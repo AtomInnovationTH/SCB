@@ -1,5 +1,7 @@
 # 🤠 Space Cowboy
 
+**Play it:** [atominnovationth.github.io/SCB](https://atominnovationth.github.io/SCB/)
+
 **A browser-based Newtonian-physics ADR (Active Debris Removal) simulation** built with Three.js. Command the V5 "Crossbow" satellite platform: navigate orbital mechanics, deploy spring-loaded capture arms, and clear 50 debris objects to win. Semi-autonomous collision avoidance AI keeps you alive while you focus on the catch.
 
 UI design draws from four landmark space sims: **Independence War** (NavSphere, velocity vectors), **MechWarrior 2** (tension gauge, damage wireframe), **FreeSpace 2** (target wireframe, comms menu), and **Orbiter** (MFD panels, orbital visualization).
