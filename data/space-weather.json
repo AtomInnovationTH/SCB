@@ -1,0 +1,25 @@
+{
+  "cycle_start_game_hour": 0,
+  "cycle_length_game_hours": 132,
+  "description": "Seeded solar-cycle microcosm — ~132 game-hours of CMEs, flares, SAA, and quiet periods. Deterministic replay so player decisions mid-cycle are learnable.",
+  "events": [
+    { "game_hour": 2,   "type": "quiet",        "severity": "--", "duration_h": 10 },
+    { "game_hour": 12,  "type": "cme",          "severity": "M",  "duration_h": 4  },
+    { "game_hour": 20,  "type": "saa_passage",  "severity": "--", "duration_h": 1  },
+    { "game_hour": 26,  "type": "solar_flare",  "severity": "C",  "duration_h": 1  },
+    { "game_hour": 34,  "type": "geomagnetic",  "severity": "Kp5","duration_h": 6  },
+    { "game_hour": 48,  "type": "solar_flare",  "severity": "X",  "duration_h": 2  },
+    { "game_hour": 52,  "type": "cme",          "severity": "X",  "duration_h": 8  },
+    { "game_hour": 66,  "type": "proton_event", "severity": "S2", "duration_h": 4  },
+    { "game_hour": 72,  "type": "quiet",        "severity": "--", "duration_h": 12 },
+    { "game_hour": 88,  "type": "solar_flare",  "severity": "M",  "duration_h": 2  },
+    { "game_hour": 94,  "type": "geomagnetic",  "severity": "Kp7","duration_h": 10 },
+    { "game_hour": 104, "type": "eclipse",      "severity": "--", "duration_h": 1  },
+    { "game_hour": 110, "type": "cme",          "severity": "C",  "duration_h": 3  },
+    { "game_hour": 116, "type": "saa_passage",  "severity": "--", "duration_h": 1  },
+    { "game_hour": 120, "type": "solar_flare",  "severity": "M",  "duration_h": 1  },
+    { "game_hour": 124, "type": "quiet",        "severity": "--", "duration_h": 4  },
+    { "game_hour": 128, "type": "proton_event", "severity": "S1", "duration_h": 2  },
+    { "game_hour": 131, "type": "cme",          "severity": "M",  "duration_h": 3  }
+  ]
+}

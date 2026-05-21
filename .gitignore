@@ -1,0 +1,23 @@
+node_modules/
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
+
+# Local secrets / env
+.env
+.env.local
+*.pem
+*.key
+secrets.json

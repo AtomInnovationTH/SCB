@@ -1,0 +1,538 @@
+/**
+ * Events.js — Centralized event name constants
+ * Prevents silent failures from event name typos.
+ * 
+ * Usage (gradual migration):
+ *   import { Events } from '../core/Events.js';
+ *   eventBus.emit(Events.ARM_DEPLOYED, { armId, targetId });
+ *   eventBus.on(Events.ARM_DEPLOYED, handler);
+ *
+ * @module core/Events
+ */
+
+export const Events = {
+  // === ARM LIFECYCLE ===
+  ARM_DEPLOYED:       'arm:deployed',
+  ARM_STATE_CHANGE:   'arm:stateChange',
+  ARM_CAPTURED:       'arm:captured',
+  ARM_RETURNED:       'arm:returned',
+  ARM_DOCKED:         'arm:docked',
+  ARM_RECALLED:       'arm:recalled',
+  ARM_CAPTURE_FAILED: 'arm:captureFailed',
+  ARM_EXPENDED:       'arm:expended',
+  ARM_DEPLOY_TO:      'arm:deployTo',
+  ARM_RECALL_ONE:     'arm:recallOne',
+  ARM_RECALL_ALL:     'arm:recallAll',
+  ARM_DEPLOY:         'arm:deploy',       // Comms menu deploy (preferType, no explicit target)
+  ARM_FISH:           'arm:fish',         // Comms menu fish (cast all)
+  ARM_MANUAL_THRUST:  'arm:manualThrust',
+  ARM_DEORBIT:        'arm:deorbit',      // One-way sacrifice command (Session 10)
+  ARM_REFUELED:       'arm:refueled',     // Arm refueled from salvaged Indium (Session 10)
+  ARM_DEORBIT_CMD:    'arm:deorbitCmd',   // Comms menu / D key deorbit command
+  ARM_SELECT:         'arm:select',       // Player selected arm by number key 1-6 (Sprint C2)
+  ARM_DESELECT:       'arm:deselect',     // Player deselected arm — back to mothership (key 7)
+  WEB_SHOT_HIT:       'arm:webShotHit',   // { debrisId, dragMultiplier } — GSL web shot hit debris (Sprint D1)
+
+  // === TARGET SELECTION ===
+  TARGET_SELECTED:    'target:selected',
+  TARGET_CLEARED:     'target:cleared',
+  TARGET_DISCOVERED:  'target:discovered',   // { target } — UX-3 #9 staggered reveal
+
+  // === CAMERA ===
+  CAMERA_VIEW_CHANGE: 'camera:viewChange',
+  VIEW_CONFIG_CHANGE: 'view:configChange',   // { showClosureRate, showNavSphere, ... } — view info-level config
+  LAUNCH_CEREMONY_START:    'camera:launchCeremonyStart',    // { arm }
+  LAUNCH_CEREMONY_COMPLETE: 'camera:launchCeremonyComplete', // { arm }
+
+  // === GAME STATE ===
+  STATE_CHANGE:       'state:change',
+  GAME_STATE_CHANGE:  'game:stateChange',     // { from, to, payload } — emitted by GameFlowManager after transition
+  GAME_RESET:         'game:reset',            // { } — emitted by GameFlowManager.resetGame()
+  GAME_KESSLER:       'game:kesslerEvent',
+  GAME_COLLISION:     'game:collision',
+  GAME_WIN:           'game:win',
+
+  // === SCORING ===
+  SCORE_UPDATE:       'score:update',
+  SCORING_AWARD:      'scoring:award',
+
+  // === MISSION (ST-4.C) ===
+  /** Emitted when mission number increments (every DEBRIS_PER_MISSION captures).
+   *  Payload: { missionNumber: number, profile: object } */
+  MISSION_START:      'mission:start',
+
+  // === MISSION MID-FLIGHT EVENTS (ST-4.D) ===
+  /** Scanned debris revealed as hydrazine hazard. Payload: { debrisId, type, hazardType } */
+  DEBRIS_HAZARD_REVEALED: 'mission:debrisHazardRevealed',
+  /** Synergy pair opportunity found. Payload: { synergyName, matchedMetals, missingMetals, bonusPoints, expiresMs } */
+  SYNERGY_OPPORTUNITY:    'mission:synergyOpportunity',
+  /** Kessler cascade threatening operations. Payload: { fragmentCount } */
+  CASCADE_THREAT:         'mission:cascadeThreat',
+  /** Severe weather reducing sensor capability. Payload: { type, sensorReduction, duration } */
+  WEATHER_MISSION_EFFECT: 'mission:weatherEffect',
+  /** Multiple conjunctions in same altitude band. Payload: { alertCount } */
+  CLUSTER_CONJUNCTION:    'mission:clusterConjunction',
+
+  // === DEBRIS ===
+  DEBRIS_CLEARED:     'debris:cleared',
+  DEBRIS_CAPTURED:    'debris:captured',
+  DEBRIS_REMOVED:     'debris:removed',
+  DEBRIS_KESSLER:     'debris:kesslerEvent',
+  DEBRIS_COLLISION:   'debris:collision',
+
+  // === RESOURCES ===
+  RESOURCE_CHANGED:   'resource:changed',
+  RESOURCE_DEPLETED:  'resource:depleted',
+  RESOURCE_CONSUME:   'resource:consume',
+  RESOURCE_REPLENISH: 'resource:replenish',
+  RESOURCE_UPGRADED:  'resource:upgraded',
+
+  // === SALVAGE (Session 10) ===
+  SALVAGE_RECOVERED:  'salvage:recovered',
+  SALVAGE_SCAN:       'salvage:scan',
+
+  // === PLAYER ===
+  PLAYER_TELEMETRY:   'player:telemetry',
+  PLAYER_THRUST_FAILED: 'player:thrustFailed',
+  PLAYER_LOW_BATTERY: 'player:lowBattery',
+  PLAYER_LOW_XENON:   'player:lowXenon',
+
+  // === COLLISION ===
+  COLLISION_WARNING:  'collision:warning',
+  COLLISION_EVASION:  'collision:evasion',
+
+  // === INTERACTION ===
+  INTERACTION_DATA_CAPTURE: 'interaction:dataCapture',
+  INTERACTION_DEORBIT:      'interaction:deorbit',
+  INTERACTION_CAPTURE:      'interaction:capture',
+  INTERACTION_FRAGMENTATION: 'interaction:fragmentation',
+
+  // === COMMS ===
+  /**
+   * COMMS_MESSAGE payload:
+   *   { text, priority, source, channel? }
+   * ST-5.1: Optional `channel` key — one of Constants.COMMS.CHANNELS.
+   * If omitted, receiver classifies via source heuristic (default FLAVOR).
+   */
+  COMMS_MESSAGE:      'comms:message',
+  COMMS_SEND:         'comms:send',
+  COMMS_SOLAR_STORM:  'comms:solarStorm',
+  COMMS_GEO_STORM:    'comms:geoStorm',
+
+  // === COMMS UI (ST-5.1) ===
+  COMMS_FOCUS:            'comms:focus',           // C-tap → expand pane
+  COMMS_RADIAL_OPEN:      'comms:radialOpen',      // C-hold → open radial menu
+  COMMS_RADIAL_CLOSE:     'comms:radialClose',     // C-release or Escape → close radial menu
+  COMMS_SCROLL_UP:        'comms:scrollUp',        // PageUp → scroll history
+  COMMS_SCROLL_DOWN:      'comms:scrollDown',       // PageDown → scroll history
+
+  // === PAUSE ===
+  PAUSE_RESUME:       'pause:resume',
+  PAUSE_MENU:         'pause:menu',
+
+  // === MENU / UI ===
+  MENU_START:         'menu:start',
+  MENU_FAST_START:    'menu:fastStart',
+  MENU_CONTINUE:      'menu:continue',
+  BRIEFING_COMMENCE:  'briefing:commence',
+  BRIEFING_SKIP:      'briefing:skip',
+  SHOP_DEPLOY:        'shop:deploy',
+  GAMEOVER_RETRY:     'gameover:retry',
+  GAMEOVER_MENU:      'gameover:menu',
+  GAMEOVER_CONTINUE:  'gameover:continue',
+  HUD_TARGET_CLICK:   'hud:targetClick',
+  HUD_GROUP_ACTIVATE: 'hud:groupActivate',   // { group } — directly activate a HUD reveal-group
+  /**
+   * Emitted when a tech library entry unlocks. Consumed by SkillsPane
+   * (Discovery Pane) for the "NEW TECH" section. Separate from
+   * CODEX_UNLOCKED (which drives the full-screen Tech Library viewer
+   * refresh + audio chime) to allow independent evolution of the two
+   * surfaces.
+   */
+  TECH_UNLOCKED:      'tech:unlocked',        // { id, title, shortText, category } — tech entry unlocked (for Discovery Pane)
+
+  // === ACTIVE SATELLITES ===
+  ACTIVE_SAT_PROXIMITY: 'activeSat:proximity',
+  ACTIVE_SAT_COLLISION: 'activeSat:collision',
+
+  // === SENSOR ===
+  SENSOR_UPGRADE:     'sensor:upgrade',
+  SENSOR_UPGRADED:    'sensor:upgraded',
+  SENSOR_QUERY_TARGETS:    'sensor:queryTargets',
+  SENSOR_DETECTED_TARGETS: 'sensor:detectedTargets',
+
+  // === ACTIVE SCAN ===
+  SCAN_QUICK:         'scan:quick',              // S key — quick ping scan
+  SCAN_WIDE:          'scan:wide',               // W key — wide aperture deep scan
+  SCAN_INITIATED:     'scan:initiated',           // { type: 'quick'|'wide' } — scan actually started (for audio/visual feedback)
+  SCAN_COMPLETE:      'scan:complete',            // { type: 'quick'|'wide', results: {...} }
+  SCAN_DISCOVERY:     'scan:discovery',           // { debrisId, type, mass, salvage?: { hydrazine, metals[] } } — hidden debris found (ST-4.D enriched)
+
+  // === KESSLER ===
+  KESSLER_FRAGMENTS_ADDED: 'kessler:fragmentsAdded',
+  KESSLER_WARNING:         'kessler:warning',
+  KESSLER_CASCADE:         'kessler:cascadeTriggered',
+  COLLISION_GAME_OVER:     'collision:gameOver',     // { reason } — KesslerSystem: shields depleted, GFM should game-over
+
+  // === UPGRADES ===
+  UPGRADE_PURCHASED:  'upgrade:purchased',
+  UPGRADE_V4_TECH:    'upgrade:v4Tech',
+
+  // === POWER ===
+  POWER_CHANGED:      'power:changed',
+  POWER_BUS_SELECTED: 'power:busSelected',
+
+  // === PERSISTENCE ===
+  PERSISTENCE_SAVED:  'persistence:saved',
+  PERSISTENCE_LOADED: 'persistence:loaded',
+  PERSISTENCE_GATHER: 'persistence:gather',  // { saveData } — systems attach their state before save
+
+  // === CARGO (Phase 2) ===
+  CARGO_STORE:         'cargo:store',
+  CARGO_UPDATED:       'cargo:updated',
+  CARGO_SELL:          'cargo:sell',
+  CARGO_FUEL_TRANSFER: 'cargo:fuelTransfer',
+
+  // === FORGE (Phase 3) ===
+  FORGE_START:         'forge:start',
+  FORGE_PHASE_CHANGE:  'forge:phaseChange',
+  FORGE_COMPLETE:      'forge:complete',
+  FORGE_CANCEL:        'forge:cancel',
+  FORGE_QUEUE_ADD:     'forge:queueAdd',
+  FORGE_TOGGLE:        'forge:toggle',
+
+  // === FUEL (Phase 4) ===
+  FUEL_CYCLE:          'fuel:cycle',          // player pressed T
+  FUEL_CHANGED:        'fuel:changed',        // fuel type switched — { fuelId, name, isp, color }
+  FUEL_DEPLETED:       'fuel:depleted',       // current fuel ran out
+
+  // === MARKET & CONTRACT (Phase 5) ===
+  CARGO_SELL_ALL:      'cargo:sellAll',
+  CONTRACT_CONTRIBUTE: 'contract:contribute',
+  CONTRACT_UPDATE:     'contract:update',
+  CONTRACT_COMPLETE:   'contract:complete',
+
+  // === TRAWLING & EDT (Phase 6) ===
+  TRAWL_START:         'trawl:start',
+  TRAWL_CAPTURE:       'trawl:capture',
+  TRAWL_END:           'trawl:end',
+  TRAWL_TARGET_ENTERING:      'trawl:target_entering',
+  TRAWL_TARGET_EXITED:        'trawl:target_exited',
+  TRAWL_TARGET_WINDOW_CLOSING: 'trawl:target_window_closing',
+  EDT_DEPLOY:          'edt:deploy',
+  EDT_RETRACT:         'edt:retract',
+  EDT_ATTRACT:         'edt:attract',
+  ROUTE_PLAN_UPDATE:   'route:planUpdate',
+
+  // === DELTAV TELEMETRY (Phase R9) ===
+  DELTAV_UPDATE:       'deltav:update',
+
+  // === CONJUNCTION (Sprint C1) ===
+  CONJUNCTION_WARNING: 'conjunction:warning',  // { tier, debrisId, tca, distance, evasionVector }
+  CONJUNCTION_CLEAR:   'conjunction:clear',    // alert expired
+  /**
+   * ST-6.1: Generic conjunction alert for gameplay-level red-lines that are
+   * not routine TCA warnings — e.g. attempted arming against an active
+   * satellite. Payload shape:
+   *   { severity: 'RED'|'YELLOW'|'GREEN', reason: string, targetId?, targetName?, norad? }
+   * `reason` values include: 'ACTIVE_SAT_ARMING' (treaty-violation guard).
+   */
+  CONJUNCTION_ALERT:   'conjunction:alert',
+
+  // === CATALOG (ST-6.1: offline data catalogue) ===
+  /** Fired once when CatalogLoader finishes initial META + file fetches.
+   *  Payload: { ready: boolean, counts: { debris, active_sats, launches, weather_events, ground_stations, constellations }, version }
+   *  `ready:false` indicates a load failure — systems must default to procedural/random behaviour. */
+  CATALOG_LOADED:      'catalog:loaded',
+
+  // === REWARD SYSTEM (Phase 5 Rewards) ===
+  SYNERGY_BONUS:          'reward:synergyBonus',       // { name, points, metals }
+  SWEEP_REPORT:           'reward:sweepReport',        // compiled sweep report data
+  SWEEP_REPORT_DISMISSED: 'reward:sweepReportDismissed', // player closed report overlay
+  TRAWL_SWEEP_COMPLETE:   'trawl:sweepComplete',       // trawl sweep finished { duration, targetsEntered }
+
+  // === TETHER DETACH (Phase 6 — Risk-Reward) ===
+  ARM_DETACHED:           'arm:detached',              // { armId, position, fuelRemaining } — tether severed
+  ARM_LOST:               'arm:lost',                  // { armId } — detached arm fuel depleted, inert
+
+  // === CODEX (Phase 7 — Learning Systems) ===
+  /** Internal event for CodexViewerUI + AudioSystem. See TECH_UNLOCKED for Discovery Pane. */
+  CODEX_UNLOCKED:         'codex:unlocked',            // { id, title, shortText, icon, category }
+  CODEX_VIEWED:           'codex:viewed',              // { id } — player viewed full entry
+  CODEX_UNLOCK_REQUEST:   'codex:unlockRequest',       // { id } — force-unlock a specific entry (e.g. from tutorial)
+
+  // === LASSO SYSTEM ===
+  LASSO_FIRED:            'lasso:fired',               // { targetId, projectileMass, launchDirection, speed }
+  LASSO_CONTACT:          'lasso:contact',
+  LASSO_CAPTURED:         'lasso:captured',
+  LASSO_DENIED:           'lasso:denied',
+  LASSO_MISSED:           'lasso:missed',    // lasso fired but failed to capture
+  LASSO_COOLDOWN_START:   'lasso:cooldownStart',  // { duration } — cooldown timer began (ST-1.3)
+  LASSO_COOLDOWN_END:     'lasso:cooldownEnd',    // {} — cooldown expired, ready to fire (ST-1.3)
+  LASSO_AMMO_CHANGED:     'lasso:ammoChanged',    // { remaining, max } — UX-3 #7 ammo system
+
+  // === TOOL RECOMMENDATION ===
+  TOOL_RECOMMENDED:       'tool:recommended',      // { tool: 'lasso'|'spinner'|'grapple'|'weaver'|'trawl', targetId }
+  TOOL_CYCLE:             'tool:cycle',             // backtick key — cycle alternatives
+  TOOL_DEPLOY:            'tool:deploy',            // D key — deploy recommended tool
+
+  // === FOCUS ACTION ===
+  FOCUS_ACTION:           'focus:action',           // F key — context-sensitive smart action
+
+  // === TUTORIAL ===
+  /** @deprecated Tutorial system removed Sprint 3. Constant retained for save-file compatibility only. No emitters remain in source. */
+  TUTORIAL_STAGE_CHANGED: 'tutorial:stage_changed',
+  TUTORIAL_SKIPPED:       'tutorial:skipped',
+  TUTORIAL_TETHER_LIMIT:  'tutorial:tetherLimitHit',
+  TUTORIAL_ARROW_INPUT:   'tutorial:arrowInput',
+  TUTORIAL_THROTTLE_INPUT:'tutorial:throttleInput',
+  TUTORIAL_WASD_INPUT:    'tutorial:wasdInput',
+  TUTORIAL_SCAN_INPUT:    'tutorial:scanInput',     // S or W key during tutorial
+  TUTORIAL_TAB_INPUT:     'tutorial:tabInput',      // Tab during tutorial
+  TUTORIAL_DEPLOY_INPUT:  'tutorial:deployInput',   // D key during tutorial
+
+  // ── SKILLS DISCOVERY ──────────────────────────────────────
+  SKILL_DISCOVERED:     'skill:discovered',        // { skillId, tier, label }
+  SKILL_REMINDED:       'skill:reminded',           // { skillId }
+  SKILL_STATE_CHANGED:  'skill:stateChanged',       // { skillId, from, to }
+  /** Fired after a skill transitions to MASTERED state.
+   *  Payload: { skillId: string, label: string, tier: number, category: string, largeToast: boolean }
+   *  `largeToast` is true for the first MASTERY_TOAST_THRESHOLD masteries in the session. */
+  MASTERY_FANFARE:      'skill:masteryFanfare',
+  SKILL_GATE_UNLOCKED:  'skill:gateUnlocked',       // { skillId }
+  SKILLS_PANE_TOGGLE:   'skills:paneToggle',        // { expanded: bool }
+  SKILLS_LOADED:        'skills:loaded',            // { skills: Map }
+
+  // ── INPUT / CAMERA EVENTS (Skills Discovery triggers) ─────────
+  CAMERA_ZOOM:          'camera:zoom',              // scroll wheel zoom (any view)
+  CAMERA_ORBIT_DRAG:    'camera:orbitDrag',         // mouse drag in orbit view
+  CAMERA_FREE_LOOK:     'camera:freeLook',          // mouse free-look in first-person
+  AUTOPILOT_NO_TARGET:  'autopilot:noTarget',       // A key with no selected target
+  COMMS_OPENED:         'comms:opened',             // C key comms toggle
+  CODEX_OPENED:         'codex:opened',             // L key codex opened
+  SHOP_OPENED:          'shop:opened',              // Shop screen displayed (ST-6.5 teaching trigger)
+  ORBIT_MFD_TOGGLE:     'orbitMfd:toggle',          // M key orbit MFD toggled
+
+  // === SPACE WEATHER (Phase 7 — Learning Systems) ===
+  WEATHER_EFFECT_START:   'weather:effectStart',       // { type, effects, duration }
+  WEATHER_EFFECT_END:     'weather:effectEnd',         // { type }
+  WEATHER_ACTIVE:         'weather:active',            // every update — merged active effects
+
+  // === UPGRADE (Phase 7 — Propellant Teaching trigger) ===
+  UPGRADE_APPLIED:        'upgrade:applied',           // { id, name } — upgrade applied to ship
+
+  // === SUBSYSTEM EVENTS (Phase 7B — Spacecraft Subsystems) ===
+  SUBSYSTEM_EVENT:        'subsystem:event',           // generic subsystem event for logging
+  GROUND_STATION_PASS:    'ground:stationPass',        // ground station in view
+
+  // === AUDIO & POLISH (Phase 8 — Final Juice) ===
+  ARM_APPROACH_PING:      'arm:approachPing',          // { distanceFraction, armId }
+  TETHER_TENSION:         'tether:tension',            // { tensionFraction, armId }
+  SALVAGE_REVEAL:         'salvage:reveal',            // { metals, totalMass, debrisType }
+  WIREFRAME_ASSESSED:     'wireframe:assessed',        // {} — DebrisWireframe: player cycled all zones
+
+  // === THROTTLE (F14) ===
+  THROTTLE_CHANGE:        'throttle:change',           // { level } — 0.0–1.0 throttle level
+
+  // === AUTOPILOT (F15) ===
+  AUTOPILOT_ENGAGE:       'autopilot:engage',          // { mode: 'TARGET'|'TRAWL'|'DEBRIS'|'PROGRADE' }
+  AUTOPILOT_DISENGAGE:    'autopilot:disengage',       // { reason: 'MANUAL'|'DELTAV'|'COLLISION'|'ARROW_INPUT'|'TRAWL' }
+  AUTOPILOT_ARRIVED:      'autopilot:arrived',         // { mode } — AP reached target, holding heading
+  AUTOPILOT_TARGET_LOCK:   'autopilot:targetLock',     // { debrisId } — AP acquired a debris lock (exempt from CA)
+  AUTOPILOT_TARGET_UNLOCK: 'autopilot:targetUnlock',   // { debrisId } — AP released debris lock
+
+  // === THRUST VISUAL (Phase 4 — Velocity Streaks) ===
+  THRUST_VISUAL:          'thrust:visual',             // { magnitude, direction, type }
+
+  // === MPD THRUSTER (F16) ===
+  MPD_FIRE:               'mpd:fire',                  // { direction, thrust, cathodeHealth }
+  MPD_CATHODE_WORN:       'mpd:cathode_worn',          // { cathodeTime, degradedFactor }
+  LITHIUM_CHANGE:         'resource:lithium_change',   // { lithium, lithiumMax, delta }
+
+  // === MPD BURST MODE (S3b) ===
+  MPD_BURST_START:        'mpd:burstStart',            // { armed } — player armed MPD
+  MPD_BURST_END:          'mpd:burstEnd',              // { reason: 'manual'|'overheat'|'battery_depleted'|'lithium_depleted' }
+  MPD_OVERHEAT:           'mpd:overheat',              // { heat } — thermal shutdown triggered
+  MPD_POWER_WARNING:      'mpd:powerWarning',          // { batteryFraction } — battery low during MPD
+
+  // === CONTROL MODE (S4 — Core Feel) ===
+  CONTROL_MODE_CHANGE:    'control:modeChange',        // { mode: 'RCS'|'COLD_GAS'|'ARM_PILOT'|'MPD_BURST' }
+
+  // ── V5 Crossbow Events ──
+
+  // --- Crossbow Lifecycle ---
+  CROSSBOW_FIRE:            'crossbow:fire',             // { armIndex, speed, springTier, armMass, launchDirection }
+  CROSSBOW_RELOAD_START:    'crossbow:reloadStart',      // { armIndex, duration }
+  CROSSBOW_RELOAD_COMPLETE: 'crossbow:reloadComplete',   // { armIndex }
+
+  // --- Tether Events ---
+  TETHER_TENSION_UPDATE:    'tether:tensionUpdate',      // { armIndex, tension, fraction }
+  TETHER_TANGLE:            'tether:tangle',             // { armIndices[] }
+  TETHER_SNAP:              'tether:snap',               // { armIndex, cause }
+  TETHER_REEL_STATE:        'tether:reelState',          // { armIndex, reeling, speed }
+
+  // --- Dual-Fire ---
+  DUAL_FIRE:                'crossbow:dualFire',         // { armIndex1, armIndex2 }
+  DUAL_FIRE_RECOIL:         'crossbow:dualFireRecoil',   // { cancelled, residualDv }
+
+  // --- Pulse Scan ---
+  PULSE_SCAN_START:         'pulseScan:start',           // { armCount }
+  PULSE_SCAN_COMPLETE:      'pulseScan:complete',        // { detections[] }
+
+  // --- Ablation ---
+  ABLATION_START:           'ablation:start',            // { armIndex, targetId }
+  ABLATION_END:             'ablation:end',              // { armIndex, despinAchieved }
+
+  // === COLLISION AVOIDANCE ===
+  CA_THREAT_DETECTED:       'ca:threatDetected',         // { debrisId, tca, missDistance, evasionVector }
+  CA_DODGE_EXECUTED:        'ca:dodgeExecuted',          // { debrisId, direction, magnitude }
+  CA_THREAT_CLEARED:        'ca:threatCleared',          // { debrisId }
+  CA_TOGGLED:               'ca:toggled',                // { enabled }
+  CA_SUPPRESSED:            'ca:suppressed',             // { debrisId, reason }
+
+  // === DEBRIS MAP (ST-4.A) ===
+  DEBRIS_MAP_CLUSTER_SELECTED: 'debrisMap:clusterSelected',  // { clusterId }
+
+  // === TRAIL SYSTEM (ST-5.2) ===
+  PLAYER_TRAIL_SAMPLE:    'player:trailSample',      // { pos: {x,y,z}, vel: {x,y,z} } — scene units
+  ARM_TRAIL_SAMPLE:       'arm:trailSample',          // { armId, pos: {x,y,z}, vel: {x,y,z} } — scene units
+  ARM_TRAIL_CLEAR:        'arm:trailClear',            // { armId } — arm docked/reloading, clear buffer
+
+  // === STRATEGIC MAP (ST-6.4) ===
+  STRATEGIC_MAP_TOGGLE:  'ui:strategic_map_toggle',   // Shift+V — toggle strategic map overlay
+  STRATEGIC_MAP_OPENED:  'ui:strategic_map_opened',   // map opened (camera transition started)
+  STRATEGIC_MAP_CLOSED:  'ui:strategic_map_closed',   // map closed (camera returned to gameplay)
+
+  // === ENVIRONMENT HAZARDS (ST-6.7) ===
+  /** Generic environment effect event.
+   *  Payload varies by type: { type: 'atomic_oxygen'|'mmod_impact'|'radiation_belt'|'battery_dod', ...typeSpecificData } */
+  ENVIRONMENT_EFFECT:     'environment:effect',
+  /** Spacecraft entered safe mode (2+ subsystems below critical threshold).
+   *  Payload: { subsystemsBelowThreshold: string[] } */
+  SAFE_MODE_ENTERED:      'environment:safe_mode_on',
+  /** Spacecraft exited safe mode (all subsystems recovered).
+   *  Payload: {} */
+  SAFE_MODE_EXITED:       'environment:safe_mode_off',
+  /** Audio cue hint for AudioSystem (fire-and-forget, may be ignored).
+   *  Payload: { cue: string } */
+  AUDIO_CUE:              'audio:cue',
+
+  // === NOTIFICATION ZONE (UX-2 Sprint) ===
+  /** Transient pilot notification (bottom-center).
+   *  Payload: { text: string, duration?: number } */
+  SHOW_NOTIFICATION:      'ui:showNotification',
+
+  // === Epic 8 events — STATION_KEEP & FEEP ===
+  /** Orbit adjust input. Payload: { armId, theta, phi, radius, fine, dt } */
+  ARM_ORBIT_ADJUST:        'arm:orbit_adjust',
+  /** Arm entered station-keep. Payload: { armId, targetId, standoffR } */
+  STATION_KEEP_ENTERED:    'arm:stationKeepEntered',
+  /** Arm exited station-keep. Payload: { armId, reason: 'capture'|'recall'|'fuel'|'lost' } */
+  STATION_KEEP_EXITED:     'arm:stationKeepExited',
+  /** FEEP propellant metal changed. Payload: { armId, metal, ispRange, thrustPerW } */
+  FEEP_METAL_CHANGED:      'arm:feepMetalChanged',
+  /** News/bounty event triggered. Payload: { eventId, name, bounty, debris[] } */
+  NEWS_EVENT_TRIGGERED:    'mission:newsEventTriggered',
+
+  // ── ST-9.3 Config G Arm Hinge + Dual-Fire Events ─────────────────────
+  /** Hinge brake engaged. Payload: { armIndex } */
+  ARM_HINGE_LOCKED:        'arm:hingeLocked',
+  /** Hinge brake released. Payload: { armIndex } */
+  ARM_HINGE_UNLOCKED:      'arm:hingeUnlocked',
+  /** Dual-fire rejected (pre-fire gating). Payload: { pairIndex, reason } */
+  ARM_DUAL_FIRE_REJECTED:  'arm:dualFireRejected',
+  /** Fire blocked — Mother angular rate too high. Payload: { omega, threshold } */
+  ARM_FIRE_BLOCKED_HIGH_RATE: 'arm:fireBlockedHighRate',
+  /** Recoil compensation applied after crossbow fire. Payload: { residualImpulse, rcsN2Used } */
+  ARM_RECOIL_COMPENSATED:  'arm:recoilCompensated',
+
+  // ── ST-9.10 C-4: Deploy State Machine Events ──────────────────────────
+  /** Deploy started (STOWED → DEPLOYING). Payload: { armIndex, fromState } */
+  ARM_DEPLOY_STARTED:      'arm:deployStarted',
+  /** Deploy completed (DEPLOYING → DEPLOYED). Payload: { armIndex } */
+  ARM_DEPLOY_COMPLETED:    'arm:deployCompleted',
+  /** Stow started (DEPLOYED → STOWING). Payload: { armIndex, fromAlpha } */
+  ARM_STOW_STARTED:        'arm:stowStarted',
+  /** Stow completed (STOWING → STOWED). Payload: { armIndex } */
+  ARM_STOW_COMPLETED:      'arm:stowCompleted',
+  /** Deploy/stow/unlock rejected (invalid transition). Payload: { armIndex, currentState, reason } */
+  ARM_DEPLOY_REJECTED:     'arm:deployRejected',
+
+  // ── ST-9.11 C-5: Launch Sequence Events ─────────────────────────────────
+  /** Phase transition. Payload: { fromPhase, toPhase, elapsedTotalS } */
+  LAUNCH_PHASE_CHANGED:      'launch:phaseChanged',
+  /** Per-arm pyro release. Payload: { armIndex } */
+  LAUNCH_LOCK_RELEASED:      'launch:lockReleased',
+  /** ROSA wing deploy started. Payload: { wing: 1|2 } */
+  ROSA_DEPLOY_STARTED:       'launch:rosaDeployStarted',
+  /** ROSA wing deploy finished. Payload: { wing: 1|2, powerW } */
+  ROSA_DEPLOY_COMPLETED:     'launch:rosaDeployCompleted',
+  /** Launch sequence finished — control handed to player. Payload: {} */
+  LAUNCH_SEQUENCE_COMPLETE:  'launch:sequenceComplete',
+
+  // ── ST-9.12 C-9: Center-of-Mass + Plume Interlock Events ───────────────
+  /** CoM drift exceeds threshold. Payload: { offsetM, threshold, suggestedStowArm } */
+  COM_DRIFT_WARNING:         'com:driftWarning',
+  /** CoM drift returns below threshold. Payload: { offsetM } */
+  COM_DRIFT_CLEARED:         'com:driftCleared',
+  /** Thruster blocked by strut in plume cone. Payload: { thrusterId, conflictingArms, reason } */
+  THRUSTER_BLOCKED_PLUME:    'thruster:blockedPlume',
+  /** Thruster unblocked (strut moved out of cone). Payload: { thrusterId } */
+  THRUSTER_UNBLOCKED:        'thruster:unblocked',
+
+  // ── ST-9.4 C-6: Capture Net Events ───────────────────────────────────────
+  /** Net projectile launched. Payload: { source:'mother'|'daughter', armIndex?, podIndex?, netClass, remaining } */
+  NET_FIRED:                 'net:fired',
+  /** Net hit target and secured debris. Payload: { armIndex, podIndex, debrisId, tangleQuality, capturedMass, mode } */
+  NET_CATCH_SUCCESS:         'net:catchSuccess',
+  /** Net missed / cling failed. Payload: { armIndex, podIndex, debrisId?, probability?, reason } */
+  NET_CATCH_MISS:            'net:catchMiss',
+  /** Reel-in motor started. Payload: { armIndex, podIndex, hasCatch } */
+  NET_REEL_STARTED:          'net:reelStarted',
+  /** Reel-in completed — debris at strut tip / pod. Payload: { armIndex, podIndex, capturedMass, debrisId? } */
+  NET_REEL_COMPLETED:        'net:reelCompleted',
+  /** Player aborted — net + debris released. Payload: { armIndex, podIndex, debrisId? } */
+  NET_RELEASED:              'net:released',
+  /** Net inventory changed (fire/reload). Payload: { source:'mother'|'daughter', armIndex?, podInventory?, remaining? } */
+  NET_INVENTORY_CHANGED:     'net:inventoryChanged',
+  /** Cross-debris warning during flight. Payload: { netId, crossDebrisId } */
+  NET_CROSS_DEBRIS_WARNING:  'net:crossDebrisWarning',
+  /** Fragmentation event. Payload: { debrisId, fragmentCount, mercyApplied } */
+  NET_FRAGMENTATION:         'net:fragmentation',
+  /** First successful cinch capture (stub for TeachingSystem). Payload: { debrisId } */
+  CINCH_FIRST_SUCCESS:       'net:cinchFirstSuccess',
+  /** Net empty click — F-press with 0 nets remaining. Payload: { armId } */
+  NET_EMPTY_CLICK:           'net:emptyClick',
+
+  // ── ST-9.5 C-7: Tether Reel Events (strut-mounted, Config G §10.4) ──────
+  /** Tether payout started. Payload: { armIndex, targetLengthM } */
+  TETHER_PAYOUT_STARTED:     'tether:payoutStarted',
+  /** Tether reel-in started. Payload: { armIndex, payloadMassKg } */
+  TETHER_REELIN_STARTED:     'tether:reelinStarted',
+  /** Tether reel-in completed (cable fully spooled). Payload: { armIndex } */
+  TETHER_REELIN_COMPLETED:   'tether:reelinCompleted',
+  /** Reel jammed. Payload: { armIndex, lengthM } */
+  TETHER_JAMMED:             'tether:jammed',
+  /** Tether cut (emergency or overload). Payload: { armIndex, reason } */
+  TETHER_CUT:                'tether:cut',
+  /** Tension > 75% of breaking — debounced warning. Payload: { armIndex, tensionN, breakingN } */
+  TETHER_TENSION_HIGH:       'tether:tensionHigh',
+
+  // ── ST-9.7 C-8: Bridle Ring Events (simplified Config G) ──────────────────
+  /** Payload attached to bridle ring point. Payload: { armIndex, pointId, payloadId, loadKg } */
+  BRIDLE_ATTACH:             'bridle:attach',
+  /** Payload detached from bridle ring point. Payload: { armIndex, pointId, payloadId } */
+  BRIDLE_DETACH:             'bridle:detach',
+  /** Bridle ring point overloaded (load > OVERLOAD_FACTOR × max). Payload: { armIndex, pointId, loadKg, maxKg } */
+  BRIDLE_OVERLOAD:           'bridle:overload',
+
+  // ── ST-9.8 C-10: Arm Tier Upgrade Events ──────────────────────────────────
+  /** Tier upgrade is available to purchase. Payload: { fromTier, toTier, costCredits, prereqMet } */
+  TIER_UPGRADE_AVAILABLE:    'tier:upgradeAvailable',
+  /** Tier upgrade rejected (pre-condition failed). Payload: { fromTier, toTier, reason } */
+  TIER_UPGRADE_REJECTED:     'tier:upgradeRejected',
+  /** Tier upgrade applied. Payload: { fromTier, toTier, newArmCount, newMassDryKg } */
+  TIER_UPGRADED:             'tier:upgraded',
+};
+
+export default Events;

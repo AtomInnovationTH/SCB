@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Space Cowboy — Test Suite</title>
+    <style>
+        body {
+            background: #0a0a1a;
+            color: #00ff88;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            padding: 20px;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        h1 { color: #00ccff; font-size: 18px; }
+        .pass { color: #00ff88; }
+        .fail { color: #ff4444; }
+        .suite { color: #ffcc00; font-weight: bold; margin-top: 12px; }
+        pre { white-space: pre-wrap; }
+    </style>
+</head>
+<body>
+    <h1>🧪 Space Cowboy Test Suite</h1>
+    <pre id="output"></pre>
+    
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+        }
+    }
+    </script>
+    
+    <script type="module">
+        // Redirect console.log to the page
+        const output = document.getElementById('output');
+        const origLog = console.log;
+        console.log = (...args) => {
+            const text = args.join(' ')
+                .replace(/\x1b\[\d+m/g, '');  // Strip ANSI codes
+            output.textContent += text + '\n';
+            origLog.apply(console, args);
+        };
+        
+        // Import all test suites
+        await import('./js/test/test-Constants.js');
+        await import('./js/test/test-EventBus.js');
+        await import('./js/test/test-OrbitalMechanics.js');
+        await import('./js/test/test-GameState.js');
+        await import('./js/test/test-ScoringSystem.js');
+        await import('./js/test/test-PowerDistribution.js');
+        await import('./js/test/test-Crossbow-Constants.js');
+        await import('./js/test/test-Crossbow-ArmUnit.js');
+        
+        // Import summary
+        const { summary } = await import('./js/test/TestRunner.js');
+        const results = summary();
+        
+        // Color the output
+        document.title = results.fail > 0 
+            ? `❌ ${results.fail} FAILED — Space Cowboy Tests`
+            : `✅ ${results.pass} PASSED — Space Cowboy Tests`;
+    </script>
+</body>
+</html>

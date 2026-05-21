@@ -1,0 +1,12 @@
+[
+  { "id": "starlink",   "name": "Starlink",             "operator": "SpaceX",           "sat_count_approx": 5000, "inc_deg": 53.0, "alt_km": 550,   "purpose": "Broadband" },
+  { "id": "oneweb",     "name": "OneWeb",               "operator": "Eutelsat OneWeb",  "sat_count_approx": 648,  "inc_deg": 87.4, "alt_km": 1200,  "purpose": "Broadband" },
+  { "id": "iridium",    "name": "Iridium NEXT",         "operator": "Iridium",          "sat_count_approx": 66,   "inc_deg": 86.4, "alt_km": 780,   "purpose": "Voice/Data" },
+  { "id": "globalstar", "name": "Globalstar",           "operator": "Globalstar Inc.",  "sat_count_approx": 48,   "inc_deg": 52.0, "alt_km": 1414,  "purpose": "Voice/Data" },
+  { "id": "gps",        "name": "GPS Block III",        "operator": "USSF",             "sat_count_approx": 31,   "inc_deg": 55.0, "alt_km": 20200, "purpose": "Navigation" },
+  { "id": "galileo",    "name": "Galileo",              "operator": "ESA",              "sat_count_approx": 30,   "inc_deg": 56.0, "alt_km": 23222, "purpose": "Navigation" },
+  { "id": "glonass",    "name": "GLONASS-K",            "operator": "Roscosmos",        "sat_count_approx": 24,   "inc_deg": 64.8, "alt_km": 19130, "purpose": "Navigation" },
+  { "id": "beidou",     "name": "BeiDou-3",             "operator": "CNSA",             "sat_count_approx": 35,   "inc_deg": 55.0, "alt_km": 21528, "purpose": "Navigation" },
+  { "id": "planet",     "name": "Planet Flock/SkySat",  "operator": "Planet Labs",      "sat_count_approx": 200,  "inc_deg": 97.5, "alt_km": 475,   "purpose": "Earth Observation" },
+  { "id": "sentinel",   "name": "Copernicus Sentinel",  "operator": "ESA",              "sat_count_approx": 8,    "inc_deg": 98.6, "alt_km": 693,   "purpose": "Earth Observation" }
+]

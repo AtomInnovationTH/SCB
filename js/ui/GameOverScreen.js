@@ -1,0 +1,305 @@
+/**
+ * GameOverScreen.js — Game over and victory screen
+ * @module ui/GameOverScreen
+ */
+
+import { eventBus } from '../core/EventBus.js';
+import { Events } from '../core/Events.js';
+import { GameStates } from '../core/GameState.js';
+import { audioSystem } from '../systems/AudioSystem.js';
+import { scoringSystem } from '../systems/ScoringSystem.js';
+
+const GAME_OVER_REASONS = {
+  kessler: 'KESSLER CASCADE EVENT',
+  collision: 'COLLISION WITH ACTIVE SATELLITE',
+  fuel: 'FUEL DEPLETED — STRANDED IN ORBIT',
+  reentry: 'UNCONTROLLED REENTRY',
+  battery: 'COMPLETE POWER FAILURE',
+};
+
+const ADR_FACTS = [
+  'In reality, removing just 5 large objects per year could stabilize the orbital environment.',
+  'The Kessler Syndrome was first proposed by NASA scientist Donald J. Kessler in 1978.',
+  'There are over 36,500 objects larger than 10cm tracked in Earth orbit.',
+  'A 1cm paint fleck traveling at orbital velocity carries the energy of a hand grenade.',
+  'Astroscale\'s ELSA-d mission demonstrated magnetic capture of a client satellite in 2021.',
+  'ESA\'s ClearSpace-1 will be the first mission to remove an existing piece of debris.',
+  'The 2009 Iridium 33 / Cosmos 2251 collision created over 2,300 tracked fragments.',
+  'At LEO altitudes, orbital debris travels at approximately 7.8 km/s (17,500 mph).',
+];
+
+export class GameOverScreen {
+  constructor() {
+    this.container = document.getElementById('hud-overlay');
+    this.element = null;
+    this.visible = false;
+    this._isWin = false;
+    this._shopScreen = null;
+    this._build();
+
+    // Self-manage visibility via EventBus (decoupled from GameFlowManager)
+    eventBus.on(Events.GAME_STATE_CHANGE, ({ to, payload }) => {
+      if (to === GameStates.GAME_OVER) this.showGameOver(payload);
+      else if (to === GameStates.WIN) this.showVictory();
+      else this.hide();
+    });
+  }
+
+  /**
+   * Set the shop screen reference for reading upgrade count.
+   * @param {import('./ShopScreen.js').ShopScreen} shop
+   */
+  setShopScreen(shop) {
+    this._shopScreen = shop;
+  }
+
+  /** @private */
+  _build() {
+    this.element = document.createElement('div');
+    this.element.id = 'gameover-screen';
+    this.element.style.cssText = `
+      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      background: rgba(0,0,0,0.9); z-index: 50; pointer-events: auto;
+      transition: opacity 0.5s;
+    `;
+
+    this.element.innerHTML = `
+      <div style="text-align:center;max-width:550px;padding:20px;">
+        <h1 id="gameover-title" style="font-family:'Courier New',monospace; font-size:2.5rem;
+            letter-spacing:0.2em; margin-bottom:0.5rem;
+            text-shadow: 0 0 30px rgba(255,68,68,0.6);"></h1>
+        <div id="gameover-reason" style="font-size:0.9rem;margin-bottom:1.5rem;"></div>
+
+        <div id="gameover-stats" style="
+          background: rgba(0,20,40,0.6); border: 1px solid rgba(0,255,136,0.2);
+          border-radius: 4px; padding: 16px; margin: 1rem 0; text-align: left;
+          font-size: 0.85rem; line-height: 1.8;
+        "></div>
+
+        <div id="gameover-fact" style="
+          font-size: 0.75rem; color: rgba(0,255,136,0.4); margin: 1.5rem 0;
+          font-style: italic; line-height: 1.5;
+        "></div>
+
+        <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-top:1.5rem;">
+          <button id="gameover-retry-btn" style="
+            font-family:'Courier New',monospace; font-size:0.9rem; color:#00ff88;
+            background: rgba(0,255,136,0.1); border: 2px solid rgba(0,255,136,0.4);
+            padding: 10px 30px; cursor: pointer; border-radius: 4px;
+            letter-spacing: 0.1em; transition: all 0.3s;
+          ">TRY AGAIN</button>
+          <button id="gameover-continue-btn" style="
+            font-family:'Courier New',monospace; font-size:0.9rem; color:#ffaa00;
+            background: rgba(255,170,0,0.1); border: 2px solid rgba(255,170,0,0.4);
+            padding: 10px 30px; cursor: pointer; border-radius: 4px;
+            letter-spacing: 0.1em; transition: all 0.3s;
+          ">CONTINUE (KEEP UPGRADES)</button>
+          <button id="gameover-menu-btn" style="
+            font-family:'Courier New',monospace; font-size:0.9rem; color:rgba(0,255,136,0.6);
+            background: transparent; border: 1px solid rgba(0,255,136,0.2);
+            padding: 10px 30px; cursor: pointer; border-radius: 4px;
+            letter-spacing: 0.1em; transition: all 0.3s;
+          ">MAIN MENU</button>
+        </div>
+      </div>
+    `;
+
+    this.element.style.display = 'none';
+    this.container.appendChild(this.element);
+
+    // Button events
+    const retryBtn = this.element.querySelector('#gameover-retry-btn');
+    retryBtn.addEventListener('click', () => {
+      audioSystem.playClick();
+      eventBus.emit(Events.GAMEOVER_RETRY);
+    });
+    retryBtn.addEventListener('mouseenter', () => {
+      retryBtn.style.background = 'rgba(0,255,136,0.25)';
+      retryBtn.style.boxShadow = '0 0 15px rgba(0,255,136,0.3)';
+    });
+    retryBtn.addEventListener('mouseleave', () => {
+      retryBtn.style.background = 'rgba(0,255,136,0.1)';
+      retryBtn.style.boxShadow = 'none';
+    });
+
+    const continueBtn = this.element.querySelector('#gameover-continue-btn');
+    continueBtn.addEventListener('click', () => {
+      audioSystem.playClick();
+      eventBus.emit(Events.GAMEOVER_CONTINUE);
+    });
+    continueBtn.addEventListener('mouseenter', () => {
+      continueBtn.style.background = 'rgba(255,170,0,0.25)';
+      continueBtn.style.boxShadow = '0 0 15px rgba(255,170,0,0.3)';
+    });
+    continueBtn.addEventListener('mouseleave', () => {
+      continueBtn.style.background = 'rgba(255,170,0,0.1)';
+      continueBtn.style.boxShadow = 'none';
+    });
+
+    const menuBtn = this.element.querySelector('#gameover-menu-btn');
+    menuBtn.addEventListener('click', () => {
+      audioSystem.playClick();
+      eventBus.emit(Events.GAMEOVER_MENU);
+    });
+    menuBtn.addEventListener('mouseenter', () => {
+      menuBtn.style.borderColor = 'rgba(0,255,136,0.5)';
+    });
+    menuBtn.addEventListener('mouseleave', () => {
+      menuBtn.style.borderColor = 'rgba(0,255,136,0.2)';
+    });
+  }
+
+  /**
+   * Show game over screen with reason.
+   * @param {string} reason - Key from GAME_OVER_REASONS
+   */
+  showGameOver(reason) {
+    this._isWin = false;
+
+    const titleEl = this.element.querySelector('#gameover-title');
+    const reasonEl = this.element.querySelector('#gameover-reason');
+    const statsEl = this.element.querySelector('#gameover-stats');
+    const factEl = this.element.querySelector('#gameover-fact');
+
+    titleEl.textContent = 'MISSION FAILED';
+    titleEl.style.color = '#ff4444';
+    titleEl.style.textShadow = '0 0 30px rgba(255,68,68,0.6)';
+
+    reasonEl.style.color = '#ff6644';
+    reasonEl.textContent = GAME_OVER_REASONS[reason] || reason || 'Unknown failure';
+
+    const stats = scoringSystem.getStats();
+    const credits = scoringSystem.credits || 0;
+    const carriedCredits = Math.floor(credits * 0.5);
+    const missionNum = Math.floor(stats.debrisCleared / 5) + 1;
+    const upgradeCount = this._getUpgradeCount();
+    statsEl.innerHTML = `
+      <div style="color:#00ff88;font-size:0.95rem;margin-bottom:6px;">Mission ${missionNum} Summary</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;">
+        <div>Score: <b style="color:#ffaa00;">${stats.totalScore.toLocaleString()}</b></div>
+        <div>Credits: <b style="color:#f0c040;">${credits.toLocaleString()} cr</b></div>
+        <div>Debris Cleared: <b>${stats.debrisCleared}</b></div>
+        <div>Best Streak: <b>${stats.bestStreak}</b></div>
+        <div>Upgrades: <b>${upgradeCount}</b></div>
+        <div>Time: <b>${stats.timePlayed}</b></div>
+      </div>
+      <div style="margin-top:6px;padding-top:6px;border-top:1px solid rgba(0,255,136,0.1);font-size:0.8rem;opacity:0.7;">
+        ├ Data Captures: ${stats.debrisByTier.data}
+        · Deorbits: ${stats.debrisByTier.deorbit}
+        · Physical: ${stats.debrisByTier.capture}
+      </div>
+      <div style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,170,0,0.2);">
+        <span style="color:#f0c040;">Continue carries: <b>${carriedCredits.toLocaleString()} cr</b> (50%) + ${upgradeCount} upgrades</span>
+      </div>
+    `;
+
+    // Show continue button on game over, reset retry button text (may say "PLAY AGAIN" after a win)
+    const retryBtn = this.element.querySelector('#gameover-retry-btn');
+    if (retryBtn) retryBtn.textContent = 'TRY AGAIN';
+    const continueBtn = this.element.querySelector('#gameover-continue-btn');
+    if (continueBtn) continueBtn.style.display = '';
+
+    factEl.textContent = '💡 ' + ADR_FACTS[Math.floor(Math.random() * ADR_FACTS.length)];
+
+    // Play game over sound
+    audioSystem.playGameOver();
+
+    this.show();
+  }
+
+  /**
+   * Show victory screen.
+   */
+  showVictory() {
+    this._isWin = true;
+
+    const titleEl = this.element.querySelector('#gameover-title');
+    const reasonEl = this.element.querySelector('#gameover-reason');
+    const statsEl = this.element.querySelector('#gameover-stats');
+    const factEl = this.element.querySelector('#gameover-fact');
+
+    titleEl.textContent = 'MISSION COMPLETE';
+    titleEl.style.color = '#00ff88';
+    titleEl.style.textShadow = '0 0 30px rgba(0,255,136,0.6), 0 0 60px rgba(0,255,136,0.3)';
+
+    reasonEl.style.color = '#00ff88';
+    reasonEl.textContent = 'The orbital environment has been stabilized. Outstanding work, Cowboy.';
+
+    const stats = scoringSystem.getStats();
+    const missionCount = Math.floor(stats.debrisCleared / 5);
+    const upgradeCount = this._getUpgradeCount();
+    statsEl.innerHTML = `
+      <div style="color:#00ff88;font-size:1rem;margin-bottom:8px;">★ Final Report ★</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;">
+        <div>Final Score: <b style="color:#ffaa00;font-size:1.1rem;">${stats.totalScore.toLocaleString()}</b></div>
+        <div>Credits Earned: <b style="color:#f0c040;">${stats.credits.toLocaleString()} cr</b></div>
+        <div>Debris Cleared: <b style="color:#00ff88;">${stats.debrisCleared}</b></div>
+        <div>Best Streak: <b>${stats.bestStreak}</b></div>
+        <div>Missions: <b>${missionCount}</b></div>
+        <div>Upgrades: <b>${upgradeCount}</b></div>
+        <div>Time: <b>${stats.timePlayed}</b></div>
+      </div>
+      <div style="margin-top:6px;padding-top:6px;border-top:1px solid rgba(0,255,136,0.1);font-size:0.8rem;opacity:0.7;">
+        ├ Data: ${stats.debrisByTier.data}
+        · Deorbits: ${stats.debrisByTier.deorbit}
+        · Physical: ${stats.debrisByTier.capture}
+      </div>
+      <div style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(0,255,136,0.2);">
+        Rating: <b style="color:#ffaa00;">${this._getRating(stats)}</b>
+      </div>
+    `;
+
+    factEl.textContent = '🌍 ' + ADR_FACTS[Math.floor(Math.random() * ADR_FACTS.length)];
+
+    // Rename retry button
+    const retryBtn = this.element.querySelector('#gameover-retry-btn');
+    retryBtn.textContent = 'PLAY AGAIN';
+
+    // Hide continue button on victory (not needed — player won)
+    const continueBtn = this.element.querySelector('#gameover-continue-btn');
+    if (continueBtn) continueBtn.style.display = 'none';
+
+    audioSystem.playVictory();
+
+    this.show();
+  }
+
+  /** @private Get total upgrade count from shop screen */
+  _getUpgradeCount() {
+    if (!this._shopScreen) return 0;
+    let count = 0;
+    for (const [, lvl] of this._shopScreen.purchasedUpgrades) count += lvl;
+    return count;
+  }
+
+  /** @private Get rating based on stats */
+  _getRating(stats) {
+    const score = stats.totalScore;
+    if (score >= 50000) return '★★★★★ ACE COWBOY';
+    if (score >= 30000) return '★★★★☆ VETERAN';
+    if (score >= 15000) return '★★★☆☆ PROFESSIONAL';
+    if (score >= 8000) return '★★☆☆☆ APPRENTICE';
+    return '★☆☆☆☆ ROOKIE';
+  }
+
+  show() {
+    this.visible = true;
+    this.element.style.display = 'flex';
+    // Fade in
+    this.element.style.opacity = '0';
+    requestAnimationFrame(() => {
+      this.element.style.opacity = '1';
+    });
+  }
+
+  hide() {
+    this.visible = false;
+    this.element.style.opacity = '0';
+    setTimeout(() => {
+      if (!this.visible) this.element.style.display = 'none';
+    }, 500);
+  }
+}
+
+export default GameOverScreen;

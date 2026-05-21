@@ -1,0 +1,74 @@
+# Space Cowboy — Code Mode Briefing
+
+## What This Is
+Browser-based 3D space debris cleanup game. Three.js r170, vanilla ES6 modules, zero build tools. Player commands the V5 "Crossbow" ADR satellite: deploy autonomous arms to capture 50 debris objects. ~22K+ LOC across 46 modules.
+
+## Architecture (read ARCHITECTURE.md §1 for full module map)
+
+```
+js/main.js              — Bootstrap + game loop (~520 LOC)
+js/core/                — Constants.js (all tuning), EventBus.js (pub/sub), Events.js (event names), GameState.js (FSM)
+js/scene/               — SceneManager (renderer+bloom), Earth (3-layer), Starfield, SunLight (sun/moon/flares)
+js/entities/            — PlayerSatellite, ArmManager→ArmUnit (20-state FSM), DebrisField (instanced), OrbitalMechanics
+js/systems/             — 24 modules: GameFlowManager, InputManager, CameraSystem, AudioSystem, ResourceSystem,
+                          ScoringSystem, PowerDistribution, SensorSystem, ForgeSystem, CargoSystem, CommsSystem,
+                          AutopilotSystem, CollisionAvoidanceSystem, TrawlManager, LassoSystem, TutorialSystem,
+                          CodexSystem, SpaceWeatherSystem, ConjunctionSystem, KesslerSystem, RewardSystem,
+                          SubsystemEvents, TargetSelector, PersistenceManager
+js/ui/                  — HUD.js (coordinator), hud/StatusPanel+TargetPanel+CommsPanel, NavSphere, OrbitMFD,
+                          TargetReticle, DebrisWireframe, DockingReticle, CodexViewerUI, ShopScreen, etc.
+js/test/                — TestRunner.js (micro-framework), run-tests.js (entry), 9 test files, 44 suites
+```
+
+## Key Patterns
+- **EventBus** — All module communication via Events.js constants. Zero raw event strings.
+- **Constants.js** — ALL tuning knobs. ~840 LOC. Change gameplay balance here.
+- **GameState FSM** — MENU→BRIEFING→ORBITAL_VIEW→APPROACH→INTERACTION→SHOP→GAME_OVER→WIN
+- **Canvas2D overlays** — 5 files use DPI-scaled Canvas2D (TargetReticle, NavSphere, OrbitMFD, DebrisWireframe, DockingReticle)
+- **No build tools** — `./start.sh` runs Python HTTP server on port 8081. Import maps in index.html.
+- **Singleton exports** — targetSelector, kesslerSystem, trawlManager (imported directly, not via _refs)
+- **GameFlowManager._refs** — 6 remaining: player, debrisField, armManager, cameraSystem, shopScreen, resourceSystem
+
+## What's Built & Working
+Core gameplay loop, 5 camera views, ARM PILOT manual control, 30+ procedural audio generators, FS2 comms menu, debris wireframe analysis, forge/cargo/fuel economy, power distribution ETS, autopilot, throttle, rotation controls, 25+ shop upgrades (incl. 5 MPD power chain), localStorage persistence, roguelite continue, CodexViewerUI (105 entries), MPD thruster with lithium + thermal management, NavSphere with distance encoding + range rings, target panel with CSS grid + progressive reveal, trawl system with adaptive speed, sim identity reframe (mass-based rewards), 10-stage tutorial, collision avoidance AI (4 Hz scan, RCS dodge), risk-reward detach (X key), synergistic salvage (6 pairs), sweep report cards.
+
+## Project Status
+V6+ complete. All planned implementation sprints done. See HANDOFF.md for session summary and next priorities.
+
+## Doc Reading Guide — Read Only What You Need
+
+**For ANY task:**
+- README.md (~200 lines) — quick start, key bindings, doc index
+- HANDOFF.md (~130 lines) — current state, next priorities, known issues
+
+**By task type — read the relevant doc:**
+| Task | Read | Lines |
+|------|------|-------|
+| Modifying HUD panels | ARCHITECTURE.md §9 | ~200 |
+| Economy/forge/cargo | GAME_DESIGN.md §4 | ~200 |
+| Game feel/controls | GAME_DESIGN.md §2-3 | ~200 |
+| Educational content | LEARNING_THROUGH_PLAY.md | 1422 |
+| Arm system design | CROSSBOW_ARMS.md | 3580 |
+| Collision avoidance | archive/COLLISION_AVOIDANCE_DESIGN.md | 454 |
+| Why a constant exists | archive/V3 Octopus.md (search by topic) | lookup |
+| V4 graphene upgrades | archive/V4 Opussy.md | 601 |
+| _refs architecture | archive/REFS_DECOUPLING_PLAN.md | 1023 |
+
+**DO NOT read all docs.** Read README.md + HANDOFF.md + the doc for your specific task.
+
+## Testing
+Zero-dependency micro-framework in `js/test/TestRunner.js` (describe/it/assert). Run:
+```
+node js/test/run-tests.js    # or ./test.sh
+```
+- 9 test files, 44 suites, 278 tests — all passing
+- Tests target Node-safe modules only (no THREE.js, no DOM)
+- Browser tests: open `test.html`
+- Add new test files to `js/test/run-tests.js` imports
+
+For manual gameplay testing: `./start.sh`, open http://localhost:8081.
+
+## Files That Should NOT Be Modified Without Understanding
+- `js/core/Constants.js` — All balance tuning. Changes cascade everywhere.
+- `js/systems/GameFlowManager.js` — State transitions, 26+ EventBus handlers. Complex wiring.
+- `js/entities/ArmUnit.js` — 20-state FSM. State transitions are fragile.

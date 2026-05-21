@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Space Cowboy — VLEO Debris Remediation</title>
+
+  <style>
+    /* === RESET & BASE === */
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      overflow: hidden;
+      background: #000;
+      font-family: 'Courier New', monospace;
+      color: #00ff88;
+    }
+
+    /* === CANVAS === */
+    #game-canvas {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    /* === HUD OVERLAY === */
+    #hud-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 10;
+    }
+
+    /* ST-6.4: Strategic map mode — dim gameplay HUD */
+    #hud-overlay.map-mode {
+      opacity: 0.15;
+      pointer-events: none;
+      transition: opacity 0.3s ease;
+    }
+
+    .hud-panel {
+      position: absolute;
+      background: rgba(5, 10, 20, 0.95);
+      border: 1px solid rgba(0, 255, 136, 0.3);
+      border-radius: 4px;
+      padding: 6px 8px;
+      pointer-events: none;
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+      font-size: 13px;
+      color: #00ff88;
+      font-family: 'Courier New', monospace;
+    }
+
+    /* ST-2.2: High-opacity fallback when panels overlap bright Earth */
+    .hud-panel--earth-overlap {
+      background: rgba(5, 10, 20, 0.98) !important;
+    }
+
+    /* Hover-to-expand for left-column panels */
+    .hud-panel-expandable {
+      pointer-events: auto;  /* Enable hover detection */
+      cursor: default;
+    }
+
+    .hud-panel-expandable .panel-expand-section {
+      max-height: 0;
+      overflow: hidden;
+      opacity: 0;
+      transition: max-height 0.25s ease, opacity 0.2s ease, padding 0.2s ease,
+                  margin 0.2s ease, border-color 0.2s ease;
+      padding-top: 0;
+      padding-bottom: 0;
+      margin-top: 0;
+      border-top: 1px solid transparent;
+    }
+
+    .hud-panel-expandable:hover .panel-expand-section,
+    .hud-panel-expandable.force-expand .panel-expand-section {
+      max-height: 200px;  /* Generous max — actual height determined by content */
+      opacity: 1;
+      padding-top: 4px;
+      padding-bottom: 2px;
+      margin-top: 4px;
+      border-top-color: rgba(0,255,136,0.15);
+    }
+
+    /* Arm hover details — revealed when fleet panel hovered */
+    .hud-panel-expandable:hover .arm-hover-detail,
+    .hud-panel-expandable.force-expand .arm-hover-detail {
+      display: block !important;  /* Override inline display:none */
+    }
+
+    /* Energy hint — more visible on hover */
+    .hud-panel-expandable:hover .energy-hint {
+      opacity: 0.7 !important;
+    }
+
+    /* F11: Horizontal-expand left panels (PROPULSION + ENERGY) */
+    .hud-panel-h-expand {
+      width: 110px;
+      overflow: hidden;
+      transition: width 0.3s ease;
+      position: relative;
+    }
+    .hud-panel-h-expand:hover {
+      width: 260px;
+    }
+    .hud-panel-h-expand .panel-full-content {
+      max-height: 0;
+      overflow: hidden;
+      opacity: 0;
+      transition: max-height 0.3s ease, opacity 0.2s ease 0.1s;
+    }
+    .hud-panel-h-expand:hover .panel-full-content {
+      max-height: 600px;
+      opacity: 1;
+    }
+    .hud-panel-h-expand .panel-collapsed-summary {
+      opacity: 1;
+      transition: opacity 0.15s ease, max-height 0.2s ease;
+      overflow: hidden;
+      padding: 2px 0;
+    }
+    .hud-panel-h-expand:hover .panel-collapsed-summary {
+      opacity: 0;
+      max-height: 0 !important;
+      overflow: hidden;
+      pointer-events: none;
+    }
+
+    /* F12: Fleet panel vertical collapse */
+    #hud-arms-panel .fleet-collapsed-summary {
+      opacity: 1;
+      max-height: 40px;
+      transition: opacity 0.15s ease, max-height 0.2s ease;
+      font-size: 10px;
+      overflow: hidden;
+    }
+    #hud-arms-panel:hover .fleet-collapsed-summary {
+      opacity: 0;
+      max-height: 0;
+      pointer-events: none;
+    }
+    #hud-arms-panel .fleet-full-content {
+      max-height: 0;
+      overflow: hidden;
+      opacity: 0;
+      transition: max-height 0.3s ease, opacity 0.2s ease 0.1s;
+    }
+    #hud-arms-panel:hover .fleet-full-content {
+      max-height: 400px;
+      opacity: 1;
+    }
+
+    /* === LEFT-COLUMN FLEX LAYOUT (always-expanded panels) === */
+    #hud-left-column {
+      display: flex;           /* safety net: JS sets this inline, but preserve it if cleared */
+      flex-direction: column;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(0,255,136,0.2) transparent;
+    }
+
+    /* Panels inside left column: flex children, not absolute */
+    #hud-left-column > .hud-panel {
+      position: relative !important;
+      width: 260px;
+    }
+
+    /* Always hide collapsed summaries */
+    #hud-left-column .panel-collapsed-summary {
+      display: none !important;
+    }
+    #hud-left-column .fleet-collapsed-summary {
+      display: none !important;
+    }
+
+    /* Always show full content */
+    #hud-left-column .panel-full-content {
+      max-height: none !important;
+      opacity: 1 !important;
+    }
+    #hud-left-column .fleet-full-content {
+      max-height: none !important;
+      opacity: 1 !important;
+    }
+
+    /* Left-column panels: auto pointer-events for hover detection */
+    #hud-resources-panel,
+    #hud-power-panel,
+    #hud-arms-panel {
+      pointer-events: auto;
+    }
+
+    .hud-panel[style*="pointer-events: auto"],
+    .hud-panel.interactive {
+      pointer-events: auto;
+    }
+
+    /* === RESOURCE BARS === */
+    .hud-resource-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin: 3px 0;
+      font-size: 11px;
+    }
+
+    .hud-resource-row > span:first-child {
+      width: 42px;
+      flex-shrink: 0;
+    }
+
+    .hud-bar-track {
+      flex: 1;
+      height: 8px;
+      background: rgba(0, 255, 136, 0.1);
+      border-radius: 2px;
+      overflow: hidden;
+      min-width: 80px;
+    }
+
+    .hud-bar-fill {
+      height: 100%;
+      background: #00ff88;
+      border-radius: 2px;
+      transition: width 0.3s ease, background-color 0.5s ease;
+    }
+
+    /* === WARNING PULSE === */
+    @keyframes warningPulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    .warning-pulse {
+      animation: warningPulse 0.5s ease-in-out infinite;
+    }
+
+    /* === GLOW TEXT === */
+    @keyframes glowPulse {
+      0%, 100% { text-shadow: 0 0 10px rgba(0,255,136,0.5); }
+      50% { text-shadow: 0 0 20px rgba(0,255,136,0.8), 0 0 40px rgba(0,255,136,0.3); }
+    }
+
+    .glow-text {
+      animation: glowPulse 2s ease-in-out infinite;
+    }
+
+    /* === SCREEN OVERLAYS === */
+    #menu-screen, #briefing-screen, #shop-screen, #gameover-screen {
+      font-family: 'Courier New', monospace;
+    }
+
+    /* === SCROLLBAR STYLING === */
+    .hud-panel::-webkit-scrollbar,
+    #shop-screen ::-webkit-scrollbar,
+    #briefing-screen ::-webkit-scrollbar {
+      width: 4px;
+    }
+
+    .hud-panel::-webkit-scrollbar-track,
+    #shop-screen ::-webkit-scrollbar-track,
+    #briefing-screen ::-webkit-scrollbar-track {
+      background: rgba(0,255,136,0.05);
+    }
+
+    .hud-panel::-webkit-scrollbar-thumb,
+    #shop-screen ::-webkit-scrollbar-thumb,
+    #briefing-screen ::-webkit-scrollbar-thumb {
+      background: rgba(0,255,136,0.2);
+      border-radius: 2px;
+    }
+
+    /* === BUTTON FOCUS === */
+    button:focus {
+      outline: 1px solid rgba(0,255,136,0.5);
+      outline-offset: 2px;
+    }
+
+    /* === COMMS PANEL FLASH === */
+    @keyframes commsFlash {
+      0%, 100% { border-color: rgba(255,68,68,0.7); }
+      50% { border-color: rgba(255,68,68,0.2); }
+    }
+
+    .comms-flash {
+      animation: commsFlash 0.5s ease-in-out infinite;
+    }
+
+    /* === RETICLE CANVAS === */
+    #reticle-canvas,
+    #navsphere-canvas {
+      image-rendering: crisp-edges;
+    }
+
+    /* === RESPONSIVE HUD === */
+    @media (max-width: 768px) {
+      .hud-panel { font-size: 11px; padding: 6px 8px; }
+      #hud-targets-panel { display: none !important; }
+      #hud-controls-panel { display: none !important; }
+      #hud-comms-panel { display: none !important; }
+    }
+
+    /* Loading screen */
+    #loading-screen {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: #000;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+      transition: opacity 1s ease-out;
+    }
+
+    #loading-screen.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    #loading-screen h1 {
+      font-family: 'Courier New', monospace;
+      color: #00ff88;
+      font-size: 2.5rem;
+      letter-spacing: 0.3em;
+      margin-bottom: 1rem;
+      text-shadow: 0 0 20px rgba(0, 255, 136, 0.5);
+    }
+
+    #loading-screen p {
+      font-family: 'Courier New', monospace;
+      color: rgba(0, 255, 136, 0.6);
+      font-size: 0.9rem;
+    }
+  </style>
+
+  <!-- Three.js r170 via import map (local — offline-first, no CDN required) -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "./node_modules/three/build/three.module.js",
+      "three/addons/": "./node_modules/three/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <!-- Loading screen -->
+  <div id="loading-screen">
+    <h1>SPACE COWBOY</h1>
+    <p>Initializing VLEO systems…</p>
+  </div>
+
+  <!-- Three.js canvas -->
+  <canvas id="game-canvas"></canvas>
+
+  <!-- HUD overlay (pointer-events: none — clicks pass through to canvas) -->
+  <div id="hud-overlay"></div>
+
+  <!-- Game bootstrap -->
+  <script type="module">
+    import './js/main.js';
+
+    // Hide loading screen once the module has loaded
+    window.addEventListener('load', () => {
+      setTimeout(() => {
+        const screen = document.getElementById('loading-screen');
+        if (screen) {
+          screen.classList.add('hidden');
+          setTimeout(() => screen.remove(), 1200);
+        }
+      }, 800);
+    });
+  </script>
+</body>
+</html>

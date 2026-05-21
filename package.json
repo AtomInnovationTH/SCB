@@ -1,0 +1,8 @@
+{
+  "name": "space-cowboy",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "three": "0.170.0"
+  }
+}

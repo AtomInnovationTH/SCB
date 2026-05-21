@@ -1,0 +1,406 @@
+/**
+ * TeachingSystem.js — First-encounter contextual overlay manager (ST-6.5)
+ *
+ * Listens for game events, determines if a teaching moment should fire,
+ * manages "seen" persistence, and delegates display to TeachingOverlay.
+ *
+ * Design philosophy (from LEARNING_THROUGH_PLAY.md):
+ *   "No tutorials. The game teaches through contextual overlays that appear
+ *    exactly once when the player first encounters each mechanic. Brief,
+ *    non-blocking, and dismissible."
+ *
+ * @module systems/TeachingSystem
+ */
+
+import { Events } from '../core/Events.js';
+import { Constants } from '../core/Constants.js';
+
+// ============================================================================
+// TEACHING MOMENT DEFINITIONS
+// ============================================================================
+
+/**
+ * All 12 teaching moments. Each defines:
+ *   id       — unique key, also used in persistence
+ *   title    — overlay heading (SHORT, caps)
+ *   body     — overlay body text (1-2 sentences)
+ *   duration — display time in ms
+ *   icon     — Unicode symbol for visual flair
+ */
+export const TEACHING_MOMENTS = [
+  {
+    id: 'first_target',
+    title: 'Target Acquired',
+    body: 'Use the radial menu (C) to choose an arm mode. Match your approach to the debris type.',
+    duration: 8000,
+    icon: '🎯',
+  },
+  {
+    id: 'first_arm',
+    title: 'Arm Deployed',
+    body: 'Hold steady — the arm needs time to reach the target. Watch the tether tension gauge.',
+    duration: 7000,
+    icon: '🦾',
+  },
+  {
+    id: 'first_capture',
+    title: 'First Catch!',
+    body: 'Nice work, Cowboy. Captured debris goes to your cargo bay. Open the Codex (Tab) to learn more.',
+    duration: 8000,
+    icon: '✅',
+  },
+  {
+    id: 'first_conjunction',
+    title: 'Conjunction Warning',
+    body: 'Another object is on a close approach. The Collision Avoidance system will suggest a burn if needed.',
+    duration: 7000,
+    icon: '⚠️',
+  },
+  {
+    id: 'first_weather',
+    title: 'Space Weather',
+    body: 'Solar activity detected. Watch your power levels — panels may degrade during storms.',
+    duration: 8000,
+    icon: '☀️',
+  },
+  {
+    id: 'first_shop',
+    title: 'The Workshop',
+    body: 'Spend resources to upgrade your satellite. TRL badges show technology maturity.',
+    duration: 7000,
+    icon: '🏪',
+  },
+  {
+    id: 'first_codex',
+    title: 'Mission Intel',
+    body: 'The Codex catalogues everything you\'ve encountered. Knowledge is half the battle.',
+    duration: 7000,
+    icon: '📖',
+  },
+  {
+    id: 'first_burn',
+    title: 'Manual Burn',
+    body: 'Thrust changes your orbit. Watch the MFD — periapsis/apoapsis shift in real time.',
+    duration: 7000,
+    icon: '🔥',
+  },
+  {
+    id: 'first_kessler',
+    title: 'Kessler Cascade',
+    body: 'A collision has spawned new debris. The situation is escalating — clear the field faster.',
+    duration: 8000,
+    icon: '💥',
+  },
+  {
+    id: 'first_autopilot',
+    title: 'Autopilot Active',
+    body: 'The computer will handle orbital adjustments. Override anytime with manual thrust.',
+    duration: 7000,
+    icon: '🤖',
+  },
+  {
+    id: 'first_lasso',
+    title: 'Net Deployed',
+    body: 'The capture net has a wide radius but needs momentum. Aim ahead of the target.',
+    duration: 7000,
+    icon: '🪢',
+  },
+  {
+    id: 'first_active_sat_warning',
+    title: 'Protected Asset',
+    body: 'Active satellites are off-limits. Houston monitors all asset interactions.',
+    duration: 8000,
+    icon: '🛡️',
+  },
+  {
+    id: 'first_safe_mode',
+    title: 'Safe Mode',
+    body: 'Multiple subsystems critical. Arms locked until repairs restore operations above 40%.',
+    duration: 8000,
+    icon: '🔒',
+  },
+  {
+    id: 'first_radiation',
+    title: 'Radiation Belt',
+    body: 'Van Allen belt transit — expect sensor noise and comms latency. Minimize exposure time.',
+    duration: 8000,
+    icon: '☢️',
+  },
+  {
+    id: 'first_strategic_map',
+    title: 'Strategic Overview',
+    body: 'The strategic map shows your full orbital environment. Drag to rotate, scroll to zoom. Plan your next approach.',
+    duration: 8000,
+    icon: '🗺️',
+  },
+  // UX-3 N1: Scan & arm deploy teaching moments
+  {
+    id: 'first_scan',
+    title: 'Quick Scan',
+    body: 'Quick Scan reveals nearby debris. Hold S for Deep Scan to find targets at longer range.',
+    duration: 7000,
+    icon: '📡',
+  },
+  {
+    id: 'first_arm_deploy',
+    title: 'Crossbow Arm Deployed',
+    body: 'Arms capture heavier targets at longer range. Press P to pilot. Manual captures earn 2× score.',
+    duration: 8000,
+    icon: '🏹',
+  },
+];
+
+/** Map of moment ID → moment definition for O(1) lookup */
+export const MOMENTS_BY_ID = new Map(TEACHING_MOMENTS.map(m => [m.id, m]));
+
+// ============================================================================
+// TEACHING SYSTEM CLASS
+// ============================================================================
+
+export class TeachingSystem {
+  /**
+   * @param {object} eventBus — EventBus instance (on/off/emit)
+   * @param {object} [persistenceManager] — optional PersistenceManager for localStorage
+   */
+  constructor(eventBus, persistenceManager) {
+    this._eventBus = eventBus;
+    this._pm = persistenceManager || null;
+    this._seen = new Set();
+    this._unsubs = [];
+    this._disposed = false;
+
+    /** Callback set by the wiring layer to display a moment. */
+    this.onShow = null;
+
+    // Load persisted seen-set
+    this._loadSeen();
+  }
+
+  // --------------------------------------------------------------------------
+  // PUBLIC API
+  // --------------------------------------------------------------------------
+
+  /**
+   * Subscribe to all trigger events.
+   * Must be called after construction and after onShow is wired.
+   */
+  init() {
+    if (this._disposed) return;
+
+    const eb = this._eventBus;
+    if (!eb) return;
+
+    // Helper: subscribe + track for dispose
+    const on = (evt, handler) => {
+      const unsub = eb.on(evt, handler);
+      if (typeof unsub === 'function') {
+        this._unsubs.push(unsub);
+      } else {
+        // fallback: store event+handler pair for manual off()
+        this._unsubs.push({ evt, handler });
+      }
+    };
+
+    // 1. first_target — TARGET_SELECTED
+    on(Events.TARGET_SELECTED, () => this._trigger('first_target'));
+
+    // 2. first_arm — ARM_DEPLOYED
+    on(Events.ARM_DEPLOYED, () => this._trigger('first_arm'));
+
+    // 3. first_capture — DEBRIS_CAPTURED
+    on(Events.DEBRIS_CAPTURED, () => this._trigger('first_capture'));
+
+    // 4 & 12. first_conjunction / first_active_sat_warning — CONJUNCTION_ALERT
+    on(Events.CONJUNCTION_ALERT, (data) => {
+      if (data && data.reason === 'ACTIVE_SAT_ARMING') {
+        this._trigger('first_active_sat_warning');
+      } else if (data && (data.severity === 'HI' || data.severity === 'MD')) {
+        this._trigger('first_conjunction');
+      }
+    });
+
+    // 5. first_weather — WEATHER_EFFECT_START
+    on(Events.WEATHER_EFFECT_START, () => this._trigger('first_weather'));
+
+    // 6. first_shop — SHOP_OPENED
+    on(Events.SHOP_OPENED, () => this._trigger('first_shop'));
+
+    // 7. first_codex — CODEX_OPENED
+    on(Events.CODEX_OPENED, () => this._trigger('first_codex'));
+
+    // 8. first_burn — THROTTLE_CHANGE with level > 0
+    on(Events.THROTTLE_CHANGE, (data) => {
+      if (data && data.level > 0) {
+        this._trigger('first_burn');
+      }
+    });
+
+    // 9. first_kessler — KESSLER_CASCADE
+    on(Events.KESSLER_CASCADE, () => this._trigger('first_kessler'));
+
+    // 10. first_autopilot — AUTOPILOT_ENGAGE
+    on(Events.AUTOPILOT_ENGAGE, () => this._trigger('first_autopilot'));
+
+    // 11. first_lasso — LASSO_FIRED
+    on(Events.LASSO_FIRED, () => this._trigger('first_lasso'));
+
+    // 13. first_safe_mode — SAFE_MODE_ENTERED (ST-6.7)
+    if (Events.SAFE_MODE_ENTERED) {
+      on(Events.SAFE_MODE_ENTERED, () => this._trigger('first_safe_mode'));
+    }
+
+    // 14. first_radiation — ENVIRONMENT_EFFECT with type 'radiation_belt' (ST-6.7)
+    if (Events.ENVIRONMENT_EFFECT) {
+      on(Events.ENVIRONMENT_EFFECT, (data) => {
+        if (data && data.type === 'radiation_belt' && data.inBelt === true) {
+          this._trigger('first_radiation');
+        }
+      });
+    }
+
+    // 15. first_strategic_map — STRATEGIC_MAP_OPENED (ST-6.4)
+    if (Events.STRATEGIC_MAP_OPENED) {
+      on(Events.STRATEGIC_MAP_OPENED, () => this._trigger('first_strategic_map'));
+    }
+
+    // 16. first_scan — SCAN_INITIATED (UX-3 N1)
+    on(Events.SCAN_INITIATED, () => this._trigger('first_scan'));
+
+    // 17. first_arm_deploy — ARM_DEPLOYED (UX-3 N1)
+    on(Events.ARM_DEPLOYED, () => this._trigger('first_arm_deploy'));
+  }
+
+  /**
+   * Check if the player has already seen a specific teaching moment.
+   * @param {string} momentId
+   * @returns {boolean}
+   */
+  hasSeen(momentId) {
+    return this._seen.has(momentId);
+  }
+
+  /**
+   * Mark a teaching moment as seen and persist.
+   * @param {string} momentId
+   */
+  markSeen(momentId) {
+    this._seen.add(momentId);
+    this._saveSeen();
+  }
+
+  /**
+   * Clear all seen flags — dev/debug tool.
+   */
+  resetAll() {
+    this._seen.clear();
+    this._saveSeen();
+  }
+
+  /**
+   * How many teaching moments the player has encountered.
+   * @returns {number}
+   */
+  getSeenCount() {
+    return this._seen.size;
+  }
+
+  /**
+   * Total number of registered teaching moments.
+   * @returns {number}
+   */
+  getTotalCount() {
+    return TEACHING_MOMENTS.length;
+  }
+
+  /**
+   * Unsubscribe all listeners — prevents memory leaks.
+   */
+  dispose() {
+    this._disposed = true;
+    const eb = this._eventBus;
+    for (const unsub of this._unsubs) {
+      if (typeof unsub === 'function') {
+        unsub();
+      } else if (unsub && unsub.evt && unsub.handler && eb && typeof eb.off === 'function') {
+        eb.off(unsub.evt, unsub.handler);
+      }
+    }
+    this._unsubs.length = 0;
+    this.onShow = null;
+  }
+
+  // --------------------------------------------------------------------------
+  // INTERNAL
+  // --------------------------------------------------------------------------
+
+  /**
+   * Core trigger logic: check seen → fire onShow → markSeen.
+   * @param {string} momentId
+   * @private
+   */
+  _trigger(momentId) {
+    if (this._disposed) return;
+    if (this._seen.has(momentId)) return;
+
+    const moment = MOMENTS_BY_ID.get(momentId);
+    if (!moment) return;
+
+    // Mark seen immediately — even if display queue is full, don't re-trigger
+    this.markSeen(momentId);
+
+    // Delegate display
+    if (typeof this.onShow === 'function') {
+      this.onShow(moment);
+    }
+  }
+
+  /**
+   * Load seen-set from localStorage via PersistenceManager pattern.
+   * Uses its own key (separate from game save — meta-preference).
+   * @private
+   */
+  _loadSeen() {
+    const key = (Constants && Constants.TEACHING)
+      ? Constants.TEACHING.PERSISTENCE_KEY
+      : 'teachingSeen';
+
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const raw = localStorage.getItem(key);
+        if (raw) {
+          const arr = JSON.parse(raw);
+          if (Array.isArray(arr)) {
+            for (const id of arr) this._seen.add(id);
+          }
+        }
+      }
+    } catch (_) {
+      // Graceful degradation: in-memory only
+    }
+  }
+
+  /**
+   * Persist seen-set to localStorage.
+   * @private
+   */
+  _saveSeen() {
+    const key = (Constants && Constants.TEACHING)
+      ? Constants.TEACHING.PERSISTENCE_KEY
+      : 'teachingSeen';
+
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(key, JSON.stringify([...this._seen]));
+      }
+    } catch (_) {
+      // Graceful degradation: in-memory only
+    }
+  }
+}
+
+// CJS guard — expose pure state logic + moment definitions for Node.js tests
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { TeachingSystem, TEACHING_MOMENTS, MOMENTS_BY_ID };
+}
+
+export default TeachingSystem;

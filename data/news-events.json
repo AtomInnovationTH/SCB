@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "events": [
+    {
+      "id": "ast_spacemobile_tumble",
+      "name": "AST SpaceMobile Sat Tumbling",
+      "headline": "AST SpaceMobile BW3 test satellite has lost attitude control and is tumbling in LEO",
+      "date": "2026-03-15",
+      "unlockCaptures": 5,
+      "bounty": 25000,
+      "partner": "USA",
+      "debris": {
+        "name": "AST-BW3",
+        "mass": 700,
+        "type": "comms_eqp",
+        "semiMajorAxis": 6721,
+        "eccentricity": 0.001,
+        "inclination": 51.6,
+        "raan": 120,
+        "argPeriapsis": 0,
+        "meanAnomaly": 45,
+        "sizeMeter": 8
+      }
+    },
+    {
+      "id": "starlink_breakup",
+      "name": "Starlink Breakup Event",
+      "headline": "SpaceX Starlink v2-mini cluster suffered catastrophic battery failure — 35 fragments in expanding cloud",
+      "date": "2026-04-01",
+      "unlockCaptures": 10,
+      "bounty": 50000,
+      "partner": "SpaceX",
+      "debris": {
+        "name": "SL-FRAG-CLUSTER",
+        "mass": 50,
+        "type": "electronics",
+        "semiMajorAxis": 6918,
+        "eccentricity": 0.002,
+        "inclination": 53.0,
+        "raan": 85,
+        "argPeriapsis": 0,
+        "meanAnomaly": 200,
+        "sizeMeter": 2,
+        "fragmentCount": 35
+      }
+    },
+    {
+      "id": "thaicom4_geo_derelict",
+      "name": "Thaicom 4 GEO Derelict",
+      "headline": "Thailand requests removal of defunct Thaicom 4 (IPSTAR) from GEO graveyard orbit",
+      "date": "2026-05-20",
+      "unlockCaptures": 20,
+      "bounty": 100000,
+      "partner": "Thailand",
+      "debris": {
+        "name": "THAICOM-4",
+        "mass": 6505,
+        "type": "comms_eqp",
+        "semiMajorAxis": 42264,
+        "eccentricity": 0.0003,
+        "inclination": 0.05,
+        "raan": 78.5,
+        "argPeriapsis": 0,
+        "meanAnomaly": 120,
+        "sizeMeter": 12
+      }
+    }
+  ]
+}

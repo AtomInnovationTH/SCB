@@ -1,0 +1,24 @@
+{
+  "version": "1.0.0",
+  "generated_at": "2026-04-20",
+  "description": "Space Cowboy offline orbital-object catalogue (ST-6.1). Values are realistic and self-consistent but curated for simulation — not a live TLE feed.",
+  "files": [
+    "debris-catalog.json",
+    "active-sats.json",
+    "launches.json",
+    "space-weather.json",
+    "ground-stations.json",
+    "constellations.json",
+    "news-events.json"
+  ],
+  "counts": {
+    "debris": 107,
+    "active_sats": 51,
+    "launches": 30,
+    "weather_events": 18,
+    "ground_stations": 24,
+    "news_events": 3,
+    "constellations": 10
+  },
+  "checksum": "sc-catalog-v1"
+}
