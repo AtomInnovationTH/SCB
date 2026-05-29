@@ -1227,6 +1227,26 @@ export const Constants = {
     // Per-Platform Net Class Specs — per §6.1
     // ═══════════════════════════════════════════════════════════
 
+    // ── Rim Weight Spin-Rate Physics (2026-05-28 Item 5 doc, no code change) ──
+    //
+    //   F_centripetal_per_weight = m × ω² × r,  where ω = 2π × SPIN_HZ
+    //
+    //   In 0g this tension keeps the net mouth open against any residual
+    //   bag-drag.  Required minimum: ~5-10 N per radial spoke for Dyneema SK78
+    //   (8 spokes total = 40-80 N total ring tension on LARGE).  Numbers at
+    //   the current SPIN_HZ values:
+    //
+    //   | Class  | D (m) | RIM_WT_COUNT | RIM_WT_MASS (kg) | SPIN_HZ | r (m) | ω (rad/s) | F/wt (N) |
+    //   |--------|-------|--------------|------------------|---------|-------|-----------|----------|
+    //   | LARGE  | 8.0   | 8            | 0.075            | 2       | 4.0   | 12.57     | 47.4     |
+    //   | MEDIUM | 5.0   | 4            | 0.050            | 4       | 2.5   | 25.13     | 78.9     |
+    //   | SMALL  | 1.5   | 4            | 0.015            | 6       | 0.75  | 37.70     | 16.0     |
+    //
+    //   All three are comfortably above the 5-10 N tension threshold and well
+    //   below Dyneema SK78 break strength (~3500 N for a 1 mm² strand).  If
+    //   you bump SPIN_HZ to dial in visual spin speed, re-derive F/wt to ensure
+    //   you stay > 10 N per weight; if F/wt < 5 N, the bag mouth collapses.
+    //
     // ── Large Net (M-NET) — Mother pod ──
     LARGE: {
       CODE:             'M-NET',

@@ -1,6 +1,255 @@
 # Space Cowboy — Next-Shift Handoff Brief
 
-*Updated: 2026-05-16 · Supersedes all prior HANDOFF entries · Prior sessions archived to [`archive/HANDOFF_AUTOPILOT_RETRO.md`](archive/HANDOFF_AUTOPILOT_RETRO.md).*
+*Updated: 2026-05-28 · Supersedes all prior HANDOFF entries · Prior sessions archived to [`archive/HANDOFF_AUTOPILOT_RETRO.md`](archive/HANDOFF_AUTOPILOT_RETRO.md).*
+
+## 2026-05-28 — Post-Cinch-Fix QA Pass (Items 1-3, 5, 7-9 shipped; 4, 6, 10, 11 deferred)
+
+> **9 of 11 QA items resolved this shift.** Tests **2316 → 2320** (+4, all mutation-verified). Grep-clean (no new instrumentation). Item 4 (end-of-ceremony pose) skipped per user direction. Items 6, 10, 11 design-docced to [`POST_CINCH_QA_DESIGN_DOCS.md`](POST_CINCH_QA_DESIGN_DOCS.md:1).
+
+### Shipped (code changes)
+
+| # | Item | Files | Tests added |
+|---|------|-------|-------------|
+| 7 | Reticle range font 2× (10/11/9 → 20/22/18 px, baselines re-spaced) | [`TargetReticle.js:860-908`](js/ui/TargetReticle.js:860) | — |
+| 8 | Empty-net comms feedback (NET_EMPTY_CLICK + COMMS warning in both `captureFromStationKeep` AND `manualNetDeploy`) | [`ArmUnit.js:1230-1260, 3086-3110`](js/entities/ArmUnit.js:3086) | — |
+| 9 | R = reel-in (always); forge moves to K ("Kiln"). Updated [`InputManager.js`](js/systems/InputManager.js:701), [`Constants.js`](js/core/Constants.js:1683), [`StatusPanel.js`](js/ui/hud/StatusPanel.js:385) (HUD label) + [`StatusPanel.js:1719-1729`](js/ui/hud/StatusPanel.js:1719) (forge-idle cargo hint `[K]`), [`ForgeSystem.js:57-62`](js/systems/ForgeSystem.js:57) (toggle docstring), [`README.md`](README.md:18) (3 sites). **6 sites total.** | 6 sites | — |
+| 2 | Net visual stays visible during REELING (added REELING branch to post-FLIGHT position sync; `eff = tetherPaidOut × (1 − reelProgress)` blends contact-pos → arm-pos as net reels in) | [`CaptureNet.js:263-294`](js/entities/CaptureNet.js:263) | +4 (replaced 1 stale "REELING is NOT synced" with 4 forward-tracking tests; all mutation-verified) |
+| 1 | Cinch ring clears debris leading edge (`CONE_LENGTH_FRAC: 0.55 → 0.85`, gap past target `D × 0.05 → D × 0.35` = 2.8 m for LARGE). Camera CINCH lookAt 0.55→0.85, BRAKE_ENVELOP midpoint 0.275→0.425 | [`Constants.js:1357-1370`](js/core/Constants.js:1357), [`CameraSystem.js:1603-1624`](js/systems/CameraSystem.js:1603) | +1 (D×0.2 gap pin, mutation-verified) |
+| 3 | Captured-debris LOD skip during REELING/HAULING/DOCKING (was only skipping for SK targets; debris pinned to arm was getting LOD-zeroed when mother was > 50 km away — the user saw "only daughter, no debris in net") | [`DebrisField.js:1271-1283`](js/entities/DebrisField.js:1271) | — (LOD code is THREE-dependent, not Node-testable) |
+| 5 | Spin-rate physics doc comment block (analytical only — current `SPIN_HZ` values of 2/4/6 Hz produce 47.4/78.9/16.0 N per weight; all comfortably above 5-10 N mouth-open threshold) | [`Constants.js:1230-1248`](js/core/Constants.js:1230) | — |
+
+### Deferred (design-only — see [`POST_CINCH_QA_DESIGN_DOCS.md`](POST_CINCH_QA_DESIGN_DOCS.md:1))
+
+- **Item 4** (end-of-ceremony "child holding balloon" pose) — explicitly skipped per user priority direction.
+- **Item 6** (gold ball identification) — most likely the [`apexHub`](js/ui/CaptureNetVisual.js:351) (`0x665544`, 50 mm sphere at net center, visible all ceremony states). Awaiting user confirmation of context.
+- **Item 10** (first-clear guidance) — design proposal: (a) directive comms text, (b) `FIRST_FIELD_CLEARED` teaching moment in [`TeachingSystem.js`](js/systems/TeachingSystem.js:30), (c) optional HUD banner. Est. ~150 LOC.
+- **Item 11** (forge chunking) — design proposal: replace silent `Math.min(massKg, BATCH_SIZE_KG)` with chunk-and-queue `ceil(N/BATCH_SIZE_KG)` sub-batches. Includes cargo-reservation question + cancel-all semantics. Est. ~150 LOC.
+
+### Key references for next shift
+
+- The world-frame cinch invariant tests at [`test-CaptureNetVisual.js:824-923`](js/test/test-CaptureNetVisual.js:824) and the new D×0.2 gap pin at [`test-CaptureNetVisual.js:798-836`](js/test/test-CaptureNetVisual.js:798) are the regression floor for any future cone-geometry tuning.
+- The 4 new REELING position-sync tests at [`test-CaptureNet.js:1790-1860`](js/test/test-CaptureNet.js:1790) pin the `tetherPaidOut × (1 − reelProgress)` blend formula.
+- K is the new forge key. R is the new reel-in key. If you reintroduce the R-key for any other purpose, you'll need to either fold it into the SK-vs-anything-else conditional or pick another letter.
+- `CONE_LENGTH_FRAC = 0.85` and the CameraSystem `0.85`/`0.425` lookAt offsets MUST stay in sync. The Constants comment + the CameraSystem comment both flag this.
+
+### Possible follow-up — BRAKE_ENVELOP camera framing review
+
+Bumping `CONE_LENGTH_FRAC` from 0.55 → 0.85 widens the cone by ~55%.  The ENVELOP weight sweep now travels from `z=−0.85 D_M` to `z=−1.7 D_M` (was `−0.55` → `−1.1`).  The BRAKE_ENVELOP camera position at `(side 1.5, fwd 0.6, up 0.5) × D_M` was tuned for the OLD cone depth; with the new depth, the endpoint of the weight sweep is further from the lookAt target by `~0.45 D_M`.  If the user reports "weights pop out of frame near the end of ENVELOP", retune the camera offsets (likely `side: 1.5 → 2.0`, `fwd: 0.6 → 1.0`) to keep both endpoints in view.  Existing soft-pin test at [`test-NetCinematic.js:666`](js/test/test-NetCinematic.js:666) (`lookFwdProj >= 0.1 × D_M`) still passes.
+
+---
+
+## 2026-05-27 — THREE.js Convention SSOT (lookAt, axes, scene units)
+
+> **READ BEFORE TOUCHING ANY ORIENTATION / ROTATION CODE.** A single-character convention bug at [`CaptureNetVisual.js:952`](js/ui/CaptureNetVisual.js:952) made the capture-net cinch render on the DAUGHTER side of the debris for the entire life of the ceremony visual. Multiple sessions (geometry tweaks, pacing fixes, camera lookAt biasing) all worked AROUND the bug without seeing it because every prior test inspected only LOCAL coordinates — never `getWorldPosition()`. Diagnosed via `NET_CINEMATIC_DEBUG`-gated instrumentation + a live capture log.
+
+### Rule 1 — `Object3D.lookAt` and `Camera.lookAt` use OPPOSITE conventions
+
+```js
+// three.js Object3D.js line 266
+if ( this.isCamera || this.isLight ) {
+    _m1.lookAt( _position, _target, this.up );   // ← Camera: local -Z = forward
+} else {
+    _m1.lookAt( _target, _position, this.up );   // ← Object3D: local +Z = forward
+}
+```
+
+| Receiver type | After `obj.lookAt(target)`, local **forward** axis is... |
+|---|---|
+| `Camera`, `Light` | local **−Z** points TOWARD `target` (OpenGL camera convention) |
+| `Object3D`, `Group`, `Mesh` | local **+Z** points TOWARD `target` |
+
+**Pre-flight checklist before calling `.lookAt(point)`:**
+1. Is the receiver a `Camera`/`Light`? Local −Z = "forward" (faces target).
+2. Is the receiver a `Group`/`Mesh`? Local **+Z** = "forward" (faces target).
+3. Does your geometry's "front face" axis match the receiver's convention?
+4. If a Group must have its **mouth on local −Z** (which most "cone-shaped" geometry like a net or a thruster cone naturally builds toward), pass `lookAt(position − dir × ε)` — NOT `+`. The Object3D will rotate so local +Z = `−dir`, hence local −Z = `+dir`, hence the mouth points along `dir`.
+
+### Rule 2 — `Matrix4.lookAt(eye, target, up)` — z = `eye − target`
+
+When you build a rotation matrix manually with `mat.lookAt(eye, target, up)` and apply via `quaternion.setFromRotationMatrix`:
+- The matrix's local **+Z** in world = `(eye − target).normalize()` ⇒ points AWAY from `target`, TOWARD `eye`.
+- `local +Z = forward` is **always** the convention for the resulting quaternion (regardless of receiver type), because the receiver-type branching only exists in `Object3D.lookAt`, not in `Matrix4.lookAt`.
+
+Codebase examples (all consistent, intent-explicit):
+- [`ArmUnit.js:2062`](js/entities/ArmUnit.js:2062): `mat.lookAt(pos+heading, pos, radial)` ⇒ matrix local +Z = `heading`.
+- [`AutopilotSystem.js:1035`](js/systems/AutopilotSystem.js:1035): `mat.lookAt(pos+wDir, pos, radial)` ⇒ matrix local +Z = `wDir`.
+- [`PlayerSatellite.js:3301`](js/entities/PlayerSatellite.js:3301): `mat.lookAt(pos+vel, pos, radial)` ⇒ matrix local +Z = `velDir`.
+- [`ActiveSatellite.js:257`](js/entities/ActiveSatellite.js:257): `mat.lookAt(pos, pos+vel, radial)` ⇒ matrix local +Z = `−velDir` (sat body uses -Z forward).
+
+**When using `Matrix4.lookAt` directly: declare what your mesh's "default forward" axis is (named constant), and pass eye/target in the order that aligns the matrix +Z with that intent.**
+
+### Rule 3 — Scene units: `M = 1e-5` everywhere
+
+- **1 metre** = `M = 1e-5` scene units.
+- **1 scene unit** = **100 km**.
+- Entity `position` fields (`NetProjectile.position`, `ArmUnit.position`, `_scenePosition`, `target._scenePosition`) are in **metres**. Search: `position.set` directly on Object3Ds.
+- Object3D `position`, `mesh.position`, `group.position` are in **scene units**.
+- The conversion happens at the boundary: `group.position.set(net.position.x * M, net.position.y * M, net.position.z * M)`.
+- If you see an unexpected `1e+5` or `* M` factor, suspect a unit-frame mismatch.
+
+### Rule 4 — Default geometry axes & how to align them
+
+| Geometry | Default symmetry axis | To align with launchDir / forward |
+|---|---|---|
+| `ConeGeometry(r, h)` | Y (apex at +Y, base at −Y) | `geo.rotateX(PI/2)` ⇒ apex at +Z, base at −Z; then translate as needed |
+| `CylinderGeometry(r1, r2, h)` | Y | `geo.rotateX(PI/2)` ⇒ axis along Z |
+| `TorusGeometry(r, t)` | normal = +Z (ring in XY plane) | typically no rotation; `rotateX(PI/2)` rotates ring into YZ plane |
+| `PlaneGeometry(w, h)` | normal = +Z (face toward +Z) | no rotation for billboarded sprites |
+| `SphereGeometry` | (radially symmetric) | rotation immaterial |
+
+`geo.rotateX(PI/2)` and `geo.translate(x, y, z)` mutate the GEOMETRY (vertex positions) — applied once at construction, NOT per-frame. The Object3D's `.rotateX(angle)` rotates the OBJECT (frame-relative), which IS affected by later quaternion changes.
+
+### Rule 5 — Quaternion setters: always with named source/target constants
+
+`setFromAxisAngle(axis, angle)` and `setFromUnitVectors(from, to)` have no hidden sign behavior IF the source vectors are explicit. The codebase convention is to declare them as module-scope constants:
+
+```js
+const _armForward  = new THREE.Vector3(0, 0, 1);  // PlayerSatellite.js:40
+const _strutFrom   = new THREE.Vector3(0, -1, 0); // PlayerSatellite.js:33
+const _yUpCollar   = new THREE.Vector3(0, 1, 0);  // PlayerSatellite.js:521
+```
+
+Then `_armQuat.setFromUnitVectors(_armForward, sg.strutDir)` reads as "rotate the arm's local +Z forward direction to point along the strut direction." Self-documenting. Don't inline raw `new THREE.Vector3(0, 0, 1)` calls — make the intent explicit.
+
+### Audit results (2026-05-27, full sweep)
+
+| Site | Receiver | Convention used | Status |
+|---|---|---|---|
+| [`CaptureNetVisual.js:952`](js/ui/CaptureNetVisual.js:952) | `Group` | local −Z = launchDir (mouth/forward) | **FIXED** (was `+`, now `−`) |
+| [`ArmUnit.js:2062`](js/entities/ArmUnit.js:2062) | `Matrix4` | local +Z = heading | OK |
+| [`ActiveSatellite.js:257`](js/entities/ActiveSatellite.js:257) | `Matrix4` | local +Z = −velDir | OK |
+| [`AutopilotSystem.js:1035`](js/systems/AutopilotSystem.js:1035) | `Matrix4` | local +Z = wDir | OK |
+| [`PlayerSatellite.js:1030, 1043, 3301`](js/entities/PlayerSatellite.js:1030) | `Object3D` / `Matrix4` | RCS billboarding / body orientation | OK |
+| [`CameraSystem.js:475, 484, 564, 584`](js/systems/CameraSystem.js:475) | `Camera` | local −Z = forward | OK |
+| [`SunLight.js:213, 297, 308, 526, 539, 558`](js/scene/SunLight.js:213) | `Mesh` (billboarded discs) | local +Z = cam dir | OK (symmetric mesh) |
+| [`StrategicMap.js:833`](js/ui/StrategicMap.js:833) | `Camera` | local −Z = origin | OK |
+
+All `quaternion.setFromAxisAngle` / `setFromUnitVectors` sites use named source/target constants. All `ConeGeometry` / `CylinderGeometry` rotations are intent-documented. **No other convention bugs identified in the sweep.**
+
+### Tests pinning the convention
+
+[`test-CaptureNetVisual.js:824-…`](js/test/test-CaptureNetVisual.js:824) — describe block `CaptureNetVisual — world-frame cinch invariant (Object3D.lookAt convention)` — 4 tests using `getWorldPosition()` + non-axis-aligned launchDir (`normalize(0.6, 0.5, −0.4)` etc.) to pin the world-frame placement of the cinch ring and overshoot. **Mutation-verified:** reverting the 1-char fix fails 3 of 4 tests with line-citation error messages.
+
+### Diagnostic workflow (re-usable for any visual-vs-physics frame mismatch)
+
+1. Add `globalThis.<FLAG>`-gated `console.log` at the suspected frame-conversion sites.
+2. Enable in browser console BEFORE the relevant event: `globalThis.<FLAG> = true`.
+3. Capture log with one repro.
+4. Compare predicted vs observed numerical values — look for sign flips, magnitude mismatches, unit-scale errors.
+5. Locate the conversion site that produces the wrong sign/magnitude.
+6. Apply fix.
+7. **Mutation-test the regression:** revert the fix, run tests, confirm they FAIL with localized error messages. Then re-apply fix.
+8. Remove ALL instrumentation.
+9. Grep-clean: `grep -RIn '<FLAG>\|TEMP gated\|_dbg<...>' js/` should return only documentation references.
+10. Add a SSOT note here if a new convention is established or clarified.
+
+### Files most likely to be touched by future orientation/rotation work
+
+- [`CaptureNetVisual.js`](js/ui/CaptureNetVisual.js:1) — cone build at line 291–301, lookAt at line 919–956, ENVELOP/CINCH placements at line 740, 770, 825.
+- [`CaptureNet.js:263-274`](js/entities/CaptureNet.js:263) — post-FLIGHT position sync (net.position = arm.position + launchDir × distanceTraveled in metres). Visual is purely downstream of this.
+- [`CameraSystem.js:1430-1730`](js/systems/CameraSystem.js:1430) — NET_CINEMATIC camera beat positions and lookAt offsets (uses `c._launchFwd`, `c._scratchNetPos`, `_netCeremonyBeatPos`, `_netCeremonyBeatLook`).
+
+**If a future net ceremony bug appears, run the gated diagnostic workflow above first. Do NOT speculate at the geometry level until you have numerical confirmation of where the frame-conversion goes wrong.**
+
+---
+
+## 2026-05-28 — Post-Cinch-Fix QA Pass — Learnings & Gotchas
+
+*Companion SSOT to the 2026-05-27 THREE.js Convention block above. Captured during the post-cinch QA shift that shipped Items 1-3, 5, 7-9 (Items 4 skipped per user; Items 6, 10, 11 design-only — see [`POST_CINCH_QA_DESIGN_DOCS.md`](POST_CINCH_QA_DESIGN_DOCS.md:1)).*
+
+### Rule A — Hotkey rebinding requires ≥ 6 sites of audit
+
+When changing a hotkey binding, search these 6 site categories before claiming "done":
+
+1. [`InputManager.js`](js/systems/InputManager.js:1) handler (the binding itself)
+2. [`Constants.js`](js/core/Constants.js:1) SkillsSystem definitions (`SKILLS.*.key`)
+3. [`StatusPanel.js`](js/ui/hud/StatusPanel.js:1) inline HUD labels (`[X]`)
+4. [`StatusPanel.js`](js/ui/hud/StatusPanel.js:1) idle-state hints (`Press [X] to ...`)
+5. Module-level docstrings in the affected system (e.g. [`ForgeSystem.js`](js/systems/ForgeSystem.js:1) toggle docstring)
+6. [`README.md`](README.md:1) — controls summary AND systems paragraph AND key-bindings table (3 sites in README alone)
+
+The Item 9 R→K swap initially landed with 4 sites; a self-audit found 2 user-visible misses ([`StatusPanel.js`](js/ui/hud/StatusPanel.js:1) cargo hint + [`ForgeSystem.js`](js/systems/ForgeSystem.js:1) docstring). Total: 6.
+
+### Rule B — When extending FSM-state coverage, audit ALL conditional blocks for that FSM
+
+The Item 2 bug: [`NetProjectile.update()`](js/entities/CaptureNet.js:1) had a post-FLIGHT position-sync block guarded by `state === CONTACT || BRAKE || ENVELOP || CINCH_CLOSING || SECURE_CHECK`. A misleading comment claimed "REELING has its own position logic", but `_updateReeling` only updated `reelProgress` (a 0→1 scalar), not position. Pattern to use:
+
+```js
+// AVOID — easy to forget one state when adding REELING:
+if (state === A || state === B || ...) { /* sync */ }
+
+// PREFER — canonical set lookup, single source of truth:
+if (POST_FLIGHT_STATES.has(state)) { /* sync */ }
+```
+
+When adding a new state to a FSM, search for ALL conditional blocks that enumerate sibling states, not just the obvious ones. Misleading "this state has its own logic" comments are a red flag — verify the claim.
+
+### Rule C — Visual geometry constants couple to camera offsets
+
+Bumping [`CONE_LENGTH_FRAC`](js/core/Constants.js:1) from 0.55 → 0.85 (Item 1) required matching updates at two hard-coded sites in [`CameraSystem.js`](js/systems/CameraSystem.js:1) (`0.275 → 0.425` for BRAKE_ENVELOP midpoint; `0.55 → 0.85` for CINCH lookAt). Both are mathematically derived from `CONE_LENGTH_FRAC × CONE_OPEN_RADIUS_FRAC × D_M` but were hard-coded as numeric literals. Either: (a) read the constant lazily in the lookAt function, or (b) bullet-comment the coupling at BOTH ends (current approach — both sites now reference `Constants.CAPTURE_NET.NET_CEREMONY.CONE_LENGTH_FRAC` in their comments and explicitly note 2026-05-28 Item 1 tuning).
+
+### Rule D — LOD guards must enumerate all "actively engaged" debris states
+
+The Item 3 bug: [`DebrisField._updateInstanceTransform`](js/entities/DebrisField.js:1) had `if (!debris._isStationKeepTarget) { ...LOD downscaling... }`. This missed captured debris (`_capturedByArm` set) — those debris got LOD-zeroed during REELING/HAULING/DOCKING because the mother was > 50 km away. **Pattern: any "user is engaged with this debris" predicate must be a function over multiple flags, not a single field.**
+
+Future-proof variants — debris-being-trawled, debris-being-ablated, debris-being-lassoed — will need to be added here when those engagement modes are introduced. Candidate refactor: a `_isUserEngaged(debris)` helper that ORs all relevant flags.
+
+### Rule E — Empty-action feedback needs all 3 components
+
+User-visible failure of an action requires all three:
+
+1. The gameplay event (e.g. [`Events.NET_EMPTY_CLICK`](js/core/Events.js:1))
+2. The audio cue ([`audioSystem.playClickFail()`](js/systems/AudioSystem.js:1))
+3. The on-screen comms message ([`Events.COMMS_MESSAGE`](js/core/Events.js:1) warning)
+
+Item 8 had only (1) and (2) — the user heard a click-fail but had no on-screen explanation. The pattern landed in BOTH [`ArmUnit.captureFromStationKeep`](js/entities/ArmUnit.js:1) AND [`ArmUnit.manualNetDeploy`](js/entities/ArmUnit.js:1). Any new "action denied / inventory empty / out of charge" failure path needs all 3 components or it'll feel broken.
+
+### Cross-rule diagnostic workflow
+
+When the user reports a visual symptom (e.g. "X is invisible during state Y"), walk the visual pipeline in order — these are the five places visibility can be silently broken:
+
+1. **Position** — is the visual being POSITIONED correctly? (FSM-state position sync — Rule B)
+2. **Scale** — is the visual being SCALED correctly? (LOD downscale — Rule D)
+3. **Lifecycle** — is the visual being REMOVED prematurely? (state-transition cleanup paths)
+4. **Camera framing** — is the CAMERA actually showing it? (offsets + lookAt — Rule C)
+5. **Feedback** — if the user expected feedback but got none, is there NO comms cue? (empty-action 3-component — Rule E)
+
+The "net+debris invisible during reel-in" symptom (Items 2 + 3) collapsed into TWO independent root causes (position freeze + LOD zero); identifying both required walking the pipeline from position → scale rather than stopping at the first finding.
+
+### Audit table (Items shipped this shift)
+
+| Rule | Item | Files touched | Tests Δ |
+|------|------|---------------|---------|
+| A    | 9 (R→K swap) | [`InputManager.js`](js/systems/InputManager.js:1) + [`Constants.js`](js/core/Constants.js:1) + [`StatusPanel.js`](js/ui/hud/StatusPanel.js:1) ×2 + [`ForgeSystem.js`](js/systems/ForgeSystem.js:1) + [`README.md`](README.md:1) | — |
+| B    | 2 (REELING position sync) | [`CaptureNet.js`](js/entities/CaptureNet.js:1) (added REELING to post-FLIGHT sync block) | +4 |
+| C    | 1 (CONE_LENGTH_FRAC 0.55→0.85) | [`Constants.js`](js/core/Constants.js:1) + [`CameraSystem.js`](js/systems/CameraSystem.js:1) (CINCH lookAt + BRAKE_ENVELOP midpoint) | +1 |
+| D    | 3 (LOD guard) | [`DebrisField.js`](js/entities/DebrisField.js:1) (added `_capturedByArm` to LOD-skip predicate) | — (THREE-dep, browser-only) |
+| E    | 8 (empty-net comms) | [`ArmUnit.js`](js/entities/ArmUnit.js:1) (2 sites: `captureFromStationKeep` + `manualNetDeploy`) | — |
+
+### Verify before push
+
+```bash
+# All 5 rules' audit checklists should leave grep-clean trails
+grep -RIn 'NET_CINEMATIC_DEBUG\|\[NETSTATE\]\|\[NETVIS\]\|TEMP gated\|_dbg<' js/ | grep -v '//.*ref\|comment'
+# (only doc references should remain — same standard as the 2026-05-27 SSOT)
+
+node js/test/run-tests.js | tail -3
+# Must show 2320 / 2320 (do not regress below 2316 baseline floor)
+```
+
+---
+
+## Q2 — Net-Launch Ceremony Redesign (2026-05-24)
+- **Status:** Shipped. [`FEATURE_FLAGS.NET_CEREMONY`](js/core/Constants.js:432) default **ON**.
+- **Tests:** 2207 → **2281** ( **+74** ).
+- 6 stages, all behind a feature flag during development; flipped to default-ON in Stage 6 after eye-validation.
+- New geometry (cone + weights + drawstring + apex hub), `NET_CINEMATIC` camera mode with 7 beats (full first deploy) / 3 beats (highlights-cut on repeat), per-beat time-dilation (0.3×–0.6×), first-deploy persistence gating via [`persistenceManager.getCeremonyFlag('FIRST_NET_DEPLOY')`](js/systems/PersistenceManager.js:172).
+- Orbital state proven not to diverge under slo-mo (bitwise-equal Keplerian elements at 0.3× over 5 s — [`test-NetCeremonyTimeScale.js`](js/test/test-NetCeremonyTimeScale.js:1)).
+- Stage 6 patch: [`setView()`](js/systems/CameraSystem.js:332) during an active ceremony aborts cleanly via new [`_abortNetCeremony()`](js/systems/CameraSystem.js:1683) helper (FOV + time-scale restored, `FIRST_NET_DEPLOY` not written).
+- See [`CEREMONY_REDESIGN.md`](CEREMONY_REDESIGN.md:1) §7 *Implementation Status* for full breakdown.
+- **To disable:** set [`FEATURE_FLAGS.NET_CEREMONY = false`](js/core/Constants.js:432) in `Constants.js` — pre-Q2 behavior preserved byte-identically.
+
+---
 
 > **Status (May 16, 2026):** Epics 5–10 complete. **SK / Mission-1 polish cycle COMPLETE** — 7 polish tasks, 2 mid-flight additions, 2 diagnostic bug fixes. See [§9](#9-sk--mission-1-polish-cycle-2026-05-16) and [`SK_M1_POLISH_HANDOFF.md`](SK_M1_POLISH_HANDOFF.md) for full breakdown.
 > Test suite: **460 suites / 2,060 tests / 0 failures** (up from 458/2,051 post-Epic 10).
