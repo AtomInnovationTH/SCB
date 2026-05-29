@@ -51,6 +51,23 @@ Space Cowboy is a **Newtonian-physics orbital mechanics simulation** dressed as 
 
 The mothership is a **lion's mane jellyfish**: central bell drifts on the orbital current, tentacles (tethered arms) extend in a sphere, anything touching a tentacle gets caught and reeled in. The mothership doesn't match orbits with each piece — it passes within tether range. The tether absorbs velocity differential during reel-in.
 
+### 2.1 Visual Metaphor — "Small child holding large balloon"
+
+> **Scale-tension framing for the net-launch ceremony and every capture cinematic.**
+
+The V5 mother is *small* (≈2 m × 0.4 m barrel, 196 kg dry). The captured debris is often *huge* (3–8 m rocket bodies, 500–2000 kg defunct sats, oscillating-string MLI blankets). The cinematic must read this scale tension at every beat — the way a photograph of a small child clutching a giant party balloon instantly communicates "this is improbably large for who is holding it."
+
+**Implications for visual / camera design:**
+
+- **CINCH cone framing** ([`Constants.CAPTURE_NET.NET_CEREMONY.CONE_LENGTH_FRAC`](js/core/Constants.js:1357), [`CameraSystem._updateNetCeremony()`](js/systems/CameraSystem.js:1430)) — the cone must extend *past* the debris leading edge, not stop at the COM. The viewer should see "debris fully contained in net, with daughter visibly smaller than the catch."
+- **End-of-ceremony pose** (Item 4, deferred per [`HANDOFF.md §1`](HANDOFF.md:5)) — after `SECURE_CHECK`, the camera should settle to a wide-ish shot where mother + tether + bagged-debris read as a single silhouette: tiny operator, oversize prize, drifting together.
+- **Daughter-arm-and-debris compositions** — when a Spinner brings back a defunct sat, the daughter is dwarfed. Don't dolly in tight; pull out so the size ratio is the subject.
+- **Reel-in pacing** — `tetherPaidOut × (1 − reelProgress)` ([`CaptureNet.js:263`](js/entities/CaptureNet.js:263)) preserves the visible *distance* between mother and catch through the entire reel. Don't accelerate beyond the player's ability to feel the haul.
+
+**Anti-pattern.** Tight-on-debris shots that crop out the mother. Once you lose the operator from the frame, the scale tension evaporates and the catch reads as "a thing in space," not "a thing the player caught."
+
+**Origin.** Articulated during the Q2 Net-Launch Ceremony Redesign shift (2026-05-24); see [`HANDOFF.md` *Q2 — Net-Launch Ceremony Redesign*](HANDOFF.md:1) and `archive/CEREMONY_REDESIGN.md` for the original ceremony spec.
+
 ### Trawl Sequence
 
 ```
@@ -110,6 +127,93 @@ The tether applies a continuous, low-force constraint. At 1 m/s relative, 100 kg
 The game evolves from "catch debris for points" to **"run a profitable orbital scavenging operation."** Revenue from three sources: government cleanup bounties, processed material sales, and anchor mass contracts.
 
 **Core tension:** Every maneuver costs ΔV, every capture potentially yields ΔV and saleable mass. The pilot who plans the most fuel-positive route wins.
+
+### 4.0 Forge v2 — Chunk-and-Queue Residual
+
+> **Status:** Design-only as of 2026-05-28 (Item 11 from the Post-Cinch QA pass). Replaces the silent-truncation pattern at [`ForgeSystem.queueBatch()`](js/systems/ForgeSystem.js:110). Est. ~150 LOC + 5 tests.
+
+**Problem.** Today, [`ForgeSystem.queueBatch()`](js/systems/ForgeSystem.js:110) silently truncates any incoming mass to [`FORGE.BATCH_SIZE_KG = 5.0 kg`](js/core/Constants.js:825):
+
+```js
+const batchMass = Math.min(massKg, FORGE.BATCH_SIZE_KG);
+```
+
+If the player queues 50 kg of aluminum from cargo, only 5 kg processes. The other 45 kg sits in cargo, **unprocessed and unmentioned** in the comms log. The player has to press **K** ten times to chew through the pile — and there is no on-screen indicator that the queue depth is greater than 1.
+
+**Design — auto-chunk and queue residual.** Replace silent truncation with explicit chunking: enqueue `ceil(massKg / BATCH_SIZE_KG)` sub-batches of `BATCH_SIZE_KG` each, plus a final short batch for the remainder.
+
+```js
+queueBatch(data) {
+  const totalMass = Math.min(massKg, cargoItem.massKg);
+  let remaining = totalMass;
+  const batches = [];
+  while (remaining > 0) {
+    const chunkMass = Math.min(remaining, FORGE.BATCH_SIZE_KG);
+    batches.push({ ...batchTemplate, massKg: chunkMass });
+    remaining -= chunkMass;
+  }
+  this._queue.push(...batches);
+  emitComms(`Queued ${totalMass.toFixed(1)} kg ${name} → ${batches.length} batches × ${BATCH_SIZE_KG} kg`);
+  if (this._phase === 'IDLE') this._startNextBatch();
+}
+```
+
+**Behavioural changes:**
+
+| Aspect | Before | After |
+|--------|--------|-------|
+| Silent truncation | Yes — 45 kg discarded silently | No — all queued |
+| Comms feedback | `"Queued 5.0 kg"` | `"Queued 50.0 kg → 10 batches × 5 kg, ~400 s total"` |
+| Queue depth | 1 batch max per press | N batches |
+| Cancel semantics | Drops current (residual already dropped) | New `cancelAll()` drops current + residual; existing `cancel()` keeps queue |
+| Cargo reservation | None — sell mid-queue and queued batches error | **Upfront reservation** — `queueBatch()` calls `removeMetal()` immediately; cancel restores |
+
+**Cargo reservation question (open).** Reserving upfront is clean but couples the forge state to cargo state. Reserving lazily preserves cargo flexibility but introduces silent mid-queue failures. **Recommendation:** upfront reservation, with a `"reserved for next batch"` flag on the cargo entry so the [`StatusPanel.js`](js/ui/hud/StatusPanel.js:1683) cargo row can show the reserved portion in muted color. Cancelling restores the reserved mass to active cargo.
+
+**UI surface ([`StatusPanel.js`](js/ui/hud/StatusPanel.js:1683) forge panel):**
+
+- Idle: `[K] Queue all aluminum (50 kg → 10 batches)`
+- Active: `[3/10] Refining batch 3 of 10 · 47 kg queued · ~360 s remaining · [Shift+K] cancel all`
+
+**Edge cases:**
+
+1. **K-press during MELT.** Existing toggle cycles `OFF → REFINE → PROPELLANT → OFF`; keep that semantics. The chunk-and-queue flow is invoked from cargo "queue all" UI, not the K-toggle.
+2. **Power-pause during MELT.** Existing freeze at [`ForgeSystem.js:228-240`](js/systems/ForgeSystem.js:228) is per-chunk, unchanged.
+3. **Cancel mid-batch.** `cancel()` = current batch only, queue continues. `cancelAll()` = drops current + residual + restores all reserved cargo.
+
+**Origin.** Item 11 from the Post-Cinch QA pass, 2026-05-28. Full candidate analysis was at `POST_CINCH_QA_DESIGN_DOCS.md §11` (stubbed); this section is the canonical home.
+
+### 4.1 First-Clear Keepsake — Apex Hub Trophy
+
+> **Status:** Design-only as of 2026-05-28 (Item 6 from the Post-Cinch QA pass). Apex-hub candidate selection awaiting user confirmation. Est. ~50 LOC + 2 tests.
+
+**Design intent.** The *very first* successful net capture in a player's profile should leave a permanent, visible memento somewhere the player will see it again — a tangible "you did the thing" trophy that the rogue-lite progression loop never resets.
+
+**Selection — which object becomes the keepsake?** Four candidates were grepped from the existing net-ceremony geometry; the strongest is the **apex hub**:
+
+| Object | Color | Geometry | Visibility | Trophy fit |
+|--------|-------|----------|-----------|-----------|
+| [`apexHub`](js/ui/CaptureNetVisual.js:351) | `0x665544` (brown-gold) | Sphere, M × 0.05 (50 mm scaled) | All net states from `SPINNING_UP` onward | ★★★★★ — true sphere, sits at net center, naturally reads as "the catch" |
+| [`drawstring`](js/ui/CaptureNetVisual.js:340) | `0xffaa44` (orange-gold) | Spoke lines apex → weights | All net states from `SPINNING_UP` onward | ★★ — directional, hard to display detached |
+| `mli_mylar` debris ([`Constants.js`](js/core/Constants.js:1730)) | `0xFFD700` (true gold) | Debris mesh | Always | ★★★ — material-coupled, only works if first catch is MLI |
+| [`apertureRing`](js/entities/PlayerSatellite.js:359) | `0xccaa44` (anodised gold) | Ring | Always (mother body) | ★ — already on mother, can't be a memento |
+
+**Recommendation:** the **apex hub**. It is the only true sphere in the ceremony, it sits visually centered in the net during the cinch beat, and a 50 mm gold sphere is the canonical "trophy ball" form-factor. (`POST_CINCH_QA_DESIGN_DOCS.md §6` had the original grep table — content folded here.)
+
+**Where the keepsake lives.** Three placement options, ranked by clarity:
+
+1. **Shop counter** ([`ShopScreen.js`](js/ui/ShopScreen.js:1)) — a small display niche on the shop UI that holds the apex hub. Visible every shop visit (every 5 debris). High visibility, low engineering cost.
+2. **Mother cargo bay** — a recessed pocket on the V5 barrel ([`PlayerSatellite._buildModel()`](js/entities/PlayerSatellite.js:1)) holding the trophy sphere. Always visible in CHASE camera. Higher engineering cost; needs new geometry.
+3. **Codex entry** — a unique 105th Tech Library entry titled *"First Catch"* with a rendered thumbnail of the apex hub. Lowest engineering cost; lowest visibility.
+
+**Recommendation:** **#1 (shop counter) + #3 (codex entry)**. The shop niche gives the player a passive reminder; the codex entry gives a clickable record. Skip #2 unless the cargo bay geometry is being touched anyway.
+
+**Trigger.** First [`NET_CATCH_SUCCESS`](js/core/Events.js:1) event where [`persistenceManager.getCeremonyFlag('FIRST_NET_CAPTURE')`](js/systems/PersistenceManager.js:172) is falsy → mark flag → spawn keepsake geometry + emit comms beat *"Apex hub recovered — that's your first. Keeping it."*
+
+**Persistence.** The flag survives `GAMEOVER_CONTINUE` and `RESET_PROFILE` (it is a profile-permanent record, not a run-permanent one). On full profile wipe, the keepsake is removed.
+
+**Origin.** Item 6 from the Post-Cinch QA pass, 2026-05-28. Original candidate analysis was at `POST_CINCH_QA_DESIGN_DOCS.md §6` (stubbed); this section is the canonical home.
+
 
 | Phase | Description | Status |
 |-------|-------------|--------|
