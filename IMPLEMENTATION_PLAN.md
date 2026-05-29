@@ -434,10 +434,10 @@ Completes HANDOFF Tier A+B and adds the remaining Part I items that weren't tact
 
 | ID | Item | Ref | Status |
 |----|------|-----|--------|
-| ✅ ST-8.3.1 | `ION_THRUSTER_METALS` lookup: 7 metals (In/Ga/Bi/I/Hg/Cs/W) with ISP, thrust, TRL | [`FINAL_ANALYSIS §4.4`](FINAL_ANALYSIS.md) | Complete |
+| ✅ ST-8.3.1 | `ION_THRUSTER_METALS` lookup: 7 metals (In/Ga/Bi/I/Hg/Cs/W) with ISP, thrust, TRL | [`FINAL_ANALYSIS §4.4`](archive/FINAL_ANALYSIS.md) | Complete |
 | ✅ ST-8.3.2 | `_currentMetal`, `_alternateMetal`, `switchMetal()`, `_computeMetalThrust()` on ArmUnit | [`GAME_FLOW_BRAINSTORM §7.2`](GAME_FLOW_BRAINSTORM.md) | Complete |
 | ✅ ST-8.3.3 | Metal-specific thrust: `thrust = P_beam / (isp × g0 × η)`, auto-ISP by flight phase | New | Complete |
-| ✅ ST-8.3.4 | `FORGE_METAL_YIELDS`: 8 debris types → metal distributions; ForgeSystem propellant mode yields FEEP metals via `refinedMetals` inventory | [`FINAL_ANALYSIS §4.4`](FINAL_ANALYSIS.md) | Complete |
+| ✅ ST-8.3.4 | `FORGE_METAL_YIELDS`: 8 debris types → metal distributions; ForgeSystem propellant mode yields FEEP metals via `refinedMetals` inventory | [`FINAL_ANALYSIS §4.4`](archive/FINAL_ANALYSIS.md) | Complete |
 | ✅ ST-8.3.5 | F2 cycles metals; CommsSystem announces with ISP % delta | New | Complete |
 | ✅ ST-8.3.6 | 7 Codex entries (PROPULSION category) for FEEP metals | [`CodexSystem.js`](js/systems/CodexSystem.js) | Complete |
 | ✅ ST-8.3.7 | Tests in [`test-FEEPMetals.js`](js/test/test-FEEPMetals.js): metal switching, ISP calculation, thrust scaling | New | Complete |
@@ -448,14 +448,14 @@ Completes HANDOFF Tier A+B and adds the remaining Part I items that weren't tact
 
 | ID | Item | Ref | Status |
 |----|------|-----|--------|
-| ✅ ST-8.4.1 | Created [`data/news-events.json`](data/news-events.json): 3 events (AST SpaceMobile tumble, Starlink breakup, Thaicom 4 GEO) | [`FINAL_ANALYSIS §5.2`](FINAL_ANALYSIS.md) | Complete |
+| ✅ ST-8.4.1 | Created [`data/news-events.json`](data/news-events.json): 3 events (AST SpaceMobile tumble, Starlink breakup, Thaicom 4 GEO) | [`FINAL_ANALYSIS §5.2`](archive/FINAL_ANALYSIS.md) | Complete |
 | ✅ ST-8.4.2 | Updated [`META.json`](data/META.json) counts | Trivial | Complete |
-| ✅ ST-8.4.3 | MissionEventSystem: news loading, capture-count gating, `NEWS_EVENT_TRIGGERED` emission | [`FINAL_ANALYSIS §5.2.B`](FINAL_ANALYSIS.md) | Complete |
+| ✅ ST-8.4.3 | MissionEventSystem: news loading, capture-count gating, `NEWS_EVENT_TRIGGERED` emission | [`FINAL_ANALYSIS §5.2.B`](archive/FINAL_ANALYSIS.md) | Complete |
 | ✅ ST-8.4.4 | News ticker: headline + delayed bounty announcement | New | Complete |
-| ✅ ST-8.4.5 | 4 ISRO ground stations in [`ground-stations.json`](data/ground-stations.json): ISTRAC Bangalore, MCF Hassan, SDSC Sriharikota, KSCC Kulasekarapattinam | [`FINAL_ANALYSIS §5A.4`](FINAL_ANALYSIS.md) | Complete |
-| ✅ ST-8.4.6 | BANGALORE/HASSAN comms personas → HOUSTON channel, NEWS → MISSION channel; ISRO handoff dialogue | [`FINAL_ANALYSIS §5A.3`](FINAL_ANALYSIS.md) | Complete |
-| ✅ ST-8.4.7 | 7 Codex entries: 3 news (NEWS category) + 4 ISRO heritage (HERITAGE category); 2 new CodexCategory values | [`FINAL_ANALYSIS §5A.5`](FINAL_ANALYSIS.md) | Complete |
-| ✅ ST-8.4.8 | [`ReputationSystem.js`](js/systems/ReputationSystem.js): 5 partners (USA/SpaceX/Thailand/ESA/India), 4 tiers, event-driven rep tracking | [`FINAL_ANALYSIS §5.2.D`](FINAL_ANALYSIS.md) | Complete |
+| ✅ ST-8.4.5 | 4 ISRO ground stations in [`ground-stations.json`](data/ground-stations.json): ISTRAC Bangalore, MCF Hassan, SDSC Sriharikota, KSCC Kulasekarapattinam | [`FINAL_ANALYSIS §5A.4`](archive/FINAL_ANALYSIS.md) | Complete |
+| ✅ ST-8.4.6 | BANGALORE/HASSAN comms personas → HOUSTON channel, NEWS → MISSION channel; ISRO handoff dialogue | [`FINAL_ANALYSIS §5A.3`](archive/FINAL_ANALYSIS.md) | Complete |
+| ✅ ST-8.4.7 | 7 Codex entries: 3 news (NEWS category) + 4 ISRO heritage (HERITAGE category); 2 new CodexCategory values | [`FINAL_ANALYSIS §5A.5`](archive/FINAL_ANALYSIS.md) | Complete |
+| ✅ ST-8.4.8 | [`ReputationSystem.js`](js/systems/ReputationSystem.js): 5 partners (USA/SpaceX/Thailand/ESA/India), 4 tiers, event-driven rep tracking | [`FINAL_ANALYSIS §5.2.D`](archive/FINAL_ANALYSIS.md) | Complete |
 | ✅ ST-8.4.9 | Tests in [`test-NewsEvents-epic8.js`](js/test/test-NewsEvents-epic8.js) + [`test-CodexISRO.js`](js/test/test-CodexISRO.js) | New | Complete |
 
 **Implementation notes:** News events are static JSON (offline-first), gated by capture count. ReputationSystem tracks 5 partners with 4 tiers (NEUTRAL/FRIENDLY/ALLIED/PARTNER). ISRO handoff dialogue: "Houston: handing off to Bangalore ISTRAC — good hunting." India starts at rep=30 (highest, reflecting ISRO launch heritage).

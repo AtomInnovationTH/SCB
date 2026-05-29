@@ -235,7 +235,7 @@ The mothership launches from **India** (ISRO), so comms is bilateral: a US partn
 - HOUSTON: Tom Hanks in *Apollo 13*. Mission Control humor: dry, technical, warm.
 - BANGALORE/HASSAN: ISRO Mission Control during Chandrayaan-3 landing (real audio publicly available). Formal address ("Spacecraft, ..."), warm closure, technical precision.
 
-The bilingual register makes the player feel they're piloting an **internationally-supported mission**, not a single-flag operation. ISRO ground stations + Indian launch sites are detailed in [`FINAL_ANALYSIS.md §5A`](FINAL_ANALYSIS.md).
+The bilingual register makes the player feel they're piloting an **internationally-supported mission**, not a single-flag operation. ISRO ground stations + Indian launch sites are detailed in [`FINAL_ANALYSIS.md §5A`](archive/FINAL_ANALYSIS.md).
 
 ### 4.4 The "Codex Whisper"
 
