@@ -427,6 +427,9 @@ export const Constants = {
 
     // NEW — C-11 Integration: Recoil Physics (deferred from C-3)
     RECOIL_PHYSICS:            false,  // C-11 — angular impulse from dual-fire applied to Mother
+
+    // NEW — Q2 Net-Launch Ceremony (CEREMONY_REDESIGN.md §5)
+    NET_CEREMONY:              true,   // Q2 net-launch ceremony; default ON (Stage 6 flip, 2026-05-24)
   },
 
   // ============================================================================
@@ -1291,6 +1294,84 @@ export const Constants = {
       LAUNCH_SPEED:     10.0,
       SPRING_ENERGY:    6,
       REPLACEMENT_COST: 25,
+    },
+
+    // ═══════════════════════════════════════════════════════════
+    // Q2 NET-LAUNCH CEREMONY — per CEREMONY_REDESIGN.md §5.1
+    // Scaffolding only (Stage 0); no read sites until Stages 1–3.
+    // Gated by FEATURE_FLAGS.NET_CEREMONY.
+    // ═══════════════════════════════════════════════════════════
+    NET_CEREMONY: {
+      // ── Per-beat physics time scales (apply ONLY to NetProjectile / CaptureNetVisual) ──
+      // 2026-05-25 pacing retune (post-Q2 visibility fix):
+      //   The engulf (ENVELOP, 1.5 g) and cinch (CINCH_CLOSING, 2.0 g) animations
+      //   are the only beats where the user reads the *mechanism* — brake event,
+      //   inertial overshoot, drawstring close. Each must play end-to-end inside
+      //   its named camera beat. Pre-retune the named beats only delivered 2.06 g
+      //   of physics across BRAKE_ENVELOP+CINCH+SECURED_SETTLE vs the 4.0 g the
+      //   animation needs (0.5+1.5+2.0); 48% of the cinch finished AFTER the
+      //   cinematic exited at 1.0× from ARM_PILOT, reading as "too fast."
+      //   New scales 0.5/0.5 keep clear "cinematic slowmo" feel while permitting
+      //   wall-clock beats short enough to hold attention (≤4 s each).
+      TIME_SCALE_PRE_FLIGHT:  0.4,   // beats 1–2 (§5.1)
+      TIME_SCALE_GLAMOUR:     0.5,   // beat 3 (§5.1)
+      TIME_SCALE_APPROACH:    0.6,   // beat 4 (§5.1)
+      TIME_SCALE_BRAKE:       0.5,   // beat 5 — 50% slowmo (was 0.3, too heavy)
+      TIME_SCALE_CINCH:       0.5,   // beat 6 — match BRAKE scale (was 0.4)
+
+      // ── Wall-clock beat durations (seconds, NOT physics-time) — §5.1 ──
+      // Invariant (enforced by tests): for beats whose name maps to an FSM state
+      // animation, beat.duration × beat.timeScale ≥ corresponding state duration.
+      //   BRAKE_ENVELOP × TIME_SCALE_BRAKE ≥ BRAKE_TIME + ENVELOP_TIME (= 2.0 g)
+      //   CINCH         × TIME_SCALE_CINCH ≥ CINCH_CLOSE_TIME           (= 2.0 g)
+      //   SECURED_SETTLE × 1.0            ≥ SECURE_CHECK_TIME           (= 0.2 g)
+      BEAT_DURATIONS_S: {
+        POD_MUZZLE_PREFIRE: 1.2,
+        MUZZLE_EXIT_SPINUP: 1.0,
+        GLAMOUR_SHOT:       1.5,
+        APPROACH_DOLLY_MIN: 1.5,    // beat 4 variable, clamped [min, max]
+        APPROACH_DOLLY_MAX: 2.5,
+        BRAKE_ENVELOP:      4.0,    // 4.0 × 0.5 = 2.0 g → BRAKE(0.5) + full ENVELOP(1.5) (was 2.2)
+        CINCH:              4.0,    // 4.0 × 0.5 = 2.0 g → full CINCH_CLOSING(2.0) (was 2.0)
+        SECURED_SETTLE:     1.0,    // 1.0 × 1.0 = 1.0 g → SECURE_CHECK + held "captured" beat (was 0.6)
+      },
+
+      // ── Subsequent-deploy highlights cut — §4 + §5.1 ──
+      // 2026-05-25 retune: previous 3-beat cut (GLAMOUR + BRAKE_ENVELOP + CINCH
+      // at 0.7×) totalled 6.65 s wall × 0.5 scale = 3.33 g of physics. The
+      // FSM needs ~3.95 g (LAUNCHING 0.15 + SPINNING_UP 0.5 + FLIGHT 3.3 for a
+      // 33 m target) just to CONTACT the target — the ceremony was exiting
+      // BEFORE the net touched the debris, so the engulf and cinch then played
+      // at 1.0× from ARM_PILOT, off-frame. New cut includes APPROACH_DOLLY
+      // (the FLIGHT-framing beat, which force-advances on NET_BRAKE_FIRED so
+      // it doesn't over-run) and SECURED_SETTLE (the "captured" hold beat).
+      // HIGHLIGHTS_TIME_SCALE raised to 1.0 because the FSM-vs-camera physics
+      // alignment fixed in the engulf/cinch retune assumes full-duration beats.
+      // Only beats 1–2 (POD_MUZZLE_PREFIRE, MUZZLE_EXIT_SPINUP) remain skipped
+      // for subsequent deploys — those are the first-time "look, the pod fires
+      // a net!" teaching moments, redundant after the player has seen them.
+      HIGHLIGHTS_CUT_BEATS:   ['GLAMOUR_SHOT', 'APPROACH_DOLLY', 'BRAKE_ENVELOP', 'CINCH', 'SECURED_SETTLE'],
+      HIGHLIGHTS_TIME_SCALE:  1.0,
+
+      // ── Visual geometry ratios — §5.1 ──
+      CONE_OPEN_RADIUS_FRAC:         1.0,    // mouth radius / (D_mesh × 0.5)
+      // 2026-05-28 (Item 1 tuning): CONE_LENGTH_FRAC bumped from 0.55 → 0.85.
+      // The cinch ring contracts at local z = -coneHeight (mouth plane).
+      // With CONE_OPEN_RADIUS_FRAC=1.0, target sits at z ≈ -mouthRadius =
+      // -0.5 × D.  At the previous 0.55 value, coneH = 0.55 × D and the
+      // gap |z_ring - z_target| = 0.05 × D ≈ 0.4 m for D=8 — well inside
+      // the half-extent of any LARGE-bin debris.  Result: the ring cinched
+      // through the middle of the debris instead of past its leading edge.
+      // At 0.85: coneH = 0.85 × D → gap = 0.35 × D = 2.8 m (LARGE) / 1.75 m
+      // (MEDIUM) / 0.525 m (SMALL), so the ring closes around the debris's
+      // forward leading edge rather than its midpoint.  Camera CINCH /
+      // BRAKE_ENVELOP lookAt offsets in CameraSystem._netCeremonyBeatLook
+      // are kept in sync (they reference 0.85 / 0.425 = coneH/2 directly).
+      CONE_LENGTH_FRAC:              0.85,   // apex-to-mouth axial length / (D_mesh × 0.5)
+      DRAWSTRING_RADIUS_FRAC_CLOSED: 0.15,   // weight radius at end of cinch / r_open
+      RIM_WEIGHT_RENDER_RADIUS_M:    0.08,   // visual sphere radius (NOT physics — 75 g tungsten ≈ 1 cm real)
+      RIM_WEIGHT_EMISSIVE_BRAKE:     0x66ccff, // colour-tint on NET_BRAKE_FIRED
+      TETHER_TENSION_THICKEN_FACTOR: 2.5,    // line width × this on NET_BRAKE_FIRED
     },
   },
 

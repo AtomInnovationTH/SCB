@@ -504,6 +504,20 @@ export const Events = {
   /** Net empty click — F-press with 0 nets remaining. Payload: { armId } */
   NET_EMPTY_CLICK:           'net:emptyClick',
 
+  // ── Q2 Net-Launch Ceremony Events (CEREMONY_REDESIGN.md §5.2) ────────────
+  /** First-fire ceremony begins. Payload: { armIndex, podIndex, netClass, firstEver: boolean } */
+  NET_CEREMONY_START:        'net:ceremonyStart',
+  /** Predictive 0.3 s lookahead before brake state-entry. Payload: { armIndex, podIndex, tMinus: 0.3 } */
+  NET_BRAKE_IMMINENT:        'net:brakeImminent',
+  /** BRAKE state entered — tether yanks taut. Payload: { armIndex, podIndex, tetherTensionN } */
+  NET_BRAKE_FIRED:           'net:brakeFired',
+  /** Mid-ENVELOP audio sting cue. Payload: { armIndex, podIndex } */
+  NET_ENVELOP_PEAK:          'net:envelopPeak',
+  /** Per-frame cinch progress during CINCH_CLOSING. Payload: { armIndex, podIndex, fraction: 0..1 } */
+  NET_CINCH_PROGRESS:        'net:cinchProgress',
+  /** Ceremony complete — camera returns to ARM_PILOT. Payload: { armIndex, podIndex, mode, success } */
+  NET_CEREMONY_COMPLETE:     'net:ceremonyComplete',
+
   // ── ST-9.5 C-7: Tether Reel Events (strut-mounted, Config G §10.4) ──────
   /** Tether payout started. Payload: { armIndex, targetLengthM } */
   TETHER_PAYOUT_STARTED:     'tether:payoutStarted',
@@ -533,6 +547,16 @@ export const Events = {
   TIER_UPGRADE_REJECTED:     'tier:upgradeRejected',
   /** Tier upgrade applied. Payload: { fromTier, toTier, newArmCount, newMassDryKg } */
   TIER_UPGRADED:             'tier:upgraded',
+
+  // === AUDIO UNLOCK (PR 6 / P3.13) ===
+  /** AudioContext still suspended 200ms after first user gesture.
+   *  Payload: {} */
+  AUDIO_UNLOCK_FAILED:       'audio:unlockFailed',
+
+  // === PERFORMANCE / QUALITY TIER (PR 4 / P1.5) ===
+  /** Quality tier changed by QualityManager (initial selection or runtime auto-downshift).
+   *  Payload: { from: 'HIGH'|'MEDIUM'|'LOW', to: 'HIGH'|'MEDIUM'|'LOW', reason: string } */
+  PERF_TIER_CHANGED:         'perf:tier-changed',
 };
 
 export default Events;

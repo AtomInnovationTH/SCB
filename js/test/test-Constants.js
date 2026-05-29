@@ -38,6 +38,12 @@ describe('Constants - Integrity', () => {
             'DOT_MIN_PX must be < DOT_MAX_PX');
     });
     
+    it('DEBUG block exists with LOG_RENDERER_DIAGNOSTICS off by default (PR 5 / P2.10)', () => {
+        assert.ok(Constants.DEBUG, 'DEBUG block should exist');
+        assert.equal(Constants.DEBUG.LOG_RENDERER_DIAGNOSTICS, false,
+            'LOG_RENDERER_DIAGNOSTICS must be false by default (enable per-session via ?debug=1)');
+    });
+
     it('TRAWLING constants exist and are valid', () => {
         assert.ok(Constants.TRAWLING, 'TRAWLING block should exist');
         assert.ok(Constants.TRAWLING.SPEED_MIN < Constants.TRAWLING.SPEED_MAX,
@@ -69,6 +75,20 @@ describe('Constants - Integrity', () => {
         const computed = Constants.EARTH_RADIUS_KM * Constants.SCENE_SCALE;
         assert.closeTo(computed, Constants.EARTH_RADIUS, 0.01,
             `${Constants.EARTH_RADIUS_KM} × ${Constants.SCENE_SCALE} = ${computed}, expected ${Constants.EARTH_RADIUS}`);
+    });
+
+    // PR 3 / P1.7 — PERF namespace + frame cap default
+    it('PERF namespace exists', () => {
+        assert.ok(Constants.PERF, 'Constants.PERF block should exist');
+        assert.equal(typeof Constants.PERF, 'object');
+    });
+
+    it('PERF.FRAME_CAP exists and defaults to null (no cap)', () => {
+        assert.ok('FRAME_CAP' in Constants.PERF,
+            'Constants.PERF.FRAME_CAP must be defined (use null for no cap)');
+        assert.equal(Constants.PERF.FRAME_CAP, null,
+            `FRAME_CAP default must be null (got ${Constants.PERF.FRAME_CAP}). ` +
+            'Hard-capping to 60 on 120/144 Hz displays causes judder.');
     });
 });
 
@@ -583,9 +603,9 @@ describe('Epic 9 FEATURE_FLAGS', () => {
 // ============================================================================
 describe('ST-9.4a NET_TERMINOLOGY + new flags', () => {
 
-    it('FEATURE_FLAGS has exactly 25 entries', () => {
-        assert.equal(Object.keys(Constants.FEATURE_FLAGS).length, 25,
-            'Expected 25 FEATURE_FLAGS (14 original + 6 Config G + 1 Capture Net + 1 Tether Reel + 1 Bridle Ring + 1 Tier Upgrades + 1 Recoil Physics)');
+    it('FEATURE_FLAGS has exactly 26 entries', () => {
+        assert.equal(Object.keys(Constants.FEATURE_FLAGS).length, 26,
+            'Expected 26 FEATURE_FLAGS (14 original + 6 Config G + 1 Capture Net + 1 Tether Reel + 1 Bridle Ring + 1 Tier Upgrades + 1 Recoil Physics + 1 Q2 Net Ceremony)');
     });
 
     it('BOLA_RENAME is not present (stale flag removed)', () => {

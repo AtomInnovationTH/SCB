@@ -724,3 +724,89 @@ describe('ArmUnit — Orbital Frame Correction', () => {
     assert.equal(arm._prevParentPos, null, '_prevParentPos should be null after reset');
   });
 });
+
+// ════════════════════════════════════════════════════════════════════════
+// 2026-05-26 ISSUE 1 FIX — Daughter docks at STRUT TIP (not mother centre).
+// ════════════════════════════════════════════════════════════════════════
+//
+// Before this fix, _updateReeling pulled the daughter to `parentPos`
+// (mother core), then _updateDocking lerped the last few metres over to
+// the strut tip. The user saw the daughter slide INTO the bus, then back
+// out to the strut. Fix: REELING target is now the strut-tip world pos
+// (parentPos + parentQuat × dockOffset), matching DOCKING.
+// ════════════════════════════════════════════════════════════════════════
+
+describe('ArmUnit V5 — REELING docks at strut-tip (Issue 1 fix, 2026-05-26)', () => {
+  it('REELING target is parentPos + parentQuat × dockOffset, not parentPos', () => {
+    const arm = makeArm();
+    // Distinctive dockOffset so we can verify the target — 1 m along local +X.
+    arm.dockOffset = new THREE.Vector3(M, 0, 0);
+    arm.state = ARM_STATES.REELING;
+    arm.capturedDebris = null;
+
+    // Identity quaternion → world dock position = parentPos + (M, 0, 0).
+    const parentPos = new THREE.Vector3(0, 0, 0);
+    const parentQuat = new THREE.Quaternion(); // identity
+
+    // Start the arm 10 m offset along +Y. With parentPos at origin and
+    // dockOffset = (M, 0, 0), the strut-tip world pos is (M, 0, 0).
+    // Mother centre is (0, 0, 0). These are distinguishable along the
+    // displacement-to-arm vector — arm should move toward (M, 0, 0), not (0, 0, 0).
+    arm.position.set(0, 10 * M, 0);
+    arm._prevParentPos = parentPos.clone();
+
+    // Run a single frame
+    arm.update(0.016, parentPos, parentQuat);
+
+    // Direction of motion: subtract starting position. With the fix, the
+    // arm should move along (toward (M, 0, 0)) — has both an X component
+    // (toward dock) AND a -Y component (closing the gap).
+    // OLD (buggy) behaviour: motion vector pointed exactly along -Y (toward
+    // mother centre) with no X component.
+    const startPos = new THREE.Vector3(0, 10 * M, 0);
+    const moveVec = arm.position.clone().sub(startPos);
+    assert.ok(moveVec.x > 0,
+      `REELING must move toward strut-tip dock (dockOffset=(M,0,0)). ` +
+      `Expected positive X motion; got moveVec.x=${moveVec.x}. ` +
+      `If this is 0, the daughter is still aiming at mother centre.`);
+  });
+
+  it('REELING snaps to dockWorldPos (not parentPos) at the final step', () => {
+    const arm = makeArm();
+    arm.dockOffset = new THREE.Vector3(M, 0, 0);
+    arm.state = ARM_STATES.REELING;
+    arm.capturedDebris = null;
+    arm._dbgReelLogged = true; // suppress one-shot debug warn
+
+    const parentPos = new THREE.Vector3(0, 0, 0);
+    const parentQuat = new THREE.Quaternion(); // identity
+
+    // Position arm at 0.5 m from the strut-tip dock (well above the 1e-7
+    // zero-vector guard at line 3535 AND well within one frame's reel
+    // step for dt=100, so the snap path fires deterministically regardless
+    // of REEL_IN_SPEED_EMPTY's tuned value).
+    arm.position.set(M + 0.5 * M, 0, 0); // 1.5 m from origin, 0.5 m from dock
+    arm._prevParentPos = parentPos.clone();
+
+    // Big dt to guarantee moveDistance >= dist for any reasonable reelSpeed.
+    arm.update(100.0, parentPos, parentQuat);
+
+    // After snap, arm.position must equal dockWorldPos = (M, 0, 0) exactly
+    // (within float epsilon), NOT parentPos = (0, 0, 0). The OLD code did
+    // `this.position.copy(parentPos)`; new code does `this.position.copy(dockWorldPos)`.
+    const dockTarget = new THREE.Vector3(M, 0, 0);
+    const distToDock   = arm.position.distanceTo(dockTarget);
+    const distToMother = arm.position.distanceTo(parentPos);
+    // Snap must land at dock (within tight tolerance — set by copy, no lerp).
+    assert.ok(distToDock < 1e-12,
+      `After REELING snap, arm.position must equal dockWorldPos (M,0,0). ` +
+      `Got position=(${arm.position.x}, ${arm.position.y}, ${arm.position.z}), ` +
+      `distToDock=${distToDock}. If this fails, the snap target is not the strut tip.`);
+    // And explicitly, must be FAR from parentPos (the buggy target).
+    assert.ok(distToMother > 0.9 * M,
+      `After REELING snap, arm.position must NOT be near mother centre (0,0,0). ` +
+      `Got distToMother=${distToMother}. If this fails, the snap is still landing at parentPos (the bug).`);
+    // And state must have advanced to DOCKING.
+    assert.equal(arm.state, ARM_STATES.DOCKING, 'REELING snap transitions to DOCKING');
+  });
+});

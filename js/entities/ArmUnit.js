@@ -1936,7 +1936,7 @@ export class ArmUnit {
      case S.NETTING:    this._updateNetting(dt); break;
      case S.GRAPPLED:   this._updateGrappled(dt); break;
      case S.HAULING:    this._updateHauling(dt, parentPos); break;
-     case S.REELING:    this._updateReeling(dt, parentPos); break;
+     case S.REELING:    this._updateReeling(dt, parentPos, parentQuat); break;
      case S.RETURNING:  this._updateReturning(dt, parentPos); break;
      case S.DOCKING:    this._updateDocking(dt, parentPos, parentQuat); break;
      case S.RELOADING:  this._updateReloading(dt); break;
@@ -3479,15 +3479,34 @@ export class ArmUnit {
   /**
    * REELING: V5 zero-fuel motor reel-in.
    * Reel motor on mothership pulls arm back — no FEEP fuel consumed.
+   *
+   * 2026-05-26 (Issue 1 fix): daughter docks at the end of the strut she
+   * launched from, NOT mother's bus centre. Before this fix, _updateReeling
+   * pulled the daughter to `parentPos` (mother core), then _updateDocking
+   * lerped the last few metres over to the strut tip. The user saw the
+   * daughter slide INTO the mother core then slide back out to the strut.
+   * Now the reel target is the strut-tip dock world position (matches
+   * _updateDocking) so the daughter approaches the correct dock from the
+   * outset.
    * @private
    */
-  _updateReeling(dt, parentPos) {
+  _updateReeling(dt, parentPos, parentQuat) {
     const hasPayload = this.capturedDebris !== null;
     const reelSpeed = hasPayload ? REEL_IN_SPEED_LOADED : REEL_IN_SPEED_EMPTY;
     const reelSpeedScaled = reelSpeed * M;
 
-    // Direction toward mothership (reuse pre-allocated _tmpVec)
-    const toMother = this._tmpVec.subVectors(parentPos, this.position);
+    // Compute strut-tip dock world position: parentPos + parentQuat × dockOffset.
+    // Falls back to parentPos (mother centre) if quaternion or dockOffset absent
+    // (pre-Config-G compat / test harness with minimal mocks).
+    const dockWorldPos = this._tmpDockTarget || (this._tmpDockTarget = new THREE.Vector3());
+    if (parentQuat && this.dockOffset) {
+      dockWorldPos.copy(this.dockOffset).applyQuaternion(parentQuat).add(parentPos);
+    } else {
+      dockWorldPos.copy(parentPos);
+    }
+
+    // Direction toward strut-tip dock (reuse pre-allocated _tmpVec)
+    const toMother = this._tmpVec.subVectors(dockWorldPos, this.position);
     const dist = toMother.length();
 
     // [DBG-REEL] One-shot at REELING entry — confirms the function fires AND
@@ -3518,8 +3537,8 @@ export class ArmUnit {
       // Move toward mothership at reel speed
       const moveDistance = reelSpeedScaled * dt;
       if (moveDistance >= dist) {
-        // Close enough to dock
-        this.position.copy(parentPos);
+        // Close enough to dock — snap to the strut-tip dock (not mother core).
+        this.position.copy(dockWorldPos);
         this._transitionTo(S.DOCKING);
         eventBus.emit(Events.ARM_RETURNED, {
           armId: this.id, captured: hasPayload, debrisId: this.capturedDebris?.id,

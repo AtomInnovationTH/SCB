@@ -69,6 +69,10 @@ class PersistenceManager {
         subsystemEvents: data.subsystemEvents || null,
         // ST-9.2: Active arm tier (Y0_QUAD / Y1_HEX / Y3_OCTO)
         armTier: data.armTier ?? 'Y0_QUAD',
+        // Q2 Net-Launch Ceremony first-time flags (CEREMONY_REDESIGN.md §5.6)
+        ceremonyFlags: {
+          FIRST_NET_DEPLOY: data.ceremonyFlags?.FIRST_NET_DEPLOY ?? false,
+        },
       };
 
       localStorage.setItem(SAVE_KEY, JSON.stringify(saveData));
@@ -152,6 +156,35 @@ class PersistenceManager {
     if (!this._storageAvailable) return false;
     const data = this.peek() || {};
     data.armTier = tierName;
+    return this.save(data);
+  }
+
+  // =========================================================================
+  // Q2 NET-LAUNCH CEREMONY FIRST-TIME FLAGS — CEREMONY_REDESIGN.md §5.6
+  // =========================================================================
+
+  /**
+   * Read a ceremony first-time flag (Q2 net-launch ceremony).
+   * Returns false for missing/legacy saves (backward-compat).
+   * @param {string} name — flag name (e.g., 'FIRST_NET_DEPLOY')
+   * @returns {boolean}
+   */
+  getCeremonyFlag(name) {
+    const data = this.peek();
+    return data?.ceremonyFlags?.[name] ?? false;
+  }
+
+  /**
+   * Persist a ceremony first-time flag (Q2 net-launch ceremony).
+   * Read-modify-write: loads existing save, patches ceremonyFlags[name], writes back.
+   * @param {string} name — flag name (e.g., 'FIRST_NET_DEPLOY')
+   * @param {boolean} value
+   * @returns {boolean} Whether save succeeded
+   */
+  setCeremonyFlag(name, value) {
+    if (!this._storageAvailable) return false;
+    const data = this.peek() || {};
+    data.ceremonyFlags = { ...(data.ceremonyFlags || {}), [name]: !!value };
     return this.save(data);
   }
 

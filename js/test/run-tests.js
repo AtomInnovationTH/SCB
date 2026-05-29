@@ -182,6 +182,18 @@ import './test-ProfileFlags.js';
 // Sprint 3 GPU profiling: AutoProfileSweep delta computation + start() guards
 import './test-AutoProfileSweep.js';
 
+// Q2 Stage 1: Net Ceremony event emission from NetProjectile FSM
+import './test-NetCeremonyEvents.js';
+
+// Q2 Stage 3: NET_CINEMATIC camera view — 7-beat net ceremony cinematic
+import './test-NetCinematic.js';
+
+// Q2 Stage 4: Ceremony time-dilation plumbing (CeremonyTimeScale + orbital divergence safety)
+import './test-NetCeremonyTimeScale.js';
+
+// Q2 Stage 5: First-deploy persistence + end-to-end ceremony wire integrity
+import './test-NetCeremonyFirstDeploy.js';
+
 // Flush any pending async describes, then print summary
 await Promise.resolve();
 summary();

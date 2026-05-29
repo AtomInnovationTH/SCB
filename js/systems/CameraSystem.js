@@ -10,6 +10,9 @@ import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
+import { captureNetSystem } from '../entities/CaptureNet.js';
+import { persistenceManager } from './PersistenceManager.js';
+import { CeremonyTimeScale } from './CeremonyTimeScale.js';
 
 // ──────────────────────────────────────────────────────────────────────────
 // [DBG-ARM] Temporary debug helpers — remove after diagnosing camera/orient bugs
@@ -30,6 +33,7 @@ export const CameraViews = {
   TARGET_LOCK: 'TARGET_LOCK',
   ARM_PILOT: 'ARM_PILOT',
   INSPECTION: 'INSPECTION',
+  NET_CINEMATIC: 'NET_CINEMATIC',
 };
 
 /** View cycling order (First Person excluded — accessible via separate binding) */
@@ -47,6 +51,7 @@ const VIEW_LABELS = {
   [CameraViews.ORBIT]:        '🌍 OVERVIEW',
   [CameraViews.ARM_PILOT]:    '🤖 ARM PILOT',
   [CameraViews.INSPECTION]:   '🔍 INSPECTION',
+  [CameraViews.NET_CINEMATIC]: '🎬 NET CINEMATIC',
 };
 
 // ============================================================================
@@ -228,6 +233,32 @@ export class CameraSystem {
       prevLook: new THREE.Vector3(),
     };
 
+    // Q2: Net ceremony cinematic state (parallel to _launchCeremony)
+    this._netCeremony = {
+      active: false,
+      beatIndex: 0,
+      beatTimer: 0,
+      beats: [],          // ordered beat definitions: [{ key, duration, fov }]
+      armIndex: -1,
+      podIndex: -1,
+      arm: null,           // ArmUnit reference (the arm that fired the net)
+      savedView: null,     // previous CameraView to restore
+      savedFov: 0,         // pre-ceremony _baseFov
+      isFirstEver: false,  // true if this is the first-ever net deploy
+      success: null,       // null until NET_CEREMONY_COMPLETE event
+      // Persistent geometry (set once at ceremony start)
+      _launchFwd: new THREE.Vector3(),     // launch direction (unit)
+      _sideDir: new THREE.Vector3(),       // port-side (cross fwd × radialUp)
+      _netDiameterScene: 0,                // D × M, scene units
+      // Per-frame scratch vectors (ZERO allocation in hot path)
+      _v3a: new THREE.Vector3(),  // result pos
+      _v3b: new THREE.Vector3(),  // result look
+      _v3c: new THREE.Vector3(),  // localUp / result up
+      _v3d: new THREE.Vector3(),  // debrisPos
+      _v3e: new THREE.Vector3(),  // general scratch
+      _scratchNetPos: new THREE.Vector3(), // net scene position
+    };
+
     // ========================================================================
     // HUD OVERLAY for view indicator
     // ========================================================================
@@ -252,6 +283,17 @@ export class CameraSystem {
     // V-7: Launch ceremony trigger
     eventBus.on(Events.LAUNCH_CEREMONY_START, ({ arm }) => {
       this.startLaunchCeremony(arm);
+    });
+
+    // Q2: Net ceremony event subscriptions (gated at handler entry)
+    eventBus.on(Events.NET_CEREMONY_START, (payload) => {
+      this._onNetCeremonyStart(payload);
+    });
+    eventBus.on(Events.NET_BRAKE_FIRED, (payload) => {
+      this._onNetBrakeFired(payload);
+    });
+    eventBus.on(Events.NET_CEREMONY_COMPLETE, (payload) => {
+      this._onNetCeremonyComplete(payload);
     });
 
     this._boundMouseDown = this._onMouseDown.bind(this);
@@ -288,6 +330,13 @@ export class CameraSystem {
    */
   setView(view) {
     if (view === this.currentView && !this._transitioning) return;
+
+    // Q2 Stage 6: external view switch during an active net ceremony aborts
+    // the ceremony cleanly (FOV/time-scale restored, FIRST_NET_DEPLOY NOT
+    // written). NET_CINEMATIC entries from the ceremony itself are exempt.
+    if (this._netCeremony.active && view !== CameraViews.NET_CINEMATIC) {
+      this._abortNetCeremony();
+    }
 
     // [DBG-ARM] Log every setView entry
     console.log(
@@ -426,6 +475,14 @@ export class CameraSystem {
         this.camera.up.copy(ceremonyUp);
         this.camera.lookAt(result.look);
       }
+    } else if (this._netCeremony.active) {
+      // Q2: Net cinematic override — bypass normal view computation
+      const ncResult = this._updateNetCeremony(dt, playerPos, velDir, radialDir, playerQuat);
+      if (ncResult) {
+        this.camera.position.copy(ncResult.pos);
+        this.camera.up.copy(ncResult.up);
+        this.camera.lookAt(ncResult.look);
+      }
     } else {
     // Compute target camera state based on current view
     let targetPos;
@@ -547,7 +604,7 @@ export class CameraSystem {
 
     // Phase 4: FOV breathe during sustained thrust (I-War heritage)
     // Skip during ARM_PILOT (has its own narrow FOV)
-    if (this.currentView !== CameraViews.ARM_PILOT && !this._launchCeremony.active) {
+    if (this.currentView !== CameraViews.ARM_PILOT && !this._launchCeremony.active && !this._netCeremony.active) {
       const thrustMag = this._thrustVisualMag;
       if (thrustMag > 0.05) {
         // Accumulate sustained thrust timer
@@ -1259,6 +1316,493 @@ export class CameraSystem {
     // Phase-change log at line ~1069 is kept (low-volume).
 
     return { pos, look };
+  }
+
+  // ==========================================================================
+  // Q2: NET CEREMONY CINEMATIC (CEREMONY_REDESIGN.md §4)
+  // ==========================================================================
+
+  /**
+   * NET_CEREMONY_START handler — enter NET_CINEMATIC mode.
+   * @private
+   */
+  _onNetCeremonyStart(payload) {
+    if (!Constants.FEATURE_FLAGS.NET_CEREMONY) return;
+    if (this._netCeremony.active) return;       // already in ceremony
+    if (this._launchCeremony.active) return;     // don't interrupt launch
+
+    const c = this._netCeremony;
+    const M = 0.00001;
+    const NC = Constants.CAPTURE_NET.NET_CEREMONY;
+    const BD = NC.BEAT_DURATIONS_S;
+    const HCB = NC.HIGHLIGHTS_CUT_BEATS;
+    const HTS = NC.HIGHLIGHTS_TIME_SCALE;
+
+    // Read first-deploy flag from PersistenceManager
+    const firstDeployDone = persistenceManager.getCeremonyFlag('FIRST_NET_DEPLOY');
+    const isFirstEver = !firstDeployDone;
+
+    // FOV targets per beat (design doc §5.3)
+    const BEAT_FOV = {
+      POD_MUZZLE_PREFIRE: 35,
+      MUZZLE_EXIT_SPINUP: 40,
+      GLAMOUR_SHOT:       50,
+      APPROACH_DOLLY:     45,
+      BRAKE_ENVELOP:      38,
+      CINCH:              42,
+      SECURED_SETTLE:     45,
+    };
+
+    // Stage 4 (CEREMONY_REDESIGN.md §5.1): per-beat physics time-scale.
+    // Applied ONLY to NetProjectile.update() and CaptureNetVisual.update() via
+    // CeremonyTimeScale. World dt stays at 1.0× (§6 R1).
+    const BEAT_TIME_SCALE = {
+      POD_MUZZLE_PREFIRE: NC.TIME_SCALE_PRE_FLIGHT, // 0.4 — beats 1–2
+      MUZZLE_EXIT_SPINUP: NC.TIME_SCALE_PRE_FLIGHT, // 0.4
+      GLAMOUR_SHOT:       NC.TIME_SCALE_GLAMOUR,    // 0.5 — beat 3
+      APPROACH_DOLLY:     NC.TIME_SCALE_APPROACH,   // 0.6 — beat 4
+      BRAKE_ENVELOP:      NC.TIME_SCALE_BRAKE,      // 0.3 — beat 5 (heavy slowmo)
+      CINCH:              NC.TIME_SCALE_CINCH,      // 0.4 — beat 6
+      SECURED_SETTLE:     1.0,                      // beat 7 — full speed
+    };
+
+    let beats;
+    if (isFirstEver) {
+      // Full 7-beat sequence
+      beats = [
+        { key: 'POD_MUZZLE_PREFIRE', duration: BD.POD_MUZZLE_PREFIRE, fov: 35, timeScale: BEAT_TIME_SCALE.POD_MUZZLE_PREFIRE },
+        { key: 'MUZZLE_EXIT_SPINUP', duration: BD.MUZZLE_EXIT_SPINUP, fov: 40, timeScale: BEAT_TIME_SCALE.MUZZLE_EXIT_SPINUP },
+        { key: 'GLAMOUR_SHOT',       duration: BD.GLAMOUR_SHOT,       fov: 50, timeScale: BEAT_TIME_SCALE.GLAMOUR_SHOT },
+        // APPROACH_DOLLY: was 2.0 s, raised to 8.0 s on 2026-05-25 so that the
+        // FLIGHT phase actually completes inside this beat for typical 30–80 m
+        // engagements (10 m/s × scale 0.6 = 6 m/s wall, so 8 s wall ≈ 48 m of
+        // flight). NET_BRAKE_FIRED force-advances out of this beat as soon as
+        // contact occurs, so the long cap is just a safety upper bound — it
+        // does not extend the ceremony when contact happens earlier.
+        { key: 'APPROACH_DOLLY',     duration: 8.0,                   fov: 45, timeScale: BEAT_TIME_SCALE.APPROACH_DOLLY },
+        { key: 'BRAKE_ENVELOP',      duration: BD.BRAKE_ENVELOP,      fov: 38, timeScale: BEAT_TIME_SCALE.BRAKE_ENVELOP },
+        { key: 'CINCH',              duration: BD.CINCH,              fov: 42, timeScale: BEAT_TIME_SCALE.CINCH },
+        { key: 'SECURED_SETTLE',     duration: BD.SECURED_SETTLE,     fov: 45, timeScale: BEAT_TIME_SCALE.SECURED_SETTLE },
+      ];
+    } else {
+      // Highlights cut: only HIGHLIGHTS_CUT_BEATS at scaled wall-clock duration.
+      // Per-beat physics time-scale is the SAME as the full sequence — only
+      // the beat DURATION is multiplied by HIGHLIGHTS_TIME_SCALE.
+      // APPROACH_DOLLY is a special case: it has no single BEAT_DURATIONS_S
+      // entry (only _MIN/_MAX), and the full-sequence code uses an 8.0 s
+      // safety cap that force-advances on NET_BRAKE_FIRED. The highlights
+      // cut must use the same cap so the FSM has time to actually contact
+      // the target inside the ceremony (the 2026-05-25 capture-flow fix).
+      beats = HCB.map(key => {
+        const duration = key === 'APPROACH_DOLLY'
+          ? 8.0 * HTS
+          : BD[key] * HTS;
+        return {
+          key,
+          duration,
+          fov: BEAT_FOV[key],
+          timeScale: BEAT_TIME_SCALE[key] ?? 1.0,
+        };
+      });
+    }
+
+    // Resolve arm reference — should be the arm in ARM_PILOT
+    const arm = this.armPilot.arm;
+    if (!arm || !arm.position) return;
+
+    // Resolve net projectile for diameter and launch direction
+    const net = captureNetSystem.getActiveNetForArm(payload.armIndex);
+
+    c.active = true;
+    c.beatIndex = 0;
+    c.beatTimer = 0;
+    c.beats = beats;
+    c.armIndex = payload.armIndex;
+    c.podIndex = payload.podIndex;
+    c.arm = arm;
+    c.savedView = this.currentView;
+    c.savedFov = this._baseFov;
+    c.isFirstEver = isFirstEver;
+    c.success = null;
+
+    // Store launch direction (unit vector)
+    if (net) {
+      c._launchFwd.set(
+        net.launchDirection.x,
+        net.launchDirection.y,
+        net.launchDirection.z
+      ).normalize();
+      c._netDiameterScene = (net.netClass?.DIAMETER || 5) * M;
+    } else if (arm.target && arm.target._scenePosition) {
+      c._launchFwd.copy(arm.target._scenePosition).sub(arm.position).normalize();
+      c._netDiameterScene = 5 * M;
+    } else {
+      c._launchFwd.copy(this._lastVelDir);
+      c._netDiameterScene = 5 * M;
+    }
+
+    // Side direction: cross(fwd, radialUp) — consistent "port side"
+    const radialUp = c._v3e.copy(arm.position).normalize();
+    c._sideDir.crossVectors(c._launchFwd, radialUp).normalize();
+    if (c._sideDir.lengthSq() < 0.001) {
+      c._sideDir.crossVectors(c._launchFwd, c._v3e.set(0, 1, 0)).normalize();
+    }
+
+    // Stage 4: publish first beat's physics time-scale BEFORE the next tick of
+    // NetProjectile / CaptureNetVisual runs. EventBus is synchronous, so this
+    // handler completes inside captureNetSystem.update() before the camera tick.
+    // The very first NetProjectile sub-step that emitted NET_CEREMONY_START
+    // already ran at 1.0× (one-frame lag accepted; beats are multi-frame).
+    if (beats.length > 0) {
+      CeremonyTimeScale.set(beats[0].timeScale ?? 1.0);
+    }
+
+    // Switch to NET_CINEMATIC mode
+    this.currentView = CameraViews.NET_CINEMATIC;
+    this._transitioning = false;
+    this._transitionProgress = 0;
+    this._fovTransitionStart = undefined;
+    this._fovTransitionEnd = undefined;
+  }
+
+  /**
+   * NET_BRAKE_FIRED advisory handler — snap APPROACH_DOLLY to BRAKE_ENVELOP.
+   * @private
+   */
+  _onNetBrakeFired(payload) {
+    if (!Constants.FEATURE_FLAGS.NET_CEREMONY) return;
+    const c = this._netCeremony;
+    if (!c.active) return;
+    if (c.armIndex !== payload.armIndex) return;
+
+    const beat = c.beats[c.beatIndex];
+    if (beat && beat.key === 'APPROACH_DOLLY') {
+      // Force beat advance on next update frame
+      c.beatTimer = beat.duration;
+    }
+  }
+
+  /**
+   * NET_CEREMONY_COMPLETE handler — handle miss (truncate) or success (let play out).
+   * @private
+   */
+  _onNetCeremonyComplete(payload) {
+    if (!Constants.FEATURE_FLAGS.NET_CEREMONY) return;
+    const c = this._netCeremony;
+    if (!c.active) return;
+    if (c.armIndex !== payload.armIndex) return;
+
+    c.success = payload.success;
+
+    if (payload.success === false) {
+      // Miss path: truncate immediately, do NOT set first-deploy flag
+      this._exitNetCeremony(false);
+    }
+    // Success path: let the ceremony beats play out naturally.
+    // _updateNetCeremony will call _exitNetCeremony(true) when all beats finish.
+  }
+
+  /**
+   * Compute a beat's camera endpoint position (design doc §5.3).
+   * Writes into `out`; no allocation.
+   * @private
+   * @param {THREE.Vector3} out — pre-allocated output vector
+   * @param {string} key — beat key or 'ARM_PILOT_START'
+   */
+  _netCeremonyBeatPos(out, key, armPos, netPos, debrisPos, fwd, side, localUp, D_M) {
+    const M = 0.00001;
+    switch (key) {
+      case 'ARM_PILOT_START':
+      case 'SECURED_SETTLE': {
+        // ARM_PILOT standard position: behind arm toward debris, above
+        const apFwd = this._netCeremony._v3e;
+        if (debrisPos.distanceToSquared(armPos) > 1e-20) {
+          apFwd.subVectors(debrisPos, armPos).normalize();
+        } else {
+          apFwd.copy(fwd);
+        }
+        return out.copy(armPos)
+          .addScaledVector(apFwd, -this.armPilot.offsetBehind)
+          .addScaledVector(localUp, this.armPilot.offsetAbove);
+      }
+      case 'POD_MUZZLE_PREFIRE':
+        return out.copy(armPos)
+          .addScaledVector(fwd, -0.6 * M)
+          .addScaledVector(localUp, 0.15 * M);
+      case 'MUZZLE_EXIT_SPINUP':
+        return out.copy(armPos)
+          .addScaledVector(localUp, 1.0 * M)
+          .addScaledVector(side, 2.5 * M);
+      case 'GLAMOUR_SHOT':
+        // Stage 3 retune 2026-05-24: 0.8 → 1.5 (D fractions; mouthR=0.5D so
+        // distance/radius = 1.5/0.5 = 3.0× — hero-shot silhouette breathing room).
+        return out.copy(netPos)
+          .addScaledVector(fwd, -1.5 * D_M);
+      case 'APPROACH_DOLLY':
+        // Stage 3 retune 2026-05-24: 0.5 → 1.25 (ratio 2.5× — outside cone wall).
+        return out.copy(netPos)
+          .addScaledVector(side, 1.25 * D_M);
+      case 'BRAKE_ENVELOP':
+        // 2026-05-25 Stage 3 fix (CONTINUOUS netPos-tracking + apex-plane-breakout):
+        // (1) NO cached `_beat5WorldPos` — see CINCH-class regression test 11 in
+        //     test-NetCinematic.js. The orbital frame translates >100 km/s; any
+        //     stale absolute anchor goes catastrophically out of frame in <1 s.
+        // (2) Camera MUST have a non-zero `fwd` component. Previously the offset
+        //     was `side × 1.25 × D_M` only — putting the camera in the apex plane
+        //     (perpendicular to launchDir). The ENVELOP animation translates the
+        //     8 rim weights along the cone axis from z=−coneH (mouth plane) to
+        //     z=0 (apex plane). With camera in the apex plane the weight start
+        //     position is at atan(coneH/sideOffset)=atan(0.55D/1.25D)=23.7° off
+        //     the camera→apex axis — OUTSIDE the half-FOV-V of 19° at beat-5
+        //     FOV=38°. User saw weights "pop in" only at the end of the sweep
+        //     (= same experience as before any of these fixes).
+        //     New offset: (side 1.5, fwd 0.6, up 0.5) × D_M places the camera
+        //     in a 3/4 elevated side view. Distance/mouthR = √(2.25+0.36+0.25)/0.5
+        //     = 3.38× (still well outside cone surface). The fwd component
+        //     pushes the camera off the apex plane so the weight sweep is
+        //     observed obliquely (parallax visible).
+        return out.copy(netPos)
+          .addScaledVector(side, 1.5 * D_M)
+          .addScaledVector(fwd, 0.6 * D_M)
+          .addScaledVector(localUp, 0.5 * D_M);
+      case 'CINCH':
+        // 2026-05-25 Stage 3 fix (apex-plane-breakout, front-view framing):
+        // Previous offset was (side 1.5, up −0.3) × D_M — again perpendicular
+        // to launchDir, so the camera sat in the apex plane (same plane the
+        // CINCH_CLOSING weights spin in). The weight ring was seen EDGE-ON
+        // — a contracting horizontal line, not a closing drawstring spiral.
+        // New offset uses fwd × 2.0 × D_M (camera AHEAD of mouth, looking back
+        // through the bag's open mouth at the apex plane) plus a small side
+        // component for parallax. The apex plane is now perpendicular to the
+        // camera's view direction → weights' spiral inward is rendered as a
+        // shrinking 2-D circle dead-centre in the frame. Distance/mouthR ratio:
+        // √(0.4² + 2.0² + 0.4²)/0.5 = √4.32/0.5 = 4.16× (well outside cone).
+        return out.copy(netPos)
+          .addScaledVector(side, 0.4 * D_M)
+          .addScaledVector(fwd, 2.0 * D_M)
+          .addScaledVector(localUp, 0.4 * D_M);
+      default:
+        return out.copy(armPos);
+    }
+  }
+
+  /**
+   * Compute a beat's lookAt target. Writes into `out`; no allocation.
+   * @private
+   */
+  _netCeremonyBeatLook(out, key, armPos, netPos, debrisPos, fwd, D_M) {
+    switch (key) {
+      case 'ARM_PILOT_START':
+      case 'SECURED_SETTLE':
+      case 'GLAMOUR_SHOT':
+        return out.copy(debrisPos);
+      case 'POD_MUZZLE_PREFIRE':
+        return out.copy(armPos);
+      case 'MUZZLE_EXIT_SPINUP':
+        return out.copy(netPos);
+      case 'BRAKE_ENVELOP':
+        // 2026-05-25 — look at cone midpoint (apex + fwd × coneH/2), not the
+        // apex itself. The ENVELOP animation occupies the full cone length
+        // (weights translate from mouth-plane to apex-plane). Centering on the
+        // apex pushes the FROM-end of the weight sweep (mouth plane) outside
+        // the FOV; centering on the midpoint balances both ends in frame.
+        // coneH = D × CONE_LENGTH_FRAC × CONE_OPEN_RADIUS_FRAC.
+        // 2026-05-28 (Item 1): CONE_LENGTH_FRAC bumped 0.55 → 0.85 so the
+        // cinch closes past the debris's leading edge (gap = 0.35 × D
+        // instead of 0.05 × D).  Midpoint moves 0.275 × D → 0.425 × D.
+        return out.copy(netPos).addScaledVector(fwd, 0.425 * (D_M ?? 0));
+      case 'CINCH':
+        // 2026-05-26 GEOMETRY FIX: CINCH ring contracts at the MOUTH plane
+        // (local z=-coneHeight).  2026-05-28 (Item 1): CONE_LENGTH_FRAC was
+        // 0.55, so coneH was 0.55 × D and the mouth/ring sat 0.4 m past the
+        // target — the user perceived the ring cinching THROUGH the
+        // debris's middle.  Bumped to 0.85 so coneH = 0.85 × D and the
+        // ring sits 0.35 × D past the target (2.8 m for LARGE D=8) —
+        // safely past the leading edge of the debris.  This look-at value
+        // = CONE_LENGTH_FRAC × CONE_OPEN_RADIUS_FRAC × D_M and MUST stay
+        // in sync with Constants.CAPTURE_NET.NET_CEREMONY.CONE_LENGTH_FRAC.
+        return out.copy(netPos).addScaledVector(fwd, 0.85 * (D_M ?? 0));
+      case 'APPROACH_DOLLY':
+        // Midpoint of net and debris
+        return out.copy(netPos).add(debrisPos).multiplyScalar(0.5);
+      default:
+        return out.copy(armPos);
+    }
+  }
+
+  /**
+   * Compute net scene position into c._scratchNetPos. No allocation.
+   * @private
+   */
+  _computeNetScenePos(c) {
+    const M = 0.00001;
+    const net = captureNetSystem.getActiveNetForArm(c.armIndex);
+    if (net && net._sourceArm?.position) {
+      const ap = net._sourceArm.position;
+      c._scratchNetPos.set(
+        ap.x + net.launchDirection.x * net.distanceTraveled * M,
+        ap.y + net.launchDirection.y * net.distanceTraveled * M,
+        ap.z + net.launchDirection.z * net.distanceTraveled * M
+      );
+    } else if (c.arm?.position) {
+      c._scratchNetPos.copy(c.arm.position);
+    } else {
+      c._scratchNetPos.set(0, 0, 0);
+    }
+  }
+
+  /**
+   * Per-frame net ceremony beat update. Returns { pos, look, up } or null.
+   * All returned vectors are pre-allocated ceremony scratch — caller must
+   * copy them immediately (same pattern as _updateLaunchCeremony).
+   * @private
+   */
+  _updateNetCeremony(dt, playerPos, velDir, radialDir, playerQuat) {
+    const c = this._netCeremony;
+
+    c.beatTimer += dt;
+    let beat = c.beats[c.beatIndex];
+
+    // Beat advance
+    if (c.beatTimer >= beat.duration) {
+      c.beatTimer -= beat.duration;
+      c.beatIndex++;
+      if (c.beatIndex >= c.beats.length) {
+        this._exitNetCeremony(true);
+        return null;
+      }
+      beat = c.beats[c.beatIndex];
+      // Stage 4: publish new beat's physics time-scale (CEREMONY_REDESIGN.md §5.1)
+      CeremonyTimeScale.set(beat.timeScale ?? 1.0);
+    }
+
+    const t = c.beatTimer / beat.duration;
+    const ease = t * t * (3 - 2 * t); // smoothstep
+
+    const arm = c.arm;
+    if (!arm || !arm.position) {
+      this._exitNetCeremony(false);
+      return null;
+    }
+
+    const armPos = arm.position;
+    this._computeNetScenePos(c);
+    const netPos = c._scratchNetPos;
+    const fwd = c._launchFwd;
+    const side = c._sideDir;
+    const D_M = c._netDiameterScene;
+
+    // Debris scene position (into c._v3d)
+    const debrisPos = c._v3d;
+    if (arm.target?._scenePosition) {
+      debrisPos.copy(arm.target._scenePosition);
+    } else if (arm._stationKeepTarget?._scenePosition) {
+      debrisPos.copy(arm._stationKeepTarget._scenePosition);
+    } else {
+      debrisPos.copy(armPos).addScaledVector(fwd, 0.0005);
+    }
+
+    // Local up (radial at arm, orthogonalized against fwd)
+    const localUp = c._v3c;
+    localUp.copy(armPos).normalize();
+    const upDot = localUp.dot(fwd);
+    if (Math.abs(upDot) < 0.999) {
+      localUp.addScaledVector(fwd, -upDot).normalize();
+    }
+
+
+    // ── Compute FROM (previous beat endpoint) and TO (current beat endpoint) ──
+    const prevKey = c.beatIndex > 0 ? c.beats[c.beatIndex - 1].key : 'ARM_PILOT_START';
+    this._netCeremonyBeatPos(this._tmpVecA, prevKey, armPos, netPos, debrisPos, fwd, side, localUp, D_M);
+    this._netCeremonyBeatPos(this._tmpVecB, beat.key, armPos, netPos, debrisPos, fwd, side, localUp, D_M);
+
+    // Output position (lerpVectors reads A,B then writes into _v3a — safe)
+    const pos = c._v3a;
+    pos.lerpVectors(this._tmpVecA, this._tmpVecB, ease);
+
+    // ── Compute FROM/TO lookAt targets ──
+    this._netCeremonyBeatLook(this._tmpVecA, prevKey, armPos, netPos, debrisPos, fwd, D_M);
+    this._netCeremonyBeatLook(this._tmpVecB, beat.key, armPos, netPos, debrisPos, fwd, D_M);
+
+    // Output lookAt
+    const look = c._v3b;
+    look.lerpVectors(this._tmpVecA, this._tmpVecB, ease);
+
+    // FOV lerp between previous beat's target and current beat's target
+    const prevFov = c.beatIndex > 0 ? c.beats[c.beatIndex - 1].fov : c.savedFov;
+    this._baseFov = prevFov + (beat.fov - prevFov) * ease;
+    this.camera.fov = this._baseFov;
+    this.camera.near = 0.000001; // ~0.1m (tight framing)
+    this.camera.updateProjectionMatrix();
+
+    // Up vector (localUp already computed into c._v3c)
+    return { pos, look, up: localUp };
+  }
+
+  /**
+   * Q2 Stage 6 — abort an active net ceremony WITHOUT routing through
+   * setView(prevView). Used by setView() when an external view change is
+   * requested mid-ceremony; the new view is set by setView's normal flow,
+   * so this helper only undoes ceremony side-effects (FOV, state, time-scale).
+   * FIRST_NET_DEPLOY is intentionally NOT written — abort ≠ normal completion.
+   * @private
+   */
+  _abortNetCeremony() {
+    const c = this._netCeremony;
+    if (!c.active) return;
+
+    // Restore FOV
+    this._baseFov = c.savedFov;
+    this.camera.fov = c.savedFov;
+    this.camera.near = Constants.CAMERA_NEAR;
+    this.camera.updateProjectionMatrix();
+
+    // Clear ceremony state
+    c.active = false;
+    c.beatIndex = 0;
+    c.beatTimer = 0;
+    c.beats = [];
+    c.arm = null;
+    c.success = null;
+
+    // Stage 4: clear ceremony time-scale (world dt back to 1.0× — §6 R1)
+    CeremonyTimeScale.reset();
+  }
+
+  /**
+   * Exit net ceremony — restore previous view and FOV.
+   * @private
+   * @param {boolean} completedNormally — true if all beats played, false on truncation/miss
+   */
+  _exitNetCeremony(completedNormally) {
+    const c = this._netCeremony;
+    if (!c.active) return;
+
+    // Set first-deploy flag at end of first-ever SUCCESSFUL ceremony
+    if (completedNormally && c.isFirstEver && c.success !== false) {
+      persistenceManager.setCeremonyFlag('FIRST_NET_DEPLOY', true);
+    }
+
+    // Restore FOV
+    this._baseFov = c.savedFov;
+    this.camera.fov = c.savedFov;
+    this.camera.near = Constants.CAMERA_NEAR;
+    this.camera.updateProjectionMatrix();
+
+    // Restore previous view
+    const prevView = c.savedView || CameraViews.ARM_PILOT;
+
+    c.active = false;
+    c.beatIndex = 0;
+    c.beatTimer = 0;
+    c.beats = [];
+    c.arm = null;
+    c.success = null;
+
+    // Stage 4: clear ceremony time-scale (world dt back to 1.0× — §6 R1)
+    CeremonyTimeScale.reset();
+
+    this.setView(prevView);
   }
 
   // ==========================================================================
