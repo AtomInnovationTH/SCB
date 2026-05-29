@@ -1564,3 +1564,307 @@ describe('CaptureNet — Inventory edge cases', () => {
     teardown();
   });
 });
+
+
+// ══════════════════════════════════════════════════════════════════════════
+// 2026-05-25 — Q2 NET CEREMONY: FSM-vs-beat alignment regression
+// ══════════════════════════════════════════════════════════════════════════
+// Problem captured from a live browser ceremony (CEREMONY_REDESIGN.md §4):
+//   - User fires net at a durable target → recommendCaptureMode picks SLAM_WRAP
+//   - SLAM_WRAP physics path is CONTACT(0.5s) → SECURE_CHECK(0.2s) → CAPTURED,
+//     skipping ENVELOP and CINCH_CLOSING states entirely.
+//   - Camera beats BRAKE_ENVELOP and CINCH (see BEAT_DURATIONS_S) frame those
+//     FSM states, but in SLAM_WRAP they never occur — so the user watches a static cone
+//     in CAPTURED/REELING state, with no engulf or cinch animation rendered.
+// Fix: when FEATURE_FLAGS.NET_CEREMONY is on AND caller did not pass an
+//   explicit `mode`, force CINCH so the FSM traverses BRAKE→ENVELOP→
+//   CINCH_CLOSING and the ceremony has the animations to show. Caller-supplied
+//   `mode` is still honoured (explicit > ceremony override > auto-recommend).
+describe('CaptureNet — Q2 ceremony alignment: captureMode forced to CINCH', () => {
+  let savedCaptureFlag, savedCeremonyFlag;
+  const setup = (ceremonyOn) => {
+    savedCaptureFlag  = Constants.FEATURE_FLAGS.CAPTURE_NET;
+    savedCeremonyFlag = Constants.FEATURE_FLAGS.NET_CEREMONY;
+    Constants.FEATURE_FLAGS.CAPTURE_NET  = true;
+    Constants.FEATURE_FLAGS.NET_CEREMONY = !!ceremonyOn;
+    captureNetSystem.reset();
+    captureNetSystem.init();
+  };
+  const teardown = () => {
+    Constants.FEATURE_FLAGS.CAPTURE_NET  = savedCaptureFlag;
+    Constants.FEATURE_FLAGS.NET_CEREMONY = savedCeremonyFlag;
+    captureNetSystem.reset();
+  };
+
+  // Durable metal target — recommendCaptureMode (CaptureNet.js:130) returns
+  // SLAM_WRAP for (no solar panels, vRel<5, surfaceRoughness>=0.5).
+  const durableTarget = () => makeTarget(10, 0, 0, 100, {
+    hasSolarPanels: false,
+    vRel: 2,
+    surfaceRoughness: 1.0,
+  });
+
+  it('CEREMONY OFF: durable target still resolves to SLAM_WRAP (no override)', () => {
+    setup(false);
+    // Sanity: recommendCaptureMode picks SLAM_WRAP for this target.
+    assert.equal(recommendCaptureMode({ hasSolarPanels: false, vRel: 2, surfaceRoughness: 1.0 }),
+      MODES.SLAM_WRAP, 'pre-check: durable target should recommend SLAM_WRAP');
+
+    const motherNet = captureNetSystem.fireMotherNet(
+      0, { x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, durableTarget()
+    );
+    assert.equal(motherNet.captureMode, MODES.SLAM_WRAP,
+      'mother pod: with ceremony OFF, durable target keeps SLAM_WRAP recommendation');
+
+    const arm = mockArm('weaver');
+    const daughterNet = captureNetSystem.fireDaughterNet(
+      arm, 0, { x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, durableTarget()
+    );
+    assert.equal(daughterNet.captureMode, MODES.SLAM_WRAP,
+      'daughter arm: with ceremony OFF, durable target keeps SLAM_WRAP recommendation');
+    teardown();
+  });
+
+  it('CEREMONY ON: durable target is FORCED to CINCH (mother pod)', () => {
+    setup(true);
+    const net = captureNetSystem.fireMotherNet(
+      0, { x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, durableTarget()
+    );
+    assert.equal(net.captureMode, MODES.CINCH,
+      'mother pod: with ceremony ON, SLAM_WRAP recommendation must be overridden to CINCH ' +
+      'so beats 5–6 (BRAKE_ENVELOP, CINCH) have FSM states to render');
+    teardown();
+  });
+
+  it('CEREMONY ON: durable target is FORCED to CINCH (daughter arms — weaver + spinner)', () => {
+    setup(true);
+    const armW = mockArm('weaver');
+    const netW = captureNetSystem.fireDaughterNet(
+      armW, 0, { x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, durableTarget()
+    );
+    assert.equal(netW.captureMode, MODES.CINCH,
+      'weaver arm: with ceremony ON, durable target must be forced to CINCH');
+
+    const armS = mockArm('spinner');
+    const netS = captureNetSystem.fireDaughterNet(
+      armS, 1, { x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, durableTarget()
+    );
+    assert.equal(netS.captureMode, MODES.CINCH,
+      'spinner arm: with ceremony ON, durable target must be forced to CINCH');
+    teardown();
+  });
+
+  it('CEREMONY ON: explicit caller-supplied mode still wins over the ceremony override', () => {
+    setup(true);
+    // If a caller (test, future explicit-mode UI) passes SLAM_WRAP explicitly,
+    // we must NOT silently rewrite it. Ceremony override applies only to the
+    // auto-recommend path.
+    const netM = captureNetSystem.fireMotherNet(
+      0, { x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, durableTarget(), MODES.SLAM_WRAP
+    );
+    assert.equal(netM.captureMode, MODES.SLAM_WRAP,
+      'mother pod: explicit SLAM_WRAP must be honoured even when ceremony is on');
+
+    const armW = mockArm('weaver');
+    const netW = captureNetSystem.fireDaughterNet(
+      armW, 0, { x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, durableTarget(), MODES.SLAM_WRAP
+    );
+    assert.equal(netW.captureMode, MODES.SLAM_WRAP,
+      'daughter arm: explicit SLAM_WRAP must be honoured even when ceremony is on');
+    teardown();
+  });
+
+  it('CEREMONY ON: CINCH-recommended target stays CINCH (no double-flip)', () => {
+    setup(true);
+    // Solar-panel target → recommendCaptureMode returns CINCH anyway.
+    const target = makeTarget(10, 0, 0, 100, { hasSolarPanels: true });
+    const net = captureNetSystem.fireMotherNet(
+      0, { x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, target
+    );
+    assert.equal(net.captureMode, MODES.CINCH,
+      'CINCH recommendation passes through unchanged when ceremony is on');
+    teardown();
+  });
+});
+
+
+// ══════════════════════════════════════════════════════════════════════════
+// 2026-05-25 — Q2 NET CEREMONY: "net DISAPPEARS" visual-drift regression
+// ══════════════════════════════════════════════════════════════════════════
+// Bug (browser-reported):
+//   Camera tracks `arm.position + launchDir × distance × M` every frame
+//   (CameraSystem._computeNetScenePos). The visual reads `net.position × M`
+//   and places the cone group there every frame (CaptureNetVisual.update,
+//   line 484). `_updateFlight` updates `net.position` from the arm — but
+//   `_updateContact/Brake/Envelop/CinchClosing/SecureCheck` do NOT. After
+//   contact, the visual freezes at the arm's position-at-contact while the
+//   arm keeps orbiting at ~7 km/s. Camera and visual diverge → cone VANISHES
+//   off-frame within ~1 s.
+// Fix (CaptureNet.js, NetProjectile.update):
+//   Continuously sync `this.position` to arm's current scene position during
+//   CONTACT/BRAKE/ENVELOP/CINCH_CLOSING/SECURE_CHECK. FLIGHT already does
+//   this; REELING has its own logic.
+describe('CaptureNet — Q2 ceremony: net.position tracks arm during post-contact states', () => {
+  // Construct a minimal NetProjectile attached to a mock arm. We then write
+  // the state directly and call update() so we don't have to drive the FSM
+  // through real timings (which mutate stateTimer and trigger transitions).
+  const M_NET = 0.00001;
+  function makeArmedNet(state, opts = {}) {
+    const arm = {
+      // Scene-units position (THREE.Vector3-like). LEO arm is ~6.4e6 m
+      // from Earth centre → scene position ≈ 64 scene units.
+      position: { x: 64, y: 0, z: 0 },
+    };
+    const net = new NetProjectile({
+      netClass: CN.MEDIUM,
+      armIndex: 0,
+      podIndex: -1,
+      launchPosition: { x: 6400000, y: 0, z: 0 },  // 6.4e6 m = 64 / M_NET
+      launchDirection: { x: 1, y: 0, z: 0 },
+      targetDebris: null,
+      captureMode: MODES.CINCH,
+      sourceArm: arm,
+    });
+    net.state = state;
+    net.stateTimer = 0.0;
+    net.distanceTraveled = opts.distanceTraveled ?? 8;  // 8 m flight, typical SK contact
+    // Force initial sync (mimics what _updateFlight would have done on entry).
+    net.position.x = arm.position.x / M_NET + net.launchDirection.x * net.distanceTraveled;
+    net.position.y = arm.position.y / M_NET + net.launchDirection.y * net.distanceTraveled;
+    net.position.z = arm.position.z / M_NET + net.launchDirection.z * net.distanceTraveled;
+    return { net, arm };
+  }
+
+  // The 5 post-FLIGHT pre-REELING states that must keep position synced.
+  const POST_FLIGHT_STATES = [
+    STATES.CONTACT,
+    STATES.BRAKE,
+    STATES.ENVELOP,
+    STATES.CINCH_CLOSING,
+    STATES.SECURE_CHECK,
+  ];
+
+  for (const state of POST_FLIGHT_STATES) {
+    it(`tracks arm during ${state} (no visual drift while orbital frame moves)`, () => {
+      const { net, arm } = makeArmedNet(state);
+
+      // Initial position before drift.
+      const x0 = net.position.x;
+      const y0 = net.position.y;
+      const z0 = net.position.z;
+
+      // Simulate the arm orbiting forward by ~70 km (≈ 1 s at LEO 7 km/s) — same
+      // ballpark as the wall-clock window of a single ceremony beat. In scene
+      // units (1 unit = 100 km), that's 0.7 scene units.
+      arm.position.x += 0.7;   // scene units
+      arm.position.y += 0.1;
+      arm.position.z -= 0.2;
+
+      // Tick the net once with a small dt. We deliberately keep dt tiny so the
+      // state doesn't transition (e.g. BRAKE_TIME = 0.5 s); we just need the
+      // position update path to fire.
+      net.update(0.001);
+
+      // Net position (metres) must reflect the new arm position. Tolerance
+      // 1e-6 m to absorb floating-point round-trip through M_NET.
+      const expectedX = arm.position.x / M_NET + net.launchDirection.x * net.distanceTraveled;
+      const expectedY = arm.position.y / M_NET + net.launchDirection.y * net.distanceTraveled;
+      const expectedZ = arm.position.z / M_NET + net.launchDirection.z * net.distanceTraveled;
+
+      const dx = net.position.x - expectedX;
+      const dy = net.position.y - expectedY;
+      const dz = net.position.z - expectedZ;
+      assert.ok(Math.abs(dx) < 1e-3 && Math.abs(dy) < 1e-3 && Math.abs(dz) < 1e-3,
+        `${state}: net.position must equal arm.position/M + launchDir × dist; ` +
+        `got drift (${dx.toExponential(2)}, ${dy.toExponential(2)}, ${dz.toExponential(2)}) metres`);
+
+      // Sanity: position MUST have moved from the initial value (would have
+      // stayed put under the old buggy code).
+      const moved = Math.hypot(net.position.x - x0, net.position.y - y0, net.position.z - z0);
+      assert.ok(moved > 1000,
+        `${state}: net.position must move with the arm (≥ 1000 m for a 70 km arm shift); ` +
+        `moved only ${moved.toFixed(1)} m — the old buggy code would have moved 0 m here`);
+    });
+  }
+
+  // 2026-05-28 (Item 2 fix): REELING used to skip the position-sync block
+  // entirely, so net.position froze at the orbital-frame contact location
+  // while the arm orbited away at 7 km/s.  The visual disappeared the moment
+  // REELING began.  Now REELING tracks the arm AND blends the effective
+  // launch distance from `tetherPaidOut → 0` as `reelProgress` advances 0→1.
+  it('REELING at progress=0 tracks arm with full tether distance', () => {
+    const { net, arm } = makeArmedNet(STATES.REELING);
+    net.tetherPaidOut = 8;        // contact distance (matches distanceTraveled)
+    net.reelProgress = 0;
+
+    arm.position.x += 0.7;        // shift arm one beat of orbital travel
+    net.update(0.001);
+
+    const expectedX = arm.position.x / M_NET + net.launchDirection.x * 8;
+    assert.ok(Math.abs(net.position.x - expectedX) < 1e-3,
+      `REELING progress=0: position must equal arm.position/M + launchDir × tetherPaidOut; ` +
+      `got ${net.position.x.toExponential(3)} vs expected ${expectedX.toExponential(3)}`);
+  });
+
+  it('REELING at progress=0.5 places net halfway between arm and contact', () => {
+    const { net, arm } = makeArmedNet(STATES.REELING);
+    net.tetherPaidOut = 8;
+    net.reelProgress = 0.5;       // halfway reeled
+
+    arm.position.x += 0.7;
+    net.update(0.001);
+
+    const expectedEff = 8 * 0.5;
+    const expectedX = arm.position.x / M_NET + net.launchDirection.x * expectedEff;
+    assert.ok(Math.abs(net.position.x - expectedX) < 1e-3,
+      `REELING progress=0.5: effective distance must be tetherPaidOut × 0.5 = 4 m; ` +
+      `got x=${net.position.x.toExponential(3)} vs expected ${expectedX.toExponential(3)}`);
+  });
+
+  it('REELING at progress=1.0 places net at arm (rendezvous)', () => {
+    const { net, arm } = makeArmedNet(STATES.REELING);
+    net.tetherPaidOut = 8;
+    net.reelProgress = 1.0;       // fully reeled
+
+    arm.position.x += 0.7;
+    net.update(0.001);
+
+    const expectedX = arm.position.x / M_NET;
+    assert.ok(Math.abs(net.position.x - expectedX) < 1e-3,
+      `REELING progress=1: net must rendezvous with the arm (eff=0); ` +
+      `got x=${net.position.x.toExponential(3)} vs expected ${expectedX.toExponential(3)}`);
+  });
+
+  it('REELING tracks arm orbital motion (no orbital-frame freeze)', () => {
+    // Regression guard for the original Item 2 bug: net.position froze at
+    // the original contact location while the arm continued co-orbiting at
+    // ~7 km/s.  This test asserts that a non-trivial arm shift propagates
+    // into the net position so the visual stays in-frame.
+    const { net, arm } = makeArmedNet(STATES.REELING);
+    net.tetherPaidOut = 8;
+    net.reelProgress = 0.3;
+    const x0 = net.position.x;
+
+    arm.position.x += 0.7;        // 70 km arm shift in scene units
+    net.update(0.001);
+
+    const moved = Math.abs(net.position.x - x0);
+    assert.ok(moved > 1000,
+      `REELING net must move with the arm (≥ 1000 m for a 70 km arm shift); ` +
+      `moved only ${moved.toFixed(1)} m — the pre-fix code would have moved 0 m here`);
+  });
+
+  it('LAUNCHING and SPINNING_UP are NOT affected (pre-FLIGHT, position at launchPosition)', () => {
+    // These states should preserve the launchPosition until FLIGHT begins.
+    for (const s of [STATES.LAUNCHING, STATES.SPINNING_UP]) {
+      const { net, arm } = makeArmedNet(s, { distanceTraveled: 0 });
+      const x0 = net.position.x;
+      arm.position.x += 0.7;
+      net.update(0.001);
+      // distanceTraveled is 0, so even the buggy code's "missing sync" wouldn't
+      // matter here. Just confirm no spurious huge changes.
+      assert.ok(Math.abs(net.position.x - x0) < 1e3,  // < 1 km drift
+        `${s}: should not be impacted by post-FLIGHT sync (small drift only); got ${(net.position.x - x0).toFixed(2)} m`);
+    }
+  });
+});

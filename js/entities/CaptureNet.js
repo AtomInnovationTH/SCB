@@ -18,10 +18,12 @@ import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { BridleRing } from './BridleRing.js';
+import { CeremonyTimeScale } from '../systems/CeremonyTimeScale.js';
 
 const CN = Constants.CAPTURE_NET;
 const STATES = CN.STATES;
 const MODES = CN.MODES;
+const FEATURE_FLAGS = Constants.FEATURE_FLAGS;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // §1  Pure Functions — Cling Probability + Frag Risk
@@ -193,6 +195,14 @@ export class NetProjectile {
 
     // Flag for CaptureNetSystem to detect state changes from forceResolve()
     this._resultProcessed  = false;
+
+    // ── Q2 Ceremony event emission guards (CEREMONY_REDESIGN.md §5.2) ──
+    this._ceremonyStartEmitted    = false;
+    this._brakeImminentEmitted    = false;
+    this._brakeFiredEmitted       = false;
+    this._envelopPeakEmitted      = false;
+    this._ceremonyCompleteEmitted = false;
+    this._lastCinchBucket         = -1;
   }
 
   // ── Tick ────────────────────────────────────────────────────────────────
@@ -203,7 +213,85 @@ export class NetProjectile {
    */
   update(dt) {
     if (!this.isActive) return;
+
+    // Q2 Ceremony: emit start event on first tick.
+    // NOTE: emitted BEFORE the scale read below so that CameraSystem's
+    // _onNetCeremonyStart handler (synchronous via EventBus) can publish the
+    // first beat's timeScale to CeremonyTimeScale before we apply it.
+    if (FEATURE_FLAGS.NET_CEREMONY && !this._ceremonyStartEmitted) {
+      this._ceremonyStartEmitted = true;
+      eventBus.emit(Events.NET_CEREMONY_START, {
+        armIndex: this.armIndex,
+        podIndex: this.podIndex,
+        netClass: this.netClass.CODE,
+      });
+    }
+
+    // Stage 4 (CEREMONY_REDESIGN.md §5, §6 R1): apply ceremony time-dilation to
+    // THIS projectile's internal dt only. World dt (orbital propagation,
+    // debris field, conjunctions, station-keep, etc.) is unaffected — the
+    // scaling happens here, not at the caller (captureNetSystem.update). When
+    // the flag is OFF or no ceremony is active, CeremonyTimeScale.get() === 1.0
+    // (short-circuit) and this is a no-op multiply.
+    const scale = FEATURE_FLAGS.NET_CEREMONY ? CeremonyTimeScale.get() : 1.0;
+    dt = dt * scale;
+
     this.stateTimer += dt;
+
+    // 2026-05-25 — Q2 visual-drift fix (THE "NET DISAPPEARS" BUG).
+    //
+    // Only `_updateFlight` updates `this.position` from the arm's current
+    // scene position; `_updateBrake/Envelop/CinchClosing/SecureCheck` do NOT.
+    // After contact, `net.position` therefore FREEZES at the arm's position
+    // at the moment of contact, while the arm itself keeps orbiting at
+    // ~7 km/s (LEO). [`CaptureNetVisual.update`](js/ui/CaptureNetVisual.js:484)
+    // reads `net.position * M` every frame and places the visual group there,
+    // so the visual is locked to a stale world point that drifts off-frame
+    // within ~1 s of contact.
+    //
+    // CameraSystem._computeNetScenePos meanwhile uses `arm.position + launchDir
+    // * distanceTraveled * M` (CURRENT arm position), so the camera tracks the
+    // arm's co-orbiting frame. Result: camera and visual end up in different
+    // reference frames, and the user sees the bag VANISH right when the
+    // engulf/cinch should start playing — exactly the user-reported symptom.
+    //
+    // Fix: keep `this.position` synced to the arm's current scene position
+    // during ALL post-FLIGHT states.  Each block below documents WHY:
+    //
+    //   CONTACT/BRAKE/ENVELOP/CINCH_CLOSING/SECURE_CHECK — visual stays
+    //     anchored at the launch-distance point in the arm's co-orbiting
+    //     frame (FLIGHT already does this work; running it twice is harmless).
+    //
+    //   REELING — 2026-05-28 (Item 2 fix): _updateReeling had a misleading
+    //     comment claiming it "has its own position logic", but it only
+    //     updates reelProgress (a 0→1 scalar), not position.  Result: net
+    //     visual froze at the orbital-frame contact point while the arm
+    //     co-orbited at 7 km/s, so the user saw the net VANISH the moment
+    //     REELING started.  Now we track the arm AND slide the effective
+    //     launch distance from `tetherPaidOut → 0` as reelProgress
+    //     advances 0→1, so the net visually reels in toward the arm.
+    if (this._sourceArm?.position
+        && (this.state === STATES.CONTACT
+            || this.state === STATES.BRAKE
+            || this.state === STATES.ENVELOP
+            || this.state === STATES.CINCH_CLOSING
+            || this.state === STATES.SECURE_CHECK)) {
+      const M_NET = 0.00001;
+      const ap = this._sourceArm.position;
+      this.position.x = ap.x / M_NET + this.launchDirection.x * this.distanceTraveled;
+      this.position.y = ap.y / M_NET + this.launchDirection.y * this.distanceTraveled;
+      this.position.z = ap.z / M_NET + this.launchDirection.z * this.distanceTraveled;
+    } else if (this._sourceArm?.position && this.state === STATES.REELING) {
+      const M_NET = 0.00001;
+      const ap = this._sourceArm.position;
+      // Effective launch distance shrinks from `tetherPaidOut` (contact
+      // distance) toward 0 as `reelProgress` advances 0→1.  At progress=1
+      // the net rendezvous with the arm.
+      const eff = this.tetherPaidOut * Math.max(0, 1 - this.reelProgress);
+      this.position.x = ap.x / M_NET + this.launchDirection.x * eff;
+      this.position.y = ap.y / M_NET + this.launchDirection.y * eff;
+      this.position.z = ap.z / M_NET + this.launchDirection.z * eff;
+    }
 
     switch (this.state) {
       case STATES.LAUNCHING:     this._updateLaunching(dt);   break;
@@ -300,6 +388,19 @@ export class NetProjectile {
         const dz = sp.z - netZ;
         const distScene = Math.sqrt(dx * dx + dy * dy + dz * dz);
         const radiusScene = (this.netClass.DIAMETER / 2) * M_NET;
+        // Q2 Ceremony: brake-imminent lookahead (cinch path only)
+        if (FEATURE_FLAGS.NET_CEREMONY && !this._brakeImminentEmitted
+            && this.captureMode === MODES.CINCH) {
+          const brakeThreshScene = (this.speed * 0.3 + this.netClass.DIAMETER / 2) * M_NET;
+          if (distScene <= brakeThreshScene) {
+            this._brakeImminentEmitted = true;
+            eventBus.emit(Events.NET_BRAKE_IMMINENT, {
+              armIndex: this.armIndex,
+              podIndex: this.podIndex,
+              tMinus: 0.3,
+            });
+          }
+        }
         if (distScene <= radiusScene) {
           if (this.captureMode === MODES.CINCH) {
             this._transitionTo(STATES.BRAKE);
@@ -314,6 +415,19 @@ export class NetProjectile {
         const dy = (tp.y || 0) - this.position.y;
         const dz = (tp.z || 0) - this.position.z;
         const distToTarget = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        // Q2 Ceremony: brake-imminent lookahead (cinch path only)
+        if (FEATURE_FLAGS.NET_CEREMONY && !this._brakeImminentEmitted
+            && this.captureMode === MODES.CINCH) {
+          const brakeThresh = this.speed * 0.3 + this.netClass.DIAMETER / 2;
+          if (distToTarget <= brakeThresh) {
+            this._brakeImminentEmitted = true;
+            eventBus.emit(Events.NET_BRAKE_IMMINENT, {
+              armIndex: this.armIndex,
+              podIndex: this.podIndex,
+              tMinus: 0.3,
+            });
+          }
+        }
         if (distToTarget <= this.netClass.DIAMETER / 2) {
           if (this.captureMode === MODES.CINCH) {
             this._transitionTo(STATES.BRAKE);
@@ -334,6 +448,15 @@ export class NetProjectile {
 
   /** Phase 5b-A: Tether brake (cinch path) */
   _updateBrake(dt) {
+    // Q2 Ceremony: emit brake-fired on state entry
+    if (FEATURE_FLAGS.NET_CEREMONY && !this._brakeFiredEmitted) {
+      this._brakeFiredEmitted = true;
+      eventBus.emit(Events.NET_BRAKE_FIRED, {
+        armIndex: this.armIndex,
+        podIndex: this.podIndex,
+        tetherTensionN: this.tensionN,
+      });
+    }
     if (this.stateTimer >= CN.BRAKE_TIME) {
       this._transitionTo(STATES.ENVELOP);
     }
@@ -341,6 +464,15 @@ export class NetProjectile {
 
   /** Phase 5b-B: Rim weights sweep past target */
   _updateEnvelop(dt) {
+    // Q2 Ceremony: emit envelop peak at 50% of ENVELOP_TIME
+    if (FEATURE_FLAGS.NET_CEREMONY && !this._envelopPeakEmitted
+        && this.stateTimer >= CN.ENVELOP_TIME * 0.5) {
+      this._envelopPeakEmitted = true;
+      eventBus.emit(Events.NET_ENVELOP_PEAK, {
+        armIndex: this.armIndex,
+        podIndex: this.podIndex,
+      });
+    }
     if (this.stateTimer >= CN.ENVELOP_TIME) {
       this._transitionTo(STATES.CINCH_CLOSING);
     }
@@ -348,6 +480,19 @@ export class NetProjectile {
 
   /** Phase 5b-C: Drawstring cinch closing */
   _updateCinchClosing(dt) {
+    // Q2 Ceremony: emit cinch progress at discrete 10% thresholds
+    if (FEATURE_FLAGS.NET_CEREMONY) {
+      const fraction = Math.min(this.stateTimer / CN.CINCH_CLOSE_TIME, 1);
+      const bucket = Math.floor(fraction * 10);
+      if (bucket !== this._lastCinchBucket) {
+        this._lastCinchBucket = bucket;
+        eventBus.emit(Events.NET_CINCH_PROGRESS, {
+          armIndex: this.armIndex,
+          podIndex: this.podIndex,
+          fraction,
+        });
+      }
+    }
     if (this.stateTimer >= CN.CINCH_CLOSE_TIME) {
       this._transitionTo(STATES.SECURE_CHECK);
     }
@@ -438,6 +583,17 @@ export class NetProjectile {
       capturedMass:  this.capturedMass,
       mode:          this.captureMode,
     });
+
+    // Q2 Ceremony: emit ceremony complete
+    if (FEATURE_FLAGS.NET_CEREMONY && !this._ceremonyCompleteEmitted) {
+      this._ceremonyCompleteEmitted = true;
+      eventBus.emit(Events.NET_CEREMONY_COMPLETE, {
+        armIndex: this.armIndex,
+        podIndex: this.podIndex,
+        mode:     this.captureMode,
+        success:  true,
+      });
+    }
   }
 
   /** @private Transition to MISSED + emit event */
@@ -452,6 +608,17 @@ export class NetProjectile {
       probability: this._clingProbability,
       reason,
     });
+
+    // Q2 Ceremony: emit ceremony complete
+    if (FEATURE_FLAGS.NET_CEREMONY && !this._ceremonyCompleteEmitted) {
+      this._ceremonyCompleteEmitted = true;
+      eventBus.emit(Events.NET_CEREMONY_COMPLETE, {
+        armIndex: this.armIndex,
+        podIndex: this.podIndex,
+        mode:     this.captureMode,
+        success:  false,
+      });
+    }
   }
 
   // ── Player Commands ────────────────────────────────────────────────────
@@ -696,7 +863,22 @@ export class CaptureNetSystem {
     // Deplete inventory
     this._motherPodInventory[podIndex]--;
 
-    const resolvedMode = mode || recommendCaptureMode(target);
+    // CEREMONY_REDESIGN §4 / NET_CEREMONY alignment (2026-05-25):
+    // When NET_CEREMONY is on, the ceremony's beats 5–6 (BRAKE_ENVELOP, CINCH)
+    // assume the CINCH FSM path. SLAM_WRAP physics skips ENVELOP and CINCH_CLOSING
+    // entirely (CONTACT → SECURE_CHECK → CAPTURED in <1 s game-time), so the
+    // visual renders no engulf or cinch animation during those beats — confirmed
+    // by browser log ([NET_CINEMATIC] CEREMONY_START captureMode=SLAM_WRAP) and
+    // by inspecting [`CaptureNet._updateContact`](js/entities/CaptureNet.js:387).
+    // Force CINCH when the auto-recommender would otherwise pick SLAM_WRAP, so
+    // the FSM traverses BRAKE→ENVELOP→CINCH_CLOSING and the ceremony visual
+    // matches the camera beats. Explicit `mode` argument is still honoured
+    // (preserves test paths and future explicit-mode UI). CINCH_P_BASE is
+    // ≥ SLAM_P_BASE in all pairings, so no score regression.
+    let resolvedMode = mode || recommendCaptureMode(target);
+    if (!mode && Constants.FEATURE_FLAGS.NET_CEREMONY) {
+      resolvedMode = MODES.CINCH;
+    }
 
     const net = new NetProjectile({
       netClass:       CN.LARGE,
@@ -759,7 +941,14 @@ export class CaptureNetSystem {
     }
 
     const netClass = (arm.config?.type === 'weaver') ? CN.MEDIUM : CN.SMALL;
-    const resolvedMode = mode || recommendCaptureMode(target);
+
+    // CEREMONY_REDESIGN §4 / NET_CEREMONY alignment (2026-05-25): see fireMotherNet
+    // above for full rationale. Force CINCH so beats 5–6 visuals (ENVELOP, CINCH_CLOSING)
+    // actually render during the ceremony — SLAM_WRAP path skips those states.
+    let resolvedMode = mode || recommendCaptureMode(target);
+    if (!mode && Constants.FEATURE_FLAGS.NET_CEREMONY) {
+      resolvedMode = MODES.CINCH;
+    }
 
     const net = new NetProjectile({
       netClass,

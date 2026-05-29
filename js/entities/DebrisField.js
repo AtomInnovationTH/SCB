@@ -11,6 +11,7 @@ import { Events } from '../core/Events.js';
 import {
   propagateOrbit,
   orbitToSceneCartesian,
+  orbitToSceneCartesianInto,
   totalDeltaV,
   kmToScene,
   orbitalVelocity,
@@ -197,6 +198,21 @@ export class DebrisField {
     this._tempScale = new THREE.Vector3();
     this._tempPos = new THREE.Vector3();
 
+    // Sprint 2 / PR A — scratch outputs for [`orbitToSceneCartesianInto`](js/entities/OrbitalMechanics.js:1).
+    // Reused across every alive debris + every background-point batch each frame.
+    this._tmpCartPos = { x: 0, y: 0, z: 0 };
+    this._tmpCartVel = { x: 0, y: 0, z: 0 };
+    // Background-orbit scratch: avoids the `{...orbit, semiMajorAxis: …}` spread
+    // copy at [`DebrisField._updateBackground()`](js/entities/DebrisField.js:1322).
+    this._tmpBgOrbit = {
+      semiMajorAxis: 0,
+      eccentricity: 0,
+      inclination: 0,
+      raan: 0,
+      argPerigee: 0,
+      trueAnomaly: 0,
+    };
+
     /** UX-4: Floating origin reference position (camera-relative rendering) */
     this._floatingOrigin = new THREE.Vector3();
     this._floatingOriginInitialized = false;
@@ -245,11 +261,22 @@ export class DebrisField {
     this._currentMissionNumber = 1;
 
     // Build everything
+    // §13 boot timeline (?logBoot=1) — finer-grain marks so we can attribute
+    // DebrisField cost to procedural orbit generation vs. InstancedMesh build
+    // vs. flag overlays vs. background Points. `window.__bootMark` is only
+    // attached when `?logBoot=1` is set, and is optional-chained → zero
+    // overhead by default and safe in Node test runner (no window global).
+    const _bm = (typeof window !== 'undefined') ? window.__bootMark : null;
     this._generateDebris();
+    _bm?.('DebrisField._generateDebris (procedural orbit gen) complete');
     initAtlases();                // ST-6.2: generate type + flag atlas textures
+    _bm?.('DebrisField initAtlases (type + flag atlas textures) complete');
     this._buildInstancedMeshes();
+    _bm?.('DebrisField._buildInstancedMeshes complete');
     this._buildFlagOverlays();    // ST-6.2: country flag decal overlay layer
+    _bm?.('DebrisField._buildFlagOverlays complete');
     this._generateBackground();
+    _bm?.('DebrisField._generateBackground (5000 Points) complete');
 
     // ST-6.1: hybrid-mode boot log
     if (this._catalogLoader && this._catalogLoader.isReady && this._catalogLoader.isReady()) {
@@ -630,6 +657,13 @@ export class DebrisField {
   // ==========================================================================
   // INSTANCED MESH CONSTRUCTION
   // ==========================================================================
+
+  // TODO(PR-6/P3.15): InstancedMesh merge opportunity — currently one mesh per
+  // (type, material, variant) key. Profiling with ?profile=1 will reveal if the
+  // ~20-30 draw calls from debris meshes are a bottleneck. Potential merge:
+  // unify materials into a single atlas-textured MeshStandardMaterial and batch
+  // all fragments into one InstancedMesh. Non-trivial: requires UV remapping,
+  // per-instance colour attributes, and flag overlay rewrite. Deferred.
 
   /** @private Build InstancedMesh per (type, material) with wireframe-derived geometry (ST-2.3) */
   _buildInstancedMeshes() {
@@ -1029,9 +1063,6 @@ export class DebrisField {
           culled++;
         }
       }
-      if (culled > 0) {
-        console.log(`[DebrisField] Mission 1: per-frame culled ${culled} debris beyond 2 km`);
-      }
     }
 
     // --- Update interactive debris ---
@@ -1218,10 +1249,11 @@ export class DebrisField {
         );
       }
     } else {
-      const cart = orbitToSceneCartesian(debris.orbit);
-      px = cart.position.x;
-      py = cart.position.y;
-      pz = cart.position.z;
+      // Sprint 2 / PR A — scratch-output variant; no per-debris allocation.
+      orbitToSceneCartesianInto(debris.orbit, this._tmpCartPos, this._tmpCartVel);
+      px = this._tmpCartPos.x;
+      py = this._tmpCartPos.y;
+      pz = this._tmpCartPos.z;
       // Reset pin-logged flag so a future re-capture logs again.
       if (debris._pinLoggedFor) debris._pinLoggedFor = null;
     }
@@ -1237,11 +1269,15 @@ export class DebrisField {
     // ST-6.2: stored on debris for flag overlay LOD
     let scale = debris.sceneSize;
     if (playerPos) {
-      // Skip LOD downscaling for debris that an arm is actively station-keeping on.
-      // LOD uses playerPos (mother ship) but the ARM_PILOT camera is near the debris;
-      // when the mother orbits far away the LOD would zero the scale, hiding the
-      // debris the user is actively working on.
-      if (!debris._isStationKeepTarget) {
+      // Skip LOD downscaling for debris that an arm is actively station-keeping on,
+      // OR that an arm has captured (pinned to the arm during REELING/HAULING/
+      // DOCKING).  LOD uses playerPos (mother ship), but the ARM_PILOT camera is
+      // near the debris.  When the mother orbits far away the LOD would zero
+      // the scale.  For SK targets this hid the inspection debris.  For
+      // captured debris (Item 3 fix, 2026-05-28) it hid the "package" being
+      // reeled in — the user saw only the daughter, with the debris
+      // invisible inside the net during the entire reel-in.
+      if (!debris._isStationKeepTarget && !debris._capturedByArm) {
         const dx = px - playerPos.x;
         const dy = py - playerPos.y;
         const dz = pz - playerPos.z;
@@ -1266,6 +1302,12 @@ export class DebrisField {
 
     // ST-6.2: Store LOD scale for flag overlay sync
     debris._lodScale = scale;
+
+    // Perf: skip compose + setMatrixAt when debris is still invisible (scale 0)
+    // from last frame — the instance buffer already holds a zero-scale matrix.
+    const wasZero = debris._wasZeroScale;
+    debris._wasZeroScale = (scale === 0);
+    if (scale === 0 && wasZero) return;
 
     // Build transform matrix
     // UX-4: Instance positions relative to floating origin (eliminates float32 jitter)
@@ -1308,27 +1350,32 @@ export class DebrisField {
     const start = batchIndex * batchSize;
     const end = Math.min(start + batchSize, BACKGROUND_COUNT);
 
+    // Sprint 2 / PR A — mutate the pre-allocated `_tmpBgOrbit` scratch instead
+    // of `{...orbit, semiMajorAxis: …}` spread (one alloc per batched debris).
+    const bg = this._tmpBgOrbit;
     for (let i = start; i < end; i++) {
       const orbit = this._backgroundOrbits[i];
 
       // Propagate (4× dt since we only update 1/4 per frame)
-      const kmOrbit = {
-        ...orbit,
-        semiMajorAxis: orbit.semiMajorAxis / Constants.SCENE_SCALE,
-      };
-      propagateOrbit(kmOrbit, gameDt * 4);
-      orbit.trueAnomaly = kmOrbit.trueAnomaly;
+      bg.semiMajorAxis = orbit.semiMajorAxis / Constants.SCENE_SCALE;
+      bg.eccentricity = orbit.eccentricity;
+      bg.inclination = orbit.inclination;
+      bg.raan = orbit.raan;
+      bg.argPerigee = orbit.argPerigee;
+      bg.trueAnomaly = orbit.trueAnomaly;
+      propagateOrbit(bg, gameDt * 4);
+      orbit.trueAnomaly = bg.trueAnomaly;
 
-      const cart = orbitToSceneCartesian(orbit);
+      orbitToSceneCartesianInto(orbit, this._tmpCartPos, this._tmpCartVel);
       // UX-4: Background positions relative to floating origin
       if (Constants.FLOATING_ORIGIN_ENABLED && this._floatingOrigin) {
         posAttr.setXYZ(i,
-          cart.position.x - this._floatingOrigin.x,
-          cart.position.y - this._floatingOrigin.y,
-          cart.position.z - this._floatingOrigin.z
+          this._tmpCartPos.x - this._floatingOrigin.x,
+          this._tmpCartPos.y - this._floatingOrigin.y,
+          this._tmpCartPos.z - this._floatingOrigin.z
         );
       } else {
-        posAttr.setXYZ(i, cart.position.x, cart.position.y, cart.position.z);
+        posAttr.setXYZ(i, this._tmpCartPos.x, this._tmpCartPos.y, this._tmpCartPos.z);
       }
     }
 
@@ -1658,10 +1705,20 @@ export class DebrisField {
       if (!debris.alive || debris._captured) continue;
       // M1: only welcome cluster debris can appear (same guard as getEnhancedTargetList)
       if (isMission1 && !debris.welcomeSpawn) continue;
-      const cart = orbitToSceneCartesian(debris.orbit);
-      const dx = cart.position.x - position.x;
-      const dy = cart.position.y - position.y;
-      const dz = cart.position.z - position.z;
+      // Perf: reuse _scenePosition (populated this frame by _updateInstanceTransform);
+      // fall back to orbitToSceneCartesian only if _scenePosition is missing (first frame).
+      const sp = debris._scenePosition;
+      let px, py, pz, cart;
+      if (sp) {
+        px = sp.x; py = sp.y; pz = sp.z;
+        cart = null;
+      } else {
+        cart = orbitToSceneCartesian(debris.orbit);
+        px = cart.position.x; py = cart.position.y; pz = cart.position.z;
+      }
+      const dx = px - position.x;
+      const dy = py - position.y;
+      const dz = pz - position.z;
       const distSq = dx * dx + dy * dy + dz * dz;
       if (distSq < rSq) {
         const dist = Math.sqrt(distSq);
