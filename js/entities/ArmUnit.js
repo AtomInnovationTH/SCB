@@ -1231,6 +1231,22 @@ export class ArmUnit {
     if (this.state !== S.TRANSIT && this.state !== S.APPROACH) return false;
     if (!this.target) return false;
 
+    // 2026-05-28 (Item 8): mirror the inventory gate from captureFromStationKeep
+    // so the ARM_PILOT manual-deploy path also fails loudly when the daughter
+    // is out of nets, instead of silently transitioning to NETTING and getting
+    // a console.warn fallback inside _updateNettingFSM with no UI cue.
+    if (Constants.isFeatureEnabled('CAPTURE_NET') && this._netInventory <= 0) {
+      eventBus.emit(Events.NET_EMPTY_CLICK, { armId: this.id });
+      audioSystem.playClickFail();
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        source: this.id,
+        text: `${this.id}: No nets remaining — return to mother for reload.`,
+        channel: 'CMD',
+        priority: 'warning',
+      });
+      return false;
+    }
+
     this._manualMode = false; // Exit manual control for capture sequence
     this._manualCapture = true; // Flag for scoring (Delegate 3C will use this)
     this._transitionTo(S.NETTING);
@@ -3088,10 +3104,21 @@ export class ArmUnit {
     if (this.state !== S.STATION_KEEP) return false;
 
     // §13 Q5: Net inventory gate — when CAPTURE_NET is ON and nets exhausted,
-    // emit NET_EMPTY_CLICK + click-fail audio instead of transitioning.
+    // emit NET_EMPTY_CLICK + click-fail audio + comms message instead of
+    // transitioning.  2026-05-28 (Item 8): the prior implementation only
+    // emitted NET_EMPTY_CLICK with no user-visible feedback beyond a click-
+    // fail sfx — players couldn't tell why F did nothing.  Add a CMD-channel
+    // comms message so the comms log explains the failure and points at the
+    // remedy (return to mother for reload).
     if (Constants.isFeatureEnabled('CAPTURE_NET') && this._netInventory <= 0) {
       eventBus.emit(Events.NET_EMPTY_CLICK, { armId: this.id });
       audioSystem.playClickFail();
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        source: this.id,
+        text: `${this.id}: No nets remaining — return to mother for reload.`,
+        channel: 'CMD',
+        priority: 'warning',
+      });
       return false;
     }
 

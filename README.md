@@ -15,7 +15,7 @@ UI design draws from four landmark space sims: **Independence War** (NavSphere, 
 # Then open http://localhost:8081
 ```
 
-**Controls:** `A` autopilot, `S` quick scan, `W` wide scan, `D` deploy tool, `F` focus action, `` ` `` cycle tools, Arrows rotate, `+/-` throttle, `Tab` cycle targets, `Space` lasso, `G` deploy arm, `H` recall, `V` camera, `P` arm pilot, `Z` wireframe, `C` comms, `N` NavSphere, `M` MPD/orbit, `L` tech library, `B` shop, `R` forge, `X` detach, `Shift+1/2/3` power bus, `[/]` adjust. WASD thrust in arm pilot mode only (P key).
+**Controls:** `A` autopilot, `S` quick scan, `W` wide scan, `D` deploy tool, `F` focus action, `` ` `` cycle tools, Arrows rotate, `+/-` throttle, `Tab` cycle targets, `Space` lasso, `G` deploy arm, `H` recall, `V` camera, `P` arm pilot, `Z` wireframe, `C` comms, `N` NavSphere, `M` MPD/orbit, `L` tech library, `B` shop, `R` reel-in (ARM_PILOT/SK), `K` forge, `X` detach, `Shift+1/2/3` power bus, `[/]` adjust. WASD thrust in arm pilot mode only (P key).
 
 **Tech:** Three.js r170 via CDN import maps. Zero build tools. ES6 modules. All geometry procedural (no GLTF). NASA public domain textures.
 
@@ -139,7 +139,7 @@ Space Cowboy/
 
 **HUD:** Progressive luminance system (dormant/active CSS states). 3-panel left column (Propulsion/Energy/Fleet), right column (wireframe + target list), NavSphere with distance encoding + range rings, OrbitMFD, 5-color system.
 
-**Systems:** Active scanning (S/W keys with cooldowns, discovery mechanics, survey rewards), auto-tool recommendation (D-deploy, backtick-cycle), focus action (F key, context-sensitive), 5 camera views, ARM PILOT manual control (P key), FS2-style comms menu (C key), debris wireframe analysis (Z key), arm deorbit sacrifice (Ctrl+Shift+D), forge system (R key), power distribution ETS (Shift+1/2/3 + [/] keys), autopilot system (A key), throttle control (+/- keys), MPD thruster burst mode (M key), lasso with miss recovery prompts (Space), trawl system with adaptive speed, collision avoidance AI, 10-stage curiosity-driven tutorial.
+**Systems:** Active scanning (S/W keys with cooldowns, discovery mechanics, survey rewards), auto-tool recommendation (D-deploy, backtick-cycle), focus action (F key, context-sensitive), 5 camera views, ARM PILOT manual control (P key), FS2-style comms menu (C key), debris wireframe analysis (Z key), arm deorbit sacrifice (Ctrl+Shift+D), forge system (K key), power distribution ETS (Shift+1/2/3 + [/] keys), autopilot system (A key), throttle control (+/- keys), MPD thruster burst mode (M key), lasso with miss recovery prompts (Space), trawl system with adaptive speed, collision avoidance AI, 10-stage curiosity-driven tutorial.
 
 **Audio:** 30+ procedural generators + ambient loop + 4-tier ΔV alarm + thruster sputtering + forge phase textures + target lock ceremony + lasso feedback.
 
@@ -166,7 +166,8 @@ Space Cowboy/
 | G | Deploy arm to target (secondary to D) / Shift+G: deploy trawl net |
 | H | Recall all arms |
 | X | Tether detach (risk-reward sacrifice) |
-| R | Cycle forge mode: OFF → REFINE → PROPELLANT → OFF |
+| R | Reel-in (ARM_PILOT, STATION_KEEP) — zero-fuel strut motor |
+| K | Cycle forge mode: OFF → REFINE → PROPELLANT → OFF |
 | T | Cycle fuel type |
 | V | Camera cycle (COMMAND → TACTICAL → OVERVIEW) |
 | P | Toggle ARM PILOT mode (40° FOV, arm camera) — WASD becomes arm thrust |

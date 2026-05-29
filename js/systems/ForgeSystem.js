@@ -56,7 +56,9 @@ export class ForgeSystem {
 
     /**
      * Toggle forge mode: OFF → REFINE → PROPELLANT → OFF
-     * R key cycles through modes. Auto-starts with heaviest available metal.
+     * K key cycles through modes ("Kiln"; rebound from R on 2026-05-28
+     * because R now drives reel-in via InputManager).  Auto-starts with the
+     * heaviest available metal.
      */
     toggle() {
         const isActive = this._phase !== 'IDLE';

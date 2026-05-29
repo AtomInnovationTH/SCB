@@ -11,6 +11,7 @@ import { Events } from '../core/Events.js';
 import { GameStates } from '../core/GameState.js';
 import { Constants } from '../core/Constants.js';
 import { powerDistribution, PowerBuses } from './PowerDistribution.js';
+import timerManager from './TimerManager.js';
 
 export class InputManager {
   constructor() {
@@ -50,10 +51,17 @@ export class InputManager {
     /** @type {boolean} Whether radial menu is currently open from C-hold */
     this._cRadialOpen = false;
 
+    // PR 6 / P3.13: Audio unlock self-test state
+    /** @type {boolean} Whether first user gesture has been handled for audio unlock */
+    this._firstGestureHandled = false;
+    /** @type {number|null} TimerManager id for audio unlock check */
+    this._audioUnlockTimerId = null;
+
     // Bind handlers for add/removeEventListener
     this._onKeyDown = this._handleKeyDown.bind(this);
     this._onKeyUp = this._handleKeyUp.bind(this);
     this._onWheel = this._handleWheel.bind(this);
+    this._onPointerDown = this._handlePointerDown.bind(this);
   }
 
   /**
@@ -252,6 +260,49 @@ export class InputManager {
 
   }
 
+  // ========================================================================
+  // PR 6 / P3.13: Audio unlock self-test
+  // ========================================================================
+
+  /**
+   * On first user gesture (keydown or pointerdown), resume AudioContext and
+   * schedule a 200 ms self-test. If still suspended after 200 ms, emit
+   * AUDIO_UNLOCK_FAILED so the HUD can display a user-facing toast.
+   * @private
+   */
+  _tryAudioUnlock() {
+    if (this._firstGestureHandled) return;
+    this._firstGestureHandled = true;
+
+    const audio = this._deps?.audioSystem;
+    if (!audio) return;
+
+    // Ensure AudioContext is initialized + resumed
+    if (typeof audio.init === 'function') audio.init();
+    if (typeof audio.resume === 'function') audio.resume();
+
+    // Schedule a 200 ms verification
+    const ctx = audio.ctx;
+    if (ctx) {
+      this._audioUnlockTimerId = timerManager.setTimeout(() => {
+        this._audioUnlockTimerId = null;
+        if (ctx.state === 'suspended') {
+          console.warn('[Audio] AudioContext still suspended 200ms after user gesture');
+          eventBus.emit(Events.AUDIO_UNLOCK_FAILED);
+        }
+      }, 200, { owner: this });
+    }
+  }
+
+  /**
+   * Pointerdown handler — triggers audio unlock on first click/tap.
+   * @param {PointerEvent} _e
+   * @private
+   */
+  _handlePointerDown(_e) {
+    this._tryAudioUnlock();
+  }
+
   /** Start listening for keyboard events */
   start() {
     window.addEventListener('keydown', this._onKeyDown);
@@ -263,6 +314,7 @@ export class InputManager {
     // && SK active — otherwise we pass through so the camera handler
     // keeps working for the orbital/inspection views.
     window.addEventListener('wheel', this._onWheel, { passive: false, capture: true });
+    window.addEventListener('pointerdown', this._onPointerDown);
   }
 
   /** Stop listening */
@@ -270,6 +322,12 @@ export class InputManager {
     window.removeEventListener('keydown', this._onKeyDown);
     window.removeEventListener('keyup', this._onKeyUp);
     window.removeEventListener('wheel', this._onWheel, { capture: true });
+    window.removeEventListener('pointerdown', this._onPointerDown);
+    // PR 6 / P3.13: Clear pending audio unlock timer on teardown
+    if (this._audioUnlockTimerId !== null) {
+      timerManager.clear(this._audioUnlockTimerId);
+      this._audioUnlockTimerId = null;
+    }
   }
 
   /**
@@ -325,6 +383,9 @@ export class InputManager {
    * @param {KeyboardEvent} e
    */
   _handleKeyDown(e) {
+    // PR 6 / P3.13: Audio unlock on first keydown gesture
+    this._tryAudioUnlock();
+
     // Bare KeyI is dropped to defeat phantom keystrokes from macOS
     // Voice Control / dictation ASR misrecognizing in-game audio as 'i'
     // (debug session 2026-05-10 — events arrive with `isTrusted: true`
@@ -555,6 +616,12 @@ export class InputManager {
               // Unpaused — hide overlay + reset timer
               if (d.hud) d.hud.hidePause();
               d.setLastTime(performance.now());
+              // Emit PAUSE_RESUME so the rAF loop in main.js gets woken back
+              // up. Without this the gameLoop stays asleep after ESC-unpause
+              // (the `_scheduleNextFrame()` wake hook lives behind this event).
+              // Symptom prior to this emit: screen froze after pressing ESC
+              // to resume because nothing scheduled the next rAF callback.
+              eventBus.emit(Events.PAUSE_RESUME);
             }
           }
         }
@@ -631,17 +698,36 @@ export class InputManager {
         }
         break;
 
-      // R key — Forge toggle (Phase R3), BUT recall/reel-in during SK
+      // R key — Reel-in (zero-fuel strut motor).
+      // 2026-05-28 (Item 9): R used to cycle the forge (with an opt-in
+      // SK→reel branch nested inside).  Player intent at the F2 stage was
+      // ambiguous: "did R fire the forge or recall the arm?".  R is now
+      // dedicated to the reel-in action; the forge moved to the K key
+      // ("Kiln"; updated in Constants.SKILLS.manage_forge + StatusPanel
+      // inline label + README key-bindings table at the same time).
       case 'KeyR':
         if (isGameplay) {
-          // During STATION_KEEP: R = reel in (zero-fuel strut motor).
-          // Use case: daughter missed target, out of nets, or out of fuel.
-          const _skArmR = this.armPilotMode && d.cameraSystem?.getPilotedArm?.();
-          if (_skArmR && _skArmR.state === Constants.ARM_STATES.STATION_KEEP) {
-            _skArmR.reelFromStationKeep();
-            e.preventDefault();
-            break;
+          const _pilotArmR = this.armPilotMode && d.cameraSystem?.getPilotedArm?.();
+          if (_pilotArmR && _pilotArmR.state === Constants.ARM_STATES.STATION_KEEP) {
+            _pilotArmR.reelFromStationKeep();
+            d.audioSystem.playClick();
+          } else {
+            // Not in ARM_PILOT-SK: provide a hint so the player understands
+            // why R did nothing.  Avoid console noise.
+            d.audioSystem.playClick();
+            eventBus.emit(Events.COMMS_MESSAGE, {
+              text: 'Reel-in only available while piloting an arm in station-keep',
+              priority: 'info',
+            });
           }
+          e.preventDefault();
+        }
+        break;
+
+      // K key — Forge toggle (was R prior to 2026-05-28 Item 9).
+      // Mnemonic: "Kiln" — the EML furnace.  Cycles OFF → REFINE → PROPELLANT → OFF.
+      case 'KeyK':
+        if (isGameplay) {
           eventBus.emit(Events.FORGE_TOGGLE);
           d.audioSystem.playClick();
           e.preventDefault();

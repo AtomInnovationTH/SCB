@@ -13,7 +13,7 @@ import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { GameStates } from '../core/GameState.js';
-import { orbitToSceneCartesian, keplerianToCartesian, orbitToKm } from '../entities/OrbitalMechanics.js';
+import { orbitToSceneCartesian, orbitToSceneCartesianInto, keplerianToCartesian, orbitToKm } from '../entities/OrbitalMechanics.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -88,6 +88,11 @@ export class TargetReticle {
     this._tempVec3 = new THREE.Vector3();
     this._tempVec4 = new THREE.Vector4();
     this._projMatrix = new THREE.Matrix4();
+
+    // Sprint 2 / PR A — scratch outputs for [`orbitToSceneCartesianInto`](js/entities/OrbitalMechanics.js:1).
+    // Hot path: per visible target per frame (5–15 calls/frame typical).
+    this._tmpCartPos = { x: 0, y: 0, z: 0 };
+    this._tmpCartVel = { x: 0, y: 0, z: 0 };
 
     // Cached target data
     this._selectedTargetId = null;
@@ -411,15 +416,14 @@ export class TargetReticle {
     if (targetSelector && data.playerVel && data.playerOrbit) {
       const activeTarget = targetSelector.getActiveTarget();
       if (activeTarget && activeTarget.orbit) {
-        const targetCart = orbitToSceneCartesian(activeTarget.orbit);
-        if (targetCart && targetCart.velocity) {
-          const rv = targetCart.velocity;  // km/s
-          const pv = data.playerVel;       // km/s
-          const dvx = rv.x - pv.x;
-          const dvy = rv.y - pv.y;
-          const dvz = rv.z - pv.z;
-          this._relativeVelocity = Math.sqrt(dvx * dvx + dvy * dvy + dvz * dvz);
-        }
+        // Sprint 2 / PR A — scratch-output variant.
+        orbitToSceneCartesianInto(activeTarget.orbit, this._tmpCartPos, this._tmpCartVel);
+        const rv = this._tmpCartVel;     // km/s
+        const pv = data.playerVel;       // km/s
+        const dvx = rv.x - pv.x;
+        const dvy = rv.y - pv.y;
+        const dvz = rv.z - pv.z;
+        this._relativeVelocity = Math.sqrt(dvx * dvx + dvy * dvy + dvz * dvz);
       }
     }
 
@@ -435,18 +439,18 @@ export class TargetReticle {
         this._prevClosureTargetId = selTargetId;
       }
       if (selTarget && selTarget.orbit) {
-        const tCart = orbitToSceneCartesian(selTarget.orbit);
-        if (tCart && tCart.position) {
-          const dx = tCart.position.x - data.playerPos.x;
-          const dy = tCart.position.y - data.playerPos.y;
-          const dz = tCart.position.z - data.playerPos.z;
-          const distKm = Math.sqrt(dx * dx + dy * dy + dz * dz) / Constants.SCENE_SCALE;
-          this._selectedTargetDistKm = distKm;
-          if (this._dt > 0 && this._prevSelectedTargetDist !== null) {
-            this._selectedClosureRate = (this._prevSelectedTargetDist - distKm) / this._dt;
-          }
-          this._prevSelectedTargetDist = distKm;
+        // Sprint 2 / PR A — scratch-output variant.
+        orbitToSceneCartesianInto(selTarget.orbit, this._tmpCartPos, this._tmpCartVel);
+        const tp = this._tmpCartPos;
+        const dx = tp.x - data.playerPos.x;
+        const dy = tp.y - data.playerPos.y;
+        const dz = tp.z - data.playerPos.z;
+        const distKm = Math.sqrt(dx * dx + dy * dy + dz * dz) / Constants.SCENE_SCALE;
+        this._selectedTargetDistKm = distKm;
+        if (this._dt > 0 && this._prevSelectedTargetDist !== null) {
+          this._selectedClosureRate = (this._prevSelectedTargetDist - distKm) / this._dt;
         }
+        this._prevSelectedTargetDist = distKm;
       } else {
         this._prevSelectedTargetDist = null;
       }
@@ -669,9 +673,11 @@ export class TargetReticle {
    * @private
    */
   _drawDebrisReticle(target, playerPos) {
-    // Get world position
-    const cart = orbitToSceneCartesian(target.orbit);
-    const worldPos = new THREE.Vector3(cart.position.x, cart.position.y, cart.position.z);
+    // Get world position — Sprint 2 / PR A — scratch-output variant.
+    orbitToSceneCartesianInto(target.orbit, this._tmpCartPos, this._tmpCartVel);
+    // Perf: reuse pre-allocated _tempVec3 instead of new Vector3 per visible target.
+    this._tempVec3.set(this._tmpCartPos.x, this._tmpCartPos.y, this._tmpCartPos.z);
+    const worldPos = this._tempVec3;
 
     // Project to screen
     const proj = this._project(worldPos);
@@ -699,7 +705,16 @@ export class TargetReticle {
 
     if (proj.visible) {
       // === ON-SCREEN RETICLE ===
-      this._drawOnScreenReticle(proj, target, color, isSelected, distKm, worldPos, playerPos, cart);
+      // Sprint 2 / PR A fix — pass the velocity scratch directly. The old
+      // `cart` binding (a `{position, velocity}` literal from the allocating
+      // `orbitToSceneCartesian`) was removed when this site migrated to the
+      // scratch-output variant at line 677, but the downstream argument and
+      // four `cart.velocity.*` reads inside `_drawOnScreenReticle` were left
+      // dangling — causing `ReferenceError: cart is not defined` every frame
+      // in ORBITAL_VIEW. `_tmpCartVel` is the velocity object written by
+      // `orbitToSceneCartesianInto` above; it carries `.x/.y/.z` km/s directly
+      // (no nested `.velocity`).
+      this._drawOnScreenReticle(proj, target, color, isSelected, distKm, worldPos, playerPos, this._tmpCartVel);
     } else {
       // === OFF-SCREEN ARROW ===
       const showArrow = isSelected ||
@@ -714,8 +729,12 @@ export class TargetReticle {
   /**
    * Draw on-screen bracket reticle for debris.
    * @private
+   * @param {{x:number,y:number,z:number}|null} vel — km/s velocity scratch from
+   *   [`orbitToSceneCartesianInto`](js/entities/OrbitalMechanics.js:593). The
+   *   parameter shape changed in Sprint 2 / PR A: callers now pass the velocity
+   *   scratch object directly instead of a `{position, velocity}` wrapper.
    */
-  _drawOnScreenReticle(proj, target, color, isSelected, distKm, worldPos, playerPos, cart) {
+  _drawOnScreenReticle(proj, target, color, isSelected, distKm, worldPos, playerPos, vel) {
     const ctx = this.ctx;
     const x = proj.x;
     const y = proj.y;
@@ -839,31 +858,36 @@ export class TargetReticle {
     }
 
     // --- Distance text below reticle ---
-    ctx.font = '10px "Courier New", monospace';
+    // 2026-05-28 (Item 7 readability pass): font sizes doubled (10/11/9 → 20/22/18)
+    // and vertical offsets re-spaced to clear the larger glyph height. The
+    // sequence below reticle is: distance (20 px) → closure rate (18 px) →
+    // metal preview (18 px). Baselines need ~22 px spacing per row to avoid
+    // overlap; previously they were at +14/+26/+38 (12 px spacing).
+    ctx.font = '20px "Courier New", monospace';
     ctx.fillStyle = color;
     ctx.textAlign = 'center';
 
     if (isSelected) {
       ctx.fillStyle = COLORS.cyan;
-      ctx.font = 'bold 11px "Courier New", monospace';
+      ctx.font = 'bold 22px "Courier New", monospace';
     }
 
     const distText = distKm < 1 ? `${(distKm * 1000).toFixed(0)}m` : `${distKm.toFixed(1)}km`;
-    ctx.fillText(distText, x, y + half + 14);
+    ctx.fillText(distText, x, y + half + 22);
 
     // --- Closure rate below distance ---
     if (target._closureRate != null && this._viewConfig.showClosureRate) {
       const rate = target._closureRate;
       const absRate = Math.abs(rate);
-      ctx.font = '9px "Courier New", monospace';
+      ctx.font = '18px "Courier New", monospace';
       ctx.textAlign = 'center';
       if (absRate < 0.5) {
         ctx.fillStyle = 'rgba(255,255,255,0.4)';
-        ctx.fillText('~0 m/s', x, y + half + 26);
+        ctx.fillText('~0 m/s', x, y + half + 46);
       } else {
         const arrow = rate > 0 ? '▼' : '▲';
         ctx.fillStyle = rate > 0 ? COLORS.green : COLORS.red;
-        ctx.fillText(`${arrow}${absRate.toFixed(0)} m/s`, x, y + half + 26);
+        ctx.fillText(`${arrow}${absRate.toFixed(0)} m/s`, x, y + half + 46);
       }
     }
 
@@ -877,13 +901,13 @@ export class TargetReticle {
         const short = _getMetalShortName(m.name || m.subtype || m.type);
         return `${short}:${m.amount.toFixed(0)}kg`;
       }).join(' ');
-      ctx.font = '9px "Courier New", monospace';
+      ctx.font = '18px "Courier New", monospace';
       ctx.fillStyle = COLORS.cyan;
       ctx.textAlign = 'center';
       ctx.globalAlpha = 0.8;
       const metalY = (target._closureRate != null && this._viewConfig.showClosureRate)
-        ? y + half + 38
-        : y + half + 26;
+        ? y + half + 70
+        : y + half + 46;
       ctx.fillText(`\u26CF ${metalStr}`, x, metalY);
       ctx.restore();
     }
@@ -903,8 +927,8 @@ export class TargetReticle {
       ctx.fillText(`${tumbleDeg}°/s  ${target.sizeMeter.toFixed(1)}m`, x, y - half - 6);
 
       // Velocity vector indicator (small line showing debris direction)
-      if (cart && cart.velocity && this._viewConfig.showVelocityVectors) {
-        const velDir = new THREE.Vector3(cart.velocity.x, cart.velocity.y, cart.velocity.z);
+      if (vel && this._viewConfig.showVelocityVectors) {
+        const velDir = new THREE.Vector3(vel.x, vel.y, vel.z);
         const velEndWorld = worldPos.clone().add(velDir.normalize().multiplyScalar(0.001));
         const velProj = this._project(velEndWorld);
         if (velProj.visible) {
@@ -930,13 +954,13 @@ export class TargetReticle {
       }
 
       // Lead indicator (small dot ahead in velocity direction)
-      if (cart && cart.velocity && this._viewConfig.showLeadIndicators) {
+      if (vel && this._viewConfig.showLeadIndicators) {
         const leadTime = 2.0; // seconds ahead
         const leadPos = worldPos.clone().add(
           new THREE.Vector3(
-            cart.velocity.x * leadTime * Constants.SCENE_SCALE,
-            cart.velocity.y * leadTime * Constants.SCENE_SCALE,
-            cart.velocity.z * leadTime * Constants.SCENE_SCALE
+            vel.x * leadTime * Constants.SCENE_SCALE,
+            vel.y * leadTime * Constants.SCENE_SCALE,
+            vel.z * leadTime * Constants.SCENE_SCALE
           )
         );
         const leadProj = this._project(leadPos);
@@ -1403,14 +1427,12 @@ export class TargetReticle {
     const target = data.targetSelector?.getActiveTarget();
     if (!target || !target.orbit) return;
 
-    // Compute current target position
-    const targetCart = orbitToSceneCartesian(target.orbit);
-    if (!targetCart || !targetCart.position) return;
-
+    // Compute current target position — Sprint 2 / PR A — scratch-output variant.
+    orbitToSceneCartesianInto(target.orbit, this._tmpCartPos, this._tmpCartVel);
     const targetPos = new THREE.Vector3(
-      targetCart.position.x,
-      targetCart.position.y,
-      targetCart.position.z
+      this._tmpCartPos.x,
+      this._tmpCartPos.y,
+      this._tmpCartPos.z
     );
 
     const playerPos = data.playerPos instanceof THREE.Vector3

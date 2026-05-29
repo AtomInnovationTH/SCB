@@ -383,7 +383,7 @@ export class StatusPanel {
         <div id="cargo-summary" data-hud-group="cargo-group" style="font-size:10px;margin-top:3px;color:#666;display:none;"></div>
         <div id="forge-inline" data-hud-group="cargo-group" style="font-size:10px;margin-top:3px;display:none;">
           <div style="display:flex;align-items:center;gap:4px;">
-            <span style="color:#666;">[R] Forge:</span>
+            <span style="color:#666;">[K] Forge:</span>
             <span id="forge-inline-status" style="color:#666;">Idle</span>
           </div>
           <div id="forge-progress-inline" style="display:none;margin-top:2px;">
@@ -1716,12 +1716,14 @@ export class StatusPanel {
       }
       if (progressContainer) progressContainer.style.display = 'none';
 
-      // Sprint A2: Show "Press [R]" hint when idle with cargo available
+      // Sprint A2: Show forge hotkey hint when idle with cargo available.
+      // 2026-05-28 (Item 9): R was the forge hotkey at the time of this
+      // sprint; the new binding is K ("Kiln").  R is now reel-in.
       if (hintEl) {
         const hasCargo = this._cargoStatus && this._cargoStatus.totalMassKg > 0;
         if (hasCargo) {
           hintEl.style.display = '';
-          hintEl.textContent = '▸ Press [R] to process cargo';
+          hintEl.textContent = '▸ Press [K] to process cargo';
           hintEl.style.color = '#ffaa00';
         } else {
           hintEl.style.display = 'none';
