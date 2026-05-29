@@ -14,7 +14,7 @@
 > Mother retains 2 body-mounted Large Net pods at all tiers. See §6 per-platform table.
 >
 > **Rev 4 — 2026-04-26 — Folded QA decisions; §10 closed; mercy rule adopted.**
-> All 12 open questions from Rev 3 resolved. See [`CAPTURE_NET_QA.md`](CAPTURE_NET_QA.md) for analysis history.
+> All 12 open questions from Rev 3 resolved. See [`CAPTURE_NET_QA.md`](archive/CAPTURE_NET_QA.md) for analysis history.
 > SMA cinch replaced with spring-loaded hub (Q-1). Material naming → Graphene-N (Q-8).
 > Net class names → Large / Medium / Small (Q-9). First-fragmentation mercy rule adopted (§5.7).
 
@@ -54,7 +54,7 @@ Two capture modes serve different target types:
 
 The rim weights are not passive tungsten — they are **edge nodes** carrying spring-loaded cinch mechanisms (Y0), with camera/radio upgrades in later years. The mesh material upgrades from Dyneema SK78 (3.6 GPa, Y0) through graphene-enhanced tiers up to 130 GPa (Y4), enabling more nets per magazine pack and longer range at each tier. Nets are carried in **reloadable magazine packs** slotted into crossbow rails, resupplied via drone delivery, depot rendezvous, or scavenging derelict platforms.
 
-> *SMA (shape-memory alloy) cinch actuation was considered and rejected at design Rev 4 — the thermal budget is fundamentally broken in eclipse conditions (−150 °C). Spring-loaded hub with solenoid pin-pull is TRL 9, temperature-independent, and fires in <100 ms. See [`CAPTURE_NET_QA.md`](CAPTURE_NET_QA.md) Q-1 for full analysis.*
+> *SMA (shape-memory alloy) cinch actuation was considered and rejected at design Rev 4 — the thermal budget is fundamentally broken in eclipse conditions (−150 °C). Spring-loaded hub with solenoid pin-pull is TRL 9, temperature-independent, and fires in <100 ms. See [`CAPTURE_NET_QA.md`](archive/CAPTURE_NET_QA.md) Q-1 for full analysis.*
 
 Every platform in the fleet — Mother, Large Daughter (Weaver), and Small Daughter (Spinner) — carries a net class sized to its target envelope. The net is the game's starting capture tool, available from mission 1, requiring no unlocks. TRL 9 — just Dyneema and tungsten and a spring.
 
@@ -977,7 +977,7 @@ Visual details defer to a UX implementation sprint — this section establishes 
 
 ## §10 Resolved Questions
 
-> **All design questions resolved at signoff 2026-04-26.** See [`CAPTURE_NET_QA.md`](CAPTURE_NET_QA.md) for analysis history.
+> **All design questions resolved at signoff 2026-04-26.** See [`CAPTURE_NET_QA.md`](archive/CAPTURE_NET_QA.md) for analysis history.
 > Twelve open items from Rev 3 §10 were reviewed, decided, and folded into §1–§9 above.
 
 ### Newly-Surfaced Concerns (from QA review)

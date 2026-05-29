@@ -14,7 +14,7 @@
 > Sections marked with ⚠️ CONFIG G below contain notes on what changed. Cross-bow spring physics (§1–§5),
 > tether material (§6–§7), and senior engineering review (§24) remain valid.
 > For full Config G specs see [`ARM_PIVOT_ANALYSIS.md §10.11`](ARM_PIVOT_ANALYSIS.md:1236).
-> For Epic 9 implementation specs see [`ARM_PIVOT_GAPS_EXPLAINER.md §W`](ARM_PIVOT_GAPS_EXPLAINER.md).
+> For Epic 9 implementation specs see [`ARM_PIVOT_GAPS_EXPLAINER.md §W`](archive/ARM_PIVOT_GAPS_EXPLAINER.md).
 >
 > **Design replacement for** [`ARM_GAMIFIED_THRUST_MULT: 200`](js/core/Constants.js:625) and [`ARM_LAUNCH_SPEED: 10.0`](js/core/Constants.js:626).
 > Every velocity, force, and energy value in this document is derived from first principles — no magic multipliers.
@@ -982,7 +982,7 @@ HBN coating is applied via chemical vapor deposition (CVD) directly onto the GSL
 
 ## 8. Aimable Crossbows vs Aimable Mother
 
-> **⚠️ CONFIG G:** Section superseded for arm geometry. Config G uses 0–180° meridian sweep via `setAimAlpha(alpha)`, not ±30° yaw. Off-plane targeting uses **semi-auto Mother rotation**: player presses Fire → `AutopilotSystem.requestAimRotation(targetDir)` rotates Mother → crossbow fires when aligned (3–7 s). See [`ARM_PIVOT_ANALYSIS.md §10.2`](ARM_PIVOT_ANALYSIS.md:817) for sweep geometry and [`ARM_PIVOT_GAPS_EXPLAINER.md §W ST-9.3`](ARM_PIVOT_GAPS_EXPLAINER.md) for implementation spec.
+> **⚠️ CONFIG G:** Section superseded for arm geometry. Config G uses 0–180° meridian sweep via `setAimAlpha(alpha)`, not ±30° yaw. Off-plane targeting uses **semi-auto Mother rotation**: player presses Fire → `AutopilotSystem.requestAimRotation(targetDir)` rotates Mother → crossbow fires when aligned (3–7 s). See [`ARM_PIVOT_ANALYSIS.md §10.2`](ARM_PIVOT_ANALYSIS.md:817) for sweep geometry and [`ARM_PIVOT_GAPS_EXPLAINER.md §W ST-9.3`](archive/ARM_PIVOT_GAPS_EXPLAINER.md) for implementation spec.
 
 ### 8.1 Three Options
 
@@ -1965,7 +1965,7 @@ During Pulse Scan (§9) all 8 arms deploy simultaneously. Tether-tether contact 
 
 ## 15. Y-Harness Tether Bridle — Geometry, FEEP Clearance & Materials
 
-> **⚠️ CONFIG G: SECTION SUPERSEDED.** Config G places the tether reel on the **strut tip**, not inside the bus. The tether goes straight from the strut-tip reel to the daughter — no Y-harness bridle, no junction fitting, no FEEP plume clearance geometry needed. Daughter FEEP fires AWAY from the strut tip. This entire section is retained for historical reference only. See [`ARM_PIVOT_ANALYSIS.md §10.4`](ARM_PIVOT_ANALYSIS.md:934) for Config G strut-tip assembly and [`ARM_PIVOT_GAPS_EXPLAINER.md §V-6`](ARM_PIVOT_GAPS_EXPLAINER.md) for the supersede rationale. ST-9.7 effort reduced from 1 day to 0.5 day.
+> **⚠️ CONFIG G: SECTION SUPERSEDED.** Config G places the tether reel on the **strut tip**, not inside the bus. The tether goes straight from the strut-tip reel to the daughter — no Y-harness bridle, no junction fitting, no FEEP plume clearance geometry needed. Daughter FEEP fires AWAY from the strut tip. This entire section is retained for historical reference only. See [`ARM_PIVOT_ANALYSIS.md §10.4`](ARM_PIVOT_ANALYSIS.md:934) for Config G strut-tip assembly and [`ARM_PIVOT_GAPS_EXPLAINER.md §V-6`](archive/ARM_PIVOT_GAPS_EXPLAINER.md) for the supersede rationale. ST-9.7 effort reduced from 1 day to 0.5 day.
 
 The Y-harness design from §3.3 requires deeper analysis of how it integrates with the arm during all operational phases and how it connects to the mothership.
 
@@ -2855,7 +2855,7 @@ The crossbow system requires these modifications to the V3 mothership bus:
 
 ## 22. V3 → V5 Migration Guide
 
-> **⚠️ CONFIG G:** The migration target is now Config G, not Config A/F. Key constant changes differ from those listed below. The authoritative Config G Constants block is in [`ARM_PIVOT_ANALYSIS.md §10.12`](ARM_PIVOT_ANALYSIS.md:1417). Additional changes: `CORE_LENGTH: 2.0` (was 1.2), `CORE_ACROSS_FLATS: 0.8` (was 1.0), `COLLAR_Y: 0.90`, `STRUT_LENGTH: 1.60`, `STRUT_SWEEP_MAX: Math.PI`, new ROSA/HINGE/LAUNCH blocks. `setAimYaw()` → `setAimAlpha()`. See [`ARM_PIVOT_GAPS_EXPLAINER.md §W ST-9.1`](ARM_PIVOT_GAPS_EXPLAINER.md) for ST-9.1 implementation spec.
+> **⚠️ CONFIG G:** The migration target is now Config G, not Config A/F. Key constant changes differ from those listed below. The authoritative Config G Constants block is in [`ARM_PIVOT_ANALYSIS.md §10.12`](ARM_PIVOT_ANALYSIS.md:1417). Additional changes: `CORE_LENGTH: 2.0` (was 1.2), `CORE_ACROSS_FLATS: 0.8` (was 1.0), `COLLAR_Y: 0.90`, `STRUT_LENGTH: 1.60`, `STRUT_SWEEP_MAX: Math.PI`, new ROSA/HINGE/LAUNCH blocks. `setAimYaw()` → `setAimAlpha()`. See [`ARM_PIVOT_GAPS_EXPLAINER.md §W ST-9.1`](archive/ARM_PIVOT_GAPS_EXPLAINER.md) for ST-9.1 implementation spec.
 
 ### 22.1 Constants to Replace
 

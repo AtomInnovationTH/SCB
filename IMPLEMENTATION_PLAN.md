@@ -34,7 +34,7 @@
   Gap items #4–#14 scoped: Comprehensive bundle (7 IN, 1 STUB, 3 DEFER).
   Semi-auto aim rotation adopted. ST-9.6 (ablation) and ST-9.9 (Reality Mode) deferred to Epic 10.
   New tasks: ST-9.10 (stow/deploy), ST-9.11 (launch locks + ROSA), ST-9.12 (CoM + interlock).
-  Full gap analysis + orchestrator specs: [`ARM_PIVOT_GAPS_EXPLAINER.md`](ARM_PIVOT_GAPS_EXPLAINER.md).
+  Full gap analysis + orchestrator specs: [`ARM_PIVOT_GAPS_EXPLAINER.md`](archive/ARM_PIVOT_GAPS_EXPLAINER.md).
   Mass budget: Y0 dry=196.4 kg, wet=242.4 kg (Config G canonical).
   Touched: IMPLEMENTATION_PLAN.md (this file), HANDOFF.md, CROSSBOW_ARMS.md,
   CAPTURE_NET.md, BIG_PICTURE.md, ARM_PIVOT_GAPS_EXPLAINER.md (new).
@@ -488,16 +488,16 @@ The following are **postponed** to a future Epic 9 (V5 Hardware Baseline) — th
 |----|------|-----------------|--------|--------|
 | ST-9.1 | `Constants.OCTOPUS_V5` block — **Config G values** per [`§10.12`](ARM_PIVOT_ANALYSIS.md:1417) | [`§11`](BIG_PICTURE.md:646) | 1 day | Ready |
 | ST-9.2 | **Config G Geometry: Top-Collar 3-Plane Layout** (re-spec'd 2026-04-27; was equatorial) | [`ARM_PIVOT_ANALYSIS.md §10.11`](ARM_PIVOT_ANALYSIS.md:1236) | 2 days | Ready |
-| ST-9.3 | **Crossbow: 0–180° Sweep + Lockable Hinge + Semi-Auto Aim + Dual-Fire** (re-spec'd 2026-04-27; was ±30° yaw) | [`ARM_PIVOT_ANALYSIS.md §10`](ARM_PIVOT_ANALYSIS.md:801), [`ARM_PIVOT_GAPS_EXPLAINER.md §W`](ARM_PIVOT_GAPS_EXPLAINER.md) | 4 days | Ready |
+| ST-9.3 | **Crossbow: 0–180° Sweep + Lockable Hinge + Semi-Auto Aim + Dual-Fire** (re-spec'd 2026-04-27; was ±30° yaw) | [`ARM_PIVOT_ANALYSIS.md §10`](ARM_PIVOT_ANALYSIS.md:801), [`ARM_PIVOT_GAPS_EXPLAINER.md §W`](archive/ARM_PIVOT_GAPS_EXPLAINER.md) | 4 days | Ready |
 | ST-9.4 | **Capture Net System** — see [`CAPTURE_NET.md`](CAPTURE_NET.md) | [`§29`](BIG_PICTURE.md:922), [`CAPTURE_NET.md`](CAPTURE_NET.md) | 4 days | Ready |
 | ST-9.5 | Dyneema SK78 tether + reel-cycle resource — **reel on strut tip** (Config G) | [`§28.3`](BIG_PICTURE.md:1310), [`ARM_PIVOT_ANALYSIS.md §10.4`](ARM_PIVOT_ANALYSIS.md:934) | 2 days | Ready |
 | ST-9.6 | ~~Mother-mounted ablation module~~ | [`§16`](BIG_PICTURE.md:909) | ~~2 days~~ | **DEFERRED → Epic 10** |
 | ST-9.7 | Tether exit geometry — **simplified for Config G** (no Y-harness, no bridle) | [`ARM_PIVOT_ANALYSIS.md §10.4`](ARM_PIVOT_ANALYSIS.md:934) | 0.5 day | Ready |
 | ST-9.8 | Technology Upgrade Ladder via Shop + Codex + HOUSTON | [`§36`](BIG_PICTURE.md:1706), [`CROSSBOW_ARMS.md §25`](CROSSBOW_ARMS.md) | 3 days | Ready |
 | ST-9.9 | ~~Reality Mode toggle~~ | [`§36.4`](BIG_PICTURE.md:1737) | ~~0.5 day~~ | **DEFERRED → Epic 10** |
-| **ST-9.10** | **Stow/Deploy State Machine** (gap #4) | [`ARM_PIVOT_GAPS_EXPLAINER.md §W`](ARM_PIVOT_GAPS_EXPLAINER.md) | 2 days | **NEW** |
+| **ST-9.10** | **Stow/Deploy State Machine** (gap #4) | [`ARM_PIVOT_GAPS_EXPLAINER.md §W`](archive/ARM_PIVOT_GAPS_EXPLAINER.md) | 2 days | **NEW** |
 | **ST-9.11** | **Launch Locks + ROSA Deploy Cinematic** (gap #7) | [`ARM_PIVOT_ANALYSIS.md §10.14`](ARM_PIVOT_ANALYSIS.md:1642), [`§10.16`](ARM_PIVOT_ANALYSIS.md:1810) | 1.5 days | **NEW** |
-| **ST-9.12** | **CoM Tracking + Thruster Plume Interlock** (gaps #5, #8) | [`ARM_PIVOT_GAPS_EXPLAINER.md §W`](ARM_PIVOT_GAPS_EXPLAINER.md) | 1.5 days | **NEW** |
+| **ST-9.12** | **CoM Tracking + Thruster Plume Interlock** (gaps #5, #8) | [`ARM_PIVOT_GAPS_EXPLAINER.md §W`](archive/ARM_PIVOT_GAPS_EXPLAINER.md) | 1.5 days | **NEW** |
 
 #### ST-9.2 Detailed Spec (Config G — 2026-04-27) ⚠️ SUPERSEDES Rev 5 EQUATORIAL SPEC
 

@@ -2,7 +2,7 @@
 
 > Companion to [`HANDOFF.md`](HANDOFF.md:1). HANDOFF covers the **next shift** (tactical fixes, 9 improvement areas, 4 sprints). This document covers the **next year** — the strategic integration of UX, simulation depth, hardware redesign (Octopus V5), and education that turns Space Cowboy into the canonical "how orbital debris removal actually works" game.
 >
-> **⚠️ CONFIG G ADOPTED (2026-04-27):** The V5 arm geometry is now **Config G (barrel-axial top-collar, 3-plane layout, ROSA panels, strut-mounted reel)** per [`ARM_PIVOT_ANALYSIS.md §10`](ARM_PIVOT_ANALYSIS.md:801). Sections §11–§13, §29, §35, §36 below contain references to equatorial arm geometry that are superseded by Config G. The updated V5 baseline spec is at §35.5 below. For full Config G specs see [`ARM_PIVOT_ANALYSIS.md §10.11`](ARM_PIVOT_ANALYSIS.md:1236). For Epic 9 implementation specs see [`ARM_PIVOT_GAPS_EXPLAINER.md §W`](ARM_PIVOT_GAPS_EXPLAINER.md).
+> **⚠️ CONFIG G ADOPTED (2026-04-27):** The V5 arm geometry is now **Config G (barrel-axial top-collar, 3-plane layout, ROSA panels, strut-mounted reel)** per [`ARM_PIVOT_ANALYSIS.md §10`](ARM_PIVOT_ANALYSIS.md:801). Sections §11–§13, §29, §35, §36 below contain references to equatorial arm geometry that are superseded by Config G. The updated V5 baseline spec is at §35.5 below. For full Config G specs see [`ARM_PIVOT_ANALYSIS.md §10.11`](ARM_PIVOT_ANALYSIS.md:1236). For Epic 9 implementation specs see [`ARM_PIVOT_GAPS_EXPLAINER.md §W`](archive/ARM_PIVOT_GAPS_EXPLAINER.md).
 >
 > All code citations use `[`label`](path:line)` clickable form. All physics derived from first principles — no magic numbers.
 
@@ -1332,7 +1332,7 @@ The game still teaches cutting-edge concepts — **but honestly**. Players learn
 >
 > **Config G barrel-axial:** ~242 kg wet (196 kg dry), Al-7075 octagonal bus **2.0m × 0.8m**, Hall-thruster main + N₂ cold-gas RCS, **ROSA panels** (2 × 2m × 1m along barrel in 0°/180° plane) + thin-film GaAs body-mount (~2,240 W peak), Li-ion battery (30% DOD), **Quad-4 config — 2 Large Daughters + 2 Small Daughters** on **1.6m struts** at **top-collar (Y=+0.9m)** with **0–180° meridian sweep** + lockable hinge (arms at 60°/120°/240°/300° in 3-plane layout), **strut-mounted reel** (Dyneema SK78 2 km, TRL 9), reel-cycle-count 20 per reel (real resource), **Capture Net** (weighted spinning Dyneema mesh) as primary capture tool + net-equipped daughter crossbows, LIDAR+camera rendezvous ladder (TRL 9), S-band ground link + 1550 nm laser ISL to ISS (TRL 7-8). **Semi-auto aim rotation** (Mother rotates to align sweep plane with target, crossbow fires on alignment). SSLV-first launch vehicle (PSLV rideshare backup). All `FEATURE_*` flags default `false`.
 >
-> See [`ARM_PIVOT_ANALYSIS.md §10.11`](ARM_PIVOT_ANALYSIS.md:1236) for locked Config G dimensions and [`ARM_PIVOT_GAPS_EXPLAINER.md §W`](ARM_PIVOT_GAPS_EXPLAINER.md) for Epic 9 implementation specs.
+> See [`ARM_PIVOT_ANALYSIS.md §10.11`](ARM_PIVOT_ANALYSIS.md:1236) for locked Config G dimensions and [`ARM_PIVOT_GAPS_EXPLAINER.md §W`](archive/ARM_PIVOT_GAPS_EXPLAINER.md) for Epic 9 implementation specs.
 >
 > **Upgrade path (§36):** Y1 HBN coating + Hex (6 arms) refit (2026, TRL 7) → Y2 GSL engineering units 4-5 km (2028, TRL 7) → Y3 GSL 6 km operational + Octo (8 arms) refit + power-beaming 50 W (2030, TRL 6-8) → Y4 GSL 10 km + power-beaming 500 W + MPD thruster (2032+, TRL 5-8). *(Ablation module and Reality Mode deferred to Epic 10.)*
 
