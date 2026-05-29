@@ -8,6 +8,7 @@
 
 import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
+import { profileFlags } from '../core/ProfileFlags.js';
 
 // ============================================================================
 // EARTH SURFACE SHADER (texture-based day/night with specular oceans)
@@ -96,6 +97,10 @@ float snoise(vec3 v) {
   return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
 }
 
+// Sprint 2 / PR C — LOW_DETAIL define skips the 7-octave noise stack entirely.
+// At LOW tier the base 8k/16k AVIF texture is detailed enough on its own;
+// the procedural noise was an ~7-octave/fragment burn that ate 2–4 ms on iGPUs.
+#ifndef LOW_DETAIL
 // Multi-octave fractal noise for terrain detail (5 octaves, higher frequency for close-range detail)
 float terrainDetail(vec3 p) {
   float n = 0.0;
@@ -115,6 +120,7 @@ float detailTiling(vec3 p) {
   n += 0.25 * snoise(p * 12800.0);
   return n;
 }
+#endif
 
 void main() {
   vec3 normal = normalize(vNormal);
@@ -145,25 +151,43 @@ void main() {
   float darkness = 1.0 - (dayColor.r + dayColor.g + dayColor.b) / 3.0;
   float oceanMask = smoothstep(0.35, 0.55, blueRatio) * smoothstep(0.3, 0.7, darkness);
 
-  // Procedural terrain detail — adds fine structure at close viewing distances
-  // Uses world-space position for consistent detail as camera moves
-  float detail = terrainDetail(normalize(vPosition));
-
-  // Distance-based blend: detail visible only at close range (LEO)
-  // At far distances, the base texture is sufficient
+  // Sprint 2 / PR C — terrain detail stack is gated by LOW_DETAIL.
+  // viewDist is still needed below for other effects, so it's defined either way.
   float viewDist = length(cameraPosition - vWorldPosition);
-  float detailFade = smoothstep(0.8, 0.2, viewDist / 3.0); // fade in within ~300km (closer detail visibility)
+#ifndef LOW_DETAIL
+  // Sprint 3 GPU profiling — Phase C.4 (2026-05-23): early-out the entire
+  // procedural-noise stack when this fragment is on the dark hemisphere.
+  // The detail contributions are multiplied into dayColor, which is then
+  // attenuated by max(0.02, dayFactor) in litDay below; with dayFactor
+  // near 0 on the night side, the noise output is suppressed to a tiny
+  // fraction of 1% anyway, so skipping the 7 snoise() calls per fragment
+  // is a zero-visual-change pure-savings transform.
+  //
+  // Threshold (dayFactor > 0.05) matches the nightFactor smoothstep
+  // crossover at NdotL ~= 0.05 — i.e. the terminator midpoint. Fragments
+  // inside the smoothstep transition still run the noise (so the visible
+  // band of detail at the dawn/dusk terminator is unchanged).
+  if (dayFactor > 0.05) {
+    // Procedural terrain detail — adds fine structure at close viewing distances
+    // Uses world-space position for consistent detail as camera moves
+    float detail = terrainDetail(normalize(vPosition));
 
-  // Apply as subtle luminance modulation — doesn't change color, just adds texture
-  // Reduce effect over ocean (water shouldn't have terrain noise)
-  float detailStrength = 0.15 * detailFade * (1.0 - oceanMask * 0.7);
-  dayColor *= 1.0 + detail * detailStrength;
+    // Distance-based blend: detail visible only at close range (LEO)
+    // At far distances, the base texture is sufficient
+    float detailFade = smoothstep(0.8, 0.2, viewDist / 3.0); // fade in within ~300km (closer detail visibility)
 
-  // Ultra-high-frequency detail tiling — visible only at very close range (nadir)
-  float tileNoise = detailTiling(normalize(vPosition));
-  float tileFade = smoothstep(2.0, 0.5, viewDist);  // tighter fade than base detail
-  float tileStrength = 0.04 * tileFade * (1.0 - oceanMask * 0.7);
-  dayColor *= 1.0 + tileNoise * tileStrength;
+    // Apply as subtle luminance modulation — doesn't change color, just adds texture
+    // Reduce effect over ocean (water shouldn't have terrain noise)
+    float detailStrength = 0.15 * detailFade * (1.0 - oceanMask * 0.7);
+    dayColor *= 1.0 + detail * detailStrength;
+
+    // Ultra-high-frequency detail tiling — visible only at very close range (nadir)
+    float tileNoise = detailTiling(normalize(vPosition));
+    float tileFade = smoothstep(2.0, 0.5, viewDist);  // tighter fade than base detail
+    float tileStrength = 0.04 * tileFade * (1.0 - oceanMask * 0.7);
+    dayColor *= 1.0 + tileNoise * tileStrength;
+  }
+#endif
 
   // Fresnel-enhanced ocean reflection — grazing angles more reflective
   float oceanFresnel = pow(1.0 - max(dot(normal, viewDir), 0.0), 3.0);
@@ -361,14 +385,108 @@ void main() {
 `;
 
 // ============================================================================
-// TEXTURE LOADER
+// TEXTURE LOADER + AVIF SUPPORT PROBE (PR P0.1)
 // ============================================================================
+//
+// AVIF compresses Earth textures ~5× smaller than JPG at visually equivalent
+// quality (e.g. earth_day_16k: 19 MB JPG → 3.9 MB AVIF). We probe browser AVIF
+// support once at module load via Image.decode() on a 1×1 AVIF data-URL and
+// cache the boolean. loadTexture() then prefers the `.avif` sibling on
+// supporting browsers (Chrome 85+, Edge 85+, Firefox 93+, Safari 16+) and
+// transparently falls back to the original `.jpg` everywhere else.
+//
+// The probe uses top-level await so the boolean is settled before any Earth
+// instance is constructed. In non-browser environments (Node test runner) the
+// `Image` global is absent, the probe short-circuits to `false`, and Earth.js
+// continues to behave exactly as before — important because test-EarthLOD.js
+// imports `selectLOD` from this module.
 const textureLoader = new THREE.TextureLoader();
 
+// 2×2 AVIF still-picture, av1 codec, ~311 bytes. Generated locally with
+// `ffmpeg -f lavfi -i color=c=black:s=2x2 -c:v libaom-av1 -still-picture 1
+//  -crf 30 -b:v 0` and verified to decode cleanly with libavif's avifdec.
+// Sufficient payload to verify the browser ships a working AVIF decoder —
+// `Image.decode()` will reject on the data-URL if AVIF is not supported.
+const AVIF_PROBE_DATA_URL =
+  'data:image/avif;base64,AAAAIGZ0eXBhdmlmAAAAAGF2aWZtaWYxbWlhZk1BMUIAAAD5bWV0YQAAAAAAAAAvaGRscgAAAAAAAAAAcGljdAAAAAAAAAAAAAAAAFBpY3R1cmVIYW5kbGVyAAAAAA5waXRtAAAAAAABAAAAHmlsb2MAAAAARAAAAQABAAAAAQAAASEAAAAWAAAAKGlpbmYAAAAAAAEAAAAaaW5mZQIAAAAAAQAAYXYwMUNvbG9yAAAAAGppcHJwAAAAS2lwY28AAAAUaXNwZQAAAAAAAAACAAAAAgAAABBwaXhpAAAAAAMICAgAAAAMYXYxQ4EADAAAAAATY29scm5jbHgAAgACAAIAAAAAF2lwbWEAAAAAAAAAAQABBAECgwQAAAAebWRhdAoFGAA2wCAyDReAAABIAAAADAZusnI=';
+
+const avifSupported = await (async () => {
+  if (typeof Image === 'undefined' || typeof document === 'undefined') {
+    return false; // Node / non-DOM environment (test runner)
+  }
+  try {
+    const probe = new Image();
+    probe.src = AVIF_PROBE_DATA_URL;
+    await probe.decode();
+    return true;
+  } catch (_e) {
+    return false;
+  }
+})();
+
+if (typeof console !== 'undefined' && typeof document !== 'undefined') {
+  console.log(`[Earth] AVIF support: ${avifSupported ? 'YES (preferring .avif)' : 'NO (falling back to .jpg)'}`);
+}
+
+/**
+ * Module-level getter so external code (e.g. [`PerfReportOverlay`](js/ui/PerfReportOverlay.js:1))
+ * can surface AVIF capability without touching the private module variable.
+ * @returns {boolean} Whether the browser successfully decoded the AVIF probe.
+ */
+export function isAvifSupported() {
+  return avifSupported === true;
+}
+
+/**
+ * Load a texture, preferring the .avif sibling when the browser supports AVIF.
+ * On AVIF load failure we automatically reissue the load against the .jpg path
+ * and patch the resulting image into the already-returned THREE.Texture so the
+ * material binding stays valid.
+ *
+ * @param {string} path  JPG path (e.g. 'textures/earth_day_16k.jpg'). When AVIF
+ *                       is supported, the .jpg suffix is rewritten to .avif.
+ */
 function loadTexture(path) {
-  const tex = textureLoader.load(path, (loaded) => {
-    console.log(`[Earth] Loaded: ${path} (${loaded.image?.width}×${loaded.image?.height})`);
-  });
+  const avifPath = path.replace(/\.jpg$/i, '.avif');
+  const useAvif = avifSupported && avifPath !== path;
+  const initialPath = useAvif ? avifPath : path;
+
+  const tex = textureLoader.load(
+    initialPath,
+    (loaded) => {
+      console.log(`[Earth] Loaded: ${initialPath} (${loaded.image?.width}×${loaded.image?.height})`);
+      // §13 boot timeline (?logBoot=1). Optional-chained so this is a no-op
+      // when the flag is off — `window.__bootMark` is only attached by main.js
+      // when `?logBoot=1` is set. This timestamps each Earth texture load (the
+      // prime suspect for the boot-time fan spike per the suspect list).
+      try {
+        const fname = initialPath.split('/').pop();
+        const dims = `${loaded.image?.width}×${loaded.image?.height}`;
+        // eslint-disable-next-line no-undef
+        window.__bootMark?.(`Earth texture decoded: ${fname} (${dims})`);
+      } catch (_e) { /* swallow — diagnostic only */ }
+    },
+    undefined,
+    (err) => {
+      if (useAvif) {
+        // AVIF file missing or decode failed at runtime — fall back to JPG.
+        console.warn(`[Earth] AVIF load failed for ${initialPath}, falling back to ${path}`, err);
+        textureLoader.load(path, (loaded) => {
+          tex.image = loaded.image;
+          tex.needsUpdate = true;
+          console.log(`[Earth] Loaded fallback: ${path} (${loaded.image?.width}×${loaded.image?.height})`);
+          try {
+            const fname = path.split('/').pop();
+            const dims = `${loaded.image?.width}×${loaded.image?.height}`;
+            // eslint-disable-next-line no-undef
+            window.__bootMark?.(`Earth texture decoded (fallback): ${fname} (${dims})`);
+          } catch (_e) { /* swallow */ }
+        });
+      } else {
+        console.error(`[Earth] Texture load failed: ${path}`, err);
+      }
+    }
+  );
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = 8;   // ST-5.3: 8× anisotropy (16k RGBA ≈ 1 GB VRAM — be conservative)
   tex.minFilter = THREE.LinearMipmapLinearFilter;
@@ -434,7 +552,10 @@ function getTextureQuality() {
   }
 
   const quality = selectLOD(maxTextureSize, deviceMemory, isAppleGPU);
-  console.log(`[Earth] LOD selected: ${quality || '4k (base)'} — maxTextureSize=${maxTextureSize}`);
+  // PR 5 / P2.10: gate verbose LOD log behind DEBUG flag (?debug=1).
+  if (Constants && Constants.DEBUG && Constants.DEBUG.LOG_RENDERER_DIAGNOSTICS) {
+    console.log(`[Earth] LOD selected: ${quality || '4k (base)'} — maxTextureSize=${maxTextureSize}`);
+  }
   return quality;
 }
 
@@ -453,6 +574,16 @@ export class Earth {
     this.sunDirection = new THREE.Vector3(1, 0.3, 0.5).normalize();
     this.elapsedTime = 0;
 
+    // Sprint 2 / PR C — LOW_DETAIL fragment-shader branch flag.
+    // Toggled by [`Earth.setLowDetail`](js/scene/Earth.js:1), wired through
+    // [`SceneManager.applyTier()`](js/scene/SceneManager.js:275).
+    //
+    // Sprint 3 GPU profiling — `?disableEarthNoise=1` force-pins LOW_DETAIL
+    // on at construction so the 7-octave noise stack is compiled out
+    // regardless of which quality tier is active. Lets us A/B the entire
+    // procedural-terrain cost in one session.
+    this._useLowDetail = profileFlags.disableEarthNoise === true;
+
     // Adaptive quality: pick texture resolution based on hardware
     const quality = getTextureQuality();
     const texSuffix = quality ? `_${quality}` : '';
@@ -466,8 +597,25 @@ export class Earth {
     this.cloudTexture = loadTexture(`textures/earth_clouds${cloudSuffix}.jpg`);
 
     this._createSurface();
-    this._createClouds();
-    this._createAtmosphere();
+    // Sprint 3 GPU profiling — `?disableClouds=1` skips the 8K-textured
+    // 128×128 transparent cloud sphere entirely. Isolates cloud-layer
+    // fragment + bandwidth cost (transparent + depthWrite=false sphere is a
+    // known bandwidth pig at 5760×3600).
+    if (!profileFlags.disableClouds) {
+      this._createClouds();
+    } else {
+      this.cloudMesh = null;
+      this.cloudMaterial = null;
+      console.info('[Earth] cloud layer skipped (?disableClouds=1)');
+    }
+    // Sprint 3 GPU profiling — `?disableAtmosphere=1` skips the atmosphere shell.
+    if (!profileFlags.disableAtmosphere) {
+      this._createAtmosphere();
+    } else {
+      this.atmosphereMesh = null;
+      this.atmosphereMaterial = null;
+      console.info('[Earth] atmosphere skipped (?disableAtmosphere=1)');
+    }
 
     scene.add(this.group);
   }
@@ -485,11 +633,74 @@ export class Earth {
         uSunDirection: { value: this.sunDirection },
         uTime: { value: 0 },
       },
+      // Sprint 2 / PR C — `defines` controls the LOW_DETAIL branch. Mutated
+      // at runtime by [`Earth.setLowDetail`](js/scene/Earth.js:1) when the
+      // quality tier changes.
+      defines: this._useLowDetail ? { LOW_DETAIL: 1 } : {},
     });
 
     this.surfaceMesh = new THREE.Mesh(geometry, this.surfaceMaterial);
     this.surfaceMesh.name = 'EarthSurface';
     this.group.add(this.surfaceMesh);
+  }
+
+  /**
+   * Sprint 2 / PR C — toggle the fragment shader's LOW_DETAIL branch.
+   * Called by [`SceneManager.applyTier()`](js/scene/SceneManager.js:275)
+   * whenever the quality tier switches. When `enabled` is true, the 7-octave
+   * noise stack in [`earthSurfaceFragmentShader`](js/scene/Earth.js:36) is
+   * compiled out — the base AVIF texture carries detail on its own.
+   *
+   * Idempotent and safe to call mid-flight: mutates `defines` + flips
+   * `needsUpdate` so the WebGL program is recompiled on the next frame.
+   *
+   * @param {boolean} enabled
+   */
+  /**
+   * Toggle the cloud sphere's visibility. Used by
+   * [`AutoProfileSweep`](js/systems/AutoProfileSweep.js:1) to A/B the
+   * cloud-layer GPU cost mid-session without reloading the page. No-op when
+   * clouds were never created (i.e. `?disableClouds=1` was set at boot).
+   *
+   * @param {boolean} visible
+   */
+  setCloudsVisible(visible) {
+    if (this.cloudMesh) {
+      this.cloudMesh.visible = visible !== false;
+    }
+  }
+
+  /**
+   * Toggle the atmosphere shell's visibility. Mid-session A/B counterpart
+   * to [`setCloudsVisible`](js/scene/Earth.js:1). No-op when atmosphere was
+   * never created (`?disableAtmosphere=1` at boot).
+   *
+   * @param {boolean} visible
+   */
+  setAtmosphereVisible(visible) {
+    if (this.atmosphereMesh) {
+      this.atmosphereMesh.visible = visible !== false;
+    }
+  }
+
+  setLowDetail(enabled) {
+    // Sprint 3 GPU profiling — `?disableEarthNoise=1` force-pins LOW_DETAIL
+    // on regardless of the tier the caller wants. Without this guard
+    // [`SceneManager.setEarth()`](js/scene/SceneManager.js:283) and
+    // [`SceneManager.applyTier()`](js/scene/SceneManager.js:305) would call
+    // `setLowDetail(false)` at HIGH/MEDIUM tier and silently undo the flag.
+    const want = profileFlags.disableEarthNoise ? true : !!enabled;
+    if (this._useLowDetail === want) return;
+    this._useLowDetail = want;
+    if (!this.surfaceMaterial) return; // surface not yet created
+    const defs = this.surfaceMaterial.defines || {};
+    if (want) {
+      defs.LOW_DETAIL = 1;
+    } else {
+      delete defs.LOW_DETAIL;
+    }
+    this.surfaceMaterial.defines = defs;
+    this.surfaceMaterial.needsUpdate = true;
   }
 
   // --- CLOUD LAYER (128×128 segments for smooth rendering) ---
@@ -555,8 +766,14 @@ export class Earth {
   setSunDirection(dir) {
     this.sunDirection.copy(dir);
     this.surfaceMaterial.uniforms.uSunDirection.value.copy(dir);
-    this.cloudMaterial.uniforms.uSunDirection.value.copy(dir);
-    this.atmosphereMaterial.uniforms.uSunDirection.value.copy(dir);
+    // Sprint 3 GPU profiling — cloud / atmosphere may be null when the
+    // `?disableClouds=1` / `?disableAtmosphere=1` flags are active.
+    if (this.cloudMaterial) {
+      this.cloudMaterial.uniforms.uSunDirection.value.copy(dir);
+    }
+    if (this.atmosphereMaterial) {
+      this.atmosphereMaterial.uniforms.uSunDirection.value.copy(dir);
+    }
   }
 
   /**
@@ -568,11 +785,18 @@ export class Earth {
 
     // Advance time uniforms
     this.surfaceMaterial.uniforms.uTime.value = this.elapsedTime;
-    this.cloudMaterial.uniforms.uTime.value = this.elapsedTime;
-    this.atmosphereMaterial.uniforms.uTime.value = this.elapsedTime;
+    // Sprint 3 GPU profiling — guarded for `?disableClouds=1` / `?disableAtmosphere=1`.
+    if (this.cloudMaterial) {
+      this.cloudMaterial.uniforms.uTime.value = this.elapsedTime;
+    }
+    if (this.atmosphereMaterial) {
+      this.atmosphereMaterial.uniforms.uTime.value = this.elapsedTime;
+    }
 
     // Sidereal cloud rotation — visible drift over a game hour (ST-5.3)
-    this.cloudMesh.rotation.y += Constants.EARTH.CLOUD_ROTATION_RATE * dt;
+    if (this.cloudMesh) {
+      this.cloudMesh.rotation.y += Constants.EARTH.CLOUD_ROTATION_RATE * dt;
+    }
   }
 
   /** @returns {THREE.Group} */

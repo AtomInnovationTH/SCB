@@ -17,6 +17,7 @@
 import { eventBus }  from '../../core/EventBus.js';
 import { Events }    from '../../core/Events.js';
 import { Constants } from '../../core/Constants.js';
+import timerManager  from '../../systems/TimerManager.js';
 
 // ── Skill state constants (match SkillsSystem) ────────────────────────────
 const UNDISCOVERED = 'undiscovered';
@@ -182,11 +183,11 @@ export class SkillsPane {
                     // Re-apply initial display now that we're past the menu.
                     // Slight delay matches the original behavior so the
                     // pane appears *after* the HUD has settled into view.
-                    if (this._initialTimerId !== null) clearTimeout(this._initialTimerId);
-                    this._initialTimerId = setTimeout(() => {
+                    if (this._initialTimerId !== null) timerManager.clear(this._initialTimerId);
+                    this._initialTimerId = timerManager.setTimeout(() => {
                         this._initialTimerId = null;
                         this._applyInitialDisplay();
-                    }, INITIAL_DISPLAY_DELAY_MS);
+                    }, INITIAL_DISPLAY_DELAY_MS, { owner: this });
                 } else if (!gameplay && this._masterVisible) {
                     this.setVisible(false);
                 }
@@ -287,10 +288,10 @@ export class SkillsPane {
         this._cancelHideTimer();
         this._cancelFadeTimer();
         if (this._initialTimerId !== null) {
-            clearTimeout(this._initialTimerId);
+            timerManager.clear(this._initialTimerId);
             this._initialTimerId = null;
         }
-        for (const tid of this._masteredTimers.values()) clearTimeout(tid);
+        for (const tid of this._masteredTimers.values()) timerManager.clear(tid);
         this._masteredTimers.clear();
 
         // Reset skill state
@@ -299,10 +300,14 @@ export class SkillsPane {
         this._discoveryCount = 0;
 
         // Reset checklist mode (ST-3.1)
-        for (const tid of this._checklistDimTimers.values()) clearTimeout(tid);
+        for (const tid of this._checklistDimTimers.values()) timerManager.clear(tid);
         this._checklistDimTimers.clear();
         this._checklistCompletedIds.clear();
         this._checklistMode = true;
+
+        // PR 5 / P2.8: safety net — kill any other untracked timers owned
+        // by this pane (e.g. animation fallbacks scheduled but not stored).
+        timerManager.clearByOwner(this);
 
         // Reset tech state
         this._recentTech.length = 0;
@@ -321,16 +326,20 @@ export class SkillsPane {
         this._cancelHideTimer();
         this._cancelFadeTimer();
         if (this._initialTimerId !== null) {
-            clearTimeout(this._initialTimerId);
+            timerManager.clear(this._initialTimerId);
             this._initialTimerId = null;
         }
-        for (const tid of this._masteredTimers.values()) clearTimeout(tid);
+        for (const tid of this._masteredTimers.values()) timerManager.clear(tid);
         this._masteredTimers.clear();
 
         // Clear checklist timers (ST-3.1)
-        for (const tid of this._checklistDimTimers.values()) clearTimeout(tid);
+        for (const tid of this._checklistDimTimers.values()) timerManager.clear(tid);
         this._checklistDimTimers.clear();
         this._checklistCompletedIds.clear();
+
+        // PR 5 / P2.8: safety net — kill any timers tagged with this owner
+        // that haven't been explicitly tracked (animation-end fallbacks etc.).
+        timerManager.clearByOwner(this);
 
         // Clear tech state
         this._recentTech.length = 0;
@@ -956,12 +965,12 @@ export class SkillsPane {
 
                     // Start mastered-fade timer
                     if (!this._masteredTimers.has(skillId)) {
-                        const tid = setTimeout(() => {
+                        const tid = timerManager.setTimeout(() => {
                             el.classList.add('sp-mastered-fade');
                             this._masteredTimers.delete(skillId);
                             // Remove DOM node after opacity transition
-                            setTimeout(() => { if (el.parentNode) el.remove(); }, 2100);
-                        }, Constants.SKILLS.MASTERED_FADE_DELAY);
+                            timerManager.setTimeout(() => { if (el.parentNode) el.remove(); }, 2100, { owner: this });
+                        }, Constants.SKILLS.MASTERED_FADE_DELAY, { owner: this });
                         this._masteredTimers.set(skillId, tid);
                     }
                 } else if (to === PRACTICED) {
@@ -1208,15 +1217,15 @@ export class SkillsPane {
 
         // Clear any existing timer for this skill
         if (this._checklistDimTimers.has(skillId)) {
-            clearTimeout(this._checklistDimTimers.get(skillId));
+            timerManager.clear(this._checklistDimTimers.get(skillId));
         }
 
         // Schedule removal after linger period
-        const tid = setTimeout(() => {
+        const tid = timerManager.setTimeout(() => {
             this._checklistCompletedIds.delete(skillId);
             this._checklistDimTimers.delete(skillId);
             this._renderCompact(); // re-renders checklist if still in novice mode
-        }, cfg.CHECKLIST_DONE_LINGER_MS);
+        }, cfg.CHECKLIST_DONE_LINGER_MS, { owner: this });
         this._checklistDimTimers.set(skillId, tid);
     }
 
@@ -1229,7 +1238,7 @@ export class SkillsPane {
         if (!this._checklistMode) return;
         this._checklistMode = false;
         // Clear all pending checklist timers
-        for (const tid of this._checklistDimTimers.values()) clearTimeout(tid);
+        for (const tid of this._checklistDimTimers.values()) timerManager.clear(tid);
         this._checklistDimTimers.clear();
         this._checklistCompletedIds.clear();
         this._renderCompact();
@@ -1452,7 +1461,7 @@ export class SkillsPane {
             if (glow.parentNode) glow.remove();
         });
         // Safety fallback: remove after 800ms even if animationend doesn't fire
-        setTimeout(() => { if (glow.parentNode) glow.remove(); }, 800);
+        timerManager.setTimeout(() => { if (glow.parentNode) glow.remove(); }, 800, { owner: this });
     }
 
     /**
@@ -1478,7 +1487,7 @@ export class SkillsPane {
                 el.classList.remove('sp-flash-mastered');
                 void el.offsetWidth;
                 el.classList.add('sp-flash-mastered');
-                setTimeout(() => el.classList.remove('sp-flash-mastered'), dur + 100);
+                timerManager.setTimeout(() => el.classList.remove('sp-flash-mastered'), dur + 100, { owner: this });
             } else {
                 // Tier-color flash via inline style + CSS transition
                 const def = this._defMap?.get(skillId);
@@ -1488,10 +1497,10 @@ export class SkillsPane {
                 void el.offsetWidth;
                 el.style.transition = `background ${dur}ms ease-out`;
                 el.style.background = 'transparent';
-                setTimeout(() => {
+                timerManager.setTimeout(() => {
                     el.style.background = '';
                     el.style.transition = '';
-                }, dur + 100);
+                }, dur + 100, { owner: this });
             }
         }
     }
@@ -1526,7 +1535,7 @@ export class SkillsPane {
         p.style.opacity = '0';
         p.style.transform = 'translateX(-10px)';
 
-        this._fadeEndTimerId = setTimeout(() => {
+        this._fadeEndTimerId = timerManager.setTimeout(() => {
             this._visible = false;
             this._fading = false;
             this._fadeEndTimerId = null;
@@ -1535,7 +1544,7 @@ export class SkillsPane {
             p.style.transition = '';
             p.style.opacity = '';
             p.style.transform = '';
-        }, dur + 50); // small buffer
+        }, dur + 50, { owner: this }); // small buffer
     }
 
     /**
@@ -1598,10 +1607,10 @@ export class SkillsPane {
      */
     _scheduleHide(delayMs) {
         this._cancelHideTimer();
-        this._hideTimerId = setTimeout(() => {
+        this._hideTimerId = timerManager.setTimeout(() => {
             this._hideTimerId = null;
             this._fadeOut();
-        }, delayMs);
+        }, delayMs, { owner: this });
     }
 
     /**
@@ -1610,7 +1619,7 @@ export class SkillsPane {
      */
     _cancelHideTimer() {
         if (this._hideTimerId !== null) {
-            clearTimeout(this._hideTimerId);
+            timerManager.clear(this._hideTimerId);
             this._hideTimerId = null;
         }
     }
@@ -1621,7 +1630,7 @@ export class SkillsPane {
      */
     _cancelFadeTimer() {
         if (this._fadeEndTimerId !== null) {
-            clearTimeout(this._fadeEndTimerId);
+            timerManager.clear(this._fadeEndTimerId);
             this._fadeEndTimerId = null;
         }
     }
@@ -1751,10 +1760,10 @@ export class SkillsPane {
         bd.style.opacity = '0';
         ov.style.opacity = '0';
 
-        setTimeout(() => {
+        timerManager.setTimeout(() => {
             bd.style.display = 'none';
             ov.style.display = 'none';
-        }, 220);
+        }, 220, { owner: this });
 
         document.removeEventListener('keydown', this._boundOnExpandedKeyDown, true);
     }

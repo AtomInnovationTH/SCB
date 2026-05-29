@@ -10,6 +10,7 @@ import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { gameState, GameStates } from '../core/GameState.js';
+import timerManager from './TimerManager.js';
 import { CameraViews } from './CameraSystem.js';
 import { scoringSystem } from './ScoringSystem.js';
 import { audioSystem } from './AudioSystem.js';
@@ -130,7 +131,7 @@ class GameFlowManager {
 
     // Clear pending shop timeout on terminal states
     if (state === GameStates.GAME_OVER || state === GameStates.WIN) {
-      if (this._shopTimeoutId) { clearTimeout(this._shopTimeoutId); this._shopTimeoutId = null; }
+      if (this._shopTimeoutId) { timerManager.clear(this._shopTimeoutId); this._shopTimeoutId = null; }
     }
 
     // Force state for reset scenarios
@@ -179,42 +180,47 @@ class GameFlowManager {
           // Start wide establishing-shot camera framing
           if (cameraSystem) cameraSystem.startVLEOIntro();
 
-          setTimeout(() => {
+          // PR 5 / P2.8: TimerManager-tracked VLEO cinematic + comms boot timers.
+          // owner=this for grouped teardown. State left null because these
+          // are first-run intro callbacks that gracefully no-op if state
+          // has changed (the inner `if (cameraSystem.currentView === ...)`
+          // guards each one).
+          timerManager.setTimeout(() => {
             this._vleoIntroActive = false;
             // End hold → camera smoothly eases back to normal chase distance
             if (cameraSystem) cameraSystem.endVLEOIntro();
-          }, vleoHoldMs);
+          }, vleoHoldMs, { owner: this });
 
           // UX-2 #10B: Comms boot sequence — trickling messages during VLEO intro
           // Also emits COMMS_OPENED to auto-discover manage_comms skill → activates comms HUD group
-          setTimeout(() => {
+          timerManager.setTimeout(() => {
             eventBus.emit(Events.COMMS_OPENED);
             eventBus.emit(Events.COMMS_MESSAGE, {
               source: 'SYSTEM', channel: 'CMD', priority: 'info',
               text: 'Comm link online',
             });
             // Removed: startup blip audio not needed per UX decision
-          }, 1000);
-          setTimeout(() => {
+          }, 1000, { owner: this });
+          timerManager.setTimeout(() => {
             eventBus.emit(Events.COMMS_MESSAGE, {
               source: 'HOUSTON', channel: 'CMD', priority: 'info',
               text: 'Reading you five-by-five, Cowboy',
             });
             // Removed: startup blip audio not needed per UX decision
-          }, 2000);
-          setTimeout(() => {
+          }, 2000, { owner: this });
+          timerManager.setTimeout(() => {
             eventBus.emit(Events.COMMS_MESSAGE, {
               source: 'SYSTEM', channel: 'CMD', priority: 'info',
               text: 'Sensor array calibrating...',
             });
             // Removed: startup blip audio not needed per UX decision
-          }, 3000);
+          }, 3000, { owner: this });
 
-          if (this._scoreGroupTimer !== null) clearTimeout(this._scoreGroupTimer);
-          this._scoreGroupTimer = setTimeout(() => {
+          if (this._scoreGroupTimer !== null) timerManager.clear(this._scoreGroupTimer);
+          this._scoreGroupTimer = timerManager.setTimeout(() => {
             this._scoreGroupTimer = null;
             eventBus.emit(Events.HUD_GROUP_ACTIVATE, { group: 'score' });
-          }, 5000 + vleoHoldMs);
+          }, 5000 + vleoHoldMs, { owner: this });
         }
 
         // Phase 2: Auto-start trawl — TrawlManager self-manages via GAME_STATE_CHANGE (Batch 3)
@@ -531,7 +537,7 @@ class GameFlowManager {
     // Interaction complete events → return to orbital view
     eventBus.on(Events.INTERACTION_DEORBIT, () => {
       gameState.clearDebris();
-      setTimeout(() => {
+      timerManager.setTimeout(() => {
         if (gameState.currentState === GameStates.INTERACTION) {
           // Check for shop visit every 5 clears
           if (gameState.debrisCleared % 5 === 0 && gameState.debrisCleared > 0) {
@@ -540,12 +546,12 @@ class GameFlowManager {
             this.transitionToState(GameStates.ORBITAL_VIEW);
           }
         }
-      }, 1500);
+      }, 1500, { owner: this });
     });
 
     eventBus.on(Events.INTERACTION_CAPTURE, () => {
       gameState.clearDebris();
-      setTimeout(() => {
+      timerManager.setTimeout(() => {
         if (gameState.currentState === GameStates.INTERACTION) {
           if (gameState.debrisCleared % 5 === 0 && gameState.debrisCleared > 0) {
             this.transitionToState(GameStates.SHOP);
@@ -553,7 +559,7 @@ class GameFlowManager {
             this.transitionToState(GameStates.ORBITAL_VIEW);
           }
         }
-      }, 1500);
+      }, 1500, { owner: this });
     });
 
     // ==================================================================
@@ -840,11 +846,11 @@ class GameFlowManager {
 
         // Auto-camera: return to COMMAND view after capture delivery
         if (cameraSystem && cameraSystem.currentView === CameraViews.TARGET_LOCK) {
-          setTimeout(() => {
+          timerManager.setTimeout(() => {
             if (cameraSystem.currentView === CameraViews.TARGET_LOCK) {
               cameraSystem.setView(CameraViews.CHASE);
             }
-          }, 2000); // 2 second delay for cinematic hold
+          }, 2000, { owner: this }); // 2 second delay for cinematic hold
         }
 
         // ── Shop trigger: every 5 debris cleared ──
@@ -856,11 +862,12 @@ class GameFlowManager {
               text: `${debrisCount} debris cleared — return to depot for resupply`,
               priority: 'high',
             });
-            this._shopTimeoutId = setTimeout(() => {
+            this._shopTimeoutId = timerManager.setTimeout(() => {
               if (gameState.isGameplay()) {
                 this.transitionToState(GameStates.SHOP);
               }
-            }, 2500);
+              this._shopTimeoutId = null;
+            }, 2500, { owner: this });
           }
         }
       }
@@ -1050,7 +1057,7 @@ class GameFlowManager {
         this._firstOrbitalView = false;
         // Add VLEO intro hold so guidance appears after the cinematic beat
         const vleoHoldMs = this._vleoIntroActive ? Constants.EARTH.VLEO_HOLD_SECONDS * 1000 : 0;
-        setTimeout(() => {
+        timerManager.setTimeout(() => {
           const { debrisField, player } = this._refs;
           if (!player || !debrisField) return;
 
@@ -1076,7 +1083,7 @@ class GameFlowManager {
               priority: 'info',
             });
           }
-        }, 3000 + vleoHoldMs);
+        }, 3000 + vleoHoldMs, { owner: this });
       }
     });
 
@@ -1113,7 +1120,7 @@ class GameFlowManager {
       if (!this._firstTimeComms.has('drift_recovery')) {
         const arrivedTarget = targetSelector.getActiveTarget();
         if (arrivedTarget) {
-          setTimeout(() => {
+          timerManager.setTimeout(() => {
             if (this._firstTimeComms.has('first_capture')) return; // already caught it
             if (this._firstTimeComms.has('drift_recovery')) return;
             if (!arrivedTarget.alive) return;
@@ -1133,7 +1140,7 @@ class GameFlowManager {
                 priority: 'info',
               });
             }
-          }, 8000);
+          }, 8000, { owner: this });
         }
       }
     });
@@ -1214,9 +1221,17 @@ class GameFlowManager {
 
     // Clear score-group activation timer
     if (this._scoreGroupTimer !== null) {
-      clearTimeout(this._scoreGroupTimer);
+      timerManager.clear(this._scoreGroupTimer);
       this._scoreGroupTimer = null;
     }
+    // PR 5 / P2.8: also kill the shop-trigger debounce and any other
+    // pending timers owned by this GameFlowManager. Prevents a stale
+    // "return to depot" auto-transition firing after a Game Over reset.
+    if (this._shopTimeoutId !== null) {
+      timerManager.clear(this._shopTimeoutId);
+      this._shopTimeoutId = null;
+    }
+    timerManager.clearByOwner(this);
   }
 
   // ==========================================================================

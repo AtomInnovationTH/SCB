@@ -13,6 +13,7 @@ import { Constants } from './core/Constants.js';
 import { eventBus } from './core/EventBus.js';
 import { Events } from './core/Events.js';
 import { gameState, GameStates } from './core/GameState.js';
+import { runtimeAdapt, TIER_ORDER } from './systems/QualityManager.js';
 
 import { SceneManager } from './scene/SceneManager.js';
 import { Earth } from './scene/Earth.js';
@@ -25,7 +26,7 @@ import { PlayerSatellite } from './entities/PlayerSatellite.js';
 import { DebrisField } from './entities/DebrisField.js';
 import { ActiveSatellites } from './entities/ActiveSatellite.js';
 import { ArmManager } from './entities/ArmManager.js';
-import { orbitToSceneCartesian } from './entities/OrbitalMechanics.js';
+import { orbitToSceneCartesianInto } from './entities/OrbitalMechanics.js';
 
 // Systems
 import { scoringSystem } from './systems/ScoringSystem.js';
@@ -80,6 +81,11 @@ import { TeachingOverlay } from './ui/TeachingOverlay.js';
 import { StrategicMap } from './ui/StrategicMap.js';
 import { captureNetVisual } from './ui/CaptureNetVisual.js';
 import { captureNetSystem } from './entities/CaptureNet.js';
+import perfReportOverlay, { captureBootInfo } from './ui/PerfReportOverlay.js';
+import { isAvifSupported } from './scene/Earth.js';
+import { profileFlags } from './core/ProfileFlags.js';
+import { AutoProfileSweep } from './systems/AutoProfileSweep.js';
+import { gameState as _gameStateRefForProfile } from './core/GameState.js';
 
 
 // ============================================================================
@@ -91,15 +97,293 @@ let starfield;
 let sunLight;
 let lastTime = 0;
 
-// 60 fps frame limiter
-const TARGET_FPS = 60;
-const FRAME_INTERVAL = 1000 / TARGET_FPS;
+// --- Diagnostic: ?logPause=1 — opt-in per-second pause/state log.
+// Parsed once at module load; never spams logs by default. Set to true via
+// `?logPause=1` URL flag. The gameLoop samples per-frame counters and emits
+// a one-line summary every ~1 s while enabled. Use this to confirm which
+// `gameState.currentState` value is live when the user thinks the game is
+// "paused" but the GPU is still busy.
+const _logPauseEnabled = (() => {
+  try {
+    return new URLSearchParams(window.location.search).get('logPause') === '1';
+  } catch (_e) { return false; }
+})();
+let _logPauseLastEmit = 0;
+let _logPauseFramesRendered = 0;
+let _logPauseFramesSkipped = 0;
+if (_logPauseEnabled) {
+  console.info('[logPause] enabled via ?logPause=1 — per-second pause/state diagnostic active');
+}
+
+// --- Diagnostic: ?logBoot=1 — opt-in boot timeline profiler.
+// Sprint 4 §13: investigate the "fan turns on before CPU/GPU has time to get
+// hot" symptom. SMC fan controller responds to brief die-temp impulses (Energy
+// Impact + dwell time, not just steady-state CPU%); once die temp crosses
+// ~60-65 °C it ramps and hysteresis keeps it spinning 5-15 min.
+//
+// This profiler captures `performance.now()` deltas between every major init
+// phase (catalog load, scene/earth construct, debris build, renderer.compile,
+// first rAF, first frame, async texture loads), then dumps a sorted timeline
+// summary so the dominant phase pops out.
+//
+// External modules call `window.__bootMark?.('phase')` (optional chaining =
+// zero overhead when flag is off; we only attach the global when enabled).
+const _logBootEnabled = (() => {
+  try {
+    return new URLSearchParams(window.location.search).get('logBoot') === '1';
+  } catch (_e) { return false; }
+})();
+const _bootT0 = (typeof performance !== 'undefined') ? performance.now() : 0;
+let _bootMarks = [];
+let _bootFirstFrameMarked = false;
+// §13 dropped the "single-emit" gate. The timeline is now continuous: marks
+// keep being appended (init phases, audio lifecycle, per-frame spikes) and the
+// user can call `window.__dumpBootTimeline()` from DevTools at any moment to
+// snapshot. Bounded auto-capture window is 60 s (see _bootSpikeWindowOver).
+const _bootSpikeWindowMs = 60_000;
+const _bootSpikeThresholdMs = 30; // Any render() > 30 ms is recorded as a spike
+let _bootSpikeCount = 0;
+function _bootMark(phase) {
+  if (!_logBootEnabled) return;
+  const t = performance.now() - _bootT0;
+  const prev = _bootMarks.length ? _bootMarks[_bootMarks.length - 1].t : 0;
+  _bootMarks.push({ phase, t, dt: t - prev });
+}
+/**
+ * §13 spike detector. Called from gameLoop with the elapsed render time. Adds
+ * a timeline mark when render() exceeds the threshold so post-boot spikes
+ * (e.g. entering ORBITAL_VIEW, opening Strategic Map, etc.) are also captured.
+ * Auto-disables after 60 s to bound memory; the user can re-enable by reload.
+ */
+function _bootSpikeDetect(renderMs) {
+  if (!_logBootEnabled) return;
+  const t = performance.now() - _bootT0;
+  if (t > _bootSpikeWindowMs) return;
+  if (renderMs > _bootSpikeThresholdMs) {
+    _bootSpikeCount++;
+    _bootMark(`SPIKE: render() took ${renderMs.toFixed(1)} ms`);
+  }
+}
+function _emitBootTimeline(reason) {
+  if (!_logBootEnabled) return;
+  const pad = (n, w) => String(Math.round(n)).padStart(w);
+  console.group(`[logBoot] BOOT TIMELINE — ${reason} (T0 = main.js eval, after imports)`);
+  for (const m of _bootMarks) {
+    console.log(`[logBoot] T+${pad(m.t, 5)}ms  (+${pad(m.dt, 4)}ms)  ${m.phase}`);
+  }
+  const top = _bootMarks.slice().sort((a, b) => b.dt - a.dt).slice(0, 8);
+  console.log('[logBoot] --- TOP 8 PHASES BY DURATION ---');
+  for (const m of top) {
+    console.log(`[logBoot]   +${pad(m.dt, 4)}ms  @ T+${pad(m.t, 5)}ms  ${m.phase}`);
+  }
+  console.log(`[logBoot] total marks=${_bootMarks.length} spike-detections=${_bootSpikeCount}`);
+  console.groupEnd();
+}
+if (_logBootEnabled) {
+  console.info('[logBoot] enabled via ?logBoot=1 — boot timeline diagnostic active. Call window.__dumpBootTimeline() from DevTools at any moment to snapshot.');
+  if (typeof window !== 'undefined') {
+    window.__bootMark = _bootMark;
+    window.__dumpBootTimeline = () => _emitBootTimeline('on-demand dump');
+  }
+  _bootMark('main.js eval (post-imports, T0)');
+}
+
+// --- rAF gate: `_rafScheduled` debounce.
+// Why this exists: the previous gameLoop unconditionally re-scheduled
+// `requestAnimationFrame(gameLoop)` at the top of every tick. That meant
+// even when `gameFlowManager.paused === true` and our render() was skipped,
+// the rAF callback kept firing at the display's refresh rate (e.g. 120 Hz).
+// The browser's compositor stays awake whenever rAF is pumping, which is
+// what consumed ~40 % of the Renderer-process GPU on user's M4 Max during
+// ESC pause (confirmed by `?logPause=1` showing `rendered/s=0 skipped/s=120`
+// while Activity Monitor still reported 40 % on "Google Chrome Helper (Renderer)").
+//
+// Fix: gate the next-frame scheduling through `_scheduleNextFrame()`, which
+// dedups concurrent requests via `_rafScheduled`. The gameLoop only
+// re-schedules when there is real work to render. Wake hooks (visibility
+// change, PAUSE_RESUME event) explicitly call `_scheduleNextFrame()` to
+// restart the loop.
+let _rafScheduled = false;
+// §14.1 Window-blur throttle flag. `visibilitychange` only fires when the
+// *tab* is hidden (e.g. switching to another browser tab). It does NOT fire
+// when the user Cmd-Tabs to another macOS app — the browser window is still
+// on-screen so `document.hidden` stays false. To pause the sim on app-switch
+// we listen for `window blur/focus` and set this flag. The `document.hasFocus()`
+// cross-check in the blur handler filters false positives from DevTools focus,
+// iframe focus, or child-popup focus. See §14.1 in GPU_PROFILING_REPORT.md.
+let _windowBlurred = false;
+// Diagnostic: tracks every _scheduleNextFrame() invocation (caller + when).
+// Emits a console row once per second under `?logPause=1`. Lets us find the
+// rogue caller that keeps the loop alive while paused.
+let _rafCallerCounts = Object.create(null);
+let _rafLastReport = 0;
+// §12.12 Pending throttle setTimeout handle. Tracked so STATE_CHANGE and
+// PAUSE_RESUME can cancel the pending throttle and reschedule immediately at
+// the new state's interval (otherwise the old throttle delays transitions by
+// up to 200 ms).
+let _scheduleTimeoutHandle = null;
+
+/**
+ * §12.12 State-aware rAF dispatch interval (ms).
+ *   0   → follow display refresh (immediate rAF) — active gameplay only.
+ *   >0  → throttle via setTimeout before rAF — for menu / pause / hidden.
+ *
+ * Rationale: anything > 0 lets the browser compositor and JS engine sleep
+ * between dispatches. On macOS this is what allows Apple Silicon Efficiency
+ * cores to reach deep c-states; the Energy Impact metric (which drives the
+ * SMC fan controller) drops accordingly. Indistinguishable to the user for
+ * UI screens since the camera barely moves and entity sim is already at 10 %.
+ */
+function _getScheduleIntervalMs() {
+  // ESC pause: aggressive 5 Hz throttle (§12.4) — render() is skipped anyway.
+  if (gameFlowManager.paused) return 200;
+ // Tab hidden: also throttle defensively. In practice the gameLoop early-
+ // returns at `document.hidden` without calling _scheduleNextFrame, so this
+ // branch is only hit when an event listener wakes the loop while hidden.
+ if (document.hidden) return 200;
+ // §14.1 Window blurred (Cmd-Tab to another app): throttle identically to
+ // hidden-tab. The browser window is still on-screen but the user is in
+ // another application — no need for full frame rate.
+ if (_windowBlurred) return 200;
+  // Menu / Briefing / Shop / Game-over / Win — user is reading UI, not flying.
+  // 30 Hz is indistinguishable from display refresh for static-camera
+  // background scenes (entity sim already runs at 10 % speed in `!isActive`).
+  // Cuts compositor + JS work 2-4× on 60/120 Hz displays.
+  if (!gameState.isGameplay()) return 33; // ~30 fps
+  // Active gameplay — display refresh.
+  return 0;
+}
+
+function _scheduleNextFrame() {
+  if (_logPauseEnabled) {
+    // Two stack-frames up: line that called _scheduleNextFrame().
+    // Take only the location portion so the histogram is readable.
+    const stack = new Error().stack || '';
+    const lines = stack.split('\n');
+    // Skip the Error() row + this function's row → caller is index 2.
+    const caller = (lines[2] || lines[1] || '?').trim().replace(/^at\s+/, '');
+    _rafCallerCounts[caller] = (_rafCallerCounts[caller] || 0) + 1;
+  }
+  if (_rafScheduled) return;
+  _rafScheduled = true;
+  const intervalMs = _getScheduleIntervalMs();
+  if (intervalMs > 0) {
+    _scheduleTimeoutHandle = setTimeout(() => {
+      _scheduleTimeoutHandle = null;
+      requestAnimationFrame(gameLoop);
+    }, intervalMs);
+  } else {
+    requestAnimationFrame(gameLoop);
+  }
+}
+
+/**
+ * §12.12 Cancel any pending throttle setTimeout and reschedule immediately at
+ * the current state's interval. Call from event handlers that change the
+ * required frame rate (STATE_CHANGE, PAUSE_RESUME, PAUSE_MENU, visibility).
+ * Prevents up-to-200 ms latency on state transitions out of pause / menu.
+ */
+function _flushScheduledFrame() {
+  if (_scheduleTimeoutHandle != null) {
+    clearTimeout(_scheduleTimeoutHandle);
+    _scheduleTimeoutHandle = null;
+  }
+  _rafScheduled = false;
+  _scheduleNextFrame();
+}
+
+/**
+ * §12.12 Predicate: should the AudioContext be in `'running'` state right now?
+ * Returns false for any "user-idle" condition: paused, hidden tab, menu /
+ * briefing / shop screens. Returns true for active gameplay AND end-screens
+ * (GAME_OVER / WIN have death / victory stings that may still need to play).
+ */
+function _shouldAudioRun() {
+  if (!audioSystem || !audioSystem.ctx) return false;
+  if (gameFlowManager.paused) return false;
+  if (document.hidden) return false;
+  if (_windowBlurred) return false; // §14.1 — app-switch via Cmd-Tab
+  if (gameState.isGameplay()) return true;
+  // End-screens may have audio stings playing — keep ctx alive briefly.
+  if (gameState.currentState === GameStates.GAME_OVER) return true;
+  if (gameState.currentState === GameStates.WIN) return true;
+  return false; // MENU, BRIEFING, SHOP
+}
+
+/**
+ * §12.12 Single suspend/resume point for the AudioContext. Idempotent —
+ * checks current `ctx.state` and only acts when it disagrees with policy.
+ * Called from STATE_CHANGE, PAUSE_RESUME, PAUSE_MENU, visibilitychange,
+ * window blur/focus (§14.1), and the pause branch in gameLoop.
+ */
+function _syncAudioCtxState() {
+  if (!audioSystem || !audioSystem.ctx) return;
+  const should = _shouldAudioRun();
+  const state = audioSystem.ctx.state;
+  if (should && state === 'suspended') {
+    audioSystem.ctx.resume();
+  } else if (!should && state === 'running') {
+    audioSystem.ctx.suspend();
+  }
+}
+
+/**
+ * Hide the entire HUD overlay during pause to silence CSS animations and
+ * any composite work on `.hud-panel` elements. Uses `visibility: hidden`
+ * (not `display: none`) so we don't churn the layout engine on every
+ * pause toggle. The pause overlay sits OUTSIDE `#hud-overlay`, so it
+ * stays visible.
+ * @param {boolean} hide
+ */
+function _setHudHidden(hide) {
+  const hud = document.getElementById('hud-overlay');
+  if (hud) hud.style.visibility = hide ? 'hidden' : 'visible';
+}
+function _emitRafCallerDiagnostic(timestamp) {
+  if (!_logPauseEnabled) return;
+  if (timestamp - _rafLastReport < 1000) return;
+  _rafLastReport = timestamp;
+  const entries = Object.entries(_rafCallerCounts);
+  if (entries.length === 0) return;
+  _rafCallerCounts = Object.create(null);
+  const summary = entries
+    .sort((a, b) => b[1] - a[1])
+    .map(([k, v]) => `${v}× ${k}`)
+    .join(' | ');
+  console.log(`[logPause] _scheduleNextFrame callers/s: ${summary}`);
+}
+
+// Frame pacing — opt-in cap via Constants.PERF.FRAME_CAP (null = native refresh).
+// Historic FRAME_INTERVAL hard-gate to 60 fps removed: it caused every-other-frame
+// judder on 120/144 Hz displays. See PR 3 / Subtask P1.7.
 let lastFrameTime = 0;
 let frameCount = 0;
+
+// PR 4 / P1.5 — Quality tier auto-adapt rolling FPS history + cooldown counter.
+// Owned here (not inside SceneManager) so the gameLoop owns both the producer
+// (frame timing) and the consumer (runtimeAdapt call). SceneManager owns the
+// renderer/post-processing state via sceneManager.applyTier().
+const _fpsHistory = [];
+let _framesSinceLastTierChange = Constants.PERF.ADAPT_COOLDOWN_FRAMES; // start "cooled down" so the first decision is gated only by history length
+const _ADAPT_CHECK_INTERVAL = 60; // call runtimeAdapt every N frames
+
+// PR 6 / P3.15 — Draw-call profiling frame counter (separate from _ADAPT_CHECK_INTERVAL).
+let _profileFrameCount = 0;
+
+// PR 6 / P3.11 — GPU probe one-shot flag. Once the probe window completes
+// (GPU_PROBE_FRAMES samples), we check the median and optionally downshift.
+// After that, the flag flips true and the probe is disabled for the session.
+let _gpuProbeComplete = false;
 
 // Catch slo-mo state (Phase 1C)
 let slowMoTimer = 0;
 let slowMoFactor = 1.0;
+
+// Sprint 2 / PR A — scratch outputs for `orbitToSceneCartesianInto` in the
+// approach-distance check (per-frame while in APPROACH state).
+const _approachCartPos = { x: 0, y: 0, z: 0 };
+const _approachCartVel = { x: 0, y: 0, z: 0 };
+const _approachTargetVec3 = new THREE.Vector3();
 
 // Entities
 let player;
@@ -157,6 +441,37 @@ let inputManager;
 // ============================================================================
 
 async function init() {
+  _bootMark('init() entry');
+  // PR 5 / P2.10 — URL flag parsing (must run before any module reads
+  // Constants.DEBUG). SceneManager handles its own `?tier=` override; we
+  // only handle `?debug=1` here so the diagnostics gate flips on for the
+  // very first _logDiagnostics() / Earth LOD log call this session.
+  try {
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('debug') === '1') {
+      Constants.DEBUG.LOG_RENDERER_DIAGNOSTICS = true;
+      console.info('[Debug] verbose diagnostics enabled via ?debug=1');
+    }
+    // PR 6 / P3.15: ?profile=1 enables per-60-frame draw-call logging.
+    if (urlParams.get('profile') === '1') {
+      Constants.DEBUG.LOG_DRAW_CALLS = true;
+      console.info('[Profile] draw-call profiling enabled via ?profile=1');
+    }
+    // Sprint 2 / Phase A: ?perfReport=1 — defer overlay attach until after the
+    // SceneManager + DebrisField exist (handled near the end of init()).
+    if (urlParams.get('perfReport') === '1') {
+      Constants.DEBUG.PERF_REPORT_OVERLAY = true;
+      console.info('[PerfReport] overlay scheduled via ?perfReport=1');
+    }
+    // Sprint 3 GPU profiling: ?autoProfile=1 enables [`AutoProfileSweep`](js/systems/AutoProfileSweep.js:1)
+    // — scheduled near the end of init() once SceneManager + Earth exist.
+    if (profileFlags.autoProfile) {
+      console.info('[AutoProfile] scheduled via ?autoProfile=1 — will auto-start once scene settles. To re-run in another game state, call window.startAutoProfile() from DevTools.');
+    }
+  } catch (_e) {
+    // Non-browser env or malformed URL — ignore.
+  }
+
   const canvas = document.getElementById('game-canvas');
   if (!canvas) {
     console.error('[main] #game-canvas not found');
@@ -172,14 +487,20 @@ async function init() {
   } catch (e) {
     console.warn('[main] CatalogLoader init threw unexpectedly:', e);
   }
+  _bootMark('CatalogLoader.init complete');
 
   // --- Scene Manager (renderer, camera, post-processing) ---
   sceneManager = new SceneManager(canvas);
   const scene = sceneManager.getScene();
   const camera = sceneManager.getCamera();
+  _bootMark('SceneManager constructed (renderer + composer + bloom)');
 
   // --- Earth (visual centerpiece) ---
   earth = new Earth(scene);
+  // Sprint 2 / PR C — register so SceneManager.applyTier() can toggle the
+  // LOW_DETAIL fragment-shader branch when the tier changes.
+  sceneManager.setEarth(earth);
+  _bootMark('Earth constructor returned (textures still decoding async)');
 
   // --- Starfield (background) ---
   starfield = new Starfield(scene);
@@ -189,9 +510,11 @@ async function init() {
 
   // --- Player Satellite ---
   player = new PlayerSatellite(scene);
+  _bootMark('Starfield + SunLight + Player constructed');
 
   // --- Debris Field (ST-6.1: hybrid mode consumes catalogLoader if ready) ---
   debrisField = new DebrisField(scene, { catalogLoader });
+  _bootMark('DebrisField constructed (800 interactive + 5000 background)');
 
   // --- Active Satellites ---
   activeSatellites = new ActiveSatellites(scene);
@@ -241,6 +564,7 @@ async function init() {
   // --- ST-6.7: Environment Hazards (AO, MMOD, Safe-Mode, Radiation, Battery DOD) ---
   environmentSystem = new EnvironmentSystem(eventBus, player, powerDistribution, resourceSystem, skillsSystem);
   environmentSystem.init();
+  _bootMark('Subsystems constructed (resource/sensor/cargo/forge/conjunction/autopilot/skills/lasso/rewards/codex/spaceWeather/missionEvents/environment)');
 
   // --- F17: Codex Viewer UI (browse unlocked entries) ---
   codexViewerUI = new CodexViewerUI(codexSystem);
@@ -305,6 +629,7 @@ async function init() {
 
   // --- Debug Overlay (Ctrl+D toggle) ---
   debugOverlay = new DebugOverlay();
+  _bootMark('UI constructed (HUD/Menu/Briefing/Shop/GameOver/Reticles/NavSphere/OrbitMFD/DebrisMap/DebugOverlay)');
 
   // --- Connect comms to HUD ---
   hud.setCommsSystem(commsSystem);
@@ -399,6 +724,7 @@ async function init() {
     setApproachComplete: (v) => { gameFlowManager.approachComplete = v; },
   });
   inputManager.start();
+  _bootMark('InputManager started + gameFlowManager.init');
 
   // --- Collision Avoidance System (after inputManager so ref is valid) ---
   collisionAvoidanceSystem.init({
@@ -427,10 +753,125 @@ async function init() {
   });
 
   // --- Pause overlay: reset lastTime to avoid time-jump on unpause ---
-  eventBus.on(Events.PAUSE_RESUME, () => { lastTime = performance.now(); });
-  eventBus.on(Events.PAUSE_MENU, () => { lastTime = performance.now(); });
+  // Also wake the rAF loop AND restore HUD visibility — gameLoop is hard-
+  // throttled to ~5 Hz while paused (see `_scheduleNextFrame()` design note),
+  // and the HUD is hidden via `_setHudHidden()` to silence its CSS animations
+  // and any composite work. PAUSE_RESUME and PAUSE_MENU are the unpause
+  // channels; both must restore the HUD + wake the loop.
+  // §12.12 Unified unpause path. _syncAudioCtxState() handles ctx.resume
+  // (only if policy says we need audio — gameplay yes, transitioning to
+  // menu no). _flushScheduledFrame cancels the 5 Hz pause throttle so the
+  // next frame runs immediately rather than after the 200 ms setTimeout.
+  eventBus.on(Events.PAUSE_RESUME, () => {
+    lastTime = performance.now();
+    _setHudHidden(false);
+    _syncAudioCtxState();
+    _flushScheduledFrame();
+  });
+  eventBus.on(Events.PAUSE_MENU, () => {
+    lastTime = performance.now();
+    _setHudHidden(false);
+    _syncAudioCtxState();
+    _flushScheduledFrame();
+  });
+
+  // §12.12 State-aware resource sync. Fires on every game-state transition.
+  // Three responsibilities:
+  //   (a) Stop looping audio when LEAVING a gameplay state, so a thruster
+  //       hum or ΔV alarm doesn't drone over the briefing / shop / game-over
+  //       screen. (Previously done per-frame in the !isActive branch — moved
+  //       here so it fires once per transition instead of 120 ×/sec.)
+  //   (b) _syncAudioCtxState — suspend ctx when entering menu / briefing / shop
+  //       (no audio needed), resume when entering gameplay.
+  //   (c) _flushScheduledFrame — the new state's frame interval is different
+  //       (e.g. menu 30 fps → gameplay display-refresh); reschedule now rather
+  //       than letting the old throttle's setTimeout(33 ms) delay the first
+  //       gameplay frame.
+  eventBus.on(Events.STATE_CHANGE, ({ from, to }) => {
+    const gameplayStates = [
+      GameStates.ORBITAL_VIEW,
+      GameStates.APPROACH,
+      GameStates.INTERACTION,
+    ];
+    const wasGameplay = gameplayStates.includes(from);
+    const nowGameplay = gameplayStates.includes(to);
+    if (wasGameplay && !nowGameplay && audioSystem) {
+      // Leaving gameplay — kill loops defensively.
+      if (typeof audioSystem.stopThrusterHum === 'function') audioSystem.stopThrusterHum();
+      if (typeof audioSystem.stopDeltaVAlarm === 'function') audioSystem.stopDeltaVAlarm();
+      if (typeof audioSystem.stopForgeHum === 'function') audioSystem.stopForgeHum();
+    }
+    _syncAudioCtxState();
+    _flushScheduledFrame();
+  });
 
   window.addEventListener('resize', onResize);
+
+  // --- PR 3 / P1.4: Pause render loop on hidden tab to save CPU/GPU and prevent
+  // dt-spike on resume. Also stop any looping audio so it doesn't drone in
+  // background tabs. Uses only existing AudioSystem public methods.
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      // §12.12 Newly hidden — silence loops AND suspend the AudioContext.
+      // (Previously only stopped loops; the ctx itself stayed `running` at
+      // 44.1 kHz, keeping the audio thread warm. _syncAudioCtxState now
+      // suspends it since _shouldAudioRun()→false when hidden.)
+      if (audioSystem) {
+        if (typeof audioSystem.stopThrusterHum === 'function') audioSystem.stopThrusterHum();
+        if (typeof audioSystem.stopDeltaVAlarm === 'function') audioSystem.stopDeltaVAlarm();
+        if (typeof audioSystem.stopForgeHum === 'function') audioSystem.stopForgeHum();
+        if (typeof audioSystem.stopAmbientLoop === 'function') audioSystem.stopAmbientLoop();
+        if (typeof audioSystem.stopLassoWireWhistle === 'function') audioSystem.stopLassoWireWhistle();
+        if (typeof audioSystem.stopAlignmentTone === 'function') audioSystem.stopAlignmentTone();
+      }
+      _syncAudioCtxState();
+    } else {
+      // Newly visible — reset last-frame timers so next dt is small.
+      const now = performance.now();
+      lastTime = now;
+      lastFrameTime = now;
+      _syncAudioCtxState();   // resumes ctx if state policy says so
+      _flushScheduledFrame(); // wakes loop (gameLoop's hidden early-return
+                              // skipped scheduling the next rAF)
+    }
+  });
+
+  // §14.1 Window blur/focus — pause sim when the user Cmd-Tabs to another
+  // macOS application. `visibilitychange` does NOT fire in this scenario
+  // because the browser tab is still on-screen (document.hidden stays false).
+  // The `document.hasFocus()` cross-check filters false positives from
+  // DevTools gaining focus, iframe focus, or child-popup focus — in those
+  // cases the *window* receives `blur` but `document.hasFocus()` often
+  // remains true because focus moved within the same browsing context.
+  // NOTE: window.blur is not stub-able in the Node test runner (jsdom does
+  // not implement the Page Visibility / Focus APIs). Manual browser testing
+  // required. See §14.1 in GPU_PROFILING_REPORT.md.
+  window.addEventListener('blur', () => {
+    // Double-check: if the document still has focus, this is a false
+    // positive (e.g. DevTools panel focused within the same window).
+    if (document.hasFocus()) return;
+    _windowBlurred = true;
+    if (audioSystem) {
+      if (typeof audioSystem.stopThrusterHum === 'function') audioSystem.stopThrusterHum();
+      if (typeof audioSystem.stopDeltaVAlarm === 'function') audioSystem.stopDeltaVAlarm();
+      if (typeof audioSystem.stopForgeHum === 'function') audioSystem.stopForgeHum();
+      if (typeof audioSystem.stopAmbientLoop === 'function') audioSystem.stopAmbientLoop();
+      if (typeof audioSystem.stopLassoWireWhistle === 'function') audioSystem.stopLassoWireWhistle();
+      if (typeof audioSystem.stopAlignmentTone === 'function') audioSystem.stopAlignmentTone();
+    }
+    _syncAudioCtxState();
+    // Do NOT call _setHudHidden(true) — when the user alt-tabs back the
+    // HUD should still be visible (only hide on actual ESC pause).
+    _flushScheduledFrame(); // reschedule at throttled 5 Hz interval
+  });
+  window.addEventListener('focus', () => {
+    _windowBlurred = false;
+    const now = performance.now();
+    lastTime = now;
+    lastFrameTime = now;
+    _syncAudioCtxState();
+    _flushScheduledFrame();
+  });
 
   // --- Hide loading screen ---
   const loadingScreen = document.getElementById('loading-screen');
@@ -444,23 +885,156 @@ async function init() {
   gameFlowManager.transitionToState(GameStates.MENU);
 
   console.log('[Space Cowboy] Engine initialized. Starting game loop…');
-  requestAnimationFrame(gameLoop);
+
+  // PR 3 / P1.6 — Pre-compile shaders before first RAF to avoid first-frame stutter
+  // when materials are encountered for the first time during gameplay.
+  _bootMark('renderer.compile() — START (synchronous shader compile of all materials + composer passes)');
+  try {
+    sceneManager.renderer.compile(sceneManager.scene, sceneManager.camera);
+  } catch (e) {
+    console.warn('[Perf] renderer.compile failed:', e);
+  }
+  _bootMark('renderer.compile() — END');
+
+  // Sprint 2 / Phase A: attach Perf Report overlay if requested via ?perfReport=1.
+  // Defers until SceneManager + DebrisField are constructed so refs are live.
+  if (Constants.DEBUG && Constants.DEBUG.PERF_REPORT_OVERLAY) {
+    try {
+      const boot = captureBootInfo({
+        sceneManager,
+        avifSupported: isAvifSupported(),
+        initialTierReason: (() => {
+          try {
+            const p = new URLSearchParams(window.location.search);
+            return p.get('tier') ? 'url-override' : 'capability-detect';
+          } catch (_e) { return 'capability-detect'; }
+        })(),
+      });
+      console.info('[PerfReport] boot snapshot:', boot);
+      perfReportOverlay.attach({
+        sceneManager,
+        debrisField,
+        fpsHistory: _fpsHistory,
+      }, boot);
+    } catch (e) {
+      console.warn('[PerfReport] overlay attach failed:', e);
+    }
+  }
+
+  // Sprint 3 GPU profiling: wire [`AutoProfileSweep`](js/systems/AutoProfileSweep.js:1)
+  // when `?autoProfile=1`. Sweep auto-starts after a 5 s settle so the user
+  // can transition to ORBITAL_VIEW first if they want the in-mission state.
+  // Expose a global re-trigger so the user can run again in a different state
+  // (e.g. captured MENU, now wants IN-MISSION) without reloading.
+  if (profileFlags.autoProfile) {
+    try {
+      const sweep = new AutoProfileSweep({
+        sceneManager,
+        earth,
+        gameState: _gameStateRefForProfile,
+      });
+      // Global trigger — call this from DevTools after switching game state.
+      window.startAutoProfile = () => {
+        sweep.start().catch((e) => console.error('[AutoProfile] start() rejected:', e));
+      };
+      console.info('[AutoProfile] ready — auto-starting in 5 s. To re-run later: call window.startAutoProfile() from DevTools (e.g. after entering ORBITAL_VIEW).');
+      setTimeout(() => { window.startAutoProfile(); }, 5000);
+    } catch (e) {
+      console.warn('[AutoProfile] init failed:', e);
+    }
+  }
+
+  _bootMark('init() complete — first rAF scheduled');
+  _scheduleNextFrame();
 }
 
 // ============================================================================
 // GAME LOOP
 // ============================================================================
 
-function gameLoop(timestamp) {
-  requestAnimationFrame(gameLoop);
+/**
+ * Diagnostic emitter for `?logPause=1`. Flushes a one-line summary every ~1 s
+ * with the current `gameFlowManager.paused` flag, `gameState.currentState`,
+ * and the rendered/skipped frame counts since the last emit. Opt-in only
+ * (gated by `_logPauseEnabled` at every call site); zero overhead in normal
+ * play. Helper lives at module scope so it can be called from inside the
+ * gameLoop without re-allocating per frame.
+ *
+ * @param {number} timestamp - rAF high-res timestamp (ms)
+ * @param {boolean} skippedThisFrame - true if pause early-return fired
+ */
+function _emitPauseDiagnostic(timestamp, skippedThisFrame) {
+  if (timestamp - _logPauseLastEmit < 1000) return;
+  _logPauseLastEmit = timestamp;
+  const rendered = _logPauseFramesRendered;
+  const skipped = _logPauseFramesSkipped;
+  _logPauseFramesRendered = 0;
+  _logPauseFramesSkipped = 0;
+  // §12.11 AudioContext state: 'running' while paused = audio scheduler ticking
+  // at 44.1 kHz, keeping an efficiency core warm and preventing low-power state.
+  const audioCtxState = (audioSystem && audioSystem.ctx)
+    ? audioSystem.ctx.state
+    : 'n/a';
+  // §12.12 frameInterval shows the throttle target the schedule policy picked
+  // for this state (0 = display refresh, 33 = 30 fps menu, 200 = 5 fps pause).
+  const intervalMs = _getScheduleIntervalMs();
+  console.log(
+    `[logPause] state=${gameState.currentState} paused=${gameFlowManager.paused} `
+    + `hidden=${document.hidden} blurred=${_windowBlurred} `
+    + `lastFrameSkipped=${skippedThisFrame} rendered/s=${rendered} skipped/s=${skipped} `
+    + `audioCtx=${audioCtxState} frameInterval=${intervalMs}ms`,
+  );
+}
 
-  // 60 fps frame limiter — skip frame if too soon
-  if (timestamp - lastFrameTime < FRAME_INTERVAL) {
+function gameLoop(timestamp) {
+  // §13 boot timeline (?logBoot=1) — one-shot mark on the very first rAF
+  // dispatch. The delta from "init() complete — first rAF scheduled" to here
+  // measures rAF latency (browser compositor / GPU process startup), separate
+  // from the cost of the first render() call itself (marked below).
+  if (_logBootEnabled && !_bootFirstFrameMarked) {
+    _bootMark('first gameLoop() entry (rAF fired)');
+  }
+  // We're now running this tick — clear the dedup flag so wakeups can
+  // re-schedule. Schedule the next frame only at the end (when we know
+  // we want to keep running). Wake hooks call `_scheduleNextFrame()` to
+  // restart the loop after an inert period.
+  _rafScheduled = false;
+
+  // PR 3 / P1.4 — Skip work entirely when tab is hidden. Reset lastTime so the
+  // first frame after resume has a small dt (instead of a multi-second spike).
+  // Note: we do NOT schedule the next frame — `visibilitychange` will wake us.
+  if (document.hidden) {
+    lastTime = timestamp;
     return;
   }
-  lastFrameTime = timestamp;
+  // §14.1 (revised) — Window blurred (user Cmd-Tabbed to another macOS app).
+  // Mirror the document.hidden path EXACTLY: zero work, no rAF rescheduling,
+  // browser compositor sleeps. The window `focus` handler calls
+  // _flushScheduledFrame() to wake the loop on focus return. The original
+  // §14.1 fix only throttled to 5 Hz via _getScheduleIntervalMs(), which kept
+  // the GPU busy — the user reported "GPU continues when switching apps".
+  // This early-return is the actual pause.
+  if (_windowBlurred) {
+    lastTime = timestamp;
+    return;
+  }
 
-  // Debug: record frame time
+  // PR 3 / P1.7 — Opt-in frame cap (default: null → no cap, follow display refresh).
+  // Old hard-coded 60 fps gate caused judder on 120/144 Hz displays.
+  const frameCap = Constants.PERF.FRAME_CAP;
+  if (frameCap !== null) {
+    const interval = 1000 / frameCap;
+    if (timestamp - lastFrameTime < interval) return;
+    // Drift correction: increment by interval, not assign timestamp, so the cap
+    // averages cleanly. If we fell behind badly, snap forward to avoid
+    // spiral-of-death.
+    lastFrameTime += interval;
+    if (timestamp - lastFrameTime > interval * 4) lastFrameTime = timestamp;
+  } else {
+    lastFrameTime = timestamp;
+  }
+
+  // Debug: record frame time (pre-existing — runs even when paused, like before)
   if (debugOverlay) {
     const frameTime = timestamp - (lastTime || timestamp);
     debugOverlay.recordFrame(frameTime);
@@ -470,12 +1044,92 @@ function gameLoop(timestamp) {
     audioSystem.stopThrusterHum();
     audioSystem.stopDeltaVAlarm();
     audioSystem.stopForgeHum();
+    // §12.12 Suspend ctx via centralised policy helper. Previously inlined
+    // the `if (ctx.state === 'running') ctx.suspend()` check; now the helper
+    // covers all suspend / resume call sites consistently.
+    _syncAudioCtxState();
+    // Hide the HUD overlay so CSS animations + any composite work on
+    // `.hud-panel` elements stop. Idempotent (no-op if already hidden).
+    _setHudHidden(true);
+    if (_logPauseEnabled) {
+      _logPauseFramesSkipped++;
+      _emitPauseDiagnostic(timestamp, true);
+      _emitRafCallerDiagnostic(timestamp);
+    }
+    // Do NOT schedule next rAF — let the browser compositor sleep.
+    // `PAUSE_RESUME` / `PAUSE_MENU` event handlers will wake the loop.
+    // This is the fix for the "40 % GPU while paused" symptom: previously
+    // the rAF callback kept pumping at the display refresh rate (e.g. 120 Hz)
+    // even though `sceneManager.render()` was skipped, which kept the
+    // browser's compositor in 120 Hz mode and consumed ~40 % of the
+    // Renderer-process GPU on macOS.
     return;
   }
+  if (_logPauseEnabled) {
+    _logPauseFramesRendered++;
+    _emitPauseDiagnostic(timestamp, false);
+  }
+  // Active frame — schedule the next rAF. Placed here (not at the top of
+  // the function) so that the `document.hidden` and `gameFlowManager.paused`
+  // early-returns above genuinely halt the loop.
+  _scheduleNextFrame();
 
   // Delta time in seconds (cap to prevent spiral of death)
   const realDt = Math.min((timestamp - lastTime) / 1000, 0.1);
   lastTime = timestamp;
+
+  // PR 4 / P1.5 — Quality tier FPS sampling + auto-adapt.
+  // Placed AFTER the paused early-return so we never feed inflated
+  // frametimes (pause keeps `lastTime` stale) into the runtimeAdapt window.
+  // Uses fresh `realDt` (already cap-clamped) — getLastFps() on DebugOverlay
+  // works on the same underlying sample but isn't gated on pause, so we
+  // intentionally compute fps locally from realDt here.
+  if (realDt > 0) {
+    const fps = 1 / realDt;
+    if (Number.isFinite(fps) && fps > 0) {
+      _fpsHistory.push(fps);
+      if (_fpsHistory.length > Constants.PERF.FPS_HISTORY_SIZE) _fpsHistory.shift();
+    }
+    _framesSinceLastTierChange++;
+    // Cadence: every N frames since last tier change. Uses our own counter
+    // (not `frameCount`, which only ticks during `isGameplay()` states), so
+    // adapt also runs during MENU/BRIEFING where the scene is still rendering.
+    //
+    // Sprint 3 GPU profiling: `?autoProfile=1` requires tier stability across
+    // configurations (otherwise the disable-X delta-vs-baseline is measuring
+    // tier-change drift instead of the toggled feature). Skip runtimeAdapt
+    // entirely while a profile sweep session is live.
+    if (sceneManager && !profileFlags.autoProfile && (_framesSinceLastTierChange % _ADAPT_CHECK_INTERVAL) === 0) {
+      const decision = runtimeAdapt({
+        currentTier: sceneManager.currentTier,
+        fpsHistory: _fpsHistory,
+        framesSinceLastChange: _framesSinceLastTierChange,
+        threshold: Constants.PERF.ADAPT_FPS_THRESHOLD,
+        cooldownFrames: Constants.PERF.ADAPT_COOLDOWN_FRAMES,
+        // Sprint 2 / PR B — auto-upshift gate. Wider cooldown + threshold
+        // creates a hysteresis band that prevents tier ping-pong.
+        upshiftThreshold: Constants.PERF.ADAPT_UPSHIFT_FPS_THRESHOLD,
+        upshiftCooldownFrames: Constants.PERF.ADAPT_UPSHIFT_COOLDOWN_FRAMES,
+        historySize: Constants.PERF.FPS_HISTORY_SIZE,
+      });
+      if (decision.changed) {
+        const from = sceneManager.currentTier;
+        const to = decision.nextTier;
+        const reason = decision.direction === 'up' ? 'auto-upshift' : 'auto-downshift';
+        const arrow = decision.direction === 'up' ? '↑' : '↓';
+        console.log(`[Perf] tier ${reason} ${arrow}: ${from} → ${to} (median fps ${decision.medianFps.toFixed(1)})`);
+        sceneManager.applyTier(to);
+        _framesSinceLastTierChange = 0;
+        // Clear history so the next decision uses post-change samples only.
+        _fpsHistory.length = 0;
+        eventBus.emit(Events.PERF_TIER_CHANGED, {
+          from,
+          to,
+          reason,
+        });
+      }
+    }
+  }
 
   // Apply slo-mo factor (Phase 1C — catch juice)
   let dt = realDt;
@@ -622,10 +1276,13 @@ function gameLoop(timestamp) {
 
     // Fuel game-over is now handled by ResourceSystem → Events.RESOURCE_DEPLETED event
 
-    // Approach state logic
+    // Approach state logic — Sprint 2 / PR A — scratch-output variant.
     if (currentState === GameStates.APPROACH && gameFlowManager.approachTarget && gameFlowManager.approachTarget.alive) {
-      const targetCart = orbitToSceneCartesian(gameFlowManager.approachTarget.orbit);
-      const targetPos = new THREE.Vector3(targetCart.position.x, targetCart.position.y, targetCart.position.z);
+      orbitToSceneCartesianInto(
+        gameFlowManager.approachTarget.orbit, _approachCartPos, _approachCartVel
+      );
+      _approachTargetVec3.set(_approachCartPos.x, _approachCartPos.y, _approachCartPos.z);
+      const targetPos = _approachTargetVec3;
       const dist = player.getPosition().distanceTo(targetPos);
 
       // Update target lock position for camera
@@ -771,10 +1428,12 @@ function gameLoop(timestamp) {
       commsSystem.update(dt, { debrisField, player, activeSatellites });
     }
   } else {
-    // Stop persistent audio when not in gameplay
-    audioSystem.stopThrusterHum();
-    audioSystem.stopDeltaVAlarm();
-    audioSystem.stopForgeHum();
+    // §12.12 Per-frame `stopThrusterHum / stopDeltaVAlarm / stopForgeHum`
+    // calls removed from this branch — moved to the STATE_CHANGE listener
+    // (init() block above) which fires once per transition instead of
+    // 30-120 times per second across menu / briefing / shop screens. The
+    // calls were idempotent (no-ops if already stopped), so removing them
+    // here has no behavioural effect.
 
     // Menu/briefing/shop states — still animate scene slowly
     try { player.update(dt * 0.1, sunDir); } catch (e) { console.error('[GameLoop] player.update (bg):', e); }
@@ -809,11 +1468,102 @@ function gameLoop(timestamp) {
   // --- Render ---
   // ST-6.4: When strategic map is open, render map scene directly (no composer);
   // otherwise use normal EffectComposer pipeline.
+  // §13 boot timeline (?logBoot=1) — bracket the first render() call to
+  // separate "rAF dispatch latency" (gameLoop entry mark above) from the
+  // actual GPU work on the first frame (lazy Metal pipeline state object
+  // compile, 16K texture upload + mipmap-gen — both deferred by Three.js
+  // until first use even though renderer.compile() was called at boot).
+  // Also wrap EVERY render() to feed the spike-detector for post-boot spikes
+  // (e.g. entering ORBITAL_VIEW, first time atmosphere/clouds bind, etc.).
+  const _bootFirstRenderCall = (_logBootEnabled && !_bootFirstFrameMarked);
+  const _bootRenderStart = _logBootEnabled ? performance.now() : 0;
+  if (_bootFirstRenderCall) {
+    _bootMark('first sceneManager.render() — START');
+  }
   if (strategicMap && strategicMap.isOpen()) {
     strategicMap.update(dt);
     strategicMap.render();
   } else {
     sceneManager.render();
+  }
+  if (_bootFirstRenderCall) {
+    _bootMark('first sceneManager.render() — END');
+  }
+  if (_logBootEnabled) {
+    _bootSpikeDetect(performance.now() - _bootRenderStart);
+  }
+
+  // §13 boot-timeline: mark the very first rendered frame. Continuous capture
+  // mode — user calls window.__dumpBootTimeline() from DevTools when they want
+  // a snapshot; we still emit one auto-summary after 5 s to confirm the
+  // diagnostic is working end-to-end. Idempotent via `_bootFirstFrameMarked`.
+  if (_logBootEnabled && !_bootFirstFrameMarked) {
+    _bootFirstFrameMarked = true;
+    _bootMark('first frame rendered (top-of-gameLoop work + render() done)');
+    setTimeout(() => _emitBootTimeline('first frame + 5 s settle (auto)'), 5000);
+  }
+
+  // PR 6 / P3.11: GPU probe — poll completed timer queries every frame
+  // while the probe is enabled. Two phases:
+  //   1. Startup probe (samples until GPU_PROBE_FRAMES, then evaluates tier).
+  //   2. AutoProfileSweep (Sprint 3) — keeps the probe alive past the
+  //      startup window when `?autoProfile=1` is set so the sweep can
+  //      measure each config.
+  if (sceneManager.gpuProbe && sceneManager.gpuProbeEnabled) {
+    sceneManager.gpuProbe.poll();
+  }
+  if (!_gpuProbeComplete && sceneManager.gpuProbeEnabled && sceneManager.gpuProbe) {
+    const probe = sceneManager.gpuProbe;
+    if (probe.getSampleCount() >= Constants.PERF.GPU_PROBE_FRAMES) {
+      _gpuProbeComplete = true;
+      const medianMs = probe.getMedianMs();
+      const threshold = Constants.PERF.GPU_PROBE_THRESHOLD_MS;
+      console.log(`[Perf] GPU probe complete: median=${medianMs.toFixed(2)}ms threshold=${threshold}ms (${probe.getSampleCount()} samples)`);
+      // Sprint 3 GPU profiling: skip the tier-downshift action when
+      // `?autoProfile=1` is set. The sweep must measure each config at a
+      // fixed tier; an auto-downshift in the first 0.5 s of the session
+      // would render every later config's delta meaningless. The downshift
+      // recommendation is still logged for visibility.
+      if (medianMs > threshold && sceneManager.currentTier !== 'LOW' && !profileFlags.autoProfile) {
+        // Find one step down from the current tier
+        const idx = TIER_ORDER.indexOf(sceneManager.currentTier);
+        const nextTier = (idx >= 0 && idx < TIER_ORDER.length - 1)
+          ? TIER_ORDER[idx + 1]
+          : 'LOW';
+        const from = sceneManager.currentTier;
+        console.log(`[Perf] GPU probe → tier downshift: ${from} → ${nextTier} (median ${medianMs.toFixed(1)}ms > ${threshold}ms)`);
+        sceneManager.applyTier(nextTier);
+        _framesSinceLastTierChange = 0;
+        _fpsHistory.length = 0;
+        eventBus.emit(Events.PERF_TIER_CHANGED, {
+          from,
+          to: nextTier,
+          reason: 'gpu-probe',
+        });
+      } else if (medianMs > threshold && profileFlags.autoProfile) {
+        console.log(`[Perf] GPU probe: median ${medianMs.toFixed(1)}ms > ${threshold}ms but tier downshift suppressed (?autoProfile=1)`);
+      }
+      // Sprint 3 GPU profiling: keep the probe alive when `?autoProfile=1`
+      // is set. Otherwise dispose to free GL queries (the original PR 6
+      // behaviour — startup probe is one-shot).
+      if (profileFlags.autoProfile) {
+        probe.resetSamples();
+        console.log('[Perf] GPU probe kept alive for AutoProfileSweep (?autoProfile=1)');
+      } else {
+        sceneManager.gpuProbeEnabled = false; // Stop wrapping render with queries
+        probe.dispose();
+      }
+    }
+  }
+
+  // PR 6 / P3.15: Draw-call profiling (every 60 frames when ?profile=1).
+  if (Constants.DEBUG.LOG_DRAW_CALLS) {
+    _profileFrameCount++;
+    if (_profileFrameCount >= 60) {
+      _profileFrameCount = 0;
+      const info = sceneManager.renderer.info.render;
+      console.log(`[Profile] calls=${info.calls} triangles=${info.triangles} points=${info.points} lines=${info.lines}`);
+    }
   }
 }
 

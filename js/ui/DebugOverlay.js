@@ -47,6 +47,20 @@ export class DebugOverlay {
     }
 
     /**
+     * PR 4 / P1.5 — peek the latest instantaneous FPS without touching the UI.
+     * Returns 0 if no sample has been recorded yet or last frame had zero time.
+     * Used by main.js to feed the QualityManager.runtimeAdapt() history buffer.
+     * @returns {number}
+     */
+    getLastFps() {
+        const samples = this._frameTimeSamples;
+        if (!samples.length) return 0;
+        const last = samples[samples.length - 1];
+        if (!last || last <= 0) return 0;
+        return 1000 / last;
+    }
+
+    /**
      * Update display with current game metrics.
      * @param {object} data
      * @param {string} data.gameState - Current game state string

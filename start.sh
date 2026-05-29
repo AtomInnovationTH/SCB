@@ -30,7 +30,19 @@ if ! kill -0 $SERVER_PID 2>/dev/null; then
     exit 1
 fi
 
-URL="http://localhost:$PORT"
+# Optional query string argument — pass the URL params you want, with or
+# without a leading "?". Examples:
+#   ./start.sh                   → http://localhost:8081/
+#   ./start.sh autoProfile=1     → http://localhost:8081/?autoProfile=1
+#   ./start.sh '?perfReport=1&tier=LOW'
+#                                → http://localhost:8081/?perfReport=1&tier=LOW
+QS="${1:-}"
+QS="${QS#\?}"   # strip leading '?' if user supplied one
+if [[ -n "$QS" ]]; then
+  URL="http://localhost:$PORT/?$QS"
+else
+  URL="http://localhost:$PORT/"
+fi
 
 # Open in default browser
 open "$URL"

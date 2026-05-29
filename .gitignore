@@ -21,3 +21,6 @@ npm-debug.log*
 *.pem
 *.key
 secrets.json
+
+# Sprint 3 GPU profiling - sweep results auto-download into the project root
+gpu-profile-*.json

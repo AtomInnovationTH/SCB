@@ -145,13 +145,32 @@ export class NavSphere {
     this._tmpDir  = new THREE.Vector3();
     this._eqDir   = new THREE.Vector3();  // reusable for equatorial projection
 
+    // §13 Sprint 4 (Phase 3 audit): cached comms-panel bottom (CSS px). The
+    // NavSphere draw loop runs at 10 Hz; the previous code called
+    // `document.getElementById('hud-comms-panel').getBoundingClientRect()`
+    // every draw, forcing a synchronous layout flush (HUD CSS animations +
+    // StatusPanel text mutations on the same frame guarantee the layout was
+    // dirty). Mirror the Sprint 2 / PR E pattern from
+    // [`HUD.js`](js/ui/HUD.js:140): cache the bottom Y, invalidate on resize
+    // and VIEW_CONFIG_CHANGE (which can show/hide the comms panel).
+    /** @type {number|null} */
+    this._commsBottomCache = null;
+    /** @type {HTMLElement|null} */
+    this._commsElCache = null;
+
     this._createCanvas();
     this._onResize();
-    window.addEventListener('resize', () => this._onResize());
+    window.addEventListener('resize', () => {
+      this._onResize();
+      this._commsBottomCache = null; // resize may move the panel
+    });
 
     // Self-manage visibility via EventBus (decoupled from GameFlowManager)
     eventBus.on(Events.VIEW_CONFIG_CHANGE, (config) => {
       if (config.showNavSphere !== undefined) this.setVisible(config.showNavSphere);
+      // Comms panel can show/hide too — invalidate the cache so the next
+      // draw recomputes the bottom Y from the new layout.
+      this._commsBottomCache = null;
     });
     eventBus.on(Events.GAME_STATE_CHANGE, ({ to }) => {
       const gameplay = (to === GameStates.ORBITAL_VIEW || to === GameStates.APPROACH || to === GameStates.INTERACTION);
@@ -278,10 +297,20 @@ export class NavSphere {
     this._up.setFromMatrixColumn(m, 1);
     this._forward.setFromMatrixColumn(m, 2).negate();
 
-    // Sphere center — top-right corner, dynamically below comms panel (UX-2 #11)
+    // Sphere center — top-right corner, dynamically below comms panel (UX-2 #11).
+    // §13 Sprint 4 (Phase 3 audit): cache the comms-panel bottom across draws
+    // to avoid a per-draw sync layout flush. Invalidated on resize and
+    // VIEW_CONFIG_CHANGE. At 10 Hz this saves ~10 layout flushes/s.
     const cx = this._width  - MARGIN_RIGHT - SPHERE_RADIUS;
-    const commsEl = document.getElementById('hud-comms-panel');
-    const commsBottom = commsEl ? commsEl.getBoundingClientRect().bottom : MARGIN_TOP_FALLBACK;
+    if (this._commsBottomCache == null) {
+      if (!this._commsElCache) {
+        this._commsElCache = document.getElementById('hud-comms-panel');
+      }
+      this._commsBottomCache = this._commsElCache
+        ? this._commsElCache.getBoundingClientRect().bottom
+        : MARGIN_TOP_FALLBACK;
+    }
+    const commsBottom = this._commsBottomCache;
     const marginTop = commsBottom + COMMS_GAP;
     const cy = marginTop + SPHERE_RADIUS;
     const R  = SPHERE_RADIUS;

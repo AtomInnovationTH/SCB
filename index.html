@@ -55,8 +55,13 @@
       border-radius: 4px;
       padding: 6px 8px;
       pointer-events: none;
-      backdrop-filter: blur(4px);
-      -webkit-backdrop-filter: blur(4px);
+      /* backdrop-filter REMOVED — was causing ~40 % GPU on M4 Max even when
+         WebGL render was skipped. Chrome re-runs the blur shader every
+         composite frame for every visible element with backdrop-filter
+         (even when the backdrop pixels haven't changed). With ~10
+         `.hud-panel` elements on a 5K × 120 Hz display this dominated the
+         compositor cost. The opaque 0.95-alpha background is sufficient
+         contrast; the blur was cosmetic, not informational. */
       font-size: 13px;
       color: #00ff88;
       font-family: 'Courier New', monospace;
@@ -349,7 +354,13 @@
     }
   </style>
 
-  <!-- Three.js r170 via jsdelivr CDN import map (GitHub Pages-friendly) -->
+  <!-- §13: importmap MUST be parsed before any module preload/load that uses
+       bare specifiers like `import * as THREE from 'three'`. Previously the
+       modulepreload of ./js/main.js was placed BEFORE the importmap, which
+       caused an intermittent browser race: main.js was fetched + its imports
+       resolved before the importmap registered, throwing
+       "Failed to resolve module specifier 'three'". Moved importmap above
+       all modulepreload tags to permanently eliminate the race. -->
   <script type="importmap">
   {
     "imports": {
@@ -358,6 +369,14 @@
     }
   }
   </script>
+
+  <!-- PR P0.2 — Resource hints: warm up CDN connection, preload critical modules
+       and the first Earth texture so the browser can fetch them in parallel
+       with parsing the import map. -->
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+  <link rel="modulepreload" href="./js/main.js">
+  <link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js" crossorigin>
+  <link rel="preload" as="image" href="./textures/earth_day.avif" type="image/avif" fetchpriority="high">
 </head>
 <body>
   <!-- Loading screen -->
@@ -386,6 +405,18 @@
         }
       }, 800);
     });
+  </script>
+
+  <!-- PR P0.3 — Service Worker registration. Relative path resolves to
+       the page's directory: '/' locally, '/SCB/' on GitHub Pages. -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js').catch((err) => {
+          console.warn('[SW] registration failed:', err);
+        });
+      });
+    }
   </script>
 </body>
 </html>

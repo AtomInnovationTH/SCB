@@ -11,6 +11,7 @@ import { summary } from './TestRunner.js';
 import './test-Constants.js';
 import './test-EventBus.js';
 import './test-OrbitalMechanics.js';
+import './test-OrbitalMechanics-scratch.js';   // Sprint 2 / PR A — scratch-output variants
 
 // S8-B: New test suites
 import './test-GameState.js';
@@ -165,6 +166,21 @@ import './test-CeremonyAlpha.js';
 
 // §13 Q5: Net Inventory — decrement, empty-click guard, FSM integration
 import './test-ArmUnit-NetInventory.js';
+
+// PR 4 / P1.5: QualityManager — selectInitialTier, runtimeAdapt, medianOf, TIER_ORDER
+import './test-QualityManager.js';
+
+// PR 5 / P2.8: TimerManager — central setTimeout/setInterval registry, tagged clearing, STATE_CHANGE auto-clear
+import './test-TimerManager.js';
+
+// PR 6 / P3.11: GpuProbe — EXT_disjoint_timer_query_webgl2 GPU frame-time probe
+import './test-GpuProbe.js';
+
+// Sprint 3 GPU profiling: ProfileFlags URL parser (?disable… / ?msaa= / ?pixelRatio=)
+import './test-ProfileFlags.js';
+
+// Sprint 3 GPU profiling: AutoProfileSweep delta computation + start() guards
+import './test-AutoProfileSweep.js';
 
 // Flush any pending async describes, then print summary
 await Promise.resolve();

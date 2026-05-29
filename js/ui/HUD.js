@@ -10,6 +10,7 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
 import { GameStates } from '../core/GameState.js';
+import timerManager from '../systems/TimerManager.js';
 import { StatusPanel } from './hud/StatusPanel.js';
 import { TargetPanel } from './hud/TargetPanel.js';
 import { CommsPanel } from './hud/CommsPanel.js';
@@ -128,6 +129,15 @@ export class HUD {
     this._rightColumn = null;
     /** @type {number} Cached right-column top position (UX-2 #11 dynamic layout) */
     this._lastRightColTop = 0;
+
+    // Sprint 2 / PR E — cached comms-panel bottom (in CSS px). Avoids a
+    // per-frame `getBoundingClientRect()` synchronous-layout flush in
+    // [`HUD.update()`](js/ui/HUD.js:835). Recomputed only on:
+    //   - window resize
+    //   - VIEW_CONFIG_CHANGE (comms panel may show/hide)
+    //   - first access (lazy init via `_recomputeCommsRectCache()`)
+    /** @type {number|null} */
+    this._commsRectBottom = null;
 
     this._build();
     this._setupEventListeners();
@@ -651,6 +661,11 @@ export class HUD {
       this.showNotification(text, duration);
     });
 
+    // PR 6 / P3.13: Audio unlock failure — one-time toast
+    eventBus.on(Events.AUDIO_UNLOCK_FAILED, () => {
+      this.showNotification('Audio blocked — click anywhere to enable sound', 5000);
+    });
+
     // Phase 8: Salvage reveal loot popup
     eventBus.on(Events.SALVAGE_REVEAL, (data) => {
       this.showSalvageReveal(data);
@@ -685,7 +700,17 @@ export class HUD {
     // --- Self-manage view config via VIEW_CONFIG_CHANGE (decoupled from GameFlowManager) ---
     eventBus.on(Events.VIEW_CONFIG_CHANGE, (config) => {
       this.setViewConfig(config);
+      // Sprint 2 / PR E — comms panel may have just been show/hidden;
+      // invalidate the cached rect so the next frame recomputes.
+      this._commsRectBottom = null;
     });
+
+    // Sprint 2 / PR E — recompute the cached comms-panel rect on viewport resize.
+    if (typeof window !== 'undefined') {
+      window.addEventListener('resize', () => {
+        this._commsRectBottom = null;
+      });
+    }
 
     // --- Self-manage selected target via HUD_TARGET_CLICK (decoupled from GameFlowManager) ---
     eventBus.on(Events.HUD_TARGET_CLICK, (data) => {
@@ -829,12 +854,17 @@ export class HUD {
   update(dt, data) {
     if (!this.visible) return;
 
-    // UX-2 #11: Dynamically position right column below comms + NavSphere
-    // NavSphere recomputes its own cy each render; right column tracks below it.
+    // UX-2 #11: Dynamically position right column below comms + NavSphere.
+    // Sprint 2 / PR E — `getBoundingClientRect()` forces a sync layout each
+    // frame because StatusPanel mutates textContent on the same frame; we now
+    // cache the comms-panel bottom and invalidate only on resize / view-config
+    // change (see _setupEventListeners). Saves ~0.2–0.5 ms/frame on dense missions.
     if (this._rightColumn && this.panels.comms) {
-      const commsRect = this.panels.comms.getBoundingClientRect();
-      const navSphereBottom = commsRect.bottom + 6 + 280; // 6px gap + 280px NavSphere diameter
-      const newTop = Math.round(navSphereBottom + 6);      // 6px gap below NavSphere
+      if (this._commsRectBottom == null) {
+        this._commsRectBottom = this.panels.comms.getBoundingClientRect().bottom;
+      }
+      const navSphereBottom = this._commsRectBottom + 6 + 280; // 6px gap + 280px NavSphere diameter
+      const newTop = Math.round(navSphereBottom + 6);          // 6px gap below NavSphere
       if (this._lastRightColTop !== newTop) {
         this._rightColumn.style.top = newTop + 'px';
         this._rightColumn.style.maxHeight = `calc(100vh - ${newTop + 30}px)`;
@@ -1176,7 +1206,7 @@ export class HUD {
       animation: detachFlash 0.5s ease-out forwards;
     `;
     document.body.appendChild(flash);
-    setTimeout(() => flash.remove(), 550);
+    timerManager.setTimeout(() => flash.remove(), 550, { owner: this });
 
     // Floating "TETHER CUT" text
     const text = document.createElement('div');
@@ -1191,7 +1221,7 @@ export class HUD {
     `;
     text.textContent = 'TETHER CUT';
     document.body.appendChild(text);
-    setTimeout(() => text.remove(), 1300);
+    timerManager.setTimeout(() => text.remove(), 1300, { owner: this });
   }
 
   /**
@@ -1222,7 +1252,7 @@ export class HUD {
       popup.textContent = massText;
     }
     document.body.appendChild(popup);
-    setTimeout(() => popup.remove(), 1600);
+    timerManager.setTimeout(() => popup.remove(), 1600, { owner: this });
   }
 
   // ==========================================================================
@@ -1242,10 +1272,12 @@ export class HUD {
     if (!this._notificationZone) return;
     this._notificationZone.textContent = text;
     this._notificationZone.style.opacity = '1';
-    clearTimeout(this._notifTimer);
-    this._notifTimer = setTimeout(() => {
+    // PR 5 / P2.8: TimerManager-tracked notification timer (debounced).
+    if (this._notifTimer) timerManager.clear(this._notifTimer);
+    this._notifTimer = timerManager.setTimeout(() => {
       this._notificationZone.style.opacity = '0';
-    }, durationMs);
+      this._notifTimer = null;
+    }, durationMs, { owner: this });
   }
 
   /**
@@ -1271,7 +1303,7 @@ export class HUD {
     `;
     popup.innerHTML = `+${points} ${name}<br><span style="font-size:12px;color:#4dd0e1;">⚡ SYNERGY BONUS</span>`;
     document.body.appendChild(popup);
-    setTimeout(() => popup.remove(), 2100);
+    timerManager.setTimeout(() => popup.remove(), 2100, { owner: this });
   }
 
   // ==========================================================================
@@ -1468,10 +1500,10 @@ export class HUD {
     document.body.appendChild(popup);
 
     // Fade out after 2.5s, remove at 3s
-    setTimeout(() => {
+    timerManager.setTimeout(() => {
       popup.style.animation = 'salvageRevealOut 0.5s ease-in forwards';
-    }, 2500);
-    setTimeout(() => popup.remove(), 3100);
+    }, 2500, { owner: this });
+    timerManager.setTimeout(() => popup.remove(), 3100, { owner: this });
   }
 
   // ==========================================================================
@@ -1493,7 +1525,7 @@ export class HUD {
       animation: detachFlash 0.8s ease-out forwards;
     `;
     document.body.appendChild(flash);
-    setTimeout(() => flash.remove(), 850);
+    timerManager.setTimeout(() => flash.remove(), 850, { owner: this });
 
     // Floating "TETHER SNAP" text
     const text = document.createElement('div');
@@ -1508,7 +1540,7 @@ export class HUD {
     `;
     text.textContent = 'TETHER SNAP';
     document.body.appendChild(text);
-    setTimeout(() => text.remove(), 2100);
+    timerManager.setTimeout(() => text.remove(), 2100, { owner: this });
 
     // Also show as a queued warning
     const cause = data?.cause || 'overload';
@@ -1590,8 +1622,8 @@ export class HUD {
     requestAnimationFrame(() => { toast.style.opacity = '1'; });
     // Hold, then fade out and remove
     const durMs = Constants.SKILLS.CELEBRATION.MASTERY_TOAST_DURATION_MS;
-    setTimeout(() => { toast.style.opacity = '0'; }, durMs - 300);
-    setTimeout(() => { toast.remove(); }, durMs);
+    timerManager.setTimeout(() => { toast.style.opacity = '0'; }, durMs - 300, { owner: this });
+    timerManager.setTimeout(() => { toast.remove(); }, durMs, { owner: this });
   }
 
   // ==========================================================================
@@ -1698,9 +1730,9 @@ export class HUD {
     if (this._armPilotStrip) {
       this._armPilotStrip.style.opacity = '0';
       this._armStripMode = null; // Reset so next show gets fresh content update
-      setTimeout(() => {
+      timerManager.setTimeout(() => {
         if (this._armPilotStrip) this._armPilotStrip.style.display = 'none';
-      }, 300);
+      }, 300, { owner: this });
     }
   }
 }

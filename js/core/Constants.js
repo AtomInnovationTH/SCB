@@ -1035,8 +1035,37 @@ export const Constants = {
   // === Audio Configuration (Phase R4) ===
   AUDIO: {
     AMBIENT_GAIN: 0.01,
-    SFX_GAIN: 0.15,
+    // §14.6 (Sprint 4) removed SFX_GAIN: 0.15 — declared but never referenced
+    // anywhere in the codebase. The SFX bus uses a hardcoded 0.7 gain at
+    // [`AudioSystem.js:116`](js/systems/AudioSystem.js:116). Keep AMBIENT_GAIN
+    // (used by opt-in `?ambient=1`) and ALERT_GAIN (used by warning/conjunction
+    // earcons — see AudioSystem.js:1820, 1848).
     ALERT_GAIN: 0.20,
+    // §13 Sprint 4 escalation — gameplay ambient loop default OFF.
+    //
+    // Root cause investigation: even after the low-power AudioContext fix
+    // (latencyHint:'playback' + sampleRate:22050, §13.5), the user reported
+    // the fan still triggered on sim-start (MENU → ORBITAL_VIEW). A/B test
+    // with ?noAudio=1 confirmed the audio thread is still the trigger.
+    //
+    // The ambient loop creates two continuously-looping BufferSource nodes
+    // (white noise) + two BiquadFilter nodes (bandpass) that keep the audio
+    // render thread permanently busy from the moment ORBITAL_VIEW starts.
+    // Even at 22 kHz the filters process every render quantum (~46 ms at
+    // 1024-sample 'playback' buffer = ~22 wakeups/s per filter chain, plus
+    // every gain ramp scheduled via linearRampToValueAtTime). On Apple
+    // Silicon this is enough to push Energy Impact across the SMC fan-trip
+    // threshold.
+    //
+    // Toggling the ambient loop off means the AudioContext still exists
+    // (so SFX play instantly without resume-latency) but no continuous
+    // sources are running between SFX events. The audio thread can c-state
+    // park between callbacks.
+    //
+    // URL flag override: `?ambient=1` enables it for users who want the
+    // engine-room sound (and accept the energy cost). `?noAmbient=1` is
+    // also accepted for symmetry but is the default.
+    AMBIENT_LOOP_ENABLED: false,
     EARCON_FREQUENCIES: {
       SUCCESS: [261, 329, 392],    // C4, E4, G4 — ascending major
       ALERT: [392, 329],            // G4, E4 — descending third
@@ -2139,6 +2168,87 @@ export const Constants = {
    */
   isRealityMode() {
     return this.FEATURE_FLAGS.REALITY_MODE === true;
+  },
+
+  // === DEBUG / DIAGNOSTICS (PR 5) ===
+  // Verbose runtime logging — off by default. Enable per-session via
+  // ?debug=1 in the URL (see main.js bootstrap), which flips the flags
+  // below to true before any module reads them.
+  DEBUG: {
+    // SceneManager._logDiagnostics() + Earth LOD selection log.
+    // When false these blocks are cheap no-ops.
+    LOG_RENDERER_DIAGNOSTICS: false,
+    // PR 6 / P3.15: Per-60-frame draw-call profiling log.
+    // Enable via ?profile=1 URL flag (see main.js bootstrap).
+    LOG_DRAW_CALLS: false,
+    // Sprint 2 / Phase A: 1 Hz performance report overlay.
+    // Enable via ?perfReport=1 URL flag (see main.js bootstrap).
+    PERF_REPORT_OVERLAY: false,
+  },
+
+  // === PERFORMANCE TUNING (PR 3 + PR 4) ===
+  PERF: {
+    // null | 60 | 120 — cap RAF to a target FPS (null = no cap, follow display refresh).
+    // On 120/144 Hz displays a hard 60 fps gate causes every-other-frame skips
+    // (judder). Default `null` lets the browser run at native refresh.
+    FRAME_CAP: null,
+
+    // --- PR 4 / P1.5: Quality tier system ---
+    // Each tier is a config object consumed by SceneManager._setupPostProcessing()
+    // and the renderer pixelRatio setter. QualityManager.selectInitialTier()
+    // picks one of these at bootstrap; runtimeAdapt() can downshift live.
+    //   msaaSamples     — MultisampledRenderTarget samples (0 = none)
+    //   enableBloom     — UnrealBloomPass added to composer when true
+    //   enableSMAA      — SMAAPass added to composer when true
+    //   pixelRatioCap   — renderer.setPixelRatio(min(devicePR, cap))
+    //   useFXAAFallback — reserved: lighter AA when SMAA is off. No FXAAPass in
+    //                     this codebase yet (PR 4 scope note); SceneManager
+    //                     treats this as a TODO marker. The current passes are
+    //                     RenderPass + UnrealBloomPass + SMAAPass.
+    // Sprint 3 GPU profiling — Phase C.1 (2026-05-23): HIGH `pixelRatioCap` lowered
+    // from 2 → 1.5 based on round-2 sweep data. At pr=2 the M4 Max renders at
+    // 5760×3600 (20.7 M fragments) and every fragment-bound pass (Earth FS,
+    // bloom mip chain, SMAA, MSAA resolve) pays for it. Post-C.1 measurement:
+    // baseline 10.52 → 4.82 ms MENU (-5.7 ms), 11.07 → 5.12 IN-MISSION (-5.95 ms).
+    // The 54% cost reduction from a 44% fragment reduction is the cache /
+    // bandwidth-pressure signature — at pr=2 we were over the M4 Max memory
+    // ceiling; at pr=1.5 we drop below it and gain super-linearly.
+    //
+    // Sprint 3 GPU profiling — Phase C.2 (2026-05-23): HIGH `enableSMAA` flipped
+    // false. With 4× MSAA still active on the customRT, geometric edges already
+    // get smoothed; SMAA's marginal contribution (shader / transparent-edge AA)
+    // costs 1.77 ms IN-MISSION at pr=1.5 — too high for the visual benefit at
+    // retina-class density. No FXAA fallback (useFXAAFallback: false) since MSAA
+    // is already handling geometric aliasing. If shader aliasing becomes visible
+    // on debris specular highlights, the cheap fix is `enableSMAA: true` at HIGH
+    // again — the cost re-emerges only at IN-MISSION, MENU is unaffected.
+    QUALITY_TIERS: {
+      HIGH:   { msaaSamples: 4, enableBloom: true,  enableSMAA: false, pixelRatioCap: 1.5, useFXAAFallback: false },
+      MEDIUM: { msaaSamples: 2, enableBloom: true,  enableSMAA: false, pixelRatioCap: 1.5, useFXAAFallback: true  },
+      LOW:    { msaaSamples: 0, enableBloom: false, enableSMAA: false, pixelRatioCap: 1,   useFXAAFallback: false },
+    },
+    // Default initial tier when auto-detection isn't conclusive.
+    DEFAULT_QUALITY_TIER: 'HIGH',
+    // Sliding-window size for the FPS history feeding runtimeAdapt() (frames).
+    FPS_HISTORY_SIZE: 180,
+    // Median FPS below this triggers a tier drop.
+    ADAPT_FPS_THRESHOLD: 50,
+    // Cooldown frames after a tier change before another change is allowed.
+    ADAPT_COOLDOWN_FRAMES: 300,
+    // Sprint 2 / PR B — auto-upshift gate. Median FPS at or above this triggers
+    // a tier promotion (one step up). Wider hysteresis band than downshift (50 → 58)
+    // prevents HIGH ↔ MEDIUM ping-pong when the workload sits near the threshold.
+    ADAPT_UPSHIFT_FPS_THRESHOLD: 58,
+    // Sprint 2 / PR B — upshift cooldown (frames). Longer than the downshift
+    // cooldown (300) because upshifting is optimistic — we want to be sure the
+    // workload really has eased before re-enabling heavier post-FX.
+    ADAPT_UPSHIFT_COOLDOWN_FRAMES: 600,
+    // PR 6 / P3.11: GPU runtime probe — EXT_disjoint_timer_query_webgl2.
+    // If the median GPU frame time over the probe window exceeds this (ms),
+    // request a tier downshift. Only runs once at startup.
+    GPU_PROBE_THRESHOLD_MS: 14,
+    // Number of frames in the probe sampling window.
+    GPU_PROBE_FRAMES: 60,
   },
 };
 

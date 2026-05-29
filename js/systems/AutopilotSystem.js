@@ -17,7 +17,7 @@ import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
-import { orbitToSceneCartesian } from '../entities/OrbitalMechanics.js';
+import { orbitToSceneCartesian, orbitToSceneCartesianInto } from '../entities/OrbitalMechanics.js';
 import { decomposeAimTarget } from './AimDecomposition.js';
 
 /** 1 metre in scene units (1 scene unit = 100 km) */
@@ -106,6 +106,12 @@ export class AutopilotSystem {
     this._tmpV1 = new THREE.Vector3();
     this._tmpV2 = new THREE.Vector3();
     this._tmpV3 = new THREE.Vector3();
+
+    // Sprint 2 / PR A — scratch outputs for [`orbitToSceneCartesianInto`](js/entities/OrbitalMechanics.js:1).
+    // Used by [`_resolveTargetState`](js/systems/AutopilotSystem.js:802) to avoid
+    // allocating a fresh `{position:{x,y,z},velocity:{x,y,z}}` literal on every AP tick.
+    this._tmpAPCartPos = { x: 0, y: 0, z: 0 };
+    this._tmpAPCartVel = { x: 0, y: 0, z: 0 };
 
     /** @type {number} Cumulative ΔV spent on station-keeping recoil compensation (m/s) */
     this._stationKeepDeltaV = 0;
@@ -802,14 +808,16 @@ export class AutopilotSystem {
   _resolveTargetState(dt) {
     // Locked TARGET ref (persists through target cycling) ---------------------
     if (this._lockedTargetRef && this._lockedTargetRef.alive && this._lockedTargetRef.orbit) {
-      const cart = orbitToSceneCartesian(this._lockedTargetRef.orbit);
-      if (cart && cart.position && cart.velocity) {
-        return {
-          Pd: new THREE.Vector3(cart.position.x, cart.position.y, cart.position.z),
-          Vd: new THREE.Vector3(cart.velocity.x, cart.velocity.y, cart.velocity.z),
-          mode: 'TARGET',
-        };
-      }
+      // Sprint 2 / PR A — scratch-output variant; no per-tick literal alloc.
+      orbitToSceneCartesianInto(
+        this._lockedTargetRef.orbit, this._tmpAPCartPos, this._tmpAPCartVel
+      );
+      const p = this._tmpAPCartPos, v = this._tmpAPCartVel;
+      return {
+        Pd: new THREE.Vector3(p.x, p.y, p.z),
+        Vd: new THREE.Vector3(v.x, v.y, v.z),
+        mode: 'TARGET',
+      };
     }
 
     // Non-locked heading — re-evaluate priority chain ------------------------
@@ -822,10 +830,10 @@ export class AutopilotSystem {
     if (heading.mode === 'TARGET' && this._targetSelector) {
       const t = this._targetSelector.getActiveTarget();
       if (t && t.orbit) {
-        const cart = orbitToSceneCartesian(t.orbit);
-        if (cart && cart.velocity) {
-          Vd = new THREE.Vector3(cart.velocity.x, cart.velocity.y, cart.velocity.z);
-        }
+        // Sprint 2 / PR A — scratch-output variant.
+        orbitToSceneCartesianInto(t.orbit, this._tmpAPCartPos, this._tmpAPCartVel);
+        const v = this._tmpAPCartVel;
+        Vd = new THREE.Vector3(v.x, v.y, v.z);
       }
     } else if (heading.mode === 'TRAWL' &&
                this._trawlManager && this._trawlManager.activeCluster) {
@@ -834,10 +842,12 @@ export class AutopilotSystem {
       // is a reasonable approximation when the cluster drifts with the mother.
     } else if (heading.mode === 'DEBRIS' &&
                this._cachedDebrisResult && this._cachedDebrisResult.orbit) {
-      const cart = orbitToSceneCartesian(this._cachedDebrisResult.orbit);
-      if (cart && cart.velocity) {
-        Vd = new THREE.Vector3(cart.velocity.x, cart.velocity.y, cart.velocity.z);
-      }
+      // Sprint 2 / PR A — scratch-output variant.
+      orbitToSceneCartesianInto(
+        this._cachedDebrisResult.orbit, this._tmpAPCartPos, this._tmpAPCartVel
+      );
+      const v = this._tmpAPCartVel;
+      Vd = new THREE.Vector3(v.x, v.y, v.z);
     } else if (heading.mode === 'PROGRADE') {
       return null; // prograde coast — no rendezvous geometry
     }

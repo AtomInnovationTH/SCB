@@ -7,6 +7,7 @@
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
+import timerManager from './TimerManager.js';
 
 class AudioSystem {
   constructor() {
@@ -48,8 +49,67 @@ class AudioSystem {
    */
   init() {
     if (this._initialized) return;
+    // §13 diagnostic: ?noAudio=1 URL flag — short-circuits AudioContext
+    // creation entirely so we can A/B test whether the audio render thread
+    // is the SMC fan trigger at sim-start. Flag is parsed lazily so the test
+    // runner (no window) is unaffected. Identical to §12.11 mechanism for
+    // pause-fan but applied to GAMEPLAY: if fan stays off with this flag set,
+    // the §12.11 audio-thread mechanism is confirmed as the gameplay trigger.
     try {
-      this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+      if (typeof window !== 'undefined' &&
+          new URLSearchParams(window.location.search).get('noAudio') === '1') {
+        console.info('[AudioSystem] ?noAudio=1 — skipping AudioContext creation. All audio is disabled for this session.');
+        this.available = false;
+        this._initialized = true; // prevent retry storms from event handlers
+        return;
+      }
+    } catch (_e) { /* swallow — non-browser env */ }
+    // §13 boot timeline (?logBoot=1) — mark every audio lifecycle event so the
+    // timeline shows precisely when the 44.1 kHz audio render thread becomes
+    // active (the §12.11 fan-trigger mechanism). Optional-chained — no-op when
+    // window.__bootMark is not attached. Safe in Node test runner.
+    try {
+      // eslint-disable-next-line no-undef
+      if (typeof window !== 'undefined') window.__bootMark?.('audioSystem.init() called');
+    } catch (_e) { /* swallow */ }
+    try {
+      // §13 Sprint 4 — low-power AudioContext configuration.
+      //
+      // Root-cause: default `new AudioContext()` uses
+      //   latencyHint = 'interactive' (≈ 256-sample buffer, ~5.8 ms @ 44.1k)
+      //   sampleRate  = 44100
+      // → audio render thread wakes ~170×/s with default config.
+      // Even with zero audible work, that wakeup frequency drives Energy
+      // Impact past the macOS SMC fan-trip threshold (§12.11 mechanism).
+      // A/B-confirmed via ?noAudio=1: fan stays OFF when ctx is never
+      // created, ON when ctx is created with defaults — even with full
+      // GPU work running in both cases.
+      //
+      // Fix: use latencyHint:'playback' (large buffer, fewer wakeups —
+      // typically 1024-4096 samples) and 22050 Hz sampleRate (half the
+      // clock rate, sufficient for all procedural game SFX which are
+      // sub-2 kHz). Combined effect: 8-32× fewer audio thread wakeups.
+      //
+      // Compatibility: every play* method uses relative time and absolute
+      // frequencies that are invariant under sample rate change. No call
+      // site needs modification. Tested at 22050 Hz / 44100 Hz, identical
+      // behaviour aside from intentional low-pass at 11025 Hz (above all
+      // procedural sound frequencies — not perceptible).
+      //
+      // Test runner is unaffected — it stubs AudioContext entirely.
+      const CtxCtor = window.AudioContext || window.webkitAudioContext;
+      let opts = { latencyHint: 'playback', sampleRate: 22050 };
+      try {
+        this.ctx = new CtxCtor(opts);
+      } catch (_e1) {
+        // Some old Safari builds don't accept sampleRate at construct time.
+        // Retry without sampleRate first; if that also fails, default ctor.
+        try {
+          this.ctx = new CtxCtor({ latencyHint: 'playback' });
+        } catch (_e2) {
+          this.ctx = new CtxCtor();
+        }
+      }
       this.master = this.ctx.createGain();
       this.master.gain.value = 0.5;
       this.sfxBus = this.ctx.createGain();
@@ -58,6 +118,30 @@ class AudioSystem {
       this.master.connect(this.ctx.destination);
       this.available = true;
       this._initialized = true;
+      // §13 mark initial state (typically 'suspended' until user gesture).
+      try {
+        // eslint-disable-next-line no-undef
+        if (typeof window !== 'undefined') {
+          window.__bootMark?.(`AudioContext created (state=${this.ctx.state}, sampleRate=${this.ctx.sampleRate})`);
+          // Subscribe to state transitions — fires when ctx goes
+          // suspended ↔ running. This is the §12.11 fan-trigger signal.
+          if (typeof this.ctx.addEventListener === 'function') {
+            this.ctx.addEventListener('statechange', () => {
+              try {
+                window.__bootMark?.(`AudioContext statechange → ${this.ctx.state}`);
+              } catch (_e) { /* swallow */ }
+            });
+          } else if ('onstatechange' in this.ctx) {
+            const prev = this.ctx.onstatechange;
+            this.ctx.onstatechange = (...args) => {
+              try {
+                window.__bootMark?.(`AudioContext statechange → ${this.ctx.state}`);
+              } catch (_e) { /* swallow */ }
+              if (typeof prev === 'function') prev.apply(this.ctx, args);
+            };
+          }
+        }
+      } catch (_e) { /* swallow */ }
       this.setupEventListeners();
     } catch (e) {
       console.warn('[AudioSystem] Web Audio API not available:', e);
@@ -75,6 +159,24 @@ class AudioSystem {
   /** Set master volume 0..1 */
   setVolume(v) {
     if (this.master) this.master.gain.value = Math.max(0, Math.min(1, v));
+  }
+
+  /**
+   * §13 escalation: decide whether the ambient engine-room loop should run
+   * in gameplay states. Constant default is false (Apple Silicon SMC fan
+   * trigger); `?ambient=1` URL flag force-enables, `?noAmbient=1` force-
+   * disables for symmetry. Node test runner has no `window` → always false.
+   * @returns {boolean}
+   * @private
+   */
+  _isAmbientLoopEnabled() {
+    try {
+      if (typeof window === 'undefined') return false;
+      const qs = new URLSearchParams(window.location.search);
+      if (qs.get('ambient') === '1') return true;
+      if (qs.get('noAmbient') === '1') return false;
+    } catch (_e) { /* swallow — non-browser env */ }
+    return !!(Constants.AUDIO && Constants.AUDIO.AMBIENT_LOOP_ENABLED);
   }
 
   // ==========================================================================
@@ -189,10 +291,17 @@ class AudioSystem {
       this.playTrawlCapture();
     });
 
-    // Ambient loop lifecycle: start on gameplay, stop on menu/gameover
+    // Ambient loop lifecycle: start on gameplay, stop on menu/gameover.
+    // §13 escalation: gated by Constants.AUDIO.AMBIENT_LOOP_ENABLED (default
+    // false) — two continuously-looping BufferSource + BiquadFilter chains
+    // were keeping the audio render thread permanently busy on Apple Silicon
+    // (SMC fan trigger after the §13.5 low-power ctx fix still ran the chip
+    // hot). URL overrides:
+    //   ?ambient=1   — force-enable (for users who want engine-room sound)
+    //   ?noAmbient=1 — force-disable (default behaviour, kept for symmetry)
     eventBus.on(Events.STATE_CHANGE, (data) => {
       const playStates = ['ORBITAL_VIEW', 'APPROACH', 'INTERACTION'];
-      if (playStates.includes(data.to) && !this._ambientActive) {
+      if (playStates.includes(data.to) && !this._ambientActive && this._isAmbientLoopEnabled()) {
         this.startAmbientLoop();
       } else if (['MENU', 'GAME_OVER', 'WIN'].includes(data.to)) {
         this.stopAmbientLoop();
@@ -1181,6 +1290,12 @@ class AudioSystem {
   startAmbientLoop() {
     if (!this.available || this._ambientActive) return;
     this._ambientActive = true;
+    // §13 boot timeline — mark exactly when the ambient loop kicks in so
+    // the user can correlate fan-on with this event in `?logBoot=1` output.
+    try {
+      // eslint-disable-next-line no-undef
+      if (typeof window !== 'undefined') window.__bootMark?.('startAmbientLoop() — 2 buffer sources + 2 filters going live');
+    } catch (_e) { /* swallow */ }
 
     // White noise via buffer for fans/coolant
     const bufferSize = this.ctx.sampleRate * 2;
@@ -1242,7 +1357,7 @@ class AudioSystem {
       this._solarGain.gain.linearRampToValueAtTime(0, now + 0.5);
     }
 
-    setTimeout(() => {
+    timerManager.setTimeout(() => {
       try {
         if (this._ambientNoise) { this._ambientNoise.stop(); this._ambientNoise = null; }
         if (this._solarNoise) { this._solarNoise.stop(); this._solarNoise = null; }
@@ -1251,7 +1366,7 @@ class AudioSystem {
       this._ambientGain = null;
       this._solarFilter = null;
       this._solarGain = null;
-    }, 600);
+    }, 600, { owner: this });
   }
 
   /**
@@ -1439,12 +1554,12 @@ class AudioSystem {
         this._forgeOsc = null;
         this._forgeGain = null;
         this._forgeFilter = null;
-        setTimeout(() => {
+        timerManager.setTimeout(() => {
           try { osc.stop(); } catch(e) {}
           try { osc.disconnect(); } catch(e) {}
           try { gain.disconnect(); } catch(e) {}
           try { filter.disconnect(); } catch(e) {}
-        }, 350);
+        }, 350, { owner: this });
       } catch (e) {
         this._forgeOsc = null;
         this._forgeGain = null;
@@ -1460,11 +1575,11 @@ class AudioSystem {
         const crackleGain = this._forgeCrackleGain;
         this._forgeCrackle = null;
         this._forgeCrackleGain = null;
-        setTimeout(() => {
+        timerManager.setTimeout(() => {
           try { crackle.stop(); } catch(e) {}
           try { crackle.disconnect(); } catch(e) {}
           try { crackleGain.disconnect(); } catch(e) {}
-        }, 250);
+        }, 250, { owner: this });
       } catch (e) {
         this._forgeCrackle = null;
         this._forgeCrackleGain = null;
@@ -1479,11 +1594,11 @@ class AudioSystem {
         const sweepGain = this._forgeSweepGain;
         this._forgeSweep = null;
         this._forgeSweepGain = null;
-        setTimeout(() => {
+        timerManager.setTimeout(() => {
           try { sweep.stop(); } catch(e) {}
           try { sweep.disconnect(); } catch(e) {}
           try { sweepGain.disconnect(); } catch(e) {}
-        }, 250);
+        }, 250, { owner: this });
       } catch (e) {
         this._forgeSweep = null;
         this._forgeSweepGain = null;
@@ -1615,13 +1730,13 @@ class AudioSystem {
       entry._retroLfo = null;
     }
 
-    setTimeout(() => {
+    timerManager.setTimeout(() => {
       entry.nodes.forEach((node) => {
         try { node.stop(); } catch (_) { /* not a source node */ }
         try { node.disconnect(); } catch (_) { /* already disconnected */ }
       });
       try { entry.gain.disconnect(); } catch (_) { /* already disconnected */ }
-    }, 150);
+    }, 150, { owner: this });
 
     this.activeSources.delete('thruster');
   }
@@ -1663,9 +1778,12 @@ class AudioSystem {
       // Periodic beeps: tier 1=single, 2=double, 3=triple
       const intervals = Constants.HUD.DV_ALARM_INTERVALS;
       const intervalSec = intervals[tier - 1] || 15;
-      this._dvAlarmInterval = setInterval(() => {
+      // PR 5 / P2.8: TimerManager-tracked interval (owner=this).
+      // _dvAlarmInterval now stores the TimerManager id; teardown via
+      // timerManager.clear() in _stopDvAlarm().
+      this._dvAlarmInterval = timerManager.setInterval(() => {
         this._playAlarmBeeps(tier);
-      }, intervalSec * 1000);
+      }, intervalSec * 1000, { owner: this });
       // Play first beep pattern immediately
       this._playAlarmBeeps(tier);
     }
@@ -1742,7 +1860,7 @@ class AudioSystem {
   /** @private Stop any active ΔV alarm (interval beeps or continuous warble) */
   _stopDvAlarm() {
     if (this._dvAlarmInterval) {
-      clearInterval(this._dvAlarmInterval);
+      timerManager.clear(this._dvAlarmInterval);
       this._dvAlarmInterval = null;
     }
     if (this._dvAlarmOsc) {
@@ -1752,10 +1870,10 @@ class AudioSystem {
         }
         const osc = this._dvAlarmOsc;
         const lfo = this._dvAlarmLfo;
-        setTimeout(() => {
+        timerManager.setTimeout(() => {
           try { osc.stop(); } catch(e) {}
           try { lfo.stop(); } catch(e) {}
-        }, 150);
+        }, 150, { owner: this });
       } catch(e) {}
       this._dvAlarmOsc = null;
       this._dvAlarmLfo = null;
@@ -1778,14 +1896,15 @@ class AudioSystem {
     if (fuelPct < 10 && !this._thrusterSputtering) {
       // Start sputtering: random gain dropouts
       this._thrusterSputtering = true;
-      this._sputterInterval = setInterval(() => {
+      // PR 5 / P2.8: TimerManager-tracked sputter interval.
+      this._sputterInterval = timerManager.setInterval(() => {
         if (!this._thrusterGain) { this._stopSputtering(); return; }
         const now = this.ctx.currentTime;
         // Random dropout: gain drops to near-zero briefly
         this._thrusterGain.gain.setValueAtTime(0.01, now);
         const resumeTime = now + 0.03 + Math.random() * 0.08;
         this._thrusterGain.gain.setValueAtTime(this._thrusterBaseGain || 0.06, resumeTime);
-      }, 150 + Math.random() * 200);
+      }, 150 + Math.random() * 200, { owner: this });
     } else if (fuelPct >= 10 && this._thrusterSputtering) {
       this._stopSputtering();
     }
@@ -1795,7 +1914,7 @@ class AudioSystem {
   _stopSputtering() {
     this._thrusterSputtering = false;
     if (this._sputterInterval) {
-      clearInterval(this._sputterInterval);
+      timerManager.clear(this._sputterInterval);
       this._sputterInterval = null;
     }
   }
@@ -2202,13 +2321,13 @@ class AudioSystem {
     });
 
     // Auto-cleanup delay nodes after fanfare + echo tail
-    setTimeout(() => {
+    timerManager.setTimeout(() => {
       try {
         delay.disconnect();
         feedback.disconnect();
         delayGain.disconnect();
       } catch (e) { /* already disconnected */ }
-    }, 2500);
+    }, 2500, { owner: this });
   }
 
   // ==========================================================================
@@ -2364,10 +2483,10 @@ class AudioSystem {
         gain.gain.linearRampToValueAtTime(0, this.ctx.currentTime + 0.1);
       }
       const n = noise;
-      setTimeout(() => {
+      timerManager.setTimeout(() => {
         try { n.stop(); } catch (e) { /* already stopped */ }
         try { n.disconnect(); } catch (e) { /* already disconnected */ }
-      }, 150);
+      }, 150, { owner: this });
     } catch (e) { /* audio not available */ }
     this._lassoWhistleNodes = null;
   }
@@ -2492,13 +2611,13 @@ class AudioSystem {
     });
 
     // Auto-cleanup delay nodes after reverb tail
-    setTimeout(() => {
+    timerManager.setTimeout(() => {
       try {
         delay.disconnect();
         feedback.disconnect();
         delayGain.disconnect();
       } catch (e) { /* already disconnected */ }
-    }, 500);
+    }, 500, { owner: this });
   }
 
   /**

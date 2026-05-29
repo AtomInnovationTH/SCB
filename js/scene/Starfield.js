@@ -144,22 +144,40 @@ const CONSTELLATIONS = [
 /**
  * Create a subtle planetarium-style label texture for a constellation name.
  * Matches the thin-font aesthetic from planet labels (Sprint C4).
+ *
+ * Sprint 3 GPU profiling — Phase C.5 (2026-05-23, rev. 2): canvas resolution
+ * quadrupled (original 512×128 → 2048×512) and font / shadow scaled 4×
+ * proportionally. First attempt (1024×256) was still soft per user smoke test.
+ * The label sprite occupies ~80–150 screen pixels of width at typical camera
+ * distances; at pr=1.5 retina (≈225 physical pixels) the GPU samples the
+ * texture's mip1 or mip2 level. A 2048-px-wide base texture means mip1 is
+ * still 1024 px wide — plenty of detail headroom. Cost: 16 MB total VRAM
+ * across 8 constellations (vs 4 MB at 1024×256, 256 KB original) — well
+ * within budget for fixed scene chrome.
+ *
  * @param {string} text — constellation name (e.g. "ORION")
  * @returns {THREE.CanvasTexture}
  */
 function createConstellationLabel(text) {
   const c = document.createElement('canvas');
-  c.width = 512; c.height = 128;
+  c.width = 2048; c.height = 512;
   const ctx = c.getContext('2d');
-  ctx.font = '400 56px "Helvetica Neue", Helvetica, Arial, sans-serif';
+  // Sprint 3 GPU profiling — Phase C.5 (2026-05-23, rev. 4): font weight
+  // bumped to 700 and shadow glow removed entirely. The first three revs
+  // progressively raised texel density (512→1024→2048) and font weight
+  // (400→600) but text was still soft. Root cause: at pr=1.5 + no SMAA,
+  // mip-level sampling averages adjacent texels and the planetarium-soft
+  // shadow was bleeding into the glyph silhouette, blurring the perceived
+  // edge. 700-weight strokes (~80% thicker than original 400) survive any
+  // mip sampling, and removing the shadow lets the glyph edge stay crisp.
+  // Fill color brightened from #aabbdd → #cce0ff to keep readability after
+  // losing the bluish glow.
+  ctx.font = '700 224px Arial, "Helvetica Neue", Helvetica, sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  // Shadow glow for readability against dark sky (§18 Fix 3)
-  ctx.shadowColor = '#6688cc';
-  ctx.shadowBlur = 12;
-  ctx.fillStyle = '#aabbdd';
+  ctx.fillStyle = '#cce0ff';
   ctx.globalAlpha = 1.0;
-  ctx.fillText(text, 256, 64);
+  ctx.fillText(text, 1024, 256);
   return new THREE.CanvasTexture(c);
 }
 

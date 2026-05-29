@@ -499,3 +499,106 @@ export function orbitToSceneCartesian(orbit) {
     velocity: result.velocity, // Keep km/s for physics
   };
 }
+
+// ============================================================================
+// Sprint 2 / PR A — Scratch-output ("Into") variants
+//
+// Same math as [`keplerianToCartesian`](js/entities/OrbitalMechanics.js:76)
+// and [`orbitToSceneCartesian`](js/entities/OrbitalMechanics.js:490) but write
+// into caller-provided `{x,y,z}` objects so per-frame call sites can avoid
+// allocating ~150–900 short-lived literals/frame (see
+// [`PERF_FOLLOWUP_ANALYSIS.md`](PERF_FOLLOWUP_ANALYSIS.md:82) § 3.1).
+//
+// The allocating versions remain for back-compat and tests; they are now
+// trivially expressible in terms of the `Into` variants.
+// ============================================================================
+
+/**
+ * Compute Cartesian state from Keplerian elements, writing into caller-owned
+ * scratch objects. Returns nothing (zero allocations).
+ *
+ * @param {object} orbit              Keplerian elements (km, rad) — same shape
+ *                                    as [`keplerianToCartesian`](js/entities/OrbitalMechanics.js:76).
+ * @param {{x:number,y:number,z:number}} outPos   Will be mutated to position in km.
+ * @param {{x:number,y:number,z:number}} outVel   Will be mutated to velocity in km/s.
+ * @param {number} [mu=Constants.MU_EARTH]
+ */
+export function keplerianToCartesianInto(orbit, outPos, outVel, mu = Constants.MU_EARTH) {
+  const { semiMajorAxis: a, eccentricity: e, inclination: i,
+          raan: Ω, argPerigee: ω, trueAnomaly: ν } = orbit;
+
+  // Semi-latus rectum
+  const p = a * (1 - e * e);
+
+  // Radius
+  const r = p / (1 + e * Math.cos(ν));
+
+  // Position in orbital plane (perifocal frame)
+  const xP = r * Math.cos(ν);
+  const yP = r * Math.sin(ν);
+
+  // Velocity in orbital plane
+  const sqrtMuP = Math.sqrt(mu / p);
+  const vxP = -sqrtMuP * Math.sin(ν);
+  const vyP = sqrtMuP * (e + Math.cos(ν));
+
+  // Rotation matrices: perifocal → ECI
+  const cosΩ = Math.cos(Ω), sinΩ = Math.sin(Ω);
+  const cosω = Math.cos(ω), sinω = Math.sin(ω);
+  const cosI = Math.cos(i), sinI = Math.sin(i);
+
+  // Combined rotation matrix elements (identical to allocating version)
+  const l1 = cosΩ * cosω - sinΩ * sinω * cosI;
+  const l2 = -cosΩ * sinω - sinΩ * cosω * cosI;
+  const m1 = sinΩ * cosω + cosΩ * sinω * cosI;
+  const m2 = -sinΩ * sinω + cosΩ * cosω * cosI;
+  const n1 = sinω * sinI;
+  const n2 = cosω * sinI;
+
+  outPos.x = l1 * xP + l2 * yP;
+  outPos.y = n1 * xP + n2 * yP;
+  outPos.z = m1 * xP + m2 * yP;
+
+  outVel.x = l1 * vxP + l2 * vyP;
+  outVel.y = n1 * vxP + n2 * vyP;
+  outVel.z = m1 * vxP + m2 * vyP;
+}
+
+/**
+ * Compute scene-unit Cartesian state from a scene-unit Keplerian orbit, writing
+ * into caller-owned scratch objects. Position is converted km → scene units;
+ * velocity is left in km/s (the physics code that consumes it stays in km/s).
+ *
+ * Mirrors [`orbitToSceneCartesian()`](js/entities/OrbitalMechanics.js:490) but
+ * is allocation-free for per-frame call sites such as
+ * [`DebrisField._updateInstanceTransform()`](js/entities/DebrisField.js:1228).
+ *
+ * @param {object} orbit              Orbit with semiMajorAxis in **scene units**.
+ * @param {{x:number,y:number,z:number}} outPos   Mutated to scene-unit position.
+ * @param {{x:number,y:number,z:number}} outVel   Mutated to km/s velocity.
+ */
+// Module-private scratch — only safe because `orbitToSceneCartesianInto` is
+// single-threaded (no Atomics/Workers touch this) and we never re-enter the
+// function before it returns. Two of these are used because the kmOrbit
+// copy must not alias outPos. The kmOrbit scratch carries semiMajorAxis only;
+// the rest of the orbit fields are read directly from `orbit`.
+const _kmOrbitScratch = {
+  semiMajorAxis: 0,
+  eccentricity: 0,
+  inclination: 0,
+  raan: 0,
+  argPerigee: 0,
+  trueAnomaly: 0,
+};
+export function orbitToSceneCartesianInto(orbit, outPos, outVel) {
+  _kmOrbitScratch.semiMajorAxis = sceneToKm(orbit.semiMajorAxis);
+  _kmOrbitScratch.eccentricity = orbit.eccentricity;
+  _kmOrbitScratch.inclination = orbit.inclination;
+  _kmOrbitScratch.raan = orbit.raan;
+  _kmOrbitScratch.argPerigee = orbit.argPerigee;
+  _kmOrbitScratch.trueAnomaly = orbit.trueAnomaly;
+  keplerianToCartesianInto(_kmOrbitScratch, outPos, outVel);
+  outPos.x = kmToScene(outPos.x);
+  outPos.y = kmToScene(outPos.y);
+  outPos.z = kmToScene(outPos.z);
+}

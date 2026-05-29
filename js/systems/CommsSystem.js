@@ -12,6 +12,7 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
 import { audioSystem } from './AudioSystem.js';
+import timerManager from './TimerManager.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -559,9 +560,9 @@ export class CommsSystem {
       // Delayed bounty announcement (2 seconds later)
       const bountyStr = (data.bounty || 0).toLocaleString();
       const debrisName = data.debrisName || 'unknown';
-      setTimeout(() => {
+      timerManager.setTimeout(() => {
         this.addMessage('INFO', 'NEWS', `Bounty posted: ₹${bountyStr} — target ${debrisName}`);
-      }, 2000);
+      }, 2000, { owner: this });
     });
 
     // ST-8.4: ISRO handoff dialogue — Houston→Bangalore on first BANGALORE comms
@@ -576,12 +577,12 @@ export class CommsSystem {
       if (src === 'BANGALORE' || src === 'HASSAN') {
         this._isroHandoffDone = true;
         // Queue handoff dialogue
-        setTimeout(() => {
+        timerManager.setTimeout(() => {
           this.addMessage('INFO', 'HOUSTON', 'Houston: handing off to Bangalore ISTRAC — good hunting.');
-        }, 500);
-        setTimeout(() => {
+        }, 500, { owner: this });
+        timerManager.setTimeout(() => {
           this.addMessage('INFO', 'BANGALORE', 'ISTRAC Bangalore: Roger, we have the conn. Tracking nominal.');
-        }, 2500);
+        }, 2500, { owner: this });
       }
     });
 
@@ -919,7 +920,7 @@ export class CommsSystem {
       case CommsPriority.CRITICAL:
         audioSystem.playWarning(0.9);
         // Double beep for critical
-        setTimeout(() => audioSystem.playWarning(0.9), 150);
+        timerManager.setTimeout(() => audioSystem.playWarning(0.9), 150, { owner: this });
         break;
       case CommsPriority.WARNING:
         audioSystem.playWarning(0.5);
