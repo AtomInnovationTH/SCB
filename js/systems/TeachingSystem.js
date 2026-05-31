@@ -268,6 +268,35 @@ export class TeachingSystem {
 
     // 17. first_arm_deploy — ARM_DEPLOYED (UX-3 N1)
     on(Events.ARM_DEPLOYED, () => this._trigger('first_arm_deploy'));
+
+    // Delegation 2 (2026-05-31): Force-injection channel for OnboardingDirector
+    // escalation overlays.  Bypasses the once-per-save `_seen` guard since the
+    // Director already runs its own dedup via its `posted/satisfied/escalated`
+    // state.  Payload: { id, title, body, duration?, icon? }.
+    if (Events.TEACHING_MOMENT_FORCE) {
+      on(Events.TEACHING_MOMENT_FORCE, (payload) => this._forceShow(payload));
+    }
+  }
+
+  /**
+   * Force-inject a synthetic moment into the overlay pipeline (Delegation 2).
+   * @param {{ id: string, title: string, body: string, duration?: number, icon?: string }} payload
+   * @private
+   */
+  _forceShow(payload) {
+    if (this._disposed) return;
+    if (!payload || !payload.id) return;
+    const moment = {
+      id: payload.id,
+      title: payload.title || 'HINT',
+      body: payload.body || '',
+      duration: payload.duration || (Constants?.TEACHING?.DEFAULT_DURATION_MS || 9000),
+      icon: payload.icon || '💡',
+    };
+    // Do NOT mark seen — re-fires legitimate (e.g. onboarding re-escalation).
+    if (typeof this.onShow === 'function') {
+      this.onShow(moment);
+    }
   }
 
   /**

@@ -67,7 +67,7 @@ After crossbow launch + tether braking + FEEP approach, the arm reaches a **stan
 | **+ / =** | Move closer to debris (decrease standoff) | FEEP forward thrust toward debris |
 | **- / _** | Move away from debris (increase standoff) | FEEP reverse thrust + tether tension |
 | **Shift** (held) | Fine mode (¼ rate for all controls) | Reduced FEEP duty cycle |
-| **F** | Deploy net / initiate capture | Existing net deploy mechanic |
+| **N** | Deploy net / initiate capture (F is alias) | Existing net deploy mechanic |
 | **ESC / P** | Exit ARM_PILOT, return to mothership camera | Existing exit path |
 
 ### 2.3 What Happens to WASD
@@ -101,7 +101,7 @@ APPROACH → STATION_KEEP → (player commands capture) → NETTING → ...
 | Standoff distance | `debrisRadius × 3` clamped to [2 m, 10 m] |
 | Station-keeping thrust | Auto FEEP to maintain position relative to debris |
 | Player controls | Orbital positioning (§2.2) |
-| Exit conditions | F-key capture, ESC/P disengage, fuel depleted, tether limit |
+| Exit conditions | N-key capture (F alias), ESC/P disengage, fuel depleted, tether limit |
 
 ### 3.3 Standoff Distance Calculation
 
@@ -366,7 +366,7 @@ Current:
 
 Proposed:  
   APPROACH → (auto, distance < standoff) → STATION_KEEP
-  STATION_KEEP → (F-key capture command) → NETTING
+  STATION_KEEP → (N-key capture command; F alias) → NETTING
   STATION_KEEP → (ESC/P disengage) → RETURNING
   STATION_KEEP → (fuel depleted) → RETURNING
   STATION_KEEP → (tether limit) → RETURNING  
@@ -479,7 +479,7 @@ Should dynamically switch based on arm state:
 3. Add `ARM_ORBIT_ADJUST` event to [`Events.js`](js/core/Events.js)
 4. Add `_updateStationKeep()` method to [`ArmUnit.js`](js/entities/ArmUnit.js) with spherical positioning
 5. Wire state transition: APPROACH → STATION_KEEP in [`ArmUnit._updateApproach()`](js/entities/ArmUnit.js:1431)
-6. Wire state transition: STATION_KEEP → NETTING on F-key capture
+6. Wire state transition: STATION_KEEP → NETTING on N-key capture (F is alias)
 
 ### Phase 2: Controls
 7. Modify [`InputManager.processInput()`](js/systems/InputManager.js:1013) — route arrow keys + ±keys to `ARM_ORBIT_ADJUST`
@@ -512,7 +512,7 @@ Should dynamically switch based on arm state:
 | Risk | Mitigation |
 |---|---|
 | STATION_KEEP feels sluggish (FEEP response time) | Tune `STATIONKEEP_LERP_RATE` — can be unrealistic-fast for gameplay while keeping thrust math honest |
-| Players can't find F-key to capture | HUD strip shows "F Capture" prominently; comms nudge after 5s in STATION_KEEP |
+| Players can't find N-key to capture | HUD strip shows "N Capture (F alias)" prominently; comms nudge after 5s in STATION_KEEP |
 | Tether clearance too restrictive | Start generous (±80° lat, ±60° lon), tighten via playtesting |
 | Existing WASD users confused | Deprecation comms message: "FEEP manual thrust unavailable — use orbital positioning" |
 | Manual override needed for edge cases | Keep legacy WASD as hidden Ctrl+M toggle for power users |

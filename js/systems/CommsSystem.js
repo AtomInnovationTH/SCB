@@ -100,6 +100,26 @@ function shouldCoalesce(recentWindow, newChannel, thresholdCount) {
   };
 }
 
+/**
+ * Delegation 4 (2026-05-31) — Browser-playtest Bug 4 helper (strengthened).
+ *
+ * During onboarding the comms panel must show *only* the Director's own
+ * Houston script (boot → handshake → arrows → …).  **Everything else is
+ * noise** — EnvironmentSystem MMOD alerts, SpaceWeatherSystem, SubsystemEvents,
+ * GameFlowManager first-time comms, CommsSystem flavour templates, etc.
+ *
+ * The check is simple: if the message payload carries `_onboarding: true`
+ * (stamped by [`OnboardingDirector._emitComms()`](js/systems/OnboardingDirector.js:748))
+ * it is allowed.  Every other message is suppressed.
+ *
+ * @param {object} [data] — full message payload (may have `_onboarding` flag)
+ * @returns {boolean} true → message is noise and should be dropped.
+ */
+export function isOnboardingNoise(data) {
+  if (data && data._onboarding) return false;   // Director's own line — pass
+  return true;                                   // everything else — drop
+}
+
 // ============================================================================
 // MESSAGE TEMPLATES
 // ============================================================================
@@ -327,10 +347,29 @@ export class CommsSystem {
       geoStormTimer: 0,
     };
 
+    /**
+     * Delegation 4 (2026-05-31) — Browser-playtest Bug 4:
+     * While the OnboardingDirector pipeline is active we suppress the
+     * non-essential "atmosphere" comms (space-weather, environment, news
+     * flavor, kessler updates, generic FLAVOR/SCI/MISSION INFO traffic)
+     * that would otherwise drown out the Houston onboarding script.
+     * The flag is toggled by ONBOARDING_STARTED / ONBOARDING_COMPLETE.
+     * @type {boolean}
+     */
+    this._onboardingActive = false;
+
     this._setupEventListeners();
 
     // Self-reset via EventBus (decoupled from GameFlowManager)
     eventBus.on(Events.GAME_RESET, () => this.reset());
+
+    // Delegation 4 — onboarding-noise gate.
+    if (Events.ONBOARDING_STARTED) {
+      eventBus.on(Events.ONBOARDING_STARTED, () => { this._onboardingActive = true; });
+    }
+    if (Events.ONBOARDING_COMPLETE) {
+      eventBus.on(Events.ONBOARDING_COMPLETE, () => { this._onboardingActive = false; });
+    }
 
     // Self-manage lifecycle via GAME_STATE_CHANGE
     // (decoupled from GameFlowManager.transitionToState start/stop/reset calls)
@@ -372,6 +411,12 @@ export class CommsSystem {
 
       // ST-5.1: Classify channel
       const channel = sourceToChannel(src, data);
+
+      // Delegation 4 (2026-05-31) — Browser-playtest Bug 4 (strengthened):
+      // During onboarding, only the Director's own tagged messages pass.
+      if (this._onboardingActive && isOnboardingNoise(data)) {
+        return;
+      }
 
       const now = new Date();
       const tsStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
@@ -775,6 +820,14 @@ export class CommsSystem {
     if (!text) return;
     // ST-5.1: Classify channel
     const channel = sourceToChannel(source, { text, ...(extra || {}) });
+
+    // Delegation 4 (2026-05-31) — Browser-playtest Bug 4 (strengthened):
+    // During onboarding, addMessage() is the internal path used by flavour
+    // templates, Kessler, weather, MMOD, etc. — none of these carry the
+    // _onboarding tag, so they are ALL suppressed.
+    if (this._onboardingActive && isOnboardingNoise(extra)) {
+      return;
+    }
 
     const now = new Date();
     const timestamp = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;

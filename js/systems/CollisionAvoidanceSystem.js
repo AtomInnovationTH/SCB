@@ -83,6 +83,14 @@ export class CollisionAvoidanceSystem {
     /** @type {number} ST-6.3: Debug log throttle */
     this._moidLogTimer = 0;
 
+    // --- Comms quieting state (Delegation 1 follow-up, 2026-05-31) ---
+    /** @type {number} Current mission number — tracked via MISSION_START
+     *  and SCORE_UPDATE so the CA comms gate works without a direct
+     *  GameState ref (same pattern as KesslerSystem). */
+    this._missionNumber = 1;
+    /** @type {number} Epoch ms of last CA comms emit (any kind) */
+    this._lastCommsEmitMs = -Infinity;
+
     this._setupListeners();
   }
 
@@ -142,6 +150,19 @@ export class CollisionAvoidanceSystem {
       this._enabled = !!data?.enabled;
     });
 
+    // Mission tracking for comms quieting gate (Delegation 1 follow-up)
+    eventBus.on(Events.MISSION_START, (d) => {
+      if (typeof d?.missionNumber === 'number') {
+        this._missionNumber = d.missionNumber;
+      }
+    });
+    eventBus.on(Events.SCORE_UPDATE, (d) => {
+      if (typeof d?.debrisCleared === 'number') {
+        const per = Constants.MISSIONS?.DEBRIS_PER_MISSION || 5;
+        this._missionNumber = Math.floor(d.debrisCleared / per) + 1;
+      }
+    });
+
     // Game reset — clear all state
     eventBus.on(Events.GAME_RESET, () => { this.reset(); });
 
@@ -193,6 +214,44 @@ export class CollisionAvoidanceSystem {
     this._armPilotMode = false;
     this._lastPlayerInputTime = -Infinity;
     this._lastSuppressedReason = null;
+    this._missionNumber = 1;
+    this._lastCommsEmitMs = -Infinity;
+  }
+
+  /**
+   * Comms-gate helper (Delegation 1 follow-up, 2026-05-31).
+   *
+   * The CA system used to fire a COMMS_MESSAGE on every threat-detected,
+   * dodge-executed, and threat-cleared transition.  Reviewer noted this
+   * produced an overwhelming yellow wall on mission 1 (10+ dodges visible
+   * in the first 60 seconds) that drowned out welcoming onboarding tone.
+   *
+   * This helper enforces two gates:
+   *   1. Mission floor — silent until missionNumber >= COMMS_MIN_MISSION.
+   *   2. Rate limit — at most one CA comms per COMMS_RATE_LIMIT_S seconds.
+   *
+   * Dodging still fires silently; only the COMMS_MESSAGE side-channel is
+   * affected.  Use this for any "chatty" CA comms; do NOT use it for
+   * future game-over alerts (those should still fire even on mission 1).
+   *
+   * @private
+   * @param {object} payload — same payload you'd pass to eventBus.emit(COMMS_MESSAGE,…)
+   * @returns {boolean} true if the message was emitted, false if gated
+   */
+  _emitCaComms(payload) {
+    const CA = Constants.COLLISION_AVOIDANCE;
+    const minMission = CA.COMMS_MIN_MISSION ?? 1;
+    if (this._missionNumber < minMission) return false;
+
+    const now = (typeof performance !== 'undefined' && performance.now)
+      ? performance.now()
+      : Date.now();
+    const rateLimitMs = (CA.COMMS_RATE_LIMIT_S ?? 0) * 1000;
+    if (rateLimitMs > 0 && (now - this._lastCommsEmitMs) < rateLimitMs) return false;
+
+    this._lastCommsEmitMs = now;
+    eventBus.emit(Events.COMMS_MESSAGE, payload);
+    return true;
   }
 
   // ==========================================================================
@@ -237,8 +296,8 @@ export class CollisionAvoidanceSystem {
           evasionVector: threat.evasionDir,
         });
 
-        // Comms warning
-        eventBus.emit(Events.COMMS_MESSAGE, {
+        // Comms warning (gated — see _emitCaComms JSDoc)
+        this._emitCaComms({
           sender: 'CA',
           text: `Debris ${threat.debrisId} — TCA ${threat.tca.toFixed(1)}s, miss ${Math.round(threat.missDistM)}m — evaluating`,
           priority: 'info',
@@ -533,8 +592,8 @@ export class CollisionAvoidanceSystem {
       magnitude: dodgeDvMs,
     });
 
-    // --- Comms notification ---
-    eventBus.emit(Events.COMMS_MESSAGE, {
+    // --- Comms notification (gated — see _emitCaComms JSDoc) ---
+    this._emitCaComms({
       sender: 'CA',
       text: `⚠ COLLISION AVOIDANCE — RCS dodge fired (${dodgeDvMs.toFixed(2)} m/s ${dirLabel})`,
       priority: 'warning',
@@ -552,7 +611,10 @@ export class CollisionAvoidanceSystem {
         debrisId: this._currentThreat.debrisId,
       });
 
-      eventBus.emit(Events.COMMS_MESSAGE, {
+      // Gated — see _emitCaComms JSDoc.  Skipping this on mission 1 is
+      // especially nice because every dodge would otherwise generate a
+      // matching "Clear." follow-up = 2× the noise.
+      this._emitCaComms({
         sender: 'CA',
         text: 'Clear. Resume heading.',
         priority: 'info',

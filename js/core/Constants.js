@@ -4,6 +4,22 @@
  */
 
 export const Constants = {
+  // ============================================================================
+  // === INPUT (Delegation 1, 2026-05-31) ===
+  // Hotkey-handler tuning knobs.  Add new flags here when InputManager grows
+  // additional feature gates.  Keep values intentionally minimal — UI key
+  // labels live in their respective UI modules, not in Constants.
+  // ============================================================================
+  INPUT: {
+    /**
+     * Drop bare-`I` keydowns to defeat macOS Voice Control / dictation ASR
+     * phantom keystrokes from in-game audio.  Default OFF since the bare-I
+     * Inspection rebind landed (Delegation 1, 2026-05-31).  Toggle to `true`
+     * if ASR regressions reappear (e.g. on certain mic/voice-control configs).
+     */
+    SUPPRESS_BARE_I: false,
+  },
+
   // === SCENE SCALE ===
   // 1 unit = 100 km. Requires logarithmicDepthBuffer: true.
   SCENE_SCALE: 0.01,
@@ -27,6 +43,16 @@ export const Constants = {
 
   // === RENDERING ===
   FLOATING_ORIGIN_ENABLED: true,    // UX-4: Camera-relative instanced mesh positions to avoid float32 jitter
+
+  // Project-wide render order (FIX_PLAN §2)
+  RENDER_ORDER: {
+    EARTH: 0,
+    SPACECRAFT_OPAQUE: 1,
+    SPACECRAFT_DETAIL: 2,    // channels, pockets, accent rings
+    SPACECRAFT_TRANSPARENT: 3, // grid overlays, wireframes
+    SPACECRAFT_ADDITIVE: 4,   // glow rings, plumes
+    HUD: 10,
+  },
 
   // === CAMERA ===
   CAMERA_NEAR: 0.00003,           // ~3 m minimum (lowered from 10m to prevent panel clipping at close zoom)
@@ -118,6 +144,31 @@ export const Constants = {
   OCTOPUS_CORE_HALL_THRUST: 0.01,       // N (2× HT-100, 10 mN each)
   OCTOPUS_CORE_HALL_ISP: 1500,          // s
   SATELLITE_ROTATION_RATE: 0.08,        // rad/s — manual arrow-key rotation (~4.6°/s, realistic for 500kg ADR satellite)
+
+  // FIX_PLAN §3: Tether-aware rotation limits (exponential spring-resistance model).
+  // When daughters are tethered, the mother's rotation is dampened by an "elastic" tether:
+  //   effectiveRate = baseRate · (1 − |θ|/θ_max)^STIFFNESS_EXPONENT
+  // — Initial keypress feels normal (rate=baseRate at θ=0).
+  // — Sustained pressure builds displacement → rate falls toward 0 at the wall.
+  // — Releasing arrows bleeds displacement toward neutral (spring-back).
+  // — Rotation TOWARD neutral always uses full baseRate (relief direction unconstrained).
+  TETHER_ROTATION: {
+    // Max per-axis displacement (pitch OR yaw) before fully locked
+    MAX_DISPLACEMENT_SOFT:  0.524,  // rad (~30°) — soft tier (LAUNCHING, TRANSIT, APPROACH, FISHING, …)
+    MAX_DISPLACEMENT_BLOCK: 0.087,  // rad (~5°)  — block tier (REELING, HAULING, GRAPPLED, NETTING, …)
+
+    // Damping curve exponent: 2 = quadratic (gentle near neutral, hard wall at θ_max)
+    STIFFNESS_EXPONENT: 2,
+
+    // Spring-back rate: how fast displacement bleeds toward 0 when no arrow pressed
+    SPRINGBACK_RATE_SOFT:  0.05,    // rad/s (~2.9°/s) — slow recovery (loose tether)
+    SPRINGBACK_RATE_BLOCK: 0.15,    // rad/s (~8.6°/s) — faster recovery (taut tether re-centers)
+
+    // Fraction of MAX_DISPLACEMENT at which the comms warning fires
+    SATURATION_THRESHOLD: 0.95,
+
+    COMMS_THROTTLE_MS: 3000,        // ms — interval between "tether tension critical" comms
+  },
 
   // --- Weaver (Large Arm) — 3 units in hexagonal config ---
   WEAVER_COUNT: 3,
@@ -518,6 +569,28 @@ export const Constants = {
   ],
 
   // =========================================================================
+  // DIFFERENTIAL FEEP THRUST — per-nozzle attitude rotation plume mapping
+  // =========================================================================
+  // Maps (axis, sign) → mainThruster array index in PlayerSatellite._buildThrusters.
+  // Physical correctness (Newton's 3rd law): nozzle offset from CoM creates
+  // torque opposite to its radial position.
+  //   pitch +1 (nose up)   → HT_BOTTOM (idx 1, at −Y): aft thrust below CoM pitches nose up
+  //   pitch −1 (nose down) → HT_TOP    (idx 0, at +Y): aft thrust above CoM pitches nose down
+  //   yaw   +1 (nose left) → HT_RIGHT  (idx 2, at +X): aft thrust right of CoM yaws nose left
+  //   yaw   −1 (nose right)→ HT_LEFT   (idx 3, at −X): aft thrust left of CoM yaws nose right
+  // Note: Code sign convention — positive yaw = ArrowLeft = nose-left (matches
+  // rotateYaw(+angle) around +Y via right-hand rule).
+  DIFFERENTIAL_THRUST: {
+    NOZZLE_MAP: {
+      pitch: { '1': 1, '-1': 0 },   // +1→HT_BOTTOM, −1→HT_TOP
+      yaw:   { '1': 2, '-1': 3 },   // +1→HT_RIGHT,  −1→HT_LEFT
+    },
+    LERP_RATE: 8,                    // per-second exponential approach rate (matches legacy glow lerp)
+    INNER_EMISSIVE_BASE: 0.3,       // idle emissive intensity for nozzle interior liner
+    INNER_EMISSIVE_FIRE_SCALE: 1.2, // additional emissiveIntensity per unit firing intensity
+  },
+
+  // =========================================================================
   // LAUNCH SEQUENCE (NEW — for ST-9.11 #7)
   // =========================================================================
   LAUNCH_SEQUENCE_ENABLED: true,
@@ -613,6 +686,27 @@ export const Constants = {
     WEAVER_MIN_MASS: 200,       // kg — weaver for large debris
     TRAWL_MIN_COUNT: 3,         // minimum cluster size for trawl recommendation
     TRAWL_MAX_INDIVIDUAL_MASS: 20, // kg — trawl only for small fragments
+  },
+
+  // =========================================================================
+  // TARGET RANKING — Composite Target Priority Index (TPI) (FIX_PLAN §4)
+  // =========================================================================
+  // TPI = W_DIST * distScore + W_DV * dvScore + W_THREAT * threatScore + W_VALUE * valueScore
+  // Each factor normalized to 0..1; lower TPI = higher priority
+  TARGET_RANKING: {
+    W_DIST: 0.35,        // distance weight — closer targets score better
+    W_DV: 0.30,          // delta-v weight — cheaper transfers score better
+    W_THREAT: 0.20,      // MOID threat weight — dangerous debris scores better (urgent)
+    W_VALUE: 0.15,       // estimated points weight — valuable targets score better
+    DIST_REF_KM: 100,    // reference distance for normalization (debris at this distance scores 1.0)
+    DV_REF_MS: 50,       // reference delta-v for normalization (m/s)
+    MOID_THREAT_MAP: {   // MOID badge → threat score (lower = more threatening → higher TPI)
+      'HI': 0.0,         // high threat → best (lowest) score
+      'MD': 0.3,
+      'LO': 0.6,
+      null: 1.0,         // no MOID data → worst score
+    },
+    VALUE_REF_PTS: 500,  // reference point value for normalization
   },
 
   // --- Ablation ---
@@ -1580,6 +1674,22 @@ export const Constants = {
     /** @deprecated Tutorial system removed Sprint 3. Retained for reference only. */
     TUTORIAL_MIN_STAGE: 7,          // suppress during tutorial stages 0-6 (DEPLOY stage onward in new 10-stage tutorial)
     ENABLED_DEFAULT: true,          // system on by default
+
+    // --- Comms quieting (Delegation 1 follow-up, 2026-05-31) -----------------
+    // Reviewer feedback after the rebind verification pass: CA dodge comms
+    // ("⚠ COLLISION AVOIDANCE — RCS dodge fired …") were spamming the new
+    // player on mission 1, drowning out the welcoming onboarding tone we want.
+    // Dodges still fire silently — only the COMMS_MESSAGE side-channel is
+    // gated.  Two layers:
+    //   1. Mission-number floor — no CA comms below missionNumber < N.
+    //   2. Rate limit — at most one CA comms every COMMS_RATE_LIMIT_S seconds
+    //      once the floor is reached (so even mid-game the channel stays
+    //      readable instead of becoming a wall of yellow).
+    // Tune freely; the system reads these every emit-site.
+    COMMS_MIN_MISSION:    3,    // mission number at which CA comms first speak
+                                // (mission = floor(debrisCleared / 5) + 1, so
+                                //  3 ≈ after 10 captures — a true "veteran" gate)
+    COMMS_RATE_LIMIT_S:  12,    // seconds between consecutive CA comms
   },
 
   // =========================================================================
@@ -1691,6 +1801,9 @@ export const Constants = {
       { id: 'nav_arrows',       label: 'Ship Rotation', key: '←↑↓→',    tier: 1, category: 'nav',       hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'TUTORIAL_ARROW_INPUT' },
       { id: 'nav_throttle',     label: 'Throttle',     key: 'Shift/Ctrl', tier: 1, category: 'nav',      hudGroup: 'propulsion',    prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'THROTTLE_CHANGE' },
       { id: 'scan_quick',       label: 'Quick Scan',   key: 'S',         tier: 1, category: 'scan',      hudGroup: 'targets',       prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'SCAN_QUICK' },
+      // ── Delegation 4 (2026-05-31): two Tier-1 skills added to back the onboarding `struts` and `inspect` beats. ──
+      { id: 'arm_struts',       label: 'Strut Deployment', key: ', .',    tier: 1, category: 'collect',   hudGroup: 'fleet',         prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'STRUT_DEPLOY_INPUT' },
+      { id: 'inspect_mother',   label: 'Spacecraft Inspection', key: 'I', tier: 1, category: 'awareness', hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'INSPECTION_TOGGLE' },
       // ── Tier 2: Core Tools (6 skills) ───────────────────────────────────
       { id: 'scan_wide',            label: 'Wide Scan',    key: 'W',     tier: 2, category: 'scan',      hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'SCAN_WIDE' },
       { id: 'nav_target',           label: 'Target Selection', key: 'Tab', tier: 2, category: 'nav',     hudGroup: 'target-info',   prereqs: [],  prereqType: 'soft', noReminder: false, triggerEvent: 'TARGET_SELECTED' },
@@ -1712,7 +1825,7 @@ export const Constants = {
       { id: 'nav_orbit_mfd',      label: 'Orbit MFD Reading',   key: 'M',  tier: 4, category: 'nav',       hudGroup: null,  prereqs: ['nav_autopilot'],  prereqType: 'soft',   noReminder: false, triggerEvent: 'ORBIT_MFD_TOGGLE' },
       { id: 'collect_pulse_scan', label: 'Pulse Scan',           key: null, tier: 4, category: 'collect',   hudGroup: null,  prereqs: [],                  prereqType: 'none',   noReminder: false, triggerEvent: 'PULSE_SCAN_START' },
       { id: 'collect_lasso_miss', label: 'Lasso Miss Recovery',  key: null, tier: 4, category: 'collect',   hudGroup: null,  prereqs: ['collect_lasso'],   prereqType: 'hard',   noReminder: true,  triggerEvent: 'LASSO_MISSED' },
-      { id: 'manage_forge',       label: 'Forge',                key: 'K',  tier: 4, category: 'manage',    hudGroup: null,  prereqs: [],                  prereqType: 'none',   noReminder: false, triggerEvent: 'FORGE_TOGGLE' },
+      { id: 'manage_forge',       label: 'Forge',                key: 'F4', tier: 4, category: 'manage',    hudGroup: null,  prereqs: [],                  prereqType: 'none',   noReminder: false, triggerEvent: 'FORGE_TOGGLE' },
       { id: 'manage_shop',        label: 'Shop Navigation',      key: null, tier: 4, category: 'manage',    hudGroup: null,  prereqs: [],                  prereqType: 'none',   noReminder: false, triggerEvent: 'UPGRADE_PURCHASED' },
       { id: 'awareness_kessler',  label: 'Kessler Event',        key: null, tier: 4, category: 'awareness', hudGroup: null,  prereqs: [],                  prereqType: 'none',   noReminder: true,  triggerEvent: 'KESSLER_CASCADE' },
       { id: 'awareness_weather',  label: 'Space Weather',        key: null, tier: 4, category: 'awareness', hudGroup: null,  prereqs: [],                  prereqType: 'none',   noReminder: true,  triggerEvent: 'WEATHER_EFFECT_START' },
@@ -2029,6 +2142,76 @@ export const Constants = {
     DEFAULT_DURATION_MS: 7000,
     PERSISTENCE_KEY: 'teachingSeen',
     TOTAL_MOMENTS: 17,           // UX-3 N1: added first_scan + first_arm_deploy
+  },
+
+  // ============================================================================
+  // ONBOARDING (Delegation 2 — 2026-05-31)
+  //
+  // Bottom-screen hint ticker + OnboardingDirector beat lifecycle.  See:
+  //   • [`js/systems/OnboardingDirector.js`](js/systems/OnboardingDirector.js:1)
+  //   • [`js/ui/hud/HintTicker.js`](js/ui/hud/HintTicker.js:1)
+  //
+  // All tuning knobs for the 13-beat first-experience pipeline live here.
+  // Persistence key is versioned so a future redesign can bump it without
+  // colliding with the v1 storage layout.
+  // ============================================================================
+  ONBOARDING: {
+    /** localStorage key for the OnboardingDirector save blob. */
+    STORAGE_KEY: 'spacecowboy_onboarding_v1',
+
+    /** Default credit award per satisfied beat (where `credit` not set). */
+    DEFAULT_CREDIT: 10,
+
+    /** Idle ms before a posted beat escalates to a center-screen overlay. */
+    IDLE_ESCALATION_MS: 15000,
+
+    /** Unrelated-input count threshold for repeated-fail escalation. */
+    UNRELATED_INPUT_THRESHOLD: 6,
+
+    /** Tiered-skip window: a beat is "already known" if its trigger key
+     *  was pressed in the last N ms before the beat was about to post. */
+    RECENT_INPUT_WINDOW_MS: 3000,
+
+    /** Default ms to wait after `HINT_SATISFIED` before advancing to next beat. */
+    ADVANCE_DELAY_MS: 1500,
+
+    /** Default ticker hint duration (overridable per-beat). */
+    DEFAULT_HINT_MS: 12000,
+
+    /** Veteran-skip threshold: fraction of relevant skills already practiced. */
+    VETERAN_SKILL_THRESHOLD: 0.5,
+
+    /** Bottom-screen ticker layout (CSS px). */
+    TICKER: {
+      BOTTOM_PX: 88,                   // distance above viewport bottom
+      ROW_HEIGHT_PX: 36,               // single-line row height
+      MAX_WIDTH_PX: 1100,              // longest the row can grow
+      MAX_VISIBLE: 4,                  // 5th displaces the rightmost
+      FADE_OUT_MS: 300,                // fade-on-clear duration
+      SHIFT_MS: 250,                   // left-shift animation when slot opens
+      FONT_LATEST_PX: 16,              // leftmost / latest hint font size
+      FONT_OLDER_PX: 13,               // older hints font size
+      SCALE_OLDER: 0.95,               // gentle scale for older hints
+      KEY_CHIP_BG_GAMEPLAY: '#0a2a3a', // cyan tinted background pill
+      KEY_CHIP_BG_MODIFIER: '#3a2a0a', // amber for Shift/Ctrl combos
+      KEY_CHIP_BG_MOUSE: '#2a0a3a',    // purple for mouse glyphs
+      ACCENT_BORDER: '#00ccff',
+    },
+  },
+
+  // ============================================================================
+  // INVENTORY (Delegation 4 — 2026-05-31)
+  //
+  // Thresholds + cooldowns for [`NetInventoryPanel.js`](js/ui/hud/NetInventoryPanel.js:1)
+  // and the HOUSTON low-ammo comms hint.  All edits to this namespace are
+  // safe to ship — purely cosmetic UX tuning.
+  // ============================================================================
+  INVENTORY: {
+    LASSO_LOW_THRESHOLD:     5,       // chip turns yellow at this remaining count
+    LASSO_CRITICAL_THRESHOLD: 0,      // chip turns red at this remaining count
+    NETS_LOW_THRESHOLD:      3,       // chip turns yellow at this net total
+    NETS_CRITICAL_THRESHOLD: 0,       // chip turns red at this net total
+    LOW_HINT_COOLDOWN_MS:    60000,   // suppress repeat low-ammo comms within this window
   },
 
   // ============================================================================
@@ -2350,6 +2533,23 @@ export const Constants = {
     GPU_PROBE_THRESHOLD_MS: 14,
     // Number of frames in the probe sampling window.
     GPU_PROBE_FRAMES: 60,
+  },
+
+  // ============================================================================
+  // === WIREFRAMES (Delegation 3, 2026-05-31) ===
+  // Shared visual constants for Mother / Daughter / Debris wireframe panels.
+  // New wireframes (MotherWireframe, DaughterWireframe) import these; existing
+  // DebrisWireframe keeps its own internal constants for backward compatibility.
+  // ============================================================================
+  WIREFRAMES: {
+    PANEL_SIZE_NORMAL:    { w: 280, h: 200 },
+    PANEL_SIZE_EXPANDED:  { w: 380, h: 280 },
+    AUTO_ROTATE_MS:       2000,   // ms per zone in auto-tour
+    COLOR_GREEN:          '#3fb950',
+    COLOR_YELLOW:         '#d29922',
+    COLOR_RED:            '#f85149',
+    COLOR_LINE:           '#58a6ff',
+    COLOR_LABEL:          '#c9d1d9',
   },
 };
 

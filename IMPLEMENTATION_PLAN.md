@@ -1,17 +1,17 @@
 # Space Cowboy — Implementation Plan
 
-> Orchestrator brief synthesising [`HANDOFF.md`](HANDOFF.md:1) (tactical, 9 items, 4 sprints) and [`BIG_PICTURE.md`](BIG_PICTURE.md:1) (strategic, 39 sections, 12-month / 4-quarter roadmap).
+> Orchestrator brief synthesising [`HANDOFF.md`](HANDOFF.md:1) (tactical, current shift + next steps) and [`BIG_PICTURE.md`](BIG_PICTURE.md:1) (strategic, 39 sections, 12-month / 4-quarter roadmap).
 >
-> Scope & ordering: **Sprints 1–4** are HANDOFF's recommended priority order ([`HANDOFF.md §5`](HANDOFF.md:781)), enriched with **one** BIG_PICTURE item that belongs with them (the tether 90° fix, [`§9`](BIG_PICTURE.md:513), slots into Sprint 1 because it is a pure physics bug isolated to [`ArmUnit._updateTether()`](js/entities/ArmUnit.js:2083)). **Epics 5–8** are BIG_PICTURE Q2–Q4 scope, each mapped to subtasks with file/line citations.
+> Scope & ordering: **Sprints 1–4** are HANDOFF's original priority order (delivered Apr 2026). **Epics 5–10** are BIG_PICTURE quarterly scope (Epics 5, 6, 8, 9, 10 delivered; Epic 7 pending). **Post-Sprint Polish (2026-06)** is the follow-up backlog from the 2026-05-30 four-fix architectural sprint.
 >
-> Current test baseline: **275 suites / 1,267 tests / 0 failures** (post-ST-9.4a, 2026-04-26). Every sprint must land green.
+> Current test baseline: **556 suites / 2364 tests / 0 failures** (post-4-fix sprint, 2026-05-30). Every sprint must land green.
 
 ---
 
 ## Table of Contents
 
 0. [Completion Log](#completion-log) ← **Start here for handoff context**
-0. [▶ NEXT: Epic 9 — V5 Hardware Baseline](#original-epic-8-items-deferred-to-epic-9--q4) ← **Start here for new work** (Epic 8 complete ✅)
+0. [▶ NEXT: Post-Sprint Polish & Architecture (2026-06)](#-next-post-sprint-polish--architecture-2026-06) ← **Start here for new work** (4-fix sprint complete ✅)
 1. [Sprint 1 — Tier A Quick Wins (1 day)](#sprint-1--tier-a-quick-wins-1-day)
 2. [Sprint 2 — Tier B First-Experience UX (2–3 days)](#sprint-2--tier-b-first-experience-ux-23-days)
 3. [Sprint 3 — Tier C Onboarding Redesign (2–4 days)](#sprint-3--tier-c-onboarding-redesign-24-days)
@@ -27,6 +27,23 @@
 ---
 
 ## Completion Log
+
+- 2026-05-30: **Four-Fix Architectural Sprint complete.** [`archive/FIX_PLAN.md`](archive/FIX_PLAN.md:1)
+  delivered: Issue 1 (Z-layer + aft rendering + RENDER_ORDER convention), Issue 2 (rotation lock
+  with exponential spring-resistance model), Issue 3 (TPI composite target ranking), Issue 4
+  (ROSA panel front/back split). Test delta: **+44 tests** (2320 → **2364**), **556 suites**, 0 failures.
+  Service worker bumped to v4. New constants: [`RENDER_ORDER`](js/core/Constants.js:1) (6-tier enum),
+  [`TETHER_ROTATION`](js/core/Constants.js:1) (spring model), [`TARGET_RANKING`](js/core/Constants.js:1) (TPI weights + MOID threat map).
+  New canonical predicates on [`ArmManager`](js/entities/ArmManager.js:1): `hasTetheredArm()`,
+  `getRotationLockTier()`. New test file: [`test-RotationLock.js`](js/test/test-RotationLock.js:1) (7 suites, 44 tests).
+  Bonus: [`AutopilotSystem.armsActive`](js/systems/AutopilotSystem.js:1) under-inclusive check (was 4 of 22 ARM_STATES) replaced with `hasTetheredArm()`.
+  Emergent discovery: spring-resistance creates a skill-based boost-assist rotation mechanic
+  (build displacement → release for springback boost). 21 deferred items + recommended next-step
+  ordering at [`HANDOFF.md §4–§5`](HANDOFF.md:1). 7-item polish backlog: see [▶ NEXT below](#-next-post-sprint-polish--architecture-2026-06).
+  Touched: PlayerSatellite.js, ArmUnit.js, MenuScene3D.js (Issue 1+4); ArmManager.js,
+  InputManager.js, AutopilotSystem.js, Constants.js, test-RotationLock.js, run-tests.js (Issue 2);
+  DebrisField.js, TargetPanel.js, Constants.js, InputManager.js (Issue 3); sw.js (cache bump).
+  Docs: HANDOFF.md (full rewrite), FIX_PLAN.md → archive/, IMPLEMENTATION_PLAN.md (this file).
 
 - 2026-04-27: **Config G adopted + Epic 9 gap scoping complete.** Barrel-axial
   top-collar geometry (2.0m × 0.8m barrel, 3-plane layout, ROSA panels, strut-mounted reel).
@@ -187,6 +204,121 @@
 - The [`_applySkillReveal()`](js/ui/HUD.js) HUD path is THE reveal mechanism (TutorialSystem deleted in Sprint 3 ST-3.2) — don't add a parallel system
 - [`DebrisMap.js`](js/ui/DebrisMap.js) suppresses all InputManager keys when visible — new keybinds must be added to the passthrough list in [`InputManager._handleKeyDown()`](js/systems/InputManager.js) if they should work while the map is open
 - Mission profiles ([`Constants.MISSIONS.PROFILES`](js/core/Constants.js)) gate conjunction/kessler/weather — new systems that should be suppressed early-game must add a profile flag
+
+---
+
+## ▶ NEXT: Post-Sprint Polish & Architecture (2026-06)
+
+> **Source:** [`HANDOFF.md §5 Recommended Next Steps`](HANDOFF.md:1) — emerged from the 2026-05-30 four-fix architectural sprint (see [Completion Log](#completion-log)).
+>
+> **Prerequisites:** 4-fix sprint complete. **556 suites / 2364 tests / 0 failures**.
+>
+> **Suggested ordering:**
+> ```
+> Day 1: ST-PS.2 test-TargetRanking → ST-PS.7 dynamic DIST_REF_KM → ST-PS.4 TPI in AP
+> Day 2: ST-PS.1 setThrusterFire → ST-PS.6 teaching moment
+> Day 3: ST-PS.3 SpacecraftMaterials → ST-PS.5 RENDER_ORDER extend
+> ```
+>
+> All 7 items are scoped, ready for Orchestrator to research+architect+code. Dependencies noted at the end.
+
+### ST-PS.1 — `setThrusterFire(axis, sign, magnitude)` differential firing
+
+- **Source.** [`archive/FIX_PLAN.md §2.2.C`](archive/FIX_PLAN.md:1) (deferred); [`HANDOFF §4.1 #1`](HANDOFF.md:1).
+- **Problem.** All 4 main FEEPs lerp glow + plume together via [`PlayerSatellite._animateThrusters`](js/entities/PlayerSatellite.js:1). Player rotation input fires all 4 nozzles regardless of axis — visually breaks the "this is a real spacecraft" reading and misses the physics-fidelity opportunity the FEEP-nozzle visual upgrade landed for.
+- **Fix.** New method `setThrusterFire(axis, sign, magnitude)` on [`PlayerSatellite`](js/entities/PlayerSatellite.js:1). Map: pitch+ → HT_BOTTOM, pitch− → HT_TOP, yaw+ → HT_LEFT, yaw− → HT_RIGHT. Lerp per-thruster glow intensity (matches existing `_thrusterGlowTargets` pattern). Call from [`InputManager.processInput`](js/systems/InputManager.js:1) after each `rotatePitch`/`rotateYaw`. Verify axis-sign convention against [`PlayerSatellite.rotatePitch`](js/entities/PlayerSatellite.js:1).
+- **Test.** Extend [`test-FEEPMetals.js`](js/test/test-FEEPMetals.js:1) (or new `test-ThrusterFire.js`): assert (axis, sign) → expected `_thrusterId` map; assert single-axis input fires only 1 nozzle; CoMCalculator + FEEPMetals tests stay green.
+- **Mode.** `code`. **Effort.** ~1–2 h.
+- **Acceptance.** Holding ↑ fires only HT_BOTTOM plume; ↑+← fires HT_BOTTOM + HT_LEFT independently; spring-resistance soft-tier scales magnitude proportionally.
+
+### ST-PS.2 — `test-TargetRanking.js` (TPI coverage)
+
+- **Source.** [`HANDOFF §4.4 #12`](HANDOFF.md:1) test gap; [`archive/FIX_PLAN.md §4.6`](archive/FIX_PLAN.md:1) suggested coverage list.
+- **Problem.** TPI math shipped without unit tests. MOID null fallback, weight normalization, and threat multiplier behaviour have no regression coverage.
+- **Fix.** New [`js/test/test-TargetRanking.js`](js/test/test-TargetRanking.js:1) with cases per [`archive/FIX_PLAN.md §4.6`](archive/FIX_PLAN.md:1):
+  - 4-target comparison table (close-cheap, close-expensive, far-cheap, MOID-HI) → assert exact ordering
+  - Edge: distance == DIST_REF_KM → distScore = 0 (not filtered)
+  - Edge: estimatedPoints = 0 → no NaN
+  - Threat tier override: identical rows except `moidBadge: 'HI'` → HI row ranks higher
+  - MOID badge propagation (Issue 3 §4.4 #14): `debris.moidBadge` reaches row.moidBadge
+- **Mode.** `code`. **Effort.** ~1 h.
+- **Acceptance.** New test file passes; covers 8+ TPI scenarios; total suite stays green.
+
+### ST-PS.3 — Extract `js/scene/SpacecraftMaterials.js`
+
+- **Source.** [`HANDOFF §4.5 #16`](HANDOFF.md:1) architecture opportunity.
+- **Problem.** `panelMatFront`, `panelMatBack`, `gridMat`, `goldEdgeMat` duplicated between [`PlayerSatellite.js`](js/entities/PlayerSatellite.js:1) and [`ArmUnit.js`](js/entities/ArmUnit.js:1) (10 materials where 4 suffice). Future panel tweaks risk skew between mother and daughter.
+- **Fix.** New `js/scene/SpacecraftMaterials.js` module exporting `getPanelMatFront()`, `getPanelMatBack()`, `getPanelGridMat()`, `getPanelGoldEdgeMat()` (memoized singletons). [`PlayerSatellite.js`](js/entities/PlayerSatellite.js:1) and [`ArmUnit.js`](js/entities/ArmUnit.js:1) import from it. No behaviour change.
+- **Test.** Existing visual tests stay green. Optional: new `test-SpacecraftMaterials.js` asserting same instance returned across calls.
+- **Mode.** `code`. **Effort.** ~1.5 h.
+- **Acceptance.** 4 materials exported; both spacecraft files import from the new module; 0 regressions in existing tests; bloom budget unchanged.
+
+### ST-PS.4 — Wire TPI into AutopilotSystem fallback
+
+- **Source.** [`HANDOFF §4.5 #18`](HANDOFF.md:1) architecture opportunity. Depends on ST-PS.2 for test coverage.
+- **Problem.** [`AutopilotSystem`](js/systems/AutopilotSystem.js:1) fallback target picker uses "nearest Tier 3/4" inline logic; doesn't benefit from MOID prioritisation that TPI bakes in.
+- **Fix.** Replace inline pick with `debrisField.getEnhancedTargetList(...)[0]`. AP now respects player-visible ranking and surfaces MOID-priority threats.
+- **Test.** Extend [`test-AutopilotSystem.js`](js/test/test-AutopilotSystem.js:1): AP target fallback chooses top-TPI not nearest-distance when a HI MOID target exists at slightly longer range.
+- **Mode.** `code`. **Effort.** ~30 min.
+- **Acceptance.** AP fallback target consistent with what's shown at the top of the player's panel; 1+ new test passes.
+
+### ST-PS.5 — Extend `RENDER_ORDER` to 5+ more modules
+
+- **Source.** [`HANDOFF §4.5 #17`](HANDOFF.md:1) architecture opportunity. [`HANDOFF §2.4`](HANDOFF.md:1) convention not yet project-wide.
+- **Problem.** 6 modules still use ad-hoc renderOrder integers: [`Earth.js`](js/scene/Earth.js:1), [`Starfield.js`](js/scene/Starfield.js:1), [`TrailSystem.js`](js/ui/TrailSystem.js:1), [`TargetReticle.js`](js/ui/TargetReticle.js:1), [`NavSphere.js`](js/ui/NavSphere.js:1), [`DockingReticle.js`](js/ui/DockingReticle.js:1). Future visual layering work risks ordering inconsistency.
+- **Fix.** Replace all numeric `renderOrder` literals with `Constants.RENDER_ORDER.*` references. Extend the enum if a new tier is needed (e.g., `BACKGROUND = -1` for Starfield if it currently uses negative values).
+- **Test.** Existing visual smoke tests stay green. Optional: linter-style grep that fails CI on `renderOrder = <integer>` outside Constants.
+- **Mode.** `code`. **Effort.** ~2 h.
+- **Acceptance.** `grep -RIn 'renderOrder = ' js/` returns only Constants.js or `RENDER_ORDER.*` references; 0 visual regressions.
+
+### ST-PS.6 — Teaching moment for rotation lock + spring-snap-back skill
+
+- **Source.** [`HANDOFF §4.5 #19`](HANDOFF.md:1) architecture opportunity + [`§4.6 #21`](HANDOFF.md:1) emergent product opportunity.
+- **Problem.** Players hitting the new rotation lock get a comms warning but no Codex/teaching reinforcement. The skill-based springback boost (build displacement → release for assisted rotation) is undiscoverable without help.
+- **Fix.** Two parts:
+  1. **Teaching overlay.** Subscribe [`TeachingSystem.js`](js/systems/TeachingSystem.js:1) to `COMMS_MESSAGE` events filtered by "rotation locked" category. Once-per-profile overlay: *"Rotation locked while daughters are tethered. Recall (H) or wait for capture. Soft-tier states (TRANSIT/APPROACH) allow limited rotation — release arrows to ride the springback for an assisted swing."*
+  2. **Codex entry.** New entry in `LEARNING` category documenting the skill: build displacement → release → springback boost. Cross-reference real-world tether dynamics.
+- **Test.** Extend [`test-TeachingSystem.js`](js/test/test-TeachingSystem.js:1): rotation-lock comms triggers teaching overlay; only fires once per profile; Codex entry registered.
+- **Mode.** `code`. **Effort.** ~45 min.
+- **Acceptance.** New player hits rotation lock → sees overlay once; subsequent locks → comms only; Codex entry searchable; teaching-system tests pass.
+
+### ST-PS.7 — Dynamic `DIST_REF_KM` from sensor tier
+
+- **Source.** [`HANDOFF §4.1 #2`](HANDOFF.md:1) silently deferred from FIX_PLAN. Depends on ST-PS.2 for test coverage.
+- **Problem.** TPI distance reference is a fixed 100km. Sensor upgrades don't change ranking sensitivity — a Basic sensor (10km max) ranks the same way as Advanced (100km max).
+- **Fix.** In [`DebrisField.getEnhancedTargetList`](js/entities/DebrisField.js:1), read `SENSOR_TIERS[d.sensorSystem.tier].rangeKm` and scale `DIST_REF_KM = max(sensorRangeKm × 0.7, 10)`. Pass sensor tier through the call. Default fallback when sensor unavailable: 100km (current behaviour).
+- **Test.** Extend [`test-TargetRanking.js`](js/test/test-TargetRanking.js:1) (from ST-PS.2): sensor tier 'basic' → 7km DIST_REF_KM → 60km debris very low rank; sensor tier 'advanced' → 70km DIST_REF_KM → same 60km debris climbs several positions.
+- **Mode.** `code`. **Effort.** ~30 min.
+- **Acceptance.** TPI reference scales with sensor tier; manual playtest confirms far targets stay competitive as player upgrades sensors; existing TPI tests stay green; new sensor-tier scaling test passes.
+
+### Cross-references
+
+| ST | HANDOFF source | FIX_PLAN source | Effort | Mode |
+|----|---|---|---|------|
+| ST-PS.1 setThrusterFire | §4.1 #1 + §4.5 #20 | §2.2.C | ~1–2 h | code |
+| ST-PS.2 test-TargetRanking | §4.4 #12 | §4.6 | ~1 h | code |
+| ST-PS.3 SpacecraftMaterials | §4.5 #16 | (new — emergent) | ~1.5 h | code |
+| ST-PS.4 TPI in AP | §4.5 #18 | §4.2 | ~30 min | code |
+| ST-PS.5 RENDER_ORDER extend | §4.5 #17 | §2.2.A | ~2 h | code |
+| ST-PS.6 teaching moment | §4.5 #19 + §4.6 #21 | (new — emergent) | ~45 min | code |
+| ST-PS.7 dynamic DIST_REF_KM | §4.1 #2 | §4.2 | ~30 min | code |
+
+### Dependency graph
+
+```
+ST-PS.2 test-TargetRanking ──┬─→ ST-PS.4 TPI in AP
+                              └─→ ST-PS.7 dynamic DIST_REF_KM
+
+ST-PS.1 setThrusterFire ──→ ST-PS.6 teaching (visual reinforcement)
+ST-PS.3 SpacecraftMaterials ── independent
+ST-PS.5 RENDER_ORDER extend ── independent
+```
+
+**Total effort:** ~7 h engineering + ~1 h playtest tuning. ≈ **1.5 days** for a single developer; **3 parallel tracks** possible (PS.2/PS.4/PS.7 batch · PS.1/PS.6 batch · PS.3/PS.5 batch).
+
+### Feature flag watch list (carry-forward)
+
+When `TETHER_REEL` flag flips ON: audit [`ArmManager.getRotationLockTier()`](js/entities/ArmManager.js:1) for severed-tether downgrade. When `STOW_DEPLOY_STATE_MACHINE` flips ON: consider 4th `'warn'` tier for DEPLOYING/STOWING transients. See [`HANDOFF §6`](HANDOFF.md:1).
 
 ---
 
@@ -769,16 +901,20 @@ ST-9.12 — Center-of-Mass Tracking + Thruster Plume Interlock
 
 ## Cross-Cutting Rules
 
-Every subtask inherits these from [`HANDOFF §3`](HANDOFF.md:156) & [`§6`](HANDOFF.md:849):
+Every subtask inherits these from [`HANDOFF §9 THREE.js SSOT`](HANDOFF.md:1), [`§10 Post-Cinch Learnings`](HANDOFF.md:1), and [`§11 Architectural Gotchas`](HANDOFF.md:1):
 
-1. **Y-up (Three.js) vs Z-up (ECI)** — use [`cartesianToKeplerian()`](js/entities/OrbitalMechanics.js:129) (corrected); do not write parallel versions ([`§3.1`](HANDOFF.md:160)).
-2. **`TIME_SCALE_GAMEPLAY` silent multiplier** — any physics-per-tick must multiply `dt * TIME_SCALE_GAMEPLAY`; factor-of-10 bug = suspect this ([`§3.2`](HANDOFF.md:167)).
-3. **`applyCartesianImpulse` vs `_applyThrust`** — world-frame ΔV → the new API at [`PlayerSatellite.js:2145`](js/entities/PlayerSatellite.js:2145); orbital-element rates → the legacy one ([`§3.3`](HANDOFF.md:178)).
-4. **CA exemption** — any pursuit system emits `AUTOPILOT_TARGET_LOCK` or equivalent so [`CollisionAvoidanceSystem`](js/systems/CollisionAvoidanceSystem.js:1) stops fighting it ([`§3.4`](HANDOFF.md:188)).
-5. **Scene scale `M = 1e-5`** — distances in metres in Constants; multiply by `M` at the rendering boundary ([`§3.7`](HANDOFF.md:214)).
-6. **Constants-first refactors** — hoist every magic number to [`Constants.js`](js/core/Constants.js:1) with a named comment ([`§3.6`](HANDOFF.md:210)).
-7. **Regression test per bug** — inverse-consistency tests for physics helpers; integration > stubs; `grep TIME_SCALE_GAMEPLAY|gameDt` to catch omissions ([`§3.5`](HANDOFF.md:198)).
-8. **Test suite must stay green** — current 275 suites / 1,267 tests / 0 failures (post-ST-9.4a). Every sprint must land green.
+1. **Y-up (Three.js) vs Z-up (ECI)** — use [`cartesianToKeplerian()`](js/entities/OrbitalMechanics.js:129) (corrected); do not write parallel versions. See [`HANDOFF §11.1`](HANDOFF.md:1).
+2. **`TIME_SCALE_GAMEPLAY` silent multiplier** — any physics-per-tick must multiply `dt * TIME_SCALE_GAMEPLAY`; factor-of-10 bug = suspect this. See [`HANDOFF §11.2`](HANDOFF.md:1).
+3. **`applyCartesianImpulse` vs `_applyThrust`** — world-frame ΔV → the new API at [`PlayerSatellite.applyCartesianImpulse()`](js/entities/PlayerSatellite.js:2145); orbital-element rates → the legacy one. See [`HANDOFF §11.3`](HANDOFF.md:1).
+4. **CA exemption** — any pursuit system emits `AUTOPILOT_TARGET_LOCK` or equivalent so [`CollisionAvoidanceSystem`](js/systems/CollisionAvoidanceSystem.js:1) stops fighting it. See [`HANDOFF §11.4`](HANDOFF.md:1).
+5. **Scene scale `M = 1e-5`** — distances in metres in Constants; multiply by `M` at the rendering boundary. See [`HANDOFF §11.6`](HANDOFF.md:1).
+6. **Constants-first refactors** — hoist every magic number to [`Constants.js`](js/core/Constants.js:1) with a named comment. Example: `Constants.RENDER_ORDER`, `Constants.TETHER_ROTATION`, `Constants.TARGET_RANKING` — all landed this sprint.
+7. **Regression test per bug** — inverse-consistency tests for physics helpers; integration > stubs; `grep TIME_SCALE_GAMEPLAY|gameDt` to catch omissions. See [`HANDOFF §11.5`](HANDOFF.md:1).
+8. **Test suite must stay green** — current **556 suites / 2,364 tests / 0 failures** (post-4-fix sprint, 2026-05-30). Every sprint must land green.
+9. **(NEW 2026-05-30) RENDER_ORDER convention** — every mesh in a spacecraft hierarchy declares `renderOrder` from the [`RENDER_ORDER`](js/core/Constants.js:1) 6-tier enum. `polygonOffset` is a finer-grained tool but cannot order across transparency passes. See [`HANDOFF §9 Rule 6`](HANDOFF.md:1).
+10. **(NEW 2026-05-30) Inline ARM_STATES checks → named predicates** — any `state === A || state === B || ...` over ARM_STATES is a code smell; promote to a named predicate on [`ArmManager`](js/entities/ArmManager.js:1) ([`hasTetheredArm()`](js/entities/ArmManager.js:1), [`getRotationLockTier()`](js/entities/ArmManager.js:1) already exist; two known remaining inline sites at [`AutopilotSystem.js:697`](js/systems/AutopilotSystem.js:697) and [`RadialMenu.js:306`](js/ui/hud/RadialMenu.js:306)). See [`HANDOFF §11.8`](HANDOFF.md:1).
+11. **(NEW 2026-05-30) GL_LINES has no face culling** — for wireframes that must hide on back-facing surfaces, use a custom ShaderMaterial with view-dot-normal discard at fragment level. `side: FrontSide` does NOT cull line primitives. See [`HANDOFF §9 Rule 7`](HANDOFF.md:1).
+12. **(NEW 2026-05-30) `ShapeGeometry` cannot split into material groups** — single contiguous face range. For front/back material splits (e.g., ROSA panel PV vs Kapton), use **two coincident meshes** sharing the same geometry instance — one `FrontSide`, one `BackSide` with cloned flipped-normal geometry. See [`HANDOFF §9 Rule 4`](HANDOFF.md:1).
 
 ---
 
@@ -797,6 +933,15 @@ Sprint 3 ST-3.5 skills-gates ──finalises──→ ST-2.1 conjunction       �
     Epic 6 ST-6.1 data catalog ──unblocks──→ Epic 7 ST-7.1 missions
     Epic 6 ST-6.3 MOID         ──unblocks──→ Epic 7 ST-7.5 porkchop
     Epic 7 ST-7.5/7.6          ──unblocks──→ Epic 8 ST-8.6 ablation
+
+──────────────────── 2026-05-30 four-fix sprint complete ────────────────────
+
+Post-Sprint Polish (2026-06):
+    ST-PS.2 test-TargetRanking ──┬─→ ST-PS.4 TPI in AP
+                                  └─→ ST-PS.7 dynamic DIST_REF_KM
+    ST-PS.1 setThrusterFire ─────→ ST-PS.6 teaching moment
+    ST-PS.3 SpacecraftMaterials ── (independent)
+    ST-PS.5 RENDER_ORDER extend ── (independent)
 ```
 
 Hard blockers (from [`BIG_PICTURE §37`](BIG_PICTURE.md:1745)):
@@ -804,6 +949,10 @@ Hard blockers (from [`BIG_PICTURE §37`](BIG_PICTURE.md:1745)):
 - §6 flag decals ← §2 (owner_country)
 - §19 teaching map ← §5 trails + §21 MOID + §22 Lambert
 - §14 / Epic 8 ← §11 Constants block
+
+Feature-flag-conditional blockers (from [`HANDOFF §6`](HANDOFF.md:1)):
+- When `TETHER_REEL` flag flips ON: [`ArmManager.getRotationLockTier()`](js/entities/ArmManager.js:1) must consult reel-cut state before any new rotation-blocked work
+- When `STOW_DEPLOY_STATE_MACHINE` flag flips ON: deploy-state × arm-state cross-product needs audit in rotation tier mapping
 
 ---
 
@@ -813,14 +962,15 @@ The orchestrator should spawn subtasks in this cadence:
 
 | Phase | Parallelisable? | Mode | Notes |
 |-------|-----------------|------|-------|
-| Sprint 1 (4 items) | Yes — ST-1.1/1.2/1.4 independent; ST-1.3 after 1.2 | `code` | Tight 1-day scope |
-| Sprint 2 (4 items) | Yes — ST-2.2/2.3 independent; ST-2.4 after ST-1.2 | `code` | Visual pass |
-| Sprint 3 (5 items) | Partial — ST-3.2 first (removes coupling), then rest parallel | `code` + `debug` | Watch test gates |
-| Sprint 4 (5 items) | Sequential A→B→C→D→E; each shippable | `code` | Each is its own PR |
-| Epics 5–8 | Per-quarter; run multiple subtasks in parallel within a quarter | `architect` for design, `code` for impl, `project-research` when new surface areas need scoping | Multi-week |
+| Sprint 1 (4 items) | Yes — ST-1.1/1.2/1.4 independent; ST-1.3 after 1.2 | `code` | Tight 1-day scope ✅ Done |
+| Sprint 2 (4 items) | Yes — ST-2.2/2.3 independent; ST-2.4 after ST-1.2 | `code` | Visual pass ✅ Done |
+| Sprint 3 (5 items) | Partial — ST-3.2 first (removes coupling), then rest parallel | `code` + `debug` | Watch test gates ✅ Done |
+| Sprint 4 (5 items) | Sequential A→B→C→D→E; each shippable | `code` | Each is its own PR ✅ Done |
+| Epics 5–8 | Per-quarter; run multiple subtasks in parallel within a quarter | `architect` for design, `code` for impl, `project-research` when new surface areas need scoping | Multi-week ✅ Epics 5/6/8 done; Epic 7 pending; Epic 9/10 done |
+| **Post-Sprint Polish (7 items)** | **Yes — 3 parallel tracks (PS.2/4/7 · PS.1/6 · PS.3/5)** | **`code` (all)** | **~1.5 days total. See [▶ NEXT](#-next-post-sprint-polish--architecture-2026-06).** |
 
 Recommended `new_task` pattern per subtask: include (a) the ST-ID, (b) the HANDOFF/BIG_PICTURE cite, (c) file/line targets, (d) acceptance criterion, (e) test requirement, (f) cross-cutting rule checklist.
 
 ---
 
-*Plan owner: Architect. Next review at Sprint 1 completion (should be same-day given 1-day scope). Sources: [`HANDOFF.md`](HANDOFF.md:1), [`BIG_PICTURE.md`](BIG_PICTURE.md:1).*
+*Plan owner: Architect. Current focus: Post-Sprint Polish (2026-06) — see [▶ NEXT](#-next-post-sprint-polish--architecture-2026-06). Sources: [`HANDOFF.md`](HANDOFF.md:1), [`BIG_PICTURE.md`](BIG_PICTURE.md:1), [`archive/FIX_PLAN.md`](archive/FIX_PLAN.md:1).*

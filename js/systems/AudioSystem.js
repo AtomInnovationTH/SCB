@@ -438,6 +438,18 @@ class AudioSystem {
     });
     eventBus.on(Events.MASTERY_FANFARE, () => this.playMasteryFanfare());
 
+    // Delegation 2 (2026-05-31) — onboarding "hint posted" soft chime.
+    // Generic AUDIO_CUE channel — payload: { id|cue: string, volume?: number }.
+    // Currently we only recognise `hint_post`; unknown cues are no-ops.
+    eventBus.on(Events.AUDIO_CUE, (data) => {
+      if (!data) return;
+      const id = data.id || data.cue;
+      if (id === 'hint_post') {
+        const v = (typeof data.volume === 'number') ? data.volume : 0.4;
+        this.playHintPost(v);
+      }
+    });
+
     // Removed: per-debris discovery blip subscription — too many rapid blips during staggered reveal
     // eventBus.on(Events.TARGET_DISCOVERED, () => this.playDiscoveryBlip());
   }
@@ -3007,6 +3019,49 @@ class AudioSystem {
     gain.connect(this.masterGain);
     osc.start(now);
     osc.stop(now + 0.06);
+  }
+
+  /**
+   * Delegation 2 (2026-05-31) — soft "hint posted" two-note ascending arpeggio.
+   * Quiet enough to fade into the ambient mix; peak gain capped at ~0.15.
+   * Fallback path uses raw oscillators so it works even if `_playSineBlip` isn't
+   * present in older builds.
+   * @param {number} [volume=0.4] — caller-side scale; clamped to [0, 1].
+   */
+  playHintPost(volume = 0.4) {
+    if (!this.available || !this.ctx) return;
+    // Delegation 4 (2026-05-31) — P1-1 fix: bail early when the AudioContext
+    // is suspended (AutoplayPolicy first-frame race). Scheduled oscillators
+    // would otherwise queue up and trigger a delayed click whenever the user
+    // first interacts. AudioCue is fire-and-forget — dropping the first chime
+    // is preferable to a glitch.
+    if (this.ctx.state !== 'running') return;
+    const v = Math.max(0, Math.min(1, volume));
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+    // Two-note rising chord: A5 (880 Hz) → C#6 (1108 Hz).
+    // Total ~250 ms; gentle exponential decay tail.
+    const dest = this.sfxBus || this.master || ctx.destination;
+    const playNote = (freq, startOffset, durSec) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, now + startOffset);
+      // TODO: Confirm chime volume in browser playtest — peer cues
+      // (playClick, playLaser) sit at peak 0.08–0.20; current 0.15·volume
+      // → effective 0.06 at the default volume=0.4 caller.  May be too
+      // quiet over ambient mix; consider 0.20 if unhearable.
+      const peak = 0.15 * v;
+      gain.gain.setValueAtTime(0.0001, now + startOffset);
+      gain.gain.exponentialRampToValueAtTime(peak, now + startOffset + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + startOffset + durSec);
+      osc.connect(gain);
+      gain.connect(dest);
+      osc.start(now + startOffset);
+      osc.stop(now + startOffset + durSec + 0.02);
+    };
+    playNote(880,  0.000, 0.14);
+    playNote(1108, 0.100, 0.18);
   }
 }
 

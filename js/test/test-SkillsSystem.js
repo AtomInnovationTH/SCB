@@ -50,9 +50,12 @@ function triggerN(eventKey, n) {
 describe('SkillsSystem — Construction & Initialization', () => {
     const sys = makeSystem();
 
-    it('constructor creates entries for all 33 skills from CATALOG', () => {
-        assert.equal(sys._skills.size, 33,
-            `Expected 33 skills, got ${sys._skills.size}`);
+    it('constructor creates entries for all skills from CATALOG', () => {
+        // Delegation 4 (2026-05-31): Catalog grew from 33 → 35 (+arm_struts, +inspect_mother).
+        // Assert against the live catalog length so future additions are not blocked.
+        const expected = Constants.SKILLS.CATALOG.length;
+        assert.equal(sys._skills.size, expected,
+            `Expected ${expected} skills, got ${sys._skills.size}`);
     });
 
     it('all skills start as undiscovered', () => {
@@ -66,10 +69,12 @@ describe('SkillsSystem — Construction & Initialization', () => {
         assert.ok(allUndiscovered, 'Every skill should start as undiscovered');
     });
 
-    it('getProgress() returns { discovered: 0, total: 33, percent: 0 }', () => {
+    it('getProgress() returns { discovered: 0, total: <catalog length>, percent: 0 }', () => {
+        // Delegation 4 (2026-05-31): assert against the live catalog length.
+        const expected = Constants.SKILLS.CATALOG.length;
         const p = sys.getProgress();
         assert.equal(p.discovered, 0);
-        assert.equal(p.total, 33);
+        assert.equal(p.total, expected);
         assert.equal(p.percent, 0);
     });
 

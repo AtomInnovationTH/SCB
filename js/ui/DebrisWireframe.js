@@ -844,6 +844,10 @@ export class DebrisWireframe {
     this._frameSkip = -1;
     /** @type {boolean} True when showing ADR satellite self-view */
     this._showingADR = false;
+    /** @type {boolean} True when in daughter-piloted expanded inspection mode */
+    this._expandedMode = false;
+    /** @type {number|null} Index of daughter arm when expanded */
+    this._fromArmIndex = null;
     /** @type {Array<{id:string,state:string,type:string}>} Arm status for dock cavity colors */
     this._armStatuses = [];
     /** @type {boolean} Whether salvage scanner upgrade is active */
@@ -1000,8 +1004,8 @@ export class DebrisWireframe {
    */
   update(dt) {
     if (!this._visible || !this._shape) return;
-    // Need either a target OR ADR self-view mode
-    if (!this._target && !this._showingADR) return;
+    // Need either a target OR ADR self-view OR expanded-mode placeholder
+    if (!this._target && !this._showingADR && !this._expandedMode) return;
 
     // Rotation: use debris tumble rate, or slow spin for ADR satellite
     if (this._showingADR) {
@@ -1044,6 +1048,39 @@ export class DebrisWireframe {
     this._projected = [];
   }
 
+  /**
+   * Enter "debris from daughter" expanded inspection mode (Delegation 3).
+   * Scales the canvas CSS 1.4× and shows a daughter-origin badge.
+   * @param {number}      armIndex      0-based daughter arm index.
+   * @param {object|null} [debrisTarget] The daughter arm's current debris target.
+   */
+  setExpandedMode(armIndex, debrisTarget = null) {
+    this._expandedMode   = true;
+    this._fromArmIndex   = armIndex;
+    const WC = Constants.WIREFRAMES;
+    const EW = WC ? WC.PANEL_SIZE_EXPANDED.w : 392;
+    const EH = WC ? WC.PANEL_SIZE_EXPANDED.h : 280;
+    this._canvas.style.width  = `${EW}px`;
+    this._canvas.style.height = `${EH}px`;
+    if (debrisTarget) {
+      this.setTarget(debrisTarget);
+    } else {
+      // Show ADR self-view as placeholder when no daughter target exists
+      this._showADRSatellite();
+      this.setVisible(true);
+    }
+  }
+
+  /**
+   * Exit expanded mode; restore normal 280×200 panel size.
+   */
+  clearExpandedMode() {
+    this._expandedMode   = false;
+    this._fromArmIndex   = null;
+    this._canvas.style.width  = `${PANEL_WIDTH}px`;
+    this._canvas.style.height = `${PANEL_HEIGHT}px`;
+  }
+
   // ==========================================================================
   // RENDERING — Private
   // ==========================================================================
@@ -1075,6 +1112,18 @@ export class DebrisWireframe {
       ctx.font = "12px 'Courier New', monospace";
       ctx.fillStyle = TYPE_COLOR;
       ctx.fillText(typeLabel, WIRE_CX, 27);
+    }
+
+    // Daughter-origin badge (expanded mode, Delegation 3)
+    if (this._expandedMode) {
+      ctx.textAlign = 'right';
+      ctx.font = "9px 'Courier New', monospace";
+      ctx.fillStyle = 'rgba(255,200,60,0.90)';
+      ctx.fillText(
+        `\uD83D\uDEF0 from Daughter ${(this._fromArmIndex || 0) + 1}`,
+        PANEL_WIDTH - 6,
+        PANEL_HEIGHT - 6,
+      );
     }
 
     // --- Project all vertices (also store rotated Z for depth-based alpha) ---

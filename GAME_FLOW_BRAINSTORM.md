@@ -38,7 +38,7 @@ Player presses S → ping sound, target panel reveals 7 debris. Picks closest (2
 
 ### 1.3 Minute 8–20 — "Why isn't this working anymore?"
 
-Player keeps lassoing fragments. Now closest target is 1.2 km. Tries to fly mother closer — ΔV gauge moves visibly. *Wait, fuel matters?* Comms: *"Lasso range 50 m. That fragment is 1.2 km out. Try a daughter arm — press G."*
+Player keeps lassoing fragments. Now closest target is 1.2 km. Tries to fly mother closer — ΔV gauge moves visibly. *Wait, fuel matters?* Comms: *"Lasso range 50 m. That fragment is 1.2 km out. Try a daughter arm — press D."*
 
 Fires daughter. Watches it deploy (visual + audio thwack). Daughter autopilots into position. **Now what?** ↑↓←→ orbit indicator appears. Player learns: I'm the brain, daughter is the body.
 
@@ -290,7 +290,7 @@ This is the **stealth education layer**. Players who want to play don't have to 
 | Forge yields gallium | Codex unlocks, FEEP options expand | "My choice paid off" |
 | Sunrise during a capture | Lighting shift mid-action | Cinematography by physics |
 | Houston quotes Apollo 13 | Random easter-egg comms callouts | Cultural pat on the back |
-| Hot-key combo "G P" | Deploy + auto-pilot in one motion | Speedrun tier |
+| Hot-key combo "D P" | Deploy + auto-pilot in one motion | Speedrun tier |
 
 ---
 

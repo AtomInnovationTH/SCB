@@ -225,6 +225,13 @@ export class NavSphere {
     this.canvas.style.display = visible ? 'block' : 'none';
   }
 
+  /**
+   * Clean public toggle — wraps toggleVisibility().
+   * Delegation 3 (2026-05-31): InputManager Shift+N prefers this over the
+   * internal toggleVisibility() which manages the _hidden flag.
+   */
+  toggle() { this.toggleVisibility(); }
+
   /** Toggle NavSphere visibility */
   toggleVisibility() {
     if (!this.canvas) return;

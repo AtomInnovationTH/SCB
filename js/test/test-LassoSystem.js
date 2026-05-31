@@ -416,3 +416,32 @@ describe('LassoSystem - Regression: targetId=0 is valid', () => {
     });
 
 });
+
+// ─── 7. Delegation 4 (2026-05-31): LASSO_AMMO_CHANGED event contract ──────
+
+describe('LassoSystem — LASSO_AMMO_CHANGED event (Delegation 4)', () => {
+    it('Events.LASSO_AMMO_CHANGED constant exists with expected value', () => {
+        assert.equal(Events.LASSO_AMMO_CHANGED, 'lasso:ammoChanged');
+    });
+
+    it('Constants.LASSO_AMMO_MAX is a positive finite number', () => {
+        assert.isType(Constants.LASSO_AMMO_MAX, 'number');
+        assert.ok(Number.isFinite(Constants.LASSO_AMMO_MAX));
+        assert.ok(Constants.LASSO_AMMO_MAX > 0);
+    });
+
+    it('Events.INVENTORY_LOW constant exists for NetInventoryPanel uplink', () => {
+        assert.equal(Events.INVENTORY_LOW, 'inventory:low');
+    });
+
+    it('Constants.INVENTORY thresholds are sensible', () => {
+        const INV = Constants.INVENTORY;
+        assert.ok(INV, 'Constants.INVENTORY namespace exists');
+        assert.ok(INV.LASSO_LOW_THRESHOLD > INV.LASSO_CRITICAL_THRESHOLD,
+            'lasso low threshold strictly above critical');
+        assert.ok(INV.NETS_LOW_THRESHOLD > INV.NETS_CRITICAL_THRESHOLD,
+            'net low threshold strictly above critical');
+        assert.ok(INV.LOW_HINT_COOLDOWN_MS >= 1000,
+            'cooldown should be at least 1 s to avoid frame-rate spam');
+    });
+});

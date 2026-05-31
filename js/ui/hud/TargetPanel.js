@@ -13,7 +13,7 @@ import { computeTotalSalvageDeltaV } from '../../entities/OrbitalMechanics.js';
 export class TargetPanel {
   constructor(container) {
     this._container = container;
-    this._sortMode = 'deltaV';
+    this._sortMode = 'tpi';  // FIX_PLAN §4: Default to composite TPI sort
     this._armManager = null;
 
     /** Currently-selected target ID (public for coordinator read-access) */
@@ -249,7 +249,7 @@ export class TargetPanel {
     this.panels.targets.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
         <span class="target-section-header" style="color:#00ff88;padding:0;">TRACKED TARGETS <span style="opacity:0.4;font-size:10px;">[Tab]</span></span>
-        <button id="hud-sort-btn" class="target-sort-btn" title="Click to cycle sort">ΔV ↑</button>
+        <button id="hud-sort-btn" class="target-sort-btn" title="Click to cycle sort">TPI ↑</button>
       </div>
       <div id="hud-target-list"></div>
       <div id="hud-untracked-section" class="target-section">
@@ -262,20 +262,21 @@ export class TargetPanel {
       </div>
     `;
 
-    // Sort button handler
+    // Sort button handler — FIX_PLAN §4: 4-way cycle tpi → deltaV → distance → points → tpi
     const sortBtn = this.panels.targets.querySelector('#hud-sort-btn');
     if (sortBtn) {
+      const SORT_CYCLE = ['tpi', 'deltaV', 'distance', 'points'];
+      const SORT_LABELS = {
+        tpi: 'TPI ↑',
+        deltaV: 'ΔV ↑',
+        distance: 'Dist ↑',
+        points: 'Pts ↓',
+      };
       sortBtn.addEventListener('click', () => {
-        if (this._sortMode === 'deltaV') {
-          this._sortMode = 'distance';
-          sortBtn.textContent = 'Dist ↑';
-        } else if (this._sortMode === 'distance') {
-          this._sortMode = 'points';
-          sortBtn.textContent = 'Pts ↓';
-        } else {
-          this._sortMode = 'deltaV';
-          sortBtn.textContent = 'ΔV ↑';
-        }
+        const idx = SORT_CYCLE.indexOf(this._sortMode);
+        const next = SORT_CYCLE[(idx + 1) % SORT_CYCLE.length];
+        this._sortMode = next;
+        sortBtn.textContent = SORT_LABELS[next];
       });
     }
 
@@ -351,13 +352,16 @@ export class TargetPanel {
 
       let targets = [...cachedTargets];
 
-      // Apply sort
+      // FIX_PLAN §4: Sort modes — 'tpi' is already sorted upstream by
+      // getEnhancedTargetList; other modes re-sort the cached list here.
       if (this._sortMode === 'distance') {
         targets.sort((a, b) => a.distanceKm - b.distanceKm);
       } else if (this._sortMode === 'points') {
         targets.sort((a, b) => b.estimatedPoints - a.estimatedPoints);
+      } else if (this._sortMode === 'deltaV') {
+        targets.sort((a, b) => a.deltaV - b.deltaV);
       }
-      // Default 'deltaV' already sorted
+      // 'tpi' mode: already sorted upstream
 
       targets = targets.slice(0, 7);
 

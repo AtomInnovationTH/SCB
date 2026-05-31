@@ -31,6 +31,33 @@ const {
   ARM_STATES,
 } = Constants;
 
+// FIX_PLAN §3: Module-local sets built once — avoids re-allocation per call to getRotationLockTier().
+// Any arm in _HIGH_RISK_ROT_STATES with a live tether → tier 'block' (hard displacement limit).
+// Any arm in _SOFT_ROT_STATES with a live tether   → tier 'soft' (generous displacement limit).
+// DOCKED / RELOADING / EXPENDED / isDetached arms contribute tier 'none'.
+const _HIGH_RISK_ROT_STATES = new Set([
+  ARM_STATES.NETTING,
+  ARM_STATES.GRAPPLED,
+  ARM_STATES.STATION_KEEP,
+  ARM_STATES.REELING,
+  ARM_STATES.HAULING,
+  ARM_STATES.RETURNING,
+  ARM_STATES.DOCKING,
+  ARM_STATES.TANGLED,
+  ARM_STATES.DEORBITING,
+]);
+const _SOFT_ROT_STATES = new Set([
+  ARM_STATES.UNDOCKING,
+  ARM_STATES.LAUNCHING,
+  ARM_STATES.WEB_SHOT,
+  ARM_STATES.TRANSIT,
+  ARM_STATES.APPROACH,
+  ARM_STATES.FISHING,
+  ARM_STATES.TRAWLING,
+  ARM_STATES.SCANNING,
+  ARM_STATES.ABLATING,
+]);
+
 /**
  * Config G: Generate dock positions for the given arm tier (ST-9.2).
  *
@@ -716,6 +743,67 @@ export class ArmManager {
       text: 'All arms recalled',
       priority: 'info',
     });
+  }
+
+  /**
+   * Recall the single deployed daughter closest to the mother.
+   *
+   * Delegation 1 (2026-05-31) onboarding helper for the bare-R rebind:
+   *   • Iterates this.arms.
+   *   • Selects arms in any non-resting state (i.e. NOT DOCKED, EXPENDED,
+   *     RETURNING, DOCKING — those are already on their way home or unable
+   *     to be recalled).
+   *   • Picks the candidate with the smallest world-space distance from
+   *     the mother.
+   *   • Calls the existing recall path used by `recallArm()` / `recallAll()`
+   *     (i.e. `arm.recall()`), which is the same flow `H` triggers.
+   *
+   * No new event constant is introduced — `arm.recall()` already emits the
+   * arm-state-change events the rest of the system listens for.
+   *
+   * @returns {number|null} 0-based index of the recalled arm, or `null` if
+   *   no eligible deployed daughter was found.
+   */
+  recallClosestDeployed() {
+    const S = ARM_STATES;
+    // Any non-resting state — exclude arms already homing or expended.
+    const eligible = [];
+    for (let i = 0; i < this.arms.length; i++) {
+      const a = this.arms[i];
+      if (!a) continue;
+      if (a.state === S.DOCKED) continue;
+      if (a.state === S.EXPENDED) continue;
+      if (a.state === S.RETURNING) continue;
+      if (a.state === S.DOCKING) continue;
+      eligible.push({ idx: i, arm: a });
+    }
+    if (eligible.length === 0) return null;
+
+    // Resolve mother world position once.
+    const motherPos = (this.playerSatellite && (this.playerSatellite.position
+      || (this.playerSatellite.mesh && this.playerSatellite.mesh.position))) || null;
+
+    let bestIdx = eligible[0].idx;
+    let bestDistSq = Infinity;
+    for (const { idx, arm } of eligible) {
+      if (motherPos && arm.position) {
+        const dx = arm.position.x - motherPos.x;
+        const dy = arm.position.y - motherPos.y;
+        const dz = arm.position.z - motherPos.z;
+        const dsq = dx * dx + dy * dy + dz * dz;
+        if (dsq < bestDistSq) {
+          bestDistSq = dsq;
+          bestIdx = idx;
+        }
+      }
+    }
+
+    const target = this.arms[bestIdx];
+    if (target && typeof target.recall === 'function') {
+      target.recall();
+      return bestIdx;
+    }
+    return null;
   }
 
   // ==========================================================================
@@ -1445,6 +1533,38 @@ export class ArmManager {
       a.state !== ARM_STATES.DOCKED &&
       a.state !== ARM_STATES.EXPENDED
     ).length;
+  }
+
+  /**
+   * FIX_PLAN §3: Returns true if ANY arm is deployed on a tether (not docked, not expended, not detached).
+   * Canonical predicate — use this instead of inline state checks.
+   */
+  hasTetheredArm() {
+    const S = Constants.ARM_STATES;
+    return this.arms.some(a =>
+      a.state !== S.DOCKED &&
+      a.state !== S.RELOADING &&
+      a.state !== S.EXPENDED &&
+      !a.isDetached
+    );
+  }
+
+  /**
+   * FIX_PLAN §3: Returns the rotation lock tier based on deployed arm states.
+   * 'block' — hard-block rotation (high-risk: REELING, HAULING, GRAPPLED, STATION_KEEP, NETTING, DOCKING)
+   * 'soft'  — soft-cap rotation to TETHER_ROTATION.SOFT_CAP_RATE (TRANSIT, APPROACH, FISHING, TRAWLING, LAUNCHING, RETURNING, SCANNING, ABLATING)
+   * 'none'  — no constraint (all arms DOCKED/EXPENDED/RELOADING or detached)
+   */
+  getRotationLockTier() {
+    let tier = 'none';
+    for (const arm of this.arms) {
+      if (arm.isDetached) continue;             // free-flying — severed tether, no shear risk
+      const s = arm.state;
+      if (_HIGH_RISK_ROT_STATES.has(s)) return 'block'; // early exit — max severity
+      if (_SOFT_ROT_STATES.has(s)) tier = 'soft';
+      // DOCKED / RELOADING / EXPENDED contribute 'none' — leave tier unchanged
+    }
+    return tier;
   }
 
   /** Get count of expended arms */

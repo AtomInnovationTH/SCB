@@ -383,7 +383,7 @@ export class StatusPanel {
         <div id="cargo-summary" data-hud-group="cargo-group" style="font-size:10px;margin-top:3px;color:#666;display:none;"></div>
         <div id="forge-inline" data-hud-group="cargo-group" style="font-size:10px;margin-top:3px;display:none;">
           <div style="display:flex;align-items:center;gap:4px;">
-            <span style="color:#666;">[K] Forge:</span>
+            <span style="color:#666;">[F4] Forge:</span>
             <span id="forge-inline-status" style="color:#666;">Idle</span>
           </div>
           <div id="forge-progress-inline" style="display:none;margin-top:2px;">

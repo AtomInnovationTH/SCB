@@ -194,6 +194,25 @@ import './test-NetCeremonyTimeScale.js';
 // Q2 Stage 5: First-deploy persistence + end-to-end ceremony wire integrity
 import './test-NetCeremonyFirstDeploy.js';
 
+// FIX_PLAN §3: Rotation lock tier — state-table walk + hasTetheredArm + constant sanity
+import './test-RotationLock.js';
+
+// Delegation 2 (2026-05-31) — Onboarding pipeline (Director + ticker + welcome field)
+import './test-OnboardingDirector.js';
+import './test-HintTicker.js';
+import './test-WelcomeField.js';
+
+// Delegation 3 (2026-05-31) — Part callouts (MotherWireframe, DaughterWireframe, StrutLabels)
+import './test-MotherWireframe.js';
+import './test-DaughterWireframe.js';
+import './test-StrutLabels.js';
+
+// Delegation 4 (2026-05-31) — Net inventory chips (Lasso + Net totals)
+import './test-NetInventoryPanel.js';
+
+// Differential FEEP plume firing — per-nozzle attitude rotation mapping
+import './test-DifferentialThrust.js';
+
 // Flush any pending async describes, then print summary
 await Promise.resolve();
 summary();

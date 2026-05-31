@@ -203,6 +203,60 @@ describe('ArmUnit Net Inventory — empty-click guard (§13 Q5)', () => {
 });
 
 // ══════════════════════════════════════════════════════════════════════════
+// Suite: Delegation 4 — NET_INVENTORY_CHANGED emits from ArmUnit methods
+// ══════════════════════════════════════════════════════════════════════════
+describe('ArmUnit Net Inventory — NET_INVENTORY_CHANGED emits (Delegation 4)', () => {
+
+  it('decrementNetInventory emits NET_INVENTORY_CHANGED', () => {
+    flagOn();
+    try {
+      const arm = makeArm(0);
+      eventBus.clear();
+      const emits = [];
+      eventBus.on(Events.NET_INVENTORY_CHANGED, (d) => emits.push(d));
+      arm.decrementNetInventory();
+      assert.equal(emits.length, 1, 'should emit exactly once');
+      assert.equal(emits[0].source, 'daughter');
+      assert.equal(emits[0].nets, arm.getNetInventory());
+    } finally {
+      flagRestore();
+    }
+  });
+
+  it('setNetInventory emits NET_INVENTORY_CHANGED', () => {
+    flagOn();
+    try {
+      const arm = makeArm(0);
+      eventBus.clear();
+      const emits = [];
+      eventBus.on(Events.NET_INVENTORY_CHANGED, (d) => emits.push(d));
+      arm.setNetInventory(1);
+      assert.equal(emits.length, 1, 'should emit exactly once');
+      assert.equal(emits[0].nets, 1);
+    } finally {
+      flagRestore();
+    }
+  });
+
+  it('reloadNetInventory emits NET_INVENTORY_CHANGED with max count', () => {
+    flagOn();
+    try {
+      const arm = makeArm(0);
+      arm.setNetInventory(0); // exhaust
+      eventBus.clear();
+      const emits = [];
+      eventBus.on(Events.NET_INVENTORY_CHANGED, (d) => emits.push(d));
+      arm.reloadNetInventory();
+      assert.equal(emits.length, 1);
+      assert.equal(emits[0].nets, arm.getNetInventoryMax(),
+        'reload should set count back to max');
+    } finally {
+      flagRestore();
+    }
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
 // Suite: Integration — CAPTURE_NET ON uses real FSM, not 85% dice roll
 // ══════════════════════════════════════════════════════════════════════════
 describe('ArmUnit Net Inventory — FSM integration (§13 Q5)', () => {

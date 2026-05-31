@@ -114,7 +114,23 @@ export const Events = {
    * ST-5.1: Optional `channel` key — one of Constants.COMMS.CHANNELS.
    * If omitted, receiver classifies via source heuristic (default FLAVOR).
    */
+  /**
+   * STRUT_LABELS_SHOW (Delegation 3, 2026-05-31)
+   * Payload: { strutGroups: Array<{pivotGroup, strut, tipNode, azRad}>, durationMs: number }
+   * Emitted by PlayerSatellite.highlightStrutsForBeat(); consumed by StrutLabels.
+   */
+  STRUT_LABELS_SHOW: 'ui:strutLabelsShow',
+
   COMMS_MESSAGE:      'comms:message',
+  /**
+   * INSPECTION_TOGGLE (Delegation 1, 2026-05-31).
+   * Payload: { subject: 'mother'|'debris', targetId?: number|null }
+   * If `subject` is omitted, receivers MUST default to 'mother' for
+   * backward compatibility.  The 'debris' subject is reserved for the
+   * Delegation 3 daughter-piloted wireframe render path; until that ships,
+   * CameraSystem only handles 'mother'.
+   */
+  INSPECTION_TOGGLE:  'inspection:toggle',
   COMMS_SEND:         'comms:send',
   COMMS_SOLAR_STORM:  'comms:solarStorm',
   COMMS_GEO_STORM:    'comms:geoStorm',
@@ -270,6 +286,13 @@ export const Events = {
   LASSO_COOLDOWN_START:   'lasso:cooldownStart',  // { duration } — cooldown timer began (ST-1.3)
   LASSO_COOLDOWN_END:     'lasso:cooldownEnd',    // {} — cooldown expired, ready to fire (ST-1.3)
   LASSO_AMMO_CHANGED:     'lasso:ammoChanged',    // { remaining, max } — UX-3 #7 ammo system
+  /**
+   * Delegation 4 (2026-05-31) — emitted by [`NetInventoryPanel`](js/ui/hud/NetInventoryPanel.js:1)
+   * when total capture-tool stocks cross the low or critical thresholds defined
+   * in [`Constants.INVENTORY`](js/core/Constants.js:1).
+   * Payload: { kind: 'lasso'|'nets'|'both', severity: 'low'|'critical', lasso: { remaining, max }, nets: { total, max } }
+   */
+  INVENTORY_LOW:          'inventory:low',
 
   // === TOOL RECOMMENDATION ===
   TOOL_RECOMMENDED:       'tool:recommended',      // { tool: 'lasso'|'spinner'|'grapple'|'weaver'|'trawl', targetId }
@@ -290,6 +313,36 @@ export const Events = {
   TUTORIAL_SCAN_INPUT:    'tutorial:scanInput',     // S or W key during tutorial
   TUTORIAL_TAB_INPUT:     'tutorial:tabInput',      // Tab during tutorial
   TUTORIAL_DEPLOY_INPUT:  'tutorial:deployInput',   // D key during tutorial
+  /** Delegation 2 onboarding (2026-05-31). Comma / Period strut deploy/stow.
+   *  Payload: {} (fire-and-forget — OnboardingDirector subscribes). */
+  STRUT_DEPLOY_INPUT:     'tutorial:strut_input',
+  /** Delegation 2 onboarding (2026-05-31). Mouse-wheel zoom or +/- zoom.
+   *  Emitted once per wheel tick / +/- keypress regardless of consumer.
+   *  Payload: {} (fire-and-forget). */
+  CAMERA_ZOOM_INPUT:      'tutorial:zoom_input',
+
+  // === ONBOARDING (Delegation 2 — bottom-screen hint ticker + director) ===
+  /** OnboardingDirector posts a hint to the bottom-screen ticker.
+   *  Payload: { id, text, glyph?, keys?:string[], skillId?, duration?, priority?:'normal'|'high' }
+   *  Re-emitting the same `id` while the hint is alive is a no-op (idempotent). */
+  HINT_POSTED:            'hint:posted',
+  /** Trigger fired — fade the bottom-screen hint that matches `id`.
+   *  Payload: { id } */
+  HINT_SATISFIED:         'hint:satisfied',
+  /** First-ever entry into the onboarding pipeline (fresh save).
+   *  Delegation 4 (2026-05-31) — used by CommsSystem to suppress
+   *  non-HOUSTON INFO noise while the player is still being walked
+   *  through the basics, and by HUD panels (NetInventoryPanel) to
+   *  defer their reveal until onboarding completes.
+   *  Payload: {} */
+  ONBOARDING_STARTED:     'onboarding:started',
+  /** Final onboarding beat completed; veteran path is now active.
+   *  Payload: {} */
+  ONBOARDING_COMPLETE:    'onboarding:complete',
+  /** OnboardingDirector escalation — feed a synthetic TeachingMoment directly
+   *  into TeachingSystem's queue (bypasses the once-per-save guard).
+   *  Payload: { id, title, body, duration?, icon? } */
+  TEACHING_MOMENT_FORCE:  'teaching:force',
 
   // ── SKILLS DISCOVERY ──────────────────────────────────────
   SKILL_DISCOVERED:     'skill:discovered',        // { skillId, tier, label }

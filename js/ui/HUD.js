@@ -15,7 +15,12 @@ import { StatusPanel } from './hud/StatusPanel.js';
 import { TargetPanel } from './hud/TargetPanel.js';
 import { CommsPanel } from './hud/CommsPanel.js';
 import { RadialMenu } from './hud/RadialMenu.js';
-import { DebrisWireframe } from './DebrisWireframe.js';
+import { HintTicker } from './hud/HintTicker.js';
+import { NetInventoryPanel } from './hud/NetInventoryPanel.js';
+import { DebrisWireframe }   from './DebrisWireframe.js';
+import { MotherWireframe }   from './MotherWireframe.js';
+import { DaughterWireframe } from './DaughterWireframe.js';
+import { StrutLabels }       from './hud/StrutLabels.js';
 import { updateDriftWarning, updateThrusterBlocks } from '../systems/CoMCalculator.js';
 
 /** Camera view → HUD info-level mapping */
@@ -125,6 +130,20 @@ export class HUD {
     this.radialMenu = null;
     /** @type {DebrisWireframe|null} Integrated wireframe analysis */
     this.debrisWireframe = null;
+    /** @type {MotherWireframe|null} Mothership part-callout panel */
+    this.motherWireframe = null;
+    /** @type {DaughterWireframe|null} Daughter arm part-callout panel */
+    this.daughterWireframe = null;
+    /** @type {StrutLabels|null} Screen-space strut tip labels */
+    this.strutLabels = null;
+    /** @type {NetInventoryPanel|null} Lasso/net inventory chips */
+    this.netInventoryPanel = null;
+    /** @type {boolean} Right column was hidden by MotherWireframe */
+    this._motherHidRightCol = false;
+    /** @type {object|null} Last tracked piloted arm */
+    this._lastPilotedArm = null;
+    /** @type {number} Last piloted arm index */
+    this._lastArmIndex = 0;
     /** @type {HTMLElement|null} Right-column container for wireframe + target list */
     this._rightColumn = null;
     /** @type {number} Cached right-column top position (UX-2 #11 dynamic layout) */
@@ -186,12 +205,32 @@ export class HUD {
     this._rightColumn.appendChild(wireframeContainer);
     this.debrisWireframe = new DebrisWireframe(wireframeContainer);
 
+    // --- MotherWireframe (floating, bottom-right — Delegation 3) ---
+    this.motherWireframe   = new MotherWireframe();
+
+    // --- DaughterWireframe (floating, bottom-left — Delegation 3) ---
+    this.daughterWireframe = new DaughterWireframe();
+
+    // --- StrutLabels (DOM screen-space labels — Delegation 3) ---
+    this.strutLabels = new StrutLabels();
+
     // --- Instantiate sub-panels ---
     this.statusPanel = new StatusPanel(this.container);
     // TargetPanel mounts inside the right column (below wireframe)
     this.targetPanel = new TargetPanel(this._rightColumn);
+    // Delegation 4 (2026-05-31) — lasso + net inventory chips, just below
+    // the target list inside the right column. Subscribes to
+    // LASSO_AMMO_CHANGED and NET_INVENTORY_CHANGED; emits INVENTORY_LOW
+    // (with HOUSTON comms) when totals cross the thresholds defined in
+    // [`Constants.INVENTORY`](js/core/Constants.js:1).  Dependencies are
+    // injected later via setArmManager / setLassoSystem.
+    this.netInventoryPanel = new NetInventoryPanel(this._rightColumn);
     this.commsPanel = new CommsPanel(this.container);
     this.radialMenu = new RadialMenu();
+    // Delegation 2 (2026-05-31): bottom-screen onboarding hint ticker.
+    // Mounted on document.body so the strip sits above the notification slot
+    // (which lives at viewport bottom) regardless of HUD overlay visibility.
+    this.hintTicker = new HintTicker();
 
     // --- Warning Strip (bottom center) ---
     this.panels.warnings = this._createPanel('hud-warnings-panel', {
@@ -416,11 +455,21 @@ export class HUD {
     }
 
     // --- Notification Zone (bottom-center, UX-2 #12) ---
+    // Delegation 4 (2026-05-31) — Browser-playtest Bug 2 fix:
+    // The earlier P0-3 fix lifted this toast from bottom:80 → bottom:132 to
+    // clear the HintTicker (88–124 px), but 132 sat inside the band already
+    // occupied by the salvage-reveal popup ([`HUD.showSalvageReveal()`](js/ui/HUD.js:1569)
+    // at bottom:120) and the warnings panel ([`HUD.panels.warnings`](js/ui/HUD.js:236)
+    // at bottom:170). Players reported the toast crowding those overlays.
+    //
+    // We now drop it to bottom:48 — well below the HintTicker (88) and
+    // clear of every other bottom-center overlay. SkillsPane (bottom:10 left)
+    // is horizontally isolated, so 48 is the simplest clean slot.
     this._notificationZone = document.createElement('div');
     this._notificationZone.id = 'notification-zone';
     Object.assign(this._notificationZone.style, {
       position: 'fixed',
-      bottom: '80px',
+      bottom: '48px',
       left: '50%',
       transform: 'translateX(-50%)',
       textAlign: 'center',
@@ -767,6 +816,43 @@ export class HUD {
         this._hideArmPilotStrip();
       }
     });
+
+    // Delegation 3 (2026-05-31): INSPECTION_TOGGLE — coordinate three wireframe panels
+    // NOTE: MotherWireframe's own handler fires before this one (registered first
+    // in _build()), so _visible has ALREADY been toggled when we reach here.
+    eventBus.on(Events.INSPECTION_TOGGLE, ({ subject } = {}) => {
+      if (subject === 'mother' || subject == null) {
+        if (!this.motherWireframe) return;
+        // Read _visible AFTER MotherWireframe's handler has toggled it
+        const isShowing = this.motherWireframe._visible;
+        if (isShowing) {
+          this._motherHidRightCol = true;
+          if (this._rightColumn) this._rightColumn.style.display = 'none';
+        } else {
+          this._motherHidRightCol = false;
+          if (this._rightColumn && this.visible) {
+            this._rightColumn.style.display = 'flex';
+          }
+        }
+      } else if (subject === 'debris') {
+        // ARM_PILOT: toggle expanded debris-from-daughter mode
+        if (!this._lastPilotedArm) {
+          eventBus.emit(Events.COMMS_MESSAGE, {
+            text: 'Select a target with Tab first.',
+            priority: 'info',
+            source: 'SYSTEM',
+          });
+          return;
+        }
+        if (this.debrisWireframe?._expandedMode) {
+          this.debrisWireframe.clearExpandedMode();
+        } else {
+          const arm        = this._lastPilotedArm;
+          const armTarget  = arm.getApproachTarget?.() ?? arm._approachTarget ?? null;
+          this.debrisWireframe?.setExpandedMode(this._lastArmIndex, armTarget);
+        }
+      }
+    });
   }
 
   // ==========================================================================
@@ -790,6 +876,17 @@ export class HUD {
     this.targetPanel.setArmManager(armManager);
     this.commsPanel.setArmManager(armManager);
     if (this.radialMenu) this.radialMenu.setArmManager(armManager);
+    if (this.netInventoryPanel) this.netInventoryPanel.setArmManager(armManager);
+  }
+
+  /**
+   * Delegation 4 (2026-05-31): Set the LassoSystem reference so the
+   * NetInventoryPanel can poll initial ammo state.  Wired from main.js
+   * after lassoSystem construction.
+   * @param {import('../systems/LassoSystem.js').LassoSystem} lassoSystem
+   */
+  setLassoSystem(lassoSystem) {
+    if (this.netInventoryPanel) this.netInventoryPanel.setLassoSystem(lassoSystem);
   }
 
   /**
@@ -873,7 +970,7 @@ export class HUD {
     }
 
     const { player, debrisField, activeSatellites, targetSelector, sensorSystem,
-            autopilotSystem, cameraSystem } = data;
+            autopilotSystem, cameraSystem, armManager } = data;
     if (!player) return;
 
     // Poll the autopilot phase once per frame. Cheap O(1) no-op when phase
@@ -987,6 +1084,28 @@ export class HUD {
     // Update wireframe animation (handles both ADR self-view and debris targets)
     if (this.debrisWireframe) {
       this.debrisWireframe.update(dt);
+    }
+
+    // Delegation 3 — mother/daughter wireframes + strut labels ─────────────
+    const pilotArm = cameraSystem?.getPilotedArm?.() ?? null;
+    if (pilotArm !== this._lastPilotedArm) {
+      this._lastPilotedArm = pilotArm;
+      if (pilotArm && armManager) {
+        const armList = armManager.getArms?.() || [];
+        const idx = armList.indexOf(pilotArm);
+        this._lastArmIndex = idx >= 0 ? idx : 0;
+      }
+    }
+    if (this.motherWireframe) {
+      if (armManager) this.motherWireframe._armManager = armManager;
+      this.motherWireframe.update(dt);
+    }
+    if (this.daughterWireframe) {
+      this.daughterWireframe.setPilotedArm(pilotArm, this._lastArmIndex);
+      this.daughterWireframe.update(dt);
+    }
+    if (this.strutLabels && cameraSystem?.camera) {
+      this.strutLabels.update(cameraSystem.camera, dt);
     }
 
     // Warning display

@@ -674,13 +674,8 @@ export class AutopilotSystem {
           // The remaining ARRIVED auto-disengage case is cluster / prograde
           // AP (no specific target locked): there's nothing further to do,
           // so an automatic shut-off after 1.5 s is the right UX.
-          const armsActive = this._armManager && this._armManager.arms &&
-            this._armManager.arms.some(a =>
-              a.state === Constants.ARM_STATES.LAUNCHING ||
-              a.state === Constants.ARM_STATES.TRANSIT ||
-              a.state === Constants.ARM_STATES.APPROACH ||
-              a.state === Constants.ARM_STATES.STATION_KEEP
-            );
+          // FIX_PLAN §3: Use canonical predicate — old check missed REELING, HAULING, etc.
+          const armsActive = this._armManager?.hasTetheredArm?.() || false;
           const hasLockedTarget = !!(this._lockedTargetRef && this._lockedTargetRef.alive);
           if (!armsActive && !hasLockedTarget) {
             this._holdTimer += dt;
@@ -1130,6 +1125,37 @@ export class AutopilotSystem {
 
     eventBus.on(Events.TRAWL_START, (data) => {
       this._applyTrawlRecoilCompensation(data);
+    });
+
+    // Delegation 2 (2026-05-31) — "release arrows" coaching warning.
+    // While AP is engaged, arrow-key inputs disengage by design (see InputManager).
+    // New onboarding pilots routinely fight that by mashing arrows.  Count
+    // arrow-key events within a 2 s rolling window; once we cross 3 within
+    // window emit a one-shot COMMS warning.  Reset on AP disengage.
+    this._arrowInterferenceCount = 0;
+    this._arrowInterferenceFirstAt = 0;
+    this._warnedAboutArrows = false;
+    eventBus.on(Events.TUTORIAL_ARROW_INPUT, () => {
+      if (!this._engaged) return;
+      const now = Date.now();
+      if (now - (this._arrowInterferenceFirstAt || 0) > 2000) {
+        this._arrowInterferenceFirstAt = now;
+        this._arrowInterferenceCount = 1;
+        return;
+      }
+      this._arrowInterferenceCount++;
+      if (this._arrowInterferenceCount >= 3 && !this._warnedAboutArrows) {
+        this._warnedAboutArrows = true;
+        eventBus.emit(Events.COMMS_MESSAGE, {
+          source: 'SPACECRAFT', channel: 'CMD', priority: 'warning',
+          text: 'Release arrow keys — autopilot has control.',
+        });
+      }
+    });
+    eventBus.on(Events.AUTOPILOT_DISENGAGE, () => {
+      this._arrowInterferenceCount = 0;
+      this._arrowInterferenceFirstAt = 0;
+      this._warnedAboutArrows = false;
     });
 
   }

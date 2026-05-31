@@ -195,11 +195,12 @@ export class InputManager {
         console.log('[AUTO-TARGET] handleCaptureAdvance: candidates=%d', targets.length);
 
         if (targets.length > 0) {
-          const next = targets[0]; // Best target (sorted by deltaV)
+          // FIX_PLAN §4: best target = lowest TPI (composite score)
+          const next = targets[0];
           const debris = d.debrisField.getDebrisById(next.id);
           if (debris) {
-            console.log('[AUTO-TARGET] handleCaptureAdvance: selecting next target id=%s type=%s deltaV=%s',
-              next.id, debris.type, next.deltaV?.toFixed(3));
+            console.log('[AUTO-TARGET] handleCaptureAdvance: selecting next target id=%s type=%s tpi=%s deltaV=%s',
+              next.id, debris.type, next.tpi?.toFixed(3), next.deltaV?.toFixed(3));
             d.targetSelector.setTarget(debris, { distanceKm: next.distanceKm, deltaV: next.deltaV });
             // UI updates in separate try/catch — must not prevent target selection
             try {
@@ -341,6 +342,14 @@ export class InputManager {
    * @private
    */
   _handleWheel(e) {
+    // Delegation 2 (2026-05-31) — emit CAMERA_ZOOM_INPUT for the
+    // OnboardingDirector regardless of mode.  The actual zoom action is still
+    // owned by CameraSystem (chase / inspection) or the SK orbit controls
+    // below.  Fire-and-forget; no preventDefault here.
+    if (this._deps) {
+      eventBus.emit(Events.CAMERA_ZOOM_INPUT);
+    }
+
     if (!this.armPilotMode) return;
     const d = this._deps;
     const skArm = d?.cameraSystem?.getPilotedArm?.();
@@ -386,12 +395,14 @@ export class InputManager {
     // PR 6 / P3.13: Audio unlock on first keydown gesture
     this._tryAudioUnlock();
 
-    // Bare KeyI is dropped to defeat phantom keystrokes from macOS
-    // Voice Control / dictation ASR misrecognizing in-game audio as 'i'
-    // (debug session 2026-05-10 — events arrive with `isTrusted: true`
-    // because ASR injects through the OS HID layer). Inspection mode
-    // now requires Shift+I (handled in the KeyI case below).
-    if (e.code === 'KeyI' && !e.shiftKey) {
+    // Anti-ASR guard for macOS Voice Control phantom "i" keystrokes.
+    // Default OFF now that bare I = Inspection (Delegation 1 onboarding
+    // hotkey rebind, 2026-05-31).  Re-enable via Constants.INPUT.SUPPRESS_BARE_I
+    // if dictation regressions reappear.  Historical context: events arrived
+    // with `isTrusted: true` because ASR injects through the OS HID layer
+    // (debug session 2026-05-10).
+    if (Constants.INPUT?.SUPPRESS_BARE_I === true
+        && e.code === 'KeyI' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
       return;
     }
 
@@ -412,13 +423,21 @@ export class InputManager {
       // 2026-05-15 polish task 3).
       const _skArmForGuard = this.armPilotMode && d.cameraSystem?.getPilotedArm?.();
       const _inSkForGuard  = _skArmForGuard && _skArmForGuard.state === Constants.ARM_STATES.STATION_KEEP;
+      // FIX_PLAN §3: Use lockTier for AP-disengage guard — suppress on both soft and block tiers.
+      const _lockTierForAP = d.armManager?.getRotationLockTier?.() ?? 'none';
       if (d.autopilotSystem && d.autopilotSystem.engaged && !_inSkForGuard) {
-        console.warn('[DBG-ARROW-AP] Arrow key disengaging autopilot!',
-          'code=', e.code,
-          'armPilotMode=', this.armPilotMode,
-          'cameraView=', d.cameraSystem?.getView?.(),
-          'pilotedArmState=', d.cameraSystem?.getPilotedArm?.()?.state);
-        d.autopilotSystem.disengage('ARROW_INPUT');
+        if (_lockTierForAP === 'block' || _lockTierForAP === 'soft') {
+          // Daughter tethered — preserve AP, emit throttled COMMS notice
+          this._maybeEmitTetherLockMsg();
+          console.log('[DBG-ARROW-AP] AP-disengage blocked: daughter tethered (tier=' + _lockTierForAP + ')');
+        } else {
+          console.warn('[DBG-ARROW-AP] Arrow key disengaging autopilot!',
+            'code=', e.code,
+            'armPilotMode=', this.armPilotMode,
+            'cameraView=', d.cameraSystem?.getView?.(),
+            'pilotedArmState=', d.cameraSystem?.getPilotedArm?.()?.state);
+          d.autopilotSystem.disengage('ARROW_INPUT');
+        }
       } else if (_inSkForGuard && d.autopilotSystem && d.autopilotSystem.engaged) {
         // Verbose-but-useful: confirm the guard fired so future regressions
         // are easy to spot. keydown is one-shot, no throttle needed.
@@ -497,19 +516,21 @@ export class InputManager {
       }
     }
 
-    // V-7: Launch ceremony — ESC aborts to CHASE, G deploys another arm,
-    // Space/Enter skip ahead to ARM_PILOT. All other keys are blocked
-    // so the player watches the daughter deploy without accidental skip.
+    // V-7: Launch ceremony — ESC aborts to CHASE, D deploys another arm,
+    // Space/Enter skip ahead to ARM_PILOT. All other keys are blocked so the
+    // player watches the daughter deploy without accidental skip.
+    // Delegation 1 (2026-05-31): "deploy another" key migrated from G → D
+    // because the primary deploy verb moved to bare D.
     if (d.cameraSystem?._launchCeremony?.active) {
       if (e.code === 'Escape') {
         d.cameraSystem.skipLaunchCeremony(false); // return to CHASE
         e.preventDefault();
         return;
       }
-      if (e.code === 'KeyG') {
-        // Second G press: skip ceremony, new deploy will start its own ceremony
+      if (e.code === 'KeyD' && !e.ctrlKey && !e.shiftKey && !e.metaKey) {
+        // Second D press: skip ceremony, new deploy will start its own ceremony
         d.cameraSystem.skipLaunchCeremony(false);
-        // Fall through to KeyG handler to deploy new arm
+        // Fall through to KeyD handler to deploy new arm
       } else if (e.code === 'Space' || e.code === 'Enter') {
         d.cameraSystem.skipLaunchCeremony(false); // skip to CHASE (ARM_PILOT via V key)
         e.preventDefault();
@@ -543,7 +564,7 @@ export class InputManager {
       case 'Tab':
         if (isGameplay) {
           try {
-            // Use same target list as HUD (tracked debris sorted by delta-V)
+            // FIX_PLAN §4: Use same target list as HUD (sorted upstream by TPI)
             this.nearbyTargets = d.debrisField.getEnhancedTargetList(
               d.player.getPosition(), d.player.getOrbitalElements()
             );
@@ -651,14 +672,31 @@ export class InputManager {
         }
         break;
 
-      // Inspection camera toggle (Shift+I key) — bare 'i' dropped above to
-      // defeat ASR/dictation phantom keystrokes (debug session 2026-05-10).
+      // Inspection camera toggle (bare I = primary, Shift+I = muscle-memory
+      // alias).  Delegation 1 onboarding rebind (2026-05-31):
+      //   • Mother mode → focus mother spacecraft wireframe (existing).
+      //   • ARM_PILOT mode → focus debris wireframe (subject='debris').
+      // TODO (Delegation 3): wire daughter/debris-from-daughter wireframe
+      // rendering in DebrisWireframe + CameraSystem when subject==='debris'.
       case 'KeyI':
-        if (isGameplay && d.cameraSystem && !this.armPilotMode && !e.repeat && e.shiftKey) {
-          if (d.cameraSystem.currentView === 'INSPECTION') {
-            d.cameraSystem.exitInspection();
-          } else {
-            d.cameraSystem.enterInspection();
+        if (isGameplay && d.cameraSystem && !e.repeat) {
+          const inspectSubject = this.armPilotMode ? 'debris' : 'mother';
+          const inspectTargetId = d.targetSelector?.getActiveTarget?.()?.id ?? null;
+          // Backward-compatible: existing handlers default subject='mother'
+          // when payload is omitted.  Delegation 3 will pick up subject='debris'.
+          eventBus.emit(Events.INSPECTION_TOGGLE, {
+            subject: inspectSubject,
+            targetId: inspectTargetId,
+          });
+          // Mother inspection still flows through the existing CameraSystem
+          // toggle — Delegation 3 will replace this branch with subject-aware
+          // routing once the daughter wireframe render path lands.
+          if (inspectSubject === 'mother') {
+            if (d.cameraSystem.currentView === 'INSPECTION') {
+              d.cameraSystem.exitInspection();
+            } else {
+              d.cameraSystem.enterInspection();
+            }
           }
           d.audioSystem?.playClick();
         }
@@ -698,38 +736,81 @@ export class InputManager {
         }
         break;
 
-      // R key — Reel-in (zero-fuel strut motor).
-      // 2026-05-28 (Item 9): R used to cycle the forge (with an opt-in
-      // SK→reel branch nested inside).  Player intent at the F2 stage was
-      // ambiguous: "did R fire the forge or recall the arm?".  R is now
-      // dedicated to the reel-in action; the forge moved to the K key
-      // ("Kiln"; updated in Constants.SKILLS.manage_forge + StatusPanel
-      // inline label + README key-bindings table at the same time).
+      // R key — context-sensitive Reel-in / recall / autopilot-abort.
+      // Delegation 1 (2026-05-31) onboarding rebind — three branches:
+      //   (1) ARM_PILOT (piloting a daughter)        → reel-in piloted daughter
+      //   (2) Autopilot engaged (orbital / approach) → abort autopilot
+      //   (3) Otherwise (ORBITAL_VIEW w/ deployed)   → recall closest deployed daughter
+      // Forge moved to F4 (was K) the same sprint; K is now free.
       case 'KeyR':
         if (isGameplay) {
-          const _pilotArmR = this.armPilotMode && d.cameraSystem?.getPilotedArm?.();
-          if (_pilotArmR && _pilotArmR.state === Constants.ARM_STATES.STATION_KEEP) {
-            _pilotArmR.reelFromStationKeep();
-            d.audioSystem.playClick();
-          } else {
-            // Not in ARM_PILOT-SK: provide a hint so the player understands
-            // why R did nothing.  Avoid console noise.
-            d.audioSystem.playClick();
+          e.preventDefault();
+          // (1) ARM_PILOT: reel piloted daughter (with or without debris)
+          if (this.armPilotMode) {
+            const pilotArmR = d.cameraSystem?.getPilotedArm?.();
+            if (pilotArmR && pilotArmR.state === Constants.ARM_STATES.STATION_KEEP) {
+              pilotArmR.reelFromStationKeep();
+              d.audioSystem?.playClick();
+            } else {
+              // Outside SK while piloting — provide a hint
+              d.audioSystem?.playClick();
+              eventBus.emit(Events.COMMS_MESSAGE, {
+                source: 'SPACECRAFT', channel: 'CMD',
+                text: 'Reel-in only available from station-keep.',
+                priority: 'info',
+              });
+            }
+            break;
+          }
+          // (2) Autopilot engaged → abort
+          if (d.autopilotSystem && d.autopilotSystem.engaged) {
+            // No dedicated AUTOPILOT_ABORT event — call disengage() directly
+            // (same path as A-key toggle when AP is on).  See Events.js note.
+            d.autopilotSystem.disengage('MANUAL_REEL');
+            d.audioSystem?.playClick();
             eventBus.emit(Events.COMMS_MESSAGE, {
-              text: 'Reel-in only available while piloting an arm in station-keep',
+              source: 'SPACECRAFT', channel: 'CMD',
+              text: 'Autopilot aborted by command.',
               priority: 'info',
             });
+            break;
           }
-          e.preventDefault();
+          // (3) ORBITAL_VIEW with deployed daughter(s) → recall closest
+          const am = d.armManager;
+          if (am && typeof am.recallClosestDeployed === 'function') {
+            const recalled = am.recallClosestDeployed();
+            if (recalled !== null && recalled !== undefined) {
+              d.audioSystem?.playClick();
+              eventBus.emit(Events.COMMS_MESSAGE, {
+                source: 'SPACECRAFT', channel: 'CMD',
+                text: `Recalling Daughter ${recalled + 1}.`,
+                priority: 'info',
+              });
+            } else {
+              // Nothing to do — gentle hint
+              d.audioSystem?.playClick();
+              eventBus.emit(Events.COMMS_MESSAGE, {
+                source: 'SPACECRAFT', channel: 'CMD',
+                text: 'No deployed daughters to recall.',
+                priority: 'info',
+              });
+            }
+          }
         }
         break;
 
-      // K key — Forge toggle (was R prior to 2026-05-28 Item 9).
-      // Mnemonic: "Kiln" — the EML furnace.  Cycles OFF → REFINE → PROPELLANT → OFF.
+      // K key — freed by Delegation 1 (2026-05-31).  Forge moved to F4.
+      // Reserved for future onboarding action; bare K is currently a no-op.
       case 'KeyK':
+        // intentionally no-op (reserved)
+        break;
+
+      // F4 — Forge (Kiln) toggle.  Moved from KeyK by Delegation 1 (2026-05-31)
+      // so K could be freed for onboarding work.  Cycles OFF → REFINE → PROPELLANT → OFF.
+      case 'F4':
         if (isGameplay) {
           eventBus.emit(Events.FORGE_TOGGLE);
-          d.audioSystem.playClick();
+          d.audioSystem?.playClick();
           e.preventDefault();
         }
         break;
@@ -802,43 +883,16 @@ export class InputManager {
         }
         break;
 
-      // Deploy V3 Octopus arm (G key) / Trawl net (Shift+G)
+      // G key — Shift+G = Trawl start.  Bare G freed by Delegation 1
+      // (2026-05-31): the deploy-daughter + launch-ceremony flow moved to
+      // KeyD so D is the primary onboarding "deploy" verb.  Bare G is a
+      // no-op (reserved).
       case 'KeyG':
-        if (isGameplay) {
-          if (e.shiftKey) {
-            // Deploy trawl net (Phase 6)
-            eventBus.emit(Events.TRAWL_START);
-          } else {
-            // FIX: If already in ARM_PILOT mode, exit it first so the new arm
-            // gets its own ceremony with smooth camera transition + strut aiming.
-            // Previously, the ceremony block was skipped when armPilotMode was true,
-            // causing the camera to stay on the old arm and the new strut to never
-            // get aimed toward the target (Bug 1 regression + Bug 2).
-            if (this.armPilotMode) {
-              this._exitArmPilotCamera();
-            }
-            d.deployArm();
-            // S2.3: Gradual daughter launch transition
-            // Auto-enter ARM PILOT after a longer delay so player notices the
-            // arm detach and watches it begin its journey before camera follows.
-            // V-7: Launch ceremony replaces setTimeout camera transition (§14.8.11.12)
-            if (d.armManager && !this.armPilotMode) {
-              const deployed = d.armManager.arms.filter(a =>
-                a.state !== 'DOCKED' && a.state !== 'EXPENDED' &&
-                a.state !== 'RETURNING' && a.state !== 'DOCKING'
-              );
-              if (deployed.length > 0) {
-                const arm = deployed[deployed.length - 1];
-                eventBus.emit(Events.COMMS_MESSAGE, {
-                  text: `Arm ${arm.id} deployed — tracking…`,
-                  priority: 'info',
-                });
-                eventBus.emit(Events.LAUNCH_CEREMONY_START, { arm });
-              }
-            }
-          }
+        if (isGameplay && e.shiftKey) {
+          eventBus.emit(Events.TRAWL_START);
           e.preventDefault();
         }
+        // bare G intentionally falls through with no action
         break;
 
       // Toggle EDT — Electrodynamic Tether (Y key, Phase 6)
@@ -857,7 +911,12 @@ export class InputManager {
         }
         break;
 
-      // D key: Deploy recommended tool (normal); Ctrl+D = debug; Ctrl+Shift+D = deorbit
+      // D key — Delegation 1 (2026-05-31) onboarding rebind:
+      //   Bare D in orbital view → Deploy DAUGHTER + start launch ceremony
+      //   (moved here from KeyG so D = primary "deploy" verb).
+      //   Tool Deploy moved to KeyT (smart context).
+      //   Ctrl+D       → debug overlay (unchanged)
+      //   Ctrl+Shift+D → deorbit sacrifice (unchanged)
       case 'KeyD':
         if (e.ctrlKey && e.shiftKey && isGameplay) {
           e.preventDefault();
@@ -869,8 +928,29 @@ export class InputManager {
           if (this.armPilotMode) {
             // WASD thrust handled in processInput — do nothing in keydown
           } else {
-            eventBus.emit(Events.TOOL_DEPLOY);
+            // If already in ARM_PILOT mode, exit it first so the new arm
+            // gets its own ceremony with smooth camera transition + strut
+            // aiming (preserves the V-7 ceremony invariant moved from KeyG).
+            if (this.armPilotMode) {
+              this._exitArmPilotCamera();
+            }
+            d.deployArm();
+            // Notify tutorial / discovery before the ceremony for ordering.
             eventBus.emit(Events.TUTORIAL_DEPLOY_INPUT);
+            if (d.armManager) {
+              const deployed = d.armManager.arms.filter(a =>
+                a.state !== 'DOCKED' && a.state !== 'EXPENDED' &&
+                a.state !== 'RETURNING' && a.state !== 'DOCKING'
+              );
+              if (deployed.length > 0) {
+                const arm = deployed[deployed.length - 1];
+                eventBus.emit(Events.COMMS_MESSAGE, {
+                  text: `Arm ${arm.id} deployed — tracking…`,
+                  priority: 'info',
+                });
+                eventBus.emit(Events.LAUNCH_CEREMONY_START, { arm });
+              }
+            }
             d.audioSystem?.playClick();
             e.preventDefault();
           }
@@ -1002,12 +1082,92 @@ export class InputManager {
         }
         break;
 
-      // Toggle NavSphere (N key)
+      // N key — Delegation 1 (2026-05-31) onboarding rebind:
+      //   ARM_PILOT mode → Deploy net / capture (alias of F; F-key remains
+      //     the contextual smart button at line ~934).
+      //   Mother mode    → Lasso / Net fire (Space remains an alternate
+      //     alias; see Note 1 in delegation spec).
+      //   NavSphere visibility toggle was on N before this sprint — moved
+      //     to OFF (no replacement binding); use the gear menu / settings
+      //     when that lands.  TODO (Delegation 2): bottom ticker may add
+      //     a "Toggle NavSphere" reminder if the feature is missed.
       case 'KeyN':
-        if (d.navSphere) {
-          d.navSphere.toggleVisibility();
-          d.audioSystem.playClick();
+        if (!isGameplay) break;
+        // Delegation 2 (2026-05-31): Shift+N → toggle NavSphere visibility.
+        // Bare N is reserved for lasso/net (Delegation 1).  No conflict because
+        // the lasso branch below also lives in the same `case 'KeyN':`.
+        if (e.shiftKey && d.navSphere) {
+          e.preventDefault();
+          d.navSphere.toggle();  // NavSphere.toggle() added Delegation 3 (2026-05-31)
+          d.audioSystem?.playClick();
+          break;
         }
+        if (this.armPilotMode && d.cameraSystem) {
+          // (1) DAUGHTER alias for F-key net deploy
+          e.preventDefault();
+          const skArmN = d.cameraSystem.getPilotedArm?.();
+          if (skArmN && skArmN.state === Constants.ARM_STATES.STATION_KEEP) {
+            skArmN.captureFromStationKeep();
+            d.audioSystem?.playClick();
+            break;
+          }
+          const pilotArmN = d.cameraSystem.getPilotedArm?.();
+          if (pilotArmN && (pilotArmN.state === 'TRANSIT' || pilotArmN.state === 'APPROACH')) {
+            const captureTarget = pilotArmN.target
+              || this._findNearestDebrisToArm(pilotArmN, d.debrisField);
+            if (captureTarget) {
+              if (!pilotArmN.target) pilotArmN.target = captureTarget;
+              if (!pilotArmN.manualNetDeploy()) {
+                d.audioSystem?.playClick();
+              }
+            } else {
+              d.audioSystem?.playClick();
+              eventBus.emit(Events.COMMS_MESSAGE, {
+                text: 'No debris in capture range',
+                priority: 'warning',
+              });
+            }
+          } else if (pilotArmN) {
+            d.audioSystem?.playClick();
+          }
+          break;
+        }
+        // (2) MOTHER lasso fire — mirrors Space case at ~1068 below.
+        // Space remains an alternate alias (Delegation 1 Note 1 — newbie-
+        // friendly "default action"); Delegation 2 will repurpose Space.
+        if (d.lassoSystem) {
+          e.preventDefault();
+          if (!this._lassoWindingUp && !d.lassoSystem.active) {
+            this._lassoWindingUp = true;
+            d.audioSystem?.playClick();
+            const windupMs = (Constants.LASSO_CAST_WINDUP || 0.15) * 1000;
+            this._lassoWindupTimeout = setTimeout(() => {
+              this._lassoWindingUp = false;
+              this._lassoWindupTimeout = null;
+              const vel = d.player.getVelocity();
+              const velDir = new THREE.Vector3(vel.x, vel.y, vel.z);
+              if (velDir.lengthSq() > 0) velDir.normalize();
+              const activeTarget = d.targetSelector ? d.targetSelector.getActiveTarget() : null;
+              d.lassoSystem.fire(
+                d.player.getPosition(),
+                d.debrisField,
+                velDir,
+                activeTarget,
+              );
+            }, windupMs);
+          }
+        }
+        break;
+
+      // J key — Journal / Skills (Discoveries) toggle.  Delegation 1
+      // (2026-05-31) onboarding rebind: SkillsPane previously listened on
+      // bare K via its own document-level handler; that listener now keys
+      // on KeyJ (see SkillsPane._onKeyDown).  This case exists so InputManager
+      // explicitly claims J for the journal so the rebind is discoverable
+      // when grepping for "case 'Key" mappings.  The actual toggle is owned
+      // by SkillsPane.toggleExpanded() — we leave the no-op here as a marker.
+      case 'KeyJ':
+        // Toggle handled by SkillsPane._onKeyDown (document listener).
         break;
 
       // Comma (,): Stow all struts gradually (α → 0). Debris Map prev if map is open.
@@ -1022,6 +1182,8 @@ export class InputManager {
             }
           }
           d.audioSystem?.playClick();
+          // Delegation 2 onboarding (2026-05-31): notify the OnboardingDirector.
+          eventBus.emit(Events.STRUT_DEPLOY_INPUT);
           e.preventDefault();
         } else if (isGameplay && d.debrisMap) {
           d.debrisMap.selectPrev();
@@ -1039,6 +1201,8 @@ export class InputManager {
             }
           }
           d.audioSystem?.playClick();
+          // Delegation 2 onboarding (2026-05-31): notify the OnboardingDirector.
+          eventBus.emit(Events.STRUT_DEPLOY_INPUT);
           e.preventDefault();
         } else if (isGameplay && d.debrisMap) {
           d.debrisMap.selectNext();
@@ -1046,16 +1210,35 @@ export class InputManager {
         }
         break;
 
-      // Cycle fuel type (T key) — dual-metal FEEP thruster (Phase 4)
+      // T key — Tool Deploy (smart context).  Delegation 1 (2026-05-31)
+      // onboarding rebind: T was FUEL_CYCLE; that emit moved to F5 (below)
+      // so the bare alpha keys remain available for onboarding verbs.
       case 'KeyT':
+        if (isGameplay && !e.repeat) {
+          if (this.armPilotMode) {
+            // Arm-pilot consumes T for nothing — leave to processInput.
+          } else {
+            eventBus.emit(Events.TOOL_DEPLOY);
+            d.audioSystem?.playClick();
+            e.preventDefault();
+          }
+        }
+        break;
+
+      // F5 — FEEP fuel cycle (Propellant).  Moved from KeyT by Delegation 1
+      // (2026-05-31).  Dual-metal FEEP thruster (Phase 4).
+      case 'F5':
         if (isGameplay) {
           eventBus.emit(Events.FUEL_CYCLE);
-          d.audioSystem.playClick();
+          d.audioSystem?.playClick();
           e.preventDefault();
         }
         break;
 
-      // Space — deploy net in ARM PILOT mode, or fire lasso otherwise
+      // Space — deploy net in ARM PILOT mode, or fire lasso otherwise.
+      // Delegation 2 (2026-05-31): in ORBITAL_VIEW, the OnboardingDirector
+      // gets first crack at intercepting Space as a "smart default" —
+      // pressing Space dispatches the active hint's primary key.
       case 'Space':
         if (this.armPilotMode && d.cameraSystem) {
           e.preventDefault(); // always prevent scroll when in arm pilot
@@ -1074,6 +1257,11 @@ export class InputManager {
               });
             }
           }
+        } else if (isGameplay && currentState === GameStates.ORBITAL_VIEW
+            && d.onboardingDirector && typeof d.onboardingDirector.pressActiveHint === 'function'
+            && d.onboardingDirector.pressActiveHint(this)) {
+          // Smart default consumed the press — original lasso path skipped.
+          e.preventDefault();
         } else if (isGameplay && d.lassoSystem) {
           // S4: Lasso cast windup — brief delay before firing for "cast" feel
           e.preventDefault();
@@ -1237,6 +1425,10 @@ export class InputManager {
           e.preventDefault();
           // Phase C: Notify tutorial of throttle change
           eventBus.emit(Events.TUTORIAL_THROTTLE_INPUT);
+          // Delegation 2 onboarding (2026-05-31): +/- doubles as a zoom verb
+          // for the camera-zoom beat (mouse wheel is canonical, but the
+          // keyboard alias should also satisfy the beat).
+          eventBus.emit(Events.CAMERA_ZOOM_INPUT);
         }
         break;
       case 'Minus':       // - key
@@ -1251,6 +1443,8 @@ export class InputManager {
           e.preventDefault();
           // Phase C: Notify tutorial of throttle change
           eventBus.emit(Events.TUTORIAL_THROTTLE_INPUT);
+          // Delegation 2 onboarding (2026-05-31): see Equal case above.
+          eventBus.emit(Events.CAMERA_ZOOM_INPUT);
         }
         break;
 
@@ -1587,11 +1781,210 @@ export class InputManager {
     const _inStationKeep = _skGuardArm && _skGuardArm.state === Constants.ARM_STATES.STATION_KEEP;
 
     if (!apEngaged && !_inStationKeep) {
-      const rotRate = Constants.SATELLITE_ROTATION_RATE; // rad/s — tunable in Constants.js
-      if (this.keys['ArrowUp'])    { d.player.rotatePitch( rotRate * dt); }
-      if (this.keys['ArrowDown'])  { d.player.rotatePitch(-rotRate * dt); }
-      if (this.keys['ArrowLeft'])  { d.player.rotateYaw( rotRate * dt); }
-      if (this.keys['ArrowRight']) { d.player.rotateYaw(-rotRate * dt); }
+      // FIX_PLAN §3: Tether-aware rotation with exponential spring resistance.
+      //   effectiveRate = baseRate · (1 − |θ|/θ_max)^STIFFNESS    (when pushing toward limit)
+      //   effectiveRate = baseRate                                 (when relieving toward neutral)
+      // On no-input frames, displacement bleeds toward 0 at SPRINGBACK_RATE.
+      const tier     = d.armManager?.getRotationLockTier?.() || 'none';
+      const baseRate = Constants.SATELLITE_ROTATION_RATE;
+
+      if (tier === 'none') {
+        // Free flight — reset spring bookkeeping so next deployment starts at neutral
+        this._tetherPitchDisp = 0;
+        this._tetherYawDisp   = 0;
+        if (this.keys['ArrowUp'])    { d.player.rotatePitch( baseRate * dt); d.player.setThrusterFire('pitch',  1, 1); }
+        if (this.keys['ArrowDown'])  { d.player.rotatePitch(-baseRate * dt); d.player.setThrusterFire('pitch', -1, 1); }
+        if (this.keys['ArrowLeft'])  { d.player.rotateYaw( baseRate * dt);  d.player.setThrusterFire('yaw',    1, 1); }
+        if (this.keys['ArrowRight']) { d.player.rotateYaw(-baseRate * dt);  d.player.setThrusterFire('yaw',   -1, 1); }
+      } else {
+        const TR         = Constants.TETHER_ROTATION;
+        const maxDisp    = (tier === 'block') ? TR.MAX_DISPLACEMENT_BLOCK : TR.MAX_DISPLACEMENT_SOFT;
+        const springback = (tier === 'block') ? TR.SPRINGBACK_RATE_BLOCK   : TR.SPRINGBACK_RATE_SOFT;
+        const stiffness  = TR.STIFFNESS_EXPONENT;
+
+        // Lazy-init per-axis displacement bookkeeping
+        if (this._tetherPitchDisp === undefined) this._tetherPitchDisp = 0;
+        if (this._tetherYawDisp   === undefined) this._tetherYawDisp   = 0;
+
+        // Net per-axis input direction (+1 / 0 / -1)
+        let pitchIn = 0, yawIn = 0;
+        if (this.keys['ArrowUp'])    pitchIn += 1;
+        if (this.keys['ArrowDown'])  pitchIn -= 1;
+        if (this.keys['ArrowLeft'])  yawIn   += 1;
+        if (this.keys['ArrowRight']) yawIn   -= 1;
+
+        // Closure: compute (rotation delta, new displacement) for one axis
+        const applyAxis = (disp, input) => {
+          if (input === 0) {
+            // No input → spring-back decay toward 0
+            const decay = springback * dt;
+            if (Math.abs(disp) <= decay) return { delta: 0, newDisp: 0 };
+            return { delta: 0, newDisp: disp - Math.sign(disp) * decay };
+          }
+          // Input present — relief or resistance?
+          const movingTowardCenter = (disp !== 0) && (Math.sign(disp) !== input);
+          let rate;
+          if (movingTowardCenter) {
+            rate = baseRate; // unconstrained re-centering
+          } else {
+            const norm = Math.min(1, Math.abs(disp) / maxDisp);
+            rate = baseRate * Math.pow(1 - norm, stiffness);
+          }
+          const delta   = input * rate * dt;
+          const newDisp = Math.max(-maxDisp, Math.min(maxDisp, disp + delta));
+          return { delta, newDisp };
+        };
+
+        const pitchRes = applyAxis(this._tetherPitchDisp, pitchIn);
+        const yawRes   = applyAxis(this._tetherYawDisp,   yawIn);
+        if (pitchRes.delta !== 0) {
+          d.player.rotatePitch(pitchRes.delta);
+          // Differential plume: magnitude = fraction of baseRate actually applied (spring reduces it)
+          const pMag = dt > 0 ? Math.min(1, Math.abs(pitchRes.delta) / (baseRate * dt)) : 0;
+          d.player.setThrusterFire('pitch', Math.sign(pitchRes.delta), pMag);
+        }
+        if (yawRes.delta !== 0) {
+          d.player.rotateYaw(yawRes.delta);
+          const yMag = dt > 0 ? Math.min(1, Math.abs(yawRes.delta) / (baseRate * dt)) : 0;
+          d.player.setThrusterFire('yaw', Math.sign(yawRes.delta), yMag);
+        }
+        this._tetherPitchDisp = pitchRes.newDisp;
+        this._tetherYawDisp   = yawRes.newDisp;
+
+        // Comms warning — only when actively pushing into a saturated limit
+        const satThresh     = TR.SATURATION_THRESHOLD;
+        const pitchSat      = Math.abs(this._tetherPitchDisp) >= maxDisp * satThresh;
+        const yawSat        = Math.abs(this._tetherYawDisp)   >= maxDisp * satThresh;
+        const fightingPitch = pitchIn !== 0 && Math.sign(this._tetherPitchDisp) === pitchIn;
+        const fightingYaw   = yawIn   !== 0 && Math.sign(this._tetherYawDisp)   === yawIn;
+        if ((pitchSat && fightingPitch) || (yawSat && fightingYaw)) {
+          this._maybeEmitTetherLockMsg();
+        }
+      }
     }
+  }
+
+  /**
+   * FIX_PLAN §3: Rate-limited COMMS warning for tether rotation lock.
+   * Called both from the AP-disengage guard (_handleKeyDown) and from the
+   * spring-saturation check (processInput). Shared throttle state ensures
+   * at most one message per COMMS_THROTTLE_MS regardless of call site.
+   */
+  _maybeEmitTetherLockMsg() {
+    const now = performance.now();
+    if (now - (this._lastTetherRotWarnMs ?? 0) < Constants.TETHER_ROTATION.COMMS_THROTTLE_MS) return;
+    this._lastTetherRotWarnMs = now;
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      priority: 'warning',
+      channel:  'FLIGHT',
+      text:     'ATTITUDE LOCKED — daughter under tether load',
+    });
+  }
+
+  // ==========================================================================
+  // Delegation 2 (2026-05-31) — public helpers for OnboardingDirector.pressActiveHint().
+  // Each method performs the *same* game-side effect that the corresponding
+  // raw key handler would.  We don't synthesize KeyboardEvents because every
+  // listener that matters lives in this file — calling the action directly is
+  // simpler and avoids accidental re-entry via the keydown router.
+  //
+  // Methods are no-ops when their dependencies aren't ready; the Director
+  // gracefully falls back to "no action".
+  // ==========================================================================
+
+  /** Smart-default helper — fires a Quick Scan (mirrors `case 'KeyS':`). */
+  fireScan() {
+    const d = this._deps; if (!d) return;
+    eventBus.emit(Events.SCAN_QUICK);
+    eventBus.emit(Events.TUTORIAL_SCAN_INPUT);
+    d.audioSystem?.playClick?.();
+  }
+
+  /** Smart-default helper — cycles the next target (mirrors `case 'Tab':`). */
+  cycleTarget() {
+    const d = this._deps; if (!d || !d.debrisField || !d.player) return;
+    try {
+      this.nearbyTargets = d.debrisField.getEnhancedTargetList(
+        d.player.getPosition(), d.player.getOrbitalElements()
+      );
+      const canDetect = d.sensorSystem && d.sensorSystem.canDetectUntracked;
+      this.nearbyTargets = this.nearbyTargets.filter(t => t.tracked !== false || canDetect);
+      if (this.nearbyTargets.length > 0) {
+        this.targetIndex = (this.targetIndex + 1) % this.nearbyTargets.length;
+        const t = this.nearbyTargets[this.targetIndex];
+        const debris = d.debrisField.getDebrisById(t.id);
+        if (debris) {
+          d.targetSelector?.setTarget(debris, { distanceKm: t.distanceKm, deltaV: t.deltaV });
+          d.debrisWireframe?.setTarget(debris);
+          d.hud?.setSelectedTarget(t.id);
+          d.targetReticle?.setSelectedTarget(t.id);
+          d.navSphere?.setSelectedTarget(t.id);
+        }
+      }
+      eventBus.emit(Events.TUTORIAL_TAB_INPUT);
+    } catch (_e) { /* defensive */ }
+  }
+
+  /** Smart-default helper — toggles autopilot (mirrors `case 'KeyA':`). */
+  engageAutopilot() {
+    const d = this._deps; if (!d) return;
+    if (d.autopilotSystem && typeof d.autopilotSystem.toggle === 'function') {
+      d.autopilotSystem.toggle();
+      d.audioSystem?.playClick?.();
+    }
+  }
+
+  /** Smart-default helper — fires the lasso (mirrors KeyN/Space branches). */
+  fireLasso() {
+    const d = this._deps; if (!d || !d.lassoSystem) return;
+    if (this._lassoWindingUp || d.lassoSystem.active) return;
+    this._lassoWindingUp = true;
+    d.audioSystem?.playClick?.();
+    const windupMs = (Constants.LASSO_CAST_WINDUP || 0.15) * 1000;
+    this._lassoWindupTimeout = setTimeout(() => {
+      this._lassoWindingUp = false;
+      this._lassoWindupTimeout = null;
+      const vel = d.player.getVelocity();
+      const velDir = new THREE.Vector3(vel.x, vel.y, vel.z);
+      if (velDir.lengthSq() > 0) velDir.normalize();
+      const activeTarget = d.targetSelector ? d.targetSelector.getActiveTarget() : null;
+      d.lassoSystem.fire(d.player.getPosition(), d.debrisField, velDir, activeTarget);
+    }, windupMs);
+  }
+
+  /** Smart-default helper — deploys the next docked daughter (mirrors `case 'KeyD':`). */
+  deployDaughter() {
+    const d = this._deps; if (!d) return;
+    if (this.armPilotMode) return;
+    if (typeof d.deployArm !== 'function') return;
+    d.deployArm();
+    eventBus.emit(Events.TUTORIAL_DEPLOY_INPUT);
+    if (d.armManager) {
+      const deployed = d.armManager.arms.filter(a =>
+        a.state !== 'DOCKED' && a.state !== 'EXPENDED' &&
+        a.state !== 'RETURNING' && a.state !== 'DOCKING'
+      );
+      if (deployed.length > 0) {
+        const arm = deployed[deployed.length - 1];
+        eventBus.emit(Events.LAUNCH_CEREMONY_START, { arm });
+      }
+    }
+    d.audioSystem?.playClick?.();
+  }
+
+  /** Smart-default helper — toggles inspection (mirrors `case 'KeyI':`). */
+  toggleInspection() {
+    const d = this._deps; if (!d || !d.cameraSystem) return;
+    const subject = this.armPilotMode ? 'debris' : 'mother';
+    const targetId = d.targetSelector?.getActiveTarget?.()?.id ?? null;
+    eventBus.emit(Events.INSPECTION_TOGGLE, { subject, targetId });
+    if (subject === 'mother') {
+      if (d.cameraSystem.currentView === 'INSPECTION') {
+        d.cameraSystem.exitInspection();
+      } else {
+        d.cameraSystem.enterInspection();
+      }
+    }
+    d.audioSystem?.playClick?.();
   }
 }

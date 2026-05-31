@@ -1,11 +1,14 @@
 /**
- * SkillsPane.js — "Discoveries" HUD overlay pane.
+ * SkillsPane.js — "Discoveries" / Journal HUD overlay pane.
  *
  * Contextual reward overlay that appears when skills are discovered or
  * tech entries are unlocked. Compact view slides in from the left, shows
  * recently discovered skills, new tech unlocks, and next suggestions,
- * then auto-hides. Expanded view (K key) shows the full skill tree
- * organized by category with tier colors and key bindings.
+ * then auto-hides. Expanded view (J key — Journal) shows the full skill
+ * tree organized by category with tier colors and key bindings.
+ *
+ * Delegation 1 (2026-05-31) onboarding rebind: open-key migrated from K → J
+ * because bare K was freed by the broader hotkey overhaul (Forge moved to F4).
  *
  * Pure DOM component — no canvas, no THREE.js.
  *
@@ -156,7 +159,7 @@ export class SkillsPane {
         this._unsubs = [];
 
         // ── Key handlers (bound once) ─────────────────────────────────
-        /** @type {Function} Bubble-phase keydown (I key toggle) */
+        /** @type {Function} Bubble-phase keydown (J key toggle — Journal) */
         this._boundOnKeyDown = this._onKeyDown.bind(this);
         /** @type {Function} Capture-phase keydown (expanded overlay) */
         this._boundOnExpandedKeyDown = this._onExpandedKeyDown.bind(this);
@@ -798,7 +801,7 @@ export class SkillsPane {
         const backBtn = document.createElement('span');
         backBtn.className = 'sp-ex-back';
         backBtn.textContent = '◂ SKILL TREE';
-        backBtn.title = 'Close (I or ESC)';
+        backBtn.title = 'Close (J or ESC)';
         backBtn.addEventListener('click', () => this._closeExpanded());
         const exCount = document.createElement('span');
         exCount.className = 'sp-ex-count';
@@ -819,7 +822,7 @@ export class SkillsPane {
         progText.className = 'sp-prog-text';
         const closeHint = document.createElement('span');
         closeHint.className = 'sp-close-hint';
-        closeHint.textContent = 'L — Tech Library  ·  K to close';
+        closeHint.textContent = 'L — Tech Library  ·  J to close';
         footer.appendChild(progText);
         footer.appendChild(closeHint);
         overlay.appendChild(footer);
@@ -1773,13 +1776,14 @@ export class SkillsPane {
     // ═══════════════════════════════════════════════════════════════════════
 
     /**
-     * Bubble-phase keydown: K key toggles expanded view when not already
-     * expanded (capture handler owns K/ESC when overlay is open).
+     * Bubble-phase keydown: J key toggles expanded Journal view when not
+     * already expanded (capture handler owns J/ESC when overlay is open).
+     * Delegation 1 (2026-05-31) rebind: K → J.
      * @param {KeyboardEvent} e
      * @private
      */
     _onKeyDown(e) {
-        if (e.code !== 'KeyK') return;
+        if (e.code !== 'KeyJ') return;
         if (e.ctrlKey || e.metaKey || e.altKey) return;
         // Ignore if typing in a form element
         const tag = e.target.tagName;
@@ -1793,7 +1797,8 @@ export class SkillsPane {
 
     /**
      * Capture-phase keydown: active ONLY while expanded overlay is open.
-     * ESC or K closes the overlay; everything else is suppressed.
+     * ESC or J closes the overlay; everything else is suppressed.
+     * Delegation 1 (2026-05-31) rebind: K → J.
      * @param {KeyboardEvent} e
      * @private
      */
@@ -1801,7 +1806,7 @@ export class SkillsPane {
         e.preventDefault();
         e.stopPropagation();
 
-        if (e.code === 'Escape' || e.code === 'KeyK') {
+        if (e.code === 'Escape' || e.code === 'KeyJ') {
             this._closeExpanded();
         }
     }

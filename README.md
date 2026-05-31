@@ -15,7 +15,7 @@ UI design draws from four landmark space sims: **Independence War** (NavSphere, 
 # Then open http://localhost:8081
 ```
 
-**Controls:** `A` autopilot, `S` quick scan, `W` wide scan, `D` deploy tool, `F` focus action, `` ` `` cycle tools, Arrows rotate, `+/-` throttle, `Tab` cycle targets, `Space` lasso, `G` deploy arm, `H` recall, `V` camera, `P` arm pilot, `Z` wireframe, `C` comms, `N` NavSphere, `M` MPD/orbit, `L` tech library, `B` shop, `R` reel-in (ARM_PILOT/SK), `K` forge, `X` detach, `Shift+1/2/3` power bus, `[/]` adjust. WASD thrust in arm pilot mode only (P key).
+**Controls:** `A` autopilot, `S` quick scan, `W` wide scan, `D` deploy daughter, `T` tool deploy, `F` focus action, `` ` `` cycle tools, Arrows rotate, `+/-` throttle, `Tab` cycle targets, `N` lasso/net (Space alias), `H` recall all, `R` smart reel-in, `V` camera, `P` arm pilot, `I` inspect, `J` journal, `Z` wireframe, `C` comms, `M` MPD/orbit, `L` codex, `B` shop, `X` detach, `F4` forge, `F5` fuel cycle, `Shift+1/2/3` power bus, `[/]` adjust. WASD thrust in arm pilot mode only (P key). Full table below.
 
 **Tech:** Three.js r170 via CDN import maps. Zero build tools. ES6 modules. All geometry procedural (no GLTF). NASA public domain textures.
 
@@ -151,7 +151,7 @@ Space Cowboy/
 
 **HUD:** Progressive luminance system (dormant/active CSS states). 3-panel left column (Propulsion/Energy/Fleet), right column (wireframe + target list), NavSphere with distance encoding + range rings, OrbitMFD, 5-color system.
 
-**Systems:** Active scanning (S/W keys with cooldowns, discovery mechanics, survey rewards), auto-tool recommendation (D-deploy, backtick-cycle), focus action (F key, context-sensitive), 5 camera views, ARM PILOT manual control (P key), FS2-style comms menu (C key), debris wireframe analysis (Z key), arm deorbit sacrifice (Ctrl+Shift+D), forge system (K key), power distribution ETS (Shift+1/2/3 + [/] keys), autopilot system (A key), throttle control (+/- keys), MPD thruster burst mode (M key), lasso with miss recovery prompts (Space), trawl system with adaptive speed, collision avoidance AI, 10-stage curiosity-driven tutorial.
+**Systems:** Active scanning (S/W keys with cooldowns, discovery mechanics, survey rewards), auto-tool recommendation (T tool-deploy, backtick-cycle), focus action (F key, context-sensitive), 5 camera views, ARM PILOT manual control (P key), FS2-style comms menu (C key), debris wireframe analysis (Z key), inspection mode (I key), journal/skills (J key), arm deorbit sacrifice (Ctrl+Shift+D), forge system (F4 key), power distribution ETS (Shift+1/2/3 + [/] keys), autopilot system (A key), throttle control (+/- keys), MPD thruster burst mode (M key), lasso/net fire (N key; Space alias), trawl system with adaptive speed, collision avoidance AI, 10-stage curiosity-driven tutorial.
 
 **Audio:** 30+ procedural generators + ambient loop + 4-tier ΔV alarm + thruster sputtering + forge phase textures + target lock ceremony + lasso feedback.
 
@@ -162,39 +162,78 @@ Space Cowboy/
 | **A** | Toggle autopilot | Arm thrust left |
 | **S** | Quick Scan (1.5s ping, $50 reward, 20% discovery) | Arm thrust back |
 | **W** | Wide Scan (4s deep scan, $150 reward, 40% discovery) | Arm thrust forward |
-| **D** | Deploy recommended tool | Arm thrust right |
+| **D** | Deploy daughter (launch ceremony) | Arm thrust right |
 
 ### Key Bindings — Full Reference
 
-| Key | Action |
-|-----|--------|
-| ↑/↓/←/→ | Pitch / Yaw rotation; in STATION_KEEP: orbit debris θ/φ |
-| +/= and − | Increase / decrease throttle; in STATION_KEEP: adjust standoff distance |
-| `` ` `` (backtick) | Cycle tool alternatives (MW2-style weapon scroll) |
-| F | Focus Action — context-sensitive smart button; in STATION_KEEP: capture |
-| F2 | Cycle FEEP metal on piloted arm (ARM_PILOT mode) |
-| Tab | Cycle target selection (auto-recommends best tool) |
-| Space | Cast lasso — or deploy net in ARM PILOT |
-| G | Deploy arm to target (secondary to D) / Shift+G: deploy trawl net |
-| H | Recall all arms |
-| X | Tether detach (risk-reward sacrifice) |
-| R | Reel-in (ARM_PILOT, STATION_KEEP) — zero-fuel strut motor |
-| K | Cycle forge mode: OFF → REFINE → PROPELLANT → OFF |
-| T | Cycle fuel type |
-| V | Camera cycle (COMMAND → TACTICAL → OVERVIEW) |
-| P | Toggle ARM PILOT mode (40° FOV, arm camera) — WASD becomes arm thrust |
-| B | Open shop |
-| Z / Shift+Z | Cycle wireframe zones forward / backward |
-| C | Toggle comms menu (FS2-style 1–6 commands) |
-| M | Toggle MPD armed / Orbit View (if no MPD upgrade) |
-| N | Toggle NavSphere |
-| L | Open Tech Library (105-entry encyclopedia) |
-| Shift+1/2/3 | Select power bus (Thrust / Sensors / Arms) |
-| [ / ] | Adjust power allocation ±10% |
-| Ctrl+D | Debug overlay |
-| Ctrl+Shift+D | Deorbit sacrifice (arm burns all fuel retrograde) |
-| Shift | Fine mode (¼ rates) during STATION_KEEP orbit controls |
-| Esc | Pause; in STATION_KEEP: recall arm |
+_Authoritative table (Delegation 1 hotkey rebind, 2026-05-31). The Codex is `L`. The Journal/Skills pane is `J`._
+
+```
+═══ MOTHER (orbital view) ═══
+  S  · Quick Scan (1.5s, $50)
+  W  · Wide Scan  (4s, $150)
+  Tab · Cycle target (TPI-sorted)
+  A  · Autopilot toggle
+  D  · Deploy daughter (launch ceremony)
+  T  · Tool Deploy (smart context)
+  N  · Lasso / Net fire   (Space = onboarding smart-default → lasso)
+  Shift+N · NavSphere toggle (Delegation 2 — 2026-05-31)
+  P  · ARM PILOT toggle
+  I  · Part callout inspection:
+         · in ORBITAL_VIEW → V5 Crossbow mothership part callout (bottom-right panel,
+           11 zones, auto-cycling; Tab advances zone, I closes)
+         · in ARM_PILOT    → enlarged debris wireframe from daughter perspective
+           (press I again to close; no target → comms hint "Select with Tab first")
+       Shift+I = alias for I
+  L  · Codex / Tech Library
+  J  · Journal / Skills discovery
+  B  · Shop
+  M  · MFD (Orbit / MPD)
+  N alias = Space (newbie-friendly default action)
+  V / Shift+V · Camera cycle / Strategic Map
+  C  · Comms tap-expand, hold-radial
+  H  · Recall ALL deployed arms
+  R  · Context Reel-in:
+         · in ORBITAL_VIEW with deployed daughter → recall closest
+         · during autopilot → abort autopilot
+         · in ARM_PILOT → reel daughter home
+  G  · (unbound — reserved)
+  K  · (unbound — reserved)
+  X  · Tether detach (sacrifice)
+  Y  · EDT deploy
+  Z / Shift+Z · Wireframe zone cycle
+  ` / Shift+` · Debris Map / Tool cycle
+  ,  / .  · Stow / deploy all struts
+  +  / −  · Throttle ± (or SK approach/retreat in ARM_PILOT)
+  [  / ]  · Power-bus adjust
+  Shift+1/2/3 · Power-bus select
+  1–6   · Select / pilot arm 1–6
+  7     · Return to mother
+  F4    · Forge (Kiln) toggle
+  F5    · FEEP fuel cycle (Propellant)
+  F2    · FEEP metal cycle (piloted arm)
+  Shift+G · Trawl start
+  Shift+O · Recall all (alias of H)
+  O     · Deploy ALL docked arms
+  Enter · Begin approach
+  Esc   · Pause / back / exit
+  Ctrl+D · Debug overlay
+  Ctrl+Shift+D · Deorbit sacrifice
+  PageUp/Down · Comms scroll
+  Arrows · Pitch/Yaw  (or SK θ/φ in ARM_PILOT)
+
+═══ DAUGHTER (ARM_PILOT) — only when P engaged ═══
+  Arrows · Orbit debris (θ/φ)  ·  Shift = fine ¼
+  + / −  · Approach/retreat (wheel also works)
+  N      · Deploy net / capture
+  F      · Smart focus (also deploys net)
+  R      · Reel-in (with or without capture)
+  I      · Inspect debris (part callouts) — render arrives in Delegation 3
+  F2     · Cycle FEEP metal (indium/alt)
+  Esc / P / 7 · Return to mother
+  1–6    · Switch piloted daughter
+  X      · Sacrifice detach
+```
 
 > **Note:** WASD mothership thrust removed from normal play. Autopilot handles all navigation. WASD is a command cluster (A/S/W/D) in normal mode, traditional thrust only in ARM PILOT mode (P key).
 

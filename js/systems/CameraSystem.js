@@ -1858,7 +1858,13 @@ export class CameraSystem {
     this.camera.near = Constants.CAMERA_NEAR;
     this.camera.updateProjectionMatrix();
 
-    this.setView(CameraViews.ORBIT);
+    // Delegation 4 (2026-05-31) — Browser-playtest UX fix:
+    // Return to whatever view the player was in BEFORE entering inspection
+    // (usually CHASE / COMMAND). Previously this was hardcoded to ORBIT
+    // (OVERVIEW), which confused players who expected I → I to toggle
+    // back to their command view.
+    const returnTo = this._previousView || CameraViews.CHASE;
+    this.setView(returnTo);
   }
 
   // ==========================================================================
@@ -2208,8 +2214,10 @@ export class CameraSystem {
 
     this._viewIndicator = document.createElement('div');
     this._viewIndicator.id = 'camera-view-indicator';
+    // Delegation 4 (2026-05-31) — Browser-playtest: moved from top:60
+    // (blocked info near comms panel header) down to top:140.
     this._viewIndicator.style.cssText = `
-      position: absolute; top: 60px; left: 50%; transform: translateX(-50%);
+      position: absolute; top: 140px; left: 50%; transform: translateX(-50%);
       font-family: 'Courier New', monospace; font-size: 0.85rem;
       color: #00ff88; letter-spacing: 0.1em;
       background: rgba(0, 20, 40, 0.7); border: 1px solid rgba(0,255,136,0.3);

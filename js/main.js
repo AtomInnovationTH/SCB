@@ -78,6 +78,8 @@ import { CodexViewerUI } from './ui/CodexViewerUI.js';
 import { SkillsPane } from './ui/hud/SkillsPane.js';
 import { TeachingSystem } from './systems/TeachingSystem.js';
 import { TeachingOverlay } from './ui/TeachingOverlay.js';
+import { OnboardingDirector } from './systems/OnboardingDirector.js';
+import { persistenceManager } from './systems/PersistenceManager.js';
 import { StrategicMap } from './ui/StrategicMap.js';
 import { captureNetVisual } from './ui/CaptureNetVisual.js';
 import { captureNetSystem } from './entities/CaptureNet.js';
@@ -431,6 +433,7 @@ let sweepReportUI;
 let codexViewerUI;
 let teachingSystem;
 let teachingOverlay;
+let onboardingDirector;
 let strategicMap;
 
 // Input
@@ -575,6 +578,21 @@ async function init() {
   teachingSystem.onShow = (moment) => teachingOverlay.show(moment);
   teachingSystem.init();
 
+  // --- Delegation 2 (2026-05-31): OnboardingDirector ---
+  // Orchestrates the 13-beat first-experience pipeline (boot → handshake →
+  // arrows → struts → zoom → inspect → scan → target → autopilot → decision
+  // → lasso/daughter → complete).  Subscribes to MISSION_START and walks
+  // each beat: emits HOUSTON comms, posts to bottom-screen ticker, soft
+  // chime, brightens related HUD panel via SKILL_DISCOVERED.  Escalates
+  // un-satisfied beats to TeachingSystem after 15 s.
+  onboardingDirector = new OnboardingDirector({
+    eventBus,
+    scoringSystem,
+    skillsSystem,
+    teachingSystem,
+    persistenceManager,
+  });
+
   // Phase 4: Wire cargo system to resource system for dual-mode fuel
   resourceSystem.setCargoSystem(cargoSystem);
   player.setResourceSystem(resourceSystem);
@@ -593,6 +611,10 @@ async function init() {
 
   // --- Build UI ---
   hud = new HUD();
+  // Delegation 4 (2026-05-31) — Browser-playtest: NetInventoryPanel is
+  // SUSPENDED (never displayed) pending a UX redesign. See ROADMAP.md.
+  // The panel still mounts so internal event tracking works, but setVisible
+  // is never called.
   menuScreen = new MenuScreen();
   briefingScreen = new BriefingScreen();
   shopScreen = new ShopScreen();
@@ -637,6 +659,9 @@ async function init() {
   // --- Connect V3 arm manager to HUD + player satellite ---
   if (armManager) hud.setArmManager(armManager);
   if (armManager) player.setArmManager(armManager);
+  // Delegation 4 (2026-05-31): wire LassoSystem into HUD so NetInventoryPanel
+  // can poll initial ammo state.
+  if (lassoSystem && typeof hud.setLassoSystem === 'function') hud.setLassoSystem(lassoSystem);
 
   // V-7: Launch cinematic visual effects (flag-gated internally)
   if (Constants.FEATURE_FLAGS && Constants.FEATURE_FLAGS.LAUNCH_SEQUENCE) {
@@ -714,6 +739,8 @@ async function init() {
     debrisField, debrisWireframe, dockingReticle, hud, targetReticle,
     navSphere, orbitMFD, debrisMap, audioSystem, debugOverlay, sensorSystem,
     lassoSystem, autopilotSystem, codexViewerUI, strategicMap,
+    // Delegation 2 (2026-05-31): smart-default Space key consults the Director.
+    onboardingDirector,
     transitionToState: (s, p) => gameFlowManager.transitionToState(s, p),
     deployArm: () => gameFlowManager.deployArm(),
     applyUpgrades: () => gameFlowManager.applyUpgrades(),
@@ -749,6 +776,36 @@ async function init() {
   eventBus.on(Events.STRATEGIC_MAP_TOGGLE, () => {
     if (strategicMap) {
       strategicMap.isOpen() ? strategicMap.close() : strategicMap.open();
+    }
+  });
+
+  // --- Delegation 2 (2026-05-31): Welcome field on first mission ever ---
+  // On the player's very first MISSION_START we seed the curated 7–8 fragment
+  // welcome cluster in the player's own orbit so the onboarding `scan` and
+  // `target` beats have guaranteed contacts.  Subsequent missions / continues
+  // skip the spawn (the legacy _spawnWelcomeField mission-1 gate also fires
+  // — the public method is idempotent against _welcomeFieldSpawned).
+  eventBus.on(Events.MISSION_START, (data) => {
+    try {
+      const firstEver = !(persistenceManager?.peek?.()?.stats?.missionsCompleted > 0);
+      const forced = Constants.DEBUG?.FORCE_WELCOME_FIELD === true;
+      const isMission1 = !data || data.missionNumber === 1 || data.missionNumber == null;
+      if ((firstEver && isMission1) || forced) {
+        const playerOrbit = player?.getOrbitalElements?.();
+        if (playerOrbit && debrisField && typeof debrisField.spawnWelcomeField === 'function') {
+          debrisField.spawnWelcomeField(playerOrbit);
+        }
+      }
+    } catch (e) {
+      console.warn('[main] welcome-field spawn failed:', e?.message);
+    }
+  });
+
+  // --- Delegation 2 (2026-05-31): brighten struts when the `struts` beat enters ---
+  eventBus.on('onboarding:beatEnter', (data) => {
+    if (!data || data.beatId !== 'struts') return;
+    if (player && typeof player.highlightStrutsForBeat === 'function') {
+      player.highlightStrutsForBeat(4000);
     }
   });
 
@@ -1310,6 +1367,7 @@ function gameLoop(timestamp) {
       sensorSystem,
       autopilotSystem,
       cameraSystem,
+      armManager,                          // Delegation 3: daughter wireframe + arm count
       forgeState: forgeSystem.getState(),
       cargoStatus: cargoSystem.getStatus(),
     });

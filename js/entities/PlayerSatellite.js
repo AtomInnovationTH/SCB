@@ -151,7 +151,8 @@ export class PlayerSatellite extends THREE.Group {
     this._lidarPulseTimer = 0;
     this._magneticPulsePhase = 0;
     this._magneticActive = false;
-    this._thrusterGlowTargets = new Map(); // thruster mesh → target intensity
+    this._thrusterGlowTargets = new Map(); // thruster mesh → { glow, plume, outerGlow, intensity }
+    this._differentialFireTargets = [0, 0, 0, 0]; // per-nozzle attitude rotation intensity [TOP, BOTTOM, RIGHT, LEFT]
     this._sensorTarget = null; // THREE.Vector3 world position to track
     this._activeThrustDir = { x: 0, y: 0, z: 0 };
 
@@ -236,6 +237,13 @@ export class PlayerSatellite extends THREE.Group {
     this._matFEEP = new THREE.MeshStandardMaterial({
       color: 0x996644, metalness: 0.80, roughness: 0.35,
     });
+    // FEEP nozzle interior — bright emissive ion-emitter surface (BackSide rendered)
+    // Visually distinct from the copper exterior; emissive modulated by differential firing
+    this._matFEEPInner = new THREE.MeshStandardMaterial({
+      color: 0x8899aa, metalness: 0.5, roughness: 0.2,
+      emissive: 0x334466, emissiveIntensity: 0.3,
+      side: THREE.BackSide,
+    });
     // RCS attitude thruster nozzles — standard aerospace gray
     this._matRCS = new THREE.MeshStandardMaterial({
       color: 0x555566, metalness: 0.65, roughness: 0.45,
@@ -291,6 +299,7 @@ export class PlayerSatellite extends THREE.Group {
     this.body = new THREE.Mesh(bodyGeo, this._matBody);
     this.body.rotation.x = Math.PI / 2; // Align Y-cylinder to Z-forward
     this.body.name = 'Barrel_ConfigG';
+    this.body.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE; // FIX_PLAN §2
     this.add(this.body);
 
     // Body-mount thin-film GaAs solar cells on barrel surface
@@ -309,81 +318,101 @@ export class PlayerSatellite extends THREE.Group {
     const cellGrid = new THREE.Mesh(cellGridGeo, cellGridMat);
     cellGrid.rotation.x = Math.PI / 2;
     cellGrid.name = 'BarrelSolarCellGrid';
+    cellGrid.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_TRANSPARENT; // FIX_PLAN §2
     this.add(cellGrid);
 
     // Gold MLI thermal blanket bands (2 bands at ±25% of barrel length)
-    // 4% radius gap to avoid Z-fighting with barrel surface
+    // FIX_PLAN §2-followup: bumped 1.04 → 1.07 in two passes.
+    //   Round 1: 1.04→1.045 to clear accent ring outer edge (ring outer 1.028).
+    //   Round 2: 1.045→1.07 to ALSO clear the stowed strut outer surface
+    //   (strut centre at radius collarR=1.0 + strut radius 0.0625 = 1.0625),
+    //   so bands no longer geometrically pierce a stowed strut at z=±0.5.
+    // Band z-extent (±0.5 ± barrelH*0.06) still straddles accent rings, so band
+    // material keeps polygonOffset to draw cleanly OVER the intersecting ring.
     const bandGeo = new THREE.CylinderGeometry(
-      barrelR * 1.04, barrelR * 1.04, barrelH * 0.12, 16, 1, true
+      barrelR * 1.07, barrelR * 1.07, barrelH * 0.12, 16, 1, true   // FIX_PLAN §2-followup
     );
-    const band1 = new THREE.Mesh(bandGeo, this._matGoldMLI);
+    const bandMat = this._matGoldMLI.clone();                          // FIX_PLAN §2-followup
+    bandMat.polygonOffset = true;                                      // FIX_PLAN §2-followup
+    bandMat.polygonOffsetFactor = -0.5;                                // FIX_PLAN §2-followup — gentle push toward camera (less than ring's -1.5)
+    bandMat.polygonOffsetUnits  = -0.5;                                // FIX_PLAN §2-followup
+    const band1 = new THREE.Mesh(bandGeo, bandMat);
     band1.rotation.x = Math.PI / 2;
     band1.position.z = barrelH * 0.25;  // +0.5m from center
     band1.name = 'MLI_Band1';
+    band1.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;      // FIX_PLAN §2-followup
     this.add(band1);
 
-    const band2 = new THREE.Mesh(bandGeo, this._matGoldMLI);
+    const band2 = new THREE.Mesh(bandGeo, bandMat);
     band2.rotation.x = Math.PI / 2;
     band2.position.z = -barrelH * 0.25; // -0.5m from center
     band2.name = 'MLI_Band2';
+    band2.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;      // FIX_PLAN §2-followup
     this.add(band2);
 
     // Panel line accent rings (dark grooves at barrel surface)
     const lineGeo = new THREE.TorusGeometry(barrelR * 1.02, M * 0.008, 4, 16);
     const lineMat = this._matDark.clone();
     lineMat.polygonOffset = true;
-    lineMat.polygonOffsetFactor = -1;
-    lineMat.polygonOffsetUnits = -1;
+    lineMat.polygonOffsetFactor = -1.5; // FIX_PLAN §2 — separate from cell grid (-1)
+    lineMat.polygonOffsetUnits = -1.5; // FIX_PLAN §2
     for (let i = -1; i <= 1; i++) {
       const line = new THREE.Mesh(lineGeo, lineMat);
       line.position.z = barrelH * 0.25 * i;
       line.rotation.x = Math.PI / 2;
+      line.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL; // FIX_PLAN §2
       this.add(line);
     }
 
     // Front viewport/window — laser aperture (20cm Cassegrain)
+    // FIX_PLAN §2-followup (round 3): viewport was at z=barrelH*0.5 − 0.05 =
+    // 0.95, i.e. 5 CM BEHIND the front cap at z=1.0 — polygonOffset cannot
+    // cover a 5 cm gap in depth, so the cap was occluding the aperture.
+    // Moved viewport to z=barrelH*0.5 + 0.001 (1 mm IN FRONT of cap) and
+    // apertureRing to +0.002 m. They now sit flush on the cap face, fully
+    // visible, with renderOrder layering keeping the gold rim on top.
     const viewportGeo = new THREE.CircleGeometry(M * 0.12, 8);
     const viewportMat = new THREE.MeshStandardMaterial({
       color: 0x112244, metalness: 0.3, roughness: 0.2,
       emissive: 0x1133aa, emissiveIntensity: 0.4,
-      polygonOffset: true,
-      polygonOffsetFactor: -2,
-      polygonOffsetUnits: -2,
     });
     this.viewport = new THREE.Mesh(viewportGeo, viewportMat);
-    this.viewport.position.set(0, M * 0.2, barrelH * 0.5 - M * 0.05);
+    this.viewport.position.set(0, M * 0.2, barrelH * 0.5 + M * 0.001);    // FIX_PLAN §2-followup (round 3)
     this.viewport.rotation.x = -0.2;
     this.viewport.name = 'LaserAperture';
+    this.viewport.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL; // FIX_PLAN §2-followup
     this.add(this.viewport);
 
     // Laser aperture ring (gold, forward-facing)
     const apertureRingGeo = new THREE.RingGeometry(M * 0.10, M * 0.14, 8);
     const apertureRingMat = this._matGoldMLI.clone();
-    apertureRingMat.polygonOffset = true;
-    apertureRingMat.polygonOffsetFactor = -2;
-    apertureRingMat.polygonOffsetUnits = -2;
     const apertureRing = new THREE.Mesh(apertureRingGeo, apertureRingMat);
-    apertureRing.position.set(0, M * 0.2, barrelH * 0.5 - M * 0.04);
+    apertureRing.position.set(0, M * 0.2, barrelH * 0.5 + M * 0.002);     // FIX_PLAN §2-followup (round 3)
     apertureRing.rotation.x = -0.2;
     apertureRing.name = 'LaserRing';
+    apertureRing.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;  // FIX_PLAN §2-followup
     this.add(apertureRing);
 
-    // End caps — polygon offset to prevent Z-fighting
+    // End caps
+    // FIX_PLAN §2-followup (round 3): removed polygonOffset from cap material
+    // — bus is openEnded so there's no built-in cap to z-fight with; the
+    // offset was also tying with viewport's offset (both -2,-2) which caused
+    // the aperture occlusion. Cap now renders as plain SPACECRAFT_OPAQUE so
+    // any DETAIL-tagged mesh in front (viewport, ring) wins cleanly.
     const capGeo = new THREE.CircleGeometry(barrelR, 16);
     const capMat = this._matBody.clone();
     capMat.emissive.setHex(0x000000);
     capMat.emissiveIntensity = 0;
-    capMat.polygonOffset = true;
-    capMat.polygonOffsetFactor = -2;
-    capMat.polygonOffsetUnits = -2;
     const frontCap = new THREE.Mesh(capGeo, capMat);
     frontCap.position.z = barrelH * 0.5;
     frontCap.name = 'FrontCap_ConfigG';
+    frontCap.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;      // FIX_PLAN §2-followup (round 3)
     this.add(frontCap);
     const rearCap = new THREE.Mesh(capGeo, capMat);
     rearCap.position.z = -barrelH * 0.5;
     rearCap.rotation.y = Math.PI;
     rearCap.name = 'RearCap_ConfigG';
+    rearCap.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;       // FIX_PLAN §2-followup (round 3)
     this.add(rearCap);
 
     // ── V-11: Stowage channels — thin dark grooves where struts nest when stowed ──
@@ -400,8 +429,8 @@ export class PlayerSatellite extends THREE.Group {
       const channel = new THREE.Mesh(channelGeo, channelMat);
       // Channel centre at Z=+0.10 (midpoint between collar +0.90 and strut tip -0.70)
       channel.position.set(
-        Math.cos(azRad) * barrelR * 1.005,
-        Math.sin(azRad) * barrelR * 1.005,
+        Math.cos(azRad) * barrelR * 1.008, // FIX_PLAN §2 — geometric separation from barrel
+        Math.sin(azRad) * barrelR * 1.008, // FIX_PLAN §2
         barrelH * 0.05,
       );
       // Orient: plane normal → radial outward, plane height → barrel Z axis
@@ -411,6 +440,7 @@ export class PlayerSatellite extends THREE.Group {
       const _m4 = new THREE.Matrix4().makeBasis(tangent, barrelAxis, radial);
       channel.quaternion.setFromRotationMatrix(_m4);
       channel.name = `StowChannel_${azDeg}`;
+      channel.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL; // FIX_PLAN §2
       this.add(channel);
 
       // ── Daughter pocket — wider recess at aft end of channel ──
@@ -423,13 +453,14 @@ export class PlayerSatellite extends THREE.Group {
       const pocket = new THREE.Mesh(pocketGeo, pocketMat);
       // Pocket at strut tip when stowed (Z = collar − strutLen = 0.90 − 1.60 = −0.70)
       pocket.position.set(
-        Math.cos(azRad) * barrelR * 1.006,
-        Math.sin(azRad) * barrelR * 1.006,
+        Math.cos(azRad) * barrelR * 1.012, // FIX_PLAN §2 — 4mm gap from cell grid
+        Math.sin(azRad) * barrelR * 1.012, // FIX_PLAN §2
         -barrelH * 0.35,
       );
       // Orient: same as channel (face outward, height along barrel Z)
       pocket.quaternion.copy(channel.quaternion);
       pocket.name = `DaughterPocket_${azDeg}`;
+      pocket.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL; // FIX_PLAN §2
       this.add(pocket);
 
       // ── Pyro-pin launch lock — small retention cylinder at pocket lip ──
@@ -437,6 +468,7 @@ export class PlayerSatellite extends THREE.Group {
       const pyroGeo = new THREE.CylinderGeometry(M * 0.006, M * 0.006, M * 0.025, 4);
       const pyroMat = new THREE.MeshStandardMaterial({
         color: 0xcc4400, metalness: 0.6, roughness: 0.4,
+        polygonOffset: true, polygonOffsetFactor: -2.5, polygonOffsetUnits: -2.5, // FIX_PLAN §2
       });
       const pyro = new THREE.Mesh(pyroGeo, pyroMat);
       // Pin sits at top lip of pocket, protruding radially
@@ -544,27 +576,38 @@ export class PlayerSatellite extends THREE.Group {
     });
 
     // ── Component A: Collar Ring (enhanced) ──────────────────────────────
+    // FIX_PLAN §2-followup: all three rings (collarRing, flangeRing, seatRing)
+    // were coplanar at z=collarY with overlapping radial extents:
+    //   collarRing  major 0.40 ± 0.015 → covers 0.385–0.415
+    //   flangeRing  major 0.388 ± 0.006 → covers 0.382–0.394
+    //   seatRing    major 0.402 ± 0.008 → covers 0.394–0.410
+    // → seatRing radially overlaps collarRing (0.394–0.410 ⊂ 0.385–0.415) at
+    //   the EXACT same z → torus-on-torus z-fight ring all the way around.
+    // Fix: stagger z by ±2 mm and tag renderOrder so layering is deterministic.
     const collarGeo = new THREE.TorusGeometry(collarR, M * 0.015, 8, 32);
     this.collarRing = new THREE.Mesh(collarGeo, collarMat);
     this.collarRing.rotation.x = Math.PI / 2;   // torus plane ⊥ barrel Z
     this.collarRing.position.z = collarY;
     this.collarRing.name = 'CollarRing';
+    this.collarRing.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL; // FIX_PLAN §2-followup
     this.add(this.collarRing);
 
-    // Inner flange ring (collar-to-barrel shelf)
+    // Inner flange ring (collar-to-barrel shelf) — pushed 2 mm aft
     const flangeRingGeo = new THREE.TorusGeometry(collarR - M * 0.012, M * 0.006, 4, 32);
     const flangeRing = new THREE.Mesh(flangeRingGeo, collarMat);
     flangeRing.rotation.x = Math.PI / 2;
-    flangeRing.position.z = collarY;
+    flangeRing.position.z = collarY - M * 0.002;                            // FIX_PLAN §2-followup
     flangeRing.name = 'CollarFlangeRing';
+    flangeRing.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;      // FIX_PLAN §2-followup
     this.add(flangeRing);
 
-    // Barrel seat ring (raised interface ring on barrel skin)
+    // Barrel seat ring (raised interface ring on barrel skin) — pushed 2 mm fore
     const seatRingGeo = new THREE.TorusGeometry(collarR + M * 0.002, M * 0.008, 4, 32);
     const seatRing = new THREE.Mesh(seatRingGeo, seatMat);
     seatRing.rotation.x = Math.PI / 2;
-    seatRing.position.z = collarY;
+    seatRing.position.z = collarY + M * 0.002;                              // FIX_PLAN §2-followup
     seatRing.name = 'BarrelSeatRing';
+    seatRing.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;        // FIX_PLAN §2-followup
     this.add(seatRing);
 
     // 12× flange bolts (Ti M5, collar-to-barrel, 30° intervals on inner ring)
@@ -618,6 +661,11 @@ export class PlayerSatellite extends THREE.Group {
       // ── A-frame brackets (×2 per hinge, straddling strut root) ──
       // Offset ±19 mm along tangent (gap = 38 mm, clears 25 mm strut + bushings)
       // Orientation: shape +Y → radial, extrude +Z → tangent×side, shape +X → barrel Z
+      // FIX_PLAN §2-followup (round 3): hinge cluster (brackets, mount bolts,
+      // bushings, pin, c-clips, brake disc) sits ON the collar ring at z=0.90
+      // with overlapping radial extents → multiple z-fights between bracket
+      // body and collar/seat ring torus surfaces. Tag every part DETAIL so
+      // they render after the ring stack and win the depth ties cleanly.
       for (const side of [-1, 1]) {
         const bracket = new THREE.Mesh(aframeGeo, aframeMat);
         // Position: on collar surface, offset tangentially, centered at half bracket height
@@ -636,6 +684,7 @@ export class PlayerSatellite extends THREE.Group {
         );
         bracket.setRotationFromMatrix(basis);
         bracket.name = `AFrame_${azDeg}_${side > 0 ? 'L' : 'R'}`;
+        bracket.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;       // FIX_PLAN §2-followup (round 3)
         this.add(bracket);
 
         // ── Mounting bolts (×2 per bracket, at flange base ±18 mm along barrel Z) ──
@@ -648,6 +697,7 @@ export class PlayerSatellite extends THREE.Group {
           );
           mb.quaternion.setFromUnitVectors(_yUpCollar, radial);  // bolt head outward
           mb.name = `MountBolt_${azDeg}_${side > 0 ? 'L' : 'R'}_${boltSide}`;
+          mb.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;          // FIX_PLAN §2-followup (round 3)
           this.add(mb);
         }
 
@@ -660,6 +710,7 @@ export class PlayerSatellite extends THREE.Group {
         );
         bushing.quaternion.copy(pinQuat);   // ring axis along tangent (around pin)
         bushing.name = `Bushing_${azDeg}_${side > 0 ? 'L' : 'R'}`;
+        bushing.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;       // FIX_PLAN §2-followup (round 3)
         this.add(bushing);
       }
 
@@ -672,6 +723,7 @@ export class PlayerSatellite extends THREE.Group {
       );
       pin.quaternion.copy(pinQuat);
       pin.name = `HingePin_${azDeg}`;
+      pin.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;             // FIX_PLAN §2-followup (round 3)
       this.add(pin);
       this.hingeMounts.push(pin);           // preserve hingeMounts[] reference
 
@@ -685,6 +737,7 @@ export class PlayerSatellite extends THREE.Group {
         );
         clip.quaternion.copy(pinQuat);
         clip.name = `CClip_${azDeg}_${side > 0 ? 'L' : 'R'}`;
+        clip.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;          // FIX_PLAN §2-followup (round 3)
         this.add(clip);
       }
 
@@ -697,6 +750,7 @@ export class PlayerSatellite extends THREE.Group {
       );
       disc.quaternion.copy(pinQuat);
       disc.name = `BrakeDisc_${azDeg}`;
+      disc.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;            // FIX_PLAN §2-followup (round 3)
       this.add(disc);
 
       // ── LED indicator (forward of outboard A-frame, per §13.1.1) ──
@@ -704,6 +758,7 @@ export class PlayerSatellite extends THREE.Group {
       const led = new THREE.Mesh(ledGeo, ledMat);
       led.position.set(cx, cy, collarY + M * 0.03);
       led.name = `HingeLED_${azDeg}`;
+      led.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;           // FIX_PLAN §2-followup (round 3)
       this.add(led);
       this.hingeLEDs.push(led);             // preserve hingeLEDs[] for postArmUpdate
     }
@@ -746,17 +801,27 @@ export class PlayerSatellite extends THREE.Group {
     });
 
     // ── Rib ring collars (field-joint detail) ──
-    const ribGeo = new THREE.TorusGeometry(strutR * 1.15, M * 0.003, 4, 12);
+    // FIX_PLAN §2-followup: bumped 1.15→1.22 so torus inner edge clears strut
+    // surface (was strutR*1.15 - 0.003 ≈ strutR*1.03, only ~0.7 mm gap → z-fight).
+    const ribGeo = new THREE.TorusGeometry(strutR * 1.22, M * 0.003, 4, 12);   // FIX_PLAN §2-followup
     const ribMat = new THREE.MeshStandardMaterial({
       color: 0x8899aa, metalness: 0.72, roughness: 0.28,  // machined 6061-T6
     });
 
     // ── Root joint collar (clevis fork fitting at hinge end) ──
+    // FIX_PLAN §2-followup: rootCollar cylinder at strutR*1.20 (radius 0.030)
+    // sits at the pivot point on the bus surface — its radial extent crosses
+    // the collarRing torus (radii 0.385–0.415) AND seatRing (0.394–0.410).
+    // polygonOffset(-2,-2) pushes the strut collar metal forward in depth so
+    // it wins the depth tie at the hinge cluster without geometry juggling.
     const rootCollarGeo = new THREE.CylinderGeometry(
       strutR * 1.20, strutR * 1.20, M * 0.025, 12
     );
     const rootCollarMat = new THREE.MeshStandardMaterial({
       color: 0x8888a0, metalness: 0.75, roughness: 0.28,  // 7075-T6
+      polygonOffset: true,                                 // FIX_PLAN §2-followup
+      polygonOffsetFactor: -2,                             // FIX_PLAN §2-followup
+      polygonOffsetUnits: -2,                              // FIX_PLAN §2-followup
     });
 
     // ── Tip joint collar (dock fitting at daughter-arm end) ──
@@ -834,6 +899,7 @@ export class PlayerSatellite extends THREE.Group {
       const strut = new THREE.Mesh(strutGeo, strutMat);
       strut.position.y = -strutLen / 2;   // hang from pivot
       strut.name = `Strut_${i}`;
+      strut.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;   // FIX_PLAN §2-followup
       pivotGroup.add(strut);
 
       // ── Tip node at far end of strut (daughter-arm dock in V-4) ──
@@ -873,6 +939,7 @@ export class PlayerSatellite extends THREE.Group {
         const clip = new THREE.Mesh(clipGeo, ribMat);
         clip.position.set(cableOffset, -strutLen * frac, 0);
         clip.name = `PClip_${i}_${frac * 100}`;
+        clip.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;   // FIX_PLAN §2-followup
         pivotGroup.add(clip);
       }
 
@@ -904,6 +971,7 @@ export class PlayerSatellite extends THREE.Group {
         ring.position.y = -strutLen * frac;
         ring.rotation.x = Math.PI / 2;   // torus plane ⊥ strut Y-axis
         ring.name = `RibRing_${i}_${frac * 100}`;
+        ring.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;   // FIX_PLAN §2-followup
         pivotGroup.add(ring);
       }
 
@@ -911,12 +979,14 @@ export class PlayerSatellite extends THREE.Group {
       const rootCollar = new THREE.Mesh(rootCollarGeo, rootCollarMat);
       rootCollar.position.y = -M * 0.0125;  // flush with pivot origin
       rootCollar.name = `RootCollar_${i}`;
+      rootCollar.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;   // FIX_PLAN §2-followup
       pivotGroup.add(rootCollar);
 
       // ── Tip joint collar (daughter dock end) ──
       const tipCollar = new THREE.Mesh(tipCollarGeo, tipCollarMat);
       tipCollar.position.y = -strutLen + M * 0.010;  // at strut tip
       tipCollar.name = `TipCollar_${i}`;
+      tipCollar.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;   // FIX_PLAN §2-followup
       pivotGroup.add(tipCollar);
 
       // ── Default orientation: α = π/2  →  strut points radially outward ──
@@ -976,6 +1046,43 @@ export class PlayerSatellite extends THREE.Group {
       this.add(thruster);
       this.mainThrusters.push(thruster);
 
+      // Inner liner — BackSide-rendered interior surface, distinct from copper exterior
+      const innerLiner = new THREE.Mesh(nozzleGeo, this._matFEEPInner.clone());
+      innerLiner.name = `FEEPInner_${i}`;
+      innerLiner.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      thruster.add(innerLiner);
+
+      // FIX_PLAN §2 — Mounting boss (ring around nozzle throat)
+      // Parent thruster has rotation.x=π/2 mapping local +Y → world +Z, so
+      // boss.position.y is the axis aligned with the nozzle, and boss cylinder
+      // geometry (along local Y) auto-aligns with world Z (no extra rotation).
+      const bossGeo = new THREE.CylinderGeometry(M * 0.07, M * 0.07, M * 0.03, 8);
+      const bossMat = new THREE.MeshStandardMaterial({
+        color: 0x444455, metalness: 0.7, roughness: 0.3,
+      });
+      const boss = new THREE.Mesh(bossGeo, bossMat);
+      // Place at nozzle throat (world Δz = +0.075M from thruster centre at world -M*1.0)
+      boss.position.y = M * 0.075;
+      boss.name = 'FEEP_Boss';
+      boss.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL; // FIX_PLAN §2
+      thruster.add(boss);
+
+      // FIX_PLAN §2 — Grid disc (ion accelerator grid recessed inside nozzle exit)
+      // Same parent-rotation accounting: use local Y axis for the nozzle direction.
+      const gridDiscGeo = new THREE.CircleGeometry(M * 0.025, 8);
+      const gridDiscMat = new THREE.MeshBasicMaterial({
+        color: 0x667788, wireframe: true, transparent: true, opacity: 0.5,
+        side: THREE.DoubleSide,
+      });
+      const gridDisc = new THREE.Mesh(gridDiscGeo, gridDiscMat);
+      // Place 5mm inside nozzle exit (world z = -M*1.005, exit at world z = -M*1.075)
+      gridDisc.position.y = -M * 0.005;
+      // Disc default normal is local +Z = world -Y; DoubleSide keeps it visible
+      // from outside the nozzle without further rotation.
+      gridDisc.name = 'FEEP_GridDisc';
+      gridDisc.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_TRANSPARENT; // FIX_PLAN §2
+      thruster.add(gridDisc);
+
       // FEEP nozzle glow ring (sized to nozzle aperture)
       const glowGeo = new THREE.RingGeometry(M * 0.02, M * 0.055, 6);
       const glowMat = new THREE.MeshBasicMaterial({
@@ -985,6 +1092,7 @@ export class PlayerSatellite extends THREE.Group {
       const glow = new THREE.Mesh(glowGeo, glowMat);
       glow.position.set(pos.x, pos.y, -M * 1.075);
       glow.name = `MainFEEPGlow_${i}`;
+      glow.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE; // FIX_PLAN §2
       this.add(glow);
 
       // FEEP plume cone (shorter, tighter than Hall-effect)
@@ -993,6 +1101,7 @@ export class PlayerSatellite extends THREE.Group {
       plume.position.set(pos.x, pos.y, -M * 1.2);
       plume.rotation.x = -Math.PI / 2;
       plume.name = `MainFEEPPlume_${i}`;
+      plume.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE; // FIX_PLAN §2
       plume.visible = false;
       this.add(plume);
       this.mainThrusterPlumes.push(plume);
@@ -1007,10 +1116,11 @@ export class PlayerSatellite extends THREE.Group {
       outerGlow.position.set(pos.x, pos.y, -M * 1.25);
       outerGlow.rotation.x = -Math.PI / 2;
       outerGlow.name = `MainFEEPOuterGlow_${i}`;
+      outerGlow.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE; // FIX_PLAN §2
       outerGlow.visible = false;
       this.add(outerGlow);
 
-      this._thrusterGlowTargets.set(thruster, { glow, plume, outerGlow, intensity: 0 });
+      this._thrusterGlowTargets.set(thruster, { glow, plume, outerGlow, innerLiner, intensity: 0 });
     });
 
     // 8 RCS attitude thrusters (2 per quadrant, Config G barrel radius)
@@ -1063,9 +1173,11 @@ export class PlayerSatellite extends THREE.Group {
    * ```
    *   panelRightPivot (Group — sun-tracking rotation)
    *     ├─ _rosaPanelWrapper1 (Group — scale.x drives roll-out)
-   *     │    ├─ ROSA_Panel_0deg   (ShapeGeometry — chamfered cell surface)
-   *     │    └─ ROSA_Grid_0deg    (PlaneGeometry — wireframe overlay)
-   *     └─ ROSA_Roll_0deg         (CylinderGeometry — stowed roll)
+   *     │    ├─ ROSA_Panel_Front_0deg (ShapeGeometry — FrontSide dark cell surface)
+   *     │    ├─ ROSA_Panel_Back_0deg  (ShapeGeometry — BackSide Kapton substrate)
+   *     │    ├─ ROSA_GoldEdge_0deg    (LineSegments — gold anodized frame)
+   *     │    └─ ROSA_Grid_0deg        (PlaneGeometry — wireframe overlay)
+   *     └─ ROSA_Roll_0deg             (CylinderGeometry — stowed roll)
    * ```
    */
   _buildSolarPanels() {
@@ -1076,14 +1188,44 @@ export class PlayerSatellite extends THREE.Group {
     const chamfer = V5.ROSA_CHAMFER * M;     // 0.30 m → scene
 
     // ── Materials ──────────────────────────────────────────────
-    const panelMat = new THREE.MeshStandardMaterial({
+    const panelMatFront = new THREE.MeshStandardMaterial({
       color: 0x0a1133, metalness: 0.4, roughness: 0.5,
-      side: THREE.DoubleSide,
-      emissive: 0x0a0a40, emissiveIntensity: 0.25, // boosted to reduce bloom dark-halo artefact
+      side: THREE.FrontSide,
+      emissive: 0x0a0a40, emissiveIntensity: 0.15,
     });
-    const gridMat = new THREE.MeshBasicMaterial({
-      color: 0x2244aa, wireframe: true, transparent: true, opacity: 0.3,
-      polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
+    const panelMatBack = new THREE.MeshStandardMaterial({
+      color: 0xccccdd, metalness: 0.3, roughness: 0.4,
+      side: THREE.BackSide,
+      emissive: 0xccccdd, emissiveIntensity: 0.4,
+    });
+    // Grid overlay: ShaderMaterial with manual back-face discard.
+    // Wireframe (GL_LINES) ignores face-culling, so gl_FrontFacing doesn't
+    // work for lines. Instead we compute the view-dot-normal per fragment
+    // and discard when negative — hides the grid from behind the panel.
+    const gridMat = new THREE.ShaderMaterial({
+      uniforms: {},
+      vertexShader: `
+        varying vec3 vViewPos;
+        varying vec3 vNorm;
+        void main() {
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          vViewPos = -mv.xyz;
+          vNorm = normalize(normalMatrix * normal);
+          gl_Position = projectionMatrix * mv;
+        }
+      `,
+      fragmentShader: `
+        varying vec3 vViewPos;
+        varying vec3 vNorm;
+        void main() {
+          if (dot(normalize(vViewPos), vNorm) < 0.0) discard;
+          gl_FragColor = vec4(0.133, 0.267, 0.667, 0.3);
+        }
+      `,
+      wireframe: true,
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
     });
     const rollMat = new THREE.MeshStandardMaterial({
       color: 0x333344, metalness: 0.5, roughness: 0.4,
@@ -1113,6 +1255,20 @@ export class PlayerSatellite extends THREE.Group {
 
     const panelGeo1 = new THREE.ShapeGeometry(shape1);
     const panelGeo2 = new THREE.ShapeGeometry(shape2);
+
+    // Back-face geometry clones with flipped normals — BackSide doesn't
+    // flip normals in the shader (only DoubleSide does via DOUBLE_SIDED),
+    // so we negate them here to get correct back-face lighting.
+    const panelGeo1Back = panelGeo1.clone();
+    const n1 = panelGeo1Back.attributes.normal;
+    for (let i = 0; i < n1.count; i++) n1.setZ(i, -n1.getZ(i));
+    n1.needsUpdate = true;
+
+    const panelGeo2Back = panelGeo2.clone();
+    const n2 = panelGeo2Back.attributes.normal;
+    for (let i = 0; i < n2.count; i++) n2.setZ(i, -n2.getZ(i));
+    n2.needsUpdate = true;
+
     // Higher-fidelity grid: 12×24 subdivisions for accordion-fold pattern
     const gridGeo   = new THREE.PlaneGeometry(rosaW, rosaL, 12, 24);
     const rollGeo   = new THREE.CylinderGeometry(M * 0.05, M * 0.05, rosaL, 8);
@@ -1144,19 +1300,33 @@ export class PlayerSatellite extends THREE.Group {
     this._rosaPanelWrapper1.rotation.x = -Math.PI / 2; // local XY → world XZ
     this.panelRightPivot.add(this._rosaPanelWrapper1);
 
-    const panel1 = new THREE.Mesh(panelGeo1, panelMat);
-    panel1.name = 'ROSA_Panel_0deg';
-    this._rosaPanelWrapper1.add(panel1);
+    const panel1Front = new THREE.Mesh(panelGeo1, panelMatFront);
+    panel1Front.name = 'ROSA_Panel_Front_0deg';
+    panel1Front.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;     // FIX_PLAN §2-followup
+    this._rosaPanelWrapper1.add(panel1Front);
 
+    // FIX_PLAN §2-followup: bump back 1 mm behind front so the two ShapeGeometry
+    // planes no longer share the exact wrapper z=0 plane (was depth-tie ring).
+    const panel1Back = new THREE.Mesh(panelGeo1Back, panelMatBack);
+    panel1Back.position.z = -0.001;                                          // FIX_PLAN §2-followup
+    panel1Back.name = 'ROSA_Panel_Back_0deg';
+    panel1Back.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;       // FIX_PLAN §2-followup
+    this._rosaPanelWrapper1.add(panel1Back);
+
+    // FIX_PLAN §2-followup (round 3): edge was at z=0.001, grid at z=0.001 →
+    // coplanar line/wireframe stack on the panel face. Bump edge up 0.5 mm
+    // so the gold panel-outline always sits above the grid wireframe.
     const edgeGeo1 = new THREE.EdgesGeometry(panelGeo1, 1);
     const edge1 = new THREE.LineSegments(edgeGeo1, goldEdgeMat);
-    edge1.position.z = 0.001;    // tiny offset above panel (avoid z-fight)
+    edge1.position.z = 0.0015;                                              // FIX_PLAN §2-followup (round 3)
     edge1.name = 'ROSA_GoldEdge_0deg';
+    edge1.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;           // FIX_PLAN §2-followup (round 3)
     this._rosaPanelWrapper1.add(edge1);
 
     const grid1 = new THREE.Mesh(gridGeo, gridMat);
     grid1.position.set(rosaW / 2, 0, 0.001);
     grid1.name = 'ROSA_Grid_0deg';
+    grid1.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_TRANSPARENT;      // FIX_PLAN §2-followup (round 3)
     this._rosaPanelWrapper1.add(grid1);
 
     this._rosaRoll1 = new THREE.Mesh(rollGeo, rollMat);
@@ -1175,19 +1345,28 @@ export class PlayerSatellite extends THREE.Group {
     this._rosaPanelWrapper2.rotation.x = -Math.PI / 2;
     this.panelLeftPivot.add(this._rosaPanelWrapper2);
 
-    const panel2 = new THREE.Mesh(panelGeo2, panelMat);
-    panel2.name = 'ROSA_Panel_180deg';
-    this._rosaPanelWrapper2.add(panel2);
+    const panel2Front = new THREE.Mesh(panelGeo2, panelMatFront);
+    panel2Front.name = 'ROSA_Panel_Front_180deg';
+    panel2Front.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;     // FIX_PLAN §2-followup
+    this._rosaPanelWrapper2.add(panel2Front);
+
+    const panel2Back = new THREE.Mesh(panelGeo2Back, panelMatBack);
+    panel2Back.position.z = -0.001;                                          // FIX_PLAN §2-followup — clear front plane
+    panel2Back.name = 'ROSA_Panel_Back_180deg';
+    panel2Back.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;       // FIX_PLAN §2-followup
+    this._rosaPanelWrapper2.add(panel2Back);
 
     const edgeGeo2 = new THREE.EdgesGeometry(panelGeo2, 1);
     const edge2 = new THREE.LineSegments(edgeGeo2, goldEdgeMat);
-    edge2.position.z = 0.001;
+    edge2.position.z = 0.0015;                                              // FIX_PLAN §2-followup (round 3)
     edge2.name = 'ROSA_GoldEdge_180deg';
+    edge2.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;           // FIX_PLAN §2-followup (round 3)
     this._rosaPanelWrapper2.add(edge2);
 
     const grid2 = new THREE.Mesh(gridGeo, gridMat);
     grid2.position.set(-rosaW / 2, 0, 0.001);
     grid2.name = 'ROSA_Grid_180deg';
+    grid2.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_TRANSPARENT;      // FIX_PLAN §2-followup (round 3)
     this._rosaPanelWrapper2.add(grid2);
 
     this._rosaRoll2 = new THREE.Mesh(rollGeo, rollMat);
@@ -1287,10 +1466,16 @@ export class PlayerSatellite extends THREE.Group {
     this.sensorGimbal.add(this.lidarLight);
 
     // Gimbal base plate
+    // FIX_PLAN §2-followup: basePlate cylinder rotation.x=π/2 makes its 0.05 m
+    // height extend along world Z, centred on sensorGimbal.z=1.0. So plate
+    // z-extent was [0.975, 1.025] — straddles the front cap at z=1.0 →
+    // textbook z-fight on the forward face of the bus. Shift plate 30 mm
+    // forward (local z=+0.03) so its aft face sits clear at z=1.005.
     const basePlateGeo = new THREE.CylinderGeometry(M * 0.35, M * 0.35, M * 0.05, 8);
     const basePlate = new THREE.Mesh(basePlateGeo, this._matDark);
     basePlate.rotation.x = Math.PI / 2;
-    basePlate.position.set(0, -M * 0.1, 0);
+    basePlate.position.set(0, -M * 0.1, M * 0.03);                          // FIX_PLAN §2-followup
+    basePlate.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;        // FIX_PLAN §2-followup
     this.sensorGimbal.add(basePlate);
   }
 
@@ -1329,18 +1514,25 @@ export class PlayerSatellite extends THREE.Group {
     this.add(guide);
 
     // Green/Red docking lights
+    // FIX_PLAN §2-followup (round 3): lights were at radial 0.20 from torus
+    // centre; torus tube inner edge at major(0.25) − minor(0.04) = 0.21, so
+    // sphere outer (0.20+0.03=0.23) physically pierced the tube. Pulled
+    // lights inward to radial 0.15 → sphere outer 0.18, well clear of tube
+    // hole rim. Visual still reads as "lights flanking the docking port".
     const dockLightGeo = new THREE.SphereGeometry(M * 0.03, 4, 4);
 
     this._dockGreenMat = new THREE.MeshBasicMaterial({ color: 0x00ff44 });
     const dockGreen = new THREE.Mesh(dockLightGeo, this._dockGreenMat);
-    dockGreen.position.set(M * 0.2, -M * 0.15, M * 1.05);
+    dockGreen.position.set(M * 0.15, -M * 0.15, M * 1.05);                  // FIX_PLAN §2-followup (round 3)
     dockGreen.name = 'DockLight_Green';
+    dockGreen.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;     // FIX_PLAN §2-followup (round 3)
     this.add(dockGreen);
 
     this._dockRedMat = new THREE.MeshBasicMaterial({ color: 0xff2222 });
     const dockRed = new THREE.Mesh(dockLightGeo, this._dockRedMat);
-    dockRed.position.set(-M * 0.2, -M * 0.15, M * 1.05);
+    dockRed.position.set(-M * 0.15, -M * 0.15, M * 1.05);                   // FIX_PLAN §2-followup (round 3)
     dockRed.name = 'DockLight_Red';
+    dockRed.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;       // FIX_PLAN §2-followup (round 3)
     this.add(dockRed);
 
     this._dockGreenLight = dockGreen;
@@ -1832,13 +2024,14 @@ export class PlayerSatellite extends THREE.Group {
     }
   }
 
-  /** @private Thruster glow proportional to active thrust */
+  /** @private Thruster glow — per-nozzle differential for attitude + uniform prograde */
   _animateThrusterGlow(dt) {
     const ti = this.thrustInput;
     const mag = Math.sqrt(ti.x * ti.x + ti.y * ti.y + ti.z * ti.z);
     const hasThrust = mag > 1e-12;
+    const lerpRate = Constants.DIFFERENTIAL_THRUST.LERP_RATE;
 
-    // Main thrusters glow when thrusting forward (prograde)
+    // Main thrusters: each nozzle lerps independently toward its own target
     this.mainThrusters.forEach((thruster, i) => {
       const data = this._thrusterGlowTargets.get(thruster);
       if (!data) return;
@@ -1848,17 +2041,23 @@ export class PlayerSatellite extends THREE.Group {
       const blocked = Constants.FEATURE_FLAGS.THRUSTER_INTERLOCK &&
                       this._plumeBlocked && tid && (tid in this._plumeBlocked);
 
-      // Determine target based on prograde thrust
-      let target = 0;
+      // Prograde thrust target (same for all nozzles, as before)
+      let progradeTarget = 0;
       if (hasThrust && ti.z > 0) {
-        target = Math.min(1.0, Math.abs(ti.z) * 5000);
+        progradeTarget = Math.min(1.0, Math.abs(ti.z) * 5000);
       }
+
+      // Differential attitude-rotation target (per-nozzle, set by setThrusterFire)
+      const diffTarget = this._differentialFireTargets[i] || 0;
+
+      // Composite: max of prograde and differential
+      let target = Math.max(progradeTarget, diffTarget);
 
       // Suppress thrust output when plume-blocked
       if (blocked) target *= 0.15;
 
-      // Smooth interpolation
-      data.intensity += (target - data.intensity) * Math.min(1, dt * 8);
+      // Smooth interpolation — per-nozzle independent lerp
+      data.intensity += (target - data.intensity) * Math.min(1, dt * lerpRate);
 
       // Apply glow — red tint when blocked, silvery-blue when clear
       if (data.glow && data.glow.material) {
@@ -1898,7 +2097,25 @@ export class PlayerSatellite extends THREE.Group {
           data.outerGlow.material.color.setHex(blocked ? 0xff4422 : 0xaaccee);
         }
       }
+
+      // Inner nozzle liner — emissive intensifies when nozzle fires
+      if (data.innerLiner && data.innerLiner.material) {
+        const DT = Constants.DIFFERENTIAL_THRUST;
+        const fireEmissive = DT.INNER_EMISSIVE_BASE + data.intensity * DT.INNER_EMISSIVE_FIRE_SCALE;
+        data.innerLiner.material.emissiveIntensity = fireEmissive;
+        if (blocked) {
+          data.innerLiner.material.emissive.setHex(0x662222);
+        } else {
+          data.innerLiner.material.emissive.setHex(0x334466);
+        }
+      }
     });
+
+    // Reset differential targets — caller must re-set every frame for sustained fire
+    this._differentialFireTargets[0] = 0;
+    this._differentialFireTargets[1] = 0;
+    this._differentialFireTargets[2] = 0;
+    this._differentialFireTargets[3] = 0;
 
     // Attitude thrusters: glow based on lateral/normal thrust
     const attitudeIntensity = hasThrust ? Math.min(1.0, (Math.abs(ti.x) + Math.abs(ti.y)) * 5000) : 0;
@@ -2417,6 +2634,32 @@ export class PlayerSatellite extends THREE.Group {
     );
     this._manualRotation.multiply(q);
     this._manualRotation.normalize();
+  }
+
+  /**
+   * Differential FEEP plume — set per-nozzle firing intensity for attitude rotation.
+   * Visual only: does NOT apply torque (rotatePitch/rotateYaw handle that).
+   *
+   * Nozzle mapping (Newton's 3rd law — opposite nozzle fires):
+   *   pitch +1 (nose up)    → HT_BOTTOM (idx 1)
+   *   pitch −1 (nose down)  → HT_TOP    (idx 0)
+   *   yaw   +1 (nose left)  → HT_RIGHT  (idx 2)
+   *   yaw   −1 (nose right) → HT_LEFT   (idx 3)
+   *
+   * @param {'pitch'|'yaw'} axis — rotation axis
+   * @param {number} sign — +1 or −1 direction
+   * @param {number} magnitude — 0..1 normalised firing intensity
+   */
+  setThrusterFire(axis, sign, magnitude) {
+    const map = Constants.DIFFERENTIAL_THRUST.NOZZLE_MAP[axis];
+    if (!map) return; // unknown axis (roll etc.) — no-op
+    const key = sign >= 0 ? '1' : '-1';
+    const idx = map[key];
+    if (idx === undefined) return;
+    this._differentialFireTargets[idx] = Math.max(
+      this._differentialFireTargets[idx],
+      Math.min(1, magnitude)
+    );
   }
 
   // ==========================================================================
@@ -3458,6 +3701,87 @@ export class PlayerSatellite extends THREE.Group {
   /** @returns {string|null} 'ion' | 'coldgas' | null */
   getLastThrustType() {
     return this._lastThrustType;
+  }
+
+  /**
+   * Delegation 2 (2026-05-31) — onboarding "struts" beat helper.
+   *
+   * Briefly brightens every strut's emissive channel to a cyan glow so the
+   * player can see what their `,` / `.` keypress just animated.  Self-clears
+   * after `durationMs`.  Calling again while a highlight is live extends the
+   * timer (idempotent).  Labels are NOT rendered — kept to a glow-only pass
+   * since the screen-space label primitive is out of scope for this delegation.
+   *
+   * @param {number} [durationMs=4000]
+   * @returns {boolean} true if struts exist and the highlight was applied
+   */
+  highlightStrutsForBeat(durationMs = 4000) {
+    if (!Array.isArray(this.strutMeshes) || this.strutMeshes.length === 0) return false;
+    // Mesh materials may be shared across all struts — collect the unique set.
+    const uniqueMats = new Set();
+    for (const s of this.strutMeshes) {
+      if (s && s.material) uniqueMats.add(s.material);
+    }
+    if (uniqueMats.size === 0) return false;
+    // Record original emissive values once per session (so we can restore).
+    if (!this._strutEmissiveOriginal) {
+      this._strutEmissiveOriginal = new Map();
+      for (const m of uniqueMats) {
+        if (m.emissive && typeof m.emissive.clone === 'function') {
+          this._strutEmissiveOriginal.set(m, m.emissive.clone());
+        }
+      }
+    }
+    // Apply cyan glow.
+    for (const m of uniqueMats) {
+      if (m.emissive && typeof m.emissive.setRGB === 'function') {
+        m.emissive.setRGB(0.05, 0.55, 0.75);
+        m.emissiveIntensity = 1.0;
+        m.needsUpdate = true;
+      }
+    }
+    // (Re-)arm restore timer.
+    if (this._strutHighlightTimer != null && typeof clearTimeout === 'function') {
+      clearTimeout(this._strutHighlightTimer);
+    }
+    if (typeof setTimeout === 'function') {
+      this._strutHighlightTimer = setTimeout(() => {
+        this._strutHighlightTimer = null;
+        const orig = this._strutEmissiveOriginal;
+        if (!orig) return;
+        for (const [m, c] of orig) {
+          if (m && m.emissive && typeof m.emissive.copy === 'function') {
+            m.emissive.copy(c);
+            m.needsUpdate = true;
+          }
+        }
+      }, durationMs);
+    }
+    // Emit strut-labels event so StrutLabels overlay can visualize tip positions.
+    // Delegation 4 (2026-05-31) — Quick-Win 2b / P1-3: enrich each entry with
+    // the authoritative `hingeAngleDeg` read from the partner arm's aimAlpha
+    // so labels can render the real strut sweep angle instead of the legacy
+    // Euler-magnitude proxy.  Falls back to 0° when an arm slot is empty.
+    const arms = this.armManager?.arms || [];
+    const RAD2DEG = 180 / Math.PI;
+    const sgPayload = (this.strutGroups || []).map((sg, i) => {
+      const arm = arms[i];
+      const alphaRad = (arm && typeof arm.getAimAlpha === 'function')
+        ? arm.getAimAlpha()
+        : 0;
+      return {
+        pivotGroup: sg.pivotGroup,
+        strut:      sg.strut,
+        tipNode:    sg.tipNode,
+        azRad:      sg.azRad,
+        hingeAngleDeg: Math.round(alphaRad * RAD2DEG),
+      };
+    });
+    eventBus.emit(Events.STRUT_LABELS_SHOW, {
+      strutGroups: sgPayload,
+      durationMs,
+    });
+    return true;
   }
 }
 

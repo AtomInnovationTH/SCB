@@ -1667,6 +1667,68 @@ export class DebrisField {
     }
   }
 
+  /**
+   * Public welcome-field API — Delegation 2 (2026-05-31).
+   *
+   * Returns a deterministic *plan* (pure data, Node-safe) describing the 7–8
+   * fragment cluster the OnboardingDirector wants spawned in the player's
+   * own orbit at 150–1500 m offsets, then (if a live debrisList is present)
+   * mutates the field to realise that plan by delegating to the existing
+   * private spawner.  Each spawned debris is additionally tagged with
+   * `welcomeField:true` so callers can disambiguate from `welcomeSpawn`
+   * (which is M1-only and applies the harsher M1-only hide logic).
+   *
+   * @param {object} playerOrbit — orbital element snapshot (a, e, i, RAAN, argP, trueAnomaly, meanMotion)
+   * @param {object} [options]
+   * @param {number} [options.count=7]      — number of fragments (7 or 8)
+   * @param {number} [options.minOffsetM=150]  — closest fragment distance (metres)
+   * @param {number} [options.maxOffsetM=1500] — farthest fragment distance (metres)
+   * @param {number} [options.minMassKg=5]
+   * @param {number} [options.maxMassKg=50]
+   * @returns {{ playerOrbit: object, fragments: Array<{ massKg:number, offsetM:number, ahead:boolean, welcomeField:boolean, type:string }> }}
+   */
+  spawnWelcomeField(playerOrbit, options = {}) {
+    const count = Math.max(7, Math.min(8, options.count ?? 7));
+    const minOffsetM = options.minOffsetM ?? 150;
+    const maxOffsetM = options.maxOffsetM ?? 1500;
+    const minMassKg = options.minMassKg ?? 5;
+    const maxMassKg = options.maxMassKg ?? 50;
+
+    // Distribute fragments evenly across the offset range; alternate ahead/behind.
+    const fragments = [];
+    for (let i = 0; i < count; i++) {
+      const frac = count === 1 ? 0.5 : (i / (count - 1));
+      const offsetM = minOffsetM + frac * (maxOffsetM - minOffsetM);
+      const massKg = minMassKg + Math.random() * (maxMassKg - minMassKg);
+      fragments.push({
+        massKg,
+        offsetM,
+        ahead: (i % 2 === 0),
+        welcomeField: true,
+        type: 'fragment',
+      });
+    }
+
+    // If a live debris list is available, also stage the existing spawn path
+    // so the actual game state is updated.  Tag matching debris with
+    // welcomeField:true post-hoc.
+    if (Array.isArray(this.debrisList) && this.debrisList.length > 0 && playerOrbit) {
+      try {
+        if (!this._welcomeFieldSpawned) {
+          this._spawnWelcomeField(playerOrbit);
+          this._welcomeFieldSpawned = true;
+        }
+        for (const d of this.debrisList) {
+          if (d.welcomeSpawn) d.welcomeField = true;
+        }
+      } catch (e) {
+        console.warn('[DebrisField] spawnWelcomeField apply failed:', e?.message);
+      }
+    }
+
+    return { playerOrbit, fragments };
+  }
+
   // ==========================================================================
   // QUERIES
   // ==========================================================================
@@ -1987,6 +2049,18 @@ export class DebrisField {
         const tumbleMult = 1.0 + tumbleDeg / 90.0;
         const estimatedPoints = Math.floor(basePoints * sizeMult * tumbleMult);
 
+        // FIX_PLAN §4: Compute Target Priority Index (TPI) — composite ranking score
+        // Lower TPI = higher priority. Factors normalized to 0..1 then weighted.
+        const TR = Constants.TARGET_RANKING;
+        const distScore = Math.min(distKm / TR.DIST_REF_KM, 1.0);
+        const dvScore = Math.min(dv / TR.DV_REF_MS, 1.0);
+        const threatMap = TR.MOID_THREAT_MAP;
+        // Use bracket lookup; null key requires `threatMap[null]` (string 'null' key in JS objects)
+        const badgeKey = debris.moidBadge != null ? debris.moidBadge : null;
+        const threatScore = threatMap[badgeKey] !== undefined ? threatMap[badgeKey] : 1.0;
+        const valueScore = 1.0 - Math.min(estimatedPoints / TR.VALUE_REF_PTS, 1.0);
+        const tpi = TR.W_DIST * distScore + TR.W_DV * dvScore + TR.W_THREAT * threatScore + TR.W_VALUE * valueScore;
+
         results.push({
           id: debris.id,
           type: debris.type,
@@ -2007,12 +2081,16 @@ export class DebrisField {
           hasSalvage: debris.hasSalvage || false,
           salvage: debris.salvage || null,
           metalMassKg: debris.metalMassKg || 0,
+          // FIX_PLAN §4: MOID propagation + composite priority index
+          moidBadge: debris.moidBadge || null,
+          moid_m: debris.moid_m || null,
+          tpi,  // Target Priority Index — lower = higher priority
         });
       }
     }
 
-    // Sort by delta-v (cheapest first)
-    return results.sort((a, b) => a.deltaV - b.deltaV);
+    // FIX_PLAN §4: Default sort by TPI (composite score, lower = higher priority)
+    return results.sort((a, b) => a.tpi - b.tpi);
   }
 
   /**

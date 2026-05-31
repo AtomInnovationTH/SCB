@@ -438,8 +438,13 @@ describe('CA — Dodge Execution', () => {
     assert.equal(puffCalled, true, '_fireRcsPuff should have been called');
   });
 
-  it('COMMS_MESSAGE emitted on dodge with warning priority', () => {
+  it('COMMS_MESSAGE emitted on dodge with warning priority (past mission gate)', () => {
     const sys = makeSystem();
+    // Delegation 1 follow-up (2026-05-31): CA comms are silenced below
+    // Constants.COLLISION_AVOIDANCE.COMMS_MIN_MISSION (default 3) to keep the
+    // onboarding mission quiet.  Bypass that gate for this test by advancing
+    // missionNumber past the threshold.
+    sys._missionNumber = (Constants.COLLISION_AVOIDANCE.COMMS_MIN_MISSION ?? 3);
     const log = trackEvents(Events.COMMS_MESSAGE);
     sys._evaluateAndDodge(makeThreat(), sys._player.getPosition());
     // Two comms messages: threat warning (during detect) + dodge warning
@@ -447,6 +452,17 @@ describe('CA — Dodge Execution', () => {
     const dodgeMsg = log.find(e => e.data.priority === 'warning');
     assert.ok(dodgeMsg !== undefined, 'warning-priority COMMS_MESSAGE should fire');
     assert.equal(dodgeMsg.data.sender, 'CA');
+  });
+
+  it('CA comms are silenced on mission 1 (Delegation 1 follow-up)', () => {
+    const sys = makeSystem();
+    // missionNumber defaults to 1 — gate should suppress the dodge comms.
+    const log = trackEvents(Events.COMMS_MESSAGE);
+    sys._evaluateAndDodge(makeThreat(), sys._player.getPosition());
+    const dodgeMsg = log.find(e =>
+      e.data.priority === 'warning' && e.data.sender === 'CA');
+    assert.equal(dodgeMsg, undefined,
+      'mission 1 should NOT emit CA dodge comms');
   });
 });
 
@@ -587,10 +603,18 @@ describe('CA — Threat Lifecycle', () => {
     assert.equal(sys._currentThreat, null);
   });
 
-  it('COMMS_MESSAGE on threat clear says "Resume heading"', () => {
+  it('COMMS_MESSAGE on threat clear says "Resume heading" (past mission gate)', () => {
     const sys = makeSystem();
+    // Delegation 1 follow-up (2026-05-31): advance past CA comms gate.
+    sys._missionNumber = (Constants.COLLISION_AVOIDANCE.COMMS_MIN_MISSION ?? 3);
     sys._scanForThreats = () => makeThreat();
     sys.update(CA.SCAN_INTERVAL + 0.01);
+
+    // Allow rate-limiter clock to advance past the threat-detect emit so the
+    // "Resume" emit isn't rate-limited away.  Push _lastCommsEmitMs into the
+    // past by the configured rate limit (+ a tick of slack).
+    const limMs = (Constants.COLLISION_AVOIDANCE.COMMS_RATE_LIMIT_S ?? 0) * 1000;
+    sys._lastCommsEmitMs = -Infinity - limMs - 1;
 
     const commsLog = trackEvents(Events.COMMS_MESSAGE);
     sys._scanForThreats = () => null;

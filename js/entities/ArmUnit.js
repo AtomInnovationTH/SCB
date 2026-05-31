@@ -361,10 +361,14 @@ export class ArmUnit {
       color: isWeaver ? 0x4488aa : 0x88aa44,
       metalness: 0.80,
       roughness: 0.30,
+      polygonOffset: true,                                          // FIX_PLAN §2-followup
+      polygonOffsetFactor: 1,                                        // FIX_PLAN §2-followup — push body slightly into depth
+      polygonOffsetUnits: 1,                                         // FIX_PLAN §2-followup — so panel-line edges draw cleanly on top
     });
     this._bodyShell = new THREE.Mesh(hexGeo, bodyMat);
     this._bodyShell.rotation.x = Math.PI / 2;
     this._bodyShell.name = `${this.id}-hex-shell`;
+    this._bodyShell.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE; // FIX_PLAN §2-followup
     this.mesh.add(this._bodyShell);
 
     // --- S3.5: Panel line edges (zero triangle cost) ---
@@ -375,6 +379,7 @@ export class ArmUnit {
     const edges = new THREE.LineSegments(edgeGeo, edgeMat);
     edges.rotation.x = Math.PI / 2;
     edges.name = `${this.id}-panel-lines`;
+    edges.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_TRANSPARENT; // FIX_PLAN §2-followup
     this.mesh.add(edges);
 
     // --- ROSA-style solar panel wings (body-mounted GaAs, 8–15 W peak) ---
@@ -385,13 +390,43 @@ export class ArmUnit {
     const rosaL = (isWeaver ? 0.20 : 0.10) * M;  // scene units — wing length (Z)
     const chamfer = rosaW * 0.15;                  // chamfer at outboard corners
 
-    const panelMat = new THREE.MeshStandardMaterial({
+    const panelMatFront = new THREE.MeshStandardMaterial({
       color: 0x0a1133, metalness: 0.4, roughness: 0.5,
-      side: THREE.DoubleSide, emissive: 0x050520, emissiveIntensity: 0.15,
+      side: THREE.FrontSide,
+      emissive: 0x050520, emissiveIntensity: 0.15,
     });
-    const gridMat = new THREE.MeshBasicMaterial({
-      color: 0x2244aa, wireframe: true, transparent: true, opacity: 0.3,
-      polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
+    const panelMatBack = new THREE.MeshStandardMaterial({
+      color: 0xccccdd, metalness: 0.3, roughness: 0.4,
+      side: THREE.BackSide,
+      emissive: 0xccccdd, emissiveIntensity: 0.4, // bright Kapton substrate — must stay visible in shadow (scene has near-zero ambient)
+    });
+    // Grid overlay: ShaderMaterial with manual back-face discard.
+    // Wireframe (GL_LINES) ignores face-culling; compute view-dot-normal
+    // per fragment and discard when negative to hide grid from behind.
+    const gridMat = new THREE.ShaderMaterial({
+      uniforms: {},
+      vertexShader: `
+        varying vec3 vViewPos;
+        varying vec3 vNorm;
+        void main() {
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          vViewPos = -mv.xyz;
+          vNorm = normalize(normalMatrix * normal);
+          gl_Position = projectionMatrix * mv;
+        }
+      `,
+      fragmentShader: `
+        varying vec3 vViewPos;
+        varying vec3 vNorm;
+        void main() {
+          if (dot(normalize(vViewPos), vNorm) < 0.0) discard;
+          gl_FragColor = vec4(0.133, 0.267, 0.667, 0.3);
+        }
+      `,
+      wireframe: true,
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
     });
     const rollMat = new THREE.MeshStandardMaterial({
       color: 0x333344, metalness: 0.5, roughness: 0.4,
@@ -407,6 +442,14 @@ export class ArmUnit {
     pShape.lineTo(0, -rosaL / 2 + chamfer);
     pShape.closePath();
     const panelGeo = new THREE.ShapeGeometry(pShape);
+
+    // Back-face geometry clone with flipped normals — BackSide doesn't
+    // flip normals in the shader, so we negate them for correct lighting.
+    const panelGeoBack = panelGeo.clone();
+    const nBack = panelGeoBack.attributes.normal;
+    for (let i = 0; i < nBack.count; i++) nBack.setZ(i, -nBack.getZ(i));
+    nBack.needsUpdate = true;
+
     const gridGeo = new THREE.PlaneGeometry(rosaW, rosaL, 3, 4);
     const rollGeo = new THREE.CylinderGeometry(
       0.008 * M, 0.008 * M, rosaL, 6);
@@ -421,12 +464,23 @@ export class ArmUnit {
     topWrapper.rotation.z = Math.PI / 2;    // XZ → YZ, extends in +Y
     topPivot.add(topWrapper);
 
-    const topPanel = new THREE.Mesh(panelGeo, panelMat);
-    topPanel.name = `${this.id}-rosa-top`;
-    topWrapper.add(topPanel);
+    // FIX_PLAN §2-followup: front+back panels were coplanar at z=0 in wrapper.
+    // Bump back 1 mm behind so the two ShapeGeometry planes no longer share
+    // the same depth and depth-tie z-fights at the panel rim disappear.
+    const topPanelFront = new THREE.Mesh(panelGeo, panelMatFront);
+    topPanelFront.name = `${this.id}-rosa-top-front`;
+    topPanelFront.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;     // FIX_PLAN §2-followup
+    topWrapper.add(topPanelFront);
+
+    const topPanelBack = new THREE.Mesh(panelGeoBack, panelMatBack);
+    topPanelBack.position.z = -0.001;                                          // FIX_PLAN §2-followup
+    topPanelBack.name = `${this.id}-rosa-top-back`;
+    topPanelBack.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;       // FIX_PLAN §2-followup
+    topWrapper.add(topPanelBack);
 
     const topGrid = new THREE.Mesh(gridGeo, gridMat);
     topGrid.position.set(rosaW * 0.5, 0, 0.0005);
+    topGrid.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_TRANSPARENT;       // FIX_PLAN §2-followup
     topWrapper.add(topGrid);
 
     const topRoll = new THREE.Mesh(rollGeo, rollMat);
@@ -445,12 +499,20 @@ export class ArmUnit {
     botWrapper.rotation.z = -Math.PI / 2;    // XZ → YZ, extends in −Y
     botPivot.add(botWrapper);
 
-    const botPanel = new THREE.Mesh(panelGeo, panelMat);
-    botPanel.name = `${this.id}-rosa-bot`;
-    botWrapper.add(botPanel);
+    const botPanelFront = new THREE.Mesh(panelGeo, panelMatFront);
+    botPanelFront.name = `${this.id}-rosa-bot-front`;
+    botPanelFront.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;     // FIX_PLAN §2-followup
+    botWrapper.add(botPanelFront);
+
+    const botPanelBack = new THREE.Mesh(panelGeoBack, panelMatBack);
+    botPanelBack.position.z = -0.001;                                          // FIX_PLAN §2-followup
+    botPanelBack.name = `${this.id}-rosa-bot-back`;
+    botPanelBack.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;       // FIX_PLAN §2-followup
+    botWrapper.add(botPanelBack);
 
     const botGrid = new THREE.Mesh(gridGeo, gridMat);
     botGrid.position.set(rosaW * 0.5, 0, 0.0005);
+    botGrid.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_TRANSPARENT;       // FIX_PLAN §2-followup
     botWrapper.add(botGrid);
 
     const botRoll = new THREE.Mesh(rollGeo, rollMat);
@@ -518,6 +580,7 @@ export class ArmUnit {
     const pvPanel = new THREE.Mesh(pvGeo, pvMat);
     pvPanel.position.y = by * 0.52 * M;
     pvPanel.rotation.x = -Math.PI / 2;
+    pvPanel.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;   // FIX_PLAN §2-followup
     this.mesh.add(pvPanel);
 
     // --- S3.5: MRR patch antenna (flat hex disc, replaces 60-tri sphere) ---
@@ -527,9 +590,11 @@ export class ArmUnit {
       color: 0xccccdd, metalness: 0.95, roughness: 0.15, side: THREE.DoubleSide,
     });
     const mrr = new THREE.Mesh(mrrGeo, mrrMat);
-    mrr.position.set(bx * 0.25 * M, by * 0.52 * M, -bz * 0.20 * M);
+    // FIX_PLAN §2-followup: bumped y 0.52→0.525 to clear pvPanel coplanar layer.
+    mrr.position.set(bx * 0.25 * M, by * 0.525 * M, -bz * 0.20 * M);   // FIX_PLAN §2-followup
     mrr.rotation.x = -Math.PI / 2;
     mrr.name = `${this.id}-mrr-patch`;
+    mrr.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;        // FIX_PLAN §2-followup
     this.mesh.add(mrr);
 
     // --- Status light (blinks to show state) ---
@@ -537,6 +602,7 @@ export class ArmUnit {
     this._statusLightMat = new THREE.MeshBasicMaterial({ color: 0x00ff44 });
     const statusLight = new THREE.Mesh(lightGeo, this._statusLightMat);
     statusLight.position.set(0, by * 0.55 * M, -bz * 0.3 * M);
+    statusLight.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE; // FIX_PLAN §2-followup
     this.mesh.add(statusLight);
 
     // --- S3.4: EPM docking collar (replaces flat dock plate) ---
@@ -573,9 +639,12 @@ export class ArmUnit {
       new THREE.CylinderGeometry(pushR, pushR, pushH, 6),
       new THREE.MeshStandardMaterial({ color: 0x777788, metalness: 0.78, roughness: 0.32 })
     );
-    pusher.position.set(0, 0, -bz * 0.52 * M);
+    // FIX_PLAN §2-followup: nudged forward to z=-bz*0.505 so pusher disc no
+    // longer shares the aft-nozzle base plane at z=-bz*0.52 (was z-fight).
+    pusher.position.set(0, 0, -bz * 0.505 * M);                          // FIX_PLAN §2-followup
     pusher.rotation.x = Math.PI / 2;
     pusher.name = `${this.id}-pusher-plate`;
+    pusher.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;       // FIX_PLAN §2-followup
     this.mesh.add(pusher);
 
     // --- S3.6: Wishbone bridle (gimbal ring + Y-fork legs + hardpoints) ---
@@ -4417,26 +4486,53 @@ export class ArmUnit {
 
   /**
    * Set net inventory directly (persistence restore / shop reload).
+   * Delegation 4 (2026-05-31): emits NET_INVENTORY_CHANGED so
+   * dependent HUD panels stay in sync when the count is adjusted
+   * outside of CaptureNet's own fire/reload path.
    * @param {number} count
    */
   setNetInventory(count) {
     this._netInventory = Math.max(0, Math.min(count, this._netInventoryMax || count));
+    eventBus.emit(Events.NET_INVENTORY_CHANGED, {
+      source: 'daughter',
+      armIndex: this.index ?? null,
+      nets: this._netInventory,
+      max:  this._netInventoryMax,
+    });
   }
 
   /**
    * Consume one net from the magazine. Returns the remaining count.
+   * Delegation 4 (2026-05-31): emits NET_INVENTORY_CHANGED so
+   * NetInventoryPanel updates immediately on any decrement point,
+   * even if CaptureNet also emits (NetInventoryPanel re-polls
+   * idempotently — the second signal is a cheap no-op).
    * @returns {number} remaining inventory (0 if already empty)
    */
   decrementNetInventory() {
     if (this._netInventory > 0) this._netInventory--;
+    eventBus.emit(Events.NET_INVENTORY_CHANGED, {
+      source: 'daughter',
+      armIndex: this.index ?? null,
+      nets: this._netInventory,
+      max:  this._netInventoryMax,
+    });
     return this._netInventory;
   }
 
   /**
    * Reload magazine to full capacity (shop / between missions).
+   * Delegation 4 (2026-05-31): emits NET_INVENTORY_CHANGED so the
+   * HUD chip updates when the player purchases a net reload in shop.
    */
   reloadNetInventory() {
     this._netInventory = this._netInventoryMax;
+    eventBus.emit(Events.NET_INVENTORY_CHANGED, {
+      source: 'daughter',
+      armIndex: this.index ?? null,
+      nets: this._netInventory,
+      max:  this._netInventoryMax,
+    });
   }
 
   /**
