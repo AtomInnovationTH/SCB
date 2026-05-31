@@ -572,18 +572,18 @@ export const Constants = {
   // DIFFERENTIAL FEEP THRUST — per-nozzle attitude rotation plume mapping
   // =========================================================================
   // Maps (axis, sign) → mainThruster array index in PlayerSatellite._buildThrusters.
-  // Physical correctness (Newton's 3rd law): nozzle offset from CoM creates
-  // torque opposite to its radial position.
-  //   pitch +1 (nose up)   → HT_BOTTOM (idx 1, at −Y): aft thrust below CoM pitches nose up
-  //   pitch −1 (nose down) → HT_TOP    (idx 0, at +Y): aft thrust above CoM pitches nose down
-  //   yaw   +1 (nose left) → HT_RIGHT  (idx 2, at +X): aft thrust right of CoM yaws nose left
-  //   yaw   −1 (nose right)→ HT_LEFT   (idx 3, at −X): aft thrust left of CoM yaws nose right
+  // Model convention: +Z = forward (prograde). FEEP nozzles at aft face (−Z) push
+  // the ship forward (+Z). Nozzle on the SAME side as the target rotation fires:
+  //   pitch +1 (nose up)    → HT_TOP   (idx 0, at +Y): thrust above CoM lifts nose
+  //   pitch −1 (nose down)  → HT_BOTTOM(idx 1, at −Y): thrust below CoM dips nose
+  //   yaw   +1 (nose left)  → HT_LEFT  (idx 3, at −X): thrust left of CoM yaws left
+  //   yaw   −1 (nose right) → HT_RIGHT (idx 2, at +X): thrust right of CoM yaws right
   // Note: Code sign convention — positive yaw = ArrowLeft = nose-left (matches
   // rotateYaw(+angle) around +Y via right-hand rule).
   DIFFERENTIAL_THRUST: {
     NOZZLE_MAP: {
-      pitch: { '1': 1, '-1': 0 },   // +1→HT_BOTTOM, −1→HT_TOP
-      yaw:   { '1': 2, '-1': 3 },   // +1→HT_RIGHT,  −1→HT_LEFT
+      pitch: { '1': 0, '-1': 1 },   // +1→HT_TOP, −1→HT_BOTTOM
+      yaw:   { '1': 3, '-1': 2 },   // +1→HT_LEFT, −1→HT_RIGHT
     },
     LERP_RATE: 8,                    // per-second exponential approach rate (matches legacy glow lerp)
     INNER_EMISSIVE_BASE: 0.3,       // idle emissive intensity for nozzle interior liner

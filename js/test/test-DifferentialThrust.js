@@ -4,6 +4,12 @@
  * Tests: DIFFERENTIAL_THRUST constants, setThrusterFire nozzle mapping,
  * per-axis isolation, combined inputs, magnitude scaling, frame-reset decay.
  *
+ * Nozzle mapping (same-side, +Z = forward model convention):
+ *   pitch +1 (nose up)    → HT_TOP    (idx 0, at +Y)
+ *   pitch −1 (nose down)  → HT_BOTTOM (idx 1, at −Y)
+ *   yaw   +1 (nose left)  → HT_LEFT   (idx 3, at −X)
+ *   yaw   −1 (nose right) → HT_RIGHT  (idx 2, at +X)
+ *
  * Node-safe: uses mock reproducing setThrusterFire logic (no THREE.js needed).
  */
 import { describe, it, assert } from './TestRunner.js';
@@ -26,20 +32,20 @@ describe('DifferentialThrust — Constants', () => {
     assert.ok(DT.NOZZLE_MAP.yaw, 'yaw mapping exists');
   });
 
-  it('pitch +1 maps to HT_BOTTOM (index 1)', () => {
-    assert.equal(DT.NOZZLE_MAP.pitch['1'], 1);
+  it('pitch +1 maps to HT_TOP (index 0)', () => {
+    assert.equal(DT.NOZZLE_MAP.pitch['1'], 0);
   });
 
-  it('pitch -1 maps to HT_TOP (index 0)', () => {
-    assert.equal(DT.NOZZLE_MAP.pitch['-1'], 0);
+  it('pitch -1 maps to HT_BOTTOM (index 1)', () => {
+    assert.equal(DT.NOZZLE_MAP.pitch['-1'], 1);
   });
 
-  it('yaw +1 maps to HT_RIGHT (index 2)', () => {
-    assert.equal(DT.NOZZLE_MAP.yaw['1'], 2);
+  it('yaw +1 maps to HT_LEFT (index 3)', () => {
+    assert.equal(DT.NOZZLE_MAP.yaw['1'], 3);
   });
 
-  it('yaw -1 maps to HT_LEFT (index 3)', () => {
-    assert.equal(DT.NOZZLE_MAP.yaw['-1'], 3);
+  it('yaw -1 maps to HT_RIGHT (index 2)', () => {
+    assert.equal(DT.NOZZLE_MAP.yaw['-1'], 2);
   });
 
   it('LERP_RATE matches legacy glow animation rate (8)', () => {
@@ -84,75 +90,75 @@ function createMock() {
 
 describe('DifferentialThrust — setThrusterFire single-axis', () => {
 
-  it('pitch +1 fires ONLY HT_BOTTOM (index 1)', () => {
+  it('pitch +1 fires ONLY HT_TOP (index 0)', () => {
     const m = createMock();
     m.setThrusterFire('pitch', 1, 1);
-    assert.equal(m._differentialFireTargets[0], 0, 'HT_TOP off');
-    assert.equal(m._differentialFireTargets[1], 1, 'HT_BOTTOM on');
-    assert.equal(m._differentialFireTargets[2], 0, 'HT_RIGHT off');
-    assert.equal(m._differentialFireTargets[3], 0, 'HT_LEFT off');
-  });
-
-  it('pitch -1 fires ONLY HT_TOP (index 0)', () => {
-    const m = createMock();
-    m.setThrusterFire('pitch', -1, 1);
     assert.equal(m._differentialFireTargets[0], 1, 'HT_TOP on');
     assert.equal(m._differentialFireTargets[1], 0, 'HT_BOTTOM off');
     assert.equal(m._differentialFireTargets[2], 0, 'HT_RIGHT off');
     assert.equal(m._differentialFireTargets[3], 0, 'HT_LEFT off');
   });
 
-  it('yaw +1 fires ONLY HT_RIGHT (index 2)', () => {
+  it('pitch -1 fires ONLY HT_BOTTOM (index 1)', () => {
+    const m = createMock();
+    m.setThrusterFire('pitch', -1, 1);
+    assert.equal(m._differentialFireTargets[0], 0, 'HT_TOP off');
+    assert.equal(m._differentialFireTargets[1], 1, 'HT_BOTTOM on');
+    assert.equal(m._differentialFireTargets[2], 0, 'HT_RIGHT off');
+    assert.equal(m._differentialFireTargets[3], 0, 'HT_LEFT off');
+  });
+
+  it('yaw +1 fires ONLY HT_LEFT (index 3)', () => {
     const m = createMock();
     m.setThrusterFire('yaw', 1, 1);
     assert.equal(m._differentialFireTargets[0], 0, 'HT_TOP off');
     assert.equal(m._differentialFireTargets[1], 0, 'HT_BOTTOM off');
-    assert.equal(m._differentialFireTargets[2], 1, 'HT_RIGHT on');
-    assert.equal(m._differentialFireTargets[3], 0, 'HT_LEFT off');
+    assert.equal(m._differentialFireTargets[2], 0, 'HT_RIGHT off');
+    assert.equal(m._differentialFireTargets[3], 1, 'HT_LEFT on');
   });
 
-  it('yaw -1 fires ONLY HT_LEFT (index 3)', () => {
+  it('yaw -1 fires ONLY HT_RIGHT (index 2)', () => {
     const m = createMock();
     m.setThrusterFire('yaw', -1, 1);
     assert.equal(m._differentialFireTargets[0], 0, 'HT_TOP off');
     assert.equal(m._differentialFireTargets[1], 0, 'HT_BOTTOM off');
-    assert.equal(m._differentialFireTargets[2], 0, 'HT_RIGHT off');
-    assert.equal(m._differentialFireTargets[3], 1, 'HT_LEFT on');
+    assert.equal(m._differentialFireTargets[2], 1, 'HT_RIGHT on');
+    assert.equal(m._differentialFireTargets[3], 0, 'HT_LEFT off');
   });
 });
 
 describe('DifferentialThrust — combined inputs', () => {
 
-  it('pitch+ AND yaw- fires HT_BOTTOM + HT_LEFT (indices 1, 3)', () => {
+  it('pitch+ AND yaw- fires HT_TOP + HT_RIGHT (indices 0, 2)', () => {
     const m = createMock();
-    m.setThrusterFire('pitch', 1, 1);   // HT_BOTTOM
-    m.setThrusterFire('yaw', -1, 1);    // HT_LEFT
-    assert.equal(m._differentialFireTargets[0], 0, 'HT_TOP off');
-    assert.equal(m._differentialFireTargets[1], 1, 'HT_BOTTOM on');
-    assert.equal(m._differentialFireTargets[2], 0, 'HT_RIGHT off');
-    assert.equal(m._differentialFireTargets[3], 1, 'HT_LEFT on');
-  });
-
-  it('pitch- AND yaw+ fires HT_TOP + HT_RIGHT (indices 0, 2)', () => {
-    const m = createMock();
-    m.setThrusterFire('pitch', -1, 1);  // HT_TOP
-    m.setThrusterFire('yaw', 1, 1);     // HT_RIGHT
+    m.setThrusterFire('pitch', 1, 1);   // HT_TOP
+    m.setThrusterFire('yaw', -1, 1);    // HT_RIGHT
     assert.equal(m._differentialFireTargets[0], 1, 'HT_TOP on');
     assert.equal(m._differentialFireTargets[1], 0, 'HT_BOTTOM off');
     assert.equal(m._differentialFireTargets[2], 1, 'HT_RIGHT on');
     assert.equal(m._differentialFireTargets[3], 0, 'HT_LEFT off');
   });
 
+  it('pitch- AND yaw+ fires HT_BOTTOM + HT_LEFT (indices 1, 3)', () => {
+    const m = createMock();
+    m.setThrusterFire('pitch', -1, 1);  // HT_BOTTOM
+    m.setThrusterFire('yaw', 1, 1);     // HT_LEFT
+    assert.equal(m._differentialFireTargets[0], 0, 'HT_TOP off');
+    assert.equal(m._differentialFireTargets[1], 1, 'HT_BOTTOM on');
+    assert.equal(m._differentialFireTargets[2], 0, 'HT_RIGHT off');
+    assert.equal(m._differentialFireTargets[3], 1, 'HT_LEFT on');
+  });
+
   it('all four directions fire all four nozzles', () => {
     const m = createMock();
-    m.setThrusterFire('pitch', 1, 0.8);
-    m.setThrusterFire('pitch', -1, 0.6);
-    m.setThrusterFire('yaw', 1, 0.7);
-    m.setThrusterFire('yaw', -1, 0.9);
-    assert.closeTo(m._differentialFireTargets[0], 0.6, 1e-9, 'HT_TOP');
-    assert.closeTo(m._differentialFireTargets[1], 0.8, 1e-9, 'HT_BOTTOM');
-    assert.closeTo(m._differentialFireTargets[2], 0.7, 1e-9, 'HT_RIGHT');
-    assert.closeTo(m._differentialFireTargets[3], 0.9, 1e-9, 'HT_LEFT');
+    m.setThrusterFire('pitch', 1, 0.8);   // HT_TOP (idx 0)
+    m.setThrusterFire('pitch', -1, 0.6);  // HT_BOTTOM (idx 1)
+    m.setThrusterFire('yaw', 1, 0.7);     // HT_LEFT (idx 3)
+    m.setThrusterFire('yaw', -1, 0.9);    // HT_RIGHT (idx 2)
+    assert.closeTo(m._differentialFireTargets[0], 0.8, 1e-9, 'HT_TOP');
+    assert.closeTo(m._differentialFireTargets[1], 0.6, 1e-9, 'HT_BOTTOM');
+    assert.closeTo(m._differentialFireTargets[2], 0.9, 1e-9, 'HT_RIGHT');
+    assert.closeTo(m._differentialFireTargets[3], 0.7, 1e-9, 'HT_LEFT');
   });
 });
 
@@ -161,33 +167,33 @@ describe('DifferentialThrust — magnitude scaling', () => {
   it('magnitude 0.5 sets half-intensity on mapped nozzle', () => {
     const m = createMock();
     m.setThrusterFire('pitch', 1, 0.5);
-    assert.closeTo(m._differentialFireTargets[1], 0.5, 1e-9, 'half intensity');
+    assert.closeTo(m._differentialFireTargets[0], 0.5, 1e-9, 'half intensity');
   });
 
   it('magnitude 0 leaves nozzle at 0', () => {
     const m = createMock();
     m.setThrusterFire('yaw', -1, 0);
-    assert.equal(m._differentialFireTargets[3], 0, 'zero magnitude');
+    assert.equal(m._differentialFireTargets[2], 0, 'zero magnitude');
   });
 
   it('magnitude > 1 is clamped to 1', () => {
     const m = createMock();
     m.setThrusterFire('pitch', 1, 2.5);
-    assert.equal(m._differentialFireTargets[1], 1, 'clamped to 1');
+    assert.equal(m._differentialFireTargets[0], 1, 'clamped to 1');
   });
 
   it('max-wins semantics: two calls, larger magnitude wins', () => {
     const m = createMock();
     m.setThrusterFire('pitch', 1, 0.3);
     m.setThrusterFire('pitch', 1, 0.7);
-    assert.closeTo(m._differentialFireTargets[1], 0.7, 1e-9, 'max wins');
+    assert.closeTo(m._differentialFireTargets[0], 0.7, 1e-9, 'max wins');
   });
 
   it('max-wins: first call with higher magnitude is preserved', () => {
     const m = createMock();
     m.setThrusterFire('yaw', 1, 0.9);
     m.setThrusterFire('yaw', 1, 0.4);
-    assert.closeTo(m._differentialFireTargets[2], 0.9, 1e-9, 'first call preserved');
+    assert.closeTo(m._differentialFireTargets[3], 0.9, 1e-9, 'first call preserved');
   });
 });
 
@@ -205,15 +211,15 @@ describe('DifferentialThrust — edge cases', () => {
   it('sign = 0 maps to +1 key (non-negative)', () => {
     const m = createMock();
     m.setThrusterFire('pitch', 0, 0.5);
-    // sign >= 0 → key '1' → HT_BOTTOM (index 1)
-    assert.closeTo(m._differentialFireTargets[1], 0.5, 1e-9);
+    // sign >= 0 → key '1' → HT_TOP (index 0)
+    assert.closeTo(m._differentialFireTargets[0], 0.5, 1e-9);
   });
 
   it('negative magnitude is clamped to 0 via Math.min(1, mag) but Math.max keeps existing', () => {
     const m = createMock();
     m.setThrusterFire('pitch', 1, -0.5);
     // Math.min(1, -0.5) = -0.5, Math.max(0, -0.5) = 0 (array starts at 0)
-    assert.equal(m._differentialFireTargets[1], 0, 'negative clamped by max with 0');
+    assert.equal(m._differentialFireTargets[0], 0, 'negative clamped by max with 0');
   });
 });
 
@@ -221,10 +227,10 @@ describe('DifferentialThrust — frame-reset decay', () => {
 
   it('targets reset to 0 after fill(0) simulating frame end', () => {
     const m = createMock();
-    m.setThrusterFire('pitch', 1, 0.8);
-    m.setThrusterFire('yaw', -1, 0.6);
-    assert.equal(m._differentialFireTargets[1], 0.8, 'set before reset');
-    assert.equal(m._differentialFireTargets[3], 0.6, 'set before reset');
+    m.setThrusterFire('pitch', 1, 0.8);   // HT_TOP (idx 0)
+    m.setThrusterFire('yaw', -1, 0.6);    // HT_RIGHT (idx 2)
+    assert.equal(m._differentialFireTargets[0], 0.8, 'set before reset');
+    assert.equal(m._differentialFireTargets[2], 0.6, 'set before reset');
 
     // Simulate _animateThrusterGlow frame-end reset
     m._differentialFireTargets[0] = 0;
@@ -232,14 +238,14 @@ describe('DifferentialThrust — frame-reset decay', () => {
     m._differentialFireTargets[2] = 0;
     m._differentialFireTargets[3] = 0;
 
-    assert.equal(m._differentialFireTargets[1], 0, 'cleared after reset');
-    assert.equal(m._differentialFireTargets[3], 0, 'cleared after reset');
+    assert.equal(m._differentialFireTargets[0], 0, 'cleared after reset');
+    assert.equal(m._differentialFireTargets[2], 0, 'cleared after reset');
   });
 
   it('re-setting after reset works normally', () => {
     const m = createMock();
-    m.setThrusterFire('yaw', 1, 1.0);
-    assert.equal(m._differentialFireTargets[2], 1.0);
+    m.setThrusterFire('yaw', 1, 1.0);  // HT_LEFT (idx 3)
+    assert.equal(m._differentialFireTargets[3], 1.0);
 
     // Reset
     m._differentialFireTargets[0] = 0;
@@ -248,8 +254,8 @@ describe('DifferentialThrust — frame-reset decay', () => {
     m._differentialFireTargets[3] = 0;
 
     // New frame
-    m.setThrusterFire('pitch', -1, 0.4);
-    assert.equal(m._differentialFireTargets[0], 0.4, 'new frame sets correctly');
-    assert.equal(m._differentialFireTargets[2], 0, 'previous axis stays 0');
+    m.setThrusterFire('pitch', -1, 0.4);  // HT_BOTTOM (idx 1)
+    assert.equal(m._differentialFireTargets[1], 0.4, 'new frame sets correctly');
+    assert.equal(m._differentialFireTargets[3], 0, 'previous axis stays 0');
   });
 });

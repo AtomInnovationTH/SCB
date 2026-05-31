@@ -2640,11 +2640,11 @@ export class PlayerSatellite extends THREE.Group {
    * Differential FEEP plume — set per-nozzle firing intensity for attitude rotation.
    * Visual only: does NOT apply torque (rotatePitch/rotateYaw handle that).
    *
-   * Nozzle mapping (Newton's 3rd law — opposite nozzle fires):
-   *   pitch +1 (nose up)    → HT_BOTTOM (idx 1)
-   *   pitch −1 (nose down)  → HT_TOP    (idx 0)
-   *   yaw   +1 (nose left)  → HT_RIGHT  (idx 2)
-   *   yaw   −1 (nose right) → HT_LEFT   (idx 3)
+   * Nozzle mapping (same-side nozzle fires, +Z = forward model convention):
+   *   pitch +1 (nose up)    → HT_TOP    (idx 0, at +Y)
+   *   pitch −1 (nose down)  → HT_BOTTOM (idx 1, at −Y)
+   *   yaw   +1 (nose left)  → HT_LEFT   (idx 3, at −X)
+   *   yaw   −1 (nose right) → HT_RIGHT  (idx 2, at +X)
    *
    * @param {'pitch'|'yaw'} axis — rotation axis
    * @param {number} sign — +1 or −1 direction
