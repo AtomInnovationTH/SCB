@@ -844,7 +844,10 @@ class GameFlowManager {
           console.log('[AUTO-TARGET] GFM ARM_RETURNED: target already set id=%s — skip fallback', targetSelector.activeTarget.id);
         }
 
-        // Auto-camera: return to COMMAND view after capture delivery
+        // Auto-camera: return to COMMAND view after capture delivery.
+        // NOTE (2026-06-03): TARGET_LOCK is currently unreachable (removed from
+        // CameraSystem's VIEW_CYCLE), so this revert is a no-op today. Retained
+        // intentionally so it keeps working if TARGET_LOCK is re-enabled.
         if (cameraSystem && cameraSystem.currentView === CameraViews.TARGET_LOCK) {
           timerManager.setTimeout(() => {
             if (cameraSystem.currentView === CameraViews.TARGET_LOCK) {

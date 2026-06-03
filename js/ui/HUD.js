@@ -39,9 +39,11 @@ const VIEW_INFO_LEVELS = {
     showAnalysis: true,
     showClosureRate: true, showTypeIcons: true,
     showVelocityVectors: true, showLeadIndicators: true,
-    hudOpacity: 0.85, label: 'TACTICAL VIEW',
+    hudOpacity: 0.85, label: 'COMMAND VIEW',
   },
   TARGET_LOCK: {
+    // Unreachable as of 2026-06-03 (TARGET_LOCK dropped from the V-cycle in
+    // CameraSystem). Retained for possible re-enable; see CameraSystem VIEW_CYCLE.
     showTargetList: true, showResources: true, showNavSphere: true,
     showComms: false, showArms: true, showProgress: false, showWarnings: true,
     showAnalysis: true,
@@ -56,6 +58,18 @@ const VIEW_INFO_LEVELS = {
     showClosureRate: false, showTypeIcons: false,
     showVelocityVectors: false, showLeadIndicators: false,
     hudOpacity: 0.6, label: 'OVERVIEW',
+  },
+  // INSPECTION (2026-06-03): now the 3rd V-cycle view. Close mechanical look at
+  // the ship with a contextual wireframe overlay. Keeps the target detail/arms
+  // readouts available (the debris subject expands the right-column wireframe);
+  // the mother subject hides the right column via the INSPECTION_TOGGLE handler.
+  INSPECTION: {
+    showTargetList: false, showResources: true, showNavSphere: false,
+    showComms: false, showArms: true, showProgress: false, showWarnings: true,
+    showAnalysis: true,
+    showClosureRate: false, showTypeIcons: false,
+    showVelocityVectors: false, showLeadIndicators: false,
+    hudOpacity: 0.8, label: 'INSPECT',
   },
   ARM_PILOT: {
     showTargetList: false, showResources: true, showNavSphere: false,
@@ -118,7 +132,6 @@ export class HUD {
     this._credits = 0;
     this._debrisCleared = 0;
     this._totalMassKg = 0;
-    this._altitude = 0;
     this._resources = { xenon: 100, coldGas: 20, battery: 100, solarRate: 0 };
     this._targetInfo = null;
 
@@ -511,45 +524,29 @@ export class HUD {
   }
 
   /**
-   * Apply skill-based dormant/active classes to all [data-hud-group] elements.
-   * Maps CATALOG hudGroup names (e.g. 'targets', 'fleet') to DOM attribute names
-   * (e.g. 'target-list', 'arms-group') via SKILL_GROUP_TO_DOM.
+   * Force all [data-hud-group] panels to the active (bright) state.
+   * Progressive-luminance dimming is disabled — panels are legible from the
+   * start. Skill discovery still drives `_skillActiveGroups` elsewhere; this
+   * method no longer applies `hud-dormant`. (SKILL_GROUP_TO_DOM /
+   * ALL_REVEAL_GROUPS are retained for a possible re-enable of luminance.)
    * @private
    */
   _applySkillReveal() {
-    // Build the set of DOM data-hud-group values that should be active
-    const activeDom = new Set();
-    for (const skillGroup of this._skillActiveGroups) {
-      const domGroups = SKILL_GROUP_TO_DOM[skillGroup];
-      if (domGroups) {
-        for (const dg of domGroups) activeDom.add(dg);
-      }
-    }
+    // VISIBILITY: all panels start (and stay) bright for legibility. The
+    // progressive-luminance dimming was reported as hard to read, so we no
+    // longer apply `hud-dormant`. Skill discovery still populates
+    // `_skillActiveGroups` for progression/affordance tracking (the dormant
+    // keycap glyph still keys off the active state), but panels render at full
+    // opacity from frame one regardless of which skills are known.
+    this.container.querySelectorAll('[data-hud-group]').forEach(el => {
+      el.classList.remove('hud-dormant');
+      el.classList.add('hud-active');
+    });
 
-    // Check if ALL reveal groups are now active → remove luminance entirely
-    const allActive = ALL_REVEAL_GROUPS.every(g => activeDom.has(g));
-    if (allActive) {
-      this.container.querySelectorAll('[data-hud-group]').forEach(el => {
-        el.classList.remove('hud-dormant', 'hud-active');
-      });
-      this._applyViewConfig();
-      return;
-    }
-
-    // Apply dormant/active to each reveal group
-    for (const group of ALL_REVEAL_GROUPS) {
-      const active = activeDom.has(group);
-      this.container.querySelectorAll(`[data-hud-group="${group}"]`).forEach(el => {
-        el.classList.toggle('hud-dormant', !active);
-        el.classList.toggle('hud-active', active);
-      });
-    }
-
-    // Comms panel: managed via skill group 'comms' but has no data-hud-group attribute
+    // Comms panel: bright from the start as well.
     if (this.panels.comms) {
-      const commsActive = this._skillActiveGroups.has('comms');
-      this.panels.comms.style.opacity = commsActive ? '' : '0.5';
-      this.panels.comms.style.pointerEvents = commsActive ? '' : 'none';
+      this.panels.comms.style.opacity = '';
+      this.panels.comms.style.pointerEvents = '';
     }
 
     // Ensure panels are visible (dormant handles dimming, not display:none)
@@ -835,21 +832,27 @@ export class HUD {
           }
         }
       } else if (subject === 'debris') {
-        // ARM_PILOT: toggle expanded debris-from-daughter mode
-        if (!this._lastPilotedArm) {
+        // Toggle the expanded debris wireframe. Two contexts:
+        //   • ARM_PILOT  → debris-from-daughter view (badged with the arm).
+        //   • Mothership → the currently Tab-selected debris (2026-06-03: the
+        //                  V-cycle INSPECT view focuses a locked target here).
+        if (this.debrisWireframe?._expandedMode) {
+          this.debrisWireframe.clearExpandedMode();
+          return;
+        }
+        if (this._lastPilotedArm) {
+          const arm        = this._lastPilotedArm;
+          const armTarget  = arm.getApproachTarget?.() ?? arm._approachTarget ?? null;
+          this.debrisWireframe?.setExpandedMode(this._lastArmIndex, armTarget);
+        } else if (this.debrisWireframe?._target) {
+          // Mothership context — expand the already-tracked selected target.
+          this.debrisWireframe.setExpandedMode(null);
+        } else {
           eventBus.emit(Events.COMMS_MESSAGE, {
             text: 'Select a target with Tab first.',
             priority: 'info',
             source: 'SYSTEM',
           });
-          return;
-        }
-        if (this.debrisWireframe?._expandedMode) {
-          this.debrisWireframe.clearExpandedMode();
-        } else {
-          const arm        = this._lastPilotedArm;
-          const armTarget  = arm.getApproachTarget?.() ?? arm._approachTarget ?? null;
-          this.debrisWireframe?.setExpandedMode(this._lastArmIndex, armTarget);
         }
       }
     });
@@ -989,7 +992,6 @@ export class HUD {
     if (this._updateTimers.resources > 0.1) {
       this._updateTimers.resources = 0;
       this._resources = { ...player.resources };
-      this._altitude = player.getAltitudeKm();
 
       // C-9: Compute CoM drift warning + plume blocks (at HUD rate, 10 Hz)
       let comDriftM = 0;
@@ -1006,7 +1008,6 @@ export class HUD {
         score: this._score,
         credits: this._credits,
         debrisCleared: this._debrisCleared,
-        altitude: this._altitude,
         resources: this._resources,
         cachedTargets: this._cachedTargets,
         forgeState: data.forgeState,

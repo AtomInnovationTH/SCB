@@ -31,10 +31,6 @@ function filterRoundTrip(filters) {
   return result;
 }
 
-function getChannelColor(channel) {
-  return COMMS.CHANNEL_COLORS[channel] || COMMS.CHANNEL_COLORS[COMMS.DEFAULT_CHANNEL];
-}
-
 // ============================================================================
 // discriminateKeyEvent
 // ============================================================================
@@ -122,27 +118,5 @@ describe('CommsPanel – pane dimensions', () => {
 
   it('C_TAP_MAX_MS is 250', () => {
     assert.equal(COMMS.C_TAP_MAX_MS, 250);
-  });
-});
-
-// ============================================================================
-// Channel color lookup
-// ============================================================================
-
-describe('CommsPanel – getChannelColor', () => {
-  it('CMD → amber #ffaa00', () => {
-    assert.equal(getChannelColor('CMD'), '#ffaa00');
-  });
-
-  it('ALERT → red #ff4444', () => {
-    assert.equal(getChannelColor('ALERT'), '#ff4444');
-  });
-
-  it('HOUSTON → mint #88ffcc', () => {
-    assert.equal(getChannelColor('HOUSTON'), '#88ffcc');
-  });
-
-  it('unknown channel → FLAVOR grey', () => {
-    assert.equal(getChannelColor('BOGUS'), COMMS.CHANNEL_COLORS.FLAVOR);
   });
 });

@@ -89,19 +89,24 @@ export const ONBOARDING_BEATS = [
     escalationText: 'Mouse wheel zooms the camera. Hold Shift while scrolling for fine zoom.',
   },
   {
-    id: 'inspect',
-    commsSource: 'HOUSTON', commsText: 'Optional: press I to inspect your spacecraft. Mouse wheel zooms in close — press I again to return to command view.',
-    commsAck: 'Spacecraft check complete. Looking good, Cowboy.',
-    text: 'Inspect mother (optional)',
-    glyph: 'I',
-    keys: ['KeyI'],
-    triggerEvent: 'INSPECTION_TOGGLE',
-    // Delegation 4 (2026-05-31): wired to `inspect_mother` Tier-1 skill (Quick-Win 2a).
-    skillId: 'inspect_mother',
+    id: 'view',
+    commsSource: 'HOUSTON', commsText: 'Press V to change camera views — Command flies the ship, Overview pulls back, Inspect zooms in close. Keep pressing V to come back to Command.',
+    commsAck: 'Good. V always loops you back to Command — your flying view — so you can never get stuck.',
+    text: 'Change camera (V)',
+    glyph: 'V',
+    keys: ['KeyV'],
+    triggerEvent: 'CAMERA_VIEW_CHANGE',
+    // 2026-06-03 consolidation: V is now the single taught camera control. It
+    // cycles Command → Overview → Inspect → Command; Inspect (formerly the
+    // separate I hotkey) shows a close, contextual wireframe of your ship or a
+    // locked target. Bare I is retained as an undocumented power-user shortcut.
+    // The comms copy explicitly tells the player V loops back to Command so a
+    // new player never gets stranded in Overview/Inspect mid-mission.
+    skillId: 'nav_camera',
     credit: 10,
     optional: true,                       // skippable after 25s
     skipAfter: 25000,
-    escalationText: 'I toggles inspection mode. Mouse wheel zooms in/out. Press I again to return to your command view.',
+    escalationText: 'V cycles Command → Overview → Inspect, then back to Command. Command is your flying view — just keep tapping V until you return to it. Inspect zooms in on your ship (or a locked target) with full callouts.',
   },
   {
     id: 'scan',
@@ -305,6 +310,9 @@ export class OnboardingDirector {
         break;
       case 'KeyN':
         if (typeof im.fireLasso === 'function') { im.fireLasso(); dispatched = true; }
+        break;
+      case 'KeyV':
+        if (typeof im.cycleView === 'function') { im.cycleView(); dispatched = true; }
         break;
       case 'KeyD':
         if (typeof im.deployDaughter === 'function') { im.deployDaughter(); dispatched = true; }

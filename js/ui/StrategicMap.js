@@ -310,6 +310,13 @@ export class StrategicMap {
     if (typeof document !== 'undefined') {
       const gameContainer = document.getElementById('hud-overlay');
       if (gameContainer) gameContainer.classList.add('map-mode');
+      // Body-mounted priority panels (objective + control mode) live outside
+      // #hud-overlay, so dim them to match the map-mode HUD fade.
+      if (typeof document.querySelectorAll === 'function') {
+        document.querySelectorAll('.hud-top-priority').forEach((el) => {
+          el.style.opacity = '0.15';
+        });
+      }
     }
 
     // Emit event
@@ -340,6 +347,11 @@ export class StrategicMap {
     if (typeof document !== 'undefined') {
       const gameContainer = document.getElementById('hud-overlay');
       if (gameContainer) gameContainer.classList.remove('map-mode');
+      if (typeof document.querySelectorAll === 'function') {
+        document.querySelectorAll('.hud-top-priority').forEach((el) => {
+          el.style.opacity = '1';
+        });
+      }
     }
 
     // Emit event

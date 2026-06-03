@@ -657,46 +657,43 @@ export class InputManager {
             d.audioSystem?.playClick();
             e.preventDefault();
           } else if (d.cameraSystem) {
-            // Plain V → camera cycle (existing behaviour)
+            // Plain V → camera cycle: COMMAND → OVERVIEW → INSPECT → COMMAND.
+            // In ARM_PILOT, V backs out to the mothership (unchanged). Otherwise
+            // cycleView() handles entering/leaving INSPECTION; we pass the
+            // contextual inspect subject (a Tab-locked debris focuses the debris
+            // wireframe, else the mother spacecraft).
             if (this.armPilotMode) {
               this._exitArmPilotCamera();
               if (d.armManager) d.armManager.deselectArm();
-            } else if (d.cameraSystem.currentView === 'INSPECTION') {
-              // S2.1: exit inspection before cycling
-              d.cameraSystem.exitInspection();
             } else {
-              d.cameraSystem.cycleView();
+              const lockedId = d.targetSelector?.getActiveTarget?.()?.id ?? null;
+              d.cameraSystem.cycleView({
+                inspectionSubject: lockedId != null ? 'debris' : 'mother',
+                inspectionTargetId: lockedId,
+              });
             }
             d.audioSystem.playClick();
           }
         }
         break;
 
-      // Inspection camera toggle (bare I = primary, Shift+I = muscle-memory
-      // alias).  Delegation 1 onboarding rebind (2026-05-31):
-      //   • Mother mode → focus mother spacecraft wireframe (existing).
-      //   • ARM_PILOT mode → focus debris wireframe (subject='debris').
-      // TODO (Delegation 3): wire daughter/debris-from-daughter wireframe
-      // rendering in DebrisWireframe + CameraSystem when subject==='debris'.
+      // Inspection shortcut (bare I = direct toggle; the V cycle is the taught
+      // primary path).  Contextual subject (2026-06-03 consolidation):
+      //   • ARM_PILOT  → expand the debris-from-daughter wireframe (no camera move).
+      //   • Mothership → toggle the close inspection camera + overlay; a Tab-locked
+      //                  debris focuses the debris wireframe, else the mother.
+      // enterInspection()/exitInspection() own the INSPECTION_TOGGLE emit, so we
+      // no longer emit it here (avoids the old double-toggle that cancelled out).
       case 'KeyI':
         if (isGameplay && d.cameraSystem && !e.repeat) {
-          const inspectSubject = this.armPilotMode ? 'debris' : 'mother';
-          const inspectTargetId = d.targetSelector?.getActiveTarget?.()?.id ?? null;
-          // Backward-compatible: existing handlers default subject='mother'
-          // when payload is omitted.  Delegation 3 will pick up subject='debris'.
-          eventBus.emit(Events.INSPECTION_TOGGLE, {
-            subject: inspectSubject,
-            targetId: inspectTargetId,
-          });
-          // Mother inspection still flows through the existing CameraSystem
-          // toggle — Delegation 3 will replace this branch with subject-aware
-          // routing once the daughter wireframe render path lands.
-          if (inspectSubject === 'mother') {
-            if (d.cameraSystem.currentView === 'INSPECTION') {
-              d.cameraSystem.exitInspection();
-            } else {
-              d.cameraSystem.enterInspection();
-            }
+          if (this.armPilotMode) {
+            const tId = d.targetSelector?.getActiveTarget?.()?.id ?? null;
+            eventBus.emit(Events.INSPECTION_TOGGLE, { subject: 'debris', targetId: tId });
+          } else if (d.cameraSystem.currentView === 'INSPECTION') {
+            d.cameraSystem.exitInspection();
+          } else {
+            const lockedId = d.targetSelector?.getActiveTarget?.()?.id ?? null;
+            d.cameraSystem.enterInspection(lockedId != null ? 'debris' : 'mother', lockedId);
           }
           d.audioSystem?.playClick();
         }
@@ -1975,16 +1972,26 @@ export class InputManager {
   /** Smart-default helper — toggles inspection (mirrors `case 'KeyI':`). */
   toggleInspection() {
     const d = this._deps; if (!d || !d.cameraSystem) return;
-    const subject = this.armPilotMode ? 'debris' : 'mother';
-    const targetId = d.targetSelector?.getActiveTarget?.()?.id ?? null;
-    eventBus.emit(Events.INSPECTION_TOGGLE, { subject, targetId });
-    if (subject === 'mother') {
-      if (d.cameraSystem.currentView === 'INSPECTION') {
-        d.cameraSystem.exitInspection();
-      } else {
-        d.cameraSystem.enterInspection();
-      }
+    if (this.armPilotMode) {
+      const tId = d.targetSelector?.getActiveTarget?.()?.id ?? null;
+      eventBus.emit(Events.INSPECTION_TOGGLE, { subject: 'debris', targetId: tId });
+    } else if (d.cameraSystem.currentView === 'INSPECTION') {
+      d.cameraSystem.exitInspection();
+    } else {
+      const lockedId = d.targetSelector?.getActiveTarget?.()?.id ?? null;
+      d.cameraSystem.enterInspection(lockedId != null ? 'debris' : 'mother', lockedId);
     }
+    d.audioSystem?.playClick?.();
+  }
+
+  /** Smart-default helper — cycles the camera view (mirrors `case 'KeyV':`). */
+  cycleView() {
+    const d = this._deps; if (!d || !d.cameraSystem || this.armPilotMode) return;
+    const lockedId = d.targetSelector?.getActiveTarget?.()?.id ?? null;
+    d.cameraSystem.cycleView({
+      inspectionSubject: lockedId != null ? 'debris' : 'mother',
+      inspectionTargetId: lockedId,
+    });
     d.audioSystem?.playClick?.();
   }
 }

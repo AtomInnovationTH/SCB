@@ -13,8 +13,32 @@ import { Constants } from '../../core/Constants.js';
 import { eventBus } from '../../core/EventBus.js';
 import { Events } from '../../core/Events.js';
 import { CommsPriority } from '../../systems/CommsSystem.js';
+import { PaneChrome } from './PaneChrome.js';
 
 const COMMS = Constants.COMMS;
+
+// 3-step sizes for the comms pane: a 1-line strip, the normal 4-line log, and
+// the large 10-line review. Heights are resolved from COMMS constants below.
+const COMMS_STEPS = ['line', 'normal', 'large'];
+
+// ----------------------------------------------------------------------------
+// SIMPLIFIED 3-COLOUR PALETTE (priority-based, not per-channel)
+// Keeps the pane easy to scan: green = normal, amber = warning, red = critical.
+// ----------------------------------------------------------------------------
+const COMMS_COLOR_NORMAL = '#00ff88';   // green  — info / nominal
+const COMMS_COLOR_WARNING = '#ffaa00';  // amber  — warnings
+const COMMS_COLOR_CRITICAL = '#ff4444'; // red    — critical / alerts
+
+/**
+ * Map a message priority to one of the 3 palette colours.
+ * @param {string} priority
+ * @returns {string} hex colour
+ */
+function getPriorityColor(priority) {
+  if (priority === CommsPriority.CRITICAL) return COMMS_COLOR_CRITICAL;
+  if (priority === CommsPriority.WARNING) return COMMS_COLOR_WARNING;
+  return COMMS_COLOR_NORMAL;
+}
 
 // ============================================================================
 // PURE HELPERS (CJS-exportable for tests)
@@ -48,15 +72,6 @@ function filterRoundTrip(filters) {
   return result;
 }
 
-/**
- * Get channel stripe colour.
- * @param {string} channel
- * @returns {string} hex colour
- */
-function getChannelColor(channel) {
-  return COMMS.CHANNEL_COLORS[channel] || COMMS.CHANNEL_COLORS[COMMS.DEFAULT_CHANNEL];
-}
-
 // ============================================================================
 // COMMS PANEL CLASS
 // ============================================================================
@@ -68,16 +83,11 @@ export class CommsPanel {
     this._armManager = null;
     this._commsFlashTimer = 0;
 
-    /** @type {boolean} Whether the pane is in expanded mode (C-tap) */
-    this._expanded = false;
-    /** @type {number|null} Auto-collapse timer handle */
-    this._expandTimer = null;
+    /** @type {import('./PaneChrome.js').PaneChrome|null} 3-step size chrome */
+    this._chrome = null;
 
     /** @type {number} Scroll offset for PageUp/PageDown review */
     this._scrollOffset = 0;
-
-    /** @type {Object<string, boolean>} Channel filter state (true = visible) */
-    this._filters = this._loadFilters();
 
     /** @type {Object<string, HTMLElement>} DOM panels for show/hide */
     this.panels = {};
@@ -116,59 +126,31 @@ export class CommsPanel {
     // Skill discovery (COMMS_OPENED) still fires for progression tracking.
     this.panels.comms.classList.add('hud-active');
 
-    // --- Filter bar at top ---
-    const filterBar = document.createElement('div');
-    filterBar.id = 'hud-comms-filters';
-    Object.assign(filterBar.style, {
-      display: 'flex',
-      gap: '2px',
-      marginBottom: '3px',
-      flexWrap: 'wrap',
-    });
-
-    this._filterButtons = {};
-    for (const ch of COMMS.CHANNELS) {
-      const btn = document.createElement('button');
-      btn.textContent = ch.slice(0, 3);
-      btn.title = ch;
-      Object.assign(btn.style, {
-        fontFamily: "'Courier New', monospace",
-        fontSize: '9px',
-        padding: '1px 4px',
-        border: `1px solid ${getChannelColor(ch)}`,
-        borderRadius: '2px',
-        background: this._filters[ch] ? 'rgba(0,0,0,0.6)' : 'rgba(0,0,0,0.2)',
-        color: this._filters[ch] ? getChannelColor(ch) : '#444',
-        cursor: 'pointer',
-        outline: 'none',
-        letterSpacing: '0.5px',
-        opacity: this._filters[ch] ? '1' : '0.4',
-        transition: 'opacity 0.15s, color 0.15s',
-      });
-      btn.addEventListener('click', () => this._toggleFilter(ch));
-      filterBar.appendChild(btn);
-      this._filterButtons[ch] = btn;
-    }
-
-    // --- Header row ---
-    const header = document.createElement('div');
-    header.style.cssText = 'font-size:11px;margin-bottom:2px;color:#00ff88;opacity:0.7;display:flex;justify-content:space-between;align-items:center;';
-    header.innerHTML = '<span>GROUND COMMS [C]</span>';
-    header.appendChild(filterBar);
-
     // --- Log container ---
     this._logEl = document.createElement('div');
     this._logEl.id = 'hud-comms-log';
     Object.assign(this._logEl.style, {
-      fontSize: '10px',
-      lineHeight: '1.5',
+      fontSize: '13px',
+      lineHeight: '1.45',
       overflowY: 'auto',
-      height: `${COMMS.PANE_HEIGHT_PX - 30}px`,
+      height: `${COMMS.PANE_HEIGHT_PX - 12}px`,
       transition: 'height 0.3s ease',
     });
 
-    this.panels.comms.appendChild(header);
     this.panels.comms.appendChild(this._logEl);
+
+    // --- Resize chrome (3-step: line / normal / large) ---
+    // Clickable top-right [C] badge cycles the size; the C key also cycles via
+    // _expandPane(). No "GROUND COMMS" label — keep the pane clean.
+    this._chrome = new PaneChrome({
+      pane: this.panels.comms,
+      keyLabel: 'C',
+      steps: COMMS_STEPS,
+      initial: 'normal',
+      color: COMMS_COLOR_NORMAL,
+      title: 'Comms size (C) — click to cycle line / normal / large',
+      onStep: () => this._applyCommsStep(),
+    });
   }
 
   // ==========================================================================
@@ -237,7 +219,8 @@ export class CommsPanel {
       const flash = Math.sin(Date.now() * 0.01) > 0;
       this.panels.comms.style.borderColor = flash ? 'rgba(255,68,68,0.7)' : 'rgba(255,68,68,0.3)';
       if (this._commsFlashTimer <= 0) {
-        this.panels.comms.style.borderColor = this._expanded
+        const step = this._chrome ? this._chrome.step : 'normal';
+        this.panels.comms.style.borderColor = (step === 'large')
           ? 'rgba(0, 255, 255, 1.0)' : 'rgba(0,255,136,0.3)';
       }
     }
@@ -327,80 +310,45 @@ export class CommsPanel {
   // PRIVATE
   // ==========================================================================
 
-  /** @private Toggle pane expand/collapse on C-tap (UX-2 #10) */
+  /** @private C-tap cycles the pane size (line → normal → large → line). */
   _expandPane() {
-    this._expanded = !this._expanded;
-
-    if (this._expanded) {
-      this.panels.comms.style.height = `${COMMS.PANE_EXPAND_HEIGHT_PX}px`;
-      this._logEl.style.height = `${COMMS.PANE_EXPAND_HEIGHT_PX - 30}px`;
-      // Brighter border when expanded
-      if (this._commsFlashTimer <= 0) {
-        this.panels.comms.style.borderColor = 'rgba(0, 255, 255, 1.0)';
-      }
-    } else {
-      this._collapsePane();
-    }
-
-    this._updateCommsPanel();
+    if (this._chrome) this._chrome.cycle();
   }
 
-  /** @private Collapse pane to normal size */
-  _collapsePane() {
-    this._expanded = false;
-    this.panels.comms.style.height = `${COMMS.PANE_HEIGHT_PX}px`;
-    this._logEl.style.height = `${COMMS.PANE_HEIGHT_PX - 30}px`;
+  /** @private Resolve the pane/log height for the current step. */
+  _applyCommsStep() {
+    const step = this._chrome ? this._chrome.step : 'normal';
+    let h;
+    if (step === 'line') h = COMMS.PANE_HEIGHT_MIN_PX;
+    else if (step === 'large') h = COMMS.PANE_EXPAND_HEIGHT_PX;
+    else h = COMMS.PANE_HEIGHT_PX;
+
+    this.panels.comms.style.height = `${h}px`;
+    this._logEl.style.height = `${h - 12}px`;
+
+    // Brighter border when enlarged beyond normal; default otherwise.
     if (this._commsFlashTimer <= 0) {
-      this.panels.comms.style.borderColor = 'rgba(0,255,136,0.3)';
+      this.panels.comms.style.borderColor = (step === 'large')
+        ? 'rgba(0, 255, 255, 1.0)'
+        : 'rgba(0,255,136,0.3)';
     }
-  }
 
-  /** @private Toggle a channel filter */
-  _toggleFilter(channel) {
-    this._filters[channel] = !this._filters[channel];
-    this._saveFilters();
-    this._updateFilterButton(channel);
+    // Re-render so the visible line count matches the new height.
     this._updateCommsPanel();
   }
 
-  /** @private Update a filter button's visual state */
-  _updateFilterButton(channel) {
-    const btn = this._filterButtons[channel];
-    if (!btn) return;
-    const active = this._filters[channel];
-    btn.style.color = active ? getChannelColor(channel) : '#444';
-    btn.style.background = active ? 'rgba(0,0,0,0.6)' : 'rgba(0,0,0,0.2)';
-    btn.style.opacity = active ? '1' : '0.4';
-  }
-
-  /** @private Load filter state from localStorage */
-  _loadFilters() {
-    const defaults = {};
-    for (const ch of COMMS.CHANNELS) defaults[ch] = true;
-    try {
-      const stored = localStorage.getItem(COMMS.FILTER_STORAGE_KEY);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        for (const ch of COMMS.CHANNELS) {
-          if (parsed[ch] !== undefined) defaults[ch] = !!parsed[ch];
-        }
-      }
-    } catch (_) { /* ignore localStorage failures */ }
-    return defaults;
-  }
-
-  /** @private Save filter state to localStorage */
-  _saveFilters() {
-    try {
-      localStorage.setItem(COMMS.FILTER_STORAGE_KEY, JSON.stringify(this._filters));
-    } catch (_) { /* ignore */ }
+  /** @private Visible line count for the current size step. */
+  _visibleLineCount() {
+    const step = this._chrome ? this._chrome.step : 'normal';
+    if (step === 'line') return COMMS.PANE_LINES_MIN;
+    if (step === 'large') return COMMS.PANE_LINES_EXPANDED;
+    return COMMS.PANE_LINES_DEFAULT;
   }
 
   /** @private Get max scroll offset */
   _getMaxScroll() {
     const total = this._commsSystem ? this._commsSystem.getMessages().length : 0;
-    const visibleCount = this._expanded ? COMMS.PANE_LINES_EXPANDED : COMMS.PANE_LINES_DEFAULT;
-    return Math.max(0, total - visibleCount);
+    return Math.max(0, total - this._visibleLineCount());
   }
 
   /** @private Update the comms panel log display */
@@ -409,55 +357,34 @@ export class CommsPanel {
 
     const allMessages = this._commsSystem ? this._commsSystem.getMessages() : [];
 
-    // Filter by active channels
-    const filtered = allMessages.filter(msg => {
-      const ch = msg.channel || COMMS.DEFAULT_CHANNEL;
-      return this._filters[ch] !== false;
-    });
-
-    if (filtered.length === 0) {
-      this._logEl.innerHTML = '<span style="opacity:0.4">Awaiting transmission…</span>';
+    if (allMessages.length === 0) {
+      this._logEl.innerHTML = `<span style="opacity:0.4;font-size:13px;">Awaiting transmission…</span>`;
       return;
     }
 
-    // Apply scroll offset (UX-2 #11: 3 default, 10 expanded)
-    const visibleCount = this._expanded ? COMMS.PANE_LINES_EXPANDED : COMMS.PANE_LINES_DEFAULT;
-    const end = filtered.length - this._scrollOffset;
+    // Apply scroll offset — visible line count follows the current size step.
+    const visibleCount = this._visibleLineCount();
+    const end = allMessages.length - this._scrollOffset;
     const start = Math.max(0, end - visibleCount);
-    const visible = filtered.slice(start, end);
+    const visible = allMessages.slice(start, end);
 
-    this._logEl.innerHTML = visible.map(msg => {
-      const channel = msg.channel || COMMS.DEFAULT_CHANNEL;
-      const stripeColor = getChannelColor(channel);
+    // Index (within `visible`) of the most-recent message — highlighted unless
+    // the user has scrolled up into history.
+    const latestIdx = (this._scrollOffset === 0) ? visible.length - 1 : -1;
 
-      let textColor = 'rgba(255,255,255,0.8)';
-      let sourceColor = '#00ff88';
-      let sourceText = `${msg.source}:`;
+    this._logEl.innerHTML = visible.map((msg, i) => {
+      const color = getPriorityColor(msg.priority);
+      const isLatest = i === latestIdx;
 
-      // HOUSTON-specific styling — distinct mint color + arrow prefix
-      const isHouston = msg.source === 'HOUSTON';
-      if (isHouston) {
-        sourceColor = '#88ffcc';
-        textColor = '#ccffee';
-        sourceText = 'HOUSTON▸';
-      }
+      // Latest message: full-strength, subtle highlight band. Older: dimmed.
+      const textOpacity = isLatest ? '1' : '0.6';
+      const rowBg = isLatest ? 'rgba(255,255,255,0.06)' : 'transparent';
+      const weight = (isLatest || msg.priority === CommsPriority.CRITICAL) ? '600' : '400';
 
-      // Priority overrides
-      if (msg.priority === CommsPriority.CRITICAL) {
-        sourceColor = '#ff4444';
-      } else if (msg.priority === CommsPriority.WARNING) {
-        sourceColor = '#ffaa00';
-      }
+      const sourceText = msg.source ? `${msg.source}: ` : '';
 
-      // ST-6.3: MOID badge prefix for conjunction messages
-      let badgePrefix = '';
-      if (msg._moidBadge && msg._moidBadgeColor) {
-        badgePrefix = `<span style="color:${msg._moidBadgeColor};font-weight:bold;font-size:10px;">[${msg._moidBadge}]</span> `;
-      }
-
-      return `<div style="margin:1px 0;padding:1px 0 1px ${COMMS.STRIPE_WIDTH_PX + 4}px;border-bottom:1px solid rgba(0,255,136,0.05);border-left:${COMMS.STRIPE_WIDTH_PX}px solid ${stripeColor};position:relative;">
-        <span style="color:${sourceColor};font-weight:${msg.priority === CommsPriority.CRITICAL ? 'bold' : 'normal'};font-size:10px;">${sourceText}</span>
-        ${badgePrefix}<span style="color:${textColor};font-size:10px;">${msg.text}</span>
+      return `<div style="margin:2px 0;padding:3px 6px;border-left:${COMMS.STRIPE_WIDTH_PX}px solid ${color};background:${rowBg};border-radius:2px;">
+        <span style="color:${color};font-weight:600;font-size:13px;">${sourceText}</span><span style="color:${color};opacity:${textOpacity};font-weight:${weight};font-size:13px;">${msg.text}</span>
       </div>`;
     }).join('');
 
@@ -466,10 +393,11 @@ export class CommsPanel {
       this._logEl.scrollTop = this._logEl.scrollHeight;
     }
 
-    // Flash border for critical messages (respect expanded-state cyan border)
+    // Flash border for critical messages (respect enlarged-state cyan border)
+    const step = this._chrome ? this._chrome.step : 'normal';
     if (this._commsFlashTimer > 0) {
       this.panels.comms.style.borderColor = 'rgba(255,68,68,0.7)';
-    } else if (!this._expanded) {
+    } else if (step !== 'large') {
       this.panels.comms.style.borderColor = 'rgba(0,255,136,0.3)';
     }
   }
@@ -479,9 +407,9 @@ export class CommsPanel {
 // NAMED EXPORTS (for tests)
 // ============================================================================
 
-export { discriminateKeyEvent, filterRoundTrip, getChannelColor };
+export { discriminateKeyEvent, filterRoundTrip };
 
 // ST-5.1: CJS guard — expose pure helpers for Node.js tests
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { discriminateKeyEvent, filterRoundTrip, getChannelColor };
+  module.exports = { discriminateKeyEvent, filterRoundTrip };
 }

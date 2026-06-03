@@ -340,6 +340,14 @@ function _syncAudioCtxState() {
 function _setHudHidden(hide) {
   const hud = document.getElementById('hud-overlay');
   if (hud) hud.style.visibility = hide ? 'hidden' : 'visible';
+  // Body-mounted priority panels (mission objective + control mode) live OUTSIDE
+  // #hud-overlay so they stay bright/un-occluded during play — but they must
+  // still hide with the rest of the HUD on pause/menu.
+  if (typeof document.querySelectorAll === 'function') {
+    document.querySelectorAll('.hud-top-priority').forEach((el) => {
+      el.style.visibility = hide ? 'hidden' : 'visible';
+    });
+  }
 }
 function _emitRafCallerDiagnostic(timestamp) {
   if (!_logPauseEnabled) return;

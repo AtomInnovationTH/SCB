@@ -443,6 +443,19 @@ export class LassoSystem {
     fire(playerPos, debrisField, playerVelDir, selectedTarget = null) {
         if (this.active || this.cooldown > 0) {
             eventBus.emit(Events.LASSO_DENIED, { reason: 'cooldown' });
+            // UX: tell the player WHY the cast was rejected. Without this the
+            // only feedback is a red reticle flash + click — a first-time
+            // player can't tell the lasso is mid-flight or recharging.
+            const secs = this.cooldownRemaining;
+            eventBus.emit(Events.COMMS_MESSAGE, {
+                text: this.active
+                    ? 'Lasso busy — wait for it to retract'
+                    : `Lasso recharging — ${Math.ceil(secs)}s`,
+                source: 'SYSTEM',
+                channel: 'CMD',
+                priority: 'info',
+                _lassoFeedback: true,
+            });
             return false;
         }
 
@@ -454,6 +467,7 @@ export class LassoSystem {
                 source: 'SYSTEM',
                 channel: 'CMD',
                 priority: 'warning',
+                _lassoFeedback: true,
             });
             return false;
         }
@@ -466,7 +480,10 @@ export class LassoSystem {
             eventBus.emit(Events.LASSO_DENIED, { reason: 'no_target' });
             eventBus.emit(Events.COMMS_MESSAGE, {
                 text: 'No targets in lasso range (200m)',
+                source: 'SYSTEM',
+                channel: 'CMD',
                 priority: 'info',
+                _lassoFeedback: true,
             });
             return false;
         }
@@ -490,6 +507,7 @@ export class LassoSystem {
                         source: 'SYSTEM',
                         channel: 'CMD',
                         priority: 'warning',
+                        _lassoFeedback: true,
                     });
                     return false;
                 }
@@ -546,7 +564,10 @@ export class LassoSystem {
             eventBus.emit(Events.LASSO_DENIED, { reason: 'no_target' });
             eventBus.emit(Events.COMMS_MESSAGE, {
                 text: 'No suitable target for lasso (too heavy or no position)',
+                source: 'SYSTEM',
+                channel: 'CMD',
                 priority: 'info',
+                _lassoFeedback: true,
             });
             return false;
         }
@@ -564,6 +585,7 @@ export class LassoSystem {
                 source: 'SYSTEM',
                 channel: 'CMD',
                 priority: 'warning',
+                _lassoFeedback: true,
             });
             return false;
         }

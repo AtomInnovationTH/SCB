@@ -4,12 +4,13 @@
  * @module ui/hud/StatusPanel
  */
 
-import { Constants, trlToBadgeColor, trlToLabel } from '../../core/Constants.js';
+import { Constants, trlToLabel } from '../../core/Constants.js';
 import { eventBus } from '../../core/EventBus.js';
 import { Events } from '../../core/Events.js';
 import { powerDistribution } from '../../systems/PowerDistribution.js';
 import { tetherReel } from '../../systems/TetherReel.js';
 import { BridleRing } from '../../entities/BridleRing.js';
+import { PaneChrome } from './PaneChrome.js';
 
 // ST-6.6: Active-tool → NASA TRL mapping. Display-only metadata.
 // Keyed by InputManager CONTROL_MODE identifiers. See BIG_PICTURE.md §25.
@@ -244,6 +245,28 @@ export class StatusPanel {
     return div;
   }
 
+  /**
+   * @private Create a top-priority panel mounted on document.body.
+   * Unlike _createPanel (which appends to the dimmable HUD overlay), these
+   * panels sit ABOVE the reticle canvas (z=11) and the 3D scene, and escape the
+   * per-view `hudOpacity` dimming — used for the always-bright mission objective
+   * and the live control-mode indicator so neither is occluded or faded.
+   */
+  _createTopPanel(id, styles) {
+    const div = document.createElement('div');
+    div.id = id;
+    div.className = 'hud-panel hud-top-priority';
+    Object.assign(div.style, {
+      position: 'fixed',
+      zIndex: '50',     // above #reticle-canvas (11) and #hud-overlay (10)
+      opacity: '1',
+      pointerEvents: 'none',
+    });
+    Object.assign(div.style, styles);
+    document.body.appendChild(div);
+    return div;
+  }
+
   /** @private */
   _build() {
     // --- Left-column flex container for stacked panels ---
@@ -263,37 +286,54 @@ export class StatusPanel {
     });
     this._container.appendChild(this._leftColumn);
 
-    // --- Score / Status Panel (top center) ---
-    this.panels.score = this._createPanel('hud-score-panel', {
-      top: '10px', left: '50%', transform: 'translateX(-50%)',
+    // --- Mission Objective bar (top center) ---
+    // Sim-reframe: the persistent top HUD shows only the mission objective
+    // (hero "CLEARED N/50") plus a quiet credit wallet. Live flight state (RCS),
+    // telemetry (orbit/altitude), and lore (TRL) live where they're contextual:
+    // the reticle, the NavSphere/Orbit MFD, and tooltips/Codex respectively.
+    // Mass recovered is taught through consequence (salvage card / run summary),
+    // not a sterile running counter. See FULL_HUD_STRATEGY.md §13.
+    //
+    // PRIORITY LAYER: the objective is the single most important readout, so it
+    // is mounted on document.body (NOT the HUD overlay) to escape the per-view
+    // `hudOpacity` dimming, kept OUT of the progressive-luminance group so it is
+    // never dormant/dimmed, and given a z-index above the reticle canvas (z=11)
+    // and 3D debris so nothing can occlude it.
+    this.panels.score = this._createTopPanel('hud-score-panel', {
+      top: '8px', left: '50%', transform: 'translateX(-50%)',
+      padding: '4px 14px',
     });
-    this.panels.score.dataset.hudGroup = 'score-group';
     this.panels.score.innerHTML = `
-      <div style="display:flex;gap:20px;align-items:center;justify-content:center;font-size:12px;">
-        <span id="hud-control-mode" style="font-size:10px;font-weight:bold;padding:1px 6px;border-radius:3px;
-              background:rgba(0,255,136,0.15);border:1px solid rgba(0,255,136,0.4);color:#00ff88;
-              letter-spacing:1px;min-width:50px;text-align:center;">RCS</span>
-        <span id="hud-control-mode-trl" title="NASA Technology Readiness Level for the active tool"
-              style="font-size:9px;font-weight:bold;padding:1px 4px;border-radius:2px;
-                     letter-spacing:0.05em;color:#22dd44;border:1px solid #22dd44;
-                     background:rgba(0,0,0,0.35);">TRL 9</span>
+      <div style="display:flex;align-items:center;gap:16px;white-space:nowrap;line-height:1;">
+        <div style="display:flex;align-items:baseline;gap:7px;">
+          <span style="font-size:10px;letter-spacing:2px;opacity:0.7;text-transform:uppercase;">Cleared</span>
+          <span style="font-size:18px;font-weight:bold;letter-spacing:1px;color:#00ff88;text-shadow:0 0 6px rgba(0,255,136,0.45);">
+            <b id="hud-cleared">0</b><span style="opacity:0.5;font-weight:normal;font-size:13px;">/${Constants.WIN_DEBRIS_COUNT}</span>
+          </span>
+          <span id="hud-cleared-track" style="width:42px;height:3px;background:rgba(0,255,136,0.2);border-radius:2px;overflow:hidden;align-self:center;">
+            <span id="hud-cleared-fill" style="display:block;width:0%;height:100%;background:#00ff88;transition:width 0.4s ease;"></span>
+          </span>
+        </div>
+        <span style="color:#ffaa00;font-size:13px;font-weight:bold;">💰 <b id="hud-credits">0</b></span>
         <span id="hud-arm-tier" title="Current arm configuration tier"
-              style="display:none;font-size:9px;font-weight:bold;padding:1px 4px;border-radius:2px;
-                     letter-spacing:0.05em;color:#ff8800;border:1px solid rgba(255,136,0,0.4);
-                     background:rgba(0,0,0,0.35);">Y0 Quad — 4 arms</span>
-        <span>│</span>
-        <span>Mass: <b id="hud-score">0</b> kg</span>
-        <span>│</span>
-        <span>Cleared: <b id="hud-cleared">0</b>/<b>${Constants.WIN_DEBRIS_COUNT}</b></span>
-        <span>│</span>
-        <span>Orbit: <b id="hud-altitude">350</b> km</span>
-        <span>│</span>
-        <span style="color:#ffaa00;">💰 <b id="hud-credits">0</b> cr</span>
-        <span id="hud-anchor-wrap" style="display:none;">
-          <span>│</span>
-          <span style="color:#81c784;">⚓ <b id="hud-anchor-mass">0</b>/<b id="hud-anchor-target">10,000</b> kg</span>
-        </span>
+              style="display:none;color:#ff8800;font-size:11px;letter-spacing:0.05em;">Y0 Quad — 4 arms</span>
+        <span id="hud-anchor-wrap" style="display:none;color:#81c784;font-size:11px;">⚓ <b id="hud-anchor-mass">0</b>/<b id="hud-anchor-target">10,000</b> kg</span>
       </div>
+    `;
+
+    // --- Control-mode indicator (bottom-center, near the reticle focal zone) ---
+    // Relocated out of the top stats bar: live flight state belongs where the
+    // player is already looking. Also body-mounted + high z-index so the reticle
+    // canvas / debris cannot draw over it, and outside luminance so it stays
+    // legible (it reflects what WASD does right now).
+    this.panels.controlMode = this._createTopPanel('hud-control-mode-panel', {
+      bottom: '120px', left: '50%', transform: 'translateX(-50%)',
+      background: 'transparent', border: 'none', padding: '0',
+    });
+    this.panels.controlMode.innerHTML = `
+      <span id="hud-control-mode" style="font-size:10px;font-weight:bold;padding:2px 8px;border-radius:3px;
+            background:rgba(0,255,136,0.15);border:1px solid rgba(0,255,136,0.4);color:#00ff88;
+            letter-spacing:1px;text-align:center;">RCS</span>
     `;
 
     // --- Propulsion Panel (left side) — F11: horizontal-expand ---
@@ -521,6 +561,27 @@ export class StatusPanel {
     this._leftColumn.appendChild(this.panels.arms);
     this.panels.arms.style.position = 'relative';
 
+    // --- Resize chrome for left-column panels (2-step: min / normal) ---
+    // These panels' real hotkeys (A=autopilot, D=deploy) are taken, so resize is
+    // badge-only: a +/− glyph top-right toggles the compact summary vs full
+    // content (CSS in index.html flips the always-expanded left-column default
+    // when the .pane-step-min class is present).
+    this._resourcesChrome = new PaneChrome({
+      pane: this.panels.resources, keyLabel: '–', bracket: false,
+      steps: ['min', 'normal'], initial: 'normal',
+      title: 'Propulsion — click to minimize / restore',
+    });
+    this._powerChrome = new PaneChrome({
+      pane: this.panels.power, keyLabel: '–', bracket: false,
+      steps: ['min', 'normal'], initial: 'normal',
+      title: 'Energy — click to minimize / restore',
+    });
+    this._armsChrome = new PaneChrome({
+      pane: this.panels.arms, keyLabel: '–', bracket: false,
+      steps: ['min', 'normal'], initial: 'normal',
+      title: 'Fleet — click to minimize / restore',
+    });
+
     // Phase 5 → R3: Listen for contract updates (now updates score bar anchor segment)
     eventBus.on(Events.CONTRACT_UPDATE, (data) => {
       const wrap = document.getElementById('hud-anchor-wrap');
@@ -625,7 +686,6 @@ export class StatusPanel {
    * @param {number} data.score
    * @param {number} data.credits
    * @param {number} data.debrisCleared
-   * @param {number} data.altitude
    * @param {object} data.resources
    * @param {Array}  data.cachedTargets
    */
@@ -790,6 +850,12 @@ export class StatusPanel {
     if (this._captureNotifTimer) {
       clearTimeout(this._captureNotifTimer);
     }
+    // Body-mounted priority panels (objective + control mode) are appended to
+    // document.body by _createTopPanel, so they are not torn down with the HUD
+    // container — remove them explicitly to avoid orphaned duplicate-id nodes.
+    for (const p of [this.panels.score, this.panels.controlMode]) {
+      if (p && p.parentNode) p.parentNode.removeChild(p);
+    }
   }
 
   // ==========================================================================
@@ -798,15 +864,15 @@ export class StatusPanel {
 
   /** @private */
   _updateScorePanel(data) {
-    const scoreEl = document.getElementById('hud-score');
     const clearedEl = document.getElementById('hud-cleared');
-    const altEl = document.getElementById('hud-altitude');
+    const fillEl = document.getElementById('hud-cleared-fill');
     const creditsEl = document.getElementById('hud-credits');
 
-    // S9-A: Display total mass recovered instead of abstract score
-    if (scoreEl) scoreEl.textContent = (data.totalMassKg || 0).toLocaleString();
     if (clearedEl) clearedEl.textContent = data.debrisCleared;
-    if (altEl) altEl.textContent = data.altitude.toFixed(0);
+    if (fillEl) {
+      const pct = Math.min(100, (data.debrisCleared / Constants.WIN_DEBRIS_COUNT) * 100);
+      fillEl.style.width = `${pct}%`;
+    }
     if (creditsEl) {
       creditsEl.textContent = data.credits.toLocaleString();
 
@@ -1654,7 +1720,7 @@ export class StatusPanel {
   // ==========================================================================
 
   /**
-   * @private Update the control mode badge in the score bar.
+   * @private Update the control mode indicator (bottom-center, near reticle).
    * Reflects what WASD currently does.
    */
   _updateControlModeIndicator() {
@@ -1666,17 +1732,11 @@ export class StatusPanel {
     el.style.background = cfg.bg;
     el.style.borderColor = cfg.border;
 
-    // ST-6.6: update adjacent TRL badge based on active tool
-    const trlEl = document.getElementById('hud-control-mode-trl');
-    if (trlEl) {
-      const trlCfg = _TOOL_TRL[this._controlMode] || _TOOL_TRL['RCS'];
-      const col = trlToBadgeColor(trlCfg.trl, Constants.TRL);
-      const lbl = trlToLabel(trlCfg.trl, Constants.TRL);
-      trlEl.textContent = `TRL ${trlCfg.trl}`;
-      trlEl.style.color = col;
-      trlEl.style.borderColor = col;
-      trlEl.title = `TRL ${trlCfg.trl} — ${lbl}\n${trlCfg.label}`;
-    }
+    // ST-6.6: TRL of the active tool is surfaced as a tooltip here (and on
+    // Codex/Shop entries — its designed home) rather than a persistent badge.
+    const trlCfg = _TOOL_TRL[this._controlMode] || _TOOL_TRL['RCS'];
+    const lbl = trlToLabel(trlCfg.trl, Constants.TRL);
+    el.title = `${cfg.label} — TRL ${trlCfg.trl} (${lbl})\n${trlCfg.label}`;
   }
 
   /** @private Update forge panel from ForgeSystem state (Sprint A2: enhanced) */

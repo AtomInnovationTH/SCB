@@ -36,11 +36,23 @@ export const CameraViews = {
   NET_CINEMATIC: 'NET_CINEMATIC',
 };
 
-/** View cycling order (First Person excluded — accessible via separate binding) */
+/**
+ * View cycling order driven by the V key.
+ *
+ * 2026-06-03 consolidation: TARGET_LOCK was removed from the cycle (it
+ * duplicated CHASE's HUD and silently fell back to CHASE framing whenever no
+ * target was locked — i.e. pressing V often appeared to do nothing). The slot
+ * was given to INSPECTION so the camera key teaches a tidy trio:
+ *   COMMAND (fly) → OVERVIEW (situational) → INSPECT (close, contextual).
+ * INSPECTION is entered/exited via enterInspection()/exitInspection() rather
+ * than a plain setView() so FOV + near-plane optics transition cleanly; the
+ * cycle helper (cycleView) routes through those. FIRST_PERSON, ARM_PILOT and
+ * NET_CINEMATIC remain outside the cycle (entered by their own bindings).
+ */
 const VIEW_CYCLE = [
   CameraViews.CHASE,          // COMMAND (default)
-  CameraViews.TARGET_LOCK,    // TACTICAL
   CameraViews.ORBIT,          // OVERVIEW
+  CameraViews.INSPECTION,     // INSPECT (contextual: mother / debris / daughter)
 ];
 
 /** Human-readable labels for HUD display */
@@ -97,6 +109,9 @@ export class CameraSystem {
     /** @type {string|null} Previous view (for transition) */
     this._previousView = null;
 
+    /** @type {('mother'|'debris'|'daughter')|null} Focused subject while in INSPECTION */
+    this._inspectSubject = null;
+
     // ========================================================================
     // TRANSITION STATE
     // ========================================================================
@@ -116,6 +131,9 @@ export class CameraSystem {
       offsetAbove: 0.00007,    // Distance above player along radial (~7m)
       lookAhead: 0.00002,      // Look-ahead past player (~2m, keeps spacecraft centered)
       smoothing: 3.0,          // Damping factor (higher = faster follow)
+      targetLookBias: 0.25,    // 2026-06-03: fraction the look point eases toward
+                               // a locked target (folded-in TACTICAL framing).
+                               // 0 = off (pure chase); keep subtle.
     };
 
     // ========================================================================
@@ -265,6 +283,8 @@ export class CameraSystem {
     this._viewIndicator = null;
     this._viewIndicatorTimer = 0;
     this._createViewIndicator();
+    this._inspectionVignette = null;
+    this._createInspectionVignette();
 
     // ========================================================================
     // MOUSE EVENT HANDLERS
@@ -315,13 +335,38 @@ export class CameraSystem {
   // ==========================================================================
 
   /**
-   * Cycle to the next camera view.
-   * Triggers a smooth transition.
+   * Cycle to the next camera view (V key).
+   *
+   * Entering or leaving INSPECTION is routed through enterInspection()/
+   * exitInspection() so the FOV + near-plane optics transition cleanly and the
+   * contextual wireframe overlay is toggled. Leaving INSPECTION always wraps
+   * back to COMMAND (CHASE) rather than the prior view, so the cycle reads
+   * COMMAND → OVERVIEW → INSPECT → COMMAND.
+   *
+   * @param {object} [opts]
+   * @param {('mother'|'debris'|'daughter')} [opts.inspectionSubject] subject to
+   *   focus when the next view is INSPECTION (defaults to 'mother').
+   * @param {number|null} [opts.inspectionTargetId] debris id for 'debris' subject.
    */
-  cycleView() {
-    const currentIdx = VIEW_CYCLE.indexOf(this.currentView);
+  cycleView(opts = {}) {
+    const cur = this.currentView;
+
+    // Leaving INSPECTION wraps back to COMMAND and restores optics/overlay.
+    if (cur === CameraViews.INSPECTION) {
+      this.exitInspection(CameraViews.CHASE);
+      return;
+    }
+
+    const currentIdx = VIEW_CYCLE.indexOf(cur);
     const nextIdx = (currentIdx + 1) % VIEW_CYCLE.length;
-    this.setView(VIEW_CYCLE[nextIdx]);
+    const next = VIEW_CYCLE[nextIdx];
+
+    if (next === CameraViews.INSPECTION) {
+      this.enterInspection(opts.inspectionSubject || 'mother', opts.inspectionTargetId ?? null);
+      return;
+    }
+
+    this.setView(next);
   }
 
   /**
@@ -344,11 +389,6 @@ export class CameraSystem {
       `_transitioning(was)=${this._transitioning} camPos=${_dbgVec(this.camera.position)} ` +
       `playerPos=${_dbgVec(this._lastPlayerPos)}`
     );
-    // [DBG-INSPECT-2] Stack trace for INSPECTION specifically
-    if (view === CameraViews.INSPECTION) {
-      console.error('[DBG-INSPECT-2] setView(INSPECTION) — capturing caller');
-      console.trace('[DBG-INSPECT-2] setView(INSPECTION) full stack:');
-    }
 
     this._previousView = this.currentView;
     this.currentView = view;
@@ -395,6 +435,9 @@ export class CameraSystem {
     if (!isArmPilotTransition) {
       this._showViewIndicator(view);
     }
+
+    // Diagnostic vignette — fade in only for the INSPECT view.
+    this._updateInspectionVignette(view);
 
     // Notify other systems of the view change
     eventBus.emit(Events.CAMERA_VIEW_CHANGE, { view, label: VIEW_LABELS[view] });
@@ -495,7 +538,7 @@ export class CameraSystem {
         break;
 
       case CameraViews.CHASE:
-        ({ pos: targetPos, look: targetLook } = this._computeChase(dt, playerPos, velDir, radialDir));
+        ({ pos: targetPos, look: targetLook } = this._computeChase(dt, playerPos, velDir, radialDir, true));
         break;
 
       case CameraViews.ORBIT:
@@ -503,6 +546,13 @@ export class CameraSystem {
         break;
 
       case CameraViews.TARGET_LOCK:
+        // NOTE (2026-06-03): TARGET_LOCK is no longer reachable — it was dropped
+        // from VIEW_CYCLE and nothing else calls setView(TARGET_LOCK) (see the
+        // VIEW_CYCLE comment + GameFlowManager's "no auto-switch" note). Its
+        // side-on framing benefit is now folded into CHASE via targetLookBias.
+        // Kept intact (this case, _computeTargetLock, VIEW_INFO_LEVELS.TARGET_LOCK,
+        // the GameFlowManager revert) so the view can be re-enabled by simply
+        // re-adding it to VIEW_CYCLE if the framing is wanted again.
         ({ pos: targetPos, look: targetLook } = this._computeTargetLock(dt, playerPos, velDir, radialDir));
         break;
 
@@ -695,7 +745,7 @@ export class CameraSystem {
    * Camera behind and above satellite, looking AT the spacecraft.
    * @private
    */
-  _computeChase(dt, playerPos, velDir, radialDir) {
+  _computeChase(dt, playerPos, velDir, radialDir, allowTargetBias = false) {
     // ST-5.3: VLEO intro uses wider offsets for cinematic establishing shot
     const s = this._vleoIntroScale;
 
@@ -707,6 +757,26 @@ export class CameraSystem {
     // Look target: at the player with a tiny forward offset (keeps spacecraft centered)
     const look = playerPos.clone()
       .add(velDir.clone().multiplyScalar(this.chase.lookAhead));
+
+    // 2026-06-03: Folded-in TARGET_LOCK behaviour. When a debris target is
+    // locked (set each frame during APPROACH) and reasonably close, gently bias
+    // the look point toward it and ease the camera back a touch so both the
+    // ship and the target stay framed — without the jarring side-on framing of
+    // the old dedicated TACTICAL view. Bias is intentionally subtle and only
+    // applied to the live CHASE view (not the ARM_PILOT / TARGET_LOCK fallbacks).
+    if (allowTargetBias && this.targetLock.target) {
+      const sep = playerPos.distanceTo(this.targetLock.target);
+      // Only engage within the OVERVIEW zoom range (~1 km) to avoid acting on a
+      // stale target left over from a previous approach.
+      if (sep > 1e-9 && sep < this.orbit.maxDistance) {
+        const bias = this.chase.targetLookBias; // 0..1 fraction toward target
+        look.lerp(this.targetLock.target, bias);
+        // Pull back proportional to separation (capped) so the target does not
+        // crowd the edge of frame as it nears.
+        const pullback = Math.min(sep * 0.4, this.chase.offsetBehind * 1.5);
+        pos.sub(velDir.clone().multiplyScalar(pullback));
+      }
+    }
 
     return { pos, look };
   }
@@ -798,6 +868,11 @@ export class CameraSystem {
 
   /**
    * Compute target lock camera — positions to show both satellite AND target.
+   *
+   * UNREACHABLE as of 2026-06-03 (TARGET_LOCK removed from VIEW_CYCLE; nothing
+   * calls setView(TARGET_LOCK)). Retained intentionally for possible re-enable —
+   * re-add CameraViews.TARGET_LOCK to VIEW_CYCLE to bring it back. The framing
+   * intent now lives in _computeChase's targetLookBias.
    * @private
    */
   _computeTargetLock(dt, playerPos, velDir, radialDir) {
@@ -1810,14 +1885,18 @@ export class CameraSystem {
   // ==========================================================================
 
   /**
-   * Enter INSPECTION mode — narrow FOV, close-range orbit around spacecraft.
-   * Copy current orbit angles for seamless entry.
+   * Enter INSPECTION mode — narrow FOV, close-range orbit around the spacecraft,
+   * plus a contextual wireframe overlay (mother / debris / daughter).
+   *
+   * This is the single entry point for inspection: it emits INSPECTION_TOGGLE
+   * exactly once so the wireframe panels show, then transitions optics. The V
+   * cycle and the bare-I shortcut both route through here (no double-toggle).
+   *
+   * @param {('mother'|'debris'|'daughter')} [subject='mother'] overlay to focus.
+   * @param {number|null} [targetId=null] debris id (for the 'debris' subject).
    */
-  enterInspection() {
+  enterInspection(subject = 'mother', targetId = null) {
     if (this.currentView === CameraViews.INSPECTION) return;
-    // [DBG-INSPECT-2] Always capture caller of enterInspection
-    console.error('[DBG-INSPECT-2] enterInspection() called');
-    console.trace('[DBG-INSPECT-2] enterInspection() full stack:');
 
     // Copy orbit angles for continuity (if coming from ORBIT)
     if (this.currentView === CameraViews.ORBIT) {
@@ -1836,14 +1915,24 @@ export class CameraSystem {
     this._fovTransitionStart = this._baseFov;
     this._fovTransitionEnd = this.inspection.fov;
 
+    // Remember the focused subject so exit can toggle the same overlay off.
+    this._inspectSubject = subject;
+
     this.setView(CameraViews.INSPECTION);
-    console.log('[CameraSystem] Inspection mode — zoom 2–50m, FOV 35°');
+
+    // Show the contextual overlay (mother/debris/daughter wireframe panels).
+    eventBus.emit(Events.INSPECTION_TOGGLE, { subject, targetId });
+
+    console.log(`[CameraSystem] Inspection mode (${subject}) — zoom 2–50m, FOV 35°`);
   }
 
   /**
-   * Exit INSPECTION mode — restore FOV and near-plane, return to ORBIT.
+   * Exit INSPECTION mode — restore FOV/near-plane, hide the overlay, and return
+   * to the requested view (defaults to the view active before inspection).
+   * @param {string} [returnTo] a CameraViews value; falls back to _previousView
+   *   then CHASE. The V cycle passes CHASE so inspection wraps to COMMAND.
    */
-  exitInspection() {
+  exitInspection(returnTo) {
     if (this.currentView !== CameraViews.INSPECTION) return;
 
     // Copy inspection angles back to orbit for continuity
@@ -1858,13 +1947,14 @@ export class CameraSystem {
     this.camera.near = Constants.CAMERA_NEAR;
     this.camera.updateProjectionMatrix();
 
-    // Delegation 4 (2026-05-31) — Browser-playtest UX fix:
-    // Return to whatever view the player was in BEFORE entering inspection
-    // (usually CHASE / COMMAND). Previously this was hardcoded to ORBIT
-    // (OVERVIEW), which confused players who expected I → I to toggle
-    // back to their command view.
-    const returnTo = this._previousView || CameraViews.CHASE;
-    this.setView(returnTo);
+    // Hide the contextual overlay by re-toggling the same subject.
+    eventBus.emit(Events.INSPECTION_TOGGLE, { subject: this._inspectSubject || 'mother' });
+    this._inspectSubject = null;
+
+    // Default return view. Bare-I / ESC fall back to the prior view (usually
+    // COMMAND); the V cycle passes CHASE explicitly to wrap to COMMAND.
+    const dest = returnTo || this._previousView || CameraViews.CHASE;
+    this.setView(dest);
   }
 
   // ==========================================================================
@@ -2190,6 +2280,8 @@ export class CameraSystem {
       this.chase.offsetBehind = Math.max(0.0001, Math.min(0.001, this.chase.offsetBehind));
       this.chase.offsetAbove = this.chase.offsetBehind * 0.48;
     } else if (this.currentView === CameraViews.TARGET_LOCK) {
+      // Unreachable as of 2026-06-03 (TARGET_LOCK removed from VIEW_CYCLE);
+      // retained for possible re-enable. See _computeTargetLock.
       // Adjust target lock offset distance
       const zoomDelta = e.deltaY > 0 ? 1.1 : 0.9;
       this.targetLock.offsetDistance *= zoomDelta;
@@ -2229,6 +2321,36 @@ export class CameraSystem {
     overlay.appendChild(this._viewIndicator);
   }
 
+  /**
+   * @private Create the INSPECT-view vignette overlay.
+   * A radial gradient (clear center → dark edges) that dims the surroundings so
+   * the inspected craft reads clearly. Pure DOM (no 3D/material/lighting risk),
+   * pointer-events:none, fades in only while the INSPECT view is active.
+   */
+  _createInspectionVignette() {
+    const overlay = document.getElementById('hud-overlay');
+    if (!overlay) return;
+    const dim = Constants.INSPECTION?.DIM ?? 0.6;
+    this._inspectionVignette = document.createElement('div');
+    this._inspectionVignette.id = 'inspection-vignette';
+    this._inspectionVignette.style.cssText = `
+      position: absolute; inset: 0;
+      pointer-events: none;
+      opacity: 0; transition: opacity 0.3s ease;
+      z-index: 1;
+      background: radial-gradient(ellipse at center,
+        rgba(0,8,16,0) 42%, rgba(0,8,16,${dim}) 100%);
+    `;
+    overlay.appendChild(this._inspectionVignette);
+  }
+
+  /** @private Fade the inspection vignette in (INSPECT) or out (any other view). */
+  _updateInspectionVignette(view) {
+    if (!this._inspectionVignette) return;
+    const on = (view === CameraViews.INSPECTION) && (Constants.INSPECTION?.DIM ?? 0.6) > 0;
+    this._inspectionVignette.style.opacity = on ? '1' : '0';
+  }
+
   /** @private Show the view indicator with a label */
   _showViewIndicator(view) {
     if (!this._viewIndicator) return;
@@ -2260,6 +2382,10 @@ export class CameraSystem {
 
     if (this._viewIndicator && this._viewIndicator.parentNode) {
       this._viewIndicator.parentNode.removeChild(this._viewIndicator);
+    }
+
+    if (this._inspectionVignette && this._inspectionVignette.parentNode) {
+      this._inspectionVignette.parentNode.removeChild(this._inspectionVignette);
     }
 
     // Remove fill light from scene

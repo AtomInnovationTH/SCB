@@ -110,13 +110,19 @@ function shouldCoalesce(recentWindow, newChannel, thresholdCount) {
  *
  * The check is simple: if the message payload carries `_onboarding: true`
  * (stamped by [`OnboardingDirector._emitComms()`](js/systems/OnboardingDirector.js:748))
- * it is allowed.  Every other message is suppressed.
+ * it is allowed.  Lasso/net denial feedback (`_lassoFeedback: true`) is also
+ * allowed so a rejected cast always explains itself.  Every other message is
+ * suppressed.
  *
  * @param {object} [data] — full message payload (may have `_onboarding` flag)
  * @returns {boolean} true → message is noise and should be dropped.
  */
 export function isOnboardingNoise(data) {
   if (data && data._onboarding) return false;   // Director's own line — pass
+  // Lasso/net denial feedback must reach the player even mid-onboarding —
+  // otherwise a rejected cast (cooldown, out-of-arc, no target) shows only a
+  // red reticle flash with no explanation, leaving new players stuck.
+  if (data && data._lassoFeedback) return false; // actionable denial — pass
   return true;                                   // everything else — drop
 }
 

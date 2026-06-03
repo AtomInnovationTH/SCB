@@ -1049,10 +1049,13 @@ export class DebrisWireframe {
   }
 
   /**
-   * Enter "debris from daughter" expanded inspection mode (Delegation 3).
-   * Scales the canvas CSS 1.4× and shows a daughter-origin badge.
-   * @param {number}      armIndex      0-based daughter arm index.
-   * @param {object|null} [debrisTarget] The daughter arm's current debris target.
+   * Enter expanded inspection mode.
+   * Scales the canvas and (for the daughter context) shows an origin badge.
+   * @param {number|null} armIndex     0-based daughter arm index, or null when
+   *                                    inspecting from the mothership.
+   * @param {object|null} [debrisTarget] The arm's current debris target. When
+   *   omitted, the already-selected target is kept (mothership V-cycle INSPECT);
+   *   only falls back to the ADR self-view if nothing is selected.
    */
   setExpandedMode(armIndex, debrisTarget = null) {
     this._expandedMode   = true;
@@ -1064,8 +1067,11 @@ export class DebrisWireframe {
     this._canvas.style.height = `${EH}px`;
     if (debrisTarget) {
       this.setTarget(debrisTarget);
+    } else if (this._target) {
+      // Keep the already-tracked selected target (mothership inspection).
+      this.setVisible(true);
     } else {
-      // Show ADR self-view as placeholder when no daughter target exists
+      // Show ADR self-view as placeholder when nothing is selected.
       this._showADRSatellite();
       this.setVisible(true);
     }
@@ -1114,13 +1120,13 @@ export class DebrisWireframe {
       ctx.fillText(typeLabel, WIRE_CX, 27);
     }
 
-    // Daughter-origin badge (expanded mode, Delegation 3)
-    if (this._expandedMode) {
+    // Daughter-origin badge (expanded mode from an arm pilot only)
+    if (this._expandedMode && this._fromArmIndex != null) {
       ctx.textAlign = 'right';
       ctx.font = "9px 'Courier New', monospace";
       ctx.fillStyle = 'rgba(255,200,60,0.90)';
       ctx.fillText(
-        `\uD83D\uDEF0 from Daughter ${(this._fromArmIndex || 0) + 1}`,
+        `\uD83D\uDEF0 from Daughter ${this._fromArmIndex + 1}`,
         PANEL_WIDTH - 6,
         PANEL_HEIGHT - 6,
       );

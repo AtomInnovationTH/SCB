@@ -60,6 +60,18 @@ export const Constants = {
   CAMERA_FOV: 55,                 // COMMAND/TACTICAL base FOV (ST-5.3: 65→55°)
   CAMERA_FOV_ARM_PILOT: 40,      // ARM_PILOT narrow FOV
 
+  // === INSPECTION (diagnostic treatment, 2026-06-03) ===
+  // Light visual treatment when the INSPECT view is active: a vignette that
+  // dims the surroundings so the inspected craft reads clearly, plus an
+  // optional edge-outline on the mothership hull. NOT a full scene wireframe —
+  // the schematic wireframe + callouts live in the MotherWireframe panel.
+  INSPECTION: {
+    DIM: 0.6,                     // vignette outer-edge darkness (0 = off, 1 = black)
+    HULL_OUTLINE: true,           // toggle the mothership hull edge-outline
+    HULL_OUTLINE_COLOR: 0x00ffcc, // cyan diagnostic tint
+    HULL_OUTLINE_THRESHOLD_DEG: 20, // EdgesGeometry thresholdAngle (deg)
+  },
+
   // === RESOURCE DEFAULTS ===
   XENON_FUEL_MAX: 100,            // kg
   COLD_GAS_MAX: 20,               // kg
@@ -2021,8 +2033,10 @@ export const Constants = {
     DEFAULT_CHANNEL: 'FLAVOR',
     COALESCE_THRESHOLD_COUNT: 3,
     COALESCE_WINDOW_MS: 2000,
+    PANE_HEIGHT_MIN_PX: 40,               // 'line' step — latest message only
     PANE_HEIGHT_PX: 144,
     PANE_WIDTH_PX: 480,                   // fits ~70 chars per line (UX-2 #11)
+    PANE_LINES_MIN: 1,                    // 'line' step line count
     PANE_LINES_DEFAULT: 4,                // collapsed line count (UX-2 #11)
     PANE_LINES_EXPANDED: 10,              // expanded line count (UX-2 #10)
     PANE_EXPAND_HEIGHT_PX: 300,
@@ -2032,7 +2046,6 @@ export const Constants = {
     C_TAP_MAX_MS: 250,
     RADIAL_RADIUS_PX: 90,
     RADIAL_OPTION_COUNT: 6,
-    FILTER_STORAGE_KEY: 'SC_comms_filters_v1',
   },
 
   // ============================================================================

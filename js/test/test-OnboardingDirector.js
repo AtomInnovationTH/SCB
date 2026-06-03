@@ -222,7 +222,7 @@ describe('OnboardingDirector — pressActiveHint (Space smart-default)', () => {
       localStorage.setItem(
         Constants.ONBOARDING.STORAGE_KEY,
         JSON.stringify({
-          completedBeats: ['boot', 'handshake', 'arrows', 'struts', 'zoom', 'inspect'],
+          completedBeats: ['boot', 'handshake', 'arrows', 'struts', 'zoom', 'view'],
           skippedBeats: [],
           mastered: false,
         }),

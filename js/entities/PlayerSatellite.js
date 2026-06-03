@@ -203,6 +203,11 @@ export class PlayerSatellite extends THREE.Group {
       this._scanFlashTimer = 0.5; // 0.5s flash duration
     });
 
+    // Diagnostic hull outline — visible only in the INSPECT camera view.
+    eventBus.on(Events.CAMERA_VIEW_CHANGE, ({ view } = {}) => {
+      this.setHullOutlineVisible(view === 'INSPECTION');
+    });
+
     // ========================================================================
     // BUILD VISUAL MODEL
     // ========================================================================
@@ -301,6 +306,26 @@ export class PlayerSatellite extends THREE.Group {
     this.body.name = 'Barrel_ConfigG';
     this.body.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE; // FIX_PLAN §2
     this.add(this.body);
+
+    // Diagnostic hull edge-outline (2026-06-03) — shown only in the INSPECT
+    // camera view to give a "technical scan" read without a full scene
+    // wireframe. EdgesGeometry on the open 16-seg barrel yields the axial seams
+    // + rim circles (clean silhouette). Hidden by default; toggled via
+    // setHullOutlineVisible() from the CAMERA_VIEW_CHANGE listener below.
+    const INS = Constants.INSPECTION || {};
+    const outlineEdges = new THREE.EdgesGeometry(bodyGeo, INS.HULL_OUTLINE_THRESHOLD_DEG ?? 20);
+    this._hullOutline = new THREE.LineSegments(
+      outlineEdges,
+      new THREE.LineBasicMaterial({
+        color: INS.HULL_OUTLINE_COLOR ?? 0x00ffcc,
+        transparent: true,
+        opacity: 0.85,
+      }),
+    );
+    this._hullOutline.rotation.x = Math.PI / 2; // match this.body orientation
+    this._hullOutline.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE; // draw on top
+    this._hullOutline.visible = false;
+    this.add(this._hullOutline);
 
     // Body-mount thin-film GaAs solar cells on barrel surface
     // (610W per ARM_PIVOT_ANALYSIS §10.15 — 6 non-ROSA faces)
@@ -2235,6 +2260,17 @@ export class PlayerSatellite extends THREE.Group {
 
   /** Set CargoSystem reference for cargo-based fuel consumption. */
   setCargoSystem(cs) { this._cargoSystem = cs; }
+
+  /**
+   * Show/hide the diagnostic hull edge-outline (INSPECT view treatment).
+   * Gated by Constants.INSPECTION.HULL_OUTLINE so it can be disabled globally.
+   * @param {boolean} visible
+   */
+  setHullOutlineVisible(visible) {
+    if (!this._hullOutline) return;
+    const enabled = Constants.INSPECTION?.HULL_OUTLINE !== false;
+    this._hullOutline.visible = !!visible && enabled;
+  }
 
   // ==========================================================================
   // V5 CROSSBOW — ARM MANAGER & RECOIL (Phase 4 Mothership)

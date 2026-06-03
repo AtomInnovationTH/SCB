@@ -200,6 +200,21 @@
       opacity: 1 !important;
     }
 
+    /* === PaneChrome 2-step: minimize left-column panels to their summary === */
+    /* When a left-column panel is on its 'min' step, flip the always-expanded
+       defaults above: show the compact summary, hide the full content. */
+    #hud-left-column .hud-panel.pane-step-min .panel-collapsed-summary,
+    #hud-left-column .hud-panel.pane-step-min .fleet-collapsed-summary {
+      display: block !important;
+    }
+    #hud-left-column .hud-panel.pane-step-min .panel-full-content,
+    #hud-left-column .hud-panel.pane-step-min .fleet-full-content {
+      max-height: 0 !important;
+      opacity: 0 !important;
+      overflow: hidden !important;
+      pointer-events: none !important;
+    }
+
     /* Left-column panels: auto pointer-events for hover detection */
     #hud-resources-panel,
     #hud-power-panel,

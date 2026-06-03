@@ -9,6 +9,7 @@ import { Constants } from '../../core/Constants.js';
 import { eventBus } from '../../core/EventBus.js';
 import { Events } from '../../core/Events.js';
 import { computeTotalSalvageDeltaV } from '../../entities/OrbitalMechanics.js';
+import { PaneChrome } from './PaneChrome.js';
 
 export class TargetPanel {
   constructor(container) {
@@ -247,18 +248,21 @@ export class TargetPanel {
     this.panels.targets.style.cursor = 'default';
 
     this.panels.targets.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;padding-right:24px;">
         <span class="target-section-header" style="color:#00ff88;padding:0;">TRACKED TARGETS <span style="opacity:0.4;font-size:10px;">[Tab]</span></span>
         <button id="hud-sort-btn" class="target-sort-btn" title="Click to cycle sort">TPI ↑</button>
       </div>
-      <div id="hud-target-list"></div>
-      <div id="hud-untracked-section" class="target-section">
-        <div class="target-section-header" style="color:#ffaa00;">UNTRACKED (SENSOR)</div>
-        <div id="hud-untracked-list"></div>
-      </div>
-      <div id="hud-activesat-section" class="target-section">
-        <div class="target-section-header" style="color:#ffffff;">ACTIVE SATS</div>
-        <div id="hud-activesat-list"></div>
+      <div id="hud-targets-min-summary" data-pane-show="min" style="display:none;font-size:11px;color:#00ff88;opacity:0.7;">—</div>
+      <div data-pane-hide="min">
+        <div id="hud-target-list"></div>
+        <div id="hud-untracked-section" class="target-section">
+          <div class="target-section-header" style="color:#ffaa00;">UNTRACKED (SENSOR)</div>
+          <div id="hud-untracked-list"></div>
+        </div>
+        <div id="hud-activesat-section" class="target-section">
+          <div class="target-section-header" style="color:#ffffff;">ACTIVE SATS</div>
+          <div id="hud-activesat-list"></div>
+        </div>
       </div>
     `;
 
@@ -292,6 +296,31 @@ export class TargetPanel {
         eventBus.emit(Events.HUD_TARGET_CLICK, { id });
       });
     }
+
+    // --- Resize chrome (3-step: min / normal / max) ---
+    // min: header + one-line count only. normal: standard list. max: taller list.
+    this._chrome = new PaneChrome({
+      pane: this.panels.targets,
+      keyLabel: 'Tab',
+      steps: ['min', 'normal', 'max'],
+      initial: 'normal',
+      color: '#00ff88',
+      title: 'Targets size — click to cycle min / normal / max',
+      onStep: (step) => {
+        // Grow the scroll cap when maximised; restore otherwise.
+        this.panels.targets.style.maxHeight = (step === 'max')
+          ? 'calc(100vh - 120px)' : 'calc(100vh - 326px)';
+        this._updateMinSummary();
+      },
+    });
+  }
+
+  /** @private Populate the minimized one-line target summary. */
+  _updateMinSummary() {
+    const el = this.panels.targets && this.panels.targets.querySelector('#hud-targets-min-summary');
+    if (!el) return;
+    const n = this._lastTrackedCount || 0;
+    el.textContent = n > 0 ? `${n} tracked target${n === 1 ? '' : 's'}` : 'No tracked targets';
   }
 
   // ==========================================================================
@@ -333,6 +362,10 @@ export class TargetPanel {
 
   /** @private Update enhanced 3-section target list */
   _updateTargetList(cachedTargets, cachedUntracked, cachedActiveSats) {
+    // Track count for the minimized one-line summary.
+    this._lastTrackedCount = Array.isArray(cachedTargets) ? cachedTargets.length : 0;
+    if (this._chrome && this._chrome.isMinimized) this._updateMinSummary();
+
     // --- TRACKED TARGETS ---
     const listEl = document.getElementById('hud-target-list');
     if (listEl) {
