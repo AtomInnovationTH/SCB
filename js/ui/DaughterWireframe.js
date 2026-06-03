@@ -536,13 +536,13 @@ export class DaughterWireframe {
 
       ctx.font      = "10px 'Courier New', monospace";
       ctx.fillStyle = DIM_COL;
-      ctx.fillText('[Tab] next zone', WIRE_CX, infoY + 26);
+      ctx.fillText('[Z] next zone', WIRE_CX, infoY + 26);
     } else {
       ctx.font      = "11px 'Courier New', monospace";
       ctx.fillStyle = DIM_COL;
       ctx.fillText('SCANNING DAUGHTER CRAFT…', WIRE_CX, infoY);
       ctx.font      = "10px 'Courier New', monospace";
-      ctx.fillText('[Tab] select zone   [I] expand', WIRE_CX, infoY + 14);
+      ctx.fillText('[Z] select zone   [I] expand', WIRE_CX, infoY + 14);
     }
   }
 }

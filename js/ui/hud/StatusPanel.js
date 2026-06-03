@@ -1777,13 +1777,13 @@ export class StatusPanel {
       if (progressContainer) progressContainer.style.display = 'none';
 
       // Sprint A2: Show forge hotkey hint when idle with cargo available.
-      // 2026-05-28 (Item 9): R was the forge hotkey at the time of this
-      // sprint; the new binding is K ("Kiln").  R is now reel-in.
+      // 2026-06-03 (Item 9): the live Forge/Kiln binding is F4 (K is a no-op,
+      // R is reel-in). Keep this hint in sync with InputManager 'F4'.
       if (hintEl) {
         const hasCargo = this._cargoStatus && this._cargoStatus.totalMassKg > 0;
         if (hasCargo) {
           hintEl.style.display = '';
-          hintEl.textContent = '▸ Press [K] to process cargo';
+          hintEl.textContent = '▸ Press [F4] to process cargo';
           hintEl.style.color = '#ffaa00';
         } else {
           hintEl.style.display = 'none';

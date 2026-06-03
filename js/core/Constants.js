@@ -1811,24 +1811,24 @@ export const Constants = {
       { id: 'nav_rotate',       label: 'Rotate View',  key: 'Drag',      tier: 1, category: 'nav',       hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'CAMERA_ORBIT_DRAG' },
       { id: 'nav_camera',       label: 'Camera Views', key: 'V',         tier: 1, category: 'nav',       hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'CAMERA_VIEW_CHANGE' },
       { id: 'nav_arrows',       label: 'Ship Rotation', key: '←↑↓→',    tier: 1, category: 'nav',       hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'TUTORIAL_ARROW_INPUT' },
-      { id: 'nav_throttle',     label: 'Throttle',     key: 'Shift/Ctrl', tier: 1, category: 'nav',      hudGroup: 'propulsion',    prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'THROTTLE_CHANGE' },
+      { id: 'nav_throttle',     label: 'Throttle',     key: '+/-', tier: 1, category: 'nav',      hudGroup: 'propulsion',    prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'THROTTLE_CHANGE' },
       { id: 'scan_quick',       label: 'Quick Scan',   key: 'S',         tier: 1, category: 'scan',      hudGroup: 'targets',       prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'SCAN_QUICK' },
       // ── Delegation 4 (2026-05-31): two Tier-1 skills added to back the onboarding `struts` and `inspect` beats. ──
       { id: 'arm_struts',       label: 'Strut Deployment', key: ', .',    tier: 1, category: 'collect',   hudGroup: 'fleet',         prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'STRUT_DEPLOY_INPUT' },
-      { id: 'inspect_mother',   label: 'Spacecraft Inspection', key: 'I', tier: 1, category: 'awareness', hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'INSPECTION_TOGGLE' },
+      { id: 'inspect_mother',   label: 'Spacecraft Inspection', key: 'V', tier: 1, category: 'awareness', hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'INSPECTION_TOGGLE' },
       // ── Tier 2: Core Tools (6 skills) ───────────────────────────────────
       { id: 'scan_wide',            label: 'Wide Scan',    key: 'W',     tier: 2, category: 'scan',      hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'SCAN_WIDE' },
       { id: 'nav_target',           label: 'Target Selection', key: 'Tab', tier: 2, category: 'nav',     hudGroup: 'target-info',   prereqs: [],  prereqType: 'soft', noReminder: false, triggerEvent: 'TARGET_SELECTED' },
       { id: 'nav_autopilot',        label: 'Autopilot',    key: 'A',     tier: 2, category: 'nav',       hudGroup: 'orbit-mfd',     prereqs: [],  prereqType: 'soft', noReminder: false, triggerEvent: 'AUTOPILOT_ENGAGE' },
       { id: 'collect_deploy',       label: 'Deploy Arm',   key: 'D',     tier: 2, category: 'collect',   hudGroup: 'fleet',         prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'ARM_DEPLOYED' },
-      { id: 'collect_lasso',        label: 'Lasso',        key: 'Space', tier: 2, category: 'collect',   hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'LASSO_FIRED' },
+      { id: 'collect_lasso',        label: 'Lasso',        key: 'N', tier: 2, category: 'collect',   hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'LASSO_FIRED' },
       { id: 'awareness_mouse_look', label: 'Mouse Look',   key: null,    tier: 2, category: 'awareness', hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: true,  triggerEvent: 'CAMERA_FREE_LOOK' },
 
       // ── Tier 3: Proficiency (7 skills) ──────────────────────────────────
       { id: 'nav_autopilot_no_target', label: 'Autopilot w/o Target', key: null, tier: 3, category: 'nav',    hudGroup: null,          prereqs: [],  prereqType: 'none', noReminder: true,  triggerEvent: 'AUTOPILOT_NO_TARGET' },
       { id: 'scan_discovery',          label: 'Scan Discovery',       key: null, tier: 3, category: 'scan',   hudGroup: null,          prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'SCAN_DISCOVERY' },
       { id: 'collect_dual_fire',       label: 'Dual Fire',            key: null, tier: 3, category: 'collect', hudGroup: null,          prereqs: [],  prereqType: 'hard', noReminder: false, triggerEvent: 'DUAL_FIRE' },
-      { id: 'collect_trawl',           label: 'Trawl',                key: 'T',  tier: 3, category: 'collect', hudGroup: null,          prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'TRAWL_START' },
+      { id: 'collect_trawl',           label: 'Trawl',                key: 'Shift+G',  tier: 3, category: 'collect', hudGroup: null,          prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'TRAWL_START' },
       { id: 'manage_power',            label: 'Power Distribution',   key: '1/2/3', tier: 3, category: 'manage', hudGroup: 'power',    prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'POWER_BUS_SELECTED' },
       { id: 'manage_comms',            label: 'Comms Menu',           key: 'C',  tier: 3, category: 'manage', hudGroup: 'comms',       prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'COMMS_OPENED' },
       { id: 'manage_codex',            label: 'Tech Library',         key: 'L',  tier: 3, category: 'manage', hudGroup: null,          prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'CODEX_OPENED' },

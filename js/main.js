@@ -1288,7 +1288,7 @@ function gameLoop(timestamp) {
     }
 
     // Update lasso system (Phase 4A — projectile flight + reel-in)
-    try { lassoSystem.update(dt, player.getPosition(), debrisField); } catch (e) { console.error('[GameLoop] lassoSystem:', e); }
+    try { lassoSystem.update(dt, player.getPosition(), debrisField, targetSelector.getActiveTarget()); } catch (e) { console.error('[GameLoop] lassoSystem:', e); }
 
     // Update reward system (Phase 5 Rewards — milestone checks)
     try { rewardSystem.update(dt, armManager); } catch (e) { console.error('[GameLoop] rewardSystem:', e); }

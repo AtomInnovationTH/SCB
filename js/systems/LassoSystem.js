@@ -112,6 +112,10 @@ export class LassoSystem {
         /** @type {number} UX-3 #7 — remaining web tether ammo */
         this._ammo = Constants.LASSO_AMMO_MAX;
 
+        /** @type {number|null} Target id we last announced as "in lasso range",
+         *  so the proactive prompt fires once per entry (not every frame). */
+        this._inRangePromptId = null;
+
         // ── Gossamer particle trail state ──────────────────────────────────
         /** @type {THREE.Points|null} Particle system for gossamer silk trail */
         this._trailPoints = null;
@@ -433,6 +437,48 @@ export class LassoSystem {
     }
 
     /**
+     * Proactive in-range prompt (gap C.3). When the Tab-selected target first
+     * comes within lasso range AND a cast is actually possible, emit a one-time
+     * "press N" comms hint. Resets when the target leaves range / changes / a
+     * cast becomes impossible, so it re-arms for the next entry.
+     * @private
+     * @param {THREE.Vector3} playerPos
+     * @param {object|null} selectedTarget
+     */
+    _updateInRangePrompt(playerPos, selectedTarget) {
+        // A cast must be currently possible, else clear and bail.
+        const canCast = !this.active && this.cooldown <= 0 && this._ammo > 0;
+        if (!canCast || !selectedTarget || !playerPos) {
+            this._inRangePromptId = null;
+            return;
+        }
+
+        const targetId = selectedTarget.id != null ? selectedTarget.id : selectedTarget.catalogId;
+        const pos = this._getDebrisScenePos(selectedTarget);
+        if (!pos) { this._inRangePromptId = null; return; }
+
+        const inRange = playerPos.distanceTo(pos) <= Constants.LASSO_RANGE * M;
+        const tooHeavy = (selectedTarget.mass || 1) > Constants.LASSO_MAX_CAPTURE_MASS;
+
+        if (inRange && !tooHeavy) {
+            // Only announce on the transition into range for this target.
+            if (this._inRangePromptId !== targetId) {
+                this._inRangePromptId = targetId;
+                eventBus.emit(Events.COMMS_MESSAGE, {
+                    text: 'Target in lasso range — press N to cast.',
+                    source: 'SYSTEM',
+                    channel: 'CMD',
+                    priority: 'info',
+                    _lassoFeedback: true,
+                });
+            }
+        } else {
+            // Out of range, too heavy, or deselected — re-arm for next entry.
+            this._inRangePromptId = null;
+        }
+    }
+
+    /**
      * Fire a lasso toward the nearest debris.
      * @param {THREE.Vector3} playerPos - Mothership position
      * @param {object} debrisField - DebrisField instance
@@ -463,7 +509,7 @@ export class LassoSystem {
         if (this._ammo <= 0) {
             eventBus.emit(Events.LASSO_DENIED, { reason: 'no_ammo' });
             eventBus.emit(Events.COMMS_MESSAGE, {
-                text: 'Web tether depleted — deploy Crossbow arms [G]',
+                text: 'Web tether depleted — deploy Crossbow arms [D]',
                 source: 'SYSTEM',
                 channel: 'CMD',
                 priority: 'warning',
@@ -503,7 +549,7 @@ export class LassoSystem {
                 if (mass > Constants.LASSO_MAX_CAPTURE_MASS) {
                     eventBus.emit(Events.LASSO_DENIED, { reason: 'too_heavy' });
                     eventBus.emit(Events.COMMS_MESSAGE, {
-                        text: 'Target too massive for web tether — try deploying a Crossbow arm [G]',
+                        text: 'Target too massive for web tether — try deploying a Crossbow arm [D]',
                         source: 'SYSTEM',
                         channel: 'CMD',
                         priority: 'warning',
@@ -700,7 +746,7 @@ export class LassoSystem {
      * @param {THREE.Vector3} playerPos - Current mothership position
      * @param {object} debrisField - For debris removal on catch
      */
-    update(dt, playerPos, debrisField) {
+    update(dt, playerPos, debrisField, selectedTarget = null) {
         this._time += dt;
 
         if (this.cooldown > 0) {
@@ -713,6 +759,11 @@ export class LassoSystem {
 
         // Phase 6: Update visual effects (run independently of active state)
         this._updateVisualEffects(dt);
+
+        // Proactive "in range — press N" prompt (gap C.3). Fires once when the
+        // Tab-selected target first enters lasso range while a cast is possible
+        // (idle, off cooldown, ammo available, target light enough).
+        this._updateInRangePrompt(playerPos, selectedTarget);
 
         if (!this.active) return;
 

@@ -660,7 +660,16 @@ export class CommsSystem {
     eventBus.on(Events.STATION_KEEP_ENTERED, (data) => {
       const standoff = data?.standoffR != null ? Math.round(data.standoffR) : '?';
       const targetId = data?.targetId != null ? data.targetId : '?';
-      this.addMessage('INFO', data?.armId || 'SYSTEM', `ON STATION — ${standoff}m standoff on debris #${targetId}. [V] view · [F] capture.`, { channel: 'CMD' });
+      // While piloting the arm, teach the station-keep orbit controls so the
+      // player can inspect every side of the debris and line up a capture.
+      // When the arm arrived under autopilot, point them at taking manual
+      // control (P) or capturing (F) instead.
+      const hint = data?.isPiloted
+        ? 'Arrow keys orbit the debris · +/- adjust distance · [F] capture.'
+        : '[P] pilot for a closer look · [F] capture.';
+      this.addMessage('INFO', data?.armId || 'SYSTEM',
+        `ON STATION — ${standoff}m standoff on debris #${targetId}. ${hint}`,
+        { channel: 'CMD' });
     });
   }
 

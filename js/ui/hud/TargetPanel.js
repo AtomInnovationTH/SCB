@@ -468,7 +468,7 @@ export class TargetPanel {
             <span style="color:${netDvColor}">Net ${netDvStr}${frozenTag}</span>
             <span>${t.estimatedPoints}pt</span>
         </div>${moidStat}
-        <div class="hint-line">[G] Deploy  [Z] Analyze  [D] Deorbit</div>
+        <div class="hint-line">[D] Deploy  [A] Autopilot  [Z] Analyze</div>
     </div>
 </div>`;
           } else {

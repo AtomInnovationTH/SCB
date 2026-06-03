@@ -31,7 +31,7 @@ export const TEACHING_MOMENTS = [
   {
     id: 'first_target',
     title: 'Target Acquired',
-    body: 'Use the radial menu (C) to choose an arm mode. Match your approach to the debris type.',
+    body: 'Press A to autopilot toward it, or deploy an arm with D. Match your approach to the debris type.',
     duration: 8000,
     icon: '🎯',
   },
@@ -45,7 +45,7 @@ export const TEACHING_MOMENTS = [
   {
     id: 'first_capture',
     title: 'First Catch!',
-    body: 'Nice work, Cowboy. Captured debris goes to your cargo bay. Open the Codex (Tab) to learn more.',
+    body: 'Nice work, Cowboy. Captured debris goes to your cargo bay. Open the Codex (L) to learn more.',
     duration: 8000,
     icon: '✅',
   },
@@ -137,7 +137,7 @@ export const TEACHING_MOMENTS = [
   {
     id: 'first_scan',
     title: 'Quick Scan',
-    body: 'Quick Scan reveals nearby debris. Hold S for Deep Scan to find targets at longer range.',
+    body: 'Quick Scan reveals nearby debris. Press W for a Wide Scan to find targets at longer range.',
     duration: 7000,
     icon: '📡',
   },

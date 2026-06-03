@@ -582,7 +582,7 @@ export class AutopilotSystem {
 
           eventBus.emit(Events.AUTOPILOT_ARRIVED, { mode: this._headingMode });
           eventBus.emit(Events.COMMS_MESSAGE, {
-            text: '✓ ON STATION — ready for capture',
+            text: '✓ ON STATION — [N] lasso (≤200m) · [D] deploy arm for far/heavy debris',
             priority: 'info',
           });
         } else if (posErrM > Dtrail_m * 3) {

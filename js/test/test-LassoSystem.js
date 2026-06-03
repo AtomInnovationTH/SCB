@@ -445,3 +445,68 @@ describe('LassoSystem — LASSO_AMMO_CHANGED event (Delegation 4)', () => {
             'cooldown should be at least 1 s to avoid frame-rate spam');
     });
 });
+
+// ─── In-range prompt transition logic (gap C.3) ────────────────────────────
+
+describe('LassoSystem — in-range "press N" prompt (gap C.3)', () => {
+
+    /**
+     * Mirror _updateInRangePrompt(): returns the new _inRangePromptId and
+     * whether a prompt should be emitted this tick. Fires once per entry.
+     */
+    function step(state, { canCast, targetId, inRange, tooHeavy }) {
+        if (!canCast || targetId == null) {
+            return { id: null, emit: false };
+        }
+        if (inRange && !tooHeavy) {
+            const emit = state.id !== targetId;
+            return { id: targetId, emit };
+        }
+        return { id: null, emit: false };
+    }
+
+    it('emits once when target first enters range', () => {
+        let s = { id: null };
+        const r = step(s, { canCast: true, targetId: 7, inRange: true, tooHeavy: false });
+        assert.equal(r.emit, true);
+        assert.equal(r.id, 7);
+    });
+
+    it('does NOT re-emit while the same target stays in range', () => {
+        let s = { id: 7 };
+        const r = step(s, { canCast: true, targetId: 7, inRange: true, tooHeavy: false });
+        assert.equal(r.emit, false, 'no spam on subsequent frames');
+        assert.equal(r.id, 7);
+    });
+
+    it('re-arms after leaving range, then emits again on re-entry', () => {
+        let s = { id: 7 };
+        const out = step(s, { canCast: true, targetId: 7, inRange: false, tooHeavy: false });
+        assert.equal(out.id, null, 'cleared on exit');
+        const back = step(out, { canCast: true, targetId: 7, inRange: true, tooHeavy: false });
+        assert.equal(back.emit, true, 'emits again after re-entry');
+    });
+
+    it('does not emit for a too-heavy target in range', () => {
+        const r = step({ id: null }, { canCast: true, targetId: 7, inRange: true, tooHeavy: true });
+        assert.equal(r.emit, false);
+        assert.equal(r.id, null);
+    });
+
+    it('does not emit when a cast is impossible (cooldown/ammo/active)', () => {
+        const r = step({ id: 7 }, { canCast: false, targetId: 7, inRange: true, tooHeavy: false });
+        assert.equal(r.emit, false);
+        assert.equal(r.id, null, 'clears so it re-arms once castable again');
+    });
+
+    it('clears when no target is selected', () => {
+        const r = step({ id: 7 }, { canCast: true, targetId: null, inRange: true, tooHeavy: false });
+        assert.equal(r.id, null);
+    });
+
+    it('emits for a new target after switching selection while in range', () => {
+        const r = step({ id: 7 }, { canCast: true, targetId: 9, inRange: true, tooHeavy: false });
+        assert.equal(r.emit, true, 'new target id triggers a fresh prompt');
+        assert.equal(r.id, 9);
+    });
+});

@@ -1108,13 +1108,13 @@ class GameFlowManager {
       }
     });
 
-    // First autopilot arrival: hint lasso
+    // First autopilot arrival: teach the two capture paths (lasso vs arm).
     eventBus.on(Events.AUTOPILOT_ARRIVED, () => {
       if (!this._firstTimeComms.has('autopilot_arrived')) {
         this._firstTimeComms.add('autopilot_arrived');
         eventBus.emit(Events.COMMS_MESSAGE, {
           sender: 'SPACECRAFT',
-          text: 'On station. Press Space to lasso.',
+          text: 'On station. Press N to lasso close debris, or D to deploy a daughter arm for distant or heavy targets.',
           priority: 'info',
         });
       }

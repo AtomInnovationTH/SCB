@@ -2739,6 +2739,7 @@ export class ArmUnit {
               armId: this.id,
               targetId: this.target.id || this.target.catalogId,
               standoffR: _so,
+              isPiloted: this.isManual(),
             });
             return;
           }
@@ -2900,6 +2901,7 @@ export class ArmUnit {
           armId: this.id,
           targetId: this.target.id || this.target.catalogId,
           standoffR: standoff,
+          isPiloted: this.isManual(),
         });
         return;
       }
