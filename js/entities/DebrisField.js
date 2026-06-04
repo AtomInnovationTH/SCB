@@ -46,6 +46,57 @@ const DEBRIS_TYPES = {
 /** Material types for debris */
 const MATERIALS = ['aluminum', 'titanium', 'composite', 'mli_mylar', 'solar_cell'];
 
+// ---------------------------------------------------------------------------
+// Per-instance colour variation (anti-monotone)
+// ---------------------------------------------------------------------------
+// A whole field of debris sharing one flat tint reads as a "grey soup". To make
+// the field feel like real, individually-weathered hardware we nudge each
+// piece's base colour deterministically by its id: small hue shifts (sun-faded
+// paint / oxidation), and brightness variation (light vs. shadow-darkened
+// surfaces, scorching). Deterministic so a piece always looks the same.
+//
+// NOTE: Three.js colour management is enabled by default (r152+), so a
+// THREE.Color built from an sRGB hex stores LINEAR values and the no-arg
+// getHSL/setHSL operate in linear space. We must read/write HSL in *sRGB*
+// space so the perceptual lightness varies as intended (otherwise the field
+// gets darker and barely varies — the opposite of the goal). Fall back to the
+// no-arg form when the constant is unavailable (older THREE / test stubs).
+const _instanceHSL = { h: 0, s: 0, l: 0 };
+const _SRGB = (typeof THREE !== 'undefined' && THREE.SRGBColorSpace) || undefined;
+
+/**
+ * Apply deterministic per-instance colour variation to `out`.
+ * @param {THREE.Color} out  - colour pre-set to the type base colour
+ * @param {number} id        - stable debris id (variation seed)
+ * @param {string} [catalogType]
+ * @returns {THREE.Color} out (mutated)
+ */
+function applyInstanceColorVariation(out, id, catalogType) {
+  // Two decorrelated hashes in [0,1)
+  const h1 = (Math.sin(id * 12.9898) * 43758.5453);
+  const h2 = (Math.sin(id * 78.233 + 1.7) * 24634.6345);
+  const r1 = h1 - Math.floor(h1);
+  const r2 = h2 - Math.floor(h2);
+
+  // Read perceptual (sRGB) HSL so the maths matches what the eye sees.
+  if (_SRGB) out.getHSL(_instanceHSL, _SRGB);
+  else out.getHSL(_instanceHSL);
+
+  // Hue drift: subtle for painted/metal, warmer scatter for raw fragments
+  const isFrag = catalogType === 'fragment' || catalogType === 'debris';
+  const hueRange = isFrag ? 0.05 : 0.03;
+  _instanceHSL.h = (_instanceHSL.h + (r1 - 0.5) * hueRange + 1) % 1;
+  // Slight saturation jitter so some pieces look more oxidised/coloured
+  _instanceHSL.s = Math.max(0, Math.min(1, _instanceHSL.s * (0.75 + r2 * 0.6)));
+  // Brightness variation is the big anti-monotone win (~±25%). Keep a sensible
+  // floor so even near-black fragments still show distinct shading.
+  _instanceHSL.l = Math.max(0.08, Math.min(0.92, _instanceHSL.l * (0.78 + r1 * 0.5)));
+
+  if (_SRGB) out.setHSL(_instanceHSL.h, _instanceHSL.s, _instanceHSL.l, _SRGB);
+  else out.setHSL(_instanceHSL.h, _instanceHSL.s, _instanceHSL.l);
+  return out;
+}
+
 /** ST-6.2: Map procedural game-type → catalogType for atlas visuals */
 const PROC_TYPE_TO_CATALOG = {
   fragment:      'debris',
@@ -104,6 +155,43 @@ const INC_CLUSTERS = [
   { center: 97.5, spread: 1.5, weight: 0.25 },   // Sun-synchronous
   { center: 45.0, spread: 40.0, weight: 0.25 },  // Random spread
 ];
+
+/**
+ * Named inclination clusters used for human-readable field/cluster IDs.
+ * Shared by getDebrisClusters() and classifyClusterId() so the "field" a scan
+ * surveys is identified identically everywhere. (id = `${incName}-${altMin}`.)
+ */
+const INC_NAMES = [
+  { center: 28.5, spread: 2.0,  name: 'canaveral',  label: 'Cape Canaveral' },
+  { center: 51.6, spread: 1.5,  name: 'iss',        label: 'ISS Band' },
+  { center: 65.0, spread: 3.0,  name: 'russian65',  label: 'Russian 65°' },
+  { center: 72.0, spread: 2.0,  name: 'russian72',  label: 'Russian 72°' },
+  { center: 82.0, spread: 2.0,  name: 'russianSSO', label: 'Russian SSO' },
+  { center: 97.5, spread: 1.5,  name: 'sso',        label: 'SSO Band' },
+  { center: 45.0, spread: 40.0, name: 'scattered',  label: 'Scattered' },
+];
+
+/**
+ * Classify an (altitudeKm, inclinationDeg) pair into a stable field/cluster id.
+ * Returns null if the altitude is outside all tracked bands.
+ * @param {number} altKm
+ * @param {number} incDeg
+ * @returns {string|null} e.g. 'iss-400' or null
+ */
+function classifyClusterId(altKm, incDeg) {
+  let matchedAlt = null;
+  for (const alt of ALT_BANDS) {
+    if (altKm >= alt.min && altKm < alt.max) { matchedAlt = alt; break; }
+  }
+  if (!matchedAlt) return null;
+  let bestInc = INC_NAMES[INC_NAMES.length - 1]; // default: scattered
+  let bestDist = Infinity;
+  for (const inc of INC_NAMES) {
+    const dist = Math.abs(incDeg - inc.center);
+    if (dist < inc.spread * 2 && dist < bestDist) { bestDist = dist; bestInc = inc; }
+  }
+  return `${bestInc.name}-${matchedAlt.min}`;
+}
 
 // ============================================================================
 // HELPER: RANDOM FROM DISTRIBUTION
@@ -229,6 +317,18 @@ export class DebrisField {
     this.flagMeshes = {};
     /** @type {Map<number, { country: string, instanceIndex: number }>} */
     this._flagLookup = new Map();
+    /** Pre-allocated temporaries for surface-mounted flag placement */
+    this._flagDirWorld = new THREE.Vector3();
+    this._flagPos = new THREE.Vector3();
+    this._flagPos2 = new THREE.Vector3();
+    this._flagQuat = new THREE.Quaternion();
+    this._flagScale = new THREE.Vector3();
+    this._flagMatrix = new THREE.Matrix4();
+    this._flagUp = new THREE.Vector3(0, 1, 0);
+    this._flagAltUp = new THREE.Vector3(1, 0, 0);
+    this._zeroVec = new THREE.Vector3(0, 0, 0);
+    /** Plane geometry default normal (+Z) used to orient the decal outward */
+    this._flagPlaneNormal = new THREE.Vector3(0, 0, 1);
 
     /** Background points */
     this.backgroundPoints = null;
@@ -752,9 +852,11 @@ export class DebrisField {
       const idx = indexMap[d._meshKey]++;
       this._instanceLookup.set(d.id, { meshKey: d._meshKey, instanceIndex: idx });
 
-      // ST-6.2: Tint instance by catalogType base colour
+      // ST-6.2: Tint instance by catalogType base colour, then add deterministic
+      // per-instance variation so the field doesn't read as a flat monotone mass.
       const baseHex = getBaseColorForType(d.catalogType || 'unknown');
       _tmpTypeColor.set(baseHex);
+      applyInstanceColorVariation(_tmpTypeColor, d.id, d.catalogType);
       const mesh = this.instancedMeshes[d._meshKey];
       if (mesh) {
         mesh.setColorAt(idx, _tmpTypeColor);
@@ -796,8 +898,11 @@ export class DebrisField {
 
     if (Object.keys(countryGroups).length === 0) return;
 
-    // Small flag quad (aspect ~3:2), shared by all country meshes
-    const flagGeo = new THREE.PlaneGeometry(1.5, 1.0);
+    // Flag decal patch (aspect ~3:2). Sized in debris-local units so it reads
+    // as a sticker painted ON the hull (NASA/ESA style), not a floating banner.
+    // Local debris geometry has bounding radius ~1, so a ~0.7-wide patch covers
+    // a believable area of the surface.
+    const flagGeo = new THREE.PlaneGeometry(0.7, 0.47);
 
     const indexCounters = {};
 
@@ -841,6 +946,21 @@ export class DebrisField {
       if (!this.flagMeshes[cc]) continue;
       const idx = indexCounters[cc]++;
       this._flagLookup.set(d.id, { country: cc, instanceIndex: idx });
+
+      // Deterministic surface-mount direction (which face of the hull the decal
+      // sits on). Derived from the id so a piece always wears its flag the same
+      // way. Bias toward the "side" of the object (low |y|) so the flag faces
+      // out from a body panel rather than off the nose/engine.
+      if (!d._flagDir) {
+        const a = (Math.sin(d.id * 12.9898) * 43758.5453);
+        const b = (Math.sin(d.id * 4.1414 + 0.7) * 13218.114);
+        const az = (a - Math.floor(a)) * Math.PI * 2;
+        const ny = ((b - Math.floor(b)) - 0.5) * 0.5;       // small vertical tilt
+        const horiz = Math.sqrt(Math.max(0, 1 - ny * ny));
+        d._flagDir = new THREE.Vector3(
+          Math.cos(az) * horiz, ny, Math.sin(az) * horiz
+        ).normalize();
+      }
     }
   }
 
@@ -1158,42 +1278,72 @@ export class DebrisField {
               const emissive = getEmissiveForMOID(currentBadge);
               if (emissive.intensity > 0) {
                 this._moidTmpColor.set(getBaseColorForType(debris.catalogType || 'unknown'));
+                applyInstanceColorVariation(this._moidTmpColor, debris.id, debris.catalogType);
                 this._moidTmpEmissive.set(emissive.color);
                 this._moidTmpColor.lerp(this._moidTmpEmissive, emissive.intensity);
                 mesh.setColorAt(lookup.instanceIndex, this._moidTmpColor);
               }
             } else {
-              // Badge cleared — revert to base type colour
+              // Badge cleared — revert to base type colour (with per-instance variation)
               this._moidTmpColor.set(getBaseColorForType(debris.catalogType || 'unknown'));
+              applyInstanceColorVariation(this._moidTmpColor, debris.id, debris.catalogType);
               mesh.setColorAt(lookup.instanceIndex, this._moidTmpColor);
             }
           }
         }
 
-        // ST-6.2: Update flag overlay transform
+        // ST-6.2: Update flag overlay transform — mount the decal ON the hull
+        // surface (NASA/ESA style), facing outward and tumbling with the piece.
         const flagInfo = this._flagLookup.get(debris.id);
         if (flagInfo && debris._scenePosition && debris._lodScale > 0) {
           const flagMesh = this.flagMeshes[flagInfo.country];
           if (flagMesh) {
             const sp = debris._scenePosition;
-            // UX-4: Flag positions relative to floating origin (same as debris instances)
-            if (Constants.FLOATING_ORIGIN_ENABLED) {
-              this._tempPos.set(
-                sp.x - this._floatingOrigin.x,
-                sp.y + debris.sceneSize * 2.0 - this._floatingOrigin.y,
-                sp.z - this._floatingOrigin.z
-              );
-            } else {
-              this._tempPos.set(sp.x, sp.y + debris.sceneSize * 2.0, sp.z);
-            }
-            this._tempQuat.setFromAxisAngle(debris.tumbleAxis, debris.tumbleAngle);
-            // Apply same reveal scale as debris mesh so flags don't appear before debris
+            const dir = debris._flagDir || this._flagPlaneNormal;
+
+            // Tumble quaternion (same rotation the debris mesh uses)
+            this._flagQuat.setFromAxisAngle(debris.tumbleAxis, debris.tumbleAngle);
+
+            // Rotate the local mount direction into world space → the outward
+            // surface normal where the decal sits.
+            this._flagDirWorld.copy(dir).applyQuaternion(this._flagQuat);
+
+            // Distance to the hull surface along the (LOCAL) mount direction.
+            // Using the bounding-box face distance (not the bounding-sphere
+            // radius) keeps the decal flush against the body even for shapes
+            // dominated by far-reaching parts like solar wings. _lodScale maps
+            // local units → world; 1.01 sits the decal just proud to avoid
+            // z-fighting.
+            const localD = DebrisWireframe.getSurfaceDistance(
+              debris.type, debris.id, dir.x, dir.y, dir.z
+            ) || 1;
+            const surfaceR = debris._lodScale * localD * 1.01;
+
+            // Centre of the debris instance, in floating-origin space
+            const baseX = Constants.FLOATING_ORIGIN_ENABLED ? sp.x - this._floatingOrigin.x : sp.x;
+            const baseY = Constants.FLOATING_ORIGIN_ENABLED ? sp.y - this._floatingOrigin.y : sp.y;
+            const baseZ = Constants.FLOATING_ORIGIN_ENABLED ? sp.z - this._floatingOrigin.z : sp.z;
+            this._flagPos.set(
+              baseX + this._flagDirWorld.x * surfaceR,
+              baseY + this._flagDirWorld.y * surfaceR,
+              baseZ + this._flagDirWorld.z * surfaceR
+            );
+
+            // Orient the plane so its +Z (front) normal points outward along dir.
+            // Matrix4.lookAt makes -Z face the target, so target = -dir → +Z = dir.
+            const up = Math.abs(this._flagDirWorld.y) > 0.95 ? this._flagAltUp : this._flagUp;
+            this._flagPos2.copy(this._flagDirWorld).multiplyScalar(-1);
+            this._flagMatrix.lookAt(this._zeroVec, this._flagPos2, up);
+            this._flagQuat.setFromRotationMatrix(this._flagMatrix);
+
+            // Reveal scale matches the debris mesh; flag patch scales with the
+            // debris so it always reads as a fixed-size sticker on the surface.
             const flagRp = debris._revealProgress;
             const flagReveal = (flagRp !== undefined && flagRp < 1)
               ? flagRp * flagRp * (3 - 2 * flagRp) : 1;
-            this._tempScale.setScalar(debris._lodScale * 0.5 * flagReveal);
-            this._tempMatrix.compose(this._tempPos, this._tempQuat, this._tempScale);
-            flagMesh.setMatrixAt(flagInfo.instanceIndex, this._tempMatrix);
+            this._flagScale.setScalar(debris._lodScale * flagReveal);
+            this._flagMatrix.compose(this._flagPos, this._flagQuat, this._flagScale);
+            flagMesh.setMatrixAt(flagInfo.instanceIndex, this._flagMatrix);
           }
         }
       }
@@ -2199,22 +2349,14 @@ export class DebrisField {
    *           center: {x:number,y:number,z:number}}>}
    */
   getDebrisClusters() {
-    // Inclination cluster names for human-readable IDs
-    const INC_NAMES = [
-      { center: 28.5, spread: 2.0, name: 'canaveral', label: 'Cape Canaveral' },
-      { center: 51.6, spread: 1.5, name: 'iss',       label: 'ISS Band' },
-      { center: 65.0, spread: 3.0, name: 'russian65',  label: 'Russian 65°' },
-      { center: 72.0, spread: 2.0, name: 'russian72',  label: 'Russian 72°' },
-      { center: 82.0, spread: 2.0, name: 'russianSSO', label: 'Russian SSO' },
-      { center: 97.5, spread: 1.5, name: 'sso',        label: 'SSO Band' },
-      { center: 45.0, spread: 40.0, name: 'scattered', label: 'Scattered' },
-    ];
+    // Inclination cluster names for human-readable IDs (shared module constant).
+    const INC_NAMES_LOCAL = INC_NAMES;
 
     // Build cluster buckets: one per (altBand × incCluster)
     const clusters = new Map();
 
     for (const alt of ALT_BANDS) {
-      for (const inc of INC_NAMES) {
+      for (const inc of INC_NAMES_LOCAL) {
         const id = `${inc.name}-${alt.min}`;
         clusters.set(id, {
           id,
@@ -2242,29 +2384,8 @@ export class DebrisField {
       // Convert inclination from radians to degrees
       const incDeg = debris.orbit.inclination * 180 / Math.PI;
 
-      // Find matching altitude band
-      let matchedAlt = null;
-      for (const alt of ALT_BANDS) {
-        if (altKm >= alt.min && altKm < alt.max) {
-          matchedAlt = alt;
-          break;
-        }
-      }
-      if (!matchedAlt) continue; // out of range
-
-      // Find closest inclination cluster
-      let bestInc = INC_NAMES[INC_NAMES.length - 1]; // default: scattered
-      let bestDist = Infinity;
-      for (const inc of INC_NAMES) {
-        const dist = Math.abs(incDeg - inc.center);
-        // Must be within 2× spread to belong to this cluster
-        if (dist < inc.spread * 2 && dist < bestDist) {
-          bestDist = dist;
-          bestInc = inc;
-        }
-      }
-
-      const clusterId = `${bestInc.name}-${matchedAlt.min}`;
+      const clusterId = classifyClusterId(altKm, incDeg);
+      if (!clusterId) continue; // out of range
       const cluster = clusters.get(clusterId);
       if (!cluster) continue;
 
@@ -2324,6 +2445,63 @@ export class DebrisField {
       if (d.alive) count++;
     }
     return count;
+  }
+
+  /**
+   * Count alive debris that have been discovered (revealed via scan/selection).
+   * @param {boolean} [trackedOnly=false] - if true, only count tracked debris
+   *   (those that Tab cycling can select without an IR scanner).
+   * @returns {number}
+   */
+  getDiscoveredCount(trackedOnly = false) {
+    let count = 0;
+    for (const d of this.debrisList) {
+      if (!d.alive || !d.discovered) continue;
+      if (trackedOnly && d.tracked === false) continue;
+      count++;
+    }
+    return count;
+  }
+
+  /**
+   * Identify the debris "field" (orbital cluster) the player is currently in,
+   * based on the dominant cluster among alive debris within `radius` of a
+   * position. Used by the scan-reward economy so ground stations pay once per
+   * distinct field surveyed (re-scanning the same field yields no new data).
+   *
+   * Returns null when there is no meaningful field nearby (empty space) — a
+   * scan there produces no valuable survey data and earns nothing.
+   *
+   * @param {THREE.Vector3} position - player scene position
+   * @param {number} radius - scene units (defaults to scan reveal range)
+   * @returns {string|null} dominant field id (e.g. 'iss-400') or null
+   */
+  getFieldIdNear(position, radius) {
+    if (!position) return null;
+    const r = radius || ((Constants.SCAN && Constants.SCAN.REVEAL_BASE_RANGE) || 5.0);
+    // Tally cluster ids among alive debris within range (discovered or not —
+    // the field exists regardless of whether the player has revealed it yet).
+    const tally = new Map();
+    const rSq = r * r;
+    for (const debris of this.debrisList) {
+      if (!debris.alive) continue;
+      const sp = debris._scenePosition;
+      if (!sp) continue;
+      const dx = sp.x - position.x, dy = sp.y - position.y, dz = sp.z - position.z;
+      if (dx * dx + dy * dy + dz * dz > rSq) continue;
+      const altKm = (debris.orbit.semiMajorAxis - Constants.EARTH_RADIUS) / Constants.SCENE_SCALE;
+      const incDeg = debris.orbit.inclination * 180 / Math.PI;
+      const id = classifyClusterId(altKm, incDeg);
+      if (!id) continue;
+      tally.set(id, (tally.get(id) || 0) + 1);
+    }
+    if (tally.size === 0) return null;
+    // Return the most populous field id.
+    let bestId = null, bestN = -1;
+    for (const [id, n] of tally) {
+      if (n > bestN) { bestN = n; bestId = id; }
+    }
+    return bestId;
   }
 }
 

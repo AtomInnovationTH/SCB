@@ -54,6 +54,7 @@ import './test-hud-activate-keys.js';
 
 // ST-4.A: Debris Map — cluster scoring, engageCluster, constants
 import './test-DebrisMap.js';
+import './test-ScanFieldRewards.js';
 
 // ST-4.C: Mission Spawn Difficulty Profiles
 import './test-MissionProfiles.js';

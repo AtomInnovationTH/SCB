@@ -12,7 +12,6 @@
 import { Constants } from '../../core/Constants.js';
 import { eventBus } from '../../core/EventBus.js';
 import { Events } from '../../core/Events.js';
-import { CommsPriority } from '../../systems/CommsSystem.js';
 import { PaneChrome } from './PaneChrome.js';
 
 const COMMS = Constants.COMMS;
@@ -31,13 +30,44 @@ const COMMS_COLOR_CRITICAL = '#ff4444'; // red    — critical / alerts
 
 /**
  * Map a message priority to one of the 3 palette colours.
+ *
+ * Semantics (per UX spec):
+ *   • GREEN  — normal / info / guidance / nominal / "attaboy"
+ *   • YELLOW — warning / alert / caution
+ *   • RED    — danger / risk / emergency / critical
+ *
+ * Accepts both the canonical CommsPriority enum values (INFO/WARNING/CRITICAL)
+ * AND the looser, human vocabulary that emitters across the codebase actually
+ * use (mixed case: 'warning', 'critical', 'danger', 'alert', 'emergency', …).
+ * Previously this only matched the exact uppercase enum, so the many lowercase
+ * `priority:'warning'` emitters rendered green — defeating the colour code.
+ *
  * @param {string} priority
  * @returns {string} hex colour
  */
 function getPriorityColor(priority) {
-  if (priority === CommsPriority.CRITICAL) return COMMS_COLOR_CRITICAL;
-  if (priority === CommsPriority.WARNING) return COMMS_COLOR_WARNING;
+  const p = String(priority || '').toLowerCase();
+  // RED — danger / risk / emergency / critical
+  if (p === 'critical' || p === 'danger' || p === 'emergency' ||
+      p === 'risk' || p === 'fatal' || p === 'error') {
+    return COMMS_COLOR_CRITICAL;
+  }
+  // YELLOW — warning / alert / caution
+  if (p === 'warning' || p === 'warn' || p === 'alert' || p === 'caution') {
+    return COMMS_COLOR_WARNING;
+  }
+  // GREEN — everything else (info / guidance / nominal / attaboy / '')
   return COMMS_COLOR_NORMAL;
+}
+
+/**
+ * True when a message priority is in the "red" (critical/danger) band.
+ * Case-insensitive and accepts the looser danger vocabulary.
+ * @param {string} priority
+ * @returns {boolean}
+ */
+function isCriticalPriority(priority) {
+  return getPriorityColor(priority) === COMMS_COLOR_CRITICAL;
 }
 
 // ============================================================================
@@ -202,7 +232,7 @@ export class CommsPanel {
    * @param {object} msg — { text, priority, channel, … }
    */
   onMessage(msg) {
-    if (msg.priority === CommsPriority.CRITICAL) {
+    if (isCriticalPriority(msg.priority)) {
       this._commsFlashTimer = 3.0;
     }
     this._scrollOffset = 0; // reset scroll on new message
@@ -379,7 +409,7 @@ export class CommsPanel {
       // Latest message: full-strength, subtle highlight band. Older: dimmed.
       const textOpacity = isLatest ? '1' : '0.6';
       const rowBg = isLatest ? 'rgba(255,255,255,0.06)' : 'transparent';
-      const weight = (isLatest || msg.priority === CommsPriority.CRITICAL) ? '600' : '400';
+      const weight = (isLatest || isCriticalPriority(msg.priority)) ? '600' : '400';
 
       const sourceText = msg.source ? `${msg.source}: ` : '';
 
@@ -407,9 +437,11 @@ export class CommsPanel {
 // NAMED EXPORTS (for tests)
 // ============================================================================
 
-export { discriminateKeyEvent, filterRoundTrip };
+export { discriminateKeyEvent, filterRoundTrip, getPriorityColor, isCriticalPriority,
+  COMMS_COLOR_NORMAL, COMMS_COLOR_WARNING, COMMS_COLOR_CRITICAL };
 
 // ST-5.1: CJS guard — expose pure helpers for Node.js tests
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { discriminateKeyEvent, filterRoundTrip };
+  module.exports = { discriminateKeyEvent, filterRoundTrip, getPriorityColor, isCriticalPriority,
+    COMMS_COLOR_NORMAL, COMMS_COLOR_WARNING, COMMS_COLOR_CRITICAL };
 }

@@ -120,3 +120,56 @@ describe('CommsPanel – pane dimensions', () => {
     assert.equal(COMMS.C_TAP_MAX_MS, 250);
   });
 });
+
+// ============================================================================
+// PRIORITY → COLOUR (mirrors CommsPanel.getPriorityColor exactly)
+// Green = info/guidance/nominal, Yellow = warning/alert, Red = danger/critical.
+// ============================================================================
+
+const COMMS_COLOR_NORMAL = '#00ff88';
+const COMMS_COLOR_WARNING = '#ffaa00';
+const COMMS_COLOR_CRITICAL = '#ff4444';
+
+function getPriorityColor(priority) {
+  const p = String(priority || '').toLowerCase();
+  if (p === 'critical' || p === 'danger' || p === 'emergency' ||
+      p === 'risk' || p === 'fatal' || p === 'error') {
+    return COMMS_COLOR_CRITICAL;
+  }
+  if (p === 'warning' || p === 'warn' || p === 'alert' || p === 'caution') {
+    return COMMS_COLOR_WARNING;
+  }
+  return COMMS_COLOR_NORMAL;
+}
+
+describe('CommsPanel – getPriorityColor (3-colour semantics, case-insensitive)', () => {
+  it('canonical enum INFO/WARNING/CRITICAL map correctly', () => {
+    assert.equal(getPriorityColor('INFO'), COMMS_COLOR_NORMAL);
+    assert.equal(getPriorityColor('WARNING'), COMMS_COLOR_WARNING);
+    assert.equal(getPriorityColor('CRITICAL'), COMMS_COLOR_CRITICAL);
+  });
+
+  it('lowercase emitter values map correctly (regression: was all green)', () => {
+    assert.equal(getPriorityColor('info'), COMMS_COLOR_NORMAL);
+    assert.equal(getPriorityColor('warning'), COMMS_COLOR_WARNING);
+    assert.equal(getPriorityColor('critical'), COMMS_COLOR_CRITICAL);
+  });
+
+  it('danger vocabulary → red', () => {
+    for (const p of ['danger', 'emergency', 'risk', 'Emergency', 'DANGER']) {
+      assert.equal(getPriorityColor(p), COMMS_COLOR_CRITICAL, `"${p}" should be red`);
+    }
+  });
+
+  it('alert/caution vocabulary → yellow', () => {
+    for (const p of ['alert', 'caution', 'Alert', 'WARN']) {
+      assert.equal(getPriorityColor(p), COMMS_COLOR_WARNING, `"${p}" should be yellow`);
+    }
+  });
+
+  it('guidance / attaboy / nominal / empty → green (the default, all-good band)', () => {
+    for (const p of ['guidance', 'attaboy', 'nominal', '', null, undefined, 'chatter']) {
+      assert.equal(getPriorityColor(p), COMMS_COLOR_NORMAL, `"${p}" should be green`);
+    }
+  });
+});

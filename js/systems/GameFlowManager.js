@@ -204,7 +204,7 @@ class GameFlowManager {
           timerManager.setTimeout(() => {
             eventBus.emit(Events.COMMS_MESSAGE, {
               source: 'HOUSTON', channel: 'CMD', priority: 'info',
-              text: 'Reading you five-by-five, Cowboy',
+              text: 'Comms are up, Cowboy. We have you on telemetry.',
             });
             // Removed: startup blip audio not needed per UX decision
           }, 2000, { owner: this });

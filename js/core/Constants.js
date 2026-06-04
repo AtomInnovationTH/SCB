@@ -195,8 +195,6 @@ export const Constants = {
   WEAVER_MAX_CAPTURE_MASS: 500,         // kg
   WEAVER_GRIPPER_SPAN: 0.05,           // m (50mm 3-jaw chuck, backup)
   WEAVER_LASER_POWER_RECV: 19.5,       // W at 2 km via 808nm PV
-  WEAVER_SOLAR_POWER: 15,              // W peak (backup)
-  WEAVER_BATTERY: 25,                   // Wh
   WEAVER_COLD_GAS: 0.2,               // kg N₂ (rapid attitude during capture)
   WEAVER_BODY: [0.2, 0.2, 0.3],       // m [x, y, z] dimensions
   WEAVER_CAPTURES_PER_FUEL: 33,        // captures before FEEP depletion
@@ -214,8 +212,6 @@ export const Constants = {
   SPINNER_MAX_CAPTURE_MASS: 10,         // kg
   SPINNER_GECKO_PAD_FORCE: 3.5,        // N/cm² (PDMS Van der Waals)
   SPINNER_LASER_POWER_RECV: 19.5,      // W at 1 km
-  SPINNER_SOLAR_POWER: 8,              // W peak (backup)
-  SPINNER_BATTERY: 10,                  // Wh
   SPINNER_BODY: [0.1, 0.1, 0.15],     // m [x, y, z] dimensions
   SPINNER_CAPTURES_PER_FUEL: 37,       // captures before FEEP depletion
 
@@ -359,8 +355,8 @@ export const Constants = {
     ROSA_LENGTH: 2.0,              // m
     ROSA_CHAMFER: 0.30,            // m
     ROSA_POWER: 1630,              // W (ROSA alone)
-    BODY_MOUNT_POWER: 610,         // W (GaAs)
-    TOTAL_SOLAR_POWER: 2240,       // W (combined)
+    BODY_MOUNT_POWER: 820,         // W (GaAs body cells — central + fwd/aft end rows, ~2.76 m²)
+    TOTAL_SOLAR_POWER: 2450,       // W (combined: ROSA 1630 + body 820)
     ROSA_DEPLOY_DURATION_S: 6.0,   // seconds per wing (ST-9.11 C-5)
 
     // ── Hinge (NEW) ──
@@ -2113,9 +2109,9 @@ export const Constants = {
   // Procedural Canvas2D textures; no external image files.
   // ============================================================================
   DEBRIS_VISUAL: {
-    ATLAS_SIZE: 1024,           // px; type texture atlas dimension
-    FLAG_ATLAS_SIZE: 512,       // px; flag decal atlas dimension
-    FLAG_SLOT_SIZE: 128,        // px per flag slot in atlas
+    ATLAS_SIZE: 2048,           // px; type texture atlas dimension (2048 = crisp surface detail on close approach)
+    FLAG_ATLAS_SIZE: 1024,      // px; flag decal atlas dimension (1024 = crisp decals up close)
+    FLAG_SLOT_SIZE: 256,        // px per flag slot in atlas
     TYPE_SLOT_COLS: 3,          // atlas grid layout columns
     TYPE_SLOT_ROWS: 2,          // atlas grid layout rows
     FLAG_SLOT_COLS: 4,          // flag atlas grid columns
@@ -2169,8 +2165,11 @@ export const Constants = {
   // colliding with the v1 storage layout.
   // ============================================================================
   ONBOARDING: {
-    /** localStorage key for the OnboardingDirector save blob. */
-    STORAGE_KEY: 'spacecowboy_onboarding_v1',
+    /** localStorage key for the OnboardingDirector save blob.
+     *  v2 (2026-06-04): added the `inspect` beat (zoom now teaches the camera,
+     *  inspect verifies the player pushed in until Mother hull callouts appear).
+     *  Bumped so v1 saves don't resume mid-pipeline against the new beat list. */
+    STORAGE_KEY: 'spacecowboy_onboarding_v2',
 
     /** Default credit award per satisfied beat (where `credit` not set). */
     DEFAULT_CREDIT: 10,
@@ -2190,6 +2189,10 @@ export const Constants = {
 
     /** Default ticker hint duration (overridable per-beat). */
     DEFAULT_HINT_MS: 12000,
+
+    /** Poll interval (ms) for re-checking a HELD beat's gate (e.g. waiting for
+     *  a scan to reveal a contact, or the player to close on a target). */
+    GATE_POLL_MS: 1200,
 
     /** Veteran-skip threshold: fraction of relevant skills already practiced. */
     VETERAN_SKILL_THRESHOLD: 0.5,

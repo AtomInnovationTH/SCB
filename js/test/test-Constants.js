@@ -833,8 +833,8 @@ describe('Config G Constants (ST-9.1)', () => {
         assert.equal(Constants.OCTOPUS_V5.ARM_PLANE_OFFSET, Math.PI / 3);
     });
 
-    it('OCTOPUS_V5.TOTAL_SOLAR_POWER === 2240', () => {
-        assert.equal(Constants.OCTOPUS_V5.TOTAL_SOLAR_POWER, 2240);
+    it('OCTOPUS_V5.TOTAL_SOLAR_POWER === 2450', () => {
+        assert.equal(Constants.OCTOPUS_V5.TOTAL_SOLAR_POWER, 2450);
     });
 
     it('OCTOPUS_V5.ROSA_POWER + BODY_MOUNT_POWER === TOTAL_SOLAR_POWER', () => {

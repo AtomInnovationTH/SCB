@@ -64,18 +64,18 @@ function rotateAndTilt(x, y, z, cosY, sinY) {
 // ============================================================================
 // WIREFRAME SHAPE — ArmUnit daughter craft (simplified schematic)
 //
-// Vertex layout (48 verts, scale×1.8 applied at end):
+// Vertex layout (52 verts, scale×1.8 applied at end):
 //   0–5   front hex  (Z=+0.50, R=0.28)
 //   6–11  rear  hex  (Z=−0.50, R=0.28)
 //  12–15  EPM pole  (base, tip, cross-A, cross-B)
 //  16–21  FEEP fore ring (6 verts, Z=+0.62)
 //  22–27  FEEP aft  ring (6 verts, Z=−0.62)
-//  28–31  ROSA panel left  corners
-//  32–35  ROSA panel right corners
-//  36–39  Net pack corners (front-bottom rectangle)
-//  40–41  Bridle hardpoints (2 positions)
-//  42–45  Status light marker (2-vertex cross)
-//  46–47  Tether line (attach point + extended aft)
+//  28–33  solar-skin front ring (6 verts, Z=+0.46, R=0.30 — conformal cells)
+//  34–39  solar-skin rear  ring (6 verts, Z=−0.46, R=0.30)
+//  40–43  Net pack corners (front-bottom rectangle)
+//  44–45  Bridle hardpoints (2 positions)
+//  46–49  Status light marker (2-vertex cross)
+//  50–51  Tether line (attach point + extended aft)
 // ============================================================================
 
 /**
@@ -112,33 +112,29 @@ export function buildDaughterShape() {
   const FFORE = ring6(0.12,  0.62);
   const FAFT  = ring6(0.12, -0.62);
 
-  // ROSA panels (28–35)
-  const PLL  = v(-0.28, -0.05,  0.05);
-  const PLO  = v(-0.82, -0.05,  0.05);
-  const PLOT = v(-0.82,  0.05,  0.05);
-  const PLI  = v(-0.28,  0.05,  0.05);
-  const PRL  = v( 0.28, -0.05,  0.05);
-  const PRO  = v( 0.82, -0.05,  0.05);
-  const PROT = v( 0.82,  0.05,  0.05);
-  const PRI  = v( 0.28,  0.05,  0.05);
+  // Body-conformal solar skin (28–39): two hex rings just proud of the body
+  // shell (R=0.30 vs body 0.28), inset along Z so end caps stay structure.
+  // Matches the 3D `-solar-skin` mesh (textured PV cells; no protruding wings).
+  const SKF = hexN(0.30,  0.46);   // skin front ring 28–33
+  const SKR = hexN(0.30, -0.46);   // skin rear  ring 34–39
 
-  // Net pack (36–39) — rectangle bulging from front-bottom
+  // Net pack (40–43) — rectangle bulging from front-bottom
   const NTA = v(-0.10, -0.28,  0.40);
   const NTB = v( 0.10, -0.28,  0.40);
   const NTC = v( 0.10, -0.36,  0.40);
   const NTD = v(-0.10, -0.36,  0.40);
 
-  // Bridle hardpoints (40–41)
+  // Bridle hardpoints (44–45)
   const BHA = v( 0.22,  0.12,  0.00);
   const BHB = v(-0.22,  0.12,  0.00);
 
-  // Status light marker (42–45): small cross
+  // Status light marker (46–49): small cross
   const SLA = v( 0.04,  0.28, -0.25);
   const SLB = v(-0.04,  0.28, -0.25);
   const SLC = v( 0.00,  0.33, -0.25);
   const SLD = v( 0.00,  0.23, -0.25);
 
-  // Tether (46–47)
+  // Tether (50–51)
   const TRA = v( 0.00,  0.00, -0.52);   // tether attach at rear face
   const TRB = v( 0.00,  0.00, -0.70);   // tether extends further
 
@@ -173,38 +169,35 @@ export function buildDaughterShape() {
   }
   faftEdges.push([RH + 0, FAFT + 0], [RH + 3, FAFT + 3]);
 
-  // Zone 4 — ROSA Panel L
-  const rosaLEdges = [
-    [PLL, PLO], [PLO, PLOT], [PLOT, PLI], [PLI, PLL],
-    [PLL, PLOT], [PLO, PLI],
-  ];
+  // Zone 4 — Solar Skin (body-conformal cells). Two hex end rings plus a
+  // longitudinal cell line down each of the 6 faces = the wireframe cell grid.
+  const solarEdges = [];
+  for (let k = 0; k < 6; k++) {
+    solarEdges.push([SKF + k, SKF + (k + 1) % 6]);  // front ring
+    solarEdges.push([SKR + k, SKR + (k + 1) % 6]);  // rear ring
+    solarEdges.push([SKF + k, SKR + k]);            // longitudinal cell line
+  }
 
-  // Zone 5 — ROSA Panel R
-  const rosaREdges = [
-    [PRL, PRO], [PRO, PROT], [PROT, PRI], [PRI, PRL],
-    [PRL, PROT], [PRO, PRI],
-  ];
-
-  // Zone 6 — Net Pack
+  // Zone 5 — Net Pack
   const netEdges = [
     [NTA, NTB], [NTB, NTC], [NTC, NTD], [NTD, NTA],
     [NTA, FH + 5], [NTB, FH + 0],
   ];
 
-  // Zone 7 — Bridle Ring
+  // Zone 6 — Bridle Ring
   const bridleEdges = [
     [BHA, BHB],
     [BHA, FH + 0],
     [BHB, FH + 3],
   ];
 
-  // Zone 8 — Status Light
+  // Zone 7 — Status Light
   const statusEdges = [
     [SLA, SLB],
     [SLC, SLD],
   ];
 
-  // Zone 9 — Tether
+  // Zone 8 — Tether
   const tetherEdges = [
     [TRA, TRB],
     [RH + 0, TRA],
@@ -224,8 +217,7 @@ export function buildDaughterShape() {
       { name: 'EPM Pole',              edges: epmEdges,    massPercent:  8, risk: 'YELLOW' },
       { name: 'FEEP Fore Thruster',    edges: fforeEdges,  massPercent: 12, risk: 'YELLOW' },
       { name: 'FEEP Aft Thruster',     edges: faftEdges,   massPercent: 12, risk: 'YELLOW' },
-      { name: 'ROSA Panel L',          edges: rosaLEdges,  massPercent: 10, risk: 'GREEN'  },
-      { name: 'ROSA Panel R',          edges: rosaREdges,  massPercent: 10, risk: 'GREEN'  },
+      { name: 'Solar Skin (cells)',   edges: solarEdges,  massPercent: 20, risk: 'GREEN'  },
       { name: 'Net Pack',              edges: netEdges,    massPercent: 10, risk: 'RED'    },
       { name: 'Bridle Ring',           edges: bridleEdges, massPercent:  5, risk: 'YELLOW' },
       { name: 'Status Light',          edges: statusEdges, massPercent:  1, risk: 'GREEN'  },
@@ -292,8 +284,9 @@ export class DaughterWireframe {
 
     /** @type {object|null} Currently tracked ArmUnit */
     this._arm     = null;
-    /** @type {number} Dynamic net risk color index */
-    this._netZoneIdx = 6;  // 'Net Pack' zone
+    /** @type {number} Dynamic net risk color index — looked up by name so it
+     * stays correct if the zone list changes (e.g. solar wings → body skin). */
+    this._netZoneIdx = this._shape.zones.findIndex(z => z.name === 'Net Pack');
     /** @type {string} Dynamic status light color */
     this._statusColor = ZONE_COLORS.GREEN;
     /** @type {number} Arm index for badge label */

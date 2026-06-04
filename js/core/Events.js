@@ -131,6 +131,25 @@ export const Events = {
    * CameraSystem only handles 'mother'.
    */
   INSPECTION_TOGGLE:  'inspection:toggle',
+  /**
+   * Explicit-boolean hull-outline control for close inspection. Payload:
+   * { visible: boolean }. Emitted by the OVERVIEW zoom-driven inspection
+   * sub-state (which keeps the camera view as ORBIT, so it can't rely on the
+   * INSPECTION CAMERA_VIEW_CHANGE that the bare-I/discrete path uses). Kept
+   * separate from INSPECTION_TOGGLE because that event is a toggle, whereas the
+   * hull outline needs an idempotent on/off to avoid desync.
+   */
+  INSPECT_HULL_OUTLINE: 'inspection:hullOutline',
+  /**
+   * MOTHER_INSPECTION_ENGAGED (2026-06-04 onboarding).
+   * Fired ONCE each time the OVERVIEW zoom-driven inspection sub-state ENGAGES
+   * for the mothership (i.e. the player pushed in close enough that the hull
+   * callouts/overlays became visible). Unlike INSPECTION_TOGGLE this fires only
+   * on engage (never on exit) and only for the mother, so onboarding can use it
+   * as an unambiguous "the player actually saw the callouts" completion signal.
+   * Payload: {}
+   */
+  MOTHER_INSPECTION_ENGAGED: 'inspection:motherEngaged',
   COMMS_SEND:         'comms:send',
   COMMS_SOLAR_STORM:  'comms:solarStorm',
   COMMS_GEO_STORM:    'comms:geoStorm',

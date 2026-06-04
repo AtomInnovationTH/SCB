@@ -181,6 +181,43 @@ export class FlagDecalSystem {
       case 'ISR': this._paintISR(ctx, fx, fy, fw, fh); break;
       default:    this._paintUnknown(ctx, fx, fy, fw, fh); break;
     }
+
+    // Decal placard frame so the flag reads as a riveted plate bonded to the
+    // hull (NASA/ESA style), not a floating banner. Drawn over the flag art.
+    this._paintDecalFrame(ctx, fx, fy, fw, fh);
+  }
+
+  /** @private Riveted placard frame + edge shading to sell "painted on hardware" */
+  _paintDecalFrame(ctx, x, y, w, h) {
+    ctx.save();
+    // Subtle inner vignette (panel curvature / dirt at edges)
+    const vg = ctx.createLinearGradient(x, y, x, y + h);
+    vg.addColorStop(0, 'rgba(255,255,255,0.10)');
+    vg.addColorStop(0.5, 'rgba(0,0,0,0)');
+    vg.addColorStop(1, 'rgba(0,0,0,0.22)');
+    ctx.fillStyle = vg;
+    ctx.fillRect(x, y, w, h);
+
+    // Dark metal border
+    ctx.strokeStyle = 'rgba(20,22,26,0.85)';
+    ctx.lineWidth = Math.max(2, w * 0.03);
+    ctx.strokeRect(x + ctx.lineWidth / 2, y + ctx.lineWidth / 2,
+      w - ctx.lineWidth, h - ctx.lineWidth);
+
+    // Corner rivets
+    ctx.fillStyle = 'rgba(180,182,190,0.9)';
+    const r = Math.max(2, w * 0.04);
+    const inset = r * 1.6;
+    for (const [rx, ry] of [
+      [x + inset, y + inset], [x + w - inset, y + inset],
+      [x + inset, y + h - inset], [x + w - inset, y + h - inset],
+    ]) {
+      ctx.beginPath(); ctx.arc(rx, ry, r, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = 'rgba(40,42,48,0.6)';
+      ctx.beginPath(); ctx.arc(rx + r * 0.2, ry + r * 0.2, r * 0.4, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = 'rgba(180,182,190,0.9)';
+    }
+    ctx.restore();
   }
 
   // --------------------------------------------------------------------------

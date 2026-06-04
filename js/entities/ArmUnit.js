@@ -13,6 +13,7 @@ import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
+import { getSolarCellTexture } from '../scene/solarCellTexture.js';
 import { tetherReel } from '../systems/TetherReel.js';
 import { captureNetSystem } from './CaptureNet.js';
 import { audioSystem } from '../systems/AudioSystem.js';
@@ -81,13 +82,17 @@ export class ArmUnit {
     // --- Type-specific configuration ---
     const isWeaver = type === 'weaver';
     this.config = {
-      mass: isWeaver ? Constants.WEAVER_MASS : Constants.SPINNER_MASS,
+      // Physical mass for ALL dynamics (manual-thrust accel, capture combined
+      // mass, recoil residual, deorbit ΔV). Uses the V5 figures (6.6/2.1 kg) so
+      // it matches crossbow launch, CoM, and recoil-cancel math — the legacy
+      // Constants.WEAVER_MASS/SPINNER_MASS (11.0/3.7) are pre-V5 and would
+      // mis-size recoil compensation by ~67%.
+      mass: isWeaver ? V5_WEAVER_MASS : V5_SPINNER_MASS,
       type: type,
       tetherMax: isWeaver ? Constants.WEAVER_TETHER_LENGTH : Constants.SPINNER_TETHER_LENGTH,
       maxCaptureMass: isWeaver ? Constants.WEAVER_MAX_CAPTURE_MASS : Constants.SPINNER_MAX_CAPTURE_MASS,
       netSize: isWeaver ? Constants.WEAVER_NET_SIZE : Constants.SPINNER_NET_SIZE,
       bodyDims: isWeaver ? Constants.WEAVER_BODY : Constants.SPINNER_BODY,
-      battery: isWeaver ? Constants.WEAVER_BATTERY : Constants.SPINNER_BATTERY,
       capturesPerFuel: isWeaver ? Constants.WEAVER_CAPTURES_PER_FUEL : Constants.SPINNER_CAPTURES_PER_FUEL,
       approachSpeed: Constants.ARM_APPROACH_SPEED,
       haulSpeed: Constants.ARM_HAUL_SPEED,
@@ -382,144 +387,51 @@ export class ArmUnit {
     edges.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_TRANSPARENT; // FIX_PLAN §2-followup
     this.mesh.add(edges);
 
-    // --- ROSA-style solar panel wings (body-mounted GaAs, 8–15 W peak) ---
-    // Panels extend along ±Y (perpendicular to yoke sweep plane) to
-    // avoid collision with mother structure during ±30° yoke rotation.
-    // Matches mother ROSA visual style: chamfered shape + wireframe grid + stowed roll.
-    const rosaW = (isWeaver ? 0.15 : 0.08) * M;  // scene units — wing width (±Y)
-    const rosaL = (isWeaver ? 0.20 : 0.10) * M;  // scene units — wing length (Z)
-    const chamfer = rosaW * 0.15;                  // chamfer at outboard corners
+    // --- Body-conformal thin-film GaAs solar cells (matches mother barrel) ---
+    // SYMMETRY: cells wrap the full hex body instead of protruding ±Y wings.
+    // A hexagonal shell shares the body's azimuthal symmetry, so the daughter's
+    // solar coverage looks identical from every angle and no longer depends on
+    // the (roll-dependent) docked orientation around the mother. This also
+    // removes the wings that broke the radial symmetry of the dock ring.
+    //
+    // Construction mirrors the mother's barrel cells (PlayerSatellite.js §body
+    // thin-film): a slightly oversized conformal shell carrying the dark GaAs
+    // material, plus a wireframe cell-grid overlay drawn on top.
 
-    const panelMatFront = new THREE.MeshStandardMaterial({
-      color: 0x0a1133, metalness: 0.4, roughness: 0.5,
+    // Darken + faintly energize the hex body so the cell skin reads as PV.
+    bodyMat.emissive.setHex(0x060614);
+    bodyMat.emissiveIntensity = 0.10;
+
+    // Conformal cell skin: a 6-sided shell (= 6 flat PV facets) at 100.6%
+    // radius carrying the dark GaAs cell texture. One mesh, no separate grid
+    // shell, so no concentric z-fight/parallax. (The hex faces are already flat,
+    // matching how body-mounted cells are flat sub-panels on real spacecraft.)
+    const cellTex = getSolarCellTexture();
+    let skinTex = null;
+    if (cellTex) {
+      skinTex = cellTex.clone();
+      skinTex.needsUpdate = true;
+      skinTex.repeat.set(isWeaver ? 1.0 : 0.7, 1.0); // ~one cell-tile per facet
+    }
+    const cellSkinGeo = new THREE.CylinderGeometry(
+      hexR * 1.006, hexR * 1.006, bz * 0.92 * M, 6, 1, true, Math.PI / 6
+    );
+    const cellSkinMat = new THREE.MeshStandardMaterial({
+      color: skinTex ? 0xffffff : 0x0a1133, // tint comes from the map when present
+      map: skinTex || null,
+      emissiveMap: skinTex || null,
+      metalness: 0.5, roughness: 0.5,
+      emissive: 0x0b1030, emissiveIntensity: 0.18,
       side: THREE.FrontSide,
-      emissive: 0x050520, emissiveIntensity: 0.15,
+      polygonOffset: true,            // sit just proud of the body shell
+      polygonOffsetFactor: -1,        // pull toward camera so cells win the depth tie
+      polygonOffsetUnits: -1,
     });
-    const panelMatBack = new THREE.MeshStandardMaterial({
-      color: 0xccccdd, metalness: 0.3, roughness: 0.4,
-      side: THREE.BackSide,
-      emissive: 0xccccdd, emissiveIntensity: 0.4, // bright Kapton substrate — must stay visible in shadow (scene has near-zero ambient)
-    });
-    // Grid overlay: ShaderMaterial with manual back-face discard.
-    // Wireframe (GL_LINES) ignores face-culling; compute view-dot-normal
-    // per fragment and discard when negative to hide grid from behind.
-    const gridMat = new THREE.ShaderMaterial({
-      uniforms: {},
-      vertexShader: `
-        varying vec3 vViewPos;
-        varying vec3 vNorm;
-        void main() {
-          vec4 mv = modelViewMatrix * vec4(position, 1.0);
-          vViewPos = -mv.xyz;
-          vNorm = normalize(normalMatrix * normal);
-          gl_Position = projectionMatrix * mv;
-        }
-      `,
-      fragmentShader: `
-        varying vec3 vViewPos;
-        varying vec3 vNorm;
-        void main() {
-          if (dot(normalize(vViewPos), vNorm) < 0.0) discard;
-          gl_FragColor = vec4(0.133, 0.267, 0.667, 0.3);
-        }
-      `,
-      wireframe: true,
-      transparent: true,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-    });
-    const rollMat = new THREE.MeshStandardMaterial({
-      color: 0x333344, metalness: 0.5, roughness: 0.4,
-    });
-
-    // Chamfered panel shape (local XY — wrapper rotates to body YZ)
-    const pShape = new THREE.Shape();
-    pShape.moveTo(chamfer, -rosaL / 2);
-    pShape.lineTo(rosaW - chamfer, -rosaL / 2);
-    pShape.lineTo(rosaW, -rosaL / 2 + chamfer);
-    pShape.lineTo(rosaW, rosaL / 2);
-    pShape.lineTo(0, rosaL / 2);
-    pShape.lineTo(0, -rosaL / 2 + chamfer);
-    pShape.closePath();
-    const panelGeo = new THREE.ShapeGeometry(pShape);
-
-    // Back-face geometry clone with flipped normals — BackSide doesn't
-    // flip normals in the shader, so we negate them for correct lighting.
-    const panelGeoBack = panelGeo.clone();
-    const nBack = panelGeoBack.attributes.normal;
-    for (let i = 0; i < nBack.count; i++) nBack.setZ(i, -nBack.getZ(i));
-    nBack.needsUpdate = true;
-
-    const gridGeo = new THREE.PlaneGeometry(rosaW, rosaL, 3, 4);
-    const rollGeo = new THREE.CylinderGeometry(
-      0.008 * M, 0.008 * M, rosaL, 6);
-
-    // --- Top wing (+Y) — extends upward from body top face ---
-    const topPivot = new THREE.Group();
-    topPivot.position.set(0, by * 0.5 * M, 0);
-    this.mesh.add(topPivot);
-
-    const topWrapper = new THREE.Group();
-    topWrapper.rotation.x = -Math.PI / 2;  // XY → XZ
-    topWrapper.rotation.z = Math.PI / 2;    // XZ → YZ, extends in +Y
-    topPivot.add(topWrapper);
-
-    // FIX_PLAN §2-followup: front+back panels were coplanar at z=0 in wrapper.
-    // Bump back 1 mm behind so the two ShapeGeometry planes no longer share
-    // the same depth and depth-tie z-fights at the panel rim disappear.
-    const topPanelFront = new THREE.Mesh(panelGeo, panelMatFront);
-    topPanelFront.name = `${this.id}-rosa-top-front`;
-    topPanelFront.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;     // FIX_PLAN §2-followup
-    topWrapper.add(topPanelFront);
-
-    const topPanelBack = new THREE.Mesh(panelGeoBack, panelMatBack);
-    topPanelBack.position.z = -0.001;                                          // FIX_PLAN §2-followup
-    topPanelBack.name = `${this.id}-rosa-top-back`;
-    topPanelBack.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;       // FIX_PLAN §2-followup
-    topWrapper.add(topPanelBack);
-
-    const topGrid = new THREE.Mesh(gridGeo, gridMat);
-    topGrid.position.set(rosaW * 0.5, 0, 0.0005);
-    topGrid.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_TRANSPARENT;       // FIX_PLAN §2-followup
-    topWrapper.add(topGrid);
-
-    const topRoll = new THREE.Mesh(rollGeo, rollMat);
-    topRoll.position.set(0.008 * M, 0, 0);
-    topRoll.rotation.x = Math.PI / 2;
-    topRoll.visible = false;  // deployed = roll hidden
-    topPivot.add(topRoll);
-
-    // --- Bottom wing (−Y) — extends downward from body bottom face ---
-    const botPivot = new THREE.Group();
-    botPivot.position.set(0, -by * 0.5 * M, 0);
-    this.mesh.add(botPivot);
-
-    const botWrapper = new THREE.Group();
-    botWrapper.rotation.x = -Math.PI / 2;   // XY → XZ
-    botWrapper.rotation.z = -Math.PI / 2;    // XZ → YZ, extends in −Y
-    botPivot.add(botWrapper);
-
-    const botPanelFront = new THREE.Mesh(panelGeo, panelMatFront);
-    botPanelFront.name = `${this.id}-rosa-bot-front`;
-    botPanelFront.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;     // FIX_PLAN §2-followup
-    botWrapper.add(botPanelFront);
-
-    const botPanelBack = new THREE.Mesh(panelGeoBack, panelMatBack);
-    botPanelBack.position.z = -0.001;                                          // FIX_PLAN §2-followup
-    botPanelBack.name = `${this.id}-rosa-bot-back`;
-    botPanelBack.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;       // FIX_PLAN §2-followup
-    botWrapper.add(botPanelBack);
-
-    const botGrid = new THREE.Mesh(gridGeo, gridMat);
-    botGrid.position.set(rosaW * 0.5, 0, 0.0005);
-    botGrid.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_TRANSPARENT;       // FIX_PLAN §2-followup
-    botWrapper.add(botGrid);
-
-    const botRoll = new THREE.Mesh(rollGeo, rollMat);
-    botRoll.position.set(-0.008 * M, 0, 0);
-    botRoll.rotation.x = Math.PI / 2;
-    botRoll.visible = false;  // deployed = roll hidden
-    botPivot.add(botRoll);
+    const cellSkin = new THREE.Mesh(cellSkinGeo, cellSkinMat);
+    cellSkin.rotation.x = Math.PI / 2;  // align length axis with body Z
+    cellSkin.name = `${this.id}-solar-skin`;
+    cellSkin.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL; // over body
+    this.mesh.add(cellSkin);
 
     // --- S3.5: Aft FEEP nozzle (stub, centered on −Z face) ---
     const aftNozR = (isWeaver ? 0.015 : 0.010) * M;
@@ -570,17 +482,36 @@ export class ArmUnit {
     canister.rotation.x = Math.PI / 2;
     this.mesh.add(canister);
 
-    // --- Laser PV receiver panel (top face, dark purple) ---
-    const pvSize = isWeaver ? 0.2 : 0.1; // m, matches spec
-    const pvGeo = new THREE.PlaneGeometry(pvSize * M, pvSize * M);
-    const pvMat = new THREE.MeshStandardMaterial({
-      color: 0x220044, metalness: 0.5, roughness: 0.3,
-      emissive: 0x110022, emissiveIntensity: 0.1,
+    // --- Laser power receiver (top face) — a small optical rectenna, NOT a
+    // solar array. A single round photodiode tuned to the 808 nm beam, set in a
+    // metallic bezel. Deliberately small and distinct from the blue silicon body
+    // cells so it doesn't read as "another solar panel".
+    const rxR = (isWeaver ? 0.045 : 0.030) * M;   // receiver disc radius (small)
+    const rxY = by * 0.52 * M;
+
+    // Metallic bezel ring around the aperture.
+    const rxBezelGeo = new THREE.RingGeometry(rxR, rxR * 1.35, 16);
+    const rxBezelMat = new THREE.MeshStandardMaterial({
+      color: 0x777788, metalness: 0.9, roughness: 0.25, side: THREE.DoubleSide,
     });
-    const pvPanel = new THREE.Mesh(pvGeo, pvMat);
-    pvPanel.position.y = by * 0.52 * M;
+    const rxBezel = new THREE.Mesh(rxBezelGeo, rxBezelMat);
+    rxBezel.position.set(0, rxY, 0);
+    rxBezel.rotation.x = -Math.PI / 2;
+    rxBezel.name = `${this.id}-laser-rx-bezel`;
+    rxBezel.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+    this.mesh.add(rxBezel);
+
+    // Dark optical receiver face with a faint amber glow (active beam target).
+    const rxGeo = new THREE.CircleGeometry(rxR, 16);
+    const rxMat = new THREE.MeshStandardMaterial({
+      color: 0x1a0e02, metalness: 0.35, roughness: 0.2,
+      emissive: 0x140a00, emissiveIntensity: 0.18,  // warm 808nm-receiver tint
+    });
+    const pvPanel = new THREE.Mesh(rxGeo, rxMat);
+    pvPanel.position.set(0, rxY + 0.0002 * M, 0);   // just above the bezel plane
     pvPanel.rotation.x = -Math.PI / 2;
-    pvPanel.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;   // FIX_PLAN §2-followup
+    pvPanel.name = `${this.id}-laser-rx`;
+    pvPanel.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
     this.mesh.add(pvPanel);
 
     // --- S3.5: MRR patch antenna (flat hex disc, replaces 60-tri sphere) ---
@@ -4166,11 +4097,11 @@ export class ArmUnit {
       [S.REELING]: 0.0,           // V5: Zero-fuel motor reel-in
       [S.RETURNING]: 1.2,
       [S.DOCKING]: 0.2,
-      [S.RELOADING]: 0.0,         // V5: Worm gear uses electrical power only
+      [S.RELOADING]: 0.0,         // V5: worm gear — zero FEEP fuel (no stored-energy model)
       [S.FISHING]: 0.02,          // Hibernate mode — ~10 mW, near-zero consumption
       [S.WEB_SHOT]: 0.0,          // Fuel consumed upfront in fireWebShot()
-      [S.ABLATING]: 0.0,          // V5: Laser uses electrical power only
-      [S.SCANNING]: 0.0,          // V5: Sensor mode uses electrical power only
+      [S.ABLATING]: 0.0,          // V5: laser de-spin — zero FEEP fuel (no stored-energy model)
+      [S.SCANNING]: 0.0,          // V5: sensor mode — zero FEEP fuel (no stored-energy model)
       [S.TANGLED]: 0.0,           // V5: Tangled — no active thrust
     };
     const rate = rates[this.state] || 0;
@@ -4541,13 +4472,21 @@ export class ArmUnit {
    * Dispose of all Three.js resources.
    */
   dispose() {
+    const disposeMat = (m) => {
+      if (!m) return;
+      // Dispose per-instance textures (e.g. cloned solar-cell map/emissiveMap)
+      // — material.dispose() does NOT free attached textures.
+      if (m.map && m.map.dispose) m.map.dispose();
+      if (m.emissiveMap && m.emissiveMap.dispose && m.emissiveMap !== m.map) m.emissiveMap.dispose();
+      m.dispose();
+    };
     this.group.traverse((child) => {
       if (child.geometry) child.geometry.dispose();
       if (child.material) {
         if (Array.isArray(child.material)) {
-          child.material.forEach(m => m.dispose());
+          child.material.forEach(disposeMat);
         } else {
-          child.material.dispose();
+          disposeMat(child.material);
         }
       }
     });

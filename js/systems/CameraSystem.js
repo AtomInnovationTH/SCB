@@ -39,20 +39,25 @@ export const CameraViews = {
 /**
  * View cycling order driven by the V key.
  *
- * 2026-06-03 consolidation: TARGET_LOCK was removed from the cycle (it
- * duplicated CHASE's HUD and silently fell back to CHASE framing whenever no
- * target was locked — i.e. pressing V often appeared to do nothing). The slot
- * was given to INSPECTION so the camera key teaches a tidy trio:
- *   COMMAND (fly) → OVERVIEW (situational) → INSPECT (close, contextual).
- * INSPECTION is entered/exited via enterInspection()/exitInspection() rather
- * than a plain setView() so FOV + near-plane optics transition cleanly; the
- * cycle helper (cycleView) routes through those. FIRST_PERSON, ARM_PILOT and
- * NET_CINEMATIC remain outside the cycle (entered by their own bindings).
+ * 2026-06-03 consolidation (rev. 2): INSPECTION removed from the cycle. The V
+ * key now teaches just two named views:
+ *   COMMAND (fly the ship) → OVERVIEW (pull back, look around) → COMMAND.
+ * Close inspection is no longer a discrete cycle slot — instead, zooming in far
+ * enough while in OVERVIEW auto-enters a mothership inspection sub-state
+ * (narrow FOV, dynamic near-plane, vignette, hull/wireframe overlays) and
+ * zooming back out leaves it. A Schmitt-trigger (separate enter/exit distances)
+ * prevents flicker at the boundary. This keeps the player's mental model to two
+ * things and removes the deliberate "no auto-switch" exception only for this
+ * zoom-driven optical transition (the named *view* still never auto-switches).
+ *
+ * INSPECTION remains a real CameraViews value for the bare-I power-user shortcut
+ * and the ARM_PILOT / debris-locked contextual wireframe path (entered via
+ * enterInspection()/exitInspection()). FIRST_PERSON, ARM_PILOT and NET_CINEMATIC
+ * remain outside the cycle (entered by their own bindings).
  */
 const VIEW_CYCLE = [
   CameraViews.CHASE,          // COMMAND (default)
-  CameraViews.ORBIT,          // OVERVIEW
-  CameraViews.INSPECTION,     // INSPECT (contextual: mother / debris / daughter)
+  CameraViews.ORBIT,          // OVERVIEW (zoom in here to inspect the mothership)
 ];
 
 /** Human-readable labels for HUD display */
@@ -157,7 +162,7 @@ export class CameraSystem {
       theta: Math.PI,           // Azimuthal angle (start behind player — same direction as cockpit)
       phi: Math.PI / 4,        // Polar angle (radians)
       distance: 0.0003,        // Distance from player (~30m)
-      minDistance: 0.00008,     // Minimum zoom (~8m — lowered from 15m; near-clip at 3m prevents clip-through)
+      minDistance: 0.00002,     // Minimum zoom (~2m — lowered so OVERVIEW can push into inspection depth; near-clip scales dynamically below the inspect threshold)
       maxDistance: 0.01,        // Maximum zoom
       rotateSpeed: 0.005,      // Mouse rotation sensitivity
       zoomSpeed: 0.0001,       // Scroll zoom speed
@@ -167,11 +172,29 @@ export class CameraSystem {
       damping: 0.92,           // Rotation momentum damping
       velocityTheta: 0,
       velocityPhi: 0,
+
+      // ----------------------------------------------------------------------
+      // Zoom-driven inspection sub-state (2026-06-03 consolidation rev. 2)
+      // ----------------------------------------------------------------------
+      // Inspection is no longer a separate view. While in OVERVIEW, zooming in
+      // past `inspectEnterDist` engages a mothership inspection sub-state
+      // (narrow FOV, dynamic near-plane, vignette, hull/wireframe overlays);
+      // zooming back out past the larger `inspectExitDist` disengages it. The
+      // gap between the two distances is a Schmitt trigger that prevents the
+      // overlay/FOV from flickering when the camera parks near the boundary.
+      inspectEnterDist: 0.00012,  // ~12m — push in closer than this to inspect
+      inspectExitDist: 0.00018,   // ~18m — pull back past this to leave inspect
+      inspectActive: false,       // current sub-state (hysteresis output)
+      inspectTaught: false,       // one-shot learning beat fired?
     };
 
     // ========================================================================
     // INSPECTION CAMERA CONFIG (S2.1 — close-range mechanical inspection)
     // ========================================================================
+    // `fov` here is the single source of truth for the inspection lens, shared
+    // by BOTH the discrete INSPECTION view (enterInspection) and the OVERVIEW
+    // zoom-driven sub-state (_setInspectZoom reads this.inspection.fov) so the
+    // two paths can't drift.
     this.inspection = {
       theta: Math.PI,
       phi: Math.PI / 4,
@@ -228,6 +251,10 @@ export class CameraSystem {
     this._fovBreathTarget = 0;       // target FOV offset
     this._fovBreathTimer = 0;        // sustained thrust timer (seconds)
     this._baseFov = camera.fov;      // base FOV to offset from
+
+    // OVERVIEW zoom-inspection FOV ease state (undefined = inactive sentinel).
+    this._inspectZoomFovTarget = undefined; // target _baseFov while easing in/out
+    this._inspectZoomSavedFov = undefined;  // _baseFov captured on engage, restored on exit
     this._thrustVisualDir = null;    // 'prograde' | 'retrograde' | 'lateral' | null
     this._thrustVisualMag = 0;       // current thrust magnitude for FOV
 
@@ -335,23 +362,20 @@ export class CameraSystem {
   // ==========================================================================
 
   /**
-   * Cycle to the next camera view (V key).
+   * Toggle the camera view (V key): COMMAND ↔ OVERVIEW.
    *
-   * Entering or leaving INSPECTION is routed through enterInspection()/
-   * exitInspection() so the FOV + near-plane optics transition cleanly and the
-   * contextual wireframe overlay is toggled. Leaving INSPECTION always wraps
-   * back to COMMAND (CHASE) rather than the prior view, so the cycle reads
-   * COMMAND → OVERVIEW → INSPECT → COMMAND.
-   *
-   * @param {object} [opts]
-   * @param {('mother'|'debris'|'daughter')} [opts.inspectionSubject] subject to
-   *   focus when the next view is INSPECTION (defaults to 'mother').
-   * @param {number|null} [opts.inspectionTargetId] debris id for 'debris' subject.
+   * 2026-06-03 rev. 2: INSPECTION is no longer a cycle slot — close inspection
+   * engages automatically by zooming in within OVERVIEW (see _evaluateInspectZoom).
+   * If the player happens to be in the discrete INSPECTION view (entered via the
+   * bare-I shortcut or the debris/arm contextual path), V wraps cleanly back to
+   * COMMAND and restores optics/overlay.
    */
-  cycleView(opts = {}) {
+  cycleView() {
     const cur = this.currentView;
 
-    // Leaving INSPECTION wraps back to COMMAND and restores optics/overlay.
+    // INSPECTION is no longer a cycle slot. If the player entered it via the
+    // bare-I shortcut (or the debris/arm contextual path) and then presses V,
+    // wrap cleanly back to COMMAND and restore optics/overlay.
     if (cur === CameraViews.INSPECTION) {
       this.exitInspection(CameraViews.CHASE);
       return;
@@ -360,12 +384,6 @@ export class CameraSystem {
     const currentIdx = VIEW_CYCLE.indexOf(cur);
     const nextIdx = (currentIdx + 1) % VIEW_CYCLE.length;
     const next = VIEW_CYCLE[nextIdx];
-
-    if (next === CameraViews.INSPECTION) {
-      this.enterInspection(opts.inspectionSubject || 'mother', opts.inspectionTargetId ?? null);
-      return;
-    }
-
     this.setView(next);
   }
 
@@ -375,6 +393,13 @@ export class CameraSystem {
    */
   setView(view) {
     if (view === this.currentView && !this._transitioning) return;
+
+    // Leaving OVERVIEW clears the zoom-driven inspection sub-state so its
+    // narrow FOV / near-plane / vignette / overlay don't leak into the next
+    // view. (No-op if it was never engaged.)
+    if (this.currentView === CameraViews.ORBIT && view !== CameraViews.ORBIT) {
+      this._clearInspectZoom();
+    }
 
     // Q2 Stage 6: external view switch during an active net ceremony aborts
     // the ceremony cleanly (FOV/time-scale restored, FIRST_NET_DEPLOY NOT
@@ -652,6 +677,24 @@ export class CameraSystem {
       }
     }
 
+    // Zoom-inspection FOV ease (OVERVIEW sub-state). The dedicated view-
+    // transition FOV lerp only runs when _fovTransitionEnd is set (armPilot /
+    // ceremony / discrete-inspection paths); the zoom sub-state doesn't use it,
+    // so this independent ease drives _baseFov toward the inspect target
+    // (narrow) or back to the saved base — including across an OVERVIEW→COMMAND
+    // view change, where the transition lerp is a no-op. Yields to the
+    // transition lerp if one is actually configured to avoid double-driving FOV.
+    if (this._inspectZoomFovTarget !== undefined && this._fovTransitionEnd === undefined) {
+      const easeRate = 5.0; // ~200ms to 63%
+      this._baseFov += (this._inspectZoomFovTarget - this._baseFov) * Math.min(1, easeRate * dt);
+      if (Math.abs(this._baseFov - this._inspectZoomFovTarget) < 0.05) {
+        this._baseFov = this._inspectZoomFovTarget;
+        this._inspectZoomFovTarget = undefined; // settled — release control
+      }
+      this.camera.fov = this._baseFov + this._fovBreathOffset;
+      this.camera.updateProjectionMatrix();
+    }
+
     // Phase 4: FOV breathe during sustained thrust (I-War heritage)
     // Skip during ARM_PILOT (has its own narrow FOV)
     if (this.currentView !== CameraViews.ARM_PILOT && !this._launchCeremony.active && !this._netCeremony.active) {
@@ -819,7 +862,125 @@ export class CameraSystem {
     const pos = playerPos.clone().add(offset);
     const look = playerPos.clone();
 
+    // When zoomed into the inspection sub-state, scale the near-plane to the
+    // (very small) distance so close mechanical detail doesn't clip. Outside
+    // the sub-state, leave the near-plane at the global default (restored by
+    // _setInspectZoom(false)).
+    if (this.orbit.inspectActive) {
+      this._applyDynamicNearPlane(this.orbit.distance);
+    }
+
     return { pos, look };
+  }
+
+  /**
+   * Scale the camera near-plane to a (very small) inspection distance so close
+   * mechanical detail doesn't clip. Shared by both inspection paths — the
+   * OVERVIEW zoom sub-state (_computeOrbit) and the discrete INSPECTION view
+   * (_computeInspection) — so the optics stay identical and can't drift. The
+   * change-guard avoids a projection-matrix rebuild on frames where near barely
+   * moves.
+   * @param {number} distance camera-to-subject distance in scene units
+   * @private
+   */
+  _applyDynamicNearPlane(distance) {
+    const newNear = Math.max(distance * 0.02, 0.000001);
+    if (Math.abs(this.camera.near - newNear) > newNear * 0.1) {
+      this.camera.near = newNear;
+      this.camera.updateProjectionMatrix();
+    }
+  }
+
+  /**
+   * Evaluate the zoom-driven inspection sub-state for OVERVIEW (ORBIT).
+   *
+   * Called after every OVERVIEW zoom change. Uses a Schmitt trigger: engage
+   * inspection once the camera pushes closer than `inspectEnterDist`, and only
+   * disengage once it pulls back past the larger `inspectExitDist`. The gap
+   * between the two prevents flicker when the player parks near the boundary.
+   * Mothership-only (2026-06-03 decision) — debris/daughter inspection stays on
+   * the explicit bare-I / ARM_PILOT path.
+   * @private
+   */
+  _evaluateInspectZoom() {
+    if (this.currentView !== CameraViews.ORBIT) return;
+
+    const o = this.orbit;
+    if (!o.inspectActive && o.distance < o.inspectEnterDist) {
+      this._setInspectZoom(true);
+    } else if (o.inspectActive && o.distance > o.inspectExitDist) {
+      this._setInspectZoom(false);
+    }
+  }
+
+  /**
+   * Engage/disengage the OVERVIEW zoom-inspection sub-state: tween FOV, manage
+   * the dynamic near-plane, fade the vignette, and toggle the mothership
+   * overlay. Does NOT change `currentView` — the named view stays OVERVIEW.
+   * @param {boolean} on
+   * @private
+   */
+  _setInspectZoom(on) {
+    const o = this.orbit;
+    if (o.inspectActive === on) return;
+    o.inspectActive = on;
+
+    if (on) {
+      // Narrow the lens like the dedicated inspection view. Remember the
+      // pre-zoom base FOV so exit restores exactly what OVERVIEW was using.
+      // The FOV itself eases per-frame in update() (the view-transition FOV
+      // lerp only runs during a view change, which this sub-state is not).
+      this._inspectZoomSavedFov = this._baseFov;
+      this._inspectZoomFovTarget = this.inspection.fov; // single source of truth (shared with discrete view)
+      this._fovBreathOffset = 0;
+      this._fovBreathTarget = 0;
+      this._fovBreathTimer = 0;
+
+      // Diagnostic vignette + mothership hull/wireframe overlay.
+      this._updateInspectionVignette(CameraViews.INSPECTION);
+      eventBus.emit(Events.INSPECTION_TOGGLE, { subject: 'mother', targetId: null });
+      eventBus.emit(Events.INSPECT_HULL_OUTLINE, { visible: true });
+      // Onboarding signal: fires only on mother-inspection ENGAGE (never exit)
+      // so the `inspect` beat can confirm the player actually reached the depth
+      // where the hull callouts appear.
+      eventBus.emit(Events.MOTHER_INSPECTION_ENGAGED, {});
+
+      // One-shot learning beat the first time inspection engages via zoom, so
+      // the player understands the silent threshold did something deliberate.
+      if (!o.inspectTaught) {
+        o.inspectTaught = true;
+        eventBus.emit(Events.SHOW_NOTIFICATION, { text: '🔍 INSPECTION — overlays active' });
+      }
+    } else {
+      // Restore lens (per-frame ease) + near-plane.
+      this._inspectZoomFovTarget = this._inspectZoomSavedFov || Constants.CAMERA_FOV;
+      this.camera.near = Constants.CAMERA_NEAR;
+      this.camera.updateProjectionMatrix();
+
+      // Fade vignette back out (any non-inspect view clears it) + hide overlay.
+      this._updateInspectionVignette(CameraViews.ORBIT);
+      eventBus.emit(Events.INSPECTION_TOGGLE, { subject: 'mother' });
+      eventBus.emit(Events.INSPECT_HULL_OUTLINE, { visible: false });
+    }
+  }
+
+  /**
+   * Clear the zoom-inspection sub-state without a view transition — used when
+   * leaving OVERVIEW so optics/overlays don't leak into the next view.
+   *
+   * Also pulls the stored OVERVIEW zoom distance back out to the exit threshold.
+   * Without this, re-entering OVERVIEW (V→COMMAND→V) would leave orbit.distance
+   * inside the inspection band while inspectActive is false — the optics/overlays
+   * would stay off AND _computeOrbit's protective dynamic near-plane (gated on
+   * inspectActive) would not engage, letting the camera clip through the
+   * mothership until the next wheel event. Resetting the distance guarantees
+   * OVERVIEW always re-opens outside the band.
+   * @private
+   */
+  _clearInspectZoom() {
+    if (!this.orbit.inspectActive) return;
+    this._setInspectZoom(false);
+    this.orbit.distance = Math.max(this.orbit.distance, this.orbit.inspectExitDist);
   }
 
   /**
@@ -856,12 +1017,8 @@ export class CameraSystem {
     const pos = playerPos.clone().add(offset);
     const look = playerPos.clone();
 
-    // Dynamic near-plane: 2% of distance, floor at 0.000001 (~0.1m)
-    const newNear = Math.max(cfg.distance * 0.02, 0.000001);
-    if (Math.abs(this.camera.near - newNear) > newNear * 0.1) {
-      this.camera.near = newNear;
-      this.camera.updateProjectionMatrix();
-    }
+    // Dynamic near-plane (shared with the OVERVIEW zoom sub-state).
+    this._applyDynamicNearPlane(cfg.distance);
 
     return { pos, look };
   }
@@ -2258,13 +2415,18 @@ export class CameraSystem {
     eventBus.emit(Events.CAMERA_ZOOM);
 
     if (this.currentView === CameraViews.ORBIT) {
-      // Zoom in/out (smooth 5% steps)
-      const zoomDelta = e.deltaY > 0 ? 1.05 : 0.95;
+      // Zoom in/out. Use finer 3% steps once inside the inspection band so
+      // close mechanical framing is controllable; 5% otherwise.
+      const fine = this.orbit.distance < this.orbit.inspectExitDist;
+      const step = fine ? 0.03 : 0.05;
+      const zoomDelta = e.deltaY > 0 ? (1 + step) : (1 - step);
       this.orbit.distance *= zoomDelta;
       this.orbit.distance = Math.max(
         this.orbit.minDistance,
         Math.min(this.orbit.maxDistance, this.orbit.distance)
       );
+      // Cross the Schmitt trigger → engage/disengage inspection optics+overlay.
+      this._evaluateInspectZoom();
     } else if (this.currentView === CameraViews.INSPECTION) {
       // Inspection zoom (smooth 3% steps for fine control)
       const zoomDelta = e.deltaY > 0 ? 1.03 : 0.97;

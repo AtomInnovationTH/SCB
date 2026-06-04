@@ -657,20 +657,16 @@ export class InputManager {
             d.audioSystem?.playClick();
             e.preventDefault();
           } else if (d.cameraSystem) {
-            // Plain V → camera cycle: COMMAND → OVERVIEW → INSPECT → COMMAND.
-            // In ARM_PILOT, V backs out to the mothership (unchanged). Otherwise
-            // cycleView() handles entering/leaving INSPECTION; we pass the
-            // contextual inspect subject (a Tab-locked debris focuses the debris
-            // wireframe, else the mother spacecraft).
+            // Plain V → camera toggle: COMMAND ↔ OVERVIEW (2026-06-03 rev. 2).
+            // INSPECT is no longer a cycle slot — zooming in within OVERVIEW
+            // engages mothership inspection automatically. In ARM_PILOT, V backs
+            // out to the mothership (unchanged). cycleView() also wraps cleanly
+            // if the player is in the discrete INSPECTION view (entered via I).
             if (this.armPilotMode) {
               this._exitArmPilotCamera();
               if (d.armManager) d.armManager.deselectArm();
             } else {
-              const lockedId = d.targetSelector?.getActiveTarget?.()?.id ?? null;
-              d.cameraSystem.cycleView({
-                inspectionSubject: lockedId != null ? 'debris' : 'mother',
-                inspectionTargetId: lockedId,
-              });
+              d.cameraSystem.cycleView();
             }
             d.audioSystem.playClick();
           }
@@ -1987,11 +1983,9 @@ export class InputManager {
   /** Smart-default helper — cycles the camera view (mirrors `case 'KeyV':`). */
   cycleView() {
     const d = this._deps; if (!d || !d.cameraSystem || this.armPilotMode) return;
-    const lockedId = d.targetSelector?.getActiveTarget?.()?.id ?? null;
-    d.cameraSystem.cycleView({
-      inspectionSubject: lockedId != null ? 'debris' : 'mother',
-      inspectionTargetId: lockedId,
-    });
+    // COMMAND ↔ OVERVIEW toggle (2026-06-03 rev. 2). Inspection is no longer a
+    // cycle slot, so no subject plumbing is needed here.
+    d.cameraSystem.cycleView();
     d.audioSystem?.playClick?.();
   }
 }

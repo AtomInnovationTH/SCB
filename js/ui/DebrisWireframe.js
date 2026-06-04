@@ -438,6 +438,12 @@ const SHAPES = {
 /** @type {Map<string, THREE.BufferGeometry>} Cached geometries keyed by type (or fragment variant) */
 const _geoCache = new Map();
 
+/** @type {Map<string, number>} Local-space bounding radius per geometry type */
+const _geoRadiusCache = new Map();
+
+/** @type {Map<string, {x:number,y:number,z:number}>} Bounding-box half-extents per geometry */
+const _geoHalfExtentCache = new Map();
+
 /**
  * Merge an array of THREE.BufferGeometry into a single BufferGeometry.
  * Supports indexed and non-indexed geometries (position + normal only).
@@ -496,102 +502,309 @@ function _mergeGeometries(geos) {
 
 /**
  * Build a THREE.BufferGeometry for a rocket body type.
- * Uses LatheGeometry with the wireframe silhouette profile (R=0.30, tapered).
+ *
+ * Improved: a spent upper stage — tapered nose, ribbed cylindrical tank, a
+ * staging seam ring, and a deep open engine bell with an internal throat cone
+ * so the nozzle reads as hollow and machined when you fly in close.
  * @returns {THREE.BufferGeometry}
  */
 function _buildRocketBodyGeo() {
-  // Profile matches wireframe: nosecone tip → body → nozzle bell → exit
+  const parts = [];
+
+  // Outer hull profile (Lathe): nosecone → tank → flared nozzle lip
   const profile = [
-    new THREE.Vector2(0.001, 0.50),    // nosecone tip (avoid zero-radius)
-    new THREE.Vector2(0.30,  0.35),    // nosecone base
-    new THREE.Vector2(0.30, -0.25),    // fuel-tank bottom
-    new THREE.Vector2(0.30, -0.50),    // engine bottom
-    new THREE.Vector2(0.42, -0.58),    // nozzle bell (wider)
-    new THREE.Vector2(0.001, -0.65),   // nozzle exit
+    new THREE.Vector2(0.001, 0.52),
+    new THREE.Vector2(0.16,  0.42),   // nose shoulder
+    new THREE.Vector2(0.30,  0.30),   // nosecone base
+    new THREE.Vector2(0.30, -0.22),   // tank wall
+    new THREE.Vector2(0.27, -0.30),   // tank-to-skirt step
+    new THREE.Vector2(0.30, -0.40),   // engine skirt
+    new THREE.Vector2(0.44, -0.52),   // nozzle bell lip (flared, open)
   ];
-  const geo = new THREE.LatheGeometry(profile, 8);
-  // Normalize: old CylinderGeometry(0.3,0.3,2.0) had bounding radius ~1.04;
-  // this LatheGeometry has ~0.71 → scale 1.5× to match scene-size convention
+  const hull = new THREE.LatheGeometry(profile, 16);
+  parts.push(hull);
+
+  // Internal nozzle throat cone (so the open bell looks hollow up close)
+  const throat = new THREE.ConeGeometry(0.10, 0.18, 14, 1, true);
+  throat.translate(0, -0.40, 0);
+  parts.push(throat);
+
+  // Staging seam ring around the midsection
+  const seam = new THREE.TorusGeometry(0.305, 0.018, 6, 18);
+  seam.rotateX(Math.PI / 2);
+  seam.translate(0, -0.06, 0);
+  parts.push(seam);
+
+  // Two raised structural bands (ribs) on the tank
+  for (const yb of [0.12, -0.16]) {
+    const band = new THREE.TorusGeometry(0.305, 0.010, 5, 16);
+    band.rotateX(Math.PI / 2);
+    band.translate(0, yb, 0);
+    parts.push(band);
+  }
+
+  const geo = _mergeGeometries(parts);
+  // Match prior scene-size convention.
   geo.scale(1.5, 1.5, 1.5);
   return geo;
 }
 
 /**
  * Build a THREE.BufferGeometry for a defunct satellite type.
- * Box bus with solar-panel wing stubs — merged geometry.
+ *
+ * Improved: a recognisable spacecraft silhouette — a multi-panel box bus with
+ * a beveled top, two segmented solar-array wings on booms, a parabolic dish on
+ * a gimbal, an antenna whip and a thruster nozzle. Reads clearly as a derelict
+ * satellite from a distance and rewards a close inspection with real structure.
  * @returns {THREE.BufferGeometry}
  */
 function _buildDefunctSatGeo() {
-  // Bus body (matches wireframe bx=0.20, by=0.15, bz=0.15)
-  const body = new THREE.BoxGeometry(0.40, 0.30, 0.30, 1, 1, 1);
+  const parts = [];
 
-  // Solar panels (thin flat extensions)
-  const wingL = new THREE.BoxGeometry(0.40, 0.16, 0.02, 1, 1, 1);
-  wingL.translate(-0.40, 0, 0);
-  const wingR = new THREE.BoxGeometry(0.40, 0.16, 0.02, 1, 1, 1);
-  wingR.translate(0.40, 0, 0);
+  // --- Main bus (slightly tapered box via Lathe-free stacked boxes) ---
+  const body = new THREE.BoxGeometry(0.40, 0.34, 0.32);
+  parts.push(body);
+  // Beveled equipment deck on top
+  const deck = new THREE.BoxGeometry(0.30, 0.06, 0.24);
+  deck.translate(0, 0.20, 0);
+  parts.push(deck);
+  // MLI blanket lip / lower adapter ring
+  const adapter = new THREE.CylinderGeometry(0.10, 0.13, 0.08, 8);
+  adapter.translate(0, -0.21, 0);
+  parts.push(adapter);
 
-  // Antenna mast (small cone on top)
-  const antenna = new THREE.ConeGeometry(0.10, 0.13, 6);
-  antenna.translate(0, 0.215, 0);
+  // --- Solar wings: boom + 3 segmented panel cells each side ---
+  for (const side of [-1, 1]) {
+    const boom = new THREE.CylinderGeometry(0.012, 0.012, 0.22, 6);
+    boom.rotateZ(Math.PI / 2);
+    boom.translate(side * 0.31, 0, 0);
+    parts.push(boom);
+    for (let s = 0; s < 3; s++) {
+      const panel = new THREE.BoxGeometry(0.30, 0.185, 0.012);
+      // gap between cells so seams are visible up close
+      panel.translate(side * (0.55 + s * 0.32), 0, 0);
+      parts.push(panel);
+    }
+  }
 
-  const geo = _mergeGeometries([body, wingL, wingR, antenna]);
-  // Normalize: old BoxGeometry(1.5,0.5,1.0) had bounding radius ~0.94;
-  // merged geo has ~0.64 → scale 1.5× to match scene-size convention
-  geo.scale(1.5, 1.5, 1.5);
+  // --- Parabolic-ish high-gain dish on a short gimbal ---
+  const gimbal = new THREE.CylinderGeometry(0.02, 0.02, 0.10, 6);
+  gimbal.translate(0.10, 0.27, 0.10);
+  parts.push(gimbal);
+  // Open dish (cone, thin) facing up-and-out
+  const dish = new THREE.ConeGeometry(0.13, 0.10, 14, 1, true);
+  dish.rotateX(Math.PI);          // open face up
+  dish.translate(0.10, 0.36, 0.10);
+  parts.push(dish);
+  const feed = new THREE.ConeGeometry(0.015, 0.07, 4);
+  feed.translate(0.10, 0.30, 0.10);
+  parts.push(feed);
+
+  // --- Antenna whip ---
+  const whip = new THREE.CylinderGeometry(0.006, 0.006, 0.22, 4);
+  whip.translate(-0.13, 0.30, -0.10);
+  parts.push(whip);
+
+  // --- Thruster nozzle on the underside ---
+  const nozzle = new THREE.ConeGeometry(0.05, 0.08, 8, 1, true);
+  nozzle.translate(-0.10, -0.24, -0.06);
+  parts.push(nozzle);
+
+  const geo = _mergeGeometries(parts);
+  // Normalise to scene-size convention (old merged geo scaled 1.5×).
+  geo.scale(1.35, 1.35, 1.35);
   return geo;
 }
 
 /**
  * Build a THREE.BufferGeometry for mission debris type.
- * Hexagonal prism with attachment ring (matches wireframe N=6, R=0.28, halfH=0.22).
+ *
+ * Improved: a discarded payload-adapter / equipment module — an octagonal
+ * canister with a recessed top hatch, a clamp-band ring, mounting lugs around
+ * the rim and a stub connector. More machined and man-made than a bare prism.
  * @returns {THREE.BufferGeometry}
  */
 function _buildMissionDebrisGeo() {
-  // Main hexagonal prism
-  const prism = new THREE.CylinderGeometry(0.28, 0.28, 0.44, 6);
+  const parts = [];
 
-  // Attachment ring (torus around the midsection)
-  const ring = new THREE.TorusGeometry(0.34, 0.03, 4, 6);
-  ring.rotateX(Math.PI / 2);
-  ring.translate(0, -0.02, 0);
+  // Main octagonal canister
+  const can = new THREE.CylinderGeometry(0.28, 0.30, 0.42, 8);
+  parts.push(can);
 
-  const geo = _mergeGeometries([prism, ring]);
-  // Normalize: old SphereGeometry(1) had bounding radius 1.0;
-  // hex prism+ring has ~0.43 → scale 2.3× to match scene-size convention
-  geo.scale(2.3, 2.3, 2.3);
+  // Recessed top hatch (smaller disc) + raised rim
+  const hatch = new THREE.CylinderGeometry(0.18, 0.18, 0.05, 8);
+  hatch.translate(0, 0.225, 0);
+  parts.push(hatch);
+  const rim = new THREE.TorusGeometry(0.20, 0.02, 5, 8);
+  rim.rotateX(Math.PI / 2);
+  rim.translate(0, 0.21, 0);
+  parts.push(rim);
+
+  // Clamp-band ring around the waist
+  const band = new THREE.TorusGeometry(0.31, 0.035, 6, 8);
+  band.rotateX(Math.PI / 2);
+  band.translate(0, -0.04, 0);
+  parts.push(band);
+
+  // Four mounting lugs around the lower rim
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI * 2 + Math.PI / 8;
+    const lug = new THREE.BoxGeometry(0.06, 0.08, 0.04);
+    lug.translate(Math.cos(a) * 0.31, -0.18, Math.sin(a) * 0.31);
+    lug.rotateY(-a);
+    parts.push(lug);
+  }
+
+  // Stub connector poking out the side
+  const stub = new THREE.CylinderGeometry(0.04, 0.04, 0.12, 6);
+  stub.rotateZ(Math.PI / 2);
+  stub.translate(0.32, 0.05, 0);
+  parts.push(stub);
+
+  const geo = _mergeGeometries(parts);
+  // Match prior scene-size convention (old hex prism scaled 2.3×).
+  geo.scale(1.85, 1.85, 1.85);
   return geo;
 }
 
 /**
+ * Deterministic hash → [0,1) for a given integer seed.
+ * @param {number} n
+ * @returns {number}
+ */
+function _hash01(n) {
+  const h = Math.sin(n * 127.1 + 311.7) * 43758.5453;
+  return h - Math.floor(h);
+}
+
+/**
+ * Build a flat-shaded BufferGeometry from a triangle list.
+ * Each triangle gets its own 3 vertices so faces read as sharp facets
+ * (no smoothed/averaged normals across edges).
+ * @param {number[][]} verts  - array of [x,y,z]
+ * @param {number[][]} faces  - array of [i,j,k] index triples
+ * @returns {THREE.BufferGeometry}
+ */
+function _buildFlatGeometry(verts, faces) {
+  const positions = [];
+  const uvs = [];
+  for (const [a, b, c] of faces) {
+    const va = verts[a], vb = verts[b], vc = verts[c];
+    positions.push(va[0], va[1], va[2], vb[0], vb[1], vb[2], vc[0], vc[1], vc[2]);
+    // Planar-ish UV from spherical coords so the type atlas reads as surface grime
+    for (const v of [va, vb, vc]) {
+      const u = 0.5 + Math.atan2(v[2], v[0]) / (2 * Math.PI);
+      const w = 0.5 + Math.asin(Math.max(-1, Math.min(1, v[1] /
+        (Math.hypot(v[0], v[1], v[2]) || 1)))) / Math.PI;
+      uvs.push(u, w);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geo.computeVertexNormals(); // per-triangle (vertices not shared) → flat facets
+  return geo;
+}
+
+/**
+ * Build the convex hull (triangle faces) of a small deterministic point cloud.
+ * Incremental hull: robust enough for the ~14-point clouds we feed it and
+ * avoids any addon/CDN dependency. Returns face index triples into `points`.
+ * @param {number[][]} points
+ * @returns {number[][]}
+ */
+function _convexHullFaces(points) {
+  const n = points.length;
+  const faces = [];
+  const EPS = 1e-7;
+  const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+  const cross = (a, b) => [
+    a[1] * b[2] - a[2] * b[1],
+    a[2] * b[0] - a[0] * b[2],
+    a[0] * b[1] - a[1] * b[0],
+  ];
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+
+  // Brute-force: a triangle (i,j,k) is a hull face if every other point lies
+  // on one side of its plane. n is tiny (~14) so O(n^4) is fine and runs once.
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      for (let k = j + 1; k < n; k++) {
+        const normal = cross(sub(points[j], points[i]), sub(points[k], points[i]));
+        const nlen = Math.hypot(normal[0], normal[1], normal[2]);
+        if (nlen < EPS) continue; // degenerate / collinear
+        let pos = 0, neg = 0;
+        for (let m = 0; m < n; m++) {
+          if (m === i || m === j || m === k) continue;
+          const d = dot(normal, sub(points[m], points[i]));
+          if (d > EPS) pos++;
+          else if (d < -EPS) neg++;
+          if (pos && neg) break;
+        }
+        if (pos && neg) continue; // not a hull face
+        // Orient outward: normal should point away from centroid (origin-ish)
+        const centerDot = dot(normal, points[i]);
+        if (centerDot < 0) faces.push([i, k, j]);
+        else faces.push([i, j, k]);
+      }
+    }
+  }
+  return faces;
+}
+
+/**
  * Build a THREE.BufferGeometry for a fragment type with per-ID variation.
- * Uses IcosahedronGeometry with deterministic vertex displacement.
+ *
+ * Improved: instead of a smooth subdivided "ball of triangles", each fragment
+ * is a sharp, irregular faceted chunk — the convex hull of a deterministic
+ * point cloud distorted along its principal axes. This reads as torn rocket
+ * shrapnel / cracked panel shards rather than a lumpy sphere. Flat-shaded so
+ * every facet catches the sun differently and gives strong specular pops as it
+ * tumbles — encouraging the player to move in for a close look.
+ *
  * @param {number} variantIndex - Variant index (0..DEBRIS_FRAGMENT_VARIANTS-1)
  * @returns {THREE.BufferGeometry}
  */
 function _buildFragmentGeo(variantIndex) {
-  // Detail 2 = 320 faces — smooth enough to read as lumpy, not spiky
-  const detail = 2;
-  const geo = new THREE.IcosahedronGeometry(1, detail);
-  const pos = geo.attributes.position;
+  const seed = ((variantIndex + 1) >>> 0) * 2654435761 >>> 0;
 
-  // Deterministic displacement seeded by variant index
-  const seed = ((variantIndex + 1) >>> 0) * 2654435761;
-  for (let i = 0; i < pos.count; i++) {
-    const x = pos.getX(i);
-    const y = pos.getY(i);
-    const z = pos.getZ(i);
-    const len = Math.sqrt(x * x + y * y + z * z) || 1;
+  // Anisotropic stretch per variant → slab-like shards, splinters, blocky chunks
+  const sx = 0.55 + _hash01(seed + 11) * 0.95;       // 0.55 .. 1.50
+  const sy = 0.45 + _hash01(seed + 23) * 0.70;       // 0.45 .. 1.15
+  const sz = 0.55 + _hash01(seed + 37) * 0.95;
+  // A few variants are flat plate-like shards (panel fragments)
+  const plate = _hash01(seed + 41) > 0.68;
+  const flat = plate ? 0.32 + _hash01(seed + 43) * 0.18 : 1.0;
 
-    // Deterministic pseudo-random per vertex+variant
-    const hash = Math.abs(Math.sin(seed + i * 127.1) * 43758.5453);
-    const displacement = 0.85 + (hash - Math.floor(hash)) * 0.3;
-
-    pos.setXYZ(i, (x / len) * displacement, (y / len) * displacement, (z / len) * displacement);
+  // Scatter a small irregular point cloud on a distorted sphere
+  const NPTS = 14;
+  const pts = [];
+  for (let i = 0; i < NPTS; i++) {
+    // Fibonacci-ish sphere direction, jittered deterministically
+    const t = (i + 0.5) / NPTS;
+    const phi = Math.acos(1 - 2 * t);
+    const theta = Math.PI * (1 + Math.sqrt(5)) * i + _hash01(seed + i * 7) * 1.3;
+    let dx = Math.sin(phi) * Math.cos(theta);
+    let dy = Math.cos(phi);
+    let dz = Math.sin(phi) * Math.sin(theta);
+    // Radius jitter so the hull has uneven, snapped-off vertices
+    const r = 0.62 + _hash01(seed + i * 53 + 5) * 0.42;
+    pts.push([dx * sx * r, dy * sy * flat * r, dz * sz * r]);
   }
 
-  pos.needsUpdate = true;
-  geo.computeVertexNormals();
+  let faces = _convexHullFaces(pts);
+  if (faces.length < 4) {
+    // Degenerate fallback (shouldn't happen) → low-detail icosahedron
+    return new THREE.IcosahedronGeometry(0.9, 1);
+  }
+
+  const geo = _buildFlatGeometry(pts, faces);
+
+  // Normalise bounding radius so all variants occupy a similar footprint,
+  // matching the scene-size convention used by the other types.
+  geo.computeBoundingSphere();
+  const br = geo.boundingSphere ? geo.boundingSphere.radius : 1;
+  if (br > 0) geo.scale(0.95 / br, 0.95 / br, 0.95 / br);
   return geo;
 }
 
@@ -757,8 +970,65 @@ export class DebrisWireframe {
         break;
     }
 
+    // Cache the local bounding radius so flag decals can be mounted exactly on
+    // the surface. Keyed by cacheKey (includes the fragment variant) so each
+    // variant resolves its own radius even if variant sizes ever diverge.
+    geo.computeBoundingSphere();
+    const br = geo.boundingSphere ? geo.boundingSphere.radius : 1;
+    _geoRadiusCache.set(cacheKey, br);
+
+    // Cache bounding-box half-extents too. The bounding *sphere* is dominated by
+    // far-reaching parts (e.g. solar wings), so using it to place a flag decal
+    // along an arbitrary direction would float the flag in empty space. The box
+    // half-extents let us land the decal on the actual hull face per direction.
+    geo.computeBoundingBox();
+    const bb = geo.boundingBox;
+    _geoHalfExtentCache.set(cacheKey, bb
+      ? { x: Math.max(Math.abs(bb.min.x), Math.abs(bb.max.x)),
+          y: Math.max(Math.abs(bb.min.y), Math.abs(bb.max.y)),
+          z: Math.max(Math.abs(bb.min.z), Math.abs(bb.max.z)) }
+      : { x: br, y: br, z: br });
+
     _geoCache.set(cacheKey, geo);
     return geo;
+  }
+
+  /**
+   * Local-space bounding radius for a debris geometry (cached after first
+   * getGeometry call). Used to place flag decals on the surface.
+   * @param {string} type
+   * @param {number} [id=0] - Debris ID (selects the fragment variant)
+   * @returns {number}
+   */
+  static getBoundingRadius(type, id = 0) {
+    const N = Constants.DEBRIS_FRAGMENT_VARIANTS || 7;
+    const cacheKey = type === 'fragment' ? `fragment_${(id >>> 0) % N}` : type;
+    return _geoRadiusCache.has(cacheKey) ? _geoRadiusCache.get(cacheKey) : 1;
+  }
+
+  /**
+   * Distance from the local origin to the bounding-box surface along a
+   * (local-space) unit direction. Used to mount flag decals flush on the hull
+   * face the decal points at, rather than at the (often much larger) bounding
+   * sphere radius. O(1); falls back to the bounding radius if uncached.
+   * @param {string} type
+   * @param {number} id
+   * @param {number} dx @param {number} dy @param {number} dz - unit direction
+   * @returns {number} distance to the box surface along the direction
+   */
+  static getSurfaceDistance(type, id, dx, dy, dz) {
+    const N = Constants.DEBRIS_FRAGMENT_VARIANTS || 7;
+    const cacheKey = type === 'fragment' ? `fragment_${(id >>> 0) % N}` : type;
+    const he = _geoHalfExtentCache.get(cacheKey);
+    if (!he) return this.getBoundingRadius(type, id);
+    // Ray from origin along (dx,dy,dz) exits the box at the smallest positive t
+    // that hits a slab face: t = halfExtent / |component|.
+    let t = Infinity;
+    const ax = Math.abs(dx), ay = Math.abs(dy), az = Math.abs(dz);
+    if (ax > 1e-6) t = Math.min(t, he.x / ax);
+    if (ay > 1e-6) t = Math.min(t, he.y / ay);
+    if (az > 1e-6) t = Math.min(t, he.z / az);
+    return isFinite(t) ? t : this.getBoundingRadius(type, id);
   }
 
   /**
@@ -1469,6 +1739,44 @@ let _flagSystem = null;
 let _visualMode = (Constants.DEBRIS_VISUAL && Constants.DEBRIS_VISUAL.DEFAULT_MODE) || 'textured';
 
 /**
+ * Pick atlas dimensions for the current device.
+ *
+ * The DEBRIS_VISUAL constants are the HIGH-end target (2048 type / 1024 flag).
+ * On low-end GPUs/RAM a 2048² RGBA atlas (~16 MB) + flag atlas is wasteful and
+ * can fail to allocate, so clamp against two signals:
+ *   • GPU MAX_TEXTURE_SIZE — a hard limit; never request a larger atlas.
+ *   • navigator.deviceMemory — Chrome/Edge only; ≤4 GB → halve the atlases.
+ * Both signals are optional; when unknown we keep the configured (HIGH) sizes,
+ * matching the conservative "unknown = capable desktop" stance used elsewhere
+ * (see scene/Earth.js selectLOD).
+ *
+ * @param {object} C - Constants.DEBRIS_VISUAL
+ * @returns {{ atlasSize: number, flagSize: number }}
+ * @private
+ */
+function _pickAtlasSizes(C) {
+  const cfgAtlas = C.ATLAS_SIZE || 1024;
+  const cfgFlag  = C.FLAG_ATLAS_SIZE || 512;
+
+  let maxTex = Infinity;
+  try {
+    const cv = document.createElement('canvas');
+    const gl = cv.getContext('webgl2') || cv.getContext('webgl');
+    if (gl) maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE) || Infinity;
+  } catch (_) { /* headless / no WebGL — keep configured sizes */ }
+
+  const memGB = (typeof navigator !== 'undefined' && navigator.deviceMemory) || undefined;
+  const lowMem = memGB !== undefined && memGB <= 4;
+  // Halve on low memory; one extra halving step is enough (4096→2048→1024 etc.).
+  const scale = lowMem ? 0.5 : 1;
+
+  // Clamp to GPU limit AND apply the memory scale, but never below a usable floor.
+  const atlasSize = Math.max(512,  Math.min(cfgAtlas, maxTex) * scale);
+  const flagSize  = Math.max(256,  Math.min(cfgFlag,  maxTex) * scale);
+  return { atlasSize, flagSize };
+}
+
+/**
  * Initialise the type and flag texture atlases. Called once at boot by DebrisField.
  * No-op if already initialised or if DOM is unavailable (Node tests).
  */
@@ -1476,8 +1784,9 @@ export function initAtlases() {
   if (typeof document === 'undefined') return;
   if (_typeAtlas) return; // already initialised
   const C = Constants.DEBRIS_VISUAL || {};
-  _typeAtlas = new DebrisTextureAtlas(C.ATLAS_SIZE);
-  _flagSystem = new FlagDecalSystem(C.FLAG_ATLAS_SIZE);
+  const { atlasSize, flagSize } = _pickAtlasSizes(C);
+  _typeAtlas = new DebrisTextureAtlas(atlasSize);
+  _flagSystem = new FlagDecalSystem(flagSize);
   _typeAtlas.generate();
   _flagSystem.generate();
 }

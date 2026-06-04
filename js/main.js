@@ -60,6 +60,7 @@ import { catalogLoader } from './systems/CatalogLoader.js';
 
 // UI
 import { HUD } from './ui/HUD.js';
+import { MotherCallouts } from './ui/MotherCallouts.js';
 import { MenuScreen } from './ui/MenuScreen.js';
 import { BriefingScreen } from './ui/BriefingScreen.js';
 import { ShopScreen } from './ui/ShopScreen.js';
@@ -400,7 +401,7 @@ let player;
 let debrisField;
 let activeSatellites;
 let armManager;
-
+let motherCallouts;
 // Systems (targetSelector, kesslerSystem, trawlManager imported as singletons above)
 let cameraSystem;
 let commsSystem;
@@ -599,6 +600,31 @@ async function init() {
     skillsSystem,
     teachingSystem,
     persistenceManager,
+    // Live game context for conditional onboarding beats (#1 target gating,
+    // #3 capture-proximity gating). Returns counts/distances the director uses
+    // to decide whether a beat is actionable yet.
+    contextProvider: () => {
+      let trackedContacts = 0;
+      let nearestDebrisM = null;
+      try {
+        if (debrisField && typeof debrisField.getDiscoveredCount === 'function') {
+          trackedContacts = debrisField.getDiscoveredCount(true);
+        }
+        const playerPos = player && player.getPosition ? player.getPosition() : null;
+        if (debrisField && playerPos && typeof debrisField.getDebrisNear === 'function') {
+          // Nearest discovered debris distance (metres). 5 km search window.
+          const near = debrisField.getDebrisNear(playerPos, 5.0);
+          let bestKm = Infinity;
+          for (const d of (near || [])) {
+            if (d && d.discovered === false) continue;
+            if (typeof d.distanceKm === 'number' && d.distanceKm < bestKm) bestKm = d.distanceKm;
+          }
+          if (bestKm < Infinity) nearestDebrisM = bestKm * 1000;
+        }
+      } catch (_e) { /* context is best-effort */ }
+      const hasTarget = !!(targetSelector && targetSelector.getActiveTarget && targetSelector.getActiveTarget());
+      return { trackedContacts, nearestDebrisM, hasTarget };
+    },
   });
 
   // Phase 4: Wire cargo system to resource system for dual-mode fuel
@@ -608,6 +634,10 @@ async function init() {
 
   // --- Camera System (replaces old manual follow) ---
   cameraSystem = new CameraSystem(camera, canvas, scene);
+
+  // --- Mothership inspection callouts (in-world 3D labels; replaces the 2D
+  // wireframe pane). Gated internally on the inspection events. ---
+  motherCallouts = new MotherCallouts(player, camera, { armManager });
 
   // --- Camera: start following the player ---
   const startPos = player.getPosition();
@@ -1658,6 +1688,13 @@ function updateCamera(dt) {
 
   // Update the camera system
   cameraSystem.update(dt, playerPos, playerVel, playerQuat);
+
+  // Inspection callouts — run AFTER the camera so band/facing use this frame's
+  // camera pose. Cheap no-op internally unless inspection is engaged.
+  if (motherCallouts) {
+    try { motherCallouts.update(dt, armManager); }
+    catch (e) { console.error('[GameLoop] motherCallouts:', e); }
+  }
 }
 
 

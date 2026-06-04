@@ -99,6 +99,15 @@ export class SensorSystem {
     this._scanCount = 0;
     /** @type {number} Total credits earned from scans this session */
     this._scanCreditsTotal = 0;
+    /**
+     * Field-based scan economy (2026-06-04): ground stations pay for NEW survey
+     * data about a debris field. The first scan of a given field is valuable;
+     * re-scanning the same field yields no new data (no reward) but still works
+     * functionally (reveals fresh arrivals, satisfies onboarding). Missions that
+     * span multiple fields therefore pay out once per distinct field surveyed.
+     * @type {Set<string>} field ids already paid out this session.
+     */
+    this._rewardedFields = new Set();
 
     // Sprint 3: Skill-based gate — suppress sensor weather effects until scan discovered
     this._scanDiscovered = false;
@@ -117,6 +126,7 @@ export class SensorSystem {
     eventBus.on(Events.GAME_RESET, () => {
       this._scanCount = 0;
       this._scanCreditsTotal = 0;
+      this._rewardedFields.clear();
     });
 
     this._setupListeners();
@@ -392,37 +402,83 @@ export class SensorSystem {
       this._wideCooldown = cfg.COOLDOWN;
     }
 
-    // S2.4: Diminishing returns on scan rewards (anti-spam)
+    // ── Field-based survey economy (2026-06-04) ──────────────────────────
+    // Ground stations pay for NEW, high-resolution data about a debris field.
+    // The first survey of a given field is valuable; re-scanning the SAME field
+    // returns data they already have (no reward) — this kills scan-farming a
+    // single spot. A mission spanning several fields still pays per field.
     this._scanCount++;
-    const sessionCap = Constants.SCAN.SESSION_SCAN_CAP || 5000;
-    const diminish = Math.max(0.2, 1 - (this._scanCount - 1) * 0.03); // -3% per scan, floor 20%
     const baseReward = cfg.REWARD;
-    let reward = Math.round(baseReward * diminish);
+    const sessionCap = Constants.SCAN.SESSION_SCAN_CAP || 5000;
 
-    // Session cap: if total earned + this reward exceeds cap, clamp
-    if (this._scanCreditsTotal >= sessionCap) {
-      reward = 0;
-    } else if (this._scanCreditsTotal + reward > sessionCap) {
-      reward = sessionCap - this._scanCreditsTotal;
+    // Identify the field the player is surveying (dominant cluster within range).
+    const revealRange = (Constants.SCAN.REVEAL_BASE_RANGE || 5.0) * (cfg.RANGE_MULTIPLIER || 1.0);
+    const fieldId = (this._lastDebrisField && this._lastPlayerPos)
+      ? this._lastDebrisField.getFieldIdNear(this._lastPlayerPos, revealRange)
+      : null;
+
+    let reward = 0;
+    let rewardKind = 'none'; // 'fresh' | 'stale' | 'empty' | 'capped'
+
+    if (!fieldId) {
+      // Empty space — nothing of value to survey.
+      rewardKind = 'empty';
+    } else if (this._rewardedFields.has(fieldId)) {
+      // Already surveyed this field — data is current, no new value.
+      rewardKind = 'stale';
+    } else {
+      // Fresh field — full survey value. Mild diminishing across DISTINCT fields
+      // surveyed (not per repeated scan) so later fields still pay, just slightly
+      // less, keeping early exploration the most rewarding.
+      const fieldsPaid = this._rewardedFields.size;
+      const diminish = Math.max(0.5, 1 - fieldsPaid * 0.05); // -5% per distinct field, floor 50%
+      reward = Math.round(baseReward * diminish);
+      rewardKind = 'fresh';
+
+      // Session cap is a final safety net against pathological field-hopping.
+      if (this._scanCreditsTotal >= sessionCap) {
+        reward = 0;
+        rewardKind = 'capped';
+      } else if (this._scanCreditsTotal + reward > sessionCap) {
+        reward = sessionCap - this._scanCreditsTotal;
+      }
+
+      if (reward > 0) {
+        this._rewardedFields.add(fieldId);
+        this._scanCreditsTotal += reward;
+      }
     }
-    this._scanCreditsTotal += reward;
 
-    // Award credits for survey data
+    // Award credits for valuable survey data.
     if (reward > 0) {
       eventBus.emit(Events.SCORING_AWARD, {
         points: reward,
         reason: type === 'quick' ? 'Quick scan survey data' : 'Deep scan survey data',
       });
     }
-    // Notify player of diminishing returns
-    if (reward < baseReward && reward > 0) {
+
+    // Player feedback — explain WHY the yield is what it is.
+    if (rewardKind === 'fresh') {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `Scan yield: ${reward}cr (diminishing — ${sessionCap - this._scanCreditsTotal}cr scan budget remaining)`,
+        sender: 'HOUSTON',
+        text: `Survey data received — fresh field logged. +$${reward}`,
         priority: 'info',
       });
-    } else if (reward === 0) {
+    } else if (rewardKind === 'stale') {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `Scan budget exhausted (${sessionCap}cr cap). Focus on captures for credits.`,
+        sender: 'HOUSTON',
+        text: 'Survey data for this field is already current — no new value. Move to a new field for fresh data.',
+        priority: 'info',
+      });
+    } else if (rewardKind === 'empty') {
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        sender: 'HOUSTON',
+        text: 'Scan complete — no significant debris field in range. No survey data of value.',
+        priority: 'info',
+      });
+    } else if (rewardKind === 'capped') {
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        text: `Scan budget reached (${sessionCap}cr cap). Focus on captures for credits.`,
         priority: 'warning',
       });
     }
@@ -469,10 +525,14 @@ export class SensorSystem {
     };
     eventBus.emit(Events.SCAN_COMPLETE, results);
 
-    // Emit per-discovery events + bonus rewards
+    // Emit per-discovery events + bonus rewards.
+    // The wide-scan discovery bonus is gated to FRESH fields only — re-scanning
+    // an already-surveyed field can't farm discovery credits (consistent with
+    // the field-survey economy above). The SCAN_DISCOVERY event still fires so
+    // hazard/synergy gameplay (MissionEventSystem) is unaffected.
     discoveries.forEach(d => {
       eventBus.emit(Events.SCAN_DISCOVERY, d);
-      if (type === 'wide' && cfg.DISCOVERY_REWARD) {
+      if (type === 'wide' && cfg.DISCOVERY_REWARD && rewardKind === 'fresh') {
         eventBus.emit(Events.SCORING_AWARD, {
           points: cfg.DISCOVERY_REWARD,
           reason: 'New contact discovered',
@@ -480,18 +540,14 @@ export class SensorSystem {
       }
     });
 
-    // Houston feedback
+    // Houston feedback — the credit yield was already reported by the
+    // field-survey block above (with the ACTUAL amount). Here we only surface
+    // newly-found contacts so the two messages don't conflict or double up.
     if (discoveries.length > 0) {
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'HOUSTON',
-        text: `Scan complete — ${discoveries.length} new contact${discoveries.length > 1 ? 's' : ''} found! +$${cfg.REWARD}`,
+        text: `Scan complete — ${discoveries.length} new contact${discoveries.length > 1 ? 's' : ''} found!`,
         priority: 'success',
-      });
-    } else {
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        sender: 'HOUSTON',
-        text: `Scan complete. Survey data logged. +$${cfg.REWARD}`,
-        priority: 'info',
       });
     }
 

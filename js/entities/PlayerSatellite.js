@@ -1,7 +1,9 @@
 /**
  * PlayerSatellite.js — The player's ADR (Active Debris Removal) spacecraft
- * Detailed cylindrical model with subsystems: FEEP thrusters, solar panels,
- * sensors, tether reels, magnetic ring, docking port, and nav lights.
+ * (Octopus V5 / Config G core). Detailed cylindrical "barrel" model with
+ * subsystems: body-mount thin-film solar cells, deployable ROSA wings,
+ * FEEP main + RCS thrusters, EO/IR/LIDAR sensor gimbal, arm collar with
+ * hinges and crossbow struts, docking port, and nav lights.
  * @module entities/PlayerSatellite
  */
 
@@ -9,6 +11,7 @@ import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
+import { getSolarCellTexture } from '../scene/solarCellTexture.js';
 import { powerDistribution } from '../systems/PowerDistribution.js';
 import {
   computeCoM, computeCoMDrift, computeCoMDriftVector,
@@ -37,7 +40,56 @@ const _strutQuat = new THREE.Quaternion();
 const _tipLocal    = new THREE.Vector3();
 const _armDir      = new THREE.Vector3();
 const _armQuat     = new THREE.Quaternion();
-const _armForward  = new THREE.Vector3(0, 0, 1); // arm mesh default forward (+Z)
+/* Deterministic docked-arm roll: build an explicit basis (forward + radial up)
+ * so every daughter shares one roll convention around the ring instead of the
+ * arbitrary roll produced by setFromUnitVectors(). Keeps body-conformal solar
+ * cells and panel lines symmetric across all azimuths. */
+const _armUp       = new THREE.Vector3();
+const _armRight    = new THREE.Vector3();
+const _armBasis    = new THREE.Matrix4();
+
+/**
+ * Write a deterministic docked-arm LOCAL quaternion into `outQuat`.
+ *
+ * Builds an explicit orthonormal basis where the daughter's forward (+Z) is the
+ * strut direction and its up (+Y) is the radial-outward direction at the arm's
+ * azimuth (projected perpendicular to forward). Because the "up" reference is
+ * the same azimuth-radial used to lay out the dock ring, every daughter ends up
+ * with the SAME roll convention around the mother — fixing the asymmetric splay
+ * that `setFromUnitVectors()` produced (its roll was an arbitrary by-product of
+ * the minimal-arc rotation and differed per azimuth).
+ *
+ * All vectors are in the player-local frame. Compose with the mother's world
+ * quaternion at the call site to get world orientation.
+ *
+ * @param {THREE.Vector3} strutDir - unit strut/forward direction (player-local)
+ * @param {number} azRad - arm azimuth (radians) used for the radial up reference
+ * @param {THREE.Quaternion} outQuat - receives the local orientation
+ */
+function _composeDockedArmQuat(strutDir, azRad, outQuat) {
+  // Forward = strut direction.
+  _armDir.copy(strutDir).normalize();
+
+  // Preferred up = radial-outward at this azimuth (XZ→here X,Y radial in local).
+  _armUp.set(Math.cos(azRad), Math.sin(azRad), 0);
+
+  // Degenerate guard: if radial ≈ parallel to forward (end-face arms point along
+  // ±Z while radial is in XY, so this is safe, but keep robust), fall back to Z.
+  _armRight.crossVectors(_armUp, _armDir);
+  if (_armRight.lengthSq() < 1e-8) {
+    _armUp.set(0, 0, 1);
+    _armRight.crossVectors(_armUp, _armDir);
+    if (_armRight.lengthSq() < 1e-8) _armRight.set(1, 0, 0);
+  }
+  _armRight.normalize();
+
+  // Re-orthogonalize up so the basis is exactly orthonormal.
+  _armUp.crossVectors(_armDir, _armRight).normalize();
+
+  // Columns: X = right, Y = up, Z = forward (so local +Z maps to strutDir).
+  _armBasis.makeBasis(_armRight, _armUp, _armDir);
+  outQuat.setFromRotationMatrix(_armBasis);
+}
 
 /** Destructured V5 constants for crossbow recoil & interlock */
 const {
@@ -149,8 +201,6 @@ export class PlayerSatellite extends THREE.Group {
     this._blinkTimer = 0;
     this._strobeTimer = 0;
     this._lidarPulseTimer = 0;
-    this._magneticPulsePhase = 0;
-    this._magneticActive = false;
     this._thrusterGlowTargets = new Map(); // thruster mesh → { glow, plume, outerGlow, intensity }
     this._differentialFireTargets = [0, 0, 0, 0]; // per-nozzle attitude rotation intensity [TOP, BOTTOM, RIGHT, LEFT]
     this._sensorTarget = null; // THREE.Vector3 world position to track
@@ -203,9 +253,26 @@ export class PlayerSatellite extends THREE.Group {
       this._scanFlashTimer = 0.5; // 0.5s flash duration
     });
 
-    // Diagnostic hull outline — visible only in the INSPECT camera view.
+    // Diagnostic hull outline — visible during close inspection. Two signals
+    // drive it; they are INDEPENDENT inputs we OR together (each frame the
+    // outline is on if EITHER path reports inspection), with an explicit boolean
+    // so they can't desync or flip-flop:
+    //   (1) the discrete INSPECTION camera view (bare-I / debris / arm path)
+    //       via CAMERA_VIEW_CHANGE, and
+    //   (2) the OVERVIEW zoom-driven mothership inspection sub-state, which
+    //       keeps the view as ORBIT and signals via INSPECT_HULL_OUTLINE.
+    // Previously these were two separate setHullOutlineVisible() calls, so a
+    // CAMERA_VIEW_CHANGE to ORBIT fired during the zoom path would clobber the
+    // hull-outline signal and make the outline flicker.
+    this._hullInspectView = false; // discrete INSPECTION view active?
+    this._hullInspectZoom = false; // OVERVIEW zoom sub-state active?
     eventBus.on(Events.CAMERA_VIEW_CHANGE, ({ view } = {}) => {
-      this.setHullOutlineVisible(view === 'INSPECTION');
+      this._hullInspectView = (view === 'INSPECTION');
+      this.setHullOutlineVisible(this._hullInspectView || this._hullInspectZoom);
+    });
+    eventBus.on(Events.INSPECT_HULL_OUTLINE, ({ visible } = {}) => {
+      this._hullInspectZoom = !!visible;
+      this.setHullOutlineVisible(this._hullInspectView || this._hullInspectZoom);
     });
 
     // ========================================================================
@@ -233,7 +300,12 @@ export class PlayerSatellite extends THREE.Group {
       color: 0x5c5c64, metalness: 0.7, roughness: 0.55,
     });
     this._matGoldMLI = new THREE.MeshStandardMaterial({
-      color: 0xccaa44, metalness: 0.75, roughness: 0.4, emissive: 0x332200, emissiveIntensity: 0.05,
+      // MLI thermal blanket — warm amber/orange foil, shiny so it catches
+      // specular glints (real MLI is crinkled, iridescent, not flat matte
+      // yellow). Low roughness + a faint emissive warmth keeps it reading as
+      // gold foil even on the shadowed side (the scene has near-zero ambient).
+      color: 0xc8923a, metalness: 0.85, roughness: 0.28,
+      emissive: 0x3a2408, emissiveIntensity: 0.10,
     });
     this._matDark = new THREE.MeshStandardMaterial({
       color: 0x222233, metalness: 0.6, roughness: 0.4,
@@ -275,8 +347,6 @@ export class PlayerSatellite extends THREE.Group {
     // --- 5. Tether reels + indicators now populated by _buildStruts() (S3.3) ---
 
     // --- 6. (V3 magnetic ring removed — not in Config G) ---
-    this.magneticRing = null;
-    this._magneticRingMat = null;
 
     // --- 7. DOCKING PORT (rear/front adapter) ---
     this._buildDockingPort();
@@ -299,8 +369,14 @@ export class PlayerSatellite extends THREE.Group {
     const barrelR = V5.COLLAR_RADIUS * M;  // 0.40m → M * 0.40
     const barrelH = V5.CORE_LENGTH * M;    // 2.00m → M * 2.00
 
-    // Main body — smooth cylinder (16 radial segments)
+    // Main body — smooth cylinder (16 radial segments). The body shell IS the
+    // base MLI (Multi-Layer Insulation) thermal blanket: gold foil is the
+    // default surface that wraps the whole bus for thermal control. Everything
+    // else — solar panels, thrusters, sensors, collar, docking port, channels —
+    // sits ON TOP of this blanket (higher renderOrder / larger radius), exactly
+    // as cut-outs/mounts sit on a real satellite's MLI.
     const bodyGeo = new THREE.CylinderGeometry(barrelR, barrelR, barrelH, 16, 1, true);
+    this._matBody = this._matGoldMLI.clone();   // body skin = MLI blanket (gold)
     this.body = new THREE.Mesh(bodyGeo, this._matBody);
     this.body.rotation.x = Math.PI / 2; // Align Y-cylinder to Z-forward
     this.body.name = 'Barrel_ConfigG';
@@ -327,65 +403,124 @@ export class PlayerSatellite extends THREE.Group {
     this._hullOutline.visible = false;
     this.add(this._hullOutline);
 
-    // Body-mount thin-film GaAs solar cells on barrel surface
-    // (610W per ARM_PIVOT_ANALYSIS §10.15 — 6 non-ROSA faces)
-    this._matBody.emissive.setHex(0x080818);
-    this._matBody.emissiveIntensity = 0.12;
+    // Body-mount GaAs solar cells (610W per ARM_PIVOT_ANALYSIS §10.15 —
+    // supplements the deployable ROSA wings).
+    //
+    // REAL-BUS INTEGRATION: body-mounted cells on real spacecraft are FLAT rigid
+    // sub-panels tiled onto the structure's facets — not a curved film. The
+    // barrel is a 16-gon, so we mount one flat PV sub-panel per facet (22.5°),
+    // tangent to the barrel ON TOP of the MLI blanket, but ONLY on facets that
+    // fall in the clear sectors between the stowed struts ([60,120,240,300]°)
+    // and clear of the ROSA wing roots at 0°/180°. Each panel carries the dark
+    // GaAs cell texture (crisp rectangular cells when the player zooms to
+    // inspect). Cells occupy only the central z-band; the MLI blanket (= the
+    // body skin itself) shows through everywhere else.
 
-    // Visible solar cell grid pattern overlaid on barrel
-    const cellGridGeo = new THREE.CylinderGeometry(
-      barrelR * 1.006, barrelR * 1.006, barrelH * 0.92, 16, 10, true
-    );
-    const cellGridMat = new THREE.MeshBasicMaterial({
-      color: 0x223366, wireframe: true, transparent: true, opacity: 0.18,
-      polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
+    // PV rows along the barrel length. The satellite is solar-constrained
+    // (2240 W solar vs an 8 kW distributable budget + 600 Wh battery), so body
+    // cells are maximized: a tall CENTRAL row plus a shorter FORWARD and AFT row
+    // filling the end bands that were previously bare MLI. All rows live only on
+    // the clear inter-strut facets (off the struts and ROSA roots).
+    const centralH = barrelH * 0.46;          // central PV row height (z)
+    const endH     = barrelH * 0.16;          // forward/aft PV row height
+    const endZ     = barrelH * 0.36;          // |z| centre of the end rows
+    const cellBandH = centralH;               // (kept for MLI seam placement below)
+    const barrelFacets = 16;                  // matches the barrel shell segment count
+    const facetStep = (Math.PI * 2) / barrelFacets; // 22.5°
+    const facetWidth = 2 * (barrelR * 1.006) * Math.tan(facetStep / 2); // chord of one facet
+
+    const barrelCellTex = getSolarCellTexture();
+    const makeRowMat = (texRows) => {
+      let tx = null;
+      if (barrelCellTex) {
+        tx = barrelCellTex.clone();
+        tx.needsUpdate = true;
+        tx.repeat.set(1, texRows);   // ~one cell-tile across a facet, N rows down
+      }
+      return new THREE.MeshStandardMaterial({
+        color: tx ? 0xffffff : 0x0a1133, // tint comes from the map when present
+        map: tx || null,
+        emissiveMap: tx || null,
+        metalness: 0.5, roughness: 0.5,
+        emissive: 0x0b1030, emissiveIntensity: 0.18,
+        side: THREE.FrontSide,
+      });
+    };
+    // PV rows: { z-centre, height, texture rows }. Three rows: central + 2 ends.
+    const pvRows = [
+      { z: 0,      h: centralH, mat: makeRowMat(3) },
+      { z: endZ,   h: endH,     mat: makeRowMat(1) },
+      { z: -endZ,  h: endH,     mat: makeRowMat(1) },
+    ];
+    // Scan-flash drives every PV-row material.
+    this._cellSkinMats = pvRows.map(r => r.mat);
+
+    // Bare-MLI half-window reserved around each strut; cells avoid these and
+    // the ROSA roots at 0°/180° (a ±8° keep-out around each).
+    const strutAz = Constants.ARM_LADDER.Y0_QUAD.azimuths.map(d => d * Math.PI / 180);
+    const rosaAz = [0, Math.PI];
+    const strutKeep = 18 * Math.PI / 180;  // ±18° clear of each strut
+    const rosaKeep  = 8 * Math.PI / 180;   // ±8° clear of each ROSA root
+    const angDist = (a, b) => { let d = Math.abs(a - b) % (Math.PI * 2); return d > Math.PI ? Math.PI * 2 - d : d; };
+
+    let _panelN = 0;
+    for (let f = 0; f < barrelFacets; f++) {
+      const az = f * facetStep + facetStep / 2;  // facet centre azimuth
+      // Skip facets near a strut or a ROSA root.
+      if (strutAz.some(s => angDist(az, s) < strutKeep)) continue;
+      if (rosaAz.some(rz => angDist(az, rz) < rosaKeep)) continue;
+
+      const rr = barrelR * 1.006;
+      const radial = new THREE.Vector3(Math.cos(az), Math.sin(az), 0);
+      const up = new THREE.Vector3(0, 0, 1);
+      const right = new THREE.Vector3().crossVectors(up, radial).normalize();
+      const _m4 = new THREE.Matrix4().makeBasis(right, up, radial);
+
+      for (const row of pvRows) {
+        const panelGeo = new THREE.PlaneGeometry(facetWidth * 0.92, row.h);
+        const panel = new THREE.Mesh(panelGeo, row.mat);
+        // Flat panel tangent to the barrel, just proud of the surface.
+        panel.position.set(Math.cos(az) * rr, Math.sin(az) * rr, row.z);
+        panel.quaternion.setFromRotationMatrix(_m4);
+        panel.name = `BarrelSolarPanel_${_panelN++}`;
+        panel.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL; // over body
+        this.add(panel);
+      }
+    }
+
+    // MLI quilting seams — the body shell IS the gold blanket, so instead of
+    // redundant solid gold bands we add thin darker tape/seam rings that divide
+    // the blanket into quilted sections (the characteristic MLI look). Purely
+    // visual definition over the gold body.
+    const seamGeo = new THREE.TorusGeometry(barrelR * 1.005, M * 0.005, 4, 24);
+    const seamMat = new THREE.MeshStandardMaterial({
+      color: 0x8a6d24, metalness: 0.7, roughness: 0.5,  // darker gold tape
+      polygonOffset: true, polygonOffsetFactor: -0.5, polygonOffsetUnits: -0.5,
     });
-    const cellGrid = new THREE.Mesh(cellGridGeo, cellGridMat);
-    cellGrid.rotation.x = Math.PI / 2;
-    cellGrid.name = 'BarrelSolarCellGrid';
-    cellGrid.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_TRANSPARENT; // FIX_PLAN §2
-    this.add(cellGrid);
+    // Seams at the cell-band edges and in the two bare-MLI end sections.
+    for (const z of [-barrelH * 0.40, -cellBandH * 0.5, cellBandH * 0.5, barrelH * 0.40]) {
+      const seam = new THREE.Mesh(seamGeo, seamMat);
+      seam.position.z = z;
+      seam.rotation.x = Math.PI / 2;
+      seam.name = 'MLI_Seam';
+      seam.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      this.add(seam);
+    }
 
-    // Gold MLI thermal blanket bands (2 bands at ±25% of barrel length)
-    // FIX_PLAN §2-followup: bumped 1.04 → 1.07 in two passes.
-    //   Round 1: 1.04→1.045 to clear accent ring outer edge (ring outer 1.028).
-    //   Round 2: 1.045→1.07 to ALSO clear the stowed strut outer surface
-    //   (strut centre at radius collarR=1.0 + strut radius 0.0625 = 1.0625),
-    //   so bands no longer geometrically pierce a stowed strut at z=±0.5.
-    // Band z-extent (±0.5 ± barrelH*0.06) still straddles accent rings, so band
-    // material keeps polygonOffset to draw cleanly OVER the intersecting ring.
-    const bandGeo = new THREE.CylinderGeometry(
-      barrelR * 1.07, barrelR * 1.07, barrelH * 0.12, 16, 1, true   // FIX_PLAN §2-followup
-    );
-    const bandMat = this._matGoldMLI.clone();                          // FIX_PLAN §2-followup
-    bandMat.polygonOffset = true;                                      // FIX_PLAN §2-followup
-    bandMat.polygonOffsetFactor = -0.5;                                // FIX_PLAN §2-followup — gentle push toward camera (less than ring's -1.5)
-    bandMat.polygonOffsetUnits  = -0.5;                                // FIX_PLAN §2-followup
-    const band1 = new THREE.Mesh(bandGeo, bandMat);
-    band1.rotation.x = Math.PI / 2;
-    band1.position.z = barrelH * 0.25;  // +0.5m from center
-    band1.name = 'MLI_Band1';
-    band1.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;      // FIX_PLAN §2-followup
-    this.add(band1);
 
-    const band2 = new THREE.Mesh(bandGeo, bandMat);
-    band2.rotation.x = Math.PI / 2;
-    band2.position.z = -barrelH * 0.25; // -0.5m from center
-    band2.name = 'MLI_Band2';
-    band2.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;      // FIX_PLAN §2-followup
-    this.add(band2);
-
-    // Panel line accent rings (dark grooves at barrel surface)
-    const lineGeo = new THREE.TorusGeometry(barrelR * 1.02, M * 0.008, 4, 16);
+    // Panel-line accent rings (thin dark seam grooves). Flush at the barrel
+    // surface (radius 1.007, just over the cells) marking the cell-band seams:
+    // one at centre, two at the cell/MLI boundaries.
+    const lineGeo = new THREE.TorusGeometry(barrelR * 1.007, M * 0.006, 4, 24);
     const lineMat = this._matDark.clone();
     lineMat.polygonOffset = true;
-    lineMat.polygonOffsetFactor = -1.5; // FIX_PLAN §2 — separate from cell grid (-1)
-    lineMat.polygonOffsetUnits = -1.5; // FIX_PLAN §2
-    for (let i = -1; i <= 1; i++) {
+    lineMat.polygonOffsetFactor = -1.5; // separate from cell skin (-1)
+    lineMat.polygonOffsetUnits = -1.5;
+    for (const z of [-(cellBandH * 0.5), 0, cellBandH * 0.5]) {
       const line = new THREE.Mesh(lineGeo, lineMat);
-      line.position.z = barrelH * 0.25 * i;
+      line.position.z = z;
       line.rotation.x = Math.PI / 2;
-      line.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL; // FIX_PLAN §2
+      line.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
       this.add(line);
     }
 
@@ -425,9 +560,11 @@ export class PlayerSatellite extends THREE.Group {
     // the aperture occlusion. Cap now renders as plain SPACECRAFT_OPAQUE so
     // any DETAIL-tagged mesh in front (viewport, ring) wins cleanly.
     const capGeo = new THREE.CircleGeometry(barrelR, 16);
-    const capMat = this._matBody.clone();
-    capMat.emissive.setHex(0x000000);
-    capMat.emissiveIntensity = 0;
+    // End caps are structural plates (optics bench forward, thruster deck aft),
+    // not blanket — keep them dark metallic, distinct from the gold MLI body.
+    const capMat = new THREE.MeshStandardMaterial({
+      color: 0x4a4a52, metalness: 0.7, roughness: 0.5,
+    });
     const frontCap = new THREE.Mesh(capGeo, capMat);
     frontCap.position.z = barrelH * 0.5;
     frontCap.name = 'FrontCap_ConfigG';
@@ -1178,6 +1315,7 @@ export class PlayerSatellite extends THREE.Group {
         attPlume.lookAt(x + outDir.x * 2, y + outDir.y * 2, zOff);
         attPlume.rotateX(Math.PI / 2);
         attPlume.name = `RCSPlume_${q}_${j}`;
+        attPlume.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE; // additive/transparent — sort after solid geometry
         attPlume.visible = false;
         this.add(attPlume);
         this.attitudeThrusterPlumes.push(attPlume);
@@ -1515,7 +1653,6 @@ export class PlayerSatellite extends THREE.Group {
   // 6. Magnetic Field Generator — REMOVED for Config G
   // --------------------------------------------------------------------------
   // V3 magnetic coil ring removed — not present in Config G design.
-  // magneticRing mesh ref kept null; _animateMagneticRing has null guard.
 
   // --------------------------------------------------------------------------
   // 7. Docking Port (repositioned for Config G barrel)
@@ -1677,17 +1814,6 @@ export class PlayerSatellite extends THREE.Group {
     return pos;
   }
 
-  /** Get world position of the magnetic ring center (Config G: returns ship position) */
-  getMagneticRingPosition() {
-    const pos = new THREE.Vector3();
-    if (this.magneticRing) {
-      this.magneticRing.getWorldPosition(pos);
-    } else {
-      this.getWorldPosition(pos);
-    }
-    return pos;
-  }
-
   /** Get world position of a specific tether reel (tether origin) */
   getTetherReelPosition(index = 0) {
     const pos = new THREE.Vector3();
@@ -1713,11 +1839,6 @@ export class PlayerSatellite extends THREE.Group {
   /** Set sensor gimbal target (world position vector or null) */
   setSensorTarget(worldPos) {
     this._sensorTarget = worldPos;
-  }
-
-  /** Set magnetic ring active (for visual pulse) */
-  setMagneticActive(active) {
-    this._magneticActive = active;
   }
 
   /** Set tether reel state (index 0-7, state: 'ready'|'deployed'|'empty') */
@@ -1855,7 +1976,6 @@ export class PlayerSatellite extends THREE.Group {
     this._animateSensorGimbal(dt);
     this._animateNavLights(dt);
     this._animateThrusterGlow(dt);
-    this._animateMagneticRing(dt);
     this._animateLidarPulse(dt);
     this._animateTetherIndicators(dt);
     this._animateScanFlash(dt);
@@ -2152,30 +2272,6 @@ export class PlayerSatellite extends THREE.Group {
     });
   }
 
-  /** @private Magnetic ring pulses when active (Config G: no-op, ring removed) */
-  _animateMagneticRing(dt) {
-    // Config G: magnetic ring removed — null guard
-    if (!this.magneticRing || !this._magneticRingMat) return;
-
-    if (!this._magneticActive) {
-      // Fade out
-      if (this._magneticRingMat.emissiveIntensity > 0.01) {
-        this._magneticRingMat.emissiveIntensity *= 0.9;
-      } else {
-        this._magneticRingMat.emissiveIntensity = 0;
-      }
-      return;
-    }
-
-    this._magneticPulsePhase += dt * 4.0;
-    const pulse = 0.3 + Math.sin(this._magneticPulsePhase) * 0.3;
-    this._magneticRingMat.emissiveIntensity = pulse;
-
-    // Subtle scale pulse
-    const s = 1.0 + Math.sin(this._magneticPulsePhase * 0.5) * 0.02;
-    this.magneticRing.scale.set(s, s, 1);
-  }
-
   /**
    * @private Scan flash — brief cyan emissive pulse on body material.
    * Triggered by SCAN_INITIATED event, decays over 0.5s.
@@ -2184,14 +2280,29 @@ export class PlayerSatellite extends THREE.Group {
     if (this._scanFlashTimer <= 0) return;
     this._scanFlashTimer -= dt;
 
+    const t = Math.max(0, this._scanFlashTimer / 0.5); // 1→0 over 0.5s
+    const done = this._scanFlashTimer <= 0;
+
+    // Drive BOTH the MLI body blanket and the solar-cell panels with the cyan
+    // scan glow. Restore values MUST match each material's build defaults
+    // (mismatched restores previously dimmed the barrel permanently after the
+    // first scan).
     if (this._matBody) {
-      const t = Math.max(0, this._scanFlashTimer / 0.5); // 1→0 over 0.5s
-      this._matBody.emissive.setHex(0x00aaff);            // cyan scan glow
-      this._matBody.emissiveIntensity = t * 0.6;           // peak 0.6, fade to 0
-      if (this._scanFlashTimer <= 0) {
-        // Restore Config G body-mount thin-film solar emissive
-        this._matBody.emissiveIntensity = 0.05;
-        this._matBody.emissive.setHex(0x050510);
+      this._matBody.emissive.setHex(0x00aaff);     // cyan scan glow
+      this._matBody.emissiveIntensity = t * 0.6;    // peak 0.6, fade to 0
+      if (done) {
+        this._matBody.emissive.setHex(0x3a2408);    // gold MLI build default (_matGoldMLI)
+        this._matBody.emissiveIntensity = 0.10;
+      }
+    }
+    if (this._cellSkinMats) {
+      for (const mat of this._cellSkinMats) {
+        mat.emissive.setHex(0x00aaff);
+        mat.emissiveIntensity = t * 0.6;
+        if (done) {
+          mat.emissive.setHex(0x0b1030); // build default (_buildMainBus)
+          mat.emissiveIntensity = 0.18;
+        }
       }
     }
   }
@@ -3331,7 +3442,7 @@ export class PlayerSatellite extends THREE.Group {
       if (arm.state !== ARM_STATES.DOCKED) {
         if (arm.state === 'LAUNCHING' && !arm._springFired &&
             arm.group && sg.strutDir.lengthSq() > 0) {
-          _armQuat.setFromUnitVectors(_armForward, sg.strutDir);
+          _composeDockedArmQuat(sg.strutDir, sg.azRad, _armQuat);
           arm.group.quaternion.copy(this.quaternion).multiply(_armQuat);
         }
         continue;
@@ -3346,8 +3457,13 @@ export class PlayerSatellite extends THREE.Group {
         // direction in world space.  Compose mother's full quaternion with
         // the local strut rotation so the arm inherits pitch/yaw/roll —
         // not just the forward axis.  strutDir is in player-local frame.
+        //
+        // SYMMETRY: use the deterministic basis (forward + azimuth-radial up)
+        // instead of setFromUnitVectors, so every docked daughter shares one
+        // roll convention and their body-conformal cells / panel lines stay
+        // symmetric around the ring.
         if (shouldShow && arm.group && sg.strutDir.lengthSq() > 0) {
-          _armQuat.setFromUnitVectors(_armForward, sg.strutDir);  // local strut rotation
+          _composeDockedArmQuat(sg.strutDir, sg.azRad, _armQuat);  // local strut rotation
           arm.group.quaternion.copy(this.quaternion).multiply(_armQuat);
         }
       }

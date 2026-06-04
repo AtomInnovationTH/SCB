@@ -65,8 +65,8 @@ function installLocalStorageShim() {
 // ─── BEAT TABLE INTEGRITY ─────────────────────────────────────────────────
 
 describe('OnboardingDirector — beat table integrity', () => {
-  it('has exactly 13 beats', () => {
-    assert.equal(ONBOARDING_BEATS.length, 13);
+  it('has exactly 16 beats', () => {
+    assert.equal(ONBOARDING_BEATS.length, 16);
   });
 
   it('all beats have unique ids', () => {
@@ -82,10 +82,13 @@ describe('OnboardingDirector — beat table integrity', () => {
     }
   });
 
-  it('credit-bearing beats all default to 10 credits', () => {
+  it('credit-bearing beats all default to 10 credits (narrative confirmations may be 0)', () => {
     const expected = Constants.ONBOARDING?.DEFAULT_CREDIT || 10;
     for (const b of ONBOARDING_BEATS) {
-      if (b.credit != null) assert.equal(b.credit, expected, `beat ${b.id}`);
+      // Skill/action beats award the standard credit; narrative confirmation
+      // beats (e.g. `captured`) may explicitly set 0 since the underlying action
+      // already scored elsewhere.
+      if (b.credit != null && b.credit !== 0) assert.equal(b.credit, expected, `beat ${b.id}`);
     }
   });
 });
@@ -212,6 +215,146 @@ describe('OnboardingDirector — lifecycle (MISSION_START → trigger → advanc
   });
 });
 
+// ─── INSPECT BEAT: callouts must actually engage (not just any scroll) ──────
+
+describe('OnboardingDirector — inspect beat (zoom-to-callouts)', () => {
+  it('inspect beat requires MOTHER_INSPECTION_ENGAGED, not just a scroll', () => {
+    const installed = installLocalStorageShim();
+    try {
+      localStorage.clear();
+      // Land on `inspect` by pre-completing everything up to and including zoom.
+      localStorage.setItem(
+        Constants.ONBOARDING.STORAGE_KEY,
+        JSON.stringify({
+          completedBeats: ['boot', 'handshake', 'arrows', 'struts', 'view', 'look', 'zoom'],
+          skippedBeats: [],
+          mastered: false,
+        }),
+      );
+      const eb = createMockEventBus();
+      const d = new OnboardingDirector({ eventBus: eb, skillsSystem: createMockSkillsSystem() });
+      d.start();
+      assert.equal(d.getActiveBeatId(), 'inspect', 'should land on inspect after zoom');
+
+      // A plain zoom scroll must NOT satisfy the inspect beat — the player has
+      // not pushed in far enough for the callouts to engage yet.
+      eb._reset();
+      eb.emit(Events.CAMERA_ZOOM_INPUT);
+      assert.equal(d.getActiveBeatId(), 'inspect', 'scrolling alone keeps inspect active');
+      assert.ok(!d.getState().completed.includes('inspect'), 'inspect not completed by scroll');
+
+      // Pushing in until inspection engages on the mother fires the dedicated
+      // event → inspect beat satisfied.
+      eb._reset();
+      eb.emit(Events.MOTHER_INSPECTION_ENGAGED);
+      const satisfied = eb._findEmits(Events.HINT_SATISFIED);
+      assert.ok(satisfied.some(e => e.payload.id === 'inspect'),
+        'MOTHER_INSPECTION_ENGAGED satisfies inspect');
+      assert.ok(d.getState().completed.includes('inspect'));
+
+      d.dispose();
+    } finally {
+      localStorage.clear();
+      if (installed) delete globalThis.localStorage;
+    }
+  });
+
+  it('inspect beat uses the inspect_mother skill (distinct from nav_zoom so it is not auto-skipped after zoom) and the right trigger', () => {
+    const inspect = ONBOARDING_BEATS.find(b => b.id === 'inspect');
+    assert.ok(inspect, 'inspect beat exists');
+    assert.equal(inspect.skillId, 'inspect_mother');
+    assert.equal(inspect.triggerEvent, 'MOTHER_INSPECTION_ENGAGED');
+  });
+});
+
+// ─── JUMP-AHEAD: out-of-order actions credit + skip future beats ─────────
+
+describe('OnboardingDirector — jump-ahead (out-of-order actions)', () => {
+  it('pressing a FUTURE beat action while an earlier hint is active credits it and keeps the active hint, then auto-skips it later', () => {
+    const installed = installLocalStorageShim();
+    try {
+      localStorage.clear();
+      // Land directly on `scan` by pre-completing the narrative + nav beats.
+      localStorage.setItem(
+        Constants.ONBOARDING.STORAGE_KEY,
+        JSON.stringify({
+          completedBeats: ['boot', 'handshake', 'arrows', 'struts', 'view', 'look', 'zoom', 'inspect'],
+          skippedBeats: [],
+          mastered: false,
+        }),
+      );
+      const eb = createMockEventBus();
+      let scored = 0;
+      const scoring = { awardPoints({ points }) { scored += points; return points; } };
+      const d = new OnboardingDirector({ eventBus: eb, skillsSystem: createMockSkillsSystem(), scoringSystem: scoring });
+      d.start();
+      assert.equal(d.getActiveBeatId(), 'scan');
+
+      // Player jumps ahead: engages autopilot (the `autopilot` beat's trigger)
+      // BEFORE scanning. This should credit + complete the autopilot beat, clear
+      // any autopilot hint, but NOT change the active `scan` beat.
+      eb._reset();
+      eb.emit(Events.AUTOPILOT_ENGAGE);
+
+      assert.equal(d.getActiveBeatId(), 'scan', 'active beat must remain scan');
+      assert.ok(d.getState().completed.includes('autopilot'), 'autopilot pre-completed');
+      assert.equal(scored, 10, 'jump-ahead action is credited');
+      const satisfied = eb._findEmits(Events.HINT_SATISFIED);
+      assert.ok(satisfied.some(e => e.payload.id === 'autopilot'),
+        'HINT_SATISFIED fired for the jumped-ahead beat id');
+
+      // Now complete scan + target normally; sequence should skip the already
+      // completed autopilot beat and land on `decision` (narrative) → it
+      // auto-advances; we just assert autopilot was not re-posted as active.
+      eb._reset();
+      eb.emit(Events.SCAN_INITIATED);   // satisfies scan
+      // advance is delayed by advanceDelay; emit target trigger after advance.
+      // The mock has no timers, so advance uses real setTimeout — instead we
+      // verify autopilot never becomes the active beat again by checking it's
+      // still marked completed and not re-emitted as HINT_POSTED.
+      const reposted = eb._findEmits(Events.HINT_POSTED).filter(e => e.payload.id === 'autopilot');
+      assert.equal(reposted.length, 0, 'autopilot hint not re-posted after being jumped');
+
+      d.dispose();
+    } finally {
+      localStorage.clear();
+      if (installed) delete globalThis.localStorage;
+    }
+  });
+
+  it('does not pre-satisfy a beat that is at or before the active beat', () => {
+    const installed = installLocalStorageShim();
+    try {
+      localStorage.clear();
+      localStorage.setItem(
+        Constants.ONBOARDING.STORAGE_KEY,
+        JSON.stringify({
+          completedBeats: ['boot', 'handshake', 'arrows', 'struts', 'view', 'look', 'zoom', 'inspect'],
+          skippedBeats: [],
+          mastered: false,
+        }),
+      );
+      const eb = createMockEventBus();
+      const d = new OnboardingDirector({ eventBus: eb, skillsSystem: createMockSkillsSystem() });
+      d.start();
+      assert.equal(d.getActiveBeatId(), 'scan');
+
+      // Fire the scan trigger — that's the ACTIVE beat, so it should satisfy
+      // normally (not be treated as a jump-ahead pre-satisfy).
+      eb._reset();
+      eb.emit(Events.SCAN_INITIATED);
+      const satisfied = eb._findEmits(Events.HINT_SATISFIED);
+      assert.ok(satisfied.some(e => e.payload.id === 'scan'), 'scan satisfied normally');
+      assert.ok(d.getState().completed.includes('scan'));
+
+      d.dispose();
+    } finally {
+      localStorage.clear();
+      if (installed) delete globalThis.localStorage;
+    }
+  });
+});
+
 // ─── SMART-DEFAULT: pressActiveHint ──────────────────────────────────────
 
 describe('OnboardingDirector — pressActiveHint (Space smart-default)', () => {
@@ -222,7 +365,7 @@ describe('OnboardingDirector — pressActiveHint (Space smart-default)', () => {
       localStorage.setItem(
         Constants.ONBOARDING.STORAGE_KEY,
         JSON.stringify({
-          completedBeats: ['boot', 'handshake', 'arrows', 'struts', 'zoom', 'view'],
+          completedBeats: ['boot', 'handshake', 'arrows', 'struts', 'view', 'look', 'zoom', 'inspect'],
           skippedBeats: [],
           mastered: false,
         }),
@@ -262,3 +405,68 @@ describe('OnboardingDirector — pressActiveHint (Space smart-default)', () => {
     }
   });
 });
+
+// ─── CONDITIONAL GATING: target beat needs a tracked contact (#1) ──────────
+
+describe('OnboardingDirector — conditional gating (#1 target, #3 capture)', () => {
+  it('holds the target beat (no real beat post) until a tracked contact exists', () => {
+    const installed = installLocalStorageShim();
+    try {
+      localStorage.clear();
+      // Land on `target` by pre-completing through autopilot's predecessor.
+      localStorage.setItem(
+        Constants.ONBOARDING.STORAGE_KEY,
+        JSON.stringify({
+          completedBeats: ['boot', 'handshake', 'arrows', 'struts', 'view', 'look', 'zoom', 'inspect', 'scan'],
+          skippedBeats: [],
+          mastered: false,
+        }),
+      );
+      const eb = createMockEventBus();
+      // Context starts with ZERO tracked contacts → target beat must be held.
+      let contacts = 0;
+      const d = new OnboardingDirector({
+        eventBus: eb,
+        skillsSystem: createMockSkillsSystem(),
+        contextProvider: () => ({ trackedContacts: contacts, nearestDebrisM: null, hasTarget: false }),
+      });
+      d.start();
+      // Active beat id is 'target' but it is HELD — the real comms/hint for it
+      // must NOT have been posted; instead a *_wait nudge hint is shown.
+      assert.equal(d.getActiveBeatId(), 'target');
+      const targetComms = eb._findEmits(Events.COMMS_MESSAGE)
+        .filter(e => e.payload.text && e.payload.text.includes('press Tab'));
+      assert.equal(targetComms.length, 0, 'real target comms not posted while held');
+      const waitHints = eb._findEmits(Events.HINT_POSTED).filter(e => e.payload.id === 'target_wait');
+      assert.ok(waitHints.length >= 1, 'a waiting nudge hint is shown');
+
+      // A scan reveals a contact → re-check converts the held beat to the real one.
+      contacts = 1;
+      eb._reset();
+      eb.emit(Events.TARGET_DISCOVERED, { target: {} });
+      const realTargetComms = eb._findEmits(Events.COMMS_MESSAGE)
+        .filter(e => e.payload.text && e.payload.text.includes('press Tab'));
+      assert.ok(realTargetComms.length >= 1, 'real target beat posts once a contact exists');
+      const cleared = eb._findEmits(Events.HINT_SATISFIED).filter(e => e.payload.id === 'target_wait');
+      assert.ok(cleared.length >= 1, 'wait nudge cleared when gate opens');
+
+      d.dispose();
+    } finally {
+      localStorage.clear();
+      if (installed) delete globalThis.localStorage;
+    }
+  });
+});
+
+// ─── CAPTURE CONFIRMATION BEAT (#4) ────────────────────────────────────────
+
+describe('OnboardingDirector — captured beat (#4 close the loop)', () => {
+  it('captured beat exists, fires on ARM_CAPTURED, and is narrative (no keys)', () => {
+    const captured = ONBOARDING_BEATS.find(b => b.id === 'captured');
+    assert.ok(captured, 'captured beat exists');
+    assert.equal(captured.triggerEvent, 'ARM_CAPTURED');
+    assert.ok(!captured.keys || captured.keys.length === 0, 'no keys (narrative confirmation)');
+    assert.ok(Number.isFinite(captured.autoAdvanceAfter), 'has a fallback auto-advance');
+  });
+});
+

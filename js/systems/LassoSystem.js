@@ -549,7 +549,7 @@ export class LassoSystem {
                 if (mass > Constants.LASSO_MAX_CAPTURE_MASS) {
                     eventBus.emit(Events.LASSO_DENIED, { reason: 'too_heavy' });
                     eventBus.emit(Events.COMMS_MESSAGE, {
-                        text: 'Target too massive for web tether — try deploying a Crossbow arm [D]',
+                        text: 'Target too massive for Mother net. Try deploying a Daughter [D]',
                         source: 'SYSTEM',
                         channel: 'CMD',
                         priority: 'warning',

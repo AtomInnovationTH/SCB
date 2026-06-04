@@ -6,6 +6,7 @@
 
 import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
+import { createLabelTexture } from './labelTexture.js';
 
 // ============================================================================
 // CANVAS TEXTURE HELPERS
@@ -35,25 +36,12 @@ function createSunDiscTexture(size = 64) {
 
 /**
  * Create a canvas-based text texture for planetarium-style labels.
- * High-contrast white text with colored glow — readable against black space.
+ * Thin wrapper over the shared label recipe (scene/labelTexture.js).
  * @param {string} text — label text (e.g. "♀ Venus")
- * @param {string} hexColor — CSS hex color string (used for glow tint)
  * @returns {THREE.CanvasTexture}
  */
-function createPlanetLabelTexture(text, hexColor) {
-  const c = document.createElement('canvas');
-  c.width = 512; c.height = 128;
-  const ctx = c.getContext('2d');
-  ctx.font = '400 64px "Helvetica Neue", Helvetica, Arial, sans-serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  // Colored glow behind text for readability
-  ctx.shadowColor = hexColor;
-  ctx.shadowBlur = 10;
-  ctx.fillStyle = '#ffffff';
-  ctx.globalAlpha = 1.0;
-  ctx.fillText(text, 256, 64);
-  return new THREE.CanvasTexture(c);
+function createPlanetLabelTexture(text) {
+  return createLabelTexture(text);
 }
 
 /**
@@ -73,6 +61,32 @@ function createMoonDiscTexture(size = 128) {
   gradient.addColorStop(0.4, 'rgba(220, 220, 200, 0.85)');
   gradient.addColorStop(0.7, 'rgba(200, 200, 185, 0.4)');
   gradient.addColorStop(1.0, 'rgba(180, 180, 160, 0.0)');
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, size, size);
+  return new THREE.CanvasTexture(canvas);
+}
+
+/**
+ * Create a soft white radial-gradient glow texture for planet halos. Using a gradient that
+ * fades to fully transparent at the edge avoids the hard-edged "black ring"
+ * artifact produced by a flat additive CircleGeometry, where the uniform-alpha
+ * disc cut off abruptly between the planet body and its label.
+ * @param {number} size — canvas pixel dimensions
+ * @returns {THREE.CanvasTexture}
+ */
+// Shared singleton glow texture (white gradient; tinted per-planet via material color)
+let _planetGlowTex = null;
+function createPlanetGlowTexture(size = 128) {
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const half = size / 2;
+  const gradient = ctx.createRadialGradient(half, half, 0, half, half, half);
+  gradient.addColorStop(0.0, 'rgba(255, 255, 255, 1.0)');
+  gradient.addColorStop(0.35, 'rgba(255, 255, 255, 0.45)');
+  gradient.addColorStop(0.7, 'rgba(255, 255, 255, 0.12)');
+  gradient.addColorStop(1.0, 'rgba(255, 255, 255, 0.0)');
   ctx.fillStyle = gradient;
   ctx.fillRect(0, 0, size, size);
   return new THREE.CanvasTexture(canvas);
@@ -215,7 +229,7 @@ export class SunLight {
 
     // --- Sun label (planetarium-style, centered below disc) ---
     this._sunLabel = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: createPlanetLabelTexture('Sun', '#ffffaa'),
+      map: createPlanetLabelTexture('Sun'),
       transparent: true, opacity: 1.0, depthWrite: false, depthTest: true,
     }));
     this._sunLabel.scale.set(50, 12, 1);
@@ -310,7 +324,7 @@ export class SunLight {
 
     // --- Moon label (planetarium-style, centered below disc) ---
     this._moonLabel = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: createPlanetLabelTexture('Moon', '#ddddcc'),
+      map: createPlanetLabelTexture('Moon'),
       transparent: true, opacity: 1.0, depthWrite: false, depthTest: true,
     }));
     this._moonLabel.scale.set(50, 12, 1);
@@ -526,12 +540,18 @@ export class SunLight {
       disc.onBeforeRender = (_r, _s, cam) => disc.lookAt(cam.position);
       this.scene.add(disc);
 
-      // --- Glow halo (subtle atmospheric shimmer behind disc) ---
+      // --- Glow halo (soft radial-gradient texture behind disc) ---
+      // Use a textured PlaneGeometry with a gradient that fades to transparent
+      // rather than a flat CircleGeometry. The old solid additive circle had a
+      // hard outer edge that, drawn behind the opaque disc, read as a dark ring
+      // between the planet and its label.
       const glow = new THREE.Mesh(
-        new THREE.CircleGeometry(def.glow, 32),
+        new THREE.PlaneGeometry(def.glow * 2, def.glow * 2),
         new THREE.MeshBasicMaterial({
-          color, transparent: true, opacity: 0.15,
+          map: _planetGlowTex || (_planetGlowTex = createPlanetGlowTexture()),
+          color, transparent: true, opacity: 0.6,
           side: THREE.DoubleSide, depthWrite: false,
+          depthTest: false,      // match disc — avoid self-occlusion against mask
           blending: THREE.AdditiveBlending,
         })
       );
@@ -541,7 +561,7 @@ export class SunLight {
 
       // --- Planetarium text label (sprite — centered directly under planet) ---
       const label = new THREE.Sprite(new THREE.SpriteMaterial({
-        map: createPlanetLabelTexture(def.name, def.hex),
+        map: createPlanetLabelTexture(def.name),
         transparent: true, opacity: 1.0, depthWrite: false,
       }));
       label.scale.set(50, 12, 1);

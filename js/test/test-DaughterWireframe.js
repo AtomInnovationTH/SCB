@@ -14,8 +14,8 @@ import { buildDaughterShape } from '../ui/DaughterWireframe.js';
 describe('buildDaughterShape — zones', () => {
   const shape = buildDaughterShape();
 
-  it('returns exactly 10 zones', () => {
-    assert.equal(shape.zones.length, 10);
+  it('returns exactly 9 zones', () => {
+    assert.equal(shape.zones.length, 9);
   });
 
   it('zone names match spec', () => {
@@ -23,7 +23,7 @@ describe('buildDaughterShape — zones', () => {
     for (const n of [
       'Body Shell (hex)', 'EPM Pole',
       'FEEP Fore Thruster', 'FEEP Aft Thruster',
-      'ROSA Panel L', 'ROSA Panel R',
+      'Solar Skin (cells)',
       'Net Pack', 'Bridle Ring', 'Status Light', 'Tether',
     ]) {
       assert.ok(names.includes(n), `has zone: ${n}`);
@@ -59,8 +59,8 @@ describe('buildDaughterShape — zones', () => {
 describe('buildDaughterShape — vertices', () => {
   const shape = buildDaughterShape();
 
-  it('vertex count is 48', () => {
-    assert.equal(shape.vertices.length, 48);
+  it('vertex count is 52', () => {
+    assert.equal(shape.vertices.length, 52);
   });
 
   it('every vertex is a 3-element array of finite numbers', () => {

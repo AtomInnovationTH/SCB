@@ -206,152 +206,292 @@ export class DebrisTextureAtlas {
     }
   }
 
-  /** @private Debris: dark grey, scratch marks, micro-dents */
+  /** @private Debris: scratched/scorched grey metal panel with seams & a warning stencil */
   _paintDebris(ctx, x, y, w, h, rand) {
-    ctx.fillStyle = '#666666';
+    // Base metal with a soft vertical lighting gradient
+    const base = ctx.createLinearGradient(x, y, x, y + h);
+    base.addColorStop(0, '#7a7a7e');
+    base.addColorStop(0.5, '#636367');
+    base.addColorStop(1, '#4e4e52');
+    ctx.fillStyle = base;
     ctx.fillRect(x, y, w, h);
-    ctx.strokeStyle = '#444444';
-    ctx.lineWidth = 1;
-    for (let i = 0; i < 20; i++) {
-      const sx = x + rand() * w;
-      const sy = y + rand() * h;
-      ctx.beginPath();
-      ctx.moveTo(sx, sy);
-      ctx.lineTo(sx + (rand() - 0.5) * 40, sy + (rand() - 0.5) * 12);
-      ctx.stroke();
-    }
-    ctx.fillStyle = '#555555';
-    for (let i = 0; i < 25; i++) {
-      const dx = x + rand() * w;
-      const dy = y + rand() * h;
-      const r = 1 + rand() * 4;
-      ctx.beginPath();
-      ctx.arc(dx, dy, r, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
 
-  /** @private Rocket body: metallic silver, rivet lines, staging seam */
-  _paintRocketBody(ctx, x, y, w, h, rand) {
-    const grad = ctx.createLinearGradient(x, y, x + w, y);
-    grad.addColorStop(0, '#888899');
-    grad.addColorStop(0.3, '#ccccdd');
-    grad.addColorStop(0.5, '#aaaabb');
-    grad.addColorStop(0.7, '#ccccdd');
-    grad.addColorStop(1, '#888899');
-    ctx.fillStyle = grad;
-    ctx.fillRect(x, y, w, h);
-    ctx.strokeStyle = '#777788';
-    ctx.lineWidth = 1;
-    const rivetSpacing = h / 8;
-    for (let i = 1; i < 8; i++) {
-      const ly = y + i * rivetSpacing;
-      ctx.beginPath();
-      ctx.moveTo(x, ly);
-      ctx.lineTo(x + w, ly);
-      ctx.stroke();
-      ctx.fillStyle = '#999aab';
-      for (let j = 0; j < 6; j++) {
+    // Large mottled discolouration patches (oxidation / sun-fade)
+    for (let i = 0; i < 14; i++) {
+      const px = x + rand() * w, py = y + rand() * h;
+      const pr = w * (0.05 + rand() * 0.18);
+      const g = ctx.createRadialGradient(px, py, 0, px, py, pr);
+      const shade = rand() > 0.5 ? '90,86,78' : '60,64,72';
+      g.addColorStop(0, `rgba(${shade},0.30)`);
+      g.addColorStop(1, `rgba(${shade},0)`);
+      ctx.fillStyle = g;
+      ctx.fillRect(px - pr, py - pr, pr * 2, pr * 2);
+    }
+
+    // Panel seams (a couple of straight weld lines)
+    ctx.strokeStyle = 'rgba(40,40,44,0.8)';
+    ctx.lineWidth = Math.max(1, w * 0.004);
+    for (let i = 0; i < 3; i++) {
+      const sy = y + (0.25 + i * 0.25) * h + (rand() - 0.5) * h * 0.05;
+      ctx.beginPath(); ctx.moveTo(x, sy); ctx.lineTo(x + w, sy); ctx.stroke();
+    }
+    // Rivets along the seams
+    ctx.fillStyle = 'rgba(150,150,156,0.7)';
+    for (let i = 0; i < 3; i++) {
+      const sy = y + (0.25 + i * 0.25) * h;
+      for (let j = 0; j < 16; j++) {
         ctx.beginPath();
-        ctx.arc(x + (j + 0.5) * (w / 6), ly, 2, 0, Math.PI * 2);
+        ctx.arc(x + (j + 0.5) * (w / 16), sy, w * 0.003, 0, Math.PI * 2);
         ctx.fill();
       }
     }
-    ctx.strokeStyle = '#556677';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(x, y + h * 0.6);
-    ctx.lineTo(x + w, y + h * 0.6);
-    ctx.stroke();
+
+    // Scratches
+    ctx.strokeStyle = 'rgba(200,200,205,0.25)';
+    ctx.lineWidth = Math.max(1, w * 0.0015);
+    for (let i = 0; i < 40; i++) {
+      const sx = x + rand() * w, sy = y + rand() * h;
+      ctx.beginPath();
+      ctx.moveTo(sx, sy);
+      ctx.lineTo(sx + (rand() - 0.5) * w * 0.12, sy + (rand() - 0.5) * h * 0.04);
+      ctx.stroke();
+    }
+
+    // Scorch / impact marks
+    for (let i = 0; i < 6; i++) {
+      const px = x + rand() * w, py = y + rand() * h;
+      const pr = w * (0.02 + rand() * 0.05);
+      const g = ctx.createRadialGradient(px, py, 0, px, py, pr);
+      g.addColorStop(0, 'rgba(15,12,10,0.85)');
+      g.addColorStop(1, 'rgba(15,12,10,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(px, py, pr, 0, Math.PI * 2); ctx.fill();
+    }
+
+    // Faded hazard stencil
+    this._stencil(ctx, x + w * 0.1, y + h * 0.78, w * 0.22, h * 0.12, 'rgba(200,180,40,0.35)');
   }
 
-  /** @private Inactive: dark blue, solar cell grid, gold foil patches */
-  _paintInactive(ctx, x, y, w, h, rand) {
-    ctx.fillStyle = '#333366';
+  /** @private Rocket body: metallic silver hull, rivet bands, staging seam, scorch */
+  _paintRocketBody(ctx, x, y, w, h, rand) {
+    // Cylindrical shading — bright down the middle, dark at the edges
+    const grad = ctx.createLinearGradient(x, y, x + w, y);
+    grad.addColorStop(0, '#6c6c78');
+    grad.addColorStop(0.25, '#b8b8c6');
+    grad.addColorStop(0.5, '#d8d8e2');
+    grad.addColorStop(0.75, '#a4a4b2');
+    grad.addColorStop(1, '#62626e');
+    ctx.fillStyle = grad;
     ctx.fillRect(x, y, w, h);
-    ctx.strokeStyle = '#444488';
+
+    // Brushed-metal vertical streaks
+    ctx.strokeStyle = 'rgba(255,255,255,0.05)';
     ctx.lineWidth = 1;
-    const cellW = w / 10;
-    const cellH = h / 10;
-    for (let i = 0; i <= 10; i++) {
-      ctx.beginPath();
-      ctx.moveTo(x + i * cellW, y);
-      ctx.lineTo(x + i * cellW, y + h);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(x, y + i * cellH);
-      ctx.lineTo(x + w, y + i * cellH);
-      ctx.stroke();
+    for (let i = 0; i < 120; i++) {
+      const sx = x + rand() * w;
+      ctx.beginPath(); ctx.moveTo(sx, y); ctx.lineTo(sx, y + h); ctx.stroke();
     }
-    ctx.fillStyle = 'rgba(200, 170, 50, 0.4)';
+
+    // Rivet bands
+    ctx.strokeStyle = 'rgba(90,90,105,0.8)';
+    ctx.lineWidth = Math.max(1, h * 0.003);
+    const bands = 10;
+    for (let i = 1; i < bands; i++) {
+      const ly = y + i * (h / bands);
+      ctx.beginPath(); ctx.moveTo(x, ly); ctx.lineTo(x + w, ly); ctx.stroke();
+      ctx.fillStyle = 'rgba(160,160,180,0.8)';
+      for (let j = 0; j < 12; j++) {
+        ctx.beginPath();
+        ctx.arc(x + (j + 0.5) * (w / 12), ly, w * 0.0035, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    // Heavy staging seam
+    ctx.strokeStyle = 'rgba(60,66,80,0.9)';
+    ctx.lineWidth = Math.max(2, h * 0.012);
+    ctx.beginPath();
+    ctx.moveTo(x, y + h * 0.62); ctx.lineTo(x + w, y + h * 0.62); ctx.stroke();
+
+    // Scorching near the engine end
+    const sg = ctx.createLinearGradient(x, y + h, x, y + h * 0.7);
+    sg.addColorStop(0, 'rgba(20,16,14,0.6)');
+    sg.addColorStop(1, 'rgba(20,16,14,0)');
+    ctx.fillStyle = sg;
+    ctx.fillRect(x, y + h * 0.7, w, h * 0.3);
+
+    // Agency stencil band
+    this._stencil(ctx, x + w * 0.12, y + h * 0.30, w * 0.3, h * 0.1, 'rgba(40,60,120,0.5)');
+  }
+
+  /** @private Inactive: dark-blue solar array with cells, busbars, MLI gold foil */
+  _paintInactive(ctx, x, y, w, h, rand) {
+    ctx.fillStyle = '#1f2a55';
+    ctx.fillRect(x, y, w, h);
+
+    // Individual solar cells with subtle per-cell shading
+    const cols = 12, rows = 12;
+    const cw = w / cols, ch = h / rows;
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const cx = x + c * cw, cy = y + r * ch;
+        const tint = 30 + Math.floor(rand() * 40);
+        ctx.fillStyle = `rgb(${tint},${tint + 10},${tint + 70})`;
+        ctx.fillRect(cx + cw * 0.06, cy + ch * 0.06, cw * 0.88, ch * 0.88);
+        // diagonal specular sheen on some cells
+        if (rand() > 0.7) {
+          ctx.fillStyle = 'rgba(120,150,255,0.18)';
+          ctx.fillRect(cx + cw * 0.06, cy + ch * 0.06, cw * 0.88, ch * 0.25);
+        }
+      }
+    }
+
+    // Silver busbar gridlines
+    ctx.strokeStyle = 'rgba(180,190,210,0.5)';
+    ctx.lineWidth = Math.max(1, w * 0.0025);
+    for (let i = 0; i <= cols; i++) {
+      ctx.beginPath(); ctx.moveTo(x + i * cw, y); ctx.lineTo(x + i * cw, y + h); ctx.stroke();
+    }
+    for (let i = 0; i <= rows; i++) {
+      ctx.beginPath(); ctx.moveTo(x, y + i * ch); ctx.lineTo(x + w, y + i * ch); ctx.stroke();
+    }
+
+    // Crinkled gold MLI foil patches
     for (let i = 0; i < 5; i++) {
-      const fx = x + rand() * w * 0.8;
-      const fy = y + rand() * h * 0.8;
-      ctx.fillRect(fx, fy, 15 + rand() * 30, 15 + rand() * 30);
+      const fx = x + rand() * w * 0.7, fy = y + rand() * h * 0.7;
+      const fw = w * (0.1 + rand() * 0.2), fh = h * (0.1 + rand() * 0.2);
+      const g = ctx.createLinearGradient(fx, fy, fx + fw, fy + fh);
+      g.addColorStop(0, 'rgba(220,180,70,0.55)');
+      g.addColorStop(0.5, 'rgba(255,215,110,0.65)');
+      g.addColorStop(1, 'rgba(180,140,40,0.55)');
+      ctx.fillStyle = g;
+      ctx.fillRect(fx, fy, fw, fh);
+      // foil crinkle lines
+      ctx.strokeStyle = 'rgba(120,90,20,0.4)';
+      ctx.lineWidth = 1;
+      for (let k = 0; k < 6; k++) {
+        ctx.beginPath();
+        ctx.moveTo(fx + rand() * fw, fy);
+        ctx.lineTo(fx + rand() * fw, fy + fh);
+        ctx.stroke();
+      }
     }
   }
 
-  /** @private Active: clean white, reflective highlight, antenna stub */
+  /** @private Active: clean white spacecraft skin, reflective highlight, labels */
   _paintActive(ctx, x, y, w, h, rand) {
-    ctx.fillStyle = '#eeeeff';
+    const base = ctx.createLinearGradient(x, y, x, y + h);
+    base.addColorStop(0, '#f4f4fb');
+    base.addColorStop(1, '#d8d8e6');
+    ctx.fillStyle = base;
     ctx.fillRect(x, y, w, h);
-    const cx = x + w * 0.4;
-    const cy = y + h * 0.3;
-    const gradR = Math.min(w, h) * 0.35;
+
+    // Big soft reflective highlight
+    const cx = x + w * 0.4, cy = y + h * 0.3;
+    const gradR = Math.min(w, h) * 0.5;
     const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, gradR);
-    grad.addColorStop(0, 'rgba(255,255,255,0.6)');
+    grad.addColorStop(0, 'rgba(255,255,255,0.7)');
     grad.addColorStop(1, 'rgba(238,238,255,0)');
     ctx.fillStyle = grad;
-    ctx.beginPath();
-    ctx.arc(cx, cy, gradR, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = '#aaaacc';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(x + w * 0.7, y + h * 0.1);
-    ctx.lineTo(x + w * 0.7, y + h * 0.5);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(x + w * 0.7, y + h * 0.1, 8, 0, Math.PI, true);
-    ctx.stroke();
-    ctx.strokeStyle = '#ccccdd';
-    ctx.lineWidth = 0.5;
-    ctx.beginPath();
-    ctx.moveTo(x, y + h * 0.5);
-    ctx.lineTo(x + w, y + h * 0.5);
-    ctx.stroke();
-  }
+    ctx.beginPath(); ctx.arc(cx, cy, gradR, 0, Math.PI * 2); ctx.fill();
 
-  /** @private Unknown: brown, pitted surface */
-  _paintUnknown(ctx, x, y, w, h, rand) {
-    ctx.fillStyle = '#665544';
-    ctx.fillRect(x, y, w, h);
-    for (let i = 0; i < 30; i++) {
-      const px = x + rand() * w;
-      const py = y + rand() * h;
-      const pr = 2 + rand() * 6;
-      ctx.fillStyle = rand() > 0.5 ? '#554433' : '#776655';
-      ctx.beginPath();
-      ctx.arc(px, py, pr, 0, Math.PI * 2);
-      ctx.fill();
+    // Panel seams
+    ctx.strokeStyle = 'rgba(170,170,200,0.6)';
+    ctx.lineWidth = Math.max(1, w * 0.002);
+    for (let i = 1; i < 4; i++) {
+      ctx.beginPath(); ctx.moveTo(x, y + i * h / 4); ctx.lineTo(x + w, y + i * h / 4); ctx.stroke();
     }
-    ctx.strokeStyle = '#443322';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(x + 2, y + 2, w - 4, h - 4);
+    // Black thermal radiator strip
+    ctx.fillStyle = 'rgba(20,20,28,0.85)';
+    ctx.fillRect(x + w * 0.62, y + h * 0.1, w * 0.12, h * 0.55);
+    // Antenna stub
+    ctx.strokeStyle = '#9999bb';
+    ctx.lineWidth = Math.max(2, w * 0.005);
+    ctx.beginPath(); ctx.moveTo(x + w * 0.2, y + h * 0.15); ctx.lineTo(x + w * 0.2, y + h * 0.45); ctx.stroke();
+    // Caution stencil
+    this._stencil(ctx, x + w * 0.1, y + h * 0.8, w * 0.25, h * 0.1, 'rgba(200,40,40,0.45)');
   }
 
-  /** @private Fragment: near-black, random noise */
-  _paintFragment(ctx, x, y, w, h, rand) {
-    ctx.fillStyle = '#333333';
+  /** @private Unknown: pitted brown/charred surface, dents and cracks */
+  _paintUnknown(ctx, x, y, w, h, rand) {
+    const base = ctx.createLinearGradient(x, y, x, y + h);
+    base.addColorStop(0, '#6f5c46');
+    base.addColorStop(1, '#4a3c2c');
+    ctx.fillStyle = base;
     ctx.fillRect(x, y, w, h);
-    const step = 4;
+
+    // Pitting / craters
+    for (let i = 0; i < 80; i++) {
+      const px = x + rand() * w, py = y + rand() * h;
+      const pr = w * (0.004 + rand() * 0.02);
+      const g = ctx.createRadialGradient(px - pr * 0.3, py - pr * 0.3, 0, px, py, pr);
+      g.addColorStop(0, rand() > 0.5 ? 'rgba(120,104,80,0.8)' : 'rgba(50,40,28,0.8)');
+      g.addColorStop(1, 'rgba(60,48,34,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(px, py, pr, 0, Math.PI * 2); ctx.fill();
+    }
+    // Cracks
+    ctx.strokeStyle = 'rgba(25,18,12,0.7)';
+    ctx.lineWidth = Math.max(1, w * 0.002);
+    for (let i = 0; i < 5; i++) {
+      let px = x + rand() * w, py = y + rand() * h;
+      ctx.beginPath(); ctx.moveTo(px, py);
+      for (let s = 0; s < 6; s++) {
+        px += (rand() - 0.5) * w * 0.08; py += (rand() - 0.5) * h * 0.08;
+        ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+    }
+  }
+
+  /** @private Fragment: dark torn metal — bright fracture edges + soot */
+  _paintFragment(ctx, x, y, w, h, rand) {
+    ctx.fillStyle = '#2c2c30';
+    ctx.fillRect(x, y, w, h);
+    // Coarse metal noise
+    const step = Math.max(2, Math.floor(w / 256));
     for (let px = x; px < x + w; px += step) {
       for (let py = y; py < y + h; py += step) {
-        const v = Math.floor(30 + rand() * 30);
-        ctx.fillStyle = `rgb(${v},${v},${v})`;
+        const v = Math.floor(28 + rand() * 38);
+        ctx.fillStyle = `rgb(${v},${v},${v + 4})`;
         ctx.fillRect(px, py, step, step);
       }
     }
+    // Bright torn fracture edges (exposed bare metal)
+    ctx.strokeStyle = 'rgba(210,210,220,0.55)';
+    ctx.lineWidth = Math.max(1, w * 0.003);
+    for (let i = 0; i < 10; i++) {
+      let px = x + rand() * w, py = y + rand() * h;
+      ctx.beginPath(); ctx.moveTo(px, py);
+      for (let s = 0; s < 4; s++) {
+        px += (rand() - 0.5) * w * 0.15; py += (rand() - 0.5) * h * 0.15;
+        ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+    }
+    // Soot blotches
+    for (let i = 0; i < 8; i++) {
+      const px = x + rand() * w, py = y + rand() * h;
+      const pr = w * (0.03 + rand() * 0.07);
+      const g = ctx.createRadialGradient(px, py, 0, px, py, pr);
+      g.addColorStop(0, 'rgba(0,0,0,0.7)');
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(px, py, pr, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  /** @private Draw a faint rectangular stencil block (mimics a painted label) */
+  _stencil(ctx, x, y, w, h, color) {
+    ctx.save();
+    ctx.fillStyle = color;
+    // a few "characters" as bars
+    const n = 4;
+    const cw = w / (n * 1.6);
+    for (let i = 0; i < n; i++) {
+      ctx.fillRect(x + i * cw * 1.6, y, cw, h);
+    }
+    ctx.restore();
   }
 }
 

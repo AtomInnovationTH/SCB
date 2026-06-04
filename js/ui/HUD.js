@@ -17,9 +17,8 @@ import { CommsPanel } from './hud/CommsPanel.js';
 import { RadialMenu } from './hud/RadialMenu.js';
 import { HintTicker } from './hud/HintTicker.js';
 import { NetInventoryPanel } from './hud/NetInventoryPanel.js';
-import { DebrisWireframe }   from './DebrisWireframe.js';
-import { MotherWireframe }   from './MotherWireframe.js';
-import { DaughterWireframe } from './DaughterWireframe.js';
+ import { DebrisWireframe }   from './DebrisWireframe.js';
+ import { DaughterWireframe } from './DaughterWireframe.js';
 import { StrutLabels }       from './hud/StrutLabels.js';
 import { updateDriftWarning, updateThrusterBlocks } from '../systems/CoMCalculator.js';
 
@@ -59,10 +58,14 @@ const VIEW_INFO_LEVELS = {
     showVelocityVectors: false, showLeadIndicators: false,
     hudOpacity: 0.6, label: 'OVERVIEW',
   },
-  // INSPECTION (2026-06-03): now the 3rd V-cycle view. Close mechanical look at
-  // the ship with a contextual wireframe overlay. Keeps the target detail/arms
-  // readouts available (the debris subject expands the right-column wireframe);
-  // the mother subject hides the right column via the INSPECTION_TOGGLE handler.
+  // INSPECTION (2026-06-03 rev. 2): no longer a V-cycle view. Used by the
+  // discrete bare-I shortcut and the ARM_PILOT / debris-locked contextual
+  // wireframe path. (The OVERVIEW zoom-driven mothership inspection sub-state
+  // keeps the view as ORBIT and therefore uses the ORBIT config above; its
+  // inspection cues are the wireframe overlay, hull outline, vignette + narrow
+  // FOV rather than extra HUD panels.) Keeps target detail/arms readouts: the
+  // debris subject expands the right-column wireframe; the mother subject hides
+  // the right column via the INSPECTION_TOGGLE handler.
   INSPECTION: {
     showTargetList: false, showResources: true, showNavSphere: false,
     showComms: false, showArms: true, showProgress: false, showWarnings: true,
@@ -143,16 +146,12 @@ export class HUD {
     this.radialMenu = null;
     /** @type {DebrisWireframe|null} Integrated wireframe analysis */
     this.debrisWireframe = null;
-    /** @type {MotherWireframe|null} Mothership part-callout panel */
-    this.motherWireframe = null;
     /** @type {DaughterWireframe|null} Daughter arm part-callout panel */
     this.daughterWireframe = null;
     /** @type {StrutLabels|null} Screen-space strut tip labels */
     this.strutLabels = null;
     /** @type {NetInventoryPanel|null} Lasso/net inventory chips */
     this.netInventoryPanel = null;
-    /** @type {boolean} Right column was hidden by MotherWireframe */
-    this._motherHidRightCol = false;
     /** @type {object|null} Last tracked piloted arm */
     this._lastPilotedArm = null;
     /** @type {number} Last piloted arm index */
@@ -218,8 +217,9 @@ export class HUD {
     this._rightColumn.appendChild(wireframeContainer);
     this.debrisWireframe = new DebrisWireframe(wireframeContainer);
 
-    // --- MotherWireframe (floating, bottom-right — Delegation 3) ---
-    this.motherWireframe   = new MotherWireframe();
+    // MotherWireframe (2D pane) removed 2026-06-03 — replaced by in-world 3D
+    // inspection callouts (ui/MotherCallouts.js, owned by main.js). The player
+    // no longer looks back and forth between the ship and a separate schematic.
 
     // --- DaughterWireframe (floating, bottom-left — Delegation 3) ---
     this.daughterWireframe = new DaughterWireframe();
@@ -814,24 +814,13 @@ export class HUD {
       }
     });
 
-    // Delegation 3 (2026-05-31): INSPECTION_TOGGLE — coordinate three wireframe panels
-    // NOTE: MotherWireframe's own handler fires before this one (registered first
-    // in _build()), so _visible has ALREADY been toggled when we reach here.
+    // Delegation 3 (2026-05-31): INSPECTION_TOGGLE — coordinate wireframe panels.
+    // 2026-06-03: the 'mother' subject is now handled entirely by the in-world
+    // 3D callouts (ui/MotherCallouts.js); the HUD no longer hides the right
+    // column for a (now removed) 2D mother pane. Only the 'debris' subject still
+    // drives a HUD panel here.
     eventBus.on(Events.INSPECTION_TOGGLE, ({ subject } = {}) => {
-      if (subject === 'mother' || subject == null) {
-        if (!this.motherWireframe) return;
-        // Read _visible AFTER MotherWireframe's handler has toggled it
-        const isShowing = this.motherWireframe._visible;
-        if (isShowing) {
-          this._motherHidRightCol = true;
-          if (this._rightColumn) this._rightColumn.style.display = 'none';
-        } else {
-          this._motherHidRightCol = false;
-          if (this._rightColumn && this.visible) {
-            this._rightColumn.style.display = 'flex';
-          }
-        }
-      } else if (subject === 'debris') {
+      if (subject === 'debris') {
         // Toggle the expanded debris wireframe. Two contexts:
         //   • ARM_PILOT  → debris-from-daughter view (badged with the arm).
         //   • Mothership → the currently Tab-selected debris (2026-06-03: the
@@ -1096,10 +1085,6 @@ export class HUD {
         const idx = armList.indexOf(pilotArm);
         this._lastArmIndex = idx >= 0 ? idx : 0;
       }
-    }
-    if (this.motherWireframe) {
-      if (armManager) this.motherWireframe._armManager = armManager;
-      this.motherWireframe.update(dt);
     }
     if (this.daughterWireframe) {
       this.daughterWireframe.setPilotedArm(pilotArm, this._lastArmIndex);

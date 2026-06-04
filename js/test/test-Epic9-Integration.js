@@ -206,7 +206,7 @@ function mockScoring(credits = 10000, debrisCleared = 20) {
 describe('Epic 9 Integration — Suite 1: Launch → Operate → Capture Cycle', () => {
   const saved = saveAllFlags();
 
-  it('launch → READY, arms STOWED, ROSA 100%, total solar 2240W', () => {
+  it('launch → READY, arms STOWED, ROSA 100%, total solar 2450W', () => {
     enableAllEpic9Flags();
     try {
       const player = mockPlayer();
@@ -227,8 +227,8 @@ describe('Epic 9 Integration — Suite 1: Launch → Operate → Capture Cycle',
       }
 
       // Verify: ROSA at 100% (power set by skipToReady)
-      const totalPower = V5.TOTAL_SOLAR_POWER || 2240;
-      assert.equal(totalPower, 2240, 'Total solar power should be 2240W');
+      const totalPower = V5.TOTAL_SOLAR_POWER || 2450;
+      assert.equal(totalPower, 2450, 'Total solar power should be 2450W');
     } finally {
       restoreAllFlags(saved);
       eventBus.clear();
