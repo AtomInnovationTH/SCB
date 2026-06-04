@@ -128,6 +128,13 @@ export class AutopilotSystem {
      */
     this._inReachRotateOnly = false;
 
+    /**
+     * @type {boolean} Guards a one-shot AUTOPILOT_ARRIVED emission when the
+     * rotate-only hold is first entered (parity with the FSM HOLD branch).
+     * Reset when leaving rotate-only or on engage/disengage.
+     */
+    this._inReachArrivedEmitted = false;
+
     this._setupListeners();
   }
 
@@ -251,6 +258,7 @@ export class AutopilotSystem {
     this._setPhase(PHASE.RENDEZVOUS_FAR);
     this._holdTimer = 0;
     this._inReachRotateOnly = false;
+    this._inReachArrivedEmitted = false;
 
     // Emit target lock for CollisionAvoidanceSystem
     this._refreshTargetLock();
@@ -282,6 +290,7 @@ export class AutopilotSystem {
     this._setPhase(PHASE.RENDEZVOUS_FAR);
     this._holdTimer = 0;
     this._inReachRotateOnly = false;
+    this._inReachArrivedEmitted = false;
     this._headingMode = 'CLUSTER';
     this._headingTarget = new THREE.Vector3(cluster.center.x, cluster.center.y, cluster.center.z);
     this._lockedTargetRef = null;
@@ -352,6 +361,7 @@ export class AutopilotSystem {
     this._holdTimer = 0;
     this._stationKeepDeltaV = 0;
     this._inReachRotateOnly = false;
+    this._inReachArrivedEmitted = false;
 
     // Release any active target lock
     this._releaseTargetLock();
@@ -483,8 +493,12 @@ export class AutopilotSystem {
       return;
     }
     // Left rotate-only (or never entered) — allow ARRIVED to fire again on a
-    // future re-entry, and reset the hold timer so a later FSM HOLD starts clean.
-    this._inReachArrivedEmitted = false;
+    // future re-entry, and reset the hold timer so a later rotate-only hold or
+    // FSM HOLD starts counting from zero.
+    if (this._inReachArrivedEmitted) {
+      this._inReachArrivedEmitted = false;
+      this._holdTimer = 0;
+    }
 
     // --- Tool-aware trailing distance ---
     const Dtrail_m = this._getTrailDistance();
@@ -1158,10 +1172,15 @@ export class AutopilotSystem {
    * would otherwise fly to. When the mother→target distance is already within
    * this reach there is no need to translate; rotating to point at the target
    * suffices (see `update()`'s in-reach branch).
-   *   lasso   → REACH_LASSO   (projectile range)
-   *   spinner → REACH_SPINNER (tether length)
-   *   weaver  → REACH_WEAVER  (tether length)
-   *   trawl   → REACH_TRAWL   (capture radius)
+   *
+   * Reach is derived from the canonical tool constants (not duplicated in the
+   * AUTOPILOT block) so retuning a tether length / projectile range
+   * automatically propagates here:
+   *   lasso   → LASSO_RANGE            (projectile range)
+   *   spinner → SPINNER_TETHER_LENGTH  (tether length)
+   *   weaver  → WEAVER_TETHER_LENGTH   (tether length)
+   *   trawl   → D_TRAIL_TRAWL          (sweep stand-off; kept ≥ trail so the
+   *             optimization engages rather than overflying the goal)
    *   default → REACH_DEFAULT
    * @returns {number} reach in metres
    * @private
@@ -1170,10 +1189,10 @@ export class AutopilotSystem {
     const AP = Constants.AUTOPILOT;
     const tool = this._targetSelector ? this._targetSelector._recommendedTool : null;
     switch (tool) {
-      case 'lasso':   return AP.REACH_LASSO;
-      case 'spinner': return AP.REACH_SPINNER;
-      case 'weaver':  return AP.REACH_WEAVER;
-      case 'trawl':   return AP.REACH_TRAWL;
+      case 'lasso':   return Constants.LASSO_RANGE;
+      case 'spinner': return Constants.SPINNER_TETHER_LENGTH;
+      case 'weaver':  return Constants.WEAVER_TETHER_LENGTH;
+      case 'trawl':   return AP.D_TRAIL_TRAWL;
       default:        return AP.REACH_DEFAULT;
     }
   }

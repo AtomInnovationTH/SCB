@@ -467,13 +467,13 @@ describe('Autopilot — In-reach rotate-only', () => {
   it('_getToolReach returns the per-tool daughter reach', () => {
     const { ap, target } = setup('weaver');
     ap._targetSelector._recommendedTool = 'weaver';
-    assert.equal(ap._getToolReach(), AP.REACH_WEAVER);
+    assert.equal(ap._getToolReach(), Constants.WEAVER_TETHER_LENGTH);
     ap._targetSelector._recommendedTool = 'spinner';
-    assert.equal(ap._getToolReach(), AP.REACH_SPINNER);
+    assert.equal(ap._getToolReach(), Constants.SPINNER_TETHER_LENGTH);
     ap._targetSelector._recommendedTool = 'lasso';
-    assert.equal(ap._getToolReach(), AP.REACH_LASSO);
+    assert.equal(ap._getToolReach(), Constants.LASSO_RANGE);
     ap._targetSelector._recommendedTool = 'trawl';
-    assert.equal(ap._getToolReach(), AP.REACH_TRAWL);
+    assert.equal(ap._getToolReach(), AP.D_TRAIL_TRAWL);
     ap._targetSelector._recommendedTool = null;
     assert.equal(ap._getToolReach(), AP.REACH_DEFAULT);
   });
@@ -570,6 +570,72 @@ describe('Autopilot — In-reach rotate-only', () => {
     ap.disengage('MANUAL');
     assert.equal(ap.engaged, false);
     assert.equal(ap._inReachRotateOnly, false, 'latch must reset on disengage');
+  });
+
+  it('getCurrentPhase() reports HOLD while holding in rotate-only', () => {
+    const { ap, player, vHat } = setup('lasso');
+    setTargetState(ap, { Pd: pdAhead(player, vHat, 150), Vd: new THREE.Vector3(0, 0, 7.5) });
+    ap.update(0.1);
+    assert.equal(ap._inReachRotateOnly, true);
+    assert.equal(ap.getCurrentPhase(), 'HOLD',
+      'HUD should see HOLD (on-station), not RENDEZVOUS_FAR, while rotate-only');
+  });
+
+  it('AUTOPILOT_ARRIVED fires once on rotate-only hold entry', () => {
+    const { ap, player, vHat } = setup('lasso');
+    const arrivedLog = trackEvents(Events.AUTOPILOT_ARRIVED);
+    setTargetState(ap, { Pd: pdAhead(player, vHat, 150), Vd: new THREE.Vector3(0, 0, 7.5) });
+    ap.update(0.1);
+    ap.update(0.1);
+    ap.update(0.1);
+    assert.equal(arrivedLog.length, 1, 'ARRIVED must fire exactly once on hold entry');
+  });
+
+  it('with LOCKED target, rotate-only holds indefinitely (no auto-disengage)', () => {
+    const { ap, player, vHat } = setup('weaver');
+    setTargetState(ap, { Pd: pdAhead(player, vHat, 800), Vd: new THREE.Vector3(0, 0, 7.5) });
+    ap.update(0.1);
+    assert.equal(ap._inReachRotateOnly, true);
+    assert.ok(ap._lockedTargetRef && ap._lockedTargetRef.alive, 'locked target alive');
+    const disLog = trackEvents(Events.AUTOPILOT_DISENGAGE);
+    ap.update(AP.HOLD_DURATION * 3);
+    assert.equal(ap.engaged, true, 'must hold indefinitely with a live locked target');
+    assert.equal(disLog.length, 0);
+  });
+
+  it('without locked target, rotate-only auto-disengages ARRIVED after HOLD_DURATION', () => {
+    const { ap, player, vHat } = setup('weaver');
+    setTargetState(ap, { Pd: pdAhead(player, vHat, 800), Vd: new THREE.Vector3(0, 0, 7.5) });
+    ap.update(0.1);
+    assert.equal(ap._inReachRotateOnly, true);
+    // Simulate cluster / prograde mode: no specific locked target.
+    ap._lockedTargetRef = null;
+    const disLog = trackEvents(Events.AUTOPILOT_DISENGAGE);
+    ap.update(AP.HOLD_DURATION + 0.1);
+    assert.equal(ap.engaged, false, 'must auto-disengage when no target is locked');
+    assert.equal(disLog.length, 1);
+    assert.equal(disLog[0].data.reason, 'ARRIVED');
+  });
+
+  it('recoil compensation applies in rotate-only mode (LASSO_FIRED)', () => {
+    const { ap, player, vHat } = setup('lasso');
+    player.mass = 130;
+    setTargetState(ap, { Pd: pdAhead(player, vHat, 150), Vd: new THREE.Vector3(0, 0, 7.5) });
+    ap.update(0.1);
+    assert.equal(ap._inReachRotateOnly, true);
+
+    eventBus.emit(Events.LASSO_FIRED, {
+      targetId: 1,
+      projectileMass: 2.5,
+      launchDirection: new THREE.Vector3(1, 0, 0),
+      speed: 10,
+    });
+    const recoilCalls = player.applyCartesianImpulse.calls.filter(c => c.dt === 0);
+    assert.equal(recoilCalls.length, 1,
+      'recoil compensation must apply while holding in rotate-only');
+    const expectedMag = (2.5 * 10 / 130) * Constants.AUTOPILOT.STATION_KEEP_EFFICIENCY;
+    assert.ok(Math.abs(recoilCalls[0].dv.x + expectedMag) < 0.001,
+      'recoil magnitude must match momentum conservation');
   });
 });
 
