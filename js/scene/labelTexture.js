@@ -51,14 +51,21 @@ export function createLabelTexture(text, { color = '#ffffff', fontPx = 112, pill
     ctx.arcTo(x, y + h, x, y, r);
     ctx.arcTo(x, y, x + w, y, r);
     ctx.closePath();
-    ctx.fillStyle = 'rgba(4, 10, 18, 0.62)';
+    ctx.fillStyle = 'rgba(3, 8, 16, 0.74)';
     ctx.fill();
     ctx.lineWidth = 4;
     ctx.strokeStyle = color;
-    ctx.globalAlpha = 0.55;
+    ctx.globalAlpha = 0.7;
     ctx.stroke();
     ctx.globalAlpha = 1.0;
   }
+
+  // Subtle dark halo around the glyphs so text stays legible against bright
+  // hull / Earth even when the pill is absent or semi-transparent.
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = Math.max(3, fontPx * 0.06);
+  ctx.strokeStyle = 'rgba(2, 6, 12, 0.85)';
+  ctx.strokeText(text, 512, 128);
 
   ctx.fillStyle = color;
   ctx.globalAlpha = 1.0;

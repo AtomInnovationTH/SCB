@@ -24,7 +24,11 @@ import { FlagDecalSystem, getUVOffsetForCountry, hasFlag } from './FlagDecalSyst
 const PANEL_WIDTH = 280;              // px — match right column & NavSphere width
 const PANEL_HEIGHT = 200;             // px — tight: wireframe + essential info text only
 const PANEL_MARGIN_RIGHT = 10;        // px from right edge (align with targets panel)
-const PANEL_MARGIN_BOTTOM = 140;      // px from bottom edge (fallback when no container)
+// Fallback anchor: top-right, below the NavSphere (446px = 160 margin + 280
+// NavSphere diameter + 6 gap), mirroring the container-mounted slot. Previously
+// this floated bottom-right at 140px, which could overlap the bottom-anchored
+// warnings strip / comms panel when DebrisWireframe was used standalone.
+const PANEL_MARGIN_TOP = 446;         // px from top edge (fallback when no container)
 const BG_COLOR = `rgba(0, 10, 25, ${Constants.WIREFRAME_BG_ALPHA})`;
 const BORDER_COLOR = 'rgba(0, 255, 136, 0.3)';
 const Z_INDEX = 12;
@@ -1064,10 +1068,12 @@ export class DebrisWireframe {
       });
       container.appendChild(this._canvas);
     } else {
-      // Legacy fixed positioning (fallback)
+      // Legacy fixed positioning (fallback) — top-right below NavSphere so it
+      // never collides with bottom-anchored panels (DaughterWireframe bottom-
+      // left, warnings strip bottom-center, comms panel).
       Object.assign(this._canvas.style, {
         position: 'fixed',
-        bottom: `${PANEL_MARGIN_BOTTOM}px`,
+        top: `${PANEL_MARGIN_TOP}px`,
         right: `${PANEL_MARGIN_RIGHT}px`,
         width: `${PANEL_WIDTH}px`,
         height: `${PANEL_HEIGHT}px`,
