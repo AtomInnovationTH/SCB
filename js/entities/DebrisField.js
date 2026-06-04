@@ -20,7 +20,7 @@ import {
 import {
   DebrisWireframe,
   initAtlases, getTypeAtlasTexture, getFlagAtlasTexture,
-  getUVOffsetForType, getBaseColorForType, getEmissiveForMOID,
+  getUVOffsetForType, getEmissiveForMOID,
   getUVOffsetForCountry, hasFlag as hasFlagDecal,
   getVisualMode,
 } from '../ui/DebrisWireframe.js';
@@ -47,6 +47,52 @@ const DEBRIS_TYPES = {
 const MATERIALS = ['aluminum', 'titanium', 'composite', 'mli_mylar', 'solar_cell'];
 
 // ---------------------------------------------------------------------------
+// Per-type material distribution (physical plausibility + visual variety)
+// ---------------------------------------------------------------------------
+// Previously every piece picked uniformly from all 5 materials, so 20% of the
+// ENTIRE field was gold MLI foil and 20% blue solar cells — the field read as
+// "almost all gold/blue" instead of a realistic mostly-metal debris cloud.
+//
+// Real orbital debris is dominated by bare/charred structural metal and dark
+// composite. Gold multi-layer insulation (MLI) and blue photovoltaic cells
+// only appear on (or shed from) satellites, and even then as a minority of the
+// surface. We therefore weight material choice BY debris type:
+//   • fragment      — explosion shards: bare aluminium, titanium, charred
+//                     composite. No intact gold foil / solar panels.
+//   • rocketBody    — large aluminium/titanium stages, some composite skirts.
+//   • defunctSat    — the "variety" piece: aluminium bus + a real chance of
+//                     gold MLI and blue solar arrays + composite panels.
+//   • missionDebris — small operational debris (clamps, lens caps, MLI scraps,
+//                     cell offcuts): a broad mix incl. occasional gold/blue.
+// Weights are relative (need not sum to 1); picked via weightedMaterial().
+const MATERIAL_WEIGHTS_BY_TYPE = {
+  fragment:      { aluminum: 0.40, titanium: 0.22, composite: 0.38 },
+  rocketBody:    { aluminum: 0.55, titanium: 0.30, composite: 0.15 },
+  defunctSat:    { aluminum: 0.34, titanium: 0.12, composite: 0.20, mli_mylar: 0.18, solar_cell: 0.16 },
+  missionDebris: { aluminum: 0.30, titanium: 0.16, composite: 0.30, mli_mylar: 0.14, solar_cell: 0.10 },
+};
+
+/**
+ * Pick a material tag for a debris piece, weighted by its type so the field
+ * reads as physically-plausible (mostly metal/composite, gold & blue rare).
+ * Falls back to a uniform pick if the type is unknown.
+ * @param {string} type — procedural debris type
+ * @returns {string} material tag from MATERIALS
+ */
+function weightedMaterial(type) {
+  const weights = MATERIAL_WEIGHTS_BY_TYPE[type];
+  if (!weights) return MATERIALS[Math.floor(Math.random() * MATERIALS.length)];
+  let total = 0;
+  for (const k in weights) total += weights[k];
+  let roll = Math.random() * total;
+  for (const k in weights) {
+    roll -= weights[k];
+    if (roll <= 0) return k;
+  }
+  return 'aluminum';
+}
+
+// ---------------------------------------------------------------------------
 // Per-instance colour variation (anti-monotone)
 // ---------------------------------------------------------------------------
 // A whole field of debris sharing one flat tint reads as a "grey soup". To make
@@ -63,6 +109,40 @@ const MATERIALS = ['aluminum', 'titanium', 'composite', 'mli_mylar', 'solar_cell
 // no-arg form when the constant is unavailable (older THREE / test stubs).
 const _instanceHSL = { h: 0, s: 0, l: 0 };
 const _SRGB = (typeof THREE !== 'undefined' && THREE.SRGBColorSpace) || undefined;
+
+// ---------------------------------------------------------------------------
+// Instance-tint base colour (3D mesh) — a near-WHITE weathering modulator.
+// ---------------------------------------------------------------------------
+// The instanceColor multiplies color × map in the shader. Earlier it was set
+// to getBaseColorForType() — DARK type colours (#666, #333, #333366). Those
+// crushed the (now bright, texture-carried) hull colour toward black and made
+// the field read as a dim, low-contrast "grey soup".
+//
+// The type's characteristic colour already lives in the atlas texture, so the
+// instanceColor's job here is ONLY weathering modulation: a bright base near
+// white with a faint type-appropriate hue bias, onto which
+// applyInstanceColorVariation() layers per-piece brightness/oxidation jitter.
+// Real hardware tints: bare metal reads neutral-cool, charred fragments lean
+// warm/sooty, solar/sat surfaces lean faintly blue.
+const _INSTANCE_TINT_BASE = {
+  debris:      '#cfcfcf',  // grey structural metal
+  fragment:    '#b9b4ac',  // charred, slightly warm bare metal
+  rocket_body: '#d6d6dc',  // bright aluminium hull
+  inactive:    '#c2c6d2',  // satellite skin, faint cool blue
+  active:      '#e6e6ee',  // clean spacecraft
+  unknown:     '#c8bfb0',  // weathered warm
+};
+
+/**
+ * Base colour for the 3D instanceColor weathering modulator (near-white).
+ * Distinct from getBaseColorForType() (used for atlas/strategic-map dots),
+ * which stays dark/type-coded for those purposes.
+ * @param {string} catalogType
+ * @returns {string} hex tint
+ */
+function getInstanceTintBase(catalogType) {
+  return _INSTANCE_TINT_BASE[catalogType] || _INSTANCE_TINT_BASE.unknown;
+}
 
 /**
  * Apply deterministic per-instance colour variation to `out`.
@@ -88,9 +168,11 @@ function applyInstanceColorVariation(out, id, catalogType) {
   _instanceHSL.h = (_instanceHSL.h + (r1 - 0.5) * hueRange + 1) % 1;
   // Slight saturation jitter so some pieces look more oxidised/coloured
   _instanceHSL.s = Math.max(0, Math.min(1, _instanceHSL.s * (0.75 + r2 * 0.6)));
-  // Brightness variation is the big anti-monotone win (~±25%). Keep a sensible
-  // floor so even near-black fragments still show distinct shading.
-  _instanceHSL.l = Math.max(0.08, Math.min(0.92, _instanceHSL.l * (0.78 + r1 * 0.5)));
+  // Brightness variation is the big anti-monotone win. Centre the multiplier
+  // on ~1.0 (range ~0.62–1.18) so on a bright base some pieces read sun-lit
+  // and others shadow/scorch-darkened, without dragging the whole field dark.
+  // Floor keeps near-black fragments from collapsing to a flat silhouette.
+  _instanceHSL.l = Math.max(0.10, Math.min(0.97, _instanceHSL.l * (0.62 + r1 * 0.56)));
 
   if (_SRGB) out.setHSL(_instanceHSL.h, _instanceHSL.s, _instanceHSL.l, _SRGB);
   else out.setHSL(_instanceHSL.h, _instanceHSL.s, _instanceHSL.l);
@@ -567,8 +649,9 @@ export class DebrisField {
     const tumbleRate = tumbleRateDeg * Math.PI / 180; // rad/s
     const tumbleAxis = randomUnitVector();
 
-    // Material
-    const material = MATERIALS[Math.floor(Math.random() * MATERIALS.length)];
+    // Material — weighted by type so gold MLI / blue solar cells stay rare and
+    // concentrated on satellites (real debris is mostly metal/composite).
+    const material = weightedMaterial(type);
 
     // Brittleness
     const brittleness = Math.random();
@@ -710,11 +793,12 @@ export class DebrisField {
         break;
       }
       case 'fragment': {
-        // Solar panel shards
-        if (material === 'solar_cell' && Math.random() < C.SALVAGE_PROB_FRAGMENT_GAAS) {
-          salvage.gaAs = C.SALVAGE_GAAS_MIN +
-            Math.random() * (C.SALVAGE_GAAS_MAX - C.SALVAGE_GAAS_MIN) * 0.5;
-        }
+        // NOTE: Fragments are now never the `solar_cell` material (see
+        // MATERIAL_WEIGHTS_BY_TYPE) — intact PV cells don't survive as loose
+        // explosion shards, so fragment-sourced GaAs was removed. GaAs salvage
+        // still comes from defunctSat (type-based, above). The orphaned
+        // SALVAGE_PROB_FRAGMENT_GAAS constant is left in Constants.js for any
+        // future re-introduction.
         // Trace Indium in titanium alloys
         if (material === 'titanium' && Math.random() < C.SALVAGE_PROB_FRAGMENT_INDIUM) {
           salvage.indium = C.SALVAGE_INDIUM_MIN +
@@ -803,12 +887,31 @@ export class DebrisField {
 
       let mat;
       if (isTextured) {
+        // Self-illumination (emissive) keeps debris faintly visible on the
+        // night side without a sun. Previously this was the FULL material
+        // colour at 0.15 — an additive glow that painted every piece its
+        // material hue (gold MLI especially) and washed the whole field toward
+        // a flat, uniform look, defeating the per-instance colour variation.
+        //
+        // Real debris is only lit by sun + earthshine, so we use a very dim,
+        // heavily-desaturated tint of the material colour (a cool ash glow)
+        // rather than the saturated hue. This preserves "visible in shadow"
+        // while letting the texture, instance tint, and material albedo —
+        // not a constant coloured wash — drive the perceived colour.
+        const emissiveColor = new THREE.Color(matDef.color);
+        const _emHSL = { h: 0, s: 0, l: 0 };
+        if (_SRGB) emissiveColor.getHSL(_emHSL, _SRGB); else emissiveColor.getHSL(_emHSL);
+        _emHSL.s *= 0.25;                       // strip most of the hue
+        _emHSL.l = Math.min(_emHSL.l, 0.30);    // keep it dim
+        if (_SRGB) emissiveColor.setHSL(_emHSL.h, _emHSL.s, _emHSL.l, _SRGB);
+        else emissiveColor.setHSL(_emHSL.h, _emHSL.s, _emHSL.l);
+
         mat = new THREE.MeshStandardMaterial({
           color: matDef.color,
           metalness: matDef.metalness,
           roughness: matDef.roughness,
-          emissive: matDef.color,
-          emissiveIntensity: 0.15,
+          emissive: emissiveColor,
+          emissiveIntensity: 0.06,
         });
         // ST-6.2: Apply type atlas texture if available
         const typeAtlasTex = getTypeAtlasTexture();
@@ -819,6 +922,23 @@ export class DebrisField {
           clonedTex.repeat.set(uvs.scaleU, uvs.scaleV);
           mat.map = clonedTex;
           mat.needsUpdate = true;
+
+          // The atlas texture ALREADY carries type-characteristic colour
+          // (silver hull, blue solar cells, gold MLI patches, charred metal).
+          // The final fragment colour is color × map × instanceColor — three
+          // colour sources multiplied. If `color` stays the full saturated
+          // material hue (e.g. gold 0xFFD700) it double-tints the already-
+          // coloured atlas and muddies everything. Soften `color` toward a
+          // light neutral tint so the texture reads truthfully and the
+          // material identity is carried by metalness/roughness instead.
+          const tint = new THREE.Color(matDef.color);
+          const _tHSL = { h: 0, s: 0, l: 0 };
+          if (_SRGB) tint.getHSL(_tHSL, _SRGB); else tint.getHSL(_tHSL);
+          _tHSL.s *= 0.35;                                 // mostly neutral
+          _tHSL.l = Math.max(0.72, Math.min(0.92, _tHSL.l)); // bright modulator
+          if (_SRGB) tint.setHSL(_tHSL.h, _tHSL.s, _tHSL.l, _SRGB);
+          else tint.setHSL(_tHSL.h, _tHSL.s, _tHSL.l);
+          mat.color = tint;
         }
       } else {
         // Wireframe fallback
@@ -852,9 +972,11 @@ export class DebrisField {
       const idx = indexMap[d._meshKey]++;
       this._instanceLookup.set(d.id, { meshKey: d._meshKey, instanceIndex: idx });
 
-      // ST-6.2: Tint instance by catalogType base colour, then add deterministic
-      // per-instance variation so the field doesn't read as a flat monotone mass.
-      const baseHex = getBaseColorForType(d.catalogType || 'unknown');
+      // Tint instance with a near-white weathering modulator (NOT the dark
+      // type colour — that lives in the atlas) plus deterministic per-instance
+      // variation, so the field reads as individually-weathered hardware
+      // instead of a flat dim mass.
+      const baseHex = getInstanceTintBase(d.catalogType || 'unknown');
       _tmpTypeColor.set(baseHex);
       applyInstanceColorVariation(_tmpTypeColor, d.id, d.catalogType);
       const mesh = this.instancedMeshes[d._meshKey];
@@ -1277,15 +1399,15 @@ export class DebrisField {
             if (currentBadge) {
               const emissive = getEmissiveForMOID(currentBadge);
               if (emissive.intensity > 0) {
-                this._moidTmpColor.set(getBaseColorForType(debris.catalogType || 'unknown'));
+                this._moidTmpColor.set(getInstanceTintBase(debris.catalogType || 'unknown'));
                 applyInstanceColorVariation(this._moidTmpColor, debris.id, debris.catalogType);
                 this._moidTmpEmissive.set(emissive.color);
                 this._moidTmpColor.lerp(this._moidTmpEmissive, emissive.intensity);
                 mesh.setColorAt(lookup.instanceIndex, this._moidTmpColor);
               }
             } else {
-              // Badge cleared — revert to base type colour (with per-instance variation)
-              this._moidTmpColor.set(getBaseColorForType(debris.catalogType || 'unknown'));
+              // Badge cleared — revert to weathering-tint base (with per-instance variation)
+              this._moidTmpColor.set(getInstanceTintBase(debris.catalogType || 'unknown'));
               applyInstanceColorVariation(this._moidTmpColor, debris.id, debris.catalogType);
               mesh.setColorAt(lookup.instanceIndex, this._moidTmpColor);
             }

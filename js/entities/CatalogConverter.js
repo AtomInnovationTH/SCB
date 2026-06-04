@@ -41,6 +41,32 @@ const SHAPE_MAP = {
 /** Material pool — mirrors the `MATERIALS` array in DebrisField.js. */
 const MATERIALS = ['aluminum', 'titanium', 'composite', 'mli_mylar', 'solar_cell'];
 
+/** Per-type material weights — mirrors MATERIAL_WEIGHTS_BY_TYPE in DebrisField.js.
+ *  Keeps gold MLI / blue solar cells rare and concentrated on satellites so the
+ *  catalogue half of the field matches the procedural half visually. */
+const MATERIAL_WEIGHTS_BY_TYPE = {
+  fragment:      { aluminum: 0.40, titanium: 0.22, composite: 0.38 },
+  rocketBody:    { aluminum: 0.55, titanium: 0.30, composite: 0.15 },
+  defunctSat:    { aluminum: 0.34, titanium: 0.12, composite: 0.20, mli_mylar: 0.18, solar_cell: 0.16 },
+  missionDebris: { aluminum: 0.30, titanium: 0.16, composite: 0.30, mli_mylar: 0.14, solar_cell: 0.10 },
+};
+
+/** Deterministically pick a type-weighted material from a seed (no random()). */
+function _weightedMaterial(type, seed) {
+  const weights = MATERIAL_WEIGHTS_BY_TYPE[type];
+  if (!weights) return MATERIALS[seed % MATERIALS.length];
+  let total = 0;
+  for (const k in weights) total += weights[k];
+  // Map the high bits of the seed to [0,total) so it decorrelates from other
+  // seed-derived choices (tumble/axis use low bits).
+  let roll = (((seed >>> 8) & 0xffff) / 0x10000) * total;
+  for (const k in weights) {
+    roll -= weights[k];
+    if (roll <= 0) return k;
+  }
+  return 'aluminum';
+}
+
 // ============================================================================
 // HELPERS
 // ============================================================================
@@ -86,7 +112,7 @@ export function catalogEntryToDebrisData(entry, id) {
   const noradStr = String(entry.norad || `cat_${id}`);
   const seed = _hash(noradStr);
 
-  const material = MATERIALS[seed % MATERIALS.length];
+  const material = _weightedMaterial(type, seed);
 
   // ----- Physical properties (pulled from catalogue, with safe defaults) -----
   const sizeMeter = _num(entry.size_m, 1.0);

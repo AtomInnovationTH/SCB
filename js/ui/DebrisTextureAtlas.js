@@ -324,58 +324,81 @@ export class DebrisTextureAtlas {
     this._stencil(ctx, x + w * 0.12, y + h * 0.30, w * 0.3, h * 0.1, 'rgba(40,60,120,0.5)');
   }
 
-  /** @private Inactive: dark-blue solar array with cells, busbars, MLI gold foil */
+  /** @private Inactive: a real spacecraft face — dense dark solar-cell array,
+   *  silver interconnects/busbars, plus crinkled gold MLI thermal blanket.
+   *  Mirrors the dense near-black triple-junction GaAs look of
+   *  scene/solarCellTexture.js (cells dominate; substrate is dark — NOT a
+   *  bright-blue wireframe), so body-mounted PV debris and these slot pixels
+   *  read consistently across the game. */
   _paintInactive(ctx, x, y, w, h, rand) {
-    ctx.fillStyle = '#1f2a55';
+    // Dark interconnect/Kapton substrate seen in the hairline cell gaps.
+    ctx.fillStyle = '#10131c';
     ctx.fillRect(x, y, w, h);
 
-    // Individual solar cells with subtle per-cell shading
-    const cols = 12, rows = 12;
+    // ---- Dense photovoltaic cell grid (tall cells, close-packed) ----------
+    const cols = 10, rows = 14;
     const cw = w / cols, ch = h / rows;
+    const gap = Math.max(1, Math.min(cw, ch) * 0.05);
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
-        const cx = x + c * cw, cy = y + r * ch;
-        const tint = 30 + Math.floor(rand() * 40);
-        ctx.fillStyle = `rgb(${tint},${tint + 10},${tint + 70})`;
-        ctx.fillRect(cx + cw * 0.06, cy + ch * 0.06, cw * 0.88, ch * 0.88);
-        // diagonal specular sheen on some cells
-        if (rand() > 0.7) {
-          ctx.fillStyle = 'rgba(120,150,255,0.18)';
-          ctx.fillRect(cx + cw * 0.06, cy + ch * 0.06, cw * 0.88, ch * 0.25);
+        const cx = x + c * cw + gap, cy = y + r * ch + gap;
+        const cWidth = cw - gap * 2, cHeight = ch - gap * 2;
+        // Per-cell tone jitter — triple-junction GaAs reads near-black blue-violet.
+        const jitter = Math.floor(rand() * 10) - 5;
+        const rr = 20 + jitter, gg = 22 + jitter, bb = 46 + jitter;
+        const g = ctx.createLinearGradient(cx, cy, cx + cWidth, cy + cHeight);
+        g.addColorStop(0.0, `rgb(${rr + 14},${gg + 16},${bb + 34})`); // glassy AR sheen
+        g.addColorStop(0.5, `rgb(${rr},${gg},${bb})`);
+        g.addColorStop(1.0, `rgb(${Math.max(0, rr - 6)},${Math.max(0, gg - 6)},${Math.max(0, bb - 14)})`);
+        ctx.fillStyle = g;
+        ctx.fillRect(cx, cy, cWidth, cHeight);
+        // Hair-thin silver finger conductors.
+        ctx.strokeStyle = 'rgba(150,165,195,0.20)';
+        ctx.lineWidth = Math.max(1, cWidth * 0.02);
+        for (let f = 1; f < 6; f++) {
+          const fx = cx + (cWidth * f) / 6;
+          ctx.beginPath(); ctx.moveTo(fx, cy); ctx.lineTo(fx, cy + cHeight); ctx.stroke();
+        }
+        // Two brighter busbars (the cell's main collectors).
+        ctx.strokeStyle = 'rgba(190,205,235,0.42)';
+        ctx.lineWidth = Math.max(1, cWidth * 0.05);
+        for (let bbar = 1; bbar <= 2; bbar++) {
+          const bx = cx + (cWidth * bbar) / 3;
+          ctx.beginPath(); ctx.moveTo(bx, cy); ctx.lineTo(bx, cy + cHeight); ctx.stroke();
         }
       }
     }
 
-    // Silver busbar gridlines
-    ctx.strokeStyle = 'rgba(180,190,210,0.5)';
-    ctx.lineWidth = Math.max(1, w * 0.0025);
-    for (let i = 0; i <= cols; i++) {
-      ctx.beginPath(); ctx.moveTo(x + i * cw, y); ctx.lineTo(x + i * cw, y + h); ctx.stroke();
-    }
-    for (let i = 0; i <= rows; i++) {
-      ctx.beginPath(); ctx.moveTo(x, y + i * ch); ctx.lineTo(x + w, y + i * ch); ctx.stroke();
-    }
-
-    // Crinkled gold MLI foil patches
-    for (let i = 0; i < 5; i++) {
-      const fx = x + rand() * w * 0.7, fy = y + rand() * h * 0.7;
-      const fw = w * (0.1 + rand() * 0.2), fh = h * (0.1 + rand() * 0.2);
-      const g = ctx.createLinearGradient(fx, fy, fx + fw, fy + fh);
-      g.addColorStop(0, 'rgba(220,180,70,0.55)');
-      g.addColorStop(0.5, 'rgba(255,215,110,0.65)');
-      g.addColorStop(1, 'rgba(180,140,40,0.55)');
-      ctx.fillStyle = g;
-      ctx.fillRect(fx, fy, fw, fh);
-      // foil crinkle lines
-      ctx.strokeStyle = 'rgba(120,90,20,0.4)';
-      ctx.lineWidth = 1;
-      for (let k = 0; k < 6; k++) {
-        ctx.beginPath();
-        ctx.moveTo(fx + rand() * fw, fy);
-        ctx.lineTo(fx + rand() * fw, fy + fh);
-        ctx.stroke();
+    // ---- Crinkled gold MLI thermal blanket (one large wrapped corner) -----
+    // Only part of the face is foil so the slot reads "blue array + gold MLI",
+    // not "all gold". This is the only slot with prominent gold.
+    const fx = x + w * (0.04 + rand() * 0.08);
+    const fy = y + h * (0.04 + rand() * 0.08);
+    const fw = w * (0.34 + rand() * 0.12);
+    const fh = h * (0.30 + rand() * 0.14);
+    const fg = ctx.createLinearGradient(fx, fy, fx + fw, fy + fh);
+    fg.addColorStop(0.0, 'rgb(150,116,40)');
+    fg.addColorStop(0.5, 'rgb(232,196,96)');
+    fg.addColorStop(1.0, 'rgb(120,92,30)');
+    ctx.fillStyle = fg;
+    ctx.fillRect(fx, fy, fw, fh);
+    // Wrinkle highlights/shadows — wandering bright & dark creases.
+    for (let k = 0; k < 22; k++) {
+      const bright = rand() > 0.5;
+      ctx.strokeStyle = bright ? 'rgba(255,238,170,0.55)' : 'rgba(90,66,18,0.55)';
+      ctx.lineWidth = Math.max(1, w * 0.0025);
+      let px = fx + rand() * fw, py = fy;
+      ctx.beginPath(); ctx.moveTo(px, py);
+      for (let s = 0; s < 5; s++) {
+        px += (rand() - 0.5) * fw * 0.25; py += fh / 5;
+        ctx.lineTo(px, py);
       }
+      ctx.stroke();
     }
+    // Tape/edge seam where the blanket is fastened down.
+    ctx.strokeStyle = 'rgba(60,48,18,0.7)';
+    ctx.lineWidth = Math.max(2, w * 0.004);
+    ctx.strokeRect(fx, fy, fw, fh);
   }
 
   /** @private Active: clean white spacecraft skin, reflective highlight, labels */
@@ -444,7 +467,7 @@ export class DebrisTextureAtlas {
     }
   }
 
-  /** @private Fragment: dark torn metal — bright fracture edges + soot */
+  /** @private Fragment: dark torn metal — bright fracture edges + soot + heat-tint */
   _paintFragment(ctx, x, y, w, h, rand) {
     ctx.fillStyle = '#2c2c30';
     ctx.fillRect(x, y, w, h);
@@ -457,16 +480,41 @@ export class DebrisTextureAtlas {
         ctx.fillRect(px, py, step, step);
       }
     }
-    // Bright torn fracture edges (exposed bare metal)
-    ctx.strokeStyle = 'rgba(210,210,220,0.55)';
-    ctx.lineWidth = Math.max(1, w * 0.003);
-    for (let i = 0; i < 10; i++) {
-      let px = x + rand() * w, py = y + rand() * h;
-      ctx.beginPath(); ctx.moveTo(px, py);
-      for (let s = 0; s < 4; s++) {
-        px += (rand() - 0.5) * w * 0.15; py += (rand() - 0.5) * h * 0.15;
-        ctx.lineTo(px, py);
+    // Heat-tinted zones — titanium/steel that ran hot during the breakup
+    // shows straw→blue oxidation. Adds warm/cool variety to the soot-grey.
+    for (let i = 0; i < 3; i++) {
+      const px = x + rand() * w, py = y + rand() * h;
+      const pr = w * (0.12 + rand() * 0.16);
+      const g = ctx.createRadialGradient(px, py, 0, px, py, pr);
+      // alternate between straw-gold heat tint and blue temper
+      if (rand() > 0.5) {
+        g.addColorStop(0, 'rgba(150,120,60,0.28)');
+      } else {
+        g.addColorStop(0, 'rgba(70,90,140,0.28)');
       }
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(px, py, pr, 0, Math.PI * 2); ctx.fill();
+    }
+    // Bright torn fracture edges (exposed bare metal) — bolder + with a dark
+    // shadow side so facets read 3D when zoomed.
+    for (let i = 0; i < 12; i++) {
+      let px = x + rand() * w, py = y + rand() * h;
+      const pts = [[px, py]];
+      for (let s = 0; s < 4; s++) {
+        px += (rand() - 0.5) * w * 0.18; py += (rand() - 0.5) * h * 0.18;
+        pts.push([px, py]);
+      }
+      // shadow first (offset), then bright highlight on top
+      ctx.strokeStyle = 'rgba(8,8,10,0.6)';
+      ctx.lineWidth = Math.max(1, w * 0.004);
+      ctx.beginPath(); ctx.moveTo(pts[0][0] + 2, pts[0][1] + 2);
+      for (let s = 1; s < pts.length; s++) ctx.lineTo(pts[s][0] + 2, pts[s][1] + 2);
+      ctx.stroke();
+      ctx.strokeStyle = 'rgba(220,222,232,0.7)';
+      ctx.lineWidth = Math.max(1, w * 0.003);
+      ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
+      for (let s = 1; s < pts.length; s++) ctx.lineTo(pts[s][0], pts[s][1]);
       ctx.stroke();
     }
     // Soot blotches

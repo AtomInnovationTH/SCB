@@ -73,6 +73,24 @@ const TYPE_LABELS = {
   fragment:      'FRAGMENT',
 };
 
+// Human-readable material names + a representative swatch colour for the
+// inspection readout, so the panel reflects the field's material variety
+// (silver hulls / dark composite / gold MLI / blue solar cells) at a glance.
+const MATERIAL_LABELS = {
+  aluminum:   'Aluminium',
+  titanium:   'Titanium',
+  composite:  'Composite',
+  mli_mylar:  'MLI Foil',
+  solar_cell: 'Solar Cell',
+};
+const MATERIAL_SWATCH = {
+  aluminum:   '#c8c8d2',
+  titanium:   '#8fa0ad',
+  composite:  '#4a4a4a',
+  mli_mylar:  '#e8c860',
+  solar_cell: '#3a52b0',
+};
+
 // ============================================================================
 // WIREFRAME SHAPE DATA — built once at module load (except fragment)
 // ============================================================================
@@ -1574,7 +1592,31 @@ export class DebrisWireframe {
       const tumbleDeg = ((t.tumbleRate || 0) * DEG).toFixed(1);
 
       ctx.fillText(`${label}  ${massStr}  ${sizeStr}`, WIRE_CX, infoY);
-      ctx.fillText(`Tumble: ${tumbleDeg}\u00B0/s  Mat: ${t.material || '?'}`, WIRE_CX, infoY + 12);
+
+      // Material readout with a friendly name + colour swatch so the panel
+      // communicates the field's new material variety at a glance.
+      const matKey = t.material;
+      const matName = MATERIAL_LABELS[matKey] || matKey || '?';
+      const tumbleLine = `Tumble: ${tumbleDeg}\u00B0/s   Mat: ${matName}`;
+      ctx.fillText(tumbleLine, WIRE_CX, infoY + 12);
+      const swatchColor = MATERIAL_SWATCH[matKey];
+      if (swatchColor && typeof ctx.measureText === 'function') {
+        // Place a small swatch just left of the material name. Measure so it
+        // sits next to "Mat: " regardless of the tumble value width.
+        ctx.save();
+        const prevAlign = ctx.textAlign;
+        const fullW = ctx.measureText(tumbleLine).width;
+        const nameW = ctx.measureText(matName).width;
+        const swX = WIRE_CX + fullW / 2 - nameW - 9;
+        ctx.fillStyle = swatchColor;
+        ctx.fillRect(swX, infoY + 6, 6, 6);
+        ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(swX, infoY + 6, 6, 6);
+        ctx.textAlign = prevAlign;
+        ctx.restore();
+        ctx.fillStyle = DIM_COLOR;
+      }
 
       // High-tumble warning
       if ((t.tumbleRate || 0) * DEG > 60) {
