@@ -52,7 +52,7 @@ export const TEACHING_MOMENTS = [
   {
     id: 'first_conjunction',
     title: 'Conjunction Warning',
-    body: 'Another object is on a close approach. The Collision Avoidance system will suggest a burn if needed.',
+    body: 'A "conjunction" means two objects are about to pass dangerously close. Your Collision Avoidance system will suggest a dodge burn if you need one.',
     duration: 7000,
     icon: '⚠️',
   },
@@ -66,7 +66,7 @@ export const TEACHING_MOMENTS = [
   {
     id: 'first_shop',
     title: 'The Workshop',
-    body: 'Spend resources to upgrade your satellite. TRL badges show technology maturity.',
+    body: 'Spend resources to upgrade your satellite. TRL badges (Technology Readiness Level) show how proven each upgrade is.',
     duration: 7000,
     icon: '🏪',
   },
@@ -80,14 +80,14 @@ export const TEACHING_MOMENTS = [
   {
     id: 'first_burn',
     title: 'Manual Burn',
-    body: 'Thrust changes your orbit. Watch the MFD — periapsis/apoapsis shift in real time.',
+    body: 'Thrusting changes your orbit. Watch the MFD (Multi-Function Display) — your orbit\'s high point (apoapsis) and low point (periapsis) shift in real time.',
     duration: 7000,
     icon: '🔥',
   },
   {
     id: 'first_kessler',
     title: 'Kessler Cascade',
-    body: 'A collision has spawned new debris. The situation is escalating — clear the field faster.',
+    body: 'A collision just spawned new debris — that\'s the start of a Kessler cascade, where wreckage breeds more wreckage. Clear the field faster before it snowballs.',
     duration: 8000,
     icon: '💥',
   },
@@ -115,14 +115,14 @@ export const TEACHING_MOMENTS = [
   {
     id: 'first_safe_mode',
     title: 'Safe Mode',
-    body: 'Multiple subsystems critical. Arms locked until repairs restore operations above 40%.',
+    body: 'Too many systems are critical, so the ship locked your arms to protect itself. Repair until they\'re above 40% to get them back.',
     duration: 8000,
     icon: '🔒',
   },
   {
     id: 'first_radiation',
     title: 'Radiation Belt',
-    body: 'Van Allen belt transit — expect sensor noise and comms latency. Minimize exposure time.',
+    body: 'You\'re crossing the Van Allen belt — a band of trapped radiation around Earth. Expect sensor static and laggy comms; don\'t linger.',
     duration: 8000,
     icon: '☢️',
   },

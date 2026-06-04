@@ -149,7 +149,7 @@ describe('OnboardingDirector — lifecycle (MISSION_START → trigger → advanc
       const commsEmits = eb._findEmits(Events.COMMS_MESSAGE);
       assert.ok(commsEmits.length >= 1, 'COMMS_MESSAGE must fire on beat post');
       const firstComms = commsEmits[0];
-      assert.equal(firstComms.payload.text, 'Use arrow keys to test attitude control.');
+      assert.equal(firstComms.payload.text, 'Cowboy, test your RCS (Reaction Control System — your steering thrusters) with the arrow keys.');
 
       const hintEmits = eb._findEmits(Events.HINT_POSTED);
       assert.ok(hintEmits.length >= 1, 'HINT_POSTED must fire on beat post');
@@ -173,7 +173,7 @@ describe('OnboardingDirector — lifecycle (MISSION_START → trigger → advanc
 
       // Houston ack message fires after satisfy.
       const ackEmits = eb._findEmits(Events.COMMS_MESSAGE);
-      const ack = ackEmits.find(e => e.payload.text === 'RCS nominal. Solar panels tracking sun.');
+      const ack = ackEmits.find(e => e.payload.text === 'RCS (steering thrusters) good. Solar panels tracking the sun.');
       assert.ok(ack, 'commsAck should be emitted');
 
       // Beat marked completed.
