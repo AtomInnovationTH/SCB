@@ -460,7 +460,7 @@ describe('CommsSystem – STATION_KEEP_ENTERED listener (§4 item 4)', () => {
     assert.equal(msg.source, 'Weaver-1');
     assert.equal(msg.channel, 'CMD');
     assert.ok(msg.text.includes('ON STATION'), 'text should say ON STATION');
-    assert.ok(msg.text.includes('8m standoff'), 'standoff should be rounded to 8');
+    assert.ok(msg.text.includes('holding 8m from'), 'standoff should be rounded to 8');
     assert.ok(msg.text.includes('#142'), 'targetId should appear');
     assert.ok(msg.text.includes('[N] capture'), 'should include N capture hint');
     assert.ok(msg.text.includes('[P] pilot'), 'should include P pilot hint');
@@ -486,7 +486,7 @@ describe('CommsSystem – STATION_KEEP_ENTERED listener (§4 item 4)', () => {
       { armId: 'Weaver-1', targetId: 42 },
       messages
     );
-    assert.ok(msg.text.includes('?m standoff'), 'missing standoff should show ?');
+    assert.ok(msg.text.includes('holding ?m from'), 'missing standoff should show ?');
   });
 
   it('SK_ENTERED without armId falls back to SYSTEM', () => {
