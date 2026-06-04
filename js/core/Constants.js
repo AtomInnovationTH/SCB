@@ -1712,22 +1712,19 @@ export const Constants = {
     D_TRAIL_TRAWL:   150,  // m — trawl sweep trailing centroid
     D_TRAIL_DEFAULT: 80,   // m — fallback when no tool recommendation
 
-    // --- In-reach rotate-only thresholds (metres) ---------------------------
+    // --- In-reach rotate-only thresholds ------------------------------------
     // When the debris is ALREADY within the active tool's capture reach there
     // is no need to translate (fly in) to the tight trailing point — the
     // mother only needs to ROTATE to point at the target and hold position.
-    // These are the maximum stand-off ranges from which each tool can engage:
+    // The per-tool reach is NOT duplicated here: AutopilotSystem._getToolReach()
+    // derives it directly from the canonical tool constants so retuning the
+    // tether length / projectile range automatically propagates:
     //   weaver  → WEAVER_TETHER_LENGTH  (2000 m tether)
     //   spinner → SPINNER_TETHER_LENGTH (500 m tether)
     //   lasso   → LASSO_RANGE           (200 m projectile range)
-    //   trawl   → TRAWL_RADIUS_KM        (50 m capture radius)
-    // Kept as named AP constants (rather than reaching into the per-tool
-    // blocks at the call-site) so the autopilot's reach policy is documented
-    // in one place and trivially tunable. See AutopilotSystem._getToolReach().
-    REACH_WEAVER:   2000,  // m — weaver tether length
-    REACH_SPINNER:   500,  // m — spinner tether length
-    REACH_LASSO:     200,  // m — lasso projectile range
-    REACH_TRAWL:      50,  // m — trawl capture radius
+    //   trawl   → D_TRAIL_TRAWL          (150 m sweep stand-off; ≥ trail so the
+    //             rotate-only optimization can engage rather than overflying it)
+    // Only the AP-owned policy values live here:
     REACH_DEFAULT:   200,  // m — conservative fallback when no tool recommendation
 
     // Hysteresis band around the reach boundary. Once inside REACH the
