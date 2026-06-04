@@ -248,6 +248,9 @@ export class GameOverScreen {
       <div style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(0,255,136,0.2);">
         Rating: <b style="color:#ffaa00;">${this._getRating(stats)}</b>
       </div>
+      <div style="margin-top:10px;padding-top:8px;border-top:1px solid rgba(0,255,136,0.15);font-size:0.85rem;color:#00ff88;">
+        Houston: That orbit's clear thanks to you. Take a breather, Cowboy — there's always another field of debris up there when you're ready. ★
+      </div>
     `;
 
     factEl.textContent = '🌍 ' + ADR_FACTS[Math.floor(Math.random() * ADR_FACTS.length)];

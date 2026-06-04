@@ -1557,6 +1557,10 @@ export class InputManager {
     const d = this._deps;
     if (!d.cameraSystem) return;
 
+    // Track whether this is a fresh entry into ARM_PILOT (vs. switching the
+    // piloted arm) so we only post the "how to get back" guidance once.
+    const wasPiloting = this.armPilotMode;
+
     // If already piloting a different arm, disable its manual mode
     if (this.armPilotMode) {
       const prevArm = d.cameraSystem.getPilotedArm();
@@ -1568,6 +1572,19 @@ export class InputManager {
     this.armPilotMode = true;
     if (arm.enableManual) arm.enableManual();
     d.cameraSystem.setPilotArm(arm);
+
+    // Unambiguous get-out guidance: in ARM_PILOT the V key does NOT toggle to
+    // Overview — it backs the camera out to Command view (and releases the
+    // daughter). New players can otherwise feel "stuck" piloting the daughter,
+    // so spell out the way home the moment they enter.
+    if (!wasPiloting) {
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        text: `Piloting ${arm.id}. Arrow keys fly it · press V to back out to Command view.`,
+        source: 'HOUSTON',
+        channel: 'CMD',
+        priority: 'info',
+      });
+    }
   }
 
   /**

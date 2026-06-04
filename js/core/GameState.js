@@ -134,6 +134,28 @@ class GameState {
   clearDebris() {
     this.debrisCleared += 1;
     eventBus.emit(Events.DEBRIS_CLEARED, { count: this.debrisCleared });
+
+    // Last-debris ceremony: escalating celebratory comms as the player closes
+    // out the field. `remaining` counts targets still needed to win. We guard
+    // each line so it fires at most once per game.
+    const remaining = Constants.WIN_DEBRIS_COUNT - this.debrisCleared;
+    if (remaining === 1 && !this._penultimateHailed) {
+      this._penultimateHailed = true;
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        text: 'One target left, Cowboy — bring it home.',
+        source: 'HOUSTON',
+        channel: 'CMD',
+        priority: 'info',
+      });
+    } else if (remaining <= 0 && !this._finalHailed) {
+      this._finalHailed = true;
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        text: "That's the last of it! Orbit's clean — outstanding work, Cowboy.",
+        source: 'HOUSTON',
+        channel: 'CMD',
+        priority: 'info',
+      });
+    }
   }
 
   /**
@@ -146,6 +168,8 @@ class GameState {
     this.debrisCleared = 0;
     this.missionTime = 0;
     this._winEmitted = false;  // S1 Fix L2: reset guard on new game
+    this._penultimateHailed = false; // last-debris ceremony guards
+    this._finalHailed = false;
   }
 }
 

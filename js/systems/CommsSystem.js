@@ -656,19 +656,29 @@ export class CommsSystem {
       this.addMessage('INFO', data?.armId || 'SYSTEM', 'Spring re-charged — ready for next deploy.', { channel: 'CMD' });
     });
 
-    // §4 item 4: STATION_KEEP_ENTERED → ON STATION comms with key hints
+    // §4 item 4: STATION_KEEP_ENTERED → ON STATION comms with key hints.
+    // New-player guidance: speak plainly about what the daughter is doing and
+    // exactly which keys move things forward. Capture is fired with [N] (the
+    // same key onboarding teaches for the net); [P] takes manual pilot control.
     eventBus.on(Events.STATION_KEEP_ENTERED, (data) => {
       const standoff = data?.standoffR != null ? Math.round(data.standoffR) : '?';
       const targetId = data?.targetId != null ? data.targetId : '?';
+      const armId = data?.armId || 'SYSTEM';
       // While piloting the arm, teach the station-keep orbit controls so the
       // player can inspect every side of the debris and line up a capture.
       // When the arm arrived under autopilot, point them at taking manual
-      // control (P) or capturing (F) instead.
+      // control (P) or capturing (N) instead.
       const hint = data?.isPiloted
-        ? 'Arrow keys orbit the debris · +/- adjust distance · [F] capture.'
-        : '[P] pilot for a closer look · [F] capture.';
-      this.addMessage('INFO', data?.armId || 'SYSTEM',
+        ? 'Arrow keys orbit the debris · +/- adjust distance · [N] capture.'
+        : '[N] capture · [P] pilot for a closer look.';
+      this.addMessage('INFO', armId,
         `ON STATION — ${standoff}m standoff on debris #${targetId}. ${hint}`,
+        { channel: 'CMD' });
+      // Plain-language follow-up for new players: name the daughter and spell
+      // out the next move in a friendly command voice.
+      const daughterName = data?.armId || 'your daughter';
+      this.addMessage('INFO', 'HOUSTON',
+        `${daughterName} is holding station on the debris. Press N to capture, or P to pilot it in closer.`,
         { channel: 'CMD' });
     });
   }
