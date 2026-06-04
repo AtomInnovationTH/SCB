@@ -160,9 +160,14 @@ const GUIDE_HOLD_S = 0.6;   // initial hold before the tour starts
 const FADE_RATE = 6.0;      // opacity ease rate (~165 ms to 63%) for band crossfades
 // Leader lines read as the *connection*, so keep them proportionally present
 // relative to their (lighter, smaller) label rather than as a vanishing hairline.
-const LINE_OP_FLOOR = 0.35; // min line opacity (× label op) once a label is visible
-const LINE_OP_SCALE = 0.85; // line opacity = labelOp * this (clamped to floor)
-const DECLUTTER_NDC = 0.055; // min vertical screen gap between labels (NDC units)
+const LINE_OP_FLOOR = 0.7;  // min line opacity (× label op) once a label is visible
+const LINE_OP_SCALE = 0.95; // line opacity = labelOp * this (clamped to floor)
+// Leader ribbon half-width as a fraction of camera→ship distance, so the leader
+// holds a steady on-screen thickness across the zoom bands instead of the 1px
+// hairline a LineBasicMaterial collapses to on most GPUs. ~0.0024 reads as a
+// clear ~3px connector at typical inspection range.
+const LINE_HALF_WIDTH_FRAC = 0.0024;
+const DECLUTTER_NDC = 0.072; // min vertical screen gap between labels (NDC units)
 
 export class MotherCallouts {
   /**
@@ -191,6 +196,18 @@ export class MotherCallouts {
     this._vFace = new THREE.Vector3();
     this._vCamDir = new THREE.Vector3();
     this._qTmp = new THREE.Quaternion();
+    // Ribbon-leader scratch (world-space endpoints + perpendicular).
+    this._rA = new THREE.Vector3();
+    this._rB = new THREE.Vector3();
+    this._rDir = new THREE.Vector3();
+    this._rView = new THREE.Vector3();
+    this._rPerp = new THREE.Vector3();
+    this._rC0 = new THREE.Vector3();
+    this._rC1 = new THREE.Vector3();
+    this._rC2 = new THREE.Vector3();
+    this._rC3 = new THREE.Vector3();
+    this._vCamLocal = new THREE.Vector3();   // camera position in player-local space
+    this._leaderHalfWidth = 0;               // local-space half-width for leader ribbons
 
     this._group = new THREE.Group();
     this._group.name = 'MotherCallouts';
@@ -237,13 +254,27 @@ export class MotherCallouts {
     return sprite;
   }
 
+  /**
+   * Build a leader as a thin, camera-facing ribbon (a 2-triangle quad) rather
+   * than a THREE.Line. LineBasicMaterial.linewidth is ignored by most WebGL
+   * drivers (clamped to 1px hairline), so the leader vanished against the
+   * heavier label text. A quad gives genuine, GPU-independent thickness without
+   * pulling in Line2/LineMaterial from the examples addons.
+   *
+   * Geometry is 4 vertices / 2 triangles; positions are rewritten each frame in
+   * {@link _setLineLocal} so the ribbon hugs the anchor→label segment and keeps
+   * a constant on-screen width regardless of zoom.
+   * @private
+   */
   _makeLine(color) {
     const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
-    const mat = new THREE.LineBasicMaterial({
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(12), 3)); // 4 verts
+    geo.setIndex([0, 1, 2, 0, 2, 3]);
+    const mat = new THREE.MeshBasicMaterial({
       color, transparent: true, opacity: 0.0, depthWrite: false, depthTest: false,
+      side: THREE.DoubleSide,
     });
-    const line = new THREE.Line(geo, mat);
+    const line = new THREE.Mesh(geo, mat);
     line.renderOrder = 29;
     line.frustumCulled = false;
     return line;
@@ -353,7 +384,15 @@ export class MotherCallouts {
     // Camera → ship distance in metres.
     this.player.getWorldPosition(this._vShip);
     this._vCam.copy(this.camera.position);
-    const distM = this._vCam.distanceTo(this._vShip) / M;
+    const distWorld = this._vCam.distanceTo(this._vShip);
+    const distM = distWorld / M;
+
+    // Camera position in player-local space, plus the leader ribbon half-width
+    // (scaled by distance → constant on-screen thickness). Both are consumed by
+    // _setLineLocal when it rebuilds each leader quad this frame.
+    this._vCamLocal.copy(this._vCam);
+    this.player.worldToLocal(this._vCamLocal);
+    this._leaderHalfWidth = distWorld * LINE_HALF_WIDTH_FRAC;
 
     this._updateBand(distM);
     this._updateGuide(dt);
@@ -465,10 +504,44 @@ export class MotherCallouts {
     sprite.position.set(offset[0], offset[1], offset[2]);
   }
 
+  /**
+   * Rewrite a leader ribbon's 4 corners so it spans fromLocal→toLocal as a thin
+   * camera-facing quad of (roughly) constant on-screen width.
+   *
+   * All math is done in player-LOCAL space (the ribbon mesh is a child of
+   * `_group`): we take the segment direction and the local view direction
+   * (segment-midpoint → camera, in local space), cross them for an in-view-plane
+   * perpendicular, and push the two endpoints ±halfWidth along it.
+   * @private
+   */
   _setLineLocal(line, fromLocal, toLocal, opacity, color) {
+    const a = this._rA.set(fromLocal[0], fromLocal[1], fromLocal[2]);
+    const b = this._rB.set(toLocal[0], toLocal[1], toLocal[2]);
+
+    // View direction in local space: from segment midpoint toward the camera.
+    // (this._vCamLocal is refreshed once per frame in update().)
+    this._rView.copy(this._vCamLocal)
+      .sub(this._rC0.copy(a).add(b).multiplyScalar(0.5));
+
+    this._rDir.copy(b).sub(a);
+    this._rPerp.copy(this._rDir).cross(this._rView);
+    if (this._rPerp.lengthSq() < 1e-30) {
+      // Degenerate (segment points straight at camera) — fall back to up-ish.
+      this._rPerp.set(0, 1, 0).cross(this._rDir);
+    }
+    this._rPerp.normalize().multiplyScalar(this._leaderHalfWidth || 0);
+
+    // Quad corners: a-side then b-side, wound CCW for the [0,1,2,0,2,3] index.
+    this._rC0.copy(a).add(this._rPerp);   // 0
+    this._rC1.copy(a).sub(this._rPerp);   // 1
+    this._rC2.copy(b).sub(this._rPerp);   // 2
+    this._rC3.copy(b).add(this._rPerp);   // 3
+
     const pos = line.geometry.attributes.position;
-    pos.setXYZ(0, fromLocal[0], fromLocal[1], fromLocal[2]);
-    pos.setXYZ(1, toLocal[0], toLocal[1], toLocal[2]);
+    pos.setXYZ(0, this._rC0.x, this._rC0.y, this._rC0.z);
+    pos.setXYZ(1, this._rC1.x, this._rC1.y, this._rC1.z);
+    pos.setXYZ(2, this._rC2.x, this._rC2.y, this._rC2.z);
+    pos.setXYZ(3, this._rC3.x, this._rC3.y, this._rC3.z);
     pos.needsUpdate = true;
     line.material.opacity = opacity;
     if (color !== undefined) line.material.color.set(color);
@@ -581,36 +654,49 @@ export class MotherCallouts {
 
   /**
    * Screen-space declutter: project visible labels to NDC and, where two would
-   * overlap vertically, nudge the lower one's local Y down a touch so stacked
-   * labels separate. Operates on local Y because labels are camera-billboarded
-   * sprites; a small local-Y push reads as vertical separation on screen.
+   * overlap vertically, nudge the lower one's local Y down so stacked labels
+   * separate. Operates on local Y because labels are camera-billboarded sprites;
+   * a small local-Y push reads as vertical separation on screen.
+   *
+   * Runs a few relaxation passes so chains of 3+ stacked labels (common on the
+   * fore cap where SENSORS / PAYLOAD / CAPTURE crowd together) fully fan out
+   * rather than just splitting the first colliding pair. The leader ribbon is
+   * rebuilt for each nudged label so it keeps tracking the moved text.
    * @private
    */
   _declutter() {
-    const items = [];
-    const all = [...this._systemLabels, ...this._partLabels];
-    for (const rec of all) {
-      if (!rec.sprite.visible) continue;
-      this._vTmp.copy(rec.sprite.position);
-      this.player.localToWorld(this._vTmp);
-      this._vTmp.project(this.camera);
-      if (this._vTmp.z > 1) continue;
-      items.push({ rec, x: this._vTmp.x, y: this._vTmp.y });
-    }
-    items.sort((a, b) => b.y - a.y); // top-down
-    for (let i = 1; i < items.length; i++) {
-      const a = items[i - 1], b = items[i];
-      const dx = Math.abs(a.x - b.x);
-      const dy = a.y - b.y;
-      if (dx < DECLUTTER_NDC * 3 && dy < DECLUTTER_NDC) {
-        // Push the lower label's local Y down a little so stacked labels split.
-        b.rec.sprite.position.y -= 0.18 * M;
-        // Keep the leader attached to the nudged label (far endpoint = index 1).
-        const lp = b.rec.line.geometry.attributes.position;
-        lp.setY(1, b.rec.sprite.position.y);
-        lp.needsUpdate = true;
-        b.y -= DECLUTTER_NDC; // approximate so subsequent comparisons use new pos
+    const NUDGE = 0.26 * M;   // local-Y push per overlap (was 0.18×M)
+    const PASSES = 3;
+    for (let pass = 0; pass < PASSES; pass++) {
+      const items = [];
+      const all = [...this._systemLabels, ...this._partLabels];
+      for (const rec of all) {
+        if (!rec.sprite.visible) continue;
+        this._vTmp.copy(rec.sprite.position);
+        this.player.localToWorld(this._vTmp);
+        this._vTmp.project(this.camera);
+        if (this._vTmp.z > 1) continue;
+        items.push({ rec, x: this._vTmp.x, y: this._vTmp.y });
       }
+      items.sort((a, b) => b.y - a.y); // top-down
+      let moved = false;
+      for (let i = 1; i < items.length; i++) {
+        const a = items[i - 1], b = items[i];
+        const dx = Math.abs(a.x - b.x);
+        const dy = a.y - b.y;
+        if (dx < DECLUTTER_NDC * 3 && dy < DECLUTTER_NDC) {
+          b.rec.sprite.position.y -= NUDGE;
+          // Rebuild the leader ribbon so it still reaches the nudged label.
+          this._setLineLocal(
+            b.rec.line, b.rec.def.anchor,
+            [b.rec.sprite.position.x, b.rec.sprite.position.y, b.rec.sprite.position.z],
+            b.rec.line.material.opacity, b.rec.line.material.color,
+          );
+          b.y -= DECLUTTER_NDC; // approximate so subsequent comparisons use new pos
+          moved = true;
+        }
+      }
+      if (!moved) break; // settled — skip remaining passes
     }
   }
 
