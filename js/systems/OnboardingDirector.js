@@ -52,8 +52,8 @@ export const ONBOARDING_BEATS = [
   },
   {
     id: 'arrows',
-    commsSource: 'HOUSTON', commsText: 'Use arrow keys to test attitude control.',
-    commsAck: 'RCS nominal. Solar panels tracking sun.',
+    commsSource: 'HOUSTON', commsText: 'Cowboy, test your RCS (Reaction Control System — your steering thrusters) with the arrow keys.',
+    commsAck: 'RCS (steering thrusters) good. Solar panels tracking the sun.',
     text: 'Test attitude control',
     glyph: '←→↑↓',
     keys: ['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'],
@@ -61,12 +61,12 @@ export const ONBOARDING_BEATS = [
     // Closest existing skill (Constants.SKILLS.CATALOG): nav_arrows.
     skillId: 'nav_arrows',
     credit: 10,
-    escalationText: 'Arrow keys rotate your spacecraft. Hold and release to point. RCS thrusters answer instantly.',
+    escalationText: 'The arrow keys fire your RCS (Reaction Control System) to rotate the ship. Hold and release to point — the thrusters respond instantly.',
   },
   {
     id: 'struts',
-    commsSource: 'HOUSTON', commsText: 'Deploy daughter struts to test arm rigging — comma and period keys.',
-    commsAck: 'Strut range 180° nominal.',
+    commsSource: 'HOUSTON', commsText: 'Now check your strut arms — the arms that hold your Daughter capture craft. Stow them with comma, deploy with period.',
+    commsAck: 'Strut arms swing the full 180° — good.',
     text: 'Stow / Deploy struts',
     glyph: ', .',
     keys: ['Comma','Period'],
@@ -172,7 +172,7 @@ export const ONBOARDING_BEATS = [
     // (showing a re-scan nudge) until contacts exist.
     requiresContacts: true,
     noContactNudge: 'No tracked contacts yet — reposition and scan again (S), or try a Wide scan (W).',
-    escalationText: 'Tab cycles through tracked debris by Time-to-Closest-Approach (TPI). If nothing cycles, scan again to reveal contacts.',
+    escalationText: 'Tab cycles through tracked debris, soonest-to-reach first. If nothing cycles, scan again to reveal contacts.',
   },
   {
     id: 'autopilot',

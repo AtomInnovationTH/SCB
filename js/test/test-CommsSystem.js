@@ -371,7 +371,7 @@ function simulateStationKeepEnteredListener(data, messages) {
   const onStation = simulateAddMessage(
     'INFO',
     armId,
-    `ON STATION — ${standoff}m standoff on debris #${targetId}. ${hint}`,
+    `ON STATION — holding ${standoff}m from debris #${targetId}. ${hint}`,
     { channel: 'CMD' },
     messages
   );

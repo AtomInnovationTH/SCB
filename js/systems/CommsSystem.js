@@ -135,25 +135,25 @@ const SPACE_WEATHER_TEMPLATES = [
   {
     priority: CommsPriority.CRITICAL,
     source: 'NOAA SWPC',
-    template: '⚠ Coronal Mass Ejection approaching. Enhanced radiation in {time} min. Seek Earth shadow for panel protection.',
+    template: '⚠ Solar storm (Coronal Mass Ejection) inbound in {time} min — a blast of radiation from the Sun. Duck into Earth\'s shadow to shield your panels.',
     effect: 'solarStorm',
   },
   {
     priority: CommsPriority.WARNING,
     source: 'NOAA SWPC',
-    template: 'Geomagnetic storm index Kp={kp}. Magnetic capture effectiveness +50% but orbit prediction accuracy -30%.',
+    template: 'Geomagnetic storm, strength Kp={kp} (how charged-up Earth\'s magnetic field is). Magnetic capture works +50% better, but orbit tracking is -30% less accurate.',
     effect: 'geoStorm',
   },
   {
     priority: CommsPriority.INFO,
     source: 'MISSION CTRL',
-    template: 'Entering Earth shadow. Duration: {dur} min. Battery power only.',
+    template: 'Heading into Earth\'s shadow for {dur} min — no sunlight, so you\'re on battery power. Go easy on the tools.',
     effect: 'eclipse',
   },
   {
     priority: CommsPriority.WARNING,
     source: 'NOAA SWPC',
-    template: 'Solar proton event detected. Solar panel degradation risk elevated for next {time} min.',
+    template: 'Burst of solar particles detected — your solar panels may wear down faster for the next {time} min.',
     effect: 'solarProton',
   },
 ];
@@ -163,17 +163,17 @@ const KESSLER_TEMPLATES = [
   {
     priority: CommsPriority.CRITICAL,
     source: 'Space Domain Awareness',
-    template: '⚠ CRITICAL: Collision detected at {alt}km. {count} new debris fragments generated. Updating catalog.',
+    template: '⚠ CRITICAL: Collision at {alt}km just shattered into {count} new debris pieces. Adding them to the catalog now.',
   },
   {
     priority: CommsPriority.WARNING,
     source: 'NORAD',
-    template: 'Conjunction risk 1 in {odds} between {obj1} and {obj2} in {hours} hours.',
+    template: 'Close call ahead (a "conjunction"): {obj1} and {obj2} have a 1-in-{odds} chance of colliding in {hours} hours. Steer clear of that area.',
   },
   {
     priority: CommsPriority.WARNING,
     source: '18th Space Defense Squadron',
-    template: 'Debris cloud expanding at {alt}km. Recommend avoidance maneuver if orbital altitude matches.',
+    template: 'Debris cloud spreading out at {alt}km. If you\'re flying near that altitude, move clear.',
   },
 ];
 
@@ -182,22 +182,22 @@ const LAUNCH_TEMPLATES = [
   {
     priority: CommsPriority.INFO,
     source: 'LAUNCH ALERT',
-    template: 'Rocket Lab Electron, T-{time} min. Debris corridor: {alt}km, {inc}° inclination. Maintain clearance.',
+    template: 'Rocket Lab Electron launching in {time} min. It\'ll pass through {alt}km at {inc}° — keep your distance from that lane.',
   },
   {
     priority: CommsPriority.INFO,
     source: 'LAUNCH ALERT',
-    template: 'SpaceX Starlink deployment. {count} objects releasing at {alt}km. Stand by for catalog update.',
+    template: 'SpaceX is releasing {count} Starlink satellites at {alt}km. New objects coming to your catalog shortly.',
   },
   {
     priority: CommsPriority.INFO,
     source: 'LAUNCH ALERT',
-    template: 'Soyuz launch from Baikonur. Ascent corridor: {alt}km, {inc}° inclination. Window: {time} min.',
+    template: 'Soyuz lifting off from Baikonur. Its climb passes through {alt}km at {inc}° over the next {time} min — give it room.',
   },
   {
     priority: CommsPriority.WARNING,
     source: 'LAUNCH ALERT',
-    template: 'URGENT: Falcon 9 second stage disposal imminent at {alt}km. Clear debris corridor.',
+    template: 'URGENT: A spent Falcon 9 rocket stage is about to be dumped at {alt}km. Clear that lane now.',
   },
 ];
 
@@ -206,27 +206,27 @@ const MISSION_TEMPLATES = [
   {
     priority: CommsPriority.INFO,
     source: 'GROUND STN',
-    template: 'Target {target} tumble rate updated to {tumble}°/s. Recommend laser detumble first.',
+    template: '{target} is spinning at {tumble}°/s. Hit it with the laser first to slow the spin (detumble) — makes it far easier to grab.',
   },
   {
     priority: CommsPriority.INFO,
     source: 'LeoLabs',
-    template: 'Characterization data received for {target}. Bonus +50 points.',
+    template: 'Got your scan data on {target}, thanks. Bonus +50 points.',
   },
   {
     priority: CommsPriority.WARNING,
     source: 'ClearSpace',
-    template: 'Contract update: Priority capture requested at {alt}km. Bonus multiplier ×2 active.',
+    template: 'New contract: priority pickup at {alt}km. Capture there and your points are doubled (×2).',
   },
   {
     priority: CommsPriority.INFO,
     source: 'GROUND STN',
-    template: 'Telemetry nominal. All systems green. Continue operations.',
+    template: 'Telemetry looks good — all systems green. Carry on, Cowboy.',
   },
   {
     priority: CommsPriority.INFO,
     source: 'ESOC',
-    template: 'Orbital decay detected on {target}. Natural re-entry in {days} days if uncaptured.',
+    template: '{target} is slowly falling out of orbit — it\'ll burn up on re-entry in {days} days if you don\'t grab it first.',
   },
 ];
 
@@ -235,27 +235,27 @@ const PLAYER_STATUS_TEMPLATES = {
   lowXenon: {
     priority: CommsPriority.WARNING,
     source: 'SPACECRAFT',
-    template: 'Warning: Xenon reserves below {pct}%. Consider resupply at orbital depot.',
+    template: 'Heads up: your xenon thruster fuel is below {pct}%. Refuel at an orbital depot when you can.',
   },
   lowColdGas: {
     priority: CommsPriority.WARNING,
     source: 'SPACECRAFT',
-    template: 'Cold gas reserves low: {val} units remaining. Limit evasive maneuvers.',
+    template: 'Cold-gas thruster fuel running low: {val} units left. Save it for dodging — go easy on quick maneuvers.',
   },
   lowBattery: {
     priority: CommsPriority.WARNING,
     source: 'SPACECRAFT',
-    template: 'Battery level critical: {pct}%. Reduce tool usage. Seek sunlight.',
+    template: 'Battery critical at {pct}%! Ease off the tools and get into sunlight to recharge.',
   },
   debrisCleared: {
     priority: CommsPriority.INFO,
     source: 'HOUSTON',
-    template: 'Achievement: {count} debris objects cleared! Space environment stability +{stability}%.',
+    template: 'Nice — {count} debris objects cleared! Orbit is {stability}% safer thanks to you.',
   },
   evasionPerformed: {
     priority: CommsPriority.WARNING,
     source: 'SPACECRAFT',
-    template: 'Collision avoidance maneuver performed. {name} passed at {dist}m.',
+    template: 'Dodge complete — {name} slipped by at {dist}m. Nicely flown.',
   },
 };
 
@@ -264,34 +264,34 @@ const FLAVOR_MESSAGES = [
   { source: 'HOUSTON', text: 'Orbital environment looking good. Keep up the great work, Cowboy.' },
   { source: 'MISSION CTRL', text: 'Sun transit in 12 minutes. Optimal solar charging window approaching.' },
   { source: 'GROUND STN', text: 'Next ground contact window: Svalbard station in 8 minutes.' },
-  { source: 'SDA', text: 'Atmospheric drag models updated. Low-altitude debris decay rates revised upward.' },
+  { source: 'SDA', text: 'Drag estimates updated — low-altitude debris is falling out of orbit a bit faster than expected.' },
   { source: 'HOUSTON', text: 'Reminder: Document all capture operations for post-mission analysis.' },
   { source: 'ESOC', text: 'ESA Space Sustainability Index updated. Your contributions noted.' },
   { source: 'NORAD', text: 'Routine catalog maintenance complete. 347 objects re-correlated.' },
   { source: 'GROUND STN', text: 'Magnetic field measurements nominal. Proceeding with scheduled survey.' },
-  { source: 'JAXA', text: 'Cooperative tracking data received. Shared catalog now includes Asian sector objects.' },
+  { source: 'JAXA', text: 'Japan shared their tracking data — your catalog now covers the Asian sector too.' },
   { source: 'HOUSTON', text: 'Weather report: Clear skies over recovery zone. Good conditions for de-orbit operations.' },
   { source: 'LeoLabs', text: 'New radar track: Uncatalogued object detected at 620km. Adding to survey queue.' },
   { source: 'MISSION CTRL', text: 'Crew activity report filed. All mission objectives on track.' },
   { source: 'SDA', text: 'Space fence detection: Small debris cluster at 780km altitude. Monitoring.' },
   { source: 'HOUSTON', text: 'Thermal model updated. Spacecraft temperatures within nominal range.' },
-  { source: 'GROUND STN', text: 'Signal-to-noise ratio excellent. Maintaining high-bandwidth downlink.' },
+  { source: 'GROUND STN', text: 'Signal is crystal clear — keeping your data link running at full speed.' },
 ];
 
 // === ST-8.4: ISRO Ground Station Personas ===
 const BANGALORE_TEMPLATES = [
-  { source: 'BANGALORE', text: 'ISTRAC Bangalore AOS — tracking {target}, signal nominal', priority: 'INFO' },
-  { source: 'BANGALORE', text: 'Bangalore confirms orbit determination, {orbits} orbits to intercept window', priority: 'INFO' },
-  { source: 'BANGALORE', text: 'ISTRAC TTC: telemetry stream healthy, all subsystems nominal', priority: 'INFO' },
-  { source: 'BANGALORE', text: 'Bangalore handover: transferring tracking to {nextStation}', priority: 'INFO' },
-  { source: 'BANGALORE', text: 'ISTRAC Bangalore: debris radar cross-section consistent with catalog entry', priority: 'INFO' },
+  { source: 'BANGALORE', text: 'ISTRAC Bangalore here — we\'ve got you on our antenna, tracking {target}, signal good.', priority: 'INFO' },
+  { source: 'BANGALORE', text: 'Bangalore confirms your orbit — {orbits} orbits until your intercept window opens.', priority: 'INFO' },
+  { source: 'BANGALORE', text: 'Bangalore: your telemetry stream is healthy, all systems looking good.', priority: 'INFO' },
+  { source: 'BANGALORE', text: 'Bangalore handing your tracking over to {nextStation} as you pass out of range.', priority: 'INFO' },
+  { source: 'BANGALORE', text: 'Bangalore: that debris matches its catalog entry on radar. Confirmed.', priority: 'INFO' },
 ];
 
 const HASSAN_TEMPLATES = [
-  { source: 'HASSAN', text: 'MCF Hassan: GEO target acquired on 32m dish', priority: 'INFO' },
-  { source: 'HASSAN', text: 'Hassan deep-space: signal locked, round-trip {rtDelay}ms', priority: 'INFO' },
-  { source: 'HASSAN', text: 'MCF confirms orbit-raise maneuver complete, circularizing', priority: 'INFO' },
-  { source: 'HASSAN', text: 'Hassan tracking: GEO approach corridor confirmed clear', priority: 'INFO' },
+  { source: 'HASSAN', text: 'Hassan station: locked onto your far-off (geostationary) target with our big 32m dish.', priority: 'INFO' },
+  { source: 'HASSAN', text: 'Hassan: signal locked. You\'re so far out the radio round-trip is {rtDelay}ms.', priority: 'INFO' },
+  { source: 'HASSAN', text: 'Hassan confirms your orbit-raise burn is done — rounding out your orbit now.', priority: 'INFO' },
+  { source: 'HASSAN', text: 'Hassan tracking: your approach lane to the high orbit is clear.', priority: 'INFO' },
 ];
 
 const HANDOFF_DIALOGUE = [
@@ -553,7 +553,7 @@ export class CommsSystem {
       this.addMessage(
         CommsPriority.CRITICAL,
         'SPACECRAFT',
-        `⚡ Emergency evasion! ${data.name} at ${(data.distance / Constants.SCENE_SCALE * 1000).toFixed(0)}m. Cold gas expended.`
+        `⚡ Emergency dodge! ${data.name} at ${(data.distance / Constants.SCENE_SCALE * 1000).toFixed(0)}m. Burned some cold-gas thruster fuel to get clear.`
       );
     });
 
@@ -564,7 +564,7 @@ export class CommsSystem {
         this.addMessage(
           CommsPriority.INFO,
           'HOUSTON',
-          `Milestone reached: ${data.debrisCleared} debris objects remediated. Score: ${data.total.toLocaleString()}. Outstanding work.`
+          `Milestone reached: ${data.debrisCleared} debris objects cleared. Score: ${data.total.toLocaleString()}. Outstanding work.`
         );
       }
     });
@@ -575,7 +575,7 @@ export class CommsSystem {
       this.addMessage(
         CommsPriority.INFO,
         'GROUND STN',
-        `Capture confirmed. Object secured. +${data.points} points. Catalog updated.`
+        `Capture confirmed — object secured. +${data.points} points. Catalog updated.`
       );
     });
 
@@ -584,7 +584,7 @@ export class CommsSystem {
       this.addMessage(
         CommsPriority.INFO,
         'SDA',
-        `Deorbit burn successful. Object on re-entry trajectory. +${data.points} points.`
+        `Deorbit burn good — that object is now headed down to burn up in the atmosphere. +${data.points} points.`
       );
     });
 
@@ -598,7 +598,7 @@ export class CommsSystem {
       this.addMessage(
         CommsPriority.INFO,
         'CMD',
-        `FEEP switched to ${data.metal} — ISP ${sign}${ispPct}%`
+        `Ion thruster (FEEP) now running on ${data.metal} — fuel efficiency ${sign}${ispPct}%`
       );
     });
 
@@ -641,7 +641,7 @@ export class CommsSystem {
 
     // §4 item 2: TETHER_SNAP → CRITICAL comms + ALERT channel (BUG-C fix)
     eventBus.on(Events.TETHER_SNAP, (data) => {
-      this.addMessage('CRITICAL', data?.armId || 'SYSTEM', 'TETHER SEVERED — arm lost. Payload jettisoned. Reload not possible.', { channel: 'ALERT' });
+      this.addMessage('CRITICAL', data?.armId || 'SYSTEM', 'TETHER SNAPPED — that arm and its catch are lost, and it can\'t be reloaded.', { channel: 'ALERT' });
     });
 
     // §4 item 3: ARM_RETURNED (captured) → Docking comms
@@ -672,7 +672,7 @@ export class CommsSystem {
         ? 'Arrow keys orbit the debris · +/- adjust distance · [N] capture.'
         : '[N] capture · [P] pilot for a closer look.';
       this.addMessage('INFO', armId,
-        `ON STATION — ${standoff}m standoff on debris #${targetId}. ${hint}`,
+        `ON STATION — holding ${standoff}m from debris #${targetId}. ${hint}`,
         { channel: 'CMD' });
       // Plain-language follow-up for new players: name the daughter and spell
       // out the next move in a friendly command voice.
