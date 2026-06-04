@@ -214,6 +214,9 @@ import './test-NetInventoryPanel.js';
 // Differential FEEP plume firing — per-nozzle attitude rotation mapping
 import './test-DifferentialThrust.js';
 
+// Guidance/onboarding §4: mother-initiated reel-in of stuck / out-of-fuel daughters
+import './test-ArmUnit-recall-reel.js';
+
 // Flush any pending async describes, then print summary
 await Promise.resolve();
 summary();

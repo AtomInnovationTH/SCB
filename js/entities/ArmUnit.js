@@ -1004,8 +1004,17 @@ export class ArmUnit {
 
   /**
    * Recall this arm (abort mission, return to core).
+   *
+   * @param {object} [opts]
+   * @param {boolean} [opts.motherInitiated=false] — true when the recall is
+   *   commanded from the mothership (bare-R / recallClosestDeployed) rather than
+   *   from the daughter's own FEEP burn. When mother-initiated, the mothership's
+   *   strut/tether reel motor pulls the daughter home for free, so a daughter
+   *   that is out of fuel or stuck is still reeled in (REELING, zero-fuel)
+   *   instead of being abandoned as EXPENDED.
    */
-  recall() {
+  recall(opts = {}) {
+    const motherInitiated = opts && opts.motherInitiated === true;
     if (this.state === S.DOCKED || this.state === S.EXPENDED) return;
 
     // Detached arms cannot be recalled — tether severed
@@ -1027,7 +1036,21 @@ export class ArmUnit {
     // If other states, transition to REELING (zero-fuel return)
     if (this.state === S.REELING || this.state === S.RETURNING) return;
 
-    if (this.fuel <= 2) {
+    // STATION_KEEP has its own bookkeeping (the SK target flag, orbit rates,
+    // polar-axis cache). Route through the dedicated zero-fuel strut reel so it
+    // is torn down cleanly rather than left dangling on the captured debris.
+    if (this.state === S.STATION_KEEP) {
+      this.capturedDebris = null;
+      this.target = null;
+      this.reelFromStationKeep();
+      eventBus.emit(Events.ARM_RECALLED, { armId: this.id });
+      return;
+    }
+
+    // Mother-initiated recall: the strut/tether reel motor lives on the
+    // mothership, so even a fuel-depleted or stuck daughter can be reeled home
+    // for free. Prefer that zero-fuel path over abandoning the daughter.
+    if (this.fuel <= 2 && !motherInitiated) {
       this._transitionTo(S.EXPENDED);
       eventBus.emit(Events.COMMS_MESSAGE, {
         text: `${this.id}: Insufficient fuel to return — expended`,
@@ -1035,10 +1058,21 @@ export class ArmUnit {
       });
       return;
     }
+    const reelingHomeOnTether = this.fuel <= 2 && motherInitiated;
     this.capturedDebris = null;
     this.target = null;
     // V5: Use REELING for zero-fuel return instead of RETURNING
     this._transitionTo(S.REELING);
+    if (reelingHomeOnTether) {
+      // Plain-language reassurance: the mother is hauling a stranded daughter
+      // home on the tether (no propellant needed).
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        text: `Reeling ${this.id} home on the tether.`,
+        source: 'HOUSTON',
+        channel: 'CMD',
+        priority: 'info',
+      });
+    }
     eventBus.emit(Events.ARM_RECALLED, { armId: this.id });
   }
 

@@ -3,6 +3,9 @@
  */
 import { describe, it, assert } from './TestRunner.js';
 import { gameState, GameStates } from '../core/GameState.js';
+import { eventBus } from '../core/EventBus.js';
+import { Events } from '../core/Events.js';
+import { Constants } from '../core/Constants.js';
 
 // ── State Transitions ──────────────────────────────────────────
 describe('GameState - State Transitions', () => {
@@ -109,5 +112,52 @@ describe('GameState - Score & Debris', () => {
         assert.equal(gameState.debrisCleared, 0);
         assert.equal(gameState.missionTime, 0);
         assert.equal(gameState.getState(), GameStates.MENU);
+    });
+});
+
+// ── Last-debris ceremony comms ─────────────────────────────────
+describe('GameState - last-debris ceremony comms', () => {
+    /** Capture COMMS_MESSAGE while running fn(). */
+    function captureComms(fn) {
+        const msgs = [];
+        const unsub = eventBus.on(Events.COMMS_MESSAGE, (d) => msgs.push(d));
+        try { fn(); } finally { unsub(); }
+        return msgs;
+    }
+
+    it('penultimate clear (one target left) posts the "One target left" hail once', () => {
+        gameState.reset();
+        // Bring the count to two-from-win without triggering ceremony lines.
+        gameState.debrisCleared = Constants.WIN_DEBRIS_COUNT - 2;
+        // Clearing now leaves exactly 1 remaining.
+        const msgs = captureComms(() => gameState.clearDebris());
+        const hail = msgs.find(m => m.text && m.text.includes('One target left'));
+        assert.ok(hail, 'posts the penultimate hail');
+        assert.equal(hail.source, 'HOUSTON');
+        // Clearing the SAME penultimate threshold again must not re-fire.
+        gameState.debrisCleared = Constants.WIN_DEBRIS_COUNT - 2;
+        const again = captureComms(() => gameState.clearDebris());
+        assert.equal(again.find(m => m.text && m.text.includes('One target left')), undefined,
+            'penultimate hail fires at most once per game');
+    });
+
+    it('final clear posts the "last of it" celebration once', () => {
+        gameState.reset();
+        gameState.debrisCleared = Constants.WIN_DEBRIS_COUNT - 1;
+        const msgs = captureComms(() => gameState.clearDebris());
+        const hail = msgs.find(m => m.text && m.text.includes('last of it'));
+        assert.ok(hail, 'posts the final celebration');
+        assert.equal(hail.source, 'HOUSTON');
+    });
+
+    it('reset re-arms both ceremony hails for a new game', () => {
+        gameState.reset();
+        gameState.debrisCleared = Constants.WIN_DEBRIS_COUNT - 1;
+        gameState.clearDebris(); // fires final
+        gameState.reset();
+        gameState.debrisCleared = Constants.WIN_DEBRIS_COUNT - 1;
+        const msgs = captureComms(() => gameState.clearDebris());
+        assert.ok(msgs.find(m => m.text && m.text.includes('last of it')),
+            'final celebration fires again after reset');
     });
 });

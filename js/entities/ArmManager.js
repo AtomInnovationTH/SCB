@@ -800,7 +800,10 @@ export class ArmManager {
 
     const target = this.arms[bestIdx];
     if (target && typeof target.recall === 'function') {
-      target.recall();
+      // Mother-initiated recall: pull the daughter home on the strut/tether
+      // reel motor (zero-fuel) so a stuck or fuel-depleted daughter is still
+      // reeled in rather than abandoned as EXPENDED.
+      target.recall({ motherInitiated: true });
       return bestIdx;
     }
     return null;

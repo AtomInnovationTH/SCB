@@ -364,13 +364,27 @@ function simulateReloadCompleteListener(data, messages) {
 function simulateStationKeepEnteredListener(data, messages) {
   const standoff = data?.standoffR != null ? Math.round(data.standoffR) : '?';
   const targetId = data?.targetId != null ? data.targetId : '?';
-  return simulateAddMessage(
+  const armId = data?.armId || 'SYSTEM';
+  const hint = data?.isPiloted
+    ? 'Arrow keys orbit the debris · +/- adjust distance · [N] capture.'
+    : '[N] capture · [P] pilot for a closer look.';
+  const onStation = simulateAddMessage(
     'INFO',
-    data?.armId || 'SYSTEM',
-    `ON STATION — ${standoff}m standoff on debris #${targetId}. [V] view · [F] capture.`,
+    armId,
+    `ON STATION — ${standoff}m standoff on debris #${targetId}. ${hint}`,
     { channel: 'CMD' },
     messages
   );
+  // Plain-language follow-up (new-player guidance).
+  const daughterName = data?.armId || 'your daughter';
+  simulateAddMessage(
+    'INFO',
+    'HOUSTON',
+    `${daughterName} is holding station on the debris. Press N to capture, or P to pilot it in closer.`,
+    { channel: 'CMD' },
+    messages
+  );
+  return onStation;
 }
 
 describe('CommsSystem – TETHER_SNAP listener (§4 item 2)', () => {
@@ -448,8 +462,22 @@ describe('CommsSystem – STATION_KEEP_ENTERED listener (§4 item 4)', () => {
     assert.ok(msg.text.includes('ON STATION'), 'text should say ON STATION');
     assert.ok(msg.text.includes('8m standoff'), 'standoff should be rounded to 8');
     assert.ok(msg.text.includes('#142'), 'targetId should appear');
-    assert.ok(msg.text.includes('[V] view'), 'should include V hint');
-    assert.ok(msg.text.includes('[F] capture'), 'should include F hint');
+    assert.ok(msg.text.includes('[N] capture'), 'should include N capture hint');
+    assert.ok(msg.text.includes('[P] pilot'), 'should include P pilot hint');
+  });
+
+  it('SK_ENTERED posts a plain-language follow-up naming the daughter', () => {
+    const messages = [];
+    simulateStationKeepEnteredListener(
+      { armId: 'Weaver-1', standoffR: 8.3, targetId: 142 },
+      messages
+    );
+    const followUp = messages.find(m =>
+      m.source === 'HOUSTON' && m.text.includes('holding station'));
+    assert.ok(followUp, 'a plain-language HOUSTON follow-up should be posted');
+    assert.ok(followUp.text.includes('Weaver-1'), 'follow-up names the daughter');
+    assert.ok(followUp.text.includes('Press N to capture'), 'tells player to press N');
+    assert.ok(followUp.text.includes('P to pilot'), 'tells player to press P');
   });
 
   it('SK_ENTERED with missing standoffR renders ? placeholder', () => {
