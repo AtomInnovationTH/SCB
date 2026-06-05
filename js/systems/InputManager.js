@@ -448,6 +448,18 @@ export class InputManager {
       eventBus.emit(Events.TUTORIAL_ARROW_INPUT);
     }
 
+    // --- Hotkey reference overlay intercept — while the shortcut list is open,
+    //     only ? (Slash, toggles closed) does anything; ESC is handled by the
+    //     overlay's own capture-phase listener. Block all other gameplay keys. ---
+    if (d.hotkeyOverlay && d.hotkeyOverlay.isVisible()) {
+      if (e.code === 'Slash') {
+        d.hotkeyOverlay.toggle();
+        d.audioSystem?.playClick();
+        e.preventDefault();
+      }
+      return;
+    }
+
     // --- F17: Codex overlay intercept — suppress all input except L (toggle) and ESC (close) ---
     if (d.codexViewerUI && d.codexViewerUI.isVisible()) {
       if (e.code === 'KeyL') {
@@ -1465,6 +1477,17 @@ export class InputManager {
           e.preventDefault();
         }
         break;
+
+      // --- ? (Slash) — Toggle the grouped keyboard-shortcut reference overlay.
+      //     Backquote (~) is already the Debris Map toggle, so the help list
+      //     uses the conventional "?" key instead. ---
+      case 'Slash':
+        if (isGameplay && d.hotkeyOverlay && !e.repeat) {
+          d.hotkeyOverlay.toggle();
+          d.audioSystem?.playClick();
+          e.preventDefault();
+        }
+        break;
     }
   }
 
@@ -1638,6 +1661,9 @@ export class InputManager {
 
     // F17: Suppress continuous input while codex overlay is open
     if (d.codexViewerUI && d.codexViewerUI.isVisible()) return;
+
+    // Suppress continuous input while the hotkey reference overlay is open
+    if (d.hotkeyOverlay && d.hotkeyOverlay.isVisible()) return;
 
     // Suppress continuous input while debris map is open
     if (d.debrisMap && d.debrisMap.isVisible()) return;

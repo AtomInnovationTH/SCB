@@ -300,12 +300,16 @@ export class PlayerSatellite extends THREE.Group {
       color: 0x5c5c64, metalness: 0.7, roughness: 0.55,
     });
     this._matGoldMLI = new THREE.MeshStandardMaterial({
-      // MLI thermal blanket — warm amber/orange foil, shiny so it catches
-      // specular glints (real MLI is crinkled, iridescent, not flat matte
-      // yellow). Low roughness + a faint emissive warmth keeps it reading as
-      // gold foil even on the shadowed side (the scene has near-zero ambient).
-      color: 0xc8923a, metalness: 0.85, roughness: 0.28,
-      emissive: 0x3a2408, emissiveIntensity: 0.10,
+      // MLI thermal blanket — warm gold foil, shiny so it catches specular
+      // glints (real MLI is crinkled, iridescent, not flat matte yellow).
+      // Base color is a bright gold (not dark orange) so the foil reads gold
+      // under the sun at ANY distance — it must NOT depend on the camera fill
+      // light (CameraSystem ~100 m range), otherwise it goes dark-orange far
+      // away and only turns gold up close. Low roughness + a lifted emissive
+      // warmth keeps it reading as gold on the shadowed side too (the scene
+      // has near-zero ambient light).
+      color: 0xd6a43e, metalness: 0.85, roughness: 0.28,
+      emissive: 0x4a3008, emissiveIntensity: 0.16,
     });
     this._matDark = new THREE.MeshStandardMaterial({
       color: 0x222233, metalness: 0.6, roughness: 0.4,
@@ -2489,8 +2493,8 @@ export class PlayerSatellite extends THREE.Group {
       this._matBody.emissive.setHex(0x00aaff);     // cyan scan glow
       this._matBody.emissiveIntensity = t * 0.6;    // peak 0.6, fade to 0
       if (done) {
-        this._matBody.emissive.setHex(0x3a2408);    // gold MLI build default (_matGoldMLI)
-        this._matBody.emissiveIntensity = 0.10;
+        this._matBody.emissive.setHex(0x4a3008);    // gold MLI build default (_matGoldMLI)
+        this._matBody.emissiveIntensity = 0.16;
       }
     }
     if (this._cellSkinMats) {

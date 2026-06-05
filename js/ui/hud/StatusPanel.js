@@ -4,7 +4,7 @@
  * @module ui/hud/StatusPanel
  */
 
-import { Constants, trlToLabel } from '../../core/Constants.js';
+import { Constants } from '../../core/Constants.js';
 import { eventBus } from '../../core/EventBus.js';
 import { Events } from '../../core/Events.js';
 import { powerDistribution } from '../../systems/PowerDistribution.js';
@@ -12,22 +12,15 @@ import { tetherReel } from '../../systems/TetherReel.js';
 import { BridleRing } from '../../entities/BridleRing.js';
 import { PaneChrome } from './PaneChrome.js';
 
-// ST-6.6: Active-tool → NASA TRL mapping. Display-only metadata.
-// Keyed by InputManager CONTROL_MODE identifiers. See BIG_PICTURE.md §25.
-const _TOOL_TRL = {
-  'RCS':       { trl: 9, label: 'Hydrazine/cold-gas RCS — flight-proven since 1960s' },
-  'COLD_GAS':  { trl: 9, label: 'Cold-gas thrusters — flight-proven since 1960s' },
-  'ARM_PILOT': { trl: 2, label: 'Crossbow arm piloting — game-speculative; no flight heritage' },
-  'MPD_BURST': { trl: 4, label: 'MPD thruster — lab-tested at NASA Glenn & JAXA; not yet flown' },
-};
-
-/** S4: Control mode display configuration (label + colors per mode) */
-const _MODE_DISPLAY = {
-  'RCS':       { label: 'RCS',       color: '#00ff88', bg: 'rgba(0,255,136,0.15)', border: 'rgba(0,255,136,0.4)' },
-  'COLD_GAS':  { label: 'COLD GAS',  color: '#4fc3f7', bg: 'rgba(79,195,247,0.15)', border: 'rgba(79,195,247,0.4)' },
-  'ARM_PILOT': { label: 'ARM PILOT', color: '#ff8800', bg: 'rgba(255,136,0,0.15)',   border: 'rgba(255,136,0,0.4)' },
-  'MPD_BURST': { label: 'MPD BURST', color: '#ff44ff', bg: 'rgba(255,68,255,0.15)',  border: 'rgba(255,68,255,0.4)' },
-};
+// ST-6.6: Active-tool → NASA TRL metadata used to live here, feeding a
+// bottom-center "RCS / COLD GAS / MPD BURST / ARM PILOT" control-mode badge.
+// Removed (2026-06-05): the mothership flies on autopilot by default and is
+// steered with the arrow keys — WASD/RCS attitude modes are not part of the
+// player-facing core loop, so a permanent centre-screen jargon badge only
+// distracted new pilots. The CONTROL_MODE_CHANGE event itself is retained
+// (CollisionAvoidanceSystem + CodexSystem consume it); only the HUD widget is
+// gone. Mode/tool meaning, where it matters, is conveyed in plain-language
+// comms instead.
 
 /**
  * Short label for each trailing-rendezvous phase. Matches
@@ -58,7 +51,6 @@ export class StatusPanel {
     this._autopilotPhase = 'OFF'; // Trailing-rendezvous phase (F15.1)
     this._mpdUnlocked = false;   // F16: MPD thruster unlocked flag
     this._mpdArmed = false;      // S3b: MPD burst mode state
-    this._controlMode = 'RCS';   // S4: current WASD control mode
 
     // V5: Crossbow arm HUD state
     this._tetherTensions = {};          // {armIndex: fraction} — cached from events
@@ -151,12 +143,6 @@ export class StatusPanel {
     eventBus.on(Events.MPD_BURST_END, () => {
       this._mpdArmed = false;
       this._updateMPDBurstDisplay();
-    });
-
-    // S4: Control mode indicator — update when WASD routing changes
-    eventBus.on(Events.CONTROL_MODE_CHANGE, (data) => {
-      this._controlMode = data.mode || 'RCS';
-      this._updateControlModeIndicator();
     });
 
     // V5: Tether tension per-arm updates
@@ -321,20 +307,11 @@ export class StatusPanel {
       </div>
     `;
 
-    // --- Control-mode indicator (bottom-center, near the reticle focal zone) ---
-    // Relocated out of the top stats bar: live flight state belongs where the
-    // player is already looking. Also body-mounted + high z-index so the reticle
-    // canvas / debris cannot draw over it, and outside luminance so it stays
-    // legible (it reflects what WASD does right now).
-    this.panels.controlMode = this._createTopPanel('hud-control-mode-panel', {
-      bottom: '120px', left: '50%', transform: 'translateX(-50%)',
-      background: 'transparent', border: 'none', padding: '0',
-    });
-    this.panels.controlMode.innerHTML = `
-      <span id="hud-control-mode" style="font-size:10px;font-weight:bold;padding:2px 8px;border-radius:3px;
-            background:rgba(0,255,136,0.15);border:1px solid rgba(0,255,136,0.4);color:#00ff88;
-            letter-spacing:1px;text-align:center;">RCS</span>
-    `;
+    // --- Control-mode indicator removed (2026-06-05) ---
+    // A bottom-center "RCS" badge used to advertise what WASD does. The mother
+    // flies on autopilot and steers with the arrow keys (no player-facing WASD
+    // attitude modes), so the badge was jargon noise for new pilots. See the
+    // note by the former _MODE_DISPLAY constant near the top of this file.
 
     // --- Propulsion Panel (left side) — F11: horizontal-expand ---
     this.panels.resources = this._createPanel('hud-resources-panel', {});
@@ -850,10 +827,10 @@ export class StatusPanel {
     if (this._captureNotifTimer) {
       clearTimeout(this._captureNotifTimer);
     }
-    // Body-mounted priority panels (objective + control mode) are appended to
-    // document.body by _createTopPanel, so they are not torn down with the HUD
-    // container — remove them explicitly to avoid orphaned duplicate-id nodes.
-    for (const p of [this.panels.score, this.panels.controlMode]) {
+    // Body-mounted priority panels (objective) are appended to document.body
+    // by _createTopPanel, so they are not torn down with the HUD container —
+    // remove them explicitly to avoid orphaned duplicate-id nodes.
+    for (const p of [this.panels.score]) {
       if (p && p.parentNode) p.parentNode.removeChild(p);
     }
   }
@@ -1713,30 +1690,6 @@ export class StatusPanel {
       notif.style.opacity = '0';
       this._captureNotifTimer = null;
     }, 2000);
-  }
-
-  // ==========================================================================
-  // S4: CONTROL MODE INDICATOR
-  // ==========================================================================
-
-  /**
-   * @private Update the control mode indicator (bottom-center, near reticle).
-   * Reflects what WASD currently does.
-   */
-  _updateControlModeIndicator() {
-    const el = document.getElementById('hud-control-mode');
-    if (!el) return;
-    const cfg = _MODE_DISPLAY[this._controlMode] || _MODE_DISPLAY['RCS'];
-    el.textContent = cfg.label;
-    el.style.color = cfg.color;
-    el.style.background = cfg.bg;
-    el.style.borderColor = cfg.border;
-
-    // ST-6.6: TRL of the active tool is surfaced as a tooltip here (and on
-    // Codex/Shop entries — its designed home) rather than a persistent badge.
-    const trlCfg = _TOOL_TRL[this._controlMode] || _TOOL_TRL['RCS'];
-    const lbl = trlToLabel(trlCfg.trl, Constants.TRL);
-    el.title = `${cfg.label} — TRL ${trlCfg.trl} (${lbl})\n${trlCfg.label}`;
   }
 
   /** @private Update forge panel from ForgeSystem state (Sprint A2: enhanced) */

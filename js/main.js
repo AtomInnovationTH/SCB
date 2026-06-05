@@ -76,6 +76,7 @@ import { TrailSystem } from './ui/TrailSystem.js';
 import { DebugOverlay } from './ui/DebugOverlay.js';
 import { SweepReportUI } from './ui/SweepReportUI.js';
 import { CodexViewerUI } from './ui/CodexViewerUI.js';
+import { HotkeyOverlay } from './ui/HotkeyOverlay.js';
 import { SkillsPane } from './ui/hud/SkillsPane.js';
 import { TeachingSystem } from './systems/TeachingSystem.js';
 import { TeachingOverlay } from './ui/TeachingOverlay.js';
@@ -440,6 +441,7 @@ let trailSystem;
 let debugOverlay;
 let sweepReportUI;
 let codexViewerUI;
+let hotkeyOverlay;
 let teachingSystem;
 let teachingOverlay;
 let onboardingDirector;
@@ -580,6 +582,9 @@ async function init() {
 
   // --- F17: Codex Viewer UI (browse unlocked entries) ---
   codexViewerUI = new CodexViewerUI(codexSystem);
+
+  // --- Keyboard shortcut reference overlay (? toggles a grouped hotkey list) ---
+  hotkeyOverlay = new HotkeyOverlay();
 
   // --- ST-6.5: Teaching System (first-encounter contextual overlays) ---
   teachingOverlay = new TeachingOverlay(document.body);
@@ -776,7 +781,7 @@ async function init() {
     gameState, player, armManager, cameraSystem, targetSelector,
     debrisField, debrisWireframe, dockingReticle, hud, targetReticle,
     navSphere, orbitMFD, debrisMap, audioSystem, debugOverlay, sensorSystem,
-    lassoSystem, autopilotSystem, codexViewerUI, strategicMap,
+    lassoSystem, autopilotSystem, codexViewerUI, strategicMap, hotkeyOverlay,
     // Delegation 2 (2026-05-31): smart-default Space key consults the Director.
     onboardingDirector,
     transitionToState: (s, p) => gameFlowManager.transitionToState(s, p),
