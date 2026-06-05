@@ -44,13 +44,32 @@ export const Constants = {
   // === RENDERING ===
   FLOATING_ORIGIN_ENABLED: true,    // UX-4: Camera-relative instanced mesh positions to avoid float32 jitter
 
-  // Project-wide render order (FIX_PLAN §2)
+  // Project-wide render order (FIX_PLAN §2; bands extended §2-followup round 4).
+  //
+  // renderOrder is a GLOBAL sort key across ALL scene objects, not per-object.
+  // Mother (PlayerSatellite) and daughter (ArmUnit) are SEPARATE top-level scene
+  // objects, so a shared scale makes their meshes tie at the dock seam (both at
+  // DETAIL) and resolve by ambiguous depth. The bands below give each layer a
+  // distinct slot and add a small DAUGHTER_BIAS so a docked daughter resolves
+  // cleanly against the mother's strut tip instead of z-fighting it.
+  //
+  // NOTE: the renderer uses logarithmicDepthBuffer (SceneManager.js), under which
+  // polygonOffset units are non-linear and only separate coplanar faces at one
+  // viewing distance. Prefer renderOrder + a tiny geometric Z stagger over
+  // polygonOffset for deterministic layering.
   RENDER_ORDER: {
     EARTH: 0,
     SPACECRAFT_OPAQUE: 1,
     SPACECRAFT_DETAIL: 2,    // channels, pockets, accent rings
     SPACECRAFT_TRANSPARENT: 3, // grid overlays, wireframes
-    SPACECRAFT_ADDITIVE: 4,   // glow rings, plumes
+    SPACECRAFT_ADDITIVE: 4,   // glow rings, plumes (drawn after solid geometry)
+    // Connectors span mother↔daughter; draw just above solid geometry so they
+    // sit on the hull they bridge without z-fighting either craft.
+    SPACECRAFT_CONNECTOR: 5,  // tethers, bridle legs, net tether
+    // Bias added to a docked daughter's meshes (group-level) so the whole craft
+    // resolves in front of the strut-tip collar it overlaps. Small enough not to
+    // cross into the connector/additive bands.
+    DAUGHTER_BIAS: 0.5,
     HUD: 10,
   },
 

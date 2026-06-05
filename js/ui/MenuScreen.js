@@ -108,9 +108,9 @@ export class MenuScreen {
         <!-- ══ HEADER (full-width, centered) ══ -->
         <div id="menu-header">
           <h1 style="font-family:'Courier New',monospace; font-size:3.5rem; color:#00ff88;
-                      letter-spacing:0.3em; margin-bottom:0.5rem;
+                      letter-spacing:0.3em; margin-bottom:0.5rem; white-space:nowrap;
                       text-shadow: 0 0 30px rgba(0,255,136,0.6), 0 0 60px rgba(0,255,136,0.3);">
-            SPACE COWBOY
+            SPACE COWBOY<span style="font-size:0.5em; letter-spacing:0.1em; margin-left:0.4em; vertical-align:0.15em; color:rgba(0,255,136,0.6);">v.92</span>
           </h1>
           <div style="font-size:1.1rem; color:rgba(0,255,136,0.6); letter-spacing:0.15em;
                        margin-bottom:1.5rem;">

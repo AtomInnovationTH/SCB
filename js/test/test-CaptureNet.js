@@ -1867,4 +1867,49 @@ describe('CaptureNet — Q2 ceremony: net.position tracks arm during post-contac
         `${s}: should not be impacted by post-FLIGHT sync (small drift only); got ${(net.position.x - x0).toFixed(2)} m`);
     }
   });
+
+  // 2026-06-05 (v2): on a SUCCESSFUL reel, the bag locks onto the captured
+  // debris (so the cinched net never separates from its catch), seating the
+  // apex one mouth-radius (= DIAMETER/2) BEHIND the debris along the launch
+  // axis. A net with no debris scene position (the cases above) keeps the
+  // retract-to-arm behavior, so those tests are unaffected.
+  it('REELING with a successful catch tracks the debris (bag wraps the catch)', () => {
+    const { net } = makeArmedNet(STATES.REELING);
+    net.catchResult = 'success';
+    // Place the captured debris at a known scene position, drifting independent
+    // of the arm so we can prove the bag follows the DEBRIS, not the arm.
+    net.targetDebris = { _scenePosition: { x: 70, y: 1, z: -2 } };
+    net.tetherPaidOut = 8;
+    net.reelProgress = 0.4;
+
+    net.update(0.001);
+
+    const back = net.netClass.DIAMETER / 2;            // launchDir = +x
+    const expectedX = 70 / M_NET - 1 * back;
+    const expectedY = 1 / M_NET;
+    const expectedZ = -2 / M_NET;
+    assert.ok(
+      Math.abs(net.position.x - expectedX) < 1e-3 &&
+      Math.abs(net.position.y - expectedY) < 1e-3 &&
+      Math.abs(net.position.z - expectedZ) < 1e-3,
+      `successful REELING must seat the bag on the debris (apex = debris − launchDir×D/2); ` +
+      `got (${net.position.x.toExponential(3)}, ${net.position.y.toExponential(3)}, ${net.position.z.toExponential(3)}) ` +
+      `vs expected (${expectedX.toExponential(3)}, ${expectedY.toExponential(3)}, ${expectedZ.toExponential(3)})`);
+  });
+
+  it('REELING with a MISS still retracts toward the arm (debris tracking is success-only)', () => {
+    const { net, arm } = makeArmedNet(STATES.REELING);
+    net.catchResult = 'miss';
+    net.targetDebris = { _scenePosition: { x: 70, y: 0, z: 0 } }; // present but must be ignored
+    net.tetherPaidOut = 8;
+    net.reelProgress = 0.5;
+
+    arm.position.x += 0.7;
+    net.update(0.001);
+
+    const expectedX = arm.position.x / M_NET + 8 * 0.5;  // arm + launchDir × eff
+    assert.ok(Math.abs(net.position.x - expectedX) < 1e-3,
+      `missed REELING must ignore the debris and retract to the arm; ` +
+      `got ${net.position.x.toExponential(3)} vs expected ${expectedX.toExponential(3)}`);
+  });
 });

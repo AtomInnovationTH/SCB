@@ -283,14 +283,34 @@ export class NetProjectile {
       this.position.z = ap.z / M_NET + this.launchDirection.z * this.distanceTraveled;
     } else if (this._sourceArm?.position && this.state === STATES.REELING) {
       const M_NET = 0.00001;
-      const ap = this._sourceArm.position;
-      // Effective launch distance shrinks from `tetherPaidOut` (contact
-      // distance) toward 0 as `reelProgress` advances 0→1.  At progress=1
-      // the net rendezvous with the arm.
-      const eff = this.tetherPaidOut * Math.max(0, 1 - this.reelProgress);
-      this.position.x = ap.x / M_NET + this.launchDirection.x * eff;
-      this.position.y = ap.y / M_NET + this.launchDirection.y * eff;
-      this.position.z = ap.z / M_NET + this.launchDirection.z * eff;
+      // 2026-06-05 (v2 — visual-only, no physics coupling): for a SUCCESSFUL
+      // catch, keep the bag locked ONTO the captured debris so the cinched net
+      // and its catch never separate while the daughter hauls it home (the
+      // user-reported "net doesn't cinch around / bring back the debris" bug).
+      // We follow the debris's live scene position — which DebrisField already
+      // drives (its orbit until the daughter snaps onto it, then the daughter's
+      // position) — and seat the bag apex one mouth-radius BEHIND the debris
+      // along the launch axis, so the forward drawstring ring wraps the debris's
+      // FAR side (opposite the daughter). This ONLY writes the net's visual
+      // position; nothing reads net.position back into the arm/debris/autopilot,
+      // so there is no feedback or station-keep coupling.
+      const sp = (this.catchResult === 'success') ? this.targetDebris?._scenePosition : null;
+      if (sp) {
+        const back = this.netClass.DIAMETER / 2;   // mouth radius (m), apex standoff
+        this.position.x = sp.x / M_NET - this.launchDirection.x * back;
+        this.position.y = sp.y / M_NET - this.launchDirection.y * back;
+        this.position.z = sp.z / M_NET - this.launchDirection.z * back;
+      } else {
+        // Empty net (miss) — reel the bag back to the arm. Effective launch
+        // distance shrinks from `tetherPaidOut` (contact distance) toward 0 as
+        // `reelProgress` advances 0→1; at progress=1 the net rendezvous with the
+        // arm.
+        const ap = this._sourceArm.position;
+        const eff = this.tetherPaidOut * Math.max(0, 1 - this.reelProgress);
+        this.position.x = ap.x / M_NET + this.launchDirection.x * eff;
+        this.position.y = ap.y / M_NET + this.launchDirection.y * eff;
+        this.position.z = ap.z / M_NET + this.launchDirection.z * eff;
+      }
     }
 
     switch (this.state) {

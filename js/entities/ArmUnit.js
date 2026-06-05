@@ -342,6 +342,23 @@ export class ArmUnit {
     this._createMesh();
     this._createTether();
 
+    // §2-followup (round 4): the daughter is a SEPARATE top-level scene object
+    // from the mother, yet docks AT the mother's strut tip where their geometry
+    // overlaps. Their meshes share the RENDER_ORDER scale, so equal bands (e.g.
+    // both DETAIL) tie and resolve by ambiguous depth → z-fighting at the seam.
+    // Lift the whole daughter BODY subtree by DAUGHTER_BIAS so it resolves
+    // cleanly in front of the strut-tip collar while preserving the body's own
+    // internal layering (every child keeps its relative renderOrder). The main
+    // tether (a child of `this.group`, not `this.mesh`) bridges to the mother
+    // and is intentionally left unbiased so it keeps lying on both craft; the
+    // short bridle legs live on `this.mesh` and ride with the biased body.
+    const dbias = Constants.RENDER_ORDER.DAUGHTER_BIAS;
+    this.mesh.traverse((obj) => {
+      if (obj.isMesh || obj.isLine || obj.isPoints || obj.isSprite) {
+        obj.renderOrder += dbias;
+      }
+    });
+
     scene.add(this.group);
   }
 
@@ -361,23 +378,83 @@ export class ArmUnit {
 
     const apothem = (bx / 2) * M;
     const hexR = apothem / Math.cos(Math.PI / 6);
-    const hexGeo = new THREE.CylinderGeometry(hexR, hexR, bz * M, 6, 1, false, Math.PI / 6);
-    const bodyMat = new THREE.MeshStandardMaterial({
-      color: isWeaver ? 0x4488aa : 0x88aa44,
-      metalness: 0.80,
-      roughness: 0.30,
-      polygonOffset: true,                                          // FIX_PLAN §2-followup
-      polygonOffsetFactor: 1,                                        // FIX_PLAN §2-followup — push body slightly into depth
-      polygonOffsetUnits: 1,                                         // FIX_PLAN §2-followup — so panel-line edges draw cleanly on top
+    const halfLen = (bz * M) / 2;
+
+    // §2-followup (round 12): the body side is built as 6 INDIVIDUAL flat facet
+    // quads (instead of one textured hex shell) so we can control cell coverage
+    // per facet: the solar-cell map goes on 5 facets, and the facet that carries
+    // the round laser receiver (+Y) is left as bare metal. The end caps are also
+    // plain metal (no cells). Separate, non-coincident faces → no z-fight.
+    //
+    // Facet k (k=0..5) outward azimuth = 30° + k·60° (matches the prior hex
+    // thetaStart = π/6). +Y is 90° → facet k=1 carries the laser RX; leave bare.
+    const LASER_FACET = 1;
+
+    const baseColor = isWeaver ? 0x4488aa : 0x88aa44;
+    const bareMetalMat = new THREE.MeshStandardMaterial({
+      color: baseColor, metalness: 0.80, roughness: 0.30,
     });
-    this._bodyShell = new THREE.Mesh(hexGeo, bodyMat);
-    this._bodyShell.rotation.x = Math.PI / 2;
-    this._bodyShell.name = `${this.id}-hex-shell`;
-    this._bodyShell.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE; // FIX_PLAN §2-followup
-    this.mesh.add(this._bodyShell);
+
+    // Solar-cell facet material (GaAs map when available, else dark PV tint).
+    const cellTex = getSolarCellTexture();
+    let skinTex = null;
+    if (cellTex) {
+      skinTex = cellTex.clone();
+      skinTex.needsUpdate = true;
+      skinTex.repeat.set(isWeaver ? 1.0 : 0.7, 1.0); // ~one cell-tile per facet
+    }
+    const cellMat = skinTex
+      ? new THREE.MeshStandardMaterial({
+          color: 0xffffff, map: skinTex, emissiveMap: skinTex,
+          emissive: 0x0b1030, emissiveIntensity: 0.18, metalness: 0.5, roughness: 0.5,
+        })
+      : new THREE.MeshStandardMaterial({
+          color: baseColor, metalness: 0.5, roughness: 0.5,
+          emissive: 0x060614, emissiveIntensity: 0.10,
+        });
+
+    // Width of one hex facet = side length = circumradius (hexagon property).
+    const facetW = hexR;
+    const facetGeo = new THREE.PlaneGeometry(facetW, bz * M);
+    this._bodyShell = null; // (legacy ref no longer a single mesh)
+    for (let k = 0; k < 6; k++) {
+      const az = Math.PI / 6 + k * (Math.PI / 3);  // facet outward azimuth (XY)
+      const mat = (k === LASER_FACET) ? bareMetalMat : cellMat;
+      const facet = new THREE.Mesh(facetGeo, mat);
+      // Plane default normal +Z; orient it to face outward at azimuth `az`,
+      // with its height running along the body Z axis.
+      const outward = new THREE.Vector3(Math.cos(az), Math.sin(az), 0);
+      const bodyAxis = new THREE.Vector3(0, 0, 1);
+      const tangent = new THREE.Vector3().crossVectors(bodyAxis, outward).normalize();
+      facet.quaternion.setFromRotationMatrix(
+        new THREE.Matrix4().makeBasis(tangent, bodyAxis, outward)
+      );
+      facet.position.copy(outward).multiplyScalar(apothem);
+      facet.name = `${this.id}-facet-${k}`;
+      facet.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
+      this.mesh.add(facet);
+      if (k === 0) this._bodyShell = facet; // keep a representative ref
+    }
+
+    // Plain metal end caps (fore +Z, aft −Z) — no solar cells on the ends.
+    const capGeo = new THREE.CircleGeometry(hexR, 6);
+    for (const s of [-1, 1]) {
+      const cap = new THREE.Mesh(capGeo, bareMetalMat);
+      cap.position.set(0, 0, s * halfLen);
+      cap.rotation.y = s > 0 ? 0 : Math.PI;  // outward-facing
+      // CircleGeometry hex: rotate so flats align with the side facets.
+      cap.rotation.z = Math.PI / 6;
+      cap.name = `${this.id}-cap-${s > 0 ? 'fore' : 'aft'}`;
+      cap.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
+      this.mesh.add(cap);
+    }
 
     // --- S3.5: Panel line edges (zero triangle cost) ---
-    const edgeGeo = new THREE.EdgesGeometry(hexGeo, 30);
+    // §2-followup (round 8): the edges are built from a slightly LARGER hex
+    // (1.5% proud) so the lines sit physically off the facets with a real,
+    // zoom-independent gap (no coplanar z-fight with the facet quads).
+    const edgeHexGeo = new THREE.CylinderGeometry(hexR * 1.015, hexR * 1.015, bz * M, 6, 1, false, Math.PI / 6);
+    const edgeGeo = new THREE.EdgesGeometry(edgeHexGeo, 30);
     const edgeMat = new THREE.LineBasicMaterial({
       color: 0x667788, transparent: true, opacity: 0.5,
     });
@@ -387,51 +464,6 @@ export class ArmUnit {
     edges.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_TRANSPARENT; // FIX_PLAN §2-followup
     this.mesh.add(edges);
 
-    // --- Body-conformal thin-film GaAs solar cells (matches mother barrel) ---
-    // SYMMETRY: cells wrap the full hex body instead of protruding ±Y wings.
-    // A hexagonal shell shares the body's azimuthal symmetry, so the daughter's
-    // solar coverage looks identical from every angle and no longer depends on
-    // the (roll-dependent) docked orientation around the mother. This also
-    // removes the wings that broke the radial symmetry of the dock ring.
-    //
-    // Construction mirrors the mother's barrel cells (PlayerSatellite.js §body
-    // thin-film): a slightly oversized conformal shell carrying the dark GaAs
-    // material, plus a wireframe cell-grid overlay drawn on top.
-
-    // Darken + faintly energize the hex body so the cell skin reads as PV.
-    bodyMat.emissive.setHex(0x060614);
-    bodyMat.emissiveIntensity = 0.10;
-
-    // Conformal cell skin: a 6-sided shell (= 6 flat PV facets) at 100.6%
-    // radius carrying the dark GaAs cell texture. One mesh, no separate grid
-    // shell, so no concentric z-fight/parallax. (The hex faces are already flat,
-    // matching how body-mounted cells are flat sub-panels on real spacecraft.)
-    const cellTex = getSolarCellTexture();
-    let skinTex = null;
-    if (cellTex) {
-      skinTex = cellTex.clone();
-      skinTex.needsUpdate = true;
-      skinTex.repeat.set(isWeaver ? 1.0 : 0.7, 1.0); // ~one cell-tile per facet
-    }
-    const cellSkinGeo = new THREE.CylinderGeometry(
-      hexR * 1.006, hexR * 1.006, bz * 0.92 * M, 6, 1, true, Math.PI / 6
-    );
-    const cellSkinMat = new THREE.MeshStandardMaterial({
-      color: skinTex ? 0xffffff : 0x0a1133, // tint comes from the map when present
-      map: skinTex || null,
-      emissiveMap: skinTex || null,
-      metalness: 0.5, roughness: 0.5,
-      emissive: 0x0b1030, emissiveIntensity: 0.18,
-      side: THREE.FrontSide,
-      polygonOffset: true,            // sit just proud of the body shell
-      polygonOffsetFactor: -1,        // pull toward camera so cells win the depth tie
-      polygonOffsetUnits: -1,
-    });
-    const cellSkin = new THREE.Mesh(cellSkinGeo, cellSkinMat);
-    cellSkin.rotation.x = Math.PI / 2;  // align length axis with body Z
-    cellSkin.name = `${this.id}-solar-skin`;
-    cellSkin.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL; // over body
-    this.mesh.add(cellSkin);
 
     // --- S3.5: Aft FEEP nozzle (stub, centered on −Z face) ---
     const aftNozR = (isWeaver ? 0.015 : 0.010) * M;
@@ -454,6 +486,10 @@ export class ArmUnit {
       blending: THREE.AdditiveBlending, depthWrite: false,
     });
     const plume = new THREE.Mesh(plumeGeo, plumeMat);
+    // §2-followup (round 4): additive plume must draw AFTER solid geometry, like
+    // the mother's plumes — without this the untagged plume sorted by raw depth
+    // against the (separate) mother object and punched through inconsistently.
+    plume.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;
     plume.position.set(0, 0, -bz * 0.75 * M);
     plume.rotation.x = -Math.PI / 2;
     plume.visible = false;
@@ -483,49 +519,59 @@ export class ArmUnit {
     this.mesh.add(canister);
 
     // --- Laser power receiver (top face) — a small optical rectenna, NOT a
-    // solar array. A single round photodiode tuned to the 808 nm beam, set in a
-    // metallic bezel. Deliberately small and distinct from the blue silicon body
-    // cells so it doesn't read as "another solar panel".
+    // solar array. A round photodiode recessed inside a short metallic housing.
     const rxR = (isWeaver ? 0.045 : 0.030) * M;   // receiver disc radius (small)
-    const rxY = by * 0.52 * M;
+    // §2-followup (round 18): earlier versions used a FLAT ring + disc that
+    // either z-fought the facet (coplanar) or, when lifted clear, looked like
+    // they FLOATED above the hull. Fix: the bezel is now a real 3-D ring HOUSING
+    // (a short open cylinder wall) that RISES from the facet — its base sits on
+    // the body, so nothing floats — and the diode is recessed at the bottom of
+    // that well. Because the wall has real height (perpendicular to the facet),
+    // no surface is coplanar with the body, so there is no z-fight at any zoom.
+    const facetY = (bx / 2) * M;                  // +Y facet plane (apothem)
+    const houseOR = rxR * 1.35;                   // housing outer radius
+    const houseH  = rxR * 0.6;                    // housing wall height (proud of facet)
 
-    // Metallic bezel ring around the aperture.
-    const rxBezelGeo = new THREE.RingGeometry(rxR, rxR * 1.35, 16);
+    // Bezel housing: open cylinder wall, base on the facet, rising +Y.
+    const rxBezelGeo = new THREE.CylinderGeometry(houseOR, houseOR, houseH, 24, 1, true);
     const rxBezelMat = new THREE.MeshStandardMaterial({
       color: 0x777788, metalness: 0.9, roughness: 0.25, side: THREE.DoubleSide,
     });
     const rxBezel = new THREE.Mesh(rxBezelGeo, rxBezelMat);
-    rxBezel.position.set(0, rxY, 0);
-    rxBezel.rotation.x = -Math.PI / 2;
+    // Sink the base slightly into the facet so the wall reads as embedded in the
+    // hull (grounded, not floating) and its bottom edge isn't exactly coplanar.
+    rxBezel.position.set(0, facetY + houseH / 2 - houseH * 0.2, 0);
     rxBezel.name = `${this.id}-laser-rx-bezel`;
     rxBezel.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
     this.mesh.add(rxBezel);
 
-    // Dark optical receiver face with a faint amber glow (active beam target).
-    const rxGeo = new THREE.CircleGeometry(rxR, 16);
+    // Dark optical receiver face (the diode) recessed at the base of the well.
+    const rxGeo = new THREE.CircleGeometry(rxR, 24);
     const rxMat = new THREE.MeshStandardMaterial({
       color: 0x1a0e02, metalness: 0.35, roughness: 0.2,
       emissive: 0x140a00, emissiveIntensity: 0.18,  // warm 808nm-receiver tint
     });
     const pvPanel = new THREE.Mesh(rxGeo, rxMat);
-    pvPanel.position.set(0, rxY + 0.0002 * M, 0);   // just above the bezel plane
+    pvPanel.position.set(0, facetY + houseH * 0.4, 0);  // recessed inside the housing
     pvPanel.rotation.x = -Math.PI / 2;
     pvPanel.name = `${this.id}-laser-rx`;
     pvPanel.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
     this.mesh.add(pvPanel);
 
-    // --- S3.5: MRR patch antenna (flat hex disc, replaces 60-tri sphere) ---
+    // --- S3.5: MRR patch antenna — a thin 3-D puck (has thickness, so it is
+    // grounded to the facet and never coplanar with it). ---
     const mrrR = (isWeaver ? 0.015 : 0.010) * M;
-    const mrrGeo = new THREE.CircleGeometry(mrrR, 6);
+    const mrrH = mrrR * 0.4;                       // puck thickness
+    const mrrGeo = new THREE.CylinderGeometry(mrrR, mrrR, mrrH, 6);
     const mrrMat = new THREE.MeshStandardMaterial({
-      color: 0xccccdd, metalness: 0.95, roughness: 0.15, side: THREE.DoubleSide,
+      color: 0xccccdd, metalness: 0.95, roughness: 0.15,
     });
     const mrr = new THREE.Mesh(mrrGeo, mrrMat);
-    // FIX_PLAN §2-followup: bumped y 0.52→0.525 to clear pvPanel coplanar layer.
-    mrr.position.set(bx * 0.25 * M, by * 0.525 * M, -bz * 0.20 * M);   // FIX_PLAN §2-followup
-    mrr.rotation.x = -Math.PI / 2;
+    // §2-followup (round 18): base sunk slightly into the facet so the puck sits
+    // ON the hull with real thickness — grounded, no float, no coplanar tie.
+    mrr.position.set(bx * 0.25 * M, facetY + mrrH / 2 - mrrH * 0.25, -bz * 0.20 * M);
     mrr.name = `${this.id}-mrr-patch`;
-    mrr.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;        // FIX_PLAN §2-followup
+    mrr.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
     this.mesh.add(mrr);
 
     // --- Status light (blinks to show state) ---
@@ -609,6 +655,7 @@ export class ArmUnit {
     const legA = new THREE.Line(legAGeo, bridleLegMat);
     legA.name = `${this.id}-bridle-leg-A`;
     legA.visible = false;
+    legA.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_CONNECTOR; // §2-followup (round 4)
     this.mesh.add(legA);
 
     const legBGeo = new THREE.BufferGeometry();
@@ -618,6 +665,7 @@ export class ArmUnit {
     const legB = new THREE.Line(legBGeo, bridleLegMat);
     legB.name = `${this.id}-bridle-leg-B`;
     legB.visible = false;
+    legB.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_CONNECTOR; // §2-followup (round 4)
     this.mesh.add(legB);
 
     this._bridleLegA = legA;
@@ -653,6 +701,11 @@ export class ArmUnit {
     this.tetherLine = new THREE.Line(geometry, this.tetherMaterial);
     this.tetherLine.visible = false;
     this.tetherLine.frustumCulled = false;
+    // §2-followup (round 4): the tether bridges the (separate) daughter and
+    // mother objects. Untagged, its transparent line sorted by raw depth and
+    // flickered in front of/behind the strut + reel point. CONNECTOR band draws
+    // it just above solid hull geometry so it lies cleanly on the craft.
+    this.tetherLine.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_CONNECTOR;
     this.group.add(this.tetherLine);
   }
 

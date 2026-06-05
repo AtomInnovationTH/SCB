@@ -242,6 +242,10 @@ export class LassoSystem {
         });
         this._tetherMesh = new THREE.Mesh(sheathGeo, sheathMat);
         this._tetherMesh.visible = false;
+        // §2-followup (round 4): the net tether bridges mother and a captured
+        // target (separate scene objects). Tag it CONNECTOR so it lies on the
+        // hull/target instead of sorting ambiguously by raw depth.
+        this._tetherMesh.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_CONNECTOR;
         this.scene.add(this._tetherMesh);
 
         const coreGeo = new THREE.TubeGeometry(
@@ -256,11 +260,16 @@ export class LassoSystem {
             transparent: true,
             opacity: 0,
             blending: THREE.AdditiveBlending,
-            depthWrite: true,
+            // §2-followup (round 4): additive geometry must NOT write depth —
+            // depthWrite:true made the (mostly transparent) core occlude things
+            // behind it with invisible pixels and z-fight the sheath around it.
+            depthWrite: false,
             depthTest: true,
         });
         this._tetherCore = new THREE.Mesh(coreGeo, coreMat);
         this._tetherCore.visible = false;
+        // Draw the additive glow after solid geometry and just above the sheath.
+        this._tetherCore.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;
         this.scene.add(this._tetherCore);
 
         // Markers removed in v2e — they confirmed anchor was going to wrong place
@@ -277,6 +286,7 @@ export class LassoSystem {
         });
         this._muzzleFlash = new THREE.Mesh(flashGeo, flashMat);
         this._muzzleFlash.visible = false;
+        this._muzzleFlash.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE; // §2-followup (round 4)
         this.scene.add(this._muzzleFlash);
 
         // ── Phase 6: Contact flash — white/cyan ─────────────────────────────
@@ -288,6 +298,7 @@ export class LassoSystem {
         });
         this._contactFlash = new THREE.Mesh(contactGeo, contactMat);
         this._contactFlash.visible = false;
+        this._contactFlash.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE; // §2-followup (round 4)
         this.scene.add(this._contactFlash);
 
         // ── Gossamer particle trail ──────────────────────────────────────────
@@ -336,6 +347,7 @@ export class LassoSystem {
         this._trailPoints = new THREE.Points(trailGeo, trailMat);
         this._trailPoints.frustumCulled = false;
         this._trailPoints.visible = false;
+        this._trailPoints.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE; // §2-followup (round 4)
         this.scene.add(this._trailPoints);
 
         // NOTE: Contact ring removed (ST-2.4) — replaced by dynamic radial sparks

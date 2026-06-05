@@ -119,22 +119,6 @@ export class AutopilotSystem {
     /** @type {object|null} C-11: Active aim coroutine state (Phase 1-2-3 sequencing) */
     this._aimCoroutine = null;
 
-    /**
-     * @type {boolean} True while the autopilot has decided the target is
-     * already within daughter reach and is therefore ROTATING ONLY (holding
-     * position, no translation burns). Latched with hysteresis in `update()`
-     * via [`_updateInReachLatch`](js/systems/AutopilotSystem.js:1) so it does
-     * not oscillate at the reach boundary.
-     */
-    this._inReachRotateOnly = false;
-
-    /**
-     * @type {boolean} Guards a one-shot AUTOPILOT_ARRIVED emission when the
-     * rotate-only hold is first entered (parity with the FSM HOLD branch).
-     * Reset when leaving rotate-only or on engage/disengage.
-     */
-    this._inReachArrivedEmitted = false;
-
     this._setupListeners();
   }
 
@@ -162,29 +146,9 @@ export class AutopilotSystem {
 
   /**
    * Get the current rendezvous-phase label for HUD / telemetry.
-   *
-   * When the autopilot is holding station via the in-reach rotate-only mode
-   * the internal FSM phase is still RENDEZVOUS_FAR (the translation switch is
-   * skipped), but the ship has effectively arrived. Report HOLD in that case
-   * so the HUD reflects the true "on-station" state rather than "far approach".
    * @returns {'OFF'|'RENDEZVOUS_FAR'|'MATCH_ORBIT'|'TRAIL_ALIGN'|'HOLD'}
    */
-  getCurrentPhase() {
-    if (this._inReachRotateOnly && this._phase !== PHASE.OFF) return PHASE.HOLD;
-    return this._phase;
-  }
-
-  /**
-   * True when the autopilot is holding station — either in the FSM HOLD phase
-   * or in the in-reach rotate-only mode (which holds position and only
-   * rotates). Used to gate station-keeping recoil compensation so it applies
-   * in BOTH hold modes, not just the FSM HOLD phase.
-   * @returns {boolean}
-   * @private
-   */
-  _isHoldingStation() {
-    return this._phase === PHASE.HOLD || this._inReachRotateOnly;
-  }
+  getCurrentPhase() { return this._phase; }
 
   // ==========================================================================
   // ENGAGE / DISENGAGE / TOGGLE
@@ -257,8 +221,6 @@ export class AutopilotSystem {
     // already satisfy tighter phases on the first update tick.
     this._setPhase(PHASE.RENDEZVOUS_FAR);
     this._holdTimer = 0;
-    this._inReachRotateOnly = false;
-    this._inReachArrivedEmitted = false;
 
     // Emit target lock for CollisionAvoidanceSystem
     this._refreshTargetLock();
@@ -289,8 +251,6 @@ export class AutopilotSystem {
     this._engaged = true;
     this._setPhase(PHASE.RENDEZVOUS_FAR);
     this._holdTimer = 0;
-    this._inReachRotateOnly = false;
-    this._inReachArrivedEmitted = false;
     this._headingMode = 'CLUSTER';
     this._headingTarget = new THREE.Vector3(cluster.center.x, cluster.center.y, cluster.center.z);
     this._lockedTargetRef = null;
@@ -360,8 +320,6 @@ export class AutopilotSystem {
     this._goalPos = null;
     this._holdTimer = 0;
     this._stationKeepDeltaV = 0;
-    this._inReachRotateOnly = false;
-    this._inReachArrivedEmitted = false;
 
     // Release any active target lock
     this._releaseTargetLock();
@@ -444,72 +402,17 @@ export class AutopilotSystem {
       else vHat.set(0, 0, 1);
     }
 
-    // -----------------------------------------------------------------------
-    // IN-REACH ROTATE-ONLY decision.
-    // If the debris is ALREADY within the active tool's daughter reach (e.g.
-    // weaver 2 km tether, spinner 500 m, lasso 200 m, trawl 50 m) there is no
-    // need to translate to the tight trailing point — flying in would waste
-    // ΔV and time when the target is already capturable from the current
-    // range. Instead the mother only ROTATES to point at the target and holds
-    // position. Translation resumes only when the target drifts back OUTSIDE
-    // reach (with a +REACH_HYSTERESIS exit band so we don't oscillate at the
-    // boundary). The latch is suppressed once we are in HOLD so the existing
-    // orbit-shape sync, station-keeping, and close-on-grappled-arm logic in
-    // the HOLD branch continue to run undisturbed.
-    // -----------------------------------------------------------------------
-    const Pm = this._player.getPosition();                 // scene units
-    const distToTargetM = Pm.distanceTo(Pd) / M;
-    this._updateInReachLatch(distToTargetM);
-
-    if (this._inReachRotateOnly && this._phase !== PHASE.HOLD) {
-      // Rotate-only: point the nose at the target, command no translation.
-      this._goalPos = Pm.clone();                // goal == current pos (holding)
-      this._headingTarget = Pd.clone();          // keep legacy HUD field populated
-      const toTarget = this._tmpV2.subVectors(Pd, Pm);
-      if (toTarget.lengthSq() > 1e-20) {
-        toTarget.normalize();
-        this._rotateTowardWorld(toTarget, dt);
-      }
-
-      // Auto-disengage contract (mirror of the HOLD branch): hold indefinitely
-      // while an arm is working or a specific locked target is alive; otherwise
-      // (cluster / prograde, no lock) shut off ARRIVED after HOLD_DURATION so
-      // the mother doesn't park rotate-only forever.
-      const armsActive = this._armManager?.hasTetheredArm?.() || false;
-      const hasLockedTarget = !!(this._lockedTargetRef && this._lockedTargetRef.alive);
-      if (!armsActive && !hasLockedTarget) {
-        this._holdTimer += dt;
-        if (this._holdTimer >= Constants.AUTOPILOT.HOLD_DURATION) {
-          this.disengage('ARRIVED');
-          return;
-        }
-      }
-      // Emit ARRIVED once on first entry into rotate-only hold (parity with
-      // the FSM HOLD branch, which fires AUTOPILOT_ARRIVED on entry).
-      if (!this._inReachArrivedEmitted) {
-        this._inReachArrivedEmitted = true;
-        eventBus.emit(Events.AUTOPILOT_ARRIVED, { mode: this._headingMode });
-      }
-      return;
-    }
-    // Left rotate-only (or never entered) — allow ARRIVED to fire again on a
-    // future re-entry, and reset the hold timer so a later rotate-only hold or
-    // FSM HOLD starts counting from zero.
-    if (this._inReachArrivedEmitted) {
-      this._inReachArrivedEmitted = false;
-      this._holdTimer = 0;
-    }
-
     // --- Tool-aware trailing distance ---
     const Dtrail_m = this._getTrailDistance();
     const Dtrail_scene = Dtrail_m * M;
+
     // --- Goal pose: P_m* = P_d − v̂_d · D_trail ---
     const Pm_goal = this._tmpV2.copy(Pd).addScaledVector(vHat, -Dtrail_scene);
     this._goalPos = Pm_goal.clone();
     this._headingTarget = Pd.clone(); // keep legacy HUD field populated
 
     // --- Errors ---
-    // Pm already fetched above (reused — getPosition() clones).
+    const Pm = this._player.getPosition();                 // scene units
     const pvel = this._player.getVelocity();               // km/s
     const Vm = this._tmpV3.set(pvel.x, pvel.y, pvel.z);    // km/s
 
@@ -1162,74 +1065,6 @@ export class AutopilotSystem {
   }
 
   // ==========================================================================
-  // TOOL-AWARE DAUGHTER REACH (in-reach rotate-only decision)
-  // ==========================================================================
-
-  /**
-   * Maximum stand-off range (metres) from which the currently-recommended
-   * tool can engage the target. This is the DAUGHTER REACH — distinct from
-   * the much tighter trailing distance `_getTrailDistance()` the autopilot
-   * would otherwise fly to. When the mother→target distance is already within
-   * this reach there is no need to translate; rotating to point at the target
-   * suffices (see `update()`'s in-reach branch).
-   *
-   * Reach is derived from the canonical tool constants (not duplicated in the
-   * AUTOPILOT block) so retuning a tether length / projectile range
-   * automatically propagates here:
-   *   lasso   → LASSO_RANGE            (projectile range)
-   *   spinner → SPINNER_TETHER_LENGTH  (tether length)
-   *   weaver  → WEAVER_TETHER_LENGTH   (tether length)
-   *   trawl   → D_TRAIL_TRAWL          (sweep stand-off; kept ≥ trail so the
-   *             optimization engages rather than overflying the goal)
-   *   default → REACH_DEFAULT
-   * @returns {number} reach in metres
-   * @private
-   */
-  _getToolReach() {
-    const AP = Constants.AUTOPILOT;
-    const tool = this._targetSelector ? this._targetSelector._recommendedTool : null;
-    switch (tool) {
-      case 'lasso':   return Constants.LASSO_RANGE;
-      case 'spinner': return Constants.SPINNER_TETHER_LENGTH;
-      case 'weaver':  return Constants.WEAVER_TETHER_LENGTH;
-      case 'trawl':   return AP.D_TRAIL_TRAWL;
-      default:        return AP.REACH_DEFAULT;
-    }
-  }
-
-  /**
-   * Update the in-reach rotate-only latch with hysteresis.
-   *
-   * Enter rotate-only when `distToTargetM` ≤ reach. Exit (resume translating)
-   * only when it climbs back above reach·(1 + REACH_HYSTERESIS). The asymmetric
-   * thresholds prevent translate↔rotate-only chattering at the boundary.
-   *
-   * @param {number} distToTargetM — mother→target distance in metres
-   * @private
-   */
-  _updateInReachLatch(distToTargetM) {
-    const AP = Constants.AUTOPILOT;
-    // Test seam / escape hatch: when disabled, the autopilot always translates
-    // (legacy trailing-rendezvous behavior) regardless of range.
-    if (this._inReachDisabled) {
-      this._inReachRotateOnly = false;
-      return;
-    }
-    const reach = this._getToolReach();
-    if (this._inReachRotateOnly) {
-      // Already rotate-only: only release when target drifts past exit band.
-      if (distToTargetM > reach * (1 + AP.REACH_HYSTERESIS)) {
-        this._inReachRotateOnly = false;
-      }
-    } else {
-      // Translating: latch into rotate-only once inside reach.
-      if (distToTargetM <= reach) {
-        this._inReachRotateOnly = true;
-      }
-    }
-  }
-
-  // ==========================================================================
   // ΔV QUERY
   // ==========================================================================
 
@@ -1344,7 +1179,7 @@ export class AutopilotSystem {
   _applyRecoilCompensation(data) {
     const AP = Constants.AUTOPILOT;
     if (!AP.STATION_KEEP_COMPENSATION) return;
-    if (!this._isHoldingStation()) return;
+    if (this._phase !== PHASE.HOLD) return;
     if (!this._player) return;
 
     // Extract projectile parameters from payload
@@ -1392,7 +1227,7 @@ export class AutopilotSystem {
   _applyTrawlRecoilCompensation(data) {
     const AP = Constants.AUTOPILOT;
     if (!AP.STATION_KEEP_COMPENSATION) return;
-    if (!this._isHoldingStation()) return;
+    if (this._phase !== PHASE.HOLD) return;
     if (!this._player) return;
 
     const netMass = Constants.TRAWLING?.NET_MASS || 5;

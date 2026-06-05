@@ -38,6 +38,15 @@ export class SceneManager {
 
     // --- Renderer (WebGL2, logarithmic depth buffer) ---
     // SMAA handles anti-aliasing via post-processing; no hardware MSAA needed
+    //
+    // Z-LAYER NOTE (§2-followup round 4): logarithmicDepthBuffer makes depth
+    // non-linear, so `material.polygonOffsetUnits` map to a real-world depth
+    // separation that VARIES with viewing distance — an offset tuned to stop
+    // z-fighting when zoomed in will under/over-shoot when zoomed out (and
+    // vice-versa). For coplanar layering prefer deterministic `renderOrder`
+    // (Constants.RENDER_ORDER) plus a tiny geometric Z stagger over polygonOffset.
+    // Existing polygonOffset values on the ship hull are legacy from FIX_PLAN §2;
+    // do not add more — promote to renderOrder bands instead.
     this.renderer = new THREE.WebGLRenderer({
       canvas,
       antialias: false,

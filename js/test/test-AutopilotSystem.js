@@ -224,9 +224,6 @@ describe('Autopilot — Forward phase transitions', () => {
     const player = makePlayer();
     const ap = makeAP({ targetSelector: ts, player });
     ap.engage();
-    // These suites exercise the translation FSM; disable the in-reach
-    // rotate-only optimization so close-range geometry still drives translation.
-    ap._inReachDisabled = true;
     return { ap, player, vHat: new THREE.Vector3(0, 0, 1) };
   }
 
@@ -354,8 +351,6 @@ describe('Autopilot — Hysteresis regressions', () => {
     const vHat = new THREE.Vector3(0, 0, 1);
     const ap = makeAP({ targetSelector: makeTargetSelector({ active: target }), player });
     ap.engage();
-    // Translation-FSM hysteresis suite — disable in-reach rotate-only.
-    ap._inReachDisabled = true;
     if (phase === 'RENDEZVOUS_FAR') return { ap, player, vHat };
     setTargetState(ap, { Pd: pdAhead(player, vHat, 300), Vd: new THREE.Vector3(0, 0, 7.5) });
     ap.update(0.1);
@@ -409,8 +404,6 @@ describe('Autopilot — Tool-aware D_trail', () => {
     const player = makePlayer();
     const ap = makeAP({ targetSelector: ts, player });
     ap.engage();
-    // D_trail geometry is a translation-phase concept; keep translation active.
-    ap._inReachDisabled = true;
 
     // Pd 100 m ahead of player in +v̂ direction — chosen so that different
     // D_trail values produce different-sign goal-offsets:
@@ -443,200 +436,6 @@ describe('Autopilot — Tool-aware D_trail', () => {
   it("tool='weaver'  uses D_TRAIL_ARMS   (35 m)",  () => runToolCase('weaver',  AP.D_TRAIL_ARMS));
   it("tool='trawl'   uses D_TRAIL_TRAWL  (150 m)", () => runToolCase('trawl',   AP.D_TRAIL_TRAWL));
   it("tool=null      uses D_TRAIL_DEFAULT (80 m)", () => runToolCase(null,      AP.D_TRAIL_DEFAULT));
-});
-
-// ============================================================================
-// SUITE 4b: IN-REACH ROTATE-ONLY
-// When the debris is already within the active tool's daughter reach, the
-// mother should ROTATE to point at it and HOLD position — no translation
-// burns. Translation resumes only when the target drifts past the hysteresis
-// exit band. See AutopilotSystem._getToolReach / _updateInReachLatch.
-// ============================================================================
-
-describe('Autopilot — In-reach rotate-only', () => {
-
-  function setup(tool) {
-    const target = makeTarget({ id: 1 });
-    const ts = makeTargetSelector({ active: target, recommendedTool: tool });
-    const player = makePlayer();
-    const ap = makeAP({ targetSelector: ts, player });
-    ap.engage();
-    return { ap, player, target, vHat: new THREE.Vector3(0, 0, 1) };
-  }
-
-  it('_getToolReach returns the per-tool daughter reach', () => {
-    const { ap, target } = setup('weaver');
-    ap._targetSelector._recommendedTool = 'weaver';
-    assert.equal(ap._getToolReach(), Constants.WEAVER_TETHER_LENGTH);
-    ap._targetSelector._recommendedTool = 'spinner';
-    assert.equal(ap._getToolReach(), Constants.SPINNER_TETHER_LENGTH);
-    ap._targetSelector._recommendedTool = 'lasso';
-    assert.equal(ap._getToolReach(), Constants.LASSO_RANGE);
-    ap._targetSelector._recommendedTool = 'trawl';
-    assert.equal(ap._getToolReach(), AP.D_TRAIL_TRAWL);
-    ap._targetSelector._recommendedTool = null;
-    assert.equal(ap._getToolReach(), AP.REACH_DEFAULT);
-  });
-
-  it('target within reach → no translation burn (rotate-only)', () => {
-    // lasso reach = 200 m; place target 150 m ahead (inside reach).
-    const { ap, player, vHat } = setup('lasso');
-    setTargetState(ap, {
-      Pd: pdAhead(player, vHat, 150),
-      Vd: new THREE.Vector3(0, 0, 7.5),
-    });
-    ap.update(0.1);
-    assert.equal(ap._inReachRotateOnly, true, 'must latch into rotate-only inside reach');
-    assert.equal(player.applyCartesianImpulse.calls.length, 0,
-      'no translation impulse should be commanded when target is in reach');
-  });
-
-  it('target outside reach → translates (commands impulse)', () => {
-    // lasso reach = 200 m; place target 800 m ahead (outside reach).
-    const { ap, player, vHat } = setup('lasso');
-    setTargetState(ap, {
-      Pd: pdAhead(player, vHat, 800),
-      Vd: new THREE.Vector3(0, 0, 7.5),
-    });
-    ap.update(0.1);
-    assert.equal(ap._inReachRotateOnly, false, 'must NOT latch rotate-only outside reach');
-    assert.ok(player.applyCartesianImpulse.calls.length > 0,
-      'translation impulse expected when target is outside reach');
-  });
-
-  it('rotate-only points the nose at the target', () => {
-    const { ap, player, vHat } = setup('spinner');
-    // Target ABOVE the prograde direction: offset along +X so the desired
-    // nose direction differs from vHat (+Z). Place inside spinner reach (500 m).
-    const Pm = player.getPosition();
-    const Pd = Pm.clone().add(new THREE.Vector3(300 * M, 0, 0)); // 300 m radially out
-    setTargetState(ap, { Pd, Vd: new THREE.Vector3(0, 0, 7.5) });
-
-    const noseBefore = new THREE.Vector3(0, 0, 1).applyQuaternion(player.quaternion);
-    const toTarget = Pd.clone().sub(Pm).normalize();
-    const angBefore = Math.acos(Math.max(-1, Math.min(1, noseBefore.dot(toTarget))));
-
-    // Several ticks of rotation.
-    for (let i = 0; i < 30; i++) ap.update(0.1);
-
-    const noseAfter = new THREE.Vector3(0, 0, 1).applyQuaternion(player.quaternion);
-    const angAfter = Math.acos(Math.max(-1, Math.min(1, noseAfter.dot(toTarget))));
-    assert.ok(angAfter < angBefore,
-      `nose must rotate toward target: angBefore=${angBefore.toFixed(3)} angAfter=${angAfter.toFixed(3)}`);
-    assert.equal(player.applyCartesianImpulse.calls.length, 0,
-      'rotate-only must never translate');
-  });
-
-  it('hysteresis: stays rotate-only until target exits reach·(1+REACH_HYSTERESIS)', () => {
-    const { ap, player, vHat } = setup('lasso'); // reach 200 m
-    // Enter rotate-only at 150 m.
-    setTargetState(ap, { Pd: pdAhead(player, vHat, 150), Vd: new THREE.Vector3(0, 0, 7.5) });
-    ap.update(0.1);
-    assert.equal(ap._inReachRotateOnly, true);
-
-    // Drift just past reach but inside the exit band (200·1.15 = 230 m) → still rotate-only.
-    setTargetState(ap, { Pd: pdAhead(player, vHat, 220), Vd: new THREE.Vector3(0, 0, 7.5) });
-    ap.update(0.1);
-    assert.equal(ap._inReachRotateOnly, true,
-      'must remain rotate-only inside the hysteresis exit band');
-    assert.equal(player.applyCartesianImpulse.calls.length, 0,
-      'no translation while still latched in rotate-only');
-
-    // Drift beyond the exit band (> 230 m) → release, resume translation.
-    setTargetState(ap, { Pd: pdAhead(player, vHat, 300), Vd: new THREE.Vector3(0, 0, 7.5) });
-    ap.update(0.1);
-    assert.equal(ap._inReachRotateOnly, false,
-      'must release rotate-only once target exits the hysteresis band');
-    assert.ok(player.applyCartesianImpulse.calls.length > 0,
-      'translation must resume after release');
-  });
-
-  it('HOLD phase is not pre-empted by rotate-only (preserves HOLD logic)', () => {
-    const { ap, player, vHat } = setup('lasso');
-    // Force HOLD as if already on-station.
-    ap._phase = 'HOLD';
-    // Target inside reach — latch would normally enter rotate-only, but HOLD
-    // must take precedence so orbit-sync / station-keeping logic runs.
-    setTargetState(ap, { Pd: pdAhead(player, vHat, 150), Vd: new THREE.Vector3(0, 0, 7.5) });
-    ap.update(0.1);
-    assert.equal(ap.getCurrentPhase(), 'HOLD', 'HOLD must not be replaced by rotate-only');
-  });
-
-  it('manual disengage still works while in rotate-only', () => {
-    const { ap, player, vHat } = setup('weaver');
-    setTargetState(ap, { Pd: pdAhead(player, vHat, 1000), Vd: new THREE.Vector3(0, 0, 7.5) });
-    ap.update(0.1);
-    assert.equal(ap._inReachRotateOnly, true, 'within weaver reach (2 km)');
-    ap.disengage('MANUAL');
-    assert.equal(ap.engaged, false);
-    assert.equal(ap._inReachRotateOnly, false, 'latch must reset on disengage');
-  });
-
-  it('getCurrentPhase() reports HOLD while holding in rotate-only', () => {
-    const { ap, player, vHat } = setup('lasso');
-    setTargetState(ap, { Pd: pdAhead(player, vHat, 150), Vd: new THREE.Vector3(0, 0, 7.5) });
-    ap.update(0.1);
-    assert.equal(ap._inReachRotateOnly, true);
-    assert.equal(ap.getCurrentPhase(), 'HOLD',
-      'HUD should see HOLD (on-station), not RENDEZVOUS_FAR, while rotate-only');
-  });
-
-  it('AUTOPILOT_ARRIVED fires once on rotate-only hold entry', () => {
-    const { ap, player, vHat } = setup('lasso');
-    const arrivedLog = trackEvents(Events.AUTOPILOT_ARRIVED);
-    setTargetState(ap, { Pd: pdAhead(player, vHat, 150), Vd: new THREE.Vector3(0, 0, 7.5) });
-    ap.update(0.1);
-    ap.update(0.1);
-    ap.update(0.1);
-    assert.equal(arrivedLog.length, 1, 'ARRIVED must fire exactly once on hold entry');
-  });
-
-  it('with LOCKED target, rotate-only holds indefinitely (no auto-disengage)', () => {
-    const { ap, player, vHat } = setup('weaver');
-    setTargetState(ap, { Pd: pdAhead(player, vHat, 800), Vd: new THREE.Vector3(0, 0, 7.5) });
-    ap.update(0.1);
-    assert.equal(ap._inReachRotateOnly, true);
-    assert.ok(ap._lockedTargetRef && ap._lockedTargetRef.alive, 'locked target alive');
-    const disLog = trackEvents(Events.AUTOPILOT_DISENGAGE);
-    ap.update(AP.HOLD_DURATION * 3);
-    assert.equal(ap.engaged, true, 'must hold indefinitely with a live locked target');
-    assert.equal(disLog.length, 0);
-  });
-
-  it('without locked target, rotate-only auto-disengages ARRIVED after HOLD_DURATION', () => {
-    const { ap, player, vHat } = setup('weaver');
-    setTargetState(ap, { Pd: pdAhead(player, vHat, 800), Vd: new THREE.Vector3(0, 0, 7.5) });
-    ap.update(0.1);
-    assert.equal(ap._inReachRotateOnly, true);
-    // Simulate cluster / prograde mode: no specific locked target.
-    ap._lockedTargetRef = null;
-    const disLog = trackEvents(Events.AUTOPILOT_DISENGAGE);
-    ap.update(AP.HOLD_DURATION + 0.1);
-    assert.equal(ap.engaged, false, 'must auto-disengage when no target is locked');
-    assert.equal(disLog.length, 1);
-    assert.equal(disLog[0].data.reason, 'ARRIVED');
-  });
-
-  it('recoil compensation applies in rotate-only mode (LASSO_FIRED)', () => {
-    const { ap, player, vHat } = setup('lasso');
-    player.mass = 130;
-    setTargetState(ap, { Pd: pdAhead(player, vHat, 150), Vd: new THREE.Vector3(0, 0, 7.5) });
-    ap.update(0.1);
-    assert.equal(ap._inReachRotateOnly, true);
-
-    eventBus.emit(Events.LASSO_FIRED, {
-      targetId: 1,
-      projectileMass: 2.5,
-      launchDirection: new THREE.Vector3(1, 0, 0),
-      speed: 10,
-    });
-    const recoilCalls = player.applyCartesianImpulse.calls.filter(c => c.dt === 0);
-    assert.equal(recoilCalls.length, 1,
-      'recoil compensation must apply while holding in rotate-only');
-    const expectedMag = (2.5 * 10 / 130) * Constants.AUTOPILOT.STATION_KEEP_EFFICIENCY;
-    assert.ok(Math.abs(recoilCalls[0].dv.x + expectedMag) < 0.001,
-      'recoil magnitude must match momentum conservation');
-  });
 });
 
 // ============================================================================
@@ -721,7 +520,6 @@ describe('Autopilot — HOLD geometry', () => {
     const vHat = new THREE.Vector3(0, 0, 1);
     const ap = makeAP({ targetSelector: makeTargetSelector({ active: target }), player });
     ap.engage();
-    ap._inReachDisabled = true; // exercise translation FSM through to HOLD
 
     setTargetState(ap, { Pd: pdAhead(player, vHat, 300), Vd: new THREE.Vector3(0, 0, 7.5) });
     ap.update(0.1);
@@ -946,7 +744,6 @@ describe('Autopilot — Integration with real applyCartesianImpulse', () => {
     });
     ap.engage();
     assert.equal(ap.engaged, true, 'AP should engage on valid target');
-    ap._inReachDisabled = true; // testing translation controller convergence
 
     // Run for ~1 second at 60 Hz and record posErr each tick.
     const dt = 1 / 60;
@@ -1012,9 +809,9 @@ describe('Autopilot — Integration with real applyCartesianImpulse', () => {
       player,
     });
     ap.engage();
-    ap._inReachDisabled = true; // testing translation controller convergence
 
     // Freeze the target state (so the goal pose is a single fixed point).
+    // Use the goal pose that the AP would see after resolving the target.
     const targetCart = orbitToSceneCartesian(target.orbit);
     const Pd = new THREE.Vector3(targetCart.position.x, targetCart.position.y, targetCart.position.z);
     const Vd = new THREE.Vector3(targetCart.velocity.x, targetCart.velocity.y, targetCart.velocity.z);
@@ -1120,7 +917,6 @@ describe('Autopilot — Integration with real applyCartesianImpulse', () => {
       player,
     });
     ap.engage();
-    ap._inReachDisabled = true; // testing predictive-braking translation controller
 
     // Drive deterministic target state each tick via the same seam the other
     // suites use. Target drifts prograde at V_ORBITAL_MPS in matching frame.

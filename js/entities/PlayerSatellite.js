@@ -361,6 +361,114 @@ export class PlayerSatellite extends THREE.Group {
   // --------------------------------------------------------------------------
   // 1. Main Bus — Config G Cylindrical Barrel (Epic 10 V-1)
   // --------------------------------------------------------------------------
+  /**
+   * @private Carve stow grooves into the barrel by displacing the cylinder's
+   * vertices radially inward in a band at each strut azimuth.
+   *
+   * The body CylinderGeometry is built Y-axis aligned and the mesh is later
+   * rotated rotation.x=π/2 (geom-Y → world-Z). So a groove at ship azimuth θ and
+   * barrel-Z range [z0,z1] maps to:
+   *   geometry azimuth  φ = -θ          (atan2(geomZ, geomX))
+   *   geometry axial    y ∈ [z0, z1]    (geom-Y == world-Z after the rotation)
+   *
+   * Each groove uses smooth cosine falloff across its angular width and a
+   * smooth ramp at its axial ends, so the dip is a rounded depression rather
+   * than a hard-edged trench. Vertices are pushed inward up to `depth`; the
+   * normals are recomputed so lighting reads the groove correctly.
+   * @param {THREE.BufferGeometry} geo  the body CylinderGeometry (Y-axis)
+   * @param {number} barrelR
+   * @param {number} barrelH
+   */
+  _carveStowGrooves(geo, barrelR, barrelH) {
+    const azimuths = (Constants.ARM_LADDER?.Y0_QUAD?.azimuths ?? [60, 120, 240, 300])
+      .map(d => d * Math.PI / 180);
+
+    // Daughter body specs [x, y, z] in metres. The pocket cradles the body
+    // cross-section (x≈y); z is the body length. Source: Constants.WEAVER_BODY /
+    // SPINNER_BODY. Arm type alternates around the ring by index (mirrors
+    // ArmManager._buildDockPositions: i%2===0 → weaver, else spinner), so the
+    // groove at azimuths[i] is sized for that daughter.
+    const WEAVER_BODY  = Constants.WEAVER_BODY  ?? [0.2, 0.2, 0.3];
+    const SPINNER_BODY = Constants.SPINNER_BODY ?? [0.1, 0.1, 0.15];
+    const barrelR_m = (Constants.OCTOPUS_V5?.COLLAR_RADIUS ?? 0.40); // metres
+
+    /**
+     * Build the groove profile (stow channel + cradle pocket) for one daughter.
+     * @param {number[]} body  daughter [x,y,z] in metres
+     * @returns {Array<{zc:number,hl:number,ha:number,d:number}>}
+     */
+    const profileFor = (body) => {
+      const crossW = body[0];                 // body width (m), cross-section
+      const bodyLen = body[2];                // body length (m), along barrel Z
+      // Pocket angular half-width so the arc spans ~1.3× the body width (a little
+      // clearance around the cradled body): arcWidth = barrelR * 2*ha = 1.3*crossW.
+      const pocketHa = Math.min(0.45, (1.3 * crossW) / (2 * barrelR_m));
+      // Pocket depth scales with daughter size and is capped at 50% of the barrel
+      // radius. The largest daughter (Weaver, crossW 0.20) hits the 50% cap; the
+      // smaller Spinner (crossW 0.10) scales down proportionally. Convert the
+      // metre depth to scene units (×M).
+      const maxDepth_m = barrelR_m * 0.50;            // 0.20 m = 50% of 0.40 m radius
+      const WEAVER_CROSS = (Constants.WEAVER_BODY ?? [0.2])[0];  // reference (largest)
+      const pocketDepth = Math.min(maxDepth_m, maxDepth_m * (crossW / WEAVER_CROSS)) * M;
+      // Pocket axial half-length ≈ body length / 2 plus a little clearance.
+      const pocketHl = (bodyLen * 0.6) * M;
+      // Stow channel: a shallower, narrower groove the folded strut lies in,
+      // running forward of the pocket. Scaled down from the pocket.
+      const chanHa = pocketHa * 0.55;
+      const chanDepth = pocketDepth * 0.55;
+      return [
+        { zc: barrelH * 0.08,  hl: barrelH * 0.38, ha: chanHa,   d: chanDepth },  // stow channel
+        { zc: -barrelH * 0.34, hl: pocketHl,       ha: pocketHa, d: pocketDepth }, // cradle pocket
+      ];
+    };
+
+    const weaverProfile  = profileFor(WEAVER_BODY);
+    const spinnerProfile = profileFor(SPINNER_BODY);
+
+    const pos = geo.attributes.position;
+    const v = new THREE.Vector3();
+    const smooth = (t) => { // smoothstep 0..1
+      t = Math.max(0, Math.min(1, t));
+      return t * t * (3 - 2 * t);
+    };
+    const angDist = (a, b) => {
+      let d = Math.abs(a - b) % (Math.PI * 2);
+      return d > Math.PI ? Math.PI * 2 - d : d;
+    };
+
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i);
+      const r = Math.hypot(v.x, v.z);
+      if (r < 1e-9) continue;              // skip axis-cap centre (open cyl: none)
+      const phi = Math.atan2(v.z, v.x);    // geometry azimuth around Y
+      const y = v.y;                       // geometry axial == world barrel-Z
+
+      let maxDepth = 0;
+      for (let a = 0; a < azimuths.length; a++) {
+        const gPhi = -azimuths[a];         // ship azimuth → geometry azimuth
+        // Match ArmManager ring assignment: even index = weaver, odd = spinner.
+        const grooves = (a % 2 === 0) ? weaverProfile : spinnerProfile;
+        for (const g of grooves) {
+          const dAng = angDist(phi, gPhi);
+          if (dAng > g.ha) continue;
+          const dAx = Math.abs(y - g.zc);
+          if (dAx > g.hl) continue;
+          // Cosine falloff across width, smooth ramp over the last 25% of length.
+          const wAng = 0.5 + 0.5 * Math.cos((dAng / g.ha) * Math.PI);
+          const wAx  = smooth((g.hl - dAx) / (g.hl * 0.25));
+          maxDepth = Math.max(maxDepth, g.d * wAng * wAx);
+        }
+      }
+      if (maxDepth > 0) {
+        const nr = (r - maxDepth) / r;     // pull inward toward the axis
+        v.x *= nr; v.z *= nr;
+        pos.setXYZ(i, v.x, v.y, v.z);
+      }
+    }
+    pos.needsUpdate = true;
+    geo.computeVertexNormals();
+  }
+
   /** @private */
   _buildMainBus() {
     // ── Config G Barrel — cylindrical, 0.4m radius × 2.0m height ──
@@ -375,7 +483,12 @@ export class PlayerSatellite extends THREE.Group {
     // else — solar panels, thrusters, sensors, collar, docking port, channels —
     // sits ON TOP of this blanket (higher renderOrder / larger radius), exactly
     // as cut-outs/mounts sit on a real satellite's MLI.
-    const bodyGeo = new THREE.CylinderGeometry(barrelR, barrelR, barrelH, 16, 1, true);
+    // §2-followup (round 11): body uses 64 radial segments (was 16) so stow
+    // grooves can be carved into the hull as real vertex displacement. The
+    // grooves dip the wall inward in a band at each strut azimuth — a true
+    // conforming depression with no separate, coincident groove mesh.
+    const bodyGeo = new THREE.CylinderGeometry(barrelR, barrelR, barrelH, 64, 24, true);
+    this._carveStowGrooves(bodyGeo, barrelR, barrelH);
     this._matBody = this._matGoldMLI.clone();   // body skin = MLI blanket (gold)
     this.body = new THREE.Mesh(bodyGeo, this._matBody);
     this.body.rotation.x = Math.PI / 2; // Align Y-cylinder to Z-forward
@@ -421,9 +534,13 @@ export class PlayerSatellite extends THREE.Group {
     // cells are maximized: a tall CENTRAL row plus a shorter FORWARD and AFT row
     // filling the end bands that were previously bare MLI. All rows live only on
     // the clear inter-strut facets (off the struts and ROSA roots).
+    // §2-followup (round 13): pulled the fore/aft rows INWARD and shortened them
+    // so they no longer run into the end-mounted hardware (collar ring at the
+    // +Z end, FEEP/RCS thrusters + docking port at the −Z end) or the carved
+    // daughter pockets near the aft end. endZ 0.36→0.30, endH 0.16→0.12.
     const centralH = barrelH * 0.46;          // central PV row height (z)
-    const endH     = barrelH * 0.16;          // forward/aft PV row height
-    const endZ     = barrelH * 0.36;          // |z| centre of the end rows
+    const endH     = barrelH * 0.12;          // forward/aft PV row height (shortened)
+    const endZ     = barrelH * 0.30;          // |z| centre of the end rows (pulled in)
     const cellBandH = centralH;               // (kept for MLI seam placement below)
     const barrelFacets = 16;                  // matches the barrel shell segment count
     const facetStep = (Math.PI * 2) / barrelFacets; // 22.5°
@@ -444,22 +561,36 @@ export class PlayerSatellite extends THREE.Group {
         metalness: 0.5, roughness: 0.5,
         emissive: 0x0b1030, emissiveIntensity: 0.18,
         side: THREE.FrontSide,
+        // §2-followup (round 5): barrel PV panels are flat DECALS tangent to the
+        // body at 1.006× radius — only ~0.6% proud, so they z-fought the gold
+        // MLI shell at some zooms under logarithmicDepthBuffer. Don't write depth
+        // and rely on renderOrder (DETAIL > body OPAQUE) so each panel always
+        // paints on the body it sits on, with no depth tie. depthTest stays on so
+        // the far side of the barrel still occludes panels behind it.
+        depthWrite: false,
       });
     };
     // PV rows: { z-centre, height, texture rows }. Three rows: central + 2 ends.
     const pvRows = [
       { z: 0,      h: centralH, mat: makeRowMat(3) },
       { z: endZ,   h: endH,     mat: makeRowMat(1) },
-      { z: -endZ,  h: endH,     mat: makeRowMat(1) },
+      { z: -endZ,  h: endH,     mat: makeRowMat(1), aft: true },
     ];
     // Scan-flash drives every PV-row material.
     this._cellSkinMats = pvRows.map(r => r.mat);
 
     // Bare-MLI half-window reserved around each strut; cells avoid these and
-    // the ROSA roots at 0°/180° (a ±8° keep-out around each).
+    // the ROSA roots at 0°/180°.
+    // §2-followup (round 13): the central/fore rows keep the original ±18° strut
+    // keep-out (they sit away from the daughter, which stows AFT). The AFT row
+    // gets a much wider ±30° keep-out so no aft cell overlaps a carved daughter
+    // pocket or a stowed daughter, and all end rows were pulled inward + shortened
+    // (endZ/endH above) so they clear the collar (+Z) and thruster/dock (−Z)
+    // hardware near the barrel ends.
     const strutAz = Constants.ARM_LADDER.Y0_QUAD.azimuths.map(d => d * Math.PI / 180);
     const rosaAz = [0, Math.PI];
-    const strutKeep = 18 * Math.PI / 180;  // ±18° clear of each strut
+    const strutKeep    = 18 * Math.PI / 180;  // ±18° clear of each strut (side/central/fore rows)
+    const strutKeepAft = 30 * Math.PI / 180;  // ±30° clear of each strut for the AFT row (pocket/daughter)
     const rosaKeep  = 8 * Math.PI / 180;   // ±8° clear of each ROSA root
     const angDist = (a, b) => { let d = Math.abs(a - b) % (Math.PI * 2); return d > Math.PI ? Math.PI * 2 - d : d; };
 
@@ -470,13 +601,17 @@ export class PlayerSatellite extends THREE.Group {
       if (strutAz.some(s => angDist(az, s) < strutKeep)) continue;
       if (rosaAz.some(rz => angDist(az, rz) < rosaKeep)) continue;
 
-      const rr = barrelR * 1.006;
+      const rr = barrelR * 1.025;
       const radial = new THREE.Vector3(Math.cos(az), Math.sin(az), 0);
       const up = new THREE.Vector3(0, 0, 1);
       const right = new THREE.Vector3().crossVectors(up, radial).normalize();
       const _m4 = new THREE.Matrix4().makeBasis(right, up, radial);
 
       for (const row of pvRows) {
+        // The aft row sits over the daughter-pocket band — give it a wider strut
+        // keep-out so no aft cell overlaps a pocket or a stowed daughter.
+        if (row.aft && strutAz.some(s => angDist(az, s) < strutKeepAft)) continue;
+
         const panelGeo = new THREE.PlaneGeometry(facetWidth * 0.92, row.h);
         const panel = new THREE.Mesh(panelGeo, row.mat);
         // Flat panel tangent to the barrel, just proud of the surface.
@@ -488,6 +623,34 @@ export class PlayerSatellite extends THREE.Group {
       }
     }
 
+    // §2-followup (round 15): a few EXTRA cells in the clear gaps BETWEEN stowed
+    // daughters near the barrel ends, without disturbing the rows above. The
+    // daughters stow at the strut azimuths [60,120,240,300]; the widest clear
+    // azimuth windows sit at 90° and 270° (between a Weaver, ±18.6°, and a
+    // Spinner, ±9.3°). At the fore/aft end Z-bands those windows are clear of
+    // daughters, struts, the RCS thrusters (45/135/225/315°) and the collar, so
+    // one cell fits in each — reclaiming otherwise-bare MLI. (The strobe lights
+    // at 90/270 sit at the equator Z=0, not at these end bands, so no conflict.)
+    const gapMat = makeRowMat(1);
+    this._cellSkinMats.push(gapMat);
+    const gapCellW = facetWidth * 0.75;   // half-angle ≈ 8.5° → ~2.9° margin to the Weaver
+    for (const gapAzDeg of [90, 270]) {
+      const gapAz = gapAzDeg * Math.PI / 180;
+      const radial = new THREE.Vector3(Math.cos(gapAz), Math.sin(gapAz), 0);
+      const up = new THREE.Vector3(0, 0, 1);
+      const right = new THREE.Vector3().crossVectors(up, radial).normalize();
+      const gM4 = new THREE.Matrix4().makeBasis(right, up, radial);
+      for (const z of [endZ, -endZ]) {  // fore (+) and aft (−) end bands
+        const rr = barrelR * 1.025;
+        const panel = new THREE.Mesh(new THREE.PlaneGeometry(gapCellW, endH), gapMat);
+        panel.position.set(Math.cos(gapAz) * rr, Math.sin(gapAz) * rr, z);
+        panel.quaternion.setFromRotationMatrix(gM4);
+        panel.name = `BarrelSolarPanel_gap_${gapAzDeg}_${z > 0 ? 'F' : 'A'}`;
+        panel.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+        this.add(panel);
+      }
+    }
+
     // MLI quilting seams — the body shell IS the gold blanket, so instead of
     // redundant solid gold bands we add thin darker tape/seam rings that divide
     // the blanket into quilted sections (the characteristic MLI look). Purely
@@ -495,7 +658,12 @@ export class PlayerSatellite extends THREE.Group {
     const seamGeo = new THREE.TorusGeometry(barrelR * 1.005, M * 0.005, 4, 24);
     const seamMat = new THREE.MeshStandardMaterial({
       color: 0x8a6d24, metalness: 0.7, roughness: 0.5,  // darker gold tape
-      polygonOffset: true, polygonOffsetFactor: -0.5, polygonOffsetUnits: -0.5,
+      // §2-followup (round 5): MLI seam rings are DECALS on the gold body.
+      // polygonOffset(-0.5) shimmered under logarithmicDepthBuffer; use
+      // depthWrite:false + renderOrder so the seam always paints on the body.
+      // The body shell still writes depth, so the seam's far arc is correctly
+      // occluded (depthTest stays on).
+      depthWrite: false,
     });
     // Seams at the cell-band edges and in the two bare-MLI end sections.
     for (const z of [-barrelH * 0.40, -cellBandH * 0.5, cellBandH * 0.5, barrelH * 0.40]) {
@@ -508,15 +676,19 @@ export class PlayerSatellite extends THREE.Group {
     }
 
 
-    // Panel-line accent rings (thin dark seam grooves). Flush at the barrel
-    // surface (radius 1.007, just over the cells) marking the cell-band seams:
-    // one at centre, two at the cell/MLI boundaries.
-    const lineGeo = new THREE.TorusGeometry(barrelR * 1.007, M * 0.006, 4, 24);
+    // Panel-line accent rings (thin dark seam grooves) marking the cell-band
+    // seams: one at centre, two at the cell/MLI boundaries.
+    // §2-followup (round 8): the accent ring (was 1.007×, tube ±0.006 → radial
+    // 1.001–1.013) RADIALLY OVERLAPPED the MLI seam ring (1.005×, ±0.005 →
+    // 1.000–1.010) AND shared its z at z=±cellBandH*0.5 → two coincident tori
+    // z-fighting each other. Push the accent out to 1.02× (radial 1.014–1.026,
+    // fully clear of the seam) and nudge its z bands off the seam bands so the
+    // two ring sets never coincide.
+    const lineGeo = new THREE.TorusGeometry(barrelR * 1.02, M * 0.006, 4, 24);
     const lineMat = this._matDark.clone();
-    lineMat.polygonOffset = true;
-    lineMat.polygonOffsetFactor = -1.5; // separate from cell skin (-1)
-    lineMat.polygonOffsetUnits = -1.5;
-    for (const z of [-(cellBandH * 0.5), 0, cellBandH * 0.5]) {
+    lineMat.depthWrite = false;
+    const accentZNudge = barrelH * 0.015; // shift accent bands off the seam bands
+    for (const z of [-(cellBandH * 0.5) + accentZNudge, 0, cellBandH * 0.5 - accentZNudge]) {
       const line = new THREE.Mesh(lineGeo, lineMat);
       line.position.z = z;
       line.rotation.x = Math.PI / 2;
@@ -537,7 +709,11 @@ export class PlayerSatellite extends THREE.Group {
       emissive: 0x1133aa, emissiveIntensity: 0.4,
     });
     this.viewport = new THREE.Mesh(viewportGeo, viewportMat);
-    this.viewport.position.set(0, M * 0.2, barrelH * 0.5 + M * 0.001);    // FIX_PLAN §2-followup (round 3)
+    // §2-followup (round 8): was +0.001·M (1 mm) in front of the cap — the disc
+    // (r 0.12) overlaps the cap (r 0.40) in screen space, and 1 mm is below the
+    // log depth buffer's reliable separation → z-fight on the front face. Pushed
+    // to +0.008·M (8 mm) for a decisive, zoom-independent standoff.
+    this.viewport.position.set(0, M * 0.2, barrelH * 0.5 + M * 0.008);
     this.viewport.rotation.x = -0.2;
     this.viewport.name = 'LaserAperture';
     this.viewport.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL; // FIX_PLAN §2-followup
@@ -547,7 +723,9 @@ export class PlayerSatellite extends THREE.Group {
     const apertureRingGeo = new THREE.RingGeometry(M * 0.10, M * 0.14, 8);
     const apertureRingMat = this._matGoldMLI.clone();
     const apertureRing = new THREE.Mesh(apertureRingGeo, apertureRingMat);
-    apertureRing.position.set(0, M * 0.2, barrelH * 0.5 + M * 0.002);     // FIX_PLAN §2-followup (round 3)
+    // §2-followup (round 8): +0.012·M (12 mm), 4 mm proud of the viewport so the
+    // gold rim sits clearly in front of the aperture glass.
+    apertureRing.position.set(0, M * 0.2, barrelH * 0.5 + M * 0.012);
     apertureRing.rotation.x = -0.2;
     apertureRing.name = 'LaserRing';
     apertureRing.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;  // FIX_PLAN §2-followup
@@ -577,69 +755,29 @@ export class PlayerSatellite extends THREE.Group {
     rearCap.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;       // FIX_PLAN §2-followup (round 3)
     this.add(rearCap);
 
-    // ── V-11: Stowage channels — thin dark grooves where struts nest when stowed ──
+    // ── V-11: Stowage grooves are carved into the BODY mesh itself ──
+    // §2-followup (round 11): a true inset arc would be hidden behind the smooth
+    // (thin, open) body wall, so the groove is now part of the hull geometry —
+    // see _buildMainBus where the body cylinder's vertices are displaced inward
+    // in a band at each strut azimuth (_carveStowGrooves). That gives a real
+    // conforming depression with zero coincident geometry. Here we only add the
+    // pyro-pin launch locks at the groove lips.
     const channelTier = Constants.ARM_LADDER.Y0_QUAD;
-    // Channel spans stowed strut range: collar (Z=+0.90) to tip (Z=-0.70)
-    const channelGeo = new THREE.PlaneGeometry(M * 0.06, barrelH * 0.80);
-    const channelMat = new THREE.MeshStandardMaterial({
-      color: 0x111122, metalness: 0.5, roughness: 0.6,
-      side: THREE.DoubleSide,
-      polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -3,
-    });
+
     for (const azDeg of channelTier.azimuths) {
       const azRad = azDeg * Math.PI / 180;
-      const channel = new THREE.Mesh(channelGeo, channelMat);
-      // Channel centre at Z=+0.10 (midpoint between collar +0.90 and strut tip -0.70)
-      channel.position.set(
-        Math.cos(azRad) * barrelR * 1.008, // FIX_PLAN §2 — geometric separation from barrel
-        Math.sin(azRad) * barrelR * 1.008, // FIX_PLAN §2
-        barrelH * 0.05,
-      );
-      // Orient: plane normal → radial outward, plane height → barrel Z axis
-      const radial = new THREE.Vector3(Math.cos(azRad), Math.sin(azRad), 0);
-      const barrelAxis = new THREE.Vector3(0, 0, 1);
-      const tangent = new THREE.Vector3().crossVectors(barrelAxis, radial).normalize();
-      const _m4 = new THREE.Matrix4().makeBasis(tangent, barrelAxis, radial);
-      channel.quaternion.setFromRotationMatrix(_m4);
-      channel.name = `StowChannel_${azDeg}`;
-      channel.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL; // FIX_PLAN §2
-      this.add(channel);
 
-      // ── Daughter pocket — wider recess at aft end of channel ──
-      // Cradles daughter body during launch (220mm × 120mm × 300mm per §10.14)
-      const pocketGeo = new THREE.BoxGeometry(M * 0.10, M * 0.30, M * 0.005);
-      const pocketMat = new THREE.MeshStandardMaterial({
-        color: 0x0a0a18, metalness: 0.4, roughness: 0.7,
-        polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4,
-      });
-      const pocket = new THREE.Mesh(pocketGeo, pocketMat);
-      // Pocket at strut tip when stowed (Z = collar − strutLen = 0.90 − 1.60 = −0.70)
-      pocket.position.set(
-        Math.cos(azRad) * barrelR * 1.012, // FIX_PLAN §2 — 4mm gap from cell grid
-        Math.sin(azRad) * barrelR * 1.012, // FIX_PLAN §2
-        -barrelH * 0.35,
-      );
-      // Orient: same as channel (face outward, height along barrel Z)
-      pocket.quaternion.copy(channel.quaternion);
-      pocket.name = `DaughterPocket_${azDeg}`;
-      pocket.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL; // FIX_PLAN §2
-      this.add(pocket);
-
-      // ── Pyro-pin launch lock — small retention cylinder at pocket lip ──
-      // 1× pyro pin through pocket lip holds daughter during launch (TRL 9)
+      // ── Pyro-pin launch lock — small retention cylinder at the groove lip ──
       const pyroGeo = new THREE.CylinderGeometry(M * 0.006, M * 0.006, M * 0.025, 4);
       const pyroMat = new THREE.MeshStandardMaterial({
         color: 0xcc4400, metalness: 0.6, roughness: 0.4,
-        polygonOffset: true, polygonOffsetFactor: -2.5, polygonOffsetUnits: -2.5, // FIX_PLAN §2
       });
       const pyro = new THREE.Mesh(pyroGeo, pyroMat);
-      // Pin sits at top lip of pocket, protruding radially
       pyro.position.set(
         Math.cos(azRad) * barrelR * 1.02,
         Math.sin(azRad) * barrelR * 1.02,
         -barrelH * 0.21,
       );
-      // Orient pin radially (point outward from barrel surface)
       const radialUp = new THREE.Vector3(Math.cos(azRad), Math.sin(azRad), 0);
       pyro.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), radialUp);
       pyro.name = `PyroPin_${azDeg}`;
@@ -743,9 +881,13 @@ export class PlayerSatellite extends THREE.Group {
     //   collarRing  major 0.40 ± 0.015 → covers 0.385–0.415
     //   flangeRing  major 0.388 ± 0.006 → covers 0.382–0.394
     //   seatRing    major 0.402 ± 0.008 → covers 0.394–0.410
-    // → seatRing radially overlaps collarRing (0.394–0.410 ⊂ 0.385–0.415) at
-    //   the EXACT same z → torus-on-torus z-fight ring all the way around.
-    // Fix: stagger z by ±2 mm and tag renderOrder so layering is deterministic.
+    // → seatRing radially overlaps collarRing (0.394–0.410 ⊂ 0.385–0.415).
+    // §2-followup (round 8): the original ±2 mm z-stagger was SMALLER than the
+    // rings' own tube radii (collar ±0.015, seat ±0.008), so at the overlapping
+    // radius their tubes still intersected in z → residual z-fight under the log
+    // depth buffer. Widened the stagger to ±0.025·M (25 mm) — larger than the
+    // sum of the half-tube-thicknesses (0.015+0.008) — so the tubes are fully
+    // separated in z at every zoom.
     const collarGeo = new THREE.TorusGeometry(collarR, M * 0.015, 8, 32);
     this.collarRing = new THREE.Mesh(collarGeo, collarMat);
     this.collarRing.rotation.x = Math.PI / 2;   // torus plane ⊥ barrel Z
@@ -754,20 +896,20 @@ export class PlayerSatellite extends THREE.Group {
     this.collarRing.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL; // FIX_PLAN §2-followup
     this.add(this.collarRing);
 
-    // Inner flange ring (collar-to-barrel shelf) — pushed 2 mm aft
+    // Inner flange ring (collar-to-barrel shelf) — pushed 25 mm aft
     const flangeRingGeo = new THREE.TorusGeometry(collarR - M * 0.012, M * 0.006, 4, 32);
     const flangeRing = new THREE.Mesh(flangeRingGeo, collarMat);
     flangeRing.rotation.x = Math.PI / 2;
-    flangeRing.position.z = collarY - M * 0.002;                            // FIX_PLAN §2-followup
+    flangeRing.position.z = collarY - M * 0.025;                            // §2-followup (round 8)
     flangeRing.name = 'CollarFlangeRing';
     flangeRing.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;      // FIX_PLAN §2-followup
     this.add(flangeRing);
 
-    // Barrel seat ring (raised interface ring on barrel skin) — pushed 2 mm fore
+    // Barrel seat ring (raised interface ring on barrel skin) — pushed 25 mm fore
     const seatRingGeo = new THREE.TorusGeometry(collarR + M * 0.002, M * 0.008, 4, 32);
     const seatRing = new THREE.Mesh(seatRingGeo, seatMat);
     seatRing.rotation.x = Math.PI / 2;
-    seatRing.position.z = collarY + M * 0.002;                              // FIX_PLAN §2-followup
+    seatRing.position.z = collarY + M * 0.025;                              // §2-followup (round 8)
     seatRing.name = 'BarrelSeatRing';
     seatRing.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;        // FIX_PLAN §2-followup
     this.add(seatRing);
@@ -972,18 +1114,29 @@ export class PlayerSatellite extends THREE.Group {
 
     // ── Root joint collar (clevis fork fitting at hinge end) ──
     // FIX_PLAN §2-followup: rootCollar cylinder at strutR*1.20 (radius 0.030)
-    // sits at the pivot point on the bus surface — its radial extent crosses
-    // the collarRing torus (radii 0.385–0.415) AND seatRing (0.394–0.410).
-    // polygonOffset(-2,-2) pushes the strut collar metal forward in depth so
-    // it wins the depth tie at the hinge cluster without geometry juggling.
+    // sits at the pivot point on the bus surface, where it crosses the body
+    // collar/seat rings. §2-followup (round 5) replaced the old polygonOffset
+    // depth bias with a real outboard standoff (see ROOT_COLLAR_STANDOFF below).
+    const ROOT_COLLAR_LEN = M * 0.025;          // cylinder length (half = inner-face offset)
+    // Forward reach of the body collar cluster toward the strut, measured from
+    // the hinge plane (collarY). The collarRing (tube radius 0.015 at z=collarY)
+    // dominates; seat/flange rings sit within it. Keep in sync with _buildCollar.
+    const COLLAR_RING_REACH = M * 0.015;
+    const STANDOFF_MARGIN   = M * 0.004;        // clearance so metal never grazes the ring
+    // Distance the collar centre must sit outboard (-Y) of the pivot so its
+    // inner face clears the ring cluster: half-length + ring reach + margin.
+    const ROOT_COLLAR_STANDOFF = ROOT_COLLAR_LEN * 0.5 + COLLAR_RING_REACH + STANDOFF_MARGIN;
     const rootCollarGeo = new THREE.CylinderGeometry(
-      strutR * 1.20, strutR * 1.20, M * 0.025, 12
+      strutR * 1.20, strutR * 1.20, ROOT_COLLAR_LEN, 12
     );
     const rootCollarMat = new THREE.MeshStandardMaterial({
       color: 0x8888a0, metalness: 0.75, roughness: 0.28,  // 7075-T6
-      polygonOffset: true,                                 // FIX_PLAN §2-followup
-      polygonOffsetFactor: -2,                             // FIX_PLAN §2-followup
-      polygonOffsetUnits: -2,                              // FIX_PLAN §2-followup
+      // §2-followup (round 5): polygonOffset(-2,-2) removed. The root collar is
+      // solid metal interpenetrating the body-frame collar/seat rings, and
+      // polygonOffset is the LEAST reliable here under logarithmicDepthBuffer
+      // (it biased two solids in different transform frames). Replaced with a
+      // real geometric standoff (see rootCollar.position.y below) so the collar
+      // metal physically clears the ring surfaces at every zoom.
     });
 
     // ── Tip joint collar (dock fitting at daughter-arm end) ──
@@ -1009,7 +1162,12 @@ export class PlayerSatellite extends THREE.Group {
     });
 
     // ── S3.3: Cable harness (Line geometry, simplified from TubeGeometry) ──
-    const cableOffset = strutR + M * 0.005;  // 30mm from strut center
+    // §2-followup (round 8): was strutR+0.005 = 0.030, which put the cable line
+    // right on the rib-ring tube (centre 0.0305, outer 0.0335) → the 1px line
+    // z-fought the ring surface where it crossed each ring. Route it just
+    // OUTSIDE the rib-ring outer edge so it rides proud of the rings with a real
+    // gap. The P-clips inherit this offset, so cable + clips stay aligned.
+    const cableOffset = strutR * 1.22 + M * 0.006;  // ~clear of rib-ring outer (0.0335)
     const cableVerts = new Float32Array([
       cableOffset, -M * 0.015, 0,                       // root collar exit
       cableOffset, -strutLen * 0.25, 0,                  // clip 1
@@ -1097,9 +1255,17 @@ export class PlayerSatellite extends THREE.Group {
       pivotGroup.add(cable);
 
       // ── S3.3: P-clips at rib ring positions ──
+      // §2-followup (round 8): the clips were at the EXACT same Y as the rib
+      // rings (-strutLen*{0.25,0.50,0.75}), and the clip box (centred at radius
+      // cableOffset≈0.030, extent ±0.006 → 0.024–0.036) sits INSIDE the rib-ring
+      // torus radial span (0.0275–0.0335) at that Y → interpenetrating coincident
+      // geometry that z-fought on the +X side. Offset each clip a few mm along Y
+      // off the ring plane so the box and torus no longer share a plane. (A clip
+      // clamping the cable just below its rib ring is physically correct.)
+      const CLIP_Y_OFFSET = M * 0.012;
       for (const frac of [0.25, 0.50, 0.75]) {
         const clip = new THREE.Mesh(clipGeo, ribMat);
-        clip.position.set(cableOffset, -strutLen * frac, 0);
+        clip.position.set(cableOffset, -strutLen * frac - CLIP_Y_OFFSET, 0);
         clip.name = `PClip_${i}_${frac * 100}`;
         clip.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;   // FIX_PLAN §2-followup
         pivotGroup.add(clip);
@@ -1139,7 +1305,13 @@ export class PlayerSatellite extends THREE.Group {
 
       // ── Root joint collar (hinge end) ──
       const rootCollar = new THREE.Mesh(rootCollarGeo, rootCollarMat);
-      rootCollar.position.y = -M * 0.0125;  // flush with pivot origin
+      // §2-followup (round 5): seat the collar outboard along the strut (-Y) by
+      // a standoff DERIVED from the ring cluster's reach + the collar's own
+      // half-length (see ROOT_COLLAR_STANDOFF above), so its inner face clears
+      // the body collar/seat rings geometrically — log-depth-buffer-safe and
+      // self-adjusting if the ring/collar dimensions change. Replaces both the
+      // old polygonOffset bias and the earlier hand-picked 6mm guess.
+      rootCollar.position.y = -ROOT_COLLAR_STANDOFF;
       rootCollar.name = `RootCollar_${i}`;
       rootCollar.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;   // FIX_PLAN §2-followup
       pivotGroup.add(rootCollar);
@@ -1208,8 +1380,16 @@ export class PlayerSatellite extends THREE.Group {
       this.add(thruster);
       this.mainThrusters.push(thruster);
 
-      // Inner liner — BackSide-rendered interior surface, distinct from copper exterior
-      const innerLiner = new THREE.Mesh(nozzleGeo, this._matFEEPInner.clone());
+      // Inner liner — BackSide-rendered interior surface, distinct from copper
+      // exterior.
+      // §2-followup (round 8): the liner used the SAME nozzleGeo as the thruster
+      // with zero offset — a coincident shell (exactly the daughter cell-skin
+      // bug). Under logarithmicDepthBuffer two coincident surfaces z-fight
+      // regardless of depth flags. Give the liner its own geometry at 0.97× the
+      // nozzle radius so it is a genuine interior wall with a real ~1.8mm gap,
+      // never coincident with the outer nozzle.
+      const linerGeo = new THREE.CylinderGeometry(M * 0.03 * 0.97, M * 0.06 * 0.97, M * 0.15, 6, 1, true);
+      const innerLiner = new THREE.Mesh(linerGeo, this._matFEEPInner.clone());
       innerLiner.name = `FEEPInner_${i}`;
       innerLiner.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
       thruster.add(innerLiner);
@@ -1388,6 +1568,14 @@ export class PlayerSatellite extends THREE.Group {
       wireframe: true,
       transparent: true,
       depthWrite: false,
+      // §2-followup (round 6): the grid is a wireframe DECAL sitting ~sub-mm over
+      // the panel face. With depthTest on, that tiny fixed z-gap is unreliable
+      // under logarithmicDepthBuffer → the grid shimmered against the panel.
+      // The fragment shader already discards back-facing fragments (the dot test
+      // above), so we can safely skip the depth test entirely: the grid then
+      // always paints cleanly on the camera-facing panel with NO depth tie, and
+      // never shows through from behind. renderOrder keeps it above the panel.
+      depthTest: false,
       side: THREE.DoubleSide,
     });
     const rollMat = new THREE.MeshStandardMaterial({
@@ -1439,8 +1627,18 @@ export class PlayerSatellite extends THREE.Group {
     // ── Gold anodized edge frames (ISS ROSA style) ──
     const goldEdgeMat = new THREE.LineBasicMaterial({
       color: 0xccaa44,     // gold chromate conversion coating
-      depthTest: true,
       transparent: false,
+      // §2-followup (round 6): the gold edge is a DECAL line frame on the panel
+      // outline, near-coplanar with the grid + panel face. It previously WROTE
+      // depth and depth-TESTED at a fixed 0.0015 z-nudge that does not hold under
+      // logarithmicDepthBuffer → shimmer against the grid/panel. Treat it like
+      // the grid: no depth write AND no depth test, so the frame always paints
+      // on its panel with zero depth tie. renderOrder keeps the stacking order
+      // (panel < edge < grid). The frame only exists where a panel face is, so
+      // skipping depthTest does not make it bleed through unrelated geometry in
+      // practice (the wings deploy far outboard of the hull).
+      depthWrite: false,
+      depthTest: false,
     });
 
     // ── Shared solar array pivot — groups both wings as one rigid
