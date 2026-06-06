@@ -1163,6 +1163,27 @@ export class DebrisField {
   // ==========================================================================
 
   /**
+   * Advance a debris's visual tumble angle for this frame, clamped to
+   * DEBRIS_MAX_VISUAL_TUMBLE_DEG_S (ST-2.3).
+   *
+   * A CAPTURED debris is cinched in the net (held by, or pinned to, a daughter),
+   * which arrests its tumble — so its orientation is frozen while held: it does
+   * not rotate while reeling in or while parked at the strut tip. The angle
+   * resumes advancing from where it stopped if the catch is ever released (the
+   * `_capturedByArm` / `_armPinned` flags clear), so a dropped catch tumbles
+   * again naturally.
+   *
+   * @param {object} debris        canonical debris record (mutated in place)
+   * @param {number} dt            real-frame delta seconds
+   * @param {number} maxVisualRad  per-frame visual-rate clamp (rad/s)
+   */
+  static _advanceTumble(debris, dt, maxVisualRad) {
+    if (debris._capturedByArm || debris._armPinned) return; // cinched — no tumble
+    const visualRate = Math.min(debris.tumbleRate * Constants.TIME_SCALE_GAMEPLAY, maxVisualRad);
+    debris.tumbleAngle += visualRate * dt;
+  }
+
+  /**
    * Per-frame update: propagate orbits, update instance transforms, update background.
    * @param {number} dt - Real-time delta (seconds)
    * @param {THREE.Vector3} [playerPos] - Player position for LOD
@@ -1379,9 +1400,8 @@ export class DebrisField {
         }
       }
 
-      // Update tumble — clamp visual rate ≤ DEBRIS_MAX_VISUAL_TUMBLE_DEG_S (ST-2.3)
-      const visualRate = Math.min(debris.tumbleRate * Constants.TIME_SCALE_GAMEPLAY, maxVisualRad);
-      debris.tumbleAngle += visualRate * dt;
+      // Update tumble (frozen while the debris is captured — see _advanceTumble).
+      DebrisField._advanceTumble(debris, dt, maxVisualRad);
 
       // Update instance transform
       const lookup = this._instanceLookup.get(debris.id);

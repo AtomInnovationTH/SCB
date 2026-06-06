@@ -9,6 +9,7 @@
  */
 import { describe, it, assert } from './TestRunner.js';
 import * as THREE from 'three';
+import { Constants } from '../core/Constants.js';
 import { DebrisField } from '../entities/DebrisField.js';
 
 describe('DebrisField.pinCapturedDebris — authoritative catch pin', () => {
@@ -54,5 +55,42 @@ describe('DebrisField.pinCapturedDebris — authoritative catch pin', () => {
     DebrisField.prototype.pinCapturedDebris.call(field, obj, armPos);
     assert.ok(obj._scenePosition.distanceTo(armPos) < 1e-9, 'pinned to arm');
     assert.equal(obj._armPinned, true, 'flagged pinned');
+  });
+});
+
+describe('DebrisField._advanceTumble — a captured catch stops rotating', () => {
+  it('advances tumble for a free (uncaptured) debris', () => {
+    const d = { tumbleRate: 0.1, tumbleAngle: 0 };
+    DebrisField._advanceTumble(d, 1.0, 999);
+    const expected = Math.min(0.1 * Constants.TIME_SCALE_GAMEPLAY, 999) * 1.0;
+    assert.ok(d.tumbleAngle > 0, 'free debris tumbles');
+    assert.ok(Math.abs(d.tumbleAngle - expected) < 1e-9, 'advanced by clamped visual rate');
+  });
+
+  it('freezes tumble while held by an arm (_capturedByArm) — reeling in', () => {
+    const d = { tumbleRate: 0.1, tumbleAngle: 1.23, _capturedByArm: {} };
+    DebrisField._advanceTumble(d, 1.0, 999);
+    assert.equal(d.tumbleAngle, 1.23, 'a reeled-in catch does not rotate');
+  });
+
+  it('freezes tumble while pinned to the strut (_armPinned) — parked', () => {
+    const d = { tumbleRate: 0.1, tumbleAngle: 2.5, _armPinned: true };
+    DebrisField._advanceTumble(d, 1.0, 999);
+    assert.equal(d.tumbleAngle, 2.5, 'a parked catch does not rotate');
+  });
+
+  it('resumes tumbling once released (flags cleared)', () => {
+    const d = { tumbleRate: 0.1, tumbleAngle: 2.5, _armPinned: true };
+    DebrisField._advanceTumble(d, 1.0, 999);
+    assert.equal(d.tumbleAngle, 2.5, 'frozen while pinned');
+    d._armPinned = false;
+    DebrisField._advanceTumble(d, 1.0, 999);
+    assert.ok(d.tumbleAngle > 2.5, 'tumbles again after release');
+  });
+
+  it('clamps the visual rate to maxVisualRad', () => {
+    const d = { tumbleRate: 1000, tumbleAngle: 0 };
+    DebrisField._advanceTumble(d, 1.0, 0.5);
+    assert.ok(Math.abs(d.tumbleAngle - 0.5) < 1e-9, 'clamped to maxVisualRad * dt');
   });
 });
