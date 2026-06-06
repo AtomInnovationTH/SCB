@@ -172,6 +172,10 @@ export class NetProjectile {
     /** @type {object|null} Reference to source arm for inventory restoration (§3.5) */
     this._sourceArm     = config.sourceArm || null;
 
+    /** @type {boolean} Daughter capture being hauled by the ArmUnit — hold the
+     *  net's own reel (bag stays cinched on the debris) until the arm delivers. */
+    this._heldByArm     = false;
+
     // ── Runtime state ──
     this.state         = STATES.LAUNCHING;
     this.stateTimer    = 0;
@@ -527,6 +531,25 @@ export class NetProjectile {
 
   /** Phase 7: Reel-in — motor pulls net+debris back */
   _updateReeling(dt) {
+    // ── Held daughter catch: keep the bag cinched on the debris until the arm
+    // delivers it. The net's own reel is short (tetherPaidOut/REEL_SPEED) and
+    // would otherwise STOW — removing the bag visual — long before the daughter
+    // finishes hauling, so the netted catch appeared to vanish mid-haul. The
+    // position-follow above keeps the bag locked onto the debris while we hold;
+    // we release the hold (and stow) once the catch is no longer pinned to a
+    // captor: docked (debris removed/alive=false, pin cleared), net failure
+    // (pin cleared), or tether snap's bounded drift (pin finally cleared).
+    if (this._heldByArm) {
+      const d = this.targetDebris;
+      const stillHauling = !!(d && d.alive !== false && d._capturedByArm);
+      if (stillHauling) {
+        this.tensionN = 1.0 + this.capturedMass * 0.1;
+        return;                       // hold: no completion while the arm hauls
+      }
+      this._heldByArm = false;        // delivered / lost → stow promptly
+      this.reelProgress = 1.0;
+    }
+
     if (this.tetherPaidOut <= 0) {
       // Edge case: net fired but didn't travel
       this.reelProgress = 1.0;
@@ -782,6 +805,15 @@ export class CaptureNetSystem {
           : CN.COOLDOWN_MISS;
         const key = net.armIndex >= 0 ? `arm_${net.armIndex}` : `pod_${net.podIndex}`;
         this._cooldownTimers.set(key, cooldown);
+
+        // Daughter captures are hauled home by the ArmUnit, not reeled by the
+        // net itself. Hold the net's reel (bag stays cinched on the debris) so
+        // the netted catch doesn't visually vanish mid-haul; _updateReeling
+        // auto-releases the hold once the daughter delivers (debris unpinned).
+        // Mother-pod captures (podIndex≥0) and misses reel/stow normally.
+        if (net.armIndex >= 0 && net.catchResult === 'success') {
+          net._heldByArm = true;
+        }
 
         // Auto-start reel (player can still release / override)
         net.startReel();

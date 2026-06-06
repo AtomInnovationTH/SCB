@@ -14,13 +14,6 @@ import { captureNetSystem } from '../entities/CaptureNet.js';
 import { persistenceManager } from './PersistenceManager.js';
 import { CeremonyTimeScale } from './CeremonyTimeScale.js';
 
-// ──────────────────────────────────────────────────────────────────────────
-// [DBG-ARM] Temporary debug helpers — remove after diagnosing camera/orient bugs
-// ──────────────────────────────────────────────────────────────────────────
-const _DBG_M  = (v) => (v / 0.00001).toFixed(1);                        // scene units → metres
-const _dbgVec = (v) => v ? `(${_DBG_M(v.x)},${_DBG_M(v.y)},${_DBG_M(v.z)})m` : 'null';
-const _dbgDir = (v) => v ? `(${v.x.toFixed(3)},${v.y.toFixed(3)},${v.z.toFixed(3)})` : 'null';
-
 // ============================================================================
 // VIEW MODES
 // ============================================================================
@@ -407,13 +400,6 @@ export class CameraSystem {
     if (this._netCeremony.active && view !== CameraViews.NET_CINEMATIC) {
       this._abortNetCeremony();
     }
-
-    // [DBG-ARM] Log every setView entry
-    console.log(
-      `[DBG-ARM] setView prev=${this.currentView} new=${view} ` +
-      `_transitioning(was)=${this._transitioning} camPos=${_dbgVec(this.camera.position)} ` +
-      `playerPos=${_dbgVec(this._lastPlayerPos)}`
-    );
 
     this._previousView = this.currentView;
     this.currentView = view;
@@ -1082,13 +1068,6 @@ export class CameraSystem {
    */
   setPilotArm(arm) {
     if (!arm) return;
-    // [DBG-ARM] setPilotArm entry — capture state at moment user pressed P
-    console.log(
-      `[DBG-ARM] setPilotArm ENTRY arm=${arm.id} state=${arm.state} ` +
-      `armPos=${_dbgVec(arm.position)} ` +
-      `targetPos=${arm.target ? _dbgVec(arm.target._scenePosition) : 'noTarget'} ` +
-      `camPos=${_dbgVec(this.camera.position)} currentView=${this.currentView}`
-    );
     this.armPilot.arm = arm;
     // Phase 4: Save base FOV (without breathe offset) and reset breathe state
     this.armPilot.fovNormal = this._baseFov;
@@ -1114,11 +1093,6 @@ export class CameraSystem {
     } else {
       this.camera.getWorldDirection(this.armPilot._prevForward);
     }
-    // [DBG-ARM] log _prevForward chosen + about to switch view
-    console.log(
-      `[DBG-ARM] setPilotArm READY arm=${arm.id} _prevForward=${_dbgDir(this.armPilot._prevForward)} ` +
-      `→ setView(ARM_PILOT)`
-    );
     this.setView(CameraViews.ARM_PILOT);
   }
 
@@ -1276,17 +1250,13 @@ export class CameraSystem {
   _updateLaunchCeremony(dt, playerPos, velDir, radialDir, playerQuat) {
     const c = this._launchCeremony;
     //                     Phase:  0    1       2       3
-    const DURATIONS = [0, 2.25, 3.0, 0.75]; // total 6.0s (50% slower for new players)
+    const DURATIONS = [0, 3.25, 3.5, 1.0]; // total 7.75s.
+    // Phase 1 (3.25s): spring fires at CROSSBOW_UNDOCK_TIME (1.5s), leaving ~1.75s
+    //   for the player to actually SEE the daughter separate and fly free in the
+    //   familiar wide CHASE view before the camera leaves the mothership.
+    // Phase 2 (3.5s) / Phase 3 (1.0s): longer, gentler glide + settle into the
+    //   pilot view so the handoff reads as gradual rather than a lunge.
     c.timer += dt;
-
-    // [DBG-ARM] Phase-change tracking + per-frame counter
-    if (c._dbgPrevPhase === undefined) { c._dbgPrevPhase = c.phase; c._dbgPhaseFrame = 0; }
-    if (c._dbgPrevPhase !== c.phase) {
-      console.log(`[DBG-ARM] CEREMONY phase change ${c._dbgPrevPhase}→${c.phase}`);
-      c._dbgPhaseFrame = 0;
-      c._dbgPrevPhase = c.phase;
-    }
-    c._dbgPhaseFrame++;
 
     // ── Phase complete? Advance ──
     if (c.timer >= DURATIONS[c.phase]) {
@@ -1310,12 +1280,6 @@ export class CameraSystem {
       }
 
       if (c.phase > 3) {
-        // [DBG-ARM] CEREMONY END (normal phase>3 path)
-        console.log(
-          `[DBG-ARM] CEREMONY END (phase>3) arm=${c.arm?.id} armState=${c.arm?.state} ` +
-          `armPos=${_dbgVec(c.arm?.position)} camPos=${_dbgVec(this.camera.position)} ` +
-          `playerPos=${_dbgVec(playerPos)}`
-        );
         // Ceremony complete → return to CHASE view.
         // ARM_PILOT is ONLY entered when the user presses the P hotkey.
         // Restore near-plane pushed during Phase 2-3
@@ -1368,12 +1332,6 @@ export class CameraSystem {
     // LAUNCH_CEREMONY_COMPLETE. Instead, replicate the phase > 3 completion
     // block inline (same logic as lines 937-962 above).
     if (arm.state === Constants.ARM_STATES.STATION_KEEP && c.phase < 3) {
-      // [DBG-ARM] CEREMONY END (early SK path — daughter reached SK before phase 3)
-      console.log(
-        `[DBG-ARM] CEREMONY END (early-SK) arm=${arm.id} phase=${c.phase} ` +
-        `armPos=${_dbgVec(arm.position)} camPos=${_dbgVec(this.camera.position)} ` +
-        `playerPos=${_dbgVec(playerPos)}`
-      );
       this.camera.near = Constants.CAMERA_NEAR;
       this.camera.updateProjectionMatrix();
       const completingArm = c.arm;
@@ -1417,7 +1375,7 @@ export class CameraSystem {
     switch (c.phase) {
 
       // ════════════════════════════════════════════════════════════════════
-      // Phase 1: OBSERVE (1.5s) — Camera at CHASE, watching the satellite
+      // Phase 1: OBSERVE (3.25s) — Camera at CHASE, watching the satellite
       // ════════════════════════════════════════════════════════════════════
       case 1: {
         // Drive strut slew toward target direction during clamp hold
@@ -1482,7 +1440,7 @@ export class CameraSystem {
       }
 
       // ════════════════════════════════════════════════════════════════════
-      // Phase 2: TETHER_FOLLOW (2.0s) — Zoom from mother to behind-daughter
+      // Phase 2: TETHER_FOLLOW (3.5s) — Zoom from mother to behind-daughter
       // ════════════════════════════════════════════════════════════════════
       case 2: {
         // Start: CHASE position (behind mother — where Phase 1 ended)
@@ -1505,7 +1463,7 @@ export class CameraSystem {
       }
 
       // ════════════════════════════════════════════════════════════════════
-      // Phase 3: HANDOFF (0.75s) — Settle to ARM_PILOT tracking view
+      // Phase 3: HANDOFF (1.0s) — Settle to ARM_PILOT tracking view
       // ════════════════════════════════════════════════════════════════════
       case 3: {
         // Temporarily set armPilot.arm so _computeArmPilot works
@@ -1533,7 +1491,7 @@ export class CameraSystem {
     // User can press P for manual pilot which eases to 40° (armPilot.fovNarrow).
     if (c.phase >= 2) {
       const targetFov = 45;
-      const fovEaseRate = 3.0;
+      const fovEaseRate = 1.5;
       this._baseFov += (targetFov - this._baseFov) * Math.min(1, fovEaseRate * dt);
       this.camera.fov = this._baseFov;
 

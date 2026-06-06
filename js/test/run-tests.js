@@ -138,6 +138,11 @@ import './test-CoMCalculator.js';
 // ST-9.4 C-6: Capture Net System — projectile, catch, reel, inventory, persistence
 import './test-CaptureNet.js';
 
+// Capture-failure handling — net failure (recoverable) vs tether snap (catastrophic),
+// reel-tension retune, oversize/strain net integrity, authoritative reel-in pin
+import './test-ArmUnit-CaptureFailure.js';
+import './test-DebrisField-PinCatch.js';
+
 // ST-9.5 C-7: Tether Reel — strut-mounted reel state machine, cable physics, persistence
 import './test-TetherReel.js';
 

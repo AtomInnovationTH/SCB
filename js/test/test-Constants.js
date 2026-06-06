@@ -367,8 +367,8 @@ describe('Constants - TEACHING namespace (ST-6.5)', () => {
         assert.ok(typeof T.PERSISTENCE_KEY === 'string' && T.PERSISTENCE_KEY.length > 0);
     });
 
-    it('TOTAL_MOMENTS is 17', () => {
-        assert.equal(Constants.TEACHING.TOTAL_MOMENTS, 17);
+    it('TOTAL_MOMENTS is 19', () => {
+        assert.equal(Constants.TEACHING.TOTAL_MOMENTS, 19);
     });
 });
 

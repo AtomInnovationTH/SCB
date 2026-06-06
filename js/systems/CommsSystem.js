@@ -641,7 +641,13 @@ export class CommsSystem {
 
     // §4 item 2: TETHER_SNAP → CRITICAL comms + ALERT channel (BUG-C fix)
     eventBus.on(Events.TETHER_SNAP, (data) => {
-      this.addMessage('CRITICAL', data?.armId || 'SYSTEM', 'TETHER SNAPPED — that arm and its catch are lost, and it can\'t be reloaded.', { channel: 'ALERT' });
+      this.addMessage('CRITICAL', data?.armId || 'SYSTEM', 'TETHER SEVERED — daughter and catch cut loose and drifting. Reload not possible; send another daughter to chase it down.', { channel: 'ALERT' });
+    });
+
+    // Net-integrity failure (recoverable): the net lost its grip on a heavy
+    // catch. The daughter is fine and returning to reload; the debris is loose.
+    eventBus.on(Events.NET_FAILED, (data) => {
+      this.addMessage('WARNING', data?.armId || 'SYSTEM', 'NET FAILED — debris slipped the net and is drifting. Daughter returning to reload; re-net to retry.', { channel: 'ALERT' });
     });
 
     // §4 item 3: ARM_RETURNED (captured) → Docking comms

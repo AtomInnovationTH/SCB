@@ -727,6 +727,12 @@ export class HUD {
       this.statusPanel.renderArmPanel();
     });
 
+    // Net-integrity failure (recoverable) → amber alert + re-render
+    eventBus.on(Events.NET_FAILED, (data) => {
+      this.showNetFailedAlert(data);
+      this.statusPanel.renderArmPanel();
+    });
+
     // V5: Tether tangle → re-render arm panel
     eventBus.on(Events.TETHER_TANGLE, () => this.statusPanel.renderArmPanel());
 
@@ -1257,15 +1263,6 @@ export class HUD {
 
     // Target list panel
     if (this.panels.targets) {
-      // [DBG-VIEWCFG] Log when target panel visibility changes
-      const wasVisible = this.panels.targets.style.display !== 'none';
-      const willShow = !!cfg.showTargetList;
-      if (wasVisible !== willShow) {
-        console.warn('[DBG-VIEWCFG] target panel visibility change:',
-          wasVisible ? 'VISIBLE→HIDDEN' : 'HIDDEN→VISIBLE',
-          'cfg.label=', cfg.label,
-          'showTargetList=', cfg.showTargetList);
-      }
       this.panels.targets.style.display = cfg.showTargetList ? '' : 'none';
     }
 
@@ -1650,6 +1647,40 @@ export class HUD {
     // Also show as a queued warning
     const cause = data?.cause || 'overload';
     this.showWarning(`⚠ TETHER SNAP — ${cause}`, 'critical');
+  }
+
+  /**
+   * Recoverable net failure: amber flash + "NET FAILED" text. Less severe than
+   * a tether snap (the daughter survives and the debris is re-capturable).
+   */
+  showNetFailedAlert(data) {
+    // Amber radial flash (softer than the red tether-snap flash)
+    const flash = document.createElement('div');
+    flash.style.cssText = `
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      background: radial-gradient(circle, rgba(255,170,40,0.45) 0%, rgba(255,140,0,0) 70%);
+      pointer-events: none; z-index: 100;
+      animation: detachFlash 0.8s ease-out forwards;
+    `;
+    document.body.appendChild(flash);
+    timerManager.setTimeout(() => flash.remove(), 850, { owner: this });
+
+    // Floating "NET FAILED" text
+    const text = document.createElement('div');
+    text.style.cssText = `
+      position: fixed; top: 35%; left: 50%;
+      transform: translate(-50%, -50%);
+      color: #ffaa33; font-family: 'Courier New', monospace;
+      font-size: 28px; font-weight: bold; letter-spacing: 4px;
+      text-shadow: 0 0 18px rgba(255,170,50,0.8), 0 0 36px rgba(255,140,0,0.4);
+      pointer-events: none; z-index: 101;
+      animation: detachTextFloat 2.0s ease-out forwards;
+    `;
+    text.textContent = 'NET FAILED';
+    document.body.appendChild(text);
+    timerManager.setTimeout(() => text.remove(), 2100, { owner: this });
+
+    this.showWarning('⚠ NET FAILED — debris slipped free', 'warning');
   }
 
   /**

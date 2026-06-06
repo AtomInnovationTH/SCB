@@ -52,7 +52,6 @@ export class TargetSelector {
     this.activeTarget = debris;
     this._targetContext = context;
     if (debris) {
-      console.log('[AUTO-TARGET] TargetSelector.setTarget: id=%s type=%s alive=%s', debris.id, debris.type, debris.alive);
       // UX-3 #9: Auto-discover on selection (ensures selected target shows in panel)
       if (!debris.discovered) {
         debris.discovered = true;
@@ -64,7 +63,6 @@ export class TargetSelector {
       }
       eventBus.emit(Events.TARGET_SELECTED, { id: debris.id, type: debris.type, debris, ...context });
     } else {
-      console.log('[AUTO-TARGET] TargetSelector.setTarget: clearing target (null)');
       this._recommendedTool = null;
       this._toolAlternatives = [];
       this._toolIndex = 0;
@@ -296,7 +294,6 @@ export class TargetSelector {
    */
   _onDebrisRemoved(data) {
     if (this.activeTarget && data && data.id === this.activeTarget.id) {
-      console.log('[AUTO-TARGET] TargetSelector._onDebrisRemoved: clearing target id=%s (matches removed debris)', data.id);
       this.clearTarget();
     }
   }

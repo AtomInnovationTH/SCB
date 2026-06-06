@@ -644,6 +644,17 @@ class GameFlowManager {
     // field, award score, and notify comms.
     // ==================================================================
 
+    // Dock completion: ArmUnit._updateDocking emits DEBRIS_CAPTURED once the
+    // catch has been stowed (~3s after arrival). THIS is where the debris is
+    // finally removed from the field — deferred from ARM_RETURNED so the catch
+    // stays visible at the mother through the dock instead of vanishing on
+    // arrival. (Scoring/salvage already happened in the ARM_RETURNED handler.)
+    eventBus.on(Events.DEBRIS_CAPTURED, (data) => {
+      if (debrisField && data && data.debrisId != null) {
+        debrisField.removeDebris(data.debrisId);
+      }
+    });
+
     eventBus.on(Events.ARM_RETURNED, (data) => {
       // Arm pilot exit now self-managed by InputManager via ARM_RETURNED listener
 
@@ -663,10 +674,13 @@ class GameFlowManager {
           fuelEfficient = fuelUsed < avgFuelPerCapture * 0.5; // Used less than 50% of average
         }
 
-        // Remove debris from field
-        if (debrisField) {
-          debrisField.removeDebris(data.debrisId);
-        }
+        // NOTE: debris removal is DEFERRED to dock completion (DEBRIS_CAPTURED,
+        // emitted by ArmUnit._updateDocking after the ~3s dock). Removing it here
+        // (on ARM_RETURNED, i.e. the instant the daughter reaches the dock) made
+        // the catch pop out of existence on arrival. Keeping it alive lets the
+        // ArmManager pin hold it visible at the mother through the dock; it's
+        // then stowed (shrunk + removed) when docking finishes. Scoring/salvage
+        // below still reads the (still-alive) debris snapshot.
 
         // Check tactical assessment bonus (tracked via WIREFRAME_ASSESSED event — Batch 3)
         const assessed = this._wireframeAssessed;
@@ -818,14 +832,10 @@ class GameFlowManager {
         // InputManager.handleCaptureAdvance already selects the next-best target
         // on ARM_CAPTURED / LASSO_CAPTURED. Only provide fallback if nothing selected.
         const currentTarget = targetSelector.activeTarget;
-        console.log('[AUTO-TARGET] GFM ARM_RETURNED: currentTarget=%s, debris=%s, data.debrisId=%s',
-          currentTarget?.id, debris?.id, data.debrisId);
         if (currentTarget && debris && currentTarget.id === (debris.id ?? data.debrisId)) {
-          console.log('[AUTO-TARGET] GFM ARM_RETURNED: clearing target (matches captured debris)');
           targetSelector.setTarget(null);
         }
         if (!targetSelector.activeTarget) {
-          console.log('[AUTO-TARGET] GFM ARM_RETURNED: no active target — attempting fallback auto-select');
           const playerPos = player ? player.getPosition() : null;
           if (playerPos && debrisField) {
             const nearby = debrisField.getDebrisNear(playerPos, 0.5); // wide radius
@@ -833,15 +843,10 @@ class GameFlowManager {
             if (nextTarget) {
               const original = debrisField.getDebrisById(nextTarget.id);
               if (original) {
-                console.log('[AUTO-TARGET] GFM ARM_RETURNED: fallback selected id=%s', original.id);
                 targetSelector.setTarget(original, { autoTarget: true });
               }
-            } else {
-              console.log('[AUTO-TARGET] GFM ARM_RETURNED: no nearby alive+discovered targets for fallback');
             }
           }
-        } else {
-          console.log('[AUTO-TARGET] GFM ARM_RETURNED: target already set id=%s — skip fallback', targetSelector.activeTarget.id);
         }
 
         // Auto-camera: return to COMMAND view after capture delivery.

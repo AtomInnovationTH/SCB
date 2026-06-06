@@ -709,6 +709,39 @@ describe('CaptureNet — ST-9.4c: Reel-in mechanics', () => {
 });
 
 
+describe('CaptureNet — daughter catch held until the arm delivers', () => {
+  it('stays REELING while the catch is pinned to the hauling arm, then stows on delivery', () => {
+    const debris = {
+      id: 'd1', mass: 100, alive: true,
+      _capturedByArm: {}, _scenePosition: { x: 0, y: 0, z: 0 },
+    };
+    const net = new NetProjectile(makeNetConfig({ targetDebris: debris, armIndex: 0 }));
+    net.tetherPaidOut = 5;
+    net.forceResolve(true);   // → CAPTURED (catchResult success)
+    net._heldByArm = true;    // marked by CaptureNetSystem for daughter captures
+    net.startReel();          // → REELING
+
+    advanceNet(net, 30.0);    // far longer than the ~2.5s natural reel time
+    assert.equal(net.state, STATES.REELING, 'held net stays REELING while the catch is pinned');
+
+    // Arm delivers (docks): debris pin cleared.
+    debris._capturedByArm = null;
+    const events = collectEvents(Events.NET_REEL_COMPLETED, () => advanceNet(net, 1.0));
+    assert.equal(net.state, STATES.STOWED, 'net stows once the catch is delivered');
+    assert.equal(events.length, 1, 'NET_REEL_COMPLETED emitted on delivery');
+  });
+
+  it('a non-held (mother-pod-style) net reels and stows normally', () => {
+    const net = new NetProjectile(makeNetConfig({ targetDebris: makeTarget(10, 0, 0, 75) }));
+    net.tetherPaidOut = 3;
+    net.forceResolve(true);
+    net.startReel();          // _heldByArm stays false
+    advanceNet(net, 10.0);
+    assert.equal(net.state, STATES.STOWED, 'unheld net stows on its own reel');
+  });
+});
+
+
 describe('CaptureNet — ST-9.4c: Release/abort', () => {
   it('release() from CAPTURED → RELEASED', () => {
     const net = new NetProjectile(makeNetConfig({ targetDebris: makeTarget() }));

@@ -662,6 +662,33 @@ export const Constants = {
   REEL_TENSION_CRITICAL: 0.9,            // fraction of break strength → red HUD
   REEL_LEVEL_WIND_SPEED: 0.02,           // m/s — traverse speed for even spooling
 
+  // --- Capture-failure model & release dynamics ---
+  // Two distinct post-capture failure modes (see ArmUnit._updateGrappled /
+  // _updateReeling):
+  //   1. NET FAILURE (recoverable): the net loses its grip on a near-rated,
+  //      heavy catch. Debris slips free and drifts (re-capturable); the
+  //      daughter keeps her mother-tether and returns to reload. Probabilistic,
+  //      scaling with how close the payload is to the net's rated mass.
+  //   2. TETHER SNAP (catastrophic): the mother↔daughter cable parts under
+  //      reel load. Daughter + catch are cut loose and drift off together.
+  //      Deterministic on overload; retuned so an in-spec catch never snaps.
+  REEL_TENSION_COEFF: 0.04,              // tension(N) = (armMass+payloadMass)×reelSpeed×coeff.
+                                         //   Tuned so a max in-spec Weaver catch
+                                         //   (~500 kg) reels home under the default
+                                         //   Dyneema 100 N break strength; only genuine
+                                         //   overload snaps the tether.
+  NET_STRAIN_SAFE_FRACTION: 0.8,         // payload ≤ 80% of net rated mass → guaranteed hold.
+  NET_STRAIN_FAIL_PROB_MAX: 0.35,        // net-failure chance at 100% rated mass (linear
+                                         //   ramp from SAFE_FRACTION → 1.0). Set 0 to disable.
+  CAPTURE_RELEASE_SEPARATION_MPS: 1.2,   // m/s separation/recoil imparted to the daughter
+                                         //   when a catch is lost (snap dynamics).
+  TETHER_SNAP_RELEASE_DELAY_S: 8.0,      // s — after a tether snap the catch drifts pinned
+                                         //   to the EXPENDED daughter for this long (so it
+                                         //   reads as "tumbling off with her"), then the pin
+                                         //   is released so the runaway debris resumes its
+                                         //   orbit + normal LOD instead of leaking full detail.
+
+
   // --- Dual-Fire / Recoil ---
   DUALFIRE_SYNC_WINDOW: 0.01,            // seconds — max timing offset for dual fire
   DUALFIRE_RECOIL_WEAVER: 0.509,         // m/s — single Weaver recoil on 130kg mothership
@@ -2190,7 +2217,7 @@ export const Constants = {
     MAX_QUEUE_DEPTH: 3,
     DEFAULT_DURATION_MS: 7000,
     PERSISTENCE_KEY: 'teachingSeen',
-    TOTAL_MOMENTS: 17,           // UX-3 N1: added first_scan + first_arm_deploy
+    TOTAL_MOMENTS: 19,           // UX-3 N1: +first_scan/first_arm_deploy; +first_net_failed/first_tether_snap
   },
 
   // ============================================================================
@@ -2432,6 +2459,18 @@ export const Constants = {
                                       // band, snap to exact 0 so the camera
                                       // doesn't asymptote forever.
     STATIONKEEP_LERP_RATE: 0.8,   // lerp factor for position smoothing
+    STANDOFF_SETTLE_TAU_S: 0.6,   // s — exponential time constant for easing the
+                                  //     standoff radius from the ACTUAL SK-entry
+                                  //     distance down to the nominal standoff.
+                                  //     The SK gate fires at ENTRY_DISTANCE_MULT ×
+                                  //     standoff (up to ~2×) while the daughter is
+                                  //     still closing, so without this ease the
+                                  //     0.8/frame position lerp yanks the daughter
+                                  //     (and the rigidly-attached pilot camera) the
+                                  //     whole gate→standoff gap in ~3 frames — the
+                                  //     "speeds up then camera jumps" artifact.
+                                  //     ~0.6s glides her in. Pilot radius input
+                                  //     cancels the settle immediately.
     FUEL_RATE_STATIONKEEP: 0.02,  // kg/s — fuel consumption holding
     FUEL_RATE_MANEUVER: 0.1,      // kg/s — fuel consumption maneuvering
     ENTRY_MAX_VELOCITY: 3.0,      // m/s — max relative vel to enter SK.  Raised from 2.0: realistic arrivals show relV ~1.9 m/s (controller residual after drift cancellation + V_CAP*0.3 ≈ 2.1 m/s nominal approach speed) which is INSIDE the 2.0 m/s gate by only 0.1 m/s — not enough margin for variation.  3.0 m/s gives 1.0 m/s headroom and matches the actual achievable steady-state of the proportional controller.  See debug session 2026-05-09.

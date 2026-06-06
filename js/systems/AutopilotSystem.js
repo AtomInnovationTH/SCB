@@ -282,38 +282,6 @@ export class AutopilotSystem {
   disengage(reason) {
     if (!this._engaged) return;
 
-    // [DBG-AP-DISENGAGE] Capture the exact reason + system state when the
-    // mothership AP shuts itself off. Helps distinguish ARRIVED (HOLD timer),
-    // DELTAV, TARGET_LOST, COLLISION, TRAWL, ARROW_INPUT, MANUAL.
-    // Routed through console.warn (visible in default DevTools filter).
-    try {
-      const dv = this._getRemainingDeltaV();
-      const armStates = this._armManager?.arms?.map(a => `${a.id}:${a.state}`)?.join(',') || '(none)';
-      let posErrM = null;
-      if (this._goalPos && this._player?.getPosition) {
-        const pm = this._player.getPosition();
-        const dx = this._goalPos.x - pm.x;
-        const dy = this._goalPos.y - pm.y;
-        const dz = this._goalPos.z - pm.z;
-        posErrM = Math.sqrt(dx * dx + dy * dy + dz * dz) / M;
-      }
-      const tgtAlive = this._lockedTargetRef ? !!this._lockedTargetRef.alive : 'noLock';
-      const tgtId = this._lockedTargetRef?.id ?? '?';
-      console.warn('[DBG-AP-DISENGAGE]',
-        'reason=', reason,
-        'phase=', this._phase,
-        'holdTimer=', this._holdTimer.toFixed(3),
-        'HOLD_DURATION=', Constants.AUTOPILOT.HOLD_DURATION,
-        'dv=', dv.toFixed(1),
-        'posErrM=', posErrM === null ? 'n/a' : posErrM.toFixed(1),
-        'tgtId=', tgtId,
-        'tgtAlive=', tgtAlive,
-        'arms=[', armStates, ']');
-    } catch (e) {
-      // Never let logging crash disengage
-      console.warn('[DBG-AP-DISENGAGE] (log failed)', e?.message);
-    }
-
     this._engaged = false;
     this._lockedTargetRef = null;
     this._debrisMapCluster = null;
@@ -489,21 +457,6 @@ export class AutopilotSystem {
           this._setPhase(PHASE.HOLD);
           this._holdTimer = 0;
 
-          // [DBG-AP-HOLD] Snapshot at HOLD entry — capture position, orbit, target, arm state
-          {
-            const posPreSnap = this._player?.getPosition?.()?.toArray?.() || '?';
-            const debrisAlive = this._debrisField?.debrisList?.filter(d => d.alive)?.length ?? '?';
-            const targetId = this._lockedTargetRef?.id ?? this._targetSelector?.getActiveTarget?.()?.id ?? '?';
-            const armStates = this._armManager?.arms?.map(a => `${a.id}:${a.state}`) || [];
-            console.error('[DBG-AP-HOLD] entering HOLD',
-              'posPreSnap=', posPreSnap,
-              'debrisAlive=', debrisAlive,
-              'targetId=', targetId,
-              'armStates=', armStates.join(','),
-              'posErrM=', posErrM.toFixed(1),
-              'velErrMps=', velErrMps.toFixed(3));
-          }
-
           // Snap mother orbit shape/plane to match target so they share
           // identical Keplerian elements and propagate together (prevents
           // secular drift from differential drag and residual ΔV error).
@@ -560,17 +513,6 @@ export class AutopilotSystem {
             let newTA = Math.atan2(yP, xP);
             if (newTA < 0) newTA += 2 * Math.PI;
             pOrb.trueAnomaly = newTA;
-
-            // [DBG-AP-HOLD] Verify snap didn't teleport
-            if (typeof console !== 'undefined') {
-              const postSnap = orbitToSceneCartesian(pOrb);
-              const dx = postSnap.position.x - preSnap.position.x;
-              const dy = postSnap.position.y - preSnap.position.y;
-              const dz = postSnap.position.z - preSnap.position.z;
-              const jumpKm = Math.sqrt(dx * dx + dy * dy + dz * dz) / Constants.SCENE_SCALE;
-              console.log('[DBG-AP-HOLD] orbit snap: jumpKm=', jumpKm.toFixed(3),
-                'newTA=', newTA.toFixed(4));
-            }
 
             // Zero RCS residual so the additive position offset in
             // PlayerSatellite.update() doesn't shift mother away from the
@@ -720,31 +662,6 @@ export class AutopilotSystem {
               dvCmd.addScaledVector(toArm, closeSpeed * AP.KP_VEL);
             }
           }
-        }
-        // [DBG-AP-HOLD-STATUS] Throttled (~5s) mid-HOLD status to confirm
-        // whether HOLD is still actively syncing during a long SK session.
-        // Reports posErrM (how far mother is from her trail goal), lockedRef
-        // identity & alive, and arm states.  Crucial for diagnosing the
-        // mother-debris drift bug: if mother drifts away from debris during
-        // SK and posErrM stays small, then her HOLD target is NOT the
-        // debris the daughter is SK'ing on.  If posErrM grows, HOLD is
-        // losing the sync.  If this line never fires, autopilot disengaged.
-        this._dbgHoldStatusAccum = (this._dbgHoldStatusAccum || 0) + dt;
-        if (this._dbgHoldStatusAccum >= 5.0) {
-          this._dbgHoldStatusAccum = 0;
-          const lt = this._lockedTargetRef;
-          const armStates = this._armManager?.arms?.filter(a =>
-            a.state !== Constants.ARM_STATES.DOCKED &&
-            a.state !== Constants.ARM_STATES.RELOADING
-          )?.map(a => `${a.id}:${a.state}${a.target ? '(tgt='+a.target.id+')' : ''}`)?.join(',') || '(none)';
-          console.log(
-            `[DBG-AP-HOLD-STATUS] phase=${this._phase} ` +
-            `posErrM=${posErrM.toFixed(1)} velErrMps=${velErrMps.toFixed(3)} ` +
-            `lockedId=${lt?.id ?? 'null'} lockedAlive=${lt ? (lt.alive !== false) : 'n/a'} ` +
-            `Dtrail=${Dtrail_m}m ` +
-            `holdTimer=${this._holdTimer.toFixed(2)}s ` +
-            `arms=[${armStates}]`
-          );
         }
         break;
       }

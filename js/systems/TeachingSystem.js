@@ -148,6 +148,21 @@ export const TEACHING_MOMENTS = [
     duration: 8000,
     icon: '🏹',
   },
+  // Capture-failure guidance (recoverable vs catastrophic)
+  {
+    id: 'first_net_failed',
+    title: 'Net Slipped',
+    body: 'The net lost its grip — too heavy, or the debris was wider than the net mouth. The catch is fine: it\'s drifting free again. Your daughter keeps her tether and heads home to reload — re-net it to try again (a bigger net helps for large debris).',
+    duration: 9000,
+    icon: '🪢',
+  },
+  {
+    id: 'first_tether_snap',
+    title: 'Tether Severed',
+    body: 'The tether snapped under reel load — that daughter and her catch are cut loose and drifting, and that line can\'t be reloaded. Launch another daughter (D) to chase the catch down, and upgrade your tether in the Workshop to haul heavier loads safely.',
+    duration: 10000,
+    icon: '⚠️',
+  },
 ];
 
 /** Map of moment ID → moment definition for O(1) lookup */
@@ -268,6 +283,16 @@ export class TeachingSystem {
 
     // 17. first_arm_deploy — ARM_DEPLOYED (UX-3 N1)
     on(Events.ARM_DEPLOYED, () => this._trigger('first_arm_deploy'));
+
+    // 18. first_net_failed — NET_FAILED (recoverable net-integrity loss)
+    if (Events.NET_FAILED) {
+      on(Events.NET_FAILED, () => this._trigger('first_net_failed'));
+    }
+
+    // 19. first_tether_snap — TETHER_SNAP (catastrophic line break)
+    if (Events.TETHER_SNAP) {
+      on(Events.TETHER_SNAP, () => this._trigger('first_tether_snap'));
+    }
 
     // Delegation 2 (2026-05-31): Force-injection channel for OnboardingDirector
     // escalation overlays.  Bypasses the once-per-save `_seen` guard since the

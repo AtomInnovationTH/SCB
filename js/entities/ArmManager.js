@@ -1363,7 +1363,20 @@ export class ArmManager {
         : [];
       // Also include tracked debris
       const tracked = this._debrisField.getTargetList ? this._debrisField.getTargetList() : [];
-      const allDebris = [...tracked, ...nearbyDebris];
+      // Resolve to CANONICAL debris objects by id (getTargetList /
+      // getUntrackedDebrisNear hand back sparse/snapshot wrappers). Fishing &
+      // web-shot capture store the picked object as their target/capturedDebris,
+      // so they must hold the real field object — never a wrapper — to pin,
+      // flag, and remove it correctly.
+      const seen = new Set();
+      const allDebris = [];
+      const getById = this._debrisField.getDebrisById?.bind(this._debrisField);
+      for (const w of [...tracked, ...nearbyDebris]) {
+        if (!w || w.id == null || seen.has(w.id)) continue;
+        seen.add(w.id);
+        const canonical = getById ? getById(w.id) : w;
+        if (canonical && canonical.alive !== false) allDebris.push(canonical);
+      }
       for (const arm of passiveArms) {
         arm._nearbyDebris = allDebris;
       }
@@ -1378,6 +1391,28 @@ export class ArmManager {
       // Pass speed scale for returning/hauling arms affected by beacon power
       arm._beaconSpeedScale = speedScale;
       arm.update(dt, parentPos, parentQuat);
+    }
+
+    // AUTHORITATIVE CATCH PIN (runs AFTER arms move, and after DebrisField.update
+    // which ran earlier this frame): force each reeling/docking arm's captured
+    // debris — looked up CANONICALLY by id — onto the arm's position, including
+    // its rendered instance. This is the definitive fix for the "net + debris
+    // drift ~600 m away and vanish during reel-in" bug, which was caused by the
+    // debris the arm pinned not being the same object DebrisField rendered.
+    if (this._debrisField && this._debrisField.pinCapturedDebris) {
+      for (const arm of this.arms) {
+        if (!arm.capturedDebris) continue;
+        if (arm.state === ARM_STATES.REELING) {
+          this._debrisField.pinCapturedDebris(arm.capturedDebris, arm.position, 1);
+        } else if (arm.state === ARM_STATES.DOCKING) {
+          // Stow shrink: as the daughter docks, shrink the catch (1.0 → 0.15)
+          // so it reads as being absorbed/stowed rather than popping out of
+          // existence. Final removal happens at dock completion (DEBRIS_CAPTURED).
+          const dur = Constants.ARM_DOCK_DURATION || 3;
+          const frac = Math.max(0, Math.min(1, arm.stateTimer / dur));
+          this._debrisField.pinCapturedDebris(arm.capturedDebris, arm.position, 1 - 0.85 * frac);
+        }
+      }
     }
   }
 

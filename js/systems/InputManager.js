@@ -145,18 +145,10 @@ export class InputManager {
     // safety net when the primary capture-event path silently fails.
     const handleCaptureAdvance = (capturedId) => {
       // FIX: Use != null instead of !capturedId so debris ID 0 is valid
-      if (capturedId == null) {
-        console.log('[AUTO-TARGET] handleCaptureAdvance: skipped — capturedId is null/undefined');
-        return;
-      }
-      console.log('[AUTO-TARGET] handleCaptureAdvance: entry, capturedId=', capturedId);
+      if (capturedId == null) return;
 
       const d = this._deps;
-      if (!d.targetSelector || !d.debrisField || !d.player) {
-        console.log('[AUTO-TARGET] handleCaptureAdvance: skipped — missing deps (targetSelector=%s, debrisField=%s, player=%s)',
-          !!d.targetSelector, !!d.debrisField, !!d.player);
-        return;
-      }
+      if (!d.targetSelector || !d.debrisField || !d.player) return;
 
       // Mark the captured debris so reticle stops rendering it immediately
       const capturedDebris = d.debrisField.getDebrisById(capturedId);
@@ -165,7 +157,6 @@ export class InputManager {
       // Clear current target if it matches captured debris
       const current = d.targetSelector.getActiveTarget();
       if (current && current.id === capturedId) {
-        console.log('[AUTO-TARGET] handleCaptureAdvance: clearing current target (matches captured)');
         d.targetSelector.clearTarget();
       }
 
@@ -174,33 +165,23 @@ export class InputManager {
       // and ARM_CAPTURED call handleCaptureAdvance for the same debris, while
       // still allowing retries when the primary path failed (no target set).
       const existingTarget = d.targetSelector.getActiveTarget();
-      if (existingTarget) {
-        console.log('[AUTO-TARGET] handleCaptureAdvance: skipped — already has target id=%s', existingTarget.id);
-        return;
-      }
+      if (existingTarget) return;
 
       // Auto-select next best target (keeps gameplay flowing)
       try {
         const playerPos = d.player.getPosition();
         const playerOrbit = d.player.getOrbitalElements();
-        if (!playerPos || !playerOrbit) {
-          console.log('[AUTO-TARGET] handleCaptureAdvance: no playerPos/playerOrbit');
-          return;
-        }
+        if (!playerPos || !playerOrbit) return;
 
         const targets = d.debrisField.getEnhancedTargetList(playerPos, playerOrbit)
           .filter(t => t.id !== capturedId && !t._captured &&
             (t.tracked !== false || (d.sensorSystem && d.sensorSystem.canDetectUntracked)));
-
-        console.log('[AUTO-TARGET] handleCaptureAdvance: candidates=%d', targets.length);
 
         if (targets.length > 0) {
           // FIX_PLAN §4: best target = lowest TPI (composite score)
           const next = targets[0];
           const debris = d.debrisField.getDebrisById(next.id);
           if (debris) {
-            console.log('[AUTO-TARGET] handleCaptureAdvance: selecting next target id=%s type=%s tpi=%s deltaV=%s',
-              next.id, debris.type, next.tpi?.toFixed(3), next.deltaV?.toFixed(3));
             d.targetSelector.setTarget(debris, { distanceKm: next.distanceKm, deltaV: next.deltaV });
             // UI updates in separate try/catch — must not prevent target selection
             try {
@@ -208,21 +189,11 @@ export class InputManager {
               if (d.hud) d.hud.setSelectedTarget(next.id);
               if (d.targetReticle) d.targetReticle.setSelectedTarget(next.id);
               if (d.navSphere) d.navSphere.setSelectedTarget(next.id);
-              console.log('[AUTO-TARGET] handleCaptureAdvance: UI sync done (hud=%s, reticle=%s, navSphere=%s)',
-                !!d.hud, !!d.targetReticle, !!d.navSphere);
-            } catch (uiErr) {
-              console.warn('[AUTO-TARGET] handleCaptureAdvance: UI sync failed:', uiErr.message);
-            }
+            } catch (uiErr) { /* non-fatal UI sync failure */ }
             this.targetIndex = 0;
-          } else {
-            console.log('[AUTO-TARGET] handleCaptureAdvance: getDebrisById(%s) returned null', next.id);
           }
-        } else {
-          console.log('[AUTO-TARGET] handleCaptureAdvance: no candidates after filtering');
         }
-      } catch (err) {
-        console.warn('[AUTO-TARGET] handleCaptureAdvance: exception:', err.message, err.stack);
-      }
+      } catch (err) { /* auto-advance is best-effort */ }
     };
 
     // FIX: ARM_CAPTURED from LassoSystem uses { debrisId } not { targetId }.
@@ -231,13 +202,11 @@ export class InputManager {
     eventBus.on(Events.ARM_CAPTURED, (data) => {
       const id = data && (data.targetId != null ? data.targetId : data.debrisId);
       if (id != null) {
-        console.log('[AUTO-TARGET] ARM_CAPTURED handler: id=', id);
         handleCaptureAdvance(id);
       }
     });
     eventBus.on(Events.LASSO_CAPTURED, (data) => {
       if (data && data.debrisId != null) {
-        console.log('[AUTO-TARGET] LASSO_CAPTURED handler: debrisId=', data.debrisId);
         handleCaptureAdvance(data.debrisId);
       }
     });
@@ -254,7 +223,6 @@ export class InputManager {
         if (!d?.targetSelector || !d.debrisField || !d.player) return;
         if (d.targetSelector.getActiveTarget()) return; // already has a target — nothing to do
         // No target after all sync handlers ran — auto-advance as fallback
-        console.log('[AUTO-TARGET] DEBRIS_REMOVED microtask fallback: no target set, retrying with removedId=', removedId);
         handleCaptureAdvance(removedId);
       });
     });
@@ -429,20 +397,9 @@ export class InputManager {
         if (_lockTierForAP === 'block' || _lockTierForAP === 'soft') {
           // Daughter tethered — preserve AP, emit throttled COMMS notice
           this._maybeEmitTetherLockMsg();
-          console.log('[DBG-ARROW-AP] AP-disengage blocked: daughter tethered (tier=' + _lockTierForAP + ')');
         } else {
-          console.warn('[DBG-ARROW-AP] Arrow key disengaging autopilot!',
-            'code=', e.code,
-            'armPilotMode=', this.armPilotMode,
-            'cameraView=', d.cameraSystem?.getView?.(),
-            'pilotedArmState=', d.cameraSystem?.getPilotedArm?.()?.state);
           d.autopilotSystem.disengage('ARROW_INPUT');
         }
-      } else if (_inSkForGuard && d.autopilotSystem && d.autopilotSystem.engaged) {
-        // Verbose-but-useful: confirm the guard fired so future regressions
-        // are easy to spot. keydown is one-shot, no throttle needed.
-        console.log('[DBG-ARROW-AP] Arrow consumed by SK orbit controls; mother AP preserved.',
-          'arm=', _skArmForGuard.id);
       }
       // Phase C: Notify tutorial of arrow key press
       eventBus.emit(Events.TUTORIAL_ARROW_INPUT);
@@ -823,15 +780,8 @@ export class InputManager {
       // Toggle ARM PILOT mode (P key)
       case 'KeyP':
         if (isGameplay) {
-          // [DBG-ARM] Log P-key entry state
-          console.log(
-            `[DBG-ARM] P-KEY pressed armPilotMode=${this.armPilotMode} ` +
-            `hasArmManager=${!!d.armManager} ` +
-            `selectedArmIndex=${d.armManager?.selectedArmIndex}`
-          );
           if (this.armPilotMode) {
             // Exit arm pilot mode
-            console.log(`[DBG-ARM] P-KEY → exit arm pilot mode`);
             this._exitArmPilotCamera();
             if (d.armManager) d.armManager.deselectArm();
             eventBus.emit(Events.COMMS_MESSAGE, {
@@ -842,11 +792,6 @@ export class InputManager {
             // Enter arm pilot mode — prefer selected arm, fallback to first deployed
             if (d.armManager) {
               let arm = d.armManager.getSelectedDeployedArm();
-              // [DBG-ARM] log getSelectedDeployedArm result
-              console.log(
-                `[DBG-ARM] P-KEY getSelectedDeployedArm() → ` +
-                `${arm ? `${arm.id} state=${arm.state}` : 'null'}`
-              );
               if (!arm) {
                 // V-8 fix: include STATION_KEEP so P-key works after daughter
                 // reaches station-keeping orbit (previously excluded, causing
@@ -857,26 +802,15 @@ export class InputManager {
                   (a.state === S.TRANSIT || a.state === S.APPROACH ||
                    a.state === S.FISHING || a.state === S.STATION_KEEP)
                 );
-                // [DBG-ARM] log fallback filter result
-                console.log(
-                  `[DBG-ARM] P-KEY fallback filter — totalArms=${d.armManager.arms.length} ` +
-                  `eligible=${deployed.length} ` +
-                  `states=[${d.armManager.arms.map(a => `${a.id}:${a.state}`).join(',')}]`
-                );
                 arm = deployed.length > 0 ? deployed[0] : null;
               }
               if (arm) {
-                console.log(
-                  `[DBG-ARM] P-KEY → _enterArmPilotCamera(${arm.id}) state=${arm.state} ` +
-                  `pos=(${(arm.position.x/0.00001).toFixed(1)},${(arm.position.y/0.00001).toFixed(1)},${(arm.position.z/0.00001).toFixed(1)})m`
-                );
                 this._enterArmPilotCamera(arm);
                 eventBus.emit(Events.COMMS_MESSAGE, {
                   text: `ARM PILOT engaged — controlling ${arm.id}`,
                   priority: 'info',
                 });
               } else {
-                console.log(`[DBG-ARM] P-KEY → no eligible arm — comms warning`);
                 eventBus.emit(Events.COMMS_MESSAGE, {
                   text: 'No deployed arms available for piloting',
                   priority: 'warning',

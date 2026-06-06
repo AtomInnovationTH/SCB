@@ -325,7 +325,21 @@ function simulateTetherSnapListener(data, messages) {
   return simulateAddMessage(
     'CRITICAL',
     data?.armId || 'SYSTEM',
-    'TETHER SEVERED — arm lost. Payload jettisoned. Reload not possible.',
+    'TETHER SEVERED — daughter and catch cut loose and drifting. Reload not possible; send another daughter to chase it down.',
+    { channel: 'ALERT' },
+    messages
+  );
+}
+
+/**
+ * Simulates the NET_FAILED listener in CommsSystem._setupEventListeners().
+ * Mirrors: this.addMessage('WARNING', data?.armId || 'SYSTEM', ..., { channel: 'ALERT' })
+ */
+function simulateNetFailedListener(data, messages) {
+  return simulateAddMessage(
+    'WARNING',
+    data?.armId || 'SYSTEM',
+    'NET FAILED — debris slipped the net and is drifting. Daughter returning to reload; re-net to retry.',
     { channel: 'ALERT' },
     messages
   );
@@ -401,6 +415,27 @@ describe('CommsSystem – TETHER_SNAP listener (§4 item 2)', () => {
   it('TETHER_SNAP without armId falls back to SYSTEM', () => {
     const messages = [];
     const msg = simulateTetherSnapListener({ armIndex: 0, cause: 'overload' }, messages);
+    assert.ok(msg, 'message should be stored');
+    assert.equal(msg.source, 'SYSTEM');
+    assert.equal(msg.channel, 'ALERT');
+  });
+});
+
+describe('CommsSystem – NET_FAILED listener (recoverable net failure)', () => {
+  it('NET_FAILED with armId stores WARNING message on ALERT channel', () => {
+    const messages = [];
+    const msg = simulateNetFailedListener({ armId: 'Weaver-1', armIndex: 0, debrisId: 42, strain: 0.95 }, messages);
+    assert.ok(msg, 'message should be stored');
+    assert.equal(msg.source, 'Weaver-1');
+    assert.equal(msg.priority, 'WARNING');
+    assert.equal(msg.channel, 'ALERT');
+    assert.ok(msg.text.includes('NET FAILED'), 'text should contain NET FAILED');
+    assert.ok(msg.text.toLowerCase().includes('retry'), 'text should tell the player they can retry');
+  });
+
+  it('NET_FAILED without armId falls back to SYSTEM', () => {
+    const messages = [];
+    const msg = simulateNetFailedListener({ armIndex: 1, debrisId: 7 }, messages);
     assert.ok(msg, 'message should be stored');
     assert.equal(msg.source, 'SYSTEM');
     assert.equal(msg.channel, 'ALERT');

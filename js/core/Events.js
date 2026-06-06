@@ -565,6 +565,8 @@ export const Events = {
   NET_REEL_COMPLETED:        'net:reelCompleted',
   /** Player aborted — net + debris released. Payload: { armIndex, podIndex, debrisId? } */
   NET_RELEASED:              'net:released',
+  /** Net lost grip on a captured catch (recoverable). Payload: { armId, armIndex, debrisId, strain, recoverable } */
+  NET_FAILED:                'net:failed',
   /** Net inventory changed (fire/reload). Payload: { source:'mother'|'daughter', armIndex?, podInventory?, remaining? } */
   NET_INVENTORY_CHANGED:     'net:inventoryChanged',
   /** Cross-debris warning during flight. Payload: { netId, crossDebrisId } */

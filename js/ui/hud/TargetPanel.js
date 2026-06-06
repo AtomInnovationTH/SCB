@@ -35,7 +35,6 @@ export class TargetPanel {
 
     // UX Fix F: Clear selected target when debris is removed/captured
     eventBus.on(Events.TARGET_CLEARED, () => {
-      console.log('[AUTO-TARGET] TargetPanel: TARGET_CLEARED → selectedTargetId = null');
       this.selectedTargetId = null;
     });
 
@@ -43,7 +42,6 @@ export class TargetPanel {
     // even if external setSelectedTarget() calls fail (exception, missing ref, etc.)
     eventBus.on(Events.TARGET_SELECTED, (data) => {
       if (data && data.id != null) {
-        console.log('[AUTO-TARGET] TargetPanel: TARGET_SELECTED → selectedTargetId =', data.id);
         this.selectedTargetId = data.id;
       }
     });
@@ -332,7 +330,6 @@ export class TargetPanel {
    * @param {number} id
    */
   setSelectedTarget(id) {
-    console.log('[AUTO-TARGET] TargetPanel.setSelectedTarget called: id=', id);
     this.selectedTargetId = id;
   }
 
@@ -399,16 +396,8 @@ export class TargetPanel {
       targets = targets.slice(0, 7);
 
       if (targets.length === 0) {
-        // [DBG-TARGETS] One-shot: log only when transitioning from non-empty → empty
-        if (this._dbgPrevTargetCount > 0) {
-          console.warn('[DBG-TARGETS] target list went EMPTY (was ' + this._dbgPrevTargetCount + ') —',
-            'cachedTargets.length=', cachedTargets?.length,
-            'allFilteredOut=', cachedTargets?.length > 0);
-        }
-        this._dbgPrevTargetCount = 0;
         listEl.innerHTML = '<span style="opacity:0.4">No targets nearby</span>';
       } else {
-        this._dbgPrevTargetCount = targets.length;
         listEl.innerHTML = targets.map(t => {
           const selected = t.id === this.selectedTargetId;
           const typeIcon = this._getTypeIcon(t.type);

@@ -51,9 +51,9 @@ function createMockEventBus() {
 // ============================================================================
 describe('TeachingSystem — Moment Definitions', () => {
 
-  it('has exactly 17 registered moments', () => {
-    assert.equal(TEACHING_MOMENTS.length, 17,
-      `expected 17 moments, got ${TEACHING_MOMENTS.length}`);
+  it('has exactly 19 registered moments', () => {
+    assert.equal(TEACHING_MOMENTS.length, 19,
+      `expected 19 moments, got ${TEACHING_MOMENTS.length}`);
   });
 
   it('all moments have required fields: id, title, body, duration, icon', () => {
@@ -73,8 +73,8 @@ describe('TeachingSystem — Moment Definitions', () => {
       `duplicate IDs found: ${ids.filter((id, i) => ids.indexOf(id) !== i)}`);
   });
 
-  it('MOMENTS_BY_ID map has all 17 entries', () => {
-    assert.equal(MOMENTS_BY_ID.size, 17);
+  it('MOMENTS_BY_ID map has all 19 entries', () => {
+    assert.equal(MOMENTS_BY_ID.size, 19);
     for (const m of TEACHING_MOMENTS) {
       assert.ok(MOMENTS_BY_ID.has(m.id), `MOMENTS_BY_ID missing ${m.id}`);
     }
@@ -85,7 +85,7 @@ describe('TeachingSystem — Moment Definitions', () => {
       'first_target', 'first_arm', 'first_capture', 'first_conjunction',
       'first_weather', 'first_shop', 'first_codex', 'first_burn',
       'first_kessler', 'first_autopilot', 'first_lasso', 'first_active_sat_warning',
-      'first_scan', 'first_arm_deploy',
+      'first_scan', 'first_arm_deploy', 'first_net_failed', 'first_tether_snap',
     ];
     for (const id of expected) {
       assert.ok(MOMENTS_BY_ID.has(id), `missing expected moment: ${id}`);
@@ -206,6 +206,36 @@ describe('TeachingSystem — Different Triggers', () => {
     assert.equal(shown[0], 'first_target');
     assert.equal(shown[1], 'first_arm');
     assert.equal(shown[2], 'first_arm_deploy');
+    ts.dispose();
+  });
+
+  it('NET_FAILED → first_net_failed shown once', () => {
+    const eb = createMockEventBus();
+    const ts = new TeachingSystem(eb);
+    const shown = [];
+    ts.onShow = (m) => shown.push(m.id);
+    ts.init();
+
+    eb.emit(Events.NET_FAILED, { armId: 'Weaver-1', debrisId: 7, recoverable: true });
+    eb.emit(Events.NET_FAILED, { armId: 'Weaver-1', debrisId: 9, recoverable: true });
+
+    assert.equal(shown.filter(id => id === 'first_net_failed').length, 1,
+      'first_net_failed shown exactly once');
+    ts.dispose();
+  });
+
+  it('TETHER_SNAP → first_tether_snap shown once', () => {
+    const eb = createMockEventBus();
+    const ts = new TeachingSystem(eb);
+    const shown = [];
+    ts.onShow = (m) => shown.push(m.id);
+    ts.init();
+
+    eb.emit(Events.TETHER_SNAP, { armId: 'Spinner-1', cause: 'overload', recoverable: false });
+    eb.emit(Events.TETHER_SNAP, { armId: 'Spinner-1', cause: 'overload', recoverable: false });
+
+    assert.equal(shown.filter(id => id === 'first_tether_snap').length, 1,
+      'first_tether_snap shown exactly once');
     ts.dispose();
   });
 });
@@ -362,7 +392,7 @@ describe('TeachingSystem — resetAll', () => {
     for (const m of TEACHING_MOMENTS) {
       ts.markSeen(m.id);
     }
-    assert.equal(ts.getSeenCount(), 17);
+    assert.equal(ts.getSeenCount(), 19);
 
     // Reset
     ts.resetAll();
@@ -381,10 +411,10 @@ describe('TeachingSystem — resetAll', () => {
 // ============================================================================
 describe('TeachingSystem — getSeenCount / getTotalCount', () => {
 
-  it('getTotalCount returns 17', () => {
+  it('getTotalCount returns 19', () => {
     const eb = createMockEventBus();
     const ts = new TeachingSystem(eb);
-    assert.equal(ts.getTotalCount(), 17);
+    assert.equal(ts.getTotalCount(), 19);
     ts.dispose();
   });
 
@@ -397,7 +427,7 @@ describe('TeachingSystem — getSeenCount / getTotalCount', () => {
     ts.markSeen('first_shop');
     ts.markSeen('first_burn');
     assert.equal(ts.getSeenCount(), 5);
-    assert.equal(ts.getTotalCount(), 17);
+    assert.equal(ts.getTotalCount(), 19);
     ts.dispose();
   });
 });

@@ -1487,6 +1487,70 @@ export class DebrisField {
   }
 
   /**
+   * Authoritative catch pin (called by ArmManager AFTER arms move, and after
+   * this.update() ran earlier in the frame). Forces a captured debris — both
+   * the object reference the arm/net/camera hold AND the CANONICAL field object
+   * looked up by id — and its rendered instance onto the arm's scene position.
+   *
+   * This is the definitive fix for the reel-in "net + debris drift ~600 m away
+   * and vanish" bug: the object the arm pinned was not the same object this
+   * field rendered, so position flags never reached the rendered instance.
+   * Pinning by id (the canonical key used by _instanceLookup / removeDebris)
+   * can't suffer that mismatch.
+   *
+   * @param {object} debrisRef - the arm's captured debris object (net/camera ref)
+   * @param {THREE.Vector3} armScenePos - arm position in scene units
+   * @param {number} [scaleMul=1] - multiplier on rendered size (dock stow-shrink)
+   */
+  pinCapturedDebris(debrisRef, armScenePos, scaleMul = 1) {
+    if (!debrisRef || !armScenePos) return;
+    const id = debrisRef.id;
+
+    // 1) Update the ref the arm/net/camera hold so those consumers track the arm.
+    if (!debrisRef._scenePosition) debrisRef._scenePosition = new THREE.Vector3();
+    debrisRef._scenePosition.copy(armScenePos);
+    debrisRef._armPinPos = debrisRef._armPinPos ? debrisRef._armPinPos.copy(armScenePos) : armScenePos.clone();
+    debrisRef._armPinned = true;
+
+    // 2) Update the CANONICAL field object by id (may be a different reference)
+    //    so the orbit-driven renderer doesn't fight us next frame.
+    const canonical = (id != null && this.debrisMap.get(id)) || debrisRef;
+    if (canonical !== debrisRef) {
+      if (!canonical._scenePosition) canonical._scenePosition = new THREE.Vector3();
+      canonical._scenePosition.copy(armScenePos);
+      canonical._armPinPos = canonical._armPinPos ? canonical._armPinPos.copy(armScenePos) : armScenePos.clone();
+      canonical._armPinned = true;
+    }
+
+    // 3) Force the rendered instance (by id slot) to the arm position THIS frame,
+    //    overriding whatever this.update() computed earlier (orbit branch).
+    if (id == null) return;
+    const lookup = this._instanceLookup.get(id);
+    if (!lookup) return;
+    const mesh = this.instancedMeshes[lookup.meshKey];
+    if (!mesh) return;
+    if (Constants.FLOATING_ORIGIN_ENABLED && this._floatingOrigin) {
+      this._tempPos.set(
+        armScenePos.x - this._floatingOrigin.x,
+        armScenePos.y - this._floatingOrigin.y,
+        armScenePos.z - this._floatingOrigin.z
+      );
+    } else {
+      this._tempPos.set(armScenePos.x, armScenePos.y, armScenePos.z);
+    }
+    if (canonical.tumbleAxis) {
+      this._tempQuat.setFromAxisAngle(canonical.tumbleAxis, canonical.tumbleAngle || 0);
+    } else {
+      this._tempQuat.identity();
+    }
+    const baseSize = canonical.sceneSize || (canonical.sizeMeter ? canonical.sizeMeter * 0.00001 : 0.00001);
+    this._tempScale.setScalar(baseSize * (scaleMul > 0 ? scaleMul : 1));
+    this._tempMatrix.compose(this._tempPos, this._tempQuat, this._tempScale);
+    mesh.setMatrixAt(lookup.instanceIndex, this._tempMatrix);
+    mesh.instanceMatrix.needsUpdate = true;
+  }
+
+  /**
    * Update the instance matrix for a single debris piece.
    * @private
    */
@@ -1499,35 +1563,30 @@ export class DebrisField {
     // arm+debris pair continues to co-orbit naturally (arm.position.copy(tPos)
     // in _updateGrappled keeps the arm shadowed onto the debris).
     let px, py, pz;
+    // AUTHORITATIVE arm pin (set by ArmUnit while it owns the catch during
+    // REELING/DOCKING and for a tether-snapped drift). This is a direct
+    // position copy with NO state/ref checks, so it can't be defeated by the
+    // SK/welcome-debris edge cases that left the older `_capturedByArm` pin
+    // reading the orbit branch — the catch was drifting 600 m+ away mid-haul.
+    const _armPinned = !!(debris._armPinned && debris._armPinPos);
     const _captor = debris._capturedByArm;
     const _captorState = _captor && _captor.state;
-    const _pinToArm = _captor && _captor.position &&
+    const _pinToArm = !_armPinned && _captor && _captor.position &&
       _captorState && _captorState !== 'GRAPPLED' && _captorState !== 'NETTING';
-    if (_pinToArm) {
+    if (_armPinned) {
+      px = debris._armPinPos.x;
+      py = debris._armPinPos.y;
+      pz = debris._armPinPos.z;
+    } else if (_pinToArm) {
       px = _captor.position.x;
       py = _captor.position.y;
       pz = _captor.position.z;
-      // One-shot verification log per (debris,captor) pair — fires the first
-      // frame this debris becomes pinned to a given arm.  If the user sees
-      // debris "stay at 35m" during REELING but never sees this log, the
-      // capture path isn't setting _capturedByArm and the pin override is
-      // dead code.
-      if (!debris._pinLoggedFor || debris._pinLoggedFor !== _captor.id) {
-        debris._pinLoggedFor = _captor.id;
-        console.warn(
-          `[DBG-PIN debris=${debris.id}] pinned to arm=${_captor.id} ` +
-          `state=${_captorState} armPos=(${(px / 0.00001).toFixed(0)},` +
-          `${(py / 0.00001).toFixed(0)},${(pz / 0.00001).toFixed(0)})m`
-        );
-      }
     } else {
       // Sprint 2 / PR A — scratch-output variant; no per-debris allocation.
       orbitToSceneCartesianInto(debris.orbit, this._tmpCartPos, this._tmpCartVel);
       px = this._tmpCartPos.x;
       py = this._tmpCartPos.y;
       pz = this._tmpCartPos.z;
-      // Reset pin-logged flag so a future re-capture logs again.
-      if (debris._pinLoggedFor) debris._pinLoggedFor = null;
     }
 
     // Store scene position for arm autopilot and external queries
@@ -1549,7 +1608,7 @@ export class DebrisField {
       // captured debris (Item 3 fix, 2026-05-28) it hid the "package" being
       // reeled in — the user saw only the daughter, with the debris
       // invisible inside the net during the entire reel-in.
-      if (!debris._isStationKeepTarget && !debris._capturedByArm) {
+      if (!debris._isStationKeepTarget && !debris._capturedByArm && !debris._armPinned) {
         const dx = px - playerPos.x;
         const dy = py - playerPos.y;
         const dz = pz - playerPos.z;
@@ -2058,6 +2117,12 @@ export class DebrisField {
         const dist = Math.sqrt(distSq);
         results.push({
           ...debris,
+          // HARDENING: the spread above would otherwise share the canonical's
+          // mutable refs (_scenePosition Vector3, orbit object). Hand out
+          // read-only SNAPSHOTS so a caller mutating a result can't corrupt the
+          // real debris. To mutate/hold a debris, resolve it via getDebrisById(id).
+          _scenePosition: debris._scenePosition ? debris._scenePosition.clone() : undefined,
+          orbit: debris.orbit ? { ...debris.orbit } : undefined,
           distance: dist,
           distanceKm: dist / Constants.SCENE_SCALE,
           _cartesian: cart,
@@ -2373,21 +2438,6 @@ export class DebrisField {
   removeDebris(id) {
     const debris = this.debrisMap.get(id);
     if (!debris || !debris.alive) return false;
-
-    // [DBG-CAPTURE] Warn loudly if something nukes a debris that an arm has
-    // already grappled or committed a net to.  This shouldn't happen in
-    // normal play — if it does, it pinpoints the offending system (deorbit,
-    // M1 cull, KesslerSystem, web-shot, etc.) ripping the capture target out
-    // mid-flight.  Removed once Issue B is root-caused.
-    if (debris._capturedByArm || debris._committedNetArmId) {
-      const stack = new Error().stack?.split('\n').slice(1, 4).join(' | ') || '';
-      console.warn(
-        `[DBG-CAPTURE] removeDebris(${id}) called on active capture target! ` +
-        `captor=${debris._capturedByArm?.id || 'none'} ` +
-        `netCommittedTo=${debris._committedNetArmId || 'none'} ` +
-        `type=${debris.type} sk=${!!debris._isStationKeepTarget} | caller: ${stack}`
-      );
-    }
 
     debris.alive = false;
 

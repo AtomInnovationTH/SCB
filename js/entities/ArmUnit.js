@@ -22,17 +22,6 @@ import { audioSystem } from '../systems/AudioSystem.js';
 const M = 0.00001;
 
 // ──────────────────────────────────────────────────────────────────────────
-// [DBG-ARM] Temporary debug helpers — remove after diagnosing orient/camera bugs
-// ──────────────────────────────────────────────────────────────────────────
-const _DBG_ARM_RAD = 180 / Math.PI;
-const _dbgArmVec   = (v) => v ? `(${(v.x/M).toFixed(1)},${(v.y/M).toFixed(1)},${(v.z/M).toFixed(1)})m` : 'null';
-const _dbgArmDir   = (v) => v ? `(${v.x.toFixed(3)},${v.y.toFixed(3)},${v.z.toFixed(3)})` : 'null';
-const _dbgArmEulerDeg = (q) => {
-  if (!q) return 'null';
-  const e = new THREE.Euler().setFromQuaternion(q, 'XYZ');
-  return `(${(e.x*_DBG_ARM_RAD).toFixed(1)},${(e.y*_DBG_ARM_RAD).toFixed(1)},${(e.z*_DBG_ARM_RAD).toFixed(1)})°`;
-};
-
 const S = Constants.ARM_STATES;
 
 // V5 Crossbow constants (destructured for readability)
@@ -167,6 +156,11 @@ export class ArmUnit {
     this.tetherMaxLength = TETHER_TIERS[0].maxLength; // From current tier
     this.tetherBreakStrength = TETHER_TIERS[0].breakStrength; // From current tier
     this.reeling = false;                  // True when actively reeling in
+    this._tetherSevered = false;           // True after a tether SNAP (hides line, drifts)
+    this._severedCatch = null;             // debris still pinned to this arm after a tether snap
+    this._severedDriftS = 0;               // s drifting since the snap (bounds the pin)
+    this._netRatedMass = 0;                // kg — net's rated capture mass (set in initNetInventory)
+    this._netDiameter = 0;                 // m — net mouth diameter (set in initNetInventory)
 
     // V5 Ablation state
     this.ablationTarget = null;            // Target being ablated
@@ -198,6 +192,8 @@ export class ArmUnit {
     this._skIdleS = 0;                      // s — accumulated time since last arrow input
     this._skSnapBack = false;               // true while a "recenter now" request is in flight
     this._standoffR = 5;                    // current standoff radius in metres
+    this._standoffTargetR = 5;              // m — radius the settle-in eases toward
+    this._standoffSettling = false;         // true while easing entry distance → nominal standoff
     this._thetaRate = 0;                    // current theta angular velocity
     this._phiRate = 0;                      // current phi angular velocity
     this._radiusRate = 0;                   // current radial velocity
@@ -811,8 +807,6 @@ export class ArmUnit {
     this._fishingMode = false;              // ensure normal deploy clears fishing flag
     this._fuelAtDeploy = this.fuel;         // Track for efficiency scoring
     this._startingDistance = 0;             // Phase 8: reset for approach beep fraction
-    this._transitEntryLogged = false;       // Reset one-shot TRANSIT entry diagnostic
-    this._transitFrameCount = 0;            // Reset frame counter for TRANSIT diagnostics
     this._smoothDriftVel = null;            // Reset EMA-smoothed drift for fresh approach
     this._prevTargetScenePos = null;        // Reset stale target position from previous mission
 
@@ -1913,6 +1907,9 @@ export class ArmUnit {
     this.position.set(0, 0, 0);
     this.velocity.set(0, 0, 0);
     this.isDetached = false;
+    this._tetherSevered = false;
+    this._severedCatch = null;
+    this._severedDriftS = 0;
     this._detachFuelWarning25 = false;
     this._detachFuelWarning10 = false;
     this._manualMode = false;
@@ -1973,12 +1970,6 @@ export class ArmUnit {
   update(dt, parentPos, parentQuat) {
    this.stateTimer += dt;
 
-   // [DBG-GAP] Stash parentPos reference so _transitionTo (which has no
-   // parentPos argument) can compute the daughter-mother gap on state entry.
-   // Reference is safe — we only read it during the same-frame state machine
-   // tick, never store it across frames.
-   this._dbgParentPos = parentPos;
-
    // C-3: Tick hinge auto-unlock settle timer
    this._tickHingeSettle(dt);
 
@@ -2002,31 +1993,6 @@ export class ArmUnit {
          this.position.y += (parentPos.y - this._prevParentPos.y);
          this.position.z += (parentPos.z - this._prevParentPos.z);
        }
-     }
-   }
-
-   // [DBG-GAP] Throttled in-state gap log (~5s) for STATION_KEEP / NETTING /
-   // GRAPPLED / REELING.  Captures the *accumulation* of mother-debris drift
-   // across a long-SK session (the 1-2 km gap the user reported after 200s
-   // of SK/NETTING is invisible to per-transition logs alone).
-   if (parentPos && (this.state === S.STATION_KEEP || this.state === S.NETTING ||
-                     this.state === S.GRAPPLED   || this.state === S.REELING)) {
-     this._dbgGapAccum = (this._dbgGapAccum || 0) + dt;
-     if (this._dbgGapAccum >= 5.0) {
-       this._dbgGapAccum = 0;
-       const debris = this._stationKeepTarget || this.capturedDebris || this.target;
-       const dpos = (debris && debris._scenePosition) ? debris._scenePosition : null;
-       const d_m_gap = this.position.distanceTo(parentPos) / M;
-       const d_t_gap = dpos ? (this.position.distanceTo(dpos) / M) : NaN;
-       const t_m_gap = dpos ? (dpos.distanceTo(parentPos) / M) : NaN;
-       const captorId = debris?._capturedByArm?.id || 'none';
-       console.log(
-         `[DBG-GAP-TICK ${this.id}] state=${this.state} t=${this.stateTimer.toFixed(1)}s | ` +
-         `d↔m=${d_m_gap.toFixed(1)}m | ` +
-         `d↔target=${isNaN(d_t_gap) ? '?' : d_t_gap.toFixed(1)+'m'} | ` +
-         `target↔m=${isNaN(t_m_gap) ? '?' : t_m_gap.toFixed(1)+'m'} | ` +
-         `tgt=${debris?.id ?? 'null'} alive=${debris?.alive !== false} captor=${captorId}`
-       );
      }
    }
 
@@ -2230,49 +2196,8 @@ export class ArmUnit {
   _transitionTo(newState) {
     const old = this.state;
     if (old === S.NETTING) this._firedNet = null;  // clear net ref when leaving NETTING
-    if (old === S.REELING) this._dbgReelLogged = false;  // reset one-shot DBG-REEL on REELING exit
     this.state = newState;
     this.stateTimer = 0;
-    // [DBG-ARM] Log every state transition
-    {
-      const _vDir = this.velocity.lengthSq() > 1e-20
-        ? this.velocity.clone().normalize() : null;
-      console.log(
-        `[DBG-ARM] _transitionTo ${this.id}: ${old} → ${newState} | ` +
-        `pos=${_dbgArmVec(this.position)} | ` +
-        `eulerDeg=${_dbgArmEulerDeg(this.group.quaternion)} | ` +
-        `velDir=${_dbgArmDir(_vDir)}`
-      );
-      this._dbgFramesSinceState = 0;  // reset counter for attitude per-frame log
-    }
-    // [DBG-GAP] Per-state-entry diagnostic for the SK/NETTING/GRAPPLED/REELING
-    // chain — measures daughter-mother, daughter-debris, and debris-mother gaps
-    // so we can see exactly when (and how much) the mother drifts away from
-    // the debris during a long station-keep session.
-    // Remove once mother-orbit-drift root cause is fixed.
-    // NOTE: uses module-local M (scene-units-per-METER = 0.00001), NOT
-    // Constants.SCENE_SCALE (which is per-KM = 0.01).
-    if (newState === S.STATION_KEEP || newState === S.NETTING ||
-        newState === S.GRAPPLED   || newState === S.REELING  ||
-        (old === S.REELING && newState === S.DOCKING)) {
-      const pp = this._dbgParentPos;
-      const debris = this._stationKeepTarget || this.capturedDebris || this.target;
-      const dpos = (debris && debris._scenePosition) ? debris._scenePosition : null;
-      const d_m_gap = pp ? (this.position.distanceTo(pp) / M) : NaN;
-      const d_t_gap = dpos ? (this.position.distanceTo(dpos) / M) : NaN;
-      const t_m_gap = (dpos && pp) ? (dpos.distanceTo(pp) / M) : NaN;
-      const captorId = debris?._capturedByArm?.id || 'none';
-      const aliveStr = debris ? `alive=${debris.alive !== false}` : 'no-debris';
-      console.warn(
-        `[DBG-GAP ${this.id}] ${old}→${newState} | ` +
-        `d↔m=${isNaN(d_m_gap) ? '?' : d_m_gap.toFixed(1)+'m'} | ` +
-        `d↔target=${isNaN(d_t_gap) ? '?' : d_t_gap.toFixed(1)+'m'} | ` +
-        `target↔m=${isNaN(t_m_gap) ? '?' : t_m_gap.toFixed(1)+'m'} | ` +
-        `tgt=${debris?.id ?? 'null'} ${aliveStr} captor=${captorId} | ` +
-        `tether=${this.tetherLength?.toFixed?.(1) ?? '?'}m`
-      );
-      this._dbgGapAccum = 0; // reset throttled in-state gap timer
-    }
     eventBus.emit(Events.ARM_STATE_CHANGE, {
       armId: this.id, from: old, to: newState,
     });
@@ -2567,25 +2492,11 @@ export class ArmUnit {
 
     const targetPos = this._getTargetScenePos();
     if (!targetPos) {
-      console.warn(`[DAP-TRANSIT ${this.id}] ⚠ NO TARGET — recalling! target=${this.target}, _scenePos=${this.target?._scenePosition}`);
       this.recall();
       return;
     }
     const toTarget = this._tmpVec.subVectors(targetPos, this.position);
     const dist = toTarget.length();
-
-    // ── DIAGNOSTIC: first 10 frames of TRANSIT (frame-by-frame) ──
-    if (!this._transitFrameCount) this._transitFrameCount = 0;
-    this._transitFrameCount++;
-    if (this._transitFrameCount <= 10 || !this._transitEntryLogged) {
-      this._transitEntryLogged = true;
-      const distM = dist / M;
-      const velMps = this.velocity.length() / M;
-      const velDir = this.velocity.clone().normalize();
-      const tgtDir = toTarget.clone().normalize();
-      const alignment = velDir.dot(tgtDir);
-      // [DAP-TRANSIT] per-frame log removed (noise during TRANSIT). Recall warning at top of fn kept.
-    }
 
     // Phase 8: Track starting distance for approach beep fraction
     if (this._startingDistance === 0 || dist > this._startingDistance) {
@@ -2660,32 +2571,8 @@ export class ArmUnit {
     if (dvMagT > maxDvT && dvMagT > 1e-18) dvCmdT.multiplyScalar(maxDvT / dvMagT);
 
     // Apply thrust impulse (NOT lerp — direct impulse like mother autopilot)
-    // ── DIAGNOSTIC: first 10 frames control law detail ──
-    if (this._transitFrameCount <= 10) {
-      const _vPre = this.velocity.length() / M;
-      const _dvMps = dvCmdT.length() / M;
-      const _maxMps = maxDvT / M;
-      const _clamped = dvMagT > maxDvT;
-      // [DAP-CTL] per-frame log removed (10 frames × every arm = noise).
-    }
     this.velocity.add(dvCmdT);
     this.position.add(this.velocity.clone().multiplyScalar(dt));
-
-    // ── DIAGNOSTIC: daughter autopilot TRANSIT telemetry (throttled ~1/s) ──
-    this._dapLogCounter = (this._dapLogCounter || 0) + 1;
-    if (this._dapLogCounter % 60 === 0) {
-      const velMps = this.velocity.length() / M;
-      const driftMps = driftVelT.length() / M;
-      const dvCmdMps = dvCmdT.length() / M;
-      const maxDvMps = maxDvT / M;
-      console.log(
-        `[DAP-TRANSIT ${this.id}] posErr=${posErrM.toFixed(1)}m | ` +
-        `v*=${vStarMT.toFixed(3)}m/s | vel=${velMps.toFixed(3)}m/s | ` +
-        `drift=${driftMps.toFixed(3)}m/s | dvCmd=${dvCmdMps.toFixed(4)}m/s | ` +
-        `maxDv=${maxDvMps.toFixed(4)}m/s | dt=${dt.toFixed(4)} | ` +
-        `V_CAP=${DAP_T.V_CAP} | clamp=${(dvMagT > maxDvT) ? 'YES' : 'no'}`
-      );
-    }
 
     // Close enough for fine approach — threshold must be >= standoff distance
     // so APPROACH controller has room to decelerate before reaching standoff.
@@ -2740,11 +2627,15 @@ export class ArmUnit {
               _dSz * Constants.STATION_KEEP.DEFAULT_STANDOFF_MULT));
           const _gateDist = _so * (Constants.STATION_KEEP.ENTRY_DISTANCE_MULT || 2.0);
           if (_distM <= _gateDist) {
-            console.log(`[SK-ENTER-MANUAL ${this.id}] dist=${_distM.toFixed(2)}m gate=${_gateDist.toFixed(1)}m standoff=${_so}`);
             this._transitionTo(S.STATION_KEEP);
             this._stationKeepTarget = this.target;
             if (this.target) this.target._isStationKeepTarget = true;
-            this._standoffR = _so;
+            // Enter at actual arrival distance, ease to nominal (same as autopilot
+            // path) so the position lerp doesn't snap the camera. Manual mode skips
+            // braking so _distM can be well outside the band — settling matters most here.
+            this._standoffR = _distM;
+            this._standoffTargetR = _so;
+            this._standoffSettling = true;
             this._initSkFrame(_tPos);
             // Use accumulated drift if available (from TRANSIT before manual)
             const _drift = this._smoothDriftVel;
@@ -2835,20 +2726,6 @@ export class ArmUnit {
     this.velocity.add(dvCmdA);
     this.position.add(this.velocity.clone().multiplyScalar(dt));
 
-    // ── DIAGNOSTIC: daughter autopilot APPROACH telemetry (throttled ~1/s) ──
-    this._dapLogCounter = (this._dapLogCounter || 0) + 1;
-    if (this._dapLogCounter % 60 === 0) {
-      const velMps = this.velocity.length() / M;
-      const driftMps = driftVelA.length() / M;
-      const relVMps = relVA.length() / M;
-      console.log(
-        `[DAP-APPROACH ${this.id}] dist=${distMetres.toFixed(1)}m | standoff=${standoff.toFixed(1)}m | ` +
-        `signedExcess=${signedExcess.toFixed(2)}m | v*=${vStarMA.toFixed(4)}m/s | ` +
-        `vel=${velMps.toFixed(3)}m/s | drift=${driftMps.toFixed(3)}m/s | ` +
-        `relV=${relVMps.toFixed(3)}m/s`
-      );
-    }
-
     // ── Epic 8: Check for STATION_KEEP entry before netting ──
     if (this.target && !this._manualMode) {
       // Relative velocity to TARGET using EMA-smoothed drift (not raw — avoids noise).
@@ -2865,23 +2742,19 @@ export class ArmUnit {
       const _SK_GATE_DIST = standoff * _SK_DIST_MULT;
       const _SK_GATE_VEL  = Constants.STATION_KEEP.ENTRY_MAX_VELOCITY;
 
-      // ── DIAGNOSTIC: STATION_KEEP gate check (~1/s during APPROACH) ──
-      if (this._dapLogCounter % 60 === 0) {
-        const _driftMps = driftVelA.length() / M;
-        console.log(
-          `[DAP-SK-GATE ${this.id}] distCheck=${(distMetres <= _SK_GATE_DIST)} (${distMetres.toFixed(1)} <= ${_SK_GATE_DIST.toFixed(1)}) | ` +
-          `velCheck=${(relVel < _SK_GATE_VEL)} (${relVel.toFixed(4)} < ${_SK_GATE_VEL}) | ` +
-          `driftNoise=${_driftMps.toFixed(4)}m/s`
-        );
-      }
-
       if (distMetres <= _SK_GATE_DIST && relVel < _SK_GATE_VEL) {
-        console.log(`[SK-ENTER ${this.id}] dist=${distMetres.toFixed(2)}m relVel=${relVel.toFixed(3)}m/s standoff=${standoff} target._scenePos=${!!this.target?._scenePosition} target.mesh=${!!this.target?.mesh}`);
         this._transitionTo(S.STATION_KEEP);
         this._stationKeepTarget = this.target;
         // Mark debris so DebrisField LOD won't scale it to 0 when mother orbits far away
         if (this.target) this.target._isStationKeepTarget = true;
-        this._standoffR = standoff;
+        // Enter at the ACTUAL arrival distance and ease in to the nominal
+        // standoff (see _updateStationKeep settle block + STANDOFF_SETTLE_TAU_S).
+        // The gate fires at up to 2× standoff while still closing, so setting
+        // _standoffR = standoff here would make the 0.8/frame position lerp snap
+        // the whole gap in ~3 frames and jerk the welded pilot camera.
+        this._standoffR = distMetres;
+        this._standoffTargetR = standoff;
+        this._standoffSettling = true;
 
         // Capture the frozen entry frame so arrow keys map cleanly to
         // screen-axes (left/right = pure horizontal screen motion, up/down =
@@ -2903,17 +2776,6 @@ export class ArmUnit {
           this.velocity.copy(driftVelA);
         } else {
           this.velocity.set(0, 0, 0);
-        }
-        // [DBG-ARM] SK entry telemetry — capture orbit-frame, position, and target
-        {
-          const _tp = this._getTargetScenePos();
-          console.log(
-            `[DBG-ARM] SK-ENTRY ${this.id} | ` +
-            `theta=${this._orbitTheta.toFixed(3)} phi=${this._orbitPhi.toFixed(3)} r=${this._standoffR.toFixed(2)}m | ` +
-            `pos=${_dbgArmVec(this.position)} | ` +
-            `targetScenePos=${_dbgArmVec(_tp)} | ` +
-            `eulerDeg=${_dbgArmEulerDeg(this.group.quaternion)}`
-          );
         }
         eventBus.emit(Events.STATION_KEEP_ENTERED, {
           armId: this.id,
@@ -2950,7 +2812,6 @@ export class ArmUnit {
 
     // If target lost, exit — check _scenePosition (instanced debris have no .mesh)
     if (!target || (!target._scenePosition && !target.mesh)) {
-      console.warn(`[SK-EXIT ${this.id}] LOST | target=${!!target} _scenePos=${!!target?._scenePosition} mesh=${!!target?.mesh} alive=${target?.alive}`);
       this._exitStationKeep('lost');
       return;
     }
@@ -2959,6 +2820,31 @@ export class ArmUnit {
     this._orbitTheta += this._thetaRate * dt;
     this._orbitPhi += this._phiRate * dt;
     this._standoffR += this._radiusRate * dt;
+
+    // ── Standoff settle-in (smooth SK entry) ──
+    // On entry _standoffR is the ACTUAL arrival distance (often well outside the
+    // nominal standoff because the SK gate fires at ENTRY_DISTANCE_MULT × standoff
+    // while the daughter is still closing). Ease it down to the nominal target so
+    // the goal recedes inward smoothly instead of letting the 0.8/frame position
+    // lerp snap the whole gap in ~3 frames (which jerks the welded pilot camera).
+    // Any pilot radius input cancels the settle and hands over manual control.
+    if (this._standoffSettling) {
+      if (Math.abs(this._radiusRate) > 1e-4) {
+        // Pilot took manual radius control. Hand over, but if the daughter is
+        // still outside the band keep easing inward (target = _rMax) so the
+        // clamp below can't snap an out-of-band radius down in a single frame.
+        this._standoffTargetR = Math.min(this._standoffR, this._rMax);
+        this._standoffSettling = this._standoffR > this._rMax;
+      } else {
+        const tauR = SK.STANDOFF_SETTLE_TAU_S || 0.6;
+        const kR = 1 - Math.exp(-dt / tauR);
+        this._standoffR += (this._standoffTargetR - this._standoffR) * kR;
+        if (Math.abs(this._standoffR - this._standoffTargetR) < 0.05) {
+          this._standoffR = this._standoffTargetR;
+          this._standoffSettling = false;
+        }
+      }
+    }
 
     // ── Pattern-C auto-return (dwell-then-ease) ──
     // Pilot-friendly recovery: daughter holds her position for a quiet window
@@ -3018,14 +2904,19 @@ export class ArmUnit {
     const thetaLimitRad = (SK.THETA_LIMIT_DEG || 120) * Math.PI / 180;
     this._orbitTheta = Math.max(-thetaLimitRad, Math.min(thetaLimitRad, this._orbitTheta));
 
-    // Clamp radius
-    this._standoffR = Math.max(this._rMin, Math.min(this._rMax, this._standoffR));
+    // Clamp radius. While settling-in from a wide SK entry the arrival distance
+    // can exceed _rMax — only enforce the lower bound so the ease can bring it
+    // down through the band; once settled the normal [_rMin,_rMax] clamp holds.
+    if (this._standoffSettling) {
+      this._standoffR = Math.max(this._rMin, this._standoffR);
+    } else {
+      this._standoffR = Math.max(this._rMin, Math.min(this._rMax, this._standoffR));
+    }
 
     // Target position in scene coordinates — use _scenePosition (orbit-propagated)
     // not mesh.position which may be stale or floating-origin-adjusted for instanced debris
     const targetPos = target._scenePosition || (target.mesh && target.mesh.position);
     if (!targetPos) {
-      console.warn(`[SK-EXIT ${this.id}] NO POS`);
       this._exitStationKeep('lost');
       return;
     }
@@ -3071,7 +2962,6 @@ export class ArmUnit {
     // Fuel depleted → exit
     if (this.fuel <= 0) {
       this.fuel = 0;
-      console.warn(`[SK-EXIT ${this.id}] FUEL DEPLETED`);
       this._exitStationKeep('fuel');
       return;
     }
@@ -3178,6 +3068,7 @@ export class ArmUnit {
     this._thetaRate = 0;
     this._phiRate = 0;
     this._radiusRate = 0;
+    this._standoffSettling = false;
     // Release the frozen entry frame so the next SK entry captures fresh axes
     this._skPolarAxis = null;
     this._skEquator0  = null;
@@ -3391,13 +3282,11 @@ export class ArmUnit {
      if (!activeNet) {
        // fireDaughterNet returned null (cooldown/inventory/flag) — fall back to SK
        // (not APPROACH, which causes "screen-races-to-debris" at orbital speed).
-       console.warn(`[NETTING-FSM ${this.id}] fireDaughterNet returned null — inv=${this._netInventory}/${this._netInventoryMax} flag=${Constants.isFeatureEnabled('CAPTURE_NET')} → fallback STATION_KEEP`);
        this._firedNet = null;
        this._transitionTo(S.STATION_KEEP);
        return;
      }
      this._firedNet = activeNet;  // store reference for subsequent frames
-     console.log(`[NETTING-FSM ${this.id}] net fired — state=${activeNet.state} target=${this.target?.id}`);
    }
 
     // NETTING: track the target at the same SK standoff offset so the camera
@@ -3459,11 +3348,6 @@ export class ArmUnit {
         armId: this.id, targetId: this.target?.id,
       });
       if (!committedAlive) {
-        console.warn(
-          `[NETTING-FSM ${this.id}] target lost during net flight ` +
-          `(committed=${this._netCommittedTarget?.id ?? 'null'} ` +
-          `alive=${this._netCommittedTarget?.alive}) → RETURNING`
-        );
         eventBus.emit(Events.COMMS_MESSAGE, {
           text: `${this.id}: Target lost during net flight — returning empty.`,
           priority: 'warning',
@@ -3502,10 +3386,6 @@ export class ArmUnit {
         // Issue-B GUARD (STOWED miss path): same target-alive check.
         const committedAliveStowed = this._netCommittedTarget && this._netCommittedTarget.alive !== false;
         if (!committedAliveStowed) {
-          console.warn(
-            `[NETTING-FSM ${this.id}] STOWED miss with dead target ` +
-            `(committed=${this._netCommittedTarget?.id ?? 'null'}) → RETURNING`
-          );
           eventBus.emit(Events.COMMS_MESSAGE, {
             text: `${this.id}: Target lost during net flight — returning empty.`,
             priority: 'warning',
@@ -3540,6 +3420,11 @@ export class ArmUnit {
         });
         return;
       }
+      // Net-integrity check at reel start: a heavy, near-rated catch can slip
+      // the net. A failure is recoverable (debris drifts free, daughter returns
+      // to reload) and is handled inside the check — bail out of REELING.
+      if (this._checkNetIntegrityOnReel()) return;
+
       // V5: Zero-fuel motor reel-in instead of fuel-burning HAULING
       this._transitionTo(S.REELING);
       const _hasPayload = this.capturedDebris !== null;
@@ -3553,6 +3438,148 @@ export class ArmUnit {
       });
     }
   }
+
+  /**
+   * Release the currently captured debris back into the field as a free,
+   * re-targetable body (shared by both capture-failure modes).
+   *
+   * The debris resumes its propagated orbit (its true trajectory — the capture
+   * was only a visual pin) and is tagged `_netted` so it reads as "still wearing
+   * the net" and is worth re-capturing. Crucially this means a lost catch never
+   * silently vanishes; it becomes a chase-able object again.
+   *
+   * @param {object} [opts]
+   * @param {boolean} [opts.keepPinned=false] - keep `_capturedByArm` so the debris
+   *        drifts WITH this arm (tether snap: the net stays intact between the
+   *        daughter and debris). When false the debris detaches and floats free.
+   * @returns {object|null} the released debris (or null if none)
+   * @private
+   */
+  _releaseCapturedDebris({ keepPinned = false } = {}) {
+    const debris = this.capturedDebris;
+    if (!debris) return null;
+    debris._netted = true;             // visual/gameplay tag: drifting in a net
+    debris._captured = false;          // re-targetable by the next daughter
+    debris._isStationKeepTarget = false;
+    debris._committedNetArmId = null;
+    if (!keepPinned) {
+      // Detach: clear the pin so DebrisField resumes orbit-driven positioning
+      // and restores LOD. The debris keeps its real orbital trajectory.
+      debris._capturedByArm = null;
+      debris._armPinned = false;       // release authoritative arm pin
+    }
+    // This arm no longer owns the catch for docking/processing in either case.
+    this.capturedDebris = null;
+    this.reeling = false;
+    this.tetherTension = 0;
+    return debris;
+  }
+
+  /**
+   * Authoritative catch pin: force the captured debris straight to this arm's
+   * position for the renderer AND every consumer (net visual, camera, autopilot,
+   * gap diagnostics). Belt-and-suspenders over DebrisField's `_capturedByArm`
+   * pin, which proved fragile for station-keep / welcome-field debris and let
+   * the catch drift hundreds of metres away on its own orbit during the haul.
+   * @private
+   */
+  _pinCatchToSelf() {
+    const d = this.capturedDebris;
+    if (!d) return;
+    d._armPinPos = d._armPinPos ? d._armPinPos.copy(this.position) : this.position.clone();
+    d._armPinned = true;
+  }
+
+  /**
+   * Net-integrity check performed as reel-in begins (GRAPPLED → REELING).
+   * Two failure modes, both RECOVERABLE (daughter keeps her tether and returns
+   * to reload while the debris drifts free, re-capturable):
+   *   • OVERSIZE (deterministic): debris is physically wider than the net mouth,
+   *     so the net can't actually cinch around it.
+   *   • STRAIN (probabilistic): a heavy catch near the net's rated mass slips
+   *     the weave, scaling with how close the payload is to the rating.
+   * @returns {boolean} true if the net failed (caller must NOT enter REELING)
+   * @private
+   */
+  _checkNetIntegrityOnReel() {
+    const debris = this.capturedDebris;
+    if (!debris) return false;
+    const payloadMass = debris.mass || 0;
+    const rated = this._netRatedMass || 0;
+    const debrisSize = debris.sizeMeter || 0;
+    const netDia = this._netDiameter || 0;
+
+    // Hard fail: debris wider than the net mouth can't be enveloped/cinched.
+    const oversized = netDia > 0 && debrisSize > netDia;
+
+    // Probabilistic fail: heavy catch near the net's rated mass slips the weave.
+    let strain = 0;
+    let strainFail = false;
+    if (!oversized && payloadMass > 0 && rated > 0) {
+      strain = payloadMass / rated;
+      const safe = Constants.NET_STRAIN_SAFE_FRACTION ?? 0.8;
+      if (strain > safe) {
+        const pMax = Constants.NET_STRAIN_FAIL_PROB_MAX ?? 0;
+        const t = Math.min(1, (strain - safe) / Math.max(1e-6, 1 - safe));
+        strainFail = Math.random() < pMax * t;
+      }
+    }
+
+    if (!oversized && !strainFail) return false;               // net holds
+
+    // ── Net failed — release the catch; daughter returns to reload ──
+    this._releaseCapturedDebris({ keepPinned: false });
+    eventBus.emit(Events.NET_FAILED, {
+      armId: this.id, armIndex: this.index,
+      debrisId: debris.id, strain, oversized, recoverable: true,
+    });
+    const reason = oversized
+      ? `Net failed — debris too wide for the net (${debrisSize.toFixed(1)}m vs ${netDia.toFixed(1)}m mouth). Returning to reload; a larger net is needed.`
+      : `Net failed — debris slipped free and is drifting. Returning to reload; re-net to retry.`;
+    eventBus.emit(Events.COMMS_MESSAGE, { text: `${this.id}: ${reason}`, priority: 'warning' });
+    if (this._stationKeepTarget) this._stationKeepTarget._isStationKeepTarget = false;
+    this._stationKeepTarget = null;
+    this.target = null;
+    this._transitionTo(S.RETURNING);
+    return true;
+  }
+
+  /**
+   * Catastrophic tether snap during reel-in: the mother↔daughter cable parts.
+   * The net stays intact between daughter and debris, so they are cut loose and
+   * drift off TOGETHER (debris stays pinned to the now-EXPENDED daughter — it
+   * does NOT vanish). A recoil impulse springs the pair clear of the mother and
+   * the severed line is hidden. The catch is lost (the daughter can't return),
+   * though the runaway debris is left re-targetable so another daughter can give
+   * chase. Upgrade the tether to haul heavier loads without snapping.
+   * @private
+   */
+  _snapTether(parentPos) {
+    // Recoil: shove the daughter (and her pinned catch) away from the mother
+    // along the tether axis so the pair visibly springs free instead of freezing.
+    const sep = (Constants.CAPTURE_RELEASE_SEPARATION_MPS || 1.2) * M;
+    if (parentPos) {
+      const away = this._tmpVec.subVectors(this.position, parentPos);
+      if (away.lengthSq() > 1e-20) {
+        away.normalize();
+        this.velocity.addScaledVector(away, sep);
+      }
+    }
+    // Keep the catch attached to the daughter (net intact) so it drifts with
+    // her — coherent, still visible, never silently removed.
+    const debris = this._releaseCapturedDebris({ keepPinned: true });
+    this._tetherSevered = true;
+    this._severedCatch = debris;       // bounded pin — released after a drift delay
+    this._severedDriftS = 0;
+    this.isDetached = true;            // cut from mother — can't reel/return
+    if (this.tetherLine) this.tetherLine.visible = false;
+    eventBus.emit(Events.TETHER_SNAP, {
+      armIndex: this.index, armId: this.id, cause: 'overload',
+      debrisId: debris && debris.id, recoverable: false,
+    });
+    this._transitionTo(S.EXPENDED);
+  }
+
 
   /**
    * HAULING: tow debris back toward parent (slow).
@@ -3625,20 +3652,6 @@ export class ArmUnit {
     const toMother = this._tmpVec.subVectors(dockWorldPos, this.position);
     const dist = toMother.length();
 
-    // [DBG-REEL] One-shot at REELING entry — confirms the function fires AND
-    // logs the initial distance.  Subsequent frames are silent to avoid log
-    // spam.  Reset when leaving REELING so the next reel-in logs fresh.
-    if (!this._dbgReelLogged) {
-      this._dbgReelLogged = true;
-      const distM = dist / M;
-      const etaS = (reelSpeed > 0 && distM > 0) ? (distM / reelSpeed).toFixed(1) : 'n/a';
-      console.warn(
-        `[DBG-REEL ${this.id}] REEL-IN START dist=${distM.toFixed(1)}m ` +
-        `reelSpeed=${reelSpeed}m/s ETA=${etaS}s payload=${hasPayload} ` +
-        `captorByArm=${this.capturedDebris?._capturedByArm?.id || 'NONE'}`
-      );
-    }
-
     // FIX (reel-in unit bug): the previous threshold `dist > 0.001` treated the
     // value as metres, but `dist` is in SCENE UNITS (1 unit = 100 km).  0.001
     // scene units = 100 m — so the entire reel-step branch was silently skipped
@@ -3664,13 +3677,20 @@ export class ArmUnit {
       }
     }
 
+    // Authoritative: drag the captured debris with us every frame so it can
+    // never be left behind on its orbit while we reel home.
+    this._pinCatchToSelf();
+
     // Update tether length
     this.tetherLength = dist / M;
 
-    // Calculate tension (simplified: F = m × a_reel)
+    // Calculate tension (simplified: F = m × a_reel).  Coefficient tuned
+    // (Constants.REEL_TENSION_COEFF) so an in-spec catch reels home under the
+    // default tether break strength — only genuine overload snaps the cable.
     const armMass = this.config.type === 'weaver' ? V5_WEAVER_MASS : V5_SPINNER_MASS;
     const payloadMass = hasPayload && this.capturedDebris ? (this.capturedDebris.mass || 0) : 0;
-    this.tetherTension = (armMass + payloadMass) * reelSpeed * 0.5; // Simplified tension estimate
+    const tensionCoeff = Constants.REEL_TENSION_COEFF ?? 0.04;
+    this.tetherTension = (armMass + payloadMass) * reelSpeed * tensionCoeff;
 
     // Emit tension update
     eventBus.emit(Events.TETHER_TENSION_UPDATE, {
@@ -3679,10 +3699,12 @@ export class ArmUnit {
       fraction: this.tetherTension / this.tetherBreakStrength,
     });
 
-    // Check for tether snap
-    if (this.tetherTension > this.tetherBreakStrength) {
-      eventBus.emit(Events.TETHER_SNAP, { armIndex: this.index, armId: this.id, cause: 'overload' });
-      this._transitionTo(S.EXPENDED);
+    // Check for tether snap — catastrophic cut from the mother (see _snapTether).
+    // Guard on REELING: the reel-step above may have already docked the catch
+    // this frame (transitioned to DOCKING), in which case it's delivered, not lost.
+    if (this.state === S.REELING && this.tetherTension > this.tetherBreakStrength) {
+      this._snapTether(parentPos);
+      return;
     }
 
     // NO fuel consumption! This is the key V5 benefit.
@@ -3736,12 +3758,24 @@ export class ArmUnit {
 
     this.position.lerp(dockWorldPos, 0.05);
 
+    // Keep the catch glued to us through the final dock approach too.
+    this._pinCatchToSelf();
+
     if (this.stateTimer > Constants.ARM_DOCK_DURATION) {
       // Process captured debris
       if (this.capturedDebris) {
         this.captures++;
+        const _caught = this.capturedDebris;
+        const _caughtId = _caught.id;
+        // Release the pin BEFORE emitting DEBRIS_CAPTURED so the GameFlowManager
+        // removeDebris (now wired to DEBRIS_CAPTURED) doesn't warn about an
+        // active captor. The catch was held visible at the mother through the
+        // whole dock; this is the clean stow/removal at the end.
+        _caught._capturedByArm = null;
+        _caught._armPinned = false;
+        this.capturedDebris = null;
         eventBus.emit(Events.DEBRIS_CAPTURED, {
-          debrisId: this.capturedDebris.id,
+          debrisId: _caughtId,
           armId: this.id,
           type: this.type,
         });
@@ -3749,11 +3783,6 @@ export class ArmUnit {
           text: `${this.id}: Debris processed. Capture #${this.captures}.`,
           priority: 'success',
         });
-        // POLISH FIX issue #2: release the pin so DebrisField stops using the
-        // arm position. The debris is removed via DEBRIS_CAPTURED handler
-        // (GameFlowManager.removeDebris) so the visual disappears cleanly.
-        this.capturedDebris._capturedByArm = null;
-        this.capturedDebris = null;
       }
       // POLISH FIX: keep daughter VISIBLE at the strut after a successful
       // retrieval — set deploy state to DEPLOYED so PlayerSatellite.postArmUpdate
@@ -4163,7 +4192,32 @@ export class ArmUnit {
     this.position.add(this.velocity.clone().multiplyScalar(dt * 0.5));
     this.velocity.multiplyScalar(0.999);
     this.mesh.visible = true;
-    this.tetherLine.visible = true;
+    // A severed tether shows no line back to the mother (the cable parted).
+    this.tetherLine.visible = !this._tetherSevered;
+
+    // Bounded cleanup of a tether-snapped catch: it tumbles off pinned to this
+    // drifting daughter for a short while, then we release the pin so the
+    // runaway debris resumes its own orbit + LOD (otherwise it would render at
+    // full detail forever and never be reclaimed by the field).
+    if (this._severedCatch) {
+      // If another daughter re-captured the runaway, the pin has transferred —
+      // stop tracking it here.
+      if (this._severedCatch._capturedByArm !== this) {
+        this._severedCatch = null;
+      } else {
+        // Keep the catch glued to this drifting daughter (authoritative pin).
+        this._severedCatch._armPinPos = this._severedCatch._armPinPos
+          ? this._severedCatch._armPinPos.copy(this.position)
+          : this.position.clone();
+        this._severedCatch._armPinned = true;
+        this._severedDriftS += dt;
+        if (this._severedDriftS >= (Constants.TETHER_SNAP_RELEASE_DELAY_S || 8.0)) {
+          this._severedCatch._capturedByArm = null; // resume orbit-driven position + LOD
+          this._severedCatch._armPinned = false;
+          this._severedCatch = null;
+        }
+      }
+    }
   }
 
   // ==========================================================================
@@ -4496,6 +4550,11 @@ export class ArmUnit {
     const capacity = Constants.ARM_NET_CAPACITY[type] ?? 0;
     this._netInventoryMax = capacity;
     this._netInventory = capacity;
+    // Net rated capture mass — Weaver carries the Medium net, Spinner the Small
+    // net (CAPTURE_NET.md §6.1). Used by the net-strain failure model.
+    const netClass = type === 'weaver' ? Constants.CAPTURE_NET.MEDIUM : Constants.CAPTURE_NET.SMALL;
+    this._netRatedMass = (netClass && netClass.MAX_CAPTURE_MASS) || 0;
+    this._netDiameter = (netClass && netClass.DIAMETER) || 0;
   }
 
   /** Current net count remaining in magazine. */
