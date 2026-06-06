@@ -1,6 +1,6 @@
 # Space Cowboy — Next-Shift Handoff Brief
 
-*Updated: 2026-05-30 · Four-fix architectural sprint complete. Prior shift archived to [`archive/HANDOFF_2026-05-29_post-cinch-qa.md`](archive/HANDOFF_2026-05-29_post-cinch-qa.md). Earlier shifts at [`archive/HANDOFF_AUTOPILOT_RETRO.md`](archive/HANDOFF_AUTOPILOT_RETRO.md), [`archive/SK_M1_POLISH_HANDOFF.md`](archive/SK_M1_POLISH_HANDOFF.md), [`archive/CEREMONY_REDESIGN.md`](archive/CEREMONY_REDESIGN.md).*
+*Updated: 2026-06-06 · Daughter capture-lifecycle polish complete (commit `b7d5fae`). Prior shift archived to [`archive/HANDOFF_2026-05-30_four-fix.md`](archive/HANDOFF_2026-05-30_four-fix.md). Earlier shifts at [`archive/HANDOFF_2026-05-29_post-cinch-qa.md`](archive/HANDOFF_2026-05-29_post-cinch-qa.md), [`archive/HANDOFF_AUTOPILOT_RETRO.md`](archive/HANDOFF_AUTOPILOT_RETRO.md), [`archive/SK_M1_POLISH_HANDOFF.md`](archive/SK_M1_POLISH_HANDOFF.md), [`archive/CEREMONY_REDESIGN.md`](archive/CEREMONY_REDESIGN.md).*
 
 ---
 
@@ -10,8 +10,8 @@
 
 | # | Read | Why |
 |---|------|-----|
-| 1 | [`§1 Session Summary`](#1-session-summary-2026-05-2930) + [`§5 Recommended Next Steps`](#5-recommended-next-steps) | What just shipped + what's ready to pick up |
-| 2 | [`§9 THREE.js Convention SSOT`](#9-threejs-convention-ssot-load-bearing) + [`§10 Post-Cinch Learnings`](#10-post-cinch-fix-learnings-load-bearing) | Load-bearing rules — read BEFORE touching orientation, FSM, or visual code |
+| 1 | [`§1 Session Summary`](#1-session-summary-2026-06-06) + [`§5 Recommended Next Steps`](#5-recommended-next-steps) | What just shipped + what's ready to pick up |
+| 2 | [`§9 THREE.js Convention SSOT`](#9-threejs-convention-ssot-load-bearing) + [`§10 Post-Cinch Learnings`](#10-post-cinch-fix-learnings-load-bearing) | Load-bearing rules — read BEFORE touching orientation, FSM, capture lifecycle, or visual code |
 | 3 | [`README.md`](README.md:1) | Quick start, controls, controls reference |
 | 4 | [`GAME_DESIGN.md`](GAME_DESIGN.md:1) §1–§3 | Core loop, jellyfish identity, ΔV economy |
 | 5 | [`ARCHITECTURE.md`](ARCHITECTURE.md:1) | File structure, module design, state machine (⚠️ needs Epic 9/10 update) |
@@ -19,98 +19,124 @@
 ### Step 2 — Verify baseline
 
 ```bash
-node js/test/run-tests.js | tail -3    # expect: 556 suites / 2364 tests / 0 failures
+node js/test/run-tests.js | tail -3    # expect: 608 suites / 2530 tests / 0 failures
 ```
 
 If red, see [`archive/SK_M1_POLISH_HANDOFF.md §7 Appendix`](archive/SK_M1_POLISH_HANDOFF.md) for diagnostic-log grep targets.
 
 ### Step 3 — Pick a task
 
-See [`§5 Recommended Next Steps`](#5-recommended-next-steps). Top 7 are ordered by effort/impact and ready for Orchestrator to research+architect+code.
+See [`§5 Recommended Next Steps`](#5-recommended-next-steps). Items are ordered by effort/impact and ready for Orchestrator to research+architect+code.
 
 ---
 
-## §1 Session Summary (2026-05-29/30)
+## §1 Session Summary (2026-06-06)
 
-**Four-fix architectural sprint.** All issues from [`archive/FIX_PLAN.md`](archive/FIX_PLAN.md) implemented across 2 days. Test delta: **+44 tests** (2320 → **2364**). 0 regressions. Service worker bumped to **v4**.
+**Daughter capture-lifecycle polish.** Commit `b7d5fae` — *"feat(capture): daughter capture lifecycle polish — reel-in fix, failure overhaul, log strip."* This session chased a headline reel-in disappearance bug to ground, replaced the fragile per-frame capture pin with an authoritative path, built a two-mode capture-failure model, added first-time-player guidance for failures, smoothed station-keep entry, hardened `getDebrisNear`, and stripped all diagnostic logging from hot paths. Test delta: **556 suites / 2364 tests → 608 suites / 2530 tests / 0 failures** (+52 suites / +166 tests).
 
-### Issues shipped
+### What shipped
 
-| # | Issue | Severity | One-line outcome |
-|---|---|---|---|
-| 4 | Solar panel "shadow" on Earth | Medium | Split DoubleSide into FrontSide (PV cells) + BackSide (Kapton/silver substrate) with flipped-normal geometry clone; custom ShaderMaterial for grid wireframe (GL_LINES has no face culling) |
-| 2 | Rotation limits when daughters tethered | High | Exponential spring-resistance model with 3 tiers (none/soft/block); new canonical [`ArmManager.hasTetheredArm()`](js/entities/ArmManager.js:1) + [`getRotationLockTier()`](js/entities/ArmManager.js:1) predicates covering all 20+ ARM_STATES |
-| 1 | Z-layer fixes + aft rendering | High | New [`RENDER_ORDER`](js/core/Constants.js:1) 6-tier enum; 50+ renderOrder annotations across barrel/collar/struts/viewport/hinge/sensors/dock/thrusters; FEEP thruster upgrade (mounting boss + accelerator grid disc per nozzle) |
-| 3 | Target ranking (TPI) | Medium-High | Composite Target Priority Index: `TPI = 0.35×dist + 0.30×ΔV + 0.20×MOID + 0.15×value`; MOID badges propagated into enhanced target objects; 4-way sort cycle |
+| # | Change | One-line outcome |
+|---|---|---|
+| 1 | **Reel-in disappearance fix** (headline) | Catch now reels in welded to the daughter instead of drifting ~600 m away on the debris's own orbit and vanishing |
+| 2 | **Net stays visible through the haul** | Daughter's net is held cinched on the debris in REELING until the arm delivers, instead of stowing on its own short timeline mid-haul |
+| 3 | **Docking delivery no longer pops out** | Debris removal deferred to dock completion; catch stays visible at the mother with a stow-shrink, then removed cleanly |
+| 4 | **Capture-failure overhaul** | Two distinct modes — recoverable NET FAILURE vs catastrophic TETHER SNAP — each with distinct comms + HUD alerts; in-spec catches never snap |
+| 5 | **First-time player guidance** | Two new teaching moments (`first_net_failed`, `first_tether_snap`) explaining what happened + recovery |
+| 6 | **Station-keep entry smoothing** | Ease standoff radius from SK-entry distance to nominal; removes the "speeds up then camera jumps" artifact; gentler launch ceremony |
+| 7 | **`getDebrisNear` hardening + canonical resolve** | `getDebrisNear` returns read-only snapshots; ArmManager resolves fishing/web-shot lists to canonical objects by id |
+| 8 | **Debug-log strip** | Removed all `DBG-*` / `[AUTO-TARGET]` / `[DAP-*]` / `[SK-ENTER/EXIT]` / `[NETTING-FSM]` console logging + dead diagnostic blocks + `_dbg*` helpers |
+
+### 1.1 Reel-in disappearance fix (the headline bug)
+
+**Symptom.** After a daughter netted debris, the net + debris drifted ~600 m away on the debris's *own* orbit and vanished during reel-in.
+
+**Root-cause investigation.** It was NOT a duplicate/clone object — a one-shot `[DBG-ID]` diagnostic proved `capturedRef === canonical, idCountInList = 1`. The real cause: `DebrisField`'s per-frame `_capturedByArm` pin did not reliably keep the *rendered* instance on the arm during the haul, because **`DebrisField.update()` runs BEFORE `ArmManager.update()` each frame** (line ordering in [`js/main.js`](js/main.js:1) ~1274 vs ~1278). The debris instance transform was being recomputed from the orbit branch after the arm had already moved.
+
+**Fix.** New authoritative [`DebrisField.pinCapturedDebris(debrisRef, armScenePos, scaleMul)`](js/entities/DebrisField.js:1), called from [`ArmManager.update()`](js/entities/ArmManager.js:1) **AFTER** the arms move. It looks the canonical debris up by id (the same key [`_instanceLookup`](js/entities/DebrisField.js:1) / [`removeDebris`](js/entities/DebrisField.js:1) use) and forces both the canonical debris and its instanced-mesh matrix onto the arm position, overriding the orbit branch. [`ArmUnit`](js/entities/ArmUnit.js:1) also calls `_pinCatchToSelf()` during REELING/DOCKING. **Net effect: the catch reels in welded to the daughter.**
+
+### 1.2 Net stays visible through the haul
+
+The net projectile used to stow on its own short timeline (`tetherPaidOut / REEL_SPEED`) and the bag visual vanished mid-haul. Now [`CaptureNet`](js/entities/CaptureNet.js:1) holds a daughter's net in REELING (`_heldByArm`, set in [`CaptureNetSystem`](js/systems/CaptureNetSystem.js:1) auto-reel for `armIndex >= 0` successful catches) so the bag stays cinched on the debris until the arm delivers. It auto-releases/stows once the catch is no longer pinned (`targetDebris._capturedByArm` cleared). **Mother-pod captures are unaffected.**
+
+### 1.3 Docking delivery no longer pops out
+
+Debris removal was deferred from `ARM_RETURNED` (dock arrival) to `DEBRIS_CAPTURED` (dock completion, ~3 s later) — see [`GameFlowManager`](js/systems/GameFlowManager.js:1)'s new `DEBRIS_CAPTURED` handler and the NOTE in its `ARM_RETURNED` handler. The catch stays visible at the mother through docking with a stow-shrink (1.0 → 0.15) applied via `pinCapturedDebris`'s `scaleMul`, then is removed cleanly. [`ArmUnit._updateDocking`](js/entities/ArmUnit.js:1) releases the pin **BEFORE** emitting `DEBRIS_CAPTURED` so the deferred `removeDebris` doesn't warn about an active captor.
+
+### 1.4 Capture-failure overhaul ([`ArmUnit`](js/entities/ArmUnit.js:1))
+
+Two distinct modes:
+
+- **(a) NET FAILURE (recoverable)** via `_checkNetIntegrityOnReel()` at GRAPPLED → REELING:
+  - **OVERSIZE** (deterministic) — debris wider than net mouth `_netDiameter`.
+  - **STRAIN** (probabilistic) — payload near `_netRatedMass`, scaling to `NET_STRAIN_FAIL_PROB_MAX`.
+  - Outcome: debris drifts free and re-capturable; daughter keeps tether and RETURNS to reload.
+- **(b) TETHER SNAP (catastrophic)** via `_snapTether()`:
+  - Only on genuine overload — reel tension retuned via `REEL_TENSION_COEFF = 0.04` so in-spec catches never snap.
+  - Daughter + catch cut loose and **drift TOGETHER** (never silently vanish); recoil impulse applied; severed line hidden; bounded drift via `TETHER_SNAP_RELEASE_DELAY_S` then pin released.
+
+Shared release helper `_releaseCapturedDebris({ keepPinned })`. New event [`Events.NET_FAILED`](js/core/Events.js:1). Distinct comms ([`CommsSystem`](js/systems/CommsSystem.js:1)) + HUD alerts ([`HUD.showNetFailedAlert`](js/ui/HUD.js:1) amber, vs tether-snap red).
+
+### 1.5 First-time player guidance ([`TeachingSystem`](js/systems/TeachingSystem.js:1))
+
+Two new teaching moments `first_net_failed` and `first_tether_snap` (`TOTAL_MOMENTS` 17 → 19), triggered by the new events, explaining what happened + recovery.
+
+### 1.6 Station-keep entry smoothing
+
+Ease standoff radius from the actual SK-entry distance to nominal over `STATION_KEEP.STANDOFF_SETTLE_TAU_S = 0.6 s` (removes the "speeds up then camera jumps" artifact, since the SK gate fires at up to 2× standoff while still closing). Gentler launch-ceremony pacing in [`CameraSystem`](js/systems/CameraSystem.js:1) (durations + FOV ease).
+
+### 1.7 `getDebrisNear` hardening + canonical resolve
+
+[`DebrisField.getDebrisNear`](js/entities/DebrisField.js:1) now returns read-only **snapshots** (cloned `_scenePosition` / `orbit`) instead of sharing the canonical's mutable refs — prevents a caller mutating a result from corrupting real debris. [`ArmManager`](js/entities/ArmManager.js:1) now resolves the fishing/web-shot `_nearbyDebris` list to canonical objects by id. (Finding: `getDebrisNear` was the only "shared-mutable-ref clone factory"; most consumers already re-resolve via `getDebrisById`, and [`SensorSystem._revealNearbyDebris`](js/systems/SensorSystem.js:1) already does.)
+
+### 1.8 Debug-log strip
+
+Removed all `DBG-*` / `[AUTO-TARGET]` / `[DAP-*]` / `[SK-ENTER/EXIT]` / `[NETTING-FSM]` console logging from hot paths ([`ArmUnit`](js/entities/ArmUnit.js:1), [`DebrisField`](js/entities/DebrisField.js:1), [`CameraSystem`](js/systems/CameraSystem.js:1), [`AutopilotSystem`](js/systems/AutopilotSystem.js:1), [`InputManager`](js/systems/InputManager.js:1), [`GameFlowManager`](js/systems/GameFlowManager.js:1), [`TargetSelector`](js/systems/TargetSelector.js:1), [`TargetPanel`](js/ui/hud/TargetPanel.js:1), [`HUD`](js/ui/HUD.js:1)) plus dead diagnostic blocks; removed the `_dbg*` helper fns.
 
 ### Test suite
 
-**556 suites / 2364 tests / 0 failures** as of 2026-05-30. New file: [`test-RotationLock.js`](js/test/test-RotationLock.js:1) — 7 suites, **44 tests**.
+**608 suites / 2530 tests / 0 failures** as of 2026-06-06. New files: [`test-ArmUnit-CaptureFailure.js`](js/test/test-ArmUnit-CaptureFailure.js:1), [`test-DebrisField-PinCatch.js`](js/test/test-DebrisField-PinCatch.js:1) (both registered in [`run-tests.js`](js/test/run-tests.js:1)); updated CommsSystem / Constants / TeachingSystem / CaptureNet suites.
 
 ---
 
 ## §2 Architecture Changes
 
-### 2.1 New Constants ([`js/core/Constants.js`](js/core/Constants.js:1))
+### 2.1 Authoritative captured-debris pin ([`DebrisField`](js/entities/DebrisField.js:1) + [`ArmManager`](js/entities/ArmManager.js:1))
 
-| Block | Purpose | Used by |
+New method [`DebrisField.pinCapturedDebris(debrisRef, armScenePos, scaleMul)`](js/entities/DebrisField.js:1) is the **canonical** way to keep a captured debris welded to a hauling arm. It is called from [`ArmManager.update()`](js/entities/ArmManager.js:1) **after** the arms move (because `debrisField.update()` runs first each frame — see [`§10 Rule G`](#rule-g-new-this-shift--frame-update-order-debris-before-arms)). It resolves the canonical debris by id, then forces both the debris and its instanced-mesh matrix onto the arm position with an optional `scaleMul` (used for the docking stow-shrink). This **overrides** the orbit branch in `_updateInstanceTransform`. The old per-frame `_capturedByArm` pin remains but is no longer load-bearing for daughter hauls.
+
+### 2.2 New tuning constants ([`js/core/Constants.js`](js/core/Constants.js:1))
+
+| Constant | Value | Purpose |
 |---|---|---|
-| `RENDER_ORDER` | 6-tier enum for Three.js renderOrder: `EARTH=0, SPACECRAFT_OPAQUE=1, DETAIL=2, TRANSPARENT=3, ADDITIVE=4, HUD=10` | [`PlayerSatellite.js`](js/entities/PlayerSatellite.js:1), [`ArmUnit.js`](js/entities/ArmUnit.js:1), [`MenuScene3D.js`](js/ui/MenuScene3D.js:1) |
-| `TETHER_ROTATION` | Spring model: `MAX_DISPLACEMENT_SOFT/BLOCK`, `STIFFNESS_EXPONENT`, `SPRINGBACK` rates, `COMMS_THROTTLE_MS` | [`InputManager.js`](js/systems/InputManager.js:1) |
-| `TARGET_RANKING` | TPI weights, reference values, `MOID_THREAT_MAP` | [`DebrisField.js`](js/entities/DebrisField.js:1), [`TargetPanel.js`](js/ui/hud/TargetPanel.js:1) |
+| `REEL_TENSION_COEFF` | `0.04` | Reel-tension scaling; retuned so in-spec catches never trigger tether snap |
+| `NET_STRAIN_SAFE_FRACTION` | `0.8` | Fraction of `_netRatedMass` below which strain failure cannot occur |
+| `NET_STRAIN_FAIL_PROB_MAX` | `0.35` | Max probabilistic net-strain failure chance near rated mass; **set `0` to disable random net loss** |
+| `CAPTURE_RELEASE_SEPARATION_MPS` | `1.2` | Separation velocity imparted to debris on recoverable release |
+| `TETHER_SNAP_RELEASE_DELAY_S` | `8.0` | Bounded drift duration after a tether snap before the pin is released |
+| `STATION_KEEP.STANDOFF_SETTLE_TAU_S` | `0.6` | Time constant for easing SK standoff radius from entry distance to nominal |
 
-### 2.2 New methods on `ArmManager` (canonical predicates)
+### 2.3 New event ([`js/core/Events.js`](js/core/Events.js:1))
 
-```js
-// js/entities/ArmManager.js
-hasTetheredArm()        → bool                      // Any non-detached arm not in {DOCKED, RELOADING, EXPENDED}
-getRotationLockTier()   → 'none' | 'soft' | 'block' // Max-severity tier across all arms
-```
-
-These replace **inline `.some()` state checks** at multiple call sites. **Two known remaining inline sites need migration** ([`AutopilotSystem.js:697`](js/systems/AutopilotSystem.js:697), [`RadialMenu.js:306`](js/ui/hud/RadialMenu.js:306)) — see [`§4 Architecture Opportunities #20`](#42-architecture-opportunities).
-
-**Tier mapping** (canonical — defined in [`ArmManager.js`](js/entities/ArmManager.js:1) module-scope sets):
-
-| Tier | States | Behaviour |
+| Event | Emitted by | Consumed by |
 |---|---|---|
-| `block` (zero rotation) | NETTING, GRAPPLED, STATION_KEEP, REELING, HAULING, RETURNING, DOCKING, TANGLED, DEORBITING | Arrow keys consume input but apply no rotation; comms warning emitted |
-| `soft` (~0.3°/s max) | LAUNCHING, TRANSIT, APPROACH, FISHING, TRAWLING, SCANNING, ABLATING, UNDOCKING, WEB_SHOT | Exponential spring resistance; player can build displacement, releases trigger springback |
-| `none` (full 0.08 rad/s) | DOCKED, RELOADING, EXPENDED; OR any arm with `isDetached === true` | Legacy unrestricted behaviour |
+| `Events.NET_FAILED` | [`ArmUnit`](js/entities/ArmUnit.js:1) `_checkNetIntegrityOnReel()` | [`CommsSystem`](js/systems/CommsSystem.js:1), [`HUD`](js/ui/HUD.js:1), [`TeachingSystem`](js/systems/TeachingSystem.js:1) |
 
-### 2.3 Emergent skill-based mechanic
+### 2.4 Held-net lifecycle ([`CaptureNet`](js/entities/CaptureNet.js:1) + [`CaptureNetSystem`](js/systems/CaptureNetSystem.js:1))
 
-The **spring-resistance model has a discoverable depth**: a skilled pilot can build displacement against soft-tier resistance, then release the arrow keys for a boost-assist rotation as the spring snaps back. Worth surfacing via a tutorial moment or Codex entry — see [`§5 #6 Teaching moment`](#5-recommended-next-steps).
+A daughter's net carries a `_heldByArm` flag, set by the auto-reel path in [`CaptureNetSystem`](js/systems/CaptureNetSystem.js:1) for `armIndex >= 0` successful catches. While held, the net does not stow on its own `tetherPaidOut / REEL_SPEED` timeline; the bag stays cinched on the debris through REELING. It auto-releases/stows once `targetDebris._capturedByArm` is cleared. Mother-pod captures (`armIndex < 0`) keep the legacy stow timeline.
 
-### 2.4 RENDER_ORDER convention
+### 2.5 Deferred dock removal ([`GameFlowManager`](js/systems/GameFlowManager.js:1))
 
-**Project-wide.** Replaces the prior ad-hoc polygonOffset-only layering. Any new mesh in spacecraft hierarchies MUST declare a `renderOrder` from the enum. **Not yet extended** to 5 modules still using ad-hoc values: [`Earth.js`](js/scene/Earth.js:1), [`Starfield.js`](js/scene/Starfield.js:1), [`TrailSystem.js`](js/ui/TrailSystem.js:1), [`TargetReticle.js`](js/ui/TargetReticle.js:1), [`NavSphere.js`](js/ui/NavSphere.js:1), [`DockingReticle.js`](js/ui/DockingReticle.js:1) — see [`§5 #5`](#5-recommended-next-steps).
+Debris removal moved from the `ARM_RETURNED` handler (dock arrival) to a new `DEBRIS_CAPTURED` handler (dock completion, ~3 s later). The `ARM_RETURNED` handler carries a NOTE documenting the deferral. [`ArmUnit._updateDocking`](js/entities/ArmUnit.js:1) releases the pin **before** emitting `DEBRIS_CAPTURED`, so the deferred `removeDebris` does not warn about an active captor.
 
-### 2.5 ROSA panel two-mesh pattern
+### 2.6 New tests
 
-`THREE.ShapeGeometry` cannot be split into material groups (one face range). Solution: **two coincident meshes sharing the same geometry instance** — one `FrontSide` PV material (dark blue), one `BackSide` Kapton material (bright Kapton 0xccccdd, emissive 0.4). For the back, geometry is cloned with **flipped normals** so lighting is correct on the back face. Grid wireframe uses a custom `ShaderMaterial` with view-dot-normal discard (workaround: GL_LINES primitives have no face culling, so DoubleSide-discard at the fragment level is the only way to hide back-facing grid lines).
-
-Same pattern applied to both:
-- Mother ROSA panels in [`PlayerSatellite.js`](js/entities/PlayerSatellite.js:1)
-- Daughter ROSA panels in [`ArmUnit.js`](js/entities/ArmUnit.js:1)
-
-**Material duplication is a known refactor opportunity** — `panelMatFront`, `panelMatBack`, `gridMat`, `goldEdgeMat` are duplicated between the two files (10 materials where 4 suffice). See [`§5 #3`](#5-recommended-next-steps).
-
-### 2.6 TPI ranking
-
-```
-TPI = 0.35 × distScore + 0.30 × dvScore + 0.20 × moidThreatScore + 0.15 × valueScore
-```
-
-- `distScore`, `dvScore`, `valueScore` normalized to [0, 1]; descending sort.
-- `moidThreatScore` from [`TARGET_RANKING.MOID_THREAT_MAP`](js/core/Constants.js:1): `HI=1.0`, `MD=0.5`, `LO=0.2`, `null=0`.
-- Implemented in [`DebrisField.getEnhancedTargetList()`](js/entities/DebrisField.js:1); MOID badges now propagated from `debris.moidBadge` into row.
-- **Default sort changed from ΔV to TPI across all consumers** — Tab cycling, auto-advance after capture, panel rendering.
-- **4-way sort cycle:** TPI ↑ → ΔV ↑ → Dist ↑ → Pts ↓ (was 3-way ΔV/Dist/Pts).
-- [`DebrisField.getTargetList()`](js/entities/DebrisField.js:1) (route planner) **deliberately preserves ΔV sort** — appropriate for fuel-cost planning.
-
-### 2.7 Service worker
-
-Bumped to **v4**. Forces clients to fetch updated [`PlayerSatellite.js`](js/entities/PlayerSatellite.js:1) and [`ArmUnit.js`](js/entities/ArmUnit.js:1) panel materials.
+| File | Coverage |
+|---|---|
+| [`js/test/test-ArmUnit-CaptureFailure.js`](js/test/test-ArmUnit-CaptureFailure.js:1) **NEW** | Net-failure (oversize/strain) vs tether-snap branching; in-spec catches never snap; release helper behaviour; `NET_FAILED` emission |
+| [`js/test/test-DebrisField-PinCatch.js`](js/test/test-DebrisField-PinCatch.js:1) **NEW** | `pinCapturedDebris` canonical-by-id resolve; matrix override of orbit branch; `scaleMul` stow-shrink |
+| [`js/test/run-tests.js`](js/test/run-tests.js:1) | Imports both new test files |
 
 ---
 
@@ -120,75 +146,48 @@ Bumped to **v4**. Forces clients to fetch updated [`PlayerSatellite.js`](js/enti
 
 ```bash
 $ node js/test/run-tests.js | tail -3
-556 suites / 2364 tests / 0 failures
+608 suites / 2530 tests / 0 failures
 ```
 
-Run with `./test.sh` or `node js/test/run-tests.js`. Pattern filter: `node js/test/run-tests.js --filter RotationLock`.
+Run with `./test.sh` or `node js/test/run-tests.js`. Pattern filter: `node js/test/run-tests.js --filter CaptureFailure`.
 
-### 3.2 Files modified this sprint
+### 3.2 Files modified this session
 
-See [`§7 Files Modified This Sprint`](#7-files-modified-this-sprint) for the complete list with issue numbers.
+| File | Change summary |
+|---|---|
+| [`js/entities/ArmUnit.js`](js/entities/ArmUnit.js:1) | Two-mode capture-failure model (`_checkNetIntegrityOnReel`, `_snapTether`, `_releaseCapturedDebris`); `_pinCatchToSelf` during REELING/DOCKING; `_updateDocking` releases pin before `DEBRIS_CAPTURED`; debug-log strip |
+| [`js/entities/DebrisField.js`](js/entities/DebrisField.js:1) | New `pinCapturedDebris(debrisRef, armScenePos, scaleMul)`; `getDebrisNear` returns read-only snapshots; debug-log strip |
+| [`js/entities/ArmManager.js`](js/entities/ArmManager.js:1) | Calls `pinCapturedDebris` after arms move; resolves fishing/web-shot `_nearbyDebris` to canonical by id |
+| [`js/entities/CaptureNet.js`](js/entities/CaptureNet.js:1) | `_heldByArm` held-net lifecycle for daughter REELING |
+| [`js/systems/CaptureNetSystem.js`](js/systems/CaptureNetSystem.js:1) | Sets `_heldByArm` on `armIndex >= 0` successful auto-reel |
+| [`js/systems/GameFlowManager.js`](js/systems/GameFlowManager.js:1) | New `DEBRIS_CAPTURED` handler (deferred removal); NOTE in `ARM_RETURNED`; debug-log strip |
+| [`js/systems/CommsSystem.js`](js/systems/CommsSystem.js:1) | Distinct net-failure vs tether-snap comms |
+| [`js/ui/HUD.js`](js/ui/HUD.js:1) | `showNetFailedAlert` (amber) vs tether-snap (red); debug-log strip |
+| [`js/systems/TeachingSystem.js`](js/systems/TeachingSystem.js:1) | `first_net_failed` + `first_tether_snap` moments; `TOTAL_MOMENTS` 17 → 19 |
+| [`js/systems/CameraSystem.js`](js/systems/CameraSystem.js:1) | Gentler launch-ceremony pacing (durations + FOV ease); debug-log strip |
+| [`js/core/Constants.js`](js/core/Constants.js:1) | New tuning constants (§2.2); `STATION_KEEP.STANDOFF_SETTLE_TAU_S` |
+| [`js/core/Events.js`](js/core/Events.js:1) | New `Events.NET_FAILED` |
+| [`js/systems/AutopilotSystem.js`](js/systems/AutopilotSystem.js:1), [`js/systems/InputManager.js`](js/systems/InputManager.js:1), [`js/systems/TargetSelector.js`](js/systems/TargetSelector.js:1), [`js/ui/hud/TargetPanel.js`](js/ui/hud/TargetPanel.js:1) | Debug-log strip only |
 
 ### 3.3 Active terminals / running processes
 
-None expected. If a browser dev session was left open, `Cmd+Shift+R` to force-reload past the SW v4 bump.
+None expected. If a browser dev session was left open, `Cmd+Shift+R` to force-reload.
 
 ---
 
 ## §4 Known Issues & Deferred Items
 
-> **21 items total**, organized by priority. Items 1-3 are in-plan deferrals from [`archive/FIX_PLAN.md`](archive/FIX_PLAN.md) that didn't make this sprint. Items 4-9 are explicitly out-of-scope per the original plan §7. Items 10-11 are feature-flag risks for when flags eventually flip ON. Items 12-15 are test coverage gaps. Items 16-20 are architecture opportunities. Item 21 is an emergent product opportunity.
+### 4.1 Latent design question (not a bug)
 
-### 4.1 Silently deferred (in plan, not implemented)
+The `getDebrisNear`-clone pattern is still used widely. Consider migrating callers to a `{ debris, distance }` shape long-term, or documenting the "snapshot, resolve-by-id to mutate" contract on the method. See [`§5`](#5-recommended-next-steps).
 
-| # | Item | Effort | Notes |
-|---|---|---|---|
-| 1 | **`setThrusterFire(axis, sign, magnitude)` on PlayerSatellite** — Differential FEEP plume firing per rotation axis. All 4 FEEPs still fire together. | ~1-2h | **Highest visible value deferred item.** [`PlayerSatellite.js`](js/entities/PlayerSatellite.js:1) `_animateThrusters` currently lerps all 4 nozzles together. Per-axis mapping spec: pitch+ → HT_BOTTOM, pitch- → HT_TOP, yaw+ → HT_LEFT, yaw- → HT_RIGHT. |
-| 2 | **Dynamic `DIST_REF_KM` from sensor tier** — TPI uses fixed 100km reference; sensor upgrades don't affect ranking sensitivity. | ~30 min | Gameplay progression hook. Read `SENSOR_TIERS[d.sensorSystem.tier].rangeKm` and scale `DIST_REF_KM` (×0.7). |
-| 3 | **`TARGET_PANEL_MAX_ROWS` constant** — Magic `7` persists in [`TargetPanel.js:362`](js/ui/hud/TargetPanel.js:362). | ~5 min | Hoist to `Constants.TARGET_RANKING.PANEL_MAX_ROWS` or similar. |
+### 4.2 Perf tradeoff to watch
 
-### 4.2 Out of scope (per plan §7)
+`getDebrisNear` now clones `_scenePosition` / `orbit` per result (bounded by nearby debris, range-gated). If profiling flags it, the caching approach noted in [`archive/QUICK_WINS_PERF.md`](archive/QUICK_WINS_PERF.md:1) / [`archive/GPU_PROFILING_REPORT.md`](archive/GPU_PROFILING_REPORT.md:1) is the follow-up.
 
-| # | Item | Notes |
-|---|---|---|
-| 4 | Real CSG stowage grooves | Cosmetic only; current polygonOffset planes are stable with new renderOrder ordering |
-| 5 | Three.js shadow-mapping for ship-on-Earth shadows | Needs perf budget — separate fix from Issue 4 panel back-face (which solved the *symptom*) |
-| 6 | Earth shader integration with spacecraft lighting | Custom day/night ShaderMaterial does not receive Three.js standard light |
-| 7 | Tether geometric collision detection against mother body | Issue 2 prevents the *scenario* (lock when tethered); does not physically simulate tether-vs-body collision |
-| 8 | 1000km search radius as mission-level setting | Intentionally larger than sensor max — tracked debris > sensor range; should be documented constant rather than inline literal |
-| 9 | Duplicated `tracked !== false` filter | Currently in [`InputManager.js`](js/systems/InputManager.js:1) Tab cycle AND [`TargetPanel.js`](js/ui/hud/TargetPanel.js:1); should consolidate into `getEnhancedTargetList` |
+### 4.3 Carried-forward backlog from prior shifts
 
-### 4.3 Feature flag risks (document for when flags flip ON)
-
-| # | Flag | Risk | Mitigation |
-|---|---|---|---|
-| 10 | **`TETHER_REEL` flip ON** | [`getRotationLockTier()`](js/entities/ArmManager.js:1) doesn't consult reel state — STATION_KEEP arm with CUT tether still blocks rotation | Add reel-state downgrade: if `armUnit.tetherSevered === true`, treat as detached (tier `none`) |
-| 11 | **`STOW_DEPLOY_STATE_MACHINE` flip ON** | Minor — DOCKED + DEPLOYING = tier `'none'`, physically correct but could use a `'warn'` tier for the transient swing | Optional: add 4th tier `'warn'` with no rotation block but a comms hint |
-
-### 4.4 Test coverage gaps
-
-| # | Gap | Suggested test file |
-|---|---|---|
-| 12 | TPI math (formula, weights, MOID null fallback) | New `test-TargetRanking.js` — see [`§5 #2`](#5-recommended-next-steps) |
-| 13 | InputManager spring dynamics (most novel code in the sprint) | Extend `test-RotationLock.js` or new `test-InputSpring.js` |
-| 14 | MOID badge propagation through `getEnhancedTargetList` | Extend `test-DebrisField.js` |
-| 15 | AutopilotSystem's `hasTetheredArm()` adoption (regression: AP must not auto-disengage after ARRIVED while REELING) | Extend [`test-AutopilotSystem.js`](js/test/test-AutopilotSystem.js:1) |
-
-### 4.5 Architecture opportunities
-
-| # | Opportunity | Effort | Notes |
-|---|---|---|---|
-| 16 | **Extract `js/scene/SpacecraftMaterials.js`** | ~1.5h | `panelMatFront/Back`, `gridMat`, `goldEdgeMat` duplicated between [`PlayerSatellite.js`](js/entities/PlayerSatellite.js:1) and [`ArmUnit.js`](js/entities/ArmUnit.js:1) — 10 materials where 4 suffice |
-| 17 | **Extend `RENDER_ORDER` to Earth, Starfield, TrailSystem, TargetReticle, NavSphere, DockingReticle** | ~2h | All use ad-hoc renderOrder; full convention coverage |
-| 18 | **Wire TPI into AutopilotSystem fallback** | ~30 min | Replace "nearest Tier 3/4" inline pick with `getEnhancedTargetList()[0]` |
-| 19 | **Teaching moment for rotation lock** | ~45 min | Subscribe [`TeachingSystem.js`](js/systems/TeachingSystem.js:1) to `COMMS_MESSAGE`, once-per-session "Rotation locked — recall with H" |
-| 20 | **Consolidate inline ARM_STATES checks to named predicates** | ~30 min | [`AutopilotSystem.js:697`](js/systems/AutopilotSystem.js:697), [`RadialMenu.js:306`](js/ui/hud/RadialMenu.js:306) still inline |
-
-### 4.6 Emergent product opportunity
-
-| # | Finding | Why it matters |
-|---|---|---|
-| 21 | **Spring rotation has skill-based mechanic** — player can build displacement then release arrows for boost-assist rotation as spring snaps back | Worth surfacing via tutorial or Codex. Couples nicely with teaching-moment work in #19. |
+The four-fix sprint's deferred items (differential `setThrusterFire`, `test-TargetRanking.js`, `SpacecraftMaterials.js` extraction, `RENDER_ORDER` extension, dynamic `DIST_REF_KM`, the two remaining inline ARM_STATES sites) remain open — full detail in [`archive/HANDOFF_2026-05-30_four-fix.md §4`](archive/HANDOFF_2026-05-30_four-fix.md). The [`DAUGHTER_RETRIEVAL_AUDIT.md`](DAUGHTER_RETRIEVAL_AUDIT.md:1) wiring gaps (TetherReel, BridleRing, Web Shot key binding) are likewise still open.
 
 ---
 
@@ -196,132 +195,19 @@ None expected. If a browser dev session was left open, `Cmd+Shift+R` to force-re
 
 Ordered by effort/impact. Each is ready for Orchestrator to research+architect+code.
 
-| Rank | Task | Effort | Acceptance |
+| Rank | Task | Effort | Notes / Acceptance |
 |---|---|---|---|
-| 1 | **`setThrusterFire` differential firing** (defer [#1](#41-silently-deferred-in-plan-not-implemented)) | ~1-2h | Holding ↑ fires only HT_BOTTOM plume; ↑+← fires HT_BOTTOM + HT_LEFT independently; existing CoMCalculator + FEEPMetals tests stay green |
-| 2 | **`test-TargetRanking.js`** (gap [#12](#44-test-coverage-gaps)) | ~1h | Covers TPI formula, weight normalization, threat multiplier, MOID null fallback, sensor-tier scaling stub |
-| 3 | **Extract `SpacecraftMaterials.js`** (opp [#16](#45-architecture-opportunities)) | ~1.5h | 4 materials exported; [`PlayerSatellite.js`](js/entities/PlayerSatellite.js:1) and [`ArmUnit.js`](js/entities/ArmUnit.js:1) both import from it; no behaviour change |
-| 4 | **Wire TPI into AutopilotSystem fallback** (opp [#18](#45-architecture-opportunities)) | ~30 min | AP's "nearest Tier 3/4" replaced with `getEnhancedTargetList()[0]`; AutopilotSystem tests still pass |
-| 5 | **Extend `RENDER_ORDER` to 5 more modules** (opp [#17](#45-architecture-opportunities)) | ~2h | [`Earth.js`](js/scene/Earth.js:1), [`Starfield.js`](js/scene/Starfield.js:1), [`TrailSystem.js`](js/ui/TrailSystem.js:1), [`TargetReticle.js`](js/ui/TargetReticle.js:1), [`NavSphere.js`](js/ui/NavSphere.js:1), [`DockingReticle.js`](js/ui/DockingReticle.js:1) all reference the enum |
-| 6 | **Teaching moment for rotation lock** (opp [#19](#45-architecture-opportunities) + emergent [#21](#46-emergent-product-opportunity)) | ~45 min | [`TeachingSystem.js`](js/systems/TeachingSystem.js:1) once-per-profile entry on first `COMMS_MESSAGE` with rotation-locked priority; bonus codex entry for spring-snap-back skill |
-| 7 | **Dynamic `DIST_REF_KM` from sensor tier** (defer [#2](#41-silently-deferred-in-plan-not-implemented)) | ~30 min | TPI reference scales with `SENSOR_TIERS[tier].rangeKm × 0.7`; manual playtest confirms far targets stay competitive as player upgrades sensors |
-
-### Dependencies
-
-```
-#1 setThrusterFire ─────────────────→ #6 teaching moment (visual reinforcement)
-#2 test-TargetRanking ──┬────────────→ #4 TPI in AP
-                        └────────────→ #7 dynamic DIST_REF_KM
-#3 SpacecraftMaterials ─── (independent)
-#5 RENDER_ORDER extend ─── (independent)
-```
-
-### Suggested ordering for next sprint
-
-```
-Day 1: #2 test-TargetRanking → #7 dynamic DIST_REF_KM → #4 TPI in AP
-Day 2: #1 setThrusterFire → #6 teaching moment
-Day 3: #3 SpacecraftMaterials → #5 RENDER_ORDER extend
-```
-
----
-
-## §6 Feature Flag Watch List
-
-These flags are currently OFF but landed code in this sprint must behave correctly when they flip ON. **Audit before flipping.**
-
-### 6.1 `TETHER_REEL`
-
-**Risk.** [`getRotationLockTier()`](js/entities/ArmManager.js:1) checks `arm.state` + `arm.isDetached`, but does NOT consult [`TetherReel.js`](js/systems/TetherReel.js:1) state. An arm in STATION_KEEP with a CUT tether will still report tier `'block'` despite being physically severed.
-
-**Fix when flipping.** Inside [`getRotationLockTier()`](js/entities/ArmManager.js:1) iteration loop, after the `isDetached` early-return, add:
-
-```js
-if (arm.tetherSevered === true) continue; // or arm.reelState === 'CUT'
-```
-
-**Test coverage.** Add `test-RotationLock.js` case: arm in REELING with `tetherSevered: true` → tier `'none'` (down from `'block'`).
-
-### 6.2 `STOW_DEPLOY_STATE_MACHINE`
-
-**Risk.** [`ArmUnit.deployState`](js/entities/ArmUnit.js:1) (LOCKED/STOWED/DEPLOYING/DEPLOYED/STOWING per ST-9.10) is independent of `arm.state` (LAUNCHING/TRANSIT/…). When the flag flips ON, a DOCKED arm in DEPLOYING transient = tier `'none'` per current logic. Physically correct (still inside the pocket) but could give the player a "free rotation" window during the swing animation.
-
-**Fix when flipping.** Optional 4th tier `'warn'`: full rotation rate but a comms hint emitted at higher cooldown. Or: simply add DEPLOYING/STOWING to `_SOFT_ROT_STATES`.
-
-**Test coverage.** Add `test-RotationLock.js` cases for each `deployState` × `armState` cross-product (5 × 22 = 110 cells — sample the 10-20 most likely combinations).
-
----
-
-## §7 Files Modified This Sprint
-
-### 7.1 Production code
-
-| Issue | File | Change summary |
-|---|---|---|
-| 4 | [`js/entities/PlayerSatellite.js`](js/entities/PlayerSatellite.js:1) | ROSA panel front/back split (FrontSide PV + BackSide Kapton with flipped-normal geometry clone), custom ShaderMaterial for grid (view-dot-normal discard), front emissive 0.25→0.15 |
-| 4 | [`js/entities/ArmUnit.js`](js/entities/ArmUnit.js:1) | Daughter ROSA panel front/back split (parity with mother) |
-| 4 | [`sw.js`](sw.js:1) | Cache version bumped to v4 |
-| 2 | [`js/entities/ArmManager.js`](js/entities/ArmManager.js:1) | New methods `hasTetheredArm()`, `getRotationLockTier()`; module-scope `_HIGH_RISK_ROT_STATES`, `_SOFT_ROT_STATES` sets |
-| 2 | [`js/systems/InputManager.js`](js/systems/InputManager.js:1) | Exponential spring-resistance model in rotation block (lines ~1581-1595); AP-disengage guard widened to tier-aware (lines ~413-427); `_maybeEmitTetherLockMsg()` |
-| 2 | [`js/systems/AutopilotSystem.js`](js/systems/AutopilotSystem.js:1) | `armsActive` predicate replaced with `armManager.hasTetheredArm()` (was incomplete 4-state list) |
-| 2 | [`js/core/Constants.js`](js/core/Constants.js:1) | New `TETHER_ROTATION` block (spring model: MAX_DISPLACEMENT_SOFT/BLOCK, STIFFNESS_EXPONENT, SPRINGBACK, COMMS_THROTTLE_MS) |
-| 1 | [`js/entities/PlayerSatellite.js`](js/entities/PlayerSatellite.js:1) | 50+ renderOrder annotations; pocket radius 1.006→1.012; pyro pin polygonOffset (-2.5); MLI bands 1.04→1.07; stowage channels 1.005→1.008; accent rings -1.5; FEEP nozzle upgrade (mounting boss + accelerator grid disc); collar ring triple-stack, sensor baseplate, laser viewport (was occluded by front cap!), strut rib ring, hinge cluster, docking port lights |
-| 1 | [`js/entities/ArmUnit.js`](js/entities/ArmUnit.js:1) | Daughter chassis renderOrders (parity with mother) |
-| 1 | [`js/ui/MenuScene3D.js`](js/ui/MenuScene3D.js:1) | Menu spacecraft model renderOrder pass |
-| 1 | [`js/core/Constants.js`](js/core/Constants.js:1) | New `RENDER_ORDER` 6-tier enum |
-| 3 | [`js/entities/DebrisField.js`](js/entities/DebrisField.js:1) | `getEnhancedTargetList`: TPI computation + MOID badge propagation + descending sort; `getTargetList` (route planner) preserved on ΔV sort |
-| 3 | [`js/ui/hud/TargetPanel.js`](js/ui/hud/TargetPanel.js:1) | 4-way sort cycle (TPI/ΔV/Dist/Pts), default 'tpi', MOID badge rendering in row |
-| 3 | [`js/core/Constants.js`](js/core/Constants.js:1) | New `TARGET_RANKING` block (weights, references, MOID_THREAT_MAP) |
-| 3 | [`js/systems/InputManager.js`](js/systems/InputManager.js:1) | Tab cycling uses TPI-sorted list (no change to call site — `getEnhancedTargetList` now returns TPI-sorted by default) |
-
-### 7.2 Tests
-
-| File | Suites | Tests | Coverage |
-|---|---|---|---|
-| [`js/test/test-RotationLock.js`](js/test/test-RotationLock.js:1) **NEW** | 7 | 44 | All ARM_STATES tier mapping, isDetached override, multi-arm escalation, hasTetheredArm() edge cases, constant sanity |
-| [`js/test/run-tests.js`](js/test/run-tests.js:1) | — | — | Imports new test file |
-
-**Test count delta:** 2320 → **2364** (+44).
-
----
-
-## §8 Locked Product Principles (2026-04-25 — Non-Negotiable)
-
-### 8.1 Offline-First — No Auto-Fetch
-
-The game **plays great offline and stays offline**. No background HTTP requests. No live TLE feeds. No telemetry.
-
-- **News-driven content** enters via manual edits to [`data/news-events.json`](data/news-events.json) — user-driven, not API-driven.
-- Optional Codex links to NASA/Celestrak open in user-clicked new tabs; never automatic.
-- 2026-05-17 switched the importmap to local `node_modules/three` for offline boot.
-
-**Live TLE feeds, auto-fetch APIs, and online sync features are explicitly OFF the roadmap.**
-
-### 8.2 Dual-Metal FEEP Is Y0 Baseline (TRL 7–8)
-
-Multimetal FEEP thrusters are **flight-demonstrated today** (Enpulsion IFM Nano series, 2024–2025). The V5 daughter arm ships from factory with a dual-metal FEEP capable of running indium (default) OR a Forge-refined alternative metal cartridge.
-
-- **Y0 baseline:** indium + 1 alt slot
-- **Y1 unlock:** iodine, bismuth (TRL 6–7)
-- **Y2 unlock:** mercury, cesium (TRL 5)
-- **Y4 endgame:** tungsten + MPD-class power (TRL 4)
-
-See [`DAUGHTER_ARM_CONTROLS.md §5`](DAUGHTER_ARM_CONTROLS.md:1) and [`GAME_FLOW_BRAINSTORM.md §7.2`](GAME_FLOW_BRAINSTORM.md:1).
-
-### 8.3 Mother Launches from India — ISRO Heritage
-
-The V5 mothership launches on a cost-optimised ISRO LVM3 / SSLV mission. Indian Mission Operations are part of the comms loop alongside Houston.
-
-- **Launch sites:** Satish Dhawan Space Centre (Sriharikota) and Kulasekarapattinam Spaceport (Tamil Nadu).
-- **Comms personas:** **BANGALORE** (ISTRAC) for mission-critical ops, **HASSAN** (MCF) for GEO operations. **Houston** retained for US-side context.
-
-Implementation in [`data/ground-stations.json`](data/ground-stations.json) and [`CommsSystem.js`](js/systems/CommsSystem.js:1).
+| 1 | **In-game playtest verification of the capture lifecycle** | ~1h | Verify reel-in (catch welded to daughter), dock stow-shrink, net-failure on oversize/heavy debris, tether-snap drift, and the two new teaching cards (`first_net_failed`, `first_tether_snap`) all read correctly in the browser |
+| 2 | **Verify fishing/trawl behavior in-game** | ~1h | Resolving `_nearbyDebris` to canonical now makes fishing proximity-capture **actually functional** (it was effectively dead because the sparse wrappers lacked `_scenePosition`). Fishing may now auto-capture where it previously never did — confirm intended behavior |
+| 3 | **`getDebrisNear` perf profile** | ~30 min | Profile the per-result `_scenePosition` / `orbit` clone under dense-debris load. If hot, apply the caching approach from [`archive/QUICK_WINS_PERF.md`](archive/QUICK_WINS_PERF.md:1) |
+| 4 | **Document / migrate the `getDebrisNear` snapshot contract** | ~1.5h | Either migrate callers to a `{ debris, distance }` shape, or formalize the "snapshot, resolve-by-id to mutate" contract as a JSDoc on the method + a guard test |
+| 5 | **Pick up the four-fix backlog** | varies | `setThrusterFire`, `test-TargetRanking.js`, `SpacecraftMaterials.js`, `RENDER_ORDER` extension — see [`archive/HANDOFF_2026-05-30_four-fix.md §5`](archive/HANDOFF_2026-05-30_four-fix.md) |
 
 ---
 
 ## §9 THREE.js Convention SSOT (load-bearing)
 
-> **READ BEFORE TOUCHING ANY ORIENTATION / ROTATION / VISIBILITY CODE.** Carried forward from prior shift. A single-character convention bug at [`CaptureNetVisual.js:952`](js/ui/CaptureNetVisual.js:952) made the capture-net cinch render on the DAUGHTER side of the debris for the entire life of the ceremony visual. Multiple sessions worked AROUND the bug without seeing it because every prior test inspected only LOCAL coordinates — never `getWorldPosition()`. **The Issue 4 ROSA fix this sprint hit the SAME class of bug** (DoubleSide hiding back-face semantics until the ship inverted): the panel-back appeared as a "shadow on Earth" because the back-face material was a single material doing double duty. Pattern repeats.
+> **READ BEFORE TOUCHING ANY ORIENTATION / ROTATION / VISIBILITY CODE.** Carried forward across shifts. A single-character convention bug at [`CaptureNetVisual.js:952`](js/ui/CaptureNetVisual.js:952) made the capture-net cinch render on the DAUGHTER side of the debris for the entire life of the ceremony visual. Multiple sessions worked AROUND the bug without seeing it because every prior test inspected only LOCAL coordinates — never `getWorldPosition()`. The 2026-05-30 ROSA fix hit the SAME class of bug (DoubleSide hiding back-face semantics until the ship inverted). **This shift's reel-in disappearance bug is the FRAME-ORDER variant** — the captured debris was POSITIONED correctly by the arm, then immediately overwritten by `DebrisField.update()` running first. Pattern repeats: the symptom is a visual disappearance; the root cause is a pipeline-ordering / convention mismatch, not a missing object.
 
 ### Rule 1 — `Object3D.lookAt` and `Camera.lookAt` use OPPOSITE conventions
 
@@ -376,7 +262,7 @@ const _yUpCollar   = new THREE.Vector3(0, 1, 0);  // PlayerSatellite.js:521
 
 Then `_armQuat.setFromUnitVectors(_armForward, sg.strutDir)` reads as "rotate the arm's local +Z forward to point along strut direction." Self-documenting. **Don't inline raw `new THREE.Vector3(0, 0, 1)` calls.**
 
-### Rule 6 (NEW this sprint) — RENDER_ORDER is the deterministic tiebreaker
+### Rule 6 — RENDER_ORDER is the deterministic tiebreaker
 
 `polygonOffset` is a finer-grained tool but cannot order across transparency passes and varies across GPUs. **Every mesh in a spacecraft hierarchy MUST declare a `renderOrder` from the [`RENDER_ORDER`](js/core/Constants.js:1) enum.** The 6-tier convention:
 
@@ -386,9 +272,9 @@ EARTH=0  →  SPACECRAFT_OPAQUE=1  →  DETAIL=2  →  TRANSPARENT=3  →  ADDIT
 
 Within the same renderOrder, Three.js sorts opaque front-to-back automatically; renderOrder is the explicit override for z-fight tiebreaking AND the only way to order Additive transparency.
 
-### Rule 7 (NEW this sprint) — GL_LINES has no face culling
+### Rule 7 — GL_LINES has no face culling
 
-If your wireframe must hide on back-facing surfaces (e.g., to avoid back-side grid bleeding through a panel-back substrate), `BufferGeometry` + `LineSegments` with `side: FrontSide` does **not** cull — GL_LINES primitives have no face. Solution: **custom ShaderMaterial with view-dot-normal discard at the fragment level** (Issue 4 implementation in [`PlayerSatellite.js`](js/entities/PlayerSatellite.js:1) and [`ArmUnit.js`](js/entities/ArmUnit.js:1)).
+If your wireframe must hide on back-facing surfaces (e.g., to avoid back-side grid bleeding through a panel-back substrate), `BufferGeometry` + `LineSegments` with `side: FrontSide` does **not** cull — GL_LINES primitives have no face. Solution: **custom ShaderMaterial with view-dot-normal discard at the fragment level** (implementation in [`PlayerSatellite.js`](js/entities/PlayerSatellite.js:1) and [`ArmUnit.js`](js/entities/ArmUnit.js:1)).
 
 ### Diagnostic workflow (re-usable)
 
@@ -397,14 +283,14 @@ If your wireframe must hide on back-facing surfaces (e.g., to avoid back-side gr
 3. Compare predicted vs observed values — look for sign flips, magnitude mismatches, unit-scale errors.
 4. Locate conversion site producing wrong sign/magnitude. Apply fix.
 5. **Mutation-test the regression:** revert fix, run tests, confirm they FAIL with localized error. Re-apply.
-6. Remove ALL instrumentation. Grep-clean.
+6. Remove ALL instrumentation. Grep-clean. *(This shift's debug-log strip is the cleanup step for the prior sessions' instrumentation — keep this discipline.)*
 7. Add SSOT note here if a new convention is established.
 
 ---
 
 ## §10 Post-Cinch-Fix Learnings (load-bearing)
 
-*Companion SSOT to §9. Captured during the post-cinch QA shift; reinforced by this sprint.*
+*Companion SSOT to §9. Captured during the post-cinch QA shift; reinforced across subsequent shifts.*
 
 ### Rule A — Hotkey rebinding requires ≥ 6 sites of audit
 
@@ -425,7 +311,7 @@ if (state === A || state === B || ...) { /* sync */ }
 if (POST_FLIGHT_STATES.has(state)) { /* sync */ }
 ```
 
-**This sprint's Issue 2 fix is the textbook application** — `_HIGH_RISK_ROT_STATES` and `_SOFT_ROT_STATES` sets in [`ArmManager.js`](js/entities/ArmManager.js:1), with `getRotationLockTier()` and `hasTetheredArm()` as the named predicates. The bonus AutopilotSystem `armsActive` fix is the *third* discovered inline-state-list bug this codebase has shipped.
+The 2026-05-30 Issue 2 fix is the textbook application — `_HIGH_RISK_ROT_STATES` and `_SOFT_ROT_STATES` sets in [`ArmManager.js`](js/entities/ArmManager.js:1), with `getRotationLockTier()` and `hasTetheredArm()` as the named predicates.
 
 ### Rule C — Visual geometry constants couple to camera offsets
 
@@ -441,24 +327,40 @@ Any "user is engaged with this debris" predicate must be a function over multipl
 2. The audio cue ([`audioSystem.playClickFail()`](js/systems/AudioSystem.js:1))
 3. The on-screen comms message ([`Events.COMMS_MESSAGE`](js/core/Events.js:1) warning)
 
-This sprint's Issue 2 rotation-blocked feedback applied this pattern (comms warning when blocked).
+This shift's capture-failure overhaul applies the same pattern: `NET_FAILED` event → distinct comms ([`CommsSystem`](js/systems/CommsSystem.js:1)) → HUD alert ([`HUD.showNetFailedAlert`](js/ui/HUD.js:1)) → teaching moment. Both failure modes (net failure amber, tether snap red) get the full triad.
 
-### Rule F (NEW this sprint) — Spring/exponential models need a release path
+### Rule F — Spring/exponential models need a release path
 
-A novel "spring resistance" gameplay mechanic was added to InputManager's rotation block. The model needs *both* an opposing force (resistance) AND a release/recovery path (springback). Both were implemented. Test: holding arrows builds displacement; releasing arrows triggers springback to zero. **The springback creates emergent skill-based depth** (see [`§4.6 emergent #21`](#46-emergent-product-opportunity)).
+A novel "spring resistance" gameplay mechanic was added to InputManager's rotation block (2026-05-30). The model needs *both* an opposing force (resistance) AND a release/recovery path (springback). Both were implemented. Test: holding arrows builds displacement; releasing arrows triggers springback to zero.
+
+### Capture lifecycle learnings (NEW this shift — 2026-06-06)
+
+These are **load-bearing** for anyone touching capture, reel-in, docking, or debris positioning.
+
+#### Rule G (NEW this shift) — Frame update order: debris BEFORE arms
+
+[`debrisField.update()`](js/entities/DebrisField.js:1) runs **BEFORE** [`armManager.update()`](js/entities/ArmManager.js:1) in [`js/main.js`](js/main.js:1) (~line 1274 vs ~1278). Anything that must position captured debris **from the arm's fresh position** must run AFTER arms move — that is exactly why [`pinCapturedDebris`](js/entities/DebrisField.js:1) is called from `ArmManager` post-arm-update, not from the debris update pass. **Symptom of getting this wrong: the captured object appears at its orbit position (drifting away / vanishing) instead of welded to the arm**, because the orbit branch in `_updateInstanceTransform` overwrites the arm-relative position later in the same frame.
+
+#### Rule H (NEW this shift) — Pin/remove captured debris by canonical id, never by holding a ref
+
+[`getDebrisNear`](js/entities/DebrisField.js:1) / [`getTargetList`](js/entities/DebrisField.js:1) / `getUntrackedDebrisNear` return throwaway **wrappers/snapshots** (post-this-shift, `getDebrisNear` clones `_scenePosition` / `orbit`). To mutate / hold / flag / remove a debris, resolve the canonical object via [`getDebrisById(id)`](js/entities/DebrisField.js:1) first. The reel-in bug investigation confirmed the capture was operating on the canonical object (`idCountInList = 1`) — the failure was positional ordering (Rule G), not a stale ref — but the **safe contract is: snapshot to read, resolve-by-id to mutate.**
+
+#### Rule I (NEW this shift) — Prefer the authoritative pin path over per-frame flags
+
+The `_capturedByArm` per-frame pin in [`DebrisField._updateInstanceTransform`](js/entities/DebrisField.js:1) is **fragile** for station-keep / welcome-field debris (it competes with the orbit branch and depends on update ordering). The authoritative `_armPinned` / `_armPinPos` + [`pinCapturedDebris`](js/entities/DebrisField.js:1) path is the reliable one and should be used for any new "hold this object on a moving arm" requirement.
 
 ### Cross-rule diagnostic workflow
 
-When the user reports a visual symptom (e.g. "X is invisible during state Y" or "X reads as a shadow"), walk the visual pipeline:
+When the user reports a visual symptom (e.g. "X is invisible during state Y", "X reads as a shadow", or "X drifts away during reel-in"), walk the visual pipeline:
 
-1. **Position** — being POSITIONED correctly? (FSM-state position sync — Rule B)
-2. **Scale** — being SCALED correctly? (LOD downscale — Rule D)
-3. **Lifecycle** — being REMOVED prematurely? (state-transition cleanup)
-4. **Material/Face** — back face vs front face, DoubleSide hiding semantics? (Issue 4 this sprint)
+1. **Position** — being POSITIONED correctly, and is the position SURVIVING the frame? (FSM-state position sync — Rule B; **frame-update order — Rule G**)
+2. **Scale** — being SCALED correctly? (LOD downscale — Rule D; stow-shrink `scaleMul`)
+3. **Lifecycle** — being REMOVED prematurely? (state-transition cleanup; **deferred dock removal §2.5**)
+4. **Material/Face** — back face vs front face, DoubleSide hiding semantics?
 5. **Camera framing** — is the CAMERA actually showing it? (offsets + lookAt — Rule C)
 6. **Feedback** — user expected feedback but got none? (empty-action 3-component — Rule E)
 
-The "panel renders as shadow on Earth when inverted" symptom (Issue 4) collapsed into a step-4 root cause: the DoubleSide material was painting the back face with the front material's dark colour. Walking the pipeline from position → scale → material identified it.
+This shift's "catch drifts ~600 m away and vanishes during reel-in" symptom collapsed into a **step-1 frame-order root cause** (Rule G): the arm positioned the debris, then `debrisField.update()` — already run earlier that frame — had left the orbit branch in control. The fix moved positioning to an authoritative post-arm pin.
 
 ---
 
@@ -510,11 +412,15 @@ A system class can be imported in `main.js` and have full `init()` / `update(dt)
 
 **Pattern:** code that enumerates a subset of `ARM_STATES` inline with `||` chains is a recurring source of bugs. Three known cases:
 
-1. ✅ **AutopilotSystem `armsActive`** — fixed this sprint; now uses `armManager.hasTetheredArm()`.
+1. ✅ **AutopilotSystem `armsActive`** — fixed 2026-05-30; now uses `armManager.hasTetheredArm()`.
 2. ⚠️ **AutopilotSystem inline list at line ~697** — still inline. Different semantic from `hasTetheredArm()` (it checks "active maneuver" not "tethered"); needs a separate named predicate.
 3. ⚠️ **RadialMenu inline check at line ~306** — still inline. Probably can adopt `hasTetheredArm()` directly.
 
 **Rule.** Any inline `state === A || state === B || ...` over ARM_STATES is a code smell; promote to a named predicate on `ArmManager`.
+
+### 11.9 Captured-debris positioning must run after arms move (2026-06-06)
+
+See [`§10 Rule G`](#rule-g-new-this-shift--frame-update-order-debris-before-arms). `debrisField.update()` runs before `armManager.update()`; the authoritative [`pinCapturedDebris`](js/entities/DebrisField.js:1) must be invoked from the arm-update pass to survive the frame.
 
 ---
 
@@ -537,27 +443,29 @@ Core identity is **Jellyfish Fisherman** ([`GAME_DESIGN.md §2`](GAME_DESIGN.md:
 
 ### 12.3 Test suite status
 
-**556 suites / 2364 tests / 0 failures** as of 2026-05-30. Harness uses the real `three` runtime (not stubbed) for physics tests.
+**608 suites / 2530 tests / 0 failures** as of 2026-06-06. Harness uses the real `three` runtime (not stubbed) for physics tests.
 
 ### 12.4 Systems & maturity
 
 | System | File | Maturity |
 |---|---|---|
 | OrbitalMechanics | [`OrbitalMechanics.js`](js/entities/OrbitalMechanics.js:1) | Stable |
-| PlayerSatellite | [`PlayerSatellite.js`](js/entities/PlayerSatellite.js:1) | Stable — Config G + 2026-05-30 renderOrder pass + ROSA front/back |
-| ArmManager / ArmUnit | [`ArmManager.js`](js/entities/ArmManager.js:1), [`ArmUnit.js`](js/entities/ArmUnit.js:1) | Stable — 2026-05-30 added canonical state predicates + daughter ROSA front/back |
-| AutopilotSystem | [`AutopilotSystem.js`](js/systems/AutopilotSystem.js:1) | Stable — `armsActive` adopts `hasTetheredArm()` 2026-05-30 |
-| InputManager | [`InputManager.js`](js/systems/InputManager.js:1) | Stable — spring-resistance rotation model 2026-05-30 |
-| DebrisField | [`DebrisField.js`](js/entities/DebrisField.js:1) | Stable — TPI ranking 2026-05-30. 2093 LOC (split candidate) |
-| TargetPanel | [`TargetPanel.js`](js/ui/hud/TargetPanel.js:1) | Stable — 4-way sort + MOID badges 2026-05-30 |
+| PlayerSatellite | [`PlayerSatellite.js`](js/entities/PlayerSatellite.js:1) | Stable — Config G + renderOrder pass + ROSA front/back |
+| ArmManager / ArmUnit | [`ArmManager.js`](js/entities/ArmManager.js:1), [`ArmUnit.js`](js/entities/ArmUnit.js:1) | Stable — 2026-06-06 capture-failure model + authoritative catch pin + canonical `_nearbyDebris` resolve |
+| AutopilotSystem | [`AutopilotSystem.js`](js/systems/AutopilotSystem.js:1) | Stable |
+| InputManager | [`InputManager.js`](js/systems/InputManager.js:1) | Stable — spring-resistance rotation model |
+| DebrisField | [`DebrisField.js`](js/entities/DebrisField.js:1) | Stable — 2026-06-06 `pinCapturedDebris` + `getDebrisNear` snapshots. 2093+ LOC (split candidate) |
+| CaptureNet + CaptureNetVisual | [`CaptureNet.js`](js/entities/CaptureNet.js:1), [`CaptureNetVisual.js`](js/ui/CaptureNetVisual.js:1) | Stable — 2026-06-06 held-net lifecycle for daughter REELING |
+| GameFlowManager | [`GameFlowManager.js`](js/systems/GameFlowManager.js:1) | Stable — 2026-06-06 deferred dock removal (`DEBRIS_CAPTURED`) |
+| CommsSystem | [`CommsSystem.js`](js/systems/CommsSystem.js:1) | Stable — 2026-06-06 net-failure vs tether-snap comms |
+| TargetPanel | [`TargetPanel.js`](js/ui/hud/TargetPanel.js:1) | Stable — 4-way sort + MOID badges |
 | CollisionAvoidance | [`CollisionAvoidanceSystem.js`](js/systems/CollisionAvoidanceSystem.js:1) | Stable |
-| LassoSystem | [`LassoSystem.js`](js/systems/LassoSystem.js:1) | OK but slow — §4 backlog (was in prior shift) |
-| CaptureNet + CaptureNetVisual | [`CaptureNet.js`](js/entities/CaptureNet.js:1), [`CaptureNetVisual.js`](js/ui/CaptureNetVisual.js:1) | Stable — Q2 ceremony shipped |
-| ConjunctionSystem | [`ConjunctionSystem.js`](js/systems/ConjunctionSystem.js:1) | OK — MOID badges now consumed by TPI |
+| LassoSystem | [`LassoSystem.js`](js/systems/LassoSystem.js:1) | OK but slow — backlog |
+| ConjunctionSystem | [`ConjunctionSystem.js`](js/systems/ConjunctionSystem.js:1) | OK — MOID badges consumed by TPI |
 | TrawlManager | [`TrawlManager.js`](js/systems/TrawlManager.js:1) | OK |
 | SkillsSystem / SkillsPane | [`SkillsSystem.js`](js/systems/SkillsSystem.js:1), [`SkillsPane.js`](js/ui/hud/SkillsPane.js:1) | Functional. 1869 LOC (split candidate) |
 | ForgeSystem | [`ForgeSystem.js`](js/systems/ForgeSystem.js:1) | OK |
-| TeachingSystem | [`TeachingSystem.js`](js/systems/TeachingSystem.js:1) | Functional — see §5 #6 next-step opportunity |
+| TeachingSystem | [`TeachingSystem.js`](js/systems/TeachingSystem.js:1) | Functional — 2026-06-06 `first_net_failed` + `first_tether_snap` (19 moments) |
 
 ---
 
@@ -572,7 +480,7 @@ Core identity is **Jellyfish Fisherman** ([`GAME_DESIGN.md §2`](GAME_DESIGN.md:
 | [`GAME_DESIGN.md`](GAME_DESIGN.md:1) | Design vision — core loop, jellyfish identity, ΔV economy |
 | [`ARCHITECTURE.md`](ARCHITECTURE.md:1) | As-built technical reference (⚠️ Epic 9/10 update pending) |
 | [`BIG_PICTURE.md`](BIG_PICTURE.md:1) | 12-month strategic roadmap |
-| [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md:1) | Sprint tracker — Sprints 1–4, Epics 5–10 + 2026-05-30 sprint |
+| [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md:1) | Sprint tracker — Sprints 1–4, Epics 5–10 + recent sprints |
 
 ### 🟡 Active references — read when touching their area
 
@@ -580,15 +488,19 @@ Core identity is **Jellyfish Fisherman** ([`GAME_DESIGN.md §2`](GAME_DESIGN.md:
 
 ### 🟠 Archives
 
-[`archive/FIX_PLAN.md`](archive/FIX_PLAN.md:1) (this sprint), [`archive/HANDOFF_2026-05-29_post-cinch-qa.md`](archive/HANDOFF_2026-05-29_post-cinch-qa.md:1) (prior shift), and the rest under [`archive/`](archive/).
+[`archive/HANDOFF_2026-05-30_four-fix.md`](archive/HANDOFF_2026-05-30_four-fix.md:1) (prior shift), [`archive/HANDOFF_2026-05-29_post-cinch-qa.md`](archive/HANDOFF_2026-05-29_post-cinch-qa.md:1), [`archive/FIX_PLAN.md`](archive/FIX_PLAN.md:1), and the rest under [`archive/`](archive/).
 
 ---
 
 ## §14 Heritage — Prior Work Summaries
 
+### 14.0 Four-Fix Architectural Sprint (2026-05-29/30, COMPLETE)
+
+ROSA panel front/back split (solar-panel-shadow fix), tethered-arm rotation-lock spring model, RENDER_ORDER 6-tier enum + 50+ annotations, TPI composite target ranking. Tests 2320 → 2364 (+44). Service worker v4. Full write-up at [`archive/HANDOFF_2026-05-30_four-fix.md`](archive/HANDOFF_2026-05-30_four-fix.md:1).
+
 ### 14.1 Post-Cinch QA Pass + Doc Consolidation (2026-05-28/29, COMPLETE)
 
-9 of 11 QA items resolved (cinch ring leading edge, net visibility during REELING, captured-debris LOD skip, reticle range font 2×, empty-net comms, R=reel + K=forge hotkey swap, spin-rate physics doc). Items 6/10/11 design content folded into [`GAME_DESIGN.md`](GAME_DESIGN.md:1). Tests +4, 2316→2320. Doc consolidation pass: 35 root .md → 16 canonical+active. Full write-up at [`archive/HANDOFF_2026-05-29_post-cinch-qa.md`](archive/HANDOFF_2026-05-29_post-cinch-qa.md:1).
+9 of 11 QA items resolved (cinch ring leading edge, net visibility during REELING, captured-debris LOD skip, reticle range font 2×, empty-net comms, R=reel + K=forge hotkey swap, spin-rate physics doc). Items 6/10/11 design content folded into [`GAME_DESIGN.md`](GAME_DESIGN.md:1). Tests +4, 2316→2320. Doc consolidation: 35 root .md → 16 canonical+active. Full write-up at [`archive/HANDOFF_2026-05-29_post-cinch-qa.md`](archive/HANDOFF_2026-05-29_post-cinch-qa.md:1).
 
 ### 14.2 Q2 Net-Launch Ceremony (2026-05-24, SHIPPED)
 
@@ -596,7 +508,7 @@ Core identity is **Jellyfish Fisherman** ([`GAME_DESIGN.md §2`](GAME_DESIGN.md:
 
 ### 14.3 Epic 10 — Config G Full Visualization (2026-05-08, COMPLETE)
 
-V3 Octopus replaced with Config G: cylindrical barrel, collar-mounted struts, ROSA roll-out panels, FEEP nozzle polish, deploy-state LEDs, full stowage visual, launch cinematic, capture net visual, tier progression visual. 11 V-tasks delivered. Spacecraft anatomy: Barrel (0.4m R × 2.0m H) + Collar (Z=+0.90m, 4 hinge brackets at 60°/120°/240°/300°) + Struts (1.60m, sweep 0–180°) + ROSA panels. Archive specs in [`archive/EPIC10_VISUALIZATION_PLAN.md`](archive/EPIC10_VISUALIZATION_PLAN.md:1), [`archive/BIG_PICTURE_EPIC_5_6_HISTORY.md`](archive/BIG_PICTURE_EPIC_5_6_HISTORY.md:1).
+V3 Octopus replaced with Config G: cylindrical barrel, collar-mounted struts, ROSA roll-out panels, FEEP nozzle polish, deploy-state LEDs, full stowage visual, launch cinematic, capture net visual, tier progression visual. 11 V-tasks delivered. Spacecraft anatomy: Barrel (0.4m R × 2.0m H) + Collar (Z=+0.90m, 4 hinge brackets at 60°/120°/240°/300°) + Struts (1.60m, sweep 0–180°) + ROSA panels. Archive specs in [`archive/EPIC10_VISUALIZATION_PLAN.md`](archive/EPIC10_VISUALIZATION_PLAN.md:1).
 
 ### 14.4 Epic 9 — Config G Arm System (2026-04-28, COMPLETE)
 
@@ -604,7 +516,7 @@ All 11 C-tasks delivered. Mass budget canonical: Y0 dry = 196.4 kg, wet = 242.4 
 
 ### 14.5 Epic 8 — Daughter-Arm Redesign + Dual-Metal FEEP + ISRO Heritage (2026-04-25, COMPLETE)
 
-5 sprints, ~6 dev days. STATION_KEEP state, orbital-crane controls, dual-metal FEEP (7 metals), news-driven missions, ISRO comms personas (BANGALORE/HASSAN), ReputationSystem. Sets up Locked Principle #3.
+5 sprints, ~6 dev days. STATION_KEEP state, orbital-crane controls, dual-metal FEEP (7 metals), news-driven missions, ISRO comms personas (BANGALORE/HASSAN), ReputationSystem.
 
 ### 14.6 SK / Mission-1 Polish (2026-05-16) + Daughter SK Wiring (2026-05-17)
 
@@ -623,23 +535,26 @@ See [`archive/HANDOFF_AUTOPILOT_RETRO.md`](archive/HANDOFF_AUTOPILOT_RETRO.md:1)
 | Object3D vs Camera lookAt | §9 Rule 1 | Camera: −Z forward; Group/Mesh: +Z forward |
 | Matrix4 lookAt sign | §9 Rule 2 | `mat.lookAt(eye, target, up)` ⇒ local +Z = `eye − target` |
 | Scene units | §9 Rule 3 + §11.6 | `M = 1e-5` (metres → scene units). Entity `.position` in metres; Object3D `.position` in scene units |
-| Geometry default axes | §9 Rule 4 | Cone/Cylinder: Y-axis → `geo.rotateX(PI/2)` for Z-aligned; ShapeGeometry single face range → use two coincident meshes for front/back |
+| Geometry default axes | §9 Rule 4 | Cone/Cylinder: Y-axis → `geo.rotateX(PI/2)` for Z-aligned; ShapeGeometry single face range → two coincident meshes for front/back |
 | Quaternion sources | §9 Rule 5 | Use named module-scope const vectors |
-| RENDER_ORDER | §9 Rule 6 (**NEW**) | Every spacecraft mesh declares `renderOrder` from the 6-tier enum |
-| GL_LINES face culling | §9 Rule 7 (**NEW**) | No face culling on line primitives; use ShaderMaterial view-dot-normal discard |
+| RENDER_ORDER | §9 Rule 6 | Every spacecraft mesh declares `renderOrder` from the 6-tier enum |
+| GL_LINES face culling | §9 Rule 7 | No face culling on line primitives; use ShaderMaterial view-dot-normal discard |
 | Hotkey audit | §10 Rule A | 6 sites: InputManager + Constants + 2× StatusPanel + system docstring + README (×3) |
 | FSM state lookup | §10 Rule B | Use `Set.has(state)` not `||` chains |
 | Visual ↔ camera coupling | §10 Rule C | Geometry constants and camera offsets must reference each other in comments |
 | LOD predicate | §10 Rule D | `_isUserEngaged(debris)` ORs all engagement flags |
 | Empty-action feedback | §10 Rule E | (event, audio, comms) — all three or it feels broken |
-| Spring/exponential models | §10 Rule F (**NEW**) | Resistance + release/recovery path; release behaviour creates emergent skill depth |
+| Spring/exponential models | §10 Rule F | Resistance + release/recovery path; release behaviour creates emergent skill depth |
+| Frame update order | §10 Rule G (**NEW**) | `debrisField.update()` BEFORE `armManager.update()`; position captured debris AFTER arms move (authoritative pin) |
+| Resolve debris by id | §10 Rule H (**NEW**) | `getDebrisNear`/`getTargetList` return snapshots/wrappers; `getDebrisById(id)` to mutate/hold/remove |
+| Authoritative pin path | §10 Rule I (**NEW**) | `_armPinned` + `pinCapturedDebris` over the fragile per-frame `_capturedByArm` flag |
 | Y-up vs Z-up | §11.1 | Three.js Y-up; orbital textbooks Z-up; round-trip needs `y↔z` swap |
 | `gameDt` vs `dt` | §11.2 | `gameDt = dt × TIME_SCALE_GAMEPLAY` (10×). Physics-per-tick MUST use `gameDt` |
 | AP impulse API | §11.3 | `_applyThrust` = element rates (legacy); `applyCartesianImpulse` = world-frame ΔV (modern) |
 | CA exemption | §11.4 | Both `_activeTargetId` and `_autopilotLockId` must be set |
 | Wiring-gap | §11.7 | A system imported in `main.js` is silently dead if `init()`/`update()` never called |
-| Inline ARM_STATES | §11.8 (**NEW**) | Three known bugs from this anti-pattern; promote to named predicate on ArmManager |
+| Inline ARM_STATES | §11.8 | Three known bugs from this anti-pattern; promote to named predicate on ArmManager |
 
 ---
 
-*End of HANDOFF.md (2026-05-30 rewrite). Current sprint: 4-fix architectural pass complete. Next sprint: see [`§5`](#5-recommended-next-steps).*
+*End of HANDOFF.md (2026-06-06 rewrite). Current shift: daughter capture-lifecycle polish complete (`b7d5fae`). Next shift: see [`§5`](#5-recommended-next-steps).*

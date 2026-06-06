@@ -920,6 +920,44 @@ Each magazine pod has a spring-loaded cap (TRL 9, ~20 g) that seals the first ne
 
 **Y1+ roadmap:** For extended multi-mission campaigns, nets stored for long periods could accumulate slow degradation tracked by [`ResourceSystem`](js/systems/ResourceSystem.js:1) — e.g., −1% cling effectiveness per 30 in-game days on orbit. A pod shutter upgrade (Shop item) slows or eliminates degradation. Defer design to the environmental-effects sprint (BIG_PICTURE Q2, §30–§33).
 
+### §7.7 As-Implemented Daughter Reel-In & Failure Model (commit `b7d5fae`, 2026-06-06)
+
+> **Implementation status note.** The phase-7 reel-in (§2.4) and the tether-snap fail-state (§7.3) above are the *design* intent. This section documents how the **daughter capture lifecycle is actually wired in code** as of commit `b7d5fae`, replacing the prior fragile per-frame pin. The two-mode failure model below makes the §7.3 "net wrapped around drifting debris" outcome a first-class, recoverable gameplay event rather than a silent loss.
+
+#### Authoritative reel-in pin (catch welded to the daughter)
+
+During REELING/DOCKING the captured debris is held on the hauling daughter by an **authoritative pin**, not by the older per-frame `_capturedByArm` flag (which was unreliable because [`DebrisField.update()`](js/entities/DebrisField.js:1) runs *before* [`ArmManager.update()`](js/entities/ArmManager.js:1) each frame, so the orbit branch could overwrite the arm-relative position later in the same frame). The pin path:
+
+1. [`ArmManager.update()`](js/entities/ArmManager.js:1) calls [`DebrisField.pinCapturedDebris(debrisRef, armScenePos, scaleMul)`](js/entities/DebrisField.js:1) **after** the arms move.
+2. `pinCapturedDebris` resolves the **canonical** debris by id (same key [`removeDebris`](js/entities/DebrisField.js:1) uses) and forces both the debris and its instanced-mesh matrix onto the arm position, overriding the orbit branch.
+3. [`ArmUnit`](js/entities/ArmUnit.js:1) also calls `_pinCatchToSelf()` during REELING/DOCKING.
+
+This fixes the prior bug where the net + debris drifted ~600 m away on the debris's own orbit and vanished during reel-in. **The catch now reels in welded to the daughter.**
+
+#### Held net (bag stays cinched through the haul)
+
+A daughter's net is held in REELING via `_heldByArm` (set in [`CaptureNetSystem`](js/systems/CaptureNetSystem.js:1) auto-reel for `armIndex >= 0` successful catches) so the cinched bag stays on the debris until the arm delivers, instead of the net stowing on its own short `tetherPaidOut / REEL_SPEED` timeline mid-haul. It auto-releases/stows once the catch is no longer pinned (`targetDebris._capturedByArm` cleared). **Mother-pod captures (`armIndex < 0`) are unaffected** — they keep the legacy stow timeline.
+
+#### Deferred dock delivery (catch stays visible through docking)
+
+Debris removal is deferred from `ARM_RETURNED` (dock arrival) to `DEBRIS_CAPTURED` (dock completion, ~3 s later) — see [`GameFlowManager`](js/systems/GameFlowManager.js:1). The catch stays visible at the mother through docking with a **stow-shrink** (scale 1.0 → 0.15 via `pinCapturedDebris`'s `scaleMul`), then is removed cleanly. `ArmUnit._updateDocking` releases the pin *before* emitting `DEBRIS_CAPTURED` so the deferred `removeDebris` does not warn about an active captor.
+
+#### Two-mode capture failure (recoverable vs catastrophic)
+
+Checked at the GRAPPLED → REELING transition by `_checkNetIntegrityOnReel()` and `_snapTether()` in [`ArmUnit`](js/entities/ArmUnit.js:1):
+
+| Mode | Trigger | Severity | Outcome | Player recovery |
+|---|---|---|---|---|
+| **Net failure — OVERSIZE** | Debris wider than net mouth `_netDiameter` (deterministic) | Recoverable | Debris released, drifts free and re-capturable; daughter keeps tether | Re-approach with a larger net class, or have the Mother take it |
+| **Net failure — STRAIN** | Payload near `_netRatedMass` (probabilistic, scales to [`NET_STRAIN_FAIL_PROB_MAX`](js/core/Constants.js:1)) | Recoverable | Same as oversize — debris drifts free; daughter RETURNS to reload | Retry; the net itself is reusable |
+| **Tether snap** | Genuine overload only — reel tension tuned via [`REEL_TENSION_COEFF`](js/core/Constants.js:1) so **in-spec catches never snap** | Catastrophic | Daughter **+ catch cut loose and drift TOGETHER** (never silently vanish); recoil impulse applied; severed line hidden; bounded drift via [`TETHER_SNAP_RELEASE_DELAY_S`](js/core/Constants.js:1) then pin released | The drifting daughter must be re-acquired; the catch is not destroyed |
+
+Shared release helper: `_releaseCapturedDebris({ keepPinned })`. New event [`Events.NET_FAILED`](js/core/Events.js:1) drives **distinct feedback** — net-failure comms + amber [`HUD.showNetFailedAlert`](js/ui/HUD.js:1) vs tether-snap red alert ([`CommsSystem`](js/systems/CommsSystem.js:1)) — and two first-time teaching moments (`first_net_failed`, `first_tether_snap`) in [`TeachingSystem`](js/systems/TeachingSystem.js:1).
+
+**Tuning constants (all [`js/core/Constants.js`](js/core/Constants.js:1)):** `REEL_TENSION_COEFF` (0.04), `NET_STRAIN_SAFE_FRACTION` (0.8), `NET_STRAIN_FAIL_PROB_MAX` (0.35 — **set 0 to disable random net loss**), `CAPTURE_RELEASE_SEPARATION_MPS` (1.2), `TETHER_SNAP_RELEASE_DELAY_S` (8.0).
+
+> **Relation to §7.3.** The design's §7.3 "tether snaps mid-reel → drifting netted debris" is now the implemented **tether-snap** mode, but improved: the daughter and catch drift *together* and remain re-acquirable rather than the debris continuing alone on its trajectory. The recoverable **net-failure** mode is new and is the common, low-stakes failure for oversize/heavy targets.
+
 ---
 
 ## §8 Visual / Audio Cues
