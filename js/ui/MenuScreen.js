@@ -48,35 +48,55 @@ export class MenuScreen {
           box-sizing: border-box;
           font-family: 'Courier New', monospace;
         }
+        /* ── Full-bleed 3D hero (background layer) ── */
+        #menu-scene-3d {
+          position: absolute; inset: 0;
+          width: 100%; height: 100%;
+          display: block;
+          z-index: 0;
+          pointer-events: none;   /* let clicks reach the buttons / page */
+        }
+        /* Vignette + edge falloff over the scene to focus the centerpiece and
+           keep overlaid text legible at the corners. */
+        #menu-vignette {
+          position: absolute; inset: 0;
+          z-index: 1;
+          pointer-events: none;
+          background:
+            radial-gradient(ellipse 72% 62% at 54% 46%, rgba(0,0,0,0) 42%, rgba(2,6,18,0.55) 100%),
+            linear-gradient(to bottom, rgba(2,6,18,0.40) 0%, rgba(0,0,0,0) 22%,
+                            rgba(0,0,0,0) 68%, rgba(1,3,10,0.55) 100%);
+        }
         #menu-header {
           text-align: center;
           position: absolute;
-          top: 18%; left: 50%;
+          top: 9%; left: 50%;
           transform: translate(-50%, 0);
           width: 40%;
           min-width: 320px;
+          z-index: 3;
         }
         #menu-body { display: contents; }
         #menu-left {
           position: absolute;
           top: 20px; left: 20px;
-          width: 25%;
+          width: 24%;
+          max-width: 360px;
           max-height: calc(100% - 40px);
           overflow-y: auto;
-        }
-        #menu-right {
-          position: absolute;
-          top: 20px; right: 20px;
-          width: 25%;
-          max-height: calc(100% - 40px);
-          overflow-y: auto;
+          z-index: 3;
+          background: rgba(4,12,30,0.52);
+          backdrop-filter: blur(6px);
+          -webkit-backdrop-filter: blur(6px);
+          border: 1px solid rgba(0,255,136,0.14);
+          border-radius: 8px;
+          padding: 14px 16px;
+          box-sizing: border-box;
         }
         @media (max-width: 900px) {
           #menu-header { position: relative; top: auto; left: auto; transform: none; width: 100%; padding: 16px; }
           #menu-body   { display: block; padding: 0 16px; }
-          #menu-left   { position: relative; top: auto; left: auto; width: 100%; max-height: none; }
-          #menu-right  { position: relative; top: auto; right: auto; width: 100%; max-height: none;
-                         border-top: 1px solid rgba(0,255,136,0.15); padding-top: 1rem; margin-top: 1rem; }
+          #menu-left   { position: relative; top: auto; left: auto; width: 100%; max-width: none; max-height: none; }
         }
         /* ── ADR credits ── */
         .adr-name {
@@ -104,6 +124,10 @@ export class MenuScreen {
       </style>
 
       <div id="menu-content">
+
+        <!-- ══ Full-bleed 3D hero: EVA astronaut welding the Mother satellite ══ -->
+        <canvas id="menu-scene-3d"></canvas>
+        <div id="menu-vignette"></div>
 
         <!-- ══ HEADER (full-width, centered) ══ -->
         <div id="menu-header">
@@ -191,15 +215,6 @@ export class MenuScreen {
             </div>
 
           </div><!-- /#menu-left -->
-
-          <!-- ── RIGHT PANEL (top-right 25%) ── -->
-          <div id="menu-right">
-
-            <!-- 3D hero scene: astronaut repairing Mother Satellite -->
-            <canvas id="menu-scene-3d" style="width:100%; height:100%; min-height:300px;
-                     border-radius:4px; display:block;"></canvas>
-
-          </div><!-- /#menu-right -->
 
         </div><!-- /#menu-body -->
       </div><!-- /#menu-content -->
