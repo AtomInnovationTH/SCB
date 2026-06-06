@@ -19,7 +19,7 @@
 ### Step 2 — Verify baseline
 
 ```bash
-node js/test/run-tests.js | tail -3    # expect: 608 suites / 2530 tests / 0 failures
+node js/test/run-tests.js | tail -3    # expect: 611 suites / 2537 tests / 0 failures
 ```
 
 If red, see [`archive/SK_M1_POLISH_HANDOFF.md §7 Appendix`](archive/SK_M1_POLISH_HANDOFF.md) for diagnostic-log grep targets.
@@ -34,18 +34,21 @@ See [`§5 Recommended Next Steps`](#5-recommended-next-steps). Items are ordered
 
 **Daughter capture-lifecycle polish.** Commit `b7d5fae` — *"feat(capture): daughter capture lifecycle polish — reel-in fix, failure overhaul, log strip."* This session chased a headline reel-in disappearance bug to ground, replaced the fragile per-frame capture pin with an authoritative path, built a two-mode capture-failure model, added first-time-player guidance for failures, smoothed station-keep entry, hardened `getDebrisNear`, and stripped all diagnostic logging from hot paths. Test delta: **556 suites / 2364 tests → 608 suites / 2530 tests / 0 failures** (+52 suites / +166 tests).
 
+> **⚠️ ADDENDUM — Park-the-catch (2026-06-06, uncommitted; supersedes the §1.3 / §2.5 dock-removal model).** The "stow-shrink (1.0 → 0.15) then remove at `DEBRIS_CAPTURED`" delivery still read to the player as *"the catch vanishes when it reaches the mother."* Per the revised design, a captured debris is **too big to ingest whole** — it must stay cinched in the net at the daughter's strut tip until a future furnace-transfer + breakdown step. So the daughter now **parks** her catch (new state `ARM_STATES.HOLDING_CATCH`) full-size at the strut, indefinitely; she is OCCUPIED (not reloaded, not `DOCKED`, dropped from the deploy pool) while the other daughters stay free. No stow-shrink, no removal. See [`§1.9`](#19-park-the-catch-supersedes-13--25) for details. Test state after this addendum: **611 suites / 2537 tests / 0 failures**.
+
 ### What shipped
 
 | # | Change | One-line outcome |
 |---|---|---|
 | 1 | **Reel-in disappearance fix** (headline) | Catch now reels in welded to the daughter instead of drifting ~600 m away on the debris's own orbit and vanishing |
 | 2 | **Net stays visible through the haul** | Daughter's net is held cinched on the debris in REELING until the arm delivers, instead of stowing on its own short timeline mid-haul |
-| 3 | **Docking delivery no longer pops out** | Debris removal deferred to dock completion; catch stays visible at the mother with a stow-shrink, then removed cleanly |
+| 3 | **Docking delivery no longer pops out** ⚠️ *superseded by #9* | (Original) debris removal deferred to dock completion; catch stayed visible with a stow-shrink, then removed cleanly |
 | 4 | **Capture-failure overhaul** | Two distinct modes — recoverable NET FAILURE vs catastrophic TETHER SNAP — each with distinct comms + HUD alerts; in-spec catches never snap |
 | 5 | **First-time player guidance** | Two new teaching moments (`first_net_failed`, `first_tether_snap`) explaining what happened + recovery |
 | 6 | **Station-keep entry smoothing** | Ease standoff radius from SK-entry distance to nominal; removes the "speeds up then camera jumps" artifact; gentler launch ceremony |
 | 7 | **`getDebrisNear` hardening + canonical resolve** | `getDebrisNear` returns read-only snapshots; ArmManager resolves fishing/web-shot lists to canonical objects by id |
 | 8 | **Debug-log strip** | Removed all `DBG-*` / `[AUTO-TARGET]` / `[DAP-*]` / `[SK-ENTER/EXIT]` / `[NETTING-FSM]` console logging + dead diagnostic blocks + `_dbg*` helpers |
+| 9 | **Park-the-catch** (addendum, uncommitted) | Catch stays full-size cinched in the net at the daughter's strut tip (`HOLDING_CATCH`); daughter occupied, other 3 free; furnace transfer + breakdown deferred |
 
 ### 1.1 Reel-in disappearance fix (the headline bug)
 
@@ -59,9 +62,9 @@ See [`§5 Recommended Next Steps`](#5-recommended-next-steps). Items are ordered
 
 The net projectile used to stow on its own short timeline (`tetherPaidOut / REEL_SPEED`) and the bag visual vanished mid-haul. Now [`CaptureNet`](js/entities/CaptureNet.js:1) holds a daughter's net in REELING (`_heldByArm`, set in [`CaptureNetSystem`](js/systems/CaptureNetSystem.js:1) auto-reel for `armIndex >= 0` successful catches) so the bag stays cinched on the debris until the arm delivers. It auto-releases/stows once the catch is no longer pinned (`targetDebris._capturedByArm` cleared). **Mother-pod captures are unaffected.**
 
-### 1.3 Docking delivery no longer pops out
+### 1.3 Docking delivery no longer pops out — ⚠️ SUPERSEDED by [`§1.9`](#19-park-the-catch-supersedes-13--25)
 
-Debris removal was deferred from `ARM_RETURNED` (dock arrival) to `DEBRIS_CAPTURED` (dock completion, ~3 s later) — see [`GameFlowManager`](js/systems/GameFlowManager.js:1)'s new `DEBRIS_CAPTURED` handler and the NOTE in its `ARM_RETURNED` handler. The catch stays visible at the mother through docking with a stow-shrink (1.0 → 0.15) applied via `pinCapturedDebris`'s `scaleMul`, then is removed cleanly. [`ArmUnit._updateDocking`](js/entities/ArmUnit.js:1) releases the pin **BEFORE** emitting `DEBRIS_CAPTURED` so the deferred `removeDebris` doesn't warn about an active captor.
+> **Historical (original b7d5fae behaviour, no longer in the code).** Debris removal was deferred from `ARM_RETURNED` (dock arrival) to `DEBRIS_CAPTURED` (dock completion, ~3 s later); the catch stayed visible through docking with a stow-shrink (1.0 → 0.15) applied via `pinCapturedDebris`'s `scaleMul`, then was removed cleanly. **This still read as "the catch vanishes at the mother," so it was replaced by park-the-catch — see [`§1.9`](#19-park-the-catch-supersedes-13--25).** `_updateDocking` no longer clears the pin or emits a removal; `GameFlowManager` no longer removes on `DEBRIS_CAPTURED`.
 
 ### 1.4 Capture-failure overhaul ([`ArmUnit`](js/entities/ArmUnit.js:1))
 
@@ -93,9 +96,24 @@ Ease standoff radius from the actual SK-entry distance to nominal over `STATION_
 
 Removed all `DBG-*` / `[AUTO-TARGET]` / `[DAP-*]` / `[SK-ENTER/EXIT]` / `[NETTING-FSM]` console logging from hot paths ([`ArmUnit`](js/entities/ArmUnit.js:1), [`DebrisField`](js/entities/DebrisField.js:1), [`CameraSystem`](js/systems/CameraSystem.js:1), [`AutopilotSystem`](js/systems/AutopilotSystem.js:1), [`InputManager`](js/systems/InputManager.js:1), [`GameFlowManager`](js/systems/GameFlowManager.js:1), [`TargetSelector`](js/systems/TargetSelector.js:1), [`TargetPanel`](js/ui/hud/TargetPanel.js:1), [`HUD`](js/ui/HUD.js:1)) plus dead diagnostic blocks; removed the `_dbg*` helper fns.
 
+### 1.9 Park-the-catch (supersedes §1.3 / §2.5)
+
+**Design change (uncommitted).** A captured debris is **too big for the mother's furnace to ingest whole**, and the furnace-transfer + breakdown mechanic is unsolved/deferred. So a daughter's catch is no longer removed at the mother — she **parks** it.
+
+- New FSM state [`ARM_STATES.HOLDING_CATCH`](js/core/Constants.js:1). [`ArmUnit._updateDocking`](js/entities/ArmUnit.js:1) now, on dock completion **with** a catch, transitions to `HOLDING_CATCH` (not `RELOADING`), keeps `capturedDebris` / `_capturedByArm` / `_armPinned` set, increments `captures`, and emits `DEBRIS_CAPTURED { parked: true }` purely as the capture-secured signal (drives `first_capture` teaching). Empty returns (e.g. a recoverable net failure) still take the legacy `RELOADING` path.
+- New [`ArmUnit._updateHoldingCatch`](js/entities/ArmUnit.js:1) clamps the daughter to her strut-tip dock (like `_updateDocked`) and re-pins the catch every frame; falls back to `RELOADING` if the catch is ever cleared (the future furnace step).
+- [`ArmManager.update`](js/entities/ArmManager.js:1) pins the catch at **full size** (`scaleMul = 1`) across `REELING` / `DOCKING` / `HOLDING_CATCH` — the old 1.0 → 0.15 stow-shrink is gone.
+- Occupancy: `HOLDING_CATCH` is not `DOCKED`, so [`_findDockedArm`](js/entities/ArmManager.js:1) skips a holding daughter automatically (other daughters stay deployable). It's also excluded from [`hasTetheredArm`](js/entities/ArmManager.js:1) and contributes `'none'` to `getRotationLockTier` (she's home, no live tether).
+- [`GameFlowManager`](js/systems/GameFlowManager.js:1) no longer removes debris on `DEBRIS_CAPTURED` — the dead removal handler was deleted (removal now belongs to the future furnace step).
+- HUD: gold `HOLDING_CATCH` state colour (both `StatusPanel` maps); the 🎣 carried-catch badge shows; stale tether readout suppressed.
+
+**Still open (explicitly deferred):** (1) daughter → furnace transfer; (2) breakdown/processing of an oversize catch; (3) salvage/scoring still fires on `ARM_RETURNED` (dock arrival), so the reward is granted before any furnace step — premature under this model, revisit when the transfer lands. Forcing-function: parking 4 oversize catches occupies all 4 daughters and stalls capture until the furnace loop exists.
+
+Tests: [`test-ArmUnit-ParkCatch.js`](js/test/test-ArmUnit-ParkCatch.js:1) (NEW, registered in `run-tests.js`) — dock-completion park vs empty-reload, `_updateHoldingCatch` pin/clamp + empty fallback, and the ArmManager occupancy/predicate behaviour. Mutation-verified.
+
 ### Test suite
 
-**608 suites / 2530 tests / 0 failures** as of 2026-06-06. New files: [`test-ArmUnit-CaptureFailure.js`](js/test/test-ArmUnit-CaptureFailure.js:1), [`test-DebrisField-PinCatch.js`](js/test/test-DebrisField-PinCatch.js:1) (both registered in [`run-tests.js`](js/test/run-tests.js:1)); updated CommsSystem / Constants / TeachingSystem / CaptureNet suites.
+**611 suites / 2537 tests / 0 failures** as of 2026-06-06 (608 / 2530 at commit `b7d5fae`; +3 suites / +7 tests from the park-the-catch addendum). New files: [`test-ArmUnit-CaptureFailure.js`](js/test/test-ArmUnit-CaptureFailure.js:1), [`test-DebrisField-PinCatch.js`](js/test/test-DebrisField-PinCatch.js:1), [`test-ArmUnit-ParkCatch.js`](js/test/test-ArmUnit-ParkCatch.js:1) (all registered in [`run-tests.js`](js/test/run-tests.js:1)); updated CommsSystem / Constants / TeachingSystem / CaptureNet suites.
 
 ---
 
@@ -103,7 +121,7 @@ Removed all `DBG-*` / `[AUTO-TARGET]` / `[DAP-*]` / `[SK-ENTER/EXIT]` / `[NETTIN
 
 ### 2.1 Authoritative captured-debris pin ([`DebrisField`](js/entities/DebrisField.js:1) + [`ArmManager`](js/entities/ArmManager.js:1))
 
-New method [`DebrisField.pinCapturedDebris(debrisRef, armScenePos, scaleMul)`](js/entities/DebrisField.js:1) is the **canonical** way to keep a captured debris welded to a hauling arm. It is called from [`ArmManager.update()`](js/entities/ArmManager.js:1) **after** the arms move (because `debrisField.update()` runs first each frame — see [`§10 Rule G`](#rule-g-new-this-shift--frame-update-order-debris-before-arms)). It resolves the canonical debris by id, then forces both the debris and its instanced-mesh matrix onto the arm position with an optional `scaleMul` (used for the docking stow-shrink). This **overrides** the orbit branch in `_updateInstanceTransform`. The old per-frame `_capturedByArm` pin remains but is no longer load-bearing for daughter hauls.
+New method [`DebrisField.pinCapturedDebris(debrisRef, armScenePos, scaleMul)`](js/entities/DebrisField.js:1) is the **canonical** way to keep a captured debris welded to a hauling arm. It is called from [`ArmManager.update()`](js/entities/ArmManager.js:1) **after** the arms move (because `debrisField.update()` runs first each frame — see [`§10 Rule G`](#rule-g-new-this-shift--frame-update-order-debris-before-arms)). It resolves the canonical debris by id, then forces both the debris and its instanced-mesh matrix onto the arm position with an optional `scaleMul`. This **overrides** the orbit branch in `_updateInstanceTransform`. The old per-frame `_capturedByArm` pin remains but is no longer load-bearing for daughter hauls. (`scaleMul` was originally used for the docking stow-shrink; post-§1.9 the catch is always pinned at `scaleMul = 1` — the parameter remains available for the future furnace-breakdown shrink.)
 
 ### 2.2 New tuning constants ([`js/core/Constants.js`](js/core/Constants.js:1))
 
@@ -126,17 +144,18 @@ New method [`DebrisField.pinCapturedDebris(debrisRef, armScenePos, scaleMul)`](j
 
 A daughter's net carries a `_heldByArm` flag, set by the auto-reel path in [`CaptureNetSystem`](js/systems/CaptureNetSystem.js:1) for `armIndex >= 0` successful catches. While held, the net does not stow on its own `tetherPaidOut / REEL_SPEED` timeline; the bag stays cinched on the debris through REELING. It auto-releases/stows once `targetDebris._capturedByArm` is cleared. Mother-pod captures (`armIndex < 0`) keep the legacy stow timeline.
 
-### 2.5 Deferred dock removal ([`GameFlowManager`](js/systems/GameFlowManager.js:1))
+### 2.5 Dock removal → park-the-catch (⚠️ SUPERSEDED by [`§1.9`](#19-park-the-catch-supersedes-13--25))
 
-Debris removal moved from the `ARM_RETURNED` handler (dock arrival) to a new `DEBRIS_CAPTURED` handler (dock completion, ~3 s later). The `ARM_RETURNED` handler carries a NOTE documenting the deferral. [`ArmUnit._updateDocking`](js/entities/ArmUnit.js:1) releases the pin **before** emitting `DEBRIS_CAPTURED`, so the deferred `removeDebris` does not warn about an active captor.
+> **Historical.** Debris removal was moved from `ARM_RETURNED` (dock arrival) to a `DEBRIS_CAPTURED` handler (dock completion, ~3 s later). **Park-the-catch removed this entirely:** capture no longer removes the debris at all — it parks cinched in the net at the strut tip (`HOLDING_CATCH`). The `GameFlowManager` `DEBRIS_CAPTURED` → `removeDebris` handler was deleted (it became unreachable once the only emitter sent `parked: true`). Field removal will be re-introduced by the future furnace-transfer step. `DEBRIS_CAPTURED` is now consumed only as the capture-secured signal (e.g. `first_capture` teaching). Scoring/salvage still happens in `ARM_RETURNED` (premature under park-the-catch — see [`§1.9`](#19-park-the-catch-supersedes-13--25)).
 
 ### 2.6 New tests
 
 | File | Coverage |
 |---|---|
 | [`js/test/test-ArmUnit-CaptureFailure.js`](js/test/test-ArmUnit-CaptureFailure.js:1) **NEW** | Net-failure (oversize/strain) vs tether-snap branching; in-spec catches never snap; release helper behaviour; `NET_FAILED` emission |
-| [`js/test/test-DebrisField-PinCatch.js`](js/test/test-DebrisField-PinCatch.js:1) **NEW** | `pinCapturedDebris` canonical-by-id resolve; matrix override of orbit branch; `scaleMul` stow-shrink |
-| [`js/test/run-tests.js`](js/test/run-tests.js:1) | Imports both new test files |
+| [`js/test/test-DebrisField-PinCatch.js`](js/test/test-DebrisField-PinCatch.js:1) **NEW** | `pinCapturedDebris` canonical-by-id resolve; matrix override of orbit branch; `scaleMul` shrink |
+| [`js/test/test-ArmUnit-ParkCatch.js`](js/test/test-ArmUnit-ParkCatch.js:1) **NEW (§1.9)** | Dock-completion park → `HOLDING_CATCH` (catch retained + pinned, `DEBRIS_CAPTURED parked:true`) vs empty-return reload; `_updateHoldingCatch` clamp/re-pin + empty fallback; ArmManager occupancy (`hasTetheredArm` / `getRotationLockTier` / `_findDockedArm`) |
+| [`js/test/run-tests.js`](js/test/run-tests.js:1) | Imports all three new test files |
 
 ---
 
@@ -146,7 +165,7 @@ Debris removal moved from the `ARM_RETURNED` handler (dock arrival) to a new `DE
 
 ```bash
 $ node js/test/run-tests.js | tail -3
-608 suites / 2530 tests / 0 failures
+611 suites / 2537 tests / 0 failures
 ```
 
 Run with `./test.sh` or `node js/test/run-tests.js`. Pattern filter: `node js/test/run-tests.js --filter CaptureFailure`.
@@ -155,18 +174,20 @@ Run with `./test.sh` or `node js/test/run-tests.js`. Pattern filter: `node js/te
 
 | File | Change summary |
 |---|---|
-| [`js/entities/ArmUnit.js`](js/entities/ArmUnit.js:1) | Two-mode capture-failure model (`_checkNetIntegrityOnReel`, `_snapTether`, `_releaseCapturedDebris`); `_pinCatchToSelf` during REELING/DOCKING; `_updateDocking` releases pin before `DEBRIS_CAPTURED`; debug-log strip |
+| [`js/entities/ArmUnit.js`](js/entities/ArmUnit.js:1) | Two-mode capture-failure model (`_checkNetIntegrityOnReel`, `_snapTether`, `_releaseCapturedDebris`); `_pinCatchToSelf` during REELING/DOCKING; debug-log strip. **Park-the-catch (§1.9):** `_updateDocking` parks a catch to new `HOLDING_CATCH` (keeps the pin) instead of removing it; new `_updateHoldingCatch` |
 | [`js/entities/DebrisField.js`](js/entities/DebrisField.js:1) | New `pinCapturedDebris(debrisRef, armScenePos, scaleMul)`; `getDebrisNear` returns read-only snapshots; debug-log strip |
-| [`js/entities/ArmManager.js`](js/entities/ArmManager.js:1) | Calls `pinCapturedDebris` after arms move; resolves fishing/web-shot `_nearbyDebris` to canonical by id |
+| [`js/entities/ArmManager.js`](js/entities/ArmManager.js:1) | Calls `pinCapturedDebris` after arms move; resolves fishing/web-shot `_nearbyDebris` to canonical by id. **Park-the-catch (§1.9):** pins catch full-size across REELING/DOCKING/`HOLDING_CATCH` (shrink removed); `HOLDING_CATCH` excluded from `hasTetheredArm` / `getRotationLockTier` / `_findDockedArm` |
 | [`js/entities/CaptureNet.js`](js/entities/CaptureNet.js:1) | `_heldByArm` held-net lifecycle for daughter REELING |
 | [`js/systems/CaptureNetSystem.js`](js/systems/CaptureNetSystem.js:1) | Sets `_heldByArm` on `armIndex >= 0` successful auto-reel |
-| [`js/systems/GameFlowManager.js`](js/systems/GameFlowManager.js:1) | New `DEBRIS_CAPTURED` handler (deferred removal); NOTE in `ARM_RETURNED`; debug-log strip |
+| [`js/systems/GameFlowManager.js`](js/systems/GameFlowManager.js:1) | (b7d5fae) `DEBRIS_CAPTURED` handler + NOTE in `ARM_RETURNED`; debug-log strip. **Park-the-catch (§1.9):** removed the now-unreachable `DEBRIS_CAPTURED` → `removeDebris` handler (capture no longer removes debris) |
 | [`js/systems/CommsSystem.js`](js/systems/CommsSystem.js:1) | Distinct net-failure vs tether-snap comms |
 | [`js/ui/HUD.js`](js/ui/HUD.js:1) | `showNetFailedAlert` (amber) vs tether-snap (red); debug-log strip |
 | [`js/systems/TeachingSystem.js`](js/systems/TeachingSystem.js:1) | `first_net_failed` + `first_tether_snap` moments; `TOTAL_MOMENTS` 17 → 19 |
 | [`js/systems/CameraSystem.js`](js/systems/CameraSystem.js:1) | Gentler launch-ceremony pacing (durations + FOV ease); debug-log strip |
-| [`js/core/Constants.js`](js/core/Constants.js:1) | New tuning constants (§2.2); `STATION_KEEP.STANDOFF_SETTLE_TAU_S` |
+| [`js/core/Constants.js`](js/core/Constants.js:1) | New tuning constants (§2.2); `STATION_KEEP.STANDOFF_SETTLE_TAU_S`. **Park-the-catch (§1.9):** new `ARM_STATES.HOLDING_CATCH` |
 | [`js/core/Events.js`](js/core/Events.js:1) | New `Events.NET_FAILED` |
+| [`js/ui/hud/StatusPanel.js`](js/ui/hud/StatusPanel.js:1) | **Park-the-catch (§1.9):** gold `HOLDING_CATCH` state colour (both maps); suppress stale tether readout |
+| [`js/test/test-ArmUnit-ParkCatch.js`](js/test/test-ArmUnit-ParkCatch.js:1) **NEW** | **Park-the-catch (§1.9)** regression suite (registered in `run-tests.js`) |
 | [`js/systems/AutopilotSystem.js`](js/systems/AutopilotSystem.js:1), [`js/systems/InputManager.js`](js/systems/InputManager.js:1), [`js/systems/TargetSelector.js`](js/systems/TargetSelector.js:1), [`js/ui/hud/TargetPanel.js`](js/ui/hud/TargetPanel.js:1) | Debug-log strip only |
 
 ### 3.3 Active terminals / running processes
@@ -197,11 +218,14 @@ Ordered by effort/impact. Each is ready for Orchestrator to research+architect+c
 
 | Rank | Task | Effort | Notes / Acceptance |
 |---|---|---|---|
-| 1 | **In-game playtest verification of the capture lifecycle** | ~1h | Verify reel-in (catch welded to daughter), dock stow-shrink, net-failure on oversize/heavy debris, tether-snap drift, and the two new teaching cards (`first_net_failed`, `first_tether_snap`) all read correctly in the browser |
-| 2 | **Verify fishing/trawl behavior in-game** | ~1h | Resolving `_nearbyDebris` to canonical now makes fishing proximity-capture **actually functional** (it was effectively dead because the sparse wrappers lacked `_scenePosition`). Fishing may now auto-capture where it previously never did — confirm intended behavior |
-| 3 | **`getDebrisNear` perf profile** | ~30 min | Profile the per-result `_scenePosition` / `orbit` clone under dense-debris load. If hot, apply the caching approach from [`archive/QUICK_WINS_PERF.md`](archive/QUICK_WINS_PERF.md:1) |
-| 4 | **Document / migrate the `getDebrisNear` snapshot contract** | ~1.5h | Either migrate callers to a `{ debris, distance }` shape, or formalize the "snapshot, resolve-by-id to mutate" contract as a JSDoc on the method + a guard test |
-| 5 | **Pick up the four-fix backlog** | varies | `setThrusterFire`, `test-TargetRanking.js`, `SpacecraftMaterials.js`, `RENDER_ORDER` extension — see [`archive/HANDOFF_2026-05-30_four-fix.md §5`](archive/HANDOFF_2026-05-30_four-fix.md) |
+| 1 | **Playtest park-the-catch (§1.9)** | ~30 min | Verify the catch stays **full-size cinched in the net at the strut tip** (no shrink/vanish), the holding daughter reads gold/occupied with the 🎣 badge, the other 3 daughters still deploy, and parking 4 oversize catches stalls capture (intended forcing-function) |
+| 2 | **Design the daughter → furnace transfer** | ~2h+ | The actual unsolved problem: how a parked `HOLDING_CATCH` catch gets from the strut tip into the mother. Determines how parked debris eventually clears and unblocks the salvage-timing fix (salvage currently fires early on `ARM_RETURNED`). Likely paired with the breakdown/comminution model (debris is too big to ingest whole) |
+| 3 | **Defer salvage/scoring to the furnace step** | ~1h | Currently granted on `ARM_RETURNED` (dock arrival), before any processing — premature under park-the-catch. Move it to the (new) furnace-transfer completion |
+| 4 | **In-game playtest of the b7d5fae capture lifecycle** | ~1h | Verify reel-in (catch welded to daughter), net-failure on oversize/heavy debris, tether-snap drift, and the teaching cards (`first_net_failed`, `first_tether_snap`) read correctly |
+| 5 | **Verify fishing/trawl behavior in-game** | ~1h | Resolving `_nearbyDebris` to canonical now makes fishing proximity-capture **actually functional** (it was effectively dead because the sparse wrappers lacked `_scenePosition`). Fishing may now auto-capture where it previously never did — confirm intended behavior. **Also check** a strut-parked catch (alive + `_scenePosition` near the mother) can't be re-grabbed by a fishing/trawl arm |
+| 6 | **`getDebrisNear` perf profile** | ~30 min | Profile the per-result `_scenePosition` / `orbit` clone under dense-debris load. If hot, apply the caching approach from [`archive/QUICK_WINS_PERF.md`](archive/QUICK_WINS_PERF.md:1) |
+| 7 | **Document / migrate the `getDebrisNear` snapshot contract** | ~1.5h | Either migrate callers to a `{ debris, distance }` shape, or formalize the "snapshot, resolve-by-id to mutate" contract as a JSDoc on the method + a guard test |
+| 8 | **Pick up the four-fix backlog** | varies | `setThrusterFire`, `test-TargetRanking.js`, `SpacecraftMaterials.js`, `RENDER_ORDER` extension — see [`archive/HANDOFF_2026-05-30_four-fix.md §5`](archive/HANDOFF_2026-05-30_four-fix.md) |
 
 ---
 
@@ -354,8 +378,8 @@ The `_capturedByArm` per-frame pin in [`DebrisField._updateInstanceTransform`](j
 When the user reports a visual symptom (e.g. "X is invisible during state Y", "X reads as a shadow", or "X drifts away during reel-in"), walk the visual pipeline:
 
 1. **Position** — being POSITIONED correctly, and is the position SURVIVING the frame? (FSM-state position sync — Rule B; **frame-update order — Rule G**)
-2. **Scale** — being SCALED correctly? (LOD downscale — Rule D; stow-shrink `scaleMul`)
-3. **Lifecycle** — being REMOVED prematurely? (state-transition cleanup; **deferred dock removal §2.5**)
+2. **Scale** — being SCALED correctly? (LOD downscale — Rule D; `pinCapturedDebris` `scaleMul` — held catches are pinned full-size post-§1.9)
+3. **Lifecycle** — being REMOVED prematurely? (state-transition cleanup; **note: capture no longer removes debris — it parks in `HOLDING_CATCH`, §1.9**)
 4. **Material/Face** — back face vs front face, DoubleSide hiding semantics?
 5. **Camera framing** — is the CAMERA actually showing it? (offsets + lookAt — Rule C)
 6. **Feedback** — user expected feedback but got none? (empty-action 3-component — Rule E)
@@ -443,7 +467,7 @@ Core identity is **Jellyfish Fisherman** ([`GAME_DESIGN.md §2`](GAME_DESIGN.md:
 
 ### 12.3 Test suite status
 
-**608 suites / 2530 tests / 0 failures** as of 2026-06-06. Harness uses the real `three` runtime (not stubbed) for physics tests.
+**611 suites / 2537 tests / 0 failures** as of 2026-06-06. Harness uses the real `three` runtime (not stubbed) for physics tests.
 
 ### 12.4 Systems & maturity
 
@@ -451,12 +475,12 @@ Core identity is **Jellyfish Fisherman** ([`GAME_DESIGN.md §2`](GAME_DESIGN.md:
 |---|---|---|
 | OrbitalMechanics | [`OrbitalMechanics.js`](js/entities/OrbitalMechanics.js:1) | Stable |
 | PlayerSatellite | [`PlayerSatellite.js`](js/entities/PlayerSatellite.js:1) | Stable — Config G + renderOrder pass + ROSA front/back |
-| ArmManager / ArmUnit | [`ArmManager.js`](js/entities/ArmManager.js:1), [`ArmUnit.js`](js/entities/ArmUnit.js:1) | Stable — 2026-06-06 capture-failure model + authoritative catch pin + canonical `_nearbyDebris` resolve |
+| ArmManager / ArmUnit | [`ArmManager.js`](js/entities/ArmManager.js:1), [`ArmUnit.js`](js/entities/ArmUnit.js:1) | Stable — 2026-06-06 capture-failure model + authoritative catch pin + canonical `_nearbyDebris` resolve + park-the-catch (`HOLDING_CATCH`, §1.9) |
 | AutopilotSystem | [`AutopilotSystem.js`](js/systems/AutopilotSystem.js:1) | Stable |
 | InputManager | [`InputManager.js`](js/systems/InputManager.js:1) | Stable — spring-resistance rotation model |
 | DebrisField | [`DebrisField.js`](js/entities/DebrisField.js:1) | Stable — 2026-06-06 `pinCapturedDebris` + `getDebrisNear` snapshots. 2093+ LOC (split candidate) |
 | CaptureNet + CaptureNetVisual | [`CaptureNet.js`](js/entities/CaptureNet.js:1), [`CaptureNetVisual.js`](js/ui/CaptureNetVisual.js:1) | Stable — 2026-06-06 held-net lifecycle for daughter REELING |
-| GameFlowManager | [`GameFlowManager.js`](js/systems/GameFlowManager.js:1) | Stable — 2026-06-06 deferred dock removal (`DEBRIS_CAPTURED`) |
+| GameFlowManager | [`GameFlowManager.js`](js/systems/GameFlowManager.js:1) | Stable — park-the-catch (§1.9): capture no longer removes debris; removal awaits the future furnace-transfer step |
 | CommsSystem | [`CommsSystem.js`](js/systems/CommsSystem.js:1) | Stable — 2026-06-06 net-failure vs tether-snap comms |
 | TargetPanel | [`TargetPanel.js`](js/ui/hud/TargetPanel.js:1) | Stable — 4-way sort + MOID badges |
 | CollisionAvoidance | [`CollisionAvoidanceSystem.js`](js/systems/CollisionAvoidanceSystem.js:1) | Stable |

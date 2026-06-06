@@ -8,7 +8,9 @@
 >
 > The capture-net path is now end-to-end functional. This document maps which of the remaining retrieval methods are also functional, which look wired but have latent issues, and which are dead on the vine.
 >
-> **✅ RESOLVED (2026-06-06, commit `b7d5fae`):** The reel-in disappearance bug (catch + net drifting ~600 m away on the debris's own orbit and vanishing during REELING) is fixed. Root cause was frame-update ordering — `DebrisField.update()` runs before `ArmManager.update()`, so the orbit branch overwrote the arm-relative position. Replaced the fragile per-frame `_capturedByArm` pin with an authoritative [`DebrisField.pinCapturedDebris()`](js/entities/DebrisField.js:1) called from `ArmManager` *after* arms move, plus a held-net lifecycle and deferred dock removal. See [`CAPTURE_NET.md §7.7`](CAPTURE_NET.md) and [`HANDOFF.md §1.1`](HANDOFF.md).
+> **✅ RESOLVED (2026-06-06, commit `b7d5fae`):** The reel-in disappearance bug (catch + net drifting ~600 m away on the debris's own orbit and vanishing during REELING) is fixed. Root cause was frame-update ordering — `DebrisField.update()` runs before `ArmManager.update()`, so the orbit branch overwrote the arm-relative position. Replaced the fragile per-frame `_capturedByArm` pin with an authoritative [`DebrisField.pinCapturedDebris()`](js/entities/DebrisField.js:1) called from `ArmManager` *after* arms move, plus a held-net lifecycle. See [`CAPTURE_NET.md §7.7`](CAPTURE_NET.md) and [`HANDOFF.md §1.1`](HANDOFF.md).
+>
+> **✅ Follow-up — "vanishes at the mother" (2026-06-06, park-the-catch, uncommitted):** the catch no longer shrinks-and-removes at the dock. The daughter now **parks** it cinched in the net at her strut tip (new `ARM_STATES.HOLDING_CATCH`), full-size, indefinitely — occupied while the other daughters stay free. Furnace transfer + breakdown are deferred. See [`HANDOFF.md §1.9`](HANDOFF.md) and [`CAPTURE_NET.md §7.7`](CAPTURE_NET.md).
 
 ---
 

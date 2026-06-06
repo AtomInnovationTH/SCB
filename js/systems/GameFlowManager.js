@@ -644,16 +644,16 @@ class GameFlowManager {
     // field, award score, and notify comms.
     // ==================================================================
 
-    // Dock completion: ArmUnit._updateDocking emits DEBRIS_CAPTURED once the
-    // catch has been stowed (~3s after arrival). THIS is where the debris is
-    // finally removed from the field — deferred from ARM_RETURNED so the catch
-    // stays visible at the mother through the dock instead of vanishing on
-    // arrival. (Scoring/salvage already happened in the ARM_RETURNED handler.)
-    eventBus.on(Events.DEBRIS_CAPTURED, (data) => {
-      if (debrisField && data && data.debrisId != null) {
-        debrisField.removeDebris(data.debrisId);
-      }
-    });
+    // Dock completion: ArmUnit._updateDocking emits DEBRIS_CAPTURED (parked:true)
+    // once the daughter docks with her catch (~3s after arrival).
+    //
+    // PARK-THE-CATCH (2026-06-06): capturing no longer removes the debris at the
+    // mother. The catch parks cinched in the net at the daughter's strut tip
+    // (state HOLDING_CATCH) until a future furnace-transfer/breakdown step, which
+    // will own the eventual field removal. So there is intentionally NO
+    // removeDebris wired to DEBRIS_CAPTURED any more — the event is consumed only
+    // as the capture-secured signal (e.g. the first_capture teaching beat, in
+    // TeachingSystem). Scoring/salvage still happens in the ARM_RETURNED handler.
 
     eventBus.on(Events.ARM_RETURNED, (data) => {
       // Arm pilot exit now self-managed by InputManager via ARM_RETURNED listener

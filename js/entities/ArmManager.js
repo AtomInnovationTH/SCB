@@ -1402,15 +1402,15 @@ export class ArmManager {
     if (this._debrisField && this._debrisField.pinCapturedDebris) {
       for (const arm of this.arms) {
         if (!arm.capturedDebris) continue;
-        if (arm.state === ARM_STATES.REELING) {
+        // PARK-THE-CATCH (2026-06-06): the catch stays FULL SIZE from reel-in,
+        // through docking, and while parked on the strut (HOLDING_CATCH) — no
+        // stow-shrink/removal any more (furnace transfer is deferred). The old
+        // 1.0 → 0.15 dock shrink-then-remove read to the player as "the catch
+        // vanishes when it reaches the mother".
+        if (arm.state === ARM_STATES.REELING ||
+            arm.state === ARM_STATES.DOCKING ||
+            arm.state === ARM_STATES.HOLDING_CATCH) {
           this._debrisField.pinCapturedDebris(arm.capturedDebris, arm.position, 1);
-        } else if (arm.state === ARM_STATES.DOCKING) {
-          // Stow shrink: as the daughter docks, shrink the catch (1.0 → 0.15)
-          // so it reads as being absorbed/stowed rather than popping out of
-          // existence. Final removal happens at dock completion (DEBRIS_CAPTURED).
-          const dur = Constants.ARM_DOCK_DURATION || 3;
-          const frac = Math.max(0, Math.min(1, arm.stateTimer / dur));
-          this._debrisField.pinCapturedDebris(arm.capturedDebris, arm.position, 1 - 0.85 * frac);
         }
       }
     }
@@ -1582,6 +1582,7 @@ export class ArmManager {
     return this.arms.some(a =>
       a.state !== S.DOCKED &&
       a.state !== S.RELOADING &&
+      a.state !== S.HOLDING_CATCH &&   // parked at the strut holding a catch — home, no live tether
       a.state !== S.EXPENDED &&
       !a.isDetached
     );
@@ -1600,7 +1601,7 @@ export class ArmManager {
       const s = arm.state;
       if (_HIGH_RISK_ROT_STATES.has(s)) return 'block'; // early exit — max severity
       if (_SOFT_ROT_STATES.has(s)) tier = 'soft';
-      // DOCKED / RELOADING / EXPENDED contribute 'none' — leave tier unchanged
+      // DOCKED / RELOADING / HOLDING_CATCH / EXPENDED contribute 'none' — leave tier unchanged
     }
     return tier;
   }

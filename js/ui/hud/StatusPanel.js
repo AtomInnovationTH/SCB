@@ -1409,6 +1409,7 @@ export class StatusPanel {
       FISHING: '#ffaa00',     // amber — active/working
       TRAWLING: '#44aaff',    // light blue — passive sweep
       RELOADING: '#ffaa00',   // V5: amber — spring reloading
+      HOLDING_CATCH: '#ffcc44', // gold — docked at strut holding a catch (occupied)
       ABLATING: '#ff44ff',    // V5: magenta — laser de-spin
       SCANNING: '#00ffff',    // V5: cyan — pulse scan
       TANGLED: '#ff8800',     // V5: orange — tether tangle
@@ -1432,7 +1433,7 @@ export class StatusPanel {
       const fuelColor = a.fuel > 50 ? '#00ff88' : a.fuel > 20 ? '#ffaa00' : '#ff4444';
       const icon = typeIcons[a.type] || '○';
       const capBadge = a.hasCaptured ? ' 🎣' : '';
-      const tether = (a.state !== 'DOCKED' && a.state !== 'RELOADING')
+      const tether = (a.state !== 'DOCKED' && a.state !== 'RELOADING' && a.state !== 'HOLDING_CATCH')
         ? ` T:${a.tetherLength}m` : '';
       const isSelected = idx === selectedIdx;
       const label = getLabel(idx, statuses.length);
@@ -1847,6 +1848,7 @@ export class StatusPanel {
       FISHING: '#00ffff',
       TRAWLING: '#44aaff',
       RELOADING: '#ffaa00',   // V5
+      HOLDING_CATCH: '#ffcc44', // gold — docked at strut holding a catch (occupied)
       ABLATING: '#ff44ff',    // V5
       SCANNING: '#00ffff',    // V5
       TANGLED: '#ff8800',     // V5

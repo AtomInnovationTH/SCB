@@ -920,9 +920,11 @@ Each magazine pod has a spring-loaded cap (TRL 9, ~20 g) that seals the first ne
 
 **Y1+ roadmap:** For extended multi-mission campaigns, nets stored for long periods could accumulate slow degradation tracked by [`ResourceSystem`](js/systems/ResourceSystem.js:1) — e.g., −1% cling effectiveness per 30 in-game days on orbit. A pod shutter upgrade (Shop item) slows or eliminates degradation. Defer design to the environmental-effects sprint (BIG_PICTURE Q2, §30–§33).
 
-### §7.7 As-Implemented Daughter Reel-In & Failure Model (commit `b7d5fae`, 2026-06-06)
+### §7.7 As-Implemented Daughter Reel-In & Failure Model (commit `b7d5fae`, 2026-06-06; park-the-catch addendum uncommitted)
 
 > **Implementation status note.** The phase-7 reel-in (§2.4) and the tether-snap fail-state (§7.3) above are the *design* intent. This section documents how the **daughter capture lifecycle is actually wired in code** as of commit `b7d5fae`, replacing the prior fragile per-frame pin. The two-mode failure model below makes the §7.3 "net wrapped around drifting debris" outcome a first-class, recoverable gameplay event rather than a silent loss.
+>
+> **Park-the-catch (uncommitted, 2026-06-06):** the delivery end changed — a captured debris is **no longer removed at the mother**. It parks cinched in the net at the daughter's strut tip (`ARM_STATES.HOLDING_CATCH`) until a future furnace step. See the "Park-the-catch at the strut" subsection below; it supersedes the old deferred-dock-removal/stow-shrink model.
 
 #### Authoritative reel-in pin (catch welded to the daughter)
 
@@ -938,9 +940,17 @@ This fixes the prior bug where the net + debris drifted ~600 m away on the debri
 
 A daughter's net is held in REELING via `_heldByArm` (set in [`CaptureNetSystem`](js/systems/CaptureNetSystem.js:1) auto-reel for `armIndex >= 0` successful catches) so the cinched bag stays on the debris until the arm delivers, instead of the net stowing on its own short `tetherPaidOut / REEL_SPEED` timeline mid-haul. It auto-releases/stows once the catch is no longer pinned (`targetDebris._capturedByArm` cleared). **Mother-pod captures (`armIndex < 0`) are unaffected** — they keep the legacy stow timeline.
 
-#### Deferred dock delivery (catch stays visible through docking)
+#### Park-the-catch at the strut (catch is held, not removed) — supersedes the earlier "deferred dock delivery"
 
-Debris removal is deferred from `ARM_RETURNED` (dock arrival) to `DEBRIS_CAPTURED` (dock completion, ~3 s later) — see [`GameFlowManager`](js/systems/GameFlowManager.js:1). The catch stays visible at the mother through docking with a **stow-shrink** (scale 1.0 → 0.15 via `pinCapturedDebris`'s `scaleMul`), then is removed cleanly. `ArmUnit._updateDocking` releases the pin *before* emitting `DEBRIS_CAPTURED` so the deferred `removeDebris` does not warn about an active captor.
+A daughter's catch is **not** ingested/removed at the mother. A captured debris is too big for the mother's furnace to swallow whole, and the furnace-transfer + breakdown mechanic is not built yet — so the daughter **parks** her catch cinched in the net at her strut tip and waits.
+
+On dock completion `ArmUnit._updateDocking` transitions to the new `ARM_STATES.HOLDING_CATCH` (instead of `RELOADING`), **keeps** `capturedDebris` / `_capturedByArm` / `_armPinned`, and emits `DEBRIS_CAPTURED { parked: true }` only as the capture-secured signal (drives the `first_capture` teaching). `ArmManager` pins the catch at **full size** (`scaleMul = 1`) across REELING / DOCKING / HOLDING_CATCH — there is **no stow-shrink and no removal** any more. `_updateHoldingCatch` clamps the daughter to her strut-tip dock and re-pins the catch each frame.
+
+The holding daughter is **occupied**: `HOLDING_CATCH` is not `DOCKED`, so she is excluded from the deploy pool (`_findDockedArm`) and from `hasTetheredArm` / `getRotationLockTier` (she reads as "home"). The other daughters stay free to capture more. `GameFlowManager` no longer removes debris on `DEBRIS_CAPTURED` (that handler was deleted); removal will be re-introduced by the future furnace-transfer step.
+
+> **Still open / deferred:** (1) daughter → furnace transfer; (2) breakdown of an oversize catch; (3) salvage/scoring still fires on `ARM_RETURNED` (premature under this model). See `HANDOFF.md §1.9`.
+
+> **Historical (no longer in the code):** the earlier model deferred removal to `DEBRIS_CAPTURED` and shrank the catch 1.0 → 0.15 before removing it. That still read as "the catch vanishes at the mother," which is why park-the-catch replaced it.
 
 #### Two-mode capture failure (recoverable vs catastrophic)
 

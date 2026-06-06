@@ -2008,7 +2008,8 @@ export class ArmUnit {
      case S.REELING:    this._updateReeling(dt, parentPos, parentQuat); break;
      case S.RETURNING:  this._updateReturning(dt, parentPos); break;
      case S.DOCKING:    this._updateDocking(dt, parentPos, parentQuat); break;
-     case S.RELOADING:  this._updateReloading(dt); break;
+      case S.RELOADING:  this._updateReloading(dt); break;
+      case S.HOLDING_CATCH: this._updateHoldingCatch(dt, parentPos, parentQuat); break;
      case S.FISHING:    this._updateFishing(dt, parentPos); break;
      case S.TRAWLING:   this._updateTrawling(dt, parentPos); break;
      case S.DEORBITING: this._updateDeorbiting(dt); break;
@@ -3762,28 +3763,6 @@ export class ArmUnit {
     this._pinCatchToSelf();
 
     if (this.stateTimer > Constants.ARM_DOCK_DURATION) {
-      // Process captured debris
-      if (this.capturedDebris) {
-        this.captures++;
-        const _caught = this.capturedDebris;
-        const _caughtId = _caught.id;
-        // Release the pin BEFORE emitting DEBRIS_CAPTURED so the GameFlowManager
-        // removeDebris (now wired to DEBRIS_CAPTURED) doesn't warn about an
-        // active captor. The catch was held visible at the mother through the
-        // whole dock; this is the clean stow/removal at the end.
-        _caught._capturedByArm = null;
-        _caught._armPinned = false;
-        this.capturedDebris = null;
-        eventBus.emit(Events.DEBRIS_CAPTURED, {
-          debrisId: _caughtId,
-          armId: this.id,
-          type: this.type,
-        });
-        eventBus.emit(Events.COMMS_MESSAGE, {
-          text: `${this.id}: Debris processed. Capture #${this.captures}.`,
-          priority: 'success',
-        });
-      }
       // POLISH FIX: keep daughter VISIBLE at the strut after a successful
       // retrieval — set deploy state to DEPLOYED so PlayerSatellite.postArmUpdate
       // shows her clamped to the strut tip (instead of hiding her until next
@@ -3792,17 +3771,84 @@ export class ArmUnit {
           this._deployState === Constants.DEPLOY_STATES.STOWED) {
         this._deployState = Constants.DEPLOY_STATES.DEPLOYED;
       }
+      this.reeling = false;
+      this.tetherTension = 0;
+
+      // PARK-THE-CATCH (2026-06-06): a captured debris is NOT processed/removed
+      // at the mother any more. The mother's furnace can't ingest a whole catch
+      // yet (furnace-transfer + breakdown are unsolved/deferred), so the daughter
+      // parks at her strut tip still holding the debris cinched in the net, full
+      // size, indefinitely. She is now OCCUPIED — she does NOT reload her spring
+      // and stays out of the deploy pool (HOLDING_CATCH is not DOCKED), leaving
+      // the other daughters free to capture more. Keep `_capturedByArm` and
+      // `_armPinned` set so the held net stays cinched (CaptureNet's held-net
+      // release keys off `_capturedByArm`) and the debris stays pinned to the
+      // strut. DEBRIS_CAPTURED is still emitted (capture-secured signal — drives
+      // the first_capture teaching beat), but the GameFlowManager handler now
+      // SKIPS removeDebris while the catch is still held/pinned, so it persists.
+      if (this.capturedDebris) {
+        this.captures++;
+        this._pinCatchToSelf();             // keep the catch welded to the strut tip
+        this._transitionTo(S.HOLDING_CATCH);
+        eventBus.emit(Events.DEBRIS_CAPTURED, {
+          debrisId: this.capturedDebris.id,
+          armId: this.id,
+          type: this.type,
+          parked: true,                     // held at strut, not removed/processed
+        });
+        eventBus.emit(Events.COMMS_MESSAGE, {
+          text: `${this.id}: Catch secured at the strut — holding in net (awaiting processing). Capture #${this.captures}.`,
+          priority: 'success',
+        });
+        return;
+      }
+
+      // Empty return (e.g., a recoverable net failure sent her home without a
+      // catch): the legacy reload path still applies.
       this.target = null;
       this._fishingMode = false;          // clear fishing flag on re-dock
       this._manualCapture = false;        // reset manual capture flag on re-dock
       this._nearbyDebris = [];
-      this.reeling = false;
-      this.tetherTension = 0;
 
       // V5: After docking, reload the crossbow spring
       this._transitionTo(S.RELOADING);
       this.reloadProgress = 0;
       this.reloadDuration = 0; // Will be calculated in RELOADING state
+      eventBus.emit(Events.CROSSBOW_RELOAD_START, {
+        armIndex: this.index,
+        duration: this.reloadDuration,
+      });
+    }
+  }
+
+  /**
+   * HOLDING_CATCH: daughter is docked at her strut tip carrying a captured
+   * debris cinched in the net, waiting for the (not-yet-implemented) furnace
+   * transfer. She holds position like DOCKED but is intentionally NOT charged
+   * and NOT in the DOCKED state, so `ArmManager._findDockedArm()` skips her and
+   * the other daughters remain available. The captured debris is re-pinned to
+   * the strut tip every frame (full size) so it never drifts or vanishes.
+   * @private
+   */
+  _updateHoldingCatch(dt, parentPos, parentQuat) {
+    // Clamp the daughter to her strut-tip dock (mirrors _updateDocked).
+    this._lastParentQuat = parentQuat ? parentQuat.clone() : null;
+    if (parentPos) {
+      const offset = this.dockOffset.clone();
+      if (parentQuat) offset.applyQuaternion(parentQuat);
+      this.position.copy(parentPos).add(offset);
+    }
+    this.tetherLine.visible = false;
+    this.velocity.set(0, 0, 0);
+
+    // Keep the captured debris welded to the strut tip, full size, in-net.
+    // If the catch was somehow lost (cleared elsewhere), fall back to reload.
+    if (this.capturedDebris) {
+      this._pinCatchToSelf();
+    } else {
+      this._transitionTo(S.RELOADING);
+      this.reloadProgress = 0;
+      this.reloadDuration = 0;
       eventBus.emit(Events.CROSSBOW_RELOAD_START, {
         armIndex: this.index,
         duration: this.reloadDuration,

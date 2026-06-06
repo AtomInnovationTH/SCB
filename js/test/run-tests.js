@@ -142,6 +142,7 @@ import './test-CaptureNet.js';
 // reel-tension retune, oversize/strain net integrity, authoritative reel-in pin
 import './test-ArmUnit-CaptureFailure.js';
 import './test-DebrisField-PinCatch.js';
+import './test-ArmUnit-ParkCatch.js';
 
 // ST-9.5 C-7: Tether Reel — strut-mounted reel state machine, cable physics, persistence
 import './test-TetherReel.js';
