@@ -4305,8 +4305,9 @@ export class ArmUnit {
       // `_armPinned` set so the held net stays cinched (CaptureNet's held-net
       // release keys off `_capturedByArm`) and the debris stays pinned to the
       // strut. DEBRIS_CAPTURED is still emitted (capture-secured signal — drives
-      // the first_capture teaching beat), but the GameFlowManager handler now
-      // SKIPS removeDebris while the catch is still held/pinned, so it persists.
+      // the first_capture teaching beat). Salvage/scoring and field removal now
+      // fire on CATCH_PROCESSED (emitted by _updateHoldingCatch once the
+      // furnace-transfer window elapses), NOT on dock arrival — see GameFlowManager.
       if (this.capturedDebris) {
         this.captures++;
         this._pinCatchToSelf();             // keep the catch welded to the strut tip
@@ -4362,9 +4363,39 @@ export class ArmUnit {
     this.tetherLine.visible = false;
     this.velocity.set(0, 0, 0);
 
-    // Keep the captured debris welded to the strut tip, full size, in-net.
-    // If the catch was somehow lost (cleared elsewhere), fall back to reload.
+    // Keep the captured debris welded to the strut tip, full size, in-net while
+    // the mother's furnace ingests it. After the transfer window the catch is
+    // handed off (CATCH_PROCESSED — GameFlowManager owns salvage/scoring/removal),
+    // cleared from the daughter, and she reloads. If the catch was cleared
+    // elsewhere, fall back to reload immediately (legacy hook).
     if (this.capturedDebris) {
+      const dwell = (Constants.FURNACE_TRANSFER && Constants.FURNACE_TRANSFER.DURATION_S) || 4.0;
+      if (this.stateTimer >= dwell) {
+        // ── Furnace-transfer complete: hand the catch to the mother ──
+        const debris = this.capturedDebris;
+        const debrisId = debris.id;
+        // Release the daughter's pin so the furnace step owns the debris.
+        debris._armPinned = false;
+        debris._capturedByArm = null;
+        debris._armPinPos = null;
+        this.capturedDebris = null;
+        this.reeling = false;
+        this.tetherTension = 0;
+        eventBus.emit(Events.CATCH_PROCESSED, { armId: this.id, debrisId, type: this.type });
+        eventBus.emit(Events.COMMS_MESSAGE, {
+          source: this.id,
+          text: `${this.id}: Catch transferred to the furnace — breaking down for salvage.`,
+          channel: 'CMD', priority: 'success',
+        });
+        this._transitionTo(S.RELOADING);
+        this.reloadProgress = 0;
+        this.reloadDuration = 0;
+        eventBus.emit(Events.CROSSBOW_RELOAD_START, {
+          armIndex: this.index,
+          duration: this.reloadDuration,
+        });
+        return;
+      }
       this._pinCatchToSelf();
     } else {
       this._transitionTo(S.RELOADING);

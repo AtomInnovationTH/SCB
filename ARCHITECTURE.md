@@ -243,7 +243,7 @@ All in [`InputManager.js`](js/systems/InputManager.js) `_handleKeyDown` + held-k
 | **Trawl** (Shift+G) | ✅ | TrawlManager auto-picks `clusters[0]` |
 | **Deorbit sacrifice** (Ctrl+Shift+D) | ✅ | |
 | **Reeling / Returning** (R/H, post-capture) | ✅ (indirect) | REELING = zero-fuel strut motor; RETURNING = FEEP |
-| **HOLDING_CATCH** (park the catch) | ✅ (auto) | Daughter parks oversize catch at strut, stays occupied (§ HANDOFF 1.9) |
+| **HOLDING_CATCH** (park the catch) | ✅ (auto) | Daughter parks catch at strut; after a `FURNACE_TRANSFER` window it hands the catch off (`CATCH_PROCESSED`) and reloads (§ HANDOFF 1.9) |
 | **Fishing** | ⚠️ orphaned from keys | `deployFishing()` exists; only via ArmManager autopilot path / comms — no direct key |
 | **Web Shot** | ⚠️ orphaned | `fireWebShot()` exists, **no keybinding** |
 | **Ablation** | ⚠️ orphaned | flag off + no keybinding |
@@ -253,7 +253,7 @@ All in [`InputManager.js`](js/systems/InputManager.js) `_handleKeyDown` + held-k
 
 **Weaver vs Spinner ARE differentiated** under `CAPTURE_NET=true`: Weaver fires a MEDIUM net, Spinner a SMALL net (different diameter/mass/launch-speed/spin/tether), and catch success is resolved by `computeClingProbability()` (velocity·contact·roughness·spin·tension·distance × pBase) — **not** the legacy flat 85% (now dead code). The *multi-tool* decision (magnet/gripper/pad) is what's missing, not net differentiation.
 
-**Captured-debris lifecycle:** authoritative `DebrisField.pinCapturedDebris()` welds the catch to the hauling arm (called post-arm-update). Catch is parked full-size in `HOLDING_CATCH` at the strut tip; **capture no longer removes debris** — field removal awaits a future furnace-transfer step (deferred). Salvage/scoring currently fires early on `ARM_RETURNED` (known timing debt).
+**Captured-debris lifecycle:** authoritative `DebrisField.pinCapturedDebris()` welds the catch to the hauling arm (called post-arm-update). Catch is parked full-size in `HOLDING_CATCH` at the strut tip. After the `FURNACE_TRANSFER.DURATION_S` window, `ArmUnit._updateHoldingCatch` emits **`CATCH_PROCESSED`** and clears the catch (→ RELOADING). `GameFlowManager`'s `CATCH_PROCESSED` handler owns **salvage extraction + scoring + field removal** — moved off `ARM_RETURNED` (dock arrival) so the reward fires at processing, and the parked catch always clears (no more 4-catch capture stall). The earlier premature-scoring + indefinite-park debt is resolved.
 
 ---
 

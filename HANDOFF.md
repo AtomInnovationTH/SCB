@@ -138,7 +138,7 @@ Removed all `DBG-*` / `[AUTO-TARGET]` / `[DAP-*]` / `[SK-ENTER/EXIT]` / `[NETTIN
 - [`GameFlowManager`](js/systems/GameFlowManager.js:1) no longer removes debris on `DEBRIS_CAPTURED` — the dead removal handler was deleted (removal now belongs to the future furnace step).
 - HUD: gold `HOLDING_CATCH` state colour (both `StatusPanel` maps); the 🎣 carried-catch badge shows; stale tether readout suppressed.
 
-**Still open (explicitly deferred):** (1) daughter → furnace transfer; (2) breakdown/processing of an oversize catch; (3) salvage/scoring still fires on `ARM_RETURNED` (dock arrival), so the reward is granted before any furnace step — premature under this model, revisit when the transfer lands. Forcing-function: parking 4 oversize catches occupies all 4 daughters and stalls capture until the furnace loop exists.
+**RESOLVED (2026-06-07 — furnace-transfer step landed):** (1) daughter → furnace transfer + (2) breakdown/processing + (3) salvage/scoring timing are all addressed. `ArmUnit._updateHoldingCatch` now runs a `Constants.FURNACE_TRANSFER.DURATION_S` window while parked, then emits **`CATCH_PROCESSED`**, releases the pin, clears `capturedDebris`, and transitions to `RELOADING` (so a parked daughter always frees herself — the 4-catch capture stall is gone). `GameFlowManager`'s reward block (score + salvage extraction + `SALVAGE_*` + field `removeDebris` + autosave + target-advance + shop) moved off `ARM_RETURNED` onto a new `CATCH_PROCESSED` handler, so the reward fires at processing, not dock arrival. Covered by `test-ArmUnit-ParkCatch.js` (furnace-transfer describe).
 
 Tests: [`test-ArmUnit-ParkCatch.js`](js/test/test-ArmUnit-ParkCatch.js:1) (NEW, registered in `run-tests.js`) — dock-completion park vs empty-reload, `_updateHoldingCatch` pin/clamp + empty fallback, and the ArmManager occupancy/predicate behaviour. Mutation-verified.
 
@@ -249,9 +249,9 @@ Ordered by effort/impact. Each is ready for Orchestrator to research+architect+c
 
 | Rank | Task | Effort | Notes / Acceptance |
 |---|---|---|---|
-| 1 | **Playtest park-the-catch (§1.9)** | ~30 min | Verify the catch stays **full-size cinched in the net at the strut tip** (no shrink/vanish), the holding daughter reads gold/occupied with the 🎣 badge, the other 3 daughters still deploy, and parking 4 oversize catches stalls capture (intended forcing-function) |
-| 2 | **Design the daughter → furnace transfer** | ~2h+ | The actual unsolved problem: how a parked `HOLDING_CATCH` catch gets from the strut tip into the mother. Determines how parked debris eventually clears and unblocks the salvage-timing fix (salvage currently fires early on `ARM_RETURNED`). Likely paired with the breakdown/comminution model (debris is too big to ingest whole) |
-| 3 | **Defer salvage/scoring to the furnace step** | ~1h | Currently granted on `ARM_RETURNED` (dock arrival), before any processing — premature under park-the-catch. Move it to the (new) furnace-transfer completion |
+| 1 | **Playtest the furnace-transfer + park-the-catch (§1.9)** | ~30 min | Verify the catch stays full-size at the strut for the `FURNACE_TRANSFER` window, then transfers (comms "Catch transferred to the furnace") and the daughter reloads + redeploys; salvage/score popup fires at transfer, not on dock arrival; capture no longer stalls after 4 catches |
+| 2 | ✅ **DONE (2026-06-07) — daughter → furnace transfer** | — | `ArmUnit._updateHoldingCatch` timed transfer → `CATCH_PROCESSED`, clears the catch → RELOADING. Stall resolved. |
+| 3 | ✅ **DONE (2026-06-07) — salvage/scoring deferred to the furnace step** | — | Reward block moved from `ARM_RETURNED` to the `CATCH_PROCESSED` handler in GameFlowManager (incl. field `removeDebris`). |
 | 4 | **In-game playtest of the b7d5fae capture lifecycle** | ~1h | Verify reel-in (catch welded to daughter), net-failure on oversize/heavy debris, tether-snap drift, and the teaching cards (`first_net_failed`, `first_tether_snap`) read correctly |
 | 5 | **Verify fishing/trawl behavior in-game** | ~1h | Resolving `_nearbyDebris` to canonical now makes fishing proximity-capture **actually functional** (it was effectively dead because the sparse wrappers lacked `_scenePosition`). Fishing may now auto-capture where it previously never did — confirm intended behavior. **Also check** a strut-parked catch (alive + `_scenePosition` near the mother) can't be re-grabbed by a fishing/trawl arm |
 | 6 | **`getDebrisNear` perf profile** | ~30 min | Profile the per-result `_scenePosition` / `orbit` clone under dense-debris load. If hot, apply the caching approach from [`archive/QUICK_WINS_PERF.md`](archive/QUICK_WINS_PERF.md:1) |
@@ -511,7 +511,7 @@ Core identity is **Jellyfish Fisherman** ([`GAME_DESIGN.md §2`](GAME_DESIGN.md:
 | InputManager | [`InputManager.js`](js/systems/InputManager.js:1) | Stable — spring-resistance rotation model |
 | DebrisField | [`DebrisField.js`](js/entities/DebrisField.js:1) | Stable — 2026-06-06 `pinCapturedDebris` + `getDebrisNear` snapshots. 2093+ LOC (split candidate) |
 | CaptureNet + CaptureNetVisual | [`CaptureNet.js`](js/entities/CaptureNet.js:1), [`CaptureNetVisual.js`](js/ui/CaptureNetVisual.js:1) | Stable — 2026-06-06 held-net lifecycle for daughter REELING |
-| GameFlowManager | [`GameFlowManager.js`](js/systems/GameFlowManager.js:1) | Stable — park-the-catch (§1.9): capture no longer removes debris; removal awaits the future furnace-transfer step |
+| GameFlowManager | [`GameFlowManager.js`](js/systems/GameFlowManager.js:1) | Stable — park-the-catch (§1.9); furnace-transfer (2026-06-07): salvage/scoring/`removeDebris` fire on `CATCH_PROCESSED`, not `ARM_RETURNED` |
 | CommsSystem | [`CommsSystem.js`](js/systems/CommsSystem.js:1) | Stable — 2026-06-06 net-failure vs tether-snap comms |
 | TargetPanel | [`TargetPanel.js`](js/ui/hud/TargetPanel.js:1) | Stable — 4-way sort + MOID badges |
 | CollisionAvoidance | [`CollisionAvoidanceSystem.js`](js/systems/CollisionAvoidanceSystem.js:1) | Stable |

@@ -76,6 +76,7 @@ export const Events = {
   // === DEBRIS ===
   DEBRIS_CLEARED:     'debris:cleared',
   DEBRIS_CAPTURED:    'debris:captured',
+  CATCH_PROCESSED:    'catch:processed',   // furnace-transfer complete — { armId, debrisId, type }; owns salvage+scoring
   DEBRIS_REMOVED:     'debris:removed',
   DEBRIS_KESSLER:     'debris:kesslerEvent',
   DEBRIS_COLLISION:   'debris:collision',

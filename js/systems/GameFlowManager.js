@@ -655,10 +655,15 @@ class GameFlowManager {
     // as the capture-secured signal (e.g. the first_capture teaching beat, in
     // TeachingSystem). Scoring/salvage still happens in the ARM_RETURNED handler.
 
-    eventBus.on(Events.ARM_RETURNED, (data) => {
-      // Arm pilot exit now self-managed by InputManager via ARM_RETURNED listener
-
-      if (data.captured && data.debrisId != null) {
+    // PARK-THE-CATCH delivery timing (HANDOFF §1.9): salvage + scoring + field
+    // removal no longer fire on ARM_RETURNED (dock ARRIVAL). They fire on
+    // CATCH_PROCESSED — emitted by ArmUnit._updateHoldingCatch once the parked
+    // catch finishes its furnace-transfer window. This defers the reward to the
+    // processing step AND is the moment the parked catch clears (so the daughter
+    // reloads — otherwise 4 parked catches stall capture). Arm pilot exit on
+    // ARM_RETURNED remains self-managed by InputManager.
+    eventBus.on(Events.CATCH_PROCESSED, (data) => {
+      if (data.debrisId != null) {
         // Get debris data before removal (for scoring)
         const debris = debrisField ? debrisField.getDebrisById(data.debrisId) : null;
 
@@ -674,13 +679,11 @@ class GameFlowManager {
           fuelEfficient = fuelUsed < avgFuelPerCapture * 0.5; // Used less than 50% of average
         }
 
-        // NOTE: debris removal is DEFERRED to dock completion (DEBRIS_CAPTURED,
-        // emitted by ArmUnit._updateDocking after the ~3s dock). Removing it here
-        // (on ARM_RETURNED, i.e. the instant the daughter reaches the dock) made
-        // the catch pop out of existence on arrival. Keeping it alive lets the
-        // ArmManager pin hold it visible at the mother through the dock; it's
-        // then stowed (shrunk + removed) when docking finishes. Scoring/salvage
-        // below still reads the (still-alive) debris snapshot.
+        // Field removal happens HERE (the furnace consumes the catch). It was
+        // intentionally deferred off ARM_RETURNED / DEBRIS_CAPTURED under
+        // park-the-catch; CATCH_PROCESSED is the step that owns it. The catch
+        // stayed alive + pinned at the strut through the dock + transfer window;
+        // now it is broken down for salvage and removed from the field.
 
         // Check tactical assessment bonus (tracked via WIREFRAME_ASSESSED event — Batch 3)
         const assessed = this._wireframeAssessed;
@@ -708,7 +711,7 @@ class GameFlowManager {
         // Comms notification (via EventBus — CommsSystem self-manages)
         eventBus.emit(Events.COMMS_SEND, {
           source: (data.armId || 'ARM').toUpperCase(),
-          text: 'Delivery complete — debris secured for deorbit',
+          text: 'Furnace transfer complete — catch broken down for salvage',
           priority: 'INFO',
         });
 
@@ -822,6 +825,13 @@ class GameFlowManager {
 
         // Update game state debris counter (belt-and-suspenders with scoringSystem)
         gameState.clearDebris();
+
+        // Furnace consumed the catch — remove it from the field (emits
+        // DEBRIS_REMOVED; wireframe/pins self-clear). Deferred here from the old
+        // ARM_RETURNED/DEBRIS_CAPTURED path under park-the-catch.
+        if (debrisField && data.debrisId != null) {
+          debrisField.removeDebris(data.debrisId);
+        }
 
         // Auto-save after successful capture
         this.saveGame();

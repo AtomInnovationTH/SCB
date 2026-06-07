@@ -97,7 +97,7 @@ Hold these while building the arc, or the learning curve breaks:
 | **THREE convention bugs** (lookAt/world-vs-local/frame-order) | Med | Silent visual breakage | HANDOFF §9/§10 SSOT; world-coord asserts in tests; mutation-test fixes |
 | **Comms arbiter regressions** (CP-4) | Med | Nag experts / mute critical alerts | `_critical` bypass tag; tier tests extend `test-CommsSystem.js` |
 | **Scope creep on the arc** | High | Never ships | Ship CP-1..CP-4 independently; chapters are data tables, not code |
-| **Salvage-timing debt** (scoring fires on `ARM_RETURNED`, before furnace) | Known | Reward granted prematurely under park-the-catch | Defer to the furnace-transfer step (HANDOFF §5 item 3) |
+| **Salvage-timing debt** (scoring fired on `ARM_RETURNED`, before furnace) | ✅ Resolved 2026-06-07 | Was: reward granted prematurely under park-the-catch | Fixed: salvage + scoring + field removal moved to `CATCH_PROCESSED` (furnace-transfer completion); parked catch now auto-clears → daughter reloads (no 4-catch stall) |
 | **Doc/code drift** (this whole pass) | High historically | Misleads future shifts | Update ARCHITECTURE drift table + this roadmap in the same shift as code changes |
 
 ---

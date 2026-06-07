@@ -362,6 +362,15 @@ export const Constants = {
     MODE_GLYPHS: { gecko: 'g', hooks: 'h', electrostatic: 'e', magnet: 'm', uv_cure: 'u' },
   },
 
+  // Daughter→furnace transfer (park-the-catch delivery; HANDOFF §1.9). A parked
+  // HOLDING_CATCH catch is handed to the mother's furnace over this window, then
+  // the daughter reloads. Salvage + scoring fire on transfer COMPLETION (the
+  // CATCH_PROCESSED event), not on dock arrival (ARM_RETURNED) — this is the
+  // fix for the premature-scoring + indefinite-park debt.
+  FURNACE_TRANSFER: {
+    DURATION_S: 4.0,   // breakdown/ingest window while the daughter holds at the strut
+  },
+
   // Tool-selection HUD constants (DAUGHTER_MULTITOOL_SPEC §4.1).
   TOOL_HUD: {
     ROW_HEIGHT_PX:     16,

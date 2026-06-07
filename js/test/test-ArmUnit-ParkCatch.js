@@ -120,6 +120,46 @@ describe('ArmUnit park-the-catch — HOLDING_CATCH update', () => {
   });
 });
 
+describe('ArmUnit park-the-catch — furnace transfer (CATCH_PROCESSED)', () => {
+  it('holds the catch until the furnace-transfer window elapses', () => {
+    eventBus.clear();
+    const arm = makeArm('weaver');
+    const debris = makeDebris(100);
+    attachCatch(arm, debris);
+    arm.state = S.HOLDING_CATCH;
+    arm.stateTimer = Constants.FURNACE_TRANSFER.DURATION_S - 0.5;  // not yet
+
+    const processed = captureEvent(Events.CATCH_PROCESSED, () => {
+      arm._updateHoldingCatch(0.016, new THREE.Vector3(0, 0, 0), null);
+    });
+    assert.equal(processed.length, 0, 'no transfer before the window elapses');
+    assert.equal(arm.state, S.HOLDING_CATCH, 'still parked');
+    assert.equal(arm.capturedDebris, debris, 'catch still held');
+    assert.equal(debris._armPinned, true, 're-pinned each frame');
+  });
+
+  it('transfers the catch to the furnace once the window elapses → RELOADING', () => {
+    eventBus.clear();
+    const arm = makeArm('weaver');
+    const debris = makeDebris(100);
+    attachCatch(arm, debris);
+    arm.state = S.HOLDING_CATCH;
+    arm.stateTimer = Constants.FURNACE_TRANSFER.DURATION_S + 0.1;  // window elapsed
+
+    const processed = captureEvent(Events.CATCH_PROCESSED, () => {
+      arm._updateHoldingCatch(0.016, new THREE.Vector3(0, 0, 0), null);
+    });
+
+    assert.equal(processed.length, 1, 'CATCH_PROCESSED fires exactly once on transfer');
+    assert.equal(processed[0].debrisId, debris.id, 'names the processed catch');
+    assert.equal(processed[0].armId, arm.id, 'names the arm');
+    assert.equal(arm.state, S.RELOADING, 'daughter reloads (freed from the deploy-pool block)');
+    assert.equal(arm.capturedDebris, null, 'catch cleared off the daughter');
+    assert.equal(debris._armPinned, false, 'daughter pin released (furnace owns it now)');
+    assert.equal(debris._capturedByArm, null, 'no longer pinned to the arm');
+  });
+});
+
 describe('ArmManager — a holding daughter is occupied, others stay free', () => {
   function mgrWith(arms) {
     const mgr = Object.create(ArmManager.prototype);
