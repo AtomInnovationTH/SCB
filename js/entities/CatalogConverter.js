@@ -15,7 +15,7 @@
  */
 
 import { Constants } from '../core/Constants.js';
-import { deriveFerrousFlags } from './debrisFerrous.js';
+import { deriveCaptureFlags } from './debrisFerrous.js';
 
 // ============================================================================
 // TYPE MAPPING: catalogue "type" → internal debris type key
@@ -191,8 +191,8 @@ export function catalogEntryToDebrisData(entry, id) {
     salvage: { xenon: 0, indium: 0, gaAs: 0, battery: 0, hydrazine: 0, lithium: 0, metals: [] },
     hasSalvage: false,
     metalMassKg: 0,
-    // DAUGHTER_MULTITOOL_SPEC §6.2 — magnet recommender inputs (shared SSOT)
-    ...deriveFerrousFlags(material, type),
+    // DAUGHTER_MULTITOOL_SPEC §6 — capture recommender inputs (shared SSOT)
+    ...deriveCaptureFlags(material, type, mass),
   };
 }
 

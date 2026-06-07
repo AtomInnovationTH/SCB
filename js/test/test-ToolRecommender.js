@@ -46,29 +46,32 @@ describe('ToolRecommender — NET / MAGNET priority (§7)', () => {
     assert.equal(r.recommended, 'MAGNET', 'magnet wins when the small net is oversize');
   });
 
-  it('too-heavy ferrous body (> 500 kg) → magnet skipped, net oversize', () => {
+  it('too-heavy ferrous body (> 500 kg) → magnet skipped; gripper takes oversize', () => {
     const r = recommendArmTool({
       armType: 'weaver', mass: 1200, debrisType: 'rocketBody',
-      ferromagnetic: true, hasFerrousFasteners: true,
+      ferromagnetic: true, hasFerrousFasteners: true, hasGrappleFixture: true,
     });
     assert.equal(r.scores.MAGNET, 0, 'beyond EPM 500 kg limit → not viable');
     assert.equal(r.scores.NET, 1, 'beyond LD-NET cap → Mother-only');
-    assert.equal(r.recommended, 'NET');
+    assert.equal(r.scores.GRIPPER, 3, 'gripper handles the oversize body (< 2000 kg)');
+    assert.equal(r.recommended, 'GRIPPER');
   });
 
   it('graceful degradation: absent ferrous flags → net-first fallback', () => {
     const r = recommendArmTool({ armType: 'weaver', mass: 200, debrisType: 'rocketBody' });
-    assert.equal(r.recommended, 'NET', 'undefined flags must not promote the magnet');
+    assert.equal(r.recommended, 'NET', 'net still wins the tie vs gripper (preference order)');
     assert.equal(r.scores.MAGNET, 0);
   });
 
   it('empty net magazine forces NET to 0 and promotes the next-best tool', () => {
     const r = recommendArmTool({
       armType: 'weaver', mass: 200, debrisType: 'rocketBody',
-      hasFerrousFasteners: true, netDepleted: true,
+      hasFerrousFasteners: true, hasGrappleFixture: true, netDepleted: true,
     });
     assert.equal(r.scores.NET, 0, 'depleted magazine → NET score 0');
-    assert.equal(r.recommended, 'MAGNET', 'magnet picks up the slack when nets are gone');
+    // 200 kg Al rocket body, nets gone: gripper (awkward-shape) outranks the
+    // ferrous-fastener magnet (§7 example).
+    assert.equal(r.recommended, 'GRIPPER', 'gripper picks up the awkward body when nets are gone');
   });
 
   it('reports the arm class toolset as the cycle order', () => {
@@ -78,10 +81,17 @@ describe('ToolRecommender — NET / MAGNET priority (§7)', () => {
     assert.deepEqual(s.alternatives, ['NET', 'PAD', 'MAGNET']);
   });
 
-  it('GRIPPER / PAD stay un-scored while their P3/P4 flags are OFF', () => {
-    const w = recommendArmTool({ armType: 'weaver', mass: 2000, debrisType: 'rocketBody' });
-    assert.equal(w.scores.GRIPPER, 0, 'gripper not offered until WEAVER_GRIPPER lands');
-    const s = recommendArmTool({ armType: 'spinner', mass: 3, debrisType: 'fragment' });
-    assert.equal(s.scores.PAD, 0, 'pad not offered until SPINNER_PAD lands');
+  it('P3 gripper: a fixtured target that fits the net shows GRIPPER as a visible alternative', () => {
+    const r = recommendArmTool({
+      armType: 'weaver', mass: 120, debrisType: 'defunctSat', hasGrappleFixture: true,
+    });
+    assert.equal(r.recommended, 'NET', 'net fits (120 < 500) and stays primary');
+    assert.equal(r.scores.GRIPPER, 3, 'fixtured + mass>=50 → gripper is awkward-shape ★★★');
+  });
+
+  it('P4 pad: spinner tiny fragment → PAD shown ★★★ (net stays the ▶ as it fits)', () => {
+    const r = recommendArmTool({ armType: 'spinner', mass: 4, debrisType: 'fragment' });
+    assert.equal(r.scores.PAD, 3, 'pad is offered ★★★ for a tiny fragment');
+    assert.equal(r.recommended, 'NET', 'SD-NET fits a 4 kg fragment, so it stays primary');
   });
 });

@@ -325,6 +325,15 @@ export const Events = {
   MAGNETIC_GRIP_ACQUIRED: 'magnet:gripAcquired',    // { armId, targetId, mass }
   MAGNETIC_GRIP_FAILED:   'magnet:gripFailed',      // { armId, targetId, reason }
   MAGNETIC_RELEASE:       'magnet:release',         // { armId, targetId } — explicit pulse-off
+  GRIPPER_LATCH_ATTEMPT:  'gripper:latchAttempt',   // { armId, targetId, fixtured }
+  GRIPPER_LATCHED:        'gripper:latched',        // { armId, targetId }
+  GRIPPER_SLIPPED:        'gripper:slipped',        // { armId, targetId, reason: 'no_fixture'|'p_roll'|'oversize' }
+  GRIPPER_RELEASED:       'gripper:released',       // { armId, targetId }
+  PAD_CONTACT_ATTEMPT:    'pad:contactAttempt',     // { armId, targetId, contactVel }
+  PAD_ADHERED:            'pad:adhered',            // { armId, targetId, mode }
+  PAD_BOUNCED:            'pad:bounced',            // { armId, targetId, reason: 'too_fast'|'no_mode'|'p_roll' }
+  PAD_RELEASED:           'pad:released',           // { armId, targetId }
+  PAD_UV_DOSE_USED:       'pad:uvDoseUsed',         // { armId, dosesRemaining } — §13 Q3
 
   // === FOCUS ACTION ===
   FOCUS_ACTION:           'focus:action',           // F key — context-sensitive smart action

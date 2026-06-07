@@ -818,6 +818,9 @@ export class DockingReticle {
       const glyph = GLYPHS[kind] || kind[0];
       let label = kind;
       if (kind === 'NET') label = `NET (${netCount})`;
+      else if (kind === 'PAD' && typeof arm._padUvCureDosesRemaining === 'number') {
+        label = `PAD [u:${arm._padUvCureDosesRemaining}]`;   // §13 Q3 — UV-cure magazine
+      }
 
       // selection marker
       ctx.font = `bold 11px ${FONT}`;

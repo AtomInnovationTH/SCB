@@ -148,6 +148,9 @@ import './test-ArmUnit-ParkCatch.js';
 import './test-ToolRecommender.js';
 import './test-ArmUnit-MagneticGrapple.js';
 import './test-DockingReticle-ToolPanel.js';
+// CP-1 / P3 + P4: gripper jaws + multi-modal pad
+import './test-ArmUnit-GripperGrapple.js';
+import './test-ArmUnit-PadContact.js';
 
 // ST-9.5 C-7: Tether Reel — strut-mounted reel state machine, cable physics, persistence
 import './test-TetherReel.js';

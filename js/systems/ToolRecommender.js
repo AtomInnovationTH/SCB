@@ -36,7 +36,8 @@ import { Constants } from '../core/Constants.js';
  * @param {string}  [opts.debrisType]                  - 'rocketBody'|'defunctSat'|'fragment'|...
  * @param {boolean} [opts.ferromagnetic=false]         - pure-steel hull (direct EPM grip)
  * @param {boolean} [opts.hasFerrousFasteners=false]   - steel bolts/brackets (bolt-latch)
- * @param {boolean} [opts.netDepleted=false]           - this arm's net magazine is empty
+ * @param {boolean} [opts.hasGrappleFixture=false]      - protruding fixture for the gripper (P3)
+ * @param {boolean} [opts.netDepleted=false]            - this arm's net magazine is empty
  * @returns {ToolRecommendation}
  */
 export function recommendArmTool(opts = {}) {
@@ -45,6 +46,7 @@ export function recommendArmTool(opts = {}) {
   const dType    = opts.debrisType || null;
   const ferro    = opts.ferromagnetic === true;
   const fasten   = opts.hasFerrousFasteners === true;
+  const fixture  = opts.hasGrappleFixture === true;
   const netGone  = opts.netDepleted === true;
 
   const TOOLSETS = Constants.DAUGHTER_TOOLSETS || {};
@@ -59,6 +61,8 @@ export function recommendArmTool(opts = {}) {
 
   const MAG = Constants.MAGNETIC_GRAPPLE || {};
   const tooHeavyForMagnet = mass > ((MAG.MAX_DEBRIS_MASS_KG) || 500);
+  const GRP = Constants.GRIPPER_GRAPPLE || {};
+  const tooHeavyForGripper = mass > ((GRP.MAX_DEBRIS_MASS_KG) || 2000);
 
   const gripperOn = Constants.isFeatureEnabled('WEAVER_GRIPPER');
   const padOn     = Constants.isFeatureEnabled('SPINNER_PAD');
@@ -88,11 +92,14 @@ export function recommendArmTool(opts = {}) {
     hints.MAGNET  = ferro ? 'ferrous hull — direct grip' : 'ferrous fasteners — bolt-latch';
   }
 
-  // ── GRIPPER fork (P3, flag-gated) — oversize / awkward shape / fixture ──
+  // ── GRIPPER fork (P3, §13 Q1, flag-gated) — oversize / awkward / fixture ──
   if ('GRIPPER' in scores && gripperOn) {
-    const awkward = dType === 'rocketBody';
-    if (netOversize || awkward) {
-      scores.GRIPPER = 3; hints.GRIPPER = netOversize ? 'oversize for net' : 'awkward shape';
+    const awkwardShape = dType === 'rocketBody' || (fixture && mass >= 50);
+    if (!tooHeavyForGripper && (netOversize || awkwardShape)) {
+      scores.GRIPPER = 3;
+      hints.GRIPPER = netOversize ? 'oversize for net' : 'awkward shape / fixture';
+    } else if (fixture) {
+      scores.GRIPPER = 1; hints.GRIPPER = 'available';   // visible, not recommended
     }
   }
 
@@ -101,11 +108,14 @@ export function recommendArmTool(opts = {}) {
     scores.PAD = 3; hints.PAD = 'pad auto-resolves adhesion';
   }
 
-  // ── Rank: highest score; ties broken by toolset (primary-first) order ──
+  // ── Rank: highest score; ties broken by preference order (NET → MAGNET →
+  // GRIPPER → PAD) so a ferrous hull prefers the direct magnet over the gripper,
+  // and the net stays primary whenever it ties a specialist tool. ──
+  const PREF = ['NET', 'MAGNET', 'GRIPPER', 'PAD'];
   let recommended = toolset[0] || 'NET';
   let best = -1;
-  for (const k of toolset) {            // iterate canonical order → first max wins
-    if (scores[k] > best) { best = scores[k]; recommended = k; }
+  for (const k of PREF) {
+    if (k in scores && scores[k] > best) { best = scores[k]; recommended = k; }
   }
 
   return { recommended, alternatives: toolset, scores, hints };

@@ -319,6 +319,49 @@ export const Constants = {
     P_GRIP_NON_FERROUS:     0.05,   // all-Al fragment / composite — residual flux only
   },
 
+  // 3-jaw gripper tuning (P3; cite archive/V3 Octopus.md:820-828).
+  GRIPPER_GRAPPLE: {
+    REACH_M:            0.30,   // jaws extend 30 cm beyond −Y face
+    GRIP_DIAMETER_M:    0.050,  // 50 mm aperture
+    GRIP_FORCE_N:       30,
+    EXTEND_TIME_S:      0.3,    // jaws extend, audible servo click
+    SEEK_TIME_S:        0.4,    // raycast for a fixture within ±15° of −Y
+    CLOSE_TIME_S:       1.2,    // spiral cam closes 50→0 mm
+    RATCHET_HOLD:       true,   // zero-power lock once closed
+    P_GRIP_FIXTURED:    0.90,   // target has docking port / strut / antenna stub
+    P_GRIP_UNFIXTURED:  0.10,   // target lacks protrusion — should not be selected
+    MAX_DEBRIS_MASS_KG: 2000,   // mechanical limit; doc-aspirational
+  },
+
+  // Multi-modal pad tuning (P4; cite archive/V3 Octopus.md:799-818).
+  PAD_CONTACT: {
+    PAD_RADIUS_M:        0.080,   // 8 cm contact patch
+    CONTACT_VEL_MAX_M_S: 0.20,    // any faster and the pad bounces (soft-contact regime)
+    APPROACH_TIMEOUT_S:  4.0,     // max APPROACH_SOFT duration before bounce
+    CONTACT_HOLD_S:      1.0,     // dwell before the P_GRIP roll
+    ENERGIZE_PULSE_S:    0.3,
+    RELEASE_PULSE_S:     0.2,
+    GECKO_TEMP_MIN_C:    -40,
+    GECKO_TEMP_MAX_C:    80,
+    UV_CURE_DOSES_Y0:    10,      // per-arm magazine (§13 Q3 — hard cap; 0 ⇒ uv_cure removed)
+    ADHESION_MODES: ['gecko', 'hooks', 'electrostatic', 'magnet', 'uv_cure'],
+    // Auto-resolved on contact by surface metadata (V3 Octopus.md:811-816):
+    //  1. material ∈ {steel,iron_alloy}                          → magnet
+    //  2. material ∈ {mli_mylar} OR roughness > 0.7              → hooks
+    //  3. material ∈ {aluminum,kapton,glass_ceramic,solar_cell}  → gecko (warm window)
+    //  4. material ∈ {composite}                                 → electrostatic
+    //  5. else                                                   → uv_cure (finite doses)
+    P_GRIP_BY_MODE: {
+      gecko:         0.90,
+      hooks:         0.95,
+      electrostatic: 0.70,
+      magnet:        0.95,
+      uv_cure:       0.98,
+    },
+    P_GRIP_NO_MODE:  0.05,        // contact happened but no mode resolved
+    MODE_GLYPHS: { gecko: 'g', hooks: 'h', electrostatic: 'e', magnet: 'm', uv_cure: 'u' },
+  },
+
   // Tool-selection HUD constants (DAUGHTER_MULTITOOL_SPEC §4.1).
   TOOL_HUD: {
     ROW_HEIGHT_PX:     16,
@@ -534,8 +577,8 @@ export const Constants = {
 
     // NEW — CP-1 / DAUGHTER_MULTITOOL_SPEC: real per-arm tool choice
     DAUGHTER_MULTITOOL:        true,   // P2 ON — tool-selection HUD, backtick cycle, MAGNETIC_GRAPPLE
-    WEAVER_GRIPPER:            false,  // P3 — Weaver tertiary gripper jaws (reserved)
-    SPINNER_PAD:               false,  // P4 — Spinner secondary multi-modal pad (reserved)
+    WEAVER_GRIPPER:            true,   // P3 ON — Weaver tertiary gripper jaws (GRIPPER_GRAPPLE)
+    SPINNER_PAD:               true,   // P4 ON — Spinner secondary multi-modal pad (PAD_CONTACT)
 
     // NEW — ST-9.5 C-7: Strut-Mounted Tether Reel
     TETHER_REEL:               false,  // ST-9.5 C-7 — strut-mounted reel state machine + cable physics

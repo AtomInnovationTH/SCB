@@ -25,7 +25,7 @@ import {
   getVisualMode,
 } from '../ui/DebrisWireframe.js';
 import { catalogEntryToDebrisData } from './CatalogConverter.js';
-import { deriveFerrousFlags } from './debrisFerrous.js';
+import { deriveCaptureFlags } from './debrisFerrous.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -718,11 +718,10 @@ export class DebrisField {
       salvage,
       hasSalvage,
       metalMassKg,
-      // DAUGHTER_MULTITOOL_SPEC §6.2 — magnet recommender inputs (graceful).
-      // ferromagnetic = pure-steel hull (direct EPM grip, rare in Y0 pool);
-      // hasFerrousFasteners = rocket bodies / defunct sats carry steel bolts &
-      // brackets even when the hull is Al/Ti (§13 Q4). Shared SSOT: debrisFerrous.js.
-      ...deriveFerrousFlags(material, type),
+      // DAUGHTER_MULTITOOL_SPEC §6 — capture recommender inputs (graceful).
+      // ferromagnetic / hasFerrousFasteners (P2), hasGrappleFixture (P3),
+      // surfaceRoughness (P4 pad-mode resolver). Shared SSOT: debrisFerrous.js.
+      ...deriveCaptureFlags(material, type, mass),
       // ST-6.2: Visual data for atlas system
       isReal: false,
       country: null,

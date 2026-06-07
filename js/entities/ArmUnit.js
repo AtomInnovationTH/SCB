@@ -177,7 +177,19 @@ export class ArmUnit {
     // Magnetic-grapple sub-state machine (P2): null | 'ENERGIZING' | 'CLOSING' | 'GRIP'
     this._magPhase = null;
     this._magTimer = 0;
-    this._magLockedDebrisId = null;        // debris id held under AUTOPILOT_TARGET_LOCK during a grapple
+    // Tool-closing CA exemption: debris id held under AUTOPILOT_TARGET_LOCK while
+    // the daughter deliberately closes to contact (magnet / gripper / pad). Released
+    // centrally on ANY exit from the closing state (_transitionTo) so it can't leak.
+    this._toolLockedDebrisId = null;
+    // Gripper-grapple sub-FSM (P3): null | 'EXTEND' | 'SEEK' | 'CLOSE'
+    this._gripPhase = null;
+    this._gripTimer = 0;
+    // Pad-contact sub-FSM (P4): null | 'APPROACH' | 'CONTACT'
+    this._padPhase = null;
+    this._padTimer = 0;
+    this._padResolvedMode = null;
+    // §13 Q3 — per-arm UV-cure magazine (finite; runtime-only at Y0, persistence deferred).
+    this._padUvCureDosesRemaining = (Constants.PAD_CONTACT && Constants.PAD_CONTACT.UV_CURE_DOSES_Y0) || 10;
 
     // V5 Ablation state
     this.ablationTarget = null;            // Target being ablated
@@ -2036,6 +2048,8 @@ export class ArmUnit {
      case S.TANGLED:    this._updateTangled(dt); break;
      case S.STATION_KEEP: this._updateStationKeep(dt); break;
      case S.MAGNETIC_GRAPPLE: this._updateMagneticGrapple(dt); break;
+     case S.GRIPPER_GRAPPLE: this._updateGripperGrapple(dt); break;
+     case S.PAD_CONTACT: this._updatePadContact(dt); break;
      case S.EXPENDED:   this._updateExpended(dt); break;
    }
 
@@ -2231,13 +2245,14 @@ export class ArmUnit {
     if (newState === S.STATION_KEEP && Constants.isFeatureEnabled('DAUGHTER_MULTITOOL')) {
       this._refreshToolRecommendation();
     }
-    // CP-1 / P2: release the magnetic-grapple CA exemption on ANY exit from
-    // MAGNETIC_GRAPPLE (success, failure, OR an external recall/deorbit), so the
-    // AUTOPILOT_TARGET_LOCK set on entry can never leak and permanently exempt a
-    // debris from collision avoidance.
-    if (old === S.MAGNETIC_GRAPPLE && this._magLockedDebrisId != null) {
-      eventBus.emit(Events.AUTOPILOT_TARGET_UNLOCK, { debrisId: this._magLockedDebrisId });
-      this._magLockedDebrisId = null;
+    // CP-1: release the tool-closing CA exemption on ANY exit from a closing
+    // state (MAGNETIC_GRAPPLE / GRIPPER_GRAPPLE / PAD_CONTACT) — success,
+    // failure, OR an external recall/deorbit — so the AUTOPILOT_TARGET_LOCK set
+    // on entry can never leak and permanently exempt a debris from avoidance.
+    if ((old === S.MAGNETIC_GRAPPLE || old === S.GRIPPER_GRAPPLE || old === S.PAD_CONTACT)
+        && this._toolLockedDebrisId != null) {
+      eventBus.emit(Events.AUTOPILOT_TARGET_UNLOCK, { debrisId: this._toolLockedDebrisId });
+      this._toolLockedDebrisId = null;
     }
     // ST-8.3.4: Auto-adjust ISP based on flight phase for current metal
     this._updateMetalIspForPhase(newState);
@@ -3230,6 +3245,7 @@ export class ArmUnit {
       debrisType: target ? (target.type || null) : null,
       ferromagnetic: !!(target && target.ferromagnetic === true),
       hasFerrousFasteners: !!(target && target.hasFerrousFasteners === true),
+      hasGrappleFixture: !!(target && target.hasGrappleFixture === true),
       netDepleted,
     });
     this._toolScores = rec.scores;
@@ -3270,8 +3286,8 @@ export class ArmUnit {
     if (this.state !== S.STATION_KEEP) return false;
     switch (this.selectedTool) {
       case 'MAGNET':  return this.magneticGrapple();
-      case 'GRIPPER': return Constants.isFeatureEnabled('WEAVER_GRIPPER') ? false : this._toolOffline('GRIPPER');
-      case 'PAD':     return Constants.isFeatureEnabled('SPINNER_PAD')    ? false : this._toolOffline('PAD');
+      case 'GRIPPER': return Constants.isFeatureEnabled('WEAVER_GRIPPER') ? this.gripperGrapple() : this._toolOffline('GRIPPER');
+      case 'PAD':     return Constants.isFeatureEnabled('SPINNER_PAD')    ? this.padContact()    : this._toolOffline('PAD');
       case 'NET':
       default:        return this.captureFromStationKeep();
     }
@@ -3317,7 +3333,7 @@ export class ArmUnit {
     audioSystem.playMagnetic();
     // CA exemption during CLOSING (the arm intentionally drives < 0.5 m to the target).
     // The lock is released centrally on ANY exit from MAGNETIC_GRAPPLE (_transitionTo).
-    this._magLockedDebrisId = target.id;
+    this._toolLockedDebrisId = target.id;
     eventBus.emit(Events.AUTOPILOT_TARGET_LOCK, { debrisId: target.id });
     eventBus.emit(Events.MAGNETIC_GRIP_ATTEMPT, {
       armId: this.id, targetId: target.id, pBase: this._magnetGripProbability(target),
@@ -3391,26 +3407,12 @@ export class ArmUnit {
 
     // ── Grip acquired ── reuse the GRAPPLED → REELING lifecycle (net-integrity
     // is skipped for non-NET catches via the _captureToolKind guard).
-    this.capturedDebris = target;
-    target._captured = true;
-    target._capturedByArm = this;
-    this._captureToolKind = 'MAGNET';
-    this._pinCatchToSelf();
     this._magPhase = null;
-
     eventBus.emit(Events.MAGNETIC_GRIP_ACQUIRED, {
       armId: this.id, targetId: target.id, mass: target.mass || 0,
     });
-    eventBus.emit(Events.ARM_CAPTURED, {
-      armId: this.id, targetId: target.id, type: this.type,
-      detached: this.isDetached, mass: target.mass || 0,
-      debrisType: target.type || 'unknown', tool: 'MAGNET',
-    });
-    eventBus.emit(Events.COMMS_MESSAGE, {
-      source: this.id, text: `${this.id}: EPM grip secured — magnetic latch holding. Reeling in.`,
-      channel: 'CMD', priority: 'success',
-    });
-    this._transitionTo(S.GRAPPLED);  // _transitionTo releases the CA lock on exit
+    this._secureToolCatch(target, 'MAGNET',
+      `${this.id}: EPM grip secured — magnetic latch holding. Reeling in.`);
   }
 
   /** @private Magnetic grip failed/aborted → release lock, return to reload. */
@@ -3430,11 +3432,260 @@ export class ArmUnit {
           ? `${this.id}: Lost contact on approach — magnetic grapple aborted. Returning.`
           : `${this.id}: Magnetic grip slipped — Returning to reload. Re-attempt or try the net.`;
     eventBus.emit(Events.COMMS_MESSAGE, { source: this.id, text: msg, channel: 'CMD', priority: 'warning' });
+    this._endToolFailure();
+  }
+
+  // ── Shared non-net catch plumbing (magnet / gripper / pad) ──────────────
+
+  /**
+   * @private Secure a non-net catch and hand off to the shared GRAPPLED →
+   * REELING → park-the-catch lifecycle. Emits ARM_CAPTURED (tagged with the
+   * tool) so scoring/teaching fire exactly as for a net catch.
+   */
+  _secureToolCatch(target, toolKind, successMsg) {
+    this.capturedDebris = target;
+    target._captured = true;
+    target._capturedByArm = this;
+    this._captureToolKind = toolKind;
+    this._pinCatchToSelf();
+    eventBus.emit(Events.ARM_CAPTURED, {
+      armId: this.id, targetId: target.id, type: this.type,
+      detached: this.isDetached, mass: target.mass || 0,
+      debrisType: target.type || 'unknown', tool: toolKind,
+    });
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      source: this.id, text: successMsg, channel: 'CMD', priority: 'success',
+    });
+    this._transitionTo(S.GRAPPLED);  // _transitionTo releases the CA lock on exit
+  }
+
+  /** @private Shared cleanup tail for a failed/aborted non-net tool attempt. */
+  _endToolFailure() {
     if (this._stationKeepTarget) this._stationKeepTarget._isStationKeepTarget = false;
     this._stationKeepTarget = null;
     this.target = null;
     this._captureToolKind = 'NET';
-    this._transitionTo(S.RETURNING);
+    this._transitionTo(S.RETURNING);  // _transitionTo releases the CA lock on exit
+  }
+
+  // ============================================================================
+  // GRIPPER JAWS (P3 — WEAVER_GRIPPER)
+  // ============================================================================
+
+  /**
+   * Begin a 3-jaw gripper grapple from STATION_KEEP (P3). Sub-FSM in
+   * `_updateGripperGrapple`: EXTEND → SEEK (fixture raycast) → CLOSE → latch roll.
+   * @returns {boolean}
+   */
+  gripperGrapple() {
+    if (this.state !== S.STATION_KEEP) return false;
+    if (!Constants.isFeatureEnabled('WEAVER_GRIPPER')) return this._toolOffline('GRIPPER');
+    const target = this._stationKeepTarget || this.target;
+    if (!target) { audioSystem.playClickFail(); return false; }
+
+    eventBus.emit(Events.STATION_KEEP_EXITED, { armId: this.id, reason: 'gripper' });
+    this._gripPhase = 'EXTEND';
+    this._gripTimer = 0;
+    this._captureToolKind = 'GRIPPER';
+    audioSystem.playClick();   // servo click
+    this._toolLockedDebrisId = target.id;
+    eventBus.emit(Events.AUTOPILOT_TARGET_LOCK, { debrisId: target.id });
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      source: this.id, text: `${this.id}: Extending gripper jaws — seeking a fixture`,
+      channel: 'CMD', priority: 'info',
+    });
+    this._transitionTo(S.GRIPPER_GRAPPLE);
+    return true;
+  }
+
+  /** @private GRIPPER_GRAPPLE sub-FSM: EXTEND → SEEK → CLOSE → latch roll. */
+  _updateGripperGrapple(dt) {
+    this._gripTimer += dt;
+    const G = Constants.GRIPPER_GRAPPLE;
+    const target = this._stationKeepTarget || this.target;
+    if (!target || target._captured || target.alive === false) {
+      this._failGripperGrip('no_fixture');
+      return;
+    }
+
+    if (this._gripPhase === 'EXTEND') {
+      if (this._gripTimer >= G.EXTEND_TIME_S) { this._gripPhase = 'SEEK'; this._gripTimer = 0; }
+      return;
+    }
+
+    if (this._gripPhase === 'SEEK') {
+      const tPos = target._scenePosition;
+      if (tPos) this.position.lerp(tPos, Math.min(1, dt * 2.0));
+      if (this._gripTimer >= G.SEEK_TIME_S) {
+        const fixtured = target.hasGrappleFixture === true;
+        eventBus.emit(Events.GRIPPER_LATCH_ATTEMPT, { armId: this.id, targetId: target.id, fixtured });
+        this._gripPhase = 'CLOSE';
+        this._gripTimer = 0;
+      }
+      return;
+    }
+
+    if (this._gripPhase === 'CLOSE') {
+      if (this._gripTimer >= G.CLOSE_TIME_S) this._resolveGripperLatch(target);
+    }
+  }
+
+  /** @private Resolve the gripper latch roll → GRAPPLED (success) or RETURNING (slip). */
+  _resolveGripperLatch(target) {
+    const G = Constants.GRIPPER_GRAPPLE;
+    if ((target.mass || 0) > G.MAX_DEBRIS_MASS_KG) { this._failGripperGrip('oversize'); return; }
+    const fixtured = target.hasGrappleFixture === true;
+    const p = fixtured ? G.P_GRIP_FIXTURED : G.P_GRIP_UNFIXTURED;
+    // Test seam: `_gripRollOverride` (0..1) forces a deterministic roll.
+    const roll = (this._gripRollOverride != null) ? this._gripRollOverride : Math.random();
+    if (roll >= p) { this._failGripperGrip(fixtured ? 'p_roll' : 'no_fixture'); return; }
+
+    this._gripPhase = null;
+    eventBus.emit(Events.GRIPPER_LATCHED, { armId: this.id, targetId: target.id });
+    this._secureToolCatch(target, 'GRIPPER',
+      `${this.id}: Gripper latched — ratchet holding (zero-power). Reeling in.`);
+  }
+
+  /** @private Gripper slip/abort → release, return to reload. */
+  _failGripperGrip(reason) {
+    const target = this._stationKeepTarget || this.target;
+    this._gripPhase = null;
+    audioSystem.playClickFail();
+    if (target) {
+      eventBus.emit(Events.GRIPPER_SLIPPED, { armId: this.id, targetId: target.id, reason });
+      eventBus.emit(Events.GRIPPER_RELEASED, { armId: this.id, targetId: target.id });
+    }
+    const msg = reason === 'oversize'
+      ? `${this.id}: Gripper failed — target beyond jaw mass limit. Returning to reload.`
+      : reason === 'no_fixture'
+        ? `${this.id}: Gripper found no fixture to grab. Returning; the net may suit this target.`
+        : `${this.id}: Gripper slipped off the fixture. Returning to reload.`;
+    eventBus.emit(Events.COMMS_MESSAGE, { source: this.id, text: msg, channel: 'CMD', priority: 'warning' });
+    this._endToolFailure();
+  }
+
+  // ============================================================================
+  // MULTI-MODAL PAD (P4 — SPINNER_PAD)
+  // ============================================================================
+
+  /**
+   * Resolve the pad adhesion mode deterministically from target surface
+   * metadata at contact (§5.3 priority). "The pad figures it out." Returns a
+   * mode string or null (NO_MODE — e.g. exotic surface with UV doses spent).
+   * @returns {string|null}
+   */
+  _resolvePadMode(target) {
+    const material = target.material;
+    const roughness = (typeof target.surfaceRoughness === 'number') ? target.surfaceRoughness : 0.5;
+    if (material === 'steel' || material === 'iron_alloy') return 'magnet';
+    if (material === 'mli_mylar' || roughness > 0.7) return 'hooks';
+    if (material === 'aluminum' || material === 'kapton'
+        || material === 'glass_ceramic' || material === 'solar_cell') return 'gecko';  // warm window assumed at Y0
+    if (material === 'composite') return 'electrostatic';
+    // Last resort — finite UV-cure magazine (§13 Q3): once spent, NO_MODE.
+    if ((this._padUvCureDosesRemaining || 0) > 0) return 'uv_cure';
+    return null;
+  }
+
+  /**
+   * Begin a multi-modal pad contact from STATION_KEEP (P4). Sub-FSM in
+   * `_updatePadContact`: APPROACH_SOFT → CONTACT (resolve mode) → grip roll.
+   * @returns {boolean}
+   */
+  padContact() {
+    if (this.state !== S.STATION_KEEP) return false;
+    if (!Constants.isFeatureEnabled('SPINNER_PAD')) return this._toolOffline('PAD');
+    const target = this._stationKeepTarget || this.target;
+    if (!target) { audioSystem.playClickFail(); return false; }
+
+    eventBus.emit(Events.STATION_KEEP_EXITED, { armId: this.id, reason: 'pad' });
+    this._padPhase = 'APPROACH';
+    this._padTimer = 0;
+    this._padResolvedMode = null;
+    this._captureToolKind = 'PAD';
+    audioSystem.playClick();
+    this._toolLockedDebrisId = target.id;
+    eventBus.emit(Events.AUTOPILOT_TARGET_LOCK, { debrisId: target.id });
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      source: this.id, text: `${this.id}: Soft approach — bringing pad to contact`,
+      channel: 'CMD', priority: 'info',
+    });
+    this._transitionTo(S.PAD_CONTACT);
+    return true;
+  }
+
+  /** @private PAD_CONTACT sub-FSM: APPROACH_SOFT → CONTACT → grip roll. */
+  _updatePadContact(dt) {
+    this._padTimer += dt;
+    const P = Constants.PAD_CONTACT;
+    const target = this._stationKeepTarget || this.target;
+    if (!target || target._captured || target.alive === false) {
+      this._failPadContact('no_mode');
+      return;
+    }
+
+    if (this._padPhase === 'APPROACH') {
+      const tPos = target._scenePosition;
+      if (tPos) {
+        this.position.lerp(tPos, Math.min(1, dt * 1.5));   // soft closing
+        const distM = this.position.distanceTo(tPos) / M;
+        if (distM <= P.PAD_RADIUS_M) {
+          const contactVel = (this._padContactVelOverride != null)
+            ? this._padContactVelOverride
+            : this.velocity.length() / M;
+          eventBus.emit(Events.PAD_CONTACT_ATTEMPT, { armId: this.id, targetId: target.id, contactVel });
+          if (contactVel > P.CONTACT_VEL_MAX_M_S) { this._failPadContact('too_fast'); return; }
+          this._padResolvedMode = this._resolvePadMode(target);
+          this._padPhase = 'CONTACT';
+          this._padTimer = 0;
+          return;
+        }
+      }
+      if (this._padTimer >= P.APPROACH_TIMEOUT_S) this._failPadContact('too_fast');
+      return;
+    }
+
+    if (this._padPhase === 'CONTACT') {
+      if (this._padTimer >= P.CONTACT_HOLD_S) this._resolvePadGrip(target);
+    }
+  }
+
+  /** @private Resolve the pad grip roll → GRAPPLED (adhered) or RETURNING (bounced). */
+  _resolvePadGrip(target) {
+    const P = Constants.PAD_CONTACT;
+    const mode = this._padResolvedMode;
+    const p = mode ? (P.P_GRIP_BY_MODE[mode] ?? P.P_GRIP_NO_MODE) : P.P_GRIP_NO_MODE;
+    // Test seam: `_padRollOverride` (0..1) forces a deterministic roll.
+    const roll = (this._padRollOverride != null) ? this._padRollOverride : Math.random();
+    if (roll >= p) { this._failPadContact(mode ? 'p_roll' : 'no_mode'); return; }
+
+    // Success — decrement the UV-cure magazine IFF that mode actually adhered.
+    if (mode === 'uv_cure') {
+      this._padUvCureDosesRemaining = Math.max(0, (this._padUvCureDosesRemaining || 0) - 1);
+      eventBus.emit(Events.PAD_UV_DOSE_USED, { armId: this.id, dosesRemaining: this._padUvCureDosesRemaining });
+    }
+    this._padPhase = null;
+    eventBus.emit(Events.PAD_ADHERED, { armId: this.id, targetId: target.id, mode });
+    this._secureToolCatch(target, 'PAD',
+      `${this.id}: Pad adhered (${mode || 'no-mode'}) — holding. Reeling in.`);
+  }
+
+  /** @private Pad bounce/abort → release, return to reload. */
+  _failPadContact(reason) {
+    const target = this._stationKeepTarget || this.target;
+    this._padPhase = null;
+    audioSystem.playClickFail();
+    if (target) {
+      eventBus.emit(Events.PAD_BOUNCED, { armId: this.id, targetId: target.id, reason });
+      eventBus.emit(Events.PAD_RELEASED, { armId: this.id, targetId: target.id });
+    }
+    const msg = reason === 'too_fast'
+      ? `${this.id}: Pad bounced — contact too fast. Returning; ease the approach and retry.`
+      : reason === 'no_mode'
+        ? `${this.id}: Pad found no adhesion mode for this surface. Returning to reload.`
+        : `${this.id}: Pad failed to adhere. Returning to reload.`;
+    eventBus.emit(Events.COMMS_MESSAGE, { source: this.id, text: msg, channel: 'CMD', priority: 'warning' });
+    this._endToolFailure();
   }
 
   /** NETTING: net deployment + capture attempt (3s) */

@@ -47,17 +47,18 @@ describe('DockingReticle — tool-selection panel', () => {
     assert.ok(ctx.texts.includes('\u25B6'), 'selection marker (▶) drawn for selected tool');
   });
 
-  it('renders NET / PAD / MAGNET rows for a Spinner', () => {
+  it('renders NET / PAD / MAGNET rows for a Spinner, with the UV-cure counter', () => {
     const arm = weaverArm();
     arm.type = 'spinner';
     arm.toolset = ['NET', 'PAD', 'MAGNET'];
     arm.selectedTool = 'NET';
-    arm._toolScores = { NET: 3, PAD: 0, MAGNET: 0 };
+    arm._toolScores = { NET: 3, PAD: 3, MAGNET: 0 };
+    arm._padUvCureDosesRemaining = 7;
     const r = reticleWith(arm);
     const ctx = mockCtx();
     r._drawToolSelectionPanel(ctx, 400, 300);
     const blob = ctx.texts.join(' | ');
-    assert.ok(blob.includes('PAD'), 'PAD row present for spinner');
+    assert.ok(blob.includes('PAD [u:7]'), 'PAD row shows the UV-cure dose counter');
     assert.ok(blob.includes('MAGNET'), 'MAGNET row present for spinner');
     assert.ok(blob.includes('Spinner'), 'header names the spinner class');
   });

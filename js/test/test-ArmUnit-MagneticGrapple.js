@@ -153,7 +153,7 @@ describe('ArmUnit magnetic grapple — CA lock lifecycle', () => {
     assert.equal(arm.state, S.GRAPPLED);
     assert.equal(got[Events.AUTOPILOT_TARGET_UNLOCK].length, 1, 'one unlock on success');
     assert.equal(got[Events.AUTOPILOT_TARGET_UNLOCK][0].debrisId, target.id);
-    assert.equal(arm._magLockedDebrisId, null, 'locked-id cleared');
+    assert.equal(arm._toolLockedDebrisId, null, 'locked-id cleared');
   });
 
   it('an external recall mid-grapple still releases the CA lock (no leak)', () => {
@@ -161,14 +161,14 @@ describe('ArmUnit magnetic grapple — CA lock lifecycle', () => {
     const arm = makeArm('weaver');
     const target = makeTarget({ ferro: true, mass: 300 });
     enterSK(arm, target);
-    arm.magneticGrapple();              // lock emitted, _magLockedDebrisId set
-    assert.equal(arm._magLockedDebrisId, target.id, 'lock recorded on entry');
+    arm.magneticGrapple();              // lock emitted, _toolLockedDebrisId set
+    assert.equal(arm._toolLockedDebrisId, target.id, 'lock recorded on entry');
 
     const got = capture([Events.AUTOPILOT_TARGET_UNLOCK], () => arm.recall());
     assert.equal(got[Events.AUTOPILOT_TARGET_UNLOCK].length, 1,
       'recall out of MAGNETIC_GRAPPLE releases the CA exemption');
     assert.equal(got[Events.AUTOPILOT_TARGET_UNLOCK][0].debrisId, target.id);
-    assert.equal(arm._magLockedDebrisId, null, 'locked-id cleared on exit');
+    assert.equal(arm._toolLockedDebrisId, null, 'locked-id cleared on exit');
   });
 
   it('failure releases the CA target lock exactly once', () => {
@@ -181,7 +181,7 @@ describe('ArmUnit magnetic grapple — CA lock lifecycle', () => {
     const got = capture([Events.AUTOPILOT_TARGET_UNLOCK], () => driveGrapple(arm));
     assert.equal(arm.state, S.RETURNING);
     assert.equal(got[Events.AUTOPILOT_TARGET_UNLOCK].length, 1, 'one unlock on failure');
-    assert.equal(arm._magLockedDebrisId, null, 'locked-id cleared');
+    assert.equal(arm._toolLockedDebrisId, null, 'locked-id cleared');
   });
 });
 
