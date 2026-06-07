@@ -202,7 +202,7 @@ describe('DebrisVisuals — getWireframeData', () => {
 // ============================================================================
 
 describe('DebrisVisuals — Material mapping coverage', () => {
-  const EXPECTED_TAGS = ['aluminum', 'titanium', 'composite', 'mli_mylar', 'solar_cell'];
+  const EXPECTED_TAGS = ['aluminum', 'titanium', 'composite', 'mli_mylar', 'solar_cell', 'steel'];
 
   it('DEBRIS_MATERIALS keys match expected material tags', () => {
     const keys = Object.keys(Constants.DEBRIS_MATERIALS).sort();

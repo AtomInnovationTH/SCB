@@ -603,9 +603,9 @@ describe('Epic 9 FEATURE_FLAGS', () => {
 // ============================================================================
 describe('ST-9.4a NET_TERMINOLOGY + new flags', () => {
 
-    it('FEATURE_FLAGS has exactly 26 entries', () => {
-        assert.equal(Object.keys(Constants.FEATURE_FLAGS).length, 26,
-            'Expected 26 FEATURE_FLAGS (14 original + 6 Config G + 1 Capture Net + 1 Tether Reel + 1 Bridle Ring + 1 Tier Upgrades + 1 Recoil Physics + 1 Q2 Net Ceremony)');
+    it('FEATURE_FLAGS has exactly 29 entries', () => {
+        assert.equal(Object.keys(Constants.FEATURE_FLAGS).length, 29,
+            'Expected 29 FEATURE_FLAGS (26 prior + 3 CP-1 multi-tool: DAUGHTER_MULTITOOL + WEAVER_GRIPPER + SPINNER_PAD)');
     });
 
     it('BOLA_RENAME is not present (stale flag removed)', () => {

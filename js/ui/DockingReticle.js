@@ -369,6 +369,11 @@ export class DockingReticle {
 
     // 10. Station-keep θ/φ/R readout (ST-8.5.1)
     this._drawStationKeepOverlay(ctx, cx, cy);
+
+    // 11. CP-1 / P2 — per-arm tool-selection panel (below the SK readout)
+    if (Constants.isFeatureEnabled('DAUGHTER_MULTITOOL')) {
+      this._drawToolSelectionPanel(ctx, cx, cy);
+    }
   }
 
   // --------------------------------------------------------------------------
@@ -698,8 +703,11 @@ export class DockingReticle {
     const boxX = cx;
     const boxY = cy + 70;
 
-    // § Q5: extra height for NET counter when CAPTURE_NET is ON
-    const showNetCount = Constants.isFeatureEnabled('CAPTURE_NET');
+    // § Q5: extra height for NET counter when CAPTURE_NET is ON.
+    // When DAUGHTER_MULTITOOL is ON the dedicated tool panel renders the NET (n)
+    // row below, so suppress the in-box counter to avoid showing it twice.
+    const showNetCount = Constants.isFeatureEnabled('CAPTURE_NET')
+      && !Constants.isFeatureEnabled('DAUGHTER_MULTITOOL');
     const netCount = showNetCount && typeof this._arm.getNetInventory === 'function'
       ? this._arm.getNetInventory() : 0;
 
@@ -755,6 +763,101 @@ export class DockingReticle {
       ctx.fillStyle = netCount === 0 ? '#ff4444' : 'rgba(0, 255, 170, 0.8)';
       ctx.fillText('NET (' + netCount + ')', boxX, netY);
     }
+  }
+
+  /**
+   * @private CP-1 / P2 — STATION_KEEP tool-selection panel
+   * (DAUGHTER_MULTITOOL_SPEC §8.1). Renders one row per verb in the arm's
+   * toolset with a ▶ on the selected tool, ★ scores, NET (n) magazine count,
+   * and a hint. Sits directly below the θ/φ/R readout box; no overlap.
+   */
+  _drawToolSelectionPanel(ctx, cx, cy) {
+    const arm = this._arm;
+    if (!arm || arm.state !== 'STATION_KEEP') return;
+    const toolset = arm.toolset || [];
+    if (toolset.length === 0) return;
+
+    const HUD = Constants.TOOL_HUD || {};
+    const GLYPHS = HUD.GLYPHS || { NET: 'N', MAGNET: 'M', GRIPPER: 'G', PAD: 'P' };
+    const scores = arm._toolScores || {};
+    const hints = arm._toolHints || {};
+    const selected = arm.selectedTool || 'NET';
+    const netCount = (typeof arm.getNetInventory === 'function') ? arm.getNetInventory() : 0;
+
+    const rowH = HUD.ROW_HEIGHT_PX || 16;
+    const boxW = HUD.PANEL_WIDTH_PX || 180;
+    // Position below the SK readout box (boxY = cy+70, max bottom ≈ cy+134).
+    const boxX = cx;
+    const boxY = cy + 142;
+    const headerH = 16;
+    const footerH = 14;
+    const boxH = headerH + toolset.length * rowH + footerH + 8;
+    const left = boxX - boxW / 2;
+
+    // Background + border
+    ctx.fillStyle = 'rgba(0, 20, 40, 0.7)';
+    ctx.fillRect(left, boxY - 4, boxW, boxH);
+    ctx.strokeStyle = 'rgba(0, 255, 170, 0.4)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(left, boxY - 4, boxW, boxH);
+
+    // Header
+    const armLabel = arm.type === 'weaver' ? 'Weaver' : arm.type === 'spinner' ? 'Spinner' : 'Daughter';
+    ctx.font = `bold 10px ${FONT}`;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = 'rgba(0, 255, 170, 0.7)';
+    ctx.fillText(`TOOL  (${armLabel})`, left + 8, boxY + 6);
+
+    // Rows
+    let y = boxY + headerH + 6;
+    for (const kind of toolset) {
+      const isSel = kind === selected;
+      const score = scores[kind] || 0;
+      const dimmed = score <= 0;
+      const glyph = GLYPHS[kind] || kind[0];
+      let label = kind;
+      if (kind === 'NET') label = `NET (${netCount})`;
+
+      // selection marker
+      ctx.font = `bold 11px ${FONT}`;
+      ctx.textAlign = 'left';
+      ctx.fillStyle = isSel ? (HUD.HIGHLIGHT_COLOR || '#ffd166') : 'rgba(0,255,170,0.3)';
+      ctx.fillText(isSel ? '\u25B6' : ' ', left + 6, y);
+
+      // glyph + label
+      ctx.font = `${isSel ? 'bold ' : ''}11px ${FONT}`;
+      ctx.fillStyle = dimmed
+        ? (HUD.DIMMED_COLOR || 'rgba(180,200,210,0.55)')
+        : (isSel ? (HUD.HIGHLIGHT_COLOR || '#ffd166') : 'rgba(0,255,170,0.85)');
+      ctx.fillText(`${glyph} \u00B7 ${label}`, left + 20, y);
+
+      // stars (score) or em-dash if not viable
+      ctx.textAlign = 'right';
+      if (score > 0) {
+        ctx.fillStyle = HUD.RECOMMEND_COLOR || '#00ffaa';
+        ctx.fillText('\u2605'.repeat(score), left + boxW - 8, y);
+      } else {
+        ctx.fillStyle = HUD.DIMMED_COLOR || 'rgba(180,200,210,0.55)';
+        ctx.fillText('\u2014', left + boxW - 8, y);
+      }
+      y += rowH;
+    }
+
+    // Footer
+    ctx.font = `9px ${FONT}`;
+    ctx.textAlign = 'left';
+    ctx.fillStyle = 'rgba(0, 255, 170, 0.5)';
+    ctx.fillText('[`] cycle   [F] dispatch', left + 8, y + 2);
+
+    // Selected-tool hint (right-aligned under footer, if present)
+    const hint = hints[selected];
+    if (hint) {
+      ctx.textAlign = 'right';
+      ctx.fillStyle = 'rgba(0, 255, 170, 0.45)';
+      ctx.fillText(hint, left + boxW - 8, y + 2);
+    }
+    ctx.textAlign = 'left';
   }
 
   /**

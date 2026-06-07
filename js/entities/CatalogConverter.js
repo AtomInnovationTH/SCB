@@ -15,6 +15,7 @@
  */
 
 import { Constants } from '../core/Constants.js';
+import { deriveFerrousFlags } from './debrisFerrous.js';
 
 // ============================================================================
 // TYPE MAPPING: catalogue "type" → internal debris type key
@@ -39,15 +40,15 @@ const SHAPE_MAP = {
 };
 
 /** Material pool — mirrors the `MATERIALS` array in DebrisField.js. */
-const MATERIALS = ['aluminum', 'titanium', 'composite', 'mli_mylar', 'solar_cell'];
+const MATERIALS = ['aluminum', 'titanium', 'composite', 'mli_mylar', 'solar_cell', 'steel'];
 
 /** Per-type material weights — mirrors MATERIAL_WEIGHTS_BY_TYPE in DebrisField.js.
  *  Keeps gold MLI / blue solar cells rare and concentrated on satellites so the
  *  catalogue half of the field matches the procedural half visually. */
 const MATERIAL_WEIGHTS_BY_TYPE = {
-  fragment:      { aluminum: 0.40, titanium: 0.22, composite: 0.38 },
-  rocketBody:    { aluminum: 0.55, titanium: 0.30, composite: 0.15 },
-  defunctSat:    { aluminum: 0.34, titanium: 0.12, composite: 0.20, mli_mylar: 0.18, solar_cell: 0.16 },
+  fragment:      { aluminum: 0.38, titanium: 0.22, composite: 0.35, steel: 0.05 },
+  rocketBody:    { aluminum: 0.45, titanium: 0.25, composite: 0.12, steel: 0.18 },
+  defunctSat:    { aluminum: 0.30, titanium: 0.12, composite: 0.18, mli_mylar: 0.16, solar_cell: 0.14, steel: 0.10 },
   missionDebris: { aluminum: 0.30, titanium: 0.16, composite: 0.30, mli_mylar: 0.14, solar_cell: 0.10 },
 };
 
@@ -190,6 +191,8 @@ export function catalogEntryToDebrisData(entry, id) {
     salvage: { xenon: 0, indium: 0, gaAs: 0, battery: 0, hydrazine: 0, lithium: 0, metals: [] },
     hasSalvage: false,
     metalMassKg: 0,
+    // DAUGHTER_MULTITOOL_SPEC §6.2 — magnet recommender inputs (shared SSOT)
+    ...deriveFerrousFlags(material, type),
   };
 }
 

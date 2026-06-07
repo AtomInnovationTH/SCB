@@ -141,21 +141,23 @@ MENU ──Start──▶ BRIEFING ──Commence/QuickStart/FreeRoam──▶ O
 
 ## 5. FEATURE_FLAGS truth table
 
-[`Constants.FEATURE_FLAGS`](js/core/Constants.js:471). `isFeatureEnabled()` force-returns false when `REALITY_MODE` is on. **Only two flags are ON in the shipping build:**
+[`Constants.FEATURE_FLAGS`](js/core/Constants.js:471). `isFeatureEnabled()` force-returns false when `REALITY_MODE` is on. **Three flags are ON in the shipping build:**
 
 | Flag | State | What it gates |
 |---|---|---|
 | **CAPTURE_NET** | **ON** | Real 14-state net projectile FSM + physics cling probability (replaces legacy 85% dice-roll, now dead code) |
 | **NET_CEREMONY** | **ON** | 7-beat cinematic net-launch camera (Q2 ceremony) |
+| **DAUGHTER_MULTITOOL** | **ON** | CP-1/P2 — per-arm tool choice: `MAGNETIC_GRAPPLE` state, SK tool-selection HUD, backtick cycle, F dispatches selected verb |
 | SHIPYARD_REFIT, CROSSBOW_MECHANISM, DUAL_OPPOSITE_FIRE, RECOIL_PHYSICS | off | spring physics, recoil-cancel pair fire |
 | NET_TERMINOLOGY, NET_PRIMARY_DOCTRINE, NET_CLING_MODEL, NET_TANGLE_MECHANICS, PER_PLATFORM_NETS | off | net doctrine refits (cling model is effectively live via CaptureNet regardless) |
 | DYNEEMA_TETHER, REEL_CYCLE_RESOURCE, **TETHER_REEL** | off | tether wear + strut reel cable physics (**TetherReel.js orphaned**) |
 | **BRIDLE_RING**, BRIDLE_RING_GEOMETRY | off | Y-harness load ring (**BridleRing.js orphaned**) |
 | ABLATION_MODULE | off | mother deorbit laser (no keybind even if flipped) |
 | TIER_UPGRADES | off | Y0/Y1/Y3 arm-config shop section |
+| WEAVER_GRIPPER, SPINNER_PAD | off | P3/P4 daughter tools (gripper jaws / multi-modal pad) — reserved under DAUGHTER_MULTITOOL |
 | STOW_DEPLOY_STATE_MACHINE, LAUNCH_SEQUENCE, COM_TRACKING, THRUSTER_INTERLOCK, SEMI_AUTO_AIM, LOCKABLE_HINGE, TECH_LADDER_SHOP, REALITY_MODE | off | Config-G gap features |
 
-> **There is NO `DAUGHTER_MULTITOOL` / magnet / gripper / pad flag.** Those tools (DAUGHTER_MULTITOOL_SPEC) are **unbuilt** — only flavor constants (`WEAVER_GRIPPER_SPAN`, `SPINNER_GECKO_PAD_FORCE`) and a removed magnetic ring exist. Tool choice today = lasso / net / trawl only.
+> **DAUGHTER_MULTITOOL is now ON (CP-1/P2 shipped).** The **MAGNET** verb is built: `ARM_STATES.MAGNETIC_GRAPPLE` (ENERGIZING→CLOSING→GRIP sub-FSM), the `ToolRecommender` (steel hull → ▶MAGNET, fastener/non-ferrous → net stays primary), the SK tool-selection HUD panel, backtick-cycle + F-dispatch. **GRIPPER (P3)** and **PAD (P4)** remain unbuilt (flags off; rows show but dispatch is graceful-offline).
 
 ---
 
@@ -231,8 +233,8 @@ All in [`InputManager.js`](js/systems/InputManager.js) `_handleKeyDown` + held-k
 
 ## 9. Capture & retrieval FSM (reachability)
 
-[`ArmUnit.js`](js/entities/ArmUnit.js) `update()` switch handles 22 `ARM_STATES`:
-`DOCKED, UNDOCKING, LAUNCHING, TRANSIT, APPROACH, NETTING, GRAPPLED, HAULING, REELING, RETURNING, DOCKING, RELOADING, HOLDING_CATCH, FISHING, TRAWLING, DEORBITING, WEB_SHOT, ABLATING, SCANNING, TANGLED, STATION_KEEP, EXPENDED`.
+[`ArmUnit.js`](js/entities/ArmUnit.js) `update()` switch handles 23 `ARM_STATES`:
+`DOCKED, UNDOCKING, LAUNCHING, TRANSIT, APPROACH, NETTING, GRAPPLED, HAULING, REELING, RETURNING, DOCKING, RELOADING, HOLDING_CATCH, FISHING, TRAWLING, DEORBITING, WEB_SHOT, ABLATING, SCANNING, TANGLED, STATION_KEEP, EXPENDED, MAGNETIC_GRAPPLE` (+ `GRIPPER_GRAPPLE`/`PAD_CONTACT` defined but reserved for P3/P4).
 
 | Method | Reachable by player? | Notes |
 |---|---|---|
@@ -244,7 +246,8 @@ All in [`InputManager.js`](js/systems/InputManager.js) `_handleKeyDown` + held-k
 | **Fishing** | ⚠️ orphaned from keys | `deployFishing()` exists; only via ArmManager autopilot path / comms — no direct key |
 | **Web Shot** | ⚠️ orphaned | `fireWebShot()` exists, **no keybinding** |
 | **Ablation** | ⚠️ orphaned | flag off + no keybinding |
-| **Magnetic grapple / Gripper / Pad** | ❌ absent | data/flavor constants only; no states/methods |
+| **Magnetic grapple** (F in STATION_KEEP, MAGNET selected) | ✅ (P2) | `MAGNETIC_GRAPPLE` ENERGIZING→CLOSING→GRIP; ferrous→GRAPPLED, else→RETURNING. Gated by `DAUGHTER_MULTITOOL` |
+| **Gripper / Pad** | ⚠️ reserved | `GRIPPER_GRAPPLE`/`PAD_CONTACT` states defined + toolset rows shown; flags off, dispatch graceful-offline (P3/P4) |
 
 **Weaver vs Spinner ARE differentiated** under `CAPTURE_NET=true`: Weaver fires a MEDIUM net, Spinner a SMALL net (different diameter/mass/launch-speed/spin/tether), and catch success is resolved by `computeClingProbability()` (velocity·contact·roughness·spin·tension·distance × pBase) — **not** the legacy flat 85% (now dead code). The *multi-tool* decision (magnet/gripper/pad) is what's missing, not net differentiation.
 

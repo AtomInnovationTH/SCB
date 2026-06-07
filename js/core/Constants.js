@@ -290,6 +290,43 @@ export const Constants = {
     TANGLED: 'TANGLED',            // V5 — tether tangle state requiring resolution
     STATION_KEEP: 'STATION_KEEP',  // V8 — hold position relative to debris (orbital-crane)
     EXPENDED: 'EXPENDED',
+    MAGNETIC_GRAPPLE: 'MAGNETIC_GRAPPLE',  // P2 — EPM contact + 50 N hold + reel (DAUGHTER_MULTITOOL)
+    GRIPPER_GRAPPLE:  'GRIPPER_GRAPPLE',   // P3 — 3-jaw chuck on protruding fixture (reserved)
+    PAD_CONTACT:      'PAD_CONTACT',       // P4 — multi-modal pad contact attempt (reserved)
+  },
+
+  // --- Daughter multi-tool (DAUGHTER_MULTITOOL_SPEC §4.1) ---
+  // Per-arm tool inventory (Y0 baseline; static-by-class, read on construction).
+  // Tool kinds are the bare strings 'NET' | 'MAGNET' | 'GRIPPER' | 'PAD'.
+  DAUGHTER_TOOLSETS: {
+    weaver:  ['NET', 'GRIPPER', 'MAGNET'],   // ordered: primary first (§2 table)
+    spinner: ['NET', 'PAD', 'MAGNET'],       // §13 Q2 — Spinner EPM is player-facing
+  },
+
+  // EPM magnetic-grapple tuning (cite EPIC10_DEEP_ANALYSIS.md:3322-3326).
+  // §13 Q4 heterogeneous-spacecraft model: real sats / rocket bodies have steel
+  // bolts / brackets even when the hull is Al or Ti.
+  MAGNETIC_GRAPPLE: {
+    CONTACT_RANGE_M:        0.5,    // EPM contact window (touch −Y face to ≤0.5 m)
+    HOLD_FORCE_N:           50,     // EPIC10 line 3322
+    MAX_DEBRIS_MASS_KG:     500,    // EPIC10 line 3325
+    ENERGIZE_PULSE_S:       0.3,    // pole-face blue flash 1.0→0.0 over 0.3 s
+    RELEASE_PULSE_S:        0.2,    // red flash 1.0→0.0 over 0.2 s
+    CLOSE_TIMEOUT_S:        6.0,    // max CLOSING duration before MAGNETIC_GRIP_FAILED
+    GRIP_DWELL_S:           0.4,    // dwell on contact before the P_GRIP roll
+    P_GRIP_FERROUS:         0.95,   // pure-ferromagnetic target (steel hull)
+    P_GRIP_FASTENERS:       0.40,   // §13 Q4 — heterogeneous target latches onto bolts/brackets
+    P_GRIP_NON_FERROUS:     0.05,   // all-Al fragment / composite — residual flux only
+  },
+
+  // Tool-selection HUD constants (DAUGHTER_MULTITOOL_SPEC §4.1).
+  TOOL_HUD: {
+    ROW_HEIGHT_PX:     16,
+    PANEL_WIDTH_PX:    180,
+    HIGHLIGHT_COLOR:   '#ffd166',          // selected (▶)
+    RECOMMEND_COLOR:   '#00ffaa',          // matches SK theme
+    DIMMED_COLOR:      'rgba(180,200,210,0.55)',
+    GLYPHS: { NET: 'N', MAGNET: 'M', GRIPPER: 'G', PAD: 'P' },
   },
 
   // --- Arm Operations ---
@@ -494,6 +531,11 @@ export const Constants = {
 
     // NEW — ST-9.4 C-6: Capture Net System
     CAPTURE_NET:               true,   // ST-9.4  — full capture net projectile + inventory (P1 ON)
+
+    // NEW — CP-1 / DAUGHTER_MULTITOOL_SPEC: real per-arm tool choice
+    DAUGHTER_MULTITOOL:        true,   // P2 ON — tool-selection HUD, backtick cycle, MAGNETIC_GRAPPLE
+    WEAVER_GRIPPER:            false,  // P3 — Weaver tertiary gripper jaws (reserved)
+    SPINNER_PAD:               false,  // P4 — Spinner secondary multi-modal pad (reserved)
 
     // NEW — ST-9.5 C-7: Strut-Mounted Tether Reel
     TETHER_REEL:               false,  // ST-9.5 C-7 — strut-mounted reel state machine + cable physics
@@ -1950,6 +1992,7 @@ export const Constants = {
     composite:  { metalness: 0.2,  roughness: 0.7,  color: 0x3A3A3A },   // dark matte
     mli_mylar:  { metalness: 0.95, roughness: 0.15, color: 0xFFD700 },   // gold foil
     solar_cell: { metalness: 0.6,  roughness: 0.5,  color: 0x1A237E },   // dark blue
+    steel:      { metalness: 0.85, roughness: 0.55, color: 0x808890 },   // ferromagnetic hull (P2 magnet target)
   },
 
   // === DEBRIS VISUAL TUMBLE CLAMPING (ST-2.3 → v2e) ===

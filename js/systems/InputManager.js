@@ -944,10 +944,16 @@ export class InputManager {
       case 'KeyF':
         if (isGameplay && !e.repeat) {
           if (this.armPilotMode) {
-            // ST-8.2.1: F from STATION_KEEP → capture debris
+            // ST-8.2.1: F from STATION_KEEP → dispatch the selected tool
+            // (CP-1 / P2: NET → net capture, MAGNET → magnetic grapple).
             const fArm = d.cameraSystem?.getPilotedArm();
             if (fArm && fArm.state === Constants.ARM_STATES.STATION_KEEP) {
-              fArm.captureFromStationKeep();
+              if (Constants.isFeatureEnabled('DAUGHTER_MULTITOOL')
+                  && typeof fArm.dispatchSelectedTool === 'function') {
+                fArm.dispatchSelectedTool();
+              } else {
+                fArm.captureFromStationKeep();
+              }
               e.preventDefault();
               return;
             }
@@ -1390,6 +1396,16 @@ export class InputManager {
       // --- Backtick: Toggle Debris Map (strategic overlay); Shift+` = Cycle tool alternatives ---
       case 'Backquote':
         if (isGameplay && !e.repeat) {
+          // CP-1 / P2: plain backtick in STATION_KEEP cycles the piloted arm's
+          // tool (NET → … → MAGNET). Captured before the Debris-Map toggle.
+          const tcArm = this.armPilotMode && d.cameraSystem?.getPilotedArm?.();
+          if (tcArm && tcArm.state === Constants.ARM_STATES.STATION_KEEP
+              && Constants.isFeatureEnabled('DAUGHTER_MULTITOOL')
+              && typeof tcArm.cycleTool === 'function') {
+            tcArm.cycleTool();
+            e.preventDefault();
+            break;
+          }
           if (e.shiftKey) {
             // Tool cycling (relocated from plain Backquote)
             eventBus.emit(Events.TOOL_CYCLE);

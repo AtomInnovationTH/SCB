@@ -17,6 +17,7 @@ import { getSolarCellTexture } from '../scene/solarCellTexture.js';
 import { tetherReel } from '../systems/TetherReel.js';
 import { captureNetSystem } from './CaptureNet.js';
 import { audioSystem } from '../systems/AudioSystem.js';
+import { recommendArmTool } from '../systems/ToolRecommender.js';
 
 /** 1 meter in scene units (1 scene unit = 100 km) */
 const M = 0.00001;
@@ -161,6 +162,22 @@ export class ArmUnit {
     this._severedDriftS = 0;               // s drifting since the snap (bounds the pin)
     this._netRatedMass = 0;                // kg — net's rated capture mass (set in initNetInventory)
     this._netDiameter = 0;                 // m — net mouth diameter (set in initNetInventory)
+
+    // ── Daughter multi-tool (CP-1 / P2 — DAUGHTER_MULTITOOL_SPEC) ──
+    // Static-by-class toolset, read once on construction. selectedTool is the
+    // verb F dispatches; it is (re)defaulted to the recommended tool whenever
+    // the daughter enters STATION_KEEP. _toolScores/_toolHints drive the HUD.
+    this.toolset = (Constants.DAUGHTER_TOOLSETS && Constants.DAUGHTER_TOOLSETS[type])
+      ? Constants.DAUGHTER_TOOLSETS[type].slice()
+      : ['NET'];
+    this.selectedTool = 'NET';
+    this._captureToolKind = 'NET';         // which verb actually secured the live catch
+    this._toolScores = {};                 // { NET: 3, MAGNET: 2, ... } — for SK HUD ★s
+    this._toolHints = {};                  // { NET: 'Weaver LD-NET', ... }
+    // Magnetic-grapple sub-state machine (P2): null | 'ENERGIZING' | 'CLOSING' | 'GRIP'
+    this._magPhase = null;
+    this._magTimer = 0;
+    this._magLockedDebrisId = null;        // debris id held under AUTOPILOT_TARGET_LOCK during a grapple
 
     // V5 Ablation state
     this.ablationTarget = null;            // Target being ablated
@@ -2018,6 +2035,7 @@ export class ArmUnit {
      case S.SCANNING:   this._updateScanning(dt); break;
      case S.TANGLED:    this._updateTangled(dt); break;
      case S.STATION_KEEP: this._updateStationKeep(dt); break;
+     case S.MAGNETIC_GRAPPLE: this._updateMagneticGrapple(dt); break;
      case S.EXPENDED:   this._updateExpended(dt); break;
    }
 
@@ -2206,6 +2224,20 @@ export class ArmUnit {
     if (newState === S.DOCKED || newState === S.RELOADING) {
       this._trailSampleAccum = 0;
       eventBus.emit(Events.ARM_TRAIL_CLEAR, { armId: this.id });
+      this._captureToolKind = 'NET';   // P2: reset capture-verb to default on a clean slate
+    }
+    // CP-1 / P2: refresh the per-arm tool recommendation on STATION_KEEP entry
+    // and default selectedTool to the recommended verb (player can re-cycle).
+    if (newState === S.STATION_KEEP && Constants.isFeatureEnabled('DAUGHTER_MULTITOOL')) {
+      this._refreshToolRecommendation();
+    }
+    // CP-1 / P2: release the magnetic-grapple CA exemption on ANY exit from
+    // MAGNETIC_GRAPPLE (success, failure, OR an external recall/deorbit), so the
+    // AUTOPILOT_TARGET_LOCK set on entry can never leak and permanently exempt a
+    // debris from collision avoidance.
+    if (old === S.MAGNETIC_GRAPPLE && this._magLockedDebrisId != null) {
+      eventBus.emit(Events.AUTOPILOT_TARGET_UNLOCK, { debrisId: this._magLockedDebrisId });
+      this._magLockedDebrisId = null;
     }
     // ST-8.3.4: Auto-adjust ISP based on flight phase for current metal
     this._updateMetalIspForPhase(newState);
@@ -2647,6 +2679,8 @@ export class ArmUnit {
             }
             eventBus.emit(Events.STATION_KEEP_ENTERED, {
               armId: this.id,
+              armType: this.type,
+              armIndex: this.index,
               targetId: this.target.id || this.target.catalogId,
               standoffR: _so,
               isPiloted: this.isManual(),
@@ -2780,6 +2814,8 @@ export class ArmUnit {
         }
         eventBus.emit(Events.STATION_KEEP_ENTERED, {
           armId: this.id,
+          armType: this.type,
+          armIndex: this.index,
           targetId: this.target.id || this.target.catalogId,
           standoffR: standoff,
           isPiloted: this.isManual(),
@@ -3127,6 +3163,7 @@ export class ArmUnit {
     if (this._netCommittedTarget) {
       this._netCommittedTarget._committedNetArmId = this.id;
     }
+    this._captureToolKind = 'NET';
     this._transitionTo(S.NETTING);
     eventBus.emit(Events.COMMS_MESSAGE, {
       text: `${this.id}: Deploying net — stand by for capture`,
@@ -3170,6 +3207,234 @@ export class ArmUnit {
       priority: 'info',
     });
     return true;
+  }
+
+  // ============================================================================
+  // DAUGHTER MULTI-TOOL (CP-1 / P2 — DAUGHTER_MULTITOOL_SPEC §5 / §7 / §8)
+  // ============================================================================
+
+  /**
+   * Recompute the per-arm tool recommendation for the current STATION_KEEP
+   * target and default `selectedTool` to the top-scored verb. Stores ★ scores
+   * and hint strings the SK tool-selection HUD reads directly off this arm.
+   * @private
+   */
+  _refreshToolRecommendation() {
+    const target = this._stationKeepTarget || this.target;
+    const netDepleted = (typeof this.getNetInventory === 'function')
+      ? this.getNetInventory() <= 0
+      : (this._netInventory <= 0);
+    const rec = recommendArmTool({
+      armType: this.type,
+      mass: target ? (target.mass || 0) : 0,
+      debrisType: target ? (target.type || null) : null,
+      ferromagnetic: !!(target && target.ferromagnetic === true),
+      hasFerrousFasteners: !!(target && target.hasFerrousFasteners === true),
+      netDepleted,
+    });
+    this._toolScores = rec.scores;
+    this._toolHints = rec.hints;
+    this.selectedTool = rec.recommended;
+    eventBus.emit(Events.TOOL_ARMSET_CHANGED, { armId: this.id, toolset: this.toolset.slice() });
+    eventBus.emit(Events.TOOL_SELECTED, { armId: this.id, tool: this.selectedTool });
+  }
+
+  /** Cycle `selectedTool` through this arm's toolset (` ` ` backtick in SK). */
+  cycleTool() {
+    if (!this.toolset || this.toolset.length <= 1) return this.selectedTool;
+    const i = this.toolset.indexOf(this.selectedTool);
+    const next = this.toolset[(i + 1) % this.toolset.length];
+    this.selectedTool = next;
+    audioSystem.playClick();
+    eventBus.emit(Events.TOOL_SELECTED, { armId: this.id, tool: next });
+    return next;
+  }
+
+  /** Programmatically select a tool (must be in the arm's toolset). */
+  setTool(kind) {
+    if (this.toolset && this.toolset.includes(kind)) {
+      this.selectedTool = kind;
+      eventBus.emit(Events.TOOL_SELECTED, { armId: this.id, tool: kind });
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Dispatch the currently-selected tool from STATION_KEEP (the F key, when
+   * DAUGHTER_MULTITOOL is ON). NET → the P1 net path; MAGNET → the P2 EPM
+   * grapple; GRIPPER/PAD → graceful "offline" until P3/P4 land.
+   * @returns {boolean} true if a dispatch occurred
+   */
+  dispatchSelectedTool() {
+    if (this.state !== S.STATION_KEEP) return false;
+    switch (this.selectedTool) {
+      case 'MAGNET':  return this.magneticGrapple();
+      case 'GRIPPER': return Constants.isFeatureEnabled('WEAVER_GRIPPER') ? false : this._toolOffline('GRIPPER');
+      case 'PAD':     return Constants.isFeatureEnabled('SPINNER_PAD')    ? false : this._toolOffline('PAD');
+      case 'NET':
+      default:        return this.captureFromStationKeep();
+    }
+  }
+
+  /** @private Graceful feedback for a not-yet-equipped verb (P3/P4). */
+  _toolOffline(kind) {
+    audioSystem.playClickFail();
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      source: this.id,
+      text: `${this.id}: ${kind} tool offline — not yet equipped. Cycle (\`) to NET or MAGNET.`,
+      channel: 'CMD',
+      priority: 'warning',
+    });
+    return false;
+  }
+
+  /** @private Base grip probability for the magnetic EPM against a target. */
+  _magnetGripProbability(target) {
+    const MAG = Constants.MAGNETIC_GRAPPLE;
+    if (!target || (target.mass || 0) > MAG.MAX_DEBRIS_MASS_KG) return 0;
+    if (target.ferromagnetic === true) return MAG.P_GRIP_FERROUS;
+    if (target.hasFerrousFasteners === true) return MAG.P_GRIP_FASTENERS;
+    return MAG.P_GRIP_NON_FERROUS;
+  }
+
+  /**
+   * Begin a magnetic-grapple attempt from STATION_KEEP (P2). Drives a small
+   * sub-FSM (ENERGIZING → CLOSING → GRIP) in `_updateMagneticGrapple`. Emits
+   * AUTOPILOT_TARGET_LOCK so CollisionAvoidance exempts the target while the
+   * daughter deliberately closes within contact range (§5.1 gotcha).
+   * @returns {boolean}
+   */
+  magneticGrapple() {
+    if (this.state !== S.STATION_KEEP) return false;
+    const target = this._stationKeepTarget || this.target;
+    if (!target) { audioSystem.playClickFail(); return false; }
+
+    eventBus.emit(Events.STATION_KEEP_EXITED, { armId: this.id, reason: 'magnet' });
+    this._magPhase = 'ENERGIZING';
+    this._magTimer = 0;
+    this._captureToolKind = 'MAGNET';
+    audioSystem.playMagnetic();
+    // CA exemption during CLOSING (the arm intentionally drives < 0.5 m to the target).
+    // The lock is released centrally on ANY exit from MAGNETIC_GRAPPLE (_transitionTo).
+    this._magLockedDebrisId = target.id;
+    eventBus.emit(Events.AUTOPILOT_TARGET_LOCK, { debrisId: target.id });
+    eventBus.emit(Events.MAGNETIC_GRIP_ATTEMPT, {
+      armId: this.id, targetId: target.id, pBase: this._magnetGripProbability(target),
+    });
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      source: this.id, text: `${this.id}: Energizing EPM — closing for magnetic grapple`,
+      channel: 'CMD', priority: 'info',
+    });
+    this._transitionTo(S.MAGNETIC_GRAPPLE);
+    return true;
+  }
+
+  /** @private MAGNETIC_GRAPPLE sub-FSM: ENERGIZING → CLOSING → GRIP roll. */
+  _updateMagneticGrapple(dt) {
+    this._magTimer += dt;
+    const MAG = Constants.MAGNETIC_GRAPPLE;
+    const target = this._stationKeepTarget || this.target;
+
+    // Target gone (removed / captured by another arm) → abort home.
+    if (!target || target._captured || target.alive === false) {
+      this._failMagneticGrip('standoff');
+      return;
+    }
+
+    if (this._magPhase === 'ENERGIZING') {
+      if (this._magTimer >= MAG.ENERGIZE_PULSE_S) {
+        this._magPhase = 'CLOSING';
+        this._magTimer = 0;
+      }
+      return;
+    }
+
+    if (this._magPhase === 'CLOSING') {
+      const tPos = target._scenePosition;
+      if (tPos) {
+        this.position.lerp(tPos, Math.min(1, dt * 2.0));
+        const distM = this.position.distanceTo(tPos) / M;
+        if (distM <= MAG.CONTACT_RANGE_M) {
+          this._magPhase = 'GRIP';
+          this._magTimer = 0;
+          return;
+        }
+      }
+      if (this._magTimer >= MAG.CLOSE_TIMEOUT_S) this._failMagneticGrip('standoff');
+      return;
+    }
+
+    if (this._magPhase === 'GRIP') {
+      if (this._magTimer >= MAG.GRIP_DWELL_S) this._resolveMagnetGrip(target);
+    }
+  }
+
+  /** @private Resolve the contact P_GRIP roll → GRAPPLED (success) or RETURNING (fail). */
+  _resolveMagnetGrip(target) {
+    if ((target.mass || 0) > Constants.MAGNETIC_GRAPPLE.MAX_DEBRIS_MASS_KG) {
+      this._failMagneticGrip('too_heavy');
+      return;
+    }
+    const ferrous = target.ferromagnetic === true || target.hasFerrousFasteners === true;
+    if (!ferrous) {
+      // Non-ferrous: residual-flux probability only — but tag the failure clearly.
+      const pNF = Constants.MAGNETIC_GRAPPLE.P_GRIP_NON_FERROUS;
+      const rollNF = (this._magRollOverride != null) ? this._magRollOverride : Math.random();
+      if (rollNF >= pNF) { this._failMagneticGrip('non_ferrous'); return; }
+    } else {
+      const p = this._magnetGripProbability(target);
+      // Test seam: `_magRollOverride` (0..1) forces a deterministic roll.
+      const roll = (this._magRollOverride != null) ? this._magRollOverride : Math.random();
+      if (roll >= p) { this._failMagneticGrip('p_roll'); return; }
+    }
+
+    // ── Grip acquired ── reuse the GRAPPLED → REELING lifecycle (net-integrity
+    // is skipped for non-NET catches via the _captureToolKind guard).
+    this.capturedDebris = target;
+    target._captured = true;
+    target._capturedByArm = this;
+    this._captureToolKind = 'MAGNET';
+    this._pinCatchToSelf();
+    this._magPhase = null;
+
+    eventBus.emit(Events.MAGNETIC_GRIP_ACQUIRED, {
+      armId: this.id, targetId: target.id, mass: target.mass || 0,
+    });
+    eventBus.emit(Events.ARM_CAPTURED, {
+      armId: this.id, targetId: target.id, type: this.type,
+      detached: this.isDetached, mass: target.mass || 0,
+      debrisType: target.type || 'unknown', tool: 'MAGNET',
+    });
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      source: this.id, text: `${this.id}: EPM grip secured — magnetic latch holding. Reeling in.`,
+      channel: 'CMD', priority: 'success',
+    });
+    this._transitionTo(S.GRAPPLED);  // _transitionTo releases the CA lock on exit
+  }
+
+  /** @private Magnetic grip failed/aborted → release lock, return to reload. */
+  _failMagneticGrip(reason) {
+    const target = this._stationKeepTarget || this.target;
+    this._magPhase = null;
+    audioSystem.playClickFail();
+    if (target) {
+      eventBus.emit(Events.MAGNETIC_GRIP_FAILED, { armId: this.id, targetId: target.id, reason });
+      eventBus.emit(Events.MAGNETIC_RELEASE, { armId: this.id, targetId: target.id });
+    }
+    const msg = reason === 'too_heavy'
+      ? `${this.id}: Magnetic grapple failed — target too massive for the EPM. Returning to reload.`
+      : reason === 'non_ferrous'
+        ? `${this.id}: No magnetic purchase — target is non-ferrous. Returning; try the net.`
+        : reason === 'standoff'
+          ? `${this.id}: Lost contact on approach — magnetic grapple aborted. Returning.`
+          : `${this.id}: Magnetic grip slipped — Returning to reload. Re-attempt or try the net.`;
+    eventBus.emit(Events.COMMS_MESSAGE, { source: this.id, text: msg, channel: 'CMD', priority: 'warning' });
+    if (this._stationKeepTarget) this._stationKeepTarget._isStationKeepTarget = false;
+    this._stationKeepTarget = null;
+    this.target = null;
+    this._captureToolKind = 'NET';
+    this._transitionTo(S.RETURNING);
   }
 
   /** NETTING: net deployment + capture attempt (3s) */
@@ -3505,6 +3770,11 @@ export class ArmUnit {
   _checkNetIntegrityOnReel() {
     const debris = this.capturedDebris;
     if (!debris) return false;
+    // CP-1 / P2: net-integrity (oversize / strain) only applies to NET catches.
+    // A magnetic (or future gripper/pad) grip has no net mouth to overflow, so
+    // skip the check entirely — otherwise a large ferrous body grabbed by the
+    // EPM would false-fail against the net diameter.
+    if (this._captureToolKind && this._captureToolKind !== 'NET') return false;
     const payloadMass = debris.mass || 0;
     const rated = this._netRatedMass || 0;
     const debrisSize = debris.sizeMeter || 0;

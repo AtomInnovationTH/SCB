@@ -318,6 +318,14 @@ export const Events = {
   TOOL_CYCLE:             'tool:cycle',             // backtick key — cycle alternatives
   TOOL_DEPLOY:            'tool:deploy',            // D key — deploy recommended tool
 
+  // === DAUGHTER MULTI-TOOL (DAUGHTER_MULTITOOL_SPEC §4.3) ===
+  TOOL_SELECTED:          'tool:selected',          // { armId, tool: 'NET'|'MAGNET'|'GRIPPER'|'PAD' }
+  TOOL_ARMSET_CHANGED:    'tool:armsetChanged',     // { armId, toolset: string[] }
+  MAGNETIC_GRIP_ATTEMPT:  'magnet:gripAttempt',     // { armId, targetId, pBase }
+  MAGNETIC_GRIP_ACQUIRED: 'magnet:gripAcquired',    // { armId, targetId, mass }
+  MAGNETIC_GRIP_FAILED:   'magnet:gripFailed',      // { armId, targetId, reason }
+  MAGNETIC_RELEASE:       'magnet:release',         // { armId, targetId } — explicit pulse-off
+
   // === FOCUS ACTION ===
   FOCUS_ACTION:           'focus:action',           // F key — context-sensitive smart action
 

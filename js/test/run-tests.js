@@ -144,6 +144,11 @@ import './test-ArmUnit-CaptureFailure.js';
 import './test-DebrisField-PinCatch.js';
 import './test-ArmUnit-ParkCatch.js';
 
+// CP-1 / P2: Daughter multi-tool — recommender, magnetic grapple, SK tool panel
+import './test-ToolRecommender.js';
+import './test-ArmUnit-MagneticGrapple.js';
+import './test-DockingReticle-ToolPanel.js';
+
 // ST-9.5 C-7: Tether Reel — strut-mounted reel state machine, cable physics, persistence
 import './test-TetherReel.js';
 

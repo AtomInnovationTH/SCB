@@ -25,6 +25,7 @@ import {
   getVisualMode,
 } from '../ui/DebrisWireframe.js';
 import { catalogEntryToDebrisData } from './CatalogConverter.js';
+import { deriveFerrousFlags } from './debrisFerrous.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -44,7 +45,7 @@ const DEBRIS_TYPES = {
 };
 
 /** Material types for debris */
-const MATERIALS = ['aluminum', 'titanium', 'composite', 'mli_mylar', 'solar_cell'];
+const MATERIALS = ['aluminum', 'titanium', 'composite', 'mli_mylar', 'solar_cell', 'steel'];
 
 // ---------------------------------------------------------------------------
 // Per-type material distribution (physical plausibility + visual variety)
@@ -66,9 +67,9 @@ const MATERIALS = ['aluminum', 'titanium', 'composite', 'mli_mylar', 'solar_cell
 //                     cell offcuts): a broad mix incl. occasional gold/blue.
 // Weights are relative (need not sum to 1); picked via weightedMaterial().
 const MATERIAL_WEIGHTS_BY_TYPE = {
-  fragment:      { aluminum: 0.40, titanium: 0.22, composite: 0.38 },
-  rocketBody:    { aluminum: 0.55, titanium: 0.30, composite: 0.15 },
-  defunctSat:    { aluminum: 0.34, titanium: 0.12, composite: 0.20, mli_mylar: 0.18, solar_cell: 0.16 },
+  fragment:      { aluminum: 0.38, titanium: 0.22, composite: 0.35, steel: 0.05 },
+  rocketBody:    { aluminum: 0.45, titanium: 0.25, composite: 0.12, steel: 0.18 },
+  defunctSat:    { aluminum: 0.30, titanium: 0.12, composite: 0.18, mli_mylar: 0.16, solar_cell: 0.14, steel: 0.10 },
   missionDebris: { aluminum: 0.30, titanium: 0.16, composite: 0.30, mli_mylar: 0.14, solar_cell: 0.10 },
 };
 
@@ -717,6 +718,11 @@ export class DebrisField {
       salvage,
       hasSalvage,
       metalMassKg,
+      // DAUGHTER_MULTITOOL_SPEC §6.2 — magnet recommender inputs (graceful).
+      // ferromagnetic = pure-steel hull (direct EPM grip, rare in Y0 pool);
+      // hasFerrousFasteners = rocket bodies / defunct sats carry steel bolts &
+      // brackets even when the hull is Al/Ti (§13 Q4). Shared SSOT: debrisFerrous.js.
+      ...deriveFerrousFlags(material, type),
       // ST-6.2: Visual data for atlas system
       isReal: false,
       country: null,
