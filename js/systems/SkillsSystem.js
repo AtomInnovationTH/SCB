@@ -2,7 +2,7 @@
  * SkillsSystem.js — Core skill discovery engine for Space Cowboy.
  *
  * Replaces the linear 10-stage TutorialSystem with free-order skill discovery.
- * 34 skills defined in Constants.SKILLS.CATALOG are tracked through four states:
+ * 35 skills defined in Constants.SKILLS.CATALOG are tracked through four states:
  *   undiscovered → discovered → practiced → mastered
  *
  * Event-driven: each skill's triggerEvent maps to an Events.js constant.

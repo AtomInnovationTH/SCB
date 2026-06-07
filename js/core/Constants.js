@@ -1861,7 +1861,7 @@ export const Constants = {
       { id: 'mastery',      tier: 5, label: 'Mastery',      color: '#cc44dd' },
     ],
 
-    // --- Skill Catalog (33 skills) -----------------------------------------------------------
+    // --- Skill Catalog (35 skills) -----------------------------------------------------------
     // Fields: id, label, key, tier, category, hudGroup, prereqs, prereqType, noReminder, triggerEvent
     // triggerEvent: Events.js constant name (string key) or null if auto/timer/needs new event
     // prereqType: 'none' | 'soft' | 'hard' | 'safety'
@@ -2228,7 +2228,7 @@ export const Constants = {
   //   • [`js/systems/OnboardingDirector.js`](js/systems/OnboardingDirector.js:1)
   //   • [`js/ui/hud/HintTicker.js`](js/ui/hud/HintTicker.js:1)
   //
-  // All tuning knobs for the 13-beat first-experience pipeline live here.
+  // All tuning knobs for the 16-beat first-experience pipeline live here.
   // Persistence key is versioned so a future redesign can bump it without
   // colliding with the v1 storage layout.
   // ============================================================================

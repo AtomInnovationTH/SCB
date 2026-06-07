@@ -1309,7 +1309,7 @@ export class SkillsPane {
     // ═══════════════════════════════════════════════════════════════════════
 
     /**
-     * Rebuild the expanded overlay body. Groups all 34 skills by category,
+     * Rebuild the expanded overlay body. Groups all 35 skills by category,
      * sorted within each category by tier number.
      * @private
      */

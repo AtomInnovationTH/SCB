@@ -20,7 +20,7 @@ import { Constants } from '../core/Constants.js';
 // ============================================================================
 
 /**
- * All 12 teaching moments. Each defines:
+ * All 19 teaching moments. Each defines:
  *   id       — unique key, also used in persistence
  *   title    — overlay heading (SHORT, caps)
  *   body     — overlay body text (1-2 sentences)

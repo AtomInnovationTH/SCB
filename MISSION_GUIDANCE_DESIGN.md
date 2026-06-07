@@ -3,7 +3,7 @@
 **Author:** Architect (Delegation 5)
 **Date:** 2026-05-31
 **Status:** Design draft. Implementation tickets in §13.
-**Predecessors:** Delegation 4 onboarding fixes; [`BIG_PICTURE.md §3`](BIG_PICTURE.md:80) mission architecture; [`FINAL_ANALYSIS.md`](archive/FINAL_ANALYSIS.md:1) orbital ladder; [`GAME_FLOW_BRAINSTORM.md`](GAME_FLOW_BRAINSTORM.md:1) Forge cycle.
+**Predecessors:** Delegation 4 onboarding fixes; [`BIG_PICTURE.md §3`](BIG_PICTURE.md:80) mission architecture; [`FINAL_ANALYSIS.md`](archive/FINAL_ANALYSIS.md:1) orbital ladder; [`GAME_FLOW_BRAINSTORM.md`](archive/GAME_FLOW_BRAINSTORM.md:1) Forge cycle.
 
 ---
 
@@ -27,7 +27,7 @@ The campaign arc rests on infrastructure that mostly exists. Critical anchors:
 - **News-event hooks** — [`data/news-events.json`](data/news-events.json:1) contains AST SpaceMobile tumble, Starlink fragmentation, Thaicom 4 graveyard. Wired via [`MissionEventSystem`](js/systems/MissionEventSystem.js:1).
 - **FEEP metal economy** — [`Constants.METALS`](js/core/Constants.js:407) (indium, gallium, bismuth, cesium, tungsten + 4 more). [`ForgeSystem.js`](js/systems/ForgeSystem.js:1) refines salvage into fuel.
 - **Mother control mode** — [`Events.CONTROL_MODE_CHANGE`](js/core/Events.js:412) `{ mode: 'RCS'|'COLD_GAS'|'ARM_PILOT'|'MPD_BURST' }`.
-- **Real catalog** — [`data/active-sats.json`](data/active-sats.json:1) (ISS, Hubble, Starlink, GPS, Sentinel, JWST entries via NORAD).
+- **Real catalog** — [`data/active-sats.json`](data/active-sats.json:1) (ISS, Hubble, Starlink, GPS, Sentinel entries via NORAD). JWST is **not** in this catalog (it orbits L2, out of LEO/GEO scope); it is codex/narration-only — consistent with §6 and ARCHITECTURE §11.
 - **Active-sat treaty guard** — [`Events.CONJUNCTION_ALERT`](js/core/Events.js:1) with `reason: 'ACTIVE_SAT_ARMING'` blocks arming on protected assets ([`TeachingSystem.first_active_sat_warning`](js/systems/TeachingSystem.js:109)).
 - **Forge / Shop progression** — [`ShopScreen.js`](js/ui/ShopScreen.js:1) auto-opens between missions; tutorial pause-point between chapters.
 

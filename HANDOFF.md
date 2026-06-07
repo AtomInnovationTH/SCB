@@ -1,6 +1,37 @@
 # Space Cowboy — Next-Shift Handoff Brief
 
-*Updated: 2026-06-06 · Daughter capture-lifecycle polish complete (commit `b7d5fae`). Prior shift archived to [`archive/HANDOFF_2026-05-30_four-fix.md`](archive/HANDOFF_2026-05-30_four-fix.md). Earlier shifts at [`archive/HANDOFF_2026-05-29_post-cinch-qa.md`](archive/HANDOFF_2026-05-29_post-cinch-qa.md), [`archive/HANDOFF_AUTOPILOT_RETRO.md`](archive/HANDOFF_AUTOPILOT_RETRO.md), [`archive/SK_M1_POLISH_HANDOFF.md`](archive/SK_M1_POLISH_HANDOFF.md), [`archive/CEREMONY_REDESIGN.md`](archive/CEREMONY_REDESIGN.md).*
+*Updated: 2026-06-07 · Architect blueprint pass (code ground-truth audit). Prior shift: 2026-06-06 daughter capture-lifecycle polish (commit `b7d5fae`), archived context at [`archive/HANDOFF_2026-05-30_four-fix.md`](archive/HANDOFF_2026-05-30_four-fix.md), [`archive/HANDOFF_2026-05-29_post-cinch-qa.md`](archive/HANDOFF_2026-05-29_post-cinch-qa.md), [`archive/SK_M1_POLISH_HANDOFF.md`](archive/SK_M1_POLISH_HANDOFF.md), [`archive/CEREMONY_REDESIGN.md`](archive/CEREMONY_REDESIGN.md).*
+
+---
+
+> ## 🧭 ARCHITECT BLUEPRINT PASS — 2026-06-07 (read this first)
+>
+> A full menu-to-sim code audit was run to reconcile docs against the live code. Two artifacts are now the **authoritative current-state + forward surfaces**:
+> - **[`ARCHITECTURE.md`](ARCHITECTURE.md)** — fully rewritten as the **as-built blueprint** (boot, loop order, state machine + full cycle, FEATURE_FLAGS truth table, verified hotkey map, HUD/panes, ceremonies, capture-FSM reachability, guidance stack, win conditions, educational-viz status, drift register). Supersedes the Epic-8-era version (in git history).
+> - **[`ROADMAP.md`](ROADMAP.md)** — rewritten as the **prioritized plan to the 12-mission arc**, with risk/coding-burden per item, pacing guardrails, optimization list, and "what docs are still needed."
+>
+> **Ground-truth corrections folded into ARCHITECTURE §16 (don't trust older claims):**
+> - Y0 = **4 arms (2W+2S)**, not 6/3+3 · OnboardingDirector = **16 beats** (not 13) · SkillsSystem = **35 skills** (not 33/34) · TeachingSystem = **19 moments** (not 12) · **30 shop upgrades** (not 21).
+> - **7 CameraViews, V cycles 2** (CHASE↔ORBIT); TARGET_LOCK orphaned. R = recall/reel (Forge = F4). Menu → **BRIEFING (target picker)** → ORBITAL_VIEW.
+> - Weaver/Spinner **are differentiated** (MEDIUM/SMALL net + cling physics); the 85% dice-roll is dead code under `CAPTURE_NET=true`.
+> - **StrategicMap is built** (bands/debris/hazards/ground-stations/MOID badges) — but porkchop/Lambert/CW/transfer-ellipse/cluster-select are **unbuilt**.
+> - **Absent in code (design-only):** `MissionCoach.js`, the 12-chapter arc, graduated comms `_suppressionTier`, `triggerFilter`, solo-flight/counter-beat, PostOnboardingCoach. **Orphaned (flags off, not wired):** TetherReel, BridleRing, Web Shot key, Ablation, magnet/gripper/pad.
+>
+> **The synergy thesis + brainstorm ideas are folded into [`ROADMAP.md`](ROADMAP.md)** (three nested loops; tool-ladder = difficulty = curriculum = TRL; the four critical-path moves CP-1..CP-4). **The single highest-leverage next move is CP-1 (make tool choice real — wire the magnet)**, then CP-3 (cluster/transfer agency + transfer-ellipse countdown), then CP-4 (MissionCoach + comms arbiter).
+
+---
+
+> **🎬 Latest (2026-06-06, commit `3d8df21`) — Main-menu hero scene.** The menu
+> 3D view (`js/ui/MenuScene3D.js`, `js/ui/MenuScreen.js`) is now a **full-bleed
+> hero**: a realistic NASA-EMU astronaut welding a faithful **Mother** (mirrors
+> `PlayerSatellite`, rolled −90°), with a docked Weaver daughter, bloom + MSAA +
+> env-map lighting, and a starfield backdrop. **Before touching the menu scene
+> or the procedural EVA suit, read [`MOTHER_MODEL_UPGRADES.md`](MOTHER_MODEL_UPGRADES.md)**
+> — it captures the hero↔canonical mapping, EMU realism rules (baggy soft-goods,
+> joint-only convolutes, minimal anodized rings), the load-bearing rendering
+> learnings (ResizeObserver sizing, MSAA via composer RT, opaque-bg bloom), what
+> is culled because the fixed camera never sees it, and the recommended
+> real-Mother upgrade backlog (radiators, comms, EVA aids, grapple, star trackers).
 
 ---
 
@@ -10,11 +41,11 @@
 
 | # | Read | Why |
 |---|------|-----|
-| 1 | [`§1 Session Summary`](#1-session-summary-2026-06-06) + [`§5 Recommended Next Steps`](#5-recommended-next-steps) | What just shipped + what's ready to pick up |
-| 2 | [`§9 THREE.js Convention SSOT`](#9-threejs-convention-ssot-load-bearing) + [`§10 Post-Cinch Learnings`](#10-post-cinch-fix-learnings-load-bearing) | Load-bearing rules — read BEFORE touching orientation, FSM, capture lifecycle, or visual code |
-| 3 | [`README.md`](README.md:1) | Quick start, controls, controls reference |
+| 1 | [`ARCHITECTURE.md`](ARCHITECTURE.md:1) | **As-built blueprint (current)** — boot, loop, state machine, flags, hotkeys, ceremonies, capture FSM, drift register |
+| 2 | [`ROADMAP.md`](ROADMAP.md:1) | **Prioritized next steps** — critical path CP-1..CP-4, risk/burden, pacing, docs-needed for the 12-arc |
+| 3 | [`§9 THREE.js Convention SSOT`](#9-threejs-convention-ssot-load-bearing) + [`§10 Post-Cinch Learnings`](#10-post-cinch-fix-learnings-load-bearing) | Load-bearing rules — read BEFORE touching orientation, FSM, capture lifecycle, or visual code |
 | 4 | [`GAME_DESIGN.md`](GAME_DESIGN.md:1) §1–§3 | Core loop, jellyfish identity, ΔV economy |
-| 5 | [`ARCHITECTURE.md`](ARCHITECTURE.md:1) | File structure, module design, state machine (⚠️ needs Epic 9/10 update) |
+| 5 | [`§1 Session Summary`](#1-session-summary-2026-06-06) + [`§5 Recommended Next Steps`](#5-recommended-next-steps) | Last code shift (capture lifecycle) + its open items |
 
 ### Step 2 — Verify baseline
 
@@ -208,7 +239,7 @@ The `getDebrisNear`-clone pattern is still used widely. Consider migrating calle
 
 ### 4.3 Carried-forward backlog from prior shifts
 
-The four-fix sprint's deferred items (differential `setThrusterFire`, `test-TargetRanking.js`, `SpacecraftMaterials.js` extraction, `RENDER_ORDER` extension, dynamic `DIST_REF_KM`, the two remaining inline ARM_STATES sites) remain open — full detail in [`archive/HANDOFF_2026-05-30_four-fix.md §4`](archive/HANDOFF_2026-05-30_four-fix.md). The [`DAUGHTER_RETRIEVAL_AUDIT.md`](DAUGHTER_RETRIEVAL_AUDIT.md:1) wiring gaps (TetherReel, BridleRing, Web Shot key binding) are likewise still open.
+The four-fix sprint's deferred items (differential `setThrusterFire`, `test-TargetRanking.js`, `SpacecraftMaterials.js` extraction, `RENDER_ORDER` extension, dynamic `DIST_REF_KM`, the two remaining inline ARM_STATES sites) remain open — full detail in [`archive/HANDOFF_2026-05-30_four-fix.md §4`](archive/HANDOFF_2026-05-30_four-fix.md). The [`DAUGHTER_RETRIEVAL_AUDIT.md`](archive/DAUGHTER_RETRIEVAL_AUDIT.md:1) wiring gaps (TetherReel, BridleRing, Web Shot key binding) are likewise still open.
 
 ---
 
@@ -428,7 +459,7 @@ The scene frame uses **Three.js Y-up**. Classical orbital-mechanics textbooks us
 
 A system class can be imported in `main.js` and have full `init()` / `update(dt)` methods, but if `main.js` doesn't actually CALL them, the system is **silently dead**. Tests pass because they instantiate modules directly; the bug is browser-only.
 
-**Confirmed orphaned wiring (still pending):** [`TetherReel.js`](js/systems/TetherReel.js:1), [`BridleRing.js`](js/entities/BridleRing.js:1) — neither imported nor init'd/update'd in [`main.js`](js/main.js:1). See [`DAUGHTER_RETRIEVAL_AUDIT.md §4`](DAUGHTER_RETRIEVAL_AUDIT.md:1).
+**Confirmed orphaned wiring (still pending):** [`TetherReel.js`](js/systems/TetherReel.js:1), [`BridleRing.js`](js/entities/BridleRing.js:1) — neither imported nor init'd/update'd in [`main.js`](js/main.js:1). See [`DAUGHTER_RETRIEVAL_AUDIT.md §4`](archive/DAUGHTER_RETRIEVAL_AUDIT.md:1).
 
 **Rule.** Add `test-main-wiring.js` smoke test that asserts every system imported in `main.js` has `init()` OR `update()` called at least once during a mock boot cycle.
 
@@ -495,24 +526,28 @@ Core identity is **Jellyfish Fisherman** ([`GAME_DESIGN.md §2`](GAME_DESIGN.md:
 
 ## §13 Active Docs Index
 
+> Consolidated 2026-06-07. Root holds **canonical + active-reference specs only**; superseded/point-in-time docs are in [`archive/`](archive/).
+
 ### 🟢 Canonical (6) — read first
 
 | Doc | Purpose |
 |---|---|
-| [`README.md`](README.md:1) | Entry point, quick start, controls |
-| [`HANDOFF.md`](HANDOFF.md:1) | **This file** — current shift, gotchas, next steps |
+| [`README.md`](README.md:1) | Entry point, quick start, controls, Doc Map |
+| [`HANDOFF.md`](HANDOFF.md:1) | **This file** — current shift, gotchas, load-bearing SSOT |
+| [`ARCHITECTURE.md`](ARCHITECTURE.md:1) | **As-built blueprint (refreshed 2026-06-07)** — current source of truth for how the code works |
+| [`ROADMAP.md`](ROADMAP.md:1) | **Forward plan** — critical path CP-1..CP-4, risk/burden, pacing, docs-needed |
 | [`GAME_DESIGN.md`](GAME_DESIGN.md:1) | Design vision — core loop, jellyfish identity, ΔV economy |
-| [`ARCHITECTURE.md`](ARCHITECTURE.md:1) | As-built technical reference (⚠️ Epic 9/10 update pending) |
-| [`BIG_PICTURE.md`](BIG_PICTURE.md:1) | 12-month strategic roadmap |
-| [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md:1) | Sprint tracker — Sprints 1–4, Epics 5–10 + recent sprints |
+| [`BIG_PICTURE.md`](BIG_PICTURE.md:1) | 12-month strategic roadmap + educational-viz specs (Part III) |
 
 ### 🟡 Active references — read when touching their area
 
-[`ARM_PIVOT_ANALYSIS.md`](ARM_PIVOT_ANALYSIS.md:1), [`CAPTURE_NET.md`](CAPTURE_NET.md:1), [`CROSSBOW_ARMS.md`](CROSSBOW_ARMS.md:1), [`DAUGHTER_ARM_CONTROLS.md`](DAUGHTER_ARM_CONTROLS.md:1), [`DAUGHTER_MULTITOOL_SPEC.md`](DAUGHTER_MULTITOOL_SPEC.md:1), [`DAUGHTER_RETRIEVAL_AUDIT.md`](DAUGHTER_RETRIEVAL_AUDIT.md:1), [`FIRST_EXPERIENCE.md`](FIRST_EXPERIENCE.md:1), [`GAME_FLOW_BRAINSTORM.md`](GAME_FLOW_BRAINSTORM.md:1), [`LEARNING_THROUGH_PLAY.md`](LEARNING_THROUGH_PLAY.md:1), [`SKILLS_ARCHITECTURE.md`](SKILLS_ARCHITECTURE.md:1).
+**Build specs (new 2026-06-07):** [`GUIDANCE_ARBITER_SPEC.md`](GUIDANCE_ARBITER_SPEC.md:1) (comms tiers + who-can-talk; CP-4 prerequisite), [`MISSION_ARC_IMPLEMENTATION.md`](MISSION_ARC_IMPLEMENTATION.md:1) (12-chapter build contract).
+
+**Subsystem references:** [`ARM_PIVOT_ANALYSIS.md`](ARM_PIVOT_ANALYSIS.md:1), [`CAPTURE_NET.md`](CAPTURE_NET.md:1), [`CROSSBOW_ARMS.md`](CROSSBOW_ARMS.md:1), [`DAUGHTER_ARM_CONTROLS.md`](DAUGHTER_ARM_CONTROLS.md:1), [`DAUGHTER_MULTITOOL_SPEC.md`](DAUGHTER_MULTITOOL_SPEC.md:1) (now incl. §15 net-failure modes + tool kit), [`LEARNING_THROUGH_PLAY.md`](LEARNING_THROUGH_PLAY.md:1), [`MISSION_GUIDANCE_DESIGN.md`](MISSION_GUIDANCE_DESIGN.md:1), [`MOTHER_MODEL_UPGRADES.md`](MOTHER_MODEL_UPGRADES.md:1), [`SKILLS_ARCHITECTURE.md`](SKILLS_ARCHITECTURE.md:1).
 
 ### 🟠 Archives
 
-[`archive/HANDOFF_2026-05-30_four-fix.md`](archive/HANDOFF_2026-05-30_four-fix.md:1) (prior shift), [`archive/HANDOFF_2026-05-29_post-cinch-qa.md`](archive/HANDOFF_2026-05-29_post-cinch-qa.md:1), [`archive/FIX_PLAN.md`](archive/FIX_PLAN.md:1), and the rest under [`archive/`](archive/).
+Sprint tracker [`archive/IMPLEMENTATION_PLAN_2026-06.md`](archive/IMPLEMENTATION_PLAN_2026-06.md:1); folded-and-archived 2026-06-07: [`archive/FIRST_EXPERIENCE.md`](archive/FIRST_EXPERIENCE.md:1) (→ MISSION_ARC §3), [`archive/GAME_FLOW_BRAINSTORM.md`](archive/GAME_FLOW_BRAINSTORM.md:1) (→ MULTITOOL §15), [`archive/DAUGHTER_RETRIEVAL_AUDIT.md`](archive/DAUGHTER_RETRIEVAL_AUDIT.md:1) (→ ARCHITECTURE §9), [`archive/QA_FINDINGS.md`](archive/QA_FINDINGS.md:1); prior shifts [`archive/HANDOFF_2026-05-30_four-fix.md`](archive/HANDOFF_2026-05-30_four-fix.md:1), [`archive/HANDOFF_2026-05-29_post-cinch-qa.md`](archive/HANDOFF_2026-05-29_post-cinch-qa.md:1), and the rest under [`archive/`](archive/).
 
 ---
 

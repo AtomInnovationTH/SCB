@@ -20,7 +20,7 @@
 
 > **Peer document to** [`CROSSBOW_ARMS.md`](CROSSBOW_ARMS.md). All physics derived from first principles — no magic numbers.
 > Replaces the "Lasso" / "Bolas" terminology from prior iterations.
-> Implementation tracked as **ST-9.4** in [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md).
+> Implementation tracked as **ST-9.4** in [`IMPLEMENTATION_PLAN.md`](archive/IMPLEMENTATION_PLAN_2026-06.md).
 >
 > **Current code:** [`LassoSystem.js`](js/systems/LassoSystem.js:1) (1,094 LOC). Constants: [`NET_*`](js/core/Constants.js:854), [`LASSO_*`](js/core/Constants.js:838), [`BOLAS_*`](js/core/Constants.js:876) (legacy aliases).
 > **Feature flags:** `FEATURE_FLAGS.NET_TERMINOLOGY` (renamed from `BOLA_RENAME`), `NET_PRIMARY_DOCTRINE`, `NET_CLING_MODEL`, `NET_TANGLE_MECHANICS`, `PER_PLATFORM_NETS`.
@@ -479,7 +479,7 @@ With the beginner-first philosophy and distance-based modifiers, baseline values
 
 At <30 m with the ×1.1 distance bonus, even the "harder target" case reaches 0.88 — comfortable. The distance modifier does the work that complex tiering would have done, with a simpler constant set.
 
-**Beginner progression:** Per [`FIRST_EXPERIENCE.md`](FIRST_EXPERIENCE.md:1), early targets are durable metal fragments at close range:
+**Beginner progression:** Per [`FIRST_EXPERIENCE.md`](archive/FIRST_EXPERIENCE.md:1), early targets are durable metal fragments at close range:
 
 | Mission stage | Target type | Capture % | Frag risk % | Player experience |
 |---------------|-------------|-----------|-------------|-------------------|
@@ -801,7 +801,7 @@ The Mother always carries **2 body-mounted Large Net pods** (§2.9). Daughter co
 
 **Y0 fleet composition (game start):** 1 Mother (2 Large Net pods) + 2 Large Daughters (Medium Net each) + 2 Small Daughters (Small Net each) = **5 capture platforms, 10 total nets at Y0 Dyneema** (8 Mother + 2×2 LD Medium + 2×4 SD Small = 8+4+8 = 20 nets at Y0... but more practically: 8 Large + 4 Medium + 8 Small = 20 nets across the fleet).
 
-**Hex (Y1) and Octo (Y3) are Tech Ladder upgrades** unlocked via Shop + Shipyard (ST-9.8). Each upgrade requires docking at a Shipyard + credits + a "refit" mission. These are NOT free configuration choices — they are earned progression. See [`CROSSBOW_ARMS.md §16`](CROSSBOW_ARMS.md) and [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) ST-9.2 / ST-9.8.
+**Hex (Y1) and Octo (Y3) are Tech Ladder upgrades** unlocked via Shop + Shipyard (ST-9.8). Each upgrade requires docking at a Shipyard + credits + a "refit" mission. These are NOT free configuration choices — they are earned progression. See [`CROSSBOW_ARMS.md §16`](CROSSBOW_ARMS.md) and [`IMPLEMENTATION_PLAN.md`](archive/IMPLEMENTATION_PLAN_2026-06.md) ST-9.2 / ST-9.8.
 
 ### §6.2 Current Code Mapping
 
@@ -1050,7 +1050,7 @@ Visual details defer to a UX implementation sprint — this section establishes 
 
 ### Resolved at Rev 5 (2026-04-26)
 
-- **Strut DOF (Rev 5):** 1-DOF yaw-only adopted. Pitch axis dropped for vacuum reliability + planar tether departure. Halves actuator count (4 vs 8 at Y0; 8 vs 16 at Y3). Bridle math becomes 2D. Plume clearance is a planar cone test. Tangle scenarios reduce in count and probability. Off-axis target acquisition handled by whole-platform attitude rotation (existing FEEP/RCS). See Pivot A in [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) completion log.
-- **Arm count baseline (Rev 5):** Quad-4 Y0 with Hex Y1 / Octo Y3 tech ladder. Y0 fleet = 1 Mother (2 Large Net pods) + 2 Large Daughters (Medium Net) + 2 Small Daughters (Small Net). Hex and Octo unlocked via Shipyard refit + tech credits. See §6.1a and Pivot B in [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) completion log.
+- **Strut DOF (Rev 5):** 1-DOF yaw-only adopted. Pitch axis dropped for vacuum reliability + planar tether departure. Halves actuator count (4 vs 8 at Y0; 8 vs 16 at Y3). Bridle math becomes 2D. Plume clearance is a planar cone test. Tangle scenarios reduce in count and probability. Off-axis target acquisition handled by whole-platform attitude rotation (existing FEEP/RCS). See Pivot A in [`IMPLEMENTATION_PLAN.md`](archive/IMPLEMENTATION_PLAN_2026-06.md) completion log.
+- **Arm count baseline (Rev 5):** Quad-4 Y0 with Hex Y1 / Octo Y3 tech ladder. Y0 fleet = 1 Mother (2 Large Net pods) + 2 Large Daughters (Medium Net) + 2 Small Daughters (Small Net). Hex and Octo unlocked via Shipyard refit + tech credits. See §6.1a and Pivot B in [`IMPLEMENTATION_PLAN.md`](archive/IMPLEMENTATION_PLAN_2026-06.md) completion log.
 
-*End of document. Implementation tracked as ST-9.4a through ST-9.4e in [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md).*
+*End of document. Implementation tracked as ST-9.4a through ST-9.4e in [`IMPLEMENTATION_PLAN.md`](archive/IMPLEMENTATION_PLAN_2026-06.md).*

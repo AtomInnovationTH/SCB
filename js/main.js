@@ -533,7 +533,7 @@ async function init() {
   // --- Active Satellites ---
   activeSatellites = new ActiveSatellites(scene);
 
-  // --- V3 Octopus Arm Manager (6 arms: 3 Weaver + 3 Spinner) ---
+  // --- Config G Arm Manager (Y0 Quad: 4 arms — 2 Weaver + 2 Spinner) ---
   armManager = new ArmManager(scene, player);
   armManager.setDebrisField(debrisField);
   armManager.setCatalogLoader(catalogLoader);    // ST-6.1: active-sat treaty guard
@@ -593,7 +593,7 @@ async function init() {
   teachingSystem.init();
 
   // --- Delegation 2 (2026-05-31): OnboardingDirector ---
-  // Orchestrates the 13-beat first-experience pipeline (boot → handshake →
+  // Orchestrates the 16-beat first-experience pipeline (boot → handshake →
   // arrows → struts → zoom → inspect → scan → target → autopilot → decision
   // → lasso/daughter → complete).  Subscribes to MISSION_START and walks
   // each beat: emits HOUSTON comms, posts to bottom-screen ticker, soft

@@ -23,53 +23,51 @@ UI design draws from four landmark space sims: **Independence War** (NavSphere, 
 
 ## Project Status
 
-- **~36 system + entity + UI modules** across core, entities, systems, UI, scene (30+ system modules)
-- **2320 / 2320 tests** passing as of 2026-05-28 (Post-Cinch-Fix QA pass)
-- **Epics 5–10 complete** — V3 Octopus replaced by Config G visualization (Epic 10), 14-state Capture Net FSM (Epic 9), STATION_KEEP orbital-crane + dual-metal FEEP + ISRO comms (Epic 8), offline data catalog + MOID + strategic map (Epic 6), trail ribbons + NavSphere + Earth 16k LOD (Epic 5)
-- **Q2 Net-Launch Ceremony shipped (2026-05-24)** — cone + weights + drawstring + apex hub geometry, `NET_CINEMATIC` 7-beat / 3-beat camera mode, time-dilation 0.3×–0.6×, first-deploy persistence gating
-- **Post-Cinch QA pass shipped (2026-05-28)** — 9 of 11 items resolved; load-bearing THREE.js convention SSOT + 5 Rules A–E in [`HANDOFF.md §2–§3`](HANDOFF.md)
-- **Next priorities**: Items 6/10/11 build (apex hub keepsake, first-clear guidance, forge chunking) — see [`HANDOFF.md §5 Recommended Priority Order`](HANDOFF.md)
+- **~150 modules** across core, entities, systems, UI, scene
+- **2542 / 2542 tests** passing as of 2026-06-07 (`node js/test/run-tests.js`)
+- **Epics 5–10 complete + capture-lifecycle polish (2026-06-06)** — Config G visualization, 14-state Capture Net FSM with physics cling probability, STATION_KEEP orbital-crane + dual-metal FEEP + ISRO comms, offline data catalog + MOID + strategic map, trail ribbons + NavSphere + Earth 16k LOD, park-the-catch (`HOLDING_CATCH`)
+- **Architecture refreshed 2026-06-07** — [`ARCHITECTURE.md`](ARCHITECTURE.md) is now the verified as-built blueprint (full hotkey map, FEATURE_FLAGS truth table, ceremonies, capture-FSM reachability, drift register)
+- **Next priorities**: see [`ROADMAP.md`](ROADMAP.md) — critical path **CP-1 (wire the magnet / make tool choice real)** → CP-2 (laser de-spin) → CP-3 (cluster/transfer agency) → CP-4 (MissionCoach + comms arbiter) toward the full 12-mission arc
 
 ---
 
 ## Documentation
 
-**New developer?** Read in this order: README → GAME_DESIGN → ARCHITECTURE → BIG_PICTURE → HANDOFF. See [`HANDOFF.md §7 Active Docs Index`](HANDOFF.md) for the current doc-state map (audit updated 2026-05-29; root layout consolidated from 35 → 16 docs).
+**New developer?** Read in order: **README → [`ARCHITECTURE.md`](ARCHITECTURE.md) (how the code works now) → [`ROADMAP.md`](ROADMAP.md) (what to build next) → [`GAME_DESIGN.md`](GAME_DESIGN.md) (why)**, then [`HANDOFF.md`](HANDOFF.md) §9–§11 before touching orientation/FSM/capture/visual code. Doc set consolidated 2026-06-07 (root = canonical + active-reference specs only; superseded docs in [`archive/`](archive/)).
 
-> **Locked product principles** (see [`HANDOFF.md Locked Product Principles`](HANDOFF.md)):
-> - **Offline-first.** No auto-fetch APIs, no live TLE feeds, no telemetry. Catalogue updates are user-driven via `data/news-events.json`. THREE.js loads from local `node_modules/` (not CDN) so the sim boots offline.
-> - **Dual-metal FEEP is Y0 baseline.** Multimetal FEEP is TRL 7–8 today (Enpulsion IFM Nano), not endgame.
-> - **Mother launches from India** (ISRO Sriharikota / Kulasekarapattinam). Bangalore (ISTRAC) and Hassan (MCF) ground control are part of comms alongside Houston.
+> **Locked product principles:**
+> - **Offline-first.** No auto-fetch APIs, no live TLE feeds, no telemetry. Catalogue updates are user-driven via `data/news-events.json`. THREE.js loads from local `node_modules/` so the sim boots offline.
+> - **Dual-metal FEEP is Y0 baseline.** Multimetal FEEP is TRL 7–9 today (Enpulsion IFM Nano), not endgame.
+> - **Mother launches from India** (ISRO Sriharikota / Kulasekarapattinam). Bangalore (ISTRAC) and Hassan (MCF) ground control join Houston in comms.
+> - **ΔV is the single master resource** — never free-regenerates except via salvage→forge→propellant.
+
+### 🗺 Doc Map — which doc for what
+
+| I want to… | Open |
+|---|---|
+| Understand how the code works *right now* | [`ARCHITECTURE.md`](ARCHITECTURE.md) |
+| Know what to build next + risk/effort | [`ROADMAP.md`](ROADMAP.md) |
+| See current shift state + load-bearing rules | [`HANDOFF.md`](HANDOFF.md) |
+| Understand the game vision / economy | [`GAME_DESIGN.md`](GAME_DESIGN.md) · [`BIG_PICTURE.md`](BIG_PICTURE.md) |
+| Build the daughter tools (magnet/gripper/pad) + net-failure modes | [`DAUGHTER_MULTITOOL_SPEC.md`](DAUGHTER_MULTITOOL_SPEC.md) |
+| Build the 12-mission arc | [`MISSION_ARC_IMPLEMENTATION.md`](MISSION_ARC_IMPLEMENTATION.md) + [`MISSION_GUIDANCE_DESIGN.md`](MISSION_GUIDANCE_DESIGN.md) |
+| Coordinate onboarding/coach/comms (who can talk) | [`GUIDANCE_ARBITER_SPEC.md`](GUIDANCE_ARBITER_SPEC.md) |
+| Work on arm/net physics or geometry | [`CAPTURE_NET.md`](CAPTURE_NET.md) · [`CROSSBOW_ARMS.md`](CROSSBOW_ARMS.md) · [`ARM_PIVOT_ANALYSIS.md`](ARM_PIVOT_ANALYSIS.md) · [`DAUGHTER_ARM_CONTROLS.md`](DAUGHTER_ARM_CONTROLS.md) |
+| Work on skills / teaching content | [`SKILLS_ARCHITECTURE.md`](SKILLS_ARCHITECTURE.md) · [`LEARNING_THROUGH_PLAY.md`](LEARNING_THROUGH_PLAY.md) |
+| Touch the menu hero / Mother model | [`MOTHER_MODEL_UPGRADES.md`](MOTHER_MODEL_UPGRADES.md) |
 
 ### 🟢 Canonical (6)
 
-| # | Document | Purpose |
-|---|----------|---------|
-| 1 | [`README.md`](README.md) | Quick start, controls, project structure |
-| 2 | [`HANDOFF.md`](HANDOFF.md) | Shift handoff — current state, load-bearing SSOTs (THREE.js conventions, Post-Cinch learnings), improvement backlog, tech debt, doc audit |
-| 3 | [`GAME_DESIGN.md`](GAME_DESIGN.md) | Design vision — core loop (jellyfish trawl), ΔV economy, balloon metaphor (§2.1), Forge v2 chunk-and-queue (§4.0), Apex Hub Keepsake (§4.1), heritage |
-| 4 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | As-built technical reference — file structure, rendering, orbital mechanics (⚠️ needs Epic 9/10 update pass) |
-| 5 | [`BIG_PICTURE.md`](BIG_PICTURE.md) | 12-month strategic roadmap — UX, V5 redesign, education, engineering |
-| 6 | [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) | Sprint tracker — Sprints 1–4, Epics 5–10 completion log (⚠️ needs Epic 9/10 backfill) |
+[`README.md`](README.md) · [`ARCHITECTURE.md`](ARCHITECTURE.md) · [`ROADMAP.md`](ROADMAP.md) · [`HANDOFF.md`](HANDOFF.md) · [`GAME_DESIGN.md`](GAME_DESIGN.md) · [`BIG_PICTURE.md`](BIG_PICTURE.md)
 
-### 🟡 Active reference (10) — consult when touching the area
+### 🟡 Active reference (build specs + subsystem docs)
 
-| Document | Read Before Touching |
-|----------|----------------------|
-| [`ARM_PIVOT_ANALYSIS.md`](ARM_PIVOT_ANALYSIS.md) | Config G geometry bible — [`PlayerSatellite.js`](js/entities/PlayerSatellite.js), [`ArmUnit.js`](js/entities/ArmUnit.js) |
-| [`CAPTURE_NET.md`](CAPTURE_NET.md) | Capture Net design Rev 4 — [`CaptureNet.js`](js/entities/CaptureNet.js), [`CaptureNetVisual.js`](js/ui/CaptureNetVisual.js) |
-| [`CROSSBOW_ARMS.md`](CROSSBOW_ARMS.md) | V5 crossbow arm physics — [`ArmUnit.js`](js/entities/ArmUnit.js), [`ArmManager.js`](js/entities/ArmManager.js) |
-| [`DAUGHTER_ARM_CONTROLS.md`](DAUGHTER_ARM_CONTROLS.md) | Orbital-crane control redesign + dual-metal FEEP |
-| [`DAUGHTER_MULTITOOL_SPEC.md`](DAUGHTER_MULTITOOL_SPEC.md) | Weaver/Spinner tool differentiation 4-phase plan |
-| [`DAUGHTER_RETRIEVAL_AUDIT.md`](DAUGHTER_RETRIEVAL_AUDIT.md) | Wiring-gap survey for retrieval methods (companion to HANDOFF §3.8) |
-| [`FIRST_EXPERIENCE.md`](FIRST_EXPERIENCE.md) | Welcome Field + first-90-second UX + Checklist Mode design |
-| [`GAME_FLOW_BRAINSTORM.md`](GAME_FLOW_BRAINSTORM.md) | Tool failure modes, FEEP metals, ISRO comms, delight catalog |
-| [`LEARNING_THROUGH_PLAY.md`](LEARNING_THROUGH_PLAY.md) | 17 aerospace concepts taught via play |
-| [`SKILLS_ARCHITECTURE.md`](SKILLS_ARCHITECTURE.md) | Skills Discovery system internals |
+**Build specs (new):** [`GUIDANCE_ARBITER_SPEC.md`](GUIDANCE_ARBITER_SPEC.md), [`MISSION_ARC_IMPLEMENTATION.md`](MISSION_ARC_IMPLEMENTATION.md).
+**Subsystems:** [`ARM_PIVOT_ANALYSIS.md`](ARM_PIVOT_ANALYSIS.md), [`CAPTURE_NET.md`](CAPTURE_NET.md), [`CROSSBOW_ARMS.md`](CROSSBOW_ARMS.md), [`DAUGHTER_ARM_CONTROLS.md`](DAUGHTER_ARM_CONTROLS.md), [`DAUGHTER_MULTITOOL_SPEC.md`](DAUGHTER_MULTITOOL_SPEC.md), [`LEARNING_THROUGH_PLAY.md`](LEARNING_THROUGH_PLAY.md), [`MISSION_GUIDANCE_DESIGN.md`](MISSION_GUIDANCE_DESIGN.md), [`MOTHER_MODEL_UPGRADES.md`](MOTHER_MODEL_UPGRADES.md), [`SKILLS_ARCHITECTURE.md`](SKILLS_ARCHITECTURE.md).
 
 ### 🟠 Archive (`archive/`)
 
-40+ heritage docs across multiple consolidation passes. Recent additions (2026-05-29): all Epic 10 docs (DEEP_ANALYSIS, IMPLEMENTATION, VISUALIZATION_PLAN), all perf-sprint docs (GPU_PROFILING, PERF_SPRINT, PERF_FOLLOWUP, QUICK_WINS, SPRINT_2), SK_M1_POLISH_HANDOFF, CEREMONY_REDESIGN, CAPTURE_UX_AUDIT, DEPLOY_ANALYSIS, FINAL_ANALYSIS, and the 5 existing stubs (ARCHIVAL_PLAN, ARM_PIVOT_GAPS_EXPLAINER, CAPTURE_NET_QA, EPIC9_CODE_ORCHESTRATOR, UX_FIXES_ROADMAP) — plus POST_CINCH_QA_DESIGN_DOCS (content folded into GAME_DESIGN.md §4.0–4.1 + HANDOFF.md §4.9.2 #6). Older archived: V3 Octopus, V4 Opussy, RESEARCH_ARCHIVE, AUTOPILOT_ANALYSIS, COLLISION_AVOIDANCE_DESIGN, REFS_DECOUPLING_PLAN, ARCHITECTURE_ANALYSIS_V6, IMPLEMENTATION_PLAN_V6, IMPLEMENTATION_PLAN, FULL_HUD_STRATEGY, NAVSPHERE_REDESIGN, TARGET_PANEL_REDESIGN, ORCHESTRATOR_BRIEF, TUTORIAL_REDESIGN, CONTROL_REDESIGN, TUTORIAL_ANALYSIS, SKILLS_SYSTEM_DESIGN, UX_OVERHAUL_PLAN, BIG_PICTURE_EPIC_5_6_HISTORY, HANDOFF_AUTOPILOT_RETRO.
+Heritage + superseded docs. Folded-and-archived 2026-06-07: `FIRST_EXPERIENCE.md` (→ MISSION_ARC §3), `GAME_FLOW_BRAINSTORM.md` (→ MULTITOOL §15), `DAUGHTER_RETRIEVAL_AUDIT.md` (→ ARCHITECTURE §9), `QA_FINDINGS.md`, and the sprint tracker `IMPLEMENTATION_PLAN_2026-06.md`. Plus prior-shift handoffs, Epic 10 docs, perf-sprint docs, and earlier consolidation passes.
 
 ---
 

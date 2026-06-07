@@ -714,7 +714,7 @@ Once the user accepts this recommendation, the following files need revision. **
 | §13.1 (Aimable Crossbow) | Add Config F doctrine. |
 | §29.1 (Capture Net summary) | No change — planar departure remains valid for body-ring arms. |
 
-### [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md)
+### [`IMPLEMENTATION_PLAN.md`](archive/IMPLEMENTATION_PLAN_2026-06.md)
 
 | Section | Required Change |
 |---------|-----------------|
@@ -790,7 +790,7 @@ This is **well within budget** and eliminates risk from the pivot-geometry block
 - [`CROSSBOW_ARMS.md`](CROSSBOW_ARMS.md) — V5 crossbow/tether design bible
 - [`CAPTURE_NET.md`](CAPTURE_NET.md) — Net capture system (Rev 5)
 - [`BIG_PICTURE.md`](BIG_PICTURE.md) — Strategic roadmap
-- [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) — Epic 9 task specs
+- [`IMPLEMENTATION_PLAN.md`](archive/IMPLEMENTATION_PLAN_2026-06.md) — Epic 9 task specs
 - [`HANDOFF.md`](HANDOFF.md) — Current project status
 - [`js/core/Constants.js`](js/core/Constants.js) — OCTOPUS_V5, ARM_LADDER, FEATURE_FLAGS
 - [`js/entities/ArmManager.js`](js/entities/ArmManager.js) — `generateDockPositions()`, arm fleet management
@@ -2021,7 +2021,7 @@ These tasks update existing design docs to reflect Config G. **No code changes.*
 | D-1 | Update [`CROSSBOW_ARMS.md`](CROSSBOW_ARMS.md) §2.4 (arm positions), §8 (aiming), §12 (8-arm config), §12.5 (mass tables), §15 (Y-harness — simplify for strut-tip reel), §17 (solar/thruster integration), §22 (migration guide), §25 (tech ladder + strut DOF) with Config G barrel dimensions, 3-plane layout, ROSA spec, strut-mounted reel, recessed channels. | CROSSBOW_ARMS.md | 1 day | None |
 | D-2 | Update [`CAPTURE_NET.md`](CAPTURE_NET.md) §4 (tangle model) — revise from equatorial planar departure to meridian-plane departure. Re-derive 5 tangle scenario probabilities. Update §5 (launch mechanics) for strut-tip crossbow fire direction. | CAPTURE_NET.md | 0.5 day | D-1 |
 | D-3 | Update [`BIG_PICTURE.md`](BIG_PICTURE.md) §11 (V5 goals), §12 (config trade study — Config G replaces Quad Linear / Hex Umbrella / Double Umbrella), §13 (crossbow refinements), §29 (net summary), §35 (audit — ROSA replaces rigid wings), §36 (tech ladder). | BIG_PICTURE.md | 0.5 day | D-1 |
-| D-4 | Update [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) §0 (completion log — note Config G adoption), ST-9.2 spec (replace equatorial generator with collar geometry), ST-9.3 spec (setAimAlpha, lockable hinge, RCS recoil), ST-9.5 (reel on strut tip), ST-9.7 (bridle ring → simplified for strut-tip exit). Add new ST-9.10 (stow/deploy state machine), ST-9.11 (launch locks + ROSA deploy sequence). | IMPLEMENTATION_PLAN.md | 0.5 day | D-1 |
+| D-4 | Update [`IMPLEMENTATION_PLAN.md`](archive/IMPLEMENTATION_PLAN_2026-06.md) §0 (completion log — note Config G adoption), ST-9.2 spec (replace equatorial generator with collar geometry), ST-9.3 spec (setAimAlpha, lockable hinge, RCS recoil), ST-9.5 (reel on strut tip), ST-9.7 (bridle ring → simplified for strut-tip exit). Add new ST-9.10 (stow/deploy state machine), ST-9.11 (launch locks + ROSA deploy sequence). | IMPLEMENTATION_PLAN.md | 0.5 day | D-1 |
 | D-5 | Update [`HANDOFF.md`](HANDOFF.md) §3 — note Config G adoption, link to this analysis doc, update Epic 9 status. | HANDOFF.md | 0.25 day | D-4 |
 
 **Total doc-only effort: ~2.75 days.**

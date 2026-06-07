@@ -16,7 +16,7 @@
   1. **P1 Foundation** — flip [`FEATURE_FLAGS.CAPTURE_NET`](js/core/Constants.js:409) ON.
   2. **P2 Magnetic grapple + tool HUD** — new `ARM_STATES.MAGNETIC_GRAPPLE`, SK overlay tool list, `` ` `` cycle, F dispatch.
   3. **P3 Gripper jaws (Weaver)** — `ARM_STATES.GRIPPER_GRAPPLE` for protruding fixtures.
-  4. **P4 Multi-modal pad (Spinner)** — `ARM_STATES.PAD_CONTACT`, auto-selects gecko/electrostatic/hooks on contact ([`GAME_FLOW_BRAINSTORM.md:173`](GAME_FLOW_BRAINSTORM.md:173) — *"the pad figures it out."*).
+  4. **P4 Multi-modal pad (Spinner)** — `ARM_STATES.PAD_CONTACT`, auto-selects gecko/electrostatic/hooks on contact ([`GAME_FLOW_BRAINSTORM.md:173`](archive/GAME_FLOW_BRAINSTORM.md:173) — *"the pad figures it out."*).
 - Every phase keeps the **460 / 2,060 / 0** suite green and adds its own regression tests. **Out of scope:** tether tension reel-in mini-game, Y1+ tools, tier-ladder arm-count progression, mission-2 planning, skills-system gating. *(Decisions log added 2026-05-16; supersedes original §13. Net economy is now **in scope** per Q5 — see §13.)*
 
 ---
@@ -31,10 +31,10 @@ Plus per [`EPIC10_DEEP_ANALYSIS.md:3320-3326`](archive/EPIC10_DEEP_ANALYSIS.md:3
 
 | Class | Mass (kg) | Primary | Secondary | Tertiary | Doc-cite |
 |---|---|---|---|---|---|
-| **Weaver** (Large Daughter) | 6.6 ([`Constants.js:312`](js/core/Constants.js:312)) | **Medium Net** `LD-NET` 5 m, 500 kg cap ([`Constants.js:1213-1234`](js/core/Constants.js:1213); spec §7.2 of [`archive/V3 Octopus.md:726`](archive/V3%20Octopus.md:726)) | **Gripper jaws** — 3-jaw chuck, 30 N grip, 50 mm aperture ([`archive/V3 Octopus.md:820-828`](archive/V3%20Octopus.md:820); [`GAME_FLOW_BRAINSTORM.md:131`](GAME_FLOW_BRAINSTORM.md:131)) | **EPM magnetic face** — 50 N hold on ferrous targets ([`EPIC10_DEEP_ANALYSIS.md:3322-3326`](archive/EPIC10_DEEP_ANALYSIS.md:3322); [`GAME_FLOW_BRAINSTORM.md:72`](GAME_FLOW_BRAINSTORM.md:72) failure-mode #2) |
-| **Spinner** (Small Daughter) | 2.1 ([`Constants.js:313`](js/core/Constants.js:313)) | **Small Net** `SD-NET` 1.5 m, 50 kg cap ([`Constants.js:1237-1257`](js/core/Constants.js:1237); [`archive/V3 Octopus.md:786-794`](archive/V3%20Octopus.md:786)) | **Multi-modal pad** — gecko / hooks / electrostatic / magnet / UV-cure, auto-mode-select on contact ([`archive/V3 Octopus.md:795-818`](archive/V3%20Octopus.md:795); [`GAME_FLOW_BRAINSTORM.md:153-178`](GAME_FLOW_BRAINSTORM.md:153)) | **EPM magnetic face** — 50 N hold on ferrous-fastener targets, 500 kg cap (§13 Q2 — Spinner EPM is now player-facing, matching Weaver). Same hardware as docking, dual-role per [`EPIC10_DEEP_ANALYSIS.md:3322-3326`](archive/EPIC10_DEEP_ANALYSIS.md:3322). |
+| **Weaver** (Large Daughter) | 6.6 ([`Constants.js:312`](js/core/Constants.js:312)) | **Medium Net** `LD-NET` 5 m, 500 kg cap ([`Constants.js:1213-1234`](js/core/Constants.js:1213); spec §7.2 of [`archive/V3 Octopus.md:726`](archive/V3%20Octopus.md:726)) | **Gripper jaws** — 3-jaw chuck, 30 N grip, 50 mm aperture ([`archive/V3 Octopus.md:820-828`](archive/V3%20Octopus.md:820); [`GAME_FLOW_BRAINSTORM.md:131`](archive/GAME_FLOW_BRAINSTORM.md:131)) | **EPM magnetic face** — 50 N hold on ferrous targets ([`EPIC10_DEEP_ANALYSIS.md:3322-3326`](archive/EPIC10_DEEP_ANALYSIS.md:3322); [`GAME_FLOW_BRAINSTORM.md:72`](archive/GAME_FLOW_BRAINSTORM.md:72) failure-mode #2) |
+| **Spinner** (Small Daughter) | 2.1 ([`Constants.js:313`](js/core/Constants.js:313)) | **Small Net** `SD-NET` 1.5 m, 50 kg cap ([`Constants.js:1237-1257`](js/core/Constants.js:1237); [`archive/V3 Octopus.md:786-794`](archive/V3%20Octopus.md:786)) | **Multi-modal pad** — gecko / hooks / electrostatic / magnet / UV-cure, auto-mode-select on contact ([`archive/V3 Octopus.md:795-818`](archive/V3%20Octopus.md:795); [`GAME_FLOW_BRAINSTORM.md:153-178`](archive/GAME_FLOW_BRAINSTORM.md:153)) | **EPM magnetic face** — 50 N hold on ferrous-fastener targets, 500 kg cap (§13 Q2 — Spinner EPM is now player-facing, matching Weaver). Same hardware as docking, dual-role per [`EPIC10_DEEP_ANALYSIS.md:3322-3326`](archive/EPIC10_DEEP_ANALYSIS.md:3322). |
 
-**Design intent split.** The Weaver chooses tools deliberately (net / gripper / magnet). The Spinner now has the same 3-tool choice space (net / pad / magnet) per §13 Q2, but the **pad** still encodes the "positioning over tool-selection" philosophy from [`GAME_FLOW_BRAINSTORM.md:172-175`](GAME_FLOW_BRAINSTORM.md:172): *"The player's job is to GET THE PAD TO TOUCH the debris. The pad figures out which adhesion mode wins."* MAGNET is the third, optional Spinner verb when the target has ferrous fasteners (rocket bodies, defunct sats).
+**Design intent split.** The Weaver chooses tools deliberately (net / gripper / magnet). The Spinner now has the same 3-tool choice space (net / pad / magnet) per §13 Q2, but the **pad** still encodes the "positioning over tool-selection" philosophy from [`GAME_FLOW_BRAINSTORM.md:172-175`](archive/GAME_FLOW_BRAINSTORM.md:172): *"The player's job is to GET THE PAD TO TOUCH the debris. The pad figures out which adhesion mode wins."* MAGNET is the third, optional Spinner verb when the target has ferrous fasteners (rocket bodies, defunct sats).
 
 ---
 
@@ -45,7 +45,7 @@ Plus per [`EPIC10_DEEP_ANALYSIS.md:3320-3326`](archive/EPIC10_DEEP_ANALYSIS.md:3
 | **Net (Weaver/Spinner)** | **Partial.** The full 14-state FSM exists in [`CaptureNet.js`](js/entities/CaptureNet.js:1) (886 LOC; states at [`Constants.js:1109-1124`](js/core/Constants.js:1109)). Visual layer is built ([`CaptureNetVisual.js`](js/ui/CaptureNetVisual.js)). However, the **live** capture path is the legacy 85% dice-roll in [`ArmUnit._updateNetting()`](js/entities/ArmUnit.js:2972) at [line 3009](js/entities/ArmUnit.js:3009) (`Math.random() < Constants.ARM_CAPTURE_SUCCESS_RATE`). | **YES — OFF.** [`FEATURE_FLAGS.CAPTURE_NET: false`](js/core/Constants.js:409). Visual gated identically in [`CaptureNetVisual.js`](js/ui/CaptureNetVisual.js). Per-platform class sizes already encode Weaver/Spinner differentiation ([`Constants.js:1213-1257`](js/core/Constants.js:1213)). |
 | **EPM Magnetic Grapple** | **Not implemented as a capture tool.** EPM **exists as docking hardware** ([`EPIC10_DEEP_ANALYSIS.md:3312-3451`](archive/EPIC10_DEEP_ANALYSIS.md:3312); constants [`DOCK_EPM_HOLD_FORCE`](js/core/Constants.js:177–183)). State-vis hooks present ([`EPIC10_DEEP_ANALYSIS.md:3438-3440`](archive/EPIC10_DEEP_ANALYSIS.md:3438) — blue-flash on energize; `_epmPoleMat` on each ArmUnit, see PlayerSatellite build path). Audio cue ready: [`AudioSystem.playMagnetic()`](js/systems/AudioSystem.js:433) at [line 433](js/systems/AudioSystem.js:433) (square 2400 Hz + 4 Hz LFO). | n/a (no flag yet). |
 | **Weaver Gripper Jaws** | **Missing.** No state, no method, no constants. Only doc-level: [`archive/V3 Octopus.md:820-828`](archive/V3%20Octopus.md:820). | n/a. |
-| **Spinner Multi-modal Pad** | **Missing.** No state, no method, no constants. Doc-level: [`archive/V3 Octopus.md:795-818`](archive/V3%20Octopus.md:795); [`GAME_FLOW_BRAINSTORM.md:153-178`](GAME_FLOW_BRAINSTORM.md:153). | n/a. |
+| **Spinner Multi-modal Pad** | **Missing.** No state, no method, no constants. Doc-level: [`archive/V3 Octopus.md:795-818`](archive/V3%20Octopus.md:795); [`GAME_FLOW_BRAINSTORM.md:153-178`](archive/GAME_FLOW_BRAINSTORM.md:153). | n/a. |
 | **Tool-selection HUD on SK** | **Missing.** SK overlay exists ([`DockingReticle._drawStationKeepOverlay()`](js/ui/DockingReticle.js:684) at [line 684](js/ui/DockingReticle.js:684)) but shows only θ/φ/R. Backtick is *already wired* but lives behind `Shift+`` ` `` and routes to legacy lasso/spinner/weaver tool list ([`InputManager.js:1166-1168`](js/systems/InputManager.js:1166); [`TargetSelector._cycleTool()`](js/systems/TargetSelector.js:149) at [line 149](js/systems/TargetSelector.js:149)). `F` in SK currently *only* calls [`ArmUnit.captureFromStationKeep()`](js/entities/ArmUnit.js:2949) → `NETTING` ([`InputManager.js:836-839`](js/systems/InputManager.js:836)). |
 
 **Net-count inventory** (`armNetCounts[]`) is already plumbed through save/load ([`PersistenceManager.js:238-258`](js/systems/PersistenceManager.js:238); [`test-ArmTierCatalog.js:756-841`](js/test/test-ArmTierCatalog.js:756)) and through [`CaptureNet.getState()`](js/entities/CaptureNet.js:1). **Per §13 Q5, net expenditure IS enabled at Y0:** NETTING entry decrements `armNetCounts[i]`; depletion (count === 0) is a hard-fail state — F-press plays click-fail audio and the recommender drops NET to score 0 so another tool takes the ▶ marker. Carry counts seed from new `ARM_NET_CAPACITY = { weaver: 2, spinner: 2 }` (§4.1). No auto-refill at Y0; resupply UX deferred to Y1.
@@ -318,7 +318,7 @@ All three new states are **entered from** [`ArmUnit.captureFromStationKeep()`](j
    └──────────────────────────┘
 ```
 
-**Mode resolution** is deterministic by target metadata at contact instant — see §6 for inputs. **No player choice required** — this is the load-bearing line from [`GAME_FLOW_BRAINSTORM.md:173`](GAME_FLOW_BRAINSTORM.md:173): *"the pad figures it out."*
+**Mode resolution** is deterministic by target metadata at contact instant — see §6 for inputs. **No player choice required** — this is the load-bearing line from [`GAME_FLOW_BRAINSTORM.md:173`](archive/GAME_FLOW_BRAINSTORM.md:173): *"the pad figures it out."*
 
 **Gecko warm-window check.** If `mode === 'gecko'` and target surface temperature outside `[GECKO_TEMP_MIN_C, GECKO_TEMP_MAX_C]`, fall back through priority list (`gecko → hooks → electrostatic → ...`). Y0 lacks per-debris temperature data, so default to "warm window OK" until a sensor scan provides `surfaceTempC` (out of scope this cycle; doc-cite for future: [`archive/V3 Octopus.md:809-818`](archive/V3%20Octopus.md:809)).
 
@@ -725,4 +725,52 @@ Restated so future readers don't expand scope:
 
 ---
 
-*End of spec. Total: 14 sections. Cross-reference: [`HANDOFF.md`](HANDOFF.md), [`SK_M1_POLISH_HANDOFF.md`](archive/SK_M1_POLISH_HANDOFF.md), [`CAPTURE_NET.md`](CAPTURE_NET.md), [`archive/V3 Octopus.md`](archive/V3%20Octopus.md), [`GAME_FLOW_BRAINSTORM.md`](GAME_FLOW_BRAINSTORM.md), [`EPIC10_DEEP_ANALYSIS.md`](archive/EPIC10_DEEP_ANALYSIS.md), [`DAUGHTER_ARM_CONTROLS.md`](DAUGHTER_ARM_CONTROLS.md).*
+## §15 — Tool Selection & Net-Failure Modes (folded from GAME_FLOW_BRAINSTORM.md)
+
+> Consolidated 2026-06-07. The brainstorm source is archived at [`archive/GAME_FLOW_BRAINSTORM.md`](archive/GAME_FLOW_BRAINSTORM.md) (delight/reward/journey color retained there). The load-bearing design — *why the net fails and which tool counters each failure* — lives here because it is the design contract for the §2 multi-tool inventory and the §7 recommender.
+
+### §15.1 The four root-cause families (the mental model to teach)
+
+Every net failure reduces to one of four physics causes. Each has a counter-tool the recommender (§7) should surface:
+
+1. **Angular momentum beats the net (tumble > ~10°/s).** Compliant low-mass net's near edge is whipped off / tangles. → **Laser de-spin first**, then net. The canonical 2-step combo (ROADMAP CP-2).
+2. **No purchase geometry (smooth/convex, no protrusions).** Cinched net slides off. → **MAGNET** if ferrous (or ferrous fasteners — see §6 heterogeneous-spacecraft model); **PAD** (gecko/electrostatic) if not; **GRIPPER** if a fixture exists.
+3. **Scale mismatch.** Sub-mesh fragment passes through; >2000 kg body can't be enveloped/reeled. → **PAD** (Spinner) for tiny; **harpoon/ablation-deorbit** for massive (sheriff play, not scavenger).
+4. **Hostile surface state.** Charge/arc, fragile panels crushed by cinch, cabled debris dragging neighbours. → discharge / compression-free pad / cable-cut before net.
+
+### §15.2 The eight observable failure modes (symptom → counter)
+
+| # | Symptom | Root cause | Counter-tool | TRL |
+|---|---|---|---|---|
+| 1 | Net slings off a corner | high tumble (>10°/s) | laser detumble | 5 |
+| 2 | Net slides off curved hull | smooth ferromagnetic, no entanglement | magnetic grapple (EPM) | 9 |
+| 3 | Net flies past it | fragment < mesh aperture | gecko/electrostatic pad (Spinner) | 4–5 |
+| 4 | Net contacts but can't envelop | massive intact body (>2000 kg) | harpoon + slow drag, or ablation-deorbit | 7 |
+| 5 | Net captures but breaks panels | cinch crushes thin structure | adhesion pad (no compression) | 4 |
+| 6 | Net repelled / arcs | spacecraft charging | discharge wand → grapple | 6 |
+| 7 | Net snags a trailing cable | cabled/MLI debris drags neighbours | cable-cut laser pulse first | 6 |
+| 8 | Houston REFUSES (RED) | treaty-protected active sat | none — `ActiveSatGuard` blocks arming | n/a |
+
+**Design principle:** every failure must answer three questions visibly — *what failed (symptom), why (root-cause readout), what now (a counter-tool owned or shop-visible)*. The STATION_KEEP inspect step must be **mandatory and rewarded** — "inspect before commit" is the doctrine that makes the tool ladder matter. Net failures should prefer **partial/recoverable** outcomes (TANGLED decision: settle vs yank) over binary loss — see ROADMAP EN-2.
+
+### §15.3 The seven-tool kit (range / best-for / mechanism)
+
+| Tool | Range | Best for | Mechanism | TRL | Build phase |
+|---|---|---|---|---|---|
+| Bolas/Lasso | 50 m | small, slow, near | spinning weighted line | 9 | shipped |
+| Net (Weaver) | 2 km | medium, tumbling, mesh-grippable | Miura-ori + SMA cinch | 7 | shipped (P1) |
+| Net (Spinner) | 500 m | small, fast-react | 1.5 m fast net | 7 | shipped (P1) |
+| Magnetic grapple | 5–50 m contact | ferrous hull / fasteners | EPM | 9 | **P2 (CP-1 priority)** |
+| Gripper jaws | contact | protruding fixtures | 3-jaw chuck | 7 | P3 |
+| Multi-modal pad | contact | smooth/fragile/tiny | gecko/hooks/electro/magnet/UV | 4–5 | P4 |
+| Laser detumble | 500 m (mother) | anything tumbling >10°/s | photon ablation | 5 | CP-2 |
+
+**Multi-modal pad doctrine (Spinner secondary):** the pad auto-resolves adhesion mode on contact (gecko/hooks/electrostatic/magnet/UV-cure). *The player's job is to get the pad to TOUCH the debris; the pad figures out which mode wins.* This rewards positioning over tool-selection — the load-bearing line for §5.3's `PAD_CONTACT` resolver.
+
+### §15.4 Acquisition ladder (each tool opens NEW debris types, not "more damage")
+
+Y0: bolas, Spinner/Weaver net → **magnet, laser detumble** (first capture failures teach the need) → Y1 gecko/multi-modal pad → Y2 electrostatic, EDT, harpoon → Y3 mussel-catechol adhesive → Y4 MPD, 500 W beam. This ladder = the difficulty ladder = the TRL curriculum (ROADMAP §0).
+
+---
+
+*End of spec. Total: 15 sections. Cross-reference: [`HANDOFF.md`](HANDOFF.md), [`ROADMAP.md`](ROADMAP.md) (CP-1/CP-2), [`CAPTURE_NET.md`](CAPTURE_NET.md), [`archive/V3 Octopus.md`](archive/V3%20Octopus.md), [`archive/GAME_FLOW_BRAINSTORM.md`](archive/GAME_FLOW_BRAINSTORM.md), [`archive/EPIC10_DEEP_ANALYSIS.md`](archive/EPIC10_DEEP_ANALYSIS.md), [`DAUGHTER_ARM_CONTROLS.md`](DAUGHTER_ARM_CONTROLS.md).*

@@ -256,7 +256,7 @@ The FEEP (Field Emission Electric Propulsion) thrusters on each daughter arm are
 | **Propellant** | Xenon (implied) | **Dual-metal: indium primary + 1 alt metal** (gallium/iodine/bismuth/etc) | **Multimetal FEEP is TRL 7–8 today** (Enpulsion IFM Nano series, multiple flight demos 2024–2025) |
 | Thruster count | 2× per arm (aft) | 2× per arm (fore + aft on yoke) | Bidirectional thrust capability |
 
-> **Important TRL note:** Multimetal FEEP is **not exotic future tech**. Dual-metal indium thrusters are flight-demonstrated. The V5 daughter arm ships with a single hardware module that can ionise indium (default) OR a player-refined alternative metal cartridge (gallium, iodine, bismuth). Switching is a **propellant change**, not a hardware upgrade. Higher-TRL exotic options (mercury, cesium, tungsten) gate behind Forge unlocks per [`GAME_FLOW_BRAINSTORM.md §7.2`](GAME_FLOW_BRAINSTORM.md).
+> **Important TRL note:** Multimetal FEEP is **not exotic future tech**. Dual-metal indium thrusters are flight-demonstrated. The V5 daughter arm ships with a single hardware module that can ionise indium (default) OR a player-refined alternative metal cartridge (gallium, iodine, bismuth). Switching is a **propellant change**, not a hardware upgrade. Higher-TRL exotic options (mercury, cesium, tungsten) gate behind Forge unlocks per [`GAME_FLOW_BRAINSTORM.md §7.2`](archive/GAME_FLOW_BRAINSTORM.md).
 
 ### 5.3 Variable Isp Trade-Off (Gameplay Mechanic)
 

@@ -1018,7 +1018,7 @@ Four major design elements are detailed in [`CAPTURE_NET.md`](CAPTURE_NET.md):
 
 Also addresses: cling probability model ([`§3`](CAPTURE_NET.md), gated by `NET_CLING_MODEL`), five tangle scenarios ([`§4`](CAPTURE_NET.md), gated by `NET_TANGLE_MECHANICS`), and fragmentation prevention ([`§5`](CAPTURE_NET.md), solved primarily by the cinch mode).
 
-This replaces [`LassoSystem.fire()`](js/systems/LassoSystem.js:205) and §4.4–§4.7 of [`HANDOFF.md`](HANDOFF.md:1). Implementation tracked as **ST-9.4** (5 sub-tasks, 4 days) in [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md). The Capture Net is the **game's starting capture tool**, available from mission 1 — TRL 9, no unlocks needed.
+This replaces [`LassoSystem.fire()`](js/systems/LassoSystem.js:205) and §4.4–§4.7 of [`HANDOFF.md`](HANDOFF.md:1). Implementation tracked as **ST-9.4** (5 sub-tasks, 4 days) in [`IMPLEMENTATION_PLAN.md`](archive/IMPLEMENTATION_PLAN_2026-06.md). The Capture Net is the **game's starting capture tool**, available from mission 1 — TRL 9, no unlocks needed.
 
 ---
 
@@ -1500,6 +1500,6 @@ Roadmap **revised after the §35 audit + §36 upgrade ladder** — game ships wi
 - [`CROSSBOW_ARMS.md`](CROSSBOW_ARMS.md:1) — V5 crossbow + tether design bible
 - [`GAME_DESIGN.md`](GAME_DESIGN.md:1) — core loop + heritage
 - [`LEARNING_THROUGH_PLAY.md`](LEARNING_THROUGH_PLAY.md:1) — concept-per-skill mapping
-- [`FIRST_EXPERIENCE.md`](FIRST_EXPERIENCE.md:1) — 90-second onboarding design
+- [`FIRST_EXPERIENCE.md`](archive/FIRST_EXPERIENCE.md:1) — 90-second onboarding design
 
 *Document owner: Architect shift. Updates: every quarter end. Next review after Q1 closes.*
