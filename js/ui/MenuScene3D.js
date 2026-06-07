@@ -198,6 +198,68 @@ function buildGrippingGlove(mat, thumbSide) {
   return g;
 }
 
+// NASA EMU orbital EVA boot, modelled from flight-hardware photos. Rather than a
+// pile of blobs, the boot is a single EXTRUDED side-profile (heel → ankle →
+// instep → up-turned toe) with a beveled, puffy fabric edge — the recognizable
+// EMU "bootie" silhouette. A curved black flexible OUTSOLE follows the foot and
+// rises with the toe (the EMU "toe-spring"), and a soft gathered cuff rolls the
+// LTA leg fabric into the boot. NO deep tread — orbital EVA needs no traction
+// (the cleated waffle sole is the Apollo LUNAR overshoe, not this). The boot is
+// built in its own frame: ankle opening at +Y, foot extends +Z, sole faces −Y.
+function buildEVABoot(mat) {
+  const boot = new THREE.Group();
+  const S = M;   // profile coords are in metres, same scale as the rest of the suit
+
+  const shapeFrom = (pts) => {
+    const s = new THREE.Shape();
+    s.moveTo(pts[0][0] * S, pts[0][1] * S);
+    for (let i = 1; i < pts.length; i++) s.lineTo(pts[i][0] * S, pts[i][1] * S);
+    s.closePath();
+    return s;
+  };
+  const extrude = (pts, width, bevel) => {
+    const geo = new THREE.ExtrudeGeometry(shapeFrom(pts), {
+      depth: Math.max(0.001, (width - 2 * bevel) * S), bevelEnabled: true,
+      bevelThickness: bevel * S, bevelSize: bevel * S, bevelSegments: 4,
+      steps: 1, curveSegments: 14,
+    });
+    geo.rotateY(-Math.PI / 2);                 // profile X(=Z_boot)→+Z, extrude(width)→X
+    geo.computeBoundingBox();
+    const bb = geo.boundingBox;
+    geo.translate(-(bb.max.x + bb.min.x) / 2, 0, 0);   // centre the width on X
+    return geo;
+  };
+
+  // Side profile (Z_boot, Y_boot): rounded heel, low ankle column, instep slope,
+  // and a blunt toe with a GENTLE up-curl (toe-spring). Wide and short — a chunky
+  // bootie, not a tall narrow boot.
+  const upper = [
+    [-0.085, -0.080], [-0.098, -0.030], [-0.092, 0.020], [-0.065, 0.052],
+    [ 0.005,  0.058], [ 0.070,  0.020], [ 0.140, -0.005],
+    [ 0.200,  0.012], [ 0.218, -0.030], [ 0.180, -0.080],
+  ];
+  // Curved outsole band — thin, gentle toe lift.
+  const soleP = [
+    [-0.087, -0.050], [-0.087, -0.086], [0.180, -0.086],
+    [ 0.220, -0.040], [ 0.200, -0.005], [0.140, -0.050],
+  ];
+
+  const footUpper = new THREE.Mesh(extrude(upper, 0.150, 0.024), mat.boot);
+  boot.add(footUpper);
+
+  const footSole = new THREE.Mesh(extrude(soleP, 0.128, 0.014), mat.bootSole);
+  footSole.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+  boot.add(footSole);
+
+  // Gathered ankle cuff — soft rolled fabric ring at the leg→boot junction
+  const cuff = new THREE.Mesh(new THREE.TorusGeometry(M * 0.066, M * 0.020, 8, 18), mat.suitFold);
+  cuff.rotation.x = Math.PI / 2;
+  cuff.position.set(0, M * 0.052, -M * 0.02);
+  boot.add(cuff);
+
+  return boot;
+}
+
 function buildAstronaut(mat) {
   const astro = new THREE.Group();
   astro.name = 'EVAAstronaut';
@@ -579,28 +641,20 @@ function buildAstronaut(mat) {
     calf.position.set(0, -M * 0.13, -M * 0.028);
     shankGroup.add(calf);
 
-    // ── Boot — chunky SOFT-FABRIC overshoe with a dark sole (no metal cuff). A
-    //    plantar-flexed foot sub-group gives relaxed, slightly pointed toes. ──
+    // ── Boot — NASA EMU orbital EVA boot (see buildEVABoot): an extruded
+    //    foot-profile bootie with a gathered ankle cuff, blunt up-turned toe and
+    //    a thin curved black sole. The ankle joint cants slightly for a relaxed,
+    //    asymmetric micro-g float. ──
     const bootGroup = new THREE.Group();
     bootGroup.position.set(0, -M * 0.42, 0);
-    const ankleSoft = new THREE.Mesh(new THREE.SphereGeometry(M * 0.072, 10, 8), mat.boot);
-    ankleSoft.scale.set(1.0, 0.9, 1.05);
-    bootGroup.add(ankleSoft);
 
-    const footGroup = new THREE.Group();          // plantar-flex pivot at the ankle
-    footGroup.rotation.x = side < 0 ? 0.40 : 0.22; // relaxed pointed toes (asymmetric)
-    const bootBody = new THREE.Mesh(new THREE.SphereGeometry(M * 0.072, 10, 8), mat.boot);
-    bootBody.scale.set(1.05, 0.9, 1.5);
-    bootBody.position.set(0, -M * 0.03, M * 0.07);
-    footGroup.add(bootBody);
-    const toe = new THREE.Mesh(new THREE.SphereGeometry(M * 0.06, 9, 7), mat.boot);
-    toe.scale.set(1.0, 0.8, 1.2);
-    toe.position.set(0, -M * 0.03, M * 0.17);
-    footGroup.add(toe);
-    const sole = new THREE.Mesh(new THREE.BoxGeometry(M * 0.115, M * 0.03, M * 0.27), mat.bootSole);
-    sole.position.set(0, -M * 0.082, M * 0.075);
-    sole.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
-    footGroup.add(sole);
+    const footGroup = new THREE.Group();           // ankle pivot
+    footGroup.rotation.x = side < 0 ? 0.10 : 0.04; // slight relaxed cant (asymmetric)
+
+    const boot = buildEVABoot(mat);
+    boot.position.y = -M * 0.03;                   // drop so the cuff meets the shin
+    footGroup.add(boot);
+
     bootGroup.add(footGroup);
     shankGroup.add(bootGroup);
 
