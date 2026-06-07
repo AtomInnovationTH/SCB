@@ -14,23 +14,24 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Constants } from '../core/Constants.js';   // FIX_PLAN §2-followup — RENDER_ORDER enum
+// The hero ship is the REAL gameplay Mother + daughters (not a hand replica), so
+// the menu can never drift from the sim. Any change to these models shows here.
+import { PlayerSatellite } from '../entities/PlayerSatellite.js';
+import { ArmUnit } from '../entities/ArmUnit.js';
 
-// ─── Constants (mirror key OCTOPUS_V5 values so the menu hero reads as the
-//     SAME spacecraft the player flies — see PlayerSatellite / Constants.OCTOPUS_V5) ─
-const M         = 1;          // scale factor (1 unit = 1 metre)
-const BUS_LEN   = 2.0 * M;   // CORE_LENGTH — barrel length (2.0 m)
-const BUS_R     = 0.4 * M;   // COLLAR_RADIUS — barrel radius (0.40 m, 0.8 m across)
-const COLLAR_Y  = 0.90 * M;  // COLLAR_Y — collar plane offset from bus centre
-const ROSA_W    = 1.0 * M;   // ROSA_WIDTH — wing extension per side
-const ROSA_L    = 2.0 * M;   // ROSA_LENGTH — panel chord
-const ROSA_CH   = 0.30 * M;  // ROSA_CHAMFER — outboard tip chamfer
-const STRUT_LEN = 1.20 * M;  // crossbow strut reach (trimmed from sim's 1.6 m for a tidy hero frame)
-// Crossbow strut azimuths (deg) — matches Constants.ARM_LADDER.Y0_QUAD.
-const STRUT_AZ  = [60, 120, 240, 300];
-// ROSA wings live at ±Y (top/bottom) in the menu so the welding astronaut on the
-// +X hull stays clear of the wing roots. (In sim the wings sit at 0°/180°; the
-// satellite is simply rolled 90° about its long axis for this hero shot.)
-const ROSA_AZ   = [90, 270];
+// ─── Scale + hull anchors ────────────────────────────────────────────────────
+// The hero Mother is a real PlayerSatellite (built at the sim's 1-unit=100-km
+// scale) scaled up so 1 unit = 1 metre. At that scale its barrel radius lands on
+// BUS_R and its front cap on BUS_LEN*0.5 — the anchor points the EVA astronaut,
+// weld glow and safety tether hang off of.
+const M       = 1;          // scale factor (1 unit = 1 metre)
+const BUS_LEN = 2.0 * M;    // Constants.OCTOPUS_V5.CORE_LENGTH — barrel length (2.0 m)
+const BUS_R   = 0.4 * M;    // Constants.OCTOPUS_V5.COLLAR_RADIUS — barrel radius (0.40 m)
+
+// PlayerSatellite builds at 1 scene unit = 100 km (1 metre = 1e-5 units). Scaling
+// the instance by 1/SIM_M makes its sim-metre geometry read at the hero's 1 m
+// scale, so the hull matches BUS_R / BUS_LEN above exactly.
+const SIM_M   = 0.00001;
 
 const SPARK_COUNT = 70;
 const SPARK_SPEED = 2.80;     // fast — sparks streak away before accumulating
@@ -158,391 +159,6 @@ function makeMaterials() {
     thaiRed:   new THREE.MeshStandardMaterial({ color: 0xed1c24, metalness: 0.0, roughness: 0.9 }),
     thaiBlue:  new THREE.MeshStandardMaterial({ color: 0x003893, metalness: 0.0, roughness: 0.85 }),
   };
-}
-
-// ═════════════════════════════════════════════════════════════════════════════
-// SATELLITE — "Mother" (Octopus V5 / Config G), faithful to PlayerSatellite.js
-//   • gold MLI barrel (2.0 m × 0.8 m) with dark GaAs body cells + quilting seams
-//   • anodized collar ring + 4 radial crossbow struts (rib rings, dock nodes)
-//   • two chamfered ROSA solar wings (dark cells, gold edge frame)
-//   • forward laser aperture (glowing) + gold rim, aft FEEP nozzle cluster
-// ═════════════════════════════════════════════════════════════════════════════
-const DEG = Math.PI / 180;
-
-// ─── Daughter spacecraft (Weaver / Spinner) ─────────────────────────────────
-// Small hex-prism free-flyers the Mother deploys on her crossbow struts
-// (faithful to ArmUnit: Weaver 0.2³×0.3 m blue, Spinner 0.1³×0.15 m green —
-// solar-cell facets, bare metal caps, an aft FEEP nozzle and a gimbal ring).
-function buildDaughter(mat, type = 'weaver') {
-  const g = new THREE.Group();
-  g.name = `Daughter_${type}`;
-  const isW = type === 'weaver';
-  const len     = (isW ? 0.30 : 0.18) * M;
-  const apothem = (isW ? 0.10 : 0.06) * M;
-  const hexR    = apothem / Math.cos(Math.PI / 6);
-
-  const bodyMat = new THREE.MeshStandardMaterial({
-    color: isW ? 0x4488aa : 0x88aa44, metalness: 0.6, roughness: 0.4,
-    emissive: 0x060614, emissiveIntensity: 0.1,
-  });
-  const cellMat = new THREE.MeshStandardMaterial({
-    color: 0x0a1133, metalness: 0.4, roughness: 0.5,
-    emissive: 0x0a0a40, emissiveIntensity: 0.12,
-  });
-
-  // Hex prism body (axis along Z after the rotation)
-  const body = new THREE.Mesh(
-    new THREE.CylinderGeometry(hexR, hexR, len, 6, 1, false, Math.PI / 6), bodyMat);
-  body.rotation.x = Math.PI / 2;
-  g.add(body);
-
-  // Solar-cell facets on 5 of 6 sides (one left as bare metal, like ArmUnit)
-  const facetGeo = new THREE.PlaneGeometry(hexR * 0.92, len * 0.9);
-  for (let k = 0; k < 6; k++) {
-    if (k === 1) continue;
-    const az = Math.PI / 6 + k * (Math.PI / 3);
-    const radial = new THREE.Vector3(Math.cos(az), Math.sin(az), 0);
-    const up = new THREE.Vector3(0, 0, 1);
-    const right = new THREE.Vector3().crossVectors(up, radial).normalize();
-    const facet = new THREE.Mesh(facetGeo, cellMat);
-    facet.position.set(radial.x * apothem * 1.02, radial.y * apothem * 1.02, 0);
-    facet.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, up, radial));
-    facet.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
-    g.add(facet);
-  }
-
-  // Aft FEEP nozzle + forward gimbal ring (ArmUnit signature)
-  const noz = new THREE.Mesh(
-    new THREE.CylinderGeometry(hexR * 0.3, hexR * 0.42, len * 0.25, 6, 1, true), mat.feep);
-  noz.rotation.x = Math.PI / 2;
-  noz.position.z = -len * 0.6;
-  g.add(noz);
-  const gimbalRing = new THREE.Mesh(
-    new THREE.TorusGeometry(hexR * 0.5, hexR * 0.09, 6, 10), mat.rcs);
-  gimbalRing.position.z = len * 0.5;
-  g.add(gimbalRing);
-
-  return g;
-}
-
-function buildSatellite(mat) {
-  const sat = new THREE.Group();
-  sat.name = 'MotherSatellite';
-
-  const RO = Constants.RENDER_ORDER;
-
-  // ── Barrel — gold MLI thermal blanket (the body skin IS the blanket) ──
-  const busGeo = new THREE.CylinderGeometry(BUS_R, BUS_R, BUS_LEN, 16, 1, true);
-  const bus = new THREE.Mesh(busGeo, mat.goldMLI);
-  bus.rotation.x = Math.PI / 2;   // align to Z-forward
-  bus.renderOrder = RO.SPACECRAFT_OPAQUE;
-  sat.add(bus);
-
-  // ── Structural end caps (dark metal: optics bench fwd / thruster deck aft) ──
-  const capGeo = new THREE.CircleGeometry(BUS_R, 16);
-  const fCap = new THREE.Mesh(capGeo, mat.cap);
-  fCap.position.z = BUS_LEN * 0.5;
-  fCap.renderOrder = RO.SPACECRAFT_OPAQUE;
-  sat.add(fCap);
-  const rCap = new THREE.Mesh(capGeo, mat.cap);
-  rCap.position.z = -BUS_LEN * 0.5;
-  rCap.rotation.y = Math.PI;
-  rCap.renderOrder = RO.SPACECRAFT_OPAQUE;
-  sat.add(rCap);
-
-  // ── Body-mount GaAs solar cells — flat dark panels on the clear facets ──
-  // (matches PlayerSatellite: a central tall row + fore/aft rows, skipping the
-  //  facets occupied by the ROSA roots and the crossbow struts).
-  const FACETS = 16, facetStep = (Math.PI * 2) / FACETS;
-  const facetW = 2 * (BUS_R * 1.006) * Math.tan(facetStep / 2);
-  const angDist = (a, b) => { let d = Math.abs(a - b) % (Math.PI * 2); return d > Math.PI ? Math.PI * 2 - d : d; };
-  const strutRad = STRUT_AZ.map(d => d * DEG);
-  const rosaRad  = ROSA_AZ.map(d => d * DEG);
-  const cellMat = mat.solar.clone();
-  cellMat.side = THREE.FrontSide;
-  cellMat.depthWrite = false;
-  const pvRows = [
-    { z: 0,              h: BUS_LEN * 0.46 },
-    { z: BUS_LEN * 0.30, h: BUS_LEN * 0.12 },
-    { z: -BUS_LEN * 0.30, h: BUS_LEN * 0.12 },
-  ];
-  for (let f = 0; f < FACETS; f++) {
-    const az = f * facetStep + facetStep / 2;
-    // Cull the back hemisphere: the satellite never rotates and the camera only
-    // sways across the +X/+Z side, so −X facets are never seen — don't build them.
-    if (Math.cos(az) < -0.30) continue;
-    if (strutRad.some(s => angDist(az, s) < 18 * DEG)) continue;
-    if (rosaRad.some(r => angDist(az, r) < 12 * DEG)) continue;
-    const rr = BUS_R * 1.02;
-    const radial = new THREE.Vector3(Math.cos(az), Math.sin(az), 0);
-    const up = new THREE.Vector3(0, 0, 1);
-    const right = new THREE.Vector3().crossVectors(up, radial).normalize();
-    const basis = new THREE.Matrix4().makeBasis(right, up, radial);
-    for (const row of pvRows) {
-      const panel = new THREE.Mesh(new THREE.PlaneGeometry(facetW * 0.9, row.h), cellMat);
-      panel.position.set(Math.cos(az) * rr, Math.sin(az) * rr, row.z);
-      panel.quaternion.setFromRotationMatrix(basis);
-      panel.renderOrder = RO.SPACECRAFT_DETAIL;
-      sat.add(panel);
-    }
-  }
-
-  // ── MLI quilting seams — thin darker-gold tape rings dividing the blanket ──
-  const seamGeo = new THREE.TorusGeometry(BUS_R * 1.006, M * 0.006, 4, 24);
-  for (const z of [-BUS_LEN * 0.40, -BUS_LEN * 0.23, BUS_LEN * 0.23, BUS_LEN * 0.40]) {
-    const seam = new THREE.Mesh(seamGeo, mat.mliSeam);
-    seam.position.z = z;
-    seam.rotation.x = Math.PI / 2;
-    seam.renderOrder = RO.SPACECRAFT_DETAIL;
-    sat.add(seam);
-  }
-
-  // ── Forward laser aperture (glowing) + gold rim ──
-  const aperture = new THREE.Mesh(new THREE.CircleGeometry(M * 0.12, 16), mat.aperture);
-  aperture.position.set(0, 0, BUS_LEN * 0.5 + M * 0.006);
-  aperture.renderOrder = RO.SPACECRAFT_DETAIL;
-  sat.add(aperture);
-  const apRing = new THREE.Mesh(new THREE.RingGeometry(M * 0.12, M * 0.16, 16), mat.goldMLI);
-  apRing.position.set(0, 0, BUS_LEN * 0.5 + M * 0.010);
-  apRing.renderOrder = RO.SPACECRAFT_DETAIL;
-  sat.add(apRing);
-
-  // ── Collar ring (anodized) at the +Z end ──
-  const collar = new THREE.Mesh(new THREE.TorusGeometry(BUS_R * 1.03, M * 0.018, 8, 32), mat.collar);
-  collar.rotation.x = Math.PI / 2;
-  collar.position.z = COLLAR_Y;
-  collar.renderOrder = RO.SPACECRAFT_DETAIL;
-  sat.add(collar);
-
-  // ── Crossbow struts — radial tubes from the collar, faithful to
-  //    PlayerSatellite._buildStruts: hinge, root collar, rib rings, tip dock
-  //    collar + node, and a tether reel cartridge with status LED. One strut
-  //    carries a docked Weaver daughter (the struts exist to deploy daughters). ──
-  const strutTube  = new THREE.CylinderGeometry(M * 0.025, M * 0.025, STRUT_LEN, 8);
-  const ribGeo     = new THREE.TorusGeometry(M * 0.030, M * 0.008, 6, 12);
-  const dockNode   = new THREE.SphereGeometry(M * 0.045, 8, 6);
-  const hingeGeo   = new THREE.BoxGeometry(M * 0.07, M * 0.06, M * 0.06);
-  const rootColGeo = new THREE.CylinderGeometry(M * 0.045, M * 0.045, M * 0.09, 10);
-  const tipColGeo  = new THREE.CylinderGeometry(M * 0.038, M * 0.038, M * 0.06, 10);
-  const reelGeo    = new THREE.BoxGeometry(M * 0.055, M * 0.07, M * 0.045);
-  for (const azDeg of STRUT_AZ) {
-    const az = azDeg * DEG;
-    const pivot = new THREE.Group();
-    pivot.position.set(Math.cos(az) * BUS_R, Math.sin(az) * BUS_R, COLLAR_Y);
-    // local -Y → radial outward
-    pivot.quaternion.setFromUnitVectors(
-      new THREE.Vector3(0, -1, 0),
-      new THREE.Vector3(Math.cos(az), Math.sin(az), 0));
-
-    const hinge = new THREE.Mesh(hingeGeo, mat.collar);
-    hinge.renderOrder = RO.SPACECRAFT_DETAIL;
-    pivot.add(hinge);
-
-    // Root joint collar (just outboard of the hinge)
-    const rootCol = new THREE.Mesh(rootColGeo, mat.collar);
-    rootCol.position.y = -M * 0.07;
-    rootCol.renderOrder = RO.SPACECRAFT_DETAIL;
-    pivot.add(rootCol);
-
-    const strut = new THREE.Mesh(strutTube, mat.strut);
-    strut.position.y = -STRUT_LEN * 0.5;
-    pivot.add(strut);
-
-    for (const frac of [0.3, 0.55, 0.8]) {
-      const ring = new THREE.Mesh(ribGeo, mat.strutRing);
-      ring.position.y = -STRUT_LEN * frac;
-      ring.rotation.x = Math.PI / 2;
-      ring.renderOrder = RO.SPACECRAFT_DETAIL;
-      pivot.add(ring);
-    }
-
-    // Tether reel cartridge (+ green status LED) near the tip
-    const reel = new THREE.Mesh(reelGeo, mat.cap);
-    reel.position.set(M * 0.05, -STRUT_LEN * 0.82, 0);
-    reel.renderOrder = RO.SPACECRAFT_DETAIL;
-    pivot.add(reel);
-    const led = new THREE.Mesh(
-      new THREE.SphereGeometry(M * 0.009, 5, 5),
-      new THREE.MeshBasicMaterial({ color: 0x33ff66 }));
-    led.position.set(M * 0.08, -STRUT_LEN * 0.82, 0);
-    pivot.add(led);
-
-    // Tip dock collar + node
-    const tipCol = new THREE.Mesh(tipColGeo, mat.collar);
-    tipCol.position.y = -STRUT_LEN + M * 0.03;
-    tipCol.renderOrder = RO.SPACECRAFT_DETAIL;
-    pivot.add(tipCol);
-    const node = new THREE.Mesh(dockNode, mat.collar);
-    node.position.y = -STRUT_LEN;
-    pivot.add(node);
-
-    sat.add(pivot);
-
-    // Docked Weaver daughter on the upper-right strut (visible to the camera).
-    if (azDeg === 60) {
-      const daughter = buildDaughter(mat, 'weaver');
-      const outDist = BUS_R + STRUT_LEN + M * 0.17;
-      daughter.position.set(Math.cos(az) * outDist, Math.sin(az) * outDist, COLLAR_Y);
-      // Body long-axis (Z) along the strut radial → docked aft-to-tip, nose out.
-      daughter.quaternion.setFromUnitVectors(
-        new THREE.Vector3(0, 0, 1), new THREE.Vector3(Math.cos(az), Math.sin(az), 0));
-      sat.add(daughter);
-    }
-  }
-
-  // ── ROSA solar wings — chamfered dark-cell panels with gold edge frame ──
-  // Built spanning local X (width) × local Z (chord), then oriented to each azimuth.
-  const halfL = ROSA_L / 2;
-  const shape = new THREE.Shape();
-  shape.moveTo(ROSA_CH, -halfL);
-  shape.lineTo(ROSA_W - ROSA_CH, -halfL);
-  shape.lineTo(ROSA_W, -halfL + ROSA_CH);
-  shape.lineTo(ROSA_W, halfL);
-  shape.lineTo(0, halfL);
-  shape.lineTo(0, -halfL + ROSA_CH);
-  shape.closePath();
-  const wingGeo = new THREE.ShapeGeometry(shape);
-  const edgeGeo = new THREE.EdgesGeometry(wingGeo, 1);
-  const goldEdgeMat = new THREE.LineBasicMaterial({ color: 0xccaa44 });
-  const gridMat = new THREE.MeshBasicMaterial({
-    color: 0x2244aa, wireframe: true, transparent: true, opacity: 0.22, depthWrite: false });
-
-  for (const azDeg of ROSA_AZ) {
-    const az = azDeg * DEG;
-    const wing = new THREE.Group();
-    // Root sits on the barrel surface. Both wings are COPLANAR (in the Y-Z plane
-    // through the axis) with their CELL faces pointing the SAME way (+X = sun &
-    // camera) — exactly like the real ROSA pair. Previously each wing's normal was
-    // the local tangent, which flipped ±X between the two sides, so the bottom
-    // wing presented its gray substrate to the camera (the "one gray panel" bug).
-    //   local X (width)  → radial outward (cos az, sin az, 0)
-    //   local Y (chord)  → ±Z  (keeps the basis right-handed)
-    //   local Z (normal) → +X  (cell face toward the sun / camera)
-    wing.position.set(Math.cos(az) * BUS_R, Math.sin(az) * BUS_R, 0);
-    const radial = new THREE.Vector3(Math.cos(az), Math.sin(az), 0);
-    const normal = new THREE.Vector3(1, 0, 0);
-    const chord  = new THREE.Vector3(0, 0, Math.sin(az));   // +Z for +Y wing, −Z for −Y wing
-    wing.quaternion.setFromRotationMatrix(
-      new THREE.Matrix4().makeBasis(radial, chord, normal));
-
-    const front = new THREE.Mesh(wingGeo, mat.solar);
-    front.renderOrder = RO.SPACECRAFT_OPAQUE;
-    wing.add(front);
-    // (Kapton-substrate back mesh removed — both wings face their cells at the
-    //  camera, so the −X back is never seen.)
-    const edge = new THREE.LineSegments(edgeGeo, goldEdgeMat);
-    edge.position.z = 0.002;
-    edge.renderOrder = RO.SPACECRAFT_DETAIL;
-    wing.add(edge);
-    const grid = new THREE.Mesh(new THREE.PlaneGeometry(ROSA_W * 0.95, ROSA_L * 0.92, 9, 20), gridMat);
-    grid.position.set(ROSA_W * 0.5, 0, 0.003);
-    grid.renderOrder = RO.SPACECRAFT_TRANSPARENT;
-    wing.add(grid);
-
-    // Tensioning spreader bar at the wing tip + root yoke (ISS ROSA signature).
-    const barGeo = new THREE.CylinderGeometry(M * 0.018, M * 0.018, ROSA_L, 6);
-    const tipBar = new THREE.Mesh(barGeo, mat.strut);
-    tipBar.position.set(ROSA_W, 0, 0);   // local Y = chord → bar spans the tip
-    tipBar.renderOrder = RO.SPACECRAFT_DETAIL;
-    wing.add(tipBar);
-    const rootYoke = new THREE.Mesh(barGeo, mat.collar);
-    rootYoke.position.set(0, 0, 0);
-    rootYoke.scale.set(1, 0.96, 1);
-    rootYoke.renderOrder = RO.SPACECRAFT_DETAIL;
-    wing.add(rootYoke);
-
-    // Roll-out spool at the wing root
-    const roll = new THREE.Mesh(new THREE.CylinderGeometry(M * 0.04, M * 0.04, ROSA_L, 8), mat.dark);
-    roll.position.set(Math.cos(az) * (BUS_R + M * 0.04), Math.sin(az) * (BUS_R + M * 0.04), 0);
-    roll.rotation.x = Math.PI / 2;
-    sat.add(roll);
-
-    sat.add(wing);
-  }
-
-  // ── Aft FEEP thruster cluster (4 copper nozzles in a cross) ──
-  const nozzleGeo = new THREE.CylinderGeometry(M * 0.03, M * 0.06, M * 0.15, 8, 1, true);
-  for (const [x, y] of [[0, 0.2], [0, -0.2], [0.2, 0], [-0.2, 0]]) {
-    const nz = new THREE.Mesh(nozzleGeo, mat.feep);
-    nz.position.set(x * M, y * M, -BUS_LEN * 0.5 - M * 0.06);
-    nz.rotation.x = Math.PI / 2;
-    nz.renderOrder = RO.SPACECRAFT_DETAIL;
-    sat.add(nz);
-  }
-
-  // ── Nav lights (port red / starboard green) on the clear ±X sides ──
-  const navGeo = new THREE.SphereGeometry(M * 0.022, 6, 6);
-  const portLight = new THREE.Mesh(navGeo, new THREE.MeshBasicMaterial({ color: 0xff2222 }));
-  portLight.position.set(-BUS_R - M * 0.02, 0, M * 0.3);
-  sat.add(portLight);
-  const starLight = new THREE.Mesh(navGeo, new THREE.MeshBasicMaterial({ color: 0x22ff22 }));
-  starLight.position.set(BUS_R + M * 0.02, 0, M * 0.3);
-  sat.add(starLight);
-
-  // ── FEEP nozzle throats — faint emissive interior discs (depth in the cluster) ──
-  const throatGeo = new THREE.CircleGeometry(M * 0.026, 10);
-  const throatMat = new THREE.MeshBasicMaterial({ color: 0x5577bb, side: THREE.DoubleSide });
-  for (const [x, y] of [[0, 0.2], [0, -0.2], [0.2, 0], [-0.2, 0]]) {
-    const th = new THREE.Mesh(throatGeo, throatMat);
-    th.position.set(x * M, y * M, -BUS_LEN * 0.5 - M * 0.13);
-    th.renderOrder = RO.SPACECRAFT_DETAIL;
-    sat.add(th);
-  }
-
-  // ── RCS attitude-thruster nubs — 8, on the diagonals (clear of wings/struts) ──
-  const rcsGeo = new THREE.CylinderGeometry(M * 0.017, M * 0.030, M * 0.055, 6, 1, true);
-  for (let q = 0; q < 4; q++) {
-    const a = q * Math.PI / 2 + Math.PI / 4;
-    const radial = new THREE.Vector3(Math.cos(a), Math.sin(a), 0);
-    for (const zc of [BUS_LEN * 0.32, -BUS_LEN * 0.32]) {
-      const nub = new THREE.Mesh(rcsGeo, mat.rcs);
-      nub.position.set(radial.x * BUS_R, radial.y * BUS_R, zc);
-      nub.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), radial);
-      nub.renderOrder = RO.SPACECRAFT_DETAIL;
-      sat.add(nub);
-    }
-  }
-
-  // ── Forward sensor gimbal — EO camera / IR / LIDAR turret (faithful to
-  //    PlayerSatellite._buildSensors). Sits on the +X/+Y front quadrant: this
-  //    is the unit the EVA astronaut is servicing. ──
-  const gimbal = new THREE.Group();
-  gimbal.position.set(M * 0.10, M * 0.20, BUS_LEN * 0.5 + M * 0.02);
-  const basePlate = new THREE.Mesh(
-    new THREE.CylinderGeometry(M * 0.17, M * 0.17, M * 0.04, 10), mat.cap);
-  basePlate.rotation.x = Math.PI / 2;
-  basePlate.renderOrder = RO.SPACECRAFT_DETAIL;
-  gimbal.add(basePlate);
-  // EO camera (dark lens cylinder)
-  const eoCam = new THREE.Mesh(
-    new THREE.CylinderGeometry(M * 0.06, M * 0.06, M * 0.16, 10), mat.dark);
-  eoCam.rotation.x = Math.PI / 2;
-  eoCam.position.set(M * 0.07, 0, M * 0.08);
-  gimbal.add(eoCam);
-  const eoLens = new THREE.Mesh(new THREE.CircleGeometry(M * 0.05, 12), mat.aperture);
-  eoLens.position.set(M * 0.07, 0, M * 0.165);
-  eoLens.renderOrder = RO.SPACECRAFT_DETAIL;
-  gimbal.add(eoLens);
-  // IR sensor (gold-foil box)
-  const irBox = new THREE.Mesh(new THREE.BoxGeometry(M * 0.11, M * 0.09, M * 0.11), mat.goldMLI);
-  irBox.position.set(-M * 0.08, 0, M * 0.07);
-  gimbal.add(irBox);
-  // LIDAR dome + green pulse light
-  const lidar = new THREE.Mesh(
-    new THREE.SphereGeometry(M * 0.055, 10, 8, 0, Math.PI * 2, 0, Math.PI / 2), mat.collar);
-  lidar.position.set(0, M * 0.085, M * 0.09);
-  gimbal.add(lidar);
-  const lidarLight = new THREE.Mesh(
-    new THREE.SphereGeometry(M * 0.02, 6, 6),
-    new THREE.MeshBasicMaterial({ color: 0x00ff44 }));
-  lidarLight.position.set(0, M * 0.115, M * 0.10);
-  gimbal.add(lidarLight);
-  sat.add(gimbal);
-
-  // (Docking port omitted — it lives on the −X face, away from the camera, and
-  //  is never visible in this fixed hero framing.)
-
-  return sat;
 }
 
 
@@ -914,6 +530,9 @@ function buildAstronaut(mat) {
   tip.rotation.x = -0.30;
   tip.rotation.z =  0.08;
   rForearmGroup.add(tip);
+  // Expose the tool tip so the scene can lock the weld glow/sparks to it (the
+  // tip is the closest point to the arc — the weld must originate here).
+  astro.userData.toolTip = tip;
 
   rShoulder.add(rForearmGroup);
 
@@ -1232,6 +851,10 @@ export class MenuScene3D {
     this._resizeObserver = null;
     this._weldGlow = null;      // molten weld-pool glow sprite
     this._visorMat = null;      // visor material (flashes with the arc)
+    this._mother   = null;      // real PlayerSatellite instance (hero ship)
+    this._daughters = [];       // real ArmUnit instances docked on the struts
+    this._sunDir   = null;      // world-space sun direction (solar tracking)
+    this._lookTarget = new THREE.Vector3(0.12, 0, 0.34);  // camera aim (set to weld)
   }
 
   /**
@@ -1282,6 +905,8 @@ export class MenuScene3D {
     const sun = new THREE.DirectionalLight(0xfff8ec, 2.5);
     sun.position.set(5, 3, 4);
     this.scene.add(sun);
+    // World-space sun direction, reused to drive the Mother's solar sun-tracking.
+    this._sunDir = sun.position.clone().normalize();
 
     // Fill (cool blue from opposite side)
     const fill = new THREE.DirectionalLight(0x4466cc, 0.4);
@@ -1313,32 +938,126 @@ export class MenuScene3D {
     this._pivot = new THREE.Group();
     this.scene.add(this._pivot);
 
-    // Satellite
-    const sat = buildSatellite(mat);
-    this._pivot.add(sat);
+    // Mother satellite — the REAL in-game PlayerSatellite, so the hero ship is
+    // literally the same mesh the player flies (no hand replica to drift from).
+    // The constructor parents the satellite into whatever "scene" we pass, so we
+    // hand it the orbit pivot. It also seeds an orbital position + 6 eventBus
+    // listeners; we zero the position and otherwise leave it static (never call
+    // update()), exactly as the old replica was static.
+    const mother = new PlayerSatellite(this._pivot);
+    mother.position.set(0, 0, 0);            // ignore the orbital position the ctor set
+    mother.scale.setScalar(1 / SIM_M);       // 1e5 → sim-metre geometry reads at 1 m
+    // Roll −90° about the long axis: in sim the solar wings sit at ±X and the
+    // sensor turret at +Y. The hero needs wings at ±Y (clear of the +X weld) and
+    // the sensor facing +X (the unit the astronaut services). This roll does both
+    // and matches the framing the hand replica was hand-built to. Struts + ROSA
+    // come out of _buildModel already in their deployed pose, so nothing else to do.
+    mother.rotation.z = -Math.PI / 2;
 
-    // Astronaut — human-scale EVA reference welding the +X hull near the front
-    // rim. Kept at the tuned weld pose (chest toward the barrel, tool tip at the
-    // weld point) so the realistic suit lines up with the arc; the ROSA wings
-    // sit at ±Y so this +X working side stays clear.
+    // This hero ship is a full gameplay PlayerSatellite, so its constructor wired
+    // the sim's eventBus handlers (crossbow recoil, EDT toggle, dual-fire). The
+    // menu instance lives for the whole app and would otherwise ALSO react to
+    // those gameplay events during a live session — emitting duplicate COMMS
+    // messages and consuming cold-gas on a phantom ship. We only want the MODEL,
+    // not the behaviour, so neutralise the handlers that emit events / mutate
+    // resources. (The remaining handlers — scan-flash timer, hull outline — are
+    // display-only and inert because we never run this satellite's update loop.)
+    mother.toggleEDT = () => {};
+    mother._applyCrossbowRecoil = () => {};
+    mother._applyDualFireRecoil = () => {};
+    this._mother = mother;
+
+    // Cull geometry the fixed hero framing never shows: the docking port sits on
+    // the −X face (away from the camera) after the roll.
+    if (mother.dockingPort) mother.dockingPort.visible = false;
+
+    // Daughters — the REAL ArmUnit models docked on the Mother's actual strut
+    // tips (drift-proof, same as the mother). Full Y0 Quad loadout: 2 Weavers +
+    // 2 Spinners, using the sim's CANONICAL per-index type assignment
+    // (ArmManager._initArms: type = i % 2 === 0 ? 'weaver' : 'spinner'), i.e.
+    // ['weaver','spinner','weaver','spinner']. That puts the two big Weavers at
+    // indices 0 & 2 (sim-local 60°/240° → ANTIPODAL, 180° apart) and the Spinners
+    // at 1 & 3 (120°/300°, also antipodal) — matching the sim, where the large
+    // daughters sit on OPPOSITE sides, not the same side.
+    this._daughters = [];
+    const loadout = [
+      ['menu-weaver-1', 'weaver'],    // index 0 — sim 60° (front-lower)
+      ['menu-spinner-1', 'spinner'],  // index 1 — sim 120° (front-upper)
+      ['menu-weaver-2', 'weaver'],    // index 2 — sim 240° (aft, opposite weaver-1)
+      ['menu-spinner-2', 'spinner'],  // index 3 — sim 300° (aft, opposite spinner-1)
+    ];
+    const tips = mother.strutTipNodes || [];
+    for (let i = 0; i < loadout.length; i++) {
+      const tip = tips[i];
+      if (!tip) continue;
+      const [id, type] = loadout[i];
+      // ArmUnit's ctor adds its visual root (.group) to the scene we pass; we
+      // immediately reparent it onto the strut tip. It also hides its body until
+      // a docked-state animation runs in-game, so force it visible here.
+      const arm = new ArmUnit(id, type, new THREE.Vector3(), this.scene);
+      arm.mesh.visible = true;
+      if (arm.tetherLine) arm.tetherLine.visible = false;   // no stray dock tether
+      tip.add(arm.group);                    // inherits the tip's deployed pose + scale
+      arm.group.position.set(0, 0, 0);
+      // Daughter forward (+Z) → strut-outward (tip-local −Y): nose points away.
+      arm.group.quaternion.setFromUnitVectors(
+        new THREE.Vector3(0, 0, 1),
+        new THREE.Vector3(0, -1, 0),
+      );
+      this._daughters.push(arm);
+    }
+
+    // Astronaut — human-scale EVA reference servicing a strut hinge. Faces −X
+    // (chest toward the barrel). Nudged +5 cm to the astronaut's anatomical right
+    // (−Z, since they face −X). Final placement is SNAPPED below so the tool tip
+    // lands exactly on an aluminium strut hinge.
     const astro = buildAstronaut(mat);
-    astro.position.set(M * 0.97, -M * 0.24, M * 0.63);
+    astro.position.set(M * 0.97, -M * 0.21, M * 0.58);
     astro.rotation.y = -Math.PI / 2;   // local +Z → world -X (chest toward satellite)
     astro.rotation.z = 0.08;           // subtle micro-g tilt
     this._pivot.add(astro);
     this._visorMat = astro.userData.visorMat || null;
 
-    // Weld at front end-cap of barrel: z = BUS_LEN*0.5 = 1.0, x = BUS_R = 0.40
-    this._weldPos.set(BUS_R, M * 0.12, BUS_LEN * 0.5);
+    // Weld site — the astronaut welds a real ALUMINIUM strut hinge, NOT the gold
+    // MLI foil (you can't weld a thermal blanket; a cracked/serviced hinge is the
+    // believable EVA job). We snap the whole astronaut so its TOOL TIP lands on
+    // the strut hinge nearest its current aim (keeps the natural reaching pose),
+    // then put the weld glow + sparks ON the tool tip. This guarantees the arc
+    // originates at the tool — not at the safety-tether anchor (earlier bug).
+    this._pivot.updateMatrixWorld(true);
+    const toolTip = astro.userData.toolTip;
+    const groups = (this._mother.strutGroups || []).filter((g) => g && g.pivotGroup);
+    if (toolTip && groups.length) {
+      const tPos = toolTip.getWorldPosition(new THREE.Vector3());
+      const scratch = new THREE.Vector3();
+      let hinge = null;
+      let bestD = Infinity;
+      for (const sg of groups) {
+        sg.pivotGroup.getWorldPosition(scratch);
+        const d = scratch.distanceToSquared(tPos);
+        if (d < bestD) { bestD = d; hinge = scratch.clone(); }
+      }
+      // Translate astronaut so tool tip → hinge, then re-read the tip as the weld.
+      astro.position.add(hinge.sub(tPos));
+      astro.updateMatrixWorld(true);
+      toolTip.getWorldPosition(this._weldPos);
+    } else {
+      this._weldPos.set(BUS_R, M * 0.12, BUS_LEN * 0.5);   // fallback: old barrel spot
+    }
 
-    // Molten weld-pool glow on the hull — pulses with the arc (see _tick).
+    // Re-aim the camera toward the work site (partway, so the astronaut + arc are
+    // framed without over-tilting). The old fixed target was tuned to the barrel.
+    this._lookTarget.copy(this._weldPos).multiplyScalar(0.7);
+
+    // Molten weld-pool glow on the hinge — pulses with the arc (see _tick).
     this._weldGlow = makeGlowSprite();
     this._weldGlow.position.copy(this._weldPos);
     this._weldGlow.scale.setScalar(M * 0.22);
     this._pivot.add(this._weldGlow);
 
-    // EVA safety tether — slack line from the astronaut's waist to a hull
-    // anchor by the sensor turret (the work site), reinforcing the EVA read.
+    // EVA safety tether — slack line from the astronaut's waist to a SEPARATE
+    // hull hardpoint near the front collar (deliberately offset from the weld so
+    // the anchor and the arc don't sit on top of each other).
     astro.updateWorldMatrix(true, false);
     const tetherStart = astro.localToWorld(new THREE.Vector3(0, M * 0.18, -M * 0.05));
     const tetherEnd   = new THREE.Vector3(M * 0.24, M * 0.12, BUS_LEN * 0.5 - M * 0.02);
@@ -1462,7 +1181,17 @@ export class MenuScene3D {
       camY,
       Math.sin(ang) * orbitR,
     );
-    this.camera.lookAt(0.12, 0.0, 0.34);   // bias framing toward the weld / astronaut
+    this.camera.lookAt(this._lookTarget);   // work site (weld / astronaut)
+
+    // Living hero — drive the Mother's OWN animators (nav-light blink/strobe,
+    // LIDAR pulse, solar sun-tracking). These only mutate materials/transforms on
+    // the model and emit nothing, so they're safe to run without the gameplay
+    // update() loop. Guarded individually in case a future refactor renames them.
+    if (this._mother) {
+      this._mother._animateNavLights?.(dt);
+      this._mother._animateLidarPulse?.(dt);
+      this._mother._animateSolarTracking?.(dt, this._sunDir);
+    }
 
     // Weld arc flicker — arc welding pulse: mostly steady with occasional spikes
     let arc = 0;
