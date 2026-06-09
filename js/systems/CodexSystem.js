@@ -1545,6 +1545,44 @@ function buildEntries() {
       seen: false,
       icon: '🚀',
     },
+
+    // === CH5 ISS CONJUNCTION BOSS (MISSION_ARC §6) — outcome-gated ===
+    {
+      id: 'iss_saver',
+      title: 'ISS Saver',
+      category: CodexCategory.DEBRIS,
+      shortText: 'You cleared a Cosmos-1408 fragment cloud before it reached the ISS.',
+      fullText: 'On 15 November 2021 Russia destroyed Cosmos-1408 in a direct-ascent ASAT test, generating 1,500+ trackable fragments and countless smaller pieces in a 51.6° band that crosses the ISS. The crew sheltered in their Soyuz and Crew Dragon for several orbits. Clearing a converging fragment cloud yourself means the station never has to burn propellant to dodge — and the crew keeps working.',
+      triggerEvent: Events.ISS_BOSS_RESOLVED,
+      triggerCondition: (p) => p && p.outcome === 'intercept',
+      unlocked: false,
+      seen: false,
+      icon: '🛰️',
+    },
+    {
+      id: 'iss_pdam',
+      title: 'ISS PDAM',
+      category: CodexCategory.DEBRIS,
+      shortText: 'You let the ISS perform a Predetermined Debris Avoidance Maneuver.',
+      fullText: 'A PDAM is the routine response when a conjunction\'s collision probability exceeds roughly 1-in-10,000: mission control commands a reboost using the Zvezda module or a docked Progress, nudging the station clear by about 0.5–1 m/s. The ISS has done this 30+ times since 1999. Declining the intercept and letting the station maneuver itself is a perfectly valid call — no penalty, just a little spent propellant.',
+      triggerEvent: Events.ISS_BOSS_RESOLVED,
+      triggerCondition: (p) => p && p.outcome === 'decline',
+      unlocked: false,
+      seen: false,
+      icon: '🚀',
+    },
+    {
+      id: 'iss_hydrazine_burn',
+      title: 'Hydrazine Reboost',
+      category: CodexCategory.DEBRIS,
+      shortText: 'The ISS dodged on its own at the last minute — burning ~3 kg of hydrazine (~$40k).',
+      fullText: 'You engaged the threat but ran out of time before closest approach, so the station had to perform a late avoidance reboost. Hydrazine is cheap on the ground but eye-wateringly expensive once launched — a rushed ~3 kg burn runs around $40,000 and interrupts on-board experiments. Finishing the intercept earlier would have saved both the propellant and the science.',
+      triggerEvent: Events.ISS_BOSS_RESOLVED,
+      triggerCondition: (p) => p && p.outcome === 'miss',
+      unlocked: false,
+      seen: false,
+      icon: '⛽',
+    },
   ];
 }
 
@@ -1695,6 +1733,11 @@ const TRL_ANNOTATIONS = {
   isro_kulasekarapattinam:  { trl: 9, trlRationale: 'Real facility, operational since 2023' },
   isro_istrac:              { trl: 9, trlRationale: 'Real facility, operational ISRO TTC network' },
   isro_launch_vehicles:     { trl: 9, trlRationale: 'Real launch vehicles with documented specs' },
+
+  // === CH5 ISS BOSS ===
+  iss_saver:          { trl: 9, trlRationale: 'Cosmos-1408 ASAT event (2021) + ISS conjunction ops documented' },
+  iss_pdam:           { trl: 9, trlRationale: 'PDAM reboosts performed 30+ times since 1999' },
+  iss_hydrazine_burn: { trl: 9, trlRationale: 'Hydrazine avoidance reboosts are routine, documented ISS ops' },
 };
 
 /**

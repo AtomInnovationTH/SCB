@@ -101,6 +101,7 @@ import './test-DebrisTextureAtlas.js';
 import './test-TeachingSystem.js';
 import './test-beatLifecycle.js';   // CP-4 — BeatSequencer + pure helpers
 import './test-MissionCoach.js';    // CP-4 — per-chapter coaching engine
+import './test-IssConjunctionBoss.js'; // CH5 — ISS conjunction boss
 
 // ST-6.7: EnvironmentSystem — AO, MMOD, Safe-Mode, Radiation Belt, Battery DOD
 import './test-EnvironmentSystem.js';

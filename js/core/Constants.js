@@ -2205,6 +2205,38 @@ export const Constants = {
     HYDRAZINE_BONUS_POINTS: 500,                // points awarded for hydrazine hazard discovery
   },
 
+  // =========================================================================
+  // CH5 ISS CONJUNCTION BOSS — MISSION_ARC_IMPLEMENTATION.md §6
+  //
+  // The "protect-the-asset" boss. On SHOP_DEPLOY into mission 5, spawn FRAG_COUNT
+  // Cosmos-1408 fragments in the ISS forward track and start a TCA_HOURS game-time
+  // countdown. Outcomes (emergent from play — no modal):
+  //   • Intercept: clear all frags before TCA → +INTERCEPT_BONUS_KG + credits + SAVER codex
+  //   • Decline:   clear none (or ISS_BOSS_DECLINE) → ISS autonomous reboost, PDAM codex, no penalty
+  //   • Miss:      cleared ≥1 but not all by TCA → ISS reboosts, HYDRAZINE codex, bonus lost
+  //                (the frags they DID clear still score normally via the capture flow)
+  // =========================================================================
+  ISS_BOSS: {
+    MISSION: 5,                       // chapter / mission number that triggers the boss
+    FRAG_COUNT: 6,                    // Cosmos-1408 threat fragments to clear
+    TCA_HOURS: 38,                    // game-time hours until closest approach
+    IMMINENT_HOURS: 4,               // final-warning threshold (game-time hours remaining)
+    INTERCEPT_BONUS_KG: 200,          // elevator-contract mass awarded on a full intercept
+    INTERCEPT_BONUS_CREDITS: 500,     // credits awarded on a full intercept
+    PERSISTENCE_KEY: 'spacecowboy_iss_boss_v1',
+    CODEX: { SAVER: 'iss_saver', PDAM: 'iss_pdam', HYDRAZINE: 'iss_hydrazine_burn' },
+    // ISS forward-track orbit the threat frags are spawned into (NORAD 25544 ≈).
+    ORBIT: {
+      altKm: 408,
+      incDeg: 51.6,
+      raanDeg: 123.4,
+      argPerigeeDeg: 45,
+      eccentricity: 0.0003,
+      fragMassKg: 45,                 // per-fragment mass
+      trackSpreadDeg: 8,              // true-anomaly spread ahead of the lead frag
+    },
+  },
+
   // === TRAIL SYSTEM (ST-5.2) ===
   TRAILS: {
     SAMPLE_RATE_HZ: 10,                // samples per game-second
@@ -2466,6 +2498,28 @@ export const Constants = {
           triggerEvent: 'DEBRIS_MAP_CLUSTER_SELECTED',
           title: 'TRANSFER MAP',
           body: 'Press ` to open the debris map, then , / . to select a cluster and read its transfer window.',
+        },
+      ],
+
+      // ── Chapter 5 is the ISS conjunction boss (IssConjunctionBoss.js / Constants.ISS_BOSS);
+      //    these beats teach the manual burn timing the intercept needs. The boss
+      //    system owns the spawn, TCA countdown, choice resolution + codex/awards. ──
+      5: [
+        {
+          id: 'ch5_intro',
+          type: 'narrative',
+          source: 'HOUSTON',
+          text: 'Cowboy, we have a situation. A Cosmos-1408 fragment cloud is converging on the ISS — 51.6° inclination, closest approach in 38 hours. There are people aboard that station. You can clear the threat, or we let CSA dodge it on the station\'s own thrusters. Your call.',
+        },
+        {
+          id: 'ch5_burn',
+          type: 'interactive',
+          source: 'HOUSTON',
+          text: 'Reaching them in time takes precise timing — trim your closing rate on the throttle (+/-) to nail the intercept window.',
+          skillId: 'nav_throttle',
+          triggerEvent: 'THROTTLE_CHANGE',
+          title: 'BURN TIMING',
+          body: 'Use + / - to throttle and time your intercept burn on the ISS threat frags.',
         },
       ],
 

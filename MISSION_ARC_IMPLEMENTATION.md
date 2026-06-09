@@ -90,6 +90,7 @@ New events to add/emit: `RADIAL_MENU_OPENED`, `HOHMANN_TRANSFER_EXECUTED` (`STRA
 ## 6. Boss events (the protect-the-asset archetype)
 
 - **Ch5 ISS Conjunction** — 38h game-time TCA countdown; 6 `iss_threat:true` Cosmos-1408 frags spawn in the ISS forward track. Player choice: **Intercept** (clear all 6 → 200 kg + 500 credits + "ISS Saver" codex) or **Decline** (ISS autonomous 0.5 m/s reboost — no penalty, "ISS PDAM" codex). Failure path (accept but miss TCA): ISS reboosts, codex "burned 3 kg hydrazine ~$40k," mass still increments, bonus lost.
+  > **✅ Built (2026-06-09):** [`js/systems/IssConjunctionBoss.js`](js/systems/IssConjunctionBoss.js) (Node-safe; triggers on `SHOP_DEPLOY` into `Constants.ISS_BOSS.MISSION`). The choice is **emergent from play** rather than a modal: clear all → intercept; clear none by TCA (or fire `ISS_BOSS_DECLINE`) → decline; clear ≥1 but not all by TCA → miss. Spawn is `DebrisField.spawnIssThreatField({count})` (repurposes alive debris into the 51.6° track, tags `iss_threat`). The credits award goes through `SCORING_AWARD`; the 200 kg goes to the elevator contract via `ShopScreen.get/setContractMass` (the only place that mass lives), and if that crosses `TARGET_MASS_KG` it also fires `CONTRACT_COMPLETE` (+win bonus) so the elevator win still arms. The three codex entries (`iss_saver`/`iss_pdam`/`iss_hydrazine_burn`) **auto-unlock** off `ISS_BOSS_RESOLVED { outcome }`. *Deferred polish:* an explicit on-screen Decline button/keybind (emergent decline already works) and a live HUD TCA-countdown widget (comms beats cover feedback).
 - **Ch9 Starlink Fragmentation** — news-event burst-spawn 35 frags over 5 min; race a Kessler cascade.
 - **Ch11 Thaicom 4** — news-event GEO graveyard contract; Hassan persona handover; MPD thruster first-fire ceremony.
 
@@ -110,7 +111,7 @@ Active-sat guard already protects ISS (25544), Hubble (20580), GPS, etc. from ar
 |---|---|---|
 | A | ✅ **DONE (2026-06-08)** — GUIDANCE_ARBITER steps 1–5 (prerequisite) | M–L |
 | B | ✅ **DONE (2026-06-08)** — `MissionCoach.js` + `_beatLifecycle.js` (`BeatSequencer`) + `BEATS_BY_MISSION[2]` + ch2 skills (`arm_pilot`, `arm_pilot_capture`) | M |
-| C | 🟡 **PARTIAL (2026-06-09)** — chapters 3/4/6/7 beat tables + the one genuinely-new skill `strategic_map` (ch4) shipped as data; ch5 ISS boss still TODO. *(ch3 reuses `scan_wide`/`manage_codex`, ch6 `manage_forge`, ch7 `collect_trawl` — all already in the catalog.)* | M (S per chapter) |
+| C | ✅ **DONE (2026-06-09)** — chapters 3/4/6/7 beat tables + `strategic_map` skill; ch5 **ISS conjunction boss** shipped as [`IssConjunctionBoss.js`](js/systems/IssConjunctionBoss.js) (38 h game-time TCA, 6 `iss_threat` frags via `DebrisField.spawnIssThreatField`, emergent Intercept/Decline/Miss + 3 outcome-gated codex entries). | M (S per chapter) |
 | D | Chapters 8–11 + Starlink boss (ch9) + Thaicom (ch11) + porkchop (ties to ROADMAP EN-5/6) | L |
 | E | Chapter 12 anchor-run UI + win cinematic + codex unlocks | M |
 | F | Solo-flight onboarding beats (ch1 graduation, §3) | S |

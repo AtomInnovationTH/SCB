@@ -47,7 +47,9 @@ import { launchSequence } from './systems/LaunchSequence.js';
 import { trawlManager } from './systems/TrawlManager.js';
 import { AutopilotSystem } from './systems/AutopilotSystem.js';
 import { SkillsSystem } from './systems/SkillsSystem.js';
-import { MissionCoach } from './systems/MissionCoach.js';import { LassoSystem } from './systems/LassoSystem.js';
+import { MissionCoach } from './systems/MissionCoach.js';
+import { IssConjunctionBoss } from './systems/IssConjunctionBoss.js';
+import { LassoSystem } from './systems/LassoSystem.js';
 import { despinLaser } from './systems/DespinLaser.js';
 import { RewardSystem } from './systems/RewardSystem.js';
 import { CodexSystem } from './systems/CodexSystem.js';
@@ -408,6 +410,7 @@ let motherCallouts;
 let cameraSystem;
 let commsSystem;
 let missionCoach;
+let issConjunctionBoss;
 let resourceSystem;
 let sensorSystem;
 let cargoSystem;
@@ -744,6 +747,14 @@ async function init() {
   // --- Phase 5: Wire cargo & scoring refs into shop for sell/contribute ---
   shopScreen.setCargoSystem(cargoSystem);
   shopScreen.setScoringSystem(scoringSystem);
+
+  // --- CH5 ISS conjunction boss (MISSION_ARC §6) — protect-the-asset event ---
+  // Needs the shop (elevator-mass award) + debrisField (ISS-track spawn), so it
+  // is constructed after shopScreen is wired, unlike MissionCoach above.
+  issConjunctionBoss = new IssConjunctionBoss({
+    eventBus, scoringSystem, debrisField, shopScreen, persistenceManager,
+  });
+  issConjunctionBoss.init();
 
   // --- GameFlowManager: init with reduced refs (13 decoupled via EventBus) ---
   // Removed: menuScreen, gameOverScreen (GAME_STATE_CHANGE)
@@ -1310,6 +1321,8 @@ function gameLoop(timestamp) {
 
     // CP-4: MissionCoach beat timers (narrative dwell + interactive escalation)
     try { if (missionCoach) missionCoach.update(dt); } catch (e) { console.error('[GameLoop] missionCoach:', e); }
+    // CH5: ISS conjunction boss TCA countdown (game-time)
+    try { if (issConjunctionBoss) issConjunctionBoss.update(dt); } catch (e) { console.error('[GameLoop] issConjunctionBoss:', e); }
 
     // V-9: Tier progression visual transition animation
     try { tierVisualManager.update(dt); } catch (e) { console.error('[GameLoop] tierVisualManager:', e); }

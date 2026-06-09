@@ -73,6 +73,17 @@ export const Events = {
   /** Multiple conjunctions in same altitude band. Payload: { alertCount } */
   CLUSTER_CONJUNCTION:    'mission:clusterConjunction',
 
+  // === CH5 ISS CONJUNCTION BOSS (MISSION_ARC §6) ===
+  /** Boss engaged: 6 Cosmos-1408 threat frags spawned in the ISS forward track.
+   *  Payload: { threatIds: number[], tcaHours: number } */
+  ISS_BOSS_STARTED:   'iss:bossStarted',
+  /** TCA window closing — final warning. Payload: { tcaRemainingHours, cleared, total } */
+  ISS_BOSS_IMMINENT:  'iss:bossImminent',
+  /** Player explicitly declines the intercept (lets CSA reboost the station). Payload: {} */
+  ISS_BOSS_DECLINE:   'iss:bossDecline',
+  /** Boss resolved. Payload: { outcome: 'intercept'|'decline'|'miss', cleared, total } */
+  ISS_BOSS_RESOLVED:  'iss:bossResolved',
+
   // === DEBRIS ===
   DEBRIS_CLEARED:     'debris:cleared',
   DEBRIS_CAPTURED:    'debris:captured',

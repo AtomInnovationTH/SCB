@@ -2085,6 +2085,96 @@ export class DebrisField {
     return { playerOrbit, fragments };
   }
 
+  /**
+   * CH5 ISS conjunction boss (MISSION_ARC §6) — spawn `count` threat fragments
+   * in the ISS forward track and tag each `iss_threat:true`.
+   *
+   * Mirrors the welcome-field approach: repurpose existing alive, non-special
+   * debris (no new allocation), overwrite their orbital elements to the ISS
+   * orbit (Constants.ISS_BOSS.ORBIT), spread them ahead in true-anomaly, refresh
+   * mass/type/salvage, and mark them tracked + discovered so the player can act
+   * immediately. Returns the ids of the spawned threats (may be fewer than
+   * `count` if the field is short on candidates).
+   *
+   * @param {object} [options]
+   * @param {number} [options.count] — number of threat frags (default Constants.ISS_BOSS.FRAG_COUNT)
+   * @returns {{ ids: number[] }}
+   */
+  spawnIssThreatField(options = {}) {
+    const cfg = Constants.ISS_BOSS && Constants.ISS_BOSS.ORBIT;
+    if (!cfg) return { ids: [] };
+    const count = Math.max(1, options.count ?? Constants.ISS_BOSS.FRAG_COUNT ?? 6);
+
+    // ISS orbit in scene units.
+    const altKm = cfg.altKm ?? 408;
+    const sma = Constants.EARTH_RADIUS + altKm * Constants.SCENE_SCALE;
+    const meanMotion = Math.sqrt(Constants.MU_EARTH / Math.pow(sma / Constants.SCENE_SCALE, 3));
+    const baseNu = Math.random() * Math.PI * 2;          // random phase around the ISS track
+    const spreadRad = (cfg.trackSpreadDeg ?? 8) * Math.PI / 180;
+    const frameComp = meanMotion * (this._lastSpawnGameDt || 0); // mid-frame propagation pre-compensation
+
+    // Gather candidates: alive, not already special-tagged, and NOT mid-capture.
+    // Unlike the welcome field (mission-1 init, nothing grappled), this runs on
+    // SHOP_DEPLOY into mission 5, when a daughter may be hauling or parking a
+    // catch (_capturedByArm/_armPinned keep that debris pinned to the arm) — so
+    // repurposing it would teleport an in-flight catch onto the ISS track.
+    const candidates = [];
+    for (const debris of this.debrisList) {
+      if (!debris.alive) continue;
+      if (debris.tutorialSpawn || debris.welcomeSpawn || debris.iss_threat) continue;
+      if (debris._capturedByArm || debris._armPinned || debris._captured) continue;
+      candidates.push(debris);
+      if (candidates.length >= count) break;
+    }
+
+    const ids = [];
+    for (let i = 0; i < count && i < candidates.length; i++) {
+      const debris = candidates[i];
+
+      // Place ahead in track (forward conjunction): evenly spread leads.
+      const lead = ((i + 1) / count) * spreadRad;
+      debris.orbit.semiMajorAxis = sma;
+      debris.orbit.eccentricity = cfg.eccentricity ?? 0.0003;
+      debris.orbit.inclination = (cfg.incDeg ?? 51.6) * Math.PI / 180;
+      debris.orbit.raan = (cfg.raanDeg ?? 123.4) * Math.PI / 180;
+      debris.orbit.argPerigee = (cfg.argPerigeeDeg ?? 45) * Math.PI / 180;
+      debris.orbit.trueAnomaly = baseNu + lead - frameComp;
+      debris.orbit.meanMotion = meanMotion;
+
+      // Cosmos-1408 fragment profile.
+      debris.mass = cfg.fragMassKg ?? 45;
+      debris.type = 'fragment';
+      const typeDef = DEBRIS_TYPES[debris.type];
+      if (typeDef) {
+        const massFrac = Math.max(0, Math.min(1,
+          (debris.mass - typeDef.massMin) / (typeDef.massMax - typeDef.massMin || 1)));
+        debris.sizeMeter = typeDef.sizeMin + massFrac * (typeDef.sizeMax - typeDef.sizeMin);
+        debris.sceneSize = debris.sizeMeter * 0.00001;
+      }
+      if (debris.dragMultiplier) debris.dragMultiplier = undefined;
+
+      debris.salvage = this._generateSalvage(debris.type, debris.mass, debris.material);
+      debris.hasSalvage = debris.salvage.xenon > 0 || debris.salvage.indium > 0 ||
+        debris.salvage.gaAs > 0 || debris.salvage.battery > 0 || debris.salvage.hydrazine > 0 ||
+        debris.salvage.lithium > 0 ||
+        (debris.salvage.metals && debris.salvage.metals.length > 0);
+      debris.metalMassKg = (debris.salvage.metals || []).reduce((sum, m) => sum + m.amount, 0);
+
+      debris.iss_threat = true;
+      debris.alive = true;
+      debris.tracked = true;
+      debris.discovered = true;
+
+      ids.push(debris.id);
+      eventBus.emit(Events.TARGET_DISCOVERED, { target: debris });
+    }
+
+    if (ids.length > 0) {
+      console.log(`[DebrisField] ISS boss: spawned ${ids.length} iss_threat frags in the 51.6° track`);
+    }
+    return { ids };
+  }
+
   // ==========================================================================
   // QUERIES
   // ==========================================================================

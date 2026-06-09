@@ -1,10 +1,34 @@
 # Space Cowboy — Next-Shift Handoff Brief
 
-*Updated: 2026-06-09 · CP-4 follow-on Phase C (partial) — `BEATS_BY_MISSION[3,4,6,7]` chapter content + the new `strategic_map` skill, all pure data on the shipped MissionCoach engine. Prior: 2026-06-09 CP-3 + CP-4 shift (transfer-window countdown; comms/guidance arbiter steps 1–5 + MissionCoach engine + chapter 2) — committed with the prior CP-2 build as one combined commit (`56a98f5`). Earlier: 2026-06-07 CP build shift (CP-1 multi-tool → CP-2 laser de-spin → furnace-transfer fix); 2026-06-07 architect blueprint pass; 2026-06-06 daughter capture-lifecycle polish (commit `b7d5fae`), archived context at [`archive/HANDOFF_2026-05-30_four-fix.md`](archive/HANDOFF_2026-05-30_four-fix.md), [`archive/HANDOFF_2026-05-29_post-cinch-qa.md`](archive/HANDOFF_2026-05-29_post-cinch-qa.md), [`archive/SK_M1_POLISH_HANDOFF.md`](archive/SK_M1_POLISH_HANDOFF.md), [`archive/CEREMONY_REDESIGN.md`](archive/CEREMONY_REDESIGN.md).*
+*Updated: 2026-06-09 · CH5 ISS conjunction boss (Phase C complete) — new `IssConjunctionBoss` system + ISS-track spawn + 3 outcome codex entries. Prior same-day: CP-4 follow-on Phase C data chapters 3/4/6/7 + `strategic_map` skill (committed `69735e4`); CP-3 + CP-4 spine (committed `56a98f5`). Earlier: 2026-06-07 CP build shift (CP-1 multi-tool → CP-2 laser de-spin → furnace-transfer fix); 2026-06-07 architect blueprint pass; 2026-06-06 daughter capture-lifecycle polish (commit `b7d5fae`), archived context at [`archive/HANDOFF_2026-05-30_four-fix.md`](archive/HANDOFF_2026-05-30_four-fix.md), [`archive/HANDOFF_2026-05-29_post-cinch-qa.md`](archive/HANDOFF_2026-05-29_post-cinch-qa.md), [`archive/SK_M1_POLISH_HANDOFF.md`](archive/SK_M1_POLISH_HANDOFF.md), [`archive/CEREMONY_REDESIGN.md`](archive/CEREMONY_REDESIGN.md).*
 
 ---
 
-> ## ⏩ LATEST SHIFT — 2026-06-09 (CP-4 follow-on Phase C, partial — chapters 3/4/6/7 as data) — read this first
+> ## ⏩ LATEST SHIFT — 2026-06-09 (CH5 ISS conjunction boss — Phase C COMPLETE) — read this first
+>
+> The "protect-the-asset" boss. **Phase C of the arc is now done** (data chapters 3/4/6/7 + this boss).
+>
+> **What landed (uncommitted — on top of `69735e4`):**
+> - **NEW** [`js/systems/IssConjunctionBoss.js`](js/systems/IssConjunctionBoss.js) — Node-safe state machine. Triggers on `SHOP_DEPLOY` into `Constants.ISS_BOSS.MISSION` (5), spawns 6 `iss_threat` Cosmos-1408 frags, runs a **38 h game-time TCA countdown** (`dt * TIME_SCALE_GAMEPLAY`), and resolves by **emergent choice** (no modal): clear all → **intercept** (+200 kg to the elevator contract via `ShopScreen.get/setContractMass`, +500 credits via `SCORING_AWARD`); clear none by TCA, or `ISS_BOSS_DECLINE` → **decline**; clear ≥1 but not all by TCA → **miss**. Fires `ISS_BOSS_STARTED`/`ISS_BOSS_IMMINENT`/`ISS_BOSS_RESOLVED`. Clears are detected via `DEBRIS_REMOVED`/`CATCH_PROCESSED`/`ARM_CAPTURED`/`LASSO_CAPTURED` (deduped by id). Completion persists (`save.issBoss`).
+> - **NEW** `DebrisField.spawnIssThreatField({count})` — repurposes alive debris into the ISS 51.6°/408 km track (mirrors `_spawnWelcomeField`), tags `iss_threat:true`, returns `{ ids }`. *(THREE-side, not in the Node harness — the boss is tested against a mock field.)*
+> - **3 codex entries** (`iss_saver`/`iss_pdam`/`iss_hydrazine_burn`) in `CodexSystem.buildEntries()` that **auto-unlock** off `ISS_BOSS_RESOLVED { outcome }` (no explicit unlock call). TRL annotations added (all 9 — real ISS ops).
+> - `Constants.ISS_BOSS` block (mission/frag-count/TCA/awards/codex ids/ISS orbit) + `BEATS_BY_MISSION[5]` (HOUSTON setup narrative + `nav_throttle` burn-timing beat — the coach teaches, the boss runs the event). New events `ISS_BOSS_STARTED`/`_IMMINENT`/`_DECLINE`/`_RESOLVED`. Wired in `main.js` (construct after `shopScreen`, `init`, `update(dt)` next to MissionCoach).
+> - **Tests:** **NEW** [`test-IssConjunctionBoss.js`](js/test/test-IssConjunctionBoss.js) (7 suites — trigger gating, all 3 outcomes + awards, dedup/multi-event clears, imminent-once, countdown, persistence, codex outcome contract) registered in `run-tests.js`; the Phase C integrity suite now also covers ch5. **656 suites / 2700 tests / 0 fail** (was 649 / 2684 at `69735e4`).
+>
+> **NOT committed this shift.** Working tree on top of `69735e4`; `.kilo/` still untracked.
+>
+> **Design notes / deferred polish (not blocking):**
+> - **Choice is emergent, not a modal.** Decline = ignore the frags until TCA (or fire `ISS_BOSS_DECLINE`). An explicit on-screen Decline button/keybind and a **live HUD TCA-countdown widget** are deferred (comms beats cover player feedback today).
+> - **The ISS itself is not a target** — the boss protects it; the *frags* are the capturable targets. `ActiveSatGuard` (norad lockout) is a separate pre-existing concern and was intentionally not touched.
+> - If the field has <1 repurposable debris, the boss no-ops without marking complete (can retry).
+>
+> **Next on the critical path → Phase D:** chapters 8–11 beat tables + the **Starlink (ch9)** and **Thaicom (ch11)** bosses + porkchop/Lambert (ties to ROADMAP EN-5/6), then Phase E (ch12 anchor-run + win cinematic) and Phase F (ch1 solo-flight graduation). The ch5 boss is a reusable template for the other two bosses (swap the spawn + outcome copy). See [`MISSION_ARC_IMPLEMENTATION.md`](MISSION_ARC_IMPLEMENTATION.md) §6/§8.
+>
+> **Not playtested in-browser this shift.** The boss logic is fully unit-tested against a mock EventBus + mock field/shop; the `DebrisField.spawnIssThreatField` render glue (frag placement in the 51.6° track) and the comms/codex surfacing are NOT covered by the Node harness.
+
+---
+
+> ## ⏩ PREVIOUS SHIFT — 2026-06-09 (CP-4 follow-on Phase C, data chapters 3/4/6/7) — committed `69735e4`
 >
 > Content shift on top of the shipped CP-4 spine. **Chapters 3, 4, 6, 7 now coach as data** (`Constants.MISSION_COACH.BEATS_BY_MISSION[N]`) on the existing `MissionCoach` engine — no engine changes.
 >
@@ -14,9 +38,9 @@
 > - **Tests:** new "Phase C data integrity" describe in `test-MissionCoach.js` — referential-integrity guard (every interactive beat's `triggerEvent` is a real `Events` key AND its `skillId` is in the catalog), `strategic_map` shape, each chapter drives to completion, ch3/ch4 sequence assertions. **649 suites / 2684 tests / 0 fail** (was 648 / 2679 at `56a98f5`).
 > - Docs: `MISSION_ARC_IMPLEMENTATION.md` §8 Phase C → 🟡 PARTIAL + §5 skill-status note; `ROADMAP.md` CP-4 follow-on note.
 >
-> **NOT committed this shift.** Working tree holds the Phase C content on top of `56a98f5`; `.kilo/` still untracked. Commit when ready.
+> **Committed as `69735e4`** (`feat(guidance): CP-4 Phase C data chapters 3/4/6/7 + strategic_map skill`). Working tree was on top of `56a98f5`; `.kilo/` left untracked.
 >
-> **Next on the critical path → finish Phase C, then D–F:** the **ch5 ISS conjunction boss** is the remaining Phase C item and is **NOT a beat table** — it's real systems work in `MissionEventSystem` (38h game-time TCA countdown, 6 `iss_threat` Cosmos-1408 frags spawned in the ISS forward track, Intercept/Decline player choice, codex unlocks, accept-but-miss failure path). After that: chapters 8–11 + Starlink (ch9) & Thaicom (ch11) bosses + porkchop (ties to EN-5/6), then ch12 anchor-run + win cinematic (Phase E), then the ch1 solo-flight graduation beats (Phase F). See [`MISSION_ARC_IMPLEMENTATION.md`](MISSION_ARC_IMPLEMENTATION.md) §6/§8.
+> **Next (now DONE — see LATEST SHIFT above):** the ch5 ISS conjunction boss was the remaining Phase C item and shipped this same day as [`IssConjunctionBoss.js`](js/systems/IssConjunctionBoss.js). After Phase C: chapters 8–11 + Starlink (ch9) & Thaicom (ch11) bosses + porkchop (ties to EN-5/6), then ch12 anchor-run + win cinematic (Phase E), then the ch1 solo-flight graduation beats (Phase F). See [`MISSION_ARC_IMPLEMENTATION.md`](MISSION_ARC_IMPLEMENTATION.md) §6/§8.
 >
 > **Adding a data-only chapter is now a ~15-line edit:** append a `BEATS_BY_MISSION[N]` array (narrative + interactive beats), and if a beat needs a brand-new skill, add it to `SKILLS.CATALOG` with a `triggerEvent` that actually fires in gameplay (grep `emit(Events.<X>` to confirm) + a `triggerFilter` if you're sharing an event. Then add a chapter to the Phase C integrity test. No engine changes.
 
