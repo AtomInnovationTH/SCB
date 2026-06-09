@@ -75,13 +75,15 @@ All use the `triggerFilter` extension from [`GUIDANCE_ARBITER_SPEC §5`](GUIDANC
 | `arm_pilot` | 3 | collect | `CONTROL_MODE_CHANGE` | `mode==='ARM_PILOT'` | 2 |
 | `arm_pilot_capture` | 3 | collect | `ARM_CAPTURED` | `manual===true` | 2 |
 | `scan_wide` | 2 | scan | `SCAN_INITIATED` | `type==='wide'` | 3 (extend existing) |
-| `strategic_map` | 3 | nav | `STRATEGIC_MAP_OPENED` | — | 4 |
+| `strategic_map` | 3 | nav | `DEBRIS_MAP_CLUSTER_SELECTED` | — | 4 |
 | `arm_trawl` | 3 | collect | `TRAWL_START` | keyboard-initiated | 7 |
 | `radial_menu` | 3 | collect | `RADIAL_MENU_OPENED` | — | 9 |
 | `orbital_hohmann` | 4 | nav | `HOHMANN_TRANSFER_EXECUTED` | — | 11 |
 | `confirm_before_fire` | 3 | awareness | (teaching-moment only) | — | 8 |
 
 New events to add/emit: `RADIAL_MENU_OPENED`, `HOHMANN_TRANSFER_EXECUTED` (`STRATEGIC_MAP_OPENED` already exists). Per-payload flags `ARM_CAPTURED.manual` + `SCAN_INITIATED.type` per the arbiter spec.
+
+> **Status (2026-06-09):** `arm_pilot` + `arm_pilot_capture` (ch2) and **`strategic_map`** (ch4, tier 3 nav) are in the catalog (now **38 skills**). Note the ch4 trigger was corrected to **`DEBRIS_MAP_CLUSTER_SELECTED`** (not `STRATEGIC_MAP_OPENED`): backtick opens the **Debris Map**, where the CP-3 cluster/transfer-window agency actually lives; the 3D StrategicMap (Shift+V → `STRATEGIC_MAP_OPENED`) is view-only. Several of this table's "new" skills already shipped under existing ids and are simply *referenced* by the new beat tables rather than re-added: `scan_wide` (`SCAN_WIDE`), the Codex `manage_codex` (`CODEX_OPENED`), `manage_forge` (`FORGE_TOGGLE`), `collect_trawl` (`TRAWL_START`), `nav_throttle`, `nav_hohmann`. Still genuinely new for later phases: `radial_menu` (ch9) + its `RADIAL_MENU_OPENED` event, `orbital_hohmann`/porkchop (ch11) + `HOHMANN_TRANSFER_EXECUTED`, and the teaching-only `confirm_before_fire` (ch8).
 
 ---
 
@@ -108,7 +110,7 @@ Active-sat guard already protects ISS (25544), Hubble (20580), GPS, etc. from ar
 |---|---|---|
 | A | ✅ **DONE (2026-06-08)** — GUIDANCE_ARBITER steps 1–5 (prerequisite) | M–L |
 | B | ✅ **DONE (2026-06-08)** — `MissionCoach.js` + `_beatLifecycle.js` (`BeatSequencer`) + `BEATS_BY_MISSION[2]` + ch2 skills (`arm_pilot`, `arm_pilot_capture`) | M |
-| C | Chapters 3–7 beat tables + their skills + ISS boss (ch5) | M (S per chapter) |
+| C | 🟡 **PARTIAL (2026-06-09)** — chapters 3/4/6/7 beat tables + the one genuinely-new skill `strategic_map` (ch4) shipped as data; ch5 ISS boss still TODO. *(ch3 reuses `scan_wide`/`manage_codex`, ch6 `manage_forge`, ch7 `collect_trawl` — all already in the catalog.)* | M (S per chapter) |
 | D | Chapters 8–11 + Starlink boss (ch9) + Thaicom (ch11) + porkchop (ties to ROADMAP EN-5/6) | L |
 | E | Chapter 12 anchor-run UI + win cinematic + codex unlocks | M |
 | F | Solo-flight onboarding beats (ch1 graduation, §3) | S |

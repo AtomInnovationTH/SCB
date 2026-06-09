@@ -1,10 +1,28 @@
 # Space Cowboy — Next-Shift Handoff Brief
 
-*Updated: 2026-06-09 · CP-3 + CP-4 shift (CP-3 transfer-ellipse launch-window countdown; CP-4 comms/guidance arbiter steps 1–5 + MissionCoach engine + chapter 2) — committed with the prior CP-2 build as one combined commit. Prior: 2026-06-07 CP build shift (CP-1 multi-tool → CP-2 laser de-spin → furnace-transfer fix); 2026-06-07 architect blueprint pass; 2026-06-06 daughter capture-lifecycle polish (commit `b7d5fae`), archived context at [`archive/HANDOFF_2026-05-30_four-fix.md`](archive/HANDOFF_2026-05-30_four-fix.md), [`archive/HANDOFF_2026-05-29_post-cinch-qa.md`](archive/HANDOFF_2026-05-29_post-cinch-qa.md), [`archive/SK_M1_POLISH_HANDOFF.md`](archive/SK_M1_POLISH_HANDOFF.md), [`archive/CEREMONY_REDESIGN.md`](archive/CEREMONY_REDESIGN.md).*
+*Updated: 2026-06-09 · CP-4 follow-on Phase C (partial) — `BEATS_BY_MISSION[3,4,6,7]` chapter content + the new `strategic_map` skill, all pure data on the shipped MissionCoach engine. Prior: 2026-06-09 CP-3 + CP-4 shift (transfer-window countdown; comms/guidance arbiter steps 1–5 + MissionCoach engine + chapter 2) — committed with the prior CP-2 build as one combined commit (`56a98f5`). Earlier: 2026-06-07 CP build shift (CP-1 multi-tool → CP-2 laser de-spin → furnace-transfer fix); 2026-06-07 architect blueprint pass; 2026-06-06 daughter capture-lifecycle polish (commit `b7d5fae`), archived context at [`archive/HANDOFF_2026-05-30_four-fix.md`](archive/HANDOFF_2026-05-30_four-fix.md), [`archive/HANDOFF_2026-05-29_post-cinch-qa.md`](archive/HANDOFF_2026-05-29_post-cinch-qa.md), [`archive/SK_M1_POLISH_HANDOFF.md`](archive/SK_M1_POLISH_HANDOFF.md), [`archive/CEREMONY_REDESIGN.md`](archive/CEREMONY_REDESIGN.md).*
 
 ---
 
-> ## ⏩ LATEST SHIFT — 2026-06-08 (CP-3 transfer-window + CP-4 COMPLETE: arbiter steps 1–5 + MissionCoach) — read this first
+> ## ⏩ LATEST SHIFT — 2026-06-09 (CP-4 follow-on Phase C, partial — chapters 3/4/6/7 as data) — read this first
+>
+> Content shift on top of the shipped CP-4 spine. **Chapters 3, 4, 6, 7 now coach as data** (`Constants.MISSION_COACH.BEATS_BY_MISSION[N]`) on the existing `MissionCoach` engine — no engine changes.
+>
+> **What landed (uncommitted — working tree on top of `56a98f5`):**
+> - **NEW skill `strategic_map`** (tier 3, nav, `triggerEvent: 'DEBRIS_MAP_CLUSTER_SELECTED'`, no filter) in `Constants.SKILLS.CATALOG` — the one genuinely-new skill for Phase C. **Catalog 37 → 38.** *(Trigger note: backtick opens the **Debris Map** where CP-3 cluster/transfer agency lives and `,`/`.` cluster-select emits `DEBRIS_MAP_CLUSTER_SELECTED`; the §5 spec's `STRATEGIC_MAP_OPENED` is the view-only 3D map on Shift+V — wrong surface, so it was corrected.)* Ch3/6/7 reuse skills already in the catalog (`scan_wide` `SCAN_WIDE`, `manage_codex` `CODEX_OPENED`, `manage_forge` `FORGE_TOGGLE`, `collect_trawl` `TRAWL_START`) — the §5 spec table called several of these "new" but they already ship.
+> - **`BEATS_BY_MISSION[3]`** (Sensor Trade) → narrative → Wide Scan (`W`) → Codex (`L`). **`[4]`** (Cargo Discipline) → narrative → Debris Map cluster-select (`` ` `` then `,`/`.`). **`[6]`** (The Forge) → narrative → Forge (`F4`). **`[7]`** (Inclination Tax) → narrative → Trawl (`Shift+G`). Each interactive beat's `triggerEvent` was verified to fire in real gameplay (InputManager/DebrisMap/ArmUnit/etc.).
+> - **Tests:** new "Phase C data integrity" describe in `test-MissionCoach.js` — referential-integrity guard (every interactive beat's `triggerEvent` is a real `Events` key AND its `skillId` is in the catalog), `strategic_map` shape, each chapter drives to completion, ch3/ch4 sequence assertions. **649 suites / 2684 tests / 0 fail** (was 648 / 2679 at `56a98f5`).
+> - Docs: `MISSION_ARC_IMPLEMENTATION.md` §8 Phase C → 🟡 PARTIAL + §5 skill-status note; `ROADMAP.md` CP-4 follow-on note.
+>
+> **NOT committed this shift.** Working tree holds the Phase C content on top of `56a98f5`; `.kilo/` still untracked. Commit when ready.
+>
+> **Next on the critical path → finish Phase C, then D–F:** the **ch5 ISS conjunction boss** is the remaining Phase C item and is **NOT a beat table** — it's real systems work in `MissionEventSystem` (38h game-time TCA countdown, 6 `iss_threat` Cosmos-1408 frags spawned in the ISS forward track, Intercept/Decline player choice, codex unlocks, accept-but-miss failure path). After that: chapters 8–11 + Starlink (ch9) & Thaicom (ch11) bosses + porkchop (ties to EN-5/6), then ch12 anchor-run + win cinematic (Phase E), then the ch1 solo-flight graduation beats (Phase F). See [`MISSION_ARC_IMPLEMENTATION.md`](MISSION_ARC_IMPLEMENTATION.md) §6/§8.
+>
+> **Adding a data-only chapter is now a ~15-line edit:** append a `BEATS_BY_MISSION[N]` array (narrative + interactive beats), and if a beat needs a brand-new skill, add it to `SKILLS.CATALOG` with a `triggerEvent` that actually fires in gameplay (grep `emit(Events.<X>` to confirm) + a `triggerFilter` if you're sharing an event. Then add a chapter to the Phase C integrity test. No engine changes.
+
+---
+
+> ## ⏩ PREVIOUS SHIFT — 2026-06-09 (CP-3 transfer-window + CP-4 COMPLETE: arbiter steps 1–5 + MissionCoach) — committed as `56a98f5`
 >
 > Critical-path build shift on top of CP-1/CP-2. **CP-3 (cluster/transfer agency + transfer-ellipse launch-window countdown) is shipped.** The cluster→autopilot agency already existed (`DebrisMap.engageSelectedCluster → AutopilotSystem.engageCluster`); this shift added the **launch-window countdown** — the §24 "space is periodic" teaching beat.
 >
@@ -102,15 +120,15 @@
 ### Step 2 — Verify baseline
 
 ```bash
-node js/test/run-tests.js | tail -3    # HEAD (CP-2+CP-3+CP-4 committed): 648 suites / 2679 tests / 0 failures
-                                        # HEAD cee4994 (CP-2/CP-3 not yet committed): 624 / 2584
+node js/test/run-tests.js | tail -3    # HEAD 56a98f5 + uncommitted Phase C: 649 suites / 2684 tests / 0 failures
+                                        # HEAD 56a98f5 (CP-2+CP-3+CP-4 spine): 648 / 2679
 ```
 
 If red, see [`archive/SK_M1_POLISH_HANDOFF.md §7 Appendix`](archive/SK_M1_POLISH_HANDOFF.md) for diagnostic-log grep targets.
 
 ### Step 3 — Pick a task
 
-**This shift's path:** CP-2 + CP-3 + CP-4 are **committed** (single combined commit; see the LATEST SHIFT block). The next move is **CP-4 follow-on content** — the 12-chapter arc as data on the shipped MissionCoach engine (`BEATS_BY_MISSION[3..12]` + their skills + the ISS/Starlink/Thaicom boss events + win cinematic, per `MISSION_ARC_IMPLEMENTATION.md` Phases C–F). The older backlog in [`§5 Recommended Next Steps`](#5-recommended-next-steps) is largely consumed; use it only for residual playtest/perf items.
+**This shift's path:** CP-2 + CP-3 + CP-4 are **committed** (`56a98f5`). Phase C chapter content (`BEATS_BY_MISSION[3,4,6,7]` + the `strategic_map` skill) is built **on top, uncommitted** — see the LATEST SHIFT block. The next move is to **finish Phase C** (the ch5 ISS conjunction boss — real `MissionEventSystem` work, not a beat table) then continue Phases D–F per `MISSION_ARC_IMPLEMENTATION.md` §8. The older backlog in [`§5 Recommended Next Steps`](#5-recommended-next-steps) is largely consumed; use it only for residual playtest/perf items.
 
 ---
 

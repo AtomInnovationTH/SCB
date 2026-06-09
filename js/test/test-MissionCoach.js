@@ -157,3 +157,85 @@ describe('MissionCoach — lifecycle', () => {
     assert.equal(save.missionCoach.completedByMission[2], true);
   });
 });
+
+// ════════════════════════════════════════════════════════════════════════════
+//  Phase C — chapters 3,4,6,7 are pure DATA on the shipped engine.
+//  Each interactive beat must (a) reference a real Events key, (b) reference a
+//  real skill in the catalog, and (c) be driveable to completion by emitting
+//  its trigger event in order.
+// ════════════════════════════════════════════════════════════════════════════
+
+const BEATS = Constants.MISSION_COACH.BEATS_BY_MISSION;
+
+/** Walk a whole chapter to completion: hold through narrative beats, fire the
+ *  trigger event for each interactive/reactive beat. Returns the recorder. */
+function runChapter(mission) {
+  const { eb, coach, rec } = makeCoach({ mission });
+  eb.emit(Events.SHOP_DEPLOY, { mission });
+  for (const beat of BEATS[mission]) {
+    if (beat.type === 'narrative') {
+      coach.update((beat.holdMs ?? Constants.MISSION_COACH.NARRATIVE_HOLD_MS) / 1000 + 0.1);
+    } else {
+      // Build a payload that passes the beat's filter (none of ch3/4/6/7 use one).
+      eb.emit(Events[beat.triggerEvent], {});
+    }
+  }
+  return { coach, rec, mission };
+}
+
+describe('MissionCoach — Phase C data integrity (ch3,4,6,7)', () => {
+  it('every Phase C interactive beat references a real Events key + catalog skill', () => {
+    const skillIds = new Set(Constants.SKILLS.CATALOG.map(s => s.id));
+    for (const mission of [3, 4, 6, 7]) {
+      const table = BEATS[mission];
+      assert.ok(Array.isArray(table) && table.length > 0, `chapter ${mission} has beats`);
+      for (const beat of table) {
+        if (beat.type === 'narrative') continue;
+        assert.ok(Events[beat.triggerEvent],
+          `ch${mission} beat ${beat.id}: triggerEvent ${beat.triggerEvent} exists`);
+        assert.ok(skillIds.has(beat.skillId),
+          `ch${mission} beat ${beat.id}: skill ${beat.skillId} is in the catalog`);
+      }
+    }
+  });
+
+  it('the strategic_map skill exists and listens on DEBRIS_MAP_CLUSTER_SELECTED', () => {
+    const sm = Constants.SKILLS.CATALOG.find(s => s.id === 'strategic_map');
+    assert.ok(sm, 'strategic_map skill present');
+    assert.equal(sm.triggerEvent, 'DEBRIS_MAP_CLUSTER_SELECTED',
+      'ch4 teaches the Debris Map cluster/transfer agency (CP-3), not the view-only StrategicMap');
+    assert.equal(sm.triggerFilter, undefined, 'fires on any cluster selection');
+  });
+
+  it('each Phase C chapter runs to completion and is marked coached', () => {
+    for (const mission of [3, 4, 6, 7]) {
+      const { coach } = runChapter(mission);
+      assert.equal(coach.isRunning(), false, `chapter ${mission} finished`);
+      assert.equal(coach.hasCoached(mission), true, `chapter ${mission} coached`);
+    }
+  });
+
+  it('ch3: opens with HOUSTON narrative, then teaches Wide Scan then the Codex', () => {
+    const { eb, coach, rec } = makeCoach({ mission: 3 });
+    eb.emit(Events.SHOP_DEPLOY, { mission: 3 });
+    assert.equal(rec.comms[0].source, 'HOUSTON');
+    coach.update(HOLD + 0.1);
+    assert.equal(rec.started[0].skillId, 'scan_wide');
+    eb.emit(Events.SCAN_WIDE, {});
+    assert.equal(rec.satisfied[0].skillId, 'scan_wide');
+    assert.equal(rec.started[1].skillId, 'manage_codex');
+    eb.emit(Events.CODEX_OPENED, {});
+    assert.equal(coach.hasCoached(3), true);
+  });
+
+  it('ch4: a single interactive beat teaches the transfer map', () => {
+    const { eb, coach, rec } = makeCoach({ mission: 4 });
+    eb.emit(Events.SHOP_DEPLOY, { mission: 4 });
+    coach.update(HOLD + 0.1);
+    assert.equal(rec.started[0].skillId, 'strategic_map');
+    eb.emit(Events.DEBRIS_MAP_CLUSTER_SELECTED, { clusterId: 'c1' });
+    assert.equal(rec.satisfied[0].skillId, 'strategic_map');
+    assert.equal(coach.hasCoached(4), true);
+  });
+});
+

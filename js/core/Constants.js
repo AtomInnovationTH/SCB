@@ -1991,7 +1991,7 @@ export const Constants = {
       { id: 'mastery',      tier: 5, label: 'Mastery',      color: '#cc44dd' },
     ],
 
-    // --- Skill Catalog (35 skills) -----------------------------------------------------------
+    // --- Skill Catalog (38 skills) -----------------------------------------------------------
     // Fields: id, label, key, tier, category, hudGroup, prereqs, prereqType, noReminder, triggerEvent, triggerFilter?
     // triggerEvent: Events.js constant name (string key) or null if auto/timer/needs new event
     // triggerFilter: OPTIONAL (data) => boolean — payload predicate so several skills can share one
@@ -2032,6 +2032,10 @@ export const Constants = {
       // ── CP-4 ch2 (MissionCoach): Daughter piloting (payload-discriminated via triggerFilter) ──
       { id: 'arm_pilot',         label: 'Daughter Piloting', key: 'P', tier: 3, category: 'collect', hudGroup: 'fleet', prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'CONTROL_MODE_CHANGE', triggerFilter: (d) => d && d.mode === 'ARM_PILOT' },
       { id: 'arm_pilot_capture', label: 'Manual Capture',    key: 'F', tier: 3, category: 'collect', hudGroup: 'fleet', prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'ARM_CAPTURED',        triggerFilter: (d) => d && d.manual === true },
+      // ── CP-4 ch4 (MissionCoach): Cluster/transfer agency on the Debris Map (CP-3) ──
+      // Backtick (`) opens the Debris Map; ,/. select a cluster → DEBRIS_MAP_CLUSTER_SELECTED
+      // (the 3D StrategicMap / Shift+V is view-only and does NOT drive transfers).
+      { id: 'strategic_map',     label: 'Transfer Map',      key: '`', tier: 3, category: 'nav',     hudGroup: null,    prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'DEBRIS_MAP_CLUSTER_SELECTED' },
 
       // ── Tier 4: Advanced (7 skills) ─────────────────────────────────────
       { id: 'nav_orbit_mfd',      label: 'Orbit MFD Reading',   key: 'M',  tier: 4, category: 'nav',       hudGroup: null,  prereqs: ['nav_autopilot'],  prereqType: 'soft',   noReminder: false, triggerEvent: 'ORBIT_MFD_TOGGLE' },
@@ -2412,6 +2416,96 @@ export const Constants = {
           triggerFilter: (d) => d && d.manual === true,
           title: 'MANUAL CAPTURE',
           body: 'Close on a target under manual pilot and press F to net it for 2× score.',
+        },
+      ],
+
+      // ── Chapter 3 — Sensor Trade: Wide Scan + the Codex (LEO-Low 400 km) ──
+      3: [
+        {
+          id: 'ch3_intro',
+          type: 'narrative',
+          source: 'HOUSTON',
+          text: 'You\'re climbing into the LEO-Low traffic lanes — and the ISS tracks through here on 51.6°. Quick pings won\'t reach the far contacts. Trade dwell time for range with a wide scan.',
+        },
+        {
+          id: 'ch3_wide_scan',
+          type: 'interactive',
+          source: 'HOUSTON',
+          text: 'Press W for a wide-aperture deep scan — slower, but it paints debris your quick ping (S) can\'t see.',
+          skillId: 'scan_wide',
+          triggerEvent: 'SCAN_WIDE',
+          title: 'WIDE SCAN',
+          body: 'Press W to run a wide-aperture scan and reveal distant contacts.',
+        },
+        {
+          id: 'ch3_codex',
+          type: 'interactive',
+          source: 'HOUSTON',
+          text: 'New contacts logged to the Tech Library. Press L to open the Codex — know what you\'re grabbing before you commit fuel to it.',
+          skillId: 'manage_codex',
+          triggerEvent: 'CODEX_OPENED',
+          title: 'THE CODEX',
+          body: 'Press L to open the Tech Library and read up on a contact.',
+        },
+      ],
+
+      // ── Chapter 4 — Cargo Discipline: cluster/transfer agency (CP-3) ──
+      4: [
+        {
+          id: 'ch4_intro',
+          type: 'narrative',
+          source: 'HOUSTON',
+          text: 'Debris travels in clusters, and space is periodic — a transfer window opens, then closes, then comes around again. Stop chasing one fragment at a time. Plan the whole sweep.',
+        },
+        {
+          id: 'ch4_map',
+          type: 'interactive',
+          source: 'HOUSTON',
+          text: 'Open the debris map (`), then use , / . to pick a cluster — the launch-window countdown times your transfer for minimum ΔV.',
+          skillId: 'strategic_map',
+          triggerEvent: 'DEBRIS_MAP_CLUSTER_SELECTED',
+          title: 'TRANSFER MAP',
+          body: 'Press ` to open the debris map, then , / . to select a cluster and read its transfer window.',
+        },
+      ],
+
+      // ── Chapter 6 — The Forge: melt salvage into FEEP propellant ──
+      6: [
+        {
+          id: 'ch6_intro',
+          type: 'narrative',
+          source: 'HOUSTON',
+          text: 'That cargo isn\'t just mass for the elevator — it\'s fuel. The Forge melts salvage into FEEP propellant. Bismuth burns hot now; cesium is worth more if you can wait. Your call.',
+        },
+        {
+          id: 'ch6_forge',
+          type: 'interactive',
+          source: 'HOUSTON',
+          text: 'Open the Forge (F4) and run a metal through the FEEP cycle — refine your catch into thrust.',
+          skillId: 'manage_forge',
+          triggerEvent: 'FORGE_TOGGLE',
+          title: 'THE FORGE',
+          body: 'Press F4 to open the Forge and convert salvage into FEEP propellant.',
+        },
+      ],
+
+      // ── Chapter 7 — Inclination Tax: trawl + plane-change ΔV (SSO 98°) ──
+      7: [
+        {
+          id: 'ch7_intro',
+          type: 'narrative',
+          source: 'HOUSTON',
+          text: 'Sun-synch orbit, 98° retrograde. Plane changes up here are brutally expensive — every degree of inclination costs ΔV you don\'t get back. Sweep efficiently: net a whole string in one pass.',
+        },
+        {
+          id: 'ch7_trawl',
+          type: 'interactive',
+          source: 'HOUSTON',
+          text: 'Line a daughter along a debris string and trawl (Shift+G) — drag the net through the cluster instead of paying to re-plan each grab.',
+          skillId: 'collect_trawl',
+          triggerEvent: 'TRAWL_START',
+          title: 'TRAWL SWEEP',
+          body: 'Press Shift+G to trawl a daughter\'s net through a string of debris.',
         },
       ],
     },
