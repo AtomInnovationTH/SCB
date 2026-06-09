@@ -13,6 +13,7 @@ import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
 import { audioSystem } from './AudioSystem.js';
 import timerManager from './TimerManager.js';
+import { messagePassesSuppression, rampSuppressionTier } from './commsSuppression.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -101,6 +102,10 @@ function shouldCoalesce(recentWindow, newChannel, thresholdCount) {
 }
 
 /**
+ * @deprecated CP-4 (2026-06-08) — superseded by the graduated suppression-tier
+ * gate in `commsSuppression.js` (`messagePassesSuppression`). Retained as an
+ * exported pure helper for back-compat; no longer used by CommsSystem itself.
+ *
  * Delegation 4 (2026-05-31) — Browser-playtest Bug 4 helper (strengthened).
  *
  * During onboarding the comms panel must show *only* the Director's own
@@ -354,27 +359,33 @@ export class CommsSystem {
     };
 
     /**
-     * Delegation 4 (2026-05-31) — Browser-playtest Bug 4:
-     * While the OnboardingDirector pipeline is active we suppress the
-     * non-essential "atmosphere" comms (space-weather, environment, news
-     * flavor, kessler updates, generic FLAVOR/SCI/MISSION INFO traffic)
-     * that would otherwise drown out the Houston onboarding script.
-     * The flag is toggled by ONBOARDING_STARTED / ONBOARDING_COMPLETE.
-     * @type {boolean}
+     * CP-4 guidance arbiter (GUIDANCE_ARBITER_SPEC §2) — graduated suppression
+     * tier (0–3) replacing the old binary `_onboardingActive`:
+     *   0 = OnboardingDirector running (only tag-bypassed lines pass)
+     *   1 = 0–30 s after ONBOARDING_COMPLETE (+ HOUSTON, MISSION)
+     *   2 = 30–60 s after (+ ALERT, CMD)
+     *   3 = steady state / DEFAULT for non-onboarding play (all channels)
+     * Escalation is driven off the game clock in `_advanceSuppression(dt)` (so it
+     * respects pause for free); see `commsSuppression.js` for the pure gate.
+     * @type {number}
      */
-    this._onboardingActive = false;
+    this._suppressionTier = 3;
+    this._postOnboardingElapsed = 0; // seconds since ONBOARDING_COMPLETE (ramp 1→3)
+    this._tempTierActive = false;    // a MissionCoach beat is holding a protected tier
+    this._tempTierRestoreS = 0;      // remaining hold (s) before the ramp resumes
 
     this._setupEventListeners();
 
     // Self-reset via EventBus (decoupled from GameFlowManager)
     eventBus.on(Events.GAME_RESET, () => this.reset());
 
-    // Delegation 4 — onboarding-noise gate.
+    // CP-4 suppression tiers — onboarding drops to tier 0; completion begins the
+    // graduated wake ramp. (Non-onboarding play stays at the default tier 3.)
     if (Events.ONBOARDING_STARTED) {
-      eventBus.on(Events.ONBOARDING_STARTED, () => { this._onboardingActive = true; });
+      eventBus.on(Events.ONBOARDING_STARTED, () => { this._suppressionTier = 0; });
     }
     if (Events.ONBOARDING_COMPLETE) {
-      eventBus.on(Events.ONBOARDING_COMPLETE, () => { this._onboardingActive = false; });
+      eventBus.on(Events.ONBOARDING_COMPLETE, () => this._beginPostOnboardingRamp());
     }
 
     // Self-manage lifecycle via GAME_STATE_CHANGE
@@ -418,9 +429,10 @@ export class CommsSystem {
       // ST-5.1: Classify channel
       const channel = sourceToChannel(src, data);
 
-      // Delegation 4 (2026-05-31) — Browser-playtest Bug 4 (strengthened):
-      // During onboarding, only the Director's own tagged messages pass.
-      if (this._onboardingActive && isOnboardingNoise(data)) {
+      // CP-4 guidance arbiter — graduated tier gate (replaces the binary
+      // onboarding gate). Tag bypasses (_critical/_onboarding/_postOnboarding/
+      // _lassoFeedback) + CRITICAL priority are honoured in the pure helper.
+      if (!messagePassesSuppression(this._suppressionTier, channel, data, data.priority)) {
         return;
       }
 
@@ -510,14 +522,15 @@ export class CommsSystem {
       if (!this._canSend('lowXenon')) return;
       const tmpl = PLAYER_STATUS_TEMPLATES.lowXenon;
       const pct = data && data.level ? Math.round(data.level / Constants.XENON_FUEL_MAX * 100) : 10;
-      this.addMessage(tmpl.priority, tmpl.source, tmpl.template.replace('{pct}', pct));
+      // CP-4: survival warning — must reach the player even during the wake ramp.
+      this.addMessage(tmpl.priority, tmpl.source, tmpl.template.replace('{pct}', pct), { _critical: true });
     });
 
     eventBus.on(Events.PLAYER_LOW_BATTERY, (data) => {
       if (!this._canSend('lowBattery')) return;
       const tmpl = PLAYER_STATUS_TEMPLATES.lowBattery;
       const pct = data && data.level ? Math.round(data.level / Constants.BATTERY_MAX * 100) : 10;
-      this.addMessage(tmpl.priority, tmpl.source, tmpl.template.replace('{pct}', pct));
+      this.addMessage(tmpl.priority, tmpl.source, tmpl.template.replace('{pct}', pct), { _critical: true });
     });
 
     // Debris cleared
@@ -704,6 +717,9 @@ export class CommsSystem {
     const gameDt = dt * Constants.TIME_SCALE_GAMEPLAY;
     this._gameTime += gameDt;
 
+    // CP-4 — advance the post-onboarding suppression ramp (real dt; pause-safe).
+    this._advanceSuppression(dt);
+
     // Update cooldowns
     for (const [key, time] of this._cooldowns) {
       this._cooldowns.set(key, time - dt);
@@ -852,11 +868,10 @@ export class CommsSystem {
     // ST-5.1: Classify channel
     const channel = sourceToChannel(source, { text, ...(extra || {}) });
 
-    // Delegation 4 (2026-05-31) — Browser-playtest Bug 4 (strengthened):
-    // During onboarding, addMessage() is the internal path used by flavour
-    // templates, Kessler, weather, MMOD, etc. — none of these carry the
-    // _onboarding tag, so they are ALL suppressed.
-    if (this._onboardingActive && isOnboardingNoise(extra)) {
+    // CP-4 guidance arbiter — graduated tier gate. addMessage() is the internal
+    // path for flavour templates, Kessler, weather, MMOD, etc.; at the default
+    // tier 3 this is a no-op, so non-onboarding play is unaffected.
+    if (!messagePassesSuppression(this._suppressionTier, channel, extra, priority)) {
       return;
     }
 
@@ -975,6 +990,56 @@ export class CommsSystem {
     };
     this._active = false;
     this._isroHandoffDone = false;
+    // CP-4 — back to steady-state default; onboarding (if it re-runs) drops to 0.
+    this._suppressionTier = 3;
+    this._postOnboardingElapsed = 0;
+    this._tempTierActive = false;
+    this._tempTierRestoreS = 0;
+  }
+
+  // ==========================================================================
+  // CP-4 GUIDANCE ARBITER — suppression tier (GUIDANCE_ARBITER_SPEC §2)
+  // ==========================================================================
+
+  /** @returns {number} current suppression tier (0–3). */
+  getSuppressionTier() { return this._suppressionTier; }
+
+  /** @private Begin the graduated post-onboarding wake ramp (tier 1 → 2 → 3). */
+  _beginPostOnboardingRamp() {
+    this._suppressionTier = 1;
+    this._postOnboardingElapsed = 0;
+    this._tempTierActive = false;
+    this._tempTierRestoreS = 0;
+  }
+
+  /**
+   * Temporarily drop to a protected tier for a high-cognitive-load MissionCoach
+   * beat (spec §2); the ramp auto-restores after `durationS` seconds of play.
+   * @param {number} tier
+   * @param {number} durationS
+   */
+  _tempDropToTier(tier, durationS) {
+    this._suppressionTier = Math.max(0, Math.min(3, tier | 0));
+    this._tempTierActive = true;
+    this._tempTierRestoreS = Math.max(0, durationS || 0);
+  }
+
+  /**
+   * Advance the suppression ramp by `dt` seconds of (unpaused) play. Driven off
+   * the game loop so it respects pause without a wall-clock timer.
+   * @param {number} dt
+   */
+  _advanceSuppression(dt) {
+    // A MissionCoach beat is holding a protected tier — count it down first.
+    if (this._tempTierActive) {
+      this._tempTierRestoreS -= dt;
+      if (this._tempTierRestoreS > 0) return; // keep holding the protected tier
+      this._tempTierActive = false;           // released → resume the ramp below
+    }
+    // Tier 0 (onboarding) and tier 3 (steady state) are terminal for the ramp.
+    if (this._suppressionTier <= 0 || this._suppressionTier >= 3) return;
+    this._postOnboardingElapsed += dt;
+    this._suppressionTier = rampSuppressionTier(this._postOnboardingElapsed);
   }
 
   // ==========================================================================

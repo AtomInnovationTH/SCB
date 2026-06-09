@@ -260,6 +260,14 @@ export const Events = {
   EDT_ATTRACT:         'edt:attract',
   ROUTE_PLAN_UPDATE:   'route:planUpdate',
 
+  // === CLUSTER TRANSFER WINDOW (CP-3) ===
+  CLUSTER_WINDOW_IMMINENT: 'cluster:windowImminent',  // T-minus threshold reached (beep/cyan)
+  CLUSTER_WINDOW_OPEN:     'cluster:windowOpen',       // optimal departure window open ("burn now")
+
+  // === MISSION COACH BEATS (CP-4 §4 — emitted by the future MissionCoach) ===
+  MISSION_BEAT_STARTED:   'mission:beatStarted',   // { skillId, … } a coach beat now owns the screen
+  MISSION_BEAT_SATISFIED: 'mission:beatSatisfied', // { skillId } the beat's action was performed
+
   // === DELTAV TELEMETRY (Phase R9) ===
   DELTAV_UPDATE:       'deltav:update',
 
@@ -472,6 +480,7 @@ export const Events = {
   // --- Ablation ---
   ABLATION_START:           'ablation:start',            // { armIndex, targetId }
   ABLATION_END:             'ablation:end',              // { armIndex, despinAchieved }
+  DESPIN_IN_SPEC:           'despin:inSpec',             // CP-2 — { targetId, tumbleDeg } target detumbled below net-safe spin
 
   // === COLLISION AVOIDANCE ===
   CA_THREAT_DETECTED:       'ca:threatDetected',         // { debrisId, tca, missDistance, evasionVector }

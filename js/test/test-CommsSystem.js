@@ -533,3 +533,100 @@ describe('CommsSystem – STATION_KEEP_ENTERED listener (§4 item 4)', () => {
     assert.equal(msg.source, 'SYSTEM');
   });
 });
+
+// ============================================================================
+// CP-4 — guidance-arbiter suppression tiers (commsSuppression.js, shared core)
+// ============================================================================
+
+import {
+  messagePassesSuppression,
+  rampSuppressionTier,
+  SUPPRESSION_TIER_CHANNELS,
+} from '../systems/commsSuppression.js';
+
+describe('CommsSystem – suppression tier gate', () => {
+  it('tier 3 (default / steady state) passes every channel', () => {
+    for (const ch of ['CMD', 'ALERT', 'HOUSTON', 'SCI', 'FLAVOR', 'MISSION']) {
+      assert.equal(messagePassesSuppression(3, ch, {}, 'INFO'), true, `${ch} should pass at tier 3`);
+    }
+  });
+
+  it('tier 0 (onboarding) suppresses everything untagged', () => {
+    assert.equal(messagePassesSuppression(0, 'FLAVOR', {}, 'INFO'), false);
+    assert.equal(messagePassesSuppression(0, 'HOUSTON', {}, 'INFO'), false);
+    assert.equal(messagePassesSuppression(0, 'ALERT', {}, 'WARNING'), false);
+  });
+
+  it('tier 0 still passes the Director\'s own _onboarding lines', () => {
+    assert.equal(messagePassesSuppression(0, 'HOUSTON', { _onboarding: true }, 'INFO'), true);
+  });
+
+  it('tier 1 allows HOUSTON + MISSION only', () => {
+    assert.equal(messagePassesSuppression(1, 'HOUSTON', {}, 'INFO'), true);
+    assert.equal(messagePassesSuppression(1, 'MISSION', {}, 'INFO'), true);
+    assert.equal(messagePassesSuppression(1, 'CMD', {}, 'INFO'), false);
+    assert.equal(messagePassesSuppression(1, 'ALERT', {}, 'WARNING'), false);
+    assert.equal(messagePassesSuppression(1, 'FLAVOR', {}, 'INFO'), false);
+    assert.equal(messagePassesSuppression(1, 'SCI', {}, 'INFO'), false);
+  });
+
+  it('tier 2 adds ALERT + CMD, still gates FLAVOR/SCI', () => {
+    assert.equal(messagePassesSuppression(2, 'ALERT', {}, 'WARNING'), true);
+    assert.equal(messagePassesSuppression(2, 'CMD', {}, 'INFO'), true);
+    assert.equal(messagePassesSuppression(2, 'FLAVOR', {}, 'INFO'), false);
+    assert.equal(messagePassesSuppression(2, 'SCI', {}, 'INFO'), false);
+  });
+
+  it('_critical tag bypasses ANY tier (incl. 0) — ISS/Hubble conjunction', () => {
+    assert.equal(messagePassesSuppression(0, 'ALERT', { _critical: true }, 'WARNING'), true);
+    assert.equal(messagePassesSuppression(1, 'FLAVOR', { _critical: true }, 'INFO'), true);
+  });
+
+  it('CRITICAL priority is never muted from tier 1 up, but NOT at tier 0', () => {
+    assert.equal(messagePassesSuppression(1, 'FLAVOR', {}, 'CRITICAL'), true);
+    assert.equal(messagePassesSuppression(2, 'SCI', {}, 'critical'), true); // case-insensitive
+    // Tier 0 protects the onboarding script — only explicit tags escape it.
+    assert.equal(messagePassesSuppression(0, 'FLAVOR', {}, 'CRITICAL'), false);
+  });
+
+  it('_postOnboarding (MissionCoach beats) passes at tiers ≥ 1 but not at tier 0', () => {
+    assert.equal(messagePassesSuppression(1, 'MISSION', { _postOnboarding: true }, 'INFO'), true);
+    assert.equal(messagePassesSuppression(2, 'FLAVOR', { _postOnboarding: true }, 'INFO'), true);
+    assert.equal(messagePassesSuppression(0, 'MISSION', { _postOnboarding: true }, 'INFO'), false);
+  });
+
+  it('_lassoFeedback (actionable denial) always passes', () => {
+    assert.equal(messagePassesSuppression(0, 'CMD', { _lassoFeedback: true }, 'INFO'), true);
+    assert.equal(messagePassesSuppression(1, 'CMD', { _lassoFeedback: true }, 'INFO'), true);
+  });
+
+  it('tier channel sets match the spec table', () => {
+    assert.deepEqual([...SUPPRESSION_TIER_CHANNELS[1]].sort(), ['HOUSTON', 'MISSION']);
+    assert.deepEqual([...SUPPRESSION_TIER_CHANNELS[2]].sort(), ['ALERT', 'CMD', 'HOUSTON', 'MISSION']);
+  });
+});
+
+describe('CommsSystem – suppression ramp (rampSuppressionTier)', () => {
+  const RAMP = { TIER2_AFTER_S: 30, TIER3_AFTER_S: 60 };
+
+  it('0–30 s → tier 1', () => {
+    assert.equal(rampSuppressionTier(0, RAMP), 1);
+    assert.equal(rampSuppressionTier(29.9, RAMP), 1);
+  });
+
+  it('30–60 s → tier 2', () => {
+    assert.equal(rampSuppressionTier(30, RAMP), 2);
+    assert.equal(rampSuppressionTier(59.9, RAMP), 2);
+  });
+
+  it('60 s+ → tier 3 (steady state)', () => {
+    assert.equal(rampSuppressionTier(60, RAMP), 3);
+    assert.equal(rampSuppressionTier(600, RAMP), 3);
+  });
+
+  it('uses Constants.COMMS.SUPPRESSION_RAMP when no ramp passed', () => {
+    const R = Constants.COMMS.SUPPRESSION_RAMP;
+    assert.ok(R && R.TIER2_AFTER_S > 0 && R.TIER3_AFTER_S > R.TIER2_AFTER_S, 'ramp constant present + ordered');
+    assert.equal(rampSuppressionTier(R.TIER3_AFTER_S), 3);
+  });
+});

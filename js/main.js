@@ -47,7 +47,8 @@ import { launchSequence } from './systems/LaunchSequence.js';
 import { trawlManager } from './systems/TrawlManager.js';
 import { AutopilotSystem } from './systems/AutopilotSystem.js';
 import { SkillsSystem } from './systems/SkillsSystem.js';
-import { LassoSystem } from './systems/LassoSystem.js';
+import { MissionCoach } from './systems/MissionCoach.js';import { LassoSystem } from './systems/LassoSystem.js';
+import { despinLaser } from './systems/DespinLaser.js';
 import { RewardSystem } from './systems/RewardSystem.js';
 import { CodexSystem } from './systems/CodexSystem.js';
 import { SpaceWeatherSystem } from './systems/SpaceWeatherSystem.js';
@@ -406,6 +407,7 @@ let motherCallouts;
 // Systems (targetSelector, kesslerSystem, trawlManager imported as singletons above)
 let cameraSystem;
 let commsSystem;
+let missionCoach;
 let resourceSystem;
 let sensorSystem;
 let cargoSystem;
@@ -590,6 +592,7 @@ async function init() {
   teachingOverlay = new TeachingOverlay(document.body);
   teachingSystem = new TeachingSystem(eventBus);
   teachingSystem.onShow = (moment) => teachingOverlay.show(moment);
+  teachingSystem.setSkillsSystem(skillsSystem); // CP-4 §3.1 veteran downgrade + hint-gating
   teachingSystem.init();
 
   // --- Delegation 2 (2026-05-31): OnboardingDirector ---
@@ -651,6 +654,10 @@ async function init() {
 
   // --- Comms System ---
   commsSystem = new CommsSystem();
+
+  // --- CP-4 MissionCoach (chapters 2+ coaching; chapter 1 stays with OnboardingDirector) ---
+  missionCoach = new MissionCoach({ eventBus, scoringSystem, persistenceManager, commsSystem });
+  missionCoach.init();
 
   // --- Build UI ---
   hud = new HUD();
@@ -715,6 +722,11 @@ async function init() {
   if (Constants.FEATURE_FLAGS.CAPTURE_NET) {
     captureNetSystem.init();   // ST-9.4: initialize mother pod inventory + set _initialized
     captureNetVisual.init(scene, player, captureNetSystem);
+  }
+
+  // CP-2: mother-mounted de-spin laser (flag-gated; operates on the active target)
+  if (Constants.FEATURE_FLAGS.LASER_DESPIN) {
+    despinLaser.init({ scene, player, targetSelector });
   }
 
   // V-9: Tier progression visual (flag-gated internally)
@@ -1289,6 +1301,15 @@ function gameLoop(timestamp) {
     // V-8: Capture net FSM + visual effects (flag-gated internally)
     try { captureNetSystem.update(dt); } catch (e) { console.error('[GameLoop] captureNetSystem:', e); }
     try { captureNetVisual.update(dt); } catch (e) { console.error('[GameLoop] captureNetVisual:', e); }
+
+    // CP-2: mother-mounted de-spin laser (flag-gated internally)
+    try { despinLaser.update(dt); } catch (e) { console.error('[GameLoop] despinLaser:', e); }
+
+    // CP-4 §4: drain deferred teaching overlays (≤1 per QUEUE_DRAIN_INTERVAL_S)
+    try { teachingSystem.update(dt); } catch (e) { console.error('[GameLoop] teachingSystem:', e); }
+
+    // CP-4: MissionCoach beat timers (narrative dwell + interactive escalation)
+    try { if (missionCoach) missionCoach.update(dt); } catch (e) { console.error('[GameLoop] missionCoach:', e); }
 
     // V-9: Tier progression visual transition animation
     try { tierVisualManager.update(dt); } catch (e) { console.error('[GameLoop] tierVisualManager:', e); }

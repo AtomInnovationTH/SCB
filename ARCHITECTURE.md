@@ -141,7 +141,7 @@ MENU ──Start──▶ BRIEFING ──Commence/QuickStart/FreeRoam──▶ O
 
 ## 5. FEATURE_FLAGS truth table
 
-[`Constants.FEATURE_FLAGS`](js/core/Constants.js:471). `isFeatureEnabled()` force-returns false when `REALITY_MODE` is on. **Three flags are ON in the shipping build:**
+[`Constants.FEATURE_FLAGS`](js/core/Constants.js:471). `isFeatureEnabled()` force-returns false when `REALITY_MODE` is on. **Several flags are ON in the shipping build:**
 
 | Flag | State | What it gates |
 |---|---|---|
@@ -150,6 +150,8 @@ MENU ──Start──▶ BRIEFING ──Commence/QuickStart/FreeRoam──▶ O
 | **DAUGHTER_MULTITOOL** | **ON** | CP-1/P2 — per-arm tool choice: `MAGNETIC_GRAPPLE` state, SK tool-selection HUD, backtick cycle, F dispatches selected verb |
 | **WEAVER_GRIPPER** | **ON** | CP-1/P3 — Weaver tertiary `GRIPPER_GRAPPLE` (3-jaw chuck on protruding fixtures) |
 | **SPINNER_PAD** | **ON** | CP-1/P4 — Spinner secondary `PAD_CONTACT` (multi-modal pad, auto mode-resolve, finite UV-cure doses) |
+| **LASER_DESPIN** | **ON** | CP-2 — mother-mounted de-spin laser (hold `U`): bleeds target `tumbleRate`, + net-cling tumble penalty so detumble→net works |
+| **CLUSTER_TRANSFER_WINDOW** | **ON** | CP-3 — DebrisMap transfer-window readout (Depart/Arrive/ΔV + countdown) + commit-on-engage T-10 beep / T-0 "window open" comms |
 | SHIPYARD_REFIT, CROSSBOW_MECHANISM, DUAL_OPPOSITE_FIRE, RECOIL_PHYSICS | off | spring physics, recoil-cancel pair fire |
 | NET_TERMINOLOGY, NET_PRIMARY_DOCTRINE, NET_CLING_MODEL, NET_TANGLE_MECHANICS, PER_PLATFORM_NETS | off | net doctrine refits (cling model is effectively live via CaptureNet regardless) |
 | DYNEEMA_TETHER, REEL_CYCLE_RESOURCE, **TETHER_REEL** | off | tether wear + strut reel cable physics (**TetherReel.js orphaned**) |
@@ -159,6 +161,10 @@ MENU ──Start──▶ BRIEFING ──Commence/QuickStart/FreeRoam──▶ O
 | STOW_DEPLOY_STATE_MACHINE, LAUNCH_SEQUENCE, COM_TRACKING, THRUSTER_INTERLOCK, SEMI_AUTO_AIM, LOCKABLE_HINGE, TECH_LADDER_SHOP, REALITY_MODE | off | Config-G gap features |
 
 > **CP-1 fully landed (P2 magnet + P3 gripper + P4 pad).** All three daughter tools are built and player-dispatchable from STATION_KEEP: `MAGNETIC_GRAPPLE`, `GRIPPER_GRAPPLE`, `PAD_CONTACT`. The `ToolRecommender` scores the arm's toolset (steel hull → ▶MAGNET; oversize/awkward/fixture → ▶GRIPPER; tiny fragment → PAD ★★★ alternative; net stays primary on ties). Ferrous/fixture/roughness flags are derived once in [`debrisFerrous.js`](js/entities/debrisFerrous.js) for both procedural and catalog debris. **Deferred:** UV-cure dose save/load persistence (§13 Q3) — runtime-only at Y0, resets full on reload.
+
+> **CP-2 landed (laser de-spin).** New mother-mounted [`DespinLaser`](js/systems/DespinLaser.js) (hold `U`, command view) operates on `targetSelector.getActiveTarget()` — bleeds the target's `tumbleRate` by `DESPIN_LASER.DESPIN_RATE_RAD_S2`, draws a cyan beam, and emits `DESPIN_IN_SPEC` ("tumble in spec, net it") on crossing the net-safe spin. The live coupling is `CaptureNet.computeTumbleModifier` (a tumble factor in `computeClingProbability`, flag-gated): high tumble sheds the net, detumble restores cling — so "detumble → net" is mechanically real, not cosmetic. The dormant daughter `ARM_STATES.ABLATING` path (bit-rotted — mutated a non-existent `angularVelocity`) is **superseded** by this mother system and remains unreached.
+
+> **CP-3 landed (cluster transfer-window countdown).** Pure math in [`LaunchWindow.js`](js/entities/LaunchWindow.js) (`meanMotion`/`orbitalPeriod`/`synodicPeriod`/`hohmannPhaseLead`/`computeTransferWindow`/`clusterToOrbitKm`/`detectWindowCrossing`) computes the next coplanar-Hohmann launch window player→cluster, using a representative member's **live** orbit for phase (`pickRepresentative` → member nearest the cluster mean altitude). [`DebrisMap`](js/ui/DebrisMap.js) renders a **TRANSFER WINDOW** readout for the highlighted cluster (`Depart T-mm:ss` / `Arrive T+mm:ss` / `ΔV m/s` + a "next window every …" periodicity hint — the §24 teaching beat) plus a dashed transfer-path arc on its schematic. `engageSelectedCluster()` **commits** the window: DebrisMap tracks it every frame (even with the map closed), emits `CLUSTER_WINDOW_IMMINENT` (cyan + `AudioSystem.playWindowImminent`) at T-`DEBRIS_MAP.WINDOW_IMMINENT_S` and `CLUSTER_WINDOW_OPEN` (+ HOUSTON comms + `playWindowOpen`) at T-0; a missed window rolls to the next synodic period via the modular solve in `computeTransferWindow`. The committed countdown clears on `AUTOPILOT_DISENGAGE`/`AUTOPILOT_ARRIVED`/`GAME_RESET`. Cluster→autopilot agency itself was already live (`DebrisMap.engageSelectedCluster → AutopilotSystem.engageCluster`); StrategicMap (3D) remains view-only.
 
 ---
 
@@ -262,12 +268,12 @@ All in [`InputManager.js`](js/systems/InputManager.js) `_handleKeyDown` + held-k
 Three layers; only the first two exist today.
 
 1. **OnboardingDirector** ([`OnboardingDirector.js`](js/systems/OnboardingDirector.js)) — **16 beats** (boot, handshake, arrows, struts, view, look, zoom, inspect, scan, target, autopilot, decision, lasso, daughter, captured, complete). Each interactive beat triggers on an `Events` constant; narrative beats auto-advance. Escalation → `TEACHING_MOMENT_FORCE` after idle (`IDLE_ESCALATION_MS`) or >6 unrelated inputs. Veteran-skip via `VETERAN_SKILL_THRESHOLD`. Emits `ONBOARDING_COMPLETE`. **No solo-flight/counter-beat, no PostOnboardingCoach (both spec'd, unbuilt).**
-2. **TeachingSystem** ([`TeachingSystem.js`](js/systems/TeachingSystem.js)) — **19 first-encounter moments**, `_seen` Set persisted to `localStorage['teachingSeen']`. `TEACHING_MOMENT_FORCE` bypasses the seen-guard (used by Director escalation).
-3. **MissionCoach** — **does not exist** (`js/systems/MissionCoach.js` absent). The 12-chapter arc has no per-chapter coaching layer in code.
+2. **TeachingSystem** ([`TeachingSystem.js`](js/systems/TeachingSystem.js)) — **19 first-encounter moments**, `_seen` Set persisted to `localStorage['teachingSeen']`. `TEACHING_MOMENT_FORCE` bypasses the seen-guard (used by Director escalation). **CP-4 §4 3-layer arbitration (built):** overlays QUEUE while a blocking surface (radial menu `C` / deploy ceremony `D`), the OnboardingDirector, or a MissionCoach beat owns the screen, and drain ≤1 per `TEACHING.QUEUE_DRAIN_INTERVAL_S` (6 s) via `update(dt)`; the **collision rule** drops an overlay permanently when an active coach beat's `skillId` matches the moment id; veterans get `presentation:'ticker'` (via the injected SkillsSystem's `getHintPresentation()`); `GAME_RESET` clears the queue. Coach-beat signals are `MISSION_BEAT_STARTED`/`MISSION_BEAT_SATISFIED` (dormant until MissionCoach emits them).
+3. **MissionCoach** ([`MissionCoach.js`](js/systems/MissionCoach.js)) — **built (engine + chapter 2)**. On `SHOP_DEPLOY` into mission N it runs `Constants.MISSION_COACH.BEATS_BY_MISSION[N]` via the shared `BeatSequencer` ([`_beatLifecycle.js`](js/systems/_beatLifecycle.js)): each beat posts a `_postOnboarding`-tagged MISSION comms line; interactive beats emit `MISSION_BEAT_STARTED` and resolve on their (payload-filtered) trigger → `MISSION_BEAT_SATISFIED`; an idle beat re-prompts via `TEACHING_MOMENT_FORCE`; completion persists per mission (`spacecowboy_mission_coach_v1`), cleared on `GAME_RESET`. Chapter 1 stays with OnboardingDirector. **Chapters 3–12 (beat tables, ~5 more skills, boss events, win cinematic) are follow-on content** (MISSION_ARC Phases C–F); the engine makes each a data edit, not code.
 
-**SkillsSystem** ([`SkillsSystem.js`](js/systems/SkillsSystem.js)) — **35 skills**, 5 tiers (orientation/core_tools/proficiency/advanced/mastery), 5 categories (nav/scan/collect/awareness/manage). States: undiscovered→discovered→practiced→mastered (mastery needs count AND `MASTERY_MIN_TIME=300s`). SM-2 spaced reminders. **No `triggerFilter`** (skills wire 1:1 to `triggerEvent`).
+**SkillsSystem** ([`SkillsSystem.js`](js/systems/SkillsSystem.js)) — **37 skills**, 5 tiers (orientation/core_tools/proficiency/advanced/mastery), 5 categories (nav/scan/collect/awareness/manage). States: undiscovered→discovered→practiced→mastered (mastery needs count AND `MASTERY_MIN_TIME=300s`). SM-2 spaced reminders. Skills wire 1:1 to a `triggerEvent`, with an **optional `triggerFilter(data) => boolean`** (CP-4 arbiter §5) so several skills can share one event but discriminate by payload — the gate lives in `_setupListeners` and a def without it fires on every event as before. To feed it, `ARM_CAPTURED` now carries `manual` (true for player net/tool captures, false for passive fishing/trawl auto-captures) and `SCAN_INITIATED` carries `type:'quick'|'wide'`. (Chapter 2's `arm_pilot`/`arm_pilot_capture` are the first live `triggerFilter` defs; chapters 3–12 add more as data.) **CP-4 §3 universal hint-gating rule** (the "respect the player" invariant) lives here too: `canFireHint(skillId,{cause})` allows a hint only if the skill is *undiscovered OR (discovered AND failed-recently)*, never for mastered, and falls silent after `MAX_UNHEEDED_NUDGES` (per-skill unheeded counters, reset on use). "failed-recently" is backed by a `_recentFailures` ring buffer auto-wired from `Constants.SKILLS.FAILURE_CAUSES` (NET_FAILED/NET_CATCH_MISS/LASSO_MISSED/LASSO_DENIED/PAD_BOUNCED/ARM_CAPTURE_FAILED). The SM-2 reminder path enforces the unheeded cap and tags each `SKILL_REMINDED` with `presentation:'ticker'|'modal'`; `isVeteran()`/`getHintPresentation()` downgrade veterans (`SKILLS.VETERAN_SKILL_THRESHOLD` 0.7, distinct from the 0.5 onboarding-skip threshold) to ticker hints.
 
-**CommsSystem** ([`CommsSystem.js`](js/systems/CommsSystem.js)) — **binary** suppression (`_onboardingActive`), NOT the graduated `_suppressionTier` (0–3) the mission-guidance design calls for. 6 channels (CMD/ALERT/HOUSTON/SCI/FLAVOR/MISSION); personas HOUSTON + ISRO BANGALORE/HASSAN with a scripted handoff line.
+**CommsSystem** ([`CommsSystem.js`](js/systems/CommsSystem.js)) — **graduated suppression tier `_suppressionTier` (0–3)** (CP-4 arbiter, GUIDANCE_ARBITER_SPEC §2), replacing the old binary `_onboardingActive`. Tier 0 = OnboardingDirector running (only tag-bypassed lines); tier 1 (0–30 s after `ONBOARDING_COMPLETE`) = + HOUSTON/MISSION; tier 2 (30–60 s) = + ALERT/CMD; tier 3 (60 s+ / **default for non-onboarding play**) = all channels. The ramp advances off the game clock in `_advanceSuppression(dt)` (pause-safe). Tag bypasses (`_critical` any tier, `_onboarding` tier 0, `_postOnboarding` tiers ≥1, `_lassoFeedback` always) + CRITICAL-priority-from-tier-1 live in the pure [`commsSuppression.js`](js/systems/commsSuppression.js) (`messagePassesSuppression`). Low-fuel/battery warnings and imminent (RED) conjunction alerts ([`ConjunctionSystem.js`](js/systems/ConjunctionSystem.js)) are stamped `_critical` so they bypass the wake ramp at any tier. `_tempDropToTier(tier, durationS)` lets a MissionCoach beat protect its highest-load moment. **CP-4 complete (arbiter steps 1–5 + MissionCoach engine + chapter 2);** the remaining 12-chapter content (chapters 3–12 beat tables, ~5 more skills, boss events, win cinematic) is data-layer follow-on (MISSION_ARC Phases C–F). 6 channels (CMD/ALERT/HOUSTON/SCI/FLAVOR/MISSION); personas HOUSTON + ISRO BANGALORE/HASSAN with a scripted handoff line.
 
 ---
 
@@ -291,10 +297,10 @@ Three layers; only the first two exist today.
 | **Porkchop plot** | ❌ | ❌ |
 | **Lambert solver** (`lambertIzzo`) | ❌ | ❌ |
 | **Clohessy-Wiltshire band** | ❌ | ❌ |
-| **Transfer ellipse + launch countdown** | ❌ | ❌ |
-| **Cluster selection** | partial — DebrisMap (backtick) picks a cluster → Shift+A engages autopilot | StrategicMap does NOT select clusters |
+| **Transfer ellipse + launch countdown** | ✅ CP-3 — DebrisMap TRANSFER WINDOW readout (Depart/Arrive/ΔV + countdown) + transfer-path arc; commit-on-engage T-10 beep / T-0 comms | ✅ [`LaunchWindow.js`](js/entities/LaunchWindow.js) (pure, tested) |
+| **Cluster selection** | DebrisMap (backtick) picks a cluster → Shift+A engages autopilot + commits its launch-window countdown | StrategicMap does NOT select clusters |
 
-So the educational suite has a strong **situational-awareness** layer (MOID, bands, Hohmann) but **no maneuver-planning/timing tools** (porkchop, Lambert, CW, transfer-window countdown). These are the biggest unbuilt teaching opportunities (see ROADMAP).
+So the educational suite has a strong **situational-awareness** layer (MOID, bands, Hohmann) plus the CP-3 **transfer-window countdown**, but still **no porkchop/Lambert/CW maneuver-planning tools**. These remain the biggest unbuilt teaching opportunities (see ROADMAP EN-5/EN-6).
 
 ---
 
@@ -337,7 +343,7 @@ Corrected during the 2026-06-07 ground-truth pass. Stale-count headers have been
 |---|---|
 | "6 arms: 3 Weaver + 3 Spinner" (main.js comment) | Y0 Quad = **4 arms: 2W + 2S** (`ARM_LADDER.Y0_QUAD`) |
 | OnboardingDirector "13 beats" | **16 beats** |
-| SkillsSystem "34"/"33 skills" | **35 skills** |
+| SkillsSystem "34"/"33 skills" | **37 skills** |
 | TeachingSystem "12 moments" | **19 moments** |
 | "5 camera views" / V cycles 3 | **7 CameraViews**, V cycles **2** (CHASE↔ORBIT); TARGET_LOCK orphaned |
 | "21 upgrades" | **30 upgrades** |

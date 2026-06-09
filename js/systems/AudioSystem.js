@@ -394,6 +394,10 @@ class AudioSystem {
       this.playAPArrived();
     });
 
+    // CP-3: transfer-window cues — T-minus beep + window-open chime
+    eventBus.on(Events.CLUSTER_WINDOW_IMMINENT, () => this.playWindowImminent());
+    eventBus.on(Events.CLUSTER_WINDOW_OPEN, () => this.playWindowOpen());
+
     // Salvage reveal — loot box moment
     eventBus.on(Events.SALVAGE_REVEAL, () => {
       this.playSalvageReveal();
@@ -2686,6 +2690,23 @@ class AudioSystem {
     gain.connect(this.sfxBus);
     osc.start(now);
     osc.stop(now + 0.12);
+  }
+
+  /** CP-3: transfer-window T-minus cue — two rising cyan blips. */
+  playWindowImminent() {
+    if (!this.available) return;
+    const now = this.ctx.currentTime;
+    this._playSineBlip(now,        988, 0.08, 0.20);  // B5
+    this._playSineBlip(now + 0.10, 1319, 0.10, 0.22); // E6
+  }
+
+  /** CP-3: transfer-window open cue — confirming ascending triad. */
+  playWindowOpen() {
+    if (!this.available) return;
+    const now = this.ctx.currentTime;
+    this._playSineBlip(now,        784, 0.12, 0.26);  // G5
+    this._playSineBlip(now + 0.12, 988, 0.12, 0.26);  // B5
+    this._playSineBlip(now + 0.24, 1319, 0.20, 0.30); // E6 held
   }
 
   /** Start a sustained 440Hz alignment confirmation tone at vol 0.1. */

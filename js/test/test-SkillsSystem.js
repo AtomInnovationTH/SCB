@@ -1082,3 +1082,248 @@ describe('SkillsSystem — Mastery Celebration (ST-3.4)', () => {
         sys.dispose();
     });
 });
+
+// ── Suite: triggerFilter payload discrimination (GUIDANCE_ARBITER_SPEC §5) ──
+//
+// The arc needs payload-discriminated skills (e.g. "manual capture" =
+// ARM_CAPTURED{manual:true}, "wide scan" = SCAN_INITIATED{type:'wide'}).
+// CP-4 step 3 adds the OPTIONAL `triggerFilter(data) => boolean` to catalog
+// defs: a def with a filter only triggers when the filter returns truthy for
+// the event payload; a def WITHOUT a filter triggers on every event (no
+// regression). The live catalog ships no filtered defs yet (the arc adds them
+// later as data), so these tests inject temporary defs around a fresh system
+// and restore the catalog afterwards.
+describe('SkillsSystem — triggerFilter payload discrimination', () => {
+
+    /**
+     * Build a SkillsSystem whose catalog has been replaced with `defs`.
+     * Restores the original catalog when `restore()` is called. Filtered defs
+     * are evaluated against live event payloads by the system's listeners.
+     */
+    function makeSystemWithCatalog(defs) {
+        eventBus.clear();
+        const original = Constants.SKILLS.CATALOG;
+        Constants.SKILLS.CATALOG = defs;
+        const sys = new SkillsSystem();
+        return {
+            sys,
+            restore() {
+                sys.dispose();
+                Constants.SKILLS.CATALOG = original;
+            },
+        };
+    }
+
+    const FILTERED_DEF = {
+        id: 'test_manual_capture', label: 'Manual Capture', key: null,
+        tier: 1, category: 'collect', hudGroup: null,
+        prereqs: [], prereqType: 'none', noReminder: true,
+        triggerEvent: 'ARM_CAPTURED',
+        triggerFilter: (data) => !!(data && data.manual),
+    };
+    const UNFILTERED_DEF = {
+        id: 'test_any_capture', label: 'Any Capture', key: null,
+        tier: 1, category: 'collect', hudGroup: null,
+        prereqs: [], prereqType: 'none', noReminder: true,
+        triggerEvent: 'LASSO_FIRED',
+    };
+
+    it('filtered def triggers ONLY when payload matches the filter', () => {
+        const { sys, restore } = makeSystemWithCatalog([FILTERED_DEF]);
+        // Non-matching payloads must NOT discover the skill
+        eventBus.emit(Events.ARM_CAPTURED, { manual: false });
+        eventBus.emit(Events.ARM_CAPTURED, {});
+        eventBus.emit(Events.ARM_CAPTURED);
+        assert.equal(sys.getState('test_manual_capture'), 'undiscovered',
+            'manual:false / empty / undefined payloads must not trigger the filtered skill');
+
+        // Matching payload triggers discovery
+        eventBus.emit(Events.ARM_CAPTURED, { manual: true });
+        assert.equal(sys.getState('test_manual_capture'), 'discovered',
+            'manual:true payload must trigger the filtered skill');
+        restore();
+    });
+
+    it('filtered def counts only matching payloads', () => {
+        const { sys, restore } = makeSystemWithCatalog([FILTERED_DEF]);
+        eventBus.emit(Events.ARM_CAPTURED, { manual: true });
+        eventBus.emit(Events.ARM_CAPTURED, { manual: false }); // ignored
+        eventBus.emit(Events.ARM_CAPTURED, { manual: true });
+        const rec = sys._skills.get('test_manual_capture');
+        assert.equal(rec.count, 2, 'Only the two manual:true payloads should be counted');
+        restore();
+    });
+
+    it('def WITHOUT a triggerFilter triggers on every event (no regression)', () => {
+        const { sys, restore } = makeSystemWithCatalog([UNFILTERED_DEF]);
+        // First event → discovery
+        eventBus.emit(Events.LASSO_FIRED);
+        assert.equal(sys.getState('test_any_capture'), 'discovered',
+            'Unfiltered skill discovers on first event regardless of payload');
+        // Further events all count, regardless of payload shape
+        eventBus.emit(Events.LASSO_FIRED, { manual: false }); // payload ignored
+        eventBus.emit(Events.LASSO_FIRED, { anything: 1 });
+        const rec = sys._skills.get('test_any_capture');
+        assert.equal(rec.count, 3, 'Unfiltered skill counts every event regardless of payload');
+        assert.notEqual(rec.state, 'undiscovered',
+            'Unfiltered skill never stays undiscovered after firing');
+        restore();
+    });
+
+    it('filtered and unfiltered defs sharing nothing coexist correctly', () => {
+        const { sys, restore } = makeSystemWithCatalog([FILTERED_DEF, UNFILTERED_DEF]);
+        // Fire the unfiltered event — only the unfiltered skill reacts
+        eventBus.emit(Events.LASSO_FIRED);
+        assert.equal(sys.getState('test_any_capture'), 'discovered');
+        assert.equal(sys.getState('test_manual_capture'), 'undiscovered');
+
+        // Fire a non-matching filtered event — neither changes
+        eventBus.emit(Events.ARM_CAPTURED, { manual: false });
+        assert.equal(sys.getState('test_manual_capture'), 'undiscovered');
+
+        // Fire a matching filtered event — only the filtered skill reacts
+        eventBus.emit(Events.ARM_CAPTURED, { manual: true });
+        assert.equal(sys.getState('test_manual_capture'), 'discovered');
+        restore();
+    });
+
+    it('CP-4 ch2 catalog defs carry triggerFilter (arm_pilot, arm_pilot_capture)', () => {
+        const withFilter = Constants.SKILLS.CATALOG.filter(d => d.triggerFilter);
+        const ids = withFilter.map(d => d.id).sort();
+        assert.deepEqual(ids, ['arm_pilot', 'arm_pilot_capture'],
+            'ch2 daughter-piloting skills are the payload-discriminated defs');
+        const pilot = Constants.SKILLS.CATALOG.find(d => d.id === 'arm_pilot');
+        assert.equal(pilot.triggerFilter({ mode: 'ARM_PILOT' }), true);
+        assert.equal(!!pilot.triggerFilter({ mode: 'RCS' }), false);
+    });
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+//  CP-4 — universal hint-gating rule + recent-failures + veteran downgrade
+//  (GUIDANCE_ARBITER_SPEC §3 / §3.1)
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('SkillsSystem — CP-4 recent-failure ring buffer', () => {
+    it('recordFailure + failedRecently within TTL', () => {
+        const sys = makeSystem();
+        const now = Date.now();
+        sys.recordFailure('net-fail', now);
+        assert.equal(sys.failedRecently('net-fail', now), true);
+        assert.equal(sys.failedRecently('lasso-miss', now), false, 'different cause');
+        sys.dispose();
+    });
+
+    it('a failure older than RECENT_FAILURE_TTL_S is not "recent"', () => {
+        const sys = makeSystem();
+        const now = Date.now();
+        sys.recordFailure('net-fail', now - (S.RECENT_FAILURE_TTL_S * 1000 + 5000));
+        assert.equal(sys.failedRecently('net-fail', now), false);
+        sys.dispose();
+    });
+
+    it('failure events are auto-wired into the buffer', () => {
+        const sys = makeSystem();
+        eventBus.emit(Events.NET_FAILED, {});
+        assert.equal(sys.failedRecently('net-fail'), true, 'NET_FAILED → net-fail');
+        sys.dispose();
+    });
+
+    it('ring buffer is bounded to RECENT_FAILURE_BUFFER', () => {
+        const sys = makeSystem();
+        for (let i = 0; i < S.RECENT_FAILURE_BUFFER + 8; i++) sys.recordFailure('net-fail');
+        assert.ok(sys._recentFailures.length <= S.RECENT_FAILURE_BUFFER, 'buffer bounded');
+        sys.dispose();
+    });
+});
+
+describe('SkillsSystem — CP-4 universal hint-gating rule (canFireHint)', () => {
+    it('undiscovered skill is always eligible (first-encounter teaching)', () => {
+        const sys = makeSystem();
+        assert.equal(sys.canFireHint('scan_quick'), true);
+        sys.dispose();
+    });
+
+    it('discovered skill is gated unless failed-recently', () => {
+        const sys = makeSystem();
+        eventBus.emit(Events.SCAN_QUICK); // discover scan_quick
+        assert.equal(sys.getState('scan_quick'), 'discovered');
+        assert.equal(sys.canFireHint('scan_quick'), false, 'no recent failure → no nudge');
+        sys.recordFailure('net-fail');
+        assert.equal(sys.canFireHint('scan_quick'), true, 'recent failure → eligible');
+        // With a specific cause that did NOT occur, still gated:
+        assert.equal(sys.canFireHint('scan_quick', { cause: 'lasso-miss' }), false);
+        sys.dispose();
+    });
+
+    it('mastered skill is never nudged', () => {
+        const sys = makeSystem();
+        const rec = sys._skills.get('scan_quick');
+        rec.state = 'mastered';
+        sys.recordFailure('net-fail');
+        assert.equal(sys.canFireHint('scan_quick'), false);
+        sys.dispose();
+    });
+
+    it('falls silent after MAX_UNHEEDED_NUDGES, re-arms when the skill is used', () => {
+        const sys = makeSystem();
+        for (let i = 0; i < S.MAX_UNHEEDED_NUDGES; i++) {
+            assert.equal(sys.canFireHint('scan_quick'), true, `nudge ${i + 1} eligible`);
+            sys.noteNudgeShown('scan_quick');
+        }
+        assert.equal(sys.canFireHint('scan_quick'), false, 'silent after the cap');
+        eventBus.emit(Events.SCAN_QUICK); // player uses it → heeded
+        assert.equal(sys.getUnheededCount('scan_quick'), 0, 'use resets the counter');
+        sys.dispose();
+    });
+});
+
+describe('SkillsSystem — CP-4 veteran downgrade', () => {
+    it('isVeteran trips at VETERAN_SKILL_THRESHOLD and downgrades to ticker', () => {
+        const sys = makeSystem();
+        assert.equal(sys.isVeteran(), false, 'fresh player is not a veteran');
+        assert.equal(sys.getHintPresentation(), 'modal');
+
+        // Discover ≥ threshold fraction of skills directly on the records.
+        const total = sys.getProgress().total;
+        const need = Math.ceil(total * S.VETERAN_SKILL_THRESHOLD);
+        let n = 0;
+        for (const rec of sys._skills.values()) {
+            if (n >= need) break;
+            rec.state = 'discovered';
+            n++;
+        }
+        assert.equal(sys.isVeteran(), true, 'veteran once ≥ threshold discovered');
+        assert.equal(sys.getHintPresentation(), 'ticker', 'veteran gets ticker, not modal');
+        sys.dispose();
+    });
+});
+
+describe('SkillsSystem — CP-4 reminder cap (4th nudge never fires)', () => {
+    it('a skill goes silent after MAX_UNHEEDED_NUDGES reminders', () => {
+        const sys = makeSystem();
+        const log = trackEvents(Events.SKILL_REMINDED);
+        eventBus.emit(Events.SCAN_QUICK); // discover (resets unheeded)
+        const rec = sys._skills.get('scan_quick');
+        const base = Date.now();
+        // Advance past the per-window freq cap each iteration to isolate the
+        // per-skill unheeded cap; keep the skill overdue each time.
+        for (let i = 0; i < S.MAX_UNHEEDED_NUDGES + 3; i++) {
+            rec.nextReminderAt = 0;
+            sys._checkReminders(base + i * (S.REMINDER_CAP_WINDOW * 1000 + 1000));
+        }
+        assert.equal(log.length, S.MAX_UNHEEDED_NUDGES,
+            `at most ${S.MAX_UNHEEDED_NUDGES} reminders, then silent`);
+        sys.dispose();
+    });
+
+    it('SKILL_REMINDED payload carries a presentation hint', () => {
+        const sys = makeSystem();
+        const log = trackEvents(Events.SKILL_REMINDED);
+        eventBus.emit(Events.SCAN_QUICK);
+        sys._skills.get('scan_quick').nextReminderAt = 0;
+        sys._checkReminders(Date.now());
+        assert.equal(log.length, 1);
+        assert.ok(['ticker', 'modal'].includes(log[0].data.presentation), 'has presentation');
+        sys.dispose();
+    });
+});

@@ -28,6 +28,25 @@ const PRACTICED    = 'practiced';
 const MASTERED     = 'mastered';
 
 /**
+ * @typedef {Object} SkillDef
+ * Immutable skill definition from Constants.SKILLS.CATALOG.
+ * @property {string}   id            - Unique skill identifier
+ * @property {string}   label         - Human-readable name
+ * @property {number}   tier          - 1..5 progression tier
+ * @property {string}   category      - nav|scan|collect|awareness|manage
+ * @property {string}   [triggerEvent] - Events.js constant key that fires this skill
+ * @property {(data:any)=>boolean} [triggerFilter] - Optional payload predicate. When
+ *           present, the skill only triggers if it returns truthy for the
+ *           triggerEvent payload — lets several skills share one triggerEvent
+ *           but discriminate by payload (e.g. ARM_CAPTURED{manual:true},
+ *           SCAN_INITIATED{type:'wide'}). Omit for fire-on-every-event behavior.
+ * @property {string}   prereqType    - none|soft|hard|safety
+ * @property {string[]} prereqs       - Prerequisite skill ids
+ * @property {boolean}  noReminder    - Skip from spaced-repetition reminders
+ * @property {Object}   [safetyGate]  - { minCatches } gate for destructive skills
+ */
+
+/**
  * @typedef {Object} SkillRecord
  * @property {Object}  def              - Immutable definition from CATALOG
  * @property {string}  state            - Current state (UNDISCOVERED/DISCOVERED/PRACTICED/MASTERED)
@@ -74,6 +93,21 @@ export class SkillsSystem {
 
         /** @type {Array<Function>} Unsubscribe functions for all EventBus listeners */
         this._unsubs = [];
+
+        /**
+         * CP-4 (GUIDANCE_ARBITER_SPEC §3) — ring buffer of recent failure causes,
+         * `{ cause, at }`, used by the universal hint-gating rule to decide whether
+         * a *discovered* skill may be nudged ("discovered AND failed-recently").
+         * @type {Array<{cause: string, at: number}>}
+         */
+        this._recentFailures = [];
+
+        /**
+         * CP-4 — per-skill count of unheeded nudges shown. The rule falls silent
+         * after MAX_UNHEEDED_NUDGES; cleared when the player uses the skill.
+         * @type {Map<string, number>}
+         */
+        this._unheededNudges = new Map();
 
         /** @type {number} Timestamp (ms) when this session started */
         this._sessionStartMs = Date.now();
@@ -176,6 +210,93 @@ export class SkillsSystem {
         };
     }
 
+    // ═══════════════════════════════════════════════════════════════════════
+    //  CP-4 — universal hint-gating rule (GUIDANCE_ARBITER_SPEC §3 / §3.1)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /**
+     * Record a recent failure cause into the ring buffer. Wired from failure
+     * events (NET_FAILED, LASSO_MISSED, …); also callable directly.
+     * @param {string} cause - short cause tag (see Constants.SKILLS.FAILURE_CAUSES)
+     * @param {number} [now]
+     */
+    recordFailure(cause, now = Date.now()) {
+        if (!cause) return;
+        this._recentFailures.push({ cause, at: now });
+        const max = Constants.SKILLS.RECENT_FAILURE_BUFFER || 12;
+        if (this._recentFailures.length > max) {
+            this._recentFailures.splice(0, this._recentFailures.length - max);
+        }
+    }
+
+    /**
+     * Whether a specific failure cause occurred within RECENT_FAILURE_TTL_S.
+     * @param {string} cause
+     * @param {number} [now]
+     * @returns {boolean}
+     */
+    failedRecently(cause, now = Date.now()) {
+        const ttl = Constants.SKILLS.RECENT_FAILURE_TTL_S * 1000;
+        return this._recentFailures.some(f => f.cause === cause && (now - f.at) <= ttl);
+    }
+
+    /** @private Any failure within the TTL (used when a hint has no specific cause). */
+    _failedRecentlyAny(now = Date.now()) {
+        const ttl = Constants.SKILLS.RECENT_FAILURE_TTL_S * 1000;
+        return this._recentFailures.some(f => (now - f.at) <= ttl);
+    }
+
+    /**
+     * THE universal hint-gating rule (GUIDANCE_ARBITER_SPEC §3): a hint for
+     * skill X may fire only if X is undiscovered OR (X discovered/practiced AND
+     * failed-recently), AND fewer than MAX_UNHEEDED_NUDGES unheeded nudges have
+     * been shown for X. Mastered skills are never nudged. This single rule is
+     * the "respect the player" invariant shared by every guidance layer.
+     * @param {string} skillId
+     * @param {{ cause?: string|null, now?: number }} [opts]
+     *        `cause` — the failure cause relevant to this hint; when omitted, any
+     *        recent failure satisfies the "failed-recently" clause.
+     * @returns {boolean}
+     */
+    canFireHint(skillId, { cause = null, now = Date.now() } = {}) {
+        const rec = this._skills.get(skillId);
+        if (!rec) return false;
+        if (rec.state === MASTERED) return false;
+        if ((this._unheededNudges.get(skillId) || 0) >= Constants.SKILLS.MAX_UNHEEDED_NUDGES) {
+            return false; // silent after N unheeded nudges
+        }
+        if (rec.state === UNDISCOVERED) return true; // first-encounter teaching always eligible
+        // Discovered/practiced: only nudge when the player is actually struggling.
+        return cause ? this.failedRecently(cause, now) : this._failedRecentlyAny(now);
+    }
+
+    /** Record that a nudge was shown for a skill (counts toward the unheeded cap). */
+    noteNudgeShown(skillId) {
+        this._unheededNudges.set(skillId, (this._unheededNudges.get(skillId) || 0) + 1);
+    }
+
+    /** @returns {number} unheeded nudges shown for a skill this session. */
+    getUnheededCount(skillId) {
+        return this._unheededNudges.get(skillId) || 0;
+    }
+
+    /**
+     * Veteran check (GUIDANCE_ARBITER_SPEC §3.1): a player who has discovered
+     * ≥ VETERAN_SKILL_THRESHOLD of all skills. Veterans get one-line ticker
+     * hints instead of modal tutorial overlays.
+     * @returns {boolean}
+     */
+    isVeteran() {
+        const p = this.getProgress();
+        const thr = Constants.SKILLS.VETERAN_SKILL_THRESHOLD ?? 0.7;
+        return p.total > 0 && (p.discovered / p.total) >= thr;
+    }
+
+    /** @returns {'ticker'|'modal'} how a tutorial-class hint should be presented. */
+    getHintPresentation() {
+        return this.isVeteran() ? 'ticker' : 'modal';
+    }
+
     /**
      * Per-frame update. Manages the 1 Hz spaced-repetition reminder check.
      * @param {number} dt - Delta time in seconds
@@ -213,6 +334,9 @@ export class SkillsSystem {
         this._reminderCapStart   = 0;
         this._masteryCount       = 0;
         this._sessionStartMs     = Date.now();
+        // CP-4 — clear hint-gating session state
+        this._recentFailures     = [];
+        this._unheededNudges.clear();
     }
 
     /**
@@ -254,7 +378,8 @@ export class SkillsSystem {
 
     /**
      * Wire up all EventBus listeners:
-     *  - Per-skill trigger events from CATALOG
+     *  - Per-skill trigger events from CATALOG (with optional triggerFilter
+     *    payload discrimination — see {@link SkillDef})
      *  - Safety gate catch tracking (ARM_CAPTURED + LASSO_CAPTURED)
      *  - Persistence (PERSISTENCE_GATHER / PERSISTENCE_LOADED)
      *  - Game reset
@@ -262,11 +387,21 @@ export class SkillsSystem {
      */
     _setupListeners() {
         // ── Per-skill trigger events ──────────────────────────────────────
+        // A def may carry an optional `triggerFilter(data) => boolean` to
+        // payload-discriminate skills that share a triggerEvent (e.g.
+        // "manual capture" = ARM_CAPTURED{manual:true}, "wide scan" =
+        // SCAN_INITIATED{type:'wide'}). When present, the skill only triggers
+        // if the filter returns truthy for the event payload. Defs WITHOUT a
+        // triggerFilter behave exactly as before (fire on every event).
+        // (GUIDANCE_ARBITER_SPEC §5.)
         for (const def of Constants.SKILLS.CATALOG) {
             if (!def.triggerEvent) continue;
             const eventName = Events[def.triggerEvent];
             if (!eventName) continue; // Event not yet wired — skip gracefully
-            const handler = () => this._onSkillTriggered(def.id);
+            const handler = (data) => {
+                if (def.triggerFilter && !def.triggerFilter(data)) return;
+                this._onSkillTriggered(def.id);
+            };
             this._unsubs.push(eventBus.on(eventName, handler));
         }
 
@@ -279,6 +414,14 @@ export class SkillsSystem {
             this._totalCatches++;
             this._checkSafetyGates();
         }));
+
+        // ── CP-4: recent-failure tracking (feeds the universal hint-gating rule) ──
+        const FC = Constants.SKILLS.FAILURE_CAUSES || {};
+        for (const [eventKey, cause] of Object.entries(FC)) {
+            const eventName = Events[eventKey];
+            if (!eventName) continue;
+            this._unsubs.push(eventBus.on(eventName, () => this.recordFailure(cause)));
+        }
 
         // ── Persistence ───────────────────────────────────────────────────
         this._unsubs.push(eventBus.on(Events.PERSISTENCE_GATHER, (saveData) => {
@@ -315,6 +458,9 @@ export class SkillsSystem {
         const now = Date.now();
         rec.count++;
         rec.lastUsedAt = now;
+        // CP-4: the player used the skill → they heeded any prior nudges. Reset
+        // the unheeded counter so future struggling can nudge again.
+        this._unheededNudges.delete(skillId);
 
         if (rec.state === UNDISCOVERED) {
             // ── First trigger → DISCOVERED ──
@@ -564,6 +710,8 @@ export class SkillsSystem {
             if (rec.state !== DISCOVERED && rec.state !== PRACTICED) continue;
             if (rec.def.noReminder) continue;
             if (now < rec.nextReminderAt) continue;
+            // CP-4: fall silent after MAX_UNHEEDED_NUDGES for this skill.
+            if ((this._unheededNudges.get(rec.def.id) || 0) >= Constants.SKILLS.MAX_UNHEEDED_NUDGES) continue;
 
             const overdue = now - rec.nextReminderAt;
             if (overdue > bestOverdue) {
@@ -574,8 +722,13 @@ export class SkillsSystem {
 
         if (!bestRec) return;
 
-        // Emit reminder
-        eventBus.emit(Events.SKILL_REMINDED, { skillId: bestRec.def.id });
+        // Emit reminder. CP-4: veterans get a one-line ticker, not a modal; and
+        // each reminder counts toward the per-skill unheeded cap (reset on use).
+        eventBus.emit(Events.SKILL_REMINDED, {
+            skillId: bestRec.def.id,
+            presentation: this.getHintPresentation(),
+        });
+        this.noteNudgeShown(bestRec.def.id);
 
         // Reminder was needed → shrink interval (they forgot)
         bestRec.reminderInterval = Math.max(

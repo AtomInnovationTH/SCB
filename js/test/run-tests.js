@@ -12,6 +12,7 @@ import './test-Constants.js';
 import './test-EventBus.js';
 import './test-OrbitalMechanics.js';
 import './test-OrbitalMechanics-scratch.js';   // Sprint 2 / PR A — scratch-output variants
+import './test-LaunchWindow.js';                // CP-3 — transfer-ellipse launch-window math
 
 // S8-B: New test suites
 import './test-GameState.js';
@@ -98,6 +99,8 @@ import './test-DebrisTextureAtlas.js';
 
 // ST-6.5: TeachingSystem — first-encounter contextual overlays, 14 moments, persistence
 import './test-TeachingSystem.js';
+import './test-beatLifecycle.js';   // CP-4 — BeatSequencer + pure helpers
+import './test-MissionCoach.js';    // CP-4 — per-chapter coaching engine
 
 // ST-6.7: EnvironmentSystem — AO, MMOD, Safe-Mode, Radiation Belt, Battery DOD
 import './test-EnvironmentSystem.js';
@@ -151,6 +154,8 @@ import './test-DockingReticle-ToolPanel.js';
 // CP-1 / P3 + P4: gripper jaws + multi-modal pad
 import './test-ArmUnit-GripperGrapple.js';
 import './test-ArmUnit-PadContact.js';
+// CP-2: mother-mounted de-spin laser + net tumble→cling coupling
+import './test-DespinLaser.js';
 
 // ST-9.5 C-7: Tether Reel — strut-mounted reel state machine, cable physics, persistence
 import './test-TetherReel.js';

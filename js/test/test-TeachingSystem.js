@@ -563,3 +563,126 @@ describe('TeachingSystem — Constants.TEACHING Cross-Check', () => {
       `TOTAL_MOMENTS (${Constants.TEACHING.TOTAL_MOMENTS}) ≠ actual count (${TEACHING_MOMENTS.length})`);
   });
 });
+
+// ============================================================================
+// 16. CP-4 §4 — 3-layer arbitration (queue / drain / collision rule)
+// ============================================================================
+describe('TeachingSystem — CP-4 arbitration (queue/drain/collision)', () => {
+  const DRAIN = Constants.TEACHING.QUEUE_DRAIN_INTERVAL_S;
+
+  /** Build an inited system that pushes shown moment-ids into `shown`. */
+  function make(shown, skillsSystem) {
+    const eb = createMockEventBus();
+    const ts = new TeachingSystem(eb);
+    if (skillsSystem) ts.setSkillsSystem(skillsSystem);
+    ts.onShow = (m) => shown.push(m);
+    ts.init();
+    return { eb, ts };
+  }
+
+  it('queues overlays while the radial menu is open; drains after close', () => {
+    const shown = [];
+    const { eb, ts } = make(shown);
+    eb.emit(Events.COMMS_RADIAL_OPEN);
+    eb.emit(Events.TARGET_SELECTED);
+    assert.equal(shown.length, 0, 'queued while radial open');
+    eb.emit(Events.COMMS_RADIAL_CLOSE);
+    ts.update(0.1); // drainTimer starts at 0 → first queued drains immediately
+    assert.equal(shown.length, 1);
+    assert.equal(shown[0].id, 'first_target');
+    ts.dispose();
+  });
+
+  it('queues while a deploy ceremony is on screen', () => {
+    const shown = [];
+    const { eb, ts } = make(shown);
+    eb.emit(Events.LAUNCH_CEREMONY_START, { arm: 'Weaver-1' });
+    eb.emit(Events.TARGET_SELECTED);
+    assert.equal(shown.length, 0);
+    eb.emit(Events.LAUNCH_CEREMONY_COMPLETE, {});
+    ts.update(0.1);
+    assert.equal(shown.length, 1);
+    ts.dispose();
+  });
+
+  it('queues while the OnboardingDirector is running', () => {
+    const shown = [];
+    const { eb, ts } = make(shown);
+    eb.emit(Events.ONBOARDING_STARTED);
+    eb.emit(Events.TARGET_SELECTED);
+    assert.equal(shown.length, 0, 'Director owns the screen');
+    eb.emit(Events.ONBOARDING_COMPLETE);
+    ts.update(0.1);
+    assert.equal(shown.length, 1);
+    ts.dispose();
+  });
+
+  it('collision rule: a coach beat teaching the same id drops the overlay permanently', () => {
+    const shown = [];
+    const { eb, ts } = make(shown);
+    eb.emit(Events.MISSION_BEAT_STARTED, { skillId: 'first_target' });
+    eb.emit(Events.TARGET_SELECTED);
+    assert.equal(shown.length, 0, 'redundant overlay dropped');
+    assert.equal(ts.hasSeen('first_target'), true, 'marked seen (never re-fires)');
+    // Even after the beat satisfies, the dropped overlay must not appear.
+    eb.emit(Events.MISSION_BEAT_SATISFIED, { skillId: 'first_target' });
+    ts.update(DRAIN + 1);
+    assert.equal(shown.length, 0);
+    ts.dispose();
+  });
+
+  it('collision rule: a non-matching coach beat queues; drains ~DRAIN s after it satisfies', () => {
+    const shown = [];
+    const { eb, ts } = make(shown);
+    eb.emit(Events.MISSION_BEAT_STARTED, { skillId: 'collect_trawl' });
+    eb.emit(Events.TARGET_SELECTED); // different id → queue
+    assert.equal(shown.length, 0);
+    eb.emit(Events.MISSION_BEAT_SATISFIED, { skillId: 'collect_trawl' });
+    ts.update(DRAIN - 2); // not yet
+    assert.equal(shown.length, 0, 'still waiting out the post-beat delay');
+    ts.update(3); // crosses the delay
+    assert.equal(shown.length, 1);
+    ts.dispose();
+  });
+
+  it('drains at most one queued overlay per QUEUE_DRAIN_INTERVAL_S', () => {
+    const shown = [];
+    const { eb, ts } = make(shown);
+    eb.emit(Events.COMMS_RADIAL_OPEN);
+    eb.emit(Events.TARGET_SELECTED); // queue #1
+    eb.emit(Events.SCAN_INITIATED);  // queue #2
+    eb.emit(Events.COMMS_RADIAL_CLOSE);
+    ts.update(0.1);
+    assert.equal(shown.length, 1, 'first drains immediately');
+    ts.update(0.1);
+    assert.equal(shown.length, 1, 'second is paced');
+    ts.update(DRAIN + 0.1);
+    assert.equal(shown.length, 2, 'second drains after the interval');
+    ts.dispose();
+  });
+
+  it('GAME_RESET clears the deferred queue (keeps _seen)', () => {
+    const shown = [];
+    const { eb, ts } = make(shown);
+    eb.emit(Events.COMMS_RADIAL_OPEN);
+    eb.emit(Events.TARGET_SELECTED); // queued
+    eb.emit(Events.GAME_RESET);
+    ts.update(DRAIN + 1);
+    assert.equal(shown.length, 0, 'queue cleared on reset');
+    ts.dispose();
+  });
+
+  it('veteran downgrade: shown moments carry presentation from SkillsSystem', () => {
+    const shownVet = [];
+    const vet = make(shownVet, { getHintPresentation: () => 'ticker' });
+    vet.eb.emit(Events.TARGET_SELECTED);
+    assert.equal(shownVet[0].presentation, 'ticker', 'veteran → ticker');
+    vet.ts.dispose();
+
+    const shownNew = [];
+    const nv = make(shownNew); // no SkillsSystem
+    nv.eb.emit(Events.TARGET_SELECTED);
+    assert.equal(shownNew[0].presentation, 'modal', 'default → modal');
+    nv.ts.dispose();
+  });
+});

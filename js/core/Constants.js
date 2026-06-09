@@ -569,6 +569,7 @@ export const Constants = {
     DYNEEMA_TETHER:        false,  // ST-9.5 — Dyneema SK78 + reel-cycle wear
     REEL_CYCLE_RESOURCE:   false,  // ST-9.5 — 20-cycle wear counter
     ABLATION_MODULE:       false,  // ST-9.6 — mother-mounted deorbit laser
+    LASER_DESPIN:          true,   // CP-2 ON — mother-mounted de-spin laser (hold U) + net tumble coupling
     BRIDLE_RING_GEOMETRY:  false,  // ST-9.7 — Y-harness FEEP plume exclusion
     TECH_LADDER_SHOP:      false,  // ST-9.8 — Y0–Y4 tier surfacing
     REALITY_MODE:          false,  // ST-9.9 — locks all FEATURE_* false (master)
@@ -603,6 +604,9 @@ export const Constants = {
 
     // NEW — Q2 Net-Launch Ceremony (CEREMONY_REDESIGN.md §5)
     NET_CEREMONY:              true,   // Q2 net-launch ceremony; default ON (Stage 6 flip, 2026-05-24)
+
+    // NEW — CP-3 / BIG_PICTURE §24: cluster transfer-ellipse + launch-window countdown
+    CLUSTER_TRANSFER_WINDOW:   true,   // CP-3 ON — DebrisMap shows Depart/Arrive/ΔV + countdown per selected cluster
   },
 
   // ============================================================================
@@ -863,6 +867,23 @@ export const Constants = {
   ABLATION_RANGE_MAX: 50,                // meters — max effective ablation range
   ABLATION_DURATION_MAX: 30,             // seconds — max continuous ablation
   ABLATION_DESPIN_RATE: 0.1,             // rad/s² — angular deceleration applied
+
+  // CP-2 — mother-mounted de-spin laser (BIG_PICTURE §16; GAME_DESIGN "10W laser de-spin").
+  // Hold-to-fire assist that bleeds a tumbling target's spin down until a net can cling.
+  DESPIN_LASER: {
+    RANGE_M:            5000,     // mother optic reach (scene-wide; >> the 50 m daughter ablation)
+    DESPIN_RATE_RAD_S2: 0.30,     // angular deceleration applied while firing
+    IN_SPEC_DEG:        10,       // tumble at/below this is net-safe → "tumble in spec, net it"
+    BEAM_COLOR:         0x66ddff, // cyan glow (BIG_PICTURE §16.4)
+    BEAM_OPACITY:       0.7,
+  },
+  // Net cling tumble penalty (CP-2) — high target tumble reduces cling; detumble restores it.
+  // This is the live-path coupling that makes the de-spin laser actually matter for capture.
+  NET_TUMBLE_PENALTY: {
+    IN_SPEC_DEG: 10,     // no penalty at/below this tumble
+    PER_DEG:     0.012,  // cling-multiplier loss per °/s above in-spec
+    FLOOR:       0.4,    // minimum multiplier (never makes a catch strictly impossible)
+  },
 
   // --- V5 Arm Configuration ---
   V5_ARM_COUNT: 4,                       // Total arms: 2W + 2S (Y0 Quad baseline — ST-9.2)
@@ -1931,6 +1952,21 @@ export const Constants = {
     REMINDER_FREQUENCY_CAP: 3,       // max reminders per cap window
     REMINDER_CAP_WINDOW: 300,        // seconds — window for frequency cap
 
+    // --- CP-4 universal hint-gating rule (GUIDANCE_ARBITER_SPEC §3 / §3.1) ---
+    MAX_UNHEEDED_NUDGES: 3,          // per-skill: fall silent after this many unheeded nudges
+    RECENT_FAILURE_TTL_S: 30,        // a failure counts as "recent" for this long (s)
+    RECENT_FAILURE_BUFFER: 12,       // ring-buffer size for recent-failure causes
+    VETERAN_SKILL_THRESHOLD: 0.7,    // fraction of skills discovered ⇒ veteran (ticker, not modal)
+    // Failure-event → cause tag for the _recentFailures ring buffer.
+    FAILURE_CAUSES: {
+      NET_FAILED:          'net-fail',
+      NET_CATCH_MISS:      'net-miss',
+      LASSO_MISSED:        'lasso-miss',
+      LASSO_DENIED:        'lasso-denied',
+      PAD_BOUNCED:         'pad-bounce',
+      ARM_CAPTURE_FAILED:  'capture-fail',
+    },
+
     // --- Blitz Detection (veteran/expert player) ---
     BLITZ_WINDOW: 8000,              // ms — variable ratio window for early rapid discovery
     BLITZ_SUPPRESS_CHANCE: 0.3,      // probability of suppressing reminder during blitz
@@ -1956,8 +1992,11 @@ export const Constants = {
     ],
 
     // --- Skill Catalog (35 skills) -----------------------------------------------------------
-    // Fields: id, label, key, tier, category, hudGroup, prereqs, prereqType, noReminder, triggerEvent
+    // Fields: id, label, key, tier, category, hudGroup, prereqs, prereqType, noReminder, triggerEvent, triggerFilter?
     // triggerEvent: Events.js constant name (string key) or null if auto/timer/needs new event
+    // triggerFilter: OPTIONAL (data) => boolean — payload predicate so several skills can share one
+    //   triggerEvent but discriminate by payload (e.g. ARM_CAPTURED{manual:true}, SCAN_INITIATED{type:'wide'}).
+    //   Omit for fire-on-every-event behavior. See GUIDANCE_ARBITER_SPEC §5 / SkillsSystem._setupListeners.
     // prereqType: 'none' | 'soft' | 'hard' | 'safety'
     //   none   — independent, discoverable any time in any order
     //   soft   — works without prereq but system provides contextual guidance
@@ -1990,6 +2029,9 @@ export const Constants = {
       { id: 'manage_power',            label: 'Power Distribution',   key: '1/2/3', tier: 3, category: 'manage', hudGroup: 'power',    prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'POWER_BUS_SELECTED' },
       { id: 'manage_comms',            label: 'Comms Menu',           key: 'C',  tier: 3, category: 'manage', hudGroup: 'comms',       prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'COMMS_OPENED' },
       { id: 'manage_codex',            label: 'Tech Library',         key: 'L',  tier: 3, category: 'manage', hudGroup: null,          prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'CODEX_OPENED' },
+      // ── CP-4 ch2 (MissionCoach): Daughter piloting (payload-discriminated via triggerFilter) ──
+      { id: 'arm_pilot',         label: 'Daughter Piloting', key: 'P', tier: 3, category: 'collect', hudGroup: 'fleet', prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'CONTROL_MODE_CHANGE', triggerFilter: (d) => d && d.mode === 'ARM_PILOT' },
+      { id: 'arm_pilot_capture', label: 'Manual Capture',    key: 'F', tier: 3, category: 'collect', hudGroup: 'fleet', prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'ARM_CAPTURED',        triggerFilter: (d) => d && d.manual === true },
 
       // ── Tier 4: Advanced (7 skills) ─────────────────────────────────────
       { id: 'nav_orbit_mfd',      label: 'Orbit MFD Reading',   key: 'M',  tier: 4, category: 'nav',       hudGroup: null,  prereqs: ['nav_autopilot'],  prereqType: 'soft',   noReminder: false, triggerEvent: 'ORBIT_MFD_TOGGLE' },
@@ -2075,6 +2117,7 @@ export const Constants = {
     POLL_INTERVAL_S: 5,       // seconds between cluster re-polls
     MAX_DISPLAY: 5,           // top-N clusters shown in the map
     MAX_DV_MS: 500,           // clusters requiring > this ΔV (m/s) are "unreachable"
+    WINDOW_IMMINENT_S: 10,    // CP-3 — countdown turns cyan + beeps at this T-minus (s)
   },
 
   // =========================================================================
@@ -2192,6 +2235,9 @@ export const Constants = {
     DEFAULT_CHANNEL: 'FLAVOR',
     COALESCE_THRESHOLD_COUNT: 3,
     COALESCE_WINDOW_MS: 2000,
+    // CP-4 guidance arbiter — graduated post-onboarding suppression ramp (s of play).
+    // Tier 1 (0→TIER2) HOUSTON+MISSION only · Tier 2 (→TIER3) +ALERT+CMD · Tier 3 all.
+    SUPPRESSION_RAMP: { TIER2_AFTER_S: 30, TIER3_AFTER_S: 60 },
     PANE_HEIGHT_MIN_PX: 40,               // 'line' step — latest message only
     PANE_HEIGHT_PX: 144,
     PANE_WIDTH_PX: 480,                   // fits ~70 chars per line (UX-2 #11)
@@ -2313,7 +2359,62 @@ export const Constants = {
     MAX_QUEUE_DEPTH: 3,
     DEFAULT_DURATION_MS: 7000,
     PERSISTENCE_KEY: 'teachingSeen',
+    QUEUE_DRAIN_INTERVAL_S: 6,   // CP-4 §4 — drain queued overlays at ≤1 per this many seconds
     TOTAL_MOMENTS: 19,           // UX-3 N1: +first_scan/first_arm_deploy; +first_net_failed/first_tether_snap
+  },
+
+  // ============================================================================
+  // MISSION COACH (CP-4 — MISSION_ARC_IMPLEMENTATION.md §2)
+  //
+  // The per-chapter coaching engine. Triggers on SHOP_DEPLOY into a mission,
+  // runs that mission's beat table on top of the guidance arbiter (every beat's
+  // comms is `_postOnboarding`-tagged; interactive beats emit MISSION_BEAT_*).
+  // A chapter is DATA, not code: add/split chapters by editing BEATS_BY_MISSION.
+  // Chapter 1 is owned by OnboardingDirector, not MissionCoach.
+  // ============================================================================
+  MISSION_COACH: {
+    PERSISTENCE_KEY: 'spacecowboy_mission_coach_v1',
+    NARRATIVE_HOLD_MS: 5000,   // narrative beat dwell before auto-advancing
+    ESCALATE_MS: 22000,        // interactive beat → re-prompt (TEACHING_MOMENT_FORCE) after this idle
+    /**
+     * Per-mission beat tables. Each beat:
+     *   { id, type:'narrative'|'interactive'|'reactive', text, source?, channel?,
+     *     skillId?, triggerEvent? (Events key), triggerFilter?(data)=>bool,
+     *     holdMs?, escalateMs?, title?, body? (escalation overlay) }
+     */
+    BEATS_BY_MISSION: {
+      // ── Chapter 2 — First Operations: Daughter piloting ──
+      2: [
+        {
+          id: 'ch2_intro',
+          type: 'narrative',
+          source: 'BANGALORE',
+          text: 'ISRO Bangalore here — good to have a second set of eyes. Your daughter craft can do the close work. Take manual control and you\'ll capture heavier debris than autopilot ever could.',
+        },
+        {
+          id: 'ch2_pilot',
+          type: 'interactive',
+          source: 'HOUSTON',
+          text: 'Deploy a daughter (D), then press P to pilot her directly.',
+          skillId: 'arm_pilot',
+          triggerEvent: 'CONTROL_MODE_CHANGE',
+          triggerFilter: (d) => d && d.mode === 'ARM_PILOT',
+          title: 'PILOT YOUR DAUGHTER',
+          body: 'Press P while a daughter is deployed to fly her yourself.',
+        },
+        {
+          id: 'ch2_manual_capture',
+          type: 'interactive',
+          source: 'HOUSTON',
+          text: 'Line up on a target and capture by hand (F) — manual catches score double.',
+          skillId: 'arm_pilot_capture',
+          triggerEvent: 'ARM_CAPTURED',
+          triggerFilter: (d) => d && d.manual === true,
+          title: 'MANUAL CAPTURE',
+          body: 'Close on a target under manual pilot and press F to net it for 2× score.',
+        },
+      ],
+    },
   },
 
   // ============================================================================

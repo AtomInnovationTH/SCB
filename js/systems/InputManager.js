@@ -12,6 +12,7 @@ import { GameStates } from '../core/GameState.js';
 import { Constants } from '../core/Constants.js';
 import { powerDistribution, PowerBuses } from './PowerDistribution.js';
 import timerManager from './TimerManager.js';
+import { despinLaser } from './DespinLaser.js';
 
 export class InputManager {
   constructor() {
@@ -676,6 +677,23 @@ export class InputManager {
             d.armManager.deployAllToTarget(target);
           }
           d.audioSystem?.playClick();
+        }
+        break;
+
+      // CP-2: de-spin laser (hold U). The continuous beam is driven by the held-key
+      // poll in processInput(); this keydown only gives a no-target affordance.
+      case 'KeyU':
+        if (isGameplay && !this.armPilotMode && !e.repeat
+            && Constants.isFeatureEnabled('LASER_DESPIN')) {
+          const dt = d.targetSelector ? d.targetSelector.getActiveTarget() : null;
+          if (!dt) {
+            d.audioSystem?.playClickFail?.();
+            eventBus.emit(Events.COMMS_MESSAGE, {
+              source: 'MOTHER', text: 'De-spin laser: select a tumbling target first.',
+              channel: 'CMD', priority: 'warning',
+            });
+          }
+          e.preventDefault();
         }
         break;
 
@@ -1608,6 +1626,20 @@ export class InputManager {
    */
   processInput(dt) {
     const d = this._deps;
+
+    // CP-2: mother-mounted de-spin laser — hold U (command view only). Set the
+    // fire intent every frame BEFORE the overlay early-returns so it always
+    // releases when an overlay opens or the key is let go.
+    const overlayOpen = !!((d.codexViewerUI && d.codexViewerUI.isVisible && d.codexViewerUI.isVisible())
+      || (d.hotkeyOverlay && d.hotkeyOverlay.isVisible && d.hotkeyOverlay.isVisible())
+      || (d.debrisMap && d.debrisMap.isVisible && d.debrisMap.isVisible())
+      || (d.strategicMap && d.strategicMap.isOpen && d.strategicMap.isOpen()));
+    despinLaser.setFiring(
+      !overlayOpen
+      && !this.armPilotMode
+      && (d.gameState && d.gameState.isGameplay && d.gameState.isGameplay())
+      && this.keys['KeyU'] === true,
+    );
 
     // F17: Suppress continuous input while codex overlay is open
     if (d.codexViewerUI && d.codexViewerUI.isVisible()) return;

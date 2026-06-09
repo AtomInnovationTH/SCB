@@ -106,12 +106,14 @@ Active-sat guard already protects ISS (25544), Hubble (20580), GPS, etc. from ar
 
 | Phase | Ships | Burden |
 |---|---|---|
-| A | GUIDANCE_ARBITER steps 1–5 (prerequisite) | M–L |
-| B | `MissionCoach.js` + `_beatLifecycle.js` + `BEATS_BY_MISSION[2]` + ch2 skills | M |
+| A | ✅ **DONE (2026-06-08)** — GUIDANCE_ARBITER steps 1–5 (prerequisite) | M–L |
+| B | ✅ **DONE (2026-06-08)** — `MissionCoach.js` + `_beatLifecycle.js` (`BeatSequencer`) + `BEATS_BY_MISSION[2]` + ch2 skills (`arm_pilot`, `arm_pilot_capture`) | M |
 | C | Chapters 3–7 beat tables + their skills + ISS boss (ch5) | M (S per chapter) |
 | D | Chapters 8–11 + Starlink boss (ch9) + Thaicom (ch11) + porkchop (ties to ROADMAP EN-5/6) | L |
 | E | Chapter 12 anchor-run UI + win cinematic + codex unlocks | M |
 | F | Solo-flight onboarding beats (ch1 graduation, §3) | S |
+
+> **Phase B note (2026-06-08):** `_beatLifecycle.js` ships as a **new** reusable `BeatSequencer` (+ `buildBeatComms`/`beatMatches`) that MissionCoach consumes; the `OnboardingDirector` migration onto it is intentionally **deferred** (it is large + well-tested — adopting the sequencer there is low-value churn for now and is folded into a later phase). MissionCoach is Node-safe and unit-tested (`test-MissionCoach.js`, `test-beatLifecycle.js`).
 
 Each chapter's acceptance test: the one new skill is discoverable via its trigger; the coach beats fire on `SHOP_DEPLOY` into that mission; a veteran sees ticker-only; the mass quota increments the anchor meter; tests stay green.
 

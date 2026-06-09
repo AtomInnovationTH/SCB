@@ -13,7 +13,12 @@ import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { GameStates } from '../core/GameState.js';
-import { totalDeltaV } from '../entities/OrbitalMechanics.js';
+import { totalDeltaV, orbitToKm } from '../entities/OrbitalMechanics.js';
+import {
+  computeTransferWindow,
+  clusterToOrbitKm,
+  detectWindowCrossing,
+} from '../entities/LaunchWindow.js';
 
 const DM = Constants.DEBRIS_MAP;
 
@@ -85,6 +90,12 @@ export class DebrisMap {
     // Conjunction risk map: altitude band → alert count
     this._conjunctionAlerts = new Map();
 
+    // --- CP-3 launch-window state ---
+    this._selectedWindow = null;      // transfer window for the highlighted cluster (display)
+    this._committedCluster = null;    // cluster the player engaged autopilot toward
+    this._committedWindow = null;     // its live transfer window (drives beep/comms)
+    this._prevDepartIn = null;        // previous committed departIn for crossing detection
+
     // --- EventBus subscriptions ---
     // NO auto-show on ORBITAL_VIEW — this is a strategic modal, toggled by player
     eventBus.on(Events.GAME_STATE_CHANGE, ({ to }) => {
@@ -109,6 +120,11 @@ export class DebrisMap {
     eventBus.on(Events.CONJUNCTION_CLEAR, () => {
       this._conjunctionAlerts.clear();
     });
+
+    // CP-3: the committed launch-window countdown ends when autopilot stops.
+    eventBus.on(Events.AUTOPILOT_DISENGAGE, () => this._clearCommittedWindow());
+    eventBus.on(Events.AUTOPILOT_ARRIVED, () => this._clearCommittedWindow());
+    eventBus.on(Events.GAME_RESET, () => this._clearCommittedWindow());
   }
 
   // ===========================================================================
@@ -166,6 +182,12 @@ export class DebrisMap {
     const cluster = this.getSelectedCluster();
     if (!cluster || !this._autopilotSystem) return;
     this._autopilotSystem.engageCluster(cluster);
+    // CP-3: commit the launch-window countdown to this cluster.
+    if (Constants.isFeatureEnabled('CLUSTER_TRANSFER_WINDOW')) {
+      this._committedCluster = cluster;
+      this._committedWindow = null;
+      this._prevDepartIn = null;
+    }
   }
 
   /**
@@ -174,11 +196,15 @@ export class DebrisMap {
    * @param {object} deps — { debrisField, player, autopilotSystem }
    */
   update(dt, deps) {
-    if (!this._visible) return;
-
     this._debrisField = deps.debrisField;
     this._player = deps.player;
     this._autopilotSystem = deps.autopilotSystem;
+
+    // CP-3: the committed-cluster countdown runs every frame, even when the
+    // map is closed — that's what makes "wait for the window" a real decision.
+    this._trackCommittedWindow(dt);
+
+    if (!this._visible) return;
 
     // Poll clusters at configured interval
     this._pollTimer += dt;
@@ -187,7 +213,75 @@ export class DebrisMap {
       this._refreshClusters();
     }
 
+    // CP-3: live transfer window for the highlighted cluster (planning readout)
+    this._selectedWindow = this._computeWindow(this.getSelectedCluster());
+
     this._draw();
+  }
+
+  // ===========================================================================
+  // CP-3 — Launch-window tracking
+  // ===========================================================================
+
+  /** Clear the committed-cluster countdown (autopilot stopped / reset). */
+  _clearCommittedWindow() {
+    this._committedCluster = null;
+    this._committedWindow = null;
+    this._prevDepartIn = null;
+  }
+
+  /**
+   * Compute the transfer window for a cluster relative to the player's orbit.
+   * @param {object|null} cluster
+   * @returns {object|null} window (see LaunchWindow.computeTransferWindow) or null
+   */
+  _computeWindow(cluster) {
+    if (!cluster || !this._player) return null;
+    if (!Constants.isFeatureEnabled('CLUSTER_TRANSFER_WINDOW')) return null;
+
+    const playerOrbit = this._player.orbit || this._player.getOrbitalElements?.();
+    if (!playerOrbit || !(playerOrbit.semiMajorAxis > 0)) return null;
+
+    const chaserKm = orbitToKm(playerOrbit);
+    const targetKm = clusterToOrbitKm(cluster);
+    if (!(targetKm.semiMajorAxis > 0)) return null;
+
+    return computeTransferWindow(chaserKm, targetKm);
+  }
+
+  /**
+   * Recompute the committed cluster's window each frame and fire the T-minus
+   * beep (once) and "window open" cue (once) as the countdown crosses thresholds.
+   */
+  _trackCommittedWindow(dt) {
+    if (!this._committedCluster) { this._committedWindow = null; return; }
+
+    const win = this._computeWindow(this._committedCluster);
+    this._committedWindow = win;
+    if (!win) { this._prevDepartIn = null; return; }
+
+    const { imminent, opened } = detectWindowCrossing(
+      this._prevDepartIn, win.departIn, win.synodic, DM.WINDOW_IMMINENT_S,
+    );
+    if (imminent) {
+      eventBus.emit(Events.CLUSTER_WINDOW_IMMINENT, {
+        clusterId: this._committedCluster.id,
+        departIn: win.departIn,
+      });
+    }
+    if (opened) {
+      eventBus.emit(Events.CLUSTER_WINDOW_OPEN, {
+        clusterId: this._committedCluster.id,
+        clusterName: this._committedCluster.name || this._committedCluster.id,
+        dvTotal: win.dvTotal,
+      });
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        source: 'HOUSTON',
+        text: `Transfer window open — execute departure burn (ΔV ${win.dvTotal.toFixed(0)} m/s).`,
+        priority: 'info',
+      });
+    }
+    this._prevDepartIn = win.departIn;
   }
 
   // ===========================================================================
@@ -412,6 +506,132 @@ export class DebrisMap {
         40, y + 68,
       );
     }
+
+    // CP-3: transfer-window readout for the highlighted cluster, below the list
+    this._drawWindowReadout(ctx, W, H, START_Y + this._rankedClusters.length * ROW_H + 6);
+  }
+
+  // ===========================================================================
+  // CP-3 — Launch-window rendering
+  // ===========================================================================
+
+  /** Format a duration in seconds as "mm:ss" or "h:mm:ss". */
+  _fmtClock(seconds) {
+    if (!Number.isFinite(seconds)) return '∞';
+    const s = Math.max(0, Math.round(seconds));
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    const pad = (n) => String(n).padStart(2, '0');
+    return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${pad(m)}:${pad(sec)}`;
+  }
+
+  /**
+   * Draw the Depart / Arrive / ΔV readout + live countdown for the selected
+   * cluster's next Hohmann transfer window.
+   */
+  _drawWindowReadout(ctx, W, H, y) {
+    const cluster = this.getSelectedCluster();
+    if (!cluster || y > H - 64) return;
+
+    // Divider
+    ctx.strokeStyle = 'rgba(255, 170, 0, 0.2)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(14, y);
+    ctx.lineTo(W - 14, y);
+    ctx.stroke();
+
+    const committed = this._committedCluster && this._committedCluster.id === cluster.id;
+    ctx.fillStyle = '#ffaa00';
+    ctx.font = 'bold 11px "Courier New", monospace';
+    ctx.fillText('▸ TRANSFER WINDOW', 14, y + 16);
+    if (committed) {
+      ctx.fillStyle = '#44ff88';
+      ctx.font = '10px "Courier New", monospace';
+      ctx.fillText('● COMMITTED', 150, y + 16);
+    }
+
+    const win = this._selectedWindow;
+    if (!win) {
+      ctx.fillStyle = '#667788';
+      ctx.font = '10px "Courier New", monospace';
+      ctx.fillText('timing unavailable — no orbit fix', 14, y + 32);
+      return;
+    }
+
+    const imminent = win.departIn <= DM.WINDOW_IMMINENT_S;
+    const open = win.departIn <= 0.5;
+    const departColor = open ? '#44ff88' : imminent ? '#33ddff' : '#ffcc44';
+
+    ctx.font = '11px "Courier New", monospace';
+    ctx.fillStyle = '#88aacc';
+    ctx.fillText('Depart', 14, y + 34);
+    ctx.fillStyle = departColor;
+    ctx.font = open ? 'bold 12px "Courier New", monospace' : '12px "Courier New", monospace';
+    ctx.fillText(open ? 'WINDOW OPEN — BURN NOW' : `T-${this._fmtClock(win.departIn)}`, 78, y + 34);
+
+    ctx.font = '11px "Courier New", monospace';
+    ctx.fillStyle = '#88aacc';
+    ctx.fillText('Arrive', 14, y + 50);
+    ctx.fillStyle = '#aabbcc';
+    ctx.fillText(`T+${this._fmtClock(win.arriveIn)}`, 78, y + 50);
+
+    ctx.fillStyle = '#88aacc';
+    ctx.fillText('ΔV', 200, y + 50);
+    const dvColor = win.dvTotal < 100 ? '#44ff88' : win.dvTotal < 400 ? '#ffcc44' : '#ff6644';
+    ctx.fillStyle = dvColor;
+    ctx.fillText(`${win.dvTotal.toFixed(0)} m/s`, 230, y + 50);
+
+    // Periodicity hint — the teaching beat
+    ctx.fillStyle = '#556677';
+    ctx.font = '9px "Courier New", monospace';
+    const periodTxt = Number.isFinite(win.synodic)
+      ? `next window every ${this._fmtClock(win.synodic)} — space is periodic`
+      : 'co-altitude — launch anytime';
+    ctx.fillText(periodTxt, 14, y + 64);
+  }
+
+  /** Draw a dashed transfer path from the player marker to the selected cluster arc. */
+  _drawTransferPath(ctx, cx, cy, altToRadius, minAlt, maxAlt) {
+    if (!Constants.isFeatureEnabled('CLUSTER_TRANSFER_WINDOW')) return;
+    const cluster = this.getSelectedCluster();
+    if (!cluster || !this._player) return;
+
+    const playerOrbit = this._player.orbit || this._player.getOrbitalElements?.() || {};
+    const playerAltKm = (playerOrbit.semiMajorAxis || 0) / Constants.SCENE_SCALE - Constants.EARTH_RADIUS_KM;
+    if (!(playerAltKm > minAlt && playerAltKm < maxAlt)) return;
+
+    const pr = altToRadius(playerAltKm);
+    const px = cx + pr * Math.cos(-Math.PI / 2);
+    const py = cy + pr * Math.sin(-Math.PI / 2);
+
+    const meanAlt = (cluster.altRange.min + cluster.altRange.max) / 2;
+    const cr = altToRadius(Math.max(minAlt + 1, Math.min(maxAlt - 1, meanAlt)));
+    const ca = (cluster.incCenter * Math.PI / 180); // arc center angle (matches arc layout)
+    const tx = cx + cr * Math.cos(ca);
+    const ty = cy + cr * Math.sin(ca);
+
+    // Dashed transfer arc (bowed via Earth-relative control point)
+    ctx.save();
+    ctx.strokeStyle = 'rgba(51, 221, 255, 0.55)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 4]);
+    const mcx = (px + tx) / 2;
+    const mcy = (py + ty) / 2;
+    const bow = 1.25; // bow outward from Earth for a transfer-ellipse feel
+    ctx.beginPath();
+    ctx.moveTo(px, py);
+    ctx.quadraticCurveTo(cx + (mcx - cx) * bow, cy + (mcy - cy) * bow, tx, ty);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Arrival marker
+    ctx.fillStyle = 'rgba(51, 221, 255, 0.9)';
+    ctx.beginPath();
+    ctx.arc(tx, ty, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
   }
 
   /** Draw the right column: orbital altitude schematic with debris density arcs. */
@@ -545,6 +765,9 @@ export class DebrisMap {
         ctx.textAlign = 'left';
       }
     }
+
+    // CP-3: transfer-path indicator from player to the selected cluster
+    this._drawTransferPath(ctx, cx, cy, altToRadius, minAlt, maxAlt);
 
     // Legend
     const legendY = H - 55;

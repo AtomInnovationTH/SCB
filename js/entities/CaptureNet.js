@@ -55,6 +55,7 @@ export function getNetClassForType(type) {
  * @param {number} [params.roughness=1]        — surface roughness (0.4=smooth, 0.7=painted, 1.0=MLI)
  * @param {number} [params.spinFraction=1]     — ω_impact / ω_design
  * @param {number} [params.tensionFraction=1]  — T_tether / T_nominal
+ * @param {number} [params.targetTumbleRate]   — target's tumble (rad/s); high tumble penalises cling (CP-2)
  * @returns {number} P_cling ∈ [0, 1]
  */
 export function computeClingProbability(params) {
@@ -67,6 +68,7 @@ export function computeClingProbability(params) {
     roughness = 1.0,
     spinFraction = 1.0,
     tensionFraction = 1.0,
+    targetTumbleRate = null,
   } = params;
 
   const vRange = 10; // m/s velocity range for clamp
@@ -77,9 +79,28 @@ export function computeClingProbability(params) {
   const fTension   = Math.max(0.6, Math.min(1.0, tensionFraction));
   // Distance modifier: f_distance = clamp(1.1 - 0.003 × range, 0.85, 1.1)
   const fDistance   = Math.max(0.85, Math.min(1.1, 1.1 - 0.003 * range));
+  // CP-2 target-tumble penalty: a fast-tumbling target sheds the net. f_tumble = 1.0
+  // at/below the in-spec spin, ramping down to a floor above it. Omitted (null) ⇒ 1.0,
+  // so callers/tests that don't supply tumble are unaffected. The mother de-spin laser
+  // lowers targetTumbleRate to restore this factor → "detumble, then net it".
+  const fTumble = computeTumbleModifier(targetTumbleRate);
 
-  const raw = pBase * fVelocity * fContact * fRoughness * fSpin * fTension * fDistance;
+  const raw = pBase * fVelocity * fContact * fRoughness * fSpin * fTension * fDistance * fTumble;
   return Math.max(0, Math.min(1, raw)); // clamp to valid probability
+}
+
+/**
+ * CP-2 net-cling tumble modifier. 1.0 when tumble is unknown or at/below the
+ * in-spec spin; ramps linearly down to NET_TUMBLE_PENALTY.FLOOR above it.
+ * @param {number|null} tumbleRateRad — target tumble in rad/s (null ⇒ no penalty)
+ * @returns {number} f_tumble ∈ [FLOOR, 1.0]
+ */
+export function computeTumbleModifier(tumbleRateRad) {
+  if (tumbleRateRad == null) return 1.0;
+  const P = Constants.NET_TUMBLE_PENALTY || { IN_SPEC_DEG: 10, PER_DEG: 0.012, FLOOR: 0.4 };
+  const tumbleDeg = Math.abs(tumbleRateRad) * (180 / Math.PI);
+  if (tumbleDeg <= P.IN_SPEC_DEG) return 1.0;
+  return Math.max(P.FLOOR, 1.0 - (tumbleDeg - P.IN_SPEC_DEG) * P.PER_DEG);
 }
 
 /**
@@ -591,6 +612,10 @@ export class NetProjectile {
       tensionFraction: 1.0,
       contactFraction: 1.0,
       roughness:       this.targetDebris?.surfaceRoughness || 1.0,
+      // CP-2: a high-tumble target sheds the net — detumble it first (mother laser).
+      targetTumbleRate: Constants.isFeatureEnabled('LASER_DESPIN')
+        ? (this.targetDebris?.tumbleRate ?? null)
+        : null,
     };
 
     this._clingProbability = computeClingProbability(params);

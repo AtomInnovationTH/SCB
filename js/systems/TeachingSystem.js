@@ -187,8 +187,31 @@ export class TeachingSystem {
     /** Callback set by the wiring layer to display a moment. */
     this.onShow = null;
 
+    // --- CP-4 §4: 3-layer arbitration (queue / drain / collision rule) ---
+    /** @type {object|null} SkillsSystem ref for the universal hint-gating rule + veteran downgrade. */
+    this._skillsSystem = null;
+    /** @type {Array<object>} moments deferred while a blocking surface is on screen. */
+    this._queue = [];
+    /** @type {Set<string>} active blocking surfaces (radial menu / deploy ceremony). */
+    this._blockers = new Set();
+    /** @type {boolean} OnboardingDirector is running (tier 0 — Director owns the screen). */
+    this._onboardingActive = false;
+    /** @type {object|null} the MissionCoach beat currently owning the screen ({ skillId }). */
+    this._activeCoachBeat = null;
+    /** @type {number} seconds until the next queued overlay may drain (≤1 per interval). */
+    this._drainTimer = 0;
+
     // Load persisted seen-set
     this._loadSeen();
+  }
+
+  /**
+   * Inject the SkillsSystem so overlays obey the universal hint-gating rule and
+   * the veteran downgrade (GUIDANCE_ARBITER_SPEC §3 / §3.1). Optional.
+   * @param {object} skillsSystem
+   */
+  setSkillsSystem(skillsSystem) {
+    this._skillsSystem = skillsSystem || null;
   }
 
   // --------------------------------------------------------------------------
@@ -301,6 +324,22 @@ export class TeachingSystem {
     if (Events.TEACHING_MOMENT_FORCE) {
       on(Events.TEACHING_MOMENT_FORCE, (payload) => this._forceShow(payload));
     }
+
+    // CP-4 §4: 3-layer arbitration. Single-fire overlays QUEUE while a blocking
+    // surface (radial menu C / deploy ceremony D) is on screen, while the
+    // OnboardingDirector is running, or while a MissionCoach beat owns the
+    // screen; they drain ≤1 per QUEUE_DRAIN_INTERVAL_S once everything is idle.
+    if (Events.COMMS_RADIAL_OPEN)  on(Events.COMMS_RADIAL_OPEN,  () => this._blockers.add('radial'));
+    if (Events.COMMS_RADIAL_CLOSE) on(Events.COMMS_RADIAL_CLOSE, () => this._blockers.delete('radial'));
+    if (Events.LAUNCH_CEREMONY_START)    on(Events.LAUNCH_CEREMONY_START,    () => this._blockers.add('launchCeremony'));
+    if (Events.LAUNCH_CEREMONY_COMPLETE) on(Events.LAUNCH_CEREMONY_COMPLETE, () => this._blockers.delete('launchCeremony'));
+    if (Events.NET_CEREMONY_START)    on(Events.NET_CEREMONY_START,    () => this._blockers.add('netCeremony'));
+    if (Events.NET_CEREMONY_COMPLETE) on(Events.NET_CEREMONY_COMPLETE, () => this._blockers.delete('netCeremony'));
+    if (Events.ONBOARDING_STARTED)  on(Events.ONBOARDING_STARTED,  () => { this._onboardingActive = true; });
+    if (Events.ONBOARDING_COMPLETE) on(Events.ONBOARDING_COMPLETE, () => { this._onboardingActive = false; });
+    if (Events.MISSION_BEAT_STARTED)   on(Events.MISSION_BEAT_STARTED,   (d) => { this._activeCoachBeat = d || {}; });
+    if (Events.MISSION_BEAT_SATISFIED) on(Events.MISSION_BEAT_SATISFIED, () => this._onCoachBeatSatisfied());
+    if (Events.GAME_RESET) on(Events.GAME_RESET, () => this._clearPending());
   }
 
   /**
@@ -320,7 +359,7 @@ export class TeachingSystem {
     };
     // Do NOT mark seen — re-fires legitimate (e.g. onboarding re-escalation).
     if (typeof this.onShow === 'function') {
-      this.onShow(moment);
+      this._show(moment);
     }
   }
 
@@ -388,7 +427,8 @@ export class TeachingSystem {
   // --------------------------------------------------------------------------
 
   /**
-   * Core trigger logic: check seen → fire onShow → markSeen.
+   * Core trigger logic with CP-4 §4 arbitration: seen-guard → collision rule →
+   * (queue while blocked | show now). Always single-fire via `_seen`.
    * @param {string} momentId
    * @private
    */
@@ -399,13 +439,80 @@ export class TeachingSystem {
     const moment = MOMENTS_BY_ID.get(momentId);
     if (!moment) return;
 
-    // Mark seen immediately — even if display queue is full, don't re-trigger
+    // Collision rule: if a MissionCoach beat is actively teaching this exact
+    // skill id, the overlay is redundant — drop it permanently (mark seen, never
+    // show or queue).
+    if (this._activeCoachBeat && this._activeCoachBeat.skillId === momentId) {
+      this.markSeen(momentId);
+      return;
+    }
+
+    // Mark seen immediately — even when queued, don't re-trigger on the next event.
     this.markSeen(momentId);
 
-    // Delegate display
-    if (typeof this.onShow === 'function') {
-      this.onShow(moment);
+    // A blocking surface (radial/ceremony), the OnboardingDirector, or a coach
+    // beat owns the screen → defer for orderly drain. Otherwise show now.
+    if (this._isBlocked()) {
+      this._enqueue(moment);
+      return;
     }
+    this._show(moment);
+  }
+
+  /** @private Whether any layer currently owns the screen (overlays must defer). */
+  _isBlocked() {
+    return this._blockers.size > 0 || this._onboardingActive || this._activeCoachBeat != null;
+  }
+
+  /** @private Enqueue a deferred moment, bounded to MAX_QUEUE_DEPTH (drop oldest). */
+  _enqueue(moment) {
+    const cap = (Constants && Constants.TEACHING && Constants.TEACHING.MAX_QUEUE_DEPTH) || 3;
+    this._queue.push(moment);
+    while (this._queue.length > cap) this._queue.shift();
+  }
+
+  /**
+   * @private Display a moment, tagging it with the veteran-aware presentation
+   * mode (GUIDANCE_ARBITER_SPEC §3.1: veterans get a ticker, not a modal).
+   */
+  _show(moment) {
+    if (typeof this.onShow !== 'function') return;
+    const presentation = (this._skillsSystem && typeof this._skillsSystem.getHintPresentation === 'function')
+      ? this._skillsSystem.getHintPresentation()
+      : 'modal';
+    this.onShow({ ...moment, presentation });
+  }
+
+  /** @private A coach beat was satisfied → resume draining after a short delay. */
+  _onCoachBeatSatisfied() {
+    this._activeCoachBeat = null;
+    const interval = (Constants && Constants.TEACHING && Constants.TEACHING.QUEUE_DRAIN_INTERVAL_S) || 6;
+    this._drainTimer = Math.max(this._drainTimer, interval);
+  }
+
+  /** @private Clear all pending/deferred arbitration state (GAME_RESET). Keeps `_seen`. */
+  _clearPending() {
+    this._queue.length = 0;
+    this._blockers.clear();
+    this._onboardingActive = false;
+    this._activeCoachBeat = null;
+    this._drainTimer = 0;
+  }
+
+  /**
+   * Per-frame update — drains the deferred-overlay queue at ≤1 per
+   * QUEUE_DRAIN_INTERVAL_S once no layer owns the screen.
+   * @param {number} dt - delta time (seconds)
+   */
+  update(dt) {
+    if (this._disposed) return;
+    if (this._drainTimer > 0) this._drainTimer -= dt;
+    if (this._queue.length === 0) return;
+    if (this._isBlocked()) return;
+    if (this._drainTimer > 0) return;
+    const moment = this._queue.shift();
+    this._show(moment);
+    this._drainTimer = (Constants && Constants.TEACHING && Constants.TEACHING.QUEUE_DRAIN_INTERVAL_S) || 6;
   }
 
   /**

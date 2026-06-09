@@ -590,6 +590,9 @@ export class ConjunctionSystem {
       source: '18th Space Defense Squadron',
       channel: 'ALERT',
       priority: tier === TIER.RED ? 'critical' : tier === TIER.YELLOW ? 'warning' : 'info',
+      // CP-4: an imminent (RED) conjunction must reach the player at ANY suppression
+      // tier — the explicit _critical tag bypasses the post-onboarding wake ramp.
+      _critical: tier === TIER.RED,
       text: `CONJUNCTION ${tier}: ${(debris.type || 'UNKNOWN').toUpperCase()} #${debris.id} at ${distMeters}m in ${Math.round(tca)}s`,
     });
 

@@ -106,11 +106,13 @@ Two payload flags must be emitted for this to work (both are cheap, additive, ig
 
 | Step | Change | Burden | Acceptance |
 |---|---|---|---|
-| 1 | `_suppressionTier` 0–3 + timers (replace `_onboardingActive`) | M | extend `test-CommsSystem.js`: tier table gates the right channels |
-| 2 | `_postOnboarding` + `_critical` tag exceptions | S | ISS `_critical` alert reaches a tier-1 player |
-| 3 | `triggerFilter` + `ARM_CAPTURED.manual` + `SCAN_INITIATED.type` | S | filtered skills fire only on matching payloads |
-| 4 | `_recentFailures` ring buffer + universal hint-gating rule | M | a 4th nudge for the same skill never fires; veteran sees ticker not modal |
-| 5 | 3-layer arbitration (queue/drain + collision rule) in TeachingSystem | M | overlay drops when a coach beat already taught the skill id |
+| 1 | ✅ **DONE (2026-06-08)** — `_suppressionTier` 0–3 + game-clock ramp (replaces `_onboardingActive`) | M | `test-CommsSystem.js` suppression-tier + ramp blocks green; default tier 3 = no-op for non-onboarding play |
+| 2 | ✅ **DONE (2026-06-08)** — `_postOnboarding` + `_critical` tag exceptions (+ CRITICAL-priority from tier 1) | S | `_critical` reaches a tier-1 player; low-fuel/battery + RED conjunction alerts stamped `_critical`; tier 0 still protected |
+| 3 | ✅ **DONE (2026-06-08)** — `triggerFilter` + `ARM_CAPTURED.manual` + `SCAN_INITIATED.type` | S | filtered skills fire only on matching payloads — landed in `SkillsSystem._setupListeners` (optional `def.triggerFilter(data)` gate; `ARM_CAPTURED` carries `manual` at all emit sites, `SCAN_INITIATED` already carried `type`); covered by `test-SkillsSystem.js` triggerFilter suite |
+| 4 | ✅ **DONE (2026-06-08)** — `_recentFailures` ring buffer + universal hint-gating rule + veteran downgrade | M | a 4th nudge for the same skill never fires; veteran sees ticker not modal — `SkillsSystem.canFireHint()` (undiscovered OR discovered+failed-recently, silent after `MAX_UNHEEDED_NUDGES`, never for mastered) + `isVeteran()`/`getHintPresentation()`; reminder path now caps unheeded nudges + tags `presentation`; covered by `test-SkillsSystem.js` |
+| 5 | ✅ **DONE (2026-06-08)** — 3-layer arbitration (queue/drain + collision rule) in TeachingSystem | M | overlay drops when a coach beat already taught the skill id — [`TeachingSystem`](js/systems/TeachingSystem.js) now queues single-fire overlays while a blocking surface (radial `C` / deploy ceremony `D`), the OnboardingDirector, or a MissionCoach beat owns the screen; drains ≤1 per `TEACHING.QUEUE_DRAIN_INTERVAL_S` via `update(dt)`; a coach beat whose `skillId` matches the moment id drops it permanently; veterans get `presentation:'ticker'`; `GAME_RESET` clears the queue. Covered by `test-TeachingSystem.js` |
+
+> **Steps 1–5 shipped 2026-06-08 — the arbiter is complete.** Layers 1–2 (tier model + tag bypasses) live in [`commsSuppression.js`](js/systems/commsSuppression.js) + [`CommsSystem.js`](js/systems/CommsSystem.js); steps 3–4 (the `triggerFilter` payload gate + the universal hint-gating rule/veteran downgrade) live in [`SkillsSystem.js`](js/systems/SkillsSystem.js); step 5 (the 3-layer queue/drain + collision rule, consuming `canFireHint`/`getHintPresentation`) lives in [`TeachingSystem.js`](js/systems/TeachingSystem.js) — driven by `MISSION_BEAT_STARTED`/`MISSION_BEAT_SATISFIED` (dormant until MissionCoach emits them). **Only MissionCoach (CP-4) itself remains — it can now be built as `BEATS_BY_MISSION[N]` data on top of this arbiter** (see [`MISSION_ARC_IMPLEMENTATION.md`](MISSION_ARC_IMPLEMENTATION.md)).
 
 Once steps 1–5 are green, MissionCoach (CP-4) can be built as **data** (`BEATS_BY_MISSION[N]`) on top of this arbiter — see [`MISSION_ARC_IMPLEMENTATION.md`](MISSION_ARC_IMPLEMENTATION.md).
 

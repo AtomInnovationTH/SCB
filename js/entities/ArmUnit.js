@@ -3452,6 +3452,7 @@ export class ArmUnit {
       armId: this.id, targetId: target.id, type: this.type,
       detached: this.isDetached, mass: target.mass || 0,
       debrisType: target.type || 'unknown', tool: toolKind,
+      manual: this._manualCapture,
     });
     eventBus.emit(Events.COMMS_MESSAGE, {
       source: this.id, text: successMsg, channel: 'CMD', priority: 'success',
@@ -3745,6 +3746,7 @@ export class ArmUnit {
           armId: this.id, targetId: this.target.id, type: this.type,
           detached: this.isDetached,
           mass: this.target?.mass || 0, debrisType: this.target?.type || 'unknown',
+          manual: this._manualCapture,
         });
         eventBus.emit(Events.COMMS_MESSAGE, {
           text: `${this.id}: Target secured! SMA cinch complete.`,
@@ -3851,6 +3853,7 @@ export class ArmUnit {
         armId: this.id, targetId: this.target?.id, type: this.type,
         detached: this.isDetached,
         mass: this.target?.mass || 0, debrisType: this.target?.type || 'unknown',
+        manual: this._manualCapture,
       });
       eventBus.emit(Events.COMMS_MESSAGE, {
         text: `${this.id}: Target secured! SMA cinch complete.`,
@@ -3898,6 +3901,7 @@ export class ArmUnit {
           armId: this.id, targetId: this.target?.id, type: this.type,
           detached: this.isDetached,
           mass: this.target?.mass || 0, debrisType: this.target?.type || 'unknown',
+          manual: this._manualCapture,
         });
       } else {
         // Issue-B GUARD (STOWED miss path): same target-alive check.
@@ -4469,6 +4473,7 @@ export class ArmUnit {
             armId: this.id, targetId: debris.id, type: this.type, mode: 'fishing',
             detached: this.isDetached,
             mass: debris.mass || 0, debrisType: debris.type || 'unknown',
+            manual: false,
           });
           eventBus.emit(Events.COMMS_MESSAGE, {
             text: `${this.id}: 🎣 Ambush capture! Target ${debris.id} caught passively.`,
@@ -4604,6 +4609,7 @@ export class ArmUnit {
             armId: this.id, targetId: debris.id, type: this.type, mode: 'trawling',
             detached: this.isDetached,
             mass: debris.mass || 0, debrisType: debris.type || 'unknown',
+            manual: false,
           });
           eventBus.emit(Events.COMMS_MESSAGE, {
             sender: this.id,

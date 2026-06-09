@@ -921,10 +921,13 @@ export class TargetReticle {
       const typeName = this._getTypeName(target.type);
       ctx.fillText(typeName, x, y - half - 18);
 
-      // Tumble rate
+      // Tumble rate (CP-2: show a ▼ DE-SPIN marker while the mother laser is firing)
       const tumbleDeg = (target.tumbleRate * 180 / Math.PI).toFixed(1);
       ctx.font = '10px "Courier New", monospace';
-      ctx.fillText(`${tumbleDeg}°/s  ${target.sizeMeter.toFixed(1)}m`, x, y - half - 6);
+      const tumbleLabel = target._despinning
+        ? `${tumbleDeg}°/s \u25BC DE-SPIN  ${target.sizeMeter.toFixed(1)}m`
+        : `${tumbleDeg}°/s  ${target.sizeMeter.toFixed(1)}m`;
+      ctx.fillText(tumbleLabel, x, y - half - 6);
 
       // Velocity vector indicator (small line showing debris direction)
       if (vel && this._viewConfig.showVelocityVectors) {
