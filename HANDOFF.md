@@ -1,10 +1,31 @@
 # Space Cowboy — Next-Shift Handoff Brief
 
-*Updated: 2026-06-09 · CH5 ISS conjunction boss (Phase C complete) — new `IssConjunctionBoss` system + ISS-track spawn + 3 outcome codex entries. Prior same-day: CP-4 follow-on Phase C data chapters 3/4/6/7 + `strategic_map` skill (committed `69735e4`); CP-3 + CP-4 spine (committed `56a98f5`). Earlier: 2026-06-07 CP build shift (CP-1 multi-tool → CP-2 laser de-spin → furnace-transfer fix); 2026-06-07 architect blueprint pass; 2026-06-06 daughter capture-lifecycle polish (commit `b7d5fae`), archived context at [`archive/HANDOFF_2026-05-30_four-fix.md`](archive/HANDOFF_2026-05-30_four-fix.md), [`archive/HANDOFF_2026-05-29_post-cinch-qa.md`](archive/HANDOFF_2026-05-29_post-cinch-qa.md), [`archive/SK_M1_POLISH_HANDOFF.md`](archive/SK_M1_POLISH_HANDOFF.md), [`archive/CEREMONY_REDESIGN.md`](archive/CEREMONY_REDESIGN.md).*
+*Updated: 2026-06-10 · Phase D complete — chapters 8/10/11 beat tables + ch9 Starlink cascade boss + 3 skills (`confirm_before_fire`/`radial_menu`/`orbital_hohmann`), shared boss primitives in `_bossLifecycle.js`. Prior: 2026-06-09 ch5 ISS conjunction boss (Phase C complete, committed `4322960`); Phase C data chapters 3/4/6/7 + `strategic_map` (`69735e4`); CP-3 + CP-4 spine (`56a98f5`). Earlier: 2026-06-07 CP build shift; 2026-06-06 daughter capture-lifecycle polish (`b7d5fae`), archived context at [`archive/HANDOFF_2026-05-30_four-fix.md`](archive/HANDOFF_2026-05-30_four-fix.md), [`archive/HANDOFF_2026-05-29_post-cinch-qa.md`](archive/HANDOFF_2026-05-29_post-cinch-qa.md), [`archive/SK_M1_POLISH_HANDOFF.md`](archive/SK_M1_POLISH_HANDOFF.md), [`archive/CEREMONY_REDESIGN.md`](archive/CEREMONY_REDESIGN.md).*
 
 ---
 
-> ## ⏩ LATEST SHIFT — 2026-06-09 (CH5 ISS conjunction boss — Phase C COMPLETE) — read this first
+> ## ⏩ LATEST SHIFT — 2026-06-10 (Phase D — chapters 8/9/10/11 + Starlink boss) — read this first
+>
+> **Phase D of the arc is complete.** Chapters 8/10/11 ship as MissionCoach data; ch9 is the second boss system. Built on top of `4322960`.
+>
+> **What landed (uncommitted):**
+> - **3 new skills (catalog 38 → 41)** in `Constants.SKILLS.CATALOG`: `confirm_before_fire` (ch8, tier 3 awareness — discovered when the active-sat guard fires `CONJUNCTION_ALERT{reason:'ACTIVE_SAT_ARMING'}`, payload-filtered), `radial_menu` (ch9, tier 3 collect — `COMMS_RADIAL_OPEN`/C-hold), `orbital_hohmann` (ch11, tier 4 nav — `CLUSTER_WINDOW_OPEN`). *Reused existing events instead of adding `RADIAL_MENU_OPENED`/`HOHMANN_TRANSFER_EXECUTED` — the porkchop UI those implied is deferred (EN-5/6).*
+> - **`BEATS_BY_MISSION[8,9,10,11]`** — ch8 Hubble/confirm-before-fire (narrative; the lockout is taught via the guard + `hubble_watch` codex, not a blocking reactive beat); ch9 radial_menu teach (alongside the boss); ch10 Belt Transit (narrative, SAA/Van-Allen); ch11 Hassan-voiced Thaicom GEO-graveyard + `orbital_hohmann` + MPD first-fire.
+> - **NEW** [`js/systems/StarlinkCascadeBoss.js`](js/systems/StarlinkCascadeBoss.js) — CH9 race-the-cascade boss (mission 9): burst-spawns 35 `starlink_threat` frags via `DebrisField.spawnStarlinkField`, 5-min game-time window, emergent **contained/partial/cascade** outcomes (+300 kg/+750 cr / +250 cr / nothing). Does **not** force a Kessler game-over (cascade tension is comms). Fires `STARLINK_BOSS_STARTED/_IMMINENT/_RESOLVED`.
+> - **NEW** [`js/systems/_bossLifecycle.js`](js/systems/_bossLifecycle.js) — shared, Node-safe boss primitives: `extractDebrisId`, `ThreatSet` (clear-tracking by id, deduped), and `awardElevatorMass` (the elevator-mass + win-crossing `CONTRACT_COMPLETE` logic). **The ISS boss was refactored to use these** (removes the prior duplication; ISS tests still green).
+> - **`DebrisField.spawnIssThreatField`/`spawnStarlinkField`** now delegate to a shared private `_spawnThreatField(orbitCfg, count, tag)` (no spawn-logic drift; in-flight-capture guard preserved).
+> - **4 codex entries** (`hubble_watch`, `starlink_contained`, `starlink_cascade`, `thaicom_graveyard`) — Starlink ones auto-unlock off `STARLINK_BOSS_RESOLVED`; Hubble/Thaicom off the chapter comms text. `Constants.STARLINK_BOSS` block + 3 events. Wired in `main.js` (construct after the ISS boss, `init`, `update(dt)`).
+> - **Tests:** **NEW** `test-StarlinkCascadeBoss.js` + `test-bossLifecycle.js`; Phase C/D integrity suite now covers ch3/4/5/6/7/8/9/10/11. **662 suites / 2717 tests / 0 fail** (was 656 / 2701).
+>
+> **NOT committed.** Working tree on top of `4322960`; `.kilo/` untracked.
+>
+> **Deferred / notes:** porkchop/Lambert viz (ch11's literal "new tool") → EN-5/6; ch11 ships as news + Hohmann-timing teaching. There is no in-game emitter wiring needed for the new skill triggers — they all reuse events that already fire (`CONJUNCTION_ALERT` from ActiveSatGuard, `COMMS_RADIAL_OPEN` from C-hold, `CLUSTER_WINDOW_OPEN` from DebrisMap). **Not browser-playtested** — the boss logic + beats are unit-tested against mocks; the `spawnStarlinkField` render glue and comms/codex surfacing aren't covered by the Node harness.
+>
+> **Next on the critical path → Phase E:** ch12 anchor-run UI ("GEO Anchor Contract — Finalize" deposit button) + the elevator win cinematic (`GAME_WIN{winType:'elevator'}` → GameOverScreen variant) + 3 endgame codex (Space Elevator / "what 10,000 kg buys" / JWST). Then Phase F (ch1 solo-flight graduation beats, §3). See [`MISSION_ARC_IMPLEMENTATION.md`](MISSION_ARC_IMPLEMENTATION.md) §7/§8.
+
+---
+
+> ## ⏩ PREVIOUS SHIFT — 2026-06-09 (CH5 ISS conjunction boss — Phase C COMPLETE) — committed `4322960`
 >
 > The "protect-the-asset" boss. **Phase C of the arc is now done** (data chapters 3/4/6/7 + this boss).
 >

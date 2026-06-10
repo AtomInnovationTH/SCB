@@ -1187,14 +1187,17 @@ describe('SkillsSystem — triggerFilter payload discrimination', () => {
         restore();
     });
 
-    it('CP-4 ch2 catalog defs carry triggerFilter (arm_pilot, arm_pilot_capture)', () => {
+    it('payload-discriminated catalog defs carry triggerFilter (ch2 pilot + ch8 confirm-before-fire)', () => {
         const withFilter = Constants.SKILLS.CATALOG.filter(d => d.triggerFilter);
         const ids = withFilter.map(d => d.id).sort();
-        assert.deepEqual(ids, ['arm_pilot', 'arm_pilot_capture'],
-            'ch2 daughter-piloting skills are the payload-discriminated defs');
+        assert.deepEqual(ids, ['arm_pilot', 'arm_pilot_capture', 'confirm_before_fire'],
+            'the payload-discriminated defs: ch2 daughter-piloting + ch8 active-sat lockout');
         const pilot = Constants.SKILLS.CATALOG.find(d => d.id === 'arm_pilot');
         assert.equal(pilot.triggerFilter({ mode: 'ARM_PILOT' }), true);
         assert.equal(!!pilot.triggerFilter({ mode: 'RCS' }), false);
+        const cbf = Constants.SKILLS.CATALOG.find(d => d.id === 'confirm_before_fire');
+        assert.equal(cbf.triggerFilter({ reason: 'ACTIVE_SAT_ARMING' }), true);
+        assert.equal(!!cbf.triggerFilter({ reason: 'PROXIMITY' }), false);
     });
 });
 

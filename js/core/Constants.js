@@ -1991,7 +1991,7 @@ export const Constants = {
       { id: 'mastery',      tier: 5, label: 'Mastery',      color: '#cc44dd' },
     ],
 
-    // --- Skill Catalog (38 skills) -----------------------------------------------------------
+    // --- Skill Catalog (41 skills) -----------------------------------------------------------
     // Fields: id, label, key, tier, category, hudGroup, prereqs, prereqType, noReminder, triggerEvent, triggerFilter?
     // triggerEvent: Events.js constant name (string key) or null if auto/timer/needs new event
     // triggerFilter: OPTIONAL (data) => boolean — payload predicate so several skills can share one
@@ -2036,6 +2036,15 @@ export const Constants = {
       // Backtick (`) opens the Debris Map; ,/. select a cluster → DEBRIS_MAP_CLUSTER_SELECTED
       // (the 3D StrategicMap / Shift+V is view-only and does NOT drive transfers).
       { id: 'strategic_map',     label: 'Transfer Map',      key: '`', tier: 3, category: 'nav',     hudGroup: null,    prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'DEBRIS_MAP_CLUSTER_SELECTED' },
+      // ── CP-4 Phase D (MissionCoach chapters 8/9/11) ──────────────────────────
+      // ch8 confirm-before-fire: discovered when the player trips the active-sat treaty
+      //   guard (ActiveSatGuard emits CONJUNCTION_ALERT{reason:'ACTIVE_SAT_ARMING'}).
+      // ch9 radial_menu: C-hold opens the dual-arm command wheel (COMMS_RADIAL_OPEN).
+      // ch11 orbital_hohmann: a committed transfer window opening (CLUSTER_WINDOW_OPEN)
+      //   is the "you timed a Hohmann" moment; the porkchop viz is deferred (EN-5/6).
+      { id: 'confirm_before_fire', label: 'Confirm Before Fire', key: null, tier: 3, category: 'awareness', hudGroup: null, prereqs: [], prereqType: 'none', noReminder: true,  triggerEvent: 'CONJUNCTION_ALERT', triggerFilter: (d) => d && d.reason === 'ACTIVE_SAT_ARMING' },
+      { id: 'radial_menu',         label: 'Dual-Arm Command',    key: 'C',  tier: 3, category: 'collect',   hudGroup: 'fleet', prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'COMMS_RADIAL_OPEN' },
+      { id: 'orbital_hohmann',     label: 'Hohmann Window',      key: null, tier: 4, category: 'nav',       hudGroup: null,    prereqs: [], prereqType: 'soft', noReminder: false, triggerEvent: 'CLUSTER_WINDOW_OPEN' },
 
       // ── Tier 4: Advanced (7 skills) ─────────────────────────────────────
       { id: 'nav_orbit_mfd',      label: 'Orbit MFD Reading',   key: 'M',  tier: 4, category: 'nav',       hudGroup: null,  prereqs: ['nav_autopilot'],  prereqType: 'soft',   noReminder: false, triggerEvent: 'ORBIT_MFD_TOGGLE' },
@@ -2234,6 +2243,41 @@ export const Constants = {
       eccentricity: 0.0003,
       fragMassKg: 45,                 // per-fragment mass
       trackSpreadDeg: 8,              // true-anomaly spread ahead of the lead frag
+    },
+  },
+
+  // =========================================================================
+  // CH9 STARLINK FRAGMENTATION BOSS — MISSION_ARC §6
+  //
+  // The "race-the-cascade" boss. On SHOP_DEPLOY into mission 9, burst-spawn
+  // FRAG_COUNT Starlink fragments and start a WINDOW_MIN game-time timer. The
+  // tension (a Kessler cascade) is narrative comms — the boss does NOT force a
+  // KesslerSystem game-over (decline/failure is never a hard punishment, §9).
+  // Outcomes (emergent from play):
+  //   • Contained: clear all frags before the window → +CONTAIN_BONUS_KG + credits + CONTAINED codex
+  //   • Partial:   clear ≥ PARTIAL_FRACTION by the window → reduced credit, no codex penalty
+  //   • Cascade:   clear < PARTIAL_FRACTION by the window → CASCADE codex, bonus lost
+  // =========================================================================
+  STARLINK_BOSS: {
+    MISSION: 9,
+    FRAG_COUNT: 35,                   // fragments burst-spawned
+    WINDOW_MIN: 5,                    // game-time minutes to contain
+    IMMINENT_MIN: 1,                  // final-warning threshold (minutes remaining)
+    CONTAIN_BONUS_KG: 300,            // elevator mass on a full containment
+    CONTAIN_BONUS_CREDITS: 750,       // credits on a full containment
+    PARTIAL_CREDITS: 250,             // credits on a partial containment
+    PARTIAL_FRACTION: 0.6,            // ≥60% cleared by the window = partial (else cascade)
+    PERSISTENCE_KEY: 'spacecowboy_starlink_boss_v1',
+    CODEX: { CONTAINED: 'starlink_contained', CASCADE: 'starlink_cascade' },
+    // Starlink shell orbit the fragments are spawned into (~550 km / 53°).
+    ORBIT: {
+      altKm: 550,
+      incDeg: 53,
+      raanDeg: 80,
+      argPerigeeDeg: 0,
+      eccentricity: 0.0001,
+      fragMassKg: 12,                 // small Starlink-frag mass
+      trackSpreadDeg: 45,             // wider spread — a fragmentation cloud, not a string
     },
   },
 
@@ -2560,6 +2604,88 @@ export const Constants = {
           triggerEvent: 'TRAWL_START',
           title: 'TRAWL SWEEP',
           body: 'Press Shift+G to trawl a daughter\'s net through a string of debris.',
+        },
+      ],
+
+      // ── Chapter 8 — Hubble Watch: consolidation + confirm-before-fire (LEO-Mid 540) ──
+      //    No new tool (the 80% reinforced). The active-sat treaty guard is the
+      //    teaching moment for the `confirm_before_fire` skill (discovered when the
+      //    player trips ActiveSatGuard's CONJUNCTION_ALERT), so these beats are
+      //    narrative — no blocking interactive/reactive beat.
+      8: [
+        {
+          id: 'ch8_intro',
+          type: 'narrative',
+          source: 'HOUSTON',
+          text: 'LEO-Mid now, 540 km — and Hubble shares this band. She\'s a working observatory, not salvage: the arm will refuse to fire on her, or on any crewed or active asset. Identify before you commit.',
+        },
+        {
+          id: 'ch8_discipline',
+          type: 'narrative',
+          source: 'HOUSTON',
+          text: 'No new gear this stretch — just discipline. Trawl the dead stuff, plan your transfers on the map, and confirm every target before you fire. The treaty guard is your backstop, not your plan.',
+        },
+      ],
+
+      // ── Chapter 9 is the Starlink cascade boss (StarlinkCascadeBoss.js); this
+      //    beat teaches the dual-arm command wheel the 35-frag race needs. The
+      //    boss system owns the spawn, 5-min window, outcomes + codex/awards. ──
+      9: [
+        {
+          id: 'ch9_radial',
+          type: 'interactive',
+          source: 'HOUSTON',
+          text: 'Field\'s getting thick — two arms beat one. Hold C for the radial command wheel: deploy, recall, and pilot both daughters from a single menu. You\'ll need the throughput.',
+          skillId: 'radial_menu',
+          triggerEvent: 'COMMS_RADIAL_OPEN',
+          title: 'DUAL-ARM COMMAND',
+          body: 'Hold C to open the radial command wheel and coordinate both daughters at once.',
+        },
+      ],
+
+      // ── Chapter 10 — Belt Transit: radiation-belt timing (MEO 19,000, GPS band) ──
+      //    Narrative consolidation (reinforces ch9 dual-arm); the "new concept" is
+      //    SAA/Van-Allen timing, taught as briefing comms — no new skill.
+      10: [
+        {
+          id: 'ch10_intro',
+          type: 'narrative',
+          source: 'HOUSTON',
+          text: 'You\'re climbing toward MEO — 19,000 km, GPS country — which means crossing the Van Allen belts. Charged-particle flux up here browns out sensors and trips safe-mode. Time your transits through the gaps.',
+        },
+        {
+          id: 'ch10_saa',
+          type: 'narrative',
+          source: 'HOUSTON',
+          text: 'Watch the South Atlantic Anomaly — the belt dips low there and dose spikes. Run both daughters through the clean windows together; don\'t get caught reeling mid-belt.',
+        },
+      ],
+
+      // ── Chapter 11 — GEO Transit / Thaicom 4: Hohmann window + Hassan handover (GEO 35,786) ──
+      //    The porkchop/Lambert viz is deferred to ROADMAP EN-5/6; `orbital_hohmann`
+      //    is discovered when a committed transfer window opens (CLUSTER_WINDOW_OPEN).
+      11: [
+        {
+          id: 'ch11_intro',
+          type: 'narrative',
+          source: 'HASSAN',
+          text: 'Cowboy, this is Hassan at ISTRAC, Bangalore — I\'ll be your conn for the GEO leg. There\'s a graveyard contract on Thaicom 4: a dead three-tonne comms bird at 35,786 km. Getting there is a patience game.',
+        },
+        {
+          id: 'ch11_hohmann',
+          type: 'interactive',
+          source: 'HASSAN',
+          text: 'GEO is a long Hohmann climb — half an orbit of coasting. Pick the cluster and let the transfer window open before you commit; burn early and you\'ll arrive where the target isn\'t.',
+          skillId: 'orbital_hohmann',
+          triggerEvent: 'CLUSTER_WINDOW_OPEN',
+          title: 'HOHMANN WINDOW',
+          body: 'Engage a transfer on the map and wait for the launch window to open before you burn.',
+        },
+        {
+          id: 'ch11_mpd',
+          type: 'narrative',
+          source: 'HASSAN',
+          text: 'For a climb this big you\'ll want the MPD thruster — high thrust, thirsty for power. First fire is yours, Cowboy. Welcome to the high country.',
         },
       ],
     },

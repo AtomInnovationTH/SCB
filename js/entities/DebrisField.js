@@ -2087,41 +2087,61 @@ export class DebrisField {
 
   /**
    * CH5 ISS conjunction boss (MISSION_ARC §6) — spawn `count` threat fragments
-   * in the ISS forward track and tag each `iss_threat:true`.
-   *
-   * Mirrors the welcome-field approach: repurpose existing alive, non-special
-   * debris (no new allocation), overwrite their orbital elements to the ISS
-   * orbit (Constants.ISS_BOSS.ORBIT), spread them ahead in true-anomaly, refresh
-   * mass/type/salvage, and mark them tracked + discovered so the player can act
-   * immediately. Returns the ids of the spawned threats (may be fewer than
-   * `count` if the field is short on candidates).
-   *
-   * @param {object} [options]
-   * @param {number} [options.count] — number of threat frags (default Constants.ISS_BOSS.FRAG_COUNT)
+   * in the ISS forward track, tagged `iss_threat:true`.
+   * @param {object} [options] @param {number} [options.count]
    * @returns {{ ids: number[] }}
    */
   spawnIssThreatField(options = {}) {
-    const cfg = Constants.ISS_BOSS && Constants.ISS_BOSS.ORBIT;
-    if (!cfg) return { ids: [] };
-    const count = Math.max(1, options.count ?? Constants.ISS_BOSS.FRAG_COUNT ?? 6);
+    const cfg = Constants.ISS_BOSS;
+    if (!cfg || !cfg.ORBIT) return { ids: [] };
+    const count = Math.max(1, options.count ?? cfg.FRAG_COUNT ?? 6);
+    return this._spawnThreatField(cfg.ORBIT, count, 'iss_threat');
+  }
 
-    // ISS orbit in scene units.
+  /**
+   * CH9 Starlink fragmentation boss (MISSION_ARC §6) — burst-spawn `count`
+   * fragments in the Starlink shell, tagged `starlink_threat:true`.
+   * @param {object} [options] @param {number} [options.count]
+   * @returns {{ ids: number[] }}
+   */
+  spawnStarlinkField(options = {}) {
+    const cfg = Constants.STARLINK_BOSS;
+    if (!cfg || !cfg.ORBIT) return { ids: [] };
+    const count = Math.max(1, options.count ?? cfg.FRAG_COUNT ?? 35);
+    return this._spawnThreatField(cfg.ORBIT, count, 'starlink_threat');
+  }
+
+  /**
+   * Shared boss-frag spawner. Repurposes existing alive, non-special, NOT-mid-
+   * capture debris into the given orbit `cfg` (mirrors `_spawnWelcomeField`):
+   * overwrites orbital elements, spreads them ahead in true-anomaly, refreshes
+   * mass/type/salvage, tags `debris[tag]=true`, and marks them tracked +
+   * discovered. Returns the spawned ids (fewer than `count` if candidates run out).
+   *
+   * @private
+   * @param {object} cfg — orbit config (altKm, incDeg, raanDeg, argPerigeeDeg, eccentricity, fragMassKg, trackSpreadDeg)
+   * @param {number} count
+   * @param {string} tag — per-debris flag identifying the threat set
+   * @returns {{ ids: number[] }}
+   */
+  _spawnThreatField(cfg, count, tag) {
+    // Orbit in scene units.
     const altKm = cfg.altKm ?? 408;
     const sma = Constants.EARTH_RADIUS + altKm * Constants.SCENE_SCALE;
     const meanMotion = Math.sqrt(Constants.MU_EARTH / Math.pow(sma / Constants.SCENE_SCALE, 3));
-    const baseNu = Math.random() * Math.PI * 2;          // random phase around the ISS track
+    const baseNu = Math.random() * Math.PI * 2;          // random phase around the track
     const spreadRad = (cfg.trackSpreadDeg ?? 8) * Math.PI / 180;
     const frameComp = meanMotion * (this._lastSpawnGameDt || 0); // mid-frame propagation pre-compensation
 
-    // Gather candidates: alive, not already special-tagged, and NOT mid-capture.
+    // Candidates: alive, not already special-tagged, and NOT mid-capture.
     // Unlike the welcome field (mission-1 init, nothing grappled), this runs on
-    // SHOP_DEPLOY into mission 5, when a daughter may be hauling or parking a
-    // catch (_capturedByArm/_armPinned keep that debris pinned to the arm) — so
-    // repurposing it would teleport an in-flight catch onto the ISS track.
+    // SHOP_DEPLOY into a later mission, when a daughter may be hauling or parking
+    // a catch (_capturedByArm/_armPinned keep that debris pinned to the arm) — so
+    // repurposing it would teleport an in-flight catch onto the threat track.
     const candidates = [];
     for (const debris of this.debrisList) {
       if (!debris.alive) continue;
-      if (debris.tutorialSpawn || debris.welcomeSpawn || debris.iss_threat) continue;
+      if (debris.tutorialSpawn || debris.welcomeSpawn || debris.iss_threat || debris.starlink_threat) continue;
       if (debris._capturedByArm || debris._armPinned || debris._captured) continue;
       candidates.push(debris);
       if (candidates.length >= count) break;
@@ -2141,7 +2161,7 @@ export class DebrisField {
       debris.orbit.trueAnomaly = baseNu + lead - frameComp;
       debris.orbit.meanMotion = meanMotion;
 
-      // Cosmos-1408 fragment profile.
+      // Fragment profile.
       debris.mass = cfg.fragMassKg ?? 45;
       debris.type = 'fragment';
       const typeDef = DEBRIS_TYPES[debris.type];
@@ -2160,7 +2180,7 @@ export class DebrisField {
         (debris.salvage.metals && debris.salvage.metals.length > 0);
       debris.metalMassKg = (debris.salvage.metals || []).reduce((sum, m) => sum + m.amount, 0);
 
-      debris.iss_threat = true;
+      debris[tag] = true;
       debris.alive = true;
       debris.tracked = true;
       debris.discovered = true;
@@ -2170,7 +2190,7 @@ export class DebrisField {
     }
 
     if (ids.length > 0) {
-      console.log(`[DebrisField] ISS boss: spawned ${ids.length} iss_threat frags in the 51.6° track`);
+      console.log(`[DebrisField] boss spawn: ${ids.length} ${tag} frags at ${altKm} km / ${cfg.incDeg ?? 51.6}°`);
     }
     return { ids };
   }

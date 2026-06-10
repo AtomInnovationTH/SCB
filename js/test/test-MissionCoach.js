@@ -183,10 +183,10 @@ function runChapter(mission) {
   return { coach, rec, mission };
 }
 
-describe('MissionCoach — Phase C data integrity (ch3,4,5,6,7)', () => {
+describe('MissionCoach — Phase C/D data integrity (ch3,4,5,6,7,8,9,10,11)', () => {
   it('every Phase C interactive beat references a real Events key + catalog skill', () => {
     const skillIds = new Set(Constants.SKILLS.CATALOG.map(s => s.id));
-    for (const mission of [3, 4, 5, 6, 7]) {
+    for (const mission of [3, 4, 5, 6, 7, 8, 9, 10, 11]) {
       const table = BEATS[mission];
       assert.ok(Array.isArray(table) && table.length > 0, `chapter ${mission} has beats`);
       for (const beat of table) {
@@ -208,7 +208,7 @@ describe('MissionCoach — Phase C data integrity (ch3,4,5,6,7)', () => {
   });
 
   it('each Phase C chapter runs to completion and is marked coached', () => {
-    for (const mission of [3, 4, 5, 6, 7]) {
+    for (const mission of [3, 4, 5, 6, 7, 8, 9, 10, 11]) {
       const { coach } = runChapter(mission);
       assert.equal(coach.isRunning(), false, `chapter ${mission} finished`);
       assert.equal(coach.hasCoached(mission), true, `chapter ${mission} coached`);

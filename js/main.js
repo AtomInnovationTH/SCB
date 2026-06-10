@@ -49,6 +49,7 @@ import { AutopilotSystem } from './systems/AutopilotSystem.js';
 import { SkillsSystem } from './systems/SkillsSystem.js';
 import { MissionCoach } from './systems/MissionCoach.js';
 import { IssConjunctionBoss } from './systems/IssConjunctionBoss.js';
+import { StarlinkCascadeBoss } from './systems/StarlinkCascadeBoss.js';
 import { LassoSystem } from './systems/LassoSystem.js';
 import { despinLaser } from './systems/DespinLaser.js';
 import { RewardSystem } from './systems/RewardSystem.js';
@@ -411,6 +412,7 @@ let cameraSystem;
 let commsSystem;
 let missionCoach;
 let issConjunctionBoss;
+let starlinkCascadeBoss;
 let resourceSystem;
 let sensorSystem;
 let cargoSystem;
@@ -755,6 +757,12 @@ async function init() {
     eventBus, scoringSystem, debrisField, shopScreen, persistenceManager,
   });
   issConjunctionBoss.init();
+
+  // --- CH9 Starlink fragmentation boss (MISSION_ARC §6) — race-the-cascade event ---
+  starlinkCascadeBoss = new StarlinkCascadeBoss({
+    eventBus, scoringSystem, debrisField, shopScreen, persistenceManager,
+  });
+  starlinkCascadeBoss.init();
 
   // --- GameFlowManager: init with reduced refs (13 decoupled via EventBus) ---
   // Removed: menuScreen, gameOverScreen (GAME_STATE_CHANGE)
@@ -1323,6 +1331,8 @@ function gameLoop(timestamp) {
     try { if (missionCoach) missionCoach.update(dt); } catch (e) { console.error('[GameLoop] missionCoach:', e); }
     // CH5: ISS conjunction boss TCA countdown (game-time)
     try { if (issConjunctionBoss) issConjunctionBoss.update(dt); } catch (e) { console.error('[GameLoop] issConjunctionBoss:', e); }
+    // CH9: Starlink cascade boss containment window (game-time)
+    try { if (starlinkCascadeBoss) starlinkCascadeBoss.update(dt); } catch (e) { console.error('[GameLoop] starlinkCascadeBoss:', e); }
 
     // V-9: Tier progression visual transition animation
     try { tierVisualManager.update(dt); } catch (e) { console.error('[GameLoop] tierVisualManager:', e); }

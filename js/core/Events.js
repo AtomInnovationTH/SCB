@@ -84,6 +84,14 @@ export const Events = {
   /** Boss resolved. Payload: { outcome: 'intercept'|'decline'|'miss', cleared, total } */
   ISS_BOSS_RESOLVED:  'iss:bossResolved',
 
+  // === CH9 STARLINK FRAGMENTATION BOSS (MISSION_ARC §6) ===
+  /** Boss engaged: N Starlink frags burst-spawned. Payload: { threatIds: number[], windowMin: number } */
+  STARLINK_BOSS_STARTED:  'starlink:bossStarted',
+  /** Containment window closing — final warning. Payload: { remainingMin, cleared, total } */
+  STARLINK_BOSS_IMMINENT: 'starlink:bossImminent',
+  /** Boss resolved. Payload: { outcome: 'contained'|'partial'|'cascade', cleared, total } */
+  STARLINK_BOSS_RESOLVED: 'starlink:bossResolved',
+
   // === DEBRIS ===
   DEBRIS_CLEARED:     'debris:cleared',
   DEBRIS_CAPTURED:    'debris:captured',

@@ -1583,6 +1583,56 @@ function buildEntries() {
       seen: false,
       icon: '⛽',
     },
+
+    // === CH8/9/11 Phase D codex (Hubble watch, Starlink boss, Thaicom) ===
+    {
+      id: 'hubble_watch',
+      title: 'Hubble Watch',
+      category: CodexCategory.DEBRIS,
+      shortText: 'The Hubble Space Telescope shares the LEO-Mid band — and is off-limits.',
+      fullText: 'Hubble orbits near 540 km at 28.5° — a working observatory, not salvage. Treaty and common sense make active, crewed, or functioning assets no-fire targets; the arm refuses to engage them. The discipline that matters at this altitude is identification: confirm what a contact IS before you commit fuel or a net to it.',
+      triggerEvent: Events.COMMS_MESSAGE,
+      triggerCondition: (p) => p && typeof p.text === 'string' && p.text.includes('Hubble'),
+      unlocked: false,
+      seen: false,
+      icon: '🔭',
+    },
+    {
+      id: 'starlink_contained',
+      title: 'Cascade Contained',
+      category: CodexCategory.DEBRIS,
+      shortText: 'You swept a fresh fragmentation cloud before it could seed a Kessler cascade.',
+      fullText: 'When a satellite fragments, the danger is not the first cloud but the second: fragments striking other objects, each impact breeding more debris until a shell becomes unusable for generations — the Kessler syndrome. Sweeping a fresh cloud quickly is the single highest-leverage thing a debris tug can do. Speed matters more than tonnage here.',
+      triggerEvent: Events.STARLINK_BOSS_RESOLVED,
+      triggerCondition: (p) => p && p.outcome === 'contained',
+      unlocked: false,
+      seen: false,
+      icon: '🛰️',
+    },
+    {
+      id: 'starlink_cascade',
+      title: 'Kessler Syndrome',
+      category: CodexCategory.DEBRIS,
+      shortText: 'Too many fragments escaped — the collisional cascade is self-sustaining.',
+      fullText: 'Donald Kessler predicted in 1978 that beyond a critical density, debris collisions become self-sustaining: each impact creates fragments that cause further impacts, faster than atmospheric drag removes them. A runaway cascade can render an entire orbital shell unusable. You didn\'t catch this one in time — but every piece you DID clear lowered the density a little, and the lesson carries forward.',
+      triggerEvent: Events.STARLINK_BOSS_RESOLVED,
+      triggerCondition: (p) => p && p.outcome === 'cascade',
+      unlocked: false,
+      seen: false,
+      icon: '💥',
+    },
+    {
+      id: 'thaicom_graveyard',
+      title: 'GEO Graveyard',
+      category: CodexCategory.DEBRIS,
+      shortText: 'Dead GEO birds are boosted to a graveyard orbit ~300 km above the belt.',
+      fullText: 'Geostationary slots at 35,786 km are scarce and precious, so end-of-life satellites are meant to be boosted into a "graveyard" orbit a few hundred km higher, clearing the working belt. Many — like the long-dead Thaicom 4 / IPSTAR — never made it, or drift uncontrolled. Reaching GEO is a patience game: a half-orbit Hohmann climb where timing, not thrust, decides whether you arrive where the target will be.',
+      triggerEvent: Events.COMMS_MESSAGE,
+      triggerCondition: (p) => p && typeof p.text === 'string' && p.text.includes('Thaicom'),
+      unlocked: false,
+      seen: false,
+      icon: '🛰️',
+    },
   ];
 }
 
@@ -1738,6 +1788,10 @@ const TRL_ANNOTATIONS = {
   iss_saver:          { trl: 9, trlRationale: 'Cosmos-1408 ASAT event (2021) + ISS conjunction ops documented' },
   iss_pdam:           { trl: 9, trlRationale: 'PDAM reboosts performed 30+ times since 1999' },
   iss_hydrazine_burn: { trl: 9, trlRationale: 'Hydrazine avoidance reboosts are routine, documented ISS ops' },
+  hubble_watch:       { trl: 9, trlRationale: 'HST operational since 1990; active-asset no-fire is policy' },
+  starlink_contained: { trl: 9, trlRationale: 'ADR rationale; fragmentation-cloud risk is well-characterised' },
+  starlink_cascade:   { trl: 9, trlRationale: 'Kessler syndrome (1978) — established, observed (2009 Iridium-Cosmos)' },
+  thaicom_graveyard:  { trl: 9, trlRationale: 'GEO graveyard disposal is IADC-standard practice' },
 };
 
 /**

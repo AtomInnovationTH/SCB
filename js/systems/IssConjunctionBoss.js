@@ -24,6 +24,7 @@
 
 import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
+import { ThreatSet, awardElevatorMass } from './_bossLifecycle.js';
 
 export class IssConjunctionBoss {
   /**
@@ -45,10 +46,8 @@ export class IssConjunctionBoss {
     this._completed = false;
     /** @type {boolean} boss currently running. */
     this._active = false;
-    /** @type {Set<number>} ids of the spawned threat frags. */
-    this._threatIds = new Set();
-    /** @type {Set<number>} ids already neutralised. */
-    this._cleared = new Set();
+    /** @type {ThreatSet} the spawned threat frags + which are neutralised. */
+    this._threats = new ThreatSet();
     /** @type {number} game-seconds until closest approach. */
     this._tcaRemainingS = 0;
     /** @type {boolean} the imminent (final) warning has fired. */
@@ -89,16 +88,16 @@ export class IssConjunctionBoss {
       const remainingH = Math.max(0, this._tcaRemainingS / 3600);
       this._eventBus.emit(Events.ISS_BOSS_IMMINENT, {
         tcaRemainingHours: remainingH,
-        cleared: this._cleared.size,
-        total: this._threatIds.size,
+        cleared: this._threats.clearedCount,
+        total: this._threats.total,
       });
-      this._comms(`ISS conjunction in ${Math.round(remainingH)} h. ${this._cleared.size}/${this._threatIds.size} fragments cleared — close it out, Cowboy.`, 'warning');
+      this._comms(`ISS conjunction in ${Math.round(remainingH)} h. ${this._threats.clearedCount}/${this._threats.total} fragments cleared — close it out, Cowboy.`, 'warning');
     }
 
     if (this._tcaRemainingS <= 0) {
       // Time's up. Cleared ≥1 but not all = a late hydrazine dodge (miss);
       // cleared none = the player effectively declined (autonomous PDAM).
-      this._resolve(this._cleared.size > 0 ? 'miss' : 'decline');
+      this._resolve(this._threats.clearedCount > 0 ? 'miss' : 'decline');
     }
   }
 
@@ -112,7 +111,7 @@ export class IssConjunctionBoss {
   getTcaRemainingHours() { return this._active ? Math.max(0, this._tcaRemainingS / 3600) : 0; }
 
   /** @returns {{cleared:number, total:number}} */
-  getProgress() { return { cleared: this._cleared.size, total: this._threatIds.size }; }
+  getProgress() { return { cleared: this._threats.clearedCount, total: this._threats.total }; }
 
   /** Clear all state (GAME_RESET / new game). */
   reset() {
@@ -161,8 +160,7 @@ export class IssConjunctionBoss {
     // complete so it can run on a later entry into the mission.
     if (ids.length === 0) return;
 
-    this._threatIds = new Set(ids);
-    this._cleared = new Set();
+    this._threats = new ThreatSet(ids);
     this._tcaRemainingS = (cfg.TCA_HOURS || 38) * 3600;
     this._imminentFired = false;
     this._active = true;
@@ -177,43 +175,26 @@ export class IssConjunctionBoss {
     runOn(Events.ISS_BOSS_DECLINE, () => { if (this._active) this._resolve('decline'); });
 
     this._eventBus.emit(Events.ISS_BOSS_STARTED, {
-      threatIds: [...this._threatIds],
+      threatIds: [...this._threats.threats],
       tcaHours: cfg.TCA_HOURS || 38,
     });
-    this._comms(`Cosmos-1408 fragment cloud converging on the ISS — ${this._threatIds.size} pieces, closest approach in ${cfg.TCA_HOURS || 38} h. Clear them or we let the station reboost. Crew's counting on you.`, 'critical');
+    this._comms(`Cosmos-1408 fragment cloud converging on the ISS — ${this._threats.total} pieces, closest approach in ${cfg.TCA_HOURS || 38} h. Clear them or we let the station reboost. Crew's counting on you.`, 'critical');
   }
 
   /** @private Mark a threat cleared (idempotent); finish on a full sweep. */
   _onThreatTouched(payload) {
     if (!this._active) return;
-    const id = this._extractDebrisId(payload);
-    if (id == null) return;
-    if (!this._threatIds.has(id) || this._cleared.has(id)) return;
-
-    this._cleared.add(id);
-    if (this._cleared.size >= this._threatIds.size) {
+    if (this._threats.touch(payload) && this._threats.allCleared) {
       this._resolve('intercept');
     }
-  }
-
-  /** @private Pull a debris id out of the various capture/removal payloads. */
-  _extractDebrisId(p) {
-    if (p == null) return null;
-    if (typeof p === 'number') return p;
-    if (typeof p.id === 'number') return p.id;
-    if (typeof p.debrisId === 'number') return p.debrisId;
-    if (typeof p.targetId === 'number') return p.targetId;
-    if (p.debris && typeof p.debris.id === 'number') return p.debris.id;
-    if (p.target && typeof p.target.id === 'number') return p.target.id;
-    return null;
   }
 
   /** @private Resolve the boss, award/announce, and persist completion. */
   _resolve(outcome) {
     if (!this._active) return;
     const cfg = Constants.ISS_BOSS;
-    const cleared = this._cleared.size;
-    const total = this._threatIds.size;
+    const cleared = this._threats.clearedCount;
+    const total = this._threats.total;
 
     if (outcome === 'intercept') {
       // Credits via scoring; elevator mass via the shop contract.
@@ -235,25 +216,9 @@ export class IssConjunctionBoss {
     this._endRun();
   }
 
-  /** @private Add mass to the elevator contract (the only place that mass lives). */
+  /** @private Add mass to the elevator contract (fires the win path on threshold). */
   _awardElevatorMass(kg) {
-    if (!this._shop) return;
-    if (typeof this._shop.getContractMass !== 'function' || typeof this._shop.setContractMass !== 'function') return;
-    const newMass = this._shop.getContractMass() + kg;
-    this._shop.setContractMass(newMass);
-    const target = (Constants.ELEVATOR_CONTRACT && Constants.ELEVATOR_CONTRACT.TARGET_MASS_KG) || 10000;
-    this._eventBus.emit(Events.CONTRACT_UPDATE, { contractMassKg: newMass, targetMassKg: target });
-
-    // Crossing the contract threshold via the boss bonus must still win the game.
-    // Mirror ShopScreen._contributeToElevator: award the win bonus + emit
-    // CONTRACT_COMPLETE (GameFlowManager arms the elevator win off that event).
-    if (newMass >= target) {
-      const winBonus = (Constants.ELEVATOR_CONTRACT && Constants.ELEVATOR_CONTRACT.WIN_BONUS) || 50000;
-      if (this._scoring && typeof this._scoring.addCredits === 'function') {
-        this._scoring.addCredits(winBonus);
-      }
-      this._eventBus.emit(Events.CONTRACT_COMPLETE, { totalMassKg: newMass, bonusCredits: winBonus });
-    }
+    awardElevatorMass(this._eventBus, this._shop, this._scoring, kg);
   }
 
   /** @private Critical-tagged comms so the boss always reaches the player. */
@@ -272,8 +237,7 @@ export class IssConjunctionBoss {
     for (const u of this._runUnsubs) { if (typeof u === 'function') u(); }
     this._runUnsubs.length = 0;
     this._active = false;
-    this._threatIds = new Set();
-    this._cleared = new Set();
+    this._threats.reset();
     this._tcaRemainingS = 0;
     this._imminentFired = false;
   }
