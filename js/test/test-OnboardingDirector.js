@@ -65,8 +65,8 @@ function installLocalStorageShim() {
 // ─── BEAT TABLE INTEGRITY ─────────────────────────────────────────────────
 
 describe('OnboardingDirector — beat table integrity', () => {
-  it('has exactly 16 beats', () => {
-    assert.equal(ONBOARDING_BEATS.length, 16);
+  it('has exactly 18 beats', () => {
+    assert.equal(ONBOARDING_BEATS.length, 18);
   });
 
   it('all beats have unique ids', () => {
@@ -467,6 +467,133 @@ describe('OnboardingDirector — captured beat (#4 close the loop)', () => {
     assert.equal(captured.triggerEvent, 'ARM_CAPTURED');
     assert.ok(!captured.keys || captured.keys.length === 0, 'no keys (narrative confirmation)');
     assert.ok(Number.isFinite(captured.autoAdvanceAfter), 'has a fallback auto-advance');
+  });
+});
+
+describe('OnboardingDirector — solo-flight graduation (Phase F §4.4)', () => {
+  const ids = ONBOARDING_BEATS.map(b => b.id);
+
+  function bootDirector(completedBeats) {
+    localStorage.clear();
+    localStorage.setItem(
+      Constants.ONBOARDING.STORAGE_KEY,
+      JSON.stringify({ completedBeats, skippedBeats: [], mastered: false }),
+    );
+    const eb = createMockEventBus();
+    const d = new OnboardingDirector({
+      eventBus: eb,
+      skillsSystem: createMockSkillsSystem(),
+      scoringSystem: { awardPoints() {} },
+    });
+    d.start();
+    return { eb, d };
+  }
+
+  it('replaces `complete` with solo_intro / solo_practice(counter) / final', () => {
+    assert.ok(!ONBOARDING_BEATS.find(b => b.id === 'complete'), 'old single complete beat removed');
+    const intro = ONBOARDING_BEATS.find(b => b.id === 'solo_intro');
+    const prac = ONBOARDING_BEATS.find(b => b.id === 'solo_practice');
+    const fin = ONBOARDING_BEATS.find(b => b.id === 'final');
+    assert.ok(intro && prac && fin, 'three solo beats exist');
+    assert.equal(prac.triggerEvent, 'DEBRIS_CAPTURED');
+    assert.equal(prac.counterTarget, 1);
+    assert.ok(prac.optional && prac.skipAfter > 0, 'optional with skipAfter so no-net players are not stuck');
+    assert.ok(prac.netEmptySkip, 'opts into the NET_EMPTY_CLICK consolation skip');
+    assert.equal(fin.onEnter, 'mastered=true', 'final marks mastered');
+    assert.equal(ids[ids.length - 1], 'final', 'final is the last beat');
+  });
+
+  it('a capture WHILE solo_practice is active satisfies the counter beat', () => {
+    const installed = installLocalStorageShim();
+    try {
+      const { eb, d } = bootDirector(ids.slice(0, ids.indexOf('solo_practice')));
+      assert.equal(d.getActiveBeatId(), 'solo_practice', 'lands on solo_practice');
+      assert.equal(d.isMastered(), false, 'not mastered before the solo capture');
+      eb._reset();
+      eb.emit(Events.DEBRIS_CAPTURED, { id: 1 });
+      assert.ok(d.getState().completed.includes('solo_practice'), 'solo_practice satisfied');
+      assert.ok(eb._findEmits(Events.HINT_SATISFIED).some(e => e.payload.id === 'solo_practice'));
+      d.dispose();
+    } finally {
+      localStorage.clear();
+      if (installed) delete globalThis.localStorage;
+    }
+  });
+
+  it('an EARLIER capture (during the `captured` beat) does NOT pre-satisfy solo_practice', () => {
+    const installed = installLocalStorageShim();
+    try {
+      const { eb, d } = bootDirector(ids.slice(0, ids.indexOf('captured')));
+      assert.equal(d.getActiveBeatId(), 'captured', 'lands on the captured recap');
+      eb.emit(Events.DEBRIS_CAPTURED, { id: 7 }); // the guided catch landing
+      assert.ok(!d.getState().completed.includes('solo_practice'),
+        'counter beat is never credited ahead of time');
+      assert.ok(!d.getState().skipped.includes('solo_practice'));
+      d.dispose();
+    } finally {
+      localStorage.clear();
+      if (installed) delete globalThis.localStorage;
+    }
+  });
+
+  it('NET_EMPTY_CLICK during solo_practice graduates with a consolation line', () => {
+    const installed = installLocalStorageShim();
+    try {
+      const { eb, d } = bootDirector(ids.slice(0, ids.indexOf('solo_practice')));
+      assert.equal(d.getActiveBeatId(), 'solo_practice');
+      eb._reset();
+      eb.emit(Events.NET_EMPTY_CLICK, { armId: 1 });
+      assert.ok(d.getState().skipped.includes('solo_practice'), 'consolation-skipped');
+      const comms = eb._findEmits(Events.COMMS_MESSAGE);
+      assert.ok(comms.some(e => /graduating you anyway/i.test((e.payload && e.payload.text) || '')),
+        'consolation comms emitted');
+      d.dispose();
+    } finally {
+      localStorage.clear();
+      if (installed) delete globalThis.localStorage;
+    }
+  });
+
+  it('counterTarget>1: re-posts a running tally then satisfies on the Nth trigger', () => {
+    // White-box exercise of the general counter mechanic (no shipped beat uses
+    // N>1 yet; solo_practice is counterTarget:1). Drive _onTrigger on a synthetic
+    // active counter beat and assert the tally re-post then satisfy.
+    const installed = installLocalStorageShim();
+    try {
+      localStorage.clear();
+      const eb = createMockEventBus();
+      const d = new OnboardingDirector({
+        eventBus: eb,
+        skillsSystem: createMockSkillsSystem(),
+        scoringSystem: { awardPoints() {} },
+      });
+      const beat = {
+        id: 'test_counter', triggerEvent: 'DEBRIS_CAPTURED', counterTarget: 2,
+        text: 'do it twice', glyph: '🎯', keys: [], credit: 0,
+      };
+      d._active = {
+        beat, postedAt: Date.now(), unrelatedInputs: 0, escalated: false,
+        idleTimer: null, autoAdvanceTimer: null, skipTimer: null, gateTimer: null, held: false,
+      };
+
+      eb._reset();
+      d._onTrigger(beat); // 1st of 2
+      assert.ok(
+        eb._findEmits(Events.HINT_POSTED).some(e => e.payload.id === 'test_counter' && /1\/2/.test(e.payload.text || '')),
+        'tally chip re-posted as 1/2',
+      );
+      assert.ok(!d.getState().completed.includes('test_counter'), 'not satisfied after 1 trigger');
+      assert.equal(d._active && d._active.beat.id, 'test_counter', 'beat still active');
+
+      eb._reset();
+      d._onTrigger(beat); // 2nd of 2 → satisfy
+      assert.ok(d.getState().completed.includes('test_counter'), 'satisfied after the Nth trigger');
+      assert.ok(eb._findEmits(Events.HINT_SATISFIED).some(e => e.payload.id === 'test_counter'));
+      d.dispose();
+    } finally {
+      localStorage.clear();
+      if (installed) delete globalThis.localStorage;
+    }
   });
 });
 

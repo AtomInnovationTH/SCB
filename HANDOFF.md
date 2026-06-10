@@ -1,10 +1,28 @@
 # Space Cowboy — Next-Shift Handoff Brief
 
-*Updated: 2026-06-10 · Phase E complete — elevator-win cinematic (GameOverScreen variant) + `GAME_WIN{winType,totalMassKg}` + 3 endgame codex. Prior same-day: Phase D (chapters 8/9/10/11 + Starlink cascade boss, committed `95854de`); ch5 ISS boss (`4322960`); Phase C data chapters (`69735e4`); CP-3 + CP-4 spine (`56a98f5`). Earlier: 2026-06-07 CP build shift; 2026-06-06 daughter capture-lifecycle polish (`b7d5fae`), archived context at [`archive/HANDOFF_2026-05-30_four-fix.md`](archive/HANDOFF_2026-05-30_four-fix.md), [`archive/HANDOFF_2026-05-29_post-cinch-qa.md`](archive/HANDOFF_2026-05-29_post-cinch-qa.md), [`archive/SK_M1_POLISH_HANDOFF.md`](archive/SK_M1_POLISH_HANDOFF.md), [`archive/CEREMONY_REDESIGN.md`](archive/CEREMONY_REDESIGN.md).*
+*Updated: 2026-06-10 · **Phase F complete — the 12-chapter mission arc is DONE.** ch1 solo-flight graduation beats + counter-beat mechanic in OnboardingDirector. Prior same-day: Phase E elevator win cinematic (committed `a4863c4`); Phase D chapters 8–11 + Starlink boss (`95854de`); ch5 ISS boss (`4322960`); Phase C data chapters (`69735e4`); CP-3 + CP-4 spine (`56a98f5`). Earlier: 2026-06-07 CP build shift; 2026-06-06 daughter capture-lifecycle polish (`b7d5fae`), archived context at [`archive/HANDOFF_2026-05-30_four-fix.md`](archive/HANDOFF_2026-05-30_four-fix.md), [`archive/HANDOFF_2026-05-29_post-cinch-qa.md`](archive/HANDOFF_2026-05-29_post-cinch-qa.md), [`archive/SK_M1_POLISH_HANDOFF.md`](archive/SK_M1_POLISH_HANDOFF.md), [`archive/CEREMONY_REDESIGN.md`](archive/CEREMONY_REDESIGN.md).*
 
 ---
 
-> ## ⏩ LATEST SHIFT — 2026-06-10 (Phase E — elevator win cinematic + endgame codex) — read this first
+> ## ⏩ LATEST SHIFT — 2026-06-10 (Phase F — solo-flight graduation; ARC COMPLETE) — read this first
+>
+> **This closes the 12-chapter arc (phases A–F all shipped).** Phase F is the only phase that touches `OnboardingDirector` (chapter 1), not MissionCoach. Built on top of `a4863c4`.
+>
+> **What landed (uncommitted):**
+> - **Counter-beat mechanic** in [`OnboardingDirector.js`](js/systems/OnboardingDirector.js) — new beat field `counterTarget: N`. In `_onTrigger`, a counter beat increments a live count and only `_satisfy`s at the target (re-posting the chip with a tally for N>1). **Guards added** in `_preSatisfy` (`if (beat.counterTarget) return`) and `_isAlreadyKnown` (`if (beat.counterTarget) return false`) so the guided catch's `DEBRIS_CAPTURED` can't pre-credit or tier-skip the solo step.
+> - **Solo-flight beats** — the single `complete` beat is split into `solo_intro` (narrative 3.5 s) → `solo_practice` (counter beat: `counterTarget:1`, `triggerEvent:'DEBRIS_CAPTURED'`, `optional`+`skipAfter:90000`, `netEmptySkip`) → `final` (`onEnter:'mastered=true'`). The existing `captured` beat (on `ARM_CAPTURED`) is the catch-confirmed recap. **`ONBOARDING_COMPLETE` now can't fire until the player has made one unguided capture.** Beat count 16 → 18.
+> - **No-net consolation** — new `_onConsolationSkip()` listens for `NET_EMPTY_CLICK`; if the active beat has `netEmptySkip`, it graduates the player with "Out of nets — graduating you anyway, Cowboy." instead of stranding them.
+> - **Tests:** new "solo-flight graduation (Phase F)" describe in `test-OnboardingDirector.js` (schema, counter satisfy while active, the early-capture guard, the NET_EMPTY_CLICK consolation) + the beat-count assertion 16→18. **666 suites / 2728 tests / 0 fail** (was 665 / 2724).
+>
+> **NOT committed.** Working tree on top of `a4863c4`; `.kilo/` untracked.
+>
+> **Notes:** `DEBRIS_CAPTURED` (ArmUnit) + `NET_EMPTY_CLICK` (ArmUnit) both fire in real gameplay, so `solo_practice` resolves naturally (the 90 s skip is just a safety net). The OnboardingDirector pipeline is otherwise unchanged. **Not browser-playtested** — the beat-lifecycle logic + guards are unit-tested against a mock bus; the in-game comms/hint rendering is not covered by the Node harness.
+>
+> **The arc is complete — no remaining critical-path arc work.** Sensible next moves are **polish/validation**, not new arc phases: (1) a full **browser playtest** of the whole arc (none of the MissionCoach chapters, the two boss systems, the win cinematic, or these graduation beats have been verified in-browser); (2) the deferred **porkchop/Lambert viz** (ROADMAP EN-5/6) to give ch11 its intended tool; (3) the optional explicit ShopScreen **"GEO Anchor Contract — Finalize"** button; (4) §4.5 anchor-mass tie-in polish (the "5 / 10,000 kg" first-commitment readout + the ch1→2 shop briefing line). See [`MISSION_ARC_IMPLEMENTATION.md`](MISSION_ARC_IMPLEMENTATION.md) §8 (all phases ✅).
+
+---
+
+> ## ⏩ PREVIOUS SHIFT — 2026-06-10 (Phase E — elevator win cinematic + endgame codex) — committed `a4863c4`
 >
 > **Phase E of the arc is complete.** Only Phase F (ch1 solo-flight graduation beats) remains to close the 12-chapter arc. Built on top of `95854de`.
 >

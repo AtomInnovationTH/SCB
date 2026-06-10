@@ -238,11 +238,41 @@ export const ONBOARDING_BEATS = [
     autoAdvanceAfter: 6000,
   },
   {
-    id: 'complete',
-    commsSource: 'HOUSTON', commsText: 'You\'re flying solo now, Cowboy. Scan for targets with S, lock on with Tab, autopilot with A, then capture. Clear the field to win. Good luck up there.',
+    // §4.4 solo-flight graduation — split the old single `complete` beat so
+    // ONBOARDING_COMPLETE can't fire before the player has actually captured
+    // something unguided. `captured` (above) is the catch-confirmed recap;
+    // these three are: hand-off → one solo capture → graduation.
+    id: 'solo_intro',
+    commsSource: 'HOUSTON', commsText: 'You\'re solo from here, Cowboy. One more on your own — lasso or daughter, your call.',
     commsAck: null,
     glyph: '★', keys: [], skillId: null,
-    autoAdvanceAfter: 5000,
+    autoAdvanceAfter: 3500,
+  },
+  {
+    id: 'solo_practice',
+    // Counter beat (§4.4): require ONE unguided capture before graduating.
+    // `counterTarget` is satisfied on the Nth DEBRIS_CAPTURED while active; it is
+    // never pre-satisfied/tier-skipped by the earlier guided catch (see the
+    // counterTarget guards in _preSatisfy / _isAlreadyKnown). Optional skipAfter
+    // + NET_EMPTY_CLICK consolation keep a no-nets player from getting stuck.
+    commsSource: 'HOUSTON', commsText: 'Find another contact and bring it in — scan, close, capture. I\'m just watching now.',
+    commsAck: 'That\'s a clean solo capture. You\'ve got this, Cowboy.',
+    text: 'Capture one on your own',
+    glyph: '🎯', keys: [], skillId: null,
+    triggerEvent: 'DEBRIS_CAPTURED',
+    counterTarget: 1,
+    credit: 0,
+    optional: true,
+    skipAfter: 90000,
+    netEmptySkip: true,
+    netEmptyComms: 'Out of nets — graduating you anyway, Cowboy.',
+  },
+  {
+    id: 'final',
+    commsSource: 'HOUSTON', commsText: 'That\'s a real cowboy. Clear the field to win — good luck up there.',
+    commsAck: null,
+    glyph: '★', keys: [], skillId: null,
+    autoAdvanceAfter: 4000,
     onEnter: 'mastered=true',
   },
 ];
@@ -527,6 +557,12 @@ export class OnboardingDirector {
     if (Events.SKILL_REMINDED) {
       on(Events.SKILL_REMINDED, (d) => this._onSkillReminded(d));
     }
+
+    // §4.4 no-net edge case: if the player is out of nets during a beat that
+    // opted into the consolation skip (solo_practice), graduate them anyway.
+    if (Events.NET_EMPTY_CLICK) {
+      on(Events.NET_EMPTY_CLICK, () => this._onConsolationSkip());
+    }
   }
 
   /**
@@ -568,6 +604,49 @@ export class OnboardingDirector {
   }
 
   // ─── INTERNAL — BEAT LIFECYCLE ────────────────────────────────────────
+
+  /**
+   * No-net consolation skip (§4.4): if the active beat opted in via
+   * `netEmptySkip`, graduate the player past it with a consolation comms line
+   * rather than stranding them when they're out of nets.
+   * @private
+   */
+  _onConsolationSkip() {
+    if (!this._active) return;
+    const beat = this._active.beat;
+    if (!beat || !beat.netEmptySkip) return;
+    if (this._completedBeats.has(beat.id) || this._skippedBeats.has(beat.id)) return;
+    this._clearActiveTimers();
+    this._emit(Events.HINT_SATISFIED, { id: beat.id });
+    if (beat.netEmptyComms) {
+      this._emitComms({
+        source: beat.commsSource || 'HOUSTON',
+        channel: 'HOUSTON',
+        text: beat.netEmptyComms,
+        priority: 'info',
+      });
+    }
+    this._skippedBeats.add(beat.id);
+    this._persist();
+    this._active = null;
+    this._advanceToNextBeat();
+  }
+
+  /**
+   * Re-post a multi-target counter beat's hint chip with the running tally.
+   * @param {object} beat @param {number} count @private
+   */
+  _repostCounterHint(beat, count) {
+    this._emit(Events.HINT_POSTED, {
+      id: beat.id,
+      text: `${beat.text || beat.commsText || ''} (${count}/${beat.counterTarget})`,
+      glyph: beat.glyph || '🎯',
+      keys: beat.keys || [],
+      skillId: beat.skillId || undefined,
+      duration: beat.hintDuration || (Constants.ONBOARDING?.DEFAULT_HINT_MS || 12000),
+      priority: 'normal',
+    });
+  }
 
   _advanceToNextBeat() {
     if (this._mastered) return;
@@ -809,6 +888,15 @@ export class OnboardingDirector {
       this._preSatisfy(beat);
       return;
     }
+    // Counter beat (§4.4): require `counterTarget` triggers while active before
+    // satisfying — re-post the chip with a running tally until the target lands.
+    if (Number.isFinite(beat.counterTarget) && beat.counterTarget > 1) {
+      this._active.count = (this._active.count || 0) + 1;
+      if (this._active.count < beat.counterTarget) {
+        this._repostCounterHint(beat, this._active.count);
+        return;
+      }
+    }
     this._satisfy(beat, /* alsoPartner= */ null);
   }
 
@@ -826,6 +914,10 @@ export class OnboardingDirector {
     if (!this._started || this._mastered) return;
     // Only meaningful for interactive beats; narrative beats auto-advance.
     if (!beat.triggerEvent) return;
+    // Counter beats (e.g. solo_practice) are live graduation steps — never
+    // credit them ahead of time from an earlier trigger of the same event
+    // (the guided catch must not satisfy the "do one solo" beat). §4.4.
+    if (beat.counterTarget) return;
     // Already handled?
     if (this._completedBeats.has(beat.id) || this._skippedBeats.has(beat.id)) return;
     // Don't pre-satisfy a beat that is BEFORE the active one (it was presumably
@@ -943,6 +1035,10 @@ export class OnboardingDirector {
 
   _isAlreadyKnown(beat) {
     if (!beat) return false;
+    // Counter beats are graduation steps — never tiered-skip them. A recent
+    // same-event trigger (the guided catch's DEBRIS_CAPTURED) must not satisfy
+    // "do one more solo". §4.4.
+    if (beat.counterTarget) return false;
     // (a) Skill already practiced+
     if (beat.skillId && this._skills && typeof this._skills.getState === 'function') {
       const s = this._skills.getState(beat.skillId);
