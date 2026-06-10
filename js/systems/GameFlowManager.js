@@ -443,7 +443,16 @@ class GameFlowManager {
       // Phase 5: Elevator contract win — trigger after returning to gameplay
       // (SHOP → WIN is not a valid state transition, so we go via ORBITAL_VIEW)
       if (this._elevatorWinTriggered) {
-        eventBus.emit(Events.GAME_WIN, scoringSystem.getStats());
+        // Phase E: tag the win so the GameOverScreen shows the anchor-run
+        // (elevator) variant and the endgame codex unlocks gate correctly.
+        const { shopScreen } = this._refs;
+        const totalMassKg = (shopScreen && typeof shopScreen.getContractMass === 'function')
+          ? shopScreen.getContractMass() : 0;
+        eventBus.emit(Events.GAME_WIN, {
+          ...scoringSystem.getStats(),
+          winType: 'elevator',
+          totalMassKg,
+        });
       }
     });
 

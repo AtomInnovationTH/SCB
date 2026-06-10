@@ -5,6 +5,7 @@
 
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
+import { Constants } from '../core/Constants.js';
 import { GameStates } from '../core/GameState.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import { scoringSystem } from '../systems/ScoringSystem.js';
@@ -35,6 +36,10 @@ export class GameOverScreen {
     this.visible = false;
     this._isWin = false;
     this._shopScreen = null;
+    /** @type {'debris'|'elevator'} which win path triggered (Phase E). */
+    this._winType = 'debris';
+    /** @type {number} kg delivered to the GEO anchor (elevator win). */
+    this._winTotalMassKg = 0;
     this._build();
 
     // Self-manage visibility via EventBus (decoupled from GameFlowManager)
@@ -42,6 +47,13 @@ export class GameOverScreen {
       if (to === GameStates.GAME_OVER) this.showGameOver(payload);
       else if (to === GameStates.WIN) this.showVictory();
       else this.hide();
+    });
+
+    // Phase E: capture the win variant. GAME_WIN is emitted immediately before
+    // the WIN state transition, so this runs before showVictory() reads it.
+    eventBus.on(Events.GAME_WIN, (data) => {
+      this._winType = (data && data.winType) || 'debris';
+      this._winTotalMassKg = (data && typeof data.totalMassKg === 'number') ? data.totalMassKg : 0;
     });
   }
 
@@ -213,7 +225,64 @@ export class GameOverScreen {
    */
   showVictory() {
     this._isWin = true;
+    if (this._winType === 'elevator') {
+      this._showElevatorVictory();
+    } else {
+      this._showDebrisVictory();
+    }
+    // Rename retry button + hide continue (shared across both win variants)
+    const retryBtn = this.element.querySelector('#gameover-retry-btn');
+    if (retryBtn) retryBtn.textContent = 'PLAY AGAIN';
+    const continueBtn = this.element.querySelector('#gameover-continue-btn');
+    if (continueBtn) continueBtn.style.display = 'none';
+    audioSystem.playVictory();
+    this.show();
+  }
 
+  /**
+   * @private Phase E — the anchor-run / elevator win cinematic. Headline is the
+   * tonnage delivered to the GEO anchor; closes on the JWST narration.
+   */
+  _showElevatorVictory() {
+    const titleEl = this.element.querySelector('#gameover-title');
+    const reasonEl = this.element.querySelector('#gameover-reason');
+    const statsEl = this.element.querySelector('#gameover-stats');
+    const factEl = this.element.querySelector('#gameover-fact');
+
+    titleEl.textContent = 'ANCHOR SET';
+    titleEl.style.color = '#00ff88';
+    titleEl.style.textShadow = '0 0 30px rgba(0,255,136,0.6), 0 0 60px rgba(0,255,136,0.3)';
+
+    reasonEl.style.color = '#00ff88';
+    reasonEl.textContent = 'The GEO anchor contract is complete. The space elevator has its counterweight — built from the sky you cleared.';
+
+    const stats = scoringSystem.getStats();
+    const target = (Constants.ELEVATOR_CONTRACT && Constants.ELEVATOR_CONTRACT.TARGET_MASS_KG) || 10000;
+    const massKg = Math.round(this._winTotalMassKg || target);
+    statsEl.innerHTML = `
+      <div style="color:#00ff88;font-size:1rem;margin-bottom:8px;">★ GEO Anchor Contract — Delivered ★</div>
+      <div style="text-align:center;margin:10px 0;">
+        <div style="font-size:2.2rem;color:#ffaa00;font-weight:bold;text-shadow:0 0 20px rgba(255,170,0,0.4);">${massKg.toLocaleString()} kg</div>
+        <div style="font-size:0.8rem;opacity:0.75;">delivered to the GEO anchor</div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;">
+        <div>Final Score: <b style="color:#ffaa00;">${stats.totalScore.toLocaleString()}</b></div>
+        <div>Credits: <b style="color:#f0c040;">${stats.credits.toLocaleString()} cr</b></div>
+        <div>Debris Cleared: <b style="color:#00ff88;">${stats.debrisCleared}</b></div>
+        <div>Time: <b>${stats.timePlayed}</b></div>
+      </div>
+      <div style="margin-top:10px;padding-top:8px;border-top:1px solid rgba(0,255,136,0.15);font-size:0.85rem;color:#00ff88;">
+        A million miles out at L2, JWST watches a sky you helped clear. That's the job, Cowboy. ★
+      </div>
+    `;
+
+    factEl.textContent = '🌍 ' + ADR_FACTS[Math.floor(Math.random() * ADR_FACTS.length)];
+  }
+
+  /**
+   * @private The standard (50-debris) stabilization victory.
+   */
+  _showDebrisVictory() {
     const titleEl = this.element.querySelector('#gameover-title');
     const reasonEl = this.element.querySelector('#gameover-reason');
     const statsEl = this.element.querySelector('#gameover-stats');
@@ -254,18 +323,6 @@ export class GameOverScreen {
     `;
 
     factEl.textContent = '🌍 ' + ADR_FACTS[Math.floor(Math.random() * ADR_FACTS.length)];
-
-    // Rename retry button
-    const retryBtn = this.element.querySelector('#gameover-retry-btn');
-    retryBtn.textContent = 'PLAY AGAIN';
-
-    // Hide continue button on victory (not needed — player won)
-    const continueBtn = this.element.querySelector('#gameover-continue-btn');
-    if (continueBtn) continueBtn.style.display = 'none';
-
-    audioSystem.playVictory();
-
-    this.show();
   }
 
   /** @private Get total upgrade count from shop screen */

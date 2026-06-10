@@ -1633,6 +1633,44 @@ function buildEntries() {
       seen: false,
       icon: '🛰️',
     },
+
+    // === CH12 ENDGAME — unlocked together on the elevator (anchor-run) win ===
+    {
+      id: 'space_elevator',
+      title: 'The Space Elevator',
+      category: CodexCategory.HERITAGE,
+      shortText: 'A tether from a GEO anchor to the ground — debris is the cheapest counterweight mass on orbit.',
+      fullText: 'Konstantin Tsiolkovsky imagined it in 1895; a space elevator is a tether running from a ground station past geostationary altitude to a counterweight, letting payloads climb to orbit electrically instead of riding rockets. The hardest part is the counterweight and the climber mass — and the cheapest mass available is already up here, as debris. Every kilogram you delivered to the GEO anchor is a kilogram that didn\'t have to be launched.',
+      triggerEvent: Events.GAME_WIN,
+      triggerCondition: (p) => p && p.winType === 'elevator',
+      unlocked: false,
+      seen: false,
+      icon: '🪝',
+    },
+    {
+      id: 'what_10000kg_buys',
+      title: 'What 10,000 kg Buys',
+      category: CodexCategory.HERITAGE,
+      shortText: 'Ten tonnes of salvaged orbital mass is a real anchor — and a cleared sky.',
+      fullText: 'Ten thousand kilograms is roughly the dry mass of a Hubble-class observatory, or a third of the ISS\'s Zarya module. Assembled at the GEO anchor it is enough structural counterweight to tension a first-generation tether — but the deeper value is subtractive: every tonne you removed is debris that will never again fragment, never force a station to dodge, never end another satellite\'s life. You didn\'t just build something. You cleaned up.',
+      triggerEvent: Events.GAME_WIN,
+      triggerCondition: (p) => p && p.winType === 'elevator',
+      unlocked: false,
+      seen: false,
+      icon: '⚖️',
+    },
+    {
+      id: 'jwst_horizon',
+      title: 'JWST — The Next Horizon',
+      category: CodexCategory.HERITAGE,
+      shortText: 'A million miles out at L2, the James Webb telescope watches a sky you helped clear.',
+      fullText: 'The James Webb Space Telescope orbits the Sun-Earth L2 point, 1.5 million km away — far beyond the debris fields, beyond reach, beyond salvage. It is the work that becomes possible when low orbit is kept clear: the deep-sky science that needs a clean launch corridor and a stable platform. You will never tow JWST. But the sky it looks out from is a little safer because of the field you swept. That\'s the job, Cowboy.',
+      triggerEvent: Events.GAME_WIN,
+      triggerCondition: (p) => p && p.winType === 'elevator',
+      unlocked: false,
+      seen: false,
+      icon: '🔭',
+    },
   ];
 }
 
@@ -1792,6 +1830,9 @@ const TRL_ANNOTATIONS = {
   starlink_contained: { trl: 9, trlRationale: 'ADR rationale; fragmentation-cloud risk is well-characterised' },
   starlink_cascade:   { trl: 9, trlRationale: 'Kessler syndrome (1978) — established, observed (2009 Iridium-Cosmos)' },
   thaicom_graveyard:  { trl: 9, trlRationale: 'GEO graveyard disposal is IADC-standard practice' },
+  space_elevator:     { trl: 2, trlRationale: 'Tsiolkovsky (1895); no material yet meets the tether strength requirement' },
+  what_10000kg_buys:  { trl: 9, trlRationale: 'Mass comparisons to flown hardware (HST, ISS Zarya)' },
+  jwst_horizon:       { trl: 9, trlRationale: 'JWST operational at Sun-Earth L2 since 2022' },
 };
 
 /**
@@ -1913,13 +1954,20 @@ export class CodexSystem {
    * @param {object} payload - Event payload
    */
   _checkUnlocks(eventName, payload) {
+    // Terminal events (the game-win screen) are not gameplay states, so
+    // CodexSystem.update() — which drains the staggered unlock queue — stops
+    // running. Unlock matching entries immediately so a batch of simultaneous
+    // endgame unlocks (the 3 elevator codex) all land on the win screen rather
+    // than only the first. update()'s drain guards `!unlocked`, so this is safe.
+    const immediate = (eventName === Events.GAME_WIN);
     for (const entry of this.entries) {
       if (entry.unlocked) continue;
       if (entry.triggerEvent !== eventName) continue;
 
       try {
         if (entry.triggerCondition(payload || {})) {
-          this._queueUnlock(entry);
+          if (immediate) this._performUnlock(entry);
+          else this._queueUnlock(entry);
         }
       } catch (e) {
         // Condition function threw — ignore silently

@@ -104,6 +104,7 @@ import './test-MissionCoach.js';    // CP-4 — per-chapter coaching engine
 import './test-bossLifecycle.js';   // CP-4 — shared boss primitives
 import './test-IssConjunctionBoss.js'; // CH5 — ISS conjunction boss
 import './test-StarlinkCascadeBoss.js'; // CH9 — Starlink cascade boss
+import './test-CodexEndgame.js';    // Phase C/D/E — outcome-gated codex
 
 // ST-6.7: EnvironmentSystem — AO, MMOD, Safe-Mode, Radiation Belt, Battery DOD
 import './test-EnvironmentSystem.js';

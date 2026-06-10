@@ -114,7 +114,7 @@ class GameState {
           this.currentState !== GameStates.WIN &&
           this.currentState !== GameStates.GAME_OVER) {
         this._winEmitted = true;
-        eventBus.emit(Events.GAME_WIN, { debrisCleared: this.debrisCleared });
+        eventBus.emit(Events.GAME_WIN, { winType: 'debris', debrisCleared: this.debrisCleared });
       }
     }
   }

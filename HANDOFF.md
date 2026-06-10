@@ -1,10 +1,28 @@
 # Space Cowboy — Next-Shift Handoff Brief
 
-*Updated: 2026-06-10 · Phase D complete — chapters 8/10/11 beat tables + ch9 Starlink cascade boss + 3 skills (`confirm_before_fire`/`radial_menu`/`orbital_hohmann`), shared boss primitives in `_bossLifecycle.js`. Prior: 2026-06-09 ch5 ISS conjunction boss (Phase C complete, committed `4322960`); Phase C data chapters 3/4/6/7 + `strategic_map` (`69735e4`); CP-3 + CP-4 spine (`56a98f5`). Earlier: 2026-06-07 CP build shift; 2026-06-06 daughter capture-lifecycle polish (`b7d5fae`), archived context at [`archive/HANDOFF_2026-05-30_four-fix.md`](archive/HANDOFF_2026-05-30_four-fix.md), [`archive/HANDOFF_2026-05-29_post-cinch-qa.md`](archive/HANDOFF_2026-05-29_post-cinch-qa.md), [`archive/SK_M1_POLISH_HANDOFF.md`](archive/SK_M1_POLISH_HANDOFF.md), [`archive/CEREMONY_REDESIGN.md`](archive/CEREMONY_REDESIGN.md).*
+*Updated: 2026-06-10 · Phase E complete — elevator-win cinematic (GameOverScreen variant) + `GAME_WIN{winType,totalMassKg}` + 3 endgame codex. Prior same-day: Phase D (chapters 8/9/10/11 + Starlink cascade boss, committed `95854de`); ch5 ISS boss (`4322960`); Phase C data chapters (`69735e4`); CP-3 + CP-4 spine (`56a98f5`). Earlier: 2026-06-07 CP build shift; 2026-06-06 daughter capture-lifecycle polish (`b7d5fae`), archived context at [`archive/HANDOFF_2026-05-30_four-fix.md`](archive/HANDOFF_2026-05-30_four-fix.md), [`archive/HANDOFF_2026-05-29_post-cinch-qa.md`](archive/HANDOFF_2026-05-29_post-cinch-qa.md), [`archive/SK_M1_POLISH_HANDOFF.md`](archive/SK_M1_POLISH_HANDOFF.md), [`archive/CEREMONY_REDESIGN.md`](archive/CEREMONY_REDESIGN.md).*
 
 ---
 
-> ## ⏩ LATEST SHIFT — 2026-06-10 (Phase D — chapters 8/9/10/11 + Starlink boss) — read this first
+> ## ⏩ LATEST SHIFT — 2026-06-10 (Phase E — elevator win cinematic + endgame codex) — read this first
+>
+> **Phase E of the arc is complete.** Only Phase F (ch1 solo-flight graduation beats) remains to close the 12-chapter arc. Built on top of `95854de`.
+>
+> **What landed (uncommitted):**
+> - **`GAME_WIN` payload enrichment** — the elevator win (`GameFlowManager` line ~446, fired on `CONTRACT_COMPLETE` → next `SHOP_DEPLOY`) now carries `winType:'elevator'` + `totalMassKg` (`shopScreen.getContractMass()`); the 50-debris win (`GameState`) carries `winType:'debris'`.
+> - **GameOverScreen elevator-win variant** — `showVictory()` now branches on the captured `winType` into `_showElevatorVictory()` ("ANCHOR SET" headline, **kg delivered to GEO** as the hero stat, JWST closing line) vs the existing `_showDebrisVictory()`. A `GAME_WIN` listener stashes `winType`/`totalMassKg` (fires before the WIN state transition). Added the `Constants` import.
+> - **3 endgame codex** (`space_elevator` TRL2, `what_10000kg_buys`, `jwst_horizon`) in `CodexSystem` — auto-unlock off `GAME_WIN{winType:'elevator'}` (the debris win does not trip them). TRL annotations added.
+> - **Tests:** **NEW** `test-CodexEndgame.js` (Node-safe `new CodexSystem()` — verifies the ISS/Starlink/endgame outcome-gated entries' `triggerEvent` + `triggerCondition`). **665 suites / 2722 tests / 0 fail** (was 662 / 2717).
+>
+> **NOT committed.** Working tree on top of `95854de`; `.kilo/` untracked.
+>
+> **Deferred / notes:** the explicit ShopScreen **"GEO Anchor Contract — Finalize" button** and a literal **ch12 free-roam mission** were deferred — the contract **already auto-deposits + wins** when a shop metal contribution crosses `TARGET_MASS_KG` (`ShopScreen._contributeToElevator` → `CONTRACT_COMPLETE`), so the elevator win is fully reachable without new shop UI. The `GameOverScreen` variant is DOM and **not browser-playtested** (the win plumbing + codex unlocks ARE unit-tested). No ch12 MissionCoach beats (spec §7 — TeachingSystem only).
+>
+> **Next on the critical path → Phase F (the last phase):** the **ch1 solo-flight graduation beats** (`complete_recap → solo_intro → solo_practice → final`) with a `counterTarget:1` counter-beat + the `NET_EMPTY_CLICK` consolation skip, so `ONBOARDING_COMPLETE` can't fire before the player has actually captured something. This lives in `OnboardingDirector` (chapter 1), NOT MissionCoach — see [`MISSION_ARC_IMPLEMENTATION.md`](MISSION_ARC_IMPLEMENTATION.md) §3 + MISSION_GUIDANCE_DESIGN §4.4. That closes the 12-chapter arc end-to-end.
+
+---
+
+> ## ⏩ PREVIOUS SHIFT — 2026-06-10 (Phase D — chapters 8/9/10/11 + Starlink boss) — committed `95854de`
 >
 > **Phase D of the arc is complete.** Chapters 8/10/11 ship as MissionCoach data; ch9 is the second boss system. Built on top of `4322960`.
 >
