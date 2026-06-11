@@ -195,11 +195,12 @@ All in [`InputManager.js`](js/systems/InputManager.js) `_handleKeyDown` + held-k
 | **L** | Codex viewer | same |
 | **J** | Skills/Journal pane *(owned by SkillsPane's own listener)* | same |
 | **B** | Shop (ORBITAL_VIEW only) | — |
-| **` (backtick)** | toggle DebrisMap; Shift+` = TOOL_CYCLE | same |
+| **` (backtick)** | toggle DebrisMap (cycles tool while piloting in SK); Shift+` = TOOL_CYCLE | cycle tool in SK |
 | **, / .** | stow / deploy all struts | same |
 | **+ / −** | throttle ±10% (in SK: orbit radius ∓) | SK: approach/retreat |
 | **[ / ]** | power bus ∓10%; Shift+1/2/3 select bus | same |
-| **1–6 / 7** | deploy/select/pilot arm; 7 = return to mother | switch piloted arm |
+| **U** | hold → mother de-spin laser (LASER_DESPIN; needs a target) | — |
+| **1–4 / 7** | deploy/select/pilot arm (Y0 = 4 ring arms); 7 = return to mother (global) | switch piloted arm |
 | **F2 / F4 / F5** | F2 (ARM_PILOT: cycle FEEP metal); F4 Forge; F5 fuel cycle | F2 metal cycle |
 | **O / Shift+O** | deploy-all-to-target / recall-all (blocked in ARM_PILOT) | — |
 | **Shift+G** | Trawl start | — |
@@ -249,7 +250,7 @@ All in [`InputManager.js`](js/systems/InputManager.js) `_handleKeyDown` + held-k
 | **Trawl** (Shift+G) | ✅ | TrawlManager auto-picks `clusters[0]` |
 | **Deorbit sacrifice** (Ctrl+Shift+D) | ✅ | |
 | **Reeling / Returning** (R/H, post-capture) | ✅ (indirect) | REELING = zero-fuel strut motor; RETURNING = FEEP |
-| **HOLDING_CATCH** (park the catch) | ✅ (auto) | Daughter parks catch at strut; after a `FURNACE_TRANSFER` window it hands the catch off (`CATCH_PROCESSED`) and reloads (§ HANDOFF 1.9) |
+| **HOLDING_CATCH** (park the catch) | ✅ (auto) | Daughter parks catch at strut; a staged `FURNACE_TRANSFER` timeline (hold→chop→feed) chops it into `CHUNK_COUNT` pieces, streams them to the furnace, then hands off (`CATCH_PROCESSED`) and reloads (§ HANDOFF 1.9 + Item 1) |
 | **Fishing** | ⚠️ orphaned from keys | `deployFishing()` exists; only via ArmManager autopilot path / comms — no direct key |
 | **Web Shot** | ⚠️ orphaned | `fireWebShot()` exists, **no keybinding** |
 | **Ablation** | ⚠️ orphaned | flag off + no keybinding |
@@ -259,7 +260,11 @@ All in [`InputManager.js`](js/systems/InputManager.js) `_handleKeyDown` + held-k
 
 **Weaver vs Spinner ARE differentiated** under `CAPTURE_NET=true`: Weaver fires a MEDIUM net, Spinner a SMALL net (different diameter/mass/launch-speed/spin/tether), and catch success is resolved by `computeClingProbability()` (velocity·contact·roughness·spin·tension·distance × pBase) — **not** the legacy flat 85% (now dead code). The *multi-tool* decision (magnet/gripper/pad) is what's missing, not net differentiation.
 
-**Captured-debris lifecycle:** authoritative `DebrisField.pinCapturedDebris()` welds the catch to the hauling arm (called post-arm-update). Catch is parked full-size in `HOLDING_CATCH` at the strut tip. After the `FURNACE_TRANSFER.DURATION_S` window, `ArmUnit._updateHoldingCatch` emits **`CATCH_PROCESSED`** and clears the catch (→ RELOADING). `GameFlowManager`'s `CATCH_PROCESSED` handler owns **salvage extraction + scoring + field removal** — moved off `ARM_RETURNED` (dock arrival) so the reward fires at processing, and the parked catch always clears (no more 4-catch capture stall). The earlier premature-scoring + indefinite-park debt is resolved.
+**Captured-debris lifecycle:** authoritative `DebrisField.pinCapturedDebris()` welds the catch to the hauling arm (called post-arm-update). Catch is parked full-size in `HOLDING_CATCH` at the strut tip. The `FURNACE_TRANSFER` window is now a **staged breakdown** (Item 1, 2026-06-11): `hold` (`HOLD_S`, catch cinched) → `chop` (`CHOP_S`, emits `CATCH_BREAKDOWN_START`, releases the net cinch, shrinks the original instanced catch out of view) → `feed` (`FEED_S`, emits `CHUNK_COUNT`× `CATCH_BREAKDOWN_CHUNK` as chunks stream to the furnace). At feed-end `ArmUnit._updateHoldingCatch` emits **`NET_CONSUMED`** + the single **`CATCH_PROCESSED`** (unchanged `{ armId, debrisId, type }` payload — bosses/persistence contract intact) and clears the catch (→ RELOADING). The THREE-side choreography lives in `FurnaceBreakdownVisual` (chunks + ghost-bag draw-in); the FSM timing is Node-tested. `GameFlowManager`'s `CATCH_PROCESSED` handler still owns **salvage extraction + scoring + field removal** (and a `CATCH_BREAKDOWN_START` comms line). `DURATION_S` is a derived getter (= `FEED_S`) for back-compat. The earlier premature-scoring + indefinite-park debt is resolved.
+
+**Daughter orientation at the strut (Item 4):** `PlayerSatellite.postArmUpdate` is the single owner of strut-basis orientation for `DOCKED` (snap), `DOCKING` (slerp onto the strut — no pop at `RELOADING→DOCKED`), and `HOLDING_CATCH` (snap — no drift toward the raw mother-bus quat). The deterministic basis lives in the shared `ArmDockBasis.composeDockedArmQuat` (SSOT, used by both PlayerSatellite and previously-duplicated code). `HOLDING_CATCH` is in ArmUnit's `skipAttitude` set so the generic attitude branch never fights postArmUpdate (HANDOFF §10 Rule B). `_updateTether` hides the tether in `HOLDING_CATCH` (Item 5) so no stray wrong-direction line renders during the park.
+
+**Net launch + spin (Item 2):** the net now models real yo-yo despin — `_updateSpinningUp` starts at `SPIN_HZ × SPIN_FOLDED_MULT` and decays to `SPIN_HZ` as the mouth blossoms; `_updateFlight` bleeds spin at `SPIN_DECAY_PER_S`, making `f_spin` a live cling factor (fire in-envelope or the wrap is weak). `ArmUnit._updateNettingFSM` leads the aim (`targetPos + relVel × dist/LAUNCH_SPEED`, relVel estimated from the target's per-frame scene delta). The SK tool HUD shows a live `P_cling` pre-fire readout + a de-spin/close-in advisory.
 
 ---
 

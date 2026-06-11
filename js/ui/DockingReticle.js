@@ -12,6 +12,9 @@ import { Events } from '../core/Events.js';
 import { GameStates } from '../core/GameState.js';
 import { Constants } from '../core/Constants.js';
 import { audioSystem } from '../systems/AudioSystem.js';
+import {
+  computeClingProbability, getNetClassForType,
+} from '../entities/CaptureNet.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -791,7 +794,9 @@ export class DockingReticle {
     const boxY = cy + 142;
     const headerH = 16;
     const footerH = 14;
-    const boxH = headerH + toolset.length * rowH + footerH + 8;
+    // Item 2: reserve an extra row for the NET pre-fire P-cling readout.
+    const preFireH = (selected === 'NET' && netCount > 0) ? 16 : 0;
+    const boxH = headerH + toolset.length * rowH + footerH + preFireH + 8;
     const left = boxX - boxW / 2;
 
     // Background + border
@@ -859,6 +864,73 @@ export class DockingReticle {
       ctx.textAlign = 'right';
       ctx.fillStyle = 'rgba(0, 255, 170, 0.45)';
       ctx.fillText(hint, left + boxW - 8, y + 2);
+    }
+    ctx.textAlign = 'left';
+
+    // Item 2: pre-fire capture readout for NET — live P_cling estimate + the
+    // spin/tumble/distance advisories so the player understands WHY to de-spin
+    // (U) or close the distance before firing.
+    if (selected === 'NET' && netCount > 0) {
+      this._drawNetPreFireReadout(ctx, left, y + 16, boxW);
+    }
+  }
+
+  /**
+   * @private Item 2 — NET pre-fire capture readout (P_cling estimate + advisories).
+   * Reuses the authoritative computeClingProbability so the displayed odds match
+   * the resolve roll. Distance / tumble drive the actionable advisory line.
+   */
+  _drawNetPreFireReadout(ctx, left, y, boxW) {
+    const arm = this._arm;
+    const target = arm && (arm._stationKeepTarget || arm.target);
+    if (!target) return;
+
+    // Range: prefer the live standoff (metres); fall back to scene-distance.
+    let range = (typeof arm._standoffR === 'number' && arm._standoffR > 0)
+      ? arm._standoffR
+      : 50;
+
+    const netClass = getNetClassForType(arm.type);
+    const CN = Constants.CAPTURE_NET;
+    const tumbleOn = Constants.isFeatureEnabled && Constants.isFeatureEnabled('LASER_DESPIN');
+    const tumbleRate = tumbleOn ? (target.tumbleRate ?? null) : null;
+    const roughness = target.surfaceRoughness ?? 1.0;
+
+    const pBase = (CN.SLAM_P_BASE && CN.SLAM_P_BASE.RIGHT_HARDER) || 0.8;
+    const pCling = computeClingProbability({
+      pBase,
+      vRel: netClass.LAUNCH_SPEED,
+      vOptimal: netClass.LAUNCH_SPEED,
+      range,
+      roughness,
+      spinFraction: 1.0,            // pre-fire: assume nominal; flight decay applies after launch
+      targetTumbleRate: tumbleRate,
+    });
+
+    const pct = Math.round(pCling * 100);
+    // Colour by odds: green (good) → amber → red.
+    const col = pct >= 80 ? '#00ffaa' : pct >= 60 ? '#ffd166' : '#ff7755';
+
+    ctx.font = `bold 10px ${FONT}`;
+    ctx.textAlign = 'left';
+    ctx.fillStyle = col;
+    ctx.fillText(`P-CLING ~${pct}%`, left + 8, y);
+
+    // Advisory: the single biggest lever the player can pull right now.
+    let advisory = '';
+    if (range > (CN.ENVELOPE_RANGE || 100)) advisory = 'too far — close in';
+    else if (range > (CN.BASELINE_RANGE_MAX || 75)) advisory = 'edge of envelope';
+    else if (tumbleRate != null) {
+      const deg = Math.abs(tumbleRate) * (180 / Math.PI);
+      const inSpec = (Constants.NET_TUMBLE_PENALTY?.IN_SPEC_DEG) || 10;
+      if (deg > inSpec) advisory = 'tumbling — de-spin [U]';
+    }
+    if (!advisory && pct >= 80) advisory = 'good shot';
+    if (advisory) {
+      ctx.font = `9px ${FONT}`;
+      ctx.textAlign = 'right';
+      ctx.fillStyle = 'rgba(0, 255, 170, 0.6)';
+      ctx.fillText(advisory, left + boxW - 8, y);
     }
     ctx.textAlign = 'left';
   }

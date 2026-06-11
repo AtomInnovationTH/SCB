@@ -160,6 +160,198 @@ describe('ArmUnit park-the-catch — furnace transfer (CATCH_PROCESSED)', () => 
   });
 });
 
+describe('ArmUnit park-the-catch — staged furnace breakdown (Item 1)', () => {
+  const FT = Constants.FURNACE_TRANSFER;
+
+  // Capture several event types across a manual HOLDING_CATCH timeline. We drive
+  // stateTimer by hand (update() owns the increment in the live loop) and step in
+  // small slices so the chunk-spacing logic is exercised like the real cadence.
+  function runBreakdown(arm, debris, { dt = 0.25, until = FT.FEED_S + 0.3 } = {}) {
+    const log = [];
+    const types = [
+      Events.CATCH_BREAKDOWN_START,
+      Events.CATCH_BREAKDOWN_CHUNK,
+      Events.NET_CONSUMED,
+      Events.CATCH_PROCESSED,
+    ];
+    const handlers = types.map((evt) => {
+      const h = (d) => log.push({ evt, d });
+      eventBus.on(evt, h);
+      return [evt, h];
+    });
+    try {
+      arm.state = S.HOLDING_CATCH;
+      arm.stateTimer = 0;
+      arm._breakdownStarted = false;
+      arm._breakdownChunksFired = 0;
+      for (let t = 0; t <= until && arm.state === S.HOLDING_CATCH; t += dt) {
+        arm.stateTimer = t;
+        arm._updateHoldingCatch(dt, new THREE.Vector3(0, 0, 0), null);
+      }
+    } finally {
+      handlers.forEach(([evt, h]) => eventBus.off(evt, h));
+    }
+    return log;
+  }
+
+  it('keeps the catch cinched (pinned + _capturedByArm) through the hold phase', () => {
+    eventBus.clear();
+    const arm = makeArm('weaver');
+    const debris = makeDebris(100);
+    attachCatch(arm, debris);
+    arm.state = S.HOLDING_CATCH;
+    arm.stateTimer = FT.HOLD_S - 0.1;   // still holding
+
+    arm._updateHoldingCatch(0.016, new THREE.Vector3(0, 0, 0), null);
+    assert.equal(arm.state, S.HOLDING_CATCH, 'still parked during hold');
+    assert.equal(debris._armPinned, true, 'catch pinned full-size during hold');
+    assert.equal(debris._capturedByArm, arm, 'net stays cinched during hold');
+    assert.ok(!debris._breakdownActive, 'breakdown not yet active during hold');
+  });
+
+  it('fires BREAKDOWN_START once at chop and releases the net cinch', () => {
+    eventBus.clear();
+    const arm = makeArm('weaver');
+    const debris = makeDebris(100);
+    attachCatch(arm, debris);
+    const log = runBreakdown(arm, debris);
+
+    const starts = log.filter((e) => e.evt === Events.CATCH_BREAKDOWN_START);
+    assert.equal(starts.length, 1, 'CATCH_BREAKDOWN_START fires exactly once');
+    assert.equal(starts[0].d.chunkCount, FT.CHUNK_COUNT, 'announces the chunk count');
+    assert.equal(starts[0].d.debrisId, debris.id, 'names the catch');
+  });
+
+  it('emits CHUNK_COUNT chunk events, then exactly one CATCH_PROCESSED, in order', () => {
+    eventBus.clear();
+    const arm = makeArm('weaver');
+    const debris = makeDebris(100);
+    attachCatch(arm, debris);
+    const log = runBreakdown(arm, debris);
+
+    const chunks = log.filter((e) => e.evt === Events.CATCH_BREAKDOWN_CHUNK);
+    const processed = log.filter((e) => e.evt === Events.CATCH_PROCESSED);
+    const consumed = log.filter((e) => e.evt === Events.NET_CONSUMED);
+
+    assert.equal(chunks.length, FT.CHUNK_COUNT, 'one event per chunk');
+    chunks.forEach((c, i) => {
+      assert.equal(c.d.index, i, `chunk ${i} indexed in order`);
+      assert.equal(c.d.total, FT.CHUNK_COUNT, 'chunk carries the total');
+    });
+    assert.equal(processed.length, 1, 'CATCH_PROCESSED fires exactly once (single-fire contract)');
+    assert.equal(consumed.length, 1, 'NET_CONSUMED fires once (net fed in with the catch)');
+
+    // Ordering: START → all CHUNKs → PROCESSED (last).
+    const order = log.map((e) => e.evt);
+    assert.equal(order[0], Events.CATCH_BREAKDOWN_START, 'START is first');
+    assert.equal(order[order.length - 1], Events.CATCH_PROCESSED, 'PROCESSED is last');
+    const lastChunkIdx = order.lastIndexOf(Events.CATCH_BREAKDOWN_CHUNK);
+    const processedIdx = order.indexOf(Events.CATCH_PROCESSED);
+    assert.ok(lastChunkIdx < processedIdx, 'all chunks precede CATCH_PROCESSED');
+  });
+
+  it('CATCH_PROCESSED payload is unchanged (armId, debrisId, type) and single-fire', () => {
+    eventBus.clear();
+    const arm = makeArm('weaver');
+    const debris = makeDebris(100);
+    attachCatch(arm, debris);
+    const log = runBreakdown(arm, debris);
+
+    const processed = log.filter((e) => e.evt === Events.CATCH_PROCESSED);
+    assert.equal(processed.length, 1, 'exactly one CATCH_PROCESSED');
+    assert.deepEqual(
+      Object.keys(processed[0].d).sort(),
+      ['armId', 'debrisId', 'type'].sort(),
+      'payload keys unchanged (bosses/persistence contract)',
+    );
+    assert.equal(processed[0].d.armId, arm.id);
+    assert.equal(processed[0].d.debrisId, debris.id);
+    assert.equal(processed[0].d.type, arm.type);
+    assert.equal(arm.state, S.RELOADING, 'daughter reloads at feed end');
+    assert.equal(arm.capturedDebris, null, 'catch cleared');
+    assert.equal(debris._armPinned, false, 'pin released to the furnace');
+    assert.equal(debris._breakdownActive, false, 'breakdown flag cleared on completion');
+  });
+
+  it('flushes all chunks even if the timer jumps straight past the feed window', () => {
+    eventBus.clear();
+    const arm = makeArm('weaver');
+    const debris = makeDebris(100);
+    attachCatch(arm, debris);
+    arm.state = S.HOLDING_CATCH;
+    arm._breakdownStarted = false;
+    arm._breakdownChunksFired = 0;
+
+    // One big frame: hold→chop is skipped (no START), jump straight to feed-end.
+    // _updateHoldingCatch fires START lazily then flushes all chunks before PROCESSED.
+    const log = [];
+    const types = [Events.CATCH_BREAKDOWN_START, Events.CATCH_BREAKDOWN_CHUNK, Events.CATCH_PROCESSED];
+    const hs = types.map((evt) => { const h = (d) => log.push({ evt, d }); eventBus.on(evt, h); return [evt, h]; });
+    try {
+      arm.stateTimer = FT.FEED_S + 0.5;
+      arm._updateHoldingCatch(0.016, new THREE.Vector3(0, 0, 0), null);
+    } finally { hs.forEach(([evt, h]) => eventBus.off(evt, h)); }
+
+    const chunks = log.filter((e) => e.evt === Events.CATCH_BREAKDOWN_CHUNK);
+    assert.equal(log.filter((e) => e.evt === Events.CATCH_BREAKDOWN_START).length, 1, 'START still fires');
+    assert.equal(chunks.length, FT.CHUNK_COUNT, 'all chunks flushed before completion');
+    assert.equal(log.filter((e) => e.evt === Events.CATCH_PROCESSED).length, 1, 'one CATCH_PROCESSED');
+  });
+
+  it('DURATION_S getter mirrors the feed-window end (back-compat)', () => {
+    assert.equal(FT.DURATION_S, FT.FEED_S, 'DURATION_S derives from FEED_S');
+  });
+});
+
+describe('ArmUnit park-the-catch — tether hidden while parked (Item 5)', () => {
+  it('hides the tether in HOLDING_CATCH (no stray wrong-direction line)', () => {
+    eventBus.clear();
+    const arm = makeArm('weaver');
+    const debris = makeDebris(100);
+    attachCatch(arm, debris);
+    arm.state = S.HOLDING_CATCH;
+    arm.tetherLine.visible = true;   // force-on; _updateTether must hide it
+    const parentPos = new THREE.Vector3(0, 0, 0);
+    arm._updateTether(parentPos, null, 0.016);
+    assert.equal(arm.tetherLine.visible, false,
+      'parked daughter shows no tether (matches DOCKED/RELOADING)');
+  });
+
+  it('still renders the tether in a genuinely deployed state (contrast)', () => {
+    eventBus.clear();
+    const arm = makeArm('weaver');
+    arm.state = S.TRANSIT;
+    arm.position.set(50 * M, 0, 0);
+    arm._updateTether(new THREE.Vector3(0, 0, 0), null, 0.016);
+    assert.equal(arm.tetherLine.visible, true, 'a deployed daughter keeps her tether');
+  });
+});
+
+describe('ArmUnit park-the-catch — attitude deferred to postArmUpdate (Item 4)', () => {
+  it('does NOT slew the daughter toward the raw mother quat in HOLDING_CATCH', () => {
+    eventBus.clear();
+    const arm = makeArm('weaver');
+    const debris = makeDebris(100);
+    attachCatch(arm, debris);
+    arm.state = S.HOLDING_CATCH;
+    arm.stateTimer = 0;
+
+    // A distinct starting orientation; a mother quat far from it.
+    const start = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), 1.0);
+    arm.group.quaternion.copy(start);
+    const parentQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2);
+    const parentPos = new THREE.Vector3(0, 0, 0);
+
+    arm.update(0.016, parentPos, parentQuat);
+
+    // The generic attitude branch must be SKIPPED for HOLDING_CATCH — otherwise it
+    // would slerp group.quaternion toward parentQuat (the wrong-basis defect).
+    // PlayerSatellite.postArmUpdate owns the strut-basis orientation instead.
+    assert.ok(arm.group.quaternion.angleTo(start) < 1e-9,
+      'HOLDING_CATCH leaves orientation for postArmUpdate (no parentQuat slew)');
+  });
+});
+
 describe('ArmManager — a holding daughter is occupied, others stay free', () => {
   function mgrWith(arms) {
     const mgr = Object.create(ArmManager.prototype);

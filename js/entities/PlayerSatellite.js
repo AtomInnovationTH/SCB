@@ -17,6 +17,7 @@ import {
   computeCoM, computeCoMDrift, computeCoMDriftVector,
   getActiveBlocks,
 } from '../systems/CoMCalculator.js';
+import { composeDockedArmQuat } from './ArmDockBasis.js';
 import {
   propagateOrbit,
   orbitToSceneCartesian,
@@ -38,58 +39,13 @@ const _strutTo   = new THREE.Vector3();
 const _strutQuat = new THREE.Quaternion();
 /* ── V-4: Preallocated temps for strut-tip dock offset + arm orientation ── */
 const _tipLocal    = new THREE.Vector3();
-const _armDir      = new THREE.Vector3();
 const _armQuat     = new THREE.Quaternion();
-/* Deterministic docked-arm roll: build an explicit basis (forward + radial up)
- * so every daughter shares one roll convention around the ring instead of the
- * arbitrary roll produced by setFromUnitVectors(). Keeps body-conformal solar
- * cells and panel lines symmetric across all azimuths. */
-const _armUp       = new THREE.Vector3();
-const _armRight    = new THREE.Vector3();
-const _armBasis    = new THREE.Matrix4();
-
-/**
- * Write a deterministic docked-arm LOCAL quaternion into `outQuat`.
- *
- * Builds an explicit orthonormal basis where the daughter's forward (+Z) is the
- * strut direction and its up (+Y) is the radial-outward direction at the arm's
- * azimuth (projected perpendicular to forward). Because the "up" reference is
- * the same azimuth-radial used to lay out the dock ring, every daughter ends up
- * with the SAME roll convention around the mother — fixing the asymmetric splay
- * that `setFromUnitVectors()` produced (its roll was an arbitrary by-product of
- * the minimal-arc rotation and differed per azimuth).
- *
- * All vectors are in the player-local frame. Compose with the mother's world
- * quaternion at the call site to get world orientation.
- *
- * @param {THREE.Vector3} strutDir - unit strut/forward direction (player-local)
- * @param {number} azRad - arm azimuth (radians) used for the radial up reference
- * @param {THREE.Quaternion} outQuat - receives the local orientation
- */
-function _composeDockedArmQuat(strutDir, azRad, outQuat) {
-  // Forward = strut direction.
-  _armDir.copy(strutDir).normalize();
-
-  // Preferred up = radial-outward at this azimuth (XZ→here X,Y radial in local).
-  _armUp.set(Math.cos(azRad), Math.sin(azRad), 0);
-
-  // Degenerate guard: if radial ≈ parallel to forward (end-face arms point along
-  // ±Z while radial is in XY, so this is safe, but keep robust), fall back to Z.
-  _armRight.crossVectors(_armUp, _armDir);
-  if (_armRight.lengthSq() < 1e-8) {
-    _armUp.set(0, 0, 1);
-    _armRight.crossVectors(_armUp, _armDir);
-    if (_armRight.lengthSq() < 1e-8) _armRight.set(1, 0, 0);
-  }
-  _armRight.normalize();
-
-  // Re-orthogonalize up so the basis is exactly orthonormal.
-  _armUp.crossVectors(_armDir, _armRight).normalize();
-
-  // Columns: X = right, Y = up, Z = forward (so local +Z maps to strutDir).
-  _armBasis.makeBasis(_armRight, _armUp, _armDir);
-  outQuat.setFromRotationMatrix(_armBasis);
-}
+/* Scratch world-space target quat for DOCKING slerp / HOLDING_CATCH snap. */
+const _armDockTargetQuat = new THREE.Quaternion();
+/* Deterministic docked-arm roll basis now lives in ArmDockBasis.js (shared SSOT
+ * with ArmUnit's DOCKING/HOLDING_CATCH self-alignment — see HANDOFF §10 Rule B).
+ * `_composeDockedArmQuat` is a thin local alias kept for call-site readability. */
+const _composeDockedArmQuat = composeDockedArmQuat;
 
 /** Destructured V5 constants for crossbow recoil & interlock */
 const {
@@ -3638,14 +3594,31 @@ export class PlayerSatellite extends THREE.Group {
       // Only override visibility + orientation for DOCKED arms (strut-mounted).
       // Arms in other FSM states (TRANSIT, HAULING, etc.) manage their own visuals.
       //
-      // Exception: LAUNCHING arms still clamped to the strut (before spring fires)
-      // must track strut orientation — otherwise the daughter appears to
-      // counter-rotate as the ceremony slews the strut toward the target.
+      // Exceptions handled here so a SINGLE owner composes the strut basis (the
+      // live sg.strutDir/azRad + mother world quat), avoiding the override-fight
+      // bug class (HANDOFF §10 Rule B):
+      //   • LAUNCHING (pre-spring): still clamped to the strut — track it, else the
+      //     daughter counter-rotates as the ceremony slews the strut to target.
+      //   • DOCKING: slerp onto the strut basis over the dock window so the arm
+      //     visibly aligns itself — no orientation pop at RELOADING→DOCKED.
+      //   • HOLDING_CATCH: snap to the strut basis every frame (like DOCKED) so the
+      //     parked daughter holds the catch square to her strut instead of drifting
+      //     toward the raw mother-bus quaternion (the wrong-basis defect, Item 4/5).
       if (arm.state !== ARM_STATES.DOCKED) {
-        if (arm.state === 'LAUNCHING' && !arm._springFired &&
-            arm.group && sg.strutDir.lengthSq() > 0) {
+        const trackStrut =
+          (arm.state === 'LAUNCHING' && !arm._springFired) ||
+          arm.state === ARM_STATES.DOCKING ||
+          arm.state === ARM_STATES.HOLDING_CATCH;
+        if (trackStrut && arm.group && sg.strutDir.lengthSq() > 0) {
           _composeDockedArmQuat(sg.strutDir, sg.azRad, _armQuat);
-          arm.group.quaternion.copy(this.quaternion).multiply(_armQuat);
+          _armDockTargetQuat.copy(this.quaternion).multiply(_armQuat);
+          if (arm.state === ARM_STATES.DOCKING) {
+            // Exponential approach onto the strut over the ~3 s dock window.
+            // 0.12/frame ≈ converges in <1 s @60fps; smooth, no snap.
+            arm.group.quaternion.slerp(_armDockTargetQuat, 0.12);
+          } else {
+            arm.group.quaternion.copy(_armDockTargetQuat);
+          }
         }
         continue;
       }

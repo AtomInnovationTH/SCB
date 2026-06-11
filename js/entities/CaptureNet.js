@@ -375,8 +375,15 @@ export class NetProjectile {
 
   /** Phase 2: Yo-yo despin spin-up (0.5 s) */
   _updateSpinningUp(dt) {
+    // Real yo-yo despin (Item 2): the folded canister starts spinning FAST and
+    // DESPINS as the rim weights deploy and the bag blossoms (L = Iω conserved,
+    // I ∝ r²). Start at SPIN_HZ × SPIN_FOLDED_MULT and decay toward SPIN_HZ as the
+    // mouth opens. The canister visibly "unwinds fast, blossoms, settles".
+    const foldedMult = CN.SPIN_FOLDED_MULT != null ? CN.SPIN_FOLDED_MULT : 1.0;
     const fraction = Math.min(this.stateTimer / CN.SPIN_UP_TIME, 1);
-    this.spinRate = fraction * this.netClass.SPIN_HZ;
+    const startHz = this.netClass.SPIN_HZ * foldedMult;
+    // Lerp from the folded (fast) spin down to the settled design spin.
+    this.spinRate = startHz + (this.netClass.SPIN_HZ - startHz) * fraction;
     if (this.stateTimer >= CN.SPIN_UP_TIME) {
       this.spinRate = this.netClass.SPIN_HZ;
       this._transitionTo(STATES.FLIGHT);
@@ -389,6 +396,14 @@ export class NetProjectile {
     const dist = this.speed * dt;
     this.distanceTraveled += dist;
     this.tetherPaidOut += dist;
+
+    // Slow in-flight spin decay (Item 2): mesh flexing + rim drag bleed angular
+    // momentum, so long shots arrive with spinFraction < 1 → live f_spin penalty
+    // in computeClingProbability ("fire inside the envelope or the wrap is weak").
+    const decayPerS = CN.SPIN_DECAY_PER_S != null ? CN.SPIN_DECAY_PER_S : 0;
+    if (decayPerS > 0 && this.spinRate > 0) {
+      this.spinRate = Math.max(0, this.spinRate - this.netClass.SPIN_HZ * decayPerS * dt);
+    }
 
     // Update position along launch direction (metres, for CaptureNetVisual + test path)
     this.position.x += this.launchDirection.x * dist;

@@ -368,7 +368,21 @@ export const Constants = {
   // CATCH_PROCESSED event), not on dock arrival (ARM_RETURNED) — this is the
   // fix for the premature-scoring + indefinite-park debt.
   FURNACE_TRANSFER: {
-    DURATION_S: 4.0,   // breakdown/ingest window while the daughter holds at the strut
+    // Staged furnace breakdown (2026-06-11 daughter-cycle polish, Item 1): the
+    // parked catch is no longer ingested in one frame. Three phases run off the
+    // daughter's HOLDING_CATCH stateTimer:
+    //   hold  [0, HOLD_S)            — catch held full-size, cinched in the net
+    //   chop  [HOLD_S, CHOP_S)       — catch separated into CHUNK_COUNT pieces
+    //   feed  [CHOP_S, FEED_S)       — chunks stream to the mother's furnace, then
+    //                                  CATCH_PROCESSED fires (salvage/score/remove)
+    // Boundaries are CUMULATIVE seconds from HOLDING_CATCH entry.
+    HOLD_S: 2.0,
+    CHOP_S: 5.0,        // chop spans [HOLD_S, CHOP_S) = 3.0 s
+    FEED_S: 9.0,        // feed spans [CHOP_S, FEED_S) = 4.0 s; chunks stream in here
+    CHUNK_COUNT: 5,     // pieces the catch is chopped into (visual + CHUNK events)
+    // Back-compat: the total window length (was the only field pre-staging). Any
+    // reader expecting "the furnace window elapsed" still gets the right total.
+    get DURATION_S() { return this.FEED_S; },
   },
 
   // Tool-selection HUD constants (DAUGHTER_MULTITOOL_SPEC §4.1).
@@ -1436,6 +1450,21 @@ export const Constants = {
     // ── Phase Timings (seconds) — per CAPTURE_NET.md §2.4 ──
     CAST_WINDUP:          0.15,   // crossbow spring release (§2.4 phase 1)
     SPIN_UP_TIME:         0.5,    // yo-yo despin (§2.4 phase 2)
+    // ── Real yo-yo despin spin physics (2026-06-11 Item 2) ──
+    // A folded net canister spins FAST (small radius → high ω by conservation of
+    // angular momentum L = Iω, I ∝ r²), then DESPINS as the rim weights deploy and
+    // the radius grows (RemoveDEBRIS 2018 flight HW spun ~1–2 Hz once blossomed).
+    // So spin must START high and SETTLE to the class SPIN_HZ as the mouth opens —
+    // the previous 0→SPIN_HZ ramp was angular-momentum backwards. The rim-weight
+    // tension table below shows SPIN_HZ alone already holds the mouth open (>10 N
+    // per spoke), so the elevated folded spin is purely the "unwind" transient.
+    SPIN_FOLDED_MULT:     3.0,    // canister starts at SPIN_HZ × this, decays to SPIN_HZ
+    // Slow in-flight spin decay (mesh flexing + rim drag). Makes spinFraction a
+    // LIVE gameplay factor in computeClingProbability: long shots arrive with
+    // spinFraction < 1 → f_spin penalty → "fire inside the envelope or the wrap is
+    // weak". Tuned (Item 2 risk note) so an in-envelope (≤100 m / ≤~1 s) shot loses
+    // <10% spin → Y0 difficulty does not regress.
+    SPIN_DECAY_PER_S:     0.08,   // fraction of SPIN_HZ lost per second of flight
     MAX_FLIGHT_TIME:      8,      // max tether pay-out (§2.4 phase 3)
     SLAM_CONTACT_TIME:    0.5,    // slam-wrap wrap duration (§2.4 phase 5a, min)
     BRAKE_TIME:           0.5,    // tether-brake application (§2.4 phase 5b)
@@ -2877,6 +2906,34 @@ export const Constants = {
   },
 
   // === STATION_KEEP — orbital-crane positioning ===
+  // ── Idle-watchdog hints (Item 3, 2026-06-11) — data-driven anti-stuck guidance ──
+  // ArmIdleAdvisor watches each arm's FSM state once per second. When an arm sits
+  // in `state` for ≥ `idleS` seconds AND the `when` predicate holds, it fires the
+  // hint ONCE per deployment (reset on any state change), routed through
+  // TEACHING_MOMENT_FORCE. Veterans (SkillsSystem.isVeteran) are skipped entirely.
+  // `when` keys: 'noNetInFlightHasNets' | 'outOfNets' | 'always'.
+  ARM_IDLE_HINTS: [
+    {
+      state: 'STATION_KEEP', idleS: 20, when: 'noNetInFlightHasNets',
+      hintId: 'sk_idle_fire_or_pilot', title: 'Daughter holding standoff',
+      text: 'She is holding station on the target — press F to fire the net (or P to pilot her).',
+      icon: '🎯',
+    },
+    {
+      state: 'STATION_KEEP', idleS: 6, when: 'outOfNets',
+      hintId: 'sk_out_of_nets', title: 'Out of nets',
+      text: 'No nets left in the magazine — press R to recall her, then restock at the shop (B).',
+      icon: '📦',
+    },
+  ],
+  // ARM_PILOT idle hint is mode-based (not an FSM state), handled directly by the
+  // advisor against InputManager's WASD mode.
+  ARM_PILOT_IDLE: {
+    idleS: 45, hintId: 'arm_pilot_return',
+    title: 'Piloting a daughter', icon: '🕹',
+    text: 'Press 7 to return to the mothership (or Esc to hand back control).',
+  },
+
   STATION_KEEP: {
     DEFAULT_STANDOFF_MULT: 1.5,    // × debris size for initial standoff
     DEFAULT_STANDOFF: 8.0,         // m — initial standoff on SK entry (mid-band of

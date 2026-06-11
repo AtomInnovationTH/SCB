@@ -150,6 +150,9 @@ import './test-CaptureNet.js';
 import './test-ArmUnit-CaptureFailure.js';
 import './test-DebrisField-PinCatch.js';
 import './test-ArmUnit-ParkCatch.js';
+import './test-ArmDockBasis.js';   // Item 4 — shared docked-arm orientation basis
+import './test-ArmUnit-LeadAim.js'; // Item 2 — net launch lead-aim
+import './test-ArmIdleAdvisor.js';  // Item 3 — anti-stuck idle watchdog
 
 // CP-1 / P2: Daughter multi-tool — recommender, magnetic grapple, SK tool panel
 import './test-ToolRecommender.js';

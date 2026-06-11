@@ -83,11 +83,13 @@ import { CodexViewerUI } from './ui/CodexViewerUI.js';
 import { HotkeyOverlay } from './ui/HotkeyOverlay.js';
 import { SkillsPane } from './ui/hud/SkillsPane.js';
 import { TeachingSystem } from './systems/TeachingSystem.js';
+import { armIdleAdvisor } from './systems/ArmIdleAdvisor.js';
 import { TeachingOverlay } from './ui/TeachingOverlay.js';
 import { OnboardingDirector } from './systems/OnboardingDirector.js';
 import { persistenceManager } from './systems/PersistenceManager.js';
 import { StrategicMap } from './ui/StrategicMap.js';
 import { captureNetVisual } from './ui/CaptureNetVisual.js';
+import { furnaceBreakdownVisual } from './ui/FurnaceBreakdownVisual.js';
 import { captureNetSystem } from './entities/CaptureNet.js';
 import perfReportOverlay, { captureBootInfo } from './ui/PerfReportOverlay.js';
 import { isAvifSupported } from './scene/Earth.js';
@@ -727,6 +729,8 @@ async function init() {
   if (Constants.FEATURE_FLAGS.CAPTURE_NET) {
     captureNetSystem.init();   // ST-9.4: initialize mother pod inventory + set _initialized
     captureNetVisual.init(scene, player, captureNetSystem);
+    // Item 1: staged furnace-breakdown choreography (chunks → furnace, net drawn in).
+    furnaceBreakdownVisual.init(scene, player);
   }
 
   // CP-2: mother-mounted de-spin laser (flag-gated; operates on the active target)
@@ -826,6 +830,15 @@ async function init() {
   });
   inputManager.start();
   _bootMark('InputManager started + gameFlowManager.init');
+
+  // --- Item 3: anti-stuck idle watchdog (data-driven, veteran-gated) ---
+  armIdleAdvisor.init({
+    armManager,
+    skillsSystem,
+    getPilotMode: () => (inputManager ? inputManager._controlMode : null),
+    getActiveNetForArm: (idx) => (captureNetSystem.getActiveNetForArm
+      ? captureNetSystem.getActiveNetForArm(idx) : null),
+  });
 
   // --- Collision Avoidance System (after inputManager so ref is valid) ---
   collisionAvoidanceSystem.init({
@@ -1320,12 +1333,16 @@ function gameLoop(timestamp) {
     // V-8: Capture net FSM + visual effects (flag-gated internally)
     try { captureNetSystem.update(dt); } catch (e) { console.error('[GameLoop] captureNetSystem:', e); }
     try { captureNetVisual.update(dt); } catch (e) { console.error('[GameLoop] captureNetVisual:', e); }
+    try { furnaceBreakdownVisual.update(dt); } catch (e) { console.error('[GameLoop] furnaceBreakdownVisual:', e); }
 
     // CP-2: mother-mounted de-spin laser (flag-gated internally)
     try { despinLaser.update(dt); } catch (e) { console.error('[GameLoop] despinLaser:', e); }
 
     // CP-4 §4: drain deferred teaching overlays (≤1 per QUEUE_DRAIN_INTERVAL_S)
     try { teachingSystem.update(dt); } catch (e) { console.error('[GameLoop] teachingSystem:', e); }
+
+    // Item 3: anti-stuck idle watchdog (1 Hz internally; veteran-gated)
+    try { armIdleAdvisor.update(dt); } catch (e) { console.error('[GameLoop] armIdleAdvisor:', e); }
 
     // CP-4: MissionCoach beat timers (narrative dwell + interactive escalation)
     try { if (missionCoach) missionCoach.update(dt); } catch (e) { console.error('[GameLoop] missionCoach:', e); }

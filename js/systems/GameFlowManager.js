@@ -671,6 +671,18 @@ class GameFlowManager {
     // processing step AND is the moment the parked catch clears (so the daughter
     // reloads — otherwise 4 parked catches stall capture). Arm pilot exit on
     // ARM_RETURNED remains self-managed by InputManager.
+    // Staged furnace breakdown (Item 1, 2026-06-11): the chop begins ~2 s into the
+    // park. Comms narrate the breakdown here (single owner); completion comms fire
+    // on CATCH_PROCESSED below. Gameplay (salvage/score/remove) still keys off the
+    // single CATCH_PROCESSED only — this handler is comms-only.
+    eventBus.on(Events.CATCH_BREAKDOWN_START, (data) => {
+      eventBus.emit(Events.COMMS_SEND, {
+        source: (data.armId || 'ARM').toUpperCase(),
+        text: `Chopping the catch for the furnace — feeding ${data.chunkCount || 5} sections`,
+        priority: 'INFO',
+      });
+    });
+
     eventBus.on(Events.CATCH_PROCESSED, (data) => {
       if (data.debrisId != null) {
         // Get debris data before removal (for scoring)
@@ -720,7 +732,7 @@ class GameFlowManager {
         // Comms notification (via EventBus — CommsSystem self-manages)
         eventBus.emit(Events.COMMS_SEND, {
           source: (data.armId || 'ARM').toUpperCase(),
-          text: 'Furnace transfer complete — catch broken down for salvage',
+          text: 'Catch fully processed — salvage in the bin',
           priority: 'INFO',
         });
 

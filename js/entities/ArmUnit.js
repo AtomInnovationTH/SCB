@@ -15,7 +15,7 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { getSolarCellTexture } from '../scene/solarCellTexture.js';
 import { tetherReel } from '../systems/TetherReel.js';
-import { captureNetSystem } from './CaptureNet.js';
+import { captureNetSystem, getNetClassForType } from './CaptureNet.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import { recommendArmTool } from '../systems/ToolRecommender.js';
 
@@ -2057,12 +2057,39 @@ export class ArmUnit {
    // Must be separate from the APPLY step above so that _updateTransit's drift
    // calculation `(parentPos - _prevParentPos)` sees the correct per-frame delta
    // (last frame's parentPos → this frame's parentPos), not zero.
-   if (parentPos) {
-     if (!this._prevParentPos) {
-       this._prevParentPos = new THREE.Vector3();
-     }
-     this._prevParentPos.copy(parentPos);
-   }
+    if (parentPos) {
+      if (!this._prevParentPos) {
+        this._prevParentPos = new THREE.Vector3();
+      }
+      this._prevParentPos.copy(parentPos);
+    }
+
+    // --- Lead-aim: estimate the selected target's scene velocity (Item 2) ---
+    // Tracked every frame while a target exists (so by the time NETTING fires the
+    // net on its first frame, STATION_KEEP has already built a velocity estimate).
+    // In the co-orbiting frame both arm and target carry the same parent drift, so
+    // the raw per-frame target delta is the relative velocity we want for lead.
+    {
+      const tp = this.target && this.target._scenePosition;
+      if (tp && dt > 1e-6) {
+        if (this._leadTargetPrevPos) {
+          if (!this._leadTargetVel) this._leadTargetVel = new THREE.Vector3();
+          // metres/s in scene-position space (target._scenePosition is in metres).
+          this._leadTargetVel.set(
+            (tp.x - this._leadTargetPrevPos.x) / dt,
+            (tp.y - this._leadTargetPrevPos.y) / dt,
+            (tp.z - this._leadTargetPrevPos.z) / dt,
+          );
+          this._leadTargetVelValid = true;
+        } else {
+          this._leadTargetPrevPos = new THREE.Vector3();
+        }
+        this._leadTargetPrevPos.copy(tp);
+      } else {
+        this._leadTargetPrevPos = null;
+        this._leadTargetVelValid = false;
+      }
+    }
 
    // --- ST-5.2: Trail sample emission (10 Hz gated by game time) ---
     if (Constants.TRAILS && Constants.TRAILS.ENABLED !== false &&
@@ -2124,7 +2151,14 @@ export class ArmUnit {
     this.group.position.copy(this.position);
 
     // --- Attitude control: orient the daughter along its heading ---
-    // DOCKED/DOCKING/RELOADING: mesh hidden or aligning — skip.
+    // DOCKED/DOCKING/RELOADING/HOLDING_CATCH: mesh hidden or strut-aligned — skip.
+    //   These are owned by PlayerSatellite.postArmUpdate, which has the live
+    //   strut basis (sg.strutDir/azRad) and composes the mother's world quat.
+    //   DOCKED snaps; DOCKING slerps onto the strut (no pop at dock); HOLDING_CATCH
+    //   snaps to the strut basis (no wrong-basis drift toward raw parentQuat).
+    //   Keeping a SINGLE owner avoids the override-fight class of bug (HANDOFF §10
+    //   Rule B) that caused the parked daughter to rotate to the mother bus basis
+    //   and render the tether in the wrong direction (Item 5).
     // LAUNCHING: maintain strut-aligned orientation set by postArmUpdate on the
     //   last DOCKED frame. The arm is either in clamp hold (velocity=0) or just
     //   launched (velocity along strut). Slerping toward parentQuat or a lookAt
@@ -2135,7 +2169,8 @@ export class ArmUnit {
     // All other deployed states: nose (+Z) along velocity (prograde).
     // Fallback: inherit mother's orientation (parentQuat) when no heading available.
     const skipAttitude = (this.state === S.DOCKED || this.state === S.DOCKING ||
-                         this.state === S.RELOADING || this.state === S.LAUNCHING);
+                         this.state === S.RELOADING || this.state === S.LAUNCHING ||
+                         this.state === S.HOLDING_CATCH);
     if (!skipAttitude) {
       let headingDir = null;
 
@@ -3783,16 +3818,39 @@ export class ArmUnit {
        y: this.position.y / M,
        z: this.position.z / M,
      };
-     // Launch direction: toward target
-     const tPos = this._getTargetScenePos();
-     let launchDir = { x: 1, y: 0, z: 0 };
-     if (tPos) {
-       const dx = tPos.x - this.position.x;
-       const dy = tPos.y - this.position.y;
-       const dz = tPos.z - this.position.z;
-       const len = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
-       launchDir = { x: dx / len, y: dy / len, z: dz / len };
-     }
+      // Launch direction: lead the target (Item 2). Aim at where the target will
+      // be when the net arrives — targetPos + relVel × (dist / LAUNCH_SPEED).
+      // Close-range SK shots barely change (short time-of-flight); long shots stop
+      // missing for a non-obvious reason. All quantities are in SCENE UNITS; the
+      // net's LAUNCH_SPEED is m/s, so convert to scene-units/s via × M.
+      const tPos = this._getTargetScenePos();
+      let launchDir = { x: 1, y: 0, z: 0 };
+      if (tPos) {
+        let aimX = tPos.x, aimY = tPos.y, aimZ = tPos.z;
+        const relVel = this._leadTargetVelValid ? this._leadTargetVel : null;
+        if (relVel) {
+          const ddx = tPos.x - this.position.x;
+          const ddy = tPos.y - this.position.y;
+          const ddz = tPos.z - this.position.z;
+          const distScene = Math.sqrt(ddx * ddx + ddy * ddy + ddz * ddz);
+          // Net class via the canonical selector (same class fireDaughterNet will
+          // launch) so the lead's time-of-flight always matches the actual net.
+          const _cnClass = getNetClassForType(this.type);
+          const launchSpeedScene = (this._firedNet?.netClass?.LAUNCH_SPEED
+            || _cnClass?.LAUNCH_SPEED || 10) * M;
+          if (launchSpeedScene > 1e-12) {
+            const tof = distScene / launchSpeedScene;   // seconds
+            aimX += relVel.x * tof;
+            aimY += relVel.y * tof;
+            aimZ += relVel.z * tof;
+          }
+        }
+        const dx = aimX - this.position.x;
+        const dy = aimY - this.position.y;
+        const dz = aimZ - this.position.z;
+        const len = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
+        launchDir = { x: dx / len, y: dy / len, z: dz / len };
+      }
 
      activeNet = captureNetSystem.fireDaughterNet(
        this, this.index, launchPos, launchDir, this.target
@@ -4315,6 +4373,8 @@ export class ArmUnit {
       if (this.capturedDebris) {
         this.captures++;
         this._pinCatchToSelf();             // keep the catch welded to the strut tip
+        this._breakdownStarted = false;     // reset staged-furnace bookkeeping (Item 1)
+        this._breakdownChunksFired = 0;
         this._transitionTo(S.HOLDING_CATCH);
         eventBus.emit(Events.DEBRIS_CAPTURED, {
           debrisId: this.capturedDebris.id,
@@ -4367,41 +4427,111 @@ export class ArmUnit {
     this.tetherLine.visible = false;
     this.velocity.set(0, 0, 0);
 
-    // Keep the captured debris welded to the strut tip, full size, in-net while
-    // the mother's furnace ingests it. After the transfer window the catch is
-    // handed off (CATCH_PROCESSED — GameFlowManager owns salvage/scoring/removal),
-    // cleared from the daughter, and she reloads. If the catch was cleared
-    // elsewhere, fall back to reload immediately (legacy hook).
-    if (this.capturedDebris) {
-      const dwell = (Constants.FURNACE_TRANSFER && Constants.FURNACE_TRANSFER.DURATION_S) || 4.0;
-      if (this.stateTimer >= dwell) {
-        // ── Furnace-transfer complete: hand the catch to the mother ──
-        const debris = this.capturedDebris;
-        const debrisId = debris.id;
-        // Release the daughter's pin so the furnace step owns the debris.
-        debris._armPinned = false;
-        debris._capturedByArm = null;
-        debris._armPinPos = null;
-        this.capturedDebris = null;
-        this.reeling = false;
-        this.tetherTension = 0;
-        eventBus.emit(Events.CATCH_PROCESSED, { armId: this.id, debrisId, type: this.type });
-        eventBus.emit(Events.COMMS_MESSAGE, {
-          source: this.id,
-          text: `${this.id}: Catch transferred to the furnace — breaking down for salvage.`,
-          channel: 'CMD', priority: 'success',
-        });
-        this._transitionTo(S.RELOADING);
-        this.reloadProgress = 0;
-        this.reloadDuration = 0;
-        eventBus.emit(Events.CROSSBOW_RELOAD_START, {
-          armIndex: this.index,
-          duration: this.reloadDuration,
-        });
-        return;
-      }
+    // If the catch was cleared elsewhere, fall back to reload immediately.
+    if (!this.capturedDebris) {
+      this._transitionTo(S.RELOADING);
+      this.reloadProgress = 0;
+      this.reloadDuration = 0;
+      eventBus.emit(Events.CROSSBOW_RELOAD_START, {
+        armIndex: this.index,
+        duration: this.reloadDuration,
+      });
+      return;
+    }
+
+    // ── Staged furnace breakdown (Item 1) ────────────────────────────────────
+    // Three phases off stateTimer (cumulative seconds from HOLDING_CATCH entry):
+    //   hold [0, HOLD_S)        — catch full-size, cinched in the net (_capturedByArm
+    //                             set so CaptureNet keeps the held net wrapped).
+    //   chop [HOLD_S, CHOP_S)   — emit CATCH_BREAKDOWN_START once; release the net's
+    //                             hold (_capturedByArm = null) so the bag visual can
+    //                             follow the chop; mark debris._breakdownActive so the
+    //                             furnace visual owns its scale/disposal.
+    //   feed [CHOP_S, FEED_S)   — emit CHUNK_COUNT evenly-spaced CATCH_BREAKDOWN_CHUNK
+    //                             events as chunks stream to the mother's furnace.
+    //   at FEED_S               — emit the single CATCH_PROCESSED (unchanged payload /
+    //                             single-fire contract — GameFlowManager + bosses) and
+    //                             reload. Gameplay timing only MOVES to feed-end.
+    // Phase boundaries come straight from the single authoritative constant —
+    // no per-site fallback literals (they drifted-by-design risk vs ArmManager's
+    // chop-window scale ramp, which reads the same keys).
+    const FT = Constants.FURNACE_TRANSFER;
+    const HOLD_S = FT.HOLD_S;
+    const CHOP_S = FT.CHOP_S;
+    const FEED_S = FT.FEED_S;
+    const CHUNK_COUNT = FT.CHUNK_COUNT;
+    const debris = this.capturedDebris;
+    const t = this.stateTimer;
+
+    // Lazy-init the per-park breakdown bookkeeping (also reset on entry in
+    // _updateDocking). Safe if a test sets HOLDING_CATCH directly.
+    if (this._breakdownStarted === undefined) this._breakdownStarted = false;
+    if (this._breakdownChunksFired === undefined) this._breakdownChunksFired = 0;
+
+    if (t < HOLD_S) {
+      // hold: catch welded full-size, net still cinched.
       this._pinCatchToSelf();
-    } else {
+      return;
+    }
+
+    // Fire the chop-start exactly once when we cross into the chop phase.
+    if (!this._breakdownStarted) {
+      this._breakdownStarted = true;
+      debris._breakdownActive = true;          // furnace visual owns scale/disposal
+      debris._capturedByArm = null;            // release the held-net cinch
+      eventBus.emit(Events.CATCH_BREAKDOWN_START, {
+        armId: this.id, debrisId: debris.id, chunkCount: CHUNK_COUNT,
+      });
+      // Player-facing comms for the breakdown is owned by GameFlowManager's
+      // CATCH_BREAKDOWN_START handler (single narrative owner) — no comms here.
+    }
+
+    // Keep the (now-breaking-down) catch pinned to the strut so it never drifts
+    // while the furnace visual animates the chop. The visual owns the scale ramp.
+    this._pinCatchToSelf();
+
+    // feed: emit chunk events evenly across [CHOP_S, FEED_S).
+    if (t >= CHOP_S && t < FEED_S) {
+      const feedSpan = Math.max(1e-6, FEED_S - CHOP_S);
+      const feedFrac = (t - CHOP_S) / feedSpan;             // 0 → 1 across feed
+      const due = Math.min(CHUNK_COUNT, Math.floor(feedFrac * CHUNK_COUNT) + 1);
+      while (this._breakdownChunksFired < due) {
+        const index = this._breakdownChunksFired;            // 0-based
+        eventBus.emit(Events.CATCH_BREAKDOWN_CHUNK, {
+          armId: this.id, debrisId: debris.id, index, total: CHUNK_COUNT,
+        });
+        this._breakdownChunksFired++;
+      }
+      return;
+    }
+
+    if (t >= FEED_S) {
+      // Flush any chunk events not yet emitted (e.g. a long frame skipped some).
+      while (this._breakdownChunksFired < CHUNK_COUNT) {
+        eventBus.emit(Events.CATCH_BREAKDOWN_CHUNK, {
+          armId: this.id, debrisId: debris.id,
+          index: this._breakdownChunksFired, total: CHUNK_COUNT,
+        });
+        this._breakdownChunksFired++;
+      }
+
+      // ── Furnace-transfer complete: hand the catch to the mother ──
+      const debrisId = debris.id;
+      // Release the daughter's pin so the furnace step owns the debris.
+      debris._armPinned = false;
+      debris._capturedByArm = null;
+      debris._armPinPos = null;
+      debris._breakdownActive = false;
+      this.capturedDebris = null;
+      this.reeling = false;
+      this.tetherTension = 0;
+      this._breakdownStarted = false;
+      this._breakdownChunksFired = 0;
+      // The successful catch consumed the net — fed in with the debris. Tell the
+      // bag visual to draw itself toward the mother (§3.5: success consumes net).
+      eventBus.emit(Events.NET_CONSUMED, { armIndex: this.index, armId: this.id });
+      eventBus.emit(Events.CATCH_PROCESSED, { armId: this.id, debrisId, type: this.type });
+      // Completion comms is owned by GameFlowManager's CATCH_PROCESSED handler.
       this._transitionTo(S.RELOADING);
       this.reloadProgress = 0;
       this.reloadDuration = 0;
@@ -4903,7 +5033,11 @@ export class ArmUnit {
    * @param {number} [dt] — frame delta (seconds) for REELING dash-flow animation
    */
   _updateTether(parentPos, parentQuat, dt) {
-    if (this.state === S.DOCKED || this.state === S.RELOADING) {
+    // HOLDING_CATCH: daughter is parked at her strut tip carrying the catch —
+    // no tether should render (matches the intent of _updateHoldingCatch hiding
+    // it). Without this entry, _updateTether (which runs AFTER the per-state
+    // handler) re-shows a stray, wrong-direction tether for the whole park.
+    if (this.state === S.DOCKED || this.state === S.RELOADING || this.state === S.HOLDING_CATCH) {
       this.tetherLine.visible = false;
       return;
     }

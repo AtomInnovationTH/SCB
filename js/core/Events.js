@@ -96,6 +96,12 @@ export const Events = {
   DEBRIS_CLEARED:     'debris:cleared',
   DEBRIS_CAPTURED:    'debris:captured',
   CATCH_PROCESSED:    'catch:processed',   // furnace-transfer complete — { armId, debrisId, type }; owns salvage+scoring
+  // Staged furnace breakdown (Item 1, 2026-06-11). Visual-only choreography on the
+  // way to CATCH_PROCESSED; gameplay (salvage/score/remove) still keys off the
+  // single CATCH_PROCESSED above. Consumed by FurnaceBreakdownVisual + CaptureNetVisual.
+  CATCH_BREAKDOWN_START: 'catch:breakdownStart', // { armId, debrisId, chunkCount } — chop begins
+  CATCH_BREAKDOWN_CHUNK: 'catch:breakdownChunk', // { armId, debrisId, index, total } — one chunk fed
+  NET_CONSUMED:          'net:consumed',         // { armIndex } — fed-in bag draws toward the mother
   DEBRIS_REMOVED:     'debris:removed',
   DEBRIS_KESSLER:     'debris:kesslerEvent',
   DEBRIS_COLLISION:   'debris:collision',

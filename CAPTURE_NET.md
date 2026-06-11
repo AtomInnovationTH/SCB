@@ -228,6 +228,13 @@ For safety margin (3×): ω_design = 6.0 rad/s ≈ 1.0 Hz
 
 Current code: [`NET_SPIN_HZ: 4`](js/core/Constants.js:854) — this is higher than minimum (provides visual drama + cling force margin). Acceptable for gameplay; real spin would be 1–2 Hz.
 
+**Yo-yo despin spin profile (2026-06-11, Item 2).** Earlier code ramped spin *up* `0 → SPIN_HZ` as the mouth opened, which is angular-momentum backwards: a folded canister has a *small* radius and therefore a *high* ω (L = Iω, I ∝ r²). As the rim weights deploy and the bag blossoms, r grows and ω *falls* — exactly the yo-yo despin used on every spin-stabilised spacecraft since Explorer 1. The model now matches:
+
+- **`SPIN_UP_TIME` (0.5 s):** spin **starts** at `SPIN_HZ × SPIN_FOLDED_MULT` (≈3×) and **decays** to the design `SPIN_HZ` as the cone blossoms — the canister visibly "unwinds fast, blossoms, settles."
+- **`FLIGHT`:** a slow `SPIN_DECAY_PER_S` (≈8 %/s of `SPIN_HZ`, from mesh flexing + rim drag) bleeds spin during the tether pay-out. Long shots arrive with `spinFraction < 1`, so the `f_spin` factor in §3.3 becomes a **live gameplay lever**: *fire inside the envelope or the wrap is weak.* In-envelope (≤100 m / ≈1 s) shots lose <10 % so Y0 difficulty does not regress.
+
+Both constants live in [`CAPTURE_NET.STATES`-adjacent tuning](js/core/Constants.js:1) (`SPIN_FOLDED_MULT`, `SPIN_DECAY_PER_S`) with the rim-weight derivation note above them. The pre-fire HUD (§3.3) shows a live `P_cling` estimate so the player can read *why* to de-spin (`U`) or close distance before firing.
+
 ### §2.6 Smart Rim Weights ("Edge Nodes")
 
 The rim weights are not passive tungsten spheres — they are **edge nodes**: miniaturised smart modules that enable the tether-brake cinch (§2.4.1) and provide situational awareness.

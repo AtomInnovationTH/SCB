@@ -1410,7 +1410,22 @@ export class ArmManager {
         if (arm.state === ARM_STATES.REELING ||
             arm.state === ARM_STATES.DOCKING ||
             arm.state === ARM_STATES.HOLDING_CATCH) {
-          this._debrisField.pinCapturedDebris(arm.capturedDebris, arm.position, 1);
+          // Item 1: once the staged furnace breakdown begins (debris._breakdownActive,
+          // set by ArmUnit at chop start), shrink the ORIGINAL instanced catch out
+          // of view so the FurnaceBreakdownVisual's chunk meshes are the only thing
+          // the player sees being fed to the furnace. Ramp over the chop phase so
+          // the swap reads as the catch coming apart, not popping out.
+          let scaleMul = 1;
+          if (arm.capturedDebris._breakdownActive) {
+            // Phase boundaries from the single authoritative constant (same keys
+            // ArmUnit._updateHoldingCatch drives the chop with — no local defaults
+            // that could desync the scale-out ramp from the chop window).
+            const FT = Constants.FURNACE_TRANSFER;
+            const span = Math.max(1e-6, FT.CHOP_S - FT.HOLD_S);
+            const frac = Math.min(1, Math.max(0, (arm.stateTimer - FT.HOLD_S) / span));
+            scaleMul = Math.max(0.001, 1 - frac);   // 1 → ~0 across the chop window
+          }
+          this._debrisField.pinCapturedDebris(arm.capturedDebris, arm.position, scaleMul);
         }
       }
     }

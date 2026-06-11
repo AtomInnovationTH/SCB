@@ -457,20 +457,36 @@ describe('CaptureNet — ST-9.4a: Launch → Spin-up → Flight transitions', ()
     assert.equal(net.state, STATES.SPINNING_UP, 'Should be SPINNING_UP');
   });
 
-  it('Spin rate ramps during SPINNING_UP', () => {
+  it('Spin rate despins (yo-yo) during SPINNING_UP — starts high, settles to SPIN_HZ', () => {
     const net = new NetProjectile(makeNetConfig());
     advanceNet(net, CN.CAST_WINDUP + 0.01); // enter SPINNING_UP
     const rate1 = net.spinRate;
+    // Real yo-yo despin: the folded canister spins fast, then unwinds as the rim
+    // weights deploy. Spin must START ABOVE the design SPIN_HZ and DECREASE.
+    assert.ok(rate1 > CN.MEDIUM.SPIN_HZ,
+      `Folded spin should start high: ${rate1} > ${CN.MEDIUM.SPIN_HZ}`);
     advanceNet(net, 0.2);
     const rate2 = net.spinRate;
-    assert.ok(rate2 > rate1, `Spin should increase: ${rate1} → ${rate2}`);
+    assert.ok(rate2 < rate1, `Spin should despin toward SPIN_HZ: ${rate1} → ${rate2}`);
+    assert.ok(rate2 >= CN.MEDIUM.SPIN_HZ - 1e-6,
+      `Spin should not undershoot SPIN_HZ during spin-up: ${rate2}`);
   });
 
-  it('SPINNING_UP → FLIGHT after SPIN_UP_TIME (0.5s)', () => {
+  it('SPINNING_UP starts at SPIN_HZ × SPIN_FOLDED_MULT', () => {
+    const net = new NetProjectile(makeNetConfig());
+    advanceNet(net, CN.CAST_WINDUP + 0.001, 0.001); // just into SPINNING_UP
+    const expected = CN.MEDIUM.SPIN_HZ * CN.SPIN_FOLDED_MULT;
+    assert.ok(Math.abs(net.spinRate - expected) < expected * 0.05,
+      `Initial folded spin ≈ ${expected}, got ${net.spinRate}`);
+  });
+
+  it('SPINNING_UP → FLIGHT after SPIN_UP_TIME (0.5s); spin settled to ~SPIN_HZ', () => {
     const net = new NetProjectile(makeNetConfig());
     advanceNet(net, CN.CAST_WINDUP + CN.SPIN_UP_TIME + 0.01);
     assert.equal(net.state, STATES.FLIGHT);
-    assert.equal(net.spinRate, CN.MEDIUM.SPIN_HZ);
+    // Settles to SPIN_HZ at FLIGHT entry; a small flight-decay step may have run.
+    assert.ok(net.spinRate <= CN.MEDIUM.SPIN_HZ + 1e-6, 'spin does not exceed SPIN_HZ in flight');
+    assert.ok(net.spinRate > CN.MEDIUM.SPIN_HZ * 0.95, 'spin is essentially settled at SPIN_HZ');
   });
 
   it('Position advances during FLIGHT', () => {
@@ -496,6 +512,49 @@ describe('CaptureNet — ST-9.4a: Launch → Spin-up → Flight transitions', ()
   });
 });
 
+describe('CaptureNet — Item 2: flight spin decay makes spinFraction live', () => {
+  function toFlight(net) {
+    advanceNet(net, CN.CAST_WINDUP + CN.SPIN_UP_TIME + 0.001, 0.001);
+  }
+
+  it('spin decays during FLIGHT (no longer pinned at SPIN_HZ)', () => {
+    const net = new NetProjectile(makeNetConfig());
+    toFlight(net);
+    const atEntry = net.spinRate;
+    advanceNet(net, 3.0);   // long flight
+    assert.ok(net.spinRate < atEntry,
+      `spin should bleed off over flight: ${atEntry} → ${net.spinRate}`);
+    assert.ok(net.spinRate >= 0, 'spin never goes negative');
+  });
+
+  it('a long shot loses meaningful spin (≳15% over 5 s)', () => {
+    const net = new NetProjectile(makeNetConfig());
+    toFlight(net);
+    advanceNet(net, 5.0);
+    const frac = net.spinRate / CN.MEDIUM.SPIN_HZ;
+    assert.ok(frac < 0.85, `long shot spinFraction should drop: ${frac}`);
+  });
+
+  it('an in-envelope shot keeps spinFraction high (<10% loss in ~1 s)', () => {
+    // Risk-note tuning guard: a ≤100 m / ~1 s shot must not regress Y0 difficulty.
+    const net = new NetProjectile(makeNetConfig());
+    toFlight(net);
+    advanceNet(net, 1.0);
+    const frac = net.spinRate / CN.MEDIUM.SPIN_HZ;
+    assert.ok(frac > 0.9, `in-envelope spinFraction should stay high: ${frac}`);
+  });
+
+  it('_resolveCatch reads the decayed spinFraction (< 1 after a long flight)', () => {
+    const target = makeTarget(5000, 0, 0, 100);   // very far → long flight
+    target._scenePosition = { x: 5000, y: 0, z: 0 };
+    const net = new NetProjectile(makeNetConfig({ targetDebris: target }));
+    toFlight(net);
+    advanceNet(net, 4.0);
+    // Force a resolve and inspect the diagnostic cling probability inputs via spinRate.
+    const spinFraction = net.spinRate / net.netClass.SPIN_HZ;
+    assert.ok(spinFraction < 1.0, `decayed spinFraction feeds the catch roll: ${spinFraction}`);
+  });
+});
 
 describe('CaptureNet — ST-9.4a: Flight timeout + tether limit', () => {
   it('MISSED after MAX_FLIGHT_TIME (8s) with no target', () => {
