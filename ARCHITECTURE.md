@@ -2,9 +2,9 @@
 
 > **The single current source of truth for "how the code actually works."** Browser-based 3D orbital-debris-removal sim. Three.js (loaded from local `node_modules`), vanilla ES6 modules, **zero build tools**.
 >
-> **Verified against code: 2026-06-07** (architect ground-truth pass; supersedes the Epic-8-era doc, now in git history). Where this doc and an older design doc disagree, **this doc wins** for as-built behavior. Design intent lives in [`GAME_DESIGN.md`](GAME_DESIGN.md), the forward plan in [`ROADMAP.md`](ROADMAP.md), and the live shift state + load-bearing SSOT rules in [`HANDOFF.md`](HANDOFF.md).
+> **Verified against code: 2026-06-07** (architect ground-truth pass; supersedes the Epic-8-era doc, now in git history). Hotkey map §6 + capture-FSM notes re-verified 2026-06-11 (daughter-cycle polish, `80c70b5`). Where this doc and an older design doc disagree, **this doc wins** for as-built behavior. Design intent lives in [`GAME_DESIGN.md`](GAME_DESIGN.md), the forward plan in [`ROADMAP.md`](ROADMAP.md), and the live shift state + load-bearing SSOT rules in [`HANDOFF.md`](HANDOFF.md).
 >
-> **Test baseline:** 612 suites / 2542 tests / 0 failures (`node js/test/run-tests.js`, verified 2026-06-07). Node-only harness; no DOM/THREE stubs for physics.
+> **Test baseline:** 676 suites / 2759 tests / 0 failures (`node js/test/run-tests.js`, verified 2026-06-11 @ `80c70b5`). Node-only harness; no DOM/THREE stubs for physics.
 
 ---
 

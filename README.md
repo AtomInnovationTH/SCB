@@ -25,7 +25,7 @@ UI design draws from four landmark space sims: **Independence War** (NavSphere, 
 
 - **~150 modules** across core, entities, systems, UI, scene
 - **2542 / 2542 tests** passing as of 2026-06-07 (`node js/test/run-tests.js`)
-- **Epics 5–10 complete + capture-lifecycle polish (2026-06-06)** — Config G visualization, 14-state Capture Net FSM with physics cling probability, STATION_KEEP orbital-crane + dual-metal FEEP + ISRO comms, offline data catalog + MOID + strategic map, trail ribbons + NavSphere + Earth 16k LOD, park-the-catch (`HOLDING_CATCH`)
+- **Epics 5–10 complete + daughter-cycle polish (2026-06-11, v.95)** — Config G visualization, 14-state Capture Net FSM with physics cling probability (real yo-yo despin + in-flight spin decay, launch lead-aim, pre-fire P-cling HUD), STATION_KEEP orbital-crane + dual-metal FEEP + ISRO comms, offline data catalog + MOID + strategic map, trail ribbons + NavSphere + Earth 16k LOD, park-the-catch (`HOLDING_CATCH`) with staged chop-and-feed furnace breakdown + anti-stuck idle advisor
 - **Architecture refreshed 2026-06-07** — [`ARCHITECTURE.md`](ARCHITECTURE.md) is now the verified as-built blueprint (full hotkey map, FEATURE_FLAGS truth table, ceremonies, capture-FSM reachability, drift register)
 - **Next priorities**: see [`ROADMAP.md`](ROADMAP.md) — critical path **CP-1 (wire the magnet / make tool choice real)** → CP-2 (laser de-spin) → CP-3 (cluster/transfer agency) → CP-4 (MissionCoach + comms arbiter) toward the full 12-mission arc
 
@@ -199,14 +199,15 @@ _Authoritative table (Delegation 1 hotkey rebind, 2026-05-31). The Codex is `L`.
   K  · (unbound — reserved)
   X  · Tether detach (sacrifice)
   Y  · EDT deploy
+  U  · De-spin laser (hold — detumble the selected target before netting)
   Z / Shift+Z · Wireframe zone cycle
-  ` / Shift+` · Debris Map / Tool cycle
+  ` / Shift+` · Debris Map / Tool cycle (` cycles tool while piloting in station-keep)
   ,  / .  · Stow / deploy all struts
   +  / −  · Throttle ± (or SK approach/retreat in ARM_PILOT)
   [  / ]  · Power-bus adjust
   Shift+1/2/3 · Power-bus select
-  1–6   · Select / pilot arm 1–6
-  7     · Return to mother
+  1–4   · Select / pilot arm 1–4
+  7     · Return to mother (works anywhere)
   F4    · Forge (Kiln) toggle
   F5    · FEEP fuel cycle (Propellant)
   F2    · FEEP metal cycle (piloted arm)
@@ -229,7 +230,7 @@ _Authoritative table (Delegation 1 hotkey rebind, 2026-05-31). The Codex is `L`.
   I      · Inspect debris (part callouts) — render arrives in Delegation 3
   F2     · Cycle FEEP metal (indium/alt)
   Esc / P / 7 · Return to mother
-  1–6    · Switch piloted daughter
+  1–4    · Switch piloted daughter
   X      · Sacrifice detach
 ```
 

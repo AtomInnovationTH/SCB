@@ -1,20 +1,21 @@
 # Space Cowboy — Next-Shift Handoff Brief
 
-*Updated: 2026-06-11 · **Daughter-cycle polish pass** (launch → net → capture → reel-in → furnace) on top of Phase F (`ce5409d`). 6-item plan in [`.kilo/plans/daughter-cycle-polish.md`](.kilo/plans/daughter-cycle-polish.md). Prior: 2026-06-10 Phase F solo-flight graduation (`ce5409d`, ARC COMPLETE); Phase E elevator win (`a4863c4`); Phase D ch8–11 + Starlink boss (`95854de`); 2026-06-06 daughter capture-lifecycle polish (`b7d5fae`). Archived context at [`archive/HANDOFF_2026-05-30_four-fix.md`](archive/HANDOFF_2026-05-30_four-fix.md), [`archive/HANDOFF_2026-05-29_post-cinch-qa.md`](archive/HANDOFF_2026-05-29_post-cinch-qa.md), [`archive/SK_M1_POLISH_HANDOFF.md`](archive/SK_M1_POLISH_HANDOFF.md), [`archive/CEREMONY_REDESIGN.md`](archive/CEREMONY_REDESIGN.md).*
+*Updated: 2026-06-11 · **Daughter-cycle polish pass** (launch → net → capture → reel-in → furnace) — committed `80c70b5`, pushed, menu v.95. 6-item plan in [`.kilo/plans/daughter-cycle-polish.md`](.kilo/plans/daughter-cycle-polish.md). Prior: 2026-06-10 Phase F solo-flight graduation (`ce5409d`, ARC COMPLETE); Phase E elevator win (`a4863c4`); Phase D ch8–11 + Starlink boss (`95854de`); 2026-06-06 daughter capture-lifecycle polish (`b7d5fae`). Archived context at [`archive/HANDOFF_2026-05-30_four-fix.md`](archive/HANDOFF_2026-05-30_four-fix.md), [`archive/HANDOFF_2026-05-29_post-cinch-qa.md`](archive/HANDOFF_2026-05-29_post-cinch-qa.md), [`archive/SK_M1_POLISH_HANDOFF.md`](archive/SK_M1_POLISH_HANDOFF.md), [`archive/CEREMONY_REDESIGN.md`](archive/CEREMONY_REDESIGN.md).*
 
 ---
 
 > ## ⏩ LATEST SHIFT — 2026-06-11 (Daughter-cycle polish — 6 items) — read this first
 >
-> **Polish pass on the full daughter loop, all on top of `ce5409d`.** Six items from [`.kilo/plans/daughter-cycle-polish.md`](.kilo/plans/daughter-cycle-polish.md), done in dependency order (5→4→1→2→3→6). **676 suites / 2759 tests / 0 fail** (was 666 / 2729). NOT committed; `.kilo/` untracked.
+> **Polish pass on the full daughter loop, all on top of `ce5409d`.** Six items from [`.kilo/plans/daughter-cycle-polish.md`](.kilo/plans/daughter-cycle-polish.md), done in dependency order (5→4→1→2→3→6). **676 suites / 2759 tests / 0 fail** (was 666 / 2729). **Committed `80c70b5` + PUSHED to origin/main.** Menu version bumped to **v.95**. `.kilo/` remains untracked.
 >
-> **What landed (uncommitted):**
+> **What landed (committed `80c70b5`):**
 > - **Item 5 (tether bug):** `ArmUnit._updateTether` now hides the tether in `HOLDING_CATCH` (one-line fix to the early-return list) — kills the stray wrong-direction tether that re-appeared ~1 s after a parked catch. `_updateBridle` mirrors automatically. Tests in `test-ArmUnit-ParkCatch.js`.
 > - **Item 4 (orientation):** extracted the deterministic docked-arm basis into a shared SSOT [`js/entities/ArmDockBasis.js`](js/entities/ArmDockBasis.js) (`composeDockedArmQuat`, used by `PlayerSatellite` + tested). `postArmUpdate` is now the SINGLE owner of strut orientation for `DOCKED` (snap), `DOCKING` (slerp — no pop at re-dock), and `HOLDING_CATCH` (snap — no drift to the mother-bus basis). `HOLDING_CATCH` added to ArmUnit's `skipAttitude` so the generic branch can't fight it (HANDOFF §10 Rule B). NEW `test-ArmDockBasis.js` + ParkCatch attitude test.
 > - **Item 1 (staged furnace breakdown):** `FURNACE_TRANSFER` is now a `{ HOLD_S:2, CHOP_S:5, FEED_S:9, CHUNK_COUNT:5 }` timeline (with a derived `DURATION_S` getter). `ArmUnit._updateHoldingCatch` runs hold→chop→feed, emitting NEW `CATCH_BREAKDOWN_START` / N×`CATCH_BREAKDOWN_CHUNK` / `NET_CONSUMED`, then the single unchanged `CATCH_PROCESSED` at feed-end (boss/persistence contract intact). NEW THREE-side [`js/ui/FurnaceBreakdownVisual.js`](js/ui/FurnaceBreakdownVisual.js) (chunk meshes fly to the furnace + ghost-bag draw-in; wired in `main.js`). `ArmManager` ramps the original instanced catch's `scaleMul→0` over the chop so only the chunks show. `GameFlowManager` gained a `CATCH_BREAKDOWN_START` comms line. Staged-timeline tests in `test-ArmUnit-ParkCatch.js`.
 > - **Item 2 (net launch + spin):** real yo-yo despin — `_updateSpinningUp` starts at `SPIN_HZ × SPIN_FOLDED_MULT` (≈3×) and decays to `SPIN_HZ`; `_updateFlight` bleeds `SPIN_DECAY_PER_S` (≈8%/s) so `f_spin` is a LIVE cling factor. First-order lead-aim in `_updateNettingFSM` (relVel from the target's per-frame scene delta, tracked in `update()`). Pre-fire `P_cling` readout + advisory in the SK tool HUD (`DockingReticle`). New constants + CAPTURE_NET.md §2.5 note. Tests: extended `test-CaptureNet.js` (despin/decay), NEW `test-ArmUnit-LeadAim.js`.
 > - **Item 3 (anti-stuck):** NEW Node-safe [`js/systems/ArmIdleAdvisor.js`](js/systems/ArmIdleAdvisor.js) — data-driven `Constants.ARM_IDLE_HINTS` watchdog (1 Hz). Fires SK-idle (fire/pilot), out-of-nets (recall/restock), and ARM_PILOT-return (`7`) hints once per deployment, veteran-gated (`SkillsSystem.isVeteran`), via `TEACHING_MOMENT_FORCE`. Wired in `main.js`. NEW `test-ArmIdleAdvisor.js`. (D-with-no-target already had the Tab hint — verified, no change.)
-> - **Item 6 (`?` overlay):** `HotkeyOverlay` audited vs InputManager — added `U` (de-spin laser), fixed `1–6`→`1–4` (Y0 = 4 ring arms), clarified the backtick nuances (Debris Map / cycle-tool-while-piloting), noted `7` is global. ARCHITECTURE.md §6 hotkey map + capture-FSM notes synced.
+> - **Item 6 (`?` overlay):** `HotkeyOverlay` audited vs InputManager — added `U` (de-spin laser), fixed `1–6`→`1–4` (Y0 = 4 ring arms), clarified the backtick nuances (Debris Map / cycle-tool-while-piloting), noted `7` is global. ARCHITECTURE.md §6 hotkey map + capture-FSM notes + README controls synced.
+> - **Post-review fixes (same commit):** a local 6-track review flagged 3 items, all fixed — (1) lead-aim now uses the canonical `getNetClassForType(this.type)` instead of an inline spinner/weaver class pick (drift risk if per-class `LAUNCH_SPEED` is ever tuned); (2) `FURNACE_TRANSFER` phase boundaries are read straight from the constant in BOTH `ArmUnit._updateHoldingCatch` and `ArmManager`'s chop-window scale ramp (no per-site fallback literals that could desync the two phase-aligned computations); (3) dead `computeDistanceModifier` import removed from `DockingReticle`.
 >
 > **Design choices worth knowing:** Item 4 chose `postArmUpdate` (not the arm-side helper the plan sketched) as the single orientation owner because it already maintains the live `sg.strutDir`/`azRad` in the correct player-local frame — avoiding the XZ/XY frame mismatch a pure arm-side reconstruction would hit. Item 1 keeps the net bag visible during the chop via a `FurnaceBreakdownVisual`-owned ghost bag (the plan's "ghost bag" risk-note option) rather than extending `CaptureNetVisual`'s lifecycle. `FEED_S=9` honors the plan's ~9 s window; `DURATION_S` derives from it so boss/teaching timing is unchanged.
 >
@@ -219,15 +220,15 @@
 ### Step 2 — Verify baseline
 
 ```bash
-node js/test/run-tests.js | tail -3    # HEAD 56a98f5 + uncommitted Phase C: 649 suites / 2684 tests / 0 failures
-                                        # HEAD 56a98f5 (CP-2+CP-3+CP-4 spine): 648 / 2679
+node js/test/run-tests.js | tail -3    # HEAD 80c70b5 (daughter-cycle polish, v.95): 676 suites / 2759 tests / 0 failures
+                                        # prior: ce5409d (Phase F, arc complete): 666 / 2729
 ```
 
 If red, see [`archive/SK_M1_POLISH_HANDOFF.md §7 Appendix`](archive/SK_M1_POLISH_HANDOFF.md) for diagnostic-log grep targets.
 
 ### Step 3 — Pick a task
 
-**This shift's path:** CP-2 + CP-3 + CP-4 are **committed** (`56a98f5`). Phase C chapter content (`BEATS_BY_MISSION[3,4,6,7]` + the `strategic_map` skill) is built **on top, uncommitted** — see the LATEST SHIFT block. The next move is to **finish Phase C** (the ch5 ISS conjunction boss — real `MissionEventSystem` work, not a beat table) then continue Phases D–F per `MISSION_ARC_IMPLEMENTATION.md` §8. The older backlog in [`§5 Recommended Next Steps`](#5-recommended-next-steps) is largely consumed; use it only for residual playtest/perf items.
+**This shift's path:** the 12-chapter arc (Phases A–F) AND the daughter-cycle polish pass are **committed + pushed** (`80c70b5`, menu v.95). The highest-value next move is a **full browser playtest** — none of the MissionCoach chapters, the two boss systems, the win cinematic, the graduation beats, or this shift's visual work (furnace chop-and-feed, spin blossom, DOCKING slerp, P-cling HUD) have been verified in-browser. The LATEST SHIFT block has the daughter-loop playtest checklist. After that: the deferred porkchop/Lambert viz (ROADMAP EN-5/6), the optional ShopScreen "GEO Anchor Contract — Finalize" button, and §4.5 anchor-mass tie-in polish.
 
 ---
 
