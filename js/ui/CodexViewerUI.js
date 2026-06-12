@@ -8,8 +8,10 @@
 
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
-import { CodexCategory } from '../systems/CodexSystem.js';
-import { Constants, trlToBadgeColor, trlToLabel } from '../core/Constants.js';
+import { CodexCategory, entryMatchesQuery } from '../systems/CodexSystem.js';
+import {
+  Constants, trlToBadgeColor, trlToLabel, trlToTechLevelLabel, techLevelBadgeText,
+} from '../core/Constants.js';
 
 // Human-readable category labels + icons
 const CATEGORY_META = {
@@ -22,6 +24,8 @@ const CATEGORY_META = {
   DEBRIS:            { label: 'Debris',              icon: '💥' },
   SENSORS:           { label: 'Sensors & Avionics',  icon: '📡' },
   COMMS:             { label: 'Communications',      icon: '📶' },
+  NEWS:              { label: 'News & Events',       icon: '📰' },
+  HERITAGE:          { label: 'Heritage',            icon: '🏛️' },
 };
 
 export class CodexViewerUI {
@@ -34,6 +38,10 @@ export class CodexViewerUI {
     this._selectedCategory = null; // null = ALL
     this._selectedEntry = null;
     this._overlay = null;
+    /** @type {string} UX-11 #10: live search query (overrides sidebar while set) */
+    this._searchQuery = '';
+    /** @type {number|null} debounce handle for the search input */
+    this._searchDebounce = null;
 
     this._buildDOM();
     this._setupListeners();
@@ -99,9 +107,13 @@ export class CodexViewerUI {
       flexShrink: '0',
     });
     header.innerHTML = `
-      <div style="display:flex;align-items:center;gap:12px;">
-        <span style="font-size:16px;color:#00d4ff;font-weight:bold;letter-spacing:2px;">🔧 TECH LIBRARY</span>
-        <span id="codex-progress" style="font-size:11px;color:#888;"></span>
+      <div style="display:flex;align-items:center;gap:12px;flex:1;min-width:0;">
+        <span style="font-size:16px;color:#00d4ff;font-weight:bold;letter-spacing:2px;white-space:nowrap;">🔧 TECH LIBRARY</span>
+        <span id="codex-progress" style="font-size:11px;color:#888;white-space:nowrap;"></span>
+        <input id="codex-search" type="text" placeholder="🔍 search topics…" spellcheck="false"
+          style="flex:1;max-width:260px;margin-left:8px;background:rgba(0,0,0,0.4);
+                 border:1px solid rgba(0,212,255,0.25);border-radius:3px;color:#cfefff;
+                 font-family:'Courier New',monospace;font-size:11px;padding:4px 8px;outline:none;" />
       </div>
       <button id="codex-close-btn" style="background:none;border:1px solid rgba(255,255,255,0.2);
         color:#888;font-size:14px;cursor:pointer;padding:2px 10px;border-radius:3px;
@@ -160,6 +172,26 @@ export class CodexViewerUI {
 
     // Close button
     overlay.querySelector('#codex-close-btn').addEventListener('click', () => this.hide());
+
+    // UX-11 #10: live search — filters across ALL categories as you type;
+    // sidebar selection is ignored while a query is active. Debounced
+    // (review fix): each render rebuilds up to 113 cards, so don't do it
+    // per keystroke.
+    const searchInput = overlay.querySelector('#codex-search');
+    searchInput.addEventListener('input', () => {
+      if (this._searchDebounce) clearTimeout(this._searchDebounce);
+      this._searchDebounce = setTimeout(() => {
+        this._searchDebounce = null;
+        this._searchQuery = searchInput.value.trim();
+        this._selectedEntry = null;
+        this._renderEntryList();
+      }, 120);
+    });
+    // Keep keystrokes (incl. game hotkeys like L/S/W) inside the search box.
+    searchInput.addEventListener('keydown', (e) => {
+      if (e.code === 'Escape') { searchInput.blur(); return; }
+      e.stopPropagation();
+    });
   }
 
   /** @private Build the category sidebar tabs */
@@ -184,8 +216,11 @@ export class CodexViewerUI {
       padding: '6px 12px', cursor: 'pointer', fontSize: '11px',
       borderLeft: '3px solid transparent', transition: 'all 0.15s ease',
       whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+      display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px',
     });
-    tab.innerHTML = `${icon} ${label}`;
+    // UX-11 #10: per-category progress counter, refreshed on every render.
+    tab.innerHTML = `<span style="overflow:hidden;text-overflow:ellipsis;">${icon} ${label}</span>` +
+      `<span class="codex-tab-count" style="font-size:9px;color:#557;flex-shrink:0;"></span>`;
     tab.addEventListener('mouseenter', () => {
       if (tab.dataset.category !== (this._selectedCategory || 'ALL')) {
         tab.style.background = 'rgba(0,212,255,0.06)';
@@ -213,10 +248,10 @@ export class CodexViewerUI {
   _renderHeader() {
     const prog = this._codex.getProgress();
     const el = document.getElementById('codex-progress');
-    if (el) el.textContent = `${prog.unlocked}/${prog.total} entries unlocked (${prog.percentage}%)`;
+    if (el) el.textContent = `${prog.unlocked}/${prog.total} briefings unlocked (${prog.percentage}%)`;
   }
 
-  /** @private Highlight the active sidebar tab */
+  /** @private Highlight the active sidebar tab + refresh per-category counts */
   _renderSidebarActive() {
     const sidebar = document.getElementById('codex-sidebar');
     if (!sidebar) return;
@@ -227,6 +262,19 @@ export class CodexViewerUI {
       tab.style.borderLeftColor = isSel ? '#00d4ff' : 'transparent';
       tab.style.background = isSel ? 'rgba(0,212,255,0.1)' : 'none';
       tab.style.color = isSel ? '#00d4ff' : '#aaa';
+
+      // UX-11 #10: per-category progress (e.g. "3/7"); ALL uses the global count.
+      const countEl = tab.querySelector('.codex-tab-count');
+      if (countEl) {
+        if (tab.dataset.category === 'ALL') {
+          const prog = this._codex.getProgress();
+          countEl.textContent = `${prog.unlocked}/${prog.total}`;
+        } else if (typeof this._codex.getCategoryProgress === 'function') {
+          const p = this._codex.getCategoryProgress(tab.dataset.category);
+          countEl.textContent = `${p.unlocked}/${p.total}`;
+        }
+        countEl.style.color = isSel ? '#00d4ff' : '#557';
+      }
     }
   }
 
@@ -239,11 +287,26 @@ export class CodexViewerUI {
     listEl.style.display = 'grid';
     detailEl.style.display = 'none';
 
-    const entries = this._selectedCategory
-      ? this._codex.getCategory(this._selectedCategory)
-      : this._codex.entries;
+    // UX-11 #10: an active search query searches ALL categories and ignores
+    // the sidebar selection until cleared.
+    let entries;
+    if (this._searchQuery) {
+      entries = (typeof this._codex.searchEntries === 'function')
+        ? this._codex.searchEntries(this._searchQuery)
+        : this._codex.entries.filter(e => entryMatchesQuery(e, this._searchQuery));
+    } else {
+      entries = this._selectedCategory
+        ? this._codex.getCategory(this._selectedCategory)
+        : this._codex.entries;
+    }
 
     listEl.innerHTML = '';
+    if (entries.length === 0) {
+      const empty = document.createElement('div');
+      Object.assign(empty.style, { color: '#667', fontSize: '12px', padding: '20px' });
+      empty.textContent = `No topics match “${this._searchQuery}”.`;
+      listEl.appendChild(empty);
+    }
     for (const entry of entries) {
       listEl.appendChild(this._makeCard(entry));
     }
@@ -251,7 +314,12 @@ export class CodexViewerUI {
     this._renderSidebarActive();
   }
 
-  /** @private Create a single entry card */
+  /** @private Create a single entry card.
+   * UX-11 #10 reveal model: title + icon + category + one-liner are ALWAYS
+   * visible — the library is a syllabus. Depth (full briefing + rationale)
+   * unlocks through play. Locked cards are readable but visibly
+   * "not-yet-detailed": dimmed border + 🔒 on the Tech-Level badge.
+   */
   _makeCard(entry) {
     const card = document.createElement('div');
     card.className = 'codex-card';
@@ -260,77 +328,64 @@ export class CodexViewerUI {
     const isNew = entry.unlocked && !entry.seen;
 
     Object.assign(card.style, {
-      padding: '10px 12px', borderRadius: '4px', cursor: isLocked ? 'default' : 'pointer',
-      border: `1px solid ${isLocked ? 'rgba(255,255,255,0.06)' : isNew ? 'rgba(0,212,255,0.4)' : 'rgba(0,212,255,0.15)'}`,
+      padding: '10px 12px', borderRadius: '4px', cursor: 'pointer',
+      border: `1px solid ${isLocked ? 'rgba(255,255,255,0.08)' : isNew ? 'rgba(0,212,255,0.4)' : 'rgba(0,212,255,0.15)'}`,
       background: isLocked ? 'rgba(255,255,255,0.02)' : isNew ? 'rgba(0,212,255,0.06)' : 'rgba(0,212,255,0.03)',
       transition: 'all 0.15s ease', position: 'relative', overflow: 'hidden',
       boxShadow: isNew ? '0 0 12px rgba(0,212,255,0.15)' : 'none',
     });
 
-    const title = isLocked ? '???' : entry.title;
-    const icon = isLocked ? '🔒' : entry.icon;
     const catMeta = CATEGORY_META[entry.category] || { label: entry.category };
-    const shortText = isLocked
-      ? '<span style="opacity:0.3;font-style:italic;">Discover through gameplay</span>'
-      : `<span style="opacity:0.7;">${entry.shortText}</span>`;
+    const shortText = `<span style="opacity:${isLocked ? 0.55 : 0.7};">${entry.shortText}</span>`;
     const newBadge = isNew
       ? '<span style="position:absolute;top:6px;right:8px;font-size:9px;color:#00d4ff;font-weight:bold;text-shadow:0 0 6px rgba(0,212,255,0.5);">NEW</span>'
       : '';
 
-    // ST-6.6: Colour-coded TRL badge on card (small, bottom-left corner style)
+    // ST-6.6 / UX-11 #10: colour-coded Tech-Level badge ("Tech Lvl n").
+    // Locked entries show a 🔒 on the badge — depth not yet earned.
     const trl = entry.trl;
-    const trlBadge = (!isLocked && typeof trl === 'number')
-      ? `<span title="TRL ${trl} — ${trlToLabel(trl, Constants.TRL)}${entry.trlRationale ? '\n' + entry.trlRationale : ''}"
+    const trlBadge = (typeof trl === 'number')
+      ? `<span title="${trlToTechLevelLabel(trl, Constants.TRL)}${entry.trlRationale && !isLocked ? '\n' + entry.trlRationale : ''}${isLocked ? '\n🔒 Full briefing locked — ' + (entry.unlockHint || 'discover through gameplay.') : ''}"
               style="position:absolute;bottom:6px;right:8px;font-size:9px;font-weight:bold;
                      padding:1px 5px;border-radius:2px;letter-spacing:0.05em;
                      color:${trlToBadgeColor(trl, Constants.TRL)};
                      border:1px solid ${trlToBadgeColor(trl, Constants.TRL)};
-                     background:rgba(0,0,0,0.45);">TRL ${trl}</span>`
+                     opacity:${isLocked ? 0.6 : 1};
+                     background:rgba(0,0,0,0.45);">${isLocked ? '🔒 ' : ''}${techLevelBadgeText(trl)}</span>`
       : '';
 
     card.innerHTML = `
       ${newBadge}
-      <div style="font-size:18px;margin-bottom:4px;">${icon}</div>
-      <div style="font-size:12px;font-weight:bold;color:${isLocked ? '#555' : '#eee'};margin-bottom:3px;
-        ${isLocked ? 'filter:blur(2px);user-select:none;' : ''}">${title}</div>
-      <div style="font-size:9px;color:${isLocked ? '#444' : '#00d4ff'};margin-bottom:4px;opacity:0.7;">${catMeta.label}</div>
+      <div style="font-size:18px;margin-bottom:4px;${isLocked ? 'opacity:0.65;' : ''}">${entry.icon}</div>
+      <div style="font-size:12px;font-weight:bold;color:${isLocked ? '#9ab' : '#eee'};margin-bottom:3px;">${entry.title}</div>
+      <div style="font-size:9px;color:${isLocked ? '#357' : '#00d4ff'};margin-bottom:4px;opacity:0.7;">${catMeta.label}</div>
       <div style="font-size:10px;line-height:1.4;padding-bottom:14px;">${shortText}</div>
       ${trlBadge}
     `;
 
-    if (!isLocked) {
-      card.addEventListener('mouseenter', () => {
-        card.style.borderColor = '#00d4ff';
-        card.style.background = 'rgba(0,212,255,0.1)';
-      });
-      card.addEventListener('mouseleave', () => {
-        card.style.borderColor = isNew ? 'rgba(0,212,255,0.4)' : 'rgba(0,212,255,0.15)';
-        card.style.background = isNew ? 'rgba(0,212,255,0.06)' : 'rgba(0,212,255,0.03)';
-      });
-      card.addEventListener('click', () => this._showDetail(entry));
-    } else {
-      card.addEventListener('click', () => this._showLockedMessage(card));
-    }
+    card.addEventListener('mouseenter', () => {
+      card.style.borderColor = isLocked ? 'rgba(0,212,255,0.3)' : '#00d4ff';
+      card.style.background = 'rgba(0,212,255,0.1)';
+    });
+    card.addEventListener('mouseleave', () => {
+      card.style.borderColor = isLocked ? 'rgba(255,255,255,0.08)'
+        : (isNew ? 'rgba(0,212,255,0.4)' : 'rgba(0,212,255,0.15)');
+      card.style.background = isLocked ? 'rgba(255,255,255,0.02)'
+        : (isNew ? 'rgba(0,212,255,0.06)' : 'rgba(0,212,255,0.03)');
+    });
+    card.addEventListener('click', () => this._showDetail(entry));
 
     return card;
   }
 
-  /** @private Brief flicker message on locked card click */
-  _showLockedMessage(card) {
-    const existing = card.querySelector('.locked-msg');
-    if (existing) return;
-    const msg = document.createElement('div');
-    msg.className = 'locked-msg';
-    Object.assign(msg.style, {
-      position: 'absolute', bottom: '4px', left: '0', right: '0', textAlign: 'center',
-      fontSize: '9px', color: '#ffaa00', padding: '2px', background: 'rgba(0,0,0,0.7)',
-    });
-    msg.textContent = '🔒 Discover this through gameplay';
-    card.appendChild(msg);
-    setTimeout(() => { if (msg.parentNode) msg.parentNode.removeChild(msg); }, 2000);
-  }
+  // (UX-11 #10: _showLockedMessage removed — locked cards open the detail
+  // view, which shows the how-to-unlock hint instead of a flicker message.)
 
-  /** @private Show the full entry detail view */
+  /** @private Show the full entry detail view.
+   * UX-11 #10: locked entries open too — they show the one-liner, the
+   * how-to-unlock hint, and a greyed "full briefing unlocks when…" panel
+   * instead of the fullText.
+   */
   _showDetail(entry) {
     const listEl = document.getElementById('codex-entry-list');
     const detailEl = document.getElementById('codex-entry-detail');
@@ -340,6 +395,8 @@ export class CodexViewerUI {
     listEl.style.display = 'none';
     detailEl.style.display = 'block';
 
+    const isLocked = !entry.unlocked;
+
     // Mark as viewed
     if (entry.unlocked && !entry.seen) {
       eventBus.emit(Events.CODEX_VIEWED, { id: entry.id });
@@ -347,34 +404,48 @@ export class CodexViewerUI {
 
     const catMeta = CATEGORY_META[entry.category] || { label: entry.category, icon: '📄' };
 
-    // ST-6.6: Larger TRL badge + label + rationale in detail view
+    // ST-6.6 / UX-11 #10: Tech-Level badge + tier word + rationale in detail
     const dTrl = entry.trl;
     let trlDetailHtml = '';
     if (typeof dTrl === 'number') {
       const col = trlToBadgeColor(dTrl, Constants.TRL);
       const lbl = trlToLabel(dTrl, Constants.TRL);
-      const rat = entry.trlRationale ? entry.trlRationale : '';
+      const rat = (!isLocked && entry.trlRationale) ? entry.trlRationale : '';
       trlDetailHtml = `
-        <div title="NASA Technology Readiness Level ${dTrl} — ${lbl}"
+        <div title="Tech Level (real-world readiness) ${dTrl} — ${lbl}"
              style="display:flex;align-items:center;gap:10px;margin-bottom:12px;
                     padding:6px 10px;border:1px solid ${col};border-radius:3px;
-                    background:rgba(0,0,0,0.35);font-size:11px;">
+                    background:rgba(0,0,0,0.35);font-size:11px;${isLocked ? 'opacity:0.7;' : ''}">
           <span style="font-weight:bold;letter-spacing:0.05em;color:${col};
                        padding:2px 8px;border:1px solid ${col};border-radius:2px;
-                       background:rgba(0,0,0,0.35);">TRL ${dTrl}</span>
+                       background:rgba(0,0,0,0.35);">${techLevelBadgeText(dTrl)}</span>
           <span style="color:${col};font-weight:bold;letter-spacing:0.04em;">${lbl}</span>
           ${rat ? `<span style="color:#888;font-style:italic;flex:1;">${rat}</span>` : ''}
+          ${isLocked ? '<span style="color:#667;font-style:italic;flex:1;text-align:right;">🔒 details locked</span>' : ''}
         </div>`;
     }
+
+    // Body: full briefing when unlocked; hint + greyed unlock line when locked.
+    const hint = entry.unlockHint || 'Discover through gameplay.';
+    const bodyHtml = isLocked
+      ? `
+        <div style="font-size:11px;color:#ffaa00;line-height:1.5;margin-bottom:12px;
+          padding:8px 12px;border:1px dashed rgba(255,170,0,0.4);border-radius:3px;">
+          🔒 <b>How to unlock:</b> ${hint}
+        </div>
+        <div style="font-size:12px;color:#667;font-style:italic;line-height:1.6;">
+          Full briefing unlocks when you encounter this in flight.
+        </div>`
+      : `<div style="font-size:12px;color:#ccc;line-height:1.7;white-space:pre-wrap;">${entry.fullText}</div>`;
 
     detailEl.innerHTML = `
       <div id="codex-back-btn" style="cursor:pointer;color:#00d4ff;font-size:12px;margin-bottom:14px;
         display:inline-block;padding:3px 8px;border:1px solid rgba(0,212,255,0.2);border-radius:3px;
         transition:background 0.15s;">← Back</div>
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
-        <span style="font-size:32px;">${entry.icon}</span>
+        <span style="font-size:32px;${isLocked ? 'opacity:0.65;' : ''}">${entry.icon}</span>
         <div>
-          <div style="font-size:16px;font-weight:bold;color:#eee;">${entry.title}</div>
+          <div style="font-size:16px;font-weight:bold;color:${isLocked ? '#9ab' : '#eee'};">${entry.title}</div>
           <div style="font-size:10px;color:#00d4ff;opacity:0.8;">${catMeta.icon} ${catMeta.label}</div>
         </div>
       </div>
@@ -382,7 +453,7 @@ export class CodexViewerUI {
       <div style="font-size:12px;color:#aaddff;line-height:1.4;margin-bottom:16px;
         padding:8px 12px;background:rgba(0,212,255,0.05);border-left:3px solid rgba(0,212,255,0.3);
         border-radius:2px;">${entry.shortText}</div>
-      <div style="font-size:12px;color:#ccc;line-height:1.7;white-space:pre-wrap;">${entry.fullText}</div>
+      ${bodyHtml}
     `;
 
     const backBtn = detailEl.querySelector('#codex-back-btn');

@@ -65,8 +65,9 @@ These are the load-bearing moves. Each unlocks downstream value far beyond its o
 | EN-6 | **Lambert solver + "impossible orbit" red slider** (veteran) | Teaches "can't brute-force time"; powers porkchop. | Med | M |
 | EN-7 | **CW accuracy band** during close approach | Teaches when linear approximation breaks; builds autopilot trust. | Low | M |
 | EN-8 | **Trophy shelf** (first net, first detumble, first GEO, first 1000kg) | Profile-permanent retention hook; cheap. Extends apex-hub keepsake. | Low | S |
-| EN-9 | **Re-home orphaned verbs:** keybind Web Shot; decide Fishing key; resolve Ablation (CP-2 supersedes) | Removes dead-code smell; small UX wins. See DAUGHTER_RETRIEVAL_AUDIT §7. | Low | S each |
+| EN-9 | **Re-home orphaned verbs:** keybind Web Shot; decide Fishing key (**now urgent: cast-all/fishing has ZERO triggers** since the 2026-06-12 RadialMenu + comms-command removal — `ArmManager.deployFishing()` is uncalled); resolve Ablation (CP-2 supersedes) | Removes dead-code smell; small UX wins. See DAUGHTER_RETRIEVAL_AUDIT §7. | Low | S each |
 | EN-10 | **NetInventoryPanel redesign + re-enable** | Suspended pending visual redesign (StatusPanel aesthetic, progressive reveal). | Low | S |
+| EN-11 | **Net/capture momentum-torque realism pass** (audit 2026-06-12, [`CAPTURE_NET.md §11`](CAPTURE_NET.md)) | Four physics effects are narrated, not simulated: (1) debris tumble L frozen on capture — make it a post-capture settle torque so the despin laser becomes *necessary*, not a dice buff; (2) net-fire linear recoil (≈1.03 m/s un-modeled kick on a 6.6 kg V5 Weaver — existing SK hold loop can absorb it); (3) SD-NET mouth collapses below its 10 N rim-tension floor at ~26 m flight with no in-code consequence; (4) reaction-wheel saturation scalar for net-fire spin-table torque. Derivations + priority order in §11.8. Alters balance — tune against SK gates + `NET_STRAIN_*`. | Med (gameplay balance) | S–M each |
 
 ---
 

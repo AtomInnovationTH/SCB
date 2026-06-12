@@ -1263,3 +1263,115 @@ describe('CaptureNetVisual — getTetherAttachPoint (Stage 3 prep)', () => {
     });
   });
 });
+
+// ─── UX-11 #2/#3: park freeze + chop hand-off ───────────────────────────
+
+describe('CaptureNetVisual — UX-11 #3: captured/parked bag is frozen (no pulse)', () => {
+  it('REELING (success): steady opacity, frozen spinAngle, rim at closed radius across frames', () => {
+    withCeremony(() => {
+      const net = mockNet({ state: 'REELING', spinRate: 2, catchResult: 'success', _heldByArm: true });
+      const cns = mockCNS({ 0: net });
+      const vis = new CaptureNetVisual();
+      vis.init(mockScene(), mockPlayer(), cns);
+      vis._createNetVisual('arm_0', 0, -1, net);
+
+      vis.update(0.016);
+      const entry = vis._activeVisuals.get('arm_0');
+      const spinAfter1 = entry.spinAngle;
+      const op1 = entry.coneMesh.material.opacity;
+      const w0a = entry.rimWeights[0].position.clone();
+
+      // Simulate a multi-second park — many frames
+      for (let i = 0; i < 60; i++) vis.update(0.05);
+
+      assert.equal(entry.spinAngle, spinAfter1, 'spinAngle must not advance during park');
+      assert.equal(entry.coneMesh.material.opacity, op1, 'opacity must be steady (no pulse)');
+      const w0b = entry.rimWeights[0].position;
+      assert.ok(w0a.distanceTo(w0b) < 1e-12, 'rim weights must be static');
+      // Rim ring sits at the CLOSED (cinched) radius
+      const r = Math.sqrt(w0b.x * w0b.x + w0b.y * w0b.y);
+      assert.ok(Math.abs(r - entry.closedRadius) < 1e-12,
+        `rim radius must equal closedRadius (${entry.closedRadius}), got ${r}`);
+      assert.equal(entry.coneMesh.material.opacity, 0.55, 'fixed 0.55 opacity');
+      vis.dispose();
+    });
+  });
+
+  it('CAPTURED: rim weights render the static cinched ring', () => {
+    withCeremony(() => {
+      const net = mockNet({ state: 'CAPTURED', spinRate: 2, catchResult: 'success' });
+      const cns = mockCNS({ 0: net });
+      const vis = new CaptureNetVisual();
+      vis.init(mockScene(), mockPlayer(), cns);
+      vis._createNetVisual('arm_0', 0, -1, net);
+      vis.update(0.016);
+      const entry = vis._activeVisuals.get('arm_0');
+      assert.equal(entry.coneMesh.visible, true);
+      for (const w of entry.rimWeights) assert.equal(w.visible, true, 'cinched ring visible');
+      assert.equal(entry.drawstringLine.visible, true, 'drawstring visible');
+      vis.dispose();
+    });
+  });
+
+  it('REELING (miss): cone hidden and rim/drawstring furniture hidden too', () => {
+    withCeremony(() => {
+      const net = mockNet({ state: 'REELING', spinRate: 2, catchResult: 'miss' });
+      const cns = mockCNS({ 0: net });
+      const vis = new CaptureNetVisual();
+      vis.init(mockScene(), mockPlayer(), cns);
+      vis._createNetVisual('arm_0', 0, -1, net);
+      // Pre-show the furniture via FLIGHT, then switch to miss-reel
+      net.state = 'FLIGHT';
+      vis.update(0.016);
+      net.state = 'REELING';
+      vis.update(0.016);
+      const entry = vis._activeVisuals.get('arm_0');
+      assert.equal(entry.coneMesh.visible, false, 'empty bag hidden during miss reel');
+      for (const w of entry.rimWeights) assert.equal(w.visible, false, 'weights hidden');
+      assert.equal(entry.drawstringLine.visible, false, 'drawstring hidden');
+      vis.dispose();
+    });
+  });
+});
+
+describe('CaptureNetVisual — UX-11 #2: chop hand-off fade (no pop)', () => {
+  it('NET_REEL_COMPLETED with capturedMass > 0 detaches + fades instead of instant removal', () => {
+    withCeremony(() => {
+      const net = mockNet({ state: 'REELING', spinRate: 2, catchResult: 'success' });
+      const cns = mockCNS({ 0: net });
+      const vis = new CaptureNetVisual();
+      vis.init(mockScene(), mockPlayer(), cns);
+      vis._createNetVisual('arm_0', 0, -1, net);
+      vis.update(0.016);
+
+      vis._onReelCompleted({ armIndex: 0, capturedMass: 120 });
+      assert.equal(vis._activeVisuals.size, 1, 'visual must survive the chop boundary');
+      const entry = vis._activeVisuals.get('arm_0');
+      assert.equal(entry.detached, true, 'entry marked detached');
+      assert.equal(vis._fadeTimers.length, 1, 'fade timer started');
+
+      // Net gone from the system (stowed) — detached visual must NOT be culled mid-fade
+      cns._armNets = {};
+      vis.update(0.1);
+      assert.equal(vis._activeVisuals.size, 1, 'still fading');
+
+      // Fade completes → removed
+      vis.update(1.0);
+      assert.equal(vis._activeVisuals.size, 0, 'removed after fade');
+      vis.dispose();
+    });
+  });
+
+  it('NET_REEL_COMPLETED with no catch removes immediately (miss path unchanged)', () => {
+    withCeremony(() => {
+      const net = mockNet({ state: 'REELING', spinRate: 2, catchResult: 'miss' });
+      const cns = mockCNS({ 0: net });
+      const vis = new CaptureNetVisual();
+      vis.init(mockScene(), mockPlayer(), cns);
+      vis._createNetVisual('arm_0', 0, -1, net);
+      vis._onReelCompleted({ armIndex: 0, capturedMass: 0 });
+      assert.equal(vis._activeVisuals.size, 0, 'empty net removed at once');
+      vis.dispose();
+    });
+  });
+});

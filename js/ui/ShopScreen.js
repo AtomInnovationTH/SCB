@@ -3,7 +3,7 @@
  * @module ui/ShopScreen
  */
 
-import { Constants, trlToBadgeColor, trlToLabel } from '../core/Constants.js';
+import { Constants, trlToBadgeColor, trlToTechLevelLabel, techLevelBadgeText } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { GameStates } from '../core/GameState.js';
@@ -703,14 +703,14 @@ export class ShopScreen {
     const costColor = maxed ? 'rgba(0,255,136,0.4)' : (canAfford ? '#f0c040' : '#ff4444');
     const costStrike = !canAfford && !maxed ? 'text-decoration:line-through;opacity:0.6;' : '';
 
-    // ST-6.6: TRL badge — colour-coded, tooltipped with rationale
+    // ST-6.6 / UX-11 #10: Tech-Level badge — colour-coded, tooltipped with rationale
     const trlBadge = (typeof upgrade.trl === 'number')
-      ? `<span title="TRL ${upgrade.trl} — ${trlToLabel(upgrade.trl, Constants.TRL)}${upgrade.trlRationale ? '\n' + upgrade.trlRationale : ''}"
+      ? `<span title="${trlToTechLevelLabel(upgrade.trl, Constants.TRL)}${upgrade.trlRationale ? '\n' + upgrade.trlRationale : ''}"
               style="display:inline-block;margin-left:6px;font-size:0.6rem;font-weight:bold;
                      padding:1px 5px;border-radius:2px;letter-spacing:0.05em;
                      color:${trlToBadgeColor(upgrade.trl, Constants.TRL)};
                      border:1px solid ${trlToBadgeColor(upgrade.trl, Constants.TRL)};
-                     background:rgba(0,0,0,0.3);">TRL ${upgrade.trl}</span>`
+                     background:rgba(0,0,0,0.3);">${techLevelBadgeText(upgrade.trl)}</span>`
       : '';
 
     return `
@@ -949,7 +949,7 @@ export class ShopScreen {
         }
       }
 
-      // TRL badge for the tier
+      // UX-11 #10: Tech-Level badge for the tier (player-facing relabel of TRL)
       const trlValue = tier.unlockTRL;
       const effectiveTRL = getEffectiveTRL(gs.debrisCleared || 0);
       const trlMet = effectiveTRL >= trlValue;
@@ -965,7 +965,7 @@ export class ShopScreen {
               ${tier.displayName}
               <span style="font-size:0.6rem;font-weight:bold;padding:1px 5px;border-radius:2px;
                            letter-spacing:0.05em;color:${trlColor};border:1px solid ${trlColor};
-                           background:rgba(0,0,0,0.3);margin-left:6px;">TRL ${trlValue}</span>
+                           background:rgba(0,0,0,0.3);margin-left:6px;">${techLevelBadgeText(trlValue)}</span>
               ${tier.endFaceArms > 0 ? '<span style="font-size:0.6rem;color:#ff8800;margin-left:6px;">+END-FACE</span>' : ''}
             </div>
             <div style="font-size:0.7rem;color:rgba(0,255,136,0.5);">${statsLine}</div>

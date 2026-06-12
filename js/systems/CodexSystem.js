@@ -31,7 +31,7 @@ export const CodexCategory = {
 };
 
 // ============================================================================
-// CORE ENTRIES (113 entries across 11 categories)
+// CORE ENTRIES (114 entries across 11 categories)
 // ============================================================================
 
 function buildEntries() {
@@ -310,6 +310,24 @@ function buildEntries() {
       unlocked: false,
       seen: false,
       icon: '🎣',
+    },
+    {
+      // Item 3 (2026-06-12): net spin physics — where the torque goes.
+      id: 'net_yo_yo_despin',
+      title: 'Net Spin & the Yo-Yo Despin',
+      category: CodexCategory.TETHERS,
+      shortText: 'The net launcher spins the canister; radius growth — not torque — slows the blossom.',
+      // Live values from Constants.CAPTURE_NET so a SPIN_HZ retune can't make
+      // this player-facing text teach stale numbers (review 2026-06-12 — the
+      // derivation test guards the constants, not prose copies of them).
+      fullText: 'A capture net leaves its launcher spinning fast (the spin table torques the canister; the equal-and-opposite reaction is absorbed by the daughter\'s reaction wheel). In flight no external torque acts on the net — its angular momentum L = Iω is conserved. As the rim weights fly outward and the mouth blossoms open, the moment of inertia grows with radius squared (I ∝ r²), so the spin rate must FALL to keep L constant. This is the yo-yo despin effect — the same trick sounding rockets use, with no fuel and no brakes. The settled spin ('
+        + `${Constants.CAPTURE_NET.LARGE.SPIN_HZ * 60}/${Constants.CAPTURE_NET.MEDIUM.SPIN_HZ * 60}/${Constants.CAPTURE_NET.SMALL.SPIN_HZ * 60} RPM by net class`
+        + ') keeps centripetal tension on each rim weight high enough to hold the mouth open in 0g until the cinch fires.',
+      triggerEvent: Events.NET_FIRED,
+      triggerCondition: () => true,
+      unlocked: false,
+      seen: false,
+      icon: '🪀',
     },
 
     // === DEBRIS (2) ===
@@ -1763,6 +1781,7 @@ const TRL_ANNOTATIONS = {
   // === TETHERS ===
   space_tether:           { trl: 5, trlRationale: 'TSS-1R (1996), YES2 (2007) demonstrated; not operational' },
   tether_reel_in:         { trl: 4, trlRationale: 'Motorised reel capture demonstrated in ground/lab tests only' },
+  net_yo_yo_despin:       { trl: 6, trlRationale: 'RemoveDEBRIS net demo (2018); yo-yo despin flown on sounding rockets since the 1960s' },
   tether_materials:       { trl: 9, trlRationale: 'Dyneema/Zylon flown as lanyards; fibre properties well-characterised' },
   tether_dynamics:        { trl: 9, trlRationale: 'Modelled and observed on TSS-1R, YES2' },
   tether_tangle_physics:  { trl: 2, trlRationale: 'Game concept — multi-tether space operations not yet flown' },
@@ -1857,13 +1876,77 @@ function applyTRLAnnotations(entries) {
 }
 
 // ============================================================================
+// UX-11 #10: HOW-TO-UNLOCK HINTS
+// Human phrasing of each entry's triggerEvent/triggerCondition intent.
+// Specific overrides for the highest-traffic entries; every other entry falls
+// back to its category default so no locked card is ever hint-less.
+// ============================================================================
+
+/** Per-category default unlock hints (all 11 categories covered). */
+const CATEGORY_UNLOCK_HINTS = {
+  ORBITAL_MECHANICS: 'Fly the mothership — maneuvers and transfers reveal orbital concepts.',
+  PROPULSION:        'Burn propellant — thrusters, fuel cycling, and the Forge teach propulsion.',
+  POWER:             'Manage the power buses and battery during operations.',
+  SPACE_ENVIRONMENT: 'Keep flying — space weather, drag, and radiation find you.',
+  MATERIALS:         'Salvage debris and process metals in the Forge.',
+  TETHERS:           'Work the daughters\' tethers, reels, and nets.',
+  DEBRIS:            'Scan, capture, and clear debris.',
+  SENSORS:           'Run scans (S / W) and read the sensor suite.',
+  COMMS:             'Use comms and downlink to ground stations.',
+  NEWS:              'Play through mission events as they break.',
+  HERITAGE:          'Reach mission milestones and endgame outcomes.',
+};
+
+/** Specific overrides — id → hint (extend over time; defaults cover the rest). */
+const UNLOCK_HINTS = {
+  keplerian_orbit:     'Reach the orbital view.',
+  delta_v:             'Spend some propellant.',
+  hohmann_transfer:    'Fly an orbit transfer between clusters.',
+  orbital_inclination: 'Start a trawl sweep (Shift+G).',
+  feep_thruster:       'Pilot a daughter (P) and thrust manually.',
+  specific_impulse:    'Earn a fuel-efficiency award.',
+  xenon_propellant:    'Watch your xenon gauge drop.',
+};
+
+/**
+ * Apply unlock hints to the entries array in-place, adding `unlockHint`.
+ * Priority: specific UNLOCK_HINTS[id] → CATEGORY_UNLOCK_HINTS[category] →
+ * generic fallback.
+ * @param {Array<object>} entries
+ * @returns {Array<object>} same array (mutated)
+ */
+function applyUnlockHints(entries) {
+  for (const entry of entries) {
+    entry.unlockHint = UNLOCK_HINTS[entry.id]
+      || CATEGORY_UNLOCK_HINTS[entry.category]
+      || 'Discover through gameplay.';
+  }
+  return entries;
+}
+
+/**
+ * UX-11 #10: pure search predicate — case-insensitive substring match on
+ * title, shortText, and category. Exported for Node tests.
+ * @param {object} entry
+ * @param {string} query
+ * @returns {boolean}
+ */
+export function entryMatchesQuery(entry, query) {
+  if (!query) return true;
+  const q = String(query).toLowerCase();
+  return (entry.title || '').toLowerCase().includes(q)
+    || (entry.shortText || '').toLowerCase().includes(q)
+    || (entry.category || '').toLowerCase().replace(/_/g, ' ').includes(q);
+}
+
+// ============================================================================
 // CODEX SYSTEM
 // ============================================================================
 
 export class CodexSystem {
   constructor() {
-    /** @type {Array<object>} All codex entries (TRL-annotated) */
-    this.entries = applyTRLAnnotations(buildEntries());
+    /** @type {Array<object>} All codex entries (TRL-annotated + unlock-hinted) */
+    this.entries = applyUnlockHints(applyTRLAnnotations(buildEntries()));
 
     /** @type {Map<string, object>} Fast lookup by id */
     this._byId = new Map();
@@ -2085,6 +2168,39 @@ export class CodexSystem {
    */
   getCategory(category) {
     return this.entries.filter(e => e.category === category);
+  }
+
+  /**
+   * UX-11 #10: per-category unlock progress (for sidebar tabs).
+   * @param {string} category - One of CodexCategory values
+   * @returns {{ unlocked: number, total: number }}
+   */
+  getCategoryProgress(category) {
+    const list = this.getCategory(category);
+    return {
+      unlocked: list.filter(e => e.unlocked).length,
+      total: list.length,
+    };
+  }
+
+  /**
+   * UX-11 #10: how-to-unlock hint for an entry (always non-empty).
+   * @param {string} id
+   * @returns {string}
+   */
+  getUnlockHint(id) {
+    const entry = this._byId.get(id);
+    return entry ? (entry.unlockHint || 'Discover through gameplay.') : '';
+  }
+
+  /**
+   * UX-11 #10: live search across ALL categories (title/shortText/category).
+   * @param {string} query
+   * @returns {Array<object>}
+   */
+  searchEntries(query) {
+    if (!query) return this.entries;
+    return this.entries.filter(e => entryMatchesQuery(e, query));
   }
 
   /**

@@ -303,7 +303,8 @@ export class StatusPanel {
         <span style="color:#ffaa00;font-size:13px;font-weight:bold;">💰 <b id="hud-credits">0</b></span>
         <span id="hud-arm-tier" title="Current arm configuration tier"
               style="display:none;color:#ff8800;font-size:11px;letter-spacing:0.05em;">Y0 Quad — 4 arms</span>
-        <span id="hud-anchor-wrap" style="display:none;color:#81c784;font-size:11px;">⚓ <b id="hud-anchor-mass">0</b>/<b id="hud-anchor-target">10,000</b> kg</span>
+        <span id="hud-anchor-wrap" title="Elevator contract — deliver refined metal at the shop to win"
+              style="color:#81c784;font-size:11px;">⚓ <span style="font-size:9px;letter-spacing:1px;opacity:0.7;">CONTRACT</span> <b id="hud-anchor-mass">0</b>/<b id="hud-anchor-target">10,000</b> kg</span>
       </div>
     `;
 
@@ -400,7 +401,7 @@ export class StatusPanel {
         <div id="cargo-summary" data-hud-group="cargo-group" style="font-size:10px;margin-top:3px;color:#666;display:none;"></div>
         <div id="forge-inline" data-hud-group="cargo-group" style="font-size:10px;margin-top:3px;display:none;">
           <div style="display:flex;align-items:center;gap:4px;">
-            <span style="color:#666;">[F4] Forge:</span>
+            <span style="color:#666;">[5] Forge:</span>
             <span id="forge-inline-status" style="color:#666;">Idle</span>
           </div>
           <div id="forge-progress-inline" style="display:none;margin-top:2px;">
@@ -560,20 +561,18 @@ export class StatusPanel {
     });
 
     // Phase 5 → R3: Listen for contract updates (now updates score bar anchor segment)
+    // UX-11 #12: the contract track is ALWAYS visible (dual-objective HUD) —
+    // the player should never have to open the shop to know if they're winning.
     eventBus.on(Events.CONTRACT_UPDATE, (data) => {
       const wrap = document.getElementById('hud-anchor-wrap');
       const massEl = document.getElementById('hud-anchor-mass');
       const targetEl = document.getElementById('hud-anchor-target');
-      if (wrap && data.contractMassKg > 0) {
-        wrap.style.display = '';  // Show when first contribution
-      }
       if (massEl) massEl.textContent = data.contractMassKg.toFixed(0);
       if (targetEl) targetEl.textContent = data.targetMassKg.toLocaleString();
       // Color intensity: muted below 50%, brighter above
       if (wrap && data.targetMassKg > 0) {
         const pct = data.contractMassKg / data.targetMassKg;
-        const color = pct > 0.5 ? '#a5d6a7' : '#81c784';
-        wrap.querySelector('span:last-child').style.color = color;
+        wrap.style.color = pct > 0.5 ? '#a5d6a7' : '#81c784';
       }
     });
 
@@ -1731,13 +1730,13 @@ export class StatusPanel {
       if (progressContainer) progressContainer.style.display = 'none';
 
       // Sprint A2: Show forge hotkey hint when idle with cargo available.
-      // 2026-06-03 (Item 9): the live Forge/Kiln binding is F4 (K is a no-op,
-      // R is reel-in). Keep this hint in sync with InputManager 'F4'.
+      // UX-11 #8 (2026-06-11): the live Forge/Kiln binding is 5 (was F4).
+      // Keep this hint in sync with InputManager 'Digit5'.
       if (hintEl) {
         const hasCargo = this._cargoStatus && this._cargoStatus.totalMassKg > 0;
         if (hasCargo) {
           hintEl.style.display = '';
-          hintEl.textContent = '▸ Press [F4] to process cargo';
+          hintEl.textContent = '▸ Press [5] to process cargo';
           hintEl.style.color = '#ffaa00';
         } else {
           hintEl.style.display = 'none';

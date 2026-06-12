@@ -95,3 +95,36 @@ describe('ToolRecommender — NET / MAGNET priority (§7)', () => {
     assert.equal(r.recommended, 'NET', 'SD-NET fits a 4 kg fragment, so it stays primary');
   });
 });
+
+describe('ToolRecommender — width fork (Item 4, 2026-06-12)', () => {
+  it('debris wider than the weaver MEDIUM net mouth → NET 0, GRIPPER wins', () => {
+    // MEDIUM net DIAMETER = 5 m; 6 m wide body fits the mass cap but not the mouth.
+    const r = recommendArmTool({
+      armType: 'weaver', mass: 300, sizeMeter: 6, debrisType: 'defunctSat',
+    });
+    assert.equal(r.scores.NET, 0, 'too-wide target zeroes the NET score');
+    assert.equal(r.hints.NET, 'too wide for net mouth', 'hint names the reason');
+    assert.equal(r.recommended, 'GRIPPER', 'gripper takes the ▶ for a too-wide body');
+    assert.equal(r.scores.GRIPPER, 3, 'gripper scores ★★★ on width-oversize');
+  });
+
+  it('debris narrower than the mouth keeps NET primary (width does not fire)', () => {
+    const r = recommendArmTool({
+      armType: 'weaver', mass: 300, sizeMeter: 3, debrisType: 'defunctSat',
+    });
+    assert.equal(r.recommended, 'NET', '3 m body fits the 5 m mouth');
+    assert.equal(r.scores.NET, 3);
+  });
+
+  it('spinner SMALL net (1.5 m mouth) width fork', () => {
+    const r = recommendArmTool({
+      armType: 'spinner', mass: 20, sizeMeter: 2, debrisType: 'missionDebris',
+    });
+    assert.equal(r.scores.NET, 0, '2 m body cannot fit the 1.5 m SD-NET mouth');
+  });
+
+  it('sizeMeter absent → width fork skipped (graceful degradation)', () => {
+    const r = recommendArmTool({ armType: 'weaver', mass: 300, debrisType: 'defunctSat' });
+    assert.equal(r.scores.NET, 3, 'no width data → net unaffected');
+  });
+});

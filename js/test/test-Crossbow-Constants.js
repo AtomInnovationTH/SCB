@@ -455,3 +455,32 @@ describe('V5 Crossbow — Deprecated Constants', () => {
     assert.equal(Constants.ARM_LAUNCH_SPEED, 10.0);
   });
 });
+
+// ── Item 3 (2026-06-12): net rim-weight tension derivation guard ─────────
+// The mouth-open centripetal tension per rim weight at the SETTLED spin
+// (F = m × ω² × r, ω = 2π × SPIN_HZ, r = DIAMETER/2) must stay ≥ 10 N for
+// every net class — below ~5 N the bag mouth collapses in 0g. This guards
+// future SPIN_HZ / RIM_WEIGHT_MASS / DIAMETER retunes. Reference values:
+// LARGE 47.4 N @ 120 RPM, MEDIUM 78.9 N @ 240 RPM, SMALL 16.0 N @ 360 RPM.
+describe('CAPTURE_NET — rim-weight tension ≥ 10 N at settled spin (Item 3)', () => {
+  const MIN_TENSION_N = 10;
+  for (const cls of ['LARGE', 'MEDIUM', 'SMALL']) {
+    it(`${cls}: F/wt = m·ω²·r ≥ ${MIN_TENSION_N} N`, () => {
+      const c = Constants.CAPTURE_NET[cls];
+      assert.ok(c, `${cls} class exists`);
+      const omega = 2 * Math.PI * c.SPIN_HZ;          // rad/s at settled spin
+      const r = c.DIAMETER / 2;                        // m
+      const F = c.RIM_WEIGHT_MASS * omega * omega * r; // N per weight
+      assert.ok(F >= MIN_TENSION_N,
+        `${cls} rim tension ${F.toFixed(1)} N < ${MIN_TENSION_N} N — ` +
+        `the net mouth will collapse; re-derive SPIN_HZ/RIM_WEIGHT_MASS (see Constants comment table)`);
+    });
+  }
+
+  it('comment-table reference values still match the constants (derivation)', () => {
+    const f = (c) => c.RIM_WEIGHT_MASS * Math.pow(2 * Math.PI * c.SPIN_HZ, 2) * (c.DIAMETER / 2);
+    assert.ok(Math.abs(f(Constants.CAPTURE_NET.LARGE) - 47.4) < 0.5, 'LARGE ≈ 47.4 N');
+    assert.ok(Math.abs(f(Constants.CAPTURE_NET.MEDIUM) - 78.9) < 0.5, 'MEDIUM ≈ 78.9 N');
+    assert.ok(Math.abs(f(Constants.CAPTURE_NET.SMALL) - 16.0) < 0.5, 'SMALL ≈ 16.0 N');
+  });
+});

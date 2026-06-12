@@ -40,6 +40,7 @@ export class DespinLaser {
     this._wasFiring = false;    // edge detection for ABLATION_START/END
     this._beam = null;          // lazy THREE.Line
     this._beamTarget = null;    // debris currently lit
+    this._overrideTarget = null; // ARM_PILOT SK target (issue 5c/9, 2026-06-12)
   }
 
   /** @param {{scene?, player?, targetSelector?}} deps */
@@ -54,19 +55,37 @@ export class DespinLaser {
 
   isFiring() { return this._firing; }
 
+  /**
+   * Issue 5c/9 (2026-06-12): while the player pilots a daughter in
+   * STATION_KEEP, the SK readout advises "de-spin [U]" — route the mother
+   * laser at the PILOTED ARM's SK target (which may differ from the
+   * Tab-locked selector target). Pass null to restore selector targeting.
+   * Set each frame by InputManager.processInput.
+   */
+  setOverrideTarget(target) { this._overrideTarget = target || null; }
+
   /** @private resolve the active target debris (canonical, mutable). */
   _target() {
+    if (this._overrideTarget) return this._overrideTarget;
     return this._targetSelector && this._targetSelector.getActiveTarget
       ? this._targetSelector.getActiveTarget()
+      : null;
+  }
+
+  /** @private world position of the resolved target (override-aware). */
+  _targetPos() {
+    if (this._overrideTarget) return this._overrideTarget._scenePosition || null;
+    return this._targetSelector && this._targetSelector.getActiveTargetPosition
+      ? this._targetSelector.getActiveTargetPosition()
       : null;
   }
 
   /** @private in-range check vs the mother optic (skipped if positions unavailable). */
   _inRange(target) {
     const cfg = Constants.DESPIN_LASER;
-    if (!this._player || !this._targetSelector || !this._targetSelector.getActiveTargetPosition) return true;
+    if (!this._player) return true;
     const motherPos = this._player.getPosition ? this._player.getPosition() : null;
-    const tPos = this._targetSelector.getActiveTargetPosition();
+    const tPos = this._targetPos();
     if (!motherPos || !tPos) return true;
     return (motherPos.distanceTo(tPos) / M) <= cfg.RANGE_M;
   }
@@ -120,9 +139,9 @@ export class DespinLaser {
 
   /** @private update/create the cyan mother→target beam (no-op without a scene). */
   _drawBeam(target) {
-    if (!this._scene || !this._player || !this._targetSelector?.getActiveTargetPosition) return;
+    if (!this._scene || !this._player) return;
     const motherPos = this._player.getPosition ? this._player.getPosition() : null;
-    const tPos = this._targetSelector.getActiveTargetPosition();
+    const tPos = this._targetPos();
     if (!motherPos || !tPos) return;
     if (!this._beam) {
       const cfg = Constants.DESPIN_LASER;

@@ -16,8 +16,10 @@ import {
   trlToBadgeColor,
   trlToLabel,
   isValidTRL,
+  trlToTechLevelLabel,
+  techLevelBadgeText,
 } from '../core/Constants.js';
-import { CodexSystem } from '../systems/CodexSystem.js';
+import { CodexSystem, entryMatchesQuery } from '../systems/CodexSystem.js';
 import { UPGRADES } from '../ui/ShopScreen.js';
 
 const T = Constants.TRL;
@@ -283,5 +285,70 @@ describe('TRL - distribution sanity', () => {
     assert.ok(c.mature > 0,       'at least one mature upgrade required');
     assert.ok(c.research > 0,     'at least one research upgrade required');
     assert.ok(c.speculative > 0,  'at least one speculative upgrade required');
+  });
+});
+
+// ============================================================================
+// UX-11 #10: Tech-Level presentation helpers + Codex syllabus getters
+// ============================================================================
+describe('Tech Level (UX-11 #10) - presentation relabel', () => {
+
+  it('trlToTechLevelLabel keeps the 1-9 number + tier word, drops "TRL"', () => {
+    assert.equal(trlToTechLevelLabel(9, T), `Tech Level 9 — ${T.LABEL_FLIGHT_PROVEN}`);
+    assert.equal(trlToTechLevelLabel(7, T), `Tech Level 7 — ${T.LABEL_MATURE}`);
+    assert.equal(trlToTechLevelLabel(5, T), `Tech Level 5 — ${T.LABEL_RESEARCH}`);
+    assert.equal(trlToTechLevelLabel(2, T), `Tech Level 2 — ${T.LABEL_SPECULATIVE}`);
+    assert.ok(!trlToTechLevelLabel(9, T).includes('TRL'), 'no TRL acronym player-facing');
+  });
+
+  it('techLevelBadgeText renders the short card badge', () => {
+    assert.equal(techLevelBadgeText(9), 'Tech Lvl 9');
+    assert.equal(techLevelBadgeText(3), 'Tech Lvl 3');
+  });
+});
+
+describe('Codex (UX-11 #10) - unlock hints, category progress, search', () => {
+
+  it('every entry carries a non-empty unlockHint (default per category)', () => {
+    const codex = new CodexSystem();
+    const missing = codex.entries.filter(e => !e.unlockHint || !e.unlockHint.trim());
+    assert.equal(missing.length, 0,
+      `entries without unlockHint: ${missing.map(e => e.id).join(', ')}`);
+  });
+
+  it('getUnlockHint returns the specific override when authored', () => {
+    const codex = new CodexSystem();
+    assert.ok(codex.getUnlockHint('hohmann_transfer').toLowerCase().includes('transfer'));
+    assert.equal(codex.getUnlockHint('nonexistent_id'), '');
+  });
+
+  it('getCategoryProgress tracks unlocks per category', () => {
+    const codex = new CodexSystem();
+    const cat = codex.entries[0].category;
+    const before = codex.getCategoryProgress(cat);
+    assert.equal(before.unlocked, 0, 'fresh system starts fully locked');
+    assert.ok(before.total > 0);
+    codex.entries[0].unlocked = true;
+    const after = codex.getCategoryProgress(cat);
+    assert.equal(after.unlocked, 1);
+    assert.equal(after.total, before.total);
+  });
+
+  it('searchEntries matches title, shortText, and category (case-insensitive)', () => {
+    const codex = new CodexSystem();
+    const byTitle = codex.searchEntries('hohmann');
+    assert.ok(byTitle.some(e => e.id === 'hohmann_transfer'), 'title match');
+    const byCat = codex.searchEntries('orbital mechanics');
+    assert.ok(byCat.length >= 4, 'category match finds the OM entries');
+    assert.equal(codex.searchEntries('zzz_no_such_topic').length, 0);
+    assert.equal(codex.searchEntries('').length, codex.entries.length, 'empty query = all');
+  });
+
+  it('entryMatchesQuery is a pure predicate', () => {
+    const e = { title: 'Xenon Propellant', shortText: 'Noble gas', category: 'PROPULSION' };
+    assert.equal(entryMatchesQuery(e, 'xenon'), true);
+    assert.equal(entryMatchesQuery(e, 'noble'), true);
+    assert.equal(entryMatchesQuery(e, 'propulsion'), true);
+    assert.equal(entryMatchesQuery(e, 'tether'), false);
   });
 });

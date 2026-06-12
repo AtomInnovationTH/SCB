@@ -13,6 +13,13 @@
 // Grouped hotkey reference. Each group → list of [keys, description] rows.
 // `keys` is an array of chips; a chip may itself contain a separator like
 // '/' which is rendered as plain text between two key caps.
+//
+// UX-11 #6: curated to fit ONE page (no scroll) at 1366×768+ — 8 cards in a
+// fixed 4-column grid.
+// Hotkey cleanup 2026-06-12: recall-all = Shift+R only (H and Shift+O freed).
+// UX-11 #8: Forge = 5, fuel cycle = 6 (F4/F5 removed).
+// UX-11 #9: C-hold radial removed — C is a plain "expand comms" tap.
+// Keep in sync with InputManager._handleKeyDown and ARCHITECTURE §6.
 const HOTKEY_GROUPS = [
   {
     // The core loop a new pilot actually needs: let the autopilot fly, deploy a
@@ -20,51 +27,53 @@ const HOTKEY_GROUPS = [
     title: 'Essentials',
     icon: '⭐',
     rows: [
-      [['A'], 'Autopilot — fly to target (your main pilot)'],
+      [['A'], 'Autopilot — fly to target (no target? auto-acquires nearest)'],
       [['Tab'], 'Pick / cycle a target'],
       [['D'], 'Deploy a daughter'],
+      [['N'], 'Fire lasso / net'],
       [['S'], 'Quick scan'],
       [['W'], 'Wide scan'],
       [['B'], 'Open shop'],
     ],
   },
   {
-    title: 'Steering (manual)',
+    title: 'Flight & Nav',
     icon: '🛰️',
     rows: [
       [['↑', '↓', '←', '→'], 'Steer the mothership (autopilot off)'],
       [['='], 'Throttle +10%'],
       [['−'], 'Throttle −10%'],
       [['Enter'], 'Approach selected target'],
-      [['R'], 'Abort autopilot / recall'],
+      [['R'], 'Context: reel-in / recall / abort autopilot'],
       [['Shift', 'A'], 'Engage debris-map cluster'],
+      [['Shift', 'G'], 'Trawl sweep (toggle)'],
     ],
   },
   {
-    title: 'Camera & Views',
+    title: 'Views & Maps',
     icon: '🎥',
     rows: [
       [['V'], 'Cycle camera (Command / Overview)'],
       [['I'], 'Toggle inspection view'],
-      [['Shift', 'V'], 'Strategic map'],
-      [['`'], 'Debris map (cycles tool while piloting in station-keep)'],
-      [['L'], 'Tech library (Codex)'],
-      [['Shift', 'N'], 'Toggle NavSphere'],
+      [['`'], 'Debris map (pick clusters)'],
+      [['Shift', 'V'], 'Strategic map (view-only)'],
       [['M'], 'Orbit display'],
+      [['Shift', 'N'], 'Toggle NavSphere'],
+      [['Shift', 'C'], 'City labels on Earth'],
+      [['L'], 'Tech library'],
     ],
   },
   {
     title: 'Daughters & Arms',
     icon: '🦾',
     rows: [
-      [['D'], 'Deploy a daughter'],
-      [['O'], 'Deploy all arms to target'],
-      [['Shift', 'O'], 'Recall all arms'],
-      [['H'], 'Recall all arms'],
-      [['R'], 'Reel-in / recall / abort autopilot'],
-      [['1', '–', '4'], 'Select / deploy arm'],
+      [['1', '–', '4'], 'Select / deploy daughter'],
       [['P'], 'Pilot a daughter (on / off)'],
+      [['Shift', 'P'], 'Cycle piloted arm (reaches arms 5+)'],
       [['7'], 'Return to mothership (works anywhere)'],
+      [['O'], 'Deploy all arms to target'],
+      [['R'], 'Recall closest / reel / abort AP'],
+      [['Shift', 'R'], 'Recall all arms'],
       [['X'], 'Tether detach'],
       [['Ctrl', 'Shift', 'D'], 'Deorbit sacrifice'],
     ],
@@ -74,44 +83,20 @@ const HOTKEY_GROUPS = [
     icon: '🪝',
     rows: [
       [['Space'], 'Smart action / fire lasso'],
-      [['N'], 'Fire lasso / net'],
       [['F'], 'Focus action'],
-      [['U'], 'Hold: de-spin laser (detumble target before netting)'],
+      [['U'], 'Hold: de-spin laser (detumble before netting)'],
       [['T'], 'Deploy tool'],
-      [['Shift', '`'], 'Cycle tool (anywhere)'],
+      [['Shift', '`'], 'Cycle tool'],
       [['Y'], 'Electrodynamic tether'],
-      [['Shift', 'G'], 'Trawl'],
-      [[','], 'Stow struts'],
-      [['.'], 'Deploy struts'],
-      [['Z', '/', 'Shift', 'Z'], 'Cycle analysis zones'],
-    ],
-  },
-  {
-    title: 'Power Distribution',
-    icon: '⚡',
-    rows: [
-      [['Shift', '1'], 'Select Thrust bus'],
-      [['Shift', '2'], 'Select Sensors bus'],
-      [['Shift', '3'], 'Select Arms bus'],
-      [['['], 'Decrease selected bus'],
-      [[']'], 'Increase selected bus'],
-    ],
-  },
-  {
-    title: 'Comms',
-    icon: '📶',
-    rows: [
-      [['C'], 'Tap: expand comms'],
-      [['C'], 'Hold: comms radial menu'],
-      [['PgUp'], 'Scroll comms up'],
-      [['PgDn'], 'Scroll comms down'],
+      [[',', '/', '.'], 'Stow / deploy struts'],
+      [['Z'], 'Cycle analysis zones (Shift reverses)'],
     ],
   },
   {
     // Advanced: only while you have taken manual control of a daughter (P key).
     // This is the one place WASD is used — the mothership itself steers with
     // the arrow keys, not WASD.
-    title: 'Piloting a daughter (advanced)',
+    title: 'Piloting a daughter',
     icon: '🕹️',
     rows: [
       [['W', 'A', 'S', 'D'], 'Thrust the daughter'],
@@ -119,21 +104,32 @@ const HOTKEY_GROUPS = [
       [['↑', '↓', '←', '→'], 'Orbit (station-keep)'],
       [['Shift'], 'Fine control (hold)'],
       [['F'], 'Net deploy / capture'],
-      [['`'], 'Cycle tool (in station-keep)'],
       [['='], 'Station-keep radius'],
       [['F2'], 'Cycle thruster metal'],
       [['7'], 'Return to mothership'],
     ],
   },
   {
-    title: 'System',
-    icon: '🔧',
+    title: 'Power & System',
+    icon: '⚡',
     rows: [
-      [['F4'], 'Forge (Kiln)'],
-      [['F5'], 'Thruster fuel cycle'],
+      [['Shift', '1'], 'Select Thrust bus'],
+      [['Shift', '2'], 'Select Sensors bus'],
+      [['Shift', '3'], 'Select Arms bus'],
+      [['[', '/', ']'], 'Adjust selected bus'],
+      [['5'], 'Forge (Kiln)'],
+      [['6'], 'Thruster fuel cycle'],
       [['J'], 'Journal / skills'],
-      [['Esc'], 'Pause / back / exit mode'],
       [['Ctrl', 'D'], 'Debug overlay'],
+    ],
+  },
+  {
+    title: 'Comms & Help',
+    icon: '📶',
+    rows: [
+      [['C'], 'Expand comms'],
+      [['PgUp', '/', 'PgDn'], 'Scroll comms history'],
+      [['Esc'], 'Pause / back / exit mode'],
       [['?'], 'Show / hide this list'],
     ],
   },
@@ -211,9 +207,11 @@ export class HotkeyOverlay {
 
     const body = document.createElement('div');
     Object.assign(body.style, {
-      flex: '1', overflowY: 'auto', padding: '16px',
-      display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
-      gap: '14px', alignContent: 'start',
+      // UX-11 #6: one page, no scrollbar. Fixed 4-column grid; the curated
+      // groups above are sized to fit two card-rows inside maxHeight:760px.
+      flex: '1', overflow: 'hidden', padding: '12px 14px',
+      display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)',
+      gap: '10px', alignContent: 'start',
     });
 
     for (const group of HOTKEY_GROUPS) {
@@ -256,14 +254,14 @@ export class HotkeyOverlay {
   _makeRow(keys, desc) {
     const row = document.createElement('div');
     Object.assign(row.style, {
-      display: 'flex', alignItems: 'center', gap: '8px',
-      margin: '4px 0', fontSize: '11px',
+      display: 'flex', alignItems: 'center', gap: '6px',
+      margin: '3px 0', fontSize: '10.5px',
     });
 
     const keyWrap = document.createElement('div');
     Object.assign(keyWrap.style, {
       display: 'flex', alignItems: 'center', gap: '3px',
-      flex: '0 0 122px', flexWrap: 'wrap',
+      flex: '0 0 108px', flexWrap: 'wrap',
     });
     for (const k of keys) {
       // Separators ('/', '–', '+') render as plain dim text, not key caps.

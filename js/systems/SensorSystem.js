@@ -517,11 +517,13 @@ export class SensorSystem {
       }
     }
 
-    // Emit scan complete results
+    // Emit scan complete results (rewardKind lets NavRecoveryAdvisor route
+    // 'empty' scans into actionable bearing guidance — UX-11 #11)
     const results = {
       type,
       discoveries: discoveries.length,
       reward,
+      rewardKind,
     };
     eventBus.emit(Events.SCAN_COMPLETE, results);
 

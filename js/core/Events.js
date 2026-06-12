@@ -13,6 +13,7 @@
 export const Events = {
   // === ARM LIFECYCLE ===
   ARM_DEPLOYED:       'arm:deployed',
+  ARM_SPRING_FIRED:   'arm:springFired',  // { armId, type, speed } — crossbow spring released, daughter actually departs (1.5 s after ARM_DEPLOYED)
   ARM_STATE_CHANGE:   'arm:stateChange',
   ARM_CAPTURED:       'arm:captured',
   ARM_RETURNED:       'arm:returned',
@@ -23,8 +24,10 @@ export const Events = {
   ARM_DEPLOY_TO:      'arm:deployTo',
   ARM_RECALL_ONE:     'arm:recallOne',
   ARM_RECALL_ALL:     'arm:recallAll',
-  ARM_DEPLOY:         'arm:deploy',       // Comms menu deploy (preferType, no explicit target)
-  ARM_FISH:           'arm:fish',         // Comms menu fish (cast all)
+  // ARM_DEPLOY / ARM_FISH removed 2026-06-12 (UX-11 #9): their only emitters
+  // were the RadialMenu + CommsPanel.executeCommsCommand, both deleted.
+  // preferType deploy survives via ARM_DEPLOY_TO (TargetSelector); the
+  // fishing/cast-all verb re-home is tracked in ROADMAP EN-9.
   ARM_MANUAL_THRUST:  'arm:manualThrust',
   ARM_DEORBIT:        'arm:deorbit',      // One-way sacrifice command (Session 10)
   ARM_REFUELED:       'arm:refueled',     // Arm refueled from salvaged Indium (Session 10)
@@ -182,10 +185,12 @@ export const Events = {
 
   // === COMMS UI (ST-5.1) ===
   COMMS_FOCUS:            'comms:focus',           // C-tap → expand pane
-  COMMS_RADIAL_OPEN:      'comms:radialOpen',      // C-hold → open radial menu
-  COMMS_RADIAL_CLOSE:     'comms:radialClose',     // C-release or Escape → close radial menu
+  // UX-11 #9: COMMS_RADIAL_OPEN/CLOSE removed with the C-hold RadialMenu.
   COMMS_SCROLL_UP:        'comms:scrollUp',        // PageUp → scroll history
   COMMS_SCROLL_DOWN:      'comms:scrollDown',       // PageDown → scroll history
+
+  // === CITY LABELS (UX-11 #5) ===
+  CITY_LABELS_TOGGLE:     'cityLabels:toggle',     // Shift+C → toggle Earth city labels
 
   // === PAUSE ===
   PAUSE_RESUME:       'pause:resume',
@@ -277,6 +282,9 @@ export const Events = {
   TRAWL_START:         'trawl:start',
   TRAWL_CAPTURE:       'trawl:capture',
   TRAWL_END:           'trawl:end',
+  /** UX-11 #4: request to cancel an active trawl sweep — { reason } — TrawlManager
+   *  ends the sweep and emits TRAWL_SWEEP_COMPLETE so dependent flags self-clear. */
+  TRAWL_ABORT:         'trawl:abort',
   TRAWL_TARGET_ENTERING:      'trawl:target_entering',
   TRAWL_TARGET_EXITED:        'trawl:target_exited',
   TRAWL_TARGET_WINDOW_CLOSING: 'trawl:target_window_closing',

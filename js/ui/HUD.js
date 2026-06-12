@@ -14,7 +14,6 @@ import timerManager from '../systems/TimerManager.js';
 import { StatusPanel } from './hud/StatusPanel.js';
 import { TargetPanel } from './hud/TargetPanel.js';
 import { CommsPanel } from './hud/CommsPanel.js';
-import { RadialMenu } from './hud/RadialMenu.js';
 import { HintTicker } from './hud/HintTicker.js';
 import { NetInventoryPanel } from './hud/NetInventoryPanel.js';
  import { DebrisWireframe }   from './DebrisWireframe.js';
@@ -142,8 +141,7 @@ export class HUD {
     this.statusPanel = null;
     this.targetPanel = null;
     this.commsPanel = null;
-    /** @type {RadialMenu|null} ST-5.1: Target-anchored radial command menu */
-    this.radialMenu = null;
+    // UX-11 #9: radialMenu removed (C-hold radial retired)
     /** @type {DebrisWireframe|null} Integrated wireframe analysis */
     this.debrisWireframe = null;
     /** @type {DaughterWireframe|null} Daughter arm part-callout panel */
@@ -239,7 +237,8 @@ export class HUD {
     // injected later via setArmManager / setLassoSystem.
     this.netInventoryPanel = new NetInventoryPanel(this._rightColumn);
     this.commsPanel = new CommsPanel(this.container);
-    this.radialMenu = new RadialMenu();
+    // UX-11 #9: RadialMenu (C-hold command wheel) removed — every action has
+    // a direct key (D deploy, Shift+R recall all, P pilot, Ctrl+Shift+D deorbit).
     // Delegation 2 (2026-05-31): bottom-screen onboarding hint ticker.
     // Mounted on document.body so the strip sits above the notification slot
     // (which lives at viewport bottom) regardless of HUD overlay visibility.
@@ -872,8 +871,7 @@ export class HUD {
   setArmManager(armManager) {
     this.statusPanel.setArmManager(armManager);
     this.targetPanel.setArmManager(armManager);
-    this.commsPanel.setArmManager(armManager);
-    if (this.radialMenu) this.radialMenu.setArmManager(armManager);
+    // (commsPanel.setArmManager removed — dead store after RadialMenu deletion)
     if (this.netInventoryPanel) this.netInventoryPanel.setArmManager(armManager);
   }
 
@@ -920,13 +918,8 @@ export class HUD {
     return this.commsPanel.isCommsOpen();
   }
 
-  /**
-   * Execute a numbered comms command (1-5).
-   * @param {number} num — Command number (1-5)
-   */
-  executeCommsCommand(num) {
-    this.commsPanel.executeCommsCommand(num);
-  }
+  // (UX-11 #9 review cleanup: executeCommsCommand wrapper removed — it had
+  // zero callers once the RadialMenu was deleted.)
 
   /**
    * Show a warning message.

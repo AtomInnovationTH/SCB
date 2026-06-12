@@ -107,7 +107,16 @@ describe('ArmUnit park-the-catch — HOLDING_CATCH update', () => {
     assert.ok(arm.position.distanceTo(expected) < 1e-9, 'clamped to strut-tip dock');
     assert.equal(arm.velocity.length(), 0, 'held station — zero velocity');
     assert.equal(debris._armPinned, true, 'catch re-pinned each frame');
-    assert.ok(debris._armPinPos.distanceTo(arm.position) < 1e-9, 'catch welded to the strut');
+    // Issue 13 (2026-06-12): the pin carries an outboard standoff so the
+    // daughter never renders inside the catch — pin = arm.position +
+    // holdDir × (sizeMeter/2 + ARM_HOLD_CLEARANCE_M), holdDir = outboard.
+    const standoff = (debris.sizeMeter / 2 + Constants.ARM_HOLD_CLEARANCE_M) * M;
+    const expectedPin = arm.position.clone().addScaledVector(
+      arm.position.clone().sub(parentPos).normalize(), standoff);
+    assert.ok(debris._armPinPos.distanceTo(expectedPin) < 1e-12,
+      'catch held outboard of the strut tip at the standoff distance');
+    assert.ok(debris._armPinPos.distanceTo(arm.position) > 1e-9,
+      'pin is never coincident with the daughter');
   });
 
   it('falls back to RELOADING if the held catch is gone', () => {

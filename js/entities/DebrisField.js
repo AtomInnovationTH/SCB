@@ -26,6 +26,7 @@ import {
 } from '../ui/DebrisWireframe.js';
 import { catalogEntryToDebrisData } from './CatalogConverter.js';
 import { deriveCaptureFlags } from './debrisFerrous.js';
+import { isFlagEligible, pickCountryForId } from '../ui/FlagDecalSystem.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -1006,18 +1007,30 @@ export class DebrisField {
   /**
    * Build flag decal overlay InstancedMeshes grouped by country code.
    * Each country gets a small PlaneGeometry with the flag atlas UV-mapped
-   * to that country's slot. Only real catalogue debris with valid country
-   * codes receive a flag overlay.
+   * to that country's slot.
+   *
+   * Item 12 (2026-06-12): eligibility is now CLASS-gated — only rocket bodies
+   * and defunct sats ≥ FLAG_MIN_SIZE_M get a flag (fragments never). Eligible
+   * PROCEDURAL pieces get a deterministic weighted country at build time
+   * (real catalog rows keep their own), so flags appear in early missions,
+   * not just on catalog debris.
    * @private
    */
   _buildFlagOverlays() {
     const flagAtlasTex = getFlagAtlasTexture();
     if (!flagAtlasTex) return; // No atlas (Node tests or mode=wireframe)
 
-    // Group real debris by country
+    // Assign a deterministic country to eligible procedural debris first.
+    for (const d of this.debrisList) {
+      if (!d.country && !d.isReal && isFlagEligible(d)) {
+        d.country = pickCountryForId(d.id);
+      }
+    }
+
+    // Group eligible debris by country
     const countryGroups = {};
     for (const d of this.debrisList) {
-      if (!d.isReal || !d.country || d.country === '---' || d.country === null) continue;
+      if (!d.country || d.country === '---' || !isFlagEligible(d)) continue;
       const cc = d.country;
       if (!countryGroups[cc]) countryGroups[cc] = [];
       countryGroups[cc].push(d);
@@ -1066,9 +1079,9 @@ export class DebrisField {
       indexCounters[cc] = 0;
     }
 
-    // Assign each real debris to a flag instance slot
+    // Assign each eligible debris to a flag instance slot
     for (const d of this.debrisList) {
-      if (!d.isReal || !d.country || d.country === '---' || d.country === null) continue;
+      if (!d.country || d.country === '---' || !isFlagEligible(d)) continue;
       const cc = d.country;
       if (!this.flagMeshes[cc]) continue;
       const idx = indexCounters[cc]++;
@@ -1483,12 +1496,23 @@ export class DebrisField {
             this._flagMatrix.lookAt(this._zeroVec, this._flagPos2, up);
             this._flagQuat.setFromRotationMatrix(this._flagMatrix);
 
-            // Reveal scale matches the debris mesh; flag patch scales with the
-            // debris so it always reads as a fixed-size sticker on the surface.
+            // Reveal scale matches the debris mesh.
             const flagRp = debris._revealProgress;
             const flagReveal = (flagRp !== undefined && flagRp < 1)
               ? flagRp * flagRp * (3 - 2 * flagRp) : 1;
-            this._flagScale.setScalar(debris._lodScale * flagReveal);
+            // Item 12 (2026-06-12): decal sized in PHYSICAL metres —
+            // clamp(sizeMeter × FACTOR, MIN..MAX) — instead of a fixed
+            // 0.7-local-unit footprint (read tiny on an 8 m rocket body).
+            // The LOD shrink ratio is preserved so distant flags fade with
+            // their debris.
+            const dv = Constants.DEBRIS_VISUAL || {};
+            const widthM = Math.min(dv.FLAG_DECAL_MAX_M ?? 1.6,
+              Math.max(dv.FLAG_DECAL_MIN_M ?? 0.4,
+                (debris.sizeMeter || 1) * (dv.FLAG_SIZE_FACTOR ?? 0.12)));
+            const lodRatio = debris.sceneSize > 0 ? debris._lodScale / debris.sceneSize : 1;
+            // Plane geometry is 0.7 local units wide → scale to widthM metres
+            // (1 m = 0.00001 scene units).
+            this._flagScale.setScalar((widthM * 0.00001 / 0.7) * lodRatio * flagReveal);
             this._flagMatrix.compose(this._flagPos, this._flagQuat, this._flagScale);
             flagMesh.setMatrixAt(flagInfo.instanceIndex, this._flagMatrix);
           }

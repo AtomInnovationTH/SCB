@@ -13,7 +13,7 @@ import { GameStates } from '../core/GameState.js';
 import { Constants } from '../core/Constants.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import {
-  computeClingProbability, getNetClassForType,
+  computeClingProbability, getNetClassForType, computeLeadAim, assessNetFit,
 } from '../entities/CaptureNet.js';
 
 // ============================================================================
@@ -626,12 +626,29 @@ export class DockingReticle {
     ctx.fillText('H', bbX - 10, bbY + 3);
   }
 
-  /** @private Bottom center: net readiness indicator */
+  /**
+   * @private Bottom center: net readiness / verb hint — STATE-AWARE (Item 10,
+   * 2026-06-12). One hint line, no stacking:
+   *   • STATION_KEEP: F/`/R/Esc verb bar — Space does NOTHING in SK (the old
+   *     '[SPACE] Deploy' hint pointed at a dead key; SK fire verbs are F and N).
+   *   • TRANSIT/APPROACH + ready: F/N fire (Space alias stays functional but
+   *     is no longer advertised).
+   *   • Not ready: get closer.
+   */
   _drawNetStatus(ctx, cx, h) {
     const y = h - 55;
     const ready = this.isNetReady();
+    const inSK = this._arm && this._arm.state === 'STATION_KEEP';
 
-    if (ready) {
+    if (inSK) {
+      const tool = (this._arm.selectedTool || 'NET').toUpperCase();
+      const pulse = 0.6 + Math.sin(this._time * 4) * 0.4;
+      ctx.font = `bold 13px ${FONT}`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = ready ? `rgba(0, 255, 136, ${pulse})` : C.gray;
+      ctx.fillText(`\u25CF [F] ${tool} \u00B7 [\`] cycle \u00B7 [R] reel \u00B7 [Esc] recall`, cx, y);
+    } else if (ready) {
       // Pulsing green when in capture range
       const pulse = 0.6 + Math.sin(this._time * 4) * 0.4;
       ctx.font = `bold 14px ${FONT}`;
@@ -640,14 +657,14 @@ export class DockingReticle {
       ctx.fillStyle = `rgba(0, 255, 136, ${pulse})`;
       ctx.shadowColor = C.primary;
       ctx.shadowBlur = 10;
-      ctx.fillText('● NET READY — [SPACE] Deploy', cx, y);
+      ctx.fillText('\u25CF NET READY \u2014 [F]/[N] fire', cx, y);
       ctx.shadowBlur = 0;
     } else {
       ctx.font = `13px ${FONT}`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillStyle = C.gray;
-      ctx.fillText('○ NET — get closer to deploy', cx, y);
+      ctx.fillText('\u25CB NET \u2014 get closer to deploy', cx, y);
     }
   }
 
@@ -918,18 +935,50 @@ export class DockingReticle {
 
     // Advisory: the single biggest lever the player can pull right now.
     let advisory = '';
-    if (range > (CN.ENVELOPE_RANGE || 100)) advisory = 'too far — close in';
+    let advisoryCol = 'rgba(0, 255, 170, 0.6)';
+
+    // UX-11 #1: off-axis warning — the auto-aim leads the target, but a big
+    // lead angle (fast transverse drift) makes the shot fragile. Teach the
+    // player to re-aim / match velocity before firing.
+    let offAxisDeg = 0;
+    const tScene = (typeof arm._getTargetScenePos === 'function') ? arm._getTargetScenePos() : null;
+    if (tScene && arm.position) {
+      const relVel = (arm._leadTargetVelValid && arm._leadTargetVel) ? arm._leadTargetVel : null;
+      const launchSpeedScene = (netClass.LAUNCH_SPEED || 10) * M;
+      const lead = computeLeadAim(arm.position, tScene, relVel, launchSpeedScene);
+      offAxisDeg = lead.offAxisDeg;
+    }
+    const offAxisWarn = CN.OFF_AXIS_WARN_DEG || 12;
+
+    // Item 4 (2026-06-12): width fork — wider-than-mouth debris is a
+    // deterministic reel-time net failure; warn BEFORE the player commits.
+    const fit = assessNetFit(target, netClass);
+
+    if (fit.fit === 'TOO_WIDE') {
+      advisory = 'too wide \u2014 use GRIPPER [`]';
+      advisoryCol = '#ff5555';
+    } else if (range > (CN.ENVELOPE_RANGE || 100)) advisory = 'too far — close in';
     else if (range > (CN.BASELINE_RANGE_MAX || 75)) advisory = 'edge of envelope';
-    else if (tumbleRate != null) {
+    else if (offAxisDeg > offAxisWarn) {
+      advisory = `OFF AXIS ${Math.round(offAxisDeg)}° — re-aim`;
+      advisoryCol = '#ff7755';
+    } else if (tumbleRate != null) {
       const deg = Math.abs(tumbleRate) * (180 / Math.PI);
       const inSpec = (Constants.NET_TUMBLE_PENALTY?.IN_SPEC_DEG) || 10;
-      if (deg > inSpec) advisory = 'tumbling — de-spin [U]';
+      // Issue 9 (2026-06-12): live °/s readout — while holding U the player
+      // sees the tumble converge toward the in-spec threshold.
+      if (target._despinning) {
+        advisory = `de-spinning ${deg.toFixed(1)}\u00B0/s \u2192 ${inSpec}\u00B0/s`;
+        advisoryCol = '#66ddff';
+      } else if (deg > inSpec) {
+        advisory = `tumbling ${Math.round(deg)}\u00B0/s \u2014 de-spin [U]`;
+      }
     }
     if (!advisory && pct >= 80) advisory = 'good shot';
     if (advisory) {
       ctx.font = `9px ${FONT}`;
       ctx.textAlign = 'right';
-      ctx.fillStyle = 'rgba(0, 255, 170, 0.6)';
+      ctx.fillStyle = advisoryCol;
       ctx.fillText(advisory, left + boxW - 8, y);
     }
     ctx.textAlign = 'left';

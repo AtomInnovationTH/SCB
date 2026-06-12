@@ -95,6 +95,14 @@ export class TrawlManager {
       }
     });
 
+    // UX-11 #4: external abort request (e.g. autopilot override) — end the sweep
+    // cleanly so TRAWL_SWEEP_COMPLETE fires and dependent flags self-clear.
+    eventBus.on(Events.TRAWL_ABORT, () => {
+      if (!this.active) return;
+      const report = this.endTrawl();
+      eventBus.emit(Events.TRAWL_END, report);
+    });
+
     /** @type {Map<number, number>} Track when each target entered range (id → trawlTime) */
     this._targetEntryTimes = new Map();
 
@@ -143,6 +151,19 @@ export class TrawlManager {
     if (!this.active) return;
 
     this.trawlTime += dt;
+
+    // UX-11 #4: watchdog — if the active cluster has no live members left the
+    // sweep can never "complete" through normal play; end it now so
+    // TRAWL_SWEEP_COMPLETE fires and the autopilot trawl-block clears.
+    if (this.activeCluster && Array.isArray(this.activeCluster.targets)) {
+      const anyAlive = this.activeCluster.targets.some(t => t && t.alive);
+      if (!anyAlive) {
+        console.log('[TrawlManager] Auto-ending trawl: cluster has no live targets');
+        const report = this.endTrawl();
+        eventBus.emit(Events.TRAWL_END, report);
+        return;
+      }
+    }
 
     // Apply traversal: advance mothership along orbit
     if (data.player && data.player.orbit) {

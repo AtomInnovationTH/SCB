@@ -84,6 +84,9 @@ import { HotkeyOverlay } from './ui/HotkeyOverlay.js';
 import { SkillsPane } from './ui/hud/SkillsPane.js';
 import { TeachingSystem } from './systems/TeachingSystem.js';
 import { armIdleAdvisor } from './systems/ArmIdleAdvisor.js';
+import { navRecoveryAdvisor } from './systems/NavRecoveryAdvisor.js';
+import { missionMilestones } from './systems/MissionMilestones.js';
+import { cityLabels } from './scene/CityLabels.js';
 import { TeachingOverlay } from './ui/TeachingOverlay.js';
 import { OnboardingDirector } from './systems/OnboardingDirector.js';
 import { persistenceManager } from './systems/PersistenceManager.js';
@@ -804,6 +807,31 @@ async function init() {
   });
   strategicMap.init();
 
+  // --- UX-11 #5: Earth city labels (Shift+C, off by default, persisted) ---
+  // Offline-first local JSON; attaches to BOTH the command-view Earth and the
+  // Strategic Map's wireframe Earth so one toggle drives both surfaces.
+  cityLabels.load().then((count) => {
+    if (!count) return;
+    cityLabels.attach({
+      parent: earth.getGroup(),
+      radius: Constants.EARTH_RADIUS,
+      getCameraPos: () => camera.position,
+    });
+    if (strategicMap && strategicMap._earthMesh && strategicMap._camera) {
+      cityLabels.attach({
+        parent: strategicMap._earthMesh,
+        radius: Constants.EARTH_RADIUS,
+        getCameraPos: () => (strategicMap._camera ? strategicMap._camera.position : null),
+        isActive: () => strategicMap.isOpen(),
+        spriteScale: 2.2,
+        // The wireframe map has no texture: its ground stations use raw
+        // latLonToPosition, so the texture calibration offset must be 0 here
+        // or cities render 90° away from co-located stations.
+        lonOffsetDeg: 0,
+      });
+    }
+  }).catch((e) => console.warn('[main] cityLabels:', e));
+
   // --- Input Manager ---
   inputManager = new InputManager();
   // --- Skills Pane (mounted on #hud-overlay, after HUD build) ---
@@ -838,6 +866,23 @@ async function init() {
     getPilotMode: () => (inputManager ? inputManager._controlMode : null),
     getActiveNetForArm: (idx) => (captureNetSystem.getActiveNetForArm
       ? captureNetSystem.getActiveNetForArm(idx) : null),
+  });
+
+  // --- UX-11 #11: "you're lost" recovery advisor (empty-scan bearing + out-of-range watchdog) ---
+  navRecoveryAdvisor.init({
+    player,
+    debrisField,
+    targetSelector,
+    skillsSystem,
+  });
+
+  // --- UX-11 #12: dual-objective milestone comms (25/50/75/90% of either win track) ---
+  // Live getters keep the SHOP_DEPLOY recap correct across save restore
+  // (event caches alone go stale — review fix).
+  missionMilestones.init({
+    getCleared: () => gameState.debrisCleared,
+    getContractKg: () => (shopScreen && typeof shopScreen.getContractMass === 'function'
+      ? shopScreen.getContractMass() : 0),
   });
 
   // --- Collision Avoidance System (after inputManager so ref is valid) ---
@@ -1292,6 +1337,8 @@ function gameLoop(timestamp) {
   earth.setSunDirection(sunDir);
   earth.update(dt);
   starfield.update(dt);
+  // UX-11 #5: city-label cull/fade (no-op while hidden)
+  try { cityLabels.update(); } catch (e) { console.error('[GameLoop] cityLabels:', e); }
 
   // --- Update entities only in active gameplay states ---
   const isActive = gameState.isGameplay();
@@ -1343,6 +1390,9 @@ function gameLoop(timestamp) {
 
     // Item 3: anti-stuck idle watchdog (1 Hz internally; veteran-gated)
     try { armIdleAdvisor.update(dt); } catch (e) { console.error('[GameLoop] armIdleAdvisor:', e); }
+
+    // UX-11 #11: lost-in-space recovery advisor (5 s scan cadence internally; veteran-gated watchdog)
+    try { navRecoveryAdvisor.update(dt); } catch (e) { console.error('[GameLoop] navRecoveryAdvisor:', e); }
 
     // CP-4: MissionCoach beat timers (narrative dwell + interactive escalation)
     try { if (missionCoach) missionCoach.update(dt); } catch (e) { console.error('[GameLoop] missionCoach:', e); }

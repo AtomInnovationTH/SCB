@@ -9,6 +9,7 @@ import { Constants } from '../../core/Constants.js';
 import { eventBus } from '../../core/EventBus.js';
 import { Events } from '../../core/Events.js';
 import { computeTotalSalvageDeltaV } from '../../entities/OrbitalMechanics.js';
+import { assessNetFit } from '../../entities/CaptureNet.js';
 import { PaneChrome } from './PaneChrome.js';
 
 export class TargetPanel {
@@ -443,6 +444,14 @@ export class TargetPanel {
             const moidBadge = this._renderMoidBadge(t);
             const moidStat = this._renderMoidStat(t);
 
+            // Item 4 (2026-06-12): capture-fit badge — same assessNetFit the
+            // reticle advisory + ToolRecommender width fork use (SSOT). Judged
+            // against the larger daughter net (Weaver MEDIUM).
+            const netFit = assessNetFit(t, Constants.CAPTURE_NET && Constants.CAPTURE_NET.MEDIUM);
+            const fitColor = netFit.fit === 'OK' ? '#00ffaa'
+              : netFit.fit === 'DESPIN_FIRST' ? '#ffd166' : '#ff7755';
+            const fitBadge = `<span style="color:${fitColor};font-size:9px;font-weight:bold;" title="Capture fit vs daughter net">${netFit.label}</span>`;
+
             // ── EXPANDED ROW (selected target) ──
             const fullType = this._getFullTypeName(t.type);
             return `<div class="target-row selected" data-id="${t.id}">
@@ -456,6 +465,7 @@ export class TargetPanel {
             <span>\u0394V ${deltaV}</span>
             <span style="color:${netDvColor}">Net ${netDvStr}${frozenTag}</span>
             <span>${t.estimatedPoints}pt</span>
+            ${fitBadge}
         </div>${moidStat}
         <div class="hint-line">[D] Deploy  [A] Autopilot  [Z] Analyze</div>
     </div>

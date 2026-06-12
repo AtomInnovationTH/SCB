@@ -16,6 +16,8 @@ import {
   getUVOffsetForCountry,
   hasFlag,
   COUNTRY_ORDER,
+  isFlagEligible,
+  pickCountryForId,
 } from '../ui/FlagDecalSystem.js';
 
 // ============================================================================
@@ -341,5 +343,66 @@ describe('DebrisTextureAtlas — Procedural type mapping', () => {
       assert.ok(uv.scaleU > 0, `${catType}: scaleU > 0`);
       assert.ok(uv.offsetU >= 0, `${catType}: offsetU >= 0`);
     }
+  });
+});
+
+// ============================================================================
+// Item 12 (2026-06-12): flag eligibility gating + procedural country pick
+// ============================================================================
+
+describe('FlagDecalSystem — isFlagEligible() type/size gating (Item 12)', () => {
+  const minM = Constants.DEBRIS_VISUAL.FLAG_MIN_SIZE_M;
+
+  it('large rocket body is eligible', () => {
+    assert.equal(isFlagEligible({ type: 'rocketBody', sizeMeter: 8 }), true);
+  });
+
+  it('large defunct sat is eligible', () => {
+    assert.equal(isFlagEligible({ type: 'defunctSat', sizeMeter: 3 }), true);
+  });
+
+  it('fragments are NEVER eligible, regardless of size', () => {
+    assert.equal(isFlagEligible({ type: 'fragment', sizeMeter: 10 }), false);
+  });
+
+  it('mission debris is not eligible', () => {
+    assert.equal(isFlagEligible({ type: 'missionDebris', sizeMeter: 10 }), false);
+  });
+
+  it('eligible types below FLAG_MIN_SIZE_M are excluded', () => {
+    assert.equal(isFlagEligible({ type: 'rocketBody', sizeMeter: minM - 0.5 }), false);
+    assert.equal(isFlagEligible({ type: 'defunctSat', sizeMeter: minM - 0.5 }), false);
+  });
+
+  it('exactly at the threshold is eligible (>=)', () => {
+    assert.equal(isFlagEligible({ type: 'rocketBody', sizeMeter: minM }), true);
+  });
+
+  it('null / missing fields → false (graceful)', () => {
+    assert.equal(isFlagEligible(null), false);
+    assert.equal(isFlagEligible({}), false);
+    assert.equal(isFlagEligible({ type: 'rocketBody' }), false);
+  });
+});
+
+describe('FlagDecalSystem — pickCountryForId() deterministic weighted pick', () => {
+  it('is deterministic — the same id always picks the same country', () => {
+    for (const id of [1, 42, 9999, 123456]) {
+      assert.equal(pickCountryForId(id), pickCountryForId(id), `id ${id} stable`);
+    }
+  });
+
+  it('never returns the unknown fallback slot', () => {
+    for (let id = 0; id < 200; id++) {
+      const cc = pickCountryForId(id);
+      assert.notEqual(cc, '???', `id ${id} → real country`);
+      assert.equal(hasFlag(cc), true, `id ${id} → ${cc} has a flag design`);
+    }
+  });
+
+  it('spreads across multiple countries (not a constant)', () => {
+    const seen = new Set();
+    for (let id = 0; id < 100; id++) seen.add(pickCountryForId(id));
+    assert.ok(seen.size >= 5, `expected ≥5 distinct countries in 100 ids, got ${seen.size}`);
   });
 });

@@ -580,13 +580,13 @@ describe('TeachingSystem — CP-4 arbitration (queue/drain/collision)', () => {
     return { eb, ts };
   }
 
-  it('queues overlays while the radial menu is open; drains after close', () => {
+  it('queues overlays while a blocking ceremony is open; drains after close', () => {
     const shown = [];
     const { eb, ts } = make(shown);
-    eb.emit(Events.COMMS_RADIAL_OPEN);
+    eb.emit(Events.LAUNCH_CEREMONY_START, { arm: 'Weaver-1' });
     eb.emit(Events.TARGET_SELECTED);
-    assert.equal(shown.length, 0, 'queued while radial open');
-    eb.emit(Events.COMMS_RADIAL_CLOSE);
+    assert.equal(shown.length, 0, 'queued while ceremony blocks');
+    eb.emit(Events.LAUNCH_CEREMONY_COMPLETE, {});
     ts.update(0.1); // drainTimer starts at 0 → first queued drains immediately
     assert.equal(shown.length, 1);
     assert.equal(shown[0].id, 'first_target');
@@ -648,10 +648,10 @@ describe('TeachingSystem — CP-4 arbitration (queue/drain/collision)', () => {
   it('drains at most one queued overlay per QUEUE_DRAIN_INTERVAL_S', () => {
     const shown = [];
     const { eb, ts } = make(shown);
-    eb.emit(Events.COMMS_RADIAL_OPEN);
+    eb.emit(Events.LAUNCH_CEREMONY_START, { arm: 'Weaver-1' });
     eb.emit(Events.TARGET_SELECTED); // queue #1
     eb.emit(Events.SCAN_INITIATED);  // queue #2
-    eb.emit(Events.COMMS_RADIAL_CLOSE);
+    eb.emit(Events.LAUNCH_CEREMONY_COMPLETE, {});
     ts.update(0.1);
     assert.equal(shown.length, 1, 'first drains immediately');
     ts.update(0.1);
@@ -664,7 +664,7 @@ describe('TeachingSystem — CP-4 arbitration (queue/drain/collision)', () => {
   it('GAME_RESET clears the deferred queue (keeps _seen)', () => {
     const shown = [];
     const { eb, ts } = make(shown);
-    eb.emit(Events.COMMS_RADIAL_OPEN);
+    eb.emit(Events.LAUNCH_CEREMONY_START, { arm: 'Weaver-1' });
     eb.emit(Events.TARGET_SELECTED); // queued
     eb.emit(Events.GAME_RESET);
     ts.update(DRAIN + 1);

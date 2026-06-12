@@ -182,14 +182,13 @@ All in [`InputManager.js`](js/systems/InputManager.js) `_handleKeyDown` + held-k
 | **Tab** | Cycle targets (TPI-sorted) | — |
 | **Space / N** | Lasso fire (Space consults OnboardingDirector first). Shift+N = NavSphere | net capture/deploy (Space auto-exits ARM_PILOT) |
 | **F** | Focus action (context smart button) | STATION_KEEP→capture; TRANSIT/APPROACH→manual net |
-| **P** | Enter ARM_PILOT | exit ARM_PILOT |
+| **P / Shift+P** | P = enter ARM_PILOT; Shift+P cycles the piloted arm (selection path for arms 5+ on Y1/Y3) | P exits; Shift+P cycles |
 | **I** | Inspection (mother, or debris if Tab-locked) | expand debris wireframe |
-| **R** | AP→abort; else recall closest daughter | reel from STATION_KEEP |
-| **H** | Recall all | recall all |
+| **R** | AP→abort; else recall closest daughter. **Shift+R = recall ALL** | reel from STATION_KEEP (Shift+R recall all) |
 | **X** | Tether detach (sacrifice) | same |
 | **Y** | EDT deploy | same |
 | **Z / Shift+Z** | Wireframe zone cycle ±1 | same |
-| **C** | tap → comms focus; hold → radial menu | same |
+| **C / Shift+C** | C = comms focus (plain tap — C-hold radial REMOVED, UX-11 #9); Shift+C = Earth city labels toggle | same |
 | **V / Shift+V** | cycle view (CHASE↔ORBIT); Shift+V → Strategic Map | Shift+V map; V exits pilot |
 | **M** | Orbit MFD (or arm MPD if unlocked) | same |
 | **L** | Codex viewer | same |
@@ -199,16 +198,16 @@ All in [`InputManager.js`](js/systems/InputManager.js) `_handleKeyDown` + held-k
 | **, / .** | stow / deploy all struts | same |
 | **+ / −** | throttle ±10% (in SK: orbit radius ∓) | SK: approach/retreat |
 | **[ / ]** | power bus ∓10%; Shift+1/2/3 select bus | same |
-| **U** | hold → mother de-spin laser (LASER_DESPIN; needs a target) | — |
-| **1–4 / 7** | deploy/select/pilot arm (Y0 = 4 ring arms); 7 = return to mother (global) | switch piloted arm |
-| **F2 / F4 / F5** | F2 (ARM_PILOT: cycle FEEP metal); F4 Forge; F5 fuel cycle | F2 metal cycle |
-| **O / Shift+O** | deploy-all-to-target / recall-all (blocked in ARM_PILOT) | — |
+| **U** | hold → mother de-spin laser (LASER_DESPIN; needs a target) | hold → de-spin the piloted arm's SK target (2026-06-12, Item 9) |
+| **1–4 / 7** | deploy/select/pilot arm (Y0 = 4 ring arms); 7 = return to mother (global). Digits 5/6 are Forge/fuel (see below) | switch piloted arm |
+| **5 / 6 / F2** | 5 = Forge, 6 = fuel cycle (UX-11 #8 — F4/F5 removed, no aliases); F2 (ARM_PILOT: cycle FEEP metal) | Forge/fuel work; F2 metal cycle |
+| **O** | deploy-all-to-target (blocked in ARM_PILOT; Shift+O recall-all removed 2026-06-12) | — |
 | **Shift+G** | Trawl start | — |
 | **Enter / Esc** | begin approach / pause·back | SK recall / exit pilot |
 | **PageUp/Down** | comms scroll | same |
 | **Arrows** | pitch/yaw (tether-aware spring) | SK θ/φ orbit (Shift = fine) |
 
-**Inert/reserved:** `K` (empty), bare `G`, bare `J` (no-op marker), `T` in ARM_PILOT, `Enter` while piloting.
+**Inert/reserved:** `K` (empty), bare `G`, bare `H` (freed 2026-06-12 — recall-all moved to Shift+R), bare `J` (no-op marker), `T` in ARM_PILOT, `Enter` while piloting. **Removed (UX-11):** `F4`/`F5` (→ `5`/`6`), C-hold radial menu. **Removed (2026-06-12):** `H` and `Shift+O` recall-all (→ `Shift+R`).
 
 ---
 
@@ -217,10 +216,10 @@ All in [`InputManager.js`](js/systems/InputManager.js) `_handleKeyDown` + held-k
 [`HUD.js`](js/ui/HUD.js) coordinates a left column (StatusPanel), right column (DebrisWireframe + TargetPanel), top-right comms, body-mounted score, plus floating overlays.
 
 - **Progressive reveal is effectively DISABLED for dimming.** `_applySkillReveal()` force-marks all groups `hud-active` (luminance dimming was "too hard to read"). `data-hud-group` / `SKILL_GROUP_TO_DOM` now only drive the corner keycap-glyph affordance + progression tracking. Panels render full-brightness from frame one. *(This supersedes the dormant-opacity design in FIRST_EXPERIENCE.md §8.)*
-- **StatusPanel** — body-mounted score/objective bar ("CLEARED n/50", credits, hidden anchor-mass), Propulsion panel (`fuel-group`, key A: autopilot, ΔV, Xe/gas/battery, EDT, MPD rows, throttle, inline Forge F4), Power panel (`power-group`, Shift+1-3 / [ ]), Crossbow Fleet panel (`arms-group`, key D: per-arm status, lasso cooldown ring, WEB n/max). HOLDING_CATCH renders gold with a 🎣 badge. Control-mode (RCS/COLD GAS) badge was **removed**.
+- **StatusPanel** — body-mounted dual-objective bar ("CLEARED n/50" + always-visible "⚓ CONTRACT x/10,000 kg" — UX-11 #12, credits), Propulsion panel (`fuel-group`, key A: autopilot, ΔV, Xe/gas/battery, EDT, MPD rows, throttle, inline Forge [5]), Power panel (`power-group`, Shift+1-3 / [ ]), Crossbow Fleet panel (`arms-group`, key D: per-arm status, lasso cooldown ring, WEB n/max). HOLDING_CATCH renders gold with a 🎣 badge. Control-mode (RCS/COLD GAS) badge was **removed**.
 - **TargetPanel** — right column. Tracked (max 7, sort cycle), Untracked sensor (max 3), Active sats (max 3). Selected row expands with Net-ΔV, points, **MOID badge**, action hints. PaneChrome resize (Tab).
 - **CommsPanel** — top-right, 3-color priority palette, PaneChrome resize (C). Hosts `executeCommsCommand(1–6)`.
-- **RadialMenu** — C-hold radial: Deploy Weaver/Spinner, Fish, Recall All, Pilot [P], Deorbit [D], with arm-state gating.
+- **RadialMenu** — **REMOVED** (UX-11 #9). Every former radial action has a direct key: D deploy, Shift+R recall all, P pilot, Ctrl+Shift+D deorbit. `C` is a plain comms-expand tap.
 - **SkillsPane** — bottom-left, J toggle (own listener). Experience-level opacity (NOVICE checklist "NEXT STEPS" → APPRENTICE auto-hide → VETERAN transient).
 - **HintTicker** — bottom strip, max 4, driven by `HINT_POSTED`/`SKILL_STATE_CHANGED`.
 - **NetInventoryPanel** — **SUSPENDED** (mounts `display:none`, never shown; logic/tests live). Redesign pending.
@@ -249,7 +248,7 @@ All in [`InputManager.js`](js/systems/InputManager.js) `_handleKeyDown` + held-k
 | **Capture Net** (F/N in STATION_KEEP; F/N/Space manual in TRANSIT/APPROACH) | ✅ | Real FSM + cling probability |
 | **Trawl** (Shift+G) | ✅ | TrawlManager auto-picks `clusters[0]` |
 | **Deorbit sacrifice** (Ctrl+Shift+D) | ✅ | |
-| **Reeling / Returning** (R/H, post-capture) | ✅ (indirect) | REELING = zero-fuel strut motor; RETURNING = FEEP |
+| **Reeling / Returning** (R / Shift+R, post-capture) | ✅ (indirect) | REELING = zero-fuel strut motor; RETURNING = FEEP. **Both now target the STRUT-TIP dock world pos** (2026-06-12, Issue 8 — RETURNING previously flew into the mother core, occluding the daughter ~2 s with a 180°-wrong tether) |
 | **HOLDING_CATCH** (park the catch) | ✅ (auto) | Daughter parks catch at strut; a staged `FURNACE_TRANSFER` timeline (hold→chop→feed) chops it into `CHUNK_COUNT` pieces, streams them to the furnace, then hands off (`CATCH_PROCESSED`) and reloads (§ HANDOFF 1.9 + Item 1) |
 | **Fishing** | ⚠️ orphaned from keys | `deployFishing()` exists; only via ArmManager autopilot path / comms — no direct key |
 | **Web Shot** | ⚠️ orphaned | `fireWebShot()` exists, **no keybinding** |
@@ -262,9 +261,11 @@ All in [`InputManager.js`](js/systems/InputManager.js) `_handleKeyDown` + held-k
 
 **Captured-debris lifecycle:** authoritative `DebrisField.pinCapturedDebris()` welds the catch to the hauling arm (called post-arm-update). Catch is parked full-size in `HOLDING_CATCH` at the strut tip. The `FURNACE_TRANSFER` window is now a **staged breakdown** (Item 1, 2026-06-11): `hold` (`HOLD_S`, catch cinched) → `chop` (`CHOP_S`, emits `CATCH_BREAKDOWN_START`, releases the net cinch, shrinks the original instanced catch out of view) → `feed` (`FEED_S`, emits `CHUNK_COUNT`× `CATCH_BREAKDOWN_CHUNK` as chunks stream to the furnace). At feed-end `ArmUnit._updateHoldingCatch` emits **`NET_CONSUMED`** + the single **`CATCH_PROCESSED`** (unchanged `{ armId, debrisId, type }` payload — bosses/persistence contract intact) and clears the catch (→ RELOADING). The THREE-side choreography lives in `FurnaceBreakdownVisual` (chunks + ghost-bag draw-in); the FSM timing is Node-tested. `GameFlowManager`'s `CATCH_PROCESSED` handler still owns **salvage extraction + scoring + field removal** (and a `CATCH_BREAKDOWN_START` comms line). `DURATION_S` is a derived getter (= `FEED_S`) for back-compat. The earlier premature-scoring + indefinite-park debt is resolved.
 
-**Daughter orientation at the strut (Item 4):** `PlayerSatellite.postArmUpdate` is the single owner of strut-basis orientation for `DOCKED` (snap), `DOCKING` (slerp onto the strut — no pop at `RELOADING→DOCKED`), and `HOLDING_CATCH` (snap — no drift toward the raw mother-bus quat). The deterministic basis lives in the shared `ArmDockBasis.composeDockedArmQuat` (SSOT, used by both PlayerSatellite and previously-duplicated code). `HOLDING_CATCH` is in ArmUnit's `skipAttitude` set so the generic attitude branch never fights postArmUpdate (HANDOFF §10 Rule B). `_updateTether` hides the tether in `HOLDING_CATCH` (Item 5) so no stray wrong-direction line renders during the park.
+**Daughter orientation at the strut (Item 4):** `PlayerSatellite.postArmUpdate` is the single owner of strut-basis orientation for `DOCKED` (snap), `DOCKING` (slerp onto the strut — no pop at `RELOADING→DOCKED`), and `HOLDING_CATCH` (snap — no drift toward the raw mother-bus quat). The deterministic basis lives in the shared `ArmDockBasis.composeDockedArmQuat` (SSOT, used by both PlayerSatellite and previously-duplicated code). `HOLDING_CATCH` is in ArmUnit's `skipAttitude` set so the generic attitude branch never fights postArmUpdate (HANDOFF §10 Rule B). `_updateTether` hides the tether in `HOLDING_CATCH` (Item 5) so no stray wrong-direction line renders during the park. As the quat owner, `postArmUpdate` also re-syncs `tetherLine.quaternion = group.quaternion⁻¹` after its slerp/snap (2026-06-12, Issue 8b — the tether counter-quat baked in `_updateTether` was one frame stale for DOCKING/LAUNCHING/HOLDING_CATCH).
 
-**Net launch + spin (Item 2):** the net now models real yo-yo despin — `_updateSpinningUp` starts at `SPIN_HZ × SPIN_FOLDED_MULT` and decays to `SPIN_HZ` as the mouth blossoms; `_updateFlight` bleeds spin at `SPIN_DECAY_PER_S`, making `f_spin` a live cling factor (fire in-envelope or the wrap is weak). `ArmUnit._updateNettingFSM` leads the aim (`targetPos + relVel × dist/LAUNCH_SPEED`, relVel estimated from the target's per-frame scene delta). The SK tool HUD shows a live `P_cling` pre-fire readout + a de-spin/close-in advisory.
+**Catch pin standoff (Issue 13, 2026-06-12):** `_pinCatchToSelf` pins the catch at `arm.position + holdDir × (sizeMeter/2 + ARM_HOLD_CLEARANCE_M)` (holdDir = net launch axis while the fired-net ref lives, else outboard from the mother), so the daughter never renders INSIDE a catch larger than herself; `ArmManager` forwards `_armPinPos` (not raw arm position) to `DebrisField.pinCapturedDebris`.
+
+**Net launch + spin (Item 2):** the net now models real yo-yo despin — `_updateSpinningUp` starts at `SPIN_HZ × SPIN_FOLDED_MULT` and decays to `SPIN_HZ` as the mouth blossoms; `_updateFlight` bleeds spin at `SPIN_DECAY_PER_S`, making `f_spin` a live cling factor (fire in-envelope or the wrap is weak). `ArmUnit._updateNettingFSM` leads the aim (`targetPos + relVel × dist/LAUNCH_SPEED`). **relVel is ARM-RELATIVE** (2026-06-12, Issue 2): the net flies in the arm's co-orbiting frame, so the estimator subtracts the arm's own per-frame delta — in a settled SK relVel ≈ 0 and shots fly dead straight (the old raw scene delta bent every SK shot by the shared orbital drift). The SK tool HUD shows a live `P_cling` pre-fire readout + width/de-spin/close-in advisories (`assessNetFit` in CaptureNet.js is the SSOT for reticle + TargetPanel badge + ToolRecommender width fork). Audio: the deploy woosh keys off **`ARM_SPRING_FIRED`** (actual spring release, 1.5 s after `ARM_DEPLOYED`); `ARM_DEPLOYED` plays a quiet clamp click.
 
 ---
 
@@ -273,7 +274,7 @@ All in [`InputManager.js`](js/systems/InputManager.js) `_handleKeyDown` + held-k
 Three layers; only the first two exist today.
 
 1. **OnboardingDirector** ([`OnboardingDirector.js`](js/systems/OnboardingDirector.js)) — **16 beats** (boot, handshake, arrows, struts, view, look, zoom, inspect, scan, target, autopilot, decision, lasso, daughter, captured, complete). Each interactive beat triggers on an `Events` constant; narrative beats auto-advance. Escalation → `TEACHING_MOMENT_FORCE` after idle (`IDLE_ESCALATION_MS`) or >6 unrelated inputs. Veteran-skip via `VETERAN_SKILL_THRESHOLD`. Emits `ONBOARDING_COMPLETE`. **No solo-flight/counter-beat, no PostOnboardingCoach (both spec'd, unbuilt).**
-2. **TeachingSystem** ([`TeachingSystem.js`](js/systems/TeachingSystem.js)) — **19 first-encounter moments**, `_seen` Set persisted to `localStorage['teachingSeen']`. `TEACHING_MOMENT_FORCE` bypasses the seen-guard (used by Director escalation). **CP-4 §4 3-layer arbitration (built):** overlays QUEUE while a blocking surface (radial menu `C` / deploy ceremony `D`), the OnboardingDirector, or a MissionCoach beat owns the screen, and drain ≤1 per `TEACHING.QUEUE_DRAIN_INTERVAL_S` (6 s) via `update(dt)`; the **collision rule** drops an overlay permanently when an active coach beat's `skillId` matches the moment id; veterans get `presentation:'ticker'` (via the injected SkillsSystem's `getHintPresentation()`); `GAME_RESET` clears the queue. Coach-beat signals are `MISSION_BEAT_STARTED`/`MISSION_BEAT_SATISFIED` (dormant until MissionCoach emits them).
+2. **TeachingSystem** ([`TeachingSystem.js`](js/systems/TeachingSystem.js)) — **19 first-encounter moments**, `_seen` Set persisted to `localStorage['teachingSeen']`. `TEACHING_MOMENT_FORCE` bypasses the seen-guard (used by Director escalation). **CP-4 §4 3-layer arbitration (built):** overlays QUEUE while a blocking surface (deploy ceremony `D` / net ceremony; the radial-menu blocker was removed with the radial), the OnboardingDirector, or a MissionCoach beat owns the screen, and drain ≤1 per `TEACHING.QUEUE_DRAIN_INTERVAL_S` (6 s) via `update(dt)`; the **collision rule** drops an overlay permanently when an active coach beat's `skillId` matches the moment id; veterans get `presentation:'ticker'` (via the injected SkillsSystem's `getHintPresentation()`); `GAME_RESET` clears the queue. Coach-beat signals are `MISSION_BEAT_STARTED`/`MISSION_BEAT_SATISFIED` (dormant until MissionCoach emits them).
 3. **MissionCoach** ([`MissionCoach.js`](js/systems/MissionCoach.js)) — **built (engine + chapter 2)**. On `SHOP_DEPLOY` into mission N it runs `Constants.MISSION_COACH.BEATS_BY_MISSION[N]` via the shared `BeatSequencer` ([`_beatLifecycle.js`](js/systems/_beatLifecycle.js)): each beat posts a `_postOnboarding`-tagged MISSION comms line; interactive beats emit `MISSION_BEAT_STARTED` and resolve on their (payload-filtered) trigger → `MISSION_BEAT_SATISFIED`; an idle beat re-prompts via `TEACHING_MOMENT_FORCE`; completion persists per mission (`spacecowboy_mission_coach_v1`), cleared on `GAME_RESET`. Chapter 1 stays with OnboardingDirector. **Chapters 3–12 (beat tables, ~5 more skills, boss events, win cinematic) are follow-on content** (MISSION_ARC Phases C–F); the engine makes each a data edit, not code.
 
 **SkillsSystem** ([`SkillsSystem.js`](js/systems/SkillsSystem.js)) — **37 skills**, 5 tiers (orientation/core_tools/proficiency/advanced/mastery), 5 categories (nav/scan/collect/awareness/manage). States: undiscovered→discovered→practiced→mastered (mastery needs count AND `MASTERY_MIN_TIME=300s`). SM-2 spaced reminders. Skills wire 1:1 to a `triggerEvent`, with an **optional `triggerFilter(data) => boolean`** (CP-4 arbiter §5) so several skills can share one event but discriminate by payload — the gate lives in `_setupListeners` and a def without it fires on every event as before. To feed it, `ARM_CAPTURED` now carries `manual` (true for player net/tool captures, false for passive fishing/trawl auto-captures) and `SCAN_INITIATED` carries `type:'quick'|'wide'`. (Chapter 2's `arm_pilot`/`arm_pilot_capture` are the first live `triggerFilter` defs; chapters 3–12 add more as data.) **CP-4 §3 universal hint-gating rule** (the "respect the player" invariant) lives here too: `canFireHint(skillId,{cause})` allows a hint only if the skill is *undiscovered OR (discovered AND failed-recently)*, never for mastered, and falls silent after `MAX_UNHEEDED_NUDGES` (per-skill unheeded counters, reset on use). "failed-recently" is backed by a `_recentFailures` ring buffer auto-wired from `Constants.SKILLS.FAILURE_CAUSES` (NET_FAILED/NET_CATCH_MISS/LASSO_MISSED/LASSO_DENIED/PAD_BOUNCED/ARM_CAPTURE_FAILED). The SM-2 reminder path enforces the unheeded cap and tags each `SKILL_REMINDED` with `presentation:'ticker'|'modal'`; `isVeteran()`/`getHintPresentation()` downgrade veterans (`SKILLS.VETERAN_SKILL_THRESHOLD` 0.7, distinct from the 0.5 onboarding-skip threshold) to ticker hints.
@@ -288,7 +289,7 @@ Three layers; only the first two exist today.
 - **MissionEventSystem** — 5 mid-mission triggers (hydrazine, synergy, kessler cascade, weather, conjunction) + **3 news events** from `data/news-events.json` (`ast_spacemobile_tumble`, `starlink_breakup`, +1) unlocked by capture count.
 - **Two win conditions (both wired):** (A) **50 debris cleared** → `GAME_WIN` from `GameState.update()`; (B) **10,000 kg refined metal** contributed to the elevator contract in ShopScreen → `CONTRACT_COMPLETE` → win on next return-to-orbit.
 - **Active-sat treaty guard** — `ActiveSatGuard.checkActiveSatArming()` invoked from **ArmManager** (3 arming paths); blocks arming against any NORAD present in `data/active-sats.json` (**51 sats**: ISS, Hubble, GPS, Starlink, etc.). **JWST is not in the catalog** (out of LEO/GEO scope).
-- **Economy:** capture → cargo → ForgeSystem (refine metals / make FEEP propellant, F4) → fuel cycling (F5) → synergy bonuses → ShopScreen credits/upgrades. ΔV is the master resource (never free-regenerates except via salvage).
+- **Economy:** capture → cargo → ForgeSystem (refine metals / make FEEP propellant, key 5) → fuel cycling (key 6) → synergy bonuses → ShopScreen credits/upgrades. ΔV is the master resource (never free-regenerates except via salvage).
 
 ---
 
@@ -353,12 +354,16 @@ Corrected during the 2026-06-07 ground-truth pass. Stale-count headers have been
 | "5 camera views" / V cycles 3 | **7 CameraViews**, V cycles **2** (CHASE↔ORBIT); TARGET_LOCK orphaned |
 | "21 upgrades" | **30 upgrades** |
 | "Start → ORBITAL_VIEW, skipping briefing" | MENU → **BRIEFING** (target picker) → ORBITAL_VIEW |
-| R = forge cycle | R = **recall/reel**; Forge = **F4** |
+| R = forge cycle | R = **recall/reel**; Forge = **5** (was F4; UX-11 #8) |
 | Weaver/Spinner identical 85% dice-roll | **differentiated** (MEDIUM/SMALL net + cling physics); 85% path dead |
-| StrategicMap unbuilt | **built** (bands/debris/hazards/ground-stations/MOID) — but no porkchop/Lambert/CW/cluster-select |
+| StrategicMap unbuilt | **built** (bands/debris/hazards/ground-stations/MOID + UX-11 #7 "RECOMMENDED NEXT" guidance panel + legend tooltips + Shift+C city labels) — view-only by design; cluster selection stays on the Debris Map |
 | MissionCoach / 12-chapter arc / graduated comms tiers / triggerFilter / solo-flight | **none exist in code** (design only) |
 | TetherReel / BridleRing wired | **orphaned** (flags off, not in main.js) |
-| Test baseline 272/1252 (old ARCHITECTURE) | **611 / 2537 / 0** |
+| "TRL n" badges player-facing | relabeled **"Tech Lvl n"** everywhere player-facing (Codex + Shop + tier gating text, UX-11 #10); internal keys/data stay `trl`/`Constants.TRL` |
+| Codex locked cards = blurred `???` | **syllabus reveal** (UX-11 #10): title + one-liner always visible; fullText/rationale gated; `unlockHint` per entry; live search + per-category progress |
+| C-hold radial menu (RadialMenu.js) | **removed** (UX-11 #9); `C` = comms expand, `Shift+C` = city labels |
+| H / Shift+O = recall all (older docs/skills text) | **Shift+R** = recall all (2026-06-12 hotkey cleanup); `H` and `Shift+O` freed (reserved) |
+| Test baseline 272/1252 (old ARCHITECTURE) | **711 / 2880 / 0** (2026-06-12) |
 
 ---
 

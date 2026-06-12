@@ -471,6 +471,11 @@ Where:
 
 This creates the core skill loop: experienced players close to <30 m for the bonus, accepting the delta-v cost. Beginners fire at baseline range (30–75 m) where everything works fine on easy targets.
 
+**Gameplay floors (2026-06-11 tuning):** the raw multiplicative stack made a perfect point-blank shot on common materials nearly hopeless (aluminum sat ≈28 %, solar-cell sat ≈16 % — read by players as "nets don't work"). Two floors in [`computeClingProbability`](js/entities/CaptureNet.js:61) fix this without trivialising the skill loop:
+
+- `ROUGHNESS_FLOOR` (0.6) — `f_roughness = max(0.6, roughness)`. The material scale above still differentiates (MLI > painted > smooth), but smooth metal is no longer a 2.5× penalty.
+- `SURE_SHOT_MIN_CLING` (0.8) — a **well-executed** shot (range ≤ `CLOSE_RANGE`, target tumble in-spec / de-tumbled, nominal launch speed, net spin ≥ 0.8) is floored at 80 %. This is the payoff the game teaches: *close the distance, de-spin [U], then fire.* Distant, tumbling, or off-nominal shots keep the full physics stack.
+
 **Performance note:** The cling probability calculation has 6 multiplicative factors. Pre-compute surface-roughness and spin factors at target-lock time, not per-frame. Must run **≤1 ms/frame** to avoid HUD stutter — see §10 concern #3.
 
 ### §3.4 Default Cling Probabilities (Y0)
@@ -1059,5 +1064,123 @@ Visual details defer to a UX implementation sprint — this section establishes 
 
 - **Strut DOF (Rev 5):** 1-DOF yaw-only adopted. Pitch axis dropped for vacuum reliability + planar tether departure. Halves actuator count (4 vs 8 at Y0; 8 vs 16 at Y3). Bridle math becomes 2D. Plume clearance is a planar cone test. Tangle scenarios reduce in count and probability. Off-axis target acquisition handled by whole-platform attitude rotation (existing FEEP/RCS). See Pivot A in [`IMPLEMENTATION_PLAN.md`](archive/IMPLEMENTATION_PLAN_2026-06.md) completion log.
 - **Arm count baseline (Rev 5):** Quad-4 Y0 with Hex Y1 / Octo Y3 tech ladder. Y0 fleet = 1 Mother (2 Large Net pods) + 2 Large Daughters (Medium Net) + 2 Small Daughters (Small Net). Hex and Octo unlocked via Shipyard refit + tech credits. See §6.1a and Pivot B in [`IMPLEMENTATION_PLAN.md`](archive/IMPLEMENTATION_PLAN_2026-06.md) completion log.
+
+---
+
+## §11 Physics Realism Audit (2026-06-12) — Known Gaps & Future Improvements
+
+> Findings from a full code audit of the daughter pipeline (D-deploy → launch ceremony →
+> autopilot → STATION_KEEP → N-fire → net flight → capture). The FSM and gates are sound;
+> every gap below is **momentum/torque bookkeeping** that is currently narrated but not
+> simulated. None blocks gameplay today — each is a future realism upgrade, listed in
+> recommended priority order. Numbers re-derived against
+> [`Constants.js:1549-1650`](js/core/Constants.js:1549).
+
+### 11.1 Rim-weight spin margins (reference table)
+
+Mouth-open condition: `F = m·ω²·r ≥ 10 N` per rim weight.
+
+> ⚠️ **Snapshot (2026-06-12), not the authority.** The single source of truth for these
+> numbers is `Constants.CAPTURE_NET.*` + the derivation guard in
+> [`test-Crossbow-Constants.js`](js/test/test-Crossbow-Constants.js) (asserts F/wt ≥ 10 N).
+> If SPIN_HZ / RIM_WEIGHT_MASS / DIAMETER are retuned (as §11.8 proposes), the guard test
+> catches floor violations — this table and the HANDOFF echo do NOT auto-update; re-derive
+> or delete the stale rows when retuning.
+
+| Class | Dia | Weights | Design spin | F/wt | **Min RPM for 10 N floor** | Force margin |
+|---|---|---|---|---|---|---|
+| LARGE (M-NET) | 8.0 m | 8 × 75 g | 2 Hz = 120 RPM | 47.4 N | ≈ 55 RPM (0.92 Hz) | 4.7× |
+| MEDIUM (LD-NET) | 5.0 m | 4 × 50 g | 4 Hz = 240 RPM | 78.9 N | ≈ 85 RPM (1.42 Hz) | 7.9× |
+| SMALL (SD-NET) | 1.5 m | 4 × 15 g | 6 Hz = 360 RPM | 16.0 N | ≈ 285 RPM (4.75 Hz) | **only 1.6×** |
+
+### 11.2 Gap: SMALL net mouth collapse not modeled in flight
+
+In-flight spin decay is 8 %/s of design spin
+([`CaptureNet.js:514-520`](js/entities/CaptureNet.js:514), `SPIN_DECAY_PER_S: 0.08`).
+Since F ∝ ω², the SD-NET drops below the 10 N floor after **~2.6 s ≈ 26 m** of flight —
+yet `RANGE: 100` and `MAX_FLIGHT: 8 s`. By its own physics the SMALL net mouth should be
+collapsed on any shot beyond ~26 m; the code only applies the `f_spin` cling penalty,
+never a mouth-collapse state. (LARGE/MEDIUM stay above floor for ~6.8 s / ~8.1 s — fine.)
+**Future fix:** add a floor check (`F/wt < 10 N → mouth collapsed → forced MISS` or heavy
+penalty), or cut SD-NET effective range to ~25 m.
+
+### 11.3 Gap: no reaction torque on the launcher at net fire
+
+The fiction (taught in Codex "Net spin & the yo-yo despin",
+[`CodexSystem.js:315-320`](js/systems/CodexSystem.js:315), and documented at
+[`Constants.js:1570-1576`](js/core/Constants.js:1570)) says the spin-table reaction goes
+into the daughter's reaction wheel. In code, `fireDaughterNet`/`fireMotherNet`
+([`CaptureNet.js:1066-1191`](js/entities/CaptureNet.js:1066)) apply **zero torque and zero
+angular state** to the launcher — the daughter has no rotational dynamics at all (attitude
+is pure slerp targeting, [`ArmUnit.js:2219-2276`](js/entities/ArmUnit.js:2219)). Angular
+momentum is created from nothing. **Future fix (cheap):** track a wheel-momentum scalar on
+the daughter, increment per net fire, require an RCS desat burn after N launches — makes
+the narrated torque path real.
+
+### 11.4 Gap: no linear recoil on net fire
+
+Crossbow *daughter* launches produce mother recoil
+([`PlayerSatellite.js:2564`](js/entities/PlayerSatellite.js:2564)), but no listener of
+`NET_FIRED` applies momentum. Magnitudes (using the **V5 daughter masses the sim actually
+flies** — `V5_WEAVER_MASS: 6.6` / `V5_SPINNER_MASS: 2.1`,
+[`Constants.js:909-910`](js/core/Constants.js:909), consumed at
+[`ArmUnit.js:81`](js/entities/ArmUnit.js:81)) are not negligible:
+
+- MEDIUM net: 0.68 kg × 10 m/s = 6.8 N·s on a 6.6 kg Weaver → **≈ 1.03 m/s kick** (34 % of
+  the 3 m/s SK entry gate — enough to shove the daughter out of its standoff band).
+- SMALL net: 1.2 N·s on a 2.1 kg Spinner → **≈ 0.57 m/s kick**.
+
+**Future fix:** apply `−(m_net·LAUNCH_SPEED)/m_daughter` to the daughter on fire and let
+the existing SK hold loop ([`ArmUnit.js:3964-3994`](js/entities/ArmUnit.js:3964)) absorb
+it — controller and fuel cost already exist. Tune against the SK gates before shipping.
+
+### 11.5 Gap: debris angular momentum frozen, not transferred, on capture
+
+[`DebrisField.js:1198-1201`](js/entities/DebrisField.js:1198): while `_capturedByArm` /
+`_armPinned` is set, tumble simply stops advancing (and resumes if dropped). The target's
+spin angular momentum is neither transferred to the net/tether/daughter nor required to be
+nulled — a 500 kg tumbler at 10°/s is arrested instantly with zero reaction. Consequence:
+the de-spin laser ([`DespinLaser.js:93-138`](js/systems/DespinLaser.js:93)) is only a
+cling-probability buff, never a torque-management *necessity*. **Future fix
+(highest gameplay value):** on CAPTURED, transfer debris L into a post-capture settle —
+torque/oscillation on the daughter+tether over `t_settle` (`τ = L/t_settle`), with a
+tumble-rate gate (e.g. > 5°/s ⇒ strain via `NET_STRAIN_*`,
+[`Constants.js:783-807`](js/core/Constants.js:783)).
+
+### 11.6 Doc nit: `SPIN_FOLDED_MULT` is stylized, not L-conserving
+
+The yo-yo despin comment ([`CaptureNet.js:491-505`](js/entities/CaptureNet.js:491)) claims
+L = Iω conservation with I ∝ r², but `SPIN_FOLDED_MULT: 3.0` implies a folded radius of
+r_open/√3 (≈ 2.3 m for LARGE) — not a folded canister. True conservation from a ~5 cm
+canister would need a ~6400× spin ratio. The 3× value is a deliberate visual
+simplification; the comment should say so rather than claim closed-form conservation.
+
+### 11.7 Minor bookkeeping items (benign, noted for completeness)
+
+- **Spin-up bonus window:** `_resolveCatch` uses `spinFraction = spinRate / SPIN_HZ`
+  ([`CaptureNet.js:743`](js/entities/CaptureNet.js:743)); during the SPINNING_UP transient
+  spinRate is up to 3× design, so `f_spin` clamps at 1.2 — a small cling *bonus* for
+  point-blank shots inside ~0.65 s. Probably fine, possibly unintended.
+- **Spring is asserted, not integrated:** `_applyLaunchImpulse`
+  ([`ArmUnit.js:2396-2442`](js/entities/ArmUnit.js:2396)) sets velocity directly; spring K
+  / draw only validate the energy budget. Acceptable for a game; documented here so nobody
+  expects force integration.
+- **`M_NET = 0.00001` scale constant** re-declared in three places inside `CaptureNet.js`
+  (≈ lines 418/424/529, "matches ArmUnit.M") — drift risk if scene scale ever changes;
+  hoist to `Constants.js` when touched next.
+
+### 11.8 Recommended order of work
+
+1. §11.5 capture-torque settle (makes the despin laser mechanically necessary).
+2. §11.4 net-fire linear recoil (existing SK controller absorbs it).
+3. §11.2 SMALL-net mouth-collapse floor (decay × floor finally interact).
+4. §11.3 reaction-wheel saturation scalar (flavor + desat loop).
+5. §11.6 comment fix (5 min).
+
+⚠️ Items 1–3 change gameplay balance — tune deliberately against the SK entry gates
+(3 m/s, [`Constants.js:3057-3058`](js/core/Constants.js:3057)) and `NET_STRAIN_*`, and
+update the `test-Crossbow-Constants.js` derivation guards alongside.
+
+---
 
 *End of document. Implementation tracked as ST-9.4a through ST-9.4e in [`IMPLEMENTATION_PLAN.md`](archive/IMPLEMENTATION_PLAN_2026-06.md).*

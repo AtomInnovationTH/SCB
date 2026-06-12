@@ -191,8 +191,18 @@ class AudioSystem {
     if (this._eventsSetup) return;
     this._eventsSetup = true;
 
-    // Arm lifecycle sounds
-    eventBus.on(Events.ARM_DEPLOYED, (data) => {
+    // Arm lifecycle sounds.
+    // Issue 1 (2026-06-12): the deploy WOOSH keys off ARM_SPRING_FIRED — the
+    // moment the crossbow spring actually releases the daughter (1.5 s after
+    // LAUNCHING entry) — so audio matches departure, not intent. ARM_DEPLOYED
+    // (clamp-release start) now plays a quiet mechanical click so the 1.5 s
+    // wind-up reads as deliberate. HUD/skills/teaching wiring on ARM_DEPLOYED
+    // is unaffected.
+    eventBus.on(Events.ARM_DEPLOYED, () => {
+      this.playDockClick();
+    });
+
+    eventBus.on(Events.ARM_SPRING_FIRED, (data) => {
       if (data.mode === 'fishing') {
         this.playNetWhoosh(0.5);
       } else {

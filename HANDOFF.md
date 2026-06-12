@@ -1,10 +1,36 @@
 # Space Cowboy — Next-Shift Handoff Brief
 
-*Updated: 2026-06-11 · **Daughter-cycle polish pass** (launch → net → capture → reel-in → furnace) — committed `80c70b5`, pushed, menu v.95. 6-item plan in [`.kilo/plans/daughter-cycle-polish.md`](.kilo/plans/daughter-cycle-polish.md). Prior: 2026-06-10 Phase F solo-flight graduation (`ce5409d`, ARC COMPLETE); Phase E elevator win (`a4863c4`); Phase D ch8–11 + Starlink boss (`95854de`); 2026-06-06 daughter capture-lifecycle polish (`b7d5fae`). Archived context at [`archive/HANDOFF_2026-05-30_four-fix.md`](archive/HANDOFF_2026-05-30_four-fix.md), [`archive/HANDOFF_2026-05-29_post-cinch-qa.md`](archive/HANDOFF_2026-05-29_post-cinch-qa.md), [`archive/SK_M1_POLISH_HANDOFF.md`](archive/SK_M1_POLISH_HANDOFF.md), [`archive/CEREMONY_REDESIGN.md`](archive/CEREMONY_REDESIGN.md).*
+*Updated: 2026-06-12 · **Daughter-lifecycle debug & polish** (13-issue pass: re-dock, pin standoff, SK lead aim, woosh timing, hotkeys, hints, U-in-pilot, net-fit guidance, stuck-state audit, spin physics, flags, tether visual) — uncommitted, plan in [`.kilo/plans/daughter-lifecycle-debug-polish.md`](.kilo/plans/daughter-lifecycle-debug-polish.md). Prior: 2026-06-11 daughter-cycle polish (`80c70b5`, v.95); 2026-06-10 Phase F solo-flight graduation (`ce5409d`, ARC COMPLETE); Phase E elevator win (`a4863c4`); Phase D ch8–11 + Starlink boss (`95854de`); 2026-06-06 daughter capture-lifecycle polish (`b7d5fae`). Archived context at [`archive/HANDOFF_2026-05-30_four-fix.md`](archive/HANDOFF_2026-05-30_four-fix.md), [`archive/HANDOFF_2026-05-29_post-cinch-qa.md`](archive/HANDOFF_2026-05-29_post-cinch-qa.md), [`archive/SK_M1_POLISH_HANDOFF.md`](archive/SK_M1_POLISH_HANDOFF.md), [`archive/CEREMONY_REDESIGN.md`](archive/CEREMONY_REDESIGN.md).*
 
 ---
 
-> ## ⏩ LATEST SHIFT — 2026-06-11 (Daughter-cycle polish — 6 items) — read this first
+> ## ⏩ LATEST SHIFT — 2026-06-12 (Daughter-lifecycle debug & polish — 13 issues) — read this first
+>
+> **Full debug/polish pass on the D-launch → ceremony → SK → net → recall → re-dock loop.** All 13 issues from [`.kilo/plans/daughter-lifecycle-debug-polish.md`](.kilo/plans/daughter-lifecycle-debug-polish.md) implemented. **711 suites / 2880 tests / 0 fail** (was 694 / 2823). **NOT committed**; `.kilo/` untracked.
+>
+> **Bug fixes (plan phase 1):**
+> - **#8 re-dock vanish/180°-tether:** `_updateReturning` now targets the STRUT-TIP dock world pos (mirrors the 2026-05-26 REELING fix) — empty-handed daughters no longer fly into the hull; AND `PlayerSatellite.postArmUpdate` re-syncs `tetherLine.quaternion = group.quaternion⁻¹` after its DOCKING/LAUNCHING/HOLDING_CATCH quat write (the counter-quat baked in `_updateTether` was one frame stale).
+> - **#13 daughter-inside-catch:** `_pinCatchToSelf` pins at `arm.position + holdDir × (sizeMeter/2 + ARM_HOLD_CLEARANCE_M)` (new constant, 1.0 m); holdDir = net launch axis while `_firedNet` lives, else outboard-from-mother (tracks parent rotation in HOLDING_CATCH). `ArmManager` forwards `_armPinPos` to `pinCapturedDebris`.
+> - **#2 SK net drift:** `_leadTargetVel` is now ARM-RELATIVE (target delta − arm delta, same-frame sampling) — the net flies in the arm's co-orbiting frame, so settled-SK shots go dead straight; the HUD OFF-AXIS readout fixed automatically (shared `computeLeadAim`). `?debug=1` logs |relVel| + offAxis at fire time.
+> - **#1 woosh timing:** NEW `Events.ARM_SPRING_FIRED` emitted at the actual spring release (`CROSSBOW_UNDOCK_TIME`, both V5 + legacy paths, carries `mode`); AudioSystem plays the deploy woosh there (fishing → `playNetWhoosh` preserved); `ARM_DEPLOYED` now plays a quiet clamp click.
+>
+> **Input/UX (phase 2):**
+> - **#7 hotkeys:** recall-all = **Shift+R only**; `H` and `Shift+O` freed (reserved no-ops). Ripple: HotkeyOverlay, README, ARCHITECTURE §6 + drift register, SKILLS `radial_menu` key, ch9 beat text, GameFlowManager hint. NEW `test-InputManager-Hotkeys.js`.
+> - **#10 hints:** `DockingReticle._drawNetStatus` is state-aware — SK shows `[F] {TOOL} · [\`] cycle · [R] reel · [Esc] recall` (the old `[SPACE] Deploy` hint pointed at a dead key in SK); TRANSIT/APPROACH shows `[F]/[N] fire`.
+> - **#9 U key:** hold-U now drives the mother despin laser at the PILOTED arm's SK target while in ARM_PILOT (`despinLaser.setOverrideTarget`); SK readout shows live `de-spinning N°/s → in-spec°/s` convergence; keydown warning text adapts.
+>
+> **Guidance/content (phase 3):**
+> - **#4 net-fit SSOT:** NEW `assessNetFit(target, netClass)` (CaptureNet.js, pure) → reticle width advisory (`too wide — use GRIPPER`), TargetPanel capture-fit badge (`NET ✓ / TOO WIDE / TOO HEAVY / DE-SPIN FIRST`), and a ToolRecommender **width fork** (`sizeMeter > DIAMETER` → NET 0, GRIPPER ★★★).
+> - **#5/#6 stuck-state audit:** deploy refusals also post HintTicker entries naming the next verb; `fireDaughterNet` null fallback now names the reason (magazine empty / cooldown Ns); mission-1 tether overload clamps to a warning (NO snap — learning-mission guard, `gameState.debrisCleared < 5`); NEW `test-EarlyMission-StuckStates.js` (rows a/b/d/e/f/g).
+> - **#3 spin physics:** rim-tension table re-derived (47.4/78.9/16.0 N — all ≥ 10 N floor), RPM column added, derivation guard test in `test-Crossbow-Constants.js`; NEW codex `net_yo_yo_despin` (TRL 6) + one-shot SCI comms line on first `NET_FIRED`; `CaptureNetVisual` confirmed using live `net.spinRate`.
+> - **#12 flags:** NEW `isFlagEligible` (rocketBody/defunctSat ≥ `FLAG_MIN_SIZE_M` 2 m — fragments never) + `pickCountryForId` (deterministic weighted, procedural sats/rockets get countries at build); decal sized in physical metres `clamp(sizeMeter × 0.12, 0.4..1.6)` preserving LOD ratio.
+> - **#11 tether visual:** solid `LineBasicMaterial` + per-vertex gradient (anchor-bright 1.0 → daughter 0.35), REELING shows a traveling brightness pulse anchor-ward; `computeLineDistances`/dash machinery removed. State tints + EXPENDED dim unchanged.
+>
+> **NOT browser-playtested.** All FSM/event/data logic is Node-tested; render glue (tether gradient look, flag decal sizing, reticle text, despin beam at SK target) needs a browser pass. **Playtest checklist:** D deploy (click at clamp, woosh at spring) → A → SK (hint bar shows F/`/R/Esc; net flies straight; U despins while piloting) → catch (catch hangs outboard, daughter visible) → R reel (tether gradient + pulse) → re-dock (no vanish, tether stays outboard, no 180° flip) → Shift+R recalls all.
+
+---
+
+> ## ⏩ PREVIOUS SHIFT — 2026-06-11 (Daughter-cycle polish — 6 items)
 >
 > **Polish pass on the full daughter loop, all on top of `ce5409d`.** Six items from [`.kilo/plans/daughter-cycle-polish.md`](.kilo/plans/daughter-cycle-polish.md), done in dependency order (5→4→1→2→3→6). **676 suites / 2759 tests / 0 fail** (was 666 / 2729). **Committed `80c70b5` + PUSHED to origin/main.** Menu version bumped to **v.95**. `.kilo/` remains untracked.
 >
@@ -220,8 +246,8 @@
 ### Step 2 — Verify baseline
 
 ```bash
-node js/test/run-tests.js | tail -3    # HEAD 80c70b5 (daughter-cycle polish, v.95): 676 suites / 2759 tests / 0 failures
-                                        # prior: ce5409d (Phase F, arc complete): 666 / 2729
+node js/test/run-tests.js | tail -3    # 2026-06-12 (lifecycle debug/polish, uncommitted): 711 suites / 2880 tests / 0 failures
+                                        # prior: 80c70b5 (daughter-cycle polish, v.95): 676 / 2759; ce5409d (Phase F): 666 / 2729
 ```
 
 If red, see [`archive/SK_M1_POLISH_HANDOFF.md §7 Appendix`](archive/SK_M1_POLISH_HANDOFF.md) for diagnostic-log grep targets.
@@ -411,6 +437,10 @@ The `getDebrisNear`-clone pattern is still used widely. Consider migrating calle
 ### 4.3 Carried-forward backlog from prior shifts
 
 The four-fix sprint's deferred items (differential `setThrusterFire`, `test-TargetRanking.js`, `SpacecraftMaterials.js` extraction, `RENDER_ORDER` extension, dynamic `DIST_REF_KM`, the two remaining inline ARM_STATES sites) remain open — full detail in [`archive/HANDOFF_2026-05-30_four-fix.md §4`](archive/HANDOFF_2026-05-30_four-fix.md). The [`DAUGHTER_RETRIEVAL_AUDIT.md`](archive/DAUGHTER_RETRIEVAL_AUDIT.md:1) wiring gaps (TetherReel, BridleRing, Web Shot key binding) are likewise still open.
+
+### 4.4 Net/capture physics realism gaps (audit 2026-06-12)
+
+A full daughter-pipeline audit (D-deploy → ceremony → autopilot → SK → N → net fire → capture) found the FSM sound but several momentum/torque effects **narrated, not simulated**: no reaction torque or linear recoil on net fire (≈1.03 m/s un-modeled kick on a 6.6 kg V5 Weaver), debris tumble L frozen rather than transferred on capture (despin laser is only a probability buff), and the SD-NET mouth physically collapses below its 10 N rim-tension floor after ~26 m of flight with no in-code consequence. Full derivations, file:line refs, and a prioritized fix plan live in [`CAPTURE_NET.md §11`](CAPTURE_NET.md). These are future realism upgrades, not bugs blocking play — items 1–3 there alter gameplay balance and need deliberate tuning against the SK entry gates and `NET_STRAIN_*`.
 
 ---
 

@@ -398,6 +398,11 @@ export const Constants = {
   // --- Arm Operations ---
   ARM_DETACH_DURATION: 2.0,            // seconds (real-time undock animation)
   ARM_DOCK_DURATION: 3.0,              // seconds (real-time re-dock)
+  // Standoff between the daughter and her pinned catch (Issue 13, 2026-06-12):
+  // the catch is held at arm.position + holdDir × (sizeMeter/2 + clearance) so
+  // the daughter never renders INSIDE a catch larger than herself. ≈ daughter
+  // half-length + net bag slack.
+  ARM_HOLD_CLEARANCE_M: 1.0,           // metres
   ARM_NET_DEPLOY_TIME: 3.0,            // seconds (Miura-ori unfold + SMA cinch)
   ARM_GRAPPLE_STABILIZE: 1.5,          // seconds (stabilization after capture)
   ARM_CAPTURE_SUCCESS_RATE: 0.85,      // 85% net capture success (legacy; gated off when CAPTURE_NET ON)
@@ -1485,6 +1490,27 @@ export const Constants = {
     BASELINE_RANGE_MAX:   75,     // 30–75 m = standard (f_distance = 1.0)
     ENVELOPE_RANGE:       100,    // max engagement envelope
 
+    // ── UX-11 #1: close-range catch forgiveness + off-axis warning ──
+    // The net mouth physically wraps a little beyond its disc at close range,
+    // so a near-graze inside CLOSE_RANGE counts as contact. Conservative —
+    // applies ONLY inside CLOSE_RANGE; the cling-probability physics is
+    // untouched, so this never trivialises long-range aim.
+    CATCH_RADIUS_FORGIVENESS: 1.25,  // effective mouth-radius multiplier (< CLOSE_RANGE only)
+    OFF_AXIS_WARN_DEG:        12,    // pre-fire HUD warns when lead angle exceeds this
+
+    // ── Cling-probability gameplay floors (2026-06-11 tuning) ──
+    // Without these, the multiplicative factor stack made a PERFECT
+    // point-blank shot on common materials nearly hopeless (aluminum sat:
+    // ~28%, solar-cell sat: ~16%) — players read it as "nets don't work".
+    // ROUGHNESS_FLOOR: smooth surfaces are harder, not 5× harder — the
+    //   f_roughness multiplier never drops below this.
+    // SURE_SHOT_MIN_CLING: a WELL-EXECUTED shot (inside CLOSE_RANGE, target
+    //   de-tumbled to in-spec, nominal launch speed, fresh net spin) is
+    //   floored here — "set up the shot properly and it sticks". Distant,
+    //   tumbling, or sloppy shots keep the full physics stack.
+    ROUGHNESS_FLOOR:      0.6,
+    SURE_SHOT_MIN_CLING:  0.8,
+
     // ── Cling probability base values — per §3.4 ──
     SLAM_P_BASE: {
       RIGHT_RIGHT:   0.90,   // right net, right target
@@ -1529,11 +1555,25 @@ export const Constants = {
     //   (8 spokes total = 40-80 N total ring tension on LARGE).  Numbers at
     //   the current SPIN_HZ values:
     //
-    //   | Class  | D (m) | RIM_WT_COUNT | RIM_WT_MASS (kg) | SPIN_HZ | r (m) | ω (rad/s) | F/wt (N) |
-    //   |--------|-------|--------------|------------------|---------|-------|-----------|----------|
-    //   | LARGE  | 8.0   | 8            | 0.075            | 2       | 4.0   | 12.57     | 47.4     |
-    //   | MEDIUM | 5.0   | 4            | 0.050            | 4       | 2.5   | 25.13     | 78.9     |
-    //   | SMALL  | 1.5   | 4            | 0.015            | 6       | 0.75  | 37.70     | 16.0     |
+    //   | Class  | D (m) | RIM_WT_COUNT | RIM_WT_MASS (kg) | SPIN_HZ | RPM | r (m) | ω (rad/s) | F/wt (N) |
+    //   |--------|-------|--------------|------------------|---------|-----|-------|-----------|----------|
+    //   | LARGE  | 8.0   | 8            | 0.075            | 2       | 120 | 4.0   | 12.57     | 47.4     |
+    //   | MEDIUM | 5.0   | 4            | 0.050            | 4       | 240 | 2.5   | 25.13     | 78.9     |
+    //   | SMALL  | 1.5   | 4            | 0.015            | 6       | 360 | 0.75  | 37.70     | 16.0     |
+    //
+    //   Re-derived 2026-06-12 (Item 3 audit): all three classes hold > 10 N per
+    //   rim weight at the SETTLED (mouth-open) spin — the design floor for
+    //   keeping the bag mouth open in 0g. Guarded by a derivation test in
+    //   test-Crossbow-Constants.js (asserts F/wt ≥ 10 N), so future SPIN_HZ /
+    //   RIM_WEIGHT_MASS retunes can't silently collapse a net mouth.
+    //
+    //   Where does the torque go? (the player-facing physics, also taught in
+    //   the Codex "Net spin & the yo-yo despin" entry + first-launch SCI line):
+    //   the launcher spin-table torques the canister at launch; the equal-and-
+    //   opposite reaction goes into the daughter's reaction wheel/body. From
+    //   then on the net carries its angular momentum L = Iω unchanged — the
+    //   mouth-open "despin" from SPIN_HZ × SPIN_FOLDED_MULT down to SPIN_HZ is
+    //   pure radius growth (I ∝ r², yo-yo effect), NOT an external torque.
     //
     //   All three are comfortably above the 5-10 N tension threshold and well
     //   below Dyneema SK78 break strength (~3500 N for a 1 mm² strand).  If
@@ -2068,18 +2108,22 @@ export const Constants = {
       // ── CP-4 Phase D (MissionCoach chapters 8/9/11) ──────────────────────────
       // ch8 confirm-before-fire: discovered when the player trips the active-sat treaty
       //   guard (ActiveSatGuard emits CONJUNCTION_ALERT{reason:'ACTIVE_SAT_ARMING'}).
-      // ch9 radial_menu: C-hold opens the dual-arm command wheel (COMMS_RADIAL_OPEN).
+      // ch9 fleet command: the C-hold radial wheel was REMOVED (UX-11 #9) —
+      //   dual-arm throughput is taught via direct keys. The skill keeps its
+      //   historical id ('radial_menu') so old saves restore cleanly, but it
+      //   now tracks the fleet-recall verb (Shift+R → ARM_RECALL_ALL; was
+      //   H / Shift+O before the 2026-06-12 hotkey cleanup).
       // ch11 orbital_hohmann: a committed transfer window opening (CLUSTER_WINDOW_OPEN)
       //   is the "you timed a Hohmann" moment; the porkchop viz is deferred (EN-5/6).
       { id: 'confirm_before_fire', label: 'Confirm Before Fire', key: null, tier: 3, category: 'awareness', hudGroup: null, prereqs: [], prereqType: 'none', noReminder: true,  triggerEvent: 'CONJUNCTION_ALERT', triggerFilter: (d) => d && d.reason === 'ACTIVE_SAT_ARMING' },
-      { id: 'radial_menu',         label: 'Dual-Arm Command',    key: 'C',  tier: 3, category: 'collect',   hudGroup: 'fleet', prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'COMMS_RADIAL_OPEN' },
+      { id: 'radial_menu',         label: 'Fleet Recall',        key: 'Shift+R',  tier: 3, category: 'collect',   hudGroup: 'fleet', prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'ARM_RECALL_ALL' },
       { id: 'orbital_hohmann',     label: 'Hohmann Window',      key: null, tier: 4, category: 'nav',       hudGroup: null,    prereqs: [], prereqType: 'soft', noReminder: false, triggerEvent: 'CLUSTER_WINDOW_OPEN' },
 
       // ── Tier 4: Advanced (7 skills) ─────────────────────────────────────
       { id: 'nav_orbit_mfd',      label: 'Orbit MFD Reading',   key: 'M',  tier: 4, category: 'nav',       hudGroup: null,  prereqs: ['nav_autopilot'],  prereqType: 'soft',   noReminder: false, triggerEvent: 'ORBIT_MFD_TOGGLE' },
       { id: 'collect_pulse_scan', label: 'Pulse Scan',           key: null, tier: 4, category: 'collect',   hudGroup: null,  prereqs: [],                  prereqType: 'none',   noReminder: false, triggerEvent: 'PULSE_SCAN_START' },
       { id: 'collect_lasso_miss', label: 'Lasso Miss Recovery',  key: null, tier: 4, category: 'collect',   hudGroup: null,  prereqs: ['collect_lasso'],   prereqType: 'hard',   noReminder: true,  triggerEvent: 'LASSO_MISSED' },
-      { id: 'manage_forge',       label: 'Forge',                key: 'F4', tier: 4, category: 'manage',    hudGroup: null,  prereqs: [],                  prereqType: 'none',   noReminder: false, triggerEvent: 'FORGE_TOGGLE' },
+      { id: 'manage_forge',       label: 'Forge',                key: '5', tier: 4, category: 'manage',    hudGroup: null,  prereqs: [],                  prereqType: 'none',   noReminder: false, triggerEvent: 'FORGE_TOGGLE' },
       { id: 'manage_shop',        label: 'Shop Navigation',      key: null, tier: 4, category: 'manage',    hudGroup: null,  prereqs: [],                  prereqType: 'none',   noReminder: false, triggerEvent: 'UPGRADE_PURCHASED' },
       { id: 'awareness_kessler',  label: 'Kessler Event',        key: null, tier: 4, category: 'awareness', hudGroup: null,  prereqs: [],                  prereqType: 'none',   noReminder: true,  triggerEvent: 'KESSLER_CASCADE' },
       { id: 'awareness_weather',  label: 'Space Weather',        key: null, tier: 4, category: 'awareness', hudGroup: null,  prereqs: [],                  prereqType: 'none',   noReminder: true,  triggerEvent: 'WEATHER_EFFECT_START' },
@@ -2356,10 +2400,8 @@ export const Constants = {
     PANE_EXPAND_HEIGHT_PX: 300,
     PANE_EXPAND_HOLD_MS: 3000,
     STRIPE_WIDTH_PX: 3,
-    C_HOLD_THRESHOLD_MS: 300,
-    C_TAP_MAX_MS: 250,
-    RADIAL_RADIUS_PX: 90,
-    RADIAL_OPTION_COUNT: 6,
+    // (UX-11 #9: C_HOLD_THRESHOLD_MS / C_TAP_MAX_MS / RADIAL_* removed with
+    // the C-hold radial menu — C acts on keydown with zero delay.)
   },
 
   // ============================================================================
@@ -2449,6 +2491,15 @@ export const Constants = {
 
     // Wireframe / textured toggle
     DEFAULT_MODE: 'textured',   // 'textured' | 'wireframe'
+
+    // Item 12 (2026-06-12): flag decal gating + physical sizing.
+    // Flags only on rocket bodies / defunct sats at least this wide:
+    FLAG_MIN_SIZE_M: 2,         // m — fragments/small junk never get flags
+    // Decal width = clamp(sizeMeter × FACTOR, MIN..MAX) metres (was a fixed
+    // 0.7-local-unit plane that read tiny on an 8 m rocket body):
+    FLAG_SIZE_FACTOR: 0.12,
+    FLAG_DECAL_MIN_M: 0.4,
+    FLAG_DECAL_MAX_M: 1.6,
   },
 
   // ============================================================================
@@ -2608,11 +2659,11 @@ export const Constants = {
           id: 'ch6_forge',
           type: 'interactive',
           source: 'HOUSTON',
-          text: 'Open the Forge (F4) and run a metal through the FEEP cycle — refine your catch into thrust.',
+          text: 'Open the Forge ([5]) and run a metal through the FEEP cycle — refine your catch into thrust.',
           skillId: 'manage_forge',
           triggerEvent: 'FORGE_TOGGLE',
           title: 'THE FORGE',
-          body: 'Press F4 to open the Forge and convert salvage into FEEP propellant.',
+          body: 'Press 5 to open the Forge and convert salvage into FEEP propellant.',
         },
       ],
 
@@ -2657,18 +2708,20 @@ export const Constants = {
       ],
 
       // ── Chapter 9 is the Starlink cascade boss (StarlinkCascadeBoss.js); this
-      //    beat teaches the dual-arm command wheel the 35-frag race needs. The
-      //    boss system owns the spawn, 5-min window, outcomes + codex/awards. ──
+      //    beat teaches dual-arm throughput for the 35-frag race. The C-hold
+      //    radial wheel was removed (UX-11 #9) — direct keys now: 1/2 deploy &
+      //    switch daughters, P pilots, Shift+R recalls the fleet. Satisfied by any
+      //    daughter deployment during the chapter. ──
       9: [
         {
           id: 'ch9_radial',
           type: 'interactive',
           source: 'HOUSTON',
-          text: 'Field\'s getting thick — two arms beat one. Hold C for the radial command wheel: deploy, recall, and pilot both daughters from a single menu. You\'ll need the throughput.',
+          text: 'Field\'s getting thick — two arms beat one. Run both daughters: [1]/[2] deploy and switch, [P] pilots, [Shift+R] recalls the whole fleet. You\'ll need the throughput.',
           skillId: 'radial_menu',
-          triggerEvent: 'COMMS_RADIAL_OPEN',
+          triggerEvent: 'ARM_DEPLOYED',
           title: 'DUAL-ARM COMMAND',
-          body: 'Hold C to open the radial command wheel and coordinate both daughters at once.',
+          body: 'Deploy both daughters ([1] and [2]) and work two catches at once.',
         },
       ],
 
@@ -3228,9 +3281,35 @@ export function trlToLabel(trl, C) {
   return k.LABEL_SPECULATIVE;
 }
 
+/**
+ * UX-11 #10: player-facing "Tech Level" presentation strings.
+ * The internal data keys stay TRL (Constants.TRL, entry.trl) — only the
+ * vocabulary shown to the player changes. Badge: "Tech Lvl n"; full label:
+ * "Tech Level n — <tier word>". Apply in BOTH CodexViewerUI and ShopScreen
+ * so "TRL" never survives anywhere player-facing.
+ * @param {number} trl
+ * @param {object} [C=Constants.TRL]
+ * @returns {string} e.g. "Tech Level 9 — Flight-proven"
+ */
+export function trlToTechLevelLabel(trl, C) {
+  return `Tech Level ${trl} — ${trlToLabel(trl, C)}`;
+}
+
+/**
+ * Short badge text for cards/chips: "Tech Lvl n".
+ * @param {number} trl
+ * @returns {string}
+ */
+export function techLevelBadgeText(trl) {
+  return `Tech Lvl ${trl}`;
+}
+
 // CJS guard — expose pure helpers for Node.js tests (same pattern as Epic 5).
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { Constants, trlToBadgeColor, trlToLabel, isValidTRL };
+  module.exports = {
+    Constants, trlToBadgeColor, trlToLabel, isValidTRL,
+    trlToTechLevelLabel, techLevelBadgeText,
+  };
 }
 
 export default Constants;

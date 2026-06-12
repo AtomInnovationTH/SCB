@@ -208,13 +208,13 @@ export function canUpgrade(currentTier, targetTier, gameState) {
     return { allowed: false, reason: `Need ${target.costCredits.toLocaleString()} credits (have ${credits.toLocaleString()})` };
   }
 
-  // TRL / debris gate
+  // TRL / debris gate (player-facing vocabulary: "Tech Level" — UX-11 #10)
   const debrisCleared = gameState.debrisCleared || 0;
   const effectiveTRL = getEffectiveTRL(debrisCleared);
   if (effectiveTRL < target.unlockTRL) {
     return {
       allowed: false,
-      reason: `Requires TRL ${target.unlockTRL} (clear ${target.debrisGate}+ debris — have ${debrisCleared})`,
+      reason: `Requires Tech Lvl ${target.unlockTRL} (clear ${target.debrisGate}+ debris — have ${debrisCleared})`,
     };
   }
 

@@ -24,6 +24,10 @@ import {
   computeFragRisk,
   recommendCaptureMode,
   getNetClassForType,
+  effectiveCatchRadius,
+  computeLeadAim,
+  missReasonToText,
+  assessNetFit,
 } from '../entities/CaptureNet.js';
 
 const CN = Constants.CAPTURE_NET;
@@ -316,6 +320,69 @@ describe('CaptureNet — computeClingProbability', () => {
     });
     assert.ok(pMax <= 1.0, `Max P (${pMax}) should be ≤ 1.0`);
     assert.ok(pMax > 0, 'Max P should be positive');
+  });
+});
+
+
+// ══════════════════════════════════════════════════════════════════════════
+// CLING TUNING FLOORS (2026-06-11) — "nets don't capture" fix
+// ══════════════════════════════════════════════════════════════════════════
+
+describe('CaptureNet — cling gameplay floors (roughness + sure-shot)', () => {
+  const DEG = Math.PI / 180;
+
+  it('roughness multiplier never drops below ROUGHNESS_FLOOR', () => {
+    // Solar-cell (0.2) and aluminum (0.4) must be treated as ≥ the floor.
+    const pSolar = computeClingProbability({ pBase: 0.80, vRel: 10, vOptimal: 10, range: 50, roughness: 0.2, spinFraction: 0.5 });
+    const pFloor = computeClingProbability({ pBase: 0.80, vRel: 10, vOptimal: 10, range: 50, roughness: CN.ROUGHNESS_FLOOR, spinFraction: 0.5 });
+    assert.ok(Math.abs(pSolar - pFloor) < 1e-12,
+      `roughness 0.2 must clamp to the ${CN.ROUGHNESS_FLOOR} floor (${pSolar} vs ${pFloor})`);
+    // Above the floor the scale still applies (rough beats smooth).
+    const pMli = computeClingProbability({ pBase: 0.80, vRel: 10, vOptimal: 10, range: 50, roughness: 1.0, spinFraction: 0.5 });
+    assert.ok(pMli > pFloor, 'rough surfaces still cling better than the floor');
+  });
+
+  it('sure-shot floor: close + de-tumbled + nominal speed → ≥ SURE_SHOT_MIN_CLING', () => {
+    // Worst material, point-blank, properly set up — must be reliable.
+    const p = computeClingProbability({
+      pBase: 0.80, vRel: 10, vOptimal: 10, range: 10,
+      roughness: 0.2, spinFraction: 0.92, targetTumbleRate: 8 * DEG,
+    });
+    assert.ok(p >= CN.SURE_SHOT_MIN_CLING,
+      `well-executed shot must be ≥ ${CN.SURE_SHOT_MIN_CLING}, got ${p}`);
+  });
+
+  it('sure-shot floor does NOT apply to tumbling targets (de-spin still matters)', () => {
+    const p = computeClingProbability({
+      pBase: 0.80, vRel: 10, vOptimal: 10, range: 10,
+      roughness: 0.4, spinFraction: 0.92, targetTumbleRate: 40 * DEG,
+    });
+    assert.ok(p < CN.SURE_SHOT_MIN_CLING, `tumbling target keeps physics odds, got ${p}`);
+  });
+
+  it('sure-shot floor does NOT apply beyond CLOSE_RANGE (aim still matters)', () => {
+    const p = computeClingProbability({
+      pBase: 0.80, vRel: 10, vOptimal: 10, range: 60,
+      roughness: 0.4, spinFraction: 0.52, targetTumbleRate: 5 * DEG,
+    });
+    assert.ok(p < CN.SURE_SHOT_MIN_CLING, `long shot keeps physics odds, got ${p}`);
+  });
+
+  it('sure-shot floor does NOT apply at off-nominal launch speed', () => {
+    const p = computeClingProbability({
+      pBase: 0.80, vRel: 16, vOptimal: 10, range: 10,
+      roughness: 0.4, spinFraction: 0.92, targetTumbleRate: 5 * DEG,
+    });
+    assert.ok(p < CN.SURE_SHOT_MIN_CLING, `bad-velocity shot keeps physics odds, got ${p}`);
+  });
+
+  it('sure-shot floor never raises an already-better raw probability… or exceeds 1', () => {
+    const p = computeClingProbability({
+      pBase: 0.95, vRel: 10, vOptimal: 10, range: 5,
+      roughness: 1.0, spinFraction: 1.0, targetTumbleRate: null,
+    });
+    assert.ok(p > CN.SURE_SHOT_MIN_CLING && p <= 1.0,
+      `strong raw shot keeps its own (better) odds, got ${p}`);
   });
 });
 
@@ -2003,5 +2070,149 @@ describe('CaptureNet — Q2 ceremony: net.position tracks arm during post-contac
     assert.ok(Math.abs(net.position.x - expectedX) < 1e-3,
       `missed REELING must ignore the debris and retract to the arm; ` +
       `got ${net.position.x.toExponential(3)} vs expected ${expectedX.toExponential(3)}`);
+  });
+});
+
+
+// ══════════════════════════════════════════════════════════════════════════
+// UX-11 #1: CLOSE-RANGE FORGIVENESS + LEAD-AIM + MISS-REASON TEXT
+// ══════════════════════════════════════════════════════════════════════════
+
+describe('CaptureNet — UX-11 #1: close-range catch forgiveness', () => {
+  it('effectiveCatchRadius widens by CATCH_RADIUS_FORGIVENESS inside CLOSE_RANGE only', () => {
+    const r = 2.5;
+    const f = CN.CATCH_RADIUS_FORGIVENESS;
+    assert.ok(f > 1.0 && f <= 1.5, `forgiveness must be conservative (1–1.5×), got ${f}`);
+    assert.ok(Math.abs(effectiveCatchRadius(r, CN.CLOSE_RANGE - 1) - r * f) < 1e-12,
+      'inside CLOSE_RANGE → widened');
+    assert.equal(effectiveCatchRadius(r, CN.CLOSE_RANGE), r, 'at CLOSE_RANGE → geometric');
+    assert.equal(effectiveCatchRadius(r, 80), r, 'beyond CLOSE_RANGE → geometric');
+  });
+
+  it('a near-graze inside CLOSE_RANGE makes contact (forgiveness path)', () => {
+    const r = CN.MEDIUM.DIAMETER / 2;                 // 2.5 m
+    // Target laterally offset 1.1×r: outside the geometric radius, inside 1.25×
+    const net = new NetProjectile(makeNetConfig({
+      targetDebris: makeTarget(12, r * 1.1, 0, 100),
+    }));
+    net._transitionTo(STATES.FLIGHT);
+    let contacted = false;
+    for (let t = 0; t < 3; t += 0.02) {
+      net.update(0.02);
+      if (net.state !== STATES.FLIGHT) { contacted = net.state === STATES.CONTACT; break; }
+    }
+    assert.ok(contacted, 'near-graze at 12 m must contact via forgiveness radius');
+  });
+
+  it('the same lateral offset beyond CLOSE_RANGE still misses (aim not trivialised)', () => {
+    const r = CN.MEDIUM.DIAMETER / 2;
+    const net = new NetProjectile(makeNetConfig({
+      targetDebris: makeTarget(50, r * 1.1, 0, 100),  // closest approach at 50 m
+    }));
+    net._transitionTo(STATES.FLIGHT);
+    let contacted = false;
+    for (let t = 0; t < 9; t += 0.02) {
+      net.update(0.02);
+      if (net.state === STATES.CONTACT || net.state === STATES.BRAKE) { contacted = true; break; }
+      if (net.state === STATES.MISSED) break;
+    }
+    assert.equal(contacted, false, 'long-range graze must NOT be forgiven');
+  });
+});
+
+describe('CaptureNet — UX-11 #1: lead-aim alignment helper', () => {
+  it('stationary target → lead dir equals bearing, offAxis 0°', () => {
+    const { dir, offAxisDeg } = computeLeadAim(
+      { x: 0, y: 0, z: 0 }, { x: 50, y: 0, z: 0 }, null, 10);
+    assert.ok(Math.abs(dir.x - 1) < 1e-12 && Math.abs(dir.y) < 1e-12);
+    assert.ok(offAxisDeg < 1e-9, `expected 0°, got ${offAxisDeg}`);
+  });
+
+  it('transverse drift produces the expected lead angle', () => {
+    // Target 50 m ahead, drifting 2 m/s sideways; net 10 m/s → tof 5 s →
+    // lead offset 10 m → angle = atan(10/50) ≈ 11.31°
+    const { offAxisDeg } = computeLeadAim(
+      { x: 0, y: 0, z: 0 }, { x: 50, y: 0, z: 0 }, { x: 0, y: 2, z: 0 }, 10);
+    const expected = Math.atan(10 / 50) * 180 / Math.PI;
+    assert.ok(Math.abs(offAxisDeg - expected) < 0.5,
+      `expected ~${expected.toFixed(1)}°, got ${offAxisDeg.toFixed(1)}°`);
+  });
+
+  it('fast transverse drift exceeds OFF_AXIS_WARN_DEG (HUD warning fires)', () => {
+    const { offAxisDeg } = computeLeadAim(
+      { x: 0, y: 0, z: 0 }, { x: 50, y: 0, z: 0 }, { x: 0, y: 4, z: 0 }, 10);
+    assert.ok(offAxisDeg > CN.OFF_AXIS_WARN_DEG,
+      `${offAxisDeg.toFixed(1)}° must exceed warn threshold ${CN.OFF_AXIS_WARN_DEG}°`);
+  });
+});
+
+describe('CaptureNet — UX-11 #1: miss-reason comms mapping', () => {
+  it('overshoot reasons map to the re-fire guidance line', () => {
+    for (const r of ['timeout', 'tether_limit']) {
+      const text = missReasonToText(r);
+      assert.ok(text && text.includes('overshot'), `${r} → overshoot text`);
+      assert.ok(text.includes('re-fire'), 'must tell the player to re-fire');
+    }
+  });
+
+  it('cling_failed maps to the get-closer / de-spin line', () => {
+    const text = missReasonToText('cling_failed');
+    assert.ok(text.includes('de-spin'), 'must point at de-spin (U)');
+  });
+
+  it('forced and unknown reasons stay silent', () => {
+    assert.equal(missReasonToText('forced'), null);
+    assert.equal(missReasonToText('whatever'), null);
+    assert.equal(missReasonToText(undefined), null);
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════
+// Item 4 (2026-06-12): assessNetFit — pre-fire capture-fit assessment.
+// Single source for reticle advisory + TargetPanel badge + recommender fork.
+// ════════════════════════════════════════════════════════════════════════
+describe('assessNetFit — width / mass / tumble pre-fire assessment (Item 4)', () => {
+  const MEDIUM = CN.MEDIUM;   // 5 m mouth
+
+  it('in-spec target → OK', () => {
+    const r = assessNetFit({ sizeMeter: 2, mass: 100, tumbleRate: 0 }, MEDIUM);
+    assert.equal(r.fit, 'OK');
+  });
+
+  it('wider than the mouth → TOO_WIDE (deterministic reel failure)', () => {
+    const r = assessNetFit({ sizeMeter: MEDIUM.DIAMETER + 1, mass: 100 }, MEDIUM);
+    assert.equal(r.fit, 'TOO_WIDE');
+    assert.equal(r.label, 'TOO WIDE');
+  });
+
+  it('width takes precedence over mass and tumble', () => {
+    const r = assessNetFit(
+      { sizeMeter: MEDIUM.DIAMETER + 1, mass: 1e6, tumbleRate: 10 }, MEDIUM);
+    assert.equal(r.fit, 'TOO_WIDE', 'width is the deterministic failure — wins precedence');
+  });
+
+  it('over the mass cap → TOO_HEAVY', () => {
+    const r = assessNetFit(
+      { sizeMeter: 1, mass: (MEDIUM.MAX_CAPTURE_MASS || 500) + 1 }, MEDIUM);
+    assert.equal(r.fit, 'TOO_HEAVY');
+  });
+
+  it('tumbling above in-spec → DESPIN_FIRST', () => {
+    const inSpecDeg = (Constants.NET_TUMBLE_PENALTY?.IN_SPEC_DEG) || 10;
+    const rad = (inSpecDeg + 5) * Math.PI / 180;
+    const r = assessNetFit({ sizeMeter: 1, mass: 50, tumbleRate: rad }, MEDIUM);
+    assert.equal(r.fit, 'DESPIN_FIRST');
+  });
+
+  it('tumble at/below in-spec → OK', () => {
+    const inSpecDeg = (Constants.NET_TUMBLE_PENALTY?.IN_SPEC_DEG) || 10;
+    const rad = (inSpecDeg - 1) * Math.PI / 180;
+    const r = assessNetFit({ sizeMeter: 1, mass: 50, tumbleRate: rad }, MEDIUM);
+    assert.equal(r.fit, 'OK');
+  });
+
+  it('null target or net class → OK (graceful)', () => {
+    assert.equal(assessNetFit(null, MEDIUM).fit, 'OK');
+    assert.equal(assessNetFit({ sizeMeter: 99 }, null).fit, 'OK');
   });
 });

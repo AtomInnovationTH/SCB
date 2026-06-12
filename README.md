@@ -15,7 +15,7 @@ UI design draws from four landmark space sims: **Independence War** (NavSphere, 
 # Then open http://localhost:8081
 ```
 
-**Controls:** `A` autopilot, `S` quick scan, `W` wide scan, `D` deploy daughter, `T` tool deploy, `F` focus action, `` ` `` cycle tools, Arrows rotate, `+/-` throttle, `Tab` cycle targets, `N` lasso/net (Space alias), `H` recall all, `R` smart reel-in, `V` camera, `P` arm pilot, `I` inspect, `J` journal, `Z` wireframe, `C` comms, `M` MPD/orbit, `L` codex, `B` shop, `X` detach, `F4` forge, `F5` fuel cycle, `Shift+1/2/3` power bus, `[/]` adjust. WASD thrust in arm pilot mode only (P key). Full table below.
+**Controls:** `A` autopilot, `S` quick scan, `W` wide scan, `D` deploy daughter, `T` tool deploy, `F` focus action, `` ` `` cycle tools, Arrows rotate, `+/-` throttle, `Tab` cycle targets, `N` lasso/net (Space alias), `Shift+R` recall all, `R` smart reel-in, `V` camera, `P` arm pilot, `I` inspect, `J` journal, `Z` wireframe, `C` comms, `M` MPD/orbit, `L` codex, `B` shop, `X` detach, `5` forge, `6` fuel cycle, `Shift+C` city labels, `Shift+1/2/3` power bus, `[/]` adjust. WASD thrust in arm pilot mode only (P key). Full table below.
 
 **Tech:** Three.js r170 via CDN import maps. Zero build tools. ES6 modules. All geometry procedural (no GLTF). NASA public domain textures.
 
@@ -118,7 +118,7 @@ Space Cowboy/
 │   │   └── CollisionAvoidanceSystem.js
 │   ├── ui/                   ← ~22 UI modules (see ARCHITECTURE.md §6.5)
 │   │   ├── HUD.js, hud/StatusPanel.js, hud/TargetPanel.js, hud/CommsPanel.js,
-│   │   ├── hud/RadialMenu.js, hud/SkillsPane.js,
+│   │   ├── hud/SkillsPane.js,
 │   │   ├── NavSphere.js, OrbitMFD.js, TargetReticle.js, DebrisWireframe.js,
 │   │   ├── DockingReticle.js, CodexViewerUI.js, VelocityStreaks.js,
 │   │   ├── TrailSystem.js, DebrisMap.js, DebrisTextureAtlas.js,
@@ -149,7 +149,7 @@ Space Cowboy/
 
 **HUD:** Progressive luminance system (dormant/active CSS states). 3-panel left column (Propulsion/Energy/Fleet), right column (wireframe + target list), NavSphere with distance encoding + range rings, OrbitMFD, 5-color system.
 
-**Systems:** Active scanning (S/W keys with cooldowns, discovery mechanics, survey rewards), auto-tool recommendation (T tool-deploy, backtick-cycle), focus action (F key, context-sensitive), 5 camera views, ARM PILOT manual control (P key), FS2-style comms menu (C key), debris wireframe analysis (Z key), inspection mode (I key), journal/skills (J key), arm deorbit sacrifice (Ctrl+Shift+D), forge system (F4 key), power distribution ETS (Shift+1/2/3 + [/] keys), autopilot system (A key), throttle control (+/- keys), MPD thruster burst mode (M key), lasso/net fire (N key; Space alias), trawl system with adaptive speed, collision avoidance AI, 10-stage curiosity-driven tutorial.
+**Systems:** Active scanning (S/W keys with cooldowns, discovery mechanics, survey rewards), auto-tool recommendation (T tool-deploy, backtick-cycle), focus action (F key, context-sensitive), 5 camera views, ARM PILOT manual control (P key), comms expand (C key), debris wireframe analysis (Z key), inspection mode (I key), journal/skills (J key), arm deorbit sacrifice (Ctrl+Shift+D), forge system (5 key), power distribution ETS (Shift+1/2/3 + [/] keys), autopilot system (A key), throttle control (+/- keys), MPD thruster burst mode (M key), lasso/net fire (N key; Space alias), trawl system with adaptive speed, collision avoidance AI, 10-stage curiosity-driven tutorial.
 
 **Audio:** 30+ procedural generators + ambient loop + 4-tier ΔV alarm + thruster sputtering + forge phase textures + target lock ceremony + lasso feedback.
 
@@ -176,7 +176,7 @@ _Authoritative table (Delegation 1 hotkey rebind, 2026-05-31). The Codex is `L`.
   T  · Tool Deploy (smart context)
   N  · Lasso / Net fire   (Space = onboarding smart-default → lasso)
   Shift+N · NavSphere toggle (Delegation 2 — 2026-05-31)
-  P  · ARM PILOT toggle
+  P  · ARM PILOT toggle   (Shift+P cycles the piloted arm — reaches arms 5+ on Y1/Y3 tiers)
   I  · Part callout inspection:
          · in ORBITAL_VIEW → V5 Crossbow mothership part callout (bottom-right panel,
            11 zones, auto-cycling; Tab advances zone, I closes)
@@ -189,13 +189,15 @@ _Authoritative table (Delegation 1 hotkey rebind, 2026-05-31). The Codex is `L`.
   M  · MFD (Orbit / MPD)
   N alias = Space (newbie-friendly default action)
   V / Shift+V · Camera cycle / Strategic Map
-  C  · Comms tap-expand, hold-radial
-  H  · Recall ALL deployed arms
+  C  · Comms expand (tap — the C-hold radial menu was removed)
+  Shift+C · Earth city labels toggle (off by default, persisted)
+  Shift+R · Recall ALL deployed arms
   R  · Context Reel-in:
          · in ORBITAL_VIEW with deployed daughter → recall closest
          · during autopilot → abort autopilot
          · in ARM_PILOT → reel daughter home
   G  · (unbound — reserved)
+  H  · (unbound — reserved)
   K  · (unbound — reserved)
   X  · Tether detach (sacrifice)
   Y  · EDT deploy
@@ -208,11 +210,10 @@ _Authoritative table (Delegation 1 hotkey rebind, 2026-05-31). The Codex is `L`.
   Shift+1/2/3 · Power-bus select
   1–4   · Select / pilot arm 1–4
   7     · Return to mother (works anywhere)
-  F4    · Forge (Kiln) toggle
-  F5    · FEEP fuel cycle (Propellant)
+  5     · Forge (Kiln) toggle  (was F4)
+  6     · FEEP fuel cycle (Propellant)  (was F5)
   F2    · FEEP metal cycle (piloted arm)
   Shift+G · Trawl start
-  Shift+O · Recall all (alias of H)
   O     · Deploy ALL docked arms
   Enter · Begin approach
   Esc   · Pause / back / exit

@@ -33,6 +33,7 @@ import { Constants } from '../core/Constants.js';
  * @param {Object} opts
  * @param {'weaver'|'spinner'} opts.armType            - daughter class (drives toolset + net cap)
  * @param {number}  [opts.mass=0]                      - target mass (kg)
+ * @param {number}  [opts.sizeMeter=0]                 - target max width (m) — Item 4 width fork
  * @param {string}  [opts.debrisType]                  - 'rocketBody'|'defunctSat'|'fragment'|...
  * @param {boolean} [opts.ferromagnetic=false]         - pure-steel hull (direct EPM grip)
  * @param {boolean} [opts.hasFerrousFasteners=false]   - steel bolts/brackets (bolt-latch)
@@ -43,6 +44,7 @@ import { Constants } from '../core/Constants.js';
 export function recommendArmTool(opts = {}) {
   const armType  = opts.armType === 'spinner' ? 'spinner' : 'weaver';
   const mass     = Number.isFinite(opts.mass) ? opts.mass : 0;
+  const sizeM    = Number.isFinite(opts.sizeMeter) ? opts.sizeMeter : 0;
   const dType    = opts.debrisType || null;
   const ferro    = opts.ferromagnetic === true;
   const fasten   = opts.hasFerrousFasteners === true;
@@ -54,10 +56,16 @@ export function recommendArmTool(opts = {}) {
 
   // Per-class net mouth capacity (kg) — drives the NET self-demotion rule.
   const CN = Constants.CAPTURE_NET || {};
+  const netClass = armType === 'weaver' ? CN.MEDIUM : CN.SMALL;
   const netCapKg = armType === 'weaver'
     ? (CN.MEDIUM && CN.MEDIUM.MAX_CAPTURE_MASS) || 500
     : (CN.SMALL && CN.SMALL.MAX_CAPTURE_MASS) || 50;
   const netOversize = mass > netCapKg;
+  // Item 4 (2026-06-12): WIDTH fork — debris wider than the net mouth is a
+  // deterministic reel-time failure (_checkNetIntegrityOnReel), so warn the
+  // player BEFORE they commit: NET scores 0 and GRIPPER takes the ▶.
+  const netDiaM = (netClass && netClass.DIAMETER) || 0;
+  const netTooWide = netDiaM > 0 && sizeM > netDiaM;
 
   const MAG = Constants.MAGNETIC_GRAPPLE || {};
   const tooHeavyForMagnet = mass > ((MAG.MAX_DEBRIS_MASS_KG) || 500);
@@ -75,6 +83,8 @@ export function recommendArmTool(opts = {}) {
   if ('NET' in scores) {
     if (netGone) {
       scores.NET = 0; hints.NET = 'magazine empty';
+    } else if (netTooWide) {
+      scores.NET = 0; hints.NET = 'too wide for net mouth';
     } else if (netOversize) {
       scores.NET = 1; hints.NET = 'class oversize — Mother only';
     } else {
@@ -92,12 +102,13 @@ export function recommendArmTool(opts = {}) {
     hints.MAGNET  = ferro ? 'ferrous hull — direct grip' : 'ferrous fasteners — bolt-latch';
   }
 
-  // ── GRIPPER fork (P3, §13 Q1, flag-gated) — oversize / awkward / fixture ──
+  // ── GRIPPER fork (P3, §13 Q1, flag-gated) — oversize / too-wide / awkward / fixture ──
   if ('GRIPPER' in scores && gripperOn) {
     const awkwardShape = dType === 'rocketBody' || (fixture && mass >= 50);
-    if (!tooHeavyForGripper && (netOversize || awkwardShape)) {
+    if (!tooHeavyForGripper && (netOversize || netTooWide || awkwardShape)) {
       scores.GRIPPER = 3;
-      hints.GRIPPER = netOversize ? 'oversize for net' : 'awkward shape / fixture';
+      hints.GRIPPER = netTooWide ? 'too wide for net — grip it'
+        : netOversize ? 'oversize for net' : 'awkward shape / fixture';
     } else if (fixture) {
       scores.GRIPPER = 1; hints.GRIPPER = 'available';   // visible, not recommended
     }

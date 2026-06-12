@@ -19,6 +19,7 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { orbitToSceneCartesian, orbitToSceneCartesianInto } from '../entities/OrbitalMechanics.js';
 import { decomposeAimTarget } from './AimDecomposition.js';
+import { findNearestLiveDebris } from './NavRecoveryAdvisor.js';
 
 /** 1 metre in scene units (1 scene unit = 100 km) */
 const M = 0.00001;
@@ -93,6 +94,9 @@ export class AutopilotSystem {
     /** @type {boolean} True while a trawl sweep is active — blocks autopilot engage */
     this._trawlActive = false;
 
+    /** @type {boolean} UX-11 #4: armed after a trawl-denied engage; next A press aborts the sweep */
+    this._trawlAbortArmed = false;
+
     /** @type {object|null} Debris Map cluster target (ST-4.A) */
     this._debrisMapCluster = null;
 
@@ -165,14 +169,10 @@ export class AutopilotSystem {
 
   /** Attempt to engage autopilot. Validates ΔV safety and trawl state first. */
   engage() {
-    if (this._trawlActive) {
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        text: '⚠ AUTOPILOT DENIED — trawl sweep in progress',
-        priority: 'warning',
-      });
-      return;
-    }
-
+    // ΔV safety FIRST — before any destructive side effect. A second-press
+    // trawl abort (below) must never fire when the engage would be denied
+    // anyway (review finding: low-ΔV double-A used to kill the sweep and
+    // still deny).
     const dv = this._getRemainingDeltaV();
     if (dv < ENGAGE_DV_MIN) {
       eventBus.emit(Events.COMMS_MESSAGE, {
@@ -182,14 +182,69 @@ export class AutopilotSystem {
       return;
     }
 
-    const hasSelectedTarget = this._targetSelector && this._targetSelector.getActiveTarget();
+    // UX-11 #4: the trawl-block is advisory — re-derive it from the TrawlManager's
+    // live state so a stuck `_trawlActive` flag (sweep that never completed)
+    // can never permanently wedge the autopilot.
+    if (this._trawlActive && !(this._trawlManager && this._trawlManager.active)) {
+      this._trawlActive = false;
+    }
+    if (this._trawlActive) {
+      // Genuine active sweep. First A press warns; a second A press aborts the
+      // trawl (TrawlManager ends the sweep → TRAWL_SWEEP_COMPLETE clears the
+      // flag synchronously) and engages.
+      if (this._trawlAbortArmed) {
+        this._trawlAbortArmed = false;
+        eventBus.emit(Events.TRAWL_ABORT, { reason: 'AUTOPILOT_OVERRIDE' });
+        if (this._trawlActive) {
+          // Abort failed to clear the sweep — bail out rather than fight it.
+          eventBus.emit(Events.COMMS_MESSAGE, {
+            text: '⚠ AUTOPILOT DENIED — trawl sweep still active',
+            priority: 'warning',
+          });
+          return;
+        }
+      } else {
+        this._trawlAbortArmed = true;
+        eventBus.emit(Events.COMMS_MESSAGE, {
+          text: '⚠ AUTOPILOT DENIED — trawl sweep in progress. Press A again to abort the sweep and engage.',
+          priority: 'warning',
+        });
+        return;
+      }
+    }
+    this._trawlAbortArmed = false;
+
+    let hasSelectedTarget = this._targetSelector && this._targetSelector.getActiveTarget();
+    if (!hasSelectedTarget) {
+      // UX-11 #11: one-tap re-acquire — pressing A with no target auto-selects
+      // the nearest live large debris and engages, instead of dead-ending.
+      // Fall back to ANY live debris when nothing ≥ LARGE_DEBRIS_MASS remains
+      // (e.g. fragments-only Kessler end-state) so the NavRecoveryAdvisor's
+      // "press A to approach" promise — which uses a mass-0 nearest lookup —
+      // is always honoured (review finding: filter mismatch).
+      const nearest = this._findNearestLargeDebris() || this._findNearestLargeDebris(0);
+      if (nearest && nearest.debris && this._targetSelector &&
+          typeof this._targetSelector.setTarget === 'function') {
+        this._targetSelector.setTarget(nearest.debris, { source: 'autopilot_reacquire' });
+        hasSelectedTarget = this._targetSelector.getActiveTarget();
+        eventBus.emit(Events.COMMS_MESSAGE, {
+          text: 'No target selected — acquiring nearest contact.',
+          priority: 'info',
+        });
+      } else if (nearest) {
+        // No selector API available — engage in DEBRIS heading mode directly.
+        this._cachedDebrisResult = nearest;
+        this._debrisScanTimer = 0;
+        hasSelectedTarget = true;
+      }
+    }
     if (!hasSelectedTarget) {
       // AUTOPILOT_ANALYSIS.md §D.5 #1: refuse to engage without a selected target.
       // Skills system listens for AUTOPILOT_NO_TARGET as a discovery signal
       // (Constants.js:1006 nav_autopilot_no_target).
       eventBus.emit(Events.AUTOPILOT_NO_TARGET);
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: '⚠ AUTOPILOT DENIED — no target selected',
+        text: '⚠ AUTOPILOT DENIED — no live contacts in the field. Check the Debris Map (`) for the next cluster.',
         priority: 'warning',
       });
       return;
@@ -851,29 +906,29 @@ export class AutopilotSystem {
   }
 
   /**
-   * Scan debrisList for the nearest alive debris with mass ≥ LARGE_DEBRIS_MASS.
-   * @returns {{ pos: THREE.Vector3, orbit: object, id: (number|string|null) }|null}
+   * Scan debrisList for the nearest alive debris with mass ≥ minMassKg
+   * (default LARGE_DEBRIS_MASS). Delegates to the shared pure helper
+   * [`findNearestLiveDebris`](js/systems/NavRecoveryAdvisor.js:1) (UX-11 #4/#11).
+   * @param {number} [minMassKg=LARGE_DEBRIS_MASS]
+   * @returns {{ pos: THREE.Vector3, orbit: object, id: (number|string|null), debris: object }|null}
    * @private
    */
-  _findNearestLargeDebris() {
+  _findNearestLargeDebris(minMassKg = LARGE_DEBRIS_MASS) {
     if (!this._debrisField || !this._debrisField.debrisList) return null;
     const playerPos = this._player.getPosition();
-    let bestDist = Infinity;
-    let bestResult = null;
-
-    for (const d of this._debrisField.debrisList) {
-      if (!d.alive) continue;
-      if ((d.mass || 0) < LARGE_DEBRIS_MASS) continue;
-      const cart = orbitToSceneCartesian(d.orbit);
-      if (!cart || !cart.position) continue;
-      const pos = new THREE.Vector3(cart.position.x, cart.position.y, cart.position.z);
-      const dist = playerPos.distanceTo(pos);
-      if (dist < bestDist) {
-        bestDist = dist;
-        bestResult = { pos, orbit: d.orbit, id: d.id != null ? d.id : null };
-      }
-    }
-    return bestResult;
+    const nearest = findNearestLiveDebris(
+      { x: playerPos.x, y: playerPos.y, z: playerPos.z },
+      this._debrisField.debrisList,
+      minMassKg
+    );
+    if (!nearest) return null;
+    const d = nearest.debris;
+    return {
+      pos: new THREE.Vector3(nearest.pos.x, nearest.pos.y, nearest.pos.z),
+      orbit: d.orbit,
+      id: d.id != null ? d.id : null,
+      debris: d,
+    };
   }
 
   // ==========================================================================
@@ -1025,6 +1080,7 @@ export class AutopilotSystem {
 
     eventBus.on(Events.TRAWL_SWEEP_COMPLETE, () => {
       this._trawlActive = false;
+      this._trawlAbortArmed = false;
       eventBus.emit(Events.COMMS_MESSAGE, {
         text: 'Press A to autopilot to next target cluster.',
         priority: 'info',

@@ -265,10 +265,10 @@ export class ArmManager {
       this.recallAll();
     });
 
-    // Comms menu: deploy fishing/ambush mode (cast all)
-    eventBus.on(Events.ARM_FISH, () => {
-      this.deployFishing();
-    });
+    // ARM_FISH listener removed 2026-06-12 (UX-11 #9): the cast-all/fishing
+    // comms verb lost its only emitters (RadialMenu + CommsPanel command).
+    // deployFishing() remains callable; re-homing the verb to a direct key
+    // is tracked in ROADMAP EN-9 ("decide Fishing key").
 
     // V4 upgrade event (unlockable via tech tree)
     eventBus.on(Events.UPGRADE_V4_TECH, ({ upgrade }) => {
@@ -1425,7 +1425,13 @@ export class ArmManager {
             const frac = Math.min(1, Math.max(0, (arm.stateTimer - FT.HOLD_S) / span));
             scaleMul = Math.max(0.001, 1 - frac);   // 1 → ~0 across the chop window
           }
-          this._debrisField.pinCapturedDebris(arm.capturedDebris, arm.position, scaleMul);
+          // Issue 13 (2026-06-12): honor the arm's standoff pin (_armPinPos =
+          // arm.position + holdDir × clearance, set by _pinCatchToSelf) so the
+          // catch hangs outboard of the daughter instead of being re-snapped
+          // exactly onto her position (daughter rendered INSIDE large catches).
+          const d = arm.capturedDebris;
+          const pinPos = (d._armPinned && d._armPinPos) ? d._armPinPos : arm.position;
+          this._debrisField.pinCapturedDebris(d, pinPos, scaleMul);
         }
       }
     }

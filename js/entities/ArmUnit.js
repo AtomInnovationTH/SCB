@@ -15,9 +15,10 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { getSolarCellTexture } from '../scene/solarCellTexture.js';
 import { tetherReel } from '../systems/TetherReel.js';
-import { captureNetSystem, getNetClassForType } from './CaptureNet.js';
+import { captureNetSystem, getNetClassForType, computeLeadAim } from './CaptureNet.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import { recommendArmTool } from '../systems/ToolRecommender.js';
+import { gameState } from '../core/GameState.js';
 
 /** 1 meter in scene units (1 scene unit = 100 km) */
 const M = 0.00001;
@@ -708,21 +709,21 @@ export class ArmUnit {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
 
-    // Dashed material gives a "high-tech fibre" visual for Dyneema SK78 tether.
-    // Color: Dyneema cream-white (dyed hi-vis for space operations).
-    this.tetherMaterial = new THREE.LineDashedMaterial({
-      color: Constants.TETHER_COLOR_NOMINAL,
+    // Item 11 (2026-06-12): SOLID gradient line (was LineDashedMaterial).
+    // Per-vertex colors make the cable read as a lit line — bright at the
+    // strut anchor (vertex 0) fading toward the daughter — instead of a 1 px
+    // dashed line that read as broken. The REELING motion cue is now a
+    // brightness pulse traveling anchor-ward (see _updateTether), replacing
+    // the old dash-phase scroll; computeLineDistances is no longer needed.
+    const colors = new Float32Array(segments * 3);
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    this.tetherMaterial = new THREE.LineBasicMaterial({
+      color: Constants.TETHER_COLOR_NOMINAL,   // state tint (multiplies vertex colors)
+      vertexColors: true,
       transparent: true,
       opacity: 0.9,
-      // POLISH: dash sizes calibrated for visibility at ARM_PILOT viewing
-      // distance.  Tether geometry is in scene units (1 unit = 100 km), so a
-      // 100 m tether spans 0.001 scene units.  Previous values (0.015/0.005)
-      // were 15× longer than typical tethers → effectively a solid line.
-      // 0.0001 (10 m) dash + 0.00005 (5 m) gap gives a clear dotted-line look
-      // and lets the reel-in dash-flow animation be visible.
-      dashSize: 0.0001,
-      gapSize: 0.00005,
     });
+    // Static base gradient: anchor-bright (1.0) → daughter-dim (0.35).
     this.tetherLine = new THREE.Line(geometry, this.tetherMaterial);
     this.tetherLine.visible = false;
     this.tetherLine.frustumCulled = false;
@@ -732,6 +733,34 @@ export class ArmUnit {
     // it just above solid hull geometry so it lies cleanly on the craft.
     this.tetherLine.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_CONNECTOR;
     this.group.add(this.tetherLine);
+    this._tetherWriteGradient(-1);
+  }
+
+  /**
+   * @private Item 11: write the per-vertex brightness gradient.
+   * Base ramp: 1.0 at the anchor (vertex 0) → 0.35 at the daughter. During
+   * REELING a gaussian brightness pulse travels toward the anchor (decreasing
+   * t) as the motion cue; `pulsePhase` ∈ [0,1) is the pulse centre (1 = at
+   * daughter, 0 = at anchor). Pass a negative phase for "no pulse".
+   */
+  _tetherWriteGradient(pulsePhase = -1) {
+    if (!this.tetherLine) return;
+    const colorAttr = this.tetherLine.geometry.attributes.color;
+    if (!colorAttr) return;
+    const arr = colorAttr.array;
+    const segments = Constants.TETHER_SEGMENTS;
+    for (let i = 0; i < segments; i++) {
+      const t = i / (segments - 1);            // 0 = anchor, 1 = daughter
+      let b = 1.0 - 0.65 * t;                  // base ramp 1.0 → 0.35
+      if (pulsePhase >= 0) {
+        const d = t - pulsePhase;
+        b += 0.9 * Math.exp(-(d * d) / (2 * 0.06 * 0.06));   // traveling pulse
+        if (b > 1.6) b = 1.6;
+      }
+      const idx = i * 3;
+      arr[idx] = b; arr[idx + 1] = b; arr[idx + 2] = b;
+    }
+    colorAttr.needsUpdate = true;
   }
 
   // ==========================================================================
@@ -804,6 +833,23 @@ export class ArmUnit {
   // ==========================================================================
 
   /**
+   * @private Item 5a (2026-06-12): post a HintTicker entry for a deploy
+   * refusal so the next action lands on the bottom strip, not just a
+   * scrolling comms line. One id per cause — HintTicker coalesces repeats.
+   */
+  _postDeployRefusalHint(cause, text) {
+    eventBus.emit(Events.HINT_POSTED, {
+      id: `deploy_refused_${cause}`,
+      text,
+      glyph: '!',
+      keys: [],
+      skillId: null,
+      duration: 10000,
+      priority: 'normal',
+    });
+  }
+
+  /**
    * Deploy this arm toward a target debris.
    * @param {object} target - Debris object with ._scenePosition and .id
    * @returns {boolean} true if deployment started
@@ -811,11 +857,15 @@ export class ArmUnit {
   deploy(target) {
     if (this.state !== S.DOCKED) return false;
     // V5: Spring must be charged to deploy
+    // Item 5a (2026-06-12): every refusal ALSO posts a HintTicker entry naming
+    // the next verb — a scrolling comms line alone is easy to miss in the
+    // learning missions ("every refusal names the next verb").
     if (!this.springCharged) {
       eventBus.emit(Events.COMMS_MESSAGE, {
         text: `${this.id}: Spring not charged — reloading`,
         priority: 'warning',
       });
+      this._postDeployRefusalHint('spring', 'Spring reloading — wait for charge, or deploy another daughter [1-4]');
       return false;
     }
     if (this.fuel <= 0) {
@@ -823,6 +873,7 @@ export class ArmUnit {
         text: `${this.id}: No fuel remaining`,
         priority: 'warning',
       });
+      this._postDeployRefusalHint('fuel', 'Daughter out of fuel — deploy another [1-4] or refuel');
       return false;
     }
     if (target.mass && target.mass > this.config.maxCaptureMass) {
@@ -830,6 +881,7 @@ export class ArmUnit {
         text: `${this.id}: Target too massive (${target.mass}kg > ${this.config.maxCaptureMass}kg)`,
         priority: 'warning',
       });
+      this._postDeployRefusalHint('mass', 'Target too massive for this daughter — pick a lighter one [Tab]');
       return false;
     }
     this.target = target;
@@ -853,6 +905,7 @@ export class ArmUnit {
           text: `${this.id}: Target ${Math.round(distToTarget)}m away (max ${Math.round(maxDeployRange)}m). Press A to autopilot closer first.`,
           priority: 'warning',
         });
+        this._postDeployRefusalHint('range', 'Target out of daughter range — press [A] to autopilot closer first');
         this.target = null;
         return false;
       }
@@ -2035,7 +2088,7 @@ export class ArmUnit {
      case S.GRAPPLED:   this._updateGrappled(dt); break;
      case S.HAULING:    this._updateHauling(dt, parentPos); break;
      case S.REELING:    this._updateReeling(dt, parentPos, parentQuat); break;
-     case S.RETURNING:  this._updateReturning(dt, parentPos); break;
+     case S.RETURNING:  this._updateReturning(dt, parentPos, parentQuat); break;
      case S.DOCKING:    this._updateDocking(dt, parentPos, parentQuat); break;
       case S.RELOADING:  this._updateReloading(dt); break;
       case S.HOLDING_CATCH: this._updateHoldingCatch(dt, parentPos, parentQuat); break;
@@ -2064,29 +2117,42 @@ export class ArmUnit {
       this._prevParentPos.copy(parentPos);
     }
 
-    // --- Lead-aim: estimate the selected target's scene velocity (Item 2) ---
+    // --- Lead-aim: estimate the selected target's velocity RELATIVE TO THE ARM ---
     // Tracked every frame while a target exists (so by the time NETTING fires the
     // net on its first frame, STATION_KEEP has already built a velocity estimate).
-    // In the co-orbiting frame both arm and target carry the same parent drift, so
-    // the raw per-frame target delta is the relative velocity we want for lead.
+    //
+    // 2026-06-12 (Issue 2 fix): the net is propagated in the ARM's co-orbiting
+    // frame — CaptureNet re-anchors `net.position = arm.position + launchDir ×
+    // distanceTraveled` every flight frame — so the correct lead velocity is the
+    // target velocity AS SEEN FROM THE ARM, not the raw scene-space delta. In a
+    // settled STATION_KEEP both arm and target share the orbital drift, so the
+    // relative velocity is ≈0 and the shot must fly dead straight; leading by
+    // the shared drift (the old behavior) bent every SK shot off-axis. Both
+    // deltas are sampled in this same block (identical frame timing) for
+    // robustness. Units: scene units/s throughout (NOT metres/s — both
+    // `_scenePosition` and `arm.position` are scene-space; `launchSpeedScene =
+    // LAUNCH_SPEED × M` in computeLeadAim matches).
     {
       const tp = this.target && this.target._scenePosition;
       if (tp && dt > 1e-6) {
-        if (this._leadTargetPrevPos) {
+        if (this._leadTargetPrevPos && this._leadArmPrevPos) {
           if (!this._leadTargetVel) this._leadTargetVel = new THREE.Vector3();
-          // metres/s in scene-position space (target._scenePosition is in metres).
+          // Arm-relative velocity in scene units/s: (targetDelta − armDelta)/dt.
           this._leadTargetVel.set(
-            (tp.x - this._leadTargetPrevPos.x) / dt,
-            (tp.y - this._leadTargetPrevPos.y) / dt,
-            (tp.z - this._leadTargetPrevPos.z) / dt,
+            ((tp.x - this._leadTargetPrevPos.x) - (this.position.x - this._leadArmPrevPos.x)) / dt,
+            ((tp.y - this._leadTargetPrevPos.y) - (this.position.y - this._leadArmPrevPos.y)) / dt,
+            ((tp.z - this._leadTargetPrevPos.z) - (this.position.z - this._leadArmPrevPos.z)) / dt,
           );
           this._leadTargetVelValid = true;
         } else {
-          this._leadTargetPrevPos = new THREE.Vector3();
+          if (!this._leadTargetPrevPos) this._leadTargetPrevPos = new THREE.Vector3();
+          if (!this._leadArmPrevPos) this._leadArmPrevPos = new THREE.Vector3();
         }
         this._leadTargetPrevPos.copy(tp);
+        this._leadArmPrevPos.copy(this.position);
       } else {
         this._leadTargetPrevPos = null;
+        this._leadArmPrevPos = null;
         this._leadTargetVelValid = false;
       }
     }
@@ -2440,6 +2506,10 @@ export class ArmUnit {
         this._transitionTo(S.TRANSIT);
         // Legacy: still uses old launch impulse for backward compat
         this._applyLaunchImpulse();
+        // Issue 1 (2026-06-12): departure event for audio (legacy UNDOCKING path).
+        eventBus.emit(Events.ARM_SPRING_FIRED, {
+          armId: this.id, type: this.type, speed: this.launchSpeed, mode: 'normal',
+        });
         eventBus.emit(Events.COMMS_MESSAGE, {
           text: `${this.id}: Clear of core — in transit`,
           priority: 'info',
@@ -2482,6 +2552,13 @@ export class ArmUnit {
       // Phase 2: Fire the spring!
       this._springFired = true;
       this._applyLaunchImpulse();
+      // Issue 1 (2026-06-12): actual departure moment — audio (woosh) keys off
+      // THIS event, not ARM_DEPLOYED (which fires 1.5 s earlier at LAUNCHING
+      // entry, during the magnetic-clamp-release hold).
+      eventBus.emit(Events.ARM_SPRING_FIRED, {
+        armId: this.id, type: this.type, speed: this.launchSpeed,
+        mode: this._fishingMode ? 'fishing' : (this._trawlingMode ? 'trawl' : 'normal'),
+      });
     }
 
     if (this._springFired) {
@@ -3277,6 +3354,7 @@ export class ArmUnit {
     const rec = recommendArmTool({
       armType: this.type,
       mass: target ? (target.mass || 0) : 0,
+      sizeMeter: target ? (target.sizeMeter || 0) : 0,
       debrisType: target ? (target.type || null) : null,
       ferromagnetic: !!(target && target.ferromagnetic === true),
       hasFerrousFasteners: !!(target && target.hasFerrousFasteners === true),
@@ -3823,33 +3901,33 @@ export class ArmUnit {
       // Close-range SK shots barely change (short time-of-flight); long shots stop
       // missing for a non-obvious reason. All quantities are in SCENE UNITS; the
       // net's LAUNCH_SPEED is m/s, so convert to scene-units/s via × M.
+      // UX-11 #1 (review fix): single source of truth — the SAME computeLeadAim
+      // used by the HUD's OFF-AXIS advisory (DockingReticle), so the warning
+      // can never disagree with where the shot actually goes.
       const tPos = this._getTargetScenePos();
       let launchDir = { x: 1, y: 0, z: 0 };
       if (tPos) {
-        let aimX = tPos.x, aimY = tPos.y, aimZ = tPos.z;
         const relVel = this._leadTargetVelValid ? this._leadTargetVel : null;
-        if (relVel) {
-          const ddx = tPos.x - this.position.x;
-          const ddy = tPos.y - this.position.y;
-          const ddz = tPos.z - this.position.z;
-          const distScene = Math.sqrt(ddx * ddx + ddy * ddy + ddz * ddz);
-          // Net class via the canonical selector (same class fireDaughterNet will
-          // launch) so the lead's time-of-flight always matches the actual net.
-          const _cnClass = getNetClassForType(this.type);
-          const launchSpeedScene = (this._firedNet?.netClass?.LAUNCH_SPEED
-            || _cnClass?.LAUNCH_SPEED || 10) * M;
-          if (launchSpeedScene > 1e-12) {
-            const tof = distScene / launchSpeedScene;   // seconds
-            aimX += relVel.x * tof;
-            aimY += relVel.y * tof;
-            aimZ += relVel.z * tof;
-          }
+        // Net class via the canonical selector (same class fireDaughterNet will
+        // launch) so the lead's time-of-flight always matches the actual net.
+        const _cnClass = getNetClassForType(this.type);
+        const launchSpeedScene = (this._firedNet?.netClass?.LAUNCH_SPEED
+          || _cnClass?.LAUNCH_SPEED || 10) * M;
+        launchDir = computeLeadAim(this.position, tPos, relVel, launchSpeedScene).dir;
+        // Issue 2 instrumentation (?debug=1): log the lead magnitude + off-axis
+        // angle at fire time. From a settled SK both should read ≈0 now that
+        // _leadTargetVel is arm-relative; a large value flags an alternate
+        // drift source (e.g. the NETTING chase lerp below).
+        if (Constants.DEBUG && Constants.DEBUG.LOG_RENDERER_DIAGNOSTICS) {
+          const bx = tPos.x - this.position.x, by = tPos.y - this.position.y, bz = tPos.z - this.position.z;
+          const bLen = Math.sqrt(bx * bx + by * by + bz * bz) || 1;
+          const dot = Math.min(1, Math.max(-1,
+            (launchDir.x * bx + launchDir.y * by + launchDir.z * bz) / bLen));
+          const offAxisDeg = Math.acos(dot) * 180 / Math.PI;
+          const relSpeed = relVel ? Math.sqrt(relVel.x ** 2 + relVel.y ** 2 + relVel.z ** 2) : 0;
+          console.info(`[LeadAim] ${this.id} fire: |relVel|=${(relSpeed / M).toFixed(3)} m/s ` +
+            `offAxis=${offAxisDeg.toFixed(2)}° dist=${(bLen / M).toFixed(1)} m state=${this.state}`);
         }
-        const dx = aimX - this.position.x;
-        const dy = aimY - this.position.y;
-        const dz = aimZ - this.position.z;
-        const len = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
-        launchDir = { x: dx / len, y: dy / len, z: dz / len };
       }
 
      activeNet = captureNetSystem.fireDaughterNet(
@@ -3859,6 +3937,23 @@ export class ArmUnit {
      if (!activeNet) {
        // fireDaughterNet returned null (cooldown/inventory/flag) — fall back to SK
        // (not APPROACH, which causes "screen-races-to-debris" at orbital speed).
+       // Item 5b (2026-06-12): name the actual reason — a silent fallback left
+       // the player wondering why nothing fired (learning-mission dead end).
+       {
+         const inv = (typeof this.getNetInventory === 'function')
+           ? this.getNetInventory() : (this._netInventory || 0);
+         const cdS = (typeof captureNetSystem.getCooldown === 'function')
+           ? captureNetSystem.getCooldown('arm', this.index) : 0;
+         const reason = inv <= 0
+           ? 'Net magazine empty — press R to reel home and reload.'
+           : cdS > 0
+             ? `Net launcher cooling down — ready in ${Math.ceil(cdS)}s.`
+             : 'Net launcher unavailable — holding station.';
+         eventBus.emit(Events.COMMS_MESSAGE, {
+           source: this.id, text: `${this.id}: ${reason}`,
+           channel: 'CMD', priority: 'warning',
+         });
+       }
        this._firedNet = null;
        this._transitionTo(S.STATION_KEEP);
        return;
@@ -4060,12 +4155,38 @@ export class ArmUnit {
    * gap diagnostics). Belt-and-suspenders over DebrisField's `_capturedByArm`
    * pin, which proved fragile for station-keep / welcome-field debris and let
    * the catch drift hundreds of metres away on its own orbit during the haul.
+   *
+   * 2026-06-12 (Issue 13): the pin carries a STANDOFF along the hold axis —
+   * `arm.position + holdDir × (sizeMeter/2 + ARM_HOLD_CLEARANCE_M)` — so the
+   * daughter never renders inside a catch larger than herself. holdDir is the
+   * capture axis (net launchDirection while the fired-net ref lives), else the
+   * outboard direction from the mother (so the catch hangs outboard of the
+   * daughter in REELING and outboard of the strut in HOLDING_CATCH, tracking
+   * parent rotation each re-pin).
+   * @param {THREE.Vector3|null} [parentPos] freshest mother position (falls
+   *   back to _prevParentPos when the call site has no parent frame in scope)
    * @private
    */
-  _pinCatchToSelf() {
+  _pinCatchToSelf(parentPos = null) {
     const d = this.capturedDebris;
     if (!d) return;
-    d._armPinPos = d._armPinPos ? d._armPinPos.copy(this.position) : this.position.clone();
+    const dir = this._tmpHoldDir || (this._tmpHoldDir = new THREE.Vector3());
+    let hasDir = false;
+    const ld = this._firedNet && this._firedNet.launchDirection;
+    if (ld) {
+      dir.set(ld.x, ld.y, ld.z);
+      hasDir = dir.lengthSq() > 1e-12;
+    }
+    const pp = parentPos || this._prevParentPos;
+    if (!hasDir && pp) {
+      dir.subVectors(this.position, pp);
+      hasDir = dir.lengthSq() > 1e-12;
+    }
+    if (hasDir) dir.normalize(); else dir.set(0, 0, 0);
+    const clearance = (Constants.ARM_HOLD_CLEARANCE_M ?? 1.0);
+    const standoffScene = ((d.sizeMeter || 0) / 2 + clearance) * M;
+    if (!d._armPinPos) d._armPinPos = new THREE.Vector3();
+    d._armPinPos.copy(this.position).addScaledVector(dir, standoffScene);
     d._armPinned = true;
   }
 
@@ -4263,7 +4384,7 @@ export class ArmUnit {
 
     // Authoritative: drag the captured debris with us every frame so it can
     // never be left behind on its orbit while we reel home.
-    this._pinCatchToSelf();
+    this._pinCatchToSelf(parentPos);
 
     // Update tether length
     this.tetherLength = dist / M;
@@ -4286,9 +4407,27 @@ export class ArmUnit {
     // Check for tether snap — catastrophic cut from the mother (see _snapTether).
     // Guard on REELING: the reel-step above may have already docked the catch
     // this frame (transitioned to DOCKING), in which case it's delivered, not lost.
+    // Item 5d (2026-06-12): during MISSION 1 (the learning mission) the snap is
+    // clamped to a warning — a catastrophic EXPENDED daughter dead-ends the
+    // beginner loop before the player has learned the recovery verbs.
     if (this.state === S.REELING && this.tetherTension > this.tetherBreakStrength) {
-      this._snapTether(parentPos);
-      return;
+      const perMission = Constants.MISSIONS?.DEBRIS_PER_MISSION || 5;
+      const missionNumber = Math.floor((gameState.debrisCleared || 0) / perMission) + 1;
+      if (missionNumber === 1) {
+        this.tetherTension = this.tetherBreakStrength;   // clamp at the limit
+        if (!this._m1SnapWarned) {
+          this._m1SnapWarned = true;
+          eventBus.emit(Events.COMMS_MESSAGE, {
+            source: this.id,
+            text: `${this.id}: Tether at rated limit — winch absorbing the overload. ` +
+              `Heavier catches will SNAP the cable once you're past training.`,
+            channel: 'CMD', priority: 'warning',
+          });
+        }
+      } else {
+        this._snapTether(parentPos);
+        return;
+      }
     }
 
     // NO fuel consumption! This is the key V5 benefit.
@@ -4303,8 +4442,17 @@ export class ArmUnit {
     });
   }
 
-  /** RETURNING: return to parent without debris */
-  _updateReturning(dt, parentPos) {
+  /**
+   * RETURNING: return to parent without debris.
+   *
+   * 2026-06-12 (re-dock fix, Issue 8): like REELING (Issue 1 fix 2026-05-26),
+   * empty-handed returns target the STRUT-TIP dock world position, NOT the
+   * mother bus centre. Targeting `parentPos` flew the daughter into/behind the
+   * hull (she "vanished" occluded for ~2 s while DOCKING lerped her back out),
+   * and the strut-tip-anchored tether drew inward through the ship — reading
+   * as a tether pointing 180° the wrong way.
+   */
+  _updateReturning(dt, parentPos, parentQuat) {
     // Detached arms can't return — switch to free-flying transit
     if (this.isDetached) {
       this._transitionTo(S.TRANSIT);
@@ -4315,7 +4463,16 @@ export class ArmUnit {
       return;
     }
 
-    const toParent = this._tmpVec.subVectors(parentPos, this.position);
+    // Strut-tip dock world position: parentPos + parentQuat × dockOffset.
+    // Falls back to parentPos if quaternion or dockOffset absent (test mocks).
+    const dockWorldPos = this._tmpDockTarget || (this._tmpDockTarget = new THREE.Vector3());
+    if (parentQuat && this.dockOffset) {
+      dockWorldPos.copy(this.dockOffset).applyQuaternion(parentQuat).add(parentPos);
+    } else {
+      dockWorldPos.copy(parentPos);
+    }
+
+    const toParent = this._tmpVec.subVectors(dockWorldPos, this.position);
     const dist = toParent.length();
 
     toParent.normalize();
@@ -4343,7 +4500,7 @@ export class ArmUnit {
     this.position.lerp(dockWorldPos, 0.05);
 
     // Keep the catch glued to us through the final dock approach too.
-    this._pinCatchToSelf();
+    this._pinCatchToSelf(parentPos);
 
     if (this.stateTimer > Constants.ARM_DOCK_DURATION) {
       // POLISH FIX: keep daughter VISIBLE at the strut after a successful
@@ -4470,7 +4627,7 @@ export class ArmUnit {
 
     if (t < HOLD_S) {
       // hold: catch welded full-size, net still cinched.
-      this._pinCatchToSelf();
+      this._pinCatchToSelf(parentPos);
       return;
     }
 
@@ -4488,7 +4645,7 @@ export class ArmUnit {
 
     // Keep the (now-breaking-down) catch pinned to the strut so it never drifts
     // while the furnace visual animates the chop. The visual owns the scale ramp.
-    this._pinCatchToSelf();
+    this._pinCatchToSelf(parentPos);
 
     // feed: emit chunk events evenly across [CHOP_S, FEED_S).
     if (t >= CHOP_S && t < FEED_S) {
@@ -5118,7 +5275,6 @@ export class ArmUnit {
         posArr[idx] = 0; posArr[idx + 1] = 0; posArr[idx + 2] = 0;
       }
       this.tetherLine.geometry.attributes.position.needsUpdate = true;
-      this.tetherLine.computeLineDistances(); // required for LineDashedMaterial
       return;
     }
 
@@ -5164,33 +5320,25 @@ export class ArmUnit {
       posArr[idx + 2] = dz * invT + sagZ * bell * sagAmp;
     }
     this.tetherLine.geometry.attributes.position.needsUpdate = true;
-    this.tetherLine.computeLineDistances(); // required for LineDashedMaterial
 
-    // POLISH: Dash-flow animation during REELING — make the dashes appear to
-    // slide along the tether toward the mother, giving the user a clear visual
-    // cue that the reel motor is winching the daughter (and her catch) home.
-    // Implementation: subtract an accumulated phase from each lineDistance so
-    // the LineDashedMaterial's dash pattern shifts in the direction of the
-    // mother (vertex 0 = anchor side; lower lineDistance values).
+    // Item 11 (2026-06-12): REELING motion cue — a brightness pulse travels
+    // along the gradient toward the mother (anchor), replacing the old
+    // LineDashedMaterial dash-phase scroll. Phase 1 → 0 maps daughter → anchor.
     if (this.state === S.REELING && typeof dt === 'number' && dt > 0) {
       const _rs = (this.capturedDebris !== null
         ? REEL_IN_SPEED_LOADED : REEL_IN_SPEED_EMPTY);
-      this._tetherDashPhase = (this._tetherDashPhase || 0) + _rs * dt * M;
-      // Keep phase bounded (modulo dash period) so it never drifts large
-      // enough to lose floating-point precision over a long reel-in.
-      const _period = (this.tetherMaterial.dashSize + this.tetherMaterial.gapSize);
-      if (_period > 0 && this._tetherDashPhase > _period) {
-        this._tetherDashPhase -= _period;
-      }
-      const distArr = this.tetherLine.geometry.attributes.lineDistance.array;
-      const phase = this._tetherDashPhase;
-      for (let i = 0; i < distArr.length; i++) {
-        distArr[i] -= phase;
-      }
-      this.tetherLine.geometry.attributes.lineDistance.needsUpdate = true;
-    } else if (this._tetherDashPhase) {
-      // Reset phase when leaving REELING so dashes snap back to static layout.
-      this._tetherDashPhase = 0;
+      // Pulse speed: one full traverse per (separation / reelSpeed) seconds,
+      // i.e. the pulse moves at the reel speed along the cable; minimum rate
+      // keeps it visible on very short tethers.
+      const sepM = Math.max(1, separation / M);
+      const rate = Math.max(0.25, _rs / sepM);          // traversals per second
+      this._tetherPulsePhase = (this._tetherPulsePhase ?? 1) - rate * dt;
+      if (this._tetherPulsePhase < 0) this._tetherPulsePhase += 1;
+      this._tetherWriteGradient(this._tetherPulsePhase);
+    } else if (this._tetherPulsePhase !== undefined) {
+      // Leaving REELING: restore the static gradient once.
+      this._tetherPulsePhase = undefined;
+      this._tetherWriteGradient(-1);
     }
 
     // FIX: Tether vertices are computed as WORLD-SPACE offsets from arm.position,

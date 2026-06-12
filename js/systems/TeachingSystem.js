@@ -326,11 +326,10 @@ export class TeachingSystem {
     }
 
     // CP-4 §4: 3-layer arbitration. Single-fire overlays QUEUE while a blocking
-    // surface (radial menu C / deploy ceremony D) is on screen, while the
+    // surface (deploy ceremony D / net ceremony) is on screen, while the
     // OnboardingDirector is running, or while a MissionCoach beat owns the
     // screen; they drain ≤1 per QUEUE_DRAIN_INTERVAL_S once everything is idle.
-    if (Events.COMMS_RADIAL_OPEN)  on(Events.COMMS_RADIAL_OPEN,  () => this._blockers.add('radial'));
-    if (Events.COMMS_RADIAL_CLOSE) on(Events.COMMS_RADIAL_CLOSE, () => this._blockers.delete('radial'));
+    // (UX-11 #9: the C-hold radial-menu blocker was removed with the radial.)
     if (Events.LAUNCH_CEREMONY_START)    on(Events.LAUNCH_CEREMONY_START,    () => this._blockers.add('launchCeremony'));
     if (Events.LAUNCH_CEREMONY_COMPLETE) on(Events.LAUNCH_CEREMONY_COMPLETE, () => this._blockers.delete('launchCeremony'));
     if (Events.NET_CEREMONY_START)    on(Events.NET_CEREMONY_START,    () => this._blockers.add('netCeremony'));

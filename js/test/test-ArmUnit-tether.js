@@ -265,3 +265,85 @@ describe('Tether Catenary — Constants Hoisted (ST-1.4)', () => {
     assert.equal(Constants.TETHER_SEGMENTS, 24);
   });
 });
+
+// ── Item 11 (2026-06-12): solid gradient line (dashes removed) ────────────
+describe('Tether visual — solid gradient line (Item 11)', () => {
+  it('material is LineBasicMaterial with vertexColors (no dash machinery)', () => {
+    const arm = makeTetherArm(0, 100 * M, 0);
+    assert.equal(arm.tetherMaterial.isLineBasicMaterial, true, 'LineBasicMaterial');
+    assert.equal(arm.tetherMaterial.vertexColors, true, 'per-vertex gradient enabled');
+    assert.equal(arm.tetherMaterial.isLineDashedMaterial, undefined, 'dashed material gone');
+  });
+
+  it('geometry carries a color attribute with anchor-bright → daughter-dim ramp', () => {
+    const arm = makeTetherArm(0, 100 * M, 0);
+    const colorAttr = arm.tetherLine.geometry.attributes.color;
+    assert.ok(colorAttr, 'color attribute exists');
+    const arr = colorAttr.array;
+    const segments = Constants.TETHER_SEGMENTS;
+    const first = arr[0];                       // anchor vertex brightness
+    const last = arr[(segments - 1) * 3];       // daughter vertex brightness
+    assert.ok(first > last, `anchor (${first}) brighter than daughter end (${last})`);
+    assert.closeTo(first, 1.0, 1e-6, 'anchor brightness = 1.0');
+    assert.closeTo(last, 0.35, 1e-6, 'daughter end brightness = 0.35');
+  });
+
+  it('REELING animates a traveling pulse; leaving REELING restores the base ramp', () => {
+    const arm = makeTetherArm(0, 100 * M, 0);
+    arm.state = S.REELING;
+    const parentPos = new THREE.Vector3(0, 0, 0);
+    arm._updateTether(parentPos, null, 0.016);
+    assert.ok(arm._tetherPulsePhase !== undefined, 'pulse phase tracked during REELING');
+    // Some vertex must exceed the base ramp max (1.0) — the pulse highlight.
+    const arr = arm.tetherLine.geometry.attributes.color.array;
+    let maxB = 0;
+    for (let i = 0; i < arr.length; i += 3) maxB = Math.max(maxB, arr[i]);
+    assert.ok(maxB > 1.0, `pulse highlight present (max ${maxB})`);
+
+    // Leave REELING → base gradient restored.
+    arm.state = S.TRANSIT;
+    arm._updateTether(parentPos, null, 0.016);
+    assert.equal(arm._tetherPulsePhase, undefined, 'pulse cleared outside REELING');
+    const arr2 = arm.tetherLine.geometry.attributes.color.array;
+    assert.closeTo(arr2[0], 1.0, 1e-6, 'base ramp restored at anchor');
+  });
+
+  it('no lineDistance attribute is required (computeLineDistances removed)', () => {
+    const arm = makeTetherArm(0, 100 * M, 0);
+    arm._updateTether(new THREE.Vector3(0, 0, 0), null, 0.016);
+    // The geometry should render without ever computing line distances.
+    assert.equal(arm.tetherLine.geometry.attributes.lineDistance, undefined,
+      'no lineDistance attribute generated');
+  });
+});
+
+// ── Issue 8b (2026-06-12): tether quat re-sync after post-arm quat change ──
+describe('Tether — world-space integrity after postArmUpdate quat change (Issue 8b)', () => {
+  it('re-syncing tetherLine.quaternion = group.quaternion⁻¹ restores world span', () => {
+    const arm = makeTetherArm(0, 100 * M, 0);
+    const parentPos = new THREE.Vector3(0, 0, 0);
+    arm.group.position.copy(arm.position);   // update() normally syncs this
+    arm._updateTether(parentPos, null, 0.016);
+
+    // _updateTether baked the counter-quat for the CURRENT group quat.
+    // Simulate PlayerSatellite.postArmUpdate slerping the group quat AFTER
+    // the tether update (the one-frame-stale defect)…
+    arm.group.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2);
+    // …then apply the postArmUpdate re-sync (the fix).
+    arm.tetherLine.quaternion.copy(arm.group.quaternion).invert();
+
+    // World-space check: vertex 0 (anchor side) must land at the anchor.
+    // anchor = parentPos + parentQuat×dockOffset; with null parentQuat in
+    // _updateTether the anchor falls back to… actually dockOffset path needs
+    // parentQuat, so anchor = parentPos here.
+    const pa = arm.tetherLine.geometry.attributes.position.array;
+    const v0 = new THREE.Vector3(pa[0], pa[1], pa[2]);
+    // group transform: rotate by group quat (incl. tetherLine counter-quat), translate by group position
+    const world = v0.clone()
+      .applyQuaternion(arm.tetherLine.quaternion)
+      .applyQuaternion(arm.group.quaternion)
+      .add(arm.group.position);
+    assert.ok(world.distanceTo(parentPos) < 1e-9,
+      `anchor vertex must span to the mother anchor in world space; off by ${world.distanceTo(parentPos)}`);
+  });
+});

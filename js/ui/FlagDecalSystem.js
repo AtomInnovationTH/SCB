@@ -76,6 +76,51 @@ export function hasFlag(countryCode) {
   return idx >= 0 && COUNTRY_ORDER[idx] !== '???';
 }
 
+/**
+ * Item 12 (2026-06-12): flag eligibility by debris CLASS, not just country.
+ * Only satellites and rocket bodies large enough to plausibly carry national
+ * markings get a decal — fragments and small junk never do.
+ * Pure + Node-safe (unit-tested headless).
+ *
+ * @param {{type?: string, sizeMeter?: number}|null} debris
+ * @returns {boolean}
+ */
+export function isFlagEligible(debris) {
+  if (!debris) return false;
+  const t = debris.type;
+  if (t !== 'rocketBody' && t !== 'defunctSat') return false;
+  const C = (typeof Constants !== 'undefined' && Constants.DEBRIS_VISUAL) || {};
+  const minM = C.FLAG_MIN_SIZE_M ?? 2;
+  return (debris.sizeMeter || 0) >= minM;
+}
+
+/**
+ * Item 12 (2026-06-12): deterministic weighted country pick for PROCEDURAL
+ * sats/rockets (catalog rows carry their own country). Weighted toward the
+ * historically dominant launch states so early-mission fields look plausible.
+ * Deterministic from the debris id so saves agree.
+ *
+ * @param {number} id — numeric debris id
+ * @returns {string} country code from the flag atlas (never '???')
+ */
+export function pickCountryForId(id) {
+  // [code, weight] — rough share of large LEO objects by origin.
+  const WEIGHTED = [
+    ['CIS', 30], ['USA', 25], ['PRC', 18], ['JPN', 5], ['IND', 5],
+    ['ESA', 5], ['FRA', 3], ['GBR', 2], ['DEU', 2], ['ITA', 1],
+    ['CAN', 1], ['BRA', 1], ['KOR', 1], ['ISR', 1],
+  ];
+  const total = WEIGHTED.reduce((s, [, w]) => s + w, 0);
+  // Deterministic hash of the id → [0, 1)
+  const h = Math.sin((id || 0) * 78.233 + 1.618) * 43758.5453;
+  let roll = (h - Math.floor(h)) * total;
+  for (const [code, w] of WEIGHTED) {
+    roll -= w;
+    if (roll < 0) return code;
+  }
+  return WEIGHTED[0][0];
+}
+
 // ============================================================================
 // CANVAS2D FLAG ATLAS CLASS (browser-only)
 // ============================================================================

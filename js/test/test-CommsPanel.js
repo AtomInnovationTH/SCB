@@ -1,6 +1,7 @@
 /**
- * test-CommsPanel.js — ST-5.1: Tap/hold discrimination, filter persistence, pane dimensions
+ * test-CommsPanel.js — ST-5.1: Filter persistence, pane dimensions, priority colours
  * Tests pure helpers from CommsPanel.js.
+ * (UX-11 #9: the tap/hold discrimination suite was removed with the C-hold radial.)
  *
  * Functions are copied from CommsPanel.js since that module imports
  * DOM/EventBus (unavailable in Node). Tests validate the algorithms.
@@ -16,11 +17,6 @@ const COMMS = Constants.COMMS;
 // ALGORITHM COPIES (mirror CommsPanel.js module-level helpers exactly)
 // ============================================================================
 
-function discriminateKeyEvent(downTs, upTs, threshold) {
-  const t = threshold != null ? threshold : COMMS.C_HOLD_THRESHOLD_MS;
-  return (upTs - downTs) >= t ? 'hold' : 'tap';
-}
-
 function filterRoundTrip(filters) {
   const json = JSON.stringify(filters);
   const parsed = JSON.parse(json);
@@ -30,33 +26,6 @@ function filterRoundTrip(filters) {
   }
   return result;
 }
-
-// ============================================================================
-// discriminateKeyEvent
-// ============================================================================
-
-describe('CommsPanel – discriminateKeyEvent (C-tap vs C-hold)', () => {
-  it('press+release in 100 ms → tap', () => {
-    assert.equal(discriminateKeyEvent(1000, 1100, 300), 'tap');
-  });
-
-  it('press+release in 250 ms → tap (at boundary)', () => {
-    assert.equal(discriminateKeyEvent(1000, 1250, 300), 'tap');
-  });
-
-  it('press+release in 400 ms → hold', () => {
-    assert.equal(discriminateKeyEvent(1000, 1400, 300), 'hold');
-  });
-
-  it('press+release in exactly 300 ms → hold (>=threshold)', () => {
-    assert.equal(discriminateKeyEvent(1000, 1300, 300), 'hold');
-  });
-
-  it('default threshold uses Constants.COMMS.C_HOLD_THRESHOLD_MS', () => {
-    assert.equal(discriminateKeyEvent(0, 200), 'tap');
-    assert.equal(discriminateKeyEvent(0, 350), 'hold');
-  });
-});
 
 // ============================================================================
 // Filter persistence round-trip
@@ -112,13 +81,6 @@ describe('CommsPanel – pane dimensions', () => {
     assert.equal(COMMS.PANE_EXPAND_HEIGHT_PX, 300);
   });
 
-  it('C_HOLD_THRESHOLD_MS is 300', () => {
-    assert.equal(COMMS.C_HOLD_THRESHOLD_MS, 300);
-  });
-
-  it('C_TAP_MAX_MS is 250', () => {
-    assert.equal(COMMS.C_TAP_MAX_MS, 250);
-  });
 });
 
 // ============================================================================

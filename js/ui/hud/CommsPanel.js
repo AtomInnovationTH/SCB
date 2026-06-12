@@ -74,17 +74,8 @@ function isCriticalPriority(priority) {
 // PURE HELPERS (CJS-exportable for tests)
 // ============================================================================
 
-/**
- * Discriminate between tap and hold based on timestamps.
- * @param {number} downTs — keydown timestamp (ms)
- * @param {number} upTs — keyup timestamp (ms)
- * @param {number} [threshold] — hold threshold in ms (default COMMS.C_HOLD_THRESHOLD_MS)
- * @returns {'tap'|'hold'}
- */
-function discriminateKeyEvent(downTs, upTs, threshold) {
-  const t = threshold != null ? threshold : COMMS.C_HOLD_THRESHOLD_MS;
-  return (upTs - downTs) >= t ? 'hold' : 'tap';
-}
+// (UX-11 #9 review cleanup: discriminateKeyEvent removed — the C tap/hold
+// discrimination it modelled no longer exists anywhere in the input path.)
 
 /**
  * Round-trip filter state through JSON (for persistence testing).
@@ -110,7 +101,6 @@ export class CommsPanel {
   constructor(container) {
     this._container = container;
     this._commsSystem = null;
-    this._armManager = null;
     this._commsFlashTimer = 0;
 
     /** @type {import('./PaneChrome.js').PaneChrome|null} 3-step size chrome */
@@ -219,14 +209,6 @@ export class CommsPanel {
   }
 
   /**
-   * Set the ArmManager reference (for RadialMenu gating).
-   * @param {import('../../entities/ArmManager.js').ArmManager} armManager
-   */
-  setArmManager(armManager) {
-    this._armManager = armManager;
-  }
-
-  /**
    * Handle an incoming comms message event. Updates the log and may trigger
    * a border flash for critical messages.
    * @param {object} msg — { text, priority, channel, … }
@@ -257,11 +239,11 @@ export class CommsPanel {
   }
 
   /**
-   * Refresh radial menu command availability (called at 10 Hz).
-   * ST-5.1: No-op — radial menu handles its own gating on open.
+   * Refresh command availability (called at 10 Hz).
+   * No-op since ST-5.1; the C-hold radial menu was removed entirely (UX-11 #9).
    */
   updateMenu() {
-    // Intentionally empty — gating moved to RadialMenu
+    // Intentionally empty
   }
 
   /**
@@ -273,63 +255,13 @@ export class CommsPanel {
     this._expandPane();
   }
 
-  /** @returns {boolean} ST-5.1: radial menu open state is on RadialMenu, not here */
+  /** @returns {boolean} Center popup fully removed (and the radial menu after it) */
   isCommsOpen() {
     return false; // Center popup fully removed
   }
 
-  /**
-   * Execute a numbered comms command (1-6).
-   * Ported from old popup — now invoked by RadialMenu via EventBus.
-   * @param {number} num — Command number (1-6)
-   */
-  executeCommsCommand(num) {
-    switch (num) {
-      case 1:
-        eventBus.emit(Events.ARM_DEPLOY, { preferType: 'weaver' });
-        eventBus.emit(Events.COMMS_MESSAGE, {
-          text: 'Deploy Weaver — executing',
-          priority: 'info',
-          source: 'COMMS',
-          channel: 'CMD',
-        });
-        break;
-      case 2:
-        eventBus.emit(Events.ARM_DEPLOY, { preferType: 'spinner' });
-        eventBus.emit(Events.COMMS_MESSAGE, {
-          text: 'Deploy Spinner — executing',
-          priority: 'info',
-          source: 'COMMS',
-          channel: 'CMD',
-        });
-        break;
-      case 3:
-        eventBus.emit(Events.ARM_FISH);
-        eventBus.emit(Events.COMMS_MESSAGE, {
-          text: 'Fish mode — casting all',
-          priority: 'info',
-          source: 'COMMS',
-          channel: 'CMD',
-        });
-        break;
-      case 4:
-        eventBus.emit(Events.ARM_RECALL_ALL);
-        break;
-      case 5:
-        eventBus.emit(Events.COMMS_MESSAGE, {
-          text: 'Use P key to toggle ARM PILOT mode',
-          priority: 'info',
-          source: 'COMMS',
-          channel: 'CMD',
-        });
-        break;
-      case 6:
-        eventBus.emit(Events.ARM_DEORBIT_CMD);
-        break;
-      default:
-        return;
-    }
-  }
+  // (UX-11 #9 review cleanup: executeCommsCommand removed — the RadialMenu
+  // was its only conceptual invoker and the HUD wrapper had zero callers.)
 
   /** Clean up DOM elements. */
   dispose() {
@@ -437,11 +369,11 @@ export class CommsPanel {
 // NAMED EXPORTS (for tests)
 // ============================================================================
 
-export { discriminateKeyEvent, filterRoundTrip, getPriorityColor, isCriticalPriority,
+export { filterRoundTrip, getPriorityColor, isCriticalPriority,
   COMMS_COLOR_NORMAL, COMMS_COLOR_WARNING, COMMS_COLOR_CRITICAL };
 
 // ST-5.1: CJS guard — expose pure helpers for Node.js tests
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { discriminateKeyEvent, filterRoundTrip, getPriorityColor, isCriticalPriority,
+  module.exports = { filterRoundTrip, getPriorityColor, isCriticalPriority,
     COMMS_COLOR_NORMAL, COMMS_COLOR_WARNING, COMMS_COLOR_CRITICAL };
 }

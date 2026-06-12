@@ -384,8 +384,8 @@ export class NetInventoryPanel {
     // Fire the HOUSTON comms hint.
     const bothZero = (this._lasso_state.remaining === 0 && this._net_state.total === 0);
     const text = bothZero
-      ? 'Out of capture tools. Shop (B) or Forge (F4) to reload.'
-      : 'Low on nets, Cowboy — visit the Shop (B) or Forge new ones (F4).';
+      ? 'Out of capture tools. Shop (B) or Forge (5) to reload.'
+      : 'Low on nets, Cowboy — visit the Shop (B) or Forge new ones (5).';
     this._eventBus?.emit?.(Events.COMMS_MESSAGE, {
       source: 'HOUSTON',
       channel: 'HOUSTON',
@@ -404,7 +404,7 @@ export class NetInventoryPanel {
       const max       = this._lasso_state.max ?? 0;
       const label = max > 0 ? `${remaining}/${max}` : `${remaining}`;
       this._lassoChip._textNode.textContent = label;
-      this._lassoChip.title = `Lasso shots: ${label}.  Press B for shop or F4 to forge.`;
+      this._lassoChip.title = `Lasso shots: ${label}.  Press B for shop or 5 to forge.`;
       this._styleChip(this._lassoChip, this._lasso_state.severity);
     }
     // Net chip text + breakdown tooltip + colour.

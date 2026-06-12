@@ -14,6 +14,7 @@ import { Constants } from '../core/Constants.js';
 import { audioSystem } from './AudioSystem.js';
 import timerManager from './TimerManager.js';
 import { messagePassesSuppression, rampSuppressionTier } from './commsSuppression.js';
+import { missReasonToText } from '../entities/CaptureNet.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -661,6 +662,18 @@ export class CommsSystem {
     // catch. The daughter is fine and returning to reload; the debris is loose.
     eventBus.on(Events.NET_FAILED, (data) => {
       this.addMessage('WARNING', data?.armId || 'SYSTEM', 'NET FAILED — debris slipped the net and is drifting. Daughter returning to reload; re-net to retry.', { channel: 'ALERT' });
+    });
+
+    // UX-11 #1: net MISS reasons → actionable plain text. A miss is fully
+    // recoverable (the net reels back and inventory is restored), so the line
+    // must say WHY it missed and what to do next, not just "missed".
+    // 'forced' (test/scripted resolves) stays silent.
+    eventBus.on(Events.NET_CATCH_MISS, (data) => {
+      const text = missReasonToText(data?.reason);
+      if (!text) return;
+      const source = (data?.armIndex != null && data.armIndex >= 0)
+        ? `ARM-${data.armIndex + 1}` : 'NET POD';
+      this.addMessage('WARNING', source, text, { channel: 'ALERT' });
     });
 
     // §4 item 3: ARM_RETURNED (captured) → Docking comms

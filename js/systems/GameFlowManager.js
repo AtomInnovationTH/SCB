@@ -1002,22 +1002,9 @@ class GameFlowManager {
     // Debris removed externally — DebrisWireframe self-clears via DEBRIS_REMOVED listener (Batch 3)
     // TargetSelector auto-clears dead targets in update()
 
-    // ==================================================================
-    // COMMS MENU ARM DEPLOY
-    // ==================================================================
-
-    eventBus.on(Events.ARM_DEPLOY, (data) => {
-      if (!armManager) return;
-      const target = targetSelector.getActiveTarget();  // imported singleton
-      if (!target || !target.alive) {
-        eventBus.emit(Events.COMMS_MESSAGE, {
-          text: 'No target selected — select debris first (Tab)',
-          priority: 'warning',
-        });
-        return;
-      }
-      armManager.deployArm(target, data.preferType || null);
-    });
+    // COMMS MENU ARM DEPLOY listener removed 2026-06-12 (UX-11 #9): its only
+    // emitters (RadialMenu, CommsPanel.executeCommsCommand) were deleted.
+    // preferType deploy still works via Events.ARM_DEPLOY_TO (TargetSelector).
 
     // ==================================================================
     // TRAWL DEPLOYMENT (Phase 6 / S7-B: wired to TrawlManager)
@@ -1141,6 +1128,21 @@ class GameFlowManager {
             priority: 'info',
           });
         }
+      }
+    });
+
+    // Item 3 (2026-06-12): first net launch — one SCI line teaching the yo-yo
+    // despin physics the player just watched (canister blossoms open and the
+    // spin visibly slows with NO thruster firing). Pairs with the Codex entry
+    // 'net_yo_yo_despin' (also unlocked by NET_FIRED).
+    eventBus.on(Events.NET_FIRED, () => {
+      if (!this._firstTimeComms.has('first_net_physics')) {
+        this._firstTimeComms.add('first_net_physics');
+        eventBus.emit(Events.COMMS_MESSAGE, {
+          source: 'SCI', channel: 'SCI',
+          text: 'DISCOVERY: Watch the net slow as it blossoms — no brakes involved. Angular momentum is conserved: the mouth opening grows its inertia (I ∝ r²), so spin falls. The yo-yo despin. Codex [L] updated.',
+          priority: 'info',
+        });
       }
     });
 
@@ -1443,7 +1445,7 @@ class GameFlowManager {
       if (arms.length === 0) {
         reason = 'No arms installed — visit shipyard';
       } else if (docked.length === 0) {
-        reason = 'All arms deployed or returning — press [H] to recall';
+        reason = 'All arms deployed or returning — press [Shift+R] to recall';
       } else if (charged.length === 0) {
         reason = 'All docked arms are reloading springs — wait for charge';
       } else if (target.mass && charged.every(a => target.mass > (a.config?.maxCaptureMass || 0))) {

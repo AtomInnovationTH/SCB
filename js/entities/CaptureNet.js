@@ -74,7 +74,10 @@ export function computeClingProbability(params) {
   const vRange = 10; // m/s velocity range for clamp
   const fVelocity  = Math.max(0.3, Math.min(1.0, 1.0 - Math.abs(vRel - vOptimal) / vRange));
   const fContact   = Math.min(contactFraction, 1.0);
-  const fRoughness = roughness;
+  // 2026-06-11 tuning: floor the roughness multiplier — smooth surfaces are
+  // harder to wrap, but the raw material scale (solar cell 0.2, aluminum 0.4)
+  // multiplied a perfect shot down to "feels broken" odds.
+  const fRoughness = Math.max(CN.ROUGHNESS_FLOOR ?? 0, roughness);
   const fSpin      = Math.max(0.5, Math.min(1.2, spinFraction));
   const fTension   = Math.max(0.6, Math.min(1.0, tensionFraction));
   // Distance modifier: f_distance = clamp(1.1 - 0.003 × range, 0.85, 1.1)
@@ -86,7 +89,21 @@ export function computeClingProbability(params) {
   const fTumble = computeTumbleModifier(targetTumbleRate);
 
   const raw = pBase * fVelocity * fContact * fRoughness * fSpin * fTension * fDistance * fTumble;
-  return Math.max(0, Math.min(1, raw)); // clamp to valid probability
+  let p = Math.max(0, Math.min(1, raw)); // clamp to valid probability
+
+  // 2026-06-11 tuning: SURE-SHOT floor. A well-executed shot — close range,
+  // target de-tumbled to in-spec (or tumble untracked), nominal launch speed,
+  // fresh net spin — succeeds reliably. This is the payoff the game teaches
+  // ("close the distance, de-spin [U]"); distant/tumbling/sloppy shots keep
+  // the full physics stack, so aim and setup still matter.
+  const sureShot = range <= (CN.CLOSE_RANGE ?? 30)
+    && fTumble >= 1.0
+    && fVelocity >= 0.99
+    && spinFraction >= 0.8;
+  if (sureShot) {
+    p = Math.max(p, Math.min(1, CN.SURE_SHOT_MIN_CLING ?? 0));
+  }
+  return p;
 }
 
 /**
@@ -110,6 +127,84 @@ export function computeTumbleModifier(tumbleRateRad) {
  */
 export function computeDistanceModifier(range) {
   return Math.max(0.85, Math.min(1.1, 1.1 - 0.003 * range));
+}
+
+/**
+ * UX-11 #1: effective catch radius with close-range forgiveness.
+ * Inside CLOSE_RANGE the net mouth wraps slightly beyond its disc, so the
+ * intersection test widens by CATCH_RADIUS_FORGIVENESS. Outside CLOSE_RANGE
+ * the geometric radius applies unchanged — aim still matters at distance.
+ * @param {number} mouthRadius — net mouth radius (metres)
+ * @param {number} range — distance travelled / range to target (metres)
+ * @returns {number} effective radius (metres)
+ */
+export function effectiveCatchRadius(mouthRadius, range) {
+  const forgive = (range < CN.CLOSE_RANGE) ? (CN.CATCH_RADIUS_FORGIVENESS || 1.0) : 1.0;
+  return mouthRadius * forgive;
+}
+
+/**
+ * UX-11 #1: lead-aim direction + off-axis angle for the pre-fire readout.
+ * Mirrors the lead computation in ArmUnit._updateNettingFSM: aim where the
+ * target will be when the net arrives (targetPos + relVel × dist/launchSpeed).
+ * All inputs share one unit system (scene units OR metres — consistent).
+ *
+ * @param {{x,y,z}} armPos — launcher position
+ * @param {{x,y,z}} targetPos — target position now
+ * @param {{x,y,z}|null} relVel — target velocity relative to launcher (units/s)
+ * @param {number} launchSpeed — net speed in the same length units per second
+ * @returns {{ dir: {x,y,z}, offAxisDeg: number }} lead direction + angle between
+ *   the lead direction and the direct bearing (0 when no lead is needed)
+ */
+export function computeLeadAim(armPos, targetPos, relVel, launchSpeed) {
+  const bx = targetPos.x - armPos.x;
+  const by = targetPos.y - armPos.y;
+  const bz = targetPos.z - armPos.z;
+  const bLen = Math.sqrt(bx * bx + by * by + bz * bz) || 1;
+
+  let ax = targetPos.x, ay = targetPos.y, az = targetPos.z;
+  if (relVel && launchSpeed > 1e-12) {
+    const tof = bLen / launchSpeed;
+    ax += relVel.x * tof;
+    ay += relVel.y * tof;
+    az += relVel.z * tof;
+  }
+  const dx = ax - armPos.x, dy = ay - armPos.y, dz = az - armPos.z;
+  const dLen = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
+  const dir = { x: dx / dLen, y: dy / dLen, z: dz / dLen };
+
+  // Angle between lead dir and direct bearing
+  const dot = Math.max(-1, Math.min(1,
+    (dir.x * bx + dir.y * by + dir.z * bz) / bLen));
+  const offAxisDeg = Math.acos(dot) * (180 / Math.PI);
+  return { dir, offAxisDeg };
+}
+
+/**
+ * Item 4 (2026-06-12): pre-fire net-fit assessment — the SINGLE source for
+ * the reticle width/mass advisory, the TargetPanel capture-fit badge, and the
+ * ToolRecommender width fork. Pure + Node-safe.
+ *
+ * Precedence: width (deterministic post-catch failure) > mass (refused at
+ * deploy / strain risk) > tumble (recoverable — de-spin first).
+ *
+ * @param {{sizeMeter?:number, mass?:number, tumbleRate?:number}|null} target
+ * @param {{DIAMETER?:number, MAX_CAPTURE_MASS?:number}|null} netClass
+ * @returns {{ fit: 'OK'|'TOO_WIDE'|'TOO_HEAVY'|'DESPIN_FIRST', label: string }}
+ */
+export function assessNetFit(target, netClass) {
+  if (!target || !netClass) return { fit: 'OK', label: 'NET \u2713' };
+  const size = target.sizeMeter || 0;
+  const mass = target.mass || 0;
+  const dia = netClass.DIAMETER || 0;
+  const cap = netClass.MAX_CAPTURE_MASS || Infinity;
+  if (dia > 0 && size > dia) return { fit: 'TOO_WIDE', label: 'TOO WIDE' };
+  if (mass > cap) return { fit: 'TOO_HEAVY', label: 'TOO HEAVY' };
+  const P = Constants.NET_TUMBLE_PENALTY || { IN_SPEC_DEG: 10 };
+  const tumbleDeg = (target.tumbleRate != null)
+    ? Math.abs(target.tumbleRate) * (180 / Math.PI) : 0;
+  if (tumbleDeg > (P.IN_SPEC_DEG ?? 10)) return { fit: 'DESPIN_FIRST', label: 'DE-SPIN FIRST' };
+  return { fit: 'OK', label: 'NET \u2713' };
 }
 
 /**
@@ -139,6 +234,25 @@ export function computeFragRisk(params) {
   }
 
   return Math.max(0, Math.min(1, risk));
+}
+
+/**
+ * UX-11 #1: map a NET_CATCH_MISS reason to an actionable player-facing line.
+ * Returns null for reasons that should stay silent ('forced' test resolves,
+ * unknown reasons).
+ * @param {string} reason — 'timeout'|'tether_limit'|'cling_failed'|'forced'|…
+ * @returns {string|null}
+ */
+export function missReasonToText(reason) {
+  switch (reason) {
+    case 'timeout':
+    case 'tether_limit':
+      return 'Net overshot — line up the reticle and re-fire. Net reeling back; inventory restored.';
+    case 'cling_failed':
+      return 'Net grazed it — wrap didn\'t hold. Close the distance or de-spin the target (hold U), then re-fire.';
+    default:
+      return null;
+  }
 }
 
 /**
@@ -447,7 +561,10 @@ export class NetProjectile {
         const dy = sp.y - netY;
         const dz = sp.z - netZ;
         const distScene = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        const radiusScene = (this.netClass.DIAMETER / 2) * M_NET;
+        // UX-11 #1: close-range forgiveness — near-grazes inside CLOSE_RANGE count.
+        const radiusScene = effectiveCatchRadius(
+          this.netClass.DIAMETER / 2, this.distanceTraveled
+        ) * M_NET;
         // Q2 Ceremony: brake-imminent lookahead (cinch path only)
         if (FEATURE_FLAGS.NET_CEREMONY && !this._brakeImminentEmitted
             && this.captureMode === MODES.CINCH) {
@@ -488,7 +605,7 @@ export class NetProjectile {
             });
           }
         }
-        if (distToTarget <= this.netClass.DIAMETER / 2) {
+        if (distToTarget <= effectiveCatchRadius(this.netClass.DIAMETER / 2, this.distanceTraveled)) {
           if (this.captureMode === MODES.CINCH) {
             this._transitionTo(STATES.BRAKE);
           } else {

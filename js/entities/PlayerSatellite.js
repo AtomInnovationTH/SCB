@@ -3619,6 +3619,16 @@ export class PlayerSatellite extends THREE.Group {
           } else {
             arm.group.quaternion.copy(_armDockTargetQuat);
           }
+          // Re-dock fix (Issue 8b, 2026-06-12): ArmUnit._updateTether already
+          // baked tetherLine.quaternion = group.quaternion⁻¹ during
+          // armManager.update() — BEFORE the quat change above. Re-sync here
+          // so the rendered tether isn't counter-rotated by this frame's slerp
+          // delta (worst at DOCKING entry, where pose error can approach 180°).
+          // Single-owner rule (HANDOFF §10 Rule B): this block owns the quat
+          // for these states, so it also owns the dependent tether counter-quat.
+          if (arm.tetherLine && arm.tetherLine.visible) {
+            arm.tetherLine.quaternion.copy(arm.group.quaternion).invert();
+          }
         }
         continue;
       }

@@ -29,6 +29,18 @@ import './test-CollisionAvoidance.js';
 // Autopilot (trailing-rendezvous) tests
 import './test-AutopilotSystem.js';
 
+// UX-11 #4: TrawlManager sweep auto-complete + abort
+import './test-TrawlManager.js';
+
+// UX-11 #11: lost-in-space recovery advisor (bearing helpers + watchdog + empty-scan)
+import './test-NavRecoveryAdvisor.js';
+
+// UX-11 #12: dual-objective milestone comms (threshold crossing + recap)
+import './test-MissionMilestones.js';
+
+// UX-11 #5: Earth city labels (parse + cull + fade + data integrity)
+import './test-CityLabels.js';
+
 // Skills System tests
 import './test-SkillsSystem.js';
 
@@ -79,8 +91,7 @@ import './test-CommsSystem.js';
 // ST-5.1: CommsPanel — tap/hold discrimination, filter persistence, pane dimensions
 import './test-CommsPanel.js';
 
-// ST-5.1: RadialMenu — arm gating, equal angles, channel stripe colours
-import './test-RadialMenu.js';
+// (UX-11 #9: test-RadialMenu.js removed with the C-hold radial menu)
 
 // ST-6.6: TRL annotation + badge helpers — Codex + Shop integrity, distribution
 import './test-TRL.js';
@@ -242,6 +253,12 @@ import './test-DifferentialThrust.js';
 
 // Guidance/onboarding §4: mother-initiated reel-in of stuck / out-of-fuel daughters
 import './test-ArmUnit-recall-reel.js';
+
+// Hotkey cleanup (2026-06-12): recall-all = Shift+R only (H / Shift+O freed)
+import './test-InputManager-Hotkeys.js';
+
+// Items 5/6 (2026-06-12): learning-mission anti-dead-end audit
+import './test-EarlyMission-StuckStates.js';
 
 // Flush any pending async describes, then print summary
 await Promise.resolve();

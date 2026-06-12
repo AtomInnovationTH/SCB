@@ -321,7 +321,8 @@ describe('ArmTierCatalog — canUpgrade gating', () => {
     const gs = baseGameState({ credits: 5000, debrisCleared: 5 });
     const result = canUpgrade('Y0_QUAD', 'Y1_HEX', gs);
     assert.equal(result.allowed, false, 'rejected');
-    assert.ok(result.reason.includes('TRL'), `reason: ${result.reason}`);
+    // UX-11 #10: player-facing vocabulary is "Tech Lvl" (internal keys stay TRL)
+    assert.ok(result.reason.includes('Tech Lvl'), `reason: ${result.reason}`);
   });
 
   it('Y3 upgrade requires TRL 8 (30+ debris)', () => {

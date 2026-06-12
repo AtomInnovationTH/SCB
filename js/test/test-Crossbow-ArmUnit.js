@@ -810,3 +810,162 @@ describe('ArmUnit V5 — REELING docks at strut-tip (Issue 1 fix, 2026-05-26)', 
     assert.equal(arm.state, ARM_STATES.DOCKING, 'REELING snap transitions to DOCKING');
   });
 });
+
+// ════════════════════════════════════════════════════════════════════════
+// 2026-06-12 ISSUE 8 FIX — RETURNING docks at STRUT TIP (not mother centre).
+// ════════════════════════════════════════════════════════════════════════
+// Empty-handed returns previously targeted parentPos (bus centre): the
+// daughter flew INTO the hull (vanished occluded ~2 s) while her strut-tip-
+// anchored tether drew inward through the ship (180° wrong), then DOCKING
+// lerped her back out. RETURNING now mirrors the REELING strut-tip fix.
+// ════════════════════════════════════════════════════════════════════════
+
+describe('ArmUnit V5 — RETURNING docks at strut-tip (Issue 8 fix, 2026-06-12)', () => {
+  it('RETURNING steers toward parentPos + parentQuat × dockOffset, not parentPos', () => {
+    const arm = makeArm();
+    arm.dockOffset = new THREE.Vector3(M, 0, 0);
+    arm.state = ARM_STATES.RETURNING;
+    arm.capturedDebris = null;
+
+    // Rotate the parent 90° about +Y: local dockOffset (+M,0,0) → world (0,0,-M).
+    const parentPos = new THREE.Vector3(0, 0, 0);
+    const parentQuat = new THREE.Quaternion().setFromAxisAngle(
+      new THREE.Vector3(0, 1, 0), Math.PI / 2,
+    );
+
+    // Start the arm offset along +Y, far enough not to dock this frame.
+    arm.position.set(0, 100 * M, 0);
+    arm.velocity.set(0, 0, 0);
+    arm._prevParentPos = parentPos.clone();
+
+    // Several frames to build up velocity toward the target.
+    for (let i = 0; i < 30; i++) arm.update(0.016, parentPos, parentQuat);
+
+    // Velocity should have a -Z component (toward the ROTATED strut tip at
+    // (0,0,-M)) — the buggy code aimed at parentPos (pure -Y, zero Z).
+    assert.ok(arm.velocity.z < 0,
+      `RETURNING must steer toward the rotated strut tip (0,0,-M); ` +
+      `velocity.z=${arm.velocity.z} should be negative. Zero means it still aims at mother centre.`);
+  });
+
+  it('RETURNING dock threshold measures distance to the strut tip', () => {
+    const arm = makeArm();
+    arm.dockOffset = new THREE.Vector3(50 * M, 0, 0);  // long strut: 50 m
+    arm.state = ARM_STATES.RETURNING;
+    arm.capturedDebris = null;
+    const parentPos = new THREE.Vector3(0, 0, 0);
+    const parentQuat = new THREE.Quaternion(); // identity
+
+    // Place the arm right at the strut tip — far from the bus centre but
+    // within threshold of the tip. Old code (dist to parentPos = 50 m) would
+    // NOT dock; new code (dist to tip ≈ 0) must transition to DOCKING.
+    arm.position.set(50 * M, 0, 0);
+    arm.velocity.set(0, 0, 0);
+    arm._prevParentPos = parentPos.clone();
+    arm.update(0.016, parentPos, parentQuat);
+
+    assert.equal(arm.state, ARM_STATES.DOCKING,
+      'arm at the strut tip must enter DOCKING (threshold vs tip, not bus centre)');
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════
+// 2026-06-12 ISSUE 1 FIX — ARM_SPRING_FIRED at actual departure.
+// ════════════════════════════════════════════════════════════════════════
+
+describe('ArmUnit V5 — ARM_SPRING_FIRED timing (Issue 1 fix, 2026-06-12)', () => {
+  it('not emitted during the magnetic-clamp phase', () => {
+    const arm = makeArm();
+    arm.deploy(makeTarget());
+    let fired = 0;
+    eventBus.on(Events.ARM_SPRING_FIRED, () => { fired++; });
+
+    const parentPos = new THREE.Vector3(0, 0, 0);
+    // Step through the clamp phase, staying under CROSSBOW_UNDOCK_TIME.
+    arm.update(CROSSBOW_UNDOCK_TIME * 0.5, parentPos);
+    assert.equal(fired, 0, 'no spring event during the clamp-release hold');
+    eventBus.clear();
+  });
+
+  it('emitted exactly once when the spring fires, with payload', () => {
+    const arm = makeArm();
+    arm.deploy(makeTarget());
+    const got = [];
+    eventBus.on(Events.ARM_SPRING_FIRED, (d) => got.push(d));
+
+    const parentPos = new THREE.Vector3(0, 0, 0);
+    arm.update(CROSSBOW_UNDOCK_TIME + 0.01, parentPos);  // crosses the threshold
+    arm.update(0.016, parentPos);                         // further frames: no re-fire
+
+    assert.equal(got.length, 1, 'ARM_SPRING_FIRED fires exactly once');
+    assert.equal(got[0].armId, arm.id, 'payload names the arm');
+    assert.equal(got[0].type, arm.type, 'payload carries the type');
+    assert.isType(got[0].speed, 'number', 'payload carries launch speed');
+    eventBus.clear();
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════
+// 2026-06-12 ISSUE 2 FIX — lead velocity is ARM-RELATIVE.
+// ════════════════════════════════════════════════════════════════════════
+// The net is propagated in the arm's co-orbiting frame (CaptureNet re-anchors
+// net.position = arm.position + launchDir × distanceTraveled), so the correct
+// lead velocity is target-velocity-relative-to-the-arm. Shared orbital drift
+// (arm and target co-moving in STATION_KEEP) must produce relVel ≈ 0.
+// ════════════════════════════════════════════════════════════════════════
+
+describe('ArmUnit — lead estimator is arm-relative (Issue 2 fix, 2026-06-12)', () => {
+  function driftArm() {
+    const arm = makeArm();
+    // Synthetic no-op state: not in the per-state switch, so the arm has zero
+    // self-motion — isolates the estimator from STATION_KEEP's chase lerp
+    // (arm self-motion is REAL relative motion and must not be asserted away).
+    arm.state = 'TEST_STATIC';
+    arm._manualMode = true;
+    arm.position.set(0.001, 0, 0);
+    arm.velocity.set(0, 0, 0);
+    return arm;
+  }
+
+  it('identical frame drift on arm and target → relVel ≈ 0', () => {
+    const arm = driftArm();
+    const target = makeTarget('drift-1', 5);
+    arm.target = target;
+    const parentPos = new THREE.Vector3(0, 0, 0);
+    const drift = new THREE.Vector3(2e-5, 1e-5, -3e-5);  // shared scene drift/frame
+
+    for (let i = 1; i <= 5; i++) {
+      // Both arm and target translate by the SAME per-frame drift.
+      arm.position.addScaledVector(drift, 1);
+      target._scenePosition.addScaledVector(drift, 1);
+      arm.update(0.016, parentPos);
+    }
+
+    assert.ok(arm._leadTargetVelValid, 'estimator valid after ≥2 samples');
+    assert.ok(arm._leadTargetVel.length() < 1e-9,
+      `shared drift must cancel: |relVel|=${arm._leadTargetVel.length()} (expected ≈0). ` +
+      `Nonzero means the estimator is using absolute scene velocity again.`);
+  });
+
+  it('genuine transverse target motion survives the subtraction', () => {
+    const arm = driftArm();
+    const target = makeTarget('drift-2', 5);
+    arm.target = target;
+    const parentPos = new THREE.Vector3(0, 0, 0);
+    const drift = new THREE.Vector3(2e-5, 0, 0);          // shared
+    const transverse = new THREE.Vector3(0, 4e-5, 0);     // target-only
+
+    for (let i = 1; i <= 5; i++) {
+      arm.position.addScaledVector(drift, 1);
+      target._scenePosition.addScaledVector(drift, 1);
+      target._scenePosition.addScaledVector(transverse, 1);
+      arm.update(0.016, parentPos);
+    }
+
+    assert.ok(arm._leadTargetVelValid, 'estimator valid');
+    const v = arm._leadTargetVel;
+    assert.ok(Math.abs(v.x) < 1e-9, `shared X drift cancels (got ${v.x})`);
+    assert.ok(Math.abs(v.y - transverse.y / 0.016) < 1e-6,
+      `transverse Y velocity preserved (got ${v.y}, expected ${transverse.y / 0.016})`);
+  });
+});

@@ -14,9 +14,19 @@ import { Constants } from '../core/Constants.js';
 import { ArmUnit } from '../entities/ArmUnit.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
+import { gameState } from '../core/GameState.js';
 
 const S = Constants.ARM_STATES;
 const M = 0.00001;
+
+// Item 5d (2026-06-12): tether snaps are clamped to a warning during MISSION 1
+// (learning-mission guard). Snap tests below run "in mission 2" by setting
+// debrisCleared ≥ 5 (missionNumber = floor(cleared/5)+1).
+function inMission2(fn) {
+  const orig = gameState.debrisCleared;
+  gameState.debrisCleared = 5;
+  try { fn(); } finally { gameState.debrisCleared = orig; }
+}
 
 function makeArm(state = S.GRAPPLED) {
   const scene = { add: () => {}, remove: () => {} };
@@ -62,18 +72,45 @@ describe('ArmUnit capture-failure — reel tension retune', () => {
       `tension ${arm.tetherTension.toFixed(1)}N should be under break ${arm.tetherBreakStrength}N`);
   });
 
-  it('a gross overload snaps the tether (catastrophic path)', () => {
+  it('a gross overload snaps the tether (catastrophic path, mission 2+)', () => {
     eventBus.clear();
     const arm = makeArm(S.REELING);
     const debris = makeDebris(2000);
     attachCatch(arm, debris);
     arm.position.set(1, 0, 0);
     const parentPos = new THREE.Vector3(0, 0, 0);
-    const snaps = captureEvent(Events.TETHER_SNAP, () => arm._updateReeling(0.016, parentPos, null));
+    let snaps;
+    inMission2(() => {
+      snaps = captureEvent(Events.TETHER_SNAP, () => arm._updateReeling(0.016, parentPos, null));
+    });
     assert.equal(snaps.length, 1, 'overload emits TETHER_SNAP');
     assert.equal(snaps[0].debrisId, 99, 'snap payload names the lost debris');
     assert.equal(snaps[0].recoverable, false, 'tether snap is not recoverable');
     assert.equal(arm.state, S.EXPENDED, 'snapped arm is EXPENDED');
+  });
+
+  it('mission 1 guard: overload is clamped to a warning — NO snap (Item 5d)', () => {
+    eventBus.clear();
+    const arm = makeArm(S.REELING);
+    const debris = makeDebris(2000);
+    attachCatch(arm, debris);
+    arm.position.set(1, 0, 0);
+    const parentPos = new THREE.Vector3(0, 0, 0);
+    const orig = gameState.debrisCleared;
+    gameState.debrisCleared = 0;        // mission 1
+    let snaps, warns;
+    try {
+      warns = captureEvent(Events.COMMS_MESSAGE, () => {
+        snaps = captureEvent(Events.TETHER_SNAP, () => arm._updateReeling(0.016, parentPos, null));
+      });
+    } finally {
+      gameState.debrisCleared = orig;
+    }
+    assert.equal(snaps.length, 0, 'no TETHER_SNAP during the learning mission');
+    assert.equal(arm.state, S.REELING, 'daughter keeps reeling (recoverable)');
+    assert.ok(arm.tetherTension <= arm.tetherBreakStrength, 'tension clamped at the limit');
+    assert.ok(warns.some(w => /rated limit/i.test(w.text || '')),
+      'player is warned the winch absorbed the overload');
   });
 
   it('reeling drags the catch to the arm (authoritative pin) even if _capturedByArm is stale', () => {
@@ -86,8 +123,12 @@ describe('ArmUnit capture-failure — reel tension retune', () => {
     arm._updateReeling(0.016, new THREE.Vector3(0, 0, 0), null);
     assert.equal(debris._armPinned, true, 'authoritative arm pin engaged');
     assert.ok(debris._armPinPos, 'arm pin position recorded');
-    assert.ok(debris._armPinPos.distanceTo(arm.position) < 1e-9,
-      'catch position forced to the arm position');
+    // Issue 13 (2026-06-12): pin = arm.position + outboard standoff
+    // (sizeMeter/2 + ARM_HOLD_CLEARANCE_M) so the daughter never renders
+    // inside the catch — no longer coincident with the arm.
+    const standoff = (debris.sizeMeter / 2 + Constants.ARM_HOLD_CLEARANCE_M) * M;
+    assert.ok(Math.abs(debris._armPinPos.distanceTo(arm.position) - standoff) < 1e-12,
+      'catch held at the standoff distance from the arm');
   });
 });
 
@@ -100,7 +141,7 @@ describe('ArmUnit capture-failure — tether snap aftermath (no vanish)', () => 
     arm.position.set(1, 0, 0);
     arm.velocity.set(0, 0, 0);
     const parentPos = new THREE.Vector3(0, 0, 0);
-    arm._updateReeling(0.016, parentPos, null);
+    inMission2(() => arm._updateReeling(0.016, parentPos, null));
 
     assert.equal(arm._tetherSevered, true, 'tether marked severed');
     assert.equal(arm.isDetached, true, 'daughter is detached from mother');
@@ -120,7 +161,7 @@ describe('ArmUnit capture-failure — tether snap aftermath (no vanish)', () => 
     attachCatch(arm, debris);
     arm.position.set(1, 0, 0);
     const parentPos = new THREE.Vector3(0, 0, 0);
-    arm._updateReeling(0.016, parentPos, null);
+    inMission2(() => arm._updateReeling(0.016, parentPos, null));
     assert.equal(debris._capturedByArm, arm, 'initially still pinned to the daughter');
 
     // Drift just short of the release delay — still pinned.
@@ -140,7 +181,7 @@ describe('ArmUnit capture-failure — tether snap aftermath (no vanish)', () => 
     const debris = makeDebris(2000);
     attachCatch(arm, debris);
     arm.position.set(1, 0, 0);
-    arm._updateReeling(0.016, new THREE.Vector3(0, 0, 0), null);
+    inMission2(() => arm._updateReeling(0.016, new THREE.Vector3(0, 0, 0), null));
 
     // Simulate another daughter grabbing the drifting debris (pin transfers).
     const other = makeArm(S.GRAPPLED);

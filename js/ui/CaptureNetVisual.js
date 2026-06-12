@@ -180,9 +180,25 @@ export class CaptureNetVisual {
     this._fadeTimers.push({ key, timer: 1.0, duration: 1.0 });
   }
 
-  /** @private */
+  /** @private
+   * UX-11 #2: a successful daughter catch reaches NET_REEL_COMPLETED at the
+   * HOLDING_CATCH *chop* boundary (the held net stows once the arm clears
+   * `debris._capturedByArm` — see ArmUnit._updateHoldingCatch). Removing the
+   * bag instantly made it POP right as the furnace breakdown starts. Instead,
+   * hand off: freeze the bag at the strut tip and fade it out while
+   * FurnaceBreakdownVisual takes over the chop. Empty (miss) reels still
+   * remove immediately — the miss fade timer owns that path.
+   */
   _onReelCompleted(payload) {
     const { key } = resolveNetId(payload);
+    if (payload && payload.capturedMass > 0) {
+      const vis = this._activeVisuals.get(key);
+      if (vis) {
+        vis.detached = true;   // state-driven updates stop; fade timer owns removal
+        this._fadeTimers.push({ key, timer: 0.8, duration: 0.8 });
+        return;
+      }
+    }
     this._removeNetVisual(key);
   }
 
@@ -486,6 +502,20 @@ export class CaptureNetVisual {
 
     // ── Update each active visual ──
     for (const [key, vis] of this._activeVisuals) {
+      // UX-11 #2: detached bag (post-chop hand-off) — the NetProjectile is
+      // gone; keep the fading bag seated at the strut tip (mother's
+      // co-orbiting frame) so it doesn't streak away at orbital speed while
+      // the fade timer plays out.
+      if (vis.detached) {
+        if (vis.armIndex >= 0 && this._player?.strutTipNodes?.[vis.armIndex]) {
+          this._player.strutTipNodes[vis.armIndex].getWorldPosition(vis.group.position);
+        } else if (this._player?.group) {
+          // Mother-pod catch — seat the fading bag on the mother body.
+          vis.group.position.copy(this._player.group.position);
+        }
+        continue;
+      }
+
       const net = this._getNet(vis.armIndex, vis.podIndex);
       if (!net) {
         this._removeNetVisual(key);
@@ -890,7 +920,11 @@ export class CaptureNetVisual {
         coneMesh.visible = true;
         vis.tetherLine.visible = true;
         if (!isFlash) coneMesh.material.color.setHex(COL_CAPTURED);
-        coneMesh.material.opacity = 0.55;
+        coneMesh.material.opacity = 0.55;   // steady — no pulse once captured (#3)
+        // UX-11 #3: static cinched bag — rim ring frozen at the closed radius
+        // on the mouth plane, spinAngle NOT advanced. The captured bag must
+        // read as a welded, settled catch, not a live animation.
+        this._setCinchedRim(vis);
         break;
 
       case STATES.MISSED:
@@ -898,15 +932,28 @@ export class CaptureNetVisual {
         coneMesh.visible = true;
         vis.tetherLine.visible = true;
         if (!isFlash) coneMesh.material.color.setHex(COL_MISSED);
-        // Opacity handled by fade timer
+        // Opacity handled by fade timer; hide the cinch furniture so no
+        // weights/strands linger at full opacity through the fade.
+        for (const w of rimWeights) w.visible = false;
+        drawstringLine.visible = false;
         break;
 
       case STATES.REELING:
         canisterMesh.visible = false;
         coneMesh.visible = net.catchResult === 'success';
         vis.tetherLine.visible = true;
-        if (coneMesh.visible && !isFlash) {
-          coneMesh.material.color.setHex(COL_CAPTURED);
+        if (coneMesh.visible) {
+          if (!isFlash) coneMesh.material.color.setHex(COL_CAPTURED);
+          // UX-11 #3: the haul/park can last many seconds (REELING is held
+          // through HOLDING_CATCH for daughter catches) — render a steady,
+          // fully-cinched bag: fixed opacity, frozen spin, rim ring pinned
+          // at the closed radius. No expand/contract pulse.
+          coneMesh.material.opacity = 0.55;
+          this._setCinchedRim(vis);
+        } else {
+          for (const w of rimWeights) w.visible = false;
+          drawstringLine.visible = false;
+          apexHub.visible = false;
         }
         break;
 
@@ -954,6 +1001,29 @@ export class CaptureNetVisual {
     }
 
     return false;
+  }
+
+  /**
+   * UX-11 #3: render the rim weights + drawstring as a STATIC fully-cinched
+   * ring at the closed radius on the mouth plane. Uses the frozen spinAngle
+   * (not advanced) so consecutive frames are identical — no pulse, no spin.
+   * @param {object} vis — entry from _activeVisuals
+   * @private
+   */
+  _setCinchedRim(vis) {
+    const { rimWeights, drawstringLine, apexHub, closedRadius, coneHeight, weightCount } = vis;
+    apexHub.visible = true;
+    drawstringLine.visible = true;
+    for (let i = 0; i < weightCount; i++) {
+      const angle = (2 * Math.PI * i / weightCount) + vis.spinAngle;
+      rimWeights[i].position.set(
+        closedRadius * Math.cos(angle),
+        closedRadius * Math.sin(angle),
+        -coneHeight,
+      );
+      rimWeights[i].visible = true;
+    }
+    this._updateDrawstring(vis);
   }
 
   /**

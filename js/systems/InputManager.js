@@ -44,13 +44,8 @@ export class InputManager {
     /** @type {number|null} Windup timeout handle */
     this._lassoWindupTimeout = null;
 
-    // ST-5.1: C-key tap/hold discrimination
-    /** @type {number|null} C keydown timestamp */
-    this._cKeyDownTs = null;
-    /** @type {number|null} C-hold timeout handle */
-    this._cHoldTimeout = null;
-    /** @type {boolean} Whether radial menu is currently open from C-hold */
-    this._cRadialOpen = false;
+    // UX-11 #9 (2026-06-11): the ST-5.1 C-key tap/hold state
+    // (_cKeyDownTs/_cHoldTimeout/_cRadialOpen) was removed with the radial menu.
 
     // PR 6 / P3.13: Audio unlock self-test state
     /** @type {boolean} Whether first user gesture has been handled for audio unlock */
@@ -364,6 +359,13 @@ export class InputManager {
     // PR 6 / P3.13: Audio unlock on first keydown gesture
     this._tryAudioUnlock();
 
+    // UX-11 #10: never treat typing in a text field (e.g. the Codex search
+    // box) as game hotkeys.
+    const tgt = e.target;
+    if (tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.isContentEditable)) {
+      return;
+    }
+
     // Anti-ASR guard for macOS Voice Control phantom "i" keystrokes.
     // Default OFF now that bare I = Inspection (Delegation 1 onboarding
     // hotkey rebind, 2026-05-31).  Re-enable via Constants.INPUT.SUPPRESS_BARE_I
@@ -513,7 +515,7 @@ export class InputManager {
     }
 
     // ST-5.1: Comms menu intercept removed — center popup deleted.
-    // RadialMenu handles command selection via C-hold + mouse.
+    // UX-11 #9: the C-hold RadialMenu was also removed; C = expand comms.
 
     switch (e.code) {
       // Confirm / Enter action (gameplay only — menu/briefing handle their own Enter)
@@ -665,31 +667,36 @@ export class InputManager {
         }
         break;
 
-      // S2.2: Deploy all arms (O key) / Recall all (Shift+O)
+      // S2.2: Deploy all arms (O key). Shift+O recall-all REMOVED (hotkey
+      // cleanup 2026-06-12) — recall-all now lives on Shift+R only.
       case 'KeyO':
-        if (isGameplay && d.armManager && !this.armPilotMode && !e.repeat) {
-          if (e.shiftKey) {
-            // Shift+O: recall all deployed arms
-            d.armManager.recallAll();
-          } else {
-            // O: deploy all docked arms to selected target
-            const target = d.targetSelector ? d.targetSelector.getActiveTarget() : null;
-            d.armManager.deployAllToTarget(target);
-          }
+        if (isGameplay && d.armManager && !this.armPilotMode && !e.repeat && !e.shiftKey) {
+          // O: deploy all docked arms to selected target
+          const target = d.targetSelector ? d.targetSelector.getActiveTarget() : null;
+          d.armManager.deployAllToTarget(target);
           d.audioSystem?.playClick();
         }
         break;
 
       // CP-2: de-spin laser (hold U). The continuous beam is driven by the held-key
       // poll in processInput(); this keydown only gives a no-target affordance.
+      // Issue 5c/9 (2026-06-12): also live in ARM_PILOT when the piloted arm is
+      // station-keeping a target (the SK readout advises "de-spin [U]").
       case 'KeyU':
-        if (isGameplay && !this.armPilotMode && !e.repeat
-            && Constants.isFeatureEnabled('LASER_DESPIN')) {
-          const dt = d.targetSelector ? d.targetSelector.getActiveTarget() : null;
-          if (!dt) {
+        if (isGameplay && !e.repeat && Constants.isFeatureEnabled('LASER_DESPIN')) {
+          let despinTarget = null;
+          if (this.armPilotMode) {
+            despinTarget = this._getPilotedSkDespinTarget();
+          } else {
+            despinTarget = d.targetSelector ? d.targetSelector.getActiveTarget() : null;
+          }
+          if (!despinTarget) {
             d.audioSystem?.playClickFail?.();
             eventBus.emit(Events.COMMS_MESSAGE, {
-              source: 'MOTHER', text: 'De-spin laser: select a tumbling target first.',
+              source: 'MOTHER',
+              text: this.armPilotMode
+                ? 'De-spin laser: piloted daughter must be station-keeping a target.'
+                : 'De-spin laser: select a tumbling target first.',
               channel: 'CMD', priority: 'warning',
             });
           }
@@ -721,10 +728,21 @@ export class InputManager {
       //   (1) ARM_PILOT (piloting a daughter)        → reel-in piloted daughter
       //   (2) Autopilot engaged (orbital / approach) → abort autopilot
       //   (3) Otherwise (ORBITAL_VIEW w/ deployed)   → recall closest deployed daughter
-      // Forge moved to F4 (was K) the same sprint; K is now free.
+      // Hotkey cleanup (2026-06-12): Shift+R = recall ALL deployed daughters
+      // (replaces H and Shift+O, both freed). Shift check FIRST — before the
+      // context chain.
+      // Forge moved to F4 (was K) that sprint, then to 5 (UX-11 #8); K is free.
       case 'KeyR':
         if (isGameplay) {
           e.preventDefault();
+          // (0) Shift+R: recall all deployed daughters
+          if (e.shiftKey) {
+            if (!e.repeat && d.armManager) {
+              eventBus.emit(Events.ARM_RECALL_ALL);
+              d.audioSystem?.playClick();
+            }
+            break;
+          }
           // (1) ARM_PILOT: reel piloted daughter (with or without debris)
           if (this.armPilotMode) {
             const pilotArmR = d.cameraSystem?.getPilotedArm?.();
@@ -779,25 +797,29 @@ export class InputManager {
         }
         break;
 
-      // K key — freed by Delegation 1 (2026-05-31).  Forge moved to F4.
-      // Reserved for future onboarding action; bare K is currently a no-op.
+      // K key — freed by Delegation 1 (2026-05-31).  Forge moved to F4, then
+      // to Digit5 (UX-11 #8, 2026-06-11).  Bare K is currently a no-op.
       case 'KeyK':
         // intentionally no-op (reserved)
         break;
 
-      // F4 — Forge (Kiln) toggle.  Moved from KeyK by Delegation 1 (2026-05-31)
-      // so K could be freed for onboarding work.  Cycles OFF → REFINE → PROPELLANT → OFF.
-      case 'F4':
-        if (isGameplay) {
-          eventBus.emit(Events.FORGE_TOGGLE);
-          d.audioSystem?.playClick();
-          e.preventDefault();
-        }
-        break;
+      // F4 removed (UX-11 #8, 2026-06-11): Forge toggle now lives on Digit5
+      // (number row, next to the 1-4 daughter keys). No alias retained.
 
-      // Toggle ARM PILOT mode (P key)
+      // Toggle ARM PILOT mode (P key).
+      // UX-11 #8 follow-up: Shift+P CYCLES the piloted/selected arm through
+      // every non-docked arm. This is the selection path for arms 5+ on
+      // Y1_HEX/Y3_OCTO tiers now that Digit5/6 are Forge/fuel (digits only
+      // reach arms 1-4).
       case 'KeyP':
         if (isGameplay) {
+          if (e.shiftKey) {
+            if (!e.repeat) {
+              this._cyclePilotedArm();
+              d.audioSystem.playClick();
+            }
+            break;
+          }
           if (this.armPilotMode) {
             // Exit arm pilot mode
             this._exitArmPilotCamera();
@@ -861,11 +883,10 @@ export class InputManager {
         }
         break;
 
-      // Recall all arms (H key)
+      // H key — freed by hotkey cleanup (2026-06-12): recall-all moved to
+      // Shift+R (was H and Shift+O). Bare H is a no-op (reserved).
       case 'KeyH':
-        if (isGameplay) {
-          if (d.armManager) d.armManager.recallAll();
-        }
+        // intentionally no-op (reserved)
         break;
 
       // D key — Delegation 1 (2026-05-31) onboarding rebind:
@@ -1008,24 +1029,22 @@ export class InputManager {
         }
         break;
 
-      // ST-5.1: C key — tap/hold discrimination (replaces toggleComms)
+      // UX-11 #9 (2026-06-11): C is a plain tap — expand/focus comms with
+      // ZERO hold delay. The C-hold radial menu was removed: every radial
+      // action already has a direct key (D deploy, Shift+R recall, P pilot,
+      // Ctrl+Shift+D deorbit) and the tap/hold discrimination added latency
+      // to the common "expand comms" verb.
+      // UX-11 #5: Shift+C toggles the Earth city labels (off by default).
       case 'KeyC':
         if (!e.repeat) {
-          this._cKeyDownTs = Date.now();
-          // Start hold timer — if held ≥ C_HOLD_THRESHOLD_MS, open radial
-          if (this._cHoldTimeout) clearTimeout(this._cHoldTimeout);
-          this._cHoldTimeout = setTimeout(() => {
-            this._cRadialOpen = true;
-            // Compute anchor position: target reticle or screen center
-            let ax = window.innerWidth / 2;
-            let ay = window.innerHeight / 2;
-            if (d.targetReticle && d.targetReticle.getScreenPosition) {
-              const sp = d.targetReticle.getScreenPosition();
-              if (sp) { ax = sp.x; ay = sp.y; }
-            }
-            eventBus.emit(Events.COMMS_RADIAL_OPEN, { x: ax, y: ay });
+          if (e.shiftKey) {
+            eventBus.emit(Events.CITY_LABELS_TOGGLE);
             d.audioSystem?.playClick();
-          }, Constants.COMMS.C_HOLD_THRESHOLD_MS);
+            e.preventDefault();
+            break;
+          }
+          eventBus.emit(Events.COMMS_FOCUS);
+          d.audioSystem?.playClick();
           // Skills discovery: comms opened
           eventBus.emit(Events.COMMS_OPENED);
         }
@@ -1174,7 +1193,7 @@ export class InputManager {
         break;
 
       // T key — Tool Deploy (smart context).  Delegation 1 (2026-05-31)
-      // onboarding rebind: T was FUEL_CYCLE; that emit moved to F5 (below)
+      // onboarding rebind: T was FUEL_CYCLE; that emit now lives on Digit6
       // so the bare alpha keys remain available for onboarding verbs.
       case 'KeyT':
         if (isGameplay && !e.repeat) {
@@ -1188,15 +1207,8 @@ export class InputManager {
         }
         break;
 
-      // F5 — FEEP fuel cycle (Propellant).  Moved from KeyT by Delegation 1
-      // (2026-05-31).  Dual-metal FEEP thruster (Phase 4).
-      case 'F5':
-        if (isGameplay) {
-          eventBus.emit(Events.FUEL_CYCLE);
-          d.audioSystem?.playClick();
-          e.preventDefault();
-        }
-        break;
+      // F5 removed (UX-11 #8, 2026-06-11): FEEP fuel cycle now lives on Digit6
+      // (number row, next to the Forge on 5). No alias retained.
 
       // Space — deploy net in ARM PILOT mode, or fire lasso otherwise.
       // Delegation 2 (2026-05-31): in ORBITAL_VIEW, the OnboardingDirector
@@ -1340,16 +1352,24 @@ export class InputManager {
           d.audioSystem.playClick();
         }
         break;
+      // UX-11 #8 (2026-06-11): 5 = Forge (Kiln) toggle, 6 = FEEP fuel cycle.
+      // The number row reads left→right as "daughters 1-4, forge 5, fuel 6,
+      // mother 7". Works in both ORBITAL and ARM_PILOT (no arm-switch
+      // collision: 1-4 select daughters). Y1+/Y3 tiers carry >4 arms;
+      // arms beyond index 3 are selected by cycling with Shift+P
+      // (InputManager._cyclePilotedArm), not digits.
       case 'Digit5':
         if (isGameplay) {
-          this._handleArmKey(4);
-          d.audioSystem.playClick();
+          eventBus.emit(Events.FORGE_TOGGLE);
+          d.audioSystem?.playClick();
+          e.preventDefault();
         }
         break;
       case 'Digit6':
         if (isGameplay) {
-          this._handleArmKey(5);
-          d.audioSystem.playClick();
+          eventBus.emit(Events.FUEL_CYCLE);
+          d.audioSystem?.playClick();
+          e.preventDefault();
         }
         break;
       case 'Digit7':
@@ -1465,32 +1485,49 @@ export class InputManager {
    */
   _handleKeyUp(e) {
     this.keys[e.code] = false;
-
-    // ST-5.1: C key release — discriminate tap vs hold
-    if (e.code === 'KeyC') {
-      if (this._cHoldTimeout) {
-        clearTimeout(this._cHoldTimeout);
-        this._cHoldTimeout = null;
-      }
-      if (this._cRadialOpen) {
-        // Hold release — close radial (select highlighted option)
-        this._cRadialOpen = false;
-        eventBus.emit(Events.COMMS_RADIAL_CLOSE, { select: true });
-      } else if (this._cKeyDownTs != null) {
-        // Tap — expand comms pane
-        const elapsed = Date.now() - this._cKeyDownTs;
-        if (elapsed < (Constants.COMMS.C_HOLD_THRESHOLD_MS || 300)) {
-          eventBus.emit(Events.COMMS_FOCUS);
-          this._deps?.audioSystem?.playClick();
-        }
-      }
-      this._cKeyDownTs = null;
-    }
+    // UX-11 #9: the C tap/hold discrimination (radial menu) was removed —
+    // C now acts on keydown with zero delay. No keyup handling needed.
   }
 
   // ==========================================================================
   // ARM KEY HELPERS (Phase 1B)
   // ==========================================================================
+
+  /**
+   * UX-11 #8 follow-up: cycle the selected/piloted arm through every
+   * non-docked, non-expended arm (wraps). This is the keyboard selection
+   * path for arms beyond index 3 on Y1_HEX/Y3_OCTO tiers, since Digit5/6
+   * now belong to Forge/fuel. Bound to Shift+P.
+   * @private
+   */
+  _cyclePilotedArm() {
+    const d = this._deps;
+    if (!d.armManager) return;
+    const S = Constants.ARM_STATES;
+    const arms = d.armManager.arms || [];
+    const eligible = [];
+    for (let i = 0; i < arms.length; i++) {
+      const a = arms[i];
+      if (a && a.state !== S.DOCKED && a.state !== S.EXPENDED) eligible.push(i);
+    }
+    if (eligible.length === 0) {
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        text: 'No deployed arms to cycle — deploy with D or 1-4 first',
+        priority: 'warning',
+      });
+      return;
+    }
+    const cur = d.armManager.selectedArmIndex;
+    const pos = eligible.indexOf(cur);
+    const nextIndex = eligible[(pos + 1) % eligible.length];
+    const arm = arms[nextIndex];
+    d.armManager.selectArm(nextIndex);
+    this._enterArmPilotCamera(arm);
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      text: `ARM PILOT — controlling ${arm.id} (Shift+P cycles)`,
+      priority: 'info',
+    });
+  }
 
   /**
    * Handle arm number key press (1-6): deploy if docked, select if deployed,
@@ -1621,22 +1658,47 @@ export class InputManager {
   }
 
   /**
+   * Resolve the de-spin laser's override target while piloting a daughter.
+   * Eligible only when the piloted arm is in STATION_KEEP; returns its SK
+   * target (or null). Single source of truth shared by the KeyU no-target
+   * affordance and the processInput() laser steering, so the warning and
+   * the actual beam eligibility can never drift apart.
+   * @returns {object|null}
+   */
+  _getPilotedSkDespinTarget() {
+    const pilotArm = this._deps.cameraSystem?.getPilotedArm?.();
+    if (pilotArm && pilotArm.state === Constants.ARM_STATES.STATION_KEEP) {
+      return pilotArm._stationKeepTarget || pilotArm.target || null;
+    }
+    return null;
+  }
+
+  /**
    * Process held keys into thrust commands.
    * @param {number} dt - Real-time delta (seconds)
    */
   processInput(dt) {
     const d = this._deps;
 
-    // CP-2: mother-mounted de-spin laser — hold U (command view only). Set the
-    // fire intent every frame BEFORE the overlay early-returns so it always
-    // releases when an overlay opens or the key is let go.
+    // CP-2: mother-mounted de-spin laser — hold U. Set the fire intent every
+    // frame BEFORE the overlay early-returns so it always releases when an
+    // overlay opens or the key is let go.
+    // Issue 5c/9 (2026-06-12): U now ALSO works while piloting a daughter in
+    // STATION_KEEP — the SK readout advises "de-spin [U]", so the advisory must
+    // point at a live key. The laser is steered at the piloted arm's SK target
+    // (override), not the Tab-locked selector target.
     const overlayOpen = !!((d.codexViewerUI && d.codexViewerUI.isVisible && d.codexViewerUI.isVisible())
       || (d.hotkeyOverlay && d.hotkeyOverlay.isVisible && d.hotkeyOverlay.isVisible())
       || (d.debrisMap && d.debrisMap.isVisible && d.debrisMap.isVisible())
       || (d.strategicMap && d.strategicMap.isOpen && d.strategicMap.isOpen()));
+    let skDespinTarget = null;
+    if (this.armPilotMode) {
+      skDespinTarget = this._getPilotedSkDespinTarget();
+    }
+    despinLaser.setOverrideTarget(skDespinTarget);
     despinLaser.setFiring(
       !overlayOpen
-      && !this.armPilotMode
+      && (!this.armPilotMode || !!skDespinTarget)
       && (d.gameState && d.gameState.isGameplay && d.gameState.isGameplay())
       && this.keys['KeyU'] === true,
     );

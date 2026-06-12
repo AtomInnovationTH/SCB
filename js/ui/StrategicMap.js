@@ -33,6 +33,7 @@ try {
 
 import { Constants } from '../core/Constants.js';
 import { Events } from '../core/Events.js';
+import { hohmannDeltaV } from '../entities/OrbitalMechanics.js';
 
 // ============================================================================
 // PURE HELPERS — Node-safe, no THREE dependency
@@ -167,6 +168,63 @@ export function formatThreatList(pairs, debrisField) {
   });
 }
 
+/**
+ * UX-11 #7: rough two-burn Hohmann ΔV between two circular orbits (km).
+ * Thin wrapper over the authoritative
+ * [`hohmannDeltaV`](js/entities/OrbitalMechanics.js:272) (single source of
+ * the formula + Constants.MU_EARTH — review fix: no second hardcoded μ),
+ * converted to m/s for the guidance panel.
+ * @param {number} r1Km — initial orbit radius (km, from Earth's center)
+ * @param {number} r2Km — target orbit radius (km)
+ * @returns {number} total ΔV in m/s
+ */
+export function hohmannDvMs(r1Km, r2Km) {
+  if (!(r1Km > 0) || !(r2Km > 0)) return 0;
+  if (Math.abs(r1Km - r2Km) < 1e-9) return 0;
+  return hohmannDeltaV(r1Km, r2Km).total * 1000;
+}
+
+/**
+ * UX-11 #7: pick the best "next cluster" — highest salvage value for the
+ * cheapest transfer. Pure + Node-testable; the StrategicMap guidance panel
+ * renders the result and points the player at the Debris Map (cluster
+ * selection deliberately stays there — no split-brain).
+ *
+ * Score = totalMassKg / (1 + dvMs/100): value buys distance, but a cluster
+ * 500 m/s away must be ~6× richer than one in plane to win.
+ *
+ * @param {Array<object>} clusters — DebrisField.getDebrisClusters() output
+ *   ({ name, count, totalMassKg, avgAltKm, targets? })
+ * @param {number} playerAltKm — player altitude (km above surface)
+ * @param {number} [earthRadiusKm=6371]
+ * @returns {{ cluster: object, dvMs: number, score: number, why: string }|null}
+ */
+export function recommendNextCluster(clusters, playerAltKm, earthRadiusKm = 6371) {
+  if (!Array.isArray(clusters) || clusters.length === 0) return null;
+  if (typeof playerAltKm !== 'number' || !isFinite(playerAltKm)) return null;
+
+  let best = null;
+  for (const c of clusters) {
+    if (!c || !(c.count > 0)) continue;
+    // Skip clusters with no live members when target refs are present.
+    if (Array.isArray(c.targets) && !c.targets.some(t => t && t.alive)) continue;
+    const altKm = (typeof c.avgAltKm === 'number') ? c.avgAltKm : playerAltKm;
+    const dvMs = hohmannDvMs(earthRadiusKm + playerAltKm, earthRadiusKm + altKm);
+    const value = c.totalMassKg || c.count || 0;
+    const score = value / (1 + dvMs / 100);
+    if (!best || score > best.score) {
+      best = { cluster: c, dvMs, score, why: '' };
+    }
+  }
+  if (!best) return null;
+
+  const c = best.cluster;
+  const mass = Math.round(c.totalMassKg || 0).toLocaleString();
+  const dvTxt = best.dvMs < 1 ? 'in plane' : `~${Math.round(best.dvMs)} m/s transfer`;
+  best.why = `${c.count} targets · ${mass} kg salvage · ${dvTxt}`;
+  return best;
+}
+
 // ============================================================================
 // STRATEGIC MAP CLASS — browser-only (requires THREE.js + DOM)
 // ============================================================================
@@ -215,6 +273,12 @@ export class StrategicMap {
     this._threatListEl = null;
     this._legendEl = null;
     this._containerEl = null;
+    /** @type {HTMLElement|null} UX-11 #7: "RECOMMENDED NEXT" guidance panel */
+    this._guidanceEl = null;
+    /** @type {number} throttle for the guidance recompute (seconds) */
+    this._guidanceTimer = 0;
+    /** @type {boolean} one-shot first-open teaching hint */
+    this._openHintShown = false;
 
     // Mouse orbit state
     this._mouseDown = false;
@@ -321,6 +385,19 @@ export class StrategicMap {
 
     // Emit event
     if (this._eventBus) this._eventBus.emit(Events.STRATEGIC_MAP_OPENED);
+
+    // UX-11 #7: refresh guidance immediately + first-open teaching hint
+    this._guidanceTimer = 999; // force recompute on next update tick
+    this._updateGuidance();
+    if (!this._openHintShown && this._eventBus) {
+      this._openHintShown = true;
+      this._eventBus.emit(Events.COMMS_MESSAGE, {
+        sender: 'HOUSTON',
+        text: 'Strategic view: red = high MOID threat, green stations = downlink. Pick your next cluster on the Debris Map (`), then Shift+A to engage.',
+        priority: 'info',
+        _postOnboarding: true,
+      });
+    }
   }
 
   /** Transition back to gameplay. */
@@ -393,6 +470,13 @@ export class StrategicMap {
 
     // --- Update legend/status ---
     this._updateLegend();
+
+    // --- UX-11 #7: refresh "RECOMMENDED NEXT" guidance (throttled, 2 s) ---
+    this._guidanceTimer += dt;
+    if (this._guidanceTimer >= 2.0) {
+      this._guidanceTimer = 0;
+      this._updateGuidance();
+    }
 
     // --- MOID pulse animation on HI-badge debris ---
     this._animatePulse(dt);
@@ -660,6 +744,17 @@ export class StrategicMap {
       font-family: 'Courier New', monospace; color: #00ff88;
     `;
 
+    // UX-11 #7: guidance panel (top-left) — "what do I do here?"
+    this._guidanceEl = document.createElement('div');
+    this._guidanceEl.style.cssText = `
+      position: absolute; top: 70px; left: 20px;
+      background: rgba(5, 10, 20, 0.9); border: 1px solid rgba(0, 204, 255, 0.4);
+      border-radius: 4px; padding: 10px 14px; pointer-events: auto;
+      font-size: 11px; min-width: 260px; max-width: 340px; line-height: 1.5;
+    `;
+    this._guidanceEl.innerHTML = '<div style="color:#00ccff;font-weight:bold;margin-bottom:6px">🎯 RECOMMENDED NEXT</div><div id="guidance-body">Scanning clusters…</div>';
+    this._containerEl.appendChild(this._guidanceEl);
+
     // Threat list (bottom-left)
     this._threatListEl = document.createElement('div');
     this._threatListEl.style.cssText = `
@@ -752,9 +847,46 @@ export class StrategicMap {
     }
   }
 
+  /**
+   * UX-11 #7: refresh the "RECOMMENDED NEXT" guidance panel. View-only by
+   * design — cluster selection stays on the Debris Map (`) to avoid a
+   * split-brain UX; this panel tells the player WHERE to go and HOW.
+   * @private
+   */
+  _updateGuidance() {
+    if (!this._guidanceEl) return;
+    const body = this._guidanceEl.querySelector('#guidance-body');
+    if (!body) return;
+
+    let clusters = [];
+    try {
+      clusters = (this._debrisField && typeof this._debrisField.getDebrisClusters === 'function')
+        ? this._debrisField.getDebrisClusters() : [];
+    } catch (_) { /* keep empty */ }
+
+    const altKm = (this._player && typeof this._player.getAltitudeKm === 'function')
+      ? this._player.getAltitudeKm() : null;
+
+    const rec = recommendNextCluster(clusters, typeof altKm === 'number' ? altKm : NaN);
+    if (!rec) {
+      body.innerHTML = `
+        <div style="color:#88ffaa;">No live clusters in the field.</div>
+        <div style="color:#8899aa;margin-top:4px;">Check the Debris Map (<b style="color:#00ccff;">\`</b>) for fresh contacts.</div>`;
+      return;
+    }
+
+    const c = rec.cluster;
+    body.innerHTML = `
+      <div style="color:#88ffaa;font-weight:bold;">${c.name || c.id || 'Cluster'}</div>
+      <div style="color:#aabbcc;">${rec.why}</div>
+      <div style="color:#8899aa;margin-top:6px;border-top:1px solid rgba(0,204,255,0.15);padding-top:6px;">
+        Select it on the Debris Map (<b style="color:#00ccff;">\`</b>),
+        then <b style="color:#00ccff;">Shift+A</b> to engage.
+      </div>`;
+  }
+
   _updateThreatList() {
     if (!this._threatListEl || !this._conjunction) return;
-
     const SM = Constants.STRATEGIC_MAP;
     const pairs = this._conjunction.getTopRiskPairs(SM.THREAT_LIST_COUNT);
     const formatted = formatThreatList(pairs, this._debrisField);
@@ -793,14 +925,14 @@ export class StrategicMap {
     this._legendEl.innerHTML = `
       <div style="color:#00ccff;font-weight:bold;margin-bottom:6px">📊 STATUS</div>
       <div>Alt: ${typeof alt === 'number' ? alt.toFixed(1) : alt} km</div>
-      <div style="margin-top:8px;color:#00ccff;font-weight:bold">🎨 LEGEND</div>
-      <div><span style="color:${SM.DOT_COLOR_DEBRIS}">●</span> debris</div>
-      <div><span style="color:${SM.DOT_COLOR_ROCKET_BODY}">●</span> rocket body</div>
-      <div><span style="color:${SM.DOT_COLOR_INACTIVE}">●</span> inactive sat</div>
-      <div><span style="color:${SM.DOT_COLOR_ACTIVE}">●</span> active sat</div>
-      <div><span style="color:${SM.DOT_COLOR_FRAGMENT}">●</span> fragment</div>
-      <div><span style="color:${SM.PLAYER_COLOR}">●</span> player</div>
-      <div><span style="color:${SM.GROUND_STATION_COLOR}">●</span> ground station</div>
+      <div style="margin-top:8px;color:#00ccff;font-weight:bold">🎨 LEGEND <span style="font-weight:normal;color:#667;">(hover)</span></div>
+      <div title="Tracked junk — your salvage. Capture it with daughters, nets, or the lasso."><span style="color:${SM.DOT_COLOR_DEBRIS}">●</span> debris</div>
+      <div title="Spent upper stages — heavy, high-value salvage. The #1 source of new fragments when they explode."><span style="color:${SM.DOT_COLOR_ROCKET_BODY}">●</span> rocket body</div>
+      <div title="Dead satellites — fair game under your contract. Often tumbling: de-spin (hold U) before netting."><span style="color:${SM.DOT_COLOR_INACTIVE}">●</span> inactive sat</div>
+      <div title="LIVE spacecraft — strictly off-limits (treaty guard will refuse arming). Red pulses mark high-MOID threats near them."><span style="color:${SM.DOT_COLOR_ACTIVE}">●</span> active sat</div>
+      <div title="Collision shrapnel — small, fast, numerous. The Kessler feedstock; trawl sweeps clear them in bulk."><span style="color:${SM.DOT_COLOR_FRAGMENT}">●</span> fragment</div>
+      <div title="You — the mothership. The white ellipse is your current orbit."><span style="color:${SM.PLAYER_COLOR}">●</span> player</div>
+      <div title="Downlink sites — scan survey data is sold here. Green = your paycheck."><span style="color:${SM.GROUND_STATION_COLOR}">●</span> ground station</div>
       ${effectsHtml}
     `;
   }

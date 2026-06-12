@@ -12,6 +12,8 @@ import {
   latLonToPosition,
   catalogTypeToColor,
   formatThreatList,
+  hohmannDvMs,
+  recommendNextCluster,
   StrategicMap,
 } from '../ui/StrategicMap.js';
 
@@ -418,5 +420,76 @@ describe('StrategicMap — ALT_BAND ring count', () => {
   it('ALT_BAND_COLORS has 7 entries matching band count', () => {
     assert.equal(Constants.STRATEGIC_MAP.ALT_BAND_COLORS.length, 7);
     assert.equal(Constants.STRATEGIC_MAP.ALT_BAND_OPACITY.length, 7);
+  });
+});
+
+// ============================================================================
+// UX-11 #7: recommend-next-cluster scorer (pure)
+// ============================================================================
+
+describe('StrategicMap — hohmannDvMs (UX-11 #7)', () => {
+  it('same orbit → 0 m/s', () => {
+    assert.equal(hohmannDvMs(6771, 6771), 0);
+  });
+
+  it('LEO 400→800 km is a few hundred m/s and grows with separation', () => {
+    const dv400to800 = hohmannDvMs(6771, 7171);
+    const dv400to1200 = hohmannDvMs(6771, 7571);
+    assert.ok(dv400to800 > 100 && dv400to800 < 400,
+      `400→800 km should be ~220 m/s, got ${dv400to800.toFixed(0)}`);
+    assert.ok(dv400to1200 > dv400to800, 'farther transfer costs more');
+  });
+
+  it('is symmetric up vs down', () => {
+    const up = hohmannDvMs(6771, 7171);
+    const down = hohmannDvMs(7171, 6771);
+    assert.ok(Math.abs(up - down) < 1e-6);
+  });
+
+  it('invalid radii → 0 (defensive)', () => {
+    assert.equal(hohmannDvMs(0, 7000), 0);
+    assert.equal(hohmannDvMs(7000, -1), 0);
+  });
+});
+
+describe('StrategicMap — recommendNextCluster (UX-11 #7)', () => {
+  function cluster(name, count, massKg, altKm, targets) {
+    return { id: name, name, count, totalMassKg: massKg, avgAltKm: altKm, targets };
+  }
+
+  it('prefers a rich nearby cluster over a slightly richer far one', () => {
+    const near = cluster('NEAR', 8, 4000, 410);
+    const far = cluster('FAR', 8, 5000, 1400);   // ~500 m/s away
+    const rec = recommendNextCluster([far, near], 400);
+    assert.equal(rec.cluster.name, 'NEAR');
+    assert.ok(rec.why.includes('8 targets'), rec.why);
+    assert.ok(rec.why.includes('4,000 kg'), rec.why);
+  });
+
+  it('a vastly richer far cluster can still win', () => {
+    const near = cluster('NEAR', 2, 100, 405);
+    const far = cluster('FAR', 30, 50000, 1400);
+    const rec = recommendNextCluster([near, far], 400);
+    assert.equal(rec.cluster.name, 'FAR');
+    assert.ok(rec.dvMs > 100, 'far transfer cost reported');
+  });
+
+  it('skips empty clusters and clusters with no live members', () => {
+    const empty = cluster('EMPTY', 0, 0, 400);
+    const dead = cluster('DEAD', 3, 900, 400, [{ alive: false }, { alive: false }]);
+    const live = cluster('LIVE', 1, 50, 800, [{ alive: true }]);
+    const rec = recommendNextCluster([empty, dead, live], 400);
+    assert.equal(rec.cluster.name, 'LIVE');
+  });
+
+  it('returns null for no clusters / invalid altitude', () => {
+    assert.equal(recommendNextCluster([], 400), null);
+    assert.equal(recommendNextCluster([cluster('X', 1, 10, 400)], NaN), null);
+    assert.equal(recommendNextCluster(null, 400), null);
+  });
+
+  it('in-plane cluster reads "in plane" in the why-line', () => {
+    const rec = recommendNextCluster([cluster('HOME', 5, 1000, 400)], 400);
+    assert.ok(rec.why.includes('in plane'), rec.why);
   });
 });

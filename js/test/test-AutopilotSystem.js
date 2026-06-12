@@ -1125,3 +1125,152 @@ describe('Autopilot — Station-keeping recoil compensation', () => {
       `after 2nd fire: expected ~${totalExpected.toFixed(4)}, got ${ap.getStationKeepDeltaV().toFixed(4)}`);
   });
 });
+
+// ============================================================================
+// SUITE: TRAWL GATE — SELF-HEAL + ABORT-ON-SECOND-PRESS (UX-11 #4)
+// ============================================================================
+
+describe('Autopilot — Trawl gate self-heal + abort override', () => {
+
+  it('stale _trawlActive with inactive TrawlManager self-heals and engages', () => {
+    const target = makeTarget({ id: 42 });
+    const ap = makeAP({
+      targetSelector: makeTargetSelector({ active: target }),
+      trawlManager: { active: false },
+    });
+    ap._trawlActive = true;  // simulate stuck flag (sweep never completed)
+    ap.engage();
+    assert.equal(ap._trawlActive, false, 'stale flag must be cleared');
+    assert.equal(ap.engaged, true, 'AP must engage after self-heal');
+  });
+
+  it('genuine trawl: first A denies + arms abort; second A emits TRAWL_ABORT and engages', () => {
+    const target = makeTarget({ id: 42 });
+    const trawlManager = { active: true };
+    const ap = makeAP({
+      targetSelector: makeTargetSelector({ active: target }),
+      trawlManager,
+    });
+    ap._trawlActive = true;
+
+    // Simulate TrawlManager's abort handling: end sweep + emit completion
+    eventBus.on(Events.TRAWL_ABORT, () => {
+      trawlManager.active = false;
+      eventBus.emit(Events.TRAWL_SWEEP_COMPLETE, { duration: 0, targetsEntered: 0 });
+    });
+    const abortLog = trackEvents(Events.TRAWL_ABORT);
+
+    ap.engage();   // first press — denied, arms abort
+    assert.equal(ap.engaged, false, 'first press must not engage');
+    assert.equal(ap._trawlAbortArmed, true, 'first press must arm the abort');
+    assert.equal(abortLog.length, 0, 'no abort on first press');
+
+    ap.engage();   // second press — abort + engage
+    assert.equal(abortLog.length, 1, 'second press must emit TRAWL_ABORT');
+    assert.equal(ap._trawlActive, false, 'sweep-complete must clear the flag');
+    assert.equal(ap.engaged, true, 'second press must engage');
+  });
+
+  it('TRAWL_SWEEP_COMPLETE disarms a pending abort', () => {
+    const target = makeTarget({ id: 42 });
+    const ap = makeAP({
+      targetSelector: makeTargetSelector({ active: target }),
+      trawlManager: { active: true },
+    });
+    ap._trawlActive = true;
+    ap.engage();   // denied → armed
+    assert.equal(ap._trawlAbortArmed, true);
+    eventBus.emit(Events.TRAWL_SWEEP_COMPLETE, {});
+    assert.equal(ap._trawlAbortArmed, false, 'completion must disarm the abort');
+    assert.equal(ap._trawlActive, false);
+  });
+
+  it('ΔV guard runs BEFORE the trawl abort — low-ΔV double-A never kills the sweep', () => {
+    const target = makeTarget({ id: 42 });
+    const trawlManager = { active: true };
+    const ap = makeAP({
+      targetSelector: makeTargetSelector({ active: target }),
+      trawlManager,
+      armManager: makeArmManager(10),   // ΔV far below ENGAGE_DV_MIN (50)
+    });
+    ap._trawlActive = true;
+    const abortLog = trackEvents(Events.TRAWL_ABORT);
+
+    ap.engage();   // denied on ΔV — must not arm the abort
+    ap.engage();   // still denied on ΔV — must not emit TRAWL_ABORT
+    assert.equal(abortLog.length, 0, 'no destructive abort while engage is ΔV-denied');
+    assert.equal(ap._trawlAbortArmed, false, 'abort never armed under ΔV denial');
+    assert.equal(ap._trawlActive, true, 'sweep untouched');
+    assert.equal(ap.engaged, false);
+  });
+});
+
+// ============================================================================
+// SUITE: ONE-TAP RE-ACQUIRE (UX-11 #11 — A with no target)
+// ============================================================================
+
+describe('Autopilot — One-tap re-acquire with no target', () => {
+
+  function makeSelectableTargetSelector() {
+    const ts = makeTargetSelector({ active: null });
+    ts.setTarget = function (debris, context = {}) {
+      this._active = debris;
+      this._lastContext = context;
+    };
+    return ts;
+  }
+
+  it('A with no target auto-selects nearest live large debris and engages', () => {
+    const near = makeTarget({ id: 7 });
+    near.mass = 120;
+    const far = makeTarget({
+      id: 8,
+      orbit: {
+        semiMajorAxis: Constants.EARTH_RADIUS + Constants.START_ALTITUDE + 0.5,
+        eccentricity: 0.001, inclination: 51.6 * Math.PI / 180,
+        raan: 0, argPerigee: 0, trueAnomaly: 1.5, meanMotion: 0,
+      },
+    });
+    far.mass = 200;
+    const ts = makeSelectableTargetSelector();
+    const ap = makeAP({
+      targetSelector: ts,
+      debrisField: makeDebrisField([far, near]),
+    });
+
+    const noTargetLog = trackEvents(Events.AUTOPILOT_NO_TARGET);
+    ap.engage();
+
+    assert.equal(noTargetLog.length, 0, 'must NOT emit AUTOPILOT_NO_TARGET when a contact exists');
+    assert.equal(ap.engaged, true, 'must engage in one press');
+    assert.equal(ts.getActiveTarget()?.id, 7, 'nearest large debris must become the selected target');
+    assert.equal(ap.headingMode, 'TARGET');
+  });
+
+  it('A with only small debris falls back to any-mass acquire (advisor parity)', () => {
+    const small = makeTarget({ id: 9 });
+    small.mass = 5;  // below LARGE_DEBRIS_MASS — fallback path must still engage
+    const ts = makeSelectableTargetSelector();
+    const ap = makeAP({
+      targetSelector: ts,
+      debrisField: makeDebrisField([small]),
+    });
+    const noTargetLog = trackEvents(Events.AUTOPILOT_NO_TARGET);
+    ap.engage();
+    assert.equal(noTargetLog.length, 0, 'small-only field must NOT dead-end');
+    assert.equal(ap.engaged, true, 'fallback acquires any live debris');
+    assert.equal(ts.getActiveTarget()?.id, 9);
+  });
+
+  it('A with a truly empty field emits AUTOPILOT_NO_TARGET', () => {
+    const ts = makeSelectableTargetSelector();
+    const ap = makeAP({
+      targetSelector: ts,
+      debrisField: makeDebrisField([]),
+    });
+    const noTargetLog = trackEvents(Events.AUTOPILOT_NO_TARGET);
+    ap.engage();
+    assert.equal(noTargetLog.length, 1, 'no live debris at all → AUTOPILOT_NO_TARGET');
+    assert.equal(ap.engaged, false);
+  });
+});
