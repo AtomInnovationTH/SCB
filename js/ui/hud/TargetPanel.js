@@ -10,6 +10,8 @@ import { eventBus } from '../../core/EventBus.js';
 import { Events } from '../../core/Events.js';
 import { computeTotalSalvageDeltaV } from '../../entities/OrbitalMechanics.js';
 import { assessNetFit } from '../../entities/CaptureNet.js';
+import { computeToolOdds, computeBestTool, toolShortLabel } from '../../systems/ToolOdds.js';
+import { dossierSystem, appraiseSalvage } from '../../systems/DossierSystem.js';
 import { PaneChrome } from './PaneChrome.js';
 
 export class TargetPanel {
@@ -343,6 +345,65 @@ export class TargetPanel {
   }
 
   /**
+   * @private Phase 0.1 (capture-feedback overhaul): the daughter whose net
+   * class judges the capture-fit badge — the player-selected arm when one is
+   * selected, else the next-available (docked, charged, fuelled) daughter.
+   * @returns {object|null} ArmUnit or null when no arm context exists
+   */
+  _getFitBadgeArm() {
+    const am = this._armManager;
+    if (!am || !Array.isArray(am.arms) || am.arms.length === 0) return null;
+    const sel = (typeof am.getSelectedArm === 'function') ? am.getSelectedArm() : null;
+    if (sel) return sel;
+    return am.arms.find(a => a.state === 'DOCKED' && a.springCharged && a.fuel > 0) || null;
+  }
+
+  /**
+   * @private Phase 1c (capture-feedback overhaul): best-tool + odds badge for
+   * one target judged by one arm — `NET 92%` / `GRAB\u25B6 95%` / `TOO WIDE`.
+   * Uses the same ToolOdds model as the reticle odds strip (SSOT).
+   * @returns {string} HTML span
+   */
+  _renderBestToolBadge(arm, t) {
+    const toolset = arm.toolset
+      || (Constants.DAUGHTER_TOOLSETS && Constants.DAUGHTER_TOOLSETS[arm.type])
+      || ['NET'];
+    const netCount = (typeof arm.getNetInventory === 'function') ? arm.getNetInventory() : undefined;
+    // Range: when the arm is already station-keeping THIS target, use its live
+    // standoff so the badge matches the reticle odds strip exactly (SSOT).
+    // Otherwise omit it — computeToolOdds assumes the 50 m nominal standoff,
+    // which is the honest planning number for a not-yet-dispatched arm (the
+    // mother→target distance is the wrong axis: capture happens at standoff).
+    let range;
+    if (arm._stationKeepTarget && arm._stationKeepTarget === t
+        && typeof arm._standoffR === 'number' && arm._standoffR > 0) {
+      range = arm._standoffR;
+    }
+    const odds = computeToolOdds({
+      armType: arm.type,
+      toolset,
+      target: t,
+      range,
+      netCount,
+      padUvDoses: arm._padUvCureDosesRemaining,
+    });
+    const best = computeBestTool(odds, toolset);
+    const o = odds[best];
+    const label = toolShortLabel(best);
+    if (o && o.p != null && o.p > 0) {
+      const cap = (Constants.TOOL_ODDS && Constants.TOOL_ODDS.DISPLAY_CAP) ?? 0.99;
+      const pct = Math.round(Math.min(o.p, cap) * 100);
+      const col = pct >= 80 ? '#00ffaa' : pct >= 50 ? '#ffd166' : '#ff7755';
+      return `<span style="color:${col};font-size:9px;font-weight:bold;" title="Best tool odds (${arm.type})">${label} ${pct}%</span>`;
+    }
+    // Nothing rollable — name the blocker (e.g. TOO WIDE / EMPTY).
+    const netBlocker = (odds.NET && odds.NET.blocker) || (o && o.blocker) || 'NO TOOL';
+    const word = netBlocker === 'WIDE' ? 'TOO WIDE'
+      : netBlocker === 'HEAVY' ? 'TOO HEAVY' : netBlocker;
+    return `<span style="color:#ff7755;font-size:9px;font-weight:bold;" title="No viable tool (${arm.type})">${word}</span>`;
+  }
+
+  /**
    * Update the target list display. Called at 2 Hz from the coordinator.
    * @param {object} data
    * @param {Array}  data.cachedTargets
@@ -444,13 +505,34 @@ export class TargetPanel {
             const moidBadge = this._renderMoidBadge(t);
             const moidStat = this._renderMoidStat(t);
 
-            // Item 4 (2026-06-12): capture-fit badge — same assessNetFit the
-            // reticle advisory + ToolRecommender width fork use (SSOT). Judged
-            // against the larger daughter net (Weaver MEDIUM).
-            const netFit = assessNetFit(t, Constants.CAPTURE_NET && Constants.CAPTURE_NET.MEDIUM);
-            const fitColor = netFit.fit === 'OK' ? '#00ffaa'
-              : netFit.fit === 'DESPIN_FIRST' ? '#ffd166' : '#ff7755';
-            const fitBadge = `<span style="color:${fitColor};font-size:9px;font-weight:bold;" title="Capture fit vs daughter net">${netFit.label}</span>`;
+            // Phase 1c (capture-feedback overhaul): best-tool + live odds for
+            // the arm that would take the shot — same ToolOdds model as the
+            // reticle strip, so the panel and the strip can never disagree.
+            // No arm context → dual W/S fit badge (Phase 0.1 fallback).
+            let fitBadge;
+            const badgeArm = this._getFitBadgeArm();
+            if (badgeArm) {
+              fitBadge = this._renderBestToolBadge(badgeArm, t);
+            } else {
+              const wFit = assessNetFit(t, Constants.CAPTURE_NET && Constants.CAPTURE_NET.MEDIUM);
+              const sFit = assessNetFit(t, Constants.CAPTURE_NET && Constants.CAPTURE_NET.SMALL);
+              const seg = (tag, f) => {
+                const ok = f.fit === 'OK';
+                const col = ok ? '#00ffaa' : f.fit === 'DESPIN_FIRST' ? '#ffd166' : '#ff7755';
+                return `<span style="color:${col}">${tag}${ok ? '\u2713' : '\u2717'}</span>`;
+              };
+              fitBadge = `<span style="font-size:9px;font-weight:bold;" title="Capture fit: Weaver / Spinner nets">${seg('W', wFit)} ${seg('S', sFit)}</span>`;
+            }
+
+            // Phase 1.5: appraised value — only once the close-range survey
+            // decrypted the manifest (value-if-profiled; dossier is the SSOT).
+            let valueBadge = '';
+            if (dossierSystem.isProfiled(t.id)) {
+              const { total } = appraiseSalvage(t.salvage);
+              if (total > 0) {
+                valueBadge = `<span style="color:#ffcc00;font-size:9px;font-weight:bold;" title="Appraised salvage value">\u20B9${total}</span>`;
+              }
+            }
 
             // ── EXPANDED ROW (selected target) ──
             const fullType = this._getFullTypeName(t.type);
@@ -465,7 +547,7 @@ export class TargetPanel {
             <span>\u0394V ${deltaV}</span>
             <span style="color:${netDvColor}">Net ${netDvStr}${frozenTag}</span>
             <span>${t.estimatedPoints}pt</span>
-            ${fitBadge}
+            ${fitBadge}${valueBadge ? `\n            ${valueBadge}` : ''}
         </div>${moidStat}
         <div class="hint-line">[D] Deploy  [A] Autopilot  [Z] Analyze</div>
     </div>

@@ -367,8 +367,8 @@ describe('Constants - TEACHING namespace (ST-6.5)', () => {
         assert.ok(typeof T.PERSISTENCE_KEY === 'string' && T.PERSISTENCE_KEY.length > 0);
     });
 
-    it('TOTAL_MOMENTS is 19', () => {
-        assert.equal(Constants.TEACHING.TOTAL_MOMENTS, 19);
+    it('TOTAL_MOMENTS is 24', () => {
+        assert.equal(Constants.TEACHING.TOTAL_MOMENTS, 24);
     });
 });
 
@@ -603,9 +603,9 @@ describe('Epic 9 FEATURE_FLAGS', () => {
 // ============================================================================
 describe('ST-9.4a NET_TERMINOLOGY + new flags', () => {
 
-    it('FEATURE_FLAGS has exactly 31 entries', () => {
-        assert.equal(Object.keys(Constants.FEATURE_FLAGS).length, 31,
-            'Expected 31 FEATURE_FLAGS (29 prior + CP-2 LASER_DESPIN + CP-3 CLUSTER_TRANSFER_WINDOW)');
+    it('FEATURE_FLAGS has exactly 33 entries', () => {
+        assert.equal(Object.keys(Constants.FEATURE_FLAGS).length, 33,
+            'Expected 33 FEATURE_FLAGS (29 prior + LASER_DESPIN + CLUSTER_TRANSFER_WINDOW + ASPECT_CAPTURE + REEL_BOOST)');
     });
 
     it('BOLA_RENAME is not present (stale flag removed)', () => {

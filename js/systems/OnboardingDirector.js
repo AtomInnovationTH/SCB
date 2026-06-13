@@ -146,7 +146,7 @@ export const ONBOARDING_BEATS = [
   },
   {
     id: 'scan',
-    commsSource: 'BANGALORE', commsText: 'Run a scan of your area — press S. Ground stations pay for fresh survey data, so scanning earns you credits.',
+    commsSource: 'BANGALORE', commsText: 'Run a scan of your area — press S. Ground stations pay for fresh survey data, so scanning earns you credits. Scanned debris shows a redacted salvage manifest in the dossier — get closer to decrypt it.',
     commsAck: 'Scan returned — survey data sold. Credits inbound.',
     text: 'Scan area (earns credits)',
     glyph: 'S',
@@ -188,7 +188,7 @@ export const ONBOARDING_BEATS = [
   },
   {
     id: 'decision',
-    commsSource: 'HOUSTON', commsText: 'Get in close on your target with autopilot. Two capture tools — the Mother net (lasso) for nearby debris, or launch a Daughter for distant or heavy pieces.',
+    commsSource: 'HOUSTON', commsText: 'Get in close on your target with autopilot. Two capture tools — the Mother net (lasso) for nearby debris, or launch a Daughter for distant or heavy pieces. While a daughter holds station you\'ll see LIVE capture odds for every tool — pull a lever (de-spin, close in) and watch the numbers climb.',
     commsAck: null,
     glyph: '?', keys: [], skillId: null,
     autoAdvanceAfter: 4000,

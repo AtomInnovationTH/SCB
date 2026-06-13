@@ -215,3 +215,33 @@ describe('ScoringSystem - Tool-Tier Efficiency (ST-4.E)', () => {
         assert.deepEqual(stats, [], 'After reset, should return empty stats');
     });
 });
+
+// ── Penalty floor (fragmentation credit penalty must not go negative) ──────
+
+describe('ScoringSystem - penalty awards are floored at 0', () => {
+    it('a penalty larger than the balance floors credits/score at 0, never negative', () => {
+        const sys = new ScoringSystem();
+        sys.credits = 100;
+        sys.totalScore = 100;
+        // Fragmentation penalty: 12 frags × 50 = -600 (no debris object).
+        sys.awardPoints({ points: -600, reason: 'Fragmentation penalty' });
+        assert.equal(sys.credits, 0, 'credits floored at 0, not -500');
+        assert.equal(sys.totalScore, 0, 'score floored at 0');
+    });
+
+    it('restore clamps a corrupt negative balance to 0', () => {
+        const sys = new ScoringSystem();
+        sys.restore({ credits: -250, totalScore: -250 });
+        assert.equal(sys.credits, 0, 'negative saved credits clamp to 0');
+        assert.equal(sys.totalScore, 0, 'negative saved score clamps to 0');
+    });
+
+    it('normal positive awards are unaffected', () => {
+        const sys = new ScoringSystem();
+        sys.credits = 100;
+        sys.totalScore = 100;
+        sys.awardPoints({ points: 75, reason: 'Survey bounty' });
+        assert.equal(sys.credits, 175);
+        assert.equal(sys.totalScore, 175);
+    });
+});

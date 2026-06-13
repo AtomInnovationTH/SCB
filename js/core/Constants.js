@@ -387,12 +387,115 @@ export const Constants = {
 
   // Tool-selection HUD constants (DAUGHTER_MULTITOOL_SPEC §4.1).
   TOOL_HUD: {
-    ROW_HEIGHT_PX:     16,
     PANEL_WIDTH_PX:    180,
     HIGHLIGHT_COLOR:   '#ffd166',          // selected (▶)
-    RECOMMEND_COLOR:   '#00ffaa',          // matches SK theme
-    DIMMED_COLOR:      'rgba(180,200,210,0.55)',
-    GLYPHS: { NET: 'N', MAGNET: 'M', GRIPPER: 'G', PAD: 'P' },
+    // ── Capture Odds Strip (capture-feedback overhaul Phase 1b) ──
+    COL_WIDTH_PX:      48,                 // fixed columns in cycle order
+    ODDS_FONT_PX:      14,                 // the % is the hero
+    LABEL_FONT_PX:     9,                  // names are footnotes
+    BLOCKER_FONT_PX:   8,                  // red blocker word under a 0% column
+    COLOR_GOOD:        '#00ffaa',          // ≥ 80%
+    COLOR_MID:         '#ffd166',          // 50-79%
+    COLOR_LOW:         '#ff7755',          // 1-49%
+    COLOR_ZERO:        'rgba(180,200,210,0.45)', // 0% / -- (dim grey)
+    COLOR_BLOCKER:     '#ff5555',          // blocker word
+  },
+
+  // Unified live tool-odds model (capture-feedback overhaul Phase 1a).
+  // ToolOdds.js is the SSOT for every % the HUD shows; same pure fns as the
+  // resolve rolls ("honest numbers").
+  TOOL_ODDS: {
+    REFRESH_HZ:           10,    // arm._toolOdds recompute rate during STATION_KEEP
+    DISPLAY_LERP_S:       0.3,   // displayed % eases toward truth (count-up feedback)
+    RECOMMEND_MARGIN:     0.15,  // RELATIVE margin: a later-preference tool takes ▶ only when p > best × (1 + this)
+    SWITCH_ADVISE_MARGIN: 0.20,  // advisory offers a switch when another tool beats selected by this
+    TREND_RATE_PER_S:     0.02,  // |Δp|/s above which the ↑/↓ trend arrow shows
+    DISPLAY_CAP:          0.99,  // sure-shots show 99%, never a lying 100%
+    FRAG_CHIP_MIN:        0.10,  // ⚠FRAG chip renders at/above this risk
+  },
+
+  // Debris Dossier — progressive reveal "treasure chest" data
+  // (capture-feedback overhaul Phase 1.5). The reticle is for ACTING; the
+  // dossier pane (DebrisWireframe) is for KNOWING.
+  DOSSIER: {
+    DETAIL_SCAN_RANGE_M:    50,    // hold a platform within this of the target…
+    SURVEY_TIME_S:          3.0,   // …for this long → automatic close-range survey
+    SURVEY_BOUNTY:          75,    // credits paid ONCE per debris on first full profile
+    WIREFRAME_TRACE_S:      1.0,   // scanned silhouette draw-on duration
+    PROFILE_ROW_INTERVAL_S: 0.35,  // Full Profile typewriter: one row per interval
+    // Salvage appraisal — credit value per unit for the decrypted manifest.
+    SALVAGE_VALUES: {
+      XENON_PER_KG:     400,   // ion fuel
+      INDIUM_PER_KG:    2000,  // FEEP fuel (carried in small kg fractions)
+      GAAS_PER_FRAC:    1500,  // per 100% panel-repair equivalent
+      BATTERY_PER_WH:   2,
+      HYDRAZINE_PER_KG: 60,    // hazmat — paid, but poorly
+      LITHIUM_PER_UNIT: 150,   // MPD fuel
+      METAL_BASE:       200,   // per salvageable metal species
+    },
+  },
+
+  // Orientation-based capture (capture-feedback overhaul Phase 2).
+  // Elongated debris presents a different width depending on the approach
+  // angle: broadside = lengthM (often un-nettable), end-on = widthM (the 5 m
+  // mouth swallows a 2 m cross-section lengthwise). Gated by
+  // FEATURE_FLAGS.ASPECT_CAPTURE.
+  ASPECT_CAPTURE: {
+    // length:width ratio per procedural debris type (2a). 1.0 = symmetric.
+    ASPECT_BY_TYPE: {
+      rocketBody:    3.5,
+      defunctSat:    1.6,
+      fragment:      1.0,
+      missionDebris: 1.0,
+    },
+    // Local long axis per type (matches DebrisWireframe geometry):
+    // rocketBody = lathe around Y; defunctSat = solar wings along X.
+    LONG_AXIS_BY_TYPE: {
+      rocketBody: { x: 0, y: 1, z: 0 },
+      defunctSat: { x: 1, y: 0, z: 0 },
+    },
+    // HUD: the END-ON ✓ chip shows when presented width fits with this margin.
+    END_ON_FIT_MARGIN: 1.0,
+  },
+
+  // Player reel-speed control (capture-feedback overhaul Phase 3a).
+  // Hold Shift during REELING for BOOST ×2 — saves time, raises tension
+  // (∝ reelSpeed²) toward the NET-RIP and TETHER-SNAP thresholds. Nominal
+  // reel stays risk-free for in-spec catches, so cautious play is never
+  // punished.
+  REEL_BOOST: {
+    SPEED_MULT:        2.0,   // boosted reel speed multiplier (tension target doubles too)
+    TENSION_EASE_TAU_S: 0.4,  // boosted tension eases toward target — the bar visibly
+                              //   climbs into the red, giving time to release Shift
+    RIP_PROB_PER_S:    0.10,  // per-second net-rip chance at 100% rated mass while
+                              //   boosting (linear from NET_STRAIN_SAFE_FRACTION;
+                              //   recoverable — reuses the strain-slip path)
+  },
+
+  // Eddy-current detumble (capture-feedback overhaul Phase 3c).
+  // MAGNET secondary: while station-keeping with MAGNET selected near a
+  // CONDUCTIVE target, the EPM's rotating field induces eddy currents that
+  // bleed tumble — a daughter-local detumble option independent of the
+  // mother's laser (slower, shorter-ranged; no new key).
+  EDDY_DAMP: {
+    RANGE_M:             30,     // must hold standoff at/inside this
+    DESPIN_RATE_RAD_S2:  0.10,   // ~⅓ of DESPIN_LASER.DESPIN_RATE_RAD_S2 (0.30)
+    CONDUCTIVE_MATERIALS: ['aluminum', 'steel', 'titanium'],
+  },
+
+  // Fragmentation severity tiers (capture-feedback overhaul Phase 3b).
+  // The dormant frag risk (computeFragRisk at _resolveCatch) is now ROLLED;
+  // severity scales with vRel excess × brittleness:
+  //   crack   — debris survives, 1-2 frags shed, capture continues, score ding
+  //   breakup — target destroyed → 3-6 fragments replace it, capture fails
+  //   shatter — brittle + hot approach: 8-12 fragments + Kessler + comms alert
+  FRAG_SEVERITY: {
+    BREAKUP_SEVERITY: 0.45,   // severity ≥ this → breakup
+    SHATTER_SEVERITY: 0.75,   // severity ≥ this → shatter
+    CRACK_FRAGS:   [1, 2],
+    BREAKUP_FRAGS: [3, 6],
+    SHATTER_FRAGS: [8, 12],
+    CRACK_MASS_FRACTION: 0.05,  // mass shed by a crack (target survives)
   },
 
   // --- Arm Operations ---
@@ -626,6 +729,15 @@ export const Constants = {
 
     // NEW — CP-3 / BIG_PICTURE §24: cluster transfer-ellipse + launch-window countdown
     CLUSTER_TRANSFER_WINDOW:   true,   // CP-3 ON — DebrisMap shows Depart/Arrive/ΔV + countdown per selected cluster
+
+    // NEW — capture-feedback overhaul Phase 2: orientation-based capture.
+    // Presented-width gating (broadside 0% → end-on ~100%) at contact +
+    // reel; togglable during tuning like CAPTURE_NET / LASER_DESPIN.
+    ASPECT_CAPTURE:            true,
+
+    // NEW — capture-feedback overhaul Phase 3a: hold Shift → boost reel ×2.
+    // Impatience is allowed but priced: boost raises net-rip + snap risk.
+    REEL_BOOST:                true,
   },
 
   // ============================================================================
@@ -2520,7 +2632,7 @@ export const Constants = {
     DEFAULT_DURATION_MS: 7000,
     PERSISTENCE_KEY: 'teachingSeen',
     QUEUE_DRAIN_INTERVAL_S: 6,   // CP-4 §4 — drain queued overlays at ≤1 per this many seconds
-    TOTAL_MOMENTS: 19,           // UX-3 N1: +first_scan/first_arm_deploy; +first_net_failed/first_tether_snap
+    TOTAL_MOMENTS: 24,           // UX-3 N1: +first_scan/first_arm_deploy; +first_net_failed/first_tether_snap; Phase 0.6: +first_high_tumble_target/first_despin_in_spec; Phase 1.5: +first_detail_scan; Phase 2: +first_aspect_target; Phase 3b: +first_fragmentation
   },
 
   // ============================================================================
@@ -2555,7 +2667,7 @@ export const Constants = {
           id: 'ch2_pilot',
           type: 'interactive',
           source: 'HOUSTON',
-          text: 'Deploy a daughter (D), then press P to pilot her directly.',
+          text: 'Deploy a daughter (D), then press P to pilot her directly. On station you\'ll see the live capture odds strip — every tool, every %.',
           skillId: 'arm_pilot',
           triggerEvent: 'CONTROL_MODE_CHANGE',
           triggerFilter: (d) => d && d.mode === 'ARM_PILOT',
@@ -2566,7 +2678,7 @@ export const Constants = {
           id: 'ch2_manual_capture',
           type: 'interactive',
           source: 'HOUSTON',
-          text: 'Line up on a target and capture by hand (F) — manual catches score double.',
+          text: 'Line up on a target and capture by hand (F) — manual catches score double. Watch the odds strip: de-spin (U) or close in and the % climbs before you commit.',
           skillId: 'arm_pilot_capture',
           triggerEvent: 'ARM_CAPTURED',
           triggerFilter: (d) => d && d.manual === true,

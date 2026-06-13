@@ -38,11 +38,14 @@ const INTERACTIVE_COUNT = (Constants.DEBRIS && Constants.DEBRIS.INTERACTIVE_COUN
 const BACKGROUND_COUNT  = (Constants.DEBRIS && Constants.DEBRIS.BACKGROUND_COUNT)  || 5000;
 
 /** Debris type definitions */
+// Phase 2 (ASPECT_CAPTURE): `aspect` = length:width ratio (1.0 = symmetric).
+// lengthM/widthM are derived per piece in _createDebrisData; keep these in
+// sync with Constants.ASPECT_CAPTURE.ASPECT_BY_TYPE.
 const DEBRIS_TYPES = {
-  fragment:     { weight: 0.60, sizeMin: 0.1, sizeMax: 1.0, massMin: 0.01, massMax: 5, tumbleMin: 10, tumbleMax: 180, shape: 'icosahedron' },
-  rocketBody:   { weight: 0.12, sizeMin: 5, sizeMax: 11, massMin: 500, massMax: 5000, tumbleMin: 1, tumbleMax: 20, shape: 'cylinder' },
-  defunctSat:   { weight: 0.16, sizeMin: 1, sizeMax: 8, massMin: 50, massMax: 2000, tumbleMin: 2, tumbleMax: 30, shape: 'box' },
-  missionDebris: { weight: 0.12, sizeMin: 0.05, sizeMax: 0.5, massMin: 0.001, massMax: 2, tumbleMin: 5, tumbleMax: 120, shape: 'sphere' },
+  fragment:     { weight: 0.60, sizeMin: 0.1, sizeMax: 1.0, massMin: 0.01, massMax: 5, tumbleMin: 10, tumbleMax: 180, shape: 'icosahedron', aspect: 1.0 },
+  rocketBody:   { weight: 0.12, sizeMin: 5, sizeMax: 11, massMin: 500, massMax: 5000, tumbleMin: 1, tumbleMax: 20, shape: 'cylinder', aspect: 3.5 },
+  defunctSat:   { weight: 0.16, sizeMin: 1, sizeMax: 8, massMin: 50, massMax: 2000, tumbleMin: 2, tumbleMax: 30, shape: 'box', aspect: 1.6 },
+  missionDebris: { weight: 0.12, sizeMin: 0.05, sizeMax: 0.5, massMin: 0.001, massMax: 2, tumbleMin: 5, tumbleMax: 120, shape: 'sphere', aspect: 1.0 },
 };
 
 /** Material types for debris */
@@ -474,6 +477,10 @@ export class DebrisField {
     // Sprint D1: Listen for GSL web shot hits to apply drag multiplier
     eventBus.on(Events.WEB_SHOT_HIT, (data) => this._onWebShotHit(data));
 
+    // Phase 3b (capture-feedback overhaul): tool-induced fragmentation — shed
+    // fragments at the impact point; breakup/shatter also destroys the body.
+    eventBus.on(Events.INTERACTION_FRAGMENTATION, (data) => this._onInteractionFragmentation(data));
+
     // ST-4.C: Listen for MISSION_START to update profile and allow re-spawn
     eventBus.on(Events.MISSION_START, (data) => {
       this._currentMissionProfile = data.profile;
@@ -708,6 +715,11 @@ export class DebrisField {
       sizeMeter,
       sceneSize,
       mass,
+      // Phase 2 (ASPECT_CAPTURE): aspect-derived extents. sizeMeter remains
+      // the max extent (long axis); widthM is the end-on cross-section the
+      // net actually has to swallow.
+      lengthM: sizeMeter,
+      widthM: sizeMeter / (typeDef.aspect || 1.0),
       tumbleRate,
       tumbleAxis,
       tumbleAngle: Math.random() * 2 * Math.PI, // Current rotation
@@ -2613,6 +2625,33 @@ export class DebrisField {
 
     eventBus.emit(Events.DEBRIS_REMOVED, { id, type: debris.type, sizeMeter: debris.sizeMeter });
     return true;
+  }
+
+  /**
+   * Phase 3b (capture-feedback overhaul): apply a tool-induced fragmentation
+   * to the field. Crack sheds a few small fragments and the body survives;
+   * breakup/shatter replaces the body with its fragments. KesslerSystem counts
+   * the same event independently.
+   * @param {{debrisId:*, fragments?:number, severity?:string, destroyTarget?:boolean, mass?:number}} data
+   * @private
+   */
+  _onInteractionFragmentation(data) {
+    if (!data) return;
+    const debris = this.debrisMap.get(data.debrisId);
+    if (!debris || debris.alive === false) return;
+    const pos = debris._scenePosition;
+    if (!pos) return;
+    const count = Math.max(1, data.fragments || 1);
+    const FS = Constants.FRAG_SEVERITY || {};
+    if (data.destroyTarget) {
+      // Breakup / shatter: fragments carry the body's mass; original removed.
+      this.createFragments({ x: pos.x, y: pos.y, z: pos.z }, debris.mass || data.mass || 1, count);
+      this.removeDebris(debris.id);
+    } else {
+      // Crack: shed a small mass fraction; the catch target survives.
+      const shedMass = Math.max(0.1, (debris.mass || 1) * (FS.CRACK_MASS_FRACTION ?? 0.05));
+      this.createFragments({ x: pos.x, y: pos.y, z: pos.z }, shedMass, count);
+    }
   }
 
   /**

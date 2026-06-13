@@ -134,8 +134,12 @@ export class ScoringSystem {
     // without touching streak, debris tier counts, or mass tracking.
     if (data.points != null && !data.debris) {
       const pts = data.points;
-      this.totalScore += pts;
-      this.credits += pts;
+      // Penalty awards (e.g. Fragmentation penalty) carry negative points.
+      // Floor the spendable balance and score at 0 so a penalty can never
+      // drive credits negative — a negative balance soft-locks shop spend()
+      // and would round-trip through persistence.
+      this.totalScore = Math.max(0, this.totalScore + pts);
+      this.credits = Math.max(0, this.credits + pts);
       eventBus.emit(Events.SCORE_UPDATE, {
         total: this.totalScore,
         credits: this.credits,
@@ -410,8 +414,10 @@ export class ScoringSystem {
    */
   restore(data) {
     if (!data) return;
-    this.totalScore = data.totalScore || 0;
-    this.credits = data.credits || 0;
+    // Clamp at 0: a corrupt or penalty-driven negative balance must never
+    // restore into a state that blocks shop purchases.
+    this.totalScore = Math.max(0, data.totalScore || 0);
+    this.credits = Math.max(0, data.credits || 0);
     this.debrisCleared = data.debrisCleared || 0;
     this.debrisByTier = data.debrisByTier || { data: 0, deorbit: 0, capture: 0 };
     this.currentStreak = data.currentStreak || 0;

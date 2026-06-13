@@ -51,9 +51,9 @@ function createMockEventBus() {
 // ============================================================================
 describe('TeachingSystem — Moment Definitions', () => {
 
-  it('has exactly 19 registered moments', () => {
-    assert.equal(TEACHING_MOMENTS.length, 19,
-      `expected 19 moments, got ${TEACHING_MOMENTS.length}`);
+  it('has exactly 24 registered moments', () => {
+    assert.equal(TEACHING_MOMENTS.length, 24,
+      `expected 24 moments, got ${TEACHING_MOMENTS.length}`);
   });
 
   it('all moments have required fields: id, title, body, duration, icon', () => {
@@ -73,8 +73,8 @@ describe('TeachingSystem — Moment Definitions', () => {
       `duplicate IDs found: ${ids.filter((id, i) => ids.indexOf(id) !== i)}`);
   });
 
-  it('MOMENTS_BY_ID map has all 19 entries', () => {
-    assert.equal(MOMENTS_BY_ID.size, 19);
+  it('MOMENTS_BY_ID map has all 24 entries', () => {
+    assert.equal(MOMENTS_BY_ID.size, 24);
     for (const m of TEACHING_MOMENTS) {
       assert.ok(MOMENTS_BY_ID.has(m.id), `MOMENTS_BY_ID missing ${m.id}`);
     }
@@ -392,7 +392,7 @@ describe('TeachingSystem — resetAll', () => {
     for (const m of TEACHING_MOMENTS) {
       ts.markSeen(m.id);
     }
-    assert.equal(ts.getSeenCount(), 19);
+    assert.equal(ts.getSeenCount(), 24);
 
     // Reset
     ts.resetAll();
@@ -411,10 +411,10 @@ describe('TeachingSystem — resetAll', () => {
 // ============================================================================
 describe('TeachingSystem — getSeenCount / getTotalCount', () => {
 
-  it('getTotalCount returns 19', () => {
+  it('getTotalCount returns 24', () => {
     const eb = createMockEventBus();
     const ts = new TeachingSystem(eb);
-    assert.equal(ts.getTotalCount(), 19);
+    assert.equal(ts.getTotalCount(), 24);
     ts.dispose();
   });
 
@@ -427,7 +427,7 @@ describe('TeachingSystem — getSeenCount / getTotalCount', () => {
     ts.markSeen('first_shop');
     ts.markSeen('first_burn');
     assert.equal(ts.getSeenCount(), 5);
-    assert.equal(ts.getTotalCount(), 19);
+    assert.equal(ts.getTotalCount(), 24);
     ts.dispose();
   });
 });

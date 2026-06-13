@@ -16,6 +16,8 @@ import { Events } from '../core/Events.js';
 import { GameStates } from '../core/GameState.js';
 import { DebrisTextureAtlas, getUVOffsetForType, getBaseColorForType, getEmissiveForMOID } from './DebrisTextureAtlas.js';
 import { FlagDecalSystem, getUVOffsetForCountry, hasFlag } from './FlagDecalSystem.js';
+import { dossierSystem, DOSSIER_TIERS, appraiseSalvage } from '../systems/DossierSystem.js';
+import { audioSystem } from '../systems/AudioSystem.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -1155,6 +1157,23 @@ export class DebrisWireframe {
     /** @type {{ risk: string, color: string }[]} */
     this._zoneAssessments = [];
 
+    // ── Dossier reveal state (capture-feedback overhaul Phase 1.5) ──
+    /** @type {number} ms timestamp when the silhouette draw-on began */
+    this._traceStart = 0;
+    /** @type {number|null} ms timestamp when Full Profile typewriter began */
+    this._profileRevealStart = null;
+    /** @type {number} rows already revealed (chime once per new row) */
+    this._lastRowsShown = 0;
+
+    // Full Profile unlocked while this target is on screen → start the
+    // line-by-line typewriter reveal ("the chest opens").
+    eventBus.on(Events.DEBRIS_PROFILED, ({ debrisId }) => {
+      if (this._target && this._target.id === debrisId) {
+        this._profileRevealStart = performance.now();
+        this._lastRowsShown = 0;
+      }
+    });
+
     // Start with ADR satellite self-view if container-mounted
     if (this._hasContainer) {
       this._showADRSatellite();
@@ -1203,6 +1222,10 @@ export class DebrisWireframe {
     this._viewedZones.clear();
     this._angle = 0;
     this._showingADR = false;
+    // Dossier: restart the silhouette draw-on; profiled targets show all rows.
+    this._traceStart = (typeof performance !== 'undefined') ? performance.now() : 0;
+    this._profileRevealStart = null;
+    this._lastRowsShown = 0;
 
     if (target) {
       this._shape = target.type === 'fragment'
@@ -1407,7 +1430,18 @@ export class DebrisWireframe {
       ctx.fillStyle = TYPE_COLOR;
       ctx.fillText('V3 OCTOPUS ADR', WIRE_CX, 27);
     } else {
-      ctx.fillText('TARGET ANALYSIS [Z]', WIRE_CX, 15);
+      // Dossier tier (Phase 1.5): UNSCANNED → static noise, no data.
+      const tier = dossierSystem.getTier(this._target);
+      if (tier === DOSSIER_TIERS.UNSCANNED) {
+        ctx.fillText('TARGET DOSSIER', WIRE_CX, 15);
+        this._renderStaticNoise(ctx);
+        ctx.font = "bold 11px 'Courier New', monospace";
+        ctx.fillStyle = DIM_COLOR;
+        ctx.textAlign = 'center';
+        ctx.fillText('UNRESOLVED \u2014 scan [S]', WIRE_CX, 150);
+        return;
+      }
+      ctx.fillText('TARGET DOSSIER [Z]', WIRE_CX, 15);
       const typeLabel = TYPE_LABELS[this._target.type] || this._target.type;
       ctx.font = "12px 'Courier New', monospace";
       ctx.fillStyle = TYPE_COLOR;
@@ -1450,6 +1484,19 @@ export class DebrisWireframe {
     // alpha mapping eliminates the flicker entirely.
     const zones = this._shape.zones;
     const assessments = this._zoneAssessments;
+    // Dossier draw-on (Phase 1.5): after a scan the silhouette MATERIALIZES —
+    // edges trace in over WIREFRAME_TRACE_S instead of popping fully formed.
+    let edgeBudget = Infinity;
+    if (!this._showingADR && this._target && this._traceStart) {
+      const traceS = (Constants.DOSSIER && Constants.DOSSIER.WIREFRAME_TRACE_S) || 1.0;
+      const nowMs = (typeof performance !== 'undefined') ? performance.now() : this._traceStart + traceS * 1000;
+      const frac = Math.min(1, (nowMs - this._traceStart) / (traceS * 1000));
+      if (frac < 1) {
+        let totalEdges = 0;
+        for (let zi = 0; zi < zones.length; zi++) totalEdges += zones[zi].edges.length;
+        edgeBudget = Math.floor(frac * totalEdges);
+      }
+    }
     ctx.save();
     for (let zi = 0; zi < zones.length; zi++) {
       const zone = zones[zi];
@@ -1481,6 +1528,8 @@ export class DebrisWireframe {
       ctx.lineWidth = highlighted ? 2 : 1;
       const baseAlpha = highlighted ? 0.9 : 0.55;
       for (let e = 0; e < edges.length; e++) {
+        if (edgeBudget <= 0) break;           // draw-on: remaining edges trace in next frames
+        edgeBudget--;
         const a = edges[e][0];
         const b = edges[e][1];
         if (a >= proj.length || b >= proj.length) continue;
@@ -1560,7 +1609,14 @@ export class DebrisWireframe {
       return;
     }
 
-    // --- Debris target info ---
+    // --- Debris target info — dossier-tier gated (Phase 1.5) ---
+    const tier = dossierSystem.getTier(this._target);
+    if (tier === DOSSIER_TIERS.SCANNED) {
+      this._renderScannedInfo(ctx, infoY);
+      return;
+    }
+
+    // PROFILED — full structural + salvage knowledge.
     if (this._zoneIndex >= 0 && this._shape) {
       const zone = this._shape.zones[this._zoneIndex];
       const { risk, color } = this._zoneAssessments[this._zoneIndex];
@@ -1618,15 +1674,162 @@ export class DebrisWireframe {
         ctx.fillStyle = DIM_COLOR;
       }
 
+      // Stacked info rows — track y so HIGH TUMBLE, brittleness and the
+      // manifest never overdraw each other (M4).
+      let rowY = infoY + 24;
+
       // High-tumble warning
       if ((t.tumbleRate || 0) * DEG > 60) {
         ctx.fillStyle = ZONE_COLORS.RED;
         ctx.font = "bold 10px 'Courier New', monospace";
-        ctx.fillText('\u26A0 HIGH TUMBLE', WIRE_CX, infoY + 24);
+        ctx.fillText('\u26A0 HIGH TUMBLE', WIRE_CX, rowY);
+        rowY += 12;
       }
 
-      // Salvage info
-      this._renderSalvageInfo(ctx, infoY + 36);
+      // Brittleness — the FRAG-chip driver. Show the RAW brittleness the
+      // fragmentation roll uses (resolveFragSeverity / effectiveFragility),
+      // NOT the material-adjusted effectiveBrittleness (zone-risk only), so
+      // the displayed number can't drift from what's actually rolled.
+      if (t.brittleness != null) {
+        const b = Math.max(0, Math.min(1, t.brittleness));
+        ctx.font = "10px 'Courier New', monospace";
+        ctx.fillStyle = b >= 0.7 ? ZONE_COLORS.RED : b >= 0.4 ? ZONE_COLORS.YELLOW : ZONE_COLORS.GREEN;
+        ctx.fillText(`Brittleness: ${b.toFixed(2)}`, WIRE_CX, rowY);
+        rowY += 12;
+      }
+
+      // Decrypted salvage manifest with credit values (typewriter reveal).
+      this._renderProfiledManifest(ctx, Math.max(rowY, infoY + 36));
+    }
+  }
+
+  /**
+   * @private UNSCANNED — static noise in the wireframe area (no data leaks).
+   */
+  _renderStaticNoise(ctx) {
+    const seed = Math.floor((typeof performance !== 'undefined' ? performance.now() : 0) / 90);
+    const rand = (i) => {
+      const v = Math.abs(Math.sin(seed * 31.7 + i * 127.1) * 43758.5453);
+      return v - Math.floor(v);
+    };
+    ctx.save();
+    ctx.strokeStyle = 'rgba(0, 255, 136, 0.18)';
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 50; i++) {
+      const x = 30 + rand(i) * (PANEL_WIDTH - 60);
+      const y = 36 + rand(i + 100) * 90;
+      const len = 2 + rand(i + 200) * 10;
+      ctx.globalAlpha = 0.1 + rand(i + 300) * 0.5;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + len, y);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  /**
+   * @private SCANNED — silhouette + type/size/est-mass; salvage manifest shows
+   * REDACTED rows (you can see THAT there's treasure, not WHAT). The survey
+   * ring fills while a platform holds within DETAIL_SCAN_RANGE_M.
+   */
+  _renderScannedInfo(ctx, infoY) {
+    const t = this._target;
+    const D = Constants.DOSSIER || {};
+    ctx.font = "10px 'Courier New', monospace";
+    ctx.fillStyle = DIM_COLOR;
+    ctx.textAlign = 'center';
+
+    const label = TYPE_LABELS[t.type] || t.type;
+    const massStr = t.mass != null ? `~${t.mass.toFixed(0)}kg` : '?';
+    const sizeStr = t.sizeMeter != null ? `${t.sizeMeter.toFixed(1)}m` : '?';
+    ctx.fillText(`${label}  ${massStr}  ${sizeStr}`, WIRE_CX, infoY);
+    const tumbleDeg = ((t.tumbleRate || 0) * DEG).toFixed(1);
+    ctx.fillText(`Tumble: ${tumbleDeg}\u00B0/s   Mat: \u2588\u2588\u2588\u2588`, WIRE_CX, infoY + 12);
+
+    // Redacted manifest — one ▓-row per real salvage line.
+    let y = infoY + 24;
+    if (t.hasSalvage && t.salvage) {
+      const { rows } = appraiseSalvage(t.salvage);
+      const n = Math.max(1, Math.min(3, rows.length || 1));
+      ctx.fillStyle = '#ffcc00';
+      ctx.font = "bold 10px 'Courier New', monospace";
+      ctx.fillText('\u26CF SALVAGE \u2014 ENCRYPTED', WIRE_CX, y);
+      y += 12;
+      ctx.font = "10px 'Courier New', monospace";
+      ctx.fillStyle = 'rgba(255, 204, 0, 0.4)';
+      for (let i = 0; i < n; i++) {
+        ctx.fillText('\u2593\u2593\u2593\u2593\u2593  \u2593\u2593 kg   \u00B7\u20B9\u2593\u2593\u2593', WIRE_CX, y);
+        y += 11;
+      }
+    }
+
+    // Survey progress ring (top-right of the wireframe) + prompt line.
+    const progress = dossierSystem.getSurveyProgress(t.id);
+    if (progress > 0) {
+      const rx = PANEL_WIDTH - 26;
+      const ry = 42;
+      ctx.strokeStyle = 'rgba(0, 255, 136, 0.25)';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(rx, ry, 10, 0, TWO_PI);
+      ctx.stroke();
+      ctx.strokeStyle = '#00ffaa';
+      ctx.beginPath();
+      ctx.arc(rx, ry, 10, -Math.PI / 2, -Math.PI / 2 + TWO_PI * progress);
+      ctx.stroke();
+      ctx.font = "bold 10px 'Courier New', monospace";
+      ctx.fillStyle = '#00ffaa';
+      ctx.fillText(`SURVEYING ${Math.round(progress * 100)}%`, WIRE_CX, y + 2);
+    } else {
+      ctx.font = "10px 'Courier New', monospace";
+      ctx.fillStyle = DIM_COLOR;
+      ctx.fillText(`close to ${D.DETAIL_SCAN_RANGE_M || 50}m to survey`, WIRE_CX, y + 2);
+    }
+  }
+
+  /**
+   * @private PROFILED — the decrypted salvage manifest with credit values,
+   * revealed line-by-line (typewriter) right after the survey completes.
+   */
+  _renderProfiledManifest(ctx, y) {
+    const t = this._target;
+    if (!t.hasSalvage || !t.salvage) return;
+    const D = Constants.DOSSIER || {};
+    const { rows, total } = appraiseSalvage(t.salvage);
+    if (rows.length === 0) return;
+
+    // Typewriter: rows appear one per PROFILE_ROW_INTERVAL_S after the survey;
+    // targets profiled earlier (re-selected) show everything at once.
+    let rowsShown = rows.length + 1;
+    if (this._profileRevealStart != null && typeof performance !== 'undefined') {
+      const interval = (D.PROFILE_ROW_INTERVAL_S || 0.35) * 1000;
+      rowsShown = Math.floor((performance.now() - this._profileRevealStart) / interval);
+      // Plan 1.5: soft chime per newly-revealed row (typewriter only — a
+      // re-selected, already-profiled target shows everything silently).
+      if (rowsShown > this._lastRowsShown && this._lastRowsShown < rows.length + 1) {
+        audioSystem.playTerminalBlip();
+      }
+    }
+    this._lastRowsShown = rowsShown;
+
+    ctx.font = "bold 10px 'Courier New', monospace";
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#ffcc00';
+    ctx.fillText('\u26CF SALVAGE MANIFEST', WIRE_CX, y);
+    y += 12;
+    ctx.font = "10px 'Courier New', monospace";
+    const maxRows = Math.min(3, rows.length);
+    for (let i = 0; i < maxRows && i < rowsShown; i++) {
+      ctx.fillStyle = '#00ccff';
+      ctx.fillText(`${rows[i].label}  \u00B7\u20B9${rows[i].value}`, WIRE_CX, y);
+      y += 11;
+    }
+    if (rowsShown > maxRows) {
+      ctx.font = "bold 10px 'Courier New', monospace";
+      ctx.fillStyle = '#00ffaa';
+      const extra = rows.length > maxRows ? ` (+${rows.length - maxRows} more)` : '';
+      ctx.fillText(`EST. VALUE \u20B9${total}${extra}`, WIRE_CX, y);
     }
   }
 

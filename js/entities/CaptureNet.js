@@ -188,23 +188,126 @@ export function computeLeadAim(armPos, targetPos, relVel, launchSpeed) {
  * Precedence: width (deterministic post-catch failure) > mass (refused at
  * deploy / strain risk) > tumble (recoverable — de-spin first).
  *
- * @param {{sizeMeter?:number, mass?:number, tumbleRate?:number}|null} target
+ * Phase 2 (capture-feedback overhaul): with ASPECT_CAPTURE on and aspect data
+ * present, the width fork becomes orientation-aware:
+ *   • TOO_WIDE — even end-on the cross-section (widthM) exceeds the mouth.
+ *   • ASPECT   — fits END-ON ONLY (widthM ≤ mouth < presented/length); pass
+ *     `approachDir` for the live verdict, omit it for the static one.
+ *
+ * @param {{sizeMeter?:number, lengthM?:number, widthM?:number, mass?:number,
+ *   tumbleRate?:number, type?:string, tumbleAxis?:object, tumbleAngle?:number}|null} target
  * @param {{DIAMETER?:number, MAX_CAPTURE_MASS?:number}|null} netClass
- * @returns {{ fit: 'OK'|'TOO_WIDE'|'TOO_HEAVY'|'DESPIN_FIRST', label: string }}
+ * @param {{x:number,y:number,z:number}|null} [approachDir] — launcher→target direction
+ * @returns {{ fit: 'OK'|'TOO_WIDE'|'TOO_HEAVY'|'DESPIN_FIRST'|'ASPECT', label: string }}
  */
-export function assessNetFit(target, netClass) {
+export function assessNetFit(target, netClass, approachDir = null) {
   if (!target || !netClass) return { fit: 'OK', label: 'NET \u2713' };
   const size = target.sizeMeter || 0;
   const mass = target.mass || 0;
   const dia = netClass.DIAMETER || 0;
   const cap = netClass.MAX_CAPTURE_MASS || Infinity;
-  if (dia > 0 && size > dia) return { fit: 'TOO_WIDE', label: 'TOO WIDE' };
+
+  const aspectOn = Constants.isFeatureEnabled && Constants.isFeatureEnabled('ASPECT_CAPTURE');
+  const lengthM = (target.lengthM != null) ? target.lengthM : size;
+  const widthM = (target.widthM != null) ? target.widthM : size;
+
+  if (dia > 0) {
+    if (aspectOn && lengthM > widthM) {
+      if (widthM > dia) return { fit: 'TOO_WIDE', label: 'TOO WIDE' };  // even end-on
+      if (lengthM > dia) {
+        // Fits end-on only. With a live approach direction report the CURRENT
+        // presentation; statically report the aspect opportunity.
+        if (approachDir) {
+          const presented = presentedWidthForApproach(target, approachDir);
+          if (presented > dia) return { fit: 'ASPECT', label: 'END-ON ONLY' };
+          // currently presented end-on → fits; fall through to mass/tumble
+        } else {
+          return { fit: 'ASPECT', label: 'END-ON ONLY' };
+        }
+      }
+    } else if (size > dia) {
+      return { fit: 'TOO_WIDE', label: 'TOO WIDE' };
+    }
+  }
   if (mass > cap) return { fit: 'TOO_HEAVY', label: 'TOO HEAVY' };
   const P = Constants.NET_TUMBLE_PENALTY || { IN_SPEC_DEG: 10 };
   const tumbleDeg = (target.tumbleRate != null)
     ? Math.abs(target.tumbleRate) * (180 / Math.PI) : 0;
   if (tumbleDeg > (P.IN_SPEC_DEG ?? 10)) return { fit: 'DESPIN_FIRST', label: 'DE-SPIN FIRST' };
   return { fit: 'OK', label: 'NET \u2713' };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// §1b  Orientation-based capture geometry (Phase 2 — ASPECT_CAPTURE)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Width an elongated body presents to a net approaching at angle θ from its
+ * long axis: end-on (θ=0) → widthM; broadside (θ=90°) → lengthM.
+ * Pure + Node-safe.
+ *
+ * @param {number} lengthM — long-axis extent (m)
+ * @param {number} widthM — cross-section width (m)
+ * @param {number} cosTheta — cos of the angle between long axis and approach dir
+ * @returns {number} presented width (m)
+ */
+export function presentedWidth(lengthM, widthM, cosTheta) {
+  const c = Math.max(-1, Math.min(1, cosTheta || 0));
+  const sinTheta = Math.sqrt(Math.max(0, 1 - c * c));
+  return Math.max(widthM || 0, (lengthM || 0) * sinTheta);
+}
+
+/**
+ * World-space long axis of a debris: the type's LOCAL long axis rotated by the
+ * live tumble orientation quat(tumbleAxis, tumbleAngle) — exactly the rotation
+ * DebrisField applies to the mesh (setFromAxisAngle). Rodrigues form, no THREE.
+ *
+ * @param {{type?:string, tumbleAxis?:{x,y,z}, tumbleAngle?:number}} debris
+ * @returns {{x:number,y:number,z:number}} unit long axis (world space)
+ */
+export function worldLongAxis(debris) {
+  const AC = Constants.ASPECT_CAPTURE || {};
+  const locals = AC.LONG_AXIS_BY_TYPE || {};
+  const v = (debris && locals[debris.type]) || { x: 0, y: 1, z: 0 };
+  const k = debris && debris.tumbleAxis;
+  const ang = (debris && debris.tumbleAngle) || 0;
+  if (!k || ang === 0) return { x: v.x, y: v.y, z: v.z };
+  // Rodrigues: v' = v cosθ + (k×v) sinθ + k (k·v)(1−cosθ)
+  const c = Math.cos(ang);
+  const s = Math.sin(ang);
+  const dot = k.x * v.x + k.y * v.y + k.z * v.z;
+  const cx = k.y * v.z - k.z * v.y;
+  const cy = k.z * v.x - k.x * v.z;
+  const cz = k.x * v.y - k.y * v.x;
+  return {
+    x: v.x * c + cx * s + k.x * dot * (1 - c),
+    y: v.y * c + cy * s + k.y * dot * (1 - c),
+    z: v.z * c + cz * s + k.z * dot * (1 - c),
+  };
+}
+
+/**
+ * Live presented width of a debris for a given approach direction.
+ * Falls back to the scalar sizeMeter when aspect data is missing (graceful —
+ * fragments / legacy saves / catalog rows pre-derivation).
+ *
+ * @param {object} debris — with lengthM/widthM (else sizeMeter), tumbleAxis/Angle
+ * @param {{x:number,y:number,z:number}} approachDir — launcher→target (any length)
+ * @returns {number} presented width (m)
+ */
+export function presentedWidthForApproach(debris, approachDir) {
+  if (!debris) return 0;
+  const size = debris.sizeMeter || 0;
+  const lengthM = (debris.lengthM != null) ? debris.lengthM : size;
+  const widthM = (debris.widthM != null) ? debris.widthM : size;
+  if (!(lengthM > widthM) || !approachDir) return lengthM;   // symmetric / no data
+  const len = Math.sqrt(approachDir.x * approachDir.x
+    + approachDir.y * approachDir.y + approachDir.z * approachDir.z);
+  if (len < 1e-12) return lengthM;
+  const axis = worldLongAxis(debris);
+  const cosTheta = Math.abs((axis.x * approachDir.x + axis.y * approachDir.y
+    + axis.z * approachDir.z) / len);
+  return presentedWidth(lengthM, widthM, cosTheta);
 }
 
 /**
@@ -237,10 +340,53 @@ export function computeFragRisk(params) {
 }
 
 /**
+ * Phase 3b: base fragility for computeFragRisk. Brittleness (per-debris,
+ * surfaced by the close-range survey) drives the FRAG chip when no explicit
+ * fragility is set — "brittleness drives fragmentation risk".
+ * @param {object|null} target
+ * @returns {number} base frag risk 0..1
+ */
+export function effectiveFragility(target) {
+  if (!target) return 0.05;
+  if (typeof target.fragility === 'number') return target.fragility;
+  if (typeof target.brittleness === 'number') return Math.max(0.05, target.brittleness * 0.3);
+  return 0.05;
+}
+
+/**
+ * Phase 3b (capture-feedback overhaul): fragmentation severity tier.
+ * Severity = brittleness × KE factor (vRel excess over the optimal wrap
+ * speed). Nominal-speed shots on tough targets crack at worst; a hot approach
+ * on a brittle body shatters. Pure + deterministic given countRoll.
+ *
+ * @param {object} params
+ * @param {number} [params.brittleness=0.5] — per-debris 0..1 (DebrisField)
+ * @param {number} [params.vRel=10] — contact speed (m/s)
+ * @param {number} [params.vOptimal=10] — optimal wrap speed (launch speed)
+ * @param {number} [params.countRoll=0.5] — 0..1 → fragment count within tier band
+ * @returns {{ tier: 'crack'|'breakup'|'shatter', severity: number,
+ *             fragmentCount: number, destroyTarget: boolean }}
+ */
+export function resolveFragSeverity({ brittleness = 0.5, vRel = 10, vOptimal = 10, countRoll = 0.5 } = {}) {
+  const FS = Constants.FRAG_SEVERITY || {};
+  const keFactor = Math.min(2, Math.max(0.5, vRel / Math.max(1e-6, vOptimal)));
+  const severity = Math.max(0, Math.min(1, brittleness)) * (keFactor / 2);
+  const tier = severity >= (FS.SHATTER_SEVERITY ?? 0.75) ? 'shatter'
+    : severity >= (FS.BREAKUP_SEVERITY ?? 0.45) ? 'breakup'
+    : 'crack';
+  const band = tier === 'shatter' ? (FS.SHATTER_FRAGS || [8, 12])
+    : tier === 'breakup' ? (FS.BREAKUP_FRAGS || [3, 6])
+    : (FS.CRACK_FRAGS || [1, 2]);
+  const r = Math.max(0, Math.min(1, countRoll));
+  const fragmentCount = band[0] + Math.round(r * (band[1] - band[0]));
+  return { tier, severity, fragmentCount, destroyTarget: tier !== 'crack' };
+}
+
+/**
  * UX-11 #1: map a NET_CATCH_MISS reason to an actionable player-facing line.
- * Returns null for reasons that should stay silent ('forced' test resolves,
- * unknown reasons).
- * @param {string} reason — 'timeout'|'tether_limit'|'cling_failed'|'forced'|…
+ * Returns null only for 'forced' (scripted/test resolves stay silent); unknown
+ * reasons fall through to a generic re-line-the-shot message.
+ * @param {string} reason — 'timeout'|'tether_limit'|'cling_failed'|'oversize_aspect'|'fragmented'|'forced'|…
  * @returns {string|null}
  */
 export function missReasonToText(reason) {
@@ -250,8 +396,18 @@ export function missReasonToText(reason) {
       return 'Net overshot — line up the reticle and re-fire. Net reeling back; inventory restored.';
     case 'cling_failed':
       return 'Net grazed it — wrap didn\'t hold. Close the distance or de-spin the target (hold U), then re-fire.';
+    case 'oversize_aspect':
+      // Phase 2: deterministic broadside bounce — teach the orientation fix.
+      return 'Net bounced off broadside — too wide this way. De-spin, then come around end-on so the net swallows it lengthwise.';
+    case 'fragmented':
+      // Phase 3b: the impact broke the target up — teach the gentle approach.
+      return 'Impact broke the target apart — fragments are now tracked. Approach slower on brittle debris (CINCH wraps gentler).';
+    case 'forced':
+      return null;   // scripted/test resolves stay silent
     default:
-      return null;
+      // Phase 2: generic line instead of silent null — a miss should never
+      // leave the player guessing.
+      return 'Net missed — re-line the shot and fire again. Net reeling back.';
   }
 }
 
@@ -331,6 +487,7 @@ export class NetProjectile {
     this._clingRoll        = 0;
     this._clingProbability = 0;
     this._fragRisk         = 0;
+    this._presentedWidthM  = null;   // Phase 2: presented width at contact (m)
 
     // Flag for CaptureNetSystem to detect state changes from forceResolve()
     this._resultProcessed  = false;
@@ -730,6 +887,18 @@ export class NetProjectile {
 
   /** @private Roll cling probability and resolve capture */
   _resolveCatch() {
+    // Phase 2 (ASPECT_CAPTURE): presented width at CONTACT — the moment the
+    // mouth meets the body decides whether it can swallow it. Broadside on an
+    // oversize presentation is a deterministic bounce, not a bad roll.
+    if (Constants.isFeatureEnabled('ASPECT_CAPTURE') && this.targetDebris) {
+      this._presentedWidthM = presentedWidthForApproach(this.targetDebris, this.launchDirection);
+      const dia = this.netClass.DIAMETER || 0;
+      if (dia > 0 && this._presentedWidthM > dia) {
+        this._miss('oversize_aspect');
+        return;
+      }
+    }
+
     // Determine P_base from capture mode
     const pBase = this.captureMode === MODES.CINCH
       ? CN.CINCH_P_BASE.RIGHT_HARDER   // 0.93 — default for cinch
@@ -753,13 +922,41 @@ export class NetProjectile {
     this._clingProbability = computeClingProbability(params);
     this._clingRoll = Math.random();
 
-    // Frag risk (for diagnostics / future consequence system)
+    // Phase 3b (capture-feedback overhaul): the frag risk is now ROLLED, not
+    // just computed. The consequence chain was already built — handleFragmentation
+    // (mercy rule) → NET_FRAGMENTATION; INTERACTION_FRAGMENTATION → KesslerSystem
+    // counts it and DebrisField sheds/replaces the body.
     this._fragRisk = computeFragRisk({
       netMass:         this.netClass.MASS,
       vRel:            this.speed,
-      targetFragility: this.targetDebris?.fragility || 0.05,
+      targetFragility: effectiveFragility(this.targetDebris),
       range:           this.distanceTraveled,
     });
+    const fragRoll = (this._fragRollOverride != null) ? this._fragRollOverride : Math.random();
+    if (this.targetDebris && fragRoll <= this._fragRisk) {
+      const sev = resolveFragSeverity({
+        brittleness: this.targetDebris.brittleness ?? 0.5,
+        vRel: this.speed,
+        vOptimal: this.netClass.LAUNCH_SPEED,
+        countRoll: (this._fragCountRollOverride != null) ? this._fragCountRollOverride : Math.random(),
+      });
+      this._fragSeverity = sev.tier;
+      captureNetSystem.handleFragmentation(this.targetDebris.id, sev.fragmentCount);
+      eventBus.emit(Events.INTERACTION_FRAGMENTATION, {
+        debrisId:     this.targetDebris.id,
+        fragments:    sev.fragmentCount,
+        severity:     sev.tier,
+        destroyTarget: sev.destroyTarget,
+        mass:         this.targetDebris.mass || 1,
+        source:       'net_contact',
+      });
+      if (sev.destroyTarget) {
+        // Breakup / shatter: the body the net wrapped no longer exists.
+        this._miss('fragmented');
+        return;
+      }
+      // Crack: 1-2 frags shed, the capture itself continues to the cling roll.
+    }
 
     if (this._clingRoll <= this._clingProbability) {
       this._captureSuccess();
@@ -1066,8 +1263,28 @@ export class CaptureNetSystem {
   fireMotherNet(podIndex, launchPos, launchDir, target, mode) {
     if (!Constants.FEATURE_FLAGS.CAPTURE_NET) return null;
     if (podIndex < 0 || podIndex > 1) return null;
-    if (this._motherPodInventory[podIndex] <= 0) return null;
-    if (this._cooldownTimers.has(`pod_${podIndex}`)) return null;
+    // Phase 0.3 (capture-feedback overhaul): refusals speak — mirror the
+    // LassoSystem denial-comms style so the player knows WHY nothing fired
+    // and what fixes it (wait N s / restock at shop [B]).
+    if (this._motherPodInventory[podIndex] <= 0) {
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        text: 'Mother net magazine empty — restock at shop [B]',
+        source: 'SYSTEM',
+        channel: 'CMD',
+        priority: 'warning',
+      });
+      return null;
+    }
+    if (this._cooldownTimers.has(`pod_${podIndex}`)) {
+      const secs = this._cooldownTimers.get(`pod_${podIndex}`) || 0;
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        text: `Mother net reloading — ${Math.ceil(secs)}s`,
+        source: 'SYSTEM',
+        channel: 'CMD',
+        priority: 'info',
+      });
+      return null;
+    }
 
     // Deplete inventory
     this._motherPodInventory[podIndex]--;
@@ -1266,6 +1483,14 @@ export class CaptureNetSystem {
   handleFragmentation(debrisId, fragmentCount) {
     const mercyApplied = CN.FRAG_MERCY_FIRST_FREE && !this._playerHasFragmented;
     this._playerHasFragmented = true;
+
+    // Phase 3b: apply the §5.5 credit penalty (waived on the first-time mercy).
+    if (!mercyApplied && (CN.FRAG_CREDIT_PENALTY || 0) > 0 && fragmentCount > 0) {
+      eventBus.emit(Events.SCORING_AWARD, {
+        points: -(CN.FRAG_CREDIT_PENALTY * fragmentCount),
+        reason: 'Fragmentation penalty',
+      });
+    }
 
     eventBus.emit(Events.NET_FRAGMENTATION, {
       debrisId,

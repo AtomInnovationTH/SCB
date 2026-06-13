@@ -18,6 +18,7 @@
  */
 
 import { Constants } from '../core/Constants.js';
+import { computeToolOdds, computeBestTool } from './ToolOdds.js';
 
 /**
  * @typedef {Object} ToolRecommendation
@@ -119,17 +120,32 @@ export function recommendArmTool(opts = {}) {
     scores.PAD = 3; hints.PAD = 'pad auto-resolves adhesion';
   }
 
-  // ── Rank: highest score; ties broken by preference order (NET → MAGNET →
-  // GRIPPER → PAD) so a ferrous hull prefers the direct magnet over the gripper,
-  // and the net stays primary whenever it ties a specialist tool. ──
-  const PREF = ['NET', 'MAGNET', 'GRIPPER', 'PAD'];
-  let recommended = toolset[0] || 'NET';
-  let best = -1;
-  for (const k of PREF) {
-    if (k in scores && scores[k] > best) { best = scores[k]; recommended = k; }
-  }
+  // ── Rank (capture-feedback overhaul Phase 1a): the ▶ is now a thin wrapper
+  // over the unified ToolOdds model — argmax p with the preference-margin
+  // stabiliser — so the ★ HUD, the odds strip, and the resolve rolls can never
+  // disagree about which tool is the best bet. ★ scores above stay as the
+  // coarse display tier; the recommendation itself comes from honest numbers.
+  const odds = computeToolOdds({
+    armType,
+    toolset,
+    target: {
+      mass,
+      sizeMeter: sizeM,
+      type: dType,
+      ferromagnetic: ferro,
+      hasFerrousFasteners: fasten,
+      hasGrappleFixture: fixture,
+      tumbleRate: (typeof opts.tumbleRate === 'number') ? opts.tumbleRate : undefined,
+      surfaceRoughness: opts.surfaceRoughness,
+      material: opts.material,
+    },
+    range: (typeof opts.range === 'number') ? opts.range : undefined,
+    netClass,
+    netCount: netGone ? 0 : undefined,
+  });
+  const recommended = computeBestTool(odds, toolset);
 
-  return { recommended, alternatives: toolset, scores, hints };
+  return { recommended, alternatives: toolset, scores, hints, odds };
 }
 
 export default { recommendArmTool };

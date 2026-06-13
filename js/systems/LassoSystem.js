@@ -12,6 +12,8 @@ import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { orbitToSceneCartesian } from '../entities/OrbitalMechanics.js';
+import { computeToolOdds } from './ToolOdds.js';
+import { captureNetSystem } from '../entities/CaptureNet.js';
 
 /** 1 meter in scene units (1 unit = 100 km = 100000 m) */
 const M = 0.00001;
@@ -476,8 +478,30 @@ export class LassoSystem {
             // Only announce on the transition into range for this target.
             if (this._inRangePromptId !== targetId) {
                 this._inRangePromptId = targetId;
+                // Phase 1d (capture-feedback overhaul): aiming the mother tools
+                // shows the same % readout grammar as the daughter odds strip —
+                // mother net odds via the unified ToolOdds model (CN.LARGE).
+                let oddsNote = '';
+                if (Constants.isFeatureEnabled && Constants.isFeatureEnabled('CAPTURE_NET')) {
+                    const rangeM = playerPos.distanceTo(pos) / M;
+                    // M3: honest magazine — pass the live mother pod count so
+                    // an empty pod shows no "Mother net N%" advertisement.
+                    const motherNets = (captureNetSystem && typeof captureNetSystem.getMotherNetCount === 'function')
+                        ? captureNetSystem.getMotherNetCount() : undefined;
+                    const odds = computeToolOdds({
+                        armType: 'mother',
+                        netClass: Constants.CAPTURE_NET.LARGE,
+                        target: selectedTarget,
+                        range: rangeM,
+                        netCount: motherNets,
+                    });
+                    if (odds.NET && odds.NET.p != null && odds.NET.p > 0) {
+                        const cap = (Constants.TOOL_ODDS && Constants.TOOL_ODDS.DISPLAY_CAP) ?? 0.99;
+                        oddsNote = ` Mother net ${Math.round(Math.min(odds.NET.p, cap) * 100)}%.`;
+                    }
+                }
                 eventBus.emit(Events.COMMS_MESSAGE, {
-                    text: 'Target in lasso range — press N to cast.',
+                    text: `Target in lasso range — press N to cast.${oddsNote}`,
                     source: 'SYSTEM',
                     channel: 'CMD',
                     priority: 'info',

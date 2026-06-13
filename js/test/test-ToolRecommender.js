@@ -81,11 +81,17 @@ describe('ToolRecommender — NET / MAGNET priority (§7)', () => {
     assert.deepEqual(s.alternatives, ['NET', 'PAD', 'MAGNET']);
   });
 
-  it('P3 gripper: a fixtured target that fits the net shows GRIPPER as a visible alternative', () => {
+  it('P3 gripper: a fixtured target that fits the net → GRIPPER takes the ▶ (honest odds)', () => {
     const r = recommendArmTool({
       armType: 'weaver', mass: 120, debrisType: 'defunctSat', hasGrappleFixture: true,
     });
-    assert.equal(r.recommended, 'NET', 'net fits (120 < 500) and stays primary');
+    // Capture-feedback overhaul Phase 1a: the ▶ is argmax of the unified
+    // ToolOdds model. A fixtured gripper latch rolls at P_GRIP_FIXTURED 0.90,
+    // while a net shot at the default 50 m standoff arrives with decayed spin
+    // (fSpin ≈ 0.6) → pCling ≈ 0.53. The honest recommendation is the gripper;
+    // the net remains a visible ★★★ alternative.
+    assert.equal(r.recommended, 'GRIPPER', 'fixtured 90% latch beats a ~53% net shot at 50 m');
+    assert.equal(r.scores.NET, 3, 'net stays a visible ★★★ alternative');
     assert.equal(r.scores.GRIPPER, 3, 'fixtured + mass>=50 → gripper is awkward-shape ★★★');
   });
 

@@ -633,6 +633,9 @@ export const Events = {
   NET_CROSS_DEBRIS_WARNING:  'net:crossDebrisWarning',
   /** Fragmentation event. Payload: { debrisId, fragmentCount, mercyApplied } */
   NET_FRAGMENTATION:         'net:fragmentation',
+  /** Phase 1.5 (capture-feedback overhaul): close-range survey completed — Full
+   *  Profile unlocked for one debris. Payload: { debrisId, target, bountyPaid } */
+  DEBRIS_PROFILED:           'debris:profiled',
   /** First successful cinch capture (stub for TeachingSystem). Payload: { debrisId } */
   CINCH_FIRST_SUCCESS:       'net:cinchFirstSuccess',
   /** Net empty click — F-press with 0 nets remaining. Payload: { armId } */

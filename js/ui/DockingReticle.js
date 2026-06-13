@@ -13,8 +13,10 @@ import { GameStates } from '../core/GameState.js';
 import { Constants } from '../core/Constants.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import {
-  computeClingProbability, getNetClassForType, computeLeadAim, assessNetFit,
+  getNetClassForType, computeLeadAim, assessNetFit, presentedWidthForApproach,
 } from '../entities/CaptureNet.js';
+import { dossierSystem } from '../systems/DossierSystem.js';
+import { toolShortLabel } from '../systems/ToolOdds.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -159,6 +161,12 @@ export class DockingReticle {
    * @param {object|null} target - Debris object with .mesh.position
    */
   setArmData(arm, target) {
+    // M2: drop the odds-display easing state when the piloted arm or the
+    // target changes — otherwise the strip briefly counts up from the previous
+    // context's odds and shows phantom trend arrows.
+    if (arm !== this._arm || target !== this._target) {
+      this._oddsEase = null;
+    }
     this._arm = arm;
     this._target = target;
   }
@@ -170,6 +178,7 @@ export class DockingReticle {
   update(dt) {
     if (!this._visible || !this._arm) return;
     this._time += dt;
+    this._lastDt = dt;   // Phase 1b: odds-strip display easing needs frame dt
     this._computeMetrics(dt);
     this._updateApproachAudio();
     this._render();
@@ -786,154 +795,487 @@ export class DockingReticle {
   }
 
   /**
-   * @private CP-1 / P2 — STATION_KEEP tool-selection panel
-   * (DAUGHTER_MULTITOOL_SPEC §8.1). Renders one row per verb in the arm's
-   * toolset with a ▶ on the selected tool, ★ scores, NET (n) magazine count,
-   * and a hint. Sits directly below the θ/φ/R readout box; no overlap.
+   * @private Capture Odds Strip — one widget, four context states
+   * (capture-feedback overhaul Phase 1b; replaces the vertical ★-score list).
+   *
+   *   AIM       (STATION_KEEP)        — live odds strip; % is the hero.
+   *   IN FLIGHT (NETTING, net away)   — strip dims to labels; `NET AWAY — 34m`.
+   *   REELING   (GRAPPLED/REELING + payload) — TENSION bar with RIP/SNAP ticks.
+   *   RESULT    — existing full-screen flashes (NET FAILED / TETHER SNAP)
+   *               handle it; the widget draws nothing.
    */
   _drawToolSelectionPanel(ctx, cx, cy) {
     const arm = this._arm;
-    if (!arm || arm.state !== 'STATION_KEEP') return;
+    if (!arm) return;
+    if (arm.state === 'STATION_KEEP') {
+      this._drawOddsStripAim(ctx, cx, cy);
+    } else if (arm.state === 'NETTING') {
+      this._drawOddsStripInFlight(ctx, cx, cy);
+    } else if ((arm.state === 'GRAPPLED' || arm.state === 'REELING') && arm.capturedDebris) {
+      this._drawTensionBar(ctx, cx, cy);
+    }
+    // RESULT state: full-screen flashes elsewhere — nothing here.
+  }
+
+  /** @private Widget frame shared by all states. Returns {left, top, boxW}. */
+  _oddsPanelFrame(ctx, cx, cy, boxH) {
+    const HUD = Constants.TOOL_HUD || {};
+    const boxW = HUD.PANEL_WIDTH_PX || 180;
+    const left = cx - boxW / 2;
+    const top = cy + 142;
+    ctx.fillStyle = 'rgba(0, 20, 40, 0.7)';
+    ctx.fillRect(left, top - 4, boxW, boxH);
+    ctx.strokeStyle = 'rgba(0, 255, 170, 0.4)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(left, top - 4, boxW, boxH);
+    return { left, top, boxW };
+  }
+
+  /** @private Short column label per verb (names are footnotes; % is the hero). */
+  _oddsColLabel(kind) {
+    return toolShortLabel(kind);
+  }
+
+  /** @private Odds → colour tier (always paired with a symbol/word — colourblind-safe). */
+  _oddsColor(pct) {
+    const HUD = Constants.TOOL_HUD || {};
+    if (pct >= 80) return HUD.COLOR_GOOD || '#00ffaa';
+    if (pct >= 50) return HUD.COLOR_MID || '#ffd166';
+    if (pct >= 1) return HUD.COLOR_LOW || '#ff7755';
+    return HUD.COLOR_ZERO || 'rgba(180,200,210,0.45)';
+  }
+
+  /**
+   * @private Ease the displayed odds toward the truth (~300 ms lerp) and track
+   * the trend rate, so de-spinning reads as a live count-up: 41%↑ 48%↑ 57%↑.
+   * Motion IS the reward — this is the loop that teaches "pull a lever → odds climb".
+   */
+  _easeOdds(kind, pTrue) {
+    const TO = Constants.TOOL_ODDS || {};
+    const dt = this._lastDt || 0.016;
+    if (!this._oddsEase) this._oddsEase = {};
+    let e = this._oddsEase[kind];
+    if (!e) e = this._oddsEase[kind] = { shown: pTrue, rate: 0, lastTrue: pTrue };
+    // Trend rate (smoothed Δp/s) from the TRUE value, so the arrow leads the easing.
+    const inst = dt > 0 ? (pTrue - e.lastTrue) / dt : 0;
+    e.rate = e.rate * 0.85 + inst * 0.15;
+    e.lastTrue = pTrue;
+    // Display easing.
+    const tau = TO.DISPLAY_LERP_S || 0.3;
+    const k = 1 - Math.exp(-dt / tau);
+    e.shown += (pTrue - e.shown) * k;
+    if (Math.abs(e.shown - pTrue) < 0.002) e.shown = pTrue;
+    return e;
+  }
+
+  /** @private AIM state — the live Capture Odds Strip. */
+  _drawOddsStripAim(ctx, cx, cy) {
+    const arm = this._arm;
     const toolset = arm.toolset || [];
     if (toolset.length === 0) return;
 
     const HUD = Constants.TOOL_HUD || {};
-    const GLYPHS = HUD.GLYPHS || { NET: 'N', MAGNET: 'M', GRIPPER: 'G', PAD: 'P' };
-    const scores = arm._toolScores || {};
-    const hints = arm._toolHints || {};
+    const TO = Constants.TOOL_ODDS || {};
+    const odds = arm._toolOdds || {};
     const selected = arm.selectedTool || 'NET';
     const netCount = (typeof arm.getNetInventory === 'function') ? arm.getNetInventory() : 0;
+    // Phase 1.5: knowledge gates the readout — before Full Profile the est-mass
+    // strain band is uncertain (NET % renders with ~) and brittleness is
+    // unknown (FRAG chip shows ?). Honest about what we don't know.
+    const skTarget = arm._stationKeepTarget || arm.target;
+    const profiled = skTarget ? dossierSystem.isProfiled(skTarget.id) : true;
 
-    const rowH = HUD.ROW_HEIGHT_PX || 16;
-    const boxW = HUD.PANEL_WIDTH_PX || 180;
-    // Position below the SK readout box (boxY = cy+70, max bottom ≈ cy+134).
-    const boxX = cx;
-    const boxY = cy + 142;
-    const headerH = 16;
-    const footerH = 14;
-    // Item 2: reserve an extra row for the NET pre-fire P-cling readout.
-    const preFireH = (selected === 'NET' && netCount > 0) ? 16 : 0;
-    const boxH = headerH + toolset.length * rowH + footerH + preFireH + 8;
-    const left = boxX - boxW / 2;
+    const headerH = 14;
+    const oddsRowH = 18;
+    const labelRowH = 11;
+    const blockerRowH = 10;
+    const advisoryH = 13;
+    const footerH = 13;
+    const boxH = headerH + oddsRowH + labelRowH + blockerRowH + advisoryH + footerH + 6;
+    const { left, top, boxW } = this._oddsPanelFrame(ctx, cx, cy, boxH);
 
-    // Background + border
-    ctx.fillStyle = 'rgba(0, 20, 40, 0.7)';
-    ctx.fillRect(left, boxY - 4, boxW, boxH);
-    ctx.strokeStyle = 'rgba(0, 255, 170, 0.4)';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(left, boxY - 4, boxW, boxH);
-
-    // Header
-    const armLabel = arm.type === 'weaver' ? 'Weaver' : arm.type === 'spinner' ? 'Spinner' : 'Daughter';
+    // Header — arm class.
+    const armLabel = arm.type === 'weaver' ? 'WEAVER' : arm.type === 'spinner' ? 'SPINNER' : 'DAUGHTER';
     ctx.font = `bold 10px ${FONT}`;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = 'rgba(0, 255, 170, 0.7)';
-    ctx.fillText(`TOOL  (${armLabel})`, left + 8, boxY + 6);
+    ctx.fillText(armLabel, left + 8, top + 5);
 
-    // Rows
-    let y = boxY + headerH + 6;
-    for (const kind of toolset) {
+    // ── Fixed columns in cycle order (the eye learns positions) ──
+    const colW = HUD.COL_WIDTH_PX || 48;
+    const stripW = toolset.length * colW;
+    const stripLeft = left + (boxW - stripW) / 2;
+    const oddsY = top + headerH + oddsRowH / 2;
+    const labelY = top + headerH + oddsRowH + labelRowH / 2;
+    const blockerY = labelY + labelRowH / 2 + blockerRowH / 2;
+    const cap = TO.DISPLAY_CAP ?? 0.99;
+    const trendRate = TO.TREND_RATE_PER_S ?? 0.02;
+
+    let selectedPct = null;
+    for (let i = 0; i < toolset.length; i++) {
+      const kind = toolset[i];
+      const o = odds[kind];
+      const colCx = stripLeft + i * colW + colW / 2;
       const isSel = kind === selected;
-      const score = scores[kind] || 0;
-      const dimmed = score <= 0;
-      const glyph = GLYPHS[kind] || kind[0];
-      let label = kind;
-      if (kind === 'NET') label = `NET (${netCount})`;
-      else if (kind === 'PAD' && typeof arm._padUvCureDosesRemaining === 'number') {
-        label = `PAD [u:${arm._padUvCureDosesRemaining}]`;   // §13 Q3 — UV-cure magazine
-      }
 
-      // selection marker
-      ctx.font = `bold 11px ${FONT}`;
-      ctx.textAlign = 'left';
-      ctx.fillStyle = isSel ? (HUD.HIGHLIGHT_COLOR || '#ffd166') : 'rgba(0,255,170,0.3)';
-      ctx.fillText(isSel ? '\u25B6' : ' ', left + 6, y);
+      let text;
+      let color;
+      let pct = null;
+      let rising = false;
+      let falling = false;
 
-      // glyph + label
-      ctx.font = `${isSel ? 'bold ' : ''}11px ${FONT}`;
-      ctx.fillStyle = dimmed
-        ? (HUD.DIMMED_COLOR || 'rgba(180,200,210,0.55)')
-        : (isSel ? (HUD.HIGHLIGHT_COLOR || '#ffd166') : 'rgba(0,255,170,0.85)');
-      ctx.fillText(`${glyph} \u00B7 ${label}`, left + 20, y);
-
-      // stars (score) or em-dash if not viable
-      ctx.textAlign = 'right';
-      if (score > 0) {
-        ctx.fillStyle = HUD.RECOMMEND_COLOR || '#00ffaa';
-        ctx.fillText('\u2605'.repeat(score), left + boxW - 8, y);
+      if (!o || o.p == null) {
+        // Empty magazine / offline: '--', not 0% — different cause, different fix.
+        text = '--';
+        color = HUD.COLOR_ZERO || 'rgba(180,200,210,0.45)';
+        if (this._oddsEase) delete this._oddsEase[kind];
       } else {
-        ctx.fillStyle = HUD.DIMMED_COLOR || 'rgba(180,200,210,0.55)';
-        ctx.fillText('\u2014', left + boxW - 8, y);
+        const e = this._easeOdds(kind, o.p);
+        pct = Math.round(Math.min(e.shown, cap) * 100);
+        color = this._oddsColor(pct);
+        rising = e.rate > trendRate;
+        falling = e.rate < -trendRate;
+        // Unprofiled target: est-mass strain band is uncertain → honest ~.
+        const approx = (kind === 'NET' && !profiled) ? '~' : '';
+        text = `${approx}${pct}%${rising ? '\u2191' : falling ? '\u2193' : ''}`;
       }
-      y += rowH;
+      if (isSel) selectedPct = pct;
+
+      // Odds number — 14px bold, brightness pulse while rising.
+      ctx.font = `bold ${HUD.ODDS_FONT_PX || 14}px ${FONT}`;
+      ctx.textAlign = 'center';
+      ctx.fillStyle = color;
+      if (rising) {
+        ctx.globalAlpha = 0.8 + 0.2 * Math.abs(Math.sin(this._time * 6));
+      }
+      ctx.fillText(text, colCx, oddsY);
+      ctx.globalAlpha = 1;
+
+      // Label row — 9px, ▶ on selected, ·n magazine count on NET.
+      let label = this._oddsColLabel(kind);
+      if (kind === 'NET') label += `\u00B7${netCount}`;
+      else if (kind === 'PAD' && typeof arm._padUvCureDosesRemaining === 'number') {
+        label += `\u00B7${arm._padUvCureDosesRemaining}`;
+      }
+      ctx.font = `${isSel ? 'bold ' : ''}${HUD.LABEL_FONT_PX || 9}px ${FONT}`;
+      ctx.fillStyle = isSel
+        ? (HUD.HIGHLIGHT_COLOR || '#ffd166')
+        : 'rgba(180, 200, 210, 0.6)';
+      ctx.fillText((isSel ? '\u25B6' : '') + label, colCx, labelY);
+
+      // Selected column: odds-coloured underline.
+      if (isSel) {
+        ctx.strokeStyle = (pct == null) ? (HUD.COLOR_ZERO || 'rgba(180,200,210,0.45)') : color;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(colCx - colW / 2 + 8, labelY + 6);
+        ctx.lineTo(colCx + colW / 2 - 8, labelY + 6);
+        ctx.stroke();
+      }
+
+      // Blocker word — 8px red, ONLY when the verb is dead (0% / --).
+      // Phase 2: the NET column carries the live aspect chip instead when the
+      // target is elongated and the mouth sits between widthM and lengthM —
+      // the % already encodes it (0% ↔ 96%); the chip explains WHY.
+      const aspectChip = (kind === 'NET') ? this._netAspectChip(skTarget) : null;
+      if (aspectChip) {
+        ctx.font = `bold ${HUD.BLOCKER_FONT_PX || 8}px ${FONT}`;
+        ctx.fillStyle = aspectChip.color;
+        ctx.fillText(aspectChip.text, colCx, blockerY);
+      } else if (o && (o.p === 0 || o.p == null) && o.blocker) {
+        ctx.font = `bold ${HUD.BLOCKER_FONT_PX || 8}px ${FONT}`;
+        ctx.fillStyle = HUD.COLOR_BLOCKER || '#ff5555';
+        ctx.fillText(o.blocker, colCx, blockerY);
+      }
     }
 
-    // Footer
+    // ── One advisory line: the single biggest lever ──
+    const advisoryY = blockerY + blockerRowH / 2 + advisoryH / 2;
+    const adv = this._buildOddsAdvisory(odds, selected, selectedPct);
+    if (adv) {
+      ctx.font = `9px ${FONT}`;
+      ctx.textAlign = 'center';
+      ctx.fillStyle = adv.color;
+      ctx.fillText(adv.text, cx, advisoryY);
+    }
+
+    // ── Footer: keys + ⚠FRAG chip (only when risk ≥ FRAG_CHIP_MIN) ──
+    const footerY = advisoryY + advisoryH / 2 + footerH / 2;
     ctx.font = `9px ${FONT}`;
     ctx.textAlign = 'left';
     ctx.fillStyle = 'rgba(0, 255, 170, 0.5)';
-    ctx.fillText('[`] cycle   [F] dispatch', left + 8, y + 2);
-
-    // Selected-tool hint (right-aligned under footer, if present)
-    const hint = hints[selected];
-    if (hint) {
+    ctx.fillText('[`] cycle   [F] fire', left + 8, footerY);
+    const fragRisk = arm._toolOddsFragRisk || 0;
+    if (!profiled) {
+      // Brittleness unknown until the close-range survey — say so honestly.
       ctx.textAlign = 'right';
-      ctx.fillStyle = 'rgba(0, 255, 170, 0.45)';
-      ctx.fillText(hint, left + boxW - 8, y + 2);
+      ctx.fillStyle = 'rgba(255, 170, 0, 0.55)';
+      ctx.fillText('\u26A0FRAG ?', left + boxW - 8, footerY);
+    } else if (fragRisk >= (TO.FRAG_CHIP_MIN ?? 0.10)) {
+      ctx.textAlign = 'right';
+      ctx.fillStyle = fragRisk >= 0.3 ? '#ff5555' : '#ffaa00';
+      ctx.fillText(`\u26A0FRAG ${Math.round(fragRisk * 100)}%`, left + boxW - 8, footerY);
     }
     ctx.textAlign = 'left';
-
-    // Item 2: pre-fire capture readout for NET — live P_cling estimate + the
-    // spin/tumble/distance advisories so the player understands WHY to de-spin
-    // (U) or close the distance before firing.
-    if (selected === 'NET' && netCount > 0) {
-      this._drawNetPreFireReadout(ctx, left, y + 16, boxW);
-    }
   }
 
   /**
-   * @private Item 2 — NET pre-fire capture readout (P_cling estimate + advisories).
-   * Reuses the authoritative computeClingProbability so the displayed odds match
-   * the resolve roll. Distance / tumble drive the actionable advisory line.
+   * @private Phase 2 — live aspect chip for the NET column. Non-null only when
+   * the target is elongated AND the mouth ∈ (widthM, lengthM): the catch is
+   * orientation-dependent, so name the current presentation.
+   * @returns {{text:string, color:string}|null}
    */
-  _drawNetPreFireReadout(ctx, left, y, boxW) {
+  _netAspectChip(target) {
+    if (!target) return null;
+    if (Constants.isFeatureEnabled && !Constants.isFeatureEnabled('ASPECT_CAPTURE')) return null;
     const arm = this._arm;
-    const target = arm && (arm._stationKeepTarget || arm.target);
-    if (!target) return;
+    const lengthM = (target.lengthM != null) ? target.lengthM : (target.sizeMeter || 0);
+    const widthM = (target.widthM != null) ? target.widthM : (target.sizeMeter || 0);
+    if (!(lengthM > widthM)) return null;
+    const dia = getNetClassForType(arm.type).DIAMETER || 0;
+    if (!(dia > widthM && dia < lengthM)) return null;   // orientation can't change the verdict
+    const tp = target._scenePosition;
+    if (!tp || !arm.position) return null;
+    const presented = presentedWidthForApproach(target, {
+      x: tp.x - arm.position.x,
+      y: tp.y - arm.position.y,
+      z: tp.z - arm.position.z,
+    });
+    const HUD = Constants.TOOL_HUD || {};
+    // M5: the ✓ shows when presented width fits the mouth with the tunable
+    // margin (1.0 = exact fit; <1 demands slack before advertising the shot).
+    const fitMargin = (Constants.ASPECT_CAPTURE && Constants.ASPECT_CAPTURE.END_ON_FIT_MARGIN) ?? 1.0;
+    return presented <= dia * fitMargin
+      ? { text: 'END-ON \u2713', color: HUD.COLOR_GOOD || '#00ffaa' }
+      : { text: 'BROADSIDE', color: HUD.COLOR_BLOCKER || '#ff5555' };
+  }
 
-    // Range: prefer the live standoff (metres); fall back to scene-distance.
-    let range = (typeof arm._standoffR === 'number' && arm._standoffR > 0)
-      ? arm._standoffR
-      : 50;
+  /**
+   * @private One advisory line — driven by the selected tool's top blocker,
+   * preserving the established priority chain for NET (width → range →
+   * off-axis → tumble with the live de-spin readout). If a different tool
+   * beats the selected by more than SWITCH_ADVISE_MARGIN, offer the switch.
+   */
+  _buildOddsAdvisory(odds, selected, selectedPct) {
+    const arm = this._arm;
+    const TO = Constants.TOOL_ODDS || {};
+    const target = arm._stationKeepTarget || arm.target;
+    const sel = odds[selected];
 
+    // Deterministic blockers on the selected tool → the fix is the advisory.
+    if (sel && sel.p == null) {
+      return { text: sel.hint || 'unavailable', color: '#ff7755' };
+    }
+
+    // Switch offer: another tool beats the selected by > 20 pts.
+    const switchMargin = TO.SWITCH_ADVISE_MARGIN ?? 0.20;
+    let bestKind = null;
+    let bestP = (sel && sel.p) || 0;
+    for (const kind of Object.keys(odds)) {
+      if (kind === selected) continue;
+      const o = odds[kind];
+      if (o && o.p != null && o.p > bestP + switchMargin) {
+        bestKind = kind;
+        bestP = o.p;
+      }
+    }
+
+    if (selected === 'NET') {
+      const range = (typeof arm._standoffR === 'number' && arm._standoffR > 0)
+        ? arm._standoffR : 50;
+      const netAdv = this._buildNetAdvisory(target, range, selectedPct ?? 0);
+      // NET-dead + better tool available → the switch IS the fix.
+      if (sel && sel.p === 0 && bestKind) {
+        return {
+          text: `${this._oddsColLabel(bestKind)} ${Math.round(bestP * 100)}% \u2014 switch [\`]`,
+          color: '#ffd166',
+        };
+      }
+      if (netAdv) return { text: netAdv.text, color: netAdv.color };
+      if (bestKind) {
+        return {
+          text: `${this._oddsColLabel(bestKind)} ${Math.round(bestP * 100)}% \u2014 switch [\`]`,
+          color: '#ffd166',
+        };
+      }
+      // Phase 1.5: nothing more urgent → offer the knowledge fix.
+      if (target && !dossierSystem.isProfiled(target.id)) {
+        const surveyM = (Constants.DOSSIER && Constants.DOSSIER.DETAIL_SCAN_RANGE_M) || 50;
+        return { text: `close to ${surveyM}m to survey`, color: 'rgba(0, 255, 170, 0.6)' };
+      }
+      return null;
+    }
+
+    // Non-NET selected: blocker hint first, then the switch offer.
+    if (sel && sel.p === 0 && sel.hint) {
+      return { text: sel.hint, color: '#ff7755' };
+    }
+    // Phase 3c: live eddy-damping readout — the MAGNET's passive secondary is
+    // working; show the tumble bleeding so the NET % climb reads as caused.
+    if (selected === 'MAGNET' && target && target._eddyDamping) {
+      const deg = Math.abs(target.tumbleRate || 0) * (180 / Math.PI);
+      return { text: `eddy-damping ${deg.toFixed(1)}\u00B0/s\u2193`, color: '#66ddff' };
+    }
+    if (bestKind) {
+      return {
+        text: `${this._oddsColLabel(bestKind)} ${Math.round(bestP * 100)}% \u2014 switch [\`]`,
+        color: '#ffd166',
+      };
+    }
+    if (sel && sel.hint && sel.p < 0.5) {
+      return { text: sel.hint, color: 'rgba(0, 255, 170, 0.6)' };
+    }
+    return null;
+  }
+
+  /** @private IN FLIGHT — strip dims to labels only; `NET AWAY — 34m`. */
+  _drawOddsStripInFlight(ctx, cx, cy) {
+    const arm = this._arm;
+    const toolset = arm.toolset || [];
+    if (toolset.length === 0) return;
+    const HUD = Constants.TOOL_HUD || {};
+    const boxH = 14 + 14 + 16 + 6;
+    const { left, top, boxW } = this._oddsPanelFrame(ctx, cx, cy, boxH);
+
+    ctx.font = `bold 10px ${FONT}`;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = 'rgba(0, 255, 170, 0.4)';
+    const armLabel = arm.type === 'weaver' ? 'WEAVER' : arm.type === 'spinner' ? 'SPINNER' : 'DAUGHTER';
+    ctx.fillText(armLabel, left + 8, top + 5);
+
+    // Dim labels only — no stale odds during flight.
+    const colW = HUD.COL_WIDTH_PX || 48;
+    const stripLeft = left + (boxW - toolset.length * colW) / 2;
+    ctx.font = `9px ${FONT}`;
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(180, 200, 210, 0.35)';
+    for (let i = 0; i < toolset.length; i++) {
+      ctx.fillText(this._oddsColLabel(toolset[i]), stripLeft + i * colW + colW / 2, top + 14 + 7);
+    }
+
+    // Status line: net distance from the live projectile.
+    const net = arm._firedNet;
+    const distM = net ? Math.round(net.distanceTraveled || 0) : null;
+    ctx.font = `bold 11px ${FONT}`;
+    ctx.fillStyle = '#66ddff';
+    ctx.fillText(distM != null ? `NET AWAY \u2014 ${distM}m` : 'NET AWAY', cx, top + 14 + 14 + 8);
+    ctx.textAlign = 'left';
+  }
+
+  /**
+   * @private REELING — the strip swaps to the TENSION bar: tether tension with
+   * the SNAP tick + payload kg; pulses red near snap. Below it, a thin NET
+   * STRAIN bar (payload / rated mass) carries the RIP tick on its own axis —
+   * boost-rip risk is driven by strain, not tether tension, so the two never
+   * share a scale. (Phase 3a adds the boost-reel key and live tension control.)
+   */
+  _drawTensionBar(ctx, cx, cy) {
+    const arm = this._arm;
+    const boxH = 14 + 12 + 16 + 12 + 14 + 6;
+    const { left, top, boxW } = this._oddsPanelFrame(ctx, cx, cy, boxH);
+
+    ctx.font = `bold 10px ${FONT}`;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = 'rgba(0, 255, 170, 0.7)';
+    ctx.fillText('TENSION', left + 8, top + 5);
+    const payloadKg = (arm.capturedDebris && arm.capturedDebris.mass) || 0;
+    ctx.textAlign = 'right';
+    ctx.fillStyle = 'rgba(0, 255, 170, 0.6)';
+    ctx.fillText(`${Math.round(payloadKg)} kg`, left + boxW - 8, top + 5);
+
+    // Bar geometry.
+    const barX = left + 10;
+    const barW = boxW - 20;
+    const barY = top + 14 + 10;
+    const barH = 8;
+
+    // Tension fraction of tether break strength (SNAP at 1.0).
+    const breakN = arm.tetherBreakStrength || 100;
+    const frac = Math.max(0, Math.min(1, (arm.tetherTension || 0) / breakN));
+    const warnFrac = Constants.REEL_TENSION_WARNING ?? 0.7;
+    const critFrac = Constants.REEL_TENSION_CRITICAL ?? 0.9;
+    const critical = frac >= critFrac;
+
+    // Track + fill (solid colour tiers — avoids gradient API in headless tests).
+    ctx.fillStyle = 'rgba(0, 255, 170, 0.12)';
+    ctx.fillRect(barX, barY, barW, barH);
+    let fillCol = frac < warnFrac ? '#00ffaa' : frac < critFrac ? '#ffd166' : '#ff4444';
+    if (critical) {
+      // Pulse red near snap.
+      ctx.globalAlpha = 0.6 + 0.4 * Math.abs(Math.sin(this._time * 8));
+      fillCol = '#ff4444';
+    }
+    ctx.fillStyle = fillCol;
+    ctx.fillRect(barX, barY, barW * frac, barH);
+    ctx.globalAlpha = 1;
+
+    // SNAP tick (tether axis only — RIP lives on the strain bar below).
+    ctx.strokeStyle = '#ff4444';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(barX + barW - 1, barY - 3);
+    ctx.lineTo(barX + barW - 1, barY + barH + 3);
+    ctx.stroke();
+    ctx.font = `8px ${FONT}`;
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#ff4444';
+    ctx.fillText('SNAP', barX + barW, barY - 7);
+
+    // NET STRAIN bar — the axis rip probability actually lives on
+    // (payloadMass / _netRatedMass vs NET_STRAIN_SAFE_FRACTION, the same
+    // quantities _updateReeling rolls boost-rip against). Only meaningful for
+    // a net catch with a known rated mass.
+    const strainY = barY + barH + 8;
+    const strainH = 4;
+    const ratedKg = arm._netRatedMass || 0;
+    const isNetCatch = !arm._captureToolKind || arm._captureToolKind === 'NET';
+    if (isNetCatch && ratedKg > 0 && payloadKg > 0) {
+      const safe = Constants.NET_STRAIN_SAFE_FRACTION ?? 0.8;
+      const strain = Math.max(0, Math.min(1, payloadKg / ratedKg));
+      ctx.fillStyle = 'rgba(0, 255, 170, 0.12)';
+      ctx.fillRect(barX, strainY, barW, strainH);
+      ctx.fillStyle = strain > safe ? '#ffaa00' : 'rgba(0, 255, 170, 0.8)';
+      ctx.fillRect(barX, strainY, barW * strain, strainH);
+      // RIP tick at the safe fraction of the STRAIN axis.
+      ctx.strokeStyle = '#ffaa00';
+      ctx.beginPath();
+      ctx.moveTo(barX + barW * safe, strainY - 2);
+      ctx.lineTo(barX + barW * safe, strainY + strainH + 2);
+      ctx.stroke();
+      ctx.font = `8px ${FONT}`;
+      ctx.textAlign = 'center';
+      ctx.fillStyle = strain > safe ? '#ffaa00' : 'rgba(255, 170, 0, 0.55)';
+      ctx.fillText('RIP', barX + barW * safe, strainY + strainH + 7);
+    }
+
+    // Footer — boost-reel hint lands with Phase 3a's REEL_BOOST.
+    if (Constants.isFeatureEnabled && Constants.isFeatureEnabled('REEL_BOOST')) {
+      ctx.font = `9px ${FONT}`;
+      ctx.textAlign = 'left';
+      ctx.fillStyle = arm._boostReel ? '#ffd166' : 'rgba(0, 255, 170, 0.5)';
+      ctx.fillText(arm._boostReel ? 'BOOST REEL \u00D72' : 'hold [\u21E7] fast reel', left + 8, strainY + strainH + 16);
+    }
+    ctx.textAlign = 'left';
+  }
+
+  /**
+   * @private NET advisory chain (formerly the P-CLING pre-fire readout — the
+   * % itself now lives in the odds strip's NET column; Phase 1b folds the two
+   * into one source so no duplicate % is shown). Priority preserved:
+   * width → range → off-axis → tumble (with the live de-spin readout).
+   * @returns {{ text: string, color: string }|null}
+   */
+  _buildNetAdvisory(target, range, pct) {
+    const arm = this._arm;
+    if (!target) return null;
     const netClass = getNetClassForType(arm.type);
     const CN = Constants.CAPTURE_NET;
     const tumbleOn = Constants.isFeatureEnabled && Constants.isFeatureEnabled('LASER_DESPIN');
     const tumbleRate = tumbleOn ? (target.tumbleRate ?? null) : null;
-    const roughness = target.surfaceRoughness ?? 1.0;
 
-    const pBase = (CN.SLAM_P_BASE && CN.SLAM_P_BASE.RIGHT_HARDER) || 0.8;
-    const pCling = computeClingProbability({
-      pBase,
-      vRel: netClass.LAUNCH_SPEED,
-      vOptimal: netClass.LAUNCH_SPEED,
-      range,
-      roughness,
-      spinFraction: 1.0,            // pre-fire: assume nominal; flight decay applies after launch
-      targetTumbleRate: tumbleRate,
-    });
-
-    const pct = Math.round(pCling * 100);
-    // Colour by odds: green (good) → amber → red.
-    const col = pct >= 80 ? '#00ffaa' : pct >= 60 ? '#ffd166' : '#ff7755';
-
-    ctx.font = `bold 10px ${FONT}`;
-    ctx.textAlign = 'left';
-    ctx.fillStyle = col;
-    ctx.fillText(`P-CLING ~${pct}%`, left + 8, y);
-
-    // Advisory: the single biggest lever the player can pull right now.
     let advisory = '';
     let advisoryCol = 'rgba(0, 255, 170, 0.6)';
 
@@ -952,11 +1294,39 @@ export class DockingReticle {
 
     // Item 4 (2026-06-12): width fork — wider-than-mouth debris is a
     // deterministic reel-time net failure; warn BEFORE the player commits.
-    const fit = assessNetFit(target, netClass);
+    // Phase 2: orientation-aware — pass the live approach bearing so a long
+    // body reads ASPECT (fits end-on) instead of a flat TOO_WIDE.
+    let approachDir = null;
+    if (tScene && arm.position) {
+      approachDir = {
+        x: tScene.x - arm.position.x,
+        y: tScene.y - arm.position.y,
+        z: tScene.z - arm.position.z,
+      };
+    }
+    const fit = assessNetFit(target, netClass, approachDir);
 
     if (fit.fit === 'TOO_WIDE') {
-      advisory = 'too wide \u2014 use GRIPPER [`]';
+      // Phase 0.2 (capture-feedback overhaul): only advise GRIPPER when this
+      // arm actually carries one — the Spinner doesn't, so point at the Weaver.
+      const toolset = (Constants.DAUGHTER_TOOLSETS && Constants.DAUGHTER_TOOLSETS[arm.type])
+        || arm.toolset || [];
+      advisory = toolset.includes('GRIPPER')
+        ? 'too wide \u2014 use GRIPPER [`]'
+        : 'too wide \u2014 recall [R], send the Weaver [D]';
       advisoryCol = '#ff5555';
+    } else if (fit.fit === 'ASPECT') {
+      // Phase 2: currently broadside on a body that fits end-on. Tumble makes
+      // θ sweep — de-spin first to freeze the aspect, THEN orbit around.
+      const inSpec = (Constants.NET_TUMBLE_PENALTY?.IN_SPEC_DEG) || 10;
+      const deg = Math.abs(tumbleRate || 0) * (180 / Math.PI);
+      if (tumbleRate != null && deg > inSpec && !target._despinning) {
+        advisory = 'de-spin to freeze aspect [U]';
+        advisoryCol = '#ffd166';
+      } else {
+        advisory = 'ASPECT: BROADSIDE \u2014 orbit to end-on';
+        advisoryCol = '#ffd166';
+      }
     } else if (range > (CN.ENVELOPE_RANGE || 100)) advisory = 'too far — close in';
     else if (range > (CN.BASELINE_RANGE_MAX || 75)) advisory = 'edge of envelope';
     else if (offAxisDeg > offAxisWarn) {
@@ -975,13 +1345,7 @@ export class DockingReticle {
       }
     }
     if (!advisory && pct >= 80) advisory = 'good shot';
-    if (advisory) {
-      ctx.font = `9px ${FONT}`;
-      ctx.textAlign = 'right';
-      ctx.fillStyle = advisoryCol;
-      ctx.fillText(advisory, left + boxW - 8, y);
-    }
-    ctx.textAlign = 'left';
+    return advisory ? { text: advisory, color: advisoryCol } : null;
   }
 
   /**

@@ -163,6 +163,47 @@ export const TEACHING_MOMENTS = [
     duration: 10000,
     icon: '⚠️',
   },
+  // Phase 0.6 (capture-feedback overhaul): proactive de-spin teaching —
+  // close the "see odds → pull lever → odds climb" loop before the first
+  // wasted net on a fast spinner.
+  {
+    id: 'first_high_tumble_target',
+    title: 'Fast Spinner',
+    body: 'That target is tumbling fast — nets slip off fast spinners. Hold U to fire the de-spin laser; watch the capture odds climb as the tumble bleeds off, then net it.',
+    duration: 9000,
+    icon: '🌀',
+  },
+  {
+    id: 'first_despin_in_spec',
+    title: 'Tumble In Spec',
+    body: 'Tumble in spec — odds restored. This works on any spinner.',
+    duration: 7000,
+    icon: '✅',
+  },
+  // Phase 1.5 (capture-feedback overhaul): the dossier "chest opens".
+  {
+    id: 'first_detail_scan',
+    title: 'Full Profile',
+    body: 'Close-range survey complete — full structural profile and salvage appraisal. Survey before you commit: brittleness drives fragmentation risk, and appraisal tells you what it\'s worth.',
+    duration: 9000,
+    icon: '📋',
+  },
+  // Phase 2 (capture-feedback overhaul): orientation-based capture.
+  {
+    id: 'first_aspect_target',
+    title: 'Too Wide Broadside',
+    body: 'Too wide broadside — but the net can swallow it lengthwise. De-spin it, then orbit around until the readout says END-ON.',
+    duration: 9000,
+    icon: '↔️',
+  },
+  // Phase 3b (capture-feedback overhaul): fragmentation consequences.
+  {
+    id: 'first_fragmentation',
+    title: 'Fragmentation',
+    body: 'The impact broke the debris into new tracked fragments — wreckage breeds wreckage. First one\'s on the house; avoid it with a slow approach, CINCH mode, or the pad for fragile pieces.',
+    duration: 10000,
+    icon: '💥',
+  },
 ];
 
 /** Map of moment ID → moment definition for O(1) lookup */
@@ -315,6 +356,48 @@ export class TeachingSystem {
     // 19. first_tether_snap — TETHER_SNAP (catastrophic line break)
     if (Events.TETHER_SNAP) {
       on(Events.TETHER_SNAP, () => this._trigger('first_tether_snap'));
+    }
+
+    // 20. first_high_tumble_target — TARGET_SELECTED with tumble above the
+    // net-safe spin (Phase 0.6). Gated on LASER_DESPIN so we never teach a
+    // verb (hold U) that isn't wired in.
+    on(Events.TARGET_SELECTED, (data) => {
+      const debris = data && data.debris;
+      if (!debris || typeof debris.tumbleRate !== 'number') return;
+      if (Constants.isFeatureEnabled && !Constants.isFeatureEnabled('LASER_DESPIN')) return;
+      const inSpecDeg = (Constants.NET_TUMBLE_PENALTY && Constants.NET_TUMBLE_PENALTY.IN_SPEC_DEG) || 10;
+      const tumbleDeg = Math.abs(debris.tumbleRate) * (180 / Math.PI);
+      if (tumbleDeg > inSpecDeg) this._trigger('first_high_tumble_target');
+    });
+
+    // 21. first_despin_in_spec — DESPIN_IN_SPEC (Phase 0.6: confirm the loop).
+    if (Events.DESPIN_IN_SPEC) {
+      on(Events.DESPIN_IN_SPEC, () => this._trigger('first_despin_in_spec'));
+    }
+
+    // 22. first_detail_scan — DEBRIS_PROFILED (Phase 1.5: the chest opens).
+    if (Events.DEBRIS_PROFILED) {
+      on(Events.DEBRIS_PROFILED, () => this._trigger('first_detail_scan'));
+    }
+
+    // 23. first_aspect_target — TARGET_SELECTED on an elongated body that only
+    // fits the daughter net end-on (Phase 2). Gated on ASPECT_CAPTURE.
+    on(Events.TARGET_SELECTED, (data) => {
+      const debris = data && data.debris;
+      if (!debris) return;
+      if (Constants.isFeatureEnabled && !Constants.isFeatureEnabled('ASPECT_CAPTURE')) return;
+      const lengthM = (debris.lengthM != null) ? debris.lengthM : (debris.sizeMeter || 0);
+      const widthM = (debris.widthM != null) ? debris.widthM : (debris.sizeMeter || 0);
+      const dia = (Constants.CAPTURE_NET && Constants.CAPTURE_NET.MEDIUM
+        && Constants.CAPTURE_NET.MEDIUM.DIAMETER) || 5;
+      if (lengthM > dia && widthM <= dia && lengthM > widthM) {
+        this._trigger('first_aspect_target');
+      }
+    });
+
+    // 24. first_fragmentation — NET_FRAGMENTATION (Phase 3b: mercy + avoidance).
+    if (Events.NET_FRAGMENTATION) {
+      on(Events.NET_FRAGMENTATION, () => this._trigger('first_fragmentation'));
     }
 
     // Delegation 2 (2026-05-31): Force-injection channel for OnboardingDirector

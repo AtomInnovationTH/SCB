@@ -1703,6 +1703,16 @@ export class InputManager {
       && this.keys['KeyU'] === true,
     );
 
+    // Phase 3a (capture-feedback overhaul): hold Shift → BOOST reel ×2 on
+    // reeling daughters. Set every frame (like the laser intent above) so the
+    // boost always releases on keyup/overlay. Shift is otherwise only a
+    // modifier (Shift+R/V/P/G), so a bare hold is conflict-free.
+    if (d.armManager && typeof d.armManager.setReelBoost === 'function') {
+      const boostHeld = !overlayOpen
+        && (this.keys['ShiftLeft'] === true || this.keys['ShiftRight'] === true);
+      d.armManager.setReelBoost(boostHeld);
+    }
+
     // F17: Suppress continuous input while codex overlay is open
     if (d.codexViewerUI && d.codexViewerUI.isVisible()) return;
 

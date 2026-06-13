@@ -15,9 +15,10 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { getSolarCellTexture } from '../scene/solarCellTexture.js';
 import { tetherReel } from '../systems/TetherReel.js';
-import { captureNetSystem, getNetClassForType, computeLeadAim } from './CaptureNet.js';
+import { captureNetSystem, getNetClassForType, computeLeadAim, computeFragRisk, effectiveFragility, presentedWidthForApproach } from './CaptureNet.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import { recommendArmTool } from '../systems/ToolRecommender.js';
+import { computeToolOdds } from '../systems/ToolOdds.js';
 import { gameState } from '../core/GameState.js';
 
 /** 1 meter in scene units (1 scene unit = 100 km) */
@@ -167,14 +168,24 @@ export class ArmUnit {
     // ── Daughter multi-tool (CP-1 / P2 — DAUGHTER_MULTITOOL_SPEC) ──
     // Static-by-class toolset, read once on construction. selectedTool is the
     // verb F dispatches; it is (re)defaulted to the recommended tool whenever
-    // the daughter enters STATION_KEEP. _toolScores/_toolHints drive the HUD.
+    // the daughter enters STATION_KEEP. The live odds strip reads _toolOdds.
     this.toolset = (Constants.DAUGHTER_TOOLSETS && Constants.DAUGHTER_TOOLSETS[type])
       ? Constants.DAUGHTER_TOOLSETS[type].slice()
       : ['NET'];
     this.selectedTool = 'NET';
     this._captureToolKind = 'NET';         // which verb actually secured the live catch
-    this._toolScores = {};                 // { NET: 3, MAGNET: 2, ... } — for SK HUD ★s
-    this._toolHints = {};                  // { NET: 'Weaver LD-NET', ... }
+    // ── Live tool odds (capture-feedback overhaul Phase 1b) ──
+    // Refreshed at TOOL_ODDS.REFRESH_HZ during STATION_KEEP so de-spinning /
+    // closing in reads as a live count-up on the reticle odds strip.
+    this._toolOdds = null;                 // { NET: {p, blocker, hint}, ... }
+    this._toolOddsFragRisk = 0;            // pre-fire FRAG % for the ⚠ chip
+    this._toolOddsTimer = 0;               // refresh accumulator (s)
+    // ── Reel boost (capture-feedback overhaul Phase 3a) ──
+    this._boostReelHeld = false;           // Shift held (set by InputManager via ArmManager)
+    this._boostReel = false;               // boost ACTIVE this frame (REELING + payload)
+    // ── Eddy-current detumble (Phase 3c — MAGNET secondary) ──
+    this._eddyActive = false;              // damping running this frame
+    this._eddyTarget = null;               // debris being damped (for flag cleanup)
     // Magnetic-grapple sub-state machine (P2): null | 'ENERGIZING' | 'CLOSING' | 'GRIP'
     this._magPhase = null;
     this._magTimer = 0;
@@ -940,11 +951,15 @@ export class ArmUnit {
   deployFreefly() {
     if (this.state !== S.DOCKED) return false;
     // V5: Spring must be charged to deploy
+    // Phase 0.5 (capture-feedback overhaul): refusal parity with deploy() —
+    // every refusal also posts a HintTicker entry naming the next verb.
+    // (No mass check here: free-fly has no target to weigh.)
     if (!this.springCharged) {
       eventBus.emit(Events.COMMS_MESSAGE, {
         text: `${this.id}: Spring not charged — reloading`,
         priority: 'warning',
       });
+      this._postDeployRefusalHint('spring', 'Spring reloading — wait for charge, or deploy another daughter [1-4]');
       return false;
     }
     if (this.fuel <= 0) {
@@ -952,6 +967,7 @@ export class ArmUnit {
         text: `${this.id}: No fuel remaining`,
         priority: 'warning',
       });
+      this._postDeployRefusalHint('fuel', 'Daughter out of fuel — deploy another [1-4] or refuel');
       return false;
     }
     this.target = null;
@@ -2980,6 +2996,20 @@ export class ArmUnit {
       return;
     }
 
+    // Phase 1b (capture-feedback overhaul): live odds refresh at REFRESH_HZ.
+    // The displayed value eases toward this truth in DockingReticle — this is
+    // the "watch the odds climb while de-spinning" feedback loop.
+    if (Constants.isFeatureEnabled('DAUGHTER_MULTITOOL')) {
+      this._toolOddsTimer += dt;
+      const interval = 1 / ((Constants.TOOL_ODDS && Constants.TOOL_ODDS.REFRESH_HZ) || 10);
+      if (this._toolOddsTimer >= interval) {
+        this._toolOddsTimer = 0;
+        this._refreshToolOdds();
+      }
+      // Phase 3c: MAGNET secondary — eddy-current detumble on conductive targets.
+      this._updateEddyDamp(dt, target);
+    }
+
     // Update spherical coordinates from input rates
     this._orbitTheta += this._thetaRate * dt;
     this._orbitPhi += this._phiRate * dt;
@@ -3229,6 +3259,14 @@ export class ArmUnit {
     // Clear LOD protection flag so normal LOD applies again
     if (this._stationKeepTarget) this._stationKeepTarget._isStationKeepTarget = false;
     this._stationKeepTarget = null;
+    // Phase 3c: stop eddy damping + clear the target's HUD flags
+    // (_despinning is safe to clear — DespinLaser re-asserts it each frame)
+    if (this._eddyTarget) {
+      this._eddyTarget._eddyDamping = false;
+      this._eddyTarget._despinning = false;
+    }
+    this._eddyTarget = null;
+    this._eddyActive = false;
     this._thetaRate = 0;
     this._phiRate = 0;
     this._radiusRate = 0;
@@ -3361,11 +3399,123 @@ export class ArmUnit {
       hasGrappleFixture: !!(target && target.hasGrappleFixture === true),
       netDepleted,
     });
-    this._toolScores = rec.scores;
-    this._toolHints = rec.hints;
     this.selectedTool = rec.recommended;
+    this._refreshToolOdds();               // Phase 1b: seed the odds strip immediately
     eventBus.emit(Events.TOOL_ARMSET_CHANGED, { armId: this.id, toolset: this.toolset.slice() });
     eventBus.emit(Events.TOOL_SELECTED, { armId: this.id, tool: this.selectedTool });
+  }
+
+  /**
+   * @private Phase 1b (capture-feedback overhaul): recompute the live tool
+   * odds for the odds strip. Called on SK entry and at TOOL_ODDS.REFRESH_HZ
+   * from _updateStationKeep — the same pure model the resolve rolls use, so
+   * de-spinning / closing in visibly moves the numbers ("honest numbers").
+   */
+  _refreshToolOdds() {
+    const target = this._stationKeepTarget || this.target;
+    const range = (typeof this._standoffR === 'number' && this._standoffR > 0)
+      ? this._standoffR : 50;
+    const netCount = (typeof this.getNetInventory === 'function')
+      ? this.getNetInventory() : (this._netInventory ?? undefined);
+    // Phase 2 (ASPECT_CAPTURE): live presented width along the current
+    // approach bearing — the NET % dips/rises as θ sweeps or as the pilot
+    // orbits toward end-on.
+    let presentedWidthM;
+    if (Constants.isFeatureEnabled('ASPECT_CAPTURE') && target
+        && target._scenePosition && this.position) {
+      const tp = target._scenePosition;
+      presentedWidthM = presentedWidthForApproach(target, {
+        x: tp.x - this.position.x,
+        y: tp.y - this.position.y,
+        z: tp.z - this.position.z,
+      });
+    }
+    const odds = computeToolOdds({
+      armType: this.type,
+      toolset: this.toolset,
+      target,
+      range,
+      netCount,
+      padUvDoses: this._padUvCureDosesRemaining,
+      presentedWidthM,
+    });
+    this._toolOdds = odds;
+    // Pre-fire FRAG risk for the ⚠FRAG chip (same computeFragRisk the resolve
+    // computes at _resolveCatch; Phase 3b rolls it).
+    if (target) {
+      const netClass = getNetClassForType(this.type);
+      this._toolOddsFragRisk = computeFragRisk({
+        netMass: netClass.MASS,
+        vRel: netClass.LAUNCH_SPEED,
+        targetFragility: effectiveFragility(target),
+        range,
+      });
+    } else {
+      this._toolOddsFragRisk = 0;
+    }
+  }
+
+  /**
+   * @private Phase 3c (capture-feedback overhaul): eddy-current detumble —
+   * the MAGNET's rotating field induces eddy currents in a CONDUCTIVE hull and
+   * bleeds tumble at ~⅓ of the mother laser's rate, ≤ EDDY_DAMP.RANGE_M. Runs
+   * passively while station-keeping with MAGNET selected (no new key). Counts
+   * toward DESPIN_IN_SPEC so the "tumble in spec — net it" loop closes the
+   * same way as the laser.
+   * @param {number} dt
+   * @param {object|null} target — the STATION_KEEP target
+   */
+  _updateEddyDamp(dt, target) {
+    const ED = Constants.EDDY_DAMP;
+    const conductive = !!(ED && target
+      && Array.isArray(ED.CONDUCTIVE_MATERIALS)
+      && ED.CONDUCTIVE_MATERIALS.includes(target.material));
+    const active = conductive
+      && this.selectedTool === 'MAGNET'
+      && (target.tumbleRate || 0) > 0
+      && (typeof this._standoffR === 'number' && this._standoffR <= (ED.RANGE_M || 30));
+
+    if (!active) {
+      if (this._eddyActive) {
+        this._eddyActive = false;
+        if (this._eddyTarget) {
+          this._eddyTarget._eddyDamping = false;
+          // Also clear the shared HUD hint — the laser re-asserts it every
+          // frame while firing, so this never fights an active despin beam.
+          this._eddyTarget._despinning = false;
+        }
+        this._eddyTarget = null;
+      }
+      return;
+    }
+
+    if (!this._eddyActive) {
+      this._eddyActive = true;
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        source: this.id,
+        text: `${this.id}: Eddy-current damping engaged — EPM field bleeding tumble (${target.material} hull).`,
+        channel: 'CMD', priority: 'info',
+      });
+    }
+    if (this._eddyTarget && this._eddyTarget !== target) this._eddyTarget._eddyDamping = false;
+    this._eddyTarget = target;
+    target._eddyDamping = true;
+    target._despinning = true;   // shared HUD hint (live °/s readouts)
+
+    const before = target.tumbleRate || 0;
+    const after = Math.max(0, before - (ED.DESPIN_RATE_RAD_S2 || 0.1) * dt);
+    target.tumbleRate = after;
+
+    // Crossed below the net-safe spin → announce once (same loop as the laser).
+    const inSpecRad = ((Constants.DESPIN_LASER && Constants.DESPIN_LASER.IN_SPEC_DEG) || 10) * Math.PI / 180;
+    if (before > inSpecRad && after <= inSpecRad) {
+      eventBus.emit(Events.DESPIN_IN_SPEC, { targetId: target.id ?? null, tumbleDeg: after * 180 / Math.PI });
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        source: this.id,
+        text: `${this.id}: Tumble in spec — net it.`,
+        channel: 'CMD', priority: 'success',
+      });
+    }
   }
 
   /** Cycle `selectedTool` through this arm's toolset (` ` ` backtick in SK). */
@@ -3997,6 +4147,11 @@ export class ArmUnit {
     const netState = activeNet.state;
     if (netState === CN_STATES.CAPTURED) {
       this.capturedDebris = this.target;
+      // Phase 2 (ASPECT_CAPTURE): freeze the presented width AT CATCH TIME —
+      // the reel-start oversize check judges the geometry the net actually
+      // wrapped, not whatever the body has rotated to by reel time.
+      this._catchPresentedWidthM = (activeNet._presentedWidthM != null)
+        ? activeNet._presentedWidthM : null;
       if (this.target) {
         this.target._captured = true;
         this.target._capturedByArm = this; // POLISH FIX issue #2: pin debris visual to arm during REELING
@@ -4211,7 +4366,13 @@ export class ArmUnit {
     if (this._captureToolKind && this._captureToolKind !== 'NET') return false;
     const payloadMass = debris.mass || 0;
     const rated = this._netRatedMass || 0;
-    const debrisSize = debris.sizeMeter || 0;
+    // Phase 2 (ASPECT_CAPTURE): judge the width the net actually wrapped at
+    // catch time (presented width at contact), not the scalar max extent —
+    // an end-on catch of a long body is legitimate.
+    const aspectOn = Constants.isFeatureEnabled('ASPECT_CAPTURE');
+    const debrisSize = (aspectOn && this._catchPresentedWidthM != null)
+      ? this._catchPresentedWidthM
+      : (debris.sizeMeter || 0);
     const netDia = this._netDiameter || 0;
 
     // Hard fail: debris wider than the net mouth can't be enveloped/cinched.
@@ -4240,13 +4401,43 @@ export class ArmUnit {
     });
     const reason = oversized
       ? `Net failed — debris too wide for the net (${debrisSize.toFixed(1)}m vs ${netDia.toFixed(1)}m mouth). Returning to reload; a larger net is needed.`
-      : `Net failed — debris slipped free and is drifting. Returning to reload; re-net to retry.`;
+      // Phase 0.4 (capture-feedback overhaul): name the CAUSE so the slip is
+      // legible — the catch was deep in the 80-100% strain band, not bad luck.
+      : `Net failed — debris slipped free and is drifting (catch was ${Math.round(strain * 100)}% of the net's rated mass — slips become likely above ${Math.round((Constants.NET_STRAIN_SAFE_FRACTION ?? 0.8) * 100)}%). Returning to reload; re-net to retry.`;
     eventBus.emit(Events.COMMS_MESSAGE, { text: `${this.id}: ${reason}`, priority: 'warning' });
     if (this._stationKeepTarget) this._stationKeepTarget._isStationKeepTarget = false;
     this._stationKeepTarget = null;
     this.target = null;
     this._transitionTo(S.RETURNING);
     return true;
+  }
+
+  /**
+   * Phase 3a (capture-feedback overhaul): the net RIPS under boost-reel load —
+   * recoverable (mirror of the reel-start strain slip): debris drifts free and
+   * re-capturable, daughter keeps her tether and returns to reload.
+   * @param {number} strain — payload / rated mass at the moment of the rip
+   * @private
+   */
+  _ripNetDuringBoost(strain) {
+    const debris = this.capturedDebris;
+    if (!debris) return;
+    this._boostReel = false;
+    this._releaseCapturedDebris({ keepPinned: false });
+    eventBus.emit(Events.NET_FAILED, {
+      armId: this.id, armIndex: this.index,
+      debrisId: debris.id, strain, oversized: false, recoverable: true,
+      cause: 'boost_reel',
+    });
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      text: `${this.id}: Net RIPPED under boost reel (catch was ${Math.round(strain * 100)}% of rated mass). `
+        + 'Debris drifting free — nominal reel speed is safe; boost prices heavy catches.',
+      priority: 'warning',
+    });
+    if (this._stationKeepTarget) this._stationKeepTarget._isStationKeepTarget = false;
+    this._stationKeepTarget = null;
+    this.target = null;
+    this._transitionTo(S.RETURNING);
   }
 
   /**
@@ -4340,7 +4531,21 @@ export class ArmUnit {
    */
   _updateReeling(dt, parentPos, parentQuat) {
     const hasPayload = this.capturedDebris !== null;
-    const reelSpeed = hasPayload ? REEL_IN_SPEED_LOADED : REEL_IN_SPEED_EMPTY;
+    // Phase 3a (capture-feedback overhaul): hold Shift → BOOST reel ×2.
+    // Tension scales ∝ reelSpeed² (mult applied to both speed and the tension
+    // formula below), so boosting a heavy catch walks the bar toward RIP/SNAP.
+    const boostOn = Constants.isFeatureEnabled('REEL_BOOST')
+      && this._boostReelHeld === true && hasPayload;
+    if (boostOn && !this._boostReel) {
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        source: this.id,
+        text: `${this.id}: Boost reel engaged — watch the tension bar.`,
+        channel: 'CMD', priority: 'info',
+      });
+    }
+    this._boostReel = boostOn;
+    const boostMult = boostOn ? ((Constants.REEL_BOOST && Constants.REEL_BOOST.SPEED_MULT) || 2) : 1;
+    const reelSpeed = (hasPayload ? REEL_IN_SPEED_LOADED : REEL_IN_SPEED_EMPTY) * boostMult;
     const reelSpeedScaled = reelSpeed * M;
 
     // Compute strut-tip dock world position: parentPos + parentQuat × dockOffset.
@@ -4392,10 +4597,40 @@ export class ArmUnit {
     // Calculate tension (simplified: F = m × a_reel).  Coefficient tuned
     // (Constants.REEL_TENSION_COEFF) so an in-spec catch reels home under the
     // default tether break strength — only genuine overload snaps the cable.
+    // Phase 3a: the boosted reelSpeed doubles the tension target; while
+    // boosting, tension EASES toward the target (TENSION_EASE_TAU_S) so the
+    // bar visibly climbs into the red and the player can release Shift before
+    // the snap. Nominal reel keeps the legacy direct assignment exactly —
+    // cautious play is never punished.
     const armMass = this.config.type === 'weaver' ? V5_WEAVER_MASS : V5_SPINNER_MASS;
     const payloadMass = hasPayload && this.capturedDebris ? (this.capturedDebris.mass || 0) : 0;
     const tensionCoeff = Constants.REEL_TENSION_COEFF ?? 0.04;
-    this.tetherTension = (armMass + payloadMass) * reelSpeed * tensionCoeff;
+    const tensionTarget = (armMass + payloadMass) * reelSpeed * tensionCoeff;
+    if (boostOn) {
+      const tau = (Constants.REEL_BOOST && Constants.REEL_BOOST.TENSION_EASE_TAU_S) || 0.4;
+      this.tetherTension += (tensionTarget - this.tetherTension) * Math.min(1, dt / tau);
+    } else {
+      this.tetherTension = tensionTarget;
+    }
+
+    // Phase 3a: boosting a catch deep in the strain band can RIP the net —
+    // recoverable (debris drifts free, daughter returns), same consequence
+    // path as the reel-start strain slip. Rolled per second while boosting.
+    if (boostOn && this.state === S.REELING
+        && (!this._captureToolKind || this._captureToolKind === 'NET')
+        && payloadMass > 0 && (this._netRatedMass || 0) > 0) {
+      const strain = payloadMass / this._netRatedMass;
+      const safe = Constants.NET_STRAIN_SAFE_FRACTION ?? 0.8;
+      if (strain > safe) {
+        const t = Math.min(1, (strain - safe) / Math.max(1e-6, 1 - safe));
+        const pPerS = (Constants.REEL_BOOST && Constants.REEL_BOOST.RIP_PROB_PER_S) ?? 0.10;
+        const roll = (this._boostRipRollOverride != null) ? this._boostRipRollOverride : Math.random();
+        if (roll < pPerS * t * dt) {
+          this._ripNetDuringBoost(strain);
+          return;
+        }
+      }
+    }
 
     // Emit tension update
     eventBus.emit(Events.TETHER_TENSION_UPDATE, {

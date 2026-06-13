@@ -746,6 +746,18 @@ export class ArmManager {
   }
 
   /**
+   * Phase 3a (capture-feedback overhaul): propagate the Shift-held boost-reel
+   * intent to every arm. Called every frame from InputManager.processInput so
+   * the boost always releases on keyup / overlay open.
+   * @param {boolean} held
+   */
+  setReelBoost(held) {
+    for (const arm of this.arms) {
+      arm._boostReelHeld = !!held;
+    }
+  }
+
+  /**
    * Recall the single deployed daughter closest to the mother.
    *
    * Delegation 1 (2026-05-31) onboarding helper for the bare-R rebind:

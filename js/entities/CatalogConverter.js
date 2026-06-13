@@ -180,6 +180,10 @@ export function catalogEntryToDebrisData(entry, id) {
     sizeMeter,
     sceneSize,
     mass,
+    // Phase 2 (ASPECT_CAPTURE): same aspect derivation as procedural debris,
+    // keyed by the internal type (rocket bodies are long; sats are wide-ish).
+    lengthM: sizeMeter,
+    widthM: sizeMeter / (((Constants.ASPECT_CAPTURE || {}).ASPECT_BY_TYPE || {})[type] || 1.0),
     tumbleRate,
     tumbleAxis,
     tumbleAngle: ((seed >>> 8) & 0xffff) / 0xffff * 2 * Math.PI,

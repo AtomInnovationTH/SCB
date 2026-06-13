@@ -2160,10 +2160,14 @@ describe('CaptureNet — UX-11 #1: miss-reason comms mapping', () => {
     assert.ok(text.includes('de-spin'), 'must point at de-spin (U)');
   });
 
-  it('forced and unknown reasons stay silent', () => {
+  it('forced stays silent; unknown reasons get a generic line (Phase 2)', () => {
     assert.equal(missReasonToText('forced'), null);
-    assert.equal(missReasonToText('whatever'), null);
-    assert.equal(missReasonToText(undefined), null);
+    // Phase 2 (capture-feedback overhaul): a miss should never leave the
+    // player guessing — unknown reasons map to a generic re-line message.
+    assert.ok(missReasonToText('whatever'), 'unknown reason → generic line');
+    assert.ok(missReasonToText(undefined), 'undefined reason → generic line');
+    assert.ok(missReasonToText('oversize_aspect').includes('end-on'),
+      'broadside bounce teaches the orientation fix');
   });
 });
 

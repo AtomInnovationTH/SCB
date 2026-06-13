@@ -732,6 +732,11 @@ export class HUD {
       this.statusPanel.renderArmPanel();
     });
 
+    // Phase 3b (capture-feedback overhaul): fragmentation → red alert flash.
+    eventBus.on(Events.NET_FRAGMENTATION, (data) => {
+      this.showFragmentationAlert(data);
+    });
+
     // V5: Tether tangle → re-render arm panel
     eventBus.on(Events.TETHER_TANGLE, () => this.statusPanel.renderArmPanel());
 
@@ -1674,6 +1679,45 @@ export class HUD {
     timerManager.setTimeout(() => text.remove(), 2100, { owner: this });
 
     this.showWarning('⚠ NET FAILED — debris slipped free', 'warning');
+  }
+
+  /**
+   * Phase 3b (capture-feedback overhaul): fragmentation alert — the impact
+   * broke debris into new tracked fragments (Kessler ticks up). Red flash;
+   * the mercy waiver is named when it applies.
+   * @param {{ debrisId:*, fragmentCount:number, mercyApplied:boolean }} data
+   */
+  showFragmentationAlert(data) {
+    const flash = document.createElement('div');
+    flash.style.cssText = `
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      background: radial-gradient(circle, rgba(255,80,40,0.5) 0%, rgba(255,40,0,0) 70%);
+      pointer-events: none; z-index: 100;
+      animation: detachFlash 0.8s ease-out forwards;
+    `;
+    document.body.appendChild(flash);
+    timerManager.setTimeout(() => flash.remove(), 850, { owner: this });
+
+    const text = document.createElement('div');
+    text.style.cssText = `
+      position: fixed; top: 35%; left: 50%;
+      transform: translate(-50%, -50%);
+      color: #ff6633; font-family: 'Courier New', monospace;
+      font-size: 28px; font-weight: bold; letter-spacing: 4px;
+      text-shadow: 0 0 18px rgba(255,100,50,0.8), 0 0 36px rgba(255,60,0,0.4);
+      pointer-events: none; z-index: 101;
+      animation: detachTextFloat 2.0s ease-out forwards;
+    `;
+    text.textContent = 'FRAGMENTATION';
+    document.body.appendChild(text);
+    timerManager.setTimeout(() => text.remove(), 2100, { owner: this });
+
+    const n = data?.fragmentCount || 1;
+    this.showWarning(
+      data?.mercyApplied
+        ? `⚠ FRAGMENTATION — ${n} new fragment${n > 1 ? 's' : ''} (first-time penalty waived)`
+        : `⚠ FRAGMENTATION — ${n} new fragment${n > 1 ? 's' : ''} tracked`,
+      'critical');
   }
 
   /**

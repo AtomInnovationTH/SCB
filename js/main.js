@@ -36,6 +36,7 @@ import { CameraSystem } from './systems/CameraSystem.js';
 import { CommsSystem } from './systems/CommsSystem.js';
 import { ResourceSystem } from './systems/ResourceSystem.js';
 import { SensorSystem } from './systems/SensorSystem.js';
+import { dossierSystem } from './systems/DossierSystem.js';
 import { kesslerSystem } from './systems/KesslerSystem.js';
 import { CargoSystem } from './systems/CargoSystem.js';
 import { ForgeSystem } from './systems/ForgeSystem.js';
@@ -1410,6 +1411,14 @@ function gameLoop(timestamp) {
     // Update extracted systems
     try { resourceSystem.update(dt); } catch (e) { console.error('[GameLoop] resourceSystem:', e); }
     try { sensorSystem.update(dt, player.getPosition(), debrisField); } catch (e) { console.error('[GameLoop] sensorSystem:', e); }
+    // Phase 1.5 (capture-feedback overhaul): close-range survey → Full Profile
+    try {
+      dossierSystem.update(dt, {
+        playerPos: player.getPosition(),
+        armManager,
+        target: targetSelector.getActiveTarget ? targetSelector.getActiveTarget() : null,
+      });
+    } catch (e) { console.error('[GameLoop] dossierSystem:', e); }
     try { kesslerSystem.update(dt); } catch (e) { console.error('[GameLoop] kesslerSystem:', e); }
 
     // Update forge system

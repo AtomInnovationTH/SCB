@@ -167,6 +167,12 @@ import './test-ArmIdleAdvisor.js';  // Item 3 — anti-stuck idle watchdog
 
 // CP-1 / P2: Daughter multi-tool — recommender, magnetic grapple, SK tool panel
 import './test-ToolRecommender.js';
+import './test-ToolOdds.js';        // capture-feedback overhaul Phase 1a — unified live odds
+import './test-DossierSystem.js';   // capture-feedback overhaul Phase 1.5 — dossier reveal + survey
+import './test-AspectCapture.js';   // capture-feedback overhaul Phase 2 — orientation-based capture
+import './test-Fragmentation.js';   // capture-feedback overhaul Phase 3b — frag roll + severity
+import './test-ReelBoost.js';       // capture-feedback overhaul Phase 3a — boost reel tension/rip
+import './test-EddyDamp.js';        // capture-feedback overhaul Phase 3c — magnet eddy detumble
 import './test-ArmUnit-MagneticGrapple.js';
 import './test-DockingReticle-ToolPanel.js';
 // CP-1 / P3 + P4: gripper jaws + multi-modal pad
