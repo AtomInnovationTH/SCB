@@ -21,6 +21,7 @@ const SPHERE_RADIUS = 140;         // px radius — diameter 280 matches targets
 const MARGIN_RIGHT = 0;            // px from right screen edge — flush with viewport edge
 const MARGIN_TOP_FALLBACK = 10;    // px from top edge — fallback when comms panel is absent
 const COMMS_GAP = 6;              // px gap between comms panel bottom and NavSphere top (UX-2 #11)
+const MIN_READOUT_HEIGHT = 20;     // px vertical footprint of the minimized LAT/LON/ALT one-liner
 
 /** @enum {string} Color palette */
 const C = {
@@ -33,6 +34,7 @@ const C = {
   sun:      '#ffcc00',
   prograde: '#00ff88',
   selected: '#00ccff',
+  geo:      'rgba(80, 170, 255, 0.95)', // LAT/LON/ALT readout — blue, clearly tied to the NavSphere
   green:    '#00ff88',
   yellow:   '#ffcc00',
   red:      '#ff4444',
@@ -128,6 +130,7 @@ export class NavSphere {
 
     this._visible = true;
     this._hidden = false;
+    this._minimized = false;             // 9-key style minimize → lat/lon/alt one-liner (8 key)
     this._time = 0;
     this._selectedTargetId = null;
     this._frameSkip = -1;  // Throttle counter for Canvas2D redraws (10Hz at 60fps)
@@ -157,6 +160,9 @@ export class NavSphere {
     this._commsBottomCache = null;
     /** @type {HTMLElement|null} */
     this._commsElCache = null;
+    /** @type {number|null} Timestamp (ms) until which the comms-bottom cache is
+     *  recomputed every draw, covering the comms panel's ~0.3s height animation. */
+    this._commsResizeSettleAt = null;
 
     this._createCanvas();
     this._onResize();
@@ -175,6 +181,14 @@ export class NavSphere {
     eventBus.on(Events.GAME_STATE_CHANGE, ({ to }) => {
       const gameplay = (to === GameStates.ORBITAL_VIEW || to === GameStates.APPROACH || to === GameStates.INTERACTION);
       if (!gameplay) this.setVisible(false);
+    });
+    // Comms panel stepped to a new size — its bottom edge (which anchors the
+    // sphere's vertical position) moved. The height animates over ~0.3s, so
+    // keep recomputing through a short settle window (see update()).
+    eventBus.on(Events.COMMS_PANEL_RESIZED, () => {
+      this._commsBottomCache = null;
+      this._commsResizeSettleAt =
+        (typeof performance !== 'undefined' ? performance.now() : Date.now()) + Constants.COMMS_RESIZE_SETTLE_MS;
     });
     eventBus.on(Events.HUD_TARGET_CLICK, (data) => {
       this.setSelectedTarget(data.id);
@@ -240,6 +254,39 @@ export class NavSphere {
     this.canvas.style.display = this._hidden ? 'none' : 'block';
   }
 
+  /**
+   * Minimize-to-one-line toggle (hotkey revamp 2026-06-14 — the 8 key).
+   * Instead of fully hiding, the minimized NavSphere collapses to a compact
+   * LAT / LON / ALT readout drawn at the sphere's corner (the sphere geometry,
+   * grid, blips and rings are skipped). The readout stays live because update()
+   * keeps refreshing _geoCache. Press again to restore the full sphere.
+   */
+  toggleMinimized() {
+    if (!this.canvas) return;
+    this._minimized = !this._minimized;
+    this._frameSkip = -1; // redraw immediately on the next frame
+  }
+
+  /** @returns {boolean} */
+  get isMinimized() { return this._minimized; }
+
+  /**
+   * Effective vertical footprint (in px) the NavSphere occupies below the comms
+   * panel, used by HUD.js to position the right-hand pane column. This is the
+   * single source of truth for the NavSphere "slot" height so panes below can
+   * reclaim the space when the sphere is minimized or hidden:
+   *   • fully hidden / not visible → 0 (column climbs to just below comms)
+   *   • minimized (8 key)          → MIN_READOUT_HEIGHT (the one-line readout)
+   *   • expanded                   → full diameter (2 × SPHERE_RADIUS)
+   * The COMMS_GAP above the slot is added by the caller, not included here.
+   * @returns {number} px
+   */
+  getReservedHeight() {
+    if (this._hidden || !this._visible) return 0;
+    if (this._minimized) return MIN_READOUT_HEIGHT;
+    return 2 * SPHERE_RADIUS;
+  }
+
   /** @param {number|null} id */
   setSelectedTarget(id) { this._selectedTargetId = id; }
 
@@ -267,6 +314,14 @@ export class NavSphere {
     this.ctx.clearRect(0, 0, this._width, this._height);
     if (!this._visible || !data || !data.playerPos) return;
 
+    // While the comms panel's height animates after a size step, force a
+    // per-draw recompute of its bottom edge so the sphere tracks it smoothly.
+    if (this._commsResizeSettleAt != null) {
+      const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+      if (now < this._commsResizeSettleAt) this._commsBottomCache = null;
+      else this._commsResizeSettleAt = null;
+    }
+
     // Geolocation readout — refresh at 2 Hz (every 5th 10Hz draw frame)
     this._geoDrawCount++;
     if (this._geoDrawCount % 5 === 0 && data.playerPos) {
@@ -276,6 +331,13 @@ export class NavSphere {
         data.playerPos.y / S,
         data.playerPos.z / S
       );
+    }
+
+    // Minimized (8 key): draw only the LAT/LON/ALT one-liner and skip the
+    // sphere. _geoCache above is still refreshed so the readout stays live.
+    if (this._minimized) {
+      this._drawMinReadout();
+      return;
     }
 
     const { playerPos, playerVel, debrisField, activeSatellites,
@@ -494,7 +556,7 @@ export class NavSphere {
     if (this._geoCache) {
       const geo = this._geoCache;
       ctx.font = '10px "Courier New", monospace';
-      ctx.fillStyle = 'rgba(0, 255, 136, 0.7)';
+      ctx.fillStyle = C.geo;
       ctx.textAlign = 'center';
       const latStr = `${geo.lat >= 0 ? '+' : ''}${geo.lat.toFixed(1)}\u00B0`;
       const lonStr = `${geo.lon >= 0 ? '+' : ''}${geo.lon.toFixed(1)}\u00B0`;
@@ -521,9 +583,36 @@ export class NavSphere {
     ctx.restore();
   }
 
-  // ==========================================================================
-  // DISTANCE ENCODING — Hybrid logarithmic dual-zone mapping (S5-A)
-  // ==========================================================================
+  /**
+   * @private Draw the minimized NavSphere — just a compact LAT / LON / ALT
+   * one-liner at the top-right corner where the sphere would sit (8 key).
+   */
+  _drawMinReadout() {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    // Anchor at the sphere's corner; reuse the cached comms-panel bottom.
+    if (this._commsBottomCache == null) {
+      if (!this._commsElCache) this._commsElCache = document.getElementById('hud-comms-panel');
+      this._commsBottomCache = this._commsElCache
+        ? this._commsElCache.getBoundingClientRect().bottom
+        : MARGIN_TOP_FALLBACK;
+    }
+    const x = this._width - MARGIN_RIGHT - 8;
+    const y = this._commsBottomCache + COMMS_GAP + 12;
+
+    const geo = this._geoCache;
+    const latStr = geo ? `${geo.lat >= 0 ? '+' : ''}${geo.lat.toFixed(1)}\u00B0` : '--';
+    const lonStr = geo ? `${geo.lon >= 0 ? '+' : ''}${geo.lon.toFixed(1)}\u00B0` : '--';
+    const altStr = geo ? `${Math.round(geo.alt)} km` : '--';
+
+    ctx.save();
+    ctx.font = '11px "Courier New", monospace';
+    ctx.fillStyle = C.geo;
+    ctx.textAlign = 'right';
+    ctx.fillText(`NAV  LAT ${latStr}  LON ${lonStr}  ALT ${altStr}`, x, y);
+    ctx.restore();
+  }
+
 
   /**
    * Hybrid log + dual-zone distance mapping.

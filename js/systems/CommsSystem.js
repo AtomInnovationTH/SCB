@@ -699,10 +699,10 @@ export class CommsSystem {
       // While piloting the arm, teach the station-keep orbit controls so the
       // player can inspect every side of the debris and line up a capture.
       // When the arm arrived under autopilot, point them at taking manual
-      // control (P) or capturing (N) instead.
+      // control (its number key 1-4) or capturing (N) instead.
       const hint = data?.isPiloted
         ? 'Arrow keys orbit the debris · +/- adjust distance · [N] capture.'
-        : '[N] capture · [P] pilot for a closer look.';
+        : '[N] capture · [1-4] pilot for a closer look.';
       this.addMessage('INFO', armId,
         `ON STATION — holding ${standoff}m from debris #${targetId}. ${hint}`,
         { channel: 'CMD' });
@@ -710,7 +710,7 @@ export class CommsSystem {
       // out the next move in a friendly command voice.
       const daughterName = data?.armId || 'your daughter';
       this.addMessage('INFO', 'HOUSTON',
-        `${daughterName} is holding station on the debris. Press N to capture, or P to pilot it in closer.`,
+        `${daughterName} is holding station on the debris. Press N to capture, or its number key (1-4) to pilot it in closer.`,
         { channel: 'CMD' });
     });
   }

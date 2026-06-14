@@ -14,123 +14,80 @@
 // `keys` is an array of chips; a chip may itself contain a separator like
 // '/' which is rendered as plain text between two key caps.
 //
-// UX-11 #6: curated to fit ONE page (no scroll) at 1366×768+ — 8 cards in a
-// fixed 4-column grid.
-// Hotkey cleanup 2026-06-12: recall-all = Shift+R only (H and Shift+O freed).
-// UX-11 #8: Forge = 5, fuel cycle = 6 (F4/F5 removed).
-// UX-11 #9: C-hold radial removed — C is a plain "expand comms" tap.
+// Hotkey reorg 2026-06-14: mode-based three-card layout (was topic-based
+// Essentials / Views & Maps / Advanced).
+//   • Mother — verbs issued from the command chair (incl. fleet commands:
+//     D deploy, R recall, and their Shift "all" variants).
+//   • Daughter — selecting / operating a deployed arm.
+//   • Advanced + Maps — cross-mode controls: maps, overlays, panes, ship
+//     systems, deep tools.
+//   Originated as a pure regroup of the older topic cards; labels have since
+//   been hand-tuned (2026-06-14). Several rows are descriptive/cosmetic — the
+//   live bindings are owned by InputManager, not this list.
 // Keep in sync with InputManager._handleKeyDown and ARCHITECTURE §6.
 const HOTKEY_GROUPS = [
   {
-    // The core loop a new pilot actually needs: let the autopilot fly, deploy a
-    // daughter, scan for debris. Everything below is optional/advanced.
-    title: 'Essentials',
-    icon: '⭐',
+    // Mother command-chair verbs, in onboarding teach order (orient → look →
+    // target → capture → scan → deploy), then the Shift fleet commands.
+    title: 'Mother',
+    icon: '🛰',
     rows: [
-      [['A'], 'Autopilot — fly to target (no target? auto-acquires nearest)'],
-      [['Tab'], 'Pick / cycle a target'],
-      [['D'], 'Deploy a daughter'],
-      [['N'], 'Fire lasso / net'],
-      [['S'], 'Quick scan'],
-      [['W'], 'Wide scan'],
-      [['B'], 'Open shop'],
+      [['↑ ↓ ← →'], 'Rotate'],
+      [['V'], 'View'],
+      [['S'], 'Scan'],
+      [['T'], 'Target debris'],
+      [['A'], 'Autopilot to target'],
+      [['N'], 'Net launch'],
+      [['D'], 'Daughter launch'],
+      [['R'], 'Reel-in'],
+      'spacer',
+      [['V', 'Shift'], 'View big picture'],
+      [['S', 'Shift'], 'Scan big area'],
+      [['A', 'Shift'], 'Autopilot to debris center + launch all'],
+      [['N', 'Shift'], 'Auto-target + launch at debris in range'],
+      [['D', 'Shift'], 'Daughters launch all'],
+      [['R', 'Shift'], 'Reel-in all'],
     ],
   },
   {
-    title: 'Flight & Nav',
-    icon: '🛰️',
+    // Selecting / operating a deployed daughter arm.
+    title: 'Daughter',
     rows: [
-      [['↑', '↓', '←', '→'], 'Steer the mothership (autopilot off)'],
-      [['='], 'Throttle +10%'],
-      [['−'], 'Throttle −10%'],
-      [['Enter'], 'Approach selected target'],
-      [['R'], 'Context: reel-in / recall / abort autopilot'],
-      [['Shift', 'A'], 'Engage debris-map cluster'],
-      [['Shift', 'G'], 'Trawl sweep (toggle)'],
-    ],
-  },
-  {
-    title: 'Views & Maps',
-    icon: '🎥',
-    rows: [
-      [['V'], 'Cycle camera (Command / Overview)'],
-      [['I'], 'Toggle inspection view'],
-      [['`'], 'Debris map (pick clusters)'],
-      [['Shift', 'V'], 'Strategic map (view-only)'],
-      [['M'], 'Orbit display'],
-      [['Shift', 'N'], 'Toggle NavSphere'],
-      [['Shift', 'C'], 'City labels on Earth'],
-      [['L'], 'Tech library'],
-    ],
-  },
-  {
-    title: 'Daughters & Arms',
-    icon: '🦾',
-    rows: [
-      [['1', '–', '4'], 'Select / deploy daughter'],
-      [['P'], 'Pilot a daughter (on / off)'],
-      [['Shift', 'P'], 'Cycle piloted arm (reaches arms 5+)'],
-      [['7'], 'Return to mothership (works anywhere)'],
-      [['O'], 'Deploy all arms to target'],
-      [['R'], 'Recall closest / reel / abort AP'],
-      [['Shift', 'R'], 'Recall all arms'],
+      [['↑ ↓ ← →'], 'Rotate around debris'],
+      [['V'], 'View'],
+      [['S'], 'Scan'],
+      [['T'], 'Target debris with tools'],
+      [['A'], 'Autopilot to target'],
+      [['N'], 'Net launch'],
+      [['D'], 'Daughter launch'],
+      [['R'], 'Reel-in'],
+      'spacer',
+      [['1', '–', '4'], 'Select daughter'],
+      [['H'], 'Hold steady with laser'],
+      [['E'], 'Electro Dynamic Tether'],
       [['X'], 'Tether detach'],
-      [['Ctrl', 'Shift', 'D'], 'Deorbit sacrifice'],
     ],
   },
   {
-    title: 'Capture & Tools',
-    icon: '🪝',
+    // Cross-mode controls: maps & overlays first, then ship systems / deep
+    // tools. Behaves the same in both Mother and Daughter modes.
+    title: 'Advanced',
     rows: [
-      [['Space'], 'Smart action / fire lasso'],
-      [['F'], 'Focus action'],
-      [['U'], 'Hold: de-spin laser (detumble before netting)'],
-      [['T'], 'Deploy tool'],
-      [['Shift', '`'], 'Cycle tool'],
-      [['Y'], 'Electrodynamic tether'],
-      [[',', '/', '.'], 'Stow / deploy struts'],
-      [['Z'], 'Cycle analysis zones (Shift reverses)'],
-    ],
-  },
-  {
-    // Advanced: only while you have taken manual control of a daughter (P key).
-    // This is the one place WASD is used — the mothership itself steers with
-    // the arrow keys, not WASD.
-    title: 'Piloting a daughter',
-    icon: '🕹️',
-    rows: [
-      [['W', 'A', 'S', 'D'], 'Thrust the daughter'],
-      [['Q', 'E'], 'Thrust up / down'],
-      [['↑', '↓', '←', '→'], 'Orbit (station-keep)'],
-      [['Shift'], 'Fine control (hold)'],
-      [['F'], 'Net deploy / capture'],
-      [['='], 'Station-keep radius'],
-      [['F2'], 'Cycle thruster metal'],
-      [['7'], 'Return to mothership'],
-    ],
-  },
-  {
-    title: 'Power & System',
-    icon: '⚡',
-    rows: [
-      [['Shift', '1'], 'Select Thrust bus'],
-      [['Shift', '2'], 'Select Sensors bus'],
-      [['Shift', '3'], 'Select Arms bus'],
-      [['[', '/', ']'], 'Adjust selected bus'],
-      [['5'], 'Forge (Kiln)'],
-      [['6'], 'Thruster fuel cycle'],
-      [['J'], 'Journal / skills'],
-      [['Ctrl', 'D'], 'Debug overlay'],
-    ],
-  },
-  {
-    title: 'Comms & Help',
-    icon: '📶',
-    rows: [
-      [['C'], 'Expand comms'],
-      [['PgUp', '/', 'PgDn'], 'Scroll comms history'],
-      [['Esc'], 'Pause / back / exit mode'],
-      [['?'], 'Show / hide this list'],
+      [['B'], 'Buy'],
+      [['F'], 'Forge'],
+      [['J'], 'Journal'],
+      [['L'], 'Library'],
+      [['M'], 'Map'],
+      [['?'], 'Help'],
+      [['Esc'], 'Pause / back'],
+      'spacer',
+      [['5'], 'toggle: City names'],
+      [['6'], 'toggle: Constellation names'],
+      [['7'], 'toggle: Comms'],
+      [['8'], 'toggle: NavSphere'],
+      [['9'], 'toggle: Debris pane'],
+      [['0'], 'toggle: Target pane'],
+      [['.'], 'toggle: Struts'],
     ],
   },
 ];
@@ -183,7 +140,7 @@ export class HotkeyOverlay {
     const panel = document.createElement('div');
     panel.id = 'hotkey-panel';
     Object.assign(panel.style, {
-      width: '88%', maxWidth: '1100px', height: '84%', maxHeight: '760px',
+      width: '92%', maxWidth: '1320px', height: '86%', maxHeight: '840px',
       background: '#1a1a2e', border: '1px solid rgba(0,212,255,0.3)',
       borderRadius: '6px', display: 'flex', flexDirection: 'column',
       boxShadow: '0 0 40px rgba(0,212,255,0.12)', overflow: 'hidden',
@@ -191,27 +148,28 @@ export class HotkeyOverlay {
 
     const header = document.createElement('div');
     Object.assign(header.style, {
-      padding: '12px 18px', borderBottom: '1px solid rgba(0,212,255,0.2)',
+      padding: '16px 22px', borderBottom: '1px solid rgba(0,212,255,0.2)',
       display: 'flex', justifyContent: 'space-between', alignItems: 'center',
       flexShrink: '0',
     });
     header.innerHTML = `
-      <div style="display:flex;align-items:center;gap:12px;">
-        <span style="font-size:16px;color:#00d4ff;font-weight:bold;letter-spacing:2px;">⌨ KEYBOARD SHORTCUTS</span>
-        <span style="font-size:11px;color:#888;">press ? or ESC to close</span>
+      <div style="display:flex;align-items:center;gap:14px;">
+        <span style="font-size:21px;color:#00d4ff;font-weight:bold;letter-spacing:2px;">⌨ KEYBOARD SHORTCUTS</span>
+        <span style="font-size:13px;color:#888;">press ? or ESC to close</span>
       </div>
       <button id="hotkey-close-btn" style="background:none;border:1px solid rgba(255,255,255,0.2);
-        color:#888;font-size:14px;cursor:pointer;padding:2px 10px;border-radius:3px;
+        color:#aaa;font-size:16px;cursor:pointer;padding:4px 12px;border-radius:3px;
         font-family:'Courier New',monospace;">ESC ✕</button>
     `;
 
     const body = document.createElement('div');
     Object.assign(body.style, {
-      // UX-11 #6: one page, no scrollbar. Fixed 4-column grid; the curated
-      // groups above are sized to fit two card-rows inside maxHeight:760px.
-      flex: '1', overflow: 'hidden', padding: '12px 14px',
-      display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)',
-      gap: '10px', alignContent: 'start',
+      // One page, no scrollbar. Three mode cards (Mother / Daughter /
+      // Advanced+Maps). Daughter is short (5 rows); Advanced+Maps is tallest,
+      // so it gets the widest track for single-line labels.
+      flex: '1', overflow: 'hidden', padding: '16px 18px',
+      display: 'grid', gridTemplateColumns: '1.1fr 0.85fr 1.15fr',
+      gap: '14px', alignContent: 'start',
     });
 
     for (const group of HOTKEY_GROUPS) {
@@ -232,36 +190,51 @@ export class HotkeyOverlay {
     const card = document.createElement('div');
     Object.assign(card.style, {
       border: '1px solid rgba(0,212,255,0.15)', borderRadius: '4px',
-      background: 'rgba(0,212,255,0.03)', padding: '10px 12px',
+      background: 'rgba(0,212,255,0.03)', padding: '12px 14px',
     });
 
     const title = document.createElement('div');
     Object.assign(title.style, {
-      fontSize: '12px', fontWeight: 'bold', color: '#00d4ff',
-      letterSpacing: '0.05em', marginBottom: '8px',
-      borderBottom: '1px solid rgba(0,212,255,0.12)', paddingBottom: '5px',
+      fontSize: '15px', fontWeight: 'bold', color: '#00d4ff',
+      letterSpacing: '0.05em', marginBottom: '10px',
+      borderBottom: '1px solid rgba(0,212,255,0.12)', paddingBottom: '6px',
     });
-    title.textContent = `${group.icon} ${group.title}`;
+    title.textContent = group.icon ? `${group.icon} ${group.title}` : group.title;
     card.appendChild(title);
 
-    for (const [keys, desc] of group.rows) {
+    for (const row of group.rows) {
+      if (row === 'spacer') {
+        card.appendChild(this._makeSpacer());
+        continue;
+      }
+      const [keys, desc] = row;
       card.appendChild(this._makeRow(keys, desc));
     }
     return card;
+  }
+
+  /** @private A horizontal divider between row clusters */
+  _makeSpacer() {
+    const hr = document.createElement('div');
+    Object.assign(hr.style, {
+      height: '0', borderTop: '1px solid rgba(0,212,255,0.18)',
+      margin: '18px 0',
+    });
+    return hr;
   }
 
   /** @private Build a single key→description row */
   _makeRow(keys, desc) {
     const row = document.createElement('div');
     Object.assign(row.style, {
-      display: 'flex', alignItems: 'center', gap: '6px',
-      margin: '3px 0', fontSize: '10.5px',
+      display: 'flex', alignItems: 'center', gap: '7px',
+      margin: '5px 0', fontSize: '13px',
     });
 
     const keyWrap = document.createElement('div');
     Object.assign(keyWrap.style, {
-      display: 'flex', alignItems: 'center', gap: '3px',
-      flex: '0 0 108px', flexWrap: 'wrap',
+      display: 'flex', alignItems: 'center', gap: '4px',
+      flex: '0 0 96px', flexWrap: 'wrap',
     });
     for (const k of keys) {
       // Separators ('/', '–', '+') render as plain dim text, not key caps.
@@ -276,7 +249,7 @@ export class HotkeyOverlay {
     }
 
     const label = document.createElement('span');
-    Object.assign(label.style, { color: '#bbb', flex: '1', lineHeight: '1.3' });
+    Object.assign(label.style, { color: '#cfcfcf', flex: '1', lineHeight: '1.35' });
     label.textContent = desc;
 
     row.appendChild(keyWrap);
@@ -288,8 +261,8 @@ export class HotkeyOverlay {
   _makeKeyCap(text) {
     const cap = document.createElement('span');
     Object.assign(cap.style, {
-      display: 'inline-block', minWidth: '14px', textAlign: 'center',
-      padding: '1px 6px', fontSize: '10px', color: '#eee',
+      display: 'inline-block', minWidth: '18px', textAlign: 'center',
+      padding: '3px 8px', fontSize: '12.5px', color: '#fff',
       background: 'rgba(255,255,255,0.06)',
       border: '1px solid rgba(0,212,255,0.3)', borderRadius: '3px',
       boxShadow: '0 1px 0 rgba(0,0,0,0.4)', whiteSpace: 'nowrap',

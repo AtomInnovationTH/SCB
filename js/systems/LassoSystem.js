@@ -545,7 +545,7 @@ export class LassoSystem {
         if (this._ammo <= 0) {
             eventBus.emit(Events.LASSO_DENIED, { reason: 'no_ammo' });
             eventBus.emit(Events.COMMS_MESSAGE, {
-                text: 'Web tether depleted — deploy Crossbow arms [D]',
+                text: 'Web tether depleted — deploy daughters [D]',
                 source: 'SYSTEM',
                 channel: 'CMD',
                 priority: 'warning',
@@ -730,7 +730,7 @@ export class LassoSystem {
         // UX-3 #7: Low ammo warning at 5 remaining
         if (this._ammo === 5) {
             eventBus.emit(Events.COMMS_MESSAGE, {
-                text: 'Web nets running low — Crossbow arms are reusable',
+                text: 'Web nets running low — daughters are reusable',
                 source: 'SYSTEM',
                 channel: 'CMD',
                 priority: 'warning',

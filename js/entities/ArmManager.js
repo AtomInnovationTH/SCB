@@ -316,7 +316,7 @@ export class ArmManager {
     // ST-6.7: Safe-mode guard — refuse arm deployment when spacecraft is in safe mode
     if (this.playerSatellite && this.playerSatellite.safeMode) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: 'Arms locked — safe mode active. Repair subsystems first.',
+        text: 'Daughters locked — safe mode active. Repair subsystems first.',
         priority: 'warning',
       });
       return false;
@@ -330,7 +330,7 @@ export class ArmManager {
     // Power distribution: block deployment if ARM bus is at 0%
     if (powerDistribution.armMultiplier <= 0) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: '⚠ ARM BEACON OFFLINE — increase ARM power to deploy',
+        text: '⚠ DAUGHTER BEACON OFFLINE — increase DAUGHTER power to deploy',
         priority: 'warning',
       });
       return false;
@@ -374,7 +374,7 @@ export class ArmManager {
 
     if (!arm) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: 'No arms available for deployment (check spring charge)',
+        text: 'No daughters available for deployment (check spring charge)',
         priority: 'warning',
       });
       return false;
@@ -417,7 +417,7 @@ export class ArmManager {
     // ST-6.7: Safe-mode guard — refuse arm deployment when spacecraft is in safe mode
     if (this.playerSatellite && this.playerSatellite.safeMode) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: 'Arms locked — safe mode active. Repair subsystems first.',
+        text: 'Daughters locked — safe mode active. Repair subsystems first.',
         priority: 'warning',
       });
       return false;
@@ -440,7 +440,7 @@ export class ArmManager {
     // Power distribution: block deployment if ARM bus is at 0%
     if (powerDistribution.armMultiplier <= 0) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: '⚠ ARM BEACON OFFLINE — increase ARM power to deploy',
+        text: '⚠ DAUGHTER BEACON OFFLINE — increase DAUGHTER power to deploy',
         priority: 'warning',
       });
       return false;
@@ -465,7 +465,7 @@ export class ArmManager {
     // ST-6.7: Safe-mode guard — refuse arm deployment when spacecraft is in safe mode
     if (this.playerSatellite && this.playerSatellite.safeMode) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: 'Arms locked — safe mode active. Repair subsystems first.',
+        text: 'Daughters locked — safe mode active. Repair subsystems first.',
         priority: 'warning',
       });
       return false;
@@ -474,7 +474,7 @@ export class ArmManager {
     // Power distribution: block deployment if ARM bus is at 0%
     if (powerDistribution.armMultiplier <= 0) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: '⚠ ARM BEACON OFFLINE — increase ARM power to deploy',
+        text: '⚠ DAUGHTER BEACON OFFLINE — increase DAUGHTER power to deploy',
         priority: 'warning',
       });
       return false;
@@ -483,7 +483,7 @@ export class ArmManager {
     let arm = this._findDockedArm(preferType || 'spinner');
     if (!arm) arm = this._findDockedArm(preferType === 'spinner' ? 'weaver' : 'spinner');
     if (!arm) {
-      eventBus.emit(Events.COMMS_MESSAGE, { text: 'No arms available for fishing', priority: 'warning' });
+      eventBus.emit(Events.COMMS_MESSAGE, { text: 'No daughters available for fishing', priority: 'warning' });
       return false;
     }
     return arm.deployFishing(direction);
@@ -498,7 +498,7 @@ export class ArmManager {
     // Power distribution: block deployment if ARM bus is at 0%
     if (powerDistribution.armMultiplier <= 0) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: '⚠ ARM BEACON OFFLINE — increase ARM power to deploy',
+        text: '⚠ DAUGHTER BEACON OFFLINE — increase DAUGHTER power to deploy',
         priority: 'warning',
       });
       return false;
@@ -509,7 +509,7 @@ export class ArmManager {
 
     if (trawling.length >= maxTrawl) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        sender: 'ARM-MGR', text: `Max trawl arms (${maxTrawl}) deployed`, priority: 'warning',
+        sender: 'DTR-MGR', text: `Max trawl daughters (${maxTrawl}) deployed`, priority: 'warning',
       });
       return false;
     }
@@ -519,7 +519,7 @@ export class ArmManager {
     if (!arm) arm = this._findDockedArm('weaver');
     if (!arm) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        sender: 'ARM-MGR', text: 'No docked arms available', priority: 'warning',
+        sender: 'DTR-MGR', text: 'No docked daughters available', priority: 'warning',
       });
       return false;
     }
@@ -540,7 +540,7 @@ export class ArmManager {
     // Power distribution: block if ARM bus offline
     if (powerDistribution.armMultiplier <= 0) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: '⚠ ARM BEACON OFFLINE — increase ARM power for web shot',
+        text: '⚠ DAUGHTER BEACON OFFLINE — increase DAUGHTER power for web shot',
         priority: 'warning',
       });
       return false;
@@ -568,7 +568,7 @@ export class ArmManager {
     }
     if (!arm) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: 'No arms available for web shot (cooldown or insufficient fuel)',
+        text: 'No daughters available for web shot (cooldown or insufficient fuel)',
         priority: 'warning',
       });
       return false;
@@ -626,7 +626,7 @@ export class ArmManager {
 
     if (!eligible) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: 'No arm with captured debris available for deorbit sacrifice',
+        text: 'No daughter with captured debris available for deorbit sacrifice',
         priority: 'warning',
       });
       return { success: false };
@@ -698,14 +698,14 @@ export class ArmManager {
     // ST-6.7: Safe-mode guard
     if (this.playerSatellite && this.playerSatellite.safeMode) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: '⚠ SAFE MODE — arm deployment locked', priority: 'warning',
+        text: '⚠ SAFE MODE — daughter deployment locked', priority: 'warning',
       });
       return 0;
     }
     // Power distribution guard
     if (powerDistribution.armMultiplier <= 0) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: '⚠ ARM BEACON OFFLINE — increase ARM power to deploy', priority: 'warning',
+        text: '⚠ DAUGHTER BEACON OFFLINE — increase DAUGHTER power to deploy', priority: 'warning',
       });
       return 0;
     }
@@ -720,12 +720,12 @@ export class ArmManager {
 
     if (deployed > 0) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `${deployed} arm${deployed > 1 ? 's' : ''} deployed${target ? ` → ${target.type || 'target'}` : ' (free-fly)'}`,
+        text: `${deployed} daughter${deployed > 1 ? 's' : ''} deployed${target ? ` → ${target.type || 'target'}` : ' (free-fly)'}`,
         priority: 'info',
       });
     } else {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: 'No arms available — check charge status',
+        text: 'No daughters available — check charge status',
         priority: 'warning',
       });
     }
@@ -740,7 +740,7 @@ export class ArmManager {
       arm.recall();
     }
     eventBus.emit(Events.COMMS_MESSAGE, {
-      text: 'All arms recalled',
+      text: 'All daughters recalled',
       priority: 'info',
     });
   }
@@ -1539,9 +1539,14 @@ export class ArmManager {
     if (this.selectedArmIndex >= 0 && this.selectedArmIndex < this.arms.length) {
       const prev = this.arms[this.selectedArmIndex];
       if (prev && prev.isManual()) prev.disableManual();
+      // D4 (hotkey revamp 2026-06-14): clear the old plate's selection glow.
+      if (prev && typeof prev.setSelectedHighlight === 'function') prev.setSelectedHighlight(false);
     }
     this.selectedArmIndex = index;
     const arm = this.arms[index];
+    // D4: glow/flash the newly selected plate (visible feedback for docked arms
+    // before launch; deployed arms also light while piloted).
+    if (arm && typeof arm.setSelectedHighlight === 'function') arm.setSelectedHighlight(true);
     eventBus.emit(Events.ARM_SELECT, { armIndex: index });
     eventBus.emit(Events.COMMS_MESSAGE, {
       text: `Selected ${arm.id} [${index + 1}]`,
@@ -1557,11 +1562,13 @@ export class ArmManager {
     if (this.selectedArmIndex >= 0 && this.selectedArmIndex < this.arms.length) {
       const arm = this.arms[this.selectedArmIndex];
       if (arm && arm.isManual()) arm.disableManual();
+      // D4 (hotkey revamp 2026-06-14): clear the selection glow.
+      if (arm && typeof arm.setSelectedHighlight === 'function') arm.setSelectedHighlight(false);
     }
     this.selectedArmIndex = -1;
     eventBus.emit(Events.ARM_DESELECT);
     eventBus.emit(Events.COMMS_MESSAGE, {
-      text: 'Arm deselected — mothership focus',
+      text: 'Daughter deselected — mothership focus',
       priority: 'info',
     });
   }

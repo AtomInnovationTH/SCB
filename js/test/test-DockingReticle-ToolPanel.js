@@ -38,7 +38,7 @@ function weaverArm() {
     state: 'STATION_KEEP', type: 'weaver',
     toolset: ['NET', 'GRIPPER', 'MAGNET'], selectedTool: 'MAGNET',
     _toolOdds: {
-      NET: { p: 0.68, blocker: 'TUMBLE', hint: 'tumbling 18°/s — de-spin [U]' },
+      NET: { p: 0.68, blocker: 'TUMBLE', hint: 'tumbling 18°/s — de-spin [H]' },
       GRIPPER: { p: 0.10, blocker: 'NO-FIX', hint: 'no fixture to grab — net it' },
       MAGNET: { p: 0.95, blocker: null, hint: 'ferrous hull — direct grip' },
     },

@@ -127,7 +127,7 @@ const SYSTEMS = [
     anchor: [ 0, 0.40 * M, 0.90 * M ],
     labelOffset: [ 0, 1.5 * M, 0.5 * M ],
     parts: [
-      { name: 'CAPTURE ARMS', mass: 9, risk: 'YELLOW', tier: 'major', live: 'arms',
+      { name: 'CAPTURE DAUGHTERS', mass: 9, risk: 'YELLOW', tier: 'major', live: 'arms',
         anchor: [ 0.20 * M, 0.346 * M, 0.90 * M ], labelOffset: [ 1.3 * M, 1.0 * M, 0.6 * M ] },
       { name: 'COLLAR RING', mass: 5, risk: 'GREEN', tier: 'major',
         anchor: [ 0, 0.40 * M, 0.90 * M ], labelOffset: [ -1.4 * M, 0.5 * M, 0.6 * M ] },
@@ -137,7 +137,7 @@ const SYSTEMS = [
         anchor: [ 0.22 * M, 0.381 * M, 0.90 * M ], labelOffset: [ 1.1 * M, 0.65 * M, 0.85 * M ] },
       { name: 'TETHER REELS', mass: 0, risk: 'GREEN', tier: 'detail',
         anchor: [ 0.20 * M, 0.346 * M, 0.55 * M ], labelOffset: [ 1.15 * M, 0.3 * M, 0.4 * M ] },
-      { name: 'CROSSBOW SPRING', mass: 0, risk: 'YELLOW', tier: 'detail',
+      { name: 'CRADLE SPRING', mass: 0, risk: 'YELLOW', tier: 'detail',
         anchor: [ 0.20 * M, 0.346 * M, 0.20 * M ], labelOffset: [ 1.1 * M, -0.3 * M, 0.1 * M ] },
       { name: 'DAUGHTER POCKETS', mass: 0, risk: 'GREEN', tier: 'detail',
         anchor: [ 0.20 * M, 0.35 * M, -0.70 * M ], labelOffset: [ 1.1 * M, 0.3 * M, -0.7 * M ] },
@@ -706,7 +706,7 @@ export class MotherCallouts {
     if (p.def.live === 'arms' && this.armManager) {
       const arms = this.armManager.getArms?.() || this.armManager.arms || [];
       const docked = arms.filter(a => a?.state === 'DOCKED').length;
-      text = `${docked}/${arms.length || 4} ARMS DOCKED`;
+      text = `${docked}/${arms.length || 4} DAUGHTERS DOCKED`;
     } else {
       text = `Mass: ${p.def.mass}%   Risk: ${RISK_TXT[p.def.risk]}`;
     }

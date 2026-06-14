@@ -81,6 +81,20 @@ describe('CommsPanel – pane dimensions', () => {
     assert.equal(COMMS.PANE_EXPAND_HEIGHT_PX, 300);
   });
 
+  it('PANE_LINES_MIN is 2 (line step shows ≥1 full message)', () => {
+    assert.equal(COMMS.PANE_LINES_MIN, 2);
+  });
+
+  it('PANE_HEIGHT_MIN_PX fits the 2-message line step (~33px/msg + 12px chrome)', () => {
+    assert.equal(COMMS.PANE_HEIGHT_MIN_PX, 80);
+    // The log container (height − 12) must hold PANE_LINES_MIN messages at the
+    // normal step's per-message ratio so neither row is clipped.
+    const perMsg = (COMMS.PANE_HEIGHT_PX - 12) / COMMS.PANE_LINES_DEFAULT;
+    const logHeight = COMMS.PANE_HEIGHT_MIN_PX - 12;
+    assert.ok(logHeight >= perMsg * COMMS.PANE_LINES_MIN,
+      `line-step log (${logHeight}px) must hold ${COMMS.PANE_LINES_MIN} msgs (~${(perMsg * COMMS.PANE_LINES_MIN).toFixed(1)}px)`);
+  });
+
 });
 
 // ============================================================================

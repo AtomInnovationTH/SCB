@@ -677,7 +677,7 @@ class GameFlowManager {
     // single CATCH_PROCESSED only — this handler is comms-only.
     eventBus.on(Events.CATCH_BREAKDOWN_START, (data) => {
       eventBus.emit(Events.COMMS_SEND, {
-        source: (data.armId || 'ARM').toUpperCase(),
+        source: (data.armId || 'DAUGHTER').toUpperCase(),
         text: `Chopping the catch for the furnace — feeding ${data.chunkCount || 5} sections`,
         priority: 'INFO',
       });
@@ -731,7 +731,7 @@ class GameFlowManager {
 
         // Comms notification (via EventBus — CommsSystem self-manages)
         eventBus.emit(Events.COMMS_SEND, {
-          source: (data.armId || 'ARM').toUpperCase(),
+          source: (data.armId || 'DAUGHTER').toUpperCase(),
           text: 'Catch fully processed — salvage in the bin',
           priority: 'INFO',
         });
@@ -1152,7 +1152,7 @@ class GameFlowManager {
         this._firstTimeComms.add('autopilot_arrived');
         eventBus.emit(Events.COMMS_MESSAGE, {
           sender: 'SPACECRAFT',
-          text: 'On station. Press N to lasso close debris, or D to deploy a daughter arm for distant or heavy targets.',
+          text: 'On station. Press N to lasso close debris, or D to deploy a daughter for distant or heavy targets.',
           priority: 'info',
         });
       }
@@ -1421,7 +1421,7 @@ class GameFlowManager {
     // UX: Confirm deployment via comms (ARM_PILOT is auto-entered by InputManager)
     if (deployed) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: 'Arm deployed — WASD to steer, P to disengage pilot',
+        text: 'Daughter deployed — WASD to steer, press its number again to back out to Command view',
         source: 'SYSTEM',
         channel: 'CMD',
         priority: 'info',

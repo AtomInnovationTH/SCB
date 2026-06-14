@@ -25,6 +25,9 @@ import { toolShortLabel } from '../systems/ToolOdds.js';
 /** 1 meter in scene units (1 scene unit = 100 km) */
 const M = 0.00001;
 
+/** Daughter states in which net guidance is still meaningful (pre-capture). */
+const PRE_CAPTURE_STATES = new Set(['TRANSIT', 'APPROACH']);
+
 /** Offset-to-pixel scale: 1 meter of lateral offset ≈ 3px on screen */
 const OFFSET_SCALE = 3;
 
@@ -638,16 +641,25 @@ export class DockingReticle {
   /**
    * @private Bottom center: net readiness / verb hint — STATE-AWARE (Item 10,
    * 2026-06-12). One hint line, no stacking:
-   *   • STATION_KEEP: F/`/R/Esc verb bar — Space does NOTHING in SK (the old
-   *     '[SPACE] Deploy' hint pointed at a dead key; SK fire verbs are F and N).
-   *   • TRANSIT/APPROACH + ready: F/N fire (Space alias stays functional but
-   *     is no longer advertised).
+   *   • STATION_KEEP: N/`/R/Esc verb bar — Space does NOTHING in SK (the old
+   *     '[SPACE] Deploy' hint pointed at a dead key; the SK fire verb is N).
+   *   • TRANSIT/APPROACH + ready: N fire.
    *   • Not ready: get closer.
+   *   • Any post-capture / retrieval state (NETTING, GRAPPLED, HAULING,
+   *     REELING, RETURNING, …): draw NOTHING — the net is already committed,
+   *     so a lingering "NET READY — [N] fire" / "get closer" line is obsolete
+   *     (2026-06-13 fix: reticle stayed visible while the piloted arm hauled
+   *     its catch home).
    */
   _drawNetStatus(ctx, cx, h) {
     const y = h - 55;
+    const state = this._arm && this._arm.state;
+    const inSK = state === 'STATION_KEEP';
+    // Net guidance is only meaningful before the net is committed. Once the
+    // arm leaves the pre-capture deployable states, suppress the line entirely.
+    if (!inSK && !PRE_CAPTURE_STATES.has(state)) return;
+
     const ready = this.isNetReady();
-    const inSK = this._arm && this._arm.state === 'STATION_KEEP';
 
     if (inSK) {
       const tool = (this._arm.selectedTool || 'NET').toUpperCase();
@@ -656,7 +668,7 @@ export class DockingReticle {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillStyle = ready ? `rgba(0, 255, 136, ${pulse})` : C.gray;
-      ctx.fillText(`\u25CF [F] ${tool} \u00B7 [\`] cycle \u00B7 [R] reel \u00B7 [Esc] recall`, cx, y);
+      ctx.fillText(`\u25CF [N] ${tool} \u00B7 [\`] cycle \u00B7 [R] reel \u00B7 [Esc] recall`, cx, y);
     } else if (ready) {
       // Pulsing green when in capture range
       const pulse = 0.6 + Math.sin(this._time * 4) * 0.4;
@@ -666,7 +678,7 @@ export class DockingReticle {
       ctx.fillStyle = `rgba(0, 255, 136, ${pulse})`;
       ctx.shadowColor = C.primary;
       ctx.shadowBlur = 10;
-      ctx.fillText('\u25CF NET READY \u2014 [F]/[N] fire', cx, y);
+      ctx.fillText('\u25CF NET READY \u2014 [N] launch', cx, y);
       ctx.shadowBlur = 0;
     } else {
       ctx.font = `13px ${FONT}`;
@@ -1005,7 +1017,7 @@ export class DockingReticle {
     ctx.font = `9px ${FONT}`;
     ctx.textAlign = 'left';
     ctx.fillStyle = 'rgba(0, 255, 170, 0.5)';
-    ctx.fillText('[`] cycle   [F] fire', left + 8, footerY);
+    ctx.fillText('[`] cycle   [N] launch', left + 8, footerY);
     const fragRisk = arm._toolOddsFragRisk || 0;
     if (!profiled) {
       // Brittleness unknown until the close-range survey — say so honestly.
@@ -1321,7 +1333,7 @@ export class DockingReticle {
       const inSpec = (Constants.NET_TUMBLE_PENALTY?.IN_SPEC_DEG) || 10;
       const deg = Math.abs(tumbleRate || 0) * (180 / Math.PI);
       if (tumbleRate != null && deg > inSpec && !target._despinning) {
-        advisory = 'de-spin to freeze aspect [U]';
+        advisory = 'de-spin to freeze aspect [H]';
         advisoryCol = '#ffd166';
       } else {
         advisory = 'ASPECT: BROADSIDE \u2014 orbit to end-on';
@@ -1335,13 +1347,13 @@ export class DockingReticle {
     } else if (tumbleRate != null) {
       const deg = Math.abs(tumbleRate) * (180 / Math.PI);
       const inSpec = (Constants.NET_TUMBLE_PENALTY?.IN_SPEC_DEG) || 10;
-      // Issue 9 (2026-06-12): live °/s readout — while holding U the player
+      // Issue 9 (2026-06-12): live °/s readout — while holding H the player
       // sees the tumble converge toward the in-spec threshold.
       if (target._despinning) {
         advisory = `de-spinning ${deg.toFixed(1)}\u00B0/s \u2192 ${inSpec}\u00B0/s`;
         advisoryCol = '#66ddff';
       } else if (deg > inSpec) {
-        advisory = `tumbling ${Math.round(deg)}\u00B0/s \u2014 de-spin [U]`;
+        advisory = `tumbling ${Math.round(deg)}\u00B0/s \u2014 de-spin [H]`;
       }
     }
     if (!advisory && pct >= 80) advisory = 'good shot';

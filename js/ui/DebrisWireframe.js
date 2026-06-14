@@ -440,7 +440,7 @@ function buildADRSatellite() {
     zones: [
       { name: 'Bus',          edges: busEdges,    massPercent: 55 },
       { name: 'Solar Panels', edges: [...panelLEdges, ...panelREdges], massPercent: 12 },
-      { name: 'Arm Cavities', edges: dockEdges,   massPercent: 18 },
+      { name: 'Daughter Cavities', edges: dockEdges,   massPercent: 18 },
       { name: 'Ion Drive',    edges: nozzleEdges, massPercent: 10 },
       { name: 'Laser',        edges: laserEdges,  massPercent: 5 },
     ],
@@ -1075,6 +1075,9 @@ export class DebrisWireframe {
     /** @type {boolean} Whether mounted in a container or floating */
     this._hasContainer = !!container;
 
+    /** @type {boolean} Collapsed-to-summary-line state (toggleMinimized). */
+    this._minimized = false;
+
     if (container) {
       // Container-relative positioning (integrated above target list)
       Object.assign(this._canvas.style, {
@@ -1087,6 +1090,27 @@ export class DebrisWireframe {
         borderRadius: '4px',
       });
       container.appendChild(this._canvas);
+
+      // Minimized one-line summary (hotkey revamp 2026-06-14 — the 9 key).
+      // When minimized we hide the canvas and show this single line of the key
+      // capture-planning facts NOT in the target list: identity · size · mass ·
+      // tumble (with ⚠ when high) · material. Lives in the same flex container,
+      // so the right column collapses up around it.
+      this._minLine = document.createElement('div');
+      this._minLine.id = 'hud-debris-min-summary';
+      Object.assign(this._minLine.style, {
+        display: 'none',
+        font: "11px 'Courier New', monospace",
+        color: 'rgba(0,255,136,0.8)',
+        padding: '4px 6px',
+        border: `1px solid ${BORDER_COLOR}`,
+        borderRadius: '4px',
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+      });
+      this._minLine.textContent = '— no target —';
+      container.appendChild(this._minLine);
     } else {
       // Legacy fixed positioning (fallback) — top-right below NavSphere so it
       // never collides with bottom-anchored panels (DaughterWireframe bottom-
@@ -1248,6 +1272,9 @@ export class DebrisWireframe {
       this._zoneAssessments = [];
       this.setVisible(false);
     }
+
+    // Keep the minimized one-liner current if the pane is collapsed (9).
+    if (this._minimized) this._renderMinLine();
   }
 
   /**
@@ -1350,7 +1377,59 @@ export class DebrisWireframe {
   setVisible(visible) {
     this._visible = visible;
     this._frameSkip = -1; // Reset throttle so next update draws immediately
+    // Respect the manual minimize (9 key): while minimized the one-liner owns
+    // the slot, so target-selection / state logic must not re-show the canvas.
+    if (this._minimized) {
+      this._canvas.style.display = 'none';
+      return;
+    }
     this._canvas.style.display = visible ? 'block' : 'none';
+  }
+
+  /**
+   * Minimize-to-one-line toggle for the "Debris pane" key (9, hotkey revamp
+   * 2026-06-14) — mirrors the comms/target minimize. When minimized we hide the
+   * wireframe canvas and show a single line of the capture-planning facts the
+   * target list doesn't carry (identity · size · mass · tumble · material); the
+   * right column collapses up around the shorter line. Press again to restore.
+   * Falls back to a plain canvas hide when floating (no container / no min line).
+   */
+  toggleMinimized() {
+    if (!this._hasContainer || !this._minLine) {
+      this.setVisible(!this._visible);
+      return;
+    }
+    this._minimized = !this._minimized;
+    if (this._minimized) {
+      this._renderMinLine();
+      this._minLine.style.display = '';
+      this._canvas.style.display = 'none';
+    } else {
+      this._minLine.style.display = 'none';
+      this._canvas.style.display = 'block';
+      this._frameSkip = -1; // redraw the wireframe immediately on restore
+    }
+  }
+
+  /** @private Populate the minimized one-liner from the current target. */
+  _renderMinLine() {
+    if (!this._minLine) return;
+    const t = this._target;
+    if (!t) {
+      this._minLine.textContent = this._showingADR ? '— V3 OCTOPUS (self) —' : '— no target —';
+      return;
+    }
+    const ident = t.name || TYPE_LABELS[t.type] || t.type || 'TARGET';
+    const sizeStr = t.sizeMeter != null ? `${t.sizeMeter.toFixed(1)}m` : '?';
+    let massStr = '?';
+    if (t.mass != null) {
+      massStr = t.mass >= 1000 ? `${(t.mass / 1000).toFixed(1)}t` : `${t.mass.toFixed(0)}kg`;
+    }
+    const tumbleDeg = (t.tumbleRate || 0) * DEG;
+    const warn = tumbleDeg > 60 ? ' \u26A0' : '';
+    const tumbleStr = `\u27F3${tumbleDeg.toFixed(0)}\u00B0/s${warn}`;
+    const matStr = MATERIAL_LABELS[t.material] || t.material || '?';
+    this._minLine.textContent = `${ident} \u00B7 ${sizeStr} \u00B7 ${massStr} \u00B7 ${tumbleStr} \u00B7 ${matStr}`;
   }
 
   /**
@@ -1927,7 +2006,7 @@ export class DebrisWireframe {
       this._allocateProjectionBuffer(this._shape.vertices.length);
       // ADR satellite zones: all green by default
       this._zoneAssessments = this._shape.zones.map((zone) => {
-        if (zone.name === 'Arm Cavities') return { risk: 'DYNAMIC', color: '#00ff88' };
+        if (zone.name === 'Daughter Cavities') return { risk: 'DYNAMIC', color: '#00ff88' };
         if (zone.name === 'Ion Drive') return { risk: 'LOW', color: '#00ccff' };
         if (zone.name === 'Laser') return { risk: 'LOW', color: '#00ccff' };
         return { risk: 'LOW', color: ZONE_COLORS.GREEN };

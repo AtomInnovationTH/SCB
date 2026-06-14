@@ -3342,7 +3342,10 @@ export class PlayerSatellite extends THREE.Group {
     // Re-orthogonalize radialUp
     radialUp = new THREE.Vector3().crossVectors(crossTrack, prograde).normalize();
 
-    // Map direction: W/S = prograde/retrograde (z), A/D = cross-track (x), Q/E = radial (y)
+    // Map direction: W/S = prograde/retrograde (z), A/D = cross-track (x).
+    // The radial (y) axis is retained for completeness but no key feeds it
+    // since Q/E radial thrust was removed (hotkey revamp 2026-06-14) —
+    // direction.y is always 0 in normal play.
     const worldImpulse = new THREE.Vector3()
       .addScaledVector(prograde, direction.z * impulse)
       .addScaledVector(crossTrack, direction.x * impulse)

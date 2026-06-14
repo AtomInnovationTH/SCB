@@ -23,6 +23,10 @@ export const Constants = {
   // === SCENE SCALE ===
   // 1 unit = 100 km. Requires logarithmicDepthBuffer: true.
   SCENE_SCALE: 0.01,
+  // ms — settle window after COMMS_PANEL_RESIZED during which cached panel
+  // geometry is recomputed each frame. Slightly longer than the CSS height
+  // transition (0.3s in CommsPanel.js) so listeners don't snap mid-animation.
+  COMMS_RESIZE_SETTLE_MS: 340,
   EARTH_RADIUS: 63.71,            // 6371 km × 0.01
   EARTH_RADIUS_KM: 6371,
 
@@ -691,7 +695,7 @@ export const Constants = {
     DYNEEMA_TETHER:        false,  // ST-9.5 — Dyneema SK78 + reel-cycle wear
     REEL_CYCLE_RESOURCE:   false,  // ST-9.5 — 20-cycle wear counter
     ABLATION_MODULE:       false,  // ST-9.6 — mother-mounted deorbit laser
-    LASER_DESPIN:          true,   // CP-2 ON — mother-mounted de-spin laser (hold U) + net tumble coupling
+    LASER_DESPIN:          true,   // CP-2 ON — mother-mounted de-spin laser (hold H) + net tumble coupling
     BRIDLE_RING_GEOMETRY:  false,  // ST-9.7 — Y-harness FEEP plume exclusion
     TECH_LADDER_SHOP:      false,  // ST-9.8 — Y0–Y4 tier surfacing
     REALITY_MODE:          false,  // ST-9.9 — locks all FEATURE_* false (master)
@@ -2198,21 +2202,21 @@ export const Constants = {
       { id: 'scan_wide',            label: 'Wide Scan',    key: 'W',     tier: 2, category: 'scan',      hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'SCAN_WIDE' },
       { id: 'nav_target',           label: 'Target Selection', key: 'Tab', tier: 2, category: 'nav',     hudGroup: 'target-info',   prereqs: [],  prereqType: 'soft', noReminder: false, triggerEvent: 'TARGET_SELECTED' },
       { id: 'nav_autopilot',        label: 'Autopilot',    key: 'A',     tier: 2, category: 'nav',       hudGroup: 'orbit-mfd',     prereqs: [],  prereqType: 'soft', noReminder: false, triggerEvent: 'AUTOPILOT_ENGAGE' },
-      { id: 'collect_deploy',       label: 'Deploy Arm',   key: 'D',     tier: 2, category: 'collect',   hudGroup: 'fleet',         prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'ARM_DEPLOYED' },
+      { id: 'collect_deploy',       label: 'Deploy Daughter',   key: 'D',     tier: 2, category: 'collect',   hudGroup: 'fleet',         prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'ARM_DEPLOYED' },
       { id: 'collect_lasso',        label: 'Lasso',        key: 'N', tier: 2, category: 'collect',   hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'LASSO_FIRED' },
       { id: 'awareness_mouse_look', label: 'Mouse Look',   key: null,    tier: 2, category: 'awareness', hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: true,  triggerEvent: 'CAMERA_FREE_LOOK' },
 
       // ── Tier 3: Proficiency (7 skills) ──────────────────────────────────
       { id: 'nav_autopilot_no_target', label: 'Autopilot w/o Target', key: null, tier: 3, category: 'nav',    hudGroup: null,          prereqs: [],  prereqType: 'none', noReminder: true,  triggerEvent: 'AUTOPILOT_NO_TARGET' },
       { id: 'scan_discovery',          label: 'Scan Discovery',       key: null, tier: 3, category: 'scan',   hudGroup: null,          prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'SCAN_DISCOVERY' },
-      { id: 'collect_dual_fire',       label: 'Dual Fire',            key: null, tier: 3, category: 'collect', hudGroup: null,          prereqs: [],  prereqType: 'hard', noReminder: false, triggerEvent: 'DUAL_FIRE' },
+      { id: 'collect_dual_fire',       label: 'Dual Launch',            key: null, tier: 3, category: 'collect', hudGroup: null,          prereqs: [],  prereqType: 'hard', noReminder: false, triggerEvent: 'DUAL_FIRE' },
       { id: 'collect_trawl',           label: 'Trawl',                key: 'Shift+G',  tier: 3, category: 'collect', hudGroup: null,          prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'TRAWL_START' },
       { id: 'manage_power',            label: 'Power Distribution',   key: '1/2/3', tier: 3, category: 'manage', hudGroup: 'power',    prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'POWER_BUS_SELECTED' },
       { id: 'manage_comms',            label: 'Comms Menu',           key: 'C',  tier: 3, category: 'manage', hudGroup: 'comms',       prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'COMMS_OPENED' },
       { id: 'manage_codex',            label: 'Tech Library',         key: 'L',  tier: 3, category: 'manage', hudGroup: null,          prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'CODEX_OPENED' },
       // ── CP-4 ch2 (MissionCoach): Daughter piloting (payload-discriminated via triggerFilter) ──
       { id: 'arm_pilot',         label: 'Daughter Piloting', key: 'P', tier: 3, category: 'collect', hudGroup: 'fleet', prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'CONTROL_MODE_CHANGE', triggerFilter: (d) => d && d.mode === 'ARM_PILOT' },
-      { id: 'arm_pilot_capture', label: 'Manual Capture',    key: 'F', tier: 3, category: 'collect', hudGroup: 'fleet', prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'ARM_CAPTURED',        triggerFilter: (d) => d && d.manual === true },
+      { id: 'arm_pilot_capture', label: 'Manual Capture',    key: 'N', tier: 3, category: 'collect', hudGroup: 'fleet', prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'ARM_CAPTURED',        triggerFilter: (d) => d && d.manual === true },
       // ── CP-4 ch4 (MissionCoach): Cluster/transfer agency on the Debris Map (CP-3) ──
       // Backtick (`) opens the Debris Map; ,/. select a cluster → DEBRIS_MAP_CLUSTER_SELECTED
       // (the 3D StrategicMap / Shift+V is view-only and does NOT drive transfers).
@@ -2227,7 +2231,7 @@ export const Constants = {
       //   H / Shift+O before the 2026-06-12 hotkey cleanup).
       // ch11 orbital_hohmann: a committed transfer window opening (CLUSTER_WINDOW_OPEN)
       //   is the "you timed a Hohmann" moment; the porkchop viz is deferred (EN-5/6).
-      { id: 'confirm_before_fire', label: 'Confirm Before Fire', key: null, tier: 3, category: 'awareness', hudGroup: null, prereqs: [], prereqType: 'none', noReminder: true,  triggerEvent: 'CONJUNCTION_ALERT', triggerFilter: (d) => d && d.reason === 'ACTIVE_SAT_ARMING' },
+      { id: 'confirm_before_fire', label: 'Confirm Before Launch', key: null, tier: 3, category: 'awareness', hudGroup: null, prereqs: [], prereqType: 'none', noReminder: true,  triggerEvent: 'CONJUNCTION_ALERT', triggerFilter: (d) => d && d.reason === 'ACTIVE_SAT_ARMING' },
       { id: 'radial_menu',         label: 'Fleet Recall',        key: 'Shift+R',  tier: 3, category: 'collect',   hudGroup: 'fleet', prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'ARM_RECALL_ALL' },
       { id: 'orbital_hohmann',     label: 'Hohmann Window',      key: null, tier: 4, category: 'nav',       hudGroup: null,    prereqs: [], prereqType: 'soft', noReminder: false, triggerEvent: 'CLUSTER_WINDOW_OPEN' },
 
@@ -2242,9 +2246,9 @@ export const Constants = {
 
       // ── Tier 5: Mastery (7 skills) ──────────────────────────────────────
       { id: 'nav_hohmann',        label: 'Hohmann Transfer',     key: null,  tier: 5, category: 'nav',       hudGroup: null,  prereqs: ['nav_orbit_mfd'],  prereqType: 'soft',   noReminder: false, triggerEvent: 'AUTOPILOT_ARRIVED' },
-      { id: 'collect_arm_pilot',  label: 'ARM PILOT Mode',       key: 'P',   tier: 5, category: 'collect',   hudGroup: null,  prereqs: [],                  prereqType: 'soft',   noReminder: false, triggerEvent: 'ARM_SELECT' },
+      { id: 'collect_arm_pilot',  label: 'DAUGHTER PILOT Mode',       key: 'P',   tier: 5, category: 'collect',   hudGroup: null,  prereqs: [],                  prereqType: 'soft',   noReminder: false, triggerEvent: 'ARM_SELECT' },
       { id: 'mastery_detach',     label: 'Risk Detach',          key: 'X',   tier: 5, category: 'collect',   hudGroup: null,  prereqs: ['collect_deploy'],  prereqType: 'safety', noReminder: false, triggerEvent: 'ARM_DETACHED',       safetyGate: { minCatches: 2 } },
-      { id: 'mastery_tool_cycle', label: 'Tool Cycling',         key: 'Shift+`', tier: 5, category: 'manage', hudGroup: null, prereqs: [],                  prereqType: 'none',   noReminder: false, triggerEvent: 'TOOL_CYCLE' },
+      { id: 'mastery_tool_cycle', label: 'Tool Cycling',         key: 'T', tier: 5, category: 'manage', hudGroup: null, prereqs: [],                  prereqType: 'none',   noReminder: false, triggerEvent: 'TOOL_CYCLE' },
       { id: 'mastery_ca_dodge',   label: 'CA Manual Override',   key: null,  tier: 5, category: 'awareness', hudGroup: null,  prereqs: [],                  prereqType: 'none',   noReminder: false, triggerEvent: 'CA_DODGE_EXECUTED' },
       { id: 'mastery_synergy',    label: 'Synergistic Salvage',  key: null,  tier: 5, category: 'collect',   hudGroup: null,  prereqs: [],                  prereqType: 'hard',   noReminder: false, triggerEvent: 'SYNERGY_BONUS' },
       { id: 'mastery_full_sweep', label: 'Full Sweep',           key: null,  tier: 5, category: 'collect',   hudGroup: null,  prereqs: [],                  prereqType: 'hard',   noReminder: false, triggerEvent: 'TRAWL_SWEEP_COMPLETE' },
@@ -2503,10 +2507,10 @@ export const Constants = {
     // CP-4 guidance arbiter — graduated post-onboarding suppression ramp (s of play).
     // Tier 1 (0→TIER2) HOUSTON+MISSION only · Tier 2 (→TIER3) +ALERT+CMD · Tier 3 all.
     SUPPRESSION_RAMP: { TIER2_AFTER_S: 30, TIER3_AFTER_S: 60 },
-    PANE_HEIGHT_MIN_PX: 40,               // 'line' step — latest message only
+    PANE_HEIGHT_MIN_PX: 80,               // 'line' step — compact 2-message view (≥1 full message always visible)
     PANE_HEIGHT_PX: 144,
     PANE_WIDTH_PX: 480,                   // fits ~70 chars per line (UX-2 #11)
-    PANE_LINES_MIN: 1,                    // 'line' step line count
+    PANE_LINES_MIN: 2,                    // 'line' step message count (2 → at least one full message visible)
     PANE_LINES_DEFAULT: 4,                // collapsed line count (UX-2 #11)
     PANE_LINES_EXPANDED: 10,              // expanded line count (UX-2 #10)
     PANE_EXPAND_HEIGHT_PX: 300,
@@ -2667,18 +2671,18 @@ export const Constants = {
           id: 'ch2_pilot',
           type: 'interactive',
           source: 'HOUSTON',
-          text: 'Deploy a daughter (D), then press P to pilot her directly. On station you\'ll see the live capture odds strip — every tool, every %.',
+          text: 'Deploy a daughter (D), then press 1-4 to pilot her directly. On station you\'ll see the live capture odds strip — every tool, every %.',
           skillId: 'arm_pilot',
           triggerEvent: 'CONTROL_MODE_CHANGE',
           triggerFilter: (d) => d && d.mode === 'ARM_PILOT',
           title: 'PILOT YOUR DAUGHTER',
-          body: 'Press P while a daughter is deployed to fly her yourself.',
+          body: 'Press 1-4 while a daughter is deployed to fly her yourself.',
         },
         {
           id: 'ch2_manual_capture',
           type: 'interactive',
           source: 'HOUSTON',
-          text: 'Line up on a target and capture by hand (F) — manual catches score double. Watch the odds strip: de-spin (U) or close in and the % climbs before you commit.',
+          text: 'Line up on a target and capture by hand (N) — manual catches score double. Watch the odds strip: de-spin (H) or close in and the % climbs before you commit.',
           skillId: 'arm_pilot_capture',
           triggerEvent: 'ARM_CAPTURED',
           triggerFilter: (d) => d && d.manual === true,
@@ -2809,30 +2813,30 @@ export const Constants = {
           id: 'ch8_intro',
           type: 'narrative',
           source: 'HOUSTON',
-          text: 'LEO-Mid now, 540 km — and Hubble shares this band. She\'s a working observatory, not salvage: the arm will refuse to fire on her, or on any crewed or active asset. Identify before you commit.',
+          text: 'LEO-Mid now, 540 km — and Hubble shares this band. She\'s a working observatory, not salvage: the daughter will refuse to launch on her, or on any crewed or active asset. Identify before you commit.',
         },
         {
           id: 'ch8_discipline',
           type: 'narrative',
           source: 'HOUSTON',
-          text: 'No new gear this stretch — just discipline. Trawl the dead stuff, plan your transfers on the map, and confirm every target before you fire. The treaty guard is your backstop, not your plan.',
+          text: 'No new gear this stretch — just discipline. Trawl the dead stuff, plan your transfers on the map, and confirm every target before you launch. The treaty guard is your backstop, not your plan.',
         },
       ],
 
       // ── Chapter 9 is the Starlink cascade boss (StarlinkCascadeBoss.js); this
       //    beat teaches dual-arm throughput for the 35-frag race. The C-hold
-      //    radial wheel was removed (UX-11 #9) — direct keys now: 1/2 deploy &
-      //    switch daughters, P pilots, Shift+R recalls the fleet. Satisfied by any
+      //    radial wheel was removed (UX-11 #9) — direct keys now: 1-4 deploy-select &
+      //    switch/pilot daughters, Shift+R recalls the fleet. Satisfied by any
       //    daughter deployment during the chapter. ──
       9: [
         {
           id: 'ch9_radial',
           type: 'interactive',
           source: 'HOUSTON',
-          text: 'Field\'s getting thick — two arms beat one. Run both daughters: [1]/[2] deploy and switch, [P] pilots, [Shift+R] recalls the whole fleet. You\'ll need the throughput.',
+          text: 'Field\'s getting thick — two daughters beat one. Run both daughters: [1]/[2] deploy and switch, [1-4] to pilot, [Shift+R] recalls the whole fleet. You\'ll need the throughput.',
           skillId: 'radial_menu',
           triggerEvent: 'ARM_DEPLOYED',
-          title: 'DUAL-ARM COMMAND',
+          title: 'DUAL-DAUGHTER COMMAND',
           body: 'Deploy both daughters ([1] and [2]) and work two catches at once.',
         },
       ],
@@ -2879,7 +2883,7 @@ export const Constants = {
           id: 'ch11_mpd',
           type: 'narrative',
           source: 'HASSAN',
-          text: 'For a climb this big you\'ll want the MPD thruster — high thrust, thirsty for power. First fire is yours, Cowboy. Welcome to the high country.',
+          text: 'For a climb this big you\'ll want the MPD thruster — high thrust, thirsty for power. First launch is yours, Cowboy. Welcome to the high country.',
         },
       ],
     },
@@ -3081,7 +3085,7 @@ export const Constants = {
     {
       state: 'STATION_KEEP', idleS: 20, when: 'noNetInFlightHasNets',
       hintId: 'sk_idle_fire_or_pilot', title: 'Daughter holding standoff',
-      text: 'She is holding station on the target — press F to fire the net (or P to pilot her).',
+      text: 'She is holding station on the target — press N to launch the net (or 1-4 to pilot her).',
       icon: '🎯',
     },
     {

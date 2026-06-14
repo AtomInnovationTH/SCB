@@ -198,7 +198,7 @@ function computeNetOdds(opts) {
       losses.push({
         loss: 1 - fTumble,
         blocker: 'TUMBLE',
-        hint: `tumbling ${Math.round(tumbleDeg)}\u00B0/s \u2014 de-spin [U]`,
+        hint: `tumbling ${Math.round(tumbleDeg)}\u00B0/s \u2014 de-spin [H]`,
       });
     }
   }

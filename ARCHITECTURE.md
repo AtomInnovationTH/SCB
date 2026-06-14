@@ -2,7 +2,7 @@
 
 > **The single current source of truth for "how the code actually works."** Browser-based 3D orbital-debris-removal sim. Three.js (loaded from local `node_modules`), vanilla ES6 modules, **zero build tools**.
 >
-> **Verified against code: 2026-06-07** (architect ground-truth pass; supersedes the Epic-8-era doc, now in git history). Hotkey map §6 + capture-FSM notes re-verified 2026-06-11 (daughter-cycle polish, `80c70b5`). Where this doc and an older design doc disagree, **this doc wins** for as-built behavior. Design intent lives in [`GAME_DESIGN.md`](GAME_DESIGN.md), the forward plan in [`ROADMAP.md`](ROADMAP.md), and the live shift state + load-bearing SSOT rules in [`HANDOFF.md`](HANDOFF.md).
+> **Verified against code: 2026-06-07** (architect ground-truth pass; supersedes the Epic-8-era doc, now in git history). Hotkey map §6 + capture-FSM notes re-verified 2026-06-11 (daughter-cycle polish, `80c70b5`). Hotkey cleanup 2026-06-13: de-spin laser `U`→`H`, capture = `N` only, `Space` lasso alias dropped. Where this doc and an older design doc disagree, **this doc wins** for as-built behavior. Design intent lives in [`GAME_DESIGN.md`](GAME_DESIGN.md), the forward plan in [`ROADMAP.md`](ROADMAP.md), and the live shift state + load-bearing SSOT rules in [`HANDOFF.md`](HANDOFF.md).
 >
 > **Test baseline:** 676 suites / 2759 tests / 0 failures (`node js/test/run-tests.js`, verified 2026-06-11 @ `80c70b5`). Node-only harness; no DOM/THREE stubs for physics.
 
@@ -170,44 +170,47 @@ MENU ──Start──▶ BRIEFING ──Commence/QuickStart/FreeRoam──▶ O
 
 ## 6. Input / hotkey map (verified)
 
-All in [`InputManager.js`](js/systems/InputManager.js) `_handleKeyDown` + held-key `processInput`. WASD thrust is **ARM_PILOT-only** (autopilot-first paradigm). Overlays (hotkey `?`, Codex `L`, StrategicMap, DebrisMap, launch ceremony) swallow most input while open.
+All in [`InputManager.js`](js/systems/InputManager.js) `_handleKeyDown` + held-key `processInput`. **The single source of truth is the in-game help pane** (`?`), defined in [`HotkeyOverlay.js`](js/ui/HotkeyOverlay.js) `HOTKEY_GROUPS`; the code is kept aligned to it (a separate "manifest" file was tried and removed 2026-06-14 — one source only). Overlays (hotkey `?`, Codex `L`, StrategicMap, DebrisMap, launch ceremony) swallow most input while open.
 
-| Key | Normal / Orbital | ARM_PILOT |
+**Hotkey revamp 2026-06-14 (code aligned to the help menu):** daughters are now flown with **arrow keys only** (station-keep orbit) — **WASD/`Q`/`E` daughter thrust was removed**, so `S`/`A`/`D`/`V`/`T` keep their Mother meanings while piloting. `1-4` is the single select/pilot verb (`P`/`Shift+P` gone); re-pressing the active digit backs out to the mother. The number row 5-0 became display toggles; several keys moved (see below). `7` is now "Comms toggle" (was return-to-mother).
+
+| Key | Normal / Orbital | While piloting a daughter |
 |---|---|---|
-| **S** | Quick Scan ($50, 1.5s) | held → −Z thrust |
-| **W** | Wide Scan ($150, 4s) | held → +Z thrust |
-| **A** | Autopilot toggle (Shift+A = engage DebrisMap cluster) | held → −X thrust |
-| **D** | Deploy daughter (+ launch ceremony). Ctrl+Shift+D = deorbit; Ctrl+D = debug | held → +X thrust |
-| **Q / E** | — | held → +Y / −Y thrust *(undocumented in README)* |
-| **Tab** | Cycle targets (TPI-sorted) | — |
-| **Space / N** | Lasso fire (Space consults OnboardingDirector first). Shift+N = NavSphere | net capture/deploy (Space auto-exits ARM_PILOT) |
-| **F** | Focus action (context smart button) | STATION_KEEP→capture; TRANSIT/APPROACH→manual net |
-| **P / Shift+P** | P = enter ARM_PILOT; Shift+P cycles the piloted arm (selection path for arms 5+ on Y1/Y3) | P exits; Shift+P cycles |
-| **I** | Inspection (mother, or debris if Tab-locked) | expand debris wireframe |
-| **R** | AP→abort; else recall closest daughter. **Shift+R = recall ALL** | reel from STATION_KEEP (Shift+R recall all) |
+| **↑↓←→** | pitch/yaw (tether-aware spring) | SK θ/φ orbit (Shift = fine) |
+| **S / Shift+S** | Quick Scan / Wide "scan big area" (Shift+S — moved off bare `W`) | same |
+| **T** | **Target debris** (cycle; `Tab` is an alias) | same |
+| **A / Shift+A** | Autopilot toggle / **autopilot to debris center + launch all** | same |
+| **N / Shift+N** | lasso/net fire / **auto-target + launch at debris in range** | N = net capture/deploy (single capture verb) |
+| **D / Shift+D** | launch **selected docked** daughter (auto-pick if none) / launch **all** docked. Ctrl+Shift+D = deorbit; Ctrl+D = debug | same |
+| **R** | AP→abort; else recall closest. **Shift+R = recall ALL** | reel from STATION_KEEP |
+| **H** | hold → de-spin laser (needs a target) | hold → de-spin the piloted arm's SK target |
+| **E** | **Electrodynamic Tether** (moved off `Y`) | same |
 | **X** | Tether detach (sacrifice) | same |
-| **Y** | EDT deploy | same |
-| **Z / Shift+Z** | Wireframe zone cycle ±1 | same |
-| **C / Shift+C** | C = comms focus (plain tap — C-hold radial REMOVED, UX-11 #9); Shift+C = Earth city labels toggle | same |
-| **V / Shift+V** | cycle view (CHASE↔ORBIT); Shift+V → Strategic Map | Shift+V map; V exits pilot |
-| **M** | Orbit MFD (or arm MPD if unlocked) | same |
-| **L** | Codex viewer | same |
-| **J** | Skills/Journal pane *(owned by SkillsPane's own listener)* | same |
-| **B** | Shop (ORBITAL_VIEW only) | — |
-| **` (backtick)** | toggle DebrisMap (cycles tool while piloting in SK); Shift+` = TOOL_CYCLE | cycle tool in SK |
-| **, / .** | stow / deploy all struts | same |
+| **V / Shift+V** | cycle view (COMMAND → OVERVIEW → INSPECTION); Shift+V → Strategic Map | V cycles view (back out via re-press digit / Esc); Shift+V map |
+| **1–4** | **Select daughter** — docked → select + glow (mother stays in view; `D` launches); deployed → select + pilot. Re-press active digit → back out. Y0 = 4 arms; 5-8 deferred | switch piloted daughter |
+| **B** | Shop / Buy (ORBITAL_VIEW only) | — |
+| **F** | **Forge** toggle (moved off `5`) | same |
+| **M** | **Map** — toggle Debris Map (`` ` `` is an alias) | same |
+| **L** | Codex / Library | same |
+| **J** | Journal / Skills *(owned by SkillsPane's own listener)* | same |
+| **? / Esc** | help pane / pause·back (Esc also backs out of pilot) | same |
+| **5 / 6** | toggle City names / Constellation names | same |
+| **7 / 8** | Comms size cycle / **NavSphere → minimize to LAT·LON·ALT one-liner** | same |
+| **9 / 0** | **Debris pane → minimize to one-liner** (id·size·mass·tumble·material) / toggle Target pane | same |
+| **. (period)** | **Struts** toggle (stow/deploy all) | same |
 | **+ / −** | throttle ±10% (in SK: orbit radius ∓) | SK: approach/retreat |
 | **[ / ]** | power bus ∓10%; Shift+1/2/3 select bus | same |
-| **U** | hold → mother de-spin laser (LASER_DESPIN; needs a target) | hold → de-spin the piloted arm's SK target (2026-06-12, Item 9) |
-| **1–4 / 7** | deploy/select/pilot arm (Y0 = 4 ring arms); 7 = return to mother (global). Digits 5/6 are Forge/fuel (see below) | switch piloted arm |
-| **5 / 6 / F2** | 5 = Forge, 6 = fuel cycle (UX-11 #8 — F4/F5 removed, no aliases); F2 (ARM_PILOT: cycle FEEP metal) | Forge/fuel work; F2 metal cycle |
-| **O** | deploy-all-to-target (blocked in ARM_PILOT; Shift+O recall-all removed 2026-06-12) | — |
+| **C** | comms focus (plain tap; not in the help pane) | same |
+| **Z / Shift+Z** | Wireframe zone cycle ±1 | same |
+| **` (backtick)** | toggle DebrisMap (alias of M; cycles tool while piloting in SK) | cycle tool in SK |
 | **Shift+G** | Trawl start | — |
-| **Enter / Esc** | begin approach / pause·back | SK recall / exit pilot |
+| **F2** | — | cycle FEEP metal (piloted arm) |
 | **PageUp/Down** | comms scroll | same |
-| **Arrows** | pitch/yaw (tether-aware spring) | SK θ/φ orbit (Shift = fine) |
 
-**Inert/reserved:** `K` (empty), bare `G`, bare `H` (freed 2026-06-12 — recall-all moved to Shift+R), bare `J` (no-op marker), `T` in ARM_PILOT, `Enter` while piloting. **Removed (UX-11):** `F4`/`F5` (→ `5`/`6`), C-hold radial menu. **Removed (2026-06-12):** `H` and `Shift+O` recall-all (→ `Shift+R`).
+**Freed by the 2026-06-14 remap:** `W`, `Y`, `O`, `,` (comma), `Shift+C`. **Features that lost their dedicated key (not in the help menu):** cycle-capture-tool (was `T`), Focus Action (was `F`), Orbit/MPD MFD (was `M`), FEEP fuel cycle (was `6`). **Removed earlier (2026-06-14 "spinning plates"):** `P`/`Shift+P` (→ `1-4` select/pilot), `7` return-to-mother (→ re-press digit; `7` is now Comms toggle), `Q`/`E` thrust, and the `TOOL_DEPLOY` event constant. **Earlier removals:** bare `I` (inspection rides the `V` cycle, 2026-06-13b); `F4`/`F5` (→ `5`/`6`); C-hold radial menu (UX-11 #9); `H`/`Shift+O` recall-all (→ `Shift+R`, 2026-06-12).
+
+**New toggle hooks (2026-06-14):** `Starfield.toggleConstellations()`, `DebrisWireframe.toggleMinimized()` (collapses the canvas to a one-line dossier summary — id·size·mass·tumble·material — and the right column reflows up), `NavSphere.toggleMinimized()` (draws just the LAT/LON/ALT readout, skips the sphere), `TargetPanel.toggleVisible()`; `starfield` was added to `InputManager` deps.
+
 
 ---
 
@@ -219,7 +222,7 @@ All in [`InputManager.js`](js/systems/InputManager.js) `_handleKeyDown` + held-k
 - **StatusPanel** — body-mounted dual-objective bar ("CLEARED n/50" + always-visible "⚓ CONTRACT x/10,000 kg" — UX-11 #12, credits), Propulsion panel (`fuel-group`, key A: autopilot, ΔV, Xe/gas/battery, EDT, MPD rows, throttle, inline Forge [5]), Power panel (`power-group`, Shift+1-3 / [ ]), Crossbow Fleet panel (`arms-group`, key D: per-arm status, lasso cooldown ring, WEB n/max). HOLDING_CATCH renders gold with a 🎣 badge. Control-mode (RCS/COLD GAS) badge was **removed**.
 - **TargetPanel** — right column. Tracked (max 7, sort cycle), Untracked sensor (max 3), Active sats (max 3). Selected row expands with Net-ΔV, points, **MOID badge**, action hints. PaneChrome resize (Tab).
 - **CommsPanel** — top-right, 3-color priority palette, PaneChrome resize (C). Hosts `executeCommsCommand(1–6)`.
-- **RadialMenu** — **REMOVED** (UX-11 #9). Every former radial action has a direct key: D deploy, Shift+R recall all, P pilot, Ctrl+Shift+D deorbit. `C` is a plain comms-expand tap.
+- **RadialMenu** — **REMOVED** (UX-11 #9). Every former radial action has a direct key: D deploy, Shift+R recall all, 1-4 select/pilot, Ctrl+Shift+D deorbit. `C` is a plain comms-expand tap.
 - **SkillsPane** — bottom-left, J toggle (own listener). Experience-level opacity (NOVICE checklist "NEXT STEPS" → APPRENTICE auto-hide → VETERAN transient).
 - **HintTicker** — bottom strip, max 4, driven by `HINT_POSTED`/`SKILL_STATE_CHANGED`.
 - **NetInventoryPanel** — **SUSPENDED** (mounts `display:none`, never shown; logic/tests live). Redesign pending.
@@ -228,7 +231,7 @@ All in [`InputManager.js`](js/systems/InputManager.js) `_handleKeyDown` + held-k
 
 ## 8. Camera system & ceremonies
 
-[`CameraSystem.js`](js/systems/CameraSystem.js). `CameraViews` enum has **7** values: `FIRST_PERSON, CHASE, ORBIT, TARGET_LOCK, ARM_PILOT, INSPECTION, NET_CINEMATIC`. The **V-cycle is only CHASE↔ORBIT** (COMMAND↔OVERVIEW). `TARGET_LOCK` is **orphaned** (dropped from cycle; framing folded into CHASE via `targetLookBias`). INSPECTION entered via I / OVERVIEW-zoom Schmitt trigger.
+[`CameraSystem.js`](js/systems/CameraSystem.js). `CameraViews` enum has **7** values: `FIRST_PERSON, CHASE, ORBIT, TARGET_LOCK, ARM_PILOT, INSPECTION, NET_CINEMATIC`. The **V-cycle is COMMAND → OVERVIEW → INSPECTION → COMMAND** (`CHASE → ORBIT → INSPECTION`, 2026-06-13b). `TARGET_LOCK` is **orphaned** (dropped from cycle; framing folded into CHASE via `targetLookBias`). The INSPECTION step is entered via `enterInspection()` (so FOV/near-plane/vignette/callouts engage); OVERVIEW-zoom still auto-enters the same sub-state via the Schmitt trigger. The standalone `I` shortcut was removed 2026-06-13b.
 
 **Ceremonies (verified):**
 - **Net-launch ceremony** (`NET_CEREMONY` on) — **7 beats**: `POD_MUZZLE_PREFIRE → MUZZLE_EXIT_SPINUP → GLAMOUR_SHOT → APPROACH_DOLLY → BRAKE_ENVELOP → CINCH → SECURED_SETTLE`, with per-beat physics time-dilation (≈0.3–0.6×; world dt stays 1.0×). Subsequent deploys use a shortened "highlights cut." Sets `FIRST_NET_DEPLOY` persistence flag on first completion only.
@@ -245,7 +248,7 @@ All in [`InputManager.js`](js/systems/InputManager.js) `_handleKeyDown` + held-k
 
 | Method | Reachable by player? | Notes |
 |---|---|---|
-| **Capture Net** (F/N in STATION_KEEP; F/N/Space manual in TRANSIT/APPROACH) | ✅ | Real FSM + cling probability |
+| **Capture Net** (N in STATION_KEEP; N manual in TRANSIT/APPROACH) | ✅ | Real FSM + cling probability |
 | **Trawl** (Shift+G) | ✅ | TrawlManager auto-picks `clusters[0]` |
 | **Deorbit sacrifice** (Ctrl+Shift+D) | ✅ | |
 | **Reeling / Returning** (R / Shift+R, post-capture) | ✅ (indirect) | REELING = zero-fuel strut motor; RETURNING = FEEP. **Both now target the STRUT-TIP dock world pos** (2026-06-12, Issue 8 — RETURNING previously flew into the mother core, occluding the daughter ~2 s with a 180°-wrong tether) |
@@ -362,7 +365,8 @@ Corrected during the 2026-06-07 ground-truth pass. Stale-count headers have been
 | "TRL n" badges player-facing | relabeled **"Tech Lvl n"** everywhere player-facing (Codex + Shop + tier gating text, UX-11 #10); internal keys/data stay `trl`/`Constants.TRL` |
 | Codex locked cards = blurred `???` | **syllabus reveal** (UX-11 #10): title + one-liner always visible; fullText/rationale gated; `unlockHint` per entry; live search + per-category progress |
 | C-hold radial menu (RadialMenu.js) | **removed** (UX-11 #9); `C` = comms expand, `Shift+C` = city labels |
-| H / Shift+O = recall all (older docs/skills text) | **Shift+R** = recall all (2026-06-12 hotkey cleanup); `H` and `Shift+O` freed (reserved) |
+| H / Shift+O = recall all (older docs/skills text) | **Shift+R** = recall all (2026-06-12 hotkey cleanup); `Shift+O` freed; `H` was briefly freed then reassigned to the **de-spin laser** (2026-06-13, was `U`) |
+| de-spin laser = `U`; capture = F/N/Space (older docs) | **`H`** = de-spin laser ("Hold"); **`N`** = the single net/capture verb (F inert in ARM_PILOT, Space lasso alias dropped) — 2026-06-13 cleanup |
 | Test baseline 272/1252 (old ARCHITECTURE) | **711 / 2880 / 0** (2026-06-12) |
 
 ---

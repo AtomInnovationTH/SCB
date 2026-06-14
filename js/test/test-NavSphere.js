@@ -63,6 +63,18 @@ function _eciToGeodetic(x, y, z) {
   return _eciToGeodeticWithGMST(x, y, z, gmst);
 }
 
+// Mirror of NavSphere.getReservedHeight() (NavSphere.js) — the vertical slot
+// the sphere reserves below the comms panel so HUD.js can pull the right-hand
+// pane column up when the sphere is minimized/hidden. Constants mirror the
+// module-level SPHERE_RADIUS (140) and MIN_READOUT_HEIGHT (20).
+function _reservedHeight({ hidden = false, visible = true, minimized = false } = {}) {
+  const SPHERE_RADIUS = 140;
+  const MIN_READOUT_HEIGHT = 20;
+  if (hidden || !visible) return 0;
+  if (minimized) return MIN_READOUT_HEIGHT;
+  return 2 * SPHERE_RADIUS;
+}
+
 /** Helper: geodetic → ECI (for round-trip testing). Y = polar axis. */
 function _geodeticToECI(latDeg, lonDeg, altKm, gmst) {
   const a = 6378.137, f = 1 / 298.257223563, b = a * (1 - f);
@@ -396,5 +408,39 @@ describe('NavSphere — Constants.NAVSPHERE ST-5.4 entries', () => {
 
   it('STALK_ALPHA is 0.5', () => {
     assert.equal(NS.STALK_ALPHA, 0.5);
+  });
+});
+
+// --------------------------------------------------------------------------
+// getReservedHeight() — dynamic right-column slot (hotkey revamp 2026-06-14)
+// --------------------------------------------------------------------------
+describe('NavSphere — getReservedHeight (dynamic pane slot)', () => {
+  it('expanded + visible → full diameter (280px)', () => {
+    assert.equal(_reservedHeight({ minimized: false }), 280);
+  });
+
+  it('minimized → one-line readout footprint (20px)', () => {
+    assert.equal(_reservedHeight({ minimized: true }), 20);
+  });
+
+  it('minimized reserves far less than expanded (panes reclaim space)', () => {
+    const expanded = _reservedHeight({ minimized: false });
+    const minimized = _reservedHeight({ minimized: true });
+    assert.ok(minimized < expanded,
+      `minimized (${minimized}) should be < expanded (${expanded})`);
+    assert.ok(expanded - minimized >= 200,
+      `expected the column to climb ≥200px, got ${expanded - minimized}px`);
+  });
+
+  it('hidden (manual toggle) → 0 (column climbs below comms)', () => {
+    assert.equal(_reservedHeight({ hidden: true }), 0);
+  });
+
+  it('not visible (view config) → 0', () => {
+    assert.equal(_reservedHeight({ visible: false }), 0);
+  });
+
+  it('hidden takes priority over minimized state', () => {
+    assert.equal(_reservedHeight({ hidden: true, minimized: true }), 0);
   });
 });

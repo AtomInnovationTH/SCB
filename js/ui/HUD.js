@@ -79,7 +79,7 @@ const VIEW_INFO_LEVELS = {
     showAnalysis: true,
     showClosureRate: true, showTypeIcons: false,
     showVelocityVectors: false, showLeadIndicators: false,
-    hudOpacity: 0.9, label: 'ARM PILOT',
+    hudOpacity: 0.9, label: 'DAUGHTER PILOT',
   },
 };
 
@@ -238,7 +238,7 @@ export class HUD {
     this.netInventoryPanel = new NetInventoryPanel(this._rightColumn);
     this.commsPanel = new CommsPanel(this.container);
     // UX-11 #9: RadialMenu (C-hold command wheel) removed — every action has
-    // a direct key (D deploy, Shift+R recall all, P pilot, Ctrl+Shift+D deorbit).
+    // a direct key (D deploy, Shift+R recall all, 1-4 select/pilot, Ctrl+Shift+D deorbit).
     // Delegation 2 (2026-05-31): bottom-screen onboarding hint ticker.
     // Mounted on document.body so the strip sits above the notification slot
     // (which lives at viewport bottom) regardless of HUD overlay visibility.
@@ -768,6 +768,16 @@ export class HUD {
       });
     }
 
+    // Comms panel stepped to a new size (line/normal/large). Its bottom edge
+    // moves, so the NavSphere slot + right-hand pane column must follow. The
+    // panel height animates over ~0.3s, so keep recomputing the cached bottom
+    // each frame until the transition settles (see update()).
+    eventBus.on(Events.COMMS_PANEL_RESIZED, () => {
+      this._commsRectBottom = null;
+      this._commsResizeSettleAt =
+        (typeof performance !== 'undefined' ? performance.now() : Date.now()) + Constants.COMMS_RESIZE_SETTLE_MS;
+    });
+
     // --- Self-manage selected target via HUD_TARGET_CLICK (decoupled from GameFlowManager) ---
     eventBus.on(Events.HUD_TARGET_CLICK, (data) => {
       this.setSelectedTarget(data.id);
@@ -891,6 +901,17 @@ export class HUD {
   }
 
   /**
+   * Set the NavSphere reference so the right-hand pane column can reserve the
+   * correct amount of vertical space and reclaim it when the sphere is
+   * minimized (8 key) or hidden. Wired from main.js after NavSphere
+   * construction. See HUD.update()'s right-column repositioning.
+   * @param {import('./NavSphere.js').NavSphere} navSphere
+   */
+  setNavSphere(navSphere) {
+    this._navSphere = navSphere;
+  }
+
+  /**
    * F17: Set the CodexSystem reference for unseen entry badge.
    * @param {import('../systems/CodexSystem.js').CodexSystem} codexSystem
    */
@@ -953,10 +974,23 @@ export class HUD {
     // cache the comms-panel bottom and invalidate only on resize / view-config
     // change (see _setupEventListeners). Saves ~0.2–0.5 ms/frame on dense missions.
     if (this._rightColumn && this.panels.comms) {
+      // While the comms panel's height animates after a size step, force a
+      // per-frame recompute so the column tracks the bottom edge smoothly
+      // instead of snapping once the transition ends.
+      if (this._commsResizeSettleAt != null) {
+        const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+        if (now < this._commsResizeSettleAt) this._commsRectBottom = null;
+        else this._commsResizeSettleAt = null;
+      }
       if (this._commsRectBottom == null) {
         this._commsRectBottom = this.panels.comms.getBoundingClientRect().bottom;
       }
-      const navSphereBottom = this._commsRectBottom + 6 + 280; // 6px gap + 280px NavSphere diameter
+      // NavSphere slot height is dynamic: it collapses to a one-line readout
+      // when minimized (8 key) and to 0 when hidden, letting the pane column
+      // climb up and reclaim the freed real estate. Falls back to the full
+      // 280px diameter if the NavSphere ref was never wired.
+      const navReserved = this._navSphere?.getReservedHeight?.() ?? 280;
+      const navSphereBottom = this._commsRectBottom + 6 + navReserved; // 6px gap above NavSphere slot
       const newTop = Math.round(navSphereBottom + 6);          // 6px gap below NavSphere
       if (this._lastRightColTop !== newTop) {
         this._rightColumn.style.top = newTop + 'px';
@@ -1860,30 +1894,29 @@ export class HUD {
 
     if (isStationKeep) {
       this._armStripMode = 'sk';
+      // Hotkey cleanup 2026-06-13: capture verb is N (was F); Shift = fine
+      // folded onto the Orbit hint.
       this._armPilotStrip.innerHTML =
         '<span class="apc-badge">🛰️ STATION KEEP</span>' +
         '<span class="apc-sep">│</span>' +
-        '<span class="apc-key">↑↓←→</span> Orbit ' +
+        '<span class="apc-key">↑↓←→</span> Orbit (Shift = fine) ' +
         '<span class="apc-sep">│</span>' +
         '<span class="apc-key">+/-</span> Distance ' +
         '<span class="apc-sep">│</span>' +
-        '<span class="apc-key">F</span> Capture ' +
-        '<span class="apc-sep">│</span>' +
-        '<span class="apc-key">Shift</span> Fine ' +
+        '<span class="apc-key">N</span> Capture ' +
         '<span class="apc-sep">│</span>' +
         '<span class="apc-key">ESC</span> Exit';
     } else {
       this._armStripMode = 'pilot';
+      // Hotkey revamp 2026-06-14: WASD/Q-E daughter thrust was removed — the
+      // daughter flies autonomously to her target. The only pilot-mode actions
+      // are deploy-net (N), recall (R), and exit (ESC).
       this._armPilotStrip.innerHTML =
-        '<span class="apc-badge">🤖 ARM PILOT</span>' +
+        '<span class="apc-badge">🤖 DAUGHTER PILOT</span>' +
         '<span class="apc-sep">│</span>' +
-        '<span class="apc-key">W A S D</span> Steer ' +
+        '<span class="apc-key">N</span> Deploy Net ' +
         '<span class="apc-sep">│</span>' +
-        '<span class="apc-key">Q E</span> Up/Down ' +
-        '<span class="apc-sep">│</span>' +
-        '<span class="apc-key">F</span> Deploy Net ' +
-        '<span class="apc-sep">│</span>' +
-        '<span class="apc-key">Shift</span> Fine ' +
+        '<span class="apc-key">R</span> Recall ' +
         '<span class="apc-sep">│</span>' +
         '<span class="apc-key">ESC</span> Exit';
     }

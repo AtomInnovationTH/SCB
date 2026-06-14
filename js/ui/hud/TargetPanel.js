@@ -232,6 +232,17 @@ export class TargetPanel {
     return div;
   }
 
+  /**
+   * Show/hide the target pane (hotkey revamp 2026-06-14 — the 0 key,
+   * "Target pane" toggle). Toggles the panel container's display.
+   */
+  toggleVisible() {
+    const panel = this.panels && this.panels.targets;
+    if (!panel) return;
+    const hidden = panel.style.display === 'none';
+    panel.style.display = hidden ? '' : 'none';
+  }
+
   /** @private */
   _build() {
     this._injectStyles();

@@ -32,25 +32,26 @@ export const CameraViews = {
 /**
  * View cycling order driven by the V key.
  *
- * 2026-06-03 consolidation (rev. 2): INSPECTION removed from the cycle. The V
- * key now teaches just two named views:
- *   COMMAND (fly the ship) → OVERVIEW (pull back, look around) → COMMAND.
- * Close inspection is no longer a discrete cycle slot — instead, zooming in far
- * enough while in OVERVIEW auto-enters a mothership inspection sub-state
- * (narrow FOV, dynamic near-plane, vignette, hull/wireframe overlays) and
- * zooming back out leaves it. A Schmitt-trigger (separate enter/exit distances)
- * prevents flicker at the boundary. This keeps the player's mental model to two
- * things and removes the deliberate "no auto-switch" exception only for this
- * zoom-driven optical transition (the named *view* still never auto-switches).
+ * 2026-06-13b (hotkey cleanup): INSPECTION is back in the cycle as the third
+ * step. The bare-I shortcut was removed, so V is now the single path to close
+ * inspection:
+ *   COMMAND (fly the ship) → OVERVIEW (pull back, look around) → INSPECTION
+ *   (close vantage + hull/debris callouts) → COMMAND.
+ * The INSPECTION step is NOT entered with a plain setView() — cycleView() routes
+ * it through enterInspection() so the narrow FOV, dynamic near-plane, vignette
+ * and contextual wireframe overlay all engage (the player sees callouts at once,
+ * exactly where bare-I used to land). A Tab-locked debris focuses the debris
+ * wireframe; otherwise the mothership.
  *
- * INSPECTION remains a real CameraViews value for the bare-I power-user shortcut
- * and the ARM_PILOT / debris-locked contextual wireframe path (entered via
- * enterInspection()/exitInspection()). FIRST_PERSON, ARM_PILOT and NET_CINEMATIC
- * remain outside the cycle (entered by their own bindings).
+ * Zooming in while in OVERVIEW still auto-enters the same inspection sub-state
+ * (Schmitt-trigger on distance) — that path is unchanged. FIRST_PERSON,
+ * ARM_PILOT and NET_CINEMATIC remain outside the cycle (entered by their own
+ * bindings).
  */
 const VIEW_CYCLE = [
   CameraViews.CHASE,          // COMMAND (default)
   CameraViews.ORBIT,          // OVERVIEW (zoom in here to inspect the mothership)
+  CameraViews.INSPECTION,     // INSPECTION (close vantage + callouts; via enterInspection)
 ];
 
 /** Human-readable labels for HUD display */
@@ -59,7 +60,7 @@ const VIEW_LABELS = {
   [CameraViews.CHASE]:        '🛰 COMMAND',
   [CameraViews.TARGET_LOCK]:  '🔒 TACTICAL',
   [CameraViews.ORBIT]:        '🌍 OVERVIEW',
-  [CameraViews.ARM_PILOT]:    '🤖 ARM PILOT',
+  [CameraViews.ARM_PILOT]:    '🤖 DAUGHTER PILOT',
   [CameraViews.INSPECTION]:   '🔍 INSPECTION',
   [CameraViews.NET_CINEMATIC]: '🎬 NET CINEMATIC',
 };
@@ -355,20 +356,21 @@ export class CameraSystem {
   // ==========================================================================
 
   /**
-   * Toggle the camera view (V key): COMMAND ↔ OVERVIEW.
+   * Advance the camera view (V key): COMMAND → OVERVIEW → INSPECTION → COMMAND.
    *
-   * 2026-06-03 rev. 2: INSPECTION is no longer a cycle slot — close inspection
-   * engages automatically by zooming in within OVERVIEW (see _evaluateInspectZoom).
-   * If the player happens to be in the discrete INSPECTION view (entered via the
-   * bare-I shortcut or the debris/arm contextual path), V wraps cleanly back to
-   * COMMAND and restores optics/overlay.
+   * 2026-06-13b: INSPECTION is the third cycle step (the bare-I shortcut was
+   * removed). Reaching it routes through enterInspection() so the close vantage,
+   * narrow FOV and contextual callouts engage immediately. Pressing V again from
+   * INSPECTION wraps back to COMMAND and restores optics/overlay.
+   *
+   * @param {string|number|null} [lockedId] - The currently Tab-locked debris id
+   *   (or null). Passed in by the caller from its injected targetSelector so
+   *   CameraSystem stays free of the targetSelector singleton dependency.
    */
-  cycleView() {
+  cycleView(lockedId = null) {
     const cur = this.currentView;
 
-    // INSPECTION is no longer a cycle slot. If the player entered it via the
-    // bare-I shortcut (or the debris/arm contextual path) and then presses V,
-    // wrap cleanly back to COMMAND and restore optics/overlay.
+    // From INSPECTION, V wraps back to COMMAND (restores optics/overlay).
     if (cur === CameraViews.INSPECTION) {
       this.exitInspection(CameraViews.CHASE);
       return;
@@ -377,6 +379,16 @@ export class CameraSystem {
     const currentIdx = VIEW_CYCLE.indexOf(cur);
     const nextIdx = (currentIdx + 1) % VIEW_CYCLE.length;
     const next = VIEW_CYCLE[nextIdx];
+
+    // INSPECTION must be entered via enterInspection() (not a plain setView) so
+    // FOV / near-plane / vignette / wireframe overlay all engage and the player
+    // sees callouts at once — the slot the bare-I shortcut used to fill. A
+    // Tab-locked debris focuses the debris wireframe; else the mothership.
+    if (next === CameraViews.INSPECTION) {
+      this.enterInspection(lockedId != null ? 'debris' : 'mother', lockedId);
+      return;
+    }
+
     this.setView(next);
   }
 
@@ -1326,8 +1338,9 @@ export class CameraSystem {
 
     // V-8 fix: Daughter reached STATION_KEEP before ceremony finished (timing
     // race when debris is close — e.g. 35m at 10 m/s ≈ 3.5s arrival vs 6s
-    // ceremony). Complete immediately so user gets the "press P" prompt
-    // while the arm is still findable and armPilot is prepped for P-key.
+    // ceremony). Complete immediately so the daughter is still findable and
+    // armPilot is prepped — the ceremony hands the player straight into the
+    // daughter (LAUNCH_CEREMONY_COMPLETE auto-enters ARM_PILOT).
     // Cannot use skipLaunchCeremony() — it omits armPilot setup, comms, and
     // LAUNCH_CEREMONY_COMPLETE. Instead, replicate the phase > 3 completion
     // block inline (same logic as lines 937-962 above).
@@ -1426,7 +1439,7 @@ export class CameraSystem {
         if (c._springLatch && !c._shookOnFire) {
           c._shookOnFire = true;
           eventBus.emit(Events.COMMS_MESSAGE, {
-            text: `${arm.id}: Spring fired — separating`,
+            text: `${arm.id}: Spring released — separating`,
             priority: 'info',
           });
         }
@@ -1488,7 +1501,7 @@ export class CameraSystem {
     // Phase 2-3: ease toward 45° (moderate cinematic view behind daughter).
     // Keep 45° through Phase 3 so the post-ceremony ARM_PILOT tracking view
     // matches Phase 2 exactly — no visual zoom from FOV narrowing.
-    // User can press P for manual pilot which eases to 40° (armPilot.fovNarrow).
+    // User selecting a launched daughter (1-4) eases to 40° (armPilot.fovNarrow).
     if (c.phase >= 2) {
       const targetFov = 45;
       const fovEaseRate = 1.5;
@@ -2474,7 +2487,7 @@ export class CameraSystem {
   /** @private Show the view indicator with a label */
   _showViewIndicator(view) {
     if (!this._viewIndicator) return;
-    const keyHint = view === CameraViews.ARM_PILOT ? '[P]' : '[V]';
+    const keyHint = view === CameraViews.ARM_PILOT ? '[1-4]' : '[V]';
     this._viewIndicator.textContent = `${VIEW_LABELS[view]}  ${keyHint}`;
     this._viewIndicator.style.opacity = '1';
     this._viewIndicatorTimer = 2.5; // Show for 2.5 seconds

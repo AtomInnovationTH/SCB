@@ -301,8 +301,8 @@ export class StatusPanel {
           </span>
         </div>
         <span style="color:#ffaa00;font-size:13px;font-weight:bold;">💰 <b id="hud-credits">0</b></span>
-        <span id="hud-arm-tier" title="Current arm configuration tier"
-              style="display:none;color:#ff8800;font-size:11px;letter-spacing:0.05em;">Y0 Quad — 4 arms</span>
+        <span id="hud-arm-tier" title="Current daughter configuration tier"
+              style="display:none;color:#ff8800;font-size:11px;letter-spacing:0.05em;">Y0 Quad — 4 daughters</span>
         <span id="hud-anchor-wrap" title="Elevator contract — deliver refined metal at the shop to win"
               style="color:#81c784;font-size:11px;">⚓ <span style="font-size:9px;letter-spacing:1px;opacity:0.7;">CONTRACT</span> <b id="hud-anchor-mass">0</b>/<b id="hud-anchor-target">10,000</b> kg</span>
       </div>
@@ -484,7 +484,7 @@ export class StatusPanel {
           </div>
           <div class="hud-power-row" data-bus="arms" style="margin:2px 0;">
             <div style="display:flex;align-items:center;gap:4px;">
-              <span class="power-label" style="width:52px;color:#00ff88;">Arms</span>
+              <span class="power-label" style="width:52px;color:#00ff88;">Daughters</span>
               <div style="flex:1;height:10px;background:rgba(0,0,0,0.5);border:1px solid rgba(0,255,136,0.3);border-radius:2px;overflow:hidden;">
                 <div id="hud-power-bar-arms" style="height:100%;width:30%;background:#00ff88;transition:width 0.2s ease;"></div>
               </div>
@@ -513,16 +513,16 @@ export class StatusPanel {
     this.panels.arms.dataset.hudGroup = 'arms-group';
     this.panels.arms.dataset.activateKey = 'D';
     this.panels.arms.innerHTML = `
-      <div style="font-size:11px;margin-bottom:4px;color:#00ff88;opacity:0.7;">🏹 CROSSBOW FLEET</div>
+      <div style="font-size:11px;margin-bottom:4px;color:#00ff88;opacity:0.7;">🛰️ DAUGHTERS</div>
       <div class="fleet-collapsed-summary" id="fleet-collapsed-summary">
         <span style="opacity:0.5;font-size:10px;">Loading fleet…</span>
       </div>
       <div class="fleet-full-content">
         <div id="hud-arms-status" style="font-size:10px;line-height:1.5;">
-          <span style="opacity:0.5">Initializing arm fleet…</span>
+          <span style="opacity:0.5">Initializing daughter fleet…</span>
         </div>
         <div style="font-size:10px;opacity:0.4;margin-top:4px;border-top:1px solid rgba(0,255,136,0.1);padding-top:3px;">
-          1-8 Select &ensp;0 Mother &ensp;G Deploy &ensp;F Fish &ensp;H Recall &ensp;D Deorbit
+          1-4 Select &ensp;0 Mother &ensp;D Launch &ensp;R Recall &ensp;Shift+R All &ensp;H De-spin
         </div>
         <div id="lasso-cooldown-row" style="display:flex;align-items:center;gap:6px;margin-top:4px;padding-top:3px;border-top:1px solid rgba(0,255,136,0.1);font-size:10px;">
           <svg id="lasso-cd-ring" width="18" height="18" viewBox="0 0 18 18" style="flex-shrink:0;">
@@ -650,7 +650,7 @@ export class StatusPanel {
       const ladder = Constants.ARM_LADDER[tierKey];
       if (ladder) {
         const displayNames = { Y0_QUAD: 'Y0 Quad', Y1_HEX: 'Y1 Hex', Y3_OCTO: 'Y3 Octo' };
-        badge.textContent = `${displayNames[tierKey] || tierKey} — ${ladder.armCount} arms`;
+        badge.textContent = `${displayNames[tierKey] || tierKey} — ${ladder.armCount} daughters`;
       }
     }
   }
@@ -740,7 +740,7 @@ export class StatusPanel {
       if (comHint) {
         if (drift >= threshold && data.comSuggestedStowArm !== undefined && data.comSuggestedStowArm !== null) {
           comHint.style.display = '';
-          comHint.textContent = `Stow Arm #${data.comSuggestedStowArm + 1} to rebalance`;
+          comHint.textContent = `Stow Daughter #${data.comSuggestedStowArm + 1} to rebalance`;
         } else {
           comHint.style.display = 'none';
           comHint.textContent = '';
@@ -1280,7 +1280,7 @@ export class StatusPanel {
         <span>${mb.wetMass} kg</span>
       </div>
       <div style="display:flex;justify-content:space-between;opacity:0.5;font-size:10px;">
-        <span>Arms: ${mb.dockedArmMass}kg docked</span>
+        <span>Daughters: ${mb.dockedArmMass}kg docked</span>
         <span>${mb.deployedArmMass}kg out</span>
       </div>
     `;
@@ -1381,14 +1381,14 @@ export class StatusPanel {
     if (!el) return;
 
     if (!this._armManager) {
-      el.innerHTML = '<span style="opacity:0.5">No arm manager</span>';
+      el.innerHTML = '<span style="opacity:0.5">No daughter manager</span>';
       this._updateFleetCollapsedSummary([]);
       return;
     }
 
     const statuses = this._armManager.getAllStatus();
     if (statuses.length === 0) {
-      el.innerHTML = '<span style="opacity:0.5">No arms configured</span>';
+      el.innerHTML = '<span style="opacity:0.5">No daughters configured</span>';
       this._updateFleetCollapsedSummary([]);
       return;
     }

@@ -258,12 +258,12 @@ export class SweepReportUI {
         </div>
 
         <div style="display:flex; justify-content:space-between; margin-bottom:6px;">
-          <span style="color:#888;">Arms Deployed</span>
+          <span style="color:#888;">Daughters Deployed</span>
           <span>${r.armsUsed || 0}</span>
         </div>
 
         <div style="display:flex; justify-content:space-between; margin-bottom:6px;">
-          <span style="color:#888;">Arm Catches</span>
+          <span style="color:#888;">Daughter Catches</span>
           <span>${r.armCatches || 0}</span>
         </div>
 

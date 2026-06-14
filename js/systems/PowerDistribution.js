@@ -174,7 +174,7 @@ class PowerDistribution {
       if (now - this._lastArmWarning > 5000) {
         this._lastArmWarning = now;
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: '⚠ ARM BEACON OFFLINE — deployed arms cannot navigate!',
+          text: '⚠ DAUGHTER BEACON OFFLINE — deployed daughters cannot navigate!',
           priority: 'critical',
         });
       }

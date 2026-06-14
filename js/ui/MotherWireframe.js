@@ -279,7 +279,7 @@ export function buildMotherShape() {
       { name: 'Laser Aperture',     edges: laserEdges,   massPercent:  6, risk: 'RED'    },
       { name: 'Front/Rear Caps',    edges: capEdges,     massPercent:  5, risk: 'GREEN'  },
       { name: 'Navigation Lights',  edges: navEdges,     massPercent:  1, risk: 'GREEN'  },
-      { name: 'Crossbow Arms',      edges: armEdges,     massPercent:  9, risk: 'YELLOW' },
+      { name: 'Daughters',         edges: armEdges,     massPercent:  9, risk: 'YELLOW' },
     ],
   };
 }
@@ -458,7 +458,7 @@ export class MotherWireframe {
     ctx.font      = "bold 12px 'Courier New', monospace";
     ctx.textAlign = 'center';
     ctx.fillStyle = HEADER_COL;
-    ctx.fillText('V5 CROSSBOW [I]', WIRE_CX, 14);
+    ctx.fillText('V5 CRADLE [V]', WIRE_CX, 14);
     ctx.font      = "11px 'Courier New', monospace";
     ctx.fillStyle = TYPE_COL;
     ctx.fillText('PART CALLOUT — MOTHERSHIP', WIRE_CX, 26);
@@ -545,22 +545,22 @@ export class MotherWireframe {
       ctx.fillStyle = color;
 
       let detail = `Mass: ${zone.massPercent}%   Risk: ${riskTxt}`;
-      if (zone.name === 'Crossbow Arms' && this._armManager) {
+      if (zone.name === 'Daughters' && this._armManager) {
         const arms   = this._armManager.getArms?.() || [];
         const docked = arms.filter(a => a?.state === 'DOCKED').length;
-        detail = `${docked}/${arms.length} ARMS DOCKED`;
+        detail = `${docked}/${arms.length} DAUGHTERS DOCKED`;
       }
       ctx.fillText(detail, WIRE_CX, infoY + 13);
 
       ctx.font      = "10px 'Courier New', monospace";
       ctx.fillStyle = DIM_COL;
-      ctx.fillText('[Tab] next zone   [I] close', WIRE_CX, infoY + 26);
+      ctx.fillText('[Tab] next zone   [V/Esc] close', WIRE_CX, infoY + 26);
     } else {
       ctx.font      = "11px 'Courier New', monospace";
       ctx.fillStyle = DIM_COL;
       ctx.fillText('SCANNING ALL ZONES…', WIRE_CX, infoY);
       ctx.font      = "10px 'Courier New', monospace";
-      ctx.fillText('[I] close   [Tab] select zone', WIRE_CX, infoY + 14);
+      ctx.fillText('[V/Esc] close   [Tab] select zone', WIRE_CX, infoY + 14);
     }
   }
 }

@@ -57,7 +57,7 @@ export class DespinLaser {
 
   /**
    * Issue 5c/9 (2026-06-12): while the player pilots a daughter in
-   * STATION_KEEP, the SK readout advises "de-spin [U]" — route the mother
+   * STATION_KEEP, the SK readout advises "de-spin [H]" — route the mother
    * laser at the PILOTED ARM's SK target (which may differ from the
    * Tab-locked selector target). Pass null to restore selector targeting.
    * Set each frame by InputManager.processInput.

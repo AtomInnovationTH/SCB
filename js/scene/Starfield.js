@@ -292,6 +292,10 @@ export class Starfield {
    */
   _createConstellations() {
     const radius = Constants.STAR_SPHERE_RADIUS;
+    // Hotkey revamp 2026-06-14: collect constellation line + label objects so
+    // the 6 key ("Constellation names" toggle) can show/hide them without
+    // affecting the star field itself.
+    this._constellationObjects = this._constellationObjects || [];
 
     // Shared Line2 material — screenspace-width lines that stay visible at any distance.
     // LineMaterial renders 2px-wide lines via geometry shaders, bypassing the
@@ -323,6 +327,7 @@ export class Starfield {
       lineObj.computeLineDistances();
       lineObj.frustumCulled = false;
       this.group.add(lineObj);
+      this._constellationObjects.push(lineObj);
 
       // Compute centroid for label placement, re-project onto sphere
       const center = new THREE.Vector3();
@@ -341,7 +346,25 @@ export class Starfield {
       label.scale.set(50, 12, 1);
       label.frustumCulled = false;
       this.group.add(label);
+      this._constellationObjects.push(label);
     }
+  }
+
+  /**
+   * Show/hide the constellation outlines + name labels (hotkey revamp
+   * 2026-06-14 — the 6 key). Leaves the star field untouched.
+   * @param {boolean} visible
+   */
+  setConstellationsVisible(visible) {
+    this._constellationsVisible = !!visible;
+    for (const obj of (this._constellationObjects || [])) {
+      obj.visible = this._constellationsVisible;
+    }
+  }
+
+  /** Toggle constellation outlines + labels (6 key). */
+  toggleConstellations() {
+    this.setConstellationsVisible(!(this._constellationsVisible ?? true));
   }
 
   /**

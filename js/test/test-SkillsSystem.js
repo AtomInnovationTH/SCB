@@ -1024,7 +1024,7 @@ describe('SkillsSystem — Mastery Celebration (ST-3.4)', () => {
         assert.equal(log.length, 1, 'Should emit exactly 1 MASTERY_FANFARE');
         const d = log[0].data;
         assert.equal(d.skillId, 'collect_deploy');
-        assert.equal(d.label, 'Deploy Arm');
+        assert.equal(d.label, 'Deploy Daughter');
         assert.equal(d.tier, 2);
         assert.equal(d.category, 'collect');
         assert.equal(typeof d.largeToast, 'boolean');

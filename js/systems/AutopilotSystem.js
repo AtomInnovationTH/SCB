@@ -579,7 +579,7 @@ export class AutopilotSystem {
 
           eventBus.emit(Events.AUTOPILOT_ARRIVED, { mode: this._headingMode });
           eventBus.emit(Events.COMMS_MESSAGE, {
-            text: '✓ ON STATION — [N] lasso (≤200m) · [D] deploy arm for far/heavy debris',
+            text: '✓ ON STATION — [N] lasso (≤200m) · [D] deploy daughter for far/heavy debris',
             priority: 'info',
           });
         } else if (posErrM > Dtrail_m * 3) {
@@ -1288,7 +1288,7 @@ export class AutopilotSystem {
       // Houston comms
       const estTime = Math.abs(motherRotationRad) / AP_ROT_RATE;
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `Rotating to firing attitude — ${Math.ceil(estTime)} seconds.`,
+        text: `Rotating to launch attitude — ${Math.ceil(estTime)} seconds.`,
         priority: 'info',
         source: 'HOUSTON',
       });

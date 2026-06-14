@@ -100,10 +100,21 @@ export class InputManager {
         this._exitArmPilotCamera();
         if (isExpended) {
           eventBus.emit(Events.COMMS_MESSAGE, {
-            text: 'ARM PILOT disengaged — arm expended',
+            text: 'DAUGHTER PILOT disengaged — daughter expended',
             priority: 'warning',
           });
         }
+      }
+      // D4 (hotkey revamp 2026-06-14): clear the selection when the returning /
+      // expended daughter is the selected one, so its 3D selection glow stops
+      // (otherwise the body keeps pulsing cyan after it docks/expends, since
+      // selection persists and nothing pressed a key). Runs regardless of
+      // armPilotMode — a daughter selected (docked-glow) but never piloted must
+      // also clear if it somehow returns/expends.
+      const am = this._deps?.armManager;
+      if (am && typeof am.getSelectedArm === 'function'
+          && am.getSelectedArm()?.id === data.armId) {
+        am.deselectArm();
       }
     };
     eventBus.on(Events.ARM_RETURNED, (data) => handleArmPilotExit(data, false));
@@ -113,7 +124,8 @@ export class InputManager {
     // When ceremony → ARM_PILOT (auto-entry path so the camera stays on the
     // daughter for debris inspection), keep the narrow ~40° FOV and ALSO turn
     // on armPilotMode so arrow-key SK orbit controls + WASD manual thrust work
-    // immediately without requiring the player to press P.
+    // immediately (the player did not have to enter pilot mode manually — the
+    // ceremony hands them straight into the daughter).
     // When skipLaunchCeremony → CHASE, snap FOV back to COMMAND default.
     eventBus.on(Events.LAUNCH_CEREMONY_COMPLETE, () => {
       const cam = this._deps?.cameraSystem;
@@ -532,34 +544,11 @@ export class InputManager {
         // Note: Menu and Briefing Enter handling is now in their own keydown listeners
         break;
 
-      // Cycle targets
+      // Cycle targets — Tab (legacy alias) and T (the menu's "Target debris"
+      // verb, 2026-06-14) both route through _cycleTarget().
       case 'Tab':
         if (isGameplay) {
-          try {
-            // FIX_PLAN §4: Use same target list as HUD (sorted upstream by TPI)
-            this.nearbyTargets = d.debrisField.getEnhancedTargetList(
-              d.player.getPosition(), d.player.getOrbitalElements()
-            );
-            // Filter: only tracked debris unless IR Scanner is active
-            const canDetect = d.sensorSystem && d.sensorSystem.canDetectUntracked;
-            this.nearbyTargets = this.nearbyTargets.filter(t => t.tracked !== false || canDetect);
-            if (this.nearbyTargets.length > 0) {
-              this.targetIndex = (this.targetIndex + 1) % this.nearbyTargets.length;
-              const t = this.nearbyTargets[this.targetIndex];
-              const debris = d.debrisField.getDebrisById(t.id);
-              if (debris) {
-                d.targetSelector.setTarget(debris, { distanceKm: t.distanceKm, deltaV: t.deltaV });
-                if (d.debrisWireframe) d.debrisWireframe.setTarget(debris);
-                d.hud.setSelectedTarget(t.id);
-                if (d.targetReticle) d.targetReticle.setSelectedTarget(t.id);
-                if (d.navSphere) d.navSphere.setSelectedTarget(t.id);
-              }
-            }
-          } catch (err) {
-            console.error('[Tab] target cycling error:', err);
-          }
-          // Notify tutorial of Tab press
-          eventBus.emit(Events.TUTORIAL_TAB_INPUT);
+          this._cycleTarget();
         }
         // Only prevent default during gameplay (briefing handles its own Tab)
         if (isGameplay) e.preventDefault();
@@ -620,7 +609,11 @@ export class InputManager {
         }
         break;
 
-      // Camera view cycling (V key) / Strategic Map (Shift+V)
+      // Camera view cycling (V key) / Strategic Map (Shift+V).
+      // Hotkey revamp 2026-06-14: V now cycles the camera in BOTH mother and
+      // daughter (ARM_PILOT) modes — the menu lists "View" as a daughter verb
+      // too. Backing out of piloting is done by re-pressing the active digit or
+      // pressing Esc (the old "V exits pilot" special-case was removed).
       case 'KeyV':
         if (isGameplay) {
           if (e.shiftKey) {
@@ -629,80 +622,15 @@ export class InputManager {
             d.audioSystem?.playClick();
             e.preventDefault();
           } else if (d.cameraSystem) {
-            // Plain V → camera toggle: COMMAND ↔ OVERVIEW (2026-06-03 rev. 2).
-            // INSPECT is no longer a cycle slot — zooming in within OVERVIEW
-            // engages mothership inspection automatically. In ARM_PILOT, V backs
-            // out to the mothership (unchanged). cycleView() also wraps cleanly
-            // if the player is in the discrete INSPECTION view (entered via I).
-            if (this.armPilotMode) {
-              this._exitArmPilotCamera();
-              if (d.armManager) d.armManager.deselectArm();
-            } else {
-              d.cameraSystem.cycleView();
-            }
+            const lockedId = d.targetSelector?.getActiveTarget?.()?.id ?? null;
+            d.cameraSystem.cycleView(lockedId);
             d.audioSystem.playClick();
           }
         }
         break;
 
-      // Inspection shortcut (bare I = direct toggle; the V cycle is the taught
-      // primary path).  Contextual subject (2026-06-03 consolidation):
-      //   • ARM_PILOT  → expand the debris-from-daughter wireframe (no camera move).
-      //   • Mothership → toggle the close inspection camera + overlay; a Tab-locked
-      //                  debris focuses the debris wireframe, else the mother.
-      // enterInspection()/exitInspection() own the INSPECTION_TOGGLE emit, so we
-      // no longer emit it here (avoids the old double-toggle that cancelled out).
-      case 'KeyI':
-        if (isGameplay && d.cameraSystem && !e.repeat) {
-          if (this.armPilotMode) {
-            const tId = d.targetSelector?.getActiveTarget?.()?.id ?? null;
-            eventBus.emit(Events.INSPECTION_TOGGLE, { subject: 'debris', targetId: tId });
-          } else if (d.cameraSystem.currentView === 'INSPECTION') {
-            d.cameraSystem.exitInspection();
-          } else {
-            const lockedId = d.targetSelector?.getActiveTarget?.()?.id ?? null;
-            d.cameraSystem.enterInspection(lockedId != null ? 'debris' : 'mother', lockedId);
-          }
-          d.audioSystem?.playClick();
-        }
-        break;
-
-      // S2.2: Deploy all arms (O key). Shift+O recall-all REMOVED (hotkey
-      // cleanup 2026-06-12) — recall-all now lives on Shift+R only.
-      case 'KeyO':
-        if (isGameplay && d.armManager && !this.armPilotMode && !e.repeat && !e.shiftKey) {
-          // O: deploy all docked arms to selected target
-          const target = d.targetSelector ? d.targetSelector.getActiveTarget() : null;
-          d.armManager.deployAllToTarget(target);
-          d.audioSystem?.playClick();
-        }
-        break;
-
-      // CP-2: de-spin laser (hold U). The continuous beam is driven by the held-key
-      // poll in processInput(); this keydown only gives a no-target affordance.
-      // Issue 5c/9 (2026-06-12): also live in ARM_PILOT when the piloted arm is
-      // station-keeping a target (the SK readout advises "de-spin [U]").
-      case 'KeyU':
-        if (isGameplay && !e.repeat && Constants.isFeatureEnabled('LASER_DESPIN')) {
-          let despinTarget = null;
-          if (this.armPilotMode) {
-            despinTarget = this._getPilotedSkDespinTarget();
-          } else {
-            despinTarget = d.targetSelector ? d.targetSelector.getActiveTarget() : null;
-          }
-          if (!despinTarget) {
-            d.audioSystem?.playClickFail?.();
-            eventBus.emit(Events.COMMS_MESSAGE, {
-              source: 'MOTHER',
-              text: this.armPilotMode
-                ? 'De-spin laser: piloted daughter must be station-keeping a target.'
-                : 'De-spin laser: select a tumbling target first.',
-              channel: 'CMD', priority: 'warning',
-            });
-          }
-          e.preventDefault();
-        }
-        break;
+      // O key — FREED (hotkey revamp 2026-06-14). NavSphere toggle moved to the
+      // 8 key (Advanced toggle row). O is currently unbound.
 
       // Open shop (B key during orbital)
       case 'KeyB':
@@ -711,15 +639,14 @@ export class InputManager {
         }
         break;
 
-      // M key: MPD Armed toggle (S3b) — falls back to Orbit MFD if no MPD
+      // M key — "Map" (hotkey revamp 2026-06-14): toggle the Debris Map. The
+      // old MPD-armed / Orbit-MFD role on M lost its key in the revamp (not in
+      // the help menu). ` (backtick) remains an undocumented Debris-Map alias.
       case 'KeyM':
-        if (isGameplay && d.player && d.player.hasMPD) {
-          d.player.toggleMPDArmed();
-          d.audioSystem.playClick();
-        } else if (d.orbitMFD) {
-          d.orbitMFD.toggle();
-          // Skills discovery: orbit MFD toggled
-          eventBus.emit(Events.ORBIT_MFD_TOGGLE);
+        if (isGameplay && d.debrisMap && !e.repeat) {
+          d.debrisMap.toggle();
+          d.audioSystem?.playClick();
+          e.preventDefault();
         }
         break;
 
@@ -797,85 +724,27 @@ export class InputManager {
         }
         break;
 
-      // K key — freed by Delegation 1 (2026-05-31).  Forge moved to F4, then
-      // to Digit5 (UX-11 #8, 2026-06-11).  Bare K is currently a no-op.
-      case 'KeyK':
-        // intentionally no-op (reserved)
-        break;
+      // P / Shift+P — REMOVED (hotkey revamp 2026-06-14). The ARM PILOT toggle
+      // and Shift+P arm-cycle were retired: daughters are now managed directly
+      // with the number row (1-4 = select/pilot), and re-pressing the active
+      // digit returns to the mother. armPilotMode is now entered only by
+      // digit-selecting a DEPLOYED arm and by LAUNCH_CEREMONY_COMPLETE. P is
+      // left unbound.
 
-      // F4 removed (UX-11 #8, 2026-06-11): Forge toggle now lives on Digit5
-      // (number row, next to the 1-4 daughter keys). No alias retained.
-
-      // Toggle ARM PILOT mode (P key).
-      // UX-11 #8 follow-up: Shift+P CYCLES the piloted/selected arm through
-      // every non-docked arm. This is the selection path for arms 5+ on
-      // Y1_HEX/Y3_OCTO tiers now that Digit5/6 are Forge/fuel (digits only
-      // reach arms 1-4).
-      case 'KeyP':
-        if (isGameplay) {
-          if (e.shiftKey) {
-            if (!e.repeat) {
-              this._cyclePilotedArm();
-              d.audioSystem.playClick();
-            }
-            break;
-          }
-          if (this.armPilotMode) {
-            // Exit arm pilot mode
-            this._exitArmPilotCamera();
-            if (d.armManager) d.armManager.deselectArm();
-            eventBus.emit(Events.COMMS_MESSAGE, {
-              text: 'ARM PILOT disengaged',
-              priority: 'info',
-            });
-          } else {
-            // Enter arm pilot mode — prefer selected arm, fallback to first deployed
-            if (d.armManager) {
-              let arm = d.armManager.getSelectedDeployedArm();
-              if (!arm) {
-                // V-8 fix: include STATION_KEEP so P-key works after daughter
-                // reaches station-keeping orbit (previously excluded, causing
-                // "No deployed arms" when user follows "press P" prompt).
-                const S = Constants.ARM_STATES;
-                const deployed = d.armManager.arms.filter(a =>
-                  a.state !== S.DOCKED && a.state !== S.EXPENDED &&
-                  (a.state === S.TRANSIT || a.state === S.APPROACH ||
-                   a.state === S.FISHING || a.state === S.STATION_KEEP)
-                );
-                arm = deployed.length > 0 ? deployed[0] : null;
-              }
-              if (arm) {
-                this._enterArmPilotCamera(arm);
-                eventBus.emit(Events.COMMS_MESSAGE, {
-                  text: `ARM PILOT engaged — controlling ${arm.id}`,
-                  priority: 'info',
-                });
-              } else {
-                eventBus.emit(Events.COMMS_MESSAGE, {
-                  text: 'No deployed arms available for piloting',
-                  priority: 'warning',
-                });
-              }
-            }
-          }
-          d.audioSystem.playClick();
-        }
-        break;
-
-      // G key — Shift+G = Trawl start.  Bare G freed by Delegation 1
-      // (2026-05-31): the deploy-daughter + launch-ceremony flow moved to
-      // KeyD so D is the primary onboarding "deploy" verb.  Bare G is a
-      // no-op (reserved).
+      // G key — Shift+G = Trawl sweep (toggle). Bare G is unbound.
       case 'KeyG':
         if (isGameplay && e.shiftKey) {
           eventBus.emit(Events.TRAWL_START);
           e.preventDefault();
         }
-        // bare G intentionally falls through with no action
         break;
 
-      // Toggle EDT — Electrodynamic Tether (Y key, Phase 6)
-      case 'KeyY':
+      // Y key — FREED (hotkey revamp 2026-06-14). EDT moved to the E key (its
+      // menu label is "Electro Dynamic Tether"). Y is currently unbound.
+
+      // E key — Electrodynamic Tether (EDT) toggle. Moved off Y by the
+      // 2026-06-14 hotkey revamp so it matches the menu's Daughter-card label.
+      case 'KeyE':
         if (isGameplay) {
           eventBus.emit(Events.EDT_DEPLOY);
           d.audioSystem.playClick();
@@ -883,16 +752,45 @@ export class InputManager {
         }
         break;
 
-      // H key — freed by hotkey cleanup (2026-06-12): recall-all moved to
-      // Shift+R (was H and Shift+O). Bare H is a no-op (reserved).
+      // H key — CP-2 de-spin laser (hold H, "H = Hold"). Migrated from U by the
+      // 2026-06-13 hotkey cleanup. The continuous beam is driven by the held-key
+      // poll in processInput(); this keydown only gives a no-target affordance.
+      // Also live in ARM_PILOT when the piloted arm is station-keeping a target
+      // (the SK readout advises "de-spin [H]").
+      // (Recall-all moved to Shift+R in the 2026-06-12 cleanup; H no longer
+      // touches recall.)
       case 'KeyH':
-        // intentionally no-op (reserved)
+        if (isGameplay && !e.repeat && Constants.isFeatureEnabled('LASER_DESPIN')) {
+          let despinTarget = null;
+          if (this.armPilotMode) {
+            despinTarget = this._getPilotedSkDespinTarget();
+          } else {
+            despinTarget = d.targetSelector ? d.targetSelector.getActiveTarget() : null;
+          }
+          if (!despinTarget) {
+            d.audioSystem?.playClickFail?.();
+            eventBus.emit(Events.COMMS_MESSAGE, {
+              source: 'MOTHER',
+              text: this.armPilotMode
+                ? 'De-spin laser: piloted daughter must be station-keeping a target.'
+                : 'De-spin laser: select a tumbling target first.',
+              channel: 'CMD', priority: 'warning',
+            });
+          }
+          e.preventDefault();
+        }
         break;
 
-      // D key — Delegation 1 (2026-05-31) onboarding rebind:
-      //   Bare D in orbital view → Deploy DAUGHTER + start launch ceremony
-      //   (moved here from KeyG so D = primary "deploy" verb).
-      //   Tool Deploy moved to KeyT (smart context).
+      // D key — Delegation 1 (2026-05-31) onboarding rebind, refined by the
+      // 2026-06-14 hotkey revamp (pick-then-launch, D1):
+      //   Bare D in orbital view → Deploy the SELECTED docked daughter
+      //     (1-4 picks which; D launches it) + start the launch ceremony.
+      //     Falls back to auto-pick (best docked arm) when no docked arm is
+      //     selected, preserving the old one-press deploy.
+      //   Shift+D      → Deploy ALL docked arms to the selected target.
+      //   Hotkey revamp 2026-06-14: D / Shift+D work the same whether or not a
+      //   daughter is being piloted (WASD daughter thrust was removed, so the
+      //   key is no longer consumed for thrust).
       //   Ctrl+D       → debug overlay (unchanged)
       //   Ctrl+Shift+D → deorbit sacrifice (unchanged)
       case 'KeyD':
@@ -902,47 +800,66 @@ export class InputManager {
         } else if (e.ctrlKey) {
           e.preventDefault();
           if (d.debugOverlay) d.debugOverlay.toggle();
+        } else if (e.shiftKey && isGameplay && d.armManager && !e.repeat) {
+          // Shift+D: deploy all docked arms to selected target
+          const allTarget = d.targetSelector ? d.targetSelector.getActiveTarget() : null;
+          d.armManager.deployAllToTarget(allTarget);
+          d.audioSystem?.playClick();
+          e.preventDefault();
         } else if (isGameplay && !e.repeat) {
-          if (this.armPilotMode) {
-            // WASD thrust handled in processInput — do nothing in keydown
+          // D1 (pick-then-launch): if a DOCKED daughter is selected with 1-4,
+          // launch THAT one by index; otherwise fall back to the auto-pick
+          // deploy path (GameFlowManager.deployArm picks the best docked arm).
+          const am = d.armManager;
+          const selIdx = am ? am.selectedArmIndex : -1;
+          const selArm = (am && selIdx >= 0) ? am.arms[selIdx] : null;
+          const target = d.targetSelector ? d.targetSelector.getActiveTarget() : null;
+          let deployedOk = false;
+          if (selArm && selArm.state === Constants.ARM_STATES.DOCKED) {
+            deployedOk = am.deployArmByIndex(selIdx, target);
           } else {
-            // If already in ARM_PILOT mode, exit it first so the new arm
-            // gets its own ceremony with smooth camera transition + strut
-            // aiming (preserves the V-7 ceremony invariant moved from KeyG).
-            if (this.armPilotMode) {
-              this._exitArmPilotCamera();
-            }
-            d.deployArm();
-            // Notify tutorial / discovery before the ceremony for ordering.
-            eventBus.emit(Events.TUTORIAL_DEPLOY_INPUT);
-            if (d.armManager) {
-              const deployed = d.armManager.arms.filter(a =>
-                a.state !== 'DOCKED' && a.state !== 'EXPENDED' &&
-                a.state !== 'RETURNING' && a.state !== 'DOCKING'
-              );
-              if (deployed.length > 0) {
-                const arm = deployed[deployed.length - 1];
-                eventBus.emit(Events.COMMS_MESSAGE, {
-                  text: `Arm ${arm.id} deployed — tracking…`,
-                  priority: 'info',
-                });
-                eventBus.emit(Events.LAUNCH_CEREMONY_START, { arm });
-              }
-            }
-            d.audioSystem?.playClick();
-            e.preventDefault();
+            d.deployArm();   // auto-pick best docked arm
+            deployedOk = true;
           }
+          // Notify tutorial / discovery before the ceremony for ordering.
+          eventBus.emit(Events.TUTORIAL_DEPLOY_INPUT);
+          if (deployedOk && am) {
+            const deployed = am.arms.filter(a =>
+              a.state !== 'DOCKED' && a.state !== 'EXPENDED' &&
+              a.state !== 'RETURNING' && a.state !== 'DOCKING'
+            );
+            if (deployed.length > 0) {
+              const arm = deployed[deployed.length - 1];
+              eventBus.emit(Events.COMMS_MESSAGE, {
+                text: `Daughter ${arm.id} deployed — tracking…`,
+                priority: 'info',
+              });
+              eventBus.emit(Events.LAUNCH_CEREMONY_START, { arm });
+            }
+          }
+          d.audioSystem?.playClick();
+          e.preventDefault();
         }
         break;
 
-      // A key: Shift+A = engage Debris Map cluster AP; plain A = autopilot toggle; WASD in arm pilot
+      // A key: Shift+A = autopilot to debris center + launch all; plain A =
+      // autopilot toggle. Hotkey revamp 2026-06-14: works in both mother and
+      // daughter modes (WASD thrust removed).
       case 'KeyA':
         if (isGameplay && !e.repeat) {
-          if (e.shiftKey && d.debrisMap) {
-            d.debrisMap.engageSelectedCluster();
+          if (e.shiftKey) {
+            // Shift+A: head to the debris concentration AND launch all docked
+            // arms at it. Engage the debris-map cluster autopilot (centroid of
+            // the selected/strongest cluster), then deploy-all to the active
+            // target so the fleet converges with the mother.
+            if (d.debrisMap && typeof d.debrisMap.engageSelectedCluster === 'function') {
+              d.debrisMap.engageSelectedCluster();
+            }
+            if (d.armManager) {
+              const clusterTarget = d.targetSelector ? d.targetSelector.getActiveTarget() : null;
+              d.armManager.deployAllToTarget(clusterTarget);
+            }
             d.audioSystem?.playClick();
-          } else if (this.armPilotMode) {
-            // WASD thrust handled in processInput — do nothing in keydown
           } else if (d.autopilotSystem) {
             d.autopilotSystem.toggle();
             d.audioSystem?.playClick();
@@ -951,98 +868,42 @@ export class InputManager {
         }
         break;
 
-      // S key: Quick Scan (normal mode); WASD thrust in arm pilot
+      // S key: Quick Scan (bare S) / Wide Scan "scan big area" (Shift+S).
+      // Hotkey revamp 2026-06-14: wide scan moved off bare W → Shift+S; both
+      // work in mother and daughter modes (WASD thrust removed).
       case 'KeyS':
         if (isGameplay && !e.repeat) {
-          if (this.armPilotMode) {
-            // WASD thrust handled in processInput — do nothing in keydown
+          if (e.shiftKey) {
+            eventBus.emit(Events.SCAN_WIDE);
           } else {
             eventBus.emit(Events.SCAN_QUICK);
-            eventBus.emit(Events.TUTORIAL_SCAN_INPUT);
-            d.audioSystem?.playClick();
           }
+          eventBus.emit(Events.TUTORIAL_SCAN_INPUT);
+          d.audioSystem?.playClick();
           e.preventDefault();
         }
         break;
 
-      // W key: Wide Scan (normal mode); WASD thrust in arm pilot
-      case 'KeyW':
-        if (isGameplay && !e.repeat) {
-          if (this.armPilotMode) {
-            // WASD thrust handled in processInput — do nothing in keydown
-          } else {
-            eventBus.emit(Events.SCAN_WIDE);
-            eventBus.emit(Events.TUTORIAL_SCAN_INPUT);
-            d.audioSystem?.playClick();
-          }
-          e.preventDefault();
-        }
-        break;
+      // W key — FREED (hotkey revamp 2026-06-14). Wide scan moved to Shift+S
+      // and daughter WASD thrust was removed, so bare W is unbound.
 
-      // F key: Net deploy (ARM PILOT) or Focus Action (normal mode)
+      // F key — "Forge" (hotkey revamp 2026-06-14): toggle the Forge/Kiln. The
+      // old Focus Action role lost its key (not in the help menu). Works in
+      // both mother and daughter modes.
       case 'KeyF':
         if (isGameplay && !e.repeat) {
-          if (this.armPilotMode) {
-            // ST-8.2.1: F from STATION_KEEP → dispatch the selected tool
-            // (CP-1 / P2: NET → net capture, MAGNET → magnetic grapple).
-            const fArm = d.cameraSystem?.getPilotedArm();
-            if (fArm && fArm.state === Constants.ARM_STATES.STATION_KEEP) {
-              if (Constants.isFeatureEnabled('DAUGHTER_MULTITOOL')
-                  && typeof fArm.dispatchSelectedTool === 'function') {
-                fArm.dispatchSelectedTool();
-              } else {
-                fArm.captureFromStationKeep();
-              }
-              e.preventDefault();
-              return;
-            }
-            // ARM PILOT mode: manual net deploy on piloted arm
-            const pilotArmF = d.cameraSystem ? d.cameraSystem.getPilotedArm() : null;
-            if (pilotArmF && (pilotArmF.state === 'TRANSIT' || pilotArmF.state === 'APPROACH')) {
-              // Find nearby debris if arm has no target
-              const captureTarget = pilotArmF.target || this._findNearestDebrisToArm(pilotArmF, d.debrisField);
-              if (captureTarget) {
-                // Set target if arm didn't have one (free-fly scenario)
-                if (!pilotArmF.target) pilotArmF.target = captureTarget;
-                // manualNetDeploy() emits its own comms message
-                if (!pilotArmF.manualNetDeploy()) {
-                  d.audioSystem.playClick(); // deploy failed (edge case)
-                }
-              } else {
-                // No target in range — rejection
-                d.audioSystem.playClick();
-                eventBus.emit(Events.COMMS_MESSAGE, {
-                  text: 'No debris in capture range',
-                  priority: 'warning',
-                });
-              }
-            } else if (pilotArmF) {
-              // Arm not in a deployable state
-              d.audioSystem.playClick();
-            }
-          } else {
-            // Focus Action — context-sensitive smart button
-            eventBus.emit(Events.FOCUS_ACTION);
-            d.audioSystem?.playClick();
-          }
+          eventBus.emit(Events.FORGE_TOGGLE);
+          d.audioSystem?.playClick();
           e.preventDefault();
         }
         break;
 
-      // UX-11 #9 (2026-06-11): C is a plain tap — expand/focus comms with
-      // ZERO hold delay. The C-hold radial menu was removed: every radial
-      // action already has a direct key (D deploy, Shift+R recall, P pilot,
-      // Ctrl+Shift+D deorbit) and the tap/hold discrimination added latency
-      // to the common "expand comms" verb.
-      // UX-11 #5: Shift+C toggles the Earth city labels (off by default).
+      // C key — Comms expand (plain tap). Hotkey revamp 2026-06-14: Shift+C
+      // city-labels toggle moved to the 5 key (Advanced toggle row), so Shift+C
+      // is freed. A dedicated "Comms" toggle also lives on the 7 key now; bare
+      // C keeps the quick expand/focus tap.
       case 'KeyC':
         if (!e.repeat) {
-          if (e.shiftKey) {
-            eventBus.emit(Events.CITY_LABELS_TOGGLE);
-            d.audioSystem?.playClick();
-            e.preventDefault();
-            break;
-          }
           eventBus.emit(Events.COMMS_FOCUS);
           d.audioSystem?.playClick();
           // Skills discovery: comms opened
@@ -1064,32 +925,35 @@ export class InputManager {
         }
         break;
 
-      // N key — Delegation 1 (2026-05-31) onboarding rebind:
-      //   ARM_PILOT mode → Deploy net / capture (alias of F; F-key remains
-      //     the contextual smart button at line ~934).
-      //   Mother mode    → Lasso / Net fire (Space remains an alternate
-      //     alias; see Note 1 in delegation spec).
-      //   NavSphere visibility toggle was on N before this sprint — moved
-      //     to OFF (no replacement binding); use the gear menu / settings
-      //     when that lands.  TODO (Delegation 2): bottom ticker may add
-      //     a "Toggle NavSphere" reminder if the feature is missed.
+      // N key — net/capture verb (hotkey cleanup 2026-06-13) + Shift+N
+      // "Auto-target + launch at debris in range" (hotkey revamp 2026-06-14):
+      //   Shift+N        → auto-acquire the best in-range debris target, then
+      //     deploy ALL docked daughters at it.
+      //   ARM_PILOT mode → Deploy net / capture (multi-tool dispatch in SK).
+      //   Mother mode    → Lasso / Net fire.
       case 'KeyN':
         if (!isGameplay) break;
-        // Delegation 2 (2026-05-31): Shift+N → toggle NavSphere visibility.
-        // Bare N is reserved for lasso/net (Delegation 1).  No conflict because
-        // the lasso branch below also lives in the same `case 'KeyN':`.
-        if (e.shiftKey && d.navSphere) {
+        if (e.shiftKey) {
+          // Shift+N: auto-acquire nearest/best in-range target, launch all.
           e.preventDefault();
-          d.navSphere.toggle();  // NavSphere.toggle() added Delegation 3 (2026-05-31)
+          this._autoTargetAndLaunch();
           d.audioSystem?.playClick();
           break;
         }
         if (this.armPilotMode && d.cameraSystem) {
-          // (1) DAUGHTER alias for F-key net deploy
+          // (1) DAUGHTER net/capture — the single capture verb (hotkey cleanup
+          // 2026-06-13: F's old SK dispatch + TRANSIT net roles folded into N).
           e.preventDefault();
           const skArmN = d.cameraSystem.getPilotedArm?.();
           if (skArmN && skArmN.state === Constants.ARM_STATES.STATION_KEEP) {
-            skArmN.captureFromStationKeep();
+            // Multi-tool dispatch (NET → net capture, MAGNET/GRIPPER/PAD →
+            // respective grapple) when DAUGHTER_MULTITOOL is on; else plain net.
+            if (Constants.isFeatureEnabled('DAUGHTER_MULTITOOL')
+                && typeof skArmN.dispatchSelectedTool === 'function') {
+              skArmN.dispatchSelectedTool();
+            } else {
+              skArmN.captureFromStationKeep();
+            }
             d.audioSystem?.playClick();
             break;
           }
@@ -1114,30 +978,13 @@ export class InputManager {
           }
           break;
         }
-        // (2) MOTHER lasso fire — mirrors Space case at ~1068 below.
-        // Space remains an alternate alias (Delegation 1 Note 1 — newbie-
-        // friendly "default action"); Delegation 2 will repurpose Space.
+        // (2) MOTHER lasso fire. The Space alias was removed in the 2026-06-13
+        // hotkey cleanup — N is the single lasso/net fire verb. Delegated to
+        // fireLasso() (single implementation, also used by the onboarding
+        // smart-default) so windup/fire tuning can't drift between paths.
         if (d.lassoSystem) {
           e.preventDefault();
-          if (!this._lassoWindingUp && !d.lassoSystem.active) {
-            this._lassoWindingUp = true;
-            d.audioSystem?.playClick();
-            const windupMs = (Constants.LASSO_CAST_WINDUP || 0.15) * 1000;
-            this._lassoWindupTimeout = setTimeout(() => {
-              this._lassoWindingUp = false;
-              this._lassoWindupTimeout = null;
-              const vel = d.player.getVelocity();
-              const velDir = new THREE.Vector3(vel.x, vel.y, vel.z);
-              if (velDir.lengthSq() > 0) velDir.normalize();
-              const activeTarget = d.targetSelector ? d.targetSelector.getActiveTarget() : null;
-              d.lassoSystem.fire(
-                d.player.getPosition(),
-                d.debrisField,
-                velDir,
-                activeTarget,
-              );
-            }, windupMs);
-          }
+          this.fireLasso();
         }
         break;
 
@@ -1152,117 +999,68 @@ export class InputManager {
         // Toggle handled by SkillsPane._onKeyDown (document listener).
         break;
 
-      // Comma (,): Stow all struts gradually (α → 0). Debris Map prev if map is open.
+      // Comma (,): FREED for struts (hotkey revamp 2026-06-14 — "." is now the
+      // single struts toggle). Still drives Debris Map "previous" while the map
+      // is open, so map navigation is preserved.
       case 'Comma':
-        if (isGameplay && d.armManager && !(d.debrisMap && d.debrisMap.isVisible())) {
-          // Set gradual target: struts close toward 0 at STRUT_SLEW_RATE per frame
-          // (driven by _updateStruts checking arm._strutTargetAlpha each tick)
-          const arms = d.armManager.arms;
-          for (const arm of arms) {
-            if (arm.state === Constants.ARM_STATES.DOCKED) {
-              arm._strutTargetAlpha = 0;
-            }
-          }
-          d.audioSystem?.playClick();
-          // Delegation 2 onboarding (2026-05-31): notify the OnboardingDirector.
-          eventBus.emit(Events.STRUT_DEPLOY_INPUT);
-          e.preventDefault();
-        } else if (isGameplay && d.debrisMap) {
+        if (isGameplay && d.debrisMap && d.debrisMap.isVisible()) {
           d.debrisMap.selectPrev();
           e.preventDefault();
         }
         break;
-      // Period (.): Deploy all struts gradually (α → π). Debris Map next if map is open.
+      // Period (.): "Struts" toggle (hotkey revamp 2026-06-14) — one key now
+      // stows/deploys all docked struts (was Comma=stow / Period=deploy). Drives
+      // Debris Map "next" while the map is open.
       case 'Period':
-        if (isGameplay && d.armManager && !(d.debrisMap && d.debrisMap.isVisible())) {
-          // Set gradual target: struts open toward π (180° zenith) at STRUT_SLEW_RATE
+        if (isGameplay && d.debrisMap && d.debrisMap.isVisible()) {
+          d.debrisMap.selectNext();
+          e.preventDefault();
+        } else if (isGameplay && d.armManager) {
           const arms = d.armManager.arms;
+          // Toggle: if any docked strut is past halfway-deployed, stow all;
+          // otherwise deploy all (α → π zenith).
+          const anyDeployed = arms.some(a =>
+            a.state === Constants.ARM_STATES.DOCKED && (a._strutTargetAlpha ?? 0) >= Math.PI / 2);
+          const targetAlpha = anyDeployed ? 0 : Math.PI;
           for (const arm of arms) {
             if (arm.state === Constants.ARM_STATES.DOCKED) {
-              arm._strutTargetAlpha = Math.PI;
+              arm._strutTargetAlpha = targetAlpha;
             }
           }
           d.audioSystem?.playClick();
           // Delegation 2 onboarding (2026-05-31): notify the OnboardingDirector.
           eventBus.emit(Events.STRUT_DEPLOY_INPUT);
           e.preventDefault();
-        } else if (isGameplay && d.debrisMap) {
-          d.debrisMap.selectNext();
-          e.preventDefault();
         }
         break;
 
-      // T key — Tool Deploy (smart context).  Delegation 1 (2026-05-31)
-      // onboarding rebind: T was FUEL_CYCLE; that emit now lives on Digit6
-      // so the bare alpha keys remain available for onboarding verbs.
+      // T key — "Target debris" (hotkey revamp 2026-06-14): cycle the active
+      // debris target (same as the Tab alias) in BOTH mother and daughter
+      // modes. The old "cycle capture tool" role lost its key (not in the help
+      // menu — the tool system still auto-recommends).
       case 'KeyT':
         if (isGameplay && !e.repeat) {
-          if (this.armPilotMode) {
-            // Arm-pilot consumes T for nothing — leave to processInput.
-          } else {
-            eventBus.emit(Events.TOOL_DEPLOY);
-            d.audioSystem?.playClick();
-            e.preventDefault();
-          }
+          this._cycleTarget();
+          d.audioSystem?.playClick();
+          e.preventDefault();
         }
         break;
 
       // F5 removed (UX-11 #8, 2026-06-11): FEEP fuel cycle now lives on Digit6
       // (number row, next to the Forge on 5). No alias retained.
 
-      // Space — deploy net in ARM PILOT mode, or fire lasso otherwise.
-      // Delegation 2 (2026-05-31): in ORBITAL_VIEW, the OnboardingDirector
-      // gets first crack at intercepting Space as a "smart default" —
-      // pressing Space dispatches the active hint's primary key.
+      // Space — OnboardingDirector "smart default" ONLY (hotkey cleanup
+      // 2026-06-13). Delegation 2 (2026-05-31): in ORBITAL_VIEW the
+      // OnboardingDirector gets first crack at intercepting Space — pressing
+      // Space dispatches the active hint's primary key. The lasso-fire alias
+      // (mother) and net-deploy alias (ARM_PILOT) were REMOVED — N is the
+      // single net/capture verb now, so Space no longer fires the net itself.
       case 'Space':
-        if (this.armPilotMode && d.cameraSystem) {
-          e.preventDefault(); // always prevent scroll when in arm pilot
-          const pilotArmForNet = d.cameraSystem.getPilotedArm();
-          if (pilotArmForNet && pilotArmForNet.isManual()) {
-            if (d.dockingReticle && d.dockingReticle.isNetReady()) {
-              // Manual net deploy — transition arm to NETTING state
-              pilotArmForNet.manualNetDeploy();
-              // Exit arm pilot mode since arm is now in capture sequence
-              this.armPilotMode = false;
-              d.cameraSystem.clearPilotArm();
-            } else {
-              eventBus.emit(Events.COMMS_MESSAGE, {
-                text: 'Too far for net deployment — get closer',
-                priority: 'warning',
-              });
-            }
-          }
-        } else if (isGameplay && currentState === GameStates.ORBITAL_VIEW
+        if (isGameplay && currentState === GameStates.ORBITAL_VIEW
             && d.onboardingDirector && typeof d.onboardingDirector.pressActiveHint === 'function'
             && d.onboardingDirector.pressActiveHint(this)) {
-          // Smart default consumed the press — original lasso path skipped.
+          // Smart default consumed the press.
           e.preventDefault();
-        } else if (isGameplay && d.lassoSystem) {
-          // S4: Lasso cast windup — brief delay before firing for "cast" feel
-          e.preventDefault();
-          if (!this._lassoWindingUp && !d.lassoSystem.active) {
-            this._lassoWindingUp = true;
-            d.audioSystem.playClick(); // immediate feedback: charging thunk
-            const windupMs = (Constants.LASSO_CAST_WINDUP || 0.15) * 1000;
-            this._lassoWindupTimeout = setTimeout(() => {
-              this._lassoWindingUp = false;
-              this._lassoWindupTimeout = null;
-              // Compute fresh position/direction at actual fire time
-              const vel = d.player.getVelocity();
-              const velDir = new THREE.Vector3(vel.x, vel.y, vel.z);
-              if (velDir.lengthSq() > 0) velDir.normalize();
-              const activeTarget = d.targetSelector ? d.targetSelector.getActiveTarget() : null;
-              const fired = d.lassoSystem.fire(
-                d.player.getPosition(),
-                d.debrisField,
-                velDir,
-                activeTarget,
-              );
-              if (fired) {
-                // (Tutorial hint auto-hide removed Sprint 3)
-              }
-            }, windupMs);
-          }
         }
         break;
 
@@ -1277,7 +1075,7 @@ export class InputManager {
             d.audioSystem.playClick();
           } else {
             eventBus.emit(Events.COMMS_MESSAGE, {
-              text: 'No arm available for detach.',
+              text: 'No daughter available for detach.',
               priority: 'warning',
             });
           }
@@ -1352,32 +1150,53 @@ export class InputManager {
           d.audioSystem.playClick();
         }
         break;
-      // UX-11 #8 (2026-06-11): 5 = Forge (Kiln) toggle, 6 = FEEP fuel cycle.
-      // The number row reads left→right as "daughters 1-4, forge 5, fuel 6,
-      // mother 7". Works in both ORBITAL and ARM_PILOT (no arm-switch
-      // collision: 1-4 select daughters). Y1+/Y3 tiers carry >4 arms;
-      // arms beyond index 3 are selected by cycling with Shift+P
-      // (InputManager._cyclePilotedArm), not digits.
+      // Number-row toggles (hotkey revamp 2026-06-14) — the help menu's
+      // Advanced card defines 5-0 as display toggles:
+      //   5 City names · 6 Constellation names · 7 Comms · 8 NavSphere ·
+      //   9 Debris pane · 0 Target pane.
+      // (Forge moved to F, FEEP fuel cycle lost its key, NavSphere moved off O.)
       case 'Digit5':
         if (isGameplay) {
-          eventBus.emit(Events.FORGE_TOGGLE);
+          eventBus.emit(Events.CITY_LABELS_TOGGLE);
           d.audioSystem?.playClick();
           e.preventDefault();
         }
         break;
       case 'Digit6':
-        if (isGameplay) {
-          eventBus.emit(Events.FUEL_CYCLE);
+        if (isGameplay && d.starfield && typeof d.starfield.toggleConstellations === 'function') {
+          d.starfield.toggleConstellations();
           d.audioSystem?.playClick();
           e.preventDefault();
         }
         break;
       case 'Digit7':
         if (isGameplay) {
-          // Return to mothership — exit arm pilot + restore camera
-          this._exitArmPilotCamera();
-          if (d.armManager) d.armManager.deselectArm();
-          d.audioSystem.playClick();
+          eventBus.emit(Events.COMMS_FOCUS);
+          eventBus.emit(Events.COMMS_OPENED);
+          d.audioSystem?.playClick();
+          e.preventDefault();
+        }
+        break;
+      case 'Digit8':
+        if (isGameplay && d.navSphere && typeof d.navSphere.toggleMinimized === 'function' && !e.repeat) {
+          d.navSphere.toggleMinimized();
+          d.audioSystem?.playClick();
+          e.preventDefault();
+        }
+        break;
+      case 'Digit9':
+        if (isGameplay && d.debrisWireframe && typeof d.debrisWireframe.toggleMinimized === 'function' && !e.repeat) {
+          d.debrisWireframe.toggleMinimized();
+          d.audioSystem?.playClick();
+          e.preventDefault();
+        }
+        break;
+      case 'Digit0':
+        if (isGameplay && d.hud && d.hud.targetPanel
+            && typeof d.hud.targetPanel.toggleVisible === 'function' && !e.repeat) {
+          d.hud.targetPanel.toggleVisible();
+          d.audioSystem?.playClick();
+          e.preventDefault();
         }
         break;
 
@@ -1431,7 +1250,10 @@ export class InputManager {
         }
         break;
 
-      // --- Backtick: Toggle Debris Map (strategic overlay); Shift+` = Cycle tool alternatives ---
+      // --- Backtick: Toggle Debris Map (strategic overlay). In ARM_PILOT
+      //     STATION_KEEP it cycles the piloted arm's tool instead. The old
+      //     Shift+` mother-side tool cycle was removed (hotkey cleanup
+      //     2026-06-13b) — that verb now lives on T. ---
       case 'Backquote':
         if (isGameplay && !e.repeat) {
           // CP-1 / P2: plain backtick in STATION_KEEP cycles the piloted arm's
@@ -1444,10 +1266,7 @@ export class InputManager {
             e.preventDefault();
             break;
           }
-          if (e.shiftKey) {
-            // Tool cycling (relocated from plain Backquote)
-            eventBus.emit(Events.TOOL_CYCLE);
-          } else if (d.debrisMap) {
+          if (d.debrisMap) {
             d.debrisMap.toggle();
           }
           d.audioSystem?.playClick();
@@ -1494,44 +1313,96 @@ export class InputManager {
   // ==========================================================================
 
   /**
-   * UX-11 #8 follow-up: cycle the selected/piloted arm through every
-   * non-docked, non-expended arm (wraps). This is the keyboard selection
-   * path for arms beyond index 3 on Y1_HEX/Y3_OCTO tiers, since Digit5/6
-   * now belong to Forge/fuel. Bound to Shift+P.
+   * Cycle the active debris target (TPI-sorted). Shared by the `Tab` legacy
+   * alias and the `T` "Target debris" verb (hotkey revamp 2026-06-14). Mirrors
+   * the HUD's enhanced target list so keyboard + HUD selection stay in lockstep.
    * @private
    */
-  _cyclePilotedArm() {
+  _cycleTarget() {
     const d = this._deps;
-    if (!d.armManager) return;
-    const S = Constants.ARM_STATES;
-    const arms = d.armManager.arms || [];
-    const eligible = [];
-    for (let i = 0; i < arms.length; i++) {
-      const a = arms[i];
-      if (a && a.state !== S.DOCKED && a.state !== S.EXPENDED) eligible.push(i);
+    try {
+      // FIX_PLAN §4: Use same target list as HUD (sorted upstream by TPI)
+      this.nearbyTargets = d.debrisField.getEnhancedTargetList(
+        d.player.getPosition(), d.player.getOrbitalElements()
+      );
+      // Filter: only tracked debris unless IR Scanner is active
+      const canDetect = d.sensorSystem && d.sensorSystem.canDetectUntracked;
+      this.nearbyTargets = this.nearbyTargets.filter(t => t.tracked !== false || canDetect);
+      if (this.nearbyTargets.length > 0) {
+        this.targetIndex = (this.targetIndex + 1) % this.nearbyTargets.length;
+        const t = this.nearbyTargets[this.targetIndex];
+        const debris = d.debrisField.getDebrisById(t.id);
+        if (debris) {
+          d.targetSelector.setTarget(debris, { distanceKm: t.distanceKm, deltaV: t.deltaV });
+          if (d.debrisWireframe) d.debrisWireframe.setTarget(debris);
+          d.hud.setSelectedTarget(t.id);
+          if (d.targetReticle) d.targetReticle.setSelectedTarget(t.id);
+          if (d.navSphere) d.navSphere.setSelectedTarget(t.id);
+        }
+      }
+    } catch (err) {
+      console.error('[target-cycle] error:', err);
     }
-    if (eligible.length === 0) {
+    // Notify tutorial of target-cycle press (legacy event name)
+    eventBus.emit(Events.TUTORIAL_TAB_INPUT);
+  }
+
+  /**
+   * Shift+N "Auto-target + launch at debris in range" (hotkey revamp
+   * 2026-06-14): acquire the best in-range debris (top of the TPI-sorted HUD
+   * list, honoring the tracked/IR filter), make it the active target, then
+   * deploy ALL docked daughters at it. Warns via comms when nothing is in
+   * range or no arms are available.
+   * @private
+   */
+  _autoTargetAndLaunch() {
+    const d = this._deps;
+    let acquired = null;
+    try {
+      const list = d.debrisField.getEnhancedTargetList(
+        d.player.getPosition(), d.player.getOrbitalElements()
+      );
+      const canDetect = d.sensorSystem && d.sensorSystem.canDetectUntracked;
+      const eligible = list.filter(t => t.tracked !== false || canDetect);
+      if (eligible.length > 0) {
+        const t = eligible[0]; // best TPI rank
+        const debris = d.debrisField.getDebrisById(t.id);
+        if (debris) {
+          d.targetSelector.setTarget(debris, { distanceKm: t.distanceKm, deltaV: t.deltaV });
+          if (d.debrisWireframe) d.debrisWireframe.setTarget(debris);
+          d.hud.setSelectedTarget(t.id);
+          if (d.targetReticle) d.targetReticle.setSelectedTarget(t.id);
+          if (d.navSphere) d.navSphere.setSelectedTarget(t.id);
+          acquired = debris;
+        }
+      }
+    } catch (err) {
+      console.error('[auto-target-launch] error:', err);
+    }
+    if (!acquired) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: 'No deployed arms to cycle — deploy with D or 1-4 first',
+        source: 'SPACECRAFT', channel: 'CMD',
+        text: 'No debris in range to auto-target.',
         priority: 'warning',
       });
       return;
     }
-    const cur = d.armManager.selectedArmIndex;
-    const pos = eligible.indexOf(cur);
-    const nextIndex = eligible[(pos + 1) % eligible.length];
-    const arm = arms[nextIndex];
-    d.armManager.selectArm(nextIndex);
-    this._enterArmPilotCamera(arm);
-    eventBus.emit(Events.COMMS_MESSAGE, {
-      text: `ARM PILOT — controlling ${arm.id} (Shift+P cycles)`,
-      priority: 'info',
-    });
+    if (d.armManager && typeof d.armManager.deployAllToTarget === 'function') {
+      d.armManager.deployAllToTarget(acquired);
+    }
   }
 
   /**
-   * Handle arm number key press (1-6): deploy if docked, select if deployed,
-   * warn if expended. UX-3 #8: deploy does NOT auto-switch camera — press P to pilot.
+   * (hotkey revamp 2026-06-14, "spinning plates"; P / Shift+P removed):
+   *   • DOCKED   → SELECT only (glow/flash via ARM_SELECT). Mother stays in
+   *     view; the player then launches the selected daughter with D. NO deploy,
+   *     NO camera switch (D1).
+   *   • DEPLOYED → SELECT + switch camera to that daughter (pilot it).
+   *   • EXPENDED → warn.
+   *   • Re-press the ACTIVE daughter's digit → return to mother: exit the pilot
+   *     camera + deselect WITHOUT recalling (the daughter keeps working — this
+   *     is the canonical "pop back" toggle that replaced P's exit role).
+   * Arms 5-8 are deferred until tiers ship (D2) — only digits 1-4 exist today.
    * @private
    * @param {number} armIndex - 0-based arm index
    */
@@ -1542,7 +1413,9 @@ export class InputManager {
     const arm = d.armManager.arms[armIndex];
     if (!arm) return;
 
-    // Toggle: re-pressing the same arm key exits pilot mode & deselects
+    // Toggle: re-pressing the active daughter's digit returns to mother.
+    // Exit the pilot camera (if piloting) and deselect — but do NOT recall;
+    // a launched daughter keeps station-keeping / working ("spinning plates").
     if (d.armManager.selectedArmIndex === armIndex) {
       this._exitArmPilotCamera();
       d.armManager.deselectArm();
@@ -1550,26 +1423,16 @@ export class InputManager {
     }
 
     if (arm.state === Constants.ARM_STATES.DOCKED) {
-      // Deploy the arm — UX-3 #8: camera stays on current view
-      const target = d.targetSelector ? d.targetSelector.getActiveTarget() : null;
-      const deployed = d.armManager.deployArmByIndex(armIndex, target);
-      if (deployed) {
-        d.armManager.selectArm(armIndex);
-        // UX-3 #8: Emit hint instead of auto-switching camera
-        eventBus.emit(Events.COMMS_MESSAGE, {
-          text: `Arm ${arm.id} deployed — press P to pilot`,
-          source: 'SYSTEM',
-          channel: 'CMD',
-          priority: 'info',
-        });
-      }
+      // SELECT only (D1) — the docked arm glows/flashes (ARM_SELECT). Mother
+      // stays in view; launch the selected daughter with D (pick-then-launch).
+      d.armManager.selectArm(armIndex);
     } else if (arm.state === Constants.ARM_STATES.EXPENDED) {
       eventBus.emit(Events.COMMS_MESSAGE, {
         text: `${arm.id} is expended — not available`,
         priority: 'warning',
       });
     } else {
-      // Arm is deployed — select it for piloting + camera follow
+      // Arm is deployed — select it for piloting + camera follow.
       d.armManager.selectArm(armIndex);
       this._enterArmPilotCamera(arm);
     }
@@ -1635,7 +1498,7 @@ export class InputManager {
 
   /**
    * Find the nearest debris to a piloted arm within capture range (~50m = 0.0005 scene units).
-   * Used by F-key manual net deploy when arm has no assigned target (free-fly mode).
+   * Used by N-key manual net deploy when arm has no assigned target (free-fly mode).
    * @private
    * @param {object} arm - ArmUnit instance
    * @param {object} debrisField - DebrisField instance
@@ -1660,7 +1523,7 @@ export class InputManager {
   /**
    * Resolve the de-spin laser's override target while piloting a daughter.
    * Eligible only when the piloted arm is in STATION_KEEP; returns its SK
-   * target (or null). Single source of truth shared by the KeyU no-target
+   * target (or null). Single source of truth shared by the KeyH no-target
    * affordance and the processInput() laser steering, so the warning and
    * the actual beam eligibility can never drift apart.
    * @returns {object|null}
@@ -1680,13 +1543,14 @@ export class InputManager {
   processInput(dt) {
     const d = this._deps;
 
-    // CP-2: mother-mounted de-spin laser — hold U. Set the fire intent every
+    // CP-2: mother-mounted de-spin laser — hold H. Set the fire intent every
     // frame BEFORE the overlay early-returns so it always releases when an
     // overlay opens or the key is let go.
-    // Issue 5c/9 (2026-06-12): U now ALSO works while piloting a daughter in
-    // STATION_KEEP — the SK readout advises "de-spin [U]", so the advisory must
+    // Issue 5c/9 (2026-06-12): H now ALSO works while piloting a daughter in
+    // STATION_KEEP — the SK readout advises "de-spin [H]", so the advisory must
     // point at a live key. The laser is steered at the piloted arm's SK target
     // (override), not the Tab-locked selector target.
+    // (Hotkey cleanup 2026-06-13: migrated from U → H, "H = Hold".)
     const overlayOpen = !!((d.codexViewerUI && d.codexViewerUI.isVisible && d.codexViewerUI.isVisible())
       || (d.hotkeyOverlay && d.hotkeyOverlay.isVisible && d.hotkeyOverlay.isVisible())
       || (d.debrisMap && d.debrisMap.isVisible && d.debrisMap.isVisible())
@@ -1700,7 +1564,7 @@ export class InputManager {
       !overlayOpen
       && (!this.armPilotMode || !!skDespinTarget)
       && (d.gameState && d.gameState.isGameplay && d.gameState.isGameplay())
-      && this.keys['KeyU'] === true,
+      && this.keys['KeyH'] === true,
     );
 
     // Phase 3a (capture-feedback overhaul): hold Shift → BOOST reel ×2 on
@@ -1729,17 +1593,12 @@ export class InputManager {
     let hasIon = false;
     let thrustType = 'ion';
 
-    // WASD thrust: ARM PILOT mode only (mothership thrust removed from normal play)
+    // WASD daughter thrust REMOVED (hotkey revamp 2026-06-14): daughters are
+    // flown with the arrow keys (station-keep orbit) only, and W/A/S/D now keep
+    // their mother-mode meanings (wide/quick scan, autopilot, launch) even while
+    // piloting. ionDir therefore stays zero from keyboard; ARM_MANUAL_THRUST is
+    // no longer emitted from held keys.
     const apEngaged = d.autopilotSystem && d.autopilotSystem.engaged;
-
-    if (this.armPilotMode && !apEngaged) {
-      if (this.keys['KeyW'])  { ionDir.z += 1; hasIon = true; }
-      if (this.keys['KeyS'])  { ionDir.z -= 1; hasIon = true; }
-      if (this.keys['KeyA'])  { ionDir.x -= 1; hasIon = true; }
-      if (this.keys['KeyD'])  { ionDir.x += 1; hasIon = true; }
-      if (this.keys['KeyQ'])  { ionDir.y += 1; hasIon = true; }
-      if (this.keys['KeyE'])  { ionDir.y -= 1; hasIon = true; }
-    }
 
     // ── ST-8.2.1: STATION_KEEP orbital controls ──
     if (this.armPilotMode) {
@@ -1788,12 +1647,12 @@ export class InputManager {
 
       // ================================================================
       // WASD Context Switch — ARM PILOT only (mothership thrust removed)
-      // Priority 1: ARM PILOT mode via P key (camera follows arm)
-      // Priority 2: Arm selected via number keys 1-6 and deployed/pilotable
+      // Priority 1: ARM PILOT mode (camera-tracked piloted daughter)
+      // Priority 2: Arm selected via number keys 1-4 and deployed/pilotable
       // ================================================================
 
       if (this.armPilotMode && d.cameraSystem) {
-        // P-key ARM PILOT: route to the camera-tracked piloted arm
+        // ARM PILOT: route to the camera-tracked piloted arm
         const arm = d.cameraSystem.getPilotedArm();
         if (arm) {
           eventBus.emit(Events.ARM_MANUAL_THRUST, {
@@ -1808,7 +1667,7 @@ export class InputManager {
         // Number-key selected arm: auto-enable manual mode + route thrust
         const selectedArm = d.armManager.getSelectedDeployedArm();
         if (selectedArm) {
-          // Auto-enable manual piloting (no P key required)
+          // Auto-enable manual piloting (selecting a deployed daughter pilots it)
           if (!selectedArm.isManual()) selectedArm.enableManual();
           eventBus.emit(Events.ARM_MANUAL_THRUST, {
             armId: selectedArm.id,
@@ -2024,7 +1883,11 @@ export class InputManager {
     }
   }
 
-  /** Smart-default helper — fires the lasso (mirrors KeyN/Space branches). */
+  /**
+   * Fire the lasso (windup → cast). Single implementation for the KeyN
+   * keyboard path and the OnboardingDirector smart-default — no duplicated
+   * windup/fire logic to drift (2026-06-13 dedup).
+   */
   fireLasso() {
     const d = this._deps; if (!d || !d.lassoSystem) return;
     if (this._lassoWindingUp || d.lassoSystem.active) return;
@@ -2082,7 +1945,8 @@ export class InputManager {
     const d = this._deps; if (!d || !d.cameraSystem || this.armPilotMode) return;
     // COMMAND ↔ OVERVIEW toggle (2026-06-03 rev. 2). Inspection is no longer a
     // cycle slot, so no subject plumbing is needed here.
-    d.cameraSystem.cycleView();
+    const lockedId = d.targetSelector?.getActiveTarget?.()?.id ?? null;
+    d.cameraSystem.cycleView(lockedId);
     d.audioSystem?.playClick?.();
   }
 }

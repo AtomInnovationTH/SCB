@@ -15,7 +15,7 @@ UI design draws from four landmark space sims: **Independence War** (NavSphere, 
 # Then open http://localhost:8081
 ```
 
-**Controls:** `A` autopilot, `S` quick scan, `W` wide scan, `D` deploy daughter, `T` tool deploy, `F` focus action, `` ` `` cycle tools, Arrows rotate, `+/-` throttle, `Tab` cycle targets, `N` lasso/net (Space alias), `Shift+R` recall all, `R` smart reel-in, `V` camera, `P` arm pilot, `I` inspect, `J` journal, `Z` wireframe, `C` comms, `M` MPD/orbit, `L` codex, `B` shop, `X` detach, `5` forge, `6` fuel cycle, `Shift+C` city labels, `Shift+1/2/3` power bus, `[/]` adjust. WASD thrust in arm pilot mode only (P key). Full table below.
+**Controls:** `A` autopilot, `S` quick scan, `W` wide scan, `D` deploy daughter, `Shift+D` deploy all, `T` cycle tool, `F` focus action (deploy tool), Arrows rotate, `+/-` throttle, `Tab` cycle targets, `N` lasso/net (the single net key — works in mother & daughter modes), `H` hold de-spin laser, `Shift+R` recall all, `R` smart reel-in, `V` camera (cycles to inspection), `P` arm pilot, `O` NavSphere, `J` journal, `Z` wireframe, `C` comms, `M` MPD/orbit, `` ` `` debris map, `L` codex, `B` shop, `X` detach, `5` forge, `6` fuel cycle, `Shift+C` city labels, `Shift+1/2/3` power bus, `[/]` adjust. WASD thrust in arm pilot mode only (P key). Full table below.
 
 **Tech:** Three.js r170 via CDN import maps. Zero build tools. ES6 modules. All geometry procedural (no GLTF). NASA public domain textures.
 
@@ -149,7 +149,7 @@ Space Cowboy/
 
 **HUD:** Progressive luminance system (dormant/active CSS states). 3-panel left column (Propulsion/Energy/Fleet), right column (wireframe + target list), NavSphere with distance encoding + range rings, OrbitMFD, 5-color system.
 
-**Systems:** Active scanning (S/W keys with cooldowns, discovery mechanics, survey rewards), auto-tool recommendation (T tool-deploy, backtick-cycle), focus action (F key, context-sensitive), 5 camera views, ARM PILOT manual control (P key), comms expand (C key), debris wireframe analysis (Z key), inspection mode (I key), journal/skills (J key), arm deorbit sacrifice (Ctrl+Shift+D), forge system (5 key), power distribution ETS (Shift+1/2/3 + [/] keys), autopilot system (A key), throttle control (+/- keys), MPD thruster burst mode (M key), lasso/net fire (N key; Space alias), trawl system with adaptive speed, collision avoidance AI, 10-stage curiosity-driven tutorial.
+**Systems:** Active scanning (S/W keys with cooldowns, discovery mechanics, survey rewards), auto-tool recommendation (T cycle-tool, F deploy-tool), focus action (F key, context-sensitive), 5 camera views (inspection via the V cycle), ARM PILOT manual control (P key), comms expand (C key), debris wireframe analysis (Z key), debris map (` key), journal/skills (J key), arm deorbit sacrifice (Ctrl+Shift+D), forge system (5 key), power distribution ETS (Shift+1/2/3 + [/] keys), autopilot system (A key), throttle control (+/- keys), MPD thruster burst mode (M key), lasso/net fire (N key — the single net/capture verb), trawl system with adaptive speed, collision avoidance AI, 10-stage curiosity-driven tutorial.
 
 **Audio:** 30+ procedural generators + ambient loop + 4-tier ΔV alarm + thruster sputtering + forge phase textures + target lock ceremony + lasso feedback.
 
@@ -164,78 +164,60 @@ Space Cowboy/
 
 ### Key Bindings — Full Reference
 
-_Authoritative table (Delegation 1 hotkey rebind, 2026-05-31). The Codex is `L`. The Journal/Skills pane is `J`._
+_Authoritative reference. The **single source of truth is the in-game help pane** (`?`), defined in [`HotkeyOverlay.js`](js/ui/HotkeyOverlay.js); [`InputManager._handleKeyDown`](js/systems/InputManager.js) and this table are kept in agreement with it. Hotkey revamp 2026-06-14: the code was aligned to the help menu — daughters are flown with **arrows only** (WASD thrust removed); `1-4` = select/pilot; `P`/`Shift+P`/`7`/`Q`/`E` removed. The Codex is `L`; Journal/Skills is `J`._
 
 ```
 ═══ MOTHER (orbital view) ═══
-  S  · Quick Scan (1.5s, $50)
-  W  · Wide Scan  (4s, $150)
-  Tab · Cycle target (TPI-sorted)
-  A  · Autopilot toggle
-  D  · Deploy daughter (launch ceremony)
-  T  · Tool Deploy (smart context)
-  N  · Lasso / Net fire   (Space = onboarding smart-default → lasso)
-  Shift+N · NavSphere toggle (Delegation 2 — 2026-05-31)
-  P  · ARM PILOT toggle   (Shift+P cycles the piloted arm — reaches arms 5+ on Y1/Y3 tiers)
-  I  · Part callout inspection:
-         · in ORBITAL_VIEW → V5 Crossbow mothership part callout (bottom-right panel,
-           11 zones, auto-cycling; Tab advances zone, I closes)
-         · in ARM_PILOT    → enlarged debris wireframe from daughter perspective
-           (press I again to close; no target → comms hint "Select with Tab first")
-       Shift+I = alias for I
-  L  · Codex / Tech Library
-  J  · Journal / Skills discovery
-  B  · Shop
-  M  · MFD (Orbit / MPD)
-  N alias = Space (newbie-friendly default action)
-  V / Shift+V · Camera cycle / Strategic Map
-  C  · Comms expand (tap — the C-hold radial menu was removed)
-  Shift+C · Earth city labels toggle (off by default, persisted)
-  Shift+R · Recall ALL deployed arms
-  R  · Context Reel-in:
-         · in ORBITAL_VIEW with deployed daughter → recall closest
-         · during autopilot → abort autopilot
-         · in ARM_PILOT → reel daughter home
-  G  · (unbound — reserved)
-  H  · (unbound — reserved)
-  K  · (unbound — reserved)
+  ↑ ↓ ← →  · Rotate (pitch / yaw)
+  V  · Cycle camera view     (Shift+V = Strategic Map)
+  S  · Quick Scan            (Shift+S = Wide "scan big area")
+  T  · Target debris (cycle; Tab is an alias)
+  A  · Autopilot to target   (Shift+A = autopilot to debris center + launch all)
+  N  · Lasso / Net fire      (Shift+N = auto-target + launch at debris in range)
+  D  · Launch the SELECTED docked daughter (1-4 picks which; auto-picks if none selected)
+         Shift+D = launch ALL docked daughters at target
+  R  · Reel-in (recall closest / abort autopilot)   (Shift+R = recall ALL)
+  H  · De-spin laser (hold — detumble before netting)
   X  · Tether detach (sacrifice)
-  Y  · EDT deploy
-  U  · De-spin laser (hold — detumble the selected target before netting)
-  Z / Shift+Z · Wireframe zone cycle
-  ` / Shift+` · Debris Map / Tool cycle (` cycles tool while piloting in station-keep)
-  ,  / .  · Stow / deploy all struts
-  +  / −  · Throttle ± (or SK approach/retreat in ARM_PILOT)
-  [  / ]  · Power-bus adjust
-  Shift+1/2/3 · Power-bus select
-  1–4   · Select / pilot arm 1–4
-  7     · Return to mother (works anywhere)
-  5     · Forge (Kiln) toggle  (was F4)
-  6     · FEEP fuel cycle (Propellant)  (was F5)
-  F2    · FEEP metal cycle (piloted arm)
-  Shift+G · Trawl start
-  O     · Deploy ALL docked arms
-  Enter · Begin approach
-  Esc   · Pause / back / exit
-  Ctrl+D · Debug overlay
-  Ctrl+Shift+D · Deorbit sacrifice
-  PageUp/Down · Comms scroll
-  Arrows · Pitch/Yaw  (or SK θ/φ in ARM_PILOT)
+  E  · Electrodynamic Tether (EDT)
+  1–4 · Select daughter (docked → glow/flash, mother stays in view; launched → pilot)
 
-═══ DAUGHTER (ARM_PILOT) — only when P engaged ═══
-  Arrows · Orbit debris (θ/φ)  ·  Shift = fine ¼
-  + / −  · Approach/retreat (wheel also works)
-  N      · Deploy net / capture
-  F      · Smart focus (also deploys net)
-  R      · Reel-in (with or without capture)
-  I      · Inspect debris (part callouts) — render arrives in Delegation 3
-  F2     · Cycle FEEP metal (indium/alt)
-  Esc / P / 7 · Return to mother
-  1–4    · Switch piloted daughter
-  X      · Sacrifice detach
+═══ DAUGHTER (while piloting — select a launched daughter with 1-4) ═══
+  ↑ ↓ ← →  · Orbit debris (θ / φ in station-keep)   ·  Shift = fine ¼
+  V / S / T / A / D  · same as Mother (view / scan / target / autopilot / launch)
+  N  · Deploy net / capture (the single capture verb)
+  R  · Reel daughter home
+  H  · De-spin the station-kept target (hold)
+  E  · Electrodynamic Tether
+  X  · Sacrifice detach
+  1–4 · Switch piloted daughter (re-press the active digit → back out to mother)
+
+═══ ADVANCED + MAPS ═══
+  B  · Shop / Buy
+  F  · Forge (Kiln) toggle
+  J  · Journal / Skills
+  L  · Codex / Library
+  M  · Map (Debris Map; ` is an alias)
+  ?  · This help pane
+  Esc · Pause / back / exit (also backs out of ARM_PILOT)
+  5  · toggle City names          6 · toggle Constellation names
+  7  · Comms size (small/med/large)   8 · NavSphere → minimize to LAT/LON/ALT one-liner
+  9  · Debris pane → minimize to one-liner (id · size · mass · tumble · material)
+  0  · toggle Target pane
+  .  · toggle Struts
+
+═══ Not shown in the help pane (still bound) ═══
+  +  / −  · Throttle ± (or SK approach/retreat while piloting)
+  [  / ]  · Power-bus adjust   ·   Shift+1/2/3 · Power-bus select
+  C  · Comms expand (quick tap)   ·   Z / Shift+Z · Wireframe zone cycle
+  Shift+G · Trawl start   ·   Enter · Begin approach   ·   PageUp/Down · Comms scroll
+  F2 · FEEP metal cycle (piloted arm)
+  Ctrl+D · Debug overlay   ·   Ctrl+Shift+D · Deorbit sacrifice
 ```
 
-> **Note:** WASD mothership thrust removed from normal play. Autopilot handles all navigation. WASD is a command cluster (A/S/W/D) in normal mode, traditional thrust only in ARM PILOT mode (P key).
+> **Note:** WASD mothership thrust is removed from normal play (autopilot navigates). As of the 2026-06-14 revamp, **daughters are flown with the arrow keys (station-keep orbit) only** — WASD/`Q`/`E` daughter thrust was removed, so `S`/`A`/`D`/`V`/`T` keep their Mother meanings even while piloting. Features that lost their dedicated key in the remap (not shown in the help menu): cycle-capture-tool, Focus Action, Orbit/MPD MFD, FEEP fuel cycle.
+
+
 
 ---
 

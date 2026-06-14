@@ -197,7 +197,7 @@ export const ONBOARDING_BEATS = [
     id: 'lasso',
     commsSource: 'HOUSTON', commsText: 'Close enough — fire the Mother net with N (or Space). Quick and easy on nearby debris.',
     commsAck: 'Catch! Nice shot, Cowboy. That\'s how it\'s done.',
-    text: 'Fire net (N)',
+    text: 'Launch net (N)',
     glyph: 'N',
     keys: ['KeyN','Space'],
     triggerEvent: 'LASSO_FIRED',
@@ -213,8 +213,8 @@ export const ONBOARDING_BEATS = [
   },
   {
     id: 'daughter',
-    commsSource: 'HOUSTON', commsText: 'For distant or heavy debris, launch a Daughter — press D. Pilot it with P, then recall with R.',
-    commsAck: 'Daughter away — nice work. Pilot with P to steer it home.',
+    commsSource: 'HOUSTON', commsText: 'For distant or heavy debris, launch a Daughter — press D. Pilot it with 1-4, then recall with R.',
+    commsAck: 'Daughter away — nice work. Pilot with 1-4 to steer it home.',
     text: 'Deploy Daughter (D)',
     glyph: 'D',
     keys: ['KeyD'],
@@ -222,7 +222,7 @@ export const ONBOARDING_BEATS = [
     skillId: 'collect_deploy',
     credit: 10,
     parallel: 'lasso',
-    escalationText: 'D launches the next docked Daughter toward your target. Press P to pilot it, then R to recall. Daughters reach debris the net cannot.',
+    escalationText: 'D launches the selected docked Daughter toward your target. Press 1-4 to pilot a launched Daughter, then R to recall. Daughters reach debris the net cannot.',
   },
   {
     id: 'captured',

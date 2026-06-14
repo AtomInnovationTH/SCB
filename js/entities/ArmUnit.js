@@ -368,6 +368,15 @@ export class ArmUnit {
     this._statusLightMat = null;
     this._netMesh = null;
 
+    // Selection highlight (hotkey revamp 2026-06-14, D4): when a DOCKED daughter
+    // is selected with 1-4 it glows/flashes so the player can see which plate
+    // they picked before launching with D. Driven by ArmManager via
+    // setSelectedHighlight(); the pulse runs in _updateSelectGlow() each frame.
+    /** @type {boolean} */
+    this._selected = false;
+    /** @type {Array<{mat:THREE.Material, baseEmissive:number, baseIntensity:number}>} */
+    this._selectGlowMats = [];
+
     // S3.6: Bridle visual references (populated in _createMesh)
     this._gimbalRing = null;
     this._bridleLegA = null;
@@ -471,6 +480,21 @@ export class ArmUnit {
       facet.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
       this.mesh.add(facet);
       if (k === 0) this._bodyShell = facet; // keep a representative ref
+    }
+
+    // D4 selection-glow: register the body facet materials (solar-cell skin +
+    // the bare-metal laser facet) so _updateSelectGlow() can pulse their
+    // emissive when this daughter is the selected plate. Both are per-arm
+    // MeshStandardMaterials, so modulating their emissive is isolated to this
+    // unit. Record each base emissive/intensity once for clean restore.
+    for (const mat of [cellMat, bareMetalMat]) {
+      if (mat && mat.emissive && !this._selectGlowMats.some(e => e.mat === mat)) {
+        this._selectGlowMats.push({
+          mat,
+          baseEmissive: mat.emissive.getHex(),
+          baseIntensity: mat.emissiveIntensity ?? 1.0,
+        });
+      }
     }
 
     // Plain metal end caps (fore +Z, aft −Z) — no solar cells on the ends.
@@ -936,7 +960,7 @@ export class ArmUnit {
       armId: this.id, type: this.type, targetId: target.id,
     });
     eventBus.emit(Events.COMMS_MESSAGE, {
-      text: `${this.id}: Crossbow launch — target ${target.id || 'acquired'}`,
+      text: `${this.id}: Cradle launch — target ${target.id || 'acquired'}`,
       priority: 'info',
     });
     return true;
@@ -988,7 +1012,7 @@ export class ArmUnit {
       armId: this.id, type: this.type, mode: 'freefly',
     });
     eventBus.emit(Events.COMMS_MESSAGE, {
-      text: `${this.id}: Crossbow launch — free-fly mode`,
+      text: `${this.id}: Cradle launch — free-fly mode`,
       priority: 'info',
     });
     return true;
@@ -1038,7 +1062,7 @@ export class ArmUnit {
 
     eventBus.emit(Events.ARM_DEPLOYED, { armId: this.id, type: this.type, mode: 'fishing' });
     eventBus.emit(Events.COMMS_MESSAGE, {
-      text: `${this.id}: Crossbow launch — ambush/fishing mode`,
+      text: `${this.id}: Cradle launch — ambush/fishing mode`,
       priority: 'info',
     });
     return true;
@@ -1091,7 +1115,7 @@ export class ArmUnit {
     eventBus.emit(Events.TRAWL_START, { armId: this.id });
     eventBus.emit(Events.ARM_DEPLOYED, { armId: this.id, type: this.type, mode: 'trawling' });
     eventBus.emit(Events.COMMS_MESSAGE, {
-      sender: this.id, text: 'Crossbow launch — trawling deployed', priority: 'info',
+      sender: this.id, text: 'Cradle launch — trawling deployed', priority: 'info',
     });
 
     return true;
@@ -1165,7 +1189,7 @@ export class ArmUnit {
     // Detached arms cannot be recalled — tether severed
     if (this.isDetached) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `${this.id}: Cannot recall — tether severed. Arm is autonomous.`,
+        text: `${this.id}: Cannot recall — tether severed. Daughter is autonomous.`,
         priority: 'warning',
       });
       return;
@@ -2303,6 +2327,9 @@ export class ArmUnit {
 
     // Status light color based on state
     this._updateStatusLight(dt);
+
+    // D4: selection glow/flash pulse on the body facets (when selected)
+    this._updateSelectGlow(dt);
   }
 
   /**
@@ -2533,11 +2560,12 @@ export class ArmUnit {
         // UX Fix D: Delayed nudge for manual piloting (first 3 deploys only)
         if (!this._manualMode && ArmUnit._pilotNudgeCount < 3) {
           const armId = this.id;
+          const pilotKey = (this.index != null && this.index < 4) ? `${this.index + 1}` : 'its number';
           setTimeout(() => {
             if (this.state === S.TRANSIT && !this._manualMode && ArmUnit._pilotNudgeCount < 3) {
               ArmUnit._pilotNudgeCount++;
               eventBus.emit(Events.COMMS_MESSAGE, {
-                text: `${armId}: Press P to take manual control — 2× capture score`,
+                text: `${armId}: Press ${pilotKey} to take manual control — 2× capture score`,
                 source: armId,
                 channel: 'CMD',
                 priority: 'info',
@@ -2600,17 +2628,18 @@ export class ArmUnit {
       } else {
         this._transitionTo(S.TRANSIT);
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: `${this.id}: Clear of core — crossbow transit`,
+          text: `${this.id}: Clear of core — cradle transit`,
           priority: 'info',
         });
         // UX Fix D: Delayed nudge for manual piloting (first 3 deploys only)
         if (!this._manualMode && ArmUnit._pilotNudgeCount < 3) {
           const armId = this.id;
+          const pilotKey = (this.index != null && this.index < 4) ? `${this.index + 1}` : 'its number';
           setTimeout(() => {
             if (this.state === S.TRANSIT && !this._manualMode && ArmUnit._pilotNudgeCount < 3) {
               ArmUnit._pilotNudgeCount++;
               eventBus.emit(Events.COMMS_MESSAGE, {
-                text: `${armId}: Press P to take manual control — 2× capture score`,
+                text: `${armId}: Press ${pilotKey} to take manual control — 2× capture score`,
                 source: armId,
                 channel: 'CMD',
                 priority: 'info',
@@ -3978,7 +4007,7 @@ export class ArmUnit {
           priority: 'critical',
         });
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: `Manual pilot available — deploy arm and press P`,
+          text: `Manual pilot available — deploy a daughter, then press 1-4 to fly it`,
           priority: 'warning',
         });
 
@@ -5173,7 +5202,7 @@ export class ArmUnit {
       this._transitionTo(S.EXPENDED);
 
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `${this.id}: Fuel exhausted — deorbit burn complete. Arm lost.`,
+        text: `${this.id}: Fuel exhausted — deorbit burn complete. Daughter lost.`,
         priority: 'warning',
       });
     }
@@ -5407,7 +5436,7 @@ export class ArmUnit {
         eventBus.emit(Events.ARM_LOST, { armId: this.id });
       } else {
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: `${this.id}: FUEL DEPLETED — arm expended`,
+          text: `${this.id}: FUEL DEPLETED — daughter expended`,
           priority: 'critical',
         });
       }
@@ -5652,6 +5681,46 @@ export class ArmUnit {
       case S.TANGLED:    this._statusLightMat.color.setHex(blink ? 0xff8800 : 0x442200); break;
       case S.STATION_KEEP: this._statusLightMat.color.setHex(blink ? 0x00ffaa : 0x004422); break;
       case S.EXPENDED:   this._statusLightMat.color.setHex(0xff0000); break;
+    }
+  }
+
+  /**
+   * D4 (hotkey revamp 2026-06-14): mark this daughter as the selected plate so
+   * its body glows/flashes. Called by ArmManager on ARM_SELECT/ARM_DESELECT.
+   * The visual pulse itself runs every frame in _updateSelectGlow(); this just
+   * flips the flag and immediately restores the base emissive on deselect so a
+   * non-updating (e.g. paused) frame doesn't leave the arm stuck lit.
+   * @param {boolean} on
+   */
+  setSelectedHighlight(on) {
+    const next = !!on;
+    if (next === this._selected) return;
+    this._selected = next;
+    if (!next) this._restoreSelectGlow();
+  }
+
+  /** @private Restore body facet emissive to its recorded base values. */
+  _restoreSelectGlow() {
+    for (const e of this._selectGlowMats) {
+      e.mat.emissive.setHex(e.baseEmissive);
+      e.mat.emissiveIntensity = e.baseIntensity;
+    }
+  }
+
+  /**
+   * @private Pulse the body facet emissive while selected (D4). A cyan flash
+   * sinusoidally modulates emissiveIntensity above the base value so the
+   * selected daughter "breathes" — clearly readable on a docked plate while
+   * the mother stays in view. No-op (cheap early return) when not selected.
+   */
+  _updateSelectGlow(dt) {
+    if (!this._selected || this._selectGlowMats.length === 0) return;
+    // ~1.4 Hz breath; intensity rides from base → base + 0.9.
+    const pulse = 0.5 + 0.5 * Math.sin(this.stateTimer * 9.0);
+    const SELECT_EMISSIVE = 0x00d4ff;   // HUD cyan accent
+    for (const e of this._selectGlowMats) {
+      e.mat.emissive.setHex(SELECT_EMISSIVE);
+      e.mat.emissiveIntensity = e.baseIntensity + 0.25 + 0.9 * pulse;
     }
   }
 

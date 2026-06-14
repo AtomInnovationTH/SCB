@@ -301,7 +301,7 @@ export function executeUpgrade(currentTier, targetTier, gameState, deps) {
   } else if (targetTier === 'Y1_HEX') {
     eventBus.emit(Events.COMMS_MESSAGE, {
       sender: 'HOUSTON',
-      text: `Hex Configuration Refit complete — ${target.armCount} arms online.`,
+      text: `Hex Configuration Refit complete — ${target.armCount} daughters online.`,
       priority: 'info',
     });
   }

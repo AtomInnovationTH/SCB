@@ -297,6 +297,13 @@ export class CommsPanel {
 
     // Re-render so the visible line count matches the new height.
     this._updateCommsPanel();
+
+    // Notify layout consumers (HUD right column + NavSphere slot) that the
+    // comms panel's height — and therefore its bottom edge — has changed, so
+    // they can invalidate their cached comms-bottom and reflow. The panel
+    // height animates over 0.3s (CSS transition), so listeners keep recomputing
+    // through a short settle window rather than snapping at the end.
+    eventBus.emit(Events.COMMS_PANEL_RESIZED, { step, height: h });
   }
 
   /** @private Visible line count for the current size step. */

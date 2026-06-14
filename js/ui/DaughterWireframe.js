@@ -419,11 +419,11 @@ export class DaughterWireframe {
     ctx.font      = "bold 12px 'Courier New', monospace";
     ctx.textAlign = 'center';
     ctx.fillStyle = HEADER_COL;
-    const armLabel = this._arm ? `ARM ${this._armIndex + 1} [I=inspect]` : 'ARM PILOT';
+    const armLabel = this._arm ? `DAUGHTER ${this._armIndex + 1} [I=inspect]` : 'DAUGHTER PILOT';
     ctx.fillText(armLabel, WIRE_CX, 14);
     ctx.font      = "11px 'Courier New', monospace";
     ctx.fillStyle = TYPE_COL;
-    const stateLabel = this._arm ? `${this._arm.state || '—'}` : 'NO ARM PILOTED';
+    const stateLabel = this._arm ? `${this._arm.state || '—'}` : 'NO DAUGHTER PILOTED';
     ctx.fillText(stateLabel, WIRE_CX, 26);
 
     ctx.fillStyle = 'rgba(88,166,255,0.22)';
@@ -433,7 +433,7 @@ export class DaughterWireframe {
       ctx.font      = "10px 'Courier New', monospace";
       ctx.fillStyle = DIM_COL;
       ctx.textAlign = 'center';
-      ctx.fillText('— press 1–6 to pilot a daughter —', WIRE_CX, WIRE_CY + 20);
+      ctx.fillText('— press 1–4 to pilot a daughter —', WIRE_CX, WIRE_CY + 20);
       return;
     }
 
@@ -535,7 +535,7 @@ export class DaughterWireframe {
       ctx.fillStyle = DIM_COL;
       ctx.fillText('SCANNING DAUGHTER CRAFT…', WIRE_CX, infoY);
       ctx.font      = "10px 'Courier New', monospace";
-      ctx.fillText('[Z] select zone   [I] expand', WIRE_CX, infoY + 14);
+      ctx.fillText('[Z] select zone', WIRE_CX, infoY + 14);
     }
   }
 }

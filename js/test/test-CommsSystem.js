@@ -381,7 +381,7 @@ function simulateStationKeepEnteredListener(data, messages) {
   const armId = data?.armId || 'SYSTEM';
   const hint = data?.isPiloted
     ? 'Arrow keys orbit the debris · +/- adjust distance · [N] capture.'
-    : '[N] capture · [P] pilot for a closer look.';
+    : '[N] capture · [1-4] pilot for a closer look.';
   const onStation = simulateAddMessage(
     'INFO',
     armId,
@@ -394,7 +394,7 @@ function simulateStationKeepEnteredListener(data, messages) {
   simulateAddMessage(
     'INFO',
     'HOUSTON',
-    `${daughterName} is holding station on the debris. Press N to capture, or P to pilot it in closer.`,
+    `${daughterName} is holding station on the debris. Press N to capture, or its number key (1-4) to pilot it in closer.`,
     { channel: 'CMD' },
     messages
   );
@@ -498,7 +498,7 @@ describe('CommsSystem – STATION_KEEP_ENTERED listener (§4 item 4)', () => {
     assert.ok(msg.text.includes('holding 8m from'), 'standoff should be rounded to 8');
     assert.ok(msg.text.includes('#142'), 'targetId should appear');
     assert.ok(msg.text.includes('[N] capture'), 'should include N capture hint');
-    assert.ok(msg.text.includes('[P] pilot'), 'should include P pilot hint');
+    assert.ok(msg.text.includes('[1-4] pilot'), 'should include 1-4 pilot hint');
   });
 
   it('SK_ENTERED posts a plain-language follow-up naming the daughter', () => {
@@ -512,7 +512,7 @@ describe('CommsSystem – STATION_KEEP_ENTERED listener (§4 item 4)', () => {
     assert.ok(followUp, 'a plain-language HOUSTON follow-up should be posted');
     assert.ok(followUp.text.includes('Weaver-1'), 'follow-up names the daughter');
     assert.ok(followUp.text.includes('Press N to capture'), 'tells player to press N');
-    assert.ok(followUp.text.includes('P to pilot'), 'tells player to press P');
+    assert.ok(followUp.text.includes('(1-4) to pilot'), 'tells player to press its number key');
   });
 
   it('SK_ENTERED with missing standoffR renders ? placeholder', () => {

@@ -188,6 +188,7 @@ export const Events = {
   // UX-11 #9: COMMS_RADIAL_OPEN/CLOSE removed with the C-hold RadialMenu.
   COMMS_SCROLL_UP:        'comms:scrollUp',        // PageUp → scroll history
   COMMS_SCROLL_DOWN:      'comms:scrollDown',       // PageDown → scroll history
+  COMMS_PANEL_RESIZED:    'comms:panelResized',    // { step, height } — pane stepped to a new size (line/normal/large)
 
   // === CITY LABELS (UX-11 #5) ===
   CITY_LABELS_TOGGLE:     'cityLabels:toggle',     // Shift+C → toggle Earth city labels
@@ -357,8 +358,9 @@ export const Events = {
 
   // === TOOL RECOMMENDATION ===
   TOOL_RECOMMENDED:       'tool:recommended',      // { tool: 'lasso'|'spinner'|'grapple'|'weaver'|'trawl', targetId }
-  TOOL_CYCLE:             'tool:cycle',             // backtick key — cycle alternatives
-  TOOL_DEPLOY:            'tool:deploy',            // D key — deploy recommended tool
+  TOOL_CYCLE:             'tool:cycle',             // T key — cycle tool alternatives
+  // TOOL_DEPLOY removed 2026-06-14 (was deprecated 2026-06-13b with no emitter;
+  // deploy is via FOCUS_ACTION / F). Do not re-add — T emits TOOL_CYCLE.
 
   // === DAUGHTER MULTI-TOOL (DAUGHTER_MULTITOOL_SPEC §4.3) ===
   TOOL_SELECTED:          'tool:selected',          // { armId, tool: 'NET'|'MAGNET'|'GRIPPER'|'PAD' }

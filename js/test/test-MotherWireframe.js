@@ -23,7 +23,7 @@ describe('buildMotherShape — zones', () => {
     const required = [
       'Barrel (bus)', 'Collar Ring', 'Struts (4)', 'FEEP Thrusters',
       'ROSA Solar Wings', 'Sensor Cluster', 'Docking Port', 'Laser Aperture',
-      'Front/Rear Caps', 'Navigation Lights', 'Crossbow Arms',
+      'Front/Rear Caps', 'Navigation Lights', 'Daughters',
     ];
     for (const n of required) {
       assert.ok(names.includes(n), `has zone: ${n}`);
@@ -36,7 +36,7 @@ describe('buildMotherShape — zones', () => {
     assert.equal(byName['Laser Aperture'],   'RED',    'Laser is RED');
     assert.equal(byName['Struts (4)'],       'YELLOW', 'Struts are YELLOW');
     assert.equal(byName['FEEP Thrusters'],   'YELLOW', 'FEEP are YELLOW');
-    assert.equal(byName['Crossbow Arms'],    'YELLOW', 'Arms are YELLOW');
+    assert.equal(byName['Daughters'],        'YELLOW', 'Daughters are YELLOW');
     assert.equal(byName['Barrel (bus)'],     'GREEN',  'Barrel is GREEN');
     assert.equal(byName['ROSA Solar Wings'], 'GREEN',  'ROSA is GREEN');
     assert.equal(byName['Docking Port'],     'GREEN',  'Dock is GREEN');

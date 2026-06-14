@@ -928,7 +928,7 @@ export class StrategicMap {
       <div style="margin-top:8px;color:#00ccff;font-weight:bold">🎨 LEGEND <span style="font-weight:normal;color:#667;">(hover)</span></div>
       <div title="Tracked junk — your salvage. Capture it with daughters, nets, or the lasso."><span style="color:${SM.DOT_COLOR_DEBRIS}">●</span> debris</div>
       <div title="Spent upper stages — heavy, high-value salvage. The #1 source of new fragments when they explode."><span style="color:${SM.DOT_COLOR_ROCKET_BODY}">●</span> rocket body</div>
-      <div title="Dead satellites — fair game under your contract. Often tumbling: de-spin (hold U) before netting."><span style="color:${SM.DOT_COLOR_INACTIVE}">●</span> inactive sat</div>
+      <div title="Dead satellites — fair game under your contract. Often tumbling: de-spin (hold H) before netting."><span style="color:${SM.DOT_COLOR_INACTIVE}">●</span> inactive sat</div>
       <div title="LIVE spacecraft — strictly off-limits (treaty guard will refuse arming). Red pulses mark high-MOID threats near them."><span style="color:${SM.DOT_COLOR_ACTIVE}">●</span> active sat</div>
       <div title="Collision shrapnel — small, fast, numerous. The Kessler feedstock; trawl sweeps clear them in bulk."><span style="color:${SM.DOT_COLOR_FRAGMENT}">●</span> fragment</div>
       <div title="You — the mothership. The white ellipse is your current orbit."><span style="color:${SM.PLAYER_COLOR}">●</span> player</div>

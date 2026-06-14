@@ -717,6 +717,10 @@ async function init() {
   // --- Connect comms to HUD ---
   hud.setCommsSystem(commsSystem);
 
+  // --- Connect NavSphere to HUD so the right pane column reserves the correct
+  //     vertical slot and reclaims it when the sphere is minimized/hidden ---
+  if (typeof hud.setNavSphere === 'function') hud.setNavSphere(navSphere);
+
   // --- Connect V3 arm manager to HUD + player satellite ---
   if (armManager) hud.setArmManager(armManager);
   if (armManager) player.setArmManager(armManager);
@@ -846,6 +850,8 @@ async function init() {
     debrisField, debrisWireframe, dockingReticle, hud, targetReticle,
     navSphere, orbitMFD, debrisMap, audioSystem, debugOverlay, sensorSystem,
     lassoSystem, autopilotSystem, codexViewerUI, strategicMap, hotkeyOverlay,
+    // Hotkey revamp 2026-06-14: starfield (6 = constellation labels toggle).
+    starfield,
     // Delegation 2 (2026-05-31): smart-default Space key consults the Director.
     onboardingDirector,
     transitionToState: (s, p) => gameFlowManager.transitionToState(s, p),

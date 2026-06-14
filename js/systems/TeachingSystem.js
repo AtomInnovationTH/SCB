@@ -31,14 +31,14 @@ export const TEACHING_MOMENTS = [
   {
     id: 'first_target',
     title: 'Target Acquired',
-    body: 'Press A to autopilot toward it, or deploy an arm with D. Match your approach to the debris type.',
+    body: 'Press A to autopilot toward it, or deploy a daughter with D. Match your approach to the debris type.',
     duration: 8000,
     icon: '🎯',
   },
   {
     id: 'first_arm',
-    title: 'Arm Deployed',
-    body: 'Hold steady — the arm needs time to reach the target. Watch the tether tension gauge.',
+    title: 'Daughter Deployed',
+    body: 'Hold steady — the daughter needs time to reach the target. Watch the tether tension gauge.',
     duration: 7000,
     icon: '🦾',
   },
@@ -115,7 +115,7 @@ export const TEACHING_MOMENTS = [
   {
     id: 'first_safe_mode',
     title: 'Safe Mode',
-    body: 'Too many systems are critical, so the ship locked your arms to protect itself. Repair until they\'re above 40% to get them back.',
+    body: 'Too many systems are critical, so the ship locked your daughters to protect itself. Repair until they\'re above 40% to get them back.',
     duration: 8000,
     icon: '🔒',
   },
@@ -143,10 +143,10 @@ export const TEACHING_MOMENTS = [
   },
   {
     id: 'first_arm_deploy',
-    title: 'Crossbow Arm Deployed',
-    body: 'Arms capture heavier targets at longer range. Press P to pilot. Manual captures earn 2× score.',
+    title: 'Daughter Launched',
+    body: 'Daughters capture heavier targets at longer range. Press 1-4 to pilot a launched daughter. Manual captures earn 2× score.',
     duration: 8000,
-    icon: '🏹',
+    icon: '🛰️',
   },
   // Capture-failure guidance (recoverable vs catastrophic)
   {
@@ -169,7 +169,7 @@ export const TEACHING_MOMENTS = [
   {
     id: 'first_high_tumble_target',
     title: 'Fast Spinner',
-    body: 'That target is tumbling fast — nets slip off fast spinners. Hold U to fire the de-spin laser; watch the capture odds climb as the tumble bleeds off, then net it.',
+    body: 'That target is tumbling fast — nets slip off fast spinners. Hold H to fire the de-spin laser; watch the capture odds climb as the tumble bleeds off, then net it.',
     duration: 9000,
     icon: '🌀',
   },
@@ -360,7 +360,7 @@ export class TeachingSystem {
 
     // 20. first_high_tumble_target — TARGET_SELECTED with tumble above the
     // net-safe spin (Phase 0.6). Gated on LASER_DESPIN so we never teach a
-    // verb (hold U) that isn't wired in.
+    // verb (hold H) that isn't wired in.
     on(Events.TARGET_SELECTED, (data) => {
       const debris = data && data.debris;
       if (!debris || typeof debris.tumbleRate !== 'number') return;

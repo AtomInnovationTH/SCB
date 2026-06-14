@@ -170,98 +170,6 @@ export class TargetSelector {
     });
   }
 
-  /**
-   * Deploy the currently recommended tool (D key).
-   * Routes to the appropriate system via EventBus events.
-   * @private
-   */
-  _deployRecommended() {
-    if (!this.activeTarget) {
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        sender: 'V5',
-        text: 'No target selected — press TAB first.',
-        priority: 'warning',
-      });
-      return;
-    }
-
-    if (!this._recommendedTool) {
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        sender: 'V5',
-        text: 'No tool recommended — press TAB to select a target.',
-        priority: 'warning',
-      });
-      return;
-    }
-
-    const tool = this._recommendedTool;
-    const target = this.activeTarget;
-
-    switch (tool) {
-      case 'lasso':
-        // Lasso firing requires player position + debrisField refs held by InputManager.
-        // Emit guidance — Space key fires lasso directly.
-        eventBus.emit(Events.COMMS_MESSAGE, {
-          sender: 'V5',
-          text: 'Lasso selected — press Space to fire.',
-          priority: 'info',
-        });
-        return; // Don't emit the deploy message below
-
-      case 'trawl':
-        eventBus.emit(Events.TRAWL_START);
-        break;
-
-      case 'spinner':
-        // ARM_DEPLOY_TO: ArmManager picks best available spinner arm
-        eventBus.emit(Events.ARM_DEPLOY_TO, { target, preferType: 'spinner' });
-        break;
-
-      case 'weaver':
-        // ARM_DEPLOY_TO: ArmManager picks best available weaver arm
-        eventBus.emit(Events.ARM_DEPLOY_TO, { target, preferType: 'weaver' });
-        break;
-
-      default:
-        // Fallback: deploy any available arm
-        eventBus.emit(Events.ARM_DEPLOY_TO, { target, preferType: null });
-        break;
-    }
-
-    eventBus.emit(Events.COMMS_MESSAGE, {
-      sender: 'V5',
-      text: `Deploying ${tool}...`,
-      priority: 'info',
-    });
-  }
-
-  // ======================================================================
-  // FOCUS ACTION (F KEY — CONTROL_REDESIGN §5)
-  // ======================================================================
-
-  /**
-   * Context-sensitive smart action.
-   * Priority chain:
-   *   1. No target selected → prompt player to Tab-select
-   *   2. Has target → deploy recommended tool
-   *      (arm/lasso systems handle range validation and emit feedback)
-   * @private
-   */
-  _handleFocusAction() {
-    if (!this.activeTarget) {
-      // No target — guide the player
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        sender: 'V5',
-        text: 'No target — press [Tab] to select.',
-        priority: 'info',
-      });
-      return;
-    }
-
-    // Has target — deploy recommended tool (systems handle range checks)
-    this._deployRecommended();
-  }
-
   // ======================================================================
   // LIFECYCLE
   // ======================================================================
@@ -320,19 +228,13 @@ export class TargetSelector {
       this._updateRecommendation();
     });
 
-    // D key → deploy recommended tool
-    eventBus.on(Events.TOOL_DEPLOY, () => {
-      this._deployRecommended();
-    });
-
-    // Backtick → cycle through tool alternatives
+    // Backtick → cycle through tool alternatives.
+    // (The TOOL_DEPLOY and FOCUS_ACTION listeners were removed in the
+    // 2026-06-14 hotkey revamp: T now emits TOOL_CYCLE, F emits FORGE_TOGGLE,
+    // and tool deployment is reached directly via D / N. No smart "focus
+    // action" verb remains.)
     eventBus.on(Events.TOOL_CYCLE, () => {
       this._cycleTool();
-    });
-
-    // F key (normal mode) → context-sensitive smart action
-    eventBus.on(Events.FOCUS_ACTION, () => {
-      this._handleFocusAction();
     });
 
     // Event-driven cleanup: clear target when its debris is removed

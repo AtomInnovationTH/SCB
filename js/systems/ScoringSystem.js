@@ -195,7 +195,7 @@ export class ScoringSystem {
       if (data.manualCapture && !this._firstManualArmMsg) {
         this._firstManualArmMsg = true;
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: 'Manual arm capture: 2× score bonus!',
+          text: 'Manual daughter capture: 2× score bonus!',
           source: 'SYSTEM',
           channel: 'CMD',
           priority: 'info',
@@ -203,7 +203,7 @@ export class ScoringSystem {
       } else if (!data.manualCapture && !this._firstAutoArmMsg) {
         this._firstAutoArmMsg = true;
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: 'Auto-capture complete. Pilot arms with P for 2× score bonus.',
+          text: 'Auto-capture complete. Pilot daughters with 1-4 for 2× score bonus.',
           source: 'SYSTEM',
           channel: 'CMD',
           priority: 'info',

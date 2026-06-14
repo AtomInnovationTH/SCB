@@ -103,22 +103,22 @@ export const UPGRADES = [
     trl: 4, trlRationale: 'Remote spectral composition analysis demonstrated on lab targets; no ADR heritage' },
 
   // Arms (6) — replaces deleted Capture category (laser, ion beam, magnetic, harpoon, net)
-  { id: 'long_tether', cat: 'Arms', name: 'Extended Tether', cost: 600,
+  { id: 'long_tether', cat: 'Daughters', name: 'Extended Tether', cost: 600,
     desc: '2× tether range', effect: 'tetherRange', value: 2.0, maxLevel: 1,
-    trl: 3, trlRationale: 'Multi-km arm-mounted tether is game-speculative; RemoveDEBRIS tether was passive' },
-  { id: 'fast_reel', cat: 'Arms', name: 'Fast Reel Motor', cost: 500,
+    trl: 3, trlRationale: 'Multi-km daughter-mounted tether is game-speculative; RemoveDEBRIS tether was passive' },
+  { id: 'fast_reel', cat: 'Daughters', name: 'Fast Reel Motor', cost: 500,
     desc: '+50% reel speed', effect: 'reelSpeed', value: 1.5, maxLevel: 1,
     trl: 4, trlRationale: 'Motorised space reels demonstrated on SFU (1995), not yet for capture ops' },
-  { id: 'arm_fuel', cat: 'Arms', name: 'Arm Fuel Reserve', cost: 700,
-    desc: '+50% arm FEEP fuel', effect: 'armFuelMax', value: 1.5, maxLevel: 1,
+  { id: 'arm_fuel', cat: 'Daughters', name: 'Daughter Fuel Reserve', cost: 700,
+    desc: '+50% daughter FEEP fuel', effect: 'armFuelMax', value: 1.5, maxLevel: 1,
     trl: 7, trlRationale: 'FEEP thrusters flown on Gaia, LISA Pathfinder; miniaturised variants emerging' },
-  { id: 'capture_net', cat: 'Arms', name: 'Reinforced Nets', cost: 800,
+  { id: 'capture_net', cat: 'Daughters', name: 'Reinforced Nets', cost: 800,
     desc: '+20% capture success', effect: 'captureRate', value: 0.2, maxLevel: 1,
     trl: 7, trlRationale: 'RemoveDEBRIS net capture demonstrated 2018' },
-  { id: 'hazmat_handler', cat: 'Arms', name: 'Hazmat Handler', cost: 1200,
+  { id: 'hazmat_handler', cat: 'Daughters', name: 'Hazmat Handler', cost: 1200,
     desc: 'Recover hydrazine → cold gas', effect: 'hazmatRecovery', value: true, maxLevel: 1,
     trl: 2, trlRationale: 'On-orbit hazmat recovery from derelicts is fully speculative' },
-  { id: 'refinery_arm', cat: 'Arms', name: 'Micro-Refinery', cost: 1500,
+  { id: 'refinery_arm', cat: 'Daughters', name: 'Micro-Refinery', cost: 1500,
     desc: '+50% salvage yield', effect: 'refineryEfficiency', value: 1.5, maxLevel: 1,
     trl: 2, trlRationale: 'Orbital micro-refinery is game-speculative; no on-orbit metal processing' },
 
@@ -132,7 +132,7 @@ export const UPGRADES = [
     desc: 'Survive 1 fragment hit', effect: 'shieldHits', value: 1, maxLevel: 1,
     trl: 9, trlRationale: 'Whipple shields flown on ISS and every crewed spacecraft since 1970s' },
   { id: 'auto_dock', cat: 'Hull', name: 'Auto-Dock Assist', cost: 600,
-    desc: 'Faster arm docking', effect: 'autoDock', value: 0.5, maxLevel: 1,
+    desc: 'Faster daughter docking', effect: 'autoDock', value: 0.5, maxLevel: 1,
     trl: 8, trlRationale: 'Auto-docking flown on Progress, Dragon-2; ADR-specific autonomy still emerging' },
 
   // Graphene (3) — V4 GSL upgrade path (Sprint D5)
@@ -615,7 +615,7 @@ export class ShopScreen {
     `).join('');
 
     // Append crossbow spring & tether material tier sections
-    html += this._renderTierSection('spring', '🏹 CROSSBOW SPRINGS', Constants.SPRING_TIERS, SPRING_DESCRIPTIONS, this._springTier);
+    html += this._renderTierSection('spring', '🛰️ CRADLE SPRINGS', Constants.SPRING_TIERS, SPRING_DESCRIPTIONS, this._springTier);
     html += this._renderTierSection('tether', '🧵 TETHER MATERIALS', Constants.TETHER_TIERS, TETHER_DESCRIPTIONS, this._tetherTier);
 
     // C-10: Arm tier upgrade section (gated by feature flag)
@@ -918,7 +918,7 @@ export class ShopScreen {
         opacity = 0.35;
       }
 
-      const statsLine = `${tier.armCount} arms · ${tier.massDryKg} kg dry · ${tier.massWetKg} kg wet`;
+      const statsLine = `${tier.armCount} daughters · ${tier.massDryKg} kg dry · ${tier.massWetKg} kg wet`;
       const featuresLine = tier.features.join(' · ');
 
       let statusHtml;
@@ -983,7 +983,7 @@ export class ShopScreen {
       <div style="margin-bottom:1rem;">
         <div style="font-size:0.8rem;color:rgba(0,255,136,0.5);letter-spacing:0.1em;
                      margin-bottom:6px;padding-bottom:3px;border-bottom:1px solid rgba(0,255,136,0.15);">
-          🐙 ARM CONFIGURATION
+          🐙 DAUGHTER CONFIGURATION
         </div>
         ${cards}
       </div>
@@ -1020,11 +1020,11 @@ export class ShopScreen {
 
     // Simple confirmation via browser confirm (no custom modal needed)
     const msg = `UPGRADE TO ${target.displayName}?\n\n` +
-      `Arms: ${target.armCount} (${target.features[0]})\n` +
+      `Daughters: ${target.armCount} (${target.features[0]})\n` +
       `Mass: ${target.massDryKg} kg dry / ${target.massWetKg} kg wet\n` +
       `Cost: ${target.costCredits.toLocaleString()} credits\n\n` +
-      `This replaces ALL current arms with the new configuration.\n` +
-      `Per-arm state (nets, tethers, bridle) will be reset.`;
+      `This replaces ALL current daughters with the new configuration.\n` +
+      `Per-daughter state (nets, tethers, bridle) will be reset.`;
 
     if (!confirm(msg)) return;
 
