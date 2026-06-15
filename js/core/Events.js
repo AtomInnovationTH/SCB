@@ -193,6 +193,12 @@ export const Events = {
   // === CITY LABELS (UX-11 #5) ===
   CITY_LABELS_TOGGLE:     'cityLabels:toggle',     // Shift+C → toggle Earth city labels
 
+  // === LOCALE / LANGUAGE ===
+  /** Player changed the menu language / region. Payload: { code, lang } where
+   *  `lang` is the full entry from core/Languages.js (flag + start city). A
+   *  future i18n layer can subscribe to re-render translated UI strings. */
+  LANGUAGE_CHANGED:       'locale:languageChanged',
+
   // === PAUSE ===
   PAUSE_RESUME:       'pause:resume',
   PAUSE_MENU:         'pause:menu',

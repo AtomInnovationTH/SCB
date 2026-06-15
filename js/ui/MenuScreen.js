@@ -9,6 +9,9 @@ import { Events } from '../core/Events.js';
 import { GameStates } from '../core/GameState.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import { persistenceManager } from '../systems/PersistenceManager.js';
+import { settingsManager } from '../systems/SettingsManager.js';
+import { LANGUAGES } from '../core/Languages.js';
+import { FlagDecalSystem } from './FlagDecalSystem.js';
 import { MenuScene3D } from './MenuScene3D.js';
 
 export class MenuScreen {
@@ -143,6 +146,53 @@ export class MenuScreen {
           padding: 0 6px; line-height: 1.4; letter-spacing: 0;
         }
         .adr-group .adr-list { padding-left: 15px; margin-bottom: 0.5rem; }
+        /* ── Language / region selector (top-right) ── */
+        #menu-lang {
+          position: absolute; top: 16px; right: 18px;
+          z-index: 6;
+          font-family: 'Helvetica Neue', Arial, 'Hiragino Sans', 'Noto Sans',
+                       'Noto Sans Thai', 'Noto Sans Devanagari', 'Noto Sans Tamil', sans-serif;
+        }
+        #menu-lang-btn {
+          display: flex; align-items: center; gap: 8px;
+          background: rgba(4,12,30,0.62); color: rgba(0,255,136,0.92);
+          border: 1px solid rgba(0,255,136,0.4); border-radius: 6px;
+          padding: 7px 11px; cursor: pointer; font: inherit; font-size: 0.86rem;
+          letter-spacing: 0.02em; transition: all 0.2s;
+          backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+        }
+        #menu-lang-btn:hover {
+          border-color: #00ff88; background: rgba(0,255,136,0.12);
+          box-shadow: 0 0 14px rgba(0,255,136,0.25);
+        }
+        #menu-lang-btn .menu-lang-caret { font-size: 0.7rem; opacity: 0.7; transition: transform 0.2s; }
+        #menu-lang.open #menu-lang-btn .menu-lang-caret { transform: rotate(180deg); }
+        .menu-lang-flag {
+          width: 22px; height: 15px; border-radius: 2px; display: block;
+          box-shadow: 0 0 0 1px rgba(0,0,0,0.5); image-rendering: auto;
+        }
+        #menu-lang-menu {
+          list-style: none; margin: 6px 0 0; padding: 5px;
+          position: absolute; top: 100%; right: 0; min-width: 200px;
+          background: rgba(4,12,30,0.92); border: 1px solid rgba(0,255,136,0.3);
+          border-radius: 6px; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+          box-shadow: 0 10px 30px rgba(0,0,0,0.5); display: none;
+        }
+        #menu-lang.open #menu-lang-menu { display: block; }
+        #menu-lang-menu li {
+          display: flex; align-items: center; gap: 10px;
+          padding: 8px 10px; border-radius: 4px; cursor: pointer;
+          color: rgba(0,255,136,0.82); transition: background 0.15s, color 0.15s;
+        }
+        #menu-lang-menu li:hover { background: rgba(0,255,136,0.14); color: #00ff88; }
+        #menu-lang-menu li[aria-selected="true"] {
+          background: rgba(0,255,136,0.08);
+          box-shadow: inset 2px 0 0 #00ff88;
+        }
+        #menu-lang-menu .menu-lang-native { font-size: 0.92rem; }
+        #menu-lang-menu .menu-lang-en {
+          margin-left: auto; font-size: 0.7rem; opacity: 0.55; letter-spacing: 0.04em;
+        }
       </style>
 
       <div id="menu-content">
@@ -150,6 +200,16 @@ export class MenuScreen {
         <!-- ══ Full-bleed 3D hero: EVA astronaut welding the Mother satellite ══ -->
         <canvas id="menu-scene-3d"></canvas>
         <div id="menu-vignette"></div>
+
+        <!-- ══ LANGUAGE / REGION SELECTOR (top-right) ══ -->
+        <div id="menu-lang">
+          <button id="menu-lang-btn" type="button" aria-haspopup="listbox" aria-expanded="false">
+            <img class="menu-lang-flag" id="menu-lang-current-flag" alt="" />
+            <span class="menu-lang-name" id="menu-lang-current-name">English</span>
+            <span class="menu-lang-caret">▾</span>
+          </button>
+          <ul id="menu-lang-menu" role="listbox" aria-label="Language"></ul>
+        </div>
 
         <!-- ══ HEADER (full-width, centered) ══ -->
         <div id="menu-header">
@@ -367,6 +427,105 @@ export class MenuScreen {
         this._continueGame();
       });
     }
+
+    // Language / region selector
+    this._buildLangSelector();
+  }
+
+  /**
+   * @private Build the top-right language/region selector. Each option carries
+   * a procedurally-painted flag swatch (same flag system as the EVA patch).
+   * Selecting a language persists it, repaints the astronaut's shoulder patch,
+   * and emits Events.LANGUAGE_CHANGED (consumed by GameFlowManager for the
+   * regional start orbit, and available to a future i18n string layer).
+   */
+  _buildLangSelector() {
+    const root = this.element.querySelector('#menu-lang');
+    const btn = this.element.querySelector('#menu-lang-btn');
+    const menu = this.element.querySelector('#menu-lang-menu');
+    if (!root || !btn || !menu) return;
+
+    // Procedural flag swatches as data-URLs (robust across platforms, unlike
+    // flag emoji which render as letters on some OSes).
+    const flagSystem = new FlagDecalSystem();
+    const swatchCache = {};
+    const swatchFor = (flagCode) => {
+      if (swatchCache[flagCode]) return swatchCache[flagCode];
+      const canvas = flagSystem.makeFlagCanvas(flagCode, 66, 45);
+      const url = canvas ? canvas.toDataURL('image/png') : '';
+      swatchCache[flagCode] = url;
+      return url;
+    };
+
+    const currentFlagImg = this.element.querySelector('#menu-lang-current-flag');
+    const currentName = this.element.querySelector('#menu-lang-current-name');
+
+    const refreshCurrent = () => {
+      const lang = settingsManager.getLanguageEntry();
+      if (currentFlagImg) { currentFlagImg.src = swatchFor(lang.flag); currentFlagImg.alt = lang.label; }
+      if (currentName) currentName.textContent = lang.native;
+      // Reflect selection state in the list
+      menu.querySelectorAll('li').forEach((li) => {
+        li.setAttribute('aria-selected', li.dataset.code === lang.code ? 'true' : 'false');
+      });
+    };
+
+    // Build option rows
+    menu.innerHTML = '';
+    for (const lang of LANGUAGES) {
+      const li = document.createElement('li');
+      li.setAttribute('role', 'option');
+      li.dataset.code = lang.code;
+      li.innerHTML = `
+        <img class="menu-lang-flag" src="${swatchFor(lang.flag)}" alt="" />
+        <span class="menu-lang-native">${lang.native}</span>
+        <span class="menu-lang-en">${lang.label}</span>
+      `;
+      li.addEventListener('click', () => {
+        audioSystem.playClick?.();
+        const changed = settingsManager.setLanguage(lang.code);
+        refreshCurrent();
+        this._closeLangMenu();
+        // Repaint the astronaut's shoulder patch immediately.
+        if (changed && this._menuScene3D) this._menuScene3D.setFlag(lang.flag);
+      });
+      menu.appendChild(li);
+    }
+
+    const toggle = (e) => {
+      e.stopPropagation();
+      root.classList.contains('open') ? this._closeLangMenu() : this._openLangMenu();
+    };
+    btn.addEventListener('click', toggle);
+
+    // Close on outside click / Escape
+    this._langOutsideHandler = (e) => {
+      if (!root.contains(e.target)) this._closeLangMenu();
+    };
+    this._langEscHandler = (e) => {
+      if (e.key === 'Escape') this._closeLangMenu();
+    };
+
+    this._langRoot = root;
+    refreshCurrent();
+  }
+
+  /** @private */
+  _openLangMenu() {
+    if (!this._langRoot) return;
+    this._langRoot.classList.add('open');
+    this._langRoot.querySelector('#menu-lang-btn')?.setAttribute('aria-expanded', 'true');
+    document.addEventListener('click', this._langOutsideHandler, true);
+    document.addEventListener('keydown', this._langEscHandler, true);
+  }
+
+  /** @private */
+  _closeLangMenu() {
+    if (!this._langRoot) return;
+    this._langRoot.classList.remove('open');
+    this._langRoot.querySelector('#menu-lang-btn')?.setAttribute('aria-expanded', 'false');
+    document.removeEventListener('click', this._langOutsideHandler, true);
+    document.removeEventListener('keydown', this._langEscHandler, true);
   }
 
   /** @private Handle keyboard when menu is visible */
@@ -432,6 +591,7 @@ export class MenuScreen {
     this.visible = false;
     this.element.style.opacity = '0';
     window.removeEventListener('keydown', this._boundKeyHandler);
+    this._closeLangMenu();
     // Stop 3D scene
     if (this._menuScene3D) this._menuScene3D.stop();
     setTimeout(() => {

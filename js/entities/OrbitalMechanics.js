@@ -213,9 +213,61 @@ export function cartesianToKeplerian(position, velocity, mu = Constants.MU_EARTH
 }
 
 // ============================================================================
-// ORBIT PROPAGATION
+// GROUND-TRACK PLACEMENT
 // ============================================================================
 
+/**
+ * Compute the RAAN + true anomaly that place a satellite's sub-satellite point
+ * (ground track) directly over a given geographic point at t=0.
+ *
+ * **Frame assumptions** (validated against this codebase):
+ *  - Orbit frame is Y-up (Y = polar axis) — see {@link keplerianToCartesian}.
+ *  - The visual Earth mesh does NOT rotate (no GMST applied to geometry), so the
+ *    ECI longitude equals the *negative* of the geographic east-longitude
+ *    because the equirectangular Earth texture is longitude-mirrored
+ *    (`mirrorLon` in main.js / CityLabels / StrategicMap).
+ *  - Circular orbit with argPerigee = 0 (the player's default).
+ *
+ * Sub-point latitude is bounded by inclination; if `|lat| > inclination` the
+ * latitude is clamped to the highest reachable parallel (true anomaly = ±90°).
+ *
+ * @param {number} latDeg        Target latitude, degrees north (negative = south)
+ * @param {number} lonEastDeg    Target longitude, degrees east (negative = west)
+ * @param {number} inclinationRad Orbit inclination (radians)
+ * @param {boolean} [ascending=true] Place on the northbound (ascending) pass
+ * @returns {{ raan: number, trueAnomaly: number }} radians, both in [0, 2π)
+ */
+export function subPointToOrbit(latDeg, lonEastDeg, inclinationRad, ascending = true) {
+  const TWO_PI = 2 * Math.PI;
+  const norm = (a) => ((a % TWO_PI) + TWO_PI) % TWO_PI;
+
+  const lat = latDeg * Math.PI / 180;
+  const inc = inclinationRad;
+  const sinInc = Math.sin(inc);
+
+  // ν such that lat = asin(sinInc · sinν); clamp when the parallel is above the
+  // orbit's reach (|lat| > inc).
+  let ratio = Math.abs(sinInc) < 1e-9 ? 0 : Math.sin(lat) / sinInc;
+  ratio = Math.max(-1, Math.min(1, ratio));
+  let nu = Math.asin(ratio);
+  if (!ascending) nu = Math.PI - nu;   // descending (southbound) branch
+
+  // Longitude of the sub-point relative to the ascending node, projected into
+  // the equatorial plane: u_proj = atan2(cosI·sinν, cosν).
+  const uProj = Math.atan2(Math.cos(inc) * Math.sin(nu), Math.cos(nu));
+
+  // ECI longitude is the mirror of geographic east-longitude (fixed Earth mesh).
+  const lonEci = -lonEastDeg * Math.PI / 180;
+
+  return {
+    raan: norm(lonEci - uProj),
+    trueAnomaly: norm(nu),
+  };
+}
+
+// ============================================================================
+// ORBIT PROPAGATION
+// ============================================================================
 /**
  * Propagate orbit by a time step using mean anomaly advancement.
  * Mutates the orbit object's trueAnomaly (and meanAnomaly if present).

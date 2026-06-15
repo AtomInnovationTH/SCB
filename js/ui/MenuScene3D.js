@@ -18,6 +18,22 @@ import { Constants } from '../core/Constants.js';   // FIX_PLAN §2-followup —
 // the menu can never drift from the sim. Any change to these models shows here.
 import { PlayerSatellite } from '../entities/PlayerSatellite.js';
 import { ArmUnit } from '../entities/ArmUnit.js';
+// EVA shoulder-patch flag is painted by the shared procedural flag system so the
+// menu can swap it to match the player's selected language (core/Languages.js).
+import { FlagDecalSystem } from './FlagDecalSystem.js';
+import { settingsManager } from '../systems/SettingsManager.js';
+import { getLanguage } from '../core/Languages.js';
+
+// Lazily-created singleton flag painter (Canvas2D). Reused for every patch
+// repaint — cheap, browser-only, and independent of the debris flag atlas.
+let _flagPainter = null;
+/** @returns {HTMLCanvasElement|null} a freshly painted flag canvas for `code`. */
+function flagCanvasFor(code) {
+  if (typeof document === 'undefined') return null;
+  if (!_flagPainter) _flagPainter = new FlagDecalSystem();
+  return _flagPainter.makeFlagCanvas(code);
+}
+
 
 // ─── Scale + hull anchors ────────────────────────────────────────────────────
 // The hero Mother is a real PlayerSatellite (built at the sim's 1-unit=100-km
@@ -156,8 +172,8 @@ function makeMaterials() {
     // Anodized bearing ring — muted aluminium, NOT chrome (used sparingly)
     suitRing:  new THREE.MeshStandardMaterial({ color: 0xb4b0a6, metalness: 0.35, roughness: 0.6 }),
     tool:      new THREE.MeshStandardMaterial({ color: 0x55565f, metalness: 0.6, roughness: 0.4 }),
-    thaiRed:   new THREE.MeshStandardMaterial({ color: 0xed1c24, metalness: 0.0, roughness: 0.9 }),
-    thaiBlue:  new THREE.MeshStandardMaterial({ color: 0x003893, metalness: 0.0, roughness: 0.85 }),
+    // Red EV-crew identification stripe (NASA EV1 marking on the thigh).
+    evRed:     new THREE.MeshStandardMaterial({ color: 0xed1c24, metalness: 0.0, roughness: 0.9 }),
   };
 }
 
@@ -260,7 +276,7 @@ function buildEVABoot(mat) {
   return boot;
 }
 
-function buildAstronaut(mat) {
+function buildAstronaut(mat, flagCode = 'USA') {
   const astro = new THREE.Group();
   astro.name = 'EVAAstronaut';
 
@@ -672,7 +688,7 @@ function buildAstronaut(mat) {
 
     // Red EV-crew identification stripe on the thigh (NASA EV1 marking)
     const idStripe = new THREE.Mesh(
-      new THREE.CylinderGeometry(M * 0.112, M * 0.106, M * 0.055, 14, 1, true), mat.thaiRed);
+      new THREE.CylinderGeometry(M * 0.112, M * 0.106, M * 0.055, 14, 1, true), mat.evRed);
     idStripe.position.y = -M * 0.27;
     idStripe.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
     legGroup.add(idStripe);
@@ -681,33 +697,54 @@ function buildAstronaut(mat) {
     astro.add(legGroup);
   }
 
-  // ── Thai flag — curved shoulder patch wrapped onto the left upper arm ──
-  // Proportions R:W:B:W:R = 1:1:2:1:1 (6 units). Built as concentric cylinder
-  // SEGMENTS so the patch hugs the arm instead of floating as a flat decal.
+  // ── National flag — curved shoulder patch wrapped onto the left upper arm ──
+  // The flag adjusts to the player's selected menu language (core/Languages.js
+  // → flag code). Rather than per-stripe geometry (which only suits horizontal
+  // tricolours like the old hardcoded Thai patch), the flag is painted to a
+  // canvas by FlagDecalSystem and mapped onto a single curved cylinder segment,
+  // so ANY flag design wraps the arm and can be swapped at runtime.
   const flagH = M * 0.085;
-  const fu    = flagH / 6;
-  const armR  = M * 0.076;                  // upper-arm radius near the patch (fattened arm)
+  const armR  = M * 0.076;                  // upper-arm radius near the patch
   const arc   = 1.6;                         // ~92° wrap, centred on the outer (−X) face
+  const thetaStart = 3 * Math.PI / 2 - arc / 2;
   const flagGroup = new THREE.Group();
   flagGroup.position.y = -M * 0.12;
-  const wrapBand = (material, yc, h, r, a, bias) => {
-    const seg = new THREE.Mesh(
-      new THREE.CylinderGeometry(r, r, h, 16, 1, true, 3 * Math.PI / 2 - a / 2, a), material);
-    seg.position.y = yc;
-    seg.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL + bias;
-    flagGroup.add(seg);
+
+  // Dark stitched border just beneath the field (slightly taller + wider arc)
+  const flagBorder = new THREE.Mesh(
+    new THREE.CylinderGeometry(armR * 0.996, armR * 0.996, flagH + M * 0.012, 20, 1, true,
+      3 * Math.PI / 2 - (arc * 1.14) / 2, arc * 1.14),
+    new THREE.MeshStandardMaterial({ color: 0x0b0b0b, roughness: 1, side: THREE.DoubleSide }));
+  flagBorder.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+  flagGroup.add(flagBorder);
+
+  // Flag field — procedural flag canvas mapped onto the curved segment. The
+  // cylinder's V (height) carries the flag's vertical axis and U (arc) its
+  // horizontal axis, so painted horizontal stripes wrap the arm as bands.
+  const flagTex = new THREE.CanvasTexture(flagCanvasFor(flagCode));
+  flagTex.colorSpace = THREE.SRGBColorSpace;
+  flagTex.wrapS = THREE.ClampToEdgeWrapping;
+  flagTex.wrapT = THREE.ClampToEdgeWrapping;
+  const flagField = new THREE.Mesh(
+    new THREE.CylinderGeometry(armR * 1.004, armR * 1.004, flagH, 24, 1, true, thetaStart, arc),
+    new THREE.MeshStandardMaterial({ map: flagTex, roughness: 0.85, metalness: 0.0,
+      side: THREE.DoubleSide }));
+  flagField.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL + 1;
+  flagGroup.add(flagField);
+
+  // Swap hook — lets the menu repaint the patch when the player picks a new
+  // language, without rebuilding the astronaut. Tracks the active code so the
+  // scene can no-op redundant sets.
+  astro.userData.flagCode = flagCode;
+  astro.userData.setFlagCode = (code) => {
+    if (code === astro.userData.flagCode) return;
+    const c = flagCanvasFor(code);
+    if (!c) return;
+    flagTex.image = c;
+    flagTex.needsUpdate = true;
+    astro.userData.flagCode = code;
   };
-  // Dark border (slightly taller + wider arc, just beneath the flag field)
-  wrapBand(new THREE.MeshStandardMaterial({ color: 0x0b0b0b, roughness: 1, side: THREE.DoubleSide }),
-           0, flagH + M * 0.012, armR * 0.996, arc * 1.14, 0);
-  // White field
-  wrapBand(new THREE.MeshStandardMaterial({ color: 0xf2f2f4, roughness: 0.85, side: THREE.DoubleSide }),
-           0, flagH, armR * 1.002, arc, 1);
-  // Red top + bottom stripes (1 unit each)
-  wrapBand(mat.thaiRed, +2.5 * fu, fu, armR * 1.004, arc, 2);
-  wrapBand(mat.thaiRed, -2.5 * fu, fu, armR * 1.004, arc, 2);
-  // Blue centre band (2 units)
-  wrapBand(mat.thaiBlue, 0, 2 * fu, armR * 1.004, arc, 2);
+
   lShoulder.add(flagGroup);   // child of arm group — rotates with the arm
 
   return astro;
@@ -1065,11 +1102,12 @@ export class MenuScene3D {
     // (chest toward the barrel). Nudged +5 cm to the astronaut's anatomical right
     // (−Z, since they face −X). Final placement is SNAPPED below so the tool tip
     // lands exactly on an aluminium strut hinge.
-    const astro = buildAstronaut(mat);
+    const astro = buildAstronaut(mat, getLanguage(settingsManager.getLanguage()).flag);
     astro.position.set(M * 0.97, -M * 0.21, M * 0.58);
     astro.rotation.y = -Math.PI / 2;   // local +Z → world -X (chest toward satellite)
     astro.rotation.z = 0.08;           // subtle micro-g tilt
     this._pivot.add(astro);
+    this._astro = astro;
     this._visorMat = astro.userData.visorMat || null;
 
     // Weld site — the astronaut welds a real ALUMINIUM strut hinge, NOT the gold
@@ -1187,6 +1225,18 @@ export class MenuScene3D {
     if (this._raf) {
       cancelAnimationFrame(this._raf);
       this._raf = null;
+    }
+  }
+
+  /**
+   * Update the astronaut's shoulder-patch flag (e.g. when the menu language
+   * changes). Safe to call before/after init and while paused — repaints the
+   * existing patch texture, no geometry rebuild.
+   * @param {string} flagCode — flag code understood by FlagDecalSystem
+   */
+  setFlag(flagCode) {
+    if (this._astro && this._astro.userData.setFlagCode) {
+      this._astro.userData.setFlagCode(flagCode);
     }
   }
 

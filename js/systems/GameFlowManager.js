@@ -20,7 +20,8 @@ import { targetSelector } from './TargetSelector.js';
 import { kesslerSystem } from './KesslerSystem.js';
 import { trawlManager } from './TrawlManager.js';
 import { launchSequence } from './LaunchSequence.js';
-import { orbitToSceneCartesian } from '../entities/OrbitalMechanics.js';
+import { orbitToSceneCartesian, subPointToOrbit } from '../entities/OrbitalMechanics.js';
+import { settingsManager } from './SettingsManager.js';
 import { VIEW_INFO_LEVELS } from '../ui/HUD.js';
 
 class GameFlowManager {
@@ -286,6 +287,7 @@ class GameFlowManager {
     // Menu → Start (skip briefing, go straight to orbital gameplay)
     eventBus.on(Events.MENU_START, () => {
       this.resetGame();
+      this._applyStartLocation();   // place ground track over the player's home region
       gameState.currentState = GameStates.MENU; // Allow transition from MENU
       persistenceManager.deleteSave(); // New Game clears any existing save
       // ST-9.11 C-5: Start launch sequence on new game (flag-gated)
@@ -299,6 +301,7 @@ class GameFlowManager {
     // Menu → Fast Start (same as start — both skip briefing now)
     eventBus.on(Events.MENU_FAST_START, () => {
       this.resetGame();
+      this._applyStartLocation();   // place ground track over the player's home region
       gameState.currentState = GameStates.MENU;
       persistenceManager.deleteSave(); // New Game clears any existing save
       // ST-9.11 C-5: Start launch sequence on new game (flag-gated)
@@ -1204,6 +1207,30 @@ class GameFlowManager {
   // ==========================================================================
   // GAME RESET
   // ==========================================================================
+
+  /**
+   * Place the player's starting orbit so its ground track passes over the home
+   * region of the selected menu language (e.g. Japanese → over Japan, Thai →
+   * over Thailand). Only RAAN + true anomaly are set — inclination stays at the
+   * 51.6° ISS band, which already covers every supported start city's latitude,
+   * so debris-field ΔV tuning is undisturbed. Called on New Game after
+   * resetGame() (which zeroes trueAnomaly).
+   */
+  _applyStartLocation() {
+    const { player } = this._refs;
+    if (!player || !player.orbit) return;
+    const lang = settingsManager.getLanguageEntry();
+    const start = lang && lang.start;
+    if (!start) return;
+
+    // Keep the canonical 51.6° inclination (matches PlayerSatellite ctor + the
+    // debris inclination clusters); only re-phase RAAN + true anomaly.
+    const inclination = 51.6 * Math.PI / 180;
+    const { raan, trueAnomaly } = subPointToOrbit(start.lat, start.lon, inclination);
+    player.orbit.inclination = inclination;
+    player.orbit.raan = raan;
+    player.orbit.trueAnomaly = trueAnomaly;
+  }
 
   /** Reset game state for new attempt */
   resetGame() {

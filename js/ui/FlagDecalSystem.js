@@ -208,28 +208,60 @@ export class FlagDecalSystem {
     const fw = w - pad * 2;
     const fh = h - pad * 2;
 
-    switch (code) {
-      case 'USA': this._paintUSA(ctx, fx, fy, fw, fh); break;
-      case 'CIS': this._paintCIS(ctx, fx, fy, fw, fh); break;
-      case 'PRC': this._paintPRC(ctx, fx, fy, fw, fh); break;
-      case 'JPN': this._paintJPN(ctx, fx, fy, fw, fh); break;
-      case 'IND': this._paintIND(ctx, fx, fy, fw, fh); break;
-      case 'ESA': this._paintESA(ctx, fx, fy, fw, fh); break;
-      case 'FRA': this._paintFRA(ctx, fx, fy, fw, fh); break;
-      case 'GBR': this._paintGBR(ctx, fx, fy, fw, fh); break;
-      case 'ISS': this._paintISS(ctx, fx, fy, fw, fh); break;
-      case 'DEU': this._paintDEU(ctx, fx, fy, fw, fh); break;
-      case 'ITA': this._paintITA(ctx, fx, fy, fw, fh); break;
-      case 'CAN': this._paintCAN(ctx, fx, fy, fw, fh); break;
-      case 'BRA': this._paintBRA(ctx, fx, fy, fw, fh); break;
-      case 'KOR': this._paintKOR(ctx, fx, fy, fw, fh); break;
-      case 'ISR': this._paintISR(ctx, fx, fy, fw, fh); break;
-      default:    this._paintUnknown(ctx, fx, fy, fw, fh); break;
-    }
+    this._drawFlagArt(ctx, code, fx, fy, fw, fh);
 
     // Decal placard frame so the flag reads as a riveted plate bonded to the
     // hull (NASA/ESA style), not a floating banner. Drawn over the flag art.
     this._paintDecalFrame(ctx, fx, fy, fw, fh);
+  }
+
+  /**
+   * @private Pure flag artwork dispatch (no placard frame). Shared by the debris
+   * atlas (`_paintFlag`) and the standalone EVA shoulder-patch texture
+   * (`makeFlagCanvas`). Supports a couple of codes beyond the 16-slot atlas
+   * (THA, ESP) used only for the player's suit patch.
+   */
+  _drawFlagArt(ctx, code, x, y, w, h) {
+    switch (code) {
+      case 'USA': this._paintUSA(ctx, x, y, w, h); break;
+      case 'CIS': this._paintCIS(ctx, x, y, w, h); break;
+      case 'PRC': this._paintPRC(ctx, x, y, w, h); break;
+      case 'JPN': this._paintJPN(ctx, x, y, w, h); break;
+      case 'IND': this._paintIND(ctx, x, y, w, h); break;
+      case 'ESA': this._paintESA(ctx, x, y, w, h); break;
+      case 'FRA': this._paintFRA(ctx, x, y, w, h); break;
+      case 'GBR': this._paintGBR(ctx, x, y, w, h); break;
+      case 'ISS': this._paintISS(ctx, x, y, w, h); break;
+      case 'DEU': this._paintDEU(ctx, x, y, w, h); break;
+      case 'ITA': this._paintITA(ctx, x, y, w, h); break;
+      case 'CAN': this._paintCAN(ctx, x, y, w, h); break;
+      case 'BRA': this._paintBRA(ctx, x, y, w, h); break;
+      case 'KOR': this._paintKOR(ctx, x, y, w, h); break;
+      case 'ISR': this._paintISR(ctx, x, y, w, h); break;
+      case 'THA': this._paintTHA(ctx, x, y, w, h); break;
+      case 'ESP': this._paintESP(ctx, x, y, w, h); break;
+      default:    this._paintUnknown(ctx, x, y, w, h); break;
+    }
+  }
+
+  /**
+   * Render a SINGLE flag to a standalone canvas (no riveted decal frame), for
+   * use as a texture map elsewhere — e.g. the astronaut's curved shoulder
+   * patch. Browser-only (returns null under Node).
+   *
+   * @param {string} code — flag code (USA/IND/JPN/THA/ESP/…)
+   * @param {number} [w=96]  canvas width  (landscape ~3:2 reads best)
+   * @param {number} [h=64]  canvas height
+   * @returns {HTMLCanvasElement|null}
+   */
+  makeFlagCanvas(code, w = 96, h = 64) {
+    if (typeof document === 'undefined') return null;
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    this._drawFlagArt(ctx, code, 0, 0, w, h);
+    return canvas;
   }
 
   /** @private Riveted placard frame + edge shading to sell "painted on hardware" */
@@ -506,6 +538,34 @@ export class FlagDecalSystem {
     ctx.lineTo(cx + sr * 0.866, cy - sr * 0.5);
     ctx.closePath();
     ctx.stroke();
+  }
+
+  /** Thailand (Trairanga): 5 horizontal bands red/white/blue/white/red (1:1:2:1:1) */
+  _paintTHA(ctx, x, y, w, h) {
+    const u = h / 6;                 // band unit
+    ctx.fillStyle = '#A51931'; ctx.fillRect(x, y, w, u + 1);             // red top
+    ctx.fillStyle = '#F4F5F8'; ctx.fillRect(x, y + u, w, u + 1);         // white
+    ctx.fillStyle = '#2D2A4A'; ctx.fillRect(x, y + u * 2, w, u * 2 + 1); // blue (2u)
+    ctx.fillStyle = '#F4F5F8'; ctx.fillRect(x, y + u * 4, w, u + 1);     // white
+    ctx.fillStyle = '#A51931'; ctx.fillRect(x, y + u * 5, w, u + 1);     // red bottom
+  }
+
+  /** Spain: red/yellow/red horizontal bands (1:2:1) + simplified crest block */
+  _paintESP(ctx, x, y, w, h) {
+    const band = h / 4;
+    ctx.fillStyle = '#AA151B'; ctx.fillRect(x, y, w, band + 1);              // red top
+    ctx.fillStyle = '#F1BF00'; ctx.fillRect(x, y + band, w, band * 2 + 1);  // yellow (2u)
+    ctx.fillStyle = '#AA151B'; ctx.fillRect(x, y + band * 3, w, band + 1);  // red bottom
+    // Simplified coat-of-arms hint: a small red/gold shield on the hoist side
+    const sw = w * 0.14;
+    const sh = h * 0.34;
+    const sx = x + w * 0.28 - sw / 2;
+    const sy = y + h / 2 - sh / 2;
+    ctx.fillStyle = '#AD1519';
+    ctx.fillRect(sx, sy, sw, sh);
+    ctx.strokeStyle = '#C8961E';
+    ctx.lineWidth = Math.max(1, w * 0.015);
+    ctx.strokeRect(sx, sy, sw, sh);
   }
 
   /** Unknown: grey field + white "?" text */
