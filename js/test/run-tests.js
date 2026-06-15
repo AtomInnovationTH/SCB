@@ -82,6 +82,7 @@ import './test-MissionEvents.js';
 // ST-5.3: Earth texture LOD selector + Camera FOV constants
 import './test-EarthLOD.js';
 import './test-CameraFOV.js';
+import './test-CameraView.js';   // 2026-06-15 — V-key 2-cycle (FLY ↔ LOOK AROUND) + badge
 
 // ST-5.4: NavSphere stalks, lock-on ring, geolocation, velocity arrows
 import './test-NavSphere.js';

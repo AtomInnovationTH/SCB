@@ -1,7 +1,10 @@
 /**
  * CameraSystem.js — Multi-view camera system
- * 4 views: Command (chase, default), Tactical (target lock), Overview (orbit), Cockpit (first person)
- * V key cycles: Command → Tactical → Overview.
+ * V key toggles two named views: FLY (chase, default) ↔ LOOK AROUND (orbit).
+ * Close inspection is NOT a separate cycle stop — it engages automatically as a
+ * zoom sub-state of LOOK AROUND (Schmitt-trigger on distance). Other views
+ * (cockpit, target lock, arm pilot, net cinematic) are entered by their own
+ * bindings.
  * Smooth transitions via position/lookAt lerp.
  * @module systems/CameraSystem
  */
@@ -32,34 +35,32 @@ export const CameraViews = {
 /**
  * View cycling order driven by the V key.
  *
- * 2026-06-13b (hotkey cleanup): INSPECTION is back in the cycle as the third
- * step. The bare-I shortcut was removed, so V is now the single path to close
- * inspection:
- *   COMMAND (fly the ship) → OVERVIEW (pull back, look around) → INSPECTION
- *   (close vantage + hull/debris callouts) → COMMAND.
- * The INSPECTION step is NOT entered with a plain setView() — cycleView() routes
- * it through enterInspection() so the narrow FOV, dynamic near-plane, vignette
- * and contextual wireframe overlay all engage (the player sees callouts at once,
- * exactly where bare-I used to land). A Tab-locked debris focuses the debris
- * wireframe; otherwise the mothership.
+ * 2026-06-15 (2-cycle revamp): V toggles just two named views —
+ *   FLY (fly the ship) ↔ LOOK AROUND (pull back, orbit the camera, study the
+ *   field). This re-aligns the cycle with the onboarding copy, which already
+ *   teaches a two-view model.
  *
- * Zooming in while in OVERVIEW still auto-enters the same inspection sub-state
- * (Schmitt-trigger on distance) — that path is unchanged. FIRST_PERSON,
- * ARM_PILOT and NET_CINEMATIC remain outside the cycle (entered by their own
- * bindings).
+ * Close inspection is NOT a cycle stop: zooming in while in LOOK AROUND
+ * auto-enters an inspection sub-state (Schmitt-trigger on distance) that engages
+ * the narrow FOV, dynamic near-plane, vignette and contextual wireframe overlay.
+ * A Tab-locked debris focuses the debris wireframe; otherwise the mothership.
+ *
+ * The discrete INSPECTION view + the legacy bare-I / toggleInspection() path
+ * remain available (entered via enterInspection()); pressing V from there wraps
+ * back to FLY. FIRST_PERSON, ARM_PILOT and NET_CINEMATIC remain outside the
+ * cycle (entered by their own bindings).
  */
 const VIEW_CYCLE = [
-  CameraViews.CHASE,          // COMMAND (default)
-  CameraViews.ORBIT,          // OVERVIEW (zoom in here to inspect the mothership)
-  CameraViews.INSPECTION,     // INSPECTION (close vantage + callouts; via enterInspection)
+  CameraViews.CHASE,          // FLY (default)
+  CameraViews.ORBIT,          // LOOK AROUND (zoom in here to inspect the mothership)
 ];
 
 /** Human-readable labels for HUD display */
 const VIEW_LABELS = {
   [CameraViews.FIRST_PERSON]: '🎯 COCKPIT',
-  [CameraViews.CHASE]:        '🛰 COMMAND',
+  [CameraViews.CHASE]:        '🛰 FLY',
   [CameraViews.TARGET_LOCK]:  '🔒 TACTICAL',
-  [CameraViews.ORBIT]:        '🌍 OVERVIEW',
+  [CameraViews.ORBIT]:        '🔭 LOOK AROUND',
   [CameraViews.ARM_PILOT]:    '🤖 DAUGHTER PILOT',
   [CameraViews.INSPECTION]:   '🔍 INSPECTION',
   [CameraViews.NET_CINEMATIC]: '🎬 NET CINEMATIC',
@@ -303,6 +304,10 @@ export class CameraSystem {
     // ========================================================================
     this._viewIndicator = null;
     this._viewIndicatorTimer = 0;
+    /** @type {boolean} When true the indicator stays on screen (no fade) —
+     * used for non-default views so the player never loses track of being
+     * in LOOK AROUND. Cleared when returning to the default FLY view. */
+    this._viewIndicatorPersistent = false;
     this._createViewIndicator();
     this._inspectionVignette = null;
     this._createInspectionVignette();
@@ -356,21 +361,23 @@ export class CameraSystem {
   // ==========================================================================
 
   /**
-   * Advance the camera view (V key): COMMAND → OVERVIEW → INSPECTION → COMMAND.
+   * Toggle the camera view (V key): FLY ↔ LOOK AROUND.
    *
-   * 2026-06-13b: INSPECTION is the third cycle step (the bare-I shortcut was
-   * removed). Reaching it routes through enterInspection() so the close vantage,
-   * narrow FOV and contextual callouts engage immediately. Pressing V again from
-   * INSPECTION wraps back to COMMAND and restores optics/overlay.
+   * 2026-06-15 (2-cycle): close inspection is no longer a cycle stop — it
+   * engages automatically by zooming in while in LOOK AROUND. The discrete
+   * INSPECTION view is still reachable via the legacy bare-I / toggleInspection()
+   * path; pressing V from there wraps back to FLY and restores optics/overlay.
    *
    * @param {string|number|null} [lockedId] - The currently Tab-locked debris id
-   *   (or null). Passed in by the caller from its injected targetSelector so
-   *   CameraSystem stays free of the targetSelector singleton dependency.
+   *   (or null). Accepted for API stability with the V-key caller; no longer used
+   *   directly now that INSPECTION left the cycle.
    */
   cycleView(lockedId = null) {
+    void lockedId; // retained for caller API stability (INSPECTION left the cycle)
     const cur = this.currentView;
 
-    // From INSPECTION, V wraps back to COMMAND (restores optics/overlay).
+    // From the legacy discrete INSPECTION view, V wraps back to FLY (restores
+    // optics/overlay).
     if (cur === CameraViews.INSPECTION) {
       this.exitInspection(CameraViews.CHASE);
       return;
@@ -379,16 +386,6 @@ export class CameraSystem {
     const currentIdx = VIEW_CYCLE.indexOf(cur);
     const nextIdx = (currentIdx + 1) % VIEW_CYCLE.length;
     const next = VIEW_CYCLE[nextIdx];
-
-    // INSPECTION must be entered via enterInspection() (not a plain setView) so
-    // FOV / near-plane / vignette / wireframe overlay all engage and the player
-    // sees callouts at once — the slot the bare-I shortcut used to fill. A
-    // Tab-locked debris focuses the debris wireframe; else the mothership.
-    if (next === CameraViews.INSPECTION) {
-      this.enterInspection(lockedId != null ? 'debris' : 'mother', lockedId);
-      return;
-    }
-
     this.setView(next);
   }
 
@@ -457,6 +454,14 @@ export class CameraSystem {
     const isArmPilotTransition = view === CameraViews.ARM_PILOT || this._previousView === CameraViews.ARM_PILOT;
     if (!isArmPilotTransition) {
       this._showViewIndicator(view);
+    } else {
+      // ARM_PILOT uses its own controls strip, not the camera view indicator.
+      // Force-clear the indicator so a persistent badge (e.g. "🔭 LOOK AROUND ·
+      // [V] to fly", set when LOOK AROUND was entered) doesn't linger on screen
+      // through the entire piloting session.
+      this._viewIndicatorPersistent = false;
+      this._viewIndicatorTimer = 0;
+      this._hideViewIndicator();
     }
 
     // Diagnostic vignette — fade in only for the INSPECT view.
@@ -667,8 +672,10 @@ export class CameraSystem {
       this.camera.position.z += (Math.random() - 0.5) * 2 * intensity;
     }
 
-    // Update view indicator timer
-    if (this._viewIndicatorTimer > 0) {
+    // Update view indicator timer (skipped while the indicator is persistent —
+    // non-default views keep the badge on screen so the player never loses
+    // track of being in LOOK AROUND).
+    if (!this._viewIndicatorPersistent && this._viewIndicatorTimer > 0) {
       this._viewIndicatorTimer -= dt;
       if (this._viewIndicatorTimer <= 0) {
         this._hideViewIndicator();
@@ -2016,9 +2023,11 @@ export class CameraSystem {
    * Enter INSPECTION mode — narrow FOV, close-range orbit around the spacecraft,
    * plus a contextual wireframe overlay (mother / debris / daughter).
    *
-   * This is the single entry point for inspection: it emits INSPECTION_TOGGLE
-   * exactly once so the wireframe panels show, then transitions optics. The V
-   * cycle and the bare-I shortcut both route through here (no double-toggle).
+   * This is the single entry point for the discrete inspection view: it emits
+   * INSPECTION_TOGGLE exactly once so the wireframe panels show, then transitions
+   * optics. Reached via the legacy bare-I / toggleInspection() path (the V cycle
+   * no longer routes here — close inspection engages as a LOOK AROUND zoom
+   * sub-state instead).
    *
    * @param {('mother'|'debris'|'daughter')} [subject='mother'] overlay to focus.
    * @param {number|null} [targetId=null] debris id (for the 'debris' subject).
@@ -2058,7 +2067,7 @@ export class CameraSystem {
    * Exit INSPECTION mode — restore FOV/near-plane, hide the overlay, and return
    * to the requested view (defaults to the view active before inspection).
    * @param {string} [returnTo] a CameraViews value; falls back to _previousView
-   *   then CHASE. The V cycle passes CHASE so inspection wraps to COMMAND.
+   *   then CHASE. cycleView() passes CHASE so V from inspection wraps to FLY.
    */
   exitInspection(returnTo) {
     if (this.currentView !== CameraViews.INSPECTION) return;
@@ -2080,7 +2089,7 @@ export class CameraSystem {
     this._inspectSubject = null;
 
     // Default return view. Bare-I / ESC fall back to the prior view (usually
-    // COMMAND); the V cycle passes CHASE explicitly to wrap to COMMAND.
+    // FLY); cycleView() passes CHASE explicitly so V wraps back to FLY.
     const dest = returnTo || this._previousView || CameraViews.CHASE;
     this.setView(dest);
   }
@@ -2487,10 +2496,29 @@ export class CameraSystem {
   /** @private Show the view indicator with a label */
   _showViewIndicator(view) {
     if (!this._viewIndicator) return;
-    const keyHint = view === CameraViews.ARM_PILOT ? '[1-4]' : '[V]';
-    this._viewIndicator.textContent = `${VIEW_LABELS[view]}  ${keyHint}`;
+
+    // The default FLY view fades after 2.5s (unobtrusive). Any other view keeps
+    // the badge on screen with a "[V] to fly" return hint so the player can't
+    // get stuck in LOOK AROUND (or the legacy INSPECTION view) unknowingly.
+    const isDefault = view === CameraViews.CHASE;
+
+    if (view === CameraViews.ARM_PILOT) {
+      this._viewIndicator.textContent = `${VIEW_LABELS[view]}  [1-4]`;
+    } else if (isDefault) {
+      this._viewIndicator.textContent = `${VIEW_LABELS[view]}  [V]`;
+    } else {
+      this._viewIndicator.textContent = `${VIEW_LABELS[view]} · [V] to fly`;
+    }
+
     this._viewIndicator.style.opacity = '1';
-    this._viewIndicatorTimer = 2.5; // Show for 2.5 seconds
+
+    if (isDefault) {
+      this._viewIndicatorPersistent = false;
+      this._viewIndicatorTimer = 2.5; // fade out after 2.5 seconds
+    } else {
+      this._viewIndicatorPersistent = true; // stays until we return to FLY
+      this._viewIndicatorTimer = 0;
+    }
   }
 
   /** @private Fade out the view indicator */

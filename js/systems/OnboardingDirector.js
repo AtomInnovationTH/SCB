@@ -79,40 +79,40 @@ export const ONBOARDING_BEATS = [
   },
   {
     id: 'view',
-    commsSource: 'HOUSTON', commsText: 'Press V to switch view. Command flies the ship; Overview pulls back. V again returns to Command.',
-    commsAck: 'Copy. V toggles Command and Overview.',
+    commsSource: 'HOUSTON', commsText: 'Press V to switch view. Fly pilots the ship; Look Around pulls back. V again returns to Fly.',
+    commsAck: 'Copy. V toggles Fly and Look Around.',
     text: 'Switch camera (V)',
     glyph: 'V',
     keys: ['KeyV'],
     triggerEvent: 'CAMERA_VIEW_CHANGE',
     // 2026-06-03 consolidation (rev. 2): V now toggles just two named views —
-    // Command (fly) ↔ Overview (look around / zoom in). Close inspection is no
+    // Fly (chase) ↔ Look Around (look around / zoom in). Close inspection is no
     // longer a third cycle slot; it engages automatically when the player zooms
-    // in far enough while in Overview (taught by the `zoom` beat below). Bare I
-    // is retained as an undocumented power-user shortcut for the discrete
+    // in far enough while in Look Around (taught by the `zoom` beat below). Bare
+    // I is retained as an undocumented power-user shortcut for the discrete
     // inspection view + debris/arm contextual wireframes.
     skillId: 'nav_camera',
     credit: 10,
     optional: true,                       // skippable after 25s
     skipAfter: 25000,
-    escalationText: 'V toggles Command and Overview. Command flies; Overview looks around and zooms. V again to fly.',
+    escalationText: 'V toggles Fly and Look Around. Fly pilots; Look Around looks around and zooms. V again to fly.',
   },
   {
     id: 'look',
-    commsSource: 'HOUSTON', commsText: 'In Overview, click and drag to look around the spacecraft.',
+    commsSource: 'HOUSTON', commsText: 'In Look Around, click and drag to study the spacecraft.',
     commsAck: 'Copy. Free look enabled.',
     text: 'Click + drag to look around',
     glyph: '🖱️ drag',
     keys: [],
     triggerEvent: 'CAMERA_ORBIT_DRAG',
-    // New beat (2026-06-03): teaches the existing Overview drag-look, which had
+    // New beat (2026-06-03): teaches the existing Look Around drag-look, which had
     // no prompt. Fires on the first CAMERA_ORBIT_DRAG. Optional so a player who
     // already discovered it isn't blocked. Maps to the nav_rotate skill.
     skillId: 'nav_rotate',
     credit: 10,
     optional: true,
     skipAfter: 20000,
-    escalationText: 'Hold the left mouse button and drag in Overview to orbit the camera.',
+    escalationText: 'Hold the left mouse button and drag in Look Around to orbit the camera.',
   },
   {
     id: 'zoom',
@@ -143,7 +143,7 @@ export const ONBOARDING_BEATS = [
     triggerEvent: 'MOTHER_INSPECTION_ENGAGED',
     skillId: 'inspect_mother',
     credit: 10,
-    escalationText: 'In Overview, keep scrolling in toward the mothership. Within a few metres her callouts and focus vignette fade in. Pull back out to clear them.',
+    escalationText: 'In Look Around, keep scrolling in toward the mothership. Within a few metres her callouts and focus vignette fade in. Pull back out to clear them.',
   },
   {
     id: 'scan',

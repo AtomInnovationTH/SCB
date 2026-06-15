@@ -33,7 +33,7 @@ const HOTKEY_GROUPS = [
     icon: '🛰',
     rows: [
       [['↑ ↓ ← →'], 'Rotate'],
-      [['V'], 'View'],
+      [['V'], 'View — fly / look around'],
       [['S'], 'Scan'],
       [['T'], 'Target debris'],
       [['A'], 'Autopilot to target'],
@@ -54,7 +54,7 @@ const HOTKEY_GROUPS = [
     title: 'Daughter',
     rows: [
       [['↑ ↓ ← →'], 'Rotate around debris'],
-      [['V'], 'View'],
+      [['V'], 'View — fly / look around'],
       [['S'], 'Scan'],
       [['T'], 'Target debris with tools'],
       [['A'], 'Autopilot to target'],

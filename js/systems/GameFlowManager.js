@@ -1448,7 +1448,7 @@ class GameFlowManager {
     // UX: Confirm deployment via comms (ARM_PILOT is auto-entered by InputManager)
     if (deployed) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: 'Daughter deployed. Arrow keys to steer; press its number again (or V) to back out to Command view',
+        text: 'Daughter deployed. Arrow keys to steer; press its number again (or V) to back out to Fly view',
         source: 'SYSTEM',
         channel: 'CMD',
         priority: 'info',

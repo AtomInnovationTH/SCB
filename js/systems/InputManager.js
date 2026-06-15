@@ -611,11 +611,13 @@ export class InputManager {
         }
         break;
 
-      // Camera view cycling (V key) / Strategic Map (Shift+V).
-      // Hotkey revamp 2026-06-14: V now cycles the camera in BOTH mother and
+      // Camera view toggle (V key) / Strategic Map (Shift+V).
+      // 2026-06-15 (2-cycle): V toggles FLY ↔ LOOK AROUND in BOTH mother and
       // daughter (ARM_PILOT) modes — the menu lists "View" as a daughter verb
-      // too. Backing out of piloting is done by re-pressing the active digit or
-      // pressing Esc (the old "V exits pilot" special-case was removed).
+      // too. Close inspection is no longer a cycle stop; it engages by zooming
+      // in while in LOOK AROUND. Backing out of piloting is done by re-pressing
+      // the active digit or pressing Esc (the old "V exits pilot" special-case
+      // was removed).
       case 'KeyV':
         if (isGameplay) {
           if (e.shiftKey) {
