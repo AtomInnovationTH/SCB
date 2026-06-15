@@ -216,7 +216,7 @@ export class MenuScreen {
 
             <!-- Kessler syndrome -->
             <details class="adr-group">
-              <summary>Kessler syndrome<span class="adr-count">1978</span></summary>
+              <summary>Kessler syndrome<span class="adr-count">4</span></summary>
               <ul class="adr-list">
               <li style="color:rgba(0,255,136,0.72); padding-left:0; margin-bottom:0.35rem;">Proposed by NASA's Donald Kessler in 1978: once orbital junk gets dense enough, each collision throws off fragments that cause more collisions. A runaway cascade that can make whole orbits unusable for generations. Every dead satellite left up there raises the odds.</li>
               <li><span class="adr-name" title="China destroyed its own Fengyun-1C weather satellite with a missile at ~865 km. The worst single debris event in history, and most of those fragments will linger for decades.">2007. Chinese anti-satellite test</span> <span class="adr-sub">3,000+ pieces</span></li>
@@ -301,6 +301,14 @@ export class MenuScreen {
                 <li><span class="adr-name" title="Advanced Maui Optical and Space Surveillance Technologies conference. The premier technical event for space-tracking and space domain awareness.">AMOS Conference</span> <span class="adr-sub">Maui · Sep</span></li>
                 <li><span class="adr-name" title="The 77th International Astronautical Congress. The world's largest space gathering (6,000+ delegates), with major debris and sustainability tracks.">Int'l Astronautical Congress</span> <span class="adr-sub">Antalya · Oct</span></li>
                 <li><span class="adr-name" title="Secure World Foundation's flagship policy event on keeping orbit usable. The 8th edition, in Brasília, Brazil (November 2026).">Summit for Space Sustainability</span> <span class="adr-sub">Brasília · Nov</span></li>
+                </ul>
+              </details>
+
+              <details class="adr-group">
+                <summary>Rawhide<span class="adr-count">2</span></summary>
+                <ul class="adr-list">
+                <li style="color:rgba(0,255,136,0.72); padding-left:0; margin-bottom:0.35rem;"><em>&ldquo;Rollin', rollin', rollin'&hellip; <strong>Rawhide!</strong>&rdquo;</em></li>
+                <li><a class="adr-name" href="https://www.perplexity.ai/search/b8b73b32-67ff-4ae8-9930-22e451aae625?sm=v" target="_blank" rel="noopener noreferrer" style="color:#00ccff;" title="The Good Ole Boys / chicken-wire bar scene from The Blues Brothers (1980)">▶ The Blues Brothers &mdash; &ldquo;Rawhide&rdquo;</a></li>
                 </ul>
               </details>
             </div>

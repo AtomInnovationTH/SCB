@@ -1833,7 +1833,7 @@ export class DebrisWireframe {
       const n = Math.max(1, Math.min(3, rows.length || 1));
       ctx.fillStyle = '#ffcc00';
       ctx.font = "bold 10px 'Courier New', monospace";
-      ctx.fillText('\u26CF SALVAGE \u2014 ENCRYPTED', WIRE_CX, y);
+      ctx.fillText('\u26CF METALS \u2014 UNKNOWN', WIRE_CX, y);
       y += 12;
       ctx.font = "10px 'Courier New', monospace";
       ctx.fillStyle = 'rgba(255, 204, 0, 0.4)';
