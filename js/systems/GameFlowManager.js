@@ -516,7 +516,7 @@ class GameFlowManager {
 
       // Comms notification
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: 'Continuing mission — upgrades retained, 50% credit penalty applied',
+        text: 'Continuing mission. Upgrades retained, 50% credit penalty applied',
         priority: 'high',
       });
 
@@ -678,7 +678,7 @@ class GameFlowManager {
     eventBus.on(Events.CATCH_BREAKDOWN_START, (data) => {
       eventBus.emit(Events.COMMS_SEND, {
         source: (data.armId || 'DAUGHTER').toUpperCase(),
-        text: `Chopping the catch for the furnace — feeding ${data.chunkCount || 5} sections`,
+        text: `Chopping the catch for the furnace. Feeding ${data.chunkCount || 5} sections`,
         priority: 'INFO',
       });
     });
@@ -732,7 +732,7 @@ class GameFlowManager {
         // Comms notification (via EventBus — CommsSystem self-manages)
         eventBus.emit(Events.COMMS_SEND, {
           source: (data.armId || 'DAUGHTER').toUpperCase(),
-          text: 'Catch fully processed — salvage in the bin',
+          text: 'Catch fully processed. Salvage in the bin',
           priority: 'INFO',
         });
 
@@ -808,7 +808,7 @@ class GameFlowManager {
             const liAmount = salvage.lithium * refineryMult;
             resourceSystem.addLithium(liAmount);
             eventBus.emit(Events.COMMS_MESSAGE, {
-              text: `⚗ Lithium salvaged — +${liAmount.toFixed(1)} units (MPD propellant)`,
+              text: `⚗ Lithium salvaged. +${liAmount.toFixed(1)} units (MPD propellant)`,
               priority: 'good',
             });
           }
@@ -898,7 +898,7 @@ class GameFlowManager {
         if (debrisCount > 0 && debrisCount % SHOP_INTERVAL === 0) {
           if (gameState.isGameplay()) {
             eventBus.emit(Events.COMMS_MESSAGE, {
-              text: `${debrisCount} debris cleared — return to depot for resupply`,
+              text: `${debrisCount} debris cleared. Return to depot for resupply`,
               priority: 'high',
             });
             this._shopTimeoutId = timerManager.setTimeout(() => {
@@ -972,7 +972,7 @@ class GameFlowManager {
 
       // Comms: report ΔV and perigee lowering
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `\u0394V burn: ${deorbitDV.toFixed(1)} m/s — perigee lowered ~${perigeeDropKm.toFixed(0)} km`,
+        text: `\u0394V burn: ${deorbitDV.toFixed(1)} m/s. Perigee lowered ~${perigeeDropKm.toFixed(0)} km`,
         priority: 'info',
       });
 
@@ -996,7 +996,7 @@ class GameFlowManager {
         credits: scoringSystem.credits,
         delta: penalty,
       });
-      console.log(`[GameFlow] Arm ${data.armId} lost — penalty ${penalty}`);
+      console.log(`[GameFlow] Arm ${data.armId} lost. Penalty ${penalty}`);
     });
 
     // Debris removed externally — DebrisWireframe self-clears via DEBRIS_REMOVED listener (Batch 3)
@@ -1043,14 +1043,14 @@ class GameFlowManager {
     eventBus.on(Events.TRAWL_TARGET_ENTERING, ({ type, mass }) => {
       const typeName = type || 'debris';
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `Target entering range — ${typeName}${mass ? ', ' + mass.toFixed(0) + ' kg' : ''}`,
+        text: `Target entering range. ${typeName}${mass ? ', ' + mass.toFixed(0) + ' kg' : ''}`,
         priority: 'info',
       });
     });
 
     eventBus.on(Events.TRAWL_TARGET_WINDOW_CLOSING, () => {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: 'Target window closing — capture now or lose it!',
+        text: 'Target window closing. Capture now or lose it!',
         priority: 'warning',
       });
     });
@@ -1140,7 +1140,7 @@ class GameFlowManager {
         this._firstTimeComms.add('first_net_physics');
         eventBus.emit(Events.COMMS_MESSAGE, {
           source: 'SCI', channel: 'SCI',
-          text: 'DISCOVERY: Watch the net slow as it blossoms — no brakes involved. Angular momentum is conserved: the mouth opening grows its inertia (I ∝ r²), so spin falls. The yo-yo despin. Codex [L] updated.',
+          text: 'DISCOVERY: Watch the net slow as it blossoms. No brakes involved. Angular momentum is conserved: the mouth opening grows its inertia (I ∝ r²), so spin falls. The yo-yo despin. Codex [L] updated.',
           priority: 'info',
         });
       }
@@ -1177,7 +1177,7 @@ class GameFlowManager {
               this._firstTimeComms.add('drift_recovery');
               eventBus.emit(Events.COMMS_MESSAGE, {
                 sender: 'SPACECRAFT',
-                text: 'Target drifting — press A to re-approach.',
+                text: 'Target drifting. Press A to re-approach.',
                 priority: 'info',
               });
             }
@@ -1192,7 +1192,7 @@ class GameFlowManager {
         this._firstTimeComms.add('first_capture');
         eventBus.emit(Events.COMMS_MESSAGE, {
           sender: 'HOUSTON',
-          text: 'Got it! Press Tab for next target.',
+          text: 'Got it! Press T for next target.',
           priority: 'info',
         });
       }
@@ -1409,7 +1409,7 @@ class GameFlowManager {
     const target = targetSelector.getActiveTarget();
     if (!target || !target.alive) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: 'DAUGHTER: No target selected — press [Tab] to cycle targets',
+        text: 'DAUGHTER: No target selected. Press [Tab] to cycle targets',
         priority: 'warning',
       });
       return;
@@ -1421,7 +1421,7 @@ class GameFlowManager {
     // UX: Confirm deployment via comms (ARM_PILOT is auto-entered by InputManager)
     if (deployed) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: 'Daughter deployed — WASD to steer, press its number again to back out to Command view',
+        text: 'Daughter deployed. Arrow keys to steer; press its number again (or V) to back out to Command view',
         source: 'SYSTEM',
         channel: 'CMD',
         priority: 'info',
@@ -1443,16 +1443,16 @@ class GameFlowManager {
       const charged  = docked.filter(a => a.springCharged !== false);
       let reason;
       if (arms.length === 0) {
-        reason = 'No arms installed — visit shipyard';
+        reason = 'No arms installed. Visit shipyard';
       } else if (docked.length === 0) {
-        reason = 'All arms deployed or returning — press [Shift+R] to recall';
+        reason = 'All arms deployed or returning. Press [Shift+R] to reel in all';
       } else if (charged.length === 0) {
-        reason = 'All docked arms are reloading springs — wait for charge';
+        reason = 'All docked arms are reloading springs. Wait for charge';
       } else if (target.mass && charged.every(a => target.mass > (a.config?.maxCaptureMass || 0))) {
         const maxCap = Math.max(...charged.map(a => a.config?.maxCaptureMass || 0));
         reason = `Target too massive (${Math.round(target.mass)} kg > ${maxCap} kg max capture)`;
       } else {
-        reason = 'Launch refused — check status panel';
+        reason = 'Launch refused. Check status panel';
       }
       eventBus.emit(Events.COMMS_MESSAGE, {
         text: `DAUGHTER: ${reason}`,

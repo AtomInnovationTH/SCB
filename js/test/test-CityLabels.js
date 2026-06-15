@@ -14,7 +14,9 @@ import {
   parseCityList,
   isCityVisible,
   distanceFade,
+  lodMaxTier,
   MAX_CITIES,
+  TIER_MAX,
 } from '../scene/CityLabels.js';
 
 describe('CityLabels — parseCityList (UX-11 #5)', () => {
@@ -39,7 +41,7 @@ describe('CityLabels — parseCityList (UX-11 #5)', () => {
   });
 
   it('caps the list at maxCount', () => {
-    const many = Array.from({ length: 100 }, (_, i) => ({ name: `C${i}`, lat: 0, lon: 0 }));
+    const many = Array.from({ length: MAX_CITIES + 25 }, (_, i) => ({ name: `C${i}`, lat: 0, lon: 0 }));
     assert.equal(parseCityList(many).length, MAX_CITIES);
     assert.equal(parseCityList(many, 5).length, 5);
   });
@@ -82,6 +84,27 @@ describe('CityLabels — distance fade', () => {
 
   it('degenerate near/far → no fade', () => {
     assert.equal(distanceFade(123, 500, 500), 1);
+  });
+});
+
+describe('CityLabels — zoom LOD tiers', () => {
+  it('parseCityList clamps tier to [1, TIER_MAX] and defaults missing to 2', () => {
+    const out = parseCityList({ cities: [
+      { name: 'A', lat: 0, lon: 0 },           // no tier → 2
+      { name: 'B', lat: 0, lon: 0, tier: 1 },
+      { name: 'C', lat: 0, lon: 0, tier: 9 },  // over-cap → TIER_MAX
+      { name: 'D', lat: 0, lon: 0, tier: 0 },  // under → 1
+    ] });
+    assert.equal(out[0].tier, 2);
+    assert.equal(out[1].tier, 1);
+    assert.equal(out[2].tier, TIER_MAX);
+    assert.equal(out[3].tier, 1);
+  });
+
+  it('lodMaxTier reveals all tiers when close, only tier 1 when far', () => {
+    assert.equal(lodMaxTier(50, 100, 500), TIER_MAX);  // at/under near → full detail
+    assert.equal(lodMaxTier(600, 100, 500), 1);        // at/over far → tier 1 only
+    assert.equal(lodMaxTier(300, 100, 500), 2);        // midpoint → mid tier (3-tier)
   });
 });
 

@@ -275,7 +275,7 @@ export class NavRecoveryAdvisor {
     const bearing = classifyBearing(playerPos, this._playerVel(), nearest.pos);
     eventBus.emit(Events.COMMS_MESSAGE, {
       sender: 'HOUSTON',
-      text: `Nearest contact ~${formatDistanceKm(bearing.distKm)}, ${bearing.label} — press A to approach.`,
+      text: `Nearest contact ~${formatDistanceKm(bearing.distKm)}, ${bearing.label}. Press A to approach.`,
       priority: 'info',
       _postOnboarding: true,
     });

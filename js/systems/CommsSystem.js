@@ -141,7 +141,7 @@ const SPACE_WEATHER_TEMPLATES = [
   {
     priority: CommsPriority.CRITICAL,
     source: 'NOAA SWPC',
-    template: '⚠ Solar storm (Coronal Mass Ejection) inbound in {time} min — a blast of radiation from the Sun. Duck into Earth\'s shadow to shield your panels.',
+    template: '⚠ Solar storm (Coronal Mass Ejection) inbound in {time} min. A blast of radiation from the Sun. Duck into Earth\'s shadow to shield your panels.',
     effect: 'solarStorm',
   },
   {
@@ -153,13 +153,13 @@ const SPACE_WEATHER_TEMPLATES = [
   {
     priority: CommsPriority.INFO,
     source: 'MISSION CTRL',
-    template: 'Heading into Earth\'s shadow for {dur} min — no sunlight, so you\'re on battery power. Go easy on the tools.',
+    template: 'Heading into Earth\'s shadow for {dur} min. No sunlight, so you\'re on battery power. Go easy on the tools.',
     effect: 'eclipse',
   },
   {
     priority: CommsPriority.WARNING,
     source: 'NOAA SWPC',
-    template: 'Burst of solar particles detected — your solar panels may wear down faster for the next {time} min.',
+    template: 'Burst of solar particles detected. Your solar panels may wear down faster for the next {time} min.',
     effect: 'solarProton',
   },
 ];
@@ -188,7 +188,7 @@ const LAUNCH_TEMPLATES = [
   {
     priority: CommsPriority.INFO,
     source: 'LAUNCH ALERT',
-    template: 'Rocket Lab Electron launching in {time} min. It\'ll pass through {alt}km at {inc}° — keep your distance from that lane.',
+    template: 'Rocket Lab Electron launching in {time} min. It\'ll pass through {alt}km at {inc}°. Keep your distance from that lane.',
   },
   {
     priority: CommsPriority.INFO,
@@ -198,7 +198,7 @@ const LAUNCH_TEMPLATES = [
   {
     priority: CommsPriority.INFO,
     source: 'LAUNCH ALERT',
-    template: 'Soyuz lifting off from Baikonur. Its climb passes through {alt}km at {inc}° over the next {time} min — give it room.',
+    template: 'Soyuz lifting off from Baikonur. Its climb passes through {alt}km at {inc}° over the next {time} min. Give it room.',
   },
   {
     priority: CommsPriority.WARNING,
@@ -212,7 +212,7 @@ const MISSION_TEMPLATES = [
   {
     priority: CommsPriority.INFO,
     source: 'GROUND STN',
-    template: '{target} is spinning at {tumble}°/s. Hit it with the laser first to slow the spin (detumble) — makes it far easier to grab.',
+    template: '{target} is spinning at {tumble}°/s. Hit it with the laser first to slow the spin (detumble). Makes it far easier to grab.',
   },
   {
     priority: CommsPriority.INFO,
@@ -227,12 +227,12 @@ const MISSION_TEMPLATES = [
   {
     priority: CommsPriority.INFO,
     source: 'GROUND STN',
-    template: 'Telemetry looks good — all systems green. Carry on, Cowboy.',
+    template: 'Telemetry looks good. All systems green. Carry on, Cowboy.',
   },
   {
     priority: CommsPriority.INFO,
     source: 'ESOC',
-    template: '{target} is slowly falling out of orbit — it\'ll burn up on re-entry in {days} days if you don\'t grab it first.',
+    template: '{target} is slowly falling out of orbit. It\'ll burn up on re-entry in {days} days if you don\'t grab it first.',
   },
 ];
 
@@ -246,7 +246,7 @@ const PLAYER_STATUS_TEMPLATES = {
   lowColdGas: {
     priority: CommsPriority.WARNING,
     source: 'SPACECRAFT',
-    template: 'Cold-gas thruster fuel running low: {val} units left. Save it for dodging — go easy on quick maneuvers.',
+    template: 'Cold-gas thruster fuel running low: {val} units left. Save it for dodging. Go easy on quick maneuvers.',
   },
   lowBattery: {
     priority: CommsPriority.WARNING,
@@ -256,12 +256,12 @@ const PLAYER_STATUS_TEMPLATES = {
   debrisCleared: {
     priority: CommsPriority.INFO,
     source: 'HOUSTON',
-    template: 'Nice — {count} debris objects cleared! Orbit is {stability}% safer thanks to you.',
+    template: 'Nice. {count} debris objects cleared! Orbit is {stability}% safer thanks to you.',
   },
   evasionPerformed: {
     priority: CommsPriority.WARNING,
     source: 'SPACECRAFT',
-    template: 'Dodge complete — {name} slipped by at {dist}m. Nicely flown.',
+    template: 'Dodge complete. {name} slipped by at {dist}m. Nicely flown.',
   },
 };
 
@@ -270,24 +270,24 @@ const FLAVOR_MESSAGES = [
   { source: 'HOUSTON', text: 'Orbital environment looking good. Keep up the great work, Cowboy.' },
   { source: 'MISSION CTRL', text: 'Sun transit in 12 minutes. Optimal solar charging window approaching.' },
   { source: 'GROUND STN', text: 'Next ground contact window: Svalbard station in 8 minutes.' },
-  { source: 'SDA', text: 'Drag estimates updated — low-altitude debris is falling out of orbit a bit faster than expected.' },
+  { source: 'SDA', text: 'Drag estimates updated. Low-altitude debris is falling out of orbit a bit faster than expected.' },
   { source: 'HOUSTON', text: 'Reminder: Document all capture operations for post-mission analysis.' },
   { source: 'ESOC', text: 'ESA Space Sustainability Index updated. Your contributions noted.' },
   { source: 'NORAD', text: 'Routine catalog maintenance complete. 347 objects re-correlated.' },
   { source: 'GROUND STN', text: 'Magnetic field measurements nominal. Proceeding with scheduled survey.' },
-  { source: 'JAXA', text: 'Japan shared their tracking data — your catalog now covers the Asian sector too.' },
+  { source: 'JAXA', text: 'Japan shared their tracking data. Your catalog now covers the Asian sector too.' },
   { source: 'HOUSTON', text: 'Weather report: Clear skies over recovery zone. Good conditions for de-orbit operations.' },
   { source: 'LeoLabs', text: 'New radar track: Uncatalogued object detected at 620km. Adding to survey queue.' },
   { source: 'MISSION CTRL', text: 'Crew activity report filed. All mission objectives on track.' },
   { source: 'SDA', text: 'Space fence detection: Small debris cluster at 780km altitude. Monitoring.' },
   { source: 'HOUSTON', text: 'Thermal model updated. Spacecraft temperatures within nominal range.' },
-  { source: 'GROUND STN', text: 'Signal is crystal clear — keeping your data link running at full speed.' },
+  { source: 'GROUND STN', text: 'Signal is crystal clear. Keeping your data link running at full speed.' },
 ];
 
 // === ST-8.4: ISRO Ground Station Personas ===
 const BANGALORE_TEMPLATES = [
-  { source: 'BANGALORE', text: 'ISTRAC Bangalore here — we\'ve got you on our antenna, tracking {target}, signal good.', priority: 'INFO' },
-  { source: 'BANGALORE', text: 'Bangalore confirms your orbit — {orbits} orbits until your intercept window opens.', priority: 'INFO' },
+  { source: 'BANGALORE', text: 'ISTRAC Bangalore here. We\'ve got you on our antenna, tracking {target}, signal good.', priority: 'INFO' },
+  { source: 'BANGALORE', text: 'Bangalore confirms your orbit. {orbits} orbits until your intercept window opens.', priority: 'INFO' },
   { source: 'BANGALORE', text: 'Bangalore: your telemetry stream is healthy, all systems looking good.', priority: 'INFO' },
   { source: 'BANGALORE', text: 'Bangalore handing your tracking over to {nextStation} as you pass out of range.', priority: 'INFO' },
   { source: 'BANGALORE', text: 'Bangalore: that debris matches its catalog entry on radar. Confirmed.', priority: 'INFO' },
@@ -296,18 +296,18 @@ const BANGALORE_TEMPLATES = [
 const HASSAN_TEMPLATES = [
   { source: 'HASSAN', text: 'Hassan station: locked onto your far-off (geostationary) target with our big 32m dish.', priority: 'INFO' },
   { source: 'HASSAN', text: 'Hassan: signal locked. You\'re so far out the radio round-trip is {rtDelay}ms.', priority: 'INFO' },
-  { source: 'HASSAN', text: 'Hassan confirms your orbit-raise burn is done — rounding out your orbit now.', priority: 'INFO' },
+  { source: 'HASSAN', text: 'Hassan confirms your orbit-raise burn is done. Rounding out your orbit now.', priority: 'INFO' },
   { source: 'HASSAN', text: 'Hassan tracking: your approach lane to the high orbit is clear.', priority: 'INFO' },
 ];
 
 const HANDOFF_DIALOGUE = [
-  { from: 'HOUSTON', text: 'Houston: handing off to Bangalore ISTRAC — good hunting.' },
+  { from: 'HOUSTON', text: 'Houston: handing off to Bangalore ISTRAC. Good hunting.' },
   { from: 'BANGALORE', text: 'ISTRAC Bangalore: Roger, we have the conn. Tracking nominal.' },
 ];
 
 const NEWS_BOUNTY_TEMPLATES = [
   { source: 'NEWS', text: '[{date} NEWS] {headline}', priority: 'WARNING' },
-  { source: 'NEWS', text: 'Bounty posted: ₹{bounty} — target {debrisName}', priority: 'INFO' },
+  { source: 'NEWS', text: 'Bounty posted: ₹{bounty}. Target {debrisName}', priority: 'INFO' },
 ];
 
 // ============================================================================
@@ -482,13 +482,15 @@ export class CommsSystem {
         priority: data.priority || CommsPriority.INFO,
         channel,
         age: 0,
+        // Carry the onboarding beat id (if any) so the comms panel can drop the
+        // "demanding attention" highlight the moment the player follows it.
+        onboardingBeatId: data._onboardingBeatId,
       };
 
       this.messages.push(msg);
       while (this.messages.length > MAX_MESSAGES) {
         this.messages.shift();
       }
-
       // Notify HUD (no sound replay, no re-emit)
       if (this.onMessage) {
         this.onMessage(msg);
@@ -589,7 +591,7 @@ export class CommsSystem {
       this.addMessage(
         CommsPriority.INFO,
         'GROUND STN',
-        `Capture confirmed — object secured. +${data.points} points. Catalog updated.`
+        `Capture confirmed. Object secured. +${data.points} points. Catalog updated.`
       );
     });
 
@@ -598,7 +600,7 @@ export class CommsSystem {
       this.addMessage(
         CommsPriority.INFO,
         'SDA',
-        `Deorbit burn good — that object is now headed down to burn up in the atmosphere. +${data.points} points.`
+        `Deorbit burn good. That object is now headed down to burn up in the atmosphere. +${data.points} points.`
       );
     });
 
@@ -612,7 +614,7 @@ export class CommsSystem {
       this.addMessage(
         CommsPriority.INFO,
         'CMD',
-        `Ion thruster (FEEP) now running on ${data.metal} — fuel efficiency ${sign}${ispPct}%`
+        `Ion thruster (FEEP) now running on ${data.metal}. Fuel efficiency ${sign}${ispPct}%`
       );
     });
 
@@ -626,7 +628,7 @@ export class CommsSystem {
       const bountyStr = (data.bounty || 0).toLocaleString();
       const debrisName = data.debrisName || 'unknown';
       timerManager.setTimeout(() => {
-        this.addMessage('INFO', 'NEWS', `Bounty posted: ₹${bountyStr} — target ${debrisName}`);
+        this.addMessage('INFO', 'NEWS', `Bounty posted: ₹${bountyStr}. Target ${debrisName}`);
       }, 2000, { owner: this });
     });
 
@@ -643,7 +645,7 @@ export class CommsSystem {
         this._isroHandoffDone = true;
         // Queue handoff dialogue
         timerManager.setTimeout(() => {
-          this.addMessage('INFO', 'HOUSTON', 'Houston: handing off to Bangalore ISTRAC — good hunting.');
+          this.addMessage('INFO', 'HOUSTON', 'Houston: handing off to Bangalore ISTRAC. Good hunting.');
         }, 500, { owner: this });
         timerManager.setTimeout(() => {
           this.addMessage('INFO', 'BANGALORE', 'ISTRAC Bangalore: Roger, we have the conn. Tracking nominal.');
@@ -655,13 +657,13 @@ export class CommsSystem {
 
     // §4 item 2: TETHER_SNAP → CRITICAL comms + ALERT channel (BUG-C fix)
     eventBus.on(Events.TETHER_SNAP, (data) => {
-      this.addMessage('CRITICAL', data?.armId || 'SYSTEM', 'TETHER SEVERED — daughter and catch cut loose and drifting. Reload not possible; send another daughter to chase it down.', { channel: 'ALERT' });
+      this.addMessage('CRITICAL', data?.armId || 'SYSTEM', 'TETHER SEVERED. Daughter and catch cut loose and drifting. Reload not possible; send another daughter to chase it down.', { channel: 'ALERT' });
     });
 
     // Net-integrity failure (recoverable): the net lost its grip on a heavy
     // catch. The daughter is fine and returning to reload; the debris is loose.
     eventBus.on(Events.NET_FAILED, (data) => {
-      this.addMessage('WARNING', data?.armId || 'SYSTEM', 'NET FAILED — debris slipped the net and is drifting. Daughter returning to reload; re-net to retry.', { channel: 'ALERT' });
+      this.addMessage('WARNING', data?.armId || 'SYSTEM', 'NET FAILED. Debris slipped the net and is drifting. Daughter returning to reload; re-net to retry.', { channel: 'ALERT' });
     });
 
     // UX-11 #1: net MISS reasons → actionable plain text. A miss is fully
@@ -679,13 +681,13 @@ export class CommsSystem {
     // §4 item 3: ARM_RETURNED (captured) → Docking comms
     eventBus.on(Events.ARM_RETURNED, (data) => {
       if (data?.captured === true) {
-        this.addMessage('INFO', data.armId || 'SYSTEM', 'Docking — 3 s.', { channel: 'CMD' });
+        this.addMessage('INFO', data.armId || 'SYSTEM', 'Docking. 3 s.', { channel: 'CMD' });
       }
     });
 
     // §4 item 3: CROSSBOW_RELOAD_COMPLETE → Spring re-charged comms
     eventBus.on(Events.CROSSBOW_RELOAD_COMPLETE, (data) => {
-      this.addMessage('INFO', data?.armId || 'SYSTEM', 'Spring re-charged — ready for next deploy.', { channel: 'CMD' });
+      this.addMessage('INFO', data?.armId || 'SYSTEM', 'Spring re-charged. Ready for next deploy.', { channel: 'CMD' });
     });
 
     // §4 item 4: STATION_KEEP_ENTERED → ON STATION comms with key hints.
@@ -704,7 +706,7 @@ export class CommsSystem {
         ? 'Arrow keys orbit the debris · +/- adjust distance · [N] capture.'
         : '[N] capture · [1-4] pilot for a closer look.';
       this.addMessage('INFO', armId,
-        `ON STATION — holding ${standoff}m from debris #${targetId}. ${hint}`,
+        `ON STATION. Holding ${standoff}m from debris #${targetId}. ${hint}`,
         { channel: 'CMD' });
       // Plain-language follow-up for new players: name the daughter and spell
       // out the next move in a friendly command voice.

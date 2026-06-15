@@ -8,7 +8,6 @@
 import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
-import { GameStates } from '../core/GameState.js';
 
 export class TrawlManager {
   constructor() {
@@ -50,20 +49,14 @@ export class TrawlManager {
     /** @type {object|null} */ this._player = null;
     /** @type {object|null} */ this._debrisField = null;
 
-    // Self-manage auto-start on ORBITAL_VIEW (Batch 3 decoupling)
-    eventBus.on(Events.GAME_STATE_CHANGE, ({ to }) => {
-      if (to === GameStates.ORBITAL_VIEW && !this.active && this._debrisField) {
-        try {
-          const clusters = this._debrisField.getDebrisClusters();
-          const nearest = clusters[0]; // densest/most-valuable cluster
-          if (nearest) {
-            this.startTrawl(nearest, this._player);
-          }
-        } catch (e) { console.error('[TrawlManager] Auto-start trawl:', e); }
-      }
-    });
-
     // Self-manage toggle via keyboard TRAWL_START (Batch 3 decoupling)
+    //
+    // NOTE (defer-trawl): the former GAME_STATE_CHANGE → ORBITAL_VIEW auto-start
+    // block was removed. It silently moved the mothership for the player on
+    // entering orbital view, which conflicted with the guided active-capture
+    // loop new players are taught. The mechanic is preserved but now only
+    // reachable via the explicit Shift+G entry point below (hidden from the
+    // new-player path until an advanced "Dragnet" mission surfaces it).
     eventBus.on(Events.TRAWL_START, (data) => {
       // Skip if this is a notification from TrawlManager auto-start (has cluster)
       if (data && data.cluster) return;
@@ -85,7 +78,7 @@ export class TrawlManager {
             this.startTrawl(clusters[0], this._player);
           } else {
             eventBus.emit(Events.COMMS_MESSAGE, {
-              text: 'No debris clusters detected — cannot start trawl.',
+              text: 'No debris clusters detected. Cannot start trawl.',
               priority: 'warning',
             });
           }
@@ -131,7 +124,7 @@ export class TrawlManager {
     eventBus.emit(Events.TRAWL_START, { cluster });
 
     eventBus.emit(Events.COMMS_MESSAGE, {
-      text: `Entering ${cluster.name} — ${cluster.count} targets. Begin fishing.`,
+      text: `Entering ${cluster.name}. ${cluster.count} targets. Begin fishing.`,
       priority: 'info',
     });
 

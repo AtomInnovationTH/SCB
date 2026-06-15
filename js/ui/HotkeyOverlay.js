@@ -43,7 +43,7 @@ const HOTKEY_GROUPS = [
       'spacer',
       [['V', 'Shift'], 'View big picture'],
       [['S', 'Shift'], 'Scan big area'],
-      [['A', 'Shift'], 'Autopilot to debris center + launch all'],
+      [['A', 'Shift'], 'Autopilot to field center + net + fan out daughters'],
       [['N', 'Shift'], 'Auto-target + launch at debris in range'],
       [['D', 'Shift'], 'Daughters launch all'],
       [['R', 'Shift'], 'Reel-in all'],

@@ -93,6 +93,20 @@ function filterRoundTrip(filters) {
   return result;
 }
 
+/**
+ * True when a comms message is a guidance instruction the player has already
+ * followed (its onboarding beat id is in the satisfied set). Such a line must
+ * NOT keep the "latest" attention highlight — once obeyed it should read like
+ * history. Pure + exported so the de-highlight contract is testable DOM-free.
+ * @param {object} msg — stored comms message (may carry `onboardingBeatId`)
+ * @param {Set<string|number>} satisfiedBeatIds
+ * @returns {boolean}
+ */
+function isFollowedInstruction(msg, satisfiedBeatIds) {
+  return !!(msg && msg.onboardingBeatId != null
+    && satisfiedBeatIds && satisfiedBeatIds.has(msg.onboardingBeatId));
+}
+
 // ============================================================================
 // COMMS PANEL CLASS
 // ============================================================================
@@ -108,6 +122,14 @@ export class CommsPanel {
 
     /** @type {number} Scroll offset for PageUp/PageDown review */
     this._scrollOffset = 0;
+
+    /**
+     * @type {Set<string|number>} Onboarding beat ids whose instruction the
+     * player has already followed. A guidance line tagged with one of these
+     * ids drops its "latest" attention highlight immediately — the moment the
+     * player obeys the comms direction it stops demanding attention.
+     */
+    this._satisfiedBeatIds = new Set();
 
     /** @type {Object<string, HTMLElement>} DOM panels for show/hide */
     this.panels = {};
@@ -168,7 +190,7 @@ export class CommsPanel {
       steps: COMMS_STEPS,
       initial: 'normal',
       color: COMMS_COLOR_NORMAL,
-      title: 'Comms size (C) — click to cycle line / normal / large',
+      title: 'Comms size (C). Click to cycle line / normal / large',
       onStep: () => this._applyCommsStep(),
     });
   }
@@ -192,6 +214,15 @@ export class CommsPanel {
 
     eventBus.on(Events.COMMS_SCROLL_DOWN, () => {
       this._scrollOffset = Math.max(this._scrollOffset - 3, 0);
+      this._updateCommsPanel();
+    });
+
+    // When an onboarding hint is satisfied (the player followed the direction),
+    // drop the matching guidance line's attention highlight right away so it
+    // stops demanding attention — without waiting for a follow-up "ack" line.
+    eventBus.on(Events.HINT_SATISFIED, (d) => {
+      if (!d || d.id == null) return;
+      this._satisfiedBeatIds.add(d.id);
       this._updateCommsPanel();
     });
   }
@@ -343,7 +374,9 @@ export class CommsPanel {
 
     this._logEl.innerHTML = visible.map((msg, i) => {
       const color = getPriorityColor(msg.priority);
-      const isLatest = i === latestIdx;
+      // A satisfied onboarding instruction is no longer "demanding attention":
+      // even if it's still the most-recent line, render it dimmed like history.
+      const isLatest = (i === latestIdx) && !isFollowedInstruction(msg, this._satisfiedBeatIds);
 
       // Latest message: full-strength, subtle highlight band. Older: dimmed.
       const textOpacity = isLatest ? '1' : '0.6';
@@ -376,11 +409,11 @@ export class CommsPanel {
 // NAMED EXPORTS (for tests)
 // ============================================================================
 
-export { filterRoundTrip, getPriorityColor, isCriticalPriority,
+export { filterRoundTrip, getPriorityColor, isCriticalPriority, isFollowedInstruction,
   COMMS_COLOR_NORMAL, COMMS_COLOR_WARNING, COMMS_COLOR_CRITICAL };
 
 // ST-5.1: CJS guard — expose pure helpers for Node.js tests
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { filterRoundTrip, getPriorityColor, isCriticalPriority,
+  module.exports = { filterRoundTrip, getPriorityColor, isCriticalPriority, isFollowedInstruction,
     COMMS_COLOR_NORMAL, COMMS_COLOR_WARNING, COMMS_COLOR_CRITICAL };
 }

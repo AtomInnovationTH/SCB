@@ -48,21 +48,6 @@ const TYPE_ICONS = {
   'missionDebris': '•',   // dot — small hardware
 };
 
-/** Phase R6: Abbreviate metal names for compact HUD display */
-function _getMetalShortName(name) {
-  const shorts = {
-    // By id (subtype)
-    'aluminum': 'Al', 'titanium': 'Ti', 'steel': 'Fe',
-    'copper': 'Cu', 'gallium': 'Ga', 'indium': 'In',
-    'carbon_composite': 'CC', 'kevlar': 'Kv', 'glass_ceramic': 'Gl',
-    'iridium': 'Ir', 'gold': 'Au', 'platinum': 'Pt',
-    'silicon': 'Si', 'nickel': 'Ni', 'cobalt': 'Co',
-    // By display name (from Constants.METALS)
-    'carbon composite': 'CC', 'glass/ceramic': 'Gl', 'kevlar/mli': 'Kv',
-  };
-  return shorts[(name || '').toLowerCase()] || (name || '').slice(0, 2);
-}
-
 // ============================================================================
 // TARGET RETICLE SYSTEM
 // ============================================================================
@@ -891,26 +876,9 @@ export class TargetReticle {
       }
     }
 
-    // Phase R6: Metal loot preview for selected target brackets
-    if (isSelected && target.salvage && target.salvage.metals && target.salvage.metals.length > 0) {
-      ctx.save();
-      const metals = [...target.salvage.metals]
-        .sort((a, b) => b.amount - a.amount)
-        .slice(0, 2);
-      const metalStr = metals.map(m => {
-        const short = _getMetalShortName(m.name || m.subtype || m.type);
-        return `${short}:${m.amount.toFixed(0)}kg`;
-      }).join(' ');
-      ctx.font = '18px "Courier New", monospace';
-      ctx.fillStyle = COLORS.cyan;
-      ctx.textAlign = 'center';
-      ctx.globalAlpha = 0.8;
-      const metalY = (target._closureRate != null && this._viewConfig.showClosureRate)
-        ? y + half + 70
-        : y + half + 46;
-      ctx.fillText(`\u26CF ${metalStr}`, x, metalY);
-      ctx.restore();
-    }
+    // Phase R6: Metal loot preview — removed 2026-06-14 (declutter). The
+    // refined-metal breakdown lives in the target dossier / shop; the floating
+    // "⛏ Al:..kg" line next to every selected target was noise.
 
     // --- Selected target: extra info ---
     if (isSelected) {
@@ -1228,7 +1196,7 @@ export class TargetReticle {
       const calloutAlpha = this._progradeCalloutTimer <= 2
         ? this._progradeCalloutTimer / 2
         : 1.0;
-      const calloutText = 'Prograde — direction of travel';
+      const calloutText = 'Prograde. Direction of travel';
       ctx.font = 'bold 13px monospace';
       this._drawCalloutPill(x + 22, y - 6, calloutText, COLORS.green, calloutAlpha);
       ctx.globalAlpha = calloutAlpha;
@@ -1296,7 +1264,7 @@ export class TargetReticle {
         ctx.font = '9px "Courier New", monospace';
         ctx.fillStyle = COLORS.yellow;
         ctx.globalAlpha = 0.5;
-        ctx.fillText('Periapsis — efficient burn', x + 22, lineY);
+        ctx.fillText('Periapsis. Efficient burn', x + 22, lineY);
       }
     }
 
@@ -1378,7 +1346,7 @@ export class TargetReticle {
       const calloutAlpha = this._retroCalloutTimer <= 2
         ? this._retroCalloutTimer / 2
         : 1.0;
-      const calloutText = 'Retrograde — brake direction';
+      const calloutText = 'Retrograde. Brake direction';
       ctx.font = 'bold 13px monospace';
       this._drawCalloutPill(x + 22, y - 6, calloutText, '#ff8844', calloutAlpha);
       ctx.globalAlpha = calloutAlpha;
@@ -1528,7 +1496,7 @@ export class TargetReticle {
       const calloutAlpha = this._leadCalloutTimer <= 2
         ? this._leadCalloutTimer / 2
         : 1.0;
-      const calloutText = 'Lead — aim here to intercept';
+      const calloutText = 'Lead. Aim here to intercept';
       ctx.font = 'bold 13px monospace';
       this._drawCalloutPill(x + 12, y - 8, calloutText, '#ffaa00', calloutAlpha);
       ctx.globalAlpha = calloutAlpha;

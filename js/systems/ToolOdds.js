@@ -132,7 +132,7 @@ function computeNetOdds(opts) {
   const range = opts.range;
 
   if (opts.netCount === 0) {
-    return { p: null, blocker: 'EMPTY', hint: 'magazine empty — restock' };
+    return { p: null, blocker: 'EMPTY', hint: 'magazine empty. Restock' };
   }
 
   // ── Deterministic gates ──
@@ -152,7 +152,7 @@ function computeNetOdds(opts) {
     launchSpeed * (CN.MAX_FLIGHT_TIME || Infinity),
   );
   if (range > maxReach) {
-    return { p: 0, blocker: 'RANGE', hint: 'too far — close in' };
+    return { p: 0, blocker: 'RANGE', hint: 'too far. Close in' };
   }
 
   // ── Probabilistic stack (same fn as NetProjectile._resolveCatch) ──
@@ -187,7 +187,7 @@ function computeNetOdds(opts) {
     losses.push({
       loss: strainFailP,
       blocker: `STRAIN ${Math.round(strainFailP * 100)}%`,
-      hint: 'heavy catch — slips likely above 80% rated',
+      hint: 'heavy catch. Slips likely above 80% rated',
     });
   }
   if (tumbleRate != null) {
@@ -204,11 +204,11 @@ function computeNetOdds(opts) {
   }
   const fDistance = Math.max(0.85, Math.min(1.1, 1.1 - 0.003 * range));
   if (fDistance < 1.0) {
-    losses.push({ loss: 1 - fDistance, blocker: 'RANGE', hint: 'edge of envelope — close in' });
+    losses.push({ loss: 1 - fDistance, blocker: 'RANGE', hint: 'edge of envelope. Close in' });
   }
   const fSpin = Math.max(0.5, Math.min(1.2, spinFraction));
   if (fSpin < 1.0) {
-    losses.push({ loss: 1 - fSpin, blocker: 'SPIN', hint: 'long flight bleeds net spin — close in' });
+    losses.push({ loss: 1 - fSpin, blocker: 'SPIN', hint: 'long flight bleeds net spin. Close in' });
   }
   losses.sort((a, b) => b.loss - a.loss);
   const top = losses[0] || null;
@@ -228,15 +228,15 @@ function computeMagnetOdds(target) {
     return { p: 0, blocker: 'HEAVY', hint: 'beyond EPM mass limit' };
   }
   if (target && target.ferromagnetic === true) {
-    return { p: MAG.P_GRIP_FERROUS ?? 0.95, blocker: null, hint: 'ferrous hull — direct grip' };
+    return { p: MAG.P_GRIP_FERROUS ?? 0.95, blocker: null, hint: 'ferrous hull. Direct grip' };
   }
   if (target && target.hasFerrousFasteners === true) {
-    return { p: MAG.P_GRIP_FASTENERS ?? 0.40, blocker: null, hint: 'ferrous fasteners — bolt-latch' };
+    return { p: MAG.P_GRIP_FASTENERS ?? 0.40, blocker: null, hint: 'ferrous fasteners. Bolt-latch' };
   }
   return {
     p: MAG.P_GRIP_NON_FERROUS ?? 0.05,
     blocker: 'NON-FERR',
-    hint: 'non-ferrous — residual flux only',
+    hint: 'non-ferrous. Residual flux only',
   };
 }
 
@@ -256,7 +256,7 @@ function computeGripperOdds(target) {
   return {
     p: G.P_GRIP_UNFIXTURED ?? 0.10,
     blocker: 'NO-FIX',
-    hint: 'no fixture to grab — net it',
+    hint: 'no fixture to grab. Net it',
   };
 }
 
@@ -268,7 +268,7 @@ function computePadOdds(target, opts) {
   const P = Constants.PAD_CONTACT || {};
   // Contact-velocity gate: faster than the soft-contact regime → deterministic bounce.
   if (typeof opts.contactVel === 'number' && opts.contactVel > (P.CONTACT_VEL_MAX_M_S ?? 0.2)) {
-    return { p: 0, blocker: 'FAST', hint: 'contact too fast — ease the approach', mode: null };
+    return { p: 0, blocker: 'FAST', hint: 'contact too fast. Ease the approach', mode: null };
   }
   const uvDoses = (typeof opts.padUvDoses === 'number') ? opts.padUvDoses : (P.UV_CURE_DOSES_Y0 || 0);
   const mode = resolvePadModeForOdds(target, uvDoses);

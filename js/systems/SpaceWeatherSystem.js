@@ -50,7 +50,7 @@ const WEATHER_TYPES = {
     maxDuration: SW.GEOMAGNETIC_MAX_DURATION,
     minInterval: SW.GEOMAGNETIC_MIN_INTERVAL,
     maxInterval: SW.GEOMAGNETIC_MAX_INTERVAL,
-    commsAlert: (kp) => `SPACE WEATHER: Geomagnetic storm — Kp index ${kp}. EDT efficiency boosted.`,
+    commsAlert: (kp) => `SPACE WEATHER: Geomagnetic storm. Kp index ${kp}. EDT efficiency boosted.`,
     codexTrigger: 'van_allen_belts',
   },
 
@@ -184,7 +184,7 @@ export class SpaceWeatherSystem {
       } catch (_) { /* default-safe */ }
     });
 
-    console.log(`[SpaceWeatherSystem] Initialized — ${this._replayMode ? 'SEEDED REPLAY' : 'random mode'} (${Object.keys(WEATHER_TYPES).length} weather types)`);
+    console.log(`[SpaceWeatherSystem] Initialized. ${this._replayMode ? 'SEEDED REPLAY' : 'random mode'} (${Object.keys(WEATHER_TYPES).length} weather types)`);
   }
 
   /**

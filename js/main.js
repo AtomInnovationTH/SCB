@@ -126,7 +126,7 @@ let _logPauseLastEmit = 0;
 let _logPauseFramesRendered = 0;
 let _logPauseFramesSkipped = 0;
 if (_logPauseEnabled) {
-  console.info('[logPause] enabled via ?logPause=1 — per-second pause/state diagnostic active');
+  console.info('[logPause] enabled via ?logPause=1. Per-second pause/state diagnostic active');
 }
 
 // --- Diagnostic: ?logBoot=1 — opt-in boot timeline profiler.
@@ -181,7 +181,7 @@ function _bootSpikeDetect(renderMs) {
 function _emitBootTimeline(reason) {
   if (!_logBootEnabled) return;
   const pad = (n, w) => String(Math.round(n)).padStart(w);
-  console.group(`[logBoot] BOOT TIMELINE — ${reason} (T0 = main.js eval, after imports)`);
+  console.group(`[logBoot] BOOT TIMELINE. ${reason} (T0 = main.js eval, after imports)`);
   for (const m of _bootMarks) {
     console.log(`[logBoot] T+${pad(m.t, 5)}ms  (+${pad(m.dt, 4)}ms)  ${m.phase}`);
   }
@@ -194,7 +194,7 @@ function _emitBootTimeline(reason) {
   console.groupEnd();
 }
 if (_logBootEnabled) {
-  console.info('[logBoot] enabled via ?logBoot=1 — boot timeline diagnostic active. Call window.__dumpBootTimeline() from DevTools at any moment to snapshot.');
+  console.info('[logBoot] enabled via ?logBoot=1. Boot timeline diagnostic active. Call window.__dumpBootTimeline() from DevTools at any moment to snapshot.');
   if (typeof window !== 'undefined') {
     window.__bootMark = _bootMark;
     window.__dumpBootTimeline = () => _emitBootTimeline('on-demand dump');
@@ -493,7 +493,7 @@ async function init() {
     // Sprint 3 GPU profiling: ?autoProfile=1 enables [`AutoProfileSweep`](js/systems/AutoProfileSweep.js:1)
     // — scheduled near the end of init() once SceneManager + Earth exist.
     if (profileFlags.autoProfile) {
-      console.info('[AutoProfile] scheduled via ?autoProfile=1 — will auto-start once scene settles. To re-run in another game state, call window.startAutoProfile() from DevTools.');
+      console.info('[AutoProfile] scheduled via ?autoProfile=1. Will auto-start once scene settles. To re-run in another game state, call window.startAutoProfile() from DevTools.');
     }
   } catch (_e) {
     // Non-browser env or malformed URL — ignore.
@@ -820,19 +820,31 @@ async function init() {
     cityLabels.attach({
       parent: earth.getGroup(),
       radius: Constants.EARTH_RADIUS,
-      getCameraPos: () => camera.position,
+      camera,
+      container: document.getElementById('hud-overlay'),
+      // The command-view Earth uses a default SphereGeometry equirectangular
+      // texture (prime meridian at +X, east toward -Z). latLonToPosition runs
+      // east toward +Z, so mirror longitude to align labels with continents.
+      mirrorLon: true,
+      // Hide command-view labels while the Strategic Map covers the screen.
+      isActive: () => !(strategicMap && strategicMap.isOpen()),
     });
     if (strategicMap && strategicMap._earthMesh && strategicMap._camera) {
       cityLabels.attach({
         parent: strategicMap._earthMesh,
         radius: Constants.EARTH_RADIUS,
-        getCameraPos: () => (strategicMap._camera ? strategicMap._camera.position : null),
+        camera: strategicMap._camera,
+        container: strategicMap._containerEl,
         isActive: () => strategicMap.isOpen(),
-        spriteScale: 2.2,
         // The wireframe map has no texture: its ground stations use raw
         // latLonToPosition, so the texture calibration offset must be 0 here
         // or cities render 90° away from co-located stations.
         lonOffsetDeg: 0,
+        // The map camera orbits much farther out (initial ~12.5 Earth radii,
+        // zoom range ~0.8–78 r) than the command view, so widen the LOD ramp:
+        // all tiers only when zoomed well in, tier 1 only when far out.
+        lodNear: Constants.EARTH_RADIUS * 6,
+        lodFar: Constants.EARTH_RADIUS * 22,
       });
     }
   }).catch((e) => console.warn('[main] cityLabels:', e));
@@ -1084,13 +1096,13 @@ async function init() {
 
   // PR 3 / P1.6 — Pre-compile shaders before first RAF to avoid first-frame stutter
   // when materials are encountered for the first time during gameplay.
-  _bootMark('renderer.compile() — START (synchronous shader compile of all materials + composer passes)');
+  _bootMark('renderer.compile(). START (synchronous shader compile of all materials + composer passes)');
   try {
     sceneManager.renderer.compile(sceneManager.scene, sceneManager.camera);
   } catch (e) {
     console.warn('[Perf] renderer.compile failed:', e);
   }
-  _bootMark('renderer.compile() — END');
+  _bootMark('renderer.compile(). END');
 
   // Sprint 2 / Phase A: attach Perf Report overlay if requested via ?perfReport=1.
   // Defers until SceneManager + DebrisField are constructed so refs are live.
@@ -1133,14 +1145,14 @@ async function init() {
       window.startAutoProfile = () => {
         sweep.start().catch((e) => console.error('[AutoProfile] start() rejected:', e));
       };
-      console.info('[AutoProfile] ready — auto-starting in 5 s. To re-run later: call window.startAutoProfile() from DevTools (e.g. after entering ORBITAL_VIEW).');
+      console.info('[AutoProfile] ready. Auto-starting in 5 s. To re-run later: call window.startAutoProfile() from DevTools (e.g. after entering ORBITAL_VIEW).');
       setTimeout(() => { window.startAutoProfile(); }, 5000);
     } catch (e) {
       console.warn('[AutoProfile] init failed:', e);
     }
   }
 
-  _bootMark('init() complete — first rAF scheduled');
+  _bootMark('init() complete. First rAF scheduled');
   _scheduleNextFrame();
 }
 
@@ -1705,7 +1717,7 @@ function gameLoop(timestamp) {
   const _bootFirstRenderCall = (_logBootEnabled && !_bootFirstFrameMarked);
   const _bootRenderStart = _logBootEnabled ? performance.now() : 0;
   if (_bootFirstRenderCall) {
-    _bootMark('first sceneManager.render() — START');
+    _bootMark('first sceneManager.render(). START');
   }
   if (strategicMap && strategicMap.isOpen()) {
     strategicMap.update(dt);
@@ -1714,7 +1726,7 @@ function gameLoop(timestamp) {
     sceneManager.render();
   }
   if (_bootFirstRenderCall) {
-    _bootMark('first sceneManager.render() — END');
+    _bootMark('first sceneManager.render(). END');
   }
   if (_logBootEnabled) {
     _bootSpikeDetect(performance.now() - _bootRenderStart);

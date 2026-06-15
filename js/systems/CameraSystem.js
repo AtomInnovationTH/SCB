@@ -947,7 +947,7 @@ export class CameraSystem {
       // the player understands the silent threshold did something deliberate.
       if (!o.inspectTaught) {
         o.inspectTaught = true;
-        eventBus.emit(Events.SHOW_NOTIFICATION, { text: '🔍 INSPECTION — overlays active' });
+        eventBus.emit(Events.SHOW_NOTIFICATION, { text: '🔍 INSPECTION. Overlays active' });
       }
     } else {
       // Restore lens (per-frame ease) + near-plane.
@@ -1278,7 +1278,7 @@ export class CameraSystem {
       // Phase 2 entry: camera starts zooming along tether toward daughter
       if (c.phase === 2) {
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: `Tracking ${c.arm.id} — tether deploying`,
+          text: `Tracking ${c.arm.id}. Tether deploying`,
           priority: 'info',
         });
       }
@@ -1317,7 +1317,7 @@ export class CameraSystem {
         this.setView(CameraViews.ARM_PILOT);
         eventBus.emit(Events.LAUNCH_CEREMONY_COMPLETE, { arm: completingArm });
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: `${completingArm.id} deployed — arrow keys orbit debris, ESC to recall`,
+          text: `${completingArm.id} deployed. Arrow keys orbit debris, ESC to recall`,
           priority: 'info',
         });
         // Return ARM_PILOT position (camera follows daughter / inspection view).
@@ -1363,7 +1363,7 @@ export class CameraSystem {
       this.setView(CameraViews.ARM_PILOT);
       eventBus.emit(Events.LAUNCH_CEREMONY_COMPLETE, { arm: completingArm });
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `${completingArm.id} deployed — arrow keys orbit debris, ESC to recall`,
+        text: `${completingArm.id} deployed. Arrow keys orbit debris, ESC to recall`,
         priority: 'info',
       });
       return this._computeArmPilot(dt, playerPos, velDir, radialDir);
@@ -1439,7 +1439,7 @@ export class CameraSystem {
         if (c._springLatch && !c._shookOnFire) {
           c._shookOnFire = true;
           eventBus.emit(Events.COMMS_MESSAGE, {
-            text: `${arm.id}: Spring released — separating`,
+            text: `${arm.id}: Spring released. Separating`,
             priority: 'info',
           });
         }
@@ -2051,7 +2051,7 @@ export class CameraSystem {
     // Show the contextual overlay (mother/debris/daughter wireframe panels).
     eventBus.emit(Events.INSPECTION_TOGGLE, { subject, targetId });
 
-    console.log(`[CameraSystem] Inspection mode (${subject}) — zoom 2–50m, FOV 35°`);
+    console.log(`[CameraSystem] Inspection mode (${subject}). Zoom 2–50m, FOV 35°`);
   }
 
   /**

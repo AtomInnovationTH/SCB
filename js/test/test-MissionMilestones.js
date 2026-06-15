@@ -70,7 +70,7 @@ describe('MissionMilestones — line formatting', () => {
   it('contract 90% urges the finish', () => {
     const line = formatMilestoneLine('contract', 0.9, 9000, 10000);
     assert.ok(line.includes('9,000'), line);
-    assert.ok(line.includes('one good cluster'), line);
+    assert.ok(line.includes('One good cluster'), line);
   });
 
   it('objective recap shows both tracks + next step', () => {

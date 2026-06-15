@@ -108,7 +108,7 @@ export class SceneManager {
         this.gpuProbeEnabled = true;
         console.log('[Perf] GPU probe active (EXT_disjoint_timer_query_webgl2 available)');
       } else {
-        console.log('[Perf] GPU probe unavailable — falling back to deviceMemory heuristic');
+        console.log('[Perf] GPU probe unavailable. Falling back to deviceMemory heuristic');
       }
     } catch (_e) {
       console.warn('[Perf] GPU probe init failed:', _e);
@@ -562,7 +562,7 @@ export class SceneManager {
       console.warn('[SceneManager] ⚠️ Composer RT size ≠ canvas buffer!', { rtW: rt1.width, rtH: rt1.height, canvasW: canvas.width, canvasH: canvas.height });
     }
     if (rt1.texture.type !== THREE.HalfFloatType) {
-      console.warn('[SceneManager] ⚠️ Composer RT is NOT HalfFloatType — HDR values will be clamped!');
+      console.warn('[SceneManager] ⚠️ Composer RT is NOT HalfFloatType. HDR values will be clamped!');
     }
   }
 

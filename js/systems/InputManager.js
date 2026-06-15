@@ -100,7 +100,7 @@ export class InputManager {
         this._exitArmPilotCamera();
         if (isExpended) {
           eventBus.emit(Events.COMMS_MESSAGE, {
-            text: 'DAUGHTER PILOT disengaged — daughter expended',
+            text: 'DAUGHTER PILOT disengaged. Daughter expended',
             priority: 'warning',
           });
         }
@@ -650,44 +650,86 @@ export class InputManager {
         }
         break;
 
-      // R key — context-sensitive Reel-in / recall / autopilot-abort.
-      // Delegation 1 (2026-05-31) onboarding rebind — three branches:
-      //   (1) ARM_PILOT (piloting a daughter)        → reel-in piloted daughter
-      //   (2) Autopilot engaged (orbital / approach) → abort autopilot
-      //   (3) Otherwise (ORBITAL_VIEW w/ deployed)   → recall closest deployed daughter
-      // Hotkey cleanup (2026-06-12): Shift+R = recall ALL deployed daughters
-      // (replaces H and Shift+O, both freed). Shift check FIRST — before the
-      // context chain.
-      // Forge moved to F4 (was K) that sprint, then to 5 (UX-11 #8); K is free.
+      // R key — Reel-in, consistent across BOTH mother and daughter modes
+      // (2026-06-14 reel-in fix). The help pane labels R "Reel-in" in both
+      // cards, so reeling ALWAYS takes priority — the old behavior where a
+      // mother-mode R with autopilot engaged silently aborted the AP and
+      // reeled NOTHING (the AP-abort branch sat ahead of the recall branch)
+      // made R feel dead for the deployed daughter. Order now:
+      //   (1) ARM_PILOT       → reel the piloted daughter home (any live state)
+      //   (2) Mother + deployed → recall closest deployed daughter
+      //   (3) Mother + nothing to reel BUT autopilot engaged → abort autopilot
+      //   (4) Otherwise        → "nothing to reel" comms (never silent)
+      // Shift+R = recall ALL deployed daughters (mother AND daughter mode);
+      // it always reports a result so it is never silent. Shift check FIRST.
       case 'KeyR':
         if (isGameplay) {
           e.preventDefault();
-          // (0) Shift+R: recall all deployed daughters
+          const am = d.armManager;
+          // (0) Shift+R: recall all deployed daughters (both modes). Use the
+          // count returned by recallAllDeployed() to always emit feedback —
+          // the old fire-and-forget ARM_RECALL_ALL claimed success even when
+          // nothing was deployed, which read as "did nothing".
           if (e.shiftKey) {
-            if (!e.repeat && d.armManager) {
-              eventBus.emit(Events.ARM_RECALL_ALL);
+            if (!e.repeat) {
               d.audioSystem?.playClick();
+              const n = (am && typeof am.recallAllDeployed === 'function')
+                ? am.recallAllDeployed()
+                : (eventBus.emit(Events.ARM_RECALL_ALL), null);
+              if (n != null) {
+                eventBus.emit(Events.COMMS_MESSAGE, {
+                  source: 'SPACECRAFT', channel: 'CMD',
+                  text: n > 0
+                    ? `Reeling in all daughters (${n}).`
+                    : 'No deployed daughters to reel in.',
+                  priority: 'info',
+                });
+              }
             }
             break;
           }
-          // (1) ARM_PILOT: reel piloted daughter (with or without debris)
+          // (1) ARM_PILOT: reel the piloted daughter home — from ANY state.
+          // recall() routes STATION_KEEP through reelFromStationKeep and sends
+          // every other live state (TRANSIT / APPROACH / HOLDING_CATCH / …) into
+          // a zero-fuel REELING return on the mother's tether motor, so R always
+          // brings the daughter you're flying back home (was SK-only — R did
+          // nothing mid-flight, 2026-06-14 fix).
           if (this.armPilotMode) {
             const pilotArmR = d.cameraSystem?.getPilotedArm?.();
-            if (pilotArmR && pilotArmR.state === Constants.ARM_STATES.STATION_KEEP) {
-              pilotArmR.reelFromStationKeep();
+            if (pilotArmR && typeof pilotArmR.recall === 'function'
+                && pilotArmR.state !== Constants.ARM_STATES.DOCKED
+                && pilotArmR.state !== Constants.ARM_STATES.EXPENDED) {
+              pilotArmR.recall({ motherInitiated: true });
               d.audioSystem?.playClick();
             } else {
-              // Outside SK while piloting — provide a hint
               d.audioSystem?.playClick();
               eventBus.emit(Events.COMMS_MESSAGE, {
                 source: 'SPACECRAFT', channel: 'CMD',
-                text: 'Reel-in only available from station-keep.',
+                text: 'No daughter to reel in.',
                 priority: 'info',
               });
             }
             break;
           }
-          // (2) Autopilot engaged → abort
+          // (2) Mother mode: reel the closest deployed daughter FIRST. Reeling
+          // is R's documented job, so it wins over the autopilot-abort even
+          // when the AP is engaged (the AP keeps the mother on-station while
+          // the daughter comes home; abort it explicitly with Esc).
+          if (am && typeof am.recallClosestDeployed === 'function') {
+            const recalled = am.recallClosestDeployed();
+            if (recalled !== null && recalled !== undefined) {
+              d.audioSystem?.playClick();
+              eventBus.emit(Events.COMMS_MESSAGE, {
+                source: 'SPACECRAFT', channel: 'CMD',
+                text: `Reeling in Daughter ${recalled + 1}.`,
+                priority: 'info',
+              });
+              break;
+            }
+          }
+          // (3) Nothing to reel — fall back to aborting an engaged autopilot
+          // (so R still has a sensible mother-mode action when no daughter is
+          // out), otherwise emit the gentle "nothing to reel" hint.
           if (d.autopilotSystem && d.autopilotSystem.engaged) {
             // No dedicated AUTOPILOT_ABORT event — call disengage() directly
             // (same path as A-key toggle when AP is on).  See Events.js note.
@@ -700,27 +742,13 @@ export class InputManager {
             });
             break;
           }
-          // (3) ORBITAL_VIEW with deployed daughter(s) → recall closest
-          const am = d.armManager;
-          if (am && typeof am.recallClosestDeployed === 'function') {
-            const recalled = am.recallClosestDeployed();
-            if (recalled !== null && recalled !== undefined) {
-              d.audioSystem?.playClick();
-              eventBus.emit(Events.COMMS_MESSAGE, {
-                source: 'SPACECRAFT', channel: 'CMD',
-                text: `Recalling Daughter ${recalled + 1}.`,
-                priority: 'info',
-              });
-            } else {
-              // Nothing to do — gentle hint
-              d.audioSystem?.playClick();
-              eventBus.emit(Events.COMMS_MESSAGE, {
-                source: 'SPACECRAFT', channel: 'CMD',
-                text: 'No deployed daughters to recall.',
-                priority: 'info',
-              });
-            }
-          }
+          // (4) Nothing to reel and no AP to abort — never silent.
+          d.audioSystem?.playClick();
+          eventBus.emit(Events.COMMS_MESSAGE, {
+            source: 'SPACECRAFT', channel: 'CMD',
+            text: 'No deployed daughters to reel in.',
+            priority: 'info',
+          });
         }
         break;
 
@@ -831,7 +859,7 @@ export class InputManager {
             if (deployed.length > 0) {
               const arm = deployed[deployed.length - 1];
               eventBus.emit(Events.COMMS_MESSAGE, {
-                text: `Daughter ${arm.id} deployed — tracking…`,
+                text: `Daughter ${arm.id} deployed. Tracking…`,
                 priority: 'info',
               });
               eventBus.emit(Events.LAUNCH_CEREMONY_START, { arm });
@@ -842,23 +870,19 @@ export class InputManager {
         }
         break;
 
-      // A key: Shift+A = autopilot to debris center + launch all; plain A =
-      // autopilot toggle. Hotkey revamp 2026-06-14: works in both mother and
-      // daughter modes (WASD thrust removed).
+      // A key: Shift+A = "go salvage the field" combo; plain A = autopilot
+      // toggle. Hotkey revamp 2026-06-14: works in both mother and daughter
+      // modes (WASD thrust removed).
       case 'KeyA':
         if (isGameplay && !e.repeat) {
           if (e.shiftKey) {
-            // Shift+A: head to the debris concentration AND launch all docked
-            // arms at it. Engage the debris-map cluster autopilot (centroid of
-            // the selected/strongest cluster), then deploy-all to the active
-            // target so the fleet converges with the mother.
-            if (d.debrisMap && typeof d.debrisMap.engageSelectedCluster === 'function') {
-              d.debrisMap.engageSelectedCluster();
-            }
-            if (d.armManager) {
-              const clusterTarget = d.targetSelector ? d.targetSelector.getActiveTarget() : null;
-              d.armManager.deployAllToTarget(clusterTarget);
-            }
+            // Shift+A (2026-06-14 high-risk-salvage rework): one press to
+            //   (1) autopilot the MOTHER to the field center (densest/highest-
+            //       value cluster),
+            //   (2) fire the MOTHER NET at the best in-range debris that is NOT
+            //       one of the daughters' targets, and
+            //   (3) fan EVERY docked daughter out to a DISTINCT debris.
+            this._fieldCenterSalvage();
             d.audioSystem?.playClick();
           } else if (d.autopilotSystem) {
             d.autopilotSystem.toggle();
@@ -1393,6 +1417,101 @@ export class InputManager {
   }
 
   /**
+   * Shift+A "field-center salvage" combo (2026-06-14 high-risk-salvage rework).
+   * One press maximizes quick salvage:
+   *   1. Autopilot the MOTHER to the debris-field center (densest / highest-
+   *      value cluster) via DebrisMap.engageBestCluster().
+   *   2. Fan EVERY docked daughter out to a DISTINCT debris (best TPI-ranked,
+   *      tracked/IR-filtered) via ArmManager.deployAllToDistinctTargets().
+   *   3. Fire the MOTHER NET at a SEPARATE debris — the best in-range one that
+   *      is NOT assigned to any daughter (user choice: net target is distinct
+   *      from the fan-out). Falls through gracefully when nothing is in range
+   *      or no daughters are available.
+   * @private
+   */
+  _fieldCenterSalvage() {
+    const d = this._deps;
+
+    // (1) Mother → field center. Prefer the "best cluster" helper; fall back to
+    // the currently-selected cluster for older DebrisMap stubs.
+    if (d.debrisMap) {
+      if (typeof d.debrisMap.engageBestCluster === 'function') {
+        d.debrisMap.engageBestCluster();
+      } else if (typeof d.debrisMap.engageSelectedCluster === 'function') {
+        d.debrisMap.engageSelectedCluster();
+      }
+    }
+
+    // Build the TPI-sorted, tracked/IR-filtered eligible debris list once.
+    let eligible = [];
+    try {
+      const list = d.debrisField.getEnhancedTargetList(
+        d.player.getPosition(), d.player.getOrbitalElements()
+      );
+      const canDetect = d.sensorSystem && d.sensorSystem.canDetectUntracked;
+      eligible = list.filter(t => t.tracked !== false || canDetect);
+    } catch (err) {
+      console.error('[field-center-salvage] target list error:', err);
+    }
+
+    // Count docked, spring-charged daughters so we can carve out distinct
+    // targets for them and reserve a SEPARATE one for the mother net.
+    const arms = (d.armManager && Array.isArray(d.armManager.arms)) ? d.armManager.arms : [];
+    const dockedCount = arms.filter(a =>
+      a && a.state === Constants.ARM_STATES.DOCKED && a.springCharged).length;
+
+    // Resolve debris objects for the top-N (one per docked daughter).
+    const daughterDebris = [];
+    const claimedIds = new Set();
+    for (const t of eligible) {
+      if (daughterDebris.length >= dockedCount) break;
+      const debris = d.debrisField.getDebrisById(t.id);
+      if (debris) {
+        daughterDebris.push(debris);
+        claimedIds.add(t.id);
+      }
+    }
+
+    // (3) Pick the mother-net target: best in-range debris NOT claimed by a
+    // daughter (separate target). Falls back to none when the field is small.
+    let netTarget = null;
+    for (const t of eligible) {
+      if (claimedIds.has(t.id)) continue;
+      const debris = d.debrisField.getDebrisById(t.id);
+      if (debris) { netTarget = debris; break; }
+    }
+
+    // (2) Fan the daughters out to distinct debris. Surplus daughters (more
+    // daughters than debris) fall back to the mother's active target.
+    if (d.armManager && typeof d.armManager.deployAllToDistinctTargets === 'function') {
+      const fallback = d.targetSelector ? d.targetSelector.getActiveTarget() : null;
+      d.armManager.deployAllToDistinctTargets(daughterDebris, fallback);
+    } else if (d.armManager && typeof d.armManager.deployAllToTarget === 'function') {
+      // Legacy fallback: single-target deploy-all.
+      d.armManager.deployAllToTarget(daughterDebris[0] || (d.targetSelector ? d.targetSelector.getActiveTarget() : null));
+    }
+
+    // (3 cont.) Fire the mother net at its separate target. Make it the active
+    // target so fireLasso() casts at it, then fire.
+    if (netTarget && d.lassoSystem) {
+      if (d.targetSelector && typeof d.targetSelector.setTarget === 'function') {
+        d.targetSelector.setTarget(netTarget);
+        if (d.debrisWireframe) d.debrisWireframe.setTarget(netTarget);
+        if (d.hud) d.hud.setSelectedTarget(netTarget.id);
+        if (d.targetReticle) d.targetReticle.setSelectedTarget(netTarget.id);
+        if (d.navSphere) d.navSphere.setSelectedTarget(netTarget.id);
+      }
+      this.fireLasso();
+    } else if (!netTarget && daughterDebris.length === 0) {
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        source: 'SPACECRAFT', channel: 'CMD',
+        text: 'No debris in range. Closing on field center.',
+        priority: 'warning',
+      });
+    }
+  }
+
+  /**
    * (hotkey revamp 2026-06-14, "spinning plates"; P / Shift+P removed):
    *   • DOCKED   → SELECT only (glow/flash via ARM_SELECT). Mother stays in
    *     view; the player then launches the selected daughter with D. NO deploy,
@@ -1428,7 +1547,7 @@ export class InputManager {
       d.armManager.selectArm(armIndex);
     } else if (arm.state === Constants.ARM_STATES.EXPENDED) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `${arm.id} is expended — not available`,
+        text: `${arm.id} is expended. Not available`,
         priority: 'warning',
       });
     } else {
@@ -1826,7 +1945,7 @@ export class InputManager {
     eventBus.emit(Events.COMMS_MESSAGE, {
       priority: 'warning',
       channel:  'FLIGHT',
-      text:     'ATTITUDE LOCKED — daughter under tether load',
+      text:     'ATTITUDE LOCKED. Daughter under tether load',
     });
   }
 

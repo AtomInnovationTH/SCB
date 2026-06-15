@@ -202,8 +202,8 @@ export class NetInventoryPanel {
     // Delegation 4 — Browser-playtest Bug 3: plain text glyphs (no emoji)
     // and short labels.  Per-arm net breakdown lives in the chip title
     // tooltip only — inline label is total/max.
-    this._lassoChip = this._buildChip('LASSO', '—/—', '');
-    this._netChip   = this._buildChip('NETS',  '—/—', '');
+    this._lassoChip = this._buildChip('LASSO', '. /. ', '');
+    this._netChip   = this._buildChip('NETS',  '. /. ', '');
     row.appendChild(this._lassoChip);
     row.appendChild(this._netChip);
 
@@ -385,7 +385,7 @@ export class NetInventoryPanel {
     const bothZero = (this._lasso_state.remaining === 0 && this._net_state.total === 0);
     const text = bothZero
       ? 'Out of capture tools. Shop (B) or Forge (5) to reload.'
-      : 'Low on nets, Cowboy — visit the Shop (B) or Forge new ones (5).';
+      : 'Low on nets, Cowboy. Visit the Shop (B) or Forge new ones (5).';
     this._eventBus?.emit?.(Events.COMMS_MESSAGE, {
       source: 'HOUSTON',
       channel: 'HOUSTON',

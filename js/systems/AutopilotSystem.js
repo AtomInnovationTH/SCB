@@ -176,7 +176,7 @@ export class AutopilotSystem {
     const dv = this._getRemainingDeltaV();
     if (dv < ENGAGE_DV_MIN) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `⚠ AUTOPILOT DENIED — ΔV ${Math.round(dv)} m/s below ${ENGAGE_DV_MIN} m/s safety limit`,
+        text: `⚠ AUTOPILOT DENIED. ΔV ${Math.round(dv)} m/s below ${ENGAGE_DV_MIN} m/s safety limit`,
         priority: 'warning',
       });
       return;
@@ -198,7 +198,7 @@ export class AutopilotSystem {
         if (this._trawlActive) {
           // Abort failed to clear the sweep — bail out rather than fight it.
           eventBus.emit(Events.COMMS_MESSAGE, {
-            text: '⚠ AUTOPILOT DENIED — trawl sweep still active',
+            text: '⚠ AUTOPILOT DENIED. Trawl sweep still active',
             priority: 'warning',
           });
           return;
@@ -206,7 +206,7 @@ export class AutopilotSystem {
       } else {
         this._trawlAbortArmed = true;
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: '⚠ AUTOPILOT DENIED — trawl sweep in progress. Press A again to abort the sweep and engage.',
+          text: '⚠ AUTOPILOT DENIED. Trawl sweep in progress. Press A again to abort the sweep and engage.',
           priority: 'warning',
         });
         return;
@@ -228,7 +228,7 @@ export class AutopilotSystem {
         this._targetSelector.setTarget(nearest.debris, { source: 'autopilot_reacquire' });
         hasSelectedTarget = this._targetSelector.getActiveTarget();
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: 'No target selected — acquiring nearest contact.',
+          text: 'No target selected. Acquiring nearest contact.',
           priority: 'info',
         });
       } else if (nearest) {
@@ -244,7 +244,7 @@ export class AutopilotSystem {
       // (Constants.js:1006 nav_autopilot_no_target).
       eventBus.emit(Events.AUTOPILOT_NO_TARGET);
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: '⚠ AUTOPILOT DENIED — no live contacts in the field. Check the Debris Map (`) for the next cluster.',
+        text: '⚠ AUTOPILOT DENIED. No live contacts in the field. Check the Debris Map (`) for the next cluster.',
         priority: 'warning',
       });
       return;
@@ -253,7 +253,7 @@ export class AutopilotSystem {
     const heading = this._determineHeading();
     if (!heading) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: 'AUTOPILOT: No valid heading — using prograde',
+        text: 'AUTOPILOT: No valid heading. Using prograde',
         priority: 'info',
       });
     }
@@ -286,7 +286,7 @@ export class AutopilotSystem {
       phase: this._phase,
     });
     eventBus.emit(Events.COMMS_MESSAGE, {
-      text: `AUTOPILOT ENGAGED — ${this._headingMode}`,
+      text: `AUTOPILOT ENGAGED. ${this._headingMode}`,
       priority: 'info',
     });
     // UX-2 #12: Route autopilot engage through notification zone
@@ -325,7 +325,7 @@ export class AutopilotSystem {
       phase: this._phase,
     });
     eventBus.emit(Events.COMMS_MESSAGE, {
-      text: `AUTOPILOT ENGAGED — CLUSTER: ${cluster.name || cluster.id}`,
+      text: `AUTOPILOT ENGAGED. CLUSTER: ${cluster.name || cluster.id}`,
       priority: 'info',
     });
   }
@@ -357,7 +357,7 @@ export class AutopilotSystem {
 
     eventBus.emit(Events.AUTOPILOT_DISENGAGE, { reason });
     eventBus.emit(Events.COMMS_MESSAGE, {
-      text: `AUTOPILOT OFF — ${reason}`,
+      text: `AUTOPILOT OFF. ${reason}`,
       priority: reason === 'DELTAV' || reason === 'COLLISION' ? 'warning' : 'info',
     });
     // UX-2 #12: Route autopilot disengage through notification zone
@@ -579,7 +579,7 @@ export class AutopilotSystem {
 
           eventBus.emit(Events.AUTOPILOT_ARRIVED, { mode: this._headingMode });
           eventBus.emit(Events.COMMS_MESSAGE, {
-            text: '✓ ON STATION — [N] lasso (≤200m) · [D] deploy daughter for far/heavy debris',
+            text: '✓ ON STATION. [N] lasso (≤200m) · [D] deploy daughter for far/heavy debris',
             priority: 'info',
           });
         } else if (posErrM > Dtrail_m * 3) {
@@ -1121,7 +1121,7 @@ export class AutopilotSystem {
         this._warnedAboutArrows = true;
         eventBus.emit(Events.COMMS_MESSAGE, {
           source: 'SPACECRAFT', channel: 'CMD', priority: 'warning',
-          text: 'Release arrow keys — autopilot has control.',
+          text: 'Release arrow keys. Autopilot has control.',
         });
       }
     });
@@ -1288,7 +1288,7 @@ export class AutopilotSystem {
       // Houston comms
       const estTime = Math.abs(motherRotationRad) / AP_ROT_RATE;
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `Rotating to launch attitude — ${Math.ceil(estTime)} seconds.`,
+        text: `Rotating to launch attitude. ${Math.ceil(estTime)} seconds.`,
         priority: 'info',
         source: 'HOUSTON',
       });

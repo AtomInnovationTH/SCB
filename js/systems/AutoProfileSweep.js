@@ -277,7 +277,7 @@ function ensureOverlay() {
   root.appendChild(row);
   const hint = document.createElement('div');
   hint.className = 'ap-hint';
-  hint.textContent = 'Auto-download may be blocked — use the buttons above (each is a user gesture so clipboard / download will work).';
+  hint.textContent = 'Auto-download may be blocked. Use the buttons above (each is a user gesture so clipboard / download will work).';
   hint.style.display = 'none';
   root.appendChild(hint);
   document.body.appendChild(root);
@@ -313,7 +313,7 @@ export class AutoProfileSweep {
   async start() {
     if (!profileFlags.autoProfile) return;
     if (this._running) {
-      console.warn('[AutoProfile] already running — ignoring duplicate start()');
+      console.warn('[AutoProfile] already running. Ignoring duplicate start()');
       return;
     }
     const sm = this._refs.sceneManager;
@@ -323,7 +323,7 @@ export class AutoProfileSweep {
     }
     const probe = sm.gpuProbe;
     if (!probe || !probe.isSupported) {
-      console.warn('[AutoProfile] EXT_disjoint_timer_query_webgl2 unavailable — sweep would record null medians; aborting.');
+      console.warn('[AutoProfile] EXT_disjoint_timer_query_webgl2 unavailable. Sweep would record null medians; aborting.');
       return;
     }
     // Defensive: if the startup probe completion path disabled the probe
@@ -355,7 +355,7 @@ export class AutoProfileSweep {
     this._running = true;
     const sessionStart = Date.now();
     const initialState = readGameState(this._refs);
-    console.info(`[AutoProfile] starting sweep — state=${initialState}, tier=${sm.currentTier}, configs=${SWEEP_CONFIGS.length}`);
+    console.info(`[AutoProfile] starting sweep. State=${initialState}, tier=${sm.currentTier}, configs=${SWEEP_CONFIGS.length}`);
 
     // Install the in-page overlay so the user can SEE progress + the final
     // JSON without needing DevTools. Browsers silently block auto-downloads
@@ -528,7 +528,7 @@ export class AutoProfileSweep {
     // inside a real user gesture so clipboard + download work.
     if (overlay) {
       overlay.status.textContent =
-        `✓ SWEEP COMPLETE — state=${state}, tier=${blob.tier}, ${wallMs} ms, ${this._results.length} configs`;
+        `✓ SWEEP COMPLETE. State=${state}, tier=${blob.tier}, ${wallMs} ms, ${this._results.length} configs`;
       overlay.pre.textContent = text;
       overlay.pre.style.display = 'block';
       overlay.copyBtn.style.display = 'inline-block';
@@ -545,7 +545,7 @@ export class AutoProfileSweep {
           if (navigator.clipboard?.writeText) {
             navigator.clipboard.writeText(text).then(
               () => { overlay.copyBtn.textContent = '✓ Copied'; },
-              () => { overlay.copyBtn.textContent = '✗ blocked — select & Cmd-C'; },
+              () => { overlay.copyBtn.textContent = '✗ blocked. Select & Cmd-C'; },
             );
           } else {
             const r = document.createRange();
@@ -557,7 +557,7 @@ export class AutoProfileSweep {
             overlay.copyBtn.textContent = ok ? '✓ Copied' : '✗ select & Cmd-C';
           }
         } catch (e) {
-          overlay.copyBtn.textContent = '✗ blocked — select & Cmd-C';
+          overlay.copyBtn.textContent = '✗ blocked. Select & Cmd-C';
           console.warn('[AutoProfile] copy failed:', e);
         }
       };

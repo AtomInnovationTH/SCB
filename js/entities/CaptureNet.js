@@ -393,21 +393,21 @@ export function missReasonToText(reason) {
   switch (reason) {
     case 'timeout':
     case 'tether_limit':
-      return 'Net overshot — line up the reticle and re-fire. Net reeling back; inventory restored.';
+      return 'Net overshot. Line up the reticle and re-fire. Net reeling back; inventory restored.';
     case 'cling_failed':
-      return 'Net grazed it — wrap didn\'t hold. Close the distance or de-spin the target (hold H), then re-fire.';
+      return 'Net grazed it. Wrap didn\'t hold. Close the distance or de-spin the target (hold H), then re-fire.';
     case 'oversize_aspect':
       // Phase 2: deterministic broadside bounce — teach the orientation fix.
-      return 'Net bounced off broadside — too wide this way. De-spin, then come around end-on so the net swallows it lengthwise.';
+      return 'Net bounced off broadside. Too wide this way. De-spin, then come around end-on so the net swallows it lengthwise.';
     case 'fragmented':
       // Phase 3b: the impact broke the target up — teach the gentle approach.
-      return 'Impact broke the target apart — fragments are now tracked. Approach slower on brittle debris (CINCH wraps gentler).';
+      return 'Impact broke the target apart. Fragments are now tracked. Approach slower on brittle debris (CINCH wraps gentler).';
     case 'forced':
       return null;   // scripted/test resolves stay silent
     default:
       // Phase 2: generic line instead of silent null — a miss should never
       // leave the player guessing.
-      return 'Net missed — re-line the shot and fire again. Net reeling back.';
+      return 'Net missed. Re-line the shot and fire again. Net reeling back.';
   }
 }
 
@@ -1268,7 +1268,7 @@ export class CaptureNetSystem {
     // and what fixes it (wait N s / restock at shop [B]).
     if (this._motherPodInventory[podIndex] <= 0) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: 'Mother net magazine empty — restock at shop [B]',
+        text: 'Mother net magazine empty. Restock at shop [B]',
         source: 'SYSTEM',
         channel: 'CMD',
         priority: 'warning',
@@ -1278,7 +1278,7 @@ export class CaptureNetSystem {
     if (this._cooldownTimers.has(`pod_${podIndex}`)) {
       const secs = this._cooldownTimers.get(`pod_${podIndex}`) || 0;
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `Mother net reloading — ${Math.ceil(secs)}s`,
+        text: `Mother net reloading. ${Math.ceil(secs)}s`,
         source: 'SYSTEM',
         channel: 'CMD',
         priority: 'info',

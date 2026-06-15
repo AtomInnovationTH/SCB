@@ -29,13 +29,23 @@ export class CargoSystem {
    * @returns {{ stored: boolean, overflow: number }}
    */
   storeMetal(data) {
+    // Guard: CARGO_STORE is also emitted as a capture *notification* (e.g.
+    // CaptureNet's { debrisId, mass, netCapture } payload), which is NOT a
+    // refined-metal entry. Only well-formed metal payloads (a string metalId +
+    // a finite positive massKg) are stored — otherwise a Map entry keyed
+    // `undefined` with NaN mass corrupts the manifest and crashes the shop.
+    if (!data || typeof data.metalId !== 'string' || !data.metalId
+        || !Number.isFinite(data.massKg) || data.massKg <= 0) {
+      return { stored: false, overflow: 0 };
+    }
+
     const available = this._capacityKg - this._totalMassKg;
     const toStore = Math.min(data.massKg, available);
     const overflow = data.massKg - toStore;
 
     if (toStore <= 0) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        sender: 'CARGO', text: `Hold full — cannot store ${data.name}`, priority: 'warning'
+        sender: 'CARGO', text: `Hold full. Cannot store ${data.name}`, priority: 'warning'
       });
       return { stored: false, overflow: data.massKg };
     }
@@ -189,6 +199,12 @@ export class CargoSystem {
     this._totalMassKg = 0;
     if (data && data.entries) {
       for (const entry of data.entries) {
+        // Skip malformed entries (no metalId / non-finite mass) so a corrupt
+        // save can't reintroduce an undefined-keyed manifest item.
+        if (!entry || typeof entry.metalId !== 'string' || !entry.metalId
+            || !Number.isFinite(entry.massKg) || entry.massKg <= 0) {
+          continue;
+        }
         this._cargo.set(entry.metalId, {
           name: entry.name,
           massKg: entry.massKg,

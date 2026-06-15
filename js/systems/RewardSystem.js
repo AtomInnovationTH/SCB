@@ -45,6 +45,10 @@ export class RewardSystem {
     this._fieldCaptured = 0;
     /** @type {Set<string>} Field-clear thresholds already announced */
     this._fieldThresholdsHit = new Set();
+    /** @type {string|null} Cluster id currently engaged for field progress (defer-trawl) */
+    this._activeClusterId = null;
+    /** @type {string|null} Human-readable name of the engaged cluster */
+    this._activeClusterName = null;
 
     // === Streak tracking ===
     /** @type {number} Timestamp of last catch (performance.now ms) */
@@ -91,7 +95,7 @@ export class RewardSystem {
       this._registerMetals([id]);
     });
 
-    // --- Trawl lifecycle ---
+    // --- Trawl lifecycle (advanced "Dragnet" mission only — preserved) ---
     eventBus.on(Events.TRAWL_START, () => {
       this._resetTrawlStats();
     });
@@ -102,6 +106,21 @@ export class RewardSystem {
 
     eventBus.on(Events.TRAWL_SWEEP_COMPLETE, (data) => {
       this._compileSweepReport(data);
+    });
+
+    // --- Active-capture cluster lifecycle (defer-trawl core loop) ---
+    // Seed field progress from the engaged cluster's REAL size when the player
+    // picks a cluster on the Debris Map. This decouples the 25/50/75/100 %
+    // comms + tiered bonuses from the (now-hidden) trawl auto-start so clearing
+    // a cluster by hand still pays off.
+    eventBus.on(Events.DEBRIS_MAP_CLUSTER_SELECTED, (data) => {
+      this._beginCluster(data);
+    });
+
+    // The active loop's celebration anchor: DebrisField emits this when the
+    // last alive member of a cluster bucket is removed via capture/deorbit.
+    eventBus.on(Events.CLUSTER_CLEARED, (data) => {
+      this._onClusterCleared(data);
     });
 
     // --- Arm deploy tracking for "all 6 deployed" milestone ---
@@ -245,7 +264,7 @@ export class RewardSystem {
     // First detached deorbit
     if (eventType === 'deorbit' && !this.milestones.has('firstDetachedDeorbit')) {
       this.milestones.set('firstDetachedDeorbit', true);
-      this._sendComms('Houston: Detached daughter completed deorbit. Sacrificial play — debris eliminated.');
+      this._sendComms('Houston: Detached daughter completed deorbit. Sacrificial play. Debris eliminated.');
     }
   }
 
@@ -294,7 +313,7 @@ export class RewardSystem {
       }
       const upper = key.toUpperCase();
       if (!KNOWN_METALS.has(upper)) {
-        console.warn(`[RewardSystem] Unknown metal key: "${upper}" — won't trigger synergies`);
+        console.warn(`[RewardSystem] Unknown metal key: "${upper}". Won't trigger synergies`);
       }
       this._trawlMetals.add(upper);
     }
@@ -332,7 +351,7 @@ export class RewardSystem {
     });
 
     // Comms
-    this._sendComms(`Houston: Synergistic salvage — ${synergy.name}. Bonus awarded.`);
+    this._sendComms(`Houston: Synergistic salvage. ${synergy.name}. Bonus awarded.`);
 
     // Synergy bonus event for HUD popup
     eventBus.emit(Events.SYNERGY_BONUS, {
@@ -393,6 +412,84 @@ export class RewardSystem {
     return { captured, total, percentage };
   }
 
+  /**
+   * Begin tracking field progress for a newly-engaged cluster (defer-trawl).
+   * Seeds _fieldTotal from the cluster's real size so the 25/50/75/100 %
+   * comms + tiered bonuses track active hand-clearing instead of trawl windows.
+   * @private
+   * @param {{clusterId?:string, name?:string, count?:number}} data
+   */
+  _beginCluster(data) {
+    if (!data) return;
+    const count = typeof data.count === 'number' ? data.count : 0;
+
+    // Re-selecting the already-engaged cluster shouldn't wipe progress.
+    if (data.clusterId && data.clusterId === this._activeClusterId) {
+      // Refresh total in case the cluster grew/shrank, but keep captured count.
+      if (count > 0) this._fieldTotal = count;
+      return;
+    }
+
+    this._activeClusterId = data.clusterId || null;
+    this._activeClusterName = data.name || null;
+    this._fieldTotal = count;
+    this._fieldCaptured = 0;
+    this._fieldThresholdsHit.clear();
+  }
+
+  /**
+   * Active-loop ceremony anchor (defer-trawl). Fired when DebrisField reports
+   * the last alive member of a cluster bucket was removed. Guarantees the
+   * 100 % field-clear bonus + comms even if incremental thresholds were never
+   * seeded (e.g. cluster cleared without ever opening the Debris Map), then
+   * emits a compiled SWEEP_REPORT to drive the star ceremony.
+   * @private
+   * @param {{clusterId?:string, name?:string, count?:number}} data
+   */
+  _onClusterCleared(data) {
+    data = data || {};
+
+    // Only the cluster the player is actively working (or an unseeded session
+    // where we never opened the Debris Map) drives the ceremony + bonus. A
+    // background clear of a DIFFERENT cluster (e.g. a stray deorbit emptying
+    // bucket B while engaged on A) must not fire a spurious ceremony with A's
+    // counts, nor wipe A's in-progress tracking.
+    const matches = !this._activeClusterId
+      || !data.clusterId
+      || data.clusterId === this._activeClusterId;
+    if (!matches) return;
+
+    if (this._fieldTotal <= 0 && typeof data.count === 'number') {
+      this._fieldTotal = data.count;
+    }
+    if (this._fieldTotal > 0 && this._fieldCaptured < this._fieldTotal) {
+      // Some pieces may have been deorbited rather than captured; treat the
+      // bucket as fully cleared for ceremony purposes.
+      this._fieldCaptured = this._fieldTotal;
+    }
+    // Fire any not-yet-announced incremental thresholds + the 100 % bonus.
+    this._checkFieldClearing();
+
+    // Celebration: audio cue + compiled star report (reuses SweepReportUI).
+    eventBus.emit(Events.AUDIO_CUE, { cue: 'sweepComplete' });
+    this._compileSweepReport(
+      { duration: 0, targetsEntered: this._fieldTotal },
+      { title: 'CLUSTER CLEARED', clusterName: data.name || this._activeClusterName || null }
+    );
+
+    // Reset per-cluster trackers so the NEXT cluster starts clean. Capture
+    // counters must reset here too: the active-capture loop never emits
+    // TRAWL_START, so _resetTrawlStats() never runs — without this, _trawlCatches
+    // accrues across clusters and _compileSweepReport reports >100 % from the
+    // second cluster onward.
+    this._trawlCatches = 0;
+    this._fieldCaptured = 0;
+    this._fieldTotal = 0;
+    this._activeClusterId = null;
+    this._activeClusterName = null;
+    this._fieldThresholdsHit.clear();
+  }
+
   // ==========================================================================
   // ALL-ARMS-DEPLOYED CHECK
   // ==========================================================================
@@ -411,7 +508,7 @@ export class RewardSystem {
       this._allArmsDeployedNotified = true;
       if (!this.milestones.has('allArms')) {
         this.milestones.set('allArms', true);
-        this._sendComms('Houston: All six daughters deployed. Full spread — impressive coordination.');
+        this._sendComms('Houston: All six daughters deployed. Full spread. Impressive coordination.');
       }
     }
   }
@@ -421,12 +518,18 @@ export class RewardSystem {
   // ==========================================================================
 
   /**
-   * Compile and emit the full sweep report when a trawl ends.
+   * Compile and emit the full report (star ceremony). Used by both the
+   * advanced trawl sweep (TRAWL_SWEEP_COMPLETE) and the core active-capture
+   * loop (CLUSTER_CLEARED).
    * @private
    * @param {object} trawlData — { duration, targetsEntered }
+   * @param {object} [opts] — { title?:string, clusterName?:string }
    */
-  _compileSweepReport(trawlData) {
-    const totalCaptured = this._trawlCatches;
+  _compileSweepReport(trawlData, opts = {}) {
+    // For the active-capture loop, debris can leave a cluster via deorbit as
+    // well as capture, so _fieldCaptured (cluster-clear count) is the
+    // authoritative "cleared" tally — use the larger of it and _trawlCatches.
+    const totalCaptured = Math.max(this._trawlCatches, this._fieldCaptured);
     const totalTargets = this._fieldTotal;
     const clearPercentage = totalTargets > 0
       ? Math.round((totalCaptured / totalTargets) * 100) : 0;
@@ -447,6 +550,8 @@ export class RewardSystem {
     const stars = this._calculateStars(clearPercentage, synergiesTriggered.length, armsUsed);
 
     const report = {
+      title: opts.title || 'SWEEP REPORT',
+      clusterName: opts.clusterName || null,
       totalCaptured,
       totalTargets,
       clearPercentage,
@@ -506,6 +611,8 @@ export class RewardSystem {
     this._fieldTotal = 0;
     this._fieldCaptured = 0;
     this._fieldThresholdsHit.clear();
+    this._activeClusterId = null;
+    this._activeClusterName = null;
     this._allArmsDeployedNotified = false;
 
     // Reset per-trawl milestones so they can fire again next trawl

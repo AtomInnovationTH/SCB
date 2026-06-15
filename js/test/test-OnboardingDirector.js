@@ -149,7 +149,7 @@ describe('OnboardingDirector — lifecycle (MISSION_START → trigger → advanc
       const commsEmits = eb._findEmits(Events.COMMS_MESSAGE);
       assert.ok(commsEmits.length >= 1, 'COMMS_MESSAGE must fire on beat post');
       const firstComms = commsEmits[0];
-      assert.equal(firstComms.payload.text, 'Cowboy, test your RCS (Reaction Control System — your steering thrusters) with the arrow keys.');
+      assert.equal(firstComms.payload.text, 'Check attitude control. The arrow keys fire your RCS (Reaction Control System) thrusters.');
 
       const hintEmits = eb._findEmits(Events.HINT_POSTED);
       assert.ok(hintEmits.length >= 1, 'HINT_POSTED must fire on beat post');
@@ -173,7 +173,7 @@ describe('OnboardingDirector — lifecycle (MISSION_START → trigger → advanc
 
       // Houston ack message fires after satisfy.
       const ackEmits = eb._findEmits(Events.COMMS_MESSAGE);
-      const ack = ackEmits.find(e => e.payload.text === 'RCS (steering thrusters) good. Solar panels tracking the sun.');
+      const ack = ackEmits.find(e => e.payload.text === 'Copy. RCS nominal, solar panels tracking.');
       assert.ok(ack, 'commsAck should be emitted');
 
       // Beat marked completed.
@@ -435,7 +435,7 @@ describe('OnboardingDirector — conditional gating (#1 target, #3 capture)', ()
       // must NOT have been posted; instead a *_wait nudge hint is shown.
       assert.equal(d.getActiveBeatId(), 'target');
       const targetComms = eb._findEmits(Events.COMMS_MESSAGE)
-        .filter(e => e.payload.text && e.payload.text.includes('press Tab'));
+        .filter(e => e.payload.text && e.payload.text.includes('Press T'));
       assert.equal(targetComms.length, 0, 'real target comms not posted while held');
       const waitHints = eb._findEmits(Events.HINT_POSTED).filter(e => e.payload.id === 'target_wait');
       assert.ok(waitHints.length >= 1, 'a waiting nudge hint is shown');
@@ -445,7 +445,7 @@ describe('OnboardingDirector — conditional gating (#1 target, #3 capture)', ()
       eb._reset();
       eb.emit(Events.TARGET_DISCOVERED, { target: {} });
       const realTargetComms = eb._findEmits(Events.COMMS_MESSAGE)
-        .filter(e => e.payload.text && e.payload.text.includes('press Tab'));
+        .filter(e => e.payload.text && e.payload.text.includes('Press T'));
       assert.ok(realTargetComms.length >= 1, 'real target beat posts once a contact exists');
       const cleared = eb._findEmits(Events.HINT_SATISFIED).filter(e => e.payload.id === 'target_wait');
       assert.ok(cleared.length >= 1, 'wait nudge cleared when gate opens');

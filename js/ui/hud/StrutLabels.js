@@ -173,7 +173,7 @@ export class StrutLabels {
 
       const alpha = _hingeAngle(sg);
       const lbl   = this._labels[i];
-      lbl.textContent  = `STRUT ${i + 1}/${k} — α=${String(alpha).padStart(3, ' ')}°`;
+      lbl.textContent  = `STRUT ${i + 1}/${k}. α=${String(alpha).padStart(3, ' ')}°`;
       lbl.style.left   = `${Math.round(sx + 8)}px`;
       lbl.style.top    = `${Math.round(sy - 10)}px`;
     }

@@ -32,6 +32,9 @@ import './test-AutopilotSystem.js';
 // UX-11 #4: TrawlManager sweep auto-complete + abort
 import './test-TrawlManager.js';
 
+// defer-trawl: CLUSTER_CLEARED + RewardSystem field-progress re-anchor
+import './test-ClusterCleared.js';
+
 // UX-11 #11: lost-in-space recovery advisor (bearing helpers + watchdog + empty-scan)
 import './test-NavRecoveryAdvisor.js';
 
@@ -68,6 +71,7 @@ import './test-hud-activate-keys.js';
 // ST-4.A: Debris Map — cluster scoring, engageCluster, constants
 import './test-DebrisMap.js';
 import './test-ScanFieldRewards.js';
+import './test-CargoSystem.js';  // manifest integrity guard (shop-crash regression)
 
 // ST-4.C: Mission Spawn Difficulty Profiles
 import './test-MissionProfiles.js';
@@ -137,6 +141,7 @@ import './test-CodexISRO.js';
 
 // ST-9.2: Config G geometry — collar hinge, azimuth docking, strut tip math, dual-fire pairs
 import './test-ArmManager-ConfigG.js';
+import './test-ArmManager-Salvage.js';   // Shift+A fan-out + Shift+R reel-all (2026-06-14)
 
 // ST-9.3 C-3: Config G Aim + Hinge + DualFire + Recoil + Decomposition
 import './test-ArmUnit-ConfigG-Aim.js';
@@ -243,6 +248,7 @@ import './test-RotationLock.js';
 
 // Delegation 2 (2026-05-31) — Onboarding pipeline (Director + ticker + welcome field)
 import './test-OnboardingDirector.js';
+import './test-GuidanceHotkeyDrift.js';  // guidance ⇄ hotkey drift guard (2026-06-14 revamp)
 import './test-HintTicker.js';
 import './test-WelcomeField.js';
 

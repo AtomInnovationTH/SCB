@@ -577,7 +577,7 @@ describe('EnvironmentSystem — Event Emissions', () => {
 
     const comms = eb.getEmitted().filter(e => e.evt === Events.COMMS_MESSAGE);
     assert.ok(comms.length >= 1, 'Should emit at least one Houston warning for AO');
-    assert.ok(comms[0].data.text.includes('atomic oxygen'), 'COMMS should mention atomic oxygen');
+    assert.ok(comms[0].data.text.toLowerCase().includes('atomic oxygen'), 'COMMS should mention atomic oxygen');
   });
 
   it('Events.js constants exist', () => {

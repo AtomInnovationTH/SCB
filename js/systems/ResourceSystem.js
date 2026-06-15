@@ -290,7 +290,7 @@ export class ResourceSystem {
       eventBus.emit(Events.FUEL_DEPLETED, { fuelId: this._currentFuelId, name: fuel.name });
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'PROPULSION',
-        text: `${fuel.name} depleted — switching to Xenon`,
+        text: `${fuel.name} depleted. Switching to Xenon`,
         priority: 'warning',
       });
       this._currentFuelId = 'xenon';

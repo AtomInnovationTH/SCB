@@ -468,7 +468,7 @@ export class DebrisField {
     // ST-6.1: hybrid-mode boot log
     if (this._catalogLoader && this._catalogLoader.isReady && this._catalogLoader.isReady()) {
       const proc = this.debrisList.length - this.realEntryCount;
-      console.log(`[DebrisField] HYBRID mode — ${this.realEntryCount} real catalogue + ${proc} procedural filler`);
+      console.log(`[DebrisField] HYBRID mode. ${this.realEntryCount} real catalogue + ${proc} procedural filler`);
     }
 
     // Phase 6: Listen for EDT attract events to nudge small debris toward player
@@ -1392,7 +1392,7 @@ export class DebrisField {
           });
           eventBus.emit(Events.COMMS_MESSAGE, {
             sender: 'DEBRIS',
-            text: `🔥 Debris ${debris.id} burned up — web-assisted de-orbit complete`,
+            text: `🔥 Debris ${debris.id} burned up. Web-assisted de-orbit complete`,
             priority: 'success',
           });
           continue; // skip further processing for this debris
@@ -1802,7 +1802,7 @@ export class DebrisField {
 
     eventBus.emit(Events.COMMS_MESSAGE, {
       sender: 'DEBRIS',
-      text: `Debris ${debrisId}: drag ×${debris.dragMultiplier} — passive de-orbit initiated`,
+      text: `Debris ${debrisId}: drag ×${debris.dragMultiplier}. Passive de-orbit initiated`,
       priority: 'info',
     });
   }
@@ -2610,6 +2610,11 @@ export class DebrisField {
     const debris = this.debrisMap.get(id);
     if (!debris || !debris.alive) return false;
 
+    // Capture the cluster bucket BEFORE marking dead so we can check whether
+    // this removal emptied the bucket (defer-trawl: anchors CLUSTER_CLEARED on
+    // active captures/deorbits instead of trawl sweeps).
+    const clusterId = this._clusterIdOf(debris);
+
     debris.alive = false;
 
     // Set instance scale to 0 (hide)
@@ -2624,7 +2629,83 @@ export class DebrisField {
     }
 
     eventBus.emit(Events.DEBRIS_REMOVED, { id, type: debris.type, sizeMeter: debris.sizeMeter });
+
+    // CLUSTER_CLEARED: if this piece was the last alive member of its bucket,
+    // fire the cluster-cleared ceremony. Guard against double-emit when several
+    // removal paths (CATCH_PROCESSED, ARM_DEORBIT, lasso) race the last member.
+    if (clusterId) {
+      this._maybeEmitClusterCleared(clusterId);
+    }
+
     return true;
+  }
+
+  /**
+   * Resolve the (altitude band × inclination cluster) bucket id for a debris
+   * object — the single classification entry point shared by getDebrisClusters,
+   * getFieldIdNear, and the CLUSTER_CLEARED accounting (so all three stay in
+   * lockstep). Transparently memoized on the orbital determinants (sma + inc):
+   * the result is identical to a live recompute, but stable debris (the vast
+   * majority on any given frame) skip the arithmetic + two linear searches, so
+   * the per-removal membership scan in _maybeEmitClusterCleared stays cheap.
+   * The cache auto-invalidates whenever sma/inc change (drift, deorbit, EDT
+   * attract, station-keep snap, fragment respawn).
+   * @private
+   * @param {object} debris
+   * @returns {string|null} cluster id, or null if out of tracked bands
+   */
+  _clusterIdOf(debris) {
+    if (!debris || !debris.orbit) return null;
+    const sma = debris.orbit.semiMajorAxis;
+    const inc = debris.orbit.inclination;
+    if (debris._clusterId !== undefined
+        && debris._clusterIdSma === sma
+        && debris._clusterIdInc === inc) {
+      return debris._clusterId;
+    }
+    const altKm = (sma - Constants.EARTH_RADIUS) / Constants.SCENE_SCALE;
+    const incDeg = inc * 180 / Math.PI;
+    debris._clusterId = classifyClusterId(altKm, incDeg);
+    debris._clusterIdSma = sma;
+    debris._clusterIdInc = inc;
+    return debris._clusterId;
+  }
+
+  /**
+   * Emit CLUSTER_CLEARED once for a bucket whose last alive member was just
+   * removed. Always called immediately AFTER a live member was marked dead, so
+   * the bucket was non-empty an instant ago. The alive-count check below is the
+   * sole de-dup mechanism: a bucket reaches `aliveInBucket === 0` exactly once
+   * per emptying (removeDebris early-returns on already-dead ids), and a later
+   * Kessler re-population that re-empties the same band naturally re-fires.
+   * @private
+   * @param {string} clusterId
+   */
+  _maybeEmitClusterCleared(clusterId) {
+    // Count alive members + total in a single pass. Per-item cost is a cached
+    // id lookup + string compare (see _clusterIdOf memoization).
+    let aliveInBucket = 0;
+    let totalInBucket = 0;
+    for (const d of this.debrisList) {
+      if (this._clusterIdOf(d) !== clusterId) continue;
+      totalInBucket++;
+      if (d.alive) aliveInBucket++;
+    }
+
+    if (aliveInBucket > 0) return; // bucket not empty yet
+
+    // Build a readable name from the id (`${incName}-${altMin}`).
+    const dash = clusterId.lastIndexOf('-');
+    const incName = dash >= 0 ? clusterId.slice(0, dash) : clusterId;
+    const altMin = dash >= 0 ? clusterId.slice(dash + 1) : '';
+    const incMeta = INC_NAMES.find(i => i.name === incName);
+    const altBand = ALT_BANDS.find(a => String(a.min) === altMin);
+    const name = (incMeta && altBand)
+      ? `${incMeta.label}, ${altBand.min}-${altBand.max} km`
+      : clusterId;
+
+    eventBus.emit(Events.CLUSTER_CLEARED, { clusterId, name, count: totalInBucket });
+    console.log(`[DebrisField] Cluster cleared: ${clusterId} (${totalInBucket} debris)`);
   }
 
   /**
@@ -2749,15 +2830,15 @@ export class DebrisField {
     for (const debris of this.debrisList) {
       if (!debris.alive) continue;
 
-      // Convert orbit SMA (scene units) back to altitude in km
-      const altKm = (debris.orbit.semiMajorAxis - Constants.EARTH_RADIUS) / Constants.SCENE_SCALE;
-      // Convert inclination from radians to degrees
-      const incDeg = debris.orbit.inclination * 180 / Math.PI;
-
-      const clusterId = classifyClusterId(altKm, incDeg);
+      // Shared classifier (memoized) — keeps cluster membership identical to
+      // the CLUSTER_CLEARED accounting in _maybeEmitClusterCleared.
+      const clusterId = this._clusterIdOf(debris);
       if (!clusterId) continue; // out of range
       const cluster = clusters.get(clusterId);
       if (!cluster) continue;
+
+      // Altitude (km) still needed for the running average.
+      const altKm = (debris.orbit.semiMajorAxis - Constants.EARTH_RADIUS) / Constants.SCENE_SCALE;
 
       cluster.count++;
       cluster._altSum += altKm;
@@ -2859,9 +2940,7 @@ export class DebrisField {
       if (!sp) continue;
       const dx = sp.x - position.x, dy = sp.y - position.y, dz = sp.z - position.z;
       if (dx * dx + dy * dy + dz * dz > rSq) continue;
-      const altKm = (debris.orbit.semiMajorAxis - Constants.EARTH_RADIUS) / Constants.SCENE_SCALE;
-      const incDeg = debris.orbit.inclination * 180 / Math.PI;
-      const id = classifyClusterId(altKm, incDeg);
+      const id = this._clusterIdOf(debris);
       if (!id) continue;
       tally.set(id, (tally.get(id) || 0) + 1);
     }

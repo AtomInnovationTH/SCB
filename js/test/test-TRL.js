@@ -294,10 +294,10 @@ describe('TRL - distribution sanity', () => {
 describe('Tech Level (UX-11 #10) - presentation relabel', () => {
 
   it('trlToTechLevelLabel keeps the 1-9 number + tier word, drops "TRL"', () => {
-    assert.equal(trlToTechLevelLabel(9, T), `Tech Level 9 — ${T.LABEL_FLIGHT_PROVEN}`);
-    assert.equal(trlToTechLevelLabel(7, T), `Tech Level 7 — ${T.LABEL_MATURE}`);
-    assert.equal(trlToTechLevelLabel(5, T), `Tech Level 5 — ${T.LABEL_RESEARCH}`);
-    assert.equal(trlToTechLevelLabel(2, T), `Tech Level 2 — ${T.LABEL_SPECULATIVE}`);
+    assert.equal(trlToTechLevelLabel(9, T), `Tech Level 9: ${T.LABEL_FLIGHT_PROVEN}`);
+    assert.equal(trlToTechLevelLabel(7, T), `Tech Level 7: ${T.LABEL_MATURE}`);
+    assert.equal(trlToTechLevelLabel(5, T), `Tech Level 5: ${T.LABEL_RESEARCH}`);
+    assert.equal(trlToTechLevelLabel(2, T), `Tech Level 2: ${T.LABEL_SPECULATIVE}`);
     assert.ok(!trlToTechLevelLabel(9, T).includes('TRL'), 'no TRL acronym player-facing');
   });
 

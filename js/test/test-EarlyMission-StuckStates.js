@@ -220,7 +220,7 @@ describe('EarlyMission stuck-states (f) — target dies mid-flight', () => {
 
     const comms = collect(Events.COMMS_MESSAGE, () => arm._updateNettingFSM(0.016));
     assert.equal(arm.state, S.STATION_KEEP, 'holds standoff for a retry');
-    assert.ok(comms.some(c => /press f to retry/i.test(c.text || '')), 'retry verb named');
+    assert.ok(comms.some(c => /press n to retry/i.test(c.text || '')), 'retry verb named');
   });
 });
 

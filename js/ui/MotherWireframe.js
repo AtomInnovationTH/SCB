@@ -461,7 +461,7 @@ export class MotherWireframe {
     ctx.fillText('V5 CRADLE [V]', WIRE_CX, 14);
     ctx.font      = "11px 'Courier New', monospace";
     ctx.fillStyle = TYPE_COL;
-    ctx.fillText('PART CALLOUT — MOTHERSHIP', WIRE_CX, 26);
+    ctx.fillText('PART CALLOUT. MOTHERSHIP', WIRE_CX, 26);
 
     // Separator
     ctx.fillStyle = 'rgba(88,166,255,0.22)';

@@ -264,7 +264,7 @@ export class TargetPanel {
         <span class="target-section-header" style="color:#00ff88;padding:0;">TRACKED TARGETS <span style="opacity:0.4;font-size:10px;">[Tab]</span></span>
         <button id="hud-sort-btn" class="target-sort-btn" title="Click to cycle sort">TPI ↑</button>
       </div>
-      <div id="hud-targets-min-summary" data-pane-show="min" style="display:none;font-size:11px;color:#00ff88;opacity:0.7;">—</div>
+      <div id="hud-targets-min-summary" data-pane-show="min" style="display:none;font-size:11px;color:#00ff88;opacity:0.7;">. </div>
       <div data-pane-hide="min">
         <div id="hud-target-list"></div>
         <div id="hud-untracked-section" class="target-section">
@@ -317,7 +317,7 @@ export class TargetPanel {
       steps: ['min', 'normal', 'max'],
       initial: 'normal',
       color: '#00ff88',
-      title: 'Targets size — click to cycle min / normal / max',
+      title: 'Targets size. Click to cycle min / normal / max',
       onStep: (step) => {
         // Grow the scroll cap when maximised; restore otherwise.
         this.panels.targets.style.maxHeight = (step === 'max')

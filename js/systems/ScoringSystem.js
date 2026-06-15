@@ -353,7 +353,7 @@ export class ScoringSystem {
     if (data.totalMassKg && data.totalMassKg >= bulkThreshold) {
       saleValue = Math.round(saleValue * bulkMult);
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `BULK BONUS ×${bulkMult} — ${data.totalMassKg.toFixed(0)}kg sold at once!`,
+        text: `BULK BONUS ×${bulkMult}. ${data.totalMassKg.toFixed(0)}kg sold at once!`,
         priority: 'success',
       });
     }
@@ -624,7 +624,7 @@ export class ScoringSystem {
         : '∞';
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: 'HOUSTON',
-        text: `Analysis: ${best.name.toUpperCase()} averaged ${best.dvPerCatch.toFixed(1)} m/s per catch — ${ratio}× more efficient than ${worst.name.toUpperCase()}. Consider using ${best.name} for future operations.`,
+        text: `Analysis: ${best.name.toUpperCase()} averaged ${best.dvPerCatch.toFixed(1)} m/s per catch. ${ratio}× more efficient than ${worst.name.toUpperCase()}. Consider using ${best.name} for future operations.`,
         priority: 1,
       });
     }

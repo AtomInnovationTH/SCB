@@ -102,7 +102,7 @@ export class CatalogLoader {
     try {
       fetchFn = _resolveFetch(opts.fetchImpl);
     } catch (e) {
-      console.error('[CatalogLoader]', e.message, '— falling back to empty catalogue.');
+      console.error('[CatalogLoader]', e.message, '. Falling back to empty catalogue.');
       this._ready = false;
       this._emitLoaded(false);
       return false;
@@ -142,10 +142,10 @@ export class CatalogLoader {
 
       this._ready = true;
       this._emitLoaded(true);
-      console.log(`[CatalogLoader] OK — ${this._debrisList.length} debris, ${this._activeList.length} active sats, ${this._launchList.length} launches, ${this._weather.events.length} weather events, ${this._groundList.length} ground stations, ${this._constellationById.size} constellations.`);
+      console.log(`[CatalogLoader] OK. ${this._debrisList.length} debris, ${this._activeList.length} active sats, ${this._launchList.length} launches, ${this._weather.events.length} weather events, ${this._groundList.length} ground stations, ${this._constellationById.size} constellations.`);
       return true;
     } catch (e) {
-      console.error('[CatalogLoader] init failed:', e.message, '— falling back to empty catalogue.');
+      console.error('[CatalogLoader] init failed:', e.message, '. Falling back to empty catalogue.');
       this._ready = false;
       this._emitLoaded(false);
       return false;

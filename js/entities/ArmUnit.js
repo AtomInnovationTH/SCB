@@ -897,10 +897,10 @@ export class ArmUnit {
     // learning missions ("every refusal names the next verb").
     if (!this.springCharged) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `${this.id}: Spring not charged — reloading`,
+        text: `${this.id}: Spring not charged. Reloading`,
         priority: 'warning',
       });
-      this._postDeployRefusalHint('spring', 'Spring reloading — wait for charge, or deploy another daughter [1-4]');
+      this._postDeployRefusalHint('spring', 'Spring reloading. Wait for charge, or deploy another daughter [1-4]');
       return false;
     }
     if (this.fuel <= 0) {
@@ -908,7 +908,7 @@ export class ArmUnit {
         text: `${this.id}: No fuel remaining`,
         priority: 'warning',
       });
-      this._postDeployRefusalHint('fuel', 'Daughter out of fuel — deploy another [1-4] or refuel');
+      this._postDeployRefusalHint('fuel', 'Daughter out of fuel. Deploy another [1-4] or refuel');
       return false;
     }
     if (target.mass && target.mass > this.config.maxCaptureMass) {
@@ -916,7 +916,7 @@ export class ArmUnit {
         text: `${this.id}: Target too massive (${target.mass}kg > ${this.config.maxCaptureMass}kg)`,
         priority: 'warning',
       });
-      this._postDeployRefusalHint('mass', 'Target too massive for this daughter — pick a lighter one [Tab]');
+      this._postDeployRefusalHint('mass', 'Target too massive for this daughter. Pick a lighter one [Tab]');
       return false;
     }
     this.target = target;
@@ -940,7 +940,7 @@ export class ArmUnit {
           text: `${this.id}: Target ${Math.round(distToTarget)}m away (max ${Math.round(maxDeployRange)}m). Press A to autopilot closer first.`,
           priority: 'warning',
         });
-        this._postDeployRefusalHint('range', 'Target out of daughter range — press [A] to autopilot closer first');
+        this._postDeployRefusalHint('range', 'Target out of daughter range. Press [A] to autopilot closer first');
         this.target = null;
         return false;
       }
@@ -960,7 +960,7 @@ export class ArmUnit {
       armId: this.id, type: this.type, targetId: target.id,
     });
     eventBus.emit(Events.COMMS_MESSAGE, {
-      text: `${this.id}: Cradle launch — target ${target.id || 'acquired'}`,
+      text: `${this.id}: Cradle launch. Target ${target.id || 'acquired'}`,
       priority: 'info',
     });
     return true;
@@ -980,10 +980,10 @@ export class ArmUnit {
     // (No mass check here: free-fly has no target to weigh.)
     if (!this.springCharged) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `${this.id}: Spring not charged — reloading`,
+        text: `${this.id}: Spring not charged. Reloading`,
         priority: 'warning',
       });
-      this._postDeployRefusalHint('spring', 'Spring reloading — wait for charge, or deploy another daughter [1-4]');
+      this._postDeployRefusalHint('spring', 'Spring reloading. Wait for charge, or deploy another daughter [1-4]');
       return false;
     }
     if (this.fuel <= 0) {
@@ -991,7 +991,7 @@ export class ArmUnit {
         text: `${this.id}: No fuel remaining`,
         priority: 'warning',
       });
-      this._postDeployRefusalHint('fuel', 'Daughter out of fuel — deploy another [1-4] or refuel');
+      this._postDeployRefusalHint('fuel', 'Daughter out of fuel. Deploy another [1-4] or refuel');
       return false;
     }
     this.target = null;
@@ -1012,7 +1012,7 @@ export class ArmUnit {
       armId: this.id, type: this.type, mode: 'freefly',
     });
     eventBus.emit(Events.COMMS_MESSAGE, {
-      text: `${this.id}: Cradle launch — free-fly mode`,
+      text: `${this.id}: Cradle launch. Free-fly mode`,
       priority: 'info',
     });
     return true;
@@ -1030,7 +1030,7 @@ export class ArmUnit {
     // V5: Spring must be charged to deploy
     if (!this.springCharged) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `${this.id}: Spring not charged — reloading`,
+        text: `${this.id}: Spring not charged. Reloading`,
         priority: 'warning',
       });
       return false;
@@ -1062,7 +1062,7 @@ export class ArmUnit {
 
     eventBus.emit(Events.ARM_DEPLOYED, { armId: this.id, type: this.type, mode: 'fishing' });
     eventBus.emit(Events.COMMS_MESSAGE, {
-      text: `${this.id}: Cradle launch — ambush/fishing mode`,
+      text: `${this.id}: Cradle launch. Ambush/fishing mode`,
       priority: 'info',
     });
     return true;
@@ -1083,7 +1083,7 @@ export class ArmUnit {
     // V5: Spring must be charged to deploy
     if (!this.springCharged) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `${this.id}: Spring not charged — reloading`,
+        text: `${this.id}: Spring not charged. Reloading`,
         priority: 'warning',
       });
       return false;
@@ -1115,7 +1115,7 @@ export class ArmUnit {
     eventBus.emit(Events.TRAWL_START, { armId: this.id });
     eventBus.emit(Events.ARM_DEPLOYED, { armId: this.id, type: this.type, mode: 'trawling' });
     eventBus.emit(Events.COMMS_MESSAGE, {
-      sender: this.id, text: 'Cradle launch — trawling deployed', priority: 'info',
+      sender: this.id, text: 'Cradle launch. Trawling deployed', priority: 'info',
     });
 
     return true;
@@ -1135,7 +1135,7 @@ export class ArmUnit {
     // Cooldown check
     if (this._webShotCooldown > 0) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `${this.id}: Web shot cooldown — ${Math.ceil(this._webShotCooldown)}s remaining`,
+        text: `${this.id}: Web shot cooldown. ${Math.ceil(this._webShotCooldown)}s remaining`,
         priority: 'warning',
       });
       return false;
@@ -1164,7 +1164,7 @@ export class ArmUnit {
     this.tetherLine.visible = true;
 
     eventBus.emit(Events.COMMS_MESSAGE, {
-      text: `${this.id}: 🕸 GSL web shot — targeting ${target.id}`,
+      text: `${this.id}: 🕸 GSL web shot. Targeting ${target.id}`,
       priority: 'info',
     });
 
@@ -1189,7 +1189,7 @@ export class ArmUnit {
     // Detached arms cannot be recalled — tether severed
     if (this.isDetached) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `${this.id}: Cannot recall — tether severed. Daughter is autonomous.`,
+        text: `${this.id}: Cannot recall. Tether severed. Daughter is autonomous.`,
         priority: 'warning',
       });
       return;
@@ -1222,7 +1222,7 @@ export class ArmUnit {
     if (this.fuel <= 2 && !motherInitiated) {
       this._transitionTo(S.EXPENDED);
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `${this.id}: Insufficient fuel to return — expended`,
+        text: `${this.id}: Insufficient fuel to return. Expended`,
         priority: 'critical',
       });
       return;
@@ -1286,8 +1286,8 @@ export class ArmUnit {
 
     // Comms callout
     const callout = wasTangled
-      ? `Houston: ${this.id} — tether cut from tangle. She's flying free.`
-      : `Houston: ${this.id} — tether severed. COWBOY! Free-flight on own fuel.`;
+      ? `Houston: ${this.id}. Tether cut from tangle. She's flying free.`
+      : `Houston: ${this.id}. Tether severed. COWBOY! Free-flight on own fuel.`;
     eventBus.emit(Events.COMMS_MESSAGE, { text: callout, priority: 'HIGH' });
 
     console.log(`[ArmUnit] ${this.id} DETACHED (fuel: ${this.fuel.toFixed(1)}%, tangled: ${wasTangled})`);
@@ -1443,7 +1443,7 @@ export class ArmUnit {
       audioSystem.playClickFail();
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: this.id,
-        text: `${this.id}: No nets remaining — return to mother for reload.`,
+        text: `${this.id}: No nets remaining. Return to mother for reload.`,
         channel: 'CMD',
         priority: 'warning',
       });
@@ -1454,7 +1454,7 @@ export class ArmUnit {
     this._manualCapture = true; // Flag for scoring (Delegate 3C will use this)
     this._transitionTo(S.NETTING);
     eventBus.emit(Events.COMMS_MESSAGE, {
-      text: `${this.id}: Net deployed — attempting capture`,
+      text: `${this.id}: Net deployed. Attempting capture`,
       priority: 'info',
     });
     return true;
@@ -1493,7 +1493,7 @@ export class ArmUnit {
     });
 
     eventBus.emit(Events.COMMS_MESSAGE, {
-      text: `${this.id}: DEORBIT BURN — all fuel committed retrograde`,
+      text: `${this.id}: DEORBIT BURN. All fuel committed retrograde`,
       priority: 'warning',
     });
 
@@ -2240,7 +2240,7 @@ export class ArmUnit {
       if (distMeters > Constants.DETACH_MAX_DISTANCE) {
         const typeLabel = this.type === 'weaver' ? 'Weaver' : 'Spinner';
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: `Daughter lost. ${typeLabel} ${this.id} exceeded max range (${Math.round(distMeters)}m) — signal lost.`,
+          text: `Daughter lost. ${typeLabel} ${this.id} exceeded max range (${Math.round(distMeters)}m). Signal lost.`,
           priority: 'critical',
         });
         eventBus.emit(Events.ARM_LOST, { armId: this.id, reason: 'max_distance' });
@@ -2536,13 +2536,13 @@ export class ArmUnit {
       if (this._trawlingMode) {
         this._transitionTo(S.TRAWLING);
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: `${this.id}: Trawling mode — slow sweep for debris`,
+          text: `${this.id}: Trawling mode. Slow sweep for debris`,
           priority: 'info',
         });
       } else if (this._fishingMode) {
         this._transitionTo(S.FISHING);
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: `${this.id}: Fishing mode — extending on tether, hibernating`,
+          text: `${this.id}: Fishing mode. Extending on tether, hibernating`,
           priority: 'info',
         });
       } else {
@@ -2554,7 +2554,7 @@ export class ArmUnit {
           armId: this.id, type: this.type, speed: this.launchSpeed, mode: 'normal',
         });
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: `${this.id}: Clear of core — in transit`,
+          text: `${this.id}: Clear of core. In transit`,
           priority: 'info',
         });
         // UX Fix D: Delayed nudge for manual piloting (first 3 deploys only)
@@ -2565,7 +2565,7 @@ export class ArmUnit {
             if (this.state === S.TRANSIT && !this._manualMode && ArmUnit._pilotNudgeCount < 3) {
               ArmUnit._pilotNudgeCount++;
               eventBus.emit(Events.COMMS_MESSAGE, {
-                text: `${armId}: Press ${pilotKey} to take manual control — 2× capture score`,
+                text: `${armId}: Press ${pilotKey} to take manual control. 2× capture score`,
                 source: armId,
                 channel: 'CMD',
                 priority: 'info',
@@ -2616,19 +2616,19 @@ export class ArmUnit {
       if (this._trawlingMode) {
         this._transitionTo(S.TRAWLING);
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: `${this.id}: Trawling mode — slow sweep for debris`,
+          text: `${this.id}: Trawling mode. Slow sweep for debris`,
           priority: 'info',
         });
       } else if (this._fishingMode) {
         this._transitionTo(S.FISHING);
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: `${this.id}: Fishing mode — extending on tether, hibernating`,
+          text: `${this.id}: Fishing mode. Extending on tether, hibernating`,
           priority: 'info',
         });
       } else {
         this._transitionTo(S.TRANSIT);
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: `${this.id}: Clear of core — cradle transit`,
+          text: `${this.id}: Clear of core. Cradle transit`,
           priority: 'info',
         });
         // UX Fix D: Delayed nudge for manual piloting (first 3 deploys only)
@@ -2639,7 +2639,7 @@ export class ArmUnit {
             if (this.state === S.TRANSIT && !this._manualMode && ArmUnit._pilotNudgeCount < 3) {
               ArmUnit._pilotNudgeCount++;
               eventBus.emit(Events.COMMS_MESSAGE, {
-                text: `${armId}: Press ${pilotKey} to take manual control — 2× capture score`,
+                text: `${armId}: Press ${pilotKey} to take manual control. 2× capture score`,
                 source: armId,
                 channel: 'CMD',
                 priority: 'info',
@@ -2719,7 +2719,7 @@ export class ArmUnit {
     // Check tether limit (skip for detached arms — free-flying)
     if (!this.isDetached && this.tetherLength >= this.config.tetherMax * 0.95) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `${this.id}: Tether limit (${Math.round(this.config.tetherMax)}m) — recalling`,
+        text: `${this.id}: Tether limit (${Math.round(this.config.tetherMax)}m). Recalling`,
         priority: 'warning',
       });
       // Phase 6: Signal tutorial system that tether limit was hit (detach hint trigger)
@@ -3326,7 +3326,7 @@ export class ArmUnit {
       audioSystem.playClickFail();
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: this.id,
-        text: `${this.id}: No nets remaining — return to mother for reload.`,
+        text: `${this.id}: No nets remaining. Return to mother for reload.`,
         channel: 'CMD',
         priority: 'warning',
       });
@@ -3360,7 +3360,7 @@ export class ArmUnit {
     this._captureToolKind = 'NET';
     this._transitionTo(S.NETTING);
     eventBus.emit(Events.COMMS_MESSAGE, {
-      text: `${this.id}: Deploying net — stand by for capture`,
+      text: `${this.id}: Deploying net. Stand by for capture`,
       priority: 'info',
     });
     return true;
@@ -3397,7 +3397,7 @@ export class ArmUnit {
     this._skSnapBack  = false;
     this._transitionTo(S.REELING);
     eventBus.emit(Events.COMMS_MESSAGE, {
-      text: `${this.id}: Reeling in — strut motor engaged`,
+      text: `${this.id}: Reeling in. Strut motor engaged`,
       priority: 'info',
     });
     return true;
@@ -3522,7 +3522,7 @@ export class ArmUnit {
       this._eddyActive = true;
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: this.id,
-        text: `${this.id}: Eddy-current damping engaged — EPM field bleeding tumble (${target.material} hull).`,
+        text: `${this.id}: Eddy-current damping engaged. EPM field bleeding tumble (${target.material} hull).`,
         channel: 'CMD', priority: 'info',
       });
     }
@@ -3541,7 +3541,7 @@ export class ArmUnit {
       eventBus.emit(Events.DESPIN_IN_SPEC, { targetId: target.id ?? null, tumbleDeg: after * 180 / Math.PI });
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: this.id,
-        text: `${this.id}: Tumble in spec — net it.`,
+        text: `${this.id}: Tumble in spec. Net it.`,
         channel: 'CMD', priority: 'success',
       });
     }
@@ -3590,7 +3590,7 @@ export class ArmUnit {
     audioSystem.playClickFail();
     eventBus.emit(Events.COMMS_MESSAGE, {
       source: this.id,
-      text: `${this.id}: ${kind} tool offline — not yet equipped. Cycle (\`) to NET or MAGNET.`,
+      text: `${this.id}: ${kind} tool offline. Not yet equipped. Cycle (\`) to NET or MAGNET.`,
       channel: 'CMD',
       priority: 'warning',
     });
@@ -3631,7 +3631,7 @@ export class ArmUnit {
       armId: this.id, targetId: target.id, pBase: this._magnetGripProbability(target),
     });
     eventBus.emit(Events.COMMS_MESSAGE, {
-      source: this.id, text: `${this.id}: Energizing EPM — closing for magnetic grapple`,
+      source: this.id, text: `${this.id}: Energizing EPM. Closing for magnetic grapple`,
       channel: 'CMD', priority: 'info',
     });
     this._transitionTo(S.MAGNETIC_GRAPPLE);
@@ -3704,7 +3704,7 @@ export class ArmUnit {
       armId: this.id, targetId: target.id, mass: target.mass || 0,
     });
     this._secureToolCatch(target, 'MAGNET',
-      `${this.id}: EPM grip secured — magnetic latch holding. Reeling in.`);
+      `${this.id}: EPM grip secured. Magnetic latch holding. Reeling in.`);
   }
 
   /** @private Magnetic grip failed/aborted → release lock, return to reload. */
@@ -3717,12 +3717,12 @@ export class ArmUnit {
       eventBus.emit(Events.MAGNETIC_RELEASE, { armId: this.id, targetId: target.id });
     }
     const msg = reason === 'too_heavy'
-      ? `${this.id}: Magnetic grapple failed — target too massive for the EPM. Returning to reload.`
+      ? `${this.id}: Magnetic grapple failed. Target too massive for the EPM. Returning to reload.`
       : reason === 'non_ferrous'
-        ? `${this.id}: No magnetic purchase — target is non-ferrous. Returning; try the net.`
+        ? `${this.id}: No magnetic purchase. Target is non-ferrous. Returning; try the net.`
         : reason === 'standoff'
-          ? `${this.id}: Lost contact on approach — magnetic grapple aborted. Returning.`
-          : `${this.id}: Magnetic grip slipped — Returning to reload. Re-attempt or try the net.`;
+          ? `${this.id}: Lost contact on approach. Magnetic grapple aborted. Returning.`
+          : `${this.id}: Magnetic grip slipped. Returning to reload. Re-attempt or try the net.`;
     eventBus.emit(Events.COMMS_MESSAGE, { source: this.id, text: msg, channel: 'CMD', priority: 'warning' });
     this._endToolFailure();
   }
@@ -3784,7 +3784,7 @@ export class ArmUnit {
     this._toolLockedDebrisId = target.id;
     eventBus.emit(Events.AUTOPILOT_TARGET_LOCK, { debrisId: target.id });
     eventBus.emit(Events.COMMS_MESSAGE, {
-      source: this.id, text: `${this.id}: Extending gripper jaws — seeking a fixture`,
+      source: this.id, text: `${this.id}: Extending gripper jaws. Seeking a fixture`,
       channel: 'CMD', priority: 'info',
     });
     this._transitionTo(S.GRIPPER_GRAPPLE);
@@ -3836,7 +3836,7 @@ export class ArmUnit {
     this._gripPhase = null;
     eventBus.emit(Events.GRIPPER_LATCHED, { armId: this.id, targetId: target.id });
     this._secureToolCatch(target, 'GRIPPER',
-      `${this.id}: Gripper latched — ratchet holding (zero-power). Reeling in.`);
+      `${this.id}: Gripper latched. Ratchet holding (zero-power). Reeling in.`);
   }
 
   /** @private Gripper slip/abort → release, return to reload. */
@@ -3849,7 +3849,7 @@ export class ArmUnit {
       eventBus.emit(Events.GRIPPER_RELEASED, { armId: this.id, targetId: target.id });
     }
     const msg = reason === 'oversize'
-      ? `${this.id}: Gripper failed — target beyond jaw mass limit. Returning to reload.`
+      ? `${this.id}: Gripper failed. Target beyond jaw mass limit. Returning to reload.`
       : reason === 'no_fixture'
         ? `${this.id}: Gripper found no fixture to grab. Returning; the net may suit this target.`
         : `${this.id}: Gripper slipped off the fixture. Returning to reload.`;
@@ -3900,7 +3900,7 @@ export class ArmUnit {
     this._toolLockedDebrisId = target.id;
     eventBus.emit(Events.AUTOPILOT_TARGET_LOCK, { debrisId: target.id });
     eventBus.emit(Events.COMMS_MESSAGE, {
-      source: this.id, text: `${this.id}: Soft approach — bringing pad to contact`,
+      source: this.id, text: `${this.id}: Soft approach. Bringing pad to contact`,
       channel: 'CMD', priority: 'info',
     });
     this._transitionTo(S.PAD_CONTACT);
@@ -3960,7 +3960,7 @@ export class ArmUnit {
     this._padPhase = null;
     eventBus.emit(Events.PAD_ADHERED, { armId: this.id, targetId: target.id, mode });
     this._secureToolCatch(target, 'PAD',
-      `${this.id}: Pad adhered (${mode || 'no-mode'}) — holding. Reeling in.`);
+      `${this.id}: Pad adhered (${mode || 'no-mode'}). Holding. Reeling in.`);
   }
 
   /** @private Pad bounce/abort → release, return to reload. */
@@ -3973,7 +3973,7 @@ export class ArmUnit {
       eventBus.emit(Events.PAD_RELEASED, { armId: this.id, targetId: target.id });
     }
     const msg = reason === 'too_fast'
-      ? `${this.id}: Pad bounced — contact too fast. Returning; ease the approach and retry.`
+      ? `${this.id}: Pad bounced. Contact too fast. Returning; ease the approach and retry.`
       : reason === 'no_mode'
         ? `${this.id}: Pad found no adhesion mode for this surface. Returning to reload.`
         : `${this.id}: Pad failed to adhere. Returning to reload.`;
@@ -4003,11 +4003,11 @@ export class ArmUnit {
       if (isHighTumble && Math.random() < failChance) {
         // Auto-capture FAILED
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: `${this.id}: AUTO-CAPTURE FAILED — target tumble too high!`,
+          text: `${this.id}: AUTO-CAPTURE FAILED. Target tumble too high!`,
           priority: 'critical',
         });
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: `Manual pilot available — deploy a daughter, then press 1-4 to fly it`,
+          text: `Manual pilot available. Deploy a daughter, then press 1-4 to fly it`,
           priority: 'warning',
         });
 
@@ -4049,7 +4049,7 @@ export class ArmUnit {
           armId: this.id, targetId: this.target?.id,
         });
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: `${this.id}: Netting failed — re-approaching`,
+          text: `${this.id}: Netting failed. Re-approaching`,
           priority: 'warning',
         });
         this._transitionTo(S.APPROACH);
@@ -4124,10 +4124,10 @@ export class ArmUnit {
          const cdS = (typeof captureNetSystem.getCooldown === 'function')
            ? captureNetSystem.getCooldown('arm', this.index) : 0;
          const reason = inv <= 0
-           ? 'Net magazine empty — press R to reel home and reload.'
+           ? 'Net magazine empty. Press R to reel home and reload.'
            : cdS > 0
-             ? `Net launcher cooling down — ready in ${Math.ceil(cdS)}s.`
-             : 'Net launcher unavailable — holding station.';
+             ? `Net launcher cooling down. Ready in ${Math.ceil(cdS)}s.`
+             : 'Net launcher unavailable. Holding station.';
          eventBus.emit(Events.COMMS_MESSAGE, {
            source: this.id, text: `${this.id}: ${reason}`,
            channel: 'CMD', priority: 'warning',
@@ -4206,7 +4206,7 @@ export class ArmUnit {
       });
       if (!committedAlive) {
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: `${this.id}: Target lost during net flight — returning empty.`,
+          text: `${this.id}: Target lost during net flight. Returning empty.`,
           priority: 'warning',
         });
         if (this._netCommittedTarget) this._netCommittedTarget._committedNetArmId = null;
@@ -4216,7 +4216,7 @@ export class ArmUnit {
         this._transitionTo(S.RETURNING);
       } else {
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: `${this.id}: Netting failed — holding standoff. Press F to retry.`,
+          text: `${this.id}: Netting failed. Holding standoff. Press N to retry.`,
           priority: 'warning',
         });
         // Fall back to SK (not APPROACH) — arm stays at standoff; pilot retries with F.
@@ -4245,7 +4245,7 @@ export class ArmUnit {
         const committedAliveStowed = this._netCommittedTarget && this._netCommittedTarget.alive !== false;
         if (!committedAliveStowed) {
           eventBus.emit(Events.COMMS_MESSAGE, {
-            text: `${this.id}: Target lost during net flight — returning empty.`,
+            text: `${this.id}: Target lost during net flight. Returning empty.`,
             priority: 'warning',
           });
           if (this._netCommittedTarget) this._netCommittedTarget._committedNetArmId = null;
@@ -4273,7 +4273,7 @@ export class ArmUnit {
       if (this.isDetached) {
         this._transitionTo(S.DEORBITING);
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: `${this.id}: No tether — committing to deorbit burn. Sacrificial play.`,
+          text: `${this.id}: No tether. Committing to deorbit burn. Sacrificial play.`,
           priority: 'warning',
         });
         return;
@@ -4290,7 +4290,7 @@ export class ArmUnit {
       const _eta = (this.tetherLength / Math.max(_reelSpeed, 1)).toFixed(1);
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: this.id,
-        text: `Reeling in — ETA ${_eta} s`,
+        text: `Reeling in. ETA ${_eta} s`,
         channel: 'CMD',
         priority: 'info',
       });
@@ -4429,10 +4429,10 @@ export class ArmUnit {
       debrisId: debris.id, strain, oversized, recoverable: true,
     });
     const reason = oversized
-      ? `Net failed — debris too wide for the net (${debrisSize.toFixed(1)}m vs ${netDia.toFixed(1)}m mouth). Returning to reload; a larger net is needed.`
+      ? `Net failed. Debris too wide for the net (${debrisSize.toFixed(1)}m vs ${netDia.toFixed(1)}m mouth). Returning to reload; a larger net is needed.`
       // Phase 0.4 (capture-feedback overhaul): name the CAUSE so the slip is
       // legible — the catch was deep in the 80-100% strain band, not bad luck.
-      : `Net failed — debris slipped free and is drifting (catch was ${Math.round(strain * 100)}% of the net's rated mass — slips become likely above ${Math.round((Constants.NET_STRAIN_SAFE_FRACTION ?? 0.8) * 100)}%). Returning to reload; re-net to retry.`;
+      : `Net failed. Debris slipped free and is drifting (catch was ${Math.round(strain * 100)}% of the net's rated mass. Slips become likely above ${Math.round((Constants.NET_STRAIN_SAFE_FRACTION ?? 0.8) * 100)}%). Returning to reload; re-net to retry.`;
     eventBus.emit(Events.COMMS_MESSAGE, { text: `${this.id}: ${reason}`, priority: 'warning' });
     if (this._stationKeepTarget) this._stationKeepTarget._isStationKeepTarget = false;
     this._stationKeepTarget = null;
@@ -4460,7 +4460,7 @@ export class ArmUnit {
     });
     eventBus.emit(Events.COMMS_MESSAGE, {
       text: `${this.id}: Net RIPPED under boost reel (catch was ${Math.round(strain * 100)}% of rated mass). `
-        + 'Debris drifting free — nominal reel speed is safe; boost prices heavy catches.',
+        + 'Debris drifting free. Nominal reel speed is safe; boost prices heavy catches.',
       priority: 'warning',
     });
     if (this._stationKeepTarget) this._stationKeepTarget._isStationKeepTarget = false;
@@ -4516,7 +4516,7 @@ export class ArmUnit {
     if (this.isDetached) {
       this._transitionTo(S.DEORBITING);
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `${this.id}: No tether — committing to deorbit burn. Sacrificial play.`,
+        text: `${this.id}: No tether. Committing to deorbit burn. Sacrificial play.`,
         priority: 'warning',
       });
       return;
@@ -4568,7 +4568,7 @@ export class ArmUnit {
     if (boostOn && !this._boostReel) {
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: this.id,
-        text: `${this.id}: Boost reel engaged — watch the tension bar.`,
+        text: `${this.id}: Boost reel engaged. Watch the tension bar.`,
         channel: 'CMD', priority: 'info',
       });
     }
@@ -4683,7 +4683,7 @@ export class ArmUnit {
           this._m1SnapWarned = true;
           eventBus.emit(Events.COMMS_MESSAGE, {
             source: this.id,
-            text: `${this.id}: Tether at rated limit — winch absorbing the overload. ` +
+            text: `${this.id}: Tether at rated limit. Winch absorbing the overload. ` +
               `Heavier catches will SNAP the cable once you're past training.`,
             channel: 'CMD', priority: 'warning',
           });
@@ -4721,7 +4721,7 @@ export class ArmUnit {
     if (this.isDetached) {
       this._transitionTo(S.TRANSIT);
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `${this.id}: Cannot return — tether severed. Free-flying.`,
+        text: `${this.id}: Cannot return. Tether severed. Free-flying.`,
         priority: 'warning',
       });
       return;
@@ -4804,7 +4804,7 @@ export class ArmUnit {
           parked: true,                     // held at strut, not removed/processed
         });
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: `${this.id}: Catch secured at the strut — holding in net (awaiting processing). Capture #${this.captures}.`,
+          text: `${this.id}: Catch secured at the strut. Holding in net (awaiting processing). Capture #${this.captures}.`,
           priority: 'success',
         });
         return;
@@ -5052,13 +5052,13 @@ export class ArmUnit {
       if (this.isDetached) {
         // Detached arms can't return — switch to free-flying transit
         eventBus.emit(Events.COMMS_MESSAGE, {
-          sender: this.id, text: 'Trawl complete — free-flying, no tether.', priority: 'info',
+          sender: this.id, text: 'Trawl complete. Free-flying, no tether.', priority: 'info',
         });
         this._transitionTo(S.TRANSIT);
       } else {
         // V5: Use REELING for zero-fuel return
         eventBus.emit(Events.COMMS_MESSAGE, {
-          sender: this.id, text: 'Trawl complete — reeling in', priority: 'info',
+          sender: this.id, text: 'Trawl complete. Reeling in', priority: 'info',
         });
         this._transitionTo(S.REELING);
       }
@@ -5094,13 +5094,13 @@ export class ArmUnit {
 
       if (this.isDetached) {
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: `Daughter lost. ${this.type === 'weaver' ? 'Weaver' : 'Spinner'} ${this.id} fuel depleted — no thrust available.`,
+          text: `Daughter lost. ${this.type === 'weaver' ? 'Weaver' : 'Spinner'} ${this.id} fuel depleted. No thrust available.`,
           priority: 'critical',
         });
         eventBus.emit(Events.ARM_LOST, { armId: this.id });
       } else {
         eventBus.emit(Events.COMMS_MESSAGE, {
-          sender: this.id, text: 'Trawl aborted — fuel depleted', priority: 'warning',
+          sender: this.id, text: 'Trawl aborted. Fuel depleted', priority: 'warning',
         });
       }
       eventBus.emit(Events.TRAWL_END, { armId: this.id });
@@ -5202,7 +5202,7 @@ export class ArmUnit {
       this._transitionTo(S.EXPENDED);
 
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `${this.id}: Fuel exhausted — deorbit burn complete. Daughter lost.`,
+        text: `${this.id}: Fuel exhausted. Deorbit burn complete. Daughter lost.`,
         priority: 'warning',
       });
     }
@@ -5430,13 +5430,13 @@ export class ArmUnit {
       // Detached arms that run out of fuel: emit ARM_LOST
       if (this.isDetached) {
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: `Daughter lost. ${this.type === 'weaver' ? 'Weaver' : 'Spinner'} ${this.id} fuel depleted — no thrust available.`,
+          text: `Daughter lost. ${this.type === 'weaver' ? 'Weaver' : 'Spinner'} ${this.id} fuel depleted. No thrust available.`,
           priority: 'critical',
         });
         eventBus.emit(Events.ARM_LOST, { armId: this.id });
       } else {
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: `${this.id}: FUEL DEPLETED — daughter expended`,
+          text: `${this.id}: FUEL DEPLETED. Daughter expended`,
           priority: 'critical',
         });
       }

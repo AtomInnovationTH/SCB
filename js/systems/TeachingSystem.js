@@ -38,7 +38,7 @@ export const TEACHING_MOMENTS = [
   {
     id: 'first_arm',
     title: 'Daughter Deployed',
-    body: 'Hold steady — the daughter needs time to reach the target. Watch the tether tension gauge.',
+    body: 'Hold steady. The daughter needs time to reach the target. Watch the tether tension gauge.',
     duration: 7000,
     icon: '🦾',
   },
@@ -59,7 +59,7 @@ export const TEACHING_MOMENTS = [
   {
     id: 'first_weather',
     title: 'Space Weather',
-    body: 'Solar activity detected. Watch your power levels — panels may degrade during storms.',
+    body: 'Solar activity detected. Watch your power levels. Panels may degrade during storms.',
     duration: 8000,
     icon: '☀️',
   },
@@ -80,14 +80,14 @@ export const TEACHING_MOMENTS = [
   {
     id: 'first_burn',
     title: 'Manual Burn',
-    body: 'Thrusting changes your orbit. Watch the MFD (Multi-Function Display) — your orbit\'s high point (apoapsis) and low point (periapsis) shift in real time.',
+    body: 'Thrusting changes your orbit. Watch the MFD (Multi-Function Display). Your orbit\'s high point (apoapsis) and low point (periapsis) shift in real time.',
     duration: 7000,
     icon: '🔥',
   },
   {
     id: 'first_kessler',
     title: 'Kessler Cascade',
-    body: 'A collision just spawned new debris — that\'s the start of a Kessler cascade, where wreckage breeds more wreckage. Clear the field faster before it snowballs.',
+    body: 'A collision just spawned new debris. That\'s the start of a Kessler cascade, where wreckage breeds more wreckage. Clear the field faster before it snowballs.',
     duration: 8000,
     icon: '💥',
   },
@@ -122,7 +122,7 @@ export const TEACHING_MOMENTS = [
   {
     id: 'first_radiation',
     title: 'Radiation Belt',
-    body: 'You\'re crossing the Van Allen belt — a band of trapped radiation around Earth. Expect sensor static and laggy comms; don\'t linger.',
+    body: 'You\'re crossing the Van Allen belt. A band of trapped radiation around Earth. Expect sensor static and laggy comms; don\'t linger.',
     duration: 8000,
     icon: '☢️',
   },
@@ -137,7 +137,7 @@ export const TEACHING_MOMENTS = [
   {
     id: 'first_scan',
     title: 'Quick Scan',
-    body: 'Quick Scan reveals nearby debris. Press W for a Wide Scan to find targets at longer range.',
+    body: 'Quick Scan reveals nearby debris. Press Shift+S for a Wide Scan to find targets at longer range.',
     duration: 7000,
     icon: '📡',
   },
@@ -152,14 +152,14 @@ export const TEACHING_MOMENTS = [
   {
     id: 'first_net_failed',
     title: 'Net Slipped',
-    body: 'The net lost its grip — too heavy, or the debris was wider than the net mouth. The catch is fine: it\'s drifting free again. Your daughter keeps her tether and heads home to reload — re-net it to try again (a bigger net helps for large debris).',
+    body: 'The net lost its grip. Too heavy, or the debris was wider than the net mouth. The catch is fine: it\'s drifting free again. Your daughter keeps her tether and heads home to reload. Re-net it to try again (a bigger net helps for large debris).',
     duration: 9000,
     icon: '🪢',
   },
   {
     id: 'first_tether_snap',
     title: 'Tether Severed',
-    body: 'The tether snapped under reel load — that daughter and her catch are cut loose and drifting, and that line can\'t be reloaded. Launch another daughter (D) to chase the catch down, and upgrade your tether in the Workshop to haul heavier loads safely.',
+    body: 'The tether snapped under reel load. That daughter and her catch are cut loose and drifting, and that line can\'t be reloaded. Launch another daughter (D) to chase the catch down, and upgrade your tether in the Workshop to haul heavier loads safely.',
     duration: 10000,
     icon: '⚠️',
   },
@@ -169,14 +169,14 @@ export const TEACHING_MOMENTS = [
   {
     id: 'first_high_tumble_target',
     title: 'Fast Spinner',
-    body: 'That target is tumbling fast — nets slip off fast spinners. Hold H to fire the de-spin laser; watch the capture odds climb as the tumble bleeds off, then net it.',
+    body: 'That target is tumbling fast. Nets slip off fast spinners. Hold H to fire the de-spin laser; watch the capture odds climb as the tumble bleeds off, then net it.',
     duration: 9000,
     icon: '🌀',
   },
   {
     id: 'first_despin_in_spec',
     title: 'Tumble In Spec',
-    body: 'Tumble in spec — odds restored. This works on any spinner.',
+    body: 'Tumble in spec. Odds restored. This works on any spinner.',
     duration: 7000,
     icon: '✅',
   },
@@ -184,7 +184,7 @@ export const TEACHING_MOMENTS = [
   {
     id: 'first_detail_scan',
     title: 'Full Profile',
-    body: 'Close-range survey complete — full structural profile and salvage appraisal. Survey before you commit: brittleness drives fragmentation risk, and appraisal tells you what it\'s worth.',
+    body: 'Close-range survey complete. Full structural profile and salvage appraisal. Survey before you commit: brittleness drives fragmentation risk, and appraisal tells you what it\'s worth.',
     duration: 9000,
     icon: '📋',
   },
@@ -192,7 +192,7 @@ export const TEACHING_MOMENTS = [
   {
     id: 'first_aspect_target',
     title: 'Too Wide Broadside',
-    body: 'Too wide broadside — but the net can swallow it lengthwise. De-spin it, then orbit around until the readout says END-ON.',
+    body: 'Too wide broadside. But the net can swallow it lengthwise. De-spin it, then orbit around until the readout says END-ON.',
     duration: 9000,
     icon: '↔️',
   },
@@ -200,7 +200,7 @@ export const TEACHING_MOMENTS = [
   {
     id: 'first_fragmentation',
     title: 'Fragmentation',
-    body: 'The impact broke the debris into new tracked fragments — wreckage breeds wreckage. First one\'s on the house; avoid it with a slow approach, CINCH mode, or the pad for fragile pieces.',
+    body: 'The impact broke the debris into new tracked fragments. Wreckage breeds wreckage. First one\'s on the house; avoid it with a slow approach, CINCH mode, or the pad for fragile pieces.',
     duration: 10000,
     icon: '💥',
   },

@@ -142,7 +142,7 @@ class GameState {
     if (remaining === 1 && !this._penultimateHailed) {
       this._penultimateHailed = true;
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: 'One target left, Cowboy — bring it home.',
+        text: 'One target left, Cowboy. Bring it home.',
         source: 'HOUSTON',
         channel: 'CMD',
         priority: 'info',
@@ -150,7 +150,7 @@ class GameState {
     } else if (remaining <= 0 && !this._finalHailed) {
       this._finalHailed = true;
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: "That's the last of it! Orbit's clean — outstanding work, Cowboy.",
+        text: "That's the last of it! Orbit's clean. Outstanding work, Cowboy.",
         source: 'HOUSTON',
         channel: 'CMD',
         priority: 'info',

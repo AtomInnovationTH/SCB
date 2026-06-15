@@ -103,14 +103,32 @@ describe('InputManager hotkeys — recall = Shift+R; de-spin laser = H (2026-06-
     assert.equal(calls.recallClosest, 1, 'bare R recalls closest');
   });
 
-  it('bare R aborts an engaged autopilot before recalling', () => {
+  it('bare R reels the closest daughter even while autopilot is engaged (reel wins over AP-abort)', () => {
     let disengaged = 0;
     const { im, calls } = makeIM({
       autopilotSystem: { engaged: true, disengage: () => { disengaged++; } },
     });
+    // recallClosestDeployed() returns 0 (a valid index) → a daughter was reeled.
     im._handleKeyDown(key('KeyR'));
-    assert.equal(disengaged, 1, 'R aborts autopilot');
-    assert.equal(calls.recallClosest, 0, 'AP abort takes precedence over recall');
+    assert.equal(calls.recallClosest, 1, 'R reels the closest daughter first');
+    assert.equal(disengaged, 0, 'R does NOT abort the autopilot when a daughter was reeled');
+  });
+
+  it('bare R falls back to aborting autopilot only when there is nothing to reel', () => {
+    let disengaged = 0;
+    const { im, calls } = makeIM({
+      armManager: {
+        arms: [],
+        selectedArmIndex: -1,
+        // No deployed daughter → recallClosestDeployed returns null.
+        recallClosestDeployed: () => { calls.recallClosest++; return null; },
+        deployAllToTarget: () => { calls.deployAll++; },
+      },
+      autopilotSystem: { engaged: true, disengage: () => { disengaged++; } },
+    });
+    im._handleKeyDown(key('KeyR'));
+    assert.equal(calls.recallClosest, 1, 'R attempts a reel first');
+    assert.equal(disengaged, 1, 'R aborts autopilot only after finding nothing to reel');
   });
 
   it('H no longer recalls — it is the de-spin laser (2026-06-13)', () => {
@@ -202,6 +220,99 @@ describe('InputManager hotkeys — recall = Shift+R; de-spin laser = H (2026-06-
     });
     assert.equal(cyc.length, 0, 'T must NOT emit TOOL_CYCLE anymore (it targets debris)');
     assert.equal(calls.targetCycle, 1, 'T cycles the target list (like Tab)');
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Reel-in fix (2026-06-14): R must reel in BOTH mother and daughter modes and
+// must never be silent. Shift+R recall-all reports an honest count.
+// ───────────────────────────────────────────────────────────────────────────
+describe('InputManager hotkeys — reel-in works in both modes (2026-06-14 fix)', () => {
+  it('R while piloting a daughter reels that daughter (even with AP engaged)', () => {
+    let recalled = 0;
+    const piloted = {
+      id: 'arm-1', state: 'STATION_KEEP',
+      recall: () => { recalled++; },
+    };
+    const { im } = makeIM({
+      cameraSystem: { getPilotedArm: () => piloted },
+      autopilotSystem: { engaged: true, disengage: () => {} },
+    });
+    im.armPilotMode = true;
+    im._handleKeyDown(key('KeyR'));
+    assert.equal(recalled, 1, 'piloted daughter is reeled home');
+  });
+
+  it('R while piloting with no live daughter emits a "no daughter" comms (never silent)', () => {
+    const piloted = { id: 'arm-1', state: 'DOCKED', recall: () => {} };
+    const { im } = makeIM({ cameraSystem: { getPilotedArm: () => piloted } });
+    im.armPilotMode = true;
+    const got = captureEvent(Events.COMMS_MESSAGE, () => {
+      im._handleKeyDown(key('KeyR'));
+    });
+    assert.ok(got.some(m => /no daughter to reel/i.test(m.text || '')),
+      'piloting a docked/expended daughter warns instead of going silent');
+  });
+
+  it('R in mother mode with nothing deployed and no AP still emits a comms (never silent)', () => {
+    const { im } = makeIM({
+      armManager: {
+        arms: [], selectedArmIndex: -1,
+        recallClosestDeployed: () => null,
+        deployAllToTarget: () => {},
+      },
+      autopilotSystem: { engaged: false },
+    });
+    const got = captureEvent(Events.COMMS_MESSAGE, () => {
+      im._handleKeyDown(key('KeyR'));
+    });
+    assert.ok(got.some(m => /no deployed daughters to reel/i.test(m.text || '')),
+      'mother R with nothing to reel and no AP is not silent');
+  });
+
+  it('Shift+R uses recallAllDeployed and reports the count when present', () => {
+    let allCount = 0;
+    const { im } = makeIM({
+      armManager: {
+        arms: [], selectedArmIndex: -1,
+        recallClosestDeployed: () => 0,
+        deployAllToTarget: () => {},
+        recallAllDeployed: () => { allCount++; return 3; },
+      },
+    });
+    const recallAllEvt = captureEvent(Events.ARM_RECALL_ALL, () => {
+      const comms = captureEvent(Events.COMMS_MESSAGE, () => {
+        im._handleKeyDown(key('KeyR', { shiftKey: true }));
+      });
+      assert.ok(comms.some(m => /reeling in all daughters \(3\)/i.test(m.text || '')),
+        'Shift+R reports the honest reel-all count');
+    });
+    assert.equal(allCount, 1, 'Shift+R calls recallAllDeployed exactly once');
+    assert.equal(recallAllEvt.length, 0, 'Shift+R does not double-fire ARM_RECALL_ALL when recallAllDeployed exists');
+  });
+
+  it('Shift+R recall-all with nothing deployed reports "no deployed daughters" (never silent)', () => {
+    const { im } = makeIM({
+      armManager: {
+        arms: [], selectedArmIndex: -1,
+        recallClosestDeployed: () => 0,
+        deployAllToTarget: () => {},
+        recallAllDeployed: () => 0,
+      },
+    });
+    const comms = captureEvent(Events.COMMS_MESSAGE, () => {
+      im._handleKeyDown(key('KeyR', { shiftKey: true }));
+    });
+    assert.ok(comms.some(m => /no deployed daughters to reel/i.test(m.text || '')),
+      'Shift+R with nothing out is not silent');
+  });
+
+  it('Shift+R falls back to ARM_RECALL_ALL when recallAllDeployed is unavailable', () => {
+    const { im } = makeIM();   // stub armManager has no recallAllDeployed
+    const recallAllEvt = captureEvent(Events.ARM_RECALL_ALL, () => {
+      im._handleKeyDown(key('KeyR', { shiftKey: true }));
+    });
+    assert.equal(recallAllEvt.length, 1, 'legacy path still emits ARM_RECALL_ALL');
   });
 });
 
@@ -459,5 +570,214 @@ describe('InputManager hotkeys — help-menu remap (2026-06-14)', () => {
       im._handleKeyDown(key('KeyC', { shiftKey: true }));
     });
     assert.equal(city.length, 0, 'Shift+C must not toggle city labels anymore');
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Shift+A field-center salvage (2026-06-14 high-risk-salvage rework):
+//   (1) autopilot the MOTHER to the field center (best cluster),
+//   (2) fan EVERY docked daughter out to a DISTINCT debris,
+//   (3) fire the MOTHER NET at a SEPARATE debris (not a daughter's target).
+// ───────────────────────────────────────────────────────────────────────────
+function makeSalvageIM(targetIds = [10, 11, 12, 13], dockedArms = 2) {
+  const ARM_DOCKED = 'DOCKED';
+  const im = new InputManager();
+  im._firstGestureHandled = true;
+  const calls = {
+    engageBest: 0, engageSelected: 0, distinctTargets: null, distinctFallback: undefined,
+    lassoFired: 0, netSetTargetId: null,
+  };
+  const arms = [];
+  for (let i = 0; i < dockedArms; i++) arms.push({ state: ARM_DOCKED, springCharged: true });
+  const enhanced = targetIds.map((id, i) => ({ id, tracked: true, distanceKm: i + 1, deltaV: i }));
+  im._deps = {
+    gameState: { currentState: 'ORBITAL_VIEW', isGameplay: () => true },
+    player: { getPosition: () => ({ x: 0, y: 0, z: 0 }), getOrbitalElements: () => ({}), getVelocity: () => ({ x: 1, y: 0, z: 0 }) },
+    debrisField: {
+      getEnhancedTargetList: () => enhanced.slice(),
+      getDebrisById: (id) => ({ id, type: 'debris' }),
+    },
+    armManager: {
+      arms,
+      deployAllToDistinctTargets: (t, fb) => { calls.distinctTargets = t; calls.distinctFallback = fb; return t.length; },
+      deployAllToTarget: () => {},
+    },
+    debrisMap: {
+      isVisible: () => false,
+      engageBestCluster: () => { calls.engageBest++; return { id: 'c0' }; },
+      engageSelectedCluster: () => { calls.engageSelected++; },
+    },
+    targetSelector: { getActiveTarget: () => null, setTarget: (debris) => { calls.netSetTargetId = debris ? debris.id : null; } },
+    lassoSystem: { active: false, fire: () => {} },
+    debrisWireframe: { setTarget: () => {} },
+    hud: { setSelectedTarget: () => {} },
+    targetReticle: { setSelectedTarget: () => {} },
+    navSphere: { setSelectedTarget: () => {} },
+    sensorSystem: { canDetectUntracked: false },
+    audioSystem: { playClick: () => {}, playClickFail: () => {} },
+  };
+  // Count fireLasso() invocations without running the real windup timer.
+  im.fireLasso = () => { calls.lassoFired++; };
+  return { im, calls };
+}
+
+describe('InputManager — Shift+A field-center salvage (2026-06-14)', () => {
+  it('autopilots the mother to the best cluster (field center)', () => {
+    const { im, calls } = makeSalvageIM();
+    im._handleKeyDown(key('KeyA', { shiftKey: true }));
+    assert.equal(calls.engageBest, 1, 'Shift+A engages the best cluster (field center)');
+    assert.equal(calls.engageSelected, 0, 'does not fall back to selected-cluster when engageBestCluster exists');
+  });
+
+  it('fans every docked daughter out to DISTINCT debris', () => {
+    const { im, calls } = makeSalvageIM([10, 11, 12, 13], 2);
+    im._handleKeyDown(key('KeyA', { shiftKey: true }));
+    assert.ok(Array.isArray(calls.distinctTargets), 'deployAllToDistinctTargets called');
+    assert.equal(calls.distinctTargets.length, 2, 'one distinct target per docked daughter');
+    const ids = calls.distinctTargets.map(t => t.id);
+    assert.deepEqual(ids, [10, 11], 'top-2 TPI debris assigned to the 2 daughters');
+    assert.equal(new Set(ids).size, ids.length, 'targets are distinct');
+  });
+
+  it('fires the mother net at a SEPARATE debris not claimed by a daughter', () => {
+    const { im, calls } = makeSalvageIM([10, 11, 12, 13], 2);
+    im._handleKeyDown(key('KeyA', { shiftKey: true }));
+    assert.equal(calls.lassoFired, 1, 'mother net fired once');
+    // Daughters took ids 10 and 11 → net should target the next free one (12).
+    assert.equal(calls.netSetTargetId, 12, 'mother net targets the first debris not assigned to a daughter');
+  });
+
+  it('falls back to engageSelectedCluster when engageBestCluster is unavailable', () => {
+    const { im, calls } = makeSalvageIM();
+    delete im._deps.debrisMap.engageBestCluster;
+    im._handleKeyDown(key('KeyA', { shiftKey: true }));
+    assert.equal(calls.engageSelected, 1, 'legacy DebrisMap path still engages a cluster');
+  });
+
+  it('plain A still toggles autopilot (no salvage combo)', () => {
+    let toggles = 0;
+    const { im, calls } = makeSalvageIM();
+    im._deps.autopilotSystem = { toggle: () => { toggles++; }, engaged: false };
+    im._handleKeyDown(key('KeyA'));
+    assert.equal(toggles, 1, 'bare A toggles autopilot');
+    assert.equal(calls.engageBest, 0, 'bare A does not run the salvage combo');
+    assert.equal(calls.lassoFired, 0, 'bare A does not fire the net');
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Help-pane coverage guard: every documented binding (HotkeyOverlay.HOTKEY_GROUPS)
+// should still trigger its event / effect. These assertions are deliberately
+// behavioral so a future re-bind that drifts from the help pane fails loudly.
+// ───────────────────────────────────────────────────────────────────────────
+function makeFullIM(overrides = {}) {
+  const im = new InputManager();
+  im._firstGestureHandled = true;
+  const calls = {
+    cycleView: 0, viewLockedId: undefined, mapToggle: 0, codexToggle: 0,
+    hotkeyToggle: 0, detachIndex: null, exitInspection: 0, shopState: null,
+  };
+  im._deps = {
+    gameState: { currentState: 'ORBITAL_VIEW', isGameplay: () => true },
+    player: { getPosition: () => ({ x: 0, y: 0, z: 0 }), getOrbitalElements: () => ({}), getVelocity: () => ({ x: 1, y: 0, z: 0 }) },
+    armManager: {
+      arms: [], selectedArmIndex: -1,
+      getActiveDetachCandidate: () => ({ index: 2 }),
+      detachArm: (i) => { calls.detachIndex = i; return true; },
+    },
+    targetSelector: { getActiveTarget: () => null, setTarget: () => {} },
+    debrisField: { getEnhancedTargetList: () => [], getDebrisById: () => null },
+    debrisWireframe: { setTarget: () => {} },
+    hud: { setSelectedTarget: () => {}, showPause: () => {}, hidePause: () => {} },
+    cameraSystem: {
+      currentView: 'COMMAND', getPilotedArm: () => null,
+      cycleView: (id) => { calls.cycleView++; calls.viewLockedId = id; },
+      exitInspection: () => { calls.exitInspection++; },
+    },
+    debrisMap: { isVisible: () => false, toggle: () => { calls.mapToggle++; } },
+    codexViewerUI: { isVisible: () => false, toggle: () => { calls.codexToggle++; } },
+    hotkeyOverlay: { isVisible: () => false, toggle: () => { calls.hotkeyToggle++; } },
+    strategicMap: { isOpen: () => false },
+    lassoSystem: { active: false, fire: () => {} },
+    sensorSystem: { canDetectUntracked: false },
+    audioSystem: { playClick: () => {}, playClickFail: () => {} },
+    autopilotSystem: { engaged: false },
+    transitionToState: (s) => { calls.shopState = s; },
+    setPaused: () => {}, getPaused: () => false, setLastTime: () => {},
+    ...overrides,
+  };
+  return { im, calls };
+}
+
+describe('InputManager — help-pane binding coverage guard', () => {
+  it('V cycles the camera view (Mother + Daughter "View")', () => {
+    const { im, calls } = makeFullIM();
+    im._handleKeyDown(key('KeyV'));
+    assert.equal(calls.cycleView, 1, 'V cycles the view');
+  });
+
+  it('Shift+V toggles the strategic map ("View big picture")', () => {
+    const got = captureEvent(Events.STRATEGIC_MAP_TOGGLE, () => {
+      const { im } = makeFullIM();
+      im._handleKeyDown(key('KeyV', { shiftKey: true }));
+    });
+    assert.equal(got.length, 1, 'Shift+V emits STRATEGIC_MAP_TOGGLE');
+  });
+
+  it('N in mother mode fires the lasso/net ("Net launch")', () => {
+    const { im } = makeFullIM();
+    let fired = 0;
+    im.fireLasso = () => { fired++; };
+    im._handleKeyDown(key('KeyN'));
+    assert.equal(fired, 1, 'N fires the mother net');
+  });
+
+  it('B opens the shop ("Buy")', () => {
+    const { im, calls } = makeFullIM();
+    im._handleKeyDown(key('KeyB'));
+    assert.equal(calls.shopState, 'SHOP', 'B transitions to SHOP');
+  });
+
+  it('L toggles the codex Library', () => {
+    const { im, calls } = makeFullIM();
+    im._handleKeyDown(key('KeyL'));
+    assert.equal(calls.codexToggle, 1, 'L toggles the codex');
+  });
+
+  it('? (Slash) toggles the hotkey help overlay', () => {
+    const { im, calls } = makeFullIM();
+    im._handleKeyDown(key('Slash'));
+    assert.equal(calls.hotkeyToggle, 1, '? toggles the help overlay');
+  });
+
+  it('Esc pauses from ORBITAL_VIEW ("Pause / back")', () => {
+    let paused = null;
+    const { im } = makeFullIM({ getPaused: () => false, setPaused: (v) => { paused = v; } });
+    im._handleKeyDown(key('Escape'));
+    assert.equal(paused, true, 'Esc pauses gameplay');
+  });
+
+  it('X detaches the active tether candidate ("Tether detach")', () => {
+    const { im, calls } = makeFullIM();
+    im._handleKeyDown(key('KeyX'));
+    assert.equal(calls.detachIndex, 2, 'X detaches the active candidate by index');
+  });
+
+  it('. (Period) toggles struts ("toggle: Struts")', () => {
+    const got = captureEvent(Events.STRUT_DEPLOY_INPUT, () => {
+      const { im } = makeFullIM({
+        armManager: { arms: [{ state: 'DOCKED', _strutTargetAlpha: 0 }] },
+      });
+      im._handleKeyDown(key('Period'));
+    });
+    assert.equal(got.length, 1, 'Period drives the strut toggle');
+  });
+
+  it('H is the de-spin "Hold steady" laser (no recall)', () => {
+    const got = captureEvent(Events.ARM_RECALL_ALL, () => {
+      const { im } = makeFullIM();
+      im._handleKeyDown(key('KeyH'));
+    });
+    assert.equal(got.length, 0, 'H does not recall — it is the de-spin laser');
   });
 });

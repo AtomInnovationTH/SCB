@@ -191,6 +191,30 @@ export class DebrisMap {
   }
 
   /**
+   * Shift+A "field center" helper (2026-06-14): re-rank clusters and engage
+   * autopilot toward the single highest-scored one (densest / highest-value =
+   * the debris-field center), regardless of which row is currently highlighted
+   * in the map. Works even when the map has never been opened (it polls on
+   * demand). Returns the engaged cluster (or null when there are none).
+   * @returns {object|null}
+   */
+  engageBestCluster() {
+    // Refresh ranking on demand so the press doesn't depend on the map being
+    // open / recently polled.
+    this._refreshClusters();
+    if (this._rankedClusters.length === 0 || !this._autopilotSystem) return null;
+    this._selectedIndex = 0;            // top-ranked = field center
+    const cluster = this._rankedClusters[0];
+    this._autopilotSystem.engageCluster(cluster);
+    if (Constants.isFeatureEnabled('CLUSTER_TRANSFER_WINDOW')) {
+      this._committedCluster = cluster;
+      this._committedWindow = null;
+      this._prevDepartIn = null;
+    }
+    return cluster;
+  }
+
+  /**
    * Called every frame from the main game loop.
    * @param {number} dt — frame delta in seconds
    * @param {object} deps — { debrisField, player, autopilotSystem }
@@ -277,7 +301,7 @@ export class DebrisMap {
       });
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: 'HOUSTON',
-        text: `Transfer window open — execute departure burn (ΔV ${win.dvTotal.toFixed(0)} m/s).`,
+        text: `Transfer window open. Execute departure burn (ΔV ${win.dvTotal.toFixed(0)} m/s).`,
         priority: 'info',
       });
     }
@@ -556,7 +580,7 @@ export class DebrisMap {
     if (!win) {
       ctx.fillStyle = '#667788';
       ctx.font = '10px "Courier New", monospace';
-      ctx.fillText('timing unavailable — no orbit fix', 14, y + 32);
+      ctx.fillText('timing unavailable. No orbit fix', 14, y + 32);
       return;
     }
 
@@ -569,7 +593,7 @@ export class DebrisMap {
     ctx.fillText('Depart', 14, y + 34);
     ctx.fillStyle = departColor;
     ctx.font = open ? 'bold 12px "Courier New", monospace' : '12px "Courier New", monospace';
-    ctx.fillText(open ? 'WINDOW OPEN — BURN NOW' : `T-${this._fmtClock(win.departIn)}`, 78, y + 34);
+    ctx.fillText(open ? 'WINDOW OPEN. BURN NOW' : `T-${this._fmtClock(win.departIn)}`, 78, y + 34);
 
     ctx.font = '11px "Courier New", monospace';
     ctx.fillStyle = '#88aacc';
@@ -587,8 +611,8 @@ export class DebrisMap {
     ctx.fillStyle = '#556677';
     ctx.font = '9px "Courier New", monospace';
     const periodTxt = Number.isFinite(win.synodic)
-      ? `next window every ${this._fmtClock(win.synodic)} — space is periodic`
-      : 'co-altitude — launch anytime';
+      ? `next window every ${this._fmtClock(win.synodic)}. Space is periodic`
+      : 'co-altitude. Launch anytime';
     ctx.fillText(periodTxt, 14, y + 64);
   }
 
@@ -802,7 +826,11 @@ export class DebrisMap {
   _emitSelection() {
     const cluster = this.getSelectedCluster();
     if (cluster) {
-      eventBus.emit(Events.DEBRIS_MAP_CLUSTER_SELECTED, { clusterId: cluster.id });
+      eventBus.emit(Events.DEBRIS_MAP_CLUSTER_SELECTED, {
+        clusterId: cluster.id,
+        name: cluster.name,
+        count: cluster.count,
+      });
     }
   }
 

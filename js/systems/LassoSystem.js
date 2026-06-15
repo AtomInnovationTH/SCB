@@ -12,8 +12,6 @@ import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { orbitToSceneCartesian } from '../entities/OrbitalMechanics.js';
-import { computeToolOdds } from './ToolOdds.js';
-import { captureNetSystem } from '../entities/CaptureNet.js';
 
 /** 1 meter in scene units (1 unit = 100 km = 100000 m) */
 const M = 0.00001;
@@ -478,30 +476,14 @@ export class LassoSystem {
             // Only announce on the transition into range for this target.
             if (this._inRangePromptId !== targetId) {
                 this._inRangePromptId = targetId;
-                // Phase 1d (capture-feedback overhaul): aiming the mother tools
-                // shows the same % readout grammar as the daughter odds strip —
-                // mother net odds via the unified ToolOdds model (CN.LARGE).
-                let oddsNote = '';
-                if (Constants.isFeatureEnabled && Constants.isFeatureEnabled('CAPTURE_NET')) {
-                    const rangeM = playerPos.distanceTo(pos) / M;
-                    // M3: honest magazine — pass the live mother pod count so
-                    // an empty pod shows no "Mother net N%" advertisement.
-                    const motherNets = (captureNetSystem && typeof captureNetSystem.getMotherNetCount === 'function')
-                        ? captureNetSystem.getMotherNetCount() : undefined;
-                    const odds = computeToolOdds({
-                        armType: 'mother',
-                        netClass: Constants.CAPTURE_NET.LARGE,
-                        target: selectedTarget,
-                        range: rangeM,
-                        netCount: motherNets,
-                    });
-                    if (odds.NET && odds.NET.p != null && odds.NET.p > 0) {
-                        const cap = (Constants.TOOL_ODDS && Constants.TOOL_ODDS.DISPLAY_CAP) ?? 0.99;
-                        oddsNote = ` Mother net ${Math.round(Math.min(odds.NET.p, cap) * 100)}%.`;
-                    }
-                }
+                // Keep this prompt clean and actionable. The raw capture-odds
+                // % ("Mother net 32%") was removed (2026-06-14): a bare number
+                // with no context is noise to a new player, and the labelled,
+                // colour-coded odds already live in the Target panel badge and
+                // the reticle odds strip (the SSOT ToolOdds readout). Comms
+                // just needs to say what to press.
                 eventBus.emit(Events.COMMS_MESSAGE, {
-                    text: `Target in lasso range — press N to cast.${oddsNote}`,
+                    text: 'Target in lasso range. Press N to cast.',
                     source: 'SYSTEM',
                     channel: 'CMD',
                     priority: 'info',
@@ -531,8 +513,8 @@ export class LassoSystem {
             const secs = this.cooldownRemaining;
             eventBus.emit(Events.COMMS_MESSAGE, {
                 text: this.active
-                    ? 'Lasso busy — wait for it to retract'
-                    : `Lasso recharging — ${Math.ceil(secs)}s`,
+                    ? 'Lasso busy. Wait for it to retract'
+                    : `Lasso recharging. ${Math.ceil(secs)}s`,
                 source: 'SYSTEM',
                 channel: 'CMD',
                 priority: 'info',
@@ -545,7 +527,7 @@ export class LassoSystem {
         if (this._ammo <= 0) {
             eventBus.emit(Events.LASSO_DENIED, { reason: 'no_ammo' });
             eventBus.emit(Events.COMMS_MESSAGE, {
-                text: 'Web tether depleted — deploy daughters [D]',
+                text: 'Web tether depleted. Deploy daughters [D]',
                 source: 'SYSTEM',
                 channel: 'CMD',
                 priority: 'warning',
@@ -663,7 +645,7 @@ export class LassoSystem {
         if (fwdDot < Constants.LASSO_FORWARD_ARC_DOT) {
             eventBus.emit(Events.LASSO_DENIED, { reason: 'outside_arc' });
             eventBus.emit(Events.COMMS_MESSAGE, {
-                text: 'Target not in forward arc — align with autopilot first',
+                text: 'Target not in forward arc. Align with autopilot first',
                 source: 'SYSTEM',
                 channel: 'CMD',
                 priority: 'warning',
@@ -715,7 +697,7 @@ export class LassoSystem {
         if (!this._firstCastPrimerSent) {
             this._firstCastPrimerSent = true;
             eventBus.emit(Events.COMMS_MESSAGE, {
-                text: 'Lasso deployed — hold steady for catch. Recharges from onboard power.',
+                text: 'Lasso deployed. Hold steady for catch. Recharges from onboard power.',
                 priority: 'info',
             });
         }
@@ -730,7 +712,7 @@ export class LassoSystem {
         // UX-3 #7: Low ammo warning at 5 remaining
         if (this._ammo === 5) {
             eventBus.emit(Events.COMMS_MESSAGE, {
-                text: 'Web nets running low — daughters are reusable',
+                text: 'Web nets running low. Daughters are reusable',
                 source: 'SYSTEM',
                 channel: 'CMD',
                 priority: 'warning',
@@ -1084,7 +1066,7 @@ export class LassoSystem {
     _cancelLasso() {
         eventBus.emit(Events.LASSO_MISSED);  // notify tutorial of mid-flight miss
         eventBus.emit(Events.COMMS_MESSAGE, {
-            text: 'Lasso retracted — no contact.',
+            text: 'Lasso retracted. No contact.',
             priority: 'info',
         });
         this._resetLasso();

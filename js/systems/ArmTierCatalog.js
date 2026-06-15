@@ -53,7 +53,7 @@ function buildCatalog() {
       massWetKg: L.Y1_HEX.wetMass,
       costCredits: COSTS.Y1_HEX || 5000,
       prereqTier: 'Y0_QUAD',
-      description: 'Hex Configuration Refit — adds 1 Large Daughter + 1 Small Daughter. Requires shipyard docking.',
+      description: 'Hex Configuration Refit. Adds 1 Large Daughter + 1 Small Daughter. Requires shipyard docking.',
       unlockTRL: TRL_GATE.Y1_HEX || 6,
       debrisGate: DEBRIS_GATE.Y1_HEX || 15,
       features: ['6-arm hex', '3 weaver + 3 spinner', 'dual-fire pairs ×3', '60° arm spacing'],
@@ -68,7 +68,7 @@ function buildCatalog() {
       massWetKg: L.Y3_OCTO.wetMass,
       costCredits: COSTS.Y3_OCTO || 15000,
       prereqTier: 'Y1_HEX',
-      description: 'Octo Configuration Refit — adds Front + Back arms, completes the Octopus. Requires Hex refit.',
+      description: 'Octo Configuration Refit. Adds Front + Back arms, completes the Octopus. Requires Hex refit.',
       unlockTRL: TRL_GATE.Y3_OCTO || 8,
       debrisGate: DEBRIS_GATE.Y3_OCTO || 30,
       features: ['8 arms = 6 ring + 2 end-face', '3 weaver + 3 spinner + F/B', 'barrel-axial sweep', 'full Octopus configuration'],
@@ -214,7 +214,7 @@ export function canUpgrade(currentTier, targetTier, gameState) {
   if (effectiveTRL < target.unlockTRL) {
     return {
       allowed: false,
-      reason: `Requires Tech Lvl ${target.unlockTRL} (clear ${target.debrisGate}+ debris — have ${debrisCleared})`,
+      reason: `Requires Tech Lvl ${target.unlockTRL} (clear ${target.debrisGate}+ debris, have ${debrisCleared})`,
     };
   }
 
@@ -301,7 +301,7 @@ export function executeUpgrade(currentTier, targetTier, gameState, deps) {
   } else if (targetTier === 'Y1_HEX') {
     eventBus.emit(Events.COMMS_MESSAGE, {
       sender: 'HOUSTON',
-      text: `Hex Configuration Refit complete — ${target.armCount} daughters online.`,
+      text: `Hex Configuration Refit complete. ${target.armCount} daughters online.`,
       priority: 'info',
     });
   }

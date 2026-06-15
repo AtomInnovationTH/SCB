@@ -78,7 +78,7 @@ export const UPGRADES = [
     requiresAll: ['solid_state_battery'],
     trl: 3, trlRationale: 'Graphene-HBN supercaps demonstrated in lab; no flight heritage' },
   { id: 'rtg_module', cat: 'Power', name: 'RTG Module', cost: 3500,
-    desc: 'Pu-238 radioisotope. +2 kW constant — even in eclipse.',
+    desc: 'Pu-238 radioisotope. +2 kW constant. Even in eclipse.',
     effect: 'rtgPower', value: 2.0, maxLevel: 1,
     requiresAll: ['multi_junction_solar'],
     trl: 9, trlRationale: 'RTGs flown since SNAP-3 (1961); MMRTG on Curiosity, Perseverance' },
@@ -139,13 +139,13 @@ export const UPGRADES = [
   { id: 'gsl_tether_v4', cat: 'Graphene', name: 'GSL Tether v4', cost: 3000,
     desc: 'Graphene tether extends reach to 12.5km', effect: 'v4TetherRange',
     value: Constants.V4_TETHER_LENGTH_MULT, maxLevel: 1,
-    trl: 2, trlRationale: 'Graphene Structural Lattice — paper-stage; HBN-coated Dyneema arriving 2026' },
+    trl: 2, trlRationale: 'Graphene Structural Lattice. Paper-stage; HBN-coated Dyneema arriving 2026' },
   { id: 'gsl_net_v4', cat: 'Graphene', name: 'GSL Net v4', cost: 3500,
     desc: '10× capture net area', effect: 'v4NetArea',
     value: Math.sqrt(Constants.V4_NET_SIZE_MULT), maxLevel: 1,
-    trl: 2, trlRationale: 'Graphene-reinforced capture net — speculative; no space heritage' },
+    trl: 2, trlRationale: 'Graphene-reinforced capture net. Speculative; no space heritage' },
   { id: 'gsl_electrostatic_v4', cat: 'Graphene', name: 'GSL Electrostatic v4', cost: 4000,
-    desc: '160N electrostatic grip — 5× capture mass', effect: 'v4GripForce',
+    desc: '160N electrostatic grip. 5× capture mass', effect: 'v4GripForce',
     value: 5.0, maxLevel: 1,
     trl: 3, trlRationale: 'Electrostatic capture demonstrated on CubeSats; 160N force is game-speculative' },
 ];
@@ -153,19 +153,19 @@ export const UPGRADES = [
 /** Spring tier descriptions for shop display */
 const SPRING_DESCRIPTIONS = [
   "Factory steel springs. Reliable but slow.",
-  "Maraging steel — premium alloy, higher energy storage.",
+  "Maraging steel. Premium alloy, higher energy storage.",
   "Composite laminate springs with carbon fiber reinforcement.",
   "Nanolaminate metamaterial with programmable stiffness.",
-  "Metamaterial quantum lattice — maximum energy density.",
+  "Metamaterial quantum lattice. Maximum energy density.",
 ];
 
 /** Tether tier descriptions for shop display */
 const TETHER_DESCRIPTIONS = [
   "Ultra-high molecular weight polyethylene. Industry standard.",
-  "PBO fiber — high modulus, UV sensitive. Handle with care.",
-  "Carbon nanotube yarn — aerospace grade.",
-  "Graphene Superlattice 50 GPa — first-gen GSL technology.",
-  "Graphene Superlattice 100 GPa — carries power, data, and steering.",
+  "PBO fiber. High modulus, UV sensitive. Handle with care.",
+  "Carbon nanotube yarn. Aerospace grade.",
+  "Graphene Superlattice 50 GPa. First-gen GSL technology.",
+  "Graphene Superlattice 100 GPa. Carries power, data, and steering.",
 ];
 
 export class ShopScreen {
@@ -377,6 +377,9 @@ export class ShopScreen {
       const sellMod = (Constants.MARKET && Constants.MARKET.SELL_PRICE_MODIFIER) || 0.85;
 
       for (const item of cargoStatus.manifest) {
+        // Defensive: skip any malformed manifest entry (missing metalId) rather
+        // than crashing the whole shop on item.metalId.startsWith.
+        if (!item || typeof item.metalId !== 'string') continue;
         const sellValue = Math.round(item.value * sellMod);
         const isRefined = item.metalId.startsWith('refined_');
         const isProp = item.metalId.startsWith('prop_');
@@ -386,7 +389,7 @@ export class ShopScreen {
           <div style="display:flex;justify-content:space-between;align-items:center;
             padding:4px 8px;margin:2px 0;background:rgba(255,255,255,0.05);border-radius:4px">
             <span style="color:${item.color};font-size:11px">
-              ${item.name}${tag} — ${item.massKg}kg
+              ${item.name}${tag}. ${item.massKg}kg
             </span>
             <span style="display:flex;gap:8px;align-items:center">
               <span style="color:#4f4;font-size:10px">${sellValue}¢</span>

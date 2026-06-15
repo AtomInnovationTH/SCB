@@ -390,7 +390,7 @@ export class SkillsPane {
         const el = document.createElement('style');
         el.id = 'skills-pane-styles';
         el.textContent = `
-/* ── Skills Pane — compact overlay (bottom-left dock) ──────────────────── */
+/* ── Skills Pane. Compact overlay (bottom-left dock) ──────────────────── */
 .skills-pane {
     position: fixed;
     bottom: 10px;
@@ -495,7 +495,7 @@ export class SkillsPane {
     animation: spEdgeGlow 500ms ease-out forwards;
 }
 
-/* ── Expanded view — backdrop ──────────────────────────────────────────── */
+/* ── Expanded view. Backdrop ──────────────────────────────────────────── */
 .sp-backdrop {
     position: fixed;
     top: 0; left: 0; right: 0; bottom: 0;
@@ -504,7 +504,7 @@ export class SkillsPane {
     display: none;
 }
 
-/* ── Expanded view — panel ─────────────────────────────────────────────── */
+/* ── Expanded view. Panel ─────────────────────────────────────────────── */
 .sp-expanded {
     position: fixed;
     top: 50%; left: 50%;
@@ -822,7 +822,7 @@ export class SkillsPane {
         progText.className = 'sp-prog-text';
         const closeHint = document.createElement('span');
         closeHint.className = 'sp-close-hint';
-        closeHint.textContent = 'L — Tech Library  ·  J to close';
+        closeHint.textContent = 'L. Tech Library  ·  J to close';
         footer.appendChild(progText);
         footer.appendChild(closeHint);
         overlay.appendChild(footer);
@@ -1116,7 +1116,7 @@ export class SkillsPane {
             // Hint
             const hint = document.createElement('div');
             hint.className = 'sp-tech-hint';
-            hint.textContent = 'L — Tech Library';
+            hint.textContent = 'L. Tech Library';
             this._paneBody.appendChild(hint);
         }
 

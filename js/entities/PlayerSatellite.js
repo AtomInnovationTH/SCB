@@ -2098,7 +2098,7 @@ export class PlayerSatellite extends THREE.Group {
         this._mpdHeat = 0;
         eventBus.emit(Events.COMMS_MESSAGE, {
           sender: 'PROPULSION',
-          text: 'MPD thermal nominal — ready to arm',
+          text: 'MPD thermal nominal. Ready to arm',
           priority: 'info',
         });
       }
@@ -2111,7 +2111,7 @@ export class PlayerSatellite extends THREE.Group {
       eventBus.emit(Events.MPD_BURST_END, { reason: 'battery_depleted' });
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'PROPULSION',
-        text: 'MPD OFFLINE — battery depleted',
+        text: 'MPD OFFLINE. Battery depleted',
         priority: 'warning',
       });
     }
@@ -2123,7 +2123,7 @@ export class PlayerSatellite extends THREE.Group {
       eventBus.emit(Events.MPD_BURST_END, { reason: 'lithium_depleted' });
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'PROPULSION',
-        text: 'MPD FUEL DEPLETED — no lithium',
+        text: 'MPD FUEL DEPLETED. No lithium',
         priority: 'warning',
       });
     }
@@ -2147,7 +2147,7 @@ export class PlayerSatellite extends THREE.Group {
       if (this._edtDeployTimer >= deployTime) {
         this._edtActive = true;
         eventBus.emit(Events.COMMS_MESSAGE, {
-          sender: 'EDT', text: 'EDT active — attracting nearby debris', priority: 'info',
+          sender: 'EDT', text: 'EDT active. Attracting nearby debris', priority: 'info',
         });
       }
     }
@@ -2158,7 +2158,7 @@ export class PlayerSatellite extends THREE.Group {
         this._edtActive = false;
         this._edtDeployed = false;
         eventBus.emit(Events.COMMS_MESSAGE, {
-          sender: 'EDT', text: 'EDT shutdown — low power', priority: 'warning',
+          sender: 'EDT', text: 'EDT shutdown. Low power', priority: 'warning',
         });
       } else if (this._resourceSystem) {
         this._resourceSystem.consume('battery', powerDraw * dt);
@@ -2177,7 +2177,7 @@ export class PlayerSatellite extends THREE.Group {
           this._edtActive = false;
           this._edtDeployed = false;
           eventBus.emit(Events.COMMS_MESSAGE, {
-            sender: 'EDT', text: 'EDT shutdown — low power', priority: 'warning',
+            sender: 'EDT', text: 'EDT shutdown. Low power', priority: 'warning',
           });
         }
       }
@@ -2872,7 +2872,7 @@ export class PlayerSatellite extends THREE.Group {
         this._hasMPD = true;
         eventBus.emit(Events.COMMS_MESSAGE, {
           sender: 'PROPULSION',
-          text: 'MPD thruster installed. Requires lithium propellant — salvage from defunct satellites.',
+          text: 'MPD thruster installed. Requires lithium propellant. Salvage from defunct satellites.',
           priority: 'info',
         });
         break;
@@ -2984,7 +2984,7 @@ export class PlayerSatellite extends THREE.Group {
       if (now - this._lastThrustOfflineWarning > 3000) {
         this._lastThrustOfflineWarning = now;
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: '⚠ ION DRIVE OFFLINE — increase THRUST power allocation',
+          text: '⚠ ION DRIVE OFFLINE. Increase THRUST power allocation',
           priority: 'warning',
         });
       }
@@ -3106,7 +3106,7 @@ export class PlayerSatellite extends THREE.Group {
       if (now - this._lastThrustOfflineWarning > 3000) {
         this._lastThrustOfflineWarning = now;
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: '⚠ MPD DRIVE OFFLINE — increase THRUST power allocation',
+          text: '⚠ MPD DRIVE OFFLINE. Increase THRUST power allocation',
           priority: 'warning',
         });
       }
@@ -3162,7 +3162,7 @@ export class PlayerSatellite extends THREE.Group {
       this._mpdDegraded = true;
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'PROPULSION',
-        text: '⚠ MPD degraded — critical power',
+        text: '⚠ MPD degraded. Critical power',
         priority: 'warning',
       });
     } else if (batteryThrustMult >= 1.0) {
@@ -3190,7 +3190,7 @@ export class PlayerSatellite extends THREE.Group {
       });
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'PROPULSION',
-        text: `⚠ MPD cathode eroded — thrust degraded to ${Math.round(degradedFactor * 100)}%`,
+        text: `⚠ MPD cathode eroded. Thrust degraded to ${Math.round(degradedFactor * 100)}%`,
         priority: 'warning',
       });
     }
@@ -3207,7 +3207,7 @@ export class PlayerSatellite extends THREE.Group {
       eventBus.emit(Events.MPD_BURST_END, { reason: 'overheat' });
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'PROPULSION',
-        text: '🔥 MPD THERMAL SHUTDOWN — mandatory cooldown',
+        text: '🔥 MPD THERMAL SHUTDOWN. Mandatory cooldown',
         priority: 'critical',
       });
     }
@@ -3275,7 +3275,7 @@ export class PlayerSatellite extends THREE.Group {
     if (this._mpdCooldownTimer > 0) {
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'PROPULSION',
-        text: `MPD cooling — ${Math.ceil(this._mpdCooldownTimer)}s remaining`,
+        text: `MPD cooling. ${Math.ceil(this._mpdCooldownTimer)}s remaining`,
         priority: 'warning',
       });
       return;
@@ -3283,7 +3283,7 @@ export class PlayerSatellite extends THREE.Group {
     if (this.resources.lithium <= 0) {
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'PROPULSION',
-        text: 'MPD FUEL DEPLETED — no lithium',
+        text: 'MPD FUEL DEPLETED. No lithium',
         priority: 'warning',
       });
       return;
@@ -3296,14 +3296,14 @@ export class PlayerSatellite extends THREE.Group {
       eventBus.emit(Events.MPD_BURST_START, { armed: true });
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'PROPULSION',
-        text: '⚡ MPD ARMED — Ludicrous mode active',
+        text: '⚡ MPD ARMED. Ludicrous mode active',
         priority: 'info',
       });
     } else {
       eventBus.emit(Events.MPD_BURST_END, { reason: 'manual' });
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'PROPULSION',
-        text: 'MPD standby — ion drive resumed',
+        text: 'MPD standby. Ion drive resumed',
         priority: 'info',
       });
     }
@@ -3689,7 +3689,7 @@ export class PlayerSatellite extends THREE.Group {
       if (now - this._lastThrustOfflineWarning > 3000) {
         this._lastThrustOfflineWarning = now;
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: '⚠ ION DRIVE OFFLINE — increase THRUST power allocation',
+          text: '⚠ ION DRIVE OFFLINE. Increase THRUST power allocation',
           priority: 'warning',
         });
       }

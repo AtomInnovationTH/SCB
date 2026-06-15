@@ -316,7 +316,7 @@ export class ArmManager {
     // ST-6.7: Safe-mode guard — refuse arm deployment when spacecraft is in safe mode
     if (this.playerSatellite && this.playerSatellite.safeMode) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: 'Daughters locked — safe mode active. Repair subsystems first.',
+        text: 'Daughters locked. Safe mode active. Repair subsystems first.',
         priority: 'warning',
       });
       return false;
@@ -330,7 +330,7 @@ export class ArmManager {
     // Power distribution: block deployment if ARM bus is at 0%
     if (powerDistribution.armMultiplier <= 0) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: '⚠ DAUGHTER BEACON OFFLINE — increase DAUGHTER power to deploy',
+        text: '⚠ DAUGHTER BEACON OFFLINE. Increase DAUGHTER power to deploy',
         priority: 'warning',
       });
       return false;
@@ -417,7 +417,7 @@ export class ArmManager {
     // ST-6.7: Safe-mode guard — refuse arm deployment when spacecraft is in safe mode
     if (this.playerSatellite && this.playerSatellite.safeMode) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: 'Daughters locked — safe mode active. Repair subsystems first.',
+        text: 'Daughters locked. Safe mode active. Repair subsystems first.',
         priority: 'warning',
       });
       return false;
@@ -431,7 +431,7 @@ export class ArmManager {
     // V5: Spring must be charged to deploy
     if (!arm.springCharged) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `${arm.id}: Spring not charged — reloading`,
+        text: `${arm.id}: Spring not charged. Reloading`,
         priority: 'warning',
       });
       return false;
@@ -440,7 +440,7 @@ export class ArmManager {
     // Power distribution: block deployment if ARM bus is at 0%
     if (powerDistribution.armMultiplier <= 0) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: '⚠ DAUGHTER BEACON OFFLINE — increase DAUGHTER power to deploy',
+        text: '⚠ DAUGHTER BEACON OFFLINE. Increase DAUGHTER power to deploy',
         priority: 'warning',
       });
       return false;
@@ -465,7 +465,7 @@ export class ArmManager {
     // ST-6.7: Safe-mode guard — refuse arm deployment when spacecraft is in safe mode
     if (this.playerSatellite && this.playerSatellite.safeMode) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: 'Daughters locked — safe mode active. Repair subsystems first.',
+        text: 'Daughters locked. Safe mode active. Repair subsystems first.',
         priority: 'warning',
       });
       return false;
@@ -474,7 +474,7 @@ export class ArmManager {
     // Power distribution: block deployment if ARM bus is at 0%
     if (powerDistribution.armMultiplier <= 0) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: '⚠ DAUGHTER BEACON OFFLINE — increase DAUGHTER power to deploy',
+        text: '⚠ DAUGHTER BEACON OFFLINE. Increase DAUGHTER power to deploy',
         priority: 'warning',
       });
       return false;
@@ -498,7 +498,7 @@ export class ArmManager {
     // Power distribution: block deployment if ARM bus is at 0%
     if (powerDistribution.armMultiplier <= 0) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: '⚠ DAUGHTER BEACON OFFLINE — increase DAUGHTER power to deploy',
+        text: '⚠ DAUGHTER BEACON OFFLINE. Increase DAUGHTER power to deploy',
         priority: 'warning',
       });
       return false;
@@ -540,7 +540,7 @@ export class ArmManager {
     // Power distribution: block if ARM bus offline
     if (powerDistribution.armMultiplier <= 0) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: '⚠ DAUGHTER BEACON OFFLINE — increase DAUGHTER power for web shot',
+        text: '⚠ DAUGHTER BEACON OFFLINE. Increase DAUGHTER power for web shot',
         priority: 'warning',
       });
       return false;
@@ -698,14 +698,14 @@ export class ArmManager {
     // ST-6.7: Safe-mode guard
     if (this.playerSatellite && this.playerSatellite.safeMode) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: '⚠ SAFE MODE — daughter deployment locked', priority: 'warning',
+        text: '⚠ SAFE MODE. Daughter deployment locked', priority: 'warning',
       });
       return 0;
     }
     // Power distribution guard
     if (powerDistribution.armMultiplier <= 0) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: '⚠ DAUGHTER BEACON OFFLINE — increase DAUGHTER power to deploy', priority: 'warning',
+        text: '⚠ DAUGHTER BEACON OFFLINE. Increase DAUGHTER power to deploy', priority: 'warning',
       });
       return 0;
     }
@@ -725,7 +725,65 @@ export class ArmManager {
       });
     } else {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: 'No daughters available — check charge status',
+        text: 'No daughters available. Check charge status.',
+        priority: 'warning',
+      });
+    }
+    return deployed;
+  }
+
+  /**
+   * Shift+A fan-out (2026-06-14): deploy every docked daughter to a *distinct*
+   * debris so the fleet spreads across the field for quick, high-risk salvage
+   * (instead of all piling onto one target like deployAllToTarget). The i-th
+   * deployable daughter is sent to the i-th entry of `targets`; when there are
+   * more daughters than targets, the extras fall back to `fallbackTarget` (the
+   * mother's active target) or free-fly. Returns the number deployed.
+   *
+   * @param {Array<object>} targets - distinct debris objects, best-first
+   * @param {object|null} [fallbackTarget] - target for surplus daughters
+   * @returns {number} number of daughters successfully deployed
+   */
+  deployAllToDistinctTargets(targets, fallbackTarget = null) {
+    // ST-6.7: Safe-mode guard
+    if (this.playerSatellite && this.playerSatellite.safeMode) {
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        text: '⚠ SAFE MODE. Daughter deployment locked', priority: 'warning',
+      });
+      return 0;
+    }
+    // Power distribution guard
+    if (powerDistribution.armMultiplier <= 0) {
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        text: '⚠ DAUGHTER BEACON OFFLINE. Increase DAUGHTER power to deploy', priority: 'warning',
+      });
+      return 0;
+    }
+
+    const list = Array.isArray(targets) ? targets.filter(Boolean) : [];
+    let deployed = 0;
+    let assigned = 0;   // index into the distinct-target list
+    for (const arm of this.arms) {
+      if (arm.state !== ARM_STATES.DOCKED) continue;
+      if (!arm.springCharged) continue;
+      // Distinct target for this daughter; surplus daughters reuse the
+      // fallback (mother's active target) or free-fly when none.
+      const target = (assigned < list.length) ? list[assigned] : fallbackTarget;
+      const ok = target ? arm.deploy(target) : arm.deployFreefly();
+      if (ok) {
+        deployed++;
+        if (assigned < list.length) assigned++;
+      }
+    }
+
+    if (deployed > 0) {
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        text: `${deployed} daughter${deployed > 1 ? 's' : ''} fanned out across ${Math.min(deployed, list.length) || 1} target${(Math.min(deployed, list.length) || 1) > 1 ? 's' : ''}`,
+        priority: 'info',
+      });
+    } else {
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        text: 'No daughters available. Check charge status.',
         priority: 'warning',
       });
     }
@@ -743,6 +801,34 @@ export class ArmManager {
       text: 'All daughters recalled',
       priority: 'info',
     });
+  }
+
+  /**
+   * Recall every *deployed* daughter (Shift+R). Unlike recallAll(), this skips
+   * arms that are already resting / homing / spent (DOCKED, EXPENDED, RETURNING,
+   * DOCKING) and returns the number actually commanded home, so the caller can
+   * give honest feedback ("Reeling in all daughters (N)" vs "nothing to reel")
+   * instead of the old always-positive "All daughters recalled" notice that read
+   * as a no-op when nothing was out (2026-06-14 reel-in fix).
+   * @returns {number} count of daughters commanded to reel home
+   */
+  recallAllDeployed() {
+    const S = ARM_STATES;
+    let count = 0;
+    for (const arm of this.arms) {
+      if (!arm) continue;
+      if (arm.state === S.DOCKED) continue;
+      if (arm.state === S.EXPENDED) continue;
+      if (arm.state === S.RETURNING) continue;
+      if (arm.state === S.DOCKING) continue;
+      if (typeof arm.recall === 'function') {
+        // Mother-initiated: zero-fuel reel on the tether motor so stuck /
+        // fuel-depleted daughters still come home (matches recallClosestDeployed).
+        arm.recall({ motherInitiated: true });
+        count++;
+      }
+    }
+    return count;
   }
 
   /**
@@ -1568,7 +1654,7 @@ export class ArmManager {
     this.selectedArmIndex = -1;
     eventBus.emit(Events.ARM_DESELECT);
     eventBus.emit(Events.COMMS_MESSAGE, {
-      text: 'Daughter deselected — mothership focus',
+      text: 'Daughter deselected. Mothership focus',
       priority: 'info',
     });
   }
@@ -1800,7 +1886,7 @@ export class ArmManager {
           arm.config.tetherMax = Math.round(arm.config.tetherMax * Constants.V4_TETHER_LENGTH_MULT);
         }
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: 'V4 GSL tethers installed — reach extended to 12.5 km',
+          text: 'V4 GSL tethers installed. Reach extended to 12.5 km',
           priority: 'success',
         });
         break;
@@ -1811,7 +1897,7 @@ export class ArmManager {
           arm.config.netSize = arm.config.netSize * Constants.V4_NET_SIZE_MULT;
         }
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: 'V4 GSL nets installed — 50×50m capture area',
+          text: 'V4 GSL nets installed. 50×50m capture area',
           priority: 'success',
         });
         break;
@@ -1824,7 +1910,7 @@ export class ArmManager {
           arm._v4Electrostatic = true;
         }
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: 'V4 HBN-coated electrostatic nets — capture rate improved',
+          text: 'V4 HBN-coated electrostatic nets. Capture rate improved',
           priority: 'success',
         });
         break;

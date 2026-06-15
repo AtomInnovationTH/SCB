@@ -38,22 +38,22 @@ import { Constants } from '../core/Constants.js';
 export const ONBOARDING_BEATS = [
   {
     id: 'boot',
-    commsSource: 'HOUSTON', commsText: 'Systems powering up — telemetry coming online…',
+    commsSource: 'HOUSTON', commsText: 'Powering up. Telemetry online.',
     commsAck: null,
     glyph: '✓', keys: [], skillId: null,
     autoAdvanceAfter: 3000,
   },
   {
     id: 'handshake',
-    commsSource: 'HOUSTON', commsText: 'Hello Cowboy, comms are up and we have you on telemetry.',
+    commsSource: 'HOUSTON', commsText: 'Cowboy, Houston. Comms up, we have you on telemetry.',
     commsAck: null,
     glyph: '✓', keys: [], skillId: null,
     autoAdvanceAfter: 2500,
   },
   {
     id: 'arrows',
-    commsSource: 'HOUSTON', commsText: 'Cowboy, test your RCS (Reaction Control System — your steering thrusters) with the arrow keys.',
-    commsAck: 'RCS (steering thrusters) good. Solar panels tracking the sun.',
+    commsSource: 'HOUSTON', commsText: 'Check attitude control. The arrow keys fire your RCS (Reaction Control System) thrusters.',
+    commsAck: 'Copy. RCS nominal, solar panels tracking.',
     text: 'Test attitude control',
     glyph: '←→↑↓',
     keys: ['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'],
@@ -61,25 +61,26 @@ export const ONBOARDING_BEATS = [
     // Closest existing skill (Constants.SKILLS.CATALOG): nav_arrows.
     skillId: 'nav_arrows',
     credit: 10,
-    escalationText: 'The arrow keys fire your RCS (Reaction Control System) to rotate the ship. Hold and release to point — the thrusters respond instantly.',
+    escalationText: 'The arrow keys fire the RCS to rotate the ship. Hold to point, release to stop. Thrusters respond instantly.',
   },
   {
     id: 'struts',
-    commsSource: 'HOUSTON', commsText: 'Now check your strut arms — the arms that hold your Daughter capture craft. Stow them with comma, deploy with period.',
-    commsAck: 'Strut arms swing the full 180° — good.',
-    text: 'Stow / Deploy struts',
-    glyph: ', .',
-    keys: ['Comma','Period'],
+    commsSource: 'HOUSTON', commsText: 'Deploy the strut arms with the . key. Press again to stow.',
+    commsAck: 'Copy. Struts cycling full 180°.',
+    text: 'Toggle struts',
+    glyph: '.',
+    keys: ['Period'],
     triggerEvent: 'STRUT_DEPLOY_INPUT',
     // Delegation 4 (2026-05-31): wired to `arm_struts` Tier-1 skill (Quick-Win 2a).
+    // Hotkey revamp 2026-06-14: . is now the single struts toggle (was , stow / . deploy).
     skillId: 'arm_struts',
     credit: 10,
-    escalationText: 'Strut arms cradle each daughter. , stows them, . deploys them outboard for launch.',
+    escalationText: 'Strut arms cradle each daughter. Press . to deploy, . again to stow.',
   },
   {
     id: 'view',
-    commsSource: 'HOUSTON', commsText: 'Press V to switch camera — Command flies the ship, Overview pulls back to look around. Press V again to return to Command.',
-    commsAck: 'Good. V toggles between your flying view and Overview — you can never get stuck.',
+    commsSource: 'HOUSTON', commsText: 'Press V to switch view. Command flies the ship; Overview pulls back. V again returns to Command.',
+    commsAck: 'Copy. V toggles Command and Overview.',
     text: 'Switch camera (V)',
     glyph: 'V',
     keys: ['KeyV'],
@@ -94,12 +95,12 @@ export const ONBOARDING_BEATS = [
     credit: 10,
     optional: true,                       // skippable after 25s
     skipAfter: 25000,
-    escalationText: 'V toggles Command ↔ Overview. Command is your flying view; Overview pulls back so you can look around and zoom in. Tap V again to fly.',
+    escalationText: 'V toggles Command and Overview. Command flies; Overview looks around and zooms. V again to fly.',
   },
   {
     id: 'look',
-    commsSource: 'HOUSTON', commsText: 'In Overview, click and drag to look around your spacecraft.',
-    commsAck: 'Nice — you can inspect from any angle now.',
+    commsSource: 'HOUSTON', commsText: 'In Overview, click and drag to look around the spacecraft.',
+    commsAck: 'Copy. Free look enabled.',
     text: 'Click + drag to look around',
     glyph: '🖱️ drag',
     keys: [],
@@ -111,12 +112,12 @@ export const ONBOARDING_BEATS = [
     credit: 10,
     optional: true,
     skipAfter: 20000,
-    escalationText: 'Hold the left mouse button and drag in Overview to orbit the camera around your ship.',
+    escalationText: 'Hold the left mouse button and drag in Overview to orbit the camera.',
   },
   {
     id: 'zoom',
-    commsSource: 'HOUSTON', commsText: 'Try the zoom — mouse wheel, or + / −.',
-    commsAck: 'Good. Now push in close on the mothership to inspect her.',
+    commsSource: 'HOUSTON', commsText: 'Test the zoom. Mouse wheel, or + / −.',
+    commsAck: 'Copy. Now close in on the mothership.',
     text: 'Zoom the camera',
     glyph: '🖱️ + −',
     keys: ['Equal','Minus','NumpadAdd','NumpadSubtract','MouseWheel'],
@@ -126,12 +127,12 @@ export const ONBOARDING_BEATS = [
     // player actually pushed in far enough for the hull callouts to engage.
     skillId: 'nav_zoom',
     credit: 10,
-    escalationText: 'Mouse wheel zooms the camera in and out. Hold Shift while scrolling for fine zoom.',
+    escalationText: 'Mouse wheel zooms in and out. Hold Shift while scrolling for fine control.',
   },
   {
     id: 'inspect',
-    commsSource: 'HOUSTON', commsText: 'Keep zooming in on the mothership — get close and her hull callouts light up automatically. Inspect before you capture so you can read structural hazards.',
-    commsAck: 'There they are — those callouts flag fragile panels and engine zones. Visual check good. Ready for first mission.',
+    commsSource: 'HOUSTON', commsText: 'Zoom in on the mothership until her hull callouts appear. Inspect before capture to read structural hazards.',
+    commsAck: 'Copy. Callouts flag fragile panels and engine zones. Ready for first mission.',
     text: 'Zoom in until callouts appear',
     glyph: '🔍',
     keys: ['Equal','NumpadAdd','MouseWheel'],
@@ -142,27 +143,27 @@ export const ONBOARDING_BEATS = [
     triggerEvent: 'MOTHER_INSPECTION_ENGAGED',
     skillId: 'inspect_mother',
     credit: 10,
-    escalationText: 'In Overview, keep scrolling IN toward the mothership. Once you\'re within a few metres her hull callouts and a focus vignette fade in. Pull back out to clear them.',
+    escalationText: 'In Overview, keep scrolling in toward the mothership. Within a few metres her callouts and focus vignette fade in. Pull back out to clear them.',
   },
   {
     id: 'scan',
-    commsSource: 'BANGALORE', commsText: 'Run a scan of your area — press S. Ground stations pay for fresh survey data, so scanning earns you credits. Scanned debris shows a redacted salvage manifest in the dossier — get closer to decrypt it.',
-    commsAck: 'Scan returned — survey data sold. Credits inbound.',
+    commsSource: 'BANGALORE', commsText: 'Scan your area with S. Ground stations pay for fresh survey data. Scanned debris logs a redacted manifest. Close in to decrypt it.',
+    commsAck: 'Copy. Scan returned, survey data sold.',
     text: 'Scan area (earns credits)',
     glyph: 'S',
     keys: ['KeyS'],
     triggerEvent: 'SCAN_INITIATED',
     skillId: 'scan_quick',
     credit: 10,
-    escalationText: 'S fires a Quick Scan; W is a wider, slower scan. Both pay out for fresh survey data on a debris field — but only the FIRST scan of a field is worth credits, so move on once a field is logged.',
+    escalationText: 'S runs a Quick Scan; Shift+S scans wider and slower. Only the first scan of a field pays out, so move on once it is logged.',
   },
   {
     id: 'target',
-    commsSource: 'BANGALORE', commsText: 'Choose your target carefully — press Tab to cycle tracked contacts.',
-    commsAck: 'Target locked. Fragment in range.',
+    commsSource: 'BANGALORE', commsText: 'Select a target. Press T to cycle tracked contacts.',
+    commsAck: 'Copy. Target locked, contact in range.',
     text: 'Cycle target',
-    glyph: 'Tab',
-    keys: ['Tab'],
+    glyph: 'T',
+    keys: ['KeyT'],
     triggerEvent: 'TARGET_SELECTED',
     skillId: 'nav_target',
     credit: 10,
@@ -171,32 +172,32 @@ export const ONBOARDING_BEATS = [
     // player is told to cycle through an empty list. The director holds this beat
     // (showing a re-scan nudge) until contacts exist.
     requiresContacts: true,
-    noContactNudge: 'No tracked contacts yet — reposition and scan again (S), or try a Wide scan (W).',
-    escalationText: 'Tab cycles through tracked debris, soonest-to-reach first. If nothing cycles, scan again to reveal contacts.',
+    noContactNudge: 'No tracked contacts yet. Reposition and scan again with S, or Wide scan with Shift+S.',
+    escalationText: 'T cycles tracked debris, soonest-to-reach first. Nothing cycling? Scan again to reveal contacts.',
   },
   {
     id: 'autopilot',
-    commsSource: 'BANGALORE', commsText: 'Autopilot closer to debris — press A.',
-    commsAck: 'On station. Decision time, Cowboy.',
+    commsSource: 'BANGALORE', commsText: 'Close on the debris. Press A for autopilot.',
+    commsAck: 'Copy. On station. Your call, Cowboy.',
     text: 'Autopilot to target',
     glyph: 'A',
     keys: ['KeyA'],
     triggerEvent: 'AUTOPILOT_ENGAGE',
     skillId: 'nav_autopilot',
     credit: 10,
-    escalationText: 'A engages autopilot to your selected target. Press A again or arrows to abort.',
+    escalationText: 'A engages autopilot to the selected target. A again or arrows to abort.',
   },
   {
     id: 'decision',
-    commsSource: 'HOUSTON', commsText: 'Get in close on your target with autopilot. Two capture tools — the Mother net (lasso) for nearby debris, or launch a Daughter for distant or heavy pieces. While a daughter holds station you\'ll see LIVE capture odds for every tool — pull a lever (de-spin, close in) and watch the numbers climb.',
+    commsSource: 'HOUSTON', commsText: 'Two capture tools. The Mother net for nearby debris, or a Daughter for distant or heavy pieces. On station, watch the live capture odds for each tool. De-spin or close in to raise them.',
     commsAck: null,
     glyph: '?', keys: [], skillId: null,
     autoAdvanceAfter: 4000,
   },
   {
     id: 'lasso',
-    commsSource: 'HOUSTON', commsText: 'Close enough — fire the Mother net with N (or Space). Quick and easy on nearby debris.',
-    commsAck: 'Catch! Nice shot, Cowboy. That\'s how it\'s done.',
+    commsSource: 'HOUSTON', commsText: 'In range. Fire the Mother net with N. Best on nearby debris.',
+    commsAck: 'Copy. Clean catch.',
     text: 'Launch net (N)',
     glyph: 'N',
     keys: ['KeyN','Space'],
@@ -208,13 +209,13 @@ export const ONBOARDING_BEATS = [
     // net range of a target; otherwise "fire when within 50 m" appears while
     // they're kilometres away. Until in range, show the closer-in nudge.
     requiresProximityM: 60,
-    farNudge: 'Get closer first — autopilot to your target with A, then fire when within ~50 m.',
-    escalationText: 'N fires the Mother net at the selected target within 50 m. Space works too. Aim at the green-highlighted debris.',
+    farNudge: 'Too far. Autopilot in with A, then fire inside 50 m.',
+    escalationText: 'N fires the Mother net at the selected target inside 50 m. Space works too. Aim at the highlighted debris.',
   },
   {
     id: 'daughter',
-    commsSource: 'HOUSTON', commsText: 'For distant or heavy debris, launch a Daughter — press D. Pilot it with 1-4, then recall with R.',
-    commsAck: 'Daughter away — nice work. Pilot with 1-4 to steer it home.',
+    commsSource: 'HOUSTON', commsText: 'For distant or heavy debris, launch a Daughter with D. Pilot with 1-4, reel in with R.',
+    commsAck: 'Copy. Daughter away. Pilot with 1-4 to steer her home.',
     text: 'Deploy Daughter (D)',
     glyph: 'D',
     keys: ['KeyD'],
@@ -222,14 +223,14 @@ export const ONBOARDING_BEATS = [
     skillId: 'collect_deploy',
     credit: 10,
     parallel: 'lasso',
-    escalationText: 'D launches the selected docked Daughter toward your target. Press 1-4 to pilot a launched Daughter, then R to recall. Daughters reach debris the net cannot.',
+    escalationText: 'D launches the selected docked Daughter at your target. Press 1-4 to pilot a launched Daughter, R to reel her in. Daughters reach what the net cannot.',
   },
   {
     id: 'captured',
     // #4 (2026-06-04): close the loop — confirm the catch landed and tell the
     // player what they earned and what to do next. Fires on the first successful
     // capture (lasso/net/arm). Narrative + a short auto-advance.
-    commsSource: 'HOUSTON', commsText: 'Splash — debris secured! That hardware is yours: salvage is refined into fuel and materials, and you\'re paid for the deorbit. Keep clearing the field.',
+    commsSource: 'HOUSTON', commsText: 'Capture confirmed. Salvage refines into fuel and materials, and you are paid for the deorbit. Keep clearing the field.',
     commsAck: null,
     glyph: '✓', keys: [], skillId: null,
     triggerEvent: 'ARM_CAPTURED',
@@ -243,7 +244,7 @@ export const ONBOARDING_BEATS = [
     // something unguided. `captured` (above) is the catch-confirmed recap;
     // these three are: hand-off → one solo capture → graduation.
     id: 'solo_intro',
-    commsSource: 'HOUSTON', commsText: 'You\'re solo from here, Cowboy. One more on your own — lasso or daughter, your call.',
+    commsSource: 'HOUSTON', commsText: 'You are solo from here, Cowboy. One more capture on your own, net or daughter.',
     commsAck: null,
     glyph: '★', keys: [], skillId: null,
     autoAdvanceAfter: 3500,
@@ -255,8 +256,8 @@ export const ONBOARDING_BEATS = [
     // never pre-satisfied/tier-skipped by the earlier guided catch (see the
     // counterTarget guards in _preSatisfy / _isAlreadyKnown). Optional skipAfter
     // + NET_EMPTY_CLICK consolation keep a no-nets player from getting stuck.
-    commsSource: 'HOUSTON', commsText: 'Find another contact and bring it in — scan, close, capture. I\'m just watching now.',
-    commsAck: 'That\'s a clean solo capture. You\'ve got this, Cowboy.',
+    commsSource: 'HOUSTON', commsText: 'Find another contact and bring it in. Scan, close, capture. Houston standing by.',
+    commsAck: 'Copy. Clean solo capture. Well done, Cowboy.',
     text: 'Capture one on your own',
     glyph: '🎯', keys: [], skillId: null,
     triggerEvent: 'DEBRIS_CAPTURED',
@@ -265,11 +266,11 @@ export const ONBOARDING_BEATS = [
     optional: true,
     skipAfter: 90000,
     netEmptySkip: true,
-    netEmptyComms: 'Out of nets — graduating you anyway, Cowboy.',
+    netEmptyComms: 'Out of nets. Graduating you anyway, Cowboy.',
   },
   {
     id: 'final',
-    commsSource: 'HOUSTON', commsText: 'That\'s a real cowboy. Clear the field to win — good luck up there.',
+    commsSource: 'HOUSTON', commsText: 'Outstanding, Cowboy. Clear the field to win. Good hunting.',
     commsAck: null,
     glyph: '★', keys: [], skillId: null,
     autoAdvanceAfter: 4000,
@@ -399,6 +400,9 @@ export class OnboardingDirector {
       case 'Tab':
         if (typeof im.cycleTarget === 'function') { im.cycleTarget(); dispatched = true; }
         break;
+      case 'KeyT':
+        if (typeof im.cycleTarget === 'function') { im.cycleTarget(); dispatched = true; }
+        break;
       case 'KeyA':
         if (typeof im.engageAutopilot === 'function') { im.engageAutopilot(); dispatched = true; }
         break;
@@ -423,7 +427,7 @@ export class OnboardingDirector {
       this._smartDefaultMsgShown = true;
       this._emitComms({
         source: 'SPACECRAFT', channel: 'CMD', priority: 'info',
-        text: 'Smart default — performing recommended action.',
+        text: 'Smart default. Performing recommended action.',
       });
     }
     return dispatched;
@@ -713,6 +717,10 @@ export class OnboardingDirector {
         channel: 'HOUSTON',
         text: beat.commsText,
         priority: 'info',
+        // Tag actionable instructions with their beat id so the comms panel can
+        // drop the attention highlight the instant the player follows it
+        // (HINT_SATISFIED), rather than leaving it highlighted until an ack.
+        _onboardingBeatId: beat.triggerEvent ? beat.id : undefined,
       });
     }
 

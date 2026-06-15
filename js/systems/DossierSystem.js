@@ -204,8 +204,8 @@ export class DossierSystem {
     eventBus.emit(Events.COMMS_MESSAGE, {
       sender: 'HOUSTON',
       text: total > 0
-        ? `Survey complete — full profile decrypted. Salvage appraisal \u20B9${total}.${bountyPaid ? ` +$${D.SURVEY_BOUNTY} survey data.` : ''}`
-        : `Survey complete — full structural profile on file.${bountyPaid ? ` +$${D.SURVEY_BOUNTY} survey data.` : ''}`,
+        ? `Survey complete. Full profile decrypted. Salvage appraisal \u20B9${total}.${bountyPaid ? ` +$${D.SURVEY_BOUNTY} survey data.` : ''}`
+        : `Survey complete. Full structural profile on file.${bountyPaid ? ` +$${D.SURVEY_BOUNTY} survey data.` : ''}`,
       priority: 'success',
     });
   }

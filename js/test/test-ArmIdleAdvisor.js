@@ -102,7 +102,7 @@ describe('ArmIdleAdvisor — out-of-nets hint', () => {
     const got = captureForce(() => { for (let i = 0; i < 7; i++) advisor.update(1.0); });
     const fires = got.filter((g) => g.id === 'sk_out_of_nets');
     assert.equal(fires.length, 1, 'out-of-nets hint fires');
-    assert.ok(/recall/i.test(fires[0].body), 'tells the player to recall');
+    assert.ok(/reel/i.test(fires[0].body), 'tells the player to reel her in');
   });
 });
 
@@ -127,7 +127,7 @@ describe('ArmIdleAdvisor — ARM_PILOT return hint', () => {
     });
     const fires = got.filter((g) => g.id === cfg.hintId);
     assert.equal(fires.length, 1, 'pilot-return hint fires once');
-    assert.ok(/7/.test(fires[0].body), 'mentions the 7 key');
+    assert.ok(/1-4|Esc|V/.test(fires[0].body), 'mentions the return-to-mother controls');
   });
 
   it('does not fire the pilot hint when not in ARM_PILOT mode', () => {

@@ -10,6 +10,9 @@
 
 import { describe, it, assert } from './TestRunner.js';
 import { Constants } from '../core/Constants.js';
+// isFollowedInstruction is a pure, DOM-free helper — import the real one so the
+// de-highlight contract is tested against production code (no mirrored copy).
+import { isFollowedInstruction } from '../ui/hud/CommsPanel.js';
 
 const COMMS = Constants.COMMS;
 
@@ -147,5 +150,37 @@ describe('CommsPanel – getPriorityColor (3-colour semantics, case-insensitive)
     for (const p of ['guidance', 'attaboy', 'nominal', '', null, undefined, 'chatter']) {
       assert.equal(getPriorityColor(p), COMMS_COLOR_NORMAL, `"${p}" should be green`);
     }
+  });
+});
+
+// ============================================================================
+// Followed-instruction de-highlight (2026-06-14): a guidance line drops its
+// "demanding attention" highlight the moment the player obeys it.
+// ============================================================================
+describe('CommsPanel – isFollowedInstruction (attention de-highlight)', () => {
+  it('a tagged instruction whose beat was satisfied counts as followed', () => {
+    const satisfied = new Set(['struts']);
+    assert.equal(isFollowedInstruction({ onboardingBeatId: 'struts' }, satisfied), true);
+  });
+
+  it('a tagged instruction still pending is NOT followed (stays highlighted)', () => {
+    const satisfied = new Set(['view']);
+    assert.equal(isFollowedInstruction({ onboardingBeatId: 'struts' }, satisfied), false);
+  });
+
+  it('a plain comms line (no beat id) is never treated as a followed instruction', () => {
+    const satisfied = new Set(['struts']);
+    assert.equal(isFollowedInstruction({ text: 'Stored 5kg titanium' }, satisfied), false);
+    assert.equal(isFollowedInstruction({ onboardingBeatId: null }, satisfied), false);
+  });
+
+  it('numeric beat ids match too (Set membership is type-exact)', () => {
+    assert.equal(isFollowedInstruction({ onboardingBeatId: 7 }, new Set([7])), true);
+    assert.equal(isFollowedInstruction({ onboardingBeatId: 7 }, new Set(['7'])), false);
+  });
+
+  it('is null-safe for a missing satisfied set', () => {
+    assert.equal(isFollowedInstruction({ onboardingBeatId: 'x' }, null), false);
+    assert.equal(isFollowedInstruction(null, new Set(['x'])), false);
   });
 });

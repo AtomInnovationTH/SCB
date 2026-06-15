@@ -264,7 +264,7 @@ export class PerfReportOverlay {
     root.id = ROOT_ID;
 
     const h = document.createElement('h4');
-    h.textContent = '🟢 perf report — 1 Hz';
+    h.textContent = '🟢 perf report. 1 Hz';
     root.appendChild(h);
 
     const table = document.createElement('table');

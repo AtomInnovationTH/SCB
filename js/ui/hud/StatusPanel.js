@@ -302,8 +302,8 @@ export class StatusPanel {
         </div>
         <span style="color:#ffaa00;font-size:13px;font-weight:bold;">💰 <b id="hud-credits">0</b></span>
         <span id="hud-arm-tier" title="Current daughter configuration tier"
-              style="display:none;color:#ff8800;font-size:11px;letter-spacing:0.05em;">Y0 Quad — 4 daughters</span>
-        <span id="hud-anchor-wrap" title="Elevator contract — deliver refined metal at the shop to win"
+              style="display:none;color:#ff8800;font-size:11px;letter-spacing:0.05em;">Y0 Quad. 4 daughters</span>
+        <span id="hud-anchor-wrap" title="Elevator contract. Deliver refined metal at the shop to win"
               style="color:#81c784;font-size:11px;">⚓ <span style="font-size:9px;letter-spacing:1px;opacity:0.7;">CONTRACT</span> <b id="hud-anchor-mass">0</b>/<b id="hud-anchor-target">10,000</b> kg</span>
       </div>
     `;
@@ -338,10 +338,10 @@ export class StatusPanel {
              border:1px solid rgba(0,255,136,0.3);border-radius:2px;overflow:hidden;">
           <div id="deltav-bar-fill" style="height:100%;width:100%;background:#00ff88;
                transition:width 0.5s ease, background-color 0.5s ease;"></div>
-          <span id="deltav-bar-text" style="position:absolute;right:4px;top:0;line-height:16px;font-size:10px;color:#fff;text-shadow:0 0 3px rgba(0,0,0,0.8);background:rgba(0,0,0,0.4);padding:0 4px;border-radius:2px;">— m/s ~—</span>
+          <span id="deltav-bar-text" style="position:absolute;right:4px;top:0;line-height:16px;font-size:10px;color:#fff;text-shadow:0 0 3px rgba(0,0,0,0.8);background:rgba(0,0,0,0.4);padding:0 4px;border-radius:2px;">. M/s ~. </span>
         </div>
         <div id="deltav-text" style="font-size:11px;margin-top:4px;margin-bottom:6px;color:#aaffdd;">
-          ΔV: — m/s • ~— transfers
+          ΔV: m/s • ~. Transfers
         </div>
         <div class="hud-resource-row">
           <span>Xenon</span>
@@ -401,7 +401,7 @@ export class StatusPanel {
         <div id="cargo-summary" data-hud-group="cargo-group" style="font-size:10px;margin-top:3px;color:#666;display:none;"></div>
         <div id="forge-inline" data-hud-group="cargo-group" style="font-size:10px;margin-top:3px;display:none;">
           <div style="display:flex;align-items:center;gap:4px;">
-            <span style="color:#666;">[5] Forge:</span>
+            <span style="color:#666;">[F] Forge:</span>
             <span id="forge-inline-status" style="color:#666;">Idle</span>
           </div>
           <div id="forge-progress-inline" style="display:none;margin-top:2px;">
@@ -532,7 +532,7 @@ export class StatusPanel {
                     stroke-linecap="round" transform="rotate(-90 9 9)"
                     style="transition:stroke-dashoffset 0.1s linear;"/>
           </svg>
-          <span id="lasso-cd-label" style="color:#ffcc00;opacity:0.7;">WEB: ${Constants.LASSO_AMMO_MAX}/${Constants.LASSO_AMMO_MAX} — <span style="color:#00ff88;">READY</span></span>
+          <span id="lasso-cd-label" style="color:#ffcc00;opacity:0.7;">WEB: ${Constants.LASSO_AMMO_MAX}/${Constants.LASSO_AMMO_MAX}. <span style="color:#00ff88;">READY</span></span>
         </div>
       </div>
     `;
@@ -547,17 +547,17 @@ export class StatusPanel {
     this._resourcesChrome = new PaneChrome({
       pane: this.panels.resources, keyLabel: '–', bracket: false,
       steps: ['min', 'normal'], initial: 'normal',
-      title: 'Propulsion — click to minimize / restore',
+      title: 'Propulsion. Click to minimize / restore',
     });
     this._powerChrome = new PaneChrome({
       pane: this.panels.power, keyLabel: '–', bracket: false,
       steps: ['min', 'normal'], initial: 'normal',
-      title: 'Energy — click to minimize / restore',
+      title: 'Energy. Click to minimize / restore',
     });
     this._armsChrome = new PaneChrome({
       pane: this.panels.arms, keyLabel: '–', bracket: false,
       steps: ['min', 'normal'], initial: 'normal',
-      title: 'Fleet — click to minimize / restore',
+      title: 'Fleet. Click to minimize / restore',
     });
 
     // Phase 5 → R3: Listen for contract updates (now updates score bar anchor segment)
@@ -650,7 +650,7 @@ export class StatusPanel {
       const ladder = Constants.ARM_LADDER[tierKey];
       if (ladder) {
         const displayNames = { Y0_QUAD: 'Y0 Quad', Y1_HEX: 'Y1 Hex', Y3_OCTO: 'Y3 Octo' };
-        badge.textContent = `${displayNames[tierKey] || tierKey} — ${ladder.armCount} daughters`;
+        badge.textContent = `${displayNames[tierKey] || tierKey}. ${ladder.armCount} daughters`;
       }
     }
   }
@@ -781,7 +781,7 @@ export class StatusPanel {
     if (deniedAge < 0.3) {
       arc.setAttribute('stroke', '#ff4444');
       arc.setAttribute('stroke-dashoffset', '0');
-      label.innerHTML = `<span style="color:${ammoColor};opacity:0.7;">${ammoTag} — <span style="color:#ff4444;">DENIED</span></span>`;
+      label.innerHTML = `<span style="color:${ammoColor};opacity:0.7;">${ammoTag}. <span style="color:#ff4444;">DENIED</span></span>`;
       return;
     }
 
@@ -793,7 +793,7 @@ export class StatusPanel {
       const offset = circumference * (1 - frac);
       arc.setAttribute('stroke', '#888888');
       arc.setAttribute('stroke-dashoffset', String(offset));
-      label.innerHTML = `<span style="color:${ammoColor};opacity:0.7;">${ammoTag} — <span style="color:#888;">${remaining.toFixed(1)}s</span></span>`;
+      label.innerHTML = `<span style="color:${ammoColor};opacity:0.7;">${ammoTag}. <span style="color:#888;">${remaining.toFixed(1)}s</span></span>`;
 
       // Auto-clear when elapsed exceeds duration
       if (remaining <= 0) {
@@ -805,7 +805,7 @@ export class StatusPanel {
       const statusText = ammo <= 0 ? 'DEPLETED' : 'READY';
       arc.setAttribute('stroke', statusColor);
       arc.setAttribute('stroke-dashoffset', '0');
-      label.innerHTML = `<span style="color:${ammoColor};opacity:0.7;">${ammoTag} — <span style="color:${statusColor};">${statusText}</span></span>`;
+      label.innerHTML = `<span style="color:${ammoColor};opacity:0.7;">${ammoTag}. <span style="color:${statusColor};">${statusText}</span></span>`;
     }
   }
 
@@ -1590,7 +1590,7 @@ export class StatusPanel {
           const brColor = brColors[brStatus.state] || '#888';
           if (occupied > 0 || brStatus.state !== 'IDLE') {
             bridleHtml = `<div style="font-size:9px;margin-top:1px;">
-              <span style="color:${brColor};">◎ Bridle: ${occupied}/${total} — ${loadKg} kg</span>
+              <span style="color:${brColor};">◎ Bridle: ${occupied}/${total}. ${loadKg} kg</span>
             </div>`;
           }
         }
@@ -1606,7 +1606,7 @@ export class StatusPanel {
           <span>🏆${a.captures}</span>${tether ? `<span>${tether}</span>` : ''}${tensionHtml ? `<span>${tensionHtml}</span>` : ''}
         </div>${reloadHtml}${tangleHtml}${aimHingeHtml}${deployHtml}${reelHtml}${bridleHtml}
         <div class="arm-hover-detail" style="display:none;font-size:10px;opacity:0.6;padding-left:12px;">
-          ΔV: ${a.remainingDeltaV ? a.remainingDeltaV.toFixed(0) + ' m/s' : '—'}
+          ΔV: ${a.remainingDeltaV ? a.remainingDeltaV.toFixed(0) + ' m/s' : '. '}
         </div>
       </div>`;
     }).join('');
@@ -1730,13 +1730,13 @@ export class StatusPanel {
       if (progressContainer) progressContainer.style.display = 'none';
 
       // Sprint A2: Show forge hotkey hint when idle with cargo available.
-      // UX-11 #8 (2026-06-11): the live Forge/Kiln binding is 5 (was F4).
-      // Keep this hint in sync with InputManager 'Digit5'.
+      // Hotkey revamp 2026-06-14: the live Forge/Kiln binding is F (was 5/F4).
+      // Keep this hint in sync with InputManager 'KeyF'.
       if (hintEl) {
         const hasCargo = this._cargoStatus && this._cargoStatus.totalMassKg > 0;
         if (hasCargo) {
           hintEl.style.display = '';
-          hintEl.textContent = '▸ Press [5] to process cargo';
+          hintEl.textContent = '▸ Press [F] to process cargo';
           hintEl.style.color = '#ffaa00';
         } else {
           hintEl.style.display = 'none';

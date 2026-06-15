@@ -382,10 +382,11 @@ export class DockingReticle {
     // 9. Arm info
     this._drawArmInfo(ctx, w, h);
 
-    // 10. Station-keep θ/φ/R readout (ST-8.5.1)
-    this._drawStationKeepOverlay(ctx, cx, cy);
+    // 10. (removed 2026-06-14) Station-keep θ/φ/R readout box — declutter.
+    //     The live capture-odds strip below already carries the SK feedback the
+    //     player acts on; the raw θ/φ/R numbers were noise.
 
-    // 11. CP-1 / P2 — per-arm tool-selection panel (below the SK readout)
+    // 11. CP-1 / P2 — per-arm tool-selection panel (the capture-odds strip)
     if (Constants.isFeatureEnabled('DAUGHTER_MULTITOOL')) {
       this._drawToolSelectionPanel(ctx, cx, cy);
     }
@@ -729,82 +730,10 @@ export class DockingReticle {
   }
 
   // --------------------------------------------------------------------------
-  // STATION-KEEP OVERLAY (ST-8.5.1)
+  // (removed 2026-06-14) STATION-KEEP θ/φ/R OVERLAY — decluttered. The capture-
+  // odds strip carries the actionable SK feedback; the raw angle/range numbers
+  // were visual noise.
   // --------------------------------------------------------------------------
-
-  /** @private Draw θ/φ/R readout when arm is in STATION_KEEP state */
-  _drawStationKeepOverlay(ctx, cx, cy) {
-    if (!this._arm || this._arm.state !== 'STATION_KEEP') return;
-
-    const theta = (this._arm._orbitTheta * 180 / Math.PI) % 360;
-    const phi = this._arm._orbitPhi * 180 / Math.PI;
-    const radius = this._arm._standoffR;
-
-    // Draw readout box below center crosshair
-    const boxX = cx;
-    const boxY = cy + 70;
-
-    // § Q5: extra height for NET counter when CAPTURE_NET is ON.
-    // When DAUGHTER_MULTITOOL is ON the dedicated tool panel renders the NET (n)
-    // row below, so suppress the in-box counter to avoid showing it twice.
-    const showNetCount = Constants.isFeatureEnabled('CAPTURE_NET')
-      && !Constants.isFeatureEnabled('DAUGHTER_MULTITOOL');
-    const netCount = showNetCount && typeof this._arm.getNetInventory === 'function'
-      ? this._arm.getNetInventory() : 0;
-
-    // Background
-    ctx.fillStyle = 'rgba(0, 20, 40, 0.7)';
-    const boxW = 180;
-    const boxH = showNetCount ? 68 : 52;
-    ctx.fillRect(boxX - boxW / 2, boxY - 4, boxW, boxH);
-
-    // Border
-    ctx.strokeStyle = 'rgba(0, 255, 170, 0.4)';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(boxX - boxW / 2, boxY - 4, boxW, boxH);
-
-    // Header
-    ctx.font = `bold 10px ${FONT}`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillStyle = 'rgba(0, 255, 170, 0.7)';
-    ctx.fillText('STATION KEEP', boxX, boxY + 6);
-
-    // θ / φ / R values
-    ctx.font = `13px ${FONT}`;
-    ctx.fillStyle = '#00ffaa';
-    const thetaStr = `\u03B8:${theta >= 0 ? '+' : ''}${theta.toFixed(1)}\u00B0`;
-    const phiStr = `\u03C6:${phi >= 0 ? '+' : ''}${phi.toFixed(1)}\u00B0`;
-    const rStr = `R:${radius.toFixed(1)}m`;
-    ctx.fillText(`${thetaStr}  ${phiStr}  ${rStr}`, boxX, boxY + 26);
-
-    // Min/max range indicator bar
-    const rMin = this._arm._rMin || 2;
-    const rMax = this._arm._rMax || 15;
-    const barY = boxY + 40;
-    const barW = boxW - 20;
-    const barX = boxX - barW / 2;
-
-    ctx.fillStyle = 'rgba(0, 255, 170, 0.1)';
-    ctx.fillRect(barX, barY - 2, barW, 4);
-
-    // Current radius pip on bar
-    const rFrac = Math.max(0, Math.min(1, (radius - rMin) / (rMax - rMin)));
-    const pipX = barX + rFrac * barW;
-    ctx.fillStyle = '#00ffaa';
-    ctx.beginPath();
-    ctx.arc(pipX, barY, 3, 0, Math.PI * 2);
-    ctx.fill();
-
-    // §13 Q5: NET inventory counter below range bar
-    if (showNetCount) {
-      const netY = barY + 16;
-      ctx.font = `bold 11px ${FONT}`;
-      ctx.textAlign = 'center';
-      ctx.fillStyle = netCount === 0 ? '#ff4444' : 'rgba(0, 255, 170, 0.8)';
-      ctx.fillText('NET (' + netCount + ')', boxX, netY);
-    }
-  }
 
   /**
    * @private Capture Odds Strip — one widget, four context states
@@ -1339,10 +1268,10 @@ export class DockingReticle {
         advisory = 'ASPECT: BROADSIDE \u2014 orbit to end-on';
         advisoryCol = '#ffd166';
       }
-    } else if (range > (CN.ENVELOPE_RANGE || 100)) advisory = 'too far — close in';
+    } else if (range > (CN.ENVELOPE_RANGE || 100)) advisory = 'too far. Close in';
     else if (range > (CN.BASELINE_RANGE_MAX || 75)) advisory = 'edge of envelope';
     else if (offAxisDeg > offAxisWarn) {
-      advisory = `OFF AXIS ${Math.round(offAxisDeg)}° — re-aim`;
+      advisory = `OFF AXIS ${Math.round(offAxisDeg)}°. Re-aim`;
       advisoryCol = '#ff7755';
     } else if (tumbleRate != null) {
       const deg = Math.abs(tumbleRate) * (180 / Math.PI);

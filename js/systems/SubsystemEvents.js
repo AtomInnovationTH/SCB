@@ -129,7 +129,7 @@ class CommsSubsystem extends BaseSubsystem {
     eventBus.on(Events.WEATHER_EFFECT_END, (data) => {
       if (data && data.type === 'SAA_PASSAGE') {
         this._inSAA = false;
-        sendComms('Signal restored — SAA passage complete.', 'SYSTEM', 'LOW');
+        sendComms('Signal restored. SAA passage complete.', 'SYSTEM', 'LOW');
       }
     });
   }
@@ -174,10 +174,10 @@ class CommsSubsystem extends BaseSubsystem {
     // --- Communications Blackout (during SAA) ---
     if (this._inSAA && !this._onCooldown() && Math.random() < 0.02 * dt) {
       const garbled = pick([
-        'COMMS DEGRADED — s#gn@l fr*gm— signal lost',
-        'COMMS DEGRADED — telemetry ██████ — partial restore',
-        'COMMS DEGRADED — [garbled] — attempting re-lock',
-        'COMMS DEGRADED — HF blackout in progress',
+        'COMMS DEGRADED. S#gn@l fr*gm. Signal lost',
+        'COMMS DEGRADED. Telemetry ██████. Partial restore',
+        'COMMS DEGRADED. [garbled]. Attempting re-lock',
+        'COMMS DEGRADED. HF blackout in progress',
       ]);
       sendComms(garbled, 'SYSTEM', 'MEDIUM');
       this._startCooldown(20);
@@ -197,7 +197,7 @@ class CommsSubsystem extends BaseSubsystem {
     if (!this._laserCommsHintSent && gameData.codexProgress >= 10 && !this._onCooldown()) {
       this._laserCommsHintSent = true;
       sendComms(
-        'NOTICE: Optical ground link available at Svalbard. Laser comms offer 10× bandwidth — consider upgrade.',
+        'NOTICE: Optical ground link available at Svalbard. Laser comms offer 10× bandwidth. Consider upgrade.',
         'SYSTEM', 'MEDIUM'
       );
       this._startCooldown(30);
@@ -498,7 +498,7 @@ class AvionicsSubsystem extends BaseSubsystem {
           const failProc = pick(['B', 'C']);
           const recoverProc = failProc === 'B' ? 'C' : 'B';
           sendComms(
-            `Watchdog timer triggered — processor ${failProc} hung. Auto-failover to processor ${recoverProc}. No data loss.`,
+            `Watchdog timer triggered. Processor ${failProc} hung. Auto-failover to processor ${recoverProc}. No data loss.`,
             'AVIONICS', 'MEDIUM'
           );
         } else {
@@ -644,12 +644,12 @@ class DegradationSubsystem extends BaseSubsystem {
         if (Math.random() < 0.05) {
           // Very rare: minor penetration
           sendComms(
-            `MMOD impact detected — micrometeorite strike on panel ${panel}. Minor penetration detected. Self-sealing foam activated.`,
+            `MMOD impact detected. Micrometeorite strike on panel ${panel}. Minor penetration detected. Self-sealing foam activated.`,
             'STRUCTURE', 'MEDIUM'
           );
         } else {
           sendComms(
-            `MMOD impact detected — micrometeorite strike on panel ${panel}. Whipple shield absorbed impact. No penetration.`,
+            `MMOD impact detected. Micrometeorite strike on panel ${panel}. Whipple shield absorbed impact. No penetration.`,
             'STRUCTURE', 'LOW'
           );
         }

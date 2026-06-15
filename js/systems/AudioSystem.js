@@ -58,7 +58,7 @@ class AudioSystem {
     try {
       if (typeof window !== 'undefined' &&
           new URLSearchParams(window.location.search).get('noAudio') === '1') {
-        console.info('[AudioSystem] ?noAudio=1 — skipping AudioContext creation. All audio is disabled for this session.');
+        console.info('[AudioSystem] ?noAudio=1. Skipping AudioContext creation. All audio is disabled for this session.');
         this.available = false;
         this._initialized = true; // prevent retry storms from event handlers
         return;
@@ -454,13 +454,17 @@ class AudioSystem {
 
     // Delegation 2 (2026-05-31) — onboarding "hint posted" soft chime.
     // Generic AUDIO_CUE channel — payload: { id|cue: string, volume?: number }.
-    // Currently we only recognise `hint_post`; unknown cues are no-ops.
+    // Currently we only recognise `hint_post` and `sweepComplete`; unknown cues
+    // are no-ops.
     eventBus.on(Events.AUDIO_CUE, (data) => {
       if (!data) return;
       const id = data.id || data.cue;
       if (id === 'hint_post') {
         const v = (typeof data.volume === 'number') ? data.volume : 0.4;
         this.playHintPost(v);
+      } else if (id === 'sweepComplete') {
+        // defer-trawl: cluster-cleared ceremony reuses the sweep-complete sting.
+        this.playSweepComplete();
       }
     });
 
@@ -1320,7 +1324,7 @@ class AudioSystem {
     // the user can correlate fan-on with this event in `?logBoot=1` output.
     try {
       // eslint-disable-next-line no-undef
-      if (typeof window !== 'undefined') window.__bootMark?.('startAmbientLoop() — 2 buffer sources + 2 filters going live');
+      if (typeof window !== 'undefined') window.__bootMark?.('startAmbientLoop(). 2 buffer sources + 2 filters going live');
     } catch (_e) { /* swallow */ }
 
     // White noise via buffer for fans/coolant

@@ -87,7 +87,7 @@ export function recommendArmTool(opts = {}) {
     } else if (netTooWide) {
       scores.NET = 0; hints.NET = 'too wide for net mouth';
     } else if (netOversize) {
-      scores.NET = 1; hints.NET = 'class oversize — Mother only';
+      scores.NET = 1; hints.NET = 'class oversize. Mother only';
     } else {
       // A pure ferrous HULL is better grabbed directly by the EPM, so the net
       // self-demotes to "viable but not preferred" (magnet wins the ▶). For
@@ -100,7 +100,7 @@ export function recommendArmTool(opts = {}) {
   // ── MAGNET fork (§13 Q2 + Q4) — both classes, fastener-driven ──────────
   if ('MAGNET' in scores && (ferro || fasten) && !tooHeavyForMagnet) {
     scores.MAGNET = ferro ? 3 : 2;
-    hints.MAGNET  = ferro ? 'ferrous hull — direct grip' : 'ferrous fasteners — bolt-latch';
+    hints.MAGNET  = ferro ? 'ferrous hull. Direct grip' : 'ferrous fasteners. Bolt-latch';
   }
 
   // ── GRIPPER fork (P3, §13 Q1, flag-gated) — oversize / too-wide / awkward / fixture ──
@@ -108,7 +108,7 @@ export function recommendArmTool(opts = {}) {
     const awkwardShape = dType === 'rocketBody' || (fixture && mass >= 50);
     if (!tooHeavyForGripper && (netOversize || netTooWide || awkwardShape)) {
       scores.GRIPPER = 3;
-      hints.GRIPPER = netTooWide ? 'too wide for net — grip it'
+      hints.GRIPPER = netTooWide ? 'too wide for net. Grip it'
         : netOversize ? 'oversize for net' : 'awkward shape / fixture';
     } else if (fixture) {
       scores.GRIPPER = 1; hints.GRIPPER = 'available';   // visible, not recommended

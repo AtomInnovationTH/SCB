@@ -138,7 +138,7 @@ describe('NavRecoveryAdvisor — out-of-range watchdog', () => {
     for (let i = 0; i < 25; i++) adv.update(1.0);   // > LOST_DWELL_S
     assert.equal(comms.length, 1, 'exactly one hint after dwell');
     assert.ok(comms[0].text.includes('Nearest contact'), `hint text: ${comms[0].text}`);
-    assert.ok(comms[0].text.includes('press A'), 'must include the one-tap affordance');
+    assert.ok(comms[0].text.includes('Press A'), 'must include the one-tap affordance');
     assert.equal(comms[0]._postOnboarding, true, 'must carry the suppression-arbiter tag');
 
     for (let i = 0; i < 60; i++) adv.update(1.0);   // still inside 120 s cooldown

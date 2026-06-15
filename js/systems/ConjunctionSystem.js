@@ -25,7 +25,7 @@ import('./MoidCalculator.js').then(mod => {
   _computeMOID = mod.computeMOID;
   _classifyMOID = mod.classifyMOID;
 }).catch(() => {
-  console.warn('[ConjunctionSystem] MoidCalculator unavailable — MOID features disabled');
+  console.warn('[ConjunctionSystem] MoidCalculator unavailable. MOID features disabled');
 });
 
 // ============================================================================
@@ -121,7 +121,7 @@ export class ConjunctionSystem {
     eventBus.on(Events.GAME_RESET, () => this.reset());
 
     console.log(
-      '[ConjunctionSystem] Initialized — first check in',
+      '[ConjunctionSystem] Initialized. First check in',
       Math.round(this._nextCheckAt), 's',
     );
   }
@@ -670,7 +670,7 @@ export class ConjunctionSystem {
     eventBus.emit(Events.COMMS_MESSAGE, {
       source: 'HOUSTON',
       priority: badge === 'HI' ? 'warning' : 'info',
-      text: `${badgeTag} Conjunction — ${name} · MOID ${moidStr}`,
+      text: `${badgeTag} Conjunction. ${name} · MOID ${moidStr}`,
       channel: 'ALERT',
     });
   }

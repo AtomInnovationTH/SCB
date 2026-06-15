@@ -299,7 +299,7 @@ export class CollisionAvoidanceSystem {
         // Comms warning (gated — see _emitCaComms JSDoc)
         this._emitCaComms({
           sender: 'CA',
-          text: `Debris ${threat.debrisId} — TCA ${threat.tca.toFixed(1)}s, miss ${Math.round(threat.missDistM)}m — evaluating`,
+          text: `Debris ${threat.debrisId}. TCA ${threat.tca.toFixed(1)}s, miss ${Math.round(threat.missDistM)}m. Evaluating`,
           priority: 'info',
         });
       }
@@ -530,7 +530,7 @@ export class CollisionAvoidanceSystem {
         });
         eventBus.emit(Events.COMMS_MESSAGE, {
           sender: 'CA',
-          text: 'Override — manual control',
+          text: 'Override. Manual control',
           priority: 'info',
         });
       }
@@ -595,7 +595,7 @@ export class CollisionAvoidanceSystem {
     // --- Comms notification (gated — see _emitCaComms JSDoc) ---
     this._emitCaComms({
       sender: 'CA',
-      text: `⚠ COLLISION AVOIDANCE — RCS dodge fired (${dodgeDvMs.toFixed(2)} m/s ${dirLabel})`,
+      text: `⚠ COLLISION AVOIDANCE. RCS dodge fired (${dodgeDvMs.toFixed(2)} m/s ${dirLabel})`,
       priority: 'warning',
     });
   }

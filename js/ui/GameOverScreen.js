@@ -13,7 +13,7 @@ import { scoringSystem } from '../systems/ScoringSystem.js';
 const GAME_OVER_REASONS = {
   kessler: 'KESSLER CASCADE EVENT',
   collision: 'COLLISION WITH ACTIVE SATELLITE',
-  fuel: 'FUEL DEPLETED — STRANDED IN ORBIT',
+  fuel: 'FUEL DEPLETED. STRANDED IN ORBIT',
   reentry: 'UNCONTROLLED REENTRY',
   battery: 'COMPLETE POWER FAILURE',
 };
@@ -254,13 +254,13 @@ export class GameOverScreen {
     titleEl.style.textShadow = '0 0 30px rgba(0,255,136,0.6), 0 0 60px rgba(0,255,136,0.3)';
 
     reasonEl.style.color = '#00ff88';
-    reasonEl.textContent = 'The GEO anchor contract is complete. The space elevator has its counterweight — built from the sky you cleared.';
+    reasonEl.textContent = 'The GEO anchor contract is complete. The space elevator has its counterweight. Built from the sky you cleared.';
 
     const stats = scoringSystem.getStats();
     const target = (Constants.ELEVATOR_CONTRACT && Constants.ELEVATOR_CONTRACT.TARGET_MASS_KG) || 10000;
     const massKg = Math.round(this._winTotalMassKg || target);
     statsEl.innerHTML = `
-      <div style="color:#00ff88;font-size:1rem;margin-bottom:8px;">★ GEO Anchor Contract — Delivered ★</div>
+      <div style="color:#00ff88;font-size:1rem;margin-bottom:8px;">★ GEO Anchor Contract. Delivered ★</div>
       <div style="text-align:center;margin:10px 0;">
         <div style="font-size:2.2rem;color:#ffaa00;font-weight:bold;text-shadow:0 0 20px rgba(255,170,0,0.4);">${massKg.toLocaleString()} kg</div>
         <div style="font-size:0.8rem;opacity:0.75;">delivered to the GEO anchor</div>
@@ -318,7 +318,7 @@ export class GameOverScreen {
         Rating: <b style="color:#ffaa00;">${this._getRating(stats)}</b>
       </div>
       <div style="margin-top:10px;padding-top:8px;border-top:1px solid rgba(0,255,136,0.15);font-size:0.85rem;color:#00ff88;">
-        Houston: That orbit's clear thanks to you. Take a breather, Cowboy — there's always another field of debris up there when you're ready. ★
+        Houston: That orbit's clear thanks to you. Take a breather, Cowboy. There's always another field of debris up there when you're ready. ★
       </div>
     `;
 

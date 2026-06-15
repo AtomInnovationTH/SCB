@@ -173,7 +173,7 @@ export class ForgeSystem {
         const removed = this._cargo.removeMetal(batch.metalId, batch.massKg);
         if (removed < 0.01) {
             eventBus.emit(Events.COMMS_MESSAGE, {
-                sender: 'FORGE', text: `${batch.name} no longer in cargo — skipping`, priority: 'warning'
+                sender: 'FORGE', text: `${batch.name} no longer in cargo. Skipping`, priority: 'warning'
             });
             this._startNextBatch(); // Try next
             return;
@@ -232,7 +232,7 @@ export class ForgeSystem {
             if (this._resources && !this._resources.canAfford('battery', powerNeeded)) {
                 // Pause — not enough power
                 eventBus.emit(Events.COMMS_MESSAGE, {
-                    sender: 'FORGE', text: 'Low power — forge paused', priority: 'warning'
+                    sender: 'FORGE', text: 'Low power. Forge paused', priority: 'warning'
                 });
                 return; // Don't advance timer
             }
@@ -339,7 +339,7 @@ export class ForgeSystem {
                     // No FEEP metals in this debris type — fall back to standard propellant
                     eventBus.emit(Events.COMMS_MESSAGE, {
                         sender: 'FORGE',
-                        text: `${debrisType}: no FEEP metals — ${propMass.toFixed(1)}kg general propellant`,
+                        text: `${debrisType}: no FEEP metals. ${propMass.toFixed(1)}kg general propellant`,
                         priority: 'info',
                     });
                 }
@@ -374,7 +374,7 @@ export class ForgeSystem {
                 if (batch.ispAsThrust <= 0) {
                     eventBus.emit(Events.COMMS_MESSAGE, {
                         sender: 'FORGE',
-                        text: `${batch.name} cannot be used as propellant — storing as refined`,
+                        text: `${batch.name} cannot be used as propellant. Storing as refined`,
                         priority: 'warning'
                     });
                     const refinedValue = batch.marketValue * FORGE.REFINE_MULTIPLIER;

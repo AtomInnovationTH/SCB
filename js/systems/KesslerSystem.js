@@ -115,7 +115,7 @@ export class KesslerSystem {
     if (this.shieldHits > 0) {
       this.shieldHits--;
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `⚡ WHIPPLE SHIELD absorbed ${label} — ${this.shieldHits} hit${this.shieldHits !== 1 ? 's' : ''} remaining`,
+        text: `⚡ WHIPPLE SHIELD absorbed ${label}. ${this.shieldHits} hit${this.shieldHits !== 1 ? 's' : ''} remaining`,
         priority: 'warning',
       });
       if (audioSystem) audioSystem.playWarning(0.5);

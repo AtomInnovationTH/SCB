@@ -91,7 +91,7 @@ export class IssConjunctionBoss {
         cleared: this._threats.clearedCount,
         total: this._threats.total,
       });
-      this._comms(`ISS conjunction in ${Math.round(remainingH)} h. ${this._threats.clearedCount}/${this._threats.total} fragments cleared — close it out, Cowboy.`, 'warning');
+      this._comms(`ISS conjunction in ${Math.round(remainingH)} h. ${this._threats.clearedCount}/${this._threats.total} fragments cleared. Close it out, Cowboy.`, 'warning');
     }
 
     if (this._tcaRemainingS <= 0) {
@@ -178,7 +178,7 @@ export class IssConjunctionBoss {
       threatIds: [...this._threats.threats],
       tcaHours: cfg.TCA_HOURS || 38,
     });
-    this._comms(`Cosmos-1408 fragment cloud converging on the ISS — ${this._threats.total} pieces, closest approach in ${cfg.TCA_HOURS || 38} h. Clear them or we let the station reboost. Crew's counting on you.`, 'critical');
+    this._comms(`Cosmos-1408 fragment cloud converging on the ISS. ${this._threats.total} pieces, closest approach in ${cfg.TCA_HOURS || 38} h. Clear them or we let the station reboost. Crew's counting on you.`, 'critical');
   }
 
   /** @private Mark a threat cleared (idempotent); finish on a full sweep. */
@@ -203,11 +203,11 @@ export class IssConjunctionBoss {
         reason: 'ISS conjunction cleared',
       });
       this._awardElevatorMass(cfg.INTERCEPT_BONUS_KG || 200);
-      this._comms('Threat neutralised — ISS is clear, no reboost required. The crew sends their thanks, Cowboy.', 'info');
+      this._comms('Threat neutralised. ISS is clear, no reboost required. The crew sends their thanks, Cowboy.', 'info');
     } else if (outcome === 'decline') {
-      this._comms('Understood — handing it to the station. ISS performing an autonomous avoidance reboost. No harm done.', 'info');
+      this._comms('Understood. Handing it to the station. ISS performing an autonomous avoidance reboost. No harm done.', 'info');
     } else { // miss
-      this._comms('Out of time — ISS executing a late reboost, ~3 kg of hydrazine burned. Threat cleared, but that one cost us.', 'warning');
+      this._comms('Out of time. ISS executing a late reboost, ~3 kg of hydrazine burned. Threat cleared, but that one cost us.', 'warning');
     }
 
     this._eventBus.emit(Events.ISS_BOSS_RESOLVED, { outcome, cleared, total });

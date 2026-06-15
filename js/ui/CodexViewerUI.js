@@ -345,7 +345,7 @@ export class CodexViewerUI {
     // Locked entries show a 🔒 on the badge — depth not yet earned.
     const trl = entry.trl;
     const trlBadge = (typeof trl === 'number')
-      ? `<span title="${trlToTechLevelLabel(trl, Constants.TRL)}${entry.trlRationale && !isLocked ? '\n' + entry.trlRationale : ''}${isLocked ? '\n🔒 Full briefing locked — ' + (entry.unlockHint || 'discover through gameplay.') : ''}"
+      ? `<span title="${trlToTechLevelLabel(trl, Constants.TRL)}${entry.trlRationale && !isLocked ? '\n' + entry.trlRationale : ''}${isLocked ? '\n🔒 Full briefing locked. ' + (entry.unlockHint || 'discover through gameplay.') : ''}"
               style="position:absolute;bottom:6px;right:8px;font-size:9px;font-weight:bold;
                      padding:1px 5px;border-radius:2px;letter-spacing:0.05em;
                      color:${trlToBadgeColor(trl, Constants.TRL)};
@@ -412,7 +412,7 @@ export class CodexViewerUI {
       const lbl = trlToLabel(dTrl, Constants.TRL);
       const rat = (!isLocked && entry.trlRationale) ? entry.trlRationale : '';
       trlDetailHtml = `
-        <div title="Tech Level (real-world readiness) ${dTrl} — ${lbl}"
+        <div title="Tech Level (real-world readiness) ${dTrl}. ${lbl}"
              style="display:flex;align-items:center;gap:10px;margin-bottom:12px;
                     padding:6px 10px;border:1px solid ${col};border-radius:3px;
                     background:rgba(0,0,0,0.35);font-size:11px;${isLocked ? 'opacity:0.7;' : ''}">

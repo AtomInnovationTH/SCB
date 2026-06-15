@@ -207,7 +207,7 @@ export class MissionEventSystem {
 
         eventBus.emit(Events.COMMS_MESSAGE, {
           sender: 'HOUSTON',
-          text: `Synergy opportunity: "${syn.name}" — collect ${missing.join(', ')} within 5 min for +${syn.points} bonus.`,
+          text: `Synergy opportunity: "${syn.name}". Collect ${missing.join(', ')} within 5 min for +${syn.points} bonus.`,
           priority: 'info',
         });
         break; // Only one synergy alert per scan

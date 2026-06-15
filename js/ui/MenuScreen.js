@@ -156,14 +156,14 @@ export class MenuScreen {
           <h1 style="font-family:'Courier New',monospace; font-size:3.5rem; color:#00ff88;
                       letter-spacing:0.3em; margin-bottom:0.5rem; white-space:nowrap;
                       text-shadow: 0 0 30px rgba(0,255,136,0.6), 0 0 60px rgba(0,255,136,0.3);">
-            SPACE COWBOY<span style="font-size:0.5em; letter-spacing:0.1em; margin-left:0.4em; vertical-align:0.15em; color:rgba(0,255,136,0.6);">v.96</span>
+            SPACE COWBOY<span style="font-size:0.5em; letter-spacing:0.1em; margin-left:0.4em; vertical-align:0.15em; color:rgba(0,255,136,0.6);">v.97</span>
           </h1>
           <div style="font-size:1.1rem; color:rgba(0,255,136,0.6); letter-spacing:0.15em;
                        margin-bottom:1.5rem;">
             Active Debris Remediation (ADR)
           </div>
 
-          <!-- START MISSION button — label carries both click and Enter hint -->
+          <!-- START MISSION button. Label carries both click and Enter hint -->
           <div style="margin:0 0 0.8rem;">
             <button id="menu-start-btn" style="
               font-family:'Courier New',monospace; color:#00ff88;
@@ -204,7 +204,7 @@ export class MenuScreen {
             <div style="margin-bottom:1.9rem; font-size:0.92rem; color:rgba(0,255,136,0.72);
                          line-height:1.7; padding:0 2px;">
               <p style="margin:0 0 0.3rem;">
-                40,000 pieces of <span class="adr-name" title="Dead satellites, spent rocket stages and collision fragments — much of it moving at 7–8 km/s. See the Kessler syndrome section below.">space junk</span> threaten every orbit.
+                40,000 pieces of <span class="adr-name" title="Dead satellites, spent rocket stages and collision fragments. Much of it moving at 7–8 km/s. See the Kessler syndrome section below.">space junk</span> threaten every orbit.
               </p>
               <p style="margin:0 0 0.3rem;">
                 Removing 5 big ones a year could stabilize Low Earth Orbit.
@@ -218,11 +218,11 @@ export class MenuScreen {
             <details class="adr-group">
               <summary>Kessler syndrome<span class="adr-count">1978</span></summary>
               <ul class="adr-list">
-              <li style="color:rgba(0,255,136,0.72); padding-left:0; margin-bottom:0.35rem;">Proposed by NASA's Donald Kessler in 1978: once orbital junk gets dense enough, each collision throws off fragments that cause more collisions — a runaway cascade that can make whole orbits unusable for generations. Every dead satellite left up there raises the odds.</li>
-              <li><span class="adr-name" title="China destroyed its own Fengyun-1C weather satellite with a missile at ~865 km — the worst single debris event in history, and most of those fragments will linger for decades.">2007 — Chinese anti-satellite test</span> <span class="adr-sub">3,000+ pieces</span></li>
-              <li><span class="adr-name" title="The defunct Russian Cosmos 2251 slammed into the active Iridium 33 communications satellite — the first accidental crash between two whole satellites.">2009 — Iridium–Cosmos crash</span> <span class="adr-sub">2,000+ pieces</span></li>
-              <li><span class="adr-name" title="Russia destroyed the defunct Cosmos 1408 satellite in a weapons test, scattering fragments that forced the ISS crew to shelter in their capsules.">2021 — Russian anti-satellite test</span> <span class="adr-sub">1,500+ pieces</span></li>
-              <li><span class="adr-name" title="The US Space Surveillance Network watches for close passes; the ISS fires its thrusters to dodge when collision odds exceed 1 in 10,000 — about once a year on average (NASA), and rising. Its hull is shielded against debris up to ~1 cm; for anything bigger spotted too late, the crew shelters in their return capsules.">ISS dodges debris</span> <span class="adr-sub">~1× / year</span></li>
+              <li style="color:rgba(0,255,136,0.72); padding-left:0; margin-bottom:0.35rem;">Proposed by NASA's Donald Kessler in 1978: once orbital junk gets dense enough, each collision throws off fragments that cause more collisions. A runaway cascade that can make whole orbits unusable for generations. Every dead satellite left up there raises the odds.</li>
+              <li><span class="adr-name" title="China destroyed its own Fengyun-1C weather satellite with a missile at ~865 km. The worst single debris event in history, and most of those fragments will linger for decades.">2007. Chinese anti-satellite test</span> <span class="adr-sub">3,000+ pieces</span></li>
+              <li><span class="adr-name" title="The defunct Russian Cosmos 2251 slammed into the active Iridium 33 communications satellite. The first accidental crash between two whole satellites.">2009. Iridium–Cosmos crash</span> <span class="adr-sub">2,000+ pieces</span></li>
+              <li><span class="adr-name" title="Russia destroyed the defunct Cosmos 1408 satellite in a weapons test, scattering fragments that forced the ISS crew to shelter in their capsules.">2021. Russian anti-satellite test</span> <span class="adr-sub">1,500+ pieces</span></li>
+              <li><span class="adr-name" title="The US Space Surveillance Network watches for close passes; the ISS fires its thrusters to dodge when collision odds exceed 1 in 10,000. About once a year on average (NASA), and rising. Its hull is shielded against debris up to ~1 cm; for anything bigger spotted too late, the crew shelters in their return capsules.">ISS dodges debris</span> <span class="adr-sub">~1× / year</span></li>
               </ul>
             </details>
 
@@ -230,11 +230,11 @@ export class MenuScreen {
             <details class="adr-group">
               <summary>Cleanup is now mandatory<span class="adr-count">5</span></summary>
               <ul class="adr-list">
-              <li><span class="adr-name" title="US Federal Communications Commission, 2022. Satellites in low orbit must now be removed within 5 years of mission end — replacing the old 25-year guideline. First fine: Dish Network, $150,000 (2023).">FCC 5-year rule</span> <span class="adr-sub">USA · 2022</span></li>
+              <li><span class="adr-name" title="US Federal Communications Commission, 2022. Satellites in low orbit must now be removed within 5 years of mission end. Replacing the old 25-year guideline. First fine: Dish Network, $150,000 (2023).">FCC 5-year rule</span> <span class="adr-sub">USA · 2022</span></li>
               <li><span class="adr-name" title="European Space Agency's Zero Debris Charter (2023): no new debris generated by participating missions by 2030, with disposal success above 90% and orbital clearance in under 5 years.">ESA Zero Debris</span> <span class="adr-sub">Europe · by 2030</span></li>
-              <li><span class="adr-name" title="ISRO's Debris-Free Space Missions pledge (2024): all Indian space activity — government and private — to be debris-free by 2030.">Debris-Free Space Missions</span> <span class="adr-sub">India · by 2030</span></li>
+              <li><span class="adr-name" title="ISRO's Debris-Free Space Missions pledge (2024): all Indian space activity. Government and private. To be debris-free by 2030.">Debris-Free Space Missions</span> <span class="adr-sub">India · by 2030</span></li>
               <li><span class="adr-name" title="Proposed EU-wide Space Act (June 2025): would require debris-mitigation plans, collision avoidance and end-of-life deorbiting for any operator serving the EU market. Targeted to apply from 2030.">EU Space Act</span> <span class="adr-sub">EU · proposed 2025</span></li>
-              <li><span class="adr-name" title="The UN Committee on the Peaceful Uses of Outer Space (2007 guidelines) and the Inter-Agency Space Debris Coordination Committee — the technical origin of the original 25-year disposal rule that national laws build on.">UN COPUOS / IADC</span> <span class="adr-sub">global</span></li>
+              <li><span class="adr-name" title="The UN Committee on the Peaceful Uses of Outer Space (2007 guidelines) and the Inter-Agency Space Debris Coordination Committee. The technical origin of the original 25-year disposal rule that national laws build on.">UN COPUOS / IADC</span> <span class="adr-sub">global</span></li>
               </ul>
             </details>
 
@@ -243,12 +243,12 @@ export class MenuScreen {
               <details class="adr-group" open>
                 <summary>Who removes debris<span class="adr-count">6</span></summary>
                 <ul class="adr-list">
-                <li><span class="adr-name" title="Tokyo-based pure-play debris remover, listed on the Tokyo Stock Exchange since 2024 (valued roughly $1 billion). In 2024 its ADRAS-J spacecraft flew within ~15 m of a discarded Japanese rocket stage — the closest a private craft has come to large debris. Its ADRAS-J2 follow-up will grab and de-orbit that stage (~2027).">Astroscale</span> <span class="adr-sub">Japan · public</span></li>
-                <li><span class="adr-name" title="Subsidiary of Northrop Grumman, and the only company doing this routinely today. Its Mission Extension Vehicles docked with live Intelsat satellites (2020–21) to add years of life — the first commercial servicing in orbit.">Northrop Grumman SpaceLogistics</span> <span class="adr-sub">USA</span></li>
-                <li><span class="adr-name" title="Swiss start-up building Europe's first debris-removal mission for the European Space Agency. Its original target — a leftover rocket adapter — was itself hit by other debris, so the mission was redirected to capture and de-orbit the retired PROBA-1 satellite instead. Launch ~2028.">ClearSpace</span> <span class="adr-sub">Switzerland</span></li>
+                <li><span class="adr-name" title="Tokyo-based pure-play debris remover, listed on the Tokyo Stock Exchange since 2024 (valued roughly $1 billion). In 2024 its ADRAS-J spacecraft flew within ~15 m of a discarded Japanese rocket stage. The closest a private craft has come to large debris. Its ADRAS-J2 follow-up will grab and de-orbit that stage (~2027).">Astroscale</span> <span class="adr-sub">Japan · public</span></li>
+                <li><span class="adr-name" title="Subsidiary of Northrop Grumman, and the only company doing this routinely today. Its Mission Extension Vehicles docked with live Intelsat satellites (2020–21) to add years of life. The first commercial servicing in orbit.">Northrop Grumman SpaceLogistics</span> <span class="adr-sub">USA</span></li>
+                <li><span class="adr-name" title="Swiss start-up building Europe's first debris-removal mission for the European Space Agency. Its original target. A leftover rocket adapter. Was itself hit by other debris, so the mission was redirected to capture and de-orbit the retired PROBA-1 satellite instead. Launch ~2028.">ClearSpace</span> <span class="adr-sub">Switzerland</span></li>
                 <li><span class="adr-name" title="Italian space-logistics firm. Its ION space tug has flown since 2020; it won a ~€120 million ESA contract (the RISE mission) to service a satellite in geostationary orbit, around 2028.">D-Orbit</span> <span class="adr-sub">Italy</span></li>
                 <li><span class="adr-name" title="Seattle start-up (raised $100 million+). Its Otter vehicle is designed to dock with satellites that were never built to be caught; it won a US Space Force contract to de-orbit a retired satellite.">Starfish Space</span> <span class="adr-sub">USA</span></li>
-                <li><span class="adr-name" title="Pioneer of in-orbit refuelling — 'gas stations in space'. Its RAFTI fuel port is becoming a de-facto industry standard for refuellable satellites.">Orbit Fab</span> <span class="adr-sub">USA</span></li>
+                <li><span class="adr-name" title="Pioneer of in-orbit refuelling. 'gas stations in space'. Its RAFTI fuel port is becoming a de-facto industry standard for refuellable satellites.">Orbit Fab</span> <span class="adr-sub">USA</span></li>
                 <li style="color:rgba(0,255,136,0.62);">Also emerging:
                   <span class="adr-name" title="Los Angeles. Uses an inflatable 'capture bag' to scoop up debris and spent objects.">TransAstra</span>,
                   <span class="adr-name" title="Michigan. Gecko-adhesive and microspine gripper arms (REACCH) to grab tumbling, uncooperative debris.">Kall Morris</span>,
@@ -260,11 +260,11 @@ export class MenuScreen {
                 <summary>Who tracks debris<span class="adr-count">6</span></summary>
                 <ul class="adr-list">
                 <li><span class="adr-name" title="Run by the US Space Force; catalogues 30,000+ objects larger than 10 cm. Its Space Fence radar on Kwajalein Atoll (Marshall Islands) can follow ~200,000 objects and is the most sensitive debris radar in the world.">US Space Surveillance Network</span> <span class="adr-sub">USA · Space Fence</span></li>
-                <li><span class="adr-name" title="The European Union Space Surveillance and Tracking partnership — radars and telescopes shared by 15 EU nations, with the catalogue hosted in Germany. Safeguards 600+ satellites.">EU SST</span> <span class="adr-sub">Europe</span></li>
-                <li><span class="adr-name" title="Menlo Park, California. A commercial network of phased-array radars — 11 radars across 7 sites worldwide — tracking objects as small as 2 cm in low orbit.">LeoLabs</span> <span class="adr-sub">USA</span></li>
+                <li><span class="adr-name" title="The European Union Space Surveillance and Tracking partnership. Radars and telescopes shared by 15 EU nations, with the catalogue hosted in Germany. Safeguards 600+ satellites.">EU SST</span> <span class="adr-sub">Europe</span></li>
+                <li><span class="adr-name" title="Menlo Park, California. A commercial network of phased-array radars. 11 radars across 7 sites worldwide. Tracking objects as small as 2 cm in low orbit.">LeoLabs</span> <span class="adr-sub">USA</span></li>
                 <li><span class="adr-name" title="El Segundo, California. A global optical-sensor network paired with AI analytics for tracking objects and issuing collision warnings.">Slingshot Aerospace</span> <span class="adr-sub">USA</span></li>
-                <li><span class="adr-name" title="Montreal. Operates the first commercial space-based tracking system — its Skylark satellites watch other objects from orbit rather than from the ground.">NorthStar Earth &amp; Space</span> <span class="adr-sub">Canada</span></li>
-                <li><span class="adr-name" title="Foothill Ranch, California. Runs the world's largest commercial telescope network — 350+ scopes — watching the higher orbits, including geostationary.">ExoAnalytic Solutions</span> <span class="adr-sub">USA</span></li>
+                <li><span class="adr-name" title="Montreal. Operates the first commercial space-based tracking system. Its Skylark satellites watch other objects from orbit rather than from the ground.">NorthStar Earth &amp; Space</span> <span class="adr-sub">Canada</span></li>
+                <li><span class="adr-name" title="Foothill Ranch, California. Runs the world's largest commercial telescope network. 350+ scopes. Watching the higher orbits, including geostationary.">ExoAnalytic Solutions</span> <span class="adr-sub">USA</span></li>
                 <li style="color:rgba(0,255,136,0.62);">Collision-avoidance software:
                   <span class="adr-name" title="Munich, Germany. Space-traffic management and a ground-sensor network, with in-orbit sensors planned.">Vyoma</span>,
                   <span class="adr-name" title="Coimbra, Portugal. AI that assesses collision risk and suggests avoidance manoeuvres days in advance.">Neuraspace</span>,
@@ -286,21 +286,21 @@ export class MenuScreen {
                 <summary>India's ecosystem<span class="adr-count">6</span></summary>
                 <ul class="adr-list">
                 <li><span class="adr-name" title="Hyderabad start-up leading an in-orbit debris-removal demonstration, with Pixxel building the satellite for it (announced March 2026).">Cosmoserve Space</span> <span class="adr-sub">Hyderabad</span></li>
-                <li><span class="adr-name" title="Bengaluru-and-California company flying the 'Fireflies' hyperspectral Earth-imaging satellites (first ones launched in 2025). It is building the satellite platform for Cosmoserve's debris-removal demo — its first move into debris work.">Pixxel</span> <span class="adr-sub">Bengaluru</span></li>
-                <li><span class="adr-name" title="Bengaluru start-up that tracks and catalogues objects in orbit (space-traffic awareness) and is deploying its own space-tracking satellites — the data needed to spot debris and avoid collisions.">Digantara</span> <span class="adr-sub">Bengaluru</span></li>
-                <li><span class="adr-name" title="Bengaluru propulsion specialist (founded 2015). Its thrusters have flown on Indian (ISRO) missions, and its Pushpak 'space tug' is designed to move satellites between orbits — the kind of mobility a debris-hunting servicer needs.">Bellatrix Aerospace</span> <span class="adr-sub">Bengaluru</span></li>
-                <li><span class="adr-name" title="Bengaluru start-up (founded 2021 by Indian Institute of Science alumni) building an in-orbit docking-and-refuelling module to refuel, repair and reposition satellites — extending their working life and cutting future debris.">OrbitAID Aerospace</span> <span class="adr-sub">Bengaluru</span></li>
-                <li><span class="adr-name" title="Indian start-up making clean, non-toxic satellite propulsion and collision-avoidance thrusters (its 'I-Booster' for 100–500 kg satellites) — focused on preventing debris rather than removing it.">Manastu Space</span> <span class="adr-sub">India</span></li>
+                <li><span class="adr-name" title="Bengaluru-and-California company flying the 'Fireflies' hyperspectral Earth-imaging satellites (first ones launched in 2025). It is building the satellite platform for Cosmoserve's debris-removal demo. Its first move into debris work.">Pixxel</span> <span class="adr-sub">Bengaluru</span></li>
+                <li><span class="adr-name" title="Bengaluru start-up that tracks and catalogues objects in orbit (space-traffic awareness) and is deploying its own space-tracking satellites. The data needed to spot debris and avoid collisions.">Digantara</span> <span class="adr-sub">Bengaluru</span></li>
+                <li><span class="adr-name" title="Bengaluru propulsion specialist (founded 2015). Its thrusters have flown on Indian (ISRO) missions, and its Pushpak 'space tug' is designed to move satellites between orbits. The kind of mobility a debris-hunting servicer needs.">Bellatrix Aerospace</span> <span class="adr-sub">Bengaluru</span></li>
+                <li><span class="adr-name" title="Bengaluru start-up (founded 2021 by Indian Institute of Science alumni) building an in-orbit docking-and-refuelling module to refuel, repair and reposition satellites. Extending their working life and cutting future debris.">OrbitAID Aerospace</span> <span class="adr-sub">Bengaluru</span></li>
+                <li><span class="adr-name" title="Indian start-up making clean, non-toxic satellite propulsion and collision-avoidance thrusters (its 'I-Booster' for 100–500 kg satellites). Focused on preventing debris rather than removing it.">Manastu Space</span> <span class="adr-sub">India</span></li>
                 </ul>
               </details>
 
               <details class="adr-group">
                 <summary>2026 events<span class="adr-count">4</span></summary>
                 <ul class="adr-list">
-                <li><span class="adr-name" title="Inter-Agency Space Debris Coordination Committee — the 44th annual meeting of the world's space agencies, held at the ESA campus in Harwell, UK (April 2026).">IADC 44th meeting</span> <span class="adr-sub">Harwell, UK · Apr</span></li>
-                <li><span class="adr-name" title="Advanced Maui Optical and Space Surveillance Technologies conference — the premier technical event for space-tracking and space domain awareness.">AMOS Conference</span> <span class="adr-sub">Maui · Sep</span></li>
-                <li><span class="adr-name" title="The 77th International Astronautical Congress — the world's largest space gathering (6,000+ delegates), with major debris and sustainability tracks.">Int'l Astronautical Congress</span> <span class="adr-sub">Antalya · Oct</span></li>
-                <li><span class="adr-name" title="Secure World Foundation's flagship policy event on keeping orbit usable — the 8th edition, in Brasília, Brazil (November 2026).">Summit for Space Sustainability</span> <span class="adr-sub">Brasília · Nov</span></li>
+                <li><span class="adr-name" title="Inter-Agency Space Debris Coordination Committee. The 44th annual meeting of the world's space agencies, held at the ESA campus in Harwell, UK (April 2026).">IADC 44th meeting</span> <span class="adr-sub">Harwell, UK · Apr</span></li>
+                <li><span class="adr-name" title="Advanced Maui Optical and Space Surveillance Technologies conference. The premier technical event for space-tracking and space domain awareness.">AMOS Conference</span> <span class="adr-sub">Maui · Sep</span></li>
+                <li><span class="adr-name" title="The 77th International Astronautical Congress. The world's largest space gathering (6,000+ delegates), with major debris and sustainability tracks.">Int'l Astronautical Congress</span> <span class="adr-sub">Antalya · Oct</span></li>
+                <li><span class="adr-name" title="Secure World Foundation's flagship policy event on keeping orbit usable. The 8th edition, in Brasília, Brazil (November 2026).">Summit for Space Sustainability</span> <span class="adr-sub">Brasília · Nov</span></li>
                 </ul>
               </details>
             </div>

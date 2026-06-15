@@ -112,7 +112,7 @@ export class PaneChrome {
     const badge = document.createElement('div');
     badge.className = 'hud-pane-badge';
     badge.textContent = bracket ? `[${keyLabel}]` : keyLabel;
-    badge.title = title || `Resize pane — click to cycle, right-click to reverse`;
+    badge.title = title || `Resize pane. Click to cycle, right-click to reverse`;
     Object.assign(badge.style, {
       position: 'absolute',
       top: '5px',

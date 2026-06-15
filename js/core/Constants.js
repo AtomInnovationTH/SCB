@@ -2196,11 +2196,11 @@ export const Constants = {
       { id: 'nav_throttle',     label: 'Throttle',     key: '+/-', tier: 1, category: 'nav',      hudGroup: 'propulsion',    prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'THROTTLE_CHANGE' },
       { id: 'scan_quick',       label: 'Quick Scan',   key: 'S',         tier: 1, category: 'scan',      hudGroup: 'targets',       prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'SCAN_QUICK' },
       // ── Delegation 4 (2026-05-31): two Tier-1 skills added to back the onboarding `struts` and `inspect` beats. ──
-      { id: 'arm_struts',       label: 'Strut Deployment', key: ', .',    tier: 1, category: 'collect',   hudGroup: 'fleet',         prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'STRUT_DEPLOY_INPUT' },
+      { id: 'arm_struts',       label: 'Strut Deployment', key: '.',      tier: 1, category: 'collect',   hudGroup: 'fleet',         prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'STRUT_DEPLOY_INPUT' },
       { id: 'inspect_mother',   label: 'Spacecraft Inspection', key: 'V', tier: 1, category: 'awareness', hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'INSPECTION_TOGGLE' },
       // ── Tier 2: Core Tools (6 skills) ───────────────────────────────────
-      { id: 'scan_wide',            label: 'Wide Scan',    key: 'W',     tier: 2, category: 'scan',      hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'SCAN_WIDE' },
-      { id: 'nav_target',           label: 'Target Selection', key: 'Tab', tier: 2, category: 'nav',     hudGroup: 'target-info',   prereqs: [],  prereqType: 'soft', noReminder: false, triggerEvent: 'TARGET_SELECTED' },
+      { id: 'scan_wide',            label: 'Wide Scan',    key: 'Shift+S',     tier: 2, category: 'scan',      hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'SCAN_WIDE' },
+      { id: 'nav_target',           label: 'Target Selection', key: 'T', tier: 2, category: 'nav',     hudGroup: 'target-info',   prereqs: [],  prereqType: 'soft', noReminder: false, triggerEvent: 'TARGET_SELECTED' },
       { id: 'nav_autopilot',        label: 'Autopilot',    key: 'A',     tier: 2, category: 'nav',       hudGroup: 'orbit-mfd',     prereqs: [],  prereqType: 'soft', noReminder: false, triggerEvent: 'AUTOPILOT_ENGAGE' },
       { id: 'collect_deploy',       label: 'Deploy Daughter',   key: 'D',     tier: 2, category: 'collect',   hudGroup: 'fleet',         prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'ARM_DEPLOYED' },
       { id: 'collect_lasso',        label: 'Lasso',        key: 'N', tier: 2, category: 'collect',   hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'LASSO_FIRED' },
@@ -2210,17 +2210,16 @@ export const Constants = {
       { id: 'nav_autopilot_no_target', label: 'Autopilot w/o Target', key: null, tier: 3, category: 'nav',    hudGroup: null,          prereqs: [],  prereqType: 'none', noReminder: true,  triggerEvent: 'AUTOPILOT_NO_TARGET' },
       { id: 'scan_discovery',          label: 'Scan Discovery',       key: null, tier: 3, category: 'scan',   hudGroup: null,          prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'SCAN_DISCOVERY' },
       { id: 'collect_dual_fire',       label: 'Dual Launch',            key: null, tier: 3, category: 'collect', hudGroup: null,          prereqs: [],  prereqType: 'hard', noReminder: false, triggerEvent: 'DUAL_FIRE' },
-      { id: 'collect_trawl',           label: 'Trawl',                key: 'Shift+G',  tier: 3, category: 'collect', hudGroup: null,          prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'TRAWL_START' },
-      { id: 'manage_power',            label: 'Power Distribution',   key: '1/2/3', tier: 3, category: 'manage', hudGroup: 'power',    prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'POWER_BUS_SELECTED' },
+      { id: 'manage_power',            label: 'Power Distribution',   key: 'Shift+1/2/3', tier: 3, category: 'manage', hudGroup: 'power',    prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'POWER_BUS_SELECTED' },
       { id: 'manage_comms',            label: 'Comms Menu',           key: 'C',  tier: 3, category: 'manage', hudGroup: 'comms',       prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'COMMS_OPENED' },
       { id: 'manage_codex',            label: 'Tech Library',         key: 'L',  tier: 3, category: 'manage', hudGroup: null,          prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'CODEX_OPENED' },
       // ── CP-4 ch2 (MissionCoach): Daughter piloting (payload-discriminated via triggerFilter) ──
-      { id: 'arm_pilot',         label: 'Daughter Piloting', key: 'P', tier: 3, category: 'collect', hudGroup: 'fleet', prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'CONTROL_MODE_CHANGE', triggerFilter: (d) => d && d.mode === 'ARM_PILOT' },
+      { id: 'arm_pilot',         label: 'Daughter Piloting', key: '1-4', tier: 3, category: 'collect', hudGroup: 'fleet', prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'CONTROL_MODE_CHANGE', triggerFilter: (d) => d && d.mode === 'ARM_PILOT' },
       { id: 'arm_pilot_capture', label: 'Manual Capture',    key: 'N', tier: 3, category: 'collect', hudGroup: 'fleet', prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'ARM_CAPTURED',        triggerFilter: (d) => d && d.manual === true },
       // ── CP-4 ch4 (MissionCoach): Cluster/transfer agency on the Debris Map (CP-3) ──
       // Backtick (`) opens the Debris Map; ,/. select a cluster → DEBRIS_MAP_CLUSTER_SELECTED
       // (the 3D StrategicMap / Shift+V is view-only and does NOT drive transfers).
-      { id: 'strategic_map',     label: 'Transfer Map',      key: '`', tier: 3, category: 'nav',     hudGroup: null,    prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'DEBRIS_MAP_CLUSTER_SELECTED' },
+      { id: 'strategic_map',     label: 'Transfer Map',      key: 'M', tier: 3, category: 'nav',     hudGroup: null,    prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'DEBRIS_MAP_CLUSTER_SELECTED' },
       // ── CP-4 Phase D (MissionCoach chapters 8/9/11) ──────────────────────────
       // ch8 confirm-before-fire: discovered when the player trips the active-sat treaty
       //   guard (ActiveSatGuard emits CONJUNCTION_ALERT{reason:'ACTIVE_SAT_ARMING'}).
@@ -2235,11 +2234,17 @@ export const Constants = {
       { id: 'radial_menu',         label: 'Fleet Recall',        key: 'Shift+R',  tier: 3, category: 'collect',   hudGroup: 'fleet', prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'ARM_RECALL_ALL' },
       { id: 'orbital_hohmann',     label: 'Hohmann Window',      key: null, tier: 4, category: 'nav',       hudGroup: null,    prereqs: [], prereqType: 'soft', noReminder: false, triggerEvent: 'CLUSTER_WINDOW_OPEN' },
 
-      // ── Tier 4: Advanced (7 skills) ─────────────────────────────────────
-      { id: 'nav_orbit_mfd',      label: 'Orbit MFD Reading',   key: 'M',  tier: 4, category: 'nav',       hudGroup: null,  prereqs: ['nav_autopilot'],  prereqType: 'soft',   noReminder: false, triggerEvent: 'ORBIT_MFD_TOGGLE' },
+      // ── Tier 4: Advanced (8 skills) ─────────────────────────────────────
+      { id: 'nav_orbit_mfd',      label: 'Orbit MFD Reading',   key: null,  tier: 4, category: 'nav',       hudGroup: null,  prereqs: ['nav_autopilot'],  prereqType: 'soft',   noReminder: false, triggerEvent: 'ORBIT_MFD_TOGGLE' },
       { id: 'collect_pulse_scan', label: 'Pulse Scan',           key: null, tier: 4, category: 'collect',   hudGroup: null,  prereqs: [],                  prereqType: 'none',   noReminder: false, triggerEvent: 'PULSE_SCAN_START' },
       { id: 'collect_lasso_miss', label: 'Lasso Miss Recovery',  key: null, tier: 4, category: 'collect',   hudGroup: null,  prereqs: ['collect_lasso'],   prereqType: 'hard',   noReminder: true,  triggerEvent: 'LASSO_MISSED' },
-      { id: 'manage_forge',       label: 'Forge',                key: '5', tier: 4, category: 'manage',    hudGroup: null,  prereqs: [],                  prereqType: 'none',   noReminder: false, triggerEvent: 'FORGE_TOGGLE' },
+      // defer-trawl: "Dragnet" (formerly "Trawl"). Re-tiered to Advanced and
+      // hard-gated behind `dragnet_unlock` — a flag the (future) advanced
+      // Dragnet mission grants. Until then this stays UNDISCOVERED for new
+      // players: Shift+G still emits TRAWL_START (testable) but the skill never
+      // surfaces in the Discovery pane / reminders. noReminder keeps it silent.
+      { id: 'collect_trawl',      label: 'Dragnet',              key: 'Shift+G', tier: 4, category: 'collect', hudGroup: null,  prereqs: ['dragnet_unlock'],  prereqType: 'hard',   noReminder: true,  triggerEvent: 'TRAWL_START' },
+      { id: 'manage_forge',       label: 'Forge',                key: 'F', tier: 4, category: 'manage',    hudGroup: null,  prereqs: [],                  prereqType: 'none',   noReminder: false, triggerEvent: 'FORGE_TOGGLE' },
       { id: 'manage_shop',        label: 'Shop Navigation',      key: null, tier: 4, category: 'manage',    hudGroup: null,  prereqs: [],                  prereqType: 'none',   noReminder: false, triggerEvent: 'UPGRADE_PURCHASED' },
       { id: 'awareness_kessler',  label: 'Kessler Event',        key: null, tier: 4, category: 'awareness', hudGroup: null,  prereqs: [],                  prereqType: 'none',   noReminder: true,  triggerEvent: 'KESSLER_CASCADE' },
       { id: 'awareness_weather',  label: 'Space Weather',        key: null, tier: 4, category: 'awareness', hudGroup: null,  prereqs: [],                  prereqType: 'none',   noReminder: true,  triggerEvent: 'WEATHER_EFFECT_START' },
@@ -2665,13 +2670,13 @@ export const Constants = {
           id: 'ch2_intro',
           type: 'narrative',
           source: 'BANGALORE',
-          text: 'ISRO Bangalore here — good to have a second set of eyes. Your daughter craft can do the close work. Take manual control and you\'ll capture heavier debris than autopilot ever could.',
+          text: 'ISRO Bangalore here. Good to have a second set of eyes. Your daughter craft can do the close work. Take manual control and you\'ll capture heavier debris than autopilot ever could.',
         },
         {
           id: 'ch2_pilot',
           type: 'interactive',
           source: 'HOUSTON',
-          text: 'Deploy a daughter (D), then press 1-4 to pilot her directly. On station you\'ll see the live capture odds strip — every tool, every %.',
+          text: 'Deploy a daughter (D), then press 1-4 to pilot her directly. On station you\'ll see the live capture odds strip. Every tool, every %.',
           skillId: 'arm_pilot',
           triggerEvent: 'CONTROL_MODE_CHANGE',
           triggerFilter: (d) => d && d.mode === 'ARM_PILOT',
@@ -2682,12 +2687,12 @@ export const Constants = {
           id: 'ch2_manual_capture',
           type: 'interactive',
           source: 'HOUSTON',
-          text: 'Line up on a target and capture by hand (N) — manual catches score double. Watch the odds strip: de-spin (H) or close in and the % climbs before you commit.',
+          text: 'Line up on a target and capture by hand (N). Manual catches score double. Watch the odds strip: de-spin (H) or close in and the % climbs before you commit.',
           skillId: 'arm_pilot_capture',
           triggerEvent: 'ARM_CAPTURED',
           triggerFilter: (d) => d && d.manual === true,
           title: 'MANUAL CAPTURE',
-          body: 'Close on a target under manual pilot and press F to net it for 2× score.',
+          body: 'Close on a target under manual pilot and press N to net it for 2× score.',
         },
       ],
 
@@ -2697,23 +2702,23 @@ export const Constants = {
           id: 'ch3_intro',
           type: 'narrative',
           source: 'HOUSTON',
-          text: 'You\'re climbing into the LEO-Low traffic lanes — and the ISS tracks through here on 51.6°. Quick pings won\'t reach the far contacts. Trade dwell time for range with a wide scan.',
+          text: 'You\'re climbing into the LEO-Low traffic lanes. And the ISS tracks through here on 51.6°. Quick pings won\'t reach the far contacts. Trade dwell time for range with a wide scan.',
         },
         {
           id: 'ch3_wide_scan',
           type: 'interactive',
           source: 'HOUSTON',
-          text: 'Press W for a wide-aperture deep scan — slower, but it paints debris your quick ping (S) can\'t see.',
+          text: 'Press Shift+S for a wide-aperture deep scan. Slower, but it paints debris your quick ping (S) can\'t see.',
           skillId: 'scan_wide',
           triggerEvent: 'SCAN_WIDE',
           title: 'WIDE SCAN',
-          body: 'Press W to run a wide-aperture scan and reveal distant contacts.',
+          body: 'Press Shift+S to run a wide-aperture scan and reveal distant contacts.',
         },
         {
           id: 'ch3_codex',
           type: 'interactive',
           source: 'HOUSTON',
-          text: 'New contacts logged to the Tech Library. Press L to open the Codex — know what you\'re grabbing before you commit fuel to it.',
+          text: 'New contacts logged to the Tech Library. Press L to open the Codex. Know what you\'re grabbing before you commit fuel to it.',
           skillId: 'manage_codex',
           triggerEvent: 'CODEX_OPENED',
           title: 'THE CODEX',
@@ -2727,17 +2732,17 @@ export const Constants = {
           id: 'ch4_intro',
           type: 'narrative',
           source: 'HOUSTON',
-          text: 'Debris travels in clusters, and space is periodic — a transfer window opens, then closes, then comes around again. Stop chasing one fragment at a time. Plan the whole sweep.',
+          text: 'Debris travels in clusters, and space is periodic. A transfer window opens, then closes, then comes around again. Stop chasing one fragment at a time. Plan the whole sweep.',
         },
         {
           id: 'ch4_map',
           type: 'interactive',
           source: 'HOUSTON',
-          text: 'Open the debris map (`), then use , / . to pick a cluster — the launch-window countdown times your transfer for minimum ΔV.',
+          text: 'Open the debris map (M), then use , / . to pick a cluster. The launch-window countdown times your transfer for minimum ΔV.',
           skillId: 'strategic_map',
           triggerEvent: 'DEBRIS_MAP_CLUSTER_SELECTED',
           title: 'TRANSFER MAP',
-          body: 'Press ` to open the debris map, then , / . to select a cluster and read its transfer window.',
+          body: 'Press M to open the debris map, then , / . to select a cluster and read its transfer window.',
         },
       ],
 
@@ -2749,13 +2754,13 @@ export const Constants = {
           id: 'ch5_intro',
           type: 'narrative',
           source: 'HOUSTON',
-          text: 'Cowboy, we have a situation. A Cosmos-1408 fragment cloud is converging on the ISS — 51.6° inclination, closest approach in 38 hours. There are people aboard that station. You can clear the threat, or we let CSA dodge it on the station\'s own thrusters. Your call.',
+          text: 'Cowboy, we have a situation. A Cosmos-1408 fragment cloud is converging on the ISS. 51.6° inclination, closest approach in 38 hours. There are people aboard that station. You can clear the threat, or we let CSA dodge it on the station\'s own thrusters. Your call.',
         },
         {
           id: 'ch5_burn',
           type: 'interactive',
           source: 'HOUSTON',
-          text: 'Reaching them in time takes precise timing — trim your closing rate on the throttle (+/-) to nail the intercept window.',
+          text: 'Reaching them in time takes precise timing. Trim your closing rate on the throttle (+/-) to nail the intercept window.',
           skillId: 'nav_throttle',
           triggerEvent: 'THROTTLE_CHANGE',
           title: 'BURN TIMING',
@@ -2769,37 +2774,37 @@ export const Constants = {
           id: 'ch6_intro',
           type: 'narrative',
           source: 'HOUSTON',
-          text: 'That cargo isn\'t just mass for the elevator — it\'s fuel. The Forge melts salvage into FEEP propellant. Bismuth burns hot now; cesium is worth more if you can wait. Your call.',
+          text: 'That cargo isn\'t just mass for the elevator. It\'s fuel. The Forge melts salvage into FEEP propellant. Bismuth burns hot now; cesium is worth more if you can wait. Your call.',
         },
         {
           id: 'ch6_forge',
           type: 'interactive',
           source: 'HOUSTON',
-          text: 'Open the Forge ([5]) and run a metal through the FEEP cycle — refine your catch into thrust.',
+          text: 'Open the Forge (F) and run a metal through the FEEP cycle. Refine your catch into thrust.',
           skillId: 'manage_forge',
           triggerEvent: 'FORGE_TOGGLE',
           title: 'THE FORGE',
-          body: 'Press 5 to open the Forge and convert salvage into FEEP propellant.',
+          body: 'Press F to open the Forge and convert salvage into FEEP propellant.',
         },
       ],
 
-      // ── Chapter 7 — Inclination Tax: trawl + plane-change ΔV (SSO 98°) ──
+      // ── Chapter 7 — Inclination Tax: plane-change ΔV, clear a whole cluster (SSO 98°) ──
       7: [
         {
           id: 'ch7_intro',
           type: 'narrative',
           source: 'HOUSTON',
-          text: 'Sun-synch orbit, 98° retrograde. Plane changes up here are brutally expensive — every degree of inclination costs ΔV you don\'t get back. Sweep efficiently: net a whole string in one pass.',
+          text: 'Sun-synch orbit, 98° retrograde. Plane changes up here are brutally expensive. Every degree of inclination costs ΔV you don\'t get back. So work one cluster at a time: clear it out before you move planes.',
         },
         {
-          id: 'ch7_trawl',
+          id: 'ch7_cluster',
           type: 'interactive',
           source: 'HOUSTON',
-          text: 'Line a daughter along a debris string and trawl (Shift+G) — drag the net through the cluster instead of paying to re-plan each grab.',
-          skillId: 'collect_trawl',
-          triggerEvent: 'TRAWL_START',
-          title: 'TRAWL SWEEP',
-          body: 'Press Shift+G to trawl a daughter\'s net through a string of debris.',
+          text: 'Open the Debris Map (M) and pick this cluster. Then target (T), autopilot (A), and net it piece by piece until it\'s clear — cheaper than re-planning every grab.',
+          skillId: 'strategic_map',
+          triggerEvent: 'DEBRIS_MAP_CLUSTER_SELECTED',
+          title: 'WORK THE CLUSTER',
+          body: 'Press M to open the Debris Map and select a cluster, then clear it with Target (T) and Autopilot (A).',
         },
       ],
 
@@ -2813,13 +2818,13 @@ export const Constants = {
           id: 'ch8_intro',
           type: 'narrative',
           source: 'HOUSTON',
-          text: 'LEO-Mid now, 540 km — and Hubble shares this band. She\'s a working observatory, not salvage: the daughter will refuse to launch on her, or on any crewed or active asset. Identify before you commit.',
+          text: 'LEO-Mid now, 540 km. And Hubble shares this band. She\'s a working observatory, not salvage: the daughter will refuse to launch on her, or on any crewed or active asset. Identify before you commit.',
         },
         {
           id: 'ch8_discipline',
           type: 'narrative',
           source: 'HOUSTON',
-          text: 'No new gear this stretch — just discipline. Trawl the dead stuff, plan your transfers on the map, and confirm every target before you launch. The treaty guard is your backstop, not your plan.',
+          text: 'No new gear this stretch. Just discipline. Clear the dead stuff, plan your transfers on the map, and confirm every target before you launch. The treaty guard is your backstop, not your plan.',
         },
       ],
 
@@ -2833,7 +2838,7 @@ export const Constants = {
           id: 'ch9_radial',
           type: 'interactive',
           source: 'HOUSTON',
-          text: 'Field\'s getting thick — two daughters beat one. Run both daughters: [1]/[2] deploy and switch, [1-4] to pilot, [Shift+R] recalls the whole fleet. You\'ll need the throughput.',
+          text: 'Field\'s getting thick. Two daughters beat one. Run both daughters: [1]/[2] deploy and switch, [1-4] to pilot, [Shift+R] recalls the whole fleet. You\'ll need the throughput.',
           skillId: 'radial_menu',
           triggerEvent: 'ARM_DEPLOYED',
           title: 'DUAL-DAUGHTER COMMAND',
@@ -2849,13 +2854,13 @@ export const Constants = {
           id: 'ch10_intro',
           type: 'narrative',
           source: 'HOUSTON',
-          text: 'You\'re climbing toward MEO — 19,000 km, GPS country — which means crossing the Van Allen belts. Charged-particle flux up here browns out sensors and trips safe-mode. Time your transits through the gaps.',
+          text: 'You\'re climbing toward MEO. 19,000 km, GPS country. Which means crossing the Van Allen belts. Charged-particle flux up here browns out sensors and trips safe-mode. Time your transits through the gaps.',
         },
         {
           id: 'ch10_saa',
           type: 'narrative',
           source: 'HOUSTON',
-          text: 'Watch the South Atlantic Anomaly — the belt dips low there and dose spikes. Run both daughters through the clean windows together; don\'t get caught reeling mid-belt.',
+          text: 'Watch the South Atlantic Anomaly. The belt dips low there and dose spikes. Run both daughters through the clean windows together; don\'t get caught reeling mid-belt.',
         },
       ],
 
@@ -2867,13 +2872,13 @@ export const Constants = {
           id: 'ch11_intro',
           type: 'narrative',
           source: 'HASSAN',
-          text: 'Cowboy, this is Hassan at ISTRAC, Bangalore — I\'ll be your conn for the GEO leg. There\'s a graveyard contract on Thaicom 4: a dead three-tonne comms bird at 35,786 km. Getting there is a patience game.',
+          text: 'Cowboy, this is Hassan at ISTRAC, Bangalore. I\'ll be your conn for the GEO leg. There\'s a graveyard contract on Thaicom 4: a dead three-tonne comms bird at 35,786 km. Getting there is a patience game.',
         },
         {
           id: 'ch11_hohmann',
           type: 'interactive',
           source: 'HASSAN',
-          text: 'GEO is a long Hohmann climb — half an orbit of coasting. Pick the cluster and let the transfer window open before you commit; burn early and you\'ll arrive where the target isn\'t.',
+          text: 'GEO is a long Hohmann climb. Half an orbit of coasting. Pick the cluster and let the transfer window open before you commit; burn early and you\'ll arrive where the target isn\'t.',
           skillId: 'orbital_hohmann',
           triggerEvent: 'CLUSTER_WINDOW_OPEN',
           title: 'HOHMANN WINDOW',
@@ -2883,7 +2888,7 @@ export const Constants = {
           id: 'ch11_mpd',
           type: 'narrative',
           source: 'HASSAN',
-          text: 'For a climb this big you\'ll want the MPD thruster — high thrust, thirsty for power. First launch is yours, Cowboy. Welcome to the high country.',
+          text: 'For a climb this big you\'ll want the MPD thruster. High thrust, thirsty for power. First launch is yours, Cowboy. Welcome to the high country.',
         },
       ],
     },
@@ -3085,22 +3090,22 @@ export const Constants = {
     {
       state: 'STATION_KEEP', idleS: 20, when: 'noNetInFlightHasNets',
       hintId: 'sk_idle_fire_or_pilot', title: 'Daughter holding standoff',
-      text: 'She is holding station on the target — press N to launch the net (or 1-4 to pilot her).',
+      text: 'She is holding station on the target. Press N to launch the net (or 1-4 to pilot her).',
       icon: '🎯',
     },
     {
       state: 'STATION_KEEP', idleS: 6, when: 'outOfNets',
       hintId: 'sk_out_of_nets', title: 'Out of nets',
-      text: 'No nets left in the magazine — press R to recall her, then restock at the shop (B).',
+      text: 'No nets left in the magazine. Press R to reel her in, then restock at the shop (B).',
       icon: '📦',
     },
   ],
   // ARM_PILOT idle hint is mode-based (not an FSM state), handled directly by the
-  // advisor against InputManager's WASD mode.
+  // advisor against InputManager's pilot mode.
   ARM_PILOT_IDLE: {
     idleS: 45, hintId: 'arm_pilot_return',
     title: 'Piloting a daughter', icon: '🕹',
-    text: 'Press 7 to return to the mothership (or Esc to hand back control).',
+    text: 'Press her number again (1-4), Esc, or V to back out to Command view.',
   },
 
   STATION_KEEP: {
@@ -3401,14 +3406,14 @@ export function trlToLabel(trl, C) {
  * UX-11 #10: player-facing "Tech Level" presentation strings.
  * The internal data keys stay TRL (Constants.TRL, entry.trl) — only the
  * vocabulary shown to the player changes. Badge: "Tech Lvl n"; full label:
- * "Tech Level n — <tier word>". Apply in BOTH CodexViewerUI and ShopScreen
+ * "Tech Level n: <tier word>". Apply in BOTH CodexViewerUI and ShopScreen
  * so "TRL" never survives anywhere player-facing.
  * @param {number} trl
  * @param {object} [C=Constants.TRL]
- * @returns {string} e.g. "Tech Level 9 — Flight-proven"
+ * @returns {string} e.g. "Tech Level 9: Flight-proven"
  */
 export function trlToTechLevelLabel(trl, C) {
-  return `Tech Level ${trl} — ${trlToLabel(trl, C)}`;
+  return `Tech Level ${trl}: ${trlToLabel(trl, C)}`;
 }
 
 /**

@@ -164,7 +164,7 @@ export class EnvironmentSystem {
       this._unsubs.push(eb.on(Events.GAME_RESET, () => this._reset()));
     }
 
-    console.log('[EnvironmentSystem] Initialized — 5 hazard effects active');
+    console.log('[EnvironmentSystem] Initialized. 5 hazard effects active');
   }
 
   /**
@@ -340,7 +340,7 @@ export class EnvironmentSystem {
     // First entry warning
     if (!this._aoFirstWarned) {
       this._aoFirstWarned = true;
-      this._houston('Caution — atomic oxygen concentration increasing at this altitude. Equipment degradation possible.', 'warning');
+      this._houston('Caution. Atomic oxygen concentration increasing at this altitude. Equipment degradation possible.', 'warning');
     }
 
     this._aoTimer += dt;
@@ -468,7 +468,7 @@ export class EnvironmentSystem {
         this._safeMode = true;
         if (this._player) this._player.safeMode = true;
 
-        this._houston('WARNING — Multiple subsystem failures. Entering safe mode. Repair critical systems.', 'critical');
+        this._houston('WARNING. Multiple subsystem failures. Entering safe mode. Repair critical systems.', 'critical');
         this._emit(Events.SAFE_MODE_ENTERED, { subsystemsBelowThreshold: belowCritical });
         this._emit(Events.ENVIRONMENT_EFFECT, { type: 'safe_mode', entering: true, subsystems: belowCritical });
       }

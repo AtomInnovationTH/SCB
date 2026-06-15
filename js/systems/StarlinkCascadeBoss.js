@@ -80,7 +80,7 @@ export class StarlinkCascadeBoss {
         cleared: this._threats.clearedCount,
         total: this._threats.total,
       });
-      this._comms(`Cascade window closing — ${this._threats.clearedCount}/${this._threats.total} fragments swept. Move, Cowboy, this debris is breeding.`, 'warning');
+      this._comms(`Cascade window closing. ${this._threats.clearedCount}/${this._threats.total} fragments swept. Move, Cowboy, this debris is breeding.`, 'warning');
     }
 
     if (this._windowRemainingS <= 0) {
@@ -151,7 +151,7 @@ export class StarlinkCascadeBoss {
       threatIds: [...this._threats.threats],
       windowMin: cfg.WINDOW_MIN || 5,
     });
-    this._comms(`Starlink bird just fragmented — ${this._threats.total} pieces tumbling through the shell, and they'll seed a Kessler cascade if they spread. Sweep them inside ${cfg.WINDOW_MIN || 5} minutes.`, 'critical');
+    this._comms(`Starlink bird just fragmented. ${this._threats.total} pieces tumbling through the shell, and they'll seed a Kessler cascade if they spread. Sweep them inside ${cfg.WINDOW_MIN || 5} minutes.`, 'critical');
   }
 
   /** @private */
@@ -175,15 +175,15 @@ export class StarlinkCascadeBoss {
         reason: 'Starlink cascade contained',
       });
       awardElevatorMass(this._eventBus, this._shop, this._scoring, cfg.CONTAIN_BONUS_KG || 300);
-      this._comms('Cloud contained — cascade averted. That shell stays usable because of you, Cowboy.', 'info');
+      this._comms('Cloud contained. Cascade averted. That shell stays usable because of you, Cowboy.', 'info');
     } else if (outcome === 'partial') {
       this._eventBus.emit(Events.SCORING_AWARD, {
         points: cfg.PARTIAL_CREDITS || 250,
         reason: 'Starlink cloud thinned',
       });
-      this._comms('Window\'s closed. You thinned the cloud but some pieces got away — tracking flags elevated conjunction risk in the shell.', 'warning');
+      this._comms('Window\'s closed. You thinned the cloud but some pieces got away. Tracking flags elevated conjunction risk in the shell.', 'warning');
     } else { // cascade
-      this._comms('Too many got past us — the fragments are colliding and breeding. The shell is degrading. Log it; we learn and we keep flying.', 'warning');
+      this._comms('Too many got past us. The fragments are colliding and breeding. The shell is degrading. Log it; we learn and we keep flying.', 'warning');
     }
 
     this._eventBus.emit(Events.STARLINK_BOSS_RESOLVED, { outcome, cleared, total });

@@ -111,7 +111,7 @@ export class DespinLaser {
       this._wasFiring = true;
       eventBus.emit(Events.ABLATION_START, { armIndex: -1, targetId: target.id ?? null });
       eventBus.emit(Events.COMMS_MESSAGE, {
-        source: 'MOTHER', text: 'De-spin laser firing — bleeding target tumble.',
+        source: 'MOTHER', text: 'De-spin laser firing. Bleeding target tumble.',
         channel: 'CMD', priority: 'info',
       });
     }
@@ -129,7 +129,7 @@ export class DespinLaser {
       const tumbleDeg = after * 180 / Math.PI;
       eventBus.emit(Events.DESPIN_IN_SPEC, { targetId: target.id ?? null, tumbleDeg });
       eventBus.emit(Events.COMMS_MESSAGE, {
-        source: 'MOTHER', text: 'Tumble in spec — net it.',
+        source: 'MOTHER', text: 'Tumble in spec. Net it.',
         channel: 'CMD', priority: 'success',
       });
     }

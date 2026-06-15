@@ -26,21 +26,21 @@ export const SENSOR_TIERS = {
     rangeKm: 10,
     scanRate: 1.0,
     dataFields: ['type', 'size'],
-    description: 'Basic radar — type and size classification',
+    description: 'Basic radar. Type and size classification',
   },
   enhanced: {
     range: 0.5,          // 50 km
     rangeKm: 50,
     scanRate: 2.0,
     dataFields: ['type', 'size', 'mass', 'material', 'tumbleRate'],
-    description: 'Enhanced sensors — mass, material, tumble data',
+    description: 'Enhanced sensors. Mass, material, tumble data',
   },
   advanced: {
     range: 1.0,          // 100 km
     rangeKm: 100,
     scanRate: 4.0,
     dataFields: ['type', 'size', 'mass', 'material', 'tumbleRate', 'brittleness', 'orbit'],
-    description: 'Advanced suite — full orbital & structural analysis',
+    description: 'Advanced suite. Full orbital & structural analysis',
   },
 };
 
@@ -379,7 +379,7 @@ export class SensorSystem {
       sender: 'V5',
       text: type === 'quick'
         ? '📡 Quick scan initiated...'
-        : '📡 Wide aperture scan — stand by...',
+        : '📡 Wide aperture scan. Stand by...',
       priority: 'info',
     });
   }
@@ -461,19 +461,19 @@ export class SensorSystem {
     if (rewardKind === 'fresh') {
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'HOUSTON',
-        text: `Survey data received — fresh field logged. +$${reward}`,
+        text: `Survey data received. Fresh field logged. +$${reward}`,
         priority: 'info',
       });
     } else if (rewardKind === 'stale') {
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'HOUSTON',
-        text: 'Survey data for this field is already current — no new value. Move to a new field for fresh data.',
+        text: 'Survey data for this field is already current. No new value. Move to a new field for fresh data.',
         priority: 'info',
       });
     } else if (rewardKind === 'empty') {
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'HOUSTON',
-        text: 'Scan complete — no significant debris field in range. No survey data of value.',
+        text: 'Scan complete. No significant debris field in range. No survey data of value.',
         priority: 'info',
       });
     } else if (rewardKind === 'capped') {
@@ -548,7 +548,7 @@ export class SensorSystem {
     if (discoveries.length > 0) {
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'HOUSTON',
-        text: `Scan complete — ${discoveries.length} new contact${discoveries.length > 1 ? 's' : ''} found!`,
+        text: `Scan complete. ${discoveries.length} new contact${discoveries.length > 1 ? 's' : ''} found!`,
         priority: 'success',
       });
     }

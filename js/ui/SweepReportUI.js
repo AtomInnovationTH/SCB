@@ -240,7 +240,8 @@ export class SweepReportUI {
           color: #ffd700;
           text-shadow: 0 0 12px rgba(255,215,0,0.4);
           margin-bottom: 8px;
-        ">SWEEP REPORT</div>
+        ">${r.title || 'SWEEP REPORT'}</div>
+        ${r.clusterName ? `<div style="font-size:12px; color:#88aabb; letter-spacing:1px; margin-bottom:4px;">${r.clusterName}</div>` : ''}
         <div style="margin: 12px 0 8px 0;">${starsHTML}</div>
       </div>
 

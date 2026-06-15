@@ -61,16 +61,16 @@ export function formatMilestoneLine(track, threshold, current, target) {
   const pct = Math.round(threshold * 100);
   if (track === 'debris') {
     const remaining = Math.max(0, target - current);
-    if (threshold >= 0.9) return `${current} of ${target} cleared — ${remaining} to go. Bring it home.`;
-    if (threshold === 0.5) return `Halfway — ${current} of ${target} debris cleared.`;
-    return `Debris track at ${pct}% — ${current} of ${target} cleared.`;
+    if (threshold >= 0.9) return `${current} of ${target} cleared. ${remaining} to go. Bring it home.`;
+    if (threshold === 0.5) return `Halfway. ${current} of ${target} debris cleared.`;
+    return `Debris track at ${pct}%. ${current} of ${target} cleared.`;
   }
   // contract
   const cur = Math.round(current).toLocaleString();
   const tgt = Math.round(target).toLocaleString();
-  if (threshold >= 0.9) return `Contract at ${cur} kg of ${tgt} — one good cluster to go.`;
-  if (threshold === 0.5) return `Contract halfway — ${cur} kg of ${tgt} delivered.`;
-  return `Elevator contract at ${pct}% — ${cur} of ${tgt} kg.`;
+  if (threshold >= 0.9) return `Contract at ${cur} kg of ${tgt}. One good cluster to go.`;
+  if (threshold === 0.5) return `Contract halfway. ${cur} kg of ${tgt} delivered.`;
+  return `Elevator contract at ${pct}%. ${cur} of ${tgt} kg.`;
 }
 
 /**
@@ -157,20 +157,45 @@ export class MissionMilestones {
 
     // UX-11 #12.3: "what next" recap when leaving the shop.
     eventBus.on(Events.SHOP_DEPLOY, () => {
-      const clearTarget = Constants.WIN_DEBRIS_COUNT || 50;
-      const contractTarget =
-        (Constants.ELEVATOR_CONTRACT && Constants.ELEVATOR_CONTRACT.TARGET_MASS_KG) || 10000;
-      const cleared = this._getCleared ? this._getCleared() : this._cleared;
-      const contractKg = this._getContractKg ? this._getContractKg() : this._contractKg;
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        sender: 'HOUSTON',
-        text: formatObjectiveRecap(cleared || 0, clearTarget, contractKg || 0, contractTarget),
-        priority: 'info',
-        _postOnboarding: true,
+      this._postRecap();
+    });
+
+    // defer-trawl: clearing a cluster is a natural "chunk of work finished"
+    // beat — restate progress + the next step, and nudge toward the next
+    // cluster. The compact card / ceremony is owned by RewardSystem; this is
+    // the textual "what next" carryover (HINT_POSTED ticker + status recap).
+    eventBus.on(Events.CLUSTER_CLEARED, () => {
+      eventBus.emit(Events.HINT_POSTED, {
+        id: 'cluster-cleared-next',
+        text: 'Cluster clear. Press M for the Debris Map and pick your next cluster.',
+        keys: ['M'],
+        duration: 9000,
+        priority: 'normal',
       });
+      this._postRecap();
     });
 
     eventBus.on(Events.GAME_RESET, () => this.reset());
+  }
+
+  /**
+   * Emit the dual-objective "what next" recap (HOUSTON). Shared by SHOP_DEPLOY
+   * and CLUSTER_CLEARED so progress + next step is restated whenever a chunk of
+   * work finishes.
+   * @private
+   */
+  _postRecap() {
+    const clearTarget = Constants.WIN_DEBRIS_COUNT || 50;
+    const contractTarget =
+      (Constants.ELEVATOR_CONTRACT && Constants.ELEVATOR_CONTRACT.TARGET_MASS_KG) || 10000;
+    const cleared = this._getCleared ? this._getCleared() : this._cleared;
+    const contractKg = this._getContractKg ? this._getContractKg() : this._contractKg;
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      sender: 'HOUSTON',
+      text: formatObjectiveRecap(cleared || 0, clearTarget, contractKg || 0, contractTarget),
+      priority: 'info',
+      _postOnboarding: true,
+    });
   }
 
   reset() {

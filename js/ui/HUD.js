@@ -380,7 +380,7 @@ export class HUD {
             filter: saturate(1.0);
             transition: opacity 600ms ease-out, filter 600ms ease-out;
         }
-        /* ST-3.3 — Dormant panel corner-glyph affordance */
+        /* ST-3.3. Dormant panel corner-glyph affordance */
         [data-hud-group][data-activate-key] {
             position: relative;
         }
@@ -591,7 +591,7 @@ export class HUD {
       const next = data.nextPhase;
       if (next && dur > 0 && isFinite(dur)) {
         const nextLabel = next.replace(/_/g, ' ');
-        detailEl.textContent = `T+${t}s — ${nextLabel} in ${Math.round(dur)}s`;
+        detailEl.textContent = `T+${t}s. ${nextLabel} in ${Math.round(dur)}s`;
       } else {
         detailEl.textContent = `T+${t}s`;
       }
@@ -647,7 +647,7 @@ export class HUD {
       const debrisLabel = data.debrisType || 'debris';
       this.showScorePopup(
         data.mass || 0,
-        `${armLabel} — ${debrisLabel} secured`
+        `${armLabel}. ${debrisLabel} secured`
       );
     });
 
@@ -708,7 +708,7 @@ export class HUD {
 
     // PR 6 / P3.13: Audio unlock failure — one-time toast
     eventBus.on(Events.AUDIO_UNLOCK_FAILED, () => {
-      this.showNotification('Audio blocked — click anywhere to enable sound', 5000);
+      this.showNotification('Audio blocked. Click anywhere to enable sound', 5000);
     });
 
     // Phase 8: Salvage reveal loot popup
@@ -1454,9 +1454,9 @@ export class HUD {
     if (!panel) return;
 
     const tierColors = {
-      GREEN:  { border: '#00cc66', text: '#00ff88', label: 'GREEN — INFORMATIONAL' },
-      YELLOW: { border: '#ccaa00', text: '#ffdd44', label: 'YELLOW — CAUTION' },
-      RED:    { border: '#ff3333', text: '#ff5555', label: 'RED — CRITICAL' },
+      GREEN:  { border: '#00cc66', text: '#00ff88', label: 'GREEN. INFORMATIONAL' },
+      YELLOW: { border: '#ccaa00', text: '#ffdd44', label: 'YELLOW. CAUTION' },
+      RED:    { border: '#ff3333', text: '#ff5555', label: 'RED. CRITICAL' },
     };
     const tc = tierColors[data.tier] || tierColors.GREEN;
 
@@ -1626,7 +1626,7 @@ export class HUD {
 
     const typeLabel = (data.debrisType || 'debris').toUpperCase();
     popup.innerHTML = `
-      <div style="font-size:11px;color:#aa8844;letter-spacing:2px;margin-bottom:4px;">▸ SALVAGE — ${typeLabel} ◂</div>
+      <div style="font-size:11px;color:#aa8844;letter-spacing:2px;margin-bottom:4px;">▸ SALVAGE. ${typeLabel} ◂</div>
       <div>${metalHtml}</div>
       ${data.totalMass ? `<div style="font-size:10px;color:#887744;margin-top:4px;">Total: ${data.totalMass.toFixed(1)}kg recovered</div>` : ''}
     `;
@@ -1678,7 +1678,7 @@ export class HUD {
 
     // Also show as a queued warning
     const cause = data?.cause || 'overload';
-    this.showWarning(`⚠ TETHER SNAP — ${cause}`, 'critical');
+    this.showWarning(`⚠ TETHER SNAP. ${cause}`, 'critical');
   }
 
   /**
@@ -1712,7 +1712,7 @@ export class HUD {
     document.body.appendChild(text);
     timerManager.setTimeout(() => text.remove(), 2100, { owner: this });
 
-    this.showWarning('⚠ NET FAILED — debris slipped free', 'warning');
+    this.showWarning('⚠ NET FAILED. Debris slipped free', 'warning');
   }
 
   /**
@@ -1749,8 +1749,8 @@ export class HUD {
     const n = data?.fragmentCount || 1;
     this.showWarning(
       data?.mercyApplied
-        ? `⚠ FRAGMENTATION — ${n} new fragment${n > 1 ? 's' : ''} (first-time penalty waived)`
-        : `⚠ FRAGMENTATION — ${n} new fragment${n > 1 ? 's' : ''} tracked`,
+        ? `⚠ FRAGMENTATION. ${n} new fragment${n > 1 ? 's' : ''} (first-time penalty waived)`
+        : `⚠ FRAGMENTATION. ${n} new fragment${n > 1 ? 's' : ''} tracked`,
       'critical');
   }
 

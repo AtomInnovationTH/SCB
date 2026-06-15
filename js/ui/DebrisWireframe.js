@@ -1109,7 +1109,7 @@ export class DebrisWireframe {
         overflow: 'hidden',
         textOverflow: 'ellipsis',
       });
-      this._minLine.textContent = '— no target —';
+      this._minLine.textContent = '. No target. ';
       container.appendChild(this._minLine);
     } else {
       // Legacy fixed positioning (fallback) — top-right below NavSphere so it
@@ -1416,7 +1416,7 @@ export class DebrisWireframe {
     if (!this._minLine) return;
     const t = this._target;
     if (!t) {
-      this._minLine.textContent = this._showingADR ? '— V3 OCTOPUS (self) —' : '— no target —';
+      this._minLine.textContent = this._showingADR ? '. V3 OCTOPUS (self). ' : '. No target. ';
       return;
     }
     const ident = t.name || TYPE_LABELS[t.type] || t.type || 'TARGET';

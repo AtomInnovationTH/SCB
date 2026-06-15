@@ -423,7 +423,7 @@ export class DaughterWireframe {
     ctx.fillText(armLabel, WIRE_CX, 14);
     ctx.font      = "11px 'Courier New', monospace";
     ctx.fillStyle = TYPE_COL;
-    const stateLabel = this._arm ? `${this._arm.state || '—'}` : 'NO DAUGHTER PILOTED';
+    const stateLabel = this._arm ? `${this._arm.state || '. '}` : 'NO DAUGHTER PILOTED';
     ctx.fillText(stateLabel, WIRE_CX, 26);
 
     ctx.fillStyle = 'rgba(88,166,255,0.22)';
@@ -433,7 +433,7 @@ export class DaughterWireframe {
       ctx.font      = "10px 'Courier New', monospace";
       ctx.fillStyle = DIM_COL;
       ctx.textAlign = 'center';
-      ctx.fillText('— press 1–4 to pilot a daughter —', WIRE_CX, WIRE_CY + 20);
+      ctx.fillText('. Press 1–4 to pilot a daughter. ', WIRE_CX, WIRE_CY + 20);
       return;
     }
 

@@ -97,7 +97,7 @@ float snoise(vec3 v) {
   return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
 }
 
-// Sprint 2 / PR C — LOW_DETAIL define skips the 7-octave noise stack entirely.
+// Sprint 2 / PR C. LOW_DETAIL define skips the 7-octave noise stack entirely.
 // At LOW tier the base 8k/16k AVIF texture is detailed enough on its own;
 // the procedural noise was an ~7-octave/fragment burn that ate 2–4 ms on iGPUs.
 #ifndef LOW_DETAIL
@@ -112,7 +112,7 @@ float terrainDetail(vec3 p) {
   return n;
 }
 
-// Ultra-high-frequency detail tiling (octaves 6–7) — nadir-only surface richness
+// Ultra-high-frequency detail tiling (octaves 6–7). Nadir-only surface richness
 // Simulates tiled detail texture at very close viewing distances
 float detailTiling(vec3 p) {
   float n = 0.0;
@@ -130,7 +130,7 @@ void main() {
   vec3 dayColor = texture2D(uDayTexture, vUv).rgb;
   vec3 nightColor = texture2D(uNightTexture, vUv).rgb;
 
-  // Boost night lights — they're dim in the source texture
+  // Boost night lights. They're dim in the source texture
   nightColor *= 2.5;
   // Warm tint for city lights
   nightColor *= vec3(1.0, 0.85, 0.6);
@@ -141,7 +141,7 @@ void main() {
   // Terminator: smooth transition over ~6 degrees
   float dayFactor = smoothstep(-0.1, 0.15, NdotL);
 
-  // Specular for oceans — ratio-based detection for robust ocean masking
+  // Specular for oceans. Ratio-based detection for robust ocean masking
   vec3 viewDir = normalize(cameraPosition - vWorldPosition);
   vec3 halfVec = normalize(uSunDirection + viewDir);
   float specular = pow(max(dot(normal, halfVec), 0.0), 64.0);
@@ -151,11 +151,11 @@ void main() {
   float darkness = 1.0 - (dayColor.r + dayColor.g + dayColor.b) / 3.0;
   float oceanMask = smoothstep(0.35, 0.55, blueRatio) * smoothstep(0.3, 0.7, darkness);
 
-  // Sprint 2 / PR C — terrain detail stack is gated by LOW_DETAIL.
+  // Sprint 2 / PR C. Terrain detail stack is gated by LOW_DETAIL.
   // viewDist is still needed below for other effects, so it's defined either way.
   float viewDist = length(cameraPosition - vWorldPosition);
 #ifndef LOW_DETAIL
-  // Sprint 3 GPU profiling — Phase C.4 (2026-05-23): early-out the entire
+  // Sprint 3 GPU profiling. Phase C.4 (2026-05-23): early-out the entire
   // procedural-noise stack when this fragment is on the dark hemisphere.
   // The detail contributions are multiplied into dayColor, which is then
   // attenuated by max(0.02, dayFactor) in litDay below; with dayFactor
@@ -164,11 +164,11 @@ void main() {
   // is a zero-visual-change pure-savings transform.
   //
   // Threshold (dayFactor > 0.05) matches the nightFactor smoothstep
-  // crossover at NdotL ~= 0.05 — i.e. the terminator midpoint. Fragments
+  // crossover at NdotL ~= 0.05. I.e. the terminator midpoint. Fragments
   // inside the smoothstep transition still run the noise (so the visible
   // band of detail at the dawn/dusk terminator is unchanged).
   if (dayFactor > 0.05) {
-    // Procedural terrain detail — adds fine structure at close viewing distances
+    // Procedural terrain detail. Adds fine structure at close viewing distances
     // Uses world-space position for consistent detail as camera moves
     float detail = terrainDetail(normalize(vPosition));
 
@@ -176,12 +176,12 @@ void main() {
     // At far distances, the base texture is sufficient
     float detailFade = smoothstep(0.8, 0.2, viewDist / 3.0); // fade in within ~300km (closer detail visibility)
 
-    // Apply as subtle luminance modulation — doesn't change color, just adds texture
+    // Apply as subtle luminance modulation. Doesn't change color, just adds texture
     // Reduce effect over ocean (water shouldn't have terrain noise)
     float detailStrength = 0.15 * detailFade * (1.0 - oceanMask * 0.7);
     dayColor *= 1.0 + detail * detailStrength;
 
-    // Ultra-high-frequency detail tiling — visible only at very close range (nadir)
+    // Ultra-high-frequency detail tiling. Visible only at very close range (nadir)
     float tileNoise = detailTiling(normalize(vPosition));
     float tileFade = smoothstep(2.0, 0.5, viewDist);  // tighter fade than base detail
     float tileStrength = 0.04 * tileFade * (1.0 - oceanMask * 0.7);
@@ -189,7 +189,7 @@ void main() {
   }
 #endif
 
-  // Fresnel-enhanced ocean reflection — grazing angles more reflective
+  // Fresnel-enhanced ocean reflection. Grazing angles more reflective
   float oceanFresnel = pow(1.0 - max(dot(normal, viewDir), 0.0), 3.0);
   float oceanSpec = oceanMask * (specular + oceanFresnel * 0.3) * dayFactor * 0.5;
 
@@ -254,7 +254,7 @@ varying vec3 vWorldPosition;
 void main() {
   vec3 normal = normalize(vNormal);
 
-  // Sample cloud texture — use brightness as alpha
+  // Sample cloud texture. Use brightness as alpha
   vec3 cloudSample = texture2D(uCloudTexture, vUv).rgb;
   float cloudAlpha = (cloudSample.r + cloudSample.g + cloudSample.b) / 3.0;
 
@@ -554,7 +554,7 @@ function getTextureQuality() {
   const quality = selectLOD(maxTextureSize, deviceMemory, isAppleGPU);
   // PR 5 / P2.10: gate verbose LOD log behind DEBUG flag (?debug=1).
   if (Constants && Constants.DEBUG && Constants.DEBUG.LOG_RENDERER_DIAGNOSTICS) {
-    console.log(`[Earth] LOD selected: ${quality || '4k (base)'} — maxTextureSize=${maxTextureSize}`);
+    console.log(`[Earth] LOD selected: ${quality || '4k (base)'}. MaxTextureSize=${maxTextureSize}`);
   }
   return quality;
 }

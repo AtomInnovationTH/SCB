@@ -56,7 +56,7 @@ export function checkActiveSatArming(target, catalogLoader, eventBusRef) {
       source: 'HOUSTON',
       channel: 'HOUSTON',
       priority: 'HIGH',
-      text: `Negative, Cowboy — ${name} is active. Stand down.`,
+      text: `Negative, Cowboy. ${name} is active. Stand down.`,
     });
   } catch (_) { /* best-effort */ }
 

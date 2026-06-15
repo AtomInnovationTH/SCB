@@ -525,7 +525,14 @@ export const Events = {
   CA_SUPPRESSED:            'ca:suppressed',             // { debrisId, reason }
 
   // === DEBRIS MAP (ST-4.A) ===
-  DEBRIS_MAP_CLUSTER_SELECTED: 'debrisMap:clusterSelected',  // { clusterId }
+  DEBRIS_MAP_CLUSTER_SELECTED: 'debrisMap:clusterSelected',  // { clusterId, name?, count? }
+
+  // === CLUSTER CLEARING (defer-trawl / guided-loop) ===
+  /** The last alive member of an orbital cluster bucket was removed via active
+   *  capture/deorbit. Anchors the "field cleared" ceremony + bonus onto the
+   *  guided loop (replaces TRAWL_SWEEP_COMPLETE in the core flow).
+   *  Payload: { clusterId: string, name: string, count: number } */
+  CLUSTER_CLEARED:     'cluster:cleared',
 
   // === TRAIL SYSTEM (ST-5.2) ===
   PLAYER_TRAIL_SAMPLE:    'player:trailSample',      // { pos: {x,y,z}, vel: {x,y,z} } — scene units
