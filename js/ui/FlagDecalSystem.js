@@ -77,9 +77,12 @@ export function hasFlag(countryCode) {
 }
 
 /**
- * Item 12 (2026-06-12): flag eligibility by debris CLASS, not just country.
- * Only satellites and rocket bodies large enough to plausibly carry national
- * markings get a decal — fragments and small junk never do.
+ * Item 12 (2026-06-12): flag eligibility by SIZE, not by catalog label.
+ * Any object at least FLAG_MIN_SIZE_M wide carries a national marking — this
+ * covers rocket bodies, defunct sats, AND large derelict satellites the catalog
+ * happens to tag "debris" (→ internal `fragment`), e.g. COSMOS 1408 / IRIDIUM 33.
+ * Small operational debris (lens caps, clamps) never qualifies; genuine
+ * fragments are always sub-threshold so they are excluded by size automatically.
  * Pure + Node-safe (unit-tested headless).
  *
  * @param {{type?: string, sizeMeter?: number}|null} debris
@@ -87,8 +90,7 @@ export function hasFlag(countryCode) {
  */
 export function isFlagEligible(debris) {
   if (!debris) return false;
-  const t = debris.type;
-  if (t !== 'rocketBody' && t !== 'defunctSat') return false;
+  if (debris.type === 'missionDebris') return false; // small operational junk
   const C = (typeof Constants !== 'undefined' && Constants.DEBRIS_VISUAL) || {};
   const minM = C.FLAG_MIN_SIZE_M ?? 2;
   return (debris.sizeMeter || 0) >= minM;

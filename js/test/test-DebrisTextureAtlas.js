@@ -361,12 +361,25 @@ describe('FlagDecalSystem — isFlagEligible() type/size gating (Item 12)', () =
     assert.equal(isFlagEligible({ type: 'defunctSat', sizeMeter: 3 }), true);
   });
 
-  it('fragments are NEVER eligible, regardless of size', () => {
-    assert.equal(isFlagEligible({ type: 'fragment', sizeMeter: 10 }), false);
+  it('large objects tagged "fragment" (mislabeled whole sats) ARE eligible', () => {
+    // Catalog "type":"debris" maps to internal `fragment`; some are whole large
+    // derelict satellites (e.g. COSMOS 1408). Size — not the label — decides.
+    assert.equal(isFlagEligible({ type: 'fragment', sizeMeter: 6 }), true);
   });
 
-  it('mission debris is not eligible', () => {
+  it('small fragments are not eligible (below size threshold)', () => {
+    assert.equal(isFlagEligible({ type: 'fragment', sizeMeter: 1 }), false);
+  });
+
+  it('mission debris is never eligible, regardless of size', () => {
     assert.equal(isFlagEligible({ type: 'missionDebris', sizeMeter: 10 }), false);
+  });
+
+  it('named catalog derelict satellites flag correctly', () => {
+    // FENGYUN-1C: catalog "debris" → internal fragment, 2.8 m — eligible.
+    assert.equal(isFlagEligible({ type: 'fragment', sizeMeter: 2.8 }), true);
+    // IRIDIUM 33: 3.1 m — eligible.
+    assert.equal(isFlagEligible({ type: 'fragment', sizeMeter: 3.1 }), true);
   });
 
   it('eligible types below FLAG_MIN_SIZE_M are excluded', () => {

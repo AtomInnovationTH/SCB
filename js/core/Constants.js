@@ -2619,7 +2619,10 @@ export const Constants = {
     DEFAULT_MODE: 'textured',   // 'textured' | 'wireframe'
 
     // Item 12 (2026-06-12): flag decal gating + physical sizing.
-    // Flags only on rocket bodies / defunct sats at least this wide:
+    // Flags are SIZE-gated: any object at least this wide carries a national
+    // marking (rocket bodies, defunct sats, and large derelict satellites the
+    // catalog tags "debris"). Small operational debris (missionDebris) and
+    // sub-threshold fragments never get flags:
     FLAG_MIN_SIZE_M: 2,         // m — fragments/small junk never get flags
     // Decal width = clamp(sizeMeter × FACTOR, MIN..MAX) metres (was a fixed
     // 0.7-local-unit plane that read tiny on an 8 m rocket body):
