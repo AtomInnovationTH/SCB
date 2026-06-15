@@ -13,6 +13,7 @@ import { Constants } from '../core/Constants.js';
 import { powerDistribution, PowerBuses } from './PowerDistribution.js';
 import timerManager from './TimerManager.js';
 import { despinLaser } from './DespinLaser.js';
+import { DEV_ACTIONS, resolveNextDevAction } from './DevSequenceAdvancer.js';
 
 export class InputManager {
   constructor() {
@@ -973,38 +974,7 @@ export class InputManager {
           // (1) DAUGHTER net/capture — the single capture verb (hotkey cleanup
           // 2026-06-13: F's old SK dispatch + TRANSIT net roles folded into N).
           e.preventDefault();
-          const skArmN = d.cameraSystem.getPilotedArm?.();
-          if (skArmN && skArmN.state === Constants.ARM_STATES.STATION_KEEP) {
-            // Multi-tool dispatch (NET → net capture, MAGNET/GRIPPER/PAD →
-            // respective grapple) when DAUGHTER_MULTITOOL is on; else plain net.
-            if (Constants.isFeatureEnabled('DAUGHTER_MULTITOOL')
-                && typeof skArmN.dispatchSelectedTool === 'function') {
-              skArmN.dispatchSelectedTool();
-            } else {
-              skArmN.captureFromStationKeep();
-            }
-            d.audioSystem?.playClick();
-            break;
-          }
-          const pilotArmN = d.cameraSystem.getPilotedArm?.();
-          if (pilotArmN && (pilotArmN.state === 'TRANSIT' || pilotArmN.state === 'APPROACH')) {
-            const captureTarget = pilotArmN.target
-              || this._findNearestDebrisToArm(pilotArmN, d.debrisField);
-            if (captureTarget) {
-              if (!pilotArmN.target) pilotArmN.target = captureTarget;
-              if (!pilotArmN.manualNetDeploy()) {
-                d.audioSystem?.playClick();
-              }
-            } else {
-              d.audioSystem?.playClick();
-              eventBus.emit(Events.COMMS_MESSAGE, {
-                text: 'No debris in capture range',
-                priority: 'warning',
-              });
-            }
-          } else if (pilotArmN) {
-            d.audioSystem?.playClick();
-          }
+          this.captureWithPilotedArm();
           break;
         }
         // (2) MOTHER lasso fire. The Space alias was removed in the 2026-06-13
@@ -1078,20 +1048,38 @@ export class InputManager {
       // F5 removed (UX-11 #8, 2026-06-11): FEEP fuel cycle now lives on Digit6
       // (number row, next to the Forge on 5). No alias retained.
 
-      // Space — OnboardingDirector "smart default" ONLY (hotkey cleanup
-      // 2026-06-13). Delegation 2 (2026-05-31): in ORBITAL_VIEW the
-      // OnboardingDirector gets first crack at intercepting Space — pressing
-      // Space dispatches the active hint's primary key. The lasso-fire alias
-      // (mother) and net-deploy alias (ARM_PILOT) were REMOVED — N is the
-      // single net/capture verb now, so Space no longer fires the net itself.
-      case 'Space':
-        if (isGameplay && currentState === GameStates.ORBITAL_VIEW
-            && d.onboardingDirector && typeof d.onboardingDirector.pressActiveHint === 'function'
+      // Space — "do the next thing" rapid-advance (2026-06-15).
+      // Onboarding still owns Space FIRST: while a beat is live the
+      // OnboardingDirector smart-default dispatches that beat's primary key.
+      // When it declines (post-onboarding, or no live beat), Space synthesizes
+      // the next step of the core loop — Scan → Target → Autopilot →
+      // Daughter launch → Capture — one step per press, so anyone can mash
+      // Space to rip through a full capture cycle (daughter-first, net fallback).
+      case 'Space': {
+        if (!isGameplay) break;
+        // Restrict to the loop-relevant states (launch-ceremony Space-skip is
+        // handled earlier and returns before this switch).
+        const spaceAllowed =
+          currentState === GameStates.ORBITAL_VIEW ||
+          currentState === GameStates.APPROACH ||
+          this.armPilotMode;
+        if (!spaceAllowed) break;
+
+        // (1) Onboarding smart-default gets first crack.
+        if (d.onboardingDirector && typeof d.onboardingDirector.pressActiveHint === 'function'
             && d.onboardingDirector.pressActiveHint(this)) {
-          // Smart default consumed the press.
+          e.preventDefault();
+          break;
+        }
+
+        // (2) Otherwise advance the dev sequence.
+        const action = resolveNextDevAction(this._buildDevSnapshot());
+        if (action) {
+          this._dispatchDevAction(action);
           e.preventDefault();
         }
         break;
+      }
 
       // (Ctrl+D debug overlay merged into KeyD case above — Phase 1A)
 
@@ -2074,5 +2062,167 @@ export class InputManager {
     const lockedId = d.targetSelector?.getActiveTarget?.()?.id ?? null;
     d.cameraSystem.cycleView(lockedId);
     d.audioSystem?.playClick?.();
+  }
+
+  /**
+   * Perform the daughter capture action with the currently-piloted arm — the
+   * single implementation shared by the `KeyN` ARM_PILOT branch and the Space
+   * rapid-advance resolver (2026-06-15 dedup, mirrors `fireLasso()`):
+   *   STATION_KEEP        → multi-tool dispatch / net capture
+   *   TRANSIT / APPROACH  → manual net deploy at the (or nearest) target
+   * @returns {boolean} true if a capture action was dispatched.
+   */
+  captureWithPilotedArm() {
+    const d = this._deps;
+    if (!d || !this.armPilotMode || !d.cameraSystem) return false;
+    const arm = d.cameraSystem.getPilotedArm?.();
+    if (!arm) return false;
+
+    if (arm.state === Constants.ARM_STATES.STATION_KEEP) {
+      // Multi-tool dispatch (NET → net capture, MAGNET/GRIPPER/PAD → respective
+      // grapple) when DAUGHTER_MULTITOOL is on; else plain net.
+      if (Constants.isFeatureEnabled('DAUGHTER_MULTITOOL')
+          && typeof arm.dispatchSelectedTool === 'function') {
+        arm.dispatchSelectedTool();
+      } else {
+        arm.captureFromStationKeep();
+      }
+      d.audioSystem?.playClick();
+      return true;
+    }
+
+    if (arm.state === 'TRANSIT' || arm.state === 'APPROACH') {
+      const captureTarget = arm.target
+        || this._findNearestDebrisToArm(arm, d.debrisField);
+      if (captureTarget) {
+        if (!arm.target) arm.target = captureTarget;
+        if (!arm.manualNetDeploy()) {
+          d.audioSystem?.playClick();
+        }
+        return true;
+      }
+      d.audioSystem?.playClick();
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        text: 'No debris in capture range',
+        priority: 'warning',
+      });
+      return false;
+    }
+
+    d.audioSystem?.playClick();
+    return false;
+  }
+
+  // ==========================================================================
+  // Space "do the next thing" rapid-advance (2026-06-15).
+  // ==========================================================================
+
+  /**
+   * Build a snapshot of live game state for {@link resolveNextDevAction}.
+   * Reads only the deps InputManager already holds; degrades gracefully when
+   * any subsystem is missing. Target distance is resolved via
+   * {@link _activeTargetDistanceM} (scene units → metres).
+   * @returns {import('./DevSequenceAdvancer.js').DevSnapshot}
+   * @private
+   */
+  _buildDevSnapshot() {
+    const d = this._deps || {};
+    const armPilotMode = !!this.armPilotMode;
+    const pilotedArmState = (armPilotMode && d.cameraSystem?.getPilotedArm?.())
+      ? d.cameraSystem.getPilotedArm().state : null;
+
+    const activeTarget = d.targetSelector?.getActiveTarget?.() || null;
+    const hasTarget = !!activeTarget;
+
+    let trackedContacts = 0;
+    try {
+      // NOTE (drift): this mirrors the contact/target queries in main.js's
+      // OnboardingDirector contextProvider (getDiscoveredCount(true) +
+      // getActiveTarget). If the "what counts as a contact" semantics change
+      // there, update both sites so the Space resolver and onboarding beat
+      // gates stay in agreement.
+      if (d.debrisField && typeof d.debrisField.getDiscoveredCount === 'function') {
+        trackedContacts = d.debrisField.getDiscoveredCount(true) || 0;
+      }
+    } catch (_e) { /* best-effort */ }
+
+    // In-range gate: live distance from the player to the active target.
+    let inCaptureRange = false;
+    if (hasTarget) {
+      const rangeM = Number.isFinite(Constants.LASSO_RANGE) ? Constants.LASSO_RANGE : 200;
+      const distM = this._activeTargetDistanceM(activeTarget);
+      inCaptureRange = Number.isFinite(distM) && distM <= rangeM;
+    }
+
+    // A docked, spring-charged, fuelled daughter is launchable — mirror the
+    // real deploy gate in ArmManager._findDockedArm (DOCKED && springCharged &&
+    // fuel > 5). A looser check would make Space dispatch DEPLOY while a docked
+    // daughter is still recharging, where deployDaughter() silently no-ops.
+    let canDeployDaughter = false;
+    if (!armPilotMode && d.armManager && Array.isArray(d.armManager.arms)) {
+      canDeployDaughter = d.armManager.arms.some(a =>
+        a && a.state === Constants.ARM_STATES.DOCKED && a.springCharged
+        && (a.fuel == null || a.fuel > 5));
+    }
+
+    const autopilotActive = !!(d.autopilotSystem && d.autopilotSystem.engaged);
+
+    return {
+      armPilotMode,
+      pilotedArmState,
+      hasTarget,
+      trackedContacts,
+      inCaptureRange,
+      canDeployDaughter,
+      autopilotActive,
+    };
+  }
+
+  /**
+   * Live distance (metres) from the player to a target debris, or null when it
+   * can't be resolved. Scene units are 100 km each (1 unit = 100 km), so the
+   * canonical conversion is scene-units / SCENE_SCALE → km, ×1000 → metres
+   * (matches DebrisField's `distanceKm = dist / SCENE_SCALE`).
+   * @param {object} target
+   * @returns {number|null}
+   * @private
+   */
+  _activeTargetDistanceM(target) {
+    const d = this._deps || {};
+    if (!target || !d.player || typeof d.player.getPosition !== 'function') return null;
+    let tgtPos = null;
+    const ts = d.targetSelector;
+    if (ts && typeof ts.getActiveTargetPosition === 'function') {
+      tgtPos = ts.getActiveTargetPosition();
+    }
+    if (!tgtPos) {
+      tgtPos = target._scenePosition || target.mesh?.position || null;
+    }
+    if (!tgtPos) return null;
+    const p = d.player.getPosition();
+    if (!p) return null;
+    const dx = p.x - tgtPos.x, dy = p.y - tgtPos.y, dz = p.z - tgtPos.z;
+    const distScene = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    const scale = Number.isFinite(Constants.SCENE_SCALE) && Constants.SCENE_SCALE > 0
+      ? Constants.SCENE_SCALE : 0.01;
+    return (distScene / scale) * 1000; // scene → km → metres
+  }
+
+  /**
+   * Dispatch the action id chosen by {@link resolveNextDevAction} to the
+   * matching InputManager helper.
+   * @param {string} action — a DEV_ACTIONS id
+   * @private
+   */
+  _dispatchDevAction(action) {
+    switch (action) {
+      case DEV_ACTIONS.SCAN:      this.fireScan(); break;
+      case DEV_ACTIONS.TARGET:    this.cycleTarget(); break;
+      case DEV_ACTIONS.AUTOPILOT: this.engageAutopilot(); break;
+      case DEV_ACTIONS.DEPLOY:    this.deployDaughter(); break;
+      case DEV_ACTIONS.NET:       this.fireLasso(); break;
+      case DEV_ACTIONS.CAPTURE:   this.captureWithPilotedArm(); break;
+      default: break;
+    }
   }
 }

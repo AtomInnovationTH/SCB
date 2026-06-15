@@ -34,6 +34,7 @@ const HOTKEY_GROUPS = [
     rows: [
       [['↑ ↓ ← →'], 'Rotate'],
       [['V'], 'View — fly / look around'],
+      [['␣'], 'Auto-advance — do the next step'],
       [['S'], 'Scan'],
       [['T'], 'Target debris'],
       [['A'], 'Autopilot to target'],

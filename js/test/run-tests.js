@@ -250,6 +250,7 @@ import './test-RotationLock.js';
 // Delegation 2 (2026-05-31) — Onboarding pipeline (Director + ticker + welcome field)
 import './test-OnboardingDirector.js';
 import './test-GuidanceHotkeyDrift.js';  // guidance ⇄ hotkey drift guard (2026-06-14 revamp)
+import './test-DevSequenceAdvancer.js';  // Space "do the next thing" rapid-advance resolver
 import './test-HintTicker.js';
 import './test-WelcomeField.js';
 
