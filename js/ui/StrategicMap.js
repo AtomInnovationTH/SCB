@@ -715,7 +715,11 @@ export class StrategicMap {
       const s = stations[i];
       const lat = s.lat || s.latitude || 0;
       const lon = s.lon || s.longitude || 0;
-      const pos = latLonToPosition(lat, lon, Constants.EARTH_RADIUS + 0.2);
+      // Mirror longitude so stations share the REAL world frame used by the
+      // debris dots (orbit-cartesian) and the command-view Earth texture.
+      // Without this the wireframe's geography is east-west flipped. Station
+      // pass windows are timer-based (SubsystemEvents), so position is cosmetic.
+      const pos = latLonToPosition(lat, -lon, Constants.EARTH_RADIUS + 0.2);
       positions[i * 3] = pos.x;
       positions[i * 3 + 1] = pos.y;
       positions[i * 3 + 2] = pos.z;

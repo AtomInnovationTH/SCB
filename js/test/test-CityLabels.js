@@ -13,6 +13,7 @@ import { readFileSync } from 'node:fs';
 import {
   parseCityList,
   isCityVisible,
+  limbFade,
   distanceFade,
   lodMaxTier,
   MAX_CITIES,
@@ -72,6 +73,24 @@ describe('CityLabels — far-hemisphere cull', () => {
     const city = { x: 0, y: 10, z: 0 };       // normal = +Y
     const cam = { x: 1000, y: 10, z: 0 };     // dir ≈ +X
     assert.equal(isCityVisible(city, center, cam), false);
+  });
+});
+
+describe('CityLabels — soft limb fade', () => {
+  const center = { x: 0, y: 0, z: 0 };
+
+  it('full opacity at the sub-camera point, zero on the far hemisphere', () => {
+    const cam = { x: 100, y: 0, z: 0 };
+    assert.equal(limbFade({ x: 10, y: 0, z: 0 }, center, cam), 1);   // facing camera
+    assert.equal(limbFade({ x: -10, y: 0, z: 0 }, center, cam), 0);  // far side
+  });
+
+  it('ramps smoothly (0..1) through the limb band', () => {
+    // City near the limb: normal almost perpendicular to the view direction,
+    // giving a small facing dot (~0.09) inside the [0.04, 0.16] fade band.
+    const cam = { x: 1000, y: 0, z: 0 };
+    const f = limbFade({ x: 1, y: 9.95, z: 0 }, center, cam);
+    assert.ok(f > 0 && f < 1, `expected partial fade, got ${f}`);
   });
 });
 

@@ -41,6 +41,14 @@ export const TIER_MAX = 3;
 /** Marker-dot diameter in CSS px (used to align the label to its surface point). */
 const DOT_PX = 8;
 
+// --- Screen-space declutter geometry (estimated label box, for collision) ---
+/** Per-character advance for the 12px Courier label text (incl. letter-spacing). */
+const CHAR_PX = 7.7;
+/** Fixed label-box width overhead: dot + gap + pill padding (CSS px). */
+const LABEL_FIXED_PX = 24;
+/** Estimated label-box height in CSS px (one text line + pill padding). */
+const LABEL_H_PX = 18;
+
 /** localStorage key for the persisted on/off preference. */
 const STORAGE_KEY = 'sc_city_labels_visible';
 
@@ -50,26 +58,15 @@ const _center = new THREE.Vector3();
 const _world = new THREE.Vector3();
 const _cam = new THREE.Vector3();
 const _proj = new THREE.Vector3();
-const _tmp = new THREE.Vector3();
-const _nadir = new THREE.Vector3();
-
-// Calibration aid: load with ?cityCal=1 to print the sub-satellite point and
-// the nearest label each ~2 s — lets us verify/lock the texture longitude
-// registration without guessing.
-const _cityCal = (typeof window !== 'undefined' && window.location &&
-  /[?&]cityCal=1/.test(window.location.search || ''));
-let _calLastMs = 0;
 
 /**
- * Longitude calibration offset (degrees) applied AFTER any mirroring. The
- * command-view textured Earth uses a default THREE.SphereGeometry (no mesh
- * rotation; shader samples raw UVs), so for a standard equirectangular day
- * texture the prime meridian (lon 0) faces +X and longitude increases EAST
- * toward -Z. `latLonToPosition` instead runs east toward +Z, so the command
- * view must MIRROR longitude (see `mirrorLon` in `attach`) with zero offset.
- * Tweak this only if labels are uniformly rotated off their continents.
+ * Declutter priority comparator: lower tier wins (major cities/landmarks kept
+ * first), then the label nearer the camera. Used to decide which label "owns"
+ * a screen region when several overlap.
  */
-export const TEXTURE_LON_OFFSET_DEG = 0;
+function _byPriority(a, b) {
+  return (a.tier - b.tier) || (a._dist - b._dist);
+}
 
 // ============================================================================
 // PURE HELPERS (Node-safe)
@@ -110,15 +107,13 @@ export function lodMaxTier(camDist, near, far) {
 }
 
 /**
- * Far-hemisphere cull: a city is visible when its surface normal points
- * toward the camera. Plain-object math (no THREE) for testability.
- * @param {{x,y,z}} cityWorldPos
- * @param {{x,y,z}} earthCenter
- * @param {{x,y,z}} camPos
- * @param {number} [threshold=0.05] — small positive bias hides limb labels
- * @returns {boolean}
+ * Cosine of the angle between a city's surface normal and the direction to the
+ * camera. ~1 at the sub-camera point, 0 at the geometric limb, <0 on the far
+ * hemisphere. Shared by `isCityVisible` and `limbFade`. Plain-object math.
+ * @param {{x,y,z}} cityWorldPos @param {{x,y,z}} earthCenter @param {{x,y,z}} camPos
+ * @returns {number}
  */
-export function isCityVisible(cityWorldPos, earthCenter, camPos, threshold = 0.05) {
+export function cityFacingDot(cityWorldPos, earthCenter, camPos) {
   const nx = cityWorldPos.x - earthCenter.x;
   const ny = cityWorldPos.y - earthCenter.y;
   const nz = cityWorldPos.z - earthCenter.z;
@@ -127,8 +122,36 @@ export function isCityVisible(cityWorldPos, earthCenter, camPos, threshold = 0.0
   const cy = camPos.y - cityWorldPos.y;
   const cz = camPos.z - cityWorldPos.z;
   const cLen = Math.sqrt(cx * cx + cy * cy + cz * cz) || 1;
-  const dot = (nx * cx + ny * cy + nz * cz) / (nLen * cLen);
-  return dot > threshold;
+  return (nx * cx + ny * cy + nz * cz) / (nLen * cLen);
+}
+
+/**
+ * Far-hemisphere cull: a city is visible when its surface normal points
+ * toward the camera.
+ * @param {{x,y,z}} cityWorldPos
+ * @param {{x,y,z}} earthCenter
+ * @param {{x,y,z}} camPos
+ * @param {number} [threshold=0.05] — small positive bias hides limb labels
+ * @returns {boolean}
+ */
+export function isCityVisible(cityWorldPos, earthCenter, camPos, threshold = 0.05) {
+  return cityFacingDot(cityWorldPos, earthCenter, camPos) > threshold;
+}
+
+/**
+ * Soft limb fade: instead of a hard cull at the horizon, ramp opacity from 0
+ * (at/over the limb) to 1 (a few degrees inside) using a smoothstep on the
+ * facing dot. Avoids labels popping in/out as the globe rotates under you.
+ * @param {{x,y,z}} cityWorldPos @param {{x,y,z}} earthCenter @param {{x,y,z}} camPos
+ * @param {number} [lo=0.04] @param {number} [hi=0.16] — fade band on the dot
+ * @returns {number} fade ∈ [0, 1] (0 = hidden beyond the limb)
+ */
+export function limbFade(cityWorldPos, earthCenter, camPos, lo = 0.04, hi = 0.16) {
+  const d = cityFacingDot(cityWorldPos, earthCenter, camPos);
+  if (d <= lo) return 0;
+  if (d >= hi) return 1;
+  const t = (d - lo) / (hi - lo);
+  return t * t * (3 - 2 * t);   // smoothstep
 }
 
 /**
@@ -195,7 +218,8 @@ export class CityLabels {
    * @param {Function} [opts.isActive] — () => boolean; layer skipped when false
    *   (e.g. the Strategic Map layer while the map is closed, or the command
    *   layer while the map is open)
-   * @param {number} [opts.lonOffsetDeg=TEXTURE_LON_OFFSET_DEG] — texture calibration
+   * @param {number} [opts.lonOffsetDeg=0] — optional longitude calibration
+   *   (degrees), applied after any mirroring; normally 0.
    * @param {boolean} [opts.mirrorLon=false] — negate longitude so labels match a
    *   default-SphereGeometry equirectangular texture (command-view Earth). Leave
    *   false for the wireframe Strategic Map so labels co-locate with ground stations.
@@ -204,7 +228,7 @@ export class CityLabels {
    *   tiers show; @param {number} [opts.lodFar=radius*10] — at/over this only tier 1.
    */
   attach({ parent, radius, camera, container, isActive = null,
-           lonOffsetDeg = TEXTURE_LON_OFFSET_DEG, mirrorLon = false,
+           lonOffsetDeg = 0, mirrorLon = false,
            fadeNear, fadeFar, lodNear, lodFar }) {
     if (!parent || !camera || !this._cities.length) return null;
     if (typeof document === 'undefined') return null;
@@ -228,12 +252,19 @@ export class CityLabels {
       root.appendChild(el);
       items.push({
         el, name: city.name, tier: city.tier || 2,
-        anchor: new THREE.Vector3(pos.x, pos.y, pos.z), shown: false,
+        // Estimated on-screen box width (monospace ⇒ length-proportional),
+        // used by the screen-space overlap declutter in update().
+        w: LABEL_FIXED_PX + city.name.length * CHAR_PX,
+        anchor: new THREE.Vector3(pos.x, pos.y, pos.z),
+        shown: false, _sx: 0, _sy: 0, _op: 1, _dist: 0,
       });
     }
 
     const layer = {
       parent, camera, root, items, isActive,
+      // Reusable scratch for the per-frame declutter (no per-frame allocation).
+      _cand: [],
+      _keptX: [], _keptY: [], _keptW: [], _keptH: [],
       fadeNear: fadeNear != null ? fadeNear : radius * 2,
       fadeFar: fadeFar != null ? fadeFar : radius * 18,
       lodNear: lodNear != null ? lodNear : radius * 3,
@@ -271,77 +302,61 @@ export class CityLabels {
       // Zoom-based LOD: how detailed a tier to reveal at this camera distance.
       const maxTier = lodMaxTier(_cam.distanceTo(_center), layer.lodNear, layer.lodFar);
 
-      if (_cityCal) this._logCalibration(layer);
-
+      // --- PASS 1: gather on-screen candidates (LOD + hemisphere + frustum) ---
+      const cand = layer._cand;
+      cand.length = 0;
       for (const item of layer.items) {
         // LOD declutter: hide tiers above the current zoom's threshold.
-        if (item.tier > maxTier) {
-          if (item.shown) { item.el.style.display = 'none'; item.shown = false; }
-          continue;
-        }
+        if (item.tier > maxTier) { this._hide(item); continue; }
 
         // City surface point in world space.
         _world.copy(item.anchor);
         layer.parent.localToWorld(_world);
 
-        // Far-hemisphere cull.
-        if (!isCityVisible(_world, _center, _cam)) {
-          if (item.shown) { item.el.style.display = 'none'; item.shown = false; }
-          continue;
-        }
+        // Soft limb fade (also culls the far hemisphere when fade reaches 0).
+        const lf = limbFade(_world, _center, _cam);
+        if (lf <= 0) { this._hide(item); continue; }
 
         // Project to normalised device coords, then to CSS pixels.
         _proj.copy(_world).project(camera);
-        if (_proj.z > 1) {   // behind the camera
-          if (item.shown) { item.el.style.display = 'none'; item.shown = false; }
-          continue;
-        }
-        const sx = (_proj.x * 0.5 + 0.5) * W;
-        const sy = (_proj.y * -0.5 + 0.5) * H;
+        if (_proj.z > 1) { this._hide(item); continue; }   // behind the camera
 
-        const dist = _world.distanceTo(_cam);
-        const op = 0.55 + 0.45 * distanceFade(dist, layer.fadeNear, layer.fadeFar);
+        item._sx = (_proj.x * 0.5 + 0.5) * W;
+        item._sy = (_proj.y * -0.5 + 0.5) * H;
+        item._dist = _world.distanceTo(_cam);
+        item._op = (0.55 + 0.45 * distanceFade(item._dist, layer.fadeNear, layer.fadeFar)) * lf;
+        cand.push(item);
+      }
+
+      // --- PASS 2: screen-space overlap declutter ---
+      // Priority: lower tier first (major cities win), then nearer the camera.
+      cand.sort(_byPriority);
+      const kx = layer._keptX, ky = layer._keptY, kw = layer._keptW, kh = layer._keptH;
+      let kept = 0;
+      for (const item of cand) {
+        const x0 = item._sx - DOT_PX / 2;
+        const y0 = item._sy - LABEL_H_PX / 2;
+        const w = item.w, h = LABEL_H_PX;
+        let collides = false;
+        for (let j = 0; j < kept; j++) {
+          if (x0 < kx[j] + kw[j] && x0 + w > kx[j] &&
+              y0 < ky[j] + kh[j] && y0 + h > ky[j]) { collides = true; break; }
+        }
+        if (collides) { this._hide(item); continue; }
+        kx[kept] = x0; ky[kept] = y0; kw[kept] = w; kh[kept] = h; kept++;
 
         // Anchor the marker dot on the surface point; the name sits to its right.
         item.el.style.transform =
-          `translate(${sx.toFixed(1)}px, ${sy.toFixed(1)}px) translate(${-DOT_PX / 2}px, -50%)`;
-        item.el.style.opacity = op.toFixed(3);
+          `translate(${item._sx.toFixed(1)}px, ${item._sy.toFixed(1)}px) translate(${-DOT_PX / 2}px, -50%)`;
+        item.el.style.opacity = item._op.toFixed(3);
         if (!item.shown) { item.el.style.display = 'flex'; item.shown = true; }
       }
     }
   }
 
-  /**
-   * @private Calibration readout (?cityCal=1). Prints the sub-satellite point
-   * (the surface point directly under the camera) as the texture-aligned
-   * lat/lon the label system currently assumes, plus the nearest label and how
-   * far off it sits. `_cam`/`_center` must already be set for the layer.
-   */
-  _logCalibration(layer) {
-    const now = (typeof performance !== 'undefined') ? performance.now() : Date.now();
-    if (now - _calLastMs < 2000) return;
-    _calLastMs = now;
-
-    // Sub-satellite direction (from Earth centre toward the camera).
-    _nadir.copy(_cam).sub(_center).normalize();
-    // Invert the label mapping: y = sin(lat); world azimuth atan2(z,x) maps to
-    // the label's longitude argument. This is the (lat, lonArg) a label would
-    // need to sit exactly under the camera.
-    const lat = Math.asin(Math.max(-1, Math.min(1, _nadir.y))) * 180 / Math.PI;
-    const lonArg = Math.atan2(_nadir.z, _nadir.x) * 180 / Math.PI;
-
-    let bestName = '(none)', bestAng = 999;
-    for (const item of layer.items) {
-      _tmp.copy(item.anchor);
-      layer.parent.localToWorld(_tmp);
-      const ang = _tmp.sub(_center).normalize().angleTo(_nadir) * 180 / Math.PI;
-      if (ang < bestAng) { bestAng = ang; bestName = item.name; }
-    }
-    console.log(
-      `[cityCal] sub-satellite point: lat≈${lat.toFixed(1)}°, label-lonArg≈${lonArg.toFixed(1)}° ` +
-      `| nearest label: "${bestName}" ${bestAng.toFixed(1)}° away ` +
-      `| camDist≈${_cam.distanceTo(_center).toFixed(1)}`
-    );
+  /** @private Hide a label if currently shown (single style write). */
+  _hide(item) {
+    if (item.shown) { item.el.style.display = 'none'; item.shown = false; }
   }
 
   /** Toggle on/off (Shift+C) — persists and announces the new state. */
@@ -415,6 +430,12 @@ export class CityLabels {
       "font:500 12px/1 'Courier New',monospace",
       'letter-spacing:0.5px',
       'color:#ffedb0',
+      // Subtle dark pill keeps the name legible over bright clouds, deserts,
+      // ice and the sunlit limb without looking heavy over dark ocean/night.
+      'padding:2px 5px',
+      'border-radius:3px',
+      'background:rgba(4,10,18,0.5)',
+      'box-shadow:0 0 0 1px rgba(120,170,150,0.12)',
       'text-shadow:0 1px 2px rgba(0,0,0,0.95),0 0 3px rgba(0,0,0,0.9)',
     ].join(';');
 

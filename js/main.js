@@ -836,10 +836,10 @@ async function init() {
         camera: strategicMap._camera,
         container: strategicMap._containerEl,
         isActive: () => strategicMap.isOpen(),
-        // The wireframe map has no texture: its ground stations use raw
-        // latLonToPosition, so the texture calibration offset must be 0 here
-        // or cities render 90° away from co-located stations.
-        lonOffsetDeg: 0,
+        // Mirror longitude to match the corrected ground stations + debris
+        // (real world frame), so the wireframe map's geography matches reality
+        // and the command view.
+        mirrorLon: true,
         // The map camera orbits much farther out (initial ~12.5 Earth radii,
         // zoom range ~0.8–78 r) than the command view, so widen the LOD ramp:
         // all tiers only when zoomed well in, tier 1 only when far out.
