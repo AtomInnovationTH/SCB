@@ -11,7 +11,8 @@
  *   wide scan = Shift+S (W freed) · target = T (Tab alias only) ·
  *   pilot daughter = 1-4 (P/Shift+P removed) · forge = F (5/F4 retired) ·
  *   map = M (backtick alias only) · struts = . (comma freed) ·
- *   return-to-mother = re-press digit / Esc / V (7 retired).
+ *   return-to-mother = re-press digit / Esc / V (7 retired) ·
+ *   de-spin laser = L (was H; H freed) · Info/Codex = I (was L) — 2026-06-15.
  */
 import { describe, it, assert } from './TestRunner.js';
 import { Constants } from '../core/Constants.js';
@@ -38,6 +39,10 @@ const FORBIDDEN = [
   { re: /\bpress 7\b/i,             why: 'return-to-mother is re-press digit / Esc / V (7 retired)' },
   { re: /\bF4\b/,                   why: 'Forge no longer on F4' },
   { re: /\bWASD\b/,                 why: 'WASD daughter thrust removed — arrow keys steer' },
+  // 2026-06-15 remap: de-spin laser H → L; Codex/Info L → I.
+  { re: /\bhold h\b/i,             why: 'de-spin laser moved to L (H freed) — 2026-06-15' },
+  { re: /de-spin \(h\)/i,          why: 'de-spin laser is L, not H — 2026-06-15' },
+  { re: /\bpress l\b/i,            why: 'Info/Codex moved to I (L is the de-spin laser) — 2026-06-15' },
 ];
 
 function scan(label, strings, problems) {
@@ -88,7 +93,7 @@ describe('Guidance ⇄ hotkey drift guard (2026-06-14 revamp)', () => {
     const expected = {
       arm_struts: '.', scan_wide: 'Shift+S', nav_target: 'T',
       arm_pilot: '1-4', strategic_map: 'M', manage_power: 'Shift+1/2/3',
-      manage_forge: 'F',
+      manage_forge: 'F', manage_codex: 'I',
     };
     const byId = new Map((Constants.SKILLS?.CATALOG || []).map(s => [s.id, s]));
     for (const [id, key] of Object.entries(expected)) {

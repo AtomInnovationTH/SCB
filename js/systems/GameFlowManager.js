@@ -1143,7 +1143,7 @@ class GameFlowManager {
         this._firstTimeComms.add('first_net_physics');
         eventBus.emit(Events.COMMS_MESSAGE, {
           source: 'SCI', channel: 'SCI',
-          text: 'DISCOVERY: Watch the net slow as it blossoms. No brakes involved. Angular momentum is conserved: the mouth opening grows its inertia (I ∝ r²), so spin falls. The yo-yo despin. Codex [L] updated.',
+          text: 'DISCOVERY: Watch the net slow as it blossoms. No brakes involved. Angular momentum is conserved: the mouth opening grows its inertia (I ∝ r²), so spin falls. The yo-yo despin. Codex [I] updated.',
           priority: 'info',
         });
       }

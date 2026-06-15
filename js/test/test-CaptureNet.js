@@ -2157,7 +2157,7 @@ describe('CaptureNet — UX-11 #1: miss-reason comms mapping', () => {
 
   it('cling_failed maps to the get-closer / de-spin line', () => {
     const text = missReasonToText('cling_failed');
-    assert.ok(text.includes('de-spin'), 'must point at de-spin (H)');
+    assert.ok(text.includes('de-spin'), 'must point at de-spin (L)');
   });
 
   it('forced stays silent; unknown reasons get a generic line (Phase 2)', () => {

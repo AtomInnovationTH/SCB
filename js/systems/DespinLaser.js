@@ -1,7 +1,7 @@
 /**
  * DespinLaser.js — CP-2 mother-mounted de-spin laser.
  *
- * A hold-to-fire assist (default key: U) that bleeds the angular momentum out of
+ * A hold-to-fire assist (default key: L) that bleeds the angular momentum out of
  * the active target so a net can cling. Mother-mounted per BIG_PICTURE §16 — it
  * operates on `targetSelector.getActiveTarget()`, not a daughter arm (the dormant
  * daughter `ARM_STATES.ABLATING` path mutated a non-existent `angularVelocity`;
@@ -57,7 +57,7 @@ export class DespinLaser {
 
   /**
    * Issue 5c/9 (2026-06-12): while the player pilots a daughter in
-   * STATION_KEEP, the SK readout advises "de-spin [H]" — route the mother
+   * STATION_KEEP, the SK readout advises "de-spin [L]" — route the mother
    * laser at the PILOTED ARM's SK target (which may differ from the
    * Tab-locked selector target). Pass null to restore selector targeting.
    * Set each frame by InputManager.processInput.

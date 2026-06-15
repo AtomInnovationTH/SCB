@@ -700,7 +700,7 @@ export const Constants = {
     DYNEEMA_TETHER:        false,  // ST-9.5 — Dyneema SK78 + reel-cycle wear
     REEL_CYCLE_RESOURCE:   false,  // ST-9.5 — 20-cycle wear counter
     ABLATION_MODULE:       false,  // ST-9.6 — mother-mounted deorbit laser
-    LASER_DESPIN:          true,   // CP-2 ON — mother-mounted de-spin laser (hold H) + net tumble coupling
+    LASER_DESPIN:          true,   // CP-2 ON — mother-mounted de-spin laser (hold L) + net tumble coupling
     BRIDLE_RING_GEOMETRY:  false,  // ST-9.7 — Y-harness FEEP plume exclusion
     TECH_LADDER_SHOP:      false,  // ST-9.8 — Y0–Y4 tier surfacing
     REALITY_MODE:          false,  // ST-9.9 — locks all FEATURE_* false (master)
@@ -2217,7 +2217,7 @@ export const Constants = {
       { id: 'collect_dual_fire',       label: 'Dual Launch',            key: null, tier: 3, category: 'collect', hudGroup: null,          prereqs: [],  prereqType: 'hard', noReminder: false, triggerEvent: 'DUAL_FIRE' },
       { id: 'manage_power',            label: 'Power Distribution',   key: 'Shift+1/2/3', tier: 3, category: 'manage', hudGroup: 'power',    prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'POWER_BUS_SELECTED' },
       { id: 'manage_comms',            label: 'Comms Menu',           key: 'C',  tier: 3, category: 'manage', hudGroup: 'comms',       prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'COMMS_OPENED' },
-      { id: 'manage_codex',            label: 'Tech Library',         key: 'L',  tier: 3, category: 'manage', hudGroup: null,          prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'CODEX_OPENED' },
+      { id: 'manage_codex',            label: 'Tech Library',         key: 'I',  tier: 3, category: 'manage', hudGroup: null,          prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'CODEX_OPENED' },
       // ── CP-4 ch2 (MissionCoach): Daughter piloting (payload-discriminated via triggerFilter) ──
       { id: 'arm_pilot',         label: 'Daughter Piloting', key: '1-4', tier: 3, category: 'collect', hudGroup: 'fleet', prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'CONTROL_MODE_CHANGE', triggerFilter: (d) => d && d.mode === 'ARM_PILOT' },
       { id: 'arm_pilot_capture', label: 'Manual Capture',    key: 'N', tier: 3, category: 'collect', hudGroup: 'fleet', prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'ARM_CAPTURED',        triggerFilter: (d) => d && d.manual === true },
@@ -2695,7 +2695,7 @@ export const Constants = {
           id: 'ch2_manual_capture',
           type: 'interactive',
           source: 'HOUSTON',
-          text: 'Line up on a target and capture by hand (N). Manual catches score double. Watch the odds strip: de-spin (H) or close in and the % climbs before you commit.',
+          text: 'Line up on a target and capture by hand (N). Manual catches score double. Watch the odds strip: de-spin (L) or close in and the % climbs before you commit.',
           skillId: 'arm_pilot_capture',
           triggerEvent: 'ARM_CAPTURED',
           triggerFilter: (d) => d && d.manual === true,
@@ -2726,11 +2726,11 @@ export const Constants = {
           id: 'ch3_codex',
           type: 'interactive',
           source: 'HOUSTON',
-          text: 'New contacts logged to the Tech Library. Press L to open the Codex. Know what you\'re grabbing before you commit fuel to it.',
+          text: 'New contacts logged to the Tech Library. Press I to open Info. Know what you\'re grabbing before you commit fuel to it.',
           skillId: 'manage_codex',
           triggerEvent: 'CODEX_OPENED',
           title: 'THE CODEX',
-          body: 'Press L to open the Tech Library and read up on a contact.',
+          body: 'Press I to open Info and read up on a contact.',
         },
       ],
 

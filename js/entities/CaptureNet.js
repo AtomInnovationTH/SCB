@@ -94,7 +94,7 @@ export function computeClingProbability(params) {
   // 2026-06-11 tuning: SURE-SHOT floor. A well-executed shot — close range,
   // target de-tumbled to in-spec (or tumble untracked), nominal launch speed,
   // fresh net spin — succeeds reliably. This is the payoff the game teaches
-  // ("close the distance, de-spin [H]"); distant/tumbling/sloppy shots keep
+  // ("close the distance, de-spin [L]"); distant/tumbling/sloppy shots keep
   // the full physics stack, so aim and setup still matter.
   const sureShot = range <= (CN.CLOSE_RANGE ?? 30)
     && fTumble >= 1.0
@@ -395,7 +395,7 @@ export function missReasonToText(reason) {
     case 'tether_limit':
       return 'Net overshot. Line up the reticle and re-fire. Net reeling back; inventory restored.';
     case 'cling_failed':
-      return 'Net grazed it. Wrap didn\'t hold. Close the distance or de-spin the target (hold H), then re-fire.';
+      return 'Net grazed it. Wrap didn\'t hold. Close the distance or de-spin the target (hold L), then re-fire.';
     case 'oversize_aspect':
       // Phase 2: deterministic broadside bounce — teach the orientation fix.
       return 'Net bounced off broadside. Too wide this way. De-spin, then come around end-on so the net swallows it lengthwise.';

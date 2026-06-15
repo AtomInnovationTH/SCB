@@ -522,7 +522,7 @@ export class StatusPanel {
           <span style="opacity:0.5">Initializing daughter fleet…</span>
         </div>
         <div style="font-size:10px;opacity:0.4;margin-top:4px;border-top:1px solid rgba(0,255,136,0.1);padding-top:3px;">
-          1-4 Select &ensp;0 Mother &ensp;D Launch &ensp;R Recall &ensp;Shift+R All &ensp;H De-spin
+          1-4 Select &ensp;0 Mother &ensp;D Launch &ensp;R Recall &ensp;Shift+R All &ensp;L De-spin
         </div>
         <div id="lasso-cooldown-row" style="display:flex;align-items:center;gap:6px;margin-top:4px;padding-top:3px;border-top:1px solid rgba(0,255,136,0.1);font-size:10px;">
           <svg id="lasso-cd-ring" width="18" height="18" viewBox="0 0 18 18" style="flex-shrink:0;">

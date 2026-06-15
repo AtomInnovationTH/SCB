@@ -7,9 +7,11 @@
  *   • O                → deploy-all unchanged
  *   • R (no shift)     → context chain unchanged (recall closest / abort AP)
  *
- * De-spin laser remap (2026-06-13, "H = Hold"):
- *   • H                → de-spin laser (no-target warning when nothing selected)
- *   • U                → inert (freed; was the de-spin laser)
+ * De-spin laser remap (2026-06-15, laser H → L):
+ *   • L                → de-spin laser (no-target warning when nothing selected)
+ *   • I                → Info / Codex toggle (was L)
+ *   • H                → inert (freed; the laser moved to L)
+ *   • U                → inert (freed earlier; was the de-spin laser before H)
  *
  * Hotkey cleanup 2026-06-13b (fewer keys):
  *   • Shift+D          → deploy-all-to-target (folded from the freed O key)
@@ -131,29 +133,42 @@ describe('InputManager hotkeys — recall = Shift+R; de-spin laser = H (2026-06-
     assert.equal(disengaged, 1, 'R aborts autopilot only after finding nothing to reel');
   });
 
-  it('H no longer recalls — it is the de-spin laser (2026-06-13)', () => {
+  it('L does not recall — it is the de-spin laser (2026-06-15)', () => {
     const { im, calls } = makeIM();
     const got = captureEvent(Events.ARM_RECALL_ALL, () => {
-      im._handleKeyDown(key('KeyH'));
+      im._handleKeyDown(key('KeyL'));
     });
-    assert.equal(got.length, 0, 'H must not emit ARM_RECALL_ALL');
-    assert.equal(calls.recallClosest, 0, 'H must not recall anything');
+    assert.equal(got.length, 0, 'L must not emit ARM_RECALL_ALL');
+    assert.equal(calls.recallClosest, 0, 'L must not recall anything');
   });
 
-  it('H with no target emits the de-spin warning (mother mode)', () => {
+  it('L with no target emits the de-spin warning (mother mode)', () => {
     let failClicks = 0;
     const { im } = makeIM({
       audioSystem: { playClick: () => {}, playClickFail: () => { failClicks++; } },
     });
     const got = captureEvent(Events.COMMS_MESSAGE, () => {
-      im._handleKeyDown(key('KeyH'));
+      im._handleKeyDown(key('KeyL'));
     });
     const warned = got.some(m => m && /de-spin/i.test(m.text || ''));
-    assert.ok(warned, 'H with no target warns to select a tumbling target');
-    assert.equal(failClicks, 1, 'H with no target plays the fail click');
+    assert.ok(warned, 'L with no target warns to select a tumbling target');
+    assert.equal(failClicks, 1, 'L with no target plays the fail click');
   });
 
-  it('U is now inert (freed — was the de-spin laser, now on H)', () => {
+  it('H is now inert (freed — the de-spin laser moved to L in 2026-06-15)', () => {
+    let failClicks = 0;
+    const { im, calls } = makeIM({
+      audioSystem: { playClick: () => {}, playClickFail: () => { failClicks++; } },
+    });
+    const got = captureEvent(Events.COMMS_MESSAGE, () => {
+      im._handleKeyDown(key('KeyH'));
+    });
+    assert.equal(got.length, 0, 'H emits no comms message');
+    assert.equal(failClicks, 0, 'H plays no fail click');
+    assert.equal(calls.recallClosest, 0, 'H recalls nothing');
+  });
+
+  it('U is now inert (freed — was the de-spin laser before H, now on L)', () => {
     let failClicks = 0;
     const { im, calls } = makeIM({
       audioSystem: { playClick: () => {}, playClickFail: () => { failClicks++; } },
@@ -738,10 +753,10 @@ describe('InputManager — help-pane binding coverage guard', () => {
     assert.equal(calls.shopState, 'SHOP', 'B transitions to SHOP');
   });
 
-  it('L toggles the codex Library', () => {
+  it('I toggles the codex Info viewer', () => {
     const { im, calls } = makeFullIM();
-    im._handleKeyDown(key('KeyL'));
-    assert.equal(calls.codexToggle, 1, 'L toggles the codex');
+    im._handleKeyDown(key('KeyI'));
+    assert.equal(calls.codexToggle, 1, 'I toggles the codex');
   });
 
   it('? (Slash) toggles the hotkey help overlay', () => {
@@ -773,11 +788,11 @@ describe('InputManager — help-pane binding coverage guard', () => {
     assert.equal(got.length, 1, 'Period drives the strut toggle');
   });
 
-  it('H is the de-spin "Hold steady" laser (no recall)', () => {
+  it('L is the de-spin "Hold steady" laser (no recall)', () => {
     const got = captureEvent(Events.ARM_RECALL_ALL, () => {
       const { im } = makeFullIM();
-      im._handleKeyDown(key('KeyH'));
+      im._handleKeyDown(key('KeyL'));
     });
-    assert.equal(got.length, 0, 'H does not recall — it is the de-spin laser');
+    assert.equal(got.length, 0, 'L does not recall — it is the de-spin laser');
   });
 });

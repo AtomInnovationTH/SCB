@@ -379,11 +379,13 @@ export class InputManager {
     }
 
     // Anti-ASR guard for macOS Voice Control phantom "i" keystrokes.
-    // Default OFF now that bare I = Inspection (Delegation 1 onboarding
-    // hotkey rebind, 2026-05-31).  Re-enable via Constants.INPUT.SUPPRESS_BARE_I
-    // if dictation regressions reappear.  Historical context: events arrived
-    // with `isTrusted: true` because ASR injects through the OS HID layer
-    // (debug session 2026-05-10).
+    // Default OFF.  As of the 2026-06-15 hotkey remap, bare I = Info/Codex
+    // toggle (was the de-spin laser hold, which moved to L; before that I was
+    // Inspection).  Re-enable via Constants.INPUT.SUPPRESS_BARE_I if dictation
+    // regressions reappear — note that doing so will also suppress the Info
+    // (Codex) toggle.  Historical context: events arrived with `isTrusted:
+    // true` because ASR injects through the OS HID layer (debug session
+    // 2026-05-10).
     if (Constants.INPUT?.SUPPRESS_BARE_I === true
         && e.code === 'KeyI' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
       return;
@@ -432,9 +434,9 @@ export class InputManager {
       return;
     }
 
-    // --- F17: Codex overlay intercept — suppress all input except L (toggle) and ESC (close) ---
+    // --- F17: Codex overlay intercept — suppress all input except I (toggle) and ESC (close) ---
     if (d.codexViewerUI && d.codexViewerUI.isVisible()) {
-      if (e.code === 'KeyL') {
+      if (e.code === 'KeyI') {
         d.codexViewerUI.toggle();
         d.audioSystem.playClick();
         e.preventDefault();
@@ -780,14 +782,15 @@ export class InputManager {
         }
         break;
 
-      // H key — CP-2 de-spin laser (hold H, "H = Hold"). Migrated from U by the
-      // 2026-06-13 hotkey cleanup. The continuous beam is driven by the held-key
-      // poll in processInput(); this keydown only gives a no-target affordance.
-      // Also live in ARM_PILOT when the piloted arm is station-keeping a target
-      // (the SK readout advises "de-spin [H]").
-      // (Recall-all moved to Shift+R in the 2026-06-12 cleanup; H no longer
+      // L key — CP-2 de-spin laser (hold L). Migrated from H by the
+      // 2026-06-15 hotkey remap (laser H → L; Codex/Info L → I; H freed).
+      // The continuous beam is driven by the held-key poll in processInput();
+      // this keydown only gives a no-target affordance. Also live in ARM_PILOT
+      // when the piloted arm is station-keeping a target (the SK readout advises
+      // "de-spin [L]").
+      // (Recall-all moved to Shift+R in the 2026-06-12 cleanup; this key never
       // touches recall.)
-      case 'KeyH':
+      case 'KeyL':
         if (isGameplay && !e.repeat && Constants.isFeatureEnabled('LASER_DESPIN')) {
           let despinTarget = null;
           if (this.armPilotMode) {
@@ -1298,8 +1301,8 @@ export class InputManager {
         }
         break;
 
-      // --- F17: Toggle Codex Library (L key) ---
-      case 'KeyL':
+      // --- F17: Toggle Codex Library / Info (I key) ---
+      case 'KeyI':
         if (isGameplay && d.codexViewerUI) {
           d.codexViewerUI.toggle();
           d.audioSystem.playClick();
@@ -1642,7 +1645,7 @@ export class InputManager {
   /**
    * Resolve the de-spin laser's override target while piloting a daughter.
    * Eligible only when the piloted arm is in STATION_KEEP; returns its SK
-   * target (or null). Single source of truth shared by the KeyH no-target
+   * target (or null). Single source of truth shared by the KeyL no-target
    * affordance and the processInput() laser steering, so the warning and
    * the actual beam eligibility can never drift apart.
    * @returns {object|null}
@@ -1662,14 +1665,14 @@ export class InputManager {
   processInput(dt) {
     const d = this._deps;
 
-    // CP-2: mother-mounted de-spin laser — hold H. Set the fire intent every
+    // CP-2: mother-mounted de-spin laser — hold L. Set the fire intent every
     // frame BEFORE the overlay early-returns so it always releases when an
     // overlay opens or the key is let go.
-    // Issue 5c/9 (2026-06-12): H now ALSO works while piloting a daughter in
-    // STATION_KEEP — the SK readout advises "de-spin [H]", so the advisory must
+    // Issue 5c/9 (2026-06-12): the laser ALSO works while piloting a daughter in
+    // STATION_KEEP — the SK readout advises "de-spin [L]", so the advisory must
     // point at a live key. The laser is steered at the piloted arm's SK target
     // (override), not the Tab-locked selector target.
-    // (Hotkey cleanup 2026-06-13: migrated from U → H, "H = Hold".)
+    // (Hotkey history: migrated U → H 2026-06-13, then H → L 2026-06-15.)
     const overlayOpen = !!((d.codexViewerUI && d.codexViewerUI.isVisible && d.codexViewerUI.isVisible())
       || (d.hotkeyOverlay && d.hotkeyOverlay.isVisible && d.hotkeyOverlay.isVisible())
       || (d.debrisMap && d.debrisMap.isVisible && d.debrisMap.isVisible())
@@ -1683,7 +1686,7 @@ export class InputManager {
       !overlayOpen
       && (!this.armPilotMode || !!skDespinTarget)
       && (d.gameState && d.gameState.isGameplay && d.gameState.isGameplay())
-      && this.keys['KeyH'] === true,
+      && this.keys['KeyL'] === true,
     );
 
     // Phase 3a (capture-feedback overhaul): hold Shift → BOOST reel ×2 on
@@ -2044,7 +2047,9 @@ export class InputManager {
     d.audioSystem?.playClick?.();
   }
 
-  /** Smart-default helper — toggles inspection (mirrors `case 'KeyI':`). */
+  /** Smart-default helper — toggles inspection. Legacy: no live key binding
+   *  (the old bare-I inspection key now opens the Codex/Info viewer). Retained
+   *  for the OnboardingDirector smart-default dispatcher. */
   toggleInspection() {
     const d = this._deps; if (!d || !d.cameraSystem) return;
     if (this.armPilotMode) {

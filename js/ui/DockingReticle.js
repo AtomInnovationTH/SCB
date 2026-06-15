@@ -1262,7 +1262,7 @@ export class DockingReticle {
       const inSpec = (Constants.NET_TUMBLE_PENALTY?.IN_SPEC_DEG) || 10;
       const deg = Math.abs(tumbleRate || 0) * (180 / Math.PI);
       if (tumbleRate != null && deg > inSpec && !target._despinning) {
-        advisory = 'de-spin to freeze aspect [H]';
+        advisory = 'de-spin to freeze aspect [L]';
         advisoryCol = '#ffd166';
       } else {
         advisory = 'ASPECT: BROADSIDE \u2014 orbit to end-on';
@@ -1282,7 +1282,7 @@ export class DockingReticle {
         advisory = `de-spinning ${deg.toFixed(1)}\u00B0/s \u2192 ${inSpec}\u00B0/s`;
         advisoryCol = '#66ddff';
       } else if (deg > inSpec) {
-        advisory = `tumbling ${Math.round(deg)}\u00B0/s \u2014 de-spin [H]`;
+        advisory = `tumbling ${Math.round(deg)}\u00B0/s \u2014 de-spin [L]`;
       }
     }
     if (!advisory && pct >= 80) advisory = 'good shot';

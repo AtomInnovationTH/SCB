@@ -822,7 +822,7 @@ export class SkillsPane {
         progText.className = 'sp-prog-text';
         const closeHint = document.createElement('span');
         closeHint.className = 'sp-close-hint';
-        closeHint.textContent = 'L. Tech Library  ·  J to close';
+        closeHint.textContent = 'I. Info  ·  J to close';
         footer.appendChild(progText);
         footer.appendChild(closeHint);
         overlay.appendChild(footer);
@@ -1116,7 +1116,7 @@ export class SkillsPane {
             // Hint
             const hint = document.createElement('div');
             hint.className = 'sp-tech-hint';
-            hint.textContent = 'L. Tech Library';
+            hint.textContent = 'I. Info';
             this._paneBody.appendChild(hint);
         }
 

@@ -183,7 +183,7 @@ All in [`InputManager.js`](js/systems/InputManager.js) `_handleKeyDown` + held-k
 | **N / Shift+N** | lasso/net fire / **auto-target + launch at debris in range** | N = net capture/deploy (single capture verb) |
 | **D / Shift+D** | launch **selected docked** daughter (auto-pick if none) / launch **all** docked. Ctrl+Shift+D = deorbit; Ctrl+D = debug | same |
 | **R** | AP→abort; else recall closest. **Shift+R = recall ALL** | reel from STATION_KEEP |
-| **H** | hold → de-spin laser (needs a target) | hold → de-spin the piloted arm's SK target |
+| **L** | hold → de-spin laser (needs a target) | hold → de-spin the piloted arm's SK target |
 | **E** | **Electrodynamic Tether** (moved off `Y`) | same |
 | **X** | Tether detach (sacrifice) | same |
 | **V / Shift+V** | cycle view (COMMAND → OVERVIEW → INSPECTION); Shift+V → Strategic Map | V cycles view (back out via re-press digit / Esc); Shift+V map |
@@ -191,7 +191,7 @@ All in [`InputManager.js`](js/systems/InputManager.js) `_handleKeyDown` + held-k
 | **B** | Shop / Buy (ORBITAL_VIEW only) | — |
 | **F** | **Forge** toggle (moved off `5`) | same |
 | **M** | **Map** — toggle Debris Map (`` ` `` is an alias) | same |
-| **L** | Codex / Library | same |
+| **I** | Codex / Library (Info) | same |
 | **J** | Journal / Skills *(owned by SkillsPane's own listener)* | same |
 | **? / Esc** | help pane / pause·back (Esc also backs out of pilot) | same |
 | **5 / 6** | toggle City names / Constellation names | same |
@@ -367,6 +367,7 @@ Corrected during the 2026-06-07 ground-truth pass. Stale-count headers have been
 | C-hold radial menu (RadialMenu.js) | **removed** (UX-11 #9); `C` = comms expand, `Shift+C` = city labels |
 | H / Shift+O = recall all (older docs/skills text) | **Shift+R** = recall all (2026-06-12 hotkey cleanup); `Shift+O` freed; `H` was briefly freed then reassigned to the **de-spin laser** (2026-06-13, was `U`) |
 | de-spin laser = `U`; capture = F/N/Space (older docs) | **`H`** = de-spin laser ("Hold"); **`N`** = the single net/capture verb (F inert in ARM_PILOT, Space lasso alias dropped) — 2026-06-13 cleanup |
+| de-spin laser = `H`; Codex/Library = `L` (2026-06-13/14) | **`L`** = de-spin laser; **`I`** = Codex / Info viewer — 2026-06-15 remap; `H` freed |
 | Test baseline 272/1252 (old ARCHITECTURE) | **711 / 2880 / 0** (2026-06-12) |
 
 ---

@@ -15,7 +15,7 @@ UI design draws from four landmark space sims: **Independence War** (NavSphere, 
 # Then open http://localhost:8081
 ```
 
-**Controls:** `A` autopilot, `S` quick scan, `W` wide scan, `D` deploy daughter, `Shift+D` deploy all, `T` cycle tool, `F` focus action (deploy tool), Arrows rotate, `+/-` throttle, `Tab` cycle targets, `N` lasso/net (the single net key — works in mother & daughter modes), `H` hold de-spin laser, `Shift+R` recall all, `R` smart reel-in, `V` camera (cycles to inspection), `P` arm pilot, `O` NavSphere, `J` journal, `Z` wireframe, `C` comms, `M` MPD/orbit, `` ` `` debris map, `L` codex, `B` shop, `X` detach, `5` forge, `6` fuel cycle, `Shift+C` city labels, `Shift+1/2/3` power bus, `[/]` adjust. WASD thrust in arm pilot mode only (P key). Full table below.
+**Controls:** `A` autopilot, `S` quick scan, `W` wide scan, `D` deploy daughter, `Shift+D` deploy all, `T` cycle tool, `F` focus action (deploy tool), Arrows rotate, `+/-` throttle, `Tab` cycle targets, `N` lasso/net (the single net key — works in mother & daughter modes), `L` hold de-spin laser, `Shift+R` recall all, `R` smart reel-in, `V` camera (cycles to inspection), `P` arm pilot, `O` NavSphere, `J` journal, `Z` wireframe, `C` comms, `M` MPD/orbit, `` ` `` debris map, `I` info/codex, `B` shop, `X` detach, `5` forge, `6` fuel cycle, `Shift+C` city labels, `Shift+1/2/3` power bus, `[/]` adjust. WASD thrust in arm pilot mode only (P key). Full table below.
 
 **Tech:** Three.js r170 via CDN import maps. Zero build tools. ES6 modules. All geometry procedural (no GLTF). NASA public domain textures.
 
@@ -164,7 +164,7 @@ Space Cowboy/
 
 ### Key Bindings — Full Reference
 
-_Authoritative reference. The **single source of truth is the in-game help pane** (`?`), defined in [`HotkeyOverlay.js`](js/ui/HotkeyOverlay.js); [`InputManager._handleKeyDown`](js/systems/InputManager.js) and this table are kept in agreement with it. Hotkey revamp 2026-06-14: the code was aligned to the help menu — daughters are flown with **arrows only** (WASD thrust removed); `1-4` = select/pilot; `P`/`Shift+P`/`7`/`Q`/`E` removed. The Codex is `L`; Journal/Skills is `J`._
+_Authoritative reference. The **single source of truth is the in-game help pane** (`?`), defined in [`HotkeyOverlay.js`](js/ui/HotkeyOverlay.js); [`InputManager._handleKeyDown`](js/systems/InputManager.js) and this table are kept in agreement with it. Hotkey revamp 2026-06-14: the code was aligned to the help menu — daughters are flown with **arrows only** (WASD thrust removed); `1-4` = select/pilot; `P`/`Shift+P`/`7`/`Q`/`E` removed. The Codex/Info viewer is `I`; the de-spin laser is `L` (remap 2026-06-15, was `H`); Journal/Skills is `J`._
 
 ```
 ═══ MOTHER (orbital view) ═══
@@ -177,7 +177,7 @@ _Authoritative reference. The **single source of truth is the in-game help pane*
   D  · Launch the SELECTED docked daughter (1-4 picks which; auto-picks if none selected)
          Shift+D = launch ALL docked daughters at target
   R  · Reel-in (recall closest / abort autopilot)   (Shift+R = recall ALL)
-  H  · De-spin laser (hold — detumble before netting)
+  L  · De-spin laser (hold — detumble before netting)
   X  · Tether detach (sacrifice)
   E  · Electrodynamic Tether (EDT)
   1–4 · Select daughter (docked → glow/flash, mother stays in view; launched → pilot)
@@ -187,7 +187,7 @@ _Authoritative reference. The **single source of truth is the in-game help pane*
   V / S / T / A / D  · same as Mother (view / scan / target / autopilot / launch)
   N  · Deploy net / capture (the single capture verb)
   R  · Reel daughter home
-  H  · De-spin the station-kept target (hold)
+  L  · De-spin the station-kept target (hold)
   E  · Electrodynamic Tether
   X  · Sacrifice detach
   1–4 · Switch piloted daughter (re-press the active digit → back out to mother)
@@ -196,7 +196,7 @@ _Authoritative reference. The **single source of truth is the in-game help pane*
   B  · Shop / Buy
   F  · Forge (Kiln) toggle
   J  · Journal / Skills
-  L  · Codex / Library
+  I  · Codex / Library (Info)
   M  · Map (Debris Map; ` is an alias)
   ?  · This help pane
   Esc · Pause / back / exit (also backs out of ARM_PILOT)

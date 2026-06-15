@@ -1,6 +1,6 @@
 /**
  * CodexViewerUI.js — DOM overlay modal for browsing the 45 codex entries.
- * Toggle with L key ("Library"). Escape closes.
+ * Toggle with I key ("Info"). Escape closes.
  *
  * Layout: full-screen overlay → centered panel with category sidebar + entry grid/detail.
  * @module ui/CodexViewerUI

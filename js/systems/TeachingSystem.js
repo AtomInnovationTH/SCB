@@ -45,7 +45,7 @@ export const TEACHING_MOMENTS = [
   {
     id: 'first_capture',
     title: 'First Catch!',
-    body: 'Nice work, Cowboy. Captured debris goes to your cargo bay. Open the Codex (L) to learn more.',
+    body: 'Nice work, Cowboy. Captured debris goes to your cargo bay. Open the Codex (I) to learn more.',
     duration: 8000,
     icon: '✅',
   },
@@ -169,7 +169,7 @@ export const TEACHING_MOMENTS = [
   {
     id: 'first_high_tumble_target',
     title: 'Fast Spinner',
-    body: 'That target is tumbling fast. Nets slip off fast spinners. Hold H to fire the de-spin laser; watch the capture odds climb as the tumble bleeds off, then net it.',
+    body: 'That target is tumbling fast. Nets slip off fast spinners. Hold L to fire the de-spin laser; watch the capture odds climb as the tumble bleeds off, then net it.',
     duration: 9000,
     icon: '🌀',
   },
@@ -360,7 +360,7 @@ export class TeachingSystem {
 
     // 20. first_high_tumble_target — TARGET_SELECTED with tumble above the
     // net-safe spin (Phase 0.6). Gated on LASER_DESPIN so we never teach a
-    // verb (hold H) that isn't wired in.
+    // verb (hold L) that isn't wired in.
     on(Events.TARGET_SELECTED, (data) => {
       const debris = data && data.debris;
       if (!debris || typeof debris.tumbleRate !== 'number') return;
