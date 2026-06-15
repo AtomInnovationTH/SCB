@@ -404,7 +404,7 @@ export class NetInventoryPanel {
       const max       = this._lasso_state.max ?? 0;
       const label = max > 0 ? `${remaining}/${max}` : `${remaining}`;
       this._lassoChip._textNode.textContent = label;
-      this._lassoChip.title = `Lasso shots: ${label}.  Press B for shop or 5 to forge.`;
+      this._lassoChip.title = `Lasso shots: ${label}.  Press B for shop or F to forge.`;
       this._styleChip(this._lassoChip, this._lasso_state.severity);
     }
     // Net chip text + breakdown tooltip + colour.

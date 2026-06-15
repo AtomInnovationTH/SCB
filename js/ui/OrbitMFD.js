@@ -323,7 +323,7 @@ export class OrbitMFD {
     ctx.stroke();
   }
 
-  /** @private Draw "ORBIT VIEW" header and [M] Toggle hint. */
+  /** @private Draw "ORBIT VIEW" header. */
   _drawHeader() {
     const ctx = this._ctx;
 
@@ -334,11 +334,6 @@ export class OrbitMFD {
     ctx.fillStyle = '#00ff88';
     ctx.textAlign = 'left';
     ctx.fillText('ORBIT VIEW', 8, 6);
-
-    // [M] Toggle hint
-    ctx.fillStyle = 'rgba(0, 255, 136, 0.5)';
-    ctx.textAlign = 'right';
-    ctx.fillText('[M] Toggle', this._size - 8, 6);
 
     // Thin line below header
     ctx.strokeStyle = 'rgba(0, 255, 136, 0.25)';

@@ -84,7 +84,7 @@ const HOTKEY_GROUPS = [
       'spacer',
       [['5'], 'toggle: City names'],
       [['6'], 'toggle: Constellation names'],
-      [['7'], 'toggle: Comms'],
+      [['7'], 'Expand comms'],
       [['8'], 'toggle: NavSphere'],
       [['9'], 'toggle: Debris pane'],
       [['0'], 'toggle: Target pane'],

@@ -18,6 +18,13 @@ import { describe, it, assert } from './TestRunner.js';
 import { Constants } from '../core/Constants.js';
 import { ONBOARDING_BEATS } from '../systems/OnboardingDirector.js';
 import { TEACHING_MOMENTS } from '../systems/TeachingSystem.js';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
+
+const _HERE = dirname(fileURLToPath(import.meta.url));
+const _JS_ROOT = resolve(_HERE, '..');
+const readSrc = (rel) => readFileSync(resolve(_JS_ROOT, rel), 'utf8');
 
 // Collect every player-facing string from a guidance beat / moment.
 function beatStrings(b) {
@@ -35,6 +42,7 @@ const FORBIDDEN = [
   { re: /\bpress tab\b/i,           why: 'target cycle is taught as T (Tab is alias-only)' },
   { re: /\bpress p\b/i,             why: 'P/Shift+P removed — pilot with 1-4' },
   { re: /\bpress 5\b/i,             why: 'Forge moved to F (5 retired)' },
+  { re: /\b5 to forge\b/i,          why: 'Forge moved to F (5 retired)' },
   { re: /\[5\]/,                    why: 'Forge moved to F (5 retired)' },
   { re: /\bpress 7\b/i,             why: 'return-to-mother is re-press digit / Esc / V (7 retired)' },
   { re: /\bF4\b/,                   why: 'Forge no longer on F4' },
@@ -103,3 +111,42 @@ describe('Guidance ⇄ hotkey drift guard (2026-06-14 revamp)', () => {
     }
   });
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// UI-panel guidance scan (2026-06-16). The HUD/shop panels build DOM at
+// runtime, so the data-import scan above never saw their on-screen strings —
+// which is exactly where the stale-key promises hid ("[M] to arm burst mode",
+// "[M] Toggle", "[T] Xenon", "5 to forge"). Scan the source text directly so a
+// future re-bind that leaves these panels stale fails loudly here too.
+//
+// Each entry asserts that a corrected source file no longer contains a banned
+// substring tied to a key that moved.
+// ───────────────────────────────────────────────────────────────────────────
+const UI_BANNED = [
+  { file: 'ui/ShopScreen.js',          bad: ['[M] to arm', 'arm burst mode'],
+    why: 'M is the Debris Map; MPD is a passive thrust upgrade with no hotkey' },
+  { file: 'ui/OrbitMFD.js',            bad: ['[M] Toggle'],
+    why: 'M opens the Debris Map; the Orbit MFD has no toggle key' },
+  { file: 'ui/hud/StatusPanel.js',     bad: ['[T] Xenon', '[T] ${fuelData.name}'],
+    why: 'T = Target debris; fuel has no cycle hotkey' },
+  { file: 'ui/hud/NetInventoryPanel.js', bad: ['5 to forge'],
+    why: 'Forge moved to F (5 = City names)' },
+];
+
+describe('Guidance ⇄ hotkey drift guard — UI panels (2026-06-16)', () => {
+  for (const { file, bad, why } of UI_BANNED) {
+    it(`${file} names no stale keys (${why})`, () => {
+      const src = readSrc(file);
+      const hits = bad.filter(b => src.includes(b));
+      assert.equal(hits.length, 0,
+        `${file} still contains stale key reference(s): ${hits.join(', ')} — ${why}`);
+    });
+  }
+
+  it('InputManager has no live bare-C comms handler (C was freed 2026-06-16)', () => {
+    const src = readSrc('systems/InputManager.js');
+    assert.ok(!/case 'KeyC':/.test(src),
+      "InputManager must not bind bare C — comms expand lives on the 7 key");
+  });
+});
+

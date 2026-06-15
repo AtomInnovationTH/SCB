@@ -40,7 +40,7 @@ export const UPGRADES = [
     desc: '+10 max cold gas', effect: 'coldGasMax', value: 10, maxLevel: 2,
     trl: 9, trlRationale: 'Cold gas tanks ubiquitous since 1960s' },
   { id: 'mpd_thruster', cat: 'Propulsion', name: 'MPD Thruster', cost: 3000,
-    desc: 'Magnetoplasmadynamic thruster. 25N thrust, Isp 3000s. Press [M] to arm burst mode. Requires lithium.',
+    desc: 'Magnetoplasmadynamic thruster. 25N thrust, Isp 3000s — fifty times the push of the ion drive for fast orbit changes. Burns lithium and draws heavy power.',
     effect: 'mpdThruster', value: true, maxLevel: 1,
     requiresAll: ['solid_state_battery', 'multi_junction_solar'],
     trl: 4, trlRationale: 'Lab-tested at NASA Glenn & JAXA; no kW-class flight heritage' },

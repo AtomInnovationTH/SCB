@@ -275,7 +275,7 @@ export const Events = {
   FORGE_TOGGLE:        'forge:toggle',
 
   // === FUEL (Phase 4) ===
-  FUEL_CYCLE:          'fuel:cycle',          // player pressed T
+  FUEL_CYCLE:          'fuel:cycle',          // UNEMITTED as of 2026-06-16 — fuel cycle has no hotkey (T = Target debris). ResourceSystem.cycleFuel still listens; kept for future use.
   FUEL_CHANGED:        'fuel:changed',        // fuel type switched — { fuelId, name, isp, color }
   FUEL_DEPLETED:       'fuel:depleted',       // current fuel ran out
 
@@ -450,7 +450,7 @@ export const Events = {
   COMMS_OPENED:         'comms:opened',             // C key comms toggle
   CODEX_OPENED:         'codex:opened',             // L key codex opened
   SHOP_OPENED:          'shop:opened',              // Shop screen displayed (ST-6.5 teaching trigger)
-  ORBIT_MFD_TOGGLE:     'orbitMfd:toggle',          // M key orbit MFD toggled
+  ORBIT_MFD_TOGGLE:     'orbitMfd:toggle',          // UNEMITTED as of 2026-06-16 — M opens the Debris Map; the Orbit MFD has no toggle key
 
   // === SPACE WEATHER (Phase 7 — Learning Systems) ===
   WEATHER_EFFECT_START:   'weather:effectStart',       // { type, effects, duration }

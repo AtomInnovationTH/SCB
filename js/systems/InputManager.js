@@ -36,7 +36,7 @@ export class InputManager {
     this._deps = null;
 
     // S4: Control mode tracking for HUD indicator
-    /** @type {string} Current WASD control mode — 'RCS'|'COLD_GAS'|'ARM_PILOT'|'MPD_BURST' */
+    /** @type {string} Current WASD control mode — 'RCS'|'COLD_GAS'|'ARM_PILOT' */
     this._controlMode = 'RCS';
 
     // S4: Lasso windup state
@@ -463,7 +463,7 @@ export class InputManager {
     }
 
     // --- Debris Map intercept — suppress most input, allow cluster nav + close ---
-    // ST-5.1: Pass through C-hold, PageUp, PageDown for comms pane interaction
+    // ST-5.1: Pass through PageUp, PageDown for comms pane interaction
     if (d.debrisMap && d.debrisMap.isVisible()) {
       switch (e.code) {
         case 'Escape':
@@ -494,7 +494,6 @@ export class InputManager {
           }
           return;
         // ST-5.1: Allow these keys through for comms pane
-        case 'KeyC':
         case 'PageUp':
         case 'PageDown':
           break; // fall through to normal handling
@@ -530,7 +529,8 @@ export class InputManager {
     }
 
     // ST-5.1: Comms menu intercept removed — center popup deleted.
-    // UX-11 #9: the C-hold RadialMenu was also removed; C = expand comms.
+    // UX-11 #9: the C-hold RadialMenu was also removed. Bare C is now unbound
+    // (2026-06-16 cleanup); comms expand lives on the 7 key.
 
     switch (e.code) {
       // Confirm / Enter action (gameplay only — menu/briefing handle their own Enter)
@@ -928,18 +928,11 @@ export class InputManager {
         }
         break;
 
-      // C key — Comms expand (plain tap). Hotkey revamp 2026-06-14: Shift+C
-      // city-labels toggle moved to the 5 key (Advanced toggle row), so Shift+C
-      // is freed. A dedicated "Comms" toggle also lives on the 7 key now; bare
-      // C keeps the quick expand/focus tap.
-      case 'KeyC':
-        if (!e.repeat) {
-          eventBus.emit(Events.COMMS_FOCUS);
-          d.audioSystem?.playClick();
-          // Skills discovery: comms opened
-          eventBus.emit(Events.COMMS_OPENED);
-        }
-        break;
+      // C key — FREED (hotkey cleanup 2026-06-16). Bare C used to duplicate the
+      // 7 key's comms expand (both emitted COMMS_FOCUS + COMMS_OPENED), so the
+      // redundant binding was removed: 7 is the single comms key now. C is left
+      // unbound/available (joining the already-free W, Y, O, ',').
+      // Shift+C city-labels moved to 5 in the 2026-06-14 revamp and is also free.
 
       // ST-5.1: PageUp / PageDown — comms history scrolling
       case 'PageUp':
@@ -1321,8 +1314,9 @@ export class InputManager {
    */
   _handleKeyUp(e) {
     this.keys[e.code] = false;
-    // UX-11 #9: the C tap/hold discrimination (radial menu) was removed —
-    // C now acts on keydown with zero delay. No keyup handling needed.
+    // No per-key keyup handling needed — the bare-C comms tap was removed in
+    // the 2026-06-16 cleanup (7 is the single comms key) and the older C
+    // tap/hold radial menu was retired earlier (UX-11 #9).
   }
 
   // ==========================================================================
@@ -1682,7 +1676,7 @@ export class InputManager {
     // Phase 3a (capture-feedback overhaul): hold Shift → BOOST reel ×2 on
     // reeling daughters. Set every frame (like the laser intent above) so the
     // boost always releases on keyup/overlay. Shift is otherwise only a
-    // modifier (Shift+R/V/P/G), so a bare hold is conflict-free.
+    // modifier (Shift+R/V/D/A/N/S/G), so a bare hold is conflict-free.
     if (d.armManager && typeof d.armManager.setReelBoost === 'function') {
       const boostHeld = !overlayOpen
         && (this.keys['ShiftLeft'] === true || this.keys['ShiftRight'] === true);
@@ -1823,8 +1817,6 @@ export class InputManager {
     let newMode = 'RCS'; // default: mothership RCS fine positioning
     if (this.armPilotMode || (d.armManager && d.armManager.selectedArmIndex >= 0 && d.armManager.getSelectedDeployedArm())) {
       newMode = 'ARM_PILOT';
-    } else if (d.player && d.player.isMPDArmed && d.player.hasMPD) {
-      newMode = 'MPD_BURST';
     } else if (this.keys['ShiftLeft'] || this.keys['ShiftRight']) {
       newMode = 'COLD_GAS';
     }

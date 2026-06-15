@@ -3242,6 +3242,30 @@ export class PlayerSatellite extends THREE.Group {
   // ========================================================================
   // S3b: MPD BURST MODE
   // ========================================================================
+  //
+  // ⚠️ FUTURE TEAMS — DORMANT FEATURE (note added 2026-06-16) ⚠️
+  // This entire MPD "Ludicrous mode" burst subsystem (toggleMPDArmed + heat /
+  // cooldown / lithium / MPD_BURST_START|END events + the StatusPanel HEAT row +
+  // the CodexSystem trigger + the AudioSystem burst SFX) is currently
+  // UNREACHABLE by the player. `toggleMPDArmed()` has NO caller: it used to be
+  // bound to the `M` key, but `M` was reassigned to the Debris Map in the
+  // 2026-06-14 hotkey revamp and the arming verb was never re-homed. As of
+  // 2026-06-16 the shop now describes the MPD as a passive thrust upgrade (no
+  // hotkey promised), so today buying it gives no burst benefit at all.
+  //
+  // DECISION NEEDED before this ships as a real feature — pick ONE:
+  //   (a) Give it an affordance again — bind arming to a free key (`W`, `Y`,
+  //       `O`, `,`, or the freed `C`), add it to HotkeyOverlay.HOTKEY_GROUPS +
+  //       the README/ARCHITECTURE §6 tables, and wire InputManager →
+  //       toggleMPDArmed(). (Re-instate the MPD_BURST control-mode branch that
+  //       was removed from InputManager.processInput on 2026-06-16.)  OR
+  //   (b) Make it genuinely passive — fold the thrust gain into the normal
+  //       drive when `hasMPD` is true and DELETE the burst/heat/arm machinery
+  //       (this getter, toggleMPDArmed, the MPD_BURST events, StatusPanel HEAT
+  //       row, CodexSystem trigger).  OR
+  //   (c) Cut the upgrade from the shop entirely.
+  // Until then, leave the code intact but be aware it does nothing in-game.
+  // See ARCHITECTURE.md §16 (drift register) for the cross-reference.
 
   /** @returns {boolean} Whether MPD is armed (Ludicrous mode active) */
   get isMPDArmed() { return this._mpdArmed; }
@@ -3261,7 +3285,13 @@ export class PlayerSatellite extends THREE.Group {
   get hasSupercap() { return this._hasSupercap; }
 
   /**
-   * Toggle MPD armed state. Called from InputManager on M key.
+   * Toggle MPD armed state.
+   *
+   * ⚠️ NO CALLER as of 2026-06-16 — this is dead until a team re-homes the
+   * arming verb (its old `M` key is now the Debris Map). See the "DORMANT
+   * FEATURE" banner above the `isMPDArmed` getter for the decision options.
+   * If you re-bind it, also restore the MPD_BURST control-mode branch in
+   * InputManager.processInput and add it to the help pane + docs.
    */
   toggleMPDArmed() {
     if (!this._hasMPD) {

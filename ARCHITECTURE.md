@@ -170,9 +170,9 @@ MENU ──Start──▶ BRIEFING ──Commence/QuickStart/FreeRoam──▶ O
 
 ## 6. Input / hotkey map (verified)
 
-All in [`InputManager.js`](js/systems/InputManager.js) `_handleKeyDown` + held-key `processInput`. **The single source of truth is the in-game help pane** (`?`), defined in [`HotkeyOverlay.js`](js/ui/HotkeyOverlay.js) `HOTKEY_GROUPS`; the code is kept aligned to it (a separate "manifest" file was tried and removed 2026-06-14 — one source only). Overlays (hotkey `?`, Codex `L`, StrategicMap, DebrisMap, launch ceremony) swallow most input while open.
+All in [`InputManager.js`](js/systems/InputManager.js) `_handleKeyDown` + held-key `processInput`. **The single source of truth is the in-game help pane** (`?`), defined in [`HotkeyOverlay.js`](js/ui/HotkeyOverlay.js) `HOTKEY_GROUPS`; the code is kept aligned to it (a separate "manifest" file was tried and removed 2026-06-14 — one source only). Overlays (hotkey `?`, Codex `I`, StrategicMap, DebrisMap, launch ceremony) swallow most input while open.
 
-**Hotkey revamp 2026-06-14 (code aligned to the help menu):** daughters are now flown with **arrow keys only** (station-keep orbit) — **WASD/`Q`/`E` daughter thrust was removed**, so `S`/`A`/`D`/`V`/`T` keep their Mother meanings while piloting. `1-4` is the single select/pilot verb (`P`/`Shift+P` gone); re-pressing the active digit backs out to the mother. The number row 5-0 became display toggles; several keys moved (see below). `7` is now "Comms toggle" (was return-to-mother).
+**Hotkey revamp 2026-06-14 (code aligned to the help menu):** daughters are now flown with **arrow keys only** (station-keep orbit) — **WASD/`Q`/`E` daughter thrust was removed**, so `S`/`A`/`D`/`V`/`T` keep their Mother meanings while piloting. `1-4` is the single select/pilot verb (`P`/`Shift+P` gone); re-pressing the active digit backs out to the mother. The number row 5-0 became display toggles; several keys moved (see below). `7` is "Comms expand" (was return-to-mother). Cleanup 2026-06-16: bare `C` was freed (it duplicated `7`'s comms expand), the MPD thruster became a passive upgrade with no hotkey, and the FEEP fuel cycle has no hotkey.
 
 | Key | Normal / Orbital | While piloting a daughter |
 |---|---|---|
@@ -195,19 +195,18 @@ All in [`InputManager.js`](js/systems/InputManager.js) `_handleKeyDown` + held-k
 | **J** | Journal / Skills *(owned by SkillsPane's own listener)* | same |
 | **? / Esc** | help pane / pause·back (Esc also backs out of pilot) | same |
 | **5 / 6** | toggle City names / Constellation names | same |
-| **7 / 8** | Comms size cycle / **NavSphere → minimize to LAT·LON·ALT one-liner** | same |
+| **7 / 8** | Comms expand / **NavSphere → minimize to LAT·LON·ALT one-liner** | same |
 | **9 / 0** | **Debris pane → minimize to one-liner** (id·size·mass·tumble·material) / toggle Target pane | same |
 | **. (period)** | **Struts** toggle (stow/deploy all) | same |
 | **+ / −** | throttle ±10% (in SK: orbit radius ∓) | SK: approach/retreat |
 | **[ / ]** | power bus ∓10%; Shift+1/2/3 select bus | same |
-| **C** | comms focus (plain tap; not in the help pane) | same |
 | **Z / Shift+Z** | Wireframe zone cycle ±1 | same |
 | **` (backtick)** | toggle DebrisMap (alias of M; cycles tool while piloting in SK) | cycle tool in SK |
 | **Shift+G** | Trawl start | — |
 | **F2** | — | cycle FEEP metal (piloted arm) |
 | **PageUp/Down** | comms scroll | same |
 
-**Freed by the 2026-06-14 remap:** `W`, `Y`, `O`, `,` (comma), `Shift+C`. **Features that lost their dedicated key (not in the help menu):** cycle-capture-tool (was `T`), Focus Action (was `F`), Orbit/MPD MFD (was `M`), FEEP fuel cycle (was `6`). **Removed earlier (2026-06-14 "spinning plates"):** `P`/`Shift+P` (→ `1-4` select/pilot), `7` return-to-mother (→ re-press digit; `7` is now Comms toggle), `Q`/`E` thrust, and the `TOOL_DEPLOY` event constant. **Earlier removals:** bare `I` (inspection rides the `V` cycle, 2026-06-13b); `F4`/`F5` (→ `5`/`6`); C-hold radial menu (UX-11 #9); `H`/`Shift+O` recall-all (→ `Shift+R`, 2026-06-12).
+**Freed by the 2026-06-14 remap:** `W`, `Y`, `O`, `,` (comma), `Shift+C`. **Freed 2026-06-16:** bare `C` (duplicated `7`'s comms expand). **Features that lost their dedicated key (not in the help menu):** cycle-capture-tool (was `T`), Focus Action (was `F`), Orbit/MPD MFD (was `M`), FEEP fuel cycle (was `6`). **Dormant/unreachable (no key, deferred gameplay decision):** MPD burst "Ludicrous mode" — `PlayerSatellite.toggleMPDArmed()` has no caller since `M` became the Debris Map; the MPD is now treated as a passive thrust upgrade. **⚠️ Future teams:** it currently does *nothing* in-game (buying the upgrade gives no burst), so it needs either a re-homed hotkey/UI affordance so players can notice and use it, a true passive-thrust rework, or removal — see the "DORMANT FEATURE" banner in `PlayerSatellite.js` (above `isMPDArmed`) for the concrete options. FEEP fuel cycle — `Events.FUEL_CYCLE` is listened by `ResourceSystem.cycleFuel` but never emitted (also keyless). **Removed earlier (2026-06-14 "spinning plates"):** `P`/`Shift+P` (→ `1-4` select/pilot), `7` return-to-mother (→ re-press digit; `7` is now Comms expand), `Q`/`E` thrust, and the `TOOL_DEPLOY` event constant. **Earlier removals:** bare `I` (inspection rides the `V` cycle, 2026-06-13b); `F4`/`F5` (→ `5`/`6`); C-hold radial menu (UX-11 #9); `H`/`Shift+O` recall-all (→ `Shift+R`, 2026-06-12).
 
 **New toggle hooks (2026-06-14):** `Starfield.toggleConstellations()`, `DebrisWireframe.toggleMinimized()` (collapses the canvas to a one-line dossier summary — id·size·mass·tumble·material — and the right column reflows up), `NavSphere.toggleMinimized()` (draws just the LAT/LON/ALT readout, skips the sphere), `TargetPanel.toggleVisible()`; `starfield` was added to `InputManager` deps.
 
@@ -364,10 +363,11 @@ Corrected during the 2026-06-07 ground-truth pass. Stale-count headers have been
 | TetherReel / BridleRing wired | **orphaned** (flags off, not in main.js) |
 | "TRL n" badges player-facing | relabeled **"Tech Lvl n"** everywhere player-facing (Codex + Shop + tier gating text, UX-11 #10); internal keys/data stay `trl`/`Constants.TRL` |
 | Codex locked cards = blurred `???` | **syllabus reveal** (UX-11 #10): title + one-liner always visible; fullText/rationale gated; `unlockHint` per entry; live search + per-category progress |
-| C-hold radial menu (RadialMenu.js) | **removed** (UX-11 #9); `C` = comms expand, `Shift+C` = city labels |
+| C-hold radial menu (RadialMenu.js) | **removed** (UX-11 #9); bare `C` is now **freed** (2026-06-16) — comms expand is on `7`; `Shift+C` city labels moved to `5` |
 | H / Shift+O = recall all (older docs/skills text) | **Shift+R** = recall all (2026-06-12 hotkey cleanup); `Shift+O` freed; `H` was briefly freed then reassigned to the **de-spin laser** (2026-06-13, was `U`) |
 | de-spin laser = `U`; capture = F/N/Space (older docs) | **`H`** = de-spin laser ("Hold"); **`N`** = the single net/capture verb (F inert in ARM_PILOT, Space lasso alias dropped) — 2026-06-13 cleanup |
 | de-spin laser = `H`; Codex/Library = `L` (2026-06-13/14) | **`L`** = de-spin laser; **`I`** = Codex / Info viewer — 2026-06-15 remap; `H` freed |
+| `M` arms MPD burst / toggles Orbit MFD; `T` cycles fuel; bare `C` expands comms (older UI strings) | **`M`** = Debris Map only; MPD burst is **dormant** (no key — passive thrust upgrade); fuel cycle has **no key** (`Events.FUEL_CYCLE` un-emitted); bare `C` **freed** (comms expand on `7`) — 2026-06-16 guidance cleanup (ShopScreen/OrbitMFD/StatusPanel/NetInventoryPanel strings corrected) |
 | Test baseline 272/1252 (old ARCHITECTURE) | **711 / 2880 / 0** (2026-06-12) |
 
 ---

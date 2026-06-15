@@ -382,7 +382,7 @@ export class StatusPanel {
           </div>
         </div>
         <div id="fuel-type-indicator" style="font-size:10px;color:#4fc3f7;margin-top:2px;margin-bottom:2px">
-          [T] Xenon · 1600s
+          Xenon · 1600s
         </div>
         <div id="throttle-gauge" style="display:flex;align-items:center;gap:4px;font-size:10px;margin-bottom:4px;">
           <span style="color:#00ff88;opacity:0.7;">Throttle</span>
@@ -922,7 +922,7 @@ export class StatusPanel {
     const el = document.getElementById('fuel-type-indicator');
     if (!el) return;
     if (fuelData) {
-      el.textContent = `[T] ${fuelData.name} · ${fuelData.isp}s`;
+      el.textContent = `${fuelData.name} · ${fuelData.isp}s`;
       el.style.color = fuelData.color || '#4fc3f7';
     }
   }
