@@ -240,7 +240,7 @@ export class MenuScreen {
 
             <!-- Companies list -->
             <div style="font-size:0.88rem; color:rgba(0,255,136,0.6); line-height:1.5;">
-              <details class="adr-group" open>
+              <details class="adr-group">
                 <summary>Who removes debris<span class="adr-count">6</span></summary>
                 <ul class="adr-list">
                 <li><span class="adr-name" title="Tokyo-based pure-play debris remover, listed on the Tokyo Stock Exchange since 2024 (valued roughly $1 billion). In 2024 its ADRAS-J spacecraft flew within ~15 m of a discarded Japanese rocket stage. The closest a private craft has come to large debris. Its ADRAS-J2 follow-up will grab and de-orbit that stage (~2027).">Astroscale</span> <span class="adr-sub">Japan · public</span></li>

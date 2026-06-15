@@ -347,3 +347,19 @@ describe('Tether — world-space integrity after postArmUpdate quat change (Issu
       `anchor vertex must span to the mother anchor in world space; off by ${world.distanceTo(parentPos)}`);
   });
 });
+
+// ── Re-dock 180° flash fix: tether hidden in DOCKING (and the other at-dock states) ──
+describe('Tether — hidden in at-dock states (re-dock 180° flash fix)', () => {
+  for (const stateName of ['DOCKED', 'DOCKING', 'RELOADING', 'HOLDING_CATCH']) {
+    it(`tetherLine is hidden in ${stateName} (no wrong-way flash at the strut)`, () => {
+      const arm = makeTetherArm(0, 100 * M, 0);
+      const parentPos = new THREE.Vector3(0, 0, 0);
+      arm.tetherLine.visible = true;          // start visible to prove it gets hidden
+      arm.state = S[stateName];
+      arm._updateTether(parentPos, null, 0.016);
+      assert.equal(arm.tetherLine.visible, false,
+        `tether must not render in ${stateName} (daughter is at her strut tip)`);
+    });
+  }
+});
+

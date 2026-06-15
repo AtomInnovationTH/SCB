@@ -110,13 +110,54 @@ describe('ArmUnit park-the-catch — HOLDING_CATCH update', () => {
     // Issue 13 (2026-06-12): the pin carries an outboard standoff so the
     // daughter never renders inside the catch — pin = arm.position +
     // holdDir × (sizeMeter/2 + ARM_HOLD_CLEARANCE_M), holdDir = outboard.
-    const standoff = (debris.sizeMeter / 2 + Constants.ARM_HOLD_CLEARANCE_M) * M;
-    const expectedPin = arm.position.clone().addScaledVector(
-      arm.position.clone().sub(parentPos).normalize(), standoff);
+    // Re-dock occlusion fix: HOLDING_CATCH adds a LATERAL bias (× catch radius)
+    // perpendicular to holdDir (holdDir × worldUp) so the bag clears the
+    // camera→daughter axis. Replicate both terms here.
+    const radius = debris.sizeMeter / 2 + Constants.ARM_HOLD_CLEARANCE_M;
+    const standoff = radius * M;
+    const holdDir = arm.position.clone().sub(parentPos).normalize();
+    const expectedPin = arm.position.clone().addScaledVector(holdDir, standoff);
+    const bias = Constants.ARM_HOLD_LATERAL_BIAS ?? 0;
+    if (bias !== 0) {
+      const lat = holdDir.clone().cross(new THREE.Vector3(0, 1, 0));
+      if (lat.lengthSq() < 1e-8) lat.set(1, 0, 0);
+      lat.normalize();
+      expectedPin.addScaledVector(lat, radius * M * bias);
+    }
     assert.ok(debris._armPinPos.distanceTo(expectedPin) < 1e-12,
-      'catch held outboard of the strut tip at the standoff distance');
+      'catch held outboard + laterally biased off the strut tip');
     assert.ok(debris._armPinPos.distanceTo(arm.position) > 1e-9,
       'pin is never coincident with the daughter');
+  });
+
+  it('biases a large catch laterally so it never eclipses the daughter on the view axis', () => {
+    eventBus.clear();
+    const arm = makeArm('weaver');
+    const debris = makeDebris(800, 5);   // max in-spec MEDIUM-net catch (5 m)
+    attachCatch(arm, debris);
+    arm.state = S.HOLDING_CATCH;
+    arm.position.set(2, 0, 0);           // off-position; snaps back to dock
+
+    const parentPos = new THREE.Vector3(0, 0, 0);
+    arm._updateHoldingCatch(0.016, parentPos, null);
+
+    const radius = debris.sizeMeter / 2 + Constants.ARM_HOLD_CLEARANCE_M;
+    const holdDir = arm.position.clone().sub(parentPos).normalize();
+    // Decompose the pin offset into along-holdDir (view axis) and perpendicular.
+    const offset = debris._armPinPos.clone().sub(arm.position);
+    const alongMag = offset.dot(holdDir);
+    const lateralMag = offset.clone().addScaledVector(holdDir, -alongMag).length();
+
+    assert.ok((Constants.ARM_HOLD_LATERAL_BIAS ?? 0) > 0,
+      'lateral bias is configured > 0');
+    // Lateral displacement must clear the ~1 m daughter half-width so a 5 m bag
+    // never fully eclipses her on the camera→daughter axis.
+    assert.ok(lateralMag > 1.0 * M,
+      `catch is biased clear of the daughter (lateral ${(lateralMag / M).toFixed(2)} m)`);
+    // Outboard standoff is preserved (catch still hangs outboard, not inboard).
+    assert.ok(alongMag > 0, 'catch still hangs outboard along the hold axis');
+    assert.ok(Math.abs(alongMag - radius * M) < 1e-9,
+      'outboard component equals the standoff distance');
   });
 
   it('falls back to RELOADING if the held catch is gone', () => {

@@ -24,6 +24,9 @@ import { gameState } from '../core/GameState.js';
 /** 1 meter in scene units (1 scene unit = 100 km) */
 const M = 0.00001;
 
+/** World up axis (reused for the HOLDING_CATCH lateral-bias cross product). */
+const _WORLD_UP = new THREE.Vector3(0, 1, 0);
+
 // ──────────────────────────────────────────────────────────────────────────
 const S = Constants.ARM_STATES;
 
@@ -4349,9 +4352,12 @@ export class ArmUnit {
    * parent rotation each re-pin).
    * @param {THREE.Vector3|null} [parentPos] freshest mother position (falls
    *   back to _prevParentPos when the call site has no parent frame in scope)
+   * @param {number} [lateralBias=0] perpendicular offset (× catch radius) to
+   *   slide the bag off the camera→daughter axis so the parked daughter stays
+   *   visible beside her catch (used by HOLDING_CATCH). 0 = pure outboard.
    * @private
    */
-  _pinCatchToSelf(parentPos = null) {
+  _pinCatchToSelf(parentPos = null, lateralBias = 0) {
     const d = this.capturedDebris;
     if (!d) return;
     const dir = this._tmpHoldDir || (this._tmpHoldDir = new THREE.Vector3());
@@ -4371,6 +4377,24 @@ export class ArmUnit {
     const standoffScene = ((d.sizeMeter || 0) / 2 + clearance) * M;
     if (!d._armPinPos) d._armPinPos = new THREE.Vector3();
     d._armPinPos.copy(this.position).addScaledVector(dir, standoffScene);
+
+    // Issue (re-dock occlusion): in HOLDING_CATCH the catch parks full-size at
+    // the strut tip directly OUTBOARD of the ~1 m daughter. From the usual
+    // gameplay camera (looking from the mother outward) a 5 m bag placed on the
+    // camera→daughter axis eclipses her — reading as "the daughter disappeared"
+    // for the whole hold/chop window. A lateral bias slides the bag off that
+    // axis (perpendicular to the outboard hold direction) so the daughter stays
+    // visible beside her catch. Axis = holdDir × world-up, falling back to
+    // world-X when holdDir is ~parallel to up. Scales with the catch radius so
+    // bigger catches clear further.
+    if (lateralBias !== 0 && hasDir) {
+      const lat = this._tmpLatDir || (this._tmpLatDir = new THREE.Vector3());
+      lat.crossVectors(dir, _WORLD_UP);
+      if (lat.lengthSq() < 1e-8) lat.set(1, 0, 0); // holdDir ∥ up — pick world-X
+      lat.normalize();
+      const latScene = ((d.sizeMeter || 0) / 2 + clearance) * M * lateralBias;
+      d._armPinPos.addScaledVector(lat, latScene);
+    }
     d._armPinned = true;
   }
 
@@ -4793,7 +4817,9 @@ export class ArmUnit {
       // furnace-transfer window elapses), NOT on dock arrival — see GameFlowManager.
       if (this.capturedDebris) {
         this.captures++;
-        this._pinCatchToSelf();             // keep the catch welded to the strut tip
+        // Pin with the same lateral bias HOLDING_CATCH will use, so there's no
+        // one-frame jump of the bag when the park state begins.
+        this._pinCatchToSelf(parentPos, Constants.ARM_HOLD_LATERAL_BIAS ?? 0);
         this._breakdownStarted = false;     // reset staged-furnace bookkeeping (Item 1)
         this._breakdownChunksFired = 0;
         this._transitionTo(S.HOLDING_CATCH);
@@ -4890,8 +4916,9 @@ export class ArmUnit {
     if (this._breakdownChunksFired === undefined) this._breakdownChunksFired = 0;
 
     if (t < HOLD_S) {
-      // hold: catch welded full-size, net still cinched.
-      this._pinCatchToSelf(parentPos);
+      // hold: catch welded full-size, net still cinched. Lateral bias keeps the
+      // bag off the camera→daughter axis so the parked daughter stays visible.
+      this._pinCatchToSelf(parentPos, Constants.ARM_HOLD_LATERAL_BIAS ?? 0);
       return;
     }
 
@@ -4909,7 +4936,8 @@ export class ArmUnit {
 
     // Keep the (now-breaking-down) catch pinned to the strut so it never drifts
     // while the furnace visual animates the chop. The visual owns the scale ramp.
-    this._pinCatchToSelf(parentPos);
+    // Same lateral bias as the hold phase so the daughter stays clear of the bag.
+    this._pinCatchToSelf(parentPos, Constants.ARM_HOLD_LATERAL_BIAS ?? 0);
 
     // feed: emit chunk events evenly across [CHOP_S, FEED_S).
     if (t >= CHOP_S && t < FEED_S) {
@@ -5454,11 +5482,17 @@ export class ArmUnit {
    * @param {number} [dt] — frame delta (seconds) for REELING dash-flow animation
    */
   _updateTether(parentPos, parentQuat, dt) {
-    // HOLDING_CATCH: daughter is parked at her strut tip carrying the catch —
-    // no tether should render (matches the intent of _updateHoldingCatch hiding
-    // it). Without this entry, _updateTether (which runs AFTER the per-state
-    // handler) re-shows a stray, wrong-direction tether for the whole park.
-    if (this.state === S.DOCKED || this.state === S.RELOADING || this.state === S.HOLDING_CATCH) {
+    // States where the daughter is AT (or arriving at) her strut-tip dock —
+    // no tether should render. REELING/RETURNING already snap her to the strut
+    // tip before entering DOCKING (Issue 1/8 fixes), so by DOCKING the cable
+    // spans ~0 and carries no information; rendering it only exposes the
+    // one-frame-stale counter-rotation flash (Mechanism B — pose error nears
+    // 180° at DOCKING entry), which read as a "wrong-way 180° tether". DOCKED /
+    // RELOADING / HOLDING_CATCH likewise park at the strut. _updateTether runs
+    // AFTER the per-state handler, so without this early-out it re-shows a
+    // stray, wrong-direction tether for the whole window.
+    if (this.state === S.DOCKED || this.state === S.DOCKING ||
+        this.state === S.RELOADING || this.state === S.HOLDING_CATCH) {
       this.tetherLine.visible = false;
       return;
     }

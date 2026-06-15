@@ -510,6 +510,11 @@ export const Constants = {
   // the daughter never renders INSIDE a catch larger than herself. ≈ daughter
   // half-length + net bag slack.
   ARM_HOLD_CLEARANCE_M: 1.0,           // metres
+  // While parked in HOLDING_CATCH the full-size catch is biased laterally
+  // (perpendicular to the outboard hold axis) by this factor × catch radius so
+  // the bag never eclipses the ~1 m daughter on the camera→daughter view axis
+  // (re-dock "daughter disappeared for 2 s" fix). 0 = pure outboard (old).
+  ARM_HOLD_LATERAL_BIAS: 1.0,
   ARM_NET_DEPLOY_TIME: 3.0,            // seconds (Miura-ori unfold + SMA cinch)
   ARM_GRAPPLE_STABILIZE: 1.5,          // seconds (stabilization after capture)
   ARM_CAPTURE_SUCCESS_RATE: 0.85,      // 85% net capture success (legacy; gated off when CAPTURE_NET ON)
