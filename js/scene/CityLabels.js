@@ -217,7 +217,10 @@ export class CityLabels {
     if (container) container.appendChild(root);
 
     const items = [];
-    const surfaceLift = radius * 1.004;   // anchor just above the surface
+    // Anchor exactly on the surface. These are 2D DOM overlays (no depth test,
+    // so no z-fighting), and any radial lift would project pins outward from
+    // disk-centre — pushing limb/coastal cities off the coast into the ocean.
+    const surfaceLift = radius;
     for (const city of this._cities) {
       const lonDeg = (mirrorLon ? -city.lon : city.lon) + lonOffsetDeg;
       const pos = latLonToPosition(city.lat, lonDeg, surfaceLift);

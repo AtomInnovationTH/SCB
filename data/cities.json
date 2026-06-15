@@ -90,7 +90,7 @@
     { "name": "Kano",            "lat": 12.00,  "lon": 8.52,    "tier": 3 },
     { "name": "Lagos",           "lat": 6.52,   "lon": 3.38,    "tier": 1 },
     { "name": "Accra",           "lat": 5.60,   "lon": -0.19,   "tier": 2 },
-    { "name": "Abidjan",         "lat": 5.36,   "lon": -4.01,   "tier": 3 },
+    { "name": "Abidjan",         "lat": 5.36,   "lon": -4.01,   "tier": 1 },
     { "name": "Khartoum",        "lat": 15.50,  "lon": 32.56,   "tier": 2 },
     { "name": "Addis Ababa",     "lat": 9.03,   "lon": 38.74,   "tier": 2 },
     { "name": "Mogadishu",       "lat": 2.05,   "lon": 45.34,   "tier": 2 },
