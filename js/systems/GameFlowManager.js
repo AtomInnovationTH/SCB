@@ -1112,6 +1112,22 @@ class GameFlowManager {
               priority: 'info',
             });
           }
+
+          // Landmark reference callout — points out the homeland feature visible
+          // on the opening pass (Languages.sight). Advisory/info so it doesn't
+          // fight onboarding; no-ops when the language has no `sight`.
+          if (!this._firstTimeComms.has('orbital_view_landmark')) {
+            this._firstTimeComms.add('orbital_view_landmark');
+            const lang = settingsManager.getLanguageEntry();
+            const sight = lang && lang.sight;
+            if (sight) {
+              eventBus.emit(Events.COMMS_MESSAGE, {
+                sender: 'SPACECRAFT',
+                text: `Off your port side — the ${sight}. Your reference point.`,
+                priority: 'info',
+              });
+            }
+          }
         }, 3000 + vleoHoldMs, { owner: this });
       }
     });
@@ -1211,10 +1227,13 @@ class GameFlowManager {
   /**
    * Place the player's starting orbit so its ground track passes over the home
    * region of the selected menu language (e.g. Japanese → over Japan, Thai →
-   * over Thailand). Only RAAN + true anomaly are set — inclination stays at the
-   * 51.6° ISS band, which already covers every supported start city's latitude,
-   * so debris-field ΔV tuning is undisturbed. Called on New Game after
-   * resetGame() (which zeroes trueAnomaly).
+   * over Thailand). Inclination is set from the language's `incDeg` (derived
+   * from the nation's real launch latitude; default 51.6° ISS band), then RAAN
+   * + true anomaly are aimed at the anchor sub-point via subPointToOrbit(). The
+   * anchor latitude is ≤ incDeg by design (see Languages.js) so the pass is not
+   * clamped. Setting inclination before MISSION_START means the welcome debris
+   * field (spawned in the player's own orbit) inherits the chosen tilt. Called
+   * on New Game after resetGame() (which zeroes trueAnomaly).
    */
   _applyStartLocation() {
     const { player } = this._refs;
@@ -1223,9 +1242,9 @@ class GameFlowManager {
     const start = lang && lang.start;
     if (!start) return;
 
-    // Keep the canonical 51.6° inclination (matches PlayerSatellite ctor + the
-    // debris inclination clusters); only re-phase RAAN + true anomaly.
-    const inclination = 51.6 * Math.PI / 180;
+    // Inclination from launch geography (Languages.incDeg), default 51.6°.
+    const incDeg = (lang && Number.isFinite(lang.incDeg)) ? lang.incDeg : 51.6;
+    const inclination = incDeg * Math.PI / 180;
     const { raan, trueAnomaly } = subPointToOrbit(start.lat, start.lon, inclination);
     player.orbit.inclination = inclination;
     player.orbit.raan = raan;

@@ -254,6 +254,9 @@ import './test-DevSequenceAdvancer.js';  // Space "do the next thing" rapid-adva
 import './test-HintTicker.js';
 import './test-WelcomeField.js';
 
+// Per-language starting orbits, anchors, landmark sight + Portuguese
+import './test-Languages.js';
+
 // Delegation 3 (2026-05-31) — Part callouts (MotherWireframe, DaughterWireframe, StrutLabels)
 import './test-MotherWireframe.js';
 import './test-DaughterWireframe.js';

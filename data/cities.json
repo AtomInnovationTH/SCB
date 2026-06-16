@@ -1,6 +1,6 @@
 {
-  "version": 4,
-  "description": "Curated city + island/landmark reference list for the Earth city-label layer (UX-11 #5). Offline-first; lat/lon in degrees. 'tier' drives zoom-based LOD: tier 1 = always shown (major cities + isolated ocean/remote references), tier 2 = medium zoom, tier 3 = close zoom only (dense-cluster / minor). Isolated references stay tier 1 so empty oceans always have a landmark.",
+  "version": 5,
+  "description": "Curated city + island/natural-landmark reference list for the Earth city-label layer (UX-11 #5). Offline-first; lat/lon in degrees. 'tier' drives zoom-based LOD: tier 1 = always shown (major cities + isolated ocean/remote references), tier 2 = medium zoom, tier 3 = close zoom only (dense-cluster / minor). Isolated references stay tier 1 so empty oceans always have a landmark. Optional 'kind' tags natural features (e.g. \"landmark\"); unknown keys are ignored by parseCityList, so they are backward-compatible.",
   "cities": [
     { "name": "New York",        "lat": 40.71,  "lon": -74.01,  "tier": 1 },
     { "name": "Washington",      "lat": 38.91,  "lon": -77.04,  "tier": 3 },
@@ -182,6 +182,21 @@
     { "name": "Ascension",       "lat": -7.95,  "lon": -14.36,  "tier": 1 },
     { "name": "St Helena",       "lat": -15.96, "lon": -5.71,   "tier": 1 },
     { "name": "Tristan",         "lat": -37.11, "lon": -12.28,  "tier": 1 },
-    { "name": "McMurdo",         "lat": -77.85, "lon": 166.67,  "tier": 1 }
+    { "name": "McMurdo",         "lat": -77.85, "lon": 166.67,  "tier": 1 },
+    { "name": "Mt Everest",      "lat": 27.99,  "lon": 86.93,   "tier": 1, "kind": "landmark" },
+    { "name": "Mt Fuji",         "lat": 35.36,  "lon": 138.73,  "tier": 1, "kind": "landmark" },
+    { "name": "Mt Kilimanjaro",  "lat": -3.07,  "lon": 37.35,   "tier": 1, "kind": "landmark" },
+    { "name": "Grand Canyon",    "lat": 36.10,  "lon": -112.11, "tier": 1, "kind": "landmark" },
+    { "name": "Amazon Rainforest","lat": -3.47, "lon": -62.22,  "tier": 1, "kind": "landmark" },
+    { "name": "Aconcagua",       "lat": -32.65, "lon": -70.01,  "tier": 1, "kind": "landmark" },
+    { "name": "Iguazu Falls",    "lat": -25.69, "lon": -54.44,  "tier": 2, "kind": "landmark" },
+    { "name": "Sahara",          "lat": 23.29,  "lon": 5.53,    "tier": 1, "kind": "landmark" },
+    { "name": "Victoria Falls",  "lat": -17.92, "lon": 25.86,   "tier": 2, "kind": "landmark" },
+    { "name": "Great Barrier Reef","lat": -18.29,"lon": 147.70, "tier": 1, "kind": "landmark" },
+    { "name": "Uluru",           "lat": -25.34, "lon": 131.04,  "tier": 2, "kind": "landmark" },
+    { "name": "Pyrenees",        "lat": 42.63,  "lon": 0.66,    "tier": 2, "kind": "landmark" },
+    { "name": "Western Ghats",   "lat": 10.17,  "lon": 77.06,   "tier": 2, "kind": "landmark" },
+    { "name": "Angkor Wat",      "lat": 13.41,  "lon": 103.87,  "tier": 2, "kind": "landmark" },
+    { "name": "Lake Baikal",     "lat": 53.50,  "lon": 108.20,  "tier": 2, "kind": "landmark" }
   ]
 }

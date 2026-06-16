@@ -131,3 +131,75 @@ describe('DebrisField.spawnWelcomeField — orbital frame preserved', () => {
     assert.ok(behindCount >= 3, `expected ≥3 behind, got ${behindCount}`);
   });
 });
+
+// ─── INCLINATION INHERITANCE (per-language start tilt) ───────────────────────
+// Per-language starting orbits (Languages.incDeg) set the player's inclination
+// before MISSION_START fires, so the welcome cluster — spawned in the player's
+// own orbit — must inherit *whatever* tilt the start uses. Low-tilt starts
+// (Brazil 5°, Tamil 18°) get the same guaranteed first contacts as the 51.6°
+// default. This guards the frame-copy at DebrisField._spawnWelcomeField.
+
+describe('DebrisField.spawnWelcomeField — inherits a non-51.6° start tilt', () => {
+  const lowTiltOrbit = {
+    semiMajorAxis: 6728.137,    // 350 km altitude (fixed start altitude)
+    eccentricity: 0.0,
+    inclination: 5.0 * Math.PI / 180,   // Brazil / Alcântara equatorial start
+    raan: 2.1,
+    argPerigee: 0.0,
+    trueAnomaly: 0.7,
+    meanMotion: 0.0011,
+  };
+
+  it('plan.playerOrbit carries the 5° start inclination unchanged', () => {
+    const mock = createMockField();
+    const plan = DebrisField.prototype.spawnWelcomeField.call(mock, lowTiltOrbit);
+    assert.closeTo(plan.playerOrbit.inclination, 5.0 * Math.PI / 180, 1e-12,
+      'plan.playerOrbit must preserve the 5° start tilt');
+  });
+
+  it('actual spawned debris copy the player inclination/raan/argPerigee (frame copy)', () => {
+    // Drive the real _spawnWelcomeField path with a minimal debris list so the
+    // line that copies playerOrbit.inclination onto each fragment is exercised.
+    const makeDebris = (id) => ({
+      id,
+      alive: true,
+      type: 'fragment',
+      mass: 10,
+      material: undefined,
+      orbit: {
+        semiMajorAxis: lowTiltOrbit.semiMajorAxis + 0.5,  // "far" candidate
+        eccentricity: 0,
+        inclination: 51.6 * Math.PI / 180,                // distinct from player
+        raan: 0,
+        argPerigee: 0,
+        trueAnomaly: 0,
+      },
+    });
+    const debrisList = Array.from({ length: 7 }, (_, i) => makeDebris(i + 1));
+
+    const mock = {
+      debrisList,
+      _welcomeFieldSpawned: false,
+      _currentMissionProfile: { hydrazine: true },
+      _lastSpawnGameDt: 0,
+      _generateSalvage: () => ({
+        xenon: 0, indium: 0, gaAs: 0, battery: 0, hydrazine: 0, lithium: 0, metals: [],
+      }),
+      // Drive the real frame-copy path (not the empty-list plan return).
+      _spawnWelcomeField: DebrisField.prototype._spawnWelcomeField,
+    };
+
+    DebrisField.prototype.spawnWelcomeField.call(mock, lowTiltOrbit);
+
+    const welcome = debrisList.filter(d => d.welcomeSpawn);
+    assert.ok(welcome.length >= 7, `expected ≥7 welcome debris, got ${welcome.length}`);
+    for (const d of welcome) {
+      assert.closeTo(d.orbit.inclination, lowTiltOrbit.inclination, 1e-12,
+        `welcome debris ${d.id} did not inherit the 5° start tilt`);
+      assert.closeTo(d.orbit.raan, lowTiltOrbit.raan, 1e-12,
+        `welcome debris ${d.id} did not inherit the player RAAN`);
+      assert.closeTo(d.orbit.argPerigee, lowTiltOrbit.argPerigee, 1e-12,
+        `welcome debris ${d.id} did not inherit the player argPerigee`);
+    }
+  });
+});
