@@ -22,6 +22,13 @@ const _zAxis = new THREE.Vector3(0, 0, 1);
 /** Reusable zero vector for reel-in lerp target */
 const _zeroVec = new THREE.Vector3(0, 0, 0);
 
+/** Default forward dir when the ship has no velocity (mirrors fire()'s legacy +Z). */
+const _defaultForward = new THREE.Vector3(0, 0, 1);
+
+/** Module-level scratch vectors — avoid per-frame allocation in the arc test. */
+const _scratchFwd = new THREE.Vector3();
+const _scratchToTarget = new THREE.Vector3();
+
 export class LassoSystem {
     /**
      * @param {THREE.Scene} scene
@@ -116,6 +123,29 @@ export class LassoSystem {
          *  so the proactive prompt fires once per entry (not every frame). */
         this._inRangePromptId = null;
 
+        /** @type {boolean} True while the OnboardingDirector pipeline is running.
+         *  The proactive in-range "Press N" prompt is the Director's job during
+         *  onboarding (the `lasso` beat teaches it), so we suppress the system
+         *  prompt until ONBOARDING_COMPLETE to avoid contradicting the Director
+         *  (it would otherwise punch through tier 0 and appear over early beats). */
+        this._onboardingActive = false;
+        // Capture unsubscribe handles so dispose() can tear these down — without
+        // this the closures keep a disposed LassoSystem alive on the eventBus and
+        // its stale callbacks keep mutating _onboardingActive / _inRangePromptId.
+        this._evtUnsubs = [
+            eventBus.on(Events.ONBOARDING_STARTED, () => { this._onboardingActive = true; }),
+            eventBus.on(Events.ONBOARDING_COMPLETE, () => { this._onboardingActive = false; }),
+            eventBus.on(Events.GAME_RESET, () => { this._inRangePromptId = null; }),
+        ];
+
+        /** @type {object|null} Optional SkillsSystem for hint-gating (Phase 3).
+         *  Wired via setSkillsSystem(); when absent the prompt fires ungated
+         *  (Node tests / headless). */
+        this._skillsSystem = null;
+        // Feed lasso failures into the recent-failure ring buffer so a STRUGGLING
+        // player still gets the proactive nudge while an expert who never fails
+        // does not. SkillsSystem records these on the LASSO_DENIED event itself
+        // (catalog FAILURE_CAUSES), so no extra wiring is needed here.
         // ── Gossamer particle trail state ──────────────────────────────────
         /** @type {THREE.Points|null} Particle system for gossamer silk trail */
         this._trailPoints = null;
@@ -137,6 +167,35 @@ export class LassoSystem {
         this._trailEmitAccum = 0;
 
         this._createVisuals();
+    }
+
+    /**
+     * Inject the SkillsSystem so the proactive in-range prompt obeys the
+     * universal hint-gating rule (mastered ⇒ silent; veteran ⇒ ticker; silent
+     * after MAX_UNHEEDED_NUDGES). Optional — when unset the prompt is ungated.
+     * @param {object} skillsSystem
+     */
+    setSkillsSystem(skillsSystem) {
+        this._skillsSystem = skillsSystem || null;
+    }
+
+    /**
+     * Resolve the forward firing direction for the arc constraint. Single source
+     * of truth shared by fire() (the authoritative gate) and the proactive
+     * in-range invite, so the invite can never advertise a cast fire() will then
+     * reject. Falls back to +Z when the ship has no velocity (matches fire()'s
+     * legacy behaviour). Writes into `out` (a scratch vector) to avoid per-frame
+     * allocation; returns `out`.
+     * @param {THREE.Vector3|null} playerVelDir — prograde dir (may be null/zero)
+     * @param {THREE.Vector3} out — scratch target
+     * @returns {THREE.Vector3} normalized forward direction
+     * @private
+     */
+    _resolveForwardDir(playerVelDir, out) {
+        if (playerVelDir && playerVelDir.lengthSq() > 0) {
+            return out.copy(playerVelDir).normalize();
+        }
+        return out.copy(_defaultForward);
     }
 
     /** Create capture net projectile group, tube tether, trail, and flash visuals */
@@ -450,14 +509,26 @@ export class LassoSystem {
 
     /**
      * Proactive in-range prompt (gap C.3). When the Tab-selected target first
-     * comes within lasso range AND a cast is actually possible, emit a one-time
-     * "press N" comms hint. Resets when the target leaves range / changes / a
-     * cast becomes impossible, so it re-arms for the next entry.
+     * comes within lasso range, is inside the forward firing arc, AND a cast is
+     * actually possible, emit a one-time "press N" comms hint. Resets when the
+     * target leaves range (with hysteresis margin) / changes / leaves the arc /
+     * a cast becomes impossible, so it re-arms for the next entry.
+     *
+     * Invite ⇔ success: the gate here mirrors the real constraints `fire()`
+     * enforces (range, mass, forward arc) so we never invite a cast the system
+     * will then refuse. The line is tagged `_proactive` so commsSuppression
+     * tier-gates it (suppressed at tier 0 — the Director owns onboarding).
+     *
      * @private
      * @param {THREE.Vector3} playerPos
      * @param {object|null} selectedTarget
+     * @param {THREE.Vector3|null} [playerVelDir] prograde dir for the arc test
      */
-    _updateInRangePrompt(playerPos, selectedTarget) {
+    _updateInRangePrompt(playerPos, selectedTarget, playerVelDir = null) {
+        // During onboarding the Director's `lasso` beat teaches this; suppress
+        // the system prompt entirely so it can't contradict an earlier beat.
+        if (this._onboardingActive) { this._inRangePromptId = null; return; }
+
         // A cast must be currently possible, else clear and bail.
         const canCast = !this.active && this.cooldown <= 0 && this._ammo > 0;
         if (!canCast || !selectedTarget || !playerPos) {
@@ -469,29 +540,78 @@ export class LassoSystem {
         const pos = this._getDebrisScenePos(selectedTarget);
         if (!pos) { this._inRangePromptId = null; return; }
 
-        const inRange = playerPos.distanceTo(pos) <= Constants.LASSO_RANGE * M;
+        const dist = playerPos.distanceTo(pos);
+        const rangeScene = Constants.LASSO_RANGE * M;
+        // Hysteresis: require leaving by a 10% margin before re-arming so a
+        // target hovering at the boundary can't re-fire the prompt repeatedly.
+        const alreadyArmed = this._inRangePromptId === targetId;
+        const enterRange = dist <= rangeScene;
+        const stayRange = dist <= rangeScene * 1.1;
+        const inRange = alreadyArmed ? stayRange : enterRange;
         const tooHeavy = (selectedTarget.mass || 1) > Constants.LASSO_MAX_CAPTURE_MASS;
 
-        if (inRange && !tooHeavy) {
-            // Only announce on the transition into range for this target.
+        // Forward-arc test — uses the SAME forward-dir resolution as fire()
+        // (shared _resolveForwardDir, +Z fallback) so the invite matches exactly
+        // what a cast would do. Always enforced, even at zero velocity.
+        const fwdDir = this._resolveForwardDir(playerVelDir, _scratchFwd);
+        const toTarget = _scratchToTarget.copy(pos).sub(playerPos).normalize();
+        const inArc = toTarget.dot(fwdDir) >= Constants.LASSO_FORWARD_ARC_DOT;
+
+        if (inRange && !tooHeavy && inArc) {
+            // Only announce on the transition into a castable state for this target.
             if (this._inRangePromptId !== targetId) {
+                // Universal hint-gating (Phase 3): skip for a player who has
+                // mastered the lasso, or after MAX_UNHEEDED_NUDGES, but still
+                // nudge a discovered-but-struggling player (recent lasso-denied
+                // failure). Ungated when no SkillsSystem is wired (tests).
+                const ss = this._skillsSystem;
+                if (ss && typeof ss.canFireHint === 'function') {
+                    if (!ss.canFireHint('collect_lasso', { cause: 'lasso-denied' })) {
+                        // Do NOT consume the transition — a subsequent lasso-denied
+                        // failure can flip canFireHint true while still in range, and
+                        // we want the nudge to fire then. Re-checked next frame.
+                        return;
+                    }
+                }
+                // Mark the transition consumed only now that we will show a hint.
                 this._inRangePromptId = targetId;
-                // Keep this prompt clean and actionable. The raw capture-odds
-                // % ("Mother net 32%") was removed (2026-06-14): a bare number
-                // with no context is noise to a new player, and the labelled,
-                // colour-coded odds already live in the Target panel badge and
-                // the reticle odds strip (the SSOT ToolOdds readout). Comms
-                // just needs to say what to press.
-                eventBus.emit(Events.COMMS_MESSAGE, {
-                    text: 'Target in lasso range. Press N to cast.',
-                    source: 'SYSTEM',
-                    channel: 'CMD',
-                    priority: 'info',
-                    _lassoFeedback: true,
-                });
+
+                // Veteran downgrade: a one-line ticker entry instead of a comms
+                // line, so an expert isn't interrupted by a modal-weight prompt.
+                const veteran = !!(ss && typeof ss.isVeteran === 'function' && ss.isVeteran());
+                if (veteran) {
+                    eventBus.emit(Events.HINT_POSTED, {
+                        id: 'lasso_in_range',
+                        text: 'In range — N to cast',
+                        glyph: 'N',
+                        keys: ['KeyN'],
+                        skillId: 'collect_lasso',
+                        duration: 4000,
+                        priority: 'normal',
+                    });
+                } else {
+                    // Keep this prompt clean and actionable. The raw capture-odds
+                    // % ("Mother net 32%") was removed (2026-06-14): a bare number
+                    // with no context is noise to a new player, and the labelled,
+                    // colour-coded odds already live in the Target panel badge and
+                    // the reticle odds strip (the SSOT ToolOdds readout). Comms
+                    // just needs to say what to press.
+                    eventBus.emit(Events.COMMS_MESSAGE, {
+                        text: 'Target in lasso range. Press N to cast.',
+                        source: 'SYSTEM',
+                        channel: 'CMD',
+                        priority: 'info',
+                        // Proactive teach prompt — tier-gated (does NOT bypass tier 0).
+                        _lassoFeedback: true,
+                        _proactive: true,
+                    });
+                }
+                if (ss && typeof ss.noteNudgeShown === 'function') {
+                    ss.noteNudgeShown('collect_lasso');
+                }
             }
         } else {
-            // Out of range, too heavy, or deselected — re-arm for next entry.
+            // Out of range, too heavy, out of arc, or deselected — re-arm.
             this._inRangePromptId = null;
         }
     }
@@ -636,10 +756,10 @@ export class LassoSystem {
             return false;
         }
 
-        // UX-3 #4: Forward-arc constraint — target must be in forward hemisphere
-        const fwdDir = playerVelDir
-            ? playerVelDir.clone().normalize()
-            : new THREE.Vector3(0, 0, 1);
+        // UX-3 #4: Forward-arc constraint — target must be in forward hemisphere.
+        // Uses the shared _resolveForwardDir (same +Z fallback as the proactive
+        // invite) so the two gates can never disagree.
+        const fwdDir = this._resolveForwardDir(playerVelDir, _scratchFwd);
         const toTarget = new THREE.Vector3().subVectors(bestPos, playerPos).normalize();
         const fwdDot = toTarget.dot(fwdDir);
         if (fwdDot < Constants.LASSO_FORWARD_ARC_DOT) {
@@ -650,6 +770,9 @@ export class LassoSystem {
                 channel: 'CMD',
                 priority: 'warning',
                 _lassoFeedback: true,
+                // During onboarding, let the Director own alignment guidance —
+                // tier-gate this denial so it can't contradict an early beat.
+                _proactive: this._onboardingActive || undefined,
             });
             return false;
         }
@@ -763,8 +886,10 @@ export class LassoSystem {
      * @param {number} dt - Delta time
      * @param {THREE.Vector3} playerPos - Current mothership position
      * @param {object} debrisField - For debris removal on catch
+     * @param {object|null} [selectedTarget] - Tab-selected target
+     * @param {THREE.Vector3|null} [playerVelDir] - Prograde dir for the arc test
      */
-    update(dt, playerPos, debrisField, selectedTarget = null) {
+    update(dt, playerPos, debrisField, selectedTarget = null, playerVelDir = null) {
         this._time += dt;
 
         if (this.cooldown > 0) {
@@ -779,9 +904,9 @@ export class LassoSystem {
         this._updateVisualEffects(dt);
 
         // Proactive "in range — press N" prompt (gap C.3). Fires once when the
-        // Tab-selected target first enters lasso range while a cast is possible
-        // (idle, off cooldown, ammo available, target light enough).
-        this._updateInRangePrompt(playerPos, selectedTarget);
+        // Tab-selected target first enters a castable state (in range, in the
+        // forward arc, idle/loaded). Tier-gated + onboarding-suppressed.
+        this._updateInRangePrompt(playerPos, selectedTarget, playerVelDir);
 
         if (!this.active) return;
 
@@ -1144,6 +1269,12 @@ export class LassoSystem {
 
     /** Cleanup */
     dispose() {
+        // Tear down eventBus subscriptions so a disposed LassoSystem isn't kept
+        // alive (and doesn't keep mutating state) via its onboarding listeners.
+        if (this._evtUnsubs) {
+            this._evtUnsubs.forEach(u => { if (typeof u === 'function') u(); });
+            this._evtUnsubs.length = 0;
+        }
         // FIX-2.4a: Dispose capture net group
         if (this._netGroup) {
             this._netGroup.traverse(child => {

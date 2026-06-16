@@ -2079,9 +2079,6 @@ export class ArmUnit {
     this._stowResolve = null;
     this._hingeSettleTimer = 0;
 
-    // UX Fix D: Reset pilot nudge counter on game reset (allows re-nudging in new runs)
-    ArmUnit._pilotNudgeCount = 0;
-
     this.mesh.visible = false;
     this.tetherLine.visible = false;
   }
@@ -2592,22 +2589,9 @@ export class ArmUnit {
           text: `${this.id}: Clear of core. In transit`,
           priority: 'info',
         });
-        // UX Fix D: Delayed nudge for manual piloting (first 3 deploys only)
-        if (!this._manualMode && ArmUnit._pilotNudgeCount < 3) {
-          const armId = this.id;
-          const pilotKey = (this.index != null && this.index < 4) ? `${this.index + 1}` : 'its number';
-          setTimeout(() => {
-            if (this.state === S.TRANSIT && !this._manualMode && ArmUnit._pilotNudgeCount < 3) {
-              ArmUnit._pilotNudgeCount++;
-              eventBus.emit(Events.COMMS_MESSAGE, {
-                text: `${armId}: Press ${pilotKey} to take manual control. 2× capture score`,
-                source: armId,
-                channel: 'CMD',
-                priority: 'info',
-              });
-            }
-          }, 2000);
-        }
+        // Manual-pilot nudge moved to ArmIdleAdvisor (Constants.ARM_IDLE_HINTS
+        // 'transit_pilot_nudge') so it is veteran-gated + deployment-scoped and
+        // routed through the same hint pipeline. (Guidance cleanup, Phase 2/3.)
       }
     }
   }
@@ -2666,22 +2650,8 @@ export class ArmUnit {
           text: `${this.id}: Clear of core. Cradle transit`,
           priority: 'info',
         });
-        // UX Fix D: Delayed nudge for manual piloting (first 3 deploys only)
-        if (!this._manualMode && ArmUnit._pilotNudgeCount < 3) {
-          const armId = this.id;
-          const pilotKey = (this.index != null && this.index < 4) ? `${this.index + 1}` : 'its number';
-          setTimeout(() => {
-            if (this.state === S.TRANSIT && !this._manualMode && ArmUnit._pilotNudgeCount < 3) {
-              ArmUnit._pilotNudgeCount++;
-              eventBus.emit(Events.COMMS_MESSAGE, {
-                text: `${armId}: Press ${pilotKey} to take manual control. 2× capture score`,
-                source: armId,
-                channel: 'CMD',
-                priority: 'info',
-              });
-            }
-          }, 2000);
-        }
+        // Manual-pilot nudge moved to ArmIdleAdvisor (Constants.ARM_IDLE_HINTS
+        // 'transit_pilot_nudge') — veteran-gated + deployment-scoped. (Phase 2/3.)
       }
       this._undockTimer = 0;
       this._springFired = false;
@@ -4042,7 +4012,7 @@ export class ArmUnit {
           priority: 'critical',
         });
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: `Manual pilot available. Deploy a daughter, then press 1-4 to fly it`,
+          text: `${this.id}: Tumble too high for auto-capture. Pilot her in manually (1-4) for a better grip.`,
           priority: 'warning',
         });
 
@@ -6187,6 +6157,3 @@ export class ArmUnit {
     if (this.scene) this.scene.remove(this.group);
   }
 }
-
-// UX Fix D: Class-level nudge counter (first 3 deploys show P-hint, then stop)
-ArmUnit._pilotNudgeCount = 0;

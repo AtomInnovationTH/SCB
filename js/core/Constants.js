@@ -3148,6 +3148,16 @@ export const Constants = {
   // `when` keys: 'noNetInFlightHasNets' | 'outOfNets' | 'always'.
   ARM_IDLE_HINTS: [
     {
+      // Guidance cleanup (Phase 2/3): the manual-pilot nudge formerly lived in
+      // ArmUnit (fired raw on the first 3 deploys, no veteran gating). It now
+      // lives here so it is veteran-gated + deployment-scoped like every other
+      // idle hint. Carries the 2× score incentive the old line had.
+      state: 'TRANSIT', idleS: 3, when: 'always',
+      hintId: 'transit_pilot_nudge', title: 'Daughter in transit',
+      text: 'Press 1-4 to take manual control — a piloted capture scores 2×.',
+      icon: '🕹',
+    },
+    {
       state: 'STATION_KEEP', idleS: 20, when: 'noNetInFlightHasNets',
       hintId: 'sk_idle_fire_or_pilot', title: 'Daughter holding standoff',
       text: 'She is holding station on the target. Press N to launch the net (or 1-4 to pilot her).',

@@ -60,9 +60,77 @@ class GameFlowManager {
     this._vleoIntroActive = false;
     /** @type {Set<string>} One-shot comms already sent this game */
     this._firstTimeComms = new Set();
+
+    // --- Onboarding gating (Guidance cleanup, Phase 0) ---
+    // Track whether the OnboardingDirector pipeline is running and whether it
+    // has reached the `target` beat, so the first-ORBITAL_VIEW auto-target can
+    // be DEFERRED until the player is taught to select a target. Auto-selecting
+    // welcome debris before the `target`/`autopilot` beats hands the player an
+    // in-range target the lasso layer then advertises, short-circuiting the
+    // guided scan→target→approach order (and silently pre-completing the lasso
+    // beat via the Director's jump-ahead). Decoupled via events (no Director ref).
+    /** @type {boolean} */
+    this._onboardingRunning = false;
+    /** @type {boolean} */
+    this._onboardingReachedTarget = false;
+    eventBus.on(Events.ONBOARDING_STARTED, () => {
+      this._onboardingRunning = true;
+      this._onboardingReachedTarget = false;
+    });
+    eventBus.on(Events.ONBOARDING_COMPLETE, () => {
+      this._onboardingRunning = false;
+      this._onboardingReachedTarget = true; // gate fully open post-onboarding
+    });
+    if (Events.GAME_RESET) {
+      eventBus.on(Events.GAME_RESET, () => {
+        this._onboardingRunning = false;
+        this._onboardingReachedTarget = false;
+      });
+    }
+    // The Director emits `onboarding:beatEnter` with { beatId } as each beat
+    // posts. Once it reaches `target`, allow auto-target (the player is now
+    // being taught to select), and on the held re-check too.
+    eventBus.on('onboarding:beatEnter', (d) => {
+      if (d && d.beatId === 'target') {
+        this._onboardingReachedTarget = true;
+        // The auto-target was deferred while onboarding was below the `target`
+        // beat — now that the player is being taught to select, do it.
+        this._tryAutoTargetWelcome();
+      }
+    });
   }
 
   /**
+   * Whether the first-ORBITAL_VIEW auto-target is currently allowed. Blocked
+   * only while onboarding is running and has not yet reached the `target` beat.
+   * @returns {boolean}
+   * @private
+   */
+  _autoTargetAllowed() {
+    if (!this._onboardingRunning) return true;
+    return this._onboardingReachedTarget;
+  }
+
+  /**
+   * Auto-select the nearest welcome-spawn debris if nothing is selected and the
+   * onboarding gate allows it. Idempotent and safe to call repeatedly. Tagged
+   * `autoTarget:true` so first-target guidance comms skip it.
+   * @private
+   */
+  _tryAutoTargetWelcome() {
+    if (!this._autoTargetAllowed()) return;
+    if (!this._refs) return;
+    const { debrisField, player } = this._refs;
+    if (!player || !debrisField) return;
+    if (targetSelector.getActiveTarget()) return;
+    const playerPos = player.getPosition();
+    if (!playerPos) return;
+    const nearby = debrisField.getDebrisNear(playerPos, 0.05);
+    const welcome = nearby && nearby.find(d => d.welcomeSpawn && d.alive);
+    if (!welcome) return;
+    const debris = debrisField.getDebrisById(welcome.id);
+    if (debris) targetSelector.setTarget(debris, { autoTarget: true });
+  }  /**
    * Initialize with references to required game systems and entities.
    * Must be called after all systems are created in init().
    *
@@ -1090,18 +1158,10 @@ class GameFlowManager {
           const { debrisField, player } = this._refs;
           if (!player || !debrisField) return;
 
-          // Auto-target nearest welcome debris if nothing selected
-          if (!targetSelector.getActiveTarget()) {
-            const playerPos = player.getPosition();
-            if (playerPos) {
-              const nearby = debrisField.getDebrisNear(playerPos, 0.05);
-              const welcome = nearby.find(d => d.welcomeSpawn && d.alive);
-              if (welcome) {
-                const debris = debrisField.getDebrisById(welcome.id);
-                if (debris) targetSelector.setTarget(debris, { autoTarget: true });
-              }
-            }
-          }
+          // Auto-target nearest welcome debris if nothing selected — but DEFER
+          // during onboarding until the `target` beat (see _autoTargetAllowed).
+          // If blocked now, _onboarding:beatEnter('target') retries it later.
+          this._tryAutoTargetWelcome();
 
           // Opening comms hint
           if (!this._firstTimeComms.has('orbital_view_opening')) {
@@ -1167,7 +1227,10 @@ class GameFlowManager {
 
     // First autopilot arrival: teach the two capture paths (lasso vs arm).
     eventBus.on(Events.AUTOPILOT_ARRIVED, () => {
-      if (!this._firstTimeComms.has('autopilot_arrived')) {
+      // During onboarding the Director's `decision` beat already teaches N vs D
+      // (and the in-range prompt teaches N) — don't double-teach. Post-onboarding
+      // this stays a useful one-shot reminder. (Guidance cleanup, Phase 2.)
+      if (!this._onboardingRunning && !this._firstTimeComms.has('autopilot_arrived')) {
         this._firstTimeComms.add('autopilot_arrived');
         eventBus.emit(Events.COMMS_MESSAGE, {
           sender: 'SPACECRAFT',
@@ -1207,6 +1270,10 @@ class GameFlowManager {
 
     // First capture: hint next target
     const onFirstCapture = () => {
+      // During onboarding the Director owns the post-capture flow (`captured` →
+      // `solo_intro` → `solo_practice` beats teach "find another"). Skip this
+      // duplicate "Press T" line then. (Guidance cleanup, Phase 2.)
+      if (this._onboardingRunning) return;
       if (!this._firstTimeComms.has('first_capture')) {
         this._firstTimeComms.add('first_capture');
         eventBus.emit(Events.COMMS_MESSAGE, {

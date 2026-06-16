@@ -13,7 +13,7 @@ import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
 import { audioSystem } from './AudioSystem.js';
 import timerManager from './TimerManager.js';
-import { messagePassesSuppression, rampSuppressionTier } from './commsSuppression.js';
+import { messagePassesSuppression, rampSuppressionTier, postOnboardingStartTier } from './commsSuppression.js';
 import { missReasonToText } from '../entities/CaptureNet.js';
 
 // ============================================================================
@@ -374,6 +374,12 @@ export class CommsSystem {
     this._postOnboardingElapsed = 0; // seconds since ONBOARDING_COMPLETE (ramp 1→3)
     this._tempTierActive = false;    // a MissionCoach beat is holding a protected tier
     this._tempTierRestoreS = 0;      // remaining hold (s) before the ramp resumes
+    // Guidance cleanup (Phase 1): only run the post-onboarding wake ramp if the
+    // Director pipeline ACTUALLY ran this session. A returning veteran is
+    // veteran-skipped — the Director emits ONBOARDING_COMPLETE WITHOUT a prior
+    // ONBOARDING_STARTED — and must NOT be dropped to tier 1 (muted atmosphere)
+    // for ~60 s. Without onboarding, steady-state tier 3 is correct.
+    this._onboardingWasRun = false;
 
     this._setupEventListeners();
 
@@ -383,7 +389,10 @@ export class CommsSystem {
     // CP-4 suppression tiers — onboarding drops to tier 0; completion begins the
     // graduated wake ramp. (Non-onboarding play stays at the default tier 3.)
     if (Events.ONBOARDING_STARTED) {
-      eventBus.on(Events.ONBOARDING_STARTED, () => { this._suppressionTier = 0; });
+      eventBus.on(Events.ONBOARDING_STARTED, () => {
+        this._suppressionTier = 0;
+        this._onboardingWasRun = true;
+      });
     }
     if (Events.ONBOARDING_COMPLETE) {
       eventBus.on(Events.ONBOARDING_COMPLETE, () => this._beginPostOnboardingRamp());
@@ -1010,6 +1019,7 @@ export class CommsSystem {
     this._postOnboardingElapsed = 0;
     this._tempTierActive = false;
     this._tempTierRestoreS = 0;
+    this._onboardingWasRun = false;
   }
 
   // ==========================================================================
@@ -1021,7 +1031,18 @@ export class CommsSystem {
 
   /** @private Begin the graduated post-onboarding wake ramp (tier 1 → 2 → 3). */
   _beginPostOnboardingRamp() {
-    this._suppressionTier = 1;
+    // Veteran-skip path: ONBOARDING_COMPLETE fired WITHOUT ONBOARDING_STARTED
+    // (the Director skipped the whole pipeline). There is no atmosphere to wake
+    // from — stay at the steady-state default tier 3 instead of muting for 60 s.
+    const startTier = postOnboardingStartTier(this._onboardingWasRun);
+    if (startTier >= 3) {
+      this._suppressionTier = 3;
+      this._postOnboardingElapsed = 0;
+      this._tempTierActive = false;
+      this._tempTierRestoreS = 0;
+      return;
+    }
+    this._suppressionTier = startTier;
     this._postOnboardingElapsed = 0;
     this._tempTierActive = false;
     this._tempTierRestoreS = 0;

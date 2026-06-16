@@ -85,6 +85,7 @@ import { HotkeyOverlay } from './ui/HotkeyOverlay.js';
 import { SkillsPane } from './ui/hud/SkillsPane.js';
 import { TeachingSystem } from './systems/TeachingSystem.js';
 import { armIdleAdvisor } from './systems/ArmIdleAdvisor.js';
+import { guidanceTelemetry } from './systems/GuidanceTelemetry.js';
 import { navRecoveryAdvisor } from './systems/NavRecoveryAdvisor.js';
 import { missionMilestones } from './systems/MissionMilestones.js';
 import { cityLabels } from './scene/CityLabels.js';
@@ -406,6 +407,8 @@ let slowMoFactor = 1.0;
 const _approachCartPos = { x: 0, y: 0, z: 0 };
 const _approachCartVel = { x: 0, y: 0, z: 0 };
 const _approachTargetVec3 = new THREE.Vector3();
+// Scratch for the per-frame lasso forward-dir (avoids a Vector3 alloc each frame).
+const _lassoVelScratch = new THREE.Vector3();
 
 // Entities
 let player;
@@ -490,6 +493,12 @@ async function init() {
       Constants.DEBUG.PERF_REPORT_OVERLAY = true;
       console.info('[PerfReport] overlay scheduled via ?perfReport=1');
     }
+    // Guidance cleanup (Phase 4): ?guidanceLog=1 enables dev-only guidance
+    // telemetry (prompt→action latency, contradiction + overlap counts).
+    // No-op in the default build; snapshot via window.__dumpGuidanceLog().
+    if (urlParams.get('guidanceLog') === '1') {
+      guidanceTelemetry.enable();
+    }
     // Sprint 3 GPU profiling: ?autoProfile=1 enables [`AutoProfileSweep`](js/systems/AutoProfileSweep.js:1)
     // — scheduled near the end of init() once SceneManager + Earth exist.
     if (profileFlags.autoProfile) {
@@ -570,6 +579,7 @@ async function init() {
   // --- Phase 4A: Skills + Lasso systems ---
   skillsSystem = new SkillsSystem();
   lassoSystem = new LassoSystem(scene);
+  lassoSystem.setSkillsSystem(skillsSystem); // Phase 3 hint-gating + veteran downgrade
 
   // --- Phase 5 Rewards: RewardSystem + SweepReportUI ---
   rewardSystem = new RewardSystem();
@@ -1461,7 +1471,13 @@ function gameLoop(timestamp) {
     }
 
     // Update lasso system (Phase 4A — projectile flight + reel-in)
-    try { lassoSystem.update(dt, player.getPosition(), debrisField, targetSelector.getActiveTarget()); } catch (e) { console.error('[GameLoop] lassoSystem:', e); }
+    try {
+      const _lv = player.getVelocity();
+      const _lvDir = (_lv && (_lv.x || _lv.y || _lv.z))
+        ? _lassoVelScratch.set(_lv.x, _lv.y, _lv.z).normalize()
+        : null;
+      lassoSystem.update(dt, player.getPosition(), debrisField, targetSelector.getActiveTarget(), _lvDir);
+    } catch (e) { console.error('[GameLoop] lassoSystem:', e); }
 
     // Update reward system (Phase 5 Rewards — milestone checks)
     try { rewardSystem.update(dt, armManager); } catch (e) { console.error('[GameLoop] rewardSystem:', e); }

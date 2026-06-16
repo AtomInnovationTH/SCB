@@ -200,7 +200,7 @@ export const ONBOARDING_BEATS = [
     commsAck: 'Copy. Clean catch.',
     text: 'Launch net (N)',
     glyph: 'N',
-    keys: ['KeyN','Space'],
+    keys: ['KeyN'],
     triggerEvent: 'LASSO_FIRED',
     skillId: 'collect_lasso',
     credit: 10,
@@ -210,7 +210,7 @@ export const ONBOARDING_BEATS = [
     // they're kilometres away. Until in range, show the closer-in nudge.
     requiresProximityM: 60,
     farNudge: 'Too far. Autopilot in with A, then fire inside 50 m.',
-    escalationText: 'N fires the Mother net at the selected target inside 50 m. Space works too. Aim at the highlighted debris.',
+    escalationText: 'N fires the Mother net at the selected target inside 50 m. Aim at the highlighted debris.',
   },
   {
     id: 'daughter',

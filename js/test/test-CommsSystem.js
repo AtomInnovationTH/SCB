@@ -541,6 +541,7 @@ describe('CommsSystem – STATION_KEEP_ENTERED listener (§4 item 4)', () => {
 import {
   messagePassesSuppression,
   rampSuppressionTier,
+  postOnboardingStartTier,
   SUPPRESSION_TIER_CHANNELS,
 } from '../systems/commsSuppression.js';
 
@@ -600,6 +601,22 @@ describe('CommsSystem – suppression tier gate', () => {
     assert.equal(messagePassesSuppression(1, 'CMD', { _lassoFeedback: true }, 'INFO'), true);
   });
 
+  it('_proactive prompt is tier-gated even with _lassoFeedback (Phase 0)', () => {
+    // The in-range "Press N" invitation is proactive — it must NOT punch through
+    // tier 0 (the Director owns onboarding) the way a reactive denial does.
+    assert.equal(
+      messagePassesSuppression(0, 'CMD', { _lassoFeedback: true, _proactive: true }, 'INFO'),
+      false, 'proactive invite suppressed at tier 0');
+    // But once steady-state (tier 3) it passes like any other CMD line.
+    assert.equal(
+      messagePassesSuppression(3, 'CMD', { _lassoFeedback: true, _proactive: true }, 'INFO'),
+      true, 'proactive invite passes at tier 3');
+    // A reactive denial (no _proactive) still bypasses tier 0.
+    assert.equal(
+      messagePassesSuppression(0, 'CMD', { _lassoFeedback: true }, 'WARNING'),
+      true, 'reactive denial still bypasses tier 0');
+  });
+
   it('tier channel sets match the spec table', () => {
     assert.deepEqual([...SUPPRESSION_TIER_CHANNELS[1]].sort(), ['HOUSTON', 'MISSION']);
     assert.deepEqual([...SUPPRESSION_TIER_CHANNELS[2]].sort(), ['ALERT', 'CMD', 'HOUSTON', 'MISSION']);
@@ -628,5 +645,17 @@ describe('CommsSystem – suppression ramp (rampSuppressionTier)', () => {
     const R = Constants.COMMS.SUPPRESSION_RAMP;
     assert.ok(R && R.TIER2_AFTER_S > 0 && R.TIER3_AFTER_S > R.TIER2_AFTER_S, 'ramp constant present + ordered');
     assert.equal(rampSuppressionTier(R.TIER3_AFTER_S), 3);
+  });
+});
+
+describe('CommsSystem – post-onboarding start tier (veteran mis-ramp fix, Phase 1)', () => {
+  it('onboarding actually ran → begin the wake ramp at tier 1', () => {
+    assert.equal(postOnboardingStartTier(true), 1);
+  });
+
+  it('veteran-skip (ONBOARDING_COMPLETE without ONBOARDING_STARTED) → steady tier 3', () => {
+    // A returning veteran must NOT be muted for ~60 s — there was no onboarding
+    // atmosphere to wake from.
+    assert.equal(postOnboardingStartTier(false), 3);
   });
 });

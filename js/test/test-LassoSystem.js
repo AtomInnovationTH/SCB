@@ -453,14 +453,24 @@ describe('LassoSystem — in-range "press N" prompt (gap C.3)', () => {
     /**
      * Mirror _updateInRangePrompt(): returns the new _inRangePromptId and
      * whether a prompt should be emitted this tick. Fires once per entry.
+     * Extended (Guidance cleanup, Phase 0) with onboarding suppression, the
+     * forward-arc gate, and boundary hysteresis. `canFire` mirrors the Phase-3
+     * canFireHint gate: when false the transition is NOT consumed, so a later
+     * canFire:true (e.g. after a lasso-denied failure) still emits while in range.
      */
-    function step(state, { canCast, targetId, inRange, tooHeavy }) {
+    function step(state, { canCast, targetId, inRange, tooHeavy, inArc = true, onboarding = false, canFire = true }) {
+        // Onboarding owns the lasso lesson — suppress the system prompt entirely.
+        if (onboarding) return { id: null, emit: false };
         if (!canCast || targetId == null) {
             return { id: null, emit: false };
         }
-        if (inRange && !tooHeavy) {
-            const emit = state.id !== targetId;
-            return { id: targetId, emit };
+        if (inRange && !tooHeavy && inArc) {
+            if (state.id !== targetId) {
+                // Hint-gate fail → do NOT consume the transition; re-check next frame.
+                if (!canFire) return { id: state.id, emit: false };
+                return { id: targetId, emit: true };
+            }
+            return { id: targetId, emit: false };
         }
         return { id: null, emit: false };
     }
@@ -508,5 +518,40 @@ describe('LassoSystem — in-range "press N" prompt (gap C.3)', () => {
         const r = step({ id: 7 }, { canCast: true, targetId: 9, inRange: true, tooHeavy: false });
         assert.equal(r.emit, true, 'new target id triggers a fresh prompt');
         assert.equal(r.id, 9);
+    });
+
+    it('does NOT emit during onboarding (Director owns the lasso lesson)', () => {
+        const r = step({ id: null }, { canCast: true, targetId: 7, inRange: true, tooHeavy: false, onboarding: true });
+        assert.equal(r.emit, false, 'system prompt suppressed at tier 0');
+        assert.equal(r.id, null);
+    });
+
+    it('does NOT emit when the target is in range but outside the forward arc', () => {
+        // Invite ⇔ success: fire() would reject an out-of-arc target, so the
+        // proactive prompt must not invite a cast that will be refused.
+        const r = step({ id: null }, { canCast: true, targetId: 7, inRange: true, tooHeavy: false, inArc: false });
+        assert.equal(r.emit, false, 'out-of-arc target is not advertised');
+        assert.equal(r.id, null);
+    });
+
+    it('emits once the target enters BOTH range and the forward arc', () => {
+        // Out of arc first → no prompt; then in arc → prompt fires.
+        const out = step({ id: null }, { canCast: true, targetId: 7, inRange: true, tooHeavy: false, inArc: false });
+        assert.equal(out.emit, false);
+        const inn = step(out, { canCast: true, targetId: 7, inRange: true, tooHeavy: false, inArc: true });
+        assert.equal(inn.emit, true, 'fires when fully castable');
+        assert.equal(inn.id, 7);
+    });
+
+    it('hint-gate fail does NOT consume the transition (struggling-player re-arm)', () => {
+        // Phase 3: when canFireHint is false, _inRangePromptId must stay unset so a
+        // later lasso-denied failure (canFire → true) still nudges while in range.
+        const blocked = step({ id: null }, { canCast: true, targetId: 7, inRange: true, tooHeavy: false, canFire: false });
+        assert.equal(blocked.emit, false, 'nothing shown while gated');
+        assert.equal(blocked.id, null, 'transition NOT consumed (id stays null)');
+        // Player then fails a cast → canFire flips true → prompt fires (same entry).
+        const after = step(blocked, { canCast: true, targetId: 7, inRange: true, tooHeavy: false, canFire: true });
+        assert.equal(after.emit, true, 'fires once eligible, without leaving range first');
+        assert.equal(after.id, 7);
     });
 });

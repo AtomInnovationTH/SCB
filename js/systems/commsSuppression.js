@@ -28,10 +28,17 @@ export const SUPPRESSION_TIER_CHANNELS = {
  *
  * Tag bypasses (spec §2.1):
  *   • `_critical: true`     — passes at ANY tier (live-asset/conjunction, survival).
- *   • `_lassoFeedback: true`— actionable capture-denial, always passes (legacy).
+ *   • `_lassoFeedback: true`— actionable capture-DENIAL (player pressed a key, it
+ *                             failed), always passes (reactive feedback).
  *   • `_onboarding: true`   — the Director's own lines (the only thing at tier 0).
  *   • `_postOnboarding:true`— MissionCoach beats; pass at tiers ≥ 1.
  * Plus: from tier 1 up, a CRITICAL-priority message is never muted.
+ *
+ * NOTE: `_proactive: true` is deliberately NOT a bypass. Proactive teach/nudge
+ * lines (e.g. the "Target in lasso range. Press N" invitation) must obey the
+ * tier gate so they never punch through tier 0 and contradict the Director.
+ * They are classified onto a normal channel (usually CMD) and gated like any
+ * other message — the tag exists only for telemetry/intent, not bypass.
  *
  * @param {number} tier      — current suppression tier (0..3)
  * @param {string} channel   — classified channel (CMD/ALERT/HOUSTON/SCI/FLAVOR/MISSION)
@@ -44,8 +51,10 @@ export function messagePassesSuppression(tier, channel, data = {}, priority = nu
 
   // Explicit critical tag bypasses every tier (incl. 0) — never mute these.
   if (d._critical === true) return true;
-  // Actionable lasso/net denial always reaches the player (legacy behaviour).
-  if (d._lassoFeedback) return true;
+  // Actionable lasso/net DENIAL always reaches the player (reactive: they
+  // pressed a key and it failed). Proactive invitations (`_proactive`) do NOT
+  // get this bypass — they are tier-gated below so they never override tier 0.
+  if (d._lassoFeedback && !d._proactive) return true;
   // The Director's own onboarding script (the only non-critical line at tier 0).
   if (d._onboarding) return true;
 
@@ -76,4 +85,20 @@ export function rampSuppressionTier(elapsedS, ramp) {
   if (elapsedS >= R.TIER3_AFTER_S) return 3;
   if (elapsedS >= R.TIER2_AFTER_S) return 2;
   return 1;
+}
+
+/**
+ * Decide the suppression tier to enter on ONBOARDING_COMPLETE.
+ *
+ * Guidance cleanup (Phase 1): the graduated wake ramp (tier 1 → 3 over ~60 s)
+ * should only run when the Director pipeline ACTUALLY ran. A returning veteran
+ * is veteran-skipped — the Director emits ONBOARDING_COMPLETE WITHOUT a prior
+ * ONBOARDING_STARTED — and must stay at the steady-state default tier 3 rather
+ * than starting muted for a minute.
+ *
+ * @param {boolean} onboardingWasRun — did ONBOARDING_STARTED fire this session?
+ * @returns {1|3} 1 ⇒ begin the wake ramp; 3 ⇒ steady state (no ramp).
+ */
+export function postOnboardingStartTier(onboardingWasRun) {
+  return onboardingWasRun ? 1 : 3;
 }
