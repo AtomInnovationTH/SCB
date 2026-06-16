@@ -510,6 +510,14 @@ export const Events = {
   TETHER_SNAP:              'tether:snap',               // { armIndex, cause }
   TETHER_REEL_STATE:        'tether:reelState',          // { armIndex, reeling, speed }
 
+  // --- Reel-in / re-dock inertia overhaul (FEATURE_FLAGS.REEL_PROFILE_V2) ---
+  /** Stage-1 net cinched tight; daughter+net+debris is now one rigid unit. Payload: { armIndex, debrisId, mUnit } */
+  CATCH_SNUGGED:            'reel:catchSnugged',
+  /** Daughter entered the FEEP soft-dock arrest window. Payload: { armIndex, mUnit, vArrest } */
+  REDOCK_ARREST_START:      'reel:redockArrestStart',
+  /** Re-dock arrest could not be funded by FEEP (or plume blocked) → slow reel-only finish. Payload: { armIndex, fuel, needed } */
+  REDOCK_FUEL_LOW:          'reel:redockFuelLow',
+
   // --- Dual-Fire ---
   DUAL_FIRE:                'crossbow:dualFire',         // { armIndex1, armIndex2 }
   DUAL_FIRE_RECOIL:         'crossbow:dualFireRecoil',   // { cancelled, residualDv }

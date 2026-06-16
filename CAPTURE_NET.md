@@ -212,6 +212,40 @@ The apex camera also enables **debris geometry assessment** during final approac
 
 **For high-value targets (Y2+): daughter triangulation.** Deploy one daughter radially to provide a second viewing angle. Daughter's sensor + Mother's ranging = stereo triangulation with sub-centimetre accuracy. Also gives 3D tumble-rate measurement for optimal brake window timing on rotating targets. Operationally expensive (burns a daughter deploy cycle) but justified for intact satellites worth thousands of credits.
 
+#### §2.4.3 Two-Stage Retrieval: Snug → Trapezoidal Haul → Soft Dock
+
+*(reel-in-redock-inertia plan; gated by `FEATURE_FLAGS.REEL_PROFILE_V2`.)*
+
+Retrieval is **two reel stages plus a docked finish**, and V2 makes each phase
+explicit and physical:
+
+1. **SNUG (rigidize) — `CATCH_SNUG`.** At the GRAPPLED→REELING boundary the
+   stage-1 net (daughter ↔ debris, ≤100 m) cinches to `TENSION_TARGET_N` and
+   settles `SETTLE_S`. Daughter + net + debris become **one rigid unit** with a
+   single CoM, `m_unit = m_daughter + m_net + m_debris`. This removes the
+   trailing-bag pendulum that drives the §4.5 asymmetric-collapse tangle. Empty
+   reels skip SNUG; over-strain stays on the recoverable net-rip path (§3.5).
+   Emits `CATCH_SNUGGED`.
+
+2. **Trapezoidal haul — `REEL_PROFILE`.** The stage-2 daughter reel (daughter ↔
+   strut, ≤2 km) replaces the old constant speed with **accel → power/tension-
+   bounded cruise → ramp-down to `V_DOCK`** within `DECEL_DISTANCE_M`. Cruise is
+   throttled by `m_unit` (heavier catch = honestly slower) AND capped so reel
+   tension never exceeds the tether break strength for any in-spec catch — the
+   **snap invariant**; only Boost may push past it (and Boost is locked out
+   inside the decel band). Empty 2 km haul drops from ~500 s to ~30 s.
+
+3. **FEEP soft re-dock arrest — `REDOCK_FEEP`.** Within `ARREST_DISTANCE_M` the
+   daughter nulls the residual closing-rate to ≤ `SOFT_DOCK_VEL` with a one-shot
+   mass-scaled FEEP fuel debit, gated by the yoke tether-plume clearance test
+   (§4.2 reconciliation). Reel-only fallback (slow, zero-fuel, warned) when fuel
+   or clearance is unmet; Mission 1 is free. Then the existing DOCKING settle
+   completes the clamp.
+
+Throughout the haul the daughter holds a **whole-haul reel attitude** (nose +Z
+at the live strut dock, +Y bridle trailing) so the tether rides outside the ±Z
+FEEP exhaust cone — the prerequisite for firing FEEP during reel.
+
 ### §2.5 Spin Physics
 
 The net must spin fast enough that centripetal force keeps the mesh taut. Required spin rate:
@@ -568,8 +602,22 @@ This uses data already available from [`SensorSystem`](js/systems/SensorSystem.j
 | **Severity** | High — may foul FEEP thrusters or solar arrays |
 | **Recovery** | Halt reel. Reverse reel 5 m. Mother rotates to reduce wrap angle. Retry reel. If 3 retries fail → cut tether. |
 | **Fail-state** | Tether fouls FEEP plume → tether ablation → snap. Or tether wraps solar array hinge → array stuck. |
-| **Probability factors** | Mother attitude rate during reel-in (should be near-zero); FEEP burn during reel (prohibited by interlock — see [`CollisionAvoidanceSystem`](js/systems/CollisionAvoidanceSystem.js:1)); tether exit angle from reel housing. *(Rev 5: in-plane exit reduces off-axis tangle vectors.)* |
+| **Probability factors** | Mother attitude rate during reel-in (should be near-zero); FEEP burn during reel (**permitted only within the yoke tether-plume clearance cone** — see reconciliation note below); tether exit angle from reel housing. *(Rev 5: in-plane exit reduces off-axis tangle vectors.)* |
 | **Base probability** | 0.02 per reel-in (2%) — reduced from 3% (Rev 4) by deterministic in-plane exit; mitigated by attitude-hold interlock |
+
+> **Reconciliation (reel-in-redock-inertia plan, Rev-3).** Earlier text read
+> "FEEP burn during reel — prohibited by interlock." That was **lore, not code**
+> (no such interlock existed in `CollisionAvoidanceSystem`), and it directly
+> contradicted `DAUGHTER_ARM_CONTROLS.md §5.1` role 4/7 (FEEP *does* manage
+> tension and arrest the re-dock during REELING). The rule is now: **FEEP is
+> permitted during reel-in, but only when the tether clears the exhaust plume.**
+> The +Y wishbone bridle (yoke) holds the cable off the ±Z plume; the daughter
+> holds a whole-haul reel attitude (nose +Z at the strut, +Y bridle trailing)
+> and `_tetherPlumeClearOK()` requires the tether to sit ≥ `MIN_TETHER_PLUME_DEG`
+> off the active-nozzle axis before any FEEP fires. If the test fails, FEEP is
+> withheld and the reel finishes on the motor alone (reel-only fallback) — the
+> §4.2 plume-ablation→snap failure is **avoided by withholding thrust**, not
+> simulated. See `YOKE_CLEARANCE` / `REDOCK_FEEP` constants.
 
 ### §4.3 Scenario 3: Daughter-Tangle (Sibling Tether Cross)
 
@@ -611,6 +659,17 @@ This uses data already available from [`SensorSystem`](js/systems/SensorSystem.j
 | **Fail-state** | Net permanently jammed in reel → that net is out of service until EVA/dock maintenance (game: return to shop for net replacement). |
 | **Probability factors** | Loaded vs empty reel-in (loaded is worse — debris mass pulls asymmetrically); reel-in speed (slower = safer); remaining spin at reel-in start |
 | **Base probability** | 0.04 per reel-in (4%); doubled (0.08) if captured debris is tumbling |
+
+> **Mitigation (reel-in-redock-inertia plan, Q3 SNUG).** The new SNUG sub-phase
+> cinches the stage-1 net tight to `CATCH_SNUG.TENSION_TARGET_N` and settles
+> before the haul, so daughter+net+debris reel home as **one rigid unit with a
+> single CoM** rather than a trailing bag on a slack tether. Removing the
+> trailing-bag pendulum directly attacks the asymmetric-collapse mechanism above
+> (the loose mesh cone that folds over itself). With `REEL_PROFILE_V2` the haul
+> also ramps the closing-rate DOWN into the dock (trapezoidal profile), and
+> "slower = safer" still holds. SNUG is feature-flagged and over-strain still
+> resolves through the existing recoverable net-rip path (`§3.5` /
+> `_checkNetIntegrityOnReel`).
 
 ### §4.6 Tangle Probability Summary
 

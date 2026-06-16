@@ -476,6 +476,51 @@ export const Constants = {
                               //   recoverable — reuses the strain-slip path)
   },
 
+  // ── Reel-in / re-dock inertia overhaul (FEATURE_FLAGS.REEL_PROFILE_V2) ──────
+  // See plan reel-in-redock-inertia.md. All speeds are game-scale m/s applied
+  // over REAL dt (matching the legacy REELING convention; NOT game-time).
+
+  // Q1 — Daughter reel-in trapezoidal velocity profile (accel → cruise → decel).
+  // Replaces the constant REEL_IN_SPEED_* haul speed when the flag is ON; the
+  // legacy constants are retained as the V_DOCK-band fallback / test-mock compat.
+  REEL_PROFILE: {
+    V_CRUISE_MAX:        60,    // m/s — cruise cap (empty / light catch)
+    V_DOCK:              1.0,   // m/s — gentle speed entering the soft-dock window
+    ACCEL:               8.0,   // m/s² — ramp-up / ramp-down magnitude
+    DECEL_DISTANCE_M:    15,    // m — begin ramp-down within this of the strut dock
+    HAUL_MOTOR_POWER:    2500,  // sets v_cruise = POWER / max(T_reel, T_MIN)
+    T_MIN:               5,     // N — denominator floor so light catches hit V_CRUISE_MAX
+    CRUISE_TENSION_FRACTION: 0.85, // cap cruise so T_reel ≤ break×this (snap invariant:
+                                   //   any in-spec catch stays under the tether break strength)
+    BOOST_LOCKOUT_IN_DECEL: true, // disable REEL_BOOST inside DECEL_DISTANCE_M
+  },
+
+  // Q3 — Stage-1 net snug-up (rigidize daughter+net+debris into one unit).
+  CATCH_SNUG: {
+    TENSION_TARGET_N:    8,     // N — snug pull tightening the bag to the −Y face
+    SETTLE_S:            0.4,   // s — settle so the cinch impulse damps before haul
+    // over-strain reuses NET_STRAIN_* + _checkNetIntegrityOnReel (recoverable rip)
+  },
+
+  // Q4 — FEEP soft re-dock (mass-scaled fuel debit; abstract model — see plan §Q4).
+  REDOCK_FEEP: {
+    SOFT_DOCK_VEL:       0.10,  // m/s — max |v_rel| to strut allowed at contact
+    ARREST_DISTANCE_M:   8,     // m — arrest active within this of dock
+    DEBIT_K:             0.0008,// fuel% per (kg·(m/s)) — tune so a hot 500 kg dock stings
+    FUEL_FALLBACK_SLOW:  true,  // insufficient fuel OR no plume clearance → slow reel-only finish + warn
+    MISSION1_FREE:       true,  // no debit during the learning mission
+  },
+
+  // Rev-3 — Yoke / tether-plume clearance (prerequisite for FEEP-during-reel).
+  // The +Y wishbone bridle keeps the tether outside the ±Z FEEP exhaust cone;
+  // ±15° beam steering is electrostatic (no moving parts, free) — the yoke's
+  // job is tether-plume clearance, NOT vectoring.
+  YOKE_CLEARANCE: {
+    MIN_TETHER_PLUME_DEG:   30,   // required angle between tether line and plume axis to fire FEEP
+    REEL_ATTITUDE_SLERP:    0.1,  // slew rate to the nose-at-strut / bridle-trailing attitude
+  },
+
+
   // Eddy-current detumble (capture-feedback overhaul Phase 3c).
   // MAGNET secondary: while station-keeping with MAGNET selected near a
   // CONDUCTIVE target, the EPM's rotating field induces eddy currents that
@@ -747,6 +792,13 @@ export const Constants = {
     // NEW — capture-feedback overhaul Phase 3a: hold Shift → boost reel ×2.
     // Impatience is allowed but priced: boost raises net-rip + snap risk.
     REEL_BOOST:                true,
+
+    // NEW — reel-in/re-dock inertia overhaul (reel-in-redock-inertia plan).
+    // Trapezoidal haul velocity profile (Q1) + combined-mass tension (Q2) +
+    // explicit SNUG rigidize (Q3) + FEEP soft re-dock arrest with yoke
+    // tether-plume clearance (Q4). OFF by default so the legacy constant-speed
+    // reel ships unchanged and the overhaul lands isolated/bisectable.
+    REEL_PROFILE_V2:           false,
   },
 
   // ============================================================================

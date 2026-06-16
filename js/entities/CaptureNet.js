@@ -853,10 +853,17 @@ export class NetProjectile {
       const d = this.targetDebris;
       const stillHauling = !!(d && d.alive !== false && d._capturedByArm);
       if (stillHauling) {
-        this.tensionN = 1.0 + this.capturedMass * 0.1;
+        // REEL_PROFILE_V2 (plan Q3): during the SNUG sub-phase the arm sets
+        // `_snugTargetN` — pull the bag tight to that explicit cinch tension so
+        // daughter+net+debris rigidize into one unit before the haul. Otherwise
+        // hold at the base mass formula (legacy behaviour).
+        this.tensionN = (this._snugTargetN != null)
+          ? this._snugTargetN
+          : 1.0 + this.capturedMass * 0.1;
         return;                       // hold: no completion while the arm hauls
       }
       this._heldByArm = false;        // delivered / lost → stow promptly
+      this._snugTargetN = null;
       this.reelProgress = 1.0;
     }
 

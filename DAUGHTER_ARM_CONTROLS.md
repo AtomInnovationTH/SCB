@@ -244,6 +244,7 @@ The FEEP (Field Emission Electric Propulsion) thrusters on each daughter arm are
 | **Tether tension management** | REELING, TRANSIT | Mid (10,000 s) | Variable | During reel-in/out, FEEP fires to keep tether taut and arm on the radial line. Prevents slack arcs that could tangle. At ±10 m lateral offset at 2 km: trivial thrust (0.038 N·m torque). |
 | **Self-return (untethered)** | RETURNING | Low (4,000 s) | Max | If tether is severed (cut, tangled, or player-commanded detach), FEEP is the ONLY way home. Weaver: 500 m/s ΔV budget → can return from 2 km in ~2 m/s ΔV. Spinner: 297 m/s budget. This is the risk/reward of the detach mechanic — finite FEEP = finite untethered life. |
 | **Emergency deorbit** | DEORBITING | Low (4,000 s) | Max sustained | Sacrifice play: arm burns all FEEP retrograde to deorbit itself (+ captured debris). High thrust mode maximises ΔV-for-time even though Isp is lower. |
+| **Re-dock inertia null** | REELING (arrest sub-phase) / DOCKING | Mid (10,000 s) | Variable | **Role 7 (reel-in-redock-inertia plan, Q4).** Inside `REDOCK_FEEP.ARREST_DISTANCE_M` of the strut, FEEP nulls the residual closing-rate for a soft contact (≤ `SOFT_DOCK_VEL`). Modelled as a one-shot mass-scaled fuel debit `DEBIT_K · m_unit · v_arrest` ("don't dock hot"). The fore nozzle (+Z exhaust) brakes toward the mother — the **same side the tether runs to** — so the burn fires **only when `_tetherPlumeClearOK()` passes** (tether ≥ `MIN_TETHER_PLUME_DEG` off the plume axis under the whole-haul reel attitude). If clearance/fuel is unmet → `FUEL_FALLBACK_SLOW`: zero-fuel reel-only finish + warn (never a dead-end). Mission 1 is a free pass. |
 
 ### 5.2 Thruster Specifications
 
@@ -281,12 +282,25 @@ At constant beam power P_beam = 40 W, efficiency η = 0.6:
 
 ### 5.4 Vectoring (±15°) & Swivel Yoke
 
+> **Correction (reel-in-redock-inertia plan, Rev-3 — user physics input).** The
+> FEEP **±15° beam steering is electrostatic — it has NO moving parts.** Beam
+> deflection is inherent to the indium emitter (this is *why* FEEP was selected
+> for the daughter), so vectoring is **free** in both lore and sim (idealized
+> impulse). The **swivel yoke** (the +Y wishbone bridle/gimbal) is therefore
+> **not** what provides vectoring. The yoke's real job is **tether-plume
+> clearance**: it holds the cable off the ±Z FEEP exhaust cone so the daughter
+> can fire the brake (fore, +Z) toward the mother — the same side the tether
+> runs to — without the plume ablating the cable (see `CAPTURE_NET.md §4.2`).
+> This is modelled by `_tetherPlumeClearOK()` + the whole-haul reel attitude
+> (nose +Z at the strut, +Y bridle trailing); see `YOKE_CLEARANCE` constants.
+
 Each arm has fore and aft ion thrusters mounted on a **swivel yoke** (titanium gimbal, 360° pitch+yaw per [§15 CROSSBOW_ARMS.md](CROSSBOW_ARMS.md)). The yoke can deflect thrust ±15° from the arm's longitudinal axis. This provides:
 
 - **Lateral thrust** without rotating the arm body → stable station-keeping
 - **Bidirectional thrust** (fore + aft engines) → can push toward OR away from debris without turning
 - **Roll/yaw authority** for net deployment orientation
 - **Tether tension assist** → fore thruster fires gently to maintain tension during reel operations
+- **Tether-plume clearance (the yoke's defining role)** → the +Y bridle keeps the cable outside the ±Z exhaust cone so FEEP can brake during reel-in/re-dock (Role 7) without ablating the tether
 - Combined with tether tension from the Y-harness bridle, enables **stable debris-relative positioning** without constant attitude corrections
 
 ### 5.4 Constants to Add
@@ -528,7 +542,7 @@ The "Orbital Crane" model gives players an intuitive spatial metaphor (move arou
 
 ### FEEP Thruster Roles (Complete)
 
-The indium FEEP thrusters (1.28 mN, Isp 4,000–19,000 s, ±15° vectoring) serve **six roles** throughout the arm's lifecycle — never idle, always justified:
+The indium FEEP thrusters (1.28 mN, Isp 4,000–19,000 s, electrostatic ±15° beam steering — no moving parts) serve **seven roles** throughout the arm's lifecycle — never idle, always justified:
 
 1. **Transit assist** — course correction after crossbow launch (low Isp, max thrust)
 2. **Approach maneuvering** — fine lateral corrections closing on debris (mid Isp)
@@ -536,5 +550,6 @@ The indium FEEP thrusters (1.28 mN, Isp 4,000–19,000 s, ±15° vectoring) serv
 4. **Tether tension management** — keeps tether taut during reel in/out; fires fore thruster to maintain radial alignment and prevent slack arcs that cause tangles
 5. **Self-return (untethered)** — if tether severed, FEEP is the only way home; Weaver has 500 m/s ΔV budget for independent operations
 6. **Emergency deorbit** — sacrifice play: all remaining FEEP burns retrograde
+7. **Re-dock inertia null** — soft re-dock arrest inside `ARREST_DISTANCE_M`: nulls the residual closing-rate (one-shot mass-scaled fuel debit), gated by the yoke tether-plume clearance test; reel-only fallback when clearance/fuel is unmet
 
 The crossbow provides the high-ΔV launch phase. FEEP handles everything after — precisely what ion propulsion was designed for.

@@ -2282,6 +2282,7 @@ export class ArmUnit {
                          this.state === S.HOLDING_CATCH);
     if (!skipAttitude) {
       let headingDir = null;
+      let reelHeading = false;
 
       // Target-tracking states: point nose toward debris target
       // STATION_KEEP included so the arm faces the debris instead of
@@ -2293,6 +2294,22 @@ export class ArmUnit {
         headingDir = this._tmpVec.subVectors(tPos, this.position);
         if (headingDir.lengthSq() < 1e-20) headingDir = null;
         else headingDir.normalize();
+      }
+
+      // Whole-haul reel attitude (REEL_PROFILE_V2, plan Rev-3): during REELING
+      // point the nose (+Z) at the LIVE strut-tip dock so the +Y wishbone bridle
+      // (and thus the tether) trails off-axis from the ±Z FEEP plume — the yoke
+      // tether-plume clearance the FEEP-during-reel behaviours depend on. Held
+      // for the entire haul (not just the arrest), and recomputed each frame so
+      // it tracks a maneuvering mother. Replaces the prograde/inherited fallback
+      // that REELING used before (REELING barely sets velocity).
+      if (!headingDir && this.state === S.REELING
+          && Constants.isFeatureEnabled('REEL_PROFILE_V2') && parentPos && this.dockOffset) {
+        const dockWP = this._tmpDockTarget || (this._tmpDockTarget = new THREE.Vector3());
+        this._resolveStrutDockWorld(parentPos, parentQuat, dockWP);
+        headingDir = this._tmpVec.subVectors(dockWP, this.position);
+        if (headingDir.lengthSq() < 1e-20) headingDir = null;
+        else { headingDir.normalize(); reelHeading = true; }
       }
 
       // Prograde fallback: align nose with velocity vector
@@ -2310,9 +2327,14 @@ export class ArmUnit {
         // V-8 fix: faster slerp for target-tracking states so daughter visually
         // snaps to face debris promptly. 0.05 was ~1s to converge — too slow for
         // APPROACH/STATION_KEEP where the daughter should clearly face the debris.
-        const sRate = (this.state === S.APPROACH || this.state === S.STATION_KEEP || this.state === S.NETTING)
-          ? 0.15    // fast reorientation during close-range operations
-          : 0.05;   // gentle for TRANSIT (cosmetic, less disorienting on long flights)
+        let sRate;
+        if (reelHeading) {
+          sRate = (Constants.YOKE_CLEARANCE && Constants.YOKE_CLEARANCE.REEL_ATTITUDE_SLERP) ?? 0.1;
+        } else {
+          sRate = (this.state === S.APPROACH || this.state === S.STATION_KEEP || this.state === S.NETTING)
+            ? 0.15    // fast reorientation during close-range operations
+            : 0.05;   // gentle for TRANSIT (cosmetic, less disorienting on long flights)
+        }
         this.group.quaternion.slerp(targetQuat, sRate);
       } else if (parentQuat) {
         // No heading available (velocity ≈ 0 in FISHING, etc.)
@@ -2386,6 +2408,16 @@ export class ArmUnit {
       this._trailSampleAccum = 0;
       eventBus.emit(Events.ARM_TRAIL_CLEAR, { armId: this.id });
       this._captureToolKind = 'NET';   // P2: reset capture-verb to default on a clean slate
+    }
+    // REEL_PROFILE_V2 bookkeeping reset on a fresh capture/dock cycle so the
+    // SNUG window (Q3), catch-cleared guard, and re-dock arrest (Q4) re-arm.
+    if (newState === S.GRAPPLED || newState === S.DOCKED || newState === S.RELOADING ||
+        newState === S.HOLDING_CATCH) {
+      this._catchSnugged = false;
+      this._reelHadPayload = false;
+      this._redockArrestStarted = false;
+      this._redockFuelLowWarned = false;
+      this._redockDebitApplied = false;
     }
     // CP-1 / P2: refresh the per-arm tool recommendation on STATION_KEEP entry
     // and default selectedTool to the recommended verb (player can re-cycle).
@@ -4286,6 +4318,28 @@ export class ArmUnit {
       // to reload) and is handled inside the check — bail out of REELING.
       if (this._checkNetIntegrityOnReel()) return;
 
+      // SNUG sub-phase (REEL_PROFILE_V2, plan Q3): before the haul, cinch the
+      // stage-1 net tight so daughter+net+debris is ONE rigid unit (one CoM,
+      // m_unit). Implemented as a short settle window after the stabilize hold:
+      // we ask the held net to pull to its snug-tension target, wait SETTLE_S so
+      // the cinch transient damps, emit CATCH_SNUGGED once, then enter REELING.
+      // Skipped when empty (reelFromStationKeep aborts have no catch) — only the
+      // GRAPPLED→REELING capture path snugs. Over-strain already handled above.
+      if (Constants.isFeatureEnabled('REEL_PROFILE_V2') && this.capturedDebris && !this._catchSnugged) {
+        this._applySnugTension();
+        const settle = (Constants.CATCH_SNUG && Constants.CATCH_SNUG.SETTLE_S) ?? 0.4;
+        if (this.stateTimer <= Constants.ARM_GRAPPLE_STABILIZE + settle) {
+          return;   // still settling — hold the GRAPPLED co-location one more frame
+        }
+        this._catchSnugged = true;
+        const armMass = this.config.type === 'weaver' ? V5_WEAVER_MASS : V5_SPINNER_MASS;
+        eventBus.emit(Events.CATCH_SNUGGED, {
+          armIndex: this.index,
+          debrisId: this.capturedDebris.id,
+          mUnit: this._computeReelMUnit(armMass, true),
+        });
+      }
+
       // V5: Zero-fuel motor reel-in instead of fuel-burning HAULING
       this._transitionTo(S.REELING);
       const _hasPayload = this.capturedDebris !== null;
@@ -4298,6 +4352,65 @@ export class ArmUnit {
         priority: 'info',
       });
     }
+  }
+
+  /**
+   * SNUG cinch (REEL_PROFILE_V2, plan Q3): tell the held stage-1 net to tighten
+   * to CATCH_SNUG.TENSION_TARGET_N so the bag rigidizes onto the debris before
+   * the haul. The net's _updateReeling honours `_snugTargetN` while `_heldByArm`
+   * (otherwise its tension is the base mass formula). No-op for non-NET grips.
+   * @private
+   */
+  _applySnugTension() {
+    if (this._captureToolKind && this._captureToolKind !== 'NET') return;
+    const net = this._firedNet || (captureNetSystem.getActiveNetForArm
+      ? captureNetSystem.getActiveNetForArm(this.index) : null);
+    if (!net) return;
+    const target = (Constants.CATCH_SNUG && Constants.CATCH_SNUG.TENSION_TARGET_N) ?? 8;
+    net._snugTargetN = target;
+  }
+
+  /**
+   * Yoke tether-plume clearance test (REEL_PROFILE_V2, plan Rev-3 / §1.2).
+   * FEEP braking fires the fore nozzle (+Z exhaust) toward the mother — the same
+   * side the tether runs to. The +Y wishbone bridle holds the cable off that
+   * axis. This returns true only when the angle between the tether line (bridle
+   * anchor → strut dock) and the active brake-plume axis (the daughter's world
+   * +Z / nose) is at least MIN_TETHER_PLUME_DEG, i.e. the cable rides outside
+   * the plume cone. When false, FEEP is withheld and the reel finishes on the
+   * motor alone (no §4.2 ablation is simulated). Degenerate/test geometry
+   * (no parent frame) returns true so minimal mocks aren't blocked.
+   * @param {THREE.Vector3} [parentPos] mother world position
+   * @param {THREE.Quaternion} [parentQuat] mother world orientation
+   * @returns {boolean} true if the tether clears the plume (FEEP permitted)
+   * @private
+   */
+  _tetherPlumeClearOK(parentPos, parentQuat) {
+    const YC = Constants.YOKE_CLEARANCE || {};
+    const minDeg = YC.MIN_TETHER_PLUME_DEG ?? 30;
+    if (!parentPos || !this.dockOffset) return true;   // test/degenerate geometry
+
+    // Strut dock world position (tether mother-side anchor) — shared resolver so
+    // this gate uses exactly the same dock reference as the reel target.
+    const dockWP = this._tmpPlumeDock || (this._tmpPlumeDock = new THREE.Vector3());
+    this._resolveStrutDockWorld(parentPos, parentQuat, dockWP);
+
+    // Tether line: daughter (+Y bridle ≈ daughter position for this angle test)
+    // → strut dock. Brake-plume axis: daughter world +Z (nose), the fore-nozzle
+    // exhaust direction under the whole-haul reel attitude.
+    const tetherDir = this._tmpPlumeTether || (this._tmpPlumeTether = new THREE.Vector3());
+    tetherDir.subVectors(dockWP, this.position);
+    if (tetherDir.lengthSq() < 1e-20) return true;
+    tetherDir.normalize();
+
+    const noseDir = this._tmpPlumeNose || (this._tmpPlumeNose = new THREE.Vector3());
+    noseDir.set(0, 0, 1).applyQuaternion(this.group.quaternion);
+    if (noseDir.lengthSq() < 1e-12) return true;
+    noseDir.normalize();
+
+    const cos = Math.max(-1, Math.min(1, tetherDir.dot(noseDir)));
+    const angleDeg = Math.acos(cos) * 180 / Math.PI;
+    return angleDeg >= minDeg;
   }
 
   /**
@@ -4569,6 +4682,117 @@ export class ArmUnit {
   }
 
   /**
+   * Resolve the strut-tip dock world position into `out` (single source of
+   * truth so every distance / heading / plume-clearance computation agrees on
+   * the dock reference). Strict fallback: only rotate+offset when BOTH a parent
+   * quaternion and a dockOffset are present; otherwise the dock is the mother
+   * centre (`parentPos`). Matches the long-standing _updateReeling convention so
+   * the FEEP gate and reel heading can never diverge from the reel target.
+   * @param {THREE.Vector3} parentPos mother world position
+   * @param {THREE.Quaternion} [parentQuat] mother world orientation
+   * @param {THREE.Vector3} out destination vector (written in place)
+   * @returns {THREE.Vector3} `out`
+   * @private
+   */
+  _resolveStrutDockWorld(parentPos, parentQuat, out) {
+    if (parentQuat && this.dockOffset) {
+      out.copy(this.dockOffset).applyQuaternion(parentQuat).add(parentPos);
+    } else {
+      out.copy(parentPos);
+    }
+    return out;
+  }
+
+  /**
+   * Combined retrieval-unit mass m_unit = m_daughter + m_net + m_debris (kg).
+   * The single source of truth for V2 reel tension/throttle (plan Q2). Net mass
+   * is small but folded in so Q3/Q4 share one consistent mass.
+   * @param {number} armMass daughter dry mass (kg)
+   * @param {boolean} hasPayload whether a catch is held
+   * @returns {number} kg
+   * @private
+   */
+  _computeReelMUnit(armMass, hasPayload) {
+    let m = armMass;
+    if (hasPayload && this.capturedDebris) m += (this.capturedDebris.mass || 0);
+    // Net mass: only NET catches carry a net; magnetic/gripper/pad grips don't.
+    if (hasPayload && (!this._captureToolKind || this._captureToolKind === 'NET')) {
+      const nc = getNetClassForType(this.type);
+      if (nc && typeof nc.MASS === 'number') m += nc.MASS;
+    }
+    return m;
+  }
+
+  /**
+   * Trapezoidal reel-in speed (m/s, game-scale) at a given remaining distance.
+   * Power-bounded cruise → ramps DOWN to V_DOCK within DECEL_DISTANCE_M.
+   *
+   * Cruise solves the implicit power throttle v = P / T_reel with
+   * T_reel = m_unit·v·coeff ⇒ v_cruise = √(P / (m_unit·coeff)), clamped to
+   * [V_DOCK, V_CRUISE_MAX]. Because the cruise is power-bounded the resulting
+   * tension T = m_unit·v·coeff = P/v ≥ P/V_CRUISE_MAX stays under the tether
+   * break strength for any in-spec catch (the snap invariant) — only Boost,
+   * which multiplies the speed AFTER the throttle, can push past it.
+   *
+   * Boost is locked out inside DECEL_DISTANCE_M (BOOST_LOCKOUT_IN_DECEL) so the
+   * player can't slam the dock and defeat the Q4 arrest.
+   * @param {number} distMeters remaining distance to the strut dock (m)
+   * @param {number} armMass daughter dry mass (kg)
+   * @param {boolean} hasPayload whether a catch is held
+   * @param {number} boostMult REEL_BOOST speed multiplier (1 when not boosting)
+   * @returns {number} reel speed in m/s
+   * @private
+   */
+  _computeReelProfileSpeed(distMeters, armMass, hasPayload, boostMult) {
+    const P = Constants.REEL_PROFILE || {};
+    const vCruiseMax = P.V_CRUISE_MAX ?? 60;
+    const vDock = P.V_DOCK ?? 1.0;
+    const decelDist = P.DECEL_DISTANCE_M ?? 15;
+    const power = P.HAUL_MOTOR_POWER ?? 2500;
+    const tMin = P.T_MIN ?? 5;
+    const coeff = Constants.REEL_TENSION_COEFF ?? 0.04;
+    const mUnit = this._computeReelMUnit(armMass, hasPayload);
+
+    // Power-bounded cruise (closed form of v = P/(m·v·coeff)). The T_MIN floor
+    // caps how fast a near-massless unit may go (keeps it ≤ V_CRUISE_MAX) and
+    // the V_DOCK floor prevents a 0-speed stall for a very heavy catch.
+    const vFromMin = power / Math.max(tMin, 1e-6);            // light-catch ceiling
+    const vFromPower = Math.sqrt(power / Math.max(mUnit * coeff, 1e-6));
+    let vCruise = Math.min(vCruiseMax, vFromMin, vFromPower);
+
+    // SNAP INVARIANT (plan §Q1): cap cruise so the steady-reel tension
+    // T = m_unit·v·coeff never exceeds break×CRUISE_TENSION_FRACTION. A heavy
+    // in-spec catch is therefore throttled to a slower-but-safe cruise; only
+    // Boost (applied AFTER this throttle) may push tension past break.
+    const tensionFrac = P.CRUISE_TENSION_FRACTION ?? 0.85;
+    const breakN = this.tetherBreakStrength || 0;
+    if (breakN > 0) {
+      const vTension = (breakN * tensionFrac) / Math.max(mUnit * coeff, 1e-6);
+      vCruise = Math.min(vCruise, vTension);
+    }
+    vCruise = Math.max(vDock, vCruise);
+
+    // Ramp DOWN to V_DOCK under a constant-deceleration (ACCEL) kinematic bound:
+    // v = √(V_DOCK² + 2·ACCEL·dist), clamped to the cruise cap. This is the
+    // decel half of the trapezoid — far from the dock the bound exceeds vCruise
+    // (so we cruise), and it tapers continuously to V_DOCK at contact (no band
+    // edge discontinuity). DECEL_DISTANCE_M is retained as the boost-lockout
+    // window. (Accel ramp-UP from launch is implicit — the daughter starts at
+    // rest at the GRAPPLED co-location and the per-frame move clamps to the
+    // remaining distance.)
+    const accel = P.ACCEL ?? 8.0;
+    const vDecel = Math.sqrt(vDock * vDock + 2 * accel * Math.max(0, distMeters));
+    let speed = Math.min(vCruise, vDecel);
+
+    // Boost multiplies cruise only, and is locked out inside the decel band so
+    // the dock can't be slammed (keeps Q4 arrest meaningful).
+    const lockBoost = (P.BOOST_LOCKOUT_IN_DECEL !== false) && distMeters <= decelDist;
+    if (boostMult > 1 && !lockBoost) speed *= boostMult;
+
+    return speed;
+  }
+
+  /**
    * REELING: V5 zero-fuel motor reel-in.
    * Reel motor on mothership pulls arm back — no FEEP fuel consumed.
    *
@@ -4584,6 +4808,24 @@ export class ArmUnit {
    */
   _updateReeling(dt, parentPos, parentQuat) {
     const hasPayload = this.capturedDebris !== null;
+
+    // Catch-cleared-mid-reel guard (plan §Q3 edge): if a captured debris was
+    // destroyed/removed elsewhere during the haul, don't strand the FSM holding
+    // a stale "loaded" profile — convert to an empty return (mirrors the
+    // HOLDING_CATCH→RELOADING fallback). Only meaningful when we previously had
+    // a catch; a genuinely empty reel (reelFromStationKeep) leaves this null
+    // from the start and is unaffected.
+    if (Constants.isFeatureEnabled('REEL_PROFILE_V2')
+        && this._reelHadPayload === true && !hasPayload && this.state === S.REELING) {
+      this._reelHadPayload = false;
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        source: this.id,
+        text: `${this.id}: Catch lost mid-reel. Returning empty.`,
+        channel: 'CMD', priority: 'warning',
+      });
+    }
+    if (hasPayload) this._reelHadPayload = true;
+
     // Phase 3a (capture-feedback overhaul): hold Shift → BOOST reel ×2.
     // Tension scales ∝ reelSpeed² (mult applied to both speed and the tension
     // formula below), so boosting a heavy catch walks the bar toward RIP/SNAP.
@@ -4598,24 +4840,88 @@ export class ArmUnit {
     }
     this._boostReel = boostOn;
     const boostMult = boostOn ? ((Constants.REEL_BOOST && Constants.REEL_BOOST.SPEED_MULT) || 2) : 1;
-    const reelSpeed = (hasPayload ? REEL_IN_SPEED_LOADED : REEL_IN_SPEED_EMPTY) * boostMult;
-    const reelSpeedScaled = reelSpeed * M;
 
     // Compute strut-tip dock world position: parentPos + parentQuat × dockOffset.
     // Falls back to parentPos (mother centre) if quaternion or dockOffset absent
     // (pre-Config-G compat / test harness with minimal mocks).
     const dockWorldPos = this._tmpDockTarget || (this._tmpDockTarget = new THREE.Vector3());
-    if (parentQuat && this.dockOffset) {
-      dockWorldPos.copy(this.dockOffset).applyQuaternion(parentQuat).add(parentPos);
-    } else {
-      dockWorldPos.copy(parentPos);
-    }
+    this._resolveStrutDockWorld(parentPos, parentQuat, dockWorldPos);
 
     // Direction toward strut-tip dock (reuse pre-allocated _tmpVec)
     const toMother = this._tmpVec.subVectors(dockWorldPos, this.position);
     const dist = toMother.length();
 
-    // FIX (reel-in unit bug): the previous threshold `dist > 0.001` treated the
+    // ── Reel speed selection ──────────────────────────────────────────────
+    // V2 (FEATURE_FLAGS.REEL_PROFILE_V2): trapezoidal velocity profile — fast
+    // power-bounded cruise that ramps DOWN to a gentle dock speed within
+    // DECEL_DISTANCE_M. Legacy path: constant REEL_IN_SPEED_* × boost.
+    const profileV2 = Constants.isFeatureEnabled('REEL_PROFILE_V2');
+    const armMass = this.config.type === 'weaver' ? V5_WEAVER_MASS : V5_SPINNER_MASS;
+    let reelSpeed;
+    if (profileV2) {
+      const distMeters = dist / M;
+      reelSpeed = this._computeReelProfileSpeed(distMeters, armMass, hasPayload, boostMult);
+    } else {      reelSpeed = (hasPayload ? REEL_IN_SPEED_LOADED : REEL_IN_SPEED_EMPTY) * boostMult;
+    }
+    const reelSpeedScaled = reelSpeed * M;
+
+    // ── FEEP soft re-dock arrest (REEL_PROFILE_V2, plan Q4) ────────────────
+    // Within ARREST_DISTANCE_M the daughter fires FEEP to null the residual
+    // closing-rate for a soft contact. Implemented as a ONE-SHOT mass-scaled
+    // fuel debit (fuel% = DEBIT_K · m_unit · v_arrest) the first frame inside
+    // the window — the existing reel ramp already carries the closing-rate down
+    // to ~V_DOCK, so the debit prices the FEEP burn rather than re-simulating
+    // momentum. Gated on tether-plume clearance (yoke) and fuel; either failing
+    // → FUEL_FALLBACK_SLOW (zero-fuel reel-only finish + warn, never a dead-end).
+    // Mission-1 is free (the learning loop). DOCKING's per-state fuel rate is
+    // suppressed for this cycle (see _consumeFuel) so the arrest is charged once.
+    if (profileV2 && hasPayload && !this._redockArrestStarted && !this.isDetached) {
+      const RF = Constants.REDOCK_FEEP || {};
+      const arrestDist = RF.ARREST_DISTANCE_M ?? 8;
+      const distMeters = dist / M;
+      if (distMeters <= arrestDist) {
+        this._redockArrestStarted = true;
+        this._redockDebitApplied = false;   // suppress DOCKING fuel rate this cycle
+        const vArrest = Math.max(reelSpeed, RF.SOFT_DOCK_VEL ?? 0.10);
+        const mUnit = this._computeReelMUnit(armMass, true);
+        eventBus.emit(Events.REDOCK_ARREST_START, {
+          armIndex: this.index, mUnit, vArrest,
+        });
+
+        const perMission = Constants.MISSIONS?.DEBRIS_PER_MISSION || 5;
+        const missionNumber = Math.floor((gameState.debrisCleared || 0) / perMission) + 1;
+        const mission1Free = (RF.MISSION1_FREE !== false) && missionNumber === 1;
+        const plumeClear = this._tetherPlumeClearOK(parentPos, parentQuat);
+
+        if (mission1Free) {
+          this._redockDebitApplied = true;   // free pass still suppresses the DOCKING rate
+        } else {
+          const debit = (RF.DEBIT_K ?? 0.0008) * mUnit * vArrest;
+          if (plumeClear && this.fuel >= debit) {
+            this.fuel -= debit;
+            this._redockDebitApplied = true;
+          } else if (RF.FUEL_FALLBACK_SLOW !== false) {
+            // Can't fund the burn OR the tether crosses the FEEP plume cone:
+            // finish on the reel motor alone (slower, zero-fuel) and warn.
+            if (!this._redockFuelLowWarned) {
+              this._redockFuelLowWarned = true;
+              eventBus.emit(Events.REDOCK_FUEL_LOW, {
+                armIndex: this.index, fuel: this.fuel, needed: debit,
+              });
+              eventBus.emit(Events.COMMS_MESSAGE, {
+                source: this.id,
+                text: plumeClear
+                  ? `${this.id}: Low FEEP for arrest. Easing in on the winch.`
+                  : `${this.id}: Tether fouls the FEEP plume. Easing in on the winch.`,
+                channel: 'CMD', priority: 'warning',
+              });
+            }
+          }
+        }
+      }
+    }
+
+
     // value as metres, but `dist` is in SCENE UNITS (1 unit = 100 km).  0.001
     // scene units = 100 m — so the entire reel-step branch was silently skipped
     // whenever REELING started inside ~100 m of the mother (e.g. a clean 35 m
@@ -4655,10 +4961,14 @@ export class ArmUnit {
     // bar visibly climbs into the red and the player can release Shift before
     // the snap. Nominal reel keeps the legacy direct assignment exactly —
     // cautious play is never punished.
-    const armMass = this.config.type === 'weaver' ? V5_WEAVER_MASS : V5_SPINNER_MASS;
+    // V2 (Q2): tension keys off the combined unit mass m_unit = daughter + net +
+    // debris (single source of truth). The cruise throttle (see
+    // _computeReelProfileSpeed) is power-bounded so an in-spec catch stays under
+    // break strength at full cruise — only Boost may push past it.
     const payloadMass = hasPayload && this.capturedDebris ? (this.capturedDebris.mass || 0) : 0;
+    const tensionMass = profileV2 ? this._computeReelMUnit(armMass, hasPayload) : (armMass + payloadMass);
     const tensionCoeff = Constants.REEL_TENSION_COEFF ?? 0.04;
-    const tensionTarget = (armMass + payloadMass) * reelSpeed * tensionCoeff;
+    const tensionTarget = tensionMass * reelSpeed * tensionCoeff;
     if (boostOn) {
       const tau = (Constants.REEL_BOOST && Constants.REEL_BOOST.TENSION_EASE_TAU_S) || 0.4;
       this.tetherTension += (tensionTarget - this.tetherTension) * Math.min(1, dt / tau);
@@ -4723,10 +5033,23 @@ export class ArmUnit {
 
     // Emit reel state
     this.reeling = true;
+    // V2: tag the current reel phase + closing-rate so the HUD can render
+    // HAUL / RAMP / ARREST and a closing-rate readout ("docking hot" legibility).
+    // `speed` already carries the live closing-rate (= reel speed; REELING moves
+    // position directly so the reel speed IS the closing-rate).
+    let reelPhase = null;
+    if (profileV2) {
+      const arrestDist = (Constants.REDOCK_FEEP && Constants.REDOCK_FEEP.ARREST_DISTANCE_M) ?? 8;
+      const decelDist = (Constants.REEL_PROFILE && Constants.REEL_PROFILE.DECEL_DISTANCE_M) ?? 15;
+      const distM = dist / M;
+      reelPhase = distM <= arrestDist ? 'ARREST' : (distM <= decelDist ? 'RAMP' : 'HAUL');
+    }
     eventBus.emit(Events.TETHER_REEL_STATE, {
       armIndex: this.index,
       reeling: true,
       speed: reelSpeed,
+      phase: reelPhase,
+      closingRate: reelSpeed,
     });
   }
 
@@ -4754,11 +5077,7 @@ export class ArmUnit {
     // Strut-tip dock world position: parentPos + parentQuat × dockOffset.
     // Falls back to parentPos if quaternion or dockOffset absent (test mocks).
     const dockWorldPos = this._tmpDockTarget || (this._tmpDockTarget = new THREE.Vector3());
-    if (parentQuat && this.dockOffset) {
-      dockWorldPos.copy(this.dockOffset).applyQuaternion(parentQuat).add(parentPos);
-    } else {
-      dockWorldPos.copy(parentPos);
-    }
+    this._resolveStrutDockWorld(parentPos, parentQuat, dockWorldPos);
 
     const toParent = this._tmpVec.subVectors(dockWorldPos, this.position);
     const dist = toParent.length();
@@ -5428,7 +5747,12 @@ export class ArmUnit {
       [S.SCANNING]: 0.0,          // V5: sensor mode — zero FEEP fuel (no stored-energy model)
       [S.TANGLED]: 0.0,           // V5: Tangled — no active thrust
     };
-    const rate = rates[this.state] || 0;
+    let rate = rates[this.state] || 0;
+    // REEL_PROFILE_V2 (plan Q4): the re-dock arrest is charged ONCE as a discrete
+    // mass-scaled debit during REELING. Suppress the per-state DOCKING rate for
+    // the cycle that fired it so the FEEP burn isn't double-charged. The flag is
+    // cleared on the next clean dock/reload cycle (in _transitionTo).
+    if (this.state === S.DOCKING && this._redockDebitApplied === true) rate = 0;
     this.fuel -= rate * dt;
 
     // === Detached arm fuel warnings (Phase 6 — no refuel possible) ===

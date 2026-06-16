@@ -178,6 +178,11 @@ import './test-DossierSystem.js';   // capture-feedback overhaul Phase 1.5 — d
 import './test-AspectCapture.js';   // capture-feedback overhaul Phase 2 — orientation-based capture
 import './test-Fragmentation.js';   // capture-feedback overhaul Phase 3b — frag roll + severity
 import './test-ReelBoost.js';       // capture-feedback overhaul Phase 3a — boost reel tension/rip
+// reel-in / re-dock inertia overhaul (REEL_PROFILE_V2)
+import './test-ReelProfile.js';     // Q1 — trapezoidal haul + m_unit tension + snap invariant
+import './test-CatchSnug.js';       // Q3 — SNUG rigidize sub-phase
+import './test-RedockArrest.js';    // Q4 — FEEP soft re-dock arrest + fuel debit + fallback
+import './test-Reel-CatchCleared.js'; // catch-cleared-mid-reel guard
 import './test-EddyDamp.js';        // capture-feedback overhaul Phase 3c — magnet eddy detumble
 import './test-ArmUnit-MagneticGrapple.js';
 import './test-DockingReticle-ToolPanel.js';
