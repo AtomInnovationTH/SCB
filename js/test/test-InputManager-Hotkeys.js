@@ -691,10 +691,16 @@ function makeFullIM(overrides = {}) {
   const calls = {
     cycleView: 0, viewLockedId: undefined, mapToggle: 0, codexToggle: 0,
     hotkeyToggle: 0, detachIndex: null, exitInspection: 0, shopState: null,
+    rosaFurlToggles: 0, rosaFeatherToggles: 0,
   };
   im._deps = {
     gameState: { currentState: 'ORBITAL_VIEW', isGameplay: () => true },
-    player: { getPosition: () => ({ x: 0, y: 0, z: 0 }), getOrbitalElements: () => ({}), getVelocity: () => ({ x: 1, y: 0, z: 0 }) },
+    player: {
+      getPosition: () => ({ x: 0, y: 0, z: 0 }), getOrbitalElements: () => ({}),
+      getVelocity: () => ({ x: 1, y: 0, z: 0 }),
+      toggleRosaFurl: () => { calls.rosaFurlToggles++; return 0; },
+      toggleRosaFeather: () => { calls.rosaFeatherToggles++; return true; },
+    },
     armManager: {
       arms: [], selectedArmIndex: -1,
       getActiveDetachCandidate: () => ({ index: 2 }),
@@ -786,6 +792,41 @@ describe('InputManager — help-pane binding coverage guard', () => {
       im._handleKeyDown(key('Period'));
     });
     assert.equal(got.length, 1, 'Period drives the strut toggle');
+  });
+
+  it(', (Comma) toggles ROSA panel furl ("toggle: Panels")', () => {
+    const got = captureEvent(Events.ROSA_FURL_INPUT, () => {
+      const { im, calls } = makeFullIM();
+      im._handleKeyDown(key('Comma'));
+      assert.equal(calls.rosaFurlToggles, 1, 'Comma calls player.toggleRosaFurl');
+    });
+    assert.equal(got.length, 1, 'Comma emits ROSA_FURL_INPUT exactly once');
+  });
+
+  it(', (Comma) drives Debris Map "previous" when the map is open (no furl)', () => {
+    let prevs = 0;
+    const got = captureEvent(Events.ROSA_FURL_INPUT, () => {
+      const { im, calls } = makeFullIM({
+        debrisMap: { isVisible: () => true, selectPrev: () => { prevs++; }, toggle: () => {} },
+      });
+      im._handleKeyDown(key('Comma'));
+      assert.equal(prevs, 1, 'Comma navigates the map');
+      assert.equal(calls.rosaFurlToggles, 0, 'no furl while map is open');
+    });
+    assert.equal(got.length, 0, 'no ROSA_FURL_INPUT while map is open');
+  });
+
+  it('Shift+, (Comma) feathers ROSA instead of furling ("toggle: Feather panels")', () => {
+    const got = captureEvent(Events.ROSA_FEATHER_INPUT, () => {
+      const { im, calls } = makeFullIM();
+      const furlEvt = captureEvent(Events.ROSA_FURL_INPUT, () => {
+        im._handleKeyDown(key('Comma', { shiftKey: true }));
+      });
+      assert.equal(calls.rosaFeatherToggles, 1, 'Shift+Comma calls player.toggleRosaFeather');
+      assert.equal(calls.rosaFurlToggles, 0, 'Shift+Comma does NOT furl');
+      assert.equal(furlEvt.length, 0, 'Shift+Comma emits no ROSA_FURL_INPUT');
+    });
+    assert.equal(got.length, 1, 'Shift+Comma emits ROSA_FEATHER_INPUT exactly once');
   });
 
   it('L is the de-spin "Hold steady" laser (no recall)', () => {

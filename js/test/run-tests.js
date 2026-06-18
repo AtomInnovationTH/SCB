@@ -35,6 +35,11 @@ import './test-TrawlManager.js';
 // defer-trawl: CLUSTER_CLEARED + RewardSystem field-progress re-anchor
 import './test-ClusterCleared.js';
 
+// Reward-first onboarding spine: autolock + guidance auto-tuning
+import './test-AutoLockController.js';
+import './test-GuidanceDirector.js';
+import './test-SettingsManager-Guidance.js';
+
 // UX-11 #11: lost-in-space recovery advisor (bearing helpers + watchdog + empty-scan)
 import './test-NavRecoveryAdvisor.js';
 
@@ -152,6 +157,9 @@ import './test-ArmUnit-DeployState.js';
 
 // ST-9.11 C-5: Launch Sequence — 9-phase state machine, lock release, ROSA power ramp
 import './test-LaunchSequence.js';
+
+// ROSA solar-array furl/unfurl runtime control (Comma hotkey)
+import './test-RosaFurl.js';
 
 // V-7: Launch Cinematic — visual driver for the 9-phase sequence
 import './test-LaunchCinematic.js';

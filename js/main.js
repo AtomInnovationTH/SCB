@@ -43,6 +43,7 @@ import { ForgeSystem } from './systems/ForgeSystem.js';
 import { ConjunctionSystem } from './systems/ConjunctionSystem.js';
 import { InputManager } from './systems/InputManager.js';
 import { gameFlowManager } from './systems/GameFlowManager.js';
+import { AutoLockController } from './systems/AutoLockController.js';
 import { powerDistribution } from './systems/PowerDistribution.js';
 import { launchSequence } from './systems/LaunchSequence.js';
 import { trawlManager } from './systems/TrawlManager.js';
@@ -91,6 +92,8 @@ import { missionMilestones } from './systems/MissionMilestones.js';
 import { cityLabels } from './scene/CityLabels.js';
 import { TeachingOverlay } from './ui/TeachingOverlay.js';
 import { OnboardingDirector } from './systems/OnboardingDirector.js';
+import { GuidanceDirector } from './systems/GuidanceDirector.js';
+import { settingsManager } from './systems/SettingsManager.js';
 import { persistenceManager } from './systems/PersistenceManager.js';
 import { StrategicMap } from './ui/StrategicMap.js';
 import { captureNetVisual } from './ui/CaptureNetVisual.js';
@@ -419,6 +422,10 @@ let motherCallouts;
 // Systems (targetSelector, kesslerSystem, trawlManager imported as singletons above)
 let cameraSystem;
 let commsSystem;
+let autoLockController;
+/** Reward-first spine: live OUT-OF-RANGE flag for the selected target, fed into
+ *  the OnboardingDirector contextProvider for the `range_wall` gate. */
+let _onboardingTargetOutOfRange = false;
 let missionCoach;
 let issConjunctionBoss;
 let starlinkCascadeBoss;
@@ -461,6 +468,7 @@ let hotkeyOverlay;
 let teachingSystem;
 let teachingOverlay;
 let onboardingDirector;
+let guidanceDirector;
 let strategicMap;
 
 // Input
@@ -623,12 +631,34 @@ async function init() {
   // each beat: emits HOUSTON comms, posts to bottom-screen ticker, soft
   // chime, brightens related HUD panel via SKILL_DISCOVERED.  Escalates
   // un-satisfied beats to TeachingSystem after 15 s.
+  guidanceDirector = new GuidanceDirector({ skillsSystem, settingsManager });
+
+  // Reward-first spine: track the live in/out-of-range state of the selected
+  // target so the Director's `range_wall` beat (requiresOutOfRange) holds until
+  // the reticle actually reports OUT OF RANGE. Updated by AutoLockController's
+  // crossing events.
+  //
+  // IMPORTANT (ordering): these flag-setters MUST be registered BEFORE the
+  // OnboardingDirector below. EventBus delivers in registration order, and the
+  // Director re-checks the range_wall gate on TARGET_OUT_OF_RANGE via its
+  // contextProvider (which reads this flag). If the Director's handler ran
+  // first, it would read the stale `false`, leave the gate closed, and the gate
+  // would only open on the next nudge event (AUTOPILOT_ENGAGE) — which is also
+  // range_wall's trigger, collapsing the teach into a single tick. Setting the
+  // flag first means the gate opens the instant the reticle reports OUT OF
+  // RANGE, so the "too far — press A" coaching is shown before the player acts.
+  eventBus.on(Events.TARGET_OUT_OF_RANGE, () => { _onboardingTargetOutOfRange = true; });
+  eventBus.on(Events.TARGET_IN_RANGE, () => { _onboardingTargetOutOfRange = false; });
+  eventBus.on(Events.TARGET_CLEARED, () => { _onboardingTargetOutOfRange = false; });
+  if (Events.GAME_RESET) eventBus.on(Events.GAME_RESET, () => { _onboardingTargetOutOfRange = false; });
+
   onboardingDirector = new OnboardingDirector({
     eventBus,
     scoringSystem,
     skillsSystem,
     teachingSystem,
     persistenceManager,
+    guidanceDirector,
     // Live game context for conditional onboarding beats (#1 target gating,
     // #3 capture-proximity gating). Returns counts/distances the director uses
     // to decide whether a beat is actionable yet.
@@ -652,9 +682,10 @@ async function init() {
         }
       } catch (_e) { /* context is best-effort */ }
       const hasTarget = !!(targetSelector && targetSelector.getActiveTarget && targetSelector.getActiveTarget());
-      return { trackedContacts, nearestDebrisM, hasTarget };
+      return { trackedContacts, nearestDebrisM, hasTarget, targetOutOfRange: _onboardingTargetOutOfRange };
     },
   });
+
 
   // Phase 4: Wire cargo system to resource system for dual-mode fuel
   resourceSystem.setCargoSystem(cargoSystem);
@@ -760,6 +791,12 @@ async function init() {
   if (Constants.FEATURE_FLAGS.TIER_UPGRADES) {
     tierVisualManager.init(scene, player, armManager);
   }
+
+  // Reward-first onboarding: front-arc autolock + net-range tracking.
+  // Auto-selects the nearest forward debris so a new player gets the lock +
+  // first catch in the first ~10 s; emits TARGET_IN_RANGE/OUT_OF_RANGE to drive
+  // the reticle flip, the in-range-only lock earcon, and the range→AP gate.
+  autoLockController = new AutoLockController({ player, debrisField, settingsManager });
 
   // --- F17: Connect codex system to HUD badge + badge click toggle ---
   hud.setCodexSystem(codexSystem);
@@ -1435,6 +1472,10 @@ function gameLoop(timestamp) {
 
     // Update target selector
     try { targetSelector.update(dt); } catch (e) { console.error('[GameLoop] targetSelector:', e); }
+
+    // Reward-first autolock + net-range tracking (after targetSelector so a
+    // dead target is cleared first, allowing immediate reacquire).
+    try { if (autoLockController) autoLockController.update(dt); } catch (e) { console.error('[GameLoop] autoLockController:', e); }
 
     // Update extracted systems
     try { resourceSystem.update(dt); } catch (e) { console.error('[GameLoop] resourceSystem:', e); }

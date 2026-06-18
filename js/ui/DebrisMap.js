@@ -5,7 +5,7 @@
  * ΔV cost, and conjunction risk, and lets the player engage autopilot toward
  * a selected cluster via Shift+A.
  *
- * Full-screen strategic overlay toggled via Backquote key. Hidden by default.
+ * Full-screen strategic overlay toggled via M (or Backquote). Hidden by default.
  * @module ui/DebrisMap
  */
 

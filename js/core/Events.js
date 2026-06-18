@@ -40,6 +40,15 @@ export const Events = {
   TARGET_SELECTED:    'target:selected',
   TARGET_CLEARED:     'target:cleared',
   TARGET_DISCOVERED:  'target:discovered',   // { target } — UX-3 #9 staggered reveal
+  /** Selected target crossed INTO net-lock range (≤ NET_LOCK_RANGE_M).
+   *  Drives the cyan reticle flip + the in-range-only lock earcon.
+   *  Payload: { id, distanceM } */
+  TARGET_IN_RANGE:    'target:inRange',
+  /** Selected target is OUTSIDE net-lock range (> NET_LOCK_RANGE_M).
+   *  Drives the yellow "OUT OF RANGE" reticle state + the range→autopilot
+   *  teaching gate. Lock earcon is SUPPRESSED in this state.
+   *  Payload: { id, distanceM } */
+  TARGET_OUT_OF_RANGE: 'target:outOfRange',
 
   // === CAMERA ===
   CAMERA_VIEW_CHANGE: 'camera:viewChange',
@@ -402,6 +411,15 @@ export const Events = {
   /** Delegation 2 onboarding (2026-05-31). Comma / Period strut deploy/stow.
    *  Payload: {} (fire-and-forget — OnboardingDirector subscribes). */
   STRUT_DEPLOY_INPUT:     'tutorial:strut_input',
+  /** ROSA solar-array furl/unfurl toggle (Comma key). Fire-and-forget — used for
+   *  audio/telemetry parity with the strut toggle (NOT a tracked onboarding skill).
+   *  Payload: { target: 0|1 } (0 = furling, 1 = unfurling). */
+  ROSA_FURL_INPUT:        'tutorial:rosa_furl_input',
+  /** ROSA solar-array feather toggle (Shift+Comma). Parks the wings edge-on to
+   *  a hazard (fast, retains more power than a full furl). Fire-and-forget —
+   *  audio/telemetry parity with the furl toggle.
+   *  Payload: { feathered: boolean }. */
+  ROSA_FEATHER_INPUT:     'tutorial:rosa_feather_input',
   /** Delegation 2 onboarding (2026-05-31). Mouse-wheel zoom or +/- zoom.
    *  Emitted once per wheel tick / +/- keypress regardless of consumer.
    *  Payload: {} (fire-and-forget). */
@@ -425,6 +443,11 @@ export const Events = {
   /** Final onboarding beat completed; veteran path is now active.
    *  Payload: {} */
   ONBOARDING_COMPLETE:    'onboarding:complete',
+  /** Guidance depth changed by the behavior-driven tuner or Settings toggle.
+   *  Payload: { level: 'GUIDED'|'POINTERS'|'MINIMAL', reason: string } */
+  GUIDANCE_LEVEL_CHANGED: 'guidance:levelChanged',
+  /** Front-arc autolock assist toggled in Settings. Payload: { enabled: boolean } */
+  AUTOLOCK_SETTING_CHANGED: 'guidance:autolockChanged',
   /** OnboardingDirector escalation — feed a synthetic TeachingMoment directly
    *  into TeachingSystem's queue (bypasses the once-per-save guard).
    *  Payload: { id, title, body, duration?, icon? } */

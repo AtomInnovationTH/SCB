@@ -991,12 +991,25 @@ export class InputManager {
         // Toggle handled by SkillsPane._onKeyDown (document listener).
         break;
 
-      // Comma (,): FREED for struts (hotkey revamp 2026-06-14 — "." is now the
-      // single struts toggle). Still drives Debris Map "previous" while the map
-      // is open, so map navigation is preserved.
+      // Comma (,): ROSA panel furl/unfurl toggle (mirrors "." struts). Rolls the
+      // solar arrays up to dodge debris / tether strikes (at a power cost), or
+      // unfurls them again. Shift+Comma feathers instead: parks the wings edge-on
+      // (faster than a full furl, wings stay deployed) to dodge a hazard. (Debris
+      // Map "previous" is handled by the map-open early-intercept near the top of
+      // _handleKeyDown, which returns before this switch — so this case only runs
+      // during normal gameplay.)
       case 'Comma':
-        if (isGameplay && d.debrisMap && d.debrisMap.isVisible()) {
-          d.debrisMap.selectPrev();
+        if (isGameplay && !e.repeat && d.player && e.shiftKey
+            && typeof d.player.toggleRosaFeather === 'function') {
+          const feathered = d.player.toggleRosaFeather();
+          d.audioSystem?.playClick();
+          eventBus.emit(Events.ROSA_FEATHER_INPUT, { feathered });
+          e.preventDefault();
+        } else if (isGameplay && !e.repeat && d.player
+            && typeof d.player.toggleRosaFurl === 'function') {
+          const target = d.player.toggleRosaFurl();
+          d.audioSystem?.playClick();
+          eventBus.emit(Events.ROSA_FURL_INPUT, { target });
           e.preventDefault();
         }
         break;

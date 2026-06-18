@@ -1056,6 +1056,9 @@ export class MenuScene3D {
     mother.toggleEDT = () => {};
     mother._applyCrossbowRecoil = () => {};
     mother._applyDualFireRecoil = () => {};
+    // The hero has no gameplay power subsystem driving solarRate, so give the
+    // ROSA cell faces a constant energized power-flow glow (see _animateRosaGlow).
+    mother._rosaGlowIdleFloor = 0.55;
     this._mother = mother;
 
     // Cull geometry the fixed hero framing never shows: the docking port sits on
@@ -1295,6 +1298,7 @@ export class MenuScene3D {
       this._mother._animateNavLights?.(dt);
       this._mother._animateLidarPulse?.(dt);
       this._mother._animateSolarTracking?.(dt, this._sunDir);
+      this._mother._animateRosaGlow?.(dt);
     }
 
     // Weld arc flicker — arc welding pulse: mostly steady with occasional spikes

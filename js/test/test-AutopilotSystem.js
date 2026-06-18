@@ -26,7 +26,7 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { AutopilotSystem } from '../systems/AutopilotSystem.js';
 import { PlayerSatellite } from '../entities/PlayerSatellite.js';
-import { orbitToSceneCartesian } from '../entities/OrbitalMechanics.js';
+import { orbitToSceneCartesian, propagateOrbit } from '../entities/OrbitalMechanics.js';
 
 const AP = Constants.AUTOPILOT;
 const M = 0.00001;                                 // 1 metre in scene units
@@ -363,12 +363,20 @@ describe('Autopilot — Hysteresis regressions', () => {
     return { ap, player, vHat };
   }
 
-  it('HOLD → TRAIL_ALIGN on posErr spike > 2·POS_TOL', () => {
+  it('HOLD → TRAIL_ALIGN on posErr spike > 2·POS_TOL (after dwell)', () => {
     const { ap, player, vHat } = driveTo('HOLD');
     assert.equal(ap.getCurrentPhase(), 'HOLD');
-    // goal offset = 280 − 80 = 200 m > 30 m (2·POS_TOL)
+    // goal offset = 280 − 80 = 200 m > 60 m (4·POS_TOL)
     setTargetState(ap, { Pd: pdAhead(player, vHat, 280), Vd: new THREE.Vector3(0, 0, 7.5) });
+    // A single sub-dwell frame must NOT demote (HOLD_EXIT_DWELL_S debounce).
     ap.update(0.1);
+    assert.equal(ap.getCurrentPhase(), 'HOLD',
+      'sub-dwell excursion must not demote (debounce)');
+    // Once the excursion persists past HOLD_EXIT_DWELL_S, demote to TRAIL_ALIGN.
+    let guard = 0;
+    while (ap.getCurrentPhase() === 'HOLD' && guard++ < 100) {
+      ap.update(0.1);
+    }
     assert.equal(ap.getCurrentPhase(), 'TRAIL_ALIGN');
   });
 
@@ -676,6 +684,49 @@ describe('PlayerSatellite — applyCartesianImpulse', () => {
 });
 
 // ============================================================================
+// SHARED: real-physics player factory used by the integration suites below.
+// Duck-types the physics-critical PlayerSatellite path (applyCartesianImpulse
+// round-trip + .position sync) without THREE.Group / scene deps. The caller
+// emulates the rest of the game loop (propagate → sync cartesian → sync
+// .position). Hoisted to file scope so the integration suites share ONE copy
+// (avoids drift if the impulse duck-type gains required fields).
+// ============================================================================
+function makeRealishPlayer(orbit) {
+  const cart = orbitToSceneCartesian(orbit);
+  const position = new THREE.Vector3(cart.position.x, cart.position.y, cart.position.z);
+  const player = {
+    orbit,
+    _cartesian: { position: { ...cart.position }, velocity: { ...cart.velocity } },
+    position,                            // Three.js-style .position (scene units)
+    quaternion: new THREE.Quaternion(),
+    _manualRotation: new THREE.Quaternion(),
+    _rcsVelocity: new THREE.Vector3(),
+    _thrusterInterlock: false,
+    _resourceSystem: null,
+    resources: { xenon: 100, battery: 100 },
+    _fireRcsPuff: () => {},
+    _deltaVSpent: 0,
+    _ionDeltaV: 0.0003,
+    throttleLevel: 1.0,
+    _ionThrustXenonRate: 0.02,
+    _ionThrustPowerRate: 5.0,
+    _lastThrustOfflineWarning: 0,
+    autopilotEngaged: false,
+    applyCartesianImpulse(dv, dt) {
+      // Delegate to the real method — this is what we are testing.
+      PlayerSatellite.prototype.applyCartesianImpulse.call(this, dv, dt);
+      // Real game loop keeps .position synced with _cartesian.position
+      this.position.set(this._cartesian.position.x,
+                        this._cartesian.position.y,
+                        this._cartesian.position.z);
+    },
+    getPosition() { return this.position.clone(); },
+    getVelocity() { return { ...this._cartesian.velocity }; },
+  };
+  return player;
+}
+
+// ============================================================================
 // SUITE 9: INTEGRATION — real PlayerSatellite.applyCartesianImpulse in a closed
 // AutopilotSystem.update() loop. This is the guard that would have caught the
 // Y-up/Z-up round-trip bug. It exercises the physics bridge end-to-end — no
@@ -683,47 +734,6 @@ describe('PlayerSatellite — applyCartesianImpulse', () => {
 // ============================================================================
 
 describe('Autopilot — Integration with real applyCartesianImpulse', () => {
-
-  /**
-   * Build a duck-typed player that uses the real PlayerSatellite.prototype
-   * methods for the physics-critical path (applyCartesianImpulse,
-   * _updateCartesian, _applyPosition) while avoiding THREE.Group / scene deps.
-   * The main game loop (propagate → sync cartesian → sync .position) is
-   * emulated by the caller.
-   */
-  function makeRealishPlayer(orbit) {
-    const cart = orbitToSceneCartesian(orbit);
-    const position = new THREE.Vector3(cart.position.x, cart.position.y, cart.position.z);
-    const player = {
-      orbit,
-      _cartesian: { position: { ...cart.position }, velocity: { ...cart.velocity } },
-      position,                            // Three.js-style .position (scene units)
-      quaternion: new THREE.Quaternion(),
-      _manualRotation: new THREE.Quaternion(),
-      _thrusterInterlock: false,
-      _resourceSystem: null,
-      resources: { xenon: 100, battery: 100 },
-      _fireRcsPuff: () => {},
-      _deltaVSpent: 0,
-      _ionDeltaV: 0.0003,
-      throttleLevel: 1.0,
-      _ionThrustXenonRate: 0.02,
-      _ionThrustPowerRate: 5.0,
-      _lastThrustOfflineWarning: 0,
-      autopilotEngaged: false,
-      applyCartesianImpulse(dv, dt) {
-        // Delegate to the real method — this is what we are testing.
-        PlayerSatellite.prototype.applyCartesianImpulse.call(this, dv, dt);
-        // Real game loop keeps .position synced with _cartesian.position
-        this.position.set(this._cartesian.position.x,
-                          this._cartesian.position.y,
-                          this._cartesian.position.z);
-      },
-      getPosition() { return this.position.clone(); },
-      getVelocity() { return { ...this._cartesian.velocity }; },
-    };
-    return player;
-  }
 
   it('posErr decreases over the first second of an engage (no divergence)', () => {
     // Player in circular LEO.
@@ -978,6 +988,149 @@ describe('Autopilot — Integration with real applyCartesianImpulse', () => {
 });
 
 // ============================================================================
+// SUITE: HOLD STATION-KEEPING STABILITY (regression for the "align/hold/align/
+// hold" oscillation, .kilo/plans/autopilot-align-hold-loop.md).
+//
+// Unlike SUITE 9 (which stubs the impulse sink or _resolveTargetState), this
+// suite runs the FULL physics bridge: real PlayerSatellite.applyCartesianImpulse
+// round-trip, real Keplerian propagation of BOTH bodies each tick, and the real
+// HOLD orbit-sync. It is the only test that would reproduce the loop, because
+// the loop is caused by the per-frame velocity-damping pulse re-deriving (and
+// corrupting) player.orbit from a stale _cartesian state on the same frame the
+// orbit-sync ran. The fix gates that pulse off while synced and debounces the
+// HOLD→TRAIL_ALIGN demotion.
+// ============================================================================
+describe('Autopilot — HOLD station-keeping stability (no ALIGN↔HOLD loop)', () => {
+
+  /** Advance one full game-loop tick: AP, then propagate both bodies & sync. */
+  function gameTick(ap, player, target, dt) {
+    ap.update(dt);
+    // Propagate both orbits at game-time scale (the real loop uses gameDt).
+    const gameDt = dt * Constants.TIME_SCALE_GAMEPLAY;
+    propagateOrbit(orbitToKmView(player.orbit), gameDt);  // see helper note
+    propagateOrbit(orbitToKmView(target.orbit), gameDt);
+    // Refresh player cartesian + .position from the (propagated/synced) orbit,
+    // mirroring PlayerSatellite.update()'s _updateCartesian/_applyPosition.
+    const cart = orbitToSceneCartesian(player.orbit);
+    player._cartesian = { position: { ...cart.position }, velocity: { ...cart.velocity } };
+    player.position.set(cart.position.x, cart.position.y, cart.position.z);
+  }
+
+  // propagateOrbit mutates trueAnomaly/meanMotion in place; it expects
+  // semiMajorAxis in km. Our orbits store SMA in scene units, so wrap with a
+  // km-view that writes results back. Minimal shim (SMA only is rescaled).
+  function orbitToKmView(orbit) {
+    const kmView = {
+      get semiMajorAxis() { return orbit.semiMajorAxis / Constants.SCENE_SCALE; },
+      set semiMajorAxis(v) { orbit.semiMajorAxis = v * Constants.SCENE_SCALE; },
+      get eccentricity() { return orbit.eccentricity; },
+      get trueAnomaly() { return orbit.trueAnomaly; },
+      set trueAnomaly(v) { orbit.trueAnomaly = v; },
+      get meanMotion() { return orbit.meanMotion; },
+      set meanMotion(v) { orbit.meanMotion = v; },
+    };
+    return kmView;
+  }
+
+  /** Drive AP to HOLD against a co-orbital trailing target, full physics. */
+  function driveToHold() {
+    const playerOrbit = {
+      semiMajorAxis: Constants.EARTH_RADIUS + 4.0,
+      eccentricity: 0.0005,
+      inclination: 51.6 * Math.PI / 180,
+      raan: 0, argPerigee: 0, trueAnomaly: 1.0, meanMotion: 0,
+    };
+    const player = makeRealishPlayer(playerOrbit);
+    // Target slightly AHEAD so the trailing goal (Pd − v̂·D_trail) sits very
+    // close to the player — a realistic terminal-approach geometry.
+    const target = {
+      id: 555, alive: true, type: 'defunctSat',
+      orbit: { ...playerOrbit, trueAnomaly: 1.0 + 1.2e-5 },
+    };
+    const ap = makeAP({
+      targetSelector: makeTargetSelector({ active: target }),
+      player,
+    });
+    ap.engage();
+
+    // Pump until HOLD (or give up). Real physics + propagation each tick.
+    const dt = 1 / 60;
+    let guard = 0;
+    while (ap.getCurrentPhase() !== 'HOLD' && ap.engaged && guard++ < 60 * 120) {
+      gameTick(ap, player, target, dt);
+    }
+    return { ap, player, target, dt };
+  }
+
+  it('reaches HOLD on a co-orbital locked target under full physics', () => {
+    const { ap } = driveToHold();
+    assert.equal(ap.getCurrentPhase(), 'HOLD',
+      'AP must converge to HOLD on a near-co-orbital target');
+  });
+
+  it('does not oscillate HOLD ↔ TRAIL_ALIGN once on station', () => {
+    const { ap, player, target, dt } = driveToHold();
+    assert.equal(ap.getCurrentPhase(), 'HOLD');
+
+    // Count demotions over 30 s of station-keeping.
+    let demotions = 0;
+    let prev = ap.getCurrentPhase();
+    for (let i = 0; i < 60 * 30; i++) {
+      gameTick(ap, player, target, dt);
+      const now = ap.getCurrentPhase();
+      if (prev === 'HOLD' && now === 'TRAIL_ALIGN') demotions++;
+      prev = now;
+      if (!ap.engaged) break;
+    }
+    assert.ok(ap.engaged, 'AP must stay engaged on a live locked target');
+    assert.equal(ap.getCurrentPhase(), 'HOLD',
+      `must remain in HOLD (got ${ap.getCurrentPhase()})`);
+    assert.equal(demotions, 0,
+      `HOLD→TRAIL_ALIGN must not recur during station-keeping (got ${demotions})`);
+  });
+
+  it('issues no per-frame impulse while synced in HOLD (pure coast)', () => {
+    const { ap, player, target, dt } = driveToHold();
+    assert.equal(ap.getCurrentPhase(), 'HOLD');
+
+    // Wrap applyCartesianImpulse to count NON-zero impulses across coast frames.
+    let impulseCalls = 0;
+    const realApply = player.applyCartesianImpulse.bind(player);
+    player.applyCartesianImpulse = (dv, t) => { impulseCalls++; realApply(dv, t); };
+
+    for (let i = 0; i < 60 * 5; i++) {
+      gameTick(ap, player, target, dt);
+      if (ap.getCurrentPhase() !== 'HOLD') break;
+    }
+    assert.equal(ap.getCurrentPhase(), 'HOLD');
+    assert.equal(impulseCalls, 0,
+      `synced HOLD must coast (no applyCartesianImpulse), got ${impulseCalls} calls`);
+  });
+
+  it('still demotes to TRAIL_ALIGN on a sustained genuine excursion', () => {
+    const { ap, player, target, dt } = driveToHold();
+    assert.equal(ap.getCurrentPhase(), 'HOLD');
+
+    // A genuine excursion the orbit-sync canNOT heal: a persistent positional
+    // displacement of the mother (e.g. a large stuck RCS/CA offset). The sync
+    // governs only the orbit-derived state; getPosition() — which posErr reads
+    // — stays displaced because we re-impose the offset every tick AFTER the
+    // loop resyncs .position from the orbit. posErr therefore exceeds the
+    // 4·POS_TOL band continuously, and once the dwell elapses HOLD must demote.
+    const offsetM = 100; // > 4·POS_TOL (60 m)
+    const offsetScene = offsetM * M;
+    let guard = 0;
+    while (ap.getCurrentPhase() === 'HOLD' && ap.engaged && guard++ < 60 * 30) {
+      gameTick(ap, player, target, dt);
+      player.position.x += offsetScene; // persistent off-station displacement
+    }
+    assert.equal(ap.getCurrentPhase(), 'TRAIL_ALIGN',
+      'a sustained genuine excursion must still demote out of HOLD');
+  });
+});
+
+// ============================================================================
+
 // SUITE: STATION-KEEPING RECOIL COMPENSATION (ST-4.B)
 // ============================================================================
 

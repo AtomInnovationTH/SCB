@@ -636,13 +636,38 @@ export const Constants = {
     // Derived: arm azimuths [60°, 120°, 240°, 300°] for Y0 Quad
 
     // ── ROSA Panels (NEW — replaces rigid wing spec) ──
+    // Square-cornered rectangle (Option B accuracy pass): real ROSA wings are
+    // plain rectangles, so the former ROSA_CHAMFER corner cut was dropped.
     ROSA_WIDTH: 1.0,               // m
     ROSA_LENGTH: 2.0,              // m
-    ROSA_CHAMFER: 0.30,            // m
     ROSA_POWER: 1630,              // W (ROSA alone)
     BODY_MOUNT_POWER: 820,         // W (GaAs body cells — central + fwd/aft end rows, ~2.76 m²)
     TOTAL_SOLAR_POWER: 2450,       // W (combined: ROSA 1630 + body 820)
     ROSA_DEPLOY_DURATION_S: 6.0,   // seconds per wing (ST-9.11 C-5)
+
+    // ── ROSA fidelity geometry (verified vs. real Redwire/NASA ROSA) ──
+    // Real ROSA: flexible PV "center wing" with a high-strain composite slit-tube
+    // boom along EACH long edge, rolled onto a root spool/mandrel ("like a tape
+    // measure"). Deploys passively via boom strain energy. The Mother is a
+    // (gameplay-liberty) motorised re-furlable variant — real ROSA is one-way.
+    ROSA_BOOM_OD: 0.020,           // m — slit-tube edge boom diameter (both long edges)
+    ROSA_DRUM_R: 0.050,            // m — root roller drum / mandrel radius
+    ROSA_SPREADER_OD: 0.010,      // m — slim tip spreader / leading-edge deploy bar
+    ROSA_BRACKET_LEN: 0.060,      // m — root mounting bracket standoff from bus
+    // Furl/unfurl runtime control (",") — snappy ~2.5 s full cycle (fraction/s).
+    ROSA_FURL_RATE: 0.40,          // 1/s — progress change per second when furling/unfurling
+    // Feather (Shift+",") — park the wings edge-on to a hazard. Snappier than a
+    // full furl (it only swings the tilt pivot, no roll-out), so retract is fast
+    // and most power is retained until the edge turns away from the sun.
+    ROSA_FEATHER_RATE: 0.60,       // 1/s — feather progress change per second
+    // Tier-aware sun-track tilt clamp. Y0 struts sit 60° off the ROSA plane, so
+    // the loose ±30° clamp clears them; Y1+ tiers add 30°/330° struts only 30°
+    // from the plane, so when a strut is within ~30° the clamp tightens to this.
+    ROSA_TILT_CLAMP_TIGHT_DEG: 18, // deg — tighter sun-track tilt at higher tiers
+    // Power split: only the ROSA blanket can furl; body-mount GaAs cells stay on.
+    // Derived from ROSA_POWER / TOTAL_SOLAR_POWER (≈0.665) and its complement.
+    ROSA_POWER_FRACTION: 1630 / 2450,        // ROSA share of peak solar (furl-gated)
+    BODY_MOUNT_POWER_FRACTION: 820 / 2450,   // body-mount share (always on)
 
     // ── Hinge (NEW) ──
     HINGE_LOCK_TORQUE: 1000,       // N·m
@@ -1559,6 +1584,29 @@ export const Constants = {
   LASSO_COOLDOWN_MISS: 1,             // seconds — cooldown after miss/retract before next cast
   LASSO_PROJECTILE_MASS: 2.5,         // kg — mass of lasso net projectile (for recoil compensation)
 
+  // --- Net-lock range SSOT (onboarding reward-first spine) ---
+  // Single source of truth for "close enough to net". Drives (a) the autolock
+  // in-range test, (b) the in-range-only lock earcon, (c) the OUT OF RANGE
+  // reticle state, and (d) TARGET_IN_RANGE/OUT_OF_RANGE events. Reconciles the
+  // old split between CaptureNet.BASELINE_RANGE_MAX (75 m) and LASSO_RANGE
+  // (200 m projectile flight). ~90 m sits comfortably inside the lasso's
+  // effective reach while reading as "right on top of it" for a new player.
+  NET_LOCK_RANGE_M: 90,
+
+  // --- Front-arc autolock (reward-first onboarding) ---
+  // The reticle auto-selects the nearest forward, in-range debris so a new
+  // player gets the satisfying lock + first catch in the first ~10 s. Permanent
+  // assist for all players (Settings toggle can disable); manual T/click always
+  // overrides. See .kilo/plans/new-player-onboarding-flow.md Phase 1.
+  AUTOLOCK: {
+    ENABLED: true,                     // master toggle (Settings can flip per-save)
+    ARC_DOT: 0.5,                      // min dot(forward, toDebris) — ~60° half-cone front arc
+    RANGE_M: 5000,                     // candidate search radius (m); the in-range test uses NET_LOCK_RANGE_M
+    REACQUIRE: true,                   // auto-advance to next candidate after a capture
+    REACQUIRE_DELAY_MS: 800,           // pause after a catch before the next lock (lets the reward register)
+  },
+
+
   // --- Capture Net Visual (ST-2.4 → FIX-2.4a → v2 polish) ---
   NET_SPIN_HZ: 4,                       // rotations per second during flight (gyroscopic stabilisation)
   NET_WEIGHT_COUNT: 4,                   // perimeter weight spheres (keep net spread open)
@@ -2145,6 +2193,14 @@ export const Constants = {
     // --- Phase transition thresholds ---
     FAR_TO_MATCH_POS: 500, // m — RENDEZVOUS_FAR → MATCH_ORBIT when pos err below this
     HOLD_DURATION:    1.5, // s — HOLD phase duration before auto-disengage
+
+    // Dwell/debounce before HOLD → TRAIL_ALIGN demotion. A station-keeping
+    // excursion (posErr > 4·POS_TOL OR velErr > 4·VEL_TOL) must persist for at
+    // least this long before the phase drops back to TRAIL_ALIGN. Absorbs
+    // single-frame transients (CA dodge settling, one-frame measurement lag,
+    // frame-boundary drag mismatch) that previously flickered the phase chip
+    // ALIGN ↔ HOLD indefinitely. See .kilo/plans/autopilot-align-hold-loop.md.
+    HOLD_EXIT_DWELL_S: 0.3, // s — sustained-excursion time before HOLD demotes
 
     // --- Control law ---
     // Predictive quadratic-braking velocity profile (see AUTOPILOT_ANALYSIS.md §D
@@ -2967,10 +3023,10 @@ export const Constants = {
   // ============================================================================
   ONBOARDING: {
     /** localStorage key for the OnboardingDirector save blob.
-     *  v2 (2026-06-04): added the `inspect` beat (zoom now teaches the camera,
-     *  inspect verifies the player pushed in until Mother hull callouts appear).
-     *  Bumped so v1 saves don't resume mid-pipeline against the new beat list. */
-    STORAGE_KEY: 'spacecowboy_onboarding_v2',
+     *  v3 (2026-06-17): reward-first capture spine replaces the 18-beat
+     *  camera/attitude lecture (new beat ids). Bumped so v1/v2 saves don't
+     *  resume mid-pipeline against the new beat list. */
+    STORAGE_KEY: 'spacecowboy_onboarding_v3',
 
     /** Default credit award per satisfied beat (where `credit` not set). */
     DEFAULT_CREDIT: 10,

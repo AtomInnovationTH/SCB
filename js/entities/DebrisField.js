@@ -207,10 +207,25 @@ const TRACKING_PROB = {
  *     pilot can see all 7 contacts in a single mother-ship vantage on
  *     mission 1, while still requiring autopilot to reach the deepest one. */
 const WELCOME_FIELD = [
-  // Close tier — lasso range, trivial first catches (~30–80 m)
-  { types: ['fragment'],                   massMin: 1,   massMax: 3,   offsetMin: 0.0000045, offsetMax: 0.0000080 }, // ~30–55m
-  { types: ['fragment'],                   massMin: 3,   massMax: 5,   offsetMin: 0.0000080, offsetMax: 0.0000150 }, // ~55–100m
-  { types: ['fragment'],                   massMin: 2,   massMax: 4,   offsetMin: 0.0000150, offsetMax: 0.0000300 }, // ~100–200m
+  // Reward-first onboarding spine (.kilo/plans/new-player-onboarding-flow.md
+  // Phase 2). The first three pieces are tuned for VISIBILITY + a value ramp +
+  // a deliberate range wall, NOT random "trivial" fragments:
+  //   #1 TEASE — physically LARGE so it reads as a glinting solar panel right
+  //      in front of the mother (a 0.4 m fragment was a ~10 px speck). Low
+  //      value (solar_cell), in net range. defunctSat/box ≈ flat panel.
+  //   #2 second easy catch — recognizable, in range, slightly higher value.
+  //   #3 RANGE WALL — clearly beyond NET_LOCK_RANGE_M so autolock goes silent +
+  //      yellow OUT OF RANGE, teaching Autopilot (A).
+  // Offsets are trueAnomaly arc offsets (≈ metres; see header note ~line 205).
+  // #1 ~25–35 m ahead (≈35–50 m from the ~15 m-trailing chase camera).
+  { types: ['defunctSat'], material: 'solar_cell', sizeM: 3.0, lowValue: true,
+    massMin: 8,   massMax: 14,  offsetMin: 0.0000038, offsetMax: 0.0000052 }, // ~25–35m TEASE
+  // #2 ~55–75 m, in net range (NET_LOCK_RANGE_M = 90 m), slightly more value.
+  { types: ['defunctSat'], sizeM: 2.2,
+    massMin: 20,  massMax: 30,  offsetMin: 0.0000082, offsetMax: 0.0000112 }, // ~55–75m
+  // #3 ~130–180 m — RANGE WALL (well beyond 90 m net-lock).
+  { types: ['defunctSat', 'missionDebris'],
+    massMin: 15,  massMax: 25,  offsetMin: 0.0000195, offsetMax: 0.0000270 }, // ~130–180m RANGE WALL
   // Medium tier — arm deploy range
   { types: ['fragment', 'missionDebris'],  massMin: 10,  massMax: 20,  offsetMin: 0.0000300, offsetMax: 0.0000600 }, // ~200–400m
   { types: ['missionDebris'],              massMin: 25,  massMax: 35,  offsetMin: 0.0000600, offsetMax: 0.0001000 }, // ~400–670m
@@ -1973,6 +1988,18 @@ export class DebrisField {
         debris.sceneSize = debris.sizeMeter * 0.00001;
       }
 
+      // Reward-first spine: deterministic visible size for curated welcome
+      // pieces (the tease must read as a panel, not a speck). `sizeM` overrides
+      // the mass-derived size; `material` paints it (solar_cell → panel look).
+      if (Number.isFinite(spec.sizeM) && typeDef) {
+        debris.sizeMeter = Math.max(typeDef.sizeMin,
+          Math.min(typeDef.sizeMax, spec.sizeM));
+        debris.sceneSize = debris.sizeMeter * 0.00001;
+      }
+      if (spec.material) {
+        debris.material = spec.material;
+      }
+
       // Reset web-shot drag if previously webbed
       if (debris.dragMultiplier) {
         debris.dragMultiplier = undefined;
@@ -1984,6 +2011,21 @@ export class DebrisField {
       // ST-4.C: Suppress hydrazine based on mission profile
       if (!profile.hydrazine) {
         debris.salvage.hydrazine = 0;
+      }
+
+      // Reward-first spine: the tease piece is a deliberately LOW-VALUE quick
+      // win (a glinting but cheap solar panel). Strip the premium materials and
+      // thin the metals so the first catch pays a little, leaving the richer
+      // pieces for later — this is what `spec.lowValue` means.
+      if (spec.lowValue && debris.salvage) {
+        debris.salvage.gaAs = 0;
+        debris.salvage.indium = 0;
+        debris.salvage.xenon = 0;
+        debris.salvage.lithium = 0;
+        debris.salvage.battery = 0;
+        if (Array.isArray(debris.salvage.metals)) {
+          for (const m of debris.salvage.metals) m.amount *= 0.3;
+        }
       }
 
       debris.hasSalvage = debris.salvage.xenon > 0 || debris.salvage.indium > 0 ||

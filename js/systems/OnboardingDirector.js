@@ -36,241 +36,115 @@ import { Constants } from '../core/Constants.js';
 // ────────────────────────────────────────────────────────────────────────────
 
 export const ONBOARDING_BEATS = [
+  // ────────────────────────────────────────────────────────────────────────
+  // REWARD-FIRST SPINE (.kilo/plans/new-player-onboarding-flow.md Phase 3).
+  // Replaces the old 18-beat camera/attitude lecture. The action is the same
+  // for everyone (lock → catch → close → clear); only the AMOUNT of talking
+  // scales (guidanceLevel + behavior tuner). Camera/attitude keys are taught
+  // contextually, just-in-time (D.6), NOT front-loaded here.
+  // ────────────────────────────────────────────────────────────────────────
   {
     id: 'boot',
-    commsSource: 'HOUSTON', commsText: 'Powering up. Telemetry online.',
+    commsSource: 'HOUSTON', commsText: 'Powering up. Telemetry online, Cowboy.',
     commsAck: null,
     glyph: '✓', keys: [], skillId: null,
     autoAdvanceAfter: 3000,
   },
   {
     id: 'handshake',
-    commsSource: 'HOUSTON', commsText: 'Cowboy, Houston. Comms up, we have you on telemetry.',
+    commsSource: 'HOUSTON', commsText: 'We have you on telemetry. Reticle is live — it locks the nearest piece for you.',
     commsAck: null,
     glyph: '✓', keys: [], skillId: null,
-    autoAdvanceAfter: 2500,
+    autoAdvanceAfter: 3000,
   },
   {
-    id: 'arrows',
-    commsSource: 'HOUSTON', commsText: 'Check attitude control. The arrow keys fire your RCS (Reaction Control System) thrusters.',
-    commsAck: 'Copy. RCS nominal, solar panels tracking.',
-    text: 'Test attitude control',
-    glyph: '←→↑↓',
-    keys: ['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'],
-    triggerEvent: 'TUTORIAL_ARROW_INPUT',
-    // Closest existing skill (Constants.SKILLS.CATALOG): nav_arrows.
-    skillId: 'nav_arrows',
-    credit: 10,
-    escalationText: 'The arrow keys fire the RCS to rotate the ship. Hold to point, release to stop. Thrusters respond instantly.',
-  },
-  {
-    id: 'struts',
-    commsSource: 'HOUSTON', commsText: 'Deploy the strut arms with the . key. Press again to stow.',
-    commsAck: 'Copy. Struts cycling full 180°.',
-    text: 'Toggle struts',
-    glyph: '.',
-    keys: ['Period'],
-    triggerEvent: 'STRUT_DEPLOY_INPUT',
-    // Delegation 4 (2026-05-31): wired to `arm_struts` Tier-1 skill (Quick-Win 2a).
-    // Hotkey revamp 2026-06-14: . is now the single struts toggle (was , stow / . deploy).
-    skillId: 'arm_struts',
-    credit: 10,
-    escalationText: 'Strut arms cradle each daughter. Press . to deploy, . again to stow.',
-  },
-  {
-    id: 'view',
-    commsSource: 'HOUSTON', commsText: 'Press V to switch view. Fly pilots the ship; Look Around pulls back. V again returns to Fly.',
-    commsAck: 'Copy. V toggles Fly and Look Around.',
-    text: 'Switch camera (V)',
-    glyph: 'V',
-    keys: ['KeyV'],
-    triggerEvent: 'CAMERA_VIEW_CHANGE',
-    // 2026-06-03 consolidation (rev. 2): V now toggles just two named views —
-    // Fly (chase) ↔ Look Around (look around / zoom in). Close inspection is no
-    // longer a third cycle slot; it engages automatically when the player zooms
-    // in far enough while in Look Around (taught by the `zoom` beat below). Bare
-    // I is retained as an undocumented power-user shortcut for the discrete
-    // inspection view + debris/arm contextual wireframes.
-    skillId: 'nav_camera',
-    credit: 10,
-    optional: true,                       // skippable after 25s
-    skipAfter: 25000,
-    escalationText: 'V toggles Fly and Look Around. Fly pilots; Look Around looks around and zooms. V again to fly.',
-  },
-  {
-    id: 'look',
-    commsSource: 'HOUSTON', commsText: 'In Look Around, click and drag to study the spacecraft.',
-    commsAck: 'Copy. Free look enabled.',
-    text: 'Click + drag to look around',
-    glyph: '🖱️ drag',
-    keys: [],
-    triggerEvent: 'CAMERA_ORBIT_DRAG',
-    // New beat (2026-06-03): teaches the existing Look Around drag-look, which had
-    // no prompt. Fires on the first CAMERA_ORBIT_DRAG. Optional so a player who
-    // already discovered it isn't blocked. Maps to the nav_rotate skill.
-    skillId: 'nav_rotate',
-    credit: 10,
-    optional: true,
-    skipAfter: 20000,
-    escalationText: 'Hold the left mouse button and drag in Look Around to orbit the camera.',
-  },
-  {
-    id: 'zoom',
-    commsSource: 'HOUSTON', commsText: 'Test the zoom. Mouse wheel, or + / −.',
-    commsAck: 'Copy. Now close in on the mothership.',
-    text: 'Zoom the camera',
-    glyph: '🖱️ + −',
-    keys: ['Equal','Minus','NumpadAdd','NumpadSubtract','MouseWheel'],
-    triggerEvent: 'CAMERA_ZOOM_INPUT',
-    // 2026-06-04: split from the old combined zoom+inspect beat. This beat only
-    // teaches that the wheel zooms; the follow-up `inspect` beat verifies the
-    // player actually pushed in far enough for the hull callouts to engage.
-    skillId: 'nav_zoom',
-    credit: 10,
-    escalationText: 'Mouse wheel zooms in and out. Hold Shift while scrolling for fine control.',
-  },
-  {
-    id: 'inspect',
-    commsSource: 'HOUSTON', commsText: 'Zoom in on the mothership until her hull callouts appear. Inspect before capture to read structural hazards.',
-    commsAck: 'Copy. Callouts flag fragile panels and engine zones. Ready for first mission.',
-    text: 'Zoom in until callouts appear',
-    glyph: '🔍',
-    keys: ['Equal','NumpadAdd','MouseWheel'],
-    // Fires only when the OVERVIEW zoom-inspection sub-state actually ENGAGES
-    // for the mother — i.e. the player reached the depth where callouts appear.
-    // This guarantees the "callouts appear automatically" promise is fulfilled,
-    // not just claimed (the old combined beat completed on the first scroll).
-    triggerEvent: 'MOTHER_INSPECTION_ENGAGED',
-    skillId: 'inspect_mother',
-    credit: 10,
-    escalationText: 'In Look Around, keep scrolling in toward the mothership. Within a few metres her callouts and focus vignette fade in. Pull back out to clear them.',
-  },
-  {
-    id: 'scan',
-    commsSource: 'BANGALORE', commsText: 'Scan your area with S. Ground stations pay for fresh survey data. Scanned debris logs a redacted manifest. Close in to decrypt it.',
-    commsAck: 'Copy. Scan returned, survey data sold.',
-    text: 'Scan area (earns credits)',
-    glyph: 'S',
-    keys: ['KeyS'],
-    triggerEvent: 'SCAN_INITIATED',
-    skillId: 'scan_quick',
-    credit: 10,
-    escalationText: 'S runs a Quick Scan; Shift+S scans wider and slower. Only the first scan of a field pays out, so move on once it is logged.',
-  },
-  {
-    id: 'target',
-    commsSource: 'BANGALORE', commsText: 'Select a target. Press T to cycle tracked contacts.',
-    commsAck: 'Copy. Target locked, contact in range.',
-    text: 'Cycle target',
-    glyph: 'T',
-    keys: ['KeyT'],
-    triggerEvent: 'TARGET_SELECTED',
-    skillId: 'nav_target',
-    credit: 10,
-    // #1 (2026-06-04): don't post this beat until a scan has actually revealed
-    // at least one TRACKED contact — otherwise Tab has nothing to select and the
-    // player is told to cycle through an empty list. The director holds this beat
-    // (showing a re-scan nudge) until contacts exist.
-    requiresContacts: true,
-    noContactNudge: 'No tracked contacts yet. Reposition and scan again with S, or Wide scan with Shift+S.',
-    escalationText: 'T cycles tracked debris, soonest-to-reach first. Nothing cycling? Scan again to reveal contacts.',
-  },
-  {
-    id: 'autopilot',
-    commsSource: 'BANGALORE', commsText: 'Close on the debris. Press A for autopilot.',
-    commsAck: 'Copy. On station. Your call, Cowboy.',
-    text: 'Autopilot to target',
-    glyph: 'A',
-    keys: ['KeyA'],
-    triggerEvent: 'AUTOPILOT_ENGAGE',
-    skillId: 'nav_autopilot',
-    credit: 10,
-    escalationText: 'A engages autopilot to the selected target. A again or arrows to abort.',
-  },
-  {
-    id: 'decision',
-    commsSource: 'HOUSTON', commsText: 'Two capture tools. The Mother net for nearby debris, or a Daughter for distant or heavy pieces. On station, watch the live capture odds for each tool. De-spin or close in to raise them.',
-    commsAck: null,
-    glyph: '?', keys: [], skillId: null,
-    autoAdvanceAfter: 4000,
-  },
-  {
-    id: 'lasso',
-    commsSource: 'HOUSTON', commsText: 'In range. Fire the Mother net with N. Best on nearby debris.',
-    commsAck: 'Copy. Clean catch.',
-    text: 'Launch net (N)',
+    // The tease. AutoLockController has locked the close glinting panel right
+    // in front of the mother. Teach the ONE key the opening forces: the net.
+    id: 'tease_lock',
+    commsSource: 'HOUSTON', commsText: 'Locked on. That panel is right in front of you — fire the Mother net with N.',
+    commsAck: 'Clean catch, Cowboy.',
+    text: 'Fire net (N)',
     glyph: 'N',
     keys: ['KeyN'],
     triggerEvent: 'LASSO_FIRED',
     skillId: 'collect_lasso',
     credit: 10,
-    parallel: 'daughter',
-    // #3 (2026-06-04): hold the capture hint until the player is actually within
-    // net range of a target; otherwise "fire when within 50 m" appears while
-    // they're kilometres away. Until in range, show the closer-in nudge.
-    requiresProximityM: 60,
-    farNudge: 'Too far. Autopilot in with A, then fire inside 50 m.',
-    escalationText: 'N fires the Mother net at the selected target inside 50 m. Aim at the highlighted debris.',
+    escalationText: 'The bracket on the panel ahead is your lock. Press N to fire the Mother net at it.',
   },
   {
-    id: 'daughter',
-    commsSource: 'HOUSTON', commsText: 'For distant or heavy debris, launch a Daughter with D. Pilot with 1-4, reel in with R.',
-    commsAck: 'Copy. Daughter away. Pilot with 1-4 to steer her home.',
-    text: 'Deploy Daughter (D)',
-    glyph: 'D',
-    keys: ['KeyD'],
-    triggerEvent: 'ARM_DEPLOYED',
-    skillId: 'collect_deploy',
-    credit: 10,
-    parallel: 'lasso',
-    escalationText: 'D launches the selected docked Daughter at your target. Press 1-4 to pilot a launched Daughter, R to reel her in. Daughters reach what the net cannot.',
-  },
-  {
-    id: 'captured',
-    // #4 (2026-06-04): close the loop — confirm the catch landed and tell the
-    // player what they earned and what to do next. Fires on the first successful
-    // capture (lasso/net/arm). Narrative + a short auto-advance.
-    commsSource: 'HOUSTON', commsText: 'Capture confirmed. Salvage refines into fuel and materials, and you are paid for the deorbit. Keep clearing the field.',
+    // Confirm the first catch landed + name the reward loop. The reticle
+    // auto-advances to the next forward piece (AutoLockController REACQUIRE).
+    id: 'first_catch',
+    commsSource: 'HOUSTON', commsText: 'Capture confirmed. Salvage refines into fuel and credits. Another one\'s locked — take it.',
     commsAck: null,
     glyph: '✓', keys: [], skillId: null,
-    triggerEvent: 'ARM_CAPTURED',
-    credit: 0,            // narrative confirmation — the capture already scored big
-    advanceDelay: 500,
-    autoAdvanceAfter: 6000,
-  },
-  {
-    // §4.4 solo-flight graduation — split the old single `complete` beat so
-    // ONBOARDING_COMPLETE can't fire before the player has actually captured
-    // something unguided. `captured` (above) is the catch-confirmed recap;
-    // these three are: hand-off → one solo capture → graduation.
-    id: 'solo_intro',
-    commsSource: 'HOUSTON', commsText: 'You are solo from here, Cowboy. One more capture on your own, net or daughter.',
-    commsAck: null,
-    glyph: '★', keys: [], skillId: null,
-    autoAdvanceAfter: 3500,
-  },
-  {
-    id: 'solo_practice',
-    // Counter beat (§4.4): require ONE unguided capture before graduating.
-    // `counterTarget` is satisfied on the Nth DEBRIS_CAPTURED while active; it is
-    // never pre-satisfied/tier-skipped by the earlier guided catch (see the
-    // counterTarget guards in _preSatisfy / _isAlreadyKnown). Optional skipAfter
-    // + NET_EMPTY_CLICK consolation keep a no-nets player from getting stuck.
-    commsSource: 'HOUSTON', commsText: 'Find another contact and bring it in. Scan, close, capture. Houston standing by.',
-    commsAck: 'Copy. Clean solo capture. Well done, Cowboy.',
-    text: 'Capture one on your own',
-    glyph: '🎯', keys: [], skillId: null,
     triggerEvent: 'DEBRIS_CAPTURED',
     counterTarget: 1,
     credit: 0,
-    optional: true,
-    skipAfter: 90000,
+    autoAdvanceAfter: 6000,
+  },
+  {
+    // Second easy catch — repetition, slightly more value. Already locked.
+    id: 'second_catch',
+    commsSource: 'HOUSTON', commsText: 'Good. Keep netting what the reticle locks.',
+    commsAck: null,
+    text: 'Net the next lock (N)',
+    glyph: 'N',
+    keys: ['KeyN'],
+    triggerEvent: 'DEBRIS_CAPTURED',
+    counterTarget: 1,
+    skillId: 'collect_lasso',
+    credit: 0,
+    // No-net safety: if the player is out of nets here, graduate past rather
+    // than stranding them (the NET_EMPTY_CLICK consolation path).
     netEmptySkip: true,
-    netEmptyComms: 'Out of nets. Graduating you anyway, Cowboy.',
+    netEmptyComms: 'Out of nets — we\'ll resupply. Moving on, Cowboy.',
+  },
+  {
+    // The range wall. The third piece is beyond net range — autolock went
+    // silent + yellow OUT OF RANGE. Teach Autopilot (A) here and ONLY here.
+    id: 'range_wall',
+    commsSource: 'BANGALORE', commsText: 'That one\'s too far for the net — see OUT OF RANGE. Press A to autopilot in.',
+    commsAck: 'On station. Net it now.',
+    text: 'Autopilot in (A)',
+    glyph: 'A',
+    keys: ['KeyA'],
+    triggerEvent: 'AUTOPILOT_ENGAGE',
+    skillId: 'nav_autopilot',
+    credit: 10,
+    // Hold until a target is actually out of range (the player has cleared the
+    // two close pieces and the reticle has hopped to the far one).
+    requiresOutOfRange: true,
+    outOfRangeNudge: 'Clear the close pieces first — the reticle will lock the far one and show OUT OF RANGE.',
+    escalationText: 'A engages autopilot to the locked target. It closes the gap; the bracket turns cyan when the net can reach.',
+  },
+  {
+    // Close-and-catch payoff: AP arrived, range met (cyan + lock sound), net it.
+    id: 'close_and_catch',
+    commsSource: 'BANGALORE', commsText: 'In range. Fire the net.',
+    commsAck: null,
+    glyph: '✓', keys: [], skillId: null,
+    triggerEvent: 'DEBRIS_CAPTURED',
+    counterTarget: 1,
+    credit: 0,
+    autoAdvanceAfter: 8000,
+    // No-net safety: graduate past if the player is out of nets here.
+    netEmptySkip: true,
+    netEmptyComms: 'Out of nets — we\'ll resupply. Moving on, Cowboy.',
+  },
+  {
+    // Free clearing — solo, unguided. Graduation proof: capturing the rest of
+    // the cluster is inherently unguided. Optional skip so a no-nets player
+    // isn't stranded.
+    id: 'free_clear',
+    commsSource: 'HOUSTON', commsText: 'You\'ve got the loop — scan, lock, close, net. Clear the rest of the cluster.',
+    commsAck: null,
+    glyph: '★', keys: [], skillId: null,
+    autoAdvanceAfter: 4000,
   },
   {
     id: 'final',
-    commsSource: 'HOUSTON', commsText: 'Outstanding, Cowboy. Clear the field to win. Good hunting.',
+    commsSource: 'HOUSTON', commsText: 'That\'s real cowboy work. Clear the field, then check the map for the next cluster. Good hunting.',
     commsAck: null,
     glyph: '★', keys: [], skillId: null,
     autoAdvanceAfter: 4000,
@@ -312,6 +186,8 @@ export class OnboardingDirector {
     this._teaching = deps.teachingSystem || null;
     this._persistence = deps.persistenceManager || null;
     this._context = typeof deps.contextProvider === 'function' ? deps.contextProvider : null;
+    /** @type {object|null} GuidanceDirector — scales coaching depth per persona. */
+    this._guidance = deps.guidanceDirector || null;
 
     /** @type {Set<string>} ids of beats already satisfied (across runs). */
     this._completedBeats = new Set();
@@ -460,6 +336,7 @@ export class OnboardingDirector {
     this._recentInputs.length = 0;
     this._smartDefaultMsgShown = false;
     this._started = false;
+    this._stationKeepArrowsShown = false;
     this._persist();
   }
 
@@ -548,6 +425,7 @@ export class OnboardingDirector {
     // hint converts to the real beat without waiting for the next poll tick.
     const gateNudgeEvents = [
       Events.TARGET_DISCOVERED, Events.SCAN_COMPLETE, Events.AUTOPILOT_ENGAGE,
+      Events.TARGET_OUT_OF_RANGE, Events.DEBRIS_CAPTURED,
     ];
     for (const e of gateNudgeEvents) {
       if (!e) continue;
@@ -567,6 +445,46 @@ export class OnboardingDirector {
     if (Events.NET_EMPTY_CLICK) {
       on(Events.NET_EMPTY_CLICK, () => this._onConsolationSkip());
     }
+
+    // Contextual JIT teaching (.kilo plan §D.6): the arrows/RCS lesson is NOT
+    // front-loaded — an autopilot-driving player never needs it to travel. It
+    // surfaces exactly when it first matters: a daughter has parked in
+    // STATION_KEEP and the pilot may want to rotate the mother to line her up.
+    // Gated by canFireHint so it only fires when undiscovered/struggling and
+    // falls silent after the unheeded cap; veterans get a ticker, never a modal.
+    if (Events.STATION_KEEP_ENTERED) {
+      on(Events.STATION_KEEP_ENTERED, () => this._onStationKeepArrowsHint());
+    }
+  }
+
+  /**
+   * Just-in-time arrows reminder when a daughter enters STATION_KEEP. One-shot,
+   * canFireHint-gated, never while an onboarding beat is mid-flight.
+   * @private
+   */
+  _onStationKeepArrowsHint() {
+    if (this._active) return;                 // don't compete with a live beat
+    if (this._stationKeepArrowsShown) return; // one-shot per session
+    const skillId = 'nav_arrows';
+    if (this._skills && typeof this._skills.canFireHint === 'function') {
+      if (!this._skills.canFireHint(skillId)) return;
+    }
+    this._stationKeepArrowsShown = true;
+    if (this._skills && typeof this._skills.noteNudgeShown === 'function') {
+      this._skills.noteNudgeShown(skillId);
+    }
+    const presentation = (this._skills && typeof this._skills.getHintPresentation === 'function')
+      ? this._skills.getHintPresentation() : 'modal';
+    this._emit(Events.HINT_POSTED, {
+      id: 'jit_arrows_sk',
+      text: 'Daughter on station — arrow keys rotate the mother to line her up.',
+      glyph: '←→↑↓',
+      keys: ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'],
+      skillId,
+      duration: Constants.ONBOARDING?.DEFAULT_HINT_MS || 12000,
+      priority: 'normal',
+      presentation,
+    });
   }
 
   /**
@@ -710,8 +628,19 @@ export class OnboardingDirector {
       return;
     }
 
+    // Guidance depth: MINIMAL players (veterans / behavior-detected experts)
+    // get NO comms or chips — the spine still advances on their actions, but
+    // the action is the reward, not a lecture. The capture beats remain wired.
+    const minimal = this._isMinimal();
+
+    // Tell the GuidanceDirector the spine is actively coaching this interactive
+    // beat's action, so doing it isn't mis-read as "ahead-of-coaching" competence.
+    if (this._guidance && typeof this._guidance.setCoachingActive === 'function') {
+      this._guidance.setCoachingActive(!!beat.triggerEvent && !minimal);
+    }
+
     // (1) Comms line.
-    if (beat.commsText) {
+    if (beat.commsText && !minimal) {
       this._emitComms({
         source: beat.commsSource || 'HOUSTON',
         channel: 'HOUSTON',
@@ -725,7 +654,7 @@ export class OnboardingDirector {
     }
 
     // (2) Hint ticker.
-    if (Array.isArray(beat.keys) && beat.keys.length > 0) {
+    if (Array.isArray(beat.keys) && beat.keys.length > 0 && !minimal) {
       this._emit(Events.HINT_POSTED, {
         id: beat.id,
         text: beat.text || beat.commsText || '',
@@ -819,7 +748,7 @@ export class OnboardingDirector {
    */
   _beatGateMet(beat) {
     if (!beat) return true;
-    if (!beat.requiresContacts && !Number.isFinite(beat.requiresProximityM)) return true;
+    if (!beat.requiresContacts && !Number.isFinite(beat.requiresProximityM) && !beat.requiresOutOfRange) return true;
     if (!this._context) return true; // no provider → don't block
     let ctx = null;
     try { ctx = this._context() || {}; } catch (_e) { return true; }
@@ -829,6 +758,12 @@ export class OnboardingDirector {
     if (Number.isFinite(beat.requiresProximityM)) {
       const d = ctx.nearestDebrisM;
       if (!(Number.isFinite(d) && d <= beat.requiresProximityM)) return false;
+    }
+    if (beat.requiresOutOfRange) {
+      // Range-wall beat: hold until a target is actually out of net range
+      // (the player has cleared the close pieces and the reticle has hopped to
+      // the far one). Driven by TARGET_OUT_OF_RANGE via the context flag.
+      if (!ctx.targetOutOfRange) return false;
     }
     return true;
   }
@@ -846,6 +781,7 @@ export class OnboardingDirector {
     // Post a soft nudge hint explaining what to do to unblock (once).
     const nudge = beat.requiresContacts ? beat.noContactNudge
                 : Number.isFinite(beat.requiresProximityM) ? beat.farNudge
+                : beat.requiresOutOfRange ? beat.outOfRangeNudge
                 : null;
     if (nudge) {
       this._emit(Events.HINT_POSTED, {
@@ -959,6 +895,12 @@ export class OnboardingDirector {
     if (!this._active || this._active.beat.id !== beat.id) return;
     this._clearActiveTimers();
 
+    // Coaching for this beat is done — clear the flag so subsequent player
+    // actions read as competence again.
+    if (this._guidance && typeof this._guidance.setCoachingActive === 'function') {
+      this._guidance.setCoachingActive(false);
+    }
+
     // (1) HINT_SATISFIED → fades the ticker entry (and any held nudge variant).
     this._emit(Events.HINT_SATISFIED, { id: beat.id });
     if (this._active.held) this._emit(Events.HINT_SATISFIED, { id: beat.id + '_wait' });
@@ -972,7 +914,7 @@ export class OnboardingDirector {
         this._emit(Events.SCORING_AWARD, { points: credit, reason: 'Onboarding: ' + beat.id });
       }
     }
-    if (beat.commsAck) {
+    if (beat.commsAck && !this._isMinimal()) {
       this._emitComms({
         source: beat.commsSource || 'HOUSTON',
         channel: 'HOUSTON',
@@ -993,10 +935,29 @@ export class OnboardingDirector {
     this._setTimeout(() => this._advanceToNextBeat(), delay);
   }
 
+  /**
+   * @private Whether guidance is at the MINIMAL depth (veteran / behavior-
+   * detected expert) — single source for the comms/chip/escalation suppression
+   * checks so they can never drift apart.
+   * @returns {boolean}
+   */
+  _isMinimal() {
+    return !!(this._guidance && typeof this._guidance.isMinimal === 'function' && this._guidance.isMinimal());
+  }
+
   _escalate(beat) {
     if (!this._active || this._active.beat.id !== beat.id) return;
     if (this._active.escalated) return;
     this._active.escalated = true;
+    // A stall is a struggle signal — let the GuidanceDirector re-escalate one
+    // tier so a player who quietly de-escalated then got stuck gets help back.
+    if (this._guidance && typeof this._guidance.noteStall === 'function') {
+      this._guidance.noteStall();
+    }
+    // MINIMAL players opted out of coaching — don't force a modal on them.
+    if (this._isMinimal()) {
+      return;
+    }
     const body = beat.escalationText || beat.commsText || '';
     if (!body) return;
     this._emit(Events.TEACHING_MOMENT_FORCE, {

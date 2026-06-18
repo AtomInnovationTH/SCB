@@ -65,6 +65,11 @@ export class AutopilotSystem {
     /** @type {number} Seconds spent in HOLD (triggers auto-disengage at HOLD_DURATION) */
     this._holdTimer = 0;
 
+    /** @type {number} Accumulated time the HOLD excursion has exceeded the
+     *  demotion band — debounces HOLD → TRAIL_ALIGN so transient single-frame
+     *  spikes don't flicker the phase (see AUTOPILOT_align-hold-loop plan). */
+    this._holdExitDwell = 0;
+
     /** @type {THREE.Vector3|null} Latest computed goal position (P_m*) in scene units */
     this._goalPos = null;
 
@@ -342,6 +347,7 @@ export class AutopilotSystem {
     this._debrisMapCluster = null;
     this._goalPos = null;
     this._holdTimer = 0;
+    this._holdExitDwell = 0;
     this._stationKeepDeltaV = 0;
 
     // Release any active target lock
@@ -598,7 +604,9 @@ export class AutopilotSystem {
         // if the orbital plane changed since last frame (e.g. perturbation,
         // collision-avoidance impulse), recompute trueAnomaly to preserve
         // the mother's physical position.
+        let syncedThisFrame = false;
         if (this._lockedTargetRef && this._lockedTargetRef.orbit && this._player) {
+          syncedThisFrame = true;
           const tOrb = this._lockedTargetRef.orbit;
           const pOrb = this._player.orbit;
 
@@ -643,18 +651,37 @@ export class AutopilotSystem {
         // Dead-band for along-track fine-tuning: if the trailing distance
         // drifts outside tolerance (from numerical noise or frame-boundary
         // drag mismatch), a gentle velocity-damping pulse nudges it back.
-        // The orbit sync above will reset SMA/ecc/etc. next frame, so the
-        // net lasting effect of the impulse is only on trueAnomaly —
-        // effectively repositioning the mother along the orbit (pure
-        // along-track station-keeping).
-        if (posErrM > POS_TOL || velErrMps > VEL_TOL) {
+        //
+        // CRITICAL: skip the damping pulse entirely while the continuous
+        // orbit-sync above is active. The sync alone holds the mother exactly
+        // at the trailing point (both bodies share Keplerian elements and the
+        // same mean motion, so they propagate in lock-step). Issuing a
+        // velocity-damping `applyCartesianImpulse` here re-derives `player.orbit`
+        // from a STALE cached `_cartesian` state and discards the sync that just
+        // ran this frame — and because da/dv ≈ 1.8 km per m/s at LEO, a sub-m/s
+        // pulse corrupts the semi-major axis by hundreds of metres. That drove
+        // the HOLD ⇄ TRAIL_ALIGN ("hold/align/hold/align") oscillation the user
+        // reported. See .kilo/plans/autopilot-align-hold-loop.md.
+        if (!syncedThisFrame && (posErrM > POS_TOL || velErrMps > VEL_TOL)) {
           dvCmd.addScaledVector(relV_mps, AP.KP_VEL * 0.5);
         }
 
-        // Hysteresis — only drop back to TRAIL_ALIGN on large excursions
-        // (e.g. sync failed, target lost). 4× tolerance prevents
-        // HOLD↔TRAIL cycling on every minor perturbation.
-        if (posErrM > 4 * POS_TOL || velErrMps > 4 * VEL_TOL) {
+        // Hysteresis + dwell — only drop back to TRAIL_ALIGN on a LARGE
+        // excursion (4× tolerance: sync failed, target lost, big perturbation)
+        // that PERSISTS for HOLD_EXIT_DWELL_S. The dwell debounces single-frame
+        // transients (CA dodge settling, one-frame measurement lag, frame-
+        // boundary drag mismatch) that — combined with the pre-fix damping
+        // pulse corrupting the synced orbit — produced the HOLD ⇄ TRAIL_ALIGN
+        // ("hold/align/hold/align") flicker. Measured posErr/velErr is used so
+        // a genuinely displaced mother (e.g. a large CA dodge that the sync
+        // cannot heal) still demotes and re-aligns.
+        const excursion = posErrM > 4 * POS_TOL || velErrMps > 4 * VEL_TOL;
+        if (excursion) {
+          this._holdExitDwell += dt;
+        } else {
+          this._holdExitDwell = 0;
+        }
+        if (excursion && this._holdExitDwell >= AP.HOLD_EXIT_DWELL_S) {
           this._setPhase(PHASE.TRAIL_ALIGN);
         } else {
           // Suppress HOLD timer while ANY of these are true:
@@ -758,6 +785,9 @@ export class AutopilotSystem {
   _setPhase(newPhase) {
     if (newPhase === this._phase) return;
     this._phase = newPhase;
+    // Reset HOLD-exit debounce on any phase change so a fresh HOLD entry starts
+    // with a clean accumulator (and a demotion can't carry stale dwell time).
+    this._holdExitDwell = 0;
   }
 
   // ==========================================================================

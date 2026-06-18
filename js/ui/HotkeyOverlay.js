@@ -89,6 +89,8 @@ const HOTKEY_GROUPS = [
       [['9'], 'toggle: Debris pane'],
       [['0'], 'toggle: Target pane'],
       [['.'], 'toggle: Struts'],
+      [[','], 'toggle: Panels'],
+      [[',', 'Shift'], 'toggle: Feather panels'],
     ],
   },
 ];

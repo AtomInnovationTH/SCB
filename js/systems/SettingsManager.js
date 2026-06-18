@@ -18,10 +18,13 @@ import { DEFAULT_LANGUAGE, isSupportedLanguage, getLanguage } from '../core/Lang
 
 const SETTINGS_KEY = 'sc_settings_v1';
 
+/** Guidance preference values. 'auto' = behavior-driven (GuidanceDirector). */
+const GUIDANCE_VALUES = ['auto', 'GUIDED', 'POINTERS', 'MINIMAL'];
+
 class SettingsManager {
   constructor() {
-    /** @type {{ language: string }} */
-    this._settings = { language: DEFAULT_LANGUAGE };
+    /** @type {{ language: string, guidance: string, autolock: boolean }} */
+    this._settings = { language: DEFAULT_LANGUAGE, guidance: 'auto', autolock: true };
     this._load();
   }
 
@@ -35,6 +38,12 @@ class SettingsManager {
       if (parsed && typeof parsed === 'object') {
         if (isSupportedLanguage(parsed.language)) {
           this._settings.language = parsed.language;
+        }
+        if (GUIDANCE_VALUES.includes(parsed.guidance)) {
+          this._settings.guidance = parsed.guidance;
+        }
+        if (typeof parsed.autolock === 'boolean') {
+          this._settings.autolock = parsed.autolock;
         }
       }
     } catch (_) { /* corrupt / blocked storage — keep defaults */ }
@@ -72,6 +81,53 @@ class SettingsManager {
     this._settings.language = code;
     this._save();
     eventBus.emit(Events.LANGUAGE_CHANGED, { code, lang: getLanguage(code) });
+    return true;
+  }
+
+  /**
+   * @returns {string} Guidance preference: 'auto' (behavior-driven) or a pinned
+   *          level ('GUIDED' | 'POINTERS' | 'MINIMAL').
+   */
+  getGuidance() {
+    return this._settings.guidance || 'auto';
+  }
+
+  /**
+   * Set the guidance preference. 'auto' returns control to the behavior-driven
+   * GuidanceDirector; a level pins it. Persists + emits GUIDANCE_LEVEL_CHANGED.
+   * @param {string} value
+   * @returns {boolean} true if the value changed
+   */
+  setGuidance(value) {
+    if (!GUIDANCE_VALUES.includes(value) || value === this._settings.guidance) return false;
+    this._settings.guidance = value;
+    this._save();
+    eventBus.emit(Events.GUIDANCE_LEVEL_CHANGED, {
+      level: value === 'auto' ? null : value,
+      reason: 'settings',
+    });
+    return true;
+  }
+
+  /** @returns {boolean} whether the front-arc autolock assist is enabled. */
+  getAutolock() {
+    return this._settings.autolock !== false;
+  }
+
+  /**
+   * Enable/disable the front-arc autolock assist. Persists + emits a settings
+   * event the AutoLockController honors.
+   * @param {boolean} on
+   * @returns {boolean} true if the value changed
+   */
+  setAutolock(on) {
+    const v = !!on;
+    if (v === this._settings.autolock) return false;
+    this._settings.autolock = v;
+    this._save();
+    if (Events.AUTOLOCK_SETTING_CHANGED) {
+      eventBus.emit(Events.AUTOLOCK_SETTING_CHANGED, { enabled: v });
+    }
     return true;
   }
 }

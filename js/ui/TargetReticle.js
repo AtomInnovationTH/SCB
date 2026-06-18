@@ -140,7 +140,15 @@ export class TargetReticle {
       this._lockLostAnimActive = true;
       this._lockLostTargetId = this._selectedTargetId;
       this._selectedTargetId = null; // Clear so brackets transition to lock-lost rendering
+      this._selectedInRange = true;  // reset range state on clear
     });
+
+    // Reward-first spine: track whether the selected target is inside net-lock
+    // range. Drives the yellow "OUT OF RANGE" reticle state (out) vs the cyan
+    // lock (in). AutoLockController emits these on the crossing.
+    this._selectedInRange = true;
+    eventBus.on(Events.TARGET_IN_RANGE, () => { this._selectedInRange = true; });
+    eventBus.on(Events.TARGET_OUT_OF_RANGE, () => { this._selectedInRange = false; });
 
     // Phase 6: Lasso feedback state
     this._lassoInFlight = false;        // true while lasso projectile is active
@@ -754,22 +762,30 @@ export class TargetReticle {
     const half = size / 2;
     const corner = size * 0.3; // Corner bracket length
 
+    // Reward-first spine: a selected-but-OUT-OF-RANGE target renders YELLOW
+    // (no lock glow) — the silent "too far for the net" state that teaches
+    // Autopilot. In range → cyan lock. Derived once here and reused by both the
+    // bracket and label sub-sections below to avoid drift within this method.
+    const outOfRange = this._selectedInRange === false;
+    const selColor = outOfRange ? COLORS.yellow : COLORS.cyan;
+
     ctx.save();
 
     if (isSelected) {
       // Steady alpha for selected target (Issue #5 — removed pulse)
       ctx.globalAlpha = 0.85;
-      ctx.strokeStyle = COLORS.cyan;
+      ctx.strokeStyle = selColor;
       ctx.lineWidth = Constants.RETICLE_BRACKET_WIDTH_SELECTED || 3.0;
 
-      // White corner flash at start of lock-on animation (~60ms window)
-      if (this._lockAnimActive && this._lockAnimT < 0.20) {
+      // White corner flash at start of lock-on animation (~60ms window) — only
+      // for an in-range lock (the flash is the "locked, act now" cue).
+      if (!outOfRange && this._lockAnimActive && this._lockAnimT < 0.20) {
         ctx.strokeStyle = COLORS.white;
         ctx.shadowColor = COLORS.white;
         ctx.shadowBlur = 16;
       } else {
         // Outer glow
-        ctx.shadowColor = COLORS.cyan;
+        ctx.shadowColor = selColor;
         ctx.shadowBlur = 0;
       }
     } else if (isLockLost) {
@@ -883,15 +899,25 @@ export class TargetReticle {
     // --- Selected target: extra info ---
     if (isSelected) {
       ctx.font = 'bold 11px "Courier New", monospace';
-      ctx.fillStyle = COLORS.cyan;
+      ctx.fillStyle = selColor;
 
       // Type name above reticle
       const typeName = this._getTypeName(target.type);
       ctx.fillText(typeName, x, y - half - 18);
 
+      // Reward-first spine: clean-mono "OUT OF RANGE" callout below the
+      // distance when the selected target is beyond net-lock range. This is
+      // the silent teach that points the player at Autopilot (A).
+      if (outOfRange) {
+        ctx.font = 'bold 16px "Courier New", monospace';
+        ctx.fillStyle = COLORS.yellow;
+        ctx.fillText('OUT OF RANGE', x, y + half + 70);
+      }
+
       // Tumble rate (CP-2: show a ▼ DE-SPIN marker while the mother laser is firing)
       const tumbleDeg = (target.tumbleRate * 180 / Math.PI).toFixed(1);
       ctx.font = '10px "Courier New", monospace';
+      ctx.fillStyle = selColor;
       const tumbleLabel = target._despinning
         ? `${tumbleDeg}°/s \u25BC DE-SPIN  ${target.sizeMeter.toFixed(1)}m`
         : `${tumbleDeg}°/s  ${target.sizeMeter.toFixed(1)}m`;

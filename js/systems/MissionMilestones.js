@@ -167,11 +167,23 @@ export class MissionMilestones {
     eventBus.on(Events.CLUSTER_CLEARED, () => {
       eventBus.emit(Events.HINT_POSTED, {
         id: 'cluster-cleared-next',
-        text: 'Cluster clear. Press M for the Debris Map and pick your next cluster.',
+        text: 'Cluster clear. Press M for the map — pick your next cluster by ΔV cost.',
         keys: ['M'],
         duration: 9000,
         priority: 'normal',
       });
+      // Reward-first spine finale (.kilo plan Phase 5): tie ΔV to the orbital
+      // ladder + seed the "be more efficient" replay hook on the FIRST cluster
+      // clear (one-shot). The per-cluster ΔV numbers live in the Debris Map.
+      if (!this._firstClusterClearComms) {
+        this._firstClusterClearComms = true;
+        eventBus.emit(Events.COMMS_MESSAGE, {
+          sender: 'HOUSTON',
+          text: 'Nice sweep, Cowboy. Moving between clusters costs ΔV — gather metals and pick efficient lines, and you climb higher for less.',
+          priority: 'info',
+          _postOnboarding: true,
+        });
+      }
       this._postRecap();
     });
 
@@ -204,6 +216,7 @@ export class MissionMilestones {
     this._fired.clear();
     this._cleared = 0;
     this._contractKg = 0;
+    this._firstClusterClearComms = false;
   }
 
   /**

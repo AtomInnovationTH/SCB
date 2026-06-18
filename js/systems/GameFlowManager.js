@@ -62,75 +62,26 @@ class GameFlowManager {
     this._firstTimeComms = new Set();
 
     // --- Onboarding gating (Guidance cleanup, Phase 0) ---
-    // Track whether the OnboardingDirector pipeline is running and whether it
-    // has reached the `target` beat, so the first-ORBITAL_VIEW auto-target can
-    // be DEFERRED until the player is taught to select a target. Auto-selecting
-    // welcome debris before the `target`/`autopilot` beats hands the player an
-    // in-range target the lasso layer then advertises, short-circuiting the
-    // guided scan→target→approach order (and silently pre-completing the lasso
-    // beat via the Director's jump-ahead). Decoupled via events (no Director ref).
+    // Track whether the OnboardingDirector pipeline is running (used by opening
+    // comms gating below). The reward-first spine (.kilo plan) hands target
+    // acquisition to AutoLockController from the first frame, so the old
+    // `target`-beat deferral + auto-target are gone (AutoLockController owns it).
     /** @type {boolean} */
     this._onboardingRunning = false;
-    /** @type {boolean} */
-    this._onboardingReachedTarget = false;
     eventBus.on(Events.ONBOARDING_STARTED, () => {
       this._onboardingRunning = true;
-      this._onboardingReachedTarget = false;
     });
     eventBus.on(Events.ONBOARDING_COMPLETE, () => {
       this._onboardingRunning = false;
-      this._onboardingReachedTarget = true; // gate fully open post-onboarding
     });
     if (Events.GAME_RESET) {
       eventBus.on(Events.GAME_RESET, () => {
         this._onboardingRunning = false;
-        this._onboardingReachedTarget = false;
       });
     }
-    // The Director emits `onboarding:beatEnter` with { beatId } as each beat
-    // posts. Once it reaches `target`, allow auto-target (the player is now
-    // being taught to select), and on the held re-check too.
-    eventBus.on('onboarding:beatEnter', (d) => {
-      if (d && d.beatId === 'target') {
-        this._onboardingReachedTarget = true;
-        // The auto-target was deferred while onboarding was below the `target`
-        // beat — now that the player is being taught to select, do it.
-        this._tryAutoTargetWelcome();
-      }
-    });
   }
 
   /**
-   * Whether the first-ORBITAL_VIEW auto-target is currently allowed. Blocked
-   * only while onboarding is running and has not yet reached the `target` beat.
-   * @returns {boolean}
-   * @private
-   */
-  _autoTargetAllowed() {
-    if (!this._onboardingRunning) return true;
-    return this._onboardingReachedTarget;
-  }
-
-  /**
-   * Auto-select the nearest welcome-spawn debris if nothing is selected and the
-   * onboarding gate allows it. Idempotent and safe to call repeatedly. Tagged
-   * `autoTarget:true` so first-target guidance comms skip it.
-   * @private
-   */
-  _tryAutoTargetWelcome() {
-    if (!this._autoTargetAllowed()) return;
-    if (!this._refs) return;
-    const { debrisField, player } = this._refs;
-    if (!player || !debrisField) return;
-    if (targetSelector.getActiveTarget()) return;
-    const playerPos = player.getPosition();
-    if (!playerPos) return;
-    const nearby = debrisField.getDebrisNear(playerPos, 0.05);
-    const welcome = nearby && nearby.find(d => d.welcomeSpawn && d.alive);
-    if (!welcome) return;
-    const debris = debrisField.getDebrisById(welcome.id);
-    if (debris) targetSelector.setTarget(debris, { autoTarget: true });
-  }  /**
    * Initialize with references to required game systems and entities.
    * Must be called after all systems are created in init().
    *
@@ -1158,10 +1109,8 @@ class GameFlowManager {
           const { debrisField, player } = this._refs;
           if (!player || !debrisField) return;
 
-          // Auto-target nearest welcome debris if nothing selected — but DEFER
-          // during onboarding until the `target` beat (see _autoTargetAllowed).
-          // If blocked now, _onboarding:beatEnter('target') retries it later.
-          this._tryAutoTargetWelcome();
+          // Target acquisition is owned by AutoLockController (reward-first
+          // spine) from the first frame — no auto-target call needed here.
 
           // Opening comms hint
           if (!this._firstTimeComms.has('orbital_view_opening')) {
@@ -1344,6 +1293,10 @@ class GameFlowManager {
     // Reset orbit to starting position
     player.orbit.semiMajorAxis = Constants.EARTH_RADIUS + Constants.START_ALTITUDE;
     player.orbit.trueAnomaly = 0;
+
+    // Reset ROSA furl state so a retry never inherits a furled array (the retry
+    // path skips the launch sequence, which would otherwise re-deploy them).
+    if (player.resetRosaFurlState) player.resetRosaFurlState();
 
     // Reset target selection (imported singleton — emits TARGET_CLEARED → DebrisWireframe self-clears)
     targetSelector.setTarget(null);

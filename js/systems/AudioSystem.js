@@ -277,13 +277,33 @@ class AudioSystem {
 
     // === Phase R8 event wiring ===
 
-    // Tab key → target lock ceremony sounds (Phase 5)
-    eventBus.on(Events.TARGET_SELECTED, () => {
-      this.playTargetLock();
+    // Target lock ceremony sounds (Phase 5) — reward-first spine.
+    // The "locked on" earcon is governed by the NET-RANGE crossing, NOT raw
+    // selection, so it always means "you can act on this now". AutoLockController
+    // tracks every selected target (auto or manual) and emits TARGET_IN_RANGE on
+    // the out→in crossing (or immediately for an already-in-range pick), which is
+    // where the lock cue fires. An explicitly out-of-range selection stays
+    // silent. We still honor a one-frame SELECTED cue when nothing will range-
+    // track it (e.g. headless/no-controller contexts) — but skip it whenever the
+    // selection is tagged in/out by the range system to avoid a double-fire.
+    eventBus.on(Events.TARGET_SELECTED, (data) => {
+      // Suppressed picks (autolock) and range-governed selections defer to
+      // TARGET_IN_RANGE for the earcon.
+      if (data && data._suppressLockSound) return;
+      if (data && data.autoLock) return;
+      // Manual selection without range governance: play immediately.
+      this._playLockDeduped();
     });
 
     eventBus.on(Events.TARGET_CLEARED, () => {
       this.playTargetLost();
+    });
+
+    // Net-range crossing INTO range → the lock earcon (the "there it is" payoff
+    // after autopilot closes the gap, and the tease lock at start). This is the
+    // single trustworthy "now actionable" cue.
+    eventBus.on(Events.TARGET_IN_RANGE, () => {
+      this._playLockDeduped();
     });
 
     // T key → ascending fuel cycle step tone
@@ -2597,6 +2617,19 @@ class AudioSystem {
   // ==========================================================================
   // PHASE 5 — TARGET LOCK CEREMONY SOUNDS
   // ==========================================================================
+
+  /**
+   * Play the lock earcon with a short dedupe window so a manual SELECTED and the
+   * follow-up TARGET_IN_RANGE crossing (or any two near-simultaneous triggers)
+   * produce exactly ONE "locked on" sound. ~250 ms guard.
+   * @private
+   */
+  _playLockDeduped() {
+    const t = (this.ctx && typeof this.ctx.currentTime === 'number') ? this.ctx.currentTime : (Date.now() / 1000);
+    if (this._lastLockAt != null && (t - this._lastLockAt) < 0.25) return;
+    this._lastLockAt = t;
+    this.playTargetLock();
+  }
 
   /**
    * Target lock-on — ascending two-note (C5→E5, 60ms each, sine wave, slight reverb).

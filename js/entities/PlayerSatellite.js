@@ -157,6 +157,25 @@ export class PlayerSatellite extends THREE.Group {
     this._blinkTimer = 0;
     this._strobeTimer = 0;
     this._lidarPulseTimer = 0;
+
+    // ROSA furl/unfurl state (Comma key). 1 = unfurled (deployed), 0 = furled
+    // (rolled up). _rosaManualControl latches once the player toggles, so the
+    // post-launch READY state defers to the player instead of LaunchSequence.
+    this._rosaFurlTarget = 1.0;
+    this._rosaFurlProgress = 1.0;
+    this._rosaManualControl = false;
+    // ROSA feather state (Shift+Comma). 0 = sun-tracking (normal), 1 = feathered
+    // (parked edge-on to a hazard). Feather only acts on a deployed wing — furl
+    // takes precedence (a furled wing is frozen, so feather is ignored while
+    // furled). Feathering cuts the ROSA power share via the edge-on incidence
+    // angle (see _updateSolarPower), NOT a separate multiplier like furl uses.
+    this._rosaFeatherTarget = 0.0;
+    this._rosaFeatherProgress = 0.0;
+    // ROSA power-flow glow: a running clock for the idle "breathing" shimmer and
+    // an optional idle floor (the menu hero sets this so the wings glow even
+    // without the gameplay power subsystem driving solarRate). See _animateRosaGlow.
+    this._rosaGlowClock = 0;
+    this._rosaGlowIdleFloor = 0;
     this._thrusterGlowTargets = new Map(); // thruster mesh → { glow, plume, outerGlow, intensity }
     this._differentialFireTargets = [0, 0, 0, 0]; // per-nozzle attitude rotation intensity [TOP, BOTTOM, RIGHT, LEFT]
     this._sensorTarget = null; // THREE.Vector3 world position to track
@@ -1474,132 +1493,74 @@ export class PlayerSatellite extends THREE.Group {
    *
    * Scene hierarchy per wing:
    * ```
-   *   panelRightPivot (Group — sun-tracking rotation)
+   *   panelRightPivot (Group — sun-tracking tilt / feather rotation)
    *     ├─ _rosaPanelWrapper1 (Group — scale.x drives roll-out)
-   *     │    ├─ ROSA_Panel_Front_0deg (ShapeGeometry — FrontSide dark cell surface)
-   *     │    ├─ ROSA_Panel_Back_0deg  (ShapeGeometry — BackSide Kapton substrate)
-   *     │    ├─ ROSA_GoldEdge_0deg    (LineSegments — gold anodized frame)
-   *     │    └─ ROSA_Grid_0deg        (PlaneGeometry — wireframe overlay)
+   *     │    ├─ ROSA_Panel_Front_0deg (PlaneGeometry — FrontSide cell-string surface)
+   *     │    └─ ROSA_Panel_Back_0deg  (PlaneGeometry — BackSide copper-Kapton substrate)
    *     └─ ROSA_Roll_0deg             (CylinderGeometry — stowed roll)
    * ```
+   *
+   * Accuracy pass (Option B): the blanket is a plain square-cornered rectangle
+   * (real ROSA wings are NOT chamfered) carrying the shared procedural solar-cell
+   * texture, so the former coplanar wireframe-grid + gold-edge decal stack (and
+   * their depthTest:false hacks) are gone — the texture now carries the cell
+   * detail. The slit-tube booms (built in `_buildRosaStructure`) provide the edge
+   * structure. UVs are oriented so the cell strings run along the deploy/X axis.
    */
   _buildSolarPanels() {
     const V5      = Constants.OCTOPUS_V5;
-    const rosaW   = V5.ROSA_WIDTH * M;       // 1.0 m → scene
-    const rosaL   = V5.ROSA_LENGTH * M;      // 2.0 m → scene
+    const rosaW   = V5.ROSA_WIDTH * M;       // 1.0 m → scene (radial deploy / X)
+    const rosaL   = V5.ROSA_LENGTH * M;      // 2.0 m → scene (axial / Y→world Z)
     const barrelR = V5.COLLAR_RADIUS * M;    // 0.4 m → scene
-    const chamfer = V5.ROSA_CHAMFER * M;     // 0.30 m → scene
 
     // ── Materials ──────────────────────────────────────────────
-    const panelMatFront = new THREE.MeshStandardMaterial({
-      color: 0x0a1133, metalness: 0.4, roughness: 0.5,
+    // Front = dark GaAs cell strings via the shared procedural texture. The
+    // texture's "tall" cells (rows>cols) are oriented so cell strings run along
+    // the deploy/X axis: repeat u (width, 1.0 m) ≈ 3 cells, v (length, 2.0 m)
+    // ≈ 6 cells. getSolarCellTexture returns null in headless (no DOM) — the
+    // material tolerates a null map (tint falls back to the dark cell colour).
+    const cellTex = getSolarCellTexture();
+    let frontMap = null;
+    if (cellTex) {
+      frontMap = cellTex.clone();
+      frontMap.repeat.set(3, 6);   // ~3 cells across width × 6 along length
+      frontMap.needsUpdate = true;
+    }
+    // MeshPhysicalMaterial adds an iridescent thin-film over the cells — the
+    // glassy blue→violet→teal angular shift of a real space-grade AR coating.
+    // The iridescence/emissive props are inert (not errors) without WebGL, so
+    // this is safe in headless tests. Front mats are tracked in _rosaFrontMats
+    // so _animateRosaGlow can pulse their emissive with generated power and the
+    // scan-flash can sweep them cyan.
+    const panelMatFront = new THREE.MeshPhysicalMaterial({
+      color: frontMap ? 0xffffff : 0x0a1133, // tint comes from the map when present
+      map: frontMap || null,
+      emissiveMap: frontMap || null,
+      metalness: 0.4, roughness: 0.42,
       side: THREE.FrontSide,
-      emissive: 0x0a0a40, emissiveIntensity: 0.15,
+      emissive: 0x0b1030, emissiveIntensity: 0.15,
+      clearcoat: 0.6, clearcoatRoughness: 0.25,
+      iridescence: 0.7, iridescenceIOR: 1.8,
+      iridescenceThicknessRange: [120, 420],
     });
+    this._rosaFrontMats = [panelMatFront];
+    // Back substrate = warmer copper-Kapton (real ROSA blanket backing), low
+    // metalness with a subtle sheen — replaces the old flat light grey.
     const panelMatBack = new THREE.MeshStandardMaterial({
-      color: 0xccccdd, metalness: 0.3, roughness: 0.4,
+      color: 0xb08d57, metalness: 0.2, roughness: 0.55,
       side: THREE.BackSide,
-      emissive: 0xccccdd, emissiveIntensity: 0.4,
-    });
-    // Grid overlay: ShaderMaterial with manual back-face discard.
-    // Wireframe (GL_LINES) ignores face-culling, so gl_FrontFacing doesn't
-    // work for lines. Instead we compute the view-dot-normal per fragment
-    // and discard when negative — hides the grid from behind the panel.
-    const gridMat = new THREE.ShaderMaterial({
-      uniforms: {},
-      vertexShader: `
-        varying vec3 vViewPos;
-        varying vec3 vNorm;
-        void main() {
-          vec4 mv = modelViewMatrix * vec4(position, 1.0);
-          vViewPos = -mv.xyz;
-          vNorm = normalize(normalMatrix * normal);
-          gl_Position = projectionMatrix * mv;
-        }
-      `,
-      fragmentShader: `
-        varying vec3 vViewPos;
-        varying vec3 vNorm;
-        void main() {
-          if (dot(normalize(vViewPos), vNorm) < 0.0) discard;
-          gl_FragColor = vec4(0.133, 0.267, 0.667, 0.3);
-        }
-      `,
-      wireframe: true,
-      transparent: true,
-      depthWrite: false,
-      // §2-followup (round 6): the grid is a wireframe DECAL sitting ~sub-mm over
-      // the panel face. With depthTest on, that tiny fixed z-gap is unreliable
-      // under logarithmicDepthBuffer → the grid shimmered against the panel.
-      // The fragment shader already discards back-facing fragments (the dot test
-      // above), so we can safely skip the depth test entirely: the grid then
-      // always paints cleanly on the camera-facing panel with NO depth tie, and
-      // never shows through from behind. renderOrder keeps it above the panel.
-      depthTest: false,
-      side: THREE.DoubleSide,
+      emissive: 0x3a2c18, emissiveIntensity: 0.18,
     });
     const rollMat = new THREE.MeshStandardMaterial({
       color: 0x333344, metalness: 0.5, roughness: 0.4,
     });
 
-    // ── Chamfered panel shapes (local XY, rotated to XZ via wrapper) ──
-    // Panel 1 (+X): shape spans [0, rosaW] × [-rosaL/2, rosaL/2]
-    // Bottom corners (outboard tips) are chamfered.
-    const shape1 = new THREE.Shape();
-    shape1.moveTo(chamfer, -rosaL / 2);
-    shape1.lineTo(rosaW - chamfer, -rosaL / 2);
-    shape1.lineTo(rosaW, -rosaL / 2 + chamfer);
-    shape1.lineTo(rosaW, rosaL / 2);
-    shape1.lineTo(0, rosaL / 2);
-    shape1.lineTo(0, -rosaL / 2 + chamfer);
-    shape1.closePath();
-
-    // Panel 2 (-X): mirrored shape spans [-rosaW, 0] × [-rosaL/2, rosaL/2]
-    const shape2 = new THREE.Shape();
-    shape2.moveTo(-chamfer, -rosaL / 2);
-    shape2.lineTo(-rosaW + chamfer, -rosaL / 2);
-    shape2.lineTo(-rosaW, -rosaL / 2 + chamfer);
-    shape2.lineTo(-rosaW, rosaL / 2);
-    shape2.lineTo(0, rosaL / 2);
-    shape2.lineTo(0, -rosaL / 2 + chamfer);
-    shape2.closePath();
-
-    const panelGeo1 = new THREE.ShapeGeometry(shape1);
-    const panelGeo2 = new THREE.ShapeGeometry(shape2);
-
-    // Back-face geometry clones with flipped normals — BackSide doesn't
-    // flip normals in the shader (only DoubleSide does via DOUBLE_SIDED),
-    // so we negate them here to get correct back-face lighting.
-    const panelGeo1Back = panelGeo1.clone();
-    const n1 = panelGeo1Back.attributes.normal;
-    for (let i = 0; i < n1.count; i++) n1.setZ(i, -n1.getZ(i));
-    n1.needsUpdate = true;
-
-    const panelGeo2Back = panelGeo2.clone();
-    const n2 = panelGeo2Back.attributes.normal;
-    for (let i = 0; i < n2.count; i++) n2.setZ(i, -n2.getZ(i));
-    n2.needsUpdate = true;
-
-    // Higher-fidelity grid: 12×24 subdivisions for accordion-fold pattern
-    const gridGeo   = new THREE.PlaneGeometry(rosaW, rosaL, 12, 24);
-    const rollGeo   = new THREE.CylinderGeometry(M * 0.05, M * 0.05, rosaL, 8);
-
-    // ── Gold anodized edge frames (ISS ROSA style) ──
-    const goldEdgeMat = new THREE.LineBasicMaterial({
-      color: 0xccaa44,     // gold chromate conversion coating
-      transparent: false,
-      // §2-followup (round 6): the gold edge is a DECAL line frame on the panel
-      // outline, near-coplanar with the grid + panel face. It previously WROTE
-      // depth and depth-TESTED at a fixed 0.0015 z-nudge that does not hold under
-      // logarithmicDepthBuffer → shimmer against the grid/panel. Treat it like
-      // the grid: no depth write AND no depth test, so the frame always paints
-      // on its panel with zero depth tie. renderOrder keeps the stacking order
-      // (panel < edge < grid). The frame only exists where a panel face is, so
-      // skipping depthTest does not make it bleed through unrelated geometry in
-      // practice (the wings deploy far outboard of the hull).
-      depthWrite: false,
-      depthTest: false,
-    });
+    // ── Square-cornered blanket planes (local XY, rotated to XZ via wrapper) ──
+    // PlaneGeometry is centred on the origin; shift +X by rosaW/2 (or -X for the
+    // -X wing) so the inboard edge sits at the barrel surface (local x=0) and the
+    // blanket grows outboard as the wrapper scale.x rolls it out.
+    const panelGeo = new THREE.PlaneGeometry(rosaW, rosaL);
+    const rollGeo  = new THREE.CylinderGeometry(M * 0.05, M * 0.05, rosaL, 8);
 
     // ── Shared solar array pivot — groups both wings as one rigid
     //    assembly so they stay coplanar through the satellite centre. ──
@@ -1621,40 +1582,28 @@ export class PlayerSatellite extends THREE.Group {
     this._rosaPanelWrapper1.rotation.x = -Math.PI / 2; // local XY → world XZ
     this.panelRightPivot.add(this._rosaPanelWrapper1);
 
-    const panel1Front = new THREE.Mesh(panelGeo1, panelMatFront);
+    const panel1Front = new THREE.Mesh(panelGeo, panelMatFront);
+    panel1Front.position.x = rosaW / 2;   // inboard edge at local x=0
     panel1Front.name = 'ROSA_Panel_Front_0deg';
-    panel1Front.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;     // FIX_PLAN §2-followup
+    panel1Front.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
     this._rosaPanelWrapper1.add(panel1Front);
 
-    // FIX_PLAN §2-followup: bump back 1 mm behind front so the two ShapeGeometry
-    // planes no longer share the exact wrapper z=0 plane (was depth-tie ring).
-    const panel1Back = new THREE.Mesh(panelGeo1Back, panelMatBack);
-    panel1Back.position.z = -0.001;                                          // FIX_PLAN §2-followup
+    // Back substrate shares the plane (BackSide material), bumped 1 mm behind so
+    // the two faces never share the exact z=0 plane (avoids a depth tie).
+    const panel1Back = new THREE.Mesh(panelGeo, panelMatBack);
+    panel1Back.position.set(rosaW / 2, 0, -0.001);
     panel1Back.name = 'ROSA_Panel_Back_0deg';
-    panel1Back.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;       // FIX_PLAN §2-followup
+    panel1Back.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
     this._rosaPanelWrapper1.add(panel1Back);
-
-    // FIX_PLAN §2-followup (round 3): edge was at z=0.001, grid at z=0.001 →
-    // coplanar line/wireframe stack on the panel face. Bump edge up 0.5 mm
-    // so the gold panel-outline always sits above the grid wireframe.
-    const edgeGeo1 = new THREE.EdgesGeometry(panelGeo1, 1);
-    const edge1 = new THREE.LineSegments(edgeGeo1, goldEdgeMat);
-    edge1.position.z = 0.0015;                                              // FIX_PLAN §2-followup (round 3)
-    edge1.name = 'ROSA_GoldEdge_0deg';
-    edge1.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;           // FIX_PLAN §2-followup (round 3)
-    this._rosaPanelWrapper1.add(edge1);
-
-    const grid1 = new THREE.Mesh(gridGeo, gridMat);
-    grid1.position.set(rosaW / 2, 0, 0.001);
-    grid1.name = 'ROSA_Grid_0deg';
-    grid1.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_TRANSPARENT;      // FIX_PLAN §2-followup (round 3)
-    this._rosaPanelWrapper1.add(grid1);
 
     this._rosaRoll1 = new THREE.Mesh(rollGeo, rollMat);
     this._rosaRoll1.position.set(M * 0.05, 0, 0); // just beyond barrel edge
     this._rosaRoll1.rotation.x = Math.PI / 2; // Y-axis → Z-axis (barrel axis)
     this._rosaRoll1.name = 'ROSA_Roll_0deg';
     this.panelRightPivot.add(this._rosaRoll1);
+
+    // ── ROSA structural detail: edge booms + tip spreader + root drum/bracket ──
+    this._buildRosaStructure(1, this._rosaPanelWrapper1, this.panelRightPivot, +1);
 
     // ── Panel 2: 180° azimuth (-X) ───────────────────────────
     this.panelLeftPivot = new THREE.Group();
@@ -1666,35 +1615,25 @@ export class PlayerSatellite extends THREE.Group {
     this._rosaPanelWrapper2.rotation.x = -Math.PI / 2;
     this.panelLeftPivot.add(this._rosaPanelWrapper2);
 
-    const panel2Front = new THREE.Mesh(panelGeo2, panelMatFront);
+    const panel2Front = new THREE.Mesh(panelGeo, panelMatFront);
+    panel2Front.position.x = -rosaW / 2;  // inboard edge at local x=0 (mirrored)
     panel2Front.name = 'ROSA_Panel_Front_180deg';
-    panel2Front.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;     // FIX_PLAN §2-followup
+    panel2Front.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
     this._rosaPanelWrapper2.add(panel2Front);
 
-    const panel2Back = new THREE.Mesh(panelGeo2Back, panelMatBack);
-    panel2Back.position.z = -0.001;                                          // FIX_PLAN §2-followup — clear front plane
+    const panel2Back = new THREE.Mesh(panelGeo, panelMatBack);
+    panel2Back.position.set(-rosaW / 2, 0, -0.001);
     panel2Back.name = 'ROSA_Panel_Back_180deg';
-    panel2Back.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;       // FIX_PLAN §2-followup
+    panel2Back.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
     this._rosaPanelWrapper2.add(panel2Back);
-
-    const edgeGeo2 = new THREE.EdgesGeometry(panelGeo2, 1);
-    const edge2 = new THREE.LineSegments(edgeGeo2, goldEdgeMat);
-    edge2.position.z = 0.0015;                                              // FIX_PLAN §2-followup (round 3)
-    edge2.name = 'ROSA_GoldEdge_180deg';
-    edge2.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;           // FIX_PLAN §2-followup (round 3)
-    this._rosaPanelWrapper2.add(edge2);
-
-    const grid2 = new THREE.Mesh(gridGeo, gridMat);
-    grid2.position.set(-rosaW / 2, 0, 0.001);
-    grid2.name = 'ROSA_Grid_180deg';
-    grid2.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_TRANSPARENT;      // FIX_PLAN §2-followup (round 3)
-    this._rosaPanelWrapper2.add(grid2);
 
     this._rosaRoll2 = new THREE.Mesh(rollGeo, rollMat);
     this._rosaRoll2.position.set(-M * 0.05, 0, 0); // just beyond barrel edge
     this._rosaRoll2.rotation.x = Math.PI / 2;
     this._rosaRoll2.name = 'ROSA_Roll_180deg';
     this.panelLeftPivot.add(this._rosaRoll2);
+
+    this._buildRosaStructure(2, this._rosaPanelWrapper2, this.panelLeftPivot, -1);
 
     // ── Default state: fully deployed ─────────────────────────
     this._setRosaWingProgress(1, 1.0);
@@ -1709,23 +1648,279 @@ export class PlayerSatellite extends THREE.Group {
   _setRosaWingProgress(wing, progress) {
     const wrapper = wing === 1 ? this._rosaPanelWrapper1 : this._rosaPanelWrapper2;
     const roll    = wing === 1 ? this._rosaRoll1 : this._rosaRoll2;
+    const struct  = wing === 1 ? this._rosaStruct1 : this._rosaStruct2;
+    // Booms + spreader live INSIDE the wrapper, so scale.x stretches/extends
+    // them with the blanket automatically. The blanket starts at 5% (a thin
+    // rolled stub) and grows to full width as progress → 1.
     if (wrapper) wrapper.scale.x = 0.05 + 0.95 * progress;
     if (roll)    roll.visible = progress < 0.5;
+
+    if (struct) {
+      // Spool spin: the blanket reels off the drum as it deploys, so spin the
+      // drum + coil about their long axis proportional to the length paid out.
+      // ~6 turns across the full stroke reads as a real reeling mechanism.
+      const spin = (1 - progress) * Math.PI * 2 * 6 * (struct.sign || 1);
+      if (struct.drum)     struct.drum.rotation.y = spin;
+      if (struct.stowRoll) struct.stowRoll.rotation.y = spin;
+
+      // Stowed-roll bulge: a fat coil of blanket+booms when stowed, shrinking to
+      // a bare mandrel as the wing rolls out (real ROSA stores like a tape measure).
+      if (struct.stowRoll) {
+        const r = 1 + 2 * (1 - progress);       // DRUM_R (deployed) → ~3× (stowed)
+        struct.stowRoll.scale.set(r, 1, r);
+        struct.stowRoll.visible = progress < 0.98; // hide the bulge when fully out
+      }
+
+      // Slit-tube spool curls: the strain-energy tape-spring uncoiling. When
+      // furled the tape tucks back toward the coil (extra wrap); as it deploys it
+      // lays flat into the boom line. A short damped overshoot as progress crosses
+      // ~0.85→1 gives the elastic "snap" of a composite boom locking straight.
+      if (struct.curls && struct.curls.length) {
+        const tuck = (1 - progress) * (Math.PI / 2);      // 0 (flat) → 90° (coiled)
+        let snap = 0;
+        if (progress > 0.85) {
+          const u = (progress - 0.85) / 0.15;             // 0→1 over the last 15%
+          snap = Math.sin(u * Math.PI * 2) * 0.12 * (1 - u); // damped wobble, rad
+        }
+        for (const curl of struct.curls) {
+          const base = curl.userData.baseRotZ || 0;
+          curl.rotation.z = base + (struct.sign || 1) * (tuck + snap);
+        }
+      }
+    }
   }
 
   /**
-   * @private Drive ROSA panel roll-out from LaunchSequence progress.
-   * Defaults to fully deployed when no LaunchSequence is available.
+   * @private Build the structural detail for one ROSA wing — the two
+   * high-strain composite edge booms (one per long edge), the tip spreader
+   * bar, the root roller drum/mandrel (with a stowed-coil bulge), and the
+   * mounting bracket standing the wing off the bus mast. Verified against the
+   * real Redwire/NASA ROSA layout (slit-tube booms on BOTH long edges, blanket
+   * rolled onto a root spool).
+   *
+   * Booms + spreader are parented to `wrapper` so the wing's `scale.x` roll-out
+   * extends them to track the blanket edge. The drum/bracket are parented to
+   * `pivot` (root-fixed, do not stretch).
+   *
+   * @param {1|2} wing
+   * @param {THREE.Group} wrapper  — the scale.x roll-out wrapper (local XY)
+   * @param {THREE.Group} pivot    — the sun-tracking pivot (root-fixed)
+   * @param {number} sign          — +1 for +X wing, -1 for -X wing
+   * @private
    */
-  _updateRosaPanels(/* dt */) {
-    let progress1 = 1.0, progress2 = 1.0;
-    if (this._launchSequence && this._launchSequence.getRosaProgress) {
-      const prog = this._launchSequence.getRosaProgress();
-      progress1 = prog.wing1;
-      progress2 = prog.wing2;
+  _buildRosaStructure(wing, wrapper, pivot, sign) {
+    const V5      = Constants.OCTOPUS_V5;
+    const rosaW   = V5.ROSA_WIDTH * M;
+    const rosaL   = V5.ROSA_LENGTH * M;
+    const boomOD  = V5.ROSA_BOOM_OD * M;
+    const sprOD   = V5.ROSA_SPREADER_OD * M;
+    const drumR   = V5.ROSA_DRUM_R * M;
+    const brkLen  = V5.ROSA_BRACKET_LEN * M;
+
+    // Near-black carbon-composite boom material (real ROSA slit-tube high-strain
+    // spars read dark, not pale) — low metalness, mid roughness for a matte
+    // composite finish.
+    const boomMat = new THREE.MeshStandardMaterial({
+      color: 0x1c1c20, metalness: 0.2, roughness: 0.6,
+    });
+    const drumMat = new THREE.MeshStandardMaterial({
+      color: 0x2a2a33, metalness: 0.6, roughness: 0.4,
+    });
+
+    // Retained handles animated by _setRosaWingProgress: the spool drum + coil
+    // (spin/scale as the blanket reels) and the slit-tube curls (uncoil + snap).
+    const struct = { stowRoll: null, drum: null, curls: [], sign };
+
+    // ── Two edge booms — run along X (roll-out dir) at both long edges (±Y) ──
+    // Cylinder default axis is Y; rotate Z by 90° so it lies along local X.
+    const boomGeo = new THREE.CylinderGeometry(boomOD / 2, boomOD / 2, rosaW, 6);
+    for (const edgeY of [rosaL / 2, -rosaL / 2]) {
+      const boom = new THREE.Mesh(boomGeo, boomMat);
+      boom.rotation.z = Math.PI / 2;           // Y-axis → X-axis (blanket length)
+      // Center at half-width so it spans local x ∈ [0, rosaW]; for the -X wing
+      // the wrapper geometry runs x ∈ [-rosaW, 0], so mirror via sign.
+      boom.position.set(sign * rosaW / 2, edgeY, 0.0008);
+      boom.name = `ROSA_Boom_${wing === 1 ? '0' : '180'}deg_${edgeY > 0 ? 'A' : 'B'}`;
+      boom.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      wrapper.add(boom);
     }
-    this._setRosaWingProgress(1, progress1);
-    this._setRosaWingProgress(2, progress2);
+
+    // ── Tip spreader bar — at the outboard edge (x = ±rosaW), spans width (Y) ──
+    const sprGeo = new THREE.CylinderGeometry(sprOD / 2, sprOD / 2, rosaL, 6);
+    const spreader = new THREE.Mesh(sprGeo, boomMat);
+    spreader.position.set(sign * rosaW, 0, 0.0008); // rides to deployed tip via scale.x
+    spreader.name = `ROSA_Spreader_${wing === 1 ? '0' : '180'}deg`;
+    spreader.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+    wrapper.add(spreader);
+
+    // ── Slit-tube spool curls — short quarter-tori where each boom peels off
+    //    the root drum and flattens into the blanket plane. This is the signature
+    //    ROSA "uncoiling tape measure" read, animated by _setRosaWingProgress:
+    //    they tuck toward the coil when furled and lay out flat when deployed,
+    //    with a small elastic overshoot as the strain-energy boom snaps straight.
+    //    Root-fixed (parented to pivot) so they do NOT stretch with scale.x. ──
+    // A TorusGeometry sweeps in its local XY plane about the local Z axis (the
+    // barrel axis), so the arc rises from the drum (zenith) and lays out radially.
+    const curlGeo = new THREE.TorusGeometry(drumR, boomOD / 2, 6, 12, Math.PI / 2);
+    const curls = [];
+    for (const edgeZ of [rosaL / 2, -rosaL / 2]) {
+      const curl = new THREE.Mesh(curlGeo, boomMat);
+      curl.position.set(sign * (brkLen + drumR * 0.4), 0, sign > 0 ? edgeZ : -edgeZ);
+      // Mirror the sweep direction for the -X wing so both curls open outboard.
+      curl.userData.baseRotZ = sign > 0 ? 0 : Math.PI;
+      curl.rotation.z = curl.userData.baseRotZ;
+      curl.name = `ROSA_SpoolCurl_${wing === 1 ? '0' : '180'}deg_${edgeZ > 0 ? 'A' : 'B'}`;
+      curl.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      pivot.add(curl);
+      curls.push(curl);
+    }
+    struct.curls = curls;
+    struct.sign = sign;
+
+    // ── Root mounting bracket — short standoff from the bus mast to the drum ──
+    const brkGeo = new THREE.BoxGeometry(brkLen, drumR * 1.2, drumR * 0.6);
+    const bracket = new THREE.Mesh(brkGeo, drumMat);
+    bracket.position.set(sign * brkLen / 2, 0, 0);
+    bracket.name = `ROSA_Bracket_${wing === 1 ? '0' : '180'}deg`;
+    pivot.add(bracket);
+
+    // ── Spool assembly — drum/mandrel + stowed-coil bulge share a pivot whose
+    //    local Y is the barrel axis, so spinning each mesh about its own long
+    //    axis (rotation.y) reads as the blanket reeling on/off the spool. ──
+    const spoolPivot = new THREE.Group();
+    spoolPivot.rotation.x = Math.PI / 2;                 // long axis → barrel Z
+    spoolPivot.position.set(sign * (brkLen + drumR * 0.4), 0, 0);
+    spoolPivot.name = `ROSA_Spool_${wing === 1 ? '0' : '180'}deg`;
+    pivot.add(spoolPivot);
+
+    // Root roller drum / mandrel — the bare spool the blanket rolls onto.
+    const drumGeo = new THREE.CylinderGeometry(drumR, drumR, rosaL * 1.02, 12);
+    const drum = new THREE.Mesh(drumGeo, drumMat);
+    drum.name = `ROSA_Drum_${wing === 1 ? '0' : '180'}deg`;
+    spoolPivot.add(drum);
+    struct.drum = drum;
+
+    // Stowed-coil bulge — coaxial fat roll of blanket when stowed, shrinking to a
+    // bare mandrel as the wing rolls out (scaled radially by _setRosaWingProgress).
+    const coilGeo = new THREE.CylinderGeometry(drumR * 1.05, drumR * 1.05, rosaL, 12);
+    const stowRoll = new THREE.Mesh(coilGeo, drumMat);
+    stowRoll.name = `ROSA_StowRoll_${wing === 1 ? '0' : '180'}deg`;
+    spoolPivot.add(stowRoll);
+    struct.stowRoll = stowRoll;
+
+    if (wing === 1) this._rosaStruct1 = struct;
+    else            this._rosaStruct2 = struct;
+  }
+
+  /**
+   * @private Drive ROSA panel roll-out. While the launch sequence is actively
+   * running, the panels follow its scripted roll-out. Once launch is READY (or
+   * absent), the player-owned furl state takes over so "," can furl/unfurl the
+   * arrays to dodge debris or tether strikes.
+   * @param {number} dt — seconds since last frame
+   */
+  _updateRosaPanels(dt = 0) {
+    // Advance the feather angle toward its target every frame. Feather only
+    // changes the per-panel tilt (handled in _animateSolarTracking), so it is
+    // independent of roll-out / launch state and animates here unconditionally.
+    const fRate = (Constants.OCTOPUS_V5.ROSA_FEATHER_RATE || 0.6) * dt;
+    const fTarget = this._rosaFeatherTarget ?? 0;
+    if (this._rosaFeatherProgress < fTarget) {
+      this._rosaFeatherProgress = Math.min(fTarget, this._rosaFeatherProgress + fRate);
+    } else if (this._rosaFeatherProgress > fTarget) {
+      this._rosaFeatherProgress = Math.max(fTarget, this._rosaFeatherProgress - fRate);
+    }
+
+    const ls = this._launchSequence;
+    const launchActive = !!(ls && ls.isActive && ls.isActive());
+
+    if (launchActive && ls.getRosaProgress) {
+      // Scripted launch roll-out owns the panels. Keep the furl state synced to
+      // the current deploy so there is no jump when control hands to the player.
+      const prog = ls.getRosaProgress();
+      this._setRosaWingProgress(1, prog.wing1);
+      this._setRosaWingProgress(2, prog.wing2);
+      this._rosaFurlProgress = Math.min(prog.wing1, prog.wing2);
+      this._rosaFurlTarget = 1.0;
+      return;
+    }
+
+    // Post-launch (READY) / no-launch: player furl control. If the player has
+    // never toggled, hold fully deployed (or whatever launch left us at).
+    const target = this._rosaManualControl ? this._rosaFurlTarget : 1.0;
+    const rate = (Constants.OCTOPUS_V5.ROSA_FURL_RATE || 0.4) * dt;
+    if (this._rosaFurlProgress < target) {
+      this._rosaFurlProgress = Math.min(target, this._rosaFurlProgress + rate);
+    } else if (this._rosaFurlProgress > target) {
+      this._rosaFurlProgress = Math.max(target, this._rosaFurlProgress - rate);
+    }
+    this._setRosaWingProgress(1, this._rosaFurlProgress);
+    this._setRosaWingProgress(2, this._rosaFurlProgress);
+  }
+
+  /**
+   * Toggle the ROSA arrays between furled (rolled up) and unfurled (deployed).
+   * Mirrors the strut deploy/stow toggle on ".". Furling reduces solar power
+   * (ROSA share only — body-mount cells stay on) but lets the player retract
+   * the wings to avoid debris or tether strikes.
+   * @returns {number} the new furl target (0 = furling, 1 = unfurling)
+   */
+  toggleRosaFurl() {
+    this._rosaManualControl = true;
+    // Decide from the live animated progress so a mid-animation press reverses.
+    this._rosaFurlTarget = this._rosaFurlProgress >= 0.5 ? 0.0 : 1.0;
+    return this._rosaFurlTarget;
+  }
+
+  /**
+   * Programmatically set the ROSA furl target. Used by tests / scripted events.
+   * @param {number} target — 0 (furled) → 1 (unfurled)
+   */
+  setRosaFurl(target) {
+    this._rosaManualControl = true;
+    this._rosaFurlTarget = Math.max(0, Math.min(1, target));
+    return this._rosaFurlTarget;
+  }
+
+  /**
+   * Reset ROSA furl state to the default (fully deployed, no manual control).
+   * Called on game reset so a retry never inherits a furled array from the
+   * previous run — the retry path does NOT re-run the launch sequence, so
+   * without this the post-launch player-furl branch would hold the panels
+   * wherever the dead run left them. Also clears the feather state so a retry
+   * starts sun-tracking, not parked edge-on.
+   */
+  resetRosaFurlState() {
+    this._rosaManualControl = false;
+    this._rosaFurlTarget = 1.0;
+    this._rosaFurlProgress = 1.0;
+    this._rosaFeatherTarget = 0.0;
+    this._rosaFeatherProgress = 0.0;
+  }
+
+  /**
+   * Toggle the ROSA arrays between feathered (parked edge-on) and sun-tracking.
+   * Bound to "Shift+,", parallel to "," = furl. Feathering swings the wings
+   * edge-on to a hazard — faster than a full furl and the wings stay deployed —
+   * cutting the ROSA power share via the edge-on sun-incidence angle (NOT via a
+   * separate multiplier like furl). Furl takes precedence: a furled wing is
+   * frozen, so feather only visibly acts once the array is unfurled.
+   * @returns {boolean} the new feather state (true = feathering edge-on)
+   */
+  toggleRosaFeather() {
+    // Decide from the live animated progress so a mid-animation press reverses.
+    this._rosaFeatherTarget = this._rosaFeatherProgress >= 0.5 ? 0.0 : 1.0;
+    return this._rosaFeatherTarget >= 0.5;
+  }
+
+  /**
+   * Programmatically set the ROSA feather target. Used by tests / scripted events.
+   * @param {number} target — 0 (sun-tracking) → 1 (edge-on)
+   * @returns {number} the clamped feather target
+   */
+  setRosaFeather(target) {
+    this._rosaFeatherTarget = Math.max(0, Math.min(1, target));
+    return this._rosaFeatherTarget;
   }
 
   /**
@@ -2131,6 +2326,7 @@ export class PlayerSatellite extends THREE.Group {
     // --- Animations ---
     this._updateRosaPanels(dt);
     this._animateSolarTracking(dt, sunDirection);
+    this._animateRosaGlow(dt);
     this._animateSensorGimbal(dt);
     this._animateNavLights(dt);
     this._animateThrusterGlow(dt);
@@ -2250,9 +2446,19 @@ export class PlayerSatellite extends THREE.Group {
    *  Panel normal at rest (rotation.x = 0) is body +Y (zenith).
    *  Rotation.x = α tilts the normal to (0, cos α, sin α) in body space.
    *  Optimal α = atan2(localSun.z, localSun.y) — maximises dot(normal, sun).
+   *
+   *  Precedence: furl wins (a furled wing is frozen, no gimbal). When deployed
+   *  and feathered, the pivot is driven to the edge-on park angle (sun-track is
+   *  skipped). Otherwise the pivot tracks the sun, clamped to the tier-aware
+   *  maximum so the trailing edge clears the arm struts.
    */
   _animateSolarTracking(dt, sunDirection) {
     if (!sunDirection) return;
+
+    // A rolled-up (furled) array shouldn't gimbal — freeze tracking when the
+    // wings are mostly furled so the panels hold their tilt while retracted.
+    // Furl takes precedence over feather.
+    if ((this._rosaFurlProgress ?? 1) < 0.5) return;
 
     // Convert sun direction to satellite body space
     const localSun = sunDirection.clone().applyQuaternion(this.quaternion.clone().invert());
@@ -2261,21 +2467,109 @@ export class PlayerSatellite extends THREE.Group {
     // (perpendicular to the boom axis X).
     const targetTilt = Math.atan2(localSun.z, localSun.y);
 
-    // Clamp to ±30° — avoids ROSA trailing edge colliding with arm struts
-    // at 60°/120° azimuth (Config G 3-plane layout clearance: 0.20m at 30°).
-    const maxTilt = 30 * Math.PI / 180;
-    const clampedTilt = Math.max(-maxTilt, Math.min(maxTilt, targetTilt));
+    // Tier-aware clamp: at Y0 the struts sit 60° off the ROSA plane so ±30°
+    // clears them; Y1+ tiers add struts only 30° from the plane → tighter clamp.
+    const maxTilt = this._rosaMaxTiltRad();
+
+    // Feather: when feathered (and deployed), park the wing edge-on to the sun
+    // (sun-track target + 90°) instead of tracking. This minimises the blanket's
+    // sun-facing cross-section to dodge a hazard while staying deployed.
+    const feather = this._rosaFeatherProgress ?? 0;
+    let desired;
+    if (feather > 0) {
+      const edgeOn = targetTilt + Math.PI / 2;             // 90° off sun = edge-on
+      const tracked = Math.max(-maxTilt, Math.min(maxTilt, targetTilt));
+      desired = tracked + (edgeOn - tracked) * feather;    // blend track → edge-on
+    } else {
+      desired = Math.max(-maxTilt, Math.min(maxTilt, targetTilt));
+    }
 
     const trackSpeed = 0.3 * dt; // Slow, smooth tracking
 
     // Apply identical tilt to both panel pivots (coplanar tracking)
     if (this.panelRightPivot) {
       const cur = this.panelRightPivot.rotation.x;
-      this.panelRightPivot.rotation.x += (clampedTilt - cur) * trackSpeed;
+      this.panelRightPivot.rotation.x += (desired - cur) * trackSpeed;
     }
     if (this.panelLeftPivot) {
       const cur = this.panelLeftPivot.rotation.x;
-      this.panelLeftPivot.rotation.x += (clampedTilt - cur) * trackSpeed;
+      this.panelLeftPivot.rotation.x += (desired - cur) * trackSpeed;
+    }
+  }
+
+  /**
+   * @private Tier-aware sun-track tilt clamp (radians).
+   *
+   * The sun-track tilt swings the ROSA trailing edge toward the arm-strut
+   * planes. At Y0 the struts sit at 60°/120° (60° off the 0°/180° ROSA plane),
+   * so the loose ±30° default clears them. Y1+ tiers add struts at 30°/330° —
+   * only 30° from the ROSA plane — so when the nearest strut is within ~30° of
+   * the plane the clamp tightens to ROSA_TILT_CLAMP_TIGHT_DEG.
+   *
+   * Reads the active tier's azimuths from ArmManager/ARM_LADDER at runtime so an
+   * in-session tier refit updates the clamp. Falls back to the Y0 quad azimuths.
+   * @returns {number} max tilt magnitude in radians
+   */
+  _rosaMaxTiltRad() {
+    const V5 = Constants.OCTOPUS_V5;
+    const looseDeg = 30;
+    const tightDeg = V5.ROSA_TILT_CLAMP_TIGHT_DEG ?? 18;
+
+    // Resolve the active tier's strut azimuths (degrees).
+    let azimuths = Constants.ARM_LADDER?.Y0_QUAD?.azimuths ?? [60, 120, 240, 300];
+    const tierKey = this.armManager?.getCurrentTier?.();
+    if (tierKey && Constants.ARM_LADDER?.[tierKey]?.azimuths) {
+      azimuths = Constants.ARM_LADDER[tierKey].azimuths;
+    }
+
+    // Smallest angular gap between any strut and the ROSA plane (0° / 180°).
+    let minGapDeg = 90;
+    for (const az of azimuths) {
+      const a = ((az % 180) + 180) % 180;      // fold onto [0,180): plane is 0 & 180
+      const gap = Math.min(a, 180 - a);        // distance to the nearest plane line
+      if (gap < minGapDeg) minGapDeg = gap;
+    }
+
+    // If a strut sits within ~30° of the plane, tighten; otherwise stay loose.
+    const deg = minGapDeg <= 30 + 1e-6 ? tightDeg : looseDeg;
+    return deg * Math.PI / 180;
+  }
+
+  /**
+   * @private Power-flow glow on the ROSA cell faces. Drives the front material
+   * emissive from the actual generated power (resources.solarRate) so the wings
+   * visibly energize in sunlight and go dark in shadow / when feathered or
+   * furled (both of which already drop solarRate). A faint sine "breathing"
+   * keeps the array alive even at steady output.
+   *
+   * Runs BEFORE _animateScanFlash so a scan pulse cleanly overrides this for its
+   * brief window. The menu hero scene has no power subsystem, so it sets
+   * `_rosaGlowIdleFloor` to give the wings a constant energized look there.
+   * @param {number} dt — seconds since last frame
+   */
+  _animateRosaGlow(dt = 0) {
+    if (!this._rosaFrontMats || !this._rosaFrontMats.length) return;
+    this._rosaGlowClock += dt;
+
+    // Normalise generated power to 0..1 against the theoretical panel peak.
+    const peak = Constants.SOLAR_FLUX * Constants.SOLAR_PANEL_AREA *
+                 Constants.SOLAR_PANEL_EFFICIENCY;
+    const rate = this.resources?.solarRate ?? 0;
+    let frac = peak > 0 ? rate / peak : 0;
+    frac = Math.max(this._rosaGlowIdleFloor || 0, Math.min(1, frac));
+
+    // Dim deep-blue substrate (0.10) → bright energized cyan-teal (0.55), plus a
+    // subtle breathing ripple so even a steady array shimmers.
+    const breathe = 0.04 * (0.5 + 0.5 * Math.sin(this._rosaGlowClock * 2.0));
+    const intensity = 0.10 + 0.45 * frac + breathe * frac;
+    // Hue lerp: cold indigo (0x0b1030) → power cyan (0x0e4a66).
+    const r = 0x0b + Math.round((0x0e - 0x0b) * frac);
+    const g = 0x10 + Math.round((0x4a - 0x10) * frac);
+    const b = 0x30 + Math.round((0x66 - 0x30) * frac);
+    const hex = (r << 16) | (g << 8) | b;
+    for (const mat of this._rosaFrontMats) {
+      mat.emissive.setHex(hex);
+      mat.emissiveIntensity = intensity;
     }
   }
 
@@ -2461,6 +2755,16 @@ export class PlayerSatellite extends THREE.Group {
           mat.emissive.setHex(0x0b1030); // build default (_buildMainBus)
           mat.emissiveIntensity = 0.18;
         }
+      }
+    }
+    // ROSA wings: sweep the same cyan scan pulse across the cell faces while the
+    // flash is active. On `done` we DON'T restore — _animateRosaGlow runs every
+    // frame (before this) and reasserts the power-flow emissive, so it owns the
+    // ROSA steady state and there is nothing to restore here.
+    if (!done && this._rosaFrontMats) {
+      for (const mat of this._rosaFrontMats) {
+        mat.emissive.setHex(0x00aaff);
+        mat.emissiveIntensity = t * 0.7;
       }
     }
   }
@@ -3948,12 +4252,30 @@ export class PlayerSatellite extends THREE.Group {
     if (inShadow) {
       this.resources.solarRate = 0;
     } else {
+      // Furl coupling: only the ROSA blanket share is gated by furl progress;
+      // the body-mount GaAs cells can't furl, so they stay on. A fully furled
+      // array keeps ~BODY_MOUNT_POWER_FRACTION of peak; unfurled is unchanged.
+      //
+      // Feather coupling: feathering parks the deployed blanket edge-on, so its
+      // sun-incidence drops by cos(feather·90°). Unlike furl (which scales the
+      // ROSA share by roll-out progress), feather attenuates the ROSA share via
+      // this geometric incidence factor — fully feathered → ROSA contributes ~0,
+      // leaving the body-mount share, but reached by turning rather than rolling.
+      const V5 = Constants.OCTOPUS_V5;
+      const bodyFrac = V5.BODY_MOUNT_POWER_FRACTION ?? 0;
+      const rosaFrac = V5.ROSA_POWER_FRACTION ?? 1;
+      const furl = (this._rosaFurlProgress ?? 1);
+      const feather = (this._rosaFeatherProgress ?? 0);
+      const featherInc = Math.cos(feather * Math.PI / 2); // 1 (flat) → 0 (edge-on)
+      const furlMult = bodyFrac + rosaFrac * furl * featherInc;
+
       this.resources.solarRate =
         Constants.SOLAR_FLUX *
         Constants.SOLAR_PANEL_AREA *
         Constants.SOLAR_PANEL_EFFICIENCY *
         sunAngle *
-        this.resources.solarPanelHealth;
+        this.resources.solarPanelHealth *
+        furlMult;
     }
   }
 
