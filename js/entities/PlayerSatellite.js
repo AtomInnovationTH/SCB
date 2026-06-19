@@ -1546,10 +1546,15 @@ export class PlayerSatellite extends THREE.Group {
     this._rosaFrontMats = [panelMatFront];
     // Back substrate = warmer copper-Kapton (real ROSA blanket backing), low
     // metalness with a subtle sheen — replaces the old flat light grey.
+    // Self-illuminating floor (emissiveIntensity ~0.4 + brighter copper emissive)
+    // so the substrate never collapses to black when its face is away from the
+    // sun / in shadow. This is the *explicit* fix for the "inverted Mother's ROSA
+    // wings vanish / dark rectangle on Earth" regression — DO NOT lower below the
+    // ROSA_BACK_EMISSIVE_MIN floor asserted in js/test/test-RosaFurl.js.
     const panelMatBack = new THREE.MeshStandardMaterial({
-      color: 0xb08d57, metalness: 0.2, roughness: 0.55,
+      color: 0xc8a878, metalness: 0.2, roughness: 0.55,
       side: THREE.BackSide,
-      emissive: 0x3a2c18, emissiveIntensity: 0.18,
+      emissive: 0x6a5638, emissiveIntensity: 0.4,
     });
     const rollMat = new THREE.MeshStandardMaterial({
       color: 0x333344, metalness: 0.5, roughness: 0.4,

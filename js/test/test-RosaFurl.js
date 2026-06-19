@@ -13,10 +13,21 @@
  * orbital seeding). We only need the furl logic, which is self-contained.
  */
 import { describe, it, assert } from './TestRunner.js';
+import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
 import { PlayerSatellite } from '../entities/PlayerSatellite.js';
 
 const P = PlayerSatellite.prototype;
+
+/**
+ * Minimum self-illumination floor for the ROSA back substrate. The back
+ * (BackSide) mesh is the ONLY thing rendered when the Mother is inverted and
+ * the camera looks at the panel's far face; if its emissiveIntensity collapses
+ * the wings read as "gone" against black space / Earth. Commit 0d5abe8 (v.99)
+ * regressed this to 0.18 and the wings vanished when flipped. Keep this in sync
+ * with panelMatBack in _buildSolarPanels(); do NOT lower the material below it.
+ */
+const ROSA_BACK_EMISSIVE_MIN = 0.3;
 
 /** Minimal stub carrying just the fields the furl methods touch. */
 function makeStub(overrides = {}) {
@@ -303,5 +314,58 @@ describe('ROSA power-flow glow — _animateRosaGlow', () => {
     const s = makeGlowStub({ _rosaFrontMats: null });
     P._animateRosaGlow.call(s, 0.016); // must not throw
     assert.ok(true, 'tolerates a null _rosaFrontMats');
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Inverted-visibility regression guard — when the Mother flips upside down the
+// camera sees the panel BACK face. The FrontSide PV mesh back-face-culls, so the
+// BackSide substrate is all that renders; if it dims to black the wings appear
+// to vanish (the 0d5abe8 "v.99" regression). Assert each wing keeps a Front
+// (FrontSide) + Back (BackSide) mesh and that the back substrate stays at/above
+// the self-illuminating floor so it can never silently re-break.
+// ───────────────────────────────────────────────────────────────────────────
+describe('ROSA inverted visibility — back-face substrate stays lit', () => {
+  // Build the real panel meshes on a THREE.Group-backed `this` so this.add(),
+  // _buildRosaStructure() and _setRosaWingProgress() all work without the heavy
+  // PlayerSatellite constructor. getSolarCellTexture() returns null in headless,
+  // which the materials tolerate — we assert on material props, not the map.
+  function buildPanels() {
+    const ctx = new THREE.Group();
+    ctx._buildRosaStructure = P._buildRosaStructure.bind(ctx);
+    ctx._setRosaWingProgress = P._setRosaWingProgress.bind(ctx);
+    P._buildSolarPanels.call(ctx);
+    return ctx;
+  }
+
+  function findByName(root, name) {
+    let hit = null;
+    root.traverse((o) => { if (!hit && o.name === name) hit = o; });
+    return hit;
+  }
+
+  it('builds a Front (FrontSide) + Back (BackSide) mesh for each wing', () => {
+    const ctx = buildPanels();
+    for (const [front, back] of [
+      ['ROSA_Panel_Front_0deg',   'ROSA_Panel_Back_0deg'],
+      ['ROSA_Panel_Front_180deg', 'ROSA_Panel_Back_180deg'],
+    ]) {
+      const f = findByName(ctx, front);
+      const b = findByName(ctx, back);
+      assert.ok(f, `${front} mesh exists`);
+      assert.ok(b, `${back} mesh exists`);
+      assert.equal(f.material.side, THREE.FrontSide, `${front} is FrontSide`);
+      assert.equal(b.material.side, THREE.BackSide, `${back} is BackSide`);
+    }
+  });
+
+  it('back substrate emissiveIntensity stays above the never-black floor', () => {
+    const ctx = buildPanels();
+    for (const name of ['ROSA_Panel_Back_0deg', 'ROSA_Panel_Back_180deg']) {
+      const b = findByName(ctx, name);
+      assert.ok(b.material.emissiveIntensity >= ROSA_BACK_EMISSIVE_MIN,
+        `${name} emissiveIntensity (${b.material.emissiveIntensity}) >= ` +
+        `${ROSA_BACK_EMISSIVE_MIN} so the inverted wing never reads as gone`);
+    }
   });
 });
