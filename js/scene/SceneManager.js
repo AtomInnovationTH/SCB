@@ -262,9 +262,12 @@ export class SceneManager {
       );
       const bloomPass = new UnrealBloomPass(
         this._bloomRes,
-        0.15,  // strength — subtle bloom for sun disc + engine glow sparkle
+        0.08,  // strength — subtle bloom for sun disc + engine glow sparkle
         0.4,   // radius
-        1.5    // threshold — eliminates dark halo around ROSA panels
+        4.0    // threshold — only the very brightest (sun disc, engine plumes)
+               // bloom. Raised from 1.5 so the directional sun's specular
+               // highlight on the spacecraft hull/panels no longer blooms into
+               // a glint/glow as the ship rolls.
       );
       this.composer.addPass(bloomPass);
       this.bloomPass = bloomPass;

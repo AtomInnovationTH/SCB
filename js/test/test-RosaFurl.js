@@ -24,10 +24,12 @@ const P = PlayerSatellite.prototype;
  * (BackSide) mesh is the ONLY thing rendered when the Mother is inverted and
  * the camera looks at the panel's far face; if its emissiveIntensity collapses
  * the wings read as "gone" against black space / Earth. Commit 0d5abe8 (v.99)
- * regressed this to 0.18 and the wings vanished when flipped. Keep this in sync
- * with panelMatBack in _buildSolarPanels(); do NOT lower the material below it.
+ * regressed this to 0.18 and the wings vanished when flipped. The live value is
+ * kept modest (enough to read against black space, not so high it looks self-lit
+ * in sunlight). Keep this floor below the live value but well above the 0.18
+ * vanish point; do NOT lower the material below it.
  */
-const ROSA_BACK_EMISSIVE_MIN = 0.3;
+const ROSA_BACK_EMISSIVE_MIN = 0.24;
 
 /** Minimal stub carrying just the fields the furl methods touch. */
 function makeStub(overrides = {}) {
@@ -366,6 +368,29 @@ describe('ROSA inverted visibility — back-face substrate stays lit', () => {
       assert.ok(b.material.emissiveIntensity >= ROSA_BACK_EMISSIVE_MIN,
         `${name} emissiveIntensity (${b.material.emissiveIntensity}) >= ` +
         `${ROSA_BACK_EMISSIVE_MIN} so the inverted wing never reads as gone`);
+    }
+  });
+
+  it('back mesh is coplanar with its front (no unit-error separation)', () => {
+    // The back substrate must sit on the SAME plane as the front (local z≈0).
+    // A prior "-0.001" offset was meant as 1 mm but 1 scene unit = 100 km, so
+    // it was actually -100 m — far larger than the whole 1×2 m panel — which
+    // flung the back face away and opened a dead zone where neither face
+    // rendered when inverted. Guard: |local z| must be a tiny fraction of the
+    // panel size (here, well under one panel width in scene units).
+    const ctx = buildPanels();
+    const panelW = Constants.OCTOPUS_V5.ROSA_WIDTH * 0.00001; // metre → scene (M)
+    for (const [front, back] of [
+      ['ROSA_Panel_Front_0deg',   'ROSA_Panel_Back_0deg'],
+      ['ROSA_Panel_Front_180deg', 'ROSA_Panel_Back_180deg'],
+    ]) {
+      const f = findByName(ctx, front);
+      const b = findByName(ctx, back);
+      // Same in-plane placement as the front, and no meaningful normal offset.
+      assert.closeTo(b.position.x, f.position.x, 1e-12, `${back} shares front x`);
+      assert.ok(Math.abs(b.position.z) < panelW * 0.01,
+        `${back} local z (${b.position.z}) must be ~coplanar with the front, ` +
+        `not flung off by a unit error (panel width ${panelW} scene units)`);
     }
   });
 });

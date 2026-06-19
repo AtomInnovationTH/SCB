@@ -275,15 +275,13 @@ export class PlayerSatellite extends THREE.Group {
       color: 0x5c5c64, metalness: 0.7, roughness: 0.55,
     });
     this._matGoldMLI = new THREE.MeshStandardMaterial({
-      // MLI thermal blanket — warm gold foil, shiny so it catches specular
-      // glints (real MLI is crinkled, iridescent, not flat matte yellow).
-      // Base color is a bright gold (not dark orange) so the foil reads gold
-      // under the sun at ANY distance — it must NOT depend on the camera fill
-      // light (CameraSystem ~100 m range), otherwise it goes dark-orange far
-      // away and only turns gold up close. Low roughness + a lifted emissive
-      // warmth keeps it reading as gold on the shadowed side too (the scene
-      // has near-zero ambient light).
-      color: 0xd6a43e, metalness: 0.85, roughness: 0.28,
+      // MLI thermal blanket — warm gold foil. Real MLI is crinkled and diffuse,
+      // not a polished mirror, so keep roughness high: a near-mirror finish turns
+      // the directional sun into a tight specular hotspot that sweeps across the
+      // curved hull as a blown-out, blooming glint as the ship rolls. The gold
+      // read comes from the base color + a lifted emissive warmth (which also
+      // carries on the shadowed side, where ambient is near-zero), not from gloss.
+      color: 0xd6a43e, metalness: 0.7, roughness: 0.62,
       emissive: 0x4a3008, emissiveIntensity: 0.16,
     });
     this._matDark = new THREE.MeshStandardMaterial({
@@ -537,7 +535,10 @@ export class PlayerSatellite extends THREE.Group {
         color: tx ? 0xffffff : 0x0a1133, // tint comes from the map when present
         map: tx || null,
         emissiveMap: tx || null,
-        metalness: 0.5, roughness: 0.5,
+        // Real PV cells carry an anti-reflective coating and read matte — low
+        // metalness + high roughness so the directional sun does NOT produce a
+        // mirror glint on the flat body-mounted cells as the hull rolls.
+        metalness: 0.25, roughness: 0.7,
         emissive: 0x0b1030, emissiveIntensity: 0.18,
         side: THREE.FrontSide,
         // §2-followup (round 5): barrel PV panels are flat DECALS tangent to the
@@ -1536,25 +1537,30 @@ export class PlayerSatellite extends THREE.Group {
       color: frontMap ? 0xffffff : 0x0a1133, // tint comes from the map when present
       map: frontMap || null,
       emissiveMap: frontMap || null,
-      metalness: 0.4, roughness: 0.42,
+      // Softer specular response: real PV blankets carry an anti-reflective
+      // coating and read fairly matte, not mirror-like. Lower metalness + higher
+      // roughness, plus a much weaker/rougher clearcoat, keep the sun glint from
+      // blowing out to white under the intensity-2.0 sun + ACES tonemapping
+      // while preserving the iridescent AR sheen.
+      metalness: 0.25, roughness: 0.62,
       side: THREE.FrontSide,
       emissive: 0x0b1030, emissiveIntensity: 0.15,
-      clearcoat: 0.6, clearcoatRoughness: 0.25,
-      iridescence: 0.7, iridescenceIOR: 1.8,
+      clearcoat: 0.3, clearcoatRoughness: 0.5,
+      iridescence: 0.5, iridescenceIOR: 1.8,
       iridescenceThicknessRange: [120, 420],
     });
     this._rosaFrontMats = [panelMatFront];
-    // Back substrate = warmer copper-Kapton (real ROSA blanket backing), low
-    // metalness with a subtle sheen — replaces the old flat light grey.
-    // Self-illuminating floor (emissiveIntensity ~0.4 + brighter copper emissive)
-    // so the substrate never collapses to black when its face is away from the
-    // sun / in shadow. This is the *explicit* fix for the "inverted Mother's ROSA
-    // wings vanish / dark rectangle on Earth" regression — DO NOT lower below the
-    // ROSA_BACK_EMISSIVE_MIN floor asserted in js/test/test-RosaFurl.js.
+    // Back substrate = warm copper-Kapton (real ROSA blanket backing). Near-matte
+    // (very low metalness, high roughness) like real Kapton foil. A modest
+    // emissive gives a self-illuminating floor so the substrate never collapses
+    // to pure black when its face is turned away from the sun / in shadow — the
+    // fix for the "inverted Mother's ROSA wings vanish / dark rectangle on Earth"
+    // regression. Keep emissiveIntensity at/above the ROSA_BACK_EMISSIVE_MIN floor
+    // asserted in js/test/test-RosaFurl.js.
     const panelMatBack = new THREE.MeshStandardMaterial({
-      color: 0xc8a878, metalness: 0.2, roughness: 0.55,
+      color: 0xc8a878, metalness: 0.08, roughness: 0.85,
       side: THREE.BackSide,
-      emissive: 0x6a5638, emissiveIntensity: 0.4,
+      emissive: 0x6a5638, emissiveIntensity: 0.26,
     });
     const rollMat = new THREE.MeshStandardMaterial({
       color: 0x333344, metalness: 0.5, roughness: 0.4,
@@ -1593,10 +1599,15 @@ export class PlayerSatellite extends THREE.Group {
     panel1Front.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
     this._rosaPanelWrapper1.add(panel1Front);
 
-    // Back substrate shares the plane (BackSide material), bumped 1 mm behind so
-    // the two faces never share the exact z=0 plane (avoids a depth tie).
+    // Back substrate shares the EXACT same plane (z=0) as the front. FrontSide
+    // and BackSide are complementary — for any camera only one of the two ever
+    // rasterizes (the other is back-face culled), so coincident geometry can't
+    // z-fight and no separation offset is needed. (A previous −0.001 "1 mm"
+    // offset was actually −100 m: 1 scene unit = 100 km, so it flung the back
+    // face 100 m off the front and opened a dead zone where the inverted wing
+    // rendered nothing. Keep this at z=0.)
     const panel1Back = new THREE.Mesh(panelGeo, panelMatBack);
-    panel1Back.position.set(rosaW / 2, 0, -0.001);
+    panel1Back.position.set(rosaW / 2, 0, 0);
     panel1Back.name = 'ROSA_Panel_Back_0deg';
     panel1Back.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
     this._rosaPanelWrapper1.add(panel1Back);
@@ -1626,8 +1637,8 @@ export class PlayerSatellite extends THREE.Group {
     panel2Front.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
     this._rosaPanelWrapper2.add(panel2Front);
 
-    const panel2Back = new THREE.Mesh(panelGeo, panelMatBack);
-    panel2Back.position.set(-rosaW / 2, 0, -0.001);
+    const panel2Back = new THREE.Mesh(panelGeo, panelMatBack); // z=0: see panel1Back note
+    panel2Back.position.set(-rosaW / 2, 0, 0);
     panel2Back.name = 'ROSA_Panel_Back_180deg';
     panel2Back.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
     this._rosaPanelWrapper2.add(panel2Back);
