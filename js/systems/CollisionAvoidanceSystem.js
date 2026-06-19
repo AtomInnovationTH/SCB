@@ -365,6 +365,16 @@ export class CollisionAvoidanceSystem {
       const debris = debrisList[i];
       if (!debris.alive) continue;
 
+      // --- Exempt the onboarding welcome cluster (mission 1 only) ---
+      // On mission 1 this tutorial cluster is the ONLY thing CA can see, and the
+      // pieces sit inside the 100 m dodge envelope. Auto-dodging them shoves the
+      // mother off its co-orbital station (silently, since CA comms are
+      // mission-gated) — which is exactly what made the "easy" first target
+      // appear to drift away. Scope to M1 so surviving welcome pieces don't stay
+      // invisible to CA in later missions (welcomeSpawn is not cleared on
+      // MISSION_START). Later catalog threats are not welcomeSpawn regardless.
+      if (debris.welcomeSpawn && this._missionNumber <= 1) continue;
+
       // --- Exempt active (Tab-selected) target ---
       if (debris.id === this._activeTargetId) continue;
 

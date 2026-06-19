@@ -115,6 +115,7 @@ export const Constants = {
     ROCKET_BODY:    'rocketBody',
     DEFUNCT_SAT:    'defunctSat',
     MISSION_DEBRIS: 'missionDebris',
+    CUBESAT:        'cubesat',
   },
 
   // === DEBRIS TIERS (by difficulty) ===
@@ -123,6 +124,7 @@ export const Constants = {
     rocketBody:     { tier: 3, label: 'Rocket Body' },
     defunctSat:     { tier: 2, label: 'Defunct Satellite' },
     missionDebris:  { tier: 1, label: 'Mission Debris' },
+    cubesat:        { tier: 2, label: 'CubeSat' },
   },
 
   // === PHYSICS ===
@@ -451,12 +453,15 @@ export const Constants = {
       defunctSat:    1.6,
       fragment:      1.0,
       missionDebris: 1.0,
+      cubesat:       1.1,
     },
     // Local long axis per type (matches DebrisWireframe geometry):
-    // rocketBody = lathe around Y; defunctSat = solar wings along X.
+    // rocketBody = lathe around Y; defunctSat = solar wings along X;
+    // cubesat = slightly long along Z (stacked-U body).
     LONG_AXIS_BY_TYPE: {
       rocketBody: { x: 0, y: 1, z: 0 },
       defunctSat: { x: 1, y: 0, z: 0 },
+      cubesat:    { x: 0, y: 0, z: 1 },
     },
     // HUD: the END-ON ✓ chip shows when presented width fits with this margin.
     END_ON_FIT_MARGIN: 1.0,
@@ -1291,6 +1296,7 @@ export const Constants = {
     defunctSat:   { aluminum: 0.30, gallium: 0.05, copper: 0.10, carbon_composite: 0.15, glass_ceramic: 0.15, titanium: 0.10, kevlar: 0.10, steel: 0.05 },
     fragment:     { aluminum: 0.45, steel: 0.25, titanium: 0.05, glass_ceramic: 0.15, kevlar: 0.10 },
     missionDebris: { aluminum: 0.20, glass_ceramic: 0.30, carbon_composite: 0.20, copper: 0.15, kevlar: 0.10, gallium: 0.03, iridium: 0.02 },
+    cubesat:      { aluminum: 0.35, copper: 0.15, gallium: 0.08, glass_ceramic: 0.12, carbon_composite: 0.15, titanium: 0.05, iridium: 0.05, steel: 0.05 },
   },
 
   // --- Cargo Hold ---
@@ -1428,6 +1434,7 @@ export const Constants = {
       missionDebris: 1.5,    // mission debris: moderate premium
       defunctSat: 1.0,       // base rate
       rocketBody: 0.8,       // large bodies: lower bounty but more salvage metal
+      cubesat: 1.4,          // small whole microsat: dense/valuable graduation catch
     },
 
     // Selling price modifier (cargo sells at this fraction of listed marketValue)

@@ -13,6 +13,8 @@
 import { describe, it, assert } from './TestRunner.js';
 import { Constants } from '../core/Constants.js';
 import { Events } from '../core/Events.js';
+import * as THREE from 'three';
+import { LassoSystem } from '../systems/LassoSystem.js';
 
 // ─── 1. Constant value tests ────────────────────────────────────────────────
 
@@ -553,5 +555,44 @@ describe('LassoSystem — in-range "press N" prompt (gap C.3)', () => {
         const after = step(blocked, { canCast: true, targetId: 7, inRange: true, tooHeavy: false, canFire: true });
         assert.equal(after.emit, true, 'fires once eligible, without leaving range first');
         assert.equal(after.id, 7);
+    });
+});
+
+// ─── Regression: net homing uses the live _scenePosition, not the orbit ─────
+// The flight homing (_getLiveTargetPos) must read the same single source of
+// truth as fire() (_getDebrisScenePos): the live _scenePosition. Onboarding
+// pinned pieces have a FROZEN orbit, so reading the orbit returned the stale
+// spawn position the mother flies past at orbital speed — the net then chased
+// BACKWARD ("net fired 180° wrong way"). For normal debris _scenePosition is
+// the orbit position anyway, so this is strictly safer.
+describe('LassoSystem — _getLiveTargetPos prefers live _scenePosition', () => {
+    it('returns _scenePosition when present (pinned piece, frozen orbit)', () => {
+        const scenePos = new THREE.Vector3(5, 6, 7);
+        // Orbit elements that would resolve somewhere completely different.
+        const debris = {
+            id: 3, alive: true,
+            _scenePosition: scenePos,
+            orbit: { semiMajorAxis: 6728.137, eccentricity: 0, inclination: 0.9,
+                     raan: 0, argPerigee: 0, trueAnomaly: 0, meanMotion: 0.0011 },
+        };
+        const debrisField = { getDebrisById: (id) => (id === 3 ? debris : null) };
+        const mock = { _targetId: 3 };
+        const pos = LassoSystem.prototype._getLiveTargetPos.call(mock, debrisField);
+        assert.ok(pos, 'a position is returned');
+        assert.equal(pos.x, 5); assert.equal(pos.y, 6); assert.equal(pos.z, 7);
+        // Must be a copy, not the shared ref (caller copies into _targetScenePos).
+        assert.ok(pos !== scenePos, 'returns a clone, not the shared vector');
+    });
+
+    it('falls back to the orbit only when no _scenePosition exists', () => {
+        const debris = {
+            id: 4, alive: true,
+            orbit: { semiMajorAxis: 6728.137, eccentricity: 0, inclination: 0,
+                     raan: 0, argPerigee: 0, trueAnomaly: 0, meanMotion: 0.0011 },
+        };
+        const debrisField = { getDebrisById: () => debris };
+        const mock = { _targetId: 4 };
+        const pos = LassoSystem.prototype._getLiveTargetPos.call(mock, debrisField);
+        assert.ok(pos && Number.isFinite(pos.x), 'orbit fallback returns a finite position');
     });
 });

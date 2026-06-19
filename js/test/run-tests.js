@@ -266,6 +266,7 @@ import './test-GuidanceHotkeyDrift.js';  // guidance ⇄ hotkey drift guard (202
 import './test-DevSequenceAdvancer.js';  // Space "do the next thing" rapid-advance resolver
 import './test-HintTicker.js';
 import './test-WelcomeField.js';
+import './test-Cubesat.js';
 
 // Per-language starting orbits, anchors, landmark sight + Portuguese
 import './test-Languages.js';

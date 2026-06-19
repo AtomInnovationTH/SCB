@@ -163,11 +163,15 @@ export class SunLight {
     this._updateLightPosition();
     scene.add(this.directionalLight);
 
-    // Subtle hemisphere light for indirect illumination
+    // Subtle hemisphere light for indirect illumination. Lifted 0.03 → 0.10 to
+    // help restore night-side / eclipse readability after the camera fill light
+    // was corrected from its accidental ~35× flood (see CameraSystem fill-light
+    // fix). Hemisphere (sky/ground gradient) is preferred over more flat ambient
+    // because it preserves up/down shaping instead of washing the ship flat.
     this.hemiLight = new THREE.HemisphereLight(
       0x4488bb, // sky color
       0x111122, // ground color
-      0.03
+      0.10
     );
     scene.add(this.hemiLight);
 

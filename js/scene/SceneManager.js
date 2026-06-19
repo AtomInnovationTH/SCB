@@ -576,7 +576,11 @@ export class SceneManager {
    * @private
    */
   _setupLights() {
-    const ambient = new THREE.AmbientLight(0x112244, 0.02);
+    // Cool, very dim ambient floor. Lifted 0.02 → 0.06 to partly restore the
+    // night-side / eclipse readability that previously leaned on the camera
+    // fill light's accidental ~35× flood (see CameraSystem fill-light fix).
+    // Kept low so the sunlit side still reads with strong directional contrast.
+    const ambient = new THREE.AmbientLight(0x112244, 0.06);
     this.scene.add(ambient);
     this.ambientLight = ambient;
   }

@@ -73,6 +73,7 @@ const TYPE_LABELS = {
   defunctSat:    'DEFUNCT SATELLITE',
   missionDebris: 'MISSION DEBRIS',
   fragment:      'FRAGMENT',
+  cubesat:       'CUBESAT',
 };
 
 // Human-readable material names + a representative swatch colour for the
@@ -447,12 +448,56 @@ function buildADRSatellite() {
   };
 }
 
+// ---------------------------------------------------------------------------
+// CubeSat: small box bus + 2 short deployed panels (wireframe data)
+// ---------------------------------------------------------------------------
+function buildCubesat() {
+  const bx = 0.17, by = 0.17, bz = 0.23;
+
+  // Bus box vertices (0–7)
+  const busVerts = [
+    [-bx, -by, -bz], [ bx, -by, -bz], [ bx,  by, -bz], [-bx,  by, -bz], // front
+    [-bx, -by,  bz], [ bx, -by,  bz], [ bx,  by,  bz], [-bx,  by,  bz], // back
+  ];
+  const busEdges = [
+    [0, 1], [1, 2], [2, 3], [3, 0],   // front face
+    [4, 5], [5, 6], [6, 7], [7, 4],   // back face
+    [0, 4], [1, 5], [2, 6], [3, 7],   // connectors
+  ];
+
+  // Deployed panel L (8–11) and R (12–15), thin quads off ±X near back.
+  const py = 0.11, pw = 0.13;
+  const panelLVerts = [
+    [-bx,       -py, bz - 0.02], [-bx - pw, -py, bz - 0.02],
+    [-bx - pw,   py, bz - 0.02], [-bx,       py, bz - 0.02],
+  ];
+  const panelRVerts = [
+    [ bx,       -py, bz - 0.02], [ bx + pw, -py, bz - 0.02],
+    [ bx + pw,   py, bz - 0.02], [ bx,       py, bz - 0.02],
+  ];
+  const panelEdges = [
+    [8, 9], [9, 10], [10, 11], [11, 8],
+    [12, 13], [13, 14], [14, 15], [15, 12],
+  ];
+
+  const vertices = [...busVerts, ...panelLVerts, ...panelRVerts];
+
+  return {
+    vertices,
+    zones: [
+      { name: 'Bus',          edges: busEdges,   massPercent: 80 },
+      { name: 'Solar Panels', edges: panelEdges, massPercent: 20 },
+    ],
+  };
+}
+
 // Pre-build static shapes at module load (fragment is per-target)
 const SHAPES = {
   rocketBody:    buildRocketBody(),
   defunctSat:    buildDefunctSat(),
   missionDebris: buildMissionDebris(),
   adrSatellite:  buildADRSatellite(),
+  cubesat:       buildCubesat(),
 };
 
 // ============================================================================
@@ -692,6 +737,53 @@ function _buildMissionDebrisGeo() {
 }
 
 /**
+ * Build a THREE.BufferGeometry for a cubesat (small whole microsat).
+ *
+ * A panelled rectangular bus (slightly long along Z, ~3U feel), body-mounted
+ * solar-cell faces, a small deployed panel wing on each side, a stub antenna
+ * whip and a separation-ring adapter underneath — reads as a tiny INTACT
+ * satellite (distinct from an irregular fragment chunk), the M1 graduation
+ * catch. Normalised to the scene-size convention used by the other types.
+ * @returns {THREE.BufferGeometry}
+ */
+function _buildCubesatGeo() {
+  const parts = [];
+
+  // Main bus — a short stacked box, slightly long along Z.
+  const body = new THREE.BoxGeometry(0.34, 0.34, 0.46);
+  parts.push(body);
+
+  // Body-mounted solar-cell panels (thin slabs proud of the ±X faces).
+  for (const side of [-1, 1]) {
+    const cell = new THREE.BoxGeometry(0.015, 0.30, 0.42);
+    cell.translate(side * 0.18, 0, 0);
+    parts.push(cell);
+  }
+
+  // A small deployed panel wing on each side (the "it's a satellite" cue).
+  for (const side of [-1, 1]) {
+    const wing = new THREE.BoxGeometry(0.26, 0.22, 0.012);
+    wing.translate(side * 0.33, 0, 0.24);
+    parts.push(wing);
+  }
+
+  // Stub antenna whip off the top.
+  const whip = new THREE.CylinderGeometry(0.006, 0.006, 0.20, 4);
+  whip.translate(0.08, 0.24, -0.12);
+  parts.push(whip);
+
+  // Separation-ring adapter underneath.
+  const adapter = new THREE.CylinderGeometry(0.09, 0.11, 0.06, 8);
+  adapter.translate(0, -0.20, 0);
+  parts.push(adapter);
+
+  const geo = _mergeGeometries(parts);
+  // Normalise toward the scene-size convention (compact body).
+  geo.scale(1.4, 1.4, 1.4);
+  return geo;
+}
+
+/**
  * Deterministic hash → [0,1) for a given integer seed.
  * @param {number} n
  * @returns {number}
@@ -796,8 +888,12 @@ function _buildFragmentGeo(variantIndex) {
   const sx = 0.55 + _hash01(seed + 11) * 0.95;       // 0.55 .. 1.50
   const sy = 0.45 + _hash01(seed + 23) * 0.70;       // 0.45 .. 1.15
   const sz = 0.55 + _hash01(seed + 37) * 0.95;
-  // A few variants are flat plate-like shards (panel fragments)
-  const plate = _hash01(seed + 41) > 0.68;
+  // A few variants are flat plate-like shards (panel fragments). The plate
+  // decision is owned by DebrisWireframe.isPlateVariant (single source of
+  // truth) so the welcome-field candidate selector and this geometry build
+  // can never drift. variantIndex is already reduced (% N) by the only caller,
+  // and isPlateVariant reduces again idempotently, so the seed matches exactly.
+  const plate = DebrisWireframe.isPlateVariant(variantIndex);
   const flat = plate ? 0.32 + _hash01(seed + 43) * 0.18 : 1.0;
 
   // Scatter a small irregular point cloud on a distorted sphere
@@ -986,6 +1082,9 @@ export class DebrisWireframe {
       case 'missionDebris':
         geo = _buildMissionDebrisGeo();
         break;
+      case 'cubesat':
+        geo = _buildCubesatGeo();
+        break;
       case 'fragment':
       default:
         geo = _buildFragmentGeo((id >>> 0) % N);
@@ -1028,6 +1127,23 @@ export class DebrisWireframe {
     const N = Constants.DEBRIS_FRAGMENT_VARIANTS || 7;
     const cacheKey = type === 'fragment' ? `fragment_${(id >>> 0) % N}` : type;
     return _geoRadiusCache.has(cacheKey) ? _geoRadiusCache.get(cacheKey) : 1;
+  }
+
+  /**
+   * Whether a fragment variant index renders as a flat plate-like shard
+   * (a panel/foil fragment) rather than a blocky chunk. This is the SINGLE
+   * SOURCE OF TRUTH for the plate decision: `_buildFragmentGeo` calls it to
+   * decide whether to flatten the shard, and the welcome-field candidate
+   * selector calls it to deterministically target flat panel-shard variants —
+   * so the rendered shape and the selector can never drift. Pure (no THREE /
+   * geometry build).
+   * @param {number} variantId - fragment variant index (id % DEBRIS_FRAGMENT_VARIANTS)
+   * @returns {boolean}
+   */
+  static isPlateVariant(variantId) {
+    const N = Constants.DEBRIS_FRAGMENT_VARIANTS || 7;
+    const seed = (((((variantId >>> 0) % N) + 1) >>> 0) * 2654435761) >>> 0;
+    return _hash01(seed + 41) > 0.68;
   }
 
   /**

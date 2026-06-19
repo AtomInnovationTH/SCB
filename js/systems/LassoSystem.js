@@ -876,7 +876,14 @@ export class LassoSystem {
         const debris = debrisField.getDebrisById
             ? debrisField.getDebrisById(this._targetId)
             : null;
-        if (!debris || !debris.alive || !debris.orbit) return null;
+        if (!debris || !debris.alive) return null;
+        // Prefer the live _scenePosition (single source of truth — matches
+        // _getDebrisScenePos used at fire time, and honours the onboarding pin
+        // whose ORBIT is intentionally frozen). Reading the orbit here for a
+        // pinned piece returned the stale spawn position the mother flies past
+        // at orbital speed — making the net home BACKWARD ("180° wrong way").
+        if (debris._scenePosition) return debris._scenePosition.clone();
+        if (!debris.orbit) return null;
         const cart = orbitToSceneCartesian(debris.orbit);
         return new THREE.Vector3(cart.position.x, cart.position.y, cart.position.z);
     }

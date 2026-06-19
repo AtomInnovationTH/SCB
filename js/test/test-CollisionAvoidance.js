@@ -13,6 +13,7 @@ import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { CollisionAvoidanceSystem } from '../systems/CollisionAvoidanceSystem.js';
+import { orbitToSceneCartesian } from '../entities/OrbitalMechanics.js';
 
 const CA = Constants.COLLISION_AVOIDANCE;
 const M = 0.00001; // 1 metre in scene units (same as CollisionAvoidanceSystem.js)
@@ -283,6 +284,39 @@ describe('CA — Threat Detection', () => {
     eventBus.emit(Events.TARGET_SELECTED, { id: 42 });
     eventBus.emit(Events.TARGET_CLEARED);
     assert.equal(sys._activeTargetId, null);
+  });
+
+  it('welcomeSpawn (onboarding cluster) debris is never a CA threat', () => {
+    // Build a real collision-course orbit so an *identical* non-welcome piece
+    // WOULD register as a threat — proving the only difference is welcomeSpawn.
+    const orbit = {
+      semiMajorAxis: 6728.137, eccentricity: 0,
+      inclination: 51.6 * Math.PI / 180, raan: 0, argPerigee: 0, trueAnomaly: 0,
+    };
+    const cart = orbitToSceneCartesian(orbit);
+    // Player sits ~50 m ahead (+x) of the debris and is slower in x, so the
+    // debris is closing on it (TCA > 0) with a sub-100 m miss → inside the
+    // dodge envelope. (rp = dPos−pPos < 0; rv = (dVel−pVel) > 0 ⇒ approaching.)
+    const player = makePlayer(
+      { x: cart.position.x + 0.0005, y: cart.position.y, z: cart.position.z },
+      { x: cart.velocity.x - 0.05, y: cart.velocity.y, z: cart.velocity.z }
+    );
+    const mkDebris = (id, welcome) => ({
+      id, alive: true, orbit: { ...orbit },
+      _scenePosition: new THREE.Vector3(cart.position.x, cart.position.y, cart.position.z),
+      welcomeSpawn: welcome,
+    });
+
+    // Control: a NON-welcome piece on this course is detected as a threat.
+    const ctrl = makeSystem({ player, debrisField: makeDebrisField([mkDebris(1, false)]) });
+    const ctrlThreat = ctrl._scanForThreats(player.getPosition(), player.getVelocity());
+    assert.ok(ctrlThreat && ctrlThreat.debrisId === 1,
+      'sanity: an identical non-welcome piece on this course IS a threat');
+
+    // Subject: the SAME course, but welcomeSpawn=true → exempt, no threat.
+    const sys = makeSystem({ player, debrisField: makeDebrisField([mkDebris(2, true)]) });
+    const threat = sys._scanForThreats(player.getPosition(), player.getVelocity());
+    assert.equal(threat, null, 'welcomeSpawn debris must be exempt from CA dodging');
   });
 
   it('_isArmTarget() returns true for arm-targeted debris', () => {

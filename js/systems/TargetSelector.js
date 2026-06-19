@@ -80,11 +80,22 @@ export class TargetSelector {
 
   /**
    * Get world position of the active target.
+   *
+   * Prefer the live `_scenePosition` (set every frame by
+   * DebrisField._updateInstanceTransform) — it is the single source of truth
+   * shared with LassoSystem/AutoLock/rendering, and for normal debris it equals
+   * the orbit position. This also honours the onboarding tease pin, which places
+   * curated pieces at a fixed mother-local offset via `_scenePosition`; reading
+   * the orbit instead would put the reticle off the rendered piece. Falls back to
+   * the orbit for targets without a cached scene position (e.g. ISS/satellites).
    * @returns {THREE.Vector3|null}
    */
   getActiveTargetPosition() {
-    if (!this.activeTarget || !this.activeTarget.orbit) return null;
-    const cart = orbitToSceneCartesian(this.activeTarget.orbit);
+    const t = this.activeTarget;
+    if (!t) return null;
+    if (t._scenePosition) return t._scenePosition.clone();
+    if (!t.orbit) return null;
+    const cart = orbitToSceneCartesian(t.orbit);
     if (!cart || !cart.position) return null;
     return cart.position;
   }

@@ -1527,27 +1527,27 @@ export class PlayerSatellite extends THREE.Group {
       frontMap.repeat.set(3, 6);   // ~3 cells across width × 6 along length
       frontMap.needsUpdate = true;
     }
-    // MeshPhysicalMaterial adds an iridescent thin-film over the cells — the
-    // glassy blue→violet→teal angular shift of a real space-grade AR coating.
-    // The iridescence/emissive props are inert (not errors) without WebGL, so
-    // this is safe in headless tests. Front mats are tracked in _rosaFrontMats
-    // so _animateRosaGlow can pulse their emissive with generated power and the
-    // scan-flash can sweep them cyan.
+    // The cell strings carry a royal-blue self-illumination (see _animateRosaGlow,
+    // which pulses the emissive with generated power). The TEAL the wings used to
+    // read came from `iridescence` (a ≈420 nm thin-film over the sun's specular),
+    // NOT the emissive — so iridescence is removed and the wings now read a clean
+    // royal blue. The emissive is intentionally NOT masked by an emissiveMap: the
+    // dark cell texture would bury the glow, and the uniform royal-blue glow is the
+    // look that reads well in BOTH the menu hero and gameplay. Props stay inert
+    // without WebGL, so this is safe in headless tests. Front mats are tracked in
+    // _rosaFrontMats so the glow + scan-flash can drive their emissive.
     const panelMatFront = new THREE.MeshPhysicalMaterial({
       color: frontMap ? 0xffffff : 0x0a1133, // tint comes from the map when present
       map: frontMap || null,
-      emissiveMap: frontMap || null,
       // Softer specular response: real PV blankets carry an anti-reflective
       // coating and read fairly matte, not mirror-like. Lower metalness + higher
       // roughness, plus a much weaker/rougher clearcoat, keep the sun glint from
-      // blowing out to white under the intensity-2.0 sun + ACES tonemapping
-      // while preserving the iridescent AR sheen.
+      // blowing out to white under the intensity-2.0 sun + ACES tonemapping.
       metalness: 0.25, roughness: 0.62,
       side: THREE.FrontSide,
-      emissive: 0x0b1030, emissiveIntensity: 0.15,
+      emissive: 0x1e3cff, emissiveIntensity: 0.30, // royal blue (matches _animateRosaGlow)
       clearcoat: 0.3, clearcoatRoughness: 0.5,
-      iridescence: 0.5, iridescenceIOR: 1.8,
-      iridescenceThicknessRange: [120, 420],
+      iridescence: 0.0, // was 0.5 → produced the TEAL thin-film sheen; removed
     });
     this._rosaFrontMats = [panelMatFront];
     // Back substrate = warm copper-Kapton (real ROSA blanket backing). Near-matte
@@ -1733,6 +1733,18 @@ export class PlayerSatellite extends THREE.Group {
     const drumR   = V5.ROSA_DRUM_R * M;
     const brkLen  = V5.ROSA_BRACKET_LEN * M;
 
+    // Root of the rolled blanket. The spool/drum sits this far OUTBOARD of the
+    // sun-tracking pivot (the pivot is at the bus collar, barrelR from centre).
+    // The blanket, both edge booms and the tip spreader all live in `wrapper`,
+    // so anchoring the wrapper at the drum makes the blanket's INBOARD edge
+    // start at the drum. Without this the wrapper sat at the pivot while the
+    // drum sat rootX outboard, so the blanket spanned [pivot → tip] and a ~8 cm
+    // strip poked INBOARD of the drum toward the bus (the "narrow strip extends
+    // in" artifact). scale.x rolls the blanket out from this drum-anchored
+    // origin, so the inboard edge stays pinned at the drum at every furl state.
+    const rootX = brkLen + drumR * 0.4;
+    wrapper.position.x = sign * rootX;
+
     // Near-black carbon-composite boom material (real ROSA slit-tube high-strain
     // spars read dark, not pale) — low metalness, mid roughness for a matte
     // composite finish.
@@ -1747,6 +1759,13 @@ export class PlayerSatellite extends THREE.Group {
     // (spin/scale as the blanket reels) and the slit-tube curls (uncoil + snap).
     const struct = { stowRoll: null, drum: null, curls: [], sign };
 
+    // Tiny anti-z-fight nudge that lifts the booms/spreader just off the blanket
+    // plane. MUST be M-scaled: 1 scene unit = 100 km, so a raw literal like
+    // 0.0008 is ~80 m — ~80× the panel width — which flung the structure far off
+    // the blanket (same unit-mismatch class as the fixed back-face −0.001 = −100 m
+    // bug). Half the boom radius sits the tube tangent to the blanket surface.
+    const zNudge = boomOD * 0.6; // ≈ 1.2 cm in metres, M-scaled (~1.2e-7 scene units)
+
     // ── Two edge booms — run along X (roll-out dir) at both long edges (±Y) ──
     // Cylinder default axis is Y; rotate Z by 90° so it lies along local X.
     const boomGeo = new THREE.CylinderGeometry(boomOD / 2, boomOD / 2, rosaW, 6);
@@ -1755,7 +1774,7 @@ export class PlayerSatellite extends THREE.Group {
       boom.rotation.z = Math.PI / 2;           // Y-axis → X-axis (blanket length)
       // Center at half-width so it spans local x ∈ [0, rosaW]; for the -X wing
       // the wrapper geometry runs x ∈ [-rosaW, 0], so mirror via sign.
-      boom.position.set(sign * rosaW / 2, edgeY, 0.0008);
+      boom.position.set(sign * rosaW / 2, edgeY, zNudge);
       boom.name = `ROSA_Boom_${wing === 1 ? '0' : '180'}deg_${edgeY > 0 ? 'A' : 'B'}`;
       boom.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
       wrapper.add(boom);
@@ -1764,7 +1783,7 @@ export class PlayerSatellite extends THREE.Group {
     // ── Tip spreader bar — at the outboard edge (x = ±rosaW), spans width (Y) ──
     const sprGeo = new THREE.CylinderGeometry(sprOD / 2, sprOD / 2, rosaL, 6);
     const spreader = new THREE.Mesh(sprGeo, boomMat);
-    spreader.position.set(sign * rosaW, 0, 0.0008); // rides to deployed tip via scale.x
+    spreader.position.set(sign * rosaW, 0, zNudge); // rides to deployed tip via scale.x (M-scaled nudge)
     spreader.name = `ROSA_Spreader_${wing === 1 ? '0' : '180'}deg`;
     spreader.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
     wrapper.add(spreader);
@@ -1781,7 +1800,7 @@ export class PlayerSatellite extends THREE.Group {
     const curls = [];
     for (const edgeZ of [rosaL / 2, -rosaL / 2]) {
       const curl = new THREE.Mesh(curlGeo, boomMat);
-      curl.position.set(sign * (brkLen + drumR * 0.4), 0, sign > 0 ? edgeZ : -edgeZ);
+      curl.position.set(sign * rootX, 0, sign > 0 ? edgeZ : -edgeZ);
       // Mirror the sweep direction for the -X wing so both curls open outboard.
       curl.userData.baseRotZ = sign > 0 ? 0 : Math.PI;
       curl.rotation.z = curl.userData.baseRotZ;
@@ -1805,7 +1824,7 @@ export class PlayerSatellite extends THREE.Group {
     //    axis (rotation.y) reads as the blanket reeling on/off the spool. ──
     const spoolPivot = new THREE.Group();
     spoolPivot.rotation.x = Math.PI / 2;                 // long axis → barrel Z
-    spoolPivot.position.set(sign * (brkLen + drumR * 0.4), 0, 0);
+    spoolPivot.position.set(sign * rootX, 0, 0);
     spoolPivot.name = `ROSA_Spool_${wing === 1 ? '0' : '180'}deg`;
     pivot.add(spoolPivot);
 
@@ -2574,14 +2593,17 @@ export class PlayerSatellite extends THREE.Group {
     let frac = peak > 0 ? rate / peak : 0;
     frac = Math.max(this._rosaGlowIdleFloor || 0, Math.min(1, frac));
 
-    // Dim deep-blue substrate (0.10) → bright energized cyan-teal (0.55), plus a
-    // subtle breathing ripple so even a steady array shimmers.
+    // Dim royal blue (0.12) → bright, vivid royal blue (0.78), plus a subtle
+    // breathing ripple so even a steady array shimmers.
     const breathe = 0.04 * (0.5 + 0.5 * Math.sin(this._rosaGlowClock * 2.0));
-    const intensity = 0.10 + 0.45 * frac + breathe * frac;
-    // Hue lerp: cold indigo (0x0b1030) → power cyan (0x0e4a66).
-    const r = 0x0b + Math.round((0x0e - 0x0b) * frac);
-    const g = 0x10 + Math.round((0x4a - 0x10) * frac);
-    const b = 0x30 + Math.round((0x66 - 0x30) * frac);
+    const intensity = 0.12 + 0.66 * frac + breathe * frac;
+    // Hue lerp: deep royal blue (0x101e64) → bright royal blue (0x2a55ff). Both
+    // ends are blue-dominant (high B, low-moderate G, minimal R) so the wings read
+    // royal blue at ANY power level — richer/deeper than the old cyan-teal — and
+    // just get brighter and more vivid toward full power.
+    const r = 0x10 + Math.round((0x2a - 0x10) * frac);
+    const g = 0x1e + Math.round((0x55 - 0x1e) * frac);
+    const b = 0x64 + Math.round((0xff - 0x64) * frac);
     const hex = (r << 16) | (g << 8) | b;
     for (const mat of this._rosaFrontMats) {
       mat.emissive.setHex(hex);

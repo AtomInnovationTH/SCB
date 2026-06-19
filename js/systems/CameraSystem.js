@@ -91,11 +91,26 @@ export class CameraSystem {
     /** @type {THREE.PointLight|null} */
     this._fillLight = null;
     if (scene) {
-      // Color: slightly warm white (spacecraft instrument lighting feel)
-      // Intensity: 0.35 — subtle fill, prevents harsh shadows without washing out metallic surfaces
-      // Distance: 0.001 scene units ≈ 100 m — only lights nearby objects
-      // Decay: 2 — physically correct inverse-square falloff
-      this._fillLight = new THREE.PointLight(0xfff5e0, 0.35, 0.001, 2);
+      // Color: slightly warm white (spacecraft instrument lighting feel).
+      //
+      // UNIT-SCALE NOTE: the scene is 1 unit = 100 km, so the camera-to-ship
+      // distance is tiny in scene units (a 15 m chase cam ≈ 0.00015). three.js
+      // attenuation is `1 / max(pow(d, decay), 0.01)` — with decay=2 the
+      // `pow(0.00015, 2)=2.25e-8` term is always below the 0.01 floor, so the
+      // inverse-square pinned at its MAX (1/0.01 = 100×). That turned a nominal
+      // 0.35 fill into an effective ~35× frontal flood (vs the sun's 2.0),
+      // flattening the ship into a washed-out, shapeless read and making the
+      // brightness lurch as the cutoff window faded between ~30–100 m of zoom.
+      // (Same class of bug as the −0.001=−100 m panel offset.)
+      //
+      // Fix: decay=0 (no inverse-square — the 100 km scale makes physical
+      // falloff meaningless here) gives a constant base of 1, and a wide
+      // cutoff (0.01 units ≈ 1 km) keeps the window ≈1 across the whole
+      // gameplay zoom band so the fill no longer changes with zoom. Effective
+      // intensity is now ~0.5, a genuine subtle fill. Night-side/eclipse
+      // readability that used to lean on the accidental flood is restored via
+      // the ambient + hemisphere lift in SceneManager/SunLight.
+      this._fillLight = new THREE.PointLight(0xfff5e0, 0.5, 0.01, 0);
       this._fillLight.name = 'cameraFillLight';
       scene.add(this._fillLight);
     }

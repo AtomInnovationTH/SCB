@@ -46,7 +46,15 @@ const DEBRIS_TYPES = {
   rocketBody:   { weight: 0.12, sizeMin: 5, sizeMax: 11, massMin: 500, massMax: 5000, tumbleMin: 1, tumbleMax: 20, shape: 'cylinder', aspect: 3.5 },
   defunctSat:   { weight: 0.16, sizeMin: 1, sizeMax: 8, massMin: 50, massMax: 2000, tumbleMin: 2, tumbleMax: 30, shape: 'box', aspect: 1.6 },
   missionDebris: { weight: 0.12, sizeMin: 0.05, sizeMax: 0.5, massMin: 0.001, massMax: 2, tumbleMin: 5, tumbleMax: 120, shape: 'sphere', aspect: 1.0 },
+  // cubesat — small WHOLE microsat (panelled box), 0.1–0.5 m, 1–12 kg, the
+  // heaviest whole thing a Mother net can take. Low tumble (intact body),
+  // net-catchable, the M1 graduation catch (welcome #7) and sprinkled rarely
+  // into the field. Registered so every type-keyed map resolves it.
+  cubesat:      { weight: 0.02, sizeMin: 0.1, sizeMax: 0.5, massMin: 1, massMax: 10, tumbleMin: 1, tumbleMax: 15, shape: 'box', aspect: 1.1 },
 };
+
+/** 1 metre expressed in scene units (1 km = SCENE_SCALE scene units). */
+const METRE_SCENE = Constants.SCENE_SCALE / 1000;
 
 /** Material types for debris */
 const MATERIALS = ['aluminum', 'titanium', 'composite', 'mli_mylar', 'solar_cell', 'steel'];
@@ -62,8 +70,13 @@ const MATERIALS = ['aluminum', 'titanium', 'composite', 'mli_mylar', 'solar_cell
 // composite. Gold multi-layer insulation (MLI) and blue photovoltaic cells
 // only appear on (or shed from) satellites, and even then as a minority of the
 // surface. We therefore weight material choice BY debris type:
-//   • fragment      — explosion shards: bare aluminium, titanium, charred
-//                     composite. No intact gold foil / solar panels.
+//   • fragment      — explosion shards: mostly bare aluminium, titanium,
+//                     charred composite. A SMALL minority (~6% each) are shed
+//                     gold-MLI / blue-solar-cell shards: a shed PV/foil scrap
+//                     reads as junk, not an intact panel. Kept small so the
+//                     field is not "gold/blue soup". These slots also let the
+//                     welcome spawn SELECT a gold/blue plate candidate (it
+//                     reuses a debris' existing mesh-slot and cannot rebind).
 //   • rocketBody    — large aluminium/titanium stages, some composite skirts.
 //   • defunctSat    — the "variety" piece: aluminium bus + a real chance of
 //                     gold MLI and blue solar arrays + composite panels.
@@ -71,10 +84,13 @@ const MATERIALS = ['aluminum', 'titanium', 'composite', 'mli_mylar', 'solar_cell
 //                     cell offcuts): a broad mix incl. occasional gold/blue.
 // Weights are relative (need not sum to 1); picked via weightedMaterial().
 const MATERIAL_WEIGHTS_BY_TYPE = {
-  fragment:      { aluminum: 0.38, titanium: 0.22, composite: 0.35, steel: 0.05 },
+  fragment:      { aluminum: 0.36, titanium: 0.21, composite: 0.31, steel: 0.05, mli_mylar: 0.06, solar_cell: 0.06 },
   rocketBody:    { aluminum: 0.45, titanium: 0.25, composite: 0.12, steel: 0.18 },
   defunctSat:    { aluminum: 0.30, titanium: 0.12, composite: 0.18, mli_mylar: 0.16, solar_cell: 0.14, steel: 0.10 },
   missionDebris: { aluminum: 0.30, titanium: 0.16, composite: 0.30, mli_mylar: 0.14, solar_cell: 0.10 },
+  // cubesat — a small intact satellite: aluminium bus dominant, real chance of
+  // blue solar cells + a little gold MLI (it has functioning panels/insulation).
+  cubesat:       { aluminum: 0.42, composite: 0.18, titanium: 0.08, solar_cell: 0.20, mli_mylar: 0.12 },
 };
 
 /**
@@ -190,6 +206,7 @@ const PROC_TYPE_TO_CATALOG = {
   rocketBody:    'rocket_body',
   defunctSat:    'inactive',
   missionDebris: 'debris',
+  cubesat:       'inactive',
 };
 
 /** Tracking probability by debris type (real-world catalog coverage) */
@@ -198,6 +215,7 @@ const TRACKING_PROB = {
   rocketBody: 0.95,    // Large, well-cataloged
   defunctSat: 0.80,    // Medium-large, mostly tracked
   missionDebris: 0.60, // Small operational debris
+  cubesat: 0.70,       // Small but a tracked whole satellite
 };
 
 /** Welcome field debris — spawned near player on first ORBITAL_VIEW for immediate gameplay.
@@ -208,30 +226,48 @@ const TRACKING_PROB = {
  *     mission 1, while still requiring autopilot to reach the deepest one. */
 const WELCOME_FIELD = [
   // Reward-first onboarding spine (.kilo/plans/new-player-onboarding-flow.md
-  // Phase 2). The first three pieces are tuned for VISIBILITY + a value ramp +
-  // a deliberate range wall, NOT random "trivial" fragments:
-  //   #1 TEASE — physically LARGE so it reads as a glinting solar panel right
-  //      in front of the mother (a 0.4 m fragment was a ~10 px speck). Low
-  //      value (solar_cell), in net range. defunctSat/box ≈ flat panel.
-  //   #2 second easy catch — recognizable, in range, slightly higher value.
-  //   #3 RANGE WALL — clearly beyond NET_LOCK_RANGE_M so autolock goes silent +
-  //      yellow OUT OF RANGE, teaching Autopilot (A).
-  // Offsets are trueAnomaly arc offsets (≈ metres; see header note ~line 205).
-  // #1 ~25–35 m ahead (≈35–50 m from the ~15 m-trailing chase camera).
-  { types: ['defunctSat'], material: 'solar_cell', sizeM: 3.0, lowValue: true,
-    massMin: 8,   massMax: 14,  offsetMin: 0.0000038, offsetMax: 0.0000052 }, // ~25–35m TEASE
-  // #2 ~55–75 m, in net range (NET_LOCK_RANGE_M = 90 m), slightly more value.
-  { types: ['defunctSat'], sizeM: 2.2,
-    massMin: 20,  massMax: 30,  offsetMin: 0.0000082, offsetMax: 0.0000112 }, // ~55–75m
-  // #3 ~130–180 m — RANGE WALL (well beyond 90 m net-lock).
-  { types: ['defunctSat', 'missionDebris'],
-    massMin: 15,  massMax: 25,  offsetMin: 0.0000195, offsetMax: 0.0000270 }, // ~130–180m RANGE WALL
-  // Medium tier — arm deploy range
-  { types: ['fragment', 'missionDebris'],  massMin: 10,  massMax: 20,  offsetMin: 0.0000300, offsetMax: 0.0000600 }, // ~200–400m
-  { types: ['missionDebris'],              massMin: 25,  massMax: 35,  offsetMin: 0.0000600, offsetMax: 0.0001000 }, // ~400–670m
-  // Far tier — require autopilot approach (all ≤1.5 km on first mission)
-  { types: ['defunctSat', 'missionDebris'], massMin: 60, massMax: 100, offsetMin: 0.0001000, offsetMax: 0.0001600 }, // ~670–1075m
-  { types: ['defunctSat'],                 massMin: 120, massMax: 180, offsetMin: 0.0001600, offsetMax: 0.0002200 }, // ~1075–1475m
+  // Phase 2). Mission 1 is NET-ONLY (every guided beat captures with the Mother
+  // net; there is no Daughter beat), and the Mother net rejects anything over
+  // LASSO_MAX_CAPTURE_MASS (10 kg). So EVERY welcome piece is authored ≤ 10 kg.
+  //
+  // APPEARANCE: all pieces are `fragment` (irregular icosahedron) so they read
+  // as LOW-VALUE space debris, not intact (high-value) satellites. Candidate
+  // selection also prefers fragment-shaped debris because the spawn reuses a
+  // debris' existing instanced-mesh slot (the rendered shape is the candidate's,
+  // not the spec's). `sizeM` scales them up so junk chunks are still visible.
+  //
+  // PLACEMENT (mother-local frame): #1 dead-centre ahead, #2 off to one side,
+  // both PINNED (local-frame, single source of truth = _scenePosition) and in
+  // net range so the two guided net catches are guaranteed. #3 is the RANGE WALL
+  // — ahead but beyond NET_LOCK_RANGE_M (90 m) so the reticle flips OUT OF RANGE
+  // and teaches Autopilot (A); it is a FREE co-orbital orbit (the approach
+  // target), not pinned. `pin:true` pieces use fwdM/latM (metres, local frame);
+  // the rest use trueAnomaly offsetMin/Max (≈ metres along-track).
+  // M1 cluster (.kilo/plans/onboarding-tease-2-lateral-tune.md). Physical
+  // hierarchy: every fragment renders sub-metre (sizeM ≈ radius, render ≈ 1.9×)
+  // so NONE renders larger than the ~2 m mother; the cubesat #7 is the small,
+  // dense, valuable "graduation" catch. Reward climbs 1→7 via mass + lowValue
+  // (kept only on #1–#2) so early catches are cheap and later ones pay more —
+  // progression by value, not strictly by size. All ≤10 kg (net-only on M1).
+  //
+  // appear/* hints drive Phase-2 candidate selection (which mesh-slot to reuse,
+  // since spawn cannot rebind shape/material): plate = flat panel-shard variant,
+  // material = the rendered colour (gold mli_mylar foil, blue solar_cell cell).
+  { types: ['fragment'], sizeM: 0.18, lowValue: true, appearMaterial: 'aluminum', appearPlate: false,
+    massMin: 3, massMax: 3,  pin: true, fwdM: 30, latM: 0 },   // #1 bolt/bracket chunk — dead centre, ~0.34 m
+  { types: ['fragment'], sizeM: 0.30, lowValue: true, appearMaterial: 'mli_mylar', appearPlate: true,
+    massMin: 4, massMax: 4,  pin: true, fwdM: 65, latM: 25 },  // #2 MLI-foil scrap (gold flat) — right, in range (≈69 m)
+  { types: ['fragment'], sizeM: 0.45, appearMaterial: 'solar_cell', appearPlate: true,
+    massMin: 5, massMax: 5,  offsetMin: 0.0000195, offsetMax: 0.0000270 }, // #3 RANGE WALL — solar-cell shard ~130–180 m
+  // Medium/far tier — still net-only on M1, so ≤10 kg; orbital placement.
+  { types: ['fragment'], sizeM: 0.55, appearMaterial: 'aluminum', appearPlate: false,
+    massMin: 6, massMax: 6,  offsetMin: 0.0000300, offsetMax: 0.0000600 }, // #4 aluminium fragment ~200–400m
+  { types: ['fragment'], sizeM: 0.95, appearMaterial: 'solar_cell', appearPlate: true,
+    massMin: 6, massMax: 6,  offsetMin: 0.0000600, offsetMax: 0.0001000 }, // #5 large thin solar-array section ~400–670m
+  { types: ['fragment'], sizeM: 0.70, appearMaterial: 'mli_mylar', appearPlate: true,
+    massMin: 8, massMax: 8,  offsetMin: 0.0001000, offsetMax: 0.0001600 }, // #6 foil + strut bundle ~670–1075m
+  { types: ['cubesat'], sizeM: 0.30,
+    massMin: 10, massMax: 10, offsetMin: 0.0001600, offsetMax: 0.0002200 }, // #7 cubesat (small whole microsat) ~1075–1475m
 ];
 
 /** Altitude bands (km above surface) with percentage weights.
@@ -455,6 +491,9 @@ export class DebrisField {
 
     /** @type {boolean} Welcome field already spawned this game */
     this._welcomeFieldSpawned = false;
+    /** @type {Set<number|string>} ids of onboarding tease pieces pinned ahead of
+     *  the mother (orbit re-synced each frame) until each is caught. */
+    this._onboardingPinIds = new Set();
 
     // ST-4.C: Mission profile state
     /** @type {object|null} Current mission profile from Constants.MISSIONS.PROFILES */
@@ -502,6 +541,8 @@ export class DebrisField {
       this._currentMissionNumber = data.missionNumber;
       // Reset welcome field flag so new field can spawn for this mission
       this._welcomeFieldSpawned = false;
+      // Drop any stale onboarding tease pin from a prior mission/run.
+      this._clearOnboardingPin();
       // 2026-05-15 polish (urgent): also reset the mission-1 hide flag so
       // the per-frame enforcement runs again if we somehow re-enter
       // mission 1 (e.g. retry / replay path).
@@ -544,7 +585,27 @@ export class DebrisField {
       this._currentMissionProfile = null;   // ST-4.C
       this._currentMissionNumber = 1;       // ST-4.C
       for (const d of this.debrisList) d.welcomeSpawn = false;
+      this._clearOnboardingPin();
     });
+
+    // Onboarding tease pin release: hand a curated piece back to normal
+    // co-orbital propagation once it leaves play. Each pinned piece (#1, #2) is
+    // released independently by id, so catching #1 doesn't unpin #2. Released on:
+    //  • ARM_CAPTURED — fires at the first REELING frame (Mother-net lasso path
+    //    emits it too), so the authoritative arm pin owns the catch, not us.
+    //  • DEBRIS_REMOVED — the reliable "tease consumed" signal (lasso catch via
+    //    removeDebris, fragmentation, web de-orbit); the lasso path the tease
+    //    trains never emits DEBRIS_CAPTURED.
+    //  • ONBOARDING_COMPLETE — player skipped/finished the guided flow (clear all).
+    const _releaseIfMatch = (d) => {
+      const id = d?.debrisId ?? d?.id;
+      if (id != null && this._onboardingPinIds.has(id)) this._clearOnboardingPin(id);
+    };
+    if (Events.ARM_CAPTURED) eventBus.on(Events.ARM_CAPTURED, _releaseIfMatch);
+    if (Events.DEBRIS_REMOVED) eventBus.on(Events.DEBRIS_REMOVED, _releaseIfMatch);
+    if (Events.ONBOARDING_COMPLETE) {
+      eventBus.on(Events.ONBOARDING_COMPLETE, () => this._clearOnboardingPin());
+    }
 
     console.log(`[DebrisField] ${this.debrisList.length} interactive + ${BACKGROUND_COUNT} background debris`);
   }
@@ -633,6 +694,11 @@ export class DebrisField {
     if (data.moidBadge === undefined) data.moidBadge = null;
     // UX-3 #9: Hidden until scanned
     if (data.discovered === undefined) data.discovered = false;
+    // Onboarding tease pin fields — keep the same hidden class as procedural
+    // debris so the per-frame update read stays monomorphic.
+    if (data._onboardingPinned === undefined) data._onboardingPinned = false;
+    if (data._onboardingPinFwd === undefined) data._onboardingPinFwd = 0;
+    if (data._onboardingPinLat === undefined) data._onboardingPinLat = 0;
   }
 
   /** @private Create a single debris data object */
@@ -757,6 +823,11 @@ export class DebrisField {
       moidBadge: null,
       // UX-3 #9: Hidden until scanned — staggered reveal
       discovered: false,
+      // Onboarding tease pin (init on every piece so all debris share one
+      // hidden class). Only the curated M1 tease piece ever flips these on.
+      _onboardingPinned: false,
+      _onboardingPinFwd: 0,
+      _onboardingPinLat: 0,
     };
   }
 
@@ -1375,6 +1446,29 @@ export class DebrisField {
 
     // --- Update interactive debris ---
     const maxVisualRad = Constants.DEBRIS_MAX_VISUAL_TUMBLE_DEG_S * Math.PI / 180;
+
+    // Mother local-frame basis for the onboarding tease pin (forward = prograde,
+    // right = cross-track / horizontal). Computed once per frame; consumed by
+    // _updateInstanceTransform to place pinned pieces (#1 dead-centre, #2 off to
+    // one side). Cleared when no player orbit so the pin branch falls back safely.
+    this._motherFwd = null;
+    this._motherRight = null;
+    if (playerPos && playerOrbit && this._onboardingPinIds.size > 0) {
+      const pc = orbitToSceneCartesian(playerOrbit);
+      const v = pc.velocity, p = playerPos;
+      let fx = v.x, fy = v.y, fz = v.z;
+      let fl = Math.hypot(fx, fy, fz) || 1; fx /= fl; fy /= fl; fz /= fl;
+      let rx = p.x, ry = p.y, rz = p.z;                 // radial (away from Earth)
+      let rl = Math.hypot(rx, ry, rz) || 1; rx /= rl; ry /= rl; rz /= rl;
+      // right = forward × radial  (horizontal, perpendicular to both)
+      let gx = fy * rz - fz * ry;
+      let gy = fz * rx - fx * rz;
+      let gz = fx * ry - fy * rx;
+      const gl = Math.hypot(gx, gy, gz) || 1; gx /= gl; gy /= gl; gz /= gl;
+      this._motherFwd = { x: fx, y: fy, z: fz };
+      this._motherRight = { x: gx, y: gy, z: gz };
+    }
+
     for (const debris of this.debrisList) {
       if (!debris.alive) continue;
 
@@ -1416,32 +1510,42 @@ export class DebrisField {
 
       // Propagate orbit (re-use pre-allocated temp instead of spread)
       const o = debris.orbit;
-      _tmpKmOrbit.semiMajorAxis = o.semiMajorAxis / Constants.SCENE_SCALE;
-      _tmpKmOrbit.eccentricity = o.eccentricity;
-      _tmpKmOrbit.inclination = o.inclination;
-      _tmpKmOrbit.raan = o.raan;
-      _tmpKmOrbit.argPerigee = o.argPerigee;
-      _tmpKmOrbit.trueAnomaly = o.trueAnomaly;
-      _tmpKmOrbit.meanMotion = o.meanMotion;
-      propagateOrbit(_tmpKmOrbit, gameDt);
-      o.trueAnomaly = _tmpKmOrbit.trueAnomaly;
-      o.meanMotion = _tmpKmOrbit.meanMotion;
+      if (debris._onboardingPinned) {
+        // ── Onboarding tease pin ────────────────────────────────────────────
+        // Skip propagation: this piece is held at a fixed offset in the mother's
+        // LOCAL frame (forward + lateral), written to _scenePosition in
+        // _updateInstanceTransform below using the per-frame mother basis. That
+        // (not the orbit) is the single source of truth all consumers read, so
+        // the piece is stable, selectable, dead-ahead/off-to-the-side, and never
+        // drifts. The orbit is left as a co-orbital fallback only.
+      } else {
+        _tmpKmOrbit.semiMajorAxis = o.semiMajorAxis / Constants.SCENE_SCALE;
+        _tmpKmOrbit.eccentricity = o.eccentricity;
+        _tmpKmOrbit.inclination = o.inclination;
+        _tmpKmOrbit.raan = o.raan;
+        _tmpKmOrbit.argPerigee = o.argPerigee;
+        _tmpKmOrbit.trueAnomaly = o.trueAnomaly;
+        _tmpKmOrbit.meanMotion = o.meanMotion;
+        propagateOrbit(_tmpKmOrbit, gameDt);
+        o.trueAnomaly = _tmpKmOrbit.trueAnomaly;
+        o.meanMotion = _tmpKmOrbit.meanMotion;
 
-      // Atmospheric drag — matches PlayerSatellite so co-orbiting objects
-      // stay on the same trajectory (prevents mother/debris drift that hid
-      // debris from the ARM_PILOT camera via LOD culling).
-      const debrisAltKm = _tmpKmOrbit.semiMajorAxis - Constants.EARTH_RADIUS_KM;
-      if (debrisAltKm < 600) {
-        const debrisVel = orbitalVelocity(
-          _tmpKmOrbit.semiMajorAxis, _tmpKmOrbit.semiMajorAxis, Constants.MU_EARTH
-        );
-        // Cross-section ≈ sizeMeter², mass from debris spec (floor 1 kg)
-        const debrisArea = debris.sizeMeter * debris.sizeMeter;
-        const debrisMass = Math.max(debris.mass || 1, 1);
-        const dragDecel = atmosphericDrag(debrisAltKm, debrisVel, debrisArea, debrisMass);
-        const dvDrag = dragDecel * gameDt;
-        if (debrisVel > 0) {
-          o.semiMajorAxis *= (1 - 2 * dvDrag / debrisVel);
+        // Atmospheric drag — matches PlayerSatellite so co-orbiting objects
+        // stay on the same trajectory (prevents mother/debris drift that hid
+        // debris from the ARM_PILOT camera via LOD culling).
+        const debrisAltKm = _tmpKmOrbit.semiMajorAxis - Constants.EARTH_RADIUS_KM;
+        if (debrisAltKm < 600) {
+          const debrisVel = orbitalVelocity(
+            _tmpKmOrbit.semiMajorAxis, _tmpKmOrbit.semiMajorAxis, Constants.MU_EARTH
+          );
+          // Cross-section ≈ sizeMeter², mass from debris spec (floor 1 kg)
+          const debrisArea = debris.sizeMeter * debris.sizeMeter;
+          const debrisMass = Math.max(debris.mass || 1, 1);
+          const dragDecel = atmosphericDrag(debrisAltKm, debrisVel, debrisArea, debrisMass);
+          const dvDrag = dragDecel * gameDt;
+          if (debrisVel > 0) {
+            o.semiMajorAxis *= (1 - 2 * dvDrag / debrisVel);
+          }
         }
       }
 
@@ -1649,7 +1753,21 @@ export class DebrisField {
     const _captorState = _captor && _captor.state;
     const _pinToArm = !_armPinned && _captor && _captor.position &&
       _captorState && _captorState !== 'GRAPPLED' && _captorState !== 'NETTING';
-    if (_armPinned) {
+    // Onboarding tease pin (local frame): place the piece at a fixed
+    // forward + lateral offset from the mother so it reads dead-centre (#1) or
+    // off-to-one-side (#2) and is selectable/in-range. This _scenePosition is
+    // authoritative (TargetSelector/AutoLock/Lasso/reticle all read it). An arm
+    // capture (ARM_CAPTURED) releases the pin first, so _armPinned wins after.
+    const _onboardPinned = !!(debris._onboardingPinned && playerPos &&
+      this._motherFwd && this._motherRight);
+    if (_onboardPinned) {
+      const f = this._motherFwd, r = this._motherRight;
+      const fwd = debris._onboardingPinFwd || 0;
+      const lat = debris._onboardingPinLat || 0;
+      px = playerPos.x + f.x * fwd + r.x * lat;
+      py = playerPos.y + f.y * fwd + r.y * lat;
+      pz = playerPos.z + f.z * fwd + r.z * lat;
+    } else if (_armPinned) {
       px = debris._armPinPos.x;
       py = debris._armPinPos.y;
       pz = debris._armPinPos.z;
@@ -1892,6 +2010,27 @@ export class DebrisField {
 
 
   /**
+   * Release onboarding tease pins, handing the curated piece(s) back to normal
+   * co-orbital propagation. Idempotent. Because each orbit was kept synced to
+   * playerOrbit + offset every frame, release is seamless (no snap).
+   * @param {number|string} [id] - release just this piece; omit to release all.
+   * @private
+   */
+  _clearOnboardingPin(id = null) {
+    const unpin = (pid) => {
+      const d = this.debrisMap.get(pid);
+      if (d) { d._onboardingPinned = false; d._onboardingPinFwd = 0; d._onboardingPinLat = 0; }
+    };
+    if (id != null) {
+      unpin(id);
+      this._onboardingPinIds.delete(id);
+      return;
+    }
+    for (const pid of this._onboardingPinIds) unpin(pid);
+    this._onboardingPinIds.clear();
+  }
+
+  /**
    * Spawn welcome field debris near the player for immediate first-game engagement.
    * Repositions far-away debris to nearby co-orbital positions.
    * ST-4.C: Now respects current mission profile for cluster count, hydrazine,
@@ -1911,12 +2050,35 @@ export class DebrisField {
     // introduced in ST-4.C that reduced M1 to a single debris item.
     const fieldToSpawn = WELCOME_FIELD;
 
-    // Collect candidates: alive debris not already special-tagged.
-    // Prefer debris in different orbit bands (farThreshold ≈ 3km altitude diff).
-    // Since we overwrite all orbital elements, any debris works — prefer far
-    // ones to avoid disrupting any coincidentally nearby objects.
+    // Collect candidates: alive debris not already special-tagged. Prefer debris
+    // in different orbit bands (farThreshold ≈ 3km altitude diff) so we don't
+    // disrupt coincidentally-nearby objects. The welcome spawn reuses a debris'
+    // existing instanced-mesh slot (it does NOT rebind geometry), so the RENDERED
+    // shape AND material/colour come from WHICH candidate is selected
+    // (_meshKey = type:material[:id%N]). That's why selection drives appearance:
+    //   - APPEARANCE BY SELECTION: a row wanting gold MLI foil (#2) or a blue
+    //     solar-cell panel shard (#3/#5) must match a candidate already in that
+    //     material slot + flat plate variant (spec.appearMaterial/appearPlate).
+    //   - SHAPE BY SELECTION: row #7 (cubesat) must match a `cubesat`-type
+    //     candidate so it renders as a small whole microsat, not a junk chunk.
+    // See the bucketing + scoring just below.
     const farThreshold = 0.03; // ~3km in scene units
-    const farCandidates = [];
+    const N = Constants.DEBRIS_FRAGMENT_VARIANTS || 7;
+    // Far-band candidate buckets by visual class. `fragment` = irregular junk
+    // chunk (the dominant cluster look). `cubesat` = small whole microsat box
+    // (row #7's graduation catch). `farOther` (defunctSat/rocketBody/…) read as
+    // intact high-value bodies — wrong for a junk cluster, so they're only a
+    // last-resort fallback. Near-band debris is the final fallback.
+    //
+    // Phase-2 fix: NO early-break. We scan the whole alive list once (≤800,
+    // one-time at spawn — negligible) so gold-MLI / blue-solar-cell plate
+    // fragments and cubesats that sit LATER in debrisList are still reachable.
+    // The old `farFragments.length >= 7` break grabbed the first 7 far fragments
+    // (≈12% chance of containing a gold plate), starving the matcher and making
+    // #2/#3/#5 fall back to generic grey chunks.
+    const farFragments = [];
+    const farCubesats = [];
+    const farOther = [];
     const fallbackCandidates = [];
 
     for (const debris of this.debrisList) {
@@ -1924,55 +2086,127 @@ export class DebrisField {
       if (debris.tutorialSpawn || debris.welcomeSpawn) continue;
       const altDiff = Math.abs(debris.orbit.semiMajorAxis - playerOrbit.semiMajorAxis);
       if (altDiff > farThreshold) {
-        farCandidates.push(debris);
+        if (debris.type === 'fragment') farFragments.push(debris);
+        else if (debris.type === 'cubesat') farCubesats.push(debris);
+        else farOther.push(debris);
       } else {
         fallbackCandidates.push(debris);
       }
-      if (farCandidates.length >= fieldToSpawn.length) break; // enough far candidates
     }
 
-    // Prefer far debris; fall back to any if not enough
-    const candidates = farCandidates.length >= fieldToSpawn.length
-      ? farCandidates
-      : [...farCandidates, ...fallbackCandidates];
+    // Per-row candidate assignment. The welcome spawn reuses a candidate's
+    // existing instanced-mesh slot (it can't rebind), so the RENDERED shape +
+    // material/colour come from WHICH candidate we pick. Score the still-unused
+    // far candidates per spec:
+    //   +4  type match (spec's desired type — shape is the dominant visual, so
+    //       it outranks material; keeps fragment rows off cubesats and #7 off
+    //       fragments whenever a cubesat exists)
+    //   +2  material match (spec.appearMaterial → rendered colour)
+    //   +1  plate-variant match (spec.appearPlate → flat panel-shard look)
+    // Best score wins; ties keep placed-order (stable). We scan fragments +
+    // cubesats together so a desired-type match can win across buckets, then
+    // fall back to any far fragment → far cubesat → far other → near so the row
+    // still spawns (spawn must never under-fill).
+    const usedIds = new Set();
+    const fragVariant = (d) => (typeof d.id === 'number' ? (d.id >>> 0) % N : 0);
+    const isPlate = (d) => DebrisWireframe.isPlateVariant(fragVariant(d));
+    // The desired type for a spec is the first entry of spec.types (fragment for
+    // #1–#6, cubesat for #7).
+    const desiredType = (spec) => (Array.isArray(spec.types) && spec.types.length ? spec.types[0] : null);
+    const scorePool = [...farFragments, ...farCubesats];
+    const pickFar = (spec) => {
+      const wantType = desiredType(spec);
+      let best = null;
+      let bestScore = -1;
+      for (const d of scorePool) {
+        if (usedIds.has(d.id)) continue;
+        let score = 0;
+        if (wantType && d.type === wantType) score += 4;
+        if (spec.appearMaterial && d.material === spec.appearMaterial) score += 2;
+        // Plate test only meaningful for fragment variants.
+        if (typeof spec.appearPlate === 'boolean' && d.type === 'fragment' &&
+            isPlate(d) === spec.appearPlate) score += 1;
+        if (score > bestScore) { bestScore = score; best = d; }
+      }
+      return best;
+    };
+    const pickAny = (pool) => {
+      for (const d of pool) {
+        if (!usedIds.has(d.id)) return d;
+      }
+      return null;
+    };
+
+    // assigned[i] = the debris that will realise spec i (null ⇒ no candidate).
+    const assigned = new Array(fieldToSpawn.length).fill(null);
+    for (let i = 0; i < fieldToSpawn.length; i++) {
+      const spec = fieldToSpawn[i];
+      // pickFar already scans the combined fragment+cubesat scorePool and returns
+      // any unused candidate (score ≥ 0), so it only returns null when that pool
+      // is exhausted/empty — fall straight through to far-other then near.
+      let chosen = pickFar(spec) || pickAny(farOther) || pickAny(fallbackCandidates);
+      if (!chosen) break; // ran out of candidates entirely
+      usedIds.add(chosen.id);
+      assigned[i] = chosen;
+    }
 
     let placed = 0;
     let untrackedCount = 0;  // ST-4.C: track how many debris set as untracked
 
     for (let i = 0; i < fieldToSpawn.length && placed < fieldToSpawn.length; i++) {
       const spec = fieldToSpawn[i];
-      if (placed >= candidates.length) break;
+      const debris = assigned[i];
+      if (!debris) break;
 
-      const debris = candidates[placed];
-
-      // Clone player orbital elements with trueAnomaly offset
-      const sign = (i % 2 === 0) ? 1 : -1;
-      const offset = sign * (spec.offsetMin + Math.random() * (spec.offsetMax - spec.offsetMin));
+      // Co-orbital elements (shared with the mother). Forward placement differs
+      // by piece: PINNED pieces (#1, #2) are positioned in the mother's LOCAL
+      // frame each frame (see the pin branch in update()/_updateInstanceTransform)
+      // — their orbit is only a sane fallback. The rest use a trueAnomaly offset.
+      const isPin = !!spec.pin;
+      // Guided pieces sit AHEAD (prograde, in AutoLock's forward arc). Spread
+      // pieces (#4+) alternate ahead/behind for variety.
+      const sign = (i < 3) ? 1 : ((i % 2 === 0) ? 1 : -1);
 
       debris.orbit.semiMajorAxis = playerOrbit.semiMajorAxis;
       debris.orbit.eccentricity = playerOrbit.eccentricity;
       debris.orbit.inclination = playerOrbit.inclination;
       debris.orbit.raan = playerOrbit.raan;
       debris.orbit.argPerigee = playerOrbit.argPerigee;
-      // 2026-05-17 fix (TRACKED TARGETS empty, off-by-one-frame bug):
-      // The debris is spawned MID-FRAME after player.update has already
-      // propagated player.trueAnomaly by n×gameDt. Right after this
-      // assignment, the debris propagation loop at line ~1083 will advance
-      // debris by ANOTHER n×gameDt — leaving it that much ahead of the
-      // player permanently. Pre-compensate by subtracting one frame's
-      // propagation step so the post-propagation trueAnomaly matches
-      // playerOrbit + offset. Diagnostic showed dNu ≈ 0.00115 rad across
-      // all 7 welcome debris (= n × gameDt for a ~100 ms spawn frame),
-      // giving a 7+ km arc offset that culled them from the M1 2 km HUD
-      // filter.
-      const _nApprox = playerOrbit.meanMotion ||
-        Math.sqrt(Constants.MU_EARTH / Math.pow(playerOrbit.semiMajorAxis / Constants.SCENE_SCALE, 3));
-      const _frameComp = _nApprox * (this._lastSpawnGameDt || 0);
-      debris.orbit.trueAnomaly = playerOrbit.trueAnomaly + offset - _frameComp;
       debris.orbit.meanMotion = playerOrbit.meanMotion;
+
+      if (isPin) {
+        // Fallback orbit ≈ fwdM ahead (used only if the local-frame pin is ever
+        // unavailable / after an uncaught release). No frame-comp needed — the
+        // authoritative position is the local-frame _scenePosition pin.
+        const aScene = playerOrbit.semiMajorAxis || 1;
+        const fwdNu = ((spec.fwdM || 0) * METRE_SCENE) / aScene; // arc → Δtrue-anomaly
+        debris.orbit.trueAnomaly = playerOrbit.trueAnomaly + fwdNu;
+      } else {
+        const offset = sign * (spec.offsetMin + Math.random() * (spec.offsetMax - spec.offsetMin));
+        // 2026-05-17 off-by-one-frame fix: the debris is spawned mid-frame after
+        // player.update propagated the player by n×gameDt, and the loop below will
+        // advance this debris once more this frame. Pre-subtract one step so the
+        // post-propagation trueAnomaly lands at playerOrbit + offset.
+        const _nApprox = playerOrbit.meanMotion ||
+          Math.sqrt(Constants.MU_EARTH / Math.pow(playerOrbit.semiMajorAxis / Constants.SCENE_SCALE, 3));
+        const _frameComp = _nApprox * (this._lastSpawnGameDt || 0);
+        debris.orbit.trueAnomaly = playerOrbit.trueAnomaly + offset - _frameComp;
+      }
 
       // Adjust mass to spec
       debris.mass = spec.massMin + Math.random() * (spec.massMax - spec.massMin);
+
+      // Mission-1 onboarding is NET-ONLY: every guided beat captures with the
+      // Mother net (tease_lock→N, second_catch→N, range_wall→A-then-net,
+      // free_clear→"net the rest of the cluster"); there is no Daughter beat.
+      // The Mother net rejects anything over LASSO_MAX_CAPTURE_MASS, so clamp
+      // the whole welcome cluster to that ceiling — otherwise the curated first
+      // target (and most of the cluster) trips "Target too massive for Mother
+      // net. Try deploying a Daughter [D]", contradicting the onboarding script.
+      const netCeil = Constants.LASSO_MAX_CAPTURE_MASS;
+      if (Number.isFinite(netCeil) && debris.mass > netCeil) {
+        debris.mass = netCeil;
+      }
 
       // Update type if needed
       if (!spec.types.includes(debris.type)) {
@@ -1989,15 +2223,21 @@ export class DebrisField {
       }
 
       // Reward-first spine: deterministic visible size for curated welcome
-      // pieces (the tease must read as a panel, not a speck). `sizeM` overrides
-      // the mass-derived size; `material` paints it (solar_cell → panel look).
-      if (Number.isFinite(spec.sizeM) && typeDef) {
-        debris.sizeMeter = Math.max(typeDef.sizeMin,
-          Math.min(typeDef.sizeMax, spec.sizeM));
+      // pieces. `sizeM` is a DELIBERATE override (a 0.1–1 m fragment is a ~10 px
+      // speck), so it intentionally bypasses the per-type sizeMax cap — a 3 m
+      // fragment renders as a clearly-visible irregular junk chunk.
+      if (Number.isFinite(spec.sizeM)) {
+        debris.sizeMeter = spec.sizeM;
         debris.sceneSize = debris.sizeMeter * 0.00001;
       }
+      // Keep salvage/flags consistent with the intended appearance. The
+      // RENDERED colour comes from the candidate's existing mesh slot (selected
+      // above to match appearMaterial); `debris.material` only feeds salvage and
+      // capture flags. Honour spec.material, else the appearance hint.
       if (spec.material) {
         debris.material = spec.material;
+      } else if (spec.appearMaterial) {
+        debris.material = spec.appearMaterial;
       }
 
       // Reset web-shot drag if previously webbed
@@ -2038,6 +2278,30 @@ export class DebrisField {
       // Mark as welcome spawn, ensure visible
       debris.welcomeSpawn = true;
       debris.alive = true;
+      // Which curated WELCOME_FIELD spec row realised this piece (0-based).
+      // Score-based candidate matching means debrisList order != spec order, so
+      // this lets consumers/tests recover the intended progression position.
+      debris._welcomeSpecIndex = i;
+
+      // Flag safety guard. Welcome pieces are reused from far candidates that
+      // may have been flag-eligible (≥2 m sat/rocket) at build time — and the
+      // per-frame flag path only REPOSITIONS, never re-checks eligibility — so a
+      // reused piece would keep a stale flag. The cluster sizes already drop
+      // below the 2 m flag threshold, but strip any existing flag explicitly:
+      // zero its instance, drop the lookup, and clear the country so no welcome
+      // piece ever wears a flag (a sub-2 m flag would be an invisible smear).
+      // Tolerant of mock receivers (tests) that lack the flag/instance state.
+      const _flagInfo = this._flagLookup && this._flagLookup.get(debris.id);
+      if (_flagInfo) {
+        const _flagMesh = this.flagMeshes && this.flagMeshes[_flagInfo.country];
+        if (_flagMesh && this._tempMatrix) {
+          this._tempMatrix.makeScale(0, 0, 0);
+          _flagMesh.setMatrixAt(_flagInfo.instanceIndex, this._tempMatrix);
+          _flagMesh.instanceMatrix.needsUpdate = true;
+        }
+        this._flagLookup.delete(debris.id);
+      }
+      debris.country = null;
 
       // 2026-05-17: pre-discover ONLY the closest welcome debris (i=0, the
       // 30–55 m close-tier spec). The other 6 stay `discovered=false` until
@@ -2053,6 +2317,22 @@ export class DebrisField {
         eventBus.emit(Events.TARGET_DISCOVERED, { target: debris });
       } else {
         debris.discovered = false;
+      }
+
+      // Onboarding tease pin: hold the curated STATION-catch pieces (those with
+      // spec.pin — #1 dead-centre, #2 off to one side) at a fixed offset in the
+      // MOTHER'S LOCAL FRAME (forward + lateral) until each is caught. Enforced
+      // per-frame in update()/_updateInstanceTransform by writing _scenePosition
+      // (the single source of truth that selection, range, net, reticle, and
+      // rendering all read — TargetSelector prefers it). Local-frame is the only
+      // way to hold a STABLE sideways offset: co-orbital cross-track oscillates
+      // to zero. #3 (range wall) is NOT pinned — it's the free orbit the mother
+      // autopilots to. Released per-id on capture / removal / complete / reset.
+      if (isPin) {
+        debris._onboardingPinned = true;
+        debris._onboardingPinFwd = (spec.fwdM || 0) * METRE_SCENE;
+        debris._onboardingPinLat = (spec.latM || 0) * METRE_SCENE;
+        this._onboardingPinIds.add(debris.id);
       }
 
       // ST-4.C: Track/untrack based on profile (untracked count from far end)

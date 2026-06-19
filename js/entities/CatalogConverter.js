@@ -37,6 +37,7 @@ const SHAPE_MAP = {
   rocketBody:   'cylinder',
   defunctSat:   'box',
   missionDebris:'sphere',
+  cubesat:      'box',
 };
 
 /** Material pool — mirrors the `MATERIALS` array in DebrisField.js. */
@@ -46,10 +47,11 @@ const MATERIALS = ['aluminum', 'titanium', 'composite', 'mli_mylar', 'solar_cell
  *  Keeps gold MLI / blue solar cells rare and concentrated on satellites so the
  *  catalogue half of the field matches the procedural half visually. */
 const MATERIAL_WEIGHTS_BY_TYPE = {
-  fragment:      { aluminum: 0.38, titanium: 0.22, composite: 0.35, steel: 0.05 },
+  fragment:      { aluminum: 0.36, titanium: 0.21, composite: 0.31, steel: 0.05, mli_mylar: 0.06, solar_cell: 0.06 },
   rocketBody:    { aluminum: 0.45, titanium: 0.25, composite: 0.12, steel: 0.18 },
   defunctSat:    { aluminum: 0.30, titanium: 0.12, composite: 0.18, mli_mylar: 0.16, solar_cell: 0.14, steel: 0.10 },
   missionDebris: { aluminum: 0.30, titanium: 0.16, composite: 0.30, mli_mylar: 0.14, solar_cell: 0.10 },
+  cubesat:       { aluminum: 0.42, composite: 0.18, titanium: 0.08, solar_cell: 0.20, mli_mylar: 0.12 },
 };
 
 /** Deterministically pick a type-weighted material from a seed (no random()). */

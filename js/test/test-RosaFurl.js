@@ -393,4 +393,26 @@ describe('ROSA inverted visibility — back-face substrate stays lit', () => {
         `not flung off by a unit error (panel width ${panelW} scene units)`);
     }
   });
+
+  it('edge booms + tip spreader sit on the blanket (no raw-literal z unit error)', () => {
+    // The booms (both long edges) and the tip spreader are nudged just off the
+    // blanket plane to avoid z-fighting, but that nudge MUST be M-scaled. A prior
+    // raw `0.0008` literal was actually ~80 m (1 scene unit = 100 km) — ~80× the
+    // panel width — flinging the edge structure far off the blanket so the wings
+    // lost all edge detailing. Guard: |local z| must be a tiny fraction of the
+    // panel width (same class of guard as the back-face coplanar test above).
+    const ctx = buildPanels();
+    const panelW = Constants.OCTOPUS_V5.ROSA_WIDTH * 0.00001; // metre → scene (M)
+    const structNames = [
+      'ROSA_Boom_0deg_A',   'ROSA_Boom_0deg_B',   'ROSA_Spreader_0deg',
+      'ROSA_Boom_180deg_A', 'ROSA_Boom_180deg_B', 'ROSA_Spreader_180deg',
+    ];
+    for (const name of structNames) {
+      const m = findByName(ctx, name);
+      assert.ok(m, `${name} mesh exists`);
+      assert.ok(Math.abs(m.position.z) < panelW * 0.1,
+        `${name} local z (${m.position.z}) must be a tiny M-scaled nudge off the ` +
+        `blanket, not a raw literal flinging it ~80 m away (panel width ${panelW})`);
+    }
+  });
 });

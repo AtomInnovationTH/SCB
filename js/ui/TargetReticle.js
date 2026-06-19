@@ -141,14 +141,26 @@ export class TargetReticle {
       this._lockLostTargetId = this._selectedTargetId;
       this._selectedTargetId = null; // Clear so brackets transition to lock-lost rendering
       this._selectedInRange = true;  // reset range state on clear
+      this._outOfRangeFlashT = 0;    // clear any lingering OUT OF RANGE callout
     });
 
     // Reward-first spine: track whether the selected target is inside net-lock
-    // range. Drives the yellow "OUT OF RANGE" reticle state (out) vs the cyan
-    // lock (in). AutoLockController emits these on the crossing.
+    // range. Drives the yellow reticle color (out) vs cyan (in). The big
+    // "OUT OF RANGE" TEXT, however, is BRIEF feedback: it only shows for
+    // `_outOfRangeFlashT` seconds after the out-of-range crossing, then fades —
+    // and never while in range. AutoLockController emits these on the crossing.
     this._selectedInRange = true;
-    eventBus.on(Events.TARGET_IN_RANGE, () => { this._selectedInRange = true; });
-    eventBus.on(Events.TARGET_OUT_OF_RANGE, () => { this._selectedInRange = false; });
+    this._outOfRangeFlashT = 0;            // >0 = show the brief OUT OF RANGE text
+    this._outOfRangeFlashDur = 1.6;        // seconds the callout stays up
+    eventBus.on(Events.TARGET_IN_RANGE, () => {
+      this._selectedInRange = true;
+      this._outOfRangeFlashT = 0;          // hide immediately once in range
+    });
+    eventBus.on(Events.TARGET_OUT_OF_RANGE, () => {
+      // Flash the text only on the in→out transition (not every frame it stays out).
+      if (this._selectedInRange !== false) this._outOfRangeFlashT = this._outOfRangeFlashDur;
+      this._selectedInRange = false;
+    });
 
     // Phase 6: Lasso feedback state
     this._lassoInFlight = false;        // true while lasso projectile is active
@@ -335,6 +347,7 @@ export class TargetReticle {
     if (this._progradeCalloutTimer > 0) this._progradeCalloutTimer -= dt;
     if (this._retroCalloutTimer > 0) this._retroCalloutTimer -= dt;
     if (this._leadCalloutTimer > 0) this._leadCalloutTimer -= dt;
+    if (this._outOfRangeFlashT > 0) this._outOfRangeFlashT -= dt;
 
     // Advance lock ceremony timers
     if (this._lockAnimActive) {
@@ -906,12 +919,18 @@ export class TargetReticle {
       ctx.fillText(typeName, x, y - half - 18);
 
       // Reward-first spine: clean-mono "OUT OF RANGE" callout below the
-      // distance when the selected target is beyond net-lock range. This is
-      // the silent teach that points the player at Autopilot (A).
-      if (outOfRange) {
+      // distance when the selected target goes beyond net-lock range. BRIEF
+      // feedback only — shown for ~_outOfRangeFlashDur after the crossing, then
+      // it fades (the yellow reticle still signals state). Never shown in range.
+      if (outOfRange && this._outOfRangeFlashT > 0) {
+        // Fade out over the last 0.5 s of the flash.
+        const a = Math.max(0, Math.min(1, this._outOfRangeFlashT / 0.5));
+        ctx.save();
+        ctx.globalAlpha *= a;
         ctx.font = 'bold 16px "Courier New", monospace';
         ctx.fillStyle = COLORS.yellow;
         ctx.fillText('OUT OF RANGE', x, y + half + 70);
+        ctx.restore();
       }
 
       // Tumble rate (CP-2: show a ▼ DE-SPIN marker while the mother laser is firing)
