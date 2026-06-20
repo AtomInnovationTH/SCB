@@ -333,11 +333,14 @@ describe('Codex (UX-11 #10) - unlock hints, category progress, search', () => {
 
   it('getCategoryProgress tracks unlocks per category', () => {
     const codex = new CodexSystem(CODEX_DATA);
-    const cat = codex.entries[0].category;
+    // Use a discovery (locked) entry's category — PLAYBOOK/WORLD_INDUSTRY start
+    // unlocked, so they would not be "fully locked" at fresh construction.
+    const target = codex.entries.find(e => !e.unlocked);
+    const cat = target.category;
     const before = codex.getCategoryProgress(cat);
-    assert.equal(before.unlocked, 0, 'fresh system starts fully locked');
+    assert.equal(before.unlocked, 0, 'fresh discovery category starts fully locked');
     assert.ok(before.total > 0);
-    codex.entries[0].unlocked = true;
+    target.unlocked = true;
     const after = codex.getCategoryProgress(cat);
     assert.equal(after.unlocked, 1);
     assert.equal(after.total, before.total);

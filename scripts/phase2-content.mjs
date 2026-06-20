@@ -141,7 +141,7 @@ const NEW_ENTRIES = [
   },
   // ---- PLAYBOOK card (no trl) ----
   {
-    id: "welcome_cowboy", category: "PLAYBOOK", icon: "🤠",
+    id: "welcome_cowboy", category: "PLAYBOOK", icon: "🤠", startUnlocked: true,
     related: ["kessler_syndrome", "adr_methods_real", "delta_v"],
     i18n: {
       title: "Welcome, Cowboy",
@@ -164,7 +164,7 @@ const NEW_ENTRIES = [
   },
   // ---- WORLD_INDUSTRY card (no trl) ----
   {
-    id: "world_adr_mandate", category: "WORLD_INDUSTRY", icon: "📜",
+    id: "world_adr_mandate", category: "WORLD_INDUSTRY", icon: "📜", startUnlocked: true,
     related: ["adr_methods_real", "kessler_syndrome", "ssa_network"],
     i18n: {
       title: "Cleanup Is Now Mandatory",

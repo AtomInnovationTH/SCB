@@ -217,10 +217,28 @@ export const CODEX_TRIGGERS = {
   solar_wind:        [{ event: E.WEATHER_EFFECT_START, match: always }],
   rendezvous:        [{ event: E.AUTOPILOT_ARRIVED, match: always }],
   docking_berthing:  [{ event: E.ARM_CAPTURED, match: always }],
-  // ===== Phase 2 — category cards =====
-  welcome_cowboy:    [{ event: E.STATE_CHANGE, match: (p) => p.newState === 'ORBITAL_VIEW' }],
-  catalog_envisat:   [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 15 }],
-  world_adr_mandate: [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 5 }],
+  // ===== CATALOG — discovery "trading cards", unlocked as you clear debris =====
+  // (PLAYBOOK + WORLD_INDUSTRY entries are `startUnlocked` in data/codex.json —
+  //  reference/onboarding material is readable from the first open, so it needs
+  //  no trigger here. welcome_cowboy / world_adr_mandate triggers were removed.)
+  catalog_envisat:        [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 15 }],
+  catalog_vanguard1:      [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 10 }],
+  catalog_les1:           [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 20 }],
+  catalog_cosmos_iridium: [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 25 }],
+  catalog_fengyun1c:      [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 35 }],
+  // Phase 2c CATALOG marquee objects
+  catalog_telstar1:       [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 12 }],
+  catalog_kosmos482:      [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 18 }],
+  catalog_sl16:           [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 28 }],
+  catalog_cz5b:           [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 32 }],
+  catalog_kosmos1408:     [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 40 }],
+  // Phase 2c NEWS & EVENTS — real-world headlines, unlocked as you progress
+  news_starlink_storm:    [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 8 }],
+  news_tiangong_dodge:    [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 14 }],
+  news_iss_pallet:        [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 22 }],
+  news_aeolus_reentry:    [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 26 }],
+  news_mev1_servicing:    [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 38 }],
+  news_yunhai_collision:  [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 42 }],
 };
 
 export default CODEX_TRIGGERS;

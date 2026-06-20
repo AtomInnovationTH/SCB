@@ -432,10 +432,70 @@ Phase-2 block.
 
 ## 12. Definition of done
 
-- [ ] `trl` optional in `CodexSystem` (+ `getEntryTRL` null guard).
-- [ ] 17 PROPULSION + `delta_v` carry `realWorld` (+`formula` where listed); shortText hooks applied.
-- [ ] 5 concept entries + 3 category cards added (128 total).
-- [ ] 8 triggers added to `codexTriggers.js`.
-- [ ] related cross-links added (§6); no dangling.
-- [ ] tests updated (§9); `node js/test/run-tests.js` green.
-- [ ] PLAYBOOK/CATALOG/WORLD_INDUSTRY now show in the sidebar (≥1 entry each).
+- [x] `trl` optional in `CodexSystem` (+ `getEntryTRL` null guard).
+- [x] 17 PROPULSION + `delta_v` carry `realWorld` (+`formula` where listed); shortText hooks applied.
+- [x] 5 concept entries + 3 category cards added (128 total).
+- [x] 8 triggers added to `codexTriggers.js`.
+- [x] related cross-links added (§6); no dangling.
+- [x] tests updated (§9); `node js/test/run-tests.js` green.
+- [x] PLAYBOOK/CATALOG/WORLD_INDUSTRY now show in the sidebar (≥1 entry each).
+
+**Phase 2 shipped & committed** (`4c3812a feat(codex): data-driven tech library + PROPULSION content slice`). Work continued past Phase 2 in the same lineage — see §13.
+
+---
+
+## 13. Progress log AFTER Phase 2 (read this before continuing)
+
+State as of this log: **155 entries**, full suite **3360 pass / 0 fail**. Content lives in
+`data/codex.json`; three idempotent, order-independent patch scripts regenerate it:
+`scripts/phase2-content.mjs` (Phase 2), `scripts/phase2b-newbie-content.mjs` (2b),
+`scripts/phase2c-catalog-news.mjs` (2c). `scripts/gen-codex-json.mjs` was **deleted** (dead).
+
+### Schema additions
+- **`startUnlocked: true`** (new optional field, read by `CodexSystem._buildEntry`). Reference/
+  onboarding entries are unlocked from first render and need **no** `CODEX_TRIGGERS` entry. The
+  data test "every entry has a callable trigger" now **exempts `e.unlocked` entries**.
+
+### Phase 2b — newbie onboarding (128 → 144)
+- **Diagnosis:** lead categories had 1 entry each *and* were locked — a "how to play" guide gated
+  behind gameplay is backwards. Fix = populate + `startUnlocked`.
+- **PLAYBOOK → 10 entries, all `startUnlocked`** (Welcome, Core Loop, Reading the Screen, ΔV Is
+  Everything, Let the Autopilot Fly, Net/Gripper/Magnet, When to Sacrifice an Arm, Salvage Economy,
+  Power Under Eclipse, Capture Quality Pays). Facts verified vs the live game (keys S/T/A, backtick
+  tool-cycle, 3-bus ETS Shift+1/2/3, win at 50 debris, salvage→Forge→propellant, ×2.5 deorbit, ≈×3.7
+  quality stack).
+- **WORLD_INDUSTRY → 4 entries, all `startUnlocked`** (mandate, who-removes, who-tracks, why-now).
+- **CATALOG** kept as the discovery "trading-card" model (locked, debris-threshold triggers).
+- **Category order** changed to newbie-forward: PLAYBOOK, WORLD_INDUSTRY, DEBRIS, CATALOG,
+  ORBITAL_MECHANICS, TETHERS, PROPULSION, SENSORS, POWER, ATTITUDE, AVIONICS, COMMS,
+  SPACE_ENVIRONMENT, MATERIALS, HERITAGE, NEWS. (No test pins positions — only ascending order.)
+
+### Phase 2c — Catalog & News expansion (144 → 155)
+- **CATALOG +5 (now 10):** Kosmos 482, Telstar 1, SL-16 rocket bodies, Long March 5B, Kosmos 1408.
+- **NEWS +6 (now 9):** Feb-2022 Starlink storm, Tiangong dodges Starlink, ISS pallet hits Florida,
+  ESA Aeolus assisted reentry, MEV-1 services Intelsat 901, Yunhai-1 02 collision.
+- All 11 are discovery cards: locked, **reachable non-comms `SCORE_UPDATE`/`debrisCleared`
+  triggers**, each with a `realWorld` source line + bidirectional `related`. Every fact web-verified
+  (Wikipedia/ESA/NASA/SpaceNews/McDowell) with corrections folded in.
+- **Voice rule applied (user request):** introduce jargon gradually — acronyms spelled out on first
+  use (LEO, ADR, ASAT, GEO); plain-language `shortText` hook before any term. A game-wide inline
+  glossary/tooltip layer (master plan §11.8) is the larger un-done follow-up.
+
+### Viewer changes already made (partial Phase 3 — `CodexViewerUI.js`)
+These are DONE, so the Phase 3 slice is partly started:
+- **Larger pane + bigger fonts** (panel 94%/1400px/1000px; cards, sidebar, detail all scaled up).
+- **Removed the "All Entries" tab** — a category is always selected; opens on the first category
+  (`_firstCategoryKey()`), so new players land on PLAYBOOK.
+- **TRL display rethought:** removed the Tech-Level badge from **cards entirely**; in the detail view
+  the Tech-Level row shows **only when `trl < 9`** (`Constants.TRL.FLIGHT_PROVEN_MIN`) — flight-proven
+  is the silent default. `getEntryTRL` data API unchanged (presentation-only decision).
+- Dropped the now-unused `trlToTechLevelLabel` import; cleaned dead `'ALL'` branches.
+
+### Still TODO for a full Phase 3 (per master plan §3.6 / §353-364)
+Per-category hue theming, detail redesign (realWorld callout block + formula chip + Related chip
+row + Prev/Next), Tracks tab, filters/sort bar, in-pane progress bars/ring, keyboard nav (roving
+tabindex), open-from-any-screen (drop the `isGameplay` gate on `I`). Then Phase 4 (anchoring/badge/
+deep-links/comms) and Phase 5 (SM-2 resurfacing + connection-map). Then batch the remaining
+thin categories' content.
+
+### Nothing committed after `4c3812a` (per user convention) — 2b/2c + viewer changes are uncommitted.

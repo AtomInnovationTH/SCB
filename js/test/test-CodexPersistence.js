@@ -76,11 +76,12 @@ describe('Codex Phase 0 — full getState→save→peek→restore cycle', () => 
   it('an unlocked entry survives a save/reload cycle', () => {
     _store.clear();
 
-    // Source system: unlock an entry, then persist its gathered state.
+    // Source system: unlock a discovery (locked) entry, then persist its state.
     const src = new CodexSystem(CODEX_DATA);
-    const target = src.entries[0].id;
-    src.entries[0].unlocked = true;
-    src.entries[0].seen = true;
+    const targetEntry = src.entries.find(e => !e.unlocked);
+    const target = targetEntry.id;
+    targetEntry.unlocked = true;
+    targetEntry.seen = true;
     persistenceManager.save({ credits: 0, codex: src.getState() });
 
     // Destination system: simulate reload by restoring from the persisted bundle.

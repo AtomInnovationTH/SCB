@@ -72,6 +72,9 @@ describe('Codex Phase 0 — trigger reachability (structural)', () => {
 
   it('every entry has at least one callable trigger', () => {
     const bad = entries.filter(e => {
+      // start-unlocked reference/onboarding entries (PLAYBOOK, WORLD_INDUSTRY)
+      // are open from the first render and need no unlock trigger.
+      if (e.unlocked) return false;
       const trigs = codex.getTriggers(e.id);
       return trigs.length === 0 || trigs.some(t => typeof t.match !== 'function');
     });
@@ -138,9 +141,11 @@ describe('Codex Phase 0 — persistence round-trip', () => {
 
   it('restore() round-trips unlocked/seen via the envelope', () => {
     const src = new CodexSystem(CODEX_DATA);
-    const id = src.entries[0].id;
-    src.entries[0].unlocked = true;
-    src.entries[0].seen = true;
+    // Use a discovery (locked) entry so the round-trip is a real lock→unlock.
+    const target = src.entries.find(e => !e.unlocked);
+    const id = target.id;
+    target.unlocked = true;
+    target.seen = true;
     const dst = new CodexSystem(CODEX_DATA);
     dst.restore(src.getState());
     assert.ok(dst.getEntry(id).unlocked, 'unlocked restored');
@@ -149,7 +154,7 @@ describe('Codex Phase 0 — persistence round-trip', () => {
 
   it('restore() accepts the legacy bare array form', () => {
     const dst = new CodexSystem(CODEX_DATA);
-    const id = dst.entries[0].id;
+    const id = dst.entries.find(e => !e.unlocked).id;
     dst.restore([{ id, unlocked: true, seen: false }]);
     assert.ok(dst.getEntry(id).unlocked, 'legacy array restored');
   });
@@ -351,7 +356,66 @@ describe('Codex Phase 2 — content slice', () => {
     assert.ok(rel.includes('carbyne'), 'space_elevator → carbyne');
   });
 
-  it('entry count is 128', () => {
-    assert.equal(entries.length, 128, 'Phase 2 yields 128 entries');
+  it('entry count is 155', () => {
+    assert.equal(entries.length, 155, 'Phase 2 + 2b + 2c yields 155 entries');
+  });
+});
+
+describe('Codex Phase 2b — newbie onboarding', () => {
+  it('lead orientation categories are populated (not a single card)', () => {
+    assert.ok(codex.getCategory('PLAYBOOK').length >= 8, 'PLAYBOOK is a real quick-start');
+    assert.ok(codex.getCategory('WORLD_INDUSTRY').length >= 3, 'WORLD_INDUSTRY expanded');
+    assert.ok(codex.getCategory('CATALOG').length >= 4, 'CATALOG expanded');
+  });
+
+  it('PLAYBOOK is start-unlocked and readable immediately (no trigger needed)', () => {
+    const playbook = codex.getCategory('PLAYBOOK');
+    const locked = playbook.filter(e => !e.unlocked).map(e => e.id);
+    assert.equal(locked.length, 0, `PLAYBOOK entries still locked: ${locked.join(', ')}`);
+  });
+
+  it('WORLD_INDUSTRY exposition is start-unlocked', () => {
+    const locked = codex.getCategory('WORLD_INDUSTRY').filter(e => !e.unlocked).map(e => e.id);
+    assert.equal(locked.length, 0, `WORLD_INDUSTRY entries still locked: ${locked.join(', ')}`);
+  });
+
+  it('CATALOG stays a discovery set (locked until encountered)', () => {
+    const unlocked = codex.getCategory('CATALOG').filter(e => e.unlocked).map(e => e.id);
+    assert.equal(unlocked.length, 0, `CATALOG entries unexpectedly start-unlocked: ${unlocked.join(', ')}`);
+  });
+
+  it('the lead category (order 0) is PLAYBOOK', () => {
+    assert.equal(codex.getCategories()[0].key, 'PLAYBOOK', 'new players land on PLAYBOOK');
+  });
+});
+
+describe('Codex Phase 2c — Catalog & News expansion', () => {
+  const CATALOG_NEW = ['catalog_kosmos482', 'catalog_telstar1', 'catalog_sl16',
+    'catalog_cz5b', 'catalog_kosmos1408'];
+  const NEWS_NEW = ['news_starlink_storm', 'news_tiangong_dodge', 'news_iss_pallet',
+    'news_aeolus_reentry', 'news_mev1_servicing', 'news_yunhai_collision'];
+
+  it('CATALOG and NEWS are well-stocked', () => {
+    assert.ok(codex.getCategory('CATALOG').length >= 9, 'CATALOG expanded to a real set');
+    assert.ok(codex.getCategory('NEWS').length >= 8, 'NEWS expanded to a real set');
+  });
+
+  it('all 11 new Catalog/News entries resolve via getEntry', () => {
+    const missing = [...CATALOG_NEW, ...NEWS_NEW].filter(id => !codex.getEntry(id));
+    assert.equal(missing.length, 0, `missing: ${missing.join(', ')}`);
+  });
+
+  it('new Catalog/News entries are discovery cards (locked + reachable trigger)', () => {
+    for (const id of [...CATALOG_NEW, ...NEWS_NEW]) {
+      assert.ok(!codex.getEntry(id).unlocked, `${id} should start locked`);
+      assert.ok(codex.entryUnlocksOn(id, Events.SCORE_UPDATE, { debrisCleared: 50 }),
+        `${id} unlocks via debris progress`);
+    }
+  });
+
+  it('every new Catalog/News entry carries a realWorld source line', () => {
+    const bad = [...CATALOG_NEW, ...NEWS_NEW]
+      .filter(id => { const e = codex.getEntry(id); return !e.realWorld || !e.realWorld.trim(); });
+    assert.equal(bad.length, 0, `missing realWorld: ${bad.join(', ')}`);
   });
 });
