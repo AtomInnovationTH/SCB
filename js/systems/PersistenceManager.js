@@ -67,6 +67,10 @@ class PersistenceManager {
           debrisByTier: data.stats?.debrisByTier ?? { data: 0, deorbit: 0, capture: 0 },
         },
         subsystemEvents: data.subsystemEvents || null,
+        // Codex unlock/seen state — contributed via PERSISTENCE_GATHER by
+        // CodexSystem. Purely additive (no SAVE_VERSION bump): old saves lack
+        // this key and CodexSystem's load guard handles its absence.
+        codex: data.codex ?? null,
         // ST-9.2: Active arm tier (Y0_QUAD / Y1_HEX / Y3_OCTO)
         armTier: data.armTier ?? 'Y0_QUAD',
         // Q2 Net-Launch Ceremony first-time flags (CEREMONY_REDESIGN.md §5.6)
@@ -76,7 +80,10 @@ class PersistenceManager {
       };
 
       localStorage.setItem(SAVE_KEY, JSON.stringify(saveData));
-      eventBus.emit(Events.PERSISTENCE_SAVED, { timestamp: saveData.timestamp });
+      // (Events.PERSISTENCE_SAVED is intentionally not emitted: it has no
+      // subscribers. The save lifecycle is covered by PERSISTENCE_GATHER, and
+      // self-managing systems restore via PERSISTENCE_LOADED. The event name is
+      // kept in Events.js as a reserved hook for future external consumers.)
       return true;
     } catch (e) {
       console.error('[PersistenceManager] Save failed:', e.message);

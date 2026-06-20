@@ -16,6 +16,7 @@ import { describe, it, assert } from './TestRunner.js';
 import { Constants } from '../core/Constants.js';
 import { Events } from '../core/Events.js';
 import { CodexSystem } from '../systems/CodexSystem.js';
+import { CODEX_DATA } from './_codexFixture.js';
 
 // ─── 1. Constants existence and types ───────────────────────────────────────
 
@@ -220,7 +221,7 @@ describe('NetVisuals — Spark cleanup (FIX-2.4a)', () => {
 
 describe('NetVisuals — Codex entry (FIX-2.4a)', () => {
 
-    const codexSystem = new CodexSystem();
+    const codexSystem = new CodexSystem(CODEX_DATA);
 
     it('bolas_weapon entry exists', () => {
         const entry = codexSystem.getEntry('bolas_weapon');
@@ -245,8 +246,8 @@ describe('NetVisuals — Codex entry (FIX-2.4a)', () => {
     it('bolas_weapon triggerEvent is LASSO_FIRED', () => {
         const entry = codexSystem.getEntry('bolas_weapon');
         assert.ok(entry, 'entry must exist');
-        assert.equal(entry.triggerEvent, Events.LASSO_FIRED,
-            `triggerEvent should be LASSO_FIRED`);
+        assert.ok(codexSystem.getTriggers('bolas_weapon').some(t => t.event === Events.LASSO_FIRED),
+            `bolas_weapon should unlock on LASSO_FIRED`);
     });
 });
 

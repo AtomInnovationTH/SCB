@@ -1302,8 +1302,12 @@ export class InputManager {
         if (isGameplay && d.codexViewerUI) {
           d.codexViewerUI.toggle();
           d.audioSystem.playClick();
-          // Skills discovery: codex opened
-          eventBus.emit(Events.CODEX_OPENED);
+          // Skills discovery: emit CODEX_OPENED on OPEN only. toggle() also
+          // closes; firing unconditionally mis-triggered TeachingSystem's
+          // first_codex (and skills discovery) on close.
+          if (typeof d.codexViewerUI.isVisible !== 'function' || d.codexViewerUI.isVisible()) {
+            eventBus.emit(Events.CODEX_OPENED);
+          }
           e.preventDefault();
         }
         break;

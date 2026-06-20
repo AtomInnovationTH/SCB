@@ -1,0 +1,357 @@
+/**
+ * test-CodexData.js — Codex Overhaul Phase 0a: data-integrity guards.
+ *
+ * CodexSystem.js is Node-safe (imports only EventBus/Events/Constants — no
+ * DOM/THREE), so we assert against the REAL entries rather than duplicating
+ * id lists. These guards make the dedupe/rewrite/extraction work safe:
+ *   - no duplicate entry ids (the _byId Map would silently swallow collisions)
+ *   - every triggerEvent is a real Events.* value (no typo'd dead triggers)
+ *   - every entry has a callable triggerCondition + required content fields
+ *   - every entry is TRL-annotated (1..9) and unlock-hinted (post-processing)
+ *   - per-category counts sum to entries.length (counts derive from data)
+ *
+ * @module test/test-CodexData
+ */
+
+import { describe, it, assert } from './TestRunner.js';
+import { CodexSystem, CodexCategory, ALIASES, entryMatchesQuery } from '../systems/CodexSystem.js';
+import { CODEX_DATA } from './_codexFixture.js';
+import { Events } from '../core/Events.js';
+
+const codex = new CodexSystem(CODEX_DATA);
+const entries = codex.entries;
+const EVENT_VALUES = new Set(Object.values(Events));
+const CATEGORY_VALUES = new Set(Object.values(CodexCategory));
+
+describe('Codex Phase 0 — entry id integrity', () => {
+  it('has entries', () => {
+    assert.ok(entries.length > 0, 'buildEntries() returned entries');
+  });
+
+  it('no duplicate entry ids', () => {
+    const seen = new Map();
+    const dupes = [];
+    for (const e of entries) {
+      if (seen.has(e.id)) dupes.push(e.id);
+      else seen.set(e.id, true);
+    }
+    assert.equal(dupes.length, 0, `duplicate ids: ${dupes.join(', ') || 'none'}`);
+  });
+
+  it('_byId index size equals entries.length (no swallowed collisions)', () => {
+    assert.equal(codex.entries.length, new Set(entries.map(e => e.id)).size,
+      'every entry id is unique');
+  });
+});
+
+describe('Codex Phase 0 — required content fields', () => {
+  it('every entry has id/title/category/shortText/fullText/icon', () => {
+    const bad = entries.filter(e =>
+      !e.id || !e.title || !e.category || !e.shortText || !e.fullText || !e.icon);
+    assert.equal(bad.length, 0,
+      `entries missing required fields: ${bad.map(e => e.id || '?').join(', ')}`);
+  });
+
+  it('every entry.category is a valid CodexCategory', () => {
+    const bad = entries.filter(e => !CATEGORY_VALUES.has(e.category));
+    assert.equal(bad.length, 0,
+      `entries with unknown category: ${bad.map(e => `${e.id}:${e.category}`).join(', ')}`);
+  });
+});
+
+describe('Codex Phase 0 — trigger reachability (structural)', () => {
+  it('every entry.triggerEvent is a real Events.* value', () => {
+    const bad = [];
+    for (const e of entries) {
+      for (const t of codex.getTriggers(e.id)) {
+        if (!EVENT_VALUES.has(t.event)) bad.push(`${e.id}:${t.event}`);
+      }
+    }
+    assert.equal(bad.length, 0, `triggers with non-Events event: ${bad.join(', ')}`);
+  });
+
+  it('every entry has at least one callable trigger', () => {
+    const bad = entries.filter(e => {
+      const trigs = codex.getTriggers(e.id);
+      return trigs.length === 0 || trigs.some(t => typeof t.match !== 'function');
+    });
+    assert.equal(bad.length, 0,
+      `entries with missing/non-function triggers: ${bad.map(e => e.id).join(', ')}`);
+  });
+
+  it('no trigger.match throws on an empty payload', () => {
+    const threw = [];
+    for (const e of entries) {
+      for (const t of codex.getTriggers(e.id)) {
+        try { t.match({}); } catch (err) { threw.push(e.id); }
+      }
+    }
+    assert.equal(threw.length, 0, `trigger.match threw on {}: ${threw.join(', ')}`);
+  });
+});
+
+describe('Codex Phase 0 — metadata annotations applied', () => {
+  it('every entry with a trl has it in 1..9', () => {
+    const bad = entries.filter(e => e.trl != null && !(Number.isInteger(e.trl) && e.trl >= 1 && e.trl <= 9));
+    assert.equal(bad.length, 0,
+      `entries with bad trl: ${bad.map(e => `${e.id}:${e.trl}`).join(', ')}`);
+  });
+
+  it('PLAYBOOK/CATALOG/WORLD_INDUSTRY entries have no trl badge', () => {
+    const NON_TECH = new Set(['PLAYBOOK', 'CATALOG', 'WORLD_INDUSTRY']);
+    const bad = entries.filter(e => NON_TECH.has(e.category) && e.trl != null).map(e => e.id);
+    assert.equal(bad.length, 0, `non-tech entries with trl: ${bad.join(', ')}`);
+  });
+
+  it('every entry with a trl has a non-empty trlRationale', () => {
+    const bad = entries.filter(e => e.trl != null && (!e.trlRationale || !e.trlRationale.trim()));
+    assert.equal(bad.length, 0, `tech entries missing trlRationale: ${bad.map(e => e.id).join(', ')}`);
+  });
+
+  it('every entry has a non-empty unlockHint', () => {
+    const bad = entries.filter(e => !e.unlockHint || !e.unlockHint.trim());
+    assert.equal(bad.length, 0, `entries missing unlockHint: ${bad.map(e => e.id).join(', ')}`);
+  });
+});
+
+describe('Codex Phase 0 — counts derive from data', () => {
+  it('per-category counts sum to entries.length', () => {
+    let sum = 0;
+    for (const cat of CATEGORY_VALUES) {
+      sum += codex.getCategory(cat).length;
+    }
+    assert.equal(sum, entries.length, 'category partition covers all entries');
+  });
+
+  it('getProgress().total equals entries.length', () => {
+    assert.equal(codex.getProgress().total, entries.length, 'progress total derives from data');
+  });
+});
+
+describe('Codex Phase 0 — persistence round-trip', () => {
+  it('getState() returns a versioned envelope { v, entries }', () => {
+    const st = codex.getState();
+    assert.equal(st.v, 1, 'envelope carries codex-local version');
+    assert.ok(Array.isArray(st.entries), 'envelope.entries is an array');
+    assert.equal(st.entries.length, entries.length, 'one record per entry');
+  });
+
+  it('restore() round-trips unlocked/seen via the envelope', () => {
+    const src = new CodexSystem(CODEX_DATA);
+    const id = src.entries[0].id;
+    src.entries[0].unlocked = true;
+    src.entries[0].seen = true;
+    const dst = new CodexSystem(CODEX_DATA);
+    dst.restore(src.getState());
+    assert.ok(dst.getEntry(id).unlocked, 'unlocked restored');
+    assert.ok(dst.getEntry(id).seen, 'seen restored');
+  });
+
+  it('restore() accepts the legacy bare array form', () => {
+    const dst = new CodexSystem(CODEX_DATA);
+    const id = dst.entries[0].id;
+    dst.restore([{ id, unlocked: true, seen: false }]);
+    assert.ok(dst.getEntry(id).unlocked, 'legacy array restored');
+  });
+
+  it('restore() ignores unknown ids and bad input without throwing', () => {
+    const dst = new CodexSystem(CODEX_DATA);
+    dst.restore({ v: 1, entries: [{ id: '__nope__', unlocked: true }] });
+    dst.restore(null);
+    dst.restore(undefined);
+    dst.restore({});
+    assert.ok(true, 'no throw on malformed restore data');
+  });
+
+  it('ALIASES (if any) all point to live entry ids', () => {
+    const bad = Object.entries(ALIASES).filter(([, newId]) => !codex.getEntry(newId));
+    assert.equal(bad.length, 0,
+      `ALIASES targets that do not exist: ${bad.map(([o, n]) => `${o}->${n}`).join(', ')}`);
+  });
+
+  it('ALIASES old ids are NOT also live entry ids (they were retired)', () => {
+    const conflict = Object.keys(ALIASES).filter(oldId => codex.getEntry(oldId));
+    assert.equal(conflict.length, 0,
+      `ALIASES keys still present as live entries: ${conflict.join(', ')}`);
+  });
+});
+
+describe('Codex Phase 0 — search includes fullText', () => {
+  it('entryMatchesQuery matches on fullText, not just title/shortText', () => {
+    const probe = {
+      title: 'Zzz', shortText: 'Zzz', category: 'PROPULSION',
+      fullText: 'The Tsiolkovsky rocket equation relates delta-v to exhaust velocity.',
+    };
+    assert.ok(entryMatchesQuery(probe, 'tsiolkovsky'), 'fullText-only term matches');
+    assert.ok(!entryMatchesQuery(probe, 'nonexistentterm'), 'unrelated term does not match');
+  });
+
+  it('searchEntries finds an entry by a fullText-only keyword', () => {
+    // "Faraday" appears in EDT fullText bodies but not in any title/shortText.
+    const hits = codex.searchEntries('faraday');
+    assert.ok(hits.length > 0, 'fullText keyword surfaces at least one entry');
+    const titlesContain = hits.every(e => !(e.title || '').toLowerCase().includes('faraday'));
+    assert.ok(titlesContain, 'match came from fullText, not the title');
+  });
+});
+
+// ===========================================================================
+// PHASE 1 — data-driven model: dedupe, relations, tracks, categories, interp
+// ===========================================================================
+describe('Codex Phase 1 — dedupe + ALIASES', () => {
+  const EXPECTED_ALIASES = {
+    specific_impulse_explained: 'specific_impulse',
+    saa_radiation: 'south_atlantic_anomaly',
+    atomic_oxygen_erosion: 'atomic_oxygen',
+    laser_comms_optical: 'laser_comms',
+    edt_propulsion: 'edt_physics',
+    star_tracker_nav: 'star_tracker',
+    cmg_gyroscopes: 'reaction_wheels',
+    mmod_impact_physics: 'mmod_impact',
+    space_aluminum: 'aluminum_space',
+    titanium: 'titanium_alloys',
+    carbon_composite: 'carbon_composites',
+  };
+
+  it('exactly the 11 expected merges are aliased', () => {
+    assert.deepEqual(ALIASES, EXPECTED_ALIASES, 'ALIASES matches the §13.3 dedupe list');
+  });
+
+  it('every merged-away loser id is gone from the entry set', () => {
+    const stillPresent = Object.keys(EXPECTED_ALIASES).filter(id => codex.getEntry(id));
+    assert.equal(stillPresent.length, 0, `losers still present: ${stillPresent.join(', ')}`);
+  });
+
+  it('every surviving alias target exists', () => {
+    const missing = [...new Set(Object.values(EXPECTED_ALIASES))].filter(id => !codex.getEntry(id));
+    assert.equal(missing.length, 0, `missing survivors: ${missing.join(', ')}`);
+  });
+});
+
+describe('Codex Phase 1 — related graph integrity', () => {
+  it('no entry.related contains a dangling id', () => {
+    const dangling = [];
+    for (const e of entries) {
+      for (const rid of (e.related || [])) {
+        if (!codex.getEntry(rid)) dangling.push(`${e.id}→${rid}`);
+      }
+    }
+    assert.equal(dangling.length, 0, `dangling related ids: ${dangling.join(', ')}`);
+  });
+
+  it('no entry lists itself as related', () => {
+    const selfRef = entries.filter(e => (e.related || []).includes(e.id)).map(e => e.id);
+    assert.equal(selfRef.length, 0, `self-referential related: ${selfRef.join(', ')}`);
+  });
+
+  it('getRelated resolves to entry objects', () => {
+    const withRel = entries.find(e => (e.related || []).length > 0);
+    assert.ok(withRel, 'at least one entry has related ids (PROPULSION slice)');
+    const resolved = codex.getRelated(withRel.id);
+    assert.equal(resolved.length, withRel.related.length, 'all related ids resolved');
+    assert.ok(resolved.every(r => r && r.id), 'resolved to entry objects');
+  });
+});
+
+describe('Codex Phase 1 — tracks', () => {
+  it('every entry.track references a defined track', () => {
+    const tracks = codex.getTracks();
+    const bad = entries.filter(e => e.track && !tracks[e.track]).map(e => `${e.id}:${e.track}`);
+    assert.equal(bad.length, 0, `entries on undefined tracks: ${bad.join(', ')}`);
+  });
+
+  it('the propellant_story track is populated and ordered', () => {
+    const t = codex.getTrack('propellant_story');
+    assert.ok(t, 'propellant_story track exists');
+    assert.ok(t.entries.length >= 5, `track has members (got ${t.entries.length})`);
+    const orders = t.entries.map(e => e.trackOrder);
+    const sorted = [...orders].sort((a, b) => a - b);
+    assert.deepEqual(orders, sorted, 'track entries are returned in trackOrder');
+  });
+});
+
+describe('Codex Phase 1 — categories', () => {
+  it('getCategories returns ordered meta with a colour per category', () => {
+    const cats = codex.getCategories();
+    assert.ok(cats.length >= 14, `expected the expanded category set (got ${cats.length})`);
+    assert.ok(cats.every(c => /^#[0-9a-fA-F]{6}$/.test(c.color)), 'every category has a hex colour');
+    const orders = cats.map(c => c.order);
+    assert.deepEqual(orders, [...orders].sort((a, b) => a - b), 'categories are order-sorted');
+  });
+
+  it('WORLD_INDUSTRY uses the menu green bridge colour', () => {
+    const meta = codex.getCategoryMeta('WORLD_INDUSTRY');
+    assert.ok(meta, 'WORLD_INDUSTRY meta exists');
+    assert.equal(meta.color.toLowerCase(), '#00ff88', 'bridges to the menu palette');
+  });
+
+  it('SENSORS was split into ATTITUDE + AVIONICS', () => {
+    assert.ok(codex.getCategory('ATTITUDE').length > 0, 'ATTITUDE has entries');
+    assert.ok(codex.getCategory('AVIONICS').length > 0, 'AVIONICS has entries');
+    // The attitude/avionics entries are no longer filed under SENSORS.
+    const sensorIds = codex.getCategory('SENSORS').map(e => e.id);
+    for (const id of ['reaction_wheels', 'magnetorquers', 'detumble', 'triple_redundancy', 'watchdog_timer', 'telemetry', 'ecc_memory']) {
+      assert.ok(!sensorIds.includes(id), `${id} moved out of SENSORS`);
+    }
+  });
+});
+
+describe('Codex Phase 1 — live-value interpolation', () => {
+  it('no entry has an unresolved {{...}} placeholder', () => {
+    const leftover = [];
+    for (const e of entries) {
+      for (const field of ['shortText', 'fullText', 'realWorld']) {
+        const v = e[field];
+        if (typeof v === 'string' && v.includes('{{')) leftover.push(`${e.id}.${field}`);
+      }
+    }
+    assert.equal(leftover.length, 0, `unresolved placeholders: ${leftover.join(', ')}`);
+  });
+
+  it('net_yo_yo_despin RPM resolves from Constants.CAPTURE_NET (120/240/360)', () => {
+    const e = codex.getEntry('net_yo_yo_despin');
+    assert.ok(e, 'net entry exists');
+    assert.ok(e.fullText.includes('120/240/360 RPM'),
+      'settled-spin RPM interpolated from live constants');
+  });
+});
+
+describe('Codex Phase 2 — content slice', () => {
+  const NEW_IDS = ['cnt', 'carbyne', 'solar_wind', 'rendezvous', 'docking_berthing',
+    'welcome_cowboy', 'catalog_envisat', 'world_adr_mandate'];
+
+  it('PLAYBOOK/CATALOG/WORLD_INDUSTRY each have at least one entry', () => {
+    assert.ok(codex.getCategory('PLAYBOOK').length >= 1, 'PLAYBOOK populated');
+    assert.ok(codex.getCategory('CATALOG').length >= 1, 'CATALOG populated');
+    assert.ok(codex.getCategory('WORLD_INDUSTRY').length >= 1, 'WORLD_INDUSTRY populated');
+  });
+
+  it('all 8 new entries resolve via getEntry', () => {
+    const missing = NEW_IDS.filter(id => !codex.getEntry(id));
+    assert.equal(missing.length, 0, `missing new entries: ${missing.join(', ')}`);
+  });
+
+  it('every PROPULSION entry has a non-empty realWorld', () => {
+    const bad = codex.getCategory('PROPULSION')
+      .filter(e => !e.realWorld || !e.realWorld.trim())
+      .map(e => e.id);
+    assert.equal(bad.length, 0, `PROPULSION entries missing realWorld: ${bad.join(', ')}`);
+  });
+
+  it('non-tech card has null TRL; cnt has TRL 3', () => {
+    assert.equal(codex.getEntryTRL('welcome_cowboy'), null, 'welcome_cowboy has no TRL badge');
+    const cnt = codex.getEntryTRL('cnt');
+    assert.ok(cnt, 'cnt has a TRL badge');
+    assert.equal(cnt.trl, 3, 'cnt TRL is 3');
+  });
+
+  it('space_elevator related includes cnt and carbyne (bidirectional graph)', () => {
+    const rel = codex.getRelated('space_elevator').map(e => e.id);
+    assert.ok(rel.includes('cnt'), 'space_elevator → cnt');
+    assert.ok(rel.includes('carbyne'), 'space_elevator → carbyne');
+  });
+
+  it('entry count is 128', () => {
+    assert.equal(entries.length, 128, 'Phase 2 yields 128 entries');
+  });
+});

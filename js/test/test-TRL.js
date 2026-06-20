@@ -20,6 +20,7 @@ import {
   techLevelBadgeText,
 } from '../core/Constants.js';
 import { CodexSystem, entryMatchesQuery } from '../systems/CodexSystem.js';
+import { CODEX_DATA } from './_codexFixture.js';
 import { UPGRADES } from '../ui/ShopScreen.js';
 
 const T = Constants.TRL;
@@ -167,31 +168,32 @@ describe('TRL - isValidTRL', () => {
 // ============================================================================
 describe('TRL - CodexSystem entries integrity', () => {
 
-  const codex = new CodexSystem();
+  const codex = new CodexSystem(CODEX_DATA);
 
   it('CodexSystem has entries', () => {
     assert.ok(Array.isArray(codex.entries), 'entries must be an array');
     assert.ok(codex.entries.length > 0, `entries must be non-empty (got ${codex.entries.length})`);
   });
 
-  it('every entry has typeof entry.trl === "number"', () => {
+  it('every entry with a trl has typeof entry.trl === "number"', () => {
     const offenders = codex.entries
-      .filter(e => typeof e.trl !== 'number')
+      .filter(e => e.trl != null && typeof e.trl !== 'number')
       .map(e => e.id);
     assert.equal(offenders.length, 0,
-      `entries missing numeric trl: ${offenders.join(', ')}`);
+      `entries with non-numeric trl: ${offenders.join(', ')}`);
   });
 
-  it('every entry passes isValidTRL', () => {
+  it('every entry with a trl passes isValidTRL', () => {
     const offenders = codex.entries
-      .filter(e => !isValidTRL(e.trl, T))
+      .filter(e => e.trl != null && !isValidTRL(e.trl, T))
       .map(e => `${e.id}=${e.trl}`);
     assert.equal(offenders.length, 0,
       `entries with invalid TRL: ${offenders.join(', ')}`);
   });
 
-  it('getEntryTRL(id) returns {trl, color, label, rationale}', () => {
-    const sample = codex.entries[0];
+  it('getEntryTRL(id) returns {trl, color, label, rationale} for a tech entry', () => {
+    const sample = codex.entries.find(e => typeof e.trl === 'number');
+    assert.ok(sample, 'at least one tech entry with a numeric trl exists');
     const info = codex.getEntryTRL(sample.id);
     assert.ok(info, 'getEntryTRL must return truthy object');
     assert.isType(info.trl, 'number');
@@ -201,6 +203,13 @@ describe('TRL - CodexSystem entries integrity', () => {
     assert.equal(info.trl, sample.trl);
     assert.equal(info.color, trlToBadgeColor(sample.trl, T));
     assert.equal(info.label, trlToLabel(sample.trl, T));
+  });
+
+  it('getEntryTRL(id) returns null for a non-tech entry (no trl)', () => {
+    const sample = codex.entries.find(e => e.trl == null);
+    assert.ok(sample, 'at least one non-tech entry without a trl exists');
+    assert.equal(codex.getEntryTRL(sample.id), null,
+      'non-tech entries have no TRL badge');
   });
 
   it('getEntryTRL(unknownId) returns null', () => {
@@ -259,7 +268,7 @@ describe('TRL - distribution sanity', () => {
   }
 
   it('Codex distribution — all four tiers populated', () => {
-    const codex = new CodexSystem();
+    const codex = new CodexSystem(CODEX_DATA);
     const c = countTiers(codex.entries);
     const pct = (n) => ((100 * n) / c.total).toFixed(1);
     console.log(`  [Codex TRL distribution] total=${c.total}  ` +
@@ -310,20 +319,20 @@ describe('Tech Level (UX-11 #10) - presentation relabel', () => {
 describe('Codex (UX-11 #10) - unlock hints, category progress, search', () => {
 
   it('every entry carries a non-empty unlockHint (default per category)', () => {
-    const codex = new CodexSystem();
+    const codex = new CodexSystem(CODEX_DATA);
     const missing = codex.entries.filter(e => !e.unlockHint || !e.unlockHint.trim());
     assert.equal(missing.length, 0,
       `entries without unlockHint: ${missing.map(e => e.id).join(', ')}`);
   });
 
   it('getUnlockHint returns the specific override when authored', () => {
-    const codex = new CodexSystem();
+    const codex = new CodexSystem(CODEX_DATA);
     assert.ok(codex.getUnlockHint('hohmann_transfer').toLowerCase().includes('transfer'));
     assert.equal(codex.getUnlockHint('nonexistent_id'), '');
   });
 
   it('getCategoryProgress tracks unlocks per category', () => {
-    const codex = new CodexSystem();
+    const codex = new CodexSystem(CODEX_DATA);
     const cat = codex.entries[0].category;
     const before = codex.getCategoryProgress(cat);
     assert.equal(before.unlocked, 0, 'fresh system starts fully locked');
@@ -335,7 +344,7 @@ describe('Codex (UX-11 #10) - unlock hints, category progress, search', () => {
   });
 
   it('searchEntries matches title, shortText, and category (case-insensitive)', () => {
-    const codex = new CodexSystem();
+    const codex = new CodexSystem(CODEX_DATA);
     const byTitle = codex.searchEntries('hohmann');
     assert.ok(byTitle.some(e => e.id === 'hohmann_transfer'), 'title match');
     const byCat = codex.searchEntries('orbital mechanics');

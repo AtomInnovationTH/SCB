@@ -1,9 +1,11 @@
 import { describe, it, assert } from './TestRunner.js';
-
-// We can't import CodexSystem directly (it has DOM/THREE deps),
-// so we test the buildEntries function output pattern.
-// Import Constants and Events for trigger verification.
+// Phase 1: CodexSystem is data-driven + Node-importable, so we assert against
+// the REAL triggers (codexTriggers.js) via entryUnlocksOn — not local mocks.
 import { Events } from '../core/Events.js';
+import { CodexSystem } from '../systems/CodexSystem.js';
+import { CODEX_DATA } from './_codexFixture.js';
+
+const codex = new CodexSystem(CODEX_DATA);
 
 describe('ST-8.4 Codex — NEWS entries exist', () => {
   // Verify the Events constants used by trigger conditions
@@ -41,23 +43,36 @@ describe('ST-8.4 Codex — entry ID uniqueness contract', () => {
   });
 });
 
-describe('ST-8.4 Codex — trigger condition contracts', () => {
-  it('news entry triggerCondition matches on eventId', () => {
-    // Simulate what CodexSystem does: calls triggerCondition(payload)
-    const condition = (p) => p.eventId === 'ast_spacemobile_tumble';
-    assert.ok(condition({ eventId: 'ast_spacemobile_tumble' }), 'matches correct eventId');
-    assert.ok(!condition({ eventId: 'wrong_id' }), 'rejects wrong eventId');
+describe('ST-8.4 Codex — trigger condition contracts (real triggers)', () => {
+  it('news_ast_spacemobile unlocks on its NEWS_EVENT_TRIGGERED eventId', () => {
+    assert.ok(codex.getEntry('news_ast_spacemobile'), 'entry exists');
+    assert.equal(codex.entryUnlocksOn('news_ast_spacemobile', Events.NEWS_EVENT_TRIGGERED,
+      { eventId: 'ast_spacemobile_tumble' }), true, 'fires on correct eventId');
+    assert.equal(codex.entryUnlocksOn('news_ast_spacemobile', Events.NEWS_EVENT_TRIGGERED,
+      { eventId: 'wrong_id' }), false, 'rejects wrong eventId');
   });
 
-  it('ISRO entry triggerCondition matches BANGALORE/HASSAN source', () => {
-    const condition = (p) => {
-      const src = (p.source || '').toUpperCase();
-      return src === 'BANGALORE' || src === 'HASSAN';
-    };
-    assert.ok(condition({ source: 'BANGALORE' }), 'matches BANGALORE');
-    assert.ok(condition({ source: 'HASSAN' }), 'matches HASSAN');
-    assert.ok(condition({ source: 'bangalore' }), 'matches lowercase');
-    assert.ok(!condition({ source: 'HOUSTON' }), 'rejects HOUSTON');
+  it('isro_why_india unlocks on a BANGALORE/HASSAN comms source', () => {
+    assert.ok(codex.getEntry('isro_why_india'), 'entry exists');
+    assert.equal(codex.entryUnlocksOn('isro_why_india', Events.COMMS_MESSAGE,
+      { source: 'BANGALORE' }), true, 'matches BANGALORE');
+    assert.equal(codex.entryUnlocksOn('isro_why_india', Events.COMMS_MESSAGE,
+      { source: 'hassan' }), true, 'matches case-insensitively');
+    assert.equal(codex.entryUnlocksOn('isro_why_india', Events.COMMS_MESSAGE,
+      { source: 'HOUSTON' }), false, 'rejects HOUSTON');
+  });
+
+  it('all four ISRO entries share the same BANGALORE/HASSAN unlock contract', () => {
+    const ISRO_IDS = ['isro_why_india', 'isro_kulasekarapattinam', 'isro_istrac', 'isro_launch_vehicles'];
+    for (const id of ISRO_IDS) {
+      assert.ok(codex.getEntry(id), `${id} exists`);
+      assert.equal(codex.entryUnlocksOn(id, Events.COMMS_MESSAGE, { source: 'BANGALORE' }), true,
+        `${id} fires on BANGALORE`);
+      assert.equal(codex.entryUnlocksOn(id, Events.COMMS_MESSAGE, { source: 'hassan' }), true,
+        `${id} matches case-insensitively`);
+      assert.equal(codex.entryUnlocksOn(id, Events.COMMS_MESSAGE, { source: 'HOUSTON' }), false,
+        `${id} rejects HOUSTON`);
+    }
   });
 });
 

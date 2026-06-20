@@ -2,6 +2,11 @@
   "name": "space-cowboy",
   "private": true,
   "type": "module",
+  "scripts": {
+    "start": "npx --yes http-server -p 8080 -c-1 .",
+    "serve": "npx --yes http-server -p 8080 -c-1 .",
+    "test": "node js/test/run-tests.js"
+  },
   "dependencies": {
     "three": "0.184.0"
   }

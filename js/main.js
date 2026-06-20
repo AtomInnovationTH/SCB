@@ -56,6 +56,7 @@ import { LassoSystem } from './systems/LassoSystem.js';
 import { despinLaser } from './systems/DespinLaser.js';
 import { RewardSystem } from './systems/RewardSystem.js';
 import { CodexSystem } from './systems/CodexSystem.js';
+import { loadCodexData } from './systems/codex/codexData.js';
 import { SpaceWeatherSystem } from './systems/SpaceWeatherSystem.js';
 import { SubsystemEvents } from './systems/SubsystemEvents.js';
 import { CollisionAvoidanceSystem } from './systems/CollisionAvoidanceSystem.js';
@@ -594,7 +595,10 @@ async function init() {
   sweepReportUI = new SweepReportUI();
 
   // --- Phase 7: Learning Systems (Codex + Space Weather + Subsystem Events) ---
-  codexSystem = new CodexSystem();
+  // Codex content is offline-first JSON (data/codex.json). Loaded here and
+  // injected; on any failure the system constructs empty (graceful).
+  const codexData = await loadCodexData();
+  codexSystem = new CodexSystem(codexData);
   // ST-6.1: seeded replay if catalogLoader is ready
   spaceWeatherSystem = new SpaceWeatherSystem({ catalogLoader });
   subsystemEvents = new SubsystemEvents();

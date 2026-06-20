@@ -126,6 +126,10 @@ import './test-bossLifecycle.js';   // CP-4 — shared boss primitives
 import './test-IssConjunctionBoss.js'; // CH5 — ISS conjunction boss
 import './test-StarlinkCascadeBoss.js'; // CH9 — Starlink cascade boss
 import './test-CodexEndgame.js';    // Phase C/D/E — outcome-gated codex
+import './test-CodexData.js';       // Codex Overhaul Phase 0a — data-integrity guards
+import './test-CodexReachability.js'; // Codex Overhaul Phase 0d — comms-substring trigger reachability
+import './test-CodexPersistence.js'; // Codex Overhaul Phase 0b — save/restore round-trip regression
+import './test-CodexInterpolate.js'; // Codex Overhaul Phase 1 — live-value interpolation + data loader
 
 // ST-6.7: EnvironmentSystem — AO, MMOD, Safe-Mode, Radiation Belt, Battery DOD
 import './test-EnvironmentSystem.js';

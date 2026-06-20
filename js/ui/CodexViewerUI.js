@@ -1,5 +1,5 @@
 /**
- * CodexViewerUI.js — DOM overlay modal for browsing the 45 codex entries.
+ * CodexViewerUI.js — DOM overlay modal for browsing the codex entries.
  * Toggle with I key ("Info"). Escape closes.
  *
  * Layout: full-screen overlay → centered panel with category sidebar + entry grid/detail.
@@ -8,13 +8,15 @@
 
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
-import { CodexCategory, entryMatchesQuery } from '../systems/CodexSystem.js';
+import { entryMatchesQuery } from '../systems/CodexSystem.js';
 import {
   Constants, trlToBadgeColor, trlToLabel, trlToTechLevelLabel, techLevelBadgeText,
 } from '../core/Constants.js';
 
-// Human-readable category labels + icons
-const CATEGORY_META = {
+// Fallback category labels/icons used only if the system supplies no meta
+// (e.g. codex.json failed to load). Authoritative meta — including per-category
+// colour — comes from data/codex.json via codexSystem.getCategories().
+const CATEGORY_META_FALLBACK = {
   ORBITAL_MECHANICS: { label: 'Orbital Mechanics', icon: '🌍' },
   PROPULSION:        { label: 'Propulsion',        icon: '🔥' },
   POWER:             { label: 'Power',              icon: '⚡' },
@@ -22,10 +24,15 @@ const CATEGORY_META = {
   MATERIALS:         { label: 'Materials',           icon: '🔩' },
   TETHERS:           { label: 'Tethers',             icon: '🪢' },
   DEBRIS:            { label: 'Debris',              icon: '💥' },
-  SENSORS:           { label: 'Sensors & Avionics',  icon: '📡' },
+  SENSORS:           { label: 'Sensors',             icon: '📡' },
+  ATTITUDE:          { label: 'Attitude Control',    icon: '🌀' },
+  AVIONICS:          { label: 'Avionics',            icon: '🖥️' },
   COMMS:             { label: 'Communications',      icon: '📶' },
-  NEWS:              { label: 'News & Events',       icon: '📰' },
+  CATALOG:           { label: 'Catalog',             icon: '🛰️' },
   HERITAGE:          { label: 'Heritage',            icon: '🏛️' },
+  WORLD_INDUSTRY:    { label: 'World & Industry',    icon: '🌐' },
+  NEWS:              { label: 'News & Events',       icon: '📰' },
+  PLAYBOOK:          { label: 'Playbook',            icon: '🎮' },
 };
 
 export class CodexViewerUI {
@@ -175,7 +182,7 @@ export class CodexViewerUI {
 
     // UX-11 #10: live search — filters across ALL categories as you type;
     // sidebar selection is ignored while a query is active. Debounced
-    // (review fix): each render rebuilds up to 113 cards, so don't do it
+    // (review fix): each render rebuilds every card, so don't do it
     // per keystroke.
     const searchInput = overlay.querySelector('#codex-search');
     searchInput.addEventListener('input', () => {
@@ -194,16 +201,33 @@ export class CodexViewerUI {
     });
   }
 
+  /** @private Resolve category meta {label, icon, color} from the system, with fallback. */
+  _catMeta(key) {
+    const m = (typeof this._codex.getCategoryMeta === 'function') ? this._codex.getCategoryMeta(key) : null;
+    const fb = CATEGORY_META_FALLBACK[key] || { label: key, icon: '📄' };
+    return {
+      label: (m && m.label) || fb.label,
+      icon: (m && m.icon) || fb.icon,
+      color: (m && m.color) || '#00d4ff',
+    };
+  }
+
   /** @private Build the category sidebar tabs */
   _buildSidebar(sidebar) {
     // "ALL" tab
     const allTab = this._makeSidebarTab('ALL', '📚', 'All Entries', null);
     sidebar.appendChild(allTab);
 
-    // Category tabs
-    for (const key of Object.keys(CodexCategory)) {
-      const meta = CATEGORY_META[key] || { label: key, icon: '📄' };
-      const tab = this._makeSidebarTab(key, meta.icon, meta.label, key);
+    // Category tabs — ordered, data-driven; skip categories with no entries yet.
+    const cats = (typeof this._codex.getCategories === 'function')
+      ? this._codex.getCategories()
+      : Object.keys(CATEGORY_META_FALLBACK).map(key => ({ key, ...this._catMeta(key) }));
+    for (const c of cats) {
+      const hasEntries = this._codex.getCategoryProgress
+        ? this._codex.getCategoryProgress(c.key).total > 0
+        : true;
+      if (!hasEntries) continue;
+      const tab = this._makeSidebarTab(c.key, c.icon, c.label, c.key);
       sidebar.appendChild(tab);
     }
   }
@@ -335,7 +359,7 @@ export class CodexViewerUI {
       boxShadow: isNew ? '0 0 12px rgba(0,212,255,0.15)' : 'none',
     });
 
-    const catMeta = CATEGORY_META[entry.category] || { label: entry.category };
+    const catMeta = this._catMeta(entry.category);
     const shortText = `<span style="opacity:${isLocked ? 0.55 : 0.7};">${entry.shortText}</span>`;
     const newBadge = isNew
       ? '<span style="position:absolute;top:6px;right:8px;font-size:9px;color:#00d4ff;font-weight:bold;text-shadow:0 0 6px rgba(0,212,255,0.5);">NEW</span>'
@@ -402,7 +426,7 @@ export class CodexViewerUI {
       eventBus.emit(Events.CODEX_VIEWED, { id: entry.id });
     }
 
-    const catMeta = CATEGORY_META[entry.category] || { label: entry.category, icon: '📄' };
+    const catMeta = this._catMeta(entry.category);
 
     // ST-6.6 / UX-11 #10: Tech-Level badge + tier word + rationale in detail
     const dTrl = entry.trl;
