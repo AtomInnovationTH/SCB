@@ -1,5 +1,11 @@
 # Step 4 — Inline Glossary / First-Use Tooltip Layer (master §11.8)
 
+> **STATUS (2026-06-20): Slices 1 & 2 DONE & committed, full suite green
+> (845 suites / 3428 tests).** Phase 2d content fill committed first (`0e425b7`);
+> Slice 1 (vertical slice / comms panel) `0291…`; Slice 2 (all DOM surfaces)
+> `e0aa753`. Slice 3 (polish / glossary index tab) remains optional follow-up.
+> See "Implementation log" at the foot of this file.
+
 > Companion to `tech-library-codex-next-session.md` (Steps 1–3 done) and the master
 > `tech-library-codex-overhaul.md` (§11.8 spec, §Phase 4 deep-links). This is the
 > actionable plan for the **last** codex step: a game-wide inline glossary so jargon
@@ -190,3 +196,52 @@ menu's `.adr-name` look or add a shared class.
   or `CodexSystem`). `SAVE_VERSION` stays 1.
 - **Slice 2 edits (later):** `TeachingOverlay.js`, `ShopScreen.js`, `BriefingScreen.js`,
   HintTicker, `CodexViewerUI._showDetail` fullText.
+
+---
+
+## 8. Implementation log (2026-06-20)
+
+**Phase 2d content (pre-req, committed `0e425b7`):** +20 entries in the five thin
+categories (155→175), 15 discovery triggers, guard tests. Was uncommitted at
+handoff; committed before starting Step 4.
+
+**Slice 1 — vertical slice / comms panel (committed):**
+- `js/systems/codex/glossary.js` — DOM-free module. **56** curated terms (51 with
+  a real `entryId`). Pure `decorateGlossary(text, { once, isNew, onSeen })`:
+  HTML-escapes all non-term text, wraps via a cached longest-first matcher with
+  word-boundary + per-term case rules (LEO uppercase-only; delta-v insensitive;
+  unicode ΔV). Exports `escapeHtml`, `GLOSSARY`, `_resetMatcher`.
+- `js/systems/codex/GlossaryState.js` — persisted first-use seen-state
+  (`{ v:1, seen[] }` slice; gather/loaded + data-loss guard; `dispose()`).
+- `Events.CODEX_OPEN_ENTRY` + `CodexViewerUI.openEntry(id)` (ALIASES-resolved,
+  locked-ok, safe no-op) + `main.js` listener beside `codex:toggleUI`.
+- `PersistenceManager.save()` whitelists `glossary` (closed envelope — required,
+  same as `codex`). `SAVE_VERSION` stays 1.
+- `CommsPanel` decorates the **body span only** (source label escaped); seen-mark
+  only on the latest un-scrolled row so history re-renders don't burn cues.
+- Tests: `test-Glossary.js`, `test-GlossaryPersistence.js`, `openEntry` guards in
+  `test-CodexViewer.js`.
+
+**Slice 2 — all other DOM surfaces (committed `e0aa753`):**
+- `js/ui/glossaryDom.js` — shared `ensureGlossaryCss()` (idempotent, defensive vs
+  minimal-DOM test shims) + `delegateGlossaryClicks(el, { capture })` (emits on
+  `data-entry`, stops propagation, idempotent).
+- Decorated: `CodexViewerUI._showDetail` (short/full/realWorld — recursive
+  deep-links; also fixed a latent `<1 km`/`>10 cm` raw-innerHTML bug via escaping),
+  `ShopScreen` upgrade/tier descriptions, `TeachingOverlay` body, `HintTicker`
+  body (pointer-events re-enabled on the click-through strip), `BriefingScreen` ΔV
+  label (capture-phase so a term click beats the card's select handler).
+- `CommsPanel` refactored onto the shared helpers (no behavior change).
+- Tests: `test-GlossaryDom.js`.
+
+**Deliberate scope calls:**
+- Glossary terms in the viewer/shop/etc. use `once:true` and **no first-use cue**
+  (`isNew` only wired on comms, the teaching surface) — the library is a "read
+  more" destination, not a place to nag.
+- BriefingScreen decorates only the ΔV stat label (its sole real jargon); prose
+  title/objective have none. Capture-phase delegation avoids the
+  clickable-card double-action.
+
+**Follow-ups (Slice 3, optional):** first-use cue tuning + seen-dimming polish;
+a dedicated glossary index/tab in the viewer; broadening the term list; wiring
+`isNew`/seen-state into non-comms surfaces if desired.
