@@ -294,9 +294,6 @@ function buildMatcher() {
   return _matcher;
 }
 
-/** Test-only: clear the cached matcher (e.g. after mutating GLOSSARY in a test). */
-export function _resetMatcher() { _matcher = null; }
-
 /**
  * Resolve a raw matched substring to its glossary record, honouring case rules:
  *   - exact case-sensitive hit wins (acronyms: LEO, TRL, RAAN…)
