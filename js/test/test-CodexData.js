@@ -356,8 +356,8 @@ describe('Codex Phase 2 — content slice', () => {
     assert.ok(rel.includes('carbyne'), 'space_elevator → carbyne');
   });
 
-  it('entry count is 155', () => {
-    assert.equal(entries.length, 155, 'Phase 2 + 2b + 2c yields 155 entries');
+  it('entry count is 175', () => {
+    assert.equal(entries.length, 175, 'Phase 2 + 2b + 2c + 2d yields 175 entries');
   });
 });
 
@@ -415,6 +415,55 @@ describe('Codex Phase 2c — Catalog & News expansion', () => {
 
   it('every new Catalog/News entry carries a realWorld source line', () => {
     const bad = [...CATALOG_NEW, ...NEWS_NEW]
+      .filter(id => { const e = codex.getEntry(id); return !e.realWorld || !e.realWorld.trim(); });
+    assert.equal(bad.length, 0, `missing realWorld: ${bad.join(', ')}`);
+  });
+});
+
+describe('Codex Phase 2d — thin-category fill', () => {
+  const TECH_NEW = [
+    // ATTITUDE
+    'attitude_control_system', 'control_moment_gyroscope', 'rcs_attitude_control',
+    'momentum_dumping', 'gravity_gradient_stabilization',
+    // AVIONICS
+    'onboard_computer', 'rad_hard_processor', 'single_event_effects', 'spacewire_bus', 'fdir',
+    // HERITAGE
+    'heritage_solar_max', 'heritage_ldef', 'heritage_hubble_servicing',
+    // SENSORS
+    'sun_sensor', 'pose_estimation',
+  ];
+  const WORLD_NEW = ['world_the_rules', 'world_liability', 'world_five_year_rule',
+    'world_servicing', 'world_sustainability_rating'];
+
+  it('thin categories are filled out', () => {
+    assert.ok(codex.getCategory('ATTITUDE').length >= 8, 'ATTITUDE filled');
+    assert.ok(codex.getCategory('AVIONICS').length >= 9, 'AVIONICS filled');
+    assert.ok(codex.getCategory('WORLD_INDUSTRY').length >= 9, 'WORLD_INDUSTRY filled');
+    assert.ok(codex.getCategory('HERITAGE').length >= 10, 'HERITAGE filled');
+    assert.ok(codex.getCategory('SENSORS').length >= 10, 'SENSORS filled');
+  });
+
+  it('all 20 new Phase 2d entries resolve via getEntry', () => {
+    const missing = [...TECH_NEW, ...WORLD_NEW].filter(id => !codex.getEntry(id));
+    assert.equal(missing.length, 0, `missing: ${missing.join(', ')}`);
+  });
+
+  it('new tech entries are discovery cards (locked + reachable debris trigger)', () => {
+    for (const id of TECH_NEW) {
+      assert.ok(!codex.getEntry(id).unlocked, `${id} should start locked`);
+      assert.ok(codex.entryUnlocksOn(id, Events.SCORE_UPDATE, { debrisCleared: 50 }),
+        `${id} unlocks via debris progress`);
+    }
+  });
+
+  it('new WORLD_INDUSTRY entries are start-unlocked reference (no trigger needed)', () => {
+    for (const id of WORLD_NEW) {
+      assert.ok(codex.getEntry(id).unlocked, `${id} should start unlocked`);
+    }
+  });
+
+  it('every new Phase 2d entry carries a realWorld source line', () => {
+    const bad = [...TECH_NEW, ...WORLD_NEW]
       .filter(id => { const e = codex.getEntry(id); return !e.realWorld || !e.realWorld.trim(); });
     assert.equal(bad.length, 0, `missing realWorld: ${bad.join(', ')}`);
   });

@@ -13,7 +13,7 @@
 ## 0. Verified state (checked at handover, 2026-06-20)
 
 > **UPDATE 2026-06-20 (Phase 3 done):** Backlog committed (`e2f9cf3`). Phase 3
-> viewer overhaul is **complete and green** (uncommitted, pending review):
+> viewer overhaul is **complete, committed & pushed** (`d207644`):
 > open-from-any-screen (dropped `isGameplay` gate at `InputManager.js`),
 > detail redesign (realWorld callout + formula chip + clickable Related chips +
 > Prev/Next), per-category hue theming (sidebar/cards/detail tinted from each
@@ -21,9 +21,18 @@
 > (All/Unlocked/Locked × Default/A–Z/Readiness), overall progress bar in the
 > header, and keyboard nav (roving arrow focus + Enter in the grid; ←/→ =
 > Prev/Next + Backspace = back in detail; ESC closes or steps back). New
-> `js/test/test-CodexViewer.js` covers the pure logic (`_hexToRgb`,
-> `_applyFilterSort`, `_currentListEntries`). Suite: **3376 pass / 0 fail**,
-> 830 suites. **Next: Option B — fill thin categories (§4).**
+> `js/test/test-CodexViewer.js` covers the pure logic. Menu bumped to **v.991**.
+>
+> **UPDATE 2026-06-20 (Phase 2d / Option B done — UNCOMMITTED):** Thin categories
+> filled via `scripts/phase2d-thin-categories.mjs` (+20 entries → **175 total**):
+> ATTITUDE 3→8, AVIONICS 4→9, WORLD_INDUSTRY 4→9, HERITAGE 7→10, SENSORS 8→10.
+> All facts web-verified; acronyms expanded; `realWorld` source line on each;
+> `related` links auto-symmetrised (reciprocal back-link step in the script).
+> 15 new discovery triggers (non-comms `SCORE_UPDATE`/debrisCleared) in
+> `codexTriggers.js`; the 5 WORLD_INDUSTRY entries are `startUnlocked` (no trigger).
+> `test-CodexData.js` count bumped 155→175 + new Phase 2d guard block. Suite:
+> **3383 pass / 0 fail**, 831 suites. **Next: Step 4 — inline glossary / tooltip
+> layer (master §11.8).**
 
 - **155 entries** in `data/codex.json`. **14 `startUnlocked`**. Tests: **3360 pass / 0 fail**
   (`node js/test/run-tests.js`, 826 suites).

@@ -168,6 +168,9 @@ export const CODEX_TRIGGERS = {
   kalman_filtering:       [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 20 }],
   pulse_scan_radar:       [{ event: E.PULSE_SCAN_COMPLETE, match: always }],
   lidar_ranging:          [{ event: E.ARM_CAPTURED, match: always }],
+  // Phase 2d SENSORS fill — discovery via debris-clear thresholds (non-comms)
+  sun_sensor:             [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 9 }],
+  pose_estimation:        [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 19 }],
 
   // ===== ATTITUDE (split from SENSORS) =====
   // survivor of ← cmg_gyroscopes (union: COMMS 'reaction wheel' + SUBSYSTEM gyro/reaction wheel)
@@ -175,6 +178,12 @@ export const CODEX_TRIGGERS = {
                            { event: E.SUBSYSTEM_EVENT, match: txt('gyro', 'reaction wheel') }],
   magnetorquers:          [{ event: E.COMMS_MESSAGE, match: txt('magnetorquer') }],
   detumble:               [{ event: E.COMMS_MESSAGE, match: txt('tumble rate') }],
+  // Phase 2d ATTITUDE fill — discovery via debris-clear thresholds (non-comms)
+  attitude_control_system:      [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 6 }],
+  rcs_attitude_control:         [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 12 }],
+  control_moment_gyroscope:     [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 16 }],
+  momentum_dumping:             [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 24 }],
+  gravity_gradient_stabilization:[{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 34 }],
 
   // ===== AVIONICS (split from SENSORS) =====
   triple_redundancy:      [{ event: E.COMMS_MESSAGE, match: (p) => !!p.text && (p.text.toLowerCase().includes('tmr') || (p.text.toLowerCase().includes('triple') && p.text.toLowerCase().includes('redundancy'))) }],
@@ -182,6 +191,12 @@ export const CODEX_TRIGGERS = {
                            { event: E.SUBSYSTEM_EVENT, match: src('AVIONICS') }],
   telemetry:              [{ event: E.COMMS_MESSAGE, match: txt('telemetry frame') }],
   ecc_memory:             [{ event: E.COMMS_MESSAGE, match: txt('single-bit error') }],
+  // Phase 2d AVIONICS fill — discovery via debris-clear thresholds (non-comms)
+  onboard_computer:       [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 7 }],
+  spacewire_bus:          [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 13 }],
+  rad_hard_processor:     [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 17 }],
+  fdir:                   [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 21 }],
+  single_event_effects:   [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 27 }],
 
   // ===== COMMS =====
   // survivor of ← laser_comms_optical
@@ -205,6 +220,10 @@ export const CODEX_TRIGGERS = {
   space_elevator:         [{ event: E.GAME_WIN, match: (p) => p.winType === 'elevator' }],
   what_10000kg_buys:      [{ event: E.GAME_WIN, match: (p) => p.winType === 'elevator' }],
   jwst_horizon:           [{ event: E.GAME_WIN, match: (p) => p.winType === 'elevator' }],
+  // Phase 2d HERITAGE fill — servicing/exposure legacy, discovery via debris-clear
+  heritage_solar_max:        [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 36 }],
+  heritage_ldef:             [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 44 }],
+  heritage_hubble_servicing: [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 46 }],
 
   // ===== NEWS =====
   news_ast_spacemobile:   [{ event: E.NEWS_EVENT_TRIGGERED, match: (p) => p.eventId === 'ast_spacemobile_tumble' }],
