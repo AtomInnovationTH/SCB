@@ -439,7 +439,7 @@ export class InputManager {
     if (d.codexViewerUI && d.codexViewerUI.isVisible()) {
       if (e.code === 'KeyI') {
         d.codexViewerUI.toggle();
-        d.audioSystem.playClick();
+        d.audioSystem?.playClick();
         e.preventDefault();
       }
       // ESC is handled by CodexViewerUI's own capture-phase listener
@@ -1298,10 +1298,14 @@ export class InputManager {
         break;
 
       // --- F17: Toggle Codex Library / Info (I key) ---
+      // Phase 3: the Tech Library opens from ANY screen (menu, paused, win,
+      // gameplay) — it's reference material, not a gameplay-only HUD. The
+      // open-codex intercept above (lines ~438) already handles I/ESC while
+      // open regardless of game state, so this only needs to drop isGameplay.
       case 'KeyI':
-        if (isGameplay && d.codexViewerUI) {
+        if (d.codexViewerUI) {
           d.codexViewerUI.toggle();
-          d.audioSystem.playClick();
+          d.audioSystem?.playClick();
           // Skills discovery: emit CODEX_OPENED on OPEN only. toggle() also
           // closes; firing unconditionally mis-triggered TeachingSystem's
           // first_codex (and skills discovery) on close.

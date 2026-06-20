@@ -49,6 +49,12 @@ export class CodexViewerUI {
     this._searchQuery = '';
     /** @type {number|null} debounce handle for the search input */
     this._searchDebounce = null;
+    /** @type {'all'|'unlocked'|'locked'} list filter (Phase 3 filter bar) */
+    this._filter = 'all';
+    /** @type {'default'|'az'|'trl'} list sort order (Phase 3 sort bar) */
+    this._sort = 'default';
+    /** @type {number} roving-focus index into the current grid (keyboard nav) */
+    this._focusIdx = -1;
 
     this._buildDOM();
     this._setupListeners();
@@ -120,6 +126,12 @@ export class CodexViewerUI {
       <div style="display:flex;align-items:center;gap:14px;flex:1;min-width:0;">
         <span style="font-size:20px;color:#00d4ff;font-weight:bold;letter-spacing:2px;white-space:nowrap;">🔧 TECH LIBRARY</span>
         <span id="codex-progress" style="font-size:13px;color:#888;white-space:nowrap;"></span>
+        <div id="codex-progress-bar" title="overall briefings unlocked"
+          style="width:120px;height:6px;border-radius:3px;background:rgba(255,255,255,0.08);
+                 overflow:hidden;flex-shrink:0;">
+          <div id="codex-progress-fill" style="height:100%;width:0%;
+            background:linear-gradient(90deg,#00d4ff,#7af);transition:width 0.3s ease;"></div>
+        </div>
         <input id="codex-search" type="text" placeholder="🔍 search topics…" spellcheck="false"
           style="flex:1;max-width:320px;margin-left:8px;background:rgba(0,0,0,0.4);
                  border:1px solid rgba(0,212,255,0.25);border-radius:3px;color:#cfefff;
@@ -153,6 +165,17 @@ export class CodexViewerUI {
       flex: '1', overflow: 'hidden', display: 'flex', flexDirection: 'column',
     });
 
+    // Filter / sort bar (above the grid; hidden while a detail or search-empty
+    // state is shown). Built once; its buttons mutate _filter/_sort and re-render.
+    const filterBar = document.createElement('div');
+    filterBar.id = 'codex-filter-bar';
+    Object.assign(filterBar.style, {
+      display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap',
+      padding: '10px 16px', borderBottom: '1px solid rgba(0,212,255,0.1)',
+      fontSize: '12px', color: '#889', flexShrink: '0',
+    });
+    this._buildFilterBar(filterBar);
+
     // Entry list (grid)
     const entryList = document.createElement('div');
     entryList.id = 'codex-entry-list';
@@ -169,6 +192,7 @@ export class CodexViewerUI {
       flex: '1', overflowY: 'auto', padding: '22px 28px', display: 'none',
     });
 
+    content.appendChild(filterBar);
     content.appendChild(entryList);
     content.appendChild(entryDetail);
     body.appendChild(sidebar);
@@ -228,8 +252,31 @@ export class CodexViewerUI {
         ? this._codex.getCategoryProgress(c.key).total > 0
         : true;
       if (!hasEntries) continue;
-      const tab = this._makeSidebarTab(c.key, c.icon, c.label, c.key);
+      const tab = this._makeSidebarTab(c.key, c.icon, c.label, c.key, c.color);
       sidebar.appendChild(tab);
+    }
+
+    // --- Tracks: guided cross-category learning paths (e.g. "The Propellant
+    // Story"). Rendered below the categories under a small divider. Selecting a
+    // track key (prefixed "track:") switches the list into ordered-track mode. ---
+    const tracks = (typeof this._codex.getTracks === 'function') ? this._codex.getTracks() : null;
+    const trackEntries = tracks ? Object.entries(tracks) : [];
+    if (trackEntries.length) {
+      const divider = document.createElement('div');
+      divider.textContent = 'LEARNING PATHS';
+      Object.assign(divider.style, {
+        padding: '14px 14px 6px', fontSize: '10px', letterSpacing: '0.14em',
+        color: '#566', borderTop: '1px solid rgba(255,255,255,0.06)', marginTop: '8px',
+      });
+      sidebar.appendChild(divider);
+      trackEntries
+        .sort((a, b) => (a[1].order ?? 999) - (b[1].order ?? 999))
+        .forEach(([tid, meta]) => {
+          const tab = this._makeSidebarTab(
+            `track:${tid}`, '🧭', meta.label || tid, `track:${tid}`, meta.color,
+          );
+          sidebar.appendChild(tab);
+        });
     }
   }
 
@@ -248,9 +295,12 @@ export class CodexViewerUI {
   }
 
   /** @private Create a sidebar tab element */
-  _makeSidebarTab(key, icon, label, category) {
+  _makeSidebarTab(key, icon, label, category, color) {
     const tab = document.createElement('div');
     tab.dataset.category = category;
+    // Phase 3 hue theming: stash the category accent on the element so the
+    // active-highlight + hover read in the category's own colour.
+    tab.dataset.accent = color || '#00d4ff';
     Object.assign(tab.style, {
       padding: '9px 14px', cursor: 'pointer', fontSize: '13px',
       borderLeft: '3px solid transparent', transition: 'all 0.15s ease',
@@ -262,7 +312,8 @@ export class CodexViewerUI {
       `<span class="codex-tab-count" style="font-size:11px;color:#557;flex-shrink:0;"></span>`;
     tab.addEventListener('mouseenter', () => {
       if (tab.dataset.category !== this._selectedCategory) {
-        tab.style.background = 'rgba(0,212,255,0.06)';
+        const rgb = this._hexToRgb(tab.dataset.accent);
+        tab.style.background = `rgba(${rgb.r},${rgb.g},${rgb.b},0.08)`;
       }
     });
     tab.addEventListener('mouseleave', () => {
@@ -283,11 +334,13 @@ export class CodexViewerUI {
   // RENDERING
   // ==========================================================================
 
-  /** @private Update header progress counter */
+  /** @private Update header progress counter + overall progress bar */
   _renderHeader() {
     const prog = this._codex.getProgress();
     const el = document.getElementById('codex-progress');
     if (el) el.textContent = `${prog.unlocked}/${prog.total} briefings unlocked (${prog.percentage}%)`;
+    const fill = document.getElementById('codex-progress-fill');
+    if (fill) fill.style.width = `${prog.percentage}%`;
   }
 
   /** @private Highlight the active sidebar tab + refresh per-category counts */
@@ -298,20 +351,55 @@ export class CodexViewerUI {
     const active = this._selectedCategory;
     for (const tab of tabs) {
       const isSel = tab.dataset.category === active;
-      tab.style.borderLeftColor = isSel ? '#00d4ff' : 'transparent';
-      tab.style.background = isSel ? 'rgba(0,212,255,0.1)' : 'none';
-      tab.style.color = isSel ? '#00d4ff' : '#aaa';
+      const accent = tab.dataset.accent || '#00d4ff';
+      const rgb = this._hexToRgb(accent);
+      tab.style.borderLeftColor = isSel ? accent : 'transparent';
+      tab.style.background = isSel ? `rgba(${rgb.r},${rgb.g},${rgb.b},0.13)` : 'none';
+      tab.style.color = isSel ? accent : '#aaa';
 
-      // Per-category progress (e.g. "3/7").
+      // Per-category progress (e.g. "3/7"). Track tabs ("track:<id>") have no
+      // category progress; show their entry count instead.
       const countEl = tab.querySelector('.codex-tab-count');
       if (countEl) {
-        if (typeof this._codex.getCategoryProgress === 'function') {
-          const p = this._codex.getCategoryProgress(tab.dataset.category);
+        const cat = tab.dataset.category;
+        if (cat.startsWith('track:')) {
+          const tid = cat.slice('track:'.length);
+          const track = (typeof this._codex.getTrack === 'function') ? this._codex.getTrack(tid) : null;
+          const list = track ? track.entries : [];
+          const unlocked = list.filter(e => e.unlocked).length;
+          countEl.textContent = `${unlocked}/${list.length}`;
+        } else if (typeof this._codex.getCategoryProgress === 'function') {
+          const p = this._codex.getCategoryProgress(cat);
           countEl.textContent = `${p.unlocked}/${p.total}`;
         }
-        countEl.style.color = isSel ? '#00d4ff' : '#557';
+        countEl.style.color = isSel ? accent : '#557';
       }
     }
+  }
+
+  /** @private Resolve the current list (search / track / category) with the
+   * active filter+sort applied. Shared by the grid and Prev/Next so they stay
+   * in lockstep.
+   * @returns {{ entries:Array<object>, isTrack:boolean }}
+   */
+  _currentListEntries() {
+    let entries;
+    let isTrack = false;
+    if (this._searchQuery) {
+      entries = (typeof this._codex.searchEntries === 'function')
+        ? this._codex.searchEntries(this._searchQuery)
+        : this._codex.entries.filter(e => entryMatchesQuery(e, this._searchQuery));
+    } else if (this._selectedCategory && this._selectedCategory.startsWith('track:')) {
+      isTrack = true;
+      const tid = this._selectedCategory.slice('track:'.length);
+      const track = (typeof this._codex.getTrack === 'function') ? this._codex.getTrack(tid) : null;
+      entries = track ? track.entries : [];
+    } else {
+      entries = this._selectedCategory
+        ? this._codex.getCategory(this._selectedCategory)
+        : this._codex.entries;
+    }
+    return { entries: this._applyFilterSort(entries, isTrack), isTrack };
   }
 
   /** @private Render the entry card grid */
@@ -323,31 +411,203 @@ export class CodexViewerUI {
     listEl.style.display = 'grid';
     detailEl.style.display = 'none';
 
-    // UX-11 #10: an active search query searches ALL categories and ignores
-    // the sidebar selection until cleared.
-    let entries;
-    if (this._searchQuery) {
-      entries = (typeof this._codex.searchEntries === 'function')
-        ? this._codex.searchEntries(this._searchQuery)
-        : this._codex.entries.filter(e => entryMatchesQuery(e, this._searchQuery));
-    } else {
-      entries = this._selectedCategory
-        ? this._codex.getCategory(this._selectedCategory)
-        : this._codex.entries;
-    }
+    // Refactored: resolve + filter via the shared helper so Prev/Next mirrors
+    // exactly what the grid shows.
+    const { entries, isTrack } = this._currentListEntries();
 
     listEl.innerHTML = '';
     if (entries.length === 0) {
       const empty = document.createElement('div');
       Object.assign(empty.style, { color: '#667', fontSize: '14px', padding: '24px' });
-      empty.textContent = `No topics match “${this._searchQuery}”.`;
+      empty.textContent = this._searchQuery
+        ? `No topics match “${this._searchQuery}”.`
+        : 'No topics match the current filter.';
       listEl.appendChild(empty);
     }
     for (const entry of entries) {
       listEl.appendChild(this._makeCard(entry));
     }
 
+    // Reset roving keyboard focus to the top of the freshly-rendered grid.
+    this._focusIdx = entries.length ? 0 : -1;
+    this._applyGridFocus();
+
     this._renderSidebarActive();
+    this._renderFilterBar(isTrack);
+  }
+
+  /** @private Highlight the keyboard-focused card (roving tabindex pattern). */
+  _applyGridFocus() {
+    const listEl = document.getElementById('codex-entry-list');
+    if (!listEl) return;
+    const cards = listEl.querySelectorAll('.codex-card');
+    cards.forEach((card, i) => {
+      if (i === this._focusIdx) {
+        card.style.outline = '2px solid #00d4ff';
+        card.style.outlineOffset = '1px';
+      } else {
+        card.style.outline = 'none';
+      }
+    });
+  }
+
+  /** @private Number of columns currently laid out in the grid (for up/down). */
+  _gridColumns(listEl) {
+    const cards = listEl.querySelectorAll('.codex-card');
+    if (cards.length < 2) return 1;
+    const firstTop = cards[0].offsetTop;
+    let cols = 1;
+    for (let i = 1; i < cards.length; i++) {
+      if (cards[i].offsetTop === firstTop) cols++;
+      else break;
+    }
+    return Math.max(1, cols);
+  }
+
+  /** @private Handle an arrow/Enter/Home/End keypress in the grid view. */
+  _handleGridKey(code) {
+    const listEl = document.getElementById('codex-entry-list');
+    if (!listEl) return;
+    const cards = listEl.querySelectorAll('.codex-card');
+    if (!cards.length) return;
+    if (this._focusIdx < 0) this._focusIdx = 0;
+
+    if (code === 'Enter') {
+      const card = cards[this._focusIdx];
+      if (card) card.click();
+      return;
+    }
+
+    const cols = this._gridColumns(listEl);
+    let idx = this._focusIdx;
+    switch (code) {
+      case 'ArrowLeft':  idx = Math.max(0, idx - 1); break;
+      case 'ArrowRight': idx = Math.min(cards.length - 1, idx + 1); break;
+      case 'ArrowUp':    idx = Math.max(0, idx - cols); break;
+      case 'ArrowDown':  idx = Math.min(cards.length - 1, idx + cols); break;
+      case 'Home':       idx = 0; break;
+      case 'End':        idx = cards.length - 1; break;
+      default: break;
+    }
+    this._focusIdx = idx;
+    this._applyGridFocus();
+    const card = cards[idx];
+    if (card && typeof card.scrollIntoView === 'function') {
+      card.scrollIntoView({ block: 'nearest' });
+    }
+  }
+
+  /** @private Step Prev/Next within the current list while in the detail view.
+   * @param {number} dir -1 for previous, +1 for next
+   */
+  _stepDetail(dir) {
+    if (!this._selectedEntry) return;
+    const { entries } = this._currentListEntries();
+    const idx = entries.findIndex(e => e.id === this._selectedEntry.id);
+    if (idx < 0) return;
+    const nextIdx = idx + dir;
+    if (nextIdx < 0 || nextIdx >= entries.length) return;
+    const detailEl = document.getElementById('codex-entry-detail');
+    if (detailEl) detailEl.scrollTop = 0;
+    this._showDetail(entries[nextIdx]);
+  }
+
+  /** @private Apply the locked/unlocked filter and the sort order.
+   * A learning path ("track") is authored as an ordered narrative, so its
+   * sequence is always preserved — the sort control is suppressed for tracks
+   * (see _renderFilterBar) and ignored here. Category/search views honour the
+   * active sort, defaulting to category order.
+   * @param {Array<object>} entries
+   * @param {boolean} [isTrack=false] keep the authored order, ignoring _sort
+   * @returns {Array<object>}
+   */
+  _applyFilterSort(entries, isTrack = false) {
+    let out = entries;
+    if (this._filter === 'unlocked') out = out.filter(e => e.unlocked);
+    else if (this._filter === 'locked') out = out.filter(e => !e.unlocked);
+
+    // Tracks keep their authored trackOrder regardless of the sort selection.
+    if (isTrack) return out;
+
+    if (this._sort === 'az') {
+      out = out.slice().sort((a, b) => a.title.localeCompare(b.title));
+    } else if (this._sort === 'trl') {
+      // Highest readiness first; non-tech (null TRL) sinks to the end.
+      out = out.slice().sort((a, b) => {
+        const at = (typeof a.trl === 'number') ? a.trl : -1;
+        const bt = (typeof b.trl === 'number') ? b.trl : -1;
+        return bt - at;
+      });
+    }
+    // 'default': category order — leave as-is.
+    return out;
+  }
+
+  /** @private Build the filter/sort bar controls (once). */
+  _buildFilterBar(bar) {
+    const mkGroup = (label, key, opts) => {
+      const wrap = document.createElement('span');
+      wrap.className = 'codex-fs-group';
+      wrap.dataset.group = key;
+      Object.assign(wrap.style, { display: 'inline-flex', alignItems: 'center', gap: '6px' });
+      const lbl = document.createElement('span');
+      lbl.textContent = label;
+      lbl.style.color = '#667';
+      wrap.appendChild(lbl);
+      for (const o of opts) {
+        const btn = document.createElement('span');
+        btn.className = 'codex-fs-btn';
+        btn.dataset.group = key;
+        btn.dataset.value = o.value;
+        btn.textContent = o.label;
+        Object.assign(btn.style, {
+          cursor: 'pointer', padding: '3px 9px', borderRadius: '11px',
+          border: '1px solid rgba(255,255,255,0.12)', color: '#9ab',
+          transition: 'all 0.15s', userSelect: 'none',
+        });
+        btn.addEventListener('click', () => {
+          if (key === 'filter') this._filter = o.value;
+          else this._sort = o.value;
+          this._selectedEntry = null;
+          this._renderEntryList();
+        });
+        wrap.appendChild(btn);
+      }
+      return wrap;
+    };
+
+    bar.appendChild(mkGroup('Show', 'filter', [
+      { value: 'all', label: 'All' },
+      { value: 'unlocked', label: 'Unlocked' },
+      { value: 'locked', label: 'Locked' },
+    ]));
+    bar.appendChild(mkGroup('Sort', 'sort', [
+      { value: 'default', label: 'Default' },
+      { value: 'az', label: 'A–Z' },
+      { value: 'trl', label: 'Readiness' },
+    ]));
+  }
+
+  /** @private Reflect current _filter/_sort selection on the bar's buttons.
+   * @param {boolean} [isTrack=false] hide the Sort group for learning paths,
+   *   whose authored order is fixed.
+   */
+  _renderFilterBar(isTrack = false) {
+    const bar = document.getElementById('codex-filter-bar');
+    if (!bar) return;
+    bar.style.display = 'flex';
+    // Sort is meaningless inside a track (order is authored) — hide that group.
+    bar.querySelectorAll('.codex-fs-group').forEach(g => {
+      if (g.dataset.group === 'sort') g.style.display = isTrack ? 'none' : 'inline-flex';
+    });
+    bar.querySelectorAll('.codex-fs-btn').forEach(btn => {
+      const active = (btn.dataset.group === 'filter')
+        ? this._filter === btn.dataset.value
+        : this._sort === btn.dataset.value;
+      btn.style.background = active ? 'rgba(0,212,255,0.18)' : 'none';
+      btn.style.borderColor = active ? 'rgba(0,212,255,0.5)' : 'rgba(255,255,255,0.12)';
+      btn.style.color = active ? '#cfefff' : '#9ab';
+    });
   }
 
   /** @private Create a single entry card.
@@ -363,18 +623,29 @@ export class CodexViewerUI {
     const isLocked = !entry.unlocked;
     const isNew = entry.unlocked && !entry.seen;
 
+    // Per-category accent (Phase 3 hue theming): unlocked cards are tinted with
+    // their category colour; locked cards stay neutral/dim so they read as
+    // "not yet detailed" regardless of category.
+    const catMeta = this._catMeta(entry.category);
+    const accent = catMeta.color || '#00d4ff';
+    const rgb = this._hexToRgb(accent);
+    const aBg = (a) => `rgba(${rgb.r},${rgb.g},${rgb.b},${a})`;
+
+    const restBorder = isLocked ? 'rgba(255,255,255,0.08)' : (isNew ? aBg(0.55) : aBg(0.22));
+    const restBg = isLocked ? 'rgba(255,255,255,0.02)' : (isNew ? aBg(0.08) : aBg(0.04));
+
     Object.assign(card.style, {
       padding: '14px 16px', borderRadius: '4px', cursor: 'pointer',
-      border: `1px solid ${isLocked ? 'rgba(255,255,255,0.08)' : isNew ? 'rgba(0,212,255,0.4)' : 'rgba(0,212,255,0.15)'}`,
-      background: isLocked ? 'rgba(255,255,255,0.02)' : isNew ? 'rgba(0,212,255,0.06)' : 'rgba(0,212,255,0.03)',
+      border: `1px solid ${restBorder}`,
+      borderLeft: `3px solid ${isLocked ? 'rgba(255,255,255,0.1)' : aBg(0.7)}`,
+      background: restBg,
       transition: 'all 0.15s ease', position: 'relative', overflow: 'hidden',
-      boxShadow: isNew ? '0 0 12px rgba(0,212,255,0.15)' : 'none',
+      boxShadow: isNew ? `0 0 12px ${aBg(0.18)}` : 'none',
     });
 
-    const catMeta = this._catMeta(entry.category);
     const shortText = `<span style="opacity:${isLocked ? 0.55 : 0.7};">${entry.shortText}</span>`;
     const newBadge = isNew
-      ? '<span style="position:absolute;top:8px;right:10px;font-size:11px;color:#00d4ff;font-weight:bold;text-shadow:0 0 6px rgba(0,212,255,0.5);">NEW</span>'
+      ? `<span style="position:absolute;top:8px;right:10px;font-size:11px;color:${accent};font-weight:bold;text-shadow:0 0 6px ${aBg(0.5)};">NEW</span>`
       : '';
 
     // Tech-Level is intentionally NOT shown on cards: flagging it (especially
@@ -384,19 +655,17 @@ export class CodexViewerUI {
       ${newBadge}
       <div style="font-size:24px;margin-bottom:6px;${isLocked ? 'opacity:0.65;' : ''}">${entry.icon}</div>
       <div style="font-size:15px;font-weight:bold;color:${isLocked ? '#9ab' : '#eee'};margin-bottom:4px;">${entry.title}</div>
-      <div style="font-size:11px;color:${isLocked ? '#357' : '#00d4ff'};margin-bottom:6px;opacity:0.7;">${catMeta.label}</div>
+      <div style="font-size:11px;color:${isLocked ? '#566' : accent};margin-bottom:6px;opacity:${isLocked ? 0.7 : 0.85};">${catMeta.label}</div>
       <div style="font-size:13px;line-height:1.5;">${shortText}</div>
     `;
 
     card.addEventListener('mouseenter', () => {
-      card.style.borderColor = isLocked ? 'rgba(0,212,255,0.3)' : '#00d4ff';
-      card.style.background = 'rgba(0,212,255,0.1)';
+      card.style.borderColor = isLocked ? aBg(0.3) : accent;
+      card.style.background = aBg(0.12);
     });
     card.addEventListener('mouseleave', () => {
-      card.style.borderColor = isLocked ? 'rgba(255,255,255,0.08)'
-        : (isNew ? 'rgba(0,212,255,0.4)' : 'rgba(0,212,255,0.15)');
-      card.style.background = isLocked ? 'rgba(255,255,255,0.02)'
-        : (isNew ? 'rgba(0,212,255,0.06)' : 'rgba(0,212,255,0.03)');
+      card.style.borderColor = restBorder;
+      card.style.background = restBg;
     });
     card.addEventListener('click', () => this._showDetail(entry));
 
@@ -419,6 +688,8 @@ export class CodexViewerUI {
     this._selectedEntry = entry;
     listEl.style.display = 'none';
     detailEl.style.display = 'block';
+    const filterBar = document.getElementById('codex-filter-bar');
+    if (filterBar) filterBar.style.display = 'none';
 
     const isLocked = !entry.unlocked;
 
@@ -453,6 +724,12 @@ export class CodexViewerUI {
         </div>`;
     }
 
+    // Accent hue for this category — tints the callout blocks and chips so the
+    // detail view reads as "part of" its category (Phase 3 hue theming).
+    const accent = catMeta.color || '#00d4ff';
+    const accentRGB = this._hexToRgb(accent);
+    const accentBg = (a) => `rgba(${accentRGB.r},${accentRGB.g},${accentRGB.b},${a})`;
+
     // Body: full briefing when unlocked; hint + greyed unlock line when locked.
     const hint = entry.unlockHint || 'Discover through gameplay.';
     const bodyHtml = isLocked
@@ -466,6 +743,79 @@ export class CodexViewerUI {
         </div>`
       : `<div style="font-size:15px;color:#ccc;line-height:1.75;white-space:pre-wrap;">${entry.fullText}</div>`;
 
+    // Real-world callout + formula chip — only when unlocked (they're "depth"
+    // that play reveals) and only when present. realWorld is the verified
+    // source/figure line; formula is the physics relation.
+    let extrasHtml = '';
+    if (!isLocked) {
+      if (entry.realWorld) {
+        extrasHtml += `
+          <div style="margin-top:18px;padding:12px 16px;border-radius:4px;
+            background:${accentBg(0.06)};border:1px solid ${accentBg(0.25)};">
+            <div style="font-size:11px;letter-spacing:0.12em;font-weight:bold;
+              color:${accent};opacity:0.85;margin-bottom:6px;">🌍 IN THE REAL WORLD</div>
+            <div style="font-size:14px;color:#cde;line-height:1.6;">${entry.realWorld}</div>
+          </div>`;
+      }
+      if (entry.formula) {
+        extrasHtml += `
+          <div style="margin-top:14px;padding:10px 14px;border-radius:4px;
+            background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.12);
+            font-size:15px;color:#e8f4ff;letter-spacing:0.02em;
+            font-family:'Courier New',monospace;overflow-x:auto;">
+            <span style="color:#778;font-size:11px;letter-spacing:0.1em;
+              display:block;margin-bottom:4px;">ƒ FORMULA</span>${entry.formula}</div>`;
+      }
+    }
+
+    // Related cross-links — clickable chips that jump to the related entry's
+    // detail (Outer-Wilds-style connection browsing). Resolved through the
+    // system so dangling ids are dropped; locked relateds still navigate.
+    const related = (typeof this._codex.getRelated === 'function')
+      ? this._codex.getRelated(entry.id)
+      : [];
+    let relatedHtml = '';
+    if (related.length) {
+      const chips = related.map(r => {
+        const rLocked = !r.unlocked;
+        return `<span class="codex-related-chip" data-id="${r.id}"
+          style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;
+            padding:5px 11px;border-radius:14px;font-size:12px;
+            border:1px solid ${rLocked ? 'rgba(255,255,255,0.14)' : accentBg(0.4)};
+            background:${rLocked ? 'rgba(255,255,255,0.03)' : accentBg(0.08)};
+            color:${rLocked ? '#89a' : '#cde'};transition:all 0.15s;">
+          <span>${r.icon}</span>${r.title}${rLocked ? ' 🔒' : ''}</span>`;
+      }).join('');
+      relatedHtml = `
+        <div style="margin-top:20px;">
+          <div style="font-size:11px;letter-spacing:0.12em;color:#778;
+            margin-bottom:8px;">🔗 RELATED</div>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;">${chips}</div>
+        </div>`;
+    }
+
+    // Prev/Next within the current view — sequential browsing without bouncing
+    // back to the grid. Mirrors the same list the grid shows (category OR
+    // learning-path, with the active filter/sort applied) so order is coherent.
+    const siblings = this._currentListEntries().entries;
+    const idx = siblings.findIndex(e => e.id === entry.id);
+    const prev = idx > 0 ? siblings[idx - 1] : null;
+    const next = (idx >= 0 && idx < siblings.length - 1) ? siblings[idx + 1] : null;
+    const navBtn = (e, label, align) => e
+      ? `<span class="codex-nav-btn" data-id="${e.id}"
+          style="cursor:pointer;color:${accent};font-size:13px;padding:6px 12px;
+            border:1px solid ${accentBg(0.25)};border-radius:3px;transition:background 0.15s;
+            text-align:${align};max-width:48%;overflow:hidden;text-overflow:ellipsis;
+            white-space:nowrap;">${label}</span>`
+      : '<span></span>';
+    const prevNextHtml = (prev || next)
+      ? `<div style="display:flex;justify-content:space-between;gap:10px;
+           margin-top:26px;padding-top:16px;border-top:1px solid rgba(255,255,255,0.08);">
+           ${navBtn(prev, `← ${prev ? prev.title : ''}`, 'left')}
+           ${navBtn(next, `${next ? next.title : ''} →`, 'right')}
+         </div>`
+      : '';
+
     detailEl.innerHTML = `
       <div id="codex-back-btn" style="cursor:pointer;color:#00d4ff;font-size:14px;margin-bottom:16px;
         display:inline-block;padding:5px 12px;border:1px solid rgba(0,212,255,0.2);border-radius:3px;
@@ -474,14 +824,17 @@ export class CodexViewerUI {
         <span style="font-size:42px;${isLocked ? 'opacity:0.65;' : ''}">${entry.icon}</span>
         <div>
           <div style="font-size:20px;font-weight:bold;color:${isLocked ? '#9ab' : '#eee'};">${entry.title}</div>
-          <div style="font-size:12px;color:#00d4ff;opacity:0.8;">${catMeta.icon} ${catMeta.label}</div>
+          <div style="font-size:12px;color:${accent};opacity:0.85;">${catMeta.icon} ${catMeta.label}</div>
         </div>
       </div>
       ${trlDetailHtml}
       <div style="font-size:15px;color:#aaddff;line-height:1.55;margin-bottom:18px;
-        padding:10px 14px;background:rgba(0,212,255,0.05);border-left:3px solid rgba(0,212,255,0.3);
+        padding:10px 14px;background:${accentBg(0.05)};border-left:3px solid ${accentBg(0.4)};
         border-radius:2px;">${entry.shortText}</div>
       ${bodyHtml}
+      ${extrasHtml}
+      ${relatedHtml}
+      ${prevNextHtml}
     `;
 
     const backBtn = detailEl.querySelector('#codex-back-btn');
@@ -492,6 +845,40 @@ export class CodexViewerUI {
       this._renderEntryList();
       this._renderHeader();
     });
+
+    // Related chips + Prev/Next: jump straight to another entry's detail.
+    // If the target lives in a different category, follow it there so its
+    // own Prev/Next + sidebar highlight stay coherent.
+    const jumpTo = (id) => {
+      const target = this._codex.getEntry ? this._codex.getEntry(id) : null;
+      if (!target) return;
+      if (target.category !== this._selectedCategory && !this._searchQuery) {
+        this._selectedCategory = target.category;
+        this._renderSidebarActive();
+      }
+      detailEl.scrollTop = 0;
+      this._showDetail(target);
+    };
+    detailEl.querySelectorAll('.codex-related-chip, .codex-nav-btn').forEach(el => {
+      el.addEventListener('mouseenter', () => { el.style.background = accentBg(0.18); });
+      el.addEventListener('mouseleave', () => { el.style.background = ''; });
+      el.addEventListener('click', () => jumpTo(el.dataset.id));
+    });
+  }
+
+  /** @private Parse a #rrggbb (or #rgb) hex colour to {r,g,b}; defaults to the
+   * codex cyan if the input is malformed. Used for category-accent tinting. */
+  _hexToRgb(hex) {
+    const fallback = { r: 0, g: 212, b: 255 };
+    if (typeof hex !== 'string') return fallback;
+    let h = hex.trim().replace(/^#/, '');
+    if (h.length === 3) h = h.split('').map(c => c + c).join('');
+    if (h.length !== 6 || /[^0-9a-fA-F]/.test(h)) return fallback;
+    return {
+      r: parseInt(h.slice(0, 2), 16),
+      g: parseInt(h.slice(2, 4), 16),
+      b: parseInt(h.slice(4, 6), 16),
+    };
   }
 
   // ==========================================================================
@@ -500,12 +887,60 @@ export class CodexViewerUI {
 
   /** @private */
   _setupListeners() {
-    // ESC closes codex (capture phase intercepts before InputManager)
+    // Keyboard handling while the codex is open (capture phase, so it runs
+    // before InputManager's codex intercept). ESC always closes; the rest is
+    // grid/detail navigation. Typing in the search box is left alone — ESC there
+    // just blurs the input, and other keys fall through to the browser.
     window.addEventListener('keydown', (e) => {
-      if (e.code === 'Escape' && this._visible) {
+      if (!this._visible) return;
+      const tgt = e.target;
+      const inSearch = tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA');
+
+      // ESC while typing in the search box: blur the field (don't close the
+      // codex). This must precede the general ESC handling below, which runs in
+      // capture phase and would otherwise swallow the keystroke before the
+      // input's own listener could react.
+      if (e.code === 'Escape' && inSearch) {
         e.stopImmediatePropagation();
         e.preventDefault();
-        this.hide();
+        if (typeof tgt.blur === 'function') tgt.blur();
+        return;
+      }
+
+      if (e.code === 'Escape') {
+        e.stopImmediatePropagation();
+        e.preventDefault();
+        // ESC from a detail view returns to the grid; from the grid it closes.
+        if (this._selectedEntry) {
+          this._selectedEntry = null;
+          this._renderEntryList();
+          this._renderHeader();
+        } else {
+          this.hide();
+        }
+        return;
+      }
+
+      if (inSearch) return; // don't hijack typing
+
+      // --- Detail view: ←/→ = Prev/Next sibling, Backspace = back to grid ---
+      if (this._selectedEntry) {
+        if (e.code === 'ArrowLeft' || e.code === 'ArrowRight') {
+          e.stopImmediatePropagation(); e.preventDefault();
+          this._stepDetail(e.code === 'ArrowRight' ? 1 : -1);
+        } else if (e.code === 'Backspace') {
+          e.stopImmediatePropagation(); e.preventDefault();
+          this._selectedEntry = null;
+          this._renderEntryList();
+          this._renderHeader();
+        }
+        return;
+      }
+
+      // --- Grid view: arrow keys move a roving focus, Enter opens detail ---
+      if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Enter', 'Home', 'End'].includes(e.code)) {
+        e.stopImmediatePropagation(); e.preventDefault();
+        this._handleGridKey(e.code);
       }
     }, true);
 

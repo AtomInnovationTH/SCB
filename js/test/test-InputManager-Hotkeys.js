@@ -765,6 +765,16 @@ describe('InputManager — help-pane binding coverage guard', () => {
     assert.equal(calls.codexToggle, 1, 'I toggles the codex');
   });
 
+  it('I opens the codex from a non-gameplay screen (menu/paused/win)', () => {
+    // Phase 3: the Tech Library is reference material, openable from ANY
+    // screen — not gated behind isGameplay(). Simulate a non-gameplay state.
+    const { im, calls } = makeFullIM({
+      gameState: { currentState: 'MAIN_MENU', isGameplay: () => false },
+    });
+    im._handleKeyDown(key('KeyI'));
+    assert.equal(calls.codexToggle, 1, 'I toggles the codex even off the gameplay screen');
+  });
+
   it('? (Slash) toggles the hotkey help overlay', () => {
     const { im, calls } = makeFullIM();
     im._handleKeyDown(key('Slash'));

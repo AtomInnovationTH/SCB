@@ -12,6 +12,19 @@
 
 ## 0. Verified state (checked at handover, 2026-06-20)
 
+> **UPDATE 2026-06-20 (Phase 3 done):** Backlog committed (`e2f9cf3`). Phase 3
+> viewer overhaul is **complete and green** (uncommitted, pending review):
+> open-from-any-screen (dropped `isGameplay` gate at `InputManager.js`),
+> detail redesign (realWorld callout + formula chip + clickable Related chips +
+> Prev/Next), per-category hue theming (sidebar/cards/detail tinted from each
+> category's `color`), Tracks tab (Learning Paths section), filter/sort bar
+> (All/Unlocked/Locked × Default/A–Z/Readiness), overall progress bar in the
+> header, and keyboard nav (roving arrow focus + Enter in the grid; ←/→ =
+> Prev/Next + Backspace = back in detail; ESC closes or steps back). New
+> `js/test/test-CodexViewer.js` covers the pure logic (`_hexToRgb`,
+> `_applyFilterSort`, `_currentListEntries`). Suite: **3376 pass / 0 fail**,
+> 830 suites. **Next: Option B — fill thin categories (§4).**
+
 - **155 entries** in `data/codex.json`. **14 `startUnlocked`**. Tests: **3360 pass / 0 fail**
   (`node js/test/run-tests.js`, 826 suites).
 - **Per-category counts:** PLAYBOOK 10, WORLD_INDUSTRY 4, DEBRIS 17, CATALOG 10, ORBITAL_MECHANICS 12,
