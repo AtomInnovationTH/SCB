@@ -133,6 +133,7 @@ import './test-CodexInterpolate.js'; // Codex Overhaul Phase 1 — live-value in
 import './test-CodexViewer.js';     // Codex Overhaul Phase 3 — viewer filter/sort/track resolution
 import './test-Glossary.js';        // Codex Overhaul Step 4 — inline glossary decorator + integrity
 import './test-GlossaryPersistence.js'; // Codex Overhaul Step 4 — glossary seen-state save/restore
+import './test-GlossaryDom.js';        // Codex Overhaul Step 4 — shared glossary DOM affordances
 
 // ST-6.7: EnvironmentSystem — AO, MMOD, Safe-Mode, Radiation Belt, Battery DOD
 import './test-EnvironmentSystem.js';

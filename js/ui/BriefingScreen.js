@@ -10,6 +10,8 @@ import { Events } from '../core/Events.js';
 import { GameStates } from '../core/GameState.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import { scoringSystem } from '../systems/ScoringSystem.js';
+import { decorateGlossary } from '../systems/codex/glossary.js';
+import { ensureGlossaryCss, delegateGlossaryClicks } from './glossaryDom.js';
 
 const SDA_PROVIDERS = [
   'LeoLabs tracking data',
@@ -291,13 +293,19 @@ export class BriefingScreen {
             </div>
           </div>
           <div style="text-align:right;min-width:120px;">
-            <div style="font-size:0.75rem;color:rgba(0,255,136,0.6);">ΔV: ${t.deltaV.toFixed(3)} km/s</div>
+            <div style="font-size:0.75rem;color:rgba(0,255,136,0.6);">${decorateGlossary('ΔV', { once: true })}: ${t.deltaV.toFixed(3)} km/s</div>
             <div style="font-size:0.75rem;color:rgba(0,255,136,0.4);">Fuel: ~${estFuel} kg Xe</div>
             <div style="font-size:0.85rem;color:#ffaa00;">${stars}</div>
           </div>
         </div>
       `;
     }).join('');
+
+    // Inline-glossary affordances: the ΔV label deep-links to its Tech Library
+    // entry. Capture phase so a term click wins over the card's own select
+    // handler (the whole card is clickable).
+    ensureGlossaryCss();
+    delegateGlossaryClicks(container, { capture: true });
 
     // Card click selection
     container.querySelectorAll('.briefing-card').forEach(card => {

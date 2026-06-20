@@ -25,6 +25,8 @@
 import { eventBus } from '../../core/EventBus.js';
 import { Events } from '../../core/Events.js';
 import { Constants } from '../../core/Constants.js';
+import { decorateGlossary } from '../../systems/codex/glossary.js';
+import { ensureGlossaryCss, delegateGlossaryClicks } from '../glossaryDom.js';
 
 // Lazy DOM probe — checked on each use so Node-side tests can install a
 // minimal document shim AFTER the module has been first evaluated.
@@ -152,6 +154,13 @@ export class HintTicker {
     ].join(';') + ';';
     this._strip = strip;
     this._container.appendChild(strip);
+
+    // Inline-glossary affordances. The strip is pointer-events:none (click-
+    // through); decorated terms re-enable pointer events on themselves (see the
+    // body span below) so a click can deep-link, and this delegated handler on
+    // the strip catches the bubbled event.
+    ensureGlossaryCss();
+    delegateGlossaryClicks(strip);
   }
 
   // ─── INTERNAL — EVENTBUS WIRING ────────────────────────────────────────
@@ -347,10 +356,12 @@ export class HintTicker {
       row.appendChild(chip);
     }
 
-    // Body text (right).
+    // Body text (right) — inline glossary decorated. `pointer-events:auto`
+    // re-enables hit-testing inside the click-through strip so glossary terms
+    // are clickable; decorateGlossary escapes the source before wrapping.
     const body = document.createElement('span');
-    body.textContent = payload.text || '';
-    body.style.cssText = 'color:#ccddee;';
+    body.innerHTML = decorateGlossary(payload.text || '', { once: true });
+    body.style.cssText = 'color:#ccddee;pointer-events:auto;';
     row.appendChild(body);
 
     return row;

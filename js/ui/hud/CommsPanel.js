@@ -14,6 +14,7 @@ import { eventBus } from '../../core/EventBus.js';
 import { Events } from '../../core/Events.js';
 import { PaneChrome } from './PaneChrome.js';
 import { decorateGlossary, escapeHtml } from '../../systems/codex/glossary.js';
+import { ensureGlossaryCss, delegateGlossaryClicks } from '../glossaryDom.js';
 
 const COMMS = Constants.COMMS;
 
@@ -166,32 +167,6 @@ export class CommsPanel {
     return div;
   }
 
-  /**
-   * @private One-time stylesheet for inline glossary terms. Reuses the menu's
-   * `.adr-name` look (dotted underline + hover glow); terms that deep-link
-   * (`data-entry`) get a pointer cursor, hover-only terms get `help`.
-   */
-  _injectGlossaryCss() {
-    if (typeof document === 'undefined' || document.getElementById('glossary-term-css')) return;
-    const style = document.createElement('style');
-    style.id = 'glossary-term-css';
-    style.textContent = `
-      .glossary-term {
-        border-bottom: 1px dotted currentColor;
-        cursor: help;
-        transition: text-shadow 0.15s, border-color 0.15s;
-      }
-      .glossary-term[data-entry] { cursor: pointer; }
-      .glossary-term:hover { text-shadow: 0 0 6px currentColor; }
-      /* First-use cue: a brighter, fully-opaque underline that drops once seen. */
-      .glossary-term--new {
-        border-bottom-style: solid;
-        border-bottom-color: currentColor;
-      }
-    `;
-    (document.head || document.documentElement).appendChild(style);
-  }
-
   /** @private */
   _build() {
     // --- Comms Panel (top-right — fixed size, UX-2 #11) ---
@@ -223,13 +198,8 @@ export class CommsPanel {
 
     // Inline-glossary affordances: a one-time stylesheet for `.glossary-term`
     // and a delegated click handler that deep-links terms with a codex entry.
-    this._injectGlossaryCss();
-    this._logEl.addEventListener('click', (e) => {
-      const span = e.target.closest && e.target.closest('.glossary-term');
-      if (!span) return;
-      const id = span.dataset && span.dataset.entry;
-      if (id) eventBus.emit(Events.CODEX_OPEN_ENTRY, { id });
-    });
+    ensureGlossaryCss();
+    delegateGlossaryClicks(this._logEl);
 
     // --- Resize chrome (3-step: line / normal / large) ---
     // Clickable top-right [C] badge cycles the size; the C key also cycles via

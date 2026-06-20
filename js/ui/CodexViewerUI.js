@@ -9,6 +9,8 @@
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { entryMatchesQuery, ALIASES } from '../systems/CodexSystem.js';
+import { decorateGlossary } from '../systems/codex/glossary.js';
+import { ensureGlossaryCss, delegateGlossaryClicks } from './glossaryDom.js';
 import {
   Constants, trlToBadgeColor, trlToLabel, techLevelBadgeText,
 } from '../core/Constants.js';
@@ -764,7 +766,7 @@ export class CodexViewerUI {
         <div style="font-size:14px;color:#667;font-style:italic;line-height:1.6;">
           Full briefing unlocks when you encounter this in flight.
         </div>`
-      : `<div style="font-size:15px;color:#ccc;line-height:1.75;white-space:pre-wrap;">${entry.fullText}</div>`;
+      : `<div style="font-size:15px;color:#ccc;line-height:1.75;white-space:pre-wrap;">${decorateGlossary(entry.fullText, { once: true })}</div>`;
 
     // Real-world callout + formula chip — only when unlocked (they're "depth"
     // that play reveals) and only when present. realWorld is the verified
@@ -777,7 +779,7 @@ export class CodexViewerUI {
             background:${accentBg(0.06)};border:1px solid ${accentBg(0.25)};">
             <div style="font-size:11px;letter-spacing:0.12em;font-weight:bold;
               color:${accent};opacity:0.85;margin-bottom:6px;">🌍 IN THE REAL WORLD</div>
-            <div style="font-size:14px;color:#cde;line-height:1.6;">${entry.realWorld}</div>
+            <div style="font-size:14px;color:#cde;line-height:1.6;">${decorateGlossary(entry.realWorld, { once: true })}</div>
           </div>`;
       }
       if (entry.formula) {
@@ -853,12 +855,17 @@ export class CodexViewerUI {
       ${trlDetailHtml}
       <div style="font-size:15px;color:#aaddff;line-height:1.55;margin-bottom:18px;
         padding:10px 14px;background:${accentBg(0.05)};border-left:3px solid ${accentBg(0.4)};
-        border-radius:2px;">${entry.shortText}</div>
+        border-radius:2px;">${decorateGlossary(entry.shortText, { once: true })}</div>
       ${bodyHtml}
       ${extrasHtml}
       ${relatedHtml}
       ${prevNextHtml}
     `;
+
+    // Inline-glossary affordances inside the library itself: decorated terms in
+    // shortText/fullText/realWorld deep-link to their own entries (idempotent).
+    ensureGlossaryCss();
+    delegateGlossaryClicks(detailEl);
 
     const backBtn = detailEl.querySelector('#codex-back-btn');
     backBtn.addEventListener('mouseenter', () => { backBtn.style.background = 'rgba(0,212,255,0.1)'; });

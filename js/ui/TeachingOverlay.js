@@ -9,6 +9,8 @@
  */
 
 import { Constants } from '../core/Constants.js';
+import { decorateGlossary } from '../systems/codex/glossary.js';
+import { ensureGlossaryCss, delegateGlossaryClicks } from './glossaryDom.js';
 
 const _hasDOM = typeof document !== 'undefined';
 
@@ -181,9 +183,11 @@ export class TeachingOverlay {
     titleRow.appendChild(titleSpan);
     el.appendChild(titleRow);
 
-    // Body text
+    // Body text — inline glossary decorated (escapes the source, then wraps
+    // jargon). Switched from textContent to innerHTML; decorateGlossary handles
+    // escaping so this stays injection-safe.
     const bodyP = document.createElement('p');
-    bodyP.textContent = moment.body;
+    bodyP.innerHTML = decorateGlossary(moment.body, { once: true });
     bodyP.style.cssText = `
       margin: 0;
       color: ${C.OVERLAY_BODY_COLOR || '#ccddee'};
@@ -196,6 +200,10 @@ export class TeachingOverlay {
     this._element = el;
     this._container.appendChild(el);
     this._visible = true;
+
+    // Inline-glossary affordances on this overlay instance.
+    ensureGlossaryCss();
+    delegateGlossaryClicks(el);
 
     // Fade in (force reflow first)
     void el.offsetHeight;

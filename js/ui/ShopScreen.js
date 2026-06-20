@@ -9,6 +9,8 @@ import { Events } from '../core/Events.js';
 import { GameStates } from '../core/GameState.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import { scoringSystem } from '../systems/ScoringSystem.js';
+import { decorateGlossary } from '../systems/codex/glossary.js';
+import { ensureGlossaryCss, delegateGlossaryClicks } from './glossaryDom.js';
 import {
   getAvailableTiers,
   getCurrentTier,
@@ -628,6 +630,11 @@ export class ShopScreen {
 
     catContainer.innerHTML = html;
 
+    // Inline-glossary affordances: decorated jargon in upgrade/tier descriptions
+    // deep-links to its Tech Library entry (idempotent CSS + delegated click).
+    ensureGlossaryCss();
+    delegateGlossaryClicks(catContainer);
+
     // Buy button handlers
     catContainer.querySelectorAll('.shop-buy-btn').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -725,7 +732,7 @@ export class ShopScreen {
           <div style="font-size:0.85rem;color:${maxed ? 'rgba(0,255,136,0.6)' : '#00ff88'};">
             ${upgrade.name}${levelBadge}${trlBadge}
           </div>
-          <div style="font-size:0.7rem;color:rgba(0,255,136,0.5);">${upgrade.desc}</div>
+          <div style="font-size:0.7rem;color:rgba(0,255,136,0.5);">${decorateGlossary(upgrade.desc, { once: true })}</div>
           ${upgrade.requires && !requiresMet ? `<div style="font-size:0.65rem;color:#ff6644;">Requires: ${UPGRADES.find(u => u.id === upgrade.requires)?.name}</div>` : ''}
           ${upgrade.requiresAll && !requiresMet ? `<div style="font-size:0.65rem;color:#ff6644;">Requires: ${upgrade.requiresAll.map(id => UPGRADES.find(u => u.id === id)?.name || id).join(' + ')}</div>` : ''}
           ${!canAfford && !maxed ? `<div style="font-size:0.6rem;color:rgba(255,68,68,0.5);margin-top:2px;">Need ${(upgrade.cost - scoringSystem.credits).toLocaleString()} more cr</div>` : ''}
@@ -861,7 +868,7 @@ export class ShopScreen {
             ${tier.name}
           </div>
           <div style="font-size:0.7rem;color:rgba(0,255,136,0.5);">${statsLine}</div>
-          <div style="font-size:0.65rem;color:rgba(0,255,136,0.35);margin-top:1px;">${desc}</div>
+          <div style="font-size:0.65rem;color:rgba(0,255,136,0.35);margin-top:1px;">${decorateGlossary(desc, { once: true })}</div>
         </div>
         <div style="text-align:right;min-width:90px;">
           ${statusHtml}
@@ -973,7 +980,7 @@ export class ShopScreen {
             </div>
             <div style="font-size:0.7rem;color:rgba(0,255,136,0.5);">${statsLine}</div>
             <div style="font-size:0.65rem;color:rgba(0,255,136,0.35);margin-top:1px;">${featuresLine}</div>
-            <div style="font-size:0.6rem;color:rgba(0,255,136,0.25);margin-top:1px;font-style:italic;">${tier.description}</div>
+            <div style="font-size:0.6rem;color:rgba(0,255,136,0.25);margin-top:1px;font-style:italic;">${decorateGlossary(tier.description, { once: true })}</div>
           </div>
           <div style="text-align:right;min-width:100px;">
             ${statusHtml}
