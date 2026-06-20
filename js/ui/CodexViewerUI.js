@@ -8,7 +8,7 @@
 
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
-import { entryMatchesQuery } from '../systems/CodexSystem.js';
+import { entryMatchesQuery, ALIASES } from '../systems/CodexSystem.js';
 import {
   Constants, trlToBadgeColor, trlToLabel, techLevelBadgeText,
 } from '../core/Constants.js';
@@ -85,6 +85,29 @@ export class CodexViewerUI {
   }
 
   isVisible() { return this._visible; }
+
+  /**
+   * Deep-link: open the viewer directly on a specific entry by id (glossary
+   * §11.8 / Phase 4). Resolves the id through save-migration ALIASES for
+   * robustness, opens the overlay, selects the entry's real category, then
+   * routes to its detail view. Unknown ids are a safe no-op. Locked entries are
+   * fine — the Phase 3 viewer renders them with a how-to-unlock hint.
+   * @param {string} id  codex entry id (possibly a retired alias)
+   * @returns {boolean} true if an entry was opened
+   */
+  openEntry(id) {
+    if (!id || !this._codex || typeof this._codex.getEntry !== 'function') return false;
+    const resolvedId = (ALIASES && ALIASES[id]) || id;
+    const entry = this._codex.getEntry(resolvedId);
+    if (!entry) return false;
+    this.show();
+    // Land on a real category (not a `track:` pseudo-key) so the sidebar +
+    // entry list resolve correctly when the user backs out of the detail view.
+    this._selectedCategory = entry.category;
+    if (typeof this._renderSidebarActive === 'function') this._renderSidebarActive();
+    this._showDetail(entry);
+    return true;
+  }
 
   // ==========================================================================
   // DOM CONSTRUCTION

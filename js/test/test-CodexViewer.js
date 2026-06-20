@@ -186,3 +186,57 @@ describe('CodexViewerUI._currentListEntries — list resolution', () => {
     assert.deepEqual(entries, []);
   });
 });
+
+describe('CodexViewerUI.openEntry — glossary deep-link (§11.8)', () => {
+  // openEntry touches DOM via show()/_showDetail()/_renderSidebarActive(); stub
+  // those so we can assert the pure routing (resolve → select category → detail)
+  // without the DOM-heavy constructor.
+  function makeDeepLinkViewer(entriesById) {
+    const v = makeViewer({
+      getEntry: (id) => entriesById[id] || null,
+    });
+    v._calls = { show: 0, detail: null, sidebar: 0 };
+    v.show = function () { this._calls.show++; this._visible = true; };
+    v._showDetail = function (entry) { this._calls.detail = entry; };
+    v._renderSidebarActive = function () { this._calls.sidebar++; };
+    return v;
+  }
+
+  const ENTRIES = {
+    delta_v: { id: 'delta_v', category: 'ORBITAL_MECHANICS', unlocked: true },
+    feep_thruster: { id: 'feep_thruster', category: 'PROPULSION', unlocked: false },
+  };
+
+  it('opens the viewer, selects the entry category, and routes to detail', () => {
+    const v = makeDeepLinkViewer(ENTRIES);
+    const ok = v.openEntry('delta_v');
+    assert.equal(ok, true, 'returns true on success');
+    assert.equal(v._calls.show, 1, 'show() called');
+    assert.equal(v._selectedCategory, 'ORBITAL_MECHANICS', 'category selected from entry');
+    assert.equal(v._calls.detail, ENTRIES.delta_v, 'routed to the entry detail');
+  });
+
+  it('deep-links a LOCKED entry (viewer shows the how-to-unlock hint)', () => {
+    const v = makeDeepLinkViewer(ENTRIES);
+    const ok = v.openEntry('feep_thruster');
+    assert.equal(ok, true, 'locked entries still open');
+    assert.equal(v._calls.detail, ENTRIES.feep_thruster, 'locked entry detail shown');
+  });
+
+  it('unknown id is a safe no-op (no show, no detail)', () => {
+    const v = makeDeepLinkViewer(ENTRIES);
+    const ok = v.openEntry('not_a_real_id');
+    assert.equal(ok, false, 'returns false on unknown id');
+    assert.equal(v._calls.show, 0, 'did not open the viewer');
+    assert.equal(v._calls.detail, null, 'did not route to detail');
+  });
+
+  it('falsy / missing id is a safe no-op', () => {
+    const v = makeDeepLinkViewer(ENTRIES);
+    assert.equal(v.openEntry(''), false);
+    assert.equal(v.openEntry(null), false);
+    assert.equal(v.openEntry(undefined), false);
+    assert.equal(v._calls.show, 0, 'never opened');
+  });
+});
+

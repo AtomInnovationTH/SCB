@@ -13,6 +13,7 @@ import { Constants } from '../../core/Constants.js';
 import { eventBus } from '../../core/EventBus.js';
 import { Events } from '../../core/Events.js';
 import { PaneChrome } from './PaneChrome.js';
+import { decorateGlossary, escapeHtml } from '../../systems/codex/glossary.js';
 
 const COMMS = Constants.COMMS;
 
@@ -134,9 +135,22 @@ export class CommsPanel {
     /** @type {Object<string, HTMLElement>} DOM panels for show/hide */
     this.panels = {};
 
+    /**
+     * @type {import('../../systems/codex/GlossaryState.js').GlossaryState|null}
+     * First-use seen-state for the inline glossary. Optional — comms still
+     * decorates terms without it (every term just keeps its first-use cue).
+     */
+    this._glossaryState = null;
+
     this._build();
     this._setupListeners();
   }
+
+  /**
+   * Inject the glossary seen-state controller so first-use cues drop after a
+   * term has been seen. @param {object} state GlossaryState-like
+   */
+  setGlossaryState(state) { this._glossaryState = state; }
 
   // ==========================================================================
   // BUILD DOM
@@ -150,6 +164,32 @@ export class CommsPanel {
     Object.assign(div.style, styles);
     this._container.appendChild(div);
     return div;
+  }
+
+  /**
+   * @private One-time stylesheet for inline glossary terms. Reuses the menu's
+   * `.adr-name` look (dotted underline + hover glow); terms that deep-link
+   * (`data-entry`) get a pointer cursor, hover-only terms get `help`.
+   */
+  _injectGlossaryCss() {
+    if (typeof document === 'undefined' || document.getElementById('glossary-term-css')) return;
+    const style = document.createElement('style');
+    style.id = 'glossary-term-css';
+    style.textContent = `
+      .glossary-term {
+        border-bottom: 1px dotted currentColor;
+        cursor: help;
+        transition: text-shadow 0.15s, border-color 0.15s;
+      }
+      .glossary-term[data-entry] { cursor: pointer; }
+      .glossary-term:hover { text-shadow: 0 0 6px currentColor; }
+      /* First-use cue: a brighter, fully-opaque underline that drops once seen. */
+      .glossary-term--new {
+        border-bottom-style: solid;
+        border-bottom-color: currentColor;
+      }
+    `;
+    (document.head || document.documentElement).appendChild(style);
   }
 
   /** @private */
@@ -180,6 +220,16 @@ export class CommsPanel {
     });
 
     this.panels.comms.appendChild(this._logEl);
+
+    // Inline-glossary affordances: a one-time stylesheet for `.glossary-term`
+    // and a delegated click handler that deep-links terms with a codex entry.
+    this._injectGlossaryCss();
+    this._logEl.addEventListener('click', (e) => {
+      const span = e.target.closest && e.target.closest('.glossary-term');
+      if (!span) return;
+      const id = span.dataset && span.dataset.entry;
+      if (id) eventBus.emit(Events.CODEX_OPEN_ENTRY, { id });
+    });
 
     // --- Resize chrome (3-step: line / normal / large) ---
     // Clickable top-right [C] badge cycles the size; the C key also cycles via
@@ -383,10 +433,23 @@ export class CommsPanel {
       const rowBg = isLatest ? 'rgba(255,255,255,0.06)' : 'transparent';
       const weight = (isLatest || isCriticalPriority(msg.priority)) ? '600' : '400';
 
-      const sourceText = msg.source ? `${msg.source}: ` : '';
+      const sourceText = msg.source ? `${escapeHtml(msg.source)}: ` : '';
+
+      // Inline glossary: wrap recognised jargon in the message body (only — never
+      // the source label). The first-use cue is driven by the seen-state, and a
+      // term is marked seen only when it's the freshest line the player is
+      // actually reading (the latest, un-scrolled row) so history re-renders
+      // don't silently burn every cue.
+      const gs = this._glossaryState;
+      const markSeen = isLatest && this._scrollOffset === 0;
+      const body = decorateGlossary(msg.text, {
+        once: true,
+        isNew: gs ? (term) => gs.isNew(term) : undefined,
+        onSeen: (gs && markSeen) ? (term) => gs.markSeen(term) : undefined,
+      });
 
       return `<div style="margin:2px 0;padding:3px 6px;border-left:${COMMS.STRIPE_WIDTH_PX}px solid ${color};background:${rowBg};border-radius:2px;">
-        <span style="color:${color};font-weight:600;font-size:13px;">${sourceText}</span><span style="color:${color};opacity:${textOpacity};font-weight:${weight};font-size:13px;">${msg.text}</span>
+        <span style="color:${color};font-weight:600;font-size:13px;">${sourceText}</span><span style="color:${color};opacity:${textOpacity};font-weight:${weight};font-size:13px;">${body}</span>
       </div>`;
     }).join('');
 

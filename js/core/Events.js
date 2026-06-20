@@ -353,6 +353,7 @@ export const Events = {
   CODEX_UNLOCKED:         'codex:unlocked',            // { id, title, shortText, icon, category }
   CODEX_VIEWED:           'codex:viewed',              // { id } — player viewed full entry
   CODEX_UNLOCK_REQUEST:   'codex:unlockRequest',       // { id } — force-unlock a specific entry (e.g. from tutorial)
+  CODEX_OPEN_ENTRY:       'codex:open-entry',          // { id } — deep-link: open the viewer on a specific entry (glossary §11.8)
 
   // === LASSO SYSTEM ===
   LASSO_FIRED:            'lasso:fired',               // { targetId, projectileMass, launchDirection, speed }

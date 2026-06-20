@@ -55,8 +55,7 @@ import { StarlinkCascadeBoss } from './systems/StarlinkCascadeBoss.js';
 import { LassoSystem } from './systems/LassoSystem.js';
 import { despinLaser } from './systems/DespinLaser.js';
 import { RewardSystem } from './systems/RewardSystem.js';
-import { CodexSystem } from './systems/CodexSystem.js';
-import { loadCodexData } from './systems/codex/codexData.js';
+import { CodexSystem } from './systems/CodexSystem.js';import { loadCodexData } from './systems/codex/codexData.js';
 import { SpaceWeatherSystem } from './systems/SpaceWeatherSystem.js';
 import { SubsystemEvents } from './systems/SubsystemEvents.js';
 import { CollisionAvoidanceSystem } from './systems/CollisionAvoidanceSystem.js';
@@ -83,6 +82,7 @@ import { TrailSystem } from './ui/TrailSystem.js';
 import { DebugOverlay } from './ui/DebugOverlay.js';
 import { SweepReportUI } from './ui/SweepReportUI.js';
 import { CodexViewerUI } from './ui/CodexViewerUI.js';
+import { GlossaryState } from './systems/codex/GlossaryState.js';
 import { HotkeyOverlay } from './ui/HotkeyOverlay.js';
 import { SkillsPane } from './ui/hud/SkillsPane.js';
 import { TeachingSystem } from './systems/TeachingSystem.js';
@@ -465,6 +465,7 @@ let trailSystem;
 let debugOverlay;
 let sweepReportUI;
 let codexViewerUI;
+let glossaryState;
 let hotkeyOverlay;
 let teachingSystem;
 let teachingOverlay;
@@ -617,6 +618,10 @@ async function init() {
 
   // --- F17: Codex Viewer UI (browse unlocked entries) ---
   codexViewerUI = new CodexViewerUI(codexSystem);
+
+  // --- Inline glossary first-use seen-state (§11.8) — persists which terms the
+  // player has already seen so the first-use cue stops nagging veterans. ---
+  glossaryState = new GlossaryState();
 
   // --- Keyboard shortcut reference overlay (? toggles a grouped hotkey list) ---
   hotkeyOverlay = new HotkeyOverlay();
@@ -804,7 +809,16 @@ async function init() {
 
   // --- F17: Connect codex system to HUD badge + badge click toggle ---
   hud.setCodexSystem(codexSystem);
+  // Feed glossary seen-state to the comms panel so inline terms drop their
+  // first-use cue once seen.
+  if (glossaryState && hud.commsPanel && typeof hud.commsPanel.setGlossaryState === 'function') {
+    hud.commsPanel.setGlossaryState(glossaryState);
+  }
   eventBus.on('codex:toggleUI', () => { if (codexViewerUI) codexViewerUI.toggle(); });
+  // Glossary deep-link (§11.8): a clicked inline term opens the viewer on its entry.
+  eventBus.on(Events.CODEX_OPEN_ENTRY, (data) => {
+    if (codexViewerUI && data && data.id) codexViewerUI.openEntry(data.id);
+  });
 
   // --- Connect shop screen to game over screen (for upgrade count display) ---
   gameOverScreen.setShopScreen(shopScreen);
