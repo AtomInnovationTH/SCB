@@ -2315,16 +2315,20 @@ export class DebrisField {
       }
       debris.country = null;
 
-      // 2026-05-17: pre-discover ONLY the closest welcome debris (i=0, the
-      // 30–55 m close-tier spec). The other 6 stay `discovered=false` until
-      // the user presses S to scan — which reveals them via
-      // SensorSystem._revealNearbyDebris() → getDebrisNear() (M1-clamped to
-      // 2 km, welcomeSpawn-gated). This matches the intended new-user UX:
-      // start with one obvious target visible, learn to scan to find more.
+      // 2026-06-21: pre-discover the TWO PINNED guided net-catch pieces
+      // (#1 dead-centre ~22 m, #2 off-side ~48 m — spec indices 0 and 1). Both
+      // are guaranteed, in-range, guided catches, so having #2 a visible mesh +
+      // reticle bracket yet absent from the list was confusing. The other 5
+      // (#3–#7) stay `discovered=false` until the user presses S to scan —
+      // which reveals them via SensorSystem._revealNearbyDebris() →
+      // getDebrisNear() (M1-clamped to 2 km, welcomeSpawn-gated). With two
+      // pre-discovered, a single quick scan (MAX_REVEALS=5) reveals exactly
+      // #3–#7. This matches the intended new-user UX: start with two obvious
+      // targets visible, learn to scan to find more.
       // Replaces the old buggy `_autoDiscoverNearest()` which used a static
       // startSma proxy and would sometimes pick a catalog debris that got
       // killed by the M1 enforcement, leaving zero discovered debris.
-      if (i === 0) {
+      if (i <= 1) {
         debris.discovered = true;
         eventBus.emit(Events.TARGET_DISCOVERED, { target: debris });
       } else {
@@ -2962,8 +2966,15 @@ export class DebrisField {
       }
     }
 
-    // FIX_PLAN §4: Default sort by TPI (composite score, lower = higher priority)
-    return results.sort((a, b) => a.tpi - b.tpi);
+    // Mission 1 is a guided cluster authored near→far == catch order == reward
+    // ramp (#1→#7 climb in both distance and value), so for a new player we sort
+    // purely by distance: the list reads top-to-bottom in catch/reward order and
+    // Tab cycles nearest-first. Later missions keep the composite Target Priority
+    // Index (distance + ΔV + threat + value, lower = higher priority). The per-
+    // result `tpi` is still computed on M1 (cheap, harmless) so the result shape
+    // other consumers rely on is unchanged.
+    return results.sort((a, b) =>
+      isMission1 ? (a.distance - b.distance) : (a.tpi - b.tpi));
   }
 
   /**

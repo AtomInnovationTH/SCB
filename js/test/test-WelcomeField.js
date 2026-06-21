@@ -610,6 +610,159 @@ describe('DebrisField — welcome matcher is not starved by list order (Phase 2 
 // renders as a small whole microsat box, not a junk fragment. The +4 type-match
 // score makes #7 prefer a cubesat slot whenever one exists in the far band.
 
+// ─── M1 FIRST-CONTACT UX: PRE-DISCOVER #1+#2 · NEAR→FAR RANKING ─────────────
+// .kilo/plans/m1-first-mission-ux.md — D1: both PINNED guided net-catch pieces
+// (#1 dead-centre, #2 off-side) are discovered up front so the second guided
+// catch is listable; #3–#7 stay hidden until the player scans. D2: the Tracked
+// Targets list (and Tab cycle, sharing getEnhancedTargetList) sorts near→far on
+// Mission 1 (catch/reward order) but keeps the composite TPI sort on M2+.
+
+describe('DebrisField — M1 pre-discovers exactly the two pinned pieces (D1)', () => {
+  // Drive the real _spawnWelcomeField path (where the discovered gate lives) on
+  // a Mission-1 receiver. Mirrors the `spawnWithPin` helper above but stands
+  // alone so this block is self-contained.
+  function spawnM1() {
+    const pinOrbit = {
+      semiMajorAxis: 6728.137, eccentricity: 0,
+      inclination: 51.6 * Math.PI / 180, raan: 0, argPerigee: 0,
+      trueAnomaly: 0.5, meanMotion: 0.0011,
+    };
+    const makeDebris = (id) => ({
+      id, alive: true, type: 'fragment', mass: 10, material: undefined,
+      orbit: {
+        semiMajorAxis: pinOrbit.semiMajorAxis + 0.5,
+        eccentricity: 0, inclination: 28.5 * Math.PI / 180,
+        raan: 0, argPerigee: 0, trueAnomaly: 0,
+      },
+    });
+    const debrisList = Array.from({ length: 7 }, (_, i) => makeDebris(i + 1));
+    const mock = {
+      debrisList,
+      debrisMap: new Map(debrisList.map(d => [d.id, d])),
+      _welcomeFieldSpawned: false,
+      _currentMissionProfile: { hydrazine: true },
+      _lastSpawnGameDt: 0,
+      _onboardingPinIds: new Set(),
+      _generateSalvage: () => ({
+        xenon: 0, indium: 0, gaAs: 0, battery: 0, hydrazine: 0, lithium: 0, metals: [],
+      }),
+      _clearOnboardingPin: DebrisField.prototype._clearOnboardingPin,
+      _spawnWelcomeField: DebrisField.prototype._spawnWelcomeField,
+    };
+    mock._spawnWelcomeField(pinOrbit);
+    return mock;
+  }
+
+  it('marks #1 and #2 discovered at spawn; #3–#7 stay undiscovered', () => {
+    const mock = spawnM1();
+    const ordered = mock.debrisList
+      .filter(d => d.welcomeSpawn)
+      .sort((a, b) => a._welcomeSpecIndex - b._welcomeSpecIndex);
+    assert.equal(ordered.length, 7, 'all 7 specs placed');
+    // Spec indices 0 (#1) and 1 (#2) are the two PINNED pieces — discovered.
+    assert.equal(ordered[0].discovered, true, '#1 (spec 0) is pre-discovered');
+    assert.equal(ordered[1].discovered, true, '#2 (spec 1) is pre-discovered');
+    // #3–#7 hidden until scan.
+    for (let i = 2; i < ordered.length; i++) {
+      assert.equal(ordered[i].discovered, false,
+        `#${i + 1} (spec ${i}) must stay undiscovered until scan`);
+    }
+    // Exactly two discovered total, and both are the pinned pieces.
+    const discovered = mock.debrisList.filter(d => d.welcomeSpawn && d.discovered);
+    assert.equal(discovered.length, 2, 'exactly two welcome pieces discovered at spawn');
+    for (const d of discovered) {
+      assert.equal(d._onboardingPinned, true, 'each pre-discovered piece is a pinned piece');
+    }
+  });
+});
+
+describe('DebrisField.getEnhancedTargetList — mission-gated ranking (D2)', () => {
+  // Build a minimal receiver + a set of discovered welcome debris whose distance
+  // order DISAGREES with their TPI order, so a sort test can distinguish the two.
+  // _scenePosition is read against playerPos for the distance (no orbital math),
+  // while orbit/mass still feed the dv/points/tpi computation.
+  function makeTargetMock(missionNumber) {
+    const playerPos = { x: 0, y: 0, z: 0 };
+    const playerOrbit = {
+      semiMajorAxis: 6878.137 * Constants.SCENE_SCALE,
+      eccentricity: 0,
+      inclination: 51.6 * Math.PI / 180,
+      raan: 0, argPerigee: 0, trueAnomaly: 0, meanMotion: 0.0011,
+    };
+    const ms = Constants.SCENE_SCALE / 1000; // metre → scene units
+    // Three pieces. Distances increase A<B<C. To make TPI disagree with
+    // distance, give the NEAREST piece (A) the LOWEST value (highest valueScore
+    // → highest/worst TPI) and the FARTHEST (C) the HIGHEST value. Points are
+    // kept below TARGET_RANKING.VALUE_REF_PTS so the value term isn't saturated,
+    // and orbits are identical so the ΔV/threat terms cancel — leaving value as
+    // the dominant differentiator. TPI order (best→worst) = C,B,A, the reverse
+    // of distance order A,B,C.
+    const mk = (id, distM, type, mass) => ({
+      id,
+      alive: true,
+      _captured: false,
+      discovered: true,
+      welcomeSpawn: true,
+      tracked: true,
+      type,
+      sizeMeter: 1,
+      mass,
+      tumbleRate: 0,
+      material: 'aluminum',
+      moidBadge: null,
+      hasSalvage: false,
+      salvage: null,
+      metalMassKg: 0,
+      _scenePosition: { x: distM * ms, y: 0, z: 0 },
+      orbit: {
+        semiMajorAxis: (6878.137 + 1) * Constants.SCENE_SCALE,
+        eccentricity: 0,
+        inclination: 51.6 * Math.PI / 180,
+        raan: 0, argPerigee: 0, trueAnomaly: 0, meanMotion: 0.0011,
+      },
+    });
+    const debrisList = [
+      mk(1, 50, 'missionDebris', 3),    // A: nearest, lowest value (~111 pts)
+      mk(2, 120, 'missionDebris', 10),  // B: mid (~250 pts)
+      mk(3, 200, 'defunctSat', 400),    // C: farthest, highest value (~495 pts)
+    ];
+    const mock = {
+      debrisList,
+      _currentMissionNumber: missionNumber,
+    };
+    return { mock, playerPos, playerOrbit };
+  }
+
+  it('Mission 1: results are sorted near→far (non-decreasing distance)', () => {
+    const { mock, playerPos, playerOrbit } = makeTargetMock(1);
+    const list = DebrisField.prototype.getEnhancedTargetList.call(mock, playerPos, playerOrbit);
+    assert.equal(list.length, 3, 'all three discovered pieces listed');
+    for (let i = 1; i < list.length; i++) {
+      assert.ok(list[i].distance >= list[i - 1].distance - 1e-12,
+        `M1 list must be non-decreasing distance: ${list[i - 1].distance} then ${list[i].distance}`);
+    }
+    // Concretely: nearest id 1 first, farthest id 3 last.
+    assert.equal(list[0].id, 1, 'nearest piece (id 1) is first on M1');
+    assert.equal(list[2].id, 3, 'farthest piece (id 3) is last on M1');
+  });
+
+  it('Mission 2+: results are sorted by TPI (not pure distance)', () => {
+    const { mock, playerPos, playerOrbit } = makeTargetMock(2);
+    const list = DebrisField.prototype.getEnhancedTargetList.call(mock, playerPos, playerOrbit);
+    assert.equal(list.length, 3, 'all three discovered pieces listed');
+    // Non-decreasing TPI (the composite priority order).
+    for (let i = 1; i < list.length; i++) {
+      assert.ok(list[i].tpi >= list[i - 1].tpi - 1e-12,
+        `M2 list must be non-decreasing TPI: ${list[i - 1].tpi} then ${list[i].tpi}`);
+    }
+    // The fixture is authored so TPI order REVERSES distance order: the farthest
+    // high-value piece (id 3) ranks first, the nearest low-value piece (id 1)
+    // last — proving the non-M1 path is NOT a pure distance sort.
+    assert.equal(list[0].id, 3, 'highest-value far piece ranks first by TPI on M2');
+    assert.equal(list[2].id, 1, 'lowest-value near piece ranks last by TPI on M2');
+  });
+});
+
 describe('DebrisField — welcome #7 selects a cubesat candidate (Phase 2 fix)', () => {
   it('realises spec #7 with a cubesat-type debris when cubesats are available', () => {
     // Mostly fragments, with a couple of cubesat candidates sprinkled in.
