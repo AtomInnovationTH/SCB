@@ -1614,8 +1614,8 @@ export const Constants = {
   LASSO_MUZZLE_OFFSET_M: 8,           // metres — forward (+Z/prograde) muzzle offset; net spawns/anchors at the nose, not the hull centre
   LASSO_RECOIL_KICK_M: 2.5,           // metres — peak cosmetic mesh kick opposite launch (visual only; no orbit/fuel change)
   LASSO_RECOIL_DECAY: 5.0,            // 1/s — critically-damped spring rate for the recoil kick to settle back
-  LASSO_MUZZLE_FLASH_TIME: 0.35,      // seconds — muzzle puff lifetime (longer = more readable launch)
-  LASSO_MUZZLE_FLASH_SCALE: 1.8,      // multiplier on the muzzle-flash sphere so the launch reads clearly
+  LASSO_MUZZLE_FLASH_TIME: 0.25,      // seconds — brief muzzle puff lifetime
+  LASSO_MUZZLE_FLASH_SCALE: 0.5,      // multiplier on the muzzle-flash sphere (small puff, not a hull-sized white blob)
 
   // --- Mother-net capture ceremony Phase 3 (reel-in physics) ---
   // .kilo/plans/mother-net-capture-ceremony.md §PHASE 3 (flag LASSO_REEL_PHYSICS).
@@ -1635,9 +1635,9 @@ export const Constants = {
   // FURNACE_TRANSFER staging + CATCH_PROCESSED salvage/score path (instead of the
   // legacy instant removeDebris + flat TIER3_BASE). When the flag is OFF the
   // legacy instant resolution is used and none of this runs.
-  MOTHER_CARGO_CELLS: 3,              // hull cargo cells (aft netting between struts)
-  MOTHER_CARGO_AFT_OFFSET_M: 12,      // metres aft (−prograde) of the hull centre for the cell row
-  MOTHER_CARGO_CELL_SPREAD_M: 6,      // metres lateral spread (cross-track) between cells
+  MOTHER_CARGO_CELLS: 3,              // hull cargo cells (held just forward of the nose)
+  MOTHER_CARGO_FWD_OFFSET_M: 9,       // metres forward (+prograde, near the launch muzzle) — catch reels back toward the nose, never through the hull
+  MOTHER_CARGO_CELL_SPREAD_M: 4,      // metres lateral spread (cross-track) between held catches
 
 
   // --- Net-lock range SSOT (onboarding reward-first spine) ---

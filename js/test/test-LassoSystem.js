@@ -1060,7 +1060,7 @@ describe('LassoSystem — Phase 3 heavy-catch physics (direct)', () => {
 
 // ─── Phase 4 — Stow → clamp/slice → furnace lifecycle ───────────────────────
 // .kilo/plans/mother-net-capture-ceremony.md PHASE 4 (flag MOTHER_CARGO_STOW).
-// The reeled catch is hauled to an AFT cargo cell (forward canister stays clear),
+// The reeled catch is hauled back to a FORWARD cargo cell near the nose (never
 // stowed (debris stays alive + pinned, LASSO_CAPTURED fires for onboarding), then
 // fed to the furnace reusing CATCH_BREAKDOWN_START + a single CATCH_PROCESSED.
 // Scoring + removeDebris move to CATCH_PROCESSED (no double-score, no flat-500).
@@ -1088,7 +1088,7 @@ describe('LassoSystem — Phase 4 stow → furnace lifecycle (flag ON)', () => {
         try { return fn(); } finally { Constants.FEATURE_FLAGS.MOTHER_CARGO_STOW = orig; }
     }
 
-    it('reel routes to an AFT cargo cell, not the hull centre', () => {
+    it('reel routes to a FORWARD cargo cell near the nose (never through the hull)', () => {
         withFlag(() => {
             const { lasso, playerPos, velDir, debrisField, target } = rig();
             lasso.fire(playerPos, debrisField, velDir, target);
@@ -1099,9 +1099,12 @@ describe('LassoSystem — Phase 4 stow → furnace lifecycle (flag ON)', () => {
             assert.equal(lasso._cargo.length, 1, 'catch stowed into a cargo cell');
             const cell = new THREE.Vector3();
             lasso._cargoCellWorld(playerPos, velDir, lasso._cargo[0].cellIndex, cell);
-            // The cell is AFT: its component along prograde (+Z) is behind the hull.
-            const aftComponent = (cell.z - playerPos.z) / M; // metres along prograde
-            assert.ok(aftComponent < 0, `cargo cell is aft of the hull (got ${aftComponent.toFixed(1)} m)`);
+            // The cell is FORWARD (same side as the incoming catch), so the reel
+            // pulls the catch back toward the nose instead of dragging it straight
+            // through the hull to the rear (the "overshoots the mother" bug).
+            const fwdComponent = (cell.z - playerPos.z) / M; // metres along prograde (+Z)
+            assert.ok(fwdComponent > 0, `cargo cell is forward of the hull centre (got ${fwdComponent.toFixed(1)} m)`);
+            assert.ok(fwdComponent < 22, 'cell sits between the hull and the catch — reel never crosses the hull');
         });
     });
 

@@ -370,12 +370,13 @@ export class LassoSystem {
     }
 
     /**
-     * Phase 4: world position of an aft cargo cell, expressed in the mother's
-     * local frame (prograde / radial-up / cross-track — cf.
-     * PlayerSatellite.js:3705-3715). Cells sit AFT (−prograde, the FEEP/dock end)
-     * so the forward canister stays clear for the next launch, spread laterally
-     * along cross-track. Recomputed each frame so stowed catches ride the hull as
-     * it reorients along velocity.
+     * Phase 4: world position of a cargo cell, in the mother's local frame
+     * (prograde / radial-up / cross-track — cf. PlayerSatellite.js:3705-3715).
+     * Cells sit just FORWARD of the hull (near the launch muzzle) with a small
+     * cross-track spread, so the reeled catch returns toward the nose it was
+     * thrown from and is NEVER hauled straight through the hull to the rear
+     * (that read as the net "overshooting the mother on return"). Recomputed each
+     * frame so stowed catches ride the hull as it reorients along velocity.
      * @param {THREE.Vector3} playerPos
      * @param {THREE.Vector3|null} playerVelDir
      * @param {number} cellIndex
@@ -396,7 +397,7 @@ export class LassoSystem {
         // Centre the row: lateral = (i - (n-1)/2) × spread.
         const lateral = (cellIndex - (cells - 1) / 2) * Constants.MOTHER_CARGO_CELL_SPREAD_M * M;
         out.copy(playerPos)
-            .addScaledVector(prograde, -Constants.MOTHER_CARGO_AFT_OFFSET_M * M)
+            .addScaledVector(prograde, Constants.MOTHER_CARGO_FWD_OFFSET_M * M)
             .addScaledVector(crossTrack, lateral);
         return out;
     }
@@ -1334,9 +1335,10 @@ export class LassoSystem {
                 // REEL: compact package travels player-relative from contact → zero
                 reelT = (this._reelProgress - WRAP_END) / (1 - WRAP_END);
             }
-            // Phase 4: haul to the chosen AFT cargo cell (player-relative), not
-            // the hull centre, so the forward canister stays clear. _zeroVec
-            // (centre) is the legacy/flag-off target.
+            // Phase 4: reel the catch back to its FORWARD cargo cell near the
+            // nose (player-relative) — the same side it was thrown from — so it is
+            // never dragged through the hull to the rear. _zeroVec (centre) is the
+            // legacy/flag-off target.
             let reelEndOffset = _zeroVec;
             if (Constants.FEATURE_FLAGS.MOTHER_CARGO_STOW && this._reelCellIndex >= 0) {
                 this._cargoCellWorld(playerPos, playerVelDir, this._reelCellIndex, _scratchMuzzle);
