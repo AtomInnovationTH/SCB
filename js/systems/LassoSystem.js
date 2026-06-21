@@ -230,6 +230,25 @@ export class LassoSystem {
         if (typeof window !== 'undefined') {
             window.__lasso = this;
             window.__lassoState = () => this._dbgSnapshot();
+            // Live flag toggle for A/B testing without a rebuild/restart, e.g.:
+            //   window.__lassoFlags()                       → read current
+            //   window.__lassoFlags({ stow:false, phys:false }) → revert Phase 3/4
+            //   window.__lassoFlags({ kin:false })          → disable net open/cinch
+            window.__lassoFlags = (set) => {
+                const F = Constants.FEATURE_FLAGS;
+                if (set && typeof set === 'object') {
+                    if ('kin' in set) F.LASSO_NET_KINEMATICS = !!set.kin;
+                    if ('phys' in set) F.LASSO_REEL_PHYSICS = !!set.phys;
+                    if ('stow' in set) F.MOTHER_CARGO_STOW = !!set.stow;
+                }
+                const now = {
+                    kin: F.LASSO_NET_KINEMATICS,
+                    phys: F.LASSO_REEL_PHYSICS,
+                    stow: F.MOTHER_CARGO_STOW,
+                };
+                console.log('[lasso] flags', now);
+                return now;
+            };
         }
     }
 
@@ -1553,10 +1572,9 @@ export class LassoSystem {
             armId: 'lasso',
             debrisId: target ? target.id : null,
         });
-        eventBus.emit(Events.COMMS_MESSAGE, {
-            text: `Catch secured to cargo cell ${cellIndex + 1}. Routing to furnace.`,
-            priority: 'info',
-        });
+        // NOTE: no per-catch comms here — the furnace breakdown (CATCH_BREAKDOWN_START
+        // → GameFlowManager) already narrates, and a sourceless message per catch
+        // spammed both the comms feed and the console.
 
         this._resetLasso();
         this.cooldown = Constants.LASSO_COOLDOWN_CATCH;
