@@ -30,6 +30,10 @@ const _scratchFwd = new THREE.Vector3();
 const _scratchToTarget = new THREE.Vector3();
 /** Phase 1B — scratch for the per-frame muzzle world position. */
 const _scratchMuzzle = new THREE.Vector3();
+/** Phase 4 — scratch for the local-frame basis used by aft cargo cells. */
+const _scratchRadial = new THREE.Vector3();
+const _scratchCross = new THREE.Vector3();
+const _scratchCargoOffset = new THREE.Vector3();
 
 export class LassoSystem {
     /**
@@ -154,7 +158,7 @@ export class LassoSystem {
         this._evtUnsubs = [
             eventBus.on(Events.ONBOARDING_STARTED, () => { this._onboardingActive = true; }),
             eventBus.on(Events.ONBOARDING_COMPLETE, () => { this._onboardingActive = false; }),
-            eventBus.on(Events.GAME_RESET, () => { this._inRangePromptId = null; }),
+            eventBus.on(Events.GAME_RESET, () => { this._inRangePromptId = null; this._cargo = []; }),
             // Phase 3: track the active mission so reel-in physics can be gated OFF
             // on Mission 1 (the tutorial reels exactly as today, flag regardless).
             eventBus.on(Events.MISSION_START, (data) => {
@@ -171,6 +175,13 @@ export class LassoSystem {
 
         /** @type {number} Phase 3 — seconds the tether has spent above the safe strain fraction. */
         this._strainTimer = 0;
+
+        /** @type {Array<object>} Phase 4 — stowed catches awaiting/undergoing furnace breakdown.
+         *  Each: { target, cellIndex, furnaceTimer, breakdownStarted }. Persists across casts. */
+        this._cargo = [];
+
+        /** @type {number} Phase 4 — cargo cell index chosen for the in-flight catch (−1 = none). */
+        this._reelCellIndex = -1;
 
         /** @type {object|null} Optional SkillsSystem for hint-gating (Phase 3).
          *  Wired via setSkillsSystem(); when absent the prompt fires ungated
@@ -274,6 +285,51 @@ export class LassoSystem {
      */
     setPlayer(player) {
         this._player = player || null;
+    }
+
+    /**
+     * Phase 4: world position of an aft cargo cell, expressed in the mother's
+     * local frame (prograde / radial-up / cross-track — cf.
+     * PlayerSatellite.js:3705-3715). Cells sit AFT (−prograde, the FEEP/dock end)
+     * so the forward canister stays clear for the next launch, spread laterally
+     * along cross-track. Recomputed each frame so stowed catches ride the hull as
+     * it reorients along velocity.
+     * @param {THREE.Vector3} playerPos
+     * @param {THREE.Vector3|null} playerVelDir
+     * @param {number} cellIndex
+     * @param {THREE.Vector3} out
+     * @returns {THREE.Vector3} world cell anchor
+     * @private
+     */
+    _cargoCellWorld(playerPos, playerVelDir, cellIndex, out) {
+        const prograde = this._resolveForwardDir(playerVelDir, _scratchFwd);
+        // radial-up = geocentric up (Earth at scene origin); fall back to +Y.
+        const radialUp = playerPos && playerPos.lengthSq() > 0
+            ? _scratchRadial.copy(playerPos).normalize()
+            : _scratchRadial.set(0, 1, 0);
+        const crossTrack = _scratchCross.crossVectors(prograde, radialUp);
+        if (crossTrack.lengthSq() < 1e-9) crossTrack.set(1, 0, 0); else crossTrack.normalize();
+
+        const cells = Math.max(1, Constants.MOTHER_CARGO_CELLS);
+        // Centre the row: lateral = (i - (n-1)/2) × spread.
+        const lateral = (cellIndex - (cells - 1) / 2) * Constants.MOTHER_CARGO_CELL_SPREAD_M * M;
+        out.copy(playerPos)
+            .addScaledVector(prograde, -Constants.MOTHER_CARGO_AFT_OFFSET_M * M)
+            .addScaledVector(crossTrack, lateral);
+        return out;
+    }
+
+    /**
+     * Phase 4: index of the first free cargo cell, or -1 when full.
+     * @returns {number}
+     * @private
+     */
+    _firstFreeCell() {
+        const cells = Math.max(1, Constants.MOTHER_CARGO_CELLS);
+        for (let i = 0; i < cells; i++) {
+            if (!this._cargo.some(c => c.cellIndex === i)) return i;
+        }
+        return -1;
     }
 
     /** Create capture net projectile group, tube tether, trail, and flash visuals */
@@ -781,6 +837,20 @@ export class LassoSystem {
             return false;
         }
 
+        // Phase 4 (MOTHER_CARGO_STOW): soft-block when every aft cargo cell is
+        // occupied — the catch has nowhere to go until the furnace clears one.
+        if (Constants.FEATURE_FLAGS.MOTHER_CARGO_STOW && this._firstFreeCell() < 0) {
+            eventBus.emit(Events.LASSO_DENIED, { reason: 'cargo_full' });
+            eventBus.emit(Events.COMMS_MESSAGE, {
+                text: 'Cargo full — furnace still processing. Wait for a cell to clear.',
+                source: 'SYSTEM',
+                channel: 'CMD',
+                priority: 'warning',
+                _lassoFeedback: true,
+            });
+            return false;
+        }
+
         // Find nearest debris within lasso range
         const rangeScene = Constants.LASSO_RANGE * M; // 200m in scene units
         const nearby = debrisField.getDebrisNear(playerPos, rangeScene);
@@ -1079,6 +1149,10 @@ export class LassoSystem {
         // Phase 6: Update visual effects (run independently of active state)
         this._updateVisualEffects(dt);
 
+        // Phase 4: tick stowed catches (furnace breakdown + cell pinning). Runs
+        // independent of active state — cargo persists across casts.
+        this._updateCargo(dt, playerPos, playerVelDir);
+
         // Proactive "in range — press N" prompt (gap C.3). Fires once when the
         // Tab-selected target first enters a castable state (in range, in the
         // forward arc, idle/loaded). Tier-gated + onboarding-suppressed.
@@ -1104,8 +1178,13 @@ export class LassoSystem {
             this._reelProgress += dt * Constants.LASSO_REEL_SPEED;
             this._reelProgress = Math.min(this._reelProgress, 1.0); // clamp — prevent overshoot
             if (this._reelProgress >= 1.0) {
-                // Catch complete!
-                this._completeCatch(debrisField);
+                // Catch complete! Phase 4: route through stow → furnace when the
+                // flag + a cargo cell are available; else the legacy instant catch.
+                if (Constants.FEATURE_FLAGS.MOTHER_CARGO_STOW && this._reelCellIndex >= 0) {
+                    this._stowCatch(playerPos, playerVelDir);
+                } else {
+                    this._completeCatch(debrisField);
+                }
                 return;
             }
 
@@ -1158,8 +1237,16 @@ export class LassoSystem {
                 // REEL: compact package travels player-relative from contact → zero
                 reelT = (this._reelProgress - WRAP_END) / (1 - WRAP_END);
             }
+            // Phase 4: haul to the chosen AFT cargo cell (player-relative), not
+            // the hull centre, so the forward canister stays clear. _zeroVec
+            // (centre) is the legacy/flag-off target.
+            let reelEndOffset = _zeroVec;
+            if (Constants.FEATURE_FLAGS.MOTHER_CARGO_STOW && this._reelCellIndex >= 0) {
+                this._cargoCellWorld(playerPos, playerVelDir, this._reelCellIndex, _scratchMuzzle);
+                reelEndOffset = _scratchCargoOffset.copy(_scratchMuzzle).sub(playerPos);
+            }
             const reelOffset = new THREE.Vector3().lerpVectors(
-                this._reelStartOffset, _zeroVec, reelT
+                this._reelStartOffset, reelEndOffset, reelT
             );
             this.projectilePos.copy(playerPos).add(reelOffset);
 
@@ -1207,6 +1294,13 @@ export class LassoSystem {
                 // reels in from the back").
                 this._reelStartOffset.copy(this._projOffset);
                 this._reelProgress = 0;
+
+                // Phase 4: pick the aft cargo cell this catch will be hauled to
+                // (leaves the forward canister clear). -1 when the flag is off, in
+                // which case the package reels to the hull centre as before.
+                this._reelCellIndex = Constants.FEATURE_FLAGS.MOTHER_CARGO_STOW
+                    ? this._firstFreeCell()
+                    : -1;
 
                 // Establish the reel-in pin AT CONTACT, anchored to where the
                 // debris currently is, so it doesn't render for one frame at its
@@ -1319,6 +1413,119 @@ export class LassoSystem {
         }
 
         // Energy pulse bead removed (Issue #6 — de-arcade tether visual)
+    }
+
+    /**
+     * Phase 4 (MOTHER_CARGO_STOW): clamp/slice the reeled catch free of the
+     * tether into its aft cargo cell. The debris STAYS alive + pinned to the cell
+     * anchor (no removeDebris / no score here) and begins the furnace-transfer
+     * countdown. LASSO_CAPTURED / ARM_CAPTURED fire AT STOW so onboarding beats
+     * (tease_lock / first_catch / second_catch) and reacquire advance promptly —
+     * scoring + salvage + removal happen later, exactly once, at CATCH_PROCESSED.
+     * @param {THREE.Vector3} playerPos
+     * @param {THREE.Vector3|null} playerVelDir
+     * @private
+     */
+    _stowCatch(playerPos, playerVelDir) {
+        const target = this.target;
+        const cellIndex = this._reelCellIndex;
+
+        // Keep the catch pinned to the cell anchor. Detach the reel-pin reference
+        // so _resetLasso() below does NOT release the pin — the cargo tick now
+        // owns it (persisting on the hull through the furnace window).
+        if (target) {
+            if (!target._armPinPos) target._armPinPos = new THREE.Vector3();
+            this._cargoCellWorld(playerPos, playerVelDir, cellIndex, _scratchMuzzle);
+            target._armPinPos.copy(_scratchMuzzle);
+            target._armPinned = true;
+        }
+        this._reelPinTarget = null; // hand pin ownership to the cargo system
+
+        this._cargo.push({
+            target,
+            cellIndex,
+            furnaceTimer: 0,
+            breakdownStarted: false,
+        });
+
+        // Onboarding/tutorial advance + capture juice fire at STOW (not furnace end).
+        eventBus.emit(Events.LASSO_STOWED, {
+            debrisId: target ? target.id : null,
+            cellIndex,
+        });
+        eventBus.emit(Events.LASSO_CAPTURED, {
+            debrisId: target ? target.id : null,
+            type: target ? target.type : 'unknown',
+            mass: target ? (target.mass || 0) : 0,
+        });
+        eventBus.emit(Events.ARM_CAPTURED, {
+            armId: 'lasso',
+            debrisId: target ? target.id : null,
+        });
+        eventBus.emit(Events.COMMS_MESSAGE, {
+            text: `Catch secured to cargo cell ${cellIndex + 1}. Routing to furnace.`,
+            priority: 'info',
+        });
+
+        this._resetLasso();
+        this.cooldown = Constants.LASSO_COOLDOWN_CATCH;
+        this.cooldownMax = Constants.LASSO_COOLDOWN_CATCH;
+        eventBus.emit(Events.LASSO_COOLDOWN_START, { duration: Constants.LASSO_COOLDOWN_CATCH });
+    }
+
+    /**
+     * Phase 4: tick stowed catches — keep them pinned to their (moving) aft cell
+     * anchor and run the staged furnace breakdown. Reuses the daughter timing
+     * (FURNACE_TRANSFER: HOLD → CHOP → FEED) and emits the SAME CATCH_BREAKDOWN_START
+     * + single CATCH_PROCESSED the daughter does, so GameFlowManager's existing
+     * handler performs salvage + scoring + removeDebris exactly once. Runs every
+     * frame (cargo persists across casts), independent of lasso active state.
+     * @param {number} dt
+     * @param {THREE.Vector3} playerPos
+     * @param {THREE.Vector3|null} playerVelDir
+     * @private
+     */
+    _updateCargo(dt, playerPos, playerVelDir) {
+        if (!this._cargo.length) return;
+        const FT = Constants.FURNACE_TRANSFER;
+        for (let i = this._cargo.length - 1; i >= 0; i--) {
+            const item = this._cargo[i];
+            const target = item.target;
+
+            // Keep the catch riding its aft cell anchor on the (reorienting) hull.
+            if (target && playerPos) {
+                if (!target._armPinPos) target._armPinPos = new THREE.Vector3();
+                this._cargoCellWorld(playerPos, playerVelDir, item.cellIndex, _scratchMuzzle);
+                target._armPinPos.copy(_scratchMuzzle);
+                target._armPinned = true;
+            }
+
+            item.furnaceTimer += dt;
+
+            // CHOP begins at HOLD_S — narrate the breakdown once (single owner is
+            // GameFlowManager's CATCH_BREAKDOWN_START handler).
+            if (!item.breakdownStarted && item.furnaceTimer >= FT.HOLD_S) {
+                item.breakdownStarted = true;
+                eventBus.emit(Events.CATCH_BREAKDOWN_START, {
+                    armId: 'lasso',
+                    debrisId: target ? target.id : null,
+                    chunkCount: FT.CHUNK_COUNT,
+                });
+            }
+
+            // FEED completes at FEED_S — the single CATCH_PROCESSED owns salvage +
+            // scoring + removeDebris (in GameFlowManager). Release our pin and free
+            // the cell.
+            if (item.furnaceTimer >= FT.FEED_S) {
+                if (target) target._armPinned = false;
+                eventBus.emit(Events.CATCH_PROCESSED, {
+                    armId: 'lasso',
+                    debrisId: target ? target.id : null,
+                    type: target ? target.type : 'fragment',
+                });
+                this._cargo.splice(i, 1);
+            }
+        }
     }
 
     /**
@@ -1570,6 +1777,8 @@ export class LassoSystem {
         // Phase 3: clear reel-physics latch + strain accumulator for the next cast.
         this._reelPhysicsActive = false;
         this._strainTimer = 0;
+        // Phase 4: clear the in-flight cargo-cell choice (stowed cargo persists).
+        this._reelCellIndex = -1;
 
         if (this._netGroup) this._netGroup.visible = false;
         // Phase 2: restore the mouth to full radius so the static net geometry is

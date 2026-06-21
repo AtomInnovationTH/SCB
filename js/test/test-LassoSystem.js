@@ -1032,3 +1032,155 @@ describe('LassoSystem — Phase 3 heavy-catch physics (direct)', () => {
         } finally { off(); }
     });
 });
+
+// ─── Phase 4 — Stow → clamp/slice → furnace lifecycle ───────────────────────
+// .kilo/plans/mother-net-capture-ceremony.md PHASE 4 (flag MOTHER_CARGO_STOW).
+// The reeled catch is hauled to an AFT cargo cell (forward canister stays clear),
+// stowed (debris stays alive + pinned, LASSO_CAPTURED fires for onboarding), then
+// fed to the furnace reusing CATCH_BREAKDOWN_START + a single CATCH_PROCESSED.
+// Scoring + removeDebris move to CATCH_PROCESSED (no double-score, no flat-500).
+describe('LassoSystem — Phase 4 stow → furnace lifecycle (flag ON)', () => {
+    const M = 0.00001;
+
+    function rig() {
+        const lasso = new LassoSystem(new THREE.Scene());
+        const playerPos = new THREE.Vector3(0, 0, 7000 * M); // off-origin so radial-up is well-defined
+        const velDir = new THREE.Vector3(0, 0, 1);
+        const target = { id: 1, alive: true, type: 'fragment', mass: 5,
+            _scenePosition: new THREE.Vector3(0, 0, (7000 + 22) * M) };
+        const removed = [];
+        const debrisField = {
+            getDebrisNear: () => [target],
+            getDebrisById: (id) => (id === 1 && target.alive ? target : null),
+            removeDebris: (id) => { removed.push(id); target.alive = false; },
+        };
+        return { lasso, playerPos, velDir, target, debrisField, removed };
+    }
+
+    function withFlag(fn) {
+        const orig = Constants.FEATURE_FLAGS.MOTHER_CARGO_STOW;
+        Constants.FEATURE_FLAGS.MOTHER_CARGO_STOW = true;
+        try { return fn(); } finally { Constants.FEATURE_FLAGS.MOTHER_CARGO_STOW = orig; }
+    }
+
+    it('reel routes to an AFT cargo cell, not the hull centre', () => {
+        withFlag(() => {
+            const { lasso, playerPos, velDir, debrisField, target } = rig();
+            lasso.fire(playerPos, debrisField, velDir, target);
+            // Run until just stowed.
+            for (let i = 0; i < 400 && lasso.active; i++) {
+                lasso.update(0.05, playerPos, debrisField, debrisField.getDebrisById(1), velDir);
+            }
+            assert.equal(lasso._cargo.length, 1, 'catch stowed into a cargo cell');
+            const cell = new THREE.Vector3();
+            lasso._cargoCellWorld(playerPos, velDir, lasso._cargo[0].cellIndex, cell);
+            // The cell is AFT: its component along prograde (+Z) is behind the hull.
+            const aftComponent = (cell.z - playerPos.z) / M; // metres along prograde
+            assert.ok(aftComponent < 0, `cargo cell is aft of the hull (got ${aftComponent.toFixed(1)} m)`);
+        });
+    });
+
+    it('stow keeps the debris alive + pinned and fires LASSO_CAPTURED (onboarding)', () => {
+        withFlag(() => {
+            const { lasso, playerPos, velDir, debrisField, target, removed } = rig();
+            let captured = null, stowed = null;
+            const offC = eventBus.on(Events.LASSO_CAPTURED, (e) => { captured = e; });
+            const offS = eventBus.on(Events.LASSO_STOWED, (e) => { stowed = e; });
+            try {
+                lasso.fire(playerPos, debrisField, velDir, target);
+                for (let i = 0; i < 400 && lasso.active; i++) {
+                    lasso.update(0.05, playerPos, debrisField, debrisField.getDebrisById(1), velDir);
+                }
+                assert.ok(stowed && stowed.debrisId === 1, 'LASSO_STOWED fired');
+                assert.ok(captured && captured.debrisId === 1, 'LASSO_CAPTURED fired at STOW (onboarding advance)');
+                assert.equal(target.alive, true, 'debris NOT removed at stow (furnace owns removal)');
+                assert.equal(target._armPinned, true, 'debris pinned to the cargo cell');
+                assert.equal(removed.length, 0, 'no removeDebris at stow');
+            } finally { offC(); offS(); }
+        });
+    });
+
+    it('furnace emits CATCH_BREAKDOWN_START then exactly one CATCH_PROCESSED; removeDebris once', () => {
+        withFlag(() => {
+            const { lasso, playerPos, velDir, debrisField, target } = rig();
+            const events = [];
+            const offB = eventBus.on(Events.CATCH_BREAKDOWN_START, (e) => events.push(['start', e]));
+            const offP = eventBus.on(Events.CATCH_PROCESSED, (e) => events.push(['processed', e]));
+            try {
+                lasso.fire(playerPos, debrisField, velDir, target);
+                // Run well past FURNACE_TRANSFER.FEED_S after stow.
+                const totalFrames = Math.ceil((Constants.FURNACE_TRANSFER.FEED_S + 8) / 0.05);
+                for (let i = 0; i < totalFrames; i++) {
+                    lasso.update(0.05, playerPos, debrisField, debrisField.getDebrisById(1), velDir);
+                }
+                const starts = events.filter(e => e[0] === 'start');
+                const processed = events.filter(e => e[0] === 'processed');
+                assert.equal(starts.length, 1, 'CATCH_BREAKDOWN_START fires exactly once');
+                assert.equal(processed.length, 1, 'CATCH_PROCESSED fires exactly once');
+                assert.equal(processed[0][1].armId, 'lasso', 'processed payload tags the lasso');
+                assert.equal(processed[0][1].debrisId, 1, 'processed payload carries the debris id');
+                // START precedes PROCESSED.
+                assert.ok(events.findIndex(e => e[0] === 'start') < events.findIndex(e => e[0] === 'processed'),
+                    'breakdown start precedes processed');
+                assert.equal(lasso._cargo.length, 0, 'cell freed after processing');
+                assert.equal(target._armPinned, false, 'pin released after processing (no orphaned pin)');
+            } finally { offB(); offP(); }
+        });
+    });
+
+    it('does NOT emit INTERACTION_CAPTURE / flat SCORING_AWARD at stow (no double-score)', () => {
+        withFlag(() => {
+            const { lasso, playerPos, velDir, debrisField, target } = rig();
+            let interaction = 0, scoring = 0;
+            const offI = eventBus.on(Events.INTERACTION_CAPTURE, () => interaction++);
+            const offS = eventBus.on(Events.SCORING_AWARD, () => scoring++);
+            try {
+                lasso.fire(playerPos, debrisField, velDir, target);
+                // Only through stow (not the furnace window) — assert no flat score.
+                for (let i = 0; i < 400 && lasso.active; i++) {
+                    lasso.update(0.05, playerPos, debrisField, debrisField.getDebrisById(1), velDir);
+                }
+                assert.equal(lasso._cargo.length, 1, 'stowed');
+                assert.equal(interaction, 0, 'no INTERACTION_CAPTURE flat-500 at stow');
+                assert.equal(scoring, 0, 'no SCORING_AWARD flat-500 at stow (scoring is at CATCH_PROCESSED)');
+            } finally { offI(); offS(); }
+        });
+    });
+
+    it('cargo-full soft-blocks a new cast with a hint', () => {
+        withFlag(() => {
+            const lasso = new LassoSystem(new THREE.Scene());
+            // Fill every cell.
+            for (let i = 0; i < Constants.MOTHER_CARGO_CELLS; i++) {
+                lasso._cargo.push({ target: { id: 100 + i }, cellIndex: i, furnaceTimer: 0, breakdownStarted: false });
+            }
+            let denied = null;
+            const off = eventBus.on(Events.LASSO_DENIED, (e) => { denied = e; });
+            try {
+                const playerPos = new THREE.Vector3(0, 0, 7000 * M);
+                const velDir = new THREE.Vector3(0, 0, 1);
+                const target = { id: 1, alive: true, type: 'fragment', mass: 5,
+                    _scenePosition: new THREE.Vector3(0, 0, (7000 + 22) * M) };
+                const debrisField = { getDebrisNear: () => [target], getDebrisById: () => target, removeDebris: () => {} };
+                const ok = lasso.fire(playerPos, debrisField, velDir, target);
+                assert.equal(ok, false, 'cast refused when cargo is full');
+                assert.ok(denied && denied.reason === 'cargo_full', 'denial reason is cargo_full');
+            } finally { off(); }
+        });
+    });
+
+    it('flag OFF: legacy instant catch — flat score + immediate removeDebris (no cargo)', () => {
+        const { lasso, playerPos, velDir, debrisField, removed, target } = rig();
+        let scoring = 0;
+        const off = eventBus.on(Events.SCORING_AWARD, () => scoring++);
+        try {
+            lasso.fire(playerPos, debrisField, velDir, target);
+            for (let i = 0; i < 400 && lasso.active; i++) {
+                lasso.update(0.05, playerPos, debrisField, debrisField.getDebrisById(1), velDir);
+            }
+            assert.equal(lasso._cargo.length, 0, 'no cargo path when flag OFF');
+            assert.ok(removed.includes(1), 'legacy instant removeDebris');
+            assert.ok(scoring >= 1, 'legacy flat SCORING_AWARD fired at completion');
+        } finally { off(); }
+    });
+});

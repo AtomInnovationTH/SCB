@@ -1626,6 +1626,17 @@ export const Constants = {
   LASSO_REEL_PULL_GAIN: 0.6,          // dimensionless — CoM nudge scale (× mass/shipMass × reelRate), clamped by RCS_MAX_SPEED
   LASSO_NET_BREAK_TIME_S: 2.0,        // seconds above NET_STRAIN_SAFE_FRACTION before the tether snaps
 
+  // --- Mother-net capture ceremony Phase 4 (stow → furnace lifecycle) ---
+  // .kilo/plans/mother-net-capture-ceremony.md §PHASE 4 (flag MOTHER_CARGO_STOW).
+  // The reeled catch is hauled to an AFT (−Z, thruster-end) cargo cell — leaving
+  // the forward canister clear — then fed to the furnace via the existing
+  // FURNACE_TRANSFER staging + CATCH_PROCESSED salvage/score path (instead of the
+  // legacy instant removeDebris + flat TIER3_BASE). When the flag is OFF the
+  // legacy instant resolution is used and none of this runs.
+  MOTHER_CARGO_CELLS: 3,              // hull cargo cells (aft netting between struts)
+  MOTHER_CARGO_AFT_OFFSET_M: 12,      // metres aft (−prograde) of the hull centre for the cell row
+  MOTHER_CARGO_CELL_SPREAD_M: 6,      // metres lateral spread (cross-track) between cells
+
 
   // --- Net-lock range SSOT (onboarding reward-first spine) ---
   // Single source of truth for "close enough to net". Drives (a) the autolock
