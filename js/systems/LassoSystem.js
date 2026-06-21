@@ -497,6 +497,30 @@ export class LassoSystem {
             this._netGroup.add(weightMesh);
         }
 
+        // ── Daughter-style cone "bag" (ceremony look) ────────────────────────
+        // Gives the net real volume instead of a flat octagon: a translucent
+        // wireframe cone whose MOUTH faces the flight direction (+Z local) and
+        // whose apex sits at the net origin (where the tether terminates, ship
+        // side). Mirrors CaptureNetVisual's ceremony cone (CONE_LENGTH_FRAC). The
+        // mouth opens on launch and cinches on capture via _applyNetMouthRadius,
+        // which scales the cone's X/Y (radius) while leaving its length intact.
+        const coneLenFrac = (Constants.CAPTURE_NET && Constants.CAPTURE_NET.NET_CEREMONY
+            && Constants.CAPTURE_NET.NET_CEREMONY.CONE_LENGTH_FRAC) || 0.85;
+        const coneHeight = radius * 2 * coneLenFrac;
+        const coneGeo = new THREE.ConeGeometry(radius, coneHeight, 12, 3, true);
+        coneGeo.rotateX(-Math.PI / 2);             // mouth faces +Z (toward target)
+        coneGeo.translate(0, 0, coneHeight / 2);   // apex at origin, mouth at +coneHeight
+        const coneMat = new THREE.MeshBasicMaterial({
+            color: 0x88ffcc,
+            transparent: true,
+            opacity: 0,
+            wireframe: true,
+            side: THREE.DoubleSide,
+        });
+        this._netCone = new THREE.Mesh(coneGeo, coneMat);
+        this._netCone.name = 'netCone';
+        this._netGroup.add(this._netCone);
+
         this._netGroup.visible = false;
         this.scene.add(this._netGroup);
 
@@ -687,6 +711,9 @@ export class LassoSystem {
                 w.position.set(Math.cos(a) * r, Math.sin(a) * r, 0);
             }
         }
+        // Cone bag: scale mouth radius (X/Y) with the fraction; keep its length so
+        // it reads as opening wide then cinching to a closed pouch on capture.
+        if (this._netCone) this._netCone.scale.set(frac, frac, 1);
     }
 
     // Sparks removed per user feedback — "NOT an arcade game"
