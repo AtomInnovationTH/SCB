@@ -1,10 +1,64 @@
 # Space Cowboy — Next-Shift Handoff Brief
 
-*Updated: 2026-06-12 · **Daughter-lifecycle debug & polish** (13-issue pass: re-dock, pin standoff, SK lead aim, woosh timing, hotkeys, hints, U-in-pilot, net-fit guidance, stuck-state audit, spin physics, flags, tether visual) — uncommitted, plan in [`.kilo/plans/daughter-lifecycle-debug-polish.md`](.kilo/plans/daughter-lifecycle-debug-polish.md). Prior: 2026-06-11 daughter-cycle polish (`80c70b5`, v.95); 2026-06-10 Phase F solo-flight graduation (`ce5409d`, ARC COMPLETE); Phase E elevator win (`a4863c4`); Phase D ch8–11 + Starlink boss (`95854de`); 2026-06-06 daughter capture-lifecycle polish (`b7d5fae`). Archived context at [`archive/HANDOFF_2026-05-30_four-fix.md`](archive/HANDOFF_2026-05-30_four-fix.md), [`archive/HANDOFF_2026-05-29_post-cinch-qa.md`](archive/HANDOFF_2026-05-29_post-cinch-qa.md), [`archive/SK_M1_POLISH_HANDOFF.md`](archive/SK_M1_POLISH_HANDOFF.md), [`archive/CEREMONY_REDESIGN.md`](archive/CEREMONY_REDESIGN.md).*
+*Updated: 2026-06-22 · **Mother-net (lasso) capture ceremony — FUNCTIONAL, VISUALLY REJECTED**. The M1 "N" mother lasso now throws/reels/cinches/stows end-to-end (Phases 1–4, committed `e5609e6`→`b593dbf`), but the net's LOOK was rejected by the owner: "big, clunky, obnoxious — cold shit. A net in space should be a simple, elegant, beautiful web." **NEXT SHIFT'S JOB: deep-analyze this shift's changes, keep the functional wins, and EITHER roll the mother net's VISUAL back to original OR unify mother+daughter on ONE shared net style (the stated ideal). See the LATEST SHIFT block.** Prior: 2026-06-12 daughter-lifecycle debug & polish*
+
+*Earlier: **Daughter-lifecycle debug & polish** (13-issue pass: re-dock, pin standoff, SK lead aim, woosh timing, hotkeys, hints, U-in-pilot, net-fit guidance, stuck-state audit, spin physics, flags, tether visual) — uncommitted, plan in [`.kilo/plans/daughter-lifecycle-debug-polish.md`](.kilo/plans/daughter-lifecycle-debug-polish.md). Prior: 2026-06-11 daughter-cycle polish (`80c70b5`, v.95); 2026-06-10 Phase F solo-flight graduation (`ce5409d`, ARC COMPLETE); Phase E elevator win (`a4863c4`); Phase D ch8–11 + Starlink boss (`95854de`); 2026-06-06 daughter capture-lifecycle polish (`b7d5fae`). Archived context at [`archive/HANDOFF_2026-05-30_four-fix.md`](archive/HANDOFF_2026-05-30_four-fix.md), [`archive/HANDOFF_2026-05-29_post-cinch-qa.md`](archive/HANDOFF_2026-05-29_post-cinch-qa.md), [`archive/SK_M1_POLISH_HANDOFF.md`](archive/SK_M1_POLISH_HANDOFF.md), [`archive/CEREMONY_REDESIGN.md`](archive/CEREMONY_REDESIGN.md).*
 
 ---
 
-> ## ⏩ LATEST SHIFT — 2026-06-12 (Daughter-lifecycle debug & polish — 13 issues) — read this first
+> ## ⏩ LATEST SHIFT — 2026-06-22 (Mother-net capture ceremony — FUNCTIONAL, VISUAL REJECTED) — read this first
+>
+> ### TL;DR for next shift
+> The M1 "N" **mother lasso** (`js/systems/LassoSystem.js`) now does the full capture ceremony — visible throw → reel-in → mouth-cinch → stow → furnace — and the **functional** behaviour is good. **The VISUAL was rejected by the owner**, verbatim: *"current mother lasso (net) looks like shit. Cold shit. Big, clunky, obnoxious. This is a space sim. A net in space can be simple, elegant, beautiful web."* Tests: **854 suites / 3458 / 0 fail**. Tree clean, HEAD `b593dbf`. Everything below is committed.
+>
+> ### YOUR MISSION (in this order)
+> 1. **Deep-analyze this shift's changes** (commits `e5609e6`→`b593dbf`, all in `LassoSystem.js` + `Constants.js`). Separate the **functional wins** (keep) from the **visual regressions** (cut/replace).
+> 2. **Decide the end-state** between two options (owner's stated ideal is **B**):
+>    - **(A) Roll back the mother net's VISUAL to original** — keep the lifecycle/physics, restore the pre-shift look.
+>    - **(B) ⭐ UNIFY: one net style for BOTH mother and daughter.** The daughter's net visual ([`js/ui/CaptureNetVisual.js`](js/ui/CaptureNetVisual.js)) is the better-loved look; make the mother lasso render through the SAME visual vocabulary so there is a single, elegant "web in space" shared by both. This is the target.
+> 3. Land it, keep the test suite green, **browser-playtest** (this shift was NOT verified in-browser — that's how the ugly net shipped).
+>
+> ### WHAT TO KEEP vs CUT — analysis of this shift
+> | Commit | What it did | Verdict |
+> |---|---|---|
+> | `04ce6c6` | **Overshoot fix** — moved cargo cells FORWARD of the nose so the catch reels back toward the muzzle instead of flying THROUGH the hull to a cell 12 m aft. **Tamed the 18 m muzzle flash → 5 m / 0.25 s.** | ✅ **KEEP** (genuine bug fixes) |
+> | `2e0d1fe` | Removed per-catch "Catch secured to cargo cell N" comms spam; added `window.__lassoFlags({kin,phys,stow})` live toggle. | ✅ **KEEP** (spam fix + diag) |
+> | `80e19fa` | `window.__lassoDebug` / `window.__lassoState()` lifecycle trace. | ✅ **KEEP** (diagnostics only) |
+> | `b593dbf` | **The rejected visual** — translucent wireframe `ConeGeometry` "bag" bolted onto the lasso net. | ❌ **CUT/REPLACE** — this is the "clunky/obnoxious" part |
+> | `e5609e6`,`0664f27`,`dc94894`,`0717b9a`,`625c271` | Phases 1–4 lifecycle: visible throw + min-flight gate + cosmetic recoil; open-on-launch/cinch-on-capture mouth kinematics; reel-in mass/tension/break-risk physics; stow→furnace. Flags flipped ON by default. | 🟡 **KEEP the lifecycle, RE-SKIN the geometry.** The FSM/physics are sound; only the *mesh* is ugly. |
+>
+> ### WHY THE MOTHER NET LOOKS BAD (root causes — don't re-make these)
+> - **It's an octagon-of-lines + 8 metal spheres + a wireframe cone**, all at once, ~8 m across on a ~20 m ship. Reads as a clunky cage, not a web. See [`_createVisuals()`](js/systems/LassoSystem.js:419): `NET_SEGMENTS` octagon `LineSegments` (line ~462) + `NET_CROSS_LINES` diameters + `NET_WEIGHT_COUNT` `SphereGeometry` rim weights (~477) + the new `ConeGeometry` bag (~510).
+> - **Too big / too opaque.** `NET_PERIMETER_RADIUS = 4` m (→ 8 m diameter), opacity driven to 0.8 (`_setNetOpacity`, ~675). An elegant space web wants a thinner, finer, more transparent mesh — far fewer hard metallic spheres (or none), a fine many-segment net, subtle emissive.
+> - **Wrong aesthetic vocabulary** vs the daughter, which already reads as a proper net (cone + rim weights + drawstring + apex hub, colour-by-phase). That mismatch is exactly why unification (option B) is the goal.
+>
+> ### THE TWO NET CODE PATHS (why "unify" is the real work)
+> - **Mother lasso** = [`js/systems/LassoSystem.js`](js/systems/LassoSystem.js) — a **self-contained** system. Builds its own meshes in `_createVisuals()`, drives them per-frame in `update()` (`_applyNetMouthRadius` ~694, `_setNetOpacity` ~675), owns its tether. NOT connected to the daughter net at all.
+> - **Daughter net** = [`js/ui/CaptureNetVisual.js`](js/ui/CaptureNetVisual.js) — **event-driven**, bound to `CaptureNetSystem` net projectiles via `NET_FIRED`/`NET_CATCH_SUCCESS`/`NET_CATCH_MISS`/`NET_REEL_COMPLETED`/`NET_RELEASED`, keyed by `armIndex`/`podIndex`, with a ceremony FSM and `netClass.DIAMETER`. It expects a `NetProjectile`, not a lasso.
+> - **Unification options, easiest→hardest:**
+>   1. **Extract a shared mesh builder** — pull the daughter's net-look construction (cone + rim weights + drawstring + apex hub + colour-by-phase) into a small pure-ish factory (e.g. `js/ui/NetMeshKit.js`) that BOTH `CaptureNetVisual` and `LassoSystem` call. Lasso keeps its own lifecycle but renders the shared look. **Lowest risk, hits the "one style" goal.** ⭐ Recommended.
+>   2. Make `CaptureNetVisual` drivable by a lightweight "net source" interface (position, mouth-frac, phase, tether endpoints) that the lasso implements — reuses the daughter's *animation* too, not just the meshes. More refactor.
+>   3. Route the mother lasso through an actual `CaptureNetSystem` projectile so it IS a daughter-style net. Highest coupling/risk — the lasso's M1 onboarding gating + cargo/furnace stow would need re-homing.
+>
+> ### TOOLS THIS SHIFT LEFT YOU (for the analysis/playtest)
+> - `window.__lassoDebug = true` then press **N** → lifecycle trace in console; `window.__lassoState()` dumps current state.
+> - `window.__lassoFlags({ kin:false, phys:false, stow:false })` — live-toggle Phases 2/3/4 with NO restart, to A/B the ugly net against simpler behaviour and to test perf. `kin:false` = flat net (no cone), `stow:false` = reel to centre (no cargo cells).
+> - **Unresolved:** owner reported fps swinging 24↔120 with tier downshifts during this work — **unverified whether it's this shift or the pre-existing scene load** (16k-instance Earth + ~5,800 debris). Use the flags above to bisect.
+>
+> ### KEY FILES & LINES
+> - [`js/systems/LassoSystem.js`](js/systems/LassoSystem.js): `_createVisuals()` ~419 (the ugly meshes), `_applyNetMouthRadius()` ~694, `_setNetOpacity()` ~675, `_cargoCellWorld()` ~386 (now forward of nose), reel block in `update()` ~1300–1500, `_stowCatch`/furnace ~1558, debug hooks in ctor ~214–295.
+> - [`js/core/Constants.js`](js/core/Constants.js): net look knobs — `NET_PERIMETER_RADIUS:4`, `NET_SEGMENTS`, `NET_CROSS_LINES`, `NET_WEIGHT_COUNT`, `NET_WEIGHT_RADIUS`, `NET_LAUNCH_COMPACT_FRAC`; `LASSO_MUZZLE_FLASH_SCALE/_TIME`, `LASSO_MIN_FLIGHT_TIME`, `MOTHER_CARGO_FWD_OFFSET_M/_CELL_SPREAD_M/_CELLS`; `FEATURE_FLAGS` (~835) `LASSO_NET_KINEMATICS`/`LASSO_REEL_PHYSICS`/`MOTHER_CARGO_STOW` all now **true**; `CAPTURE_NET.NET_CEREMONY` (~1938, `CONE_LENGTH_FRAC`).
+> - [`js/ui/CaptureNetVisual.js`](js/ui/CaptureNetVisual.js): the daughter net look to unify toward — `_createCeremonyVisual` ~223 (canister/disc/cone/rim/drawstring/apex hub), colour constants `COL_CINCH`/`COL_CAPTURED`/etc ~41–56.
+> - Tests: [`js/test/test-LassoSystem.js`](js/test/test-LassoSystem.js) (Phase 1–4; routing test asserts forward cell), `test-Constants.js` FEATURE_FLAGS count = 37.
+>
+> ### DO KEEP IN MIND
+> - **This is NOT an arcade game.** Owner previously had catch slo-mo + contact-flash removed — do **not** reintroduce juice. Elegant and restrained.
+> - **Browser-playtest before declaring done.** The whole reason a bad net shipped is the Node harness can't see the meshes.
+> - One shared, simple, beautiful web for mother + daughter is the north star.
+
+---
+
+> ## ⏩ PREVIOUS SHIFT — 2026-06-12 (Daughter-lifecycle debug & polish — 13 issues)
 >
 > **Full debug/polish pass on the D-launch → ceremony → SK → net → recall → re-dock loop.** All 13 issues from [`.kilo/plans/daughter-lifecycle-debug-polish.md`](.kilo/plans/daughter-lifecycle-debug-polish.md) implemented. **711 suites / 2880 tests / 0 fail** (was 694 / 2823). **NOT committed**; `.kilo/` untracked.
 >
