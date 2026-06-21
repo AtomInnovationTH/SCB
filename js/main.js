@@ -1776,6 +1776,11 @@ function gameLoop(timestamp) {
       drawCalls: renderInfo.render?.calls || 0,
       triangles: renderInfo.render?.triangles || 0,
       textures: renderInfo.memory?.textures || 0,
+      // Mission-1 welcome-field per-piece size/position/visibility diagnostics
+      // (empty array on later missions). Lets us tune the first-mission cluster.
+      welcomeDebris: (debrisField && typeof debrisField.getWelcomeFieldDiagnostics === 'function')
+        ? debrisField.getWelcomeFieldDiagnostics(player ? player.getPosition() : null)
+        : [],
     });
   }
 

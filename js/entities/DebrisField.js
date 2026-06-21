@@ -253,10 +253,10 @@ const WELCOME_FIELD = [
   // appear/* hints drive Phase-2 candidate selection (which mesh-slot to reuse,
   // since spawn cannot rebind shape/material): plate = flat panel-shard variant,
   // material = the rendered colour (gold mli_mylar foil, blue solar_cell cell).
-  { types: ['fragment'], sizeM: 0.18, lowValue: true, appearMaterial: 'aluminum', appearPlate: false,
-    massMin: 3, massMax: 3,  pin: true, fwdM: 30, latM: 0 },   // #1 bolt/bracket chunk — dead centre, ~0.34 m
-  { types: ['fragment'], sizeM: 0.30, lowValue: true, appearMaterial: 'mli_mylar', appearPlate: true,
-    massMin: 4, massMax: 4,  pin: true, fwdM: 65, latM: 25 },  // #2 MLI-foil scrap (gold flat) — right, in range (≈69 m)
+  { types: ['fragment'], sizeM: 0.60, lowValue: true, appearMaterial: 'aluminum', appearPlate: true,
+    massMin: 3, massMax: 3,  pin: true, fwdM: 22, latM: 0 },   // #1 aluminium panel shard (flat) — dead centre, ~22 m, render ~1.15 m
+  { types: ['fragment'], sizeM: 0.70, lowValue: true, appearMaterial: 'mli_mylar', appearPlate: true,
+    massMin: 4, massMax: 4,  pin: true, fwdM: 45, latM: 18 },  // #2 MLI-foil scrap (gold flat) — right, in range (≈48 m), render ~1.33 m
   { types: ['fragment'], sizeM: 0.45, appearMaterial: 'solar_cell', appearPlate: true,
     massMin: 5, massMax: 5,  offsetMin: 0.0000195, offsetMax: 0.0000270 }, // #3 RANGE WALL — solar-cell shard ~130–180 m
   // Medium/far tier — still net-only on M1, so ≤10 kg; orbital placement.
@@ -446,6 +446,12 @@ export class DebrisField {
     /** Pre-allocated colors for web shot tinting (Sprint D1) */
     this._webTintColor = new THREE.Color(0.85, 0.92, 1.0);
     this._defaultDebrisColor = new THREE.Color(1, 1, 1);
+    /** Per-instance brightness boost for the pinned welcome pieces (#1/#2) so
+     *  they catch the eye even on the shadow side without touching the shared
+     *  (deliberately dim) material emissive. Kept modest (1.25×) so the foil /
+     *  solar-cell material hue still reads as man-made debris rather than being
+     *  washed to a neutral-grey "rock". See m1-debris-1-2-visibility plan. */
+    this._welcomeBoostColor = new THREE.Color(1.25, 1.25, 1.25);
 
     /** ST-6.2: Pre-allocated temporaries for MOID colour tinting */
     this._moidTmpColor = new THREE.Color();
@@ -591,17 +597,23 @@ export class DebrisField {
     // Onboarding tease pin release: hand a curated piece back to normal
     // co-orbital propagation once it leaves play. Each pinned piece (#1, #2) is
     // released independently by id, so catching #1 doesn't unpin #2. Released on:
-    //  • ARM_CAPTURED — fires at the first REELING frame (Mother-net lasso path
-    //    emits it too), so the authoritative arm pin owns the catch, not us.
-    //  • DEBRIS_REMOVED — the reliable "tease consumed" signal (lasso catch via
-    //    removeDebris, fragmentation, web de-orbit); the lasso path the tease
-    //    trains never emits DEBRIS_CAPTURED.
+    //  • LASSO_CONTACT — the Mother net's reel-in begins. This MUST release the
+    //    pin at contact (not completion): otherwise the highest-priority pin
+    //    branch in _updateInstanceTransform keeps re-pinning the piece to its
+    //    fixed mother-local offset every reel frame, so the net package reels in
+    //    but the debris stays frozen in place, then vanishes when removeDebris
+    //    zeroes its scale. The LassoSystem reel then drives the piece to the
+    //    mother via the authoritative _armPinned/_armPinPos direct-copy pin.
+    //  • ARM_CAPTURED — daughter-arm catch path (payload uses targetId/debrisId).
+    //  • DEBRIS_REMOVED — the reliable "tease consumed" backstop (fragmentation,
+    //    web de-orbit, or any catch that ends in removeDebris).
     //  • ONBOARDING_COMPLETE — player skipped/finished the guided flow (clear all).
     const _releaseIfMatch = (d) => {
-      const id = d?.debrisId ?? d?.id;
+      const id = d?.debrisId ?? d?.targetId ?? d?.id;
       if (id != null && this._onboardingPinIds.has(id)) this._clearOnboardingPin(id);
     };
     if (Events.ARM_CAPTURED) eventBus.on(Events.ARM_CAPTURED, _releaseIfMatch);
+    if (Events.LASSO_CONTACT) eventBus.on(Events.LASSO_CONTACT, _releaseIfMatch);
     if (Events.DEBRIS_REMOVED) eventBus.on(Events.DEBRIS_REMOVED, _releaseIfMatch);
     if (Events.ONBOARDING_COMPLETE) {
       eventBus.on(Events.ONBOARDING_COMPLETE, () => this._clearOnboardingPin());
@@ -2333,6 +2345,20 @@ export class DebrisField {
         debris._onboardingPinFwd = (spec.fwdM || 0) * METRE_SCENE;
         debris._onboardingPinLat = (spec.latM || 0) * METRE_SCENE;
         this._onboardingPinIds.add(debris.id);
+
+        // Per-instance brightness boost (lever 3, m1-debris-1-2-visibility):
+        // brighten ONLY the pinned welcome pieces (#1/#2) via the existing
+        // instanceColor channel so they read clearly even on the shadow side.
+        // Isolated to these instances — no shared-material/emissive change.
+        // Tolerant of mock receivers (tests) lacking instanced meshes.
+        const _boostLookup = this._instanceLookup && this._instanceLookup.get(debris.id);
+        if (_boostLookup) {
+          const _boostMesh = this.instancedMeshes && this.instancedMeshes[_boostLookup.meshKey];
+          if (_boostMesh && _boostMesh.instanceColor) {
+            _boostMesh.setColorAt(_boostLookup.instanceIndex, this._welcomeBoostColor);
+            _boostMesh.instanceColor.needsUpdate = true;
+          }
+        }
       }
 
       // ST-4.C: Track/untrack based on profile (untracked count from far end)
@@ -2820,10 +2846,27 @@ export class DebrisField {
       // Any non-welcome debris is invisible to the pilot on the first mission.
       if (isMission1 && !debris.welcomeSpawn) continue;
 
-      const cart = orbitToSceneCartesian(debris.orbit);
-      const dx = cart.position.x - refPos.x;
-      const dy = cart.position.y - refPos.y;
-      const dz = cart.position.z - refPos.z;
+      // Prefer the live rendered _scenePosition (the single source of truth all
+      // consumers read, and the same basis getDebrisNear uses) measured against
+      // the rendered playerPos. Onboarding-PINNED pieces have their orbit
+      // propagation frozen (see _updateInstanceTransform pin branch), so the
+      // orbital comparison below drifts them out of the M1 2 km window within
+      // ~0.3 s and silently drops #1/#2 from the HUD list / T-Tab / scan reveal.
+      // Comparing scene-vs-rendered is self-consistent and cancels the RCS
+      // offset too. Pieces without a scene position (e.g. catalog debris that
+      // never entered the instance pool) fall back to the orbital comparison.
+      let dx, dy, dz;
+      const sp = debris._scenePosition;
+      if (sp && playerPos) {
+        dx = sp.x - playerPos.x;
+        dy = sp.y - playerPos.y;
+        dz = sp.z - playerPos.z;
+      } else {
+        const cart = orbitToSceneCartesian(debris.orbit);
+        dx = cart.position.x - refPos.x;
+        dy = cart.position.y - refPos.y;
+        dz = cart.position.z - refPos.z;
+      }
       const distSq = dx * dx + dy * dy + dz * dz;
 
       if (distSq < rSq) {
@@ -3218,6 +3261,94 @@ export class DebrisField {
       if (d.alive) count++;
     }
     return count;
+  }
+
+  /**
+   * Mission-1 welcome-field diagnostics — per-piece SIZE, POSITION, and
+   * VISIBILITY feedback for the curated learning cluster (WELCOME_FIELD #1–#7).
+   *
+   * Built for tuning the first mission: it reports the *live* state of each
+   * curated piece (not the authored spec) so layout drift, LOD culling, or
+   * a piece that never becomes discoverable can be spotted on screen via the
+   * Ctrl+D debug overlay.
+   *
+   * Each entry contains:
+   *  - `label`      1-based piece number (= spec index + 1 → "debris 1..7")
+   *  - `type`       rendered debris type (fragment / cubesat)
+   *  - `sizeM`      live size in metres (`sizeMeter`)
+   *  - `renderM`    approximate on-screen size (≈ 1.9× sizeMeter, see WELCOME_FIELD)
+   *  - `rangeM`     straight-line distance from the player (m) or null
+   *  - `fwdM`/`latM` along-track / cross-track offset in the mother's local
+   *                 frame (m) — fwd>0 ahead, lat>0 to the right; null if frame
+   *                 not yet established
+   *  - `inNetRange` true when within Constants.NET_LOCK_RANGE_M
+   *  - `discovered` / `tracked`  HUD/targeting visibility flags
+   *  - `pinned`     held in the mother's local frame (#1/#2 onboarding pins)
+   *  - `captured`   currently held by an arm/net
+   *  - `lodState`   'full' | 'far½' | 'CULLED' (distance LOD applied to render)
+   *  - `visible`    alive AND rendered (lodScale > 0)
+   *
+   * @param {{x:number,y:number,z:number}} [playerPos] - mother-ship scene position
+   * @returns {Array<object>} entries sorted by piece number ([] if none spawned)
+   */
+  getWelcomeFieldDiagnostics(playerPos) {
+    const out = [];
+    if (!Array.isArray(this.debrisList)) return out;
+
+    // METRE_SCENE scene-units-per-metre → invert for scene→metres readout.
+    const sceneToM = (METRE_SCENE > 0) ? (1 / METRE_SCENE) : 100000;
+    const fwd = this._motherFwd;
+    const right = this._motherRight;
+    const netRangeM = Constants.NET_LOCK_RANGE_M || 90;
+
+    for (const d of this.debrisList) {
+      if (!d || !d.welcomeSpawn) continue;
+      if (typeof d._welcomeSpecIndex !== 'number') continue;
+
+      const pos = d._scenePosition;
+      let rangeM = null;
+      let fwdM = null;
+      let latM = null;
+      if (pos && playerPos) {
+        const dx = pos.x - playerPos.x;
+        const dy = pos.y - playerPos.y;
+        const dz = pos.z - playerPos.z;
+        rangeM = Math.sqrt(dx * dx + dy * dy + dz * dz) * sceneToM;
+        if (fwd && right) {
+          fwdM = (dx * fwd.x + dy * fwd.y + dz * fwd.z) * sceneToM;
+          latM = (dx * right.x + dy * right.y + dz * right.z) * sceneToM;
+        }
+      }
+
+      // _lodScale is the post-LOD instance scale written each frame in
+      // _updateInstanceTransform (0 = culled, sceneSize = full, ½ = far tier).
+      const lod = (typeof d._lodScale === 'number') ? d._lodScale : (d.sceneSize || 0);
+      let lodState = 'full';
+      if (lod === 0) lodState = 'CULLED';
+      else if (d.sceneSize > 0 && lod < d.sceneSize * 0.99) lodState = 'far\u00bd';
+
+      const sizeM = Number.isFinite(d.sizeMeter) ? d.sizeMeter : 0;
+
+      out.push({
+        label: d._welcomeSpecIndex + 1,
+        type: d.type || '?',
+        sizeM,
+        renderM: sizeM * 1.9,
+        rangeM,
+        fwdM,
+        latM,
+        inNetRange: (rangeM != null) ? (rangeM <= netRangeM) : null,
+        discovered: !!d.discovered,
+        tracked: d.tracked !== false,
+        pinned: !!d._onboardingPinned,
+        captured: !!d._capturedByArm,
+        lodState,
+        visible: !!d.alive && lod > 0,
+      });
+    }
+
+    out.sort((a, b) => a.label - b.label);
+    return out;
   }
 
   /**

@@ -48,6 +48,11 @@ export class LassoSystem {
         /** @type {object|null} Target debris (from getDebrisNear result) */
         this.target = null;
 
+        /** @type {object|null} Debris currently held by the reel-in pin
+         *  (_armPinned/_armPinPos), tracked so it can be released on reset even
+         *  after this.target is cleared. */
+        this._reelPinTarget = null;
+
         /** @type {string|null} Target debris ID for live lookup */
         this._targetId = null;
 
@@ -971,6 +976,21 @@ export class LassoSystem {
                 this._reelStartOffset, _zeroVec, reelT
             );
             this.projectilePos.copy(playerPos).add(reelOffset);
+
+            // Drag the captured debris along with the net package so it visibly
+            // reels into the mother. The debris position is otherwise owned by
+            // DebrisField._updateInstanceTransform (orbit propagation, or the
+            // onboarding pin which is released at LASSO_CONTACT) and would stay
+            // frozen mid-reel. Use the authoritative _armPinned/_armPinPos
+            // direct-copy pin (highest priority after the now-released onboarding
+            // pin) — this also exempts the package from distance LOD culling so
+            // it stays visible inside the net during the haul.
+            if (this.target) {
+                this._reelPinTarget = this.target;
+                if (!this.target._armPinPos) this.target._armPinPos = new THREE.Vector3();
+                this.target._armPinPos.copy(this.projectilePos);
+                this.target._armPinned = true;
+            }
         } else {
             // Flight phase: homing projectile tracks target in local frame
             // Advance offset toward target-relative-to-player
@@ -990,6 +1010,19 @@ export class LassoSystem {
                 // reels in from the back").
                 this._reelStartOffset.copy(this._projOffset);
                 this._reelProgress = 0;
+
+                // Establish the reel-in pin AT CONTACT, anchored to where the
+                // debris currently is, so it doesn't render for one frame at its
+                // stale orbital position in the gap between the onboarding-pin
+                // release (LASSO_CONTACT, emitted below) and the first reel-in
+                // frame (debrisField.update runs before lassoSystem.update). The
+                // reel branch then animates _armPinPos toward the mother.
+                if (this.target) {
+                    this._reelPinTarget = this.target;
+                    if (!this.target._armPinPos) this.target._armPinPos = new THREE.Vector3();
+                    this.target._armPinPos.copy(this.target._scenePosition || this._targetScenePos || this.projectilePos);
+                    this.target._armPinned = true;
+                }
 
                 // Contact flash removed per user feedback ("NOT an arcade game")
                 this._contactFlashTimer = 0;
@@ -1209,6 +1242,13 @@ export class LassoSystem {
 
     /** Reset lasso state */
     _resetLasso() {
+        // Release the reel-in pin so a cancelled-mid-reel piece returns to
+        // normal propagation (on a completed catch the debris is already removed,
+        // so this is a harmless no-op cleanup).
+        if (this._reelPinTarget) {
+            this._reelPinTarget._armPinned = false;
+            this._reelPinTarget = null;
+        }
         this.active = false;
         this.target = null;
         this._targetId = null;

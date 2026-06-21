@@ -4,7 +4,7 @@
  * Projects 3D debris positions to 2D screen space and draws:
  *  - On-screen reticles (brackets/diamonds) with distance labels
  *  - Off-screen directional arrows along screen edges
- *  - Lead indicators and velocity vectors for selected target
+ *  - Velocity vectors for selected target
  * @module ui/TargetReticle
  */
 
@@ -38,14 +38,6 @@ const COLORS = {
   cyan:    '#4488ff',
   cyanDim: 'rgba(68,136,255,0.4)',
   magenta: '#ff44ff',
-};
-
-/** Contact type icon symbols */
-const TYPE_ICONS = {
-  'rocketBody':    '⬡',   // hexagon — large cylindrical
-  'defunctSat':    '◈',   // diamond — satellite
-  'fragment':      '◇',   // small diamond — fragment
-  'missionDebris': '•',   // dot — small hardware
 };
 
 // ============================================================================
@@ -93,10 +85,8 @@ export class TargetReticle {
     // First-encounter callout tracking
     this._progradeFirstSeen = false;
     this._retroFirstSeen = false;
-    this._leadFirstSeen = false;
     this._progradeCalloutTimer = 0;
     this._retroCalloutTimer = 0;
-    this._leadCalloutTimer = 0;
 
     // Phase 1: Telemetry & relative velocity tracking
     this._deltaVSpent = 0;
@@ -226,9 +216,7 @@ export class TargetReticle {
     // View-config flags (set by CameraSystem progressive info levels)
     this._viewConfig = {
       showClosureRate: true,
-      showTypeIcons: true,
       showVelocityVectors: true,
-      showLeadIndicators: true,
     };
 
     this._createCanvas();
@@ -324,9 +312,7 @@ export class TargetReticle {
   setViewConfig(config) {
     if (!config) return;
     if (config.showClosureRate !== undefined)    this._viewConfig.showClosureRate    = config.showClosureRate;
-    if (config.showTypeIcons !== undefined)      this._viewConfig.showTypeIcons      = config.showTypeIcons;
     if (config.showVelocityVectors !== undefined) this._viewConfig.showVelocityVectors = config.showVelocityVectors;
-    if (config.showLeadIndicators !== undefined) this._viewConfig.showLeadIndicators  = config.showLeadIndicators;
   }
 
   /**
@@ -346,7 +332,6 @@ export class TargetReticle {
     // Decrement first-encounter callout timers
     if (this._progradeCalloutTimer > 0) this._progradeCalloutTimer -= dt;
     if (this._retroCalloutTimer > 0) this._retroCalloutTimer -= dt;
-    if (this._leadCalloutTimer > 0) this._leadCalloutTimer -= dt;
     if (this._outOfRangeFlashT > 0) this._outOfRangeFlashT -= dt;
 
     // Advance lock ceremony timers
@@ -444,13 +429,24 @@ export class TargetReticle {
         this._prevSelectedTargetDist = null;
         this._prevClosureTargetId = selTargetId;
       }
-      if (selTarget && selTarget.orbit) {
-        // Sprint 2 / PR A — scratch-output variant.
-        orbitToSceneCartesianInto(selTarget.orbit, this._tmpCartPos, this._tmpCartVel);
-        const tp = this._tmpCartPos;
-        const dx = tp.x - data.playerPos.x;
-        const dy = tp.y - data.playerPos.y;
-        const dz = tp.z - data.playerPos.z;
+      if (selTarget && (selTarget._scenePosition || selTarget.orbit)) {
+        // Prefer the rendered _scenePosition so PINNED pieces (#1/#2) report
+        // their true range instead of a stale frozen-orbit distance.
+        let tx, ty, tz;
+        if (selTarget._scenePosition) {
+          tx = selTarget._scenePosition.x;
+          ty = selTarget._scenePosition.y;
+          tz = selTarget._scenePosition.z;
+        } else {
+          // Sprint 2 / PR A — scratch-output variant.
+          orbitToSceneCartesianInto(selTarget.orbit, this._tmpCartPos, this._tmpCartVel);
+          tx = this._tmpCartPos.x;
+          ty = this._tmpCartPos.y;
+          tz = this._tmpCartPos.z;
+        }
+        const dx = tx - data.playerPos.x;
+        const dy = ty - data.playerPos.y;
+        const dz = tz - data.playerPos.z;
         const distKm = Math.sqrt(dx * dx + dy * dy + dz * dz) / Constants.SCENE_SCALE;
         this._selectedTargetDistKm = distKm;
         if (this._dt > 0 && this._prevSelectedTargetDist !== null) {
@@ -534,11 +530,6 @@ export class TargetReticle {
     // --- Draw prograde/retrograde velocity markers (Phase 2.3) ---
     if (this._viewConfig.showVelocityVectors) {
       this._drawVelocityMarkers(data);
-    }
-
-    // --- Draw lead indicator for selected target (Phase 2.4) ---
-    if (this._viewConfig.showLeadIndicators && targetSelector) {
-      this._drawTargetLeadIndicator(data);
     }
 
     // Clean up stale closure rate entries
@@ -679,10 +670,19 @@ export class TargetReticle {
    * @private
    */
   _drawDebrisReticle(target, playerPos) {
-    // Get world position — Sprint 2 / PR A — scratch-output variant.
+    // World position + velocity. Compute orbit velocity into _tmpCartVel (used
+    // by the velocity-vector / lead rendering below), but PREFER the
+    // authoritative rendered _scenePosition for the bracket position: onboarding
+    // PINNED pieces (#1/#2) skip orbit propagation each frame, so their orbit is
+    // stale and orbitToSceneCartesian would draw the bracket far from where the
+    // debris actually renders (the reported "reticle won't focus on #1/#2" bug).
+    // getDebrisNear carries _scenePosition as a clone on the snapshot.
     orbitToSceneCartesianInto(target.orbit, this._tmpCartPos, this._tmpCartVel);
-    // Perf: reuse pre-allocated _tempVec3 instead of new Vector3 per visible target.
-    this._tempVec3.set(this._tmpCartPos.x, this._tmpCartPos.y, this._tmpCartPos.z);
+    if (target._scenePosition) {
+      this._tempVec3.set(target._scenePosition.x, target._scenePosition.y, target._scenePosition.z);
+    } else {
+      this._tempVec3.set(this._tmpCartPos.x, this._tmpCartPos.y, this._tmpCartPos.z);
+    }
     const worldPos = this._tempVec3;
 
     // Project to screen
@@ -862,15 +862,6 @@ export class TargetReticle {
       return;
     }
 
-    // --- Contact type icon (top-left of bracket) ---
-    if (this._viewConfig.showTypeIcons) {
-      const typeIcon = TYPE_ICONS[target.type] || '○';
-      ctx.font = '11px sans-serif';
-      ctx.fillStyle = isSelected ? COLORS.cyan : color;
-      ctx.textAlign = 'left';
-      ctx.fillText(typeIcon, x - half + 3, y - half + 12);
-    }
-
     // --- Distance text below reticle ---
     // 2026-05-28 (Item 7 readability pass): font sizes doubled (10/11/9 → 20/22/18)
     // and vertical offsets re-spaced to clear the larger glyph height. The
@@ -889,15 +880,15 @@ export class TargetReticle {
     const distText = distKm < 1 ? `${(distKm * 1000).toFixed(0)}m` : `${distKm.toFixed(1)}km`;
     ctx.fillText(distText, x, y + half + 22);
 
-    // --- Closure rate below distance ---
-    if (target._closureRate != null && this._viewConfig.showClosureRate) {
+    // --- Closure rate below distance (selected target only) ---
+    if (isSelected && target._closureRate != null && this._viewConfig.showClosureRate) {
       const rate = target._closureRate;
       const absRate = Math.abs(rate);
       ctx.font = '18px "Courier New", monospace';
       ctx.textAlign = 'center';
       if (absRate < 0.5) {
         ctx.fillStyle = 'rgba(255,255,255,0.4)';
-        ctx.fillText('~0 m/s', x, y + half + 46);
+        ctx.fillText('0 m/s', x, y + half + 46);
       } else {
         const arrow = rate > 0 ? '▼' : '▲';
         ctx.fillStyle = rate > 0 ? COLORS.green : COLORS.red;
@@ -941,66 +932,6 @@ export class TargetReticle {
         ? `${tumbleDeg}°/s \u25BC DE-SPIN  ${target.sizeMeter.toFixed(1)}m`
         : `${tumbleDeg}°/s  ${target.sizeMeter.toFixed(1)}m`;
       ctx.fillText(tumbleLabel, x, y - half - 6);
-
-      // Velocity vector indicator (small line showing debris direction)
-      if (vel && this._viewConfig.showVelocityVectors) {
-        const velDir = new THREE.Vector3(vel.x, vel.y, vel.z);
-        const velEndWorld = worldPos.clone().add(velDir.normalize().multiplyScalar(0.001));
-        const velProj = this._project(velEndWorld);
-        if (velProj.visible) {
-          ctx.beginPath();
-          ctx.strokeStyle = COLORS.cyan;
-          ctx.lineWidth = 1;
-          ctx.setLineDash([3, 3]);
-          ctx.moveTo(x, y);
-          ctx.lineTo(velProj.x, velProj.y);
-          ctx.stroke();
-          ctx.setLineDash([]);
-
-          // Arrow head
-          const vdx = velProj.x - x;
-          const vdy = velProj.y - y;
-          const vlen = Math.sqrt(vdx * vdx + vdy * vdy);
-          if (vlen > 10) {
-            const tipX = x + (vdx / vlen) * Math.min(vlen, 40);
-            const tipY = y + (vdy / vlen) * Math.min(vlen, 40);
-            this._drawArrowhead(tipX, tipY, Math.atan2(vdy, vdx), 6);
-          }
-        }
-      }
-
-      // Lead indicator (small dot ahead in velocity direction)
-      if (vel && this._viewConfig.showLeadIndicators) {
-        const leadTime = 2.0; // seconds ahead
-        const leadPos = worldPos.clone().add(
-          new THREE.Vector3(
-            vel.x * leadTime * Constants.SCENE_SCALE,
-            vel.y * leadTime * Constants.SCENE_SCALE,
-            vel.z * leadTime * Constants.SCENE_SCALE
-          )
-        );
-        const leadProj = this._project(leadPos);
-        if (leadProj.visible) {
-          ctx.beginPath();
-          ctx.arc(leadProj.x, leadProj.y, 3, 0, Math.PI * 2);
-          ctx.fillStyle = COLORS.cyan;
-          ctx.globalAlpha = 0.8;
-          ctx.fill();
-        }
-      }
-
-      // Tumble visualization (small rotating tick mark)
-      const tumbleAngle = this._time * target.tumbleRate;
-      const tumbleR = half + 6;
-      ctx.globalAlpha = 0.5;
-      ctx.beginPath();
-      ctx.strokeStyle = COLORS.cyan;
-      ctx.lineWidth = 1.5;
-      const tX = x + Math.cos(tumbleAngle) * tumbleR;
-      const tY = y + Math.sin(tumbleAngle) * tumbleR;
-      ctx.moveTo(x + Math.cos(tumbleAngle) * (tumbleR - 4), y + Math.sin(tumbleAngle) * (tumbleR - 4));
-      ctx.lineTo(tX, tY);
-      ctx.stroke();
     }
 
     ctx.restore();
@@ -1284,7 +1215,7 @@ export class TargetReticle {
             ctx.fillText(`${label}: ${crText}`, x + 22, lineY);
           } else {
             ctx.fillStyle = 'rgba(255,255,255,0.4)';
-            ctx.fillText('~0 m/s', x + 22, lineY);
+            ctx.fillText('0 m/s', x + 22, lineY);
           }
           lineY += 12;
         }
@@ -1424,141 +1355,6 @@ export class TargetReticle {
           ctx.fillText(`Post-burn ΔV: ${Math.round(postBurn)} m/s`, x + 22, y + 30);
         }
       }
-    }
-
-    ctx.restore();
-  }
-
-  // ==========================================================================
-  // TARGET LEAD INDICATOR (Phase 2.4)
-  // ==========================================================================
-
-  /**
-   * Draw a lead indicator showing where the selected target WILL BE when a
-   * deployed arm would arrive. Helps players understand orbital phasing.
-   * @private
-   * @param {object} data - Game data
-   */
-  _drawTargetLeadIndicator(data) {
-    const target = data.targetSelector?.getActiveTarget();
-    if (!target || !target.orbit) return;
-
-    // Compute current target position — Sprint 2 / PR A — scratch-output variant.
-    orbitToSceneCartesianInto(target.orbit, this._tmpCartPos, this._tmpCartVel);
-    const targetPos = new THREE.Vector3(
-      this._tmpCartPos.x,
-      this._tmpCartPos.y,
-      this._tmpCartPos.z
-    );
-
-    const playerPos = data.playerPos instanceof THREE.Vector3
-      ? data.playerPos
-      : new THREE.Vector3(data.playerPos.x, data.playerPos.y, data.playerPos.z);
-
-    const dist = playerPos.distanceTo(targetPos);
-    if (dist < 1e-10) return;
-
-    // Estimate arm transit time (arm speed in scene units per real second)
-    const transitTime = dist / Constants.ARM_APPROACH_SPEED; // real seconds
-    const transitTimeCapped = Math.min(transitTime, 300); // cap at 5 min
-
-    // Approximate orbital angular velocity: n = sqrt(mu / r³)
-    // Convert scene radius to km for the calculation
-    const r_km = targetPos.length() / Constants.SCENE_SCALE;
-    if (r_km < 100) return; // Safety check
-
-    const mu = 398600.4418; // km³/s² (Earth standard gravitational parameter)
-    const n = Math.sqrt(mu / (r_km * r_km * r_km)); // rad/s
-
-    // Predict future angular displacement (accounting for game time scale)
-    const angle = n * transitTimeCapped * Constants.TIME_SCALE_GAMEPLAY;
-
-    // Rotate target position around Earth center (Y axis) by predicted angle
-    const futurePos = targetPos.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), angle);
-
-    // Project both current and future positions
-    const currentProj = this._project(targetPos);
-    const futureProj = this._project(futurePos);
-
-    if (futureProj.visible) {
-      // Draw dashed line from current target to lead indicator
-      if (currentProj.visible) {
-        const ctx = this.ctx;
-        ctx.save();
-        ctx.strokeStyle = '#ffaa00';
-        ctx.lineWidth = 1;
-        ctx.globalAlpha = 0.4;
-        ctx.setLineDash([4, 4]);
-        ctx.beginPath();
-        ctx.moveTo(currentProj.x, currentProj.y);
-        ctx.lineTo(futureProj.x, futureProj.y);
-        ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.restore();
-      }
-
-      this._drawLeadIndicatorMarker(futureProj.x, futureProj.y, transitTimeCapped);
-    }
-  }
-
-  /**
-   * Draw the lead indicator diamond ◆ marker with time estimate.
-   * @private
-   * @param {number} x - Screen X
-   * @param {number} y - Screen Y
-   * @param {number} transitTime - Estimated transit time in seconds
-   */
-  _drawLeadIndicatorMarker(x, y, transitTime) {
-    const ctx = this.ctx;
-    ctx.save();
-    ctx.globalAlpha = 0.85;
-
-    // Diamond shape ◆
-    ctx.strokeStyle = '#ffaa00';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(x, y - 10);
-    ctx.lineTo(x + 8, y);
-    ctx.lineTo(x, y + 10);
-    ctx.lineTo(x - 8, y);
-    ctx.closePath();
-    ctx.stroke();
-
-    // Small center dot
-    ctx.fillStyle = '#ffaa00';
-    ctx.beginPath();
-    ctx.arc(x, y, 1.5, 0, Math.PI * 2);
-    ctx.fill();
-
-    // First-encounter callout trigger
-    if (!this._leadFirstSeen) {
-      this._leadFirstSeen = true;
-      this._leadCalloutTimer = CALLOUT_DURATION;
-    }
-
-    ctx.textAlign = 'left';
-    if (this._leadCalloutTimer > 0) {
-      const calloutAlpha = this._leadCalloutTimer <= 2
-        ? this._leadCalloutTimer / 2
-        : 1.0;
-      const calloutText = 'Lead. Aim here to intercept';
-      ctx.font = 'bold 13px monospace';
-      this._drawCalloutPill(x + 12, y - 8, calloutText, '#ffaa00', calloutAlpha);
-      ctx.globalAlpha = calloutAlpha;
-      ctx.fillStyle = '#ffaa00';
-      ctx.fillText(calloutText, x + 12, y + 2);
-    } else {
-      // Time estimate label
-      ctx.font = '10px "Courier New", monospace';
-      const timeStr = transitTime < 60
-        ? `~${Math.round(transitTime)}s`
-        : `~${(transitTime / 60).toFixed(1)}m`;
-      ctx.fillText(timeStr, x + 12, y + 4);
-
-      // "Lead" label
-      ctx.font = '9px "Courier New", monospace';
-      ctx.globalAlpha = 0.6;
-      ctx.fillText('Lead', x + 12, y - 8);
     }
 
     ctx.restore();

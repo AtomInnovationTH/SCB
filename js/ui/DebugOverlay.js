@@ -103,7 +103,48 @@ export class DebugOverlay {
             lines.push(`GL: ${data.drawCalls} draws | ${data.triangles} tris | ${data.textures} tex`);
         }
 
+        // Mission-1 welcome-field diagnostics (size / position / visibility per piece).
+        // Provided by DebrisField.getWelcomeFieldDiagnostics(); only present on
+        // mission 1 (the curated learning cluster). Used to tune first-mission layout.
+        if (Array.isArray(data.welcomeDebris) && data.welcomeDebris.length) {
+            lines.push('── M1 Welcome Debris (size/pos/vis) ──');
+            for (const p of data.welcomeDebris) {
+                lines.push(this._formatWelcomePiece(p));
+            }
+        }
+
         this._element.textContent = lines.join('\n');
+    }
+
+    /**
+     * Format one welcome-field diagnostic piece into two compact overlay lines.
+     * @private
+     * @param {object} p - entry from DebrisField.getWelcomeFieldDiagnostics()
+     * @returns {string}
+     */
+    _formatWelcomePiece(p) {
+        const m = (v, suffix = '') => (Number.isFinite(v) ? `${v.toFixed(0)}${suffix}` : '?');
+        const m1 = (v) => (Number.isFinite(v) ? v.toFixed(2) : '?');
+        const signed = (v) => (Number.isFinite(v) ? `${v >= 0 ? '+' : ''}${v.toFixed(0)}` : '?');
+
+        // Line 1 — identity + SIZE + POSITION.
+        const type = (p.type || '?').slice(0, 4).padEnd(4, ' ');
+        const size = `${m1(p.sizeM)}m→${m1(p.renderM)}m`;
+        const range = `rng ${m(p.rangeM, 'm')}`;
+        const frame = `fwd ${signed(p.fwdM)} lat ${signed(p.latM)}`;
+        const head = `D${p.label} ${type} ${size}  ${range} ${frame}`;
+
+        // Line 2 — VISIBILITY state. ✓/✗ alive+rendered, disc/hid, trk, pin,
+        // captured, net-range, and the distance-LOD tier.
+        const vis = p.visible ? '✓vis' : '✗hidden';
+        const disc = p.discovered ? '●disc' : '○undisc';
+        const trk = p.tracked ? 'trk' : 'no-trk';
+        const pin = p.pinned ? ' pin' : '';
+        const cap = p.captured ? ' CAUGHT' : '';
+        const net = (p.inNetRange === null) ? '' : (p.inNetRange ? ' net✓' : ' net✗(out)');
+        const lod = ` LOD:${p.lodState || '?'}`;
+        const state = `   ${vis} ${disc} ${trk}${pin}${cap}${net}${lod}`;
+        return `${head}\n${state}`;
     }
 
     /** Remove from DOM */

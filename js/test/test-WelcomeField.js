@@ -259,13 +259,19 @@ describe('DebrisField — onboarding tease pin (orbit-based)', () => {
       assert.ok(mock._onboardingPinIds.has(d.id), 'pinned id is tracked in the set');
     }
     const ms = Constants.SCENE_SCALE / 1000; // metre → scene
-    const d1 = mock.debrisList[0];
-    const d2 = mock.debrisList[1];
-    // #1 dead-centre: 30 m forward, no lateral.
-    assert.closeTo(d1._onboardingPinFwd, 30 * ms, 1e-12, '#1 is 30 m forward');
+    // Identify the pinned pieces by ROLE, not by debrisList index: the curated
+    // spec→candidate matcher assigns by appearance score (type/material/plate),
+    // so spec #1 does not necessarily land at debrisList[0]. The product
+    // invariant is "one dead-centre piece + one piece off to the side".
+    const d1 = pinned.find(d => d._onboardingPinLat === 0);       // #1 dead centre
+    const d2 = pinned.find(d => d._onboardingPinLat > 0);         // #2 off to one side
+    assert.ok(d1, 'a dead-centre pinned piece exists (#1)');
+    assert.ok(d2, 'an off-to-one-side pinned piece exists (#2)');
+    // #1 dead-centre: 22 m forward, no lateral.
+    assert.closeTo(d1._onboardingPinFwd, 22 * ms, 1e-12, '#1 is 22 m forward');
     assert.equal(d1._onboardingPinLat, 0, '#1 has no lateral (dead centre)');
     // #2 farther ahead AND off to one side.
-    assert.closeTo(d2._onboardingPinFwd, 65 * ms, 1e-12, '#2 is 65 m forward');
+    assert.closeTo(d2._onboardingPinFwd, 45 * ms, 1e-12, '#2 is 45 m forward');
     assert.ok(d2._onboardingPinLat > 0, '#2 is offset to one side');
     assert.ok(d2._onboardingPinFwd > d1._onboardingPinFwd, '#2 sits farther ahead than #1');
   });
@@ -277,8 +283,11 @@ describe('DebrisField — onboarding tease pin (orbit-based)', () => {
     const ms = Constants.SCENE_SCALE / 1000;
     const a = spawnWithPin(0);
     const b = spawnWithPin(1.0); // large frame-comp
-    assert.closeTo(a.debrisList[0]._onboardingPinFwd, 30 * ms, 1e-12, 'dt=0 → 30 m');
-    assert.closeTo(b.debrisList[0]._onboardingPinFwd, 30 * ms, 1e-12, 'dt=1 → still 30 m');
+    // The dead-centre piece (#1) is pinned 22 m forward regardless of spawn dt.
+    const aCenter = a.debrisList.find(d => d._onboardingPinned && d._onboardingPinLat === 0);
+    const bCenter = b.debrisList.find(d => d._onboardingPinned && d._onboardingPinLat === 0);
+    assert.closeTo(aCenter._onboardingPinFwd, 22 * ms, 1e-12, 'dt=0 → 22 m');
+    assert.closeTo(bCenter._onboardingPinFwd, 22 * ms, 1e-12, 'dt=1 → still 22 m');
   });
 
   it('pinned pieces are in net range and inside the forward arc', () => {
@@ -296,8 +305,11 @@ describe('DebrisField — onboarding tease pin (orbit-based)', () => {
 
   it('release semantics: catching one piece does not unpin the other', () => {
     const mock = spawnWithPin();
-    const [d1, d2] = mock.debrisList;
-    assert.ok(d1._onboardingPinned && d2._onboardingPinned, 'both pinned to start');
+    // Identify pinned pieces by role (matcher order is appearance-scored).
+    const pinned = mock.debrisList.filter(d => d._onboardingPinned);
+    const d1 = pinned.find(d => d._onboardingPinLat === 0);   // #1 dead centre
+    const d2 = pinned.find(d => d._onboardingPinLat > 0);     // #2 to one side
+    assert.ok(d1 && d2 && d1._onboardingPinned && d2._onboardingPinned, 'both pinned to start');
 
     // A non-pinned id must release nothing.
     mock._clearOnboardingPin(9999);
