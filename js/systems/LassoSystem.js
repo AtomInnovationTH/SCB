@@ -1011,7 +1011,7 @@ export class LassoSystem {
         const maxApparentSpeed = Constants.LASSO_SPEED * Constants.TIME_SCALE_GAMEPLAY; // 100 m/s apparent
         const desiredTravelM = Math.max(contactRadiusM, launchDistanceM - contactRadiusM);
         const easedApparentSpeed = Math.max(
-            maxApparentSpeed * 0.2, // never crawl — always visibly moves
+            3, // tiny floor so it always visibly moves; near throws glide for the full LASSO_MIN_FLIGHT_TIME
             Math.min(maxApparentSpeed, desiredTravelM / Constants.LASSO_MIN_FLIGHT_TIME)
         );
         this._flightSpeedScene = easedApparentSpeed * M; // scene units / real second (TIME_SCALE already folded in)
@@ -1038,12 +1038,13 @@ export class LassoSystem {
             this._tetherCore.material.opacity = 0.8;
         }
         this._pulsePhase = 0;
-        // Phase 1B/1C: a small muzzle puff AT THE CANISTER (nose), so the net
-        // visibly emerges from hardware at the front face rather than the centre.
+        // Phase 1B/1C: a muzzle puff AT THE CANISTER (nose), scaled up + longer so
+        // the launch reads clearly and the net visibly emerges from hardware.
         this._muzzleFlash.position.copy(muzzleWorld);
+        this._muzzleFlash.scale.setScalar(Constants.LASSO_MUZZLE_FLASH_SCALE);
         this._muzzleFlash.visible = true;
-        this._muzzleFlashTimer = 0.2;
-        this._muzzleFlash.material.opacity = 0.9;
+        this._muzzleFlashTimer = Constants.LASSO_MUZZLE_FLASH_TIME;
+        this._muzzleFlash.material.opacity = 0.95;
         // Phase 1C: kick the mother mesh opposite the launch (cosmetic only).
         this._launchRecoil(this._lastLaunchDir);
 
@@ -1802,10 +1803,11 @@ export class LassoSystem {
      * @param {number} dt
      */
     _updateVisualEffects(dt) {
-        // Muzzle flash fade (200ms)
+        // Muzzle flash fade (LASSO_MUZZLE_FLASH_TIME)
         if (this._muzzleFlashTimer > 0) {
             this._muzzleFlashTimer -= dt;
-            this._muzzleFlash.material.opacity = Math.max(0, this._muzzleFlashTimer / 0.2) * 0.9;
+            const flashLife = Constants.LASSO_MUZZLE_FLASH_TIME || 0.2;
+            this._muzzleFlash.material.opacity = Math.max(0, this._muzzleFlashTimer / flashLife) * 0.95;
             if (this._muzzleFlashTimer <= 0) {
                 this._muzzleFlash.visible = false;
             }

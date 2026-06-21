@@ -628,6 +628,15 @@ describe('LassoSystem — Phase 1 constants', () => {
 describe('LassoSystem — Phase 1 visible throw (integration)', () => {
     const M = 0.00001; // scene units per metre (matches LassoSystem.js)
 
+    // Phase 1 is about the THROW, independent of the catch resolution. Force the
+    // legacy instant-catch path (Phase 4 stow OFF) so "still captures" means a
+    // deterministic removeDebris without needing a GameFlowManager furnace stub.
+    function withInstantCatch(fn) {
+        const orig = Constants.FEATURE_FLAGS.MOTHER_CARGO_STOW;
+        Constants.FEATURE_FLAGS.MOTHER_CARGO_STOW = false;
+        try { return fn(); } finally { Constants.FEATURE_FLAGS.MOTHER_CARGO_STOW = orig; }
+    }
+
     // Minimal headless scene + debrisField. The target is a pinned-style piece
     // with a fixed _scenePosition (frozen orbit), the M1 guided-catch case.
     function makeRig(distM) {
@@ -676,28 +685,32 @@ describe('LassoSystem — Phase 1 visible throw (integration)', () => {
     });
 
     it('1A: guided #1 (~22 m) still captures (LASSO_CAPTURED + removeDebris)', () => {
-        const { lasso, playerPos, velDir, debrisField, removed, target } = makeRig(22);
-        let captured = null;
-        const off = eventBus.on(Events.LASSO_CAPTURED, (e) => { captured = e; });
-        lasso.fire(playerPos, debrisField, velDir, target);
-        // Run up to 8 s of real time (well under LASSO_MAX_FLIGHT_TIME + reel).
-        for (let i = 0; i < 200 && lasso.active; i++) {
-            lasso.update(0.05, playerPos, debrisField, debrisField.getDebrisById(1), velDir);
-        }
-        off();
-        assert.equal(lasso.active, false, '#1 lasso completes (no longer active)');
-        assert.ok(removed.includes(1), '#1 debris removed on catch');
-        assert.ok(captured && captured.debrisId === 1, 'LASSO_CAPTURED fired for #1 (onboarding advance)');
+        withInstantCatch(() => {
+            const { lasso, playerPos, velDir, debrisField, removed, target } = makeRig(22);
+            let captured = null;
+            const off = eventBus.on(Events.LASSO_CAPTURED, (e) => { captured = e; });
+            lasso.fire(playerPos, debrisField, velDir, target);
+            // Run up to 8 s of real time (well under LASSO_MAX_FLIGHT_TIME + reel).
+            for (let i = 0; i < 200 && lasso.active; i++) {
+                lasso.update(0.05, playerPos, debrisField, debrisField.getDebrisById(1), velDir);
+            }
+            off();
+            assert.equal(lasso.active, false, '#1 lasso completes (no longer active)');
+            assert.ok(removed.includes(1), '#1 debris removed on catch');
+            assert.ok(captured && captured.debrisId === 1, 'LASSO_CAPTURED fired for #1 (onboarding advance)');
+        });
     });
 
     it('1A: guided #2 (~48 m) still captures', () => {
-        const { lasso, playerPos, velDir, debrisField, removed } = makeRig(48);
-        lasso.fire(playerPos, debrisField, velDir, debrisField.getDebrisById(1));
-        for (let i = 0; i < 300 && lasso.active; i++) {
-            lasso.update(0.05, playerPos, debrisField, debrisField.getDebrisById(1), velDir);
-        }
-        assert.equal(lasso.active, false, '#2 lasso completes');
-        assert.ok(removed.includes(1), '#2 debris removed on catch');
+        withInstantCatch(() => {
+            const { lasso, playerPos, velDir, debrisField, removed } = makeRig(48);
+            lasso.fire(playerPos, debrisField, velDir, debrisField.getDebrisById(1));
+            for (let i = 0; i < 300 && lasso.active; i++) {
+                lasso.update(0.05, playerPos, debrisField, debrisField.getDebrisById(1), velDir);
+            }
+            assert.equal(lasso.active, false, '#2 lasso completes');
+            assert.ok(removed.includes(1), '#2 debris removed on catch');
+        });
     });
 
     it('1A: a near throw takes at least ~LASSO_MIN_FLIGHT_TIME to contact (not a blink)', () => {
@@ -809,7 +822,9 @@ describe('LassoSystem — Phase 2 net kinematics', () => {
 
     it('cinch-on-capture: reel still completes and mouth ends cinched (flag ON)', () => {
         const orig = Constants.FEATURE_FLAGS.LASSO_NET_KINEMATICS;
+        const origStow = Constants.FEATURE_FLAGS.MOTHER_CARGO_STOW;
         Constants.FEATURE_FLAGS.LASSO_NET_KINEMATICS = true;
+        Constants.FEATURE_FLAGS.MOTHER_CARGO_STOW = false; // isolate the cinch: use the instant-catch resolution
         try {
             const lasso = new LassoSystem(new THREE.Scene());
             const playerPos = new THREE.Vector3(0, 0, 0);
@@ -836,27 +851,34 @@ describe('LassoSystem — Phase 2 net kinematics', () => {
             assert.ok(sawCinch, 'mouth cinched toward NET_CINCH_RADIUS_FRAC during the haul');
         } finally {
             Constants.FEATURE_FLAGS.LASSO_NET_KINEMATICS = orig;
+            Constants.FEATURE_FLAGS.MOTHER_CARGO_STOW = origStow;
         }
     });
 
     it('flag OFF: net geometry stays at the static full radius (legacy behaviour)', () => {
-        const lasso = new LassoSystem(new THREE.Scene());
-        const playerPos = new THREE.Vector3(0, 0, 0);
-        const velDir = new THREE.Vector3(0, 0, 1);
-        const target = { id: 1, alive: true, type: 'fragment', mass: 5,
-            _scenePosition: new THREE.Vector3(0, 0, 22 * M) };
-        const debrisField = {
-            getDebrisNear: () => [target],
-            getDebrisById: (id) => (id === 1 && target.alive ? target : null),
-            removeDebris: () => { target.alive = false; },
-        };
-        lasso.fire(playerPos, debrisField, velDir, target);
-        // A few flight frames; with the flag OFF the rim radius must not move.
-        for (let i = 0; i < 5 && !lasso._reelingIn; i++) {
-            lasso.update(1 / 60, playerPos, debrisField, target, velDir);
+        const orig = Constants.FEATURE_FLAGS.LASSO_NET_KINEMATICS;
+        Constants.FEATURE_FLAGS.LASSO_NET_KINEMATICS = false;
+        try {
+            const lasso = new LassoSystem(new THREE.Scene());
+            const playerPos = new THREE.Vector3(0, 0, 0);
+            const velDir = new THREE.Vector3(0, 0, 1);
+            const target = { id: 1, alive: true, type: 'fragment', mass: 5,
+                _scenePosition: new THREE.Vector3(0, 0, 22 * M) };
+            const debrisField = {
+                getDebrisNear: () => [target],
+                getDebrisById: (id) => (id === 1 && target.alive ? target : null),
+                removeDebris: () => { target.alive = false; },
+            };
+            lasso.fire(playerPos, debrisField, velDir, target);
+            // A few flight frames; with the flag OFF the rim radius must not move.
+            for (let i = 0; i < 5 && !lasso._reelingIn; i++) {
+                lasso.update(1 / 60, playerPos, debrisField, target, velDir);
+            }
+            assert.ok(Math.abs(netRadiusScene(lasso) - lasso._netFullRadiusScene) < lasso._netFullRadiusScene * 0.02,
+                'rim stays at full radius when LASSO_NET_KINEMATICS is OFF');
+        } finally {
+            Constants.FEATURE_FLAGS.LASSO_NET_KINEMATICS = orig;
         }
-        assert.ok(Math.abs(netRadiusScene(lasso) - lasso._netFullRadiusScene) < lasso._netFullRadiusScene * 0.02,
-            'rim stays at full radius when LASSO_NET_KINEMATICS is OFF');
     });
 });
 
@@ -903,7 +925,9 @@ describe('LassoSystem — Phase 3 reel physics gating (M1 untouched)', () => {
 
     it('flag ON + Mission 1 (mass ≤ cap): no _rcsVelocity delta, plain tension payload', () => {
         const orig = Constants.FEATURE_FLAGS.LASSO_REEL_PHYSICS;
+        const origStow = Constants.FEATURE_FLAGS.MOTHER_CARGO_STOW;
         Constants.FEATURE_FLAGS.LASSO_REEL_PHYSICS = true;
+        Constants.FEATURE_FLAGS.MOTHER_CARGO_STOW = false; // assert the instant-catch removeDebris on M1
         try {
             const r = rig(1, 5);
             r.run();
@@ -915,6 +939,7 @@ describe('LassoSystem — Phase 3 reel physics gating (M1 untouched)', () => {
             assert.ok(r.removed.includes(1), 'M1 catch completes normally');
         } finally {
             Constants.FEATURE_FLAGS.LASSO_REEL_PHYSICS = orig;
+            Constants.FEATURE_FLAGS.MOTHER_CARGO_STOW = origStow;
         }
     });
 
@@ -1170,6 +1195,8 @@ describe('LassoSystem — Phase 4 stow → furnace lifecycle (flag ON)', () => {
     });
 
     it('flag OFF: legacy instant catch — flat score + immediate removeDebris (no cargo)', () => {
+        const orig = Constants.FEATURE_FLAGS.MOTHER_CARGO_STOW;
+        Constants.FEATURE_FLAGS.MOTHER_CARGO_STOW = false;
         const { lasso, playerPos, velDir, debrisField, removed, target } = rig();
         let scoring = 0;
         const off = eventBus.on(Events.SCORING_AWARD, () => scoring++);
@@ -1181,6 +1208,6 @@ describe('LassoSystem — Phase 4 stow → furnace lifecycle (flag ON)', () => {
             assert.equal(lasso._cargo.length, 0, 'no cargo path when flag OFF');
             assert.ok(removed.includes(1), 'legacy instant removeDebris');
             assert.ok(scoring >= 1, 'legacy flat SCORING_AWARD fired at completion');
-        } finally { off(); }
+        } finally { off(); Constants.FEATURE_FLAGS.MOTHER_CARGO_STOW = orig; }
     });
 });
