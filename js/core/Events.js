@@ -361,6 +361,7 @@ export const Events = {
   LASSO_CAPTURED:         'lasso:captured',
   LASSO_DENIED:           'lasso:denied',
   LASSO_MISSED:           'lasso:missed',    // lasso fired but failed to capture
+  LASSO_SNAPPED:          'lasso:snapped',   // { targetId, tensionN } — Phase 3 tether broke under strain (heavy catch dropped)
   LASSO_COOLDOWN_START:   'lasso:cooldownStart',  // { duration } — cooldown timer began (ST-1.3)
   LASSO_COOLDOWN_END:     'lasso:cooldownEnd',    // {} — cooldown expired, ready to fire (ST-1.3)
   LASSO_AMMO_CHANGED:     'lasso:ammoChanged',    // { remaining, max } — UX-3 #7 ammo system

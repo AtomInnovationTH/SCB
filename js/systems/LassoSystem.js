@@ -155,7 +155,22 @@ export class LassoSystem {
             eventBus.on(Events.ONBOARDING_STARTED, () => { this._onboardingActive = true; }),
             eventBus.on(Events.ONBOARDING_COMPLETE, () => { this._onboardingActive = false; }),
             eventBus.on(Events.GAME_RESET, () => { this._inRangePromptId = null; }),
+            // Phase 3: track the active mission so reel-in physics can be gated OFF
+            // on Mission 1 (the tutorial reels exactly as today, flag regardless).
+            eventBus.on(Events.MISSION_START, (data) => {
+                this._missionNumber = (data && data.missionNumber != null) ? data.missionNumber : 1;
+            }),
         ];
+
+        /** @type {number} Phase 3 — active mission number (1 = tutorial; gates reel physics). */
+        this._missionNumber = 1;
+
+        /** @type {boolean} Phase 3 — whether reel-in physics is active for the CURRENT catch
+         *  (flag ON && !isMission1 && capturedMass > LASSO_MAX_CAPTURE_MASS). Latched at contact. */
+        this._reelPhysicsActive = false;
+
+        /** @type {number} Phase 3 — seconds the tether has spent above the safe strain fraction. */
+        this._strainTimer = 0;
 
         /** @type {object|null} Optional SkillsSystem for hint-gating (Phase 3).
          *  Wired via setSkillsSystem(); when absent the prompt fires ungated
@@ -1094,11 +1109,21 @@ export class LassoSystem {
                 return;
             }
 
-            // S4: Emit tether tension feedback — intensifies as reel-in progresses
-            eventBus.emit(Events.TETHER_TENSION, {
-                tensionFraction: this._reelProgress,
-                armId: 'lasso',
-            });
+            // S4: Emit tether tension feedback — intensifies as reel-in progresses.
+            // Phase 3 (gated): when reel physics is active for this (heavy, non-M1)
+            // catch, also carry the real mass-driven tension in Newtons + a strain
+            // fraction; apply a subtle CoM pull toward the catch; and risk a snap
+            // under sustained over-strain. When the gate is OFF (M1 / ≤cap / flag
+            // off) the payload + timing are byte-identical to before.
+            if (this._reelPhysicsActive) {
+                this._applyReelPhysics(dt, playerPos);
+                if (!this.active) return; // a snap reset the lasso this frame
+            } else {
+                eventBus.emit(Events.TETHER_TENSION, {
+                    tensionFraction: this._reelProgress,
+                    armId: 'lasso',
+                });
+            }
 
             // Two-phase capture: WRAP (net shrinks at contact) → REEL (compact package
             // travels to player). Matches physically meaningful net capture sequence.
@@ -1162,6 +1187,16 @@ export class LassoSystem {
             if (distToTarget < this._contactRadiusScene &&
                 this.flightTimer >= Constants.LASSO_MIN_FLIGHT_TIME) { // proximity + min-flight gate — contact!
                 this._reelingIn = true;
+                // Phase 3: latch whether reel-in physics applies to THIS catch.
+                // MANDATORY gate — disabled on Mission 1 and for ≤ the Mother-net
+                // mass cap, so the tutorial / welcome catches reel identically to
+                // today regardless of the LASSO_REEL_PHYSICS flag.
+                this._strainTimer = 0;
+                const capturedMass = this.target ? (this.target.mass || 0) : 0;
+                this._reelPhysicsActive =
+                    Constants.FEATURE_FLAGS.LASSO_REEL_PHYSICS &&
+                    this._missionNumber !== 1 &&
+                    capturedMass > Constants.LASSO_MAX_CAPTURE_MASS;
                 // CRITICAL FIX (v2e): Use _projOffset directly — it's already the
                 // player-relative offset, uncontaminated by per-frame orbital drift.
                 // Previous code (subVectors(projectilePos, playerPos)) was subtracting
@@ -1284,6 +1319,88 @@ export class LassoSystem {
         }
 
         // Energy pulse bead removed (Issue #6 — de-arcade tether visual)
+    }
+
+    /**
+     * Phase 3 (LASSO_REEL_PHYSICS, gated): mass-driven reel tension + a subtle
+     * centre-of-mass pull toward the catch + tangle/break risk. Only ever called
+     * when _reelPhysicsActive is latched true at contact (flag ON, NOT Mission 1,
+     * capturedMass > LASSO_MAX_CAPTURE_MASS), so the tutorial / welcome catches
+     * never reach this path. VISUAL/MOTION uses the fuel-free, self-damping
+     * _rcsVelocity channel (the same one the collision-dodge uses), clamped by
+     * RCS_MAX_SPEED — never the fuel-charging applyCartesianImpulse.
+     * @param {number} dt
+     * @param {THREE.Vector3} playerPos
+     * @private
+     */
+    _applyReelPhysics(dt, playerPos) {
+        const capturedMass = this.target ? (this.target.mass || 0) : 0;
+
+        // --- Mass-driven tension (mirror CaptureNet.js:879) ---
+        const tensionN = Constants.LASSO_TENSION_BASE_N + capturedMass * Constants.LASSO_TENSION_PER_KG;
+        const strainFraction = capturedMass / Math.max(1, Constants.LASSO_NET_RATED_MASS_KG);
+        eventBus.emit(Events.TETHER_TENSION, {
+            tensionFraction: this._reelProgress, // keep progress for legacy HUD/audio
+            tensionN,                            // real Newtons (Phase 3 HUD/tautness)
+            strainFraction,                      // 0..1+ vs net rating
+            armId: 'lasso',
+        });
+
+        // --- CoM pull toward the catch (momentum) ---
+        // Reeling a mass m toward the ship pulls the ship toward the catch by
+        // m/m_ship. Nudge _rcsVelocity toward the (player-relative) net package,
+        // scaled by mass ratio × reel rate, clamped by RCS_MAX_SPEED.
+        if (this._player && this._player._rcsVelocity && this.projectilePos) {
+            const shipMass = (this._player.mass && this._player.mass > 0) ? this._player.mass : 130;
+            const massRatio = capturedMass / (capturedMass + shipMass);
+            const toCatch = new THREE.Vector3().subVectors(this.projectilePos, playerPos);
+            if (toCatch.lengthSq() > 1e-20) {
+                toCatch.normalize();
+                const nudge = Constants.LASSO_REEL_PULL_GAIN * massRatio *
+                    Constants.LASSO_REEL_SPEED * dt * Constants.RCS_MAX_SPEED;
+                this._player._rcsVelocity.addScaledVector(toCatch, nudge);
+                const maxV = Constants.RCS_MAX_SPEED;
+                if (this._player._rcsVelocity.length() > maxV) {
+                    this._player._rcsVelocity.normalize().multiplyScalar(maxV);
+                }
+            }
+        }
+
+        // --- Tangle / break risk ---
+        // Sustained strain above NET_STRAIN_SAFE_FRACTION accumulates; past
+        // LASSO_NET_BREAK_TIME_S the tether snaps, dropping the catch (no score,
+        // no removeDebris) with a miss-style cooldown.
+        if (strainFraction > Constants.NET_STRAIN_SAFE_FRACTION) {
+            this._strainTimer += dt;
+            if (this._strainTimer >= Constants.LASSO_NET_BREAK_TIME_S) {
+                this._snapTether(tensionN);
+                return;
+            }
+        } else {
+            this._strainTimer = Math.max(0, this._strainTimer - dt); // strain recovers when eased
+        }
+    }
+
+    /**
+     * Phase 3: snap the tether under over-strain — drop the catch cleanly (release
+     * the reel pin, NO removeDebris/score) and go to a miss-style cooldown.
+     * @param {number} tensionN
+     * @private
+     */
+    _snapTether(tensionN) {
+        const targetId = this.target ? this.target.id : null;
+        eventBus.emit(Events.LASSO_SNAPPED, { targetId, tensionN });
+        eventBus.emit(Events.LASSO_MISSED); // tutorial/skills treat a snap as a failed catch
+        eventBus.emit(Events.COMMS_MESSAGE, {
+            text: 'Net tether snapped under load. Catch lost — detumble or use a Daughter.',
+            source: 'SYSTEM',
+            channel: 'CMD',
+            priority: 'warning',
+        });
+        this._resetLasso(); // releases the _armPinned pin → debris resumes its orbit
+        this.cooldown = Constants.LASSO_COOLDOWN_MISS;
+        this.cooldownMax = Constants.LASSO_COOLDOWN_MISS;
+        eventBus.emit(Events.LASSO_COOLDOWN_START, { duration: Constants.LASSO_COOLDOWN_MISS });
     }
 
     /** Complete a successful lasso catch */
@@ -1450,6 +1567,9 @@ export class LassoSystem {
         this._reelingIn = false;
         this._reelProgress = 0;
         this._netSpinAngle = 0;
+        // Phase 3: clear reel-physics latch + strain accumulator for the next cast.
+        this._reelPhysicsActive = false;
+        this._strainTimer = 0;
 
         if (this._netGroup) this._netGroup.visible = false;
         // Phase 2: restore the mouth to full radius so the static net geometry is

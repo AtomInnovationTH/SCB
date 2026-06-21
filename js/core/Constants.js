@@ -1615,6 +1615,17 @@ export const Constants = {
   LASSO_RECOIL_KICK_M: 1.2,           // metres — peak cosmetic mesh kick opposite launch (visual only; no orbit/fuel change)
   LASSO_RECOIL_DECAY: 6.0,            // 1/s — critically-damped spring rate for the recoil kick to settle back
 
+  // --- Mother-net capture ceremony Phase 3 (reel-in physics) ---
+  // .kilo/plans/mother-net-capture-ceremony.md §PHASE 3 (flag LASSO_REEL_PHYSICS).
+  // GATED OFF on Mission 1 AND for capturedMass ≤ LASSO_MAX_CAPTURE_MASS (10 kg),
+  // so M1 / welcome catches reel EXACTLY as today regardless of the flag. Only
+  // heavier later catches feel mass-driven tension, a CoM pull, and break risk.
+  LASSO_TENSION_BASE_N: 1.0,          // N — baseline tether tension (mirrors CaptureNet.js:879)
+  LASSO_TENSION_PER_KG: 0.1,          // N per kg of captured mass (mirrors CaptureNet model)
+  LASSO_NET_RATED_MASS_KG: 50,        // kg — Mother-net rated payload; strain = capturedMass / rated
+  LASSO_REEL_PULL_GAIN: 0.6,          // dimensionless — CoM nudge scale (× mass/shipMass × reelRate), clamped by RCS_MAX_SPEED
+  LASSO_NET_BREAK_TIME_S: 2.0,        // seconds above NET_STRAIN_SAFE_FRACTION before the tether snaps
+
 
   // --- Net-lock range SSOT (onboarding reward-first spine) ---
   // Single source of truth for "close enough to net". Drives (a) the autolock

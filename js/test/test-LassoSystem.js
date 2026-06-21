@@ -859,3 +859,176 @@ describe('LassoSystem — Phase 2 net kinematics', () => {
             'rim stays at full radius when LASSO_NET_KINEMATICS is OFF');
     });
 });
+
+// ─── Phase 3 — Reel-in tension, CoM pull, break risk (gated) ────────────────
+// .kilo/plans/mother-net-capture-ceremony.md PHASE 3 (flag LASSO_REEL_PHYSICS).
+// MANDATORY gate: OFF on Mission 1 AND for capturedMass ≤ LASSO_MAX_CAPTURE_MASS.
+// The tutorial / welcome catches must reel EXACTLY as today (no _rcsVelocity
+// delta, identical timing, identical TETHER_TENSION payload) regardless of the
+// flag. The heavy-catch physics (tension∝mass, bounded CoM pull, snap) is
+// forward-looking infra exercised directly here since fire() caps casts at 10 kg.
+describe('LassoSystem — Phase 3 reel physics gating (M1 untouched)', () => {
+    const M = 0.00001;
+
+    function rig(missionNumber, mass) {
+        const scene = new THREE.Scene();
+        const lasso = new LassoSystem(scene);
+        lasso._missionNumber = missionNumber;
+        const player = { _rcsVelocity: new THREE.Vector3(), mass: 130 };
+        lasso.setPlayer(player);
+        const playerPos = new THREE.Vector3(0, 0, 0);
+        const velDir = new THREE.Vector3(0, 0, 1);
+        const target = { id: 1, alive: true, type: 'fragment', mass,
+            _scenePosition: new THREE.Vector3(0, 0, 22 * M) };
+        const tensions = [];
+        const off = eventBus.on(Events.TETHER_TENSION, (e) => { if (e.armId === 'lasso') tensions.push(e); });
+        const removed = [];
+        const debrisField = {
+            getDebrisNear: () => [target],
+            getDebrisById: (id) => (id === 1 && target.alive ? target : null),
+            removeDebris: (id) => { removed.push(id); target.alive = false; },
+        };
+        const run = () => {
+            lasso.fire(playerPos, debrisField, velDir, target);
+            let frames = 0;
+            for (let i = 0; i < 400 && lasso.active; i++) {
+                lasso.update(0.05, playerPos, debrisField, debrisField.getDebrisById(1), velDir);
+                frames++;
+            }
+            off();
+            return frames;
+        };
+        return { lasso, player, run, tensions, removed };
+    }
+
+    it('flag ON + Mission 1 (mass ≤ cap): no _rcsVelocity delta, plain tension payload', () => {
+        const orig = Constants.FEATURE_FLAGS.LASSO_REEL_PHYSICS;
+        Constants.FEATURE_FLAGS.LASSO_REEL_PHYSICS = true;
+        try {
+            const r = rig(1, 5);
+            r.run();
+            assert.equal(r.lasso._reelPhysicsActive, false, 'reel physics NOT latched on M1');
+            assert.equal(r.player._rcsVelocity.lengthSq(), 0, 'no CoM pull applied on M1');
+            assert.ok(r.tensions.length > 0, 'tension still emitted');
+            assert.ok(r.tensions.every(t => t.tensionN === undefined && t.strainFraction === undefined),
+                'M1 tension payload is the legacy shape (no tensionN/strainFraction)');
+            assert.ok(r.removed.includes(1), 'M1 catch completes normally');
+        } finally {
+            Constants.FEATURE_FLAGS.LASSO_REEL_PHYSICS = orig;
+        }
+    });
+
+    it('flag ON + M2 but mass ≤ cap: still gated off (welcome-weight pieces)', () => {
+        const orig = Constants.FEATURE_FLAGS.LASSO_REEL_PHYSICS;
+        Constants.FEATURE_FLAGS.LASSO_REEL_PHYSICS = true;
+        try {
+            const r = rig(2, 8); // ≤ LASSO_MAX_CAPTURE_MASS
+            r.run();
+            assert.equal(r.lasso._reelPhysicsActive, false, 'gated off for ≤ cap mass even on M2');
+            assert.equal(r.player._rcsVelocity.lengthSq(), 0, 'no CoM pull for light catch');
+        } finally {
+            Constants.FEATURE_FLAGS.LASSO_REEL_PHYSICS = orig;
+        }
+    });
+
+    it('reel timing is identical under the gate (flag ON+M1 vs flag OFF)', () => {
+        const orig = Constants.FEATURE_FLAGS.LASSO_REEL_PHYSICS;
+        try {
+            Constants.FEATURE_FLAGS.LASSO_REEL_PHYSICS = false;
+            const framesOff = rig(1, 5).run();
+            Constants.FEATURE_FLAGS.LASSO_REEL_PHYSICS = true;
+            const framesOnM1 = rig(1, 5).run();
+            assert.equal(framesOnM1, framesOff, 'M1 reel takes the same number of frames with the flag on');
+        } finally {
+            Constants.FEATURE_FLAGS.LASSO_REEL_PHYSICS = orig;
+        }
+    });
+});
+
+describe('LassoSystem — Phase 3 heavy-catch physics (direct)', () => {
+    const M = 0.00001;
+
+    // Build a lasso parked mid-reel with a heavy catch + a player stub, then
+    // drive _applyReelPhysics directly (fire() caps casts at 10 kg, so the heavy
+    // path can only be reached this way today).
+    function heavyRig(mass) {
+        const lasso = new LassoSystem(new THREE.Scene());
+        const player = { _rcsVelocity: new THREE.Vector3(), mass: 130 };
+        lasso.setPlayer(player);
+        lasso.active = true;
+        lasso._reelingIn = true;
+        lasso._reelProgress = 0.5;
+        lasso.target = { id: 9, alive: true, type: 'rocket_body', mass,
+            _armPinned: true };
+        lasso._reelPinTarget = lasso.target;
+        lasso._reelPhysicsActive = true;
+        lasso.projectilePos = new THREE.Vector3(0, 0, 10 * M); // catch ahead of ship
+        return { lasso, player, playerPos: new THREE.Vector3(0, 0, 0) };
+    }
+
+    it('tension rises with captured mass (tensionN = base + mass×k)', () => {
+        let last = null;
+        const off = eventBus.on(Events.TETHER_TENSION, (e) => { if (e.armId === 'lasso') last = e; });
+        try {
+            const a = heavyRig(20);
+            a.lasso._applyReelPhysics(0.016, a.playerPos);
+            const tLight = last.tensionN;
+            const b = heavyRig(100);
+            b.lasso._applyReelPhysics(0.016, b.playerPos);
+            const tHeavy = last.tensionN;
+            assert.ok(tHeavy > tLight, 'heavier catch → higher tension');
+            assert.ok(Math.abs(tHeavy - (Constants.LASSO_TENSION_BASE_N + 100 * Constants.LASSO_TENSION_PER_KG)) < 1e-9,
+                'tensionN matches base + mass×per-kg');
+        } finally { off(); }
+    });
+
+    it('CoM pull is toward the catch and bounded by RCS_MAX_SPEED', () => {
+        const { lasso, player, playerPos } = heavyRig(80);
+        for (let i = 0; i < 200; i++) lasso._applyReelPhysics(0.05, playerPos);
+        const v = player._rcsVelocity;
+        assert.ok(v.length() > 0, 'a CoM pull was applied');
+        assert.ok(v.length() <= Constants.RCS_MAX_SPEED + 1e-12,
+            `pull clamped by RCS_MAX_SPEED (got ${v.length()})`);
+        assert.ok(v.z > 0, 'pull is toward the catch (catch is at +Z ahead of the ship)');
+    });
+
+    it('sustained over-strain SNAPS the tether: drops the catch, no score/removeDebris', () => {
+        const orig = Constants.FEATURE_FLAGS.LASSO_REEL_PHYSICS;
+        Constants.FEATURE_FLAGS.LASSO_REEL_PHYSICS = true;
+        let snapped = null, captured = false;
+        const offSnap = eventBus.on(Events.LASSO_SNAPPED, (e) => { snapped = e; });
+        const offCap = eventBus.on(Events.LASSO_CAPTURED, () => { captured = true; });
+        try {
+            // mass 100 → strain = 100/50 = 2.0 > NET_STRAIN_SAFE_FRACTION (0.8).
+            const { lasso, playerPos } = heavyRig(100);
+            const target = lasso.target;
+            let frames = 0;
+            // Accumulate strain past LASSO_NET_BREAK_TIME_S.
+            while (lasso.active && frames < 1000) {
+                lasso._applyReelPhysics(0.05, playerPos);
+                frames++;
+            }
+            assert.ok(snapped && snapped.targetId === 9, 'LASSO_SNAPPED fired for the heavy catch');
+            assert.equal(lasso.active, false, 'lasso reset after the snap');
+            assert.equal(target._armPinned, false, 'reel pin released — no orphaned pin');
+            assert.equal(captured, false, 'no LASSO_CAPTURED / score on a snap');
+            assert.ok(frames * 0.05 >= Constants.LASSO_NET_BREAK_TIME_S,
+                'snap waited out the break time, not instant');
+        } finally {
+            offSnap(); offCap();
+            Constants.FEATURE_FLAGS.LASSO_REEL_PHYSICS = orig;
+        }
+    });
+
+    it('strain below the safe fraction never snaps (timer recovers)', () => {
+        // mass 30 → strain 0.6 < 0.8 safe. Should never snap.
+        const { lasso, playerPos } = heavyRig(30);
+        let snapped = false;
+        const off = eventBus.on(Events.LASSO_SNAPPED, () => { snapped = true; });
+        try {
+            for (let i = 0; i < 400; i++) lasso._applyReelPhysics(0.05, playerPos);
+            assert.equal(snapped, false, 'safe-strain catch never snaps');
+            assert.equal(lasso._strainTimer, 0, 'strain timer stays drained below the safe fraction');
+        } finally { off(); }
+    });
+});
