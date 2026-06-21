@@ -736,3 +736,126 @@ describe('PlayerSatellite — Phase 1C cosmetic recoil (visual only)', () => {
         assert.equal(stub._recoilOffset.x, 7, 'unchanged on null');
     });
 });
+
+// ─── Phase 2 — Net open-on-launch + cinch-on-capture kinematics ─────────────
+// .kilo/plans/mother-net-capture-ceremony.md PHASE 2 (flag LASSO_NET_KINEMATICS).
+// A parameterized geometry animation (NOT a cloth sim): the mouth opens from
+// compact as gyro spin ramps, then cinches around the catch over the WRAP window.
+// These tests force the flag ON, drive a real LassoSystem, and assert the mouth
+// radius helper is monotonic/clamped and produces no NaNs. The flag stays OFF by
+// default so production behaviour is unchanged.
+describe('LassoSystem — Phase 2 net kinematics', () => {
+    const M = 0.00001;
+
+    function netRadiusScene(lasso) {
+        // Max XY radius across the rim weights = current mouth radius.
+        let max = 0;
+        for (const w of lasso._netWeights) {
+            const r = Math.hypot(w.position.x, w.position.y);
+            if (r > max) max = r;
+        }
+        return max;
+    }
+
+    it('_applyNetMouthRadius scales the rim weights + clamps, no NaNs', () => {
+        const lasso = new LassoSystem(new THREE.Scene());
+        const full = lasso._netFullRadiusScene;
+        lasso._applyNetMouthRadius(1.0);
+        assert.ok(Math.abs(netRadiusScene(lasso) - full) < full * 0.02, 'frac=1 → full radius');
+        lasso._applyNetMouthRadius(0.5);
+        const half = netRadiusScene(lasso);
+        assert.ok(Math.abs(half - full * 0.5) < full * 0.02, 'frac=0.5 → ~half radius');
+        lasso._applyNetMouthRadius(-5); // clamps to 0.05 floor, never negative/NaN
+        const clamped = netRadiusScene(lasso);
+        assert.ok(Number.isFinite(clamped) && clamped > 0, 'clamped to a small positive radius, finite');
+        // Line geometry positions are all finite.
+        const arr = lasso._netLines.geometry.getAttribute('position').array;
+        for (let i = 0; i < arr.length; i++) assert.ok(Number.isFinite(arr[i]), 'line vertex finite');
+    });
+
+    it('open-on-launch: mouth radius grows monotonically over the spin-up window', () => {
+        const orig = Constants.FEATURE_FLAGS.LASSO_NET_KINEMATICS;
+        Constants.FEATURE_FLAGS.LASSO_NET_KINEMATICS = true;
+        try {
+            const lasso = new LassoSystem(new THREE.Scene());
+            const playerPos = new THREE.Vector3(0, 0, 0);
+            const velDir = new THREE.Vector3(0, 0, 1);
+            const target = { id: 1, alive: true, type: 'fragment', mass: 5,
+                _scenePosition: new THREE.Vector3(0, 0, 60 * M) }; // far enough to watch it open
+            const debrisField = {
+                getDebrisNear: () => [target],
+                getDebrisById: (id) => (id === 1 && target.alive ? target : null),
+                removeDebris: () => { target.alive = false; },
+            };
+            lasso.fire(playerPos, debrisField, velDir, target);
+            const launchR = netRadiusScene(lasso);
+            const radii = [launchR];
+            const dt = 1 / 60;
+            for (let i = 0; i < Math.ceil(Constants.NET_SPIN_UP_TIME / dt) && !lasso._reelingIn; i++) {
+                lasso.update(dt, playerPos, debrisField, target, velDir);
+                radii.push(netRadiusScene(lasso));
+            }
+            // Non-decreasing through the open window, ending near full radius.
+            for (let i = 1; i < radii.length; i++) {
+                assert.ok(radii[i] >= radii[i - 1] - 1e-12,
+                    `mouth radius must not shrink while opening (step ${i})`);
+            }
+            assert.ok(radii[radii.length - 1] > launchR, 'mouth opened wider than the compact launch radius');
+            assert.ok(launchR < lasso._netFullRadiusScene * 0.9, 'left the canister compact (not already full)');
+        } finally {
+            Constants.FEATURE_FLAGS.LASSO_NET_KINEMATICS = orig;
+        }
+    });
+
+    it('cinch-on-capture: reel still completes and mouth ends cinched (flag ON)', () => {
+        const orig = Constants.FEATURE_FLAGS.LASSO_NET_KINEMATICS;
+        Constants.FEATURE_FLAGS.LASSO_NET_KINEMATICS = true;
+        try {
+            const lasso = new LassoSystem(new THREE.Scene());
+            const playerPos = new THREE.Vector3(0, 0, 0);
+            const velDir = new THREE.Vector3(0, 0, 1);
+            const target = { id: 1, alive: true, type: 'fragment', mass: 5,
+                _scenePosition: new THREE.Vector3(0, 0, 22 * M) };
+            const removed = [];
+            const debrisField = {
+                getDebrisNear: () => [target],
+                getDebrisById: (id) => (id === 1 && target.alive ? target : null),
+                removeDebris: (id) => { removed.push(id); target.alive = false; },
+            };
+            lasso.fire(playerPos, debrisField, velDir, target);
+            let sawCinch = false;
+            for (let i = 0; i < 300 && lasso.active; i++) {
+                lasso.update(0.05, playerPos, debrisField, debrisField.getDebrisById(1), velDir);
+                if (lasso._reelingIn) {
+                    const frac = netRadiusScene(lasso) / lasso._netFullRadiusScene;
+                    if (frac <= Constants.NET_CINCH_RADIUS_FRAC + 0.05) sawCinch = true;
+                }
+            }
+            assert.equal(lasso.active, false, 'reel completes with kinematics ON');
+            assert.ok(removed.includes(1), 'debris captured');
+            assert.ok(sawCinch, 'mouth cinched toward NET_CINCH_RADIUS_FRAC during the haul');
+        } finally {
+            Constants.FEATURE_FLAGS.LASSO_NET_KINEMATICS = orig;
+        }
+    });
+
+    it('flag OFF: net geometry stays at the static full radius (legacy behaviour)', () => {
+        const lasso = new LassoSystem(new THREE.Scene());
+        const playerPos = new THREE.Vector3(0, 0, 0);
+        const velDir = new THREE.Vector3(0, 0, 1);
+        const target = { id: 1, alive: true, type: 'fragment', mass: 5,
+            _scenePosition: new THREE.Vector3(0, 0, 22 * M) };
+        const debrisField = {
+            getDebrisNear: () => [target],
+            getDebrisById: (id) => (id === 1 && target.alive ? target : null),
+            removeDebris: () => { target.alive = false; },
+        };
+        lasso.fire(playerPos, debrisField, velDir, target);
+        // A few flight frames; with the flag OFF the rim radius must not move.
+        for (let i = 0; i < 5 && !lasso._reelingIn; i++) {
+            lasso.update(1 / 60, playerPos, debrisField, target, velDir);
+        }
+        assert.ok(Math.abs(netRadiusScene(lasso) - lasso._netFullRadiusScene) < lasso._netFullRadiusScene * 0.02,
+            'rim stays at full radius when LASSO_NET_KINEMATICS is OFF');
+    });
+});

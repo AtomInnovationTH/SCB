@@ -1647,6 +1647,10 @@ export const Constants = {
   NET_SEGMENTS: 8,                       // octagonal perimeter line segments
   NET_CROSS_LINES: 4,                    // cross-mesh lines (diameters through center)
   NET_COMPACT_SCALE: 0.45,              // scale factor during reel-in (was 0.15 — too small to see)
+  // Phase 2 net kinematics (flag LASSO_NET_KINEMATICS) — open-on-launch + cinch-on-capture.
+  NET_SPIN_UP_TIME: 0.4,                // seconds — net opens from compact to full as gyro spin ramps
+  NET_LAUNCH_COMPACT_FRAC: 0.3,         // mouth radius fraction at launch (leaves the canister compact, then opens)
+  NET_CINCH_RADIUS_FRAC: 0.25,          // mouth radius fraction when fully cinched on the catch (drawstring close)
   // Coaxial tether (v2): dark outer sheath + bright inner core
   NET_TETHER_SHEATH_RADIUS: 0.45,       // metres — outer sheath radius (thicker, dark)
   NET_TETHER_CORE_RADIUS: 0.18,         // metres — inner core radius (thin, bright)

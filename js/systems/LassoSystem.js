@@ -308,6 +308,17 @@ export class LassoSystem {
         const netLines = new THREE.LineSegments(lineGeo, lineMat);
         this._netGroup.add(netLines);
 
+        // Phase 2 (LASSO_NET_KINEMATICS): keep references + a full-radius template
+        // of the line positions so the mouth can be opened on launch and cinched
+        // on contact by rewriting the XY radius each frame. The base positions are
+        // captured at NET_PERIMETER_RADIUS; per-frame we scale x,y by a radius
+        // fraction. When the flag is OFF none of this runs and the geometry stays
+        // static (legacy group-scale behaviour).
+        this._netLines = netLines;
+        this._netLineBasePositions = Float32Array.from(positions);
+        this._netFullRadiusScene = radius; // NET_PERIMETER_RADIUS * M
+        this._netWeights = [];
+
         // Perimeter weight spheres (keep net spread open during flight)
         const weightGeo = new THREE.SphereGeometry(Constants.NET_WEIGHT_RADIUS * M, 6, 6);
         for (let i = 0; i < Constants.NET_WEIGHT_COUNT; i++) {
@@ -325,6 +336,10 @@ export class LassoSystem {
                 Math.sin(angle) * radius,
                 0
             );
+            // Phase 2: remember the rim angle so the weight can swing in/out with
+            // the mouth radius (open-on-launch / cinch-on-capture).
+            weightMesh.userData.rimAngle = angle;
+            this._netWeights.push(weightMesh);
             this._netGroup.add(weightMesh);
         }
 
@@ -486,6 +501,38 @@ export class LassoSystem {
                 child.material.opacity = opacity;
             }
         });
+    }
+
+    /**
+     * Phase 2 (LASSO_NET_KINEMATICS): set the net MOUTH radius as a fraction of
+     * the full perimeter radius — the parameterized "open / cinch" animation. The
+     * line geometry XY is scaled from its full-radius template and the rim weights
+     * swing in/out along their stored angle. This is a kinematic mapping (not a
+     * cloth sim): openFrac on launch, cinchFrac on capture. No-op when the net
+     * references are absent (legacy / pre-init).
+     * @param {number} radiusFrac — mouth radius fraction in [NET_CINCH..1]
+     * @private
+     */
+    _applyNetMouthRadius(radiusFrac) {
+        const frac = Math.max(0.05, Math.min(1, radiusFrac));
+        if (this._netLines && this._netLineBasePositions) {
+            const attr = this._netLines.geometry.getAttribute('position');
+            const base = this._netLineBasePositions;
+            const arr = attr.array;
+            for (let i = 0; i < base.length; i += 3) {
+                arr[i] = base[i] * frac;       // x
+                arr[i + 1] = base[i + 1] * frac; // y
+                arr[i + 2] = base[i + 2];        // z (planar — unchanged)
+            }
+            attr.needsUpdate = true;
+        }
+        if (this._netWeights) {
+            const r = this._netFullRadiusScene * frac;
+            for (const w of this._netWeights) {
+                const a = w.userData.rimAngle || 0;
+                w.position.set(Math.cos(a) * r, Math.sin(a) * r, 0);
+            }
+        }
     }
 
     // Sparks removed per user feedback — "NOT an arcade game"
@@ -892,6 +939,11 @@ export class LassoSystem {
         // Show capture net visuals (FIX-2.4a) — reset scale in case prior reel-in collapsed it
         this._netGroup.visible = true;
         this._netGroup.scale.setScalar(1.0);
+        // Phase 2: leave the canister with the mouth compact so the open-on-launch
+        // animation has somewhere to open FROM (else it pops full for one frame).
+        if (Constants.FEATURE_FLAGS.LASSO_NET_KINEMATICS) {
+            this._applyNetMouthRadius(Constants.NET_LAUNCH_COMPACT_FRAC);
+        }
         this._setNetOpacity(0.8);
         // Sprint 2 v2: Show coaxial tether (sheath + bright core)
         this._tetherMesh.visible = true;
@@ -1053,11 +1105,23 @@ export class LassoSystem {
             const WRAP_END = 0.2;                              // wrap phase: t ∈ [0, 0.2]
             const COMPACT_SCALE = Constants.NET_COMPACT_SCALE; // Sprint 2 v2: 0.45 (was 0.15 — too small to see)
 
-            if (this._netGroup) this._netGroup.scale.setScalar(
-                this._reelProgress < WRAP_END
-                    ? 1.0 - (this._reelProgress / WRAP_END) * (1.0 - COMPACT_SCALE)
-                    : COMPACT_SCALE
-            );
+            if (Constants.FEATURE_FLAGS.LASSO_NET_KINEMATICS) {
+                // Phase 2: drawstring CINCH on the catch — close the mouth radius
+                // around the debris over the WRAP window, then hold it cinched
+                // through the haul. Drive the radius directly (group scale stays 1
+                // so weights cinch toward centre rather than the whole net merely
+                // scaling down).
+                const cinchT = Math.min(1, this._reelProgress / WRAP_END);
+                const mouthFrac = 1.0 - cinchT * (1.0 - Constants.NET_CINCH_RADIUS_FRAC);
+                if (this._netGroup) this._netGroup.scale.setScalar(1.0);
+                this._applyNetMouthRadius(mouthFrac);
+            } else if (this._netGroup) {
+                this._netGroup.scale.setScalar(
+                    this._reelProgress < WRAP_END
+                        ? 1.0 - (this._reelProgress / WRAP_END) * (1.0 - COMPACT_SCALE)
+                        : COMPACT_SCALE
+                );
+            }
             this._setNetOpacity(0.8);
             // Tether hidden at contact — no opacity update needed during reel-in
 
@@ -1165,13 +1229,25 @@ export class LassoSystem {
 
             // Orient net face perpendicular to flight direction (Z-axis = velocity)
             if (this._targetScenePos && !this._reelingIn) {
+                // Phase 2: OPEN-ON-LAUNCH. The net leaves the canister compact and
+                // opens as the gyroscopic spin ramps over NET_SPIN_UP_TIME — a
+                // kinematic spin→centrifugal-open mapping (not a force sim). Spin
+                // rate ramps with the open fraction so it reads as "spinning up".
+                let spinScale = 1.0;
+                if (Constants.FEATURE_FLAGS.LASSO_NET_KINEMATICS) {
+                    const openFrac = Math.min(1, this.flightTimer / Constants.NET_SPIN_UP_TIME);
+                    const mouthFrac = Constants.NET_LAUNCH_COMPACT_FRAC +
+                        openFrac * (1.0 - Constants.NET_LAUNCH_COMPACT_FRAC);
+                    this._applyNetMouthRadius(mouthFrac);
+                    spinScale = 0.25 + 0.75 * openFrac; // spin-up while opening
+                }
                 const flightDir = new THREE.Vector3()
                     .subVectors(this._targetScenePos, playerPos).normalize();
                 if (flightDir.lengthSq() > 0.001) {
                     const orientQuat = new THREE.Quaternion();
                     orientQuat.setFromUnitVectors(_zAxis, flightDir);
                     // Apply gyroscopic spin around flight axis
-                    this._netSpinAngle += 2 * Math.PI * Constants.NET_SPIN_HZ * dt;
+                    this._netSpinAngle += 2 * Math.PI * Constants.NET_SPIN_HZ * spinScale * dt;
                     const spinQuat = new THREE.Quaternion();
                     spinQuat.setFromAxisAngle(_zAxis, this._netSpinAngle);
                     this._netGroup.quaternion.multiplyQuaternions(orientQuat, spinQuat);
@@ -1376,6 +1452,9 @@ export class LassoSystem {
         this._netSpinAngle = 0;
 
         if (this._netGroup) this._netGroup.visible = false;
+        // Phase 2: restore the mouth to full radius so the static net geometry is
+        // correct if the flag is toggled off and the next cast starts clean.
+        if (Constants.FEATURE_FLAGS.LASSO_NET_KINEMATICS) this._applyNetMouthRadius(1.0);
         if (this._tetherMesh) {
             this._tetherMesh.visible = false;
             this._tetherMesh.material.opacity = 0;
