@@ -164,6 +164,14 @@ export class LassoSystem {
             eventBus.on(Events.MISSION_START, (data) => {
                 this._missionNumber = (data && data.missionNumber != null) ? data.missionNumber : 1;
             }),
+            // Diagnostics: trace the key lifecycle events when window.__lassoDebug is on.
+            eventBus.on(Events.LASSO_DENIED, (e) => this._trace('DENIED', e)),
+            eventBus.on(Events.LASSO_CONTACT, (e) => this._trace('CONTACT', e)),
+            eventBus.on(Events.LASSO_STOWED, (e) => this._trace('STOWED', e)),
+            eventBus.on(Events.LASSO_SNAPPED, (e) => this._trace('SNAPPED', e)),
+            eventBus.on(Events.LASSO_CAPTURED, (e) => this._trace('CAPTURED', e)),
+            eventBus.on(Events.CATCH_BREAKDOWN_START, (e) => { if (e && e.armId === 'lasso') this._trace('FURNACE_START', e); }),
+            eventBus.on(Events.CATCH_PROCESSED, (e) => { if (e && e.armId === 'lasso') this._trace('FURNACE_PROCESSED', e); }),
         ];
 
         /** @type {number} Phase 3 — active mission number (1 = tutorial; gates reel physics). */
@@ -212,6 +220,61 @@ export class LassoSystem {
         this._trailEmitAccum = 0;
 
         this._createVisuals();
+
+        /** @type {number} Diagnostics — throttle counter for per-frame trace logs. */
+        this._dbgFrame = 0;
+        // Diagnostics: expose the live instance + a state dumper so issues can be
+        // inspected from the browser console without a rebuild. Enable tracing with
+        //   window.__lassoDebug = true
+        // then fire a net (N). Snapshot anytime with window.__lassoState().
+        if (typeof window !== 'undefined') {
+            window.__lasso = this;
+            window.__lassoState = () => this._dbgSnapshot();
+        }
+    }
+
+    /** Diagnostics — true when console tracing is enabled (browser only). */
+    _dbg() {
+        return typeof window !== 'undefined' && window.__lassoDebug === true;
+    }
+
+    /** Diagnostics — one-line tagged console log when tracing is on. */
+    _trace(tag, obj) {
+        if (this._dbg()) console.log(`[lasso] ${tag}`, obj || '');
+    }
+
+    /** Diagnostics — current lifecycle snapshot (numbers in metres where noted). */
+    _dbgSnapshot() {
+        const M = 0.00001;
+        const off = (this.projectilePos && this._lastPlayerPos)
+            ? this.projectilePos.distanceTo(this._lastPlayerPos) / M : null;
+        return {
+            flags: {
+                NET_KINEMATICS: Constants.FEATURE_FLAGS.LASSO_NET_KINEMATICS,
+                REEL_PHYSICS: Constants.FEATURE_FLAGS.LASSO_REEL_PHYSICS,
+                CARGO_STOW: Constants.FEATURE_FLAGS.MOTHER_CARGO_STOW,
+                REALITY_MODE: Constants.FEATURE_FLAGS.REALITY_MODE,
+            },
+            active: this.active,
+            reelingIn: this._reelingIn,
+            reelProgress: +(this._reelProgress || 0).toFixed(3),
+            flightTimer: +(this.flightTimer || 0).toFixed(3),
+            cooldown: +(this.cooldown || 0).toFixed(2),
+            ammo: this._ammo,
+            missionNumber: this._missionNumber,
+            reelCellIndex: this._reelCellIndex,
+            reelPhysicsActive: this._reelPhysicsActive,
+            cargoCount: this._cargo.length,
+            cargo: this._cargo.map(c => ({ id: c.target && c.target.id, cell: c.cellIndex, t: +c.furnaceTimer.toFixed(2), chop: c.breakdownStarted })),
+            projOffsetFromPlayer_m: off != null ? +off.toFixed(2) : null,
+            target: this.target ? { id: this.target.id, mass: this.target.mass, type: this.target.type } : null,
+            constants: {
+                MIN_FLIGHT_TIME: Constants.LASSO_MIN_FLIGHT_TIME,
+                MUZZLE_OFFSET_M: Constants.LASSO_MUZZLE_OFFSET_M,
+                CARGO_CELLS: Constants.MOTHER_CARGO_CELLS,
+                FURNACE_FEED_S: Constants.FURNACE_TRANSFER.FEED_S,
+            },
+        };
     }
 
     /**
@@ -1021,6 +1084,19 @@ export class LassoSystem {
         this._reelProgress = 0;
         this._netSpinAngle = 0;
 
+        this._trace('FIRE', {
+            targetId: bestTarget.id, mass: bestTarget.mass, type: bestTarget.type,
+            muzzleOffset_m: +(this._projOffset.length() / M).toFixed(2),
+            launchDist_m: +launchDistanceM.toFixed(2),
+            contactRadius_m: +contactRadiusM.toFixed(2),
+            easedSpeed_mps: +easedApparentSpeed.toFixed(2),
+            flags: {
+                kin: Constants.FEATURE_FLAGS.LASSO_NET_KINEMATICS,
+                phys: Constants.FEATURE_FLAGS.LASSO_REEL_PHYSICS,
+                stow: Constants.FEATURE_FLAGS.MOTHER_CARGO_STOW,
+            },
+        });
+
         // Show capture net visuals (FIX-2.4a) — reset scale in case prior reel-in collapsed it
         this._netGroup.visible = true;
         this._netGroup.scale.setScalar(1.0);
@@ -1138,6 +1214,7 @@ export class LassoSystem {
      */
     update(dt, playerPos, debrisField, selectedTarget = null, playerVelDir = null) {
         this._time += dt;
+        this._lastPlayerPos = playerPos; // diagnostics — for _dbgSnapshot offset math
 
         if (this.cooldown > 0) {
             this.cooldown -= dt;
@@ -1414,6 +1491,19 @@ export class LassoSystem {
         }
 
         // Energy pulse bead removed (Issue #6 — de-arcade tether visual)
+
+        // Diagnostics — throttled per-frame state while a cast is live (~6 Hz).
+        if (this._dbg() && (++this._dbgFrame % 10 === 0)) {
+            const M = 0.00001;
+            const offM = (this.projectilePos && playerPos)
+                ? this.projectilePos.distanceTo(playerPos) / M : null;
+            this._trace(this._reelingIn ? 'reel' : 'flight', {
+                t: +this.flightTimer.toFixed(2),
+                reel: +this._reelProgress.toFixed(2),
+                netOffset_m: offM != null ? +offM.toFixed(2) : null,
+                netVisible: this._netGroup ? this._netGroup.visible : null,
+            });
+        }
     }
 
     /**
