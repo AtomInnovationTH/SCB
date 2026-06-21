@@ -596,3 +596,143 @@ describe('LassoSystem — _getLiveTargetPos prefers live _scenePosition', () => 
         assert.ok(pos && Number.isFinite(pos.x), 'orbit fallback returns a finite position');
     });
 });
+
+// ─── Phase 1 — Visible throw + nose muzzle + cosmetic recoil ────────────────
+// .kilo/plans/mother-net-capture-ceremony.md PHASE 1. The first guided catch was
+// invisible: contact fired at a flat 20 m while guided #1 sits ~22 m away, so the
+// net travelled ~2 m (~0.02 s). Phase 1 adds (1A) a min-flight-time gate + a
+// contact radius that scales with launch distance + an eased flight speed, (1B) a
+// front-centre muzzle so the net spawns/anchors at the nose not the hull centre,
+// and (1C) a cosmetic mesh-kick recoil with no orbit/fuel change.
+import { eventBus } from '../core/EventBus.js';
+
+describe('LassoSystem — Phase 1 constants', () => {
+    it('LASSO_MIN_FLIGHT_TIME is a positive real-time gate (~0.5 s)', () => {
+        assert.ok(Number.isFinite(Constants.LASSO_MIN_FLIGHT_TIME), 'finite');
+        assert.ok(Constants.LASSO_MIN_FLIGHT_TIME >= 0.4 && Constants.LASSO_MIN_FLIGHT_TIME <= 0.8,
+            `expected ~0.45–0.6 s, got ${Constants.LASSO_MIN_FLIGHT_TIME}`);
+    });
+    it('contact radius scales below the legacy 20 m flat radius', () => {
+        assert.ok(Constants.LASSO_CONTACT_RADIUS_M < 20, 'base contact radius shrunk from 20 m');
+        assert.ok(Constants.LASSO_CONTACT_RADIUS_FLOOR_M > 0 &&
+            Constants.LASSO_CONTACT_RADIUS_FLOOR_M <= Constants.LASSO_CONTACT_RADIUS_M,
+            'floor is positive and ≤ base radius');
+        assert.ok(Constants.LASSO_CONTACT_RADIUS_FRACTION > 0 && Constants.LASSO_CONTACT_RADIUS_FRACTION < 1,
+            'fraction is in (0,1)');
+    });
+    it('muzzle offset is a positive forward distance', () => {
+        assert.ok(Constants.LASSO_MUZZLE_OFFSET_M > 0, 'muzzle is ahead of the hull centre');
+    });
+});
+
+describe('LassoSystem — Phase 1 visible throw (integration)', () => {
+    const M = 0.00001; // scene units per metre (matches LassoSystem.js)
+
+    // Minimal headless scene + debrisField. The target is a pinned-style piece
+    // with a fixed _scenePosition (frozen orbit), the M1 guided-catch case.
+    function makeRig(distM) {
+        const scene = new THREE.Scene();
+        const lasso = new LassoSystem(scene);
+        const playerPos = new THREE.Vector3(0, 0, 0);
+        const velDir = new THREE.Vector3(0, 0, 1); // prograde = +Z (forward)
+        const target = {
+            id: 1, alive: true, type: 'fragment', mass: 5,
+            _scenePosition: new THREE.Vector3(0, 0, distM * M), // directly ahead
+        };
+        const removed = [];
+        const debrisField = {
+            getDebrisNear: () => [target],
+            getDebrisById: (id) => (id === target.id && target.alive ? target : null),
+            removeDebris: (id) => { removed.push(id); target.alive = false; },
+        };
+        return { scene, lasso, playerPos, velDir, target, debrisField, removed };
+    }
+
+    it('1B: net spawns at the nose muzzle, not the hull centre', () => {
+        const { lasso, playerPos, velDir, debrisField, target } = makeRig(22);
+        const ok = lasso.fire(playerPos, debrisField, velDir, target);
+        assert.equal(ok, true, 'fire accepted the in-range, in-arc target');
+        const spawnDistM = lasso.projectilePos.distanceTo(playerPos) / M;
+        assert.ok(Math.abs(spawnDistM - Constants.LASSO_MUZZLE_OFFSET_M) < 0.5,
+            `spawn should sit ~${Constants.LASSO_MUZZLE_OFFSET_M} m ahead, got ${spawnDistM.toFixed(2)} m`);
+    });
+
+    it('1A: contact cannot fire before LASSO_MIN_FLIGHT_TIME even point-blank', () => {
+        // Target only ~10 m ahead → within the contact radius almost immediately;
+        // the min-flight gate must still hold contact off until the throw is seen.
+        const { lasso, playerPos, velDir, debrisField, target } = makeRig(10);
+        lasso.fire(playerPos, debrisField, velDir, target);
+        let t = 0;
+        const dt = 0.05;
+        while (t < Constants.LASSO_MIN_FLIGHT_TIME - dt) {
+            lasso.update(dt, playerPos, debrisField, target, velDir);
+            t += dt;
+            assert.equal(lasso._reelingIn, false,
+                `contact must not fire at t=${t.toFixed(2)}s (< min flight ${Constants.LASSO_MIN_FLIGHT_TIME}s)`);
+        }
+        // Step past the gate → contact fires.
+        for (let i = 0; i < 5; i++) lasso.update(dt, playerPos, debrisField, target, velDir);
+        assert.equal(lasso._reelingIn, true, 'contact fires once past the min-flight gate + proximity');
+    });
+
+    it('1A: guided #1 (~22 m) still captures (LASSO_CAPTURED + removeDebris)', () => {
+        const { lasso, playerPos, velDir, debrisField, removed, target } = makeRig(22);
+        let captured = null;
+        const off = eventBus.on(Events.LASSO_CAPTURED, (e) => { captured = e; });
+        lasso.fire(playerPos, debrisField, velDir, target);
+        // Run up to 8 s of real time (well under LASSO_MAX_FLIGHT_TIME + reel).
+        for (let i = 0; i < 200 && lasso.active; i++) {
+            lasso.update(0.05, playerPos, debrisField, debrisField.getDebrisById(1), velDir);
+        }
+        off();
+        assert.equal(lasso.active, false, '#1 lasso completes (no longer active)');
+        assert.ok(removed.includes(1), '#1 debris removed on catch');
+        assert.ok(captured && captured.debrisId === 1, 'LASSO_CAPTURED fired for #1 (onboarding advance)');
+    });
+
+    it('1A: guided #2 (~48 m) still captures', () => {
+        const { lasso, playerPos, velDir, debrisField, removed } = makeRig(48);
+        lasso.fire(playerPos, debrisField, velDir, debrisField.getDebrisById(1));
+        for (let i = 0; i < 300 && lasso.active; i++) {
+            lasso.update(0.05, playerPos, debrisField, debrisField.getDebrisById(1), velDir);
+        }
+        assert.equal(lasso.active, false, '#2 lasso completes');
+        assert.ok(removed.includes(1), '#2 debris removed on catch');
+    });
+
+    it('1A: a near throw takes at least ~LASSO_MIN_FLIGHT_TIME to contact (not a blink)', () => {
+        const { lasso, playerPos, velDir, debrisField, target } = makeRig(22);
+        lasso.fire(playerPos, debrisField, velDir, target);
+        let t = 0;
+        const dt = 1 / 60;
+        while (lasso.active && !lasso._reelingIn && t < 3) {
+            lasso.update(dt, playerPos, debrisField, target, velDir);
+            t += dt;
+        }
+        assert.ok(lasso._reelingIn, 'eventually contacts');
+        assert.ok(t >= Constants.LASSO_MIN_FLIGHT_TIME - dt,
+            `flight lasted ${t.toFixed(3)}s — must be ≥ min flight ${Constants.LASSO_MIN_FLIGHT_TIME}s (visible arc)`);
+    });
+});
+
+describe('PlayerSatellite — Phase 1C cosmetic recoil (visual only)', () => {
+    // applyCosmeticRecoil seeds a transient offset that springs back; it must not
+    // touch the orbit, fuel, or _rcsVelocity. We test the offset bookkeeping in
+    // isolation against the prototype so we don't need a full PlayerSatellite.
+    it('seeds the recoil offset and leaves _rcsVelocity untouched', async () => {
+        const { PlayerSatellite } = await import('../entities/PlayerSatellite.js');
+        const stub = {
+            _recoilOffset: new THREE.Vector3(),
+            _rcsVelocity: new THREE.Vector3(),
+        };
+        PlayerSatellite.prototype.applyCosmeticRecoil.call(stub, new THREE.Vector3(0, 0, -1.2 * 0.00001));
+        assert.ok(stub._recoilOffset.lengthSq() > 0, 'recoil offset seeded');
+        assert.equal(stub._rcsVelocity.lengthSq(), 0, 'recoil is NOT an RCS impulse (no orbit/fuel change)');
+    });
+    it('a null offset is a safe no-op', async () => {
+        const { PlayerSatellite } = await import('../entities/PlayerSatellite.js');
+        const stub = { _recoilOffset: new THREE.Vector3(7, 7, 7) };
+        PlayerSatellite.prototype.applyCosmeticRecoil.call(stub, null);
+        assert.equal(stub._recoilOffset.x, 7, 'unchanged on null');
+    });
+});

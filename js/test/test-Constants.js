@@ -603,9 +603,9 @@ describe('Epic 9 FEATURE_FLAGS', () => {
 // ============================================================================
 describe('ST-9.4a NET_TERMINOLOGY + new flags', () => {
 
-    it('FEATURE_FLAGS has exactly 34 entries', () => {
-        assert.equal(Object.keys(Constants.FEATURE_FLAGS).length, 34,
-            'Expected 34 FEATURE_FLAGS (29 prior + LASER_DESPIN + CLUSTER_TRANSFER_WINDOW + ASPECT_CAPTURE + REEL_BOOST + REEL_PROFILE_V2)');
+    it('FEATURE_FLAGS has exactly 37 entries', () => {
+        assert.equal(Object.keys(Constants.FEATURE_FLAGS).length, 37,
+            'Expected 37 FEATURE_FLAGS (34 prior + LASSO_NET_KINEMATICS + LASSO_REEL_PHYSICS + MOTHER_CARGO_STOW)');
     });
 
     it('BOLA_RENAME is not present (stale flag removed)', () => {

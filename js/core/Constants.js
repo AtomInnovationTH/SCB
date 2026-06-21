@@ -829,6 +829,16 @@ export const Constants = {
     // tether-plume clearance (Q4). OFF by default so the legacy constant-speed
     // reel ships unchanged and the overhaul lands isolated/bisectable.
     REEL_PROFILE_V2:           false,
+
+    // NEW — mother-net capture ceremony (.kilo/plans/mother-net-capture-ceremony.md)
+    // Phase 2: kinematic net open-on-launch + cinch-on-capture animation.
+    LASSO_NET_KINEMATICS:      false,  // Phase 2 — net opens on spin-up, cinches on contact (visual only)
+    // Phase 3: mass-driven reel tension, CoM pull, tangle/break risk. Gated OFF
+    // on M1 and for ≤ LASSO_MAX_CAPTURE_MASS pieces regardless of this flag.
+    LASSO_REEL_PHYSICS:        false,  // Phase 3 — real reel tension + ship pull + break risk (M2+/heavy only)
+    // Phase 4: route the Mother-net catch through stow → clamp/slice → furnace
+    // instead of instant removeDebris + flat TIER3_BASE.
+    MOTHER_CARGO_STOW:         false,  // Phase 4 — aft cargo cells + furnace lifecycle (falls back to flat-500 when OFF)
   },
 
   // ============================================================================
@@ -1590,6 +1600,21 @@ export const Constants = {
   LASSO_COOLDOWN_CATCH: 2,            // seconds — cooldown after successful catch before next cast
   LASSO_COOLDOWN_MISS: 1,             // seconds — cooldown after miss/retract before next cast
   LASSO_PROJECTILE_MASS: 2.5,         // kg — mass of lasso net projectile (for recoil compensation)
+
+  // --- Mother-net capture ceremony Phase 1 (visible throw) ---
+  // .kilo/plans/mother-net-capture-ceremony.md §1A/1B/1C.
+  // The first guided catch was invisible: contact fired at LASSO_CONTACT_RADIUS_M
+  // (20 m) while guided #1 is pinned at ~22 m, so the net travelled ~2 m (~0.02 s)
+  // at the 100 m/real-s rate. These make even a point-blank throw read as a real
+  // arc that leaves the nose canister and travels.
+  LASSO_MIN_FLIGHT_TIME: 0.5,         // seconds real-time — contact cannot fire before this, so the throw is always seen
+  LASSO_CONTACT_RADIUS_M: 6,          // metres — base contact radius (replaces the flat 20 m). Scaled down for near targets.
+  LASSO_CONTACT_RADIUS_FRACTION: 0.35,// contactRadius = min(LASSO_CONTACT_RADIUS_M, fraction × launchDistance), floored
+  LASSO_CONTACT_RADIUS_FLOOR_M: 3,    // metres — never shrink the contact test below this (so contact still triggers)
+  LASSO_MUZZLE_OFFSET_M: 8,           // metres — forward (+Z/prograde) muzzle offset; net spawns/anchors at the nose, not the hull centre
+  LASSO_RECOIL_KICK_M: 1.2,           // metres — peak cosmetic mesh kick opposite launch (visual only; no orbit/fuel change)
+  LASSO_RECOIL_DECAY: 6.0,            // 1/s — critically-damped spring rate for the recoil kick to settle back
+
 
   // --- Net-lock range SSOT (onboarding reward-first spine) ---
   // Single source of truth for "close enough to net". Drives (a) the autolock

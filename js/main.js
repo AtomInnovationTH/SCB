@@ -590,6 +590,7 @@ async function init() {
   skillsSystem = new SkillsSystem();
   lassoSystem = new LassoSystem(scene);
   lassoSystem.setSkillsSystem(skillsSystem); // Phase 3 hint-gating + veteran downgrade
+  lassoSystem.setPlayer(player); // Phase 1C — cosmetic launch-recoil mesh kick
 
   // --- Phase 5 Rewards: RewardSystem + SweepReportUI ---
   rewardSystem = new RewardSystem();

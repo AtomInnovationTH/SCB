@@ -28,6 +28,8 @@ const _defaultForward = new THREE.Vector3(0, 0, 1);
 /** Module-level scratch vectors — avoid per-frame allocation in the arc test. */
 const _scratchFwd = new THREE.Vector3();
 const _scratchToTarget = new THREE.Vector3();
+/** Phase 1B — scratch for the per-frame muzzle world position. */
+const _scratchMuzzle = new THREE.Vector3();
 
 export class LassoSystem {
     /**
@@ -61,6 +63,18 @@ export class LassoSystem {
 
         /** @type {THREE.Vector3} Offset of projectile relative to player (local frame) */
         this._projOffset = new THREE.Vector3();
+
+        /** @type {number} Phase 1A — per-shot contact radius (scene units), scaled by launch distance. */
+        this._contactRadiusScene = Constants.LASSO_CONTACT_RADIUS_M * M;
+
+        /** @type {number} Phase 1A — per-shot eased apparent flight speed (scene units / real second). */
+        this._flightSpeedScene = Constants.LASSO_SPEED * M * Constants.TIME_SCALE_GAMEPLAY;
+
+        /** @type {THREE.Vector3|null} Phase 1C — last launch direction (world), for cosmetic recoil. */
+        this._lastLaunchDir = null;
+
+        /** @type {object|null} Phase 1C — PlayerSatellite for cosmetic recoil kick (optional). */
+        this._player = null;
 
         /** @type {number} Flight timer */
         this.flightTimer = 0;
@@ -201,6 +215,50 @@ export class LassoSystem {
             return out.copy(playerVelDir).normalize();
         }
         return out.copy(_defaultForward);
+    }
+
+    /**
+     * Phase 1B: world position of the front-centre launcher muzzle — along the
+     * nose (+Z/prograde) at LASSO_MUZZLE_OFFSET_M ahead of the hull centre. The
+     * net spawns here and the tether anchors here so the throw reads as leaving
+     * a front launcher, not the hull centroid. Recomputed every frame so it
+     * tracks the nose as the ship reorients along velocity.
+     * @param {THREE.Vector3} playerPos
+     * @param {THREE.Vector3|null} playerVelDir — prograde dir (may be null/zero)
+     * @param {THREE.Vector3} out — scratch target (returned)
+     * @returns {THREE.Vector3} world muzzle position
+     * @private
+     */
+    _computeMuzzleWorld(playerPos, playerVelDir, out) {
+        const fwd = this._resolveForwardDir(playerVelDir, _scratchFwd);
+        return out.copy(playerPos).addScaledVector(fwd, Constants.LASSO_MUZZLE_OFFSET_M * M);
+    }
+
+    /**
+     * Phase 1C: trigger a brief cosmetic recoil kick of the mother mesh opposite
+     * the launch direction. This is VISUAL ONLY — no orbit change, no fuel, no
+     * _rcsVelocity — so it cannot disturb the M1 station-keep / pin. The kick
+     * offset is applied to the player model group and springs back via a
+     * critically-damped decay in PlayerSatellite. Falls back to a no-op when no
+     * player model is wired (headless tests).
+     * @param {THREE.Vector3} launchDir — normalized world launch direction
+     * @private
+     */
+    _launchRecoil(launchDir) {
+        if (!this._player || typeof this._player.applyCosmeticRecoil !== 'function') return;
+        if (!launchDir) return;
+        this._player.applyCosmeticRecoil(
+            launchDir.clone().multiplyScalar(-Constants.LASSO_RECOIL_KICK_M * M)
+        );
+    }
+
+    /**
+     * Wire the PlayerSatellite so the cosmetic launch recoil (Phase 1C) can kick
+     * the hull mesh. Optional — when unset the recoil is a no-op (headless tests).
+     * @param {object} player — PlayerSatellite with applyCosmeticRecoil(offsetVec)
+     */
+    setPlayer(player) {
+        this._player = player || null;
     }
 
     /** Create capture net projectile group, tube tether, trail, and flash visuals */
@@ -787,11 +845,44 @@ export class LassoSystem {
         this.target = bestTarget;
         this._targetId = bestTarget.id;
         this._targetScenePos = bestPos.clone();
-        this.projectilePos = playerPos.clone();
-        this._projOffset.set(0, 0, 0); // starts at player
 
-        const dir = new THREE.Vector3().subVectors(bestPos, playerPos).normalize();
+        // Phase 1B: spawn the projectile + anchor the tether at the FRONT-CENTRE
+        // launcher muzzle (along the nose, +Z/prograde), not the hull centroid.
+        // The muzzle is recomputed every frame in update() so it tracks the nose
+        // as the ship reorients; here we just seed the initial spawn.
+        const muzzleWorld = this._computeMuzzleWorld(playerPos, playerVelDir, new THREE.Vector3());
+        this.projectilePos = muzzleWorld.clone();
+        this._projOffset.copy(muzzleWorld).sub(playerPos); // player-relative muzzle offset
+
+        const dir = new THREE.Vector3().subVectors(bestPos, muzzleWorld).normalize();
         this.projectileVel = dir.multiplyScalar(Constants.LASSO_SPEED * M); // LASSO_SPEED m/s in scene units (relative)
+        // Phase 1C: remember the launch direction so the cosmetic recoil kick can
+        // shove the mother mesh opposite the throw.
+        this._lastLaunchDir = dir.clone();
+
+        // Phase 1A: visible throw geometry. Compute the launch distance (muzzle →
+        // target, metres) once at fire, then derive a contact radius that scales
+        // down for near targets and an EASED flight speed so even a point-blank
+        // guided catch reads as a ~LASSO_MIN_FLIGHT_TIME arc instead of a 0.02 s
+        // blink. Far targets keep the fast 100 m/real-s apparent speed (capped by
+        // LASSO_MAX_FLIGHT_TIME).
+        const launchDistanceM = muzzleWorld.distanceTo(bestPos) / M;
+        const contactRadiusM = Math.max(
+            Constants.LASSO_CONTACT_RADIUS_FLOOR_M,
+            Math.min(
+                Constants.LASSO_CONTACT_RADIUS_M,
+                Constants.LASSO_CONTACT_RADIUS_FRACTION * launchDistanceM
+            )
+        );
+        this._contactRadiusScene = contactRadiusM * M;
+
+        const maxApparentSpeed = Constants.LASSO_SPEED * Constants.TIME_SCALE_GAMEPLAY; // 100 m/s apparent
+        const desiredTravelM = Math.max(contactRadiusM, launchDistanceM - contactRadiusM);
+        const easedApparentSpeed = Math.max(
+            maxApparentSpeed * 0.2, // never crawl — always visibly moves
+            Math.min(maxApparentSpeed, desiredTravelM / Constants.LASSO_MIN_FLIGHT_TIME)
+        );
+        this._flightSpeedScene = easedApparentSpeed * M; // scene units / real second (TIME_SCALE already folded in)
 
         this.flightTimer = 0;
         this._reelingIn = false;
@@ -810,8 +901,14 @@ export class LassoSystem {
             this._tetherCore.material.opacity = 0.8;
         }
         this._pulsePhase = 0;
-        this._muzzleFlashTimer = 0;
-        this._muzzleFlash.visible = false;
+        // Phase 1B/1C: a small muzzle puff AT THE CANISTER (nose), so the net
+        // visibly emerges from hardware at the front face rather than the centre.
+        this._muzzleFlash.position.copy(muzzleWorld);
+        this._muzzleFlash.visible = true;
+        this._muzzleFlashTimer = 0.2;
+        this._muzzleFlash.material.opacity = 0.9;
+        // Phase 1C: kick the mother mesh opposite the launch (cosmetic only).
+        this._launchRecoil(this._lastLaunchDir);
 
         // Sound: electromagnetic THWIP (via EventBus → AudioSystem)
         eventBus.emit(Events.LASSO_FIRED, {
@@ -998,7 +1095,8 @@ export class LassoSystem {
             const toTarget = new THREE.Vector3().subVectors(targetOffset, this._projOffset);
             const distToTarget = toTarget.length();
 
-            if (distToTarget < M * 20) { // within 20m — contact!
+            if (distToTarget < this._contactRadiusScene &&
+                this.flightTimer >= Constants.LASSO_MIN_FLIGHT_TIME) { // proximity + min-flight gate — contact!
                 this._reelingIn = true;
                 // CRITICAL FIX (v2e): Use _projOffset directly — it's already the
                 // player-relative offset, uncontaminated by per-frame orbital drift.
@@ -1036,10 +1134,14 @@ export class LassoSystem {
 
                 eventBus.emit(Events.LASSO_CONTACT, { targetId: this.target.id });
             } else {
-                // Move projectile toward current target at lasso speed (relative frame)
-                // Multiply by TIME_SCALE_GAMEPLAY so the lasso travels at real game speed, not slow real-time speed
-                const speed = Constants.LASSO_SPEED * M; // m/s → scene units
-                const step = Math.min(speed * dt * Constants.TIME_SCALE_GAMEPLAY, distToTarget);
+                // Phase 1A: move at the per-shot EASED apparent speed so even a
+                // point-blank guided catch reads as a ~LASSO_MIN_FLIGHT_TIME arc
+                // instead of a single-frame blink. _flightSpeedScene already folds
+                // in TIME_SCALE_GAMEPLAY (computed at fire). Clamp the step so the
+                // net parks at contact range and waits out the min-flight gate
+                // rather than overshooting the target.
+                const parkDist = Math.max(0, distToTarget - this._contactRadiusScene * 0.5);
+                const step = Math.min(this._flightSpeedScene * dt, distToTarget, parkDist || distToTarget);
                 toTarget.normalize().multiplyScalar(step);
                 this._projOffset.add(toTarget);
             }
@@ -1081,16 +1183,28 @@ export class LassoSystem {
             }
         }
 
-        // Sprint 2 v2e: Rebuild tether EVERY frame from PLAYER CENTRE → projectile.
-        // No bow offset — keeps it simple. Combined with QuadraticBezierCurve3
-        // (no extrapolation) the tether is guaranteed to go from ship centre to
-        // the net and nowhere else.
+        // Phase 1B: rebuild the tether EVERY frame from the front-centre MUZZLE
+        // (nose, +Z/prograde) → projectile, not the hull centroid. The muzzle is
+        // recomputed each frame so it tracks the nose as the ship reorients along
+        // velocity. During reel-in the package returns toward the hull centre
+        // (Phase 4 reroutes this to an aft cargo cell). Combined with
+        // QuadraticBezierCurve3 (no extrapolation) the tether is guaranteed to go
+        // from the muzzle to the net and nowhere else.
         if (this._tetherMesh && this._tetherMesh.visible && this.projectilePos) {
             this._tetherMesh.material.opacity = 0.5;
             if (this._tetherCore) {
                 this._tetherCore.material.opacity = this._reelingIn ? 0.95 : 0.8;
             }
-            this._rebuildTetherGeometry(playerPos, this.projectilePos);
+            const tetherStart = this._reelingIn
+                ? playerPos
+                : this._computeMuzzleWorld(playerPos, playerVelDir, _scratchMuzzle);
+            this._rebuildTetherGeometry(tetherStart, this.projectilePos);
+            // Keep the muzzle puff pinned to the (moving) nose while it fades.
+            if (this._muzzleFlash && this._muzzleFlash.visible && !this._reelingIn) {
+                this._muzzleFlash.position.copy(
+                    this._computeMuzzleWorld(playerPos, playerVelDir, _scratchMuzzle)
+                );
+            }
         }
 
         // Energy pulse bead removed (Issue #6 — de-arcade tether visual)

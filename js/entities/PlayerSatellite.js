@@ -131,6 +131,14 @@ export class PlayerSatellite extends THREE.Group {
     // Phase 1: RCS fine-positioning velocity (additive to orbital motion)
     this._rcsVelocity = new THREE.Vector3();
 
+    // Mother-net Phase 1C: cosmetic launch-recoil offset (scene units). Applied
+    // to the rendered hull position each frame and decayed back to zero by a
+    // critically-damped spring. VISUAL ONLY — it does NOT feed the orbit, fuel,
+    // or _rcsVelocity, and is re-derived from orbit each frame so it never
+    // accumulates. ≤ LASSO_RECOIL_KICK_M (~1.2 m) so it reads as a subtle shudder
+    // at ship scale, negligible at orbital scale.
+    this._recoilOffset = new THREE.Vector3();
+
     // Phase 1: Thrust direction tracking & cumulative ΔV
     this._deltaVSpent = 0;         // cumulative ΔV spent this mission (km/s game units)
     this._thrustDirection = null;   // 'prograde' | 'retrograde' | 'lateral' | null
@@ -2304,6 +2312,18 @@ export class PlayerSatellite extends THREE.Group {
       }
     }
 
+    // --- Mother-net Phase 1C: cosmetic launch-recoil shudder ---
+    // Apply the (decaying) recoil offset to the rendered position, then spring it
+    // back toward zero. Because _applyPosition() recomputes position from orbit
+    // every frame, this offset never accumulates into the orbit — it is purely a
+    // visual hull kick that the tether/muzzle (computed from getPosition) follow.
+    if (this._recoilOffset.lengthSq() > 1e-24) {
+      this.position.add(this._recoilOffset);
+      const decay = Math.max(0, 1 - Constants.LASSO_RECOIL_DECAY * dt);
+      this._recoilOffset.multiplyScalar(decay);
+      if (this._recoilOffset.lengthSq() < 1e-26) this._recoilOffset.set(0, 0, 0);
+    }
+
     this._orientAlongVelocity();
 
     // --- Solar power ---
@@ -4359,6 +4379,17 @@ export class PlayerSatellite extends THREE.Group {
   // ==========================================================================
   // GETTERS
   // ==========================================================================
+
+  /**
+   * Mother-net Phase 1C: apply a cosmetic launch-recoil kick to the hull mesh.
+   * The offset (scene units, opposite the launch direction) is added to the
+   * rendered position next frame and springs back to zero. VISUAL ONLY — no
+   * orbit/fuel/RCS change. See _recoilOffset in the constructor + update().
+   * @param {THREE.Vector3} offset — world-space kick offset (scene units)
+   */
+  applyCosmeticRecoil(offset) {
+    if (offset) this._recoilOffset.copy(offset);
+  }
 
   /** @returns {THREE.Vector3} */
   getPosition() {
