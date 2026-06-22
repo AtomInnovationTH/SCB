@@ -229,6 +229,9 @@ import './test-daughter-autopilot-sim.js';
 // V-8: Capture Net Visual — state-machine-driven 3D renderer
 import './test-CaptureNetVisual.js';
 
+// Shared net-mesh factory — unified "web in space" for Mother + Daughter
+import './test-NetMeshKit.js';
+
 // V-9: Tier Progression Visual — tier upgrade collar/strut rebuild + flash
 import './test-TierVisualManager.js';
 

@@ -781,9 +781,9 @@ describe('LassoSystem — Phase 2 net kinematics', () => {
         lasso._applyNetMouthRadius(-5); // clamps to 0.05 floor, never negative/NaN
         const clamped = netRadiusScene(lasso);
         assert.ok(Number.isFinite(clamped) && clamped > 0, 'clamped to a small positive radius, finite');
-        // Line geometry positions are all finite.
-        const arr = lasso._netLines.geometry.getAttribute('position').array;
-        for (let i = 0; i < arr.length; i++) assert.ok(Number.isFinite(arr[i]), 'line vertex finite');
+        // Kit-owned drawstring positions are all finite (web geometry stays valid).
+        const arr = lasso._netKit.drawstringPositions;
+        for (let i = 0; i < arr.length; i++) assert.ok(Number.isFinite(arr[i]), 'web vertex finite');
     });
 
     it('open-on-launch: mouth radius grows monotonically over the spin-up window', () => {

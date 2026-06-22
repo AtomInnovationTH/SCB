@@ -12,12 +12,17 @@ import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { orbitToSceneCartesian } from '../entities/OrbitalMechanics.js';
+import { NetMeshKit } from '../ui/NetMeshKit.js';
 
 /** 1 meter in scene units (1 unit = 100 km = 100000 m) */
 const M = 0.00001;
 
 /** Reusable Z-axis vector for quaternion math */
 const _zAxis = new THREE.Vector3(0, 0, 1);
+
+/** Reusable −Z axis — the NetMeshKit mouth points along local −Z, so the net
+ *  group is oriented so local −Z maps onto the flight direction (see update()). */
+const _negZAxis = new THREE.Vector3(0, 0, -1);
 
 /** Reusable zero vector for reel-in lerp target */
 const _zeroVec = new THREE.Vector3(0, 0, 0);
@@ -417,109 +422,38 @@ export class LassoSystem {
 
     /** Create capture net projectile group, tube tether, trail, and flash visuals */
     _createVisuals() {
-        // ── FIX-2.4a: Weighted capture net group ─────────────────────────────
+        // ── Unified "web in space" net — shared NetMeshKit (Mother + Daughter) ──
+        // Replaces the rejected look (8 m octagon LineSegments + four 3 m chrome
+        // sphere weights + the wireframe cone "bag") with the SAME translucent web
+        // vocabulary the daughter uses (handoff option B). Sized + styled by
+        // NET_WEB so it reads as a delicate web the small operator casts, never a
+        // cage that out-masses the ship + catch (GAME_DESIGN.md §2.1).
+        //
+        // STRICTLY LOCAL-SPACE: the kit only builds geometry around a local origin
+        // (apex at (0,0,0), mouth along local −Z). All world-positioning,
+        // orientation, open/cinch drive, reel, and tether (the solved F8–F12
+        // machinery) stay in update()/_applyNetMouthRadius/_setNetOpacity below.
         this._netGroup = new THREE.Group();
 
-        const segments = Constants.NET_SEGMENTS;
-        const crossLines = Constants.NET_CROSS_LINES;
-        const radius = Constants.NET_PERIMETER_RADIUS * M;
-
-        // Build perimeter vertex positions (octagonal ring)
-        const perimeterVerts = [];
-        for (let i = 0; i < segments; i++) {
-            const angle = (i / segments) * Math.PI * 2;
-            perimeterVerts.push(new THREE.Vector3(
-                Math.cos(angle) * radius,
-                Math.sin(angle) * radius,
-                0
-            ));
-        }
-
-        // Build line segment pairs for LineSegments geometry
-        const positions = [];
-
-        // Perimeter edges (octagonal outline)
-        for (let i = 0; i < segments; i++) {
-            const a = perimeterVerts[i];
-            const b = perimeterVerts[(i + 1) % segments];
-            positions.push(a.x, a.y, a.z, b.x, b.y, b.z);
-        }
-
-        // Cross-lines (diameters through center — mesh pattern)
-        for (let i = 0; i < crossLines; i++) {
-            const a = perimeterVerts[i];
-            const b = perimeterVerts[(i + Math.floor(segments / 2)) % segments];
-            positions.push(a.x, a.y, a.z, b.x, b.y, b.z);
-        }
-
-        const lineGeo = new THREE.BufferGeometry();
-        lineGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-        const lineMat = new THREE.LineBasicMaterial({
-            color: 0x88ffcc,
-            transparent: true,
-            opacity: 0,
+        const NW = Constants.NET_WEB;
+        this._netKit = NetMeshKit.build({
+            diameter:          NW.MOTHER_DIAMETER,
+            weightCount:       NW.EDGE_NODE_COUNT,
+            weightRadiusM:     NW.EDGE_NODE_RADIUS_M,
+            color:             NW.WEB_COLOR,
+            opacity:           0,             // faded in on fire() via _setNetOpacity
+            drawstringOpacity: 0,             // whole web (incl. drawstring) starts hidden
+            weightTransparent: true,          // Mother fades the whole net in/out
+            apexTransparent:   true,          // …including the apex hub
+            childrenVisible:   true,          // Mother shows the whole net at once (no per-state FSM)
         });
-        const netLines = new THREE.LineSegments(lineGeo, lineMat);
-        this._netGroup.add(netLines);
+        this._netGroup.add(this._netKit.group);
 
-        // Phase 2 (LASSO_NET_KINEMATICS): keep references + a full-radius template
-        // of the line positions so the mouth can be opened on launch and cinched
-        // on contact by rewriting the XY radius each frame. The base positions are
-        // captured at NET_PERIMETER_RADIUS; per-frame we scale x,y by a radius
-        // fraction. When the flag is OFF none of this runs and the geometry stays
-        // static (legacy group-scale behaviour).
-        this._netLines = netLines;
-        this._netLineBasePositions = Float32Array.from(positions);
-        this._netFullRadiusScene = radius; // NET_PERIMETER_RADIUS * M
-        this._netWeights = [];
-
-        // Perimeter weight spheres (keep net spread open during flight)
-        const weightGeo = new THREE.SphereGeometry(Constants.NET_WEIGHT_RADIUS * M, 6, 6);
-        for (let i = 0; i < Constants.NET_WEIGHT_COUNT; i++) {
-            const weightMat = new THREE.MeshStandardMaterial({
-                color: 0x444444,
-                metalness: 0.8,
-                roughness: 0.3,
-                transparent: true,
-                opacity: 0,
-            });
-            const weightMesh = new THREE.Mesh(weightGeo, weightMat);
-            const angle = (i / Constants.NET_WEIGHT_COUNT) * Math.PI * 2;
-            weightMesh.position.set(
-                Math.cos(angle) * radius,
-                Math.sin(angle) * radius,
-                0
-            );
-            // Phase 2: remember the rim angle so the weight can swing in/out with
-            // the mouth radius (open-on-launch / cinch-on-capture).
-            weightMesh.userData.rimAngle = angle;
-            this._netWeights.push(weightMesh);
-            this._netGroup.add(weightMesh);
-        }
-
-        // ── Daughter-style cone "bag" (ceremony look) ────────────────────────
-        // Gives the net real volume instead of a flat octagon: a translucent
-        // wireframe cone whose MOUTH faces the flight direction (+Z local) and
-        // whose apex sits at the net origin (where the tether terminates, ship
-        // side). Mirrors CaptureNetVisual's ceremony cone (CONE_LENGTH_FRAC). The
-        // mouth opens on launch and cinches on capture via _applyNetMouthRadius,
-        // which scales the cone's X/Y (radius) while leaving its length intact.
-        const coneLenFrac = (Constants.CAPTURE_NET && Constants.CAPTURE_NET.NET_CEREMONY
-            && Constants.CAPTURE_NET.NET_CEREMONY.CONE_LENGTH_FRAC) || 0.85;
-        const coneHeight = radius * 2 * coneLenFrac;
-        const coneGeo = new THREE.ConeGeometry(radius, coneHeight, 12, 3, true);
-        coneGeo.rotateX(-Math.PI / 2);             // mouth faces +Z (toward target)
-        coneGeo.translate(0, 0, coneHeight / 2);   // apex at origin, mouth at +coneHeight
-        const coneMat = new THREE.MeshBasicMaterial({
-            color: 0x88ffcc,
-            transparent: true,
-            opacity: 0,
-            wireframe: true,
-            side: THREE.DoubleSide,
-        });
-        this._netCone = new THREE.Mesh(coneGeo, coneMat);
-        this._netCone.name = 'netCone';
-        this._netGroup.add(this._netCone);
+        // References the open-on-launch / cinch-on-capture animation + tests use.
+        // These mirror the kit handle (which owns the meshes) — the mouth-radius
+        // animation drives them through NetMeshKit.setMouthFraction.
+        this._netWeights = this._netKit.rimWeights;          // rim nodes (open/cinch sweep)
+        this._netFullRadiusScene = this._netKit.mouthRadius; // full open mouth radius (scene units)
 
         this._netGroup.visible = false;
         this.scene.add(this._netGroup);
@@ -669,51 +603,27 @@ export class LassoSystem {
     }
 
     /**
-     * Set opacity on all net group children materials (Mesh + LineSegments).
+     * Set opacity on the net's web (cone + drawstring + fade-able edge nodes)
+     * via the shared kit. The tether is a separate object owned by LassoSystem
+     * and is faded independently.
      * @param {number} opacity
      */
     _setNetOpacity(opacity) {
-        if (!this._netGroup) return;
-        this._netGroup.traverse(child => {
-            if (child.material) {
-                child.material.opacity = opacity;
-            }
-        });
+        if (this._netKit) NetMeshKit.setOpacity(this._netKit, opacity);
     }
 
     /**
      * Phase 2 (LASSO_NET_KINEMATICS): set the net MOUTH radius as a fraction of
-     * the full perimeter radius — the parameterized "open / cinch" animation. The
-     * line geometry XY is scaled from its full-radius template and the rim weights
-     * swing in/out along their stored angle. This is a kinematic mapping (not a
-     * cloth sim): openFrac on launch, cinchFrac on capture. No-op when the net
-     * references are absent (legacy / pre-init).
+     * the full perimeter radius — the parameterized "open / cinch" animation,
+     * delegated to the shared kit (scales rim-node + cone XY, keeps the apex +
+     * axial length, rebuilds the drawstring). This is a kinematic mapping (not a
+     * cloth sim): openFrac on launch, cinchFrac on capture. No-op when the kit is
+     * absent (pre-init).
      * @param {number} radiusFrac — mouth radius fraction in [NET_CINCH..1]
      * @private
      */
     _applyNetMouthRadius(radiusFrac) {
-        const frac = Math.max(0.05, Math.min(1, radiusFrac));
-        if (this._netLines && this._netLineBasePositions) {
-            const attr = this._netLines.geometry.getAttribute('position');
-            const base = this._netLineBasePositions;
-            const arr = attr.array;
-            for (let i = 0; i < base.length; i += 3) {
-                arr[i] = base[i] * frac;       // x
-                arr[i + 1] = base[i + 1] * frac; // y
-                arr[i + 2] = base[i + 2];        // z (planar — unchanged)
-            }
-            attr.needsUpdate = true;
-        }
-        if (this._netWeights) {
-            const r = this._netFullRadiusScene * frac;
-            for (const w of this._netWeights) {
-                const a = w.userData.rimAngle || 0;
-                w.position.set(Math.cos(a) * r, Math.sin(a) * r, 0);
-            }
-        }
-        // Cone bag: scale mouth radius (X/Y) with the fraction; keep its length so
-        // it reads as opening wide then cinching to a closed pouch on capture.
-        if (this._netCone) this._netCone.scale.set(frac, frac, 1);
+        if (this._netKit) NetMeshKit.setMouthFraction(this._netKit, radiusFrac);
     }
 
     // Sparks removed per user feedback — "NOT an arcade game"
@@ -1152,7 +1062,9 @@ export class LassoSystem {
         if (Constants.FEATURE_FLAGS.LASSO_NET_KINEMATICS) {
             this._applyNetMouthRadius(Constants.NET_LAUNCH_COMPACT_FRAC);
         }
-        this._setNetOpacity(0.8);
+        // Cool pre-contact web tint (reset any green left from a prior reel).
+        if (this._netKit) NetMeshKit.setColor(this._netKit, Constants.NET_WEB.WEB_COLOR);
+        this._setNetOpacity(Constants.NET_WEB.WEB_OPACITY);
         // Sprint 2 v2: Show coaxial tether (sheath + bright core)
         this._tetherMesh.visible = true;
         this._tetherMesh.material.opacity = 0.55;
@@ -1351,7 +1263,10 @@ export class LassoSystem {
                         : COMPACT_SCALE
                 );
             }
-            this._setNetOpacity(0.8);
+            // Captured: tint the web green (daughter capture language) + hold the
+            // translucent web opacity through the haul.
+            if (this._netKit) NetMeshKit.setColor(this._netKit, Constants.NET_WEB.REEL_COLOR);
+            this._setNetOpacity(Constants.NET_WEB.WEB_OPACITY);
             // Tether hidden at contact — no opacity update needed during reel-in
 
             let reelT;
@@ -1500,7 +1415,12 @@ export class LassoSystem {
                     .subVectors(this._targetScenePos, playerPos).normalize();
                 if (flightDir.lengthSq() > 0.001) {
                     const orientQuat = new THREE.Quaternion();
-                    orientQuat.setFromUnitVectors(_zAxis, flightDir);
+                    // The shared NetMeshKit cone points its MOUTH along local −Z
+                    // (apex at the group origin / tether side). Orient the group so
+                    // local −Z maps onto the flight direction → the web mouth opens
+                    // toward the target (was +Z for the old octagon; cosmetic only,
+                    // outside the F8–F12 frame/motion machinery).
+                    orientQuat.setFromUnitVectors(_negZAxis, flightDir);
                     // Apply gyroscopic spin around flight axis
                     this._netSpinAngle += 2 * Math.PI * Constants.NET_SPIN_HZ * spinScale * dt;
                     const spinQuat = new THREE.Quaternion();
@@ -1983,12 +1903,9 @@ export class LassoSystem {
             this._evtUnsubs.forEach(u => { if (typeof u === 'function') u(); });
             this._evtUnsubs.length = 0;
         }
-        // FIX-2.4a: Dispose capture net group
+        // Dispose the shared net-mesh kit (cone + nodes + drawstring + apex hub).
         if (this._netGroup) {
-            this._netGroup.traverse(child => {
-                if (child.geometry) child.geometry.dispose();
-                if (child.material) child.material.dispose();
-            });
+            if (this._netKit) NetMeshKit.dispose(this._netKit);
             this.scene.remove(this._netGroup);
         }
         // Sprint 2 v2: Dispose coaxial tether (sheath + core)

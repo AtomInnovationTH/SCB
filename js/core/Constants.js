@@ -1704,6 +1704,23 @@ export const Constants = {
   get BOLAS_SPARK_DURATION() { return this.NET_SPARK_DURATION; },
   get BOLAS_SPARK_LENGTH() { return this.NET_SPARK_LENGTH; },
 
+  // --- Unified "web in space" net look (NetMeshKit — both Mother + Daughter) ---
+  // The Mother net (LassoSystem) renders through the shared NetMeshKit, sized +
+  // styled by these knobs so it reads as a delicate translucent WEB the small
+  // operator casts — never the rejected 8 m chrome octagon-cage + 3 m boulders.
+  // The "small child / large balloon" scale rule (GAME_DESIGN.md §2.1): the net
+  // is subordinate to mother + catch. The legacy NET_PERIMETER_RADIUS (8 m dia) /
+  // NET_WEIGHT_RADIUS (1.5 m) above are SUPERSEDED for the Mother mesh and remain
+  // only for the BOLAS_* aliases + legacy tests.
+  NET_WEB: {
+    MOTHER_DIAMETER:    5.0,    // m — Mother net mouth diameter (was 8 m; shrunk toward ship scale)
+    WEB_COLOR:          0x88aacc, // cool ivory/cyan Dyneema (matches daughter pre-contact COL_DISC)
+    WEB_OPACITY:        0.45,   // translucent — reveal the catch through the web (was Mother 0.8)
+    EDGE_NODE_COUNT:    6,      // edge-node glints (was 4 boulders)
+    EDGE_NODE_RADIUS_M: 0.10,   // m — tiny glints, not ballast (was 1.5 m; ~match daughter 0.08)
+    REEL_COLOR:         0x00ff44, // green tint once the catch is secured / reeling (daughter language)
+  },
+
   // =========================================================================
   // CAPTURE NET SYSTEM — ST-9.4 C-6 (Config G)
   // Per CAPTURE_NET.md §2–§6 canonical spec. Gated by FEATURE_FLAGS.CAPTURE_NET.

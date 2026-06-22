@@ -21,6 +21,7 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
 import { CeremonyTimeScale } from '../systems/CeremonyTimeScale.js';
+import { NetMeshKit } from './NetMeshKit.js';
 
 /** 1 metre in scene units (1 scene unit = 100 km). Same as PlayerSatellite.js */
 const M = 1e-5;
@@ -304,76 +305,27 @@ export class CaptureNetVisual {
     canisterMesh.name = 'canister';
     group.add(canisterMesh);
 
-    // ── Cone mesh (replaces flat disc) ──
+    // ── Cone mesh + rim weights + drawstring + apex hub — shared NetMeshKit ──
+    // Stage A: the kit reproduces the daughter's ceremony web 1:1 (cone rotateX/
+    // translate, closedRadius, spoke pattern). The FSM below (_updateCeremonyState)
+    // keeps positioning the kit-owned `rimWeights` with its existing, tested math
+    // (F4 lookAt / F5 envZ + cinch-plane / F6 detached-bag); only the mesh SOURCE
+    // moved into the kit. Defaults match the old inline construction exactly
+    // (16×4 cone, opacity 0.55, COL_DISC, 0.08 m nodes, 0.05 m apex hub).
     const diameter = netProjectile.netClass.DIAMETER || 8;
-    const mouthR = M * (diameter / 2) * NET_CER.CONE_OPEN_RADIUS_FRAC;
-    const coneH  = mouthR * 2 * NET_CER.CONE_LENGTH_FRAC;
-    // ConeGeometry: base at y=-h/2, apex at y=+h/2; 16 radial, 4 height, open-ended
-    const coneGeo = new THREE.ConeGeometry(mouthR, coneH, 16, 4, true);
-    // Rotate so mouth faces -Z (lookAt forward direction) and apex near origin
-    // rotateX(PI/2): (x,y,z)→(x,-z,y) → apex at z=+h/2, base at z=-h/2
-    coneGeo.rotateX(Math.PI / 2);
-    // Translate so apex at origin (z=0) and mouth at z=-coneH
-    coneGeo.translate(0, 0, -coneH / 2);
-    const coneMat = new THREE.MeshStandardMaterial({
-      color: COL_DISC,
-      transparent: true,
-      opacity: 0.55,
-      side: THREE.DoubleSide,
-      wireframe: true,
-    });
-    const coneMesh = new THREE.Mesh(coneGeo, coneMat);
-    coneMesh.name = 'cone';
-    coneMesh.visible = false;
-    group.add(coneMesh);
-
-    // ── Rim weight spheres ──
     const weightCount = netProjectile.netClass.RIM_WEIGHT_COUNT || 4;
-    const weightGeo = new THREE.SphereGeometry(M * NET_CER.RIM_WEIGHT_RENDER_RADIUS_M, 8, 8);
-    const rimWeights = [];
-    const rimWeightMats = [];
-    for (let i = 0; i < weightCount; i++) {
-      const mat = new THREE.MeshStandardMaterial({
-        color: 0x888888,
-        metalness: 0.9,
-        roughness: 0.3,
-        emissive: new THREE.Color(0x000000),
-      });
-      const w = new THREE.Mesh(weightGeo, mat);
-      w.name = `weight_${i}`;
-      w.visible = false;
-      rimWeights.push(w);
-      rimWeightMats.push(mat);
-      group.add(w);
-    }
-
-    // ── Drawstring — spoke pattern: apex→w0→apex→w1→…→apex→wN-1→apex→w0 ──
-    const dsVertexCount = weightCount * 2 + 2;
-    const drawstringPositions = new Float32Array(dsVertexCount * 3);
-    const drawstringGeo = new THREE.BufferGeometry();
-    drawstringGeo.setAttribute('position', new THREE.BufferAttribute(drawstringPositions, 3));
-    const drawstringMat = new THREE.LineBasicMaterial({
-      color: 0xffaa44,
-      transparent: true,
-      opacity: 0.8,
+    const kitHandle = NetMeshKit.build({
+      diameter,
+      weightCount,
+      // childrenVisible defaults false — the FSM toggles per-state visibility.
     });
-    const drawstringLine = new THREE.Line(drawstringGeo, drawstringMat);
-    drawstringLine.name = 'drawstring';
-    drawstringLine.visible = false;
-    drawstringLine.frustumCulled = false;
-    group.add(drawstringLine);
-
-    // ── Apex hub — small sphere at tether termination ──
-    const apexGeo = new THREE.SphereGeometry(M * 0.05, 8, 8);
-    const apexMat = new THREE.MeshStandardMaterial({
-      color: 0x665544,
-      metalness: 0.7,
-      roughness: 0.4,
-    });
-    const apexHub = new THREE.Mesh(apexGeo, apexMat);
-    apexHub.name = 'apexHub';
-    apexHub.visible = false;
-    group.add(apexHub);
+    const coneMesh = kitHandle.coneMesh;
+    const rimWeights = kitHandle.rimWeights;
+    const rimWeightMats = kitHandle.rimWeightMats;
+    const drawstringLine = kitHandle.drawstringLine;
+    const drawstringPositions = kitHandle.drawstringPositions;
+    const apexHub = kitHandle.apexHub;
+    group.add(kitHandle.group);
 
     // ── Tether line (same as flag-OFF path) ──
     const tetherPositions = new Float32Array(6); // 2 points × 3 components
@@ -396,17 +348,18 @@ export class CaptureNetVisual {
       canisterMesh,
       discMesh: coneMesh,          // alias for flash-timer compat
       coneMesh,
+      kitHandle,                   // owns cone/weights/drawstring/apex geometry+materials
       tetherLine,
       tetherPositions,
       rimWeights,
       rimWeightMats,
-      weightGeo,
+      weightGeo: kitHandle.weightGeo,
       drawstringLine,
       drawstringPositions,
       apexHub,
-      mouthRadius: mouthR,
-      coneHeight: coneH,
-      closedRadius: mouthR * NET_CER.DRAWSTRING_RADIUS_FRAC_CLOSED,
+      mouthRadius: kitHandle.mouthRadius,
+      coneHeight: kitHandle.coneHeight,
+      closedRadius: kitHandle.closedRadius,
       weightCount,
       spinAngle: 0,
       armIndex,
@@ -431,15 +384,8 @@ export class CaptureNetVisual {
     vis.canisterMesh.material.dispose();
 
     if (vis.useCeremony) {
-      // Ceremony path — cone, weights, drawstring, apex hub
-      vis.coneMesh.geometry.dispose();
-      vis.coneMesh.material.dispose();
-      vis.weightGeo.dispose();
-      for (const mat of vis.rimWeightMats) mat.dispose();
-      vis.drawstringLine.geometry.dispose();
-      vis.drawstringLine.material.dispose();
-      vis.apexHub.geometry.dispose();
-      vis.apexHub.material.dispose();
+      // Ceremony path — cone, weights, drawstring, apex hub are kit-owned.
+      NetMeshKit.dispose(vis.kitHandle);
     } else {
       // Original path — flat disc
       vis.discMesh.geometry.dispose();
@@ -1029,33 +975,15 @@ export class CaptureNetVisual {
   /**
    * Update drawstring line vertex positions from current rim weight positions.
    * Spoke pattern: apex→w0→apex→w1→…→apex→wN-1→apex→w0.
-   * No allocations — writes directly to pre-allocated Float32Array.
+   * Delegates to the shared NetMeshKit so the Mother + Daughter render the same
+   * web topology (single source of truth — no drift). The kit handle's
+   * rimWeights / drawstringPositions / drawstringLine are reference-identical to
+   * the vis entry's, so output is unchanged. No allocations.
    * @param {object} vis — entry from _activeVisuals
    * @private
    */
   _updateDrawstring(vis) {
-    const { rimWeights, drawstringPositions, drawstringLine, weightCount } = vis;
-    let idx = 0;
-    for (let i = 0; i < weightCount; i++) {
-      // Apex vertex (origin in local space)
-      drawstringPositions[idx++] = 0;
-      drawstringPositions[idx++] = 0;
-      drawstringPositions[idx++] = 0;
-      // Weight vertex
-      drawstringPositions[idx++] = rimWeights[i].position.x;
-      drawstringPositions[idx++] = rimWeights[i].position.y;
-      drawstringPositions[idx++] = rimWeights[i].position.z;
-    }
-    // Final apex
-    drawstringPositions[idx++] = 0;
-    drawstringPositions[idx++] = 0;
-    drawstringPositions[idx++] = 0;
-    // Close to first weight
-    drawstringPositions[idx++] = rimWeights[0].position.x;
-    drawstringPositions[idx++] = rimWeights[0].position.y;
-    drawstringPositions[idx++] = rimWeights[0].position.z;
-
-    drawstringLine.geometry.attributes.position.needsUpdate = true;
+    NetMeshKit.updateDrawstring(vis.kitHandle);
   }
 
   // ── Public getters ─────────────────────────────────────────────────────
