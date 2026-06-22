@@ -409,12 +409,22 @@ export class LassoSystem {
 
     /**
      * Phase 4: index of the first free cargo cell, or -1 when full.
+     *
+     * Fills cells CENTER-OUT (e.g. for 3 cells the order is [1, 0, 2]) so a lone
+     * catch reels straight back to the nose centerline instead of an off-centre
+     * cell. Cells are laterally spread by MOTHER_CARGO_CELL_SPREAD_M, so the old
+     * left-to-right fill parked the very first catch ~one spread off to the side
+     * (visible as the net "returning off to the left"). Order = ascending lateral
+     * distance from centre, index as the tie-break.
      * @returns {number}
      * @private
      */
     _firstFreeCell() {
         const cells = Math.max(1, Constants.MOTHER_CARGO_CELLS);
-        for (let i = 0; i < cells; i++) {
+        const centre = (cells - 1) / 2;
+        const order = Array.from({ length: cells }, (_, i) => i)
+            .sort((a, b) => (Math.abs(a - centre) - Math.abs(b - centre)) || (a - b));
+        for (const i of order) {
             if (!this._cargo.some(c => c.cellIndex === i)) return i;
         }
         return -1;

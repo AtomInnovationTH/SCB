@@ -1108,6 +1108,28 @@ describe('LassoSystem — Phase 4 stow → furnace lifecycle (flag ON)', () => {
         });
     });
 
+    it('_firstFreeCell fills cargo cells center-out (lone catch returns to the nose centerline)', () => {
+        withFlag(() => {
+            const lasso = new LassoSystem(new THREE.Scene());
+            const cells = Constants.MOTHER_CARGO_CELLS;
+            const centre = Math.round((cells - 1) / 2);
+            // First catch → centered cell (lateral 0), not an off-centre cell.
+            assert.equal(lasso._firstFreeCell(), centre, 'first free cell is the centre cell');
+            const playerPos = new THREE.Vector3(0, 0, 7000 * M);
+            const velDir = new THREE.Vector3(0, 0, 1);
+            const cell = new THREE.Vector3();
+            lasso._cargoCellWorld(playerPos, velDir, lasso._firstFreeCell(), cell);
+            // The centre cell sits on the prograde axis: ~zero cross-track offset
+            // (the "returns off to the left" symptom is gone for a lone catch).
+            const lateral = Math.hypot(cell.x - playerPos.x, cell.y - playerPos.y) / M;
+            assert.ok(lateral < 1e-6, `centre cell has ~0 lateral offset (got ${lateral.toFixed(3)} m)`);
+            // Subsequent fills expand outward from the centre.
+            lasso._cargo.push({ target: { id: 1 }, cellIndex: centre, furnaceTimer: 0, breakdownStarted: false });
+            const next = lasso._firstFreeCell();
+            assert.ok(next !== centre && next >= 0, 'second catch fills an outer cell');
+        });
+    });
+
     it('stow keeps the debris alive + pinned and fires LASSO_CAPTURED (onboarding)', () => {
         withFlag(() => {
             const { lasso, playerPos, velDir, debrisField, target, removed } = rig();
