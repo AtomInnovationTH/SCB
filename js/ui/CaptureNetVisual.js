@@ -43,13 +43,13 @@ const CN = Constants.CAPTURE_NET;
 // shared by CONTACT+BRAKE+ENVELOP — three states one colour — which made
 // debugging the broken engulf animation impossible.
 const COL_CANISTER  = 0x556677;
-const COL_DISC      = 0x88aacc;   // pre-contact (LAUNCHING / SPINNING_UP / FLIGHT)
+const COL_DISC      = 0xcfeaff;   // pre-contact (LAUNCHING / SPINNING_UP / FLIGHT) — ivory Dyneema (was cold cyan 0x88aacc)
 const COL_CONTACT   = 0xffdd44;   // CONTACT (yellow — "touched")
 const COL_BRAKE     = 0xff7700;   // BRAKE (orange — "tether locked")
 const COL_ENVELOP   = 0xff3344;   // ENVELOP (red — "wrapping")
 const COL_CINCH     = 0xff44dd;   // CINCH_CLOSING (magenta — "drawstring")
 const COL_SECURE    = 0xaaff44;   // SECURE_CHECK (yellow-green pulse — "checking grip")
-const COL_CAPTURED  = 0x00ff44;
+const COL_CAPTURED  = 0x66dd88;   // CAPTURED — gentler secured green (was harsh arcade 0x00ff44)
 const COL_MISSED    = 0xff4444;
 const COL_TETHER    = 0xddddee;
 

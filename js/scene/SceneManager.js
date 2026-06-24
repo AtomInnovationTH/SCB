@@ -17,6 +17,7 @@ import { Constants } from '../core/Constants.js';
 import { profileFlags } from '../core/ProfileFlags.js';
 import { selectInitialTier } from '../systems/QualityManager.js';
 import { GpuProbe } from '../systems/GpuProbe.js';
+import { NetMeshKit } from '../ui/NetMeshKit.js';
 
 export class SceneManager {
   /**
@@ -47,11 +48,22 @@ export class SceneManager {
     // (Constants.RENDER_ORDER) plus a tiny geometric Z stagger over polygonOffset.
     // Existing polygonOffset values on the ship hull are legacy from FIX_PLAN §2;
     // do not add more — promote to renderOrder bands instead.
+    // Dev screenshot loop (Phase 0 of the net-visual plan): `?shot=1` enables
+    // `preserveDrawingBuffer` so `window.__netShot()` can read back the exact
+    // `#game-canvas` pixels via `toDataURL`. A plain (non-preserved) buffer
+    // returns black on read-back. Default OFF — this has a measurable perf cost
+    // and must never ship enabled.
+    let _preserveDrawingBuffer = false;
+    try {
+      const _p = new URLSearchParams(window.location.search);
+      _preserveDrawingBuffer = _p.get('shot') === '1' || _p.has('shot');
+    } catch (_e) { /* non-browser env — ignore */ }
     this.renderer = new THREE.WebGLRenderer({
       canvas,
       antialias: false,
       logarithmicDepthBuffer: true,
       powerPreference: 'high-performance',
+      preserveDrawingBuffer: _preserveDrawingBuffer,
     });
 
     // --- PR 4 / P1.5: Detect initial quality tier from GL capabilities
@@ -66,6 +78,10 @@ export class SceneManager {
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.0;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+    // Fat-line capture-net web (NetMeshKit) needs the DRAWING-BUFFER size (CSS px
+    // × pixelRatio) for correct screen-space thread width — same units SMAA uses.
+    this._syncNetMeshResolution();
 
     // Shadow maps disabled — no shadow-casting lights in the scene
     this.renderer.shadowMap.enabled = false;
@@ -622,6 +638,15 @@ export class SceneManager {
   }
 
   /**
+   * Push the renderer's drawing-buffer size (CSS px × pixelRatio) to NetMeshKit
+   * so its fat-line web threads render at the intended screen-space width.
+   */
+  _syncNetMeshResolution() {
+    const pr = this.renderer.getPixelRatio();
+    NetMeshKit.setResolution(window.innerWidth * pr, window.innerHeight * pr);
+  }
+
+  /**
    * Handle browser resize — updates composer and all passes.
    */
   resize() {
@@ -633,6 +658,10 @@ export class SceneManager {
     this.camera.updateProjectionMatrix();
 
     this.renderer.setSize(w, h);
+
+    // Keep the fat-line net web's LineMaterial resolution in sync with the
+    // drawing buffer so threads keep their intended screen-space width.
+    this._syncNetMeshResolution();
 
     // EffectComposer.setSize accepts CSS pixels and internally multiplies
     // by its _pixelRatio (read from renderer in the constructor).

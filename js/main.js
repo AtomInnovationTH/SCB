@@ -1218,6 +1218,112 @@ async function init() {
     }
   }
 
+  // --- Net-visual screenshot loop (Phase 0 + auto-capture) ---
+  // Dev-only, gated by `?shot=1` (which also flips on `preserveDrawingBuffer`
+  // in SceneManager). Closes the "blind agent" loop: an agent on this host can
+  // read back the exact #game-canvas pixels — no screen-recording permission,
+  // no foreground-window dependency, no pause overlay obscuring the net.
+  //
+  //   window.__netPause(true|false) → freeze / resume the current frame
+  //   window.__netShot('name')      → download ~/Downloads/netshot-<name>-<ts>.png
+  //   window.__netAuto(true|false)  → auto-capture at each net FSM key beat
+  //
+  // Auto-capture (on by default with `?shotauto=1`, or `__netAuto(true)`) snaps a
+  // frame at the net's deterministic ceremony beats (fired / envelop / brake /
+  // cinch / captured / reel) for BOTH the Mother (lasso:*) and Daughter (net:*)
+  // — removing manual-timing guesswork. Files: netshot-auto-<beat>-<ts>.png.
+  try {
+    const _shotParams = new URLSearchParams(window.location.search);
+    if (_shotParams.get('shot') === '1' || _shotParams.has('shot') ||
+        _shotParams.get('shotauto') === '1' || _shotParams.has('shotauto')) {
+      const _netCapture = (name) => {
+        const cv = document.getElementById('game-canvas');
+        if (!cv) { console.error('[netShot] #game-canvas not found'); return; }
+        // preserveDrawingBuffer (set by ?shot) keeps the last rendered frame
+        // readable even while paused. The WebGL frame's alpha is 0 in most
+        // pixels (the composer writes colour without alpha), so a direct
+        // toDataURL() yields a *transparent* PNG viewers show as white —
+        // composite onto opaque black first so the export matches the screen.
+        const flat = document.createElement('canvas');
+        flat.width = cv.width;
+        flat.height = cv.height;
+        const ctx = flat.getContext('2d');
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, flat.width, flat.height);
+        ctx.drawImage(cv, 0, 0);
+        const url = flat.toDataURL('image/png');
+        if (url.length < 1000) {
+          console.warn('[netShot] canvas read-back looks empty — is ?shot=1 set and a frame rendered?');
+        }
+        const safe = String(name || 'frame').replace(/[^a-z0-9_-]/gi, '');
+        const ts = new Date().toISOString().replace(/[:.]/g, '-');
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `netshot-${safe}-${ts}.png`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        console.info(`[netShot] saved ${a.download}`);
+        return a.download;
+      };
+
+      window.__netPause = (val) => {
+        const next = (val === undefined) ? !gameFlowManager.paused : !!val;
+        gameFlowManager.paused = next;
+        if (next) {
+          if (hud) hud.showPause();
+        } else {
+          if (hud) hud.hidePause();
+          lastTime = performance.now();
+          eventBus.emit(Events.PAUSE_RESUME);
+        }
+        return next;
+      };
+      window.__netShot = _netCapture;
+
+      // ── Deterministic auto-capture at net FSM key beats ──
+      let _autoOn = _shotParams.get('shotauto') === '1' || _shotParams.has('shotauto');
+      const _beatsDone = new Set();   // debounce: one shot per beat per net cycle
+      // Snap after the new state has had two frames to render (and a touch of
+      // settle) so the captured frame shows the beat, not the transition into it.
+      const _snap = (beat, delayMs = 140) => {
+        if (!_autoOn || _beatsDone.has(beat)) return;
+        _beatsDone.add(beat);
+        setTimeout(() => {
+          requestAnimationFrame(() => requestAnimationFrame(() => _netCapture(`auto-${beat}`)));
+        }, delayMs);
+      };
+      const _resetCycle = () => { _beatsDone.clear(); };
+
+      window.__netAuto = (on) => {
+        _autoOn = (on === undefined) ? !_autoOn : !!on;
+        console.info(`[netShot] auto-capture ${_autoOn ? 'ON' : 'OFF'}`);
+        return _autoOn;
+      };
+
+      if (eventBus && Events) {
+        // Mother (LassoSystem) — current production launch path
+        if (Events.LASSO_FIRED)   eventBus.on(Events.LASSO_FIRED,   () => { _resetCycle(); _snap('fired', 550); });
+        if (Events.LASSO_CONTACT) eventBus.on(Events.LASSO_CONTACT, () => _snap('contact'));
+        if (Events.LASSO_CAPTURED)eventBus.on(Events.LASSO_CAPTURED,() => _snap('captured', 250));
+        if (Events.LASSO_STOWED)  eventBus.on(Events.LASSO_STOWED,  () => _snap('reel', 250));
+        // Daughter / unified (CaptureNet) ceremony beats
+        if (Events.NET_FIRED)       eventBus.on(Events.NET_FIRED,       () => { _resetCycle(); _snap('fired', 550); });
+        if (Events.NET_ENVELOP_PEAK)eventBus.on(Events.NET_ENVELOP_PEAK,() => _snap('envelop'));
+        if (Events.NET_BRAKE_FIRED) eventBus.on(Events.NET_BRAKE_FIRED, () => _snap('brake'));
+        if (Events.NET_CINCH_PROGRESS) eventBus.on(Events.NET_CINCH_PROGRESS, (p) => {
+          if (p && typeof p.fraction === 'number' && p.fraction >= 0.85) _snap('cinch');
+        });
+        if (Events.NET_CATCH_SUCCESS) eventBus.on(Events.NET_CATCH_SUCCESS, () => _snap('captured', 250));
+        if (Events.NET_REEL_STARTED)  eventBus.on(Events.NET_REEL_STARTED,  () => _snap('reel', 250));
+      }
+
+      console.info(`[netShot] ready. __netShot("name") to grab, __netPause(true) to freeze, __netAuto(true) for auto-capture (currently ${_autoOn ? 'ON' : 'OFF'}).`);
+    }
+  } catch (e) {
+    console.warn('[netShot] hook setup failed:', e);
+  }
+
   _bootMark('init() complete. First rAF scheduled');
   _scheduleNextFrame();
 }

@@ -1636,8 +1636,18 @@ export const Constants = {
   // legacy instant removeDebris + flat TIER3_BASE). When the flag is OFF the
   // legacy instant resolution is used and none of this runs.
   MOTHER_CARGO_CELLS: 3,              // hull cargo cells (held just forward of the nose)
-  MOTHER_CARGO_FWD_OFFSET_M: 9,       // metres forward (+prograde, near the launch muzzle) — catch reels back toward the nose, never through the hull
-  MOTHER_CARGO_CELL_SPREAD_M: 4,      // metres lateral spread (cross-track) between held catches
+  MOTHER_CARGO_FWD_OFFSET_M: 4,       // metres forward (+prograde) — catch reels right up to the nose/hull so it reads as "into the mother" (was 9 m → looked like it vanished short of the ship)
+  MOTHER_CARGO_CELL_SPREAD_M: 0,      // metres lateral spread — 0: every catch reels to the nose centerline (was 4 m → catches #2/#3 reeled off to the side of the mother)
+  // A captured M1 welcome FRAGMENT is physically tiny (~0.6 m → 0.000006 scene
+  // units), so at the gameplay camera distance it rendered sub-pixel: the catch
+  // was pinned + reeled to the nose correctly but was INVISIBLE inside the net
+  // and at the hull (owner: "debris seems to disappear ... should be visible in
+  // the net"). While a catch is HELD by the Mother net (reel → cargo/furnace),
+  // clamp its apparent render size up to this floor so it reads as a real catch.
+  // Scoped to lasso-held catches only (via debris._catchRenderMin) so the
+  // Daughter's small nets are unaffected. Stays well under the 7 m net mouth /
+  // ~1.75 m cinched mouth, so it reads as "in the net", never bursting out.
+  MOTHER_CATCH_MIN_RENDER_M: 1.5,     // metres — min apparent size of a net-held catch
 
 
   // --- Net-lock range SSOT (onboarding reward-first spine) ---
@@ -1676,18 +1686,18 @@ export const Constants = {
   NET_LAUNCH_COMPACT_FRAC: 0.3,         // mouth radius fraction at launch (leaves the canister compact, then opens)
   NET_CINCH_RADIUS_FRAC: 0.25,          // mouth radius fraction when fully cinched on the catch (drawstring close)
   // Coaxial tether (v2): dark outer sheath + bright inner core
-  NET_TETHER_SHEATH_RADIUS: 0.45,       // metres — outer sheath radius (thicker, dark)
-  NET_TETHER_CORE_RADIUS: 0.18,         // metres — inner core radius (thin, bright)
+  NET_TETHER_SHEATH_RADIUS: 0.4,        // metres — outer sheath radius (slimmed from 0.7 → gossamer cable, not a heavy column)
+  NET_TETHER_CORE_RADIUS: 0.18,         // metres — inner luminous core (slimmed from 0.35; also softens the bloom blob at the web apex)
   NET_TETHER_SAG: 2.0,                   // metres — catenary sag at tether midpoint
-  NET_TETHER_SEGMENTS: 20,              // segments along tether curve (more = smoother sag)
-  NET_TETHER_RADIAL_SEGMENTS: 6,        // radial segments for tube cross-section (smoother)
+  NET_TETHER_SEGMENTS: 24,              // segments along tether curve (more = smoother sag — was 20)
+  NET_TETHER_RADIAL_SEGMENTS: 10,       // radial segments for tube cross-section (smoother — was 6/8, looked faceted/jagged)
   NET_PULSE_HZ: 2.0,                    // pulse beads per second travelling along tether during reel-in
   NET_PULSE_RADIUS: 0.8,                // metres — pulse bead radius
   NET_SPARK_COUNT: 12,                   // radial spark lines on contact
   NET_SPARK_DURATION: 0.4,              // seconds — spark animation time
   NET_SPARK_LENGTH: 15,                  // metres — spark line length
   // Legacy tether radius alias for tests
-  NET_TETHER_RADIUS: 0.45,              // = sheath radius (backwards compat)
+  NET_TETHER_RADIUS: 0.4,              // = sheath radius (backwards compat)
 
   // Legacy aliases (backwards compat for any external refs)
   get BOLAS_SPIN_HZ() { return this.NET_SPIN_HZ; },
@@ -1713,12 +1723,33 @@ export const Constants = {
   // NET_WEIGHT_RADIUS (1.5 m) above are SUPERSEDED for the Mother mesh and remain
   // only for the BOLAS_* aliases + legacy tests.
   NET_WEB: {
-    MOTHER_DIAMETER:    5.0,    // m — Mother net mouth diameter (was 8 m; shrunk toward ship scale)
-    WEB_COLOR:          0x88aacc, // cool ivory/cyan Dyneema (matches daughter pre-contact COL_DISC)
-    WEB_OPACITY:        0.45,   // translucent — reveal the catch through the web (was Mother 0.8)
+    MOTHER_DIAMETER:    7.0,    // m — Mother net mouth diameter. Restored to the
+                                // owner-approved spike value (was briefly shrunk to
+                                // 5 m, which read tiny/cold at the real M1 fire
+                                // framing — see plan §B). 7 m fills the frame like
+                                // the approved close-up without dwarfing the ship.
+    WEB_COLOR:          0xeaf1ff, // bright warm-ivory Dyneema. Nudged brighter than
+                                // 0xcfeaff so the thin threads don't gray-out
+                                // against black at the in-game (distant) framing.
+    WEB_OPACITY:        0.8,    // translucent but luminous — at the real fire
+                                // distance the fine threads must not gray out
+                                // (was 0.6, read cold/faint in-game — §B luminance).
     EDGE_NODE_COUNT:    6,      // edge-node glints (was 4 boulders)
     EDGE_NODE_RADIUS_M: 0.10,   // m — tiny glints, not ballast (was 1.5 m; ~match daughter 0.08)
-    REEL_COLOR:         0x00ff44, // green tint once the catch is secured / reeling (daughter language)
+    REEL_COLOR:         0x66dd88, // gentler captured/secured green (was harsh 0x00ff44 arcade green)
+    // The web is a fat-line orb-weaver spoke+ring mesh (LineSegments2 +
+    // LineMaterial from three/addons/lines): RADIAL_SPOKES radial threads
+    // (apex→rim) + RING_COUNT concentric "spiral thread" rings. Fat-lines carry
+    // real screen-space width + built-in AA, so an ultralight (physically sub-mm
+    // Dyneema) thread renders as a soft, legible ivory web — never the rejected
+    // cold 1-px aliased line. Browser-tunable.
+    // Counts restored to the owner-approved spike (22×6, ~20×6): finer than this
+    // reads as gray fuzz at the distant in-game framing; coarser cells read
+    // clearly as a *net*. Width bumped so threads stay legible when small.
+    RADIAL_SPOKES:      20,     // radial threads — clear web cells at distance (16–24)
+    RING_COUNT:         6,      // concentric rings — clear mesh (4–6)
+    LINE_WIDTH_PX:      2.4,    // fat-line thread width px — legible ivory strand at the in-game distance
+    NODE_ADDITIVE:      true,   // edge-node glints use additive sparkle (threads stay flat/translucent)
   },
 
   // =========================================================================

@@ -187,7 +187,7 @@ describe('CaptureNetVisual — state-driven visibility', () => {
     });
   });
 
-  it('CAPTURED: disc green (0x00ff44)', () => {
+  it('CAPTURED: disc green (0x66dd88)', () => {
     withFlag(true, () => {
       const net = mockNet({ state: 'CAPTURED', catchResult: 'success' });
       const cns = mockCNS({ 0: net });
@@ -197,7 +197,7 @@ describe('CaptureNetVisual — state-driven visibility', () => {
       vis.update(0.016);
 
       const entry = vis._activeVisuals.get('arm_0');
-      assert.equal(entry.discMesh.material.color.getHex(), 0x00ff44, 'disc is green');
+      assert.equal(entry.discMesh.material.color.getHex(), 0x66dd88, 'disc is gentle green');
       vis.dispose();
     });
   });
@@ -672,7 +672,7 @@ describe('CaptureNetVisual — ceremony state-driven visibility (flag ON)', () =
     });
   });
 
-  it('CAPTURED: cone turns green (0x00ff44)', () => {
+  it('CAPTURED: cone turns green (0x66dd88)', () => {
     withCeremony(() => {
       const net = mockNet({ state: 'CAPTURED', catchResult: 'success' });
       const cns = mockCNS({ 0: net });
@@ -682,7 +682,7 @@ describe('CaptureNetVisual — ceremony state-driven visibility (flag ON)', () =
       vis.update(0.016);
 
       const entry = vis._activeVisuals.get('arm_0');
-      assert.equal(entry.coneMesh.material.color.getHex(), 0x00ff44, 'cone is green');
+      assert.equal(entry.coneMesh.material.color.getHex(), 0x66dd88, 'cone is gentle green');
       vis.dispose();
     });
   });

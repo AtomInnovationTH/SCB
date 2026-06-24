@@ -23,29 +23,92 @@
  * so the daughter's envelop/cinch math is untouched. The Mother orients its
  * group via its own quaternion path (it just feeds the kit a group).
  *
- * Stage A reproduces the daughter's cone + rim + drawstring + apex 1:1 (extracted
- * from `_createCeremonyVisual`); Stage B (browser-tuned) can upgrade the cone
- * wireframe to a finer spoke+ring web behind the same handle/API.
+ * Stage B reproduces a fine orb-weaver **spoke + ring web** (radial spokes from
+ * apex to rim + concentric "spiral thread" rings), a single `THREE.LineSegments`
+ * with optional additive shimmer — the owner's "beautiful web". The cone
+ * envelope (apex at origin, mouth ring at local −Z, `mouthRadius` / `coneHeight`)
+ * is identical to Stage A, so every consumer animation (scale, mouth-fraction,
+ * rim-node placement, colour-by-phase, cinch) and all geometry invariants are
+ * preserved — only the line topology + material changed. The handle still
+ * exposes the web as `coneMesh` (alias `webLines`) for byte-compatible consumers.
  *
  * @module ui/NetMeshKit
  */
 
 import * as THREE from 'three';
+import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
+import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
 import { Constants } from '../core/Constants.js';
 
 /** 1 metre in scene units (1 scene unit = 100 km). Matches both consumers. */
 const M = 1e-5;
 
 const NET_CER = Constants.CAPTURE_NET.NET_CEREMONY;
+const NET_WEB = Constants.NET_WEB;
+
+// ── Fat-line resolution sync (plan §3 / §11 Phase B) ────────────────────────
+// LineMaterial computes screen-space width from `resolution` (the DRAWING-BUFFER
+// size in px, i.e. CSS px × pixelRatio). Every live web LineMaterial is
+// registered here; SceneManager drives `NetMeshKit.setResolution(w, h)` with the
+// renderer's real drawing-buffer size on init + resize (so Retina threads aren't
+// rendered at half width). The window value below is only a pre-SceneManager
+// fallback. Pure-local-space rule (§1.6) preserved: this only touches material
+// resolution, never any transform / world / frame state. Guarded for Node.
+const _liveLineMats = new Set();
+const _resolution = { w: 1, h: 1 };
+if (typeof window !== 'undefined') {
+  _resolution.w = window.innerWidth || 1;
+  _resolution.h = window.innerHeight || 1;
+}
 
 // ── Default look (shared web vocabulary) ────────────────────────────────────
-// COOL pre-contact tint, matching the daughter's COL_DISC so the unify is 1:1.
-const DEFAULT_WEB_COLOR     = 0x88aacc;
-const DEFAULT_WEB_OPACITY   = 0.55;
+// Ivory Dyneema thread — fat-line, soft + legible (replaces the rejected cold
+// 1-px cyan LineSegments).
+const DEFAULT_WEB_COLOR     = (NET_WEB && NET_WEB.WEB_COLOR) || 0xcfeaff;
+const DEFAULT_WEB_OPACITY   = (NET_WEB && NET_WEB.WEB_OPACITY) || 0.6;
 const DEFAULT_DRAWSTRING_COLOR = 0xffaa44;
-const DEFAULT_WEIGHT_COLOR  = 0x888888;
+const DEFAULT_WEIGHT_COLOR  = 0xeef4ff;   // ivory tungsten edge-node glint
 const DEFAULT_APEX_COLOR    = 0x665544;
 const DEFAULT_APEX_RADIUS_M = 0.05;
+// Fat-line web fineness (orb-weaver spoke + ring). Shared source of truth in
+// Constants.NET_WEB so Mother + Daughter render the same web.
+const DEFAULT_RADIAL_SPOKES = (NET_WEB && NET_WEB.RADIAL_SPOKES) || 22;
+const DEFAULT_RING_COUNT    = (NET_WEB && NET_WEB.RING_COUNT) || 6;
+const DEFAULT_LINE_WIDTH_PX = (NET_WEB && NET_WEB.LINE_WIDTH_PX) || 2.0;
+const DEFAULT_NODE_ADDITIVE = (NET_WEB && NET_WEB.NODE_ADDITIVE) !== false;
+
+/**
+ * Build the orb-weaver spoke+ring web vertex positions for a single
+ * THREE.LineSegments. Apex at local origin; mouth ring at z = −coneHeight,
+ * radius = mouthRadius. The cone is linear (at axial fraction t: z = −coneHeight·t,
+ * radius = mouthRadius·t), so radial spokes are straight apex→rim threads and
+ * each ring is a polygon at fraction t. No per-frame use — construction only.
+ * @returns {Float32Array}
+ */
+function buildWebPositions(mouthRadius, coneHeight, radialSpokes, rings) {
+  const positions = [];
+  // Radial spokes: apex (0,0,0) → rim point on the mouth plane.
+  for (let s = 0; s < radialSpokes; s++) {
+    const a = (2 * Math.PI * s) / radialSpokes;
+    positions.push(0, 0, 0, Math.cos(a) * mouthRadius, Math.sin(a) * mouthRadius, -coneHeight);
+  }
+  // Concentric "spiral thread" rings at axial fractions t = 1/rings … 1.
+  for (let k = 1; k <= rings; k++) {
+    const t = k / rings;
+    const z = -coneHeight * t;
+    const r = mouthRadius * t;
+    for (let s = 0; s < radialSpokes; s++) {
+      const a0 = (2 * Math.PI * s) / radialSpokes;
+      const a1 = (2 * Math.PI * (s + 1)) / radialSpokes;
+      positions.push(
+        Math.cos(a0) * r, Math.sin(a0) * r, z,
+        Math.cos(a1) * r, Math.sin(a1) * r, z,
+      );
+    }
+  }
+  return new Float32Array(positions);
+}
 
 export const NetMeshKit = {
   /**
@@ -58,8 +121,10 @@ export const NetMeshKit = {
    * @param {number} [opts.coneOpenRadiusFrac] mouth radius / (D/2)
    * @param {number} [opts.coneLengthFrac]     apex→mouth axial length / (D/2)
    * @param {number} [opts.closedRadiusFrac]   cinch radius / open radius
-   * @param {number} [opts.coneRadialSegments=16]
-   * @param {number} [opts.coneHeightSegments=4]
+   * @param {number} [opts.radialSpokes]       fat-line web fineness (radial threads)
+   * @param {number} [opts.rings]              concentric ring count
+   * @param {number} [opts.lineWidth]          fat-line thread width (screen px)
+   * @param {boolean} [opts.nodeAdditive]      additive-blend glint for the edge nodes
    * @param {number} [opts.color]              base web colour (hex)
    * @param {number} [opts.opacity]            base web opacity (cone + nodes + apex)
    * @param {number} [opts.drawstringOpacity=0.8] drawstring line opacity
@@ -77,8 +142,10 @@ export const NetMeshKit = {
       coneOpenRadiusFrac = NET_CER.CONE_OPEN_RADIUS_FRAC,
       coneLengthFrac = NET_CER.CONE_LENGTH_FRAC,
       closedRadiusFrac = NET_CER.DRAWSTRING_RADIUS_FRAC_CLOSED,
-      coneRadialSegments = 16,
-      coneHeightSegments = 4,
+      radialSpokes = DEFAULT_RADIAL_SPOKES,
+      rings = DEFAULT_RING_COUNT,
+      lineWidth = DEFAULT_LINE_WIDTH_PX,
+      nodeAdditive = DEFAULT_NODE_ADDITIVE,
       color = DEFAULT_WEB_COLOR,
       opacity = DEFAULT_WEB_OPACITY,
       drawstringOpacity = 0.8,
@@ -92,30 +159,41 @@ export const NetMeshKit = {
     const group = new THREE.Group();
     group.name = 'NetMeshKit';
 
-    // ── Cone "web" (apex at origin, mouth at local −Z) ──
+    // ── Spoke + ring "web" (apex at origin, mouth ring at local −Z) ──
+    // Fat-line orb-weaver web: radial spokes + concentric rings rendered as a
+    // LineSegments2 + LineMaterial (three/addons/lines), so the threads carry
+    // real screen-space width + built-in AA — the fix for the rejected cold
+    // 1-px aliased GL line. The envelope (mouthRadius / coneHeight) is identical
+    // to the old wireframe, so every consumer animation + invariant holds.
+    // Threads are flat-translucent (NormalBlending, no depth write) so the web
+    // reveals the catch through it without occluding or harsh additive glint.
     const mouthRadius = M * (D / 2) * coneOpenRadiusFrac;
     const coneHeight  = mouthRadius * 2 * coneLengthFrac;
-    // ConeGeometry: base at y=−h/2, apex at y=+h/2; open-ended wireframe.
-    const coneGeo = new THREE.ConeGeometry(
-      mouthRadius, coneHeight, coneRadialSegments, coneHeightSegments, true);
-    // rotateX(PI/2): (x,y,z)→(x,−z,y) → apex at z=+h/2, base at z=−h/2.
-    coneGeo.rotateX(Math.PI / 2);
-    // Translate so apex at origin (z=0) and mouth at z=−coneHeight.
-    coneGeo.translate(0, 0, -coneHeight / 2);
-    const coneMat = new THREE.MeshStandardMaterial({
+    const webPositions = buildWebPositions(mouthRadius, coneHeight, radialSpokes, rings);
+    const webGeo = new LineSegmentsGeometry();
+    webGeo.setPositions(webPositions);
+    const coneMat = new LineMaterial({
       color,
       transparent: true,
       opacity,
-      side: THREE.DoubleSide,
-      wireframe: true,
+      linewidth: lineWidth,    // screen-space pixels (worldUnits:false)
+      worldUnits: false,
+      dashed: false,
+      alphaToCoverage: false,
+      blending: THREE.NormalBlending,
+      depthWrite: false,
     });
-    const coneMesh = new THREE.Mesh(coneGeo, coneMat);
+    coneMat.resolution.set(_resolution.w, _resolution.h);
+    _liveLineMats.add(coneMat);
+    const coneMesh = new LineSegments2(webGeo, coneMat);
     coneMesh.name = 'cone';
     coneMesh.visible = childrenVisible;
+    coneMesh.frustumCulled = false;   // scaled per-frame; avoid stale-bounds cull
     group.add(coneMesh);
 
-    // ── Rim weight spheres (edge-node glints) ──
-    // Weights sit at the mouth plane (z = −coneHeight) at the open radius.
+    // ── Rim weight spheres (tungsten edge-node glints) ──
+    // Weights sit at the mouth plane (z = −coneHeight) at the open radius. Ivory
+    // emissive glints (canon §2.6 edge nodes) — tiny, lead the unfurl + cinch.
     const mouthZ = -coneHeight;
     const weightGeo = (weightCount > 0)
       ? new THREE.SphereGeometry(M * weightRadiusM, 8, 8)
@@ -127,11 +205,14 @@ export const NetMeshKit = {
       const angle = (2 * Math.PI * i) / weightCount;
       const mat = new THREE.MeshStandardMaterial({
         color: DEFAULT_WEIGHT_COLOR,
-        metalness: 0.9,
-        roughness: 0.3,
-        emissive: new THREE.Color(0x000000),
+        metalness: 0.4,
+        roughness: 0.25,
+        emissive: new THREE.Color(DEFAULT_WEIGHT_COLOR),
+        emissiveIntensity: 0.6,
         transparent: weightTransparent,
         opacity,
+        blending: nodeAdditive ? THREE.AdditiveBlending : THREE.NormalBlending,
+        depthWrite: !nodeAdditive,
       });
       const w = new THREE.Mesh(weightGeo, mat);
       w.name = `weight_${i}`;
@@ -176,6 +257,9 @@ export const NetMeshKit = {
     const handle = {
       group,
       coneMesh,
+      webLines: coneMesh,   // alias — the cone IS the fat-line spoke+ring web
+      webPositions,         // raw Float32Array of web segment endpoints (apex→rim + rings)
+      lineMaterial: coneMat, // the web's LineMaterial (resolution-synced)
       rimWeights,
       rimWeightMats,
       weightGeo,
@@ -306,6 +390,34 @@ export const NetMeshKit = {
   },
 
   /**
+   * Explicitly set the fat-line resolution (px) for all live web materials.
+   * Optional — the kit already syncs on window resize. Consumers with a custom
+   * render target (or tests) may call this directly. Pure-local-space safe.
+   * @param {number} w viewport width px
+   * @param {number} h viewport height px
+   */
+  setResolution(w, hgt) {
+    if (w > 0 && hgt > 0) {
+      _resolution.w = w; _resolution.h = hgt;
+      for (const m of _liveLineMats) m.resolution.set(w, hgt);
+    }
+  },
+
+  /**
+   * Register an external fat-line LineMaterial (e.g. a tether) so it shares the
+   * web's resolution sync. Seeds it with the current resolution immediately.
+   * @param {import('three/addons/lines/LineMaterial.js').LineMaterial} mat
+   */
+  registerLineMaterial(mat) {
+    if (mat) { mat.resolution.set(_resolution.w, _resolution.h); _liveLineMats.add(mat); }
+  },
+
+  /** Stop syncing a previously-registered LineMaterial (call on dispose). */
+  unregisterLineMaterial(mat) {
+    if (mat) _liveLineMats.delete(mat);
+  },
+
+  /**
    * Free all geometry + materials owned by the handle. The caller owns removing
    * `handle.group` from the scene.
    * @param {object} h handle
@@ -315,6 +427,7 @@ export const NetMeshKit = {
     if (h.coneMesh) {
       h.coneMesh.geometry.dispose();
       h.coneMesh.material.dispose();
+      _liveLineMats.delete(h.coneMesh.material);
     }
     if (h.weightGeo) h.weightGeo.dispose();
     for (const mat of h.rimWeightMats) mat.dispose();

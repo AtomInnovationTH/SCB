@@ -77,6 +77,37 @@ describe('NetMeshKit — build() structure', () => {
     NetMeshKit.dispose(h);
   });
 
+  it('builds a spoke+ring fat-line web with the expected vertex count', () => {
+    const radialSpokes = 16;
+    const rings = 4;
+    const h = NetMeshKit.build({ diameter: 8, weightCount: 8, radialSpokes, rings });
+    assert.ok(h.coneMesh.isLineSegments2, 'web is a fat-line LineSegments2');
+    assert.equal(h.webLines, h.coneMesh, 'webLines aliases coneMesh');
+    assert.ok(h.lineMaterial && h.lineMaterial.isLineMaterial, 'exposes the web LineMaterial');
+    // spokes: radialSpokes × 2 verts; rings: rings × radialSpokes × 2 verts.
+    const expectedVerts = radialSpokes * 2 + rings * radialSpokes * 2;
+    // Fat-line geometry stores interleaved instance attributes, not a plain
+    // 'position' — the raw endpoint buffer is exposed on the handle instead.
+    assert.equal(h.webPositions.length / 3, expectedVerts, 'web vertex count = spokes + rings');
+    // First spoke starts at the apex (local origin).
+    assert.equal(h.webPositions[0], 0, 'spoke 0 apex x=0');
+    assert.equal(h.webPositions[1], 0, 'spoke 0 apex y=0');
+    assert.equal(h.webPositions[2], 0, 'spoke 0 apex z=0');
+    NetMeshKit.dispose(h);
+  });
+
+  it('web threads stay flat (NormalBlending); nodeAdditive toggles edge-node glint', () => {
+    // The web is always flat-translucent (additive made the threads read cold).
+    const h = NetMeshKit.build({ diameter: 8, weightCount: 8, nodeAdditive: true });
+    assert.equal(h.coneMesh.material.blending, THREE.NormalBlending, 'web threads NormalBlending');
+    assert.equal(h.coneMesh.material.depthWrite, false, 'web does not write depth');
+    assert.equal(h.rimWeightMats[0].blending, THREE.AdditiveBlending, 'node glint additive on');
+    NetMeshKit.dispose(h);
+    const hNorm = NetMeshKit.build({ diameter: 8, weightCount: 8, nodeAdditive: false });
+    assert.equal(hNorm.rimWeightMats[0].blending, THREE.NormalBlending, 'node glint additive off');
+    NetMeshKit.dispose(hNorm);
+  });
+
   it('supports weightCount = 0 (pure-thread web, no nodes)', () => {
     const h = NetMeshKit.build({ diameter: 8, weightCount: 0 });
     assert.equal(h.rimWeights.length, 0, 'no rim weights');

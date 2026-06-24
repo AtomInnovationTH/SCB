@@ -13,6 +13,9 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { orbitToSceneCartesian } from '../entities/OrbitalMechanics.js';
 import { NetMeshKit } from '../ui/NetMeshKit.js';
+import { Line2 } from 'three/addons/lines/Line2.js';
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
+import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 
 /** 1 meter in scene units (1 unit = 100 km = 100000 m) */
 const M = 0.00001;
@@ -39,6 +42,9 @@ const _scratchMuzzle = new THREE.Vector3();
 const _scratchRadial = new THREE.Vector3();
 const _scratchCross = new THREE.Vector3();
 const _scratchCargoOffset = new THREE.Vector3();
+/** Tether — scratch for the nadir (planet-down) sag direction + flight anchor. */
+const _scratchNadir = new THREE.Vector3();
+const _scratchTetherAnchor = new THREE.Vector3();
 
 export class LassoSystem {
     /**
@@ -348,6 +354,47 @@ export class LassoSystem {
     }
 
     /**
+     * Tether anchor for the OUTBOUND (flight) phase. Unlike the muzzle (which
+     * sits LASSO_MUZZLE_OFFSET_M along the *velocity* vector), this anchor sits a
+     * short way from the hull along the direction to the *net* — i.e. it is
+     * always collinear with the tether. Anchoring along velocity put the start
+     * point off the tether's line whenever the cast direction ≠ prograde (the
+     * common case — the net flies at the target, not along velocity), which bowed
+     * the strand into an arch that looped over the mother and read as a detached
+     * tether (owner: "tether seems disconnect from mother"). Pointing the anchor
+     * at the net keeps the strand straight from the nose to the net and clearly
+     * attached. Offset is clamped small so it hugs the hull at the in-game framing.
+     * @param {THREE.Vector3} playerPos hull centre (world)
+     * @param {THREE.Vector3} netPos    projectile/net position (world)
+     * @param {THREE.Vector3} out       scratch target (returned)
+     * @returns {THREE.Vector3} world tether anchor
+     * @private
+     */
+    _computeTetherAnchor(playerPos, netPos, out) {
+        // out = (net − player) delta. NOTE: keep all math on `out` itself — do
+        // NOT alias a separate `dir` handle to it; an earlier version did
+        // `const dir = out.copy(...)` then `out.copy(playerPos).addScaledVector(dir,…)`,
+        // which (since dir===out) added playerPos·off and parked the anchor ~100 m
+        // radially outward — the tether then stretched to a wrong point in flight
+        // and snapped back to the hull at reel ("tether jumps to wrong position").
+        out.copy(netPos).sub(playerPos);
+        const dist = out.length();
+        if (dist < 1e-9) return out.copy(playerPos);
+        // Anchor at the NOSE TIP, not the 8 m spawn muzzle. LASSO_MUZZLE_OFFSET_M
+        // (where the projectile spawns + the muzzle flash sits) is ~4 ship-lengths
+        // ahead of the hull; anchoring the *tether* there left a large empty gap
+        // between the mother and the strand at the in-game framing, reading as a
+        // detached tether. The hull (OCTOPUS_V5 core ≈ 2 m) reads as connected
+        // when the strand starts within ~1.5 m of centre, so clamp hard to the
+        // nose and shrink further for very short throws. Direction is toward the
+        // net (collinear with the tether) so the strand never arches off-axis.
+        const off = Math.min(1.5 * M, dist * 0.5);
+        // Scale the delta to length `off` (toward the net), then offset from the
+        // hull — single-buffer, no aliasing.
+        return out.multiplyScalar(off / dist).add(playerPos);
+    }
+
+    /**
      * Phase 1C: trigger a brief cosmetic recoil kick of the mother mesh opposite
      * the launch direction. This is VISUAL ONLY — no orbit change, no fuel, no
      * _rcsVelocity — so it cannot disturb the M1 station-keep / pin. The kick
@@ -468,38 +515,38 @@ export class LassoSystem {
         this._netGroup.visible = false;
         this.scene.add(this._netGroup);
 
-        // ── Sprint 2 v2: COAXIAL TETHER + energy pulse bead ─────────────────
-        // Dyneema look: ivory/cyan-white fibre, not arcade yellow.
-        // Sheath (dark, thick) provides silhouette; inner core (bright, thin)
-        // provides the luminous cable look; pulse bead travels on reel-in.
-        // Sprint 2 v2c: Use QuadraticBezierCurve3 (NOT CatmullRomCurve3 with 3
-        // points) — Catmull-Rom with only 3 control points EXTRAPOLATES past
-        // its endpoints, causing the tether to visibly extend beyond the
-        // mothership in the opposite direction of the net ("out the back" bug).
-        // Quadratic Bezier is mathematically guaranteed to pass through only
-        // its two endpoints, with the middle point acting as a pull (not anchor).
-        const initCurve = new THREE.QuadraticBezierCurve3(
-            new THREE.Vector3(0, 0, 0),
-            new THREE.Vector3(0, 0, M * 5),
-            new THREE.Vector3(0, 0, M * 10),
-        );
+        // ── Sprint 2 v2: tether (Dyneema ivory fibre, not arcade yellow) ────
+        // Rebuilt each frame from a QuadraticBezierCurve3 (NOT CatmullRom with 3
+        // points — that extrapolates past its endpoints, the "out the back of
+        // mother" bug). Quadratic Bezier passes through only its two endpoints.
 
-        // Outer sheath — dark, roughly fabric-like
-        const sheathGeo = new THREE.TubeGeometry(
-            initCurve,
-            Constants.NET_TETHER_SEGMENTS,
-            Constants.NET_TETHER_SHEATH_RADIUS * M,
-            Constants.NET_TETHER_RADIAL_SEGMENTS,
-            false
-        );
-        const sheathMat = new THREE.MeshStandardMaterial({
-            color: 0x3a4452,        // muted slate (fibre sheath)
-            metalness: 0.15,
-            roughness: 0.95,
+        // ── Gossamer fat-line tether (matches the NetMeshKit web primitive) ──
+        // A single Line2 / LineMaterial cable replaces the old coaxial
+        // sheath+core TubeGeometry. A thin tube faceted/Frenet-twisted into a
+        // jagged "staircase" when slimmed toward gossamer; a fat line carries a
+        // constant screen-space width + built-in AA, so it reads as a smooth,
+        // delicate ivory strand at any thinness. Shares the web's resolution sync
+        // (registered with NetMeshKit). Cheaper than the per-frame dual-tube
+        // rebuild it replaces. _tetherCore is retired (kept null; all its call
+        // sites are guarded).
+        const tetherGeo = new LineGeometry();
+        // Seed with the initial straight segment (rebuilt each frame from the
+        // live catenary in _rebuildTetherGeometry).
+        tetherGeo.setPositions([0, 0, 0, 0, 0, M * 10]);
+        const tetherMat = new LineMaterial({
+            color: 0xcfeaff,        // ivory Dyneema, matching the web
+            linewidth: 2.0,         // screen-space px — slim but AA-legible
             transparent: true,
-            opacity: 0,
+            opacity: 0,             // faded in on fire()
+            worldUnits: false,
+            dashed: false,
+            blending: THREE.NormalBlending,
+            depthWrite: false,
+            depthTest: true,
         });
-        this._tetherMesh = new THREE.Mesh(sheathGeo, sheathMat);
+        NetMeshKit.registerLineMaterial(tetherMat);
+        this._tetherMesh = new Line2(tetherGeo, tetherMat);
+        this._tetherMesh.frustumCulled = false;
         this._tetherMesh.visible = false;
         // §2-followup (round 4): the net tether bridges mother and a captured
         // target (separate scene objects). Tag it CONNECTOR so it lies on the
@@ -507,29 +554,8 @@ export class LassoSystem {
         this._tetherMesh.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_CONNECTOR;
         this.scene.add(this._tetherMesh);
 
-        const coreGeo = new THREE.TubeGeometry(
-            initCurve,
-            Constants.NET_TETHER_SEGMENTS,
-            Constants.NET_TETHER_CORE_RADIUS * M,
-            Constants.NET_TETHER_RADIAL_SEGMENTS,
-            false
-        );
-        const coreMat = new THREE.MeshBasicMaterial({
-            color: 0xddeeff,        // cool ivory
-            transparent: true,
-            opacity: 0,
-            blending: THREE.AdditiveBlending,
-            // §2-followup (round 4): additive geometry must NOT write depth —
-            // depthWrite:true made the (mostly transparent) core occlude things
-            // behind it with invisible pixels and z-fight the sheath around it.
-            depthWrite: false,
-            depthTest: true,
-        });
-        this._tetherCore = new THREE.Mesh(coreGeo, coreMat);
-        this._tetherCore.visible = false;
-        // Draw the additive glow after solid geometry and just above the sheath.
-        this._tetherCore.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;
-        this.scene.add(this._tetherCore);
+        // Coaxial bright core retired — the fat-line strand carries the look.
+        this._tetherCore = null;
 
         // Markers removed in v2e — they confirmed anchor was going to wrong place
 
@@ -656,12 +682,19 @@ export class LassoSystem {
         const mid = new THREE.Vector3()
             .addVectors(startPos, endPos)
             .multiplyScalar(0.5);
-        // Catenary sag: bias midpoint toward -Y. For a QuadraticBezierCurve3,
-        // the control point pulls the curve TOWARD it (but never reaches it).
-        // To achieve sag amount `s` at the apex, the control point must be at
-        // 2s below the midpoint (since the apex of a symmetric quadratic bezier
-        // sits at 50% of the way from line to control point).
-        mid.y -= sagMag * 2;
+        // Catenary sag toward NADIR (planet-down), NOT world −Y. The Earth sits
+        // at the scene origin, so nadir = −normalize(mid). Sagging along a fixed
+        // world axis pulled the control point off to one side of the tether at
+        // most orbital attitudes, bowing the strand into an "arch" that loops
+        // up and over the mother and reads as a detached tether. A nadir-aligned
+        // sag always hangs the strand gently downward toward the planet (and
+        // vanishes to taut when the tether is itself radial), so it never arches
+        // across the hull. For a QuadraticBezierCurve3 the apex sits halfway to
+        // the control point, so offset by 2× the desired sag.
+        const nadir = mid.lengthSq() > 0
+            ? _scratchNadir.copy(mid).normalize().multiplyScalar(-1)
+            : _scratchNadir.set(0, -1, 0);
+        mid.addScaledVector(nadir, sagMag * 2);
 
         // Sprint 2 v2c: QuadraticBezierCurve3 — guaranteed no extrapolation
         // past endpoints. CatmullRomCurve3 with 3 points OVERSHOOTS past
@@ -673,29 +706,31 @@ export class LassoSystem {
         );
         this._tetherCurve = curve;
 
-        // Sheath (outer, thick, dark)
-        const sheathGeo = new THREE.TubeGeometry(
-            curve,
-            Constants.NET_TETHER_SEGMENTS,
-            Constants.NET_TETHER_SHEATH_RADIUS * M,
-            Constants.NET_TETHER_RADIAL_SEGMENTS,
-            false
-        );
-        this._tetherMesh.geometry.dispose();
-        this._tetherMesh.geometry = sheathGeo;
-
-        // Core (inner, thin, bright) — coaxial
-        if (this._tetherCore) {
-            const coreGeo = new THREE.TubeGeometry(
-                curve,
-                Constants.NET_TETHER_SEGMENTS,
-                Constants.NET_TETHER_CORE_RADIUS * M,
-                Constants.NET_TETHER_RADIAL_SEGMENTS,
-                false
-            );
-            this._tetherCore.geometry.dispose();
-            this._tetherCore.geometry = coreGeo;
+        // Sample the catenary into the fat-line strand. getPoints(N) yields
+        // NET_TETHER_SEGMENTS+1 points; flatten to [x,y,z,…] for LineGeometry.
+        const pts = curve.getPoints(Constants.NET_TETHER_SEGMENTS);
+        const flat = this._tetherFlat && this._tetherFlat.length === pts.length * 3
+            ? this._tetherFlat
+            : (this._tetherFlat = new Float32Array(pts.length * 3));
+        // ── DEFECT-1 FIX: anchor-relative vertices (float32 precision) ──────
+        // The ship orbits at ~64–84 scene units from the world origin
+        // (EARTH_RADIUS 63.71 + altitude). At magnitude ~64 the float32 grid
+        // spacing is 2^(6-23) ≈ 7.6e-6 units ≈ 0.76 m, while the tether's spine
+        // points sit ~1 m apart — so absolute-world vertices snap to that grid
+        // and the strand renders as a regular "lightning-bolt" sawtooth (the web
+        // escapes this because it lives in a local Group near its own origin).
+        // Fix: park the line object AT the start anchor and store every vertex
+        // RELATIVE to that anchor. The subtraction happens in float64 (JS
+        // numbers) and the small offsets (~0.0003 units) keep full float32
+        // precision; the single uniform translation in the object matrix shifts
+        // the whole strand together (no per-vertex wobble). Primitive-agnostic.
+        this._tetherMesh.position.copy(startPos);
+        for (let i = 0; i < pts.length; i++) {
+            flat[i * 3] = pts[i].x - startPos.x;
+            flat[i * 3 + 1] = pts[i].y - startPos.y;
+            flat[i * 3 + 2] = pts[i].z - startPos.z;
         }
+        this._tetherMesh.geometry.setPositions(flat);
     }
 
     /**
@@ -1314,6 +1349,7 @@ export class LassoSystem {
                 if (!this.target._armPinPos) this.target._armPinPos = new THREE.Vector3();
                 this.target._armPinPos.copy(this.projectilePos);
                 this.target._armPinned = true;
+                this.target._catchRenderMin = Constants.MOTHER_CATCH_MIN_RENDER_M * M;
             }
         } else {
             // Flight phase: homing projectile tracks target in local frame
@@ -1364,6 +1400,7 @@ export class LassoSystem {
                     if (!this.target._armPinPos) this.target._armPinPos = new THREE.Vector3();
                     this.target._armPinPos.copy(this.target._scenePosition || this._targetScenePos || this.projectilePos);
                     this.target._armPinned = true;
+                    this.target._catchRenderMin = Constants.MOTHER_CATCH_MIN_RENDER_M * M;
                 }
 
                 // Contact flash removed per user feedback ("NOT an arcade game")
@@ -1458,7 +1495,7 @@ export class LassoSystem {
             }
             const tetherStart = this._reelingIn
                 ? playerPos
-                : this._computeMuzzleWorld(playerPos, playerVelDir, _scratchMuzzle);
+                : this._computeTetherAnchor(playerPos, this.projectilePos, _scratchTetherAnchor);
             this._rebuildTetherGeometry(tetherStart, this.projectilePos);
             // Keep the muzzle puff pinned to the (moving) nose while it fades.
             if (this._muzzleFlash && this._muzzleFlash.visible && !this._reelingIn) {
@@ -1507,6 +1544,7 @@ export class LassoSystem {
             this._cargoCellWorld(playerPos, playerVelDir, cellIndex, _scratchMuzzle);
             target._armPinPos.copy(_scratchMuzzle);
             target._armPinned = true;
+            target._catchRenderMin = Constants.MOTHER_CATCH_MIN_RENDER_M * M;
         }
         this._reelPinTarget = null; // hand pin ownership to the cargo system
 
@@ -1566,6 +1604,7 @@ export class LassoSystem {
                 this._cargoCellWorld(playerPos, playerVelDir, item.cellIndex, _scratchMuzzle);
                 target._armPinPos.copy(_scratchMuzzle);
                 target._armPinned = true;
+                target._catchRenderMin = Constants.MOTHER_CATCH_MIN_RENDER_M * M;
             }
 
             item.furnaceTimer += dt;
@@ -1586,6 +1625,7 @@ export class LassoSystem {
             // the cell.
             if (item.furnaceTimer >= FT.FEED_S) {
                 if (target) target._armPinned = false;
+                if (target) target._catchRenderMin = 0;
                 eventBus.emit(Events.CATCH_PROCESSED, {
                     armId: 'lasso',
                     debrisId: target ? target.id : null,
@@ -1829,6 +1869,7 @@ export class LassoSystem {
         // so this is a harmless no-op cleanup).
         if (this._reelPinTarget) {
             this._reelPinTarget._armPinned = false;
+            this._reelPinTarget._catchRenderMin = 0;
             this._reelPinTarget = null;
         }
         this.active = false;
@@ -1921,6 +1962,7 @@ export class LassoSystem {
         // Sprint 2 v2: Dispose coaxial tether (sheath + core)
         if (this._tetherMesh) {
             this.scene.remove(this._tetherMesh);
+            NetMeshKit.unregisterLineMaterial(this._tetherMesh.material);
             this._tetherMesh.geometry.dispose();
             this._tetherMesh.material.dispose();
         }

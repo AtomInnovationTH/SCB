@@ -1837,6 +1837,17 @@ export class DebrisField {
       }
     }
 
+    // Net-held catch readability: a lasso-held catch sets `_catchRenderMin`
+    // (scene units). A physically tiny catch (e.g. a 0.6 m M1 fragment) renders
+    // sub-pixel and "disappears" inside the net / at the nose; clamp its apparent
+    // size up to that floor while held so it reads as a real catch. Opt-in per
+    // debris AND gated on _armPinned (actively held) so a stale override can
+    // never inflate a released piece, and the Daughter pipeline (which never sets
+    // it) is unaffected.
+    if (_armPinned && debris._catchRenderMin && scale < debris._catchRenderMin) {
+      scale = debris._catchRenderMin;
+    }
+
     // ST-6.2: Store LOD scale for flag overlay sync
     debris._lodScale = scale;
 
