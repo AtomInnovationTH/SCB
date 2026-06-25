@@ -22,7 +22,8 @@
 > Replaces the "Lasso" / "Bolas" terminology from prior iterations.
 > Implementation tracked as **ST-9.4** in [`IMPLEMENTATION_PLAN.md`](archive/IMPLEMENTATION_PLAN_2026-06.md).
 >
-> **Current code:** [`LassoSystem.js`](js/systems/LassoSystem.js:1) (1,094 LOC). Constants: [`NET_*`](js/core/Constants.js:854), [`LASSO_*`](js/core/Constants.js:838), [`BOLAS_*`](js/core/Constants.js:876) (legacy aliases).
+> **Current code:** [`LassoSystem.js`](js/systems/LassoSystem.js:1) (Mother net lifecycle + tether). Constants: [`NET_*`](js/core/Constants.js:854), [`NET_WEB`](js/core/Constants.js) (shared web look), [`LASSO_*`](js/core/Constants.js:838), [`BOLAS_*`](js/core/Constants.js:876) (legacy aliases).
+> **Shared rendering (2026-06-25):** Mother + Daughter nets render through one fat-line "web in space" factory, [`NetMeshKit.js`](js/ui/NetMeshKit.js); see §8 implementation note.
 > **Feature flags:** `FEATURE_FLAGS.NET_TERMINOLOGY` (renamed from `BOLA_RENAME`), `NET_PRIMARY_DOCTRINE`, `NET_CLING_MODEL`, `NET_TANGLE_MECHANICS`, `PER_PLATFORM_NETS`.
 >
 > Created: 2026-04-26. Status: Design complete, pending implementation.
@@ -1043,17 +1044,40 @@ Shared release helper: `_releaseCapturedDebris({ keepPinned })`. New event [`Eve
 
 ## §8 Visual / Audio Cues
 
+> **Implementation note (2026-06-25 — unified "web in space", committed `7e9a4cb`).**
+> Both the Mother net ([`LassoSystem`](js/systems/LassoSystem.js)) and the Daughter nets
+> ([`CaptureNetVisual`](js/ui/CaptureNetVisual.js)) now render through ONE shared factory,
+> [`NetMeshKit`](js/ui/NetMeshKit.js): a fine **orb-weaver spoke+ring web** drawn as a
+> `LineSegments2` / `LineMaterial` fat line (real screen-space width + built-in AA) in
+> **ivory Dyneema**, parameterised by [`Constants.NET_WEB`](js/core/Constants.js) (`MOTHER_DIAMETER`
+> 7 m, `RADIAL_SPOKES` 20, `RING_COUNT` 6, `LINE_WIDTH_PX` 2.4, `WEB_OPACITY` 0.8,
+> warm-ivory `WEB_COLOR`, green `REEL_COLOR` on capture). This replaced the rejected cold
+> 1-px octagon + metal-sphere + wireframe-cone look. Edge nodes are small additive ivory
+> glints; the drawstring shares the ivory hue. The cyan/coaxial-tube cues below are retired.
+>
+> **Tether** is a single ivory **fat line** (`Line2`/`LineMaterial`, sharing the web's
+> resolution sync), NOT the old coaxial sheath+core tube. It is built in an
+> **anchor-relative local frame** for float32 precision (no sawtooth), anchored at the
+> **nose tip toward the net** (collinear; no arch/"disconnect"), with a gentle **nadir**
+> catenary sag. See [`_rebuildTetherGeometry`](js/systems/LassoSystem.js) /
+> [`_computeTetherAnchor`](js/systems/LassoSystem.js).
+>
+> **Held catch readability:** a captured catch is reeled to ~4 m at the nose and held
+> through the furnace; a physically tiny fragment (≈0.6 m) is clamped up to
+> `MOTHER_CATCH_MIN_RENDER_M` (1.5 m) apparent size *while net-held* so it reads as a real
+> catch in the net and at the nose (opt-in `debris._catchRenderMin`, gated on `_armPinned`).
+
 | Phase | Visual | Audio | Duration |
 |-------|--------|-------|----------|
 | **Windup** | Crossbow rail glows cyan; net package visible in cradle | Mechanical tension creak (rising pitch, 0.15 s) | 0.15 s |
-| **Launch** | Muzzle flash (existing [`_muzzleFlash`](js/systems/LassoSystem.js:91)); net package streaks outward | Spring release "thwip" + tether unwind hiss | 0.2 s |
-| **Flight** | Spinning octagonal mesh visible; 4–8 rim weight dots orbit the perimeter; tether line trails behind (coaxial: dark sheath + bright core, existing [`_tetherMesh`](js/systems/LassoSystem.js:63) / [`_tetherCore`](js/systems/LassoSystem.js:66)) | Low hum from spin (fades with distance) | 2–8 s |
-| **Slam-wrap contact** | Radial spark burst (existing [`NET_SPARK_COUNT: 12`](js/core/Constants.js:869)); mesh deforms/wraps around target outline | Impact "clang" (metal-on-metal); Velcro "rip" sound (cling) | 0.4 s |
+| **Launch** | Muzzle flash (existing [`_muzzleFlash`](js/systems/LassoSystem.js)); net package streaks outward from the nose | Spring release "thwip" + tether unwind hiss | 0.2 s |
+| **Flight** | Spinning **ivory fat-line web** (spoke+ring, [`NetMeshKit`](js/ui/NetMeshKit.js)) opens from the canister; small ivory edge-node glints lead the rim; a single ivory fat-line tether trails to the nose ([`_tetherMesh`](js/systems/LassoSystem.js)) | Low hum from spin (fades with distance) | 2–8 s |
+| **Slam-wrap contact** | Radial spark burst (existing [`NET_SPARK_COUNT: 12`](js/core/Constants.js)); mesh deforms/wraps around target outline | Impact "clang" (metal-on-metal); Velcro "rip" sound (cling) | 0.4 s |
 | **Tether brake** (cinch mode) | Tether flashes white (tension); net centre decelerates visibly; rim weights streak forward past debris | Sharp "twang" (tether tension snap); rising tone (weights accelerating forward) | 0.5 s |
-| **Cinch closing** | **Drawstring line** (bright cyan) shrinks from full mesh diameter to 0.3× diameter. Edge-node positions (small bright dots) converge inward. Mesh goes **semi-transparent** behind the target (opacity shift). Combined with confirmation chime. No vertex-level mesh animation at Y0. | Mechanical "zip" sound (drawstring); click of solenoid latch | 2 s |
-| **Secure success** | Green pulse travels along tether → platform; net tightens visually on target (slam) or bag gently settles (cinch); "SECURED" text flash | Confirmation chime (2-tone ascending) | 1 s |
+| **Cinch closing** | **Drawstring line** (ivory, matching the web) shrinks the mouth toward the cinched radius. Edge-node ivory glints converge inward. The translucent web reveals the catch through it (opacity holds). No vertex-level mesh animation at Y0. | Mechanical "zip" sound (drawstring); click of solenoid latch | 2 s |
+| **Secure success** | Web tints **green** ([`REEL_COLOR`](js/core/Constants.js)); net settles on the catch; "SECURED" text flash | Confirmation chime (2-tone ascending) | 1 s |
 | **Secure fail** | Red pulse; net goes limp / translucent; "MISSED" text flash | Sad descending tone | 0.5 s |
-| **Reel-in** | Tether shortens; net (± debris) moves toward platform; pulse beads travel along tether (existing [`NET_PULSE_HZ: 2.0`](js/core/Constants.js:867)) | Reel motor whir (pitch rises as speed increases) | 1–5 s |
+| **Reel-in** | Tether shortens (anchored at the nose); the **green** net + the (size-clamped, visible) catch move to a forward cargo cell ~4 m off the nose | Reel motor whir (pitch rises as speed increases) | 1–5 s |
 | **Tangle** | Tether turns amber/red; affected object(s) highlighted amber | Warning klaxon (brief) + "Tangle detected" comms | Until resolved |
 
 **Cinch teaching animation — deferred to roadmap** (Q-3 decision). The tether-brake cinch is a novel concept that would benefit from a real-time PIP (picture-in-picture) inset in the bottom-right corner, showing the net from a side angle during cinch. This is a visual-polish sprint item, not Y0 scope. For Y0: the cinch simply works — drawstring line shrinks, confirmation chime plays. The Codex entry (§9) describes the concept in words. A stub event (`CINCH_FIRST_SUCCESS`) should be placed for [`TeachingSystem`](js/systems/TeachingSystem.js:1) to bind to later.

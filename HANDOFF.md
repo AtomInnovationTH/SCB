@@ -1,12 +1,38 @@
 # Space Cowboy — Next-Shift Handoff Brief
 
-*Updated: 2026-06-22 · **Mother-net (lasso) capture ceremony — FUNCTIONAL, VISUALLY REJECTED**. The M1 "N" mother lasso now throws/reels/cinches/stows end-to-end (Phases 1–4, committed `e5609e6`→`b593dbf`), but the net's LOOK was rejected by the owner: "big, clunky, obnoxious — cold shit. A net in space should be a simple, elegant, beautiful web." **NEXT SHIFT'S JOB: deep-analyze this shift's changes, keep the functional wins, and EITHER roll the mother net's VISUAL back to original OR unify mother+daughter on ONE shared net style (the stated ideal). See the LATEST SHIFT block.** Prior: 2026-06-12 daughter-lifecycle debug & polish*
-
-*Earlier: **Daughter-lifecycle debug & polish** (13-issue pass: re-dock, pin standoff, SK lead aim, woosh timing, hotkeys, hints, U-in-pilot, net-fit guidance, stuck-state audit, spin physics, flags, tether visual) — uncommitted, plan in [`.kilo/plans/daughter-lifecycle-debug-polish.md`](.kilo/plans/daughter-lifecycle-debug-polish.md). Prior: 2026-06-11 daughter-cycle polish (`80c70b5`, v.95); 2026-06-10 Phase F solo-flight graduation (`ce5409d`, ARC COMPLETE); Phase E elevator win (`a4863c4`); Phase D ch8–11 + Starlink boss (`95854de`); 2026-06-06 daughter capture-lifecycle polish (`b7d5fae`). Archived context at [`archive/HANDOFF_2026-05-30_four-fix.md`](archive/HANDOFF_2026-05-30_four-fix.md), [`archive/HANDOFF_2026-05-29_post-cinch-qa.md`](archive/HANDOFF_2026-05-29_post-cinch-qa.md), [`archive/SK_M1_POLISH_HANDOFF.md`](archive/SK_M1_POLISH_HANDOFF.md), [`archive/CEREMONY_REDESIGN.md`](archive/CEREMONY_REDESIGN.md).*
+*Updated: 2026-06-25 · **Capture-net VISUAL REWORK — unified web shipped, look + tether + held-catch defects fixed**. The mother + daughter now share ONE fat-line "web in space" ([`NetMeshKit`](js/ui/NetMeshKit.js)); the rejected "cold/clunky" look is replaced and the in-game tether + captured-debris defects from owner review are resolved. Committed `7e9a4cb` on `main` (after `71328a3`). Tests **858 / 3478 / 0**. See the LATEST SHIFT block. Prior: 2026-06-22 mother-net ceremony (functional, visual rejected)*
 
 ---
 
-> ## ⏩ LATEST SHIFT — 2026-06-22 (Mother-net capture ceremony — FUNCTIONAL, VISUAL REJECTED) — read this first
+> ## ⏩ LATEST SHIFT — 2026-06-25 (Capture-net visual rework — unified web + tether + held-catch, SHIPPED) — read this first
+>
+> ### TL;DR for next shift
+> The rejected mother-net look is fixed and the mother + daughter now render through **one shared fat-line web** ([`NetMeshKit`](js/ui/NetMeshKit.js) — orb-weaver spoke+ring `LineSegments2`/`LineMaterial`, ivory Dyneema). Four owner-reported defects were root-caused (with a headless Brave+CDP screenshot/probe loop) and fixed. Committed **`7e9a4cb`** on `main`. Tests **858 suites / 3478 / 0 fail**. Full per-defect detail (root cause → fix → verification) lives in [`.kilo/plans/unify-net-visual-web.md`](.kilo/plans/unify-net-visual-web.md) (session handover at the bottom).
+>
+> ### WHAT SHIPPED (all in `7e9a4cb`)
+> | Area | Fix | Files |
+> |---|---|---|
+> | **Web look** (§B) | Restored the owner-approved spike vocabulary at the real M1 framing: `MOTHER_DIAMETER` 5→7 m, `RADIAL_SPOKES` 28→20, `RING_COUNT` 8→6, `LINE_WIDTH_PX` 1.5→2.4, `WEB_OPACITY` 0.6→0.8, brighter warm-ivory `WEB_COLOR`. Reads bold/legible, not cold/gray. | [`Constants.NET_WEB`](js/core/Constants.js), [`NetMeshKit`](js/ui/NetMeshKit.js) |
+> | **Tether jagged** (§A) | Build the strand in an **anchor-relative local frame** (vertices relative to the start anchor) so float32 precision at ~64–84 scene-unit world coords no longer sawtooths it. | [`LassoSystem._rebuildTetherGeometry`](js/systems/LassoSystem.js) |
+> | **Tether "disconnected" / arched** | Anchor the flight tether at the **nose tip toward the net** (collinear), not the 8 m velocity-muzzle; sag toward **nadir**, not world −Y. | [`LassoSystem._computeTetherAnchor`](js/systems/LassoSystem.js) |
+> | **Tether "jumps to wrong position"** | Fixed a **Vector3 aliasing bug** in `_computeTetherAnchor` (`dir`===`out`) that parked the anchor ~100 m radially out and snapped it back at reel. | [`LassoSystem._computeTetherAnchor`](js/systems/LassoSystem.js) |
+> | **Captured debris "disappears"** | A 0.6 m welcome fragment rendered sub-pixel. While **net-held**, clamp its apparent render size up to `MOTHER_CATCH_MIN_RENDER_M` (1.5 m) via opt-in `debris._catchRenderMin`, gated on `_armPinned`. Scoped to lasso catches — **daughter pipeline untouched**. | [`Constants`](js/core/Constants.js), [`LassoSystem`](js/systems/LassoSystem.js), [`DebrisField._updateInstanceTransform`](js/entities/DebrisField.js) |
+>
+> ### KEY FACTS the probe loop established (don't re-investigate)
+> - The capture **pin pipeline is correct**: `LassoSystem.target` IS the live debris; it is `_armPinned` + LOD-exempt through reel, reels to ~4 m at the nose, and the cargo system holds the **live** instance through the furnace. Nothing is culled/removed early. The debris "vanishing" was purely apparent **size**.
+> - The faint **arc over the mother during a cast is NOT the tether** — it's a `PlayerSatellite` model ring (`CollarRing`/`MLI_Seam` torus) seen edge-on. Confirmed by hiding `_tetherMesh`.
+> - Float32 precision at large world coords is the real cause of thin-line sawtooth (lesson: build thin things in a local frame near origin).
+>
+> ### DEV LOOP (headless, no owner keypress needed)
+> `npx http-server -p 8080 -c-1 .` then drive a headless Brave (`--headless=new --use-angle=metal`) over the CDP (Node 22 built-in `WebSocket`): press **N** to fire the mother net, `Page.captureScreenshot` the open/reel/cargo beats, and monkey-patch `window.__lasso` methods for per-frame numeric traces. (Throwaway harness lived outside the repo; `?shotauto=1` is the owner's manual path.) Always verify **in-game at the real M1 framing**, not just a close-up spike.
+>
+> ### STILL OPEN (was blocked on this sign-off)
+> - **Phase B.5** (Daughter re-dock) and **Phase C** (Mother-as-Daughter unification, Stage 3) remain in [`.kilo/plans/unify-net-visual-web.md`](.kilo/plans/unify-net-visual-web.md). If the owner wants the net to fill the frame like the close-up spike, the remaining lever is a **closer Mother-fire ceremony cam** (the daughter has `NET_CINEMATIC`; the mother has none) — that's Phase C territory.
+> - `MOTHER_CATCH_MIN_RENDER_M` (1.5 m) is tunable if the held catch reads too large/dark at the nose.
+
+---
+
+> ## ⏪ PRIOR SHIFT — 2026-06-22 (Mother-net capture ceremony — FUNCTIONAL, VISUAL REJECTED — now resolved above)
 >
 > ### TL;DR for next shift
 > The M1 "N" **mother lasso** (`js/systems/LassoSystem.js`) now does the full capture ceremony — visible throw → reel-in → mouth-cinch → stow → furnace — and the **functional** behaviour is good. **The VISUAL was rejected by the owner**, verbatim: *"current mother lasso (net) looks like shit. Cold shit. Big, clunky, obnoxious. This is a space sim. A net in space can be simple, elegant, beautiful web."* Tests: **854 suites / 3458 / 0 fail**. Tree clean, HEAD `b593dbf`. Everything below is committed.
