@@ -257,6 +257,44 @@
       transition: width 0.3s ease, background-color 0.5s ease;
     }
 
+    /* === Left-column pane readability (Propulsion / Energy / Daughters) ===
+       These three panes carry the densest small-font telemetry, so they get a
+       crisper monospace stack with grayscale antialiasing (Courier New renders
+       muddy below ~12px), tighter line metrics, and higher-contrast titles. */
+    #hud-resources-panel,
+    #hud-power-panel,
+    #hud-arms-panel {
+      font-family: ui-monospace, 'SF Mono', 'JetBrains Mono', 'Roboto Mono',
+                   Menlo, Consolas, 'Courier New', monospace;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      letter-spacing: 0.015em;
+      text-rendering: optimizeLegibility;
+    }
+
+    /* Pane titles — bump size/weight/contrast so the section is scannable */
+    #hud-resources-panel .pane-title,
+    #hud-power-panel .pane-title,
+    #hud-arms-panel .pane-title {
+      font-size: 12px !important;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      opacity: 0.95 !important;
+      text-shadow: 0 0 8px rgba(0, 255, 136, 0.35);
+    }
+
+    /* Resource / power / fleet rows — larger, bolder labels and readouts */
+    #hud-resources-panel .hud-resource-row { font-size: 12px; }
+    #hud-power-panel .power-label,
+    #hud-power-panel .power-value {
+      font-size: 11px !important;
+      font-weight: 600;
+    }
+    #hud-arms-panel #hud-arms-status {
+      font-size: 11px !important;
+      line-height: 1.6 !important;
+    }
+
     /* === WARNING PULSE === */
     @keyframes warningPulse {
       0%, 100% { opacity: 1; }

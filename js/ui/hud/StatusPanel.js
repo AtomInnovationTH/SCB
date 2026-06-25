@@ -332,7 +332,7 @@ export class StatusPanel {
         </div>
       </div>
       <div class="panel-full-content">
-        <div style="font-size:11px;margin-bottom:4px;color:#00ff88;opacity:0.7;">PROPULSION</div>
+        <div class="pane-title" style="font-size:11px;margin-bottom:4px;color:#00ff88;opacity:0.7;">PROPULSION</div>
         <div id="autopilot-indicator" style="font-size:10px;margin-bottom:4px;padding:2px 6px;border-radius:2px;display:inline-block;background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.1);color:#555;">[Autopilot: OFF]</div>
         <div id="deltav-bar-track" style="position:relative;width:100%;height:16px;background:rgba(0,0,0,0.5);
              border:1px solid rgba(0,255,136,0.3);border-radius:2px;overflow:hidden;">
@@ -459,7 +459,7 @@ export class StatusPanel {
         </div>
       </div>
       <div class="panel-full-content">
-        <div style="font-size:11px;margin-bottom:4px;color:#00ff88;opacity:0.7;display:flex;justify-content:space-between;align-items:center;">
+        <div class="pane-title" style="font-size:11px;margin-bottom:4px;color:#00ff88;opacity:0.7;display:flex;justify-content:space-between;align-items:center;">
           <span>⚡ ENERGY</span>
           <span id="power-collapse-indicator" style="font-size:10px;opacity:0.4;transition:transform 0.2s;">▸</span>
         </div>
@@ -513,7 +513,7 @@ export class StatusPanel {
     this.panels.arms.dataset.hudGroup = 'arms-group';
     this.panels.arms.dataset.activateKey = 'D';
     this.panels.arms.innerHTML = `
-      <div style="font-size:11px;margin-bottom:4px;color:#00ff88;opacity:0.7;">🛰️ DAUGHTERS</div>
+      <div class="pane-title" style="font-size:11px;margin-bottom:4px;color:#00ff88;opacity:0.7;">🛰️ DAUGHTERS</div>
       <div class="fleet-collapsed-summary" id="fleet-collapsed-summary">
         <span style="opacity:0.5;font-size:10px;">Loading fleet…</span>
       </div>
