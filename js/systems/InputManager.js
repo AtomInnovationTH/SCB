@@ -704,7 +704,7 @@ export class InputManager {
             if (pilotArmR && typeof pilotArmR.recall === 'function'
                 && pilotArmR.state !== Constants.ARM_STATES.DOCKED
                 && pilotArmR.state !== Constants.ARM_STATES.EXPENDED) {
-              pilotArmR.recall({ motherInitiated: true });
+              pilotArmR.recall();
               d.audioSystem?.playClick();
             } else {
               d.audioSystem?.playClick();
@@ -865,7 +865,7 @@ export class InputManager {
             if (deployed.length > 0) {
               const arm = deployed[deployed.length - 1];
               eventBus.emit(Events.COMMS_MESSAGE, {
-                text: `Daughter ${arm.id} deployed. Tracking…`,
+                text: `Daughter ${arm.displayName} deployed. Tracking…`,
                 priority: 'info',
               });
               eventBus.emit(Events.LAUNCH_CEREMONY_START, { arm });
@@ -1553,9 +1553,19 @@ export class InputManager {
       // SELECT only (D1) — the docked arm glows/flashes (ARM_SELECT). Mother
       // stays in view; launch the selected daughter with D (pick-then-launch).
       d.armManager.selectArm(armIndex);
+    } else if (arm.state === Constants.ARM_STATES.ADRIFT) {
+      // Out of usable FEEP but STILL tethered and powered — select + pilot works
+      // (avionics are live). Thrusters are dry, so nudge the player to reel her in.
+      d.armManager.selectArm(armIndex);
+      this._enterArmPilotCamera(arm);
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        source: 'HOUSTON', channel: 'CMD',
+        text: `${arm.displayName} is adrift — thrusters dry, avionics live. Press R to reel her home.`,
+        priority: 'info',
+      });
     } else if (arm.state === Constants.ARM_STATES.EXPENDED) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `${arm.id} is expended. Not available`,
+        text: `${arm.displayName} is expended. Not available`,
         priority: 'warning',
       });
     } else {
@@ -1597,7 +1607,7 @@ export class InputManager {
     // so spell out the way home the moment they enter.
     if (!wasPiloting) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `Piloting ${arm.id}. Arrow keys fly it · press V to back out to Command view.`,
+        text: `Piloting ${arm.displayName}. Arrow keys fly it · press V to back out to Command view.`,
         source: 'HOUSTON',
         channel: 'CMD',
         priority: 'info',

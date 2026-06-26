@@ -784,7 +784,7 @@ class GameFlowManager {
               armId: returningArm.id, amount: fuelRestore,
             });
             eventBus.emit(Events.COMMS_MESSAGE, {
-              text: `\u26CF ${returningArm.id}: Indium recovered \u2014 FEEP fuel +${fuelRestore.toFixed(0)}%`,
+              text: `\u26CF ${returningArm.displayName}: Indium recovered \u2014 FEEP fuel +${fuelRestore.toFixed(0)}%`,
               priority: 'good',
             });
           }

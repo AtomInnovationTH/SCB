@@ -704,7 +704,8 @@ export class DockingReticle {
 
     // Arm ID + type
     ctx.fillStyle = C.primary;
-    ctx.fillText(`${this._arm.id.toUpperCase()} [${this._arm.type.toUpperCase()}]`, x, y);
+    const armName = this._arm.displayName || `${this._arm.id} [${this._arm.type}]`;
+    ctx.fillText(armName.toUpperCase(), x, y);
     y += lineH;
 
     // Fuel percentage
@@ -836,7 +837,7 @@ export class DockingReticle {
     const { left, top, boxW } = this._oddsPanelFrame(ctx, cx, cy, boxH);
 
     // Header — arm class.
-    const armLabel = arm.type === 'weaver' ? 'WEAVER' : arm.type === 'spinner' ? 'SPINNER' : 'DAUGHTER';
+    const armLabel = arm.type === 'weaver' ? 'LARGE' : arm.type === 'spinner' ? 'SMALL' : 'DAUGHTER';
     ctx.font = `bold 10px ${FONT}`;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
@@ -1083,7 +1084,7 @@ export class DockingReticle {
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = 'rgba(0, 255, 170, 0.4)';
-    const armLabel = arm.type === 'weaver' ? 'WEAVER' : arm.type === 'spinner' ? 'SPINNER' : 'DAUGHTER';
+    const armLabel = arm.type === 'weaver' ? 'LARGE' : arm.type === 'spinner' ? 'SMALL' : 'DAUGHTER';
     ctx.fillText(armLabel, left + 8, top + 5);
 
     // Dim labels only — no stale odds during flight.
@@ -1254,7 +1255,7 @@ export class DockingReticle {
         || arm.toolset || [];
       advisory = toolset.includes('GRIPPER')
         ? 'too wide \u2014 use GRIPPER [`]'
-        : 'too wide \u2014 recall [R], send the Weaver [D]';
+        : 'too wide \u2014 recall [R], send the Large [D]';
       advisoryCol = '#ff5555';
     } else if (fit.fit === 'ASPECT') {
       // Phase 2: currently broadside on a body that fits end-on. Tumble makes

@@ -295,7 +295,12 @@ export const Constants = {
     SCANNING: 'SCANNING',          // V5 — pulse scan distributed sensor array
     TANGLED: 'TANGLED',            // V5 — tether tangle state requiring resolution
     STATION_KEEP: 'STATION_KEEP',  // V8 — hold position relative to debris (orbital-crane)
-    EXPENDED: 'EXPENDED',
+    ADRIFT: 'ADRIFT',              // Out of usable FEEP but STILL TETHERED & powered — recoverable.
+                                   //   Thrusters offline (no working propellant); avionics/beacon live,
+                                   //   so the mother can still reel her home, the player can still
+                                   //   select/pilot (1-4), and she can be disconnected. NOT lost.
+    EXPENDED: 'EXPENDED',          // Genuinely lost — tether snapped, detached & out of range/fuel,
+                                   //   or deorbit burn complete. Terminal; no recovery.
     MAGNETIC_GRAPPLE: 'MAGNETIC_GRAPPLE',  // P2 — EPM contact + 50 N hold + reel (DAUGHTER_MULTITOOL)
     GRIPPER_GRAPPLE:  'GRIPPER_GRAPPLE',   // P3 — 3-jaw chuck on protruding fixture (reserved)
     PAD_CONTACT:      'PAD_CONTACT',       // P4 — multi-modal pad contact attempt (reserved)
@@ -787,6 +792,14 @@ export const Constants = {
     THRUSTER_INTERLOCK:        false,  // ST-9.12 — plume geometry check
     SEMI_AUTO_AIM:             false,  // ST-9.3  — Mother auto-rotation aim
     LOCKABLE_HINGE:            false,  // ST-9.3  — ROTATE ↔ LOCKED hinge
+
+    // Manual-flight navigation aids: prograde/retrograde velocity markers +
+    // closure-rate/ETA readouts on the target reticle. OFF by default — the
+    // mother flies on autopilot and is nudged with the arrow keys, so KSP-style
+    // burn-vector tooling is just orbital flavor in the core loop. Reserved for
+    // advanced missions where the autopilot is degraded/damaged and the pilot
+    // must hand-fly the rendezvous. (AP heading cue rides along with these.)
+    MANUAL_NAV:                false,
 
     // NEW — ST-9.4 C-6: Capture Net System
     CAPTURE_NET:               true,   // ST-9.4  — full capture net projectile + inventory (P1 ON)
@@ -2101,6 +2114,19 @@ export const Constants = {
   DETACH_SLOWMO_DURATION: 0.3,         // seconds of slo-mo on detach (slightly longer than catch)
   DETACH_SLOWMO_FACTOR: 0.08,          // time scale during detach slo-mo
   DETACH_MAX_DISTANCE: 50000,          // meters (50 km) — auto-destroy detached arm if it drifts beyond this
+
+  // --- Emergency FEEP reserve (tethered reel-home safety margin) ---
+  // A NON-detached daughter never burns her tank to zero on a job. She keeps
+  // this much FEEP (% of tank) in reserve so that, when reeled home on the
+  // mother's winch, she can maintain tether tension and fire the soft-dock
+  // arrest (REDOCK_FEEP) — neutralizing inertia so neither she nor her catch
+  // slams the strut/mother. When a working/flying daughter hits this floor she
+  // does NOT die: she goes ADRIFT (recoverable, still commandable on the tether).
+  // The reserve is only ever spent on the way home (REELING / DOCKING) or a
+  // deorbit burn; if it runs dry mid-reel the winch still finishes the job.
+  // (Detached daughters have no tether to winch, so the reserve cannot help
+  //  them — they still expend at zero. See ArmUnit._consumeFuel.)
+  ARM_RESERVE_FUEL: 5,                 // % of tank held back for a safe reel-home
 
   // --- NavSphere Tether Zones (Phase 3 — reserve constants) ---
   NAVSPHERE_LASSO_RING_COLOR: 'rgba(255, 255, 255, 0.3)',

@@ -93,7 +93,7 @@ export function recommendArmTool(opts = {}) {
       // self-demotes to "viable but not preferred" (magnet wins the ▶). For
       // fastener-only / non-ferrous targets the net stays primary.
       scores.NET = ferro ? 2 : 3;
-      hints.NET = armType === 'weaver' ? 'Weaver LD-NET' : 'Spinner SD-NET';
+      hints.NET = armType === 'weaver' ? 'Large LD-NET' : 'Small SD-NET';
     }
   }
 

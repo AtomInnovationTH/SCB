@@ -15,6 +15,7 @@ import { audioSystem } from './AudioSystem.js';
 import timerManager from './TimerManager.js';
 import { messagePassesSuppression, rampSuppressionTier, postOnboardingStartTier } from './commsSuppression.js';
 import { missReasonToText } from '../entities/CaptureNet.js';
+import { daughterDisplayName } from '../core/daughterNames.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -666,13 +667,13 @@ export class CommsSystem {
 
     // §4 item 2: TETHER_SNAP → CRITICAL comms + ALERT channel (BUG-C fix)
     eventBus.on(Events.TETHER_SNAP, (data) => {
-      this.addMessage('CRITICAL', data?.armId || 'SYSTEM', 'TETHER SEVERED. Daughter and catch cut loose and drifting. Reload not possible; send another daughter to chase it down.', { channel: 'ALERT' });
+      this.addMessage('CRITICAL', daughterDisplayName(data?.armId) || 'SYSTEM', 'TETHER SEVERED. Daughter and catch cut loose and drifting. Reload not possible; send another daughter to chase it down.', { channel: 'ALERT' });
     });
 
     // Net-integrity failure (recoverable): the net lost its grip on a heavy
     // catch. The daughter is fine and returning to reload; the debris is loose.
     eventBus.on(Events.NET_FAILED, (data) => {
-      this.addMessage('WARNING', data?.armId || 'SYSTEM', 'NET FAILED. Debris slipped the net and is drifting. Daughter returning to reload; re-net to retry.', { channel: 'ALERT' });
+      this.addMessage('WARNING', daughterDisplayName(data?.armId) || 'SYSTEM', 'NET FAILED. Debris slipped the net and is drifting. Daughter returning to reload; re-net to retry.', { channel: 'ALERT' });
     });
 
     // UX-11 #1: net MISS reasons → actionable plain text. A miss is fully
@@ -690,13 +691,13 @@ export class CommsSystem {
     // §4 item 3: ARM_RETURNED (captured) → Docking comms
     eventBus.on(Events.ARM_RETURNED, (data) => {
       if (data?.captured === true) {
-        this.addMessage('INFO', data.armId || 'SYSTEM', 'Docking. 3 s.', { channel: 'CMD' });
+        this.addMessage('INFO', daughterDisplayName(data.armId) || 'SYSTEM', 'Docking. 3 s.', { channel: 'CMD' });
       }
     });
 
     // §4 item 3: CROSSBOW_RELOAD_COMPLETE → Spring re-charged comms
     eventBus.on(Events.CROSSBOW_RELOAD_COMPLETE, (data) => {
-      this.addMessage('INFO', data?.armId || 'SYSTEM', 'Spring re-charged. Ready for next deploy.', { channel: 'CMD' });
+      this.addMessage('INFO', daughterDisplayName(data?.armId) || 'SYSTEM', 'Spring re-charged. Ready for next deploy.', { channel: 'CMD' });
     });
 
     // §4 item 4: STATION_KEEP_ENTERED → ON STATION comms with key hints.
@@ -706,7 +707,7 @@ export class CommsSystem {
     eventBus.on(Events.STATION_KEEP_ENTERED, (data) => {
       const standoff = data?.standoffR != null ? Math.round(data.standoffR) : '?';
       const targetId = data?.targetId != null ? data.targetId : '?';
-      const armId = data?.armId || 'SYSTEM';
+      const armId = daughterDisplayName(data?.armId) || 'SYSTEM';
       // While piloting the arm, teach the station-keep orbit controls so the
       // player can inspect every side of the debris and line up a capture.
       // When the arm arrived under autopilot, point them at taking manual
@@ -719,7 +720,7 @@ export class CommsSystem {
         { channel: 'CMD' });
       // Plain-language follow-up for new players: name the daughter and spell
       // out the next move in a friendly command voice.
-      const daughterName = data?.armId || 'your daughter';
+      const daughterName = daughterDisplayName(data?.armId) || 'your daughter';
       this.addMessage('INFO', 'HOUSTON',
         `${daughterName} is holding station on the debris. Press N to capture, or its number key (1-4) to pilot it in closer.`,
         { channel: 'CMD' });

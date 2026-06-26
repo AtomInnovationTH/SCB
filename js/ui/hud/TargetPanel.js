@@ -532,7 +532,7 @@ export class TargetPanel {
                 const col = ok ? '#00ffaa' : f.fit === 'DESPIN_FIRST' ? '#ffd166' : '#ff7755';
                 return `<span style="color:${col}">${tag}${ok ? '\u2713' : '\u2717'}</span>`;
               };
-              fitBadge = `<span style="font-size:9px;font-weight:bold;" title="Capture fit: Weaver / Spinner nets">${seg('W', wFit)} ${seg('S', sFit)}</span>`;
+              fitBadge = `<span style="font-size:9px;font-weight:bold;" title="Capture fit: Large / Small nets">${seg('L', wFit)} ${seg('S', sFit)}</span>`;
             }
 
             // Phase 1.5: appraised value — only once the close-range survey

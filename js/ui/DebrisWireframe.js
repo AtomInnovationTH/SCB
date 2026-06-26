@@ -1012,7 +1012,7 @@ function getRecommendation(zoneName, target) {
   // Zone-specific recommendations
   if (nameLower.includes('engine'))      return '\u26A0 Avoid engine \u2014 approach from opposite end';
   if (nameLower.includes('solar panel')) return '\u25B3 Fragile \u2014 net may cause fragmentation';
-  if (target.type === 'fragment')        return '\u2713 Small target \u2014 spinner auto-capture viable';
+  if (target.type === 'fragment')        return '\u2713 Small target \u2014 Small daughter auto-capture viable';
 
   // Fall back to risk-based
   const { risk } = assessZone(zoneName, target);
@@ -1776,7 +1776,7 @@ export class DebrisWireframe {
         if (arms.length > 0) {
           let armStr = '';
           for (const a of arms) {
-            const prefix = a.type === 'weaver' ? 'W' : 'S';
+            const prefix = a.type === 'weaver' ? 'L' : 'S';
             const idx = a.id.split('-')[1] || '?';
             const stateChar = a.state === 'DOCKED' ? '\u25CF' :
                               a.state === 'EXPENDED' ? '\u2715' : '\u25D0';
@@ -1787,7 +1787,7 @@ export class DebrisWireframe {
           // Draw arm status as colored indicators
           let armX = 30;
           for (const a of arms) {
-            const prefix = a.type === 'weaver' ? 'W' : 'S';
+            const prefix = a.type === 'weaver' ? 'L' : 'S';
             const idx = a.id.split('-')[1] || '?';
             const icon = a.state === 'DOCKED' ? '\u25CF' :
                          a.state === 'EXPENDED' ? '\u2715' : '\u25D0';

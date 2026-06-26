@@ -383,7 +383,7 @@ export class ArmManager {
     // Check mass compatibility
     if (targetMass > arm.config.maxCaptureMass) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `${arm.id} cannot capture ${targetMass}kg (max ${arm.config.maxCaptureMass}kg)`,
+        text: `${arm.displayName} cannot capture ${targetMass}kg (max ${arm.config.maxCaptureMass}kg)`,
         priority: 'warning',
       });
       return false;
@@ -431,7 +431,7 @@ export class ArmManager {
     // V5: Spring must be charged to deploy
     if (!arm.springCharged) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `${arm.id}: Spring not charged. Reloading`,
+        text: `${arm.displayName}: Spring not charged. Reloading`,
         priority: 'warning',
       });
       return false;
@@ -607,7 +607,11 @@ export class ArmManager {
    * @returns {{ success: boolean, armId?: string, fuelAtStart?: number, totalMass?: number, debrisId?: number }}
    */
   deorbitCapturingArm() {
-    // Sprint C2: Prefer selected arm if it's eligible for deorbit
+    // Sprint C2: Prefer selected arm if it's eligible for deorbit.
+    // Only fuel-capable states are eligible for the general (auto-pick) path —
+    // a deorbit burn needs real propellant. ADRIFT (reserve-only) is deliberately
+    // NOT eligible here so an out-of-fuel daughter can't intercept and consume a
+    // healthy daughter's deorbit via the find() fallback below.
     const isEligible = (a) =>
       (a.state === ARM_STATES.GRAPPLED ||
        a.state === ARM_STATES.HAULING ||
@@ -617,9 +621,18 @@ export class ArmManager {
     let eligible = null;
     if (this.selectedArmIndex >= 0 && this.selectedArmIndex < this.arms.length) {
       const selected = this.arms[this.selectedArmIndex];
-      if (isEligible(selected)) eligible = selected;
+      if (isEligible(selected)) {
+        eligible = selected;
+      } else if (selected && selected.state === ARM_STATES.ADRIFT &&
+                 (selected.capturedDebris || selected.target)) {
+        // The player explicitly targeted an adrift daughter for deorbit — let
+        // startDeorbit emit the "reel her in instead" hint for THAT daughter
+        // (scoped to the selection so it can't shadow another's deorbit).
+        selected.startDeorbit();
+        return { success: false };
+      }
     }
-    // Fallback: find first eligible arm
+    // Fallback: find first eligible (fuel-capable) arm
     if (!eligible) {
       eligible = this.arms.find(isEligible);
     }
@@ -822,9 +835,9 @@ export class ArmManager {
       if (arm.state === S.RETURNING) continue;
       if (arm.state === S.DOCKING) continue;
       if (typeof arm.recall === 'function') {
-        // Mother-initiated: zero-fuel reel on the tether motor so stuck /
-        // fuel-depleted daughters still come home (matches recallClosestDeployed).
-        arm.recall({ motherInitiated: true });
+        // Zero-fuel reel on the mothership tether motor: stuck / fuel-depleted
+        // tethered daughters always come home (never abandoned as EXPENDED).
+        arm.recall();
         count++;
       }
     }
@@ -898,10 +911,9 @@ export class ArmManager {
 
     const target = this.arms[bestIdx];
     if (target && typeof target.recall === 'function') {
-      // Mother-initiated recall: pull the daughter home on the strut/tether
-      // reel motor (zero-fuel) so a stuck or fuel-depleted daughter is still
-      // reeled in rather than abandoned as EXPENDED.
-      target.recall({ motherInitiated: true });
+      // Pull the daughter home on the strut/tether reel motor (zero-fuel) so a
+      // stuck or fuel-depleted daughter is still reeled in, never abandoned.
+      target.recall();
       return bestIdx;
     }
     return null;
@@ -1635,7 +1647,7 @@ export class ArmManager {
     if (arm && typeof arm.setSelectedHighlight === 'function') arm.setSelectedHighlight(true);
     eventBus.emit(Events.ARM_SELECT, { armIndex: index });
     eventBus.emit(Events.COMMS_MESSAGE, {
-      text: `Selected ${arm.id} [${index + 1}]`,
+      text: `Selected ${arm.displayName} [${index + 1}]`,
       priority: 'info',
     });
   }

@@ -231,7 +231,7 @@ export class RewardSystem {
     // First Weaver catch (large arm, type 'weaver')
     if (method === 'arm' && data && data.type === 'weaver' && !this.milestones.has('firstWeaver')) {
       this.milestones.set('firstWeaver', true);
-      this._sendComms('Houston: Large object secured via Weaver. That\'s the heavy lifting we need.');
+      this._sendComms('Houston: Heavy object secured via the Large daughter. That\'s the heavy lifting we need.');
     }
 
     // First lasso catch

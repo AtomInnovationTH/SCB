@@ -58,7 +58,7 @@ describe('DockingReticle — capture odds strip (AIM)', () => {
     assert.ok(blob.includes('NET\u00B72'), 'NET label carries the magazine count');
     assert.ok(blob.includes('GRAB'), 'GRIPPER label shortened to GRAB');
     assert.ok(blob.includes('MAG'), 'MAGNET label shortened to MAG');
-    assert.ok(blob.includes('WEAVER'), 'header names the arm class');
+    assert.ok(blob.includes('LARGE'), 'header names the arm class');
     assert.ok(ctx.texts.some(t => t.startsWith('\u25B6')), '▶ marks the selected column');
   });
 

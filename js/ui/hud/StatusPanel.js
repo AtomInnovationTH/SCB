@@ -34,6 +34,39 @@ const _PHASE_LABELS = {
   HOLD:            'HOLD',
 };
 
+/**
+ * Canonical daughter-state → color map. Shared by the expanded per-card render
+ * (`_renderArmPanel`) and the collapsed fleet summary (`_updateFleetCollapsedSummary`)
+ * so a given state always reads the same color in both. Previously these were
+ * two separate maps that had drifted (e.g. TRANSIT showed blue when expanded
+ * but amber when collapsed; FISHING amber vs cyan).
+ */
+const ARM_STATE_COLORS = {
+  DOCKED:        '#00ff88', // green — ready
+  UNDOCKING:     '#4488ff', // blue — in motion
+  LAUNCHING:     '#00ffff', // cyan — spring launch
+  TRANSIT:       '#4488ff', // blue — in motion
+  APPROACH:      '#4488ff', // blue — in motion
+  RETURNING:     '#4488ff', // blue — in motion
+  DOCKING:       '#4488ff', // blue — in motion
+  NETTING:       '#ffaa00', // amber — working
+  GRAPPLED:      '#ffaa00', // amber — working
+  HAULING:       '#ffaa00', // amber — working
+  REELING:       '#00ffff', // cyan — motor reel-in
+  FISHING:       '#ffaa00', // amber — working
+  CAPTURING:     '#ff8800', // orange — working
+  TRAWLING:      '#44aaff', // light blue — passive sweep
+  RELOADING:     '#ffaa00', // amber — spring reloading
+  HOLDING_CATCH: '#ffcc44', // gold — docked holding a catch (occupied)
+  ABLATING:      '#ff44ff', // magenta — laser de-spin
+  SCANNING:      '#00ffff', // cyan — pulse scan
+  TANGLED:       '#ff8800', // orange — tether tangle
+  DEORBITING:    '#ff4400', // orange-red — sacrificial burn
+  STATION_KEEP:  '#00ffaa', // teal — orbital crane hold
+  ADRIFT:        '#ffaa00', // amber — out of usable FEEP but tethered & recoverable
+  EXPENDED:      '#ff4444', // red — lost/dead
+};
+
 export class StatusPanel {
   constructor(container) {
     this._container = container;
@@ -116,6 +149,16 @@ export class StatusPanel {
     // Sprint C2: Re-render arm panel when selection changes
     eventBus.on(Events.ARM_SELECT, () => this._renderArmPanel());
     eventBus.on(Events.ARM_DESELECT, () => this._renderArmPanel());
+
+    // Fleet hotkey "learned" tracking — the header hint shows full labels until
+    // the player has both launched and recalled at least once, then fades to
+    // terse glyphs (progressive disclosure; #4 dark-cockpit cleanup).
+    this._fleetLaunchUsed = false;
+    this._fleetRecallUsed = false;
+    eventBus.on(Events.ARM_DEPLOYED, () => { this._fleetLaunchUsed = true; });
+    eventBus.on(Events.ARM_RECALLED, () => { this._fleetRecallUsed = true; });
+    eventBus.on(Events.ARM_RECALL_ONE, () => { this._fleetRecallUsed = true; });
+    eventBus.on(Events.ARM_RECALL_ALL, () => { this._fleetRecallUsed = true; });
 
     // F14: Listen for throttle changes
     eventBus.on(Events.THROTTLE_CHANGE, (data) => {
@@ -384,7 +427,7 @@ export class StatusPanel {
         <div id="fuel-type-indicator" style="font-size:10px;color:#4fc3f7;margin-top:2px;margin-bottom:2px">
           Xenon · 1600s
         </div>
-        <div id="throttle-gauge" style="display:flex;align-items:center;gap:4px;font-size:10px;margin-bottom:4px;">
+        <div id="throttle-gauge" style="display:none;align-items:center;gap:4px;font-size:10px;margin-bottom:4px;">
           <span style="color:#00ff88;opacity:0.7;">Throttle</span>
           <div style="flex:1;height:8px;background:rgba(0,0,0,0.5);border:1px solid rgba(0,255,136,0.3);border-radius:2px;overflow:hidden;position:relative;">
             <div id="throttle-bar-fill" style="height:100%;width:100%;background:#00ff88;transition:width 0.15s ease;"></div>
@@ -513,16 +556,17 @@ export class StatusPanel {
     this.panels.arms.dataset.hudGroup = 'arms-group';
     this.panels.arms.dataset.activateKey = 'D';
     this.panels.arms.innerHTML = `
-      <div class="pane-title" style="font-size:11px;margin-bottom:4px;color:#00ff88;opacity:0.7;">🛰️ DAUGHTERS</div>
+      <div class="pane-title" id="fleet-header" style="font-size:11px;margin-bottom:4px;color:#00ff88;opacity:0.7;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
+        <span>🛰️ DAUGHTERS</span>
+        <span id="fleet-aggregate" style="font-weight:normal;letter-spacing:normal;font-size:10px;opacity:0.75;"></span>
+        <span id="fleet-hotkeys" style="margin-left:auto;font-weight:normal;letter-spacing:normal;font-size:9px;opacity:0.4;white-space:nowrap;"></span>
+      </div>
       <div class="fleet-collapsed-summary" id="fleet-collapsed-summary">
         <span style="opacity:0.5;font-size:10px;">Loading fleet…</span>
       </div>
       <div class="fleet-full-content">
         <div id="hud-arms-status" style="font-size:10px;line-height:1.5;">
           <span style="opacity:0.5">Initializing daughter fleet…</span>
-        </div>
-        <div style="font-size:10px;opacity:0.4;margin-top:4px;border-top:1px solid rgba(0,255,136,0.1);padding-top:3px;">
-          1-4 Select &ensp;0 Mother &ensp;D Launch &ensp;R Recall &ensp;Shift+R All &ensp;L De-spin
         </div>
         <div id="lasso-cooldown-row" style="display:flex;align-items:center;gap:6px;margin-top:4px;padding-top:3px;border-top:1px solid rgba(0,255,136,0.1);font-size:10px;">
           <svg id="lasso-cd-ring" width="18" height="18" viewBox="0 0 18 18" style="flex-shrink:0;">
@@ -1047,6 +1091,13 @@ export class StatusPanel {
     if (!fill || !val) return;
 
     const pct = Math.round(this._throttleLevel * 100);
+
+    // Dark-cockpit (#6): full throttle is the default, so the gauge is just
+    // visual filler at 100%. Hide the whole row unless the pilot has actually
+    // throttled down — then it reappears to show exactly how far.
+    const gauge = document.getElementById('throttle-gauge');
+    if (gauge) gauge.style.display = pct >= 100 ? 'none' : 'flex';
+
     fill.style.width = `${pct}%`;
     val.textContent = `${pct}%`;
 
@@ -1382,6 +1433,7 @@ export class StatusPanel {
 
     if (!this._armManager) {
       el.innerHTML = '<span style="opacity:0.5">No daughter manager</span>';
+      this._updateFleetHeader([]);
       this._updateFleetCollapsedSummary([]);
       return;
     }
@@ -1389,34 +1441,13 @@ export class StatusPanel {
     const statuses = this._armManager.getAllStatus();
     if (statuses.length === 0) {
       el.innerHTML = '<span style="opacity:0.5">No daughters configured</span>';
+      this._updateFleetHeader([]);
       this._updateFleetCollapsedSummary([]);
       return;
     }
 
-    const stateColors = {
-      DOCKED: '#00ff88',      // green — ready
-      UNDOCKING: '#4488ff',   // blue — in motion
-      LAUNCHING: '#00ffff',   // V5: cyan — spring launch
-      TRANSIT: '#4488ff',     // blue — in motion
-      APPROACH: '#4488ff',    // blue — in motion
-      RETURNING: '#4488ff',   // blue — in motion
-      DOCKING: '#4488ff',     // blue — in motion
-      NETTING: '#ffaa00',     // amber — active/working
-      GRAPPLED: '#ffaa00',    // amber — active/working
-      HAULING: '#ffaa00',     // amber — active/working
-      REELING: '#00ffff',     // V5: cyan — motor reel-in
-      FISHING: '#ffaa00',     // amber — active/working
-      TRAWLING: '#44aaff',    // light blue — passive sweep
-      RELOADING: '#ffaa00',   // V5: amber — spring reloading
-      HOLDING_CATCH: '#ffcc44', // gold — docked at strut holding a catch (occupied)
-      ABLATING: '#ff44ff',    // V5: magenta — laser de-spin
-      SCANNING: '#00ffff',    // V5: cyan — pulse scan
-      TANGLED: '#ff8800',     // V5: orange — tether tangle
-      DEORBITING: '#ff4400',  // orange-red — sacrificial burn
-      EXPENDED: '#ff4444',    // red — lost/dead
-    };
+    const stateColors = ARM_STATE_COLORS;
 
-    const typeIcons = { weaver: '🕸️', spinner: '🔄' };
     const selectedIdx = this._armManager.selectedArmIndex;
     const now = Date.now();
 
@@ -1427,24 +1458,19 @@ export class StatusPanel {
       return String(idx + 1);
     };
 
-    const armsHtml = statuses.map((a, idx) => {
+    const renderCard = (a, idx) => {
       const color = stateColors[a.state] || '#888';
-      const fuelColor = a.fuel > 50 ? '#00ff88' : a.fuel > 20 ? '#ffaa00' : '#ff4444';
-      const icon = typeIcons[a.type] || '○';
-      const capBadge = a.hasCaptured ? ' 🎣' : '';
-      const tether = (a.state !== 'DOCKED' && a.state !== 'RELOADING' && a.state !== 'HOLDING_CATCH')
-        ? ` T:${a.tetherLength}m` : '';
       const isSelected = idx === selectedIdx;
       const label = getLabel(idx, statuses.length);
-      const typeSuffix = a.type === 'weaver' ? 'W' : 'S';
+      const typeLetter = a.type === 'weaver' ? 'L' : a.type === 'spinner' ? 'S' : '·';
 
-      // V5: Selection styling
+      // Selection styling — cyan number marker + card border/glow.
       const selBorder = isSelected
         ? `border:1px solid #00ffff;box-shadow:0 0 6px rgba(0,255,255,0.4);`
         : '';
-      const selTag = isSelected
-        ? `<span style="color:#00ffff;font-size:10px;font-weight:bold;">[${label}${typeSuffix}]</span> `
-        : `<span style="opacity:0.5;font-size:10px;">${label}${typeSuffix}</span> `;
+      const numHtml = isSelected
+        ? `<span style="color:#00ffff;font-weight:bold;">▸${label}</span>`
+        : `<span style="opacity:0.55;">&nbsp;${label}</span>`;
 
       // V5: Crossbow fire flash (white glow for 200ms after fire)
       const flashTs = this._crossbowFireFlash[idx];
@@ -1453,18 +1479,49 @@ export class StatusPanel {
         ? 'border-color:#ffffff !important;box-shadow:0 0 10px rgba(255,255,255,0.6) !important;'
         : '';
 
-      // V5: Spring charge indicator
-      let springIcon = '';
-      if (a.state === 'DOCKED' || a.state === 'RELOADING' || a.state === 'DOCKING') {
-        if (a.springCharged) {
-          springIcon = '<span style="color:#00ffff;" title="Spring charged">⚡</span>';
-        } else if (a.state === 'RELOADING') {
-          springIcon = '<span style="color:#ffaa00;" title="Reloading">◌</span>';
-        } else {
-          springIcon = '<span style="color:#666;" title="Spring empty">○</span>';
-        }
+      // ── Deviation badges — rendered ONLY when they carry information, so an
+      //    idle docked fleet collapses to one tidy line per daughter and the
+      //    pane only gets loud when a unit actually does something. ──
+      const badges = [];
+
+      // Holding a catch — needs to be brought home.
+      if (a.hasCaptured) badges.push('<span title="Holding a catch">🎣</span>');
+
+      // Fuel — only when below full (100% is the boring default).
+      if (a.fuel < 100) {
+        const fuelColor = a.fuel > 50 ? '#00ff88' : a.fuel > 20 ? '#ffaa00' : '#ff4444';
+        badges.push(`<span style="color:${fuelColor};" title="Daughter fuel">⛽${a.fuel}%</span>`);
       }
 
+      // Spring not charged while home — can't fire yet.
+      if ((a.state === 'DOCKED' || a.state === 'DOCKING') && !a.springCharged) {
+        badges.push('<span style="color:#ffaa00;" title="Spring not charged">○</span>');
+      }
+
+      // Tether length — only while deployed.
+      if (a.state !== 'DOCKED' && a.state !== 'RELOADING' &&
+          a.state !== 'HOLDING_CATCH' && a.tetherLength) {
+        badges.push(`<span style="opacity:0.7;" title="Tether deployed">T:${a.tetherLength}m</span>`);
+      }
+
+      // Tether tension — color-coded; flashes red near snap.
+      const tensFrac = this._tetherTensions[idx];
+      if (tensFrac !== undefined && a.state !== 'DOCKED' && a.state !== 'RELOADING') {
+        const tensPct = Math.round(tensFrac * 100);
+        let tensColor = '#00ff88';
+        if (tensFrac >= (Constants.REEL_TENSION_CRITICAL || 0.9)) {
+          tensColor = (now % 400 < 200) ? '#ff3333' : '#ff6666'; // flashing red
+        } else if (tensFrac >= (Constants.REEL_TENSION_WARNING || 0.7)) {
+          tensColor = '#ffaa00';
+        }
+        badges.push(`<span style="color:${tensColor};" title="Tether tension">⊗${tensPct}%</span>`);
+      }
+
+      const badgeHtml = badges.length
+        ? `<span style="display:flex;gap:6px;margin-left:auto;opacity:0.9;">${badges.join('')}</span>`
+        : '';
+
+      // ── Active-only sub-rows ──
       // V5: Reload progress bar (shown when RELOADING)
       let reloadHtml = '';
       if (a.state === 'RELOADING') {
@@ -1479,20 +1536,6 @@ export class StatusPanel {
           </div>`;
       }
 
-      // V5: Tether tension indicator (color-coded)
-      let tensionHtml = '';
-      const tensFrac = this._tetherTensions[idx];
-      if (tensFrac !== undefined && a.state !== 'DOCKED' && a.state !== 'RELOADING') {
-        const tensPct = Math.round(tensFrac * 100);
-        let tensColor = '#00ff88';
-        if (tensFrac >= (Constants.REEL_TENSION_CRITICAL || 0.9)) {
-          tensColor = (now % 400 < 200) ? '#ff3333' : '#ff6666'; // flashing red
-        } else if (tensFrac >= (Constants.REEL_TENSION_WARNING || 0.7)) {
-          tensColor = '#ffaa00';
-        }
-        tensionHtml = `<span style="color:${tensColor};font-size:9px;" title="Tether tension">⊗${tensPct}%</span>`;
-      }
-
       // V5: Tangle warning per arm (with auto-resolve countdown)
       // Uses JS-calculated opacity to avoid animation restart on 10Hz innerHTML rebuild
       let tangleHtml = '';
@@ -1503,24 +1546,7 @@ export class StatusPanel {
         tangleHtml = `<div style="font-size:9px;color:#ffaa00;opacity:${tangleOpacity.toFixed(2)};">⚠ TANGLE ${remaining.toFixed(0)}s</div>`;
       }
 
-      // C-3: Aim alpha + hinge state for selected arm
-      let aimHingeHtml = '';
-      if (isSelected && this._armManager && this._armManager.arms[idx]) {
-        const armObj = this._armManager.arms[idx];
-        if (typeof armObj.getAimAlpha === 'function') {
-          const alphaDeg = (armObj.getAimAlpha() * 180 / Math.PI).toFixed(1);
-          const hingeStr = armObj.getHingeState();
-          const hingeColor = hingeStr === 'LOCKED' ? '#ff8800' : '#00ff88';
-          const partnerIdx = this._armManager.getDualFirePair ? this._armManager.getDualFirePair(idx) : null;
-          const pairStr = partnerIdx !== null ? `PAIR:${partnerIdx + 1}` : '';
-          aimHingeHtml = `<div style="font-size:9px;display:flex;gap:6px;opacity:0.8;margin-top:1px;">
-            <span style="color:#88ccff;">α:${alphaDeg}°</span>
-            <span style="color:${hingeColor};">⊕${hingeStr}</span>
-            ${pairStr ? `<span style="color:#aaa;">${pairStr}</span>` : ''}
-          </div>`;
-        }
-      }
-
+      // ── Feature-gated diagnostics (all OFF by default; debug overlays) ──
       // C-4: Deploy state indicator (only when STOW_DEPLOY_STATE_MACHINE flag is on)
       let deployHtml = '';
       if (Constants.FEATURE_FLAGS.STOW_DEPLOY_STATE_MACHINE &&
@@ -1597,57 +1623,96 @@ export class StatusPanel {
       }
 
       return `<div style="margin:1px 0;padding:2px 4px;border-left:2px solid ${color};background:rgba(0,20,40,0.4);${selBorder}${flashStyle}">
-        <div style="display:flex;justify-content:space-between;align-items:center;">
-          <span>${selTag}${springIcon ? springIcon + ' ' : ''}${icon} <span style="color:${color};">${a.id}</span>${capBadge}</span>
-          <span style="color:${color};font-size:10px;">${a.state}</span>
-        </div>
-        <div style="font-size:10px;display:flex;gap:6px;opacity:0.7;">
-          <span>⛽<span style="color:${fuelColor};">${a.fuel}%</span></span>
-          <span>🏆${a.captures}</span>${tether ? `<span>${tether}</span>` : ''}${tensionHtml ? `<span>${tensionHtml}</span>` : ''}
-        </div>${reloadHtml}${tangleHtml}${aimHingeHtml}${deployHtml}${reelHtml}${bridleHtml}
+        <div style="display:flex;align-items:center;gap:6px;">
+          ${numHtml}
+          <span style="opacity:0.5;">${typeLetter}</span>
+          <span style="color:${color};white-space:nowrap;">● ${a.state}</span>
+          ${badgeHtml}
+        </div>${reloadHtml}${tangleHtml}${deployHtml}${reelHtml}${bridleHtml}
         <div class="arm-hover-detail" style="display:none;font-size:10px;opacity:0.6;padding-left:12px;">
-          ΔV: ${a.remainingDeltaV ? a.remainingDeltaV.toFixed(0) + ' m/s' : '. '}
+          ΔV ${a.remainingDeltaV ? a.remainingDeltaV.toFixed(0) + ' m/s' : '—'} · 🏆 ${a.captures} · ⛽ ${a.fuel}%
         </div>
       </div>`;
-    }).join('');
+    };
 
-    // V5: Fleet status footer — launch speed, pulse scan, thruster interlock
-    const launchSpeed = (statuses[0] && statuses[0].launchSpeed) || Constants.CROSSBOW_LAUNCH_SPEED_DEFAULT || 10;
+    // ── Dark-cockpit fleet assembly (#1) + urgency sort (#3) ──────────────────
+    // Classify each daughter so the pane stays silent when the fleet is nominal
+    // and surfaces trouble first. Lower priority number = more attention:
+    //   0 urgent (expended / low fuel / tangled / tension critical)
+    //   1 needs delivery (holding a catch)
+    //   2 active (deployed / in motion / working)
+    //   3 watched (selected, or docked-but-not-charged)
+    //   4 nominal (docked, charged, essentially full)  → collapses out of sight
+    const LOW_FUEL = 25;
+    // Daughters do not refuel while docked, so a docked unit below this bar is
+    // shown as a full card (pri 3) rather than collapsing into the silent strip
+    // — otherwise a drained-but-docked daughter would hide its fuel badge and
+    // the pilot could launch it half-empty believing the fleet was topped off.
+    const NOMINAL_FUEL = 95;
+    const classify = (a, idx) => {
+      const tens = this._tetherTensions[idx];
+      const tensionCritical = tens !== undefined && tens >= (Constants.REEL_TENSION_CRITICAL || 0.9);
+      const tangled = this._tangleState && this._tangleState.armIndices.includes(idx);
+      if (a.state === 'EXPENDED' || a.state === 'ADRIFT' || tangled || tensionCritical || a.fuel <= LOW_FUEL) return 0;
+      if (a.hasCaptured) return 1;
+      if (a.state !== 'DOCKED') return 2;
+      if (idx === selectedIdx || !a.springCharged || a.fuel < NOMINAL_FUEL) return 3;
+      return 4;
+    };
 
-    // V5: Pulse scan status — prefer live data from ArmManager
-    let scanHtml = '';
-    if (this._armManager.getFleetStatus) {
-      const fleet = this._armManager.getFleetStatus();
-      if (fleet.pulseScanActive) {
-        // JS-calculated opacity avoids animation restart on 10Hz innerHTML rebuild
-        const scanPulse = 0.5 + 0.5 * Math.sin(now * 0.008);
-        scanHtml = `<span style="color:#00ffff;opacity:${scanPulse.toFixed(2)};">◉ SCANNING</span>`;
-      } else if (fleet.pulseScanCooldown > 0) {
-        scanHtml = `<span style="color:#888;">SCAN:${Math.ceil(fleet.pulseScanCooldown)}s</span>`;
-      } else {
-        scanHtml = `<span style="color:#00ff88;">SCAN:RDY</span>`;
-      }
-    } else if (this._pulseScanState === 'SCANNING') {
-      const scanPulse = 0.5 + 0.5 * Math.sin(now * 0.008);
-      scanHtml = `<span style="color:#00ffff;opacity:${scanPulse.toFixed(2)};">◉ SCANNING</span>`;
+    const entries = statuses.map((a, idx) => ({ a, idx, pri: classify(a, idx) }));
+    const allNominal = entries.every(e => e.pri === 4);
+
+    let armsHtml;
+    if (allNominal) {
+      // Whole fleet docked, charged and full → one quiet strip of dots. The
+      // header aggregate carries the "N ready" count, so this just confirms the
+      // individual units exist (and lets selection still highlight one).
+      armsHtml = `<div style="display:flex;gap:9px;align-items:center;font-size:10px;opacity:0.55;flex-wrap:wrap;">` +
+        entries.map(e =>
+          `<span><span style="color:#00ff88;">●</span><span style="opacity:0.7;">${getLabel(e.idx, statuses.length)}</span></span>`
+        ).join('') +
+        `</div>`;
     } else {
-      scanHtml = `<span style="color:#00ff88;">SCAN:RDY</span>`;
+      // Sort by attention, stable within a priority band (keeps numbering calm).
+      const sorted = entries.slice().sort((x, y) => x.pri - y.pri || x.idx - y.idx);
+      const cards = sorted.filter(e => e.pri <= 3);
+      const docked = sorted.filter(e => e.pri === 4);
+      armsHtml = cards.map(e => renderCard(e.a, e.idx)).join('');
+      if (docked.length) {
+        // Nominal docked units fold into a single dim tail line.
+        const dots = docked
+          .map(e => `<span style="color:#00ff88;">●</span>${getLabel(e.idx, statuses.length)}`)
+          .join(' ');
+        armsHtml += `<div style="font-size:9px;opacity:0.4;margin-top:2px;">+${docked.length} docked&ensp;${dots}</div>`;
+      }
     }
 
-    // V5: Thruster interlock warning — JS-calculated pulse for 10Hz safe rendering
+    // V5: Fleet status footer — pulse scan, thruster interlock.
+    // (Launch speed was removed: it's a static config value, not a live readout,
+    //  so it only added idle noise. It lives in the shop / upgrade screen.)
+
+    // Thruster interlock warning — the only footer element that carries live,
+    // actionable signal. (The former "SCAN" readout was removed: pulseScan() has
+    // no hotkey / caller in the shipped build, so it could never change from
+    // "SCAN ✓" — permanent filler. The mechanic itself is left intact in
+    // ArmManager for when/if it gets wired up.) JS-calculated pulse for 10Hz-safe
+    // rendering.
     let interlockHtml = '';
     if (this._thrusterInterlock) {
       const lockPulse = 0.5 + 0.5 * Math.sin(now * 0.01);
-      interlockHtml = ` <span style="color:#ff3333;font-weight:bold;opacity:${lockPulse.toFixed(2)};">⚠ THR LOCK</span>`;
+      interlockHtml = `<span style="color:#ff3333;font-weight:bold;opacity:${lockPulse.toFixed(2)};">⚠ THR LOCK</span>`;
     }
 
-    // Build footer and assign all HTML in one pass (avoids double DOM parse)
-    const footerHtml = `<div style="font-size:10px;margin-top:3px;padding-top:3px;border-top:1px solid rgba(0,255,136,0.1);display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-      <span style="color:#00ffff;">V:${launchSpeed.toFixed(1)} m/s</span>
-      ${scanHtml}${interlockHtml}
-    </div>`;
+    // Footer renders ONLY when there's something to say — silent by default.
+    const footerHtml = interlockHtml
+      ? `<div style="font-size:10px;margin-top:3px;padding-top:3px;border-top:1px solid rgba(0,255,136,0.1);display:flex;gap:8px;align-items:center;flex-wrap:wrap;">${interlockHtml}</div>`
+      : '';
 
     el.innerHTML = armsHtml + footerHtml;
+
+    // Header aggregate + hotkey hint (#4/#5)
+    this._updateFleetHeader(statuses);
 
     // F12: Update fleet collapsed summary
     this._updateFleetCollapsedSummary(statuses);
@@ -1822,6 +1887,56 @@ export class StatusPanel {
   // F12: FLEET COLLAPSED SUMMARY UPDATER
   // ==========================================================================
 
+  /**
+   * @private Update the header line: the at-a-glance fleet aggregate (#5) and
+   * the progressive-disclosure hotkey hint (#4). Kept separate from the card
+   * list so it refreshes on the same cadence without rebuilding the rows.
+   */
+  _updateFleetHeader(statuses) {
+    // Hotkey hint — full labels until the player has both launched and recalled,
+    // then fade to terse glyphs. Mother (0), Recall-All (Shift+R) and De-spin (L)
+    // are intentionally not advertised here to keep the line short.
+    const hk = document.getElementById('fleet-hotkeys');
+    if (hk) {
+      const learned = this._fleetLaunchUsed && this._fleetRecallUsed;
+      hk.innerHTML = learned
+        ? '<span title="Select 1-4 · Launch D · Recall R">1-4 · D · R</span>'
+        : '1-4 Select&ensp;D Launch&ensp;R Recall';
+      hk.style.opacity = learned ? '0.28' : '0.5';
+    }
+
+    const agg = document.getElementById('fleet-aggregate');
+    if (!agg) return;
+    if (!statuses || statuses.length === 0) { agg.textContent = ''; return; }
+
+    const isOut = (s) => s.state !== 'DOCKED' && s.state !== 'RELOADING' && s.state !== 'HOLDING_CATCH';
+    const out = statuses.filter(isOut).length;
+    const ready = statuses.filter(s => s.state === 'DOCKED' && s.springCharged).length;
+
+    let attention = 0;
+    statuses.forEach((s, idx) => {
+      const tens = this._tetherTensions[idx];
+      const crit = tens !== undefined && tens >= (Constants.REEL_TENSION_CRITICAL || 0.9);
+      const tangled = this._tangleState && this._tangleState.armIndices.includes(idx);
+      if (s.state === 'EXPENDED' || s.state === 'ADRIFT' || s.fuel <= 25 || s.hasCaptured || tangled || crit) attention++;
+    });
+
+    let txt, color, opacity;
+    if (attention > 0) {
+      txt = `${attention}⚠${out ? ` · ${out} out` : ''}`;
+      color = '#ffaa00'; opacity = '0.95';
+    } else if (out > 0) {
+      txt = `${out} out · ${ready} ready`;
+      color = '#aaffdd'; opacity = '0.75';
+    } else {
+      txt = `${ready} ready`;
+      color = '#00ff88'; opacity = '0.7';
+    }
+    agg.textContent = txt;
+    agg.style.color = color;
+    agg.style.opacity = opacity;
+  }
+
   /** @private Update the fleet collapsed summary with arm state counts */
   _updateFleetCollapsedSummary(statuses) {
     const el = document.getElementById('fleet-collapsed-summary');
@@ -1832,29 +1947,7 @@ export class StatusPanel {
       return;
     }
 
-    const stateColors = {
-      DOCKED: '#00ff88',
-      UNDOCKING: '#4488ff',
-      LAUNCHING: '#00ffff',   // V5
-      TRANSIT: '#ffaa00',
-      APPROACH: '#ffaa00',
-      RETURNING: '#4488ff',
-      DOCKING: '#4488ff',
-      NETTING: '#ffaa00',
-      GRAPPLED: '#ffaa00',
-      HAULING: '#ffaa00',
-      REELING: '#00ffff',     // V5
-      FISHING: '#00ffff',
-      TRAWLING: '#44aaff',
-      RELOADING: '#ffaa00',   // V5
-      HOLDING_CATCH: '#ffcc44', // gold — docked at strut holding a catch (occupied)
-      ABLATING: '#ff44ff',    // V5
-      SCANNING: '#00ffff',    // V5
-      TANGLED: '#ff8800',     // V5
-      CAPTURING: '#ff8800',
-      DEORBITING: '#ff4400',
-      EXPENDED: '#ff4444',
-    };
+    const stateColors = ARM_STATE_COLORS;
 
     // Count by state
     const counts = {};

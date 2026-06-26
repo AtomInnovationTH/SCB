@@ -109,13 +109,15 @@ describe('ArmManager.recallAllDeployed — honest count (2026-06-14 reel fix)', 
     assert.equal(expended.recallCount, 0, 'expended daughter not reeled');
   });
 
-  it('uses motherInitiated zero-fuel reel for stuck daughters', () => {
+  it('reels stuck daughters home on the zero-fuel tether (unconditional reel)', () => {
     const mgr = makeMgr();
     const sk = fakeArm(S.STATION_KEEP);
     mgr.arms = [sk];
     mgr.recallAllDeployed();
-    assert.ok(sk.recallOpts && sk.recallOpts.motherInitiated === true,
-      'reel-all uses motherInitiated tether reel');
+    // recall() now always reels a tethered daughter home on the mothership's
+    // zero-fuel winch — no motherInitiated option is needed or passed.
+    assert.equal(sk.recallCount, 1, 'reel-all calls recall() on the stuck daughter');
+    assert.equal(sk.recallOpts, undefined, 'no obsolete options passed to recall()');
   });
 
   it('returns 0 when nothing is deployed', () => {

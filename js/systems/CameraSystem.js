@@ -1300,7 +1300,7 @@ export class CameraSystem {
       // Phase 2 entry: camera starts zooming along tether toward daughter
       if (c.phase === 2) {
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: `Tracking ${c.arm.id}. Tether deploying`,
+          text: `Tracking ${c.arm.displayName}. Tether deploying`,
           priority: 'info',
         });
       }
@@ -1339,7 +1339,7 @@ export class CameraSystem {
         this.setView(CameraViews.ARM_PILOT);
         eventBus.emit(Events.LAUNCH_CEREMONY_COMPLETE, { arm: completingArm });
         eventBus.emit(Events.COMMS_MESSAGE, {
-          text: `${completingArm.id} deployed. Arrow keys orbit debris, ESC to recall`,
+          text: `${completingArm.displayName} deployed. Arrow keys orbit debris, ESC to recall`,
           priority: 'info',
         });
         // Return ARM_PILOT position (camera follows daughter / inspection view).
@@ -1385,7 +1385,7 @@ export class CameraSystem {
       this.setView(CameraViews.ARM_PILOT);
       eventBus.emit(Events.LAUNCH_CEREMONY_COMPLETE, { arm: completingArm });
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `${completingArm.id} deployed. Arrow keys orbit debris, ESC to recall`,
+        text: `${completingArm.displayName} deployed. Arrow keys orbit debris, ESC to recall`,
         priority: 'info',
       });
       return this._computeArmPilot(dt, playerPos, velDir, radialDir);
@@ -1461,7 +1461,7 @@ export class CameraSystem {
         if (c._springLatch && !c._shookOnFire) {
           c._shookOnFire = true;
           eventBus.emit(Events.COMMS_MESSAGE, {
-            text: `${arm.id}: Spring released. Separating`,
+            text: `${arm.displayName}: Spring released. Separating`,
             priority: 'info',
           });
         }

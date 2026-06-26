@@ -89,7 +89,6 @@ export class TargetReticle {
     this._retroCalloutTimer = 0;
 
     // Phase 1: Telemetry & relative velocity tracking
-    this._deltaVSpent = 0;
     this._thrustDirection = null;
     this._relativeVelocity = 0;  // relative to selected target, in km/s
 
@@ -166,6 +165,15 @@ export class TargetReticle {
     this._catchPulseActive = false;
     this._catchPulseTime = 0;           // countdown from 0.3 → 0
 
+    // Fading "▸ N" training wheel: a tiny fire-prompt under an in-range lock.
+    // Deliberately UNHURRIED — it waits a grace period after the first in-range
+    // lock (give the player time to look around) and only nudges across the
+    // first two pieces, persisting on each until that piece is captured. It does
+    // NOT vanish the instant the net is first fired (that left the 2nd piece with
+    // no prompt and felt like it disappeared too fast). Helpful, not pushy.
+    this._firstInRangeLockTime = null;  // _time (s) when an in-range lock first appeared
+    this._debrisCleared = 0;            // captures seen — prompt caps out after 2
+
     eventBus.on(Events.LASSO_FIRED, () => {
       this._lassoInFlight = true;
       this._lassoCooldownTimer = 0;     // Not cooling yet — in flight
@@ -184,6 +192,12 @@ export class TargetReticle {
 
     // S9-B: Bracket pulse on arm capture
     eventBus.on(Events.ARM_CAPTURED, (data) => {
+      // Count each cleared piece ONCE here for the "▸ N" cap. A Mother-net catch
+      // emits BOTH LASSO_CAPTURED and ARM_CAPTURED (LassoSystem fires ARM_CAPTURED
+      // "for catch juice"), so counting in both handlers double-counted and tripped
+      // the 2-piece cap after a single catch. ARM_CAPTURED fires for net AND
+      // daughter captures, so it's the single canonical place to tally.
+      this._debrisCleared++;
       this.showCatchPulse();
       // UX Fix E+: Hide captured debris reticle immediately
       if (data && data.targetId) this._capturedIds.add(data.targetId);
@@ -396,7 +410,6 @@ export class TargetReticle {
 
     // Capture Phase 1 telemetry
     if (data.telemetry) {
-      this._deltaVSpent = data.telemetry.deltaVSpent || 0;
       this._thrustDirection = data.telemetry.thrustDirection || null;
     }
 
@@ -528,7 +541,9 @@ export class TargetReticle {
     }
 
     // --- Draw prograde/retrograde velocity markers (Phase 2.3) ---
-    if (this._viewConfig.showVelocityVectors) {
+    // Gated behind MANUAL_NAV (off by default): these are manual-flight nav aids
+    // for advanced/autopilot-degraded missions, not the autopilot core loop.
+    if (this._viewConfig.showVelocityVectors && Constants.FEATURE_FLAGS.MANUAL_NAV) {
       this._drawVelocityMarkers(data);
     }
 
@@ -881,18 +896,16 @@ export class TargetReticle {
     ctx.fillText(distText, x, y + half + 22);
 
     // --- Closure rate below distance (selected target only) ---
+    // Plain words ("Closing"/"Opening") instead of ▲/▼ jargon for newcomers,
+    // and nothing at all when the rate is negligible (no dead "0 m/s" line).
     if (isSelected && target._closureRate != null && this._viewConfig.showClosureRate) {
       const rate = target._closureRate;
       const absRate = Math.abs(rate);
-      ctx.font = '18px "Courier New", monospace';
-      ctx.textAlign = 'center';
-      if (absRate < 0.5) {
-        ctx.fillStyle = 'rgba(255,255,255,0.4)';
-        ctx.fillText('0 m/s', x, y + half + 46);
-      } else {
-        const arrow = rate > 0 ? '▼' : '▲';
+      if (absRate >= 0.5) {
+        ctx.font = '18px "Courier New", monospace';
+        ctx.textAlign = 'center';
         ctx.fillStyle = rate > 0 ? COLORS.green : COLORS.red;
-        ctx.fillText(`${arrow}${absRate.toFixed(0)} m/s`, x, y + half + 46);
+        ctx.fillText(`${rate > 0 ? 'Closing' : 'Opening'} ${absRate.toFixed(0)} m/s`, x, y + half + 46);
       }
     }
 
@@ -902,17 +915,9 @@ export class TargetReticle {
 
     // --- Selected target: extra info ---
     if (isSelected) {
-      ctx.font = 'bold 11px "Courier New", monospace';
-      ctx.fillStyle = selColor;
-
-      // Type name above reticle
-      const typeName = this._getTypeName(target.type);
-      ctx.fillText(typeName, x, y - half - 18);
-
-      // Reward-first spine: clean-mono "OUT OF RANGE" callout below the
-      // distance when the selected target goes beyond net-lock range. BRIEF
-      // feedback only — shown for ~_outOfRangeFlashDur after the crossing, then
-      // it fades (the yellow reticle still signals state). Never shown in range.
+      // Reward-first spine: brief "OUT OF RANGE" callout below the distance when
+      // the selected target is beyond net-lock range. The onboarding comms point
+      // directly at this label ("see OUT OF RANGE"), so the wording is load-bearing.
       if (outOfRange && this._outOfRangeFlashT > 0) {
         // Fade out over the last 0.5 s of the flash.
         const a = Math.max(0, Math.min(1, this._outOfRangeFlashT / 0.5));
@@ -924,14 +929,47 @@ export class TargetReticle {
         ctx.restore();
       }
 
-      // Tumble rate (CP-2: show a ▼ DE-SPIN marker while the mother laser is firing)
-      const tumbleDeg = (target.tumbleRate * 180 / Math.PI).toFixed(1);
-      ctx.font = '10px "Courier New", monospace';
-      ctx.fillStyle = selColor;
-      const tumbleLabel = target._despinning
-        ? `${tumbleDeg}°/s \u25BC DE-SPIN  ${target.sizeMeter.toFixed(1)}m`
-        : `${tumbleDeg}°/s  ${target.sizeMeter.toFixed(1)}m`;
-      ctx.fillText(tumbleLabel, x, y - half - 6);
+      // CP-2: DE-SPIN feedback — shown ONLY while the mother laser is actively
+      // firing (actionable "the de-spin is working" cue). The idle tumble°/s and
+      // size numerics were removed: the bracket color already encodes danger, and
+      // the raw figures live in the target dossier (TargetPanel) for those who
+      // want them. A newcomer can't act on "34.2°/s 1.5m".
+      if (target._despinning) {
+        ctx.font = 'bold 11px "Courier New", monospace';
+        ctx.fillStyle = selColor;
+        ctx.fillText('\u25BC DE-SPIN', x, y - half - 6);
+      }
+
+      // Fading "▸ N" fire prompt — co-locates the comms lesson ("fire the Mother
+      // net with N") on the bracket the eye is already on. Deliberately gentle:
+      //   • only on an IN-RANGE lock,
+      //   • only across the first two pieces (capped by captures, NOT by the
+      //     first fire — so it returns for the 2nd piece), persisting on each
+      //     until that piece is captured, and
+      //   • only after a ~4 s grace from the first in-range lock — the player
+      //     gets to look around first (the grace is global, so by the 2nd piece
+      //     it shows promptly). Fades in over 0.8 s, then soft-pulses.
+      const NUDGE_DELAY_S = 4;
+      if (!outOfRange && this._debrisCleared < 2) {
+        if (this._firstInRangeLockTime == null) this._firstInRangeLockTime = this._time;
+        const sinceLock = this._time - this._firstInRangeLockTime;
+        if (sinceLock >= NUDGE_DELAY_S) {
+          // Stays visible until the net is fired, but the pulse is intentionally
+          // calm: a slow breath (~0.29 Hz) whose amplitude eases from ±0.16 down
+          // to ±0.05 over the first ~6 s, so it greets the eye then settles into
+          // a soft steady glow rather than nagging.
+          const shownFor = sinceLock - NUDGE_DELAY_S;
+          const fadeIn = Math.min(1, shownFor / 0.8);
+          const amp = Math.max(0.05, 0.16 - 0.018 * shownFor);
+          const breathe = 0.8 + amp * Math.sin(this._time * 1.8);
+          ctx.save();
+          ctx.globalAlpha = fadeIn * breathe;
+          ctx.font = 'bold 18px "Courier New", monospace';
+          ctx.fillStyle = COLORS.cyan;
+          ctx.fillText('\u25B8 N', x, y + half + 70);
+          ctx.restore();
+        }
+      }
     }
 
     ctx.restore();
@@ -1190,33 +1228,20 @@ export class TargetReticle {
 
       let lineY = y + 18;
 
-      // Phase 1: ΔV-spent counter below prograde label (always show to prevent flashing)
-      {
-        ctx.font = '9px "Courier New", monospace';
-        ctx.fillStyle = 'rgba(0, 255, 136, 0.6)';
-        const spentMs = this._deltaVSpent * 1000; // convert km/s game units → m/s
-        ctx.fillText(spentMs > 0.05 ? `Spent: ${spentMs.toFixed(1)} m/s` : 'Spent: 0.0 m/s', x + 22, lineY);
-        lineY += 12;
-      }
-
-      // Phase R6: Closure rate + ETA for selected target (always show to prevent flashing)
+      // Phase R6: Closure rate + ETA for selected target — shown only when the
+      // closure is actually meaningful (no dead "0 m/s" line when matched).
       if (this._selectedTargetDistKm > 0) {
         const cr = this._selectedClosureRate; // km/s, positive = closing
-        {
+        if (Math.abs(cr) > 0.001) {
           ctx.font = '9px "Courier New", monospace';
           ctx.globalAlpha = 0.8;
-          if (Math.abs(cr) > 0.001) {
-            const label = cr > 0 ? 'Closing' : 'Opening';
-            ctx.fillStyle = cr > 0 ? COLORS.green : COLORS.red;
-            const crKms = Math.abs(cr);
-            const crText = crKms >= 1
-              ? `${crKms.toFixed(2)} km/s`
-              : `${(crKms * 1000).toFixed(0)} m/s`;
-            ctx.fillText(`${label}: ${crText}`, x + 22, lineY);
-          } else {
-            ctx.fillStyle = 'rgba(255,255,255,0.4)';
-            ctx.fillText('0 m/s', x + 22, lineY);
-          }
+          const label = cr > 0 ? 'Closing' : 'Opening';
+          ctx.fillStyle = cr > 0 ? COLORS.green : COLORS.red;
+          const crKms = Math.abs(cr);
+          const crText = crKms >= 1
+            ? `${crKms.toFixed(2)} km/s`
+            : `${(crKms * 1000).toFixed(0)} m/s`;
+          ctx.fillText(`${label}: ${crText}`, x + 22, lineY);
           lineY += 12;
         }
         // ETA when closing on target
