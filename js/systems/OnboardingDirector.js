@@ -52,7 +52,7 @@ export const ONBOARDING_BEATS = [
   },
   {
     id: 'handshake',
-    commsSource: 'HOUSTON', commsText: 'We have you on telemetry. Reticle is live — it locks the nearest piece for you.',
+    commsSource: 'HOUSTON', commsText: 'We have you on telemetry. Reticle is live. It locks the nearest piece for you.',
     commsAck: null,
     glyph: '✓', keys: [], skillId: null,
     autoAdvanceAfter: 3000,
@@ -61,21 +61,21 @@ export const ONBOARDING_BEATS = [
     // The tease. AutoLockController has locked the close glinting panel right
     // in front of the mother. Teach the ONE key the opening forces: the net.
     id: 'tease_lock',
-    commsSource: 'HOUSTON', commsText: 'Locked on. That panel is right in front of you — fire the Mother net with N.',
+    commsSource: 'HOUSTON', commsText: 'Debris {distM} meters in front. Launch net with N.',
     commsAck: 'Clean catch, Cowboy.',
-    text: 'Fire net (N)',
+    text: 'Launch net (N)',
     glyph: 'N',
     keys: ['KeyN'],
     triggerEvent: 'LASSO_FIRED',
     skillId: 'collect_lasso',
     credit: 10,
-    escalationText: 'The bracket on the panel ahead is your lock. Press N to fire the Mother net at it.',
+    escalationText: 'That bracket is your lock. Press N to launch the net.',
   },
   {
     // Confirm the first catch landed + name the reward loop. The reticle
     // auto-advances to the next forward piece (AutoLockController REACQUIRE).
     id: 'first_catch',
-    commsSource: 'HOUSTON', commsText: 'Capture confirmed. Salvage refines into fuel and credits. Another one\'s locked — take it.',
+    commsSource: 'HOUSTON', commsText: 'Capture confirmed. Salvage refines into fuel and credits. Another one\'s locked. Take it.',
     commsAck: null,
     glyph: '✓', keys: [], skillId: null,
     triggerEvent: 'DEBRIS_CAPTURED',
@@ -98,13 +98,13 @@ export const ONBOARDING_BEATS = [
     // No-net safety: if the player is out of nets here, graduate past rather
     // than stranding them (the NET_EMPTY_CLICK consolation path).
     netEmptySkip: true,
-    netEmptyComms: 'Out of nets — we\'ll resupply. Moving on, Cowboy.',
+    netEmptyComms: 'Out of nets. We\'ll resupply. Moving on, Cowboy.',
   },
   {
     // The range wall. The third piece is beyond net range — autolock went
     // silent + yellow OUT OF RANGE. Teach Autopilot (A) here and ONLY here.
     id: 'range_wall',
-    commsSource: 'BANGALORE', commsText: 'That one\'s too far for the net — see OUT OF RANGE. Press A to autopilot in.',
+    commsSource: 'BANGALORE', commsText: 'That one\'s too far for the net. See OUT OF RANGE. Press A to autopilot in.',
     commsAck: 'On station. Net it now.',
     text: 'Autopilot in (A)',
     glyph: 'A',
@@ -115,13 +115,13 @@ export const ONBOARDING_BEATS = [
     // Hold until a target is actually out of range (the player has cleared the
     // two close pieces and the reticle has hopped to the far one).
     requiresOutOfRange: true,
-    outOfRangeNudge: 'Clear the close pieces first — the reticle will lock the far one and show OUT OF RANGE.',
+    outOfRangeNudge: 'Clear the close pieces first. The reticle will lock the far one and show OUT OF RANGE.',
     escalationText: 'A engages autopilot to the locked target. It closes the gap; the bracket turns cyan when the net can reach.',
   },
   {
     // Close-and-catch payoff: AP arrived, range met (cyan + lock sound), net it.
     id: 'close_and_catch',
-    commsSource: 'BANGALORE', commsText: 'In range. Fire the net.',
+    commsSource: 'BANGALORE', commsText: 'In range. Launch the net.',
     commsAck: null,
     glyph: '✓', keys: [], skillId: null,
     triggerEvent: 'DEBRIS_CAPTURED',
@@ -130,14 +130,14 @@ export const ONBOARDING_BEATS = [
     autoAdvanceAfter: 8000,
     // No-net safety: graduate past if the player is out of nets here.
     netEmptySkip: true,
-    netEmptyComms: 'Out of nets — we\'ll resupply. Moving on, Cowboy.',
+    netEmptyComms: 'Out of nets. We\'ll resupply. Moving on, Cowboy.',
   },
   {
     // Free clearing — solo, unguided. Graduation proof: capturing the rest of
     // the cluster is inherently unguided. Optional skip so a no-nets player
     // isn't stranded.
     id: 'free_clear',
-    commsSource: 'HOUSTON', commsText: 'You\'ve got the loop — scan, lock, close, net. Clear the rest of the cluster.',
+    commsSource: 'HOUSTON', commsText: 'You\'ve got the loop: scan, lock, close, net. Clear the rest of the cluster.',
     commsAck: null,
     glyph: '★', keys: [], skillId: null,
     autoAdvanceAfter: 4000,
@@ -477,7 +477,7 @@ export class OnboardingDirector {
       ? this._skills.getHintPresentation() : 'modal';
     this._emit(Events.HINT_POSTED, {
       id: 'jit_arrows_sk',
-      text: 'Daughter on station — arrow keys rotate the mother to line her up.',
+      text: 'Daughter on station. Arrow keys rotate the mother to line her up.',
       glyph: '←→↑↓',
       keys: ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'],
       skillId,
@@ -644,7 +644,7 @@ export class OnboardingDirector {
       this._emitComms({
         source: beat.commsSource || 'HOUSTON',
         channel: 'HOUSTON',
-        text: beat.commsText,
+        text: this._renderCommsText(beat.commsText),
         priority: 'info',
         // Tag actionable instructions with their beat id so the comms panel can
         // drop the attention highlight the instant the player follows it
@@ -1080,6 +1080,33 @@ export class OnboardingDirector {
     const catalog = Constants?.SKILLS?.CATALOG;
     if (!Array.isArray(catalog)) return null;
     return catalog.find(s => s.id === skillId) || null;
+  }
+
+  /**
+   * Interpolate live-context tokens in a comms line. Currently supports
+   * `{distM}` → the rounded range (metres) to the nearest tracked debris, so a
+   * targeting cue reads the real distance the player sees rather than a stale
+   * hardcoded number. When no live distance is available (no contextProvider,
+   * or nothing in range yet) the distance clause is dropped so the line still
+   * reads cleanly (e.g. "Debris in front. Launch net with N.").
+   * @param {string} text
+   * @returns {string}
+   * @private
+   */
+  _renderCommsText(text) {
+    if (typeof text !== 'string' || text.indexOf('{distM}') === -1) return text;
+    let distM = null;
+    if (this._context) {
+      try {
+        const ctx = this._context() || {};
+        if (Number.isFinite(ctx.nearestDebrisM) && ctx.nearestDebrisM > 0) {
+          distM = Math.round(ctx.nearestDebrisM);
+        }
+      } catch (_e) { /* context is best-effort */ }
+    }
+    if (distM != null) return text.replace('{distM} meters', `${distM} meters`);
+    // No live range — strip the "{distM} meters " clause (note trailing space).
+    return text.replace('{distM} meters ', '').replace('{distM} meters', '');
   }
 
   _emit(eventName, payload) {

@@ -828,7 +828,7 @@ export class LassoSystem {
                 if (veteran) {
                     eventBus.emit(Events.HINT_POSTED, {
                         id: 'lasso_in_range',
-                        text: 'In range — N to cast',
+                        text: 'In range. N to cast',
                         glyph: 'N',
                         keys: ['KeyN'],
                         skillId: 'collect_lasso',
@@ -907,7 +907,7 @@ export class LassoSystem {
         if (Constants.FEATURE_FLAGS.MOTHER_CARGO_STOW && this._firstFreeCell() < 0) {
             eventBus.emit(Events.LASSO_DENIED, { reason: 'cargo_full' });
             eventBus.emit(Events.COMMS_MESSAGE, {
-                text: 'Cargo full — furnace still processing. Wait for a cell to clear.',
+                text: 'Cargo full. Furnace still processing. Wait for a cell to clear.',
                 source: 'SYSTEM',
                 channel: 'CMD',
                 priority: 'warning',
@@ -1707,7 +1707,7 @@ export class LassoSystem {
         eventBus.emit(Events.LASSO_SNAPPED, { targetId, tensionN });
         eventBus.emit(Events.LASSO_MISSED); // tutorial/skills treat a snap as a failed catch
         eventBus.emit(Events.COMMS_MESSAGE, {
-            text: 'Net tether snapped under load. Catch lost — detumble or use a Daughter.',
+            text: 'Net tether snapped under load. Catch lost. Detumble or use a Daughter.',
             source: 'SYSTEM',
             channel: 'CMD',
             priority: 'warning',

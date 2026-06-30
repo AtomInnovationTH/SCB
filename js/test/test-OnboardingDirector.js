@@ -169,7 +169,7 @@ describe('OnboardingDirector — lifecycle (post → trigger → advance)', () =
 
       const commsEmits = eb._findEmits(Events.COMMS_MESSAGE);
       assert.ok(commsEmits.length >= 1, 'COMMS_MESSAGE must fire on beat post');
-      assert.ok(/fire the Mother net with N/i.test(commsEmits[0].payload.text));
+      assert.ok(/Launch net with N/i.test(commsEmits[0].payload.text));
 
       const hintEmits = eb._findEmits(Events.HINT_POSTED);
       assert.ok(hintEmits.length >= 1, 'HINT_POSTED must fire on beat post');

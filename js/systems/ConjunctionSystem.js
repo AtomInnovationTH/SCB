@@ -97,6 +97,9 @@ export class ConjunctionSystem {
     this._primerSent = false;
     this._primerTimer = 0;
     this._pendingFirstAlert = null;
+    // Onboarding: one-shot dodge-tools tip on the first close pass (YELLOW/RED),
+    // when rolling up the panels (,) and stowing the struts (.) first matters.
+    this._dodgeToolsTipSent = false;
 
     // ST-6.3: MOID cache and badge state
     /** @type {Map<number|string, number>} debris id → MOID in metres */
@@ -281,6 +284,7 @@ export class ConjunctionSystem {
     this._primerSent = false;
     this._primerTimer = 0;
     this._pendingFirstAlert = null;
+    this._dodgeToolsTipSent = false;
     this._conjunctionAllowed = false;  // ST-4.C: reset mission profile gate
     // ST-6.3: Reset MOID state
     this._moidCache.clear();
@@ -595,6 +599,18 @@ export class ConjunctionSystem {
       _critical: tier === TIER.RED,
       text: `CONJUNCTION ${tier}: ${(debris.type || 'UNKNOWN').toUpperCase()} #${debris.id} at ${distMeters}m in ${Math.round(tca)}s`,
     });
+
+    // Onboarding (JIT): the first real close pass is when protecting extended
+    // hardware first matters. Teach the two dodge-tool keys in one comms line.
+    if (!this._dodgeToolsTipSent && (tier === TIER.YELLOW || tier === TIER.RED)) {
+      this._dodgeToolsTipSent = true;
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        source: 'HOUSTON',
+        channel: 'HOUSTON',
+        priority: 'warning',
+        text: 'Debris crossing close. Tuck in to protect your hardware.<br>Roll up the panels with , and stow the struts with .',
+      });
+    }
 
     console.log(
       `[ConjunctionSystem] ${tier} alert #${this._alertCount}: ` +

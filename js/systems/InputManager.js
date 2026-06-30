@@ -1560,7 +1560,7 @@ export class InputManager {
       this._enterArmPilotCamera(arm);
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: 'HOUSTON', channel: 'CMD',
-        text: `${arm.displayName} is adrift — thrusters dry, avionics live. Press R to reel her home.`,
+        text: `${arm.displayName} is adrift. Thrusters dry, avionics live. Press R to reel her home.`,
         priority: 'info',
       });
     } else if (arm.state === Constants.ARM_STATES.EXPENDED) {

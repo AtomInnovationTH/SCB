@@ -3062,7 +3062,7 @@ export const Constants = {
           id: 'ch7_cluster',
           type: 'interactive',
           source: 'HOUSTON',
-          text: 'Open the Debris Map (M) and pick this cluster. Then target (T), autopilot (A), and net it piece by piece until it\'s clear — cheaper than re-planning every grab.',
+          text: 'Open the Debris Map (M) and pick this cluster. Then target (T), autopilot (A), and net it piece by piece until it\'s clear. Cheaper than re-planning every grab.',
           skillId: 'strategic_map',
           triggerEvent: 'DEBRIS_MAP_CLUSTER_SELECTED',
           title: 'WORK THE CLUSTER',
@@ -3356,7 +3356,7 @@ export const Constants = {
       // idle hint. Carries the 2× score incentive the old line had.
       state: 'TRANSIT', idleS: 3, when: 'always',
       hintId: 'transit_pilot_nudge', title: 'Daughter in transit',
-      text: 'Press 1-4 to take manual control — a piloted capture scores 2×.',
+      text: 'Press 1-4 to take manual control. A piloted capture scores 2×.',
       icon: '🕹',
     },
     {

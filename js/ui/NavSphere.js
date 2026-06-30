@@ -182,6 +182,18 @@ export class NavSphere {
       const gameplay = (to === GameStates.ORBITAL_VIEW || to === GameStates.APPROACH || to === GameStates.INTERACTION);
       if (!gameplay) this.setVisible(false);
     });
+    // Declutter the first mission: hold the nav orb off by default so new
+    // players aren't faced with the radar before they've learned the loop.
+    // Press 8 to bring it up (see toggleMinimized). It returns automatically
+    // from mission 2 on. `_hidden` is honoured by setVisible(), so the view
+    // config's showNavSphere:true can't override the first-mission hold.
+    eventBus.on(Events.MISSION_START, ({ missionNumber } = {}) => {
+      this._hidden = (missionNumber === 1);
+      this._frameSkip = -1;
+      if (this.canvas) {
+        this.canvas.style.display = (this._hidden || !this._visible) ? 'none' : 'block';
+      }
+    });
     // Comms panel stepped to a new size — its bottom edge (which anchors the
     // sphere's vertical position) moved. The height animates over ~0.3s, so
     // keep recomputing through a short settle window (see update()).
@@ -263,6 +275,16 @@ export class NavSphere {
    */
   toggleMinimized() {
     if (!this.canvas) return;
+    // If the orb is being held off (default-off in the first mission, or a
+    // prior manual hide), the first 8 press brings it up rather than collapsing
+    // an already-hidden orb. Subsequent presses minimize/expand as normal.
+    if (this._hidden) {
+      this._hidden = false;
+      this._minimized = false;
+      this._frameSkip = -1;
+      this.canvas.style.display = this._visible ? 'block' : 'none';
+      return;
+    }
     this._minimized = !this._minimized;
     this._frameSkip = -1; // redraw immediately on the next frame
   }

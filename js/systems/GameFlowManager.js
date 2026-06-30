@@ -1153,7 +1153,7 @@ class GameFlowManager {
             if (sight) {
               eventBus.emit(Events.COMMS_MESSAGE, {
                 sender: 'SPACECRAFT',
-                text: `Off your port side — the ${sight}. Your reference point.`,
+                text: `Off your port side: the ${sight}. Your reference point.`,
                 priority: 'info',
               });
             }

@@ -167,7 +167,7 @@ export class MissionMilestones {
     eventBus.on(Events.CLUSTER_CLEARED, () => {
       eventBus.emit(Events.HINT_POSTED, {
         id: 'cluster-cleared-next',
-        text: 'Cluster clear. Press M for the map — pick your next cluster by ΔV cost.',
+        text: 'Cluster clear. Press M for the map and pick your next cluster by ΔV cost.',
         keys: ['M'],
         duration: 9000,
         priority: 'normal',
@@ -179,7 +179,7 @@ export class MissionMilestones {
         this._firstClusterClearComms = true;
         eventBus.emit(Events.COMMS_MESSAGE, {
           sender: 'HOUSTON',
-          text: 'Nice sweep, Cowboy. Moving between clusters costs ΔV — gather metals and pick efficient lines, and you climb higher for less.',
+          text: 'Nice sweep, Cowboy. Moving between clusters costs ΔV. Gather metals and pick efficient lines, and you climb higher for less.',
           priority: 'info',
           _postOnboarding: true,
         });

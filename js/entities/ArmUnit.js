@@ -1241,7 +1241,7 @@ export class ArmUnit {
       // Plain-language reassurance: the mother is hauling a low/empty daughter
       // home on the tether (winch power — no propellant needed).
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `Reeling ${this.displayName} home on the tether — winch power, no FEEP needed.`,
+        text: `Reeling ${this.displayName} home on the tether. Winch power, no FEEP needed.`,
         source: 'HOUSTON',
         channel: 'CMD',
         priority: 'info',
@@ -1483,7 +1483,7 @@ export class ArmUnit {
     if (this.state === S.ADRIFT || this.fuel <= (Constants.ARM_RESERVE_FUEL ?? 0)) {
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: 'HOUSTON', channel: 'CMD',
-        text: `${this.displayName}: Insufficient FEEP for a deorbit burn — reel her in (R) instead.`,
+        text: `${this.displayName}: Insufficient FEEP for a deorbit burn. Reel her in (R) instead.`,
         priority: 'warning',
       });
       return { success: false, fuelAtStart: this.fuel, totalMass: 0 };
@@ -5716,7 +5716,7 @@ export class ArmUnit {
     eventBus.emit(Events.COMMS_MESSAGE, {
       source: 'HOUSTON',
       channel: 'CMD',
-      text: `${this.displayName}: FEEP propellant spent — thrusters offline, but she's still on the tether and powered. Press R to reel her home (winch, no fuel needed) or disconnect. Not lost.`,
+      text: `${this.displayName}: FEEP propellant spent. Thrusters offline, but she's still on the tether and powered. Press R to reel her home (winch, no fuel needed) or disconnect. Not lost.`,
       priority: 'warning',
     });
   }
@@ -5823,7 +5823,7 @@ export class ArmUnit {
         this._transitionTo(S.REELING);
         eventBus.emit(Events.COMMS_MESSAGE, {
           source: 'HOUSTON', channel: 'CMD',
-          text: `${this.displayName}: FEEP reserve only — finishing the return on the winch.`,
+          text: `${this.displayName}: FEEP reserve only. Finishing the return on the winch.`,
           priority: 'warning',
         });
         eventBus.emit(Events.ARM_RECALLED, { armId: this.id });

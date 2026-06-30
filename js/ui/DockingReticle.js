@@ -687,14 +687,14 @@ export class DockingReticle {
       ctx.fillStyle = `rgba(0, 255, 136, ${pulse})`;
       ctx.shadowColor = C.primary;
       ctx.shadowBlur = 10;
-      ctx.fillText('\u25CF NET READY \u2014 [N] launch', cx, y);
+      ctx.fillText('\u25CF NET READY: [N] launch', cx, y);
       ctx.shadowBlur = 0;
     } else {
       ctx.font = `13px ${FONT}`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillStyle = C.gray;
-      ctx.fillText('\u25CB NET \u2014 get closer to deploy', cx, y);
+      ctx.fillText('\u25CB NET: get closer to deploy', cx, y);
     }
   }
 
