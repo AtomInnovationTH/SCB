@@ -551,8 +551,7 @@ export class HUD {
     // Ensure panels are visible (dormant handles dimming, not display:none)
     if (this.panels.targets) this.panels.targets.style.display = '';
     if (this.panels.arms) this.panels.arms.style.display = '';
-    if (this.panels.resources) this.panels.resources.style.display = '';
-    if (this.panels.power) this.panels.power.style.display = '';
+    if (this.panels.mother) this.panels.mother.style.display = '';
     if (this._rightColumn) this._rightColumn.style.display = 'flex';
     if (this.statusPanel && this.statusPanel.leftColumn) {
       this.statusPanel.leftColumn.style.display = 'flex';
@@ -1264,15 +1263,11 @@ export class HUD {
 
     // --- Post-tutorial: camera view controls panel visibility ---
 
-    // Resource panel
+    // MOTHER pane (Propulsion + Energy + Net digest) — keyed off showResources.
+    // The net's visibility now follows showResources (it is a Mother system).
     const showRes = cfg.showResources !== undefined ? cfg.showResources : true;
-    if (this.panels.resources) {
-      this.panels.resources.style.display = showRes ? '' : 'none';
-    }
-
-    // Power distribution panel (follows resource panel visibility)
-    if (this.panels.power) {
-      this.panels.power.style.display = showRes ? '' : 'none';
+    if (this.panels.mother) {
+      this.panels.mother.style.display = showRes ? '' : 'none';
     }
 
     // Toggle entire left column when all left-side panels are hidden

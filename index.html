@@ -144,30 +144,6 @@
       pointer-events: none;
     }
 
-    /* F12: Fleet panel vertical collapse */
-    #hud-arms-panel .fleet-collapsed-summary {
-      opacity: 1;
-      max-height: 40px;
-      transition: opacity 0.15s ease, max-height 0.2s ease;
-      font-size: 10px;
-      overflow: hidden;
-    }
-    #hud-arms-panel:hover .fleet-collapsed-summary {
-      opacity: 0;
-      max-height: 0;
-      pointer-events: none;
-    }
-    #hud-arms-panel .fleet-full-content {
-      max-height: 0;
-      overflow: hidden;
-      opacity: 0;
-      transition: max-height 0.3s ease, opacity 0.2s ease 0.1s;
-    }
-    #hud-arms-panel:hover .fleet-full-content {
-      max-height: 400px;
-      opacity: 1;
-    }
-
     /* === LEFT-COLUMN FLEX LAYOUT (always-expanded panels) === */
     #hud-left-column {
       display: flex;           /* safety net: JS sets this inline, but preserve it if cleared */
@@ -182,44 +158,73 @@
       width: 260px;
     }
 
-    /* Always hide collapsed summaries */
-    #hud-left-column .panel-collapsed-summary {
-      display: none !important;
-    }
-    #hud-left-column .fleet-collapsed-summary {
-      display: none !important;
-    }
-
     /* Always show full content */
     #hud-left-column .panel-full-content {
-      max-height: none !important;
-      opacity: 1 !important;
-    }
-    #hud-left-column .fleet-full-content {
       max-height: none !important;
       opacity: 1 !important;
     }
 
     /* === PaneChrome 2-step: minimize left-column panels to their summary === */
     /* When a left-column panel is on its 'min' step, flip the always-expanded
-       defaults above: show the compact summary, hide the full content. */
-    #hud-left-column .hud-panel.pane-step-min .panel-collapsed-summary,
-    #hud-left-column .hud-panel.pane-step-min .fleet-collapsed-summary {
-      display: block !important;
-    }
-    #hud-left-column .hud-panel.pane-step-min .panel-full-content,
-    #hud-left-column .hud-panel.pane-step-min .fleet-full-content {
+       default above: hide the full content. */
+    #hud-left-column .hud-panel.pane-step-min .panel-full-content {
       max-height: 0 !important;
       opacity: 0 !important;
       overflow: hidden !important;
       pointer-events: none !important;
     }
 
+    /* MOTHER pane: the inner Propulsion / Energy .panel-full-content blocks are
+       always "open" — their show/hide is driven by the .mother-detail wrapper
+       (hover-expand / pinned), not by the pane-step-min flip above. Override so
+       the min step (compact digest) doesn't double-collapse the inner content.
+       NOTE: must out-specify the suppressor above
+       (`#hud-left-column .hud-panel.pane-step-min .panel-full-content`, 1 id +
+       3 classes). Scoping under #hud-left-column gives 2 ids + 2 classes so this
+       wins the !important tie — otherwise the hover-reveal shows an empty box. */
+    #hud-left-column #hud-mother-panel.pane-step-min .panel-full-content {
+      max-height: none !important;
+      opacity: 1 !important;
+      overflow: visible !important;
+      pointer-events: auto !important;
+    }
+
     /* Left-column panels: auto pointer-events for hover detection */
-    #hud-resources-panel,
+    #hud-mother-panel,
     #hud-power-panel,
     #hud-arms-panel {
       pointer-events: auto;
+    }
+
+    /* === MOTHER pane: digest-led, hover-expand detail ===
+       The MOTHER pane leads with a one-line readiness digest and hides the full
+       Propulsion + Energy detail by default. Hovering the pane reveals it
+       (StatusPanel also toggles .mother-expanded on hover). */
+    #hud-mother-panel .mother-detail {
+      max-height: 0;
+      overflow: hidden;
+      opacity: 0;
+      transition: max-height 0.3s ease, opacity 0.2s ease 0.05s;
+    }
+    #hud-mother-panel:hover .mother-detail,
+    #hud-mother-panel.mother-expanded .mother-detail {
+      max-height: 720px;
+      opacity: 1;
+    }
+    /* Nested Propulsion / Energy blocks must NOT render their own boxed
+       border/background — only the MOTHER container is a visible box. */
+    #hud-mother-panel .mother-block {
+      background: none;
+      border: none;
+      padding: 0;
+      margin: 0;
+      position: relative;
+    }
+
+    /* The MOTHER pane is hover-reveal, so its PaneChrome resize badge (the small
+       +/− glyph) is redundant clutter — hide it. */
+    #hud-mother-panel .hud-pane-badge {
+      display: none !important;
     }
 
     .hud-panel[style*="pointer-events: auto"],
@@ -261,7 +266,7 @@
        These three panes carry the densest small-font telemetry, so they get a
        crisper monospace stack with grayscale antialiasing (Courier New renders
        muddy below ~12px), tighter line metrics, and higher-contrast titles. */
-    #hud-resources-panel,
+    #hud-mother-panel,
     #hud-power-panel,
     #hud-arms-panel {
       font-family: ui-monospace, 'SF Mono', 'JetBrains Mono', 'Roboto Mono',
@@ -273,7 +278,7 @@
     }
 
     /* Pane titles — bump size/weight/contrast so the section is scannable */
-    #hud-resources-panel .pane-title,
+    #hud-mother-panel .pane-title,
     #hud-power-panel .pane-title,
     #hud-arms-panel .pane-title {
       font-size: 12px !important;
@@ -284,7 +289,7 @@
     }
 
     /* Resource / power / fleet rows — larger, bolder labels and readouts */
-    #hud-resources-panel .hud-resource-row { font-size: 12px; }
+    #hud-mother-panel .hud-resource-row { font-size: 12px; }
     #hud-power-panel .power-label,
     #hud-power-panel .power-value {
       font-size: 11px !important;

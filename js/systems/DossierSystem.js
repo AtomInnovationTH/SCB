@@ -80,7 +80,54 @@ export class DossierSystem {
     /** @type {{id:*, elapsed:number}|null} survey in progress on the active target. */
     this._survey = null;
 
-    eventBus.on(Events.GAME_RESET, () => this.reset());
+    // First-credit legibility (Workstream 1): during onboarding, defer the
+    // survey-bounty payout so the player's first salient credit gain is the net
+    // catch they were just taught — not an unexplained +75 ~3 s into the sim.
+    /** @type {boolean} true between ONBOARDING_STARTED and ONBOARDING_COMPLETE. */
+    this._onboardingActive = false;
+    /** @type {boolean} true once the first capture released the deferred queue. */
+    this._firstCaptureDone = false;
+    /** @type {Map<*, number>} debrisId → deferred bounty amount (released later). */
+    this._deferredBounties = new Map();
+
+    // Store unsubscribe handles so instances (e.g. in tests) can detach from the
+    // shared eventBus and avoid accumulating handlers / cross-instance bleed.
+    /** @type {Array<Function>} */
+    this._unsubs = [];
+    this._unsubs.push(eventBus.on(Events.GAME_RESET, () => this.reset()));
+
+    // Gate deferral on ONBOARDING_STARTED actually firing (veteran-skip emits
+    // ONBOARDING_COMPLETE without STARTED → never defers; pays immediately).
+    this._unsubs.push(eventBus.on(Events.ONBOARDING_STARTED, () => {
+      this._onboardingActive = true;
+      this._firstCaptureDone = false;
+    }));
+    // Flush any still-deferred bounty so a player who finishes onboarding
+    // without capturing is never stranded.
+    this._unsubs.push(eventBus.on(Events.ONBOARDING_COMPLETE, () => {
+      this._onboardingActive = false;
+      this._flushDeferredBounties();
+    }));
+    // First capture while onboarding is active releases the deferred queue so
+    // the survey data lands in the same HUD credit flash as the catch reward.
+    this._unsubs.push(eventBus.on(Events.DEBRIS_CAPTURED, () => {
+      if (this._onboardingActive && !this._firstCaptureDone) {
+        this._firstCaptureDone = true;
+        this._flushDeferredBounties();
+      }
+    }));
+  }
+
+  /**
+   * Detach all eventBus subscriptions. The production singleton lives for the
+   * page lifetime and never needs this, but short-lived instances (tests) call
+   * it to avoid leaking handlers onto the shared bus.
+   */
+  destroy() {
+    if (this._unsubs) {
+      for (const off of this._unsubs) { if (typeof off === 'function') off(); }
+      this._unsubs = [];
+    }
   }
 
   /** Clear all knowledge state (new session). */
@@ -88,6 +135,36 @@ export class DossierSystem {
     this._profiled.clear();
     this._bountyPaid.clear();
     this._survey = null;
+    this._onboardingActive = false;
+    this._firstCaptureDone = false;
+    this._deferredBounties.clear();
+  }
+
+  /**
+   * Release every deferred survey bounty as a single combined SCORING_AWARD +
+   * one `_onboarding`-tagged comms line that bypasses tier-0 suppression.
+   * No-op (and silent) when nothing is queued.
+   * @private
+   */
+  _flushDeferredBounties() {
+    if (this._deferredBounties.size === 0) return;
+    let total = 0;
+    for (const amount of this._deferredBounties.values()) total += amount;
+    this._deferredBounties.clear();
+    if (total <= 0) return;
+
+    eventBus.emit(Events.SCORING_AWARD, {
+      points: total,
+      reason: 'Close-range survey data',
+    });
+    // Combined narration — the capture's own SCORING_AWARD lands on the same
+    // DEBRIS_CAPTURED event, so the wallet shows one combined jump.
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      sender: 'HOUSTON',
+      text: `Capture confirmed \u2014 salvage refines into fuel and credits, plus survey data. +$${total} cr.`,
+      priority: 'success',
+      _onboarding: true,
+    });
   }
 
   /** Whether a debris has its Full Profile unlocked. */
@@ -185,13 +262,22 @@ export class DossierSystem {
     this._profiled.add(target.id);
 
     let bountyPaid = false;
+    let bountyDeferred = false;
     if (!this._bountyPaid.has(target.id) && (D.SURVEY_BOUNTY || 0) > 0) {
       this._bountyPaid.add(target.id);
-      bountyPaid = true;
-      eventBus.emit(Events.SCORING_AWARD, {
-        points: D.SURVEY_BOUNTY,
-        reason: 'Close-range survey data',
-      });
+      if (this._onboardingActive && !this._firstCaptureDone) {
+        // Defer the payout: keep the visual profile reveal ("chest opens"), but
+        // release the credits together with the first net-catch reward so the
+        // player's first salient credit gain is legibly the catch they learned.
+        bountyDeferred = true;
+        this._deferredBounties.set(target.id, D.SURVEY_BOUNTY);
+      } else {
+        bountyPaid = true;
+        eventBus.emit(Events.SCORING_AWARD, {
+          points: D.SURVEY_BOUNTY,
+          reason: 'Close-range survey data',
+        });
+      }
     }
 
     eventBus.emit(Events.DEBRIS_PROFILED, {
@@ -201,12 +287,19 @@ export class DossierSystem {
     });
 
     const { total } = appraiseSalvage(target.salvage);
+    // While deferring, suppress the bounty clause — the combined release line
+    // (tagged _onboarding) narrates the credits on first capture instead.
+    const bountyClause = bountyPaid ? ` +$${D.SURVEY_BOUNTY} survey data.` : '';
     eventBus.emit(Events.COMMS_MESSAGE, {
       sender: 'HOUSTON',
       text: total > 0
-        ? `Survey complete. Full profile decrypted. Salvage appraisal \u20B9${total}.${bountyPaid ? ` +$${D.SURVEY_BOUNTY} survey data.` : ''}`
-        : `Survey complete. Full structural profile on file.${bountyPaid ? ` +$${D.SURVEY_BOUNTY} survey data.` : ''}`,
+        ? `Survey complete. Full profile decrypted. Salvage appraisal \u20B9${total}.${bountyClause}`
+        : `Survey complete. Full structural profile on file.${bountyClause}`,
       priority: 'success',
+      // During onboarding the neutral reveal line must bypass tier-0 suppression
+      // too, so the "chest opens" beat is still legible. The bounty itself is
+      // held back for the combined capture release above.
+      ...(bountyDeferred ? { _onboarding: true } : {}),
     });
   }
 }

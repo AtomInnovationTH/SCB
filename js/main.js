@@ -827,6 +827,7 @@ async function init() {
   // --- Phase 5: Wire cargo & scoring refs into shop for sell/contribute ---
   shopScreen.setCargoSystem(cargoSystem);
   shopScreen.setScoringSystem(scoringSystem);
+  shopScreen.setPersistenceManager(persistenceManager);
 
   // --- CH5 ISS conjunction boss (MISSION_ARC §6) — protect-the-asset event ---
   // Needs the shop (elevator-mass award) + debrisField (ISS-track spawn), so it

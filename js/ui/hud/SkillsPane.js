@@ -390,12 +390,11 @@ export class SkillsPane {
         const el = document.createElement('style');
         el.id = 'skills-pane-styles';
         el.textContent = `
-/* ── Skills Pane. Compact overlay (bottom-left dock) ──────────────────── */
+/* ── Skills Pane. Compact pane docked in the left column under Daughters ─── */
 .skills-pane {
-    position: fixed;
-    bottom: 10px;
-    left: 10px;
-    width: 280px;
+    position: relative;
+    width: 100%;
+    box-sizing: border-box;
     max-height: 300px;
     overflow-y: auto;
     background: rgba(0, 10, 20, 0.85);
@@ -747,7 +746,10 @@ export class SkillsPane {
     }
 
     /**
-     * Build the compact pane: header + body, appended to #hud-overlay.
+     * Build the compact pane: header + body. Docked into the left-column stack
+     * (`#hud-left-column`) directly under the Daughters pane so the readiness
+     * board reads top-to-bottom: MOTHER → DAUGHTERS → DISCOVERIES. Falls back to
+     * the HUD overlay if the column isn't present yet.
      * @private
      */
     _buildCompactPane() {
@@ -773,7 +775,11 @@ export class SkillsPane {
         pane.appendChild(body);
         this._paneBody = body;
 
-        this._hudContainer.appendChild(pane);
+        // Dock in the left column under Daughters (StatusPanel appends MOTHER then
+        // DAUGHTERS, so appending here lands directly beneath them). Fall back to
+        // the HUD overlay if the column hasn't been built.
+        const leftColumn = document.getElementById('hud-left-column');
+        (leftColumn || this._hudContainer).appendChild(pane);
         this._pane = pane;
     }
 

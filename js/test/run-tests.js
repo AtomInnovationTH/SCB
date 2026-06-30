@@ -106,6 +106,9 @@ import './test-CommsPanel.js';
 // ST-6.6: TRL annotation + badge helpers — Codex + Shop integrity, distribution
 import './test-TRL.js';
 
+// Early-shop tension: recommended-starter ⭐ + first-depot affordability floor
+import './test-ShopRecommendation.js';
+
 // ST-6.1: CatalogLoader + hybrid DebrisField + seeded Space Weather + active-sat guard
 import './test-CatalogLoader.js';
 

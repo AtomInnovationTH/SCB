@@ -446,6 +446,18 @@ export const Constants = {
     },
   },
 
+  // Shop / depot tuning (first-credit legibility + early-shop tension plan).
+  SHOP: {
+    // First-depot affordability floor. On the true first depot visit only
+    // (gated by the FIRST_DEPOT_VISITED ceremony flag), a one-time on-theme
+    // "first cleanup contract settled" bonus tops the wallet UP TO this floor
+    // if below it — enough for one 500 starter, not two and not the 800 net.
+    FIRST_DEPOT_FLOOR: 600,
+    // Ordered recommendation preference for the ⭐ starter highlight. The shop
+    // ⭐-marks the first item here that is un-owned and currently affordable.
+    RECOMMENDED_STARTERS: ['capture_net', 'fast_reel', 'enhanced_eo', 'efficient_ion'],
+  },
+
   // Orientation-based capture (capture-feedback overhaul Phase 2).
   // Elongated debris presents a different width depending on the approach
   // angle: broadside = lengthM (often un-nettable), end-on = widthM (the 5 m

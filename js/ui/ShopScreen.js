@@ -152,6 +152,56 @@ export const UPGRADES = [
     trl: 3, trlRationale: 'Electrostatic capture demonstrated on CubeSats; 160N force is game-speculative' },
 ];
 
+/**
+ * Recommended-starter highlight (early-shop tension plan). Ordered preference;
+ * the shop ⭐-marks the first item here that is (a) un-owned and (b) affordable.
+ * The badge persists on early visits until the player owns ANY starter, then
+ * fades. Cosmetic only — buying still flows through _purchaseUpgrade.
+ * Falls back to Constants.SHOP.RECOMMENDED_STARTERS so tuning lives in one place.
+ */
+export const STARTER_PREFERENCE =
+  (Constants.SHOP && Constants.SHOP.RECOMMENDED_STARTERS)
+  || ['capture_net', 'fast_reel', 'enhanced_eo', 'efficient_ion'];
+
+/** One-line "why" per starter, shown next to the ⭐ badge. */
+const STARTER_WHY = {
+  capture_net:  'Miss fewer catches',
+  fast_reel:    'Reel in faster, retry sooner',
+  enhanced_eo:  'Spot debris from farther out',
+  efficient_ion:'Stretch every drop of xenon',
+};
+
+/**
+ * Pick the recommended starter id: the first preference that is BOTH un-owned
+ * and affordable at the given credits. Returns null when none qualify or when
+ * the player already owns any starter (the ⭐ has served its purpose).
+ * Pure — exported for tests.
+ * @param {Array<{id:string,cost:number}>} upgrades — upgrade catalog
+ * @param {Map<string,number>|Set<string>|Iterable} owned — owned upgrade ids
+ * @param {number} credits — current spendable credits
+ * @param {string[]} [preference] — ordered preference list
+ * @returns {string|null}
+ */
+export function recommendedStarter(upgrades, owned, credits, preference = STARTER_PREFERENCE) {
+  const ownsId = (id) => {
+    if (!owned) return false;
+    if (owned instanceof Map || owned instanceof Set) return owned.has(id);
+    if (typeof owned.has === 'function') return owned.has(id);
+    if (Array.isArray(owned)) return owned.includes(id);
+    return false;
+  };
+  // Once the player owns any starter, the highlight fades entirely.
+  if (preference.some(ownsId)) return null;
+  const byId = new Map((upgrades || []).map(u => [u.id, u]));
+  for (const id of preference) {
+    const u = byId.get(id);
+    if (!u) continue;
+    if (ownsId(id)) continue;
+    if (credits >= u.cost) return id;
+  }
+  return null;
+}
+
 /** Spring tier descriptions for shop display */
 const SPRING_DESCRIPTIONS = [
   "Factory steel springs. Reliable but slow.",
@@ -179,6 +229,9 @@ export class ShopScreen {
     this._lastPurchasedId = null; // for flash animation
     this._springTier = 0;  // Current spring tier index (0 = T1 starter)
     this._tetherTier = 0;  // Current tether tier index (0 = T1 starter)
+    // True only while showing the player's first depot visit (set from the
+    // GAME_STATE_CHANGE payload). Drives the one-time first-visit framing + ⭐.
+    this._firstDepotVisit = false;
 
     // Phase 5: system references for cargo selling
     this._cargoSystem = null;
@@ -194,9 +247,17 @@ export class ShopScreen {
     this._build();
 
     // Self-manage visibility via EventBus (decoupled from GameFlowManager)
-    eventBus.on(Events.GAME_STATE_CHANGE, ({ to }) => {
-      if (to === GameStates.SHOP) this.show();
-      else this.hide();
+    eventBus.on(Events.GAME_STATE_CHANGE, ({ to, firstDepotVisit }) => {
+      if (to === GameStates.SHOP) {
+        // GameFlowManager persists FIRST_DEPOT_VISITED before this event fires,
+        // so the flag would already read true here. It passes the pre-write
+        // signal through the payload instead — capture it for refresh() to use.
+        this._firstDepotVisit = !!firstDepotVisit;
+        this.show();
+      } else {
+        this._firstDepotVisit = false;
+        this.hide();
+      }
     });
   }
 
@@ -279,6 +340,11 @@ export class ShopScreen {
             <span style="font-size:0.7rem;color:rgba(0,255,136,0.35);margin-left:12px;">
               Upgrades owned: <b id="shop-upgrade-count" style="color:rgba(0,255,136,0.6);">0</b>
             </span>
+          </div>
+          <div id="shop-firstvisit-note" style="display:none;font-size:0.78rem;
+                color:rgba(240,192,64,0.85);margin-top:8px;max-width:560px;
+                margin-left:auto;margin-right:auto;line-height:1.35;">
+            Credits are your refit budget — gear that pays for itself. Pick one upgrade that fits your run.
           </div>
         </div>
 
@@ -602,6 +668,19 @@ export class ShopScreen {
     const catContainer = this.element.querySelector('#shop-categories');
     if (!catContainer) return;
 
+    // First-depot framing + recommended-starter highlight (early-shop tension).
+    // The investment-framing header and ⭐ both key off "first depot visit";
+    // the ⭐ additionally requires the player to own no starter yet. Use the
+    // in-memory signal from GAME_STATE_CHANGE — the persisted FIRST_DEPOT_VISITED
+    // flag is already true by the time the shop renders, so re-reading it here
+    // would never show the framing on the actual first visit.
+    const firstDepot = this._firstDepotVisit;
+    const noteEl = this.element.querySelector('#shop-firstvisit-note');
+    if (noteEl) noteEl.style.display = firstDepot ? 'block' : 'none';
+    const recommendedId = firstDepot
+      ? recommendedStarter(UPGRADES, this.purchasedUpgrades, scoringSystem.credits)
+      : null;
+
     // Group by category
     const categories = {};
     UPGRADES.forEach(u => {
@@ -615,7 +694,7 @@ export class ShopScreen {
                      margin-bottom:6px;padding-bottom:3px;border-bottom:1px solid rgba(0,255,136,0.15);">
           ${cat.toUpperCase()}
         </div>
-        ${upgrades.map(u => this._renderUpgradeCard(u)).join('')}
+        ${upgrades.map(u => this._renderUpgradeCard(u, recommendedId)).join('')}
       </div>
     `).join('');
 
@@ -683,10 +762,11 @@ export class ShopScreen {
   // ========================================================================
 
   /** @private Render a single upgrade card */
-  _renderUpgradeCard(upgrade) {
+  _renderUpgradeCard(upgrade, recommendedId = null) {
     const currentLevel = this.purchasedUpgrades.get(upgrade.id) || 0;
     const maxed = currentLevel >= upgrade.maxLevel;
     const canAfford = scoringSystem.credits >= upgrade.cost;
+    const isRecommended = recommendedId === upgrade.id;
     // Support both single `requires` (string) and `requiresAll` (array) prerequisites
     let requiresMet = true;
     if (upgrade.requires) {
@@ -723,16 +803,28 @@ export class ShopScreen {
                      background:rgba(0,0,0,0.3);">${techLevelBadgeText(upgrade.trl)}</span>`
       : '';
 
+    // Recommended-starter ⭐ badge + one-line "why" (early-shop tension).
+    const starBadge = isRecommended
+      ? `<span title="Recommended starter" style="margin-left:6px;font-size:0.75rem;
+               color:#f0c040;">★</span>`
+      : '';
+    const whyLine = isRecommended && STARTER_WHY[upgrade.id]
+      ? `<div style="font-size:0.65rem;color:rgba(240,192,64,0.85);margin-top:2px;">
+           ★ ${STARTER_WHY[upgrade.id]}</div>`
+      : '';
+
     return `
       <div data-upgrade-id="${upgrade.id}" style="display:flex;justify-content:space-between;align-items:center;
                   padding:8px 12px;margin:4px 0;border-radius:3px;
-                  background:${bgColor};border:1px solid ${borderColor};
+                  background:${isRecommended ? 'rgba(240,192,64,0.06)' : bgColor};
+                  border:1px solid ${isRecommended ? 'rgba(240,192,64,0.45)' : borderColor};
                   opacity:${opacity};transition:all 0.3s;">
         <div style="flex:1;">
           <div style="font-size:0.85rem;color:${maxed ? 'rgba(0,255,136,0.6)' : '#00ff88'};">
-            ${upgrade.name}${levelBadge}${trlBadge}
+            ${upgrade.name}${levelBadge}${trlBadge}${starBadge}
           </div>
           <div style="font-size:0.7rem;color:rgba(0,255,136,0.5);">${decorateGlossary(upgrade.desc, { once: true })}</div>
+          ${whyLine}
           ${upgrade.requires && !requiresMet ? `<div style="font-size:0.65rem;color:#ff6644;">Requires: ${UPGRADES.find(u => u.id === upgrade.requires)?.name}</div>` : ''}
           ${upgrade.requiresAll && !requiresMet ? `<div style="font-size:0.65rem;color:#ff6644;">Requires: ${upgrade.requiresAll.map(id => UPGRADES.find(u => u.id === id)?.name || id).join(' + ')}</div>` : ''}
           ${!canAfford && !maxed ? `<div style="font-size:0.6rem;color:rgba(255,68,68,0.5);margin-top:2px;">Need ${(upgrade.cost - scoringSystem.credits).toLocaleString()} more cr</div>` : ''}

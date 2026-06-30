@@ -149,6 +149,12 @@ class GameFlowManager {
 
     const from = gameState.currentState;
 
+    // First-depot visit signal, computed BEFORE the flag is persisted so the
+    // shop can render its one-time framing/⭐ on the actual first visit. Passed
+    // through GAME_STATE_CHANGE (the flag write below would otherwise flip to
+    // true before ShopScreen reads storage in its own handler).
+    let firstDepotVisit = false;
+
     // Clear pending shop timeout on terminal states
     if (state === GameStates.GAME_OVER || state === GameStates.WIN) {
       if (this._shopTimeoutId) { timerManager.clear(this._shopTimeoutId); this._shopTimeoutId = null; }
@@ -264,6 +270,7 @@ class GameFlowManager {
 
       case GameStates.SHOP:
         // HUD self-manages visibility via GAME_STATE_CHANGE
+        firstDepotVisit = this._applyFirstDepotFloor();
         break;
 
       case GameStates.GAME_OVER:
@@ -278,7 +285,7 @@ class GameFlowManager {
     }
 
     // Notify self-managing UI screens and overlays
-    eventBus.emit(Events.GAME_STATE_CHANGE, { from, to: state, payload });
+    eventBus.emit(Events.GAME_STATE_CHANGE, { from, to: state, payload, firstDepotVisit });
 
     console.log(`[GameState] ${from} → ${state}`);
   }
@@ -395,6 +402,20 @@ class GameFlowManager {
           this.applyUpgradeEffect(data);
         }
       });
+
+      // Rollout backfill: FIRST_DEPOT_VISITED is newer than some saves. Without
+      // this, _applyFirstDepotFloor() (gated on that flag) would fire its
+      // one-time "first cleanup contract settled" credit floor on the next depot
+      // visit of every PRE-EXISTING player, mutating veteran wallets and showing
+      // new-pilot framing. A loaded save with any progression (debris cleared or
+      // upgrades bought) is by definition past its true first depot, so mark the
+      // flag seen for them. Genuinely fresh profiles start via MENU_START and
+      // still earn the bonus on their real first depot.
+      const pastFirstDepot = (save.debrisCleared || 0) > 0
+        || (Array.isArray(save.upgrades) && save.upgrades.length > 0);
+      if (pastFirstDepot && !persistenceManager.getCeremonyFlag('FIRST_DEPOT_VISITED')) {
+        persistenceManager.setCeremonyFlag('FIRST_DEPOT_VISITED', true);
+      }
 
       // Sync to gameState
       gameState.debrisCleared = save.debrisCleared || 0;
@@ -1427,6 +1448,10 @@ class GameFlowManager {
       resourceMaxes: resources,
       power: powerDistribution.serialize(),
       contractMassKg: shopScreen ? shopScreen.getContractMass() : 0,
+      // Preserve profile-permanent ceremony flags across full saves. Without
+      // this, saveGame() would reset the whitelist to defaults (false) and drop
+      // flags like FIRST_NET_DEPLOY / FIRST_DEPOT_VISITED set via setCeremonyFlag.
+      ceremonyFlags: persistenceManager.peek()?.ceremonyFlags || {},
       stats: {
         totalCaptures: scoring.totalCaptures,
         manualCaptures: scoring.manualCaptures,
@@ -1443,10 +1468,45 @@ class GameFlowManager {
     persistenceManager.save(saveData);
   }
 
+  /**
+   * First-depot settlement (first-credit legibility + early-shop tension plan).
+   * On the player's true first depot visit only — gated by the profile-permanent
+   * FIRST_DEPOT_VISITED ceremony flag — pay a one-time, on-theme "first cleanup
+   * contract settled" bonus that tops the wallet UP TO Constants.SHOP.FIRST_DEPOT_FLOOR
+   * if it is below that. This guarantees one ~500 starter is affordable without
+   * gifting two upgrades or the 800 net. Runs once per profile and survives
+   * GAMEOVER_CONTINUE (which resets debrisCleared but not the flag).
+   * Called on SHOP entry (a depot arrival), never on SHOP_DEPLOY (exit).
+   * @returns {boolean} true when this was the first depot visit (so the shop can
+   *   render its one-time first-visit framing + recommended-starter ⭐). The
+   *   FIRST_DEPOT_VISITED flag is persisted here, so callers must use this
+   *   return value rather than re-reading the flag afterward.
+   * @private
+   */
+  _applyFirstDepotFloor() {
+    if (persistenceManager.getCeremonyFlag('FIRST_DEPOT_VISITED')) return false;
+
+    const FLOOR = (Constants.SHOP && Constants.SHOP.FIRST_DEPOT_FLOOR) || 600;
+    const topUp = Math.max(0, FLOOR - scoringSystem.credits);
+    if (topUp > 0) {
+      scoringSystem.addCredits(topUp);
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        sender: 'HOUSTON',
+        text: `First cleanup contract settled \u2014 +$${topUp} cr to your refit budget.`,
+        priority: 'success',
+      });
+    }
+
+    // Persist the new credits, then mark the flag (read-modify-write preserves
+    // the freshly-saved wallet + other ceremony flags).
+    this.saveGame();
+    persistenceManager.setCeremonyFlag('FIRST_DEPOT_VISITED', true);
+    return true;
+  }
+
   // ==========================================================================
   // HELPERS
   // ==========================================================================
-
   /**
    * Check if a specific upgrade has been purchased.
    * @param {string} upgradeId - e.g. 'hazmat_handler', 'salvage_scanner'

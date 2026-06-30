@@ -367,11 +367,19 @@ export class DockingReticle {
       this._drawTargetIndicator(ctx, cx, cy);
     }
 
-    // 5. Range readout
-    this._drawRangeReadout(ctx, cx);
+    // 5/6. Range + closure-rate readouts — MANUAL PILOT ONLY.
+    // RNG/CLR are advanced hand-flying instruments: the pilot uses closure
+    // rate to feather the final approach and RNG for fine arm-tip distance.
+    // Under autopilot the DAP controller flies the approach itself, so these
+    // numbers are noise (and RNG duplicates the per-debris TargetReticle
+    // distance). Suppress them unless the player is actually flying the arm.
+    if (this._arm.isManual && this._arm.isManual()) {
+      // 5. Range readout
+      this._drawRangeReadout(ctx, cx);
 
-    // 6. Closure rate readout
-    this._drawClosureRate(ctx, cx);
+      // 6. Closure rate readout
+      this._drawClosureRate(ctx, cx);
+    }
 
     // 7. Alignment bars
     this._drawAlignmentBars(ctx, cx, cy, w, h);

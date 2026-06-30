@@ -133,8 +133,107 @@ describe('DossierSystem — data bounty (once per debris)', () => {
     assert.equal(awards2.length, 0, 're-profile pays nothing');
     assert.equal(got2[Events.DEBRIS_PROFILED][0].bountyPaid, false);
 
-    ds.reset();
+    ds.reset(); ds.destroy();
     assert.ok(!ds.isProfiled('pay-1'), 'reset clears profiles');
+  });
+});
+
+describe('DossierSystem — onboarding deferral (first-credit legibility)', () => {
+  const near = { x: 10 * M, y: 0, z: 0 };
+  const survey = (ds, d) => { for (let i = 0; i < 35; i++) ds.update(0.1, { playerPos: near, target: d }); };
+
+  it('survey during onboarding (no capture yet) does NOT emit the bounty award', () => {
+    const ds = new DossierSystem();
+    const d = makeDebris({ id: 'def-1' });
+    eventBus.emit(Events.ONBOARDING_STARTED, {});
+    const got = collect([Events.SCORING_AWARD, Events.DEBRIS_PROFILED], () => survey(ds, d));
+    const awards = got[Events.SCORING_AWARD].filter(a => a.reason === 'Close-range survey data');
+    assert.equal(awards.length, 0, 'bounty deferred, not awarded at survey time');
+    assert.equal(got[Events.DEBRIS_PROFILED].length, 1, 'profile still revealed');
+    assert.equal(got[Events.DEBRIS_PROFILED][0].bountyPaid, false);
+    ds.reset(); ds.destroy();
+  });
+
+  it('first DEBRIS_CAPTURED while active releases the deferred bounty exactly once', () => {
+    const ds = new DossierSystem();
+    const d = makeDebris({ id: 'def-2' });
+    eventBus.emit(Events.ONBOARDING_STARTED, {});
+    survey(ds, d);
+    const got = collect([Events.SCORING_AWARD], () => {
+      eventBus.emit(Events.DEBRIS_CAPTURED, {});
+      eventBus.emit(Events.DEBRIS_CAPTURED, {});  // second capture must not re-pay
+    });
+    const awards = got[Events.SCORING_AWARD].filter(a => a.reason === 'Close-range survey data');
+    assert.equal(awards.length, 1, 'deferred bounty released once on first capture');
+    assert.equal(awards[0].points, Constants.DOSSIER.SURVEY_BOUNTY);
+    ds.reset(); ds.destroy();
+  });
+
+  it('multiple surveyed debris accumulate; release pays the sum once', () => {
+    const ds = new DossierSystem();
+    const a = makeDebris({ id: 'def-3a' });
+    const b = makeDebris({ id: 'def-3b' });
+    eventBus.emit(Events.ONBOARDING_STARTED, {});
+    survey(ds, a);
+    survey(ds, b);
+    const got = collect([Events.SCORING_AWARD], () => eventBus.emit(Events.DEBRIS_CAPTURED, {}));
+    const awards = got[Events.SCORING_AWARD].filter(x => x.reason === 'Close-range survey data');
+    assert.equal(awards.length, 1, 'one combined award');
+    assert.equal(awards[0].points, Constants.DOSSIER.SURVEY_BOUNTY * 2, 'sum of both bounties');
+    ds.reset(); ds.destroy();
+  });
+
+  it('ONBOARDING_COMPLETE flushes a still-deferred bounty (player never captured)', () => {
+    const ds = new DossierSystem();
+    const d = makeDebris({ id: 'def-4' });
+    eventBus.emit(Events.ONBOARDING_STARTED, {});
+    survey(ds, d);
+    const got = collect([Events.SCORING_AWARD], () => eventBus.emit(Events.ONBOARDING_COMPLETE, {}));
+    const awards = got[Events.SCORING_AWARD].filter(a => a.reason === 'Close-range survey data');
+    assert.equal(awards.length, 1, 'flushed on completion so nothing is stranded');
+    assert.equal(awards[0].points, Constants.DOSSIER.SURVEY_BOUNTY);
+    ds.reset(); ds.destroy();
+  });
+
+  it('veteran-skip (COMPLETE without STARTED) pays immediately at survey time', () => {
+    const ds = new DossierSystem();
+    const d = makeDebris({ id: 'def-5' });
+    eventBus.emit(Events.ONBOARDING_COMPLETE, {});  // no STARTED → never defers
+    const got = collect([Events.SCORING_AWARD], () => survey(ds, d));
+    const awards = got[Events.SCORING_AWARD].filter(a => a.reason === 'Close-range survey data');
+    assert.equal(awards.length, 1, 'immediate pay when onboarding not active');
+    ds.reset(); ds.destroy();
+  });
+
+  it('GAME_RESET clears deferral state (no cross-run leakage)', () => {
+    const ds = new DossierSystem();
+    const d = makeDebris({ id: 'def-6' });
+    eventBus.emit(Events.ONBOARDING_STARTED, {});
+    survey(ds, d);
+    eventBus.emit(Events.GAME_RESET, {});
+    assert.equal(ds._deferredBounties.size, 0, 'deferred queue cleared');
+    assert.equal(ds._onboardingActive, false, 'onboarding flag cleared');
+    assert.equal(ds._firstCaptureDone, false, 'capture flag cleared');
+    const got = collect([Events.SCORING_AWARD], () => eventBus.emit(Events.DEBRIS_CAPTURED, {}));
+    const awards = got[Events.SCORING_AWARD].filter(a => a.reason === 'Close-range survey data');
+    assert.equal(awards.length, 0, 'no stranded payout after reset');
+    ds.destroy();
+  });
+
+  it('destroy() detaches listeners — a destroyed instance ignores further events', () => {
+    const ds = new DossierSystem();
+    const d = makeDebris({ id: 'def-7' });
+    eventBus.emit(Events.ONBOARDING_STARTED, {});
+    survey(ds, d);                  // queues a deferred bounty
+    assert.equal(ds._deferredBounties.size, 1, 'bounty queued while active');
+    ds.destroy();                   // detach from the shared bus
+    const got = collect([Events.SCORING_AWARD], () => {
+      eventBus.emit(Events.DEBRIS_CAPTURED, {});   // must NOT trigger a flush now
+      eventBus.emit(Events.GAME_RESET, {});        // must NOT reset now
+    });
+    const awards = got[Events.SCORING_AWARD].filter(a => a.reason === 'Close-range survey data');
+    assert.equal(awards.length, 0, 'destroyed instance emits nothing on capture');
+    assert.equal(ds._deferredBounties.size, 1, 'destroyed instance ignores GAME_RESET');
   });
 });
 

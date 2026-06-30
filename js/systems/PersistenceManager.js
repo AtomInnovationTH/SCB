@@ -80,6 +80,10 @@ class PersistenceManager {
         // Q2 Net-Launch Ceremony first-time flags (CEREMONY_REDESIGN.md §5.6)
         ceremonyFlags: {
           FIRST_NET_DEPLOY: data.ceremonyFlags?.FIRST_NET_DEPLOY ?? false,
+          // First-depot settlement + framing (first-credit legibility plan):
+          // gates the one-time affordability floor and the investment-framing
+          // shop header. Profile-permanent — survives GAMEOVER_CONTINUE.
+          FIRST_DEPOT_VISITED: data.ceremonyFlags?.FIRST_DEPOT_VISITED ?? false,
         },
       };
 

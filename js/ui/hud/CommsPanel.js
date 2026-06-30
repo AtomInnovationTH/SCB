@@ -22,6 +22,11 @@ const COMMS = Constants.COMMS;
 // the large 10-line review. Heights are resolved from COMMS constants below.
 const COMMS_STEPS = ['line', 'normal', 'large'];
 
+// Height (px) reserved at the top of the comms pane for the gated elevator-
+// contract tracker. The pane GROWS by this much when the tracker is revealed,
+// so the message log keeps its full per-step height (no clipped lines).
+const CONTRACT_HEADER_PX = 26;
+
 // ----------------------------------------------------------------------------
 // SIMPLIFIED 3-COLOUR PALETTE (priority-based, not per-channel)
 // Keeps the pane easy to scan: green = normal, amber = warning, red = critical.
@@ -183,6 +188,39 @@ export class CommsPanel {
     // Skill discovery (COMMS_OPENED) still fires for progression tracking.
     this.panels.comms.classList.add('hud-active');
 
+    // --- Elevator-contract tracker (gated header) ---
+    // The slow, shop-driven 10,000 kg endgame objective. Hidden until the player
+    // makes their first contribution (CONTRACT_UPDATE with contractMassKg > 0),
+    // then revealed here at the TOP of the comms pane — grouping the long-game
+    // objective with the channel that narrates its milestones. Starts
+    // display:none so a new pilot never sees a static, unreachable 0/10,000 in
+    // the always-bright score strip. Reused ids (hud-anchor-mass/-target) keep
+    // continuity with the former score-strip segment.
+    this._contractVisible = false;
+    this._contractEl = document.createElement('div');
+    this._contractEl.id = 'hud-contract-tracker';
+    Object.assign(this._contractEl.style, {
+      display: 'none',
+      boxSizing: 'border-box',
+      height: `${CONTRACT_HEADER_PX}px`,
+      paddingBottom: '5px',
+      borderBottom: '1px solid rgba(129,199,132,0.18)',
+      alignItems: 'center',
+      gap: '7px',
+      whiteSpace: 'nowrap',
+      fontSize: '11px',
+      color: '#81c784',
+    });
+    this._contractEl.innerHTML = `
+      <span style="font-size:13px;">⚓</span>
+      <span style="font-size:9px;letter-spacing:1px;opacity:0.7;text-transform:uppercase;">Contract</span>
+      <span><b id="hud-anchor-mass">0</b><span style="opacity:0.5;">/</span><b id="hud-anchor-target">10,000</b><span style="opacity:0.7;"> kg</span></span>
+      <span style="flex:1;height:3px;background:rgba(129,199,132,0.2);border-radius:2px;overflow:hidden;margin-right:22px;">
+        <span id="hud-contract-fill" style="display:block;width:0%;height:100%;background:#81c784;transition:width 0.4s ease;"></span>
+      </span>
+    `;
+    this.panels.comms.appendChild(this._contractEl);
+
     // --- Log container ---
     this._logEl = document.createElement('div');
     this._logEl.id = 'hud-comms-log';
@@ -245,6 +283,10 @@ export class CommsPanel {
       this._satisfiedBeatIds.add(d.id);
       this._updateCommsPanel();
     });
+
+    // Elevator-contract tracker — gated header atop the comms pane (replaces the
+    // former always-on score-strip segment). Reveals on first contribution.
+    eventBus.on(Events.CONTRACT_UPDATE, (data) => this._onContractUpdate(data));
   }
 
   // ==========================================================================
@@ -336,8 +378,12 @@ export class CommsPanel {
     else if (step === 'large') h = COMMS.PANE_EXPAND_HEIGHT_PX;
     else h = COMMS.PANE_HEIGHT_PX;
 
-    this.panels.comms.style.height = `${h}px`;
-    this._logEl.style.height = `${h - 12}px`;
+    // The log keeps its full per-step height; the pane grows by the contract
+    // header (when revealed) so revealing the tracker never clips messages.
+    const logH = h - 12;
+    const panelH = h + (this._contractVisible ? CONTRACT_HEADER_PX : 0);
+    this.panels.comms.style.height = `${panelH}px`;
+    this._logEl.style.height = `${logH}px`;
 
     // Brighter border when enlarged beyond normal; default otherwise.
     if (this._commsFlashTimer <= 0) {
@@ -355,6 +401,44 @@ export class CommsPanel {
     // height animates over 0.3s (CSS transition), so listeners keep recomputing
     // through a short settle window rather than snapping at the end.
     eventBus.emit(Events.COMMS_PANEL_RESIZED, { step, height: h });
+  }
+
+  /**
+   * @private Update the gated elevator-contract tracker. Reveals the header the
+   * first time the player has contributed mass (contractMassKg > 0) and keeps it
+   * shown thereafter. On reveal the comms pane grows by CONTRACT_HEADER_PX so the
+   * message log keeps its full height (COMMS_PANEL_RESIZED reflows the column).
+   * @param {object} data — { contractMassKg, targetMassKg }
+   */
+  _onContractUpdate(data) {
+    if (!data || typeof data.contractMassKg !== 'number') return;
+    const mass = data.contractMassKg;
+    const target = data.targetMassKg
+      || (Constants.ELEVATOR_CONTRACT && Constants.ELEVATOR_CONTRACT.TARGET_MASS_KG) || 10000;
+
+    const massEl = document.getElementById('hud-anchor-mass');
+    const targetEl = document.getElementById('hud-anchor-target');
+    const fillEl = document.getElementById('hud-contract-fill');
+    if (massEl) massEl.textContent = mass.toFixed(0);
+    if (targetEl) targetEl.textContent = target.toLocaleString();
+    if (fillEl && target > 0) {
+      fillEl.style.width = `${Math.min(100, (mass / target) * 100)}%`;
+    }
+    // Color intensity: muted below 50 %, brighter above (mirrors the old strip).
+    if (this._contractEl && target > 0) {
+      const c = (mass / target) > 0.5 ? '#a5d6a7' : '#81c784';
+      this._contractEl.style.color = c;
+      if (fillEl) fillEl.style.background = c;
+    }
+
+    // Gate: reveal once the contract is actually in play, then keep it shown.
+    if (mass > 0 && !this._contractVisible) {
+      this._contractVisible = true;
+      if (this._contractEl) this._contractEl.style.display = 'flex';
+      // Grow the pane to fit the header without stealing log height, and notify
+      // the layout (NavSphere slot + right-hand pane column) to reflow.
+      this._applyCommsStep();
+    }
   }
 
   /** @private Visible line count for the current size step. */

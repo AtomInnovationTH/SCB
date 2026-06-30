@@ -34,38 +34,10 @@ const _PHASE_LABELS = {
   HOLD:            'HOLD',
 };
 
-/**
- * Canonical daughter-state → color map. Shared by the expanded per-card render
- * (`_renderArmPanel`) and the collapsed fleet summary (`_updateFleetCollapsedSummary`)
- * so a given state always reads the same color in both. Previously these were
- * two separate maps that had drifted (e.g. TRANSIT showed blue when expanded
- * but amber when collapsed; FISHING amber vs cyan).
- */
-const ARM_STATE_COLORS = {
-  DOCKED:        '#00ff88', // green — ready
-  UNDOCKING:     '#4488ff', // blue — in motion
-  LAUNCHING:     '#00ffff', // cyan — spring launch
-  TRANSIT:       '#4488ff', // blue — in motion
-  APPROACH:      '#4488ff', // blue — in motion
-  RETURNING:     '#4488ff', // blue — in motion
-  DOCKING:       '#4488ff', // blue — in motion
-  NETTING:       '#ffaa00', // amber — working
-  GRAPPLED:      '#ffaa00', // amber — working
-  HAULING:       '#ffaa00', // amber — working
-  REELING:       '#00ffff', // cyan — motor reel-in
-  FISHING:       '#ffaa00', // amber — working
-  CAPTURING:     '#ff8800', // orange — working
-  TRAWLING:      '#44aaff', // light blue — passive sweep
-  RELOADING:     '#ffaa00', // amber — spring reloading
-  HOLDING_CATCH: '#ffcc44', // gold — docked holding a catch (occupied)
-  ABLATING:      '#ff44ff', // magenta — laser de-spin
-  SCANNING:      '#00ffff', // cyan — pulse scan
-  TANGLED:       '#ff8800', // orange — tether tangle
-  DEORBITING:    '#ff4400', // orange-red — sacrificial burn
-  STATION_KEEP:  '#00ffaa', // teal — orbital crane hold
-  ADRIFT:        '#ffaa00', // amber — out of usable FEEP but tethered & recoverable
-  EXPENDED:      '#ff4444', // red — lost/dead
-};
+// Shared "net" identity colour. NET reads the same ivory in BOTH the MOTHER
+// digest (lasso ammo) and the DAUGHTERS list (per-unit magazine) so the player
+// learns one colour for "nets". Low/empty still warns amber/red in both.
+const NET_COLOR = '#f0ecd8'; // ivory white
 
 export class StatusPanel {
   constructor(container) {
@@ -76,9 +48,11 @@ export class StatusPanel {
     this._captureNotifEl = null;
     this._forgeRevealed = false;
     this._cargoStatus = null;   // cached from CARGO_UPDATED events
-    this._powerExpanded = false;
-    this._powerCollapseTimer = null;
     this._lastPowerState = null;
+    this._motherExpanded = false;     // MOTHER detail hover-expand state
+    this._motherPinned = false;       // badge-pinned open (chrome 'normal' step)
+    this._motherHovering = false;     // pointer currently over the MOTHER pane
+    this._motherCollapseTimer = null;
     this._throttleLevel = 1.0;  // F14: cached throttle for HUD display
     this._autopilotMode = 'OFF'; // F15: cached autopilot mode for HUD
     this._autopilotPhase = 'OFF'; // Trailing-rendezvous phase (F15.1)
@@ -89,14 +63,18 @@ export class StatusPanel {
     this._tetherTensions = {};          // {armIndex: fraction} — cached from events
     this._tangleState = null;           // {armIndices, startTime, duration} — active tangle
     this._pulseScanState = 'READY';     // READY | SCANNING | COOLDOWN
-    this._thrusterInterlock = false;    // back arm blocking exhaust
-    this._crossbowFireFlash = {};       // {armIndex: timestamp} — flash start times
 
     // ST-1.3: Lasso cooldown ring state
     this._lassoCooldownDuration = 0;    // total cooldown duration (s)
     this._lassoCooldownStart = 0;       // Date.now() when cooldown started
     this._lassoCooldownActive = false;  // true while cooling
     this._lassoDeniedFlash = 0;         // Date.now() timestamp of last denied flash
+
+    // MOTHER readiness-digest dark-cockpit state — each segment reports whether
+    // it is nominal; the line dims when all three are. Start nominal (quiet).
+    this._netNominal = true;
+    this._dvNominal = true;
+    this._pwrNominal = true;
 
     /** @type {Object<string, HTMLElement>} DOM panels for show/hide */
     this.panels = {};
@@ -149,16 +127,6 @@ export class StatusPanel {
     // Sprint C2: Re-render arm panel when selection changes
     eventBus.on(Events.ARM_SELECT, () => this._renderArmPanel());
     eventBus.on(Events.ARM_DESELECT, () => this._renderArmPanel());
-
-    // Fleet hotkey "learned" tracking — the header hint shows full labels until
-    // the player has both launched and recalled at least once, then fades to
-    // terse glyphs (progressive disclosure; #4 dark-cockpit cleanup).
-    this._fleetLaunchUsed = false;
-    this._fleetRecallUsed = false;
-    eventBus.on(Events.ARM_DEPLOYED, () => { this._fleetLaunchUsed = true; });
-    eventBus.on(Events.ARM_RECALLED, () => { this._fleetRecallUsed = true; });
-    eventBus.on(Events.ARM_RECALL_ONE, () => { this._fleetRecallUsed = true; });
-    eventBus.on(Events.ARM_RECALL_ALL, () => { this._fleetRecallUsed = true; });
 
     // F14: Listen for throttle changes
     eventBus.on(Events.THROTTLE_CHANGE, (data) => {
@@ -215,11 +183,8 @@ export class StatusPanel {
       this._renderArmPanel();
     });
 
-    // V5: Crossbow fire flash — store timestamp per arm, immediate re-render
-    eventBus.on(Events.CROSSBOW_FIRE, (data) => {
-      if (data.armIndex !== undefined) {
-        this._crossbowFireFlash[data.armIndex] = Date.now();
-      }
+    // V5: Crossbow fire — refresh the fleet list (the daughter's status changes).
+    eventBus.on(Events.CROSSBOW_FIRE, () => {
       this._renderArmPanel();
     });
 
@@ -235,16 +200,16 @@ export class StatusPanel {
       this._lassoCooldownDuration = data.duration || 2;
       this._lassoCooldownStart = Date.now();
       this._lassoCooldownActive = true;
-      this._updateLassoCooldownRing();
+      this._updateNetDigest();
     });
     eventBus.on(Events.LASSO_COOLDOWN_END, () => {
       this._lassoCooldownActive = false;
-      this._updateLassoCooldownRing();
+      this._updateNetDigest();
     });
     // Also flash denied state briefly
     eventBus.on(Events.LASSO_DENIED, () => {
       this._lassoDeniedFlash = Date.now();
-      this._updateLassoCooldownRing();
+      this._updateNetDigest();
     });
     // UX-3 #7: Lasso ammo tracking
     this._lassoAmmo = Constants.LASSO_AMMO_MAX;
@@ -252,7 +217,7 @@ export class StatusPanel {
     eventBus.on(Events.LASSO_AMMO_CHANGED, (data) => {
       this._lassoAmmo = data.remaining;
       this._lassoAmmoMax = data.max;
-      this._updateLassoCooldownRing();
+      this._updateNetDigest();
     });
 
   }
@@ -332,8 +297,20 @@ export class StatusPanel {
       top: '8px', left: '50%', transform: 'translateX(-50%)',
       padding: '4px 14px',
     });
+    // PRIORITY-LAYER CONTENT — restored to the documented "objective + quiet
+    // wallet" intent: this most-seen, never-dimmed strip now carries ONLY the
+    // hero CLEARED N/50 progress meter plus a quiet credit wallet.
+    //   • The elevator-contract tracker was REMOVED from here. It is a slow,
+    //     shop-driven, late-game objective that stays at 0 (and is mechanically
+    //     unreachable — the Forge isn't taught in onboarding) for a new pilot's
+    //     whole first session, so a static "0/10,000 kg" in this slot was clutter
+    //     in premium real estate. It now lives gated atop the comms pane
+    //     (CommsPanel._onContractUpdate), revealed on the first contribution,
+    //     grouped with the channel that already narrates its milestones.
+    //   • The daughter-tier badge (#hud-arm-tier, feature-flagged) moved to the
+    //     DAUGHTERS pane header where it is contextual.
     this.panels.score.innerHTML = `
-      <div style="display:flex;align-items:center;gap:16px;white-space:nowrap;line-height:1;">
+      <div style="display:flex;align-items:center;gap:14px;white-space:nowrap;line-height:1;">
         <div style="display:flex;align-items:baseline;gap:7px;">
           <span style="font-size:10px;letter-spacing:2px;opacity:0.7;text-transform:uppercase;">Cleared</span>
           <span style="font-size:18px;font-weight:bold;letter-spacing:1px;color:#00ff88;text-shadow:0 0 6px rgba(0,255,136,0.45);">
@@ -343,11 +320,7 @@ export class StatusPanel {
             <span id="hud-cleared-fill" style="display:block;width:0%;height:100%;background:#00ff88;transition:width 0.4s ease;"></span>
           </span>
         </div>
-        <span style="color:#ffaa00;font-size:13px;font-weight:bold;">💰 <b id="hud-credits">0</b></span>
-        <span id="hud-arm-tier" title="Current daughter configuration tier"
-              style="display:none;color:#ff8800;font-size:11px;letter-spacing:0.05em;">Y0 Quad. 4 daughters</span>
-        <span id="hud-anchor-wrap" title="Elevator contract. Deliver refined metal at the shop to win"
-              style="color:#81c784;font-size:11px;">⚓ <span style="font-size:9px;letter-spacing:1px;opacity:0.7;">CONTRACT</span> <b id="hud-anchor-mass">0</b>/<b id="hud-anchor-target">10,000</b> kg</span>
+        <span style="color:#ffaa00;font-size:12px;font-weight:bold;opacity:0.85;">💰 <b id="hud-credits">0</b></span>
       </div>
     `;
 
@@ -357,25 +330,45 @@ export class StatusPanel {
     // attitude modes), so the badge was jargon noise for new pilots. See the
     // note by the former _MODE_DISPLAY constant near the top of this file.
 
-    // --- Propulsion Panel (left side) — F11: horizontal-expand ---
-    this.panels.resources = this._createPanel('hud-resources-panel', {});
-    this.panels.resources.className = 'hud-panel hud-panel-expandable';
-    this.panels.resources.dataset.hudGroup = 'fuel-group';
-    this.panels.resources.dataset.activateKey = 'A';
-    this.panels.resources.innerHTML = `
-      <div class="panel-collapsed-summary" id="propulsion-collapsed-summary">
-        <div style="font-size:10px;color:#00ff88;opacity:0.7;margin-bottom:3px;white-space:nowrap;">PROPULSION <span id="autopilot-mini" style="color:#555;font-weight:bold;">Auto:OFF</span></div>
-        <div style="width:96px;height:8px;background:rgba(0,0,0,0.5);border:1px solid rgba(0,255,136,0.3);border-radius:2px;overflow:hidden;margin-bottom:4px;">
-          <div id="propulsion-mini-dv-fill" style="height:100%;width:100%;background:#00ff88;transition:width 0.5s ease,background-color 0.5s ease;"></div>
-        </div>
-        <div id="propulsion-fuel-pips" style="display:flex;gap:4px;align-items:center;font-size:9px;">
-          <span style="color:#00ff88;">●</span><span style="opacity:0.5;" title="Xenon fuel">Xenon</span>
-          <span style="color:#00ff88;">●</span><span style="opacity:0.5;" title="Cold gas (RCS)">Gas</span>
-          <span style="color:#00ff88;">●</span><span style="opacity:0.5;" title="Battery charge">Batt</span>
-        </div>
+    // --- MOTHER Pane (left side, top) — unified Propulsion + Energy + Net digest ---
+    // Replaces the former separate #hud-resources-panel + #hud-power-panel panes.
+    // Leads with a one-line strategic-readiness digest (Net charges · ΔV budget %
+    // · power glyph); the full Propulsion + Energy detail is hidden by default and
+    // revealed on hover (or pinned open via the chrome badge). See
+    // .kilo/plans/…-mother-pane-readiness-digest.md.
+    //
+    // NOTE: the inner propulsion/energy blocks intentionally KEEP all of the
+    // element IDs, data-hud-group values, and the data-activate-key='A' that the
+    // updaters and tests key off — only their parent box is now the MOTHER pane.
+    this.panels.mother = this._createPanel('hud-mother-panel', {});
+    this.panels.mother.className = 'hud-panel hud-panel-expandable';
+    this.panels.mother.innerHTML = `
+      <div class="mother-header pane-title" style="font-size:11px;margin-bottom:3px;color:#00ff88;opacity:0.7;display:flex;align-items:baseline;gap:6px;">
+        <span>MOTHER</span>
       </div>
+      <div id="mother-digest" style="font-size:11px;line-height:1.4;white-space:nowrap;display:flex;align-items:center;gap:6px;transition:opacity 0.3s ease;">
+        <span id="mother-digest-net" style="display:inline-flex;align-items:center;gap:4px;color:${NET_COLOR};">
+          <span class="md-label">NET</span>
+          <span class="md-track"><span class="md-fill" id="mother-digest-net-fill"></span></span>
+          <span class="md-count" id="mother-digest-net-count">${Constants.LASSO_AMMO_MAX}</span>
+          <span id="mother-digest-net-reload" style="display:none;">↻</span>
+        </span>
+        <span class="md-sep">·</span>
+        <span id="mother-digest-dv" style="display:inline-flex;align-items:center;gap:4px;color:#aaffdd;">
+          <span class="md-label">ΔV</span>
+          <span class="md-track"><span class="md-fill" id="mother-digest-dv-fill"></span></span>
+          <span class="md-count" id="mother-digest-dv-pct" style="display:none;"></span>
+        </span>
+        <span class="md-sep">·</span>
+        <span id="mother-digest-pwr" style="display:inline-flex;align-items:center;gap:3px;color:#00ff88;">
+          <span>⚡</span>
+          <span id="mother-digest-pwr-text" style="display:none;font-weight:bold;letter-spacing:0.05em;"></span>
+        </span>
+      </div>
+      <div class="mother-detail">
+        <div class="mother-block mother-block-propulsion" data-hud-group="fuel-group" data-activate-key="A">
       <div class="panel-full-content">
-        <div class="pane-title" style="font-size:11px;margin-bottom:4px;color:#00ff88;opacity:0.7;">PROPULSION</div>
+        <div class="pane-title" style="font-size:11px;margin-top:6px;margin-bottom:4px;color:#00ff88;opacity:0.7;">PROPULSION</div>
         <div id="autopilot-indicator" style="font-size:10px;margin-bottom:4px;padding:2px 6px;border-radius:2px;display:inline-block;background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.1);color:#555;">[Autopilot: OFF]</div>
         <div id="deltav-bar-track" style="position:relative;width:100%;height:16px;background:rgba(0,0,0,0.5);
              border:1px solid rgba(0,255,136,0.3);border-radius:2px;overflow:hidden;">
@@ -469,40 +462,10 @@ export class StatusPanel {
           </div>
         </div>
       </div>
-    `;
-    this._leftColumn.appendChild(this.panels.resources);
-    this.panels.resources.style.position = 'relative';
-
-    // --- Power Distribution Panel (left side, middle) — F11: horizontal-expand ---
-    this.panels.power = this._createPanel('hud-power-panel', {});
-    this.panels.power.className = 'hud-panel hud-panel-expandable';
-    this.panels.power.dataset.hudGroup = 'power-group';
-    this.panels.power.innerHTML = `
-      <div class="panel-collapsed-summary" id="energy-collapsed-summary">
-        <div style="font-size:10px;color:#00ff88;opacity:0.7;margin-bottom:3px;white-space:nowrap;">⚡ ENERGY</div>
-        <div style="display:flex;gap:4px;align-items:flex-end;height:32px;">
-          <div style="flex:1;display:flex;flex-direction:column;align-items:center;">
-            <div style="width:100%;background:rgba(0,0,0,0.5);border:1px solid rgba(0,255,136,0.3);border-radius:2px;height:28px;position:relative;overflow:hidden;">
-              <div id="energy-mini-thrust" style="position:absolute;bottom:0;width:100%;height:40%;background:#00ff88;transition:height 0.2s ease;"></div>
-            </div>
-            <span style="font-size:7px;opacity:0.4;margin-top:1px;">T</span>
-          </div>
-          <div style="flex:1;display:flex;flex-direction:column;align-items:center;">
-            <div style="width:100%;background:rgba(0,0,0,0.5);border:1px solid rgba(68,136,255,0.3);border-radius:2px;height:28px;position:relative;overflow:hidden;">
-              <div id="energy-mini-sensors" style="position:absolute;bottom:0;width:100%;height:30%;background:#4488ff;transition:height 0.2s ease;"></div>
-            </div>
-            <span style="font-size:7px;opacity:0.4;margin-top:1px;">S</span>
-          </div>
-          <div style="flex:1;display:flex;flex-direction:column;align-items:center;">
-            <div style="width:100%;background:rgba(0,0,0,0.5);border:1px solid rgba(0,255,136,0.3);border-radius:2px;height:28px;position:relative;overflow:hidden;">
-              <div id="energy-mini-arms" style="position:absolute;bottom:0;width:100%;height:30%;background:#00ff88;transition:height 0.2s ease;"></div>
-            </div>
-            <span style="font-size:7px;opacity:0.4;margin-top:1px;">A</span>
-          </div>
         </div>
-      </div>
+        <div class="mother-block mother-block-energy" id="hud-power-panel" data-hud-group="power-group">
       <div class="panel-full-content">
-        <div class="pane-title" style="font-size:11px;margin-bottom:4px;color:#00ff88;opacity:0.7;display:flex;justify-content:space-between;align-items:center;">
+        <div class="pane-title" style="font-size:11px;margin-top:6px;margin-bottom:4px;color:#00ff88;opacity:0.7;display:flex;justify-content:space-between;align-items:center;">
           <span>⚡ ENERGY</span>
           <span id="power-collapse-indicator" style="font-size:10px;opacity:0.4;transition:transform 0.2s;">▸</span>
         </div>
@@ -539,86 +502,83 @@ export class StatusPanel {
           ⇧1-3: select · [ ] ±10%
           </div>
         </div>
+        </div>
+      </div>
       `;
-      this._leftColumn.appendChild(this.panels.power);
-      this.panels.power.style.position = 'relative';
-      this._injectPowerPulseStyle();
+    this._leftColumn.appendChild(this.panels.mother);
+    this.panels.mother.style.position = 'relative';
+    this._injectPowerPulseStyle();
+    this._injectMotherDigestStyle();
 
-    // B5: Energy auto-collapse — default to compact bars-only
+    // Cache the energy sub-block (drives the power-collapse CSS/JS via #hud-power-panel)
+    this.panels.power = this.panels.mother.querySelector('#hud-power-panel');
+    // Back-compat alias: other code historically referenced panels.resources as
+    // the propulsion box. It now lives inside the MOTHER pane.
+    this.panels.resources = this.panels.mother.querySelector('.mother-block-propulsion');
+    // Set the propulsion onboarding activate-key via JS (matches the arms pane
+    // pattern) so the progressive-luminance dormant-keycap glyph + the
+    // activate-keys grep test (`activateKey = 'A'`) still find it.
+    if (this.panels.resources) this.panels.resources.dataset.activateKey = 'A';
+
+    // B5 → MOTHER: the energy bars default to compact bars-only; the whole MOTHER
+    // detail (propulsion + energy) expands together on hover (see _expandMother).
     this._injectPowerCollapseStyle();
-    this.panels.power.classList.add('power-collapsed');
-    this.panels.power.addEventListener('mouseenter', () => this._expandPower());
-    this.panels.power.addEventListener('mouseleave', () => this._schedulePowerCollapse());
+    if (this.panels.power) this.panels.power.classList.add('power-collapsed');
 
-    // --- V5 Crossbow Arm Status Panel (left side, bottom) — F12: fleet collapsed summary ---
+    // --- V5 Crossbow Arm Status Panel (left side, bottom) — DAUGHTERS pane ---
     this.panels.arms = this._createPanel('hud-arms-panel', {});
     this.panels.arms.className = 'hud-panel hud-panel-expandable';
     this.panels.arms.dataset.hudGroup = 'arms-group';
     this.panels.arms.dataset.activateKey = 'D';
+    // DAUGHTERS pane: one always-visible list, one line per daughter (plain
+    // status + fuel). No hover layer / no resize badge — the selected daughter
+    // highlights and shows the single action it can take right now.
     this.panels.arms.innerHTML = `
-      <div class="pane-title" id="fleet-header" style="font-size:11px;margin-bottom:4px;color:#00ff88;opacity:0.7;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
-        <span>🛰️ DAUGHTERS</span>
-        <span id="fleet-aggregate" style="font-weight:normal;letter-spacing:normal;font-size:10px;opacity:0.75;"></span>
-        <span id="fleet-hotkeys" style="margin-left:auto;font-weight:normal;letter-spacing:normal;font-size:9px;opacity:0.4;white-space:nowrap;"></span>
+      <div class="pane-title" id="fleet-header" style="font-size:11px;margin-bottom:3px;color:#00ff88;opacity:0.7;display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;">
+        <span>DAUGHTERS</span>
+        <span id="fleet-select-hint" style="font-weight:normal;letter-spacing:normal;font-size:10px;opacity:0.4;white-space:nowrap;">select 1–4</span>
+        <span id="hud-arm-tier" title="Current daughter configuration tier"
+              style="display:none;color:#ff8800;font-weight:normal;letter-spacing:0.05em;font-size:10px;">Y0 Quad. 4 daughters</span>
       </div>
-      <div class="fleet-collapsed-summary" id="fleet-collapsed-summary">
-        <span style="opacity:0.5;font-size:10px;">Loading fleet…</span>
-      </div>
-      <div class="fleet-full-content">
-        <div id="hud-arms-status" style="font-size:10px;line-height:1.5;">
-          <span style="opacity:0.5">Initializing daughter fleet…</span>
-        </div>
-        <div id="lasso-cooldown-row" style="display:flex;align-items:center;gap:6px;margin-top:4px;padding-top:3px;border-top:1px solid rgba(0,255,136,0.1);font-size:10px;">
-          <svg id="lasso-cd-ring" width="18" height="18" viewBox="0 0 18 18" style="flex-shrink:0;">
-            <circle cx="9" cy="9" r="7" fill="none" stroke="rgba(255,204,0,0.15)" stroke-width="2"/>
-            <circle id="lasso-cd-arc" cx="9" cy="9" r="7" fill="none" stroke="#ffcc00" stroke-width="2"
-                    stroke-dasharray="44" stroke-dashoffset="0"
-                    stroke-linecap="round" transform="rotate(-90 9 9)"
-                    style="transition:stroke-dashoffset 0.1s linear;"/>
-          </svg>
-          <span id="lasso-cd-label" style="color:#ffcc00;opacity:0.7;">WEB: ${Constants.LASSO_AMMO_MAX}/${Constants.LASSO_AMMO_MAX}. <span style="color:#00ff88;">READY</span></span>
-        </div>
+      <div id="hud-arms-status" style="font-size:11px;line-height:1.6;">
+        <span style="opacity:0.5">Initializing daughter fleet…</span>
       </div>
     `;
     this._leftColumn.appendChild(this.panels.arms);
     this.panels.arms.style.position = 'relative';
 
-    // --- Resize chrome for left-column panels (2-step: min / normal) ---
-    // These panels' real hotkeys (A=autopilot, D=deploy) are taken, so resize is
-    // badge-only: a +/− glyph top-right toggles the compact summary vs full
-    // content (CSS in index.html flips the always-expanded left-column default
-    // when the .pane-step-min class is present).
-    this._resourcesChrome = new PaneChrome({
-      pane: this.panels.resources, keyLabel: '–', bracket: false,
-      steps: ['min', 'normal'], initial: 'normal',
-      title: 'Propulsion. Click to minimize / restore',
-    });
-    this._powerChrome = new PaneChrome({
-      pane: this.panels.power, keyLabel: '–', bracket: false,
-      steps: ['min', 'normal'], initial: 'normal',
-      title: 'Energy. Click to minimize / restore',
-    });
-    this._armsChrome = new PaneChrome({
-      pane: this.panels.arms, keyLabel: '–', bracket: false,
-      steps: ['min', 'normal'], initial: 'normal',
-      title: 'Fleet. Click to minimize / restore',
+    // --- Resize chrome for the MOTHER pane (2-step: min / normal) ---
+    // The MOTHER pane defaults to 'min' (compact digest only); hovering reveals
+    // the full Propulsion + Energy detail. (The badge itself is hidden via CSS;
+    // the step machinery + hover handlers below drive the reveal.)
+    this._motherChrome = new PaneChrome({
+      pane: this.panels.mother, keyLabel: '–', bracket: false,
+      steps: ['min', 'normal'], initial: 'min',
+      title: 'Mother systems',
+      onStep: (name) => this._onMotherStep(name),
     });
 
-    // Phase 5 → R3: Listen for contract updates (now updates score bar anchor segment)
-    // UX-11 #12: the contract track is ALWAYS visible (dual-objective HUD) —
-    // the player should never have to open the shop to know if they're winning.
-    eventBus.on(Events.CONTRACT_UPDATE, (data) => {
-      const wrap = document.getElementById('hud-anchor-wrap');
-      const massEl = document.getElementById('hud-anchor-mass');
-      const targetEl = document.getElementById('hud-anchor-target');
-      if (massEl) massEl.textContent = data.contractMassKg.toFixed(0);
-      if (targetEl) targetEl.textContent = data.targetMassKg.toLocaleString();
-      // Color intensity: muted below 50%, brighter above
-      if (wrap && data.targetMassKg > 0) {
-        const pct = data.contractMassKg / data.targetMassKg;
-        wrap.style.color = pct > 0.5 ? '#a5d6a7' : '#81c784';
-      }
+    // MOTHER disclosure: hover reveals detail; mouse-leave collapses (unless
+    // pinned open via the chrome badge / 'normal' step). The energy block no
+    // longer self-collapses independently — it follows the MOTHER expand state.
+    this.panels.mother.addEventListener('mouseenter', () => {
+      this._motherHovering = true;
+      this._expandMother();
     });
+    this.panels.mother.addEventListener('mouseleave', () => {
+      this._motherHovering = false;
+      this._scheduleMotherCollapse();
+    });
+    // Reflect the initial compact step in the detail visibility + energy block.
+    this._onMotherStep('min');
+
+    // Phase 5 → R3 (relocated): the elevator-contract tracker used to live in the
+    // top-center score strip and was ALWAYS visible. It moved to a gated header
+    // atop the comms pane (CommsPanel._onContractUpdate) — revealed only once the
+    // player makes their first contribution (contractMassKg > 0) — so a new pilot
+    // isn't shown a static, unreachable 0/10,000 objective in the most-seen HUD
+    // slot. The comms zone already narrates the contract milestones
+    // (MissionMilestones), so the tracker and its narration share one cluster.
 
     this._buildDeltaVBar();
     this._buildCaptureNotification();
@@ -723,11 +683,6 @@ export class StatusPanel {
     }
     this._updateCargoLine();
 
-    // V5: Cache thruster interlock state from PlayerSatellite
-    if (data.thrusterInterlocked !== undefined) {
-      this._thrusterInterlock = data.thrusterInterlocked;
-    }
-
     // C-9: Update CoM drift display + plume block indicator
     this._updateCoMDisplay(data);
 
@@ -742,7 +697,7 @@ export class StatusPanel {
     this._renderArmPanel();
 
     // ST-1.3: Update lasso cooldown ring at 10Hz for smooth arc depletion
-    this._updateLassoCooldownRing();
+    this._updateNetDigest();
   }
 
   /** Re-render the arm status panel (call on arm state-change events). */
@@ -805,52 +760,53 @@ export class StatusPanel {
   }
 
   /**
-   * ST-1.3: Update the lasso cooldown ring SVG + label.
-   * Ring depletes from full → empty during cooldown, then shows READY.
+   * Update the MOTHER digest's Net segment (`mother-digest-net`).
+   *
+   * Reframe: the net is a depleting-magazine gauge — a thin bar (fraction
+   * remaining) with the charges count as the hero number, mirroring the score
+   * mini-track. The ~2s reload gap pulses the fill + shows a `↻` glyph (the
+   * reticle owns the fire moment, so no cooldown ring here). Color tiers: ≤5
+   * red, ≤10 amber, else ivory. Empty/`0` red at depletion; brief red flash on a
+   * denied fire. Updates stable child nodes (no per-tick innerHTML reparse).
    * @private
    */
-  _updateLassoCooldownRing() {
-    const arc = document.getElementById('lasso-cd-arc');
-    const label = document.getElementById('lasso-cd-label');
-    if (!arc || !label) return;
+  _updateNetDigest() {
+    const seg = document.getElementById('mother-digest-net');
+    const fill = document.getElementById('mother-digest-net-fill');
+    const count = document.getElementById('mother-digest-net-count');
+    const reloadGlyph = document.getElementById('mother-digest-net-reload');
+    if (!seg || !fill || !count) return;
 
-    const circumference = 2 * Math.PI * 7; // r=7 ≈ 44
     const ammo = this._lassoAmmo ?? Constants.LASSO_AMMO_MAX;
     const ammoMax = this._lassoAmmoMax ?? Constants.LASSO_AMMO_MAX;
-    const ammoTag = `WEB: ${ammo}/${ammoMax}`;
-    const ammoColor = ammo <= 5 ? '#ff4444' : ammo <= 10 ? '#ffaa00' : '#ffcc00';
+    const pct = ammoMax > 0 ? Math.max(0, Math.min(100, (ammo / ammoMax) * 100)) : 0;
+    let color = ammo <= 5 ? '#ff4444' : ammo <= 10 ? '#ffaa00' : NET_COLOR;
 
-    // Denied flash (300ms red pulse)
-    const deniedAge = this._lassoDeniedFlash ? (Date.now() - this._lassoDeniedFlash) / 1000 : 999;
-    if (deniedAge < 0.3) {
-      arc.setAttribute('stroke', '#ff4444');
-      arc.setAttribute('stroke-dashoffset', '0');
-      label.innerHTML = `<span style="color:${ammoColor};opacity:0.7;">${ammoTag}. <span style="color:#ff4444;">DENIED</span></span>`;
-      return;
-    }
-
+    // Reload state — resolve the ~2s cooldown window (auto-clear when elapsed).
+    let remaining = 0;
     if (this._lassoCooldownActive && this._lassoCooldownDuration > 0) {
-      const elapsed = (Date.now() - this._lassoCooldownStart) / 1000;
-      const remaining = Math.max(0, this._lassoCooldownDuration - elapsed);
-      // fraction: 1 = just started (full ring), 0 = done (empty ring)
-      const frac = remaining / this._lassoCooldownDuration;
-      const offset = circumference * (1 - frac);
-      arc.setAttribute('stroke', '#888888');
-      arc.setAttribute('stroke-dashoffset', String(offset));
-      label.innerHTML = `<span style="color:${ammoColor};opacity:0.7;">${ammoTag}. <span style="color:#888;">${remaining.toFixed(1)}s</span></span>`;
-
-      // Auto-clear when elapsed exceeds duration
-      if (remaining <= 0) {
-        this._lassoCooldownActive = false;
-      }
-    } else {
-      // Ready state — full green ring (or depleted if ammo=0)
-      const statusColor = ammo <= 0 ? '#ff4444' : '#00ff88';
-      const statusText = ammo <= 0 ? 'DEPLETED' : 'READY';
-      arc.setAttribute('stroke', statusColor);
-      arc.setAttribute('stroke-dashoffset', '0');
-      label.innerHTML = `<span style="color:${ammoColor};opacity:0.7;">${ammoTag}. <span style="color:${statusColor};">${statusText}</span></span>`;
+      remaining = this._lassoCooldownDuration - (Date.now() - this._lassoCooldownStart) / 1000;
+      if (remaining <= 0) { this._lassoCooldownActive = false; remaining = 0; }
     }
+    const reloading = this._lassoCooldownActive && remaining > 0;
+
+    // Denied flash (300ms) overrides the tier color with a red pulse.
+    const deniedAge = this._lassoDeniedFlash ? (Date.now() - this._lassoDeniedFlash) / 1000 : 999;
+    const denied = deniedAge < 0.3;
+    if (denied) color = '#ff4444';
+
+    fill.style.width = `${pct}%`;
+    fill.style.backgroundColor = color;
+    count.textContent = String(Math.max(0, ammo));
+    count.style.color = color;
+
+    if (reloadGlyph) reloadGlyph.style.display = reloading ? '' : 'none';
+    seg.classList.toggle('reloading', reloading);
+
+    // Nominal = plenty of charges, not reloading, not just denied. Drives the
+    // dark-cockpit dimming of the whole digest line.
+    this._netNominal = ammo > 10 && !reloading && !denied;
+    this._refreshDigestDim();
   }
 
   /**
@@ -953,9 +909,6 @@ export class StatusPanel {
 
     // Cache for cross-method access (used by _updateDeltaVBar for DELTAV_UPDATE payload)
     this._lastResources = resources;
-
-    // F11: Update propulsion collapsed summary fuel pips
-    this._updatePropulsionPips();
   }
 
   /**
@@ -1129,12 +1082,10 @@ export class StatusPanel {
   /**
    * @private F15: Update autopilot indicator color and text.
    * Engaged-state chip format: `[Autopilot: <mode> · <phase>]` (e.g. `[Autopilot: TARGET · ALIGN]`).
-   * Mini collapsed label: `Auto:<mode>·<phase>` (e.g. `Auto:TARGET·ALIGN`).
    * Phase segment is hidden when the AP is OFF.
    */
   _updateAutopilotIndicator() {
     const el = document.getElementById('autopilot-indicator');
-    const mini = document.getElementById('autopilot-mini');
     const phaseLabel = _PHASE_LABELS[this._autopilotPhase] || '';
 
     if (this._autopilotMode === 'OFF') {
@@ -1144,26 +1095,15 @@ export class StatusPanel {
         el.style.borderColor = 'rgba(255,255,255,0.1)';
         el.style.background = 'rgba(0,0,0,0.4)';
       }
-      if (mini) {
-        mini.textContent = 'Auto:OFF';
-        mini.style.color = '#555';
-      }
     } else {
       const fullLabel = phaseLabel
         ? `[Autopilot: ${this._autopilotMode} · ${phaseLabel}]`
         : `[Autopilot: ${this._autopilotMode}]`;
-      const miniLabel = phaseLabel
-        ? `Auto:${this._autopilotMode}·${phaseLabel}`
-        : `Auto:${this._autopilotMode}`;
       if (el) {
         el.textContent = fullLabel;
         el.style.color = '#00ff88';
         el.style.borderColor = 'rgba(0,255,136,0.5)';
         el.style.background = 'rgba(0,255,136,0.08)';
-      }
-      if (mini) {
-        mini.textContent = miniLabel;
-        mini.style.color = '#00ff88';
       }
     }
   }
@@ -1200,6 +1140,50 @@ export class StatusPanel {
       `;
       document.head.appendChild(style);
     }
+  }
+
+  /** @private Inject CSS for the MOTHER readiness-digest gauges (count + mini-bars). */
+  _injectMotherDigestStyle() {
+    if (document.getElementById('mother-digest-style')) return;
+    const style = document.createElement('style');
+    style.id = 'mother-digest-style';
+    style.textContent = `
+      #mother-digest .md-label {
+        opacity: 0.55;
+        font-weight: bold;
+        letter-spacing: 0.06em;
+      }
+      #mother-digest .md-sep { opacity: 0.25; }
+      #mother-digest .md-track {
+        width: 38px;
+        height: 3px;
+        border-radius: 2px;
+        overflow: hidden;
+        display: inline-block;
+        background: rgba(255, 255, 255, 0.12);
+      }
+      #mother-digest .md-fill {
+        display: block;
+        height: 100%;
+        width: 100%;
+        border-radius: 2px;
+        transition: width 0.3s ease, background-color 0.3s ease;
+      }
+      #mother-digest .md-count {
+        font-weight: bold;
+        min-width: 16px;
+        text-align: right;
+      }
+      @keyframes mother-net-reload {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.3; }
+      }
+      #mother-digest-net.reloading #mother-digest-net-fill {
+        animation: mother-net-reload 0.7s ease-in-out infinite;
+      }
+      #mother-digest-net-reload { opacity: 0.8; }
+    `;
+    document.head.appendChild(style);
   }
 
   /** @private Inject CSS for power panel collapse/expand (B5) */
@@ -1243,47 +1227,78 @@ export class StatusPanel {
     document.head.appendChild(style);
   }
 
-  /** @private Expand the power panel to full detail view (B5) */
-  _expandPower() {
-    if (this._powerCollapseTimer) {
-      clearTimeout(this._powerCollapseTimer);
-      this._powerCollapseTimer = null;
-    }
-    if (!this._powerExpanded) {
-      this._powerExpanded = true;
-      this.panels.power.classList.remove('power-collapsed');
+  /**
+   * @private MOTHER disclosure — react to a chrome step change.
+   * 'normal' = pinned open (detail always visible); 'min' = compact (detail
+   * hidden unless hovered). Keeps the energy block's `power-collapsed` class in
+   * sync so the energy bars expand/collapse with the rest of the detail.
+   */
+  _onMotherStep(name) {
+    this._motherPinned = (name === 'normal');
+    if (this._motherPinned) {
+      this._expandMother();
+    } else {
+      // Un-pinning: collapse the detail — but NOT while the pointer is still over
+      // the pane. CSS `:hover` would keep `.mother-detail` open while
+      // `power-collapsed` hid the energy-bar labels, stranding unlabeled bars
+      // until the next mouseenter. The mouseleave handler will collapse it.
+      if (this._motherHovering) return;
+      this._collapseMother();
     }
   }
 
-  /** @private Collapse the power panel to bars-only view (B5) */
-  _collapsePower() {
-    this._powerExpanded = false;
-    this.panels.power.classList.add('power-collapsed');
-    this._powerCollapseTimer = null;
+  /** @private Expand the MOTHER detail (Propulsion + Energy) to full view. */
+  _expandMother() {
+    if (this._motherCollapseTimer) {
+      clearTimeout(this._motherCollapseTimer);
+      this._motherCollapseTimer = null;
+    }
+    this._motherExpanded = true;
+    if (this.panels.mother) this.panels.mother.classList.add('mother-expanded');
+    // Energy block follows the MOTHER expand state.
+    if (this.panels.power) this.panels.power.classList.remove('power-collapsed');
   }
 
-  /** @private Schedule auto-collapse after 3s of no interaction (B5) */
-  _schedulePowerCollapse() {
-    if (this._powerCollapseTimer) {
-      clearTimeout(this._powerCollapseTimer);
-    }
-    this._powerCollapseTimer = setTimeout(() => this._collapsePower(), 3000);
+  /** @private Collapse the MOTHER detail back to the digest-only view. */
+  _collapseMother() {
+    this._motherCollapseTimer = null;
+    // Stay open while pinned via the chrome badge.
+    if (this._motherPinned) return;
+    this._motherExpanded = false;
+    if (this.panels.mother) this.panels.mother.classList.remove('mother-expanded');
+    if (this.panels.power) this.panels.power.classList.add('power-collapsed');
+  }
+
+  /** @private Schedule a MOTHER collapse shortly after the pointer leaves. */
+  _scheduleMotherCollapse() {
+    // Keep the detail open while pinned, or while the pointer is still over the
+    // pane (e.g. the player pressed 1/2/3 to reallocate power without leaving) —
+    // otherwise CSS :hover would keep .mother-detail open while `power-collapsed`
+    // hid the bar labels, stranding unlabeled bars until the next mouseenter.
+    if (this._motherPinned || this._motherHovering) return;
+    if (this._motherCollapseTimer) clearTimeout(this._motherCollapseTimer);
+    this._motherCollapseTimer = setTimeout(() => this._collapseMother(), 400);
   }
 
   /** @private Update power distribution bars from PowerDistribution state */
   _updatePowerBars() {
     const state = powerDistribution.getState();
 
-    // B5: Expand on power state change (keyboard interaction via 1/2/3 keys)
+    // B5 → MOTHER: expand the detail on power state change (keyboard interaction
+    // via 1/2/3 keys) so the player sees the bars they're adjusting, then let it
+    // auto-collapse unless pinned.
     const stateKey = `${state.thrust}-${state.sensors}-${state.arms}-${state.selectedBus}`;
     if (this._lastPowerState !== null && this._lastPowerState !== stateKey) {
-      this._expandPower();
-      this._schedulePowerCollapse();
+      this._expandMother();
+      this._scheduleMotherCollapse();
     }
     this._lastPowerState = stateKey;
 
     const buses = ['thrust', 'sensors', 'arms'];
     const colors = { thrust: '#00ff88', sensors: '#4488ff', arms: '#00ff88' };
+
+    // Track starvation for the digest power glyph.
+    let anyStarved = false;
 
     for (const bus of buses) {
       const bar = document.getElementById(`hud-power-bar-${bus}`);
@@ -1298,13 +1313,66 @@ export class StatusPanel {
       if (val) val.textContent = `${state[bus]}%`;
       if (row) row.setAttribute('data-selected', state.selectedBus === bus ? 'true' : 'false');
 
-      // F11: Update energy collapsed summary mini bar
-      const mini = document.getElementById(`energy-mini-${bus}`);
-      if (mini) {
-        mini.style.height = `${state[bus]}%`;
-        mini.style.opacity = state[bus] === 0 ? '0.2' : '1';
-      }
+      if (state[bus] === 0) anyStarved = true;
     }
+
+    // Digest ⚡ glyph — derived power health.
+    this._updatePowerDigestGlyph(anyStarved);
+  }
+
+  /**
+   * @private Update the MOTHER digest `⚡` power-health glyph.
+   * Dark-cockpit: the glyph is colour-coded and a word only appears on a fault.
+   * Green (no word) when battery >20% and no bus starved; amber `LOW` at 5–20%
+   * or a starved bus; red `CRIT` <5%. Battery comes from the last cached payload.
+   * @param {boolean} anyStarved — true if any power bus is allocated 0%.
+   */
+  _updatePowerDigestGlyph(anyStarved) {
+    const seg = document.getElementById('mother-digest-pwr');
+    const txt = document.getElementById('mother-digest-pwr-text');
+    if (!seg) return;
+
+    const res = this._lastResources || {};
+    const batteryMax = res.batteryMax || Constants.BATTERY_MAX || 100;
+    const batteryPct = batteryMax > 0 && res.battery != null
+      ? (res.battery / batteryMax) * 100
+      : 100;
+
+    let color, label;
+    if (batteryPct < 5) {
+      color = '#ff4444';
+      label = 'CRIT';
+    } else if (batteryPct < 20 || anyStarved) {
+      color = '#ffaa00';
+      label = 'LOW';
+    } else {
+      color = '#00ff88';
+      label = '';
+    }
+    seg.style.color = color;
+    if (txt) {
+      txt.textContent = label;
+      txt.style.display = label ? '' : 'none';
+    }
+
+    this._pwrNominal = !label;
+    this._refreshDigestDim();
+  }
+
+  /**
+   * @private Dark-cockpit dimming for the readiness digest. When every segment
+   * is nominal the whole line goes quiet (~0.5 opacity); the moment anything
+   * deviates the line returns to full opacity so the off-colour segment reads as
+   * an alert rather than wallpaper. Each segment updater sets its own flag.
+   */
+  _refreshDigestDim() {
+    const digest = document.getElementById('mother-digest');
+    if (!digest) return;
+    const allNominal =
+      this._netNominal !== false &&
+      this._dvNominal !== false &&
+      this._pwrNominal !== false;
+    digest.style.opacity = allNominal ? '0.5' : '1';
   }
 
   /** @private Render mass budget / Tsiolkovsky ΔV display */
@@ -1355,12 +1423,6 @@ export class StatusPanel {
     const maxDV = this._initialDeltaV || 500; // fallback estimate
     const pct = Math.max(0, Math.min(100, (dv / maxDV) * 100));
 
-    // Estimate transfers based on actual nearby target costs (or 50 m/s default)
-    const avgTransferCostMs = cachedTargets.length > 0
-      ? (cachedTargets.slice(0, 5).reduce((sum, t) => sum + (t.deltaV || 0), 0) / Math.min(5, cachedTargets.length)) * 1000
-      : 50;
-    const transfers = avgTransferCostMs > 0 ? Math.floor(dv / Math.max(avgTransferCostMs, 10)) : 0;
-
     // Phase R9: Predictive ΔV — warn if matching selected target would drop below threshold
     let predictedPct = null;
     if (cachedTargets && cachedTargets.length > 0) {
@@ -1386,28 +1448,17 @@ export class StatusPanel {
     // Update bar width
     fill.style.width = `${pct}%`;
 
-    // Color transitions based on percentage (synchronized with audio tiers: 30/15/5/1%)
-    if (pct > 30) {
-      fill.style.backgroundColor = '#00ff88';
-      fill.style.animation = 'none';
-    } else if (pct > 15) {
-      fill.style.backgroundColor = '#ffaa00';
-      fill.style.animation = 'none';
-    } else if (pct > 5) {
-      fill.style.backgroundColor = '#ff4444';
-      fill.style.animation = 'none';
-    } else if (pct > 1) {
-      // 5%-1%: pulsing red bar
-      fill.style.backgroundColor = '#ff4444';
-      fill.style.animation = 'deltav-pulse 0.8s ease-in-out infinite';
-    } else {
-      // <1%: strobing red (faster pulse matching continuous audio warble)
-      fill.style.backgroundColor = '#ff4444';
-      fill.style.animation = 'deltav-pulse 0.3s ease-in-out infinite';
+    // Color transitions based on percentage (synchronized with audio tiers: 30/15/5/1%).
+    // Shared ladder (_dvColorTier) so the detail bar and the MOTHER digest segment
+    // below cannot drift. The detail bar uses solid green as its nominal colour.
+    {
+      const tier = this._dvColorTier(pct, '#00ff88');
+      fill.style.backgroundColor = tier.color;
+      fill.style.animation = tier.anim;
     }
 
-    text.textContent = `ΔV: ${Math.round(dv)} m/s • ~${transfers} transfers`;
-    if (barText) barText.textContent = `${Math.round(dv)} m/s ~${transfers}`;
+    text.textContent = `ΔV: ${Math.round(dv)} m/s • ${Math.round(pct)}%`;
+    if (barText) barText.textContent = `${Math.round(dv)} m/s`;
 
     // Color the text label too
     if (pct <= 5) {
@@ -1418,12 +1469,53 @@ export class StatusPanel {
       text.style.color = '#aaffdd';
     }
 
-    // F11: Update propulsion collapsed summary mini ΔV bar
-    const miniDvFill = document.getElementById('propulsion-mini-dv-fill');
-    if (miniDvFill) {
-      miniDvFill.style.width = fill.style.width;
-      miniDvFill.style.backgroundColor = fill.style.backgroundColor;
+    // MOTHER digest ΔV segment — a thin remaining-budget gauge; the `%` text
+    // appears only when low (≤30%), dark-cockpit style. The bar fraction is the
+    // honest "what can I still do before I refuel?" read and uses the SAME
+    // _dvColorTier ladder as the detail bar above (only the nominal colour
+    // differs: the digest uses the dimmer teal), so the two never diverge.
+    //
+    // (This replaced `~N transfers` — shipΔV ÷ avg cost of the 5 nearest targets.
+    // That metric was degenerate: the nearest targets are the ones you're already
+    // co-orbital with, so their cost rounds to a few m/s and hit the 10 m/s floor,
+    // collapsing the readout to shipΔV/10 (~300) regardless of tactical state.)
+    const dvFill = document.getElementById('mother-digest-dv-fill');
+    const dvPct = document.getElementById('mother-digest-dv-pct');
+    if (dvFill) {
+      dvFill.style.width = `${pct}%`;
+      const tier = this._dvColorTier(pct, '#aaffdd');
+      dvFill.style.backgroundColor = tier.color;
+      dvFill.style.animation = tier.anim;
+      if (dvPct) {
+        if (pct <= 30) {
+          dvPct.style.display = '';
+          dvPct.textContent = `${Math.round(pct)}%`;
+          dvPct.style.color = tier.color;
+        } else {
+          dvPct.style.display = 'none';
+        }
+      }
+      this._dvNominal = pct > 30;
+      this._refreshDigestDim();
     }
+  }
+
+  /**
+   * @private Shared ΔV colour + pulse-animation ladder (audio tiers 30/15/5/1%).
+   * Used by BOTH the propulsion detail bar and the MOTHER digest segment so the
+   * two readouts can never drift. `nominalColor` is the only intended difference
+   * (detail bar = solid green `#00ff88`; digest = dimmer teal `#aaffdd`).
+   * @param {number} pct — remaining ΔV, 0..100
+   * @param {string} nominalColor — colour when pct > 30
+   * @returns {{ color: string, anim: string }}
+   */
+  _dvColorTier(pct, nominalColor) {
+    if (pct > 30) return { color: nominalColor, anim: 'none' };
+    if (pct > 15) return { color: '#ffaa00', anim: 'none' };
+    if (pct > 5)  return { color: '#ff4444', anim: 'none' };
+    // 5%-1%: pulsing red. <1%: faster strobe matching the continuous audio warble.
+    if (pct > 1)  return { color: '#ff4444', anim: 'deltav-pulse 0.8s ease-in-out infinite' };
+    return { color: '#ff4444', anim: 'deltav-pulse 0.3s ease-in-out infinite' };
   }
 
   /** @private Render the V5 crossbow arm status panel */
@@ -1432,290 +1524,175 @@ export class StatusPanel {
     if (!el) return;
 
     if (!this._armManager) {
-      el.innerHTML = '<span style="opacity:0.5">No daughter manager</span>';
-      this._updateFleetHeader([]);
-      this._updateFleetCollapsedSummary([]);
+      el.innerHTML = '<span style="opacity:0.5">No daughters</span>';
+      this._updateFleetHeader();
       return;
     }
 
     const statuses = this._armManager.getAllStatus();
     if (statuses.length === 0) {
-      el.innerHTML = '<span style="opacity:0.5">No daughters configured</span>';
-      this._updateFleetHeader([]);
-      this._updateFleetCollapsedSummary([]);
+      el.innerHTML = '<span style="opacity:0.5">No daughters</span>';
+      this._updateFleetHeader();
       return;
     }
 
-    const stateColors = ARM_STATE_COLORS;
+    // List by size: Large daughters (weavers) first, then Small (spinners). A
+    // small gap separates the two size groups — no headers, no resized rows.
+    const sizeRank = { weaver: 0, spinner: 1 };
+    const sorted = statuses
+      .map((a, idx) => ({ a, idx }))
+      .sort((x, y) => (sizeRank[x.a.type] ?? 2) - (sizeRank[y.a.type] ?? 2) || x.idx - y.idx);
 
-    const selectedIdx = this._armManager.selectedArmIndex;
-    const now = Date.now();
+    let prevType = null;
+    el.innerHTML = sorted.map((e) => {
+      const gap = (prevType !== null && e.a.type !== prevType) ? '<div style="height:6px;"></div>' : '';
+      prevType = e.a.type;
+      return gap + this._renderDaughterLine(e.a, e.idx);
+    }).join('');
 
-    // V5: Arm label — indices 0–5 numbered 1–6, index N-2 = "F" (front), N-1 = "B" (back)
-    const getLabel = (idx, total) => {
-      if (total > 6 && idx === total - 2) return 'F';
-      if (total > 6 && idx === total - 1) return 'B';
-      return String(idx + 1);
-    };
+    this._updateFleetHeader();
+  }
 
-    const renderCard = (a, idx) => {
-      const color = stateColors[a.state] || '#888';
-      const isSelected = idx === selectedIdx;
-      const label = getLabel(idx, statuses.length);
-      const typeLetter = a.type === 'weaver' ? 'L' : a.type === 'spinner' ? 'S' : '·';
-
-      // Selection styling — cyan number marker + card border/glow.
-      const selBorder = isSelected
-        ? `border:1px solid #00ffff;box-shadow:0 0 6px rgba(0,255,255,0.4);`
-        : '';
-      const numHtml = isSelected
-        ? `<span style="color:#00ffff;font-weight:bold;">▸${label}</span>`
-        : `<span style="opacity:0.55;">&nbsp;${label}</span>`;
-
-      // V5: Crossbow fire flash (white glow for 200ms after fire)
-      const flashTs = this._crossbowFireFlash[idx];
-      const flashActive = flashTs && (now - flashTs) < 200;
-      const flashStyle = flashActive
-        ? 'border-color:#ffffff !important;box-shadow:0 0 10px rgba(255,255,255,0.6) !important;'
-        : '';
-
-      // ── Deviation badges — rendered ONLY when they carry information, so an
-      //    idle docked fleet collapses to one tidy line per daughter and the
-      //    pane only gets loud when a unit actually does something. ──
-      const badges = [];
-
-      // Holding a catch — needs to be brought home.
-      if (a.hasCaptured) badges.push('<span title="Holding a catch">🎣</span>');
-
-      // Fuel — only when below full (100% is the boring default).
-      if (a.fuel < 100) {
-        const fuelColor = a.fuel > 50 ? '#00ff88' : a.fuel > 20 ? '#ffaa00' : '#ff4444';
-        badges.push(`<span style="color:${fuelColor};" title="Daughter fuel">⛽${a.fuel}%</span>`);
-      }
-
-      // Spring not charged while home — can't fire yet.
-      if ((a.state === 'DOCKED' || a.state === 'DOCKING') && !a.springCharged) {
-        badges.push('<span style="color:#ffaa00;" title="Spring not charged">○</span>');
-      }
-
-      // Tether length — only while deployed.
-      if (a.state !== 'DOCKED' && a.state !== 'RELOADING' &&
-          a.state !== 'HOLDING_CATCH' && a.tetherLength) {
-        badges.push(`<span style="opacity:0.7;" title="Tether deployed">T:${a.tetherLength}m</span>`);
-      }
-
-      // Tether tension — color-coded; flashes red near snap.
-      const tensFrac = this._tetherTensions[idx];
-      if (tensFrac !== undefined && a.state !== 'DOCKED' && a.state !== 'RELOADING') {
-        const tensPct = Math.round(tensFrac * 100);
-        let tensColor = '#00ff88';
-        if (tensFrac >= (Constants.REEL_TENSION_CRITICAL || 0.9)) {
-          tensColor = (now % 400 < 200) ? '#ff3333' : '#ff6666'; // flashing red
-        } else if (tensFrac >= (Constants.REEL_TENSION_WARNING || 0.7)) {
-          tensColor = '#ffaa00';
-        }
-        badges.push(`<span style="color:${tensColor};" title="Tether tension">⊗${tensPct}%</span>`);
-      }
-
-      const badgeHtml = badges.length
-        ? `<span style="display:flex;gap:6px;margin-left:auto;opacity:0.9;">${badges.join('')}</span>`
-        : '';
-
-      // ── Active-only sub-rows ──
-      // V5: Reload progress bar (shown when RELOADING)
-      let reloadHtml = '';
-      if (a.state === 'RELOADING') {
-        const pct = Math.round((a.reloadProgress || 0) * 100);
-        const barColor = pct >= 100 ? '#00ff88' : '#00ffff';
-        reloadHtml = `<div style="display:flex;align-items:center;gap:4px;margin-top:1px;">
-            <span style="font-size:9px;color:#888;">RLD</span>
-            <div style="flex:1;height:4px;background:rgba(0,0,0,0.5);border:1px solid rgba(0,255,255,0.3);border-radius:1px;overflow:hidden;">
-              <div style="height:100%;width:${pct}%;background:${barColor};transition:width 0.15s ease;"></div>
-            </div>
-            <span style="font-size:9px;color:${barColor};">${pct}%</span>
-          </div>`;
-      }
-
-      // V5: Tangle warning per arm (with auto-resolve countdown)
-      // Uses JS-calculated opacity to avoid animation restart on 10Hz innerHTML rebuild
-      let tangleHtml = '';
-      if (this._tangleState && this._tangleState.armIndices.includes(idx)) {
-        const elapsed = now - this._tangleState.startTime;
-        const remaining = Math.max(0, (this._tangleState.duration - elapsed) / 1000);
-        const tangleOpacity = 0.5 + 0.5 * Math.sin(now * 0.01);
-        tangleHtml = `<div style="font-size:9px;color:#ffaa00;opacity:${tangleOpacity.toFixed(2)};">⚠ TANGLE ${remaining.toFixed(0)}s</div>`;
-      }
-
-      // ── Feature-gated diagnostics (all OFF by default; debug overlays) ──
-      // C-4: Deploy state indicator (only when STOW_DEPLOY_STATE_MACHINE flag is on)
-      let deployHtml = '';
-      if (Constants.FEATURE_FLAGS.STOW_DEPLOY_STATE_MACHINE &&
-          this._armManager && this._armManager.arms[idx]) {
-        const armObj = this._armManager.arms[idx];
-        if (typeof armObj.getDeployState === 'function') {
-          const ds = armObj.getDeployState();
-          // Color coding: LOCKED=red, STOWED=amber, DEPLOYING/STOWING=cyan, DEPLOYED=green
-          const dsColors = {
-            'LOCKED': '#ff4444', 'STOWED': '#ffaa00',
-            'DEPLOYING': '#00ffff', 'DEPLOYED': '#00ff88', 'STOWING': '#00ffff',
-          };
-          const dsColor = dsColors[ds] || '#888';
-          let dsLabel = ds;
-          // Add progress % for transitional states
-          if ((ds === 'DEPLOYING' || ds === 'STOWING') &&
-              typeof armObj.getDeployProgress === 'function') {
-            const pct = Math.round(armObj.getDeployProgress() * 100);
-            dsLabel = `${ds} ${pct}%`;
-          }
-          deployHtml = `<div style="font-size:9px;margin-top:1px;">
-            <span style="color:${dsColor};">▸ ${dsLabel}</span>
-          </div>`;
-        }
-      }
-
-      // C-7: Tether reel HUD row (only when TETHER_REEL flag is ON)
-      let reelHtml = '';
-      if (Constants.FEATURE_FLAGS.TETHER_REEL) {
-        const reelRec = tetherReel.getReelRecord(idx);
-        if (reelRec && reelRec.state !== 'STOWED') {
-          const cLen = reelRec.cableLengthM.toFixed(1);
-          const cMax = reelRec.maxCableLengthM.toFixed(0);
-          const breakN = Constants.OCTOPUS_V5.REEL.BREAKING_TENSION_N;
-          const tensPct = breakN > 0 ? (reelRec.tensionN / breakN * 100) : 0;
-          const reelColors = {
-            'PAYING_OUT': '#00ffff', 'STATIC': '#00ff88',
-            'REELING_IN': '#4488ff', 'JAMMED': '#ff8800', 'CUT': '#ff4444',
-          };
-          const rsColor = reelColors[reelRec.state] || '#888';
-
-          // Tension bar color
-          let tBarColor = '#00ff88';
-          if (tensPct >= 90) tBarColor = '#ff3333';
-          else if (tensPct >= 75) tBarColor = '#ffaa00';
-
-          reelHtml = `<div style="font-size:9px;margin-top:1px;display:flex;gap:6px;align-items:center;">
-            <span style="color:${rsColor};">⊙${reelRec.state}</span>
-            <span style="color:#88ccff;">${cLen}/${cMax}m</span>
-            <span style="color:${tBarColor};">⊗${Math.round(tensPct)}%</span>
-          </div>`;
-        }
-      }
-
-      // C-8: Bridle ring status row (only when BRIDLE_RING flag is ON)
-      let bridleHtml = '';
-      if (Constants.FEATURE_FLAGS.BRIDLE_RING) {
-        const brStatus = BridleRing.getStatus(idx);
-        if (brStatus) {
-          const occupied = brStatus.attachPoints.filter(p => p.isOccupied).length;
-          const total = brStatus.attachPoints.length;
-          const loadKg = brStatus.totalLoadKg.toFixed(0);
-          const brColors = {
-            'IDLE': '#888', 'ATTACHED': '#00ff88',
-            'OVERLOADED': '#ffaa00', 'DAMAGED': '#ff3333',
-          };
-          const brColor = brColors[brStatus.state] || '#888';
-          if (occupied > 0 || brStatus.state !== 'IDLE') {
-            bridleHtml = `<div style="font-size:9px;margin-top:1px;">
-              <span style="color:${brColor};">◎ Bridle: ${occupied}/${total}. ${loadKg} kg</span>
-            </div>`;
-          }
-        }
-      }
-
-      return `<div style="margin:1px 0;padding:2px 4px;border-left:2px solid ${color};background:rgba(0,20,40,0.4);${selBorder}${flashStyle}">
-        <div style="display:flex;align-items:center;gap:6px;">
-          ${numHtml}
-          <span style="opacity:0.5;">${typeLetter}</span>
-          <span style="color:${color};white-space:nowrap;">● ${a.state}</span>
-          ${badgeHtml}
-        </div>${reloadHtml}${tangleHtml}${deployHtml}${reelHtml}${bridleHtml}
-        <div class="arm-hover-detail" style="display:none;font-size:10px;opacity:0.6;padding-left:12px;">
-          ΔV ${a.remainingDeltaV ? a.remainingDeltaV.toFixed(0) + ' m/s' : '—'} · 🏆 ${a.captures} · ⛽ ${a.fuel}%
-        </div>
-      </div>`;
-    };
-
-    // ── Dark-cockpit fleet assembly (#1) + urgency sort (#3) ──────────────────
-    // Classify each daughter so the pane stays silent when the fleet is nominal
-    // and surfaces trouble first. Lower priority number = more attention:
-    //   0 urgent (expended / low fuel / tangled / tension critical)
-    //   1 needs delivery (holding a catch)
-    //   2 active (deployed / in motion / working)
-    //   3 watched (selected, or docked-but-not-charged)
-    //   4 nominal (docked, charged, essentially full)  → collapses out of sight
-    const LOW_FUEL = 25;
-    // Daughters do not refuel while docked, so a docked unit below this bar is
-    // shown as a full card (pri 3) rather than collapsing into the silent strip
-    // — otherwise a drained-but-docked daughter would hide its fuel badge and
-    // the pilot could launch it half-empty believing the fleet was topped off.
-    const NOMINAL_FUEL = 95;
-    const classify = (a, idx) => {
-      const tens = this._tetherTensions[idx];
-      const tensionCritical = tens !== undefined && tens >= (Constants.REEL_TENSION_CRITICAL || 0.9);
-      const tangled = this._tangleState && this._tangleState.armIndices.includes(idx);
-      if (a.state === 'EXPENDED' || a.state === 'ADRIFT' || tangled || tensionCritical || a.fuel <= LOW_FUEL) return 0;
-      if (a.hasCaptured) return 1;
-      if (a.state !== 'DOCKED') return 2;
-      if (idx === selectedIdx || !a.springCharged || a.fuel < NOMINAL_FUEL) return 3;
-      return 4;
-    };
-
-    const entries = statuses.map((a, idx) => ({ a, idx, pri: classify(a, idx) }));
-    const allNominal = entries.every(e => e.pri === 4);
-
-    let armsHtml;
-    if (allNominal) {
-      // Whole fleet docked, charged and full → one quiet strip of dots. The
-      // header aggregate carries the "N ready" count, so this just confirms the
-      // individual units exist (and lets selection still highlight one).
-      armsHtml = `<div style="display:flex;gap:9px;align-items:center;font-size:10px;opacity:0.55;flex-wrap:wrap;">` +
-        entries.map(e =>
-          `<span><span style="color:#00ff88;">●</span><span style="opacity:0.7;">${getLabel(e.idx, statuses.length)}</span></span>`
-        ).join('') +
-        `</div>`;
-    } else {
-      // Sort by attention, stable within a priority band (keeps numbering calm).
-      const sorted = entries.slice().sort((x, y) => x.pri - y.pri || x.idx - y.idx);
-      const cards = sorted.filter(e => e.pri <= 3);
-      const docked = sorted.filter(e => e.pri === 4);
-      armsHtml = cards.map(e => renderCard(e.a, e.idx)).join('');
-      if (docked.length) {
-        // Nominal docked units fold into a single dim tail line.
-        const dots = docked
-          .map(e => `<span style="color:#00ff88;">●</span>${getLabel(e.idx, statuses.length)}`)
-          .join(' ');
-        armsHtml += `<div style="font-size:9px;opacity:0.4;margin-top:2px;">+${docked.length} docked&ensp;${dots}</div>`;
-      }
+  /**
+   * @private Plain-English status word + colour for one daughter — what it's
+   * doing, in words a new player understands (not the internal state enum).
+   * Critical tether stress / tangle override the state so trouble reads first.
+   * @returns {{label: string, color: string}}
+   */
+  _daughterStatus(a, idx) {
+    const tens = this._tetherTensions[idx];
+    const tangled = this._tangleState && this._tangleState.armIndices.includes(idx);
+    if (a.state === 'TANGLED' || tangled) return { label: 'Tangled', color: '#ffaa00' };
+    if (tens !== undefined && tens >= (Constants.REEL_TENSION_CRITICAL || 0.9)
+        && a.state !== 'DOCKED' && a.state !== 'RELOADING') {
+      return { label: 'Tether stress', color: '#ff4444' };
     }
 
-    // V5: Fleet status footer — pulse scan, thruster interlock.
-    // (Launch speed was removed: it's a static config value, not a live readout,
-    //  so it only added idle noise. It lives in the shop / upgrade screen.)
+    switch (a.state) {
+      case 'DOCKED':
+        return a.springCharged
+          ? { label: 'Ready', color: '#00ff88' }
+          : { label: 'Charging', color: '#ffaa00' };
+      case 'RELOADING':
+        return { label: `Reloading ${Math.round((a.reloadProgress || 0) * 100)}%`, color: '#00ffff' };
+      case 'LAUNCHING': case 'UNDOCKING': case 'TRANSIT':
+        return { label: 'Heading out', color: '#00ffff' };
+      case 'APPROACH': case 'STATION_KEEP':
+        return { label: 'Approaching', color: '#00ffff' };
+      case 'NETTING': case 'GRAPPLED': case 'MAGNETIC_GRAPPLE':
+      case 'GRIPPER_GRAPPLE': case 'PAD_CONTACT': case 'WEB_SHOT':
+        return { label: 'Capturing', color: '#00ffff' };
+      case 'REELING': case 'HAULING': case 'RETURNING': case 'DOCKING':
+        return { label: 'Returning', color: '#00ffff' };
+      case 'HOLDING_CATCH':
+        return { label: 'Catch aboard', color: '#ffaa00' };
+      case 'FISHING': case 'TRAWLING':
+        return { label: 'Fishing', color: '#00ff88' };
+      case 'SCANNING':
+        return { label: 'Scanning', color: '#4488ff' };
+      case 'ABLATING':
+        return { label: 'De-spinning', color: '#00ffff' };
+      case 'DEORBITING':
+        return { label: 'Deorbiting', color: '#ff4444' };
+      case 'ADRIFT':
+        return { label: 'Adrift', color: '#ffaa00' };
+      case 'EXPENDED':
+        return { label: 'Lost', color: '#ff4444' };
+      default:
+        return { label: a.state, color: '#888' };
+    }
+  }
 
-    // Thruster interlock warning — the only footer element that carries live,
-    // actionable signal. (The former "SCAN" readout was removed: pulseScan() has
-    // no hotkey / caller in the shipped build, so it could never change from
-    // "SCAN ✓" — permanent filler. The mechanic itself is left intact in
-    // ArmManager for when/if it gets wired up.) JS-calculated pulse for 10Hz-safe
-    // rendering.
-    let interlockHtml = '';
-    if (this._thrusterInterlock) {
-      const lockPulse = 0.5 + 0.5 * Math.sin(now * 0.01);
-      interlockHtml = `<span style="color:#ff3333;font-weight:bold;opacity:${lockPulse.toFixed(2)};">⚠ THR LOCK</span>`;
+  /**
+   * @private The hotkey hint shown on the selected daughter's 2nd line — the
+   * key(s) relevant to its current state, in plain words. Empty when it's busy /
+   * not actionable. Daughters fly on autopilot, so the only verbs surfaced are
+   * launch (D) and recall (R).
+   */
+  _daughterHotkeys(a) {
+    const key = (k, verb) => `<span style="color:#00ffff;font-weight:bold;">${k}</span>`
+      + `<span style="opacity:0.8;"> ${verb}</span>`;
+    switch (a.state) {
+      case 'DOCKED':
+        return (a.springCharged && a.fuel > 0) ? key('D', 'launch') : '';
+      case 'EXPENDED': case 'RELOADING': case 'HOLDING_CATCH': case 'DOCKING':
+        return '';
+      case 'ADRIFT':
+        return key('R', 'reel in');
+      default:
+        return key('R', 'recall');
+    }
+  }
+
+  /**
+   * @private One daughter row. Unselected = a single details line
+   * (number · status · nets · fuel). Selected = two lines: the details line,
+   * plus a 2nd line listing the hotkey(s) relevant to its current state.
+   */
+  _renderDaughterLine(a, idx) {
+    const selectedIdx = this._armManager ? this._armManager.selectedArmIndex : -1;
+    const total = this._armManager ? this._armManager.arms.length : 0;
+    const isSel = idx === selectedIdx;
+
+    // 1-4 (front/back letters only matter on the big late-game fleets).
+    let label = String(idx + 1);
+    if (total > 6 && idx === total - 2) label = 'F';
+    else if (total > 6 && idx === total - 1) label = 'B';
+
+    const { label: status, color: statusColor } = this._daughterStatus(a, idx);
+    const catchFlag = a.hasCaptured ? ' <span title="Carrying a catch">🎣</span>' : '';
+
+    // NET — each daughter's own magazine. Same ivory NET colour as the MOTHER
+    // pane (shared NET_COLOR), warning amber at half / red at empty (at 0 it
+    // can't capture). Net inventory isn't in getStatus, so read the arm object
+    // directly. Always emit a cell (empty when absent) to keep columns aligned.
+    const armObj = this._armManager ? this._armManager.arms[idx] : null;
+    let netHtml = '<span></span>';
+    if (armObj && typeof armObj.getNetInventory === 'function') {
+      const nets = armObj.getNetInventory();
+      const maxNets = typeof armObj.getNetInventoryMax === 'function' ? armObj.getNetInventoryMax() : 0;
+      const netColor = nets <= 0 ? '#ff4444' : (maxNets > 0 && nets <= maxNets * 0.5) ? '#ffaa00' : NET_COLOR;
+      netHtml = `<span style="color:${netColor};white-space:nowrap;" title="Nets remaining">NET ${nets}</span>`;
     }
 
-    // Footer renders ONLY when there's something to say — silent by default.
-    const footerHtml = interlockHtml
-      ? `<div style="font-size:10px;margin-top:3px;padding-top:3px;border-top:1px solid rgba(0,255,136,0.1);display:flex;gap:8px;align-items:center;flex-wrap:wrap;">${interlockHtml}</div>`
-      : '';
+    // ΔV — same label/colour ladder as the MOTHER pane (no fuel-gauge icon).
+    // Daughter ΔV is its fuel % × type budget (getStatus.remainingDeltaV is
+    // unreliable, so derive it). Right-aligned so it hugs the pane's right edge.
+    const fuelPct = Math.round(a.fuel ?? 0);
+    const dvMax = a.type === 'weaver' ? (Constants.WEAVER_DELTA_V || 500)
+      : (Constants.SPINNER_DELTA_V || 297);
+    const dv = Math.round((fuelPct / 100) * dvMax);
+    const dvColor = this._dvColorTier(fuelPct, '#aaffdd').color;
+    const dvHtml = `<span style="color:${dvColor};white-space:nowrap;text-align:right;" title="Maneuver budget (ΔV)">ΔV ${dv}</span>`;
 
-    el.innerHTML = armsHtml + footerHtml;
+    const numHtml = isSel
+      ? `<span style="color:#00ffff;font-weight:bold;">▸${label}</span>`
+      : `<span style="opacity:0.6;">${label}</span>`;
 
-    // Header aggregate + hotkey hint (#4/#5)
-    this._updateFleetHeader(statuses);
+    // Line 1 — details laid out as fixed columns so N · status · NET · ΔV line up
+    // vertically down the list. The number column is right-aligned (the ▸ marker
+    // hangs left of the digit); the ΔV column is right-aligned to the pane edge.
+    const detailLine = `<div style="display:grid;grid-template-columns:20px 1fr 50px 56px;column-gap:8px;align-items:baseline;">`
+      + `<span style="text-align:right;">${numHtml}</span>`
+      + `<span style="color:${statusColor};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${status}${catchFlag}</span>`
+      + netHtml
+      + dvHtml
+      + `</div>`;
 
-    // F12: Update fleet collapsed summary
-    this._updateFleetCollapsedSummary(statuses);
+    if (!isSel) {
+      return `<div style="padding:1px 4px;border-left:2px solid transparent;">${detailLine}</div>`;
+    }
+
+    // Line 2 — the relevant hotkey(s), indented to sit under the status column.
+    const keys = this._daughterHotkeys(a);
+    const keysLine = `<div style="padding-left:28px;font-size:10px;margin-top:1px;">`
+      + (keys || '<span style="opacity:0.4;">busy…</span>')
+      + `</div>`;
+
+    return `<div style="padding:2px 4px;background:rgba(0,255,255,0.08);border-left:2px solid #00ffff;">`
+      + detailLine
+      + keysLine
+      + `</div>`;
   }
 
   /**
@@ -1848,119 +1825,20 @@ export class StatusPanel {
   }
 
   // ==========================================================================
-  // F11: PROPULSION COLLAPSED SUMMARY UPDATER
-  // ==========================================================================
-
-  /** @private Update the propulsion collapsed summary fuel pips */
-  _updatePropulsionPips() {
-    const pipsEl = document.getElementById('propulsion-fuel-pips');
-    if (!pipsEl || !this._lastResources) return;
-
-    const r = this._lastResources;
-    const xenonMax = r.xenonMax || Constants.XENON_FUEL_MAX;
-    const coldGasMax = r.coldGasMax || Constants.COLD_GAS_MAX;
-    const batteryMax = r.batteryMax || Constants.BATTERY_MAX;
-    const xenonPct = (r.xenon / xenonMax) * 100;
-    const coldGasPct = (r.coldGas / coldGasMax) * 100;
-    const batteryPct = (r.battery / batteryMax) * 100;
-
-    const pipColor = (pct) => pct > 30 ? '#00ff88' : pct > 15 ? '#ffaa00' : '#ff4444';
-    const liPipColor = (pct) => pct > 30 ? '#88ccff' : pct > 15 ? '#ffaa00' : '#ff4444';
-
-    // F16: Include lithium pip when MPD is unlocked
-    const lithiumPip = this._mpdUnlocked
-      ? (() => {
-          const liMax = r.lithiumMax || Constants.MPD_LITHIUM_CAPACITY || 100;
-          const liPct = liMax > 0 ? (r.lithium / liMax) * 100 : 0;
-          return ` <span style="color:${liPipColor(liPct)};">●</span><span style="opacity:0.5;">Li</span>`;
-        })()
-      : '';
-
-    pipsEl.innerHTML = `
-      <span style="color:${pipColor(xenonPct)};">●</span><span style="opacity:0.5;margin-right:2px;">Xe</span>
-      <span style="color:${pipColor(coldGasPct)};">●</span><span style="opacity:0.5;margin-right:2px;">Gs</span>
-      <span style="color:${pipColor(batteryPct)};">●</span><span style="opacity:0.5;">Bt</span>${lithiumPip}
-    `;
-  }
-
-  // ==========================================================================
-  // F12: FLEET COLLAPSED SUMMARY UPDATER
+  // DAUGHTERS PANE: HEADER
   // ==========================================================================
 
   /**
-   * @private Update the header line: the at-a-glance fleet aggregate (#5) and
-   * the progressive-disclosure hotkey hint (#4). Kept separate from the card
-   * list so it refreshes on the same cadence without rebuilding the rows.
+   * @private Update the header. Shows a faint "select 1–4" hint while no
+   * daughter is selected (the entry point for new players); once one is
+   * selected, that daughter's line carries the contextual action prompt so the
+   * hint is redundant and hidden.
    */
-  _updateFleetHeader(statuses) {
-    // Hotkey hint — full labels until the player has both launched and recalled,
-    // then fade to terse glyphs. Mother (0), Recall-All (Shift+R) and De-spin (L)
-    // are intentionally not advertised here to keep the line short.
-    const hk = document.getElementById('fleet-hotkeys');
-    if (hk) {
-      const learned = this._fleetLaunchUsed && this._fleetRecallUsed;
-      hk.innerHTML = learned
-        ? '<span title="Select 1-4 · Launch D · Recall R">1-4 · D · R</span>'
-        : '1-4 Select&ensp;D Launch&ensp;R Recall';
-      hk.style.opacity = learned ? '0.28' : '0.5';
-    }
-
-    const agg = document.getElementById('fleet-aggregate');
-    if (!agg) return;
-    if (!statuses || statuses.length === 0) { agg.textContent = ''; return; }
-
-    const isOut = (s) => s.state !== 'DOCKED' && s.state !== 'RELOADING' && s.state !== 'HOLDING_CATCH';
-    const out = statuses.filter(isOut).length;
-    const ready = statuses.filter(s => s.state === 'DOCKED' && s.springCharged).length;
-
-    let attention = 0;
-    statuses.forEach((s, idx) => {
-      const tens = this._tetherTensions[idx];
-      const crit = tens !== undefined && tens >= (Constants.REEL_TENSION_CRITICAL || 0.9);
-      const tangled = this._tangleState && this._tangleState.armIndices.includes(idx);
-      if (s.state === 'EXPENDED' || s.state === 'ADRIFT' || s.fuel <= 25 || s.hasCaptured || tangled || crit) attention++;
-    });
-
-    let txt, color, opacity;
-    if (attention > 0) {
-      txt = `${attention}⚠${out ? ` · ${out} out` : ''}`;
-      color = '#ffaa00'; opacity = '0.95';
-    } else if (out > 0) {
-      txt = `${out} out · ${ready} ready`;
-      color = '#aaffdd'; opacity = '0.75';
-    } else {
-      txt = `${ready} ready`;
-      color = '#00ff88'; opacity = '0.7';
-    }
-    agg.textContent = txt;
-    agg.style.color = color;
-    agg.style.opacity = opacity;
-  }
-
-  /** @private Update the fleet collapsed summary with arm state counts */
-  _updateFleetCollapsedSummary(statuses) {
-    const el = document.getElementById('fleet-collapsed-summary');
-    if (!el) return;
-
-    if (!statuses || statuses.length === 0) {
-      el.innerHTML = '<span style="opacity:0.5;font-size:10px;">No fleet</span>';
-      return;
-    }
-
-    const stateColors = ARM_STATE_COLORS;
-
-    // Count by state
-    const counts = {};
-    for (const a of statuses) {
-      counts[a.state] = (counts[a.state] || 0) + 1;
-    }
-
-    const parts = Object.entries(counts).map(([state, count]) => {
-      const color = stateColors[state] || '#888';
-      return `${count}<span style="color:${color};">●</span>${state}`;
-    });
-
-    el.innerHTML = `<span style="white-space:nowrap;font-size:10px;">FLEET: ${parts.join(' ')}</span>`;
+  _updateFleetHeader() {
+    const hint = document.getElementById('fleet-select-hint');
+    if (!hint) return;
+    const hasSelection = !!this._armManager && this._armManager.selectedArmIndex >= 0;
+    hint.style.display = hasSelection ? 'none' : '';
   }
 
   // ==========================================================================
