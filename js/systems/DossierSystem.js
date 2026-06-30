@@ -161,7 +161,7 @@ export class DossierSystem {
     // DEBRIS_CAPTURED event, so the wallet shows one combined jump.
     eventBus.emit(Events.COMMS_MESSAGE, {
       sender: 'HOUSTON',
-      text: `Capture confirmed \u2014 salvage refines into fuel and credits, plus survey data. +$${total} cr.`,
+      text: `Capture confirmed. Salvage refines into fuel and credits. Survey data: ${total} credits earned.`,
       priority: 'success',
       _onboarding: true,
     });
@@ -286,15 +286,12 @@ export class DossierSystem {
       bountyPaid,
     });
 
-    const { total } = appraiseSalvage(target.salvage);
-    // While deferring, suppress the bounty clause — the combined release line
-    // (tagged _onboarding) narrates the credits on first capture instead.
-    const bountyClause = bountyPaid ? ` +$${D.SURVEY_BOUNTY} survey data.` : '';
+    // The full salvage appraisal lives in the dossier pane; the comms line
+    // just announces the data is in and names the credits earned for it.
+    const bountyClause = bountyPaid ? ` ${D.SURVEY_BOUNTY} credits earned.` : '';
     eventBus.emit(Events.COMMS_MESSAGE, {
       sender: 'HOUSTON',
-      text: total > 0
-        ? `Survey complete. Full profile decrypted. Salvage appraisal \u20B9${total}.${bountyClause}`
-        : `Survey complete. Full structural profile on file.${bountyClause}`,
+      text: `Survey data sent to ground station.${bountyClause}`,
       priority: 'success',
       // During onboarding the neutral reveal line must bypass tier-0 suppression
       // too, so the "chest opens" beat is still legible. The bounty itself is

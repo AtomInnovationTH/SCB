@@ -75,7 +75,7 @@ export const ONBOARDING_BEATS = [
     // Confirm the first catch landed + name the reward loop. The reticle
     // auto-advances to the next forward piece (AutoLockController REACQUIRE).
     id: 'first_catch',
-    commsSource: 'HOUSTON', commsText: 'Capture confirmed. Salvage refines into fuel and credits. Another one\'s locked. Take it.',
+    commsSource: 'HOUSTON', commsText: 'Capture confirmed. Salvage refines into fuel and credits.',
     commsAck: null,
     glyph: '✓', keys: [], skillId: null,
     triggerEvent: 'DEBRIS_CAPTURED',
