@@ -26,6 +26,7 @@ import { describe, it, assert } from './TestRunner.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { InputManager } from '../systems/InputManager.js';
+import { Constants } from '../core/Constants.js';
 
 function makeIM(overrides = {}) {
   const im = new InputManager();
@@ -845,5 +846,104 @@ describe('InputManager — help-pane binding coverage guard', () => {
       im._handleKeyDown(key('KeyL'));
     });
     assert.equal(got.length, 0, 'L does not recall — it is the de-spin laser');
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// Net-ladder Mother fire routing (net ladder Phase B)
+//   ≤10 kg  → lasso (existing path)
+//   >500 kg → fireMotherNet (Mother Large Net pod)
+//   10–500  → refuse + "save the burn — deploy a Daughter"
+// ══════════════════════════════════════════════════════════════════════════
+describe('InputManager — Mother net routing by target mass (net ladder)', () => {
+  function makeRoutingIM(targetMass, podInv = [2, 2]) {
+    const im = new InputManager();
+    im._firstGestureHandled = true;
+    const calls = { lassoFired: 0, motherFired: [], comms: [] };
+    const target = targetMass == null ? null : { id: 't1', mass: targetMass,
+      _scenePosition: { x: 0, y: 0, z: 0.001 } };
+    im._deps = {
+      gameState: { currentState: 'ORBITAL_VIEW', isGameplay: () => true },
+      player: {
+        getPosition: () => ({ x: 0, y: 0, z: 0 }),
+        getVelocity: () => ({ x: 0, y: 0, z: 1 }),
+      },
+      debrisField: { getDebrisNear: () => (target ? [target] : []) },
+      targetSelector: {
+        getActiveTarget: () => target,
+        getActiveTargetPosition: () => (target && target._scenePosition ? target._scenePosition : null),
+      },
+      lassoSystem: { active: false, fire: () => { calls.lassoFired++; } },
+      captureNetSystem: {
+        getMotherPodInventory: (i) => podInv[i] || 0,
+        fireMotherNet: (podIndex, pos, dir, tgt) => {
+          calls.motherFired.push({ podIndex, tgt });
+          return (podInv[podIndex] || 0) > 0 ? { podIndex } : null;
+        },
+      },
+      audioSystem: { playClick: () => {}, playClickFail: () => {} },
+    };
+    return { im, calls, target };
+  }
+
+  it('≤10 kg selected target → lasso path (fireMotherNet NOT called)', () => {
+    const { im, calls } = makeRoutingIM(8);
+    im.fireLasso();
+    assert.equal(calls.motherFired.length, 0, 'no Mother net fired for light prey');
+    // windup timer scheduled; the lasso itself fires after the windup — assert
+    // the routing did not short-circuit to Mother net or refusal.
+    assert.ok(im._lassoWindingUp, 'lasso windup started for ≤10 kg target');
+    if (im._lassoWindupTimeout) clearTimeout(im._lassoWindupTimeout);
+  });
+
+  it('>500 kg selected target → fireMotherNet on a pod with inventory', () => {
+    const { im, calls, target } = makeRoutingIM(800, [2, 2]);
+    im.fireLasso();
+    assert.equal(calls.motherFired.length, 1, 'Mother net fired exactly once');
+    assert.equal(calls.motherFired[0].podIndex, 0, 'picks pod 0 (has inventory)');
+    assert.equal(calls.motherFired[0].tgt, target, 'aims at the selected whale');
+    assert.equal(calls.lassoFired, 0, 'lasso not fired for a whale');
+    assert.equal(im._lassoWindingUp, false, 'no lasso windup for a whale');
+  });
+
+  it('>500 kg picks pod 1 when pod 0 is empty', () => {
+    const { im, calls } = makeRoutingIM(800, [0, 2]);
+    im.fireLasso();
+    assert.equal(calls.motherFired.length, 1);
+    assert.equal(calls.motherFired[0].podIndex, 1, 'falls to pod 1 when pod 0 empty');
+  });
+
+  it('10–500 kg selected target → refuse (LASSO_DENIED daughter_sized), no fire', () => {
+    const { im, calls } = makeRoutingIM(300);
+    const denials = captureEvent(Events.LASSO_DENIED, () => { im.fireLasso(); });
+    assert.equal(calls.motherFired.length, 0, 'no Mother net for daughter-sized prey');
+    assert.equal(calls.lassoFired, 0, 'no lasso for daughter-sized prey');
+    assert.ok(im._lassoWindingUp !== true, 'no lasso windup started');
+    assert.ok(denials.some(d => d.reason === 'daughter_sized'),
+      'emits LASSO_DENIED with reason daughter_sized');
+  });
+
+  it('band edges: exactly 10 kg → lasso; exactly 500 kg → refuse', () => {
+    const cap = Constants.LASSO_MAX_CAPTURE_MASS;      // 10
+    const daughterCap = Constants.WEAVER_MAX_CAPTURE_MASS; // 500
+    // exactly at lasso cap → lasso (mass > cap is false)
+    const a = makeRoutingIM(cap);
+    a.im.fireLasso();
+    assert.equal(a.calls.motherFired.length, 0, 'exactly 10 kg is lasso-legal');
+    assert.ok(a.im._lassoWindingUp, 'lasso windup at exactly the cap');
+    if (a.im._lassoWindupTimeout) clearTimeout(a.im._lassoWindupTimeout);
+    // exactly at daughter cap → daughter-sized refusal (mass > daughterCap false; mass > cap true)
+    const b = makeRoutingIM(daughterCap);
+    const denials = captureEvent(Events.LASSO_DENIED, () => { b.im.fireLasso(); });
+    assert.equal(b.calls.motherFired.length, 0, 'exactly 500 kg is not a whale');
+    assert.ok(denials.some(d => d.reason === 'daughter_sized'), 'exactly 500 kg refuses to Daughter');
+  });
+
+  it('no selected target → lasso auto-aim path unchanged', () => {
+    const { im, calls } = makeRoutingIM(null);
+    im.fireLasso();
+    assert.equal(calls.motherFired.length, 0, 'no routing without a selected target');
+    assert.ok(im._lassoWindingUp, 'falls through to the lasso windup path');
+    if (im._lassoWindupTimeout) clearTimeout(im._lassoWindupTimeout);
   });
 });

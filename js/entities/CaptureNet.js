@@ -1128,6 +1128,7 @@ export class CaptureNetSystem {
     eventBus.emit(Events.NET_INVENTORY_CHANGED, {
       source: 'mother',
       podInventory: [...this._motherPodInventory],
+      podMax: [...this._motherPodMax],
     });
   }
 
@@ -1431,11 +1432,49 @@ export class CaptureNetSystem {
     return this._motherPodMax[podIndex] || 0;
   }
 
-  /** Set mother pod inventory (persistence restore). */
+  /** Set mother pod inventory (persistence restore). Clamped to per-pod max. */
   setMotherPodInventory(counts) {
     if (Array.isArray(counts)) {
-      this._motherPodInventory = [counts[0] || 0, counts[1] || 0];
+      this._motherPodInventory = [
+        Math.max(0, Math.min(counts[0] || 0, this._motherPodMax[0] || 0)),
+        Math.max(0, Math.min(counts[1] || 0, this._motherPodMax[1] || 0)),
+      ];
     }
+  }
+
+  /** True when at least one Mother pod has space for another net. */
+  hasMotherPodSpace() {
+    if (!Constants.FEATURE_FLAGS.CAPTURE_NET) return false;
+    for (let i = 0; i < this._motherPodInventory.length; i++) {
+      if ((this._motherPodInventory[i] || 0) < (this._motherPodMax[i] || 0)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Load exactly one Large Net into the emptiest pod that has space (shop
+   * restock — one net per 250 cr purchase, matching REPLACEMENT_COST; net
+   * ladder Phase B, mirrors the daughters' per-net reload economy).
+   * @returns {boolean} true if a net was loaded
+   */
+  loadOneMotherNet() {
+    if (!Constants.FEATURE_FLAGS.CAPTURE_NET) return false;
+    // Pick the pod with the most free space (largest max−current), so repeated
+    // buys top the pods off evenly.
+    let bestPod = -1;
+    let bestFree = 0;
+    for (let i = 0; i < this._motherPodInventory.length; i++) {
+      const free = (this._motherPodMax[i] || 0) - (this._motherPodInventory[i] || 0);
+      if (free > bestFree) { bestFree = free; bestPod = i; }
+    }
+    if (bestPod < 0) return false;
+    this._motherPodInventory[bestPod]++;
+    eventBus.emit(Events.NET_INVENTORY_CHANGED, {
+      source: 'mother',
+      podInventory: [...this._motherPodInventory],
+      podMax: [...this._motherPodMax],
+    });
+    return true;
   }
 
   /** Get the active net projectile for a given arm index (if any). */
@@ -1528,7 +1567,18 @@ export class CaptureNetSystem {
   restoreState(state) {
     if (!state) return;
     if (Array.isArray(state.motherPodInventory)) {
-      this._motherPodInventory = [...state.motherPodInventory];
+      // Ensure the per-pod max is seeded (init() normally does this before
+      // restore, but guard for out-of-order load paths) so the clamp below has
+      // a real ceiling. Then clamp restored counts to the current max — a save
+      // written before the net-ladder MAGAZINE_SIZE downsize can carry counts
+      // above the new cap and must not load an over-max magazine.
+      if (!this._motherPodMax[0] && !this._motherPodMax[1]) {
+        this._motherPodMax = [CN.LARGE.MAGAZINE_SIZE, CN.LARGE.MAGAZINE_SIZE];
+      }
+      this._motherPodInventory = [
+        Math.max(0, Math.min(state.motherPodInventory[0] ?? 0, this._motherPodMax[0] || 0)),
+        Math.max(0, Math.min(state.motherPodInventory[1] ?? 0, this._motherPodMax[1] || 0)),
+      ];
     }
     if (typeof state.playerHasFragmented === 'boolean') {
       this._playerHasFragmented = state.playerHasFragmented;

@@ -37,6 +37,7 @@ import {
   computeClingProbability,
   recommendCaptureMode,
   getNetClassForType,
+  captureNetSystem,
 } from '../entities/CaptureNet.js';
 
 /** Preference order for ▶ tie-breaks (matches ToolRecommender). */
@@ -316,12 +317,22 @@ export function computeToolOdds(opts = {}) {
   const range = (typeof opts.range === 'number') ? opts.range : 50;
   const netClass = opts.netClass || getNetClassForType(armType);
 
+  // M3 (capture-feedback overhaul): a Mother-net odds row must reflect the pod
+  // magazine, never advertise e.g. "96%" on an empty pod. When the caller does
+  // not supply an explicit netCount for the mother, derive it from the live pod
+  // inventory so an empty magazine collapses to the EMPTY blocker ('--').
+  let netCount = opts.netCount;
+  if (netCount === undefined && armType === 'mother'
+      && captureNetSystem && typeof captureNetSystem.getMotherNetCount === 'function') {
+    netCount = captureNetSystem.getMotherNetCount();
+  }
+
   /** @type {Object<string, {p:number|null, blocker:string|null, hint:string}>} */
   const odds = {};
   for (const kind of toolset) {
     switch (kind) {
       case 'NET':
-        odds.NET = computeNetOdds({ target, range, netClass, netCount: opts.netCount, presentedWidthM: opts.presentedWidthM });
+        odds.NET = computeNetOdds({ target, range, netClass, netCount, presentedWidthM: opts.presentedWidthM });
         break;
       case 'MAGNET':
         odds.MAGNET = computeMagnetOdds(target);

@@ -14,6 +14,7 @@ import { powerDistribution, PowerBuses } from './PowerDistribution.js';
 import timerManager from './TimerManager.js';
 import { despinLaser } from './DespinLaser.js';
 import { DEV_ACTIONS, resolveNextDevAction } from './DevSequenceAdvancer.js';
+import { classifyNetTarget } from './netRouting.js';
 
 export class InputManager {
   constructor() {
@@ -2026,6 +2027,39 @@ export class InputManager {
   fireLasso() {
     const d = this._deps; if (!d || !d.lassoSystem) return;
     if (this._lassoWindingUp || d.lassoSystem.active) return;
+
+    // ── Net-ladder strict routing (net ladder Phase B) ──────────────────────
+    // The Mother's primary fire verb (N) auto-routes by the SELECTED target's
+    // mass so a beginner cannot waste a scarce, delta-v-costly Large Net on
+    // daughter-sized prey (and cannot try to lasso a whale). Bands + copy come
+    // from the shared classifyNetTarget() (single source of truth with
+    // LassoSystem's own rejection path). With no Tab-selected target we fall
+    // through to the lasso auto-aim path unchanged (welcome-field / onboarding
+    // relies on this).
+    const activeTarget = d.targetSelector ? d.targetSelector.getActiveTarget() : null;
+    if (activeTarget && d.captureNetSystem && Constants.isFeatureEnabled('CAPTURE_NET')) {
+      const { band, message } = classifyNetTarget(activeTarget.mass || 0);
+      if (band === 'whale') {
+        // Whale — only the Mother's Large Net holds it. Fire a pod directly.
+        this.fireMotherNet(activeTarget);
+        return;
+      }
+      if (band === 'daughter') {
+        // Daughter-sized: refuse the Mother fire, point the player at a Daughter.
+        eventBus.emit(Events.LASSO_DENIED, { reason: 'daughter_sized' });
+        eventBus.emit(Events.COMMS_MESSAGE, {
+          text: message,
+          source: 'SYSTEM',
+          channel: 'CMD',
+          priority: 'warning',
+          _lassoFeedback: true,
+        });
+        d.audioSystem?.playClickFail?.() ?? d.audioSystem?.playClick?.();
+        return;
+      }
+      // else band === 'lasso' (≤ 10 kg) → fall through to the lasso path below.
+    }
+
     this._lassoWindingUp = true;
     d.audioSystem?.playClick?.();
     const windupMs = (Constants.LASSO_CAST_WINDUP || 0.15) * 1000;
@@ -2035,9 +2069,41 @@ export class InputManager {
       const vel = d.player.getVelocity();
       const velDir = new THREE.Vector3(vel.x, vel.y, vel.z);
       if (velDir.lengthSq() > 0) velDir.normalize();
-      const activeTarget = d.targetSelector ? d.targetSelector.getActiveTarget() : null;
-      d.lassoSystem.fire(d.player.getPosition(), d.debrisField, velDir, activeTarget);
+      const target = d.targetSelector ? d.targetSelector.getActiveTarget() : null;
+      d.lassoSystem.fire(d.player.getPosition(), d.debrisField, velDir, target);
     }, windupMs);
+  }
+
+  /**
+   * Fire a Mother Large Net pod at a whale-class target (net ladder Phase B).
+   * Picks the pod with inventory; fireMotherNet handles empty/cooldown comms.
+   * @param {object} target — the selected debris (mass > 500 kg)
+   */
+  fireMotherNet(target) {
+    const d = this._deps; if (!d || !d.captureNetSystem || !d.player) return;
+    const cns = d.captureNetSystem;
+    // Pick the first pod with inventory; if both empty, fire pod 0 so the
+    // system's own "magazine empty — restock at shop" comms fires.
+    let podIndex = 0;
+    if (cns.getMotherPodInventory(0) <= 0 && cns.getMotherPodInventory(1) > 0) podIndex = 1;
+
+    const pos = d.player.getPosition();
+    const launchPos = { x: pos.x, y: pos.y, z: pos.z };
+    // Aim from the Mother toward the target using the canonical scene-position
+    // resolver (single source of truth shared with LassoSystem/rendering; falls
+    // back to the target's orbit when no cached _scenePosition exists — whale
+    // targets are the most likely to need that fallback).
+    const tPos = d.targetSelector ? d.targetSelector.getActiveTargetPosition() : null;
+    let launchDir = { x: 0, y: 0, z: 1 };
+    if (tPos) {
+      const dir = new THREE.Vector3(tPos.x - pos.x, tPos.y - pos.y, tPos.z - pos.z);
+      if (dir.lengthSq() > 0) { dir.normalize(); launchDir = { x: dir.x, y: dir.y, z: dir.z }; }
+    }
+    // mode omitted → CaptureNet auto-selects SLAM/CINCH.
+    const net = cns.fireMotherNet(podIndex, launchPos, launchDir, target);
+    if (net) {
+      d.audioSystem?.playClick?.();
+    }
   }
 
   /** Smart-default helper — deploys the next docked daughter (mirrors `case 'KeyD':`). */

@@ -220,6 +220,18 @@ export class StatusPanel {
       this._updateNetDigest();
     });
 
+    // Net ladder Phase B: Mother Large Net pod inventory segment. The digest
+    // NET bar counts LASSO ammo; this separate M-NET segment tracks the whale-
+    // hunt pods, fed by NET_INVENTORY_CHANGED { source:'mother', podInventory }.
+    this._motherPods = null;      // [n0, n1] once a mother event arrives
+    this._motherPodsMax = null;   // [max0, max1]
+    eventBus.on(Events.NET_INVENTORY_CHANGED, (data) => {
+      if (!data || data.source !== 'mother') return;
+      if (Array.isArray(data.podInventory)) this._motherPods = data.podInventory.slice();
+      if (Array.isArray(data.podMax)) this._motherPodsMax = data.podMax.slice();
+      this._updateMotherPodDigest();
+    });
+
   }
 
   // ==========================================================================
@@ -352,6 +364,11 @@ export class StatusPanel {
           <span class="md-track"><span class="md-fill" id="mother-digest-net-fill"></span></span>
           <span class="md-count" id="mother-digest-net-count">${Constants.LASSO_AMMO_MAX}</span>
           <span id="mother-digest-net-reload" style="display:none;">↻</span>
+        </span>
+        <span class="md-sep" id="mother-digest-mnet-sep" style="display:none;">·</span>
+        <span id="mother-digest-mnet" style="display:none;align-items:center;gap:4px;color:${NET_COLOR};" title="Mother Large Net pods (whale hunts)">
+          <span class="md-label">M-NET</span>
+          <span class="md-count" id="mother-digest-mnet-count">0/0</span>
         </span>
         <span class="md-sep">·</span>
         <span id="mother-digest-dv" style="display:inline-flex;align-items:center;gap:4px;color:#aaffdd;">
@@ -807,6 +824,43 @@ export class StatusPanel {
     // dark-cockpit dimming of the whole digest line.
     this._netNominal = ammo > 10 && !reloading && !denied;
     this._refreshDigestDim();
+  }
+
+  /**
+   * Update the MOTHER digest's Large Net pod segment (`mother-digest-mnet`).
+   * Net ladder Phase B: shows `M-NET n/max` where n = both pods combined and
+   * max = 2 pods × LARGE.MAGAZINE_SIZE. Hidden until a `source:'mother'`
+   * NET_INVENTORY_CHANGED arrives (CAPTURE_NET off ⇒ never shown). Amber ≤50%,
+   * red at 0 — the whale-hunt magazine is scarce by design.
+   * @private
+   */
+  _updateMotherPodDigest() {
+    const seg = document.getElementById('mother-digest-mnet');
+    const sep = document.getElementById('mother-digest-mnet-sep');
+    const count = document.getElementById('mother-digest-mnet-count');
+    if (!seg || !count) return;
+
+    if (!Array.isArray(this._motherPods)) {
+      seg.style.display = 'none';
+      if (sep) sep.style.display = 'none';
+      return;
+    }
+
+    const nets = this._motherPods.reduce((a, b) => a + (b || 0), 0);
+    const perPod = (Constants.CAPTURE_NET && Constants.CAPTURE_NET.LARGE
+      && Constants.CAPTURE_NET.LARGE.MAGAZINE_SIZE) || 2;
+    const maxNets = Array.isArray(this._motherPodsMax)
+      ? this._motherPodsMax.reduce((a, b) => a + (b || 0), 0)
+      : perPod * this._motherPods.length;
+
+    const color = nets <= 0 ? '#ff4444'
+      : (maxNets > 0 && nets <= maxNets * 0.5) ? '#ffaa00' : NET_COLOR;
+
+    seg.style.display = 'inline-flex';
+    if (sep) sep.style.display = '';
+    count.textContent = `${nets}/${maxNets}`;
+    count.style.color = color;
+    seg.style.color = color;
   }
 
   /**
@@ -1652,7 +1706,7 @@ export class StatusPanel {
       const nets = armObj.getNetInventory();
       const maxNets = typeof armObj.getNetInventoryMax === 'function' ? armObj.getNetInventoryMax() : 0;
       const netColor = nets <= 0 ? '#ff4444' : (maxNets > 0 && nets <= maxNets * 0.5) ? '#ffaa00' : NET_COLOR;
-      netHtml = `<span style="color:${netColor};white-space:nowrap;" title="Nets remaining">NET ${nets}</span>`;
+      netHtml = `<span style="color:${netColor};white-space:nowrap;" title="Nets remaining">NET ${nets}/${maxNets}</span>`;
     }
 
     // ΔV — same label/colour ladder as the MOTHER pane (no fuel-gauge icon).

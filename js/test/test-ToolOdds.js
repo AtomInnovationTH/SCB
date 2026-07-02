@@ -16,6 +16,7 @@ import {
   resolvePadModeForOdds,
 } from '../systems/ToolOdds.js';
 import { Constants } from '../core/Constants.js';
+import { captureNetSystem } from '../entities/CaptureNet.js';
 
 const CN = Constants.CAPTURE_NET;
 
@@ -262,5 +263,54 @@ describe('ToolOdds — ▶ selection (computeBestTool)', () => {
     });
     assert.equal(odds.NET.p, null);
     assert.equal(computeBestTool(odds, ['NET', 'GRIPPER', 'MAGNET']), 'GRIPPER');
+  });
+});
+
+// ── M3 (capture-feedback overhaul): Mother-net odds honour pod inventory ────
+describe('ToolOdds — Mother net derives netCount from pod inventory (M3)', () => {
+  let savedFlag;
+  const setup = () => {
+    savedFlag = Constants.FEATURE_FLAGS.CAPTURE_NET;
+    Constants.FEATURE_FLAGS.CAPTURE_NET = true;
+    captureNetSystem.reset();
+    captureNetSystem.init();
+  };
+  const teardown = () => {
+    Constants.FEATURE_FLAGS.CAPTURE_NET = savedFlag;
+    captureNetSystem.reset();
+  };
+
+  it('empty Mother pods → NET row collapses to EMPTY (never a %)', () => {
+    setup();
+    captureNetSystem.setMotherPodInventory([0, 0]);
+    const odds = computeToolOdds({
+      armType: 'mother', range: 30,
+      target: baseTarget({ mass: 3000, sizeMeter: 6, type: 'rocketBody' }),
+    });
+    assert.equal(odds.NET.p, null, 'no % advertised on an empty magazine');
+    assert.equal(odds.NET.blocker, 'EMPTY', 'blocker is EMPTY');
+    teardown();
+  });
+
+  it('stocked Mother pods → NET row rolls a real % for a whale', () => {
+    setup();
+    const odds = computeToolOdds({
+      armType: 'mother', range: 30,
+      target: baseTarget({ mass: 3000, sizeMeter: 6, type: 'rocketBody', tumbleRate: 0 }),
+    });
+    assert.ok(odds.NET.p > 0, 'stocked pods advertise a real probability');
+    assert.notEqual(odds.NET.blocker, 'EMPTY', 'not blocked as EMPTY when stocked');
+    teardown();
+  });
+
+  it('explicit netCount still overrides the derived pod count', () => {
+    setup();
+    // pods are full (init), but an explicit 0 must win.
+    const odds = computeToolOdds({
+      armType: 'mother', range: 30, netCount: 0,
+      target: baseTarget({ mass: 3000, sizeMeter: 6, type: 'rocketBody' }),
+    });
+    assert.equal(odds.NET.p, null, 'explicit netCount:0 forces EMPTY');
+    teardown();
   });
 });

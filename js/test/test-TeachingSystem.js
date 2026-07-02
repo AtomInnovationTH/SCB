@@ -51,9 +51,9 @@ function createMockEventBus() {
 // ============================================================================
 describe('TeachingSystem — Moment Definitions', () => {
 
-  it('has exactly 24 registered moments', () => {
-    assert.equal(TEACHING_MOMENTS.length, 24,
-      `expected 24 moments, got ${TEACHING_MOMENTS.length}`);
+  it('has exactly 28 registered moments', () => {
+    assert.equal(TEACHING_MOMENTS.length, 28,
+      `expected 28 moments, got ${TEACHING_MOMENTS.length}`);
   });
 
   it('all moments have required fields: id, title, body, duration, icon', () => {
@@ -73,8 +73,8 @@ describe('TeachingSystem — Moment Definitions', () => {
       `duplicate IDs found: ${ids.filter((id, i) => ids.indexOf(id) !== i)}`);
   });
 
-  it('MOMENTS_BY_ID map has all 24 entries', () => {
-    assert.equal(MOMENTS_BY_ID.size, 24);
+  it('MOMENTS_BY_ID map has all 28 entries', () => {
+    assert.equal(MOMENTS_BY_ID.size, 28);
     for (const m of TEACHING_MOMENTS) {
       assert.ok(MOMENTS_BY_ID.has(m.id), `MOMENTS_BY_ID missing ${m.id}`);
     }
@@ -86,6 +86,8 @@ describe('TeachingSystem — Moment Definitions', () => {
       'first_weather', 'first_shop', 'first_codex', 'first_burn',
       'first_kessler', 'first_autopilot', 'first_lasso', 'first_active_sat_warning',
       'first_scan', 'first_arm_deploy', 'first_net_failed', 'first_tether_snap',
+      'first_small_daughter_deploy', 'first_large_daughter_deploy',
+      'first_whale_target', 'first_deltav_waste',
     ];
     for (const id of expected) {
       assert.ok(MOMENTS_BY_ID.has(id), `missing expected moment: ${id}`);
@@ -392,7 +394,7 @@ describe('TeachingSystem — resetAll', () => {
     for (const m of TEACHING_MOMENTS) {
       ts.markSeen(m.id);
     }
-    assert.equal(ts.getSeenCount(), 24);
+    assert.equal(ts.getSeenCount(), 28);
 
     // Reset
     ts.resetAll();
@@ -411,10 +413,10 @@ describe('TeachingSystem — resetAll', () => {
 // ============================================================================
 describe('TeachingSystem — getSeenCount / getTotalCount', () => {
 
-  it('getTotalCount returns 24', () => {
+  it('getTotalCount returns 28', () => {
     const eb = createMockEventBus();
     const ts = new TeachingSystem(eb);
-    assert.equal(ts.getTotalCount(), 24);
+    assert.equal(ts.getTotalCount(), 28);
     ts.dispose();
   });
 
@@ -427,7 +429,7 @@ describe('TeachingSystem — getSeenCount / getTotalCount', () => {
     ts.markSeen('first_shop');
     ts.markSeen('first_burn');
     assert.equal(ts.getSeenCount(), 5);
-    assert.equal(ts.getTotalCount(), 24);
+    assert.equal(ts.getTotalCount(), 28);
     ts.dispose();
   });
 });

@@ -2,13 +2,17 @@
  * test-ArmUnit-NetInventory.js — §13 Q5: Net Inventory Decrement + Empty-Click Guard
  *
  * Phase 1 tests per DAUGHTER_MULTITOOL_SPEC.md §10:
- *   1. Fresh Weaver starts with armNetCounts[i] === 2
- *   2. Fresh Spinner starts with armNetCounts[i] === 2
+ *   1. Fresh Weaver (Large Daughter) starts with armNetCounts[i] === 2
+ *   2. Fresh Spinner (Small Daughter) starts with armNetCounts[i] === 4
  *   3. Firing a net (NETTING entry) decrements the count by exactly 1
- *   4. Firing twice exhausts the inventory to 0
+ *   4. Firing to depletion exhausts the inventory to 0
  *   5. With 0 nets, attempting to fire emits NET_EMPTY_CLICK, no decrement below 0, no NETTING
- *   6. After firing twice, count stays at 0 across update ticks (no negative drift, no auto-refill)
+ *   6. After firing to empty, count stays at 0 across update ticks (no negative drift, no auto-refill)
  *   7. (Integration) Full SK → F → NETTING with CAPTURE_NET ON uses real FSM, not 85% dice roll
+ *
+ * Refund-on-miss semantic (CAPTURE_NET.md §3.5): a net reeled home empty is
+ * returned to the magazine; only a net wrapped around a catch (or lost to snap)
+ * is spent. Magazine count therefore tracks successful captures per load.
  */
 
 import { describe, it, assert } from './TestRunner.js';
@@ -80,6 +84,55 @@ function flagRestore() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
+// Suite: Net-ladder drift guards (net ladder Phase A)
+// Constants that MUST stay in lockstep across the two parallel definitions:
+//   ARM_NET_CAPACITY (per-arm magazine) ⇔ CAPTURE_NET.*.MAGAZINE_SIZE (net class)
+//   SPINNER_MAX_CAPTURE_MASS (arm config) ⇔ CAPTURE_NET.SMALL.MAX_CAPTURE_MASS
+// ══════════════════════════════════════════════════════════════════════════
+describe('Net-ladder constant drift guards', () => {
+
+  it('ARM_NET_CAPACITY.weaver === CAPTURE_NET.MEDIUM.MAGAZINE_SIZE', () => {
+    assert.equal(Constants.ARM_NET_CAPACITY.weaver,
+      Constants.CAPTURE_NET.MEDIUM.MAGAZINE_SIZE,
+      'Large Daughter magazine must match the Medium net class MAGAZINE_SIZE');
+  });
+
+  it('ARM_NET_CAPACITY.spinner === CAPTURE_NET.SMALL.MAGAZINE_SIZE', () => {
+    assert.equal(Constants.ARM_NET_CAPACITY.spinner,
+      Constants.CAPTURE_NET.SMALL.MAGAZINE_SIZE,
+      'Small Daughter magazine must match the Small net class MAGAZINE_SIZE');
+  });
+
+  it('SPINNER_MAX_CAPTURE_MASS === CAPTURE_NET.SMALL.MAX_CAPTURE_MASS === 50', () => {
+    assert.equal(Constants.SPINNER_MAX_CAPTURE_MASS,
+      Constants.CAPTURE_NET.SMALL.MAX_CAPTURE_MASS,
+      'Small Daughter catch cap must match the Small net class MAX_CAPTURE_MASS');
+    assert.equal(Constants.SPINNER_MAX_CAPTURE_MASS, 50, 'unified Small catch cap is 50 kg');
+  });
+
+  it('WEAVER_MAX_CAPTURE_MASS === CAPTURE_NET.MEDIUM.MAX_CAPTURE_MASS === 500', () => {
+    assert.equal(Constants.WEAVER_MAX_CAPTURE_MASS,
+      Constants.CAPTURE_NET.MEDIUM.MAX_CAPTURE_MASS,
+      'Large Daughter catch cap must match the Medium net class MAX_CAPTURE_MASS');
+    assert.equal(Constants.WEAVER_MAX_CAPTURE_MASS, 500, 'Large catch cap is 500 kg');
+  });
+
+  it('initNetInventory seeds magazine from the net class MAGAZINE_SIZE', () => {
+    flagOn();
+    try {
+      const weaver = makeArm(0);
+      const spinner = makeArm(1);
+      assert.equal(weaver.getNetInventoryMax(), Constants.CAPTURE_NET.MEDIUM.MAGAZINE_SIZE,
+        'weaver seeded from MEDIUM.MAGAZINE_SIZE');
+      assert.equal(spinner.getNetInventoryMax(), Constants.CAPTURE_NET.SMALL.MAGAZINE_SIZE,
+        'spinner seeded from SMALL.MAGAZINE_SIZE');
+    } finally {
+      flagRestore();
+    }
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════
 // Suite: Net Inventory — Initial Capacity
 // ══════════════════════════════════════════════════════════════════════════
 describe('ArmUnit Net Inventory — initial capacity (§13 Q5)', () => {
@@ -96,13 +149,13 @@ describe('ArmUnit Net Inventory — initial capacity (§13 Q5)', () => {
     }
   });
 
-  it('Fresh Spinner starts with netInventory === 2', () => {
+  it('Fresh Spinner starts with netInventory === 4', () => {
     flagOn();
     try {
       const arm = makeArm(1); // spinner in Y0_QUAD
       assert.equal(arm.getNetInventory(), Constants.ARM_NET_CAPACITY.spinner,
         'Spinner net inventory should match ARM_NET_CAPACITY.spinner');
-      assert.equal(arm.getNetInventory(), 2, 'Spinner should have 2 nets');
+      assert.equal(arm.getNetInventory(), 4, 'Spinner (Small Daughter) should have 4 nets');
     } finally {
       flagRestore();
     }

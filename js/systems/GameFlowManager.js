@@ -18,6 +18,7 @@ import { persistenceManager } from './PersistenceManager.js';
 import { powerDistribution } from './PowerDistribution.js';
 import { targetSelector } from './TargetSelector.js';
 import { kesslerSystem } from './KesslerSystem.js';
+import { captureNetSystem } from '../entities/CaptureNet.js';
 import { trawlManager } from './TrawlManager.js';
 import { launchSequence } from './LaunchSequence.js';
 import { orbitToSceneCartesian, subPointToOrbit } from '../entities/OrbitalMechanics.js';
@@ -1418,6 +1419,11 @@ class GameFlowManager {
       // ── Salvage upgrades → no-op (checked at runtime via _hasUpgrade) ──
       case 'hazmatRecovery':
       case 'refineryEfficiency':
+        break;
+
+      // ── Net ladder Phase B: consumable Mother Large Net restock (one net) ──
+      case 'motherNetRestock':
+        captureNetSystem.loadOneMotherNet();
         break;
 
       // ── Kessler / hull upgrades → KesslerSystem ──

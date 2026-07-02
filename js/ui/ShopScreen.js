@@ -11,6 +11,7 @@ import { audioSystem } from '../systems/AudioSystem.js';
 import { scoringSystem } from '../systems/ScoringSystem.js';
 import { decorateGlossary } from '../systems/codex/glossary.js';
 import { ensureGlossaryCss, delegateGlossaryClicks } from './glossaryDom.js';
+import { captureNetSystem } from '../entities/CaptureNet.js';
 import {
   getAvailableTiers,
   getCurrentTier,
@@ -116,6 +117,16 @@ export const UPGRADES = [
     trl: 7, trlRationale: 'FEEP thrusters flown on Gaia, LISA Pathfinder; miniaturised variants emerging' },
   { id: 'capture_net', cat: 'Daughters', name: 'Reinforced Nets', cost: 800,
     desc: '+20% capture success', effect: 'captureRate', value: 0.2, maxLevel: 1,
+    trl: 7, trlRationale: 'RemoveDEBRIS net capture demonstrated 2018' },
+  // Net ladder Phase B: consumable Mother Large Net restock. Repeatable (no
+  // maxLevel gate — see _purchaseUpgrade consumable branch). Each buy loads one
+  // net (250 cr) into the emptiest pod, up to 2 pods × 2. Whale-hunt magazine
+  // only; no in-mission resupply. Gated by CAPTURE_NET (filtered at render).
+  { id: 'mother_net_restock', cat: 'Daughters', name: 'Mother Large Net (restock)',
+    cost: Constants.CAPTURE_NET.LARGE.REPLACEMENT_COST,
+    desc: 'Load one Large Net into a Mother pod (whale hunts). Buy up to 2 pods × 2.',
+    effect: 'motherNetRestock', value: 1, maxLevel: Infinity, consumable: true,
+    requiresFeature: 'CAPTURE_NET',
     trl: 7, trlRationale: 'RemoveDEBRIS net capture demonstrated 2018' },
   { id: 'hazmat_handler', cat: 'Daughters', name: 'Hazmat Handler', cost: 1200,
     desc: 'Recover hydrazine → cold gas', effect: 'hazmatRecovery', value: true, maxLevel: 1,
@@ -684,6 +695,9 @@ export class ShopScreen {
     // Group by category
     const categories = {};
     UPGRADES.forEach(u => {
+      // Net ladder: hide feature-gated items (e.g. Mother net restock) when the
+      // gating flag is off.
+      if (u.requiresFeature && !Constants.isFeatureEnabled(u.requiresFeature)) return;
       if (!categories[u.cat]) categories[u.cat] = [];
       categories[u.cat].push(u);
     });
@@ -775,14 +789,18 @@ export class ShopScreen {
     if (upgrade.requiresAll) {
       requiresMet = upgrade.requiresAll.every(id => this.purchasedUpgrades.has(id));
     }
-    const available = !maxed && canAfford && requiresMet;
+    // Consumable restock with no remaining capacity (both Mother pods full) is
+    // unavailable — don't let the player pay for a net that can't be loaded.
+    const consumableFull = upgrade.effect === 'motherNetRestock'
+      && !captureNetSystem.hasMotherPodSpace();
+    const available = !maxed && canAfford && requiresMet && !consumableFull;
 
     const opacity = maxed ? 0.5 : (available ? 1.0 : 0.5);
     const borderColor = maxed ? 'rgba(0,255,136,0.2)' : (available ? 'rgba(0,255,136,0.3)' : 'rgba(255,68,68,0.15)');
     const bgColor = maxed ? 'rgba(0,255,136,0.05)' : 'rgba(0,20,40,0.5)';
 
-    // Level indicator for multi-level upgrades
-    const levelBadge = upgrade.maxLevel > 1
+    // Level indicator for multi-level upgrades (consumables show no level badge).
+    const levelBadge = (!upgrade.consumable && upgrade.maxLevel > 1)
       ? `<span style="font-size:0.65rem;color:${maxed ? '#00ff88' : '#f0c040'};margin-left:6px;
                        padding:1px 5px;border-radius:2px;border:1px solid ${maxed ? 'rgba(0,255,136,0.3)' : 'rgba(240,192,64,0.3)'};
                        background:${maxed ? 'rgba(0,255,136,0.1)' : 'rgba(240,192,64,0.08)'};">
@@ -1154,6 +1172,31 @@ export class ShopScreen {
   _purchaseUpgrade(upgradeId) {
     const upgrade = UPGRADES.find(u => u.id === upgradeId);
     if (!upgrade) return;
+
+    // Consumables (e.g. Mother Large Net restock) are repeatable — no maxLevel
+    // gate, no ownership record. They just spend credits and emit the effect.
+    if (upgrade.consumable) {
+      if (upgrade.requiresFeature && !Constants.isFeatureEnabled(upgrade.requiresFeature)) return;
+      // Don't charge for a net that can't be loaded (both pods already full).
+      if (upgrade.effect === 'motherNetRestock' && !captureNetSystem.hasMotherPodSpace()) {
+        audioSystem.playWarning(0.3);
+        return;
+      }
+      if (!scoringSystem.spendCredits(upgrade.cost)) {
+        audioSystem.playWarning(0.3);
+        return;
+      }
+      this._lastPurchasedId = upgradeId;
+      audioSystem.playCaptureSuccess();
+      eventBus.emit(Events.UPGRADE_PURCHASED, {
+        id: upgradeId,
+        effect: upgrade.effect,
+        value: upgrade.value,
+        consumable: true,
+      });
+      this.refresh();
+      return;
+    }
 
     const currentLevel = this.purchasedUpgrades.get(upgradeId) || 0;
     if (currentLevel >= upgrade.maxLevel) return;

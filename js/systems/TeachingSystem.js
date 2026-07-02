@@ -148,6 +148,37 @@ export const TEACHING_MOMENTS = [
     duration: 8000,
     icon: '🛰️',
   },
+  // Per-class first-deploy: catch cap + reach so the mass-routing rule is legible
+  // the first time each daughter class is launched (net ladder, Phase A).
+  {
+    id: 'first_small_daughter_deploy',
+    title: 'Small Daughter',
+    body: 'Small Daughter: nets targets up to 50 kg, ranges 500 m from the Mother. Fast reload, four nets aboard — your workhorse for fragments.',
+    duration: 8000,
+    icon: '🛰️',
+  },
+  {
+    id: 'first_large_daughter_deploy',
+    title: 'Large Daughter',
+    body: 'Large Daughter: nets targets up to 500 kg, ranges 2 km from the Mother. Two heavier nets aboard — send her for the big dead satellites.',
+    duration: 8000,
+    icon: '🛰️',
+  },
+  // Net ladder Phase B: whale doctrine — only the Mother's Large Net holds >500 kg.
+  {
+    id: 'first_whale_target',
+    title: 'Whale',
+    body: 'Whale-class target — over 500 kg. Only the Mother\'s Large Net holds that. Fly the Mother in close and fire [N]; plan the burn, the pods are scarce.',
+    duration: 9000,
+    icon: '🐋',
+  },
+  {
+    id: 'first_deltav_waste',
+    title: 'Save the Burn',
+    body: 'You\'re burning the Mother toward a daughter-sized catch. A Daughter reaches it for near-zero Δv — deploy one [D] and park the Mother. Save the burn for whales.',
+    duration: 9000,
+    icon: '⛽',
+  },
   // Capture-failure guidance (recoverable vs catastrophic)
   {
     id: 'first_net_failed',
@@ -224,6 +255,9 @@ export class TeachingSystem {
     this._seen = new Set();
     this._unsubs = [];
     this._disposed = false;
+    /** @type {number|null} mass of the currently-selected target (net-ladder
+     *  Δv-waste nudge); null when nothing is selected. */
+    this._selectedTargetMass = null;
 
     /** Callback set by the wiring layer to display a moment. */
     this.onShow = null;
@@ -312,6 +346,17 @@ export class TeachingSystem {
       if (data && data.level > 0) {
         this._trigger('first_burn');
       }
+      // Net ladder Phase B: Δv-efficiency nudge — burning the Mother toward a
+      // daughter-sized catch (10–500 kg) that a Daughter could take for ~0 Δv.
+      if (data && data.level > 0
+          && Constants.isFeatureEnabled && Constants.isFeatureEnabled('CAPTURE_NET')) {
+        const m = this._selectedTargetMass;
+        const lassoCap = Constants.LASSO_MAX_CAPTURE_MASS || 10;
+        const daughterCap = Constants.WEAVER_MAX_CAPTURE_MASS || 500;
+        if (typeof m === 'number' && m > lassoCap && m <= daughterCap) {
+          this._trigger('first_deltav_waste');
+        }
+      }
     });
 
     // 9. first_kessler — KESSLER_CASCADE
@@ -346,7 +391,14 @@ export class TeachingSystem {
     on(Events.SCAN_INITIATED, () => this._trigger('first_scan'));
 
     // 17. first_arm_deploy — ARM_DEPLOYED (UX-3 N1)
-    on(Events.ARM_DEPLOYED, () => this._trigger('first_arm_deploy'));
+    on(Events.ARM_DEPLOYED, (data) => {
+      this._trigger('first_arm_deploy');
+      // Per-class net-ladder cards (Large/Small Daughter). Player-facing naming;
+      // internal enum weaver=Large Daughter, spinner=Small Daughter.
+      const type = data && data.type;
+      if (type === 'weaver') this._trigger('first_large_daughter_deploy');
+      else if (type === 'spinner') this._trigger('first_small_daughter_deploy');
+    });
 
     // 18. first_net_failed — NET_FAILED (recoverable net-integrity loss)
     if (Events.NET_FAILED) {
@@ -394,6 +446,24 @@ export class TeachingSystem {
         this._trigger('first_aspect_target');
       }
     });
+
+    // Net ladder Phase B: whale-class lock + track selected mass for the
+    // Δv-efficiency nudge on THROTTLE_CHANGE. Gated on CAPTURE_NET.
+    on(Events.TARGET_SELECTED, (data) => {
+      const debris = data && data.debris;
+      const mass = debris && typeof debris.mass === 'number' ? debris.mass : null;
+      this._selectedTargetMass = mass;
+      if (mass == null) return;
+      if (Constants.isFeatureEnabled && !Constants.isFeatureEnabled('CAPTURE_NET')) return;
+      const daughterCap = Constants.WEAVER_MAX_CAPTURE_MASS || 500;
+      if (mass > daughterCap) this._trigger('first_whale_target');
+    });
+
+    // Clear the tracked selected mass when the target is deselected/lost so the
+    // Δv-waste nudge can't fire against a stale (no-longer-selected) target.
+    if (Events.TARGET_CLEARED) {
+      on(Events.TARGET_CLEARED, () => { this._selectedTargetMass = null; });
+    }
 
     // 24. first_fragmentation — NET_FRAGMENTATION (Phase 3b: mercy + avoidance).
     if (Events.NET_FRAGMENTATION) {

@@ -48,7 +48,7 @@ Plus per [`EPIC10_DEEP_ANALYSIS.md:3320-3326`](archive/EPIC10_DEEP_ANALYSIS.md:3
 | **Spinner Multi-modal Pad** | **Missing.** No state, no method, no constants. Doc-level: [`archive/V3 Octopus.md:795-818`](archive/V3%20Octopus.md:795); [`GAME_FLOW_BRAINSTORM.md:153-178`](archive/GAME_FLOW_BRAINSTORM.md:153). | n/a. |
 | **Tool-selection HUD on SK** | **Missing.** SK overlay exists ([`DockingReticle._drawStationKeepOverlay()`](js/ui/DockingReticle.js:684) at [line 684](js/ui/DockingReticle.js:684)) but shows only θ/φ/R. Backtick is *already wired* but lives behind `Shift+`` ` `` and routes to legacy lasso/spinner/weaver tool list ([`InputManager.js:1166-1168`](js/systems/InputManager.js:1166); [`TargetSelector._cycleTool()`](js/systems/TargetSelector.js:149) at [line 149](js/systems/TargetSelector.js:149)). `F` in SK currently *only* calls [`ArmUnit.captureFromStationKeep()`](js/entities/ArmUnit.js:2949) → `NETTING` ([`InputManager.js:836-839`](js/systems/InputManager.js:836)). |
 
-**Net-count inventory** (`armNetCounts[]`) is already plumbed through save/load ([`PersistenceManager.js:238-258`](js/systems/PersistenceManager.js:238); [`test-ArmTierCatalog.js:756-841`](js/test/test-ArmTierCatalog.js:756)) and through [`CaptureNet.getState()`](js/entities/CaptureNet.js:1). **Per §13 Q5, net expenditure IS enabled at Y0:** NETTING entry decrements `armNetCounts[i]`; depletion (count === 0) is a hard-fail state — F-press plays click-fail audio and the recommender drops NET to score 0 so another tool takes the ▶ marker. Carry counts seed from new `ARM_NET_CAPACITY = { weaver: 2, spinner: 2 }` (§4.1). No auto-refill at Y0; resupply UX deferred to Y1.
+**Net-count inventory** (`armNetCounts[]`) is already plumbed through save/load ([`PersistenceManager.js:238-258`](js/systems/PersistenceManager.js:238); [`test-ArmTierCatalog.js:756-841`](js/test/test-ArmTierCatalog.js:756)) and through [`CaptureNet.getState()`](js/entities/CaptureNet.js:1). **Per §13 Q5, net expenditure IS enabled at Y0:** NETTING entry decrements `armNetCounts[i]`; depletion (count === 0) is a hard-fail state — F-press plays click-fail audio and the recommender drops NET to score 0 so another tool takes the ▶ marker. Carry counts seed from `ARM_NET_CAPACITY = { weaver: 2, spinner: 4 }` (§4.1; net ladder — Large Daughter 2, Small Daughter 4). No auto-refill at Y0; resupply UX deferred to Y1.
 
 ---
 
@@ -78,11 +78,13 @@ DAUGHTER_TOOLSETS: {
 },
 
 // === Per-arm net inventory capacity (§13 Q5 — depletion is a real Y0 fail state) ===
-// Mass budget anchor: M-NET ~1,265 g vs 6,600 g Weaver = 19% per net (V3 Octopus.md:751);
-// SD-NET ~360 g vs 2,100 g Spinner = 17% per net (V3 Octopus.md:792). Uniform 2/arm = "one mulligan".
+// Net ladder: values MUST equal CAPTURE_NET.MEDIUM/SMALL.MAGAZINE_SIZE (drift-guard
+// test enforces). Payload-fraction invariant justifying 2/4:
+//   Large Daughter (weaver): 2 × 0.68 kg / 6.6 kg ≈ 21%
+//   Small Daughter (spinner): 4 × 0.12 kg / 2.1 kg ≈ 23%
 ARM_NET_CAPACITY: {
-  weaver:  2,
-  spinner: 2,
+  weaver:  2,   // Large Daughter — Medium net magazine
+  spinner: 4,   // Small Daughter — Small net magazine
 },
 
 // === MAGNETIC_GRAPPLE tuning (cite EPIC10_DEEP_ANALYSIS.md:3322-3326) ===
@@ -531,7 +533,7 @@ Lives in [`DockingReticle.js`](js/ui/DockingReticle.js) alongside the existing `
 
 | File | Change |
 |---|---|
-| [`Constants.js`](js/core/Constants.js:409) | `CAPTURE_NET: false → true`. Add `ARM_NET_CAPACITY = { weaver: 2, spinner: 2 }` (§13 Q5). |
+| [`Constants.js`](js/core/Constants.js:409) | `CAPTURE_NET: false → true`. Add `ARM_NET_CAPACITY = { weaver: 2, spinner: 4 }` (§13 Q5; net ladder). |
 | [`ArmUnit.js`](js/entities/ArmUnit.js:2972) | Gate `_updateNetting()` legacy path on `!Constants.FEATURE_FLAGS.CAPTURE_NET`. New path: bind `CaptureNet.getActiveNetForArm(armIndex)` and drive transitions off the FSM ([`CaptureNet.js`](js/entities/CaptureNet.js:1) §1-§4). **§13 Q5:** decrement `armNetCounts[armIndex]` on NETTING entry; F-press routes to `audioSystem.playClickFail()` + emits `NET_EMPTY_CLICK { armId }` when count === 0 (no FSM transition). |
 | [`CaptureNetVisual.js`](js/ui/CaptureNetVisual.js) | Already gated on the same flag — no source change needed. |
 | [`main.js`](js/main.js) | Verify [`captureNetVisual.init(scene, player, captureNetSystem)`](js/scene/LaunchCinematic.js) (per [`HANDOFF.md:79`](HANDOFF.md:79)) is wired pre-flip. Stub if not. |
@@ -543,7 +545,7 @@ Lives in [`DockingReticle.js`](js/ui/DockingReticle.js) alongside the existing `
 **Tests to add.**
 - [`test-CaptureNet.js`](js/test/test-CaptureNet.js) — already covers FSM transitions; bump to assert post-flag-flip success path: launching a Weaver fires a `LD-NET` (5 m), launching a Spinner fires `SD-NET` (1.5 m). Use [`getNetClassForType()`](js/entities/CaptureNet.js:35).
 - New `test-Net-FlagOn-Smoke.js` — full integration test: deploy → STATION_KEEP → F → CAPTURED via real FSM, not legacy dice-roll. Asserts `captureNetSystem.getState().nets[armIdx].state` cycles `FOLDED→…→CAPTURED`.
-- New `test-ArmUnit-NetInventory.js` (§13 Q5) — decrement on NETTING entry; capture-fail does not refund; F at 0 emits `NET_EMPTY_CLICK`; no FSM transition; persisted counts round-trip through save/load.
+- New `test-ArmUnit-NetInventory.js` (§13 Q5) — decrement on NETTING entry; a net reeled home empty is refunded to the magazine (refund-on-miss, CAPTURE_NET.md §3.5), only a wrapped/snapped net is spent; F at 0 emits `NET_EMPTY_CLICK`; no FSM transition; persisted counts round-trip through save/load.
 - Update existing fixtures (`[3,3,3,3]` → `[2,2,2,2]`) in [`test-ArmTierCatalog.js:759`](js/test/test-ArmTierCatalog.js:759), [`test-Epic9-Integration.js:722`](js/test/test-Epic9-Integration.js:722), [`test-ArmTierCatalog.js:785`](js/test/test-ArmTierCatalog.js:785), [`test-ArmTierCatalog.js:821`](js/test/test-ArmTierCatalog.js:821) to match the new `ARM_NET_CAPACITY` seed.
 
 **LOC delta:** ~60–80 modified source, ~140 net new test code (was: ~30 / ~80 pre-Q5).
@@ -641,7 +643,7 @@ Lives in [`DockingReticle.js`](js/ui/DockingReticle.js) alongside the existing `
 | `test-DockingReticle-ToolPanel.js` | Render-call assertions for the new SK panel; Weaver vs Spinner row count; ▶ marker moves on cycle. |
 | `test-ArmUnit-GripperGrapple.js` | Fixture vs no-fixture; oversize fail; LATCHED zero-power hold (state lingers without thrust). |
 | `test-ArmUnit-PadContact.js` | `_resolvePadMode()` priority table; bounce on too-fast contact; **§13 Q3 — UV-cure dose decrement only on success; count=0 removes 'uv_cure' from priority list; persistence round-trip on `padUvCureDosesRemaining[]`.** |
-| `test-ArmUnit-NetInventory.js` (new, §13 Q5) | NETTING entry decrements `armNetCounts[i]`; capture-fail does not refund; F-press at 0 emits `NET_EMPTY_CLICK` and plays click-fail audio with no FSM transition; recommender drops NET to score 0 when depleted. |
+| `test-ArmUnit-NetInventory.js` (new, §13 Q5) | NETTING entry decrements `armNetCounts[i]`; a net reeled home empty is refunded (refund-on-miss, CAPTURE_NET.md §3.5) — only a wrapped/snapped net is spent; F-press at 0 emits `NET_EMPTY_CLICK` and plays click-fail audio with no FSM transition; recommender drops NET to score 0 when depleted. |
 | Extension to [`test-CaptureNet.js`](js/test/test-CaptureNet.js) | Net-class-by-platform assertions. |
 | Extension to [`test-StationKeep.js`](js/test/test-StationKeep.js) | F dispatches by `selectedTool`; backtick cycles arm-local toolset. |
 | Extension to [`test-CollisionAvoidance.js`](js/test/test-CollisionAvoidance.js) | All 3 new ARM_STATES included in the dodge-exempt predicate; matches §3.4 dual-axis pattern. |
@@ -695,7 +697,7 @@ Lives in [`DockingReticle.js`](js/ui/DockingReticle.js) alongside the existing `
 | **Q2** | Spinner EPM player-facing? | "Add MAGNET to Spinner. `DAUGHTER_TOOLSETS.spinner = ['NET', 'PAD', 'MAGNET']`. Honours EPIC10 verbatim. Spinner HUD shows 3 rows. Same MAX_DEBRIS_MASS_KG (500) as Weaver." | EPIC10 spec'd dual-role EPMs on **every** daughter; this honours the hardware doc. Spinner's choice space now matches Weaver's. | §1, §2, §4.1 (`DAUGHTER_TOOLSETS`), §7 (recommender per-arm filter), §8.1 (Spinner mockup → 3 rows), §9.2 |
 | **Q3** | UV-cure dose enforcement | "Enforce cap now — 10 doses/arm, hard limit. Exhausted UV-cure removes it from the priority list (contact returns NO_MODE on exotic surfaces). HUD shows dose counter; persisted to save. ~30 LOC, 1 new test." | UV-cure becomes a real Y0 resource matching V3 Octopus's "finite-magazine" intent. Forces the pad to **fail visibly** on unsupported surfaces once doses are spent. | §4.1 (PAD_CONTACT comment), §5.3, §6.3, §8.1 (HUD), §9.4, §10, §14 |
 | **Q4** | Titanium / paramagnetic | "Heterogeneous-spacecraft model — Drop paramagnetic. Add `hasFerrousFasteners` (derived from type === 'rocketBody' \|\| 'defunctSat'). Those get P_GRIP=0.40 (latches onto bolts). All-Al fragments get P=0.05." | Real spacecraft are heterogeneous (steel bolts in Al/Ti hulls). Material-purity model replaced with structure-realism model. Eliminates the physically-bogus `P_GRIP_PARAMAGNETIC=0.55` line. | §4.1 (MAGNETIC_GRAPPLE constants), §6.1, §6.2, §7 |
-| **Q5** | Net-count decrement | "Decrement on launch, hard-fail at 0, no auto-refill. Out-of-nets becomes a real fail state requiring manual resupply UX (deferred)." Carry counts: **Weaver=2, Spinner=2** (uniform "one mulligan per arm"). | Inventory becomes meaningful at Y0. Counts honour the mass budget (~19% / 17% of arm mass per net). Graceful degradation: at `armNetCounts[i]===0` the NET row dims to count `0`, recommender drops NET to score 0, F-dispatch plays click-fail audio so the player learns to backtick to another tool. | §1, §3, §4.1 (new `ARM_NET_CAPACITY`), §7 (zero-net handling), §8.1 (NET shows `(n)`), §8.2 (click-fail audio), §9.1 (P1 scope grows), §10 (`test-ArmUnit-NetInventory.js` added), §14 (line removed) |
+| **Q5** | Net-count decrement | "Decrement on launch, hard-fail at 0, no auto-refill. Out-of-nets becomes a real fail state requiring manual resupply UX (deferred)." Carry counts (net ladder): **Large Daughter (weaver)=2, Small Daughter (spinner)=4** (payload-fraction invariant ~21% / ~23%). **Refund-on-miss (code wins over the original "no refund" draft, CAPTURE_NET.md §3.5):** a net reeled home empty returns to the magazine; only a net wrapped around a catch or lost to snap is spent — magazine count = successful captures per load. | Inventory becomes meaningful at Y0. Counts honour the mass budget. Graceful degradation: at `armNetCounts[i]===0` the NET row dims to count `0`, recommender drops NET to score 0, F-dispatch plays click-fail audio so the player learns to backtick to another tool. | §1, §3, §4.1 (new `ARM_NET_CAPACITY`), §7 (zero-net handling), §8.1 (NET shows `(n)`), §8.2 (click-fail audio), §9.1 (P1 scope grows), §10 (`test-ArmUnit-NetInventory.js` added), §14 (line removed) |
 | **Q6** | Toolsets runtime-mutable? | "Static-by-class. `Constants.DAUGHTER_TOOLSETS[arm.type]` read on construction; not persisted. Y1 unlocks via Constants edits + feature flags. Cheapest, smallest save schema." | Matches §4.1 draft; lowest-risk schema; Y1+ unlocks remain cheap (Constants edit + new flag). | §4.1 (annotation only) |
 | **Q7** | SK panel pulse? | "Static cyan ★s + yellow ▶ selector. No animation. Quietest; trusts the player to read the panel. Recommended tool is bold or highlighted." | Honours [`SK_M1_POLISH_HANDOFF.md:221-227`](archive/SK_M1_POLISH_HANDOFF.md:221) "no SK animation" ethos. **Bold text weight** on the recommended row carries the affordance without motion. | §8.1, §8.2 |
 

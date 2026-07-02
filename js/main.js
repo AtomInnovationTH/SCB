@@ -929,6 +929,8 @@ async function init() {
     debrisField, debrisWireframe, dockingReticle, hud, targetReticle,
     navSphere, orbitMFD, debrisMap, audioSystem, debugOverlay, sensorSystem,
     lassoSystem, autopilotSystem, codexViewerUI, strategicMap, hotkeyOverlay,
+    // Net ladder Phase B: Mother Large Net routing (>500 kg → fireMotherNet).
+    captureNetSystem,
     // Hotkey revamp 2026-06-14: starfield (6 = constellation labels toggle).
     starfield,
     // Delegation 2 (2026-05-31): smart-default Space key consults the Director.

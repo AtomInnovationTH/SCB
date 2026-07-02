@@ -87,7 +87,15 @@ export function recommendArmTool(opts = {}) {
     } else if (netTooWide) {
       scores.NET = 0; hints.NET = 'too wide for net mouth';
     } else if (netOversize) {
-      scores.NET = 1; hints.NET = 'class oversize. Mother only';
+      // Net ladder: distinguish "wrong daughter for this catch" from a true
+      // whale. Above the Large Daughter ceiling (WEAVER cap, 500 kg) only the
+      // Mother's Large Net holds it; between this arm's cap and 500 kg a bigger
+      // Daughter can. The hint routes the player to the right platform.
+      const whaleCap = (CN.MEDIUM && CN.MEDIUM.MAX_CAPTURE_MASS) || 500;
+      scores.NET = 1;
+      hints.NET = mass > whaleCap
+        ? 'whale — Mother\'s Large Net only'
+        : (armType === 'spinner' ? 'too big — send a Large Daughter' : 'oversize for this net');
     } else {
       // A pure ferrous HULL is better grabbed directly by the EPM, so the net
       // self-demotes to "viable but not preferred" (magnet wins the ▶). For

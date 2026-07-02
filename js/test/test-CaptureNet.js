@@ -29,6 +29,7 @@ import {
   missReasonToText,
   assessNetFit,
 } from '../entities/CaptureNet.js';
+import { classifyNetTarget } from '../systems/netRouting.js';
 
 const CN = Constants.CAPTURE_NET;
 const STATES = CN.STATES;
@@ -76,7 +77,7 @@ function advanceNet(net, totalTime, dt = 0.05) {
 /**
  * Create a mock arm for CaptureNetSystem testing.
  * Default inventory mirrors the real ArmUnit via Constants.ARM_NET_CAPACITY
- * (Phase 1 §13 Q5: per-arm magazine = 2 for both Weaver and Spinner).
+ * (net ladder: Large Daughter/weaver = 2, Small Daughter/spinner = 4).
  */
 function mockArm(type = 'weaver', opts = {}) {
   const defaultInv = Constants.ARM_NET_CAPACITY[type] ?? 0;
@@ -140,7 +141,7 @@ describe('CaptureNet — Constants', () => {
     assert.equal(L.DIAMETER, 8.0);
     assert.equal(L.MASS, 1.95);
     assert.equal(L.MAX_CAPTURE_MASS, 5000);
-    assert.equal(L.MAGAZINE_SIZE, 4);
+    assert.equal(L.MAGAZINE_SIZE, 2);
     assert.equal(L.LAUNCH_SPEED, 10.0);
     assert.equal(L.REEL_SPEED, 2.0);
     assert.equal(L.TETHER_MAX, 100);
@@ -257,6 +258,42 @@ describe('CaptureNet — getNetClassForType', () => {
 
   it('unknown → MEDIUM (fallback)', () => {
     assert.equal(getNetClassForType('unknown'), CN.MEDIUM);
+  });
+});
+
+
+// ══════════════════════════════════════════════════════════════════════════
+// PURE FUNCTIONS — classifyNetTarget (net-ladder mass routing SSOT)
+// ══════════════════════════════════════════════════════════════════════════
+
+describe('netRouting — classifyNetTarget', () => {
+  const lassoCap = Constants.LASSO_MAX_CAPTURE_MASS;      // 10
+  const daughterCap = Constants.WEAVER_MAX_CAPTURE_MASS;  // 500
+
+  it('≤ lasso cap → lasso band, no message', () => {
+    assert.equal(classifyNetTarget(5).band, 'lasso');
+    assert.equal(classifyNetTarget(lassoCap).band, 'lasso', 'exactly the cap is lasso-legal');
+    assert.equal(classifyNetTarget(5).message, null);
+  });
+
+  it('10–500 kg → daughter band with refusal message', () => {
+    const r = classifyNetTarget(300);
+    assert.equal(r.band, 'daughter');
+    assert.ok(/Daughter/.test(r.message), 'points at a Daughter');
+    assert.equal(classifyNetTarget(daughterCap).band, 'daughter', 'exactly 500 is not a whale');
+  });
+
+  it('> 500 kg → whale band, Mother Large Net message', () => {
+    const r = classifyNetTarget(800);
+    assert.equal(r.band, 'whale');
+    assert.ok(/Large Net/.test(r.message), 'names the Mother Large Net');
+  });
+
+  it('bands are gap-free and ordered at the boundaries', () => {
+    assert.equal(classifyNetTarget(lassoCap).band, 'lasso');
+    assert.equal(classifyNetTarget(lassoCap + 0.01).band, 'daughter');
+    assert.equal(classifyNetTarget(daughterCap).band, 'daughter');
+    assert.equal(classifyNetTarget(daughterCap + 0.01).band, 'whale');
   });
 });
 
@@ -929,12 +966,12 @@ describe('CaptureNet — ST-9.4d: CaptureNetSystem lifecycle', () => {
     captureNetSystem.reset();
   };
 
-  it('init() sets mother pod inventory to 4+4 at Y0', () => {
+  it('init() sets mother pod inventory to 2+2 at Y0', () => {
     setup();
     captureNetSystem.init();
-    assert.equal(captureNetSystem.getMotherNetCount(), 8);
-    assert.equal(captureNetSystem.getMotherPodInventory(0), 4);
-    assert.equal(captureNetSystem.getMotherPodInventory(1), 4);
+    assert.equal(captureNetSystem.getMotherNetCount(), 4);
+    assert.equal(captureNetSystem.getMotherPodInventory(0), 2);
+    assert.equal(captureNetSystem.getMotherPodInventory(1), 2);
     teardown();
   });
 
@@ -977,22 +1014,22 @@ describe('CaptureNet — ST-9.4d: fireMotherNet', () => {
     );
     assert.ok(net, 'Should return a NetProjectile');
     assert.equal(net.netClass, CN.LARGE);
-    assert.equal(captureNetSystem.getMotherPodInventory(0), 3);
+    assert.equal(captureNetSystem.getMotherPodInventory(0), 1);
     assert.equal(captureNetSystem.activeNets.length, 1);
     teardown();
   });
 
   it('returns null when pod is empty', () => {
     setup();
-    // Fire all 4 from pod 0
-    for (let i = 0; i < 4; i++) {
+    // Fire all 2 from pod 0
+    for (let i = 0; i < 2; i++) {
       captureNetSystem.fireMotherNet(0, { x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, makeTarget());
     }
     const net = captureNetSystem.fireMotherNet(0, { x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, makeTarget());
     assert.equal(net, null, 'Should be null when pod empty');
     assert.equal(captureNetSystem.getMotherPodInventory(0), 0);
-    // Pod 1 should still have 4
-    assert.equal(captureNetSystem.getMotherPodInventory(1), 4);
+    // Pod 1 should still have 2
+    assert.equal(captureNetSystem.getMotherPodInventory(1), 2);
     teardown();
   });
 
@@ -1014,7 +1051,7 @@ describe('CaptureNet — ST-9.4d: fireMotherNet', () => {
     assert.equal(events[0].source, 'mother');
     assert.equal(events[0].podIndex, 1);
     assert.equal(events[0].netClass, 'LARGE');
-    assert.equal(events[0].remaining, 3);
+    assert.equal(events[0].remaining, 1);
     teardown();
   });
 
@@ -1025,7 +1062,7 @@ describe('CaptureNet — ST-9.4d: fireMotherNet', () => {
     });
     assert.equal(events.length, 1);
     assert.equal(events[0].source, 'mother');
-    assert.deepEqual(events[0].podInventory, [3, 4]);
+    assert.deepEqual(events[0].podInventory, [1, 2]);
     teardown();
   });
 });
@@ -1064,7 +1101,7 @@ describe('CaptureNet — ST-9.4d: fireDaughterNet', () => {
     );
     assert.ok(net);
     assert.equal(net.netClass, CN.SMALL);
-    assert.equal(arm.getNetInventory(), 1); // was 2 (ARM_NET_CAPACITY.spinner), now 1
+    assert.equal(arm.getNetInventory(), 3); // was 4 (ARM_NET_CAPACITY.spinner), now 3
     teardown();
   });
 
@@ -1293,8 +1330,8 @@ describe('CaptureNet — Persistence', () => {
     captureNetSystem.fireMotherNet(0, { x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, makeTarget());
     const state = captureNetSystem.getState();
     assert.ok(Array.isArray(state.motherPodInventory));
-    assert.equal(state.motherPodInventory[0], 3);
-    assert.equal(state.motherPodInventory[1], 4);
+    assert.equal(state.motherPodInventory[0], 1); // pod 0 fired once (2 → 1)
+    assert.equal(state.motherPodInventory[1], 2); // pod 1 untouched
     assert.equal(state.playerHasFragmented, false);
     teardown();
   });
@@ -1306,8 +1343,8 @@ describe('CaptureNet — Persistence', () => {
 
     captureNetSystem.reset();
     captureNetSystem.restoreState(state);
-    assert.equal(captureNetSystem.getMotherPodInventory(0), 3);
-    assert.equal(captureNetSystem.getMotherPodInventory(1), 4);
+    assert.equal(captureNetSystem.getMotherPodInventory(0), 1);
+    assert.equal(captureNetSystem.getMotherPodInventory(1), 2);
     teardown();
   });
 
@@ -1327,7 +1364,7 @@ describe('CaptureNet — Persistence', () => {
   it('restoreState(null) is a no-op', () => {
     setup();
     captureNetSystem.restoreState(null);
-    assert.equal(captureNetSystem.getMotherNetCount(), 8); // unchanged
+    assert.equal(captureNetSystem.getMotherNetCount(), 4); // unchanged (2 pods × 2)
     teardown();
   });
 
@@ -1336,6 +1373,44 @@ describe('CaptureNet — Persistence', () => {
     captureNetSystem.setMotherPodInventory([1, 2]);
     assert.equal(captureNetSystem.getMotherPodInventory(0), 1);
     assert.equal(captureNetSystem.getMotherPodInventory(1), 2);
+    teardown();
+  });
+
+  it('restoreState clamps over-max pod counts from a pre-ladder save', () => {
+    // A save written when LARGE.MAGAZINE_SIZE was 4 carries [3,4]; after the
+    // net-ladder downsize to 2 the restored magazine must not exceed the max.
+    setup();
+    captureNetSystem.restoreState({ motherPodInventory: [3, 4] });
+    assert.equal(captureNetSystem.getMotherPodInventory(0), 2, 'pod 0 clamped to max 2');
+    assert.equal(captureNetSystem.getMotherPodInventory(1), 2, 'pod 1 clamped to max 2');
+    teardown();
+  });
+
+  it('setMotherPodInventory clamps over-max counts', () => {
+    setup();
+    captureNetSystem.setMotherPodInventory([9, 9]);
+    assert.equal(captureNetSystem.getMotherPodInventory(0), 2);
+    assert.equal(captureNetSystem.getMotherPodInventory(1), 2);
+    teardown();
+  });
+
+  it('loadOneMotherNet loads exactly one net into the emptiest pod', () => {
+    setup();
+    captureNetSystem.setMotherPodInventory([0, 1]); // pod 0 emptier
+    const loaded = captureNetSystem.loadOneMotherNet();
+    assert.equal(loaded, true, 'a net was loaded');
+    assert.equal(captureNetSystem.getMotherPodInventory(0), 1, 'emptiest pod gets the net');
+    assert.equal(captureNetSystem.getMotherPodInventory(1), 1, 'other pod untouched');
+    assert.equal(captureNetSystem.getMotherNetCount(), 2, 'exactly one net added total');
+    teardown();
+  });
+
+  it('loadOneMotherNet + hasMotherPodSpace refuse when both pods are full', () => {
+    setup(); // pods start full [2,2]
+    assert.equal(captureNetSystem.hasMotherPodSpace(), false, 'no space when full');
+    const loaded = captureNetSystem.loadOneMotherNet();
+    assert.equal(loaded, false, 'no net loaded when full');
+    assert.equal(captureNetSystem.getMotherNetCount(), 4, 'count unchanged (never exceeds max)');
     teardown();
   });
 });
@@ -1470,7 +1545,7 @@ describe('CaptureNet — ArmUnit net inventory methods', () => {
     assert.equal(w.getNetInventory(), 2, 'Weaver = 2 nets per §13 Q5');
     const s = mockArm('spinner');
     assert.equal(s.getNetInventory(), Constants.ARM_NET_CAPACITY.spinner);
-    assert.equal(s.getNetInventory(), 2, 'Spinner = 2 nets per §13 Q5');
+    assert.equal(s.getNetInventory(), 4, 'Small Daughter (spinner) = 4 nets (net ladder)');
   });
 
   it('decrementNetInventory reduces by 1', () => {
@@ -1542,17 +1617,17 @@ describe('CaptureNet — §3.5: Miss reel-back restores inventory', () => {
 
   it('Mother pod inventory restores after miss + reel-back', () => {
     setup();
-    assert.equal(captureNetSystem.getMotherPodInventory(0), 4);
+    assert.equal(captureNetSystem.getMotherPodInventory(0), 2);
     const net = captureNetSystem.fireMotherNet(
       0, { x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, makeTarget()
     );
-    assert.equal(captureNetSystem.getMotherPodInventory(0), 3, 'Depleted on fire');
+    assert.equal(captureNetSystem.getMotherPodInventory(0), 1, 'Depleted on fire');
     // Force a miss + reel back
     net.forceResolve(false);
     net.tetherPaidOut = 1;
     // Update until net is removed (stowed)
     for (let i = 0; i < 200; i++) captureNetSystem.update(0.1);
-    assert.equal(captureNetSystem.getMotherPodInventory(0), 4, 'Restored after miss reel-back');
+    assert.equal(captureNetSystem.getMotherPodInventory(0), 2, 'Restored after miss reel-back');
     teardown();
   });
 
@@ -1574,14 +1649,14 @@ describe('CaptureNet — §3.5: Miss reel-back restores inventory', () => {
 
   it('Inventory NOT restored on successful capture', () => {
     setup();
-    assert.equal(captureNetSystem.getMotherPodInventory(0), 4);
+    assert.equal(captureNetSystem.getMotherPodInventory(0), 2);
     const net = captureNetSystem.fireMotherNet(
       0, { x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, makeTarget()
     );
     net.forceResolve(true);
     net.tetherPaidOut = 1;
     for (let i = 0; i < 200; i++) captureNetSystem.update(0.1);
-    assert.equal(captureNetSystem.getMotherPodInventory(0), 3, 'NOT restored on success');
+    assert.equal(captureNetSystem.getMotherPodInventory(0), 1, 'NOT restored on success');
     teardown();
   });
 
@@ -1590,11 +1665,11 @@ describe('CaptureNet — §3.5: Miss reel-back restores inventory', () => {
     const net = captureNetSystem.fireMotherNet(
       0, { x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, makeTarget()
     );
-    assert.equal(captureNetSystem.getMotherPodInventory(0), 3);
+    assert.equal(captureNetSystem.getMotherPodInventory(0), 1);
     net.forceResolve(true);
     net.release(); // abort → net lost
     captureNetSystem.update(0.1);
-    assert.equal(captureNetSystem.getMotherPodInventory(0), 3, 'NOT restored on release');
+    assert.equal(captureNetSystem.getMotherPodInventory(0), 1, 'NOT restored on release');
     teardown();
   });
 });
@@ -1698,8 +1773,8 @@ describe('CaptureNet — Inventory edge cases', () => {
     const n1 = captureNetSystem.fireMotherNet(1, { x: 0, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }, null);
     assert.ok(n0, 'Pod 0 should fire');
     assert.ok(n1, 'Pod 1 should fire');
-    assert.equal(captureNetSystem.getMotherPodInventory(0), 3);
-    assert.equal(captureNetSystem.getMotherPodInventory(1), 3);
+    assert.equal(captureNetSystem.getMotherPodInventory(0), 1);
+    assert.equal(captureNetSystem.getMotherPodInventory(1), 1);
     teardown();
   });
 

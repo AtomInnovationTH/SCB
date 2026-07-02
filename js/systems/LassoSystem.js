@@ -12,6 +12,7 @@ import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { orbitToSceneCartesian } from '../entities/OrbitalMechanics.js';
+import { classifyNetTarget } from './netRouting.js';
 import { NetMeshKit } from '../ui/NetMeshKit.js';
 import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
@@ -946,8 +947,13 @@ export class LassoSystem {
                 // UX-3 #4: Mass-specific rejection with comms hint
                 if (mass > Constants.LASSO_MAX_CAPTURE_MASS) {
                     eventBus.emit(Events.LASSO_DENIED, { reason: 'too_heavy' });
+                    // Net ladder: route the player to the right tool by mass via
+                    // the shared classifier (single source of truth with the
+                    // Mother fire routing in InputManager) — a Daughter for
+                    // 10–500 kg, the Mother's Large Net for whales (>500 kg).
+                    const { message } = classifyNetTarget(mass);
                     eventBus.emit(Events.COMMS_MESSAGE, {
-                        text: 'Target too massive for Mother net. Try deploying a Daughter [D]',
+                        text: message,
                         source: 'SYSTEM',
                         channel: 'CMD',
                         priority: 'warning',
@@ -1308,9 +1314,11 @@ export class LassoSystem {
                         : COMPACT_SCALE
                 );
             }
-            // Captured: tint the web green (daughter capture language) + hold the
-            // translucent web opacity through the haul.
-            if (this._netKit) NetMeshKit.setColor(this._netKit, Constants.NET_WEB.REEL_COLOR);
+            // 2026-06-30 realism pass: the web stays ivory Dyneema through the
+            // haul too — a real net doesn't change colour when it grips. Capture
+            // state is signalled on the HUD/comms, not by recolouring the mesh
+            // (matches CaptureNetVisual.js). Hold the translucent web opacity.
+            if (this._netKit) NetMeshKit.setColor(this._netKit, Constants.NET_WEB.WEB_COLOR);
             this._setNetOpacity(Constants.NET_WEB.WEB_OPACITY);
             // Tether hidden at contact — no opacity update needed during reel-in
 

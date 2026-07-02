@@ -6159,7 +6159,8 @@ export class ArmUnit {
 
   // ═══════════════════════════════════════════════════════════════════════
   // ST-9.4 C-6: CAPTURE NET INVENTORY
-  // Per CAPTURE_NET.md §6.1 — weaver=Medium(2), spinner=Small(4) at Y0.
+  // Per CAPTURE_NET.md §6.1 — weaver=Medium Net (Large Daughter, magazine 2),
+  // spinner=Small Net (Small Daughter, magazine 4) at Y0.
   // Gated by FEATURE_FLAGS.CAPTURE_NET. When OFF: inventory stays 0.
   // ═══════════════════════════════════════════════════════════════════════
 
@@ -6170,12 +6171,15 @@ export class ArmUnit {
   initNetInventory() {
     if (!Constants.isFeatureEnabled('CAPTURE_NET')) return;
     const type = this.config.type;
-    const capacity = Constants.ARM_NET_CAPACITY[type] ?? 0;
+    // Net class — Weaver carries the Medium net (Large Daughter), Spinner the
+    // Small net (Small Daughter) (CAPTURE_NET.md §6.1).
+    const netClass = type === 'weaver' ? Constants.CAPTURE_NET.MEDIUM : Constants.CAPTURE_NET.SMALL;
+    // Magazine capacity is sourced from the net class's MAGAZINE_SIZE. The
+    // ARM_NET_CAPACITY constant mirrors these values (drift-guard test enforces
+    // equality); we seed from MAGAZINE_SIZE so the net class stays authoritative.
+    const capacity = (netClass && netClass.MAGAZINE_SIZE) ?? Constants.ARM_NET_CAPACITY[type] ?? 0;
     this._netInventoryMax = capacity;
     this._netInventory = capacity;
-    // Net rated capture mass — Weaver carries the Medium net, Spinner the Small
-    // net (CAPTURE_NET.md §6.1). Used by the net-strain failure model.
-    const netClass = type === 'weaver' ? Constants.CAPTURE_NET.MEDIUM : Constants.CAPTURE_NET.SMALL;
     this._netRatedMass = (netClass && netClass.MAX_CAPTURE_MASS) || 0;
     this._netDiameter = (netClass && netClass.DIAMETER) || 0;
   }

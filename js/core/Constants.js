@@ -234,7 +234,7 @@ export const Constants = {
   SPINNER_TETHER_LENGTH: 500,           // m (0.5 km)
   SPINNER_TETHER_REEL_SPEED: 2.0,      // m/s
   SPINNER_NET_SIZE: 1.5,                // m (1.5×1.5 deployed)
-  SPINNER_MAX_CAPTURE_MASS: 10,         // kg
+  SPINNER_MAX_CAPTURE_MASS: 50,         // kg — derived from CAPTURE_NET.SMALL.MAX_CAPTURE_MASS (drift-guard test enforces)
   SPINNER_GECKO_PAD_FORCE: 3.5,        // N/cm² (PDMS Van der Waals)
   SPINNER_LASER_POWER_RECV: 19.5,      // W at 1 km
   SPINNER_BODY: [0.1, 0.1, 0.15],     // m [x, y, z] dimensions
@@ -587,11 +587,13 @@ export const Constants = {
   ARM_CAPTURE_SUCCESS_RATE: 0.85,      // 85% net capture success (legacy; gated off when CAPTURE_NET ON)
 
   // Per-arm net inventory capacity (§13 Q5 — depletion is a real Y0 fail state)
-  // Mass budget anchor: M-NET ~1,265 g vs 6,600 g Weaver = 19% per net;
-  // SD-NET ~360 g vs 2,100 g Spinner = 17% per net. Uniform 2/arm = "one mulligan".
+  // These values MUST equal CAPTURE_NET.MEDIUM/SMALL.MAGAZINE_SIZE (drift-guard
+  // test enforces). Payload-fraction invariant justifying 2/4:
+  //   Large Daughter (weaver): 2 × 0.68 kg / 6.6 kg ≈ 21%
+  //   Small Daughter (spinner): 4 × 0.12 kg / 2.1 kg ≈ 23%
   ARM_NET_CAPACITY: {
     weaver:  2,
-    spinner: 2,
+    spinner: 4,
   },
 
   // --- Arm Approach Speeds (scene units/s — 1 unit = 100 km) ---
@@ -1947,7 +1949,10 @@ export const Constants = {
       CONE_HALF_ANGLE:  15,        // degrees (§2.1)
       SPIN_HZ:          2,         // (§6.1)
       MAX_CAPTURE_MASS: 5000,      // kg (§6.1)
-      MAGAZINE_SIZE:    4,         // nets/pack Dyneema Y0 (§6.4)
+      // Net ladder: 2 nets per pod × 2 body-mounted pods (§2.9) = 4 whale
+      // captures per load. Whale hunts are the Mother's premium, delta-v-costly
+      // job — the scarce magazine enforces "burn only for whales" doctrine.
+      MAGAZINE_SIZE:    2,         // nets/pod Dyneema Y0 (§6.4)
       RELOAD_TIME:      30,        // seconds (§6.1)
       REEL_SPEED:       2.0,       // m/s (§6.1)
       TETHER_MAX:       100,       // m (§6.1)
@@ -2903,7 +2908,7 @@ export const Constants = {
     DEFAULT_DURATION_MS: 7000,
     PERSISTENCE_KEY: 'teachingSeen',
     QUEUE_DRAIN_INTERVAL_S: 6,   // CP-4 §4 — drain queued overlays at ≤1 per this many seconds
-    TOTAL_MOMENTS: 24,           // UX-3 N1: +first_scan/first_arm_deploy; +first_net_failed/first_tether_snap; Phase 0.6: +first_high_tumble_target/first_despin_in_spec; Phase 1.5: +first_detail_scan; Phase 2: +first_aspect_target; Phase 3b: +first_fragmentation
+    TOTAL_MOMENTS: 28,           // UX-3 N1: +first_scan/first_arm_deploy; +first_net_failed/first_tether_snap; Phase 0.6: +first_high_tumble_target/first_despin_in_spec; Phase 1.5: +first_detail_scan; Phase 2: +first_aspect_target; Phase 3b: +first_fragmentation; Net ladder: +first_small_daughter_deploy/first_large_daughter_deploy/first_whale_target/first_deltav_waste
   },
 
   // ============================================================================

@@ -354,7 +354,7 @@ The Mother's hex body ([`OCTOPUS_CORE_ACROSS_FLATS: 1.0`](js/core/Constants.js:1
 > **Rev 5 note:** The Mother retains her 2 body-mounted Large Net pods at **all arm-count tiers** (Y0 Quad through Y3 Octo). Daughter count changes with the tech ladder (§6); Mother pod count does not. The Mother's net capacity is independent of how many daughters are docked.
 
 **Two magazine pods** mounted on the Mother's forward face, **180° apart**, each containing:
-- 1 magazine pack slot (holds 4 Dyneema nets at Y0, up to 8 at Y4)
+- 1 magazine pack slot (holds 2 Dyneema nets per pod at Y0 — 4 whale captures per load across both pods; higher tiers pack more)
 - 1 tether reel (shared by all nets in the pack — sequential fire)
 - 1 launch spring (E = 100 J)
 - Apex camera per-net (factory-installed on each net at the tether junction)
@@ -848,7 +848,7 @@ Both numbers change in real-time as the player adjusts approach distance and vel
 | **Engagement envelope** | 100 m | 100 m | 100 m |
 | **Spin rate** | 2 Hz | 4 Hz | 6 Hz |
 | **Max capture mass** | 5000 kg | 500 kg | 50 kg |
-| **Magazine pack (Dyneema Y0)** | 4 nets/pack | 2 nets/pack | 4 nets/pack |
+| **Magazine pack (Dyneema Y0)** | 2 nets/pod × 2 pods = 4 | 2 nets/pack | 4 nets/pack |
 | **Reload time** | 30 s (mechanical reload from magazine) | 15 s | 5 s |
 | **Tether length** | 100 m (pod reel via centre-line guide ring, §2.9) | 100 m (daughter-mounted reel) | 100 m (daughter-mounted reel) |
 | **Reel-in speed** | 2.0 m/s | 2.0 m/s | 3.0 m/s |
@@ -871,7 +871,7 @@ The Mother always carries **2 body-mounted Large Net pods** (§2.9). Daughter co
 
 *Config G mass breakdown from [`ARM_PIVOT_ANALYSIS.md §10.11`](ARM_PIVOT_ANALYSIS.md:1375): bus core 152.0 kg + ROSA 6.0 kg + body-mount cells 3.0 kg + 4× strut assemblies 18.0 kg + daughters 17.4 kg = 196.4 dry. Propellant 46.0 kg → 242.4 wet. Daughter masses unchanged: [`WEAVER_MASS`](js/core/Constants.js:260) = 6.6 kg/LD; [`SPINNER_MASS`](js/core/Constants.js:261) = 2.1 kg/SD.*
 
-**Y0 fleet composition (game start):** 1 Mother (2 Large Net pods) + 2 Large Daughters (Medium Net each) + 2 Small Daughters (Small Net each) = **5 capture platforms, 10 total nets at Y0 Dyneema** (8 Mother + 2×2 LD Medium + 2×4 SD Small = 8+4+8 = 20 nets at Y0... but more practically: 8 Large + 4 Medium + 8 Small = 20 nets across the fleet).
+**Y0 fleet composition (game start):** 1 Mother (2 Large Net pods) + 2 Large Daughters (Medium Net each) + 2 Small Daughters (Small Net each) = **5 capture platforms, 16 total nets at Y0 Dyneema** (net ladder: 2 pods × 2 = 4 Large + 2 LD × 2 = 4 Medium + 2 SD × 4 = 8 Small = 4+4+8 = 16 nets across the fleet).
 
 **Hex (Y1) and Octo (Y3) are Tech Ladder upgrades** unlocked via Shop + Shipyard (ST-9.8). Each upgrade requires docking at a Shipyard + credits + a "refit" mission. These are NOT free configuration choices — they are earned progression. See [`CROSSBOW_ARMS.md §16`](CROSSBOW_ARMS.md) and [`IMPLEMENTATION_PLAN.md`](archive/IMPLEMENTATION_PLAN_2026-06.md) ST-9.2 / ST-9.8.
 
