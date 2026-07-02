@@ -1763,7 +1763,9 @@ export const Constants = {
                                 // (was 0.6, read cold/faint in-game — §B luminance).
     EDGE_NODE_COUNT:    6,      // edge-node glints (was 4 boulders)
     EDGE_NODE_RADIUS_M: 0.10,   // m — tiny glints, not ballast (was 1.5 m; ~match daughter 0.08)
-    REEL_COLOR:         0x66dd88, // gentler captured/secured green (was harsh 0x00ff44 arcade green)
+    // (removed 2026-06-30) REEL_COLOR — the web no longer tints green on capture.
+    // A real net doesn't change colour when it grips; capture state lives on the
+    // HUD/comms now (see LassoSystem reel-in + CaptureNetVisual realism pass).
     // The web is a fat-line orb-weaver spoke+ring mesh (LineSegments2 +
     // LineMaterial from three/addons/lines): RADIAL_SPOKES radial threads
     // (apex→rim) + RING_COUNT concentric "spiral thread" rings. Fat-lines carry

@@ -35,22 +35,19 @@ const NET_CER = Constants.CAPTURE_NET.NET_CEREMONY;
 const CN = Constants.CAPTURE_NET;
 
 // ── Re-usable colour constants ──────────────────────────────────────────
-// 2026-05-25 retune: each ceremony FSM state now has a distinct cone hue
-// so user can identify what phase they're seeing at a glance. The hue
-// progression maps to action energy: blue (calm pre-contact) → yellow
-// (touched) → orange (tether locked) → red (wrapping) → magenta
-// (drawstring closing) → green (captured). Old COL_CONTACT (orange) was
-// shared by CONTACT+BRAKE+ENVELOP — three states one colour — which made
-// debugging the broken engulf animation impossible.
+// 2026-06-30 realism pass: the net fabric renders as ONE ivory Dyneema colour
+// (COL_DISC) through the ENTIRE capture FSM. A real recovery net has no
+// mechanism to change colour when it catches something, so the old
+// state-coded hue progression (ivory → yellow → orange → red → magenta →
+// green) was pure arcade signalling painted onto a physical object. Capture
+// STATE (CONTACT → BRAKE → ENVELOP → CINCH → SECURE → CAPTURED / MISS) now
+// lives on the docking reticle / HUD (DockingReticle._drawOddsStripInFlight +
+// _netPhaseReadout) and the comms log. Only PHYSICAL motion — spin, cinch
+// contraction, opacity, and the slack drift-out fade on a miss — still plays
+// on the net itself. (Rim-weight edge-node emissive is left intact: it is a
+// glint on the tungsten weights, not a recolour of the fabric.)
 const COL_CANISTER  = 0x556677;
-const COL_DISC      = 0xcfeaff;   // pre-contact (LAUNCHING / SPINNING_UP / FLIGHT) — ivory Dyneema (was cold cyan 0x88aacc)
-const COL_CONTACT   = 0xffdd44;   // CONTACT (yellow — "touched")
-const COL_BRAKE     = 0xff7700;   // BRAKE (orange — "tether locked")
-const COL_ENVELOP   = 0xff3344;   // ENVELOP (red — "wrapping")
-const COL_CINCH     = 0xff44dd;   // CINCH_CLOSING (magenta — "drawstring")
-const COL_SECURE    = 0xaaff44;   // SECURE_CHECK (yellow-green pulse — "checking grip")
-const COL_CAPTURED  = 0x66dd88;   // CAPTURED — gentler secured green (was harsh arcade 0x00ff44)
-const COL_MISSED    = 0xff4444;
+const COL_DISC      = 0xcfeaff;   // ivory Dyneema — the net's ONLY fabric colour, every state
 const COL_TETHER    = 0xddddee;
 
 // Scratch vectors (avoid per-frame allocation)
@@ -95,8 +92,6 @@ export class CaptureNetVisual {
     this._activeVisuals = new Map();
     /** @type {boolean} */
     this._disposed = false;
-    /** @type {Array<{key:string, color:number, timer:number}>} */
-    this._flashTimers = [];
     /** @type {Array<{key:string, timer:number, duration:number}>} */
     this._fadeTimers = [];
 
@@ -168,16 +163,19 @@ export class CaptureNetVisual {
     this._createNetVisual(key, armIndex, podIndex, net);
   }
 
-  /** @private Flash disc green on successful catch. */
-  _onNetCaught(payload) {
-    const { key } = resolveNetId(payload);
-    this._flashTimers.push({ key, color: COL_CAPTURED, timer: 0.5 });
-  }
+  /** @private
+   * A successful catch no longer repaints the net. Real Dyneema does not flash
+   * green on grip — the CAPTURED signal lives on the reticle/HUD
+   * (DockingReticle) and the comms log now. Kept as a documented no-op so the
+   * NET_CATCH_SUCCESS subscription + dispose() symmetry stay intact.
+   */
+  _onNetCaught(_payload) { /* capture state shown on the reticle/HUD, not the mesh */ }
 
-  /** @private Flash disc red, then fade out and remove. */
+  /** @private Miss: the net goes slack and drifts off, fading out. No red
+   * recolour — the mesh stays ivory and simply fades; the MISS reason is
+   * spoken on the comms log / reticle. */
   _onNetMiss(payload) {
     const { key } = resolveNetId(payload);
-    this._flashTimers.push({ key, color: COL_MISSED, timer: 0.3 });
     this._fadeTimers.push({ key, timer: 1.0, duration: 1.0 });
   }
 
@@ -398,7 +396,6 @@ export class CaptureNetVisual {
     this._activeVisuals.delete(key);
 
     // Purge associated timers
-    this._flashTimers = this._flashTimers.filter(f => f.key !== key);
     this._fadeTimers  = this._fadeTimers.filter(f => f.key !== key);
   }
 
@@ -417,19 +414,6 @@ export class CaptureNetVisual {
     // CeremonyTimeScale.get() === 1.0 (short-circuit, no-op multiply).
     const scale = Constants.FEATURE_FLAGS.NET_CEREMONY ? CeremonyTimeScale.get() : 1.0;
     dt = dt * scale;
-
-    // ── Tick flash timers ──
-    for (let i = this._flashTimers.length - 1; i >= 0; i--) {
-      const f = this._flashTimers[i];
-      f.timer -= dt;
-      if (f.timer <= 0) {
-        this._flashTimers.splice(i, 1);
-        // Colour restored via next state-driven update
-      } else {
-        const vis = this._activeVisuals.get(f.key);
-        if (vis) vis.discMesh.material.color.setHex(f.color);
-      }
-    }
 
     // ── Tick fade timers ──
     for (let i = this._fadeTimers.length - 1; i >= 0; i--) {
@@ -479,11 +463,9 @@ export class CaptureNetVisual {
       );
 
       // ── State-driven visibility + appearance ──
-      const isFlash = this._flashTimers.some(f => f.key === key);
-
       // ── Ceremony path: separate state handler ──
       if (vis.useCeremony) {
-        if (this._updateCeremonyState(key, vis, net, dt, isFlash)) continue;
+        if (this._updateCeremonyState(key, vis, net, dt)) continue;
       } else {
 
       switch (state) {
@@ -508,7 +490,7 @@ export class CaptureNetVisual {
             ? Math.min(1, net.spinRate / net.netClass.SPIN_HZ)
             : 1;
           discMesh.scale.setScalar(Math.max(0.05, spinFrac));
-          if (!isFlash) discMesh.material.color.setHex(COL_DISC);
+          discMesh.material.color.setHex(COL_DISC);
           discMesh.material.opacity = 0.6;
           break;
         }
@@ -519,7 +501,7 @@ export class CaptureNetVisual {
           tetherLine.visible = true;
           discMesh.scale.setScalar(1);
           discMesh.rotation.z += net.spinRate * Math.PI * 2 * dt;
-          if (!isFlash) discMesh.material.color.setHex(COL_DISC);
+          discMesh.material.color.setHex(COL_DISC);
           discMesh.material.opacity = 0.6;
           break;
 
@@ -528,7 +510,7 @@ export class CaptureNetVisual {
           canisterMesh.visible = false;
           discMesh.visible = true;
           tetherLine.visible = true;
-          if (!isFlash) discMesh.material.color.setHex(COL_CONTACT);
+          discMesh.material.color.setHex(COL_DISC);
           discMesh.material.opacity = 0.6;
           break;
 
@@ -537,7 +519,7 @@ export class CaptureNetVisual {
           discMesh.visible = true;
           tetherLine.visible = true;
           discMesh.scale.setScalar(Math.max(0.3, 1.0 - net.tangleQuality * 0.5));
-          if (!isFlash) discMesh.material.color.setHex(COL_CONTACT);
+          discMesh.material.color.setHex(COL_DISC);
           discMesh.material.opacity = 0.6;
           break;
 
@@ -546,7 +528,7 @@ export class CaptureNetVisual {
           discMesh.visible = true;
           tetherLine.visible = true;
           discMesh.scale.setScalar(Math.max(0.2, 1.0 - net.tangleQuality * 0.7));
-          if (!isFlash) discMesh.material.color.setHex(COL_CINCH);
+          discMesh.material.color.setHex(COL_DISC);
           discMesh.material.opacity = 0.6;
           break;
 
@@ -562,7 +544,7 @@ export class CaptureNetVisual {
           canisterMesh.visible = false;
           discMesh.visible = true;
           tetherLine.visible = true;
-          if (!isFlash) discMesh.material.color.setHex(COL_CAPTURED);
+          discMesh.material.color.setHex(COL_DISC);
           discMesh.material.opacity = 0.6;
           break;
 
@@ -570,7 +552,7 @@ export class CaptureNetVisual {
           canisterMesh.visible = false;
           discMesh.visible = true;
           tetherLine.visible = true;
-          if (!isFlash) discMesh.material.color.setHex(COL_MISSED);
+          discMesh.material.color.setHex(COL_DISC);
           // Opacity handled by fade timer
           break;
 
@@ -578,8 +560,8 @@ export class CaptureNetVisual {
           canisterMesh.visible = false;
           discMesh.visible = net.catchResult === 'success';
           tetherLine.visible = true;
-          if (discMesh.visible && !isFlash) {
-            discMesh.material.color.setHex(COL_CAPTURED);
+          if (discMesh.visible) {
+            discMesh.material.color.setHex(COL_DISC);
           }
           break;
 
@@ -629,11 +611,10 @@ export class CaptureNetVisual {
    * @param {object} vis — entry from _activeVisuals
    * @param {object} net — NetProjectile
    * @param {number} dt  — seconds
-   * @param {boolean} isFlash — true if a flash timer is active for this key
    * @returns {boolean} true if visual was removed (caller should `continue`)
    * @private
    */
-  _updateCeremonyState(key, vis, net, dt, isFlash) {
+  _updateCeremonyState(key, vis, net, dt) {
     const { coneMesh, rimWeights, drawstringLine,
             apexHub, mouthRadius, coneHeight, closedRadius,
             weightCount, rimWeightMats, canisterMesh } = vis;
@@ -671,7 +652,7 @@ export class CaptureNetVisual {
 
         // Scale cone with spin fraction
         coneMesh.scale.setScalar(Math.max(0.05, spinFrac));
-        if (!isFlash) coneMesh.material.color.setHex(COL_DISC);
+        coneMesh.material.color.setHex(COL_DISC);
         coneMesh.material.opacity = 0.55;
 
         // Place weights at expanding radius
@@ -698,7 +679,7 @@ export class CaptureNetVisual {
 
         coneMesh.scale.setScalar(1);
         vis.spinAngle += net.spinRate * Math.PI * 2 * dt;
-        if (!isFlash) coneMesh.material.color.setHex(COL_DISC);
+        coneMesh.material.color.setHex(COL_DISC);
         coneMesh.material.opacity = 0.55;
 
         // Place weights at full mouth radius
@@ -723,13 +704,10 @@ export class CaptureNetVisual {
         apexHub.visible = true;
         drawstringLine.visible = true;
 
-        // 2026-05-25: split CONTACT (yellow) from BRAKE (orange) — they were
-        // both COL_CONTACT before, making the brake-fired event invisible.
-        if (!isFlash) {
-          coneMesh.material.color.setHex(
-            state === STATES.BRAKE ? COL_BRAKE : COL_CONTACT
-          );
-        }
+        // Fabric stays ivory through CONTACT + BRAKE — the phase is read on the
+        // HUD, not the mesh. The BRAKE-fired event still drives the rim-weight
+        // emissive glint below (a physical tungsten-node cue, not a recolour).
+        coneMesh.material.color.setHex(COL_DISC);
         coneMesh.material.opacity = 0.55;
 
         // Maintain weight positions at mouth radius
@@ -761,7 +739,7 @@ export class CaptureNetVisual {
         apexHub.visible = true;
         drawstringLine.visible = true;
 
-        if (!isFlash) coneMesh.material.color.setHex(COL_ENVELOP);
+        coneMesh.material.color.setHex(COL_DISC);
         coneMesh.material.opacity = 0.55;
         // Cone scale UNCHANGED — no shrink (replaces old discMesh.scale.setScalar)
 
@@ -806,7 +784,7 @@ export class CaptureNetVisual {
         apexHub.visible = true;
         drawstringLine.visible = true;
 
-        if (!isFlash) coneMesh.material.color.setHex(COL_CINCH);
+        coneMesh.material.color.setHex(COL_DISC);
         coneMesh.material.opacity = 0.55;
 
         // 2026-05-25 CRITICAL FIX: was `net.tangleQuality` (=0 throughout this
@@ -855,9 +833,9 @@ export class CaptureNetVisual {
         coneMesh.visible = true;
         vis.tetherLine.visible = true;
         apexHub.visible = true;
-        // Pulse opacity AND tint yellow-green so user can identify the
-        // "checking grip" beat distinctly from CINCH and CAPTURED.
-        if (!isFlash) coneMesh.material.color.setHex(COL_SECURE);
+        // Fabric stays ivory; the "checking grip" beat is read on the HUD. The
+        // opacity pulse below remains as a subtle physical shimmer.
+        coneMesh.material.color.setHex(COL_DISC);
         coneMesh.material.opacity = 0.35 + 0.25 * Math.sin(Date.now() * 0.01);
         break;
 
@@ -865,7 +843,7 @@ export class CaptureNetVisual {
         canisterMesh.visible = false;
         coneMesh.visible = true;
         vis.tetherLine.visible = true;
-        if (!isFlash) coneMesh.material.color.setHex(COL_CAPTURED);
+        coneMesh.material.color.setHex(COL_DISC);
         coneMesh.material.opacity = 0.55;   // steady — no pulse once captured (#3)
         // UX-11 #3: static cinched bag — rim ring frozen at the closed radius
         // on the mouth plane, spinAngle NOT advanced. The captured bag must
@@ -877,7 +855,7 @@ export class CaptureNetVisual {
         canisterMesh.visible = false;
         coneMesh.visible = true;
         vis.tetherLine.visible = true;
-        if (!isFlash) coneMesh.material.color.setHex(COL_MISSED);
+        coneMesh.material.color.setHex(COL_DISC);
         // Opacity handled by fade timer; hide the cinch furniture so no
         // weights/strands linger at full opacity through the fade.
         for (const w of rimWeights) w.visible = false;
@@ -889,7 +867,7 @@ export class CaptureNetVisual {
         coneMesh.visible = net.catchResult === 'success';
         vis.tetherLine.visible = true;
         if (coneMesh.visible) {
-          if (!isFlash) coneMesh.material.color.setHex(COL_CAPTURED);
+          coneMesh.material.color.setHex(COL_DISC);
           // UX-11 #3: the haul/park can last many seconds (REELING is held
           // through HOLDING_CATCH for daughter catches) — render a steady,
           // fully-cinched bag: fixed opacity, frozen spin, rim ring pinned
@@ -1032,7 +1010,6 @@ export class CaptureNetVisual {
     this._boundReelCompleted = null;
     this._boundNetReleased = null;
 
-    this._flashTimers = [];
     this._fadeTimers = [];
     this._enabled = false;
     this._disposed = true;

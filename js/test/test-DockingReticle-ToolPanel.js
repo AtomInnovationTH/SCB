@@ -145,6 +145,22 @@ describe('DockingReticle — odds widget context states', () => {
     assert.ok(!blob.includes('%'), 'no stale odds during flight');
   });
 
+  // 2026-06-30 realism pass: the net mesh no longer changes colour, so the
+  // capture ceremony (CONTACT → … → SECURING) is read on the in-flight strip.
+  it('IN FLIGHT: shows the capture phase once the net reaches the target', () => {
+    const arm = weaverArm();
+    arm.state = 'NETTING';
+
+    arm._firedNet = { state: 'CONTACT', distanceTraveled: 0 };
+    let blob = (() => { const c = mockCtx(); reticleWith(arm)._drawToolSelectionPanel(c, 400, 300); return c.texts.join(' | '); })();
+    assert.ok(blob.includes('CONTACT'), `CONTACT phase shown: ${blob}`);
+    assert.ok(!blob.includes('NET AWAY'), 'distance readout replaced by the phase');
+
+    arm._firedNet = { state: 'CINCH_CLOSING', distanceTraveled: 0 };
+    blob = (() => { const c = mockCtx(); reticleWith(arm)._drawToolSelectionPanel(c, 400, 300); return c.texts.join(' | '); })();
+    assert.ok(blob.includes('CINCHING'), `CINCH_CLOSING reads as CINCHING: ${blob}`);
+  });
+
   it('REELING: tension bar with SNAP mark, strain-axis RIP mark, payload kg', () => {
     const arm = weaverArm();
     arm.state = 'REELING';

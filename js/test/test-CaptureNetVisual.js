@@ -187,7 +187,9 @@ describe('CaptureNetVisual — state-driven visibility', () => {
     });
   });
 
-  it('CAPTURED: disc green (0x66dd88)', () => {
+  // 2026-06-30 realism pass: the net fabric is ivory Dyneema in EVERY state —
+  // capture state is signalled on the reticle/HUD, not by recolouring the mesh.
+  it('CAPTURED: disc stays ivory (0xcfeaff)', () => {
     withFlag(true, () => {
       const net = mockNet({ state: 'CAPTURED', catchResult: 'success' });
       const cns = mockCNS({ 0: net });
@@ -197,15 +199,12 @@ describe('CaptureNetVisual — state-driven visibility', () => {
       vis.update(0.016);
 
       const entry = vis._activeVisuals.get('arm_0');
-      assert.equal(entry.discMesh.material.color.getHex(), 0x66dd88, 'disc is gentle green');
+      assert.equal(entry.discMesh.material.color.getHex(), 0xcfeaff, 'disc stays ivory on CAPTURED');
       vis.dispose();
     });
   });
 
-  // 2026-05-25 retune: COL_CONTACT changed 0xffaa00 → 0xffdd44 (yellow) to
-  // distinguish CONTACT from BRAKE (which now gets its own orange COL_BRAKE).
-  // Legacy disc-mesh path inherits the new colour.
-  it('CONTACT: disc yellow (COL_CONTACT)', () => {
+  it('CONTACT: disc stays ivory (no recolour)', () => {
     withFlag(true, () => {
       const net = mockNet({ state: 'CONTACT' });
       const cns = mockCNS({ 0: net });
@@ -215,15 +214,12 @@ describe('CaptureNetVisual — state-driven visibility', () => {
       vis.update(0.016);
 
       const entry = vis._activeVisuals.get('arm_0');
-      assert.equal(entry.discMesh.material.color.getHex(), 0xffdd44, 'disc is yellow (CONTACT)');
+      assert.equal(entry.discMesh.material.color.getHex(), 0xcfeaff, 'disc stays ivory on CONTACT');
       vis.dispose();
     });
   });
 
-  // 2026-05-25 retune: COL_CINCH changed 0x00aaff → 0xff44dd (magenta) to
-  // separate CINCH visually from CAPTURED green and to make the drawstring
-  // close unmistakable. Legacy disc-mesh path inherits the new colour.
-  it('CINCH_CLOSING: disc magenta (COL_CINCH)', () => {
+  it('CINCH_CLOSING: disc stays ivory (no recolour)', () => {
     withFlag(true, () => {
       const net = mockNet({ state: 'CINCH_CLOSING', tangleQuality: 0.5 });
       const cns = mockCNS({ 0: net });
@@ -233,7 +229,7 @@ describe('CaptureNetVisual — state-driven visibility', () => {
       vis.update(0.016);
 
       const entry = vis._activeVisuals.get('arm_0');
-      assert.equal(entry.discMesh.material.color.getHex(), 0xff44dd, 'disc is magenta (CINCH)');
+      assert.equal(entry.discMesh.material.color.getHex(), 0xcfeaff, 'disc stays ivory on CINCH_CLOSING');
       vis.dispose();
     });
   });
@@ -621,11 +617,11 @@ describe('CaptureNetVisual — ceremony state-driven visibility (flag ON)', () =
     });
   });
 
-  // Per-state colour identification (2026-05-25 retune).
-  // The user explicitly requested colour-coding so they can identify which
-  // FSM state is visible during the cinematic. Each ceremony state must
-  // produce a DISTINCT cone hue.
-  it('Ceremony FSM states each render with a distinct cone colour', () => {
+  // 2026-06-30 realism pass (was: "distinct cone colour per state"). A real
+  // recovery net has no mechanism to change colour mid-capture, so the fabric
+  // now renders ONE ivory Dyneema hue through the whole ceremony — the FSM
+  // phase is read on the reticle/HUD instead (DockingReticle._netPhaseReadout).
+  it('Ceremony FSM states all render the SAME ivory fabric colour', () => {
     withCeremony(() => {
       const vis = new CaptureNetVisual();
       const net = mockNet({ state: 'CONTACT', spinRate: 0 });
@@ -633,23 +629,15 @@ describe('CaptureNetVisual — ceremony state-driven visibility (flag ON)', () =
       vis.init(mockScene(), mockPlayer(), cns);
       vis._createNetVisual('arm_0', 0, -1, net);
 
-      const stateColours = new Map();
-      const states = ['CONTACT', 'BRAKE', 'ENVELOP', 'CINCH_CLOSING', 'SECURE_CHECK'];
+      const states = ['CONTACT', 'BRAKE', 'ENVELOP', 'CINCH_CLOSING', 'SECURE_CHECK', 'CAPTURED'];
       for (const s of states) {
         net.state = s;
         net.stateTimer = 0;
         vis.update(0.016);
         const entry = vis._activeVisuals.get('arm_0');
-        stateColours.set(s, entry.coneMesh.material.color.getHex());
+        assert.equal(entry.coneMesh.material.color.getHex(), 0xcfeaff,
+          `${s} must keep the net fabric ivory (0xcfeaff) — capture state belongs on the HUD, not the mesh`);
       }
-
-      // Every state must have a unique colour
-      const colours = Array.from(stateColours.values());
-      const uniqueColours = new Set(colours);
-      assert.equal(uniqueColours.size, states.length,
-        `Each of [${states.join(', ')}] must render with a unique cone colour. ` +
-        `Got: ${states.map((s, i) => `${s}=0x${colours[i].toString(16)}`).join(', ')}. ` +
-        `If two share a colour, the user cannot identify which FSM state is active.`);
       vis.dispose();
     });
   });
@@ -672,7 +660,7 @@ describe('CaptureNetVisual — ceremony state-driven visibility (flag ON)', () =
     });
   });
 
-  it('CAPTURED: cone turns green (0x66dd88)', () => {
+  it('CAPTURED: cone stays ivory (0xcfeaff)', () => {
     withCeremony(() => {
       const net = mockNet({ state: 'CAPTURED', catchResult: 'success' });
       const cns = mockCNS({ 0: net });
@@ -682,7 +670,7 @@ describe('CaptureNetVisual — ceremony state-driven visibility (flag ON)', () =
       vis.update(0.016);
 
       const entry = vis._activeVisuals.get('arm_0');
-      assert.equal(entry.coneMesh.material.color.getHex(), 0x66dd88, 'cone is gentle green');
+      assert.equal(entry.coneMesh.material.color.getHex(), 0xcfeaff, 'cone stays ivory on CAPTURED');
       vis.dispose();
     });
   });

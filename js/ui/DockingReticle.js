@@ -1079,7 +1079,36 @@ export class DockingReticle {
     return null;
   }
 
-  /** @private IN FLIGHT — strip dims to labels only; `NET AWAY — 34m`. */
+  /**
+   * @private Map the fired net's FSM state → {label, color} for the in-flight
+   * readout. This is where the capture ceremony is now signalled: the net mesh
+   * stays ivory Dyneema (CaptureNetVisual realism pass, 2026-06-30) and the
+   * phase the player used to read off the net's colour reads here instead.
+   * Colours mirror the old net hue energy ramp so the muscle memory carries
+   * over — but each is paired with a WORD (colourblind-safe).
+   * Returns null for pre-contact flight (caller shows the distance readout).
+   * @param {object} net — arm._firedNet (NetProjectile) or null
+   * @returns {{ label: string, color: string }|null}
+   */
+  _netPhaseReadout(net) {
+    const S = Constants.CAPTURE_NET && Constants.CAPTURE_NET.STATES;
+    if (!net || !S) return null;
+    switch (net.state) {
+      case S.CONTACT:       return { label: 'CONTACT',        color: '#ffdd44' };
+      case S.BRAKE:         return { label: 'TETHER LOCK',    color: '#ff9933' };
+      case S.ENVELOP:       return { label: 'ENVELOPING',     color: '#ff6655' };
+      case S.CINCH_CLOSING: return { label: 'CINCHING',       color: '#ff66dd' };
+      case S.SECURE_CHECK:  return { label: 'SECURING\u2026', color: '#aaff44' };
+      case S.CAPTURED:      return { label: 'CAPTURED \u2713', color: '#66ff99' };
+      case S.MISSED:        return { label: 'MISS',           color: C.danger };
+      default:              return null; // FOLDED/LAUNCHING/SPINNING_UP/FLIGHT → distance
+    }
+  }
+
+  /** @private IN FLIGHT — strip dims to labels only; status line carries either
+   * `NET AWAY — 34m` (pre-contact) or the colour-coded capture phase
+   * (CONTACT → … → SECURING) once the net reaches the target. The net mesh no
+   * longer changes colour, so this readout IS the capture-state signal. */
   _drawOddsStripInFlight(ctx, cx, cy) {
     const arm = this._arm;
     const toolset = arm.toolset || [];
@@ -1105,12 +1134,26 @@ export class DockingReticle {
       ctx.fillText(this._oddsColLabel(toolset[i]), stripLeft + i * colW + colW / 2, top + 14 + 7);
     }
 
-    // Status line: net distance from the live projectile.
+    // Status line: capture phase once the net is at the target, else net range.
     const net = arm._firedNet;
-    const distM = net ? Math.round(net.distanceTraveled || 0) : null;
+    const phase = this._netPhaseReadout(net);
+    const statusY = top + 14 + 14 + 8;
     ctx.font = `bold 11px ${FONT}`;
-    ctx.fillStyle = '#66ddff';
-    ctx.fillText(distM != null ? `NET AWAY \u2014 ${distM}m` : 'NET AWAY', cx, top + 14 + 14 + 8);
+    if (phase) {
+      // CAPTURED is a brief, celebratory pulse before the arm hands off to the
+      // tension-bar (GRAPPLED) view; everything else reads steady.
+      const S = Constants.CAPTURE_NET.STATES;
+      if (net.state === S.CAPTURED) {
+        ctx.globalAlpha = 0.7 + 0.3 * Math.abs(Math.sin(this._time * 6));
+      }
+      ctx.fillStyle = phase.color;
+      ctx.fillText(phase.label, cx, statusY);
+      ctx.globalAlpha = 1;
+    } else {
+      const distM = net ? Math.round(net.distanceTraveled || 0) : null;
+      ctx.fillStyle = '#66ddff';
+      ctx.fillText(distM != null ? `NET AWAY \u2014 ${distM}m` : 'NET AWAY', cx, statusY);
+    }
     ctx.textAlign = 'left';
   }
 

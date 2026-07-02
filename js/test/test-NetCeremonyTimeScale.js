@@ -329,34 +329,34 @@ describe('CeremonyTimeScale — 4. NetProjectile stateTimer scales by dt × scal
 });
 
 describe('CeremonyTimeScale — 5. CaptureNetVisual consumes scaled dt', () => {
-  it('flash-timer countdown progresses at half speed when scale=0.5', () => {
+  it('fade-timer countdown progresses at half speed when scale=0.5', () => {
     withFlags({ NET_CEREMONY: true, CAPTURE_NET: true }, () => {
       // ── Baseline ──
       CeremonyTimeScale.reset();
       const visBase = new CaptureNetVisual();
       // Force enable without calling init() (avoids THREE scene mocks).
       visBase._enabled = true;
-      visBase._flashTimers.push({ key: 'k1', timer: 1.0, color: 0xffffff });
+      visBase._fadeTimers.push({ key: 'k1', timer: 1.0, duration: 1.0 });
       const dt = 0.01;
       const FRAMES = 10;
       for (let i = 0; i < FRAMES; i++) visBase.update(dt);
-      const baseTimer = visBase._flashTimers[0]?.timer ?? -999;
+      const baseTimer = visBase._fadeTimers[0]?.timer ?? -999;
 
       // ── Scaled ──
       CeremonyTimeScale.set(0.5);
       const visScaled = new CaptureNetVisual();
       visScaled._enabled = true;
-      visScaled._flashTimers.push({ key: 'k1', timer: 1.0, color: 0xffffff });
+      visScaled._fadeTimers.push({ key: 'k1', timer: 1.0, duration: 1.0 });
       for (let i = 0; i < FRAMES; i++) visScaled.update(dt);
-      const scaledTimer = visScaled._flashTimers[0]?.timer ?? -999;
+      const scaledTimer = visScaled._fadeTimers[0]?.timer ?? -999;
 
       const expectedBase   = 1.0 - dt * FRAMES;          // 0.9
       const expectedScaled = 1.0 - dt * FRAMES * 0.5;    // 0.95
       assert.ok(Math.abs(baseTimer - expectedBase) < 1e-12,
-        `baseline flash timer = ${baseTimer}, expected ${expectedBase}`);
+        `baseline fade timer = ${baseTimer}, expected ${expectedBase}`);
       assert.ok(Math.abs(scaledTimer - expectedScaled) < 1e-12,
-        `scaled flash timer = ${scaledTimer}, expected ${expectedScaled}`);
-      // Flash timer decremented by dt; scaled side decrements by half.
+        `scaled fade timer = ${scaledTimer}, expected ${expectedScaled}`);
+      // Fade timer decremented by dt; scaled side decrements by half.
       const baseDelta   = 1.0 - baseTimer;    // 0.1
       const scaledDelta = 1.0 - scaledTimer;  // 0.05
       assert.ok(Math.abs(scaledDelta * 2 - baseDelta) < 1e-12,
