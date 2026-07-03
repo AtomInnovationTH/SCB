@@ -2,7 +2,17 @@
  * CodexViewerUI.js — DOM overlay modal for browsing the codex entries.
  * Toggle with I key ("Info"). Escape closes.
  *
- * Layout: full-screen overlay → centered panel with category sidebar + entry grid/detail.
+ * Layout (Slice 1 overhaul): full-screen overlay → centered panel with a
+ * **3-column master-detail** interior:
+ *   • sidebar (categories + learning paths)
+ *   • compact entry list (dense rows — icon · title · one-line hook · NEW/🔒 pip)
+ *   • persistent reading pane (QUICK LOOK → BRIEFING → TECH LEVEL → REAL WORLD →
+ *     FORMULA → RELATED → prev/next)
+ *
+ * Reading follows selection: ↑/↓ move the list AND re-render the pane, so the
+ * pane is never empty. Below ~1000px the interior collapses to a 2-pane swap
+ * (list ⇄ reading), preserving the old Back behavior.
+ *
  * @module ui/CodexViewerUI
  */
 
@@ -37,6 +47,15 @@ const CATEGORY_META_FALLBACK = {
   PLAYBOOK:          { label: 'Playbook',            icon: '🎮' },
 };
 
+// Below this panel width the 3-column interior collapses to a 2-pane swap
+// (list ⇄ reading), mirroring the pre-overhaul Back navigation.
+const NARROW_BREAKPOINT = 1000;
+
+// Dwell before an entry is marked seen. `CODEX_VIEWED` fires only once the
+// selection has *rested* on an unlocked/unseen entry this long — arrow-scrubbing
+// and transient renders (deep-link routing, filter churn) never mark seen.
+const SEEN_DWELL_MS = 1500;
+
 export class CodexViewerUI {
   /**
    * @param {import('../systems/CodexSystem.js').CodexSystem} codexSystem
@@ -55,8 +74,26 @@ export class CodexViewerUI {
     this._filter = 'all';
     /** @type {'default'|'az'|'trl'} list sort order (Phase 3 sort bar) */
     this._sort = 'default';
-    /** @type {number} roving-focus index into the current grid (keyboard nav) */
+    /** @type {number} roving-focus index into the current entry list (keyboard nav) */
     this._focusIdx = -1;
+    /** @type {boolean} true while the interior is in the narrow 2-pane swap mode */
+    this._narrow = false;
+
+    /** @type {string|null} deep-link target id for the next show()'s auto-select */
+    this._pendingOpenId = null;
+
+    /** @type {*} debounce handle for the window resize listener */
+    this._resizeDebounce = null;
+
+    /** @type {*} pending seen-dwell timer handle (null when disarmed) */
+    this._seenTimer = null;    /**
+     * Injectable timer seam so the dwell logic is testable in the DOM-less Node
+     * harness. Tests swap these for spies via `_setSeenTimerHooks`.
+     * @type {(fn:Function, ms:number)=>*}
+     */
+    this._scheduleSeen = (fn, ms) => setTimeout(fn, ms);
+    /** @type {(handle:*)=>void} */
+    this._cancelSeen = (h) => clearTimeout(h);
 
     this._buildDOM();
     this._setupListeners();
@@ -70,18 +107,23 @@ export class CodexViewerUI {
 
   show() {
     this._visible = true;
-    this._selectedEntry = null;
     // No "All" view — land on a category (the first newbie-friendly one) so the
     // list is focused and readable on open.
     if (!this._selectedCategory) this._selectedCategory = this._firstCategoryKey();
     this._overlay.style.display = 'flex';
     requestAnimationFrame(() => { this._overlay.style.opacity = '1'; });
+    this._applyResponsiveLayout();
     this._renderHeader();
     this._renderEntryList();
+    // Auto-select the first entry so the reading pane is never empty on open.
+    this._selectFirstEntry();
   }
 
   hide() {
     this._visible = false;
+    // Cancel any pending seen-dwell emit — a fire after close would mark an
+    // entry the player never actually read.
+    this._clearSeenTimer();
     this._overlay.style.opacity = '0';
     setTimeout(() => { if (!this._visible) this._overlay.style.display = 'none'; }, 200);
   }
@@ -92,8 +134,8 @@ export class CodexViewerUI {
    * Deep-link: open the viewer directly on a specific entry by id (glossary
    * §11.8 / Phase 4). Resolves the id through save-migration ALIASES for
    * robustness, opens the overlay, selects the entry's real category, then
-   * routes to its detail view. Unknown ids are a safe no-op. Locked entries are
-   * fine — the Phase 3 viewer renders them with a how-to-unlock hint.
+   * routes to its reading pane. Unknown ids are a safe no-op. Locked entries are
+   * fine — the viewer renders them with a how-to-unlock hint.
    * @param {string} id  codex entry id (possibly a retired alias)
    * @returns {boolean} true if an entry was opened
    */
@@ -102,12 +144,14 @@ export class CodexViewerUI {
     const resolvedId = (ALIASES && ALIASES[id]) || id;
     const entry = this._codex.getEntry(resolvedId);
     if (!entry) return false;
-    this.show();
-    // Land on a real category (not a `track:` pseudo-key) so the sidebar +
-    // entry list resolve correctly when the user backs out of the detail view.
+    // Land on the entry's real category (not a `track:` pseudo-key) BEFORE
+    // show() so show()'s auto-select resolves the right list — no transient
+    // render/mark-seen of the stale category's first entry. _pendingOpenId tells
+    // _selectFirstEntry to route to this entry instead of position 0.
     this._selectedCategory = entry.category;
-    if (typeof this._renderSidebarActive === 'function') this._renderSidebarActive();
-    this._showDetail(entry);
+    this._pendingOpenId = resolvedId;
+    this.show();
+    this._pendingOpenId = null;
     return true;
   }
 
@@ -133,7 +177,7 @@ export class CodexViewerUI {
     const panel = document.createElement('div');
     panel.id = 'codex-panel';
     Object.assign(panel.style, {
-      width: '94%', maxWidth: '1400px', height: '90%', maxHeight: '1000px',
+      width: '96vw', maxWidth: '1720px', height: '94vh', maxHeight: '1200px',
       background: '#1a1a2e', border: '1px solid rgba(0,212,255,0.3)',
       borderRadius: '6px', display: 'flex', flexDirection: 'column',
       boxShadow: '0 0 40px rgba(0,212,255,0.12)', overflow: 'hidden',
@@ -167,61 +211,67 @@ export class CodexViewerUI {
         font-family:'Courier New',monospace;">ESC ✕</button>
     `;
 
-    // --- Body (sidebar + content) ---
+    // --- Body (sidebar + list + reading pane) ---
     const body = document.createElement('div');
     body.id = 'codex-body';
     Object.assign(body.style, {
       display: 'flex', flex: '1', overflow: 'hidden',
     });
 
-    // --- Sidebar ---
+    // --- Sidebar (column 1) ---
     const sidebar = document.createElement('div');
     sidebar.id = 'codex-sidebar';
     Object.assign(sidebar.style, {
-      width: '210px', minWidth: '180px', borderRight: '1px solid rgba(0,212,255,0.15)',
+      width: '200px', minWidth: '180px', borderRight: '1px solid rgba(0,212,255,0.15)',
       overflowY: 'auto', padding: '10px 0', flexShrink: '0',
     });
     this._buildSidebar(sidebar);
 
-    // --- Content area ---
-    const content = document.createElement('div');
-    content.id = 'codex-content';
-    Object.assign(content.style, {
-      flex: '1', overflow: 'hidden', display: 'flex', flexDirection: 'column',
+    // --- Middle column: filter bar + compact entry list (column 2) ---
+    const middle = document.createElement('div');
+    middle.id = 'codex-middle';
+    Object.assign(middle.style, {
+      width: '320px', minWidth: '300px', maxWidth: '340px',
+      borderRight: '1px solid rgba(0,212,255,0.12)',
+      display: 'flex', flexDirection: 'column', flexShrink: '0', overflow: 'hidden',
     });
 
-    // Filter / sort bar (above the grid; hidden while a detail or search-empty
-    // state is shown). Built once; its buttons mutate _filter/_sort and re-render.
+    // Filter / sort bar (above the list). Built once; its buttons mutate
+    // _filter/_sort and re-render.
     const filterBar = document.createElement('div');
     filterBar.id = 'codex-filter-bar';
     Object.assign(filterBar.style, {
-      display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap',
-      padding: '10px 16px', borderBottom: '1px solid rgba(0,212,255,0.1)',
-      fontSize: '12px', color: '#889', flexShrink: '0',
+      display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap',
+      padding: '8px 12px', borderBottom: '1px solid rgba(0,212,255,0.1)',
+      fontSize: '11px', color: '#889', flexShrink: '0',
     });
     this._buildFilterBar(filterBar);
 
-    // Entry list (grid)
+    // Compact entry list (dense rows, replaces the old card grid).
     const entryList = document.createElement('div');
     entryList.id = 'codex-entry-list';
     Object.assign(entryList.style, {
-      flex: '1', overflowY: 'auto', padding: '16px',
-      display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
-      gap: '14px', alignContent: 'start',
+      flex: '1', overflowY: 'auto', padding: '6px 0',
     });
 
-    // Entry detail (hidden by default)
-    const entryDetail = document.createElement('div');
-    entryDetail.id = 'codex-entry-detail';
-    Object.assign(entryDetail.style, {
-      flex: '1', overflowY: 'auto', padding: '22px 28px', display: 'none',
+    middle.appendChild(filterBar);
+    middle.appendChild(entryList);
+
+    // --- Reading pane (column 3) ---
+    const reading = document.createElement('div');
+    reading.id = 'codex-reading';
+    // Focusable (programmatic only) so Enter can move reading focus off the
+    // list and PgUp/PgDn scroll the briefing. tabIndex -1 keeps it out of the
+    // Tab order while allowing reading.focus().
+    reading.tabIndex = -1;
+    reading.style.outline = 'none';
+    Object.assign(reading.style, {
+      flex: '1', overflowY: 'auto', padding: '26px 32px', minWidth: '0',
     });
 
-    content.appendChild(filterBar);
-    content.appendChild(entryList);
-    content.appendChild(entryDetail);
     body.appendChild(sidebar);
-    body.appendChild(content);
+    body.appendChild(middle);
+    body.appendChild(reading);
     panel.appendChild(header);
     panel.appendChild(body);
     overlay.appendChild(panel);
@@ -233,17 +283,16 @@ export class CodexViewerUI {
     overlay.querySelector('#codex-close-btn').addEventListener('click', () => this.hide());
 
     // UX-11 #10: live search — filters across ALL categories as you type;
-    // sidebar selection is ignored while a query is active. Debounced
-    // (review fix): each render rebuilds every card, so don't do it
-    // per keystroke.
+    // sidebar selection is ignored while a query is active. Debounced (each
+    // render rebuilds every row, so don't do it per keystroke).
     const searchInput = overlay.querySelector('#codex-search');
     searchInput.addEventListener('input', () => {
       if (this._searchDebounce) clearTimeout(this._searchDebounce);
       this._searchDebounce = setTimeout(() => {
         this._searchDebounce = null;
         this._searchQuery = searchInput.value.trim();
-        this._selectedEntry = null;
         this._renderEntryList();
+        this._selectFirstEntry();
       }, 120);
     });
     // Keep keystrokes (incl. game hotkeys like L/S/W) inside the search box.
@@ -267,8 +316,6 @@ export class CodexViewerUI {
   /** @private Build the category sidebar tabs */
   _buildSidebar(sidebar) {
     // Category tabs — ordered, data-driven; skip categories with no entries yet.
-    // (No "All Entries" tab: a category is always selected so new players land
-    // on a focused, readable list rather than the full firehose.)
     const cats = (typeof this._codex.getCategories === 'function')
       ? this._codex.getCategories()
       : Object.keys(CATEGORY_META_FALLBACK).map(key => ({ key, ...this._catMeta(key) }));
@@ -281,9 +328,9 @@ export class CodexViewerUI {
       sidebar.appendChild(tab);
     }
 
-    // --- Tracks: guided cross-category learning paths (e.g. "The Propellant
-    // Story"). Rendered below the categories under a small divider. Selecting a
-    // track key (prefixed "track:") switches the list into ordered-track mode. ---
+    // --- Tracks: guided cross-category learning paths. Rendered below the
+    // categories under a small divider. Selecting a track key (prefixed
+    // "track:") switches the list into ordered-track mode. ---
     const tracks = (typeof this._codex.getTracks === 'function') ? this._codex.getTracks() : null;
     const trackEntries = tracks ? Object.entries(tracks) : [];
     if (trackEntries.length) {
@@ -348,9 +395,9 @@ export class CodexViewerUI {
     });
     tab.addEventListener('click', () => {
       this._selectedCategory = category;
-      this._selectedEntry = null;
       this._renderSidebarActive();
       this._renderEntryList();
+      this._selectFirstEntry();
     });
     return tab;
   }
@@ -358,6 +405,37 @@ export class CodexViewerUI {
   // ==========================================================================
   // RENDERING
   // ==========================================================================
+
+  /** @private Apply the panel-width responsive mode (3-column vs 2-pane swap). */
+  _applyResponsiveLayout() {
+    const panel = document.getElementById('codex-panel');
+    const reading = document.getElementById('codex-reading');
+    const middle = document.getElementById('codex-middle');
+    if (!panel || !reading || !middle) return;
+    const w = panel.getBoundingClientRect().width || panel.offsetWidth || 0;
+    // Fall back to wide when width can't be measured (headless / not yet laid out).
+    this._narrow = w > 0 && w < NARROW_BREAKPOINT;
+    if (this._narrow) {
+      // 2-pane swap: the middle list takes the remaining width; reading pane is
+      // shown only when an entry is open (see _selectEntry / _showList).
+      middle.style.width = 'auto';
+      middle.style.maxWidth = 'none';
+      middle.style.flex = '1';
+      if (this._selectedEntry) {
+        middle.style.display = 'none';
+        reading.style.display = 'block';
+      } else {
+        middle.style.display = 'flex';
+        reading.style.display = 'none';
+      }
+    } else {
+      middle.style.width = '320px';
+      middle.style.maxWidth = '340px';
+      middle.style.flex = '0 0 auto';
+      middle.style.display = 'flex';
+      reading.style.display = 'block';
+    }
+  }
 
   /** @private Update header progress counter + overall progress bar */
   _renderHeader() {
@@ -403,7 +481,7 @@ export class CodexViewerUI {
   }
 
   /** @private Resolve the current list (search / track / category) with the
-   * active filter+sort applied. Shared by the grid and Prev/Next so they stay
+   * active filter+sort applied. Shared by the list and Prev/Next so they stay
    * in lockstep.
    * @returns {{ entries:Array<object>, isTrack:boolean }}
    */
@@ -427,121 +505,226 @@ export class CodexViewerUI {
     return { entries: this._applyFilterSort(entries, isTrack), isTrack };
   }
 
-  /** @private Render the entry card grid */
+  /** @private Render the compact entry list (dense rows). */
   _renderEntryList() {
     const listEl = document.getElementById('codex-entry-list');
-    const detailEl = document.getElementById('codex-entry-detail');
-    if (!listEl || !detailEl) return;
+    if (!listEl) return;
 
-    listEl.style.display = 'grid';
-    detailEl.style.display = 'none';
-
-    // Refactored: resolve + filter via the shared helper so Prev/Next mirrors
-    // exactly what the grid shows.
     const { entries, isTrack } = this._currentListEntries();
 
     listEl.innerHTML = '';
     if (entries.length === 0) {
       const empty = document.createElement('div');
-      Object.assign(empty.style, { color: '#667', fontSize: '14px', padding: '24px' });
+      Object.assign(empty.style, { color: '#667', fontSize: '13px', padding: '18px 14px' });
       empty.textContent = this._searchQuery
         ? `No topics match “${this._searchQuery}”.`
         : 'No topics match the current filter.';
       listEl.appendChild(empty);
     }
-    for (const entry of entries) {
-      listEl.appendChild(this._makeCard(entry));
-    }
+    entries.forEach((entry, i) => listEl.appendChild(this._makeRow(entry, i)));
 
-    // Reset roving keyboard focus to the top of the freshly-rendered grid.
-    this._focusIdx = entries.length ? 0 : -1;
-    this._applyGridFocus();
+    // Keep the roving-focus index within bounds of the freshly-rendered list.
+    if (this._selectedEntry) {
+      const sel = entries.findIndex(e => e.id === this._selectedEntry.id);
+      this._focusIdx = sel >= 0 ? sel : (entries.length ? 0 : -1);
+    } else {
+      this._focusIdx = entries.length ? 0 : -1;
+    }
+    this._applyRowFocus();
 
     this._renderSidebarActive();
     this._renderFilterBar(isTrack);
   }
 
-  /** @private Highlight the keyboard-focused card (roving tabindex pattern). */
-  _applyGridFocus() {
+  /** @private Highlight the active/selected + keyboard-focused list row. */
+  _applyRowFocus() {
     const listEl = document.getElementById('codex-entry-list');
     if (!listEl) return;
-    const cards = listEl.querySelectorAll('.codex-card');
-    cards.forEach((card, i) => {
-      if (i === this._focusIdx) {
-        card.style.outline = '2px solid #00d4ff';
-        card.style.outlineOffset = '1px';
-      } else {
-        card.style.outline = 'none';
+    const rows = listEl.querySelectorAll('.codex-row');
+    rows.forEach((row, i) => {
+      const isFocus = i === this._focusIdx;
+      row.style.background = isFocus ? row.dataset.selBg : 'transparent';
+      row.style.borderLeftColor = isFocus ? row.dataset.accent : 'transparent';
+      if (isFocus && typeof row.scrollIntoView === 'function') {
+        row.scrollIntoView({ block: 'nearest' });
       }
     });
   }
 
-  /** @private Number of columns currently laid out in the grid (for up/down). */
-  _gridColumns(listEl) {
-    const cards = listEl.querySelectorAll('.codex-card');
-    if (cards.length < 2) return 1;
-    const firstTop = cards[0].offsetTop;
-    let cols = 1;
-    for (let i = 1; i < cards.length; i++) {
-      if (cards[i].offsetTop === firstTop) cols++;
-      else break;
-    }
-    return Math.max(1, cols);
+  /** @private Create a single compact entry row.
+   * Reveal model (UX-11 #10): title + icon + one-liner are ALWAYS visible — the
+   * library is a syllabus. Locked rows read as "not yet detailed": dimmed + 🔒.
+   */
+  _makeRow(entry, index) {
+    const row = document.createElement('div');
+    row.className = 'codex-row';
+    row.dataset.id = entry.id;
+
+    const isLocked = !entry.unlocked;
+    const isNew = entry.unlocked && !entry.seen;
+
+    const catMeta = this._catMeta(entry.category);
+    const accent = catMeta.color || '#00d4ff';
+    const rgb = this._hexToRgb(accent);
+    const selBg = `rgba(${rgb.r},${rgb.g},${rgb.b},0.13)`;
+    row.dataset.accent = accent;
+    row.dataset.selBg = selBg;
+
+    Object.assign(row.style, {
+      display: 'flex', alignItems: 'flex-start', gap: '9px',
+      padding: '8px 12px', cursor: 'pointer',
+      borderLeft: '3px solid transparent', transition: 'background 0.12s ease',
+    });
+
+    const pip = isNew
+      ? `<span title="new" style="flex-shrink:0;align-self:center;font-size:9px;font-weight:bold;color:${accent};letter-spacing:0.06em;text-shadow:0 0 6px ${accent};">NEW</span>`
+      : (isLocked
+        ? `<span title="locked" style="flex-shrink:0;align-self:center;font-size:12px;color:#667;">🔒</span>`
+        : '');
+
+    row.innerHTML = `
+      <span style="font-size:17px;flex-shrink:0;line-height:1.3;${isLocked ? 'opacity:0.6;' : ''}">${entry.icon}</span>
+      <span style="flex:1;min-width:0;">
+        <span style="display:block;font-size:13px;font-weight:bold;color:${isLocked ? '#9ab' : '#eee'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${entry.title}</span>
+        <span style="display:block;font-size:11px;line-height:1.35;color:#889;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:${isLocked ? 0.6 : 0.85};">${entry.shortText}</span>
+      </span>
+      ${pip}
+    `;
+
+    row.addEventListener('mouseenter', () => {
+      if (index !== this._focusIdx) {
+        const r = this._hexToRgb(accent);
+        row.style.background = `rgba(${r.r},${r.g},${r.b},0.06)`;
+      }
+    });
+    row.addEventListener('mouseleave', () => {
+      if (index !== this._focusIdx) row.style.background = 'transparent';
+    });
+    row.addEventListener('click', () => {
+      this._selectEntry(entry, { focusPane: this._narrow });
+    });
+    return row;
   }
 
-  /** @private Handle an arrow/Enter/Home/End keypress in the grid view. */
-  _handleGridKey(code) {
-    const listEl = document.getElementById('codex-entry-list');
-    if (!listEl) return;
-    const cards = listEl.querySelectorAll('.codex-card');
-    if (!cards.length) return;
-    if (this._focusIdx < 0) this._focusIdx = 0;
-
-    if (code === 'Enter') {
-      const card = cards[this._focusIdx];
-      if (card) card.click();
+  /** @private Auto-select an entry so the reading pane is never empty on open.
+   * Normally lands on the first list entry; when a deep-link set `_pendingOpenId`
+   * (openEntry), routes straight to that entry — even in narrow mode, where a
+   * deep-link should open the reading pane rather than sit on the list. */
+  _selectFirstEntry() {
+    const { entries } = this._currentListEntries();
+    if (!entries.length) {
+      this._selectedEntry = null;
+      this._clearSeenTimer();
+      this._renderEmptyReading();
       return;
     }
-
-    const cols = this._gridColumns(listEl);
-    let idx = this._focusIdx;
-    switch (code) {
-      case 'ArrowLeft':  idx = Math.max(0, idx - 1); break;
-      case 'ArrowRight': idx = Math.min(cards.length - 1, idx + 1); break;
-      case 'ArrowUp':    idx = Math.max(0, idx - cols); break;
-      case 'ArrowDown':  idx = Math.min(cards.length - 1, idx + cols); break;
-      case 'Home':       idx = 0; break;
-      case 'End':        idx = cards.length - 1; break;
-      default: break;
+    // Deep-link routing: open the requested entry directly. In narrow mode the
+    // deep-link intentionally opens the pane (focusPane), unlike a plain open.
+    if (this._pendingOpenId) {
+      const target = entries.find(e => e.id === this._pendingOpenId)
+        || (this._codex.getEntry ? this._codex.getEntry(this._pendingOpenId) : null);
+      if (target) {
+        this._selectEntry(target, { focusPane: this._narrow });
+        return;
+      }
     }
-    this._focusIdx = idx;
-    this._applyGridFocus();
-    const card = cards[idx];
-    if (card && typeof card.scrollIntoView === 'function') {
-      card.scrollIntoView({ block: 'nearest' });
+    if (this._narrow) {
+      // Narrow: show the list first; don't auto-open a reading pane.
+      this._selectedEntry = null;
+      this._clearSeenTimer();
+      this._applyResponsiveLayout();
+      return;
+    }
+    this._selectEntry(entries[0], { focusPane: false });
+  }
+
+  /** @private After a filter/sort change (same selection context), keep the
+   * current reading position if the selected entry survives the new list;
+   * otherwise fall back to the first entry. Category/track switches still jump
+   * to first via _selectFirstEntry directly. */
+  _reselectAfterListChange() {
+    const { entries } = this._currentListEntries();
+    if (this._selectedEntry && entries.some(e => e.id === this._selectedEntry.id)) {
+      // Selection survived: _renderEntryList already recomputed _focusIdx +
+      // applied row focus. Nothing else to do (don't re-arm the seen timer).
+      return;
+    }
+    this._selectFirstEntry();
+  }
+
+  /** @private Select an entry: update focus, render its reading pane, and (in
+   * narrow mode) swap the list out for the pane.
+   * @param {object} entry
+   * @param {{focusPane?:boolean}} [opts]
+   */
+  _selectEntry(entry, opts = {}) {
+    if (!entry) return;
+    this._selectedEntry = entry;
+    const { entries } = this._currentListEntries();
+    const idx = entries.findIndex(e => e.id === entry.id);
+    // Fix #6: if the entry isn't in the current list (e.g. a RELATED chip jumped
+    // to an entry filtered out by "Unlocked"), clear the roving index so
+    // _applyRowFocus lights no row instead of a stale/wrong one.
+    this._focusIdx = idx >= 0 ? idx : -1;
+    this._applyRowFocus();
+    this._renderReading(entry);
+    // Seen dwell: (re)arm the timer for the newly-rested selection. Scrubbing
+    // to another entry before it fires cancels the pending emit.
+    this._armSeenTimer(entry);
+    if (this._narrow) {
+      this._applyResponsiveLayout(); // hides the list, shows the pane
+    }
+    if (opts.focusPane) {
+      const reading = document.getElementById('codex-reading');
+      if (reading && typeof reading.focus === 'function') { try { reading.focus(); } catch (_) {} }
     }
   }
 
-  /** @private Step Prev/Next within the current list while in the detail view.
-   * @param {number} dir -1 for previous, +1 for next
+  /** @private Test seam: swap the timer scheduler/canceller for spies.
+   * @param {(fn:Function, ms:number)=>*} schedule
+   * @param {(handle:*)=>void} cancel
    */
-  _stepDetail(dir) {
-    if (!this._selectedEntry) return;
-    const { entries } = this._currentListEntries();
-    const idx = entries.findIndex(e => e.id === this._selectedEntry.id);
-    if (idx < 0) return;
-    const nextIdx = idx + dir;
-    if (nextIdx < 0 || nextIdx >= entries.length) return;
-    const detailEl = document.getElementById('codex-entry-detail');
-    if (detailEl) detailEl.scrollTop = 0;
-    this._showDetail(entries[nextIdx]);
+  _setSeenTimerHooks(schedule, cancel) {
+    if (typeof schedule === 'function') this._scheduleSeen = schedule;
+    if (typeof cancel === 'function') this._cancelSeen = cancel;
+  }
+
+  /** @private Arm the seen-dwell timer for a rested selection. Clears any
+   * pending handle first (selection changed → previous dwell is void). Only
+   * unlocked, unseen entries arm; locked / already-seen entries never do.
+   * @param {object} entry
+   */
+  _armSeenTimer(entry) {
+    this._clearSeenTimer();
+    if (!entry || !entry.unlocked || entry.seen) return;
+    const id = entry.id;
+    this._seenTimer = this._scheduleSeen(() => {
+      this._seenTimer = null;
+      eventBus.emit(Events.CODEX_VIEWED, { id });
+    }, SEEN_DWELL_MS);
+  }
+
+  /** @private Cancel any pending seen-dwell emit (selection change / hide). */
+  _clearSeenTimer() {
+    if (this._seenTimer != null) {
+      this._cancelSeen(this._seenTimer);
+      this._seenTimer = null;
+    }
+  }
+
+  /** @private In narrow mode, return from the reading pane to the list. */
+  _showList() {
+    if (!this._narrow) return;
+    this._selectedEntry = null;
+    this._clearSeenTimer();
+    this._applyResponsiveLayout();
+    this._applyRowFocus();
   }
 
   /** @private Apply the locked/unlocked filter and the sort order.
    * A learning path ("track") is authored as an ordered narrative, so its
    * sequence is always preserved — the sort control is suppressed for tracks
-   * (see _renderFilterBar) and ignored here. Category/search views honour the
-   * active sort, defaulting to category order.
+   * (see _renderFilterBar) and ignored here.
    * @param {Array<object>} entries
    * @param {boolean} [isTrack=false] keep the authored order, ignoring _sort
    * @returns {Array<object>}
@@ -574,7 +757,7 @@ export class CodexViewerUI {
       const wrap = document.createElement('span');
       wrap.className = 'codex-fs-group';
       wrap.dataset.group = key;
-      Object.assign(wrap.style, { display: 'inline-flex', alignItems: 'center', gap: '6px' });
+      Object.assign(wrap.style, { display: 'inline-flex', alignItems: 'center', gap: '5px' });
       const lbl = document.createElement('span');
       lbl.textContent = label;
       lbl.style.color = '#667';
@@ -586,15 +769,18 @@ export class CodexViewerUI {
         btn.dataset.value = o.value;
         btn.textContent = o.label;
         Object.assign(btn.style, {
-          cursor: 'pointer', padding: '3px 9px', borderRadius: '11px',
+          cursor: 'pointer', padding: '2px 7px', borderRadius: '10px',
           border: '1px solid rgba(255,255,255,0.12)', color: '#9ab',
           transition: 'all 0.15s', userSelect: 'none',
         });
         btn.addEventListener('click', () => {
           if (key === 'filter') this._filter = o.value;
           else this._sort = o.value;
-          this._selectedEntry = null;
           this._renderEntryList();
+          // Preserve reading position across a filter/sort change when the
+          // current selection survives the new list; only jump to first if it
+          // was filtered out (or nothing was selected).
+          this._reselectAfterListChange();
         });
         wrap.appendChild(btn);
       }
@@ -614,14 +800,12 @@ export class CodexViewerUI {
   }
 
   /** @private Reflect current _filter/_sort selection on the bar's buttons.
-   * @param {boolean} [isTrack=false] hide the Sort group for learning paths,
-   *   whose authored order is fixed.
+   * @param {boolean} [isTrack=false] hide the Sort group for learning paths.
    */
   _renderFilterBar(isTrack = false) {
     const bar = document.getElementById('codex-filter-bar');
     if (!bar) return;
     bar.style.display = 'flex';
-    // Sort is meaningless inside a track (order is authored) — hide that group.
     bar.querySelectorAll('.codex-fs-group').forEach(g => {
       if (g.dataset.group === 'sort') g.style.display = isTrack ? 'none' : 'inline-flex';
     });
@@ -635,167 +819,136 @@ export class CodexViewerUI {
     });
   }
 
-  /** @private Create a single entry card.
-   * UX-11 #10 reveal model: title + icon + category + one-liner are ALWAYS
-   * visible — the library is a syllabus. Depth (full briefing + rationale)
-   * unlocks through play. Locked cards are readable but visibly
-   * "not-yet-detailed": dimmed border + 🔒 on the Tech-Level badge.
-   */
-  _makeCard(entry) {
-    const card = document.createElement('div');
-    card.className = 'codex-card';
-
-    const isLocked = !entry.unlocked;
-    const isNew = entry.unlocked && !entry.seen;
-
-    // Per-category accent (Phase 3 hue theming): unlocked cards are tinted with
-    // their category colour; locked cards stay neutral/dim so they read as
-    // "not yet detailed" regardless of category.
-    const catMeta = this._catMeta(entry.category);
-    const accent = catMeta.color || '#00d4ff';
-    const rgb = this._hexToRgb(accent);
-    const aBg = (a) => `rgba(${rgb.r},${rgb.g},${rgb.b},${a})`;
-
-    const restBorder = isLocked ? 'rgba(255,255,255,0.08)' : (isNew ? aBg(0.55) : aBg(0.22));
-    const restBg = isLocked ? 'rgba(255,255,255,0.02)' : (isNew ? aBg(0.08) : aBg(0.04));
-
-    Object.assign(card.style, {
-      padding: '14px 16px', borderRadius: '4px', cursor: 'pointer',
-      border: `1px solid ${restBorder}`,
-      borderLeft: `3px solid ${isLocked ? 'rgba(255,255,255,0.1)' : aBg(0.7)}`,
-      background: restBg,
-      transition: 'all 0.15s ease', position: 'relative', overflow: 'hidden',
-      boxShadow: isNew ? `0 0 12px ${aBg(0.18)}` : 'none',
-    });
-
-    const shortText = `<span style="opacity:${isLocked ? 0.55 : 0.7};">${entry.shortText}</span>`;
-    const newBadge = isNew
-      ? `<span style="position:absolute;top:8px;right:10px;font-size:11px;color:${accent};font-weight:bold;text-shadow:0 0 6px ${aBg(0.5)};">NEW</span>`
-      : '';
-
-    // Tech-Level is intentionally NOT shown on cards: flagging it (especially
-    // the flight-proven majority) is noise. It surfaces only in the detail view
-    // and only for not-yet-proven tech — see _showDetail.
-    card.innerHTML = `
-      ${newBadge}
-      <div style="font-size:24px;margin-bottom:6px;${isLocked ? 'opacity:0.65;' : ''}">${entry.icon}</div>
-      <div style="font-size:15px;font-weight:bold;color:${isLocked ? '#9ab' : '#eee'};margin-bottom:4px;">${entry.title}</div>
-      <div style="font-size:11px;color:${isLocked ? '#566' : accent};margin-bottom:6px;opacity:${isLocked ? 0.7 : 0.85};">${catMeta.label}</div>
-      <div style="font-size:13px;line-height:1.5;">${shortText}</div>
-    `;
-
-    card.addEventListener('mouseenter', () => {
-      card.style.borderColor = isLocked ? aBg(0.3) : accent;
-      card.style.background = aBg(0.12);
-    });
-    card.addEventListener('mouseleave', () => {
-      card.style.borderColor = restBorder;
-      card.style.background = restBg;
-    });
-    card.addEventListener('click', () => this._showDetail(entry));
-
-    return card;
+  /** @private Render an empty-state reading pane (no entry selected). */
+  _renderEmptyReading() {
+    const reading = document.getElementById('codex-reading');
+    if (!reading) return;
+    reading.innerHTML = `
+      <div style="max-width:700px;margin:0 auto;color:#667;font-size:14px;
+        padding:40px 0;text-align:center;font-style:italic;">
+        ${this._searchQuery ? `No topics match “${this._searchQuery}”.` : 'Select a topic to read its briefing.'}
+      </div>`;
   }
 
-  // (UX-11 #10: _showLockedMessage removed — locked cards open the detail
-  // view, which shows the how-to-unlock hint instead of a flicker message.)
-
-  /** @private Show the full entry detail view.
-   * UX-11 #10: locked entries open too — they show the one-liner, the
-   * how-to-unlock hint, and a greyed "full briefing unlocks when…" panel
-   * instead of the fullText.
+  /** @private Render the persistent reading pane for an entry.
+   * Sections top→bottom: QUICK LOOK → BRIEFING → TECH LEVEL (trl<9) →
+   * IN THE REAL WORLD → FORMULA → RELATED → prev/next. Locked entries show only
+   * QUICK LOOK + the how-to-unlock panel.
    */
-  _showDetail(entry) {
-    const listEl = document.getElementById('codex-entry-list');
-    const detailEl = document.getElementById('codex-entry-detail');
-    if (!listEl || !detailEl) return;
-
-    this._selectedEntry = entry;
-    listEl.style.display = 'none';
-    detailEl.style.display = 'block';
-    const filterBar = document.getElementById('codex-filter-bar');
-    if (filterBar) filterBar.style.display = 'none';
+  _renderReading(entry) {
+    const reading = document.getElementById('codex-reading');
+    if (!reading) return;
 
     const isLocked = !entry.unlocked;
 
-    // Mark as viewed
-    if (entry.unlocked && !entry.seen) {
-      eventBus.emit(Events.CODEX_VIEWED, { id: entry.id });
-    }
-
     const catMeta = this._catMeta(entry.category);
-
-    // Tech-Level row: shown ONLY when the tech is not yet flight-proven.
-    // TRL 9 (established/operational) is the unremarkable default — flagging it
-    // everywhere is noise — so the row appears only for Mature/Research/
-    // Speculative tech, where "how real is this?" is genuinely useful signal.
-    const dTrl = entry.trl;
-    let trlDetailHtml = '';
-    if (typeof dTrl === 'number' && dTrl < Constants.TRL.FLIGHT_PROVEN_MIN) {
-      const col = trlToBadgeColor(dTrl, Constants.TRL);
-      const lbl = trlToLabel(dTrl, Constants.TRL);
-      const rat = (!isLocked && entry.trlRationale) ? entry.trlRationale : '';
-      trlDetailHtml = `
-        <div title="Tech Level (real-world readiness) ${dTrl}. ${lbl}"
-             style="display:flex;align-items:center;gap:10px;margin-bottom:14px;
-                    padding:8px 12px;border:1px solid ${col};border-radius:3px;
-                    background:rgba(0,0,0,0.35);font-size:13px;${isLocked ? 'opacity:0.7;' : ''}">
-          <span style="font-weight:bold;letter-spacing:0.05em;color:${col};
-                       padding:2px 8px;border:1px solid ${col};border-radius:2px;
-                       background:rgba(0,0,0,0.35);">${techLevelBadgeText(dTrl)}</span>
-          <span style="color:${col};font-weight:bold;letter-spacing:0.04em;">${lbl}</span>
-          ${rat ? `<span style="color:#888;font-style:italic;flex:1;">${rat}</span>` : ''}
-          ${isLocked ? '<span style="color:#667;font-style:italic;flex:1;text-align:right;">🔒 details locked</span>' : ''}
-        </div>`;
-    }
-
-    // Accent hue for this category — tints the callout blocks and chips so the
-    // detail view reads as "part of" its category (Phase 3 hue theming).
     const accent = catMeta.color || '#00d4ff';
     const accentRGB = this._hexToRgb(accent);
     const accentBg = (a) => `rgba(${accentRGB.r},${accentRGB.g},${accentRGB.b},${a})`;
 
-    // Body: full briefing when unlocked; hint + greyed unlock line when locked.
-    const hint = entry.unlockHint || 'Discover through gameplay.';
-    const bodyHtml = isLocked
-      ? `
-        <div style="font-size:13px;color:#ffaa00;line-height:1.6;margin-bottom:14px;
-          padding:10px 14px;border:1px dashed rgba(255,170,0,0.4);border-radius:3px;">
-          🔒 <b>How to unlock:</b> ${hint}
-        </div>
-        <div style="font-size:14px;color:#667;font-style:italic;line-height:1.6;">
-          Full briefing unlocks when you encounter this in flight.
-        </div>`
-      : `<div style="font-size:15px;color:#ccc;line-height:1.75;white-space:pre-wrap;">${decorateGlossary(entry.fullText, { once: true })}</div>`;
+    const sectionHeader = (text, color) =>
+      `<div style="font-size:11px;letter-spacing:0.14em;font-weight:bold;
+        color:${color || '#778'};margin:0 0 8px;">${text}</div>`;
 
-    // Real-world callout + formula chip — only when unlocked (they're "depth"
-    // that play reveals) and only when present. realWorld is the verified
-    // source/figure line; formula is the physics relation.
-    let extrasHtml = '';
+    // In narrow mode, offer a Back affordance to return to the list.
+    const backHtml = this._narrow
+      ? `<div id="codex-back-btn" style="cursor:pointer;color:#00d4ff;font-size:13px;margin-bottom:16px;
+          display:inline-block;padding:5px 12px;border:1px solid rgba(0,212,255,0.2);border-radius:3px;
+          transition:background 0.15s;">← Back to list</div>`
+      : '';
+
+    // Title header
+    const titleHtml = `
+      <div style="display:flex;align-items:center;gap:14px;margin-bottom:18px;">
+        <span style="font-size:40px;${isLocked ? 'opacity:0.6;' : ''}">${entry.icon}</span>
+        <div>
+          <div style="font-size:22px;font-weight:bold;color:${isLocked ? '#9ab' : '#eee'};">${entry.title}</div>
+          <div style="font-size:12px;color:${accent};opacity:0.85;">${catMeta.icon} ${catMeta.label}</div>
+        </div>
+      </div>`;
+
+    // QUICK LOOK — the ELI5 lead, always shown (even when locked).
+    const quickLookHtml = `
+      <div style="margin-bottom:22px;">
+        ${sectionHeader('QUICK LOOK', accent)}
+        <div style="font-size:16px;color:#aaddff;line-height:1.6;
+          padding:12px 16px;background:${accentBg(0.06)};border-left:3px solid ${accentBg(0.5)};
+          border-radius:2px;">${decorateGlossary(entry.shortText, { once: true })}</div>
+      </div>`;
+
+    // TECH LEVEL — only when the tech is not yet flight-proven (trl<9).
+    const dTrl = entry.trl;
+    let trlHtml = '';
+    if (typeof dTrl === 'number' && dTrl < Constants.TRL.FLIGHT_PROVEN_MIN) {
+      const col = trlToBadgeColor(dTrl, Constants.TRL);
+      const lbl = trlToLabel(dTrl, Constants.TRL);
+      const rat = (!isLocked && entry.trlRationale) ? entry.trlRationale : '';
+      trlHtml = `
+        <div style="margin-bottom:22px;">
+          ${sectionHeader('⚠ TECH LEVEL', col)}
+          <div title="Tech Level (real-world readiness) ${dTrl}. ${lbl}"
+               style="display:flex;align-items:center;gap:10px;
+                      padding:8px 12px;border:1px solid ${col};border-radius:3px;
+                      background:rgba(0,0,0,0.35);font-size:13px;${isLocked ? 'opacity:0.7;' : ''}">
+            <span style="font-weight:bold;letter-spacing:0.05em;color:${col};
+                         padding:2px 8px;border:1px solid ${col};border-radius:2px;
+                         background:rgba(0,0,0,0.35);">${techLevelBadgeText(dTrl)}</span>
+            <span style="color:${col};font-weight:bold;letter-spacing:0.04em;">${lbl}</span>
+            ${rat ? `<span style="color:#888;font-style:italic;flex:1;">${rat}</span>` : ''}
+            ${isLocked ? '<span style="color:#667;font-style:italic;flex:1;text-align:right;">🔒 details locked</span>' : ''}
+          </div>
+        </div>`;
+    }
+
+    // BRIEFING (fullText) — unlocked only; locked shows the how-to-unlock panel.
+    const hint = entry.unlockHint || 'Discover through gameplay.';
+    let briefingHtml;
+    if (isLocked) {
+      briefingHtml = `
+        <div style="margin-bottom:22px;">
+          <div style="font-size:13px;color:#ffaa00;line-height:1.6;
+            padding:10px 14px;border:1px dashed rgba(255,170,0,0.4);border-radius:3px;">
+            🔒 <b>How to unlock:</b> ${hint}
+          </div>
+          <div style="font-size:14px;color:#667;font-style:italic;line-height:1.6;margin-top:12px;">
+            Full briefing unlocks when you encounter this in flight.
+          </div>
+        </div>`;
+    } else {
+      briefingHtml = `
+        <div style="margin-bottom:22px;">
+          ${sectionHeader('BRIEFING')}
+          <div style="font-size:15px;color:#ccc;line-height:1.8;white-space:pre-wrap;">${decorateGlossary(entry.fullText, { once: true })}</div>
+          ${this._verifiedStampHtml(entry)}
+        </div>`;
+    }
+
+    // IN THE REAL WORLD + FORMULA — unlocked depth only.
+    let realWorldHtml = '';
+    let formulaHtml = '';
     if (!isLocked) {
       if (entry.realWorld) {
-        extrasHtml += `
-          <div style="margin-top:18px;padding:12px 16px;border-radius:4px;
-            background:${accentBg(0.06)};border:1px solid ${accentBg(0.25)};">
-            <div style="font-size:11px;letter-spacing:0.12em;font-weight:bold;
-              color:${accent};opacity:0.85;margin-bottom:6px;">🌍 IN THE REAL WORLD</div>
-            <div style="font-size:14px;color:#cde;line-height:1.6;">${decorateGlossary(entry.realWorld, { once: true })}</div>
+        realWorldHtml = `
+          <div style="margin-bottom:22px;">
+            ${sectionHeader('🌍 IN THE REAL WORLD', accent)}
+            <div style="padding:12px 16px;border-radius:4px;
+              background:${accentBg(0.06)};border:1px solid ${accentBg(0.25)};
+              font-size:14px;color:#cde;line-height:1.6;">${decorateGlossary(entry.realWorld, { once: true })}</div>
           </div>`;
       }
       if (entry.formula) {
-        extrasHtml += `
-          <div style="margin-top:14px;padding:10px 14px;border-radius:4px;
-            background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.12);
-            font-size:15px;color:#e8f4ff;letter-spacing:0.02em;
-            font-family:'Courier New',monospace;overflow-x:auto;">
-            <span style="color:#778;font-size:11px;letter-spacing:0.1em;
-              display:block;margin-bottom:4px;">ƒ FORMULA</span>${entry.formula}</div>`;
+        formulaHtml = `
+          <div style="margin-bottom:22px;">
+            ${sectionHeader('ƒ FORMULA')}
+            <div style="padding:10px 14px;border-radius:4px;
+              background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.12);
+              font-size:15px;color:#e8f4ff;letter-spacing:0.02em;
+              font-family:'Courier New',monospace;overflow-x:auto;">${entry.formula}</div>
+          </div>`;
       }
     }
 
-    // Related cross-links — clickable chips that jump to the related entry's
-    // detail (Outer-Wilds-style connection browsing). Resolved through the
-    // system so dangling ids are dropped; locked relateds still navigate.
+    // RELATED — clickable chips (locked relateds still navigate).
     const related = (typeof this._codex.getRelated === 'function')
       ? this._codex.getRelated(entry.id)
       : [];
@@ -812,16 +965,13 @@ export class CodexViewerUI {
           <span>${r.icon}</span>${r.title}${rLocked ? ' 🔒' : ''}</span>`;
       }).join('');
       relatedHtml = `
-        <div style="margin-top:20px;">
-          <div style="font-size:11px;letter-spacing:0.12em;color:#778;
-            margin-bottom:8px;">🔗 RELATED</div>
+        <div style="margin-bottom:22px;">
+          ${sectionHeader('🔗 RELATED')}
           <div style="display:flex;flex-wrap:wrap;gap:8px;">${chips}</div>
         </div>`;
     }
 
-    // Prev/Next within the current view — sequential browsing without bouncing
-    // back to the grid. Mirrors the same list the grid shows (category OR
-    // learning-path, with the active filter/sort applied) so order is coherent.
+    // Prev/Next within the current list.
     const siblings = this._currentListEntries().entries;
     const idx = siblings.findIndex(e => e.id === entry.id);
     const prev = idx > 0 ? siblings[idx - 1] : null;
@@ -835,65 +985,63 @@ export class CodexViewerUI {
       : '<span></span>';
     const prevNextHtml = (prev || next)
       ? `<div style="display:flex;justify-content:space-between;gap:10px;
-           margin-top:26px;padding-top:16px;border-top:1px solid rgba(255,255,255,0.08);">
+           margin-top:8px;padding-top:16px;border-top:1px solid rgba(255,255,255,0.08);">
            ${navBtn(prev, `← ${prev ? prev.title : ''}`, 'left')}
            ${navBtn(next, `${next ? next.title : ''} →`, 'right')}
          </div>`
       : '';
 
-    detailEl.innerHTML = `
-      <div id="codex-back-btn" style="cursor:pointer;color:#00d4ff;font-size:14px;margin-bottom:16px;
-        display:inline-block;padding:5px 12px;border:1px solid rgba(0,212,255,0.2);border-radius:3px;
-        transition:background 0.15s;">← Back</div>
-      <div style="display:flex;align-items:center;gap:14px;margin-bottom:10px;">
-        <span style="font-size:42px;${isLocked ? 'opacity:0.65;' : ''}">${entry.icon}</span>
-        <div>
-          <div style="font-size:20px;font-weight:bold;color:${isLocked ? '#9ab' : '#eee'};">${entry.title}</div>
-          <div style="font-size:12px;color:${accent};opacity:0.85;">${catMeta.icon} ${catMeta.label}</div>
-        </div>
+    reading.innerHTML = `
+      <div style="max-width:700px;margin:0 auto;">
+        ${backHtml}
+        ${titleHtml}
+        ${quickLookHtml}
+        ${briefingHtml}
+        ${trlHtml}
+        ${realWorldHtml}
+        ${formulaHtml}
+        ${relatedHtml}
+        ${prevNextHtml}
       </div>
-      ${trlDetailHtml}
-      <div style="font-size:15px;color:#aaddff;line-height:1.55;margin-bottom:18px;
-        padding:10px 14px;background:${accentBg(0.05)};border-left:3px solid ${accentBg(0.4)};
-        border-radius:2px;">${decorateGlossary(entry.shortText, { once: true })}</div>
-      ${bodyHtml}
-      ${extrasHtml}
-      ${relatedHtml}
-      ${prevNextHtml}
     `;
 
-    // Inline-glossary affordances inside the library itself: decorated terms in
-    // shortText/fullText/realWorld deep-link to their own entries (idempotent).
+    // Inline-glossary affordances inside the library itself.
     ensureGlossaryCss();
-    delegateGlossaryClicks(detailEl);
+    delegateGlossaryClicks(reading);
 
-    const backBtn = detailEl.querySelector('#codex-back-btn');
-    backBtn.addEventListener('mouseenter', () => { backBtn.style.background = 'rgba(0,212,255,0.1)'; });
-    backBtn.addEventListener('mouseleave', () => { backBtn.style.background = 'none'; });
-    backBtn.addEventListener('click', () => {
-      this._selectedEntry = null;
-      this._renderEntryList();
-      this._renderHeader();
-    });
+    // Back button (narrow mode)
+    const backBtn = reading.querySelector('#codex-back-btn');
+    if (backBtn) {
+      backBtn.addEventListener('mouseenter', () => { backBtn.style.background = 'rgba(0,212,255,0.1)'; });
+      backBtn.addEventListener('mouseleave', () => { backBtn.style.background = 'none'; });
+      backBtn.addEventListener('click', () => this._showList());
+    }
 
-    // Related chips + Prev/Next: jump straight to another entry's detail.
-    // If the target lives in a different category, follow it there so its
-    // own Prev/Next + sidebar highlight stay coherent.
+    // Related chips + Prev/Next: jump straight to another entry.
     const jumpTo = (id) => {
       const target = this._codex.getEntry ? this._codex.getEntry(id) : null;
       if (!target) return;
       if (target.category !== this._selectedCategory && !this._searchQuery) {
         this._selectedCategory = target.category;
         this._renderSidebarActive();
+        this._renderEntryList();
       }
-      detailEl.scrollTop = 0;
-      this._showDetail(target);
+      reading.scrollTop = 0;
+      this._selectEntry(target);
     };
-    detailEl.querySelectorAll('.codex-related-chip, .codex-nav-btn').forEach(el => {
+    reading.querySelectorAll('.codex-related-chip, .codex-nav-btn').forEach(el => {
       el.addEventListener('mouseenter', () => { el.style.background = accentBg(0.18); });
       el.addEventListener('mouseleave', () => { el.style.background = ''; });
       el.addEventListener('click', () => jumpTo(el.dataset.id));
     });
+  }
+
+  /** @private VERIFIED micro-stamp for entries carrying a lastVerified date. */
+  _verifiedStampHtml(entry) {
+    const lv = entry.lastVerified;
+    if (!lv || typeof lv !== 'string') return '';
+    return `<div style="margin-top:10px;font-size:10px;letter-spacing:0.1em;
+      color:#566;">VERIFIED ${lv}</div>`;
   }
 
   /** @private Parse a #rrggbb (or #rgb) hex colour to {r,g,b}; defaults to the
@@ -918,18 +1066,15 @@ export class CodexViewerUI {
   /** @private */
   _setupListeners() {
     // Keyboard handling while the codex is open (capture phase, so it runs
-    // before InputManager's codex intercept). ESC always closes; the rest is
-    // grid/detail navigation. Typing in the search box is left alone — ESC there
-    // just blurs the input, and other keys fall through to the browser.
+    // before InputManager's codex intercept). ESC always closes; ↑/↓ move the
+    // list selection AND the reading pane; Enter focuses the pane; / focuses
+    // search. Typing in the search box is left alone.
     window.addEventListener('keydown', (e) => {
       if (!this._visible) return;
       const tgt = e.target;
       const inSearch = tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA');
 
-      // ESC while typing in the search box: blur the field (don't close the
-      // codex). This must precede the general ESC handling below, which runs in
-      // capture phase and would otherwise swallow the keystroke before the
-      // input's own listener could react.
+      // ESC while typing in the search box: blur the field (don't close).
       if (e.code === 'Escape' && inSearch) {
         e.stopImmediatePropagation();
         e.preventDefault();
@@ -940,11 +1085,10 @@ export class CodexViewerUI {
       if (e.code === 'Escape') {
         e.stopImmediatePropagation();
         e.preventDefault();
-        // ESC from a detail view returns to the grid; from the grid it closes.
-        if (this._selectedEntry) {
-          this._selectedEntry = null;
-          this._renderEntryList();
-          this._renderHeader();
+        // Narrow mode with the reading pane open: ESC returns to the list.
+        // Otherwise ESC closes the viewer.
+        if (this._narrow && this._selectedEntry) {
+          this._showList();
         } else {
           this.hide();
         }
@@ -953,24 +1097,20 @@ export class CodexViewerUI {
 
       if (inSearch) return; // don't hijack typing
 
-      // --- Detail view: ←/→ = Prev/Next sibling, Backspace = back to grid ---
-      if (this._selectedEntry) {
-        if (e.code === 'ArrowLeft' || e.code === 'ArrowRight') {
-          e.stopImmediatePropagation(); e.preventDefault();
-          this._stepDetail(e.code === 'ArrowRight' ? 1 : -1);
-        } else if (e.code === 'Backspace') {
-          e.stopImmediatePropagation(); e.preventDefault();
-          this._selectedEntry = null;
-          this._renderEntryList();
-          this._renderHeader();
-        }
+      // '/' focuses the search box.
+      if (e.code === 'Slash') {
+        e.stopImmediatePropagation(); e.preventDefault();
+        const input = document.getElementById('codex-search');
+        if (input && typeof input.focus === 'function') input.focus();
         return;
       }
 
-      // --- Grid view: arrow keys move a roving focus, Enter opens detail ---
-      if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Enter', 'Home', 'End'].includes(e.code)) {
+      // ↑/↓ move the list selection and re-render the reading pane (reading
+      // follows selection). ←/→ step prev/next. Enter focuses the pane. Home/End
+      // jump to list ends.
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter', 'Home', 'End', 'Backspace'].includes(e.code)) {
         e.stopImmediatePropagation(); e.preventDefault();
-        this._handleGridKey(e.code);
+        this._handleListKey(e.code);
       }
     }, true);
 
@@ -978,9 +1118,73 @@ export class CodexViewerUI {
     eventBus.on(Events.CODEX_UNLOCKED, () => {
       if (this._visible) {
         this._renderHeader();
-        if (!this._selectedEntry) this._renderEntryList();
+        this._renderEntryList();
       }
     });
+
+    // Debounced resize: re-evaluate the 3-column ⇄ 2-pane breakpoint while open.
+    // On a mode flip with an entry selected, re-render the reading pane so the
+    // "← Back to list" affordance appears/disappears (it's only emitted while
+    // _narrow at render time).
+    window.addEventListener('resize', () => {
+      if (!this._visible) return;
+      if (this._resizeDebounce) clearTimeout(this._resizeDebounce);
+      this._resizeDebounce = setTimeout(() => {
+        this._resizeDebounce = null;
+        if (!this._visible) return;
+        this._onResize();
+      }, 150);
+    });
+  }
+
+  /** @private Handle a settled window resize while the viewer is open. */
+  _onResize() {
+    const wasNarrow = this._narrow;
+    this._applyResponsiveLayout();
+    if (this._narrow !== wasNarrow && this._selectedEntry) {
+      // Back-button affordance is narrow-only and baked in at render time.
+      this._renderReading(this._selectedEntry);
+    }
+  }
+
+  /** @private Keyboard navigation over the compact list + reading pane. */
+  _handleListKey(code) {
+    const { entries } = this._currentListEntries();
+    if (!entries.length) return;
+
+    // Backspace in narrow mode returns to the list.
+    if (code === 'Backspace') {
+      if (this._narrow && this._selectedEntry) this._showList();
+      return;
+    }
+
+    // Enter focuses the reading pane (accessibility: move reading focus off the
+    // list). In narrow mode, ensure the pane is shown.
+    if (code === 'Enter') {
+      if (this._focusIdx >= 0 && this._focusIdx < entries.length) {
+        this._selectEntry(entries[this._focusIdx], { focusPane: true });
+      }
+      return;
+    }
+
+    let idx = this._focusIdx < 0 ? 0 : this._focusIdx;
+    switch (code) {
+      case 'ArrowUp':
+      case 'ArrowLeft':  idx = Math.max(0, idx - 1); break;
+      case 'ArrowDown':
+      case 'ArrowRight': idx = Math.min(entries.length - 1, idx + 1); break;
+      case 'Home':       idx = 0; break;
+      case 'End':        idx = entries.length - 1; break;
+      default: break;
+    }
+    this._focusIdx = idx;
+    // Reading follows selection (in wide mode). In narrow mode, keep the list
+    // visible while arrowing; only open the pane on Enter/click.
+    if (this._narrow) {
+      this._applyRowFocus();
+    } else {
+      this._selectEntry(entries[idx]);
+    }
   }
 }
 
