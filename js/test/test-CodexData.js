@@ -468,3 +468,86 @@ describe('Codex Phase 2d — thin-category fill', () => {
     assert.equal(bad.length, 0, `missing realWorld: ${bad.join(', ')}`);
   });
 });
+
+// ===========================================================================
+// PHASE 6a — Content batch A: deep-dive editorial template conformance.
+// Activated per batch as categories are rewritten (see the deep-dive overhaul
+// plan §2/§5 + the Slice-1 review-fixes plan Part 2A). Scope EXPANDS as later
+// slices land — add 'DEBRIS' and 'SPACE_ENVIRONMENT' here once phase6a rewrites
+// them so the guards only police already-rewritten copy.
+// ===========================================================================
+describe('Codex Phase 6a — batch A template conformance', () => {
+  const REWRITTEN_A = ['ORBITAL_MECHANICS', 'DEBRIS', 'SPACE_ENVIRONMENT'];
+  const batchA = entries.filter(e => REWRITTEN_A.includes(e.category));
+
+  it('batch A has entries to police', () => {
+    assert.ok(batchA.length > 0, `rewritten categories populated: ${REWRITTEN_A.join(', ')}`);
+  });
+
+  it('shortText ≤140 chars (ELI5 quick-glance)', () => {
+    const bad = batchA.filter(e => (e.shortText || '').length > 140)
+      .map(e => `${e.id}:${e.shortText.length}`);
+    assert.equal(bad.length, 0, `shortText over 140: ${bad.join(', ')}`);
+  });
+
+  it('fullText is multi-paragraph (≥1 blank-line break)', () => {
+    const bad = batchA.filter(e => !(e.fullText || '').includes('\n\n')).map(e => e.id);
+    assert.equal(bad.length, 0, `single-paragraph fullText: ${bad.join(', ')}`);
+  });
+
+  it('every entry carries ≥2 related links', () => {
+    const bad = batchA.filter(e => (e.related || []).length < 2)
+      .map(e => `${e.id}:${(e.related || []).length}`);
+    assert.equal(bad.length, 0, `under-linked entries: ${bad.join(', ')}`);
+  });
+
+  it('related links are symmetric (every target links back)', () => {
+    const oneway = [];
+    for (const e of batchA) {
+      for (const rid of (e.related || [])) {
+        const t = codex.getEntry(rid);
+        if (!t || !(t.related || []).includes(e.id)) oneway.push(`${e.id}→${rid}`);
+      }
+    }
+    assert.equal(oneway.length, 0, `asymmetric related: ${oneway.join(', ')}`);
+  });
+
+  it('every trl-bearing entry has a realWorld line', () => {
+    const bad = batchA.filter(e => e.trl != null && (!e.realWorld || !e.realWorld.trim()))
+      .map(e => e.id);
+    assert.equal(bad.length, 0, `tech entries missing realWorld: ${bad.join(', ')}`);
+  });
+
+  // Part 2A — actionable-hint rule: no passive / vague unlock hints. Every hint
+  // must name a concrete player action or an observable threshold.
+  it('unlockHints name a concrete action (no banned passive patterns)', () => {
+    const BANNED = [
+      /keep flying/i,
+      /finds you/i,
+      /discover through gameplay/i,               // CodexSystem default → unset hint
+      /^scan, capture, and clear debris\.?$/i,     // old generic ×17
+      /maneuvers and transfers reveal orbital concepts/i, // old ORBITAL generic ×6
+    ];
+    const bad = [];
+    for (const e of batchA) {
+      const h = e.unlockHint || '';
+      if (BANNED.some(re => re.test(h))) bad.push(`${e.id}:"${h}"`);
+    }
+    assert.equal(bad.length, 0, `passive/vague unlock hints: ${bad.join(' | ')}`);
+  });
+
+  it('no banned voice phrases in i18n copy', () => {
+    const BANNED = [
+      /delve/i, /unleash/i, /revoluti/i, /game.?chang/i, /tapestry/i,
+      /testament to/i, /in the world of/i, /it.s not just .*,? it.s/i,
+      /\bcrucial\b/i, /\bvital\b/i,
+    ];
+    const bad = [];
+    for (const e of batchA) {
+      const txt = [e.shortText, e.fullText, e.realWorld, e.trlRationale].filter(Boolean).join('  ');
+      for (const re of BANNED) if (re.test(txt)) bad.push(`${e.id}:${re}`);
+      if (/!/.test(txt)) bad.push(`${e.id}:exclamation`);
+    }
+    assert.equal(bad.length, 0, `banned voice patterns: ${bad.join(', ')}`);
+  });
+});
