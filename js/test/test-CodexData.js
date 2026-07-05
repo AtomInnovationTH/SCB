@@ -630,3 +630,83 @@ describe('Codex Phase 6b — batch B template conformance', () => {
     assert.equal(bad.length, 0, `banned voice patterns: ${bad.join(', ')}`);
   });
 });
+
+// ===========================================================================
+// PHASE 6c — Content batch C template conformance (MATERIALS + ATTITUDE +
+// AVIONICS + HERITAGE + PROPULSION). Same rules as 6a/6b.
+// ===========================================================================
+describe('Codex Phase 6c — batch C template conformance', () => {
+  const REWRITTEN_C = ['MATERIALS', 'ATTITUDE', 'AVIONICS', 'HERITAGE', 'PROPULSION'];
+  const batchC = entries.filter(e => REWRITTEN_C.includes(e.category));
+
+  it('batch C has entries to police', () => {
+    assert.ok(batchC.length > 0, `rewritten categories populated: ${REWRITTEN_C.join(', ')}`);
+  });
+
+  it('shortText ≤140 chars (ELI5 quick-glance)', () => {
+    const bad = batchC.filter(e => (e.shortText || '').length > 140)
+      .map(e => `${e.id}:${e.shortText.length}`);
+    assert.equal(bad.length, 0, `shortText over 140: ${bad.join(', ')}`);
+  });
+
+  it('fullText is multi-paragraph (≥1 blank-line break)', () => {
+    const bad = batchC.filter(e => !(e.fullText || '').includes('\n\n')).map(e => e.id);
+    assert.equal(bad.length, 0, `single-paragraph fullText: ${bad.join(', ')}`);
+  });
+
+  it('every entry carries ≥2 related links', () => {
+    const bad = batchC.filter(e => (e.related || []).length < 2)
+      .map(e => `${e.id}:${(e.related || []).length}`);
+    assert.equal(bad.length, 0, `under-linked entries: ${bad.join(', ')}`);
+  });
+
+  it('related links are symmetric (every target links back)', () => {
+    const oneway = [];
+    for (const e of batchC) {
+      for (const rid of (e.related || [])) {
+        const t = codex.getEntry(rid);
+        if (!t || !(t.related || []).includes(e.id)) oneway.push(`${e.id}→${rid}`);
+      }
+    }
+    assert.equal(oneway.length, 0, `asymmetric related: ${oneway.join(', ')}`);
+  });
+
+  it('every trl-bearing entry has a realWorld line', () => {
+    const bad = batchC.filter(e => e.trl != null && (!e.realWorld || !e.realWorld.trim()))
+      .map(e => e.id);
+    assert.equal(bad.length, 0, `tech entries missing realWorld: ${bad.join(', ')}`);
+  });
+
+  it('unlockHints name a concrete action (no banned passive patterns)', () => {
+    const BANNED = [
+      /keep flying/i, /finds you/i, /discover through gameplay/i,
+      /^scan, capture, and clear debris\.?$/i,
+      /run scans .* and read the sensor suite/i,               // old ATTITUDE/AVIONICS generic
+      /salvage debris and process metals in the forge/i,       // old MATERIALS generic
+      /burn propellant .* teach propulsion/i,                  // old PROPULSION generic
+      /reach mission milestones and endgame outcomes/i,        // old HERITAGE generic
+      /deliver mass to the elevator to unlock/i,               // old HERITAGE (mismatched trigger)
+    ];
+    const bad = [];
+    for (const e of batchC) {
+      const h = e.unlockHint || '';
+      if (BANNED.some(re => re.test(h))) bad.push(`${e.id}:"${h}"`);
+    }
+    assert.equal(bad.length, 0, `passive/vague unlock hints: ${bad.join(' | ')}`);
+  });
+
+  it('no banned voice phrases in i18n copy', () => {
+    const BANNED = [
+      /delve/i, /unleash/i, /revolutionar|revolutioni[sz]e/i, /game.?chang/i, /tapestry/i,
+      /testament to/i, /in the world of/i, /it.s not just .*,? it.s/i,
+      /\bcrucial\b/i, /\bvital\b/i,
+    ];
+    const bad = [];
+    for (const e of batchC) {
+      const txt = [e.shortText, e.fullText, e.realWorld, e.trlRationale].filter(Boolean).join('  ');
+      for (const re of BANNED) if (re.test(txt)) bad.push(`${e.id}:${re}`);
+      if (/!/.test(txt)) bad.push(`${e.id}:exclamation`);
+    }
+    assert.equal(bad.length, 0, `banned voice patterns: ${bad.join(', ')}`);
+  });
+});
