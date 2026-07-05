@@ -691,12 +691,19 @@
       "category": "POWER",
       "trl": 9,
       "icon": "🔋",
+      "related": [
+        "battery_chemistry",
+        "solid_state_battery",
+        "power_bus_management"
+      ],
       "i18n": {
         "title": "Battery Cycle Life",
-        "shortText": "Li-ion batteries in LEO undergo 16 charge/discharge cycles per day — rating for 50,000+ cycles is critical.",
-        "fullText": "In LEO, batteries charge during sunlight and discharge during eclipse — 16 cycles per day, ~5,840 per year. Over a 15-year mission, that's 87,600 cycles. Space-grade lithium-ion cells are rated for 50,000-80,000 cycles with 10-20% depth-of-discharge. Going deeper into the battery shortens its life exponentially. Your power management system limits battery DoD to preserve long-term capacity.",
-        "unlockHint": "Manage the power buses and battery during operations.",
-        "trlRationale": "Established design-for-life practice"
+        "shortText": "Sixteen charge-discharge cycles a day, nearly 90,000 over a long mission: cycle life is a hard budget.",
+        "fullText": "Each orbit is one battery cycle: charge in sunlight, discharge in eclipse, sixteen times a day and about 5,840 times a year. Over a fifteen-year life that is nearly 90,000 cycles, far more than any phone battery will ever see.\n\nSpace cells meet it by trading depth for endurance, rated for 50,000-80,000 shallow cycles. Push the depth of discharge deeper and usable life falls off sharply, so the power manager guards it closely. Treat cycle life as a consumable like propellant: spend it carelessly with deep draws and the battery ages years early, long before anything else on the bus wears out.",
+        "realWorld": "16 cycles/day (~5,840/yr); space cells rated 50,000-80,000 cycles at shallow depth of discharge.",
+        "formula": "cycles/yr ≈ 16 × 365 ≈ 5,840",
+        "trlRationale": "Established design-for-life practice.",
+        "unlockHint": "Read a battery subsystem alert."
       }
     },
     {
@@ -704,12 +711,18 @@
       "category": "POWER",
       "trl": 9,
       "icon": "🌑",
+      "related": [
+        "solar_power",
+        "battery_chemistry",
+        "power_bus_management"
+      ],
       "i18n": {
         "title": "Eclipse Cycles",
-        "shortText": "Your spacecraft passes through Earth's shadow every orbit.",
-        "fullText": "In a 400km orbit, you experience ~35 minutes of darkness every 92-minute orbit. During eclipse, solar panels produce nothing. Battery reserves and power rationing become critical. Some operations (EDT propulsion, sensors) may need to be reduced during eclipse to maintain essential systems.",
-        "unlockHint": "Manage the power buses and battery during operations.",
-        "trlRationale": "Fundamental LEO constraint since 1957"
+        "shortText": "Every orbit drags you through Earth's shadow: about 35 dark minutes where the panels make nothing.",
+        "fullText": "In a 400 km orbit the mothership spends roughly 35 minutes of each 92-minute lap inside Earth's shadow. For that stretch the solar panels produce nothing, and everything aboard runs off the batteries charged during the sunlit side.\n\nThat makes eclipse the sizing case for the whole power system. Battery reserve, load-shedding priorities, and which subsystems may dim all get set by how you survive the dark side. Some draws, like electrodynamic-tether work or a hungry sensor sweep, may have to wait for sunrise so the essentials stay powered until you come back into the light.",
+        "realWorld": "~35 min eclipse per ~92-min LEO orbit; a fundamental constraint since Sputnik 1 (1957).",
+        "trlRationale": "Fundamental LEO constraint since 1957.",
+        "unlockHint": "Fly into Earth's shadow (eclipse)."
       }
     },
     {
@@ -717,12 +730,18 @@
       "category": "POWER",
       "trl": 3,
       "icon": "⚡",
+      "related": [
+        "supercapacitors",
+        "solid_state_battery",
+        "mpd_burst"
+      ],
       "i18n": {
         "title": "Graphene Supercapacitors",
-        "shortText": "Single-atom carbon sheets with astronomical power density — perfect for MPD burst power.",
-        "fullText": "Graphene is a single layer of carbon atoms arranged in hexagons — the strongest, most conductive material ever measured. Stack graphene sheets separated by hexagonal boron nitride (HBN) insulator and you get a supercapacitor that charges in seconds and survives millions of cycles. Energy density: 10× less than batteries. But power density: 1000× more. Your MPD thruster draws 150 kW — a current spike that would damage any battery. The supercap bank absorbs the peak, while batteries provide sustained baseload. Same principle as the \"ludicrous mode\" battery pack in high-performance electric vehicles.",
-        "unlockHint": "Manage the power buses and battery during operations.",
-        "trlRationale": "Lab-scale graphene capacitors demonstrated; no space heritage"
+        "shortText": "Single-atom carbon sheets promise a supercapacitor with brutal power density, built for the MPD burst.",
+        "fullText": "Graphene is a one-atom-thick sheet of carbon, the strongest and most conductive material yet measured. Stacked with an insulating layer between sheets, it forms a supercapacitor that charges in seconds and survives millions of cycles, storing perhaps a tenth the energy of a battery but delivering it at far higher power density.\n\nThat profile suits one job on your ship in particular: the magnetoplasmadynamic (MPD) thruster's burst can draw around 150 kilowatts, a spike that would damage a battery asked to supply it. A graphene bank absorbs and releases that peak while the batteries handle the steady baseload. The material is still lab-scale, with no space heritage yet.",
+        "realWorld": "Lab-scale graphene capacitors demonstrated; no space heritage; targeted at MPD-class burst loads.",
+        "trlRationale": "Lab-scale graphene capacitors demonstrated; no space heritage.",
+        "unlockHint": "Buy the graphene supercapacitor upgrade."
       }
     },
     {
@@ -730,12 +749,18 @@
       "category": "POWER",
       "trl": 9,
       "icon": "☀️",
+      "related": [
+        "solar_power",
+        "solar_cell_degradation",
+        "power_beaming"
+      ],
       "i18n": {
         "title": "Multi-Junction Photovoltaics",
-        "shortText": "Triple-junction cells stack three materials tuned to different parts of the solar spectrum.",
-        "fullText": "Triple-junction cells stack three materials tuned to different parts of the solar spectrum. The top layer catches UV/blue, the middle catches visible, the bottom catches infrared. Combined: 39% efficiency vs 22% for silicon. Every Mars rover, every GPS satellite, and the ISS all use multi-junction GaAs cells. The tradeoff: 100× more expensive per watt than silicon — but in space, mass and area matter more than cost.",
-        "unlockHint": "Manage the power buses and battery during operations.",
-        "trlRationale": "Triple-junction GaAs on every GEO sat and Mars rover"
+        "shortText": "Stack three materials, each tuned to a different slice of the spectrum, and one cell harvests far more sunlight.",
+        "fullText": "A plain silicon cell converts about 20% of the sunlight that hits it. A triple-junction cell stacks three semiconductor layers, each tuned to a different band of the spectrum: the top catches blue and ultraviolet, the middle visible light, the bottom infrared. Together they reach roughly 30% in space, half again as much power from the same area.\n\nThe price is cost, many times that of silicon per watt, so they fly where area and mass matter more than money: the International Space Station, communications satellites, and solar landers. Your arrays use them, so a smaller wing carries the load a silicon panel would need far more surface to match.",
+        "realWorld": "Space triple-junction (GaAs) cells ~30% efficient vs ~20% for silicon; flown on the ISS, GEO satellites, and solar landers like InSight.",
+        "trlRationale": "Triple-junction GaAs standard on GEO satellites and the ISS.",
+        "unlockHint": "Buy the multi-junction solar upgrade."
       }
     },
     {
@@ -743,12 +768,17 @@
       "category": "POWER",
       "trl": 9,
       "icon": "✨",
+      "related": [
+        "thermal_management",
+        "atomic_oxygen"
+      ],
       "i18n": {
         "title": "Multi-Layer Insulation (MLI)",
-        "shortText": "Gold and silver Mylar blankets — the distinctive look of every spacecraft.",
-        "fullText": "MLI blankets are layers of thin aluminized Mylar separated by mesh spacers. Each layer reflects infrared radiation, creating a thermal barrier. 20-30 layers reduce heat transfer by 99%. The distinctive gold/silver appearance of spacecraft comes from these blankets. They're the most mass-efficient thermal protection available.",
-        "unlockHint": "Manage the power buses and battery during operations.",
-        "trlRationale": "Ubiquitous — standard exterior on all spacecraft"
+        "shortText": "Those gold and silver blankets aren't styling: they're the most mass-efficient thermal armour there is.",
+        "fullText": "The gold and silver sheen of a spacecraft comes from multi-layer insulation (MLI): stacks of thin aluminised film separated by fine mesh spacers. Each layer reflects infrared radiation back, and twenty or thirty layers together cut radiative heat transfer by around 99%.\n\nBecause the layers are feather-light, MLI is the most mass-efficient thermal protection available, which is why nearly every spacecraft wears it. It keeps the deep cold of shadow out and trapped heat in, smoothing the brutal swing between sunlight and eclipse. On your ship it is the first line of the thermal system, the passive blanket the heaters and radiators only have to trim.",
+        "realWorld": "20-30 layers of aluminised film cut radiative transfer ~99%; standard exterior on essentially all spacecraft.",
+        "trlRationale": "Ubiquitous — standard exterior on all spacecraft.",
+        "unlockHint": "Fly until the mothership notes MLI thermal load."
       }
     },
     {
@@ -756,12 +786,21 @@
       "category": "POWER",
       "trl": 9,
       "icon": "⚡",
+      "related": [
+        "eclipse_cycle",
+        "battery_cycles",
+        "thermal_management",
+        "solar_power",
+        "rtg_power",
+        "supercapacitors"
+      ],
       "i18n": {
         "title": "Power Bus ETS",
-        "shortText": "Emergency load-shedding prioritizes critical systems — just like a warship's damage control.",
-        "fullText": "Spacecraft electrical power is distributed through regulated buses (typically 28V or 100V DC). When power generation drops (eclipse, panel failure), an Energy Transfer System (ETS) sheds non-critical loads in priority order: science instruments first, then heaters, then communications, with attitude control and life support last to go. Your three-bus power system (Thrust/Sensors/Daughters) lets you manually prioritize.",
-        "unlockHint": "Manage the power buses and battery during operations.",
-        "trlRationale": "Standard load-shedding on every bus"
+        "shortText": "When power runs short, the bus sheds loads in priority order: science first to go, survival systems last.",
+        "fullText": "A spacecraft distributes electricity over regulated buses, typically 28 or 100 volts of direct current. When generation drops, during eclipse or after a panel fault, an energy-transfer system sheds non-critical loads in a set order: science instruments first, then heaters, then communications, with attitude control and survival functions last to go.\n\nIt is damage control by another name, the same triage a warship runs when power gets tight. Your ship splits its power across three buses, Thrust, Sensors, and Daughters, so you can prioritise by hand. Deciding what to starve and what to protect when the budget is thin is one of the quiet skills of staying alive up here.",
+        "realWorld": "Regulated 28 V / 100 V DC buses with priority load-shedding; standard on every spacecraft.",
+        "trlRationale": "Standard load-shedding on every bus.",
+        "unlockHint": "Switch a power bus."
       }
     },
     {
@@ -769,12 +808,19 @@
       "category": "POWER",
       "trl": 9,
       "icon": "☢️",
+      "related": [
+        "solar_power",
+        "thermal_management",
+        "power_bus_management"
+      ],
       "i18n": {
         "title": "Radioisotope Generators",
-        "shortText": "Plutonium-238 decay produces constant power for decades — no moving parts, no fuel to run out.",
-        "fullText": "An RTG is beautifully simple: Plutonium-238 decays, releasing heat. Thermocouples spanning the hot core and cold radiator fins generate electricity from the temperature difference — the Seebeck effect. No turbines, no moving parts, no fuel to run out (half-life: 87.7 years). Voyager 1's three RTGs have powered it for 48+ years — it's now 24 billion km from Earth, in interstellar space, still transmitting at 23 watts. Your 2 kW micro-RTG uses MMRTG technology (Multi-Mission RTG) scaled down from the Mars Curiosity rover's 110W unit. It will outlast every other component on your spacecraft.",
-        "unlockHint": "Manage the power buses and battery during operations.",
-        "trlRationale": "Flown since SNAP-3 (1961); Voyager, Curiosity, Perseverance"
+        "shortText": "Plutonium-238 decays and the heat becomes electricity: decades of steady power, no moving parts, no fuel to burn.",
+        "fullText": "A radioisotope thermoelectric generator (RTG) is elegantly simple. Plutonium-238 decays and gives off heat; thermocouples spanning the hot core and cold radiator fins turn that temperature difference straight into electricity, through the Seebeck effect. Nothing spins, nothing combusts, and the fuel fades on a half-life of 87.7 years.\n\nVoyager 1 has run on three of them for over 45 years and still transmits from interstellar space on a dwindling budget of watts. Your micro-RTG scales down the Multi-Mission RTG design flown on the Curiosity and Perseverance rovers. It ignores eclipse and cold entirely, quietly outlasting every other component you carry.",
+        "realWorld": "Flown since SNAP-3 (1961); Voyager (45+ yrs), Curiosity and Perseverance (MMRTG); Pu-238 half-life 87.7 yr.",
+        "formula": "V ∝ ΔT   (Seebeck effect: output tracks the temperature difference)",
+        "trlRationale": "Flown since SNAP-3 (1961); Voyager, Curiosity, Perseverance.",
+        "unlockHint": "Buy the RTG module upgrade."
       }
     },
     {
@@ -782,12 +828,18 @@
       "category": "POWER",
       "trl": 9,
       "icon": "📉",
+      "related": [
+        "solar_power",
+        "multijunction_pv",
+        "uv_degradation"
+      ],
       "i18n": {
         "title": "Solar Cell Degradation",
-        "shortText": "Radiation and UV gradually reduce solar panel output — panels lose 2-3% efficiency per year in LEO.",
-        "fullText": "Solar cells degrade from proton and electron radiation damage, UV embrittlement of cover glass, and micrometeorite pitting. Typical degradation: 2-3% per year in LEO, 1% in GEO. After 15 years, panels may produce only 60-70% of their beginning-of-life power. Mission designers \"over-size\" solar arrays to ensure adequate end-of-life power. Salvaged panels from old satellites are often severely degraded.",
-        "unlockHint": "Manage the power buses and battery during operations.",
-        "trlRationale": "Observed and modelled on every long-duration mission"
+        "shortText": "Radiation and ultraviolet steadily eat panel output: a couple of percent a year, gone for good.",
+        "fullText": "Solar arrays do not hold their rating. Proton and electron radiation damage the cells, ultraviolet light embrittles and clouds the cover glass, and micrometeoroids pit the surface. In low Earth orbit the loss runs about 2-3% of output per year, a little less in the calmer radiation higher up.\n\nOver a long mission it compounds: after fifteen years a panel may deliver only 60-70% of its beginning-of-life power, so designers oversize arrays to guarantee enough at end of life. It also makes salvage a gamble. Panels pulled off an old derelict can look intact yet supply a fraction of their original watts, one more reason a scavenged part's label lies.",
+        "realWorld": "~2-3%/yr output loss in LEO; arrays oversized for end-of-life power; measured on every long-duration mission.",
+        "trlRationale": "Observed and modelled on every long-duration mission.",
+        "unlockHint": "Take a solar-panel UV degradation warning."
       }
     },
     {
@@ -795,28 +847,43 @@
       "category": "POWER",
       "trl": 9,
       "icon": "☀️",
+      "related": [
+        "sun_sensor",
+        "eclipse_cycle",
+        "multijunction_pv",
+        "battery_chemistry",
+        "power_bus_management",
+        "rtg_power",
+        "solar_cell_degradation",
+        "power_beaming"
+      ],
       "i18n": {
         "title": "Solar Panel Power Generation",
-        "shortText": "Solar panels convert sunlight to electricity — but not in Earth's shadow.",
-        "fullText": "In LEO, spacecraft spend ~35% of each orbit in Earth's shadow. Solar panels produce ~300 W/m² in sunlight, zero in eclipse. Your power distribution system must manage this cycle: charging batteries in sunlight, rationing power in shadow. Panel degradation from radiation reduces output over time.",
-        "unlockHint": "Manage the power buses and battery during operations.",
-        "trlRationale": "Flown on every operational spacecraft since Vanguard 1 (1958)"
-      },
-      "related": [
-        "sun_sensor"
-      ]
+        "shortText": "Solar panels turn sunlight into electricity, and make nothing the moment you cross into Earth's shadow.",
+        "fullText": "Sunlight is free power, and in low Earth orbit a panel delivers on the order of 300 watts per square metre while it is lit. The catch is the shadow: a low orbit spends roughly a third of every lap in eclipse, when the panels produce nothing at all.\n\nThat rhythm defines your power budget. The distribution system charges batteries in daylight and rations draw in darkness, and it must keep doing so as the panels slowly lose output to radiation and ultraviolet aging. Your mothership has run on this cycle since the first burn; every watt you spend on thrust, sensors, or daughters comes out of it.",
+        "realWorld": "Flown on essentially every spacecraft since Vanguard 1 (1958); LEO arrays deliver ~300 W/m² in sunlight, zero in eclipse.",
+        "formula": "P = η · G · A   (efficiency × solar flux × area)",
+        "trlRationale": "Flown on every operational spacecraft since Vanguard 1 (1958).",
+        "unlockHint": "Draw the battery below half charge."
+      }
     },
     {
       "id": "solid_state_battery",
       "category": "POWER",
       "trl": 5,
       "icon": "🔋",
+      "related": [
+        "battery_chemistry",
+        "battery_cycles",
+        "graphene_supercap"
+      ],
       "i18n": {
         "title": "Solid-State Batteries",
-        "shortText": "Replace the liquid electrolyte with a solid ceramic or glass — no fire risk in space.",
-        "fullText": "Replace the liquid electrolyte with a solid ceramic or glass. No sloshing in microgravity, no fire risk from thermal runaway, and 40% more energy per kilogram. Spacecraft batteries endure 50,000+ charge/discharge cycles — once every 92-minute orbit for years. Toyota, QuantumScape, and NASA JPL are all racing to flight-qualify solid-state cells. Your battery survives what would melt a phone battery.",
-        "unlockHint": "Manage the power buses and battery during operations.",
-        "trlRationale": "Automotive solid-state cells emerging; not yet space-qualified"
+        "shortText": "Swap the liquid electrolyte for solid ceramic: no sloshing, no fire, and more energy per kilogram.",
+        "fullText": "A conventional lithium-ion cell carries a flammable liquid electrolyte. A solid-state cell replaces it with a solid ceramic or glass, which removes the fire risk from thermal runaway, tolerates temperature swings better, and packs perhaps 40% more energy per kilogram.\n\nFor a spacecraft cycling its pack every 92 minutes for years, those gains matter, but the technology is not yet flight-proven; carmakers and labs are racing to qualify it on the ground first. Your cells are an early space-rated version, shrugging off duty that would swell and melt a phone battery and buying more reserve for the same mass you had to haul to orbit.",
+        "realWorld": "Automotive solid-state cells emerging (Toyota, QuantumScape); ~40% higher energy density; not yet space-qualified.",
+        "trlRationale": "Automotive solid-state cells emerging; not yet space-qualified.",
+        "unlockHint": "Buy the solid-state battery upgrade."
       }
     },
     {
@@ -824,12 +891,21 @@
       "category": "POWER",
       "trl": 9,
       "icon": "🔋",
+      "related": [
+        "battery_cycles",
+        "solar_power",
+        "solid_state_battery",
+        "eclipse_cycle",
+        "supercapacitors",
+        "catalog_les1"
+      ],
       "i18n": {
         "title": "Space-Grade Batteries",
-        "shortText": "Li-ion cells designed for 50,000+ charge cycles in extreme temperatures.",
-        "fullText": "Space batteries must survive 16 charge-discharge cycles per day (one per orbit), extreme temperatures (-20°C to +40°C), and radiation. Depth-of-discharge (DoD) is kept at 25-30% to maximize cycle life — you only use a quarter of the capacity to get 50,000+ cycles (9+ years). This is why your battery shows plenty of capacity but the system treats 25% as \"empty\".",
-        "unlockHint": "Manage the power buses and battery during operations.",
-        "trlRationale": "Li-ion flown since 1990s; space-grade cells routine"
+        "shortText": "Space Li-ion runs shallow on purpose: use a quarter of the pack and it survives tens of thousands of cycles.",
+        "fullText": "A satellite battery charges and discharges about 16 times a day, once per orbit, through swings of temperature and steady radiation. To survive that, space-grade lithium-ion cells are cycled shallow: only a quarter to a third of the capacity is used per orbit, because shallow cycles last far longer than deep ones.\n\nThat limit buys more than 50,000 cycles, roughly nine years of orbits or better. It also explains a quirk you will notice: the pack reads plenty of charge, yet the system calls 25% empty and refuses to go lower. It is not being stingy; it is protecting the one component you cannot swap out on station.",
+        "realWorld": "Space Li-ion cycled at ~25-30% depth of discharge for 50,000+ cycles; flown since the 1990s.",
+        "trlRationale": "Li-ion flown since 1990s; space-grade cells routine.",
+        "unlockHint": "Fly until the mothership flags a battery-cycle note."
       }
     },
     {
@@ -837,12 +913,18 @@
       "category": "POWER",
       "trl": 9,
       "icon": "🌀",
+      "related": [
+        "detumble",
+        "net_yo_yo_despin"
+      ],
       "i18n": {
         "title": "Spin Stabilization",
-        "shortText": "A spinning object resists attitude changes — useful for stability, but must be de-spun before capture.",
-        "fullText": "Angular momentum conservation means a spinning object maintains its orientation. Early satellites used spin stabilization (rotating at 1-2 RPM) instead of reaction wheels — simpler but limits antenna pointing. Tumbling debris is often spin-stabilized by accident. Your ablation laser can gradually de-spin targets by vaporizing material on one side, creating a tiny counter-torque. It's like using a garden hose to stop a merry-go-round.",
-        "unlockHint": "Manage the power buses and battery during operations.",
-        "trlRationale": "Flown since Explorer 1 (1958)"
+        "shortText": "A spinning body holds its heading like a thrown football: cheap stability, but a catch must be de-spun first.",
+        "fullText": "Spin a body up and its angular momentum resists any change in orientation, so it holds a steady heading without active control. Early satellites used this, rotating at a couple of revolutions per minute instead of carrying reaction wheels, simple and reliable at the cost of only pointing along the spin axis.\n\nDebris inherits the trick by accident: a dead satellite left tumbling is spin-stabilised whether it meant to be or not, and you cannot safely grab a spinning target. Your ablation laser de-spins one gently, vaporising a whisper of material off one side to make a tiny counter-torque, like stopping a merry-go-round with a garden hose, until the tumble is slow enough to catch.",
+        "realWorld": "Spin stabilisation flown since Explorer 1 (1958); laser/ablation de-spin is an emerging debris-handling technique.",
+        "formula": "L = I·ω   (angular momentum conserved; a spinning body resists reorientation)",
+        "trlRationale": "Flown since Explorer 1 (1958).",
+        "unlockHint": "De-spin a target with the ablation laser."
       }
     },
     {
@@ -850,12 +932,18 @@
       "category": "POWER",
       "trl": 8,
       "icon": "⚡",
+      "related": [
+        "graphene_supercap",
+        "battery_chemistry",
+        "power_bus_management"
+      ],
       "i18n": {
         "title": "Supercapacitors",
-        "shortText": "Burst power devices that charge in seconds — perfect for deploying daughters and lasso.",
-        "fullText": "Supercapacitors store less total energy than batteries but can discharge it 100× faster. They're perfect for brief high-power operations: deploying a daughter, launching a lasso, activating electromagnets. Your spacecraft charges supercap banks from solar panels, then dumps the energy in milliseconds when needed. They last millions of cycles with no degradation.",
-        "unlockHint": "Manage the power buses and battery during operations.",
-        "trlRationale": "Supercap modules flown on CubeSats; mature for bus applications"
+        "shortText": "Store less than a battery but dump it a hundred times faster: burst power for lassos, nets, and magnets.",
+        "fullText": "A supercapacitor holds far less total energy than a battery, but it can pour that energy out perhaps a hundred times faster and take millions of charge cycles without wearing down. That makes it the right tool for short, violent power demands.\n\nYour spacecraft trickle-charges a supercapacitor bank from the panels, then dumps it in milliseconds to fling a lasso, launch a net, or fire an electromagnet. A battery asked to deliver that spike would sag or degrade; the supercapacitor shrugs it off. The division of labour is deliberate: batteries for endurance, supercapacitors for the punch.",
+        "realWorld": "Supercapacitor modules flown on CubeSats; mature for burst-power bus applications.",
+        "trlRationale": "Supercap modules flown on CubeSats; mature for bus applications.",
+        "unlockHint": "Fly until the mothership reports supercapacitor use."
       }
     },
     {
@@ -863,12 +951,18 @@
       "category": "POWER",
       "trl": 9,
       "icon": "🌡️",
+      "related": [
+        "mli_insulation",
+        "power_bus_management",
+        "rtg_power"
+      ],
       "i18n": {
         "title": "Thermal Management",
-        "shortText": "In space, the sun side is +120°C while the shadow side is -150°C — simultaneously.",
-        "fullText": "With no atmosphere to conduct heat, temperature in space is purely radiative. Direct sunlight heats surfaces to +120°C while shadowed sides cool to -150°C. Multi-Layer Insulation (MLI) blankets, heat pipes, and radiator panels manage this gradient. Your bus maintains +20°C internally through active thermal control — heaters in shadow, radiators in sun.",
-        "unlockHint": "Manage the power buses and battery during operations.",
-        "trlRationale": "MLI + heaters + radiators on every spacecraft"
+        "shortText": "Sunlit surfaces bake past 120°C while shadowed ones freeze below -150°C, at the same time on the same hull.",
+        "fullText": "With no air to carry heat away, temperature in space is set entirely by radiation. A surface in direct sunlight can climb past 120°C while a shadowed one falls below -150°C on the very same spacecraft. Left alone, that gradient would crack structures and kill electronics.\n\nThe fixes work together, passive and active: multi-layer insulation blankets, heat pipes moving warmth to where it is needed, radiator panels dumping it to space, and heaters for the cold soak. Your bus holds around 20°C inside by balancing all of them, heaters on the shadow side and radiators on the sunlit side. Thermal control is invisible when it works and mission-ending when it does not.",
+        "realWorld": "Radiative-only environment (+120°C sun / -150°C shade); MLI, heat pipes, radiators, heaters on every spacecraft.",
+        "trlRationale": "MLI + heaters + radiators on every spacecraft.",
+        "unlockHint": "Fly until the mothership flags a thermal gradient."
       }
     },
     {
@@ -876,12 +970,17 @@
       "category": "POWER",
       "trl": 5,
       "icon": "📡",
+      "related": [
+        "solar_power",
+        "multijunction_pv"
+      ],
       "i18n": {
         "title": "Wireless Power Transmission",
-        "shortText": "Ground-based transmitters beam microwave energy to your spacecraft's rectenna array.",
-        "fullText": "Nikola Tesla dreamed of it in 1901. A century later, it works: ground-based phased-array microwave transmitters focus a beam on your spacecraft's rectenna — a mesh of antennas that convert microwave energy directly to DC electricity. JAXA demonstrated 1.8 kW wireless power transfer over 55 meters in 2015. Your receiver operates at 5.8 GHz (ISM band) with a 1 m² rectenna panel achieving ~85% RF-to-DC conversion. The beam is only available when you're over a ground station — but during those 30–90 second windows, you get free power. The future of space infrastructure: orbital solar farms beaming terawatts to Earth.",
-        "unlockHint": "Manage the power buses and battery during operations.",
-        "trlRationale": "JAXA (2015) demonstrated 1.8 kW over 55 m ground-to-ground; no on-orbit heritage"
+        "shortText": "Beam power as microwaves and a spacecraft can charge without carrying its own source: an old dream, now demonstrated.",
+        "fullText": "Nikola Tesla imagined transmitting power without wires in 1901; a century on, it works. A ground or orbital transmitter focuses a microwave or laser beam onto a receiving array, a rectenna, which converts the beam straight to direct-current electricity at high efficiency.\n\nThe demonstrations are real but small. JAXA beamed 1.8 kilowatts across 50 metres in 2015, and in 2023 Caltech's orbital experiment sent power to Earth for the first time, though only a trace reached the ground. Your receiver harvests a beam during the brief seconds you overfly a transmitter station, free power with no panel to age and no eclipse to wait out, pointing toward the far larger orbital power farms still on the drawing board.",
+        "realWorld": "JAXA 1.8 kW over 50 m (2015); Caltech MAPLE beamed power to Earth (2023, proof of concept, trace power); no operational on-orbit heritage.",
+        "trlRationale": "JAXA (2015) 1.8 kW over 50 m; Caltech MAPLE (2023) first space-to-Earth demo; no operational heritage.",
+        "unlockHint": "Buy the power-beaming upgrade."
       }
     },
     {
@@ -892,7 +991,8 @@
       "related": [
         "uv_degradation",
         "mmod_impact",
-        "heritage_ldef"
+        "heritage_ldef",
+        "mli_insulation"
       ],
       "i18n": {
         "title": "Atomic Oxygen Erosion",
@@ -1040,7 +1140,8 @@
       "icon": "🌞",
       "related": [
         "atomic_oxygen",
-        "radiation_dose"
+        "radiation_dose",
+        "solar_cell_degradation"
       ],
       "i18n": {
         "title": "UV Degradation",
@@ -1190,12 +1291,18 @@
       "category": "TETHERS",
       "trl": 3,
       "icon": "🥅",
+      "related": [
+        "net_yo_yo_despin",
+        "miura_ori_net",
+        "tether_materials"
+      ],
       "i18n": {
         "title": "Capture Net — Weighted Mesh",
         "shortText": "Capture net. A weighted Dyneema mesh spun open by gyroscopic rotation. Gentle enough for delicate debris — and it still works in vacuum.",
-        "fullText": "Capture net. A weighted Dyneema mesh spun open by gyroscopic rotation. Gentle enough for delicate debris — and it still works in vacuum. The lasso projectile is a spinning octagonal net — lightweight Dyneema lines with perimeter weights that keep it spread open during flight. Launched on a tether, the net wraps gently around debris on contact and reels it back to the mothership intact.",
-        "unlockHint": "Work the daughters' tethers, reels, and nets.",
-        "trlRationale": "Spinning net / bolas capture is conceptual; no flight heritage"
+        "fullText": "The lasso is a spinning octagonal net of lightweight Dyneema lines, its perimeter studded with small weights that centrifugal force holds spread open in flight. Launched on a tether, it needs no rigid frame and no propellant of its own.\n\nOn contact the mesh wraps around the target rather than striking it, gentle enough for a fragile or oddly shaped derelict that a rigid grab would shatter or send tumbling. Then the reel takes over and draws the whole bundle back to the mothership intact. It is a deliberately low-violence capture: catch first, ask questions later, without adding fresh fragments to the field you are trying to clear.",
+        "realWorld": "Spinning-net (bolas) capture is conceptual; nets flown on RemoveDEBRIS (2018).",
+        "trlRationale": "Spinning net / bolas capture is conceptual; no flight heritage.",
+        "unlockHint": "Fire the lasso."
       }
     },
     {
@@ -1203,29 +1310,38 @@
       "category": "TETHERS",
       "trl": 5,
       "icon": "⚡",
-      "i18n": {
-        "title": "Electrodynamic Tethers",
-        "shortText": "A conductive tether moving through Earth's magnetic field generates current — propellantless propulsion.",
-        "fullText": "An electrodynamic tether (EDT) is a long conductive wire that generates electrical current as it moves through Earth's magnetic field (Faraday's law). By controlling current direction, you can create thrust or drag without propellant. NASA's TSS-1R experiment deployed a 20 km tether from the Space Shuttle in 1996 — it generated 3,500 volts before the tether snapped.",
-        "unlockHint": "Work the daughters' tethers, reels, and nets.",
-        "trlRationale": "TSS-1R demonstrated EDT current generation; not operational"
-      },
       "related": [
         "space_tether",
-        "tether_dynamics"
-      ]
+        "tether_dynamics",
+        "tether_materials"
+      ],
+      "i18n": {
+        "title": "Electrodynamic Tethers",
+        "shortText": "Drag a conductive cable through Earth’s magnetic field and it makes current: thrust or drag with no propellant.",
+        "fullText": "An electrodynamic tether (EDT) is a long conductive wire, and moving it through Earth's magnetic field induces a voltage along its length, by Faraday's law of induction. Let that current flow and the field pushes back on the wire, giving thrust or drag on demand, all without spending propellant.\n\nThat makes EDTs a tempting deorbit tool: run the current one way and you drag a derelict down for free. The Shuttle's TSS-1R deployed a nearly 20 km tether in 1996 and generated some 3,500 volts before the tether abruptly snapped, a reminder that the forces are large and the engineering unforgiving. The physics is proven; a robust operational system is not here yet.",
+        "realWorld": "TSS-1R (1996) generated ~3,500 V on a ~20 km tether before it snapped; EDT deorbit not yet operational.",
+        "formula": "EMF = ∫ (v × B) · dL   (motional induction along the tether)",
+        "trlRationale": "TSS-1R demonstrated EDT current generation; not operational.",
+        "unlockHint": "Fly until the mothership mentions the electrodynamic tether."
+      }
     },
     {
       "id": "miura_ori_net",
       "category": "TETHERS",
       "trl": 7,
       "icon": "📐",
+      "related": [
+        "net_yo_yo_despin",
+        "bolas_weapon",
+        "tether_materials"
+      ],
       "i18n": {
         "title": "Miura-Ori Net Folding",
-        "shortText": "Nets fold into compact packages using Miura-ori — a folding pattern that deploys in a single pull.",
-        "fullText": "Miura-ori is a rigid folding pattern invented by Koryo Miura for satellite solar panels. It folds a flat sheet into a compact stack that unfurls completely with a single diagonal pull. Your capture nets use this pattern — the SMA (shape memory alloy) cinch wire activates on contact, triggering the Miura-ori unfold in under 3 seconds to envelope the target.",
-        "unlockHint": "Work the daughters' tethers, reels, and nets.",
-        "trlRationale": "Miura-ori flown on SFU (1995); net capture via RemoveDEBRIS (2018)"
+        "shortText": "A fold pattern from origami packs a net flat, then unfurls it completely with one pull.",
+        "fullText": "Miura-ori is a rigid folding pattern devised by Koryo Miura to stow satellite solar arrays. It collapses a flat sheet into a compact stack that springs fully open from a single diagonal pull, with no snagging and no separate hinges.\n\nYour capture nets borrow it. Stowed, the net is a tight package; on contact a shape-memory-alloy cinch wire triggers, and the Miura-ori pattern unfolds the mesh to envelop the target in under three seconds. The appeal is reliability: one actuation, one clean deployment, in an environment where a jammed fold means a missed catch. The pattern first flew on Japan's SFU spacecraft in 1995.",
+        "realWorld": "Miura-ori flown on Japan's SFU (1995); net capture demonstrated by RemoveDEBRIS (2018).",
+        "trlRationale": "Miura-ori flown on SFU (1995); net capture via RemoveDEBRIS (2018).",
+        "unlockHint": "Fire the crossbow net."
       }
     },
     {
@@ -1233,12 +1349,20 @@
       "category": "TETHERS",
       "trl": 3,
       "icon": "🎣",
+      "related": [
+        "space_tether",
+        "tether_dynamics",
+        "tether_reel_in",
+        "net_yo_yo_despin",
+        "tether_tangle_physics"
+      ],
       "i18n": {
         "title": "Motorized Reel Mechanics",
-        "shortText": "The reel motor on the mothership does all the hauling — zero fuel cost for retrieval.",
-        "fullText": "Unlike traditional spacecraft capture systems that use propulsion for retrieval, your daughters use a motorized reel on the mothership. At 15 W power draw, the reel winches tether at 0.25 m/s loaded (0.5 m/s unloaded). The mechanical advantage means zero propellant cost for retrieval — only electrical power. A brake system handles tension spikes during retrieval of tumbling objects.",
-        "unlockHint": "Work the daughters' tethers, reels, and nets.",
-        "trlRationale": "Mothership-mounted reel is game-speculative"
+        "shortText": "The mothership reel motor does the hauling on electricity alone: retrieval that spends watts, not fuel.",
+        "fullText": "Most capture concepts burn propellant to drag a catch back. Yours does not: a motorised reel on the mothership winches the tether in, drawing about 15 watts and pulling at a quarter-metre per second under load, half that empty. The mechanical advantage means retrieval costs electricity, never fuel.\n\nA tumbling catch fights back, so the reel carries a brake to ride out the tension spikes as an off-balance target jerks the line. Get it right and a dead satellite comes home on winch power alone. Get it wrong and a spike can snap the tether, which is why the reel controls tension as carefully as it controls speed.",
+        "realWorld": "Mothership-mounted powered reel (~15 W, ~0.25 m/s loaded) is game-speculative; grounded in real winch-capture research.",
+        "trlRationale": "Mothership-mounted reel is game-speculative.",
+        "unlockHint": "Reel in a tether."
       }
     },
     {
@@ -1246,12 +1370,20 @@
       "category": "TETHERS",
       "trl": 6,
       "icon": "🪀",
+      "related": [
+        "miura_ori_net",
+        "bolas_weapon",
+        "reel_mechanics",
+        "spin_stabilization"
+      ],
       "i18n": {
         "title": "Net Spin & the Yo-Yo Despin",
-        "shortText": "The net launcher spins the canister; radius growth — not torque — slows the blossom.",
-        "fullText": "A capture net leaves its launcher spinning fast (the spin table torques the canister; the equal-and-opposite reaction is absorbed by the daughter's reaction wheel). In flight no external torque acts on the net — its angular momentum L = Iω is conserved. As the rim weights fly outward and the mouth blossoms open, the moment of inertia grows with radius squared (I ∝ r²), so the spin rate must FALL to keep L constant. This is the yo-yo despin effect — the same trick sounding rockets use, with no fuel and no brakes. The settled spin ({{CAPTURE_NET.LARGE.SPIN_HZ*60}}/{{CAPTURE_NET.MEDIUM.SPIN_HZ*60}}/{{CAPTURE_NET.SMALL.SPIN_HZ*60}} RPM by net class) keeps centripetal tension on each rim weight high enough to hold the mouth open in 0g until the cinch fires.",
-        "unlockHint": "Work the daughters' tethers, reels, and nets.",
-        "trlRationale": "RemoveDEBRIS net demo (2018); yo-yo despin flown on sounding rockets since the 1960s"
+        "shortText": "The net launcher spins the canister; radius growth, not torque, is what slows the blossom.",
+        "fullText": "A capture net leaves its launcher spinning fast: the spin table torques the canister, and the daughter's reaction wheel soaks up the equal-and-opposite kick. Once it is flying free, no external torque acts on the net, so its angular momentum L = Iω is conserved.\n\nAs the rim weights fly outward and the mouth blossoms open, the moment of inertia grows with radius squared, so the spin rate must fall to keep L fixed. This is the yo-yo despin effect, the same trick sounding rockets have used since the 1960s, with no fuel and no brakes. The settled spin ({{CAPTURE_NET.LARGE.SPIN_HZ*60}}/{{CAPTURE_NET.MEDIUM.SPIN_HZ*60}}/{{CAPTURE_NET.SMALL.SPIN_HZ*60}} RPM by net class) keeps centripetal tension on each rim weight high enough to hold the mouth open in zero gravity until the cinch fires.",
+        "realWorld": "RemoveDEBRIS net demo (2018); yo-yo despin flown on sounding rockets since the 1960s.",
+        "formula": "L = I·ω = const;  I ∝ r²   (spin rate falls as the net opens)",
+        "trlRationale": "RemoveDEBRIS net demo (2018); yo-yo despin flown on sounding rockets since the 1960s.",
+        "unlockHint": "Fire a capture net."
       }
     },
     {
@@ -1259,12 +1391,20 @@
       "category": "TETHERS",
       "trl": 5,
       "icon": "🪢",
+      "related": [
+        "tether_dynamics",
+        "tether_materials",
+        "edt_physics",
+        "tether_reel_in",
+        "reel_mechanics"
+      ],
       "i18n": {
         "title": "Space Tethers",
-        "shortText": "Cables connecting objects in orbit — used for momentum, power, and propulsion.",
-        "fullText": "Space tethers can be tens of kilometers long. A taut tether between two objects at different altitudes experiences a gravity gradient that keeps it vertical. The lower end orbits faster than a free object at that altitude, and the upper end orbits slower. This principle enables momentum exchange, propellantless propulsion, and your daughter's ability to reel in debris without fuel.",
-        "unlockHint": "Work the daughters' tethers, reels, and nets.",
-        "trlRationale": "TSS-1R (1996), YES2 (2007) demonstrated; not operational"
+        "shortText": "Cables kilometres long that trade momentum, make power, or reel a catch in, all without propellant.",
+        "fullText": "A space tether is a cable, sometimes tens of kilometres long, strung between two objects in orbit. Held taut, the gravity gradient keeps it pointing up and down, because the lower end wants to orbit faster than the upper end. That difference stores usable energy.\n\nExploited well, tethers exchange momentum between objects, generate power or thrust, and let you reel a captured object in without burning fuel. Demonstrations like the Shuttle's TSS-1R in 1996 and Europe's YES2 in 2007 proved the physics, though none is operational yet. Your daughters lean on the same principle to haul debris home on electricity instead of propellant.",
+        "realWorld": "TSS-1R (1996) and YES2 (2007, ~31.7 km) demonstrated tether deployment; not yet operational.",
+        "trlRationale": "TSS-1R (1996), YES2 (2007) demonstrated; not operational.",
+        "unlockHint": "Deploy a daughter's arm."
       }
     },
     {
@@ -1272,12 +1412,20 @@
       "category": "TETHERS",
       "trl": 9,
       "icon": "〰️",
+      "related": [
+        "space_tether",
+        "reel_mechanics",
+        "tether_materials",
+        "edt_physics",
+        "tether_tangle_physics"
+      ],
       "i18n": {
         "title": "Tether Dynamics",
-        "shortText": "Long tethers vibrate like guitar strings in orbit — managing oscillation is critical for operations.",
-        "fullText": "A 500-meter tether in LEO behaves like an extremely long, thin guitar string. Gravity gradient, atmospheric drag, and electrodynamic forces all induce vibrations. Deployment speed must be carefully controlled — too fast causes dangerous oscillations, too slow wastes time. The reel motor on your mothership uses active damping to suppress tether modes.",
-        "unlockHint": "Work the daughters' tethers, reels, and nets.",
-        "trlRationale": "Modelled and observed on TSS-1R, YES2"
+        "shortText": "A long tether behaves like a giant guitar string; let it oscillate and a capture turns dangerous.",
+        "fullText": "A 500-metre tether in orbit acts like an enormously long, thin guitar string. Gravity gradient, atmospheric drag, and electrodynamic forces all pluck it, setting up vibrations that travel its length. Deploy it too fast and the oscillations grow dangerous; too slow and you waste the mission clock.\n\nManaging those modes is the whole game. Your mothership's reel motor pays the tether out under controlled tension and actively damps the swaying, reading it back through tension sensors. A well-damped tether reels a tumbling catch home smoothly; an undamped one can whip, snag, or snap, which is why the reel never simply lets go and hauls.",
+        "realWorld": "Tether oscillation modelled and observed on TSS-1R and YES2; active reel damping controls it.",
+        "trlRationale": "Modelled and observed on TSS-1R, YES2.",
+        "unlockHint": "Reel in a tether."
       }
     },
     {
@@ -1285,12 +1433,22 @@
       "category": "TETHERS",
       "trl": 9,
       "icon": "🧵",
+      "related": [
+        "space_tether",
+        "tether_dynamics",
+        "tether_reel_in",
+        "bolas_weapon",
+        "edt_physics",
+        "miura_ori_net"
+      ],
       "i18n": {
         "title": "Tether Materials: Dyneema & Zylon",
-        "shortText": "Space tethers use ultra-high molecular weight polymers — stronger than steel cables at a fraction of the mass.",
-        "fullText": "Dyneema (UHMWPE) and Zylon (PBO) fibers achieve tensile strengths of 3-6 GPa — comparable to steel at 1/8 the density. Zylon is stronger but degrades under UV light; Dyneema is more durable in LEO. Your tether tiers upgrade through progressively stronger materials, allowing longer tether deployments and heavier captures.",
-        "unlockHint": "Work the daughters' tethers, reels, and nets.",
-        "trlRationale": "Dyneema/Zylon flown as lanyards; fibre properties well-characterised"
+        "shortText": "Dyneema and Zylon fibres out-pull steel at an eighth the weight: the reason a thread can haul a satellite.",
+        "fullText": "A tether has to be impossibly strong and impossibly light at once, so it is spun from ultra-high-strength polymer fibre. Dyneema (ultra-high-molecular-weight polyethylene) and Zylon (PBO) reach tensile strengths of 3-6 gigapascals, matching steel at roughly an eighth of the density.\n\nEach has a catch. Zylon is stronger but degrades under ultraviolet light, while Dyneema holds up better in the low-orbit environment. Your tether upgrades climb through progressively tougher fibres, and each step buys longer deployments and heavier captures. The fibre's strength-to-weight is the real limit: it sets how big a derelict a thread the width of a shoelace can safely drag.",
+        "realWorld": "Dyneema (UHMWPE) and Zylon (PBO) reach 3-6 GPa at ~1/8 steel's density; Zylon degrades under UV.",
+        "formula": "specific strength = tensile strength / density   (the figure of merit)",
+        "trlRationale": "Dyneema/Zylon flown as lanyards; fibre properties well-characterised.",
+        "unlockHint": "Fit a tether upgrade."
       }
     },
     {
@@ -1298,12 +1456,18 @@
       "category": "TETHERS",
       "trl": 4,
       "icon": "🎣",
+      "related": [
+        "space_tether",
+        "reel_mechanics",
+        "tether_materials"
+      ],
       "i18n": {
         "title": "Tether Reel-In: Free ΔV",
-        "shortText": "Reeling in a captured object costs no propellant — gravity does the work.",
-        "fullText": "When your daughter captures debris and reels it in, the tether does the work. The debris descends to a lower orbit (losing energy), while the mothership gains that energy. In practice, the mass difference makes this essentially free. This is why tether-based capture is so efficient compared to chemical propulsion rendezvous.",
-        "unlockHint": "Work the daughters' tethers, reels, and nets.",
-        "trlRationale": "Motorised reel capture demonstrated in ground/lab tests only"
+        "shortText": "Reeling a catch in costs no propellant: the orbital energy difference does the work for you.",
+        "fullText": "When a daughter captures debris and the reel hauls it in, gravity foots the bill. As the tether shortens, the captured object drops to a lower orbit and gives up energy while the mothership gains it, and because your ship massively outweighs the catch, the exchange is essentially free.\n\nThat is why tethered capture beats a chemical rendezvous for cleanup: no propellant is spent bringing the target home, only the electricity to run the reel motor and its brake. Fuel is the one resource you cannot refill up here, so a method that trades it for winch power changes what is worth chasing. Every catch reeled in cost you watts, not delta-V.",
+        "realWorld": "Motorised tether reel-in demonstrated in ground and lab tests; propellant-free retrieval via orbital-energy exchange.",
+        "trlRationale": "Motorised reel capture demonstrated in ground/lab tests only.",
+        "unlockHint": "Capture a target with an arm."
       }
     },
     {
@@ -1311,12 +1475,17 @@
       "category": "TETHERS",
       "trl": 2,
       "icon": "🪢",
+      "related": [
+        "reel_mechanics",
+        "tether_dynamics"
+      ],
       "i18n": {
         "title": "Tether Tangle Physics",
-        "shortText": "When tethers cross, friction locks them together. Resolving tangles requires careful slack-pulse sequences.",
-        "fullText": "Tether tangles are the bane of multi-daughter operations. When two tethers cross under tension, friction holds them locked. The solution: inject a precisely timed slack pulse into one tether, allowing it to float free while the other remains taut. Your cradle system detects tangles via tension sensors and can auto-resolve minor crossings, but severe tangles require manual intervention — or cutting free.",
-        "unlockHint": "Work the daughters' tethers, reels, and nets.",
-        "trlRationale": "Game concept — multi-tether space operations not yet flown"
+        "shortText": "Cross two tethers under tension and friction locks them; freeing the snarl takes a timed slack pulse.",
+        "fullText": "Run several daughters on tethers at once and the lines can cross. Under tension, friction at the crossing point locks them together, and pulling harder only cinches the snarl tighter, the bane of multi-tether operations.\n\nThe fix is counterintuitive: inject a precisely timed slack pulse into one line so it briefly floats free of the other while the second stays taut, letting the crossing slip apart. Your cradle watches tension across all the tethers and auto-resolves minor crossings this way, but a bad tangle still needs a manual hand, or, as a last resort, cutting a line free and writing off the catch on it.",
+        "realWorld": "Multi-tether operations not yet flown; slack-pulse untangling is a game concept grounded in cable-friction mechanics.",
+        "trlRationale": "Game concept — multi-tether space operations not yet flown.",
+        "unlockHint": "Tangle two tethers."
       }
     },
     {
@@ -1681,12 +1850,17 @@
       "category": "SENSORS",
       "trl": 3,
       "icon": "📡",
+      "related": [
+        "lidar_sensing",
+        "docking_precision"
+      ],
       "i18n": {
         "title": "Distributed Pulse Scan",
-        "shortText": "Multiple daughters transmit radar pulses simultaneously — distributed aperture gives superior resolution.",
-        "fullText": "A single small radar antenna has poor angular resolution. But by timing pulses from multiple daughters spread across hundreds of meters, your cradle system creates a synthetic aperture — a virtual antenna the size of the entire daughter constellation. This distributed pulse scan can detect debris down to 1 cm at ranges your single mothership radar could never achieve.",
-        "unlockHint": "Run scans (S / W) and read the sensor suite.",
-        "trlRationale": "Distributed synthetic aperture across daughter arms — game-speculative"
+        "shortText": "Time pulses from daughters spread across hundreds of metres and the swarm acts as one giant radar dish.",
+        "fullText": "A single small radar antenna sees the sky coarsely; its resolution is set by its size, and a daughter's dish is tiny. The distributed pulse scan gets around that by firing radar pulses from several daughters spread across hundreds of metres and combining the returns with precise timing.\n\nThat synthesises an aperture the size of the whole constellation, a virtual antenna far larger than any one craft carries, sharp enough to pick out debris down to a centimetre at ranges the mothership's own radar could never reach. It is the same principle as ground radio-telescope arrays, applied to a formation of small spacecraft. The concept is speculative, but the physics of aperture synthesis is well proven.",
+        "realWorld": "Aperture synthesis is proven in radio astronomy; a debris-scanning distributed array across daughters is game-speculative.",
+        "trlRationale": "Distributed synthetic aperture across daughter arms — game-speculative.",
+        "unlockHint": "Complete a pulse scan (W)."
       }
     },
     {
@@ -1694,12 +1868,18 @@
       "category": "SENSORS",
       "trl": 8,
       "icon": "📡",
+      "related": [
+        "imu_drift",
+        "star_tracker",
+        "kalman_filtering"
+      ],
       "i18n": {
         "title": "GPS-Denied Navigation",
-        "shortText": "When GPS is unavailable, spacecraft rely on star trackers and inertial measurement units.",
-        "fullText": "GPS signals can be blocked by solar storms, SAA passages, or geometry. Without GPS, spacecraft rely on star trackers (cameras that match star patterns to catalogs) and IMUs (accelerometers + gyroscopes that dead-reckon position). Kalman filters fuse these noisy measurements into usable position estimates. Military spacecraft are designed to operate GPS-denied from the start.",
-        "unlockHint": "Run scans (S / W) and read the sensor suite.",
-        "trlRationale": "Military GPS-denied nav; still maturing on civilian platforms"
+        "shortText": "Lose the satnav fix and you fall back on stars and inertial sensors: dead reckoning until the signal returns.",
+        "fullText": "Satellite navigation is not guaranteed in orbit. Solar storms, South Atlantic Anomaly passes, and simple geometry can block or degrade the signal, leaving a spacecraft to find itself another way.\n\nThe fallback is onboard: a star tracker matching star patterns for absolute attitude, and an inertial unit dead-reckoning motion, with a Kalman filter fusing the two into a usable position estimate. Military spacecraft are built to run this way from the start, never trusting an outside signal an adversary could deny. Your ship treats a lost fix the same way, leaning on its own senses rather than waiting for the constellation to come back.",
+        "realWorld": "GPS-denied navigation via star trackers + inertial units + Kalman fusion; standard on military spacecraft.",
+        "trlRationale": "Military GPS-denied nav; still maturing on civilian platforms.",
+        "unlockHint": "Take a GPS-denied navigation event."
       }
     },
     {
@@ -1707,45 +1887,60 @@
       "category": "SENSORS",
       "trl": 9,
       "icon": "🧭",
+      "related": [
+        "star_tracker",
+        "sun_sensor",
+        "kalman_filtering",
+        "gps_denied"
+      ],
       "i18n": {
         "title": "Inertial Measurement Unit",
-        "shortText": "Gyros and accelerometers track motion between star fixes — but they drift.",
-        "fullText": "An IMU contains three gyroscopes and three accelerometers measuring rotation and acceleration. Between star tracker fixes, the IMU dead-reckons the spacecraft's attitude. But small measurement errors accumulate (drift), requiring periodic correction. Modern fiber-optic gyros drift ~0.01°/hour. Mechanical gyros were worse — Apollo astronauts had to realign every few hours.",
-        "unlockHint": "Run scans (S / W) and read the sensor suite.",
-        "trlRationale": "Fibre-optic gyros standard since 1990s"
-      },
-      "related": [
-        "sun_sensor"
-      ]
+        "shortText": "Gyros and accelerometers dead-reckon your motion between star fixes, accurate but slowly drifting off truth.",
+        "fullText": "An inertial measurement unit (IMU) packs three gyroscopes and three accelerometers, sensing rotation and acceleration directly. Between star-tracker fixes it dead-reckons the spacecraft's attitude, integrating its own readings to say how the vehicle has turned.\n\nThe weakness is drift: tiny measurement errors accumulate, so the estimate slowly wanders from truth and must be corrected against an absolute reference. Modern fibre-optic gyros drift only about a hundredth of a degree an hour; the mechanical gyros of the Apollo era were far worse, forcing crews to realign every few hours against the stars. Pair the IMU with a star tracker and you get the best of both: absolute fixes, smoothly bridged.",
+        "realWorld": "Fibre-optic gyros drift ~0.01°/hr, far better than Apollo-era mechanical gyros; standard since the 1990s.",
+        "trlRationale": "Fibre-optic gyros standard since 1990s.",
+        "unlockHint": "Fly until the mothership flags IMU drift."
+      }
     },
     {
       "id": "kalman_filtering",
       "category": "SENSORS",
       "trl": 9,
       "icon": "📊",
+      "related": [
+        "imu_drift",
+        "star_tracker",
+        "pose_estimation",
+        "gps_denied",
+        "attitude_control_system"
+      ],
       "i18n": {
         "title": "Kalman Filtering",
-        "shortText": "Named after Rudolf Kálmán — the algorithm that fuses noisy sensor data into reliable position estimates.",
-        "fullText": "Every sensor lies slightly. GPS has ±10m error, star trackers have arc-second noise, IMUs drift over time. The Kalman filter (1960) is a mathematical algorithm that combines multiple noisy measurements optimally, considering each sensor's known error characteristics. It's used in virtually every navigation system — from Apollo guidance to your smartphone. Your target tracking system runs Kalman filters on all debris contacts.",
-        "unlockHint": "Run scans (S / W) and read the sensor suite.",
-        "trlRationale": "Used since Apollo (1969)"
-      },
-      "related": [
-        "attitude_control_system",
-        "pose_estimation"
-      ]
+        "shortText": "Every sensor lies a little; the Kalman filter blends their lies into one estimate better than any alone.",
+        "fullText": "No sensor is exact. Satellite navigation carries metres of error, a star tracker has arcsecond jitter, an inertial unit drifts. The Kalman filter, published by Rudolf Kalman in 1960, is the algorithm that fuses such noisy streams optimally, weighting each by its known uncertainty to produce an estimate better than any single input.\n\nIt runs almost everywhere a position or attitude must be tracked, from the Apollo guidance computer to the phone in your pocket. On your ship it runs on every debris contact, blending radar, lidar, and optical returns into one confident track. Without it you would have several disagreeing measurements and no principled way to choose; with it you get a single number and a bound on how far to trust it.",
+        "realWorld": "Kalman filter (Rudolf Kalman, 1960); flown on Apollo guidance; standard in navigation everywhere since.",
+        "trlRationale": "Used since Apollo (1969).",
+        "unlockHint": "Clear 20 pieces of debris."
+      }
     },
     {
       "id": "lidar_sensing",
       "category": "SENSORS",
       "trl": 9,
       "icon": "🔴",
+      "related": [
+        "lidar_ranging",
+        "pulse_scan_radar",
+        "pose_estimation"
+      ],
       "i18n": {
         "title": "LIDAR — Time of Flight",
-        "shortText": "Laser pulses measure distance by timing the round trip of light.",
-        "fullText": "LIDAR (Light Detection And Ranging) fires laser pulses and measures how long they take to bounce back. At the speed of light, 1 nanosecond = 30cm of distance. Your sensor system uses LIDAR for precise ranging to nearby debris. It can even measure target rotation by tracking point changes between pulses.",
-        "unlockHint": "Run scans (S / W) and read the sensor suite.",
-        "trlRationale": "Flash LIDAR flown on Dragon, Cygnus since 2012"
+        "shortText": "Fire a laser pulse, time the echo: at light speed, one nanosecond of delay is 30 cm of distance.",
+        "fullText": "Lidar (light detection and ranging) measures distance by timing light. It fires a short laser pulse, waits for the reflection, and converts the round-trip time into range; because light covers 30 centimetres per nanosecond, precise timing gives precise distance.\n\nSweep the beam and you get more than a single number: a point cloud of the target's surface, and, by watching how points shift between pulses, a read on how it is rotating. Your sensor suite uses lidar to range nearby debris and gauge its tumble. Unlike a camera it does not need sunlight, which matters when half of every orbit is spent in shadow.",
+        "realWorld": "Flash lidar flown for rendezvous on Dragon and Cygnus since ~2012; light-time ranging at 30 cm/ns.",
+        "formula": "d = c · t / 2   (round-trip time of flight)",
+        "trlRationale": "Flash LIDAR flown on Dragon, Cygnus since 2012.",
+        "unlockHint": "Upgrade a sensor."
       }
     },
     {
@@ -1753,52 +1948,63 @@
       "category": "SENSORS",
       "trl": 9,
       "icon": "🔦",
+      "related": [
+        "lidar_sensing",
+        "pose_estimation",
+        "docking_precision"
+      ],
       "i18n": {
         "title": "LIDAR Ranging",
-        "shortText": "Laser pulses measure distance to millimeter precision — essential for final approach to debris.",
-        "fullText": "LIDAR (Light Detection and Ranging) fires laser pulses and measures the return time to calculate distance. At close range (<1 km), it provides millimeter-precision distance and centimeter-resolution 3D mapping of debris surfaces. Your daughters use LIDAR during the APPROACH state to build a tumble model of the target before committing to net deployment.",
-        "unlockHint": "Run scans (S / W) and read the sensor suite.",
-        "trlRationale": "Same heritage as lidar_sensing"
-      },
-      "related": [
-        "pose_estimation"
-      ]
+        "shortText": "Up close, lidar maps a target to the millimetre: enough to model its tumble before you commit to a catch.",
+        "fullText": "At close range, under a kilometre, lidar does more than range: it builds a centimetre-resolution three-dimensional map of a target's surface, accurate to the millimetre in distance. That detail turns a blip into something you can plan a capture against.\n\nYour daughters run lidar through the approach, assembling a tumble model of the derelict, its spin axis, rate, and shape, before anyone commits a net. Grab without that model and a fast or off-axis tumble will slap the net aside or wrench the tether. The map is the difference between a clean envelope and a fumbled catch that only adds to the mess.",
+        "realWorld": "Close-range flash lidar gives mm-precision ranging and cm-resolution 3-D maps; used for rendezvous on Dragon and Cygnus.",
+        "trlRationale": "Flash lidar rendezvous heritage on Dragon and Cygnus.",
+        "unlockHint": "Capture a target with an arm."
+      }
     },
     {
       "id": "docking_precision",
       "category": "SENSORS",
       "trl": 9,
       "icon": "🎯",
+      "related": [
+        "pose_estimation",
+        "lidar_ranging",
+        "rendezvous",
+        "docking_berthing",
+        "pulse_scan_radar",
+        "news_mev1_servicing"
+      ],
       "i18n": {
         "title": "Proximity Navigation",
-        "shortText": "The last 100 meters of approach require centimeter-level accuracy.",
-        "fullText": "Rendezvous and proximity operations (RPO) use a combination of LIDAR, optical cameras, and relative GPS to achieve centimeter precision. Your daughter's final approach to debris uses similar techniques: closing velocity must drop below 0.1 m/s, alignment within 5°. One wrong move and you bounce the target into an unpredictable tumble.",
-        "unlockHint": "Run scans (S / W) and read the sensor suite.",
-        "trlRationale": "IDSS/NDS operational on Dragon, Starliner"
-      },
-      "related": [
-        "docking_berthing",
-        "rendezvous",
-        "pose_estimation"
-      ]
+        "shortText": "The last hundred metres of an approach demand centimetre accuracy; one clumsy nudge sends the target tumbling.",
+        "fullText": "Rendezvous and proximity operations live or die in the final hundred metres. Getting there means fusing lidar, optical cameras, and relative satellite navigation into a position estimate good to centimetres, with closing speed dropping below a tenth of a metre per second and alignment held within a few degrees.\n\nYour daughters run the same discipline on final approach to a derelict. Come in too fast or off-axis and you do not capture the target, you punch it into an unpredictable tumble that is harder and more dangerous to catch on the next try. Precision here is not elegance for its own sake; it is the difference between a clean grip and making the problem worse.",
+        "realWorld": "RPO fuses lidar, optical, and relative satellite navigation to cm precision; docking systems operational on Dragon and Starliner.",
+        "trlRationale": "IDSS/NDS operational on Dragon, Starliner.",
+        "unlockHint": "Close on a target under relative navigation."
+      }
     },
     {
       "id": "star_tracker",
       "category": "SENSORS",
       "trl": 9,
       "icon": "⭐",
+      "related": [
+        "sun_sensor",
+        "imu_drift",
+        "kalman_filtering",
+        "pose_estimation",
+        "gps_denied",
+        "attitude_control_system"
+      ],
       "i18n": {
         "title": "Star Trackers",
-        "shortText": "Cameras that identify star patterns to determine spacecraft orientation to ±0.001°.",
-        "fullText": "Star trackers photograph the sky and match star patterns against an onboard catalog of ~3000 stars. This gives attitude knowledge to arcsecond accuracy — essential for pointing antennas, sensors, and thrusters. They fail in sunlight (too bright) and near the Moon (confuses the pattern matcher), so spacecraft carry multiple trackers pointing different directions.",
-        "unlockHint": "Run scans (S / W) and read the sensor suite.",
-        "trlRationale": "Ubiquitous attitude sensor since 1980s"
-      },
-      "related": [
-        "attitude_control_system",
-        "sun_sensor",
-        "pose_estimation"
-      ]
+        "shortText": "A camera that reads the star field like a fingerprint, fixing which way you point to a thousandth of a degree.",
+        "fullText": "A star tracker photographs the sky and matches the pattern it sees against an onboard catalogue of a few thousand stars. From that match it works out which way the spacecraft is pointing, to arcsecond accuracy, the finest attitude reference most vehicles carry.\n\nThat precision is what lets you aim an antenna, a sensor, or a thruster with confidence. It has limits: point one near the Sun and it is blinded, near the Moon and the pattern-matcher can be fooled, so a spacecraft carries several facing different ways. Paired with a sun sensor for coarse reference and an inertial unit to coast between fixes, the star tracker anchors the whole attitude solution.",
+        "realWorld": "Pattern-matches a few thousand catalogued stars to arcsecond accuracy; ubiquitous attitude sensor since the 1980s.",
+        "trlRationale": "Ubiquitous attitude sensor since 1980s.",
+        "unlockHint": "Fly until the mothership flags the star tracker."
+      }
     },
     {
       "id": "detumble",
@@ -1815,7 +2021,8 @@
       "related": [
         "docking_berthing",
         "control_moment_gyroscope",
-        "rcs_attitude_control"
+        "rcs_attitude_control",
+        "spin_stabilization"
       ]
     },
     {
@@ -1927,12 +2134,20 @@
       "category": "COMMS",
       "trl": 9,
       "icon": "📶",
+      "related": [
+        "telemetry_bandwidth",
+        "frequency_bands",
+        "ground_station_pass",
+        "ground_station_window",
+        "laser_comms"
+      ],
       "i18n": {
         "title": "Bandwidth & Data Rates",
-        "shortText": "Space-to-ground links have limited bandwidth — every bit must be prioritized.",
-        "fullText": "A typical S-band downlink carries ~2 Mbps — less than a poor WiFi connection. With 6 active daughters generating telemetry, sensor data, and video, bandwidth becomes a real constraint. Data compression, prioritization, and store-and-forward help, but sometimes you have to choose which daughter gets real-time data.",
-        "unlockHint": "Use comms and downlink to ground stations.",
-        "trlRationale": "Fundamental comms architecture"
+        "shortText": "A satellite downlink is thinner than bad home internet; every bit has to earn its place in the stream.",
+        "fullText": "A common S-band downlink carries only about 2 megabits per second, less than a weak home connection, and it is shared across everything the ship wants to say. With six daughters generating telemetry, sensor returns, and video at once, the pipe fills instantly.\n\nSo you triage the bits. Compression, prioritisation, and store-and-forward all help, but sometimes the honest answer is that only one daughter gets a live feed while the rest send numbers. Bandwidth is a budget like any other up here, and choosing what not to send is as much a part of the job as choosing what to.",
+        "realWorld": "Typical S-band downlink ~2 Mbps, shared across all traffic; compression and prioritisation are standard practice.",
+        "trlRationale": "Fundamental comms architecture.",
+        "unlockHint": "Fly until the mothership flags a bandwidth limit."
       }
     },
     {
@@ -1940,12 +2155,18 @@
       "category": "COMMS",
       "trl": 9,
       "icon": "📵",
+      "related": [
+        "signal_propagation",
+        "frequency_bands",
+        "catalog_les1"
+      ],
       "i18n": {
         "title": "Communications Blackout",
-        "shortText": "High-energy particles can disrupt radio signals, causing temporary blackouts.",
-        "fullText": "During solar events or SAA passages, energetic particles ionize the atmosphere unevenly, causing signal scintillation and blackout. Plasma sheaths during reentry cause total comm loss (Apollo missions waited in silence). Your comms degradation during SAA passage mirrors this real phenomenon.",
-        "unlockHint": "Use comms and downlink to ground stations.",
-        "trlRationale": "Observed since Gemini re-entry"
+        "shortText": "Charged particles can scramble a radio link, and a reentry plasma sheath can silence it completely.",
+        "fullText": "Radio does not always get through. During solar events or a pass through the South Atlantic Anomaly, energetic particles ionise the upper atmosphere unevenly, scattering signals into scintillation and, at worst, a blackout. The link degrades or drops until the disturbance passes.\n\nThe extreme case is reentry, when the superheated plasma sheath around a returning craft blocks radio entirely; Apollo crews rode out minutes of enforced silence on every return. You meet the milder version as comms fade during a South Atlantic Anomaly crossing. The lesson is the one every operator learns: never count on the link being there at the exact moment you need it most.",
+        "realWorld": "Ionospheric scintillation during solar events and SAA passes; reentry plasma blackout (famous on Apollo returns).",
+        "trlRationale": "Observed since Gemini re-entry.",
+        "unlockHint": "Fly through a comms blackout."
       }
     },
     {
@@ -1953,12 +2174,18 @@
       "category": "COMMS",
       "trl": 9,
       "icon": "📡",
+      "related": [
+        "ground_station_pass",
+        "tdrs_relay",
+        "bandwidth_limits"
+      ],
       "i18n": {
-        "title": "Ground Station Passes",
-        "shortText": "You can only talk to ground when a station is overhead — typically 5-10 min per pass.",
-        "fullText": "In LEO, ground stations are visible for just minutes per orbit. The Deep Space Network (Madrid, Canberra, Goldstone) provides near-continuous coverage for deep space, but LEO satellites rely on a constellation of ground stations. Each pass gives a brief data dump window. This is why spacecraft must store data and prioritize what to send.",
-        "unlockHint": "Use comms and downlink to ground stations.",
-        "trlRationale": "Fundamental LEO constraint"
+        "title": "Contact Windows",
+        "shortText": "Contact is rationed by geometry, so spacecraft hoard data and dump it in the brief window a station is up.",
+        "fullText": "Because a station is only overhead for minutes at a time, a spacecraft lives by store-and-forward: it records continuously and unloads in the short window when a ground site comes into range. Miss the window and the data waits a full orbit or more for the next one.\n\nThat scarcity drives the whole contact plan. Operators schedule which commands go up and which data comes down against a known timetable of passes, and the recorder must be sized so nothing important is overwritten before it can be sent. When the mothership calls a station coming into range, it is opening one of those narrow, precious windows.",
+        "realWorld": "Store-and-forward against a scheduled pass timetable; onboard recorders sized to bridge the gaps between contacts.",
+        "trlRationale": "Fundamental LEO constraint.",
+        "unlockHint": "Fly until the mothership flags a ground station coming into range."
       }
     },
     {
@@ -1966,12 +2193,19 @@
       "category": "COMMS",
       "trl": 9,
       "icon": "📻",
+      "related": [
+        "ground_station_window",
+        "tdrs_relay",
+        "bandwidth_limits",
+        "signal_propagation"
+      ],
       "i18n": {
         "title": "Ground Station Passes",
-        "shortText": "Communication with ground is limited to brief passes over tracking stations — typically 5-15 minutes.",
-        "fullText": "LEO spacecraft can only communicate with ground stations when they have line-of-sight. A typical pass over a ground station lasts 5-15 minutes depending on orbital geometry. NASA's network includes stations in Houston, Canberra (Australia), and Madrid (Spain), providing near-continuous coverage — but commercial operators may only get a few passes per day.",
-        "unlockHint": "Use comms and downlink to ground stations.",
-        "trlRationale": "Fundamental LEO constraint"
+        "shortText": "You can only talk when a station is in view: a few minutes per orbit, then silence until the next pass.",
+        "fullText": "A low-orbit spacecraft can only reach a ground station while it has line of sight, and that window is short: five to fifteen minutes per pass, depending on how high overhead the track runs. Between passes there is nothing but the onboard recorder.\n\nGlobal networks with sites like Houston, Canberra, and Madrid stitch the passes into near-continuous coverage for those who can afford it, but a commercial operator may get only a handful of contacts a day. That rhythm shapes operations: you store data, prioritise what to dump, and plan the important conversations for when a station is actually above the horizon.",
+        "realWorld": "LEO passes last ~5-15 min; global networks (Houston, Canberra, Madrid) approach continuous coverage; a fundamental constraint.",
+        "trlRationale": "Fundamental LEO constraint.",
+        "unlockHint": "Make a ground-station pass."
       }
     },
     {
@@ -1979,12 +2213,18 @@
       "category": "COMMS",
       "trl": 8,
       "icon": "🔦",
+      "related": [
+        "frequency_bands",
+        "telemetry_bandwidth",
+        "bandwidth_limits"
+      ],
       "i18n": {
         "title": "Laser Communications",
-        "shortText": "Light-based data links: 10× more bandwidth than radio, but need precise pointing.",
-        "fullText": "Laser comms (optical links) transmit data via modulated laser beams between spacecraft and ground stations. NASA's LCRD demo achieved 1.2 Gbps from GEO — 10-100× faster than radio. The catch: both ends must point within microradians of each other. Clouds block the beam, so multiple ground stations are needed. Your optical link to Svalbard works because the Arctic has clear, dark skies.",
-        "unlockHint": "Use comms and downlink to ground stations.",
-        "trlRationale": "LCRD (2021), SDA T1 Tranche (2023-24); emerging operational"
+        "shortText": "Send data on a laser instead of radio: far more bandwidth, if you can hold the aim within microradians.",
+        "fullText": "Optical, or laser, communications carry data on a modulated light beam instead of radio waves, buying enormous bandwidth. NASA's LCRD relay, launched in 2021, works at roughly a gigabit per second, and a 2023 CubeSat experiment, TBIRD, hit 200 gigabits per second to the ground, orders of magnitude beyond radio.\n\nThe price is precision and weather. Both ends must aim within microradians, and cloud simply blocks the beam, so operators keep several ground sites and switch between them. The technology has crossed into real use: SpaceX's Starlink now routes traffic over laser links between thousands of satellites. Your optical downlink to Svalbard works because the Arctic offers clear, dark skies.",
+        "realWorld": "NASA LCRD (2021, ~1 Gbps); TBIRD (2023) 200 Gbps to ground; Starlink runs operational laser inter-satellite links at scale.",
+        "trlRationale": "LCRD (2021), TBIRD (2023), Starlink optical links operational; ground-to-space still weather-limited.",
+        "unlockHint": "Fly until the mothership flags the laser comms link."
       }
     },
     {
@@ -1992,12 +2232,19 @@
       "category": "COMMS",
       "trl": 9,
       "icon": "📡",
+      "related": [
+        "bandwidth_limits",
+        "telemetry_bandwidth",
+        "laser_comms",
+        "comms_blackout"
+      ],
       "i18n": {
         "title": "S-Band vs Ka-Band",
-        "shortText": "Higher frequencies carry more data but need larger antennas and precise pointing.",
-        "fullText": "S-band (~2 GHz): robust, works with small omnidirectional antennas, but limited to ~2 Mbps. Ka-band (~26 GHz): 10× bandwidth but requires dish antennas with precise pointing. X-band (~8 GHz): a middle ground used by military and deep-space missions. Your spacecraft starts with S-band; upgrading to Ka-band or optical requires more power and better attitude control.",
-        "unlockHint": "Use comms and downlink to ground stations.",
-        "trlRationale": "ITU-coordinated bands since 1960s"
+        "shortText": "Higher radio bands carry more data but demand bigger dishes and finer aim: power and pointing for throughput.",
+        "fullText": "Radio bands trade robustness for capacity. S-band, near 2 gigahertz, is forgiving: a small omnidirectional antenna holds the link, but it tops out around 2 megabits per second. Ka-band, near 26 gigahertz, offers roughly ten times the data rate but needs a steerable dish aimed precisely. X-band, near 8 gigahertz, sits between them and serves military and deep-space work.\n\nThe higher you climb in frequency, the more you pay in antenna size, pointing accuracy, and power, and the more weather and ionospheric disturbances bite. Your ship begins on S-band and earns its way up: reaching Ka-band or an optical link means first affording the attitude control and power that finer beams demand.",
+        "realWorld": "S-band ~2 GHz (robust, ~2 Mbps); X-band ~8 GHz; Ka-band ~26 GHz (~10× data, needs precise pointing); ITU-coordinated.",
+        "trlRationale": "ITU-coordinated bands since 1960s.",
+        "unlockHint": "Fly out of the South Atlantic Anomaly."
       }
     },
     {
@@ -2005,12 +2252,19 @@
       "category": "COMMS",
       "trl": 9,
       "icon": "⏳",
+      "related": [
+        "tdrs_relay",
+        "ground_station_pass",
+        "comms_blackout"
+      ],
       "i18n": {
         "title": "Signal Propagation Delay",
-        "shortText": "Light-speed delay to LEO is only ~2 ms — but processing and routing add 200-500 ms latency.",
-        "fullText": "Radio signals travel at the speed of light — 300,000 km/s. At LEO altitude (400 km), the raw propagation delay is just 1.3 ms. But real-world latency includes encoding, error correction, relay satellite hops (if using TDRS: up to GEO and back = ~240 ms), ground processing, and network routing. Total round-trip latency: 400-800 ms — noticeable during manual daughter piloting.",
-        "unlockHint": "Use comms and downlink to ground stations.",
-        "trlRationale": "Speed of light — established science"
+        "shortText": "Light to low orbit takes barely a millisecond, yet relays and processing stretch the round trip past half a second.",
+        "fullText": "Radio travels at the speed of light, so the raw hop to a 400 km orbit is only about 1.3 milliseconds. The delay you actually feel is almost entirely the rest of the chain: encoding, error correction, ground processing, network routing, and any relay hops.\n\nGo through a geostationary relay and the signal climbs to 36,000 km and back, adding a couple hundred milliseconds by itself. Total round-trip latency lands around 400-800 milliseconds, enough to feel when you fly a daughter by hand: the view is a little stale and your command lands a little late. It is why close, fast work leans on onboard autonomy rather than a joystick from the ground.",
+        "realWorld": "Raw LEO light-time ~1.3 ms; a GEO relay hop adds ~240 ms; real round-trip latency ~400-800 ms.",
+        "formula": "t = d / c   (c ≈ 300,000 km/s)",
+        "trlRationale": "Speed of light — established science.",
+        "unlockHint": "Take a message from Houston."
       }
     },
     {
@@ -2018,12 +2272,18 @@
       "category": "COMMS",
       "trl": 9,
       "icon": "🛰️",
+      "related": [
+        "ground_station_pass",
+        "ground_station_window",
+        "signal_propagation"
+      ],
       "i18n": {
         "title": "TDRS Relay Satellites",
-        "shortText": "Tracking and Data Relay Satellites in GEO provide near-continuous communication coverage.",
-        "fullText": "NASA's Tracking and Data Relay Satellite System (TDRSS) places relay satellites in geostationary orbit to provide LEO spacecraft with near-continuous ground contact. Instead of waiting for a ground station pass, you relay through TDRS. The ISS uses TDRS for most communications. The system has been operational since 1983 — the Space Shuttle was its first user.",
-        "unlockHint": "Use comms and downlink to ground stations.",
-        "trlRationale": "TDRS operational since 1983"
+        "shortText": "Relay satellites parked in high orbit give a low flyer near-constant contact, with no waiting for the next pass.",
+        "fullText": "Instead of waiting for the ground to rotate a station under you, you can relay through a satellite that always sees both you and home. NASA's Tracking and Data Relay Satellite System parks relays in geostationary orbit, giving low-orbit spacecraft near-continuous contact; the International Space Station routes most of its traffic this way.\n\nThe system has run since 1983, when the Space Shuttle became its first user, and it is now slowly being handed off to commercial relay providers. The idea is unchanged: a few high, always-visible relays beat a scattered ring of ground sites for staying in touch. For a busy operation, continuous contact is worth more than raw data rate.",
+        "realWorld": "NASA TDRSS relays in GEO, operational since 1983; used by the ISS; now being phased over to commercial relays.",
+        "trlRationale": "TDRS operational since 1983.",
+        "unlockHint": "Clear 30 pieces of debris."
       }
     },
     {
@@ -2031,16 +2291,20 @@
       "category": "COMMS",
       "trl": 9,
       "icon": "📶",
+      "related": [
+        "bandwidth_limits",
+        "frequency_bands",
+        "laser_comms",
+        "spacewire_bus"
+      ],
       "i18n": {
         "title": "Telemetry Bandwidth",
-        "shortText": "S-band links provide ~2 Mbps — shared between telemetry, commands, and science data.",
-        "fullText": "Standard spacecraft communication uses S-band (~2 GHz) providing 1-2 Mbps. With multiple daughters transmitting telemetry simultaneously, bandwidth becomes a constraint — you can't get high-resolution video from all daughters at once. Ka-band (~26 GHz) offers 10× higher data rates but requires more precise antenna pointing. Laser comms (optical) can reach 100+ Mbps.",
-        "unlockHint": "Use comms and downlink to ground stations.",
-        "trlRationale": "S-band telemetry standard since 1960s"
-      },
-      "related": [
-        "spacewire_bus"
-      ]
+        "shortText": "Six daughters talking at once won't fit one S-band pipe; someone gets numbers, not live video.",
+        "fullText": "Standard S-band telemetry runs at 1-2 megabits per second, and every daughter shares it. Their combined telemetry, commands, and science can easily outstrip the link, so you cannot pull high-resolution video from all six at the same time; something gives.\n\nMoving up in frequency buys room. Ka-band around 26 gigahertz offers roughly ten times the data rate, and an optical link more still, but each demands tighter antenna pointing and more power. Your ship starts on rugged, forgiving S-band and trades up as its attitude control and power allow. The data bus feeding the radio, the spacecraft's internal wiring, has to keep pace too.",
+        "realWorld": "S-band ~1-2 Mbps; Ka-band ~10× more; optical more still, at the cost of pointing and power.",
+        "trlRationale": "S-band telemetry standard since 1960s.",
+        "unlockHint": "Take a telemetry bandwidth event."
+      }
     },
     {
       "id": "isro_launch_vehicles",
@@ -3161,17 +3425,17 @@
       "icon": "🌞",
       "related": [
         "star_tracker",
-        "attitude_control_system",
         "imu_drift",
-        "solar_power"
+        "solar_power",
+        "attitude_control_system"
       ],
       "i18n": {
         "title": "Sun Sensors",
-        "shortText": "The cheapest, oldest trick in attitude control: look at the Sun. If you know where it is, you know which way you're facing.",
-        "fullText": "A sun sensor measures the direction to the Sun, giving the spacecraft a quick, reliable reference for which way it is pointing. Coarse sun sensors are little more than light detectors that report roughly where the Sun is — handy for spinning up out of a tumble or aiming solar panels. Fine sun sensors are far more precise and feed the attitude determination system. They are among the simplest, cheapest, and oldest attitude sensors, flown since the earliest satellites, and almost every spacecraft carries some form of them as a dependable backstop to fancier star trackers.",
-        "realWorld": "Flown since the earliest satellites; coarse and fine variants on nearly every spacecraft",
-        "trlRationale": "Flown since the dawn of the satellite era",
-        "unlockHint": "Run scans (S / W) and read the sensor suite."
+        "shortText": "The cheapest, oldest trick in attitude control: look at the Sun, and you know which way you're facing.",
+        "fullText": "A sun sensor measures the direction to the Sun, giving a quick, dependable reference for which way a spacecraft points. Coarse versions are little more than light detectors reporting roughly where the Sun sits, enough to spin up out of a tumble or aim solar panels. Fine versions are far more precise and feed the attitude determination system directly.\n\nThey are among the simplest, cheapest, and oldest attitude sensors, flown since the earliest satellites, and almost every spacecraft still carries some form as a backstop to the fussier star tracker. When the fancy sensor is blinded by sunlight or confused, the humble sun sensor is often what keeps a vehicle oriented. Reliability, not precision, is its whole point.",
+        "realWorld": "Flown since the earliest satellites; coarse and fine variants on nearly every spacecraft.",
+        "trlRationale": "Flown since the dawn of the satellite era.",
+        "unlockHint": "Clear 9 pieces of debris."
       }
     },
     {
@@ -3183,15 +3447,16 @@
         "lidar_ranging",
         "docking_precision",
         "kalman_filtering",
-        "star_tracker"
+        "star_tracker",
+        "lidar_sensing"
       ],
       "i18n": {
         "title": "Visual Pose Estimation",
-        "shortText": "Your target is tumbling, unlit, and was never built to be caught. A camera and clever math work out exactly how it’s oriented anyway.",
-        "fullText": "To grab a derelict, you first have to know precisely where it is and how it is tumbling — its full six-degrees-of-freedom 'pose' (position plus orientation). Cooperative spacecraft make this easy with markers or radio links, but debris is non-cooperative: no beacons, no markers, often spinning in shadow. Visual pose estimation solves it with cameras and algorithms that either match the live image to a 3-D model of the target or track its features frame by frame, recovering the relative pose in real time. It is the perception layer beneath any capture, and it is being actively developed and demonstrated for debris removal and satellite servicing.",
-        "realWorld": "Vision-based relative navigation for non-cooperative targets; developed and demonstrated in ESA and JAXA debris-removal and servicing programs",
-        "trlRationale": "Demonstrated in servicing/ADR programs; non-cooperative capture still maturing",
-        "unlockHint": "Run scans (S / W) and read the sensor suite."
+        "shortText": "Your target is tumbling, unlit, and never built to be caught; a camera and hard math still work out its exact pose.",
+        "fullText": "To grab a derelict you first have to know precisely where it is and how it is tumbling: its full six-degrees-of-freedom pose, position plus orientation. A cooperative spacecraft makes this easy with markers or a radio link, but debris offers none of that. It is non-cooperative, with no beacons, no markers, and often spinning in shadow.\n\nVisual pose estimation solves it with cameras and algorithms that either match the live image against a three-dimensional model of the target or track its features frame to frame, recovering the relative pose in real time. It is the perception layer beneath every capture, and it is being actively demonstrated in European and Japanese debris-removal and servicing programs. Non-cooperative capture is exactly where it is still maturing.",
+        "realWorld": "Vision-based relative navigation for non-cooperative targets; demonstrated in ESA and JAXA debris-removal and servicing programs.",
+        "trlRationale": "Demonstrated in servicing/ADR programs; non-cooperative capture still maturing.",
+        "unlockHint": "Clear 19 pieces of debris."
       }
     }
   ]

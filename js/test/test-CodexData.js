@@ -538,12 +538,91 @@ describe('Codex Phase 6a — batch A template conformance', () => {
 
   it('no banned voice phrases in i18n copy', () => {
     const BANNED = [
-      /delve/i, /unleash/i, /revoluti/i, /game.?chang/i, /tapestry/i,
+      /delve/i, /unleash/i, /revolutionar|revolutioni[sz]e/i, /game.?chang/i, /tapestry/i,
       /testament to/i, /in the world of/i, /it.s not just .*,? it.s/i,
       /\bcrucial\b/i, /\bvital\b/i,
     ];
     const bad = [];
     for (const e of batchA) {
+      const txt = [e.shortText, e.fullText, e.realWorld, e.trlRationale].filter(Boolean).join('  ');
+      for (const re of BANNED) if (re.test(txt)) bad.push(`${e.id}:${re}`);
+      if (/!/.test(txt)) bad.push(`${e.id}:exclamation`);
+    }
+    assert.equal(bad.length, 0, `banned voice patterns: ${bad.join(', ')}`);
+  });
+});
+
+// ===========================================================================
+// PHASE 6b — Content batch B template conformance (POWER + TETHERS + COMMS +
+// SENSORS). Same rules as 6a; scope expands as later slices rewrite more.
+// ===========================================================================
+describe('Codex Phase 6b — batch B template conformance', () => {
+  const REWRITTEN_B = ['POWER', 'TETHERS', 'COMMS', 'SENSORS'];
+  const batchB = entries.filter(e => REWRITTEN_B.includes(e.category));
+
+  it('batch B has entries to police', () => {
+    assert.ok(batchB.length > 0, `rewritten categories populated: ${REWRITTEN_B.join(', ')}`);
+  });
+
+  it('shortText ≤140 chars (ELI5 quick-glance)', () => {
+    const bad = batchB.filter(e => (e.shortText || '').length > 140)
+      .map(e => `${e.id}:${e.shortText.length}`);
+    assert.equal(bad.length, 0, `shortText over 140: ${bad.join(', ')}`);
+  });
+
+  it('fullText is multi-paragraph (≥1 blank-line break)', () => {
+    const bad = batchB.filter(e => !(e.fullText || '').includes('\n\n')).map(e => e.id);
+    assert.equal(bad.length, 0, `single-paragraph fullText: ${bad.join(', ')}`);
+  });
+
+  it('every entry carries ≥2 related links', () => {
+    const bad = batchB.filter(e => (e.related || []).length < 2)
+      .map(e => `${e.id}:${(e.related || []).length}`);
+    assert.equal(bad.length, 0, `under-linked entries: ${bad.join(', ')}`);
+  });
+
+  it('related links are symmetric (every target links back)', () => {
+    const oneway = [];
+    for (const e of batchB) {
+      for (const rid of (e.related || [])) {
+        const t = codex.getEntry(rid);
+        if (!t || !(t.related || []).includes(e.id)) oneway.push(`${e.id}→${rid}`);
+      }
+    }
+    assert.equal(oneway.length, 0, `asymmetric related: ${oneway.join(', ')}`);
+  });
+
+  it('every trl-bearing entry has a realWorld line', () => {
+    const bad = batchB.filter(e => e.trl != null && (!e.realWorld || !e.realWorld.trim()))
+      .map(e => e.id);
+    assert.equal(bad.length, 0, `tech entries missing realWorld: ${bad.join(', ')}`);
+  });
+
+  it('unlockHints name a concrete action (no banned passive patterns)', () => {
+    const BANNED = [
+      /keep flying/i, /finds you/i, /discover through gameplay/i,
+      /^scan, capture, and clear debris\.?$/i,
+      /manage the power buses and battery during operations/i, // old POWER generic
+      /work the daughters. tethers, reels, and nets/i,          // old TETHERS generic
+      /use comms and downlink to ground stations/i,             // old COMMS generic
+      /run scans .* and read the sensor suite/i,                // old SENSORS generic
+    ];
+    const bad = [];
+    for (const e of batchB) {
+      const h = e.unlockHint || '';
+      if (BANNED.some(re => re.test(h))) bad.push(`${e.id}:"${h}"`);
+    }
+    assert.equal(bad.length, 0, `passive/vague unlock hints: ${bad.join(' | ')}`);
+  });
+
+  it('no banned voice phrases in i18n copy', () => {
+    const BANNED = [
+      /delve/i, /unleash/i, /revolutionar|revolutioni[sz]e/i, /game.?chang/i, /tapestry/i,
+      /testament to/i, /in the world of/i, /it.s not just .*,? it.s/i,
+      /\bcrucial\b/i, /\bvital\b/i,
+    ];
+    const bad = [];
+    for (const e of batchB) {
       const txt = [e.shortText, e.fullText, e.realWorld, e.trlRationale].filter(Boolean).join('  ');
       for (const re of BANNED) if (re.test(txt)) bad.push(`${e.id}:${re}`);
       if (/!/.test(txt)) bad.push(`${e.id}:exclamation`);

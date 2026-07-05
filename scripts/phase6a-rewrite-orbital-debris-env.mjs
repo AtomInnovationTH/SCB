@@ -553,12 +553,15 @@ for (const ne of NEW_ENTRIES) {
 }
 
 // --- outbound symmetrization: every id a rewritten entry links to gets a
-// reciprocal back-link (idempotent — guarded by includes()). ---
+// reciprocal back-link (idempotent — guarded by includes()). Honour
+// HEAL_SKIP_CATEGORIES here too, so a rewritten entry that ever links to a
+// tutorial (PLAYBOOK) card never forces a back-link onto it — the outbound and
+// inbound passes must agree on which categories may receive reciprocal links. ---
 const byId = new Map(codex.entries.map((e) => [e.id, e]));
 for (const ne of NEW_ENTRIES) {
   for (const rid of ne.related || []) {
     const target = byId.get(rid);
-    if (!target) continue;
+    if (!target || HEAL_SKIP_CATEGORIES.has(target.category)) continue;
     target.related = target.related || [];
     if (!target.related.includes(ne.id)) target.related.push(ne.id);
   }
