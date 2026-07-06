@@ -133,6 +133,8 @@ export class CodexSystem {
       related: Array.isArray(e.related) ? e.related : [],
       track: e.track || null,
       trackOrder: (typeof e.trackOrder === 'number') ? e.trackOrder : null,
+      // Currency stamp (WORLD_INDUSTRY/NEWS/CATALOG). "YYYY-MM" or null.
+      lastVerified: (typeof e.lastVerified === 'string') ? e.lastVerified : null,
       // translatable fields (interpolated against live Constants)
       title: i.title || e.id,
       shortText: interpolate(i.shortText || '', Constants),

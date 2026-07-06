@@ -710,3 +710,98 @@ describe('Codex Phase 6c — batch C template conformance', () => {
     assert.equal(bad.length, 0, `banned voice patterns: ${bad.join(', ')}`);
   });
 });
+
+// ===========================================================================
+// PHASE 6d — Content batch D: currency refresh (WORLD_INDUSTRY + NEWS + CATALOG
+// + PLAYBOOK). Same template rules as 6a-c, plus the new `lastVerified` stamp on
+// the three real-world categories (PLAYBOOK exempt).
+// ===========================================================================
+describe('Codex Phase 6d — batch D template conformance', () => {
+  const REWRITTEN_D = ['WORLD_INDUSTRY', 'NEWS', 'CATALOG', 'PLAYBOOK'];
+  const STAMPED = ['WORLD_INDUSTRY', 'NEWS', 'CATALOG']; // PLAYBOOK exempt
+  const batchD = entries.filter(e => REWRITTEN_D.includes(e.category));
+
+  it('batch D has entries to police', () => {
+    assert.ok(batchD.length > 0, `rewritten categories populated: ${REWRITTEN_D.join(', ')}`);
+  });
+
+  it('shortText ≤140 chars (ELI5 quick-glance)', () => {
+    const bad = batchD.filter(e => (e.shortText || '').length > 140)
+      .map(e => `${e.id}:${e.shortText.length}`);
+    assert.equal(bad.length, 0, `shortText over 140: ${bad.join(', ')}`);
+  });
+
+  it('fullText is multi-paragraph (≥1 blank-line break)', () => {
+    const bad = batchD.filter(e => !(e.fullText || '').includes('\n\n')).map(e => e.id);
+    assert.equal(bad.length, 0, `single-paragraph fullText: ${bad.join(', ')}`);
+  });
+
+  it('every entry carries ≥2 related links', () => {
+    const bad = batchD.filter(e => (e.related || []).length < 2)
+      .map(e => `${e.id}:${(e.related || []).length}`);
+    assert.equal(bad.length, 0, `under-linked entries: ${bad.join(', ')}`);
+  });
+
+  it('related links are symmetric (every target links back)', () => {
+    // PLAYBOOK→concept links are intentionally one-directional (tutorial cards
+    // point to concepts; concepts never show a tutorial chip). Only require
+    // symmetry when both endpoints share PLAYBOOK-ness.
+    const isPB = (c) => c === 'PLAYBOOK';
+    const oneway = [];
+    for (const e of batchD) {
+      for (const rid of (e.related || [])) {
+        const t = codex.getEntry(rid);
+        if (!t) { oneway.push(`${e.id}→${rid}(dangling)`); continue; }
+        if (isPB(e.category) !== isPB(t.category)) continue; // intentional one-way
+        if (!(t.related || []).includes(e.id)) oneway.push(`${e.id}→${rid}`);
+      }
+    }
+    assert.equal(oneway.length, 0, `asymmetric related: ${oneway.join(', ')}`);
+  });
+
+  it('every trl-bearing entry has a realWorld line', () => {
+    const bad = batchD.filter(e => e.trl != null && (!e.realWorld || !e.realWorld.trim()))
+      .map(e => e.id);
+    assert.equal(bad.length, 0, `tech entries missing realWorld: ${bad.join(', ')}`);
+  });
+
+  // NEW: lastVerified currency stamp on the real-world categories.
+  it('WORLD_INDUSTRY/NEWS/CATALOG entries carry a lastVerified YYYY-MM stamp', () => {
+    const need = batchD.filter(e => STAMPED.includes(e.category));
+    const bad = need.filter(e => !/^\d{4}-\d{2}$/.test(e.lastVerified || ''))
+      .map(e => `${e.id}:${e.lastVerified}`);
+    assert.equal(bad.length, 0, `missing/malformed lastVerified: ${bad.join(', ')}`);
+  });
+
+  it('unlockHints name a concrete action (no banned passive patterns)', () => {
+    const BANNED = [
+      /keep flying/i, /finds you/i, /discover through gameplay/i,
+      /^scan, capture, and clear debris\.?$/i,
+      /clear debris to be briefed on notable objects/i,      // old CATALOG generic
+      /clear enough debris to be briefed on the priority/i,  // old catalog_envisat
+      /the news desk will brief you/i,                       // old NEWS generic
+      /play through mission events as they break/i,          // old fictional-NEWS generic
+    ];
+    const bad = [];
+    for (const e of batchD) {
+      const h = e.unlockHint || '';
+      if (BANNED.some(re => re.test(h))) bad.push(`${e.id}:"${h}"`);
+    }
+    assert.equal(bad.length, 0, `passive/vague unlock hints: ${bad.join(' | ')}`);
+  });
+
+  it('no banned voice phrases in i18n copy', () => {
+    const BANNED = [
+      /delve/i, /unleash/i, /revolutionar|revolutioni[sz]e/i, /game.?chang/i, /tapestry/i,
+      /testament to/i, /in the world of/i, /it.s not just .*,? it.s/i,
+      /\bcrucial\b/i, /\bvital\b/i,
+    ];
+    const bad = [];
+    for (const e of batchD) {
+      const txt = [e.shortText, e.fullText, e.realWorld, e.trlRationale].filter(Boolean).join('  ');
+      for (const re of BANNED) if (re.test(txt)) bad.push(`${e.id}:${re}`);
+      if (/!/.test(txt)) bad.push(`${e.id}:exclamation`);
+    }
+    assert.equal(bad.length, 0, `banned voice patterns: ${bad.join(', ')}`);
+  });
+});

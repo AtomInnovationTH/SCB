@@ -1001,6 +1001,7 @@ export class CodexViewerUI {
         ${realWorldHtml}
         ${formulaHtml}
         ${relatedHtml}
+        ${entry.unlocked ? this._verifiedStampHtml(entry) : ''}
         ${prevNextHtml}
       </div>
     `;

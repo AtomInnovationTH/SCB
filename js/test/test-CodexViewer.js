@@ -40,6 +40,21 @@ function entry(id, opts = {}) {
   };
 }
 
+describe('CodexViewerUI._verifiedStampHtml — lastVerified currency stamp', () => {
+  it('renders a VERIFIED stamp when lastVerified is a date string', () => {
+    const v = makeViewer();
+    const html = v._verifiedStampHtml({ lastVerified: '2026-07' });
+    assert.ok(html.includes('VERIFIED 2026-07'), 'stamp shows the date');
+  });
+
+  it('renders nothing when lastVerified is absent or non-string', () => {
+    const v = makeViewer();
+    assert.equal(v._verifiedStampHtml({}), '', 'no field → empty');
+    assert.equal(v._verifiedStampHtml({ lastVerified: null }), '', 'null → empty');
+    assert.equal(v._verifiedStampHtml({ lastVerified: 202607 }), '', 'non-string → empty');
+  });
+});
+
 describe('CodexViewerUI._hexToRgb — accent colour parsing', () => {
   it('parses #rrggbb', () => {
     const v = makeViewer();

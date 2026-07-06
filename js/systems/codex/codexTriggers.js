@@ -240,24 +240,24 @@ export const CODEX_TRIGGERS = {
   // (PLAYBOOK + WORLD_INDUSTRY entries are `startUnlocked` in data/codex.json —
   //  reference/onboarding material is readable from the first open, so it needs
   //  no trigger here. welcome_cowboy / world_adr_mandate triggers were removed.)
-  catalog_envisat:        [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 15 }],
-  catalog_vanguard1:      [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 10 }],
-  catalog_les1:           [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 20 }],
-  catalog_cosmos_iridium: [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 25 }],
-  catalog_fengyun1c:      [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 35 }],
+  catalog_envisat:        [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 7 }],
+  catalog_vanguard1:      [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 4 }],
+  catalog_les1:           [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 9 }],
+  catalog_cosmos_iridium: [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 11 }],
+  catalog_fengyun1c:      [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 15 }],
   // Phase 2c CATALOG marquee objects
-  catalog_telstar1:       [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 12 }],
-  catalog_kosmos482:      [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 18 }],
-  catalog_sl16:           [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 28 }],
-  catalog_cz5b:           [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 32 }],
-  catalog_kosmos1408:     [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 40 }],
+  catalog_telstar1:       [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 5 }],
+  catalog_kosmos482:      [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 8 }],
+  catalog_sl16:           [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 13 }],
+  catalog_cz5b:           [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 14 }],
+  catalog_kosmos1408:     [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 18 }],
   // Phase 2c NEWS & EVENTS — real-world headlines, unlocked as you progress
-  news_starlink_storm:    [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 8 }],
-  news_tiangong_dodge:    [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 14 }],
-  news_iss_pallet:        [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 22 }],
-  news_aeolus_reentry:    [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 26 }],
-  news_mev1_servicing:    [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 38 }],
-  news_yunhai_collision:  [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 42 }],
+  news_starlink_storm:    [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 3 }],
+  news_tiangong_dodge:    [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 6 }],
+  news_iss_pallet:        [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 10 }],
+  news_aeolus_reentry:    [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 12 }],
+  news_mev1_servicing:    [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 16 }],
+  news_yunhai_collision:  [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 20 }],
 };
 
 export default CODEX_TRIGGERS;
