@@ -103,6 +103,36 @@
       "label": "The Propellant Story",
       "color": "#e69f00",
       "order": 0
+    },
+    "cowboy_basics": {
+      "label": "Cowboy Basics",
+      "color": "#56b4e9",
+      "order": 1
+    },
+    "how_we_catch": {
+      "label": "How We Catch",
+      "color": "#009e73",
+      "order": 2
+    },
+    "why_orbits_are_weird": {
+      "label": "Why Orbits Are Weird",
+      "color": "#0072b2",
+      "order": 3
+    },
+    "power_through_the_dark": {
+      "label": "Power Through the Dark",
+      "color": "#f0e442",
+      "order": 4
+    },
+    "the_debris_crisis": {
+      "label": "The Debris Crisis",
+      "color": "#d55e00",
+      "order": 5
+    },
+    "world_stage": {
+      "label": "The World Stage",
+      "color": "#cc79a7",
+      "order": 6
     }
   },
   "aliases": {
@@ -143,7 +173,9 @@
         "formula": "a_drag = −½·ρ·v²·(C_d·A / m)",
         "trlRationale": "Observed and modelled since Sputnik 1 (1957).",
         "unlockHint": "Clear 5 pieces of debris."
-      }
+      },
+      "track": "why_orbits_are_weird",
+      "trackOrder": 10
     },
     {
       "id": "delta_v",
@@ -165,7 +197,9 @@
         "formula": "Δv = Isp · g₀ · ln(m₀ / m_f)   (Tsiolkovsky, 1903)",
         "trlRationale": "Tsiolkovsky rocket equation (1903).",
         "unlockHint": "Spend propellant on a maneuver."
-      }
+      },
+      "track": "why_orbits_are_weird",
+      "trackOrder": 9
     },
     {
       "id": "hohmann_transfer",
@@ -188,7 +222,9 @@
         "formula": "Δv_total = Δv₁ + Δv₂   (two tangential burns via the transfer ellipse)",
         "trlRationale": "Flown on essentially every orbital transfer since the 1960s.",
         "unlockHint": "Fly an orbit transfer between clusters."
-      }
+      },
+      "track": "why_orbits_are_weird",
+      "trackOrder": 8
     },
     {
       "id": "j2_perturbation",
@@ -208,7 +244,9 @@
         "formula": "Ω̇ = −(3/2)·J₂·(R_E / p)²·n·cos i",
         "trlRationale": "Exploited on every Sun-synchronous satellite.",
         "unlockHint": "Fly until tracking flags targets drifting from their predicted track."
-      }
+      },
+      "track": "why_orbits_are_weird",
+      "trackOrder": 3
     },
     {
       "id": "keplerian_orbit",
@@ -230,7 +268,9 @@
         "formula": "r = a(1 − e²) / (1 + e·cos ν)",
         "trlRationale": "Established orbital mechanics since Kepler (1609).",
         "unlockHint": "Open the orbital view."
-      }
+      },
+      "track": "why_orbits_are_weird",
+      "trackOrder": 0
     },
     {
       "id": "orbital_inclination",
@@ -250,7 +290,9 @@
         "formula": "Δv = 2·v·sin(Δi / 2)",
         "trlRationale": "Established orbital mechanics.",
         "unlockHint": "Select a debris target (T)."
-      }
+      },
+      "track": "why_orbits_are_weird",
+      "trackOrder": 2
     },
     {
       "id": "orbital_period_altitude",
@@ -273,7 +315,9 @@
         "formula": "T = 2π · √(a³ / μ)",
         "trlRationale": "Kepler's third law (1619).",
         "unlockHint": "Engage the autopilot (A)."
-      }
+      },
+      "track": "why_orbits_are_weird",
+      "trackOrder": 1
     },
     {
       "id": "raan_precession",
@@ -292,7 +336,9 @@
         "realWorld": "ISS RAAN drifts ~5°/day westward; the same J2 nodal term underpins Sun-synchronous design.",
         "trlRationale": "Exploited operationally for decades.",
         "unlockHint": "Fly until the mothership logs a ground-station pass."
-      }
+      },
+      "track": "why_orbits_are_weird",
+      "trackOrder": 4
     },
     {
       "id": "relative_velocity",
@@ -312,7 +358,9 @@
         "formula": "drift rate ≈ −(3/2)·n·Δa   (n = mean motion, Δa = altitude gap)",
         "trlRationale": "Core concept in every rendezvous since Gemini (1965).",
         "unlockHint": "Capture a target with an arm."
-      }
+      },
+      "track": "why_orbits_are_weird",
+      "trackOrder": 5
     },
     {
       "id": "prograde_paradox",
@@ -331,7 +379,9 @@
         "realWorld": "Documented from Gemini 4 (1965); standard rendezvous doctrine ever since.",
         "trlRationale": "Documented from Gemini 4 (1965) onward.",
         "unlockHint": "Work the throttle on the mothership."
-      }
+      },
+      "track": "why_orbits_are_weird",
+      "trackOrder": 6
     },
     {
       "id": "specific_impulse",
@@ -719,7 +769,9 @@
         "formula": "cycles/yr ≈ 16 × 365 ≈ 5,840",
         "trlRationale": "Established design-for-life practice.",
         "unlockHint": "Read a battery subsystem alert."
-      }
+      },
+      "track": "power_through_the_dark",
+      "trackOrder": 5
     },
     {
       "id": "eclipse_cycle",
@@ -738,7 +790,9 @@
         "realWorld": "~35 min eclipse per ~92-min LEO orbit; a fundamental constraint since Sputnik 1 (1957).",
         "trlRationale": "Fundamental LEO constraint since 1957.",
         "unlockHint": "Fly into Earth's shadow (eclipse)."
-      }
+      },
+      "track": "power_through_the_dark",
+      "trackOrder": 3
     },
     {
       "id": "graphene_supercap",
@@ -777,7 +831,9 @@
         "realWorld": "Space triple-junction (GaAs) cells ~30% efficient vs ~20% for silicon; flown on the ISS, GEO satellites, and solar landers like InSight.",
         "trlRationale": "Triple-junction GaAs standard on GEO satellites and the ISS.",
         "unlockHint": "Buy the multi-junction solar upgrade."
-      }
+      },
+      "track": "power_through_the_dark",
+      "trackOrder": 1
     },
     {
       "id": "mli_insulation",
@@ -819,7 +875,9 @@
         "realWorld": "Regulated 28 V / 100 V DC buses with priority load-shedding; standard on every spacecraft.",
         "trlRationale": "Standard load-shedding on every bus.",
         "unlockHint": "Switch a power bus."
-      }
+      },
+      "track": "power_through_the_dark",
+      "trackOrder": 7
     },
     {
       "id": "rtg_power",
@@ -839,7 +897,9 @@
         "formula": "V ∝ ΔT   (Seebeck effect: output tracks the temperature difference)",
         "trlRationale": "Flown since SNAP-3 (1961); Voyager, Curiosity, Perseverance.",
         "unlockHint": "Buy the RTG module upgrade."
-      }
+      },
+      "track": "power_through_the_dark",
+      "trackOrder": 9
     },
     {
       "id": "solar_cell_degradation",
@@ -859,7 +919,9 @@
         "realWorld": "~2-3%/yr output loss in LEO; arrays oversized for end-of-life power; measured on every long-duration mission.",
         "trlRationale": "Observed and modelled on every long-duration mission.",
         "unlockHint": "Take a solar-panel UV degradation warning."
-      }
+      },
+      "track": "power_through_the_dark",
+      "trackOrder": 2
     },
     {
       "id": "solar_power",
@@ -885,7 +947,9 @@
         "formula": "P = η · G · A   (efficiency × solar flux × area)",
         "trlRationale": "Flown on every operational spacecraft since Vanguard 1 (1958).",
         "unlockHint": "Draw the battery below half charge."
-      }
+      },
+      "track": "power_through_the_dark",
+      "trackOrder": 0
     },
     {
       "id": "solid_state_battery",
@@ -927,7 +991,9 @@
         "realWorld": "Space Li-ion cycled at ~25-30% depth of discharge for 50,000+ cycles; flown since the 1990s.",
         "trlRationale": "Li-ion flown since 1990s; space-grade cells routine.",
         "unlockHint": "Fly until the mothership flags a battery-cycle note."
-      }
+      },
+      "track": "power_through_the_dark",
+      "trackOrder": 4
     },
     {
       "id": "spin_stabilization",
@@ -965,7 +1031,9 @@
         "realWorld": "Supercapacitor modules flown on CubeSats; mature for burst-power bus applications.",
         "trlRationale": "Supercap modules flown on CubeSats; mature for bus applications.",
         "unlockHint": "Fly until the mothership reports supercapacitor use."
-      }
+      },
+      "track": "power_through_the_dark",
+      "trackOrder": 6
     },
     {
       "id": "thermal_management",
@@ -985,7 +1053,9 @@
         "realWorld": "Radiative-only environment (+120°C sun / -150°C shade); MLI, heat pipes, radiators, heaters on every spacecraft.",
         "trlRationale": "MLI + heaters + radiators on every spacecraft.",
         "unlockHint": "Fly until the mothership flags a thermal gradient."
-      }
+      },
+      "track": "power_through_the_dark",
+      "trackOrder": 8
     },
     {
       "id": "power_beaming",
@@ -1076,7 +1146,9 @@
         "realWorld": "Kessler & Cour-Palais (1978); the 900-1,000 km and ~1,500 km LEO bands are argued to be near or past critical density.",
         "trlRationale": "Kessler & Cour-Palais (1978); observed during 2007, 2009 events.",
         "unlockHint": "Begin flying the mission."
-      }
+      },
+      "track": "the_debris_crisis",
+      "trackOrder": 0
     },
     {
       "id": "mmod_impact",
@@ -1368,7 +1440,9 @@
         "realWorld": "Spinning-net (bolas) capture is conceptual; nets flown on RemoveDEBRIS (2018).",
         "trlRationale": "Spinning net / bolas capture is conceptual; no flight heritage.",
         "unlockHint": "Fire the lasso."
-      }
+      },
+      "track": "how_we_catch",
+      "trackOrder": 5
     },
     {
       "id": "edt_physics",
@@ -1407,7 +1481,9 @@
         "realWorld": "Miura-ori flown on Japan's SFU (1995); net capture demonstrated by RemoveDEBRIS (2018).",
         "trlRationale": "Miura-ori flown on SFU (1995); net capture via RemoveDEBRIS (2018).",
         "unlockHint": "Fire the crossbow net."
-      }
+      },
+      "track": "how_we_catch",
+      "trackOrder": 4
     },
     {
       "id": "reel_mechanics",
@@ -1428,7 +1504,9 @@
         "realWorld": "Mothership-mounted powered reel (~15 W, ~0.25 m/s loaded) is game-speculative; grounded in real winch-capture research.",
         "trlRationale": "Mothership-mounted reel is game-speculative.",
         "unlockHint": "Reel in a tether."
-      }
+      },
+      "track": "how_we_catch",
+      "trackOrder": 7
     },
     {
       "id": "net_yo_yo_despin",
@@ -1449,7 +1527,9 @@
         "formula": "L = I·ω = const;  I ∝ r²   (spin rate falls as the net opens)",
         "trlRationale": "RemoveDEBRIS net demo (2018); yo-yo despin flown on sounding rockets since the 1960s.",
         "unlockHint": "Fire a capture net."
-      }
+      },
+      "track": "how_we_catch",
+      "trackOrder": 3
     },
     {
       "id": "space_tether",
@@ -1470,7 +1550,9 @@
         "realWorld": "TSS-1R (1996) and YES2 (2007, ~31.7 km) demonstrated tether deployment; not yet operational.",
         "trlRationale": "TSS-1R (1996), YES2 (2007) demonstrated; not operational.",
         "unlockHint": "Deploy a daughter's arm."
-      }
+      },
+      "track": "how_we_catch",
+      "trackOrder": 6
     },
     {
       "id": "tether_dynamics",
@@ -1533,7 +1615,9 @@
         "realWorld": "Motorised tether reel-in demonstrated in ground and lab tests; propellant-free retrieval via orbital-energy exchange.",
         "trlRationale": "Motorised reel capture demonstrated in ground/lab tests only.",
         "unlockHint": "Capture a target with an arm."
-      }
+      },
+      "track": "how_we_catch",
+      "trackOrder": 8
     },
     {
       "id": "tether_tangle_physics",
@@ -1575,7 +1659,9 @@
         "realWorld": "RemoveDEBRIS net 2018 / harpoon 2019; Astroscale ELSA-d 2021; ADRAS-J ~15 m rendezvous 2024; ClearSpace-1 (PROBA-1 target) in development.",
         "trlRationale": "Demonstrated in orbit: RemoveDEBRIS (2018-19), ELSA-d (2021), ADRAS-J (2024).",
         "unlockHint": "Clear 50 pieces of debris."
-      }
+      },
+      "track": "the_debris_crisis",
+      "trackOrder": 11
     },
     {
       "id": "breakup_events",
@@ -1599,7 +1685,9 @@
         "realWorld": "Iridium-Cosmos (2009): 2,000+ tracked fragments; Fengyun-1C (2007): 3,000+, the largest single event.",
         "trlRationale": "Iridium-Cosmos 2009, Fengyun-1C 2007 — documented.",
         "unlockHint": "See a collision or breakup spawn fresh fragments."
-      }
+      },
+      "track": "the_debris_crisis",
+      "trackOrder": 1
     },
     {
       "id": "starlink_contained",
@@ -1648,7 +1736,9 @@
         "realWorld": "USSPACECOM issues CDMs; the ISS maneuvers a few times a year, dozens of times since 1999.",
         "trlRationale": "USSPACECOM CDMs; ISS manoeuvres a few times a year.",
         "unlockHint": "Capture a target with an arm."
-      }
+      },
+      "track": "the_debris_crisis",
+      "trackOrder": 7
     },
     {
       "id": "debris_classification",
@@ -1668,7 +1758,9 @@
         "realWorld": "IADC size classes; ~40,000 tracked >10 cm, ~1 million 1-10 cm, 130+ million >1 mm (ESA, 2025).",
         "trlRationale": "IADC classification, long-established.",
         "unlockHint": "Clear 10 pieces of debris."
-      }
+      },
+      "track": "the_debris_crisis",
+      "trackOrder": 3
     },
     {
       "id": "debris_tracking",
@@ -1690,7 +1782,9 @@
         "realWorld": "US Space Surveillance Network + ESA catalogue ~40,000 tracked objects (2025); untracked pieces number in the millions.",
         "trlRationale": "USSPACECOM catalog operational since the 1960s.",
         "unlockHint": "Upgrade a sensor."
-      }
+      },
+      "track": "the_debris_crisis",
+      "trackOrder": 5
     },
     {
       "id": "fengyun_test",
@@ -1711,7 +1805,9 @@
         "realWorld": "Fengyun-1C, 11 Jan 2007, ~865 km; 3,000+ tracked fragments; largest single debris event on record.",
         "trlRationale": "Historical event, 11 January 2007.",
         "unlockHint": "Witness an orbital shell tip into cascade."
-      }
+      },
+      "track": "the_debris_crisis",
+      "trackOrder": 9
     },
     {
       "id": "thaicom_graveyard",
@@ -1791,7 +1887,9 @@
         "formula": "E = ½·m·v²   (impact energy scales with velocity squared)",
         "trlRationale": "Observed and measured since the 1960s.",
         "unlockHint": "Capture a target with an arm."
-      }
+      },
+      "track": "the_debris_crisis",
+      "trackOrder": 2
     },
     {
       "id": "iss_pdam",
@@ -1872,7 +1970,9 @@
         "realWorld": "US Space Surveillance Network + ESA SST; ~40,000 catalogued objects (2025); commercial trackers LeoLabs, ExoAnalytic.",
         "trlRationale": "Operational network since the 1960s.",
         "unlockHint": "Clear 40 pieces of debris."
-      }
+      },
+      "track": "the_debris_crisis",
+      "trackOrder": 6
     },
     {
       "id": "iridium_cosmos",
@@ -1894,7 +1994,9 @@
         "realWorld": "Iridium 33 (active) + Cosmos 2251 (derelict), 10 Feb 2009, ~11.7 km/s, ~790 km; 2,000+ tracked fragments.",
         "trlRationale": "Historical event, 10 February 2009.",
         "unlockHint": "Clear 25 pieces of debris."
-      }
+      },
+      "track": "the_debris_crisis",
+      "trackOrder": 8
     },
     {
       "id": "trackable_vs_dark",
@@ -1913,7 +2015,9 @@
         "realWorld": "SSN tracks to ~10 cm; an estimated 25-30 untracked 1-10 cm pieces exist per tracked object (published studies).",
         "trlRationale": "Gap characterised by multiple published studies.",
         "unlockHint": "Fit a sensor or scan upgrade."
-      }
+      },
+      "track": "the_debris_crisis",
+      "trackOrder": 4
     },
     {
       "id": "pulse_scan_radar",
@@ -2052,7 +2156,9 @@
         "realWorld": "RPO fuses lidar, optical, and relative satellite navigation to cm precision; docking systems operational on Dragon and Starliner.",
         "trlRationale": "IDSS/NDS operational on Dragon, Starliner.",
         "unlockHint": "Close on a target under relative navigation."
-      }
+      },
+      "track": "how_we_catch",
+      "trackOrder": 1
     },
     {
       "id": "star_tracker",
@@ -2094,7 +2200,9 @@
         "realWorld": "Debris tumbles up to ~60°/s; de-spin via grapple-point counter-torque is a core active-debris-removal problem.",
         "trlRationale": "Detumble control demonstrated; non-cooperative capture still maturing.",
         "unlockHint": "Fly until the mothership reports a target's tumble rate."
-      }
+      },
+      "track": "how_we_catch",
+      "trackOrder": 2
     },
     {
       "id": "magnetorquers",
@@ -2653,7 +2761,9 @@
         "formula": "phasing: Δt = Δθ / (n_target − n_chaser)",
         "trlRationale": "Routine operational astrodynamics.",
         "unlockHint": "Let the autopilot arrive at a target."
-      }
+      },
+      "track": "why_orbits_are_weird",
+      "trackOrder": 7
     },
     {
       "id": "docking_berthing",
@@ -2675,7 +2785,9 @@
         "realWorld": "Docking: Apollo, Crew Dragon. Berthing: Canadarm2 (SSRMS) capturing Cygnus and HTV cargo ships.",
         "trlRationale": "Mature operational technique.",
         "unlockHint": "Make a capture."
-      }
+      },
+      "track": "how_we_catch",
+      "trackOrder": 9
     },
     {
       "id": "welcome_cowboy",
@@ -2692,7 +2804,9 @@
         "shortText": "Low orbit is getting dangerous to use. You're here to clean it up — one piece of junk at a time.",
         "fullText": "Welcome to space, Cowboy. Decades of launches left low Earth orbit littered with dead satellites and shrapnel, and every collision makes more, the runaway feedback called Kessler syndrome. Your job is active debris removal: fly your mothership and its daughter drones out to derelict objects, capture them, and either drag them down to burn up or salvage them for parts.\n\nThe core loop is simple: scan for targets, let autopilot bring you alongside, capture, and bank the haul. Clear enough debris, fifty pieces to win the shift, and you have helped keep orbit usable. This library fills in as you go, every system you touch unlocking the science behind it. Press I anytime to come back here.",
         "unlockHint": "Reach orbit."
-      }
+      },
+      "track": "cowboy_basics",
+      "trackOrder": 0
     },
     {
       "id": "catalog_envisat",
@@ -2711,7 +2825,9 @@
         "realWorld": "ESA, launched 2002; contact lost 2012; drifts near 770 km; perennial top-priority ADR target.",
         "unlockHint": "Clear 7 pieces of debris."
       },
-      "lastVerified": "2026-07"
+      "lastVerified": "2026-07",
+      "track": "the_debris_crisis",
+      "trackOrder": 10
     },
     {
       "id": "world_adr_mandate",
@@ -2736,7 +2852,9 @@
         "realWorld": "FCC 5-year rule (effective 2024) · ESA Zero Debris Charter (2030 goal) · EU Space Act proposed 2025 · ISRO Debris-Free 2030 · Astroscale, ClearSpace, LeoLabs",
         "unlockHint": "Start clearing debris to learn why the work exists."
       },
-      "lastVerified": "2026-07"
+      "lastVerified": "2026-07",
+      "track": "world_stage",
+      "trackOrder": 1
     },
     {
       "id": "core_loop",
@@ -2756,7 +2874,9 @@
         "shortText": "Scan, pick a target, let autopilot fly you there, capture, cash in. Repeat. That's the whole job.",
         "fullText": "Five steps, and then you do them again. That is the entire job.\n\n1. Scan (S) to find debris. 2. Target (T) to pick one. 3. Autopilot (A) flies you alongside — you don't hand-fly there. 4. Capture it with a daughter's net. 5. Bank the haul: drag it down to burn up, or salvage it for parts.\n\nClear 50 pieces and the shift is won. Everything else in this library just explains one of these five steps in more depth.",
         "unlockHint": "Reach orbit."
-      }
+      },
+      "track": "cowboy_basics",
+      "trackOrder": 1
     },
     {
       "id": "reading_the_hud",
@@ -2772,7 +2892,9 @@
         "shortText": "A nav-ball, a few status panels, and a colour code that runs green to red. Glance for red; read the rest when curious.",
         "fullText": "Don't try to absorb every readout at once. The essentials are few.\n\nThe NavSphere (nav-ball) shows where you're pointed and where your target sits; the side panels track ship health, power, and resources; and the status colours run from green (fine) toward red (act now). You can play the whole loop just watching for red and trusting autopilot for the rest. The detail is all here in the library when you want it.",
         "unlockHint": "Reach orbit."
-      }
+      },
+      "track": "cowboy_basics",
+      "trackOrder": 2
     },
     {
       "id": "delta_v_doctrine",
@@ -2789,7 +2911,9 @@
         "shortText": "Fuel doesn't refill on its own. Every burn spends a budget you can't get back for free.",
         "fullText": "Delta-V (ΔV), your ability to change orbit, is the master resource. Your xenon and cold-gas tanks do not magically refill: the only way to top up is to salvage metal and run it through the Forge into propellant.\n\nSo fly cheap. Let autopilot pick efficient routes, and don't chase a target across the sky when a closer one will do. Run every tank dry and the mission ends, wherever you happen to be.",
         "unlockHint": "Reach orbit."
-      }
+      },
+      "track": "cowboy_basics",
+      "trackOrder": 5
     },
     {
       "id": "autopilot_first",
@@ -2807,7 +2931,9 @@
         "shortText": "Hand-flying in orbit is a black-belt skill. For almost everything, press A and let the computer do it.",
         "fullText": "Orbital motion is counter-intuitive: thrust straight at a target and you will usually miss it, an effect known as the prograde paradox.\n\nThat is why autopilot (A) is the default. It solves the approach for you and burns less fuel doing it. Manual piloting exists for fine moments and bragging rights, but you can win the entire game leaning on autopilot. Automating isn't cheating up here; the professionals do exactly the same.",
         "unlockHint": "Reach orbit."
-      }
+      },
+      "track": "cowboy_basics",
+      "trackOrder": 3
     },
     {
       "id": "tool_choice",
@@ -2826,7 +2952,9 @@
         "shortText": "Different junk wants different tools. The game suggests one — and you can cycle to the rest.",
         "fullText": "Your daughters carry several capture tools: a net is the workhorse, backed by grippers, magnets, and pads.\n\nThe game reads each target and marks a recommended tool with a ▶. While piloting a daughter, tap the backtick key ( ` ) to cycle through the options. Big tumbling slab? Net. Small iron fragment? Magnet. When in doubt, take the suggestion — it is usually right.",
         "unlockHint": "Reach orbit."
-      }
+      },
+      "track": "cowboy_basics",
+      "trackOrder": 4
     },
     {
       "id": "arm_sacrifice",
@@ -2842,7 +2970,9 @@
         "shortText": "Bring a daughter home to reuse it — or ride it down with the junk for a bigger payout.",
         "fullText": "Most captures mean tethering the target and reeling it in. But for stubborn or massive debris you can send a daughter down with it on a deorbit burn, sacrificing the arm for a bonus worth up to ×2.5 the score.\n\nIt is a genuine trade: lose hardware now for a bigger clear, or keep your fleet and play the long game. Early on, keep your arms. Once you can spare one, the deorbit bonus adds up fast.",
         "unlockHint": "Reach orbit."
-      }
+      },
+      "track": "cowboy_basics",
+      "trackOrder": 8
     },
     {
       "id": "salvage_economy",
@@ -2859,7 +2989,9 @@
         "shortText": "Dead satellites are a gas station. Grab the metal, run the Forge, refuel — your only way to top up.",
         "fullText": "A captured object isn't just a tick on the counter; it is raw material. Salvage yields metal, and sometimes a splash of propellant or an on-the-spot panel repair.\n\nFeed salvaged metal into the Forge in propellant mode and it becomes fuel you can burn. Because the tanks never refill for free, the salvage-to-Forge-to-propellant loop is the heartbeat that keeps you flying. You clean up and gas up in the same move.",
         "unlockHint": "Reach orbit."
-      }
+      },
+      "track": "cowboy_basics",
+      "trackOrder": 6
     },
     {
       "id": "power_triage",
@@ -2875,7 +3007,9 @@
         "shortText": "Half of every orbit is night. With no sun, you ration power across three buses: thrust, sensors, daughters.",
         "fullText": "Your solar panels stop producing the instant you cross into Earth's shadow, and you run on battery. Power flows through three buses, Thrust, Sensors, and Daughters, and you can shift the balance: Shift+1/2/3 selects a bus, then [ and ] trim it.\n\nGoing into eclipse with a capture to finish? Lean power toward Daughters. Long coast ahead? Favour Thrust. Manage the dark half of the orbit and the bright half takes care of itself.",
         "unlockHint": "Reach orbit."
-      }
+      },
+      "track": "cowboy_basics",
+      "trackOrder": 9
     },
     {
       "id": "capture_quality",
@@ -2891,7 +3025,9 @@
         "shortText": "A clean, scanned, fuel-smart capture can score nearly four times a sloppy one. Style matters.",
         "fullText": "Not all captures are equal. Scan a target's structure before you grab it, pilot the daughter in by hand, approach without burning much fuel, and recover its salvage: each adds a multiplier.\n\nStacked, those bonuses reach almost ×3.7 over a bare auto-grab. You never have to chase the perfect capture, but when you want a high score, or a faster fifty, quality beats quantity.",
         "unlockHint": "Reach orbit."
-      }
+      },
+      "track": "cowboy_basics",
+      "trackOrder": 7
     },
     {
       "id": "world_who_removes",
@@ -2913,7 +3049,9 @@
         "realWorld": "Astroscale ELSA-d (2021), ADRAS-J (~15 m, 2024), ADRAS-J2 (~2027); ClearSpace-1 (PROBA-1, ~2028); Starfish Space, D-Orbit.",
         "unlockHint": "Reach orbit."
       },
-      "lastVerified": "2026-07"
+      "lastVerified": "2026-07",
+      "track": "world_stage",
+      "trackOrder": 5
     },
     {
       "id": "world_who_tracks",
@@ -2934,7 +3072,9 @@
         "realWorld": "US Space Surveillance Network + ESA catalogue ~40,000 tracked objects (2025); commercial trackers LeoLabs, Slingshot Aerospace.",
         "unlockHint": "Reach orbit."
       },
-      "lastVerified": "2026-07"
+      "lastVerified": "2026-07",
+      "track": "world_stage",
+      "trackOrder": 6
     },
     {
       "id": "world_why_now",
@@ -2954,7 +3094,9 @@
         "realWorld": "Tracked population ~40,000 and rising (2025); mega-constellation growth drives the collision-rate concern.",
         "unlockHint": "Reach orbit."
       },
-      "lastVerified": "2026-07"
+      "lastVerified": "2026-07",
+      "track": "world_stage",
+      "trackOrder": 0
     },
     {
       "id": "catalog_vanguard1",
@@ -3190,7 +3332,9 @@
         "realWorld": "ESA Aeolus (launched 2018); first assisted reentry, 28 Jul 2023.",
         "unlockHint": "Clear 12 pieces of debris."
       },
-      "lastVerified": "2026-07"
+      "lastVerified": "2026-07",
+      "track": "world_stage",
+      "trackOrder": 10
     },
     {
       "id": "news_mev1_servicing",
@@ -3210,7 +3354,9 @@
         "realWorld": "Northrop Grumman MEV-1 + Intelsat 901; docked 25 Feb 2020 (first commercial GEO docking).",
         "unlockHint": "Clear 16 pieces of debris."
       },
-      "lastVerified": "2026-07"
+      "lastVerified": "2026-07",
+      "track": "world_stage",
+      "trackOrder": 9
     },
     {
       "id": "news_yunhai_collision",
@@ -3455,7 +3601,9 @@
         "realWorld": "Outer Space Treaty (in force 1967); Liability Convention (in force 1972).",
         "unlockHint": "Reach orbit."
       },
-      "lastVerified": "2026-07"
+      "lastVerified": "2026-07",
+      "track": "world_stage",
+      "trackOrder": 3
     },
     {
       "id": "world_liability",
@@ -3474,7 +3622,9 @@
         "realWorld": "Liability Convention (1972); sole claim filed: Kosmos 954 crash in Canada, 1978.",
         "unlockHint": "Reach orbit."
       },
-      "lastVerified": "2026-07"
+      "lastVerified": "2026-07",
+      "track": "world_stage",
+      "trackOrder": 4
     },
     {
       "id": "world_five_year_rule",
@@ -3493,7 +3643,9 @@
         "realWorld": "IADC 25-year guideline (voluntary); FCC 5-year deorbit rule adopted 2022, effective 2024.",
         "unlockHint": "Reach orbit."
       },
-      "lastVerified": "2026-07"
+      "lastVerified": "2026-07",
+      "track": "world_stage",
+      "trackOrder": 2
     },
     {
       "id": "world_servicing",
@@ -3514,7 +3666,9 @@
         "realWorld": "On-orbit servicing (OSAM); first commercial demo: Northrop Grumman MEV-1 + Intelsat 901, 2020.",
         "unlockHint": "Reach orbit."
       },
-      "lastVerified": "2026-07"
+      "lastVerified": "2026-07",
+      "track": "world_stage",
+      "trackOrder": 7
     },
     {
       "id": "world_sustainability_rating",
@@ -3533,7 +3687,9 @@
         "realWorld": "Space Sustainability Rating (WEF-initiated; ESA/MIT/BryceTech/UT-Austin; run by eSpace at EPFL); Platinum: OneWeb 2024, SES O3b mPOWER 2025.",
         "unlockHint": "Reach orbit."
       },
-      "lastVerified": "2026-07"
+      "lastVerified": "2026-07",
+      "track": "world_stage",
+      "trackOrder": 8
     },
     {
       "id": "heritage_solar_max",
@@ -3634,7 +3790,9 @@
         "realWorld": "Vision-based relative navigation for non-cooperative targets; demonstrated in ESA and JAXA debris-removal and servicing programs.",
         "trlRationale": "Demonstrated in servicing/ADR programs; non-cooperative capture still maturing.",
         "unlockHint": "Clear 19 pieces of debris."
-      }
+      },
+      "track": "how_we_catch",
+      "trackOrder": 0
     }
   ]
 }

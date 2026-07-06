@@ -275,6 +275,61 @@ describe('Codex Phase 1 — tracks', () => {
   });
 });
 
+// ===========================================================================
+// PHASE 6e — Learning tracks expansion (1 → 7). Structural: every track is a
+// curated 6–12 entry ordered path; entries carry at most one track.
+// ===========================================================================
+describe('Codex Phase 6e — learning tracks', () => {
+  const EXPECTED = [
+    'propellant_story', 'cowboy_basics', 'how_we_catch', 'why_orbits_are_weird',
+    'power_through_the_dark', 'the_debris_crisis', 'world_stage',
+  ];
+
+  it('all seven tracks are defined with label + colour + order', () => {
+    const tracks = codex.getTracks();
+    const missing = EXPECTED.filter(t => !tracks[t]);
+    assert.equal(missing.length, 0, `missing track defs: ${missing.join(', ')}`);
+    const bad = Object.entries(tracks).filter(([, m]) =>
+      !m.label || !/^#[0-9a-fA-F]{3,6}$/.test(m.color || '') || typeof m.order !== 'number');
+    assert.equal(bad.length, 0, `malformed track meta: ${bad.map(b => b[0]).join(', ')}`);
+  });
+
+  it('track meta orders are unique', () => {
+    const orders = Object.values(codex.getTracks()).map(m => m.order);
+    assert.equal(new Set(orders).size, orders.length, `duplicate track orders: ${orders.join(', ')}`);
+  });
+
+  it('every track has contiguous trackOrder 0..n-1; new tracks hold 6–12 entries', () => {
+    // propellant_story pre-dates the 6–12 guidance (14 entries), so the size band
+    // applies to the six tracks added in Slice 6; the contiguous-order invariant
+    // applies to all seven.
+    const NEW_TRACKS = EXPECTED.filter(t => t !== 'propellant_story');
+    const bad = [];
+    for (const tid of EXPECTED) {
+      const t = codex.getTrack(tid);
+      const n = t.entries.length;
+      if (NEW_TRACKS.includes(tid) && (n < 6 || n > 12)) bad.push(`${tid}:${n} entries`);
+      const orders = t.entries.map(e => e.trackOrder);
+      const expect = Array.from({ length: n }, (_, i) => i);
+      if (JSON.stringify(orders) !== JSON.stringify(expect)) bad.push(`${tid}:non-contiguous [${orders}]`);
+    }
+    assert.equal(bad.length, 0, bad.join(' | '));
+  });
+
+  it('no entry belongs to more than one track (single track field)', () => {
+    // The schema allows one track per entry; confirm membership counts add up
+    // and every tracked entry resolves to exactly its own track.
+    const tracked = entries.filter(e => e.track);
+    const perTrack = EXPECTED.reduce((s, tid) => s + codex.getTrack(tid).entries.length, 0);
+    assert.equal(tracked.length, perTrack, 'tracked entries reconcile with per-track membership');
+  });
+
+  it('track member entries are real and unlockable (no dangling ids)', () => {
+    const bad = entries.filter(e => e.track && !codex.getEntry(e.id)).map(e => e.id);
+    assert.equal(bad.length, 0, `phantom track members: ${bad.join(', ')}`);
+  });
+});
+
 describe('Codex Phase 1 — categories', () => {
   it('getCategories returns ordered meta with a colour per category', () => {
     const cats = codex.getCategories();
