@@ -601,6 +601,8 @@ async function init() {
   // injected; on any failure the system constructs empty (graceful).
   const codexData = await loadCodexData();
   codexSystem = new CodexSystem(codexData);
+  // Slice 8: let the manage_codex SM-2 reminder resurface unread entries.
+  skillsSystem.setCodexSystem(codexSystem);
   // ST-6.1: seeded replay if catalogLoader is ready
   spaceWeatherSystem = new SpaceWeatherSystem({ catalogLoader });
   subsystemEvents = new SubsystemEvents();

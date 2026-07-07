@@ -474,4 +474,127 @@ describe('CodexViewerUI._loggedLineHtml — unlock anchor stamp (Slice 7)', () =
   });
 });
 
+// ── Slice 8: Curious next? chips ─────────────────────────────────────────────
+const theme = { accent: '#00d4ff', accentBg: (a) => `rgba(0,212,255,${a})` };
+
+describe('CodexViewerUI._curiousNextHtml — locked-first, cap 2', () => {
+  function viewerWithRelated(related) {
+    return makeViewer({ getRelated: () => related });
+  }
+
+  it('renders nothing for a locked focus entry', () => {
+    const v = viewerWithRelated([{ id: 'x', title: 'X', unlocked: false }]);
+    assert.equal(v._curiousNextHtml({ id: 'f', unlocked: false }, theme), '');
+  });
+
+  it('renders nothing when there are no related entries', () => {
+    const v = viewerWithRelated([]);
+    assert.equal(v._curiousNextHtml({ id: 'f', unlocked: true }, theme), '');
+  });
+
+  it('renders nothing when all related are unlocked+seen', () => {
+    const v = viewerWithRelated([
+      { id: 'a', title: 'A', unlocked: true, seen: true },
+      { id: 'b', title: 'B', unlocked: true, seen: true },
+    ]);
+    assert.equal(v._curiousNextHtml({ id: 'f', unlocked: true }, theme), '');
+  });
+
+  it('puts locked entries first, then unlocked-but-unseen', () => {
+    const v = viewerWithRelated([
+      { id: 'unseen', title: 'Unseen One', unlocked: true, seen: false, icon: '📘' },
+      { id: 'locked', title: 'Locked One', unlocked: false, icon: '🔒', unlockHint: 'Catch 3 debris.' },
+    ]);
+    const html = v._curiousNextHtml({ id: 'f', unlocked: true }, theme);
+    const iLocked = html.indexOf('Locked One');
+    const iUnseen = html.indexOf('Unseen One');
+    assert.ok(iLocked >= 0 && iUnseen >= 0, 'both chips present');
+    assert.ok(iLocked < iUnseen, 'locked chip comes before unseen chip');
+    assert.ok(html.includes("What's behind 🔒 Locked One? — Catch 3 debris."), 'locked prompt text');
+    assert.ok(html.includes("Haven't read Unseen One yet"), 'unseen prompt text');
+  });
+
+  it('caps at 2 chips', () => {
+    const v = viewerWithRelated([
+      { id: 'l1', title: 'L1', unlocked: false, unlockHint: 'h' },
+      { id: 'l2', title: 'L2', unlocked: false, unlockHint: 'h' },
+      { id: 'l3', title: 'L3', unlocked: false, unlockHint: 'h' },
+    ]);
+    const html = v._curiousNextHtml({ id: 'f', unlocked: true }, theme);
+    const count = (html.match(/codex-related-chip/g) || []).length;
+    assert.equal(count, 2, 'at most 2 chips');
+    assert.ok(!html.includes('>L3<') && !html.includes('L3?'), 'third pick dropped');
+  });
+
+  it('reuses the .codex-related-chip class and data-id for delegation', () => {
+    const v = viewerWithRelated([{ id: 'target', title: 'T', unlocked: false, unlockHint: 'h' }]);
+    const html = v._curiousNextHtml({ id: 'f', unlocked: true }, theme);
+    assert.ok(html.includes('class="codex-related-chip"'), 'uses related-chip class');
+    assert.ok(html.includes('data-id="target"'), 'carries data-id for jumpTo');
+  });
+});
+
+// ── Slice 8: map-mode toggle state (pure, _renderReading stubbed out) ─────────
+describe('CodexViewerUI — map mode toggle state', () => {
+  function mapViewer() {
+    const v = makeViewer({
+      getEntry: (id) => ({ id, unlocked: true }),
+      getRelated: () => [],
+    });
+    v._mapMode = false;
+    v._mapFocusId = null;
+    // Stub the DOM-heavy renderer so we test pure state transitions.
+    v._renderCalls = [];
+    v._renderReading = (entry) => { v._renderCalls.push(entry.id); };
+    return v;
+  }
+
+  it('_enterMapMode sets _mapMode + focus id and re-renders', () => {
+    const v = mapViewer();
+    v._enterMapMode({ id: 'dv', unlocked: true });
+    assert.equal(v._mapMode, true, 'map mode on');
+    assert.equal(v._mapFocusId, 'dv', 'focus id set');
+    assert.deepEqual(v._renderCalls, ['dv'], 're-rendered the focus entry');
+  });
+
+  it('_enterMapMode ignores a locked entry', () => {
+    const v = mapViewer();
+    v._enterMapMode({ id: 'x', unlocked: false });
+    assert.equal(v._mapMode, false, 'stays off for locked');
+    assert.deepEqual(v._renderCalls, [], 'no render');
+  });
+
+  it('_recenterMap updates focus id without leaving map mode', () => {
+    const v = mapViewer();
+    v._enterMapMode({ id: 'dv', unlocked: true });
+    v._recenterMap('hohmann');
+    assert.equal(v._mapMode, true, 'still in map mode');
+    assert.equal(v._mapFocusId, 'hohmann', 'focus re-centered');
+    assert.deepEqual(v._renderCalls, ['dv', 'hohmann'], 'renders new focus');
+  });
+
+  it('_recenterMap ignores a locked/unknown target', () => {
+    const v = makeViewer({ getEntry: () => null });
+    v._mapMode = true;
+    v._mapFocusId = 'dv';
+    v._renderReading = () => { throw new Error('should not render'); };
+    v._recenterMap('nope'); // getEntry returns null → no-op
+    assert.equal(v._mapFocusId, 'dv', 'focus unchanged on unknown target');
+  });
+
+  it('_selectEntry clears map mode', () => {
+    const v = mapViewer();
+    v._enterMapMode({ id: 'dv', unlocked: true });
+    // Give _selectEntry the seams it touches so it doesn't throw headless.
+    v._focusIdx = -1;
+    v._narrow = false;
+    v._applyRowFocus = () => {};
+    v._armSeenTimer = () => {};
+    v._currentListEntries = () => ({ entries: [] });
+    v._selectEntry({ id: 'dv', unlocked: true });
+    assert.equal(v._mapMode, false, '_selectEntry exits map mode');
+  });
+});
+
+
 

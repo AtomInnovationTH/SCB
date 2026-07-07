@@ -1330,3 +1330,123 @@ describe('SkillsSystem — CP-4 reminder cap (4th nudge never fires)', () => {
         sys.dispose();
     });
 });
+
+// ── Slice 8: Codex resurfacing (didYouKnow enrichment of manage_codex) ───────
+describe('SkillsSystem — Codex resurfacing (Slice 8)', () => {
+
+    /** Minimal codex stub: unlocked entries + category order. */
+    function makeCodexStub(entries, cats) {
+        return {
+            getUnlockedEntries: () => entries.filter(e => e.unlocked),
+            getCategories: () => (cats || []).map(k => ({ key: k })),
+        };
+    }
+
+    it('_pickDidYouKnow returns null with no codex ref', () => {
+        const sys = makeSystem();
+        assert.equal(sys._pickDidYouKnow(), null, 'no codex → null');
+        sys.dispose();
+    });
+
+    it('_pickDidYouKnow returns null when all unlocked entries are seen', () => {
+        const sys = makeSystem();
+        sys.setCodexSystem(makeCodexStub([
+            { id: 'a', icon: '🅰️', title: 'A', unlocked: true, seen: true },
+            { id: 'b', icon: '🅱️', title: 'B', unlocked: true, seen: true },
+        ]));
+        assert.equal(sys._pickDidYouKnow(), null, 'all seen → null');
+        sys.dispose();
+    });
+
+    it('_pickDidYouKnow prefers the longest-unread (lowest tSim)', () => {
+        const sys = makeSystem();
+        sys.setCodexSystem(makeCodexStub([
+            { id: 'new', icon: '🆕', title: 'Newer', unlocked: true, seen: false, unlockContext: { tSim: 900 } },
+            { id: 'old', icon: '📜', title: 'Older', unlocked: true, seen: false, unlockContext: { tSim: 120 } },
+        ]));
+        const pick = sys._pickDidYouKnow();
+        assert.equal(pick.id, 'old', 'lowest tSim (longest-unread) wins');
+        assert.equal(pick.title, 'Older');
+        assert.equal(pick.icon, '📜');
+        sys.dispose();
+    });
+
+    it('_pickDidYouKnow sorts entries without context after ctx-bearing ones', () => {
+        const sys = makeSystem();
+        sys.setCodexSystem(makeCodexStub([
+            { id: 'noctx', icon: '❓', title: 'NoCtx', unlocked: true, seen: false },
+            { id: 'ctx', icon: '⏱️', title: 'Ctx', unlocked: true, seen: false, unlockContext: { tSim: 500 } },
+        ]));
+        assert.equal(sys._pickDidYouKnow().id, 'ctx', 'ctx-bearing entry preferred over no-ctx');
+        sys.dispose();
+    });
+
+    it('_pickDidYouKnow is deterministic; ties break by category order then id', () => {
+        const sys = makeSystem();
+        // Two entries, same tSim; category order [POWER, NAV] → POWER wins.
+        sys.setCodexSystem(makeCodexStub([
+            { id: 'z', icon: '⚡', title: 'Z', unlocked: true, seen: false, unlockContext: { tSim: 100 }, category: 'NAV' },
+            { id: 'y', icon: '🔋', title: 'Y', unlocked: true, seen: false, unlockContext: { tSim: 100 }, category: 'POWER' },
+        ], ['POWER', 'NAV']));
+        const a = sys._pickDidYouKnow();
+        const b = sys._pickDidYouKnow();
+        assert.equal(a.id, 'y', 'earlier category (POWER) wins the tie');
+        assert.equal(a.id, b.id, 'deterministic across calls');
+        sys.dispose();
+    });
+
+    it('SKILL_REMINDED for manage_codex carries didYouKnow', () => {
+        const sys = makeSystem();
+        sys.setCodexSystem(makeCodexStub([
+            { id: 'dv', icon: '🚀', title: 'Delta-V Budget', unlocked: true, seen: false, unlockContext: { tSim: 60 } },
+        ]));
+        const log = trackEvents(Events.SKILL_REMINDED);
+        // Discover manage_codex, then force it overdue.
+        eventBus.emit(Events.CODEX_OPENED);
+        const rec = sys._skills.get('manage_codex');
+        rec.state = 'discovered';
+        rec.count = 1;
+        rec.nextReminderAt = Date.now() - 10000;
+        sys._checkReminders(Date.now());
+        assert.equal(log.length, 1, 'one reminder');
+        assert.equal(log[0].data.skillId, 'manage_codex');
+        assert.ok(log[0].data.didYouKnow, 'payload carries didYouKnow');
+        assert.equal(log[0].data.didYouKnow.id, 'dv');
+        assert.equal(log[0].data.didYouKnow.title, 'Delta-V Budget');
+        sys.dispose();
+    });
+
+    it('SKILL_REMINDED for a non-codex skill does NOT carry didYouKnow', () => {
+        const sys = makeSystem();
+        sys.setCodexSystem(makeCodexStub([
+            { id: 'dv', icon: '🚀', title: 'Delta-V Budget', unlocked: true, seen: false, unlockContext: { tSim: 60 } },
+        ]));
+        const log = trackEvents(Events.SKILL_REMINDED);
+        eventBus.emit(Events.SCAN_QUICK);
+        sys._skills.get('scan_quick').nextReminderAt = Date.now() - 10000;
+        sys._checkReminders(Date.now());
+        assert.equal(log.length, 1);
+        assert.equal(log[0].data.skillId, 'scan_quick');
+        assert.equal('didYouKnow' in log[0].data, false, 'no didYouKnow on non-codex reminder');
+        sys.dispose();
+    });
+
+    it('manage_codex reminder carries didYouKnow:null when nothing qualifies', () => {
+        const sys = makeSystem();
+        sys.setCodexSystem(makeCodexStub([
+            { id: 'seen', icon: '👁️', title: 'Seen', unlocked: true, seen: true },
+        ]));
+        const log = trackEvents(Events.SKILL_REMINDED);
+        eventBus.emit(Events.CODEX_OPENED);
+        const rec = sys._skills.get('manage_codex');
+        rec.state = 'discovered';
+        rec.count = 1;
+        rec.nextReminderAt = Date.now() - 10000;
+        sys._checkReminders(Date.now());
+        assert.equal(log.length, 1);
+        assert.ok('didYouKnow' in log[0].data, 'didYouKnow key present');
+        assert.equal(log[0].data.didYouKnow, null, 'null when all seen');
+        sys.dispose();
+    });
+});
+

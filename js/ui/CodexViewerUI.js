@@ -20,6 +20,7 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { entryMatchesQuery, ALIASES } from '../systems/CodexSystem.js';
 import { decorateGlossary } from '../systems/codex/glossary.js';
+import { layoutEgoMap, EGO_LAYOUT_VIEW } from '../systems/codex/egoLayout.js';
 import { ensureGlossaryCss, delegateGlossaryClicks } from './glossaryDom.js';
 import {
   Constants, trlToBadgeColor, trlToLabel, techLevelBadgeText,
@@ -79,6 +80,16 @@ export class CodexViewerUI {
     /** @type {boolean} true while the interior is in the narrow 2-pane swap mode */
     this._narrow = false;
 
+    /**
+     * Slice 8 — ego-map mode. When true the reading pane renders an SVG
+     * connections map of `_selectedEntry` instead of the article. Transient
+     * (never persisted); cleared on any selection/filter/track switch and hide().
+     * @type {boolean}
+     */
+    this._mapMode = false;
+    /** @type {?string} focus entry id for the map (may differ from selection after re-centering) */
+    this._mapFocusId = null;
+
     /** @type {string|null} deep-link target id for the next show()'s auto-select */
     this._pendingOpenId = null;
 
@@ -121,6 +132,8 @@ export class CodexViewerUI {
 
   hide() {
     this._visible = false;
+    // Slice 8: map mode is transient — never persists across a close.
+    this._mapMode = false;
     // Cancel any pending seen-dwell emit — a fire after close would mark an
     // entry the player never actually read.
     this._clearSeenTimer();
@@ -350,6 +363,37 @@ export class CodexViewerUI {
           sidebar.appendChild(tab);
         });
     }
+
+    // --- Slice 8: CONNECTIONS — the ego-map affordance. A `map:` pseudo-key tab
+    // enters map mode on the current selection (fallback: first unlocked entry).
+    // It never becomes the active category, so it's given a custom onClick that
+    // enters map mode instead of switching the category. ---
+    const mapDivider = document.createElement('div');
+    mapDivider.textContent = 'CONNECTIONS';
+    Object.assign(mapDivider.style, {
+      padding: '14px 14px 6px', fontSize: '10px', letterSpacing: '0.14em',
+      color: '#566', borderTop: '1px solid rgba(255,255,255,0.06)', marginTop: '8px',
+    });
+    sidebar.appendChild(mapDivider);
+    const mapTab = this._makeSidebarTab('map:', '🕸', 'Map', 'map:', '#8ab',
+      () => this._openMapFromSidebar());
+    sidebar.appendChild(mapTab);
+  }
+
+  /** @private Slice 8 — enter map mode from the sidebar Map tab. Uses the
+   * current selection, falling back to the first unlocked entry. */
+  _openMapFromSidebar() {
+    let entry = this._selectedEntry;
+    if (!entry || !entry.unlocked) {
+      const unlocked = (typeof this._codex.getUnlockedEntries === 'function')
+        ? this._codex.getUnlockedEntries()
+        : (this._codex.entries || []).filter(e => e.unlocked);
+      entry = unlocked && unlocked.length ? unlocked[0] : null;
+    }
+    if (!entry) return;
+    this._selectedEntry = entry;
+    this._enterMapMode(entry);
+    if (this._narrow) this._applyResponsiveLayout();
   }
 
   /** @private First category key (by order) that has at least one entry. */
@@ -366,8 +410,16 @@ export class CodexViewerUI {
     return cats.length ? cats[0].key : null;
   }
 
-  /** @private Create a sidebar tab element */
-  _makeSidebarTab(key, icon, label, category, color) {
+  /** @private Create a sidebar tab element.
+   * @param {string} key
+   * @param {string} icon
+   * @param {string} label
+   * @param {string} category - dataset.category (may be a `track:`/`map:` pseudo-key)
+   * @param {string} color
+   * @param {Function} [onClick] - Slice 8: custom click handler; when supplied,
+   *        replaces the default category-switch behaviour (used by the map tab).
+   */
+  _makeSidebarTab(key, icon, label, category, color, onClick) {
     const tab = document.createElement('div');
     tab.dataset.category = category;
     // Phase 3 hue theming: stash the category accent on the element so the
@@ -393,12 +445,12 @@ export class CodexViewerUI {
         tab.style.background = 'none';
       }
     });
-    tab.addEventListener('click', () => {
+    tab.addEventListener('click', onClick || (() => {
       this._selectedCategory = category;
       this._renderSidebarActive();
       this._renderEntryList();
       this._selectFirstEntry();
-    });
+    }));
     return tab;
   }
 
@@ -471,6 +523,9 @@ export class CodexViewerUI {
           const list = track ? track.entries : [];
           const unlocked = list.filter(e => e.unlocked).length;
           countEl.textContent = `${unlocked}/${list.length}`;
+        } else if (cat === 'map:') {
+          // Slice 8: the Map tab is an action, not a category — no progress badge.
+          countEl.textContent = '';
         } else if (typeof this._codex.getCategoryProgress === 'function') {
           const p = this._codex.getCategoryProgress(cat);
           countEl.textContent = `${p.unlocked}/${p.total}`;
@@ -611,6 +666,8 @@ export class CodexViewerUI {
    * (openEntry), routes straight to that entry — even in narrow mode, where a
    * deep-link should open the reading pane rather than sit on the list. */
   _selectFirstEntry() {
+    // Slice 8: category/track/search switches drop out of map mode.
+    this._mapMode = false;
     const { entries } = this._currentListEntries();
     if (!entries.length) {
       this._selectedEntry = null;
@@ -659,6 +716,8 @@ export class CodexViewerUI {
    */
   _selectEntry(entry, opts = {}) {
     if (!entry) return;
+    // Slice 8: any fresh selection returns to the article (exits map mode).
+    this._mapMode = false;
     this._selectedEntry = entry;
     const { entries } = this._currentListEntries();
     const idx = entries.findIndex(e => e.id === entry.id);
@@ -846,6 +905,14 @@ export class CodexViewerUI {
     const accentRGB = this._hexToRgb(accent);
     const accentBg = (a) => `rgba(${accentRGB.r},${accentRGB.g},${accentRGB.b},${a})`;
 
+    // Slice 8 — ego-map mode short-circuits the article and renders the SVG
+    // connections map instead. Unlocked entries only (map mode is never armed
+    // for locked ones; guard anyway so a stray toggle can't strand the pane).
+    if (this._mapMode && entry.unlocked) {
+      this._renderEgoMap(entry, { accent, accentBg });
+      return;
+    }
+
     const sectionHeader = (text, color) =>
       `<div style="font-size:11px;letter-spacing:0.14em;font-weight:bold;
         color:${color || '#778'};margin:0 0 8px;">${text}</div>`;
@@ -861,10 +928,11 @@ export class CodexViewerUI {
     const titleHtml = `
       <div style="display:flex;align-items:center;gap:14px;margin-bottom:18px;">
         <span style="font-size:40px;${isLocked ? 'opacity:0.6;' : ''}">${entry.icon}</span>
-        <div>
+        <div style="flex:1;">
           <div style="font-size:22px;font-weight:bold;color:${isLocked ? '#9ab' : '#eee'};">${entry.title}</div>
           <div style="font-size:12px;color:${accent};opacity:0.85;">${catMeta.icon} ${catMeta.label}</div>
         </div>
+        ${entry.unlocked ? this._mapToggleHtml('🕸 MAP', accent, accentBg) : ''}
       </div>`;
 
     // QUICK LOOK — the ELI5 lead, always shown (even when locked).
@@ -954,16 +1022,8 @@ export class CodexViewerUI {
       : [];
     let relatedHtml = '';
     if (related.length) {
-      const chips = related.map(r => {
-        const rLocked = !r.unlocked;
-        return `<span class="codex-related-chip" data-id="${r.id}"
-          style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;
-            padding:5px 11px;border-radius:14px;font-size:12px;
-            border:1px solid ${rLocked ? 'rgba(255,255,255,0.14)' : accentBg(0.4)};
-            background:${rLocked ? 'rgba(255,255,255,0.03)' : accentBg(0.08)};
-            color:${rLocked ? '#89a' : '#cde'};transition:all 0.15s;">
-          <span>${r.icon}</span>${r.title}${rLocked ? ' 🔒' : ''}</span>`;
-      }).join('');
+      const chips = related.map(r => this._relatedChipHtml(r.id, !r.unlocked, accentBg,
+        `<span>${r.icon}</span>${r.title}${!r.unlocked ? ' 🔒' : ''}`)).join('');
       relatedHtml = `
         <div style="margin-bottom:22px;">
           ${sectionHeader('🔗 RELATED')}
@@ -1004,6 +1064,7 @@ export class CodexViewerUI {
         ${relatedHtml}
         ${entry.unlocked ? this._verifiedStampHtml(entry) : ''}
         ${entry.unlocked ? this._loggedLineHtml(entry) : ''}
+        ${entry.unlocked ? this._curiousNextHtml(entry, { accent, accentBg }) : ''}
         ${prevNextHtml}
       </div>
     `;
@@ -1018,6 +1079,18 @@ export class CodexViewerUI {
       backBtn.addEventListener('mouseenter', () => { backBtn.style.background = 'rgba(0,212,255,0.1)'; });
       backBtn.addEventListener('mouseleave', () => { backBtn.style.background = 'none'; });
       backBtn.addEventListener('click', () => this._showList());
+    }
+
+    // Slice 8 — MAP toggle: enter ego-map mode for this entry.
+    const mapToggle = reading.querySelector('#codex-map-toggle');
+    if (mapToggle) {
+      mapToggle.addEventListener('mouseenter', () => { mapToggle.style.background = accentBg(0.15); });
+      mapToggle.addEventListener('mouseleave', () => { mapToggle.style.background = ''; });
+      const enterMap = () => this._enterMapMode(entry);
+      mapToggle.addEventListener('click', enterMap);
+      mapToggle.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); enterMap(); }
+      });
     }
 
     // Related chips + Prev/Next: jump straight to another entry.
@@ -1078,6 +1151,212 @@ export class CodexViewerUI {
     return `<div style="margin:0 0 14px;padding:8px 12px;border-radius:6px;
       background:${tint(0.12)};border:1px solid ${tint(0.35)};
       font-size:11px;letter-spacing:0.08em;color:${accent || '#00d4ff'};">✓ ${label} — FILE COMPLETE</div>`;
+  }
+
+  /** @private Slice 8 — the map/read toggle pill, shared by the article header
+   * (🕸 MAP) and the map header (📖 READ) so their styling never drifts. The two
+   * render paths are mutually exclusive full-innerHTML replaces, so the shared
+   * `codex-map-toggle` id never collides at runtime.
+   * @param {string} label
+   * @param {string} accent
+   * @param {(a:number)=>string} accentBg
+   * @returns {string}
+   */
+  _mapToggleHtml(label, accent, accentBg) {
+    return `<span id="codex-map-toggle" tabindex="0" role="button"
+      style="cursor:pointer;flex-shrink:0;color:${accent};font-size:12px;padding:6px 12px;
+        border:1px solid ${accentBg(0.35)};border-radius:14px;transition:background 0.15s;
+        white-space:nowrap;">${label}</span>`;
+  }
+
+  /** @private Slice 8 — "Curious next?" chips at the reading-pane foot. Up to 2,
+   * chosen deterministically from `entry.related` in array order: locked entries
+   * first (rendered as a question from the unlock hint), then unlocked-but-unseen.
+   * Reuses the `.codex-related-chip` markup so click delegation keeps working.
+   * Empty when nothing qualifies. Callers gate on `entry.unlocked`.
+   * @param {object} entry
+   * @param {{accent:string, accentBg:(a:number)=>string}} theme
+   * @returns {string}
+   */
+  _curiousNextHtml(entry, { accent, accentBg }) {
+    if (!entry || !entry.unlocked) return '';
+    const related = (typeof this._codex.getRelated === 'function')
+      ? (this._codex.getRelated(entry.id) || [])
+      : [];
+    if (!related.length) return '';
+
+    const locked = related.filter(r => r && !r.unlocked);
+    const unseen = related.filter(r => r && r.unlocked && !r.seen);
+    // Locked prompts first, then unlocked-but-unread; array order preserved
+    // within each group. Cap at 2 total.
+    const picks = [];
+    for (const r of locked) { if (picks.length >= 2) break; picks.push({ r, kind: 'locked' }); }
+    for (const r of unseen) { if (picks.length >= 2) break; picks.push({ r, kind: 'unseen' }); }
+    if (!picks.length) return '';
+
+    const chips = picks.map(({ r, kind }) => {
+      const hint = r.unlockHint || 'Discover through gameplay.';
+      const text = (kind === 'locked')
+        ? `What's behind 🔒 ${r.title}? — ${hint}`
+        : `Haven't read ${r.title} yet — it's in your library.`;
+      const inner = `<span>${r.icon || '📄'}</span><span>${text}</span>`;
+      return this._relatedChipHtml(r.id, kind === 'locked', accentBg, inner,
+        'gap:6px;padding:7px 12px;line-height:1.4;');
+    }).join('');
+
+    return `<div style="margin-top:18px;">
+      <div style="font-size:11px;letter-spacing:0.14em;font-weight:bold;color:${accent};
+        margin:0 0 8px;">CURIOUS NEXT?</div>
+      <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-start;">${chips}</div>
+    </div>`;
+  }
+
+  /** @private Slice 8 — shared clickable `.codex-related-chip` markup used by
+   * both the RELATED section and the CURIOUS NEXT chips, so the chip's
+   * border/background/color affordance never drifts between them. The class +
+   * data-id keep click delegation working (jumpTo). `inner` is the pre-built
+   * chip contents; `extraStyle` overrides gap/padding/line-height per caller.
+   * @param {string} id
+   * @param {boolean} locked
+   * @param {(a:number)=>string} accentBg
+   * @param {string} inner
+   * @param {string} [extraStyle]
+   * @returns {string}
+   */
+  _relatedChipHtml(id, locked, accentBg, inner, extraStyle = 'gap:5px;padding:5px 11px;') {
+    return `<span class="codex-related-chip" data-id="${id}"
+      style="display:inline-flex;align-items:center;cursor:pointer;
+        border-radius:14px;font-size:12px;${extraStyle}
+        border:1px solid ${locked ? 'rgba(255,255,255,0.14)' : accentBg(0.4)};
+        background:${locked ? 'rgba(255,255,255,0.03)' : accentBg(0.08)};
+        color:${locked ? '#89a' : '#cde'};transition:all 0.15s;">${inner}</span>`;
+  }
+
+  /** @private Slice 8 — enter ego-map mode focused on `entry`. Sets the map
+   * focus id, flips `_mapMode`, and re-renders the reading pane as the SVG map.
+   * Does NOT go through `_selectEntry` (which would exit map mode and re-arm the
+   * seen-dwell timer). @param {object} entry */
+  _enterMapMode(entry) {
+    if (!entry || !entry.unlocked) return;
+    this._mapMode = true;
+    this._mapFocusId = entry.id;
+    this._renderReading(entry);
+  }
+
+  /** @private Slice 8 — re-center the map on a node without leaving map mode.
+   * Cheap: only recomputes the layout and re-renders the SVG (no scaffolding
+   * rebuild, no dwell timer). @param {string} id */
+  _recenterMap(id) {
+    const target = (typeof this._codex.getEntry === 'function') ? this._codex.getEntry(id) : null;
+    if (!target || !target.unlocked) return;
+    this._mapFocusId = id;
+    // Re-render via the focus entry; _mapMode is still true so _renderReading
+    // routes back into _renderEgoMap.
+    this._renderReading(target);
+  }
+
+  /** @private Slice 8 — render the reading pane as an SVG ego-map for `entry`.
+   * Single-click a node → re-center (stay in map); dblclick / Enter → openEntry
+   * (exits map). Nodes are focusable for Enter. Locked nodes dimmed with 🔒 and
+   * a visible title. No physics/pan/zoom.
+   * @param {object} entry
+   * @param {{accent:string, accentBg:(a:number)=>string}} theme
+   */
+  _renderEgoMap(entry, { accent, accentBg }) {
+    const reading = document.getElementById('codex-reading');
+    if (!reading) return;
+
+    const focusId = this._mapFocusId || entry.id;
+    const { nodes, edges } = layoutEgoMap({
+      focusId,
+      getEntry: (id) => (this._codex.getEntry ? this._codex.getEntry(id) : null),
+      getRelated: (id) => (this._codex.getRelated ? this._codex.getRelated(id) : []),
+    });
+
+    const VW = EGO_LAYOUT_VIEW.width;
+    const VH = EGO_LAYOUT_VIEW.height;
+
+    // Edges under nodes.
+    const byId = new Map(nodes.map(n => [n.id, n]));
+    const edgeSvg = edges.map(e => {
+      const a = byId.get(e.from);
+      const b = byId.get(e.to);
+      if (!a || !b) return '';
+      const dim = (b.ring === 2) ? 0.18 : 0.4;
+      return `<line x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}"
+        x2="${b.x.toFixed(1)}" y2="${b.y.toFixed(1)}"
+        stroke="${accentBg(dim)}" stroke-width="${b.ring === 2 ? 1 : 1.5}" />`;
+    }).join('');
+
+    const nodeSvg = nodes.map(n => {
+      const isFocus = n.ring === 0;
+      const r = isFocus ? 34 : (n.ring === 1 ? 26 : 20);
+      const op = n.ring === 2 ? 0.35 : 1;
+      const stroke = isFocus ? accent : (n.locked ? '#556' : accentBg(0.6));
+      const fill = isFocus ? accentBg(0.18) : 'rgba(10,14,20,0.9)';
+      const iconSize = isFocus ? 26 : (n.ring === 1 ? 20 : 16);
+      const labelY = n.y + r + 16;
+      const label = `${n.locked ? '🔒 ' : ''}${n.title}`;
+      const labelColor = n.locked ? '#89a' : (isFocus ? '#eee' : '#bcd');
+      const cursor = isFocus ? 'default' : 'pointer';
+      return `<g class="codex-map-node" data-id="${n.id}" data-ring="${n.ring}"
+        tabindex="0" style="cursor:${cursor};outline:none;" opacity="${op}">
+        <circle cx="${n.x.toFixed(1)}" cy="${n.y.toFixed(1)}" r="${r}"
+          fill="${fill}" stroke="${stroke}" stroke-width="${isFocus ? 2.5 : 1.5}"
+          ${n.locked ? 'stroke-dasharray="4 3"' : ''} />
+        <text x="${n.x.toFixed(1)}" y="${(n.y + iconSize * 0.35).toFixed(1)}"
+          text-anchor="middle" font-size="${iconSize}"
+          ${n.locked ? 'opacity="0.6"' : ''}>${n.icon}</text>
+        <text x="${n.x.toFixed(1)}" y="${labelY.toFixed(1)}" text-anchor="middle"
+          font-size="12" fill="${labelColor}"
+          style="font-family:inherit;">${label}</text>
+      </g>`;
+    }).join('');
+
+    reading.innerHTML = `
+      <div style="max-width:100%;margin:0 auto;">
+        <div style="display:flex;align-items:center;gap:14px;margin-bottom:14px;">
+          <div style="flex:1;">
+            <div style="font-size:11px;letter-spacing:0.14em;font-weight:bold;color:${accent};">CONNECTIONS</div>
+            <div style="font-size:16px;font-weight:bold;color:#eee;">${entry.icon} ${entry.title}</div>
+            <div style="font-size:11px;color:#889;margin-top:2px;">Click a node to re-center · double-click or Enter to open</div>
+          </div>
+          ${this._mapToggleHtml('📖 READ', accent, accentBg)}
+        </div>
+        <svg viewBox="0 0 ${VW} ${VH}" width="100%"
+          style="display:block;max-height:70vh;background:rgba(0,0,0,0.25);
+            border:1px solid ${accentBg(0.2)};border-radius:6px;"
+          preserveAspectRatio="xMidYMid meet">
+          <g>${edgeSvg}</g>
+          <g>${nodeSvg}</g>
+        </svg>
+      </div>`;
+
+    // READ toggle returns to the article (re-selects the focus entry, which
+    // clears _mapMode and re-arms the seen timer as a normal read).
+    const readToggle = reading.querySelector('#codex-map-toggle');
+    if (readToggle) {
+      readToggle.addEventListener('mouseenter', () => { readToggle.style.background = accentBg(0.15); });
+      readToggle.addEventListener('mouseleave', () => { readToggle.style.background = ''; });
+      const exit = () => { this._mapMode = false; this._selectEntry(entry); };
+      readToggle.addEventListener('click', exit);
+      readToggle.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); exit(); }
+      });
+    }
+
+    // Node interactions: single-click re-centers (non-focus); dblclick/Enter opens.
+    reading.querySelectorAll('.codex-map-node').forEach(g => {
+      const id = g.dataset.id;
+      const isFocus = g.dataset.ring === '0';
+      if (!isFocus) {
+        g.addEventListener('click', () => this._recenterMap(id));
+      }
+      g.addEventListener('dblclick', () => this.openEntry(id));
+      g.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); this.openEntry(id); }
+      });
+    });
   }
 
   /** @private Parse a #rrggbb (or #rgb) hex colour to {r,g,b}; defaults to the

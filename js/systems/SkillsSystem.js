@@ -112,9 +112,67 @@ export class SkillsSystem {
         /** @type {number} Timestamp (ms) when this session started */
         this._sessionStartMs = Date.now();
 
+        /**
+         * Slice 8 — optional CodexSystem reference used to enrich the
+         * `manage_codex` SM-2 reminder with a "did you know?" pick. Injected via
+         * setCodexSystem() from main.js; absent in headless tests unless stubbed.
+         * @type {?Object}
+         */
+        this._codex = null;
+
         // Bootstrap
         this._initSkills();
         this._setupListeners();
+    }
+
+    /**
+     * Slice 8 — inject the CodexSystem so the `manage_codex` reminder can point
+     * the player at an unlocked-but-unread entry. Purely additive: no codex ref
+     * means the reminder stays the generic "Tech Library" nudge.
+     * @param {Object} codex - CodexSystem instance (getUnlockedEntries/getCategories)
+     */
+    setCodexSystem(codex) {
+        this._codex = codex || null;
+    }
+
+    /**
+     * Slice 8 — deterministically pick one unlocked-but-unseen codex entry to
+     * resurface with the `manage_codex` reminder. Prefers the longest-unread
+     * (lowest `unlockContext.tSim`); entries without a context sort last; final
+     * tiebreak by category order then id. Returns null when there is no codex
+     * reference or nothing qualifies.
+     * @returns {?{id:string, icon:string, title:string}}
+     * @private
+     */
+    _pickDidYouKnow() {
+        const codex = this._codex;
+        if (!codex || typeof codex.getUnlockedEntries !== 'function') return null;
+        const unseen = codex.getUnlockedEntries().filter(e => e && !e.seen);
+        if (!unseen.length) return null;
+
+        // Stable category order (for the final tiebreak) from getCategories().
+        const catOrder = new Map();
+        if (typeof codex.getCategories === 'function') {
+            const cats = codex.getCategories() || [];
+            cats.forEach((c, i) => { if (c && c.key != null) catOrder.set(c.key, i); });
+        }
+        const catRank = (e) => (catOrder.has(e.category) ? catOrder.get(e.category) : Number.MAX_SAFE_INTEGER);
+        const tSimOf = (e) => {
+            const c = e.unlockContext;
+            return (c && typeof c === 'object' && Number.isFinite(c.tSim)) ? c.tSim : Number.POSITIVE_INFINITY;
+        };
+
+        const best = unseen.slice().sort((a, b) => {
+            const ta = tSimOf(a);
+            const tb = tSimOf(b);
+            if (ta !== tb) return ta - tb;           // longest-unread first; no-ctx last
+            const ca = catRank(a);
+            const cb = catRank(b);
+            if (ca !== cb) return ca - cb;
+            return a.id < b.id ? -1 : (a.id > b.id ? 1 : 0);
+        })[0];
+
+        return { id: best.id, icon: best.icon || '📄', title: best.title || best.id };
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -724,10 +782,16 @@ export class SkillsSystem {
 
         // Emit reminder. CP-4: veterans get a one-line ticker, not a modal; and
         // each reminder counts toward the per-skill unheeded cap (reset on use).
-        eventBus.emit(Events.SKILL_REMINDED, {
+        // Slice 8: the manage_codex reminder is enriched with a "did you know?"
+        // pick (an unlocked-but-unread entry) when a codex ref is available.
+        const payload = {
             skillId: bestRec.def.id,
             presentation: this.getHintPresentation(),
-        });
+        };
+        if (bestRec.def.id === 'manage_codex') {
+            payload.didYouKnow = this._pickDidYouKnow();
+        }
+        eventBus.emit(Events.SKILL_REMINDED, payload);
         this.noteNudgeShown(bestRec.def.id);
 
         // Reminder was needed → shrink interval (they forgot)

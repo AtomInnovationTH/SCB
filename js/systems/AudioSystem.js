@@ -9,6 +9,33 @@ import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
 import timerManager from './TimerManager.js';
 
+// Slice 8 — codex unlock chime. The base pair is D5→A5 [587, 880]; per category
+// we transpose by a small deterministic pentatonic offset so different tracks
+// feel tonally distinct without any pitch feeling "wrong". Pure + module-level
+// so it's unit-testable in the headless harness.
+const CODEX_CHIME_BASE = [587, 880]; // D5, A5
+const CODEX_PENTATONIC = [0, 2, 4, 7, 9]; // major-pentatonic semitone offsets
+
+/**
+ * Deterministic two-note frequency pair for a codex-unlock chime, transposed
+ * from the base D5→A5 pair by a per-category pentatonic offset.
+ * @param {string} [category] - codex category key; unknown/missing → base pair.
+ * @returns {[number, number]} two finite ascending frequencies.
+ */
+export function codexChimeNotes(category) {
+  if (typeof category !== 'string' || category.length === 0) {
+    return [CODEX_CHIME_BASE[0], CODEX_CHIME_BASE[1]];
+  }
+  // Stable string hash → pentatonic bucket.
+  let h = 0;
+  for (let i = 0; i < category.length; i++) {
+    h = (h * 31 + category.charCodeAt(i)) | 0;
+  }
+  const semi = CODEX_PENTATONIC[Math.abs(h) % CODEX_PENTATONIC.length];
+  const factor = Math.pow(2, semi / 12);
+  return [CODEX_CHIME_BASE[0] * factor, CODEX_CHIME_BASE[1] * factor];
+}
+
 class AudioSystem {
   constructor() {
     this.ctx = null;
@@ -404,9 +431,9 @@ class AudioSystem {
       this.playWeatherAlert(data.type);
     });
 
-    // Codex unlock — discovery chime
-    eventBus.on(Events.CODEX_UNLOCKED, () => {
-      this.playCodexUnlock();
+    // Codex unlock — discovery chime (Slice 8: per-category tonal variant)
+    eventBus.on(Events.CODEX_UNLOCKED, (d) => {
+      this.playCodexUnlock(d && d.category);
     });
 
     // Sweep complete — success fanfare
@@ -2295,15 +2322,17 @@ class AudioSystem {
   }
 
   /**
-   * Codex unlock — gentle two-note ascending chime D5→A5.
+   * Codex unlock — gentle two-note ascending chime (D5→A5 base, transposed by
+   * a deterministic per-category pentatonic offset via {@link codexChimeNotes}).
    * Light and informative, not disruptive.
+   * @param {string} [category] - codex category key for the tonal variant.
    */
-  playCodexUnlock() {
+  playCodexUnlock(category) {
     if (!this.available) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
 
-    const notes = [587, 880]; // D5, A5
+    const notes = codexChimeNotes(category);
     notes.forEach((freq, i) => {
       const start = now + i * 0.15;
       const osc = ctx.createOscillator();

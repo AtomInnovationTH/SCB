@@ -134,6 +134,8 @@ import './test-CodexReachability.js'; // Codex Overhaul Phase 0d — comms-subst
 import './test-CodexPersistence.js'; // Codex Overhaul Phase 0b — save/restore round-trip regression
 import './test-CodexInterpolate.js'; // Codex Overhaul Phase 1 — live-value interpolation + data loader
 import './test-CodexViewer.js';     // Codex Overhaul Phase 3 — viewer filter/sort/track resolution
+import './test-EgoLayout.js';       // Codex Overhaul Slice 8 — pure ego-map radial layout
+import './test-CodexChime.js';      // Codex Overhaul Slice 8 — per-category unlock chime helper
 import './test-Glossary.js';        // Codex Overhaul Step 4 — inline glossary decorator + integrity
 import './test-GlossaryPersistence.js'; // Codex Overhaul Step 4 — glossary seen-state save/restore
 import './test-GlossaryDom.js';        // Codex Overhaul Step 4 — shared glossary DOM affordances

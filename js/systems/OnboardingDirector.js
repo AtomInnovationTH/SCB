@@ -500,9 +500,16 @@ export class OnboardingDirector {
     const def = this._lookupSkillDef(d.skillId);
     if (!def || def.noReminder) return;
     const keyHint = def.key ? ` [${def.key}]` : '';
+    // Slice 8 — codex resurfacing: when the manage_codex reminder carries a
+    // "did you know?" pick, point the player at a specific unread entry instead
+    // of the generic library reminder. Same HINT_POSTED path, same gating.
+    const dyk = d.didYouKnow;
+    const text = (dyk && dyk.title)
+      ? `Did you know? ${dyk.icon || ''} ${dyk.title} is in your library — press ${def.key || 'I'}`
+      : `Reminder: ${def.label}${keyHint}`;
     this._emit(Events.HINT_POSTED, {
       id: 'remind_' + d.skillId,
-      text: `Reminder: ${def.label}${keyHint}`,
+      text,
       glyph: def.key || '?',
       keys: [],
       skillId: d.skillId,
