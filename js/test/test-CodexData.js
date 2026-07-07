@@ -134,7 +134,7 @@ describe('Codex Phase 0 — counts derive from data', () => {
 describe('Codex Phase 0 — persistence round-trip', () => {
   it('getState() returns a versioned envelope { v, entries }', () => {
     const st = codex.getState();
-    assert.equal(st.v, 1, 'envelope carries codex-local version');
+    assert.equal(st.v, 2, 'envelope carries codex-local version (v2: + unlock context)');
     assert.ok(Array.isArray(st.entries), 'envelope.entries is an array');
     assert.equal(st.entries.length, entries.length, 'one record per entry');
   });

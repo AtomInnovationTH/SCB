@@ -111,6 +111,16 @@ export class CodexSystem {
     /** @type {Set<string>} event names already subscribed */
     this._subscribedEvents = new Set();
 
+    // Slice 7 — unlock anchoring: mission clock (accumulated in update, reset on
+    // MISSION_START/GAME_RESET) + latest mothership altitude cached from
+    // telemetry, stamped onto each entry as it unlocks.
+    /** @type {number} seconds since mission start */
+    this._missionTime = 0;
+    /** @type {number|null} last known mothership altitude (km) */
+    this._lastAltKm = null;
+    /** @type {Set<string>} category/track keys whose first-100% comms already fired */
+    this._completionsFired = new Set();
+
     this._setupListeners();
 
     console.log(`[CodexSystem] Initialized with ${this.entries.length} entries across ${Object.keys(this._categoryMeta).length || Object.keys(CodexCategory).length} categories`);
@@ -200,6 +210,16 @@ export class CodexSystem {
         if (entry && !entry.unlocked) this._queueUnlock(entry);
       }
     });
+
+    // Slice 7 — cache the latest mothership altitude so _performUnlock can stamp
+    // an unlock's location. Passive listener, independent of the trigger checks.
+    eventBus.on(Events.PLAYER_TELEMETRY, (p) => {
+      if (p && Number.isFinite(p.altitude)) this._lastAltKm = p.altitude;
+    });
+    // Reset the mission clock (and per-mission completion latches) on a new run.
+    const resetMissionClock = () => { this._missionTime = 0; this._completionsFired.clear(); };
+    eventBus.on(Events.MISSION_START, resetMissionClock);
+    eventBus.on(Events.GAME_RESET, resetMissionClock);
   }
 
   // ==========================================================================
@@ -247,6 +267,13 @@ export class CodexSystem {
     entry.unlocked = true;
     this._cooldownTimer = Constants.CODEX.UNLOCK_COOLDOWN;
 
+    // Slice 7 — anchor the unlock in mission time + place. altKm may be null
+    // (no telemetry yet, e.g. a headless test or the very first frame).
+    entry.unlockContext = {
+      tSim: Math.max(0, Math.round(this._missionTime)),
+      altKm: Number.isFinite(this._lastAltKm) ? Math.round(this._lastAltKm) : null,
+    };
+
     eventBus.emit(Events.CODEX_UNLOCKED, {
       id: entry.id, title: entry.title, shortText: entry.shortText,
       icon: entry.icon, category: entry.category,
@@ -257,6 +284,51 @@ export class CodexSystem {
     });
 
     console.log(`[CodexSystem] Unlocked: ${entry.icon} ${entry.title}`);
+
+    // Slice 7 — first-100% completion comms for the entry's category and track.
+    this._checkCompletion(entry);
+  }
+
+  /**
+   * @private Emit a single Houston line the first time the unlocked entry's
+   * category or track reaches 100%. Arbiter-gated and reward-free: it rides the
+   * decoupled COMMS_MESSAGE path (`_postOnboarding` passes at suppression tiers
+   * ≥ 1), never `_critical`, and grants no credits/XP.
+   * @param {object} entry the entry just unlocked
+   */
+  _checkCompletion(entry) {
+    const catKey = `cat:${entry.category}`;
+    if (!this._completionsFired.has(catKey)) {
+      const p = this.getCategoryProgress(entry.category);
+      if (p.total > 0 && p.unlocked === p.total) {
+        this._completionsFired.add(catKey);
+        const label = (this._categoryMeta[entry.category] && this._categoryMeta[entry.category].label) || entry.category;
+        this._emitCompletionComms(`Full ${label} file logged. Good work up there, Cowboy.`);
+      }
+    }
+    if (entry.track) {
+      const tKey = `track:${entry.track}`;
+      if (!this._completionsFired.has(tKey)) {
+        const t = this.getTrack(entry.track);
+        if (t && t.entries.length > 0 && t.entries.every(e => e.unlocked)) {
+          this._completionsFired.add(tKey);
+          const label = (t.meta && t.meta.label) || entry.track;
+          this._emitCompletionComms(`That's the whole ${label} track, start to finish. Nicely done.`);
+        }
+      }
+    }
+  }
+
+  /** @private Post a completion line on the decoupled, arbiter-gated comms path. */
+  _emitCompletionComms(text) {
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      source: 'HOUSTON',
+      text,
+      channel: 'MISSION',
+      priority: 'info',
+      _postOnboarding: true,   // rides the CP-4 suppression ramp at tiers ≥ 1
+      _codexCompletion: true,  // tag for tests / downstream filters
+    });
   }
 
   // ==========================================================================
@@ -265,6 +337,10 @@ export class CodexSystem {
 
   /** Tick the unlock cooldown and process queued unlocks. */
   update(dt) {
+    // Slice 7 — advance the mission clock (only ticks during active play, since
+    // the game loop calls this with the sim dt). Mirrors ConjunctionSystem.
+    if (Number.isFinite(dt)) this._missionTime += dt;
+
     if (this._cooldownTimer > 0) this._cooldownTimer -= dt;
 
     if (this._cooldownTimer <= 0 && this._unlockQueue.length > 0) {
@@ -424,8 +500,14 @@ export class CodexSystem {
    */
   getState() {
     return {
-      v: 1,
-      entries: this.entries.map(e => ({ id: e.id, unlocked: e.unlocked, seen: e.seen })),
+      v: 2,
+      entries: this.entries.map(e => {
+        const o = { id: e.id, unlocked: e.unlocked, seen: e.seen };
+        // Slice 7 — additive: persist unlock context when present. Old (v1)
+        // saves simply lack `ctx`; the restore path tolerates its absence.
+        if (e.unlockContext) o.ctx = e.unlockContext;
+        return o;
+      }),
     };
   }
 
@@ -447,6 +529,11 @@ export class CodexSystem {
       if (!entry) continue;
       entry.unlocked = entry.unlocked || !!saved.unlocked;
       entry.seen = entry.seen || !!saved.seen;
+      // Slice 7 — restore unlock context if the save carried it (v2+); old saves
+      // and startUnlocked entries simply have none.
+      if (saved.ctx && typeof saved.ctx === 'object' && !entry.unlockContext) {
+        entry.unlockContext = saved.ctx;
+      }
       if (saved.unlocked) restored++;
     }
     console.log(`[CodexSystem] Restored ${restored} unlocked entries from save`);

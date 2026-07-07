@@ -121,6 +121,98 @@ describe('Codex Phase 1 — empty-codex load failure does NOT clobber saved unlo
   });
 });
 
+describe('Codex Phase 7 — unlock context anchoring (Slice 7)', () => {
+  it('_performUnlock stamps { tSim, altKm } from the mission clock + telemetry', () => {
+    const sys = new CodexSystem(CODEX_DATA);
+    sys._missionTime = 134;                 // T+02:14
+    eventBus.emit(Events.PLAYER_TELEMETRY, { altitude: 782.4 });
+    const target = sys.entries.find(e => !e.unlocked);
+    sys._performUnlock(target);
+    assert.ok(target.unlockContext, 'context stamped on unlock');
+    assert.equal(target.unlockContext.tSim, 134, 'mission time captured');
+    assert.equal(target.unlockContext.altKm, 782, 'altitude captured (rounded)');
+  });
+
+  it('update(dt) advances the mission clock; MISSION_START resets it', () => {
+    const sys = new CodexSystem(CODEX_DATA);
+    sys.update(10); sys.update(5);
+    assert.equal(sys._missionTime, 15, 'clock accumulates dt');
+    eventBus.emit(Events.MISSION_START, {});
+    assert.equal(sys._missionTime, 0, 'MISSION_START zeroes the clock');
+  });
+
+  it('unlock context survives a getState → restore cycle (additive, v2)', () => {
+    _store.clear();
+    const src = new CodexSystem(CODEX_DATA);
+    src._missionTime = 90;
+    eventBus.emit(Events.PLAYER_TELEMETRY, { altitude: 500 });
+    const t = src.entries.find(e => !e.unlocked);
+    src._performUnlock(t);
+    const state = src.getState();
+    assert.equal(state.v, 2, 'codex slice version bumped to 2');
+    const saved = state.entries.find(e => e.id === t.id);
+    assert.ok(saved.ctx && saved.ctx.tSim === 90 && saved.ctx.altKm === 500, 'ctx serialized');
+
+    const dst = new CodexSystem(CODEX_DATA);
+    dst.restore(state);
+    assert.deepEqual(dst.getEntry(t.id).unlockContext, { tSim: 90, altKm: 500 }, 'ctx restored');
+  });
+
+  it('restore tolerates a legacy v1 save with no ctx', () => {
+    const dst = new CodexSystem(CODEX_DATA);
+    const legacy = { v: 1, entries: [{ id: 'delta_v', unlocked: true, seen: true }] };
+    dst.restore(legacy);
+    assert.ok(dst.getEntry('delta_v').unlocked, 'unlock restored');
+    assert.equal(dst.getEntry('delta_v').unlockContext, undefined, 'no ctx invented for old saves');
+  });
+});
+
+describe('Codex Phase 7 — first-completion comms (Slice 7)', () => {
+  // Smallest category that still has a gated entry, so we can drive it to 100%.
+  function pickCategory(sys) {
+    const counts = {};
+    for (const e of sys.entries) counts[e.category] = (counts[e.category] || 0) + 1;
+    return Object.keys(counts).sort((a, b) => counts[a] - counts[b])
+      .find(c => sys.getCategory(c).some(e => !e.unlocked));
+  }
+
+  it('emits ONE arbiter-gated Houston line when a category first hits 100%, no rewards', () => {
+    const sys = new CodexSystem(CODEX_DATA);
+    const cat = pickCategory(sys);
+    const list = sys.getCategory(cat);
+
+    const fired = [];
+    const off = eventBus.on(Events.COMMS_MESSAGE, (m) => { if (m && m._codexCompletion) fired.push(m); });
+    try {
+      for (let i = 0; i < list.length - 1; i++) sys._performUnlock(list[i]);
+      assert.equal(fired.length, 0, 'no completion line before 100%');
+      sys._performUnlock(list[list.length - 1]);
+      const catLines = fired.filter(m => /file logged/i.test(m.text));
+      assert.equal(catLines.length, 1, 'exactly one category completion line');
+      const line = catLines[0];
+      assert.equal(line.source, 'HOUSTON');
+      assert.equal(line._postOnboarding, true, 'rides the arbiter-gated post-onboarding path');
+      assert.ok(!line._critical, 'never critical');
+      assert.equal(line.credits, undefined, 'no reward grammar (credits)');
+      assert.equal(line.xp, undefined, 'no reward grammar (xp)');
+    } finally { off(); }
+  });
+
+  it('does not re-fire completion for an already-complete category', () => {
+    const sys = new CodexSystem(CODEX_DATA);
+    const cat = pickCategory(sys);
+    const list = sys.getCategory(cat);
+    list.forEach(e => sys._performUnlock(e));
+
+    const fired = [];
+    const off = eventBus.on(Events.COMMS_MESSAGE, (m) => { if (m && m._codexCompletion) fired.push(m); });
+    try {
+      sys._checkCompletion(list[0]);
+      assert.equal(fired.length, 0, 'completion latch prevents a re-fire');
+    } finally { off(); }
+  });
+});
+
 describe('Codex Phase 0 — persistence test teardown', () => {
   it('restores prior localStorage + storage flag', () => {
     _store.clear();

@@ -994,6 +994,7 @@ export class CodexViewerUI {
     reading.innerHTML = `
       <div style="max-width:700px;margin:0 auto;">
         ${backHtml}
+        ${entry.unlocked ? this._completionBannerHtml(entry, accent) : ''}
         ${titleHtml}
         ${quickLookHtml}
         ${briefingHtml}
@@ -1002,6 +1003,7 @@ export class CodexViewerUI {
         ${formulaHtml}
         ${relatedHtml}
         ${entry.unlocked ? this._verifiedStampHtml(entry) : ''}
+        ${entry.unlocked ? this._loggedLineHtml(entry) : ''}
         ${prevNextHtml}
       </div>
     `;
@@ -1043,6 +1045,39 @@ export class CodexViewerUI {
     if (!lv || typeof lv !== 'string') return '';
     return `<div style="margin-top:10px;font-size:10px;letter-spacing:0.1em;
       color:#566;">VERIFIED ${lv}</div>`;
+  }
+
+  /** @private LOGGED anchor stamp: when/where this entry was first unlocked,
+   * e.g. "LOGGED  T+02:14 · 782 km" (Slice 7). Empty for entries with no
+   * captured unlock context (startUnlocked / reference / pre-Slice-7 saves). */
+  _loggedLineHtml(entry) {
+    const c = entry && entry.unlockContext;
+    if (!c || typeof c !== 'object' || !Number.isFinite(c.tSim)) return '';
+    const t = Math.max(0, Math.floor(c.tSim));
+    const h = Math.floor(t / 3600);
+    const m = Math.floor((t % 3600) / 60);
+    const s = t % 60;
+    const clock = h > 0
+      ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+      : `${m}:${String(s).padStart(2, '0')}`;
+    const alt = Number.isFinite(c.altKm) ? ` · ${c.altKm} km` : '';
+    return `<div style="margin-top:6px;font-size:10px;letter-spacing:0.1em;
+      color:#566;">LOGGED  T+${clock}${alt}</div>`;
+  }
+
+  /** @private Completion banner shown when the entry's category is 100%
+   * unlocked (Slice 7). Subtle, category-accent tinted, no reward grammar. */
+  _completionBannerHtml(entry, accent) {
+    if (!entry || !this._codex || typeof this._codex.getCategoryProgress !== 'function') return '';
+    const p = this._codex.getCategoryProgress(entry.category);
+    if (!p || p.total === 0 || p.unlocked < p.total) return '';
+    const meta = (typeof this._codex.getCategoryMeta === 'function') ? this._codex.getCategoryMeta(entry.category) : null;
+    const label = (meta && meta.label) || entry.category;
+    const c = this._hexToRgb(accent || '#00d4ff');
+    const tint = (a) => `rgba(${c.r},${c.g},${c.b},${a})`;
+    return `<div style="margin:0 0 14px;padding:8px 12px;border-radius:6px;
+      background:${tint(0.12)};border:1px solid ${tint(0.35)};
+      font-size:11px;letter-spacing:0.08em;color:${accent || '#00d4ff'};">✓ ${label} — FILE COMPLETE</div>`;
   }
 
   /** @private Parse a #rrggbb (or #rgb) hex colour to {r,g,b}; defaults to the

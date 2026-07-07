@@ -450,3 +450,28 @@ describe('CodexViewerUI seen-dwell timer — CODEX_VIEWED fires only after a res
   });
 });
 
+describe('CodexViewerUI._loggedLineHtml — unlock anchor stamp (Slice 7)', () => {
+  it('formats T+MM:SS and altitude from unlockContext', () => {
+    const v = makeViewer();
+    const html = v._loggedLineHtml({ unlockContext: { tSim: 134, altKm: 782 } });
+    assert.ok(html.includes('T+2:14'), 'mm:ss clock');
+    assert.ok(html.includes('782 km'), 'altitude shown');
+  });
+
+  it('formats hours when tSim is at least 3600', () => {
+    const v = makeViewer();
+    const html = v._loggedLineHtml({ unlockContext: { tSim: 3661, altKm: 400 } });
+    assert.ok(html.includes('T+1:01:01'), 'h:mm:ss clock');
+  });
+
+  it('omits altitude when altKm is null; empty when context is missing', () => {
+    const v = makeViewer();
+    const noAlt = v._loggedLineHtml({ unlockContext: { tSim: 60, altKm: null } });
+    assert.ok(noAlt.includes('T+1:00'), 'time shown');
+    assert.ok(!noAlt.includes('km'), 'no altitude segment');
+    assert.equal(v._loggedLineHtml({}), '', 'no context yields empty');
+    assert.equal(v._loggedLineHtml({ unlockContext: { altKm: 400 } }), '', 'no tSim yields empty');
+  });
+});
+
+
