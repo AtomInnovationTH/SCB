@@ -1062,7 +1062,6 @@ export class CodexViewerUI {
         ${realWorldHtml}
         ${formulaHtml}
         ${relatedHtml}
-        ${entry.unlocked ? this._verifiedStampHtml(entry) : ''}
         ${entry.unlocked ? this._loggedLineHtml(entry) : ''}
         ${entry.unlocked ? this._curiousNextHtml(entry, { accent, accentBg }) : ''}
         ${prevNextHtml}
