@@ -47,36 +47,26 @@ describe('ST-3.3 HUD Activate Keys', () => {
     });
 });
 
-describe('HUD codex unlock toast — source guards', () => {
-    // HUD is not instantiated in the Node suite (its constructor builds heavy
-    // DOM), so these are grep-style guards matching this file's precedent.
-    // Behavior (coalesce / viewer-open suppression / placement) is verified by
-    // the Playwright spot-check.
+describe('HUD codex unlock — stays out of the flight view', () => {
+    // User-facing rule: no popups over the flight HUD. Codex unlock feedback
+    // lives on the Discoveries pane (SkillsPane, TECH_UNLOCKED) + the audio
+    // chime (AudioSystem, CODEX_UNLOCKED) — never a center-screen toast. These
+    // inverted grep-style guards (this file's precedent) lock that in against
+    // regression of the removed showCodexUnlockToast popup.
     const hudSrc = fs.readFileSync(path.join(uiRoot, 'HUD.js'), 'utf8');
 
-    it('subscribes to CODEX_UNLOCKED', () => {
-        assert.ok(/Events\.CODEX_UNLOCKED/.test(hudSrc),
-            'HUD must listen for CODEX_UNLOCKED');
+    it('does not subscribe to CODEX_UNLOCKED', () => {
+        assert.ok(!/Events\.CODEX_UNLOCKED/.test(hudSrc),
+            'HUD must not listen for CODEX_UNLOCKED; unlock feedback belongs to the Discoveries pane + chime');
     });
 
-    it('defines showCodexUnlockToast', () => {
-        assert.ok(/showCodexUnlockToast\s*\(/.test(hudSrc),
-            'HUD must define showCodexUnlockToast');
+    it('defines no showCodexUnlockToast method', () => {
+        assert.ok(!/showCodexUnlockToast/.test(hudSrc),
+            'HUD must not define a codex unlock toast');
     });
 
-    it('consumes the CODEX.NOTIFICATION_DURATION constant', () => {
-        assert.ok(/Constants\.CODEX\.NOTIFICATION_DURATION/.test(hudSrc),
-            'toast duration must derive from NOTIFICATION_DURATION');
-    });
-
-    it('suppresses the toast while the codex viewer is open', () => {
-        assert.ok(/codex-overlay/.test(hudSrc),
-            'toast must probe the codex viewer overlay to suppress-when-open');
-    });
-
-    it('is non-interactive (pointer-events:none)', () => {
-        assert.ok(/hud-codex-toast/.test(hudSrc), 'toast element has its own class');
-        assert.ok(/pointer-events:\s*none/.test(hudSrc),
-            'toast must be non-interactive like the mastery toast');
+    it('renders no toast element over the flight view', () => {
+        assert.ok(!/hud-codex-toast/.test(hudSrc),
+            'no codex toast element class may exist in the HUD');
     });
 });

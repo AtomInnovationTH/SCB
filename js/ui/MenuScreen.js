@@ -264,7 +264,7 @@ export class MenuScreen {
             <div style="margin-bottom:1.9rem; font-size:0.92rem; color:rgba(0,255,136,0.72);
                          line-height:1.7; padding:0 2px;">
               <p style="margin:0 0 0.3rem;">
-                40,000 pieces of <span class="adr-name" title="Dead satellites, spent rocket stages and collision fragments. Much of it moving at 7–8 km/s. See the Kessler syndrome section below.">space junk</span> threaten every orbit — moving ten times faster than a bullet.
+                <strong>40,000</strong> pieces of <span class="adr-name" title="Dead satellites, spent rocket stages and collision fragments. Much of it moving at 7–8 km/s. See the Kessler syndrome section below.">space junk</span> threaten every orbit, moving ten times faster than a bullet.
               </p>
               <p style="margin:0 0 0.3rem;">
                 Removing 5 big ones a year could stabilize Low Earth Orbit.
@@ -283,7 +283,7 @@ export class MenuScreen {
               <li><span class="adr-name" title="Kosmos 482 was a Soviet Venus lander stranded in Earth orbit by a 1972 launch failure. Built to survive Venus, it fell back to Earth intact 53 years later, in 2025.">The Venus lander that stayed</span> <span class="adr-sub">1972 → 2025</span></li>
               <li><span class="adr-name" title="In 2021 the working Yunhai 1-02 satellite was struck by a fragment of a Zenit rocket launched back in 1996. A 25-year-old piece of junk found its target.">Hit by a rocket from 1996</span> <span class="adr-sub">2021</span></li>
               <li><span class="adr-name" title="A minor solar storm in 2022 warmed and puffed up the upper atmosphere, adding just enough drag to pull 38 freshly-launched Starlink satellites back down before they reached their orbits.">A solar storm sinks 38 Starlinks</span> <span class="adr-sub">2022</span></li>
-              <li><span class="adr-name" title="The nuclear-powered Kosmos 954 scattered radioactive debris across northern Canada in 1978. Canada billed the USSR under the 1972 Liability Convention — the only space-crash bill ever paid.">The only space-crash bill ever</span> <span class="adr-sub">Canada · 1978</span></li>
+              <li><span class="adr-name" title="The nuclear-powered Kosmos 954 scattered radioactive debris across northern Canada in 1978. Canada billed the USSR under the 1972 Liability Convention, the only space-crash bill ever paid.">The only space-crash bill ever</span> <span class="adr-sub">Canada · 1978</span></li>
               </ul>
             </details>
 

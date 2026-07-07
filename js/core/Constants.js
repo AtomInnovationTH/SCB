@@ -2190,7 +2190,6 @@ export const Constants = {
   // =========================================================================
   CODEX: {
     UNLOCK_COOLDOWN: 20,              // seconds between unlocks (reduced from 30 for better game feel)
-    NOTIFICATION_DURATION: 4,         // seconds notification stays visible
   },
 
   // =========================================================================
