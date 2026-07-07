@@ -333,9 +333,12 @@ describe('Codex (UX-11 #10) - unlock hints, category progress, search', () => {
 
   it('getCategoryProgress tracks unlocks per category', () => {
     const codex = new CodexSystem(CODEX_DATA);
-    // Use a discovery (locked) entry's category — PLAYBOOK/WORLD_INDUSTRY start
-    // unlocked, so they would not be "fully locked" at fresh construction.
-    const target = codex.entries.find(e => !e.unlocked);
+    // Use a locked entry from a fully-locked category. PLAYBOOK/WORLD_INDUSTRY
+    // start unlocked, and every tech category now start-unlocks one "cornerstone"
+    // briefing, so only the earned discovery-card categories (CATALOG/NEWS) are
+    // fully locked at fresh construction.
+    const target = codex.entries.find(e =>
+      !e.unlocked && codex.getCategoryProgress(e.category).unlocked === 0);
     const cat = target.category;
     const before = codex.getCategoryProgress(cat);
     assert.equal(before.unlocked, 0, 'fresh discovery category starts fully locked');

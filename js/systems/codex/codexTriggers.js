@@ -38,6 +38,15 @@ const E = Events;
 /**
  * id → [{ event, match }]. Every entry in data/codex.json must have an entry
  * here (guarded by test-CodexData.js), or it can never unlock.
+ *
+ * NOTE: A dozen of these ids are per-category "cornerstone" entries flagged
+ * `startUnlocked: true` in data/codex.json (delta_v, specific_impulse,
+ * solar_power, kessler_syndrome, aluminum_space, space_tether, hypervelocity,
+ * pulse_scan_radar, ground_station_pass, isro_why_india,
+ * attitude_control_system, onboard_computer). Their triggers stay defined here
+ * intentionally: already-unlocked entries are skipped by _checkUnlocks, so the
+ * predicates are inert at runtime but keep the entryUnlocksOn contract tests
+ * (e.g. test-CodexISRO.js) valid.
  * @type {Record<string, Array<{ event: string, match: (p:object)=>boolean }>>}
  */
 export const CODEX_TRIGGERS = {

@@ -153,12 +153,15 @@ export class CodexSystem {
       formula: i.formula || null,
       unlockHint: i.unlockHint || 'Discover through gameplay.',
       trlRationale: hasTrl ? (i.trlRationale || 'Established science (default)') : null,
-      // runtime state. `startUnlocked` entries (PLAYBOOK quick-start, WORLD_INDUSTRY
-      // exposition) are readable immediately — onboarding/reference material is not
-      // a gameplay "discovery", so it needs no trigger and is open from the start.
+      // runtime state. `startUnlocked` entries are readable immediately: PLAYBOOK
+      // quick-start + WORLD_INDUSTRY exposition (onboarding/reference material, not
+      // a gameplay "discovery"), plus one per-category "cornerstone" briefing so
+      // every tech category shows its value from the first library open.
       unlocked: e.startUnlocked === true,
       seen: false,
-      // unlock predicates (multi-trigger). Empty for startUnlocked entries.
+      // unlock predicates (multi-trigger). Inert for startUnlocked entries (they
+      // are already unlocked, so _checkUnlocks skips them) but kept for cornerstones
+      // to preserve the entryUnlocksOn contract tests.
       _triggers: CODEX_TRIGGERS[e.id] || [],
     };
   }

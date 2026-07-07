@@ -182,6 +182,7 @@
       "category": "ORBITAL_MECHANICS",
       "trl": 9,
       "icon": "⚡",
+      "startUnlocked": true,
       "related": [
         "hohmann_transfer",
         "rendezvous",
@@ -388,6 +389,7 @@
       "category": "PROPULSION",
       "trl": 9,
       "icon": "📊",
+      "startUnlocked": true,
       "related": [
         "feep_thruster",
         "mpd_burst",
@@ -928,6 +930,7 @@
       "category": "POWER",
       "trl": 9,
       "icon": "☀️",
+      "startUnlocked": true,
       "related": [
         "sun_sensor",
         "eclipse_cycle",
@@ -1121,6 +1124,7 @@
       "category": "SPACE_ENVIRONMENT",
       "trl": 9,
       "icon": "💥",
+      "startUnlocked": true,
       "related": [
         "breakup_events",
         "iridium_cosmos",
@@ -1274,6 +1278,7 @@
       "category": "MATERIALS",
       "trl": 9,
       "icon": "🔩",
+      "startUnlocked": true,
       "related": [
         "titanium_alloys",
         "carbon_composites"
@@ -1536,6 +1541,7 @@
       "category": "TETHERS",
       "trl": 5,
       "icon": "🪢",
+      "startUnlocked": true,
       "related": [
         "tether_dynamics",
         "tether_materials",
@@ -1871,6 +1877,7 @@
       "category": "DEBRIS",
       "trl": 9,
       "icon": "⚡",
+      "startUnlocked": true,
       "related": [
         "mmod_impact",
         "debris_classification",
@@ -2024,6 +2031,7 @@
       "category": "SENSORS",
       "trl": 3,
       "icon": "📡",
+      "startUnlocked": true,
       "related": [
         "lidar_sensing",
         "docking_precision"
@@ -2382,6 +2390,7 @@
       "category": "COMMS",
       "trl": 9,
       "icon": "📻",
+      "startUnlocked": true,
       "related": [
         "ground_station_window",
         "tdrs_relay",
@@ -2612,6 +2621,7 @@
       "category": "HERITAGE",
       "trl": 9,
       "icon": "🇮🇳",
+      "startUnlocked": true,
       "related": [
         "isro_launch_vehicles",
         "isro_istrac",
@@ -3381,6 +3391,7 @@
       "category": "ATTITUDE",
       "trl": 9,
       "icon": "🧭",
+      "startUnlocked": true,
       "related": [
         "star_tracker",
         "reaction_wheels",
@@ -3486,6 +3497,7 @@
       "category": "AVIONICS",
       "trl": 9,
       "icon": "📟",
+      "startUnlocked": true,
       "related": [
         "rad_hard_processor",
         "spacewire_bus",

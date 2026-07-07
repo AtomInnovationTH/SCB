@@ -504,8 +504,14 @@ describe('Codex Phase 2d — thin-category fill', () => {
   });
 
   it('new tech entries are discovery cards (locked + reachable debris trigger)', () => {
+    // Cornerstone ungating: attitude_control_system + onboard_computer are now
+    // per-category startUnlocked cornerstones (see data/codex.json), so they no
+    // longer start locked. Their debris trigger remains defined and reachable.
+    const CORNERSTONE_EXEMPT = ['attitude_control_system', 'onboard_computer'];
     for (const id of TECH_NEW) {
-      assert.ok(!codex.getEntry(id).unlocked, `${id} should start locked`);
+      if (!CORNERSTONE_EXEMPT.includes(id)) {
+        assert.ok(!codex.getEntry(id).unlocked, `${id} should start locked`);
+      }
       assert.ok(codex.entryUnlocksOn(id, Events.SCORE_UPDATE, { debrisCleared: 50 }),
         `${id} unlocks via debris progress`);
     }
@@ -521,6 +527,61 @@ describe('Codex Phase 2d — thin-category fill', () => {
     const bad = [...TECH_NEW, ...WORLD_NEW]
       .filter(id => { const e = codex.getEntry(id); return !e.realWorld || !e.realWorld.trim(); });
     assert.equal(bad.length, 0, `missing realWorld: ${bad.join(', ')}`);
+  });
+});
+
+describe('Codex — per-category cornerstone ungating', () => {
+  // Every tech category should offer at least one fully-readable "cornerstone"
+  // briefing from the first library open. Approach A (data-only): exactly one
+  // anchor entry per tech category is flagged startUnlocked in data/codex.json.
+  // CATALOG + NEWS stay fully locked (earned discovery cards). PLAYBOOK +
+  // WORLD_INDUSTRY were already fully/partly start-unlocked and are excluded
+  // from the "one cornerstone" bookkeeping below.
+  const CORNERSTONES = [
+    'delta_v', 'specific_impulse', 'space_tether', 'hypervelocity',
+    'pulse_scan_radar', 'solar_power', 'attitude_control_system',
+    'onboard_computer', 'ground_station_pass', 'kessler_syndrome',
+    'aluminum_space', 'isro_why_india',
+  ];
+  // Categories with intentional bulk start-unlocked content (not "cornerstones").
+  const NON_CORNERSTONE_CATEGORIES = new Set(['PLAYBOOK', 'WORLD_INDUSTRY']);
+  // Categories that must remain fully locked (earned discovery cards).
+  const ALWAYS_LOCKED_CATEGORIES = new Set(['CATALOG', 'NEWS']);
+
+  it('each of the 12 cornerstone entries is unlocked at build', () => {
+    const bad = CORNERSTONES.filter(id => {
+      const e = codex.getEntry(id);
+      return !e || !e.unlocked;
+    });
+    assert.equal(bad.length, 0, `cornerstones not start-unlocked: ${bad.join(', ')}`);
+  });
+
+  it('every category except CATALOG/NEWS has >=1 unlocked entry at start', () => {
+    const bare = [];
+    for (const cat of CATEGORY_VALUES) {
+      if (ALWAYS_LOCKED_CATEGORIES.has(cat)) continue;
+      const hasUnlocked = codex.getCategory(cat).some(e => e.unlocked);
+      if (!hasUnlocked) bare.push(cat);
+    }
+    assert.equal(bare.length, 0, `categories with no start-unlocked entry: ${bare.join(', ')}`);
+  });
+
+  it('tech categories have <=2 start-unlocked entries (guards discovery loop)', () => {
+    const overGated = [];
+    for (const cat of CATEGORY_VALUES) {
+      if (NON_CORNERSTONE_CATEGORIES.has(cat)) continue;
+      const unlockedCount = codex.getCategory(cat).filter(e => e.unlocked).length;
+      if (unlockedCount > 2) overGated.push(`${cat}:${unlockedCount}`);
+    }
+    assert.equal(overGated.length, 0,
+      `categories with startUnlocked creep (>2): ${overGated.join(', ')}`);
+  });
+
+  it('CATALOG and NEWS still have 0 start-unlocked entries', () => {
+    for (const cat of ALWAYS_LOCKED_CATEGORIES) {
+      const unlockedCount = codex.getCategory(cat).filter(e => e.unlocked).length;
+      assert.equal(unlockedCount, 0, `${cat} should have no start-unlocked entries`);
+    }
   });
 });
 
