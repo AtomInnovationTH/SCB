@@ -19,7 +19,7 @@
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { entryMatchesQuery, ALIASES } from '../systems/CodexSystem.js';
-import { decorateGlossary } from '../systems/codex/glossary.js';
+import { decorateGlossary, escapeHtml } from '../systems/codex/glossary.js';
 import { layoutEgoMap, EGO_LAYOUT_VIEW } from '../systems/codex/egoLayout.js';
 import { ensureGlossaryCss, delegateGlossaryClicks } from './glossaryDom.js';
 import {
@@ -576,6 +576,22 @@ export class CodexViewerUI {
         : 'No topics match the current filter.';
       listEl.appendChild(empty);
     }
+    // 2a: a dim, non-interactive reassurance banner when the whole list is
+    // locked (default 'all' filter, no search) — turns a wall-of-🔒 first
+    // impression into "these unlock as you fly" guidance.
+    if (this._shouldShowZeroUnlockedBanner(entries)) {
+      const banner = document.createElement('div');
+      banner.className = 'codex-zero-unlocked-banner';
+      Object.assign(banner.style, {
+        color: '#7c9', fontSize: '12px', lineHeight: '1.4',
+        padding: '10px 12px', margin: '2px 6px 6px',
+        background: 'rgba(90,220,150,0.06)',
+        border: '1px solid rgba(90,220,150,0.2)', borderRadius: '4px',
+        pointerEvents: 'none',
+      });
+      banner.textContent = '🔒 All locked for now — these unlock as you fly. Open any entry to see how.';
+      listEl.appendChild(banner);
+    }
     entries.forEach((entry, i) => listEl.appendChild(this._makeRow(entry, i)));
 
     // Keep the roving-focus index within bounds of the freshly-rendered list.
@@ -606,6 +622,45 @@ export class CodexViewerUI {
     });
   }
 
+  /** @private Whether the zero-unlocked "all locked for now" banner should show
+   * for the given rendered list. Only for the default `all` filter with no
+   * active search query (showing it in search results or the `locked` filter
+   * would be misleading noise), and only when EVERY entry in the list is locked.
+   * Pure so it is testable in the DOM-less Node harness.
+   * @param {Array<object>} entries the already filter/sort-resolved list
+   * @returns {boolean}
+   */
+  _shouldShowZeroUnlockedBanner(entries) {
+    if (this._searchQuery) return false;
+    if (this._filter !== 'all') return false;
+    if (!Array.isArray(entries) || entries.length === 0) return false;
+    return entries.every(e => !e.unlocked);
+  }
+
+  /** @private Build a hover `title` attribute (with a leading space) for a
+   * locked row's how-to-unlock hint; unlocked rows get an empty string (no
+   * attr). The hint may contain apostrophes/parens, so the attribute stays
+   * double-quoted and `"` is escaped via escapeHtml. Pure/testable.
+   * @param {object} entry
+   * @returns {string} e.g. ` title="How to unlock: Catch 3 debris."` or ``
+   */
+  _lockedRowTitleAttr(entry) {
+    const text = this._lockedRowTitleText(entry);
+    return text ? ` title="${escapeHtml(text)}"` : '';
+  }
+
+  /** @private The plain how-to-unlock tooltip text for a locked row (or '' when
+   * unlocked). Split from `_lockedRowTitleAttr` so `_makeRow` can set it as a
+   * DOM property (row.title) without HTML-attr escaping. Pure/testable.
+   * @param {object} entry
+   * @returns {string}
+   */
+  _lockedRowTitleText(entry) {
+    if (!entry || entry.unlocked) return '';
+    const hint = entry.unlockHint || 'Discover through gameplay.';
+    return `How to unlock: ${hint}`;
+  }
+
   /** @private Create a single compact entry row.
    * Reveal model (UX-11 #10): title + icon + one-liner are ALWAYS visible — the
    * library is a syllabus. Locked rows read as "not yet detailed": dimmed + 🔒.
@@ -617,6 +672,10 @@ export class CodexViewerUI {
 
     const isLocked = !entry.unlocked;
     const isNew = entry.unlocked && !entry.seen;
+
+    // 2b: locked rows carry a how-to-unlock hover hint; unlocked rows get none.
+    const titleText = this._lockedRowTitleText(entry);
+    if (titleText) row.title = titleText;
 
     const catMeta = this._catMeta(entry.category);
     const accent = catMeta.color || '#00d4ff';

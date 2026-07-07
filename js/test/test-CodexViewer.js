@@ -596,5 +596,84 @@ describe('CodexViewerUI — map mode toggle state', () => {
   });
 });
 
+// ── Feedback fixes: locked-list affordances (banner + hover hint) ────────────
+describe('CodexViewerUI._shouldShowZeroUnlockedBanner — 2a gating', () => {
+  it('shows when every entry is locked (default all filter, no search)', () => {
+    const v = makeViewer();
+    v._filter = 'all';
+    v._searchQuery = '';
+    const list = [entry('a', { unlocked: false }), entry('b', { unlocked: false })];
+    assert.equal(v._shouldShowZeroUnlockedBanner(list), true);
+  });
+
+  it('hides when at least one entry is unlocked', () => {
+    const v = makeViewer();
+    v._filter = 'all';
+    v._searchQuery = '';
+    const list = [entry('a', { unlocked: false }), entry('b', { unlocked: true })];
+    assert.equal(v._shouldShowZeroUnlockedBanner(list), false);
+  });
+
+  it('hides on an empty list (nothing to reassure about)', () => {
+    const v = makeViewer();
+    v._filter = 'all';
+    v._searchQuery = '';
+    assert.equal(v._shouldShowZeroUnlockedBanner([]), false);
+  });
+
+  it('hides while a search query is active', () => {
+    const v = makeViewer();
+    v._filter = 'all';
+    v._searchQuery = 'orbit';
+    const list = [entry('a', { unlocked: false })];
+    assert.equal(v._shouldShowZeroUnlockedBanner(list), false);
+  });
+
+  it('hides for non-default filters (locked/unlocked would be misleading)', () => {
+    const v = makeViewer();
+    v._searchQuery = '';
+    const list = [entry('a', { unlocked: false })];
+    v._filter = 'locked';
+    assert.equal(v._shouldShowZeroUnlockedBanner(list), false);
+    v._filter = 'unlocked';
+    assert.equal(v._shouldShowZeroUnlockedBanner(list), false);
+  });
+});
+
+describe('CodexViewerUI._lockedRowTitleText / _lockedRowTitleAttr — 2b hover hint', () => {
+  it('locked entry yields "How to unlock: <hint>" text', () => {
+    const v = makeViewer();
+    const text = v._lockedRowTitleText({ unlocked: false, unlockHint: 'Catch 3 debris.' });
+    assert.equal(text, 'How to unlock: Catch 3 debris.');
+  });
+
+  it('unlocked entry yields empty text and empty attr (no title on unlocked rows)', () => {
+    const v = makeViewer();
+    assert.equal(v._lockedRowTitleText({ unlocked: true, unlockHint: 'x' }), '');
+    assert.equal(v._lockedRowTitleAttr({ unlocked: true, unlockHint: 'x' }), '');
+  });
+
+  it('falls back to a default hint when unlockHint is missing', () => {
+    const v = makeViewer();
+    assert.equal(
+      v._lockedRowTitleText({ unlocked: false }),
+      'How to unlock: Discover through gameplay.'
+    );
+  });
+
+  it('attr form is a double-quoted title with escaped double-quotes', () => {
+    const v = makeViewer();
+    const attr = v._lockedRowTitleAttr({ unlocked: false, unlockHint: 'Fire the "crossbow" (spring).' });
+    assert.ok(attr.startsWith(' title="'), 'leading space + double-quoted title');
+    assert.ok(attr.endsWith('"'), 'closes the double quote');
+    assert.ok(attr.includes('&quot;crossbow&quot;'), 'inner double-quotes escaped');
+    // Apostrophes/parens survive verbatim inside a double-quoted attribute.
+    const apos = v._lockedRowTitleAttr({ unlocked: false, unlockHint: "Don't forget (springs)." });
+    assert.ok(apos.includes("Don"), 'apostrophe hint preserved');
+    assert.ok(apos.includes('(springs)'), 'parens preserved');
+  });
+});
+
+
 
 

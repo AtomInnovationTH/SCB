@@ -168,6 +168,11 @@ export class HUD {
     /** @type {number|null} */
     this._commsRectBottom = null;
 
+    /** @type {HTMLElement|null} Reused codex-unlock toast element (coalesced) */
+    this._codexToast = null;
+    /** @type {number} Generation token so stale coalesced-toast timers no-op */
+    this._codexToastGen = 0;
+
     this._build();
     this._setupEventListeners();
   }
@@ -690,6 +695,14 @@ export class HUD {
     // ST-3.4: Mastery celebration toast (first N masteries only)
     eventBus.on(Events.MASTERY_FANFARE, (d) => {
       if (d?.largeToast) this.showMasteryToast(d);
+    });
+
+    // Codex unlock toast — closes the feedback loop on CODEX_UNLOCKED, which
+    // otherwise only drove a chime + SkillsPane badge (no on-screen cue). The
+    // toast coalesces (single element, last-wins) so the GAME_WIN same-frame
+    // batch doesn't stack; the SkillsPane recent-tech list still records each.
+    eventBus.on(Events.CODEX_UNLOCKED, (d) => {
+      this.showCodexUnlockToast(d);
     });
 
     // --- Weather indicator badges (Phase 7) ---
@@ -1826,6 +1839,101 @@ export class HUD {
     const durMs = Constants.SKILLS.CELEBRATION.MASTERY_TOAST_DURATION_MS;
     timerManager.setTimeout(() => { toast.style.opacity = '0'; }, durMs - 300, { owner: this });
     timerManager.setTimeout(() => { toast.remove(); }, durMs, { owner: this });
+  }
+
+  // ==========================================================================
+  // CODEX UNLOCK TOAST
+  // ==========================================================================
+
+  /**
+   * Show a small library-styled toast when a codex entry unlocks. Follows the
+   * mastery-toast precedent (fixed-position, pointer-events:none, timerManager
+   * with { owner: this }) but is visually distinct (green/library accent) and
+   * offset lower so a rare mastery+codex collision doesn't fully overlap.
+   *
+   * Coalesces: a single reused element (`this._codexToast`) — a new unlock
+   * replaces the content and restarts the timers rather than stacking. This
+   * handles the GAME_WIN same-frame batch (last entry wins); the SkillsPane
+   * recent-tech list still records every unlock separately.
+   *
+   * Suppressed while the Tech Library viewer is open — it already refreshes its
+   * list live on unlock (CodexViewerUI CODEX_UNLOCKED handler), so a toast on
+   * top would be redundant noise. Chrome text is hardcoded English (HUD
+   * precedent); title/shortText arrive already i18n-resolved from CodexSystem.
+   *
+   * @param {{ id?:string, title?:string, shortText?:string, icon?:string, category?:string }} data
+   */
+  showCodexUnlockToast(data) {
+    if (!data) return;
+    // Suppress when the codex viewer is open (it refreshes live on unlock).
+    // HUD holds no reference to the viewer singleton, so probe its overlay
+    // element's visibility directly — cheap and dependency-free.
+    const overlay = document.getElementById('codex-overlay');
+    if (overlay && overlay.style.display !== 'none' && overlay.style.display !== '') {
+      return;
+    }
+
+    const esc = (s) => String(s ?? '').replace(/</g, '&lt;');
+    const icon = esc(data.icon || '📖');
+    const title = esc(data.title || 'New briefing');
+    const shortText = esc(data.shortText || '');
+
+    // Reuse a single element so rapid/batch unlocks coalesce (last wins).
+    let toast = this._codexToast;
+    if (!toast || !toast.isConnected) {
+      toast = document.createElement('div');
+      toast.className = 'hud-codex-toast';
+      toast.style.cssText = `
+        position: fixed;
+        left: 50%;
+        top: 40%;
+        transform: translate(-50%, -50%);
+        max-width: 460px;
+        padding: 10px 20px;
+        background: linear-gradient(135deg, rgba(8, 26, 20, 0.94), rgba(12, 44, 34, 0.94));
+        border: 1px solid rgba(90, 230, 170, 0.75);
+        box-shadow: 0 0 20px rgba(70, 220, 150, 0.4), 0 4px 16px rgba(0, 0, 0, 0.55);
+        color: #eafff5;
+        font-family: 'Courier New', monospace;
+        text-align: center;
+        z-index: 8950;
+        opacity: 0;
+        transition: opacity 0.3s ease;
+        pointer-events: none;
+      `;
+      document.body.appendChild(toast);
+      this._codexToast = toast;
+    }
+
+    toast.innerHTML = `
+      <div style="font-size:10px; color:#7fe9bf; letter-spacing:2.5px; margin-bottom:4px;">📖 NEW BRIEFING LOGGED</div>
+      <div style="font-size:15px; font-weight:bold; color:#fff;">${icon} ${title}</div>
+      <div style="font-size:11px; color:#bfe8d6; margin-top:3px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:420px; margin-left:auto; margin-right:auto;">${shortText}</div>
+      <div style="font-size:10px; color:#6fbf9c; letter-spacing:1px; margin-top:5px;">Press I to read</div>
+    `;
+
+    // Bump a generation token so timers from a prior (coalesced) unlock become
+    // no-ops — otherwise the earlier fade-out would hide the reused element mid
+    // display. Only the newest unlock's timers act on the shared element.
+    const gen = (this._codexToastGen || 0) + 1;
+    this._codexToastGen = gen;
+
+    // Next frame: fade in (element may already be at opacity 1 from a prior
+    // coalesced unlock — setting it again is harmless).
+    requestAnimationFrame(() => { if (this._codexToastGen === gen) toast.style.opacity = '1'; });
+
+    // Hold + fade timers. timerManager owner:this so HUD teardown clears them;
+    // the generation guard keeps a stale timer from touching a fresher toast.
+    const durMs = Constants.CODEX.NOTIFICATION_DURATION * 1000;
+    timerManager.setTimeout(() => {
+      if (this._codexToastGen === gen) toast.style.opacity = '0';
+    }, durMs - 300, { owner: this });
+    timerManager.setTimeout(() => {
+      if (this._codexToastGen === gen) {
+        toast.remove();
+        this._codexToast = null;
+      }
+    }, durMs, { owner: this });
   }
 
   // ==========================================================================

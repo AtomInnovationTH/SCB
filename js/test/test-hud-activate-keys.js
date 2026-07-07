@@ -46,3 +46,37 @@ describe('ST-3.3 HUD Activate Keys', () => {
             'CSS must include hud-keycap-pulse keyframe');
     });
 });
+
+describe('HUD codex unlock toast — source guards', () => {
+    // HUD is not instantiated in the Node suite (its constructor builds heavy
+    // DOM), so these are grep-style guards matching this file's precedent.
+    // Behavior (coalesce / viewer-open suppression / placement) is verified by
+    // the Playwright spot-check.
+    const hudSrc = fs.readFileSync(path.join(uiRoot, 'HUD.js'), 'utf8');
+
+    it('subscribes to CODEX_UNLOCKED', () => {
+        assert.ok(/Events\.CODEX_UNLOCKED/.test(hudSrc),
+            'HUD must listen for CODEX_UNLOCKED');
+    });
+
+    it('defines showCodexUnlockToast', () => {
+        assert.ok(/showCodexUnlockToast\s*\(/.test(hudSrc),
+            'HUD must define showCodexUnlockToast');
+    });
+
+    it('consumes the CODEX.NOTIFICATION_DURATION constant', () => {
+        assert.ok(/Constants\.CODEX\.NOTIFICATION_DURATION/.test(hudSrc),
+            'toast duration must derive from NOTIFICATION_DURATION');
+    });
+
+    it('suppresses the toast while the codex viewer is open', () => {
+        assert.ok(/codex-overlay/.test(hudSrc),
+            'toast must probe the codex viewer overlay to suppress-when-open');
+    });
+
+    it('is non-interactive (pointer-events:none)', () => {
+        assert.ok(/hud-codex-toast/.test(hudSrc), 'toast element has its own class');
+        assert.ok(/pointer-events:\s*none/.test(hudSrc),
+            'toast must be non-interactive like the mastery toast');
+    });
+});
