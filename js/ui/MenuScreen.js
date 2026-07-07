@@ -272,9 +272,6 @@ export class MenuScreen {
               <p style="margin:0; color:#00ff88; font-weight:bold; letter-spacing:0.06em;">
                 Space Cowboys wanted.
               </p>
-              <p style="margin:0.55rem 0 0; font-size:0.78rem; color:rgba(0,255,136,0.55); font-style:italic;">
-                Learn as you fly — a 175-entry Tech Library unlocks in-game, from Cowboy Basics to The World Stage.
-              </p>
             </div>
 
             <!-- True stories from orbit (hook, pre-expanded) -->
@@ -350,18 +347,12 @@ export class MenuScreen {
               </details>
 
               <details class="adr-group">
-                <summary>Space agencies<span class="adr-count">4</span></summary>
+                <summary>Space agencies<span class="adr-count">10</span></summary>
                 <ul class="adr-list">
                 <li><span class="adr-name" title="America's space agency. Its Orbital Debris Program Office (founded 1979) was the first of its kind and writes the US debris-mitigation standards (ODMSP).">NASA</span> <span class="adr-sub">USA</span></li>
                 <li><span class="adr-name" title="Runs the Clean Space initiative and funds ClearSpace-1 (€86 million). Its Space Debris Office in Darmstadt, Germany tracks debris using partner radars such as the giant TIRA dish, plus new Flyeye survey telescopes.">European Space Agency</span> <span class="adr-sub">ESA</span></li>
                 <li><span class="adr-name" title="Japan's space agency. Runs the Commercial Removal of Debris Demonstration (CRD2) with Astroscale: Phase 1 (ADRAS-J) inspected a spent rocket stage; Phase 2 will capture and de-orbit it, ~2027.">Japan Aerospace Exploration Agency</span> <span class="adr-sub">JAXA · CRD2</span></li>
                 <li><span class="adr-name" title="India's space agency. Its IS4OM centre and Project NETRA track debris and run collision avoidance, backing the national Debris-Free Space Missions goal for 2030.">ISRO</span> <span class="adr-sub">India · IS4OM</span></li>
-                </ul>
-              </details>
-
-              <details class="adr-group">
-                <summary>India's ecosystem<span class="adr-count">6</span></summary>
-                <ul class="adr-list">
                 <li><span class="adr-name" title="Hyderabad start-up leading an in-orbit debris-removal demonstration, with Pixxel building the satellite for it (announced March 2026).">Cosmoserve Space</span> <span class="adr-sub">Hyderabad</span></li>
                 <li><span class="adr-name" title="Bengaluru-and-California company flying the 'Fireflies' hyperspectral Earth-imaging satellites (first ones launched in 2025). It is building the satellite platform for Cosmoserve's debris-removal demo. Its first move into debris work.">Pixxel</span> <span class="adr-sub">Bengaluru</span></li>
                 <li><span class="adr-name" title="Bengaluru start-up that tracks and catalogues objects in orbit (space-traffic awareness) and is deploying its own space-tracking satellites. The data needed to spot debris and avoid collisions.">Digantara</span> <span class="adr-sub">Bengaluru</span></li>
