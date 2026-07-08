@@ -31,7 +31,7 @@
 
 ## 1. System map
 
-ES6 modules, no bundler. `index.html` → `<script type="module" src="js/main.js">`. THREE is imported via import-map from **local `./node_modules/three/`** (offline-first; not CDN).
+ES6 modules, no bundler. `index.html` → `<script type="module" src="js/main.js">`. THREE is imported via import-map from **vendored `./vendor/three/`** (offline-first; no CDN, committed to the repo so GitHub Pages ships it too).
 
 ```
 js/

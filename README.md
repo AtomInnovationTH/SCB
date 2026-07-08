@@ -17,7 +17,7 @@ UI design draws from four landmark space sims: **Independence War** (NavSphere, 
 
 **Controls (essentials):** Arrows rotate, `S` quick scan (`Shift+S` wide), `T` target debris (`Tab` alias), `A` autopilot (`Shift+A` field-center salvage), `N` lasso/net fire (`Shift+N` auto-target + launch), `D` launch selected daughter (`Shift+D` launch all), `R` reel-in (`Shift+R` reel-in all), `1–4` select/pilot daughter, `L` hold de-spin laser, `E` electrodynamic tether, `X` tether detach, `V` camera (`Shift+V` strategic map), `B` shop, `F` forge, `J` journal, `I` info/codex, `M` debris map (`` ` `` alias), `?` help, `Esc` pause/back, `5–0`/`.` display toggles, `+/-` throttle, `Shift+1/2/3` + `[/]` power bus. Daughters fly with the arrow keys (station-keep orbit) — there is no WASD thrust. Full table below.
 
-**Tech:** Three.js r170 via CDN import maps. Zero build tools. ES6 modules. All geometry procedural (no GLTF). NASA public domain textures.
+**Tech:** Three.js vendored same-origin under `./vendor/three/` (no CDN, fully offline). Zero build tools. ES6 modules. All geometry procedural (no GLTF). NASA public domain textures.
 
 ---
 
@@ -36,7 +36,7 @@ UI design draws from four landmark space sims: **Independence War** (NavSphere, 
 **New developer?** Read in order: **README → [`ARCHITECTURE.md`](ARCHITECTURE.md) (how the code works now) → [`ROADMAP.md`](ROADMAP.md) (what to build next) → [`GAME_DESIGN.md`](GAME_DESIGN.md) (why)**, then [`HANDOFF.md`](HANDOFF.md) §9–§11 before touching orientation/FSM/capture/visual code. Doc set consolidated 2026-06-07 (root = canonical + active-reference specs only; superseded docs in [`archive/`](archive/)).
 
 > **Locked product principles:**
-> - **Offline-first.** No auto-fetch APIs, no live TLE feeds, no telemetry. Catalogue updates are user-driven via `data/news-events.json`. THREE.js loads from local `node_modules/` so the sim boots offline.
+> - **Offline-first.** No auto-fetch APIs, no live TLE feeds, no telemetry. Catalogue updates are user-driven via `data/news-events.json`. THREE.js is vendored same-origin under `./vendor/three/` (no CDN) so the sim boots offline. Note: served from a local server, even a hard-refresh runs fully offline; on the remote GitHub Pages deploy a hard-refresh bypasses the service worker (browser spec) and needs the network — a normal reload is the offline path there.
 > - **Dual-metal FEEP is Y0 baseline.** Multimetal FEEP is TRL 7–9 today (Enpulsion IFM Nano), not endgame.
 > - **Mother launches from India** (ISRO Sriharikota / Kulasekarapattinam). Bangalore (ISTRAC) and Hassan (MCF) ground control join Houston in comms.
 > - **ΔV is the single master resource** — never free-regenerates except via salvage→forge→propellant.

@@ -17,13 +17,18 @@
  *
  *   CACHE-FIRST (immutable / large blobs / vendor code — fetch from cache
  *   if present, otherwise hit the network and populate the cache):
+ *     - Anything under `/vendor/` (Three.js + addons, vendored same-origin)
  *     - Anything under `/textures/`
  *     - Anything under `/data/`
- *     - Cross-origin requests to `cdn.jsdelivr.net` (Three.js + addons)
- *       Fetched with `{ mode: 'cors' }`. ONLY response.ok responses are
- *       cached to avoid poisoning the cache with 404s / opaque errors.
  *
  *   PASS-THROUGH for anything else.
+ *
+ * Three.js is served same-origin from `./vendor/` (no CDN). The sim is
+ * fully offline-first when served from any static host; the only hard limit
+ * is that browsers bypass the service worker on a force-refresh, so offline
+ * hard-refresh works when a local server is running (localhost serves
+ * everything) but on a remote deploy a hard-refresh needs the network — a
+ * normal reload is the offline path there.
  *
  * Scope: this file lives at the workspace root and is registered from
  * index.html via the relative path `./sw.js`, so the scope is the page
@@ -33,7 +38,7 @@
  * The SW does not intercept its own URL (we never call respondWith for it).
  */
 
-const CACHE_NAME = 'space-cowboy-v6';
+const CACHE_NAME = 'space-cowboy-v7';
 
 // Small, safe pre-cache list. Each entry is wrapped in try/catch so a single
 // 404 (e.g. local dev without ./js/main.js yet) does NOT abort installation.
@@ -41,6 +46,10 @@ const PRECACHE_URLS = [
   './',
   './index.html',
   './js/main.js',
+  './vendor/three/build/three.module.js',
+  // three.module.js statically imports ./three.core.js — precache both so the
+  // engine is self-consistent even on an install-then-immediately-offline boot.
+  './vendor/three/build/three.core.js',
 ];
 
 // ---------------------------------------------------------------------------
@@ -108,9 +117,9 @@ function isJSRequest(url) {
 
 /** Should this URL be served cache-first? */
 function isCacheFirstURL(url) {
+  if (url.pathname.includes('/vendor/')) return true;
   if (url.pathname.includes('/textures/')) return true;
   if (url.pathname.includes('/data/')) return true;
-  if (url.hostname === 'cdn.jsdelivr.net') return true;
   return false;
 }
 
@@ -130,13 +139,29 @@ function offlineResponse(url) {
  * Network-first: try the network, populate cache on success, fall back to
  * cache on failure, then a synthetic offline Response.
  *
+ * The network fetch is bounded by a short AbortController timeout ONLY when
+ * the browser reports itself offline (`!navigator.onLine`), so a dead-but-
+ * connected network (captive portal, VPN with no upstream) falls back to
+ * cache fast instead of blocking on the OS socket timeout. When online, the
+ * fetch is unbounded so a slow-but-healthy connection still gets the latest
+ * deploy rather than being force-aborted into a stale cached copy. On
+ * localhost this never trips; it's insurance for remote deploys.
+ *
  * IMPORTANT: clone the response BEFORE handing it to the page; `cache.put`
  * consumes the clone's body, not the original.
  */
+const NETWORK_TIMEOUT_MS = 4000;
+
 async function networkFirst(request) {
   const cache = await caches.open(CACHE_NAME);
+  // Only arm the abort timer when the browser thinks it's offline — avoids
+  // aborting a slow-but-online fetch and serving stale code (see comment above).
+  const controller = new AbortController();
+  const timer = (typeof navigator !== 'undefined' && navigator.onLine === false)
+    ? setTimeout(() => controller.abort(), NETWORK_TIMEOUT_MS)
+    : null;
   try {
-    const networkResponse = await fetch(request);
+    const networkResponse = await fetch(request, { signal: controller.signal });
     if (networkResponse && networkResponse.ok) {
       // Clone first — do NOT await put before returning to the page.
       const copy = networkResponse.clone();
@@ -147,6 +172,8 @@ async function networkFirst(request) {
     const cached = await cache.match(request);
     if (cached) return cached;
     return offlineResponse(new URL(request.url));
+  } finally {
+    if (timer !== null) clearTimeout(timer);
   }
 }
 
@@ -155,16 +182,13 @@ async function networkFirst(request) {
  * and populate cache on success. Only response.ok responses are stored to
  * avoid poisoning the cache.
  */
-async function cacheFirst(request, { useCorsMode = false } = {}) {
+async function cacheFirst(request) {
   const cache = await caches.open(CACHE_NAME);
   const cached = await cache.match(request);
   if (cached) return cached;
 
   try {
-    const fetchRequest = useCorsMode
-      ? new Request(request.url, { mode: 'cors', credentials: 'omit' })
-      : request;
-    const networkResponse = await fetch(fetchRequest);
+    const networkResponse = await fetch(request);
     if (networkResponse && networkResponse.ok) {
       const copy = networkResponse.clone();
       cache.put(request, copy).catch(() => { /* ignore */ });
@@ -194,22 +218,18 @@ self.addEventListener('fetch', (event) => {
   // Only handle http(s) — skip chrome-extension://, data:, blob:, etc.
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
 
-  // CDN cross-origin (jsdelivr) — cache-first with CORS mode.
-  if (url.hostname === 'cdn.jsdelivr.net') {
-    event.respondWith(cacheFirst(request, { useCorsMode: true }));
-    return;
-  }
-
-  // Same-origin or other origins below.
-  // Network-first: HTML navigations + JS modules.
-  if (isHTMLRequest(request) || isJSRequest(url)) {
-    event.respondWith(networkFirst(request));
-    return;
-  }
-
-  // Cache-first: textures + data.
+  // Cache-first: vendored Three.js (./vendor/), textures, data. This MUST be
+  // checked before the JS network-first branch below, otherwise vendored
+  // `.js` modules would match isJSRequest() and go network-first.
   if (isCacheFirstURL(url)) {
     event.respondWith(cacheFirst(request));
+    return;
+  }
+
+  // Network-first: HTML navigations + JS modules (so new deploys take effect
+  // on the next visit; falls back to cache, then a synthetic offline Response).
+  if (isHTMLRequest(request) || isJSRequest(url)) {
+    event.respondWith(networkFirst(request));
     return;
   }
 

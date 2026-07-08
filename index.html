@@ -422,18 +422,19 @@
   <script type="importmap">
   {
     "imports": {
-      "three": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.module.js",
-      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/"
+      "three": "./vendor/three/build/three.module.js",
+      "three/addons/": "./vendor/three/examples/jsm/"
     }
   }
   </script>
 
-  <!-- PR P0.2 — Resource hints: warm up CDN connection, preload critical modules
-       and the first Earth texture so the browser can fetch them in parallel
-       with parsing the import map. -->
-  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+  <!-- PR P0.2 — Resource hints: preload critical modules and the first Earth
+       texture so the browser can fetch them in parallel with parsing the
+       import map. Three.js is vendored same-origin under ./vendor/ (relative
+       paths resolve to '/' locally and '/SCB/' on GitHub Pages) so the sim is
+       fully offline-first — no CDN, no internet dependency at runtime. -->
   <link rel="modulepreload" href="./js/main.js">
-  <link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.module.js" crossorigin>
+  <link rel="modulepreload" href="./vendor/three/build/three.module.js">
   <link rel="preload" as="image" href="./textures/earth_day.avif" type="image/avif" fetchpriority="high">
 </head>
 <body>
