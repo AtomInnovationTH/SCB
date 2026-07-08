@@ -205,9 +205,11 @@ void main() {
 
   vec3 finalColor = litDay + nightColor * nightFactor + nightBase * (1.0 - dayFactor);
 
-  // Subtle Fresnel rim for blending into atmosphere
-  float fresnel = pow(1.0 - max(dot(normal, viewDir), 0.0), 3.0);
-  finalColor += vec3(0.1, 0.15, 0.3) * fresnel * 0.15 * dayFactor;
+  // Atmospheric limb haze: blue scattering in front of the planet edge so the
+  // hard surface silhouette dissolves into the atmosphere shell. Softer power +
+  // stronger blue tint than before to marry the surface into the glow.
+  float fresnel = pow(1.0 - max(dot(normal, viewDir), 0.0), 2.5);
+  finalColor += vec3(0.30, 0.50, 0.85) * fresnel * 0.35 * dayFactor;
 
   gl_FragColor = vec4(finalColor, 1.0);
 
@@ -282,105 +284,112 @@ void main() {
 `;
 
 // ============================================================================
-// ATMOSPHERE SHADER — FIXED: thin bright limb glow (ISS photo reference)
-// Fresnel is brightest at the EDGE (limb) and fades toward the camera.
-// From VLEO, atmosphere appears as an incredibly thin, bright blue band.
+// ATMOSPHERE SHADER — analytic limb scattering.
+// Per-fragment impact-parameter altitude + exponential density falloff:
+// brightest at the limb base (Earth's edge), fades smoothly to zero before the
+// mesh's geometric edge — no hard silhouette cutoff (the flaw of normal-based
+// Fresnel rims). Rayleigh altitude gradient (cyan-white → blue → violet),
+// narrow saturated terminator sunset, gold Mie forward-scatter hotspot toward
+// the sun, and a thin greenish night airglow band.
+// Perf: log depth is encoded in the vertex shader (early-Z preserved, so the
+// occluded Earth-disc half of the shell is culled before shading); analytic
+// shading reads only `position` (normal/uv attributes stripped).
 // ============================================================================
 const atmosphereVertexShader = /* glsl */ `
-#include <common>
-#include <logdepthbuf_pars_vertex>
-
-varying vec3 vNormal;
 varying vec3 vWorldPosition;
-varying vec3 vViewDir;
-varying float vDot;
+
+// three.js WebGLRenderer supplies this automatically whenever the renderer has
+// logarithmicDepthBuffer enabled (2.0 / log2(camera.far + 1.0)) — declaring it
+// is enough, no manual uniform entry needed.
+uniform float logDepthBufFC;
 
 void main() {
-  vNormal = normalize(normalMatrix * normal);
   vec4 worldPos = modelMatrix * vec4(position, 1.0);
   vWorldPosition = worldPos.xyz;
-  vViewDir = normalize(cameraPosition - worldPos.xyz);
-
-  // Pre-compute dot product for fragment shader
-  vDot = dot(vNormal, vViewDir);
 
   gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
 
-  #include <logdepthbuf_vertex>
+  // Vertex-encoded logarithmic depth (three.js classic non-fragDepth path).
+  // Writing gl_FragDepth in the fragment stage (the stock logdepthbuf chunks)
+  // disables early-Z, forcing the shader to run on the ~half of the shell that
+  // is occluded by the opaque Earth disc. Encoding here restores early-Z; the
+  // interpolation error is negligible vs the multi-unit shell/surface gap.
+  gl_Position.z = log2(max(1e-6, gl_Position.w + 1.0)) * logDepthBufFC - 1.0;
+  gl_Position.z *= gl_Position.w;
 }
 `;
 
 const atmosphereFragmentShader = /* glsl */ `
-#include <logdepthbuf_pars_fragment>
-
 uniform vec3 uSunDirection;
-uniform float uTime;
+uniform vec3 uCenter;            // Earth center, world space (CPU-fed)
 uniform float uEarthRadius;
-uniform float uAtmosphereRadius;
+uniform float uInvShellDepth;    // 1.0 / (ATMOSPHERE_RADIUS - EARTH_RADIUS)
 
-varying vec3 vNormal;
 varying vec3 vWorldPosition;
-varying vec3 vViewDir;
-varying float vDot;
+
+// Cheap hash for sub-LSB dithering (breaks 8-bit additive banding).
+float hash12(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
 
 void main() {
-  vec3 normal = normalize(vNormal);
-  vec3 viewDir = normalize(vViewDir);
+  // === RAY GEOMETRY: altitude of the view ray's closest approach to Earth ===
+  // Real atmosphere is densest at the surface and thins exponentially upward.
+  // Brightness therefore peaks where the ray grazes the limb (h -> 0) and
+  // fades smoothly to zero well before the shell's geometric edge — no hard
+  // silhouette cutoff (the flaw of normal-based Fresnel rims).
+  vec3 rayDir = normalize(vWorldPosition - cameraPosition);
+  vec3 oc = uCenter - cameraPosition;
+  float tca = max(dot(oc, rayDir), 0.0);          // camera is always outside the shell
+  vec3 rel = (cameraPosition + rayDir * tca) - uCenter;
+  float b = length(rel);                           // impact parameter
+  float h01 = clamp((b - uEarthRadius) * uInvShellDepth, 0.0, 1.0);
 
-  // === FIXED FRESNEL: Brightest at the LIMB (edge), fades inward ===
-  // When viewing the edge, dot(normal, viewDir) → 0 (perpendicular)
-  // When viewing face-on, dot(normal, viewDir) → 1
-  // We want brightness at the edge, so we use (1 - abs(dot))
-  float edgeFactor = 1.0 - abs(dot(normal, viewDir));
+  // Exponential density falloff; forced to exactly 0 at the shell top so the
+  // mesh edge is invisible.
+  float density = exp(-h01 * 4.0) * smoothstep(1.0, 0.75, h01);
 
-  // Sharp power curve: slightly wider than razor-thin for visual impact
-  // Power of 4.0 gives a clearly visible ISS-like limb glow
-  float rimPower = pow(edgeFactor, 4.0);
+  // === LIGHTING at the closest-approach point (what the viewer perceives) ===
+  vec3 limbNormal = rel / max(b, 0.0001);
+  float NdotL = dot(limbNormal, uSunDirection);
+  float dayFactor = smoothstep(-0.35, 0.2, NdotL);
 
-  // Additional sharpening: kill anything that isn't at the very edge
-  // This prevents the "thick haze" look
-  rimPower *= smoothstep(0.0, 0.12, edgeFactor);
+  // === RAYLEIGH: altitude gradient — bright white-cyan base -> blue -> violet ===
+  vec3 lowCol  = vec3(0.75, 0.88, 1.00);
+  vec3 midCol  = vec3(0.25, 0.55, 1.00);
+  vec3 highCol = vec3(0.15, 0.25, 0.90);
+  vec3 rayleigh = mix(lowCol, midCol, smoothstep(0.0, 0.45, h01));
+  rayleigh = mix(rayleigh, highCol, smoothstep(0.45, 1.0, h01));
 
-  // Altitude-based falloff: atmosphere should only be visible near Earth limb
-  float atmosphereThickness = rimPower * 2.5;
-  atmosphereThickness = clamp(atmosphereThickness, 0.0, 1.0);
+  // === TERMINATOR: narrow saturated sunset band at the day/night line ===
+  float terminatorZone = smoothstep(-0.18, 0.02, NdotL) * smoothstep(0.22, 0.02, NdotL);
+  vec3 sunset = mix(vec3(1.0, 0.25, 0.08), vec3(1.0, 0.55, 0.20), h01);
+  vec3 scatter = mix(rayleigh, sunset, terminatorZone * 0.85);
 
-  // === SUN ILLUMINATION ===
-  float NdotL = dot(normal, uSunDirection);
-  float dayFactor = smoothstep(-0.3, 0.5, NdotL);
+  // === MIE forward scatter: gold hotspot when looking TOWARD the sun ===
+  // (rayDir, not viewDir — dot(viewDir,sun) was backscatter, a bug.)
+  float VdotS = max(dot(rayDir, uSunDirection), 0.0);
+  float v2 = VdotS * VdotS;
+  float mie = v2 * v2 * v2;
 
-  // === RAYLEIGH SCATTERING COLORS ===
-  // Blue on the sunlit side (dominant Rayleigh)
-  vec3 rayleighDay = vec3(0.4, 0.7, 1.0);
+  // === LINEAR ADDITIVE OUTPUT (alpha=1; falloff lives in rgb) ===
+  vec3 atmos = scatter * density * dayFactor * 2.2;
+  atmos += vec3(1.0, 0.88, 0.65) * mie * density * dayFactor * 1.5;
 
-  // Orange/red at the terminator (sunset/sunrise)
-  float terminatorZone = smoothstep(-0.15, 0.05, NdotL) * smoothstep(0.25, 0.05, NdotL);
-  vec3 rayleighTerminator = vec3(1.0, 0.5, 0.15);
+  // === NIGHT: thin greenish airglow layer (~90-100 km, ISS-observed) ===
+  float ag = (h01 - 0.62) / 0.18;
+  float airglowBand = exp(-ag * ag);
+  atmos += vec3(0.10, 0.30, 0.22) * airglowBand * (1.0 - dayFactor) * 0.35;
 
-  // Blend between day blue and terminator orange
-  vec3 scatterColor = mix(rayleighDay, rayleighTerminator, terminatorZone * 0.7);
+  // Sub-LSB dither to break additive banding on the smooth gradient.
+  atmos += (hash12(gl_FragCoord.xy) - 0.5) * (2.0 / 255.0);
 
-  // Brighten the limb color slightly for that ISS-like brilliant blue-white
-  scatterColor = mix(scatterColor, vec3(0.8, 0.9, 1.0), rimPower * 0.3);
+  float lum = max(atmos.r, max(atmos.g, atmos.b));
+  if (lum < 0.002) discard;
 
-  // === COMBINE: bright rim × sun illumination ===
-  float intensity = atmosphereThickness * 1.8;
-  vec3 atmosColor = scatterColor * intensity * dayFactor;
-
-  // === NIGHT SIDE: visible airglow (greenish tint, ISS-observed) ===
-  float nightGlow = rimPower * 0.30 * (1.0 - dayFactor);
-  atmosColor += vec3(0.10, 0.25, 0.18) * nightGlow;
-
-  // === ALPHA: visible mainly at rim edges, transparent everywhere else ===
-  float alpha = atmosphereThickness * dayFactor * 1.0 + nightGlow * 0.9;
-  alpha = clamp(alpha, 0.0, 0.95);
-
-  // Fade very faint contributions to zero for cleanliness
-  if (alpha < 0.005) discard;
-
-  gl_FragColor = vec4(atmosColor, alpha);
-
-  #include <logdepthbuf_fragment>
+  gl_FragColor = vec4(atmos, 1.0);
 }
 `;
 
@@ -733,18 +742,21 @@ export class Earth {
     this.group.add(this.cloudMesh);
   }
 
-  // --- ATMOSPHERE (128×128 segments, BackSide, additive blending) ---
+  // --- ATMOSPHERE (64×64 segments, BackSide, additive blending) ---
   _createAtmosphere() {
-    const geometry = new THREE.SphereGeometry(Constants.ATMOSPHERE_RADIUS, 128, 128);
+    const geometry = new THREE.SphereGeometry(Constants.ATMOSPHERE_RADIUS, 64, 64);
+    // Shading is fully analytic — only `position` is read.
+    geometry.deleteAttribute('normal');
+    geometry.deleteAttribute('uv');
 
     this.atmosphereMaterial = new THREE.ShaderMaterial({
       vertexShader: atmosphereVertexShader,
       fragmentShader: atmosphereFragmentShader,
       uniforms: {
         uSunDirection: { value: this.sunDirection },
-        uTime: { value: 0 },
+        uCenter: { value: new THREE.Vector3() },
         uEarthRadius: { value: Constants.EARTH_RADIUS },
-        uAtmosphereRadius: { value: Constants.ATMOSPHERE_RADIUS },
+        uInvShellDepth: { value: 1 / (Constants.ATMOSPHERE_RADIUS - Constants.EARTH_RADIUS) },
       },
       transparent: true,
       depthWrite: false,
@@ -790,7 +802,8 @@ export class Earth {
       this.cloudMaterial.uniforms.uTime.value = this.elapsedTime;
     }
     if (this.atmosphereMaterial) {
-      this.atmosphereMaterial.uniforms.uTime.value = this.elapsedTime;
+      // Keep the analytic shader's Earth-center uniform in sync (group may move).
+      this.atmosphereMesh.getWorldPosition(this.atmosphereMaterial.uniforms.uCenter.value);
     }
 
     // Sidereal cloud rotation — visible drift over a game hour (ST-5.3)

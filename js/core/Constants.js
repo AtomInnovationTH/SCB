@@ -144,7 +144,7 @@ export const Constants = {
 
   // === ATMOSPHERE LAYERS (scene units, radii) ===
   CLOUD_RADIUS: 63.81,            // +10 km above surface
-  ATMOSPHERE_RADIUS: 64.41,       // +70 km above surface
+  ATMOSPHERE_RADIUS: 65.11,       // +140 km above surface — gives the limb-glow gradient room to fade softly (was +70 km)
 
   // === EARTH RENDERING (ST-5.3) ===
   EARTH: {
