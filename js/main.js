@@ -403,6 +403,13 @@ let _profileFrameCount = 0;
 // After that, the flag flips true and the probe is disabled for the session.
 let _gpuProbeComplete = false;
 
+// Perf warmup/settle guard (Constants.PERF.ADAPT_WARMUP_MS). Timestamp (rAF /
+// performance.now clock) before which adaptive tier changes are suppressed, so
+// one-time startup transients (shader compile, texture upload, scene build)
+// can't trigger a spurious permanent downgrade. Initialised on the first active
+// frame and re-armed on each GAME_STATE_CHANGE into a heavier (non-MENU) state.
+let _perfSettleUntil = 0;
+
 // Catch slo-mo state (Phase 1C)
 let slowMoTimer = 0;
 let slowMoFactor = 1.0;
@@ -1135,6 +1142,15 @@ async function init() {
     if (debrisField && typeof debrisField.setMenuBackdropBoost === 'function') {
       debrisField.setMenuBackdropBoost(inMenu);
     }
+    // Re-arm the perf warmup/settle guard when entering a heavier state (menu →
+    // briefing → sim). Building the mission scene spikes GPU time / drops FPS
+    // for a beat; without a fresh settle window the runtime adapt loop reads
+    // that transient as sustained load and downshifts the tier. Clear the FPS
+    // history too so only post-transition (steady-state) samples count.
+    if (!inMenu) {
+      _perfSettleUntil = performance.now() + Constants.PERF.ADAPT_WARMUP_MS;
+      _fpsHistory.length = 0;
+    }
   });
 
   window.addEventListener('resize', onResize);
@@ -1523,21 +1539,32 @@ function gameLoop(timestamp) {
   // works on the same underlying sample but isn't gated on pause, so we
   // intentionally compute fps locally from realDt here.
   if (realDt > 0) {
+    // Perf warmup/settle guard — start the clock on the first active frame so
+    // the GPU probe + runtimeAdapt below ignore startup transients (see
+    // Constants.PERF.ADAPT_WARMUP_MS).
+    if (_perfSettleUntil === 0) _perfSettleUntil = timestamp + Constants.PERF.ADAPT_WARMUP_MS;
     const fps = 1 / realDt;
-    if (Number.isFinite(fps) && fps > 0) {
+    // Only sample real gameplay frames. Menu / briefing / shop / game-over are
+    // intentionally throttled to ~30 fps (see _getScheduleIntervalMs), below the
+    // 50 fps downshift threshold — feeding them to runtimeAdapt would read the
+    // deliberate throttle as a slow GPU and downshift the tier on a static UI
+    // screen. Startup/non-gameplay assessment is the GPU probe's job (it measures
+    // per-frame GPU ms, which the frame-schedule throttle does not skew).
+    if (gameState.isGameplay() && Number.isFinite(fps) && fps > 0) {
       _fpsHistory.push(fps);
       if (_fpsHistory.length > Constants.PERF.FPS_HISTORY_SIZE) _fpsHistory.shift();
     }
     _framesSinceLastTierChange++;
     // Cadence: every N frames since last tier change. Uses our own counter
-    // (not `frameCount`, which only ticks during `isGameplay()` states), so
-    // adapt also runs during MENU/BRIEFING where the scene is still rendering.
+    // (not `frameCount`, which only ticks during gameplay). runtimeAdapt is
+    // gated on isGameplay() too (matching the sampling gate above), so a
+    // throttled UI screen can never drive an FPS-based tier change.
     //
     // Sprint 3 GPU profiling: `?autoProfile=1` requires tier stability across
     // configurations (otherwise the disable-X delta-vs-baseline is measuring
     // tier-change drift instead of the toggled feature). Skip runtimeAdapt
     // entirely while a profile sweep session is live.
-    if (sceneManager && !profileFlags.autoProfile && (_framesSinceLastTierChange % _ADAPT_CHECK_INTERVAL) === 0) {
+    if (sceneManager && gameState.isGameplay() && !profileFlags.autoProfile && timestamp >= _perfSettleUntil && (_framesSinceLastTierChange % _ADAPT_CHECK_INTERVAL) === 0) {
       const decision = runtimeAdapt({
         currentTier: sceneManager.currentTier,
         fpsHistory: _fpsHistory,
@@ -1998,7 +2025,13 @@ function gameLoop(timestamp) {
   }
   if (!_gpuProbeComplete && sceneManager.gpuProbeEnabled && sceneManager.gpuProbe) {
     const probe = sceneManager.gpuProbe;
-    if (probe.getSampleCount() >= Constants.PERF.GPU_PROBE_FRAMES) {
+    if (timestamp < _perfSettleUntil && !profileFlags.autoProfile) {
+      // Warmup: discard transient shader-compile / texture-upload / scene-build
+      // samples so the probe window fills with steady-state frames only. Without
+      // this the median of the first 60 frames is inflated by one-time load cost
+      // and falsely downshifts a machine that holds the tier at steady state.
+      probe.resetSamples();
+    } else if (probe.getSampleCount() >= Constants.PERF.GPU_PROBE_FRAMES) {
       _gpuProbeComplete = true;
       const medianMs = probe.getMedianMs();
       const threshold = Constants.PERF.GPU_PROBE_THRESHOLD_MS;

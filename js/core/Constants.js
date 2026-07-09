@@ -3616,6 +3616,16 @@ export const Constants = {
     GPU_PROBE_THRESHOLD_MS: 14,
     // Number of frames in the probe sampling window.
     GPU_PROBE_FRAMES: 60,
+    // Warmup/settle guard (ms). Adaptive tier changes — both the one-shot GPU
+    // startup probe and the runtime FPS adapt loop — are suppressed for this
+    // long after boot AND after each transition into a heavier state (menu →
+    // briefing → sim). One-time startup costs (shader compilation, 16K Earth
+    // texture decode/upload, debris-field build) spike GPU time and FPS well
+    // past steady state; without this window the probe/adapt would read that
+    // transient as sustained load and permanently downshift a capable machine
+    // (e.g. an M4 Max that holds HIGH at ~5 ms/frame — see Phase C.1 note above).
+    // A genuinely slow device still downshifts once the window elapses.
+    ADAPT_WARMUP_MS: 2500,
   },
 
   // ============================================================================
