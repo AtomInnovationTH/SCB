@@ -24,3 +24,36 @@ secrets.json
 
 # Sprint 3 GPU profiling - sweep results auto-download into the project root
 gpu-profile-*.json
+
+# ─── Not published to GitHub — kept locally only ───────────────────────────
+# The public repo is trimmed to only what's needed to RUN the sim:
+# index.html, sw.js, .nojekyll, js/ (minus js/test/), vendor/, textures/,
+# data/, package.json, start.sh, README.md. Everything below stays on this
+# machine but is neither tracked nor uploaded.
+
+# Docs — README.md is the one kept exception (repo landing page)
+/*.md
+!/README.md
+/archive/
+
+# Test suite (not needed to run the sim)
+/js/test/
+/test.sh
+/test.html
+
+# Content-generation tooling (regenerates data/*.json)
+/scripts/
+
+# AI / editor tooling config
+/.kilo/
+/.roo/
+/.roomodes
+/.clinerules-code
+
+# Experimental spikes & scratch
+/js/spike/
+/netspike.html
+/tmp/
+
+# Doc / marketing assets (not needed to run)
+/screenshot.png
