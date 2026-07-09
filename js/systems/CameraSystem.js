@@ -90,6 +90,8 @@ export class CameraSystem {
     // ========================================================================
     /** @type {THREE.PointLight|null} */
     this._fillLight = null;
+    /** @type {THREE.PointLight|null} Cool back/rim light on the far side of the ship. */
+    this._rimLight = null;
     if (scene) {
       // Color: slightly warm white (spacecraft instrument lighting feel).
       //
@@ -106,13 +108,27 @@ export class CameraSystem {
       // Fix: decay=0 (no inverse-square — the 100 km scale makes physical
       // falloff meaningless here) gives a constant base of 1, and a wide
       // cutoff (0.01 units ≈ 1 km) keeps the window ≈1 across the whole
-      // gameplay zoom band so the fill no longer changes with zoom. Effective
-      // intensity is now ~0.5, a genuine subtle fill. Night-side/eclipse
-      // readability that used to lean on the accidental flood is restored via
-      // the ambient + hemisphere lift in SceneManager/SunLight.
-      this._fillLight = new THREE.PointLight(0xfff5e0, 0.5, 0.01, 0);
+      // gameplay zoom band so the fill no longer changes with zoom. The wide
+      // cutoff ALSO means it only reaches the near ship/debris, never the
+      // distant Earth (~0.6 units away) — so it can't wash out the Earth or
+      // atmosphere. Camera-side KEY (front fill) — lifted 0.5 → 0.8 so the
+      // camera-facing hull reads as lit metal rather than a flat dark shape.
+      this._fillLight = new THREE.PointLight(0xfff5e0, 2.4, 0.01, 0);
       this._fillLight.name = 'cameraFillLight';
       scene.add(this._fillLight);
+
+      // RIM / BACK LIGHT — a cool key on the FAR side of the ship from the
+      // camera. Point lights are omnidirectional, so a light placed just beyond
+      // the ship (opposite the camera) catches the hull's silhouette edges and
+      // separates them from the black-space backdrop — the "less silhouette"
+      // fix, and the same rim technique the menu hero uses (MenuScene3D rim
+      // DirectionalLight). Same unit-scale trick as the fill (decay=0 + ~1 km
+      // cutoff) so it stays a constant, zoom-independent rim that only touches
+      // the near ship/debris and never the Earth. Positioned per-frame in
+      // update() along the camera→ship axis.
+      this._rimLight = new THREE.PointLight(0xbcd0ff, 2.0, 0.01, 0);
+      this._rimLight.name = 'cameraRimLight';
+      scene.add(this._rimLight);
     }
 
     /** @private scene reference for fill-light cleanup */
@@ -760,9 +776,23 @@ export class CameraSystem {
       if (this._vleoIntroScale < 1.001) this._vleoIntroScale = 1.0;
     }
 
-    // Sync fill light to camera — illuminates whatever the camera is looking at
+    // Sync the ship light rig each frame. Both lights are distance-limited (see
+    // ctor) so they only illuminate the near ship/debris, never the Earth.
     if (this._fillLight) {
+      // Camera-side key: fills the hull face the pilot is looking at.
       this._fillLight.position.copy(this.camera.position);
+    }
+    if (this._rimLight && playerPos) {
+      // Back/rim: place it just beyond the ship along the camera→ship axis so
+      // it lights the far edges toward the camera, peeling the silhouette off
+      // the black background.
+      const back = this._tmpVecA.subVectors(playerPos, this.camera.position);
+      if (back.lengthSq() > 1e-12) {
+        back.setLength(0.0003);   // ~30 m past the ship
+        this._rimLight.position.copy(playerPos).add(back);
+      } else {
+        this._rimLight.position.copy(playerPos);
+      }
     }
   }
 
@@ -2564,10 +2594,14 @@ export class CameraSystem {
       this._inspectionVignette.parentNode.removeChild(this._inspectionVignette);
     }
 
-    // Remove fill light from scene
+    // Remove fill + rim lights from scene
     if (this._fillLight && this._scene) {
       this._scene.remove(this._fillLight);
       this._fillLight = null;
+    }
+    if (this._rimLight && this._scene) {
+      this._scene.remove(this._rimLight);
+      this._rimLight = null;
     }
   }
 

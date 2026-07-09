@@ -13,6 +13,7 @@ import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js';
 // Sprint 2 / PR D — FXAA fallback for MEDIUM tier (cheaper than SMAA).
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { FXAAShader } from 'three/addons/shaders/FXAAShader.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Constants } from '../core/Constants.js';
 import { profileFlags } from '../core/ProfileFlags.js';
 import { selectInitialTier } from '../systems/QualityManager.js';
@@ -599,6 +600,28 @@ export class SceneManager {
     const ambient = new THREE.AmbientLight(0x112244, 0.06);
     this.scene.add(ambient);
     this.ambientLight = ambient;
+
+    // Image-based ambient fill (PMREM of a neutral studio room). Gives the
+    // metallic Mother/daughter hulls (MeshStandardMaterial, metalness ~0.7, no
+    // per-material envMap) a soft omnidirectional specular + diffuse response so
+    // faces the orbit-driven sun isn't hitting read as lit metal instead of a
+    // flat black silhouette against the bright Earth limb. This is the same IBL
+    // that makes the menu hero ship read well.
+    //
+    // EARTH-SAFE: Earth surface, clouds and atmosphere are custom ShaderMaterials
+    // (Earth.js), which ignore scene.environment entirely — so the day/night
+    // terminator and limb scattering are untouched. Only PBR materials (ship +
+    // interactive debris) pick up the fill. Kept modest so deep space stays dark.
+    try {
+      const pmrem = new THREE.PMREMGenerator(this.renderer);
+      this._envRT = pmrem.fromScene(new RoomEnvironment(), 0.04);
+      this.scene.environment = this._envRT.texture;
+      this.scene.environmentIntensity = 0.55;
+      pmrem.dispose();
+    } catch (e) {
+      console.warn('[SceneManager] environment IBL setup failed:', e);
+      this._envRT = null;
+    }
   }
 
   /**
