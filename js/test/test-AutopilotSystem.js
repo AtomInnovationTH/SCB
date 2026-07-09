@@ -1426,4 +1426,45 @@ describe('Autopilot — One-tap re-acquire with no target', () => {
     assert.equal(noTargetLog.length, 1, 'no live debris at all → AUTOPILOT_NO_TARGET');
     assert.equal(ap.engaged, false);
   });
+
+  it('prefers the TargetAcquisition helper pick over the mass-based fallback', () => {
+    const helperPick = makeTarget({ id: 55 });
+    const massPick = makeTarget({ id: 7 });
+    massPick.mass = 200;
+    const ts = makeSelectableTargetSelector();
+    // Helper acquires by driving the same selector the AP reads.
+    const targetAcquisition = {
+      acquireBestTarget(ctx) {
+        ts.setTarget(helperPick, ctx);
+        return helperPick;
+      },
+    };
+    const ap = makeAP({
+      targetSelector: ts,
+      debrisField: makeDebrisField([massPick]),
+    });
+    ap._targetAcquisition = targetAcquisition; // init happens inside makeAP; inject after
+    const noTargetLog = trackEvents(Events.AUTOPILOT_NO_TARGET);
+    ap.engage();
+    assert.equal(noTargetLog.length, 0);
+    assert.equal(ap.engaged, true);
+    assert.equal(ts.getActiveTarget()?.id, 55, 'helper pick wins over the mass-based nearest');
+  });
+
+  it('falls back to mass-based nearest when the helper returns null', () => {
+    const massPick = makeTarget({ id: 7 });
+    massPick.mass = 200;
+    const ts = makeSelectableTargetSelector();
+    const targetAcquisition = { acquireBestTarget() { return null; } };
+    const ap = makeAP({
+      targetSelector: ts,
+      debrisField: makeDebrisField([massPick]),
+    });
+    ap._targetAcquisition = targetAcquisition;
+    const noTargetLog = trackEvents(Events.AUTOPILOT_NO_TARGET);
+    ap.engage();
+    assert.equal(noTargetLog.length, 0, 'must not dead-end when helper yields null but debris exists');
+    assert.equal(ap.engaged, true);
+    assert.equal(ts.getActiveTarget()?.id, 7, 'mass-based fallback selects the live debris');
+  });
 });

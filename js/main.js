@@ -89,6 +89,7 @@ import { TeachingSystem } from './systems/TeachingSystem.js';
 import { armIdleAdvisor } from './systems/ArmIdleAdvisor.js';
 import { guidanceTelemetry } from './systems/GuidanceTelemetry.js';
 import { navRecoveryAdvisor } from './systems/NavRecoveryAdvisor.js';
+import { targetAcquisition } from './systems/TargetAcquisition.js';
 import { missionMilestones } from './systems/MissionMilestones.js';
 import { cityLabels } from './scene/CityLabels.js';
 import { TeachingOverlay } from './ui/TeachingOverlay.js';
@@ -729,7 +730,7 @@ async function init() {
   // SUSPENDED (never displayed) pending a UX redesign. See ROADMAP.md.
   // The panel still mounts so internal event tracking works, but setVisible
   // is never called.
-  menuScreen = new MenuScreen();
+  menuScreen = new MenuScreen(sceneManager ? sceneManager.currentTier : null);
   briefingScreen = new BriefingScreen();
   shopScreen = new ShopScreen();
   gameOverScreen = new GameOverScreen();
@@ -866,6 +867,7 @@ async function init() {
   // --- F15: Wire autopilot dependencies ---
   autopilotSystem.init({
     player, targetSelector, trawlManager, debrisField, armManager,
+    targetAcquisition,
   });
 
   // --- ST-6.4: Strategic Map (Shift+V orbital overview) ---
@@ -931,6 +933,8 @@ async function init() {
     debrisField, debrisWireframe, dockingReticle, hud, targetReticle,
     navSphere, orbitMFD, debrisMap, audioSystem, debugOverlay, sensorSystem,
     lassoSystem, autopilotSystem, codexViewerUI, strategicMap, hotkeyOverlay,
+    // Scan auto-select: unified acquire helper (Shift+N / Shift+A route here).
+    targetAcquisition,
     // Net ladder Phase B: Mother Large Net routing (>500 kg → fireMotherNet).
     captureNetSystem,
     // Hotkey revamp 2026-06-14: starfield (6 = constellation labels toggle).
@@ -964,6 +968,24 @@ async function init() {
     debrisField,
     targetSelector,
     skillsSystem,
+  });
+
+  // --- Scan auto-select: unify every programmatic acquire behind one helper ---
+  // After a scan settles with nothing selected, auto-select the best pane
+  // contact and coach the next verb (N/D in range, A out of range). Also backs
+  // Shift+N / Shift+A and autopilot's no-target fallback. Purely event-driven —
+  // no per-frame update. Wired after HUD/reticle/navSphere exist.
+  targetAcquisition.init({
+    player,
+    debrisField,
+    sensorSystem,
+    targetSelector,
+    hud,
+    targetReticle,
+    navSphere,
+    debrisWireframe,
+    skillsSystem,
+    guidanceDirector,
   });
 
   // --- UX-11 #12: dual-objective milestone comms (25/50/75/90% of either win track) ---
@@ -1082,6 +1104,37 @@ async function init() {
     }
     _syncAudioCtxState();
     _flushScheduledFrame();
+  });
+
+  // --- Backdrop reveal (Option A): hide the gameplay ship during MENU ---
+  // The menu canvas is now transparent, so the live orbital scene (Earth,
+  // constellations, background debris) shows through behind the MenuScene3D
+  // hero plate. The gameplay PlayerSatellite would otherwise appear as a
+  // "second Mother" behind the hero. Hide the player root (+ docked arm
+  // visuals) on entering MENU and restore on ANY exit (start, continue, and
+  // the pause→menu path). The slow follow-camera still frames Earth/debris
+  // even with the ship hidden (it tracks the hidden ship's position).
+  // Owned here (not in MenuScreen) so the screen doesn't touch gameplay entities.
+  const _setPlayerShipHidden = (hide) => {
+    if (player) player.visible = !hide;
+    // Docked daughters are separate scene objects tracking the struts; at MENU
+    // they're usually LOCKED/STOWED (already hidden), but hide their groups too
+    // so nothing peeks out behind the hero if a save left one deployed.
+    if (armManager && Array.isArray(armManager.arms)) {
+      for (const arm of armManager.arms) {
+        if (arm && arm.group) arm.group.visible = !hide;
+      }
+    }
+  };
+  eventBus.on(Events.GAME_STATE_CHANGE, ({ to }) => {
+    const inMenu = to === GameStates.MENU;
+    _setPlayerShipHidden(inMenu);
+    // Boost the background debris cloud so it reads as a visible dust field
+    // behind the transparent menu, and restore it on any exit. Restoring
+    // re-applies whatever hidden state was active (e.g. the Mission-1 hide).
+    if (debrisField && typeof debrisField.setMenuBackdropBoost === 'function') {
+      debrisField.setMenuBackdropBoost(inMenu);
+    }
   });
 
   window.addEventListener('resize', onResize);

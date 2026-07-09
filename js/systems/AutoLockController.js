@@ -98,6 +98,7 @@ export class AutoLockController {
     on(Events.TARGET_SELECTED, (d) => {
       if (d && d.autoLock) return;          // our own pick — not a manual override
       if (d && d.autoTarget) return;        // legacy welcome auto-target — also ours
+      if (d && d.autoAcquire) return;       // TargetAcquisition programmatic pick — also ours
       this._manualOverride = true;
     });
 
@@ -123,6 +124,17 @@ export class AutoLockController {
 
     if (Events.GAME_RESET) {
       on(Events.GAME_RESET, () => this.reset());
+    }
+
+    // Scan is the player's explicit "I'm lost, help" action (scan auto-select,
+    // TargetAcquisition). Re-arm ambient assist by clearing any sticky manual
+    // override so the reticle resumes picking in-arc contacts. Fill-only
+    // precedence (by design): after this re-arm, _tryAcquire may grab an in-arc
+    // ≤5 km piece during the ~0-1.2 s reveal stagger before SCAN_REVEALS_SETTLED
+    // fires; the scan acquire then finds a target present and skips. Both picks
+    // are "assisted flow" — no fight.
+    if (Events.SCAN_COMPLETE) {
+      on(Events.SCAN_COMPLETE, () => { this._manualOverride = false; });
     }
 
     // Settings toggle honors the autolock assist enable/disable.

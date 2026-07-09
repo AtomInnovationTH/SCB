@@ -1392,22 +1392,10 @@ export class InputManager {
     const d = this._deps;
     let acquired = null;
     try {
-      const list = d.debrisField.getEnhancedTargetList(
-        d.player.getPosition(), d.player.getOrbitalElements()
-      );
-      const canDetect = d.sensorSystem && d.sensorSystem.canDetectUntracked;
-      const eligible = list.filter(t => t.tracked !== false || canDetect);
-      if (eligible.length > 0) {
-        const t = eligible[0]; // best TPI rank
-        const debris = d.debrisField.getDebrisById(t.id);
-        if (debris) {
-          d.targetSelector.setTarget(debris, { distanceKm: t.distanceKm, deltaV: t.deltaV });
-          if (d.debrisWireframe) d.debrisWireframe.setTarget(debris);
-          d.hud.setSelectedTarget(t.id);
-          if (d.targetReticle) d.targetReticle.setSelectedTarget(t.id);
-          if (d.navSphere) d.navSphere.setSelectedTarget(t.id);
-          acquired = debris;
-        }
+      // Unified acquire (top of the TPI-sorted, tracked/IR-filtered pane list),
+      // so the pane highlight and the net target always agree.
+      if (d.targetAcquisition && typeof d.targetAcquisition.acquireBestTarget === 'function') {
+        acquired = d.targetAcquisition.acquireBestTarget({ source: 'shift_n' });
       }
     } catch (err) {
       console.error('[auto-target-launch] error:', err);
@@ -1451,14 +1439,19 @@ export class InputManager {
       }
     }
 
-    // Build the TPI-sorted, tracked/IR-filtered eligible debris list once.
+    // Build the TPI-sorted, tracked/IR-filtered eligible debris list once, via
+    // the unified helper so this shares the pane's exact eligibility rule.
     let eligible = [];
     try {
-      const list = d.debrisField.getEnhancedTargetList(
-        d.player.getPosition(), d.player.getOrbitalElements()
-      );
-      const canDetect = d.sensorSystem && d.sensorSystem.canDetectUntracked;
-      eligible = list.filter(t => t.tracked !== false || canDetect);
+      if (d.targetAcquisition && typeof d.targetAcquisition.getEligibleTargets === 'function') {
+        eligible = d.targetAcquisition.getEligibleTargets();
+      } else {
+        const list = d.debrisField.getEnhancedTargetList(
+          d.player.getPosition(), d.player.getOrbitalElements()
+        );
+        const canDetect = d.sensorSystem && d.sensorSystem.canDetectUntracked;
+        eligible = list.filter(t => t.tracked !== false || canDetect);
+      }
     } catch (err) {
       console.error('[field-center-salvage] target list error:', err);
     }

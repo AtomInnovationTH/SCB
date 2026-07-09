@@ -4,6 +4,14 @@
  */
 
 export const Constants = {
+  // === VERSION ===
+  // Single source of truth for the displayed app version. VERSION is the raw
+  // value; VERSION_LABEL is the exact string the UI renders (menu title tag,
+  // and any other ES-module UI). NON-module consumers (e.g. sw.js cache name)
+  // must be updated by hand — keep them in sync here.
+  VERSION: '0.995',
+  VERSION_LABEL: 'V.995',
+
   // ============================================================================
   // === INPUT (Delegation 1, 2026-05-31) ===
   // Hotkey-handler tuning knobs.  Add new flags here when InputManager grows

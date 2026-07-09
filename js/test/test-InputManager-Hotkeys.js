@@ -49,6 +49,19 @@ function makeIM(overrides = {}) {
       getEnhancedTargetList: () => { calls.targetCycle++; return []; },
       getDebrisById: () => null,
     },
+    // Unified acquire helper: Shift+N / Shift+A route through it. The stub
+    // consults debrisField.getEnhancedTargetList so `calls.targetCycle` still
+    // reflects the auto-acquire attempt (mirrors the real helper).
+    targetAcquisition: {
+      getEligibleTargets: () => {
+        calls.targetCycle++;
+        return [];
+      },
+      acquireBestTarget: () => {
+        calls.targetCycle++;
+        return null;
+      },
+    },
     debrisWireframe: { setTarget: () => {}, toggleMinimized: () => { calls.debrisPane++; } },
     hud: { setSelectedTarget: () => {}, targetPanel: { toggleVisible: () => { calls.targetPane++; } } },
     navSphere: { toggle: () => { calls.navToggle++; }, toggleMinimized: () => { calls.navMin = (calls.navMin || 0) + 1; }, setSelectedTarget: () => {} },

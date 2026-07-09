@@ -325,7 +325,11 @@ class GameFlowManager {
       this.transitionToState(GameStates.ORBITAL_VIEW);
     });
 
-    // Menu → Fast Start (same as start — both skip briefing now)
+    // Menu → Fast Start (LEGACY / reserved hook, 2026-07 menu overhaul).
+    // The KeyF "fast start" shortcut was removed from MenuScreen — no emitter
+    // remains for MENU_FAST_START. This handler is kept as a reserved hook
+    // (matching the codebase convention of retaining unused Events constants,
+    // e.g. PERSISTENCE_SAVED) and is byte-identical to MENU_START above.
     eventBus.on(Events.MENU_FAST_START, () => {
       this.resetGame();
       this._applyStartLocation();   // place ground track over the player's home region

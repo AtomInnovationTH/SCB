@@ -43,6 +43,10 @@ import './test-SettingsManager-Guidance.js';
 // UX-11 #11: lost-in-space recovery advisor (bearing helpers + watchdog + empty-scan)
 import './test-NavRecoveryAdvisor.js';
 
+// Scan auto-select: unified programmatic acquire helper (S → highlight → N/D/A)
+import './test-TargetAcquisition.js';
+import './test-SensorSystem.js';
+
 // UX-11 #12: dual-objective milestone comms (threshold crossing + recap)
 import './test-MissionMilestones.js';
 
@@ -187,6 +191,7 @@ import './test-CaptureNet.js';
 // reel-tension retune, oversize/strain net integrity, authoritative reel-in pin
 import './test-ArmUnit-CaptureFailure.js';
 import './test-DebrisField-PinCatch.js';
+import './test-DebrisField-MenuBackdrop.js';
 import './test-ArmUnit-ParkCatch.js';
 import './test-ArmDockBasis.js';   // Item 4 — shared docked-arm orientation basis
 import './test-ArmUnit-LeadAim.js'; // Item 2 — net launch lead-aim

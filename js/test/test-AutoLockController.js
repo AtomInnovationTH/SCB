@@ -135,4 +135,42 @@ describe('AutoLockController — manual override', () => {
     ctrl.dispose();
     targetSelector.reset();
   });
+
+  it('an autoAcquire TARGET_SELECTED is NOT treated as a manual override', () => {
+    eventBus.clear();
+    targetSelector.reset();
+    const ctrl = new AutoLockController({
+      player: mockPlayer(),
+      debrisField: mockField([debrisAt(1, 40)]),
+    });
+    // TargetAcquisition programmatic pick — must not suppress autolock.
+    eventBus.emit(Events.TARGET_SELECTED, { id: 99, autoAcquire: true });
+    targetSelector.reset();
+    ctrl.update(0.016);
+    assert.ok(targetSelector.getActiveTarget(), 'autolock still acquires after a programmatic pick');
+    assert.equal(targetSelector.getActiveTarget().id, 1);
+    ctrl.dispose();
+    targetSelector.reset();
+  });
+
+  it('SCAN_COMPLETE clears a sticky manual override (re-arms ambient assist)', () => {
+    eventBus.clear();
+    targetSelector.reset();
+    const ctrl = new AutoLockController({
+      player: mockPlayer(),
+      debrisField: mockField([debrisAt(1, 40)]),
+    });
+    // Manual selection sets the override; clearing leaves it sticky.
+    eventBus.emit(Events.TARGET_SELECTED, { id: 99 });
+    targetSelector.reset();
+    ctrl.update(0.016);
+    assert.equal(targetSelector.getActiveTarget(), null, 'override active pre-scan');
+    // Scan is the explicit "help me" action — re-arm.
+    eventBus.emit(Events.SCAN_COMPLETE, { type: 'quick', rewardKind: 'fresh' });
+    ctrl.update(0.016);
+    assert.ok(targetSelector.getActiveTarget(), 'autolock resumes after SCAN_COMPLETE');
+    assert.equal(targetSelector.getActiveTarget().id, 1);
+    ctrl.dispose();
+    targetSelector.reset();
+  });
 });

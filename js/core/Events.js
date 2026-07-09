@@ -248,6 +248,7 @@ export const Events = {
   SCAN_WIDE:          'scan:wide',               // W key — wide aperture deep scan
   SCAN_INITIATED:     'scan:initiated',           // { type: 'quick'|'wide' } — scan actually started (for audio/visual feedback)
   SCAN_COMPLETE:      'scan:complete',            // { type: 'quick'|'wide', results: {...} }
+  SCAN_REVEALS_SETTLED: 'scan:revealsSettled',    // { revealed: number, scanType: 'quick'|'wide' } — staggered scan reveals finished discovering; scan auto-select fills the pane
   SCAN_DISCOVERY:     'scan:discovery',           // { debrisId, type, mass, salvage?: { hydrazine, metals[] } } — hidden debris found (ST-4.D enriched)
 
   // === KESSLER ===

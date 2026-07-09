@@ -14,6 +14,8 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Constants } from '../core/Constants.js';   // FIX_PLAN §2-followup — RENDER_ORDER enum
+import { eventBus } from '../core/EventBus.js';       // tier-change subscription (menu renderer QoS)
+import { Events } from '../core/Events.js';
 // The hero ship is the REAL gameplay Mother + daughters (not a hand replica), so
 // the menu can never drift from the sim. Any change to these models shows here.
 import { PlayerSatellite } from '../entities/PlayerSatellite.js';
@@ -53,58 +55,33 @@ const SPARK_COUNT = 70;
 const SPARK_SPEED = 2.80;     // fast — sparks streak away before accumulating
 const SPARK_LIFE  = 0.45;     // short — die quickly for crisp look
 
-// ─── Space backdrop ─────────────────────────────────────────────────────────
-// Vertical gradient used as an OPAQUE scene background: a faint blue glow up top
-// fading to near-black below. Opaque so the bloom pass composites cleanly and
-// the canvas works as a full-bleed hero plate behind the menu UI.
-function makeSpaceGradient() {
-  const c = document.createElement('canvas');
-  c.width = 4; c.height = 256;
-  const g = c.getContext('2d');
-  const grad = g.createLinearGradient(0, 0, 0, 256);
-  grad.addColorStop(0.0, '#0a1a3a');   // upper space haze
-  grad.addColorStop(0.45, '#050d22');
-  grad.addColorStop(1.0, '#01030a');   // deep shadow below
-  g.fillStyle = grad;
-  g.fillRect(0, 0, 4, 256);
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
+// ─── Menu render quality per tier ───────────────────────────────────────────
+// The menu hero is a SINGLE ship on an otherwise empty scene — it has none of
+// the main scene's fragment-bound cost (the Earth fullscreen atmosphere shader,
+// full 40k-debris field, active-sat swarm). SceneManager's HIGH pixelRatioCap
+// was deliberately lowered 2→1.5 in Sprint 3 (Constants.js C.1 note) to tame
+// THAT fragment cost — a cap the cheap menu scene shouldn't inherit, or the
+// hero silhouette aliases against the now-live backdrop. So the menu keeps its
+// own table: crisp at HIGH (pixelRatio 2, the menu's original value), stepping
+// down only on weaker tiers. MSAA is 4× on HalfFloat (RGBA16F) — the proven-
+// portable ceiling; higher sample counts aren't guaranteed for float targets on
+// all GPUs. bloom-enable still matches QUALITY_TIERS (HIGH/MEDIUM on, LOW off).
+const MENU_QUALITY = {
+  HIGH:   { pixelRatioCap: 2,   msaaSamples: 4, enableBloom: true  },
+  MEDIUM: { pixelRatioCap: 1.5, msaaSamples: 4, enableBloom: true  },
+  LOW:    { pixelRatioCap: 1,   msaaSamples: 0, enableBloom: false },
+};
+function menuQualityFor(tier) {
+  return MENU_QUALITY[tier] || MENU_QUALITY.HIGH;
 }
 
-// ─── Starfield ──────────────────────────────────────────────────────────────
-// Distant stars on a large shell — adds depth/parallax behind the ship as the
-// camera sways. Slightly varied warm/cool tints; brightest ones catch the bloom.
-function buildStarfield() {
-  const N = 1400;
-  const pos = new Float32Array(N * 3);
-  const col = new Float32Array(N * 3);
-  for (let i = 0; i < N; i++) {
-    const r = 60 + Math.random() * 40;
-    const u = Math.random() * 2 - 1;
-    const t = Math.random() * Math.PI * 2;
-    const s = Math.sqrt(1 - u * u);
-    pos[i * 3]     = r * s * Math.cos(t);
-    pos[i * 3 + 1] = r * u;
-    pos[i * 3 + 2] = r * s * Math.sin(t);
-    // Most stars dim; a few bright. Power curve biases toward faint.
-    const w = Math.pow(Math.random(), 2.2) * 1.1 + 0.15;
-    const tint = Math.random();
-    col[i * 3]     = w * (0.82 + 0.18 * tint);
-    col[i * 3 + 1] = w * 0.9;
-    col[i * 3 + 2] = w * (0.9 + 0.1 * (1 - tint));
-  }
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
-  const m = new THREE.PointsMaterial({
-    size: 0.5, sizeAttenuation: true, vertexColors: true,
-    transparent: true, depthWrite: false,
-  });
-  const pts = new THREE.Points(g, m);
-  pts.name = 'Starfield';
-  return pts;
-}
+
+// ─── Space backdrop ─────────────────────────────────────────────────────────
+// Backdrop reveal (Option A): the menu canvas is now TRANSPARENT so the live
+// game scene (Earth, the real Starfield with constellations, the background
+// debris cloud, active satellites) shows through from the main renderer behind
+// it. No scene.background, no menu-local starfield — those would occlude or
+// double-up the reveal. See init(): scene.background = null + clear alpha 0.
 
 // ─── Soft additive glow sprite (weld pool / hot spot) ───────────────────────
 function makeGlowSprite() {
@@ -923,7 +900,7 @@ function updateSparks(sparkSystem, weldPos, dt) {
 // PUBLIC: MenuScene3D
 // ═════════════════════════════════════════════════════════════════════════════
 export class MenuScene3D {
-  constructor() {
+  constructor(initialTier = null) {
     this.renderer = null;
     this.scene    = null;
     this.camera   = null;
@@ -937,6 +914,7 @@ export class MenuScene3D {
     this._pivot   = null;       // scene root that orbits
     this._composer = null;      // EffectComposer (bloom)
     this._bloom    = null;      // UnrealBloomPass
+    this._lastDpr  = window.devicePixelRatio || 1;  // tracked for DPR-change rebuild
     this._envRT    = null;      // PMREM environment render target
     this._canvas   = null;      // canvas ref (for resize-on-show)
     this._resizeObserver = null;
@@ -946,6 +924,29 @@ export class MenuScene3D {
     this._daughters = [];       // real ArmUnit instances docked on the struts
     this._sunDir   = null;      // world-space sun direction (solar tracking)
     this._lookTarget = new THREE.Vector3(0.12, 0, 0.34);  // camera aim (set to weld)
+
+    // ── Quality-tier compliance ──
+    // Menu renderer tracks SceneManager's tier (HIGH/MEDIUM/LOW) so weak devices
+    // don't pay full pixelRatio / MSAA / bloom cost on the menu. The per-tier
+    // values come from MENU_QUALITY (above) — deliberately crisper at HIGH than
+    // the fragment-bound main-scene tiers, since the hero scene is cheap. Initial
+    // tier is handed in from main.js (SceneManager.currentTier); live changes
+    // arrive via Events.PERF_TIER_CHANGED (the adapt loop runs during MENU).
+    this._tier = initialTier || Constants.PERF.DEFAULT_QUALITY_TIER || 'HIGH';
+    this._tierHandler = null;
+
+    // ── prefers-reduced-motion ──
+    // When set, the camera sway freezes at the sway centre and the weld arc runs
+    // as a constant faint glow (no spark emission / light flicker). Live-toggled
+    // via a matchMedia 'change' listener.
+    this._reducedMotion = false;
+    this._motionMedia = null;
+    this._motionHandler = null;
+
+    // Frame gate — the menu hero render loop is capped to ~60 fps (30 under
+    // reduced motion) so it doesn't run at 120 fps on ProMotion displays while
+    // the rest of the app throttles to 30 Hz during MENU (energy policy §12.12).
+    this._lastFrameT = 0;
   }
 
   /**
@@ -957,20 +958,31 @@ export class MenuScene3D {
     // Renderer
     this.renderer = new THREE.WebGLRenderer({
       canvas,
-      antialias: true,
+      // The composer's multisampled HalfFloat target does all AA (see
+      // _buildComposer, samples>0), so a context-level MSAA backbuffer would be
+      // dead memory at pr 2 fullscreen. Trade-off: the composer-failure fallback
+      // path (_tick's renderer.render when _composer is null) becomes aliased —
+      // acceptable, it only triggers if _buildComposer throws.
+      antialias: false,
       alpha: true,
     });
+    // Pixel ratio is tier-driven (see MENU_QUALITY). _applyTierSettings() at the
+    // end of init() sets the authoritative value from this._tier; this initial
+    // cap of 2 is just a safe pre-composer default (matches the HIGH cap).
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.0;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    // Backdrop reveal: fully transparent clear so the live game scene composites
+    // through from the main renderer behind this canvas.
+    this.renderer.setClearColor(0x000000, 0);
 
     // Scene
     this.scene = new THREE.Scene();
 
-    // Opaque space backdrop (vertical gradient). An opaque background lets the
-    // bloom composite cleanly and turns the canvas into a full-bleed hero plate.
-    this.scene.background = makeSpaceGradient();
+    // Transparent backdrop (Option A). No scene.background — the real orbital
+    // scene (Earth, constellations, debris) renders behind the menu canvas.
+    this.scene.background = null;
 
     // Image-based reflections so the gold MLI hull, gold visor and metal rings
     // read as real specular surfaces (not flat matte). Low intensity keeps the
@@ -1021,9 +1033,9 @@ export class MenuScene3D {
     // ── Build scene objects ──
     const mat = makeMaterials();
 
-    // Distant starfield for depth/parallax (added to scene root, not the orbit
-    // pivot, so it reads as a fixed sky behind the slowly-swaying camera).
-    this.scene.add(buildStarfield());
+    // (Backdrop reveal) No menu-local starfield: the real Starfield.js — with
+    // its 8 constellations — now shows through from the main scene behind the
+    // transparent canvas, so a second star shell here would double up / occlude.
 
     // Orbit pivot — everything rotates around this
     this._pivot = new THREE.Group();
@@ -1172,30 +1184,9 @@ export class MenuScene3D {
 
     // ── Post-processing: bloom so the weld arc, glowing aperture, nav lights
     //    and visor glints actually radiate (the difference between a static
-    //    diagram and a living hero shot). Threshold keeps the bloom on bright
-    //    highlights only, not the whole gold body. ──
-    // Crucial: an EffectComposer bypasses the renderer's built-in MSAA, so we
-    // render into a MULTISAMPLED HalfFloat target (matches SceneManager's HIGH
-    // tier: msaaSamples=4). Without this the full-bleed hero looks pixelated.
-    const pr = this.renderer.getPixelRatio();
-    const cw = Math.max(1, canvas.clientWidth);
-    const ch = Math.max(1, canvas.clientHeight);
-    const isWebGL2 = this.renderer.capabilities.isWebGL2;
-    const rt = new THREE.WebGLRenderTarget(
-      Math.floor(cw * pr), Math.floor(ch * pr),
-      { type: THREE.HalfFloatType, samples: isWebGL2 ? 4 : 0 },
-    );
-    this._composer = new EffectComposer(this.renderer, rt);
-    this._composer.setPixelRatio(pr);
-    this._composer.addPass(new RenderPass(this.scene, this.camera));
-    this._bloom = new UnrealBloomPass(
-      new THREE.Vector2(cw, ch),
-      0.28,   // strength — subtle glow, not a blinding halo
-      0.5,    // radius
-      1.0,    // threshold — only genuinely bright sources (arc, lights) bloom
-    );
-    this._composer.addPass(this._bloom);
-    this._composer.addPass(new OutputPass());
+    //    diagram and a living hero shot). The composer is built in
+    //    _buildComposer() (invoked via _applyTierSettings below) so a tier
+    //    change can tear it down and rebuild at new MSAA / bloom settings.
 
     // Handle resize. A ResizeObserver is essential here: init() runs while the
     // menu is display:none (clientWidth = 0), so we must re-size when the canvas
@@ -1207,7 +1198,135 @@ export class MenuScene3D {
       this._resizeObserver = new ResizeObserver(() => this._onResize(canvas));
       this._resizeObserver.observe(canvas);
     }
+
+    // Tier-change subscription: the main-loop adapt check runs during MENU, so
+    // PERF_TIER_CHANGED can fire while the menu is up. Rebuild the composer to
+    // the new tier's pixelRatio / MSAA / bloom settings.
+    this._tierHandler = ({ to }) => this._applyTier(to);
+    eventBus.on(Events.PERF_TIER_CHANGED, this._tierHandler);
+
+    // prefers-reduced-motion — read once and live-listen for changes.
+    this._initReducedMotion();
+
+    // Apply the initial tier (sets pixelRatio + bloom enable) before the first
+    // size pass so the composer target is created at the right resolution.
+    this._applyTierSettings();
     this._onResize(canvas);
+  }
+
+  /**
+   * @private Build (or rebuild) the EffectComposer for the current tier.
+   * An EffectComposer bypasses the renderer's built-in MSAA, so we render into a
+   * MULTISAMPLED HalfFloat target (matches SceneManager's tier msaaSamples).
+   * Bloom is added only when the tier enables it; otherwise the enlarged weld
+   * glow sprite (see _tick) carries the arc read on its own (LOW-tier fallback).
+   *
+   * Backdrop reveal note: the composer runs over a TRANSPARENT clear. A HalfFloat
+   * target + OutputPass keeps the alpha channel intact so the hero composites
+   * cleanly over the live game scene; UnrealBloomPass is purely additive (it only
+   * lightens bright pixels) so it can only ADD glow, never punch a dark halo into
+   * the transparent region — the old opaque-background workaround is no longer
+   * needed. The bloom threshold (1.0) keeps it on genuinely bright sources only.
+   */
+  _buildComposer() {
+    // Tear down any prior composer (tier rebuild path). EffectComposer.dispose()
+    // does NOT dispose added passes, so the bloom mip-chain targets would leak on
+    // every tier rebuild — dispose the bloom pass explicitly first.
+    if (this._composer) {
+      this._bloom?.dispose?.();
+      this._composer.dispose?.();
+      this._composer = null;
+      this._bloom = null;
+    }
+
+    const tierCfg = menuQualityFor(this._tier);
+    const pr = this.renderer.getPixelRatio();
+    const canvas = this._canvas;
+    const cw = Math.max(1, canvas.clientWidth || 1);
+    const ch = Math.max(1, canvas.clientHeight || 1);
+    const isWebGL2 = this.renderer.capabilities.isWebGL2;
+    // 4× MSAA on the HalfFloat target (three clamps to gl.MAX_SAMPLES). Kept at
+    // 4 rather than higher because float (RGBA16F) multisample support above 4×
+    // isn't guaranteed across GPUs and would risk an incomplete framebuffer.
+    const samples = isWebGL2 ? (tierCfg.msaaSamples || 0) : 0;
+    const rt = new THREE.WebGLRenderTarget(
+      Math.floor(cw * pr), Math.floor(ch * pr),
+      { type: THREE.HalfFloatType, samples },
+    );
+    this._composer = new EffectComposer(this.renderer, rt);
+    this._composer.setPixelRatio(pr);
+    this._composer.addPass(new RenderPass(this.scene, this.camera));
+    if (tierCfg.enableBloom) {
+      this._bloom = new UnrealBloomPass(
+        new THREE.Vector2(cw, ch),
+        0.28,   // strength — subtle glow, not a blinding halo
+        0.5,    // radius
+        1.0,    // threshold — only genuinely bright sources (arc, lights) bloom
+      );
+      this._composer.addPass(this._bloom);
+    }
+    this._composer.addPass(new OutputPass());
+  }
+
+  /**
+   * @private Apply renderer-level settings for the current tier (pixelRatio) and
+   * (re)build the composer so MSAA / bloom match. Split from _applyTier so init()
+   * can call it once without re-reading a tier arg.
+   */
+  _applyTierSettings() {
+    const tierCfg = menuQualityFor(this._tier);
+    const cap = tierCfg.pixelRatioCap || 1.5;
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, cap));
+    this._lastDpr = window.devicePixelRatio || 1;
+    this._buildComposer();
+  }
+
+  /**
+   * @private Handle a tier change (from PERF_TIER_CHANGED). No-ops if the tier is
+   * unchanged or unknown. Rebuilds renderer pixelRatio + composer, then re-sizes.
+   * @param {string} tier — 'HIGH' | 'MEDIUM' | 'LOW'
+   */
+  _applyTier(tier) {
+    if (!tier || tier === this._tier) return;
+    if (!MENU_QUALITY[tier]) return;   // ignore unknown tiers
+    this._tier = tier;
+    if (!this.renderer) return;
+    this._applyTierSettings();
+    if (this._canvas) this._onResize(this._canvas);
+  }
+
+  /**
+   * @private Initialise prefers-reduced-motion detection + live listener.
+   */
+  _initReducedMotion() {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    try {
+      this._motionMedia = window.matchMedia('(prefers-reduced-motion: reduce)');
+      this._reducedMotion = !!this._motionMedia.matches;
+      this._motionHandler = (e) => {
+        this._reducedMotion = !!e.matches;
+        // Snap the camera to the sway centre immediately when motion is reduced.
+        if (this._reducedMotion) this._applyReducedMotionPose();
+      };
+      // addEventListener is the modern API; addListener is the deprecated fallback.
+      if (typeof this._motionMedia.addEventListener === 'function') {
+        this._motionMedia.addEventListener('change', this._motionHandler);
+      } else if (typeof this._motionMedia.addListener === 'function') {
+        this._motionMedia.addListener(this._motionHandler);
+      }
+    } catch (err) {
+      console.warn('MenuScene3D: prefers-reduced-motion unavailable:', err);
+    }
+  }
+
+  /** @private Place the camera at the frozen sway-centre pose (reduced motion). */
+  _applyReducedMotionPose() {
+    if (!this.camera) return;
+    const orbitR = 5.5;
+    const ang  = 0.5;    // sway centre (see _tick)
+    const camY = 0.85;   // sway centre
+    this.camera.position.set(Math.cos(ang) * orbitR, camY, Math.sin(ang) * orbitR);
+    this.camera.lookAt(this._lookTarget);
   }
 
   /** Start the render + animation loop. */
@@ -1215,6 +1334,8 @@ export class MenuScene3D {
     if (this._running) return;
     this._running = true;
     this._clock.start();
+    // Reset the frame gate so resume renders immediately rather than bursting.
+    this._lastFrameT = 0;
     // The menu just became visible — force a correct size once layout is live
     // (clientWidth was 0 during init while hidden).
     if (this._canvas) requestAnimationFrame(() => this._onResize(this._canvas));
@@ -1253,6 +1374,19 @@ export class MenuScene3D {
       this._resizeObserver.disconnect();
       this._resizeObserver = null;
     }
+    if (this._tierHandler) {
+      eventBus.off?.(Events.PERF_TIER_CHANGED, this._tierHandler);
+      this._tierHandler = null;
+    }
+    if (this._motionMedia && this._motionHandler) {
+      if (typeof this._motionMedia.removeEventListener === 'function') {
+        this._motionMedia.removeEventListener('change', this._motionHandler);
+      } else if (typeof this._motionMedia.removeListener === 'function') {
+        this._motionMedia.removeListener(this._motionHandler);
+      }
+      this._motionMedia = null;
+      this._motionHandler = null;
+    }
     if (this._composer) {
       this._composer.dispose?.();
       this._composer = null;
@@ -1273,6 +1407,16 @@ export class MenuScene3D {
     if (!this._running) return;
     this._raf = requestAnimationFrame(() => this._tick());
 
+    // Frame gate: cap to ~60 fps (30 under reduced motion). Return BEFORE
+    // _clock.getDelta() so dt accumulates across skipped frames — spark physics
+    // and camera sway speed stay correct on the frames we actually render. The
+    // −2 ms epsilon avoids beat-frequency lock on 120 Hz displays, where an exact
+    // 16.67 ms threshold would skip alternate vsync ticks.
+    const now = performance.now();
+    const minInterval = (this._reducedMotion ? 1000 / 30 : 1000 / 60) - 2;
+    if (now - this._lastFrameT < minInterval) return;
+    this._lastFrameT = now;
+
     const dt = Math.min(this._clock.getDelta(), 0.05); // cap for tab-away
     this._orbitAngle += dt;
 
@@ -1280,14 +1424,19 @@ export class MenuScene3D {
     // so the welding astronaut + arc stay the framed centerpiece at all times.
     // Centre angle ~0.5 rad puts the camera in the +X/+Z front-right octant
     // looking back at the weld; the gentle vertical bob adds life.
+    // prefers-reduced-motion: freeze at the sway centre (ang=0.5, camY=0.85).
     const orbitR = 5.5;
-    const ang  = 0.5 + Math.sin(this._orbitAngle * 0.16) * 0.62;
-    const camY = 0.85 + Math.sin(this._orbitAngle * 0.12) * 0.42;
-    this.camera.position.set(
-      Math.cos(ang) * orbitR,
-      camY,
-      Math.sin(ang) * orbitR,
-    );
+    if (this._reducedMotion) {
+      this.camera.position.set(Math.cos(0.5) * orbitR, 0.85, Math.sin(0.5) * orbitR);
+    } else {
+      const ang  = 0.5 + Math.sin(this._orbitAngle * 0.16) * 0.62;
+      const camY = 0.85 + Math.sin(this._orbitAngle * 0.12) * 0.42;
+      this.camera.position.set(
+        Math.cos(ang) * orbitR,
+        camY,
+        Math.sin(ang) * orbitR,
+      );
+    }
     this.camera.lookAt(this._lookTarget);   // work site (weld / astronaut)
 
     // Living hero — drive the Mother's OWN animators (nav-light blink/strobe,
@@ -1301,26 +1450,31 @@ export class MenuScene3D {
       this._mother._animateRosaGlow?.(dt);
     }
 
-    // Weld arc flicker — arc welding pulse: mostly steady with occasional spikes
+    // Weld arc flicker — arc welding pulse: mostly steady with occasional spikes.
+    // prefers-reduced-motion: hold a constant faint glow (no random flicker).
     let arc = 0;
     if (this._weldLight) {
       this._weldLight.position.copy(this._weldPos);
-      const base  = 0.12 + Math.random() * 0.06;
-      const spike = Math.random() < 0.16 ? (0.35 + Math.random() * 0.7) : 0.0;
-      arc = spike;
-      this._weldLight.intensity = base + spike;
+      if (this._reducedMotion) {
+        this._weldLight.intensity = 0.14;   // steady faint arc
+      } else {
+        const base  = 0.12 + Math.random() * 0.06;
+        const spike = Math.random() < 0.16 ? (0.35 + Math.random() * 0.7) : 0.0;
+        arc = spike;
+        this._weldLight.intensity = base + spike;
+      }
     }
 
     // Molten weld-pool glow — opacity + size track the arc spikes (hot when
     // striking, dim-red afterglow between strikes). Kept modest so it reads as
-    // a hot spot, not a flare.
+    // a hot spot, not a flare. Reduced motion → static faint glow.
     if (this._weldGlow) {
       this._weldGlow.material.opacity = Math.min(0.7, 0.14 + arc * 0.32);
       this._weldGlow.scale.setScalar(M * (0.16 + arc * 0.05));
     }
 
-    // Sparks
-    if (this._sparkSystem) {
+    // Sparks — suppressed entirely under reduced motion (no streaking particles).
+    if (this._sparkSystem && !this._reducedMotion) {
       updateSparks(this._sparkSystem, this._weldPos, dt);
     }
 
@@ -1332,6 +1486,14 @@ export class MenuScene3D {
     const w = canvas.clientWidth;
     const h = canvas.clientHeight;
     if (w === 0 || h === 0) return;
+    // DPR change (e.g. dragging the window between a retina and a 1× monitor):
+    // re-apply tier settings first so pixelRatio + composer targets rebuild at the
+    // new device pixel ratio (otherwise 2× is wasteful on 1×, and 1.5×/1× is blurry
+    // on retina). No recursion: _applyTierSettings does not call _onResize.
+    const dpr = window.devicePixelRatio || 1;
+    if (dpr !== this._lastDpr) {
+      this._applyTierSettings();   // sets _lastDpr + rebuilds composer at new pr
+    }
     this.renderer.setSize(w, h, false);
     if (this._composer) this._composer.setSize(w, h);
     this.camera.aspect = w / h;

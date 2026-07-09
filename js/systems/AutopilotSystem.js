@@ -90,6 +90,8 @@ export class AutopilotSystem {
     this._debrisField = null;
     /** @type {import('../entities/ArmManager.js').ArmManager|null} */
     this._armManager = null;
+    /** @type {import('./TargetAcquisition.js').TargetAcquisition|null} */
+    this._targetAcquisition = null;
 
     /** @type {number} Timer for throttling debris scan */
     this._debrisScanTimer = 0;
@@ -141,6 +143,7 @@ export class AutopilotSystem {
     this._trawlManager = deps.trawlManager;
     this._debrisField = deps.debrisField;
     this._armManager = deps.armManager;
+    this._targetAcquisition = deps.targetAcquisition || null;
   }
 
   // ==========================================================================
@@ -222,25 +225,40 @@ export class AutopilotSystem {
     let hasSelectedTarget = this._targetSelector && this._targetSelector.getActiveTarget();
     if (!hasSelectedTarget) {
       // UX-11 #11: one-tap re-acquire — pressing A with no target auto-selects
-      // the nearest live large debris and engages, instead of dead-ending.
-      // Fall back to ANY live debris when nothing ≥ LARGE_DEBRIS_MASS remains
-      // (e.g. fragments-only Kessler end-state) so the NavRecoveryAdvisor's
-      // "press A to approach" promise — which uses a mass-0 nearest lookup —
-      // is always honoured (review finding: filter mismatch).
-      const nearest = this._findNearestLargeDebris() || this._findNearestLargeDebris(0);
-      if (nearest && nearest.debris && this._targetSelector &&
-          typeof this._targetSelector.setTarget === 'function') {
-        this._targetSelector.setTarget(nearest.debris, { source: 'autopilot_reacquire' });
+      // the best contact and engages, instead of dead-ending.
+      //
+      // Prefer the unified helper (top of the Tracked Targets pane, so the pane
+      // highlight and the AP destination agree). The helper's list is
+      // discovered-only, so fall back to the mass-based nearest lookup when it
+      // yields null (e.g. an undiscovered field, or fragments-only Kessler
+      // end-state) — this honours the NavRecoveryAdvisor "press A to approach"
+      // promise, which uses a mass-0 nearest lookup, in all cases.
+      let acquired = null;
+      if (this._targetAcquisition && typeof this._targetAcquisition.acquireBestTarget === 'function') {
+        acquired = this._targetAcquisition.acquireBestTarget({ source: 'autopilot_reacquire' });
+      }
+      if (acquired) {
         hasSelectedTarget = this._targetSelector.getActiveTarget();
         eventBus.emit(Events.COMMS_MESSAGE, {
           text: 'No target selected. Acquiring nearest contact.',
           priority: 'info',
         });
-      } else if (nearest) {
-        // No selector API available — engage in DEBRIS heading mode directly.
-        this._cachedDebrisResult = nearest;
-        this._debrisScanTimer = 0;
-        hasSelectedTarget = true;
+      } else {
+        const nearest = this._findNearestLargeDebris() || this._findNearestLargeDebris(0);
+        if (nearest && nearest.debris && this._targetSelector &&
+            typeof this._targetSelector.setTarget === 'function') {
+          this._targetSelector.setTarget(nearest.debris, { source: 'autopilot_reacquire' });
+          hasSelectedTarget = this._targetSelector.getActiveTarget();
+          eventBus.emit(Events.COMMS_MESSAGE, {
+            text: 'No target selected. Acquiring nearest contact.',
+            priority: 'info',
+          });
+        } else if (nearest) {
+          // No selector API available — engage in DEBRIS heading mode directly.
+          this._cachedDebrisResult = nearest;
+          this._debrisScanTimer = 0;
+          hasSelectedTarget = true;
+        }
       }
     }
     if (!hasSelectedTarget) {

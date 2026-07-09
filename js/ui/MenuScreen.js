@@ -1,12 +1,13 @@
 /**
  * MenuScreen.js — Main menu / start screen overlay
- * Supports Enter key to start, F key for Fast Start (skip briefing).
+ * Enter key (or the START MISSION button) begins the mission.
  * @module ui/MenuScreen
  */
 
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { GameStates } from '../core/GameState.js';
+import { Constants } from '../core/Constants.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import { persistenceManager } from '../systems/PersistenceManager.js';
 import { settingsManager } from '../systems/SettingsManager.js';
@@ -15,11 +16,17 @@ import { FlagDecalSystem } from './FlagDecalSystem.js';
 import { MenuScene3D } from './MenuScene3D.js';
 
 export class MenuScreen {
-  constructor() {
+  /**
+   * @param {string|null} [initialTier] — current SceneManager quality tier so the
+   *   menu renderer boots at the matching pixelRatio / MSAA / bloom settings.
+   *   Live changes still arrive via Events.PERF_TIER_CHANGED (handled in MenuScene3D).
+   */
+  constructor(initialTier = null) {
     this.container = document.getElementById('hud-overlay');
     this.element = null;
     this.visible = false;
     this._menuScene3D = null;
+    this._initialTier = initialTier;
     this._boundKeyHandler = this._onKeyDown.bind(this);
     this._build();
 
@@ -37,7 +44,7 @@ export class MenuScreen {
     this.element.style.cssText = `
       position: absolute; top: 0; left: 0; width: 100%; height: 100%;
       display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
-      background: radial-gradient(ellipse at center, rgba(6,24,60,0.55) 0%, rgba(2,12,35,0.68) 50%, rgba(0,6,20,0.78) 100%);
+      background: radial-gradient(ellipse at center, rgba(6,24,60,0.20) 0%, rgba(2,12,35,0.30) 55%, rgba(0,6,20,0.40) 100%);
       z-index: 50; pointer-events: auto; transition: opacity 0.5s; overflow-y: auto;
     `;
 
@@ -59,16 +66,19 @@ export class MenuScreen {
           z-index: 0;
           pointer-events: none;   /* let clicks reach the buttons / page */
         }
-        /* Vignette + edge falloff over the scene to focus the centerpiece and
-           keep overlaid text legible at the corners. */
+        /* Vignette + edge falloff over the (now live) backdrop: focus the
+           centerpiece and keep overlaid text legible at the corners without
+           crushing the Earth limb along the bottom. Lightened for the reveal —
+           the scene shows through, so the vignette is a gentle frame, not a
+           blackout. */
         #menu-vignette {
           position: absolute; inset: 0;
           z-index: 1;
           pointer-events: none;
           background:
-            radial-gradient(ellipse 72% 62% at 54% 46%, rgba(0,0,0,0) 42%, rgba(2,6,18,0.55) 100%),
-            linear-gradient(to bottom, rgba(2,6,18,0.40) 0%, rgba(0,0,0,0) 22%,
-                            rgba(0,0,0,0) 68%, rgba(1,3,10,0.55) 100%);
+            radial-gradient(ellipse 74% 64% at 54% 46%, rgba(0,0,0,0) 48%, rgba(2,6,18,0.34) 100%),
+            linear-gradient(to bottom, rgba(2,6,18,0.28) 0%, rgba(0,0,0,0) 24%,
+                            rgba(0,0,0,0) 74%, rgba(1,3,10,0.30) 100%);
         }
         #menu-header {
           text-align: center;
@@ -111,6 +121,36 @@ export class MenuScreen {
           transition: color 0.15s, text-shadow 0.15s;
         }
         .adr-name:hover {
+          color: #00ff88;
+          text-shadow: 0 0 6px rgba(0,255,136,0.5);
+        }
+        /* Touch-friendly lore tooltip: the ADR factoids used native title=
+           attributes, which never appear on touch devices. They now live in
+           data-tip and surface via this styled popover — shown on hover for
+           pointer devices AND on tap/click (toggle) for touch. */
+        #menu-tip {
+          position: fixed;
+          z-index: 60;
+          max-width: min(320px, 78vw);
+          background: rgba(3,10,26,0.96);
+          border: 1px solid rgba(0,255,136,0.35);
+          border-radius: 6px;
+          padding: 9px 12px;
+          color: rgba(0,255,136,0.9);
+          font-family: 'Courier New', monospace;
+          font-size: 0.8rem;
+          line-height: 1.5;
+          letter-spacing: 0.01em;
+          box-shadow: 0 8px 26px rgba(0,0,0,0.55), 0 0 14px rgba(0,255,136,0.12);
+          backdrop-filter: blur(8px);
+          -webkit-backdrop-filter: blur(8px);
+          pointer-events: none;
+          opacity: 0;
+          transform: translateY(4px);
+          transition: opacity 0.14s, transform 0.14s;
+        }
+        #menu-tip.open { opacity: 1; transform: translateY(0); }
+        .adr-name.tip-active {
           color: #00ff88;
           text-shadow: 0 0 6px rgba(0,255,136,0.5);
         }
@@ -216,7 +256,7 @@ export class MenuScreen {
           <h1 style="font-family:'Courier New',monospace; font-size:3.5rem; color:#00ff88;
                       letter-spacing:0.3em; margin-bottom:0.5rem; white-space:nowrap;
                       text-shadow: 0 0 30px rgba(0,255,136,0.6), 0 0 60px rgba(0,255,136,0.3);">
-            SPACE COWBOY<span style="font-size:0.5em; letter-spacing:0.1em; margin-left:0.4em; vertical-align:0.15em; color:rgba(0,255,136,0.6);">V.994</span>
+            SPACE COWBOY<span style="font-size:0.5em; letter-spacing:0.1em; margin-left:0.4em; vertical-align:0.15em; color:rgba(0,255,136,0.6);">${Constants.VERSION_LABEL || ''}</span>
           </h1>
           <div style="font-size:1.1rem; color:rgba(0,255,136,0.6); letter-spacing:0.15em;
                        margin-bottom:1.5rem;">
@@ -274,8 +314,8 @@ export class MenuScreen {
               </p>
             </div>
 
-            <!-- True stories from orbit (hook, pre-expanded) -->
-            <details class="adr-group" open>
+            <!-- True stories from orbit (hook) -->
+            <details class="adr-group">
               <summary>True stories from orbit<span class="adr-count">6</span></summary>
               <ul class="adr-list">
               <li><span class="adr-name" title="Launched in 1965 and long thought dead, the LES-1 satellite was detected transmitting again in 2013. Its tumbling likely switches its transmitter on and off. Nobody sent the command.">The zombie satellite</span> <span class="adr-sub">1967 → 2013</span></li>
@@ -394,7 +434,7 @@ export class MenuScreen {
     const canvas3d = this.element.querySelector('#menu-scene-3d');
     if (canvas3d) {
       try {
-        this._menuScene3D = new MenuScene3D();
+        this._menuScene3D = new MenuScene3D(this._initialTier);
         this._menuScene3D.init(canvas3d);
       } catch (err) {
         console.warn('MenuScene3D init failed (fallback to blank):', err);
@@ -438,6 +478,119 @@ export class MenuScreen {
 
     // Language / region selector
     this._buildLangSelector();
+
+    // Touch-friendly lore tooltips (replaces native title= which is invisible
+    // on touch). Converts .adr-name[title] → data-tip and wires tap/hover.
+    this._initLoreTooltips();
+  }
+
+  /**
+   * @private Migrate the lore panel's native `title=` tooltips to a styled,
+   * tap-toggleable popover. Native `title` never shows on touch devices; this
+   * gives the same factoids a tap target on touch and a hover on pointer
+   * devices, in the menu's green/monospace aesthetic. Free-text only — these
+   * are one-off factoids, NOT codex entries, so the glossary deep-link system
+   * (glossaryDom.js → CODEX_OPEN_ENTRY) deliberately isn't used here.
+   */
+  _initLoreTooltips() {
+    const left = this.element.querySelector('#menu-left');
+    if (!left) return;
+
+    // Shared floating tooltip element (one per screen).
+    let tip = this.element.querySelector('#menu-tip');
+    if (!tip) {
+      tip = document.createElement('div');
+      tip.id = 'menu-tip';
+      tip.setAttribute('role', 'tooltip');
+      this.element.appendChild(tip);
+    }
+    this._tipEl = tip;
+    this._tipAnchor = null;   // currently tap-pinned .adr-name (null = none)
+    this._describedEl = null; // anchor currently wired via aria-describedby
+                              // (covers both hover and pin paths)
+
+    // Move title → data-tip so the native tooltip never competes with ours.
+    left.querySelectorAll('.adr-name[title]').forEach((el) => {
+      const text = el.getAttribute('title');
+      if (text) el.setAttribute('data-tip', text);
+      el.removeAttribute('title');
+    });
+
+    const place = (anchor) => {
+      const text = anchor.getAttribute('data-tip');
+      if (!text) return;
+      tip.textContent = text;
+      tip.classList.add('open');
+      // Measure after content set. Position above the anchor, clamped to viewport.
+      const r = anchor.getBoundingClientRect();
+      const tw = tip.offsetWidth;
+      const th = tip.offsetHeight;
+      const margin = 8;
+      let left2 = r.left + r.width / 2 - tw / 2;
+      left2 = Math.max(margin, Math.min(left2, window.innerWidth - tw - margin));
+      let top2 = r.top - th - 8;
+      if (top2 < margin) top2 = r.bottom + 8;   // flip below if no room above
+      tip.style.left = `${Math.round(left2)}px`;
+      tip.style.top = `${Math.round(top2)}px`;
+      // a11y: associate the anchor with the tooltip. Track the anchor so hide()
+      // can clear it (hover anchors aren't _tipAnchor, so this covers both paths).
+      anchor.setAttribute('aria-describedby', 'menu-tip');
+      this._describedEl = anchor;
+    };
+
+    const hide = () => {
+      tip.classList.remove('open');
+      if (this._describedEl) {
+        this._describedEl.removeAttribute('aria-describedby');
+        this._describedEl = null;
+      }
+      if (this._tipAnchor) {
+        this._tipAnchor.classList.remove('tip-active');
+        this._tipAnchor = null;
+      }
+    };
+    this._hideLoreTip = hide;
+
+    // Hover (pointer devices) — show while hovered, unless a tap-pin is active.
+    left.addEventListener('mouseover', (e) => {
+      const anchor = e.target.closest && e.target.closest('.adr-name[data-tip]');
+      if (!anchor || this._tipAnchor) return;
+      place(anchor);
+    });
+    left.addEventListener('mouseout', (e) => {
+      const anchor = e.target.closest && e.target.closest('.adr-name[data-tip]');
+      if (!anchor || this._tipAnchor) return;
+      hide();
+    });
+
+    // Tap / click — toggle a pinned tooltip (touch-friendly). For real links
+    // (the Rawhide anchor) let the navigation happen; only pin for spans.
+    left.addEventListener('click', (e) => {
+      const anchor = e.target.closest && e.target.closest('.adr-name[data-tip]');
+      if (!anchor) return;
+      if (anchor.tagName === 'A') return;   // real link — don't hijack navigation
+      e.preventDefault();
+      e.stopPropagation();
+      if (this._tipAnchor === anchor) { hide(); return; }
+      hide();
+      this._tipAnchor = anchor;
+      anchor.classList.add('tip-active');
+      place(anchor);
+    });
+
+    // Dismiss a pinned tooltip on outside tap / Escape.
+    this._tipOutsideHandler = (e) => {
+      if (!this._tipAnchor) return;
+      if (e.target.closest && e.target.closest('.adr-name[data-tip]')) return;
+      hide();
+    };
+    document.addEventListener('click', this._tipOutsideHandler, true);
+
+    // The lore panel scrolls independently — a pinned/hovered tooltip would
+    // drift away from its anchor, so hide it on scroll (cheap + unobtrusive).
+    left.addEventListener('scroll', hide, { passive: true });
+    this._tipEscHandler = (e) => { if (e.key === 'Escape') hide(); };
+    document.addEventListener('keydown', this._tipEscHandler, true);
   }
 
   /**
@@ -543,13 +696,9 @@ export class MenuScreen {
     // 2026-05-17 rollback: revert from "any key" to "Press Return to start".
     // The any-key behaviour was too easy to trigger by accident (e.g. the
     // user tapping Cmd+Shift+R for a hard refresh would blow past the menu).
-    // Enter/Return (or NumpadEnter) starts normally; KeyF keeps its
-    // dedicated "fast start" shortcut (skip briefing).
-    if (e.code === 'KeyF' && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
-      e.preventDefault();
-      this._fastStart();
-      return;
-    }
+    // Only Enter/Return (or NumpadEnter) starts. (The KeyF "fast start"
+    // shortcut was removed in the menu overhaul — START MISSION is the single
+    // entry path; MENU_FAST_START remains a reserved event with no emitter.)
     if (e.code === 'Enter' || e.code === 'NumpadEnter') {
       e.preventDefault();
       this._startGame();
@@ -562,14 +711,6 @@ export class MenuScreen {
     audioSystem.resume();
     audioSystem.playClick();
     eventBus.emit(Events.MENU_START);
-  }
-
-  /** @private Fast start — skip briefing, pick nearest easy target */
-  _fastStart() {
-    audioSystem.init();
-    audioSystem.resume();
-    audioSystem.playClick();
-    eventBus.emit(Events.MENU_FAST_START);
   }
 
   /** @private Continue from saved game */
@@ -600,6 +741,7 @@ export class MenuScreen {
     this.element.style.opacity = '0';
     window.removeEventListener('keydown', this._boundKeyHandler);
     this._closeLangMenu();
+    if (this._hideLoreTip) this._hideLoreTip();
     // Stop 3D scene
     if (this._menuScene3D) this._menuScene3D.stop();
     setTimeout(() => {

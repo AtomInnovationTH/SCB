@@ -575,14 +575,19 @@ export class SensorSystem {
     const revealRange = (Constants.SCAN.REVEAL_BASE_RANGE || 5.0) * (cfg.RANGE_MULTIPLIER || 1.0);
     const maxReveals = cfg.MAX_REVEALS || (scanType === 'wide' ? 10 : 5);
 
-    // getDebrisNear returns spread-copies; we need original refs via getDebrisById
+    // getDebrisNear returns spread-copies; we need original refs via getDebrisById.
+    // Truly empty space → no reveal-settled event: NavRecoveryAdvisor's empty-scan
+    // bearing guidance owns that case (rewardKind:'empty'). No double messaging.
     const nearby = debrisField.getDebrisNear(playerPos, revealRange);
     if (!nearby || nearby.length === 0) return;
 
-    // Filter to undiscovered only, resolve original debris objects, already sorted by distance
+    // Filter to undiscovered only, resolve original debris objects, already sorted by distance.
+    // Track whether the field already holds discovered contacts so a re-scan of a
+    // known field still fills the selection even when nothing new is revealed.
     const toReveal = [];
+    let hasDiscovered = false;
     for (const copy of nearby) {
-      if (copy.discovered) continue;
+      if (copy.discovered) { hasDiscovered = true; continue; }
       const original = debrisField.getDebrisById(copy.id);
       if (original && !original.discovered) {
         toReveal.push(original);
@@ -600,6 +605,27 @@ export class SensorSystem {
         eventBus.emit(Events.TARGET_DISCOVERED, { target: debris });
       }, i * staggerMs);
     });
+
+    // Signal that scan reveals have settled so scan auto-select can fill the
+    // Tracked Targets pane. Fire after the last staggered reveal lands (+50 ms
+    // margin) when there are new contacts; fire immediately when nothing new was
+    // revealed but the field still holds discovered contacts (re-scan of a known
+    // field must still fill an empty selection). Never fire when the field is
+    // genuinely empty (both toReveal empty and no discovered contacts) — that's
+    // NavRecoveryAdvisor's territory.
+    if (toReveal.length > 0) {
+      setTimeout(() => {
+        eventBus.emit(Events.SCAN_REVEALS_SETTLED, {
+          revealed: toReveal.length,
+          scanType,
+        });
+      }, toReveal.length * staggerMs + 50);
+    } else if (hasDiscovered) {
+      eventBus.emit(Events.SCAN_REVEALS_SETTLED, {
+        revealed: 0,
+        scanType,
+      });
+    }
   }
 
   /**

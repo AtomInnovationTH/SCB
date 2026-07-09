@@ -1286,6 +1286,44 @@ export class DebrisField {
     this.group.add(this.backgroundPoints);
   }
 
+  /**
+   * Boost the background debris cloud for the MENU backdrop reveal, or restore it.
+   *
+   * The transparent menu hero canvas composites over the live game scene, and the
+   * faint background dust (size 0.0002 / opacity 0.6) can read too subtle behind
+   * the menu UI. This makes it visibly denser while the menu is showing.
+   *
+   * Mission 1 hides `backgroundPoints` (see the _mission1HideApplied path). This
+   * method stores/restores the exact prior `.visible`/`size`/`opacity`, so exiting
+   * the boost automatically re-applies whatever hidden state was active on entry
+   * (if `visible:false` was stored, that's what gets restored) — no need to
+   * consult the mission number or _mission1HideApplied here.
+   *
+   * @param {boolean} on  true to boost, false to restore.
+   */
+  setMenuBackdropBoost(on) {
+    const pts = this.backgroundPoints;
+    if (!pts || !pts.material) return;
+    if (on) {
+      if (this._menuBackdropBoost) return;   // already boosted — no-op
+      this._menuBackdropBoost = {
+        visible: pts.visible,
+        size: pts.material.size,
+        opacity: pts.material.opacity,
+      };
+      pts.visible = true;
+      pts.material.size = this._menuBackdropBoost.size * 2;   // 0.0002 → 0.0004
+      pts.material.opacity = 0.85;
+    } else {
+      const prev = this._menuBackdropBoost;
+      if (!prev) return;   // not boosted — no-op
+      pts.visible = prev.visible;
+      pts.material.size = prev.size;
+      pts.material.opacity = prev.opacity;
+      this._menuBackdropBoost = null;
+    }
+  }
+
   // ==========================================================================
   // UPDATE
   // ==========================================================================
