@@ -703,12 +703,23 @@ export class SkillsPane {
 .sp-cl-current {
     color: var(--tier-color, #44ddff);
     font-weight: 600;
-    animation: sp-cl-pulse 1.4s ease-in-out infinite; /* matches CHECKLIST_PULSE_PERIOD_MS */
+    /* Static current-step affordance: steady accent border + faint tint.
+     * The attention pulse plays only on step CHANGE (2 iterations, then
+     * settles) — the row is rebuilt each _renderChecklist(), so re-adding
+     * the class re-triggers the finite animation naturally. No infinite
+     * loop → no perpetual flashing rectangle. */
+    border-left: 2px solid var(--tier-color, #44ddff);
+    padding-left: 4px;
+    background: rgba(68, 221, 255, 0.06);
+    animation: sp-cl-pulse 1.4s ease-in-out 2; /* matches CHECKLIST_PULSE_PERIOD_MS, finite */
 }
 .sp-cl-current .sp-cl-mark { color: var(--tier-color, #44ddff); }
 @keyframes sp-cl-pulse {
-    0%, 100% { opacity: 0.7; }
+    0%, 100% { opacity: 0.78; }
     50%      { opacity: 1;   }
+}
+@media (prefers-reduced-motion: reduce) {
+    .sp-cl-current { animation: none; opacity: 1; }
 }
 .sp-cl-upcoming {
     color: rgba(160, 160, 160, 0.55);
