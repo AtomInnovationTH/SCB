@@ -462,6 +462,19 @@ export class HUD {
           0%   { opacity: 1; transform: translate(-50%, 0); }
           100% { opacity: 0; transform: translate(-50%, -20px); }
         }
+        /* Item 6 stage 5 — HUD power-on: panels slide+fade in with a stagger
+         * on the first mission start (matches SkillsPane's slide-in feel).
+         * Applied per-panel via .hud-poweron with a per-element delay set in
+         * JS. Reduced motion → a plain quick fade, no translate. */
+        @keyframes hud-poweron {
+          0%   { opacity: 0; transform: translateX(-16px); }
+          100% { opacity: 1; transform: translateX(0); }
+        }
+        .hud-poweron { animation: hud-poweron 0.34s ease-out both; }
+        @media (prefers-reduced-motion: reduce) {
+          @keyframes hud-poweron { 0% { opacity: 0; } 100% { opacity: 1; } }
+          .hud-poweron { animation: hud-poweron 0.2s ease both; }
+        }
       `;
       document.head.appendChild(catchStyle);
     }
@@ -1207,6 +1220,45 @@ export class HUD {
     this._applyViewConfig();
     // Re-apply progressive luminance (must come after view config)
     this._applySkillReveal();
+    // Item 6 stage 5 — power-on stagger, first mission start only (not on
+    // returns from SHOP/pause). Panels slide+fade in with a small cascade.
+    if (!this._didPowerOn) {
+      this._didPowerOn = true;
+      this._playPowerOn();
+    }
+  }
+
+  /**
+   * @private Stagger the visible HUD panels in with the hud-poweron animation.
+   * One-shot; the class self-cleans on animationend so it never lingers.
+   */
+  _playPowerOn() {
+    // Left → center → right cascade using the natural panel order.
+    const targets = [];
+    Object.values(this.panels).forEach(p => {
+      if (p && p.style.display !== 'none') targets.push(p);
+    });
+    if (this._rightColumn && this._rightColumn.style.display !== 'none') {
+      targets.push(this._rightColumn);
+    }
+    targets.forEach((el, i) => {
+      const delayMs = Math.min(i * 55, 400);
+      el.style.animationDelay = `${delayMs}ms`;
+      el.classList.add('hud-poweron');
+      let fallback = null;
+      const clear = () => {
+        if (fallback) { clearTimeout(fallback); fallback = null; }
+        el.classList.remove('hud-poweron');
+        el.style.animationDelay = '';
+        el.removeEventListener('animationend', clear);
+      };
+      el.addEventListener('animationend', clear);
+      // Fallback: if the panel is hidden (display:none) or the HUD is torn
+      // down before animationend fires, animationend never arrives — clean up
+      // anyway so the class + inline delay can't linger. Covers delay (≤400ms)
+      // + the 0.34s animation with margin.
+      fallback = setTimeout(clear, delayMs + 800);
+    });
   }
 
   hide() {
