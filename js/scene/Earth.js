@@ -130,6 +130,11 @@ void main() {
   vec3 dayColor = texture2D(uDayTexture, vUv).rgb;
   vec3 nightColor = texture2D(uNightTexture, vUv).rgb;
 
+  // T2.5: +12% saturation micro-grade to counter ACES desaturation (the output
+  // stage now tone-maps, which mildly greys the disc). Luma-preserving: push away
+  // from the perceptual grey. A few ALU, no texture cost.
+  dayColor = mix(vec3(dot(dayColor, vec3(0.299, 0.587, 0.114))), dayColor, 1.12);
+
   // Boost night lights. They're dim in the source texture
   nightColor *= 2.5;
   // Warm tint for city lights
@@ -208,8 +213,11 @@ void main() {
   // Atmospheric limb haze: blue scattering in front of the planet edge so the
   // hard surface silhouette dissolves into the atmosphere shell. Softer power +
   // stronger blue tint than before to marry the surface into the glow.
-  float fresnel = pow(1.0 - max(dot(normal, viewDir), 0.0), 2.5);
-  finalColor += vec3(0.30, 0.50, 0.85) * fresnel * 0.35 * dayFactor;
+  // T2.2: tightened under live ACES — exponent 2.5→3.2 and gain 0.35→0.22 confine
+  // the blue-white veil to the limb so the nadir disc stays saturated (was a wash
+  // lifted across most of the disc at LEO grazing angles).
+  float fresnel = pow(1.0 - max(dot(normal, viewDir), 0.0), 3.2);
+  finalColor += vec3(0.30, 0.50, 0.85) * fresnel * 0.22 * dayFactor;
 
   gl_FragColor = vec4(finalColor, 1.0);
 
@@ -260,16 +268,21 @@ void main() {
   vec3 cloudSample = texture2D(uCloudTexture, vUv).rgb;
   float cloudAlpha = (cloudSample.r + cloudSample.g + cloudSample.b) / 3.0;
 
-  // Shape: boost contrast for cleaner cloud edges
-  cloudAlpha = smoothstep(0.25, 0.95, cloudAlpha);
-  cloudAlpha *= 0.85; // Max opacity
+  // Shape: boost contrast for cleaner cloud edges.
+  // T2.4: crisper ramp (0.25,0.95)→(0.30,0.92) and lower max opacity 0.85→0.78 —
+  // clouds were the biggest white-area / soft-edge (blur) contributor over ocean
+  // under the old clipped pass-through; ACES + this tighten the read.
+  cloudAlpha = smoothstep(0.30, 0.92, cloudAlpha);
+  cloudAlpha *= 0.78; // Max opacity
 
   // Lighting
   float NdotL = dot(normal, uSunDirection);
   float dayFactor = smoothstep(-0.1, 0.2, NdotL);
 
-  // Cloud color: bright white in sunlight, dark gray in shadow
-  vec3 cloudDay = vec3(0.95, 0.95, 0.97);
+  // Cloud color: bright white in sunlight, dark gray in shadow.
+  // T2.4: nudged off pure white (0.95,0.95,0.97)→(0.90,0.91,0.94) so the filmic
+  // shoulder has headroom instead of clipping cloud tops to flat white.
+  vec3 cloudDay = vec3(0.90, 0.91, 0.94);
   vec3 cloudNight = vec3(0.05, 0.06, 0.08);
   vec3 cloudColor = mix(cloudNight, cloudDay, dayFactor);
 
@@ -357,16 +370,21 @@ void main() {
   float dayFactor = smoothstep(-0.35, 0.2, NdotL);
 
   // === RAYLEIGH: altitude gradient — bright white-cyan base -> blue -> violet ===
-  vec3 lowCol  = vec3(0.75, 0.88, 1.00);
+  // T2.3: lowCol base pulled toward electric blue (0.75,0.88,1.00)→(0.60,0.80,1.00)
+  // so the limb reads saturated blue rather than white now that ACES no longer
+  // clips it to a flat plateau.
+  vec3 lowCol  = vec3(0.60, 0.80, 1.00);
   vec3 midCol  = vec3(0.25, 0.55, 1.00);
   vec3 highCol = vec3(0.15, 0.25, 0.90);
   vec3 rayleigh = mix(lowCol, midCol, smoothstep(0.0, 0.45, h01));
   rayleigh = mix(rayleigh, highCol, smoothstep(0.45, 1.0, h01));
 
   // === TERMINATOR: narrow saturated sunset band at the day/night line ===
+  // T2.3: blend 0.85→0.92 for a more saturated sunset now that the shoulder
+  // keeps it from blowing out.
   float terminatorZone = smoothstep(-0.18, 0.02, NdotL) * smoothstep(0.22, 0.02, NdotL);
   vec3 sunset = mix(vec3(1.0, 0.25, 0.08), vec3(1.0, 0.55, 0.20), h01);
-  vec3 scatter = mix(rayleigh, sunset, terminatorZone * 0.85);
+  vec3 scatter = mix(rayleigh, sunset, terminatorZone * 0.92);
 
   // === MIE forward scatter: gold hotspot when looking TOWARD the sun ===
   // (rayDir, not viewDir — dot(viewDir,sun) was backscatter, a bug.)
@@ -375,7 +393,10 @@ void main() {
   float mie = v2 * v2 * v2;
 
   // === LINEAR ADDITIVE OUTPUT (alpha=1; falloff lives in rgb) ===
-  vec3 atmos = scatter * density * dayFactor * 2.2;
+  // T2.3: limb multiplier 2.2→1.8. The old value clipped to a white plateau under
+  // pass-through; with ACES rolloff now active a lower value gives a smooth
+  // electric-blue gradient instead of an overexposed band.
+  vec3 atmos = scatter * density * dayFactor * 1.8;
   atmos += vec3(1.0, 0.88, 0.65) * mie * density * dayFactor * 1.5;
 
   // === NIGHT: thin greenish airglow layer (~90-100 km, ISS-observed) ===

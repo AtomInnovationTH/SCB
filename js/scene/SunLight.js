@@ -643,18 +643,20 @@ export class SunLight {
     this._camForward.set(0, 0, -1).applyQuaternion(this.camera.quaternion);
     const sunDot = this._camForward.dot(this.sunDirection);
 
-    // Gentle auto-exposure: floor 0.8, ceiling 1.05, slow lerp
+    // Gentle auto-exposure (now live — the gameplay OutputPass finally applies it).
+    // T2.1 retune under ACES: away 1.05→1.12, sun-facing 0.8→0.85, eclipse 1.3→1.25.
+    // The filmic shoulder means values >1 are usable without washing out.
     let targetExposure;
     if (this._inShadow) {
-      targetExposure = 1.3;   // Boost when in Earth's shadow — simulate eye adaptation
+      targetExposure = 1.25;  // Boost when in Earth's shadow — simulate eye adaptation
     } else if (sunDot > 0.85) {
-      targetExposure = 0.8;   // Looking directly at sun — slight dim
+      targetExposure = 0.85;  // Looking directly at sun — slight dim
     } else if (sunDot < 0.3) {
-      targetExposure = 1.05;  // Looking away from sun — subtle boost without washing out metallic surfaces
+      targetExposure = 1.12;  // Looking away from sun — subtle boost without washing out metallic surfaces
     } else {
       // Smooth interpolation in the transition zone [0.3, 0.85]
       const t = (sunDot - 0.3) / (0.85 - 0.3);
-      targetExposure = THREE.MathUtils.lerp(1.05, 0.8, t);
+      targetExposure = THREE.MathUtils.lerp(1.12, 0.85, t);
     }
 
     this._currentExposure = THREE.MathUtils.lerp(
