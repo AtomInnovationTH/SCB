@@ -198,11 +198,20 @@ void main() {
   float oceanFresnel = pow(1.0 - max(dot(normal, viewDir), 0.0), 3.0);
   float oceanSpec = oceanMask * (specular + oceanFresnel * 0.3) * dayFactor * 0.5;
 
+  // E1 — Tight ocean sun-glint (the iconic orbital-photo cue). A very sharp
+  // (pow 300) highlight where the sun mirrors off the water gives a moving
+  // glitter point distinct from the broad pow-64 sheen. Warm-tinted like real
+  // sun-on-water. Pre-tonemap strength 1.2 stays well under the bloom
+  // threshold (4.0) after ACES, so it sparkles without blooming.
+  float oceanGlintTerm = pow(max(dot(normal, halfVec), 0.0), 300.0)
+    * 1.2 * oceanMask * dayFactor;
+  vec3 oceanGlint = oceanGlintTerm * vec3(1.0, 0.95, 0.8);
+
   // === NIGHT SIDE ===
   float nightFactor = smoothstep(0.05, -0.15, NdotL);
 
   // === COMPOSE ===
-  vec3 litDay = dayColor * max(0.02, dayFactor) + vec3(oceanSpec);
+  vec3 litDay = dayColor * max(0.02, dayFactor) + vec3(oceanSpec) + oceanGlint;
 
   // Earthshine: faint cool-blue ambient reveals terrain shapes on the dark side
   float nightAmbient = 0.03;
