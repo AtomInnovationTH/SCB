@@ -1144,9 +1144,10 @@ async function init() {
     }
     // Re-arm the perf warmup/settle guard when entering a heavier state (menu →
     // briefing → sim). Building the mission scene spikes GPU time / drops FPS
-    // for a beat; without a fresh settle window the runtime adapt loop reads
-    // that transient as sustained load and downshifts the tier. Clear the FPS
-    // history too so only post-transition (steady-state) samples count.
+    // for a beat; the settle window suppresses both FPS sampling and runtimeAdapt
+    // until it elapses (see gameLoop), so that transient never enters the history.
+    // Also clear any stale pre-transition gameplay samples so the post-settle
+    // window starts empty.
     if (!inMenu) {
       _perfSettleUntil = performance.now() + Constants.PERF.ADAPT_WARMUP_MS;
       _fpsHistory.length = 0;
@@ -1544,13 +1545,17 @@ function gameLoop(timestamp) {
     // Constants.PERF.ADAPT_WARMUP_MS).
     if (_perfSettleUntil === 0) _perfSettleUntil = timestamp + Constants.PERF.ADAPT_WARMUP_MS;
     const fps = 1 / realDt;
-    // Only sample real gameplay frames. Menu / briefing / shop / game-over are
-    // intentionally throttled to ~30 fps (see _getScheduleIntervalMs), below the
-    // 50 fps downshift threshold — feeding them to runtimeAdapt would read the
-    // deliberate throttle as a slow GPU and downshift the tier on a static UI
-    // screen. Startup/non-gameplay assessment is the GPU probe's job (it measures
-    // per-frame GPU ms, which the frame-schedule throttle does not skew).
-    if (gameState.isGameplay() && Number.isFinite(fps) && fps > 0) {
+    // Only sample real gameplay frames, AND only after the warmup/settle window
+    // has elapsed. Menu / briefing / shop / game-over are intentionally throttled
+    // to ~30 fps (see _getScheduleIntervalMs), below the 50 fps downshift threshold
+    // — feeding them to runtimeAdapt would read the deliberate throttle as a slow
+    // GPU and downshift the tier on a static UI screen. The `timestamp >=
+    // _perfSettleUntil` gate keeps one-time startup/mission-build transients
+    // (shader compile, texture upload, scene build) OUT of the history entirely, so
+    // the first post-settle decision can't be a median dominated by that jank.
+    // Startup/non-gameplay assessment is the GPU probe's job (it measures per-frame
+    // GPU ms, which the frame-schedule throttle does not skew).
+    if (gameState.isGameplay() && timestamp >= _perfSettleUntil && Number.isFinite(fps) && fps > 0) {
       _fpsHistory.push(fps);
       if (_fpsHistory.length > Constants.PERF.FPS_HISTORY_SIZE) _fpsHistory.shift();
     }

@@ -914,6 +914,7 @@ export class MenuScene3D {
     this._pivot   = null;       // scene root that orbits
     this._composer = null;      // EffectComposer (bloom)
     this._bloom    = null;      // UnrealBloomPass
+    this._outputPass = null;    // OutputPass (tonemap + sRGB)
     this._lastDpr  = window.devicePixelRatio || 1;  // tracked for DPR-change rebuild
     this._envRT    = null;      // PMREM environment render target
     this._canvas   = null;      // canvas ref (for resize-on-show)
@@ -1230,13 +1231,16 @@ export class MenuScene3D {
    */
   _buildComposer() {
     // Tear down any prior composer (tier rebuild path). EffectComposer.dispose()
-    // does NOT dispose added passes, so the bloom mip-chain targets would leak on
-    // every tier rebuild — dispose the bloom pass explicitly first.
+    // does NOT dispose added passes, so the bloom mip-chain targets and the
+    // OutputPass ShaderMaterial would leak on every tier rebuild — dispose the
+    // added passes explicitly first.
     if (this._composer) {
       this._bloom?.dispose?.();
+      this._outputPass?.dispose?.();
       this._composer.dispose?.();
       this._composer = null;
       this._bloom = null;
+      this._outputPass = null;
     }
 
     const tierCfg = menuQualityFor(this._tier);
@@ -1265,7 +1269,8 @@ export class MenuScene3D {
       );
       this._composer.addPass(this._bloom);
     }
-    this._composer.addPass(new OutputPass());
+    this._outputPass = new OutputPass();
+    this._composer.addPass(this._outputPass);
   }
 
   /**
@@ -1388,8 +1393,14 @@ export class MenuScene3D {
       this._motionHandler = null;
     }
     if (this._composer) {
+      // Match _buildComposer teardown: dispose added passes (EffectComposer
+      // disposes neither) before the composer's own RTs.
+      this._bloom?.dispose?.();
+      this._outputPass?.dispose?.();
       this._composer.dispose?.();
       this._composer = null;
+      this._bloom = null;
+      this._outputPass = null;
     }
     if (this._envRT) {
       this._envRT.dispose();

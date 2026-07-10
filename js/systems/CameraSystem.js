@@ -111,7 +111,7 @@ export class CameraSystem {
       // gameplay zoom band so the fill no longer changes with zoom. The wide
       // cutoff ALSO means it only reaches the near ship/debris, never the
       // distant Earth (~0.6 units away) — so it can't wash out the Earth or
-      // atmosphere. Camera-side KEY (front fill) — lifted 0.5 → 0.8 so the
+      // atmosphere. Camera-side KEY (front fill) — lifted 0.5 → 2.4 so the
       // camera-facing hull reads as lit metal rather than a flat dark shape.
       this._fillLight = new THREE.PointLight(0xfff5e0, 2.4, 0.01, 0);
       this._fillLight.name = 'cameraFillLight';
