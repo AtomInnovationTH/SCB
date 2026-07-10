@@ -28,6 +28,12 @@ export class MenuScreen {
     this._menuScene3D = null;
     this._initialTier = initialTier;
     this._boundKeyHandler = this._onKeyDown.bind(this);
+    // Departure sequence state (Item 6). While _departing is true the menu is
+    // playing its exit cascade + 3D camera pull-back before MENU_START fires;
+    // any further key/click fast-forwards it (skippable). _departTimer holds
+    // the pending emit so a skip can cancel + fire it immediately.
+    this._departing = false;
+    this._departTimer = null;
     this._build();
 
     // Self-manage visibility via EventBus (decoupled from GameFlowManager)
@@ -232,6 +238,38 @@ export class MenuScreen {
         #menu-lang-menu .menu-lang-native { font-size: 0.92rem; }
         #menu-lang-menu .menu-lang-en {
           margin-left: auto; font-size: 0.7rem; opacity: 0.55; letter-spacing: 0.04em;
+        }
+
+        /* ── Departure cascade (Item 6 — menu→sim transition) ──
+         * When START is pressed we add .menu-departing to #menu-content: the
+         * DOM chrome (header, body/left column, language selector) staggers
+         * out (fade + small slide) left column first, so the transparent 3D
+         * hero + live gameplay scene behind become the focus while the menu
+         * camera pulls back. The 3D canvas itself is NOT faded here — the
+         * MenuScene3D.beginDeparture() camera pull-back handles the hero. */
+        #menu-content.menu-departing #menu-left,
+        #menu-content.menu-departing #menu-header,
+        #menu-content.menu-departing #menu-lang,
+        #menu-content.menu-departing #menu-tip {
+          opacity: 0;
+          transform: translateX(-24px);
+          transition: opacity 0.42s ease, transform 0.42s ease;
+          pointer-events: none;
+        }
+        /* Stagger: left column leads, header follows, chrome last. */
+        #menu-content.menu-departing #menu-left   { transition-delay: 0s; }
+        #menu-content.menu-departing #menu-header { transition-delay: 0.09s; }
+        #menu-content.menu-departing #menu-lang   { transition-delay: 0.15s; }
+        #menu-content.menu-departing #menu-tip    { transition-delay: 0.12s; }
+        @media (prefers-reduced-motion: reduce) {
+          #menu-content.menu-departing #menu-left,
+          #menu-content.menu-departing #menu-header,
+          #menu-content.menu-departing #menu-lang,
+          #menu-content.menu-departing #menu-tip {
+            transition: opacity 0.2s ease;
+            transform: none;
+            transition-delay: 0s;
+          }
         }
       </style>
 
@@ -693,6 +731,14 @@ export class MenuScreen {
   _onKeyDown(e) {
     if (!this.visible) return;
 
+    // If a departure is already playing, ANY key fast-forwards it (skippable
+    // per Item 6 guard — total added latency must be short & skippable).
+    if (this._departing) {
+      e.preventDefault();
+      this._finishDeparture();
+      return;
+    }
+
     // 2026-05-17 rollback: revert from "any key" to "Press Return to start".
     // The any-key behaviour was too easy to trigger by accident (e.g. the
     // user tapping Cmd+Shift+R for a hard refresh would blow past the menu).
@@ -705,11 +751,69 @@ export class MenuScreen {
     }
   }
 
-  /** @private Start game (go to briefing) */
+  /**
+   * @private Start game — plays the departure cinematic (Item 6), then emits
+   * MENU_START. The menu chrome staggers out and the 3D hero camera pulls
+   * back while the live gameplay scene behind the transparent menu takes over;
+   * MENU_START fires at the end (or immediately, on skip / reduced motion).
+   */
   _startGame() {
+    if (this._departing) { this._finishDeparture(); return; }
     audioSystem.init();
     audioSystem.resume();
     audioSystem.playClick();
+
+    const reduced = !!(window.matchMedia &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+
+    // Reduced motion → skip the staged cinematic, straight cut (still gives
+    // the DOM a brief fade via the departing class, but no camera move wait).
+    if (reduced) {
+      const content = this.element.querySelector('#menu-content');
+      if (content) content.classList.add('menu-departing');
+      if (this._menuScene3D) this._menuScene3D.beginDeparture(0.4);
+      this._departing = true;
+      this._departTimer = setTimeout(() => this._finishDeparture(), 220);
+      return;
+    }
+
+    // Stage 1: menu chrome stagger-fade (CSS cascade, left column first).
+    const content = this.element.querySelector('#menu-content');
+    if (content) content.classList.add('menu-departing');
+    // Stage 2: 3D hero departure — weld arc/glow/sparks fade, camera pulls
+    // back (orbit 5.5 → 8) so the hero recedes toward the live scene.
+    if (this._menuScene3D) this._menuScene3D.beginDeparture(1.4);
+    this._departing = true;
+    // Stage 3 handoff: emit MENU_START near the end of the pull-back. The
+    // gameplay scene (Earth, debris, now-unhidden ship) is already rendering
+    // behind the transparent menu; hide() then cross-fades the plate to 0.
+    this._departTimer = setTimeout(() => this._finishDeparture(), 1350);
+    this._armSkipClick();
+  }
+
+  /** @private Any pointer press during departure fast-forwards it. */
+  _armSkipClick() {
+    if (this._skipClickHandler) return;
+    this._skipClickHandler = () => this._finishDeparture();
+    // capture-phase, one path; removed in _finishDeparture.
+    window.addEventListener('pointerdown', this._skipClickHandler, true);
+  }
+
+  /**
+   * @private Complete the departure: fire MENU_START exactly once. Called at
+   * the end of the ramp OR early when the player skips (any key/click).
+   */
+  _finishDeparture() {
+    if (this._departTimer) {
+      clearTimeout(this._departTimer);
+      this._departTimer = null;
+    }
+    if (this._skipClickHandler) {
+      window.removeEventListener('pointerdown', this._skipClickHandler, true);
+      this._skipClickHandler = null;
+    }
+    if (!this._departing) return;
+    this._departing = false;
     eventBus.emit(Events.MENU_START);
   }
 
@@ -723,6 +827,16 @@ export class MenuScreen {
 
   show() {
     this.visible = true;
+    // Clear any leftover departure state from a prior run (e.g. returning to
+    // the menu after a game) so the chrome is fully visible + interactive.
+    this._departing = false;
+    if (this._departTimer) { clearTimeout(this._departTimer); this._departTimer = null; }
+    if (this._skipClickHandler) {
+      window.removeEventListener('pointerdown', this._skipClickHandler, true);
+      this._skipClickHandler = null;
+    }
+    const content = this.element.querySelector('#menu-content');
+    if (content) content.classList.remove('menu-departing');
     // Toggle Continue button visibility based on whether a save exists
     const continueWrapper = this.element.querySelector('#menu-continue-wrapper');
     if (continueWrapper) {
@@ -740,6 +854,10 @@ export class MenuScreen {
     this.visible = false;
     this.element.style.opacity = '0';
     window.removeEventListener('keydown', this._boundKeyHandler);
+    if (this._skipClickHandler) {
+      window.removeEventListener('pointerdown', this._skipClickHandler, true);
+      this._skipClickHandler = null;
+    }
     this._closeLangMenu();
     if (this._hideLoreTip) this._hideLoreTip();
     // Stop 3D scene

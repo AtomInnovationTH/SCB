@@ -944,6 +944,16 @@ export class MenuScene3D {
     this._motionMedia = null;
     this._motionHandler = null;
 
+    // ── Departure animation (Item 6 — menu→sim transition) ──
+    // When START is pressed, beginDeparture() ramps this 0→1 over
+    // _departureDur seconds: the weld arc/glow/sparks fade out and the camera
+    // eases its orbit radius back (5.5 → 8) so the hero recedes as the live
+    // gameplay scene behind the transparent menu takes over. null = idle.
+    this._departure = null;         // { t, dur } while animating, else null
+    this._departureDur = 1.6;       // seconds (skippable)
+    this._departureBaseOrbitR = 5.5;
+    this._departureOrbitR = 8.0;
+
     // Frame gate — the menu hero render loop is capped to ~60 fps (30 under
     // reduced motion) so it doesn't run at 120 fps on ProMotion displays while
     // the rest of the app throttles to 30 Hz during MENU (energy policy §12.12).
@@ -1339,6 +1349,10 @@ export class MenuScene3D {
     if (this._running) return;
     this._running = true;
     this._clock.start();
+    // A fresh MENU entry (first show, or returning from a game) must not carry
+    // over a prior departure ramp — reset so the weld/glow/sparks + orbit
+    // radius return to their idle values.
+    this._departure = null;
     // Reset the frame gate so resume renders immediately rather than bursting.
     this._lastFrameT = 0;
     // The menu just became visible — force a correct size once layout is live
@@ -1355,6 +1369,29 @@ export class MenuScene3D {
       cancelAnimationFrame(this._raf);
       this._raf = null;
     }
+  }
+
+  /**
+   * Begin the departure animation (Item 6 — menu→sim transition). Ramps the
+   * weld arc / molten glow / sparks down to nothing and eases the camera's
+   * orbit radius back (5.5 → 8) so the hero recedes while the live gameplay
+   * scene behind the transparent menu becomes the focus. Idempotent — a second
+   * call is ignored so a fast double-click can't restart the ramp. Under
+   * reduced motion the visual ramp still runs (it only fades, no new motion),
+   * but callers should keep the total handoff short.
+   * @param {number} [durationSec] — override the default ramp duration
+   */
+  beginDeparture(durationSec) {
+    if (this._departure) return;
+    this._departure = { t: 0 };
+    if (typeof durationSec === 'number' && durationSec > 0) {
+      this._departureDur = durationSec;
+    }
+  }
+
+  /** True while the departure ramp is in progress. */
+  get isDeparting() {
+    return !!this._departure;
   }
 
   /**
@@ -1431,12 +1468,25 @@ export class MenuScene3D {
     const dt = Math.min(this._clock.getDelta(), 0.05); // cap for tab-away
     this._orbitAngle += dt;
 
+    // Departure ramp (Item 6): advance toward 1 with an ease-out curve. `dep`
+    // 0→1 drives the camera pull-back + weld/glow/spark fade below. `depFade`
+    // (1→0) is the multiplier that dims the work-site effects out.
+    let dep = 0;
+    if (this._departure) {
+      this._departure.t = Math.min(this._departureDur, this._departure.t + dt);
+      const raw = this._departure.t / this._departureDur; // 0→1 linear
+      dep = 1 - Math.pow(1 - raw, 3);                      // ease-out cubic
+    }
+    const depFade = 1 - dep;
+
     // Camera — a slow, eased SWAY across the work side (not a full 360° spin),
     // so the welding astronaut + arc stay the framed centerpiece at all times.
     // Centre angle ~0.5 rad puts the camera in the +X/+Z front-right octant
     // looking back at the weld; the gentle vertical bob adds life.
     // prefers-reduced-motion: freeze at the sway centre (ang=0.5, camY=0.85).
-    const orbitR = 5.5;
+    // During departure the orbit radius eases 5.5 → 8 so the hero recedes.
+    const orbitR = this._departureBaseOrbitR +
+      (this._departureOrbitR - this._departureBaseOrbitR) * dep;
     if (this._reducedMotion) {
       this.camera.position.set(Math.cos(0.5) * orbitR, 0.85, Math.sin(0.5) * orbitR);
     } else {
@@ -1463,29 +1513,32 @@ export class MenuScene3D {
 
     // Weld arc flicker — arc welding pulse: mostly steady with occasional spikes.
     // prefers-reduced-motion: hold a constant faint glow (no random flicker).
+    // During departure `depFade` ramps the arc out (the weld "stops").
     let arc = 0;
     if (this._weldLight) {
       this._weldLight.position.copy(this._weldPos);
       if (this._reducedMotion) {
-        this._weldLight.intensity = 0.14;   // steady faint arc
+        this._weldLight.intensity = 0.14 * depFade;   // steady faint arc, fading
       } else {
         const base  = 0.12 + Math.random() * 0.06;
         const spike = Math.random() < 0.16 ? (0.35 + Math.random() * 0.7) : 0.0;
-        arc = spike;
-        this._weldLight.intensity = base + spike;
+        arc = spike * depFade;
+        this._weldLight.intensity = (base + spike) * depFade;
       }
     }
 
     // Molten weld-pool glow — opacity + size track the arc spikes (hot when
     // striking, dim-red afterglow between strikes). Kept modest so it reads as
-    // a hot spot, not a flare. Reduced motion → static faint glow.
+    // a hot spot, not a flare. Reduced motion → static faint glow. Departure
+    // fades it out with the arc.
     if (this._weldGlow) {
-      this._weldGlow.material.opacity = Math.min(0.7, 0.14 + arc * 0.32);
+      this._weldGlow.material.opacity = Math.min(0.7, 0.14 + arc * 0.32) * depFade;
       this._weldGlow.scale.setScalar(M * (0.16 + arc * 0.05));
     }
 
-    // Sparks — suppressed entirely under reduced motion (no streaking particles).
-    if (this._sparkSystem && !this._reducedMotion) {
+    // Sparks — suppressed entirely under reduced motion (no streaking particles)
+    // and once the departure ramp is well underway (the weld has stopped).
+    if (this._sparkSystem && !this._reducedMotion && dep < 0.5) {
       updateSparks(this._sparkSystem, this._weldPos, dt);
     }
 
