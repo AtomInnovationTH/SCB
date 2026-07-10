@@ -1,6 +1,8 @@
 /**
- * Starfield.js — 10,000 background stars as Points geometry
- * with 8 major constellation outlines and planetarium-style labels
+ * Starfield.js — 10,000 background stars (size-honoring ShaderMaterial with
+ * round soft sprites + prominent-star twinkle), a faint procedural Milky Way
+ * band, an occasional shooting star, plus 8 major constellation outlines and
+ * planetarium-style labels
  * @module scene/Starfield
  */
 
@@ -194,9 +196,17 @@ export class Starfield {
     this.group = new THREE.Group();
     this.group.name = 'StarfieldGroup';
 
+    // Accumulated time for the star twinkle shader uniform.
+    this._time = 0;
+    // Reusable temporaries for the shooting-star update (no per-frame alloc).
+    this._tmpMeteorA = new THREE.Vector3();
+    this._tmpMeteorB = new THREE.Vector3();
+
     this.mesh = this._create();
     this.group.add(this.mesh);
+    this._createMilkyWay();
     this._createConstellations();
+    this._initShootingStar();
 
     scene.add(this.group);
   }
@@ -213,6 +223,12 @@ export class Starfield {
     const positions = new Float32Array(count * 3);
     const colors = new Float32Array(count * 3);
     const sizes = new Float32Array(count);
+    // Twinkle amplitude per star (0 = steady; only the ~50 prominent stars
+    // twinkle). Kept as an attribute so the vertex shader can modulate size
+    // over time without touching the CPU each frame.
+    const twinkle = new Float32Array(count);
+    // Random per-star phase so twinkles don't beat in unison.
+    const phase = new Float32Array(count);
 
     // Star color palette (spectral types)
     const STAR_COLORS = [
@@ -248,12 +264,17 @@ export class Starfield {
       colors[i * 3 + 2] = color.b * brightness;
 
       // Star sizes: most small, few large (power-law distribution)
-      // Range 0.5 to 2.0
+      // Range 0.5 to 2.0. Now HONORED by the ShaderMaterial below (the old
+      // PointsMaterial ignored the per-vertex `size` and drew every star as a
+      // uniform 1.5 px square — Item 3 dead-code fix).
       const sizeRoll = Math.random();
       sizes[i] = 0.5 + Math.pow(sizeRoll, 3) * 1.5;
+      twinkle[i] = 0.0;
+      phase[i] = Math.random() * Math.PI * 2;
     }
 
-    // Add a few bright "prominent" stars
+    // Add a few bright "prominent" stars — larger, brighter, and the only ones
+    // that twinkle (subtle size/brightness shimmer, so the sky isn't static).
     const prominentCount = Math.min(50, count);
     for (let i = 0; i < prominentCount; i++) {
       sizes[i] = 1.5 + Math.random() * 1.0;
@@ -261,28 +282,253 @@ export class Starfield {
       colors[i * 3] *= brightness / colors[i * 3] || 1;
       colors[i * 3 + 1] *= brightness / colors[i * 3 + 1] || 1;
       colors[i * 3 + 2] *= brightness / colors[i * 3 + 2] || 1;
+      twinkle[i] = 0.15 + Math.random() * 0.15;   // 15–30% shimmer
     }
 
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
+    geometry.setAttribute('aTwinkle', new THREE.BufferAttribute(twinkle, 1));
+    geometry.setAttribute('aPhase', new THREE.BufferAttribute(phase, 1));
 
-    const material = new THREE.PointsMaterial({
-      vertexColors: true,
-      size: 1.5,
-      sizeAttenuation: false,  // Stars stay same size regardless of distance
+    // ShaderMaterial — honors the per-star `size` attribute (PointsMaterial
+    // could not), draws round soft-edged sprites via gl_PointCoord instead of
+    // hard 1.5 px squares, and shimmers the prominent stars over time. Keeps
+    // vertex colors + additive blending + depthWrite:false like before.
+    const material = new THREE.ShaderMaterial({
+      uniforms: {
+        uTime: { value: 0 },
+        uPixelRatio: { value: (typeof window !== 'undefined' && window.devicePixelRatio) || 1 },
+        uSizeScale: { value: 1.5 },   // matches the old PointsMaterial base size
+        uOpacity: { value: 0.95 },
+      },
+      // NOTE: no `vertexColors: true` — raw ShaderMaterial would then inject its
+      // own `attribute vec3 color` and collide with the manual declaration
+      // below. We declare and consume `color` ourselves.
       transparent: true,
-      opacity: 0.95,
       depthWrite: false,
+      depthTest: true,
       blending: THREE.AdditiveBlending,
+      vertexShader: `
+        attribute vec3 color;
+        attribute float size;
+        attribute float aTwinkle;
+        attribute float aPhase;
+        uniform float uTime;
+        uniform float uPixelRatio;
+        uniform float uSizeScale;
+        varying vec3 vColor;
+        varying float vBright;
+        void main() {
+          vColor = color;
+          // Twinkle: gentle sine shimmer, only where aTwinkle > 0. Modulates
+          // both point size and a brightness varying used in the fragment.
+          float tw = 1.0 + aTwinkle * sin(uTime * 2.5 + aPhase);
+          vBright = tw;
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          gl_Position = projectionMatrix * mv;
+          // sizeAttenuation:false — constant screen size, scaled for retina.
+          gl_PointSize = size * uSizeScale * uPixelRatio * tw;
+        }
+      `,
+      fragmentShader: `
+        uniform float uOpacity;
+        varying vec3 vColor;
+        varying float vBright;
+        void main() {
+          // Round soft-edged sprite: radial falloff from the point center.
+          vec2 d = gl_PointCoord - vec2(0.5);
+          float r = length(d) * 2.0;              // 0 at center → 1 at edge
+          float alpha = smoothstep(1.0, 0.0, r);  // soft round disc
+          alpha *= alpha;                          // tighten core, soften halo
+          gl_FragColor = vec4(vColor * vBright, alpha * uOpacity);
+        }
+      `,
     });
 
     const points = new THREE.Points(geometry, material);
     points.name = 'Starfield';
     points.frustumCulled = false; // Always render — surrounds the scene
+    this._starMaterial = material;
 
     return points;
+  }
+
+  /**
+   * Build a faint procedural Milky Way band — ~3500 clustered stars along a
+   * tilted great circle. No texture: stars are scattered in a band-local frame
+   * (a thin ribbon around the equator of a rotated basis) then rotated into
+   * world space. Sizes 0.4–0.9, dim additive so it reads as a soft glow rather
+   * than discrete points. Reuses the same star ShaderMaterial (via a clone with
+   * a lower opacity + no twinkle) for a single extra draw call.
+   * @private
+   */
+  _createMilkyWay() {
+    const count = 3500;
+    const radius = Constants.STAR_SPHERE_RADIUS * 0.985; // just inside the star shell
+    const positions = new Float32Array(count * 3);
+    const colors = new Float32Array(count * 3);
+    const sizes = new Float32Array(count);
+    const twinkle = new Float32Array(count); // all 0 (band doesn't twinkle)
+    const phase = new Float32Array(count);
+
+    // Band basis: a great circle tilted ~28° so it cuts diagonally across the
+    // sky rather than lying on the ecliptic. u,v span the band plane; w is the
+    // band normal (stars cluster near the u–v plane, i.e. small |w·pos|).
+    const tilt = 0.49; // ~28°
+    const ct = Math.cos(tilt), st = Math.sin(tilt);
+    // rotated basis (rotation about the X axis)
+    const uAxis = new THREE.Vector3(1, 0, 0);
+    const vAxis = new THREE.Vector3(0, ct, st);
+    const wAxis = new THREE.Vector3(0, -st, ct);
+
+    // Milky-Way palette — faint warm-white with a few dusty blue.
+    const c0 = new THREE.Color(0.85, 0.86, 0.95);
+    const c1 = new THREE.Color(0.95, 0.92, 0.85);
+
+    const tmp = new THREE.Vector3();
+    for (let i = 0; i < count; i++) {
+      // Angle around the band + a gaussian-ish spread across its width.
+      const ang = Math.random() * Math.PI * 2;
+      // Sum of two randoms ≈ triangular → clusters toward band center.
+      const spread = (Math.random() + Math.random() - 1.0) * 0.22; // half-width ~0.22 rad
+      // Longitudinal clumping: bias density with a couple of low-freq lobes so
+      // the band has brighter "clouds" like the real galactic plane.
+      const clump = 0.6 + 0.4 * Math.abs(Math.sin(ang * 1.5 + 0.7));
+      const cosS = Math.cos(spread), sinS = Math.sin(spread);
+      // Point on the tilted great circle, lifted off-plane by `spread`.
+      tmp.copy(uAxis).multiplyScalar(Math.cos(ang) * cosS)
+        .addScaledVector(vAxis, Math.sin(ang) * cosS)
+        .addScaledVector(wAxis, sinS)
+        .normalize().multiplyScalar(radius);
+      positions[i * 3] = tmp.x;
+      positions[i * 3 + 1] = tmp.y;
+      positions[i * 3 + 2] = tmp.z;
+
+      const col = Math.random() < 0.8 ? c0 : c1;
+      const b = (0.28 + Math.random() * 0.32) * clump;
+      colors[i * 3] = col.r * b;
+      colors[i * 3 + 1] = col.g * b;
+      colors[i * 3 + 2] = col.b * b;
+
+      sizes[i] = 0.4 + Math.random() * 0.5; // 0.4–0.9
+      twinkle[i] = 0.0;
+      phase[i] = 0.0;
+    }
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
+    geometry.setAttribute('aTwinkle', new THREE.BufferAttribute(twinkle, 1));
+    geometry.setAttribute('aPhase', new THREE.BufferAttribute(phase, 1));
+
+    // Same shader as the main stars but lower overall opacity for a haze read.
+    const material = this._starMaterial.clone();
+    material.uniforms.uOpacity.value = 0.55;
+    material.uniforms.uSizeScale.value = 1.5;
+
+    const points = new THREE.Points(geometry, material);
+    points.name = 'MilkyWay';
+    points.frustumCulled = false;
+    this._milkyWay = points;
+    this._milkyWayMaterial = material;
+    this.group.add(points);
+  }
+
+  /**
+   * Initialize the shooting-star system: a single reusable 2-vertex additive
+   * line (LineSegments) that stays hidden until a meteor fires. One meteor
+   * every 60–120 s, streaking for ~0.35 s across a random arc of the sky.
+   * Cheap: one line, no per-frame allocation.
+   * @private
+   */
+  _initShootingStar() {
+    const geom = new THREE.BufferGeometry();
+    // 2 vertices (head, tail); positions updated per active frame.
+    this._meteorPos = new Float32Array(6);
+    geom.setAttribute('position', new THREE.BufferAttribute(this._meteorPos, 3));
+    // Per-vertex color so the tail fades to black (streak look).
+    this._meteorCol = new Float32Array([1, 1, 1, 0, 0, 0]);
+    geom.setAttribute('color', new THREE.BufferAttribute(this._meteorCol, 3));
+    const mat = new THREE.LineBasicMaterial({
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.0,
+      depthWrite: false,
+      depthTest: false,
+      blending: THREE.AdditiveBlending,
+    });
+    this._meteor = new THREE.LineSegments(geom, mat);
+    this._meteor.name = 'ShootingStar';
+    this._meteor.frustumCulled = false;
+    this._meteor.visible = false;
+    this._meteorMat = mat;
+    this.group.add(this._meteor);
+
+    this._meteorTimer = 8 + Math.random() * 20; // first one within ~8–28 s
+    this._meteorActive = false;
+    this._meteorElapsed = 0;
+    this._meteorDur = 0.35;
+    this._meteorStart = new THREE.Vector3();
+    this._meteorEnd = new THREE.Vector3();
+  }
+
+  /**
+   * Advance the shooting-star scheduler + active streak.
+   * @param {number} dt — seconds
+   * @private
+   */
+  _updateShootingStar(dt) {
+    if (!this._meteor) return;
+    if (this._meteorActive) {
+      this._meteorElapsed += dt;
+      const t = this._meteorElapsed / this._meteorDur;
+      if (t >= 1) {
+        this._meteorActive = false;
+        this._meteor.visible = false;
+        this._meteorMat.opacity = 0;
+        this._meteorTimer = 60 + Math.random() * 60; // next in 60–120 s
+        return;
+      }
+      // Head advances along the arc; tail trails behind by a fixed fraction.
+      const head = Math.min(1, t * 1.15);
+      const tail = Math.max(0, head - 0.12);
+      const hv = this._tmpMeteorA.copy(this._meteorStart).lerp(this._meteorEnd, head);
+      const tv = this._tmpMeteorB.copy(this._meteorStart).lerp(this._meteorEnd, tail);
+      this._meteorPos[0] = hv.x; this._meteorPos[1] = hv.y; this._meteorPos[2] = hv.z;
+      this._meteorPos[3] = tv.x; this._meteorPos[4] = tv.y; this._meteorPos[5] = tv.z;
+      this._meteor.geometry.attributes.position.needsUpdate = true;
+      // Fade in fast, out slow (ease the whole streak's opacity by a sine).
+      this._meteorMat.opacity = Math.sin(t * Math.PI) * 0.9;
+      return;
+    }
+    this._meteorTimer -= dt;
+    if (this._meteorTimer <= 0) this._fireShootingStar();
+  }
+
+  /** Launch a shooting star along a random short arc. @private */
+  _fireShootingStar() {
+    const radius = Constants.STAR_SPHERE_RADIUS * 0.98;
+    // Random start direction on the sphere.
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos(2 * Math.random() - 1);
+    this._meteorStart.set(
+      radius * Math.sin(phi) * Math.cos(theta),
+      radius * Math.sin(phi) * Math.sin(theta),
+      radius * Math.cos(phi)
+    );
+    // End point: a short random offset direction, re-projected to the shell.
+    const off = this._tmpMeteorA.set(
+      (Math.random() - 0.5),
+      (Math.random() - 0.5),
+      (Math.random() - 0.5)
+    ).normalize().multiplyScalar(radius * 0.18);
+    this._meteorEnd.copy(this._meteorStart).add(off).normalize().multiplyScalar(radius);
+    this._meteorActive = true;
+    this._meteorElapsed = 0;
+    this._meteor.visible = true;
   }
 
   /**
@@ -372,6 +618,22 @@ export class Starfield {
    * @param {number} _dt — delta time (unused for stars)
    */
   update(_dt) {
+    const dt = (typeof _dt === 'number' && isFinite(_dt)) ? _dt : 0;
+    this._time += dt;
+
+    // Drive the star twinkle shader uniform (prominent stars shimmer).
+    if (this._starMaterial) {
+      this._starMaterial.uniforms.uTime.value = this._time;
+      // Keep pixelRatio current for correct on-screen star size after a
+      // window move between displays of different density.
+      const pr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+      this._starMaterial.uniforms.uPixelRatio.value = pr;
+      if (this._milkyWayMaterial) this._milkyWayMaterial.uniforms.uPixelRatio.value = pr;
+    }
+
+    // Shooting-star scheduler + active streak.
+    this._updateShootingStar(dt);
+
     // Line2 LineMaterial needs current viewport resolution for correct screenspace width
     if (this._constellationLineMaterial) {
       this._constellationLineMaterial.resolution.set(
