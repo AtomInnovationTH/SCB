@@ -854,6 +854,12 @@ export class MenuScreen {
     this.visible = false;
     this.element.style.opacity = '0';
     window.removeEventListener('keydown', this._boundKeyHandler);
+    // Defensive: if an external state change hides the menu mid-departure,
+    // cancel the pending MENU_START emit + clear the flag so the timer can't
+    // fire a stray second MENU_START later. (Normal flow completes via
+    // _finishDeparture() before any hide, so this only matters on odd paths.)
+    if (this._departTimer) { clearTimeout(this._departTimer); this._departTimer = null; }
+    this._departing = false;
     if (this._skipClickHandler) {
       window.removeEventListener('pointerdown', this._skipClickHandler, true);
       this._skipClickHandler = null;

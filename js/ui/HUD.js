@@ -1242,14 +1242,22 @@ export class HUD {
       targets.push(this._rightColumn);
     }
     targets.forEach((el, i) => {
-      el.style.animationDelay = `${Math.min(i * 55, 400)}ms`;
+      const delayMs = Math.min(i * 55, 400);
+      el.style.animationDelay = `${delayMs}ms`;
       el.classList.add('hud-poweron');
+      let fallback = null;
       const clear = () => {
+        if (fallback) { clearTimeout(fallback); fallback = null; }
         el.classList.remove('hud-poweron');
         el.style.animationDelay = '';
         el.removeEventListener('animationend', clear);
       };
       el.addEventListener('animationend', clear);
+      // Fallback: if the panel is hidden (display:none) or the HUD is torn
+      // down before animationend fires, animationend never arrives — clean up
+      // anyway so the class + inline delay can't linger. Covers delay (≤400ms)
+      // + the 0.34s animation with margin.
+      fallback = setTimeout(clear, delayMs + 800);
     });
   }
 
