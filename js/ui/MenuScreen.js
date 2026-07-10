@@ -34,6 +34,9 @@ export class MenuScreen {
     // the pending emit so a skip can cancel + fire it immediately.
     this._departing = false;
     this._departTimer = null;
+    // Which event _finishDeparture emits (MENU_START for new game, MENU_CONTINUE
+    // for a returning player — T8). Set when a departure begins.
+    this._departEvent = null;
     this._build();
 
     // Self-manage visibility via EventBus (decoupled from GameFlowManager)
@@ -784,6 +787,20 @@ export class MenuScreen {
     audioSystem.init();
     audioSystem.resume();
     audioSystem.playClick();
+    // New game → full 1.35s cinematic pull-back, then MENU_START.
+    this._beginDeparture(Events.MENU_START, 1350, 1.4);
+  }
+
+  /**
+   * @private Play the menu→sim departure cinematic then emit `event`. Shared by
+   * new-game (MENU_START, full pull-back) and continue (MENU_CONTINUE, short
+   * pull-back — T8). Honors reduced-motion with a quick straight cut.
+   * @param {string} event — EventBus event to emit at the end (or on skip).
+   * @param {number} durationMs — ms before the handoff emit.
+   * @param {number} cameraDur — seconds for the 3D hero camera pull-back.
+   */
+  _beginDeparture(event, durationMs, cameraDur) {
+    this._departEvent = event;
 
     const reduced = !!(window.matchMedia &&
       window.matchMedia('(prefers-reduced-motion: reduce)').matches);
@@ -804,16 +821,16 @@ export class MenuScreen {
     const content = this.element.querySelector('#menu-content');
     if (content) content.classList.add('menu-departing');
     // T6: clear the plate + vignette and stop capturing pointer events so the
-    // reveal isn't dimmed and post-MENU_START clicks reach the game canvas.
+    // reveal isn't dimmed and post-departure clicks reach the game canvas.
     this._beginPlateDeparture();
     // Stage 2: 3D hero departure — weld arc/glow/sparks fade, camera pulls
-    // back (orbit 5.5 → 8) so the hero recedes toward the live scene.
-    if (this._menuScene3D) this._menuScene3D.beginDeparture(1.4);
+    // back so the hero recedes toward the live scene.
+    if (this._menuScene3D) this._menuScene3D.beginDeparture(cameraDur);
     this._departing = true;
-    // Stage 3 handoff: emit MENU_START near the end of the pull-back. The
-    // gameplay scene (Earth, debris, now-unhidden ship) is already rendering
-    // behind the transparent menu; hide() then cross-fades the plate to 0.
-    this._departTimer = setTimeout(() => this._finishDeparture(), 1350);
+    // Stage 3 handoff: emit the target event near the end of the pull-back. The
+    // gameplay scene is already rendering behind the transparent menu; hide()
+    // then cross-fades the plate to 0.
+    this._departTimer = setTimeout(() => this._finishDeparture(), durationMs);
     this._armSkipClick();
   }
 
@@ -840,8 +857,8 @@ export class MenuScreen {
   }
 
   /**
-   * @private Complete the departure: fire MENU_START exactly once. Called at
-   * the end of the ramp OR early when the player skips (any key/click).
+   * @private Complete the departure: fire the target event exactly once. Called
+   * at the end of the ramp OR early when the player skips (any key/click).
    */
   _finishDeparture() {
     if (this._departTimer) {
@@ -854,15 +871,23 @@ export class MenuScreen {
     }
     if (!this._departing) return;
     this._departing = false;
-    eventBus.emit(Events.MENU_START);
+    // Default to MENU_START if somehow unset (defensive).
+    eventBus.emit(this._departEvent || Events.MENU_START);
+    this._departEvent = null;
   }
 
-  /** @private Continue from saved game */
+  /**
+   * @private Continue from saved game (T8). Play a SHORT departure (0.6s) then
+   * emit MENU_CONTINUE — replaces the previous hard cut so returning players
+   * get the same live-scene handoff as a new game (albeit briefer, since the
+   * destination is the BRIEFING card rather than straight to flight).
+   */
   _continueGame() {
+    if (this._departing) { this._finishDeparture(); return; }
     audioSystem.init();
     audioSystem.resume();
     audioSystem.playClick();
-    eventBus.emit(Events.MENU_CONTINUE);
+    this._beginDeparture(Events.MENU_CONTINUE, 600, 0.6);
   }
 
   show() {
@@ -870,6 +895,7 @@ export class MenuScreen {
     // Clear any leftover departure state from a prior run (e.g. returning to
     // the menu after a game) so the chrome is fully visible + interactive.
     this._departing = false;
+    this._departEvent = null;
     if (this._departTimer) { clearTimeout(this._departTimer); this._departTimer = null; }
     if (this._skipClickHandler) {
       window.removeEventListener('pointerdown', this._skipClickHandler, true);
@@ -903,6 +929,7 @@ export class MenuScreen {
     // _finishDeparture() before any hide, so this only matters on odd paths.)
     if (this._departTimer) { clearTimeout(this._departTimer); this._departTimer = null; }
     this._departing = false;
+    this._departEvent = null;
     if (this._skipClickHandler) {
       window.removeEventListener('pointerdown', this._skipClickHandler, true);
       this._skipClickHandler = null;
