@@ -216,6 +216,10 @@ export const Events = {
   MENU_START:         'menu:start',
   MENU_FAST_START:    'menu:fastStart',
   MENU_CONTINUE:      'menu:continue',
+  // Emitted at the START of the menu→sim departure pull-back (before MENU_START/
+  // MENU_CONTINUE, which fire at the END). Drives the departure audio pad swell
+  // (T10). { event } = the terminal event that will fire.
+  MENU_DEPARTURE_START: 'menu:departureStart',
   BRIEFING_COMMENCE:  'briefing:commence',
   BRIEFING_SKIP:      'briefing:skip',
   SHOP_DEPLOY:        'shop:deploy',
@@ -224,6 +228,9 @@ export const Events = {
   GAMEOVER_CONTINUE:  'gameover:continue',
   HUD_TARGET_CLICK:   'hud:targetClick',
   HUD_GROUP_ACTIVATE: 'hud:groupActivate',   // { group } — directly activate a HUD reveal-group
+  // Emitted once per mission when the HUD power-on stagger plays (T7 reset makes
+  // it per-mission). Drives the comms-crackle cue (T10).
+  HUD_POWER_ON:       'hud:powerOn',
   /**
    * Emitted when a tech library entry unlocks. Consumed by SkillsPane
    * (Discovery Pane) for the "NEW TECH" section. Separate from

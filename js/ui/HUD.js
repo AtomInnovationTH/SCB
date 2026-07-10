@@ -1238,6 +1238,9 @@ export class HUD {
    * One-shot; the class self-cleans on animationend so it never lingers.
    */
   _playPowerOn() {
+    // T10: comms-crackle cue — the HUD coming online. Once per mission (this
+    // method is guarded by _didPowerOn, reset per-mission in T7).
+    eventBus.emit(Events.HUD_POWER_ON);
     // Left → center → right cascade using the natural panel order.
     const targets = [];
     Object.values(this.panels).forEach(p => {

@@ -801,6 +801,9 @@ export class MenuScreen {
    */
   _beginDeparture(event, durationMs, cameraDur) {
     this._departEvent = event;
+    // T10: cue the departure audio pad swell at the START of the pull-back
+    // (MENU_START/MENU_CONTINUE fire at the END). Sized to the camera move.
+    eventBus.emit(Events.MENU_DEPARTURE_START, { event, durationMs, cameraDur });
 
     const reduced = !!(window.matchMedia &&
       window.matchMedia('(prefers-reduced-motion: reduce)').matches);

@@ -365,6 +365,20 @@ class AudioSystem {
       }
     });
 
+    // T10 — menu→sim transition audio. There is no menu ambient (engine-room
+    // loop is gameplay-only), so the departure was silent. A soft pad swell
+    // rises during the camera pull-back; a comms crackle marks the HUD coming
+    // online. Both gate on this.available, so ?noAudio=1 (init short-circuits
+    // → available=false) keeps them silent for capture drivers.
+    eventBus.on(Events.MENU_DEPARTURE_START, (data) => {
+      // Size the swell to the pull-back so it lands with the handoff.
+      const dur = (data && Number.isFinite(data.durationMs)) ? data.durationMs / 1000 : 1.35;
+      this.playDepartureSwell(dur);
+    });
+    eventBus.on(Events.HUD_POWER_ON, () => {
+      this.playCommsCrackle();
+    });
+
     // === Phase R9 event wiring ===
 
     // ΔV telemetry → 4-tier urgency alarm + thruster sputtering + ambient modulation
@@ -2207,6 +2221,103 @@ class AudioSystem {
       gain2.connect(this.sfxBus);
       osc2.start(start);
       osc2.stop(start + 0.35);
+    });
+  }
+
+  /**
+   * T10 — menu→sim departure pad swell. A soft, low synth chord that fades in
+   * and back out over the camera pull-back, giving the (otherwise silent)
+   * departure a sense of motion/lift without a musical stinger. Kept quiet
+   * (peak ≈ 0.06) so it sits under the UI click and never masks Houston VO.
+   * @param {number} [durationSec=1.35] — total swell length (≈ pull-back time).
+   */
+  playDepartureSwell(durationSec = 1.35) {
+    if (!this.available) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+    const dur = Math.max(0.4, Math.min(3, durationSec));
+
+    // Low chord: root A2, fifth E3, octave A3 — a stable, open "lift" voicing.
+    const freqs = [110, 164.81, 220];
+    // Shared lowpass so the pad reads warm/soft, opening slightly as it swells.
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.Q.value = 0.7;
+    filter.frequency.setValueAtTime(300, now);
+    filter.frequency.linearRampToValueAtTime(900, now + dur * 0.55);
+    filter.frequency.linearRampToValueAtTime(500, now + dur);
+
+    // Master swell envelope: slow attack, gentle release.
+    const swell = ctx.createGain();
+    swell.gain.setValueAtTime(0.0001, now);
+    swell.gain.linearRampToValueAtTime(0.06, now + dur * 0.5);
+    swell.gain.linearRampToValueAtTime(0.0001, now + dur);
+    filter.connect(swell);
+    swell.connect(this.sfxBus);
+
+    freqs.forEach((f, i) => {
+      const osc = ctx.createOscillator();
+      osc.type = i === 0 ? 'sine' : 'triangle';
+      osc.frequency.value = f;
+      // Slight per-voice detune for a wider, less synthetic pad.
+      osc.detune.value = (i - 1) * 4;
+      const vg = ctx.createGain();
+      vg.gain.value = i === 0 ? 0.9 : 0.5; // root loudest
+      osc.connect(vg);
+      vg.connect(filter);
+      osc.start(now);
+      osc.stop(now + dur + 0.05);
+    });
+  }
+
+  /**
+   * T10 — comms crackle: a short radio-squelch burst + a two-blip "online"
+   * confirm, played as the HUD powers on. Signals the comms link coming live
+   * alongside the visual power-on stagger. ~0.35 s total, subtle.
+   */
+  playCommsCrackle() {
+    if (!this.available) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+
+    // Squelch burst: bandpass-filtered noise, quick in/out (radio keying).
+    const nDur = 0.16;
+    const bufSize = Math.ceil(ctx.sampleRate * nDur);
+    const buf = ctx.createBuffer(1, bufSize, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
+    const noise = ctx.createBufferSource();
+    noise.buffer = buf;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.Q.value = 4;
+    bp.frequency.setValueAtTime(1400, now);
+    bp.frequency.exponentialRampToValueAtTime(2200, now + nDur);
+    const ng = ctx.createGain();
+    ng.gain.setValueAtTime(0.0001, now);
+    ng.gain.exponentialRampToValueAtTime(0.09, now + 0.02);
+    ng.gain.exponentialRampToValueAtTime(0.001, now + nDur);
+    noise.connect(bp);
+    bp.connect(ng);
+    ng.connect(this.sfxBus);
+    noise.start(now);
+    noise.stop(now + nDur + 0.02);
+
+    // Two-blip "online" confirm after the squelch (comms handshake).
+    const blips = [880, 1320];
+    blips.forEach((f, i) => {
+      const start = now + 0.18 + i * 0.09;
+      const osc = ctx.createOscillator();
+      osc.type = 'square';
+      osc.frequency.value = f;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, start);
+      g.gain.exponentialRampToValueAtTime(0.05, start + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.001, start + 0.06);
+      osc.connect(g);
+      g.connect(this.sfxBus);
+      osc.start(start);
+      osc.stop(start + 0.07);
     });
   }
 
