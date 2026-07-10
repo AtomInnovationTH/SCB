@@ -271,6 +271,28 @@ export class MenuScreen {
             transition-delay: 0s;
           }
         }
+        /* T6 — clear the backdrop DURING the pull-back. The radial-gradient
+         * plate on #menu-screen and the #menu-vignette both stayed at full
+         * strength until hide()'s trailing 0.5s fade, dimming the live-scene
+         * reveal. Fade both over ~1.1s so the camera pull-back reveals a clean
+         * scene. The plate background is set inline, so override with
+         * !important; the vignette is a normal CSS child. */
+        #menu-screen.menu-departing-plate {
+          background: rgba(0,0,0,0) !important;
+          transition: background 1.1s ease !important;
+        }
+        #menu-content.menu-departing #menu-vignette {
+          opacity: 0;
+          transition: opacity 1.1s ease;
+        }
+        @media (prefers-reduced-motion: reduce) {
+          #menu-screen.menu-departing-plate {
+            transition: background 0.2s ease !important;
+          }
+          #menu-content.menu-departing #menu-vignette {
+            transition: opacity 0.2s ease;
+          }
+        }
       </style>
 
       <div id="menu-content">
@@ -771,6 +793,7 @@ export class MenuScreen {
     if (reduced) {
       const content = this.element.querySelector('#menu-content');
       if (content) content.classList.add('menu-departing');
+      this._beginPlateDeparture();
       if (this._menuScene3D) this._menuScene3D.beginDeparture(0.4);
       this._departing = true;
       this._departTimer = setTimeout(() => this._finishDeparture(), 220);
@@ -780,6 +803,9 @@ export class MenuScreen {
     // Stage 1: menu chrome stagger-fade (CSS cascade, left column first).
     const content = this.element.querySelector('#menu-content');
     if (content) content.classList.add('menu-departing');
+    // T6: clear the plate + vignette and stop capturing pointer events so the
+    // reveal isn't dimmed and post-MENU_START clicks reach the game canvas.
+    this._beginPlateDeparture();
     // Stage 2: 3D hero departure — weld arc/glow/sparks fade, camera pulls
     // back (orbit 5.5 → 8) so the hero recedes toward the live scene.
     if (this._menuScene3D) this._menuScene3D.beginDeparture(1.4);
@@ -789,6 +815,20 @@ export class MenuScreen {
     // behind the transparent menu; hide() then cross-fades the plate to 0.
     this._departTimer = setTimeout(() => this._finishDeparture(), 1350);
     this._armSkipClick();
+  }
+
+  /**
+   * @private T6 — start the backdrop clear: fade the plate + vignette (via CSS
+   * classes) and stop the menu from capturing pointer events so post-departure
+   * clicks reach the game canvas ~0.5s sooner. The window-level capture-phase
+   * skip handler still fires (capture precedes hit-testing), so pointer-events
+   * off does not break skip-to-finish.
+   */
+  _beginPlateDeparture() {
+    if (this.element) {
+      this.element.classList.add('menu-departing-plate');
+      this.element.style.pointerEvents = 'none';
+    }
   }
 
   /** @private Any pointer press during departure fast-forwards it. */
@@ -837,6 +877,9 @@ export class MenuScreen {
     }
     const content = this.element.querySelector('#menu-content');
     if (content) content.classList.remove('menu-departing');
+    // T6: restore the backdrop plate + pointer capture for the fresh menu.
+    this.element.classList.remove('menu-departing-plate');
+    this.element.style.pointerEvents = 'auto';
     // Toggle Continue button visibility based on whether a save exists
     const continueWrapper = this.element.querySelector('#menu-continue-wrapper');
     if (continueWrapper) {

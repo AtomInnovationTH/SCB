@@ -767,6 +767,11 @@ export class HUD {
       } else {
         this.hide();
       }
+      // T7: replay the power-on stagger per MISSION, not per page load. Return
+      // to MENU (quit) rearms it so the next ORBITAL_VIEW show() plays it again.
+      if (to === GameStates.MENU) {
+        this._didPowerOn = false;
+      }
     });
 
     // --- Self-manage view config via VIEW_CONFIG_CHANGE (decoupled from GameFlowManager) ---
