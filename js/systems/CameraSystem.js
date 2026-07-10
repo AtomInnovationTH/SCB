@@ -113,7 +113,9 @@ export class CameraSystem {
       // distant Earth (~0.6 units away) — so it can't wash out the Earth or
       // atmosphere. Camera-side KEY (front fill) — lifted 0.5 → 2.4 so the
       // camera-facing hull reads as lit metal rather than a flat dark shape.
-      this._fillLight = new THREE.PointLight(0xfff5e0, 2.4, 0.01, 0);
+      // Item 2 (ship parity): warm key color matched to the menu hero's key
+      // (0xfff8ec) — was 0xfff5e0. Positioned off-axis per-frame in update().
+      this._fillLight = new THREE.PointLight(0xfff8ec, 2.4, 0.01, 0);
       this._fillLight.name = 'cameraFillLight';
       scene.add(this._fillLight);
 
@@ -779,8 +781,27 @@ export class CameraSystem {
     // Sync the ship light rig each frame. Both lights are distance-limited (see
     // ctor) so they only illuminate the near ship/debris, never the Earth.
     if (this._fillLight) {
-      // Camera-side key: fills the hull face the pilot is looking at.
-      this._fillLight.position.copy(this.camera.position);
+      // OFF-AXIS KEY (Item 2, ship parity): the fill used to sit AT the camera
+      // (position.copy(camera.position)) → flat, frontal "flash-photo" light
+      // with zero modeling. The menu hero reads better because its key sits at
+      // a flattering off-axis angle. Offset the fill in CAMERA SPACE — up and
+      // right relative to the camera — by a fraction of the camera→ship
+      // distance so the offset scales with zoom and the hull gets form shadows.
+      // Basis from the camera QUATERNION (set synchronously by lookAt() above;
+      // matrixWorld is only recomputed lazily at render, so it would be stale).
+      this._tmpVecB.set(1, 0, 0).applyQuaternion(this.camera.quaternion); // right
+      this._tmpVecC.set(0, 1, 0).applyQuaternion(this.camera.quaternion); // up
+      let d = 0.0004;                         // ~40 m default (no ship pos yet)
+      if (playerPos) {
+        d = this._tmpVecA.subVectors(playerPos, this.camera.position).length();
+      }
+      // Clamp the offset lever so the offset light stays inside the ~1 km
+      // cutoff even in wide (ORBIT/INSPECTION) views — the added lever is
+      // sqrt(0.4² + 0.3²)=0.5·d, so cap d·0.5 at ~half the cutoff (0.004).
+      const lever = Math.min(d, 0.008);
+      this._fillLight.position.copy(this.camera.position)
+        .addScaledVector(this._tmpVecC, 0.4 * lever)   // lift up
+        .addScaledVector(this._tmpVecB, 0.3 * lever);  // push right
     }
     if (this._rimLight && playerPos) {
       // Back/rim: place it just beyond the ship along the camera→ship axis so
