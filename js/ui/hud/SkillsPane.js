@@ -710,7 +710,10 @@ export class SkillsPane {
      * loop → no perpetual flashing rectangle. */
     border-left: 2px solid var(--tier-color, #44ddff);
     padding-left: 4px;
-    background: rgba(68, 221, 255, 0.06);
+    /* Tint derives from --tier-color so it matches the border on non-cyan
+     * tiers (was hardcoded cyan rgba(68,221,255,0.06)). color-mix is safe —
+     * Chromium-only app. */
+    background: color-mix(in srgb, var(--tier-color, #44ddff) 8%, transparent);
     animation: sp-cl-pulse 1.4s ease-in-out 2; /* matches CHECKLIST_PULSE_PERIOD_MS, finite */
 }
 .sp-cl-current .sp-cl-mark { color: var(--tier-color, #44ddff); }
