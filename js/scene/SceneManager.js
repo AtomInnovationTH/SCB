@@ -13,6 +13,11 @@ import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js';
 // Sprint 2 / PR D — FXAA fallback for MEDIUM tier (cheaper than SMAA).
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { FXAAShader } from 'three/addons/shaders/FXAAShader.js';
+// Output stage: applies renderer.toneMapping (ACES) + sRGB encoding to the
+// composed HDR buffer. Without it the EffectComposer chain writes raw linear
+// HDR to the canvas (three only tone-maps built-in materials rendered directly
+// to screen), so ACES + the SunLight auto-exposure system were dead in flight.
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Constants } from '../core/Constants.js';
 import { profileFlags } from '../core/ProfileFlags.js';
@@ -292,7 +297,18 @@ export class SceneManager {
       this.bloomPass = null;
     }
 
-    // 3. Anti-aliasing: SMAA (HIGH) → FXAA (MEDIUM) → none (LOW + MSAA only).
+    // 3. Output stage — ACES tone map + sRGB encode of the composed HDR buffer.
+    // MUST come before any post-AA: OutputPass converts HDR→LDR sRGB, and FXAA's
+    // luma edge detection (and SMAA's) assume sRGB/LDR input, so AA runs on the
+    // tone-mapped result. This is also what finally activates the SunLight
+    // auto-exposure (`renderer.toneMappingExposure`, SunLight._updateAutoExposure)
+    // and rolls off the bright atmosphere limb / specular highlights that used to
+    // hard-clip at 1.0 (the washed-out look). One cheap fullscreen pass, all tiers.
+    const outputPass = new OutputPass();
+    this.composer.addPass(outputPass);
+    this.outputPass = outputPass;
+
+    // 4. Anti-aliasing: SMAA (HIGH) → FXAA (MEDIUM) → none (LOW + MSAA only).
     // Sprint 3 GPU profiling — `?disableSMAA=1` forces *both* SMAA and FXAA off
     // (the flag is really "disable post-AA"; tier-MSAA still runs in customRT).
     if (cfg.enableSMAA && !profileFlags.disableSMAA) {
@@ -399,6 +415,7 @@ export class SceneManager {
     this.smaaPass = null;
     this.fxaaPass = null;
     this.renderPass = null;
+    this.outputPass = null;
   }
 
   /**
@@ -614,10 +631,14 @@ export class SceneManager {
     // interactive debris) pick up the fill. Kept modest so deep space stays dark.
     try {
       const pmrem = new THREE.PMREMGenerator(this.renderer);
-      this._envRT = pmrem.fromScene(new RoomEnvironment(), 0.04);
+      const roomEnv = new RoomEnvironment();
+      this._envRT = pmrem.fromScene(roomEnv, 0.04);
       this.scene.environment = this._envRT.texture;
       this.scene.environmentIntensity = 0.55;
       pmrem.dispose();
+      // Free the bake scene's geometries/materials — the PMREM texture is the
+      // only artifact we keep (in _envRT).
+      roomEnv.dispose?.();
     } catch (e) {
       console.warn('[SceneManager] environment IBL setup failed:', e);
       this._envRT = null;
