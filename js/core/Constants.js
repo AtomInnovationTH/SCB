@@ -3568,10 +3568,10 @@ export const Constants = {
     //   enableBloom     — UnrealBloomPass added to composer when true
     //   enableSMAA      — SMAAPass added to composer when true
     //   pixelRatioCap   — renderer.setPixelRatio(min(devicePR, cap))
-    //   useFXAAFallback — reserved: lighter AA when SMAA is off. No FXAAPass in
-    //                     this codebase yet (PR 4 scope note); SceneManager
-    //                     treats this as a TODO marker. The current passes are
-    //                     RenderPass + UnrealBloomPass + SMAAPass.
+    //   useFXAAFallback — adds an FXAA ShaderPass (post-OutputPass) when SMAA is
+    //                     off, for lighter edge AA on top of MSAA. Wired in
+    //                     SceneManager._setupPostProcessing. Chain when active:
+    //                     RenderPass + UnrealBloomPass + OutputPass + FXAA.
     // Sprint 3 GPU profiling — Phase C.1 (2026-05-23): HIGH `pixelRatioCap` lowered
     // from 2 → 1.5 based on round-2 sweep data. At pr=2 the M4 Max renders at
     // 5760×3600 (20.7 M fragments) and every fragment-bound pass (Earth FS,
@@ -3585,12 +3585,16 @@ export const Constants = {
     // false. With 4× MSAA still active on the customRT, geometric edges already
     // get smoothed; SMAA's marginal contribution (shader / transparent-edge AA)
     // costs 1.77 ms IN-MISSION at pr=1.5 — too high for the visual benefit at
-    // retina-class density. No FXAA fallback (useFXAAFallback: false) since MSAA
-    // is already handling geometric aliasing. If shader aliasing becomes visible
-    // on debris specular highlights, the cheap fix is `enableSMAA: true` at HIGH
-    // again — the cost re-emerges only at IN-MISSION, MENU is unaffected.
+    // retina-class density.
+    //
+    // Polish pass 2 (2026-07-10): HIGH `useFXAAFallback` flipped true. The
+    // OutputPass now sits before FXAA (MSAA → bloom → OutputPass → FXAA), so
+    // FXAA receives tone-mapped sRGB luma — the input it needs and was denied
+    // pre-OutputPass, which is why it was previously judged ineffective. MSAA-4
+    // alone leaves residual stair-stepping on the extreme-contrast Earth limb;
+    // FXAA (~0.3 ms) kills that sawtooth for far less than SMAA's 1.77 ms.
     QUALITY_TIERS: {
-      HIGH:   { msaaSamples: 4, enableBloom: true,  enableSMAA: false, pixelRatioCap: 1.5, useFXAAFallback: false },
+      HIGH:   { msaaSamples: 4, enableBloom: true,  enableSMAA: false, pixelRatioCap: 1.5, useFXAAFallback: true  },
       MEDIUM: { msaaSamples: 2, enableBloom: true,  enableSMAA: false, pixelRatioCap: 1.5, useFXAAFallback: true  },
       LOW:    { msaaSamples: 0, enableBloom: false, enableSMAA: false, pixelRatioCap: 1,   useFXAAFallback: false },
     },
