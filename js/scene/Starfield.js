@@ -457,7 +457,11 @@ export class Starfield {
       transparent: true,
       opacity: 0.0,
       depthWrite: false,
-      depthTest: false,
+      // B1: depthTest ON (matches the star/Milky Way materials). The meteor
+      // lives on the star shell (r≈392); with depthTest:false a far-side meteor
+      // drew OVER the opaque Earth (only ~0.6 units away, writes depth) — a
+      // white streak across the day disc. depthTest lets the Earth occlude it.
+      depthTest: true,
       blending: THREE.AdditiveBlending,
     });
     this._meteor = new THREE.LineSegments(geom, mat);
@@ -614,19 +618,29 @@ export class Starfield {
   }
 
   /**
-   * Per-frame update: keep Line2 material resolution in sync with viewport.
-   * @param {number} _dt — delta time (unused for stars)
+   * Per-frame update: advance twinkle time, keep pixel-ratio + Line2 material
+   * resolution in sync with the viewport.
+   * @param {number} _dt — delta time (seconds)
+   * @param {number} [pixelRatio] — the RENDERER's capped pixel ratio (B2). Falls
+   *   back to window.devicePixelRatio when undefined so the class stays usable
+   *   standalone (e.g. in tests / menu preview).
    */
-  update(_dt) {
+  update(_dt, pixelRatio) {
     const dt = (typeof _dt === 'number' && isFinite(_dt)) ? _dt : 0;
-    this._time += dt;
+    // B3: wrap the accumulator to keep float32 precision. 251.327 = 100 twinkle
+    // periods (2π / 2.5 ≈ 2.51327 s); wrapping on a whole multiple keeps
+    // sin(uTime*2.5 + phase) continuous across the wrap so twinkle never jumps.
+    this._time = (this._time + dt) % 251.327;
 
     // Drive the star twinkle shader uniform (prominent stars shimmer).
     if (this._starMaterial) {
       this._starMaterial.uniforms.uTime.value = this._time;
       // Keep pixelRatio current for correct on-screen star size after a
-      // window move between displays of different density.
-      const pr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+      // window move between displays of different density. B2: prefer the
+      // renderer's capped ratio passed in; fall back to devicePixelRatio.
+      const pr = (typeof pixelRatio === 'number' && isFinite(pixelRatio) && pixelRatio > 0)
+        ? pixelRatio
+        : ((typeof window !== 'undefined' && window.devicePixelRatio) || 1);
       this._starMaterial.uniforms.uPixelRatio.value = pr;
       if (this._milkyWayMaterial) this._milkyWayMaterial.uniforms.uPixelRatio.value = pr;
     }
