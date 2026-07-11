@@ -1394,6 +1394,62 @@ async function init() {
       }
 
       console.info(`[netShot] ready. __netShot("name") to grab, __netPause(true) to freeze, __netAuto(true) for auto-capture (currently ${_autoOn ? 'ON' : 'OFF'}).`);
+
+      // ── deep-polish-4 T2: menu→sim handoff apparent-size probe ──
+      // Analytic (no pixel classification): projects each model's bounding
+      // sphere through its own camera to a vertical screen-height fraction, so
+      // the harness (tmp/scb_handoff.cjs) can gate the match-cut on a <20% size
+      // discontinuity and read the INTRO_START_SCALE that makes hero≈ship.
+      //   hero  = receding menu MenuScene3D Mother at the handoff (orbitR→8)
+      //   ship  = sim PlayerSatellite in chase at INTRO_START_SCALE (the cut)
+      // fracH  = 2·atan(radius / distance) / vFOV — units cancel per model.
+      window.__handoffProbe = () => {
+        const out = {};
+        try {
+          const ms = menuScreen && menuScreen._menuScene3D;
+          if (ms && ms.camera && ms._mother) {
+            const box = new THREE.Box3().setFromObject(ms._mother);
+            const r = box.getBoundingSphere(new THREE.Sphere()).radius;
+            const vfov = ms.camera.fov * Math.PI / 180;
+            const dStart = ms._departureBaseOrbitR; // 5.5 (idle)
+            const dEnd = ms._departureOrbitR;        // 8.0 (fully receded @ handoff)
+            out.hero = {
+              fovDeg: ms.camera.fov, radius: r, distIdle: dStart, distHandoff: dEnd,
+              fracIdle: 2 * Math.atan(r / dStart) / vfov,
+              fracHandoff: 2 * Math.atan(r / dEnd) / vfov,
+            };
+          }
+          if (player && cameraSystem && cameraSystem.camera && cameraSystem.chase) {
+            const box = new THREE.Box3().setFromObject(player);
+            const r = box.getBoundingSphere(new THREE.Sphere()).radius;
+            const vfov = (cameraSystem._baseFov || cameraSystem.camera.fov) * Math.PI / 180;
+            const ob = cameraSystem.chase.offsetBehind;
+            const oa = cameraSystem.chase.offsetAbove;
+            const chaseDist = Math.hypot(ob, oa);
+            const scale = Constants.EARTH.INTRO_START_SCALE;
+            out.sim = {
+              fovDeg: cameraSystem._baseFov || cameraSystem.camera.fov,
+              radius: r, chaseDist, scale,
+              distCut: chaseDist * scale, distSettled: chaseDist,
+              fracCut: 2 * Math.atan(r / (chaseDist * scale)) / vfov,
+              fracSettled: 2 * Math.atan(r / chaseDist) / vfov,
+            };
+          }
+          if (out.hero && out.sim) {
+            out.matchRatio = out.sim.fracCut / out.hero.fracHandoff; // want ≈1.0 (<20% off)
+            // Solve the scale that makes ship apparent size == hero-at-handoff:
+            // 2·atan(r/(chaseDist·s)) = fracHandoff·vfov → s = r / (chaseDist·tan(θ/2))
+            const vfov = (cameraSystem._baseFov || cameraSystem.camera.fov) * Math.PI / 180;
+            const theta = out.hero.fracHandoff * vfov;
+            const t = Math.tan(theta / 2);
+            out.suggestedScale = t > 0 ? out.sim.radius / (out.sim.chaseDist * t) : null;
+          }
+        } catch (e) {
+          out.error = String(e && e.message || e);
+        }
+        return out;
+      };
+      console.info('[handoffProbe] ready. __handoffProbe() → analytic hero/ship apparent-size + suggestedScale.');
     }
   } catch (e) {
     console.warn('[netShot] hook setup failed:', e);
