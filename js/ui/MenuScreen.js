@@ -801,15 +801,16 @@ export class MenuScreen {
    */
   _beginDeparture(event, durationMs, cameraDur) {
     this._departEvent = event;
-    // T10: cue the departure audio pad swell at the START of the pull-back
-    // (MENU_START/MENU_CONTINUE fire at the END). Sized to the camera move.
-    eventBus.emit(Events.MENU_DEPARTURE_START, { event, durationMs, cameraDur });
 
     const reduced = !!(window.matchMedia &&
       window.matchMedia('(prefers-reduced-motion: reduce)').matches);
 
     // Reduced motion → skip the staged cinematic, straight cut (still gives
     // the DOM a brief fade via the departing class, but no camera move wait).
+    // The audio pad swell accompanies the pull-back cinematic, so it is
+    // skipped here too (emitting it would overrun the ~220ms cut — the swell
+    // has a 0.4s floor — desyncing audio from the visual for reduced-motion
+    // users).
     if (reduced) {
       const content = this.element.querySelector('#menu-content');
       if (content) content.classList.add('menu-departing');
@@ -819,6 +820,10 @@ export class MenuScreen {
       this._departTimer = setTimeout(() => this._finishDeparture(), 220);
       return;
     }
+
+    // T10: cue the departure audio pad swell at the START of the pull-back
+    // (MENU_START/MENU_CONTINUE fire at the END). Sized to the camera move.
+    eventBus.emit(Events.MENU_DEPARTURE_START, { event, durationMs, cameraDur });
 
     // Stage 1: menu chrome stagger-fade (CSS cascade, left column first).
     const content = this.element.querySelector('#menu-content');
