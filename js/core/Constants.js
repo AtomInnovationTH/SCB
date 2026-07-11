@@ -159,9 +159,16 @@ export const Constants = {
     CLOUD_ROTATION_RATE: 0.00007,   // rad/s — sidereal-ish, visible drift over a game hour
     LOD_16K_THRESHOLD: 16384,       // renderer.capabilities.maxTextureSize >= → 16k textures
     LOD_8K_THRESHOLD: 8192,         //                                    >= → 8k textures
-    VLEO_HOLD_SECONDS: 4,           // first-boot cinematic intro hold time
-    VLEO_INTRO_CAMERA_SCALE: 3.0,   // chase-offset multiplier for cinematic establishing shot
-    VLEO_INTRO_EASE_RATE: 2.5,      // per-second exponential ease rate back to normal
+    // Menu→sim handoff intro (deep-polish-4). Replaces the legacy VLEO
+    // establishing shot: no dead hold, chase settles straight into formation so
+    // the arrival is one continuous gesture with the menu hero's recede.
+    //   INTRO_START_SCALE — chase-offset multiplier at MENU_START. Tuned (T3) so
+    //     the sim ship's apparent size ≈ the receding menu hero's at the cut
+    //     (match-cut, Option A). 1.0 = no zoom.
+    //   INTRO_EASE_RATE   — per-second exponential ease rate back to 1.0
+    //     (settle ~1.5-2 s so it overlaps the HUD power-on stagger).
+    INTRO_START_SCALE: 1.8,
+    INTRO_EASE_RATE: 1.35,
   },
 
   // === STARFIELD ===

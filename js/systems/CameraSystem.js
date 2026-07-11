@@ -286,9 +286,10 @@ export class CameraSystem {
     this._thrustVisualDir = null;    // 'prograde' | 'retrograde' | 'lateral' | null
     this._thrustVisualMag = 0;       // current thrust magnitude for FOV
 
-    // ST-5.3: VLEO cinematic intro — wider establishing shot
-    this._vleoIntroScale = 1.0;      // chase-offset multiplier (1.0 = normal)
-    this._vleoIntroHolding = false;  // true while the 4 s hold is active
+    // Menu→sim handoff intro (deep-polish-4). Chase offset starts scaled at
+    // MENU_START (match-cut to the receding menu hero) and eases straight back
+    // to 1.0 — no dead hold. 1.0 = normal formation. See startIntroZoom().
+    this._introScale = 1.0;          // chase-offset multiplier (1.0 = normal)
 
     // Pre-allocated temporary vectors for update() hot path
     this._tmpVecA = new THREE.Vector3();
@@ -771,11 +772,12 @@ export class CameraSystem {
       this._thrustVisualDir = null;
     }
 
-    // ST-5.3: VLEO intro offset decay — smooth ease back to normal after hold ends
-    if (!this._vleoIntroHolding && this._vleoIntroScale > 1.001) {
-      const easeRate = Constants.EARTH.VLEO_INTRO_EASE_RATE;
-      this._vleoIntroScale += (1.0 - this._vleoIntroScale) * Math.min(1, easeRate * dt);
-      if (this._vleoIntroScale < 1.001) this._vleoIntroScale = 1.0;
+    // Menu→sim intro offset decay — ease straight back to normal (no hold). The
+    // ease begins the moment startIntroZoom() sets _introScale > 1.0.
+    if (this._introScale > 1.001) {
+      const easeRate = Constants.EARTH.INTRO_EASE_RATE;
+      this._introScale += (1.0 - this._introScale) * Math.min(1, easeRate * dt);
+      if (this._introScale < 1.001) this._introScale = 1.0;
     }
 
     // Sync the ship light rig each frame. Both lights are distance-limited (see
@@ -860,8 +862,8 @@ export class CameraSystem {
    * @private
    */
   _computeChase(dt, playerPos, velDir, radialDir, allowTargetBias = false) {
-    // ST-5.3: VLEO intro uses wider offsets for cinematic establishing shot
-    const s = this._vleoIntroScale;
+    // Menu→sim intro uses a scaled chase offset for the match-cut settle.
+    const s = this._introScale;
 
     // Position: behind (opposite velocity) and above (along radial out)
     const pos = playerPos.clone()
@@ -2161,24 +2163,26 @@ export class CameraSystem {
   }
 
   // ==========================================================================
-  // ST-5.3: VLEO CINEMATIC INTRO
+  // MENU→SIM HANDOFF INTRO (deep-polish-4)
   // ==========================================================================
 
   /**
-   * Start VLEO cinematic intro — wider chase-cam establishing shot.
-   * Call on first ORBITAL_VIEW entry (new game, no save).
+   * Start the menu→sim intro settle — chase offset snaps to INTRO_START_SCALE
+   * then eases straight back to 1.0 (no dead hold). Call on first ORBITAL_VIEW
+   * entry of a new game. Callers must skip this under reduced motion or when the
+   * departure was skipped (leave the scale at 1.0) — see GameFlowManager.
    */
-  startVLEOIntro() {
-    this._vleoIntroScale = Constants.EARTH.VLEO_INTRO_CAMERA_SCALE;
-    this._vleoIntroHolding = true;
+  startIntroZoom() {
+    this._introScale = Constants.EARTH.INTRO_START_SCALE;
   }
 
   /**
-   * End VLEO intro hold — chase offset smoothly decays back to 1.0.
+   * Force the intro settle to its end state immediately (scale 1.0). Used when
+   * the player skips the menu departure so the sim doesn't play a zoom they
+   * chose to skip.
    */
-  endVLEOIntro() {
-    this._vleoIntroHolding = false;
-    // _vleoIntroScale decays in update() via VLEO_INTRO_EASE_RATE
+  skipIntroZoom() {
+    this._introScale = 1.0;
   }
 
   /**

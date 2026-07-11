@@ -760,7 +760,7 @@ export class MenuScreen {
     // per Item 6 guard — total added latency must be short & skippable).
     if (this._departing) {
       e.preventDefault();
-      this._finishDeparture();
+      this._finishDeparture(true);
       return;
     }
 
@@ -783,7 +783,7 @@ export class MenuScreen {
    * MENU_START fires at the end (or immediately, on skip / reduced motion).
    */
   _startGame() {
-    if (this._departing) { this._finishDeparture(); return; }
+    if (this._departing) { this._finishDeparture(true); return; }
     audioSystem.init();
     audioSystem.resume();
     audioSystem.playClick();
@@ -859,7 +859,7 @@ export class MenuScreen {
   /** @private Any pointer press during departure fast-forwards it. */
   _armSkipClick() {
     if (this._skipClickHandler) return;
-    this._skipClickHandler = () => this._finishDeparture();
+    this._skipClickHandler = () => this._finishDeparture(true);
     // capture-phase, one path; removed in _finishDeparture.
     window.addEventListener('pointerdown', this._skipClickHandler, true);
   }
@@ -892,15 +892,17 @@ export class MenuScreen {
   /**
    * @private Complete the departure: fire the target event exactly once. Called
    * at the end of the ramp OR early when the player skips (any key/click).
+   * @param {boolean} [skipped=false] — true when triggered by a skip (key /
+   *   pointer / re-press), so the sim side can suppress the intro camera zoom.
    */
-  _finishDeparture() {
+  _finishDeparture(skipped = false) {
     // Capture emit intent BEFORE the reset clears _departing/_departEvent, so
     // the exactly-once guard and the target event survive the teardown.
     const wasDeparting = this._departing;
     const event = this._departEvent || Events.MENU_START; // default defensive
     this._resetDepartureState();
     if (!wasDeparting) return;
-    eventBus.emit(event);
+    eventBus.emit(event, { skipped: !!skipped });
   }
 
   /**
@@ -910,7 +912,7 @@ export class MenuScreen {
    * destination is the BRIEFING card rather than straight to flight).
    */
   _continueGame() {
-    if (this._departing) { this._finishDeparture(); return; }
+    if (this._departing) { this._finishDeparture(true); return; }
     audioSystem.init();
     audioSystem.resume();
     audioSystem.playClick();

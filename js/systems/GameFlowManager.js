@@ -57,8 +57,10 @@ class GameFlowManager {
     // --- First Experience guidance state ---
     /** @type {boolean} First ORBITAL_VIEW entry this game (for auto-target + opening comms) */
     this._firstOrbitalView = true;
-    /** @type {boolean} ST-5.3: VLEO cinematic intro active (4 s hold on first boot) */
-    this._vleoIntroActive = false;
+    /** @type {boolean} deep-polish-4: suppress the menu→sim intro zoom on the
+     *  next new-game ORBITAL_VIEW entry (set when the player SKIPS the menu
+     *  departure — MENU_START { skipped:true }). Consumed once, then reset. */
+    this._suppressIntroZoom = false;
     /** @type {Set<string>} One-shot comms already sent this game */
     this._firstTimeComms = new Set();
 
@@ -200,54 +202,52 @@ class GameFlowManager {
         //   (b) re-firing on saved-game continues (MENU_CONTINUE sets
         //       _firstOrbitalView = false and emits HUD_GROUP_ACTIVATE directly)
         if (this._firstOrbitalView) {
-          // ST-5.3: VLEO cinematic intro — wider camera + delayed HUD fade-in
-          const vleoHoldMs = Constants.EARTH.VLEO_HOLD_SECONDS * 1000;
-          this._vleoIntroActive = true;
+          // deep-polish-4: menu→sim intro settle — chase offset starts scaled
+          // and eases straight into formation (no dead hold). Skipped entirely
+          // under reduced motion (a11y) or when the player skipped the menu
+          // departure, so the scale stays at 1.0 in those paths.
+          const reduced = this._prefersReducedMotion();
+          if (cameraSystem) {
+            if (reduced || this._suppressIntroZoom) {
+              cameraSystem.skipIntroZoom();
+            } else {
+              cameraSystem.startIntroZoom();
+            }
+          }
+          this._suppressIntroZoom = false;
 
-          // Start wide establishing-shot camera framing
-          if (cameraSystem) cameraSystem.startVLEOIntro();
-
-          // PR 5 / P2.8: TimerManager-tracked VLEO cinematic + comms boot timers.
-          // owner=this for grouped teardown. State left null because these
-          // are first-run intro callbacks that gracefully no-op if state
-          // has changed (the inner `if (cameraSystem.currentView === ...)`
-          // guards each one).
-          timerManager.setTimeout(() => {
-            this._vleoIntroActive = false;
-            // End hold → camera smoothly eases back to normal chase distance
-            if (cameraSystem) cameraSystem.endVLEOIntro();
-          }, vleoHoldMs, { owner: this });
-
-          // UX-2 #10B: Comms boot sequence — trickling messages during VLEO intro
-          // Also emits COMMS_OPENED to auto-discover manage_comms skill → activates comms HUD group
+          // Comms boot trickle — messages arrive during the ~1.5-2 s settle.
+          // Retimed off the removed 4 s hold; staggered so nothing arrives as a
+          // wall. owner=this for grouped teardown; inner guards no-op on state
+          // change (these are first-run intro callbacks).
           timerManager.setTimeout(() => {
             eventBus.emit(Events.COMMS_OPENED);
             eventBus.emit(Events.COMMS_MESSAGE, {
               source: 'SYSTEM', channel: 'CMD', priority: 'info',
               text: 'Comm link online',
             });
-            // Removed: startup blip audio not needed per UX decision
-          }, 1000, { owner: this });
+          }, 800, { owner: this });
           timerManager.setTimeout(() => {
             eventBus.emit(Events.COMMS_MESSAGE, {
               source: 'HOUSTON', channel: 'CMD', priority: 'info',
               text: 'Comms are up, Cowboy. We have you on telemetry.',
             });
-            // Removed: startup blip audio not needed per UX decision
-          }, 2000, { owner: this });
+          }, 1700, { owner: this });
           timerManager.setTimeout(() => {
             eventBus.emit(Events.COMMS_MESSAGE, {
               source: 'SYSTEM', channel: 'CMD', priority: 'info',
               text: 'Sensor array calibrating...',
             });
-            // Removed: startup blip audio not needed per UX decision
-          }, 3000, { owner: this });
+          }, 2600, { owner: this });
 
+          // Score-group HUD panel powers on during the settle so the arrival is
+          // one gesture (overlaps the camera easing into formation). Re-keyed
+          // off the removed VLEO hold to a fixed settle-aligned delay.
           if (this._scoreGroupTimer !== null) timerManager.clear(this._scoreGroupTimer);
           this._scoreGroupTimer = timerManager.setTimeout(() => {
             this._scoreGroupTimer = null;
             eventBus.emit(Events.HUD_GROUP_ACTIVATE, { group: 'score' });
-          }, 5000 + vleoHoldMs, { owner: this });
+          }, 2000, { owner: this });
         }
 
         // Phase 2: Auto-start trawl — TrawlManager self-manages via GAME_STATE_CHANGE (Batch 3)
@@ -312,8 +312,12 @@ class GameFlowManager {
     // ==================================================================
 
     // Menu → Start (skip briefing, go straight to orbital gameplay)
-    eventBus.on(Events.MENU_START, () => {
+    eventBus.on(Events.MENU_START, (data) => {
       this.resetGame();
+      // deep-polish-4: if the player SKIPPED the menu departure, suppress the
+      // sim intro zoom too (respect the skip). Set AFTER resetGame(), which
+      // clears the flag. Read once by the ORBITAL_VIEW enter below.
+      this._suppressIntroZoom = !!(data && data.skipped);
       this._applyStartLocation();   // place ground track over the player's home region
       gameState.currentState = GameStates.MENU; // Allow transition from MENU
       persistenceManager.deleteSave(); // New Game clears any existing save
@@ -1124,21 +1128,20 @@ class GameFlowManager {
     // One-shot messages keyed by _firstTimeComms Set. Resets on resetGame().
     // ==================================================================
 
-    // First ORBITAL_VIEW: auto-target nearest welcome debris + opening comms
-    // ST-5.3: Delayed by VLEO_HOLD_SECONDS on first boot for cinematic intro
+    // First ORBITAL_VIEW: opening comms guidance. deep-polish-4: the 4 s VLEO
+    // hold is gone; guidance now trickles in AFTER the boot comms + settle, and
+    // the two lines are split into separate timers so they never land together.
     eventBus.on(Events.GAME_STATE_CHANGE, ({ to }) => {
       if (to === 'ORBITAL_VIEW' && this._firstOrbitalView) {
         this._firstOrbitalView = false;
-        // Add VLEO intro hold so guidance appears after the cinematic beat
-        const vleoHoldMs = this._vleoIntroActive ? Constants.EARTH.VLEO_HOLD_SECONDS * 1000 : 0;
+
+        // Opening comms hint — after the boot trickle (last boot line at 2600ms).
         timerManager.setTimeout(() => {
           const { debrisField, player } = this._refs;
           if (!player || !debrisField) return;
 
           // Target acquisition is owned by AutoLockController (reward-first
           // spine) from the first frame — no auto-target call needed here.
-
-          // Opening comms hint
           if (!this._firstTimeComms.has('orbital_view_opening')) {
             this._firstTimeComms.add('orbital_view_opening');
             eventBus.emit(Events.COMMS_MESSAGE, {
@@ -1147,10 +1150,15 @@ class GameFlowManager {
               priority: 'info',
             });
           }
+        }, 3600, { owner: this });
 
-          // Landmark reference callout — points out the homeland feature visible
-          // on the opening pass (Languages.sight). Advisory/info so it doesn't
-          // fight onboarding; no-ops when the language has no `sight`.
+        // Landmark reference callout — points out the homeland feature visible
+        // on the opening pass (Languages.sight). Staggered a beat after the
+        // contacts hint so the arrival isn't a text wall. No-ops when the
+        // language has no `sight`.
+        timerManager.setTimeout(() => {
+          const { player } = this._refs;
+          if (!player) return;
           if (!this._firstTimeComms.has('orbital_view_landmark')) {
             this._firstTimeComms.add('orbital_view_landmark');
             const lang = settingsManager.getLanguageEntry();
@@ -1163,7 +1171,7 @@ class GameFlowManager {
               });
             }
           }
-        }, 3000 + vleoHoldMs, { owner: this });
+        }, 4400, { owner: this });
       }
     });
 
@@ -1277,6 +1285,22 @@ class GameFlowManager {
    * field (spawned in the player's own orbit) inherits the chosen tilt. Called
    * on New Game after resetGame() (which zeroes trueAnomaly).
    */
+  /**
+   * @private Detect the OS/browser "reduce motion" accessibility preference.
+   * Guarded for the Node test runner (no window/matchMedia). Used to skip the
+   * menu→sim intro camera zoom for users who opt out of motion.
+   * @returns {boolean}
+   */
+  _prefersReducedMotion() {
+    try {
+      return !!(typeof window !== 'undefined' &&
+        typeof window.matchMedia === 'function' &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    } catch (_e) {
+      return false;
+    }
+  }
+
   _applyStartLocation() {
     const { player } = this._refs;
     if (!player || !player.orbit) return;
@@ -1349,7 +1373,7 @@ class GameFlowManager {
 
     // Reset first-experience guidance
     this._firstOrbitalView = true;
-    this._vleoIntroActive = false;
+    this._suppressIntroZoom = false;
     this._firstTimeComms = new Set();
 
     // Clear score-group activation timer
