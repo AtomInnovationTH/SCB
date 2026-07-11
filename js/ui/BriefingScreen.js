@@ -49,20 +49,30 @@ export class BriefingScreen {
   _build() {
     this.element = document.createElement('div');
     this.element.id = 'briefing-screen';
+    // T9 — briefing is a bottom-third comms overlay over the LIVE scene, not a
+    // full-screen blackout. Anchor content to the bottom; a gentle bottom-only
+    // gradient scrim keeps the card legible over a bright day-Earth while the
+    // top stays clear (scene reveal). pointer-events:none on the shell lets the
+    // clear area pass through; the card itself re-enables pointer events.
     this.element.style.cssText = `
-      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-      display: flex; flex-direction: column; align-items: center; justify-content: center;
-      background: rgba(0,5,15,0.9); z-index: 50; pointer-events: auto;
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
+      background: linear-gradient(to bottom, rgba(0,0,0,0) 42%, rgba(0,6,18,0.55) 100%);
+      z-index: 50; pointer-events: none;
       transition: opacity 0.3s;
     `;
 
     this.element.innerHTML = `
-      <div style="max-width:700px;width:90%;max-height:85vh;overflow-y:auto;padding:20px;">
-        <div style="text-align:center;margin-bottom:1.5rem;">
+      <div id="briefing-card-panel" style="pointer-events:auto;width:94%;max-width:900px;
+           max-height:54vh;overflow-y:auto;margin:0 0 3vh 0;padding:14px 22px;
+           background:rgba(2,12,26,0.82);border:1px solid rgba(0,255,136,0.28);
+           border-radius:6px;box-shadow:0 0 30px rgba(0,0,0,0.5),0 0 22px rgba(0,255,136,0.08);
+           backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px);">
+        <div style="text-align:center;margin-bottom:0.9rem;">
           <div style="font-size:0.7rem;color:rgba(0,255,136,0.4);letter-spacing:0.2em;margin-bottom:4px;">
             ▲ GROUND STATION UPLINK ▲
           </div>
-          <h2 style="font-size:1.5rem;color:#00ff88;letter-spacing:0.15em;
+          <h2 style="font-size:1.25rem;color:#00ff88;letter-spacing:0.15em;margin:0;
                       text-shadow:0 0 15px rgba(0,255,136,0.4);">
             <span id="briefing-mission-title">MISSION BRIEFING</span>
           </h2>
@@ -73,7 +83,7 @@ export class BriefingScreen {
         <div id="briefing-context" style="
           display:flex;justify-content:center;gap:20px;align-items:center;
           background:rgba(0,20,40,0.5);border:1px solid rgba(0,255,136,0.15);
-          border-radius:4px;padding:8px 16px;margin-bottom:1rem;font-size:0.8rem;">
+          border-radius:4px;padding:6px 16px;margin-bottom:0.7rem;font-size:0.8rem;">
           <span id="briefing-objective" style="color:rgba(0,255,136,0.7);">Clear 5 debris to reach the depot</span>
           <span style="color:rgba(0,255,136,0.2);">│</span>
           <span style="color:#f0c040;">💰 <b id="briefing-credits">0</b> cr</span>
@@ -81,17 +91,17 @@ export class BriefingScreen {
           <span style="color:rgba(0,255,136,0.6);">Cleared: <b id="briefing-cleared">0</b>/<b>${Constants.WIN_DEBRIS_COUNT}</b></span>
         </div>
 
-        <div style="font-size:0.75rem;color:rgba(0,255,136,0.4);text-align:center;margin-bottom:0.5rem;">
+        <div style="font-size:0.72rem;color:rgba(0,255,136,0.4);text-align:center;margin-bottom:0.4rem;">
           ↑↓ Arrow keys or Tab to select target
         </div>
 
-        <div id="briefing-targets" style="margin-bottom:1.5rem;"></div>
+        <div id="briefing-targets" style="margin-bottom:0.8rem;"></div>
 
-        <div style="text-align:center;margin-top:1rem;">
+        <div style="text-align:center;margin-top:0.6rem;">
           <button id="briefing-commence-btn" style="
             font-family:'Courier New',monospace; font-size:1rem; color:#00ff88;
             background: rgba(0,255,136,0.1); border: 2px solid rgba(0,255,136,0.4);
-            padding: 10px 36px; cursor: pointer; border-radius: 4px;
+            padding: 9px 34px; cursor: pointer; border-radius: 4px;
             letter-spacing: 0.15em; transition: all 0.3s; opacity: 0.4;
             pointer-events: none;
           ">COMMENCE APPROACH</button>
@@ -113,7 +123,7 @@ export class BriefingScreen {
 
         <!-- Enter to launch prompt -->
         <div id="briefing-enter-prompt" class="glow-text" style="
-          text-align:center; margin-top:1rem; font-size:0.9rem;
+          text-align:center; margin-top:0.6rem; font-size:0.85rem;
           color:#00ff88; letter-spacing:0.12em;
           text-shadow: 0 0 12px rgba(0,255,136,0.4);
           opacity: 0.5;
@@ -283,7 +293,7 @@ export class BriefingScreen {
       return `
         <div class="briefing-card" data-idx="${i}" style="
           background: rgba(0,20,40,0.6); border: 1px solid rgba(0,255,136,0.2);
-          border-radius: 4px; padding: 12px 16px; margin: 8px 0; cursor: pointer;
+          border-radius: 4px; padding: 8px 14px; margin: 6px 0; cursor: pointer;
           transition: all 0.2s; display: flex; justify-content: space-between; align-items: center;
         ">
           <div style="flex:1;">
