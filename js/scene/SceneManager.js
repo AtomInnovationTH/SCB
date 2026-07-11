@@ -286,10 +286,13 @@ export class SceneManager {
         this._bloomRes,
         0.08,  // strength — subtle bloom for sun disc + engine glow sparkle
         0.4,   // radius
-        4.0    // threshold — only the very brightest (sun disc, engine plumes)
-               // bloom. Raised from 1.5 so the directional sun's specular
-               // highlight on the spacecraft hull/panels no longer blooms into
-               // a glint/glow as the ship rolls.
+        // threshold — only the very brightest (sun disc, engine plumes) bloom.
+        // Raised from 1.5 so the directional sun's specular highlight on the
+        // spacecraft hull/panels no longer blooms into a glint/glow as the ship
+        // rolls. `?bloomThreshold=N` overrides it (P3 roll-glint A/B).
+        (profileFlags.bloomThresholdOverride !== null)
+          ? profileFlags.bloomThresholdOverride
+          : 4.0
       );
       this.composer.addPass(bloomPass);
       this.bloomPass = bloomPass;

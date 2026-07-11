@@ -37,6 +37,11 @@
  *   `?disableAtmosphere=1` — skip [`Earth._createAtmosphere()`](js/scene/Earth.js:652).
  *   `?msaa=N`              — override `tierConfig.msaaSamples` (0, 2, 4 typical).
  *   `?pixelRatio=N`        — override `tierConfig.pixelRatioCap` (1, 1.5, 2 typical).
+ *   `?bloomThreshold=N`    — override the [`UnrealBloomPass`](js/scene/SceneManager.js:289)
+ *                            luminance threshold (default 4.0). Lower = more of
+ *                            the frame blooms. Used to A/B the historical hull
+ *                            roll-glint (P3): 4.0 suppresses it, 2.5 was proposed
+ *                            to re-add a subtle sun glint. Range [0.5..8].
  *
  * @module core/ProfileFlags
  */
@@ -92,6 +97,7 @@ function readFloatInRange(params, key, min, max) {
  * @property {boolean} disableAtmosphere
  * @property {number|null} msaaOverride        — null means "use tier default"
  * @property {number|null} pixelRatioOverride  — null means "use tier default"
+ * @property {number|null} bloomThresholdOverride — null means "use pass default (4.0)"
  * @property {boolean} anyEnabled              — true when any flag is non-default
  */
 
@@ -114,6 +120,7 @@ function parseFromLocation() {
     disableAtmosphere: false,
     msaaOverride: null,
     pixelRatioOverride: null,
+    bloomThresholdOverride: null,
     anyEnabled: false,
   };
 
@@ -138,6 +145,7 @@ function parseFromLocation() {
     disableAtmosphere: params.get('disableAtmosphere') === '1',
     msaaOverride: readIntInRange(params, 'msaa', 0, 8),
     pixelRatioOverride: readFloatInRange(params, 'pixelRatio', 0.5, 4),
+    bloomThresholdOverride: readFloatInRange(params, 'bloomThreshold', 0.5, 8),
   };
 
   flags.anyEnabled =
@@ -149,7 +157,8 @@ function parseFromLocation() {
     flags.disableClouds ||
     flags.disableAtmosphere ||
     flags.msaaOverride !== null ||
-    flags.pixelRatioOverride !== null;
+    flags.pixelRatioOverride !== null ||
+    flags.bloomThresholdOverride !== null;
 
   if (flags.anyEnabled && typeof console !== 'undefined') {
     try {
@@ -188,6 +197,7 @@ export function _parseForTest(search) {
     disableAtmosphere: params.get('disableAtmosphere') === '1',
     msaaOverride: readIntInRange(params, 'msaa', 0, 8),
     pixelRatioOverride: readFloatInRange(params, 'pixelRatio', 0.5, 4),
+    bloomThresholdOverride: readFloatInRange(params, 'bloomThreshold', 0.5, 8),
   };
   out.anyEnabled =
     out.profilePasses ||
@@ -198,7 +208,8 @@ export function _parseForTest(search) {
     out.disableClouds ||
     out.disableAtmosphere ||
     out.msaaOverride !== null ||
-    out.pixelRatioOverride !== null;
+    out.pixelRatioOverride !== null ||
+    out.bloomThresholdOverride !== null;
   return Object.freeze(out);
 }
 
