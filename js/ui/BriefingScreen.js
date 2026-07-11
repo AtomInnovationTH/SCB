@@ -62,6 +62,10 @@ export class BriefingScreen {
       transition: opacity 0.3s;
     `;
 
+    // NOTE: #briefing-card-panel has no CSS/JS consumer in the app (the panel
+    // is styled inline). It is an intentional, stable hook for the local
+    // capture/verification driver (tmp/scb_briefing.cjs) and future animation
+    // targeting — do not strip it as "unused".
     this.element.innerHTML = `
       <div id="briefing-card-panel" style="pointer-events:auto;width:94%;max-width:900px;
            max-height:54vh;overflow-y:auto;margin:0 0 3vh 0;padding:14px 22px;

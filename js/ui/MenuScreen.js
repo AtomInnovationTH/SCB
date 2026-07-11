@@ -865,10 +865,18 @@ export class MenuScreen {
   }
 
   /**
-   * @private Complete the departure: fire the target event exactly once. Called
-   * at the end of the ramp OR early when the player skips (any key/click).
+   * @private Tear down the TRANSIENT departure state (pending timer, in-flight
+   * flag, target event, and the window-level skip-click listener). Single
+   * source of truth for the reset that show(), hide(), and _finishDeparture()
+   * all need — keeps them from drifting as departure state grows.
+   *
+   * Deliberately does NOT touch the departure CSS/style side effects
+   * (`menu-departing`, `menu-departing-plate`, inline pointer-events). Those
+   * must PERSIST through hide()'s opacity fade so the reveal isn't re-dimmed
+   * and clicks keep reaching the game canvas (T6); they are restored only in
+   * show() when a fresh, interactive menu is being built.
    */
-  _finishDeparture() {
+  _resetDepartureState() {
     if (this._departTimer) {
       clearTimeout(this._departTimer);
       this._departTimer = null;
@@ -877,11 +885,22 @@ export class MenuScreen {
       window.removeEventListener('pointerdown', this._skipClickHandler, true);
       this._skipClickHandler = null;
     }
-    if (!this._departing) return;
     this._departing = false;
-    // Default to MENU_START if somehow unset (defensive).
-    eventBus.emit(this._departEvent || Events.MENU_START);
     this._departEvent = null;
+  }
+
+  /**
+   * @private Complete the departure: fire the target event exactly once. Called
+   * at the end of the ramp OR early when the player skips (any key/click).
+   */
+  _finishDeparture() {
+    // Capture emit intent BEFORE the reset clears _departing/_departEvent, so
+    // the exactly-once guard and the target event survive the teardown.
+    const wasDeparting = this._departing;
+    const event = this._departEvent || Events.MENU_START; // default defensive
+    this._resetDepartureState();
+    if (!wasDeparting) return;
+    eventBus.emit(event);
   }
 
   /**
@@ -902,13 +921,7 @@ export class MenuScreen {
     this.visible = true;
     // Clear any leftover departure state from a prior run (e.g. returning to
     // the menu after a game) so the chrome is fully visible + interactive.
-    this._departing = false;
-    this._departEvent = null;
-    if (this._departTimer) { clearTimeout(this._departTimer); this._departTimer = null; }
-    if (this._skipClickHandler) {
-      window.removeEventListener('pointerdown', this._skipClickHandler, true);
-      this._skipClickHandler = null;
-    }
+    this._resetDepartureState();
     const content = this.element.querySelector('#menu-content');
     if (content) content.classList.remove('menu-departing');
     // T6: restore the backdrop plate + pointer capture for the fresh menu.
@@ -932,16 +945,12 @@ export class MenuScreen {
     this.element.style.opacity = '0';
     window.removeEventListener('keydown', this._boundKeyHandler);
     // Defensive: if an external state change hides the menu mid-departure,
-    // cancel the pending MENU_START emit + clear the flag so the timer can't
-    // fire a stray second MENU_START later. (Normal flow completes via
-    // _finishDeparture() before any hide, so this only matters on odd paths.)
-    if (this._departTimer) { clearTimeout(this._departTimer); this._departTimer = null; }
-    this._departing = false;
-    this._departEvent = null;
-    if (this._skipClickHandler) {
-      window.removeEventListener('pointerdown', this._skipClickHandler, true);
-      this._skipClickHandler = null;
-    }
+    // cancel the pending emit + clear the flags so the timer can't fire a stray
+    // second event later. (Normal flow completes via _finishDeparture() before
+    // any hide, so this only matters on odd paths.) NOTE: the departure CSS
+    // (plate/pointer-events) is intentionally left in place — it must persist
+    // through this opacity fade so the reveal stays clear; show() restores it.
+    this._resetDepartureState();
     this._closeLangMenu();
     if (this._hideLoreTip) this._hideLoreTip();
     // Stop 3D scene
