@@ -220,6 +220,10 @@ export const Events = {
   // MENU_CONTINUE, which fire at the END). Drives the departure audio pad swell
   // (T10). { event } = the terminal event that will fire.
   MENU_DEPARTURE_START: 'menu:departureStart',
+  // Emitted once at ~65% of the departure pull-back (deep-polish-4 T4). Lets the
+  // sim unhide the real player ship EARLY — while the receding menu hero still
+  // masks it — so the swap at the cut has no visibility pop / first-render hitch.
+  MENU_DEPARTURE_REVEAL: 'menu:departureReveal',
   BRIEFING_COMMENCE:  'briefing:commence',
   BRIEFING_SKIP:      'briefing:skip',
   SHOP_DEPLOY:        'shop:deploy',

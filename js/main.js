@@ -1154,6 +1154,14 @@ async function init() {
     }
   });
 
+  // T4: reveal the real player ship EARLY — at ~65% of the menu→sim pull-back,
+  // while still in MENU — so it is rendered + lit behind the receding hero and
+  // the swap at the cut has no visibility pop / first-render hitch. Idempotent
+  // with the GAME_STATE_CHANGE unhide that follows at MENU_START.
+  eventBus.on(Events.MENU_DEPARTURE_REVEAL, () => {
+    _setPlayerShipHidden(false);
+  });
+
   window.addEventListener('resize', onResize);
 
   // --- PR 3 / P1.4: Pause render loop on hidden tab to save CPU/GPU and prevent

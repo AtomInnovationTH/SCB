@@ -34,6 +34,9 @@ export class MenuScreen {
     // the pending emit so a skip can cancel + fire it immediately.
     this._departing = false;
     this._departTimer = null;
+    // T4: one-shot timer that fires MENU_DEPARTURE_REVEAL at ~65% of the
+    // pull-back so the sim unhides the real ship while the hero still masks it.
+    this._revealTimer = null;
     // Which event _finishDeparture emits (MENU_START for new game, MENU_CONTINUE
     // for a returning player — T8). Set when a departure begins.
     this._departEvent = null;
@@ -835,6 +838,14 @@ export class MenuScreen {
     // back so the hero recedes toward the live scene.
     if (this._menuScene3D) this._menuScene3D.beginDeparture(cameraDur);
     this._departing = true;
+    // T4: reveal the real player ship EARLY (~65% through the pull-back) so it is
+    // rendered + lit behind the still-frame-filling hero — the cut then has no
+    // visibility pop. One-shot; cleared by _resetDepartureState (skip cancels it,
+    // and MENU_START's own GAME_STATE_CHANGE unhide covers the skipped path).
+    this._revealTimer = setTimeout(() => {
+      this._revealTimer = null;
+      eventBus.emit(Events.MENU_DEPARTURE_REVEAL);
+    }, Math.round(durationMs * 0.65));
     // Stage 3 handoff: emit the target event near the end of the pull-back. The
     // gameplay scene is already rendering behind the transparent menu; hide()
     // then cross-fades the plate to 0.
@@ -880,6 +891,10 @@ export class MenuScreen {
     if (this._departTimer) {
       clearTimeout(this._departTimer);
       this._departTimer = null;
+    }
+    if (this._revealTimer) {
+      clearTimeout(this._revealTimer);
+      this._revealTimer = null;
     }
     if (this._skipClickHandler) {
       window.removeEventListener('pointerdown', this._skipClickHandler, true);
