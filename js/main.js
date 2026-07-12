@@ -1162,6 +1162,42 @@ async function init() {
     _setPlayerShipHidden(false);
   });
 
+  // #5 (deep-polish-4): power-up FLASH mask at the menu→sim cut. A brief blue-white
+  // "reactor ignition" surge, centered on the ship, that spans the handoff frame —
+  // masking the residual orientation/face-flip discontinuity that the size
+  // match-cut + partial de-roll don't cover. Narratively it IS the ship powering
+  // up ("Powering up. Telemetry online, Cowboy."). DOM overlay so it sits over
+  // BOTH the menu's last frame and the sim's first frames. Gentler under
+  // prefers-reduced-motion (a soft veil, not a bright pulse).
+  let _powerupFlashEl = null;
+  const _triggerPowerupFlash = () => {
+    if (!_powerupFlashEl) {
+      _powerupFlashEl = document.createElement('div');
+      _powerupFlashEl.id = 'powerup-flash';
+      _powerupFlashEl.style.cssText = [
+        'position:fixed', 'inset:0', 'pointer-events:none', 'z-index:9998',
+        'opacity:0', 'mix-blend-mode:screen',
+        'background:radial-gradient(circle at 50% 58%,' +
+          ' rgba(206,228,255,0.95) 0%, rgba(120,178,255,0.42) 34%, rgba(48,96,190,0) 70%)',
+      ].join(';');
+      document.body.appendChild(_powerupFlashEl);
+    }
+    const reduced = !!(window.matchMedia
+      && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    const peak = reduced ? 0.34 : 0.92;
+    const fade = reduced ? 0.28 : 0.36;
+    const el = _powerupFlashEl;
+    el.style.transition = 'none';
+    el.style.opacity = String(peak);
+    void el.offsetHeight;            // force reflow so the peak applies before the fade
+    requestAnimationFrame(() => {
+      el.style.transition = `opacity ${fade}s ease-out`;
+      el.style.opacity = '0';
+    });
+  };
+  eventBus.on(Events.MENU_START, _triggerPowerupFlash);
+  eventBus.on(Events.MENU_CONTINUE, _triggerPowerupFlash);
+
   window.addEventListener('resize', onResize);
 
   // --- PR 3 / P1.4: Pause render loop on hidden tab to save CPU/GPU and prevent
