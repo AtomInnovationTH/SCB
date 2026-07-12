@@ -377,6 +377,31 @@ export class BriefingScreen {
     this.visible = true;
     this.element.style.display = 'flex';
     this.element.style.opacity = '1';
+    // T10 — briefing card entrance: a 280ms slide-up + fade of the card panel
+    // (the scrim fades via the shell's own opacity transition). Gives the card
+    // a deliberate "uplink arriving" beat instead of a hard pop. Honors
+    // prefers-reduced-motion (snap to final state, no transform).
+    const panel = this.element.querySelector('#briefing-card-panel');
+    if (panel) {
+      const reduced = !!(window.matchMedia &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+      if (reduced) {
+        panel.style.transition = 'none';
+        panel.style.transform = 'none';
+        panel.style.opacity = '1';
+      } else {
+        panel.style.transition = 'none';
+        panel.style.transform = 'translateY(26px)';
+        panel.style.opacity = '0';
+        void panel.offsetHeight; // force reflow so the start state applies
+        requestAnimationFrame(() => {
+          panel.style.transition =
+            'transform 0.28s cubic-bezier(0.22,0.61,0.36,1), opacity 0.28s ease-out';
+          panel.style.transform = 'translateY(0)';
+          panel.style.opacity = '1';
+        });
+      }
+    }
     // Listen for keyboard input while briefing is shown
     window.addEventListener('keydown', this._boundKeyHandler);
   }
