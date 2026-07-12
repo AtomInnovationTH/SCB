@@ -772,12 +772,15 @@ export class CameraSystem {
       this._thrustVisualDir = null;
     }
 
-    // Menu→sim intro offset decay — ease straight back to normal (no hold). The
-    // ease begins the moment startIntroZoom() sets _introScale > 1.0.
-    if (this._introScale > 1.001) {
+    // Menu→sim intro offset decay — ease straight back to normal formation (no
+    // hold). Bidirectional: startIntroZoom() may set _introScale ABOVE 1.0
+    // (start wide, zoom in) or BELOW 1.0 (start close, pull back — the measured
+    // match-cut, since the menu hero fills the frame at the handoff). The ease
+    // begins the moment startIntroZoom() moves _introScale off 1.0.
+    if (Math.abs(this._introScale - 1.0) > 0.001) {
       const easeRate = Constants.EARTH.INTRO_EASE_RATE;
       this._introScale += (1.0 - this._introScale) * Math.min(1, easeRate * dt);
-      if (this._introScale < 1.001) this._introScale = 1.0;
+      if (Math.abs(this._introScale - 1.0) < 0.001) this._introScale = 1.0;
     }
 
     // Sync the ship light rig each frame. Both lights are distance-limited (see

@@ -167,7 +167,7 @@ export const Constants = {
     //     (match-cut, Option A). 1.0 = no zoom.
     //   INTRO_EASE_RATE   — per-second exponential ease rate back to 1.0
     //     (settle ~1.5-2 s so it overlaps the HUD power-on stagger).
-    INTRO_START_SCALE: 1.8,
+    INTRO_START_SCALE: 0.30,
     INTRO_EASE_RATE: 1.35,
   },
 
