@@ -1068,7 +1068,12 @@ export class MenuScene3D {
     this.camera.lookAt(0, -0.05, 0);
 
     // ── Lighting ──
-    // Sun (strong directional)
+    // Sun (strong directional). T9 (deep-polish-4) evaluated aligning this to the
+    // sim sun direction (SunLight.js (1,0.3,0.5)) for lit-side continuity across
+    // the cut, but the captures showed the gain is marginal — the shading change
+    // at the handoff is dominated by the camera swing (front-right hero → behind
+    // chase), not the ~16.5° sun delta — while the aligned light slightly
+    // over-shadowed the art-directed hero. Kept the tuned hero key light.
     const sun = new THREE.DirectionalLight(0xfff8ec, 2.5);
     sun.position.set(5, 3, 4);
     this.scene.add(sun);
