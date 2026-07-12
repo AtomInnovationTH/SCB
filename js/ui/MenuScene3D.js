@@ -240,7 +240,10 @@ function buildEVABoot(mat) {
   const shapeFrom = (pts) => {
     const s = new THREE.Shape();
     s.moveTo(pts[0][0] * S, pts[0][1] * S);
-    for (let i = 1; i < pts.length; i++) s.lineTo(pts[i][0] * S, pts[i][1] * S);
+    // splineThru (Catmull-Rom) instead of straight lineTo segments so the boot
+    // silhouette reads as a ROUNDED soft-goods bootie, not a faceted wedge —
+    // curveSegments below then tessellates the smooth outline. Near-zero cost.
+    s.splineThru(pts.slice(1).map((p) => new THREE.Vector2(p[0] * S, p[1] * S)));
     s.closePath();
     return s;
   };
@@ -258,17 +261,18 @@ function buildEVABoot(mat) {
   };
 
   // Side profile (Z_boot, Y_boot): rounded heel, low ankle column, instep slope,
-  // and a blunt toe with a GENTLE up-curl (toe-spring). Wide and short — a chunky
-  // bootie, not a tall narrow boot.
+  // and a blunt ROUNDED toe (EMU booties are bulbous, not pointed). Wide + short
+  // — a chunky bootie, not a tall narrow boot. splineThru rounds these into a
+  // smooth soft-goods outline.
   const upper = [
     [-0.085, -0.080], [-0.098, -0.030], [-0.092, 0.020], [-0.065, 0.052],
-    [ 0.005,  0.058], [ 0.070,  0.020], [ 0.140, -0.005],
-    [ 0.200,  0.012], [ 0.218, -0.030], [ 0.180, -0.080],
+    [ 0.005,  0.058], [ 0.075,  0.028], [ 0.140,  0.004],
+    [ 0.184,  0.000], [ 0.202, -0.038], [ 0.182, -0.082],
   ];
   // Curved outsole band — thin, gentle toe lift.
   const soleP = [
-    [-0.087, -0.050], [-0.087, -0.086], [0.180, -0.086],
-    [ 0.220, -0.040], [ 0.200, -0.005], [0.140, -0.050],
+    [-0.087, -0.050], [-0.087, -0.086], [0.182, -0.086],
+    [ 0.208, -0.048], [ 0.192, -0.010], [0.140, -0.052],
   ];
 
   const footUpper = new THREE.Mesh(extrude(upper, 0.150, 0.024), mat.boot);
@@ -637,8 +641,10 @@ function buildAstronaut(mat, flagCode = 'USA') {
   for (const side of [-1, 1]) {
     const legGroup = new THREE.Group();
     legGroup.position.set(side * M * 0.085, M * 0.0, 0);
-    legGroup.rotation.z = side * 0.12;                       // splay apart at the hips
-    legGroup.rotation.x = side < 0 ? -0.04 : -0.24;          // asymmetric hip flex
+    legGroup.rotation.z = side * 0.13;                       // splay apart at the hips
+    // Micro-g float: thighs flexed FORWARD (toward the work), asymmetric so she
+    // isn't a rigid standing figure — one leg tucks more than the other.
+    legGroup.rotation.x = side < 0 ? -0.20 : -0.44;
 
     // Soft fabric hip/brief bulge (no shiny bearing on the leg itself)
     const hip = new THREE.Mesh(new THREE.SphereGeometry(M * 0.10, 10, 8), mat.suitWhite);
@@ -655,7 +661,7 @@ function buildAstronaut(mat, flagCode = 'USA') {
     const kneeY = -M * 0.43;
     const shankGroup = new THREE.Group();
     shankGroup.position.y = kneeY;
-    shankGroup.rotation.x = side < 0 ? 0.55 : 0.28;
+    shankGroup.rotation.x = side < 0 ? 0.72 : 0.48;         // knees bent (floating, not standing)
 
     const shin = new THREE.Mesh(
       new THREE.CylinderGeometry(M * 0.094, M * 0.082, M * 0.40, 14), mat.suitWhite);
