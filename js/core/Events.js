@@ -224,6 +224,10 @@ export const Events = {
   // sim unhide the real player ship EARLY — while the receding menu hero still
   // masks it — so the swap at the cut has no visibility pop / first-render hitch.
   MENU_DEPARTURE_REVEAL: 'menu:departureReveal',
+  // Emitted per SAFER cold-gas puff during the astronaut jet-off exit
+  // (deep-polish-4 T6). Drives a tiny filtered-noise "pfft"; fires only on the
+  // full new-game exit (not continue/reduced). noAudio-safe via AudioSystem.
+  MENU_EVA_PUFF: 'menu:evaPuff',
   BRIEFING_COMMENCE:  'briefing:commence',
   BRIEFING_SKIP:      'briefing:skip',
   SHOP_DEPLOY:        'shop:deploy',

@@ -1803,6 +1803,9 @@ export class MenuScene3D {
     puff.material.opacity = 0.85;
     puff.scale.setScalar(M * 0.05);
     ex.puffAge[i] = 0.0001; // > 0 marks active
+    // T6: cold-gas "pfft" audio, synced to the visual puff. Event-driven so it
+    // only fires on the full jet-off exit (not continue/reduced); noAudio-safe.
+    eventBus.emit(Events.MENU_EVA_PUFF);
   }
 
   /** @private Expand + fade active cold-gas puffs (~0.3 s each). */

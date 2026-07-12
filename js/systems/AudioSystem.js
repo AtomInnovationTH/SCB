@@ -379,6 +379,12 @@ class AudioSystem {
       this.playCommsCrackle();
     });
 
+    // T6 — SAFER cold-gas puff "pfft" during the astronaut jet-off exit. One per
+    // puff (fires only on the full new-game exit). Gates on this.available.
+    eventBus.on(Events.MENU_EVA_PUFF, () => {
+      this.playEvaPuff();
+    });
+
     // === Phase R9 event wiring ===
 
     // ΔV telemetry → 4-tier urgency alarm + thruster sputtering + ambient modulation
@@ -2319,6 +2325,38 @@ class AudioSystem {
       osc.start(start);
       osc.stop(start + 0.07);
     });
+  }
+
+  /**
+   * T6 — SAFER cold-gas puff: a tiny highpassed-noise "pfft" (~0.05 s, quiet),
+   * layered under the departure pad swell as the astronaut thrusters fire on her
+   * jet-off exit. Deliberately subtle — a texture cue, not a bang.
+   */
+  playEvaPuff() {
+    if (!this.available) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+    const dur = 0.06;
+    const bufSize = Math.ceil(ctx.sampleRate * dur);
+    const buf = ctx.createBuffer(1, bufSize, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
+    const noise = ctx.createBufferSource();
+    noise.buffer = buf;
+    // Highpass ~3 kHz → thin, gassy hiss rather than a low thud.
+    const hp = ctx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.value = 3000;
+    hp.Q.value = 0.5;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.exponentialRampToValueAtTime(0.045, now + 0.008); // quiet, fast attack
+    g.gain.exponentialRampToValueAtTime(0.0008, now + dur);
+    noise.connect(hp);
+    hp.connect(g);
+    g.connect(this.sfxBus);
+    noise.start(now);
+    noise.stop(now + dur + 0.02);
   }
 
   /**

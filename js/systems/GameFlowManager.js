@@ -220,6 +220,17 @@ class GameFlowManager {
           // Retimed off the removed 4 s hold; staggered so nothing arrives as a
           // wall. owner=this for grouped teardown; inner guards no-op on state
           // change (these are first-run intro callbacks).
+          // T6: "EVA crew clear." lands first (handoff+~0.3s) — the acknowledgment
+          // that the astronaut cleared the hull, which is what UNLOCKS the power-up
+          // (the existing "Powering up..." boot line then reads as the result).
+          // Tagged _onboarding so it passes the tier-0 suppression gate during the
+          // OnboardingDirector intro (raw HOUSTON lines are muted at tier 0).
+          timerManager.setTimeout(() => {
+            eventBus.emit(Events.COMMS_MESSAGE, {
+              source: 'HOUSTON', channel: 'CMD', priority: 'info',
+              text: 'EVA crew clear.', _onboarding: true,
+            });
+          }, 300, { owner: this });
           timerManager.setTimeout(() => {
             eventBus.emit(Events.COMMS_OPENED);
             eventBus.emit(Events.COMMS_MESSAGE, {
