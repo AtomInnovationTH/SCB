@@ -56,31 +56,44 @@ const SPARK_SPEED = 2.80;     // fast — sparks streak away before accumulating
 const SPARK_LIFE  = 0.45;     // short — die quickly for crisp look
 
 // ─── T5 astronaut exit-beat tunables (deep-polish-4) ────────────────────────
-// Beat-sheet timings are in ABSOLUTE departure seconds (see _updateAstronautExit).
+// Beat timings are FRACTIONS of the departure duration (see _updateAstronautExit),
+// so the whole cinematic scales with _departureDur — lengthen the departure and
+// every beat slows in proportion.
 const EXIT_TURN_Y   = 0.52;   // acknowledgment turn about Y (~30°), toward camera
 const EXIT_ARM_TUCK = -0.42;  // welding-arm shoulder pitch delta (tucks tool to chest)
 const EXIT_BODY_ROLL = 0.12;  // slight roll during translation (not a rigid statue)
+const BEAT_TURN_START   = 0.08;  // fraction of dur — glance-back begins
+const BEAT_TURN_END     = 0.34;  // glance-back complete
+const BEAT_TETHER_START = 0.31;  // umbilical pulls taut
+const BEAT_TETHER_END   = 0.45;  // umbilical fully reeled
+const BEAT_JETOFF       = 0.47;  // cold-gas push-off begins
+const BEAT_ORIENT_GATE  = 0.50;  // de-roll / fly-around begins (AFTER push-off)
 // Jet-off is a Newtonian push-off: a brief cold-gas IMPULSE accelerates her to a
 // modest drift speed, then CONSTANT-velocity coast (no ease-in "whip"/yank). Speed
-// is stylized (~2 m/s) — faster than a real ~0.3 m/s EVA translation for screen
-// legibility, but not the ~6-12 m/s cartoon launch the old ease-in produced.
-const EXIT_JETOFF_START = 0.85;  // s — push-off begins (after turn + tether reel)
-const EXIT_DRIFT_SPEED  = 2.0;   // m/s constant drift after the impulse
-const EXIT_IMPULSE_RAMP = 0.22;  // s to accelerate from rest to drift speed
+// is stylized + slowed (~1.4 m/s) for a calm, legible drift over the longer ramp.
+const EXIT_DRIFT_SPEED  = 1.4;   // m/s constant drift after the impulse
+const EXIT_IMPULSE_RAMP = 0.30;  // s to accelerate from rest to drift speed
 // Drift direction: screen DOWN-and-RIGHT. She welds on the camera-near (+X) side,
 // so drifting toward the lower-right carries her off the near edge WITHOUT crossing
 // in front of the hull (screen up-left, the old vector, crossed the silhouette).
 const EXIT_RIGHT_BIAS = 0.86;
 const EXIT_DOWN_BIAS  = 0.52;
-// #5 orientation-continuity (deep-polish-4). As the departure ramps, migrate the
-// camera sway centre toward the sim's slightly-above-behind chase view and gently
-// de-roll the hero toward the sim orientation (gated to AFTER the astronaut jets
-// off — see _tick). Softens the roll/viewpoint jolt; the power-up flash masks the
-// residual face-flip. All modest by design (a big swing would read as a whirl).
+// #5 orientation-continuity (deep-polish-4). TWO treatments, chosen at RANDOM per
+// new-game departure (see beginDeparture → this._orientMode):
+//   'partial'   — migrate the camera sway centre modestly toward the sim view +
+//                 gently de-roll (~28°, gated after push-off); a power-up FLASH
+//                 (main.js) masks the residual face-flip. Keeps the scale-reference
+//                 hero framing longest. Lower risk.
+//   'flyaround' — the camera ARCS fully behind the ship while the hull de-rolls to
+//                 native orientation, so the cut is orientation-seamless; the
+//                 astronaut dissolves out. No flash. Showpiece, higher risk.
+// Continue/reduced always use 'partial' framing (no roll change).
 const MOTHER_BASE_ROLL_Z = -Math.PI / 2;   // the menu build roll (wings vertical)
-const EXIT_DEROLL      = Math.PI / 6.4;      // ~28° de-roll toward horizontal wings
-const EXIT_CAM_ANG_END = 1.05;               // sway-centre azimuth at the cut (from 0.5)
-const EXIT_CAM_CAMY_END = 0.45;              // sway-centre elevation at the cut (from 0.85)
+const EXIT_DEROLL       = Math.PI / 6.4;    // 'partial': ~28° de-roll toward horizontal
+const EXIT_CAM_ANG_END  = 1.05;             // 'partial': sway-centre azimuth at the cut
+const EXIT_CAM_CAMY_END = 0.45;             // 'partial': sway-centre elevation at the cut
+const FLYAROUND_ANG_END  = -Math.PI / 2;    // 'flyaround': camera azimuth → directly behind
+const FLYAROUND_CAMY_END = 2.0;             // 'flyaround': slightly above (sim radial-above chase)
 
 // ─── Menu render quality per tier ───────────────────────────────────────────
 // The menu hero is a SINGLE ship on an otherwise empty scene — it has none of
@@ -1043,6 +1056,11 @@ export class MenuScene3D {
     this._tetherCoil = null;
     this._exitPuffs = [];
     this._exit = null;
+    // #5: per-departure orientation treatment ('partial' | 'flyaround'), chosen
+    // at random in beginDeparture. Opacity-dissolve state for the fly-around exit.
+    this._orientMode = 'partial';
+    this._astroMats = null;
+    this._astroFaded = false;
 
     // Frame gate — the menu hero render loop is capped to ~60 fps (30 under
     // reduced motion) so it doesn't run at 120 fps on ProMotion displays while
@@ -1517,11 +1535,19 @@ export class MenuScene3D {
     this._exit = {
       sparkBurstDone: false,
       fullExit: this._departureDur >= 1.0,
-      exitDir: null,       // cached screen up-left world vector (set at jet-off)
+      exitDir: null,       // cached screen down-right world vector (set at jet-off)
       tetherRemoved: false,
       puffFired: [false, false],
       puffAge: [0, 0],
     };
+    // #5: randomly pick the orientation treatment for THIS departure. Only the
+    // full new-game exit gets the seamless fly-around; continue/reduced stay on
+    // the safer 'partial' framing. main.js listens for MENU_ORIENT_MODE to know
+    // whether to fire the power-up flash ('partial' only — the fly-around is
+    // seamless and needs no mask).
+    this._orientMode = (this._exit.fullExit && !this._reducedMotion && Math.random() < 0.5)
+      ? 'flyaround' : 'partial';
+    eventBus.emit(Events.MENU_ORIENT_MODE, { mode: this._orientMode });
   }
 
   /**
@@ -1557,11 +1583,39 @@ export class MenuScene3D {
       this._astro.rotation.z = this._astroBaseRotZ;
     }
     if (this._astroWeldArm) this._astroWeldArm.rotation.x = this._weldArmBaseRotX;
+    this._setAstroOpacity(1);   // undo any fly-around exit dissolve
+    if (this._mother) this._mother.rotation.z = MOTHER_BASE_ROLL_Z; // undo any de-roll
     if (this._exitPuffs) {
       for (const p of this._exitPuffs) { p.visible = false; p.material.opacity = 0; }
     }
     // Rebuild the tether if a prior exit removed/retracted it.
     this._rebuildTether(0);
+  }
+
+  /**
+   * @private Set the astronaut's overall opacity (0-1). Lazily collects her
+   * unique materials once. k<1 flips them to transparent (+depthWrite off to
+   * avoid sort artifacts); k≈1 restores fully opaque. Used for the fly-around
+   * exit dissolve; a no-op guard avoids thrashing material flags every frame.
+   */
+  _setAstroOpacity(k) {
+    if (!this._astro) return;
+    if (!this._astroMats) {
+      this._astroMats = new Set();
+      this._astro.traverse((o) => {
+        if (!o.material) return;
+        (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => this._astroMats.add(m));
+      });
+    }
+    const opaque = k >= 0.999;
+    if (opaque && this._astroFaded === false) return;
+    this._astroFaded = !opaque;
+    this._astroMats.forEach((m) => {
+      m.transparent = !opaque;
+      m.opacity = k;
+      m.depthWrite = opaque;
+      m.needsUpdate = true;
+    });
   }
 
   /** True while the departure ramp is in progress. */
@@ -1656,50 +1710,55 @@ export class MenuScene3D {
 
     // Camera — a slow, eased SWAY across the work side (not a full 360° spin),
     // so the welding astronaut + arc stay the framed centerpiece at all times.
-    // Centre angle ~0.5 rad puts the camera in the +X/+Z front-right octant
-    // looking back at the weld; the gentle vertical bob adds life.
-    // prefers-reduced-motion: freeze at the sway centre (but still land on the
-    // departure-biased end pose below so the reduced-motion cut is matched too).
+    // Centre angle ~0.5 rad puts the camera in the +X/+Z front-right octant.
     // During departure the orbit radius eases 5.5 → 8 so the hero recedes.
     const orbitR = this._departureBaseOrbitR +
       (this._departureOrbitR - this._departureBaseOrbitR) * dep;
-    // #5 (deep-polish-4): migrate the sway CENTRE toward the sim chase view as the
-    // departure ramps (dep 0→1) — swing a little toward the aft side and drop the
-    // elevation to the sim's near-level, slightly-above-behind chase — and DAMP
-    // the sway amplitude to ~0 at the cut so the final menu frame is steady and
-    // closer to the sim's first frame (softens the orientation jolt; the power-up
-    // flash in main.js masks the residual face-flip).
-    const angCentre  = 0.5  + (EXIT_CAM_ANG_END  - 0.5)  * dep;
-    const camYCentre = 0.85 + (EXIT_CAM_CAMY_END - 0.85) * dep;
-    const swayDamp = 1 - dep * 0.85;
-    if (this._reducedMotion) {
-      this.camera.position.set(Math.cos(angCentre) * orbitR, camYCentre, Math.sin(angCentre) * orbitR);
-    } else {
+    // #5 orientation continuity — two randomly-chosen treatments (full new-game
+    // exit only; continue/reduced use 'partial'). `bt` is the normalized beat
+    // clock (fraction of dur); the orientation move is gated to BEAT_ORIENT_GATE
+    // (after the push-off) so the hull never rotates while she's still anchored.
+    const bt = this._departure ? this._departure.t / this._departureDur : 0;
+    const orientGate = _clamp01((bt - BEAT_ORIENT_GATE) / Math.max(0.001, 1 - BEAT_ORIENT_GATE));
+    const flyaround = this._orientMode === 'flyaround'
+      && this._departure && !this._reducedMotion && this._exit && this._exit.fullExit;
+
+    if (flyaround) {
+      // 'flyaround': camera ARCS behind + hull FULLY de-rolls in lockstep, look
+      // target recenters on the hull, sway damps to 0 → the last menu frame lands
+      // on the sim chase framing (seamless). She dissolves out over the final 10%.
+      const fa = orientGate * orientGate * (3 - 2 * orientGate);   // smoothstep
+      const angCentre  = 0.5  + (FLYAROUND_ANG_END  - 0.5)  * fa;
+      const camYCentre = 0.85 + (FLYAROUND_CAMY_END - 0.85) * fa;
+      const swayDamp = 1 - fa;
       const ang  = angCentre  + Math.sin(this._orbitAngle * 0.16) * 0.62 * swayDamp;
       const camY = camYCentre + Math.sin(this._orbitAngle * 0.12) * 0.42 * swayDamp;
-      this.camera.position.set(
-        Math.cos(ang) * orbitR,
-        camY,
-        Math.sin(ang) * orbitR,
-      );
-    }
-    this.camera.lookAt(this._lookTarget);   // work site (weld / astronaut)
-
-    // #5: gated partial DE-ROLL of the hero toward the sim orientation. Starts
-    // ONLY after the astronaut has jetted off (EXIT_JETOFF_START) — her placement
-    // is a fixed build-time hinge-snap, so rolling the ship while she's anchored
-    // would swing the hull out from under her. Ease-IN so most of the roll lands
-    // late, once she has drifted off-frame. Skipped under reduced motion (she
-    // never leaves) and on the short continue path (gate > its duration).
-    if (this._mother) {
-      let rollEase = 0;
-      if (this._departure && !this._reducedMotion && this._exit && this._exit.fullExit
-          && this._departureDur > EXIT_JETOFF_START) {
-        const rollT = _clamp01(
-          (this._departure.t - EXIT_JETOFF_START) / (this._departureDur - EXIT_JETOFF_START));
-        rollEase = rollT * rollT; // ease-in: gentle while she's still visible
+      this.camera.position.set(Math.cos(ang) * orbitR, camY, Math.sin(ang) * orbitR);
+      if (this._mother) this._mother.rotation.z = MOTHER_BASE_ROLL_Z * (1 - fa);
+      this.camera.lookAt(this._lookTarget.clone().multiplyScalar(1 - fa)); // → hull centre
+      const fadeStart = 0.90;   // fraction of dur
+      this._setAstroOpacity(bt >= fadeStart ? _clamp01(1 - (bt - fadeStart) / (1 - fadeStart)) : 1);
+    } else {
+      // 'partial': modest end-pose bias toward the sim view + a gentle ~28°
+      // de-roll (gated after push-off); the power-up flash (main.js) masks the
+      // residual face-flip. Reduced motion still lands on the biased end pose.
+      const angCentre  = 0.5  + (EXIT_CAM_ANG_END  - 0.5)  * dep;
+      const camYCentre = 0.85 + (EXIT_CAM_CAMY_END - 0.85) * dep;
+      const swayDamp = 1 - dep * 0.85;
+      if (this._reducedMotion) {
+        this.camera.position.set(Math.cos(angCentre) * orbitR, camYCentre, Math.sin(angCentre) * orbitR);
+      } else {
+        const ang  = angCentre  + Math.sin(this._orbitAngle * 0.16) * 0.62 * swayDamp;
+        const camY = camYCentre + Math.sin(this._orbitAngle * 0.12) * 0.42 * swayDamp;
+        this.camera.position.set(Math.cos(ang) * orbitR, camY, Math.sin(ang) * orbitR);
       }
-      this._mother.rotation.z = MOTHER_BASE_ROLL_Z + EXIT_DEROLL * rollEase;
+      this.camera.lookAt(this._lookTarget);   // work site (weld / astronaut)
+      let rollEase = 0;
+      if (this._departure && !this._reducedMotion && this._exit && this._exit.fullExit) {
+        rollEase = orientGate * orientGate;   // ease-in: gentle while she's still visible
+      }
+      if (this._mother) this._mother.rotation.z = MOTHER_BASE_ROLL_Z + EXIT_DEROLL * rollEase;
+      this._setAstroOpacity(1);   // 'partial' never dissolves
     }
 
     // Living hero — drive the Mother's OWN animators (nav-light blink/strobe,
@@ -1783,19 +1842,22 @@ export class MenuScene3D {
   }
 
   /**
-   * @private T5 — advance the astronaut exit keyframe machine off the ABSOLUTE
-   * departure seconds `t`. Returns the acknowledgment-turn ease (0→1) for the
-   * visor glint. Beat sheet:
-   *   0.00-0.15  arc snap + one final spark burst (arc handled in _tick)
-   *   0.15-0.60  torso/helmet turn toward camera + welding-arm tuck (+ glint)
-   *   0.55-0.82  umbilical pulls taut then reels into the pack (fullExit only)
-   *   0.85-...   SAFER puffs + Newtonian push-off (impulse→coast) down-and-right
+   * @private T5 — advance the astronaut exit keyframe machine. `t` is absolute
+   * departure seconds; beats are keyed to FRACTIONS of _departureDur (bt = t/dur)
+   * so the whole exit scales with the ramp length. Returns the turn ease (0→1)
+   * for the visor glint. Beat sheet (fractions of dur):
+   *   ~0            arc snap + one final spark burst (arc handled in _tick)
+   *   TURN_START..END   torso/helmet turn toward camera + welding-arm tuck (+glint)
+   *   TETHER_START..END umbilical pulls taut then reels into the pack (fullExit)
+   *   JETOFF..          SAFER puffs + Newtonian push-off (impulse→coast) down-right
    * Continue (short) departure plays turn only; she stays. fullExit gates the
    * reel + jet-off + removal.
    */
   _updateAstronautExit(t, dt) {
     const ex = this._exit;
     if (!ex || !this._astro || !this._astroBasePos) return 0;
+    const dur = this._departureDur;
+    const bt = t / dur;   // normalized beat clock (0→1) — beats scale with dur
 
     // Beat 1 — one final spark burst as the trigger releases.
     if (!ex.sparkBurstDone && t >= 0.02) {
@@ -1803,9 +1865,9 @@ export class MenuScene3D {
       if (this._sparkSystem) emitSparkBurst(this._sparkSystem, this._weldPos, 22);
     }
 
-    // Beat 2 — acknowledgment turn (~30°) + welding-arm tuck to chest. Eased
-    // over 0.45 s (a calm glance back, not a snap).
-    const turnE = _easeOutCubic(_clamp01((t - 0.15) / 0.45));
+    // Beat 2 — acknowledgment turn (~30°) + welding-arm tuck to chest (a calm
+    // glance back, not a snap).
+    const turnE = _easeOutCubic(_clamp01((bt - BEAT_TURN_START) / (BEAT_TURN_END - BEAT_TURN_START)));
     this._astro.rotation.y = this._astroBaseRotY + EXIT_TURN_Y * turnE;
     if (this._astroWeldArm) {
       this._astroWeldArm.rotation.x = this._weldArmBaseRotX + EXIT_ARM_TUCK * turnE;
@@ -1813,29 +1875,30 @@ export class MenuScene3D {
 
     if (!ex.fullExit) return turnE; // continue path: turn only, she stays
 
-    // Beat 3 — umbilical pulls taut then reels into the pack, 0.55-0.82 s.
-    if (!ex.tetherRemoved && t >= 0.55) {
-      const reel = _clamp01((t - 0.55) / 0.27);
+    // Beat 3 — umbilical pulls taut then reels into the pack.
+    if (!ex.tetherRemoved && bt >= BEAT_TETHER_START) {
+      const reel = _clamp01((bt - BEAT_TETHER_START) / (BEAT_TETHER_END - BEAT_TETHER_START));
       this._rebuildTether(reel);
       if (reel >= 1) { this._removeTether(); ex.tetherRemoved = true; }
     }
 
     // Beat 4 — jet-off: cold-gas puffs, then a Newtonian push-off (impulse ramp
     // then constant-velocity coast) drifting DOWN-and-RIGHT, off the near edge.
-    if (t >= EXIT_JETOFF_START) {
+    const jetoffT = BEAT_JETOFF * dur;   // absolute push-off time
+    if (t >= jetoffT) {
       if (!ex.exitDir) ex.exitDir = this._computeExitDir();
-      this._maybeFirePuff(0, EXIT_JETOFF_START + 0.04, t);
-      this._maybeFirePuff(1, EXIT_JETOFF_START + 0.20, t);
-      const tm = t - EXIT_JETOFF_START;                 // seconds since push-off
+      this._maybeFirePuff(0, jetoffT + 0.06, t);
+      this._maybeFirePuff(1, jetoffT + 0.28, t);
+      const tm = t - jetoffT;                            // seconds since push-off
       const v = EXIT_DRIFT_SPEED, ramp = EXIT_IMPULSE_RAMP;
       const dist = tm < ramp
-        ? 0.5 * (v / ramp) * tm * tm                    // impulse: x = ½at²
-        : 0.5 * v * ramp + v * (tm - ramp);             // then constant-velocity coast
+        ? 0.5 * (v / ramp) * tm * tm                     // impulse: x = ½at²
+        : 0.5 * v * ramp + v * (tm - ramp);              // then constant-velocity coast
       this._astro.position.copy(this._astroBasePos)
         .addScaledVector(ex.exitDir, dist);
       // Roll eases in over the push-off then holds (no accelerating spin).
       this._astro.rotation.z = this._astroBaseRotZ
-        + EXIT_BODY_ROLL * _easeOutCubic(_clamp01(tm / 0.5));
+        + EXIT_BODY_ROLL * _easeOutCubic(_clamp01(tm / 0.7));
     }
     this._updatePuffs(dt);
     return turnE;

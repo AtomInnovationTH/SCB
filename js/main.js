@@ -1162,15 +1162,18 @@ async function init() {
     _setPlayerShipHidden(false);
   });
 
-  // #5 (deep-polish-4): power-up FLASH mask at the menu→sim cut. A brief blue-white
-  // "reactor ignition" surge, centered on the ship, that spans the handoff frame —
-  // masking the residual orientation/face-flip discontinuity that the size
-  // match-cut + partial de-roll don't cover. Narratively it IS the ship powering
-  // up ("Powering up. Telemetry online, Cowboy."). DOM overlay so it sits over
-  // BOTH the menu's last frame and the sim's first frames. Gentler under
-  // prefers-reduced-motion (a soft veil, not a bright pulse).
+  // #5 (deep-polish-4): power-up FLASH mask at the menu→sim cut — but ONLY for the
+  // 'partial' orientation treatment. The randomly-chosen 'flyaround' treatment
+  // arcs the camera behind + de-rolls the hull so the cut is already orientation-
+  // seamless and needs no mask (a flash there would be gratuitous). MenuScene3D
+  // announces the per-departure mode via MENU_ORIENT_MODE. A brief blue-white
+  // "reactor ignition" surge, centered on the ship, spanning the handoff frame;
+  // narratively the ship powering up. Gentler under prefers-reduced-motion.
+  let _orientMode = 'partial';
+  eventBus.on(Events.MENU_ORIENT_MODE, ({ mode } = {}) => { _orientMode = mode || 'partial'; });
   let _powerupFlashEl = null;
   const _triggerPowerupFlash = () => {
+    if (_orientMode === 'flyaround') return;   // seamless — no mask needed
     if (!_powerupFlashEl) {
       _powerupFlashEl = document.createElement('div');
       _powerupFlashEl.id = 'powerup-flash';
@@ -1185,7 +1188,7 @@ async function init() {
     const reduced = !!(window.matchMedia
       && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
     const peak = reduced ? 0.34 : 0.92;
-    const fade = reduced ? 0.28 : 0.36;
+    const fade = reduced ? 0.28 : 0.42;
     const el = _powerupFlashEl;
     el.style.transition = 'none';
     el.style.opacity = String(peak);

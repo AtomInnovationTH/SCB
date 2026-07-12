@@ -790,11 +790,11 @@ export class MenuScreen {
     audioSystem.init();
     audioSystem.resume();
     audioSystem.playClick();
-    // New game → cinematic pull-back, then MENU_START. Retimed to ~2.1s in
-    // deep-polish-4 so the slowed, Newtonian astronaut exit (impulse→coast, no
-    // cartoon whip) has room to play and drift gracefully off-frame before the
-    // handoff. cameraDur (2.0s) also clamps the astronaut beat timeline.
-    this._beginDeparture(Events.MENU_START, 2100, 2.0);
+    // New game → cinematic pull-back, then MENU_START. ~50% slower (2.1→3.15s;
+    // cameraDur 2.0→3.0) so the astronaut exit + the orientation move (random
+    // partial-flash or fly-around) play calmly. cameraDur also clamps the
+    // fraction-based astronaut beat timeline.
+    this._beginDeparture(Events.MENU_START, 3150, 3.0);
   }
 
   /**

@@ -228,6 +228,11 @@ export const Events = {
   // (deep-polish-4 T6). Drives a tiny filtered-noise "pfft"; fires only on the
   // full new-game exit (not continue/reduced). noAudio-safe via AudioSystem.
   MENU_EVA_PUFF: 'menu:evaPuff',
+  // Emitted when a menu→sim departure begins, announcing the randomly-chosen
+  // orientation treatment (deep-polish-4 #5). { mode: 'partial' | 'flyaround' }.
+  // main.js fires the power-up cut flash only for 'partial' (the fly-around is
+  // orientation-seamless and needs no mask).
+  MENU_ORIENT_MODE: 'menu:orientMode',
   BRIEFING_COMMENCE:  'briefing:commence',
   BRIEFING_SKIP:      'briefing:skip',
   SHOP_DEPLOY:        'shop:deploy',
