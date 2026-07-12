@@ -790,8 +790,9 @@ export class MenuScreen {
     audioSystem.init();
     audioSystem.resume();
     audioSystem.playClick();
-    // New game → full 1.35s cinematic pull-back, then MENU_START.
-    this._beginDeparture(Events.MENU_START, 1350, 1.4);
+    // New game → cinematic pull-back (retimed 1350→1500ms in deep-polish-4 T5 so
+    // the astronaut exit beat has room), then MENU_START.
+    this._beginDeparture(Events.MENU_START, 1500, 1.4);
   }
 
   /**
@@ -915,6 +916,12 @@ export class MenuScreen {
     // the exactly-once guard and the target event survive the teardown.
     const wasDeparting = this._departing;
     const event = this._departEvent || Events.MENU_START; // default defensive
+    // T5: on a skip, jump the 3D hero + astronaut exit to their end state so a
+    // fast-forward doesn't freeze the astronaut mid-beat behind the revealed
+    // sim ship (the DOM side is handled by the reset + emit below).
+    if (skipped && wasDeparting && this._menuScene3D && this._menuScene3D.skipDeparture) {
+      this._menuScene3D.skipDeparture();
+    }
     this._resetDepartureState();
     if (!wasDeparting) return;
     eventBus.emit(event, { skipped: !!skipped });

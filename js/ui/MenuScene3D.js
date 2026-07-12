@@ -55,6 +55,15 @@ const SPARK_COUNT = 70;
 const SPARK_SPEED = 2.80;     // fast — sparks streak away before accumulating
 const SPARK_LIFE  = 0.45;     // short — die quickly for crisp look
 
+// ─── T5 astronaut exit-beat tunables (deep-polish-4) ────────────────────────
+// Beat-sheet timings are in ABSOLUTE departure seconds (see _updateAstronautExit).
+const EXIT_TURN_Y   = 0.52;   // acknowledgment turn about Y (~30°), toward camera
+const EXIT_ARM_TUCK = -0.42;  // welding-arm shoulder pitch delta (tucks tool to chest)
+const EXIT_DIST     = 4.6;    // menu units she translates up-and-left on jet-off
+const EXIT_BODY_ROLL = 0.14;  // slight roll during translation (not a rigid statue)
+const EXIT_LEFT_BIAS = 0.72;  // screen-left weight of the exit vector
+const EXIT_UP_BIAS   = 0.70;  // screen-up weight of the exit vector
+
 // ─── Menu render quality per tier ───────────────────────────────────────────
 // The menu hero is a SINGLE ship on an otherwise empty scene — it has none of
 // the main scene's fragment-bound cost (the Earth fullscreen atmosphere shader,
@@ -82,6 +91,10 @@ function menuQualityFor(tier) {
 // debris cloud, active satellites) shows through from the main renderer behind
 // it. No scene.background, no menu-local starfield — those would occlude or
 // double-up the reveal. See init(): scene.background = null + clear alpha 0.
+
+// ─── Small easing helpers (T5 exit beat) ────────────────────────────────────
+function _clamp01(x) { return x < 0 ? 0 : x > 1 ? 1 : x; }
+function _easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
 
 // ─── Soft additive glow sprite (weld pool / hot spot) ───────────────────────
 function makeGlowSprite() {
@@ -724,6 +737,11 @@ function buildAstronaut(mat, flagCode = 'USA') {
 
   lShoulder.add(flagGroup);   // child of arm group — rotates with the arm
 
+  // T5 (deep-polish-4) exit-beat handles: the welding arm (tucks to chest on the
+  // acknowledgment turn) and the SAFER pack (cold-gas puff anchor at jet-off).
+  astro.userData.weldArm = rShoulder;
+  astro.userData.safer = safer;
+
   return astro;
 }
 
@@ -810,13 +828,14 @@ function emitSpark(spark) {
   spark.vz = Math.sin(phi) * Math.sin(theta) * spd * 0.65;
 }
 
-function updateSparks(sparkSystem, weldPos, dt) {
+function updateSparks(sparkSystem, weldPos, dt, emitRate = 30) {
   const { sparks, geo } = sparkSystem;
   const pos = geo.attributes.position.array;
   const col = geo.attributes.color.array;
   const siz = geo.attributes.size.array;
 
-  const emitRate = 30; // sparks/s — fast enough to look active, short life = no piling
+  // sparks/s — fast enough to look active, short life = no piling. emitRate 0
+  // (departure) integrates existing sparks to death without new emission.
   let toEmit = emitRate * dt;
 
   for (let i = 0; i < SPARK_COUNT; i++) {
@@ -892,6 +911,24 @@ function updateSparks(sparkSystem, weldPos, dt) {
   geo.attributes.size.needsUpdate     = true;
 }
 
+// T5 — one-shot spark burst (the "final spark" as the welder releases the
+// trigger). Emits up to n dead sparks at once from the weld tip.
+function emitSparkBurst(sparkSystem, weldPos, n) {
+  const { sparks, geo } = sparkSystem;
+  const pos = geo.attributes.position.array;
+  let emitted = 0;
+  for (let i = 0; i < sparks.length && emitted < n; i++) {
+    const s = sparks[i];
+    if (s.alive) continue;
+    emitSpark(s);
+    pos[i * 3]     = weldPos.x;
+    pos[i * 3 + 1] = weldPos.y;
+    pos[i * 3 + 2] = weldPos.z;
+    emitted++;
+  }
+  geo.attributes.position.needsUpdate = true;
+}
+
 
 // ═════════════════════════════════════════════════════════════════════════════
 
@@ -953,6 +990,22 @@ export class MenuScene3D {
     this._departureDur = 1.6;       // seconds (skippable)
     this._departureBaseOrbitR = 5.5;
     this._departureOrbitR = 8.0;
+
+    // ── T5 astronaut exit beat (deep-polish-4) ──
+    // Runtime refs + captured base poses populated in init(); the per-departure
+    // keyframe state lives on this._exit (created in beginDeparture).
+    this._astroWeldArm = null;
+    this._astroSafer = null;
+    this._astroBasePos = null;
+    this._astroBaseRotY = 0;
+    this._astroBaseRotZ = 0;
+    this._weldArmBaseRotX = 0;
+    this._tether = null;
+    this._tetherLocalWaist = null;
+    this._tetherEnd = null;
+    this._tetherRadius = 0;
+    this._exitPuffs = [];
+    this._exit = null;
 
     // Frame gate — the menu hero render loop is capped to ~60 fps (30 under
     // reduced motion) so it doesn't run at 120 fps on ProMotion displays while
@@ -1189,6 +1242,36 @@ export class MenuScene3D {
     tether.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
     this._pivot.add(tether);
 
+    // ── T5 astronaut-exit-beat handles (deep-polish-4) ──
+    // Capture base poses so the exit can animate from a known rest state and
+    // _resetAstronautExit() can restore them for a fresh MENU entry.
+    this._astroWeldArm = astro.userData.weldArm || null;
+    this._astroSafer = astro.userData.safer || null;
+    this._astroBasePos = astro.position.clone();
+    this._astroBaseRotY = astro.rotation.y;
+    this._astroBaseRotZ = astro.rotation.z;
+    this._weldArmBaseRotX = this._astroWeldArm ? this._astroWeldArm.rotation.x : 0;
+    // Tether refs for the reel-in (rebuilt per frame during the reel, disposed
+    // each rebuild). tetherEnd is the hull hardpoint that releases + retracts.
+    this._tether = tether;
+    this._tetherLocalWaist = new THREE.Vector3(0, M * 0.18, -M * 0.05); // astro-local
+    this._tetherEnd = tetherEnd.clone();
+    this._tetherRadius = M * 0.013;
+    // Cold-gas puff sprites (2), reused from the glow-sprite helper, tinted cool
+    // white. Hidden until the jet-off beat fires them.
+    this._exitPuffs = [];
+    for (let i = 0; i < 2; i++) {
+      const puff = makeGlowSprite();
+      puff.material.color = new THREE.Color(0xcfe4ff);
+      puff.material.opacity = 0;
+      puff.scale.setScalar(M * 0.05);
+      puff.visible = false;
+      this._pivot.add(puff);
+      this._exitPuffs.push(puff);
+    }
+    // Per-departure exit state (fire flags + cached exit vector). Reset each run.
+    this._exit = null;
+
     // Spark system
     this._sparkSystem = buildSparkSystem();
     this._pivot.add(this._sparkSystem.points);
@@ -1353,6 +1436,8 @@ export class MenuScene3D {
     // over a prior departure ramp — reset so the weld/glow/sparks + orbit
     // radius return to their idle values.
     this._departure = null;
+    this._exit = null;
+    this._resetAstronautExit();
     // Reset the frame gate so resume renders immediately rather than bursting.
     this._lastFrameT = 0;
     // The menu just became visible — force a correct size once layout is live
@@ -1387,6 +1472,58 @@ export class MenuScene3D {
     if (typeof durationSec === 'number' && durationSec > 0) {
       this._departureDur = durationSec;
     }
+    // T5: per-departure exit state. fullExit gates the tether-reel + jet-off +
+    // removal to the full new-game pull-back; a short (continue) departure plays
+    // arc-snap + acknowledgment turn only ("she stays"). Reduced motion skips
+    // the beat entirely (handled in _tick).
+    this._exit = {
+      sparkBurstDone: false,
+      fullExit: this._departureDur >= 1.0,
+      exitDir: null,       // cached screen up-left world vector (set at jet-off)
+      tetherRemoved: false,
+      puffFired: [false, false],
+      puffAge: [0, 0],
+    };
+  }
+
+  /**
+   * T5 — jump the departure + astronaut exit straight to their end state (arc
+   * off, astronaut cleared, dep = 1). Called when the player SKIPS the menu
+   * departure (MenuScreen fast-forward). The DOM side is handled by
+   * _finishDeparture; this makes the 3D hero match so a skip doesn't freeze the
+   * astronaut mid-beat behind the newly-revealed sim ship.
+   */
+  skipDeparture() {
+    if (!this._departure) return;
+    this._departure.t = this._departureDur;
+    if (this._exit && this._exit.fullExit && !this._reducedMotion) {
+      // Clear the astronaut + tether immediately (end state of the full exit).
+      if (this._astro) this._astro.visible = false;
+      this._removeTether();
+      this._exit.tetherRemoved = true;
+    }
+    if (this._weldLight) this._weldLight.intensity = 0;
+    if (this._weldGlow) this._weldGlow.material.opacity = 0;
+  }
+
+  /**
+   * @private Restore the astronaut + tether + puffs to their built rest state
+   * (fresh MENU entry). Undoes any in-flight exit-beat mutation so returning to
+   * the menu after a game shows the welding pose again, not the cleared frame.
+   */
+  _resetAstronautExit() {
+    if (this._astro) {
+      this._astro.visible = true;
+      if (this._astroBasePos) this._astro.position.copy(this._astroBasePos);
+      this._astro.rotation.y = this._astroBaseRotY;
+      this._astro.rotation.z = this._astroBaseRotZ;
+    }
+    if (this._astroWeldArm) this._astroWeldArm.rotation.x = this._weldArmBaseRotX;
+    if (this._exitPuffs) {
+      for (const p of this._exitPuffs) { p.visible = false; p.material.opacity = 0; }
+    }
+    // Rebuild the tether if a prior exit removed/retracted it.
+    this._rebuildTether(0);
   }
 
   /** True while the departure ramp is in progress. */
@@ -1511,39 +1648,205 @@ export class MenuScene3D {
       this._mother._animateRosaGlow?.(dt);
     }
 
-    // Weld arc flicker — arc welding pulse: mostly steady with occasional spikes.
-    // prefers-reduced-motion: hold a constant faint glow (no random flicker).
-    // During departure `depFade` ramps the arc out (the weld "stops").
+    // T5 astronaut exit beat (deep-polish-4). Keyframed off the ABSOLUTE
+    // departure seconds so the beat-sheet timings hold regardless of `dep`
+    // normalization. Reduced motion skips the beat (straight cut). Returns the
+    // acknowledgment-turn ease (0→1) so the visor glint can track it.
+    let exitTurn = 0;
+    if (this._departure && !this._reducedMotion) {
+      exitTurn = this._updateAstronautExit(this._departure.t, dt);
+    }
+
+    // Weld arc — normal welding is a flickering point light; at departure it
+    // SNAPS off (welders release the trigger; the luminance step is the exit's
+    // attention "bell"). Reduced motion keeps the old faint fade-with-dep.
     let arc = 0;
     if (this._weldLight) {
       this._weldLight.position.copy(this._weldPos);
-      if (this._reducedMotion) {
+      if (this._departure && !this._reducedMotion) {
+        this._weldLight.intensity = this._departure.t < 0.05 ? 1.1 : 0; // one last strike, then off
+      } else if (this._reducedMotion) {
         this._weldLight.intensity = 0.14 * depFade;   // steady faint arc, fading
       } else {
         const base  = 0.12 + Math.random() * 0.06;
         const spike = Math.random() < 0.16 ? (0.35 + Math.random() * 0.7) : 0.0;
-        arc = spike * depFade;
-        this._weldLight.intensity = (base + spike) * depFade;
+        arc = spike;
+        this._weldLight.intensity = base + spike;
       }
     }
 
-    // Molten weld-pool glow — opacity + size track the arc spikes (hot when
-    // striking, dim-red afterglow between strikes). Kept modest so it reads as
-    // a hot spot, not a flare. Reduced motion → static faint glow. Departure
-    // fades it out with the arc.
+    // Molten weld-pool glow. Idle: opacity/size track the arc spikes. Departure:
+    // a SLOW cooling decay (~1 s) decoupled from the arc snap — the pool stays
+    // hot a beat after the arc dies, then fades (cooling metal reads great).
     if (this._weldGlow) {
-      this._weldGlow.material.opacity = Math.min(0.7, 0.14 + arc * 0.32) * depFade;
-      this._weldGlow.scale.setScalar(M * (0.16 + arc * 0.05));
+      if (this._departure && !this._reducedMotion) {
+        const cool = Math.max(0, 1 - this._departure.t / 1.0);
+        this._weldGlow.material.opacity = 0.34 * cool * cool;   // ease-out cool
+        this._weldGlow.scale.setScalar(M * (0.16 * cool));
+      } else {
+        this._weldGlow.material.opacity = Math.min(0.7, 0.14 + arc * 0.32) * depFade;
+        this._weldGlow.scale.setScalar(M * (0.16 + arc * 0.05));
+      }
     }
 
-    // Sparks — suppressed entirely under reduced motion (no streaking particles)
-    // and once the departure ramp is well underway (the weld has stopped).
-    if (this._sparkSystem && !this._reducedMotion && dep < 0.5) {
-      updateSparks(this._sparkSystem, this._weldPos, dt);
+    // Visor glint on the acknowledgment turn — the arc is dead, so briefly lift
+    // the gold visor's emissive to a warm highlight as she turns toward camera
+    // (the scene key light alone is too weak at this distance). Peaks mid-turn.
+    if (this._visorMat) {
+      const glint = exitTurn > 0 ? Math.sin(Math.min(1, exitTurn) * Math.PI) : 0;
+      if (glint > 0.001) {
+        this._visorMat.emissive.setHex(0xffcf87);
+        this._visorMat.emissiveIntensity = glint * 0.6;
+      } else if (this._visorMat.emissiveIntensity !== 0) {
+        this._visorMat.emissiveIntensity = 0;
+      }
+    }
+
+    // Sparks — normal welding stream (idle). At departure: no new steady
+    // emission, but the one final burst (emitted in _updateAstronautExit) + its
+    // tail integrate to death. Suppressed entirely under reduced motion.
+    if (this._sparkSystem && !this._reducedMotion) {
+      if (!this._departure) {
+        updateSparks(this._sparkSystem, this._weldPos, dt);
+      } else if (this._departure.t < 0.9) {
+        updateSparks(this._sparkSystem, this._weldPos, dt, 0); // decay-only
+      }
     }
 
     if (this._composer) this._composer.render();
     else this.renderer.render(this.scene, this.camera);
+  }
+
+  /**
+   * @private T5 — advance the astronaut exit keyframe machine off the ABSOLUTE
+   * departure seconds `t`. Returns the acknowledgment-turn ease (0→1) for the
+   * visor glint. Beat sheet:
+   *   0.00-0.15  arc snap + one final spark burst (arc handled in _tick)
+   *   0.15-0.45  torso/helmet turn toward camera + welding-arm tuck (+ glint)
+   *   0.45-0.60  tether reel-in (fullExit only)
+   *   0.60-...   SAFER puffs + ease-in translation up-and-left + slight roll
+   * Continue (short) departure plays turn only; she stays. fullExit gates the
+   * reel + jet-off + removal.
+   */
+  _updateAstronautExit(t, dt) {
+    const ex = this._exit;
+    if (!ex || !this._astro || !this._astroBasePos) return 0;
+
+    // Beat 1 — one final spark burst as the trigger releases.
+    if (!ex.sparkBurstDone && t >= 0.02) {
+      ex.sparkBurstDone = true;
+      if (this._sparkSystem) emitSparkBurst(this._sparkSystem, this._weldPos, 22);
+    }
+
+    // Beat 2 — acknowledgment turn (~30°) + welding-arm tuck to chest.
+    const turnE = _easeOutCubic(_clamp01((t - 0.15) / 0.30));
+    this._astro.rotation.y = this._astroBaseRotY + EXIT_TURN_Y * turnE;
+    if (this._astroWeldArm) {
+      this._astroWeldArm.rotation.x = this._weldArmBaseRotX + EXIT_ARM_TUCK * turnE;
+    }
+
+    if (!ex.fullExit) return turnE; // continue path: turn only, she stays
+
+    // Beat 3 — tether reel-in (hull end retracts to the waist spool).
+    if (!ex.tetherRemoved && t >= 0.45) {
+      const reel = _clamp01((t - 0.45) / 0.15);
+      this._rebuildTether(reel);
+      if (reel >= 1) { this._removeTether(); ex.tetherRemoved = true; }
+    }
+
+    // Beat 4 — jet-off: cold-gas puffs, then ease-in translation up-and-left.
+    if (t >= 0.60) {
+      if (!ex.exitDir) ex.exitDir = this._computeExitDir();
+      this._maybeFirePuff(0, 0.65, t);
+      this._maybeFirePuff(1, 0.80, t);
+      const move = _clamp01((t - 0.60) / 0.75);
+      const moveE = move * move;                          // ease-in quad
+      this._astro.position.copy(this._astroBasePos)
+        .addScaledVector(ex.exitDir, EXIT_DIST * moveE);
+      this._astro.rotation.z = this._astroBaseRotZ + EXIT_BODY_ROLL * moveE;
+    }
+    this._updatePuffs(dt);
+    return turnE;
+  }
+
+  /**
+   * @private Compute the exit translation direction — screen up-and-left in
+   * world space, from the current camera framing (so she leads the eye away
+   * from the ship anchor + the igniting comms/dossier to the right).
+   */
+  _computeExitDir() {
+    const fwd = this._lookTarget.clone().sub(this.camera.position).normalize();
+    const right = fwd.clone().cross(new THREE.Vector3(0, 1, 0)).normalize();
+    const up = right.clone().cross(fwd).normalize();
+    return up.multiplyScalar(EXIT_UP_BIAS)
+      .addScaledVector(right, -EXIT_LEFT_BIAS)
+      .normalize();
+  }
+
+  /** @private Fire cold-gas puff `i` once, at t≥fireT, anchored on the SAFER. */
+  _maybeFirePuff(i, fireT, t) {
+    const ex = this._exit;
+    if (!ex || ex.puffFired[i]) return;
+    if (t < fireT) return;
+    ex.puffFired[i] = true;
+    const puff = this._exitPuffs[i];
+    if (!puff) return;
+    const anchor = new THREE.Vector3();
+    if (this._astroSafer) this._astroSafer.getWorldPosition(anchor);
+    else anchor.copy(this._astro.position);
+    // Offset toward the thrust side (opposite the exit vector) with a little
+    // per-pod spread so the two puffs don't stack.
+    if (ex.exitDir) anchor.addScaledVector(ex.exitDir, -M * 0.18);
+    anchor.x += (i === 0 ? -1 : 1) * M * 0.12;
+    puff.position.copy(anchor);
+    puff.visible = true;
+    puff.material.opacity = 0.85;
+    puff.scale.setScalar(M * 0.05);
+    ex.puffAge[i] = 0.0001; // > 0 marks active
+  }
+
+  /** @private Expand + fade active cold-gas puffs (~0.3 s each). */
+  _updatePuffs(dt) {
+    const ex = this._exit;
+    if (!ex) return;
+    for (let i = 0; i < this._exitPuffs.length; i++) {
+      if (ex.puffAge[i] <= 0) continue;
+      ex.puffAge[i] += dt;
+      const life = 0.32;
+      const a = ex.puffAge[i] / life;
+      const puff = this._exitPuffs[i];
+      if (a >= 1) { puff.visible = false; puff.material.opacity = 0; ex.puffAge[i] = 0; continue; }
+      puff.material.opacity = 0.85 * (1 - a);
+      puff.scale.setScalar(M * (0.05 + a * 0.22));    // expands as it dissipates
+    }
+  }
+
+  /**
+   * @private Rebuild the safety tether at reel progress `p` (0 = full slack,
+   * 1 = fully retracted). The hull hardpoint end retracts toward the astronaut's
+   * waist spool; the slack sag flattens as it reels. Disposes the previous
+   * geometry each rebuild (leak guard — ≤10 rebuilds over the 0.15 s reel).
+   */
+  _rebuildTether(p) {
+    const tether = this._tether;
+    if (!tether || !this._astro || !this._tetherEnd || !this._tetherLocalWaist) return;
+    if (p >= 0.999) { tether.visible = false; return; }
+    this._astro.updateWorldMatrix(true, false);
+    const waist = this._astro.localToWorld(this._tetherLocalWaist.clone());
+    const end = this._tetherEnd.clone().lerp(waist, p);
+    const mid = waist.clone().add(end).multiplyScalar(0.5);
+    mid.y -= M * 0.22 * (1 - p);   // slack sag flattens as it retracts
+    mid.x += M * 0.10 * (1 - p);
+    const curve = new THREE.CatmullRomCurve3([waist, mid, end]);
+    const oldGeo = tether.geometry;
+    tether.geometry = new THREE.TubeGeometry(curve, 24, this._tetherRadius, 6, false);
+    if (oldGeo && oldGeo.dispose) oldGeo.dispose();
+    tether.visible = true;
+  }
+
+  /** @private Hide the tether (end state of the reel-in). */
+  _removeTether() {
+    if (this._tether) this._tether.visible = false;
   }
 
   _onResize(canvas) {
