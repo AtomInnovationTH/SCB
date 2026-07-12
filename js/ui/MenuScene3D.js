@@ -59,10 +59,19 @@ const SPARK_LIFE  = 0.45;     // short — die quickly for crisp look
 // Beat-sheet timings are in ABSOLUTE departure seconds (see _updateAstronautExit).
 const EXIT_TURN_Y   = 0.52;   // acknowledgment turn about Y (~30°), toward camera
 const EXIT_ARM_TUCK = -0.42;  // welding-arm shoulder pitch delta (tucks tool to chest)
-const EXIT_DIST     = 4.6;    // menu units she translates up-and-left on jet-off
-const EXIT_BODY_ROLL = 0.14;  // slight roll during translation (not a rigid statue)
-const EXIT_LEFT_BIAS = 0.72;  // screen-left weight of the exit vector
-const EXIT_UP_BIAS   = 0.70;  // screen-up weight of the exit vector
+const EXIT_BODY_ROLL = 0.12;  // slight roll during translation (not a rigid statue)
+// Jet-off is a Newtonian push-off: a brief cold-gas IMPULSE accelerates her to a
+// modest drift speed, then CONSTANT-velocity coast (no ease-in "whip"/yank). Speed
+// is stylized (~2 m/s) — faster than a real ~0.3 m/s EVA translation for screen
+// legibility, but not the ~6-12 m/s cartoon launch the old ease-in produced.
+const EXIT_JETOFF_START = 0.85;  // s — push-off begins (after turn + tether reel)
+const EXIT_DRIFT_SPEED  = 2.0;   // m/s constant drift after the impulse
+const EXIT_IMPULSE_RAMP = 0.22;  // s to accelerate from rest to drift speed
+// Drift direction: screen DOWN-and-RIGHT. She welds on the camera-near (+X) side,
+// so drifting toward the lower-right carries her off the near edge WITHOUT crossing
+// in front of the hull (screen up-left, the old vector, crossed the silhouette).
+const EXIT_RIGHT_BIAS = 0.86;
+const EXIT_DOWN_BIAS  = 0.52;
 
 // ─── Menu render quality per tier ───────────────────────────────────────────
 // The menu hero is a SINGLE ship on an otherwise empty scene — it has none of
@@ -1727,9 +1736,9 @@ export class MenuScene3D {
    * departure seconds `t`. Returns the acknowledgment-turn ease (0→1) for the
    * visor glint. Beat sheet:
    *   0.00-0.15  arc snap + one final spark burst (arc handled in _tick)
-   *   0.15-0.45  torso/helmet turn toward camera + welding-arm tuck (+ glint)
-   *   0.45-0.60  tether reel-in (fullExit only)
-   *   0.60-...   SAFER puffs + ease-in translation up-and-left + slight roll
+   *   0.15-0.60  torso/helmet turn toward camera + welding-arm tuck (+ glint)
+   *   0.60-0.80  tether reel-in (fullExit only)
+   *   0.85-...   SAFER puffs + Newtonian push-off (impulse→coast) down-and-right
    * Continue (short) departure plays turn only; she stays. fullExit gates the
    * reel + jet-off + removal.
    */
@@ -1743,8 +1752,9 @@ export class MenuScene3D {
       if (this._sparkSystem) emitSparkBurst(this._sparkSystem, this._weldPos, 22);
     }
 
-    // Beat 2 — acknowledgment turn (~30°) + welding-arm tuck to chest.
-    const turnE = _easeOutCubic(_clamp01((t - 0.15) / 0.30));
+    // Beat 2 — acknowledgment turn (~30°) + welding-arm tuck to chest. Eased
+    // over 0.45 s (a calm glance back, not a snap).
+    const turnE = _easeOutCubic(_clamp01((t - 0.15) / 0.45));
     this._astro.rotation.y = this._astroBaseRotY + EXIT_TURN_Y * turnE;
     if (this._astroWeldArm) {
       this._astroWeldArm.rotation.x = this._weldArmBaseRotX + EXIT_ARM_TUCK * turnE;
@@ -1752,39 +1762,45 @@ export class MenuScene3D {
 
     if (!ex.fullExit) return turnE; // continue path: turn only, she stays
 
-    // Beat 3 — tether reel-in (hull end retracts to the waist spool).
-    if (!ex.tetherRemoved && t >= 0.45) {
-      const reel = _clamp01((t - 0.45) / 0.15);
+    // Beat 3 — tether reel-in (hull end retracts to the waist spool), 0.60-0.80 s.
+    if (!ex.tetherRemoved && t >= 0.60) {
+      const reel = _clamp01((t - 0.60) / 0.20);
       this._rebuildTether(reel);
       if (reel >= 1) { this._removeTether(); ex.tetherRemoved = true; }
     }
 
-    // Beat 4 — jet-off: cold-gas puffs, then ease-in translation up-and-left.
-    if (t >= 0.60) {
+    // Beat 4 — jet-off: cold-gas puffs, then a Newtonian push-off (impulse ramp
+    // then constant-velocity coast) drifting DOWN-and-RIGHT, off the near edge.
+    if (t >= EXIT_JETOFF_START) {
       if (!ex.exitDir) ex.exitDir = this._computeExitDir();
-      this._maybeFirePuff(0, 0.65, t);
-      this._maybeFirePuff(1, 0.80, t);
-      const move = _clamp01((t - 0.60) / 0.75);
-      const moveE = move * move;                          // ease-in quad
+      this._maybeFirePuff(0, EXIT_JETOFF_START + 0.04, t);
+      this._maybeFirePuff(1, EXIT_JETOFF_START + 0.20, t);
+      const tm = t - EXIT_JETOFF_START;                 // seconds since push-off
+      const v = EXIT_DRIFT_SPEED, ramp = EXIT_IMPULSE_RAMP;
+      const dist = tm < ramp
+        ? 0.5 * (v / ramp) * tm * tm                    // impulse: x = ½at²
+        : 0.5 * v * ramp + v * (tm - ramp);             // then constant-velocity coast
       this._astro.position.copy(this._astroBasePos)
-        .addScaledVector(ex.exitDir, EXIT_DIST * moveE);
-      this._astro.rotation.z = this._astroBaseRotZ + EXIT_BODY_ROLL * moveE;
+        .addScaledVector(ex.exitDir, dist);
+      // Roll eases in over the push-off then holds (no accelerating spin).
+      this._astro.rotation.z = this._astroBaseRotZ
+        + EXIT_BODY_ROLL * _easeOutCubic(_clamp01(tm / 0.5));
     }
     this._updatePuffs(dt);
     return turnE;
   }
 
   /**
-   * @private Compute the exit translation direction — screen up-and-left in
-   * world space, from the current camera framing (so she leads the eye away
-   * from the ship anchor + the igniting comms/dossier to the right).
+   * @private Compute the exit drift direction — screen DOWN-and-RIGHT in world
+   * space from the current camera framing. She welds on the camera-near side, so
+   * this leads her off the near (lower-right) edge without crossing the hull.
    */
   _computeExitDir() {
     const fwd = this._lookTarget.clone().sub(this.camera.position).normalize();
     const right = fwd.clone().cross(new THREE.Vector3(0, 1, 0)).normalize();
     const up = right.clone().cross(fwd).normalize();
-    return up.multiplyScalar(EXIT_UP_BIAS)
-      .addScaledVector(right, -EXIT_LEFT_BIAS)
+    return right.multiplyScalar(EXIT_RIGHT_BIAS)
+      .addScaledVector(up, -EXIT_DOWN_BIAS)
       .normalize();
   }
 

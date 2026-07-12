@@ -790,9 +790,11 @@ export class MenuScreen {
     audioSystem.init();
     audioSystem.resume();
     audioSystem.playClick();
-    // New game → cinematic pull-back (retimed 1350→1500ms in deep-polish-4 T5 so
-    // the astronaut exit beat has room), then MENU_START.
-    this._beginDeparture(Events.MENU_START, 1500, 1.4);
+    // New game → cinematic pull-back, then MENU_START. Retimed to ~2.1s in
+    // deep-polish-4 so the slowed, Newtonian astronaut exit (impulse→coast, no
+    // cartoon whip) has room to play and drift gracefully off-frame before the
+    // handoff. cameraDur (2.0s) also clamps the astronaut beat timeline.
+    this._beginDeparture(Events.MENU_START, 2100, 2.0);
   }
 
   /**
