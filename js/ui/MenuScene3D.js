@@ -94,6 +94,13 @@ const EXIT_CAM_ANG_END  = 1.05;             // 'partial': sway-centre azimuth at
 const EXIT_CAM_CAMY_END = 0.45;             // 'partial': sway-centre elevation at the cut
 const FLYAROUND_ANG_END  = -Math.PI / 2;    // 'flyaround': camera azimuth → directly behind
 const FLYAROUND_CAMY_END = 2.0;             // 'flyaround': slightly above (sim radial-above chase)
+// Shared camera-sway parameters (used by BOTH orientation branches in _tick and
+// by _applyReducedMotionPose). Centralized so a sway tuning change can't drift
+// between the randomly-selected 'partial' and 'flyaround' treatments.
+const SWAY_ANG_CENTRE  = 0.5;   // idle azimuth centre (front-right octant)
+const SWAY_CAMY_CENTRE = 0.85;  // idle elevation centre
+const SWAY_ANG_FREQ  = 0.16, SWAY_ANG_AMP  = 0.62;   // azimuth bob
+const SWAY_CAMY_FREQ = 0.12, SWAY_CAMY_AMP = 0.42;   // elevation bob
 
 // ─── Menu render quality per tier ───────────────────────────────────────────
 // The menu hero is a SINGLE ship on an otherwise empty scene — it has none of
@@ -1061,6 +1068,7 @@ export class MenuScene3D {
     this._orientMode = 'partial';
     this._astroMats = null;
     this._astroFaded = false;
+    this._tmpLook = new THREE.Vector3();   // scratch for the fly-around lookAt (no per-frame alloc)
 
     // Frame gate — the menu hero render loop is capped to ~60 fps (30 under
     // reduced motion) so it doesn't run at 120 fps on ProMotion displays while
@@ -1476,11 +1484,20 @@ export class MenuScene3D {
   /** @private Place the camera at the frozen sway-centre pose (reduced motion). */
   _applyReducedMotionPose() {
     if (!this.camera) return;
-    const orbitR = 5.5;
-    const ang  = 0.5;    // sway centre (see _tick)
-    const camY = 0.85;   // sway centre
-    this.camera.position.set(Math.cos(ang) * orbitR, camY, Math.sin(ang) * orbitR);
+    this._positionSwayCamera(SWAY_ANG_CENTRE, SWAY_CAMY_CENTRE, 5.5, 0); // damp 0 = frozen centre
     this.camera.lookAt(this._lookTarget);
+  }
+
+  /**
+   * @private Position the orbit camera at a swaying pose around `centreAng` /
+   * `centreCamY` at radius `orbitR`, with sway amplitude scaled by `damp`
+   * (0 = frozen on the centre). Single source of the sway math so the two
+   * orientation branches + the reduced-motion pose can never drift apart.
+   */
+  _positionSwayCamera(centreAng, centreCamY, orbitR, damp) {
+    const ang  = centreAng  + Math.sin(this._orbitAngle * SWAY_ANG_FREQ)  * SWAY_ANG_AMP  * damp;
+    const camY = centreCamY + Math.sin(this._orbitAngle * SWAY_CAMY_FREQ) * SWAY_CAMY_AMP * damp;
+    this.camera.position.set(Math.cos(ang) * orbitR, camY, Math.sin(ang) * orbitR);
   }
 
   /** Start the render + animation loop. */
@@ -1728,30 +1745,21 @@ export class MenuScene3D {
       // target recenters on the hull, sway damps to 0 → the last menu frame lands
       // on the sim chase framing (seamless). She dissolves out over the final 10%.
       const fa = orientGate * orientGate * (3 - 2 * orientGate);   // smoothstep
-      const angCentre  = 0.5  + (FLYAROUND_ANG_END  - 0.5)  * fa;
-      const camYCentre = 0.85 + (FLYAROUND_CAMY_END - 0.85) * fa;
-      const swayDamp = 1 - fa;
-      const ang  = angCentre  + Math.sin(this._orbitAngle * 0.16) * 0.62 * swayDamp;
-      const camY = camYCentre + Math.sin(this._orbitAngle * 0.12) * 0.42 * swayDamp;
-      this.camera.position.set(Math.cos(ang) * orbitR, camY, Math.sin(ang) * orbitR);
+      const angCentre  = SWAY_ANG_CENTRE  + (FLYAROUND_ANG_END  - SWAY_ANG_CENTRE)  * fa;
+      const camYCentre = SWAY_CAMY_CENTRE + (FLYAROUND_CAMY_END - SWAY_CAMY_CENTRE) * fa;
+      this._positionSwayCamera(angCentre, camYCentre, orbitR, 1 - fa);
       if (this._mother) this._mother.rotation.z = MOTHER_BASE_ROLL_Z * (1 - fa);
-      this.camera.lookAt(this._lookTarget.clone().multiplyScalar(1 - fa)); // → hull centre
+      this._tmpLook.copy(this._lookTarget).multiplyScalar(1 - fa);   // → hull centre (no per-frame alloc)
+      this.camera.lookAt(this._tmpLook);
       const fadeStart = 0.90;   // fraction of dur
       this._setAstroOpacity(bt >= fadeStart ? _clamp01(1 - (bt - fadeStart) / (1 - fadeStart)) : 1);
     } else {
       // 'partial': modest end-pose bias toward the sim view + a gentle ~28°
       // de-roll (gated after push-off); the power-up flash (main.js) masks the
       // residual face-flip. Reduced motion still lands on the biased end pose.
-      const angCentre  = 0.5  + (EXIT_CAM_ANG_END  - 0.5)  * dep;
-      const camYCentre = 0.85 + (EXIT_CAM_CAMY_END - 0.85) * dep;
-      const swayDamp = 1 - dep * 0.85;
-      if (this._reducedMotion) {
-        this.camera.position.set(Math.cos(angCentre) * orbitR, camYCentre, Math.sin(angCentre) * orbitR);
-      } else {
-        const ang  = angCentre  + Math.sin(this._orbitAngle * 0.16) * 0.62 * swayDamp;
-        const camY = camYCentre + Math.sin(this._orbitAngle * 0.12) * 0.42 * swayDamp;
-        this.camera.position.set(Math.cos(ang) * orbitR, camY, Math.sin(ang) * orbitR);
-      }
+      const angCentre  = SWAY_ANG_CENTRE  + (EXIT_CAM_ANG_END  - SWAY_ANG_CENTRE)  * dep;
+      const camYCentre = SWAY_CAMY_CENTRE + (EXIT_CAM_CAMY_END - SWAY_CAMY_CENTRE) * dep;
+      this._positionSwayCamera(angCentre, camYCentre, orbitR, this._reducedMotion ? 0 : 1 - dep * 0.85);
       this.camera.lookAt(this._lookTarget);   // work site (weld / astronaut)
       let rollEase = 0;
       if (this._departure && !this._reducedMotion && this._exit && this._exit.fullExit) {
