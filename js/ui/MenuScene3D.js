@@ -73,6 +73,19 @@ const EXIT_IMPULSE_RAMP = 0.22;  // s to accelerate from rest to drift speed
 const EXIT_RIGHT_BIAS = 0.86;
 const EXIT_DOWN_BIAS  = 0.52;
 
+// ─── #5 menu→sim orientation fly-around (deep-polish-4 follow-up) ────────────
+// The menu frames the hero front-right with the ship ROLLED -90° (wings vertical,
+// sensor/weld face toward camera); the sim chase sits BEHIND the ship (wings
+// horizontal, aft/thruster deck toward camera). To make the cut orientation-
+// CONTINUOUS, once the astronaut has pushed off (so de-rolling the hull no longer
+// swings the weld site out from under her fixed pose), the camera ARCS around to
+// behind the ship while the hull DE-ROLLS to its native (sim) orientation and the
+// look target recenters on the hull. By the cut the menu framing ≈ the sim chase,
+// so the revealed real ship (T4) and the hero converge and the swap is seamless.
+const FLYAROUND_START    = 0.95;          // s into departure — after the push-off
+const FLYAROUND_ANG_END  = -Math.PI / 2;  // camera azimuth → directly behind (-Z)
+const FLYAROUND_CAMY_END = 2.0;           // slightly above (matches the sim's radial-above chase)
+
 // ─── Menu render quality per tier ───────────────────────────────────────────
 // The menu hero is a SINGLE ship on an otherwise empty scene — it has none of
 // the main scene's fragment-bound cost (the Earth fullscreen atmosphere shader,
@@ -1547,6 +1560,7 @@ export class MenuScene3D {
       this._astro.rotation.y = this._astroBaseRotY;
       this._astro.rotation.z = this._astroBaseRotZ;
     }
+    this._setAstroOpacity(1);   // undo any exit dissolve
     if (this._astroWeldArm) this._astroWeldArm.rotation.x = this._weldArmBaseRotX;
     if (this._exitPuffs) {
       for (const p of this._exitPuffs) { p.visible = false; p.material.opacity = 0; }
@@ -1653,18 +1667,42 @@ export class MenuScene3D {
     // During departure the orbit radius eases 5.5 → 8 so the hero recedes.
     const orbitR = this._departureBaseOrbitR +
       (this._departureOrbitR - this._departureBaseOrbitR) * dep;
+
+    // #5 orientation fly-around factor (0→1). Gated to begin only AFTER the
+    // astronaut pushes off (FLYAROUND_START) so the hull de-roll never swings the
+    // weld site out from under her fixed pose. Only the full new-game exit runs
+    // it (continue is too short / goes to briefing; reduced motion is frozen).
+    let fa = 0;
+    if (this._departure && !this._reducedMotion && this._exit && this._exit.fullExit) {
+      const span = Math.max(0.001, this._departureDur - FLYAROUND_START);
+      const lin = _clamp01((this._departure.t - FLYAROUND_START) / span);
+      fa = lin * lin * (3 - 2 * lin);   // smoothstep ease-in-out (calm sweep)
+    }
+
     if (this._reducedMotion) {
       this.camera.position.set(Math.cos(0.5) * orbitR, 0.85, Math.sin(0.5) * orbitR);
     } else {
-      const ang  = 0.5 + Math.sin(this._orbitAngle * 0.16) * 0.62;
-      const camY = 0.85 + Math.sin(this._orbitAngle * 0.12) * 0.42;
+      // Sway centre migrates from the front-right hero pose toward the sim
+      // BEHIND-the-ship pose as fa→1; sway amplitude damps out so the last frame
+      // sits clean on the match-cut framing.
+      const angCentre  = 0.5  + (FLYAROUND_ANG_END  - 0.5)  * fa;
+      const camYCentre = 0.85 + (FLYAROUND_CAMY_END - 0.85) * fa;
+      const swayDamp = 1 - fa;
+      const ang  = angCentre  + Math.sin(this._orbitAngle * 0.16) * 0.62 * swayDamp;
+      const camY = camYCentre + Math.sin(this._orbitAngle * 0.12) * 0.42 * swayDamp;
       this.camera.position.set(
         Math.cos(ang) * orbitR,
         camY,
         Math.sin(ang) * orbitR,
       );
     }
-    this.camera.lookAt(this._lookTarget);   // work site (weld / astronaut)
+    // De-roll the hull from the menu pose (-90°) to its native (sim) orientation
+    // as the camera swings behind, so wings go vertical→horizontal in lockstep.
+    if (this._mother) this._mother.rotation.z = (-Math.PI / 2) * (1 - fa);
+    // Recenter the look target from the weld site onto the hull centre for the
+    // behind-view (weldPos*0.7 → origin), so the ship frames like the sim chase.
+    const look = this._lookTarget.clone().multiplyScalar(1 - fa);
+    this.camera.lookAt(look);   // work site (weld / astronaut) → hull centre
 
     // Living hero — drive the Mother's OWN animators (nav-light blink/strobe,
     // LIDAR pulse, solar sun-tracking). These only mutate materials/transforms on
@@ -1801,8 +1839,39 @@ export class MenuScene3D {
       this._astro.rotation.z = this._astroBaseRotZ
         + EXIT_BODY_ROLL * _easeOutCubic(_clamp01(tm / 0.5));
     }
+    // Dissolve her out over the final stretch so she fades into the power-up
+    // transition rather than hard-vanishing at the cut (the fly-around keeps her
+    // roughly in frame, so she won't have fully drifted off by the handoff).
+    const fadeStart = this._departureDur - 0.30;
+    this._setAstroOpacity(t >= fadeStart ? _clamp01(1 - (t - fadeStart) / 0.30) : 1);
     this._updatePuffs(dt);
     return turnE;
+  }
+
+  /**
+   * @private Set the astronaut's overall opacity (0-1). Lazily collects her
+   * unique materials once. k<1 flips them to transparent (+depthWrite off to
+   * avoid sort artifacts); k≈1 restores fully opaque. Used for the exit dissolve.
+   */
+  _setAstroOpacity(k) {
+    if (!this._astro) return;
+    if (!this._astroMats) {
+      this._astroMats = new Set();
+      this._astro.traverse((o) => {
+        if (!o.material) return;
+        (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => this._astroMats.add(m));
+      });
+    }
+    const opaque = k >= 0.999;
+    // No-op guard: don't thrash material flags every frame once already opaque.
+    if (opaque && this._astroFaded === false) return;
+    this._astroFaded = !opaque;
+    this._astroMats.forEach((m) => {
+      m.transparent = !opaque;
+      m.opacity = k;
+      m.depthWrite = opaque;
+      m.needsUpdate = true;
+    });
   }
 
   /**
