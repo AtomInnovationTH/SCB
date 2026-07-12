@@ -105,6 +105,18 @@ function menuQualityFor(tier) {
 function _clamp01(x) { return x < 0 ? 0 : x > 1 ? 1 : x; }
 function _easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
 
+// Relaxed, gently coiled umbilical control points from anchor `a` (PLSS) to hull
+// `h`. One soft belly loop reads as an untensioned beta-cloth line in micro-g;
+// used for the STATIC idle shape and as the start state the reel-in straightens.
+function tetherCoilPoints(a, h) {
+  const mid = a.clone().add(h).multiplyScalar(0.5);
+  const p1 = a.clone().add(new THREE.Vector3(M * 0.08, -M * 0.15, M * 0.06));
+  const p2 = mid.clone().add(new THREE.Vector3(M * 0.03, -M * 0.36, M * 0.13)); // belly bottom
+  const p3 = mid.clone().add(new THREE.Vector3(-M * 0.07, -M * 0.05, -M * 0.03)); // loop back up
+  const p4 = h.clone().add(new THREE.Vector3(M * 0.02, -M * 0.11, -M * 0.02));
+  return [a.clone(), p1, p2, p3, p4, h.clone()];
+}
+
 // ─── Soft additive glow sprite (weld pool / hot spot) ───────────────────────
 function makeGlowSprite() {
   const c = document.createElement('canvas');
@@ -1010,9 +1022,10 @@ export class MenuScene3D {
     this._astroBaseRotZ = 0;
     this._weldArmBaseRotX = 0;
     this._tether = null;
-    this._tetherLocalWaist = null;
+    this._tetherAnchorLocal = null;
     this._tetherEnd = null;
     this._tetherRadius = 0;
+    this._tetherCoil = null;
     this._exitPuffs = [];
     this._exit = null;
 
@@ -1240,19 +1253,20 @@ export class MenuScene3D {
     this._weldGlow.scale.setScalar(M * 0.22);
     this._pivot.add(this._weldGlow);
 
-    // EVA safety tether — slack line from the astronaut's waist to a SEPARATE
-    // hull hardpoint near the front collar (deliberately offset from the weld so
-    // the anchor and the arc don't sit on top of each other).
+    // EVA umbilical — an IVORY beta-cloth line from the lower PLSS/SAFER on her
+    // back to a hull hardpoint (offset from the weld so anchor + arc don't stack).
+    // Relaxed + gently COILED at idle (a STATIC shape — no per-frame cost while
+    // the menu idles); on departure it pulls TAUT then reels into the pack.
+    this._tetherAnchorLocal = new THREE.Vector3(0, M * 0.20, -M * 0.24); // lower PLSS back
+    this._tetherEnd = new THREE.Vector3(M * 0.24, M * 0.12, BUS_LEN * 0.5 - M * 0.02);
+    this._tetherRadius = M * 0.018;
     astro.updateWorldMatrix(true, false);
-    const tetherStart = astro.localToWorld(new THREE.Vector3(0, M * 0.18, -M * 0.05));
-    const tetherEnd   = new THREE.Vector3(M * 0.24, M * 0.12, BUS_LEN * 0.5 - M * 0.02);
-    const tetherMid   = tetherStart.clone().add(tetherEnd).multiplyScalar(0.5);
-    tetherMid.y -= M * 0.22;   // gravity-free slack sag
-    tetherMid.x += M * 0.10;
-    const tetherCurve = new THREE.CatmullRomCurve3([tetherStart, tetherMid, tetherEnd]);
+    const umbAnchor = astro.localToWorld(this._tetherAnchorLocal.clone());
+    this._tetherCoil = tetherCoilPoints(umbAnchor, this._tetherEnd);
     const tether = new THREE.Mesh(
-      new THREE.TubeGeometry(tetherCurve, 28, M * 0.013, 6, false),
-      new THREE.MeshStandardMaterial({ color: 0xd8d8de, metalness: 0.1, roughness: 0.8 }));
+      new THREE.TubeGeometry(
+        new THREE.CatmullRomCurve3(this._tetherCoil), 44, this._tetherRadius, 7, false),
+      new THREE.MeshStandardMaterial({ color: 0xe8e2d2, metalness: 0.0, roughness: 0.92 }));
     tether.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
     this._pivot.add(tether);
 
@@ -1265,12 +1279,7 @@ export class MenuScene3D {
     this._astroBaseRotY = astro.rotation.y;
     this._astroBaseRotZ = astro.rotation.z;
     this._weldArmBaseRotX = this._astroWeldArm ? this._astroWeldArm.rotation.x : 0;
-    // Tether refs for the reel-in (rebuilt per frame during the reel, disposed
-    // each rebuild). tetherEnd is the hull hardpoint that releases + retracts.
     this._tether = tether;
-    this._tetherLocalWaist = new THREE.Vector3(0, M * 0.18, -M * 0.05); // astro-local
-    this._tetherEnd = tetherEnd.clone();
-    this._tetherRadius = M * 0.013;
     // Cold-gas puff sprites (2), reused from the glow-sprite helper, tinted cool
     // white. Hidden until the jet-off beat fires them.
     this._exitPuffs = [];
@@ -1737,7 +1746,7 @@ export class MenuScene3D {
    * visor glint. Beat sheet:
    *   0.00-0.15  arc snap + one final spark burst (arc handled in _tick)
    *   0.15-0.60  torso/helmet turn toward camera + welding-arm tuck (+ glint)
-   *   0.60-0.80  tether reel-in (fullExit only)
+   *   0.55-0.82  umbilical pulls taut then reels into the pack (fullExit only)
    *   0.85-...   SAFER puffs + Newtonian push-off (impulse→coast) down-and-right
    * Continue (short) departure plays turn only; she stays. fullExit gates the
    * reel + jet-off + removal.
@@ -1762,9 +1771,9 @@ export class MenuScene3D {
 
     if (!ex.fullExit) return turnE; // continue path: turn only, she stays
 
-    // Beat 3 — tether reel-in (hull end retracts to the waist spool), 0.60-0.80 s.
-    if (!ex.tetherRemoved && t >= 0.60) {
-      const reel = _clamp01((t - 0.60) / 0.20);
+    // Beat 3 — umbilical pulls taut then reels into the pack, 0.55-0.82 s.
+    if (!ex.tetherRemoved && t >= 0.55) {
+      const reel = _clamp01((t - 0.55) / 0.27);
       this._rebuildTether(reel);
       if (reel >= 1) { this._removeTether(); ex.tetherRemoved = true; }
     }
@@ -1846,24 +1855,31 @@ export class MenuScene3D {
   }
 
   /**
-   * @private Rebuild the safety tether at reel progress `p` (0 = full slack,
-   * 1 = fully retracted). The hull hardpoint end retracts toward the astronaut's
-   * waist spool; the slack sag flattens as it reels. Disposes the previous
-   * geometry each rebuild (leak guard — ≤10 rebuilds over the 0.15 s reel).
+   * @private Rebuild the umbilical at retract progress `p` (0 = idle coil,
+   * 1 = fully reeled into the pack). First ~35% pulls the slack coil TAUT
+   * (blends the coiled control points toward a straight anchor→hull line); the
+   * rest REELS the hull end back to the PLSS anchor along that line. Disposes the
+   * previous geometry each rebuild (leak guard — ≤~18 rebuilds over the reel).
    */
   _rebuildTether(p) {
     const tether = this._tether;
-    if (!tether || !this._astro || !this._tetherEnd || !this._tetherLocalWaist) return;
+    if (!tether || !this._astro || !this._tetherEnd || !this._tetherCoil
+        || !this._tetherAnchorLocal) return;
     if (p >= 0.999) { tether.visible = false; return; }
     this._astro.updateWorldMatrix(true, false);
-    const waist = this._astro.localToWorld(this._tetherLocalWaist.clone());
-    const end = this._tetherEnd.clone().lerp(waist, p);
-    const mid = waist.clone().add(end).multiplyScalar(0.5);
-    mid.y -= M * 0.22 * (1 - p);   // slack sag flattens as it retracts
-    mid.x += M * 0.10 * (1 - p);
-    const curve = new THREE.CatmullRomCurve3([waist, mid, end]);
+    const a = this._astro.localToWorld(this._tetherAnchorLocal.clone());
+    const taut = _clamp01(p / 0.35);              // 0→1 straighten the coil
+    const reel = _clamp01((p - 0.35) / 0.65);     // 0→1 hull end → pack
+    const end = this._tetherEnd.clone().lerp(a, reel);
+    const n = this._tetherCoil.length;
+    const pts = [];
+    for (let i = 0; i < n; i++) {
+      const straight = a.clone().lerp(end, i / (n - 1));
+      pts.push(this._tetherCoil[i].clone().lerp(straight, taut));
+    }
     const oldGeo = tether.geometry;
-    tether.geometry = new THREE.TubeGeometry(curve, 24, this._tetherRadius, 6, false);
+    tether.geometry = new THREE.TubeGeometry(
+      new THREE.CatmullRomCurve3(pts), 40, this._tetherRadius, 7, false);
     if (oldGeo && oldGeo.dispose) oldGeo.dispose();
     tether.visible = true;
   }
