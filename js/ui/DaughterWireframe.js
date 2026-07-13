@@ -419,7 +419,7 @@ export class DaughterWireframe {
     ctx.font      = "bold 12px 'Courier New', monospace";
     ctx.textAlign = 'center';
     ctx.fillStyle = HEADER_COL;
-    const armLabel = this._arm ? `DAUGHTER ${this._armIndex + 1} [I=inspect]` : 'DAUGHTER PILOT';
+    const armLabel = this._arm ? `DAUGHTER ${this._armIndex + 1}` : 'DAUGHTER PILOT';
     ctx.fillText(armLabel, WIRE_CX, 14);
     ctx.font      = "11px 'Courier New', monospace";
     ctx.fillStyle = TYPE_COL;

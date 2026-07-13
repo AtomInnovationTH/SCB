@@ -38,7 +38,7 @@
  * The SW does not intercept its own URL (we never call respondWith for it).
  */
 
-const CACHE_NAME = 'space-cowboy-v7';
+const CACHE_NAME = 'space-cowboy-v8';
 
 // Small, safe pre-cache list. Each entry is wrapped in try/catch so a single
 // 404 (e.g. local dev without ./js/main.js yet) does NOT abort installation.

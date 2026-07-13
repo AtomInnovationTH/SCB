@@ -518,8 +518,12 @@ export class ArmUnit {
       const cap = new THREE.Mesh(capGeo, bareMetalMat);
       cap.position.set(0, 0, s * halfLen);
       cap.rotation.y = s > 0 ? 0 : Math.PI;  // outward-facing
-      // CircleGeometry hex: rotate so flats align with the side facets.
-      cap.rotation.z = Math.PI / 6;
+      // CircleGeometry(hexR, 6) default vertices sit at azimuth 0°+k·60°, which
+      // are exactly the hull CORNERS between the side facets (facets are centered
+      // at 30°+k·60°, L482). So the default cap already aligns — no z-rotation.
+      // (Adding π/6 here rotated cap corners onto facet-normal azimuths, poking
+      // ~13.4% past the facet planes. The aft cap's rotation.y=π mirror maps the
+      // corrected vertex set onto itself, so this fixes both caps.)
       cap.name = `${this.id}-cap-${s > 0 ? 'fore' : 'aft'}`;
       cap.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
       this.mesh.add(cap);
@@ -554,6 +558,22 @@ export class ArmUnit {
     aftNozzle.name = `${this.id}-feep-aft`;
     this.mesh.add(aftNozzle);
 
+    // Small mounting boss/recess ring at the nozzle base so it reads as attached
+    // rather than a stub poking out of the cap. On a DISTINCT z-plane
+    // (z=-bz*0.515) — between the aft cap (−0.5) and the pusher disc (−0.505,
+    // L707) and the nozzle base (−0.52) — plus DETAIL order so it does not
+    // re-introduce the L696/round-8 aft-nozzle-base z-fight.
+    const bossGeo = new THREE.CylinderGeometry(aftNozR * 2.0, aftNozR * 2.2, aftNozL * 0.4, 6, 1, false);
+    const bossMat = new THREE.MeshStandardMaterial({
+      color: 0x3a3a44, metalness: 0.7, roughness: 0.4,
+    });
+    const boss = new THREE.Mesh(bossGeo, bossMat);
+    boss.position.set(0, 0, -bz * 0.515 * M);
+    boss.rotation.x = Math.PI / 2;
+    boss.name = `${this.id}-feep-aft-boss`;
+    boss.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+    this.mesh.add(boss);
+
     // Aft thruster plume (additive blend, hidden by default)
     const plumeGeo = new THREE.ConeGeometry(aftNozR * 3, bz * 0.5 * M, 6, 1, true);
     const plumeMat = new THREE.MeshBasicMaterial({
@@ -577,7 +597,11 @@ export class ArmUnit {
     const foreNozL = (isWeaver ? 0.015 : 0.010) * M;
     const foreNozGeo = new THREE.CylinderGeometry(foreNozR, foreNozR * 1.1, foreNozL, 6, 1, true);
     const foreNozzle = new THREE.Mesh(foreNozGeo, feepMat);
-    foreNozzle.position.set(bx * 0.25 * M, 0, bz * 0.45 * M);
+    // Protrude past the fore face (halfLen = bz·0.5·M) with the base embedded so
+    // it reads as a real nozzle, not a stub buried inside the hull. The brake
+    // plume axis test uses the daughter's world +Z direction (L4394), not this
+    // mesh position, so moving it forward is safe.
+    foreNozzle.position.set(bx * 0.25 * M, 0, bz * 0.5 * M + foreNozL * 0.35);
     foreNozzle.rotation.x = -Math.PI / 2;
     foreNozzle.name = `${this.id}-feep-fore`;
     this.mesh.add(foreNozzle);
@@ -585,7 +609,9 @@ export class ArmUnit {
     // --- Net canister (forward, cylindrical) ---
     const canR = isWeaver ? 0.06 : 0.03;
     const canH = isWeaver ? 0.08 : 0.05;
-    const canGeo = new THREE.CylinderGeometry(canR * M, canR * M, canH * M, 8, 1, true);
+    // Closed-ended so the outboard face reads as a capped canister lid rather
+    // than a see-through tube protruding from the fore face.
+    const canGeo = new THREE.CylinderGeometry(canR * M, canR * M, canH * M, 8, 1, false);
     const canMat = new THREE.MeshStandardMaterial({
       color: 0x666677, metalness: 0.6, roughness: 0.4,
     });
@@ -6055,6 +6081,12 @@ export class ArmUnit {
     const visible = show && pastSlack;
     this._bridleLegA.visible = visible;
     this._bridleLegB.visible = visible;
+    // Gate the gimbal ring + hardpoints with the legs so the bridle hardware only
+    // appears while the tether/bridle is deployed (they read as clutter floating
+    // on the docked body otherwise). Refs stored at build time (L722, L733–734).
+    if (this._gimbalRing) this._gimbalRing.visible = visible;
+    if (this._bridleHpA) this._bridleHpA.visible = visible;
+    if (this._bridleHpB) this._bridleHpB.visible = visible;
     // Color: mirror tether material (same strain logic drives both)
     if (visible && this._bridleLegMat && this.tetherMaterial) {
       this._bridleLegMat.color.copy(this.tetherMaterial.color);

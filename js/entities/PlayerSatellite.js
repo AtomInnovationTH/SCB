@@ -12,6 +12,7 @@ import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { getSolarCellTexture } from '../scene/solarCellTexture.js';
+import { getMLIFoilMaps } from '../scene/mliFoilTexture.js';
 import { powerDistribution } from '../systems/PowerDistribution.js';
 import {
   computeCoM, computeCoMDrift, computeCoMDriftVector,
@@ -277,23 +278,93 @@ export class PlayerSatellite extends THREE.Group {
   // ==========================================================================
 
   /** @private */
+  /**
+   * Build a thin dark border frame (mounting-rail read) sized to a PV panel.
+   * Four flat bars forming a rectangle outline in the panel's local XY plane,
+   * so it can share the panel's position/quaternion. Masks the residual gold
+   * edge lift of flat facet panels on the curved hull.
+   * @param {number} w panel width (local X)
+   * @param {number} h panel height (local Y)
+   * @param {number} renderOrder renderOrder applied to each bar (groups don't
+   *   propagate renderOrder to children in three.js)
+   * @returns {THREE.Group}
+   * @private
+   */
+  _makePanelFrame(w, h, renderOrder) {
+    const t = Math.min(w, h) * 0.06; // frame bar thickness
+    const g = new THREE.Group();
+    const mat = this._matPanelFrame;
+    const bars = [
+      { gw: w, gh: t, x: 0, y: (h - t) / 2 },   // top
+      { gw: w, gh: t, x: 0, y: -(h - t) / 2 },  // bottom
+      { gw: t, gh: h - 2 * t, x: (w - t) / 2, y: 0 },   // right
+      { gw: t, gh: h - 2 * t, x: -(w - t) / 2, y: 0 },  // left
+    ];
+    for (const b of bars) {
+      const bar = new THREE.Mesh(new THREE.PlaneGeometry(b.gw, b.gh), mat);
+      bar.position.set(b.x, b.y, 0);
+      bar.renderOrder = renderOrder;
+      g.add(bar);
+    }
+    return g;
+  }
+
   _buildModel() {
     // Shared materials
+    // Crinkled-MLI normal + roughness maps (null in headless/no-DOM). Returns a
+    // fresh clone per call so each part can carry its own `repeat`. The barrel
+    // body wraps ~2.5 m circumference × 2 m, so it gets a higher repeat for tight
+    // wrinkles; small parts (aperture ring, IR box) get ~1×1.
+    // Barrel foil repeat: u MUST stay an integer (the cylinder UV closes at u=1;
+    // a fractional u puts a hard texture seam down the barrel). [5, 4] lands the
+    // crumple facets ~4–5 cm on the ~2.5 m barrel (real MLI crinkle density).
+    const bodyFoil = getMLIFoilMaps({ repeat: [5, 4] });
     this._matBody = new THREE.MeshStandardMaterial({
       color: 0x5c5c64, metalness: 0.7, roughness: 0.55,
     });
     this._matGoldMLI = new THREE.MeshStandardMaterial({
-      // MLI thermal blanket — warm gold foil. Real MLI is crinkled and diffuse,
-      // not a polished mirror, so keep roughness high: a near-mirror finish turns
-      // the directional sun into a tight specular hotspot that sweeps across the
-      // curved hull as a blown-out, blooming glint as the ship rolls. The gold
-      // read comes from the base color + a lifted emissive warmth (which also
-      // carries on the shadowed side, where ambient is near-zero), not from gloss.
-      color: 0xd6a43e, metalness: 0.7, roughness: 0.62,
+      // MLI thermal blanket — warm gold foil (amber Kapton over aluminized
+      // mylar). Real MLI is a crinkled, highly-REFLECTIVE metallized film: flat
+      // mirror facets at many tilts separated by sharp fold creases, so it reads
+      // as broken high-contrast gold glints under the PMREM IBL. That specular
+      // facet read is the whole look, so this is a near-MIRROR: metalness 1.0 +
+      // roughness 0.5 (the roughnessMap, relative 0.30–1.00, multiplies it to an
+      // effective ~0.15–0.33 — glossy enough for facet glints, satin enough to
+      // avoid a harsh blown-out sweep). The facet-normal variation from the
+      // normalMap breaks the sun into many small glints rather than one big
+      // sweep. If a rolling blowout still appears in chase view, raise roughness
+      // toward 0.55. Emissive warmth still carries the shadow side.
+      color: 0xd6a43e, metalness: 1.0, roughness: 0.5,
       emissive: 0x4a3008, emissiveIntensity: 0.16,
     });
+    // Crumpled mirror-foil read (v2.2): apply the MLI normal + roughness +
+    // albedo maps. The normalMap tilts each flat facet a different way so the
+    // environment glints off it (mirror crumple); the roughnessMap mottles
+    // reflectance per-facet + sparkles (it MULTIPLIES material.roughness, so
+    // it's encoded relative 0.30–1.00 → effective ~0.13–0.27 at roughness 0.42);
+    // the albedoMap is near-uniform amber (variation is specular, not albedo).
+    // No-op headless. The body skin (_matBody) is a clone of this material, so
+    // it inherits all three maps at the same barrel-scale repeat automatically.
+    if (bodyFoil) {
+      this._matGoldMLI.map = bodyFoil.albedoMap;
+      this._matGoldMLI.normalMap = bodyFoil.normalMap;
+      this._matGoldMLI.normalScale = new THREE.Vector2(0.9, 0.9);
+      this._matGoldMLI.roughnessMap = bodyFoil.roughnessMap;
+      // emissiveMap carries the crease pattern onto the shadow side, where flat
+      // emissive would otherwise wash the crease darkening out. Scan-flash
+      // mutates emissive/emissiveIntensity only — the map does not interfere.
+      this._matGoldMLI.emissiveMap = bodyFoil.albedoMap;
+    }
     this._matDark = new THREE.MeshStandardMaterial({
       color: 0x222233, metalness: 0.6, roughness: 0.4,
+    });
+    // PV panel frame/mounting-rail material — dark satin metal outline drawn as a
+    // thin border around each flat body-mounted cell to mask the ~2% edge lift
+    // (flat 22.5° facet over a curved hull). depthWrite off so it always paints
+    // on the panel it frames (like the other DETAIL decals).
+    this._matPanelFrame = new THREE.MeshStandardMaterial({
+      color: 0x1a1a22, metalness: 0.55, roughness: 0.5,
+      depthWrite: false, side: THREE.DoubleSide,
     });
     // FEEP nozzle material — copper/bronze tint (field-emission emitters use refractory metals)
     this._matFEEP = new THREE.MeshStandardMaterial({
@@ -364,6 +435,23 @@ export class PlayerSatellite extends THREE.Group {
    * @param {number} barrelR
    * @param {number} barrelH
    */
+  /**
+   * Single source of truth for stow-groove angular half-widths. The pocket arc
+   * spans ~1.3× the daughter body width (capped at 0.45 rad); the shallower stow
+   * channel the folded strut lies in is 0.55× the pocket half-width. Both the
+   * groove carve (`_carveStowGrooves`/`profileFor`) and the pyro-pin lip
+   * placement consume this so the two can never drift apart (previously the pin
+   * math re-derived these numbers independently — a latent desync bug).
+   * @param {number} crossW    daughter body cross-section width (m)
+   * @param {number} barrelR_m barrel radius (m)
+   * @returns {{ pocketHa: number, chanHa: number }} angular half-widths (rad)
+   * @private
+   */
+  _stowGrooveHalfWidths(crossW, barrelR_m) {
+    const pocketHa = Math.min(0.45, (1.3 * crossW) / (2 * barrelR_m));
+    return { pocketHa, chanHa: pocketHa * 0.55 };
+  }
+
   _carveStowGrooves(geo, barrelR, barrelH) {
     const azimuths = (Constants.ARM_LADDER?.Y0_QUAD?.azimuths ?? [60, 120, 240, 300])
       .map(d => d * Math.PI / 180);
@@ -387,19 +475,21 @@ export class PlayerSatellite extends THREE.Group {
       const bodyLen = body[2];                // body length (m), along barrel Z
       // Pocket angular half-width so the arc spans ~1.3× the body width (a little
       // clearance around the cradled body): arcWidth = barrelR * 2*ha = 1.3*crossW.
-      const pocketHa = Math.min(0.45, (1.3 * crossW) / (2 * barrelR_m));
-      // Pocket depth scales with daughter size and is capped at 50% of the barrel
-      // radius. The largest daughter (Weaver, crossW 0.20) hits the 50% cap; the
-      // smaller Spinner (crossW 0.10) scales down proportionally. Convert the
-      // metre depth to scene units (×M).
-      const maxDepth_m = barrelR_m * 0.50;            // 0.20 m = 50% of 0.40 m radius
+      // Shared with the pyro-pin lip placement via _stowGrooveHalfWidths.
+      const { pocketHa, chanHa } = this._stowGrooveHalfWidths(crossW, barrelR_m);
+      // Pocket depth scales with daughter size and is capped at ~15% of the
+      // barrel radius. Was 50% (0.20 m), which read as an impact crater; ~15%
+      // (0.06 m) with the plateau profile below reads as a machined pocket. The
+      // largest daughter (Weaver, crossW 0.20) hits the cap; the smaller Spinner
+      // (crossW 0.10) scales down proportionally. Convert metre depth to scene
+      // units (×M).
+      const maxDepth_m = barrelR_m * 0.15;            // 0.06 m ≈ 15% of 0.40 m radius
       const WEAVER_CROSS = (Constants.WEAVER_BODY ?? [0.2])[0];  // reference (largest)
       const pocketDepth = Math.min(maxDepth_m, maxDepth_m * (crossW / WEAVER_CROSS)) * M;
       // Pocket axial half-length ≈ body length / 2 plus a little clearance.
       const pocketHl = (bodyLen * 0.6) * M;
       // Stow channel: a shallower, narrower groove the folded strut lies in,
-      // running forward of the pocket. Scaled down from the pocket.
-      const chanHa = pocketHa * 0.55;
+      // running forward of the pocket. chanHa comes from the shared helper above.
       const chanDepth = pocketDepth * 0.55;
       return [
         { zc: barrelH * 0.08,  hl: barrelH * 0.38, ha: chanHa,   d: chanDepth },  // stow channel
@@ -438,8 +528,14 @@ export class PlayerSatellite extends THREE.Group {
           if (dAng > g.ha) continue;
           const dAx = Math.abs(y - g.zc);
           if (dAx > g.hl) continue;
-          // Cosine falloff across width, smooth ramp over the last 25% of length.
-          const wAng = 0.5 + 0.5 * Math.cos((dAng / g.ha) * Math.PI);
+          // Plateau profile: flat floor over the inner ~60% of the angular width,
+          // steep smoothstep walls over the outer 40% — reads as a machined
+          // pocket with a level bottom rather than a rounded (crater) dip. Same
+          // smooth ramp over the last 25% of the axial length.
+          const plateauHa = g.ha * 0.60;
+          const wAng = (dAng <= plateauHa)
+            ? 1
+            : smooth((g.ha - dAng) / (g.ha - plateauHa));
           const wAx  = smooth((g.hl - dAx) / (g.hl * 0.25));
           maxDepth = Math.max(maxDepth, g.d * wAng * wAx);
         }
@@ -589,7 +685,16 @@ export class PlayerSatellite extends THREE.Group {
       if (strutAz.some(s => angDist(az, s) < strutKeep)) continue;
       if (rosaAz.some(rz => angDist(az, rz) < rosaKeep)) continue;
 
-      const rr = barrelR * 1.025;
+      // §2-followup (round 21): radial restack. Earlier the panels sat at 1.025R
+      // and the accent rings extended to ~1.035R (the round-8 comments miscounted
+      // the tube radii by 2.5×), so the accents poked OUTSIDE the panels near
+      // facet centres. New code-true stack (units of hull radius R): hull 1.000
+      // writes depth; seam tape 0.998–1.006R; accent rings 1.004–1.012R; PV
+      // panels flat-tangent at 1.014R centre. Flat 22.5° facet panels still lift
+      // ~2% (sec 11.25°) at their azimuth edges → ~1.034R; that residual gold gap
+      // is masked by the per-panel dark frame border below (reads as a mounting
+      // rail), NOT by pushing rr lower (which would let the accents poke through).
+      const rr = barrelR * 1.014;
       const radial = new THREE.Vector3(Math.cos(az), Math.sin(az), 0);
       const up = new THREE.Vector3(0, 0, 1);
       const right = new THREE.Vector3().crossVectors(up, radial).normalize();
@@ -606,8 +711,21 @@ export class PlayerSatellite extends THREE.Group {
         panel.position.set(Math.cos(az) * rr, Math.sin(az) * rr, row.z);
         panel.quaternion.setFromRotationMatrix(_m4);
         panel.name = `BarrelSolarPanel_${_panelN++}`;
-        panel.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL; // over body
+        // Sub-order 2.01 within the DETAIL band: panels paint first, then seam
+        // tape (2.02) and accents (2.03) over them. All < 2.5 (daughter bias) and
+        // < 3 (TRANSPARENT).
+        panel.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL + 0.01; // over body
         this.add(panel);
+
+        // Thin dark frame border masking the flat-panel edge lift (mounting rail
+        // read). Sits just above the panel so the gold gap at the facet edges
+        // never shows. Sub-order between panel (2.01) and seam tape (2.02).
+        const frame = this._makePanelFrame(facetWidth * 0.92, row.h, Constants.RENDER_ORDER.SPACECRAFT_DETAIL + 0.015);
+        frame.position.copy(panel.position);
+        frame.quaternion.copy(panel.quaternion);
+        frame.name = `BarrelSolarPanelFrame_${_panelN}`;
+        frame.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL + 0.015;
+        this.add(frame);
       }
     }
 
@@ -629,13 +747,20 @@ export class PlayerSatellite extends THREE.Group {
       const right = new THREE.Vector3().crossVectors(up, radial).normalize();
       const gM4 = new THREE.Matrix4().makeBasis(right, up, radial);
       for (const z of [endZ, -endZ]) {  // fore (+) and aft (−) end bands
-        const rr = barrelR * 1.025;
+        const rr = barrelR * 1.014;
         const panel = new THREE.Mesh(new THREE.PlaneGeometry(gapCellW, endH), gapMat);
         panel.position.set(Math.cos(gapAz) * rr, Math.sin(gapAz) * rr, z);
         panel.quaternion.setFromRotationMatrix(gM4);
         panel.name = `BarrelSolarPanel_gap_${gapAzDeg}_${z > 0 ? 'F' : 'A'}`;
-        panel.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+        panel.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL + 0.01;
         this.add(panel);
+
+        const frame = this._makePanelFrame(gapCellW, endH, Constants.RENDER_ORDER.SPACECRAFT_DETAIL + 0.015);
+        frame.position.copy(panel.position);
+        frame.quaternion.copy(panel.quaternion);
+        frame.name = `BarrelSolarPanelFrame_gap_${gapAzDeg}_${z > 0 ? 'F' : 'A'}`;
+        frame.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL + 0.015;
+        this.add(frame);
       }
     }
 
@@ -643,7 +768,12 @@ export class PlayerSatellite extends THREE.Group {
     // redundant solid gold bands we add thin darker tape/seam rings that divide
     // the blanket into quilted sections (the characteristic MLI look). Purely
     // visual definition over the gold body.
-    const seamGeo = new THREE.TorusGeometry(barrelR * 1.005, M * 0.005, 4, 24);
+    // §2-followup (round 21): thin Kapton tape at radial 0.998–1.006R (tube
+    // radius M*0.0016). Thinner than before (was M*0.005 → 1.017R outer, which
+    // the round-8 comment mis-stated) so it reads like real tape and stays well
+    // inside the PV panel centre radius (1.014R). Torus tube radius is in
+    // M-units, NOT a fraction of barrelR — the earlier comments confused the two.
+    const seamGeo = new THREE.TorusGeometry(barrelR * 1.002, M * 0.0016, 4, 24);
     const seamMat = new THREE.MeshStandardMaterial({
       color: 0x8a6d24, metalness: 0.7, roughness: 0.5,  // darker gold tape
       // §2-followup (round 5): MLI seam rings are DECALS on the gold body.
@@ -659,20 +789,22 @@ export class PlayerSatellite extends THREE.Group {
       seam.position.z = z;
       seam.rotation.x = Math.PI / 2;
       seam.name = 'MLI_Seam';
-      seam.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      // Sub-order 2.02 — paints over the PV panels (2.01) but under accents.
+      seam.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL + 0.02;
       this.add(seam);
     }
 
 
     // Panel-line accent rings (thin dark seam grooves) marking the cell-band
     // seams: one at centre, two at the cell/MLI boundaries.
-    // §2-followup (round 8): the accent ring (was 1.007×, tube ±0.006 → radial
-    // 1.001–1.013) RADIALLY OVERLAPPED the MLI seam ring (1.005×, ±0.005 →
-    // 1.000–1.010) AND shared its z at z=±cellBandH*0.5 → two coincident tori
-    // z-fighting each other. Push the accent out to 1.02× (radial 1.014–1.026,
-    // fully clear of the seam) and nudge its z bands off the seam bands so the
-    // two ring sets never coincide.
-    const lineGeo = new THREE.TorusGeometry(barrelR * 1.02, M * 0.006, 4, 24);
+    // §2-followup (round 21): the round-8 comment claimed the accent reached
+    // 1.014–1.026R and cleared the seam — but the tube radius is M-units, so the
+    // old TorusGeometry(barrelR*1.02, M*0.006) actually spanned 1.005–1.035R and
+    // poked OUTSIDE the PV panels near facet centres. New tight stack:
+    // accents at barrelR*1.008 with tube M*0.0016 → radial 1.004–1.012R, above
+    // the seam tape (≤1.006R) and below the panel centre (1.014R). Keep the
+    // existing z-nudge so accent and seam z-bands never coincide.
+    const lineGeo = new THREE.TorusGeometry(barrelR * 1.008, M * 0.0016, 4, 24);
     const lineMat = this._matDark.clone();
     lineMat.depthWrite = false;
     const accentZNudge = barrelH * 0.015; // shift accent bands off the seam bands
@@ -680,9 +812,30 @@ export class PlayerSatellite extends THREE.Group {
       const line = new THREE.Mesh(lineGeo, lineMat);
       line.position.z = z;
       line.rotation.x = Math.PI / 2;
-      line.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      // Sub-order 2.03 — paints last (over panels + seam tape).
+      line.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL + 0.03;
       this.add(line);
     }
+
+    // Aperture bezel/housing — a short 8-gon cylinder wall bridging the cap face
+    // (z=1.0M) to the back of the viewport disc, sharing the -0.2 tilt so bezel,
+    // glass disc, and gold ring read as one aimed optic assembly. This FILLS the
+    // deliberate §2-followup log-depth standoff gap (8mm/12mm) with structure
+    // rather than seating the pieces flush (which would regress that fix).
+    // OPAQUE band so the disc (DETAIL) still paints in front of the bezel mouth.
+    const bezelLen = M * 0.02;
+    const bezelGeo = new THREE.CylinderGeometry(M * 0.13, M * 0.135, bezelLen, 8, 1, true);
+    const bezelMat = new THREE.MeshStandardMaterial({
+      color: 0x3a3a44, metalness: 0.7, roughness: 0.45,
+    });
+    const bezel = new THREE.Mesh(bezelGeo, bezelMat);
+    // Cylinder axis Y → point it along +Z, then apply the shared -0.2 tilt.
+    bezel.rotation.x = Math.PI / 2 - 0.2;
+    // Sit its aft mouth on the cap face and its fore mouth just under the disc.
+    bezel.position.set(0, M * 0.2, barrelH * 0.5 + M * 0.001 + bezelLen * 0.5);
+    bezel.name = 'LaserBezel';
+    bezel.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
+    this.add(bezel);
 
     // Front viewport/window — laser aperture (20cm Cassegrain)
     // FIX_PLAN §2-followup (round 3): viewport was at z=barrelH*0.5 − 0.05 =
@@ -710,6 +863,18 @@ export class PlayerSatellite extends THREE.Group {
     // Laser aperture ring (gold, forward-facing)
     const apertureRingGeo = new THREE.RingGeometry(M * 0.10, M * 0.14, 8);
     const apertureRingMat = this._matGoldMLI.clone();
+    // The clone shares the barrel-scale foil textures (tight wrinkles); this ring
+    // is only a few cm, so swap in ~1×1-repeat foil clones for a sane wrinkle
+    // scale on the small part (null-safe headless — leaves the inherited maps).
+    // Override ALL THREE maps so the repeat stays consistent across them.
+    const ringFoil = getMLIFoilMaps({ repeat: [1, 1] });
+    if (ringFoil) {
+      apertureRingMat.map = ringFoil.albedoMap;
+      apertureRingMat.normalMap = ringFoil.normalMap;
+      apertureRingMat.roughnessMap = ringFoil.roughnessMap;
+      apertureRingMat.emissiveMap = ringFoil.albedoMap;
+      apertureRingMat.needsUpdate = true;
+    }
     const apertureRing = new THREE.Mesh(apertureRingGeo, apertureRingMat);
     // §2-followup (round 8): +0.012·M (12 mm), 4 mm proud of the viewport so the
     // gold rim sits clearly in front of the aperture glass.
@@ -725,7 +890,11 @@ export class PlayerSatellite extends THREE.Group {
     // offset was also tying with viewport's offset (both -2,-2) which caused
     // the aperture occlusion. Cap now renders as plain SPACECRAFT_OPAQUE so
     // any DETAIL-tagged mesh in front (viewport, ring) wins cleanly.
-    const capGeo = new THREE.CircleGeometry(barrelR, 16);
+    // 64 segments to match the barrel cylinder (both default thetaStart=0 →
+    // phases align). Rim rows are uncarved (groove z-spans stay clear of the
+    // ±barrelH/2 rims), so the flat 64-gon caps seat exactly on the barrel edge
+    // and no longer leave see-through slits from the 16↔64 segment mismatch.
+    const capGeo = new THREE.CircleGeometry(barrelR, 64);
     // End caps are structural plates (optics bench forward, thruster deck aft),
     // not blanket — keep them dark metallic, distinct from the gold MLI body.
     const capMat = new THREE.MeshStandardMaterial({
@@ -752,25 +921,44 @@ export class PlayerSatellite extends THREE.Group {
     // pyro-pin launch locks at the groove lips.
     const channelTier = Constants.ARM_LADDER.Y0_QUAD;
 
-    for (const azDeg of channelTier.azimuths) {
-      const azRad = azDeg * Math.PI / 180;
+    // Groove angular half-widths at the stow-channel band (matches the profile
+    // used by _carveStowGrooves): the pin sits at z=-barrelH*0.21, inside the
+    // stow channel, whose angular half-width is chanHa = pocketHa*0.55. Recompute
+    // per daughter type so each pin lands on the actual carved lip, not the
+    // deepest floor (INTENT MISMATCH FIX: comment said "groove lips" but pins
+    // were at the groove centre over the deepest carve → ~12 cm float).
+    const barrelR_m_pin = (Constants.OCTOPUS_V5?.COLLAR_RADIUS ?? 0.40);
+    const chanHaFor = (body) =>
+      this._stowGrooveHalfWidths(body[0], barrelR_m_pin).chanHa;
+    const chanHaWeaver  = chanHaFor(Constants.WEAVER_BODY  ?? [0.2, 0.2, 0.3]);
+    const chanHaSpinner = chanHaFor(Constants.SPINNER_BODY ?? [0.1, 0.1, 0.15]);
+    const pinEps = 2 * Math.PI / 180;   // small margin past the lip onto uncarved hull
 
-      // ── Pyro-pin launch lock — small retention cylinder at the groove lip ──
-      const pyroGeo = new THREE.CylinderGeometry(M * 0.006, M * 0.006, M * 0.025, 4);
-      const pyroMat = new THREE.MeshStandardMaterial({
-        color: 0xcc4400, metalness: 0.6, roughness: 0.4,
-      });
-      const pyro = new THREE.Mesh(pyroGeo, pyroMat);
-      pyro.position.set(
-        Math.cos(azRad) * barrelR * 1.02,
-        Math.sin(azRad) * barrelR * 1.02,
-        -barrelH * 0.21,
-      );
-      const radialUp = new THREE.Vector3(Math.cos(azRad), Math.sin(azRad), 0);
-      pyro.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), radialUp);
-      pyro.name = `PyroPin_${azDeg}`;
-      this.add(pyro);
-    }
+    channelTier.azimuths.forEach((azDeg, aIdx) => {
+      const azRad = azDeg * Math.PI / 180;
+      // Even index = weaver, odd = spinner (matches _carveStowGrooves / ArmManager).
+      const chanHa = (aIdx % 2 === 0) ? chanHaWeaver : chanHaSpinner;
+
+      // Two pins per groove, one on each lip (±(chanHa+ε) around the azimuth), at
+      // radius 1.005R on the uncarved hull just outside the channel wall.
+      for (const side of [-1, 1]) {
+        const lipAz = azRad + side * (chanHa + pinEps);
+        const pyroGeo = new THREE.CylinderGeometry(M * 0.006, M * 0.006, M * 0.025, 4);
+        const pyroMat = new THREE.MeshStandardMaterial({
+          color: 0xcc4400, metalness: 0.6, roughness: 0.4,
+        });
+        const pyro = new THREE.Mesh(pyroGeo, pyroMat);
+        pyro.position.set(
+          Math.cos(lipAz) * barrelR * 1.005,
+          Math.sin(lipAz) * barrelR * 1.005,
+          -barrelH * 0.21,
+        );
+        const radialUp = new THREE.Vector3(Math.cos(lipAz), Math.sin(lipAz), 0);
+        pyro.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), radialUp);
+        pyro.name = `PyroPin_${azDeg}_${side > 0 ? 'hi' : 'lo'}`;
+        this.add(pyro);
+      }
+    });
 
     // (V3 docking cavities removed — Config G uses collar-mounted struts)
     this._dockingCavities = [];
@@ -1351,6 +1539,22 @@ export class PlayerSatellite extends THREE.Group {
     // Map thruster index → Constants.THRUSTERS id (for interlock visual)
     const thrusterIds = ['HT_TOP', 'HT_BOTTOM', 'HT_RIGHT', 'HT_LEFT'];
 
+    // Recessed aft thruster deck — a shallow mounting plate the 4 FEEP cones sit
+    // on, so the cluster reads as attached hardware rather than cones floating off
+    // the aft cap. Sits just aft of the rear cap (z=-M*1.0) on a distinct z-plane
+    // (z=-M*1.008) with DETAIL order so it does not z-fight the cap face; radius
+    // covers the ±0.2M cross while staying inside the 0.40M hull.
+    const deckGeo = new THREE.CylinderGeometry(M * 0.30, M * 0.30, M * 0.04, 16);
+    const deckMat = new THREE.MeshStandardMaterial({
+      color: 0x3a3a44, metalness: 0.7, roughness: 0.45,
+    });
+    const aftDeck = new THREE.Mesh(deckGeo, deckMat);
+    aftDeck.rotation.x = Math.PI / 2;
+    aftDeck.position.set(0, 0, -M * 1.008);
+    aftDeck.name = 'AftThrusterDeck';
+    aftDeck.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+    this.add(aftDeck);
+
     // 4 main FEEP thrusters at aft face, cross pattern (Config G barrel)
     const mainPositions = [
       { x: 0, y: M * 0.2 },  // top
@@ -1466,8 +1670,15 @@ export class PlayerSatellite extends THREE.Group {
 
         const att = new THREE.Mesh(attitudeNozzleGeo, this._matRCS);
         att.position.set(x, y, zOff);
-        // Orient radially outward
+        // Orient radially outward. lookAt aims the mesh +Z at the target, but the
+        // CylinderGeometry axis is +Y — without this rotate the nozzle lies
+        // sideways ("shark fin"). rotateX(π/2) tips the cylinder axis onto the
+        // outward look direction, mirroring the plume fix at L1484.
+        // (attitudeThrusters is write-once: only pushed here at build time and
+        // never re-oriented at runtime, so mutating orientation after lookAt is
+        // safe.)
         att.lookAt(x * 2, y * 2, zOff);
+        att.rotateX(Math.PI / 2);
         att.name = `RCSThruster_${q}_${j}`;
         this.add(att);
         this.attitudeThrusters.push(att);
@@ -1558,17 +1769,18 @@ export class PlayerSatellite extends THREE.Group {
       iridescence: 0.0, // was 0.5 → produced the TEAL thin-film sheen; removed
     });
     this._rosaFrontMats = [panelMatFront];
-    // Back substrate = warm copper-Kapton (real ROSA blanket backing). Near-matte
-    // (very low metalness, high roughness) like real Kapton foil. A modest
-    // emissive gives a self-illuminating floor so the substrate never collapses
-    // to pure black when its face is turned away from the sun / in shadow — the
-    // fix for the "inverted Mother's ROSA wings vanish / dark rectangle on Earth"
-    // regression. Keep emissiveIntensity at/above the ROSA_BACK_EMISSIVE_MIN floor
+    // Back substrate = deep amber-brown copper-Kapton (real ROSA blanket backing
+    // reads dark amber, not beige). Near-matte (very low metalness, high
+    // roughness) like real Kapton foil. A modest emissive gives a
+    // self-illuminating floor so the substrate never collapses to pure black when
+    // its face is turned away from the sun / in shadow — the fix for the
+    // "inverted Mother's ROSA wings vanish / dark rectangle on Earth" regression.
+    // Keep emissiveIntensity at/above the ROSA_BACK_EMISSIVE_MIN (0.24) floor
     // asserted in js/test/test-RosaFurl.js.
     const panelMatBack = new THREE.MeshStandardMaterial({
-      color: 0xc8a878, metalness: 0.08, roughness: 0.85,
+      color: 0x7a4f26, metalness: 0.08, roughness: 0.85,
       side: THREE.BackSide,
-      emissive: 0x6a5638, emissiveIntensity: 0.26,
+      emissive: 0x3e2c14, emissiveIntensity: 0.25,
     });
     const rollMat = new THREE.MeshStandardMaterial({
       color: 0x333344, metalness: 0.5, roughness: 0.4,
@@ -1776,16 +1988,27 @@ export class PlayerSatellite extends THREE.Group {
 
     // ── Two edge booms — run along X (roll-out dir) at both long edges (±Y) ──
     // Cylinder default axis is Y; rotate Z by 90° so it lies along local X.
+    // Booms are added on BOTH faces (±zNudge): the front pair sits on the cell
+    // side, the back pair on the copper-Kapton substrate side so the featureless
+    // back face now carries matching structure. All parented to `wrapper` so the
+    // roll-out scale.x extends them with the blanket. (Booms are not in `struct`
+    // handles, so _setRosaWingProgress leaves them untouched — safe.)
     const boomGeo = new THREE.CylinderGeometry(boomOD / 2, boomOD / 2, rosaW, 6);
     for (const edgeY of [rosaL / 2, -rosaL / 2]) {
-      const boom = new THREE.Mesh(boomGeo, boomMat);
-      boom.rotation.z = Math.PI / 2;           // Y-axis → X-axis (blanket length)
-      // Center at half-width so it spans local x ∈ [0, rosaW]; for the -X wing
-      // the wrapper geometry runs x ∈ [-rosaW, 0], so mirror via sign.
-      boom.position.set(sign * rosaW / 2, edgeY, zNudge);
-      boom.name = `ROSA_Boom_${wing === 1 ? '0' : '180'}deg_${edgeY > 0 ? 'A' : 'B'}`;
-      boom.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
-      wrapper.add(boom);
+      for (const face of [zNudge, -zNudge]) {
+        const boom = new THREE.Mesh(boomGeo, boomMat);
+        boom.rotation.z = Math.PI / 2;           // Y-axis → X-axis (blanket length)
+        // Center at half-width so it spans local x ∈ [0, rosaW]; for the -X wing
+        // the wrapper geometry runs x ∈ [-rosaW, 0], so mirror via sign.
+        boom.position.set(sign * rosaW / 2, edgeY, face);
+        // Keep the original front-boom names (asserted in test-RosaFurl.js); the
+        // new back-face pair gets a distinct "_K" (Kapton side) suffix.
+        boom.name = (face > 0)
+          ? `ROSA_Boom_${wing === 1 ? '0' : '180'}deg_${edgeY > 0 ? 'A' : 'B'}`
+          : `ROSA_Boom_${wing === 1 ? '0' : '180'}deg_${edgeY > 0 ? 'A' : 'B'}_K`;
+        boom.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+        wrapper.add(boom);
+      }
     }
 
     // ── Tip spreader bar — at the outboard edge (x = ±rosaW), spans width (Y) ──
@@ -1820,12 +2043,22 @@ export class PlayerSatellite extends THREE.Group {
     struct.curls = curls;
     struct.sign = sign;
 
-    // ── Root mounting bracket — short standoff from the bus mast to the drum ──
+    // ── Root mounting brackets — three short standoffs from the bus mast to the
+    //    drum (one central + two flanking), giving the root a real truss read. ──
     const brkGeo = new THREE.BoxGeometry(brkLen, drumR * 1.2, drumR * 0.6);
     const bracket = new THREE.Mesh(brkGeo, drumMat);
     bracket.position.set(sign * brkLen / 2, 0, 0);
     bracket.name = `ROSA_Bracket_${wing === 1 ? '0' : '180'}deg`;
     pivot.add(bracket);
+
+    // Two flanking brackets offset along the drum axis (barrel Z), narrower.
+    const brkSideGeo = new THREE.BoxGeometry(brkLen * 0.9, drumR * 0.9, drumR * 0.4);
+    for (const zOff of [rosaL * 0.32, -rosaL * 0.32]) {
+      const brkSide = new THREE.Mesh(brkSideGeo, drumMat);
+      brkSide.position.set(sign * brkLen / 2, 0, zOff);
+      brkSide.name = `ROSA_Bracket_${wing === 1 ? '0' : '180'}deg_${zOff > 0 ? 'A' : 'B'}`;
+      pivot.add(brkSide);
+    }
 
     // ── Spool assembly — drum/mandrel + stowed-coil bulge share a pivot whose
     //    local Y is the barrel axis, so spinning each mesh about its own long
@@ -1999,7 +2232,19 @@ export class PlayerSatellite extends THREE.Group {
 
     // IR Sensor: gold-foil box
     const irGeo = new THREE.BoxGeometry(M * 0.2, M * 0.15, M * 0.2);
-    const irSensor = new THREE.Mesh(irGeo, this._matGoldMLI);
+    // Clone the gold MLI material so the small box can carry a ~1×1-repeat
+    // crinkle instead of the barrel-scale foil shared by _matGoldMLI. Override
+    // ALL THREE maps so the repeat stays consistent across them.
+    const irMat = this._matGoldMLI.clone();
+    const irFoil = getMLIFoilMaps({ repeat: [1, 1] });
+    if (irFoil) {
+      irMat.map = irFoil.albedoMap;
+      irMat.normalMap = irFoil.normalMap;
+      irMat.roughnessMap = irFoil.roughnessMap;
+      irMat.emissiveMap = irFoil.albedoMap;
+      irMat.needsUpdate = true;
+    }
+    const irSensor = new THREE.Mesh(irGeo, irMat);
     irSensor.position.set(-M * 0.25, 0, M * 0.1);
     irSensor.name = 'IR_Sensor';
     this.sensorGimbal.add(irSensor);
@@ -2024,18 +2269,47 @@ export class PlayerSatellite extends THREE.Group {
     this.lidarLight.name = 'LIDAR_Light';
     this.sensorGimbal.add(this.lidarLight);
 
-    // Gimbal base plate
-    // FIX_PLAN §2-followup: basePlate cylinder rotation.x=π/2 makes its 0.05 m
-    // height extend along world Z, centred on sensorGimbal.z=1.0. So plate
-    // z-extent was [0.975, 1.025] — straddles the front cap at z=1.0 →
-    // textbook z-fight on the forward face of the bus. Shift plate 30 mm
-    // forward (local z=+0.03) so its aft face sits clear at z=1.005.
-    const basePlateGeo = new THREE.CylinderGeometry(M * 0.35, M * 0.35, M * 0.05, 8);
+    // Sensor base plate — FIXED deck, re-parented from the articulating gimbal
+    // to the hull (`this`). Only the instruments (EO/IR/LIDAR, children of
+    // sensorGimbal) articulate; the deck they mount to stays put. Ship-local
+    // position is the gimbal origin (0, 0.25M, 1.0M) plus the old gimbal-local
+    // offset (0, -0.1M, +0.03M) = (0, 0.15M, 1.03M).
+    // §2-followup: keep the aft face clear of the front cap plane (z=1.0M); the
+    // deck sits forward of it so nothing straddles/z-fights the cap face.
+    // Plate shrunk r 0.35M → 0.26M so its silhouette stays inside the hull
+    // radius (0.40M) while still covering the instruments at x=±0.25M.
+    const basePlateR = M * 0.26;
+    const basePlateT = M * 0.05;
+    const basePlateGeo = new THREE.CylinderGeometry(basePlateR, basePlateR, basePlateT, 16);
     const basePlate = new THREE.Mesh(basePlateGeo, this._matDark);
     basePlate.rotation.x = Math.PI / 2;
-    basePlate.position.set(0, -M * 0.1, M * 0.03);                          // FIX_PLAN §2-followup
-    basePlate.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;        // FIX_PLAN §2-followup
-    this.sensorGimbal.add(basePlate);
+    basePlate.position.set(0, M * 0.15, M * 1.03);
+    basePlate.name = 'SensorDeck';
+    basePlate.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+    this.add(basePlate);
+
+    // Thin fixed flange/skirt ring bridging the cap face (z=1.0M) to the deck's
+    // aft face. A short open cylinder from the cap plane to just under the plate,
+    // keeping the §2-followup 5 mm stagger (deck aft face ≈ z=1.0055M) so it
+    // does not re-straddle the cap plane.
+    const skirtGeo = new THREE.CylinderGeometry(basePlateR * 0.98, basePlateR * 0.98, M * 0.03, 16, 1, true);
+    const skirt = new THREE.Mesh(skirtGeo, this._matDark);
+    skirt.rotation.x = Math.PI / 2;
+    skirt.position.set(0, M * 0.15, M * 1.015);
+    skirt.name = 'SensorDeckSkirt';
+    skirt.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+    this.add(skirt);
+
+    // Small mount feet under the instruments (fixed to the deck, x=±0.25M).
+    const footGeo = new THREE.CylinderGeometry(M * 0.04, M * 0.05, M * 0.04, 6);
+    for (const fx of [M * 0.25, -M * 0.25]) {
+      const foot = new THREE.Mesh(footGeo, this._matDark);
+      foot.position.set(fx, M * 0.15, M * 1.045);
+      foot.rotation.x = Math.PI / 2;
+      foot.name = 'SensorMountFoot';
+      foot.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      this.add(foot);
+    }
   }
 
   // --------------------------------------------------------------------------
@@ -2064,6 +2338,20 @@ export class PlayerSatellite extends THREE.Group {
     this.dockingPort.position.set(0, -M * 0.15, M * 1.05);
     this.dockingPort.name = 'DockingPort';
     this.add(this.dockingPort);
+
+    // Short docking collar bridging the 10 mm gap between the cap face (z=1.0M)
+    // and the ring (tube nearest point z=1.01M) so the port reads as attached to
+    // the hull rather than floating. Open-ended cylinder centred on the ring
+    // axis (0, -0.15M), r just inside the ring major radius, spanning z 1.0→1.05.
+    // Kept clear of the guide cone at z=1.1M.
+    const collarLen = M * 0.05;
+    const collarGeo = new THREE.CylinderGeometry(M * 0.23, M * 0.23, collarLen, 12, 1, true);
+    const collar = new THREE.Mesh(collarGeo, dockMat);
+    collar.rotation.x = Math.PI / 2;
+    collar.position.set(0, -M * 0.15, M * 1.0 + collarLen * 0.5);
+    collar.name = 'DockingCollar';
+    collar.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+    this.add(collar);
 
     // Docking guide cone
     const guideGeo = new THREE.ConeGeometry(M * 0.22, M * 0.12, 6, 1, true);
