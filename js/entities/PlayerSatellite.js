@@ -305,55 +305,59 @@ export class PlayerSatellite extends THREE.Group {
 
   _buildModel() {
     // Shared materials
-    // Crinkled-MLI normal + roughness + albedo maps, v4 straight-crease mylar
+    // Gold-MLI normal + roughness + albedo maps, v5 HEIGHT-FIELD drape
     // (null in headless/no-DOM). These are BAKED static PNGs loaded from textures/
-    // (mli_foil_*.png); the v4 generator in mliFoilTexture.js is the bake source
+    // (mli_foil_*.png); the v5 generator in mliFoilTexture.js is the bake source
     // (re-run `node scripts/bake-foil-maps.mjs` after knob tweaks), so runtime
     // pays no procedural build cost — just a full-size texture load + a brief
     // pop-in like the Earth textures. Returns a fresh clone per call so each part
-    // can carry its own `repeat`. The v4 `crumpled` generator bakes a 20×16 facet
-    // lattice (~12.5 cm square-ish facets) into ONE tile with straight-edge power-
-    // diagram creases + coarse-parent MERGED panels (large flats + long straight
-    // ridges, the MRO drape) — so the barrel gets a SINGLE un-tiled wrap [1,1]:
-    // the barrel UV is ~2.51 m circumference × 2.0 m (aspect ≈1.26 — near square),
-    // and u=1 is an integer wrap so the cylinder UV stays seamless at u=1 (a
-    // fractional u would put a hard texture seam down the barrel). The aperture
-    // ring reuses the same crumpled tile ([1,1] + smallPart roughness). Instrument
-    // boxes instead use `variant:'flat'` — a calm taut sheet, since the crumpled
-    // facets on a tiny cube face read as glitter. See mliFoilTexture.js header for
-    // the bake pipeline and the v3→v4 straight-crease/panel-merge story.
+    // can carry its own `repeat`. The v5 `crumpled` generator bakes a continuous
+    // drape height field — LARGE smooth near-white↔amber gradient panels, long
+    // straight bright fold-ridge crests + radiating fans, gated micro-crumple —
+    // into ONE tile (the MRO gold-foil read; no cell/facet mosaic). The barrel
+    // gets a SINGLE un-tiled wrap [1,1]: the barrel UV is ~2.51 m circumference ×
+    // 2.0 m (aspect ≈1.26 — near square), and u=1 is an integer wrap so the
+    // cylinder UV stays seamless at u=1 (a fractional u would put a hard texture
+    // seam down the barrel; the height field is tileable by construction). The
+    // aperture ring reuses the same crumpled tile ([1,1] + smallPart roughness).
+    // Instrument boxes instead use `variant:'flat'` — a calm taut sheet, since the
+    // full drape amplitudes on a tiny cube face read as glitter. See
+    // mliFoilTexture.js header for the bake pipeline and the v2.2→v5 height-field
+    // architecture story (fixed per-UV gain, no normalization, no blur).
     const bodyFoil = getMLIFoilMaps({ repeat: [1, 1] });
     this._matBody = new THREE.MeshStandardMaterial({
       color: 0x5c5c64, metalness: 0.7, roughness: 0.55,
     });
     this._matGoldMLI = new THREE.MeshStandardMaterial({
       // MLI thermal blanket — LEMON-gold aluminized-Kapton foil. Real MLI is a
-      // crumpled, highly-REFLECTIVE metallized film: LARGE flat mirror facets at
-      // wildly different tilts separated by razor fold creases, so it reads as a
-      // high-contrast patchwork of near-white specular tiles next to deep shadow
-      // tiles under the PMREM IBL. That specular facet mosaic is the whole look,
-      // so this is a near-MIRROR: metalness 1.0 + roughness 0.45 (the
+      // continuous DRAPED metallized sheet: large smooth mirror panels with
+      // gradient sweeps, separated by sharp tented fold ridges whose crests catch
+      // bright specular streaks — so under the PMREM IBL it reads as big
+      // near-white↔amber gradient panels crossed by bright ridge lines (the MRO
+      // gold-foil look), NOT a facet mosaic. That specular drape is the whole
+      // look, so this is a near-MIRROR: metalness 1.0 + roughness 0.45 (the
       // roughnessMap, relative 0.30–0.60, multiplies it to an effective
-      // ~0.13–0.27 — glossy enough for facet glints, satin enough to avoid a
-      // harsh blown-out sweep). The v3 normalMap writes each facet's strong tilt
-      // (α ~8–40°) DIRECTLY, so the sun breaks into a mirror mosaic rather than
-      // one big sweep. If a rolling blowout still appears in chase view (F4),
-      // raise roughness toward 0.50. Color is LEMON-gold (0xe3c24d, R:G ≈1.16),
+      // ~0.13–0.27 — glossy enough for ridge glints, satin enough to avoid a
+      // harsh blown-out sweep). The v5 normalMap comes from a continuous height
+      // field's gradient, so the sun sweeps smoothly across each panel and pops on
+      // the crests. If a rolling blowout still appears in chase view (F4), raise
+      // roughness toward 0.50. Color is LEMON-gold (0xe3c24d, R:G ≈1.16),
       // NOT amber/copper (0xd6a43e was amber, R:G 1.30 → rejected). Emissive is a
       // matching lemon-shadow tint carrying the shadow side; scan-flash mutates
       // emissive/emissiveIntensity at runtime — the resting tint is retuned here.
       color: 0xe3c24d, metalness: 1.0, roughness: 0.45,
       emissive: 0x4a3d12, emissiveIntensity: 0.16,
     });
-    // Crumpled mirror-foil read (v3): apply the MLI normal + roughness + albedo
-    // maps. The normalMap writes each large flat facet's strong tilt directly so
-    // the environment glints off it (mirror mosaic, no pebble outlines); the
-    // roughnessMap mottles reflectance per-facet (it MULTIPLIES material.roughness,
-    // so it's encoded relative 0.30–0.60 → effective ~0.13–0.27 at roughness
-    // 0.45); the albedoMap is near-neutral/near-white (hue lives in the material
-    // color, variation is SPECULAR not albedo). No-op headless. The body skin
-    // (_matBody) is a clone of this material, so it inherits all three maps at the
-    // same [1,1] wrap automatically.
+    // Drape gold-foil read (v5): apply the MLI normal + roughness + albedo maps.
+    // The normalMap (from the height-field gradient) sweeps each panel smoothly and
+    // tents the fold crests so the environment glints along the ridge lines (no
+    // cell/facet outlines); the roughnessMap mottles reflectance per-panel + roughens
+    // the fold faces (it MULTIPLIES material.roughness, so it's encoded relative
+    // 0.30–0.60 → effective ~0.13–0.27 at roughness 0.45); the albedoMap is
+    // near-neutral/near-white (hue lives in the material color, variation is
+    // SPECULAR not albedo). No-op headless. The body skin (_matBody) is a clone of
+    // this material, so it inherits all three maps at the same [1,1] wrap
+    // automatically.
     if (bodyFoil) {
       this._matGoldMLI.map = bodyFoil.albedoMap;
       this._matGoldMLI.normalMap = bodyFoil.normalMap;
