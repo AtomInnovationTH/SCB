@@ -1,17 +1,37 @@
 /**
- * mliFoilTexture.js — Procedural crumpled gold MLI (Multi-Layer Insulation)
- * foil maps, v3 (crumpled-mylar facet mosaic).
+ * mliFoilTexture.js — Crumpled gold MLI (Multi-Layer Insulation) foil maps, v3
+ * (crumpled-mylar facet mosaic). BAKED-TEXTURE pipeline.
  *
- * Generates tileable normal + roughness + albedo maps that read as real
- * lemon-gold aluminized-Kapton foil — a thin, highly-reflective metallized film
- * that is CRUMPLED into a mosaic of large flat mirror facets separated by
- * razor-sharp fold creases (MOM/Chandrayaan-2/MRO flight & cleanroom photos).
- * The signature look: adjacent facets jump tens of degrees, so the environment
- * reflects off each one at a wildly different angle → a high-contrast patchwork
- * of near-white specular tiles right next to deep shadow tiles. The variation is
- * SPECULAR (facet normal + IBL), not albedo, so this must be paired with a
- * metallic, low-roughness material (PlayerSatellite `_matGoldMLI`: metalness 1.0,
- * roughness ≈0.45) under the scenes' PMREM IBL — the reflection is the effect.
+ * ── BAKE PIPELINE (this module is the SOURCE OF TRUTH for the maps) ───────────
+ * The v3 generator (`buildFoilPixels` + its helpers) is the canonical definition
+ * of the foil look. It is deterministic (hash-based, no time/random seed) and
+ * pure JS with NO DOM, so it runs identically in Node. The four maps are BAKED
+ * to static lossless PNGs in `textures/` by `node scripts/bake-foil-maps.mjs`,
+ * and the RUNTIME loads those PNGs instead of generating pixels — killing the
+ * one-time ~0.8–1s (fast desktop) to ~2–4s+ (low-end) main-thread build stall.
+ * After a knob tweak here, RE-RUN the bake script to regenerate the PNGs.
+ *
+ * Why baking is lossless & MORE consistent: the hash bottoms out in `Math.sin`,
+ * whose last-ULP behaviour is engine-specific (stable within V8, but Safari/JSC
+ * or Firefox could flip an occasional hash bucket). Runtime generation was never
+ * strictly bit-identical across browsers; shipping baked PNGs makes it so. Bake
+ * on Node/V8 only — re-bakes on the same toolchain are sha256-stable.
+ *
+ * ⚠ RE-BAKE DEPLOY NOTE: sw.js serves `/textures/` CACHE-FIRST, so re-baked PNGs
+ * only reach returning players via a release (Constants.VERSION + sw.js
+ * CACHE_NAME bumped together, per the pairing rule). No per-file version suffix
+ * (matches the Earth textures).
+ *
+ * ── THE LOOK ──────────────────────────────────────────────────────────────────
+ * Tileable normal + roughness + albedo maps that read as real lemon-gold
+ * aluminized-Kapton foil — a thin, highly-reflective metallized film CRUMPLED
+ * into a mosaic of large flat mirror facets separated by razor-sharp fold creases
+ * (MOM/Chandrayaan-2/MRO flight & cleanroom photos). Adjacent facets jump tens of
+ * degrees, so the environment reflects off each one at a wildly different angle →
+ * a high-contrast patchwork of near-white specular tiles next to deep shadow
+ * tiles. The variation is SPECULAR (facet normal + IBL), not albedo, so this must
+ * be paired with a metallic, low-roughness material (PlayerSatellite
+ * `_matGoldMLI`: metalness 1.0, roughness ≈0.45) under the scenes' PMREM IBL.
  *
  * History: v1 (fBm value noise) → hammered/blobby metal. v2 (dense isotropic
  * cellular facets, deep V grooves) → "gold nuggets" (cobblestone + grout). v2.1
@@ -38,23 +58,40 @@
  * SIGN TRAP: canvas rows run top-down while UV v runs bottom-up. v2.2 handled
  * this implicitly via the Sobel `−dy` term; v3 writes normals directly and so
  * NEGATES ny on write (G = (−ny)·0.5+0.5) or every facet lights upside-down.
+ * The baked PNGs write rows top-down exactly like the old canvas, and
+ * `THREE.Texture`/`ImageLoader` default `flipY = true` just like `CanvasTexture`
+ * — identical orientation, so the ny negation stays correct. Do NOT touch flipY,
+ * and do NOT switch to ImageBitmapLoader (it flips at decode).
  *
- * Follows the solarCellTexture.js convention: one-shot cached generation and
- * **returns null in headless/no-DOM environments** (tests instantiate
- * PlayerSatellite in node with no document). Because material `.clone()` shares
- * texture references, per-part scale requires cloned texture objects (they share
- * the backing canvas but carry an independent `repeat`), so getMLIFoilMaps()
- * returns freshly-cloned textures on every call. Two roughness canvases are
- * cached: the default and a `smallPart` variant (higher floor) for cm-scale
- * clones (aperture ring, IR box) that would otherwise clip to white under bloom.
+ * ── RUNTIME LOADER (full-size-placeholder swap) ───────────────────────────────
+ * `getMLIFoilMaps` clones from per-map "master" textures that start life showing
+ * a FULL-SIZE (`FOIL_SIZE`²) solid-neutral placeholder canvas, then swap in the
+ * decoded PNG via `texture.image = img; needsUpdate = true`. The placeholder MUST
+ * be full-size: r184 uploads regular textures through IMMUTABLE `texStorage2D`,
+ * allocating storage ONCE at the first upload's dimensions; a 1×1 placeholder
+ * swapped to 1024² would `texSubImage2D` out of bounds (GL error, texture stuck
+ * at 1×1). Full-size placeholder ⇒ first upload allocates 1024² immutable storage
+ * + mips, and the PNG arrival is a same-size `texSubImage2D` re-upload — the only
+ * supported swap path. The placeholder fill is ~1–3 ms and is GC'd after the swap.
+ * Cost: a brief pop-in (plain lemon-gold neutral for <~300 ms until the PNG
+ * decodes) on a cold first visit — matches the Earth texture loads; the service
+ * worker makes repeat visits instant.
+ *
+ * Clones share the master's `Source`, and `Texture.copy()` forces version 1, so
+ * a clone issued before the PNG arrives is registered and gets `needsUpdate` on
+ * swap; clones issued after are already backed by uploaded storage. Per-part
+ * scale works because each clone carries an independent `repeat`. Two roughness
+ * masters exist: the default and a `smallPart` variant (higher floor) for
+ * cm-scale clones (aperture ring, IR box) that would otherwise clip to white
+ * under bloom.
+ *
+ * **Returns null in headless/no-DOM environments** (tests instantiate
+ * PlayerSatellite in node with no document; ImageLoader needs DOM anyway).
  *
  * @module scene/mliFoilTexture
  */
 
 import * as THREE from 'three';
-
-/** Cached master canvases keyed by resolution (backing pixels are shared). */
-const _canvasCache = new Map();
 
 /**
  * Deterministic 2-D hash → 0..1. Used for feature-point jitter, per-cell tilt,
@@ -291,37 +328,32 @@ function _buildFields(size, cellsU, cellsV) {
 }
 
 /**
- * Build the shared master canvases at `size`: normal + default roughness +
- * smallPart roughness + albedo. Direct per-pixel normal write (no Sobel/blur).
- * @param {number} size
- * @returns {{ normalCanvas, roughCanvas, roughSmallCanvas, albedoCanvas }|null}
+ * Build the v3 crumpled-mylar maps as raw RGBA pixel buffers — PURE JS, NO DOM.
+ * This is the BAKE SOURCE OF TRUTH: `scripts/bake-foil-maps.mjs` calls it in Node
+ * and encodes the result to the static PNGs the runtime loads. Direct per-pixel
+ * normal write (no Sobel/blur). Rows top-down (canvas/flipY-true parity).
+ *
+ * Four `Uint8ClampedArray(size*size*4)` RGBA buffers:
+ *  - `normal`     : facet normal, ny negated (canvas-y-down vs UV-v-up), α=255.
+ *  - `rough`      : default roughness, R=G=B, α=255 (multiplies material 0.45).
+ *  - `roughSmall` : higher-floor roughness for cm-scale clones, R=G=B, α=255.
+ *  - `albedo`     : near-neutral/near-white, R=G=B, α=255 (hue lives in material).
+ *
+ * @param {number} [size=1024]
+ * @returns {{ size:number, normal:Uint8ClampedArray, rough:Uint8ClampedArray,
+ *             roughSmall:Uint8ClampedArray, albedo:Uint8ClampedArray }}
  */
-function _buildCanvases(size) {
-  if (typeof document === 'undefined') return null;
-  const normalCanvas = document.createElement('canvas');
-  const roughCanvas = document.createElement('canvas');
-  const roughSmallCanvas = document.createElement('canvas');
-  const albedoCanvas = document.createElement('canvas');
-  normalCanvas.width = normalCanvas.height = size;
-  roughCanvas.width = roughCanvas.height = size;
-  roughSmallCanvas.width = roughSmallCanvas.height = size;
-  albedoCanvas.width = albedoCanvas.height = size;
-  if (typeof normalCanvas.getContext !== 'function') return null;
-  const nctx = normalCanvas.getContext('2d');
-  const rctx = roughCanvas.getContext('2d');
-  const rsctx = roughSmallCanvas.getContext('2d');
-  const actx = albedoCanvas.getContext('2d');
-  if (!nctx || !rctx || !rsctx || !actx) return null;
-
+export function buildFoilPixels(size = 1024) {
   // ~14 cm square-ish facets on the 2.51×2.0 m barrel at repeat [1,1]:
   // 18 along u (circumference), 14 along v (height).
   const cellsU = 18, cellsV = 14;
   const { nx, ny, nz, crease, id: idField, tone } = _buildFields(size, cellsU, cellsV);
 
-  const nImg = nctx.createImageData(size, size);
-  const rImg = rctx.createImageData(size, size);
-  const rsImg = rsctx.createImageData(size, size);
-  const aImg = actx.createImageData(size, size);
+  const N = size * size;
+  const normal = new Uint8ClampedArray(N * 4);
+  const rough = new Uint8ClampedArray(N * 4);
+  const roughSmall = new Uint8ClampedArray(N * 4);
+  const albedo = new Uint8ClampedArray(N * 4);
 
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
@@ -329,10 +361,10 @@ function _buildCanvases(size) {
       const idx = p * 4;
 
       // ── Normal map v3 ─── direct write; NEGATE ny (canvas-y-down vs UV-v-up).
-      nImg.data[idx + 0] = Math.round((nx[p] * 0.5 + 0.5) * 255);
-      nImg.data[idx + 1] = Math.round((-ny[p] * 0.5 + 0.5) * 255);
-      nImg.data[idx + 2] = Math.round((nz[p] * 0.5 + 0.5) * 255);
-      nImg.data[idx + 3] = 255;
+      normal[idx + 0] = Math.round((nx[p] * 0.5 + 0.5) * 255);
+      normal[idx + 1] = Math.round((-ny[p] * 0.5 + 0.5) * 255);
+      normal[idx + 2] = Math.round((nz[p] * 0.5 + 0.5) * 255);
+      normal[idx + 3] = 255;
 
       const facetId = idField[p];
       const c = crease[p];
@@ -340,17 +372,17 @@ function _buildCanvases(size) {
       // ── Roughness v3 ─── per-facet 0.30 + variantId·0.30 (0.30–0.60) +
       // crease·0.10. Sparkle REMOVED (large facets glint on their own). This map
       // MULTIPLIES material.roughness (≈0.45) → effective ~0.13–0.32.
-      let rough = 0.30 + facetId * 0.30 + c * 0.10;
-      rough = Math.max(0.30, Math.min(0.70, rough));
-      const rv = Math.round(rough * 255);
-      rImg.data[idx + 0] = rv; rImg.data[idx + 1] = rv; rImg.data[idx + 2] = rv; rImg.data[idx + 3] = 255;
+      let r = 0.30 + facetId * 0.30 + c * 0.10;
+      r = Math.max(0.30, Math.min(0.70, r));
+      const rv = Math.round(r * 255);
+      rough[idx + 0] = rv; rough[idx + 1] = rv; rough[idx + 2] = rv; rough[idx + 3] = 255;
 
       // smallPart roughness: same facets, higher floor (0.50) so cm-scale clones
       // (aperture ring, IR box) don't clip to white under bloom.
       let roughS = 0.50 + facetId * 0.20 + c * 0.08;
       roughS = Math.max(0.50, Math.min(0.80, roughS));
       const rsv = Math.round(roughS * 255);
-      rsImg.data[idx + 0] = rsv; rsImg.data[idx + 1] = rsv; rsImg.data[idx + 2] = rsv; rsImg.data[idx + 3] = 255;
+      roughSmall[idx + 0] = rsv; roughSmall[idx + 1] = rsv; roughSmall[idx + 2] = rsv; roughSmall[idx + 3] = 255;
 
       // ── Albedo v3 ─── near-neutral/near-white; hue lives in the material
       // color so the gold reads LEMON, not amber. Faint per-facet tone jitter
@@ -358,68 +390,155 @@ function _buildCanvases(size) {
       const toneV = 0.95 + (tone[p] - 0.5) * 0.07;      // ±3.5% per facet
       const luma = toneV * (1 - c * 0.05);              // crease ≤5%
       const lv = Math.round(Math.min(1, luma) * 255);
-      aImg.data[idx + 0] = lv; aImg.data[idx + 1] = lv; aImg.data[idx + 2] = lv; aImg.data[idx + 3] = 255;
+      albedo[idx + 0] = lv; albedo[idx + 1] = lv; albedo[idx + 2] = lv; albedo[idx + 3] = 255;
     }
   }
-  nctx.putImageData(nImg, 0, 0);
-  rctx.putImageData(rImg, 0, 0);
-  rsctx.putImageData(rsImg, 0, 0);
-  actx.putImageData(aImg, 0, 0);
-  return { normalCanvas, roughCanvas, roughSmallCanvas, albedoCanvas };
+  return { size, normal, rough, roughSmall, albedo };
 }
 
 /**
- * Get crinkled-MLI normal + roughness + albedo maps (v3 crumpled mylar).
+ * MUST match the baked PNG dimensions (`scripts/bake-foil-maps.mjs` bakes at this
+ * size). Used only for full-size placeholder allocation (the immutable-storage
+ * trap). A re-bake at a different size MUST update this constant too.
+ */
+const FOIL_SIZE = 1024;
+
+/** Baked map files, relative paths (Earth.js / textures/ convention). */
+const FOIL_FILES = {
+  normal: 'textures/mli_foil_normal.png',
+  rough: 'textures/mli_foil_roughness.png',
+  roughSmall: 'textures/mli_foil_roughness_small.png',
+  albedo: 'textures/mli_foil_albedo.png',
+};
+
+/**
+ * Neutral solid fill per map for the full-size placeholder (the color a facet
+ * reads before the PNG decodes): normal flat-up, rough/roughSmall mid-grey,
+ * albedo white. Ensures the pre-load look degrades to plain lemon-gold, not a
+ * black or broken material.
+ */
+const FOIL_NEUTRAL = {
+  normal: 'rgb(128,128,255)',
+  rough: 'rgb(128,128,128)',
+  roughSmall: 'rgb(153,153,153)',
+  albedo: 'rgb(255,255,255)',
+};
+
+/**
+ * Per-map master texture records: `{ texture, loaded, clones[] }`. The texture
+ * starts on a full-size neutral placeholder and swaps in the decoded PNG. Clones
+ * issued before load are tracked so they can be version-bumped on swap.
+ */
+const _masters = new Map();
+
+/** Build a full-size solid-neutral placeholder canvas (immutable-storage trap). */
+function _makePlaceholderCanvas(fill) {
+  const c = document.createElement('canvas');
+  c.width = c.height = FOIL_SIZE;
+  // Some test harnesses stub `document.createElement` with a bare object (no
+  // canvas API); treat that as headless — return null so the caller degrades
+  // to the null contract instead of throwing (matches the old _buildCanvases
+  // `getContext !== 'function'` guard).
+  if (typeof c.getContext !== 'function') return null;
+  const ctx = c.getContext('2d');
+  if (!ctx || typeof ctx.fillRect !== 'function') return null;
+  ctx.fillStyle = fill;
+  ctx.fillRect(0, 0, FOIL_SIZE, FOIL_SIZE);
+  return c;
+}
+
+/**
+ * Get (or lazily create) the master texture for a map key. The master owns the
+ * shared `Source`; `getMLIFoilMaps` returns `.clone()`s of it. The PNG loads once
+ * per key and swaps into the shared Source via a same-size texSubImage2D.
+ */
+function _getMaster(key, colorSpace) {
+  let rec = _masters.get(key);
+  if (rec) return rec;
+
+  const placeholder = _makePlaceholderCanvas(FOIL_NEUTRAL[key]);
+  if (!placeholder) return null;
+
+  // Plain Texture (not CanvasTexture): r184 never reads isCanvasTexture, and this
+  // texture later carries an <img>. Full-size placeholder ⇒ first upload
+  // allocates FOIL_SIZE² immutable storage; the PNG swap is a same-size re-upload.
+  const texture = new THREE.Texture(placeholder);
+  texture.colorSpace = colorSpace;
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.anisotropy = 8;
+  texture.needsUpdate = true;
+
+  rec = { texture, loaded: false, clones: [] };
+  _masters.set(key, rec);
+
+  new THREE.ImageLoader().load(
+    FOIL_FILES[key],
+    (image) => {
+      // Same-size texSubImage2D re-upload into the pre-allocated storage.
+      rec.texture.image = image;
+      rec.texture.needsUpdate = true;
+      // Each clone gates on its OWN version; bump the ones issued pre-load.
+      for (const c of rec.clones) c.needsUpdate = true;
+      rec.clones.length = 0;
+      rec.loaded = true;
+    },
+    undefined,
+    () => {
+      // Offline first visit: keep the neutral placeholder, warn once, no crash
+      // and no per-frame renderer spam (the placeholder is a valid image).
+      console.warn(`[mliFoilTexture] failed to load ${FOIL_FILES[key]}; using neutral placeholder`);
+    }
+  );
+  return rec;
+}
+
+/**
+ * Get crinkled-MLI normal + roughness + albedo maps (v3 crumpled mylar), backed
+ * by the baked static PNGs in `textures/`.
  *
- * Returns freshly-cloned CanvasTexture objects on every call (sharing the
- * cached backing canvas) so each material part can set its own `repeat` without
- * disturbing others. Returns `null` in headless/no-DOM environments.
+ * Returns freshly-cloned Texture objects on every call (sharing the cached master
+ * Source) so each material part can set its own `repeat` without disturbing
+ * others. Returns `null` in headless/no-DOM environments.
  *
  * @param {object} [opts]
- * @param {number} [opts.size=1024]                 canvas pixel dimension (power of two)
- * @param {number|[number,number]} [opts.repeat=1]  UV repeat (scalar or [u,v])
- * @param {boolean} [opts.smallPart=false]          use the higher-floor roughness
- *                                                   canvas for cm-scale clones
+ * @param {number} [opts.size]                       ignored (files are fixed size)
+ * @param {number|[number,number]} [opts.repeat=1]   UV repeat (scalar or [u,v])
+ * @param {boolean} [opts.smallPart=false]           use the higher-floor roughness
+ *                                                    master for cm-scale clones
  * @returns {{ normalMap, roughnessMap, albedoMap }|null}
  */
 export function getMLIFoilMaps(opts = {}) {
-  const size = opts.size || 1024;
   if (typeof document === 'undefined') return null;
-
-  let master = _canvasCache.get(size);
-  if (!master) {
-    master = _buildCanvases(size);
-    if (!master) return null;
-    _canvasCache.set(size, master);
-  }
 
   const ru = Array.isArray(opts.repeat) ? opts.repeat[0] : (opts.repeat ?? 1);
   const rv = Array.isArray(opts.repeat) ? opts.repeat[1] : (opts.repeat ?? 1);
 
-  const mk = (canvas, colorSpace) => {
-    const t = new THREE.CanvasTexture(canvas);
-    t.colorSpace = colorSpace;
-    t.wrapS = THREE.RepeatWrapping;
-    t.wrapT = THREE.RepeatWrapping;
+  const clone = (rec) => {
+    if (!rec) return null;
+    const t = rec.texture.clone();      // shares Source; copy() forces version 1
     t.repeat.set(ru, rv);
-    t.anisotropy = 8;
-    t.needsUpdate = true;
+    // Only pre-load clones need the registry: post-load the Source is already
+    // uploaded and copy()'s version bump uploads them on first bind.
+    if (!rec.loaded) rec.clones.push(t);
     return t;
   };
 
-  return {
-    // Normal map is vector data, not color — must be NoColorSpace. Roughness
-    // stays linear (NoColorSpace). Albedo is color (SRGB).
-    normalMap: mk(master.normalCanvas, THREE.NoColorSpace),
-    roughnessMap: mk(
-      opts.smallPart ? master.roughSmallCanvas : master.roughCanvas,
-      THREE.NoColorSpace
-    ),
-    albedoMap: mk(master.albedoCanvas, THREE.SRGBColorSpace),
-  };
+  const normalMap = clone(_getMaster('normal', THREE.NoColorSpace));
+  const roughnessMap = clone(_getMaster(
+    opts.smallPart ? 'roughSmall' : 'rough',
+    THREE.NoColorSpace
+  ));
+  const albedoMap = clone(_getMaster('albedo', THREE.SRGBColorSpace));
+
+  if (!normalMap || !roughnessMap || !albedoMap) return null;
+  return { normalMap, roughnessMap, albedoMap };
 }
 
-/** Test/teardown hook — drop the cached master canvases. */
+/** Test/teardown hook — dispose the master textures and drop the cache. */
 export function _resetMLIFoilTextureCache() {
-  _canvasCache.clear();
+  for (const rec of _masters.values()) {
+    if (rec.texture) rec.texture.dispose();
+  }
+  _masters.clear();
 }

@@ -306,16 +306,21 @@ export class PlayerSatellite extends THREE.Group {
   _buildModel() {
     // Shared materials
     // Crinkled-MLI normal + roughness + albedo maps, v3 crumpled mylar (null in
-    // headless/no-DOM). Returns a fresh clone per call so each part can carry its
-    // own `repeat`. The v3 generator bakes an 18×14 facet lattice into ONE tile,
-    // so the barrel gets a SINGLE un-tiled wrap [1,1]: the barrel UV is
-    // ~2.51 m circumference × 2.0 m (aspect ≈1.26 — near square), which the 18×14
-    // lattice absorbs into ~14 cm square-ish mirror facets with razor creases —
-    // the reference facet scale (10–20 facets across a face), not v2.2's tiled
-    // 4–5 cm pebbles. u=1 is an integer wrap so the cylinder UV stays seamless at
-    // u=1 (a fractional u would put a hard texture seam down the barrel). Small
-    // parts (aperture ring, IR box) reuse the same tile at [1,1] + smallPart
-    // roughness. See mliFoilTexture.js header for the v2.2→v3 inversion story.
+    // headless/no-DOM). These are BAKED static PNGs loaded from textures/
+    // (mli_foil_*.png); the v3 generator in mliFoilTexture.js is the bake source
+    // (re-run `node scripts/bake-foil-maps.mjs` after knob tweaks), so runtime
+    // pays no procedural build cost — just a full-size texture load + a brief
+    // pop-in like the Earth textures. Returns a fresh clone per call so each part
+    // can carry its own `repeat`. The v3 generator bakes an 18×14 facet lattice
+    // into ONE tile, so the barrel gets a SINGLE un-tiled wrap [1,1]: the barrel
+    // UV is ~2.51 m circumference × 2.0 m (aspect ≈1.26 — near square), which the
+    // 18×14 lattice absorbs into ~14 cm square-ish mirror facets with razor
+    // creases — the reference facet scale (10–20 facets across a face), not
+    // v2.2's tiled 4–5 cm pebbles. u=1 is an integer wrap so the cylinder UV
+    // stays seamless at u=1 (a fractional u would put a hard texture seam down
+    // the barrel). Small parts (aperture ring, IR box) reuse the same tile at
+    // [1,1] + smallPart roughness. See mliFoilTexture.js header for the bake
+    // pipeline and the v2.2→v3 inversion story.
     const bodyFoil = getMLIFoilMaps({ repeat: [1, 1] });
     this._matBody = new THREE.MeshStandardMaterial({
       color: 0x5c5c64, metalness: 0.7, roughness: 0.55,
