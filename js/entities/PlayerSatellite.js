@@ -11,7 +11,7 @@ import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
-import { getSolarCellTexture } from '../scene/solarCellTexture.js';
+import { getSolarCellTexture, getRosaBackTexture } from '../scene/solarCellTexture.js';
 import { getMLIFoilMaps } from '../scene/mliFoilTexture.js';
 import { powerDistribution } from '../systems/PowerDistribution.js';
 import {
@@ -279,76 +279,79 @@ export class PlayerSatellite extends THREE.Group {
 
   /** @private */
   /**
-   * Build a thin dark border frame (mounting-rail read) sized to a PV panel.
-   * Four flat bars forming a rectangle outline in the panel's local XY plane,
-   * so it can share the panel's position/quaternion. Masks the residual gold
-   * edge lift of flat facet panels on the curved hull.
-   * @param {number} w panel width (local X)
-   * @param {number} h panel height (local Y)
-   * @param {number} renderOrder renderOrder applied to each bar (groups don't
-   *   propagate renderOrder to children in three.js)
-   * @returns {THREE.Group}
+   * Build a thin PV panel BOX (Task 1, F1 z-layer fix). The outward +z face
+   * carries the GaAs cell material; the four side walls + inner (−z) face carry
+   * the dark mounting-rail material (`_matPanelRail`) — the 10 mm side walls ARE
+   * the mounting rail that covers the flat-facet-over-curved-hull corner air gap,
+   * so no separate frame decal is needed. BoxGeometry material array order is
+   * [+x, −x, +y, −y, +z, −z]; index 4 (+z) is the cell face, which carries
+   * standard 0..1 UVs so the cell texture's `repeat` is unchanged. The panel is
+   * positioned by the caller so the +z face lands at the visual radius (1.014R)
+   * and the back sits buried at 1.004R.
+   * @param {number} w   panel width (local X)
+   * @param {number} h   panel height (local Y)
+   * @param {number} thick  panel thickness (local Z)
+   * @param {THREE.Material} cellMat  outward-face GaAs cell material
+   * @returns {THREE.Mesh}
    * @private
    */
-  _makePanelFrame(w, h, renderOrder) {
-    const t = Math.min(w, h) * 0.06; // frame bar thickness
-    const g = new THREE.Group();
-    const mat = this._matPanelFrame;
-    const bars = [
-      { gw: w, gh: t, x: 0, y: (h - t) / 2 },   // top
-      { gw: w, gh: t, x: 0, y: -(h - t) / 2 },  // bottom
-      { gw: t, gh: h - 2 * t, x: (w - t) / 2, y: 0 },   // right
-      { gw: t, gh: h - 2 * t, x: -(w - t) / 2, y: 0 },  // left
-    ];
-    for (const b of bars) {
-      const bar = new THREE.Mesh(new THREE.PlaneGeometry(b.gw, b.gh), mat);
-      bar.position.set(b.x, b.y, 0);
-      bar.renderOrder = renderOrder;
-      g.add(bar);
-    }
-    return g;
+  _makePanelBox(w, h, thick, cellMat) {
+    const geo = new THREE.BoxGeometry(w, h, thick);
+    const rail = this._matPanelRail;
+    // [+x, −x, +y, −y, +z(outward cell), −z(inner rail)]
+    const mats = [rail, rail, rail, rail, cellMat, rail];
+    return new THREE.Mesh(geo, mats);
   }
 
   _buildModel() {
     // Shared materials
-    // Crinkled-MLI normal + roughness maps (null in headless/no-DOM). Returns a
-    // fresh clone per call so each part can carry its own `repeat`. The barrel
-    // body wraps ~2.5 m circumference × 2 m, so it gets a higher repeat for tight
-    // wrinkles; small parts (aperture ring, IR box) get ~1×1.
-    // Barrel foil repeat: u MUST stay an integer (the cylinder UV closes at u=1;
-    // a fractional u puts a hard texture seam down the barrel). [5, 4] lands the
-    // crumple facets ~4–5 cm on the ~2.5 m barrel (real MLI crinkle density).
-    const bodyFoil = getMLIFoilMaps({ repeat: [5, 4] });
+    // Crinkled-MLI normal + roughness + albedo maps, v3 crumpled mylar (null in
+    // headless/no-DOM). Returns a fresh clone per call so each part can carry its
+    // own `repeat`. The v3 generator bakes an 18×14 facet lattice into ONE tile,
+    // so the barrel gets a SINGLE un-tiled wrap [1,1]: the barrel UV is
+    // ~2.51 m circumference × 2.0 m (aspect ≈1.26 — near square), which the 18×14
+    // lattice absorbs into ~14 cm square-ish mirror facets with razor creases —
+    // the reference facet scale (10–20 facets across a face), not v2.2's tiled
+    // 4–5 cm pebbles. u=1 is an integer wrap so the cylinder UV stays seamless at
+    // u=1 (a fractional u would put a hard texture seam down the barrel). Small
+    // parts (aperture ring, IR box) reuse the same tile at [1,1] + smallPart
+    // roughness. See mliFoilTexture.js header for the v2.2→v3 inversion story.
+    const bodyFoil = getMLIFoilMaps({ repeat: [1, 1] });
     this._matBody = new THREE.MeshStandardMaterial({
       color: 0x5c5c64, metalness: 0.7, roughness: 0.55,
     });
     this._matGoldMLI = new THREE.MeshStandardMaterial({
-      // MLI thermal blanket — warm gold foil (amber Kapton over aluminized
-      // mylar). Real MLI is a crinkled, highly-REFLECTIVE metallized film: flat
-      // mirror facets at many tilts separated by sharp fold creases, so it reads
-      // as broken high-contrast gold glints under the PMREM IBL. That specular
-      // facet read is the whole look, so this is a near-MIRROR: metalness 1.0 +
-      // roughness 0.5 (the roughnessMap, relative 0.30–1.00, multiplies it to an
-      // effective ~0.15–0.33 — glossy enough for facet glints, satin enough to
-      // avoid a harsh blown-out sweep). The facet-normal variation from the
-      // normalMap breaks the sun into many small glints rather than one big
-      // sweep. If a rolling blowout still appears in chase view, raise roughness
-      // toward 0.55. Emissive warmth still carries the shadow side.
-      color: 0xd6a43e, metalness: 1.0, roughness: 0.5,
-      emissive: 0x4a3008, emissiveIntensity: 0.16,
+      // MLI thermal blanket — LEMON-gold aluminized-Kapton foil. Real MLI is a
+      // crumpled, highly-REFLECTIVE metallized film: LARGE flat mirror facets at
+      // wildly different tilts separated by razor fold creases, so it reads as a
+      // high-contrast patchwork of near-white specular tiles next to deep shadow
+      // tiles under the PMREM IBL. That specular facet mosaic is the whole look,
+      // so this is a near-MIRROR: metalness 1.0 + roughness 0.45 (the
+      // roughnessMap, relative 0.30–0.60, multiplies it to an effective
+      // ~0.13–0.27 — glossy enough for facet glints, satin enough to avoid a
+      // harsh blown-out sweep). The v3 normalMap writes each facet's strong tilt
+      // (α ~8–40°) DIRECTLY, so the sun breaks into a mirror mosaic rather than
+      // one big sweep. If a rolling blowout still appears in chase view (F4),
+      // raise roughness toward 0.50. Color is LEMON-gold (0xe3c24d, R:G ≈1.16),
+      // NOT amber/copper (0xd6a43e was amber, R:G 1.30 → rejected). Emissive is a
+      // matching lemon-shadow tint carrying the shadow side; scan-flash mutates
+      // emissive/emissiveIntensity at runtime — the resting tint is retuned here.
+      color: 0xe3c24d, metalness: 1.0, roughness: 0.45,
+      emissive: 0x4a3d12, emissiveIntensity: 0.16,
     });
-    // Crumpled mirror-foil read (v2.2): apply the MLI normal + roughness +
-    // albedo maps. The normalMap tilts each flat facet a different way so the
-    // environment glints off it (mirror crumple); the roughnessMap mottles
-    // reflectance per-facet + sparkles (it MULTIPLIES material.roughness, so
-    // it's encoded relative 0.30–1.00 → effective ~0.13–0.27 at roughness 0.42);
-    // the albedoMap is near-uniform amber (variation is specular, not albedo).
-    // No-op headless. The body skin (_matBody) is a clone of this material, so
-    // it inherits all three maps at the same barrel-scale repeat automatically.
+    // Crumpled mirror-foil read (v3): apply the MLI normal + roughness + albedo
+    // maps. The normalMap writes each large flat facet's strong tilt directly so
+    // the environment glints off it (mirror mosaic, no pebble outlines); the
+    // roughnessMap mottles reflectance per-facet (it MULTIPLIES material.roughness,
+    // so it's encoded relative 0.30–0.60 → effective ~0.13–0.27 at roughness
+    // 0.45); the albedoMap is near-neutral/near-white (hue lives in the material
+    // color, variation is SPECULAR not albedo). No-op headless. The body skin
+    // (_matBody) is a clone of this material, so it inherits all three maps at the
+    // same [1,1] wrap automatically.
     if (bodyFoil) {
       this._matGoldMLI.map = bodyFoil.albedoMap;
       this._matGoldMLI.normalMap = bodyFoil.normalMap;
-      this._matGoldMLI.normalScale = new THREE.Vector2(0.9, 0.9);
+      this._matGoldMLI.normalScale = new THREE.Vector2(1.0, 1.0);
       this._matGoldMLI.roughnessMap = bodyFoil.roughnessMap;
       // emissiveMap carries the crease pattern onto the shadow side, where flat
       // emissive would otherwise wash the crease darkening out. Scan-flash
@@ -358,13 +361,15 @@ export class PlayerSatellite extends THREE.Group {
     this._matDark = new THREE.MeshStandardMaterial({
       color: 0x222233, metalness: 0.6, roughness: 0.4,
     });
-    // PV panel frame/mounting-rail material — dark satin metal outline drawn as a
-    // thin border around each flat body-mounted cell to mask the ~2% edge lift
-    // (flat 22.5° facet over a curved hull). depthWrite off so it always paints
-    // on the panel it frames (like the other DETAIL decals).
-    this._matPanelFrame = new THREE.MeshStandardMaterial({
+    // PV panel mounting-rail material (Task 1) — dark satin metal on the side
+    // walls + inner face of the thin PV boxes. The 10 mm box side walls ARE the
+    // mounting rail (they cover the ~6.7 mm corner air gap of a flat facet panel
+    // over the curved hull), so this replaces the old zero-thickness frame decal:
+    // solid, depth-writing, single-sided (FrontSide) — no polygon offset, no
+    // decal render-order tricks.
+    this._matPanelRail = new THREE.MeshStandardMaterial({
       color: 0x1a1a22, metalness: 0.55, roughness: 0.5,
-      depthWrite: false, side: THREE.DoubleSide,
+      side: THREE.FrontSide,
     });
     // FEEP nozzle material — copper/bronze tint (field-emission emitters use refractory metals)
     this._matFEEP = new THREE.MeshStandardMaterial({
@@ -626,6 +631,10 @@ export class PlayerSatellite extends THREE.Group {
     const barrelFacets = 16;                  // matches the barrel shell segment count
     const facetStep = (Math.PI * 2) / barrelFacets; // 22.5°
     const facetWidth = 2 * (barrelR * 1.006) * Math.tan(facetStep / 2); // chord of one facet
+    // Task 1 (F1): PV panels are thin boxes 10 mm deep. The dark side walls (this
+    // thickness) cover the ~6.7 mm corner air gap of a flat 22.5° facet panel over
+    // the curved hull and give the panel a real silhouette lip at the limb.
+    const PANEL_THICK = M * 0.010;
 
     const barrelCellTex = getSolarCellTexture();
     const makeRowMat = (texRows) => {
@@ -645,13 +654,12 @@ export class PlayerSatellite extends THREE.Group {
         metalness: 0.25, roughness: 0.7,
         emissive: 0x0b1030, emissiveIntensity: 0.18,
         side: THREE.FrontSide,
-        // §2-followup (round 5): barrel PV panels are flat DECALS tangent to the
-        // body at 1.006× radius — only ~0.6% proud, so they z-fought the gold
-        // MLI shell at some zooms under logarithmicDepthBuffer. Don't write depth
-        // and rely on renderOrder (DETAIL > body OPAQUE) so each panel always
-        // paints on the body it sits on, with no depth tie. depthTest stays on so
-        // the far side of the barrel still occludes panels behind it.
-        depthWrite: false,
+        // Task 1 (F1 z-layer fix): panels are now thin BOXES, not zero-thickness
+        // decals. The +z (outward) cell face sits at 1.014R with the back face
+        // buried under the panel at 1.004R, so the panel has real depth and can
+        // write depth normally — no more coplanar-decal z-fight, no floating
+        // sticker read. depthWrite ON, standard OPAQUE render order.
+        depthWrite: true,
       });
     };
     // PV rows: { z-centre, height, texture rows }. Three rows: central + 2 ends.
@@ -705,27 +713,20 @@ export class PlayerSatellite extends THREE.Group {
         // keep-out so no aft cell overlaps a pocket or a stowed daughter.
         if (row.aft && strutAz.some(s => angDist(az, s) < strutKeepAft)) continue;
 
-        const panelGeo = new THREE.PlaneGeometry(facetWidth * 0.92, row.h);
-        const panel = new THREE.Mesh(panelGeo, row.mat);
-        // Flat panel tangent to the barrel, just proud of the surface.
-        panel.position.set(Math.cos(az) * rr, Math.sin(az) * rr, row.z);
+        // Task 1 (F1): thin BOX panel instead of a zero-thickness decal. The
+        // outward +z cell face stays at the current visual radius (1.014R); the
+        // box is PANEL_THICK deep (10 mm), so the back face buries well inside the
+        // hull and the 10 mm dark side walls cover the ~6.7 mm corner air gap of a
+        // flat facet over the curved hull (they read as a mounting rail). Centre
+        // the box so its +z face lands at rr: centre = rr − halfThick.
+        const panel = this._makePanelBox(facetWidth * 0.92, row.h, PANEL_THICK, row.mat);
+        const cr = rr - PANEL_THICK / 2;   // box-centre radius so +z face sits at rr
+        panel.position.set(Math.cos(az) * cr, Math.sin(az) * cr, row.z);
         panel.quaternion.setFromRotationMatrix(_m4);
         panel.name = `BarrelSolarPanel_${_panelN++}`;
-        // Sub-order 2.01 within the DETAIL band: panels paint first, then seam
-        // tape (2.02) and accents (2.03) over them. All < 2.5 (daughter bias) and
-        // < 3 (TRANSPARENT).
-        panel.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL + 0.01; // over body
+        // Opaque, depth-writing box — no decal render-order tricks.
+        panel.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
         this.add(panel);
-
-        // Thin dark frame border masking the flat-panel edge lift (mounting rail
-        // read). Sits just above the panel so the gold gap at the facet edges
-        // never shows. Sub-order between panel (2.01) and seam tape (2.02).
-        const frame = this._makePanelFrame(facetWidth * 0.92, row.h, Constants.RENDER_ORDER.SPACECRAFT_DETAIL + 0.015);
-        frame.position.copy(panel.position);
-        frame.quaternion.copy(panel.quaternion);
-        frame.name = `BarrelSolarPanelFrame_${_panelN}`;
-        frame.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL + 0.015;
-        this.add(frame);
       }
     }
 
@@ -748,19 +749,13 @@ export class PlayerSatellite extends THREE.Group {
       const gM4 = new THREE.Matrix4().makeBasis(right, up, radial);
       for (const z of [endZ, -endZ]) {  // fore (+) and aft (−) end bands
         const rr = barrelR * 1.014;
-        const panel = new THREE.Mesh(new THREE.PlaneGeometry(gapCellW, endH), gapMat);
-        panel.position.set(Math.cos(gapAz) * rr, Math.sin(gapAz) * rr, z);
+        const cr = rr - PANEL_THICK / 2;   // box-centre radius so +z face sits at rr
+        const panel = this._makePanelBox(gapCellW, endH, PANEL_THICK, gapMat);
+        panel.position.set(Math.cos(gapAz) * cr, Math.sin(gapAz) * cr, z);
         panel.quaternion.setFromRotationMatrix(gM4);
         panel.name = `BarrelSolarPanel_gap_${gapAzDeg}_${z > 0 ? 'F' : 'A'}`;
-        panel.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL + 0.01;
+        panel.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
         this.add(panel);
-
-        const frame = this._makePanelFrame(gapCellW, endH, Constants.RENDER_ORDER.SPACECRAFT_DETAIL + 0.015);
-        frame.position.copy(panel.position);
-        frame.quaternion.copy(panel.quaternion);
-        frame.name = `BarrelSolarPanelFrame_gap_${gapAzDeg}_${z > 0 ? 'F' : 'A'}`;
-        frame.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL + 0.015;
-        this.add(frame);
       }
     }
 
@@ -863,11 +858,13 @@ export class PlayerSatellite extends THREE.Group {
     // Laser aperture ring (gold, forward-facing)
     const apertureRingGeo = new THREE.RingGeometry(M * 0.10, M * 0.14, 8);
     const apertureRingMat = this._matGoldMLI.clone();
-    // The clone shares the barrel-scale foil textures (tight wrinkles); this ring
-    // is only a few cm, so swap in ~1×1-repeat foil clones for a sane wrinkle
-    // scale on the small part (null-safe headless — leaves the inherited maps).
-    // Override ALL THREE maps so the repeat stays consistent across them.
-    const ringFoil = getMLIFoilMaps({ repeat: [1, 1] });
+    // The clone shares the barrel-scale foil textures; this ring is only a few cm,
+    // so swap in [1,1] foil clones with the smallPart roughness variant (higher
+    // floor) + a scalar roughness ≈0.6 so the small metallic part doesn't clip to
+    // white under bloom (F2 exposure fix). Null-safe headless (leaves inherited
+    // maps). Override ALL THREE maps so the repeat stays consistent across them.
+    const ringFoil = getMLIFoilMaps({ repeat: [1, 1], smallPart: true });
+    apertureRingMat.roughness = 0.6;
     if (ringFoil) {
       apertureRingMat.map = ringFoil.albedoMap;
       apertureRingMat.normalMap = ringFoil.normalMap;
@@ -1770,15 +1767,28 @@ export class PlayerSatellite extends THREE.Group {
     });
     this._rosaFrontMats = [panelMatFront];
     // Back substrate = deep amber-brown copper-Kapton (real ROSA blanket backing
-    // reads dark amber, not beige). Near-matte (very low metalness, high
-    // roughness) like real Kapton foil. A modest emissive gives a
+    // reads dark amber, not beige). Task 3 (F3): the backside now carries a
+    // procedural copper-Kapton substrate map (bay-seam grid + stiffener strips +
+    // wiring runs + per-bay jitter) so it no longer reads as flat untextured
+    // cardboard at the common top-down inspect angle. Near-matte (very low
+    // metalness, high roughness) like real Kapton foil. A modest emissive gives a
     // self-illuminating floor so the substrate never collapses to pure black when
     // its face is turned away from the sun / in shadow — the fix for the
     // "inverted Mother's ROSA wings vanish / dark rectangle on Earth" regression.
     // Keep emissiveIntensity at/above the ROSA_BACK_EMISSIVE_MIN (0.24) floor
-    // asserted in js/test/test-RosaFurl.js.
+    // asserted in js/test/test-RosaFurl.js. Emissive stays UN-masked (never-black
+    // floor) — same rationale as the front mat.
+    let backMap = null;
+    const rosaBackTex = getRosaBackTexture();
+    if (rosaBackTex) {
+      backMap = rosaBackTex.clone();
+      backMap.repeat.set(2, 5);   // ~2 bay-cols across width × 5 bays along length
+      backMap.needsUpdate = true;
+    }
     const panelMatBack = new THREE.MeshStandardMaterial({
-      color: 0x7a4f26, metalness: 0.08, roughness: 0.85,
+      color: backMap ? 0xffffff : 0x7a4f26, // tint comes from the map when present
+      map: backMap || null,
+      metalness: 0.08, roughness: 0.85,
       side: THREE.BackSide,
       emissive: 0x3e2c14, emissiveIntensity: 0.25,
     });
@@ -2232,11 +2242,14 @@ export class PlayerSatellite extends THREE.Group {
 
     // IR Sensor: gold-foil box
     const irGeo = new THREE.BoxGeometry(M * 0.2, M * 0.15, M * 0.2);
-    // Clone the gold MLI material so the small box can carry a ~1×1-repeat
-    // crinkle instead of the barrel-scale foil shared by _matGoldMLI. Override
-    // ALL THREE maps so the repeat stays consistent across them.
+    // Clone the gold MLI material so the small box can carry a [1,1] crinkle
+    // instead of the barrel-scale foil shared by _matGoldMLI, with the smallPart
+    // roughness variant (higher floor) + scalar roughness ≈0.6 so the box doesn't
+    // blow out white over the collar under bloom (F2 exposure fix). Override ALL
+    // THREE maps so the repeat stays consistent across them.
     const irMat = this._matGoldMLI.clone();
-    const irFoil = getMLIFoilMaps({ repeat: [1, 1] });
+    const irFoil = getMLIFoilMaps({ repeat: [1, 1], smallPart: true });
+    irMat.roughness = 0.6;
     if (irFoil) {
       irMat.map = irFoil.albedoMap;
       irMat.normalMap = irFoil.normalMap;
