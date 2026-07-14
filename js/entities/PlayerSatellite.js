@@ -305,22 +305,23 @@ export class PlayerSatellite extends THREE.Group {
 
   _buildModel() {
     // Shared materials
-    // Crinkled-MLI normal + roughness + albedo maps, v3 crumpled mylar (null in
-    // headless/no-DOM). These are BAKED static PNGs loaded from textures/
-    // (mli_foil_*.png); the v3 generator in mliFoilTexture.js is the bake source
+    // Crinkled-MLI normal + roughness + albedo maps, v4 straight-crease mylar
+    // (null in headless/no-DOM). These are BAKED static PNGs loaded from textures/
+    // (mli_foil_*.png); the v4 generator in mliFoilTexture.js is the bake source
     // (re-run `node scripts/bake-foil-maps.mjs` after knob tweaks), so runtime
     // pays no procedural build cost — just a full-size texture load + a brief
     // pop-in like the Earth textures. Returns a fresh clone per call so each part
-    // can carry its own `repeat`. The v3 generator bakes an 18×14 facet lattice
-    // into ONE tile, so the barrel gets a SINGLE un-tiled wrap [1,1]: the barrel
-    // UV is ~2.51 m circumference × 2.0 m (aspect ≈1.26 — near square), which the
-    // 18×14 lattice absorbs into ~14 cm square-ish mirror facets with razor
-    // creases — the reference facet scale (10–20 facets across a face), not
-    // v2.2's tiled 4–5 cm pebbles. u=1 is an integer wrap so the cylinder UV
-    // stays seamless at u=1 (a fractional u would put a hard texture seam down
-    // the barrel). Small parts (aperture ring, IR box) reuse the same tile at
-    // [1,1] + smallPart roughness. See mliFoilTexture.js header for the bake
-    // pipeline and the v2.2→v3 inversion story.
+    // can carry its own `repeat`. The v4 `crumpled` generator bakes a 20×16 facet
+    // lattice (~12.5 cm square-ish facets) into ONE tile with straight-edge power-
+    // diagram creases + coarse-parent MERGED panels (large flats + long straight
+    // ridges, the MRO drape) — so the barrel gets a SINGLE un-tiled wrap [1,1]:
+    // the barrel UV is ~2.51 m circumference × 2.0 m (aspect ≈1.26 — near square),
+    // and u=1 is an integer wrap so the cylinder UV stays seamless at u=1 (a
+    // fractional u would put a hard texture seam down the barrel). The aperture
+    // ring reuses the same crumpled tile ([1,1] + smallPart roughness). Instrument
+    // boxes instead use `variant:'flat'` — a calm taut sheet, since the crumpled
+    // facets on a tiny cube face read as glitter. See mliFoilTexture.js header for
+    // the bake pipeline and the v3→v4 straight-crease/panel-merge story.
     const bodyFoil = getMLIFoilMaps({ repeat: [1, 1] });
     this._matBody = new THREE.MeshStandardMaterial({
       color: 0x5c5c64, metalness: 0.7, roughness: 0.55,
@@ -2247,13 +2248,17 @@ export class PlayerSatellite extends THREE.Group {
 
     // IR Sensor: gold-foil box
     const irGeo = new THREE.BoxGeometry(M * 0.2, M * 0.15, M * 0.2);
-    // Clone the gold MLI material so the small box can carry a [1,1] crinkle
-    // instead of the barrel-scale foil shared by _matGoldMLI, with the smallPart
-    // roughness variant (higher floor) + scalar roughness ≈0.6 so the box doesn't
-    // blow out white over the collar under bloom (F2 exposure fix). Override ALL
-    // THREE maps so the repeat stays consistent across them.
+    // Clone the gold MLI material so the small box can carry the v4 `flat`
+    // variant — a taut near-flat sheet (very low tilt 1.5–7°, high inheritance,
+    // a few shallow straight folds) instead of the barrel's crumpled facets,
+    // which mapped onto each tiny BoxGeometry face read as a glitter/disco-ball.
+    // The flat variant bakes ONE roughness with a high floor, so smallPart is
+    // dropped; scalar roughness ≈0.6 (flat map 0.50–0.80 × 0.6 ⇒ effective
+    // ~0.30–0.48 satin) keeps the box from blowing out white over the collar
+    // under bloom (F2 exposure fix). Override ALL THREE maps so the repeat stays
+    // consistent across them.
     const irMat = this._matGoldMLI.clone();
-    const irFoil = getMLIFoilMaps({ repeat: [1, 1], smallPart: true });
+    const irFoil = getMLIFoilMaps({ repeat: [1, 1], variant: 'flat' });
     irMat.roughness = 0.6;
     if (irFoil) {
       irMat.map = irFoil.albedoMap;
