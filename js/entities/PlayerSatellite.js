@@ -13,6 +13,7 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { getSolarCellTexture, getRosaBackTexture } from '../scene/solarCellTexture.js';
 import { getMLIFoilMaps } from '../scene/mliFoilTexture.js';
+import { getOrbitalFoilEnv } from '../scene/orbitalFoilEnv.js';
 import { powerDistribution } from '../systems/PowerDistribution.js';
 import {
   computeCoM, computeCoMDrift, computeCoMDriftVector,
@@ -303,8 +304,48 @@ export class PlayerSatellite extends THREE.Group {
     return new THREE.Mesh(geo, mats);
   }
 
+  /**
+   * Apply the synthetic orbital environment map to the gold MLI foil materials
+   * (v6 root-cause fix). Foil is a near-mirror: its perceived contrast is the
+   * reflected environment × normal variation, so under the scene's near-uniform
+   * RoomEnvironment the gold reads as a smooth brass pipe no matter how much
+   * crumple detail the normal map carries. A per-MATERIAL orbital envMap (sun +
+   * void + Earth) on ONLY these materials makes it read as broken white/dark
+   * foil patchwork; scene.environment stays RoomEnvironment for everything else.
+   *
+   * Call once after construction, from the owning scene, passing that scene's
+   * renderer. Idempotent-ish: safe to call again (re-fetches the cached env).
+   * Headless-safe: with no renderer (node tests) getOrbitalFoilEnv returns null
+   * and this no-ops, leaving the materials unchanged.
+   *
+   * NOTE: a per-material envMap ignores scene.environmentIntensity — brightness
+   * is retuned via material.envMapIntensity here (default 1.0, useful 0.5–2).
+   *
+   * @param {THREE.WebGLRenderer} [renderer] - the owning scene's renderer.
+   * @param {number} [intensity=1.0] - envMapIntensity for the foil materials.
+   * @returns {boolean} true if an env map was applied, false if it no-op'd.
+   */
+  applyFoilEnv(renderer, intensity = 1.0) {
+    const env = getOrbitalFoilEnv(renderer);
+    if (!env || !this._foilMats) return false;
+    for (const mat of this._foilMats) {
+      if (!mat) continue;
+      mat.envMap = env;
+      mat.envMapIntensity = intensity;
+      mat.needsUpdate = true;
+    }
+    return true;
+  }
+
   _buildModel() {
     // Shared materials
+    // Gold MLI foil materials (master + its clones) are collected here so the
+    // orbital env-map (v6) can be applied to all of them in one pass via
+    // applyFoilEnv(). Foil is a near-mirror, so its whole look is the reflected
+    // environment; a per-material orbital envMap on just these (not
+    // scene.environment) is what makes it read as broken foil rather than a
+    // smooth brass pipe under the uniform RoomEnvironment. See orbitalFoilEnv.js.
+    this._foilMats = [];
     // Gold-MLI normal + roughness + albedo maps, v5 HEIGHT-FIELD drape
     // (null in headless/no-DOM). These are BAKED static PNGs loaded from textures/
     // (mli_foil_*.png); the v5 generator in mliFoilTexture.js is the bake source
@@ -368,6 +409,11 @@ export class PlayerSatellite extends THREE.Group {
       // mutates emissive/emissiveIntensity only — the map does not interfere.
       this._matGoldMLI.emissiveMap = bodyFoil.albedoMap;
     }
+    // Register the master gold material for the v6 orbital envMap pass. The
+    // _matBody / aperture-ring / IR-box clones are registered at their clone
+    // sites (clones copy envMap by reference at clone time, but we set envMap
+    // AFTER construction via applyFoilEnv, so each clone must be tracked).
+    this._foilMats.push(this._matGoldMLI);
     this._matDark = new THREE.MeshStandardMaterial({
       color: 0x222233, metalness: 0.6, roughness: 0.4,
     });
@@ -586,6 +632,7 @@ export class PlayerSatellite extends THREE.Group {
     const bodyGeo = new THREE.CylinderGeometry(barrelR, barrelR, barrelH, 64, 24, true);
     this._carveStowGrooves(bodyGeo, barrelR, barrelH);
     this._matBody = this._matGoldMLI.clone();   // body skin = MLI blanket (gold)
+    this._foilMats.push(this._matBody);         // v6 orbital envMap target
     this.body = new THREE.Mesh(bodyGeo, this._matBody);
     this.body.rotation.x = Math.PI / 2; // Align Y-cylinder to Z-forward
     this.body.name = 'Barrel_ConfigG';
@@ -882,6 +929,7 @@ export class PlayerSatellite extends THREE.Group {
       apertureRingMat.emissiveMap = ringFoil.albedoMap;
       apertureRingMat.needsUpdate = true;
     }
+    this._foilMats.push(apertureRingMat);       // v6 orbital envMap target
     const apertureRing = new THREE.Mesh(apertureRingGeo, apertureRingMat);
     // §2-followup (round 8): +0.012·M (12 mm), 4 mm proud of the viewport so the
     // gold rim sits clearly in front of the aperture glass.
@@ -2271,6 +2319,7 @@ export class PlayerSatellite extends THREE.Group {
       irMat.emissiveMap = irFoil.albedoMap;
       irMat.needsUpdate = true;
     }
+    this._foilMats.push(irMat);                 // v6 orbital envMap target
     const irSensor = new THREE.Mesh(irGeo, irMat);
     irSensor.position.set(-M * 0.25, 0, M * 0.1);
     irSensor.name = 'IR_Sensor';

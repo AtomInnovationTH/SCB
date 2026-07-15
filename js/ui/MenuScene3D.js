@@ -1205,6 +1205,13 @@ export class MenuScene3D {
     mother._rosaGlowIdleFloor = 0.55;
     this._mother = mother;
 
+    // MLI foil v6: give ONLY the gold MLI materials a synthetic orbital env map
+    // (sun + void + Earth) so the near-mirror foil reads as broken white/dark
+    // patchwork instead of a smooth brass pipe. scene.environment stays the
+    // RoomEnvironment for the astronaut/props. Per-material envMap ignores
+    // scene.environmentIntensity, so brightness is set via envMapIntensity here.
+    mother.applyFoilEnv(this.renderer, 1.4);
+
     // Cull geometry the fixed hero framing never shows: the docking port sits on
     // the −X face (away from the camera) after the roll.
     if (mother.dockingPort) mother.dockingPort.visible = false;

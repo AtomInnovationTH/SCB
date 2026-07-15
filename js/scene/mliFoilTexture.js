@@ -169,15 +169,24 @@ function _valueNoise(u, v, period, salt = 0) {
  *    few soft folds, matching the PRIME-1 instrument-box MLI (no glitter).
  *
  * KNOB GUARDANCE (from the iteration log — read before turning any dial):
- *  - `drapeAmp` STRONG: carries the "mirror panels" read under IBL. If between
- *    folds reads too machined-smooth in-engine, raise 1.2→1.6 (and/or panelTilt).
+ *  - `drapeAmp` (v6: 0.9): the smooth "mirror panels" sweep. v6 LOWERED it from
+ *    v5's 1.2 so the sweep no longer dominates the raised per-panel tilt.
  *  - `pillowAmp` KEEP SMALL (≤0.15): 0.5+ reads quilted/hammered, 1.0 cracked-mud.
- *  - `panelTiltAmp`: v4's mirror-mosaic variety but WITH smooth gradients.
+ *  - `panelTiltAmp` (v6: 9.0, was v5 1.1): THE v6 mid-band lever. Foil is a
+ *    near-mirror, so its contrast is (env radiance contrast × NORMAL variation).
+ *    Once a contrasty orbital env-map is reflected (orbitalFoilEnv.js), raising
+ *    this fractures the reflection into per-panel facets — the "broken foil" read.
+ *    It responds sub-linearly (the border-gate `sm` × `invCells` damp it): v5→v6
+ *    1.1→9 moved the 512² 20°+ tilt share 13%→31% (target 25–40%). Re-measure via
+ *    tmp/foil_v6_tilt.mjs after any change; do NOT chase the raw number blindly —
+ *    too high (>11) reads glittery at hero scale.
  *  - `borderGate` (0.70): fraction of borders LEFT OPEN — this breaks the closed-
  *    cell topology into an open network of straight segments. Do not lower much.
  *  - `foldCount` [anchors, raysPerAnchorMax, looseChains]: chains are polylines
  *    (2–4 straight segments) → long CONNECTED ridges (single segments read
- *    "pick-up-sticks"). HALF-WIDTHS are thin (bright-line sharpness ∝ amp/width).
+ *    "pick-up-sticks"). HALF-WIDTHS are thin; v6 widened them ×1.7 (in _buildFolds)
+ *    so fold crests survive one mip level at hero scale (bright-line sharpness ∝
+ *    amp/width, so wider ⇒ softer — foldAmp held at 3.2 keeps the crest bright).
  *  - `microAmp`: still subtle; raise first if the in-engine read lacks fine
  *    wrinkle. `microPeriods` are NON-aligned (13/29) — aligned 16/32 showed a
  *    grid-plaid artifact.
@@ -190,9 +199,9 @@ function _valueNoise(u, v, period, salt = 0) {
 const FOIL_VARIANTS = {
   crumpled: {                       // barrel + aperture ring
     cellsU: 11, cellsV: 9, weightAmp: 0.15,
-    drapeAmp: 1.2, drapePeriod: 3,
+    drapeAmp: 0.9, drapePeriod: 3,
     pillowAmp: 0.10, pillowK: 3.0,
-    panelTiltAmp: 1.1,
+    panelTiltAmp: 9.0,
     borderGate: 0.70, borderK: 6.5, borderAmp: 1.3,
     foldCount: [8, 4, 6],            // [anchors, raysPerAnchorMax, looseChains]
     foldAmp: 3.2,
@@ -347,7 +356,7 @@ function _buildFolds(count, salt) {
     for (let r = 0; r < rays; r++) {
       const ang = _hash01(a, 3 + r, salt + 24) * Math.PI * 2;
       const len = 0.25 + 0.45 * _hash01(a, 9 + r, salt + 25);
-      const w = 0.0045 + 0.0075 * _hash01(a, 15 + r, salt + 26);
+      const w = (0.0045 + 0.0075 * _hash01(a, 15 + r, salt + 26)) * 1.7;
       const amp = (0.55 + 0.45 * _hash01(a, 21 + r, salt + 27)) *
         (_hash01(a, 27 + r, salt + 28) < 0.6 ? 1 : -1);
       const r0 = 0.012 + 0.02 * _hash01(a, 33 + r, salt + 29);
@@ -360,7 +369,7 @@ function _buildFolds(count, salt) {
     const x0 = _hash01(k, 40, salt + 31), y0 = _hash01(k, 41, salt + 32);
     const ang = _hash01(k, 42, salt + 33) * Math.PI * 2;
     const len = 0.25 + 0.40 * _hash01(k, 43, salt + 34);
-    const w = 0.005 + 0.009 * _hash01(k, 44, salt + 35);
+    const w = (0.005 + 0.009 * _hash01(k, 44, salt + 35)) * 1.7;
     const amp = (0.5 + 0.5 * _hash01(k, 45, salt + 36)) *
       (_hash01(k, 46, salt + 37) < 0.5 ? 1 : -1);
     const segs = 2 + Math.floor(_hash01(k, 47, salt + 38) * 3);

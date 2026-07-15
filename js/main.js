@@ -564,6 +564,12 @@ async function init() {
 
   // --- Player Satellite ---
   player = new PlayerSatellite(scene);
+  // MLI foil v6: per-material orbital envMap on the gold MLI (near-mirror foil
+  // needs a contrasty environment to reflect, not the near-uniform RoomEnvironment
+  // that leaves it a smooth brass pipe). scene.environment is unchanged for the
+  // rest of the ship/debris. Per-material envMap ignores scene.environmentIntensity;
+  // brightness set via envMapIntensity here.
+  player.applyFoilEnv(sceneManager.getRenderer(), 1.4);
   _bootMark('Starfield + SunLight + Player constructed');
 
   // --- Debris Field (ST-6.1: hybrid mode consumes catalogLoader if ready) ---
