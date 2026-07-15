@@ -569,7 +569,7 @@ async function init() {
   // that leaves it a smooth brass pipe). scene.environment is unchanged for the
   // rest of the ship/debris. Per-material envMap ignores scene.environmentIntensity;
   // brightness set via envMapIntensity here.
-  player.applyFoilEnv(sceneManager.getRenderer(), 1.4);
+  player.applyFoilEnv(sceneManager.getRenderer(), 1.0); // v6.1 calm: 1.4→1.0
   _bootMark('Starfield + SunLight + Player constructed');
 
   // --- Debris Field (ST-6.1: hybrid mode consumes catalogLoader if ready) ---

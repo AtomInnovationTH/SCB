@@ -100,22 +100,29 @@ export function disposeOrbitalFoilEnv(renderer) {
  */
 function _buildOrbitalScene() {
   const s = new THREE.Scene();
-  s.background = new THREE.Color(0x000000);
+  // v6.1 CALM: a dim WARM FLOOR instead of pure black. A pitch-black void made
+  // the near-mirror foil show large black voids and maximum-contrast reflections
+  // (user: "too fancy/shiny/distracting"). A low warm floor keeps the gold's
+  // body color everywhere — reflections never crash to black.
+  s.background = new THREE.Color(0.14, 0.13, 0.11);
 
   // HDR sun disk — bright warm, aligned with the analytic sun direction (5,3,4).
+  // v6.1 CALM: radiance lowered (60,55,45)→(28,26,22) so glints stay but the
+  // whole-panel specular blowouts settle to a satin sheen.
   const sunDir = new THREE.Vector3(5, 3, 4).normalize().multiplyScalar(10);
   const sun = new THREE.Mesh(
     new THREE.SphereGeometry(1.2, 24, 16),
-    new THREE.MeshBasicMaterial({ color: new THREE.Color(60, 55, 45) }),
+    new THREE.MeshBasicMaterial({ color: new THREE.Color(28, 26, 22) }),
   );
   sun.position.copy(sunDir);
   s.add(sun);
 
   // HDR Earth sphere — large, cool, low, filling the lower hemisphere so the
   // foil's downward-facing folds catch an Earth-blue glow band.
+  // v6.1 CALM: cyan band was too loud (0.9,1.6,2.6)→(0.7,1.1,1.7).
   const earth = new THREE.Mesh(
     new THREE.SphereGeometry(10, 32, 24),
-    new THREE.MeshBasicMaterial({ color: new THREE.Color(0.9, 1.6, 2.6) }),
+    new THREE.MeshBasicMaterial({ color: new THREE.Color(0.7, 1.1, 1.7) }),
   );
   earth.position.set(0, -12.5, 0);
   s.add(earth);

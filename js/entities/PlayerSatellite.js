@@ -386,7 +386,9 @@ export class PlayerSatellite extends THREE.Group {
       // NOT amber/copper (0xd6a43e was amber, R:G 1.30 → rejected). Emissive is a
       // matching lemon-shadow tint carrying the shadow side; scan-flash mutates
       // emissive/emissiveIntensity at runtime — the resting tint is retuned here.
-      color: 0xe3c24d, metalness: 1.0, roughness: 0.45,
+      // v6.1 calm: roughness 0.45→0.50 (satin, less mirror; roughnessMap
+      // multiplies → effective ~0.15–0.30, killing the harsh whole-panel sweep).
+      color: 0xe3c24d, metalness: 1.0, roughness: 0.50,
       emissive: 0x4a3d12, emissiveIntensity: 0.16,
     });
     // Drape gold-foil read (v5): apply the MLI normal + roughness + albedo maps.

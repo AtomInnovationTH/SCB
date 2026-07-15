@@ -195,6 +195,10 @@ function _valueNoise(u, v, period, salt = 0) {
  *    crumpled ~tan 35°≈0.70, flat ~tan 8°≈0.14. Raise if creases read too dark.
  *  - If the flat box reads too DEAD in-engine, raise flat slopeGain 0.0234→0.03
  *    or foldAmp 0.8→1.2.
+ *  - `toneSpan` / `rough.span` on the FLAT variant (v6.1: 0.008 / 0.05, slashed
+ *    from 0.04 / 0.20): per-panel albedo + roughness spread. On the IR box the
+ *    whole 4×4 tile lands on EVERY face, so any real span reads as gold CAMO
+ *    (user-rejected). Keep these tiny — the box wants near-uniform plain gold.
  */
 const FOIL_VARIANTS = {
   crumpled: {                       // barrel + aperture ring
@@ -214,6 +218,12 @@ const FOIL_VARIANTS = {
     creaseDarken: 0.05,
   },
   flat: {                           // IR box (taut sheet on flat faces)
+    // v6.1 CAMO FIX: the box maps the WHOLE tile onto EVERY face (BoxGeometry,
+    // repeat [1,1]), so each small face shows ALL 4×4=16 panels at once. Any
+    // per-panel variation (albedo tone OR roughness) therefore reads as gold
+    // CAMOUFLAGE (user-rejected — "even flat gold would be better"). The box
+    // must be NEAR-UNIFORM plain gold: per-panel spans are slashed to ~faint,
+    // leaving only folds/creases to carry a whisper of texture.
     cellsU: 4, cellsV: 4, weightAmp: 0.3,
     drapeAmp: 0.5, drapePeriod: 2,
     pillowAmp: 0.10, pillowK: 1.6,
@@ -223,8 +233,8 @@ const FOIL_VARIANTS = {
     microAmp: 0.0, microPeriods: [13, 29], anchorRadius: 0.07,
     slopeGain: 0.0234,
     slopeRef: 0.14,                  // crease mask: ~tan 8°
-    toneSpan: 0.04,
-    rough: { base: 0.50, span: 0.20, creaseAdd: 0.06, lo: 0.50, hi: 0.80 },
+    toneSpan: 0.008,                 // v6.1: 0.04→0.008 (albedo blotches gone)
+    rough: { base: 0.50, span: 0.05, creaseAdd: 0.06, lo: 0.50, hi: 0.80 }, // v6.1: span 0.20→0.05 (specular blotches gone; creases keep faint texture)
     roughSmall: null,               // flat has ONE roughness (high floor baked)
     creaseDarken: 0.03,
   },

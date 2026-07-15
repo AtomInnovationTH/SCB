@@ -1210,7 +1210,7 @@ export class MenuScene3D {
     // patchwork instead of a smooth brass pipe. scene.environment stays the
     // RoomEnvironment for the astronaut/props. Per-material envMap ignores
     // scene.environmentIntensity, so brightness is set via envMapIntensity here.
-    mother.applyFoilEnv(this.renderer, 1.4);
+    mother.applyFoilEnv(this.renderer, 1.0); // v6.1 calm: 1.4→1.0
 
     // Cull geometry the fixed hero framing never shows: the docking port sits on
     // the −X face (away from the camera) after the roll.
