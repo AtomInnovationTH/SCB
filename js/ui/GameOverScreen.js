@@ -300,7 +300,11 @@ export class GameOverScreen {
     reasonEl.textContent = 'The orbital environment has been stabilized. Outstanding work, Cowboy.';
 
     const stats = scoringSystem.getStats();
-    const missionCount = Math.floor(stats.debrisCleared / 5);
+    // Missions completed, derived from the constant and clamped to the 12-chapter
+    // arc so the victory report never overshoots (F2/F3, mirrors _showStats clamp).
+    const perMission = (Constants.MISSIONS && Constants.MISSIONS.DEBRIS_PER_MISSION) || 5;
+    const maxMission = Math.max(1, Math.floor((Constants.WIN_DEBRIS_COUNT || 60) / perMission));
+    const missionCount = Math.min(maxMission, Math.floor(stats.debrisCleared / perMission));
     const upgradeCount = this._getUpgradeCount();
     statsEl.innerHTML = `
       <div style="color:#00ff88;font-size:1rem;margin-bottom:8px;">★ Final Report ★</div>
