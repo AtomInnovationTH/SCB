@@ -162,6 +162,20 @@ export const UPGRADES = [
     desc: '160N electrostatic grip. 5× capture mass', effect: 'v4GripForce',
     value: 5.0, maxLevel: 1,
     trl: 3, trlRationale: 'Electrostatic capture demonstrated on CubeSats; 160N force is game-speculative' },
+
+  // Cargo (2) — E2 elevator-throughput fix. The hold caps how much refined
+  // salvage each depot run can deliver to the space-elevator contract. Absolute
+  // capacity targets live in Constants (SSOT); the effect value is the target kg.
+  // Prices are a Phase-4 balance concern (tuned against catalog total).
+  { id: 'cargo_bay_2', cat: 'Cargo', name: 'Cargo Bay II', cost: 1800,
+    desc: 'Expanded hold: +1,000 kg (500 → 1,500). More salvage per depot run.',
+    effect: 'cargoCapacity', value: Constants.CARGO_BAY_TIER2_KG, maxLevel: 1,
+    trl: 6, trlRationale: 'Deployable/expandable cargo modules (BEAM, Cygnus) have flight heritage' },
+  { id: 'cargo_bay_3', cat: 'Cargo', name: 'Cargo Bay III', cost: 3600,
+    desc: 'Whale-class hold: +1,500 kg (1,500 → 3,000). Sized for rocket-body salvage.',
+    effect: 'cargoCapacity', value: Constants.CARGO_BAY_TIER3_KG, maxLevel: 1,
+    requiresAll: ['cargo_bay_2'],
+    trl: 4, trlRationale: 'Large pressurised cargo volumes demonstrated; 3 t ADR hold is game-speculative' },
 ];
 
 /**

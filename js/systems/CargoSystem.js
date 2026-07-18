@@ -225,6 +225,39 @@ export class CargoSystem {
     this._capacityKg = Constants.CARGO_CAPACITY_KG || 500;
   }
 
+  /**
+   * Apply a shop upgrade that affects cargo capacity (E2 Cargo Bay chain).
+   *
+   * The `cargoCapacity` effect carries the ABSOLUTE target hold size in
+   * `data.value` (e.g. 1500, 3000), so the handler is a plain assignment and is
+   * therefore IDEMPOTENT — safe to re-run on the save-restore path (which routes
+   * through EFFECT_ROUTES → CARGO_SYSTEM just like purchase). We never shrink the
+   * hold below what a bigger tier already granted (upgrades don't stack down),
+   * and we never drop the hold below the current stored mass.
+   *
+   * WHY THIS EXISTS (E2): the elevator win needs cargo THROUGHPUT — before this,
+   * the hold was constant at CARGO_CAPACITY_KG (500) with no upgrade path, so
+   * 12 depots × 500 kg = 6,000 kg < the 10,000 kg contract. This is the reachability fix.
+   *
+   * @param {object} data - { effect: 'cargoCapacity', value: number (absolute kg) }
+   */
+  applyUpgrade(data) {
+    if (!data || data.effect !== 'cargoCapacity') return;
+    const target = Number(data.value);
+    if (!Number.isFinite(target) || target <= 0) return;
+    // Absolute assignment, but never below the base hold or a larger tier already
+    // applied (guards purchase-order / restore-replay from clobbering a bigger bay).
+    const next = Math.max(this._capacityKg, target, Constants.CARGO_CAPACITY_KG || 500);
+    if (next === this._capacityKg) return;
+    this._capacityKg = next;
+    eventBus.emit(Events.CARGO_UPDATED, this.getStatus());
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      sender: 'CARGO',
+      text: `Cargo bay expanded. Hold capacity now ${this._capacityKg.toLocaleString()} kg.`,
+      priority: 'info',
+    });
+  }
+
   /** Cleanup. */
   dispose() {
     // Could remove event listeners here if needed

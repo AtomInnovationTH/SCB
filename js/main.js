@@ -880,7 +880,7 @@ async function init() {
   gameFlowManager.init({
     player, debrisField, armManager, cameraSystem,
     shopScreen,
-    resourceSystem,
+    resourceSystem, cargoSystem,
   });
 
   // --- F15: Wire autopilot dependencies ---

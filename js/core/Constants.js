@@ -1354,6 +1354,11 @@ export const Constants = {
   // --- Cargo Hold ---
   CARGO_CAPACITY_KG: 500,        // base cargo hold capacity in kg
   CARGO_CAPACITY_SLOTS: 20,      // max distinct material stacks
+  // E2 Cargo Bay upgrade chain — absolute hold targets (CargoSystem.applyUpgrade
+  // assigns, not accumulates, so restore-replay is idempotent). The elevator win
+  // needs throughput: 12 depots × TIER3 (3,000) ≫ the 10,000 kg contract.
+  CARGO_BAY_TIER2_KG: 1500,      // cargo_bay_2: base 500 → 1,500 (+1,000)
+  CARGO_BAY_TIER3_KG: 3000,      // cargo_bay_3: 1,500 → 3,000 (+1,500)
 
   // =========================================================================
   // FORGE — Electromagnetic Levitation Melting (EML) Furnace (Phase 3)

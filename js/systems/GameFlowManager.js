@@ -27,7 +27,7 @@ import { VIEW_INFO_LEVELS } from '../ui/HUD.js';
 import {
   resolveEffectRoute,
   RESOURCE_SYSTEM, PLAYER, ARM_MANAGER, SENSOR_EVENT,
-  KESSLER_SYSTEM, CAPTURE_NET, RUNTIME, ARM_MANAGER_EVENT,
+  KESSLER_SYSTEM, CAPTURE_NET, RUNTIME, ARM_MANAGER_EVENT, CARGO_SYSTEM,
 } from './upgradeEffectRoutes.js';
 
 class GameFlowManager {
@@ -1430,7 +1430,7 @@ class GameFlowManager {
    *   GAMEOVER_CONTINUE (from a reset base) pass no opts → full route.
    */
   applyUpgradeEffect(data, opts = {}) {
-    const { player, armManager, resourceSystem } = this._refs;
+    const { player, armManager, resourceSystem, cargoSystem } = this._refs;
     // kesslerSystem / captureNetSystem: imported singletons
 
     for (const target of resolveEffectRoute(data.effect, opts)) {
@@ -1443,6 +1443,9 @@ class GameFlowManager {
           break;
         case ARM_MANAGER:
           if (armManager) armManager.applyUpgrade(data);
+          break;
+        case CARGO_SYSTEM:
+          if (cargoSystem) cargoSystem.applyUpgrade(data);
           break;
         case SENSOR_EVENT:
           eventBus.emit(Events.SENSOR_UPGRADE, data);

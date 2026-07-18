@@ -26,11 +26,12 @@ export const KESSLER_SYSTEM = 'kesslerSystem';     // kesslerSystem.applyUpgrade
 export const CAPTURE_NET = 'captureNet';           // captureNetSystem.loadOneMotherNet()
 export const RUNTIME = 'runtime';                  // no apply-time action; checked at runtime via _hasUpgrade
 export const ARM_MANAGER_EVENT = 'armManagerEvent';// handled by ArmManager's own UPGRADE_PURCHASED listener
+export const CARGO_SYSTEM = 'cargoSystem';         // cargoSystem.applyUpgrade(data) — E2 Cargo Bay chain
 
 /** The complete set of valid route targets (for test validation). */
 export const ROUTE_TARGETS = new Set([
   RESOURCE_SYSTEM, PLAYER, ARM_MANAGER, SENSOR_EVENT,
-  KESSLER_SYSTEM, CAPTURE_NET, RUNTIME, ARM_MANAGER_EVENT,
+  KESSLER_SYSTEM, CAPTURE_NET, RUNTIME, ARM_MANAGER_EVENT, CARGO_SYSTEM,
 ]);
 
 /**
@@ -83,6 +84,9 @@ export const EFFECT_ROUTES = {
 
   // ── Consumable Mother Large Net restock ──
   motherNetRestock: [CAPTURE_NET],
+
+  // ── Cargo hold capacity → CargoSystem (E2 elevator-throughput fix) ──
+  cargoCapacity: [CARGO_SYSTEM],
 
   // ── Kessler / hull ──
   kesslerWarning: [KESSLER_SYSTEM],
