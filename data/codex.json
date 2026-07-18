@@ -1664,7 +1664,7 @@
         "fullText": "Active debris removal (ADR) means sending something up to catch a dead object and drag it down, and after decades of study the first real missions are flying. Britain's RemoveDEBRIS fired a net at a mock target in 2018 and a harpoon in 2019; Astroscale's ELSA-d tested magnetic docking in 2021; and in 2024 its ADRAS-J closed to about 15 metres from a spent Japanese H-2A rocket stage, the closest look yet at a piece of uncontrolled debris.\n\nEurope's ClearSpace-1 is being built to grab and deorbit a defunct satellite, having switched its target to the agency's own retired PROBA-1 after the original target was itself struck by debris. Every approach shares your problem: a dead, drifting, non-cooperative target. Your cradle is the next step, reusable and multi-target where these one-shot demonstrators were not.",
         "realWorld": "RemoveDEBRIS net 2018 / harpoon 2019; Astroscale ELSA-d 2021; ADRAS-J ~15 m rendezvous 2024; ClearSpace-1 (PROBA-1 target) in development.",
         "trlRationale": "Demonstrated in orbit: RemoveDEBRIS (2018-19), ELSA-d (2021), ADRAS-J (2024).",
-        "unlockHint": "Clear 50 pieces of debris."
+        "unlockHint": "Clear 60 pieces of debris."
       },
       "track": "the_debris_crisis",
       "trackOrder": 11
@@ -2812,7 +2812,7 @@
       "i18n": {
         "title": "Welcome, Cowboy",
         "shortText": "Low orbit is getting dangerous to use. You're here to clean it up — one piece of junk at a time.",
-        "fullText": "Welcome to space, Cowboy. Decades of launches left low Earth orbit littered with dead satellites and shrapnel, and every collision makes more, the runaway feedback called Kessler syndrome. Your job is active debris removal: fly your mothership and its daughter drones out to derelict objects, capture them, and either drag them down to burn up or salvage them for parts.\n\nThe core loop is simple: scan for targets, let autopilot bring you alongside, capture, and bank the haul. Clear enough debris, fifty pieces to win the shift, and you have helped keep orbit usable. This library fills in as you go, every system you touch unlocking the science behind it. Press I anytime to come back here.",
+        "fullText": "Welcome to space, Cowboy. Decades of launches left low Earth orbit littered with dead satellites and shrapnel, and every collision makes more, the runaway feedback called Kessler syndrome. Your job is active debris removal: fly your mothership and its daughter drones out to derelict objects, capture them, and either drag them down to burn up or salvage them for parts.\n\nThe core loop is simple: scan for targets, let autopilot bring you alongside, capture, and bank the haul. Clear enough debris, sixty pieces to win the shift, and you have helped keep orbit usable. This library fills in as you go, every system you touch unlocking the science behind it. Press I anytime to come back here.",
         "unlockHint": "Reach orbit."
       },
       "track": "cowboy_basics",
@@ -2882,7 +2882,7 @@
       "i18n": {
         "title": "The Core Loop",
         "shortText": "Scan, pick a target, let autopilot fly you there, capture, cash in. Repeat. That's the whole job.",
-        "fullText": "Five steps, and then you do them again. That is the entire job.\n\n1. Scan (S) to find debris. 2. Target (T) to pick one. 3. Autopilot (A) flies you alongside — you don't hand-fly there. 4. Capture it with a daughter's net. 5. Bank the haul: drag it down to burn up, or salvage it for parts.\n\nClear 50 pieces and the shift is won. Everything else in this library just explains one of these five steps in more depth.",
+        "fullText": "Five steps, and then you do them again. That is the entire job.\n\n1. Scan (S) to find debris. 2. Target (T) to pick one. 3. Autopilot (A) flies you alongside — you don't hand-fly there. 4. Capture it with a daughter's net. 5. Bank the haul: drag it down to burn up, or salvage it for parts.\n\nClear 60 pieces and the shift is won. Everything else in this library just explains one of these five steps in more depth.",
         "unlockHint": "Reach orbit."
       },
       "track": "cowboy_basics",
@@ -3033,7 +3033,7 @@
       "i18n": {
         "title": "Capture Quality Pays",
         "shortText": "A clean, scanned, fuel-smart capture can score nearly four times a sloppy one. Style matters.",
-        "fullText": "Not all captures are equal. Scan a target's structure before you grab it, pilot the daughter in by hand, approach without burning much fuel, and recover its salvage: each adds a multiplier.\n\nStacked, those bonuses reach almost ×3.7 over a bare auto-grab. You never have to chase the perfect capture, but when you want a high score, or a faster fifty, quality beats quantity.",
+        "fullText": "Not all captures are equal. Scan a target's structure before you grab it, pilot the daughter in by hand, approach without burning much fuel, and recover its salvage: each adds a multiplier.\n\nStacked, those bonuses reach almost ×3.7 over a bare auto-grab. You never have to chase the perfect capture, but when you want a high score, or a faster clear, quality beats quantity.",
         "unlockHint": "Reach orbit."
       },
       "track": "cowboy_basics",

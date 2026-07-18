@@ -264,16 +264,23 @@ export class BriefingScreen {
 
     // Update mission context from scoring system
     const stats = scoringSystem.getStats();
-    const missionNum = Math.floor(stats.debrisCleared / 5) + 1;
-    const debrisUntilShop = 5 - (stats.debrisCleared % 5);
+    // Mission number = floor(cleared/perMission)+1, clamped to the 12-chapter arc
+    // so a boundary briefing at exactly WIN_DEBRIS_COUNT (continue-past-threshold)
+    // doesn't read "MISSION 13 BRIEFING" (F2/F3, mirrors GameOverScreen clamp).
+    const perMission = (Constants.MISSIONS && Constants.MISSIONS.DEBRIS_PER_MISSION) || 5;
+    const maxMission = Math.max(1, Math.floor((Constants.WIN_DEBRIS_COUNT || 60) / perMission));
+    const missionNum = Math.min(maxMission, Math.floor(stats.debrisCleared / perMission) + 1);
+    // Debris until the next depot, clamped ≥ 0 so continue-past-threshold never
+    // renders "Clear -N debris" (F3 residual). Modulo keeps this in [1, perMission].
+    const debrisUntilShop = Math.max(0, perMission - (stats.debrisCleared % perMission));
 
     const titleEl = this.element.querySelector('#briefing-mission-title');
     if (titleEl) titleEl.textContent = `MISSION ${missionNum} BRIEFING`;
 
     const objectiveEl = this.element.querySelector('#briefing-objective');
     if (objectiveEl) {
-      objectiveEl.textContent = debrisUntilShop === 5
-        ? 'Clear 5 debris to reach the depot'
+      objectiveEl.textContent = debrisUntilShop >= perMission
+        ? `Clear ${perMission} debris to reach the depot`
         : `Clear ${debrisUntilShop} more debris for depot visit`;
     }
 
