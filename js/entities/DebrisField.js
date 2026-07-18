@@ -814,6 +814,12 @@ export class DebrisField {
       lengthM: sizeMeter,
       widthM: sizeMeter / (typeDef.aspect || 1.0),
       tumbleRate,
+      // E1 despin doctrine: the tumble the piece SPAWNED with. The capture tumble
+      // bonus is paid only when this was above-spec AND tumble at capture is
+      // in-spec — i.e. the player despun it. Reading live tumbleRate at award time
+      // (as before) perversely rewarded catching a still-spinning target and
+      // penalised despinning it. Frozen at spawn so despin can't erase it.
+      _initialTumbleRate: tumbleRate,
       tumbleAxis,
       tumbleAngle: Math.random() * 2 * Math.PI, // Current rotation
       material,
@@ -3183,6 +3189,7 @@ export class DebrisField {
       debris.sceneSize = debris.sizeMeter * 0.00001;
       debris.mass = mass / actualCount;
       debris.tumbleRate = randRange(30, 180) * Math.PI / 180;
+      debris._initialTumbleRate = debris.tumbleRate; // E1: keep spawn-tumble in sync with the override
 
       // Place near the collision point — approximate orbit from position
       const r = Math.sqrt(position.x ** 2 + position.y ** 2 + position.z ** 2);

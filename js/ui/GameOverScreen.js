@@ -343,11 +343,16 @@ export class GameOverScreen {
 
   /** @private Get rating based on stats */
   _getRating(stats) {
+    // E1/E4 recalibration: bands re-derived from scripted full-run score data
+    // AFTER the ledger split (sales no longer inflate score) AND the 60-clear
+    // retune. Simulated full runs score ~53k (low skill) → ~96k (high skill), so
+    // the old 8k/15k/30k/50k bands saturated at ACE for everyone. These bands
+    // separate a died-early partial run (ROOKIE) from a skilled completion (ACE).
     const score = stats.totalScore;
-    if (score >= 50000) return '★★★★★ ACE COWBOY';
-    if (score >= 30000) return '★★★★☆ VETERAN';
-    if (score >= 15000) return '★★★☆☆ PROFESSIONAL';
-    if (score >= 8000) return '★★☆☆☆ APPRENTICE';
+    if (score >= 95000) return '★★★★★ ACE COWBOY';
+    if (score >= 78000) return '★★★★☆ VETERAN';
+    if (score >= 60000) return '★★★☆☆ PROFESSIONAL';
+    if (score >= 45000) return '★★☆☆☆ APPRENTICE';
     return '★☆☆☆☆ ROOKIE';
   }
 

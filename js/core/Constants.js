@@ -116,6 +116,15 @@ export const Constants = {
   TIER3_BASE: 500,                // Physical capture
   TIER4_BASE: 2000,               // Boss-class
   WIN_DEBRIS_COUNT: 60,           // 12 chapters × DEBRIS_PER_MISSION(5); ch12 = elevator-anchor finale (F2 Option A)
+  // E1 despin doctrine tuning: the capture tumble bonus scales with the ABOVE-SPEC
+  // spin the player tamed ((initialDeg - IN_SPEC_DEG) / SLOPE), capped at MAX_BONUS.
+  // A 180°/s fragment despun to spec earns +~0.5×; gentle so despinning is a
+  // meaningful reward without a fast fragment out-paying a whale.
+  TUMBLE_DESPIN_SLOPE_DEG: 340,   // degrees/s of above-spec spin per +1.0 tumbleFactor
+  TUMBLE_DESPIN_MAX_BONUS: 0.5,   // max tumbleFactor contribution (+50%)
+  // E1 retune: per debris-tier scaling of the capture base so a tiny fragment
+  // (tier 1) no longer earns the same flat base as a rocket body (tier 3/4).
+  DEBRIS_TIER_BASE_WEIGHT: { 1: 0.4, 2: 0.7, 3: 1.0, 4: 1.3 },
 
   // === DEBRIS TYPES ===
   DEBRIS_TYPES: {
@@ -1229,6 +1238,11 @@ export const Constants = {
 
   // --- Salvage Scoring ---
   SALVAGE_SCORE_MULTIPLIER: 1.15,     // ×1.15 when salvage recovered
+  // E1 retune: soft-cap on the PRODUCT of situational capture multipliers
+  // (assessment ×1.3 · manual ×2 · fuel-eff ×1.25 · salvage ×1.15 · detach ×2 ·
+  // deorbit). Stacked, these reached ~×7.5 and made a single lucky catch pay a
+  // whole shop tier. Capped so the ceiling is a deliberate skill target, tunable.
+  SITUATIONAL_MULT_SOFT_CAP: 2.5,
   SALVAGE_XENON_CREDIT_BONUS: 200,    // Flat credits for Xenon recovery
   SALVAGE_INDIUM_CREDIT_BONUS: 500,   // Flat credits for Indium (scarce)
   SALVAGE_HAZMAT_MULTIPLIER: 1.4,     // ×1.4 for hydrazine recovery (risky)
@@ -1488,7 +1502,7 @@ export const Constants = {
     // Bounty premiums by debris type (multiplier on base capture score)
     // Keys must match DEBRIS_TYPES values (camelCase game IDs)
     BOUNTY_PREMIUMS: {
-      fragment: 1.8,         // small fragments: high bounty per piece (thorough cleanup)
+      fragment: 1.2,         // E1 retune: was 1.8 — fragments are the bulk of catches;
       missionDebris: 1.5,    // mission debris: moderate premium
       defunctSat: 1.0,       // base rate
       rocketBody: 0.8,       // large bodies: lower bounty but more salvage metal

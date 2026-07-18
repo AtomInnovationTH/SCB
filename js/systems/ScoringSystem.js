@@ -88,7 +88,7 @@ export class ScoringSystem {
   calculateScore(params) {
     const { debris, method, captureTier, fragmentsCreated = 0, nearbyActiveSats = 0 } = params;
 
-    // Determine base points from debris tier (guess tier from type + mass)
+    // Determine base points from capture ACTION tier (data/deorbit/physical).
     const debrisTier = this._getDebrisTier(debris);
     let base;
     if (captureTier === CAPTURE_TIERS.DATA) {
@@ -99,12 +99,36 @@ export class ScoringSystem {
       base = Constants.TIER3_BASE;
     }
 
+    // E1 retune: scale the base by the DEBRIS tier so a physically-captured tiny
+    // fragment no longer earns the same flat base as a rocket body. Previously the
+    // flat 500 physical-capture base made early fragment runs pay ~640/catch, so a
+    // first depot blew past the intended 600–1,500 cr band. The tier weight
+    // (fragment ≈ 0.4× … boss-class ≈ 1.3×) tracks payout to target value while
+    // the salvage/metal bonus below adds the value share.
+    const tierWeights = Constants.DEBRIS_TIER_BASE_WEIGHT || { 1: 0.4, 2: 0.7, 3: 1.0, 4: 1.3 };
+    base *= (tierWeights[debrisTier] || 1.0);
+
     // Size factor: bigger = more points
     const sizeFactor = 1.0 + Math.log10(Math.max(debris.mass || 1, 1)) / 4;
 
-    // Tumble factor: higher tumble = more impressive
-    const tumbleRateDeg = (debris.tumbleRate || 0) * 180 / Math.PI;
-    const tumbleFactor = 1.0 + tumbleRateDeg / 90.0;
+    // E1 despin doctrine (also fixes the perverse incentive): the tumble bonus
+    // is a DESPIN reward, not a "caught it spinning" reward. Pay it only when the
+    // piece SPAWNED above-spec (its _initialTumbleRate exceeded IN_SPEC_DEG) AND
+    // it is in-spec at capture (the player despun it). A still-tumbling lucky
+    // catch earns nothing; despinning now RAISES payout instead of cutting it.
+    // The magnitude scales with how fast it originally spun (harder despin = more).
+    const inSpecDeg = (Constants.NET_TUMBLE_PENALTY && Constants.NET_TUMBLE_PENALTY.IN_SPEC_DEG) || 10;
+    const initialTumbleDeg = ((debris._initialTumbleRate != null
+      ? debris._initialTumbleRate
+      : (debris.tumbleRate || 0)) * 180 / Math.PI);
+    const captureTumbleDeg = (debris.tumbleRate || 0) * 180 / Math.PI;
+    let tumbleFactor = 1.0;
+    if (initialTumbleDeg > inSpecDeg && captureTumbleDeg <= inSpecDeg) {
+      // Reward proportional to the above-spec spin that was tamed, gently sloped
+      // and capped so a fast fragment despin can't dominate a run (E1 retune).
+      const despinBonus = (initialTumbleDeg - inSpecDeg) / (Constants.TUMBLE_DESPIN_SLOPE_DEG || 340);
+      tumbleFactor = 1.0 + Math.min(despinBonus, (Constants.TUMBLE_DESPIN_MAX_BONUS || 0.5));
+    }
 
     // Risk multiplier: nearby valuable assets increase stakes
     const riskMultiplier = 1.0 + nearbyActiveSats * 0.5;
@@ -167,9 +191,16 @@ export class ScoringSystem {
       points += materialBonus;
     }
 
+    // E1 retune: the situational multipliers below are ACCUMULATED into a single
+    // product, then soft-capped (SITUATIONAL_MULT_SOFT_CAP) before a single apply.
+    // Previously each was applied inline (points *= X), so stacking a scanned,
+    // manual, fuel-efficient, salvage, detached, deorbit catch reached ~×7.5 and
+    // made one lucky catch worth an entire shop tier. Comms still fire per bonus.
+    let situationalMult = 1.0;
+
     // Tactical assessment bonus: ×1.3 if player assessed all zones before capture
     if (data.tacticalAssessment) {
-      points = Math.round(points * 1.3);
+      situationalMult *= 1.3;
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: 'HOUSTON',
         text: 'Good assessment, Cowboy.',
@@ -179,7 +210,7 @@ export class ScoringSystem {
 
     // Manual capture bonus: ×2.0 for manually piloting arm to target
     if (data.manualCapture) {
-      points = Math.round(points * 2.0);
+      situationalMult *= 2.0;
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: 'HOUSTON',
         text: 'Clean approach. Manual piloting noted.',
@@ -213,7 +244,7 @@ export class ScoringSystem {
 
     // Fuel efficiency bonus: ×1.25 for fuel-efficient manual capture
     if (data.fuelEfficient) {
-      points = Math.round(points * 1.25);
+      situationalMult *= 1.25;
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: 'HOUSTON',
         text: 'Efficient trajectory. Minimal fuel expenditure.',
@@ -223,7 +254,7 @@ export class ScoringSystem {
 
     // Salvage recovery bonus: ×1.15 when debris had salvageable resources (Session 10)
     if (data.salvageRecovered) {
-      points = Math.round(points * Constants.SALVAGE_SCORE_MULTIPLIER);
+      situationalMult *= Constants.SALVAGE_SCORE_MULTIPLIER;
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: 'HOUSTON',
         text: 'Salvage recovered. Good haul.',
@@ -234,7 +265,7 @@ export class ScoringSystem {
     // Deorbit sacrifice bonus (Session 10): arm sacrificed with captured debris
     if (data.deorbitSacrifice) {
       const deorbitMult = data.deorbitMultiplier || Constants.DEORBIT_MULTIPLIER_BASE;
-      points = Math.round(points * deorbitMult);
+      situationalMult *= deorbitMult;
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: 'HOUSTON',
         text: 'She went down with the target. Worth it.',
@@ -244,7 +275,7 @@ export class ScoringSystem {
 
     // Phase 6: Detached arm capture — ×2.0 for free-flying catch
     if (data.detachedCapture) {
-      points = Math.round(points * Constants.DETACH_SCORE_MULT);
+      situationalMult *= Constants.DETACH_SCORE_MULT;
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: 'HOUSTON',
         text: 'COWBOY! Free-flying capture! Textbook maneuver.',
@@ -254,13 +285,17 @@ export class ScoringSystem {
 
     // Phase 6: Detached arm deorbit sacrifice — ×2.5
     if (data.detachedSacrifice) {
-      points = Math.round(points * Constants.DETACH_SACRIFICE_MULT);
+      situationalMult *= Constants.DETACH_SACRIFICE_MULT;
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: 'HOUSTON',
         text: 'Godspeed. She took the debris with her. Sacrifice noted.',
         priority: 1,
       });
     }
+
+    // E1 retune: soft-cap the accumulated situational product, then apply once.
+    const cap = Constants.SITUATIONAL_MULT_SOFT_CAP || 2.5;
+    points = Math.round(points * Math.min(situationalMult, cap));
 
     this.totalScore += points;
     this.credits += points;
