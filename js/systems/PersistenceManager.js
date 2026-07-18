@@ -76,6 +76,13 @@ class PersistenceManager {
         // CodexSystem. Purely additive (no SAVE_VERSION bump): old saves lack
         // this key and CodexSystem's load guard handles its absence.
         codex: data.codex ?? null,
+        // Mission-coach chapter completion — contributed via PERSISTENCE_GATHER by
+        // MissionCoach (save.missionCoach = {version, completedByMission}). This
+        // whitelist previously dropped it, so coached chapters re-fired on every
+        // reload+CONTINUE despite MissionCoach's "coached once" contract. Additive
+        // (no SAVE_VERSION bump): MissionCoach._restore guards its own absence.
+        // (Bosses' issBoss/starlinkBoss are intentionally NOT persisted — per-run.)
+        missionCoach: data.missionCoach ?? null,
         // Glossary first-use seen-state — contributed via PERSISTENCE_GATHER by
         // GlossaryState (§11.8). Additive (no SAVE_VERSION bump): old saves lack
         // this key and GlossaryState's restore guard handles its absence.
