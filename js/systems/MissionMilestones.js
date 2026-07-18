@@ -2,7 +2,7 @@
  * MissionMilestones.js — mission-completion clarity (UX-11 #12).
  *
  * Tracks BOTH win conditions —
- *   • debris track: `gameState.debrisCleared` vs `Constants.WIN_DEBRIS_COUNT` (50)
+ *   • debris track: `gameState.debrisCleared` vs `Constants.WIN_DEBRIS_COUNT` (60)
  *   • contract track: elevator contract kg vs `ELEVATOR_CONTRACT.TARGET_MASS_KG` (10,000)
  * — and posts a HOUSTON milestone line the first time EITHER track crosses
  * 25 / 50 / 75 / 90 %. Lines carry `_postOnboarding` so the CP-4 suppression
@@ -126,7 +126,7 @@ export class MissionMilestones {
       const count = d && typeof d.count === 'number' ? d.count : null;
       if (count == null) return;
       this._cleared = count;
-      const target = Constants.WIN_DEBRIS_COUNT || 50;
+      const target = Constants.WIN_DEBRIS_COUNT || 60;
       // Debris clears arrive one at a time, so the TRUE previous state is
       // always count-1 — seed from it when unseeded (fresh boot or restore)
       // so a genuinely-crossed threshold still announces (review fix).
@@ -197,7 +197,7 @@ export class MissionMilestones {
    * @private
    */
   _postRecap() {
-    const clearTarget = Constants.WIN_DEBRIS_COUNT || 50;
+    const clearTarget = Constants.WIN_DEBRIS_COUNT || 60;
     const contractTarget =
       (Constants.ELEVATOR_CONTRACT && Constants.ELEVATOR_CONTRACT.TARGET_MASS_KG) || 10000;
     const cleared = this._getCleared ? this._getCleared() : this._cleared;

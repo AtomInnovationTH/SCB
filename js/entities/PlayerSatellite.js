@@ -124,6 +124,12 @@ export class PlayerSatellite extends THREE.Group {
     this._baseColdGasDeltaV = this._coldGasDeltaV;
     this._baseColdGasRate = this._coldGasRate;
 
+    // Ion-drive multiplier factors, kept separate so they compose without one
+    // upgrade clobbering another on the save-restore path (F2/F4). _ionDeltaV is
+    // always recomputed as base × thrustMult × mpdPassiveMult via _recomputeIonDeltaV().
+    this._thrustMult = 1;        // Ion Booster (thrustMultiplier effect)
+    this._mpdPassiveMult = 1;    // MPD Thruster passive drive gain (mpdThruster effect)
+
     // ========================================================================
     // THRUST INPUT STATE
     // ========================================================================
@@ -3573,6 +3579,17 @@ export class PlayerSatellite extends THREE.Group {
   // ==========================================================================
 
   /**
+   * Recompute the effective ion-drive delta-V from its base and the composable
+   * multiplier factors (Ion Booster × MPD passive). Called by applyUpgrade so
+   * the two upgrades stack instead of overwriting each other, and so re-applying
+   * either on the save-restore path is idempotent.
+   * @private
+   */
+  _recomputeIonDeltaV() {
+    this._ionDeltaV = this._baseIonDeltaV * this._thrustMult * this._mpdPassiveMult;
+  }
+
+  /**
    * Apply a shop upgrade that affects propulsion properties.
    * Modifies the rate properties that thrustIon()/thrustColdGas() already read.
    * @param {object} data - { effect: string, value: number }
@@ -3585,7 +3602,8 @@ export class PlayerSatellite extends THREE.Group {
         break;
       case 'thrustMultiplier':
         // value=1.5 → 50% more thrust delta-V per tick
-        this._ionDeltaV = this._baseIonDeltaV * data.value;
+        this._thrustMult = data.value;
+        this._recomputeIonDeltaV();
         break;
       case 'coldGasThrust':
         // value=1.3 → 30% more cold gas thrust per tick
@@ -3596,11 +3614,17 @@ export class PlayerSatellite extends THREE.Group {
         this._coldGasRate = this._baseColdGasRate * data.value;
         break;
       case 'mpdThruster':
-        // F16: Unlock MPD thruster from shop purchase
+        // F16 + F2: Unlock MPD thruster from shop purchase. The burst subsystem
+        // (toggleMPDArmed) stays dormant (no hotkey); the MPD instead delivers a
+        // REAL passive gain by boosting the primary ion drive so ch11's copy
+        // ("its passive drive trims your transfer burns") is honest. Idempotent on
+        // save-restore because it recomputes _ionDeltaV from base × factors.
         this._hasMPD = true;
+        this._mpdPassiveMult = Constants.MPD_PASSIVE_THRUST_MULT || 1.5;
+        this._recomputeIonDeltaV();
         eventBus.emit(Events.COMMS_MESSAGE, {
           sender: 'PROPULSION',
-          text: 'MPD thruster installed. Requires lithium propellant. Salvage from defunct satellites.',
+          text: 'MPD thruster installed. Passive drive boosts primary thrust; lithium reserves feed heavy burns.',
           priority: 'info',
         });
         break;

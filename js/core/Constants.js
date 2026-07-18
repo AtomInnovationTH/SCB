@@ -115,7 +115,7 @@ export const Constants = {
   TIER2_BASE: 300,                // Deorbit
   TIER3_BASE: 500,                // Physical capture
   TIER4_BASE: 2000,               // Boss-class
-  WIN_DEBRIS_COUNT: 50,
+  WIN_DEBRIS_COUNT: 60,           // 12 chapters × DEBRIS_PER_MISSION(5); ch12 = elevator-anchor finale (F2 Option A)
 
   // === DEBRIS TYPES ===
   DEBRIS_TYPES: {
@@ -1458,6 +1458,7 @@ export const Constants = {
   MPD_LITHIUM_CAPACITY: 100,         // max lithium units
   MPD_LITHIUM_PER_SECOND: 0.5,       // lithium consumption rate
   MPD_DELTA_V: 0.0015,               // scene units/s² — scaled for gameplay feel (~5× ion)
+  MPD_PASSIVE_THRUST_MULT: 1.5,      // F2: passive ion-drive boost while MPD installed (folds MPD gain into the normal drive; the burst path stays dormant). +50% primary thrust for the GEO/ch11 climb.
 
   // --- MPD Burst Mode (S3b) ---
   MPD_BURST_HEAT_RATE: 1.0,               // heat units/s while firing
@@ -3181,7 +3182,39 @@ export const Constants = {
           id: 'ch11_mpd',
           type: 'narrative',
           source: 'HASSAN',
-          text: 'For a climb this big you\'ll want the MPD thruster. High thrust, thirsty for power. First launch is yours, Cowboy. Welcome to the high country.',
+          text: 'For a climb this big you\'ll want the MPD thruster. High thrust, thirsty for power. Its passive drive trims your transfer burns once it\'s aboard. First launch is yours, Cowboy. Welcome to the high country.',
+        },
+      ],
+
+      // ── Chapter 12 — Anchor Set: the elevator finale (F2 Option A) ──
+      //    Consolidation chapter — NO new plate/tool (ROADMAP §4 guardrail). Caps
+      //    the 12-chapter arc: HASSAN frames the final contract mass, one interactive
+      //    beat lands on a live elevator contribution (CONTRACT_UPDATE — emitted from
+      //    ShopScreen._contributeToElevator and _bossLifecycle.awardElevatorMass), then
+      //    a closing narrative. The elevator win itself is owned by CONTRACT_COMPLETE /
+      //    the debris-count GAME_WIN; these beats only narrate the home stretch.
+      12: [
+        {
+          id: 'ch12_intro',
+          type: 'narrative',
+          source: 'HASSAN',
+          text: 'This is the last leg, Cowboy. Every tonne you\'ve refined has been climbing a tether to geostationary. The anchor counterweight needs its final mass — and there\'s no crew but you left to carry it. Bring the rest home.',
+        },
+        {
+          id: 'ch12_contribute',
+          type: 'interactive',
+          source: 'HASSAN',
+          text: 'Dock, open the Shop, and contribute your refined salvage to the elevator contract. Watch the anchor-mass gauge climb — top it off and the tether holds on its own.',
+          skillId: 'manage_shop',
+          triggerEvent: 'CONTRACT_UPDATE',
+          title: 'SET THE ANCHOR',
+          body: 'Contribute refined metal to the space elevator contract from the Shop to raise the anchor mass.',
+        },
+        {
+          id: 'ch12_outro',
+          type: 'narrative',
+          source: 'HASSAN',
+          text: 'That\'s it. The counterweight\'s locked and the ribbon\'s taut from ground station to GEO. First permanent road off Earth — and you paved it out of the junk that used to threaten it. Anchor set, Cowboy. Ride easy.',
         },
       ],
     },

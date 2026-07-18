@@ -294,7 +294,7 @@ export class StatusPanel {
 
     // --- Mission Objective bar (top center) ---
     // Sim-reframe: the persistent top HUD shows only the mission objective
-    // (hero "CLEARED N/50") plus a quiet credit wallet. Live flight state (RCS),
+    // (hero "CLEARED N/60") plus a quiet credit wallet. Live flight state (RCS),
     // telemetry (orbit/altitude), and lore (TRL) live where they're contextual:
     // the reticle, the NavSphere/Orbit MFD, and tooltips/Codex respectively.
     // Mass recovered is taught through consequence (salvage card / run summary),
@@ -311,7 +311,7 @@ export class StatusPanel {
     });
     // PRIORITY-LAYER CONTENT — restored to the documented "objective + quiet
     // wallet" intent: this most-seen, never-dimmed strip now carries ONLY the
-    // hero CLEARED N/50 progress meter plus a quiet credit wallet.
+    // hero CLEARED N/60 progress meter plus a quiet credit wallet.
     //   • The elevator-contract tracker was REMOVED from here. It is a slow,
     //     shop-driven, late-game objective that stays at 0 (and is mechanically
     //     unreachable — the Forge isn't taught in onboarding) for a new pilot's

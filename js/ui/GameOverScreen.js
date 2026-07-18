@@ -184,7 +184,11 @@ export class GameOverScreen {
     const stats = scoringSystem.getStats();
     const credits = scoringSystem.credits || 0;
     const carriedCredits = Math.floor(credits * 0.5);
-    const missionNum = Math.floor(stats.debrisCleared / 5) + 1;
+    // Mission number = floor(cleared/5)+1, but clamp to the 12-chapter arc so a
+    // boundary death at exactly WIN_DEBRIS_COUNT doesn't read "Mission 13" (F2/F3).
+    const perMission = (Constants.MISSIONS && Constants.MISSIONS.DEBRIS_PER_MISSION) || 5;
+    const maxMission = Math.max(1, Math.floor((Constants.WIN_DEBRIS_COUNT || 60) / perMission));
+    const missionNum = Math.min(maxMission, Math.floor(stats.debrisCleared / perMission) + 1);
     const upgradeCount = this._getUpgradeCount();
     statsEl.innerHTML = `
       <div style="color:#00ff88;font-size:0.95rem;margin-bottom:6px;">Mission ${missionNum} Summary</div>
@@ -280,7 +284,7 @@ export class GameOverScreen {
   }
 
   /**
-   * @private The standard (50-debris) stabilization victory.
+   * @private The standard (WIN_DEBRIS_COUNT) stabilization victory.
    */
   _showDebrisVictory() {
     const titleEl = this.element.querySelector('#gameover-title');
