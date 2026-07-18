@@ -479,6 +479,16 @@ export class InputManager {
             e.preventDefault();
           }
           return;
+        case 'KeyM':
+          // D4: M opens the Debris Map — it must also CLOSE it (symmetry with
+          // the Backquote alias). Without this the map-open intercept's default
+          // branch swallowed KeyM, so the map could only be closed with Esc / `.
+          if (!e.repeat) {
+            d.debrisMap.hide();
+            d.audioSystem?.playClick();
+            e.preventDefault();
+          }
+          return;
         case 'Comma':
           d.debrisMap.selectPrev();
           e.preventDefault();
@@ -851,9 +861,13 @@ export class InputManager {
           const target = d.targetSelector ? d.targetSelector.getActiveTarget() : null;
           let deployedOk = false;
           if (selArm && selArm.state === Constants.ARM_STATES.DOCKED) {
+            // deployArmByIndex + arm.deploy/deployFreefly already emit a specific
+            // refusal comms on every reachable failure (spring/fuel/power/
+            // safe-mode/mass); the only silent path (not-DOCKED) is guarded
+            // above, so no extra backstop is needed here.
             deployedOk = am.deployArmByIndex(selIdx, target);
           } else {
-            d.deployArm();   // auto-pick best docked arm
+            d.deployArm();   // auto-pick best docked arm (backstops its own refusals)
             deployedOk = true;
           }
           // Notify tutorial / discovery before the ceremony for ordering.

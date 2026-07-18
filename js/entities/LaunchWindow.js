@@ -211,3 +211,52 @@ export function detectWindowCrossing(prevDepartIn, departIn, synodic, imminentS)
   const imminent = !opened && prevDepartIn > imminentS && departIn <= imminentS;
   return { imminent, opened };
 }
+
+// ============================================================================
+// D1 — co-orbital detection (near-co-altitude "launch anytime")
+// ============================================================================
+
+/**
+ * Co-orbital thresholds. When a cluster sits at almost the player's altitude,
+ * the two mean motions are nearly equal, so the synodic period balloons to
+ * YEARS (a huge-but-FINITE number) and the Hohmann ΔV is trivial. The old
+ * readout then printed nonsense like "next window every 27 years / T-22yr"
+ * (defect D1). Past these thresholds there is effectively no phasing to wait
+ * for — you can depart whenever.
+ */
+export const CO_ORBITAL_DELTA_V_MS = 1;           // total transfer ΔV ≤ 1 m/s
+export const CO_ORBITAL_SYNODIC_S = 7 * 86400;    // synodic period > 7 days
+
+/**
+ * Whether a computed transfer window is effectively co-orbital (no meaningful
+ * launch window — "launch anytime"). True for an exactly co-period orbit
+ * (infinite synodic), a trivial ΔV, or a synodic period beyond the threshold.
+ * @param {object|null} win - a computeTransferWindow() result
+ * @param {{ dvMs?: number, synodicS?: number }} [opts] - threshold overrides
+ * @returns {boolean}
+ */
+export function isCoOrbital(win, { dvMs = CO_ORBITAL_DELTA_V_MS, synodicS = CO_ORBITAL_SYNODIC_S } = {}) {
+  if (!win) return false;
+  if (!Number.isFinite(win.synodic)) return true;                 // exactly co-period
+  if (Number.isFinite(win.dvTotal) && win.dvTotal < dvMs) return true; // trivial transfer
+  return win.synodic > synodicS;                                   // window years away
+}
+
+/**
+ * Presentation model for the co-orbital case (D1). Returns null when the window
+ * is a normal (non-co-orbital) transfer, so the caller keeps its usual T-minus
+ * countdown render; otherwise returns the "launch anytime" display strings.
+ * Kept here (pure) so the DebrisMap readout decision is unit-testable without
+ * the canvas-bound UI.
+ * @param {object|null} win - a computeTransferWindow() result
+ * @param {{ dvMs?: number, synodicS?: number }} [opts]
+ * @returns {{ departText: string, periodText: string, showArrive: boolean }|null}
+ */
+export function coOrbitalReadout(win, opts) {
+  if (!isCoOrbital(win, opts)) return null;
+  return {
+    departText: 'LAUNCH ANYTIME',
+    periodText: 'co-altitude \u2014 no transfer needed',
+    showArrive: false,
+  };
+}

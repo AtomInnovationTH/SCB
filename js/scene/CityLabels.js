@@ -28,6 +28,7 @@ import * as THREE from 'three';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { latLonToPosition } from '../ui/StrategicMap.js';
+import { StorageKeys } from '../core/StorageKeys.js';
 
 /** Hard cap on rendered labels (performance + clutter). */
 export const MAX_CITIES = 220;
@@ -50,7 +51,7 @@ const LABEL_FIXED_PX = 24;
 const LABEL_H_PX = 18;
 
 /** localStorage key for the persisted on/off preference. */
-const STORAGE_KEY = 'sc_city_labels_visible';
+const STORAGE_KEY = StorageKeys.CITY_LABELS;
 
 // Module-level scratch vectors — update() runs every frame; no per-frame
 // allocations (project scratch-vector discipline).

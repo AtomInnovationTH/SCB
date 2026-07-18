@@ -18,6 +18,7 @@ import {
   computeTransferWindow,
   clusterToOrbitKm,
   detectWindowCrossing,
+  coOrbitalReadout,
 } from '../entities/LaunchWindow.js';
 
 const DM = Constants.DEBRIS_MAP;
@@ -584,6 +585,31 @@ export class DebrisMap {
       return;
     }
 
+    // D1: near-co-altitude clusters have a synodic period of YEARS and a trivial
+    // ΔV — the Hohmann countdown is meaningless. Show a "launch anytime"
+    // advisory and hide the T-minus / arrival clocks (keep ΔV for context).
+    const coOrbital = coOrbitalReadout(win);
+    if (coOrbital) {
+      ctx.font = '11px "Courier New", monospace';
+      ctx.fillStyle = '#88aacc';
+      ctx.fillText('Depart', 14, y + 34);
+      ctx.fillStyle = '#44ff88';
+      ctx.font = 'bold 12px "Courier New", monospace';
+      ctx.fillText(coOrbital.departText, 78, y + 34);
+
+      ctx.font = '11px "Courier New", monospace';
+      ctx.fillStyle = '#88aacc';
+      ctx.fillText('\u0394V', 14, y + 50);
+      const dvColorCo = win.dvTotal < 100 ? '#44ff88' : win.dvTotal < 400 ? '#ffcc44' : '#ff6644';
+      ctx.fillStyle = dvColorCo;
+      ctx.fillText(`${win.dvTotal.toFixed(0)} m/s`, 44, y + 50);
+
+      ctx.fillStyle = '#556677';
+      ctx.font = '9px "Courier New", monospace';
+      ctx.fillText(coOrbital.periodText, 14, y + 64);
+      return;
+    }
+
     const imminent = win.departIn <= DM.WINDOW_IMMINENT_S;
     const open = win.departIn <= 0.5;
     const departColor = open ? '#44ff88' : imminent ? '#33ddff' : '#ffcc44';
@@ -607,12 +633,12 @@ export class DebrisMap {
     ctx.fillStyle = dvColor;
     ctx.fillText(`${win.dvTotal.toFixed(0)} m/s`, 230, y + 50);
 
-    // Periodicity hint — the teaching beat
+    // Periodicity hint — the teaching beat. (Co-orbital / infinite-synodic
+    // windows are handled by the launch-anytime early return above, so here the
+    // synodic is always a finite, meaningful sub-7-day period.)
     ctx.fillStyle = '#556677';
     ctx.font = '9px "Courier New", monospace';
-    const periodTxt = Number.isFinite(win.synodic)
-      ? `next window every ${this._fmtClock(win.synodic)}. Space is periodic`
-      : 'co-altitude. Launch anytime';
+    const periodTxt = `next window every ${this._fmtClock(win.synodic)}. Space is periodic`;
     ctx.fillText(periodTxt, 14, y + 64);
   }
 

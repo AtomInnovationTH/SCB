@@ -15,8 +15,9 @@
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { DEFAULT_LANGUAGE, isSupportedLanguage, getLanguage } from '../core/Languages.js';
+import { StorageKeys } from '../core/StorageKeys.js';
 
-const SETTINGS_KEY = 'sc_settings_v1';
+const SETTINGS_KEY = StorageKeys.SETTINGS;
 
 /** Guidance preference values. 'auto' = behavior-driven (GuidanceDirector). */
 const GUIDANCE_VALUES = ['auto', 'GUIDED', 'POINTERS', 'MINIMAL'];

@@ -529,6 +529,12 @@ async function init() {
   const canvas = document.getElementById('game-canvas');
   if (!canvas) {
     console.error('[main] #game-canvas not found');
+    // F7: this is a non-throwing early return, so the index.html error/rejection
+    // handlers won't fire — surface the failure card explicitly so boot doesn't
+    // hang on the loading screen with no feedback.
+    if (typeof window !== 'undefined' && typeof window.__showBootFailure === 'function') {
+      window.__showBootFailure('SYSTEMS OFFLINE', 'Render canvas missing — the page did not load correctly.');
+    }
     return;
   }
 
@@ -1276,6 +1282,12 @@ async function init() {
   });
 
   // --- Hide loading screen ---
+  // F7 boot resilience: this is the ONE place the loading screen is dismissed —
+  // it fires only after init() has succeeded this far, so a failed boot leaves
+  // the screen up and the index.html error handler can surface a failure card.
+  // The `__bootOk` flag tells those handlers boot succeeded, so post-boot
+  // runtime errors don't get mistaken for a boot failure.
+  if (typeof window !== 'undefined') window.__bootOk = true;
   const loadingScreen = document.getElementById('loading-screen');
   if (loadingScreen) {
     loadingScreen.classList.add('hidden');

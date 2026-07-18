@@ -438,6 +438,19 @@
   <link rel="preload" as="image" href="./textures/earth_day.avif" type="image/avif" fetchpriority="high">
 </head>
 <body>
+  <!-- F7: JavaScript is required — this is the only content non-JS visitors see. -->
+  <noscript>
+    <div style="position:fixed;inset:0;z-index:1000;display:flex;flex-direction:column;
+                align-items:center;justify-content:center;background:#000;color:#00ff88;
+                font-family:'Courier New',monospace;text-align:center;padding:24px;">
+      <div style="font-size:2rem;letter-spacing:0.25em;margin-bottom:14px;">SPACE COWBOY</div>
+      <div style="max-width:520px;color:rgba(0,255,136,0.7);line-height:1.6;">
+        This simulation needs JavaScript and a WebGL2-capable browser.
+        Please enable JavaScript and reload.
+      </div>
+    </div>
+  </noscript>
+
   <!-- Loading screen -->
   <div id="loading-screen">
     <h1>SPACE COWBOY</h1>
@@ -451,19 +464,73 @@
   <div id="hud-overlay"></div>
 
   <!-- Game bootstrap -->
-  <script type="module">
-    import './js/main.js';
+  <!-- F7 boot resilience — this classic script runs BEFORE the deferred ES
+       module below, so it can (a) verify WebGL2 up front with a friendly
+       message, and (b) catch any uncaught boot error / promise rejection and
+       show a retro failure card with a Reload button instead of the old silent
+       black screen. The loading screen is dismissed ONLY by main.js on success
+       (it sets window.__bootOk), so we no longer hide it on window.load — that
+       used to mask a failed boot as a black screen. -->
+  <script>
+    (function () {
+      var shown = false;
+      function esc(s) {
+        return String(s == null ? '' : s).replace(/[<>&]/g, function (c) {
+          return c === '<' ? '&lt;' : c === '>' ? '&gt;' : '&amp;';
+        });
+      }
+      function showBootFailure(title, detailHtml) {
+        // Never show over a successfully-booted game (post-boot runtime errors
+        // are not boot failures), and only show once.
+        if (shown || window.__bootOk) return;
+        shown = true;
+        var card = document.createElement('div');
+        card.id = 'boot-failure';
+        card.setAttribute('role', 'alert');
+        card.style.cssText = 'position:fixed;inset:0;z-index:1000;display:flex;' +
+          'flex-direction:column;align-items:center;justify-content:center;background:#000;' +
+          'color:#00ff88;font-family:\'Courier New\',monospace;text-align:center;padding:24px;';
+        card.innerHTML =
+          '<div style="font-size:2rem;letter-spacing:0.25em;text-shadow:0 0 18px rgba(0,255,136,0.5);margin-bottom:14px;">' +
+            esc(title || 'SYSTEMS OFFLINE') + '</div>' +
+          '<div style="max-width:560px;color:rgba(0,255,136,0.7);font-size:0.95rem;line-height:1.6;margin-bottom:22px;">' +
+            (detailHtml || 'The simulation failed to start.') + '</div>' +
+          '<button id="boot-reload" type="button" style="font-family:inherit;color:#00ff88;' +
+            'background:rgba(0,255,136,0.1);border:2px solid rgba(0,255,136,0.5);padding:10px 32px;' +
+            'border-radius:4px;letter-spacing:0.15em;cursor:pointer;">RELOAD ↻</button>';
+        (document.body || document.documentElement).appendChild(card);
+        var btn = document.getElementById('boot-reload');
+        if (btn) btn.addEventListener('click', function () { window.location.reload(); });
+      }
+      window.__showBootFailure = showBootFailure;
 
-    // Hide loading screen once the module has loaded
-    window.addEventListener('load', () => {
-      setTimeout(() => {
-        const screen = document.getElementById('loading-screen');
-        if (screen) {
-          screen.classList.add('hidden');
-          setTimeout(() => screen.remove(), 1200);
+      // (a) WebGL2 capability check — the friendliest possible message.
+      try {
+        if (!document.createElement('canvas').getContext('webgl2')) {
+          showBootFailure('WEBGL2 REQUIRED',
+            'Space Cowboy needs a WebGL2-capable browser with hardware acceleration ' +
+            'enabled. Try a recent Chrome, Edge, Firefox or Safari and make sure ' +
+            'hardware acceleration is turned on.');
         }
-      }, 800);
-    });
+      } catch (e) { /* getContext can throw when locked down — the error path covers it */ }
+
+      // (b) Uncaught boot error / rejection → failure card (scoped to boot via __bootOk).
+      window.addEventListener('error', function (e) {
+        showBootFailure('SYSTEMS OFFLINE',
+          'The simulation hit an error while starting.<br><br><code style="color:rgba(0,255,136,0.55);' +
+          'font-size:0.8rem;">' + esc(e && (e.message || (e.error && e.error.message))) + '</code>');
+      });
+      window.addEventListener('unhandledrejection', function (e) {
+        var r = e && e.reason;
+        showBootFailure('SYSTEMS OFFLINE',
+          'The simulation failed to initialize.<br><br><code style="color:rgba(0,255,136,0.55);' +
+          'font-size:0.8rem;">' + esc(r && (r.message || r)) + '</code>');
+      });
+    })();
+  </script>
+  <script type="module">
+    // main.js hides #loading-screen and sets window.__bootOk on success.
+    import './js/main.js';
   </script>
 
   <!-- PR P0.3 — Service Worker registration. Relative path resolves to

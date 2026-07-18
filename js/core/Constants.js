@@ -2491,7 +2491,7 @@ export const Constants = {
       { id: 'scan_discovery',          label: 'Scan Discovery',       key: null, tier: 3, category: 'scan',   hudGroup: null,          prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'SCAN_DISCOVERY' },
       { id: 'collect_dual_fire',       label: 'Dual Launch',            key: null, tier: 3, category: 'collect', hudGroup: null,          prereqs: [],  prereqType: 'hard', noReminder: false, triggerEvent: 'DUAL_FIRE' },
       { id: 'manage_power',            label: 'Power Distribution',   key: 'Shift+1/2/3', tier: 3, category: 'manage', hudGroup: 'power',    prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'POWER_BUS_SELECTED' },
-      { id: 'manage_comms',            label: 'Comms Menu',           key: 'C',  tier: 3, category: 'manage', hudGroup: 'comms',       prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'COMMS_OPENED' },
+      { id: 'manage_comms',            label: 'Comms Menu',           key: '7',  tier: 3, category: 'manage', hudGroup: 'comms',       prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'COMMS_OPENED' },
       { id: 'manage_codex',            label: 'Tech Library',         key: 'I',  tier: 3, category: 'manage', hudGroup: null,          prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'CODEX_OPENED' },
       // ── CP-4 ch2 (MissionCoach): Daughter piloting (payload-discriminated via triggerFilter) ──
       { id: 'arm_pilot',         label: 'Daughter Piloting', key: '1-4', tier: 3, category: 'collect', hudGroup: 'fleet', prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'CONTROL_MODE_CHANGE', triggerFilter: (d) => d && d.mode === 'ARM_PILOT' },
@@ -2515,7 +2515,13 @@ export const Constants = {
       { id: 'orbital_hohmann',     label: 'Hohmann Window',      key: null, tier: 4, category: 'nav',       hudGroup: null,    prereqs: [], prereqType: 'soft', noReminder: false, triggerEvent: 'CLUSTER_WINDOW_OPEN' },
 
       // ── Tier 4: Advanced (8 skills) ─────────────────────────────────────
-      { id: 'nav_orbit_mfd',      label: 'Orbit MFD Reading',   key: null,  tier: 4, category: 'nav',       hudGroup: null,  prereqs: ['nav_autopilot'],  prereqType: 'soft',   noReminder: false, triggerEvent: 'ORBIT_MFD_TOGGLE' },
+      // F5: was triggerEvent 'ORBIT_MFD_TOGGLE' — that event has NO emitter
+      // (OrbitMFD is constructed + frame-updated but its toggle() was never
+      // wired to a key), so this skill was undiscoverable and gated nav_hohmann.
+      // Repointed to the live orbital-survey read (Debris Map cluster select),
+      // which is the surface that now teaches orbital-element reading. Revive
+      // the OrbitMFD panel + repoint back if it ships.
+      { id: 'nav_orbit_mfd',      label: 'Orbit MFD Reading',   key: null,  tier: 4, category: 'nav',       hudGroup: null,  prereqs: ['nav_autopilot'],  prereqType: 'soft',   noReminder: false, triggerEvent: 'DEBRIS_MAP_CLUSTER_SELECTED' },
       { id: 'collect_pulse_scan', label: 'Pulse Scan',           key: null, tier: 4, category: 'collect',   hudGroup: null,  prereqs: [],                  prereqType: 'none',   noReminder: false, triggerEvent: 'PULSE_SCAN_START' },
       { id: 'collect_lasso_miss', label: 'Lasso Miss Recovery',  key: null, tier: 4, category: 'collect',   hudGroup: null,  prereqs: ['collect_lasso'],   prereqType: 'hard',   noReminder: true,  triggerEvent: 'LASSO_MISSED' },
       // defer-trawl: "Dragnet" (formerly "Trawl"). Re-tiered to Advanced and
@@ -2533,7 +2539,11 @@ export const Constants = {
       { id: 'nav_hohmann',        label: 'Hohmann Transfer',     key: null,  tier: 5, category: 'nav',       hudGroup: null,  prereqs: ['nav_orbit_mfd'],  prereqType: 'soft',   noReminder: false, triggerEvent: 'AUTOPILOT_ARRIVED' },
       { id: 'collect_arm_pilot',  label: 'DAUGHTER PILOT Mode',       key: 'P',   tier: 5, category: 'collect',   hudGroup: null,  prereqs: [],                  prereqType: 'soft',   noReminder: false, triggerEvent: 'ARM_SELECT' },
       { id: 'mastery_detach',     label: 'Risk Detach',          key: 'X',   tier: 5, category: 'collect',   hudGroup: null,  prereqs: ['collect_deploy'],  prereqType: 'safety', noReminder: false, triggerEvent: 'ARM_DETACHED',       safetyGate: { minCatches: 2 } },
-      { id: 'mastery_tool_cycle', label: 'Tool Cycling',         key: 'T', tier: 5, category: 'manage', hudGroup: null, prereqs: [],                  prereqType: 'none',   noReminder: false, triggerEvent: 'TOOL_CYCLE' },
+      // F5: was key 'T' + triggerEvent 'TOOL_CYCLE'. T is now "Target debris"
+      // and TOOL_CYCLE has no emitter; the tool-cycle verb moved to Backquote in
+      // ARM_PILOT/STATION_KEEP, which emits TOOL_SELECTED (ArmUnit cycleTool).
+      // Repointed so the skill is discoverable; glyph updated to the live key.
+      { id: 'mastery_tool_cycle', label: 'Tool Cycling',         key: '`', tier: 5, category: 'manage', hudGroup: null, prereqs: [],                  prereqType: 'none',   noReminder: false, triggerEvent: 'TOOL_SELECTED' },
       { id: 'mastery_ca_dodge',   label: 'CA Manual Override',   key: null,  tier: 5, category: 'awareness', hudGroup: null,  prereqs: [],                  prereqType: 'none',   noReminder: false, triggerEvent: 'CA_DODGE_EXECUTED' },
       { id: 'mastery_synergy',    label: 'Synergistic Salvage',  key: null,  tier: 5, category: 'collect',   hudGroup: null,  prereqs: [],                  prereqType: 'hard',   noReminder: false, triggerEvent: 'SYNERGY_BONUS' },
       { id: 'mastery_full_sweep', label: 'Full Sweep',           key: null,  tier: 5, category: 'collect',   hudGroup: null,  prereqs: [],                  prereqType: 'hard',   noReminder: false, triggerEvent: 'TRAWL_SWEEP_COMPLETE' },

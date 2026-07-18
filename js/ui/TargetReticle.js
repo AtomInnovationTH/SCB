@@ -865,7 +865,7 @@ export class TargetReticle {
     // Bottom-left corner
     ctx.moveTo(x - half + corner, y + half);
     ctx.lineTo(x - half, y + half);
-    ctx.lineTo(x - half, y - half + corner);
+    ctx.lineTo(x - half, y + half - corner);
     ctx.stroke();
 
     // Reset shadow

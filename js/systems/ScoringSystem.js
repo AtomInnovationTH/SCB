@@ -340,18 +340,10 @@ export class ScoringSystem {
   processSale(data) {
     if (!data || !data.totalValue || data.totalValue <= 0) return 0;
 
-    const market = Constants.MARKET || {};
-    let saleValue = data.totalValue;
+    const { saleValue, bulk } = computeSaleValue(data.totalValue, data.totalMassKg);
 
-    // Apply sell price modifier (market spread — 85% of listed value)
-    const sellMod = market.SELL_PRICE_MODIFIER || 0.85;
-    saleValue = Math.round(saleValue * sellMod);
-
-    // Apply bulk bonus if selling above mass threshold
-    const bulkThreshold = market.BULK_THRESHOLD_KG || 50;
-    const bulkMult = market.BULK_BONUS_MULTIPLIER || 1.15;
-    if (data.totalMassKg && data.totalMassKg >= bulkThreshold) {
-      saleValue = Math.round(saleValue * bulkMult);
+    if (bulk) {
+      const bulkMult = (Constants.MARKET && Constants.MARKET.BULK_BONUS_MULTIPLIER) || 1.15;
       eventBus.emit(Events.COMMS_MESSAGE, {
         text: `BULK BONUS ×${bulkMult}. ${data.totalMassKg.toFixed(0)}kg sold at once!`,
         priority: 'success',
@@ -633,3 +625,46 @@ export class ScoringSystem {
 
 export const scoringSystem = new ScoringSystem();
 export default scoringSystem;
+
+// ============================================================================
+// PURE ECONOMY HELPERS — market sale value + elevator contribution payout
+// (exported for tests and shared by ShopScreen sell/contribute paths; E3/E6)
+// ============================================================================
+
+/**
+ * Market sale-value math (SSOT for cargo sales AND elevator contributions):
+ * apply the sell-price modifier (market spread) then the bulk bonus above the
+ * mass threshold. Pure — no side effects; callers credit / emit comms.
+ * @param {number} totalValue - listed cargo value (¢)
+ * @param {number} totalMassKg
+ * @returns {{ saleValue: number, bulk: boolean }}
+ */
+export function computeSaleValue(totalValue, totalMassKg) {
+  if (!(totalValue > 0)) return { saleValue: 0, bulk: false };
+  const market = Constants.MARKET || {};
+  const sellMod = market.SELL_PRICE_MODIFIER || 0.85;
+  const bulkThreshold = market.BULK_THRESHOLD_KG || 50;
+  const bulkMult = market.BULK_BONUS_MULTIPLIER || 1.15;
+  let saleValue = Math.round(totalValue * sellMod);
+  const bulk = !!(totalMassKg && totalMassKg >= bulkThreshold);
+  if (bulk) saleValue = Math.round(saleValue * bulkMult);
+  return { saleValue, bulk };
+}
+
+/**
+ * E3 — credits paid for contributing refined metal to the elevator contract.
+ * The contract's per-kg bonus is documented as being paid "on top of selling
+ * price", so a contribution must pay the market SALE VALUE (spread + bulk) PLUS
+ * that bonus. The pre-fix code paid only the bonus, so contributing forfeited
+ * ~20 ¢/kg vs selling and the elevator win was economically dominated. This is
+ * the SSOT that makes contributing at least as good as selling.
+ * @param {number} listedValue - listed ¢ value of the contributed metal
+ * @param {number} massKg
+ * @returns {{ saleValue: number, bonus: number, payout: number }}
+ */
+export function computeContributionPayout(listedValue, massKg) {
+  const { saleValue } = computeSaleValue(listedValue, massKg);
+  const bonusPerKg = (Constants.ELEVATOR_CONTRACT && Constants.ELEVATOR_CONTRACT.BONUS_CREDITS_PER_KG) || 5;
+  const bonus = Math.round((massKg > 0 ? massKg : 0) * bonusPerKg);
+  return { saleValue, bonus, payout: saleValue + bonus };
+}

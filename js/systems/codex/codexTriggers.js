@@ -68,10 +68,19 @@ export const CODEX_TRIGGERS = {
   specific_impulse:       [{ event: E.SCORING_AWARD, match: (p) => !!p.reason && p.reason.includes('fuel') },
                            { event: E.FUEL_CHANGED, match: always }],
   xenon_propellant:       [{ event: E.PLAYER_TELEMETRY, match: (p) => p.xenonPct < 0.7 }],
-  krypton_propellant:     [{ event: E.UPGRADE_APPLIED, match: (p) => !!p.id && p.id.includes('krypton') }],
-  argon_propellant:       [{ event: E.UPGRADE_APPLIED, match: (p) => !!p.id && p.id.includes('argon') }],
+  // F6: krypton/argon are reference propellants with NO in-game upgrade to buy
+  // (the propulsion tree is xenon/cold-gas/lithium/FEEP), so their old
+  // UPGRADE_APPLIED (id includes 'krypton'/'argon') triggers could never fire.
+  // Repointed to progression thresholds, matching the other encyclopedic cards.
+  krypton_propellant:     [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 22 }],
+  argon_propellant:       [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 28 }],
   cold_gas_thruster:      [{ event: E.PLAYER_TELEMETRY, match: (p) => p.coldGasPct < 0.8 }],
-  mpd_burst:              [{ event: E.MPD_BURST_START, match: always }],
+  // F6: MPD_BURST_START's only emitter is the uncallable toggleMPDArmed (MPD
+  // burst input isn't wired until the Wave-4 MPD-activation work). Added an
+  // UPGRADE_APPLIED fallback so the entry unlocks when the MPD thruster is
+  // installed; the burst trigger stays for when it goes live.
+  mpd_burst:              [{ event: E.MPD_BURST_START, match: always },
+                           { event: E.UPGRADE_APPLIED, match: (p) => !!p.id && p.id.includes('mpd') }],
   spring_energy:          [{ event: E.CROSSBOW_FIRE, match: always }],
   recoil_cancellation:    [{ event: E.DUAL_FIRE, match: always }],
   cold_gas_rcs:           [{ event: E.CONTROL_MODE_CHANGE, match: (p) => p.mode === 'COLD_GAS' }],
@@ -138,7 +147,12 @@ export const CODEX_TRIGGERS = {
   net_yo_yo_despin:       [{ event: E.NET_FIRED, match: always }],
   tether_materials:       [{ event: E.UPGRADE_APPLIED, match: (p) => !!p.id && p.id.includes('tether') }],
   tether_dynamics:        [{ event: E.TETHER_REEL_STATE, match: (p) => p.reeling === true }],
-  tether_tangle_physics:  [{ event: E.TETHER_TANGLE, match: always }],
+  // F6: TETHER_TANGLE has no emitter (enterTangle()/the TANGLED FSM state are
+  // dead code — Wave-3 cleanup candidate). Added a live TETHER_REEL_STATE
+  // fallback (tangle physics is most relevant while reeling in) so the entry is
+  // reachable; the tangle trigger stays for if/when that state is revived.
+  tether_tangle_physics:  [{ event: E.TETHER_TANGLE, match: always },
+                           { event: E.TETHER_REEL_STATE, match: (p) => p.reeling === true }],
   // survivor of ← edt_propulsion (union: COMMS 'edt' + EDT_ATTRACT)
   edt_physics:            [{ event: E.COMMS_MESSAGE, match: txt('edt') },
                            { event: E.EDT_ATTRACT, match: always }],

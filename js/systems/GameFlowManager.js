@@ -24,6 +24,11 @@ import { launchSequence } from './LaunchSequence.js';
 import { orbitToSceneCartesian, subPointToOrbit } from '../entities/OrbitalMechanics.js';
 import { settingsManager } from './SettingsManager.js';
 import { VIEW_INFO_LEVELS } from '../ui/HUD.js';
+import {
+  resolveEffectRoute,
+  RESOURCE_SYSTEM, PLAYER, ARM_MANAGER, SENSOR_EVENT,
+  KESSLER_SYSTEM, CAPTURE_NET, RUNTIME, ARM_MANAGER_EVENT,
+} from './upgradeEffectRoutes.js';
 
 class GameFlowManager {
   constructor() {
@@ -331,6 +336,7 @@ class GameFlowManager {
       this._suppressIntroZoom = !!(data && data.skipped);
       this._applyStartLocation();   // place ground track over the player's home region
       gameState.currentState = GameStates.MENU; // Allow transition from MENU
+      persistenceManager.backupSave(); // F1 save-guard: back up before New Game clears it
       persistenceManager.deleteSave(); // New Game clears any existing save
       // ST-9.11 C-5: Start launch sequence on new game (flag-gated)
       if (Constants.FEATURE_FLAGS.LAUNCH_SEQUENCE) {
@@ -349,6 +355,7 @@ class GameFlowManager {
       this.resetGame();
       this._applyStartLocation();   // place ground track over the player's home region
       gameState.currentState = GameStates.MENU;
+      persistenceManager.backupSave(); // F1 save-guard: back up before New Game clears it
       persistenceManager.deleteSave(); // New Game clears any existing save
       // ST-9.11 C-5: Start launch sequence on new game (flag-gated)
       if (Constants.FEATURE_FLAGS.LAUNCH_SEQUENCE) {
@@ -414,13 +421,13 @@ class GameFlowManager {
 
       // Re-apply all upgrade effects to game systems (PlayerSatellite, SensorSystem,
       // ArmManager, KesslerSystem). ResourceSystem maxes (xenonMax, coldGasMax,
-      // batteryMax) are already handled by resourceSystem.restore() above — skip
-      // those to avoid double-counting the cumulative += additions.
-      const RESTORED_BY_RESOURCE_SYSTEM = new Set(['xenonMax', 'coldGasMax', 'batteryMax']);
+      // batteryMax) — plus the power-infra effects supercapUpgrade/rtgPower/
+      // powerBeaming — are already restored by resourceSystem.restore() above,
+      // so the { restore: true } route skips their RESOURCE_SYSTEM leg to avoid
+      // double-counting the cumulative += additions. Non-resource legs (e.g.
+      // supercapUpgrade → player MPD-cooling flag) still re-apply.
       shopScreen.forEachPurchasedUpgrade((data) => {
-        if (!RESTORED_BY_RESOURCE_SYSTEM.has(data.effect)) {
-          this.applyUpgradeEffect(data);
-        }
+        this.applyUpgradeEffect(data, { restore: true });
       });
 
       // Rollout backfill: FIRST_DEPOT_VISITED is newer than some saves. Without
@@ -1411,66 +1418,62 @@ class GameFlowManager {
     // Upgrades are applied via individual events as they're bought
   }
 
-  /** Apply a specific upgrade effect — routes to the correct system */
-  applyUpgradeEffect(data) {
+  /**
+   * Apply a specific upgrade effect — routes to the correct system(s) via the
+   * exported EFFECT_ROUTES map (F4). Every catalog effect is guaranteed a route
+   * by test-shop-effects.js, so a shop item can no longer be silently inert.
+   * @param {object} data — { effect, value, id, ... } (the catalog row)
+   * @param {{ restore?: boolean }} [opts] — restore=true is the MENU_CONTINUE
+   *   load path, where ResourceSystem.restore() has already set absolute maxes;
+   *   the RESOURCE_SYSTEM route is then skipped for RESOURCE_RESTORED_EFFECTS to
+   *   avoid double-counting cumulative bumps (e.g. batteryMax). Purchase and
+   *   GAMEOVER_CONTINUE (from a reset base) pass no opts → full route.
+   */
+  applyUpgradeEffect(data, opts = {}) {
     const { player, armManager, resourceSystem } = this._refs;
-    // kesslerSystem: imported singleton
+    // kesslerSystem / captureNetSystem: imported singletons
 
-    switch (data.effect) {
-      // ── Resource pool upgrades → ResourceSystem ──
-      case 'xenonMax':
-      case 'coldGasMax':
-      case 'batteryMax':
-      case 'solarEfficiency':
-      case 'panelDegradation':
-        resourceSystem.applyUpgrade(data);
-        break;
-
-      // ── Propulsion upgrades → PlayerSatellite ──
-      case 'xenonEfficiency':
-      case 'thrustMultiplier':
-      case 'coldGasThrust':
-      case 'coldGasEfficiency':
-      case 'mpdThruster':
-      case 'mpdCathodeLife':
-        player.applyUpgrade(data);
-        break;
-
-      // ── Sensor upgrades → SensorSystem (self-manages via SENSOR_UPGRADE event) ──
-      case 'sensorRange':
-      case 'detectUntracked':
-      case 'scanRange':
-      case 'salvageScan':
-        eventBus.emit(Events.SENSOR_UPGRADE, data);
-        break;
-
-      // ── Arm upgrades → ArmManager ──
-      case 'tetherRange':
-      case 'reelSpeed':
-      case 'armFuelMax':
-      case 'captureRate':
-      case 'autoDock':
-      case 'springTier':
-      case 'tetherTier':
-        if (armManager) armManager.applyUpgrade(data);
-        break;
-
-      // ── Salvage upgrades → no-op (checked at runtime via _hasUpgrade) ──
-      case 'hazmatRecovery':
-      case 'refineryEfficiency':
-        break;
-
-      // ── Net ladder Phase B: consumable Mother Large Net restock (one net) ──
-      case 'motherNetRestock':
-        captureNetSystem.loadOneMotherNet();
-        break;
-
-      // ── Kessler / hull upgrades → KesslerSystem ──
-      case 'kesslerWarning':
-      case 'shieldHits':
-        kesslerSystem.applyUpgrade(data);
-        break;
+    for (const target of resolveEffectRoute(data.effect, opts)) {
+      switch (target) {
+        case RESOURCE_SYSTEM:
+          resourceSystem.applyUpgrade(data);
+          break;
+        case PLAYER:
+          player.applyUpgrade(data);
+          break;
+        case ARM_MANAGER:
+          if (armManager) armManager.applyUpgrade(data);
+          break;
+        case SENSOR_EVENT:
+          eventBus.emit(Events.SENSOR_UPGRADE, data);
+          break;
+        case KESSLER_SYSTEM:
+          kesslerSystem.applyUpgrade(data);
+          break;
+        case CAPTURE_NET:
+          captureNetSystem.loadOneMotherNet();
+          break;
+        case RUNTIME:
+          // No apply-time action — checked at runtime via _hasUpgrade.
+          break;
+        case ARM_MANAGER_EVENT:
+          // Handled by ArmManager's own UPGRADE_PURCHASED listener — do not
+          // re-dispatch here (would double-apply on purchase).
+          break;
+      }
     }
+
+    // F6: UPGRADE_APPLIED had ZERO emitters, so codex entries keyed to it
+    // (tether_materials, trackable_vs_dark, plus the mpd_burst fallback) were
+    // permanently locked. Emit it here — the single point every applied upgrade
+    // flows through (purchase, restore, gameover-continue) — so those unlock and
+    // legacy saves repair on load. Codex unlock is idempotent, so re-emitting on
+    // restore is harmless. Payload carries the id/effect the matchers key on.
+    eventBus.emit(Events.UPGRADE_APPLIED, {
+      id: data.id,
+      effect: data.effect,
+      name: data.name,
+    });
   }
 
   // ==========================================================================

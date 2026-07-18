@@ -109,6 +109,17 @@ export class HintTicker {
     return this._items.map(it => it.id);
   }
 
+  /**
+   * Clear every visible hint. Wired to GAME_WIN (F3) so a lingering onboarding
+   * chip doesn't sit on top of the victory screen. Also usable programmatically.
+   */
+  clearAll() {
+    // Snapshot ids first — _fadeAndRemove mutates this._items in place.
+    for (const id of this._items.map(it => it.id)) {
+      this._fadeAndRemove(id);
+    }
+  }
+
   /** Tear down DOM + EventBus subscriptions. */
   dispose() {
     if (this._disposed) return;
@@ -176,6 +187,11 @@ export class HintTicker {
     on(Events.HINT_SATISFIED, (d) => this._onHintSatisfied(d));
     if (Events.SKILL_STATE_CHANGED) {
       on(Events.SKILL_STATE_CHANGED, (d) => this._onSkillStateChanged(d));
+    }
+    // F3: the game-win screen takes over — drop any lingering hint chips so they
+    // don't hover over the victory report.
+    if (Events.GAME_WIN) {
+      on(Events.GAME_WIN, () => this.clearAll());
     }
   }
 

@@ -14,7 +14,7 @@ import { settingsManager } from '../systems/SettingsManager.js';
 import { LANGUAGES } from '../core/Languages.js';
 import { FlagDecalSystem } from './FlagDecalSystem.js';
 import { MenuScene3D } from './MenuScene3D.js';
-
+import { resolvePrimaryMenuAction, startRequiresConfirm, NEW_GAME_CONFIRM_MESSAGE } from './menuActions.js';
 export class MenuScreen {
   /**
    * @param {string|null} [initialTier] — current SceneManager quality tier so the
@@ -340,7 +340,7 @@ export class MenuScreen {
               line-height: 1;
             ">
               <div style="font-size:1.2rem;">▶ START MISSION</div>
-              <div style="font-size:0.72rem; opacity:0.55; letter-spacing:0.1em; margin-top:5px;">
+              <div id="menu-start-hint" style="font-size:0.72rem; opacity:0.55; letter-spacing:0.1em; margin-top:5px;">
                 Press Enter or Click
               </div>
             </button>
@@ -521,7 +521,7 @@ export class MenuScreen {
       btn.style.boxShadow = 'none';
     });
     btn.addEventListener('click', () => {
-      this._startGame();
+      this._requestStartGame();
     });
 
     // Button interactions — Continue
@@ -775,8 +775,34 @@ export class MenuScreen {
     // entry path; MENU_FAST_START remains a reserved event with no emitter.)
     if (e.code === 'Enter' || e.code === 'NumpadEnter') {
       e.preventDefault();
-      this._startGame();
+      // F1 save-guard: with a save present, the primary key RESUMES the mission
+      // (CONTINUE) — it must never silently start a new game that wipes the
+      // save (that was the instant, no-confirm data loss). With no save it
+      // starts as before.
+      if (resolvePrimaryMenuAction(persistenceManager.hasSave()) === 'CONTINUE') {
+        this._continueGame();
+      } else {
+        this._requestStartGame();
+      }
     }
+  }
+
+  /**
+   * @private F1 save-guard: entry point for the explicit START MISSION button.
+   * Starting a NEW game clears any existing save (GameFlowManager MENU_START →
+   * deleteSave). When a save exists this asks a single confirm that names the
+   * loss and points at CONTINUE, so an intentional new game is still one click
+   * away but an accidental one can't silently wipe progress. With no save (or
+   * no window.confirm), it starts immediately. A skip during an in-flight
+   * departure fast-forwards it without re-confirming.
+   */
+  _requestStartGame() {
+    if (this._departing) { this._finishDeparture(true); return; }
+    if (startRequiresConfirm(persistenceManager.hasSave())) {
+      const canConfirm = typeof window !== 'undefined' && typeof window.confirm === 'function';
+      if (canConfirm && !window.confirm(NEW_GAME_CONFIRM_MESSAGE)) return;
+    }
+    this._startGame();
   }
 
   /**
@@ -787,6 +813,8 @@ export class MenuScreen {
    */
   _startGame() {
     if (this._departing) { this._finishDeparture(true); return; }
+    // Note: the new-game save-wipe confirm lives in _requestStartGame() (the
+    // button/key entry point). _startGame() is the confirmed departure path.
     audioSystem.init();
     audioSystem.resume();
     audioSystem.playClick();
@@ -954,9 +982,17 @@ export class MenuScreen {
     this.element.classList.remove('menu-departing-plate');
     this.element.style.pointerEvents = 'auto';
     // Toggle Continue button visibility based on whether a save exists
+    const hasSave = persistenceManager.hasSave();
     const continueWrapper = this.element.querySelector('#menu-continue-wrapper');
     if (continueWrapper) {
-      continueWrapper.style.display = persistenceManager.hasSave() ? 'block' : 'none';
+      continueWrapper.style.display = hasSave ? 'block' : 'none';
+    }
+    // F1 save-guard: when a save exists, Enter maps to CONTINUE (the safe
+    // action), so the START button's key hint must not claim Enter starts a
+    // new game. Keep the copy honest with the actual key mapping.
+    const startHint = this.element.querySelector('#menu-start-hint');
+    if (startHint) {
+      startHint.textContent = hasSave ? 'Click to start new (confirms)' : 'Press Enter or Click';
     }
     this.element.style.display = 'flex';
     this.element.style.opacity = '1';

@@ -5552,9 +5552,11 @@ export class ArmUnit {
     this.fuel -= burnRate * dt;
 
     // Move retrograde (opposite to orbital velocity direction = "slowing down")
-    const retrograde = this.position.clone().normalize().cross(
-      new THREE.Vector3(0, 1, 0)
-    ).normalize().negate();
+    // F9: derive retrograde from the LIVE velocity vector, not `position × ŷ`.
+    // The old cross-product assumed an equatorial orbit and pointed the wrong
+    // way for inclined tracks (e.g. the 51.6° ISS-like orbits the sim uses).
+    // (normalize() of a zero vector returns zero in THREE, so no NaN risk.)
+    const retrograde = this.velocity.clone().normalize().negate();
     // ST-8.3.4: Use metal-specific thrust calculation
     const thrustDV = (this._computeMetalThrust() / (this.config.mass + (this.capturedDebris?.mass || 0))) * dt;
     this.velocity.add(retrograde.multiplyScalar(thrustDV));

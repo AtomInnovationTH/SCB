@@ -20,7 +20,7 @@
  *   • Idle ≥ IDLE_ESCALATION_MS without satisfaction → emit TEACHING_MOMENT_FORCE
  *   • > UNRELATED_INPUT_THRESHOLD unrelated inputs without satisfaction → same
  *
- * Persistence: localStorage['spacecowboy_onboarding_v1'] = {
+  * Persistence: localStorage['spacecowboy_onboarding_v3'] = {
  *   completedBeats:[], skippedBeats:[], mastered:bool
  * }
  *
@@ -29,6 +29,7 @@
 
 import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
+import { StorageKeys } from '../core/StorageKeys.js';
 
 // ────────────────────────────────────────────────────────────────────────────
 // BEAT TABLE — fixed by spec.  Do not edit individual values without bumping
@@ -365,7 +366,7 @@ export class OnboardingDirector {
     // Every other major system (SkillsSystem, CommsSystem, KesslerSystem,
     // MissionEventSystem, ReputationSystem, EnvironmentSystem, SpaceWeatherSystem,
     // TrawlManager, DebrisField …) self-resets on GAME_RESET.  The Director
-    // never subscribed — so its localStorage blob (`spacecowboy_onboarding_v1`)
+    // never subscribed — so its localStorage blob (`spacecowboy_onboarding_v3`)
     // accumulated across QA / "new game" sessions, and the pipeline resumed
     // at whichever beat the previous run had reached (e.g. the player
     // satisfied target on run #3 → next run posts `autopilot` first).
@@ -1052,7 +1053,7 @@ export class OnboardingDirector {
   // ─── INTERNAL — PERSISTENCE ───────────────────────────────────────────
 
   _loadPersisted() {
-    const key = Constants.ONBOARDING?.STORAGE_KEY || 'spacecowboy_onboarding_v1';
+    const key = Constants.ONBOARDING?.STORAGE_KEY || StorageKeys.ONBOARDING;
     try {
       if (typeof localStorage === 'undefined') return;
       const raw = localStorage.getItem(key);
@@ -1070,7 +1071,7 @@ export class OnboardingDirector {
   }
 
   _persist() {
-    const key = Constants.ONBOARDING?.STORAGE_KEY || 'spacecowboy_onboarding_v1';
+    const key = Constants.ONBOARDING?.STORAGE_KEY || StorageKeys.ONBOARDING;
     try {
       if (typeof localStorage === 'undefined') return;
       localStorage.setItem(key, JSON.stringify({

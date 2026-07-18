@@ -7,8 +7,13 @@
 import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
+import { StorageKeys } from '../core/StorageKeys.js';
 
-const SAVE_KEY = 'spacecowboy_save_v1';
+const SAVE_KEY = StorageKeys.SAVE;
+// F1 save-guard: a New Game copies the existing save here before deleting it,
+// so an accidental Enter-on-menu (which maps to START) is recoverable instead
+// of an instant, silent data loss.
+const SAVE_BACKUP_KEY = StorageKeys.SAVE_BACKUP;
 const SAVE_VERSION = 1;
 
 class PersistenceManager {
@@ -473,6 +478,54 @@ class PersistenceManager {
     } catch (e) {
       console.error('[PersistenceManager] Delete failed:', e.message);
     }
+  }
+
+  /**
+   * F1 save-guard: copy the current save to a backup slot before it is deleted
+   * by a New Game. Enter on the menu maps to START, which calls deleteSave();
+   * backing up first makes that accidental loss recoverable. No-op (returns
+   * false) when storage is unavailable or there is no save to back up.
+   * @returns {boolean} Whether a backup was written.
+   */
+  backupSave() {
+    if (!this._storageAvailable) return false;
+
+    try {
+      const raw = localStorage.getItem(SAVE_KEY);
+      if (!raw) return false;
+      localStorage.setItem(SAVE_BACKUP_KEY, raw);
+      return true;
+    } catch (e) {
+      console.error('[PersistenceManager] Backup failed:', e.message);
+      return false;
+    }
+  }
+
+  /**
+   * Read the raw backup slot written by backupSave(). Returns the parsed save
+   * object, or null when absent/invalid. Version-checked like peek().
+   * @returns {object|null}
+   */
+  peekBackup() {
+    if (!this._storageAvailable) return null;
+
+    try {
+      const raw = localStorage.getItem(SAVE_BACKUP_KEY);
+      if (!raw) return null;
+      const data = JSON.parse(raw);
+      if (!data || data.version !== SAVE_VERSION) return null;
+      return data;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /**
+   * Whether a recoverable backup save exists (written by backupSave()).
+   * @returns {boolean}
+   */
+  hasBackup() {
+    return this.peekBackup() !== null;
   }
 
   /**

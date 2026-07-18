@@ -8,10 +8,11 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { GameStates } from '../core/GameState.js';
 import { audioSystem } from '../systems/AudioSystem.js';
-import { scoringSystem } from '../systems/ScoringSystem.js';
+import { scoringSystem, computeContributionPayout } from '../systems/ScoringSystem.js';
 import { decorateGlossary } from '../systems/codex/glossary.js';
 import { ensureGlossaryCss, delegateGlossaryClicks } from './glossaryDom.js';
 import { captureNetSystem } from '../entities/CaptureNet.js';
+import { upgradePrereqsMet } from './shopGating.js';
 import {
   getAvailableTiers,
   getCurrentTier,
@@ -543,23 +544,15 @@ export class ShopScreen {
     const item = manifest.find(m => m.metalId === metalId);
     if (!item) return;
 
-    const sellMod = (Constants.MARKET && Constants.MARKET.SELL_PRICE_MODIFIER) || 0.85;
-    let credits = Math.round(item.value * sellMod);
-
-    // Bulk bonus for single large items
-    const bulkThresh = (Constants.MARKET && Constants.MARKET.BULK_THRESHOLD_KG) || 50;
-    const bulkMult = (Constants.MARKET && Constants.MARKET.BULK_BONUS_MULTIPLIER) || 1.15;
-    if (item.massKg >= bulkThresh) {
-      credits = Math.round(credits * bulkMult);
-    }
-
     this._cargoSystem.removeMetal(metalId, item.massKg);
 
-    // Add credits via scoring system
+    // E6: single sale-value SSOT. Route through ScoringSystem.processSale
+    // (market spread + bulk bonus + credit + BULK comms) instead of the local
+    // copy that had drifted from the canonical pipeline.
     const ss = this._scoringSystem || scoringSystem;
-    if (ss && ss.addCredits) {
-      ss.addCredits(credits);
-    }
+    const credits = (ss && ss.processSale)
+      ? ss.processSale({ totalValue: item.value, totalMassKg: item.massKg })
+      : 0;
 
     eventBus.emit(Events.COMMS_MESSAGE, {
       sender: 'MARKET',
@@ -576,32 +569,23 @@ export class ShopScreen {
     const manifest = this._cargoSystem.getManifest();
     if (manifest.length === 0) return;
 
-    let totalCredits = 0;
+    let totalValue = 0;
     let totalMass = 0;
-    const sellMod = (Constants.MARKET && Constants.MARKET.SELL_PRICE_MODIFIER) || 0.85;
-
     for (const item of [...manifest]) {
-      const credits = Math.round(item.value * sellMod);
-      totalCredits += credits;
+      totalValue += item.value;
       totalMass += item.massKg;
       this._cargoSystem.removeMetal(item.metalId, item.massKg);
     }
 
-    // Bulk bonus on total
-    const bulkThresh = (Constants.MARKET && Constants.MARKET.BULK_THRESHOLD_KG) || 50;
-    const bulkMult = (Constants.MARKET && Constants.MARKET.BULK_BONUS_MULTIPLIER) || 1.15;
-    if (totalMass >= bulkThresh) {
-      totalCredits = Math.round(totalCredits * bulkMult);
-    }
-
+    // E6: route through the shared sale pipeline (spread + bulk-on-total + credit).
     const ss = this._scoringSystem || scoringSystem;
-    if (ss && ss.addCredits) {
-      ss.addCredits(totalCredits);
-    }
+    const credits = (ss && ss.processSale)
+      ? ss.processSale({ totalValue, totalMassKg: totalMass })
+      : 0;
 
     eventBus.emit(Events.COMMS_MESSAGE, {
       sender: 'MARKET',
-      text: `Sold all cargo (${totalMass.toFixed(1)}kg) for ${totalCredits}¢`,
+      text: `Sold all cargo (${totalMass.toFixed(1)}kg) for ${credits}¢`,
       priority: 'info'
     });
 
@@ -612,17 +596,25 @@ export class ShopScreen {
   _contributeToElevator(metalId, massKg) {
     if (!this._cargoSystem) return;
 
+    // Read the item BEFORE removal so we can value the contribution at market.
+    const item = this._cargoSystem.getManifest().find(m => m.metalId === metalId);
+
     const removed = this._cargoSystem.removeMetal(metalId, massKg);
     if (removed < 0.01) return;
 
     this._contractMassKg = (this._contractMassKg || 0) + removed;
 
-    const bonusPerKg = (Constants.ELEVATOR_CONTRACT && Constants.ELEVATOR_CONTRACT.BONUS_CREDITS_PER_KG) || 5;
-    const bonus = Math.round(removed * bonusPerKg);
+    // E3: a contribution pays the metal's SELL VALUE (market spread + bulk
+    // bonus — the same credits selling it would earn) PLUS the elevator's
+    // per-kg bonus, which the constant documents as being "on top of selling
+    // price". Before this fix it paid ONLY the 5¢/kg bonus, so contributing
+    // forfeited ~20¢/kg vs selling and the elevator win was strictly dominated.
+    const perKgValue = (item && item.massKg > 0) ? (item.value / item.massKg) : 0;
+    const { saleValue, bonus, payout } = computeContributionPayout(perKgValue * removed, removed);
 
     const ss = this._scoringSystem || scoringSystem;
     if (ss && ss.addCredits) {
-      ss.addCredits(bonus);
+      ss.addCredits(payout);
     }
 
     const target = (Constants.ELEVATOR_CONTRACT && Constants.ELEVATOR_CONTRACT.TARGET_MASS_KG) || 10000;
@@ -634,7 +626,7 @@ export class ShopScreen {
 
     eventBus.emit(Events.COMMS_MESSAGE, {
       sender: 'ELEVATOR',
-      text: `+${removed.toFixed(1)}kg contributed (+${bonus}¢ bonus). Total: ${this._contractMassKg.toFixed(1)}kg`,
+      text: `+${removed.toFixed(1)}kg contributed (+${payout}¢: ${saleValue} sale + ${bonus} bonus). Total: ${this._contractMassKg.toFixed(1)}kg`,
       priority: 'info'
     });
 
@@ -781,14 +773,10 @@ export class ShopScreen {
     const maxed = currentLevel >= upgrade.maxLevel;
     const canAfford = scoringSystem.credits >= upgrade.cost;
     const isRecommended = recommendedId === upgrade.id;
-    // Support both single `requires` (string) and `requiresAll` (array) prerequisites
-    let requiresMet = true;
-    if (upgrade.requires) {
-      requiresMet = this.purchasedUpgrades.has(upgrade.requires);
-    }
-    if (upgrade.requiresAll) {
-      requiresMet = upgrade.requiresAll.every(id => this.purchasedUpgrades.has(id));
-    }
+    // Prerequisite gate (E5 SSOT): shared with the purchase guard in
+    // _purchaseUpgrade so the render's disabled-state and the actual purchase
+    // enforcement can't drift. Handles requires / requiresAll / requiresFeature.
+    const requiresMet = upgradePrereqsMet(upgrade, this.purchasedUpgrades, (f) => Constants.isFeatureEnabled(f));
     // Consumable restock with no remaining capacity (both Mother pods full) is
     // unavailable — don't let the player pay for a net that can't be loaded.
     const consumableFull = upgrade.effect === 'motherNetRestock'
@@ -1200,6 +1188,15 @@ export class ShopScreen {
 
     const currentLevel = this.purchasedUpgrades.get(upgradeId) || 0;
     if (currentLevel >= upgrade.maxLevel) return;
+
+    // E5: enforce prerequisites at PURCHASE time, not just in the render's
+    // disabled-state. Without this a mis-ordered / scripted buy could acquire a
+    // locked upgrade (e.g. graphene_supercap before solid_state_battery) and
+    // spend the credits anyway. Refuse before charging — wallet untouched.
+    if (!upgradePrereqsMet(upgrade, this.purchasedUpgrades, (f) => Constants.isFeatureEnabled(f))) {
+      audioSystem.playWarning(0.3);
+      return;
+    }
 
     if (!scoringSystem.spendCredits(upgrade.cost)) {
       audioSystem.playWarning(0.3);
