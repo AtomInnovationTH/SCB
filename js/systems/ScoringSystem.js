@@ -316,13 +316,20 @@ export class ScoringSystem {
   }
 
   /**
-   * Add credits directly (e.g. from cargo sales, contract bonuses).
+   * Add credits directly (e.g. from cargo sales, contract contributions,
+   * contract WIN_BONUS, FIRST_DEPOT_FLOOR top-up).
+   *
+   * E4 (ledger split): this is CREDITS-ONLY — it no longer touches totalScore.
+   * `credits` are the spendable wallet (shop); `totalScore` is the performance
+   * ledger (WIN/GameOver report + rating bands). Selling salvage or contributing
+   * to the elevator should NOT inflate the performance score — that's a payment,
+   * not an achievement. Capture/boss/bounty awards still pay BOTH via awardPoints
+   * (performance is also payment), so no caller changes are needed there.
    * @param {number} amount
    */
   addCredits(amount) {
     if (amount <= 0) return;
     this.credits += amount;
-    this.totalScore += amount;
     eventBus.emit(Events.SCORE_UPDATE, {
       total: this.totalScore,
       credits: this.credits,
