@@ -57,3 +57,6 @@ gpu-profile-*.json
 
 # Doc / marketing assets (not needed to run)
 /screenshot.png
+
+# Visual A/B audit screenshots (throwaway compare artifacts)
+/scb_audit/

@@ -3693,8 +3693,14 @@ export const Constants = {
     // pre-OutputPass, which is why it was previously judged ineffective. MSAA-4
     // alone leaves residual stair-stepping on the extreme-contrast Earth limb;
     // FXAA (~0.3 ms) kills that sawtooth for far less than SMAA's 1.77 ms.
+    // C2 (Earth-visuals): HIGH `useFXAAFallback` flipped back to false. 4× MSAA in
+    // the composer RT already resolves geometric edges; the earlier polish-pass
+    // rationale (FXAA kills residual limb sawtooth) was calibrated against the
+    // A1-bug wash. With Phase A landed, FXAA's ~0.3 ms full-frame luma smear reads
+    // as redundant texture softening on the now-crisp disc. Kept ON for MEDIUM,
+    // where MSAA is only 2× and the extra edge cleanup still earns its keep.
     QUALITY_TIERS: {
-      HIGH:   { msaaSamples: 4, enableBloom: true,  enableSMAA: false, pixelRatioCap: 1.5, useFXAAFallback: true  },
+      HIGH:   { msaaSamples: 4, enableBloom: true,  enableSMAA: false, pixelRatioCap: 1.5, useFXAAFallback: false },
       MEDIUM: { msaaSamples: 2, enableBloom: true,  enableSMAA: false, pixelRatioCap: 1.5, useFXAAFallback: true  },
       LOW:    { msaaSamples: 0, enableBloom: false, enableSMAA: false, pixelRatioCap: 1,   useFXAAFallback: false },
     },

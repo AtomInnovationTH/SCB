@@ -721,9 +721,12 @@ export class SceneManager {
 
     // P2.9: update bloom pass resolution by mutating its existing Vector2
     // and cached resolution — no new allocations on resize.
+    // A3: quarter-physical (/4) to match the construction-time resolution in
+    // _setupPostProcessing (was /2 here, so a resize silently doubled the bloom
+    // RT resolution vs boot).
     if (this.bloomPass) {
-      const bw = Math.floor(w * pixelRatio / 2);
-      const bh = Math.floor(h * pixelRatio / 2);
+      const bw = Math.floor(w * pixelRatio / 4);
+      const bh = Math.floor(h * pixelRatio / 4);
       this._bloomRes.set(bw, bh);
       if (this.bloomPass.resolution && typeof this.bloomPass.resolution.set === 'function') {
         this.bloomPass.resolution.set(bw, bh);

@@ -24,7 +24,13 @@ varying vec3 vWorldPosition;
 
 void main() {
   vUv = uv;
-  vNormal = normalize(normalMatrix * normal);
+  // A1: world-space normal. three.js normalMatrix is the normal matrix of the
+  // modelViewMatrix (VIEW space), so the old value rotated with the camera and
+  // disagreed with the world-space uSunDirection / cameraPosition / vWorldPosition
+  // every fragment lighting term dots against. mat3(modelMatrix) puts the normal
+  // in world space to match them (Earth group is unscaled; cloudMesh.rotation.y
+  // is handled correctly by modelMatrix).
+  vNormal = normalize(mat3(modelMatrix) * normal);
   vPosition = position;
   vec4 worldPos = modelMatrix * vec4(position, 1.0);
   vWorldPosition = worldPos.xyz;
@@ -34,19 +40,13 @@ void main() {
 }
 `;
 
-const earthSurfaceFragmentShader = /* glsl */ `
-#include <logdepthbuf_pars_fragment>
-
-uniform sampler2D uDayTexture;
-uniform sampler2D uNightTexture;
-uniform vec3 uSunDirection;
-uniform float uTime;
-
-varying vec3 vNormal;
-varying vec3 vPosition;
-varying vec2 vUv;
-varying vec3 vWorldPosition;
-
+// ============================================================================
+// SHARED SIMPLEX NOISE (GLSL)
+// ============================================================================
+// Extracted from the surface fragment shader as a shared GLSL string so it can be
+// reused without duplicating the ~50-line Ashima simplex. Injected via template
+// interpolation. (Currently consumed only by the surface shader's terrain detail.)
+const simplexNoiseGLSL = /* glsl */ `
 // Simplex-like noise for procedural terrain detail
 // Based on Ashima Arts webgl-noise (3-component, fast)
 vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
@@ -96,7 +96,37 @@ float snoise(vec3 v) {
   m = m * m;
   return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
 }
+`;
 
+// ============================================================================
+// SHARED LIGHTING (GLSL)
+// ============================================================================
+// A2 Lambert modeling term, shared by the surface and cloud fragment shaders via
+// template interpolation so their day-side shading curves cannot drift. Adds a
+// luminance gradient from the sub-solar point toward the terminator; the 0.25
+// floor keeps the terminator from crushing to black (earthshine lifts the dark
+// side further below). pow(..., 0.6) softens the falloff so the lit disc doesn't
+// read as a hard-shaded ball.
+const lambertTermGLSL = /* glsl */ `
+float lambertTerm(float NdotL) {
+  return mix(0.25, 1.0, pow(clamp(NdotL, 0.0, 1.0), 0.6));
+}
+`;
+
+const earthSurfaceFragmentShader = /* glsl */ `
+#include <logdepthbuf_pars_fragment>
+
+uniform sampler2D uDayTexture;
+uniform sampler2D uNightTexture;
+uniform vec3 uSunDirection;
+uniform float uTime;
+
+varying vec3 vNormal;
+varying vec3 vPosition;
+varying vec2 vUv;
+varying vec3 vWorldPosition;
+${simplexNoiseGLSL}
+${lambertTermGLSL}
 // Sprint 2 / PR C. LOW_DETAIL define skips the 7-octave noise stack entirely.
 // At LOW tier the base 8k/16k AVIF texture is detailed enough on its own;
 // the procedural noise was an ~7-octave/fragment burn that ate 2–4 ms on iGPUs.
@@ -130,10 +160,25 @@ void main() {
   vec3 dayColor = texture2D(uDayTexture, vUv).rgb;
   vec3 nightColor = texture2D(uNightTexture, vUv).rgb;
 
-  // T2.5: +12% saturation micro-grade to counter ACES desaturation (the output
-  // stage now tone-maps, which mildly greys the disc). Luma-preserving: push away
-  // from the perceptual grey. A few ALU, no texture cost.
-  dayColor = mix(vec3(dot(dayColor, vec3(0.299, 0.587, 0.114))), dayColor, 1.12);
+  // BOLD GRADE (visible pass) — WATER-AWARE (2026-07-19). Applied pre-shading /
+  // pre-ACES so it reads across the whole disc regardless of view distance:
+  //   1) contrast around an 0.18 linear pivot — punch + apparent depth;
+  //   2) saturation — clearly visible colour pop.
+  // Ocean sits low in linear space (below the pivot), so a strong global contrast
+  // hardened the shallow/deep depth boundary into an unnatural bright band and
+  // amplified 8-bit banding in the smooth sea gradient. Fix: detect blue-dominant
+  // water from the raw texel and fade the grade toward flat over it — land and
+  // clouds keep the full punch, water stays soft and natural.
+  {
+    float gsum    = dayColor.r + dayColor.g + dayColor.b;
+    float blueDom = dayColor.b / max(gsum, 0.001);      // ~0.33 neutral, >0.42 water
+    float waterW  = smoothstep(0.36, 0.44, blueDom);    // 1 over ocean, 0 over land
+    float contrastAmt = mix(1.15, 1.02, waterW);        // full on land, near-flat on water
+    float satAmt      = mix(1.25, 1.08, waterW);
+    dayColor = max(vec3(0.0), (dayColor - 0.18) * contrastAmt + 0.18);
+    float gLuma = dot(dayColor, vec3(0.299, 0.587, 0.114));
+    dayColor = mix(vec3(gLuma), dayColor, satAmt);
+  }
 
   // Boost night lights. They're dim in the source texture
   nightColor *= 2.5;
@@ -173,24 +218,25 @@ void main() {
   // inside the smoothstep transition still run the noise (so the visible
   // band of detail at the dawn/dusk terminator is unchanged).
   if (dayFactor > 0.05) {
-    // Procedural terrain detail. Adds fine structure at close viewing distances
-    // Uses world-space position for consistent detail as camera moves
-    float detail = terrainDetail(normalize(vPosition));
+    // Procedural terrain detail is near-field only. Reverted (2026-07-19) from the
+    // C4 "extend to gameplay altitude" experiment: the noise was imperceptible at
+    // the 350 km orbital view (it only touches the small nadir patch) yet cost
+    // snoise() on the whole lit disc. Distance fade restored to its original
+    // ~240 km range AND wrapped in an early-out so orbital altitude pays ZERO
+    // snoise (previously terrainDetail ran on every lit fragment regardless).
+    float detailFade = smoothstep(0.8, 0.2, viewDist / 3.0); // fades out by ~240 km
+    if (detailFade > 0.0) {
+      // Uses object-space position for consistent detail as camera moves
+      float detail = terrainDetail(normalize(vPosition));
+      float detailStrength = 0.15 * detailFade * (1.0 - oceanMask * 0.7);
+      dayColor *= 1.0 + detail * detailStrength;
 
-    // Distance-based blend: detail visible only at close range (LEO)
-    // At far distances, the base texture is sufficient
-    float detailFade = smoothstep(0.8, 0.2, viewDist / 3.0); // fade in within ~300km (closer detail visibility)
-
-    // Apply as subtle luminance modulation. Doesn't change color, just adds texture
-    // Reduce effect over ocean (water shouldn't have terrain noise)
-    float detailStrength = 0.15 * detailFade * (1.0 - oceanMask * 0.7);
-    dayColor *= 1.0 + detail * detailStrength;
-
-    // Ultra-high-frequency detail tiling. Visible only at very close range (nadir)
-    float tileNoise = detailTiling(normalize(vPosition));
-    float tileFade = smoothstep(2.0, 0.5, viewDist);  // tighter fade than base detail
-    float tileStrength = 0.04 * tileFade * (1.0 - oceanMask * 0.7);
-    dayColor *= 1.0 + tileNoise * tileStrength;
+      // Ultra-high-frequency detail tiling. Visible only at very close range (nadir)
+      float tileNoise = detailTiling(normalize(vPosition));
+      float tileFade = smoothstep(2.0, 0.5, viewDist);  // tighter fade than base detail
+      float tileStrength = 0.04 * tileFade * (1.0 - oceanMask * 0.7);
+      dayColor *= 1.0 + tileNoise * tileStrength;
+    }
   }
 #endif
 
@@ -201,17 +247,24 @@ void main() {
   // E1 — Tight ocean sun-glint (the iconic orbital-photo cue). A very sharp
   // (pow 300) highlight where the sun mirrors off the water gives a moving
   // glitter point distinct from the broad pow-64 sheen. Warm-tinted like real
-  // sun-on-water. Pre-tonemap strength 1.2 stays well under the bloom
-  // threshold (4.0) after ACES, so it sparkles without blooming.
+  // sun-on-water.
+  // B3: with A1 fixed, halfVec now tracks the true sun mirror point (it was
+  // misplaced pre-fix). Strength 1.2 → 1.8 starting point (plan allows up to 2.0);
+  // pow-300 keeps it tight — may bloom slightly past threshold 4.0 (acceptable
+  // sparkle). Verify on screenshots.
   float oceanGlintTerm = pow(max(dot(normal, halfVec), 0.0), 300.0)
-    * 1.2 * oceanMask * dayFactor;
+    * 1.8 * oceanMask * dayFactor;
   vec3 oceanGlint = oceanGlintTerm * vec3(1.0, 0.95, 0.8);
 
   // === NIGHT SIDE ===
   float nightFactor = smoothstep(0.05, -0.15, NdotL);
 
   // === COMPOSE ===
-  vec3 litDay = dayColor * max(0.02, dayFactor) + vec3(oceanSpec) + oceanGlint;
+  // A2: Lambert modeling term (shared lambertTerm() helper). dayFactor alone
+  // saturated to 1.0 across the disc (flat albedo = "map on a ball"); this adds a
+  // real luminance gradient from the sub-solar point toward the terminator.
+  float lambert = lambertTerm(NdotL);
+  vec3 litDay = dayColor * max(0.02, dayFactor * lambert) + vec3(oceanSpec) + oceanGlint;
 
   // Earthshine: faint cool-blue ambient reveals terrain shapes on the dark side
   float nightAmbient = 0.03;
@@ -220,13 +273,13 @@ void main() {
   vec3 finalColor = litDay + nightColor * nightFactor + nightBase * (1.0 - dayFactor);
 
   // Atmospheric limb haze: blue scattering in front of the planet edge so the
-  // hard surface silhouette dissolves into the atmosphere shell. Softer power +
-  // stronger blue tint than before to marry the surface into the glow.
-  // T2.2: tightened under live ACES — exponent 2.5→3.2 and gain 0.35→0.22 confine
-  // the blue-white veil to the limb so the nadir disc stays saturated (was a wash
-  // lifted across most of the disc at LEO grazing angles).
-  float fresnel = pow(1.0 - max(dot(normal, viewDir), 0.0), 3.2);
-  finalColor += vec3(0.30, 0.50, 0.85) * fresnel * 0.22 * dayFactor;
+  // hard surface silhouette dissolves into the atmosphere shell.
+  // T2.2 tightened this (exp 3.2, gain 0.22) to fight the A1-bug disc-center wash.
+  // B1: with A1 fixed the fresnel is genuinely limb-only, so it can breathe again —
+  // gain 0.22 → 0.32, exponent 3.2 → 2.8 for a livelier limb without disc wash.
+  // Verify on screenshots (nadir disc-center must stay clean).
+  float fresnel = pow(1.0 - max(dot(normal, viewDir), 0.0), 2.8);
+  finalColor += vec3(0.30, 0.50, 0.85) * fresnel * 0.32 * dayFactor;
 
   gl_FragColor = vec4(finalColor, 1.0);
 
@@ -248,7 +301,13 @@ varying vec3 vWorldPosition;
 
 void main() {
   vUv = uv;
-  vNormal = normalize(normalMatrix * normal);
+  // A1: world-space normal. three.js normalMatrix is the normal matrix of the
+  // modelViewMatrix (VIEW space), so the old value rotated with the camera and
+  // disagreed with the world-space uSunDirection / cameraPosition / vWorldPosition
+  // every fragment lighting term dots against. mat3(modelMatrix) puts the normal
+  // in world space to match them (Earth group is unscaled; cloudMesh.rotation.y
+  // is handled correctly by modelMatrix).
+  vNormal = normalize(mat3(modelMatrix) * normal);
   vPosition = position;
   vec4 worldPos = modelMatrix * vec4(position, 1.0);
   vWorldPosition = worldPos.xyz;
@@ -269,7 +328,7 @@ varying vec3 vNormal;
 varying vec3 vPosition;
 varying vec2 vUv;
 varying vec3 vWorldPosition;
-
+${lambertTermGLSL}
 void main() {
   vec3 normal = normalize(vNormal);
 
@@ -277,23 +336,33 @@ void main() {
   vec3 cloudSample = texture2D(uCloudTexture, vUv).rgb;
   float cloudAlpha = (cloudSample.r + cloudSample.g + cloudSample.b) / 3.0;
 
-  // Shape: boost contrast for cleaner cloud edges.
-  // T2.4: crisper ramp (0.25,0.95)→(0.30,0.92) and lower max opacity 0.85→0.78 —
-  // clouds were the biggest white-area / soft-edge (blur) contributor over ocean
-  // under the old clipped pass-through; ACES + this tighten the read.
-  cloudAlpha = smoothstep(0.30, 0.92, cloudAlpha);
-  cloudAlpha *= 0.78; // Max opacity
+  // Shape: crisp cloud edges via a TIGHT alpha ramp + high opacity (bold pass,
+  // 2026-07-19). The 8k cloud map is bilinear-magnified (~5 km/texel), which
+  // smears the day/clear boundary into haze. A narrow (0.42→0.80) contrast window
+  // sharpens that transition across the WHOLE disc — the altitude-independent
+  // replacement for the reverted near-field C5 erosion. Higher max opacity (0.92)
+  // reads as denser, more solid cloud masses instead of washed-out translucency.
+  // Trade-off: the tight low edge drops the faintest wisps (<0.42). Dial the
+  // window wider (e.g. 0.36→0.86) or opacity down if it looks hard/aliased.
+  cloudAlpha = smoothstep(0.42, 0.80, cloudAlpha);
+  cloudAlpha *= 0.92; // Max opacity
 
   // Lighting
   float NdotL = dot(normal, uSunDirection);
   float dayFactor = smoothstep(-0.1, 0.2, NdotL);
 
+  // A2: reuse the shared lambertTerm() helper so day-side clouds shade with the
+  // sun angle identically to the surface (the two can't drift). dayFactor still
+  // gates the day/night blend and the terminator scatter below (unchanged).
+  float lambert = lambertTerm(NdotL);
+
   // Cloud color: bright white in sunlight, dark gray in shadow.
-  // T2.4: nudged off pure white (0.95,0.95,0.97)→(0.90,0.91,0.94) so the filmic
-  // shoulder has headroom instead of clipping cloud tops to flat white.
-  vec3 cloudDay = vec3(0.90, 0.91, 0.94);
+  // B2: cloudDay 0.90 → ~0.97. T2.4 pulled it off pure white to protect the ACES
+  // shoulder; with A2's lambert term now shading the day side, clouds can read
+  // brighter white near noon (grey near terminator) without clipping.
+  vec3 cloudDay = vec3(0.97, 0.98, 1.00);
   vec3 cloudNight = vec3(0.05, 0.06, 0.08);
-  vec3 cloudColor = mix(cloudNight, cloudDay, dayFactor);
+  vec3 cloudColor = mix(cloudNight, cloudDay * lambert, dayFactor);
 
   // Slight scattering highlight at terminator
   float terminator = (1.0 - abs(NdotL)) * smoothstep(-0.2, 0.1, NdotL);
@@ -485,7 +554,7 @@ export function isAvifSupported() {
  * @param {string} path  JPG path (e.g. 'textures/earth_day_16k.jpg'). When AVIF
  *                       is supported, the .jpg suffix is rewritten to .avif.
  */
-function loadTexture(path) {
+function loadTexture(path, anisotropy = 8) {
   const avifPath = path.replace(/\.jpg$/i, '.avif');
   const useAvif = avifSupported && avifPath !== path;
   const initialPath = useAvif ? avifPath : path;
@@ -527,7 +596,14 @@ function loadTexture(path) {
     }
   );
   tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = 8;   // ST-5.3: 8× anisotropy (16k RGBA ≈ 1 GB VRAM — be conservative)
+  // C1 (tier-gated): anisotropy is chosen by the caller from the detected LOD
+  // tier (see the Earth constructor) — the full 16x on capable 16k GPUs, less on
+  // weaker hardware — so the extra grazing-angle sampling cost only lands where
+  // it can be absorbed. three.js clamps this to renderer.capabilities
+  // .getMaxAnisotropy() at texture upload, so any value is a safe ceiling.
+  // (Anisotropy does not multiply texture memory; the old "16k RGBA ~ 1 GB VRAM"
+  // note was stale.)
+  tex.anisotropy = anisotropy;
   tex.minFilter = THREE.LinearMipmapLinearFilter;
   tex.magFilter = THREE.LinearFilter;
   tex.wrapS = THREE.ClampToEdgeWrapping;   // prevent antimeridian seam
@@ -630,10 +706,17 @@ export class Earth {
 
     console.log(`[Earth] Texture quality: ${quality || 'base'} (suffix: "${texSuffix}")`);
 
+    // C1 (tier-gated anisotropy): scale the grazing-angle sampling cost with the
+    // detected LOD tier so the weakest GPUs — the base tier (low maxTextureSize /
+    // low memory), the same population the LOW render tier targets — don't pay for
+    // 16x. 8k-capable hardware gets 8x; 16k-capable (Apple Silicon / >=8 GB) gets
+    // the full 16x.
+    const texAniso = quality === '16k' ? 16 : (quality === '8k' ? 8 : 4);
+
     // Load textures at detected quality tier
-    this.dayTexture = loadTexture(`textures/earth_day${texSuffix}.jpg`);
-    this.nightTexture = loadTexture(`textures/earth_night${texSuffix}.jpg`);
-    this.cloudTexture = loadTexture(`textures/earth_clouds${cloudSuffix}.jpg`);
+    this.dayTexture = loadTexture(`textures/earth_day${texSuffix}.jpg`, texAniso);
+    this.nightTexture = loadTexture(`textures/earth_night${texSuffix}.jpg`, texAniso);
+    this.cloudTexture = loadTexture(`textures/earth_clouds${cloudSuffix}.jpg`, texAniso);
 
     this._createSurface();
     // Sprint 3 GPU profiling — `?disableClouds=1` skips the 8K-textured
