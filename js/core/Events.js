@@ -306,7 +306,6 @@ export const Events = {
   FORGE_TOGGLE:        'forge:toggle',
 
   // === FUEL (Phase 4) ===
-  FUEL_CYCLE:          'fuel:cycle',          // UNEMITTED as of 2026-06-16 — fuel cycle has no hotkey (T = Target debris). ResourceSystem.cycleFuel still listens; kept for future use.
   FUEL_CHANGED:        'fuel:changed',        // fuel type switched — { fuelId, name, isp, color }
   FUEL_DEPLETED:       'fuel:depleted',       // current fuel ran out
 

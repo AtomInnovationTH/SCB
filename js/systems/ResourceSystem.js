@@ -215,53 +215,6 @@ export class ResourceSystem {
   }
 
   /**
-   * Cycle to next available fuel. Called when T is pressed.
-   * @param {import('./CargoSystem.js').CargoSystem} [cargoSystem] - to check available propellant slugs
-   */
-  cycleFuel(cargoSystem) {
-    const cs = cargoSystem || this._cargoSystem;
-
-    // Build list of available fuels
-    const available = ['xenon']; // always available (even if tank is empty)
-
-    if (cs) {
-      const manifest = cs.getManifest();
-      for (const [fuelId, fuelDef] of Object.entries(Constants.FUELS)) {
-        if (fuelDef.fromCargo && fuelDef.cargoMetalId) {
-          const inCargo = manifest.find(m => m.metalId === fuelDef.cargoMetalId);
-          if (inCargo && inCargo.massKg > 0.1) {
-            available.push(fuelId);
-          }
-        }
-      }
-    }
-
-    this._availableFuels = available;
-
-    // Find current index and cycle
-    const currentIdx = available.indexOf(this._currentFuelId);
-    const nextIdx = (currentIdx + 1) % available.length;
-    this._currentFuelId = available[nextIdx];
-
-    const fuel = this.getCurrentFuel();
-
-    eventBus.emit(Events.FUEL_CHANGED, {
-      fuelId: this._currentFuelId,
-      name: fuel.name,
-      isp: fuel.isp,
-      color: fuel.color,
-      thrustScale: fuel.thrustScale,
-      index: nextIdx,
-    });
-
-    eventBus.emit(Events.COMMS_MESSAGE, {
-      sender: 'PROPULSION',
-      text: `Fuel: ${fuel.name} (Isp ${fuel.isp}s)`,
-      priority: 'info',
-    });
-  }
-
-  /**
    * Consume ion fuel based on current fuel type.
    * @param {number} amount - base consumption amount
    * @param {import('./CargoSystem.js').CargoSystem} [cargoSystem] - for cargo-based fuels
@@ -568,9 +521,6 @@ export class ResourceSystem {
     eventBus.on(Events.RESOURCE_REPLENISH, (data) => {
       this.replenish(data.resource, data.amount);
     });
-
-    // Phase 4: Fuel cycling
-    eventBus.on(Events.FUEL_CYCLE, () => this.cycleFuel(this._cargoSystem));
 
     // S3b: Ground station pass tracking for power beaming
     eventBus.on(Events.GROUND_STATION_PASS, () => {
