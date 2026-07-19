@@ -43,7 +43,6 @@ const _HIGH_RISK_ROT_STATES = new Set([
   ARM_STATES.HAULING,
   ARM_STATES.RETURNING,
   ARM_STATES.DOCKING,
-  ARM_STATES.TANGLED,
   ARM_STATES.DEORBITING,
 ]);
 const _SOFT_ROT_STATES = new Set([
@@ -633,13 +632,13 @@ export class ArmManager {
 
   /**
    * Get the best candidate arm for detach.
-   * Priority: TANGLED > APPROACH > TRANSIT > NETTING > GRAPPLED.
+   * Priority: APPROACH > TRANSIT > NETTING > GRAPPLED.
    * If ARM PILOT is active, prefer the piloted arm.
    * @returns {ArmUnit|null}
    */
   getActiveDetachCandidate() {
     const S = ARM_STATES;
-    const PRIORITY = [S.TANGLED, S.APPROACH, S.TRANSIT, S.NETTING, S.GRAPPLED];
+    const PRIORITY = [S.APPROACH, S.TRANSIT, S.NETTING, S.GRAPPLED];
     // If a specific arm is selected (arm pilot mode), prefer it
     const selected = this.getSelectedDeployedArm();
     if (selected && !selected.isDetached) {

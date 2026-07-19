@@ -553,7 +553,6 @@ export const Events = {
 
   // --- Tether Events ---
   TETHER_TENSION_UPDATE:    'tether:tensionUpdate',      // { armIndex, tension, fraction }
-  TETHER_TANGLE:            'tether:tangle',             // { armIndices[] }
   TETHER_SNAP:              'tether:snap',               // { armIndex, cause }
   TETHER_REEL_STATE:        'tether:reelState',          // { armIndex, reeling, speed }
 

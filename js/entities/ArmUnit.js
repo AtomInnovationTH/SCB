@@ -4,7 +4,7 @@
  * and Spinner (small, 2.1kg V5, reel on mothership) types.
  * V5 State machine: DOCKED → LAUNCHING → TRANSIT → APPROACH →
  *   NETTING → GRAPPLED → REELING → DOCKING → RELOADING →
- *   TRAWLING → ABLATING → SCANNING → TANGLED → EXPENDED
+ *   TRAWLING → ABLATING → SCANNING → EXPENDED
  * Legacy states (UNDOCKING, HAULING, RETURNING) preserved for backward compat.
  * @module entities/ArmUnit
  */
@@ -41,7 +41,6 @@ const {
   REEL_BRAKE_FORCE_MAX, REEL_TENSION_WARNING, REEL_TENSION_CRITICAL,
   ABLATION_LASER_POWER, ABLATION_RANGE_MAX, ABLATION_DURATION_MAX, ABLATION_DESPIN_RATE,
   PULSE_SCAN_DURATION, PULSE_SCAN_RANGE_MULT,
-  TANGLE_DETECT_ANGLE, TANGLE_RESOLVE_TIME, TANGLE_SLACK_PULSE,
   V5_WEAVER_MASS, V5_SPINNER_MASS,
   SPRING_TIERS, TETHER_TIERS,
 } = Constants;
@@ -206,10 +205,6 @@ export class ArmUnit {
     // V5 Ablation state
     this.ablationTarget = null;            // Target being ablated
     this.ablationTimer = 0;                // Time spent ablating
-
-    // V5 Tangle state
-    this.tangleTimer = 0;                  // Time spent resolving tangle
-    this.tanglePartner = null;             // Other arm involved in tangle
 
     // ── Epic 8.3: FEEP Dual-Metal System ──
     this._currentMetal = 'indium';     // active FEEP propellant
@@ -1232,7 +1227,7 @@ export class ArmUnit {
    */
   detach() {
     const DETACHABLE = new Set([
-      S.TRANSIT, S.APPROACH, S.TANGLED, S.NETTING, S.GRAPPLED, S.ADRIFT
+      S.TRANSIT, S.APPROACH, S.NETTING, S.GRAPPLED, S.ADRIFT
     ]);
     if (!DETACHABLE.has(this.state)) return false;
     if (this.isDetached) return false;
@@ -1240,7 +1235,6 @@ export class ArmUnit {
     this.isDetached = true;
     this._detachFuelWarning25 = false;
     this._detachFuelWarning10 = false;
-    const wasTangled = this.state === S.TANGLED;
 
     // Sever tether — no reel-back possible
     this.tetherLength = 0;
@@ -1255,17 +1249,16 @@ export class ArmUnit {
       armId: this.index,
       position: this.position.clone(),
       fuelRemaining: this.fuel,
-      wasTangled,
       hasDebris: this.capturedDebris !== null,
     });
 
     // Comms callout
-    const callout = wasTangled
-      ? `Houston: ${this.displayName}. Tether cut from tangle. She's flying free.`
-      : `Houston: ${this.displayName}. Tether severed. COWBOY! Free-flight on own fuel.`;
-    eventBus.emit(Events.COMMS_MESSAGE, { text: callout, priority: 'HIGH' });
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      text: `Houston: ${this.displayName}. Tether severed. COWBOY! Free-flight on own fuel.`,
+      priority: 'HIGH',
+    });
 
-    console.log(`[ArmUnit] ${this.id} DETACHED (fuel: ${this.fuel.toFixed(1)}%, tangled: ${wasTangled})`);
+    console.log(`[ArmUnit] ${this.id} DETACHED (fuel: ${this.fuel.toFixed(1)}%)`);
     return true;
   }
 
@@ -1523,20 +1516,6 @@ export class ArmUnit {
       targetId: target.id || null,
     });
     return true;
-  }
-
-  /**
-   * Enter tangle state with another arm's tether.
-   * @param {ArmUnit} partner - Other arm involved in the tangle
-   */
-  enterTangle(partner) {
-    this._preTangleState = this.state;
-    this.tanglePartner = partner;
-    this.tangleTimer = 0;
-    this._transitionTo(S.TANGLED);
-    eventBus.emit(Events.TETHER_TANGLE, {
-      armIndices: [this.index, partner.index],
-    });
   }
 
   /**
@@ -2045,8 +2024,6 @@ export class ArmUnit {
     this.tetherLength = 0;
     this.ablationTarget = null;
     this.ablationTimer = 0;
-    this.tangleTimer = 0;
-    this.tanglePartner = null;
     this.reeling = false;
     this.launchDirection = null;
     // Don't reset springTier/tetherTier — those are upgrades
@@ -2120,9 +2097,8 @@ export class ArmUnit {
      case S.DEORBITING: this._updateDeorbiting(dt); break;
      case S.WEB_SHOT:   this._updateWebShot(dt, parentPos); break;
      case S.ABLATING:   this._updateAblating(dt); break;
-     case S.SCANNING:   this._updateScanning(dt); break;
-     case S.TANGLED:    this._updateTangled(dt); break;
-     case S.STATION_KEEP: this._updateStationKeep(dt); break;
+      case S.SCANNING:   this._updateScanning(dt); break;
+      case S.STATION_KEEP: this._updateStationKeep(dt); break;
      case S.MAGNETIC_GRAPPLE: this._updateMagneticGrapple(dt); break;
      case S.GRIPPER_GRAPPLE: this._updateGripperGrapple(dt); break;
      case S.PAD_CONTACT: this._updatePadContact(dt); break;
@@ -2208,13 +2184,13 @@ export class ArmUnit {
     // DEORBITING handles its own burn rate in _updateDeorbiting()
     // TRAWLING handles its own fuel consumption in _updateTrawling()
     // WEB_SHOT fuel is consumed upfront in fireWebShot()
-    // V5: REELING, RELOADING, LAUNCHING, ABLATING, SCANNING, TANGLED exempt from legacy fuel
+    // V5: REELING, RELOADING, LAUNCHING, ABLATING, SCANNING exempt from legacy fuel
     if (this.state !== S.DOCKED && this.state !== S.EXPENDED &&
         this.state !== S.DEORBITING && this.state !== S.TRAWLING &&
         this.state !== S.WEB_SHOT && this.state !== S.REELING &&
         this.state !== S.RELOADING && this.state !== S.LAUNCHING &&
         this.state !== S.ABLATING && this.state !== S.SCANNING &&
-        this.state !== S.TANGLED && this.state !== S.ADRIFT) {
+        this.state !== S.ADRIFT) {
       this._consumeFuel(dt);
     }
 
@@ -5572,29 +5548,6 @@ export class ArmUnit {
   }
 
   /**
-   * TANGLED: V5 tether tangle state — auto-resolution via gentle slack pulses.
-   * @private
-   */
-  _updateTangled(dt) {
-    this.tangleTimer += dt;
-
-    // Apply periodic tension pulses
-    if (Math.floor(this.tangleTimer * 2) % 2 === 0) {
-      this.tetherTension = TANGLE_SLACK_PULSE;
-    } else {
-      this.tetherTension = 0;
-    }
-
-    if (this.tangleTimer >= TANGLE_RESOLVE_TIME) {
-      // Tangle resolved
-      this.tangleTimer = 0;
-      this.tanglePartner = null;
-      this._transitionTo(this._preTangleState || S.DOCKED);
-      this._preTangleState = null;
-    }
-  }
-
-  /**
    * ADRIFT: out of usable FEEP but STILL TETHERED and powered. Thrusters are
    * offline (the working tank is empty), yet avionics/beacon run on the reserve
    * and the mother's winch can pull her home, so she stays fully recoverable —
@@ -5683,7 +5636,6 @@ export class ArmUnit {
       [S.WEB_SHOT]: 0.0,          // Fuel consumed upfront in fireWebShot()
       [S.ABLATING]: 0.0,          // V5: laser de-spin — zero FEEP fuel (no stored-energy model)
       [S.SCANNING]: 0.0,          // V5: sensor mode — zero FEEP fuel (no stored-energy model)
-      [S.TANGLED]: 0.0,           // V5: Tangled — no active thrust
     };
     let rate = rates[this.state] || 0;
     // REEL_PROFILE_V2 (plan Q4): the re-dock arrest is charged ONCE as a discrete
@@ -6021,7 +5973,6 @@ export class ArmUnit {
       case S.WEB_SHOT:   this._statusLightMat.color.setHex(blink ? 0xffffff : 0x448844); break;
       case S.ABLATING:   this._statusLightMat.color.setHex(blink ? 0xff4488 : 0x441122); break;
       case S.SCANNING:   this._statusLightMat.color.setHex(blink ? 0x88ffff : 0x224444); break;
-      case S.TANGLED:    this._statusLightMat.color.setHex(blink ? 0xff8800 : 0x442200); break;
       case S.STATION_KEEP: this._statusLightMat.color.setHex(blink ? 0x00ffaa : 0x004422); break;
       case S.ADRIFT:     this._statusLightMat.color.setHex(blink ? 0xffaa00 : 0x442200); break;
       case S.EXPENDED:   this._statusLightMat.color.setHex(0xff0000); break;

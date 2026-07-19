@@ -61,7 +61,6 @@ export class StatusPanel {
 
     // V5: Crossbow arm HUD state
     this._tetherTensions = {};          // {armIndex: fraction} — cached from events
-    this._tangleState = null;           // {armIndices, startTime, duration} — active tangle
     this._pulseScanState = 'READY';     // READY | SCANNING | COOLDOWN
 
     // ST-1.3: Lasso cooldown ring state
@@ -161,16 +160,6 @@ export class StatusPanel {
       if (data.armIndex !== undefined) {
         this._tetherTensions[data.armIndex] = data.fraction || 0;
       }
-    });
-
-    // V5: Tether tangle detection — start auto-resolve countdown
-    eventBus.on(Events.TETHER_TANGLE, (data) => {
-      this._tangleState = {
-        armIndices: data.armIndices || [],
-        startTime: Date.now(),
-        duration: (Constants.TANGLE_RESOLVE_TIME || 8) * 1000,
-      };
-      this._renderArmPanel();
     });
 
     // V5: Pulse scan lifecycle
@@ -703,13 +692,6 @@ export class StatusPanel {
     // C-9: Update CoM drift display + plume block indicator
     this._updateCoMDisplay(data);
 
-    // V5: Auto-clear expired tangle state
-    if (this._tangleState) {
-      const elapsed = Date.now() - this._tangleState.startTime;
-      if (elapsed >= this._tangleState.duration) {
-        this._tangleState = null;
-      }
-    }
     // V5: Re-render arm panel at 10Hz for live tension/scan/flash updates
     this._renderArmPanel();
 
@@ -1615,8 +1597,6 @@ export class StatusPanel {
    */
   _daughterStatus(a, idx) {
     const tens = this._tetherTensions[idx];
-    const tangled = this._tangleState && this._tangleState.armIndices.includes(idx);
-    if (a.state === 'TANGLED' || tangled) return { label: 'Tangled', color: '#ffaa00' };
     if (tens !== undefined && tens >= (Constants.REEL_TENSION_CRITICAL || 0.9)
         && a.state !== 'DOCKED' && a.state !== 'RELOADING') {
       return { label: 'Tether stress', color: '#ff4444' };

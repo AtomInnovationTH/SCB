@@ -753,9 +753,6 @@ export class HUD {
       this.showFragmentationAlert(data);
     });
 
-    // V5: Tether tangle → re-render arm panel
-    eventBus.on(Events.TETHER_TANGLE, () => this.statusPanel.renderArmPanel());
-
     // V5: Dual-fire → re-render arm panel (individual CROSSBOW_FIRE events handle per-arm flashes)
     eventBus.on(Events.DUAL_FIRE, () => this.statusPanel.renderArmPanel());
 

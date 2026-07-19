@@ -147,12 +147,10 @@ export const CODEX_TRIGGERS = {
   net_yo_yo_despin:       [{ event: E.NET_FIRED, match: always }],
   tether_materials:       [{ event: E.UPGRADE_APPLIED, match: (p) => !!p.id && p.id.includes('tether') }],
   tether_dynamics:        [{ event: E.TETHER_REEL_STATE, match: (p) => p.reeling === true }],
-  // F6: TETHER_TANGLE has no emitter (enterTangle()/the TANGLED FSM state are
-  // dead code — Wave-3 cleanup candidate). Added a live TETHER_REEL_STATE
-  // fallback (tangle physics is most relevant while reeling in) so the entry is
-  // reachable; the tangle trigger stays for if/when that state is revived.
-  tether_tangle_physics:  [{ event: E.TETHER_TANGLE, match: always },
-                           { event: E.TETHER_REEL_STATE, match: (p) => p.reeling === true }],
+  // The TANGLED FSM state + its TETHER_TANGLE emitter were deleted (dead code,
+  // zero callers — P1 integrity sweep). Tangle physics is most relevant while
+  // reeling in, so this entry is reachable via the live TETHER_REEL_STATE trigger.
+  tether_tangle_physics:  [{ event: E.TETHER_REEL_STATE, match: (p) => p.reeling === true }],
   // survivor of ← edt_propulsion (union: COMMS 'edt' + EDT_ATTRACT)
   edt_physics:            [{ event: E.COMMS_MESSAGE, match: txt('edt') },
                            { event: E.EDT_ATTRACT, match: always }],

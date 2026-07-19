@@ -316,7 +316,6 @@ export const Constants = {
     HOLDING_CATCH: 'HOLDING_CATCH', // Daughter docked at strut tip holding a captured debris in-net, awaiting furnace transfer (occupied — not redeployable, not reloaded)
     ABLATING: 'ABLATING',          // V5 — 10W laser de-spin/nudge
     SCANNING: 'SCANNING',          // V5 — pulse scan distributed sensor array
-    TANGLED: 'TANGLED',            // V5 — tether tangle state requiring resolution
     STATION_KEEP: 'STATION_KEEP',  // V8 — hold position relative to debris (orbital-crane)
     ADRIFT: 'ADRIFT',              // Out of usable FEEP but STILL TETHERED & powered — recoverable.
                                    //   Thrusters offline (no working propellant); avionics/beacon live,
