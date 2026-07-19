@@ -17,7 +17,7 @@
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
-import { orbitToSceneCartesian } from '../entities/OrbitalMechanics.js';
+import { orbitToSceneCartesian, orbitToSceneCartesianInto } from '../entities/OrbitalMechanics.js';
 import { classifyContact, sweptClosestDistM } from './collisionModel.js';
 import { audioSystem } from './AudioSystem.js';
 
@@ -106,6 +106,9 @@ export class CollisionAvoidanceSystem {
     this._contactCooldowns = new Map();
     /** @type {object|null} ResourceSystem ref for glancing-hit damage */
     this._resourceSystem = null;
+    /** @private Reusable scratch for the contact scan's cartesian read (no per-tick alloc). */
+    this._contactScratchPos = { x: 0, y: 0, z: 0 };
+    this._contactScratchVel = { x: 0, y: 0, z: 0 };
 
     this._setupListeners();
   }
@@ -404,16 +407,10 @@ export class CollisionAvoidanceSystem {
       const debris = list[i];
       if (!debris || !debris.alive) continue;
 
-      // --- Exemptions (order = cheapest first) ---
-      // Onboarding / tutorial cluster: never lethal (belt-and-suspenders on top
-      // of the onboarding gate — a drifted welcome piece can't kill anyone).
-      if (debris.welcomeSpawn || debris.welcomeField) continue;
-      // Captured / pinned / in-hold debris is not a collision (we're holding it).
-      if (debris._captured || debris._armPinned || debris._capturedByArm) continue;
-      // Threats we're deliberately approaching to capture are exempt.
-      if (debris.id === this._activeTargetId) continue;
-      if (this._autopilotLockId != null && debris.id === this._autopilotLockId) continue;
-      if (this._isArmTarget(debris.id)) continue;
+      // Shared exemption set (SSOT with the dodge scan): welcome cluster
+      // (M1-scoped) / welcomeField / captured-pinned / active-target /
+      // autopilot-locked / arm-targeted are never contacts.
+      if (this._isThreatExempt(debris)) continue;
 
       // --- Fast distance² pre-filter using cached scene position (same as the
       //     dodge scan's candidate envelope) ---
@@ -425,11 +422,13 @@ export class CollisionAvoidanceSystem {
       const distSq = dx * dx + dy * dy + dz * dz;
       if (distSq > CA.SCAN_RADIUS_SQ) continue;
 
-      // --- Closing speed from full cartesian state (m/s) ---
-      const cart = orbitToSceneCartesian(debris.orbit);
-      const rvx = (cart.velocity.x - playerVel.x) * KM_TO_SCENE;
-      const rvy = (cart.velocity.y - playerVel.y) * KM_TO_SCENE;
-      const rvz = (cart.velocity.z - playerVel.z) * KM_TO_SCENE;
+      // --- Closing speed from full cartesian state (m/s). Use the zero-alloc
+      //     scratch variant so the emitter loop allocates nothing per candidate. ---
+      orbitToSceneCartesianInto(debris.orbit, this._contactScratchPos, this._contactScratchVel);
+      const vel = this._contactScratchVel;
+      const rvx = (vel.x - playerVel.x) * KM_TO_SCENE;
+      const rvy = (vel.y - playerVel.y) * KM_TO_SCENE;
+      const rvz = (vel.z - playerVel.z) * KM_TO_SCENE;
       const rLen = Math.sqrt(distSq);
       // Positive when approaching (distance shrinking).
       const closingScene = rLen > 1e-12 ? -(dx * rvx + dy * rvy + dz * rvz) / rLen : 0;
@@ -521,6 +520,31 @@ export class CollisionAvoidanceSystem {
   // ==========================================================================
 
   /**
+   * Shared exemption test for BOTH the dodge scan (`_scanForThreats`) and the
+   * collision-consequence scan (`_scanAndProcessContacts`), so the two candidate
+   * filters over the same `debrisList` can't drift apart. A debris is exempt when:
+   *   • it's the onboarding welcome cluster AND we're still on mission 1 — surviving
+   *     welcome pieces re-enter both scans in later missions (welcomeSpawn is not
+   *     cleared on MISSION_START), matching the long-standing dodge doctrine;
+   *   • it carries the persistent `welcomeField` flag;
+   *   • it's a held/captured catch (we're holding it — not a collision, not a dodge);
+   *   • it's the active (Tab-selected) target, autopilot-locked, or arm-targeted
+   *     (deliberately being approached to capture).
+   * @private
+   * @param {object} debris
+   * @returns {boolean}
+   */
+  _isThreatExempt(debris) {
+    if (debris.welcomeSpawn && this._missionNumber <= 1) return true;
+    if (debris.welcomeField) return true;
+    if (debris._captured || debris._armPinned || debris._capturedByArm) return true;
+    if (debris.id === this._activeTargetId) return true;
+    if (this._autopilotLockId != null && debris.id === this._autopilotLockId) return true;
+    if (this._isArmTarget(debris.id)) return true;
+    return false;
+  }
+
+  /**
    * Scan all debris for the most threatening upcoming collision.
    * Pre-filters by distance² for performance (800 debris → ~5-20 candidates).
    *
@@ -570,24 +594,9 @@ export class CollisionAvoidanceSystem {
       const debris = debrisList[i];
       if (!debris.alive) continue;
 
-      // --- Exempt the onboarding welcome cluster (mission 1 only) ---
-      // On mission 1 this tutorial cluster is the ONLY thing CA can see, and the
-      // pieces sit inside the 100 m dodge envelope. Auto-dodging them shoves the
-      // mother off its co-orbital station (silently, since CA comms are
-      // mission-gated) — which is exactly what made the "easy" first target
-      // appear to drift away. Scope to M1 so surviving welcome pieces don't stay
-      // invisible to CA in later missions (welcomeSpawn is not cleared on
-      // MISSION_START). Later catalog threats are not welcomeSpawn regardless.
-      if (debris.welcomeSpawn && this._missionNumber <= 1) continue;
-
-      // --- Exempt active (Tab-selected) target ---
-      if (debris.id === this._activeTargetId) continue;
-
-      // --- Exempt autopilot-locked debris (any AP mode) ---
-      if (this._autopilotLockId != null && debris.id === this._autopilotLockId) continue;
-
-      // --- Exempt arm-targeted debris ---
-      if (this._isArmTarget(debris.id)) continue;
+      // Shared exemption set (SSOT with the contact scan) — welcome cluster is
+      // M1-scoped so surviving pieces re-enter CA in later missions.
+      if (this._isThreatExempt(debris)) continue;
 
       // --- Fast distance² pre-filter using cached scene position ---
       let dx, dy, dz;

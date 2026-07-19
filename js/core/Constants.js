@@ -2354,7 +2354,7 @@ export const Constants = {
   COLLISION_MODEL: {
     HULL_RADIUS_M:        12,   // mother-ship contact radius (fallback when caller omits it)
     CONTACT_MARGIN_M:     8,    // added to hull radius → physical-contact envelope (~20 m)
-    WARN_RADIUS_M:        300,  // near-miss proximity-warning envelope (matches CA WARN_THRESHOLD_M)
+    WARN_RADIUS_M:        300,  // D2 near-miss proximity-warning envelope (this model's own knob; the CA dodge path has a separate, currently-unused WARN_THRESHOLD_M)
     GLANCING_MIN_SPEED_MS: 2,   // below this closing speed a contact is inert (docking/reel drift-in)
     HARD_IMPACT_KJ:       250,  // kinetic energy ≥ this → 'hard' (shield/game-over); else 'glancing'
     // Per-debris re-fire cooldowns so a single lingering pass ≠ machine-gun events.
