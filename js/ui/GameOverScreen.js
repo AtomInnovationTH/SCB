@@ -16,7 +16,11 @@ const GAME_OVER_REASONS = {
   debris: 'CATASTROPHIC DEBRIS COLLISION',
   fuel: 'FUEL DEPLETED. STRANDED IN ORBIT',
   reentry: 'UNCONTROLLED REENTRY',
-  battery: 'COMPLETE POWER FAILURE',
+  // NOTE: no 'battery' reason. Battery depletion folds into 'fuel'
+  // (ResourceSystem fires RESOURCE_DEPLETED{reason:'fuel'} only when xenon AND
+  // coldGas AND battery are all 0; battery self-recharges in sunlight/RTG/beam,
+  // so a battery-alone death is transient by design). A real power-failure
+  // death mechanic is a backlog item (ROADMAP §7, via PowerDistribution).
 };
 
 const ADR_FACTS = [
