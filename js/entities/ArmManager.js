@@ -52,7 +52,6 @@ const _SOFT_ROT_STATES = new Set([
   ARM_STATES.WEB_SHOT,
   ARM_STATES.TRANSIT,
   ARM_STATES.APPROACH,
-  ARM_STATES.FISHING,
   ARM_STATES.TRAWLING,
   ARM_STATES.SCANNING,
   ARM_STATES.ABLATING,
@@ -265,10 +264,10 @@ export class ArmManager {
       this.recallAll();
     });
 
-    // ARM_FISH listener removed 2026-06-12 (UX-11 #9): the cast-all/fishing
-    // comms verb lost its only emitters (RadialMenu + CommsPanel command).
-    // deployFishing() remains callable; re-homing the verb to a direct key
-    // is tracked in ROADMAP EN-9 ("decide Fishing key").
+    // The cast-all/fishing verb (ARM_FISH + deployFishing + the FISHING FSM
+    // state) was orphaned when the RadialMenu/CommsPanel command was removed
+    // (UX-11 #9); it had zero triggers, so the whole path was deleted in the
+    // P1 integrity sweep. Re-introducing a passive-ambush verb is a fresh design.
 
     // V4 upgrade event (unlockable via tech tree)
     eventBus.on(Events.UPGRADE_V4_TECH, ({ upgrade }) => {
@@ -455,41 +454,6 @@ export class ArmManager {
   }
 
   /**
-   * Deploy an arm in passive fishing/ambush mode.
-   * Arm extends on tether and hibernates, auto-capturing passing debris.
-   * @param {THREE.Vector3} [direction] - Deploy direction (null = use dock offset)
-   * @param {'weaver'|'spinner'|null} [preferType] - Preferred arm type
-   * @returns {boolean}
-   */
-  deployFishing(direction = null, preferType = 'spinner') {
-    // ST-6.7: Safe-mode guard — refuse arm deployment when spacecraft is in safe mode
-    if (this.playerSatellite && this.playerSatellite.safeMode) {
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        text: 'Daughters locked. Safe mode active. Repair subsystems first.',
-        priority: 'warning',
-      });
-      return false;
-    }
-
-    // Power distribution: block deployment if ARM bus is at 0%
-    if (powerDistribution.armMultiplier <= 0) {
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        text: '⚠ DAUGHTER BEACON OFFLINE. Increase DAUGHTER power to deploy',
-        priority: 'warning',
-      });
-      return false;
-    }
-
-    let arm = this._findDockedArm(preferType || 'spinner');
-    if (!arm) arm = this._findDockedArm(preferType === 'spinner' ? 'weaver' : 'spinner');
-    if (!arm) {
-      eventBus.emit(Events.COMMS_MESSAGE, { text: 'No daughters available for fishing', priority: 'warning' });
-      return false;
-    }
-    return arm.deployFishing(direction);
-  }
-
-  /**
    * Deploy a docked arm in trawling mode — slow sweep for passive debris collection.
    * @param {{ x: number, y: number, z: number }|null} direction — trawl direction
    * @returns {boolean}
@@ -528,7 +492,7 @@ export class ArmManager {
   }
 
   /**
-   * Fire a GSL web shot from a docked or fishing arm at a target debris.
+   * Fire a GSL web shot from a docked arm at a target debris.
    * "Fire and forget" ranged shot that increases debris atmospheric drag.
    * @param {object} target - Debris object with .id and ._scenePosition
    * @param {'weaver'|'spinner'|null} [preferType] - Preferred arm type
@@ -549,15 +513,15 @@ export class ArmManager {
     // Sprint C2: Prefer selected arm if eligible
     if (this.selectedArmIndex >= 0 && this.selectedArmIndex < this.arms.length) {
       const selected = this.arms[this.selectedArmIndex];
-      if ((selected.state === ARM_STATES.DOCKED || selected.state === ARM_STATES.FISHING) &&
+      if (selected.state === ARM_STATES.DOCKED &&
           selected._webShotCooldown <= 0 && selected.fuel > Constants.WEB_SHOT_FUEL_COST) {
         if (selected.fireWebShot(target)) return true;
       }
     }
 
-    // Find a docked/fishing arm (prefer type if given) with no cooldown
+    // Find a docked arm (prefer type if given) with no cooldown
     const eligible = (a) =>
-      (a.state === ARM_STATES.DOCKED || a.state === ARM_STATES.FISHING) &&
+      a.state === ARM_STATES.DOCKED &&
       a._webShotCooldown <= 0;
 
     let arm = preferType
@@ -577,7 +541,7 @@ export class ArmManager {
   }
 
   /**
-   * Set reference to debris field for fishing proximity checks.
+   * Set reference to debris field for trawling proximity checks.
    * @param {import('../entities/DebrisField.js').DebrisField} debrisField
    */
   setDebrisField(debrisField) {
@@ -669,13 +633,13 @@ export class ArmManager {
 
   /**
    * Get the best candidate arm for detach.
-   * Priority: TANGLED > APPROACH > TRANSIT > FISHING > NETTING > GRAPPLED.
+   * Priority: TANGLED > APPROACH > TRANSIT > NETTING > GRAPPLED.
    * If ARM PILOT is active, prefer the piloted arm.
    * @returns {ArmUnit|null}
    */
   getActiveDetachCandidate() {
     const S = ARM_STATES;
-    const PRIORITY = [S.TANGLED, S.APPROACH, S.TRANSIT, S.FISHING, S.NETTING, S.GRAPPLED];
+    const PRIORITY = [S.TANGLED, S.APPROACH, S.TRANSIT, S.NETTING, S.GRAPPLED];
     // If a specific arm is selected (arm pilot mode), prefer it
     const selected = this.getSelectedDeployedArm();
     if (selected && !selected.isDetached) {
@@ -1462,9 +1426,8 @@ export class ArmManager {
       }
     }
 
-    // Inject nearby debris data into fishing AND trawling arms for auto-capture
+    // Inject nearby debris data into trawling arms for auto-capture
     const passiveArms = this.arms.filter(a =>
-      a.state === ARM_STATES.FISHING ||
       a.state === ARM_STATES.TRAWLING
     );
     if (passiveArms.length > 0 && this._debrisField) {
@@ -1682,7 +1645,7 @@ export class ArmManager {
 
   /**
    * Get the selected arm IF it is deployed and pilotable, or null.
-   * Pilotable states: TRANSIT, APPROACH, FISHING, TRAWLING, STATION_KEEP.
+   * Pilotable states: TRANSIT, APPROACH, TRAWLING, STATION_KEEP.
    * @returns {ArmUnit|null}
    */
   getSelectedDeployedArm() {
@@ -1691,7 +1654,6 @@ export class ArmManager {
     const pilotable = [
       ARM_STATES.TRANSIT,
       ARM_STATES.APPROACH,
-      ARM_STATES.FISHING,
       ARM_STATES.TRAWLING,
       ARM_STATES.STATION_KEEP,
     ];
@@ -1729,7 +1691,7 @@ export class ArmManager {
   /**
    * FIX_PLAN §3: Returns the rotation lock tier based on deployed arm states.
    * 'block' — hard-block rotation (high-risk: REELING, HAULING, GRAPPLED, STATION_KEEP, NETTING, DOCKING)
-   * 'soft'  — soft-cap rotation to TETHER_ROTATION.SOFT_CAP_RATE (TRANSIT, APPROACH, FISHING, TRAWLING, LAUNCHING, RETURNING, SCANNING, ABLATING)
+   * 'soft'  — soft-cap rotation to TETHER_ROTATION.SOFT_CAP_RATE (TRANSIT, APPROACH, TRAWLING, LAUNCHING, RETURNING, SCANNING, ABLATING)
    * 'none'  — no constraint (all arms DOCKED/EXPENDED/RELOADING or detached)
    */
   getRotationLockTier() {

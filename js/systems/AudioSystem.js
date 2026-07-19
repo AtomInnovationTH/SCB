@@ -229,12 +229,8 @@ class AudioSystem {
       this.playDockClick();
     });
 
-    eventBus.on(Events.ARM_SPRING_FIRED, (data) => {
-      if (data.mode === 'fishing') {
-        this.playNetWhoosh(0.5);
-      } else {
-        this.playArmDeploy();
-      }
+    eventBus.on(Events.ARM_SPRING_FIRED, () => {
+      this.playArmDeploy();
     });
 
     eventBus.on(Events.ARM_CAPTURED, () => {

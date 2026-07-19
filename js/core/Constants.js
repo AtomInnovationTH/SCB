@@ -215,7 +215,7 @@ export const Constants = {
   // — Rotation TOWARD neutral always uses full baseRate (relief direction unconstrained).
   TETHER_ROTATION: {
     // Max per-axis displacement (pitch OR yaw) before fully locked
-    MAX_DISPLACEMENT_SOFT:  0.524,  // rad (~30°) — soft tier (LAUNCHING, TRANSIT, APPROACH, FISHING, …)
+    MAX_DISPLACEMENT_SOFT:  0.524,  // rad (~30°) — soft tier (LAUNCHING, TRANSIT, APPROACH, TRAWLING, …)
     MAX_DISPLACEMENT_BLOCK: 0.087,  // rad (~5°)  — block tier (REELING, HAULING, GRAPPLED, NETTING, …)
 
     // Damping curve exponent: 2 = quadratic (gentle near neutral, hard wall at θ_max)
@@ -307,7 +307,6 @@ export const Constants = {
     HAULING: 'HAULING',
     RETURNING: 'RETURNING',
     DOCKING: 'DOCKING',
-    FISHING: 'FISHING',            // Passive ambush — hibernate on tether, auto-capture on proximity
     TRAWLING: 'TRAWLING',          // Slow sweep — passive debris collection along orbit path
     DEORBITING: 'DEORBITING',      // One-way sacrifice — burning all fuel retrograde (Session 10)
     WEB_SHOT: 'WEB_SHOT',          // Brief GSL web shot launch animation (Sprint D1)

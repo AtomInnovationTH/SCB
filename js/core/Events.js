@@ -26,8 +26,9 @@ export const Events = {
   ARM_RECALL_ALL:     'arm:recallAll',
   // ARM_DEPLOY / ARM_FISH removed 2026-06-12 (UX-11 #9): their only emitters
   // were the RadialMenu + CommsPanel.executeCommsCommand, both deleted.
-  // preferType deploy survives via ARM_DEPLOY_TO (TargetSelector); the
-  // fishing/cast-all verb re-home is tracked in ROADMAP EN-9.
+  // preferType deploy survives via ARM_DEPLOY_TO (TargetSelector); the orphaned
+  // fishing/cast-all verb (deployFishing + the FISHING FSM state) was fully
+  // deleted in the P1 integrity sweep — reintroducing it is a fresh design.
   ARM_MANUAL_THRUST:  'arm:manualThrust',
   ARM_DEORBIT:        'arm:deorbit',      // One-way sacrifice command (Session 10)
   ARM_REFUELED:       'arm:refueled',     // Arm refueled from salvaged Indium (Session 10)

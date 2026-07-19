@@ -4,7 +4,7 @@
  * and Spinner (small, 2.1kg V5, reel on mothership) types.
  * V5 State machine: DOCKED → LAUNCHING → TRANSIT → APPROACH →
  *   NETTING → GRAPPLED → REELING → DOCKING → RELOADING →
- *   FISHING → TRAWLING → ABLATING → SCANNING → TANGLED → EXPENDED
+ *   TRAWLING → ABLATING → SCANNING → TANGLED → EXPENDED
  * Legacy states (UNDOCKING, HAULING, RETURNING) preserved for backward compat.
  * @module entities/ArmUnit
  */
@@ -132,10 +132,6 @@ export class ArmUnit {
     this._fuelAtDeploy = 100;    // Track fuel at deployment for efficiency scoring
     this._autoFailChance = 0;    // Set by external code to trigger tutorial auto-failure
 
-    // Fishing/ambush mode state
-    this._fishingMode = false;
-    this._fishingDir = null;
-    this._fishingDeployTarget = 0;
     this._nearbyDebris = [];               // injected by ArmManager for proximity checks
 
     // Web shot state (Sprint D1)
@@ -961,7 +957,6 @@ export class ArmUnit {
       return false;
     }
     this.target = target;
-    this._fishingMode = false;              // ensure normal deploy clears fishing flag
     this._fuelAtDeploy = this.fuel;         // Track for efficiency scoring
     this._startingDistance = 0;             // Phase 8: reset for approach beep fraction
     this._smoothDriftVel = null;            // Reset EMA-smoothed drift for fresh approach
@@ -1036,7 +1031,6 @@ export class ArmUnit {
       return false;
     }
     this.target = null;
-    this._fishingMode = false;
     this._trawlingMode = false;
     this._fuelAtDeploy = this.fuel;
 
@@ -1054,56 +1048,6 @@ export class ArmUnit {
     });
     eventBus.emit(Events.COMMS_MESSAGE, {
       text: `${this.displayName}: Cradle launch. Free-fly mode`,
-      priority: 'info',
-    });
-    return true;
-  }
-
-  /**
-   * Deploy this arm in passive fishing/ambush mode.
-   * Arm extends on tether to max range and hibernates, auto-capturing
-   * any debris that drifts within proximity (trapdoor spider ambush).
-   * @param {THREE.Vector3} deployDir - Direction to extend outward from core
-   * @returns {boolean}
-   */
-  deployFishing(deployDir) {
-    if (this.state !== S.DOCKED) return false;
-    // V5: Spring must be charged to deploy
-    if (!this.springCharged) {
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `${this.displayName}: Spring not charged. Reloading`,
-        priority: 'warning',
-      });
-      return false;
-    }
-    if (this.fuel <= 5) {
-      eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `${this.displayName}: Insufficient fuel for fishing deployment`,
-        priority: 'warning',
-      });
-      return false;
-    }
-    // Fallback uses world-space dock direction so ambush fires outward
-    // regardless of parent orientation (§4.6 fix).
-    this._fishingDir = deployDir
-      ? deployDir.clone().normalize()
-      : this._worldDockDirection(this._lastParentQuat);
-    this._fishingDeployTarget = this.config.tetherMax * 0.8; // deploy to 80% of tether max
-    this.target = null;
-
-    // V5: Launch direction for fishing
-    this.launchDirection = this._fishingDir.clone();
-
-    // V5: Use LAUNCHING state
-    this._transitionTo(S.LAUNCHING);
-    this._undockTimer = 0;
-    this._springFired = false;
-    this._dockWorldPos = this.position.clone();
-    this._fishingMode = true;
-
-    eventBus.emit(Events.ARM_DEPLOYED, { armId: this.id, type: this.type, mode: 'fishing' });
-    eventBus.emit(Events.COMMS_MESSAGE, {
-      text: `${this.displayName}: Cradle launch. Ambush/fishing mode`,
       priority: 'info',
     });
     return true;
@@ -1169,8 +1113,8 @@ export class ArmUnit {
    * @returns {boolean} true if web shot was initiated
    */
   fireWebShot(target) {
-    // Must be IDLE (docked) or FISHING to fire
-    if (this.state !== S.DOCKED && this.state !== S.FISHING) return false;
+    // Must be IDLE (docked) to fire
+    if (this.state !== S.DOCKED) return false;
     if (!target || target.id === undefined || target.id === null) return false;
 
     // Cooldown check
@@ -1288,7 +1232,7 @@ export class ArmUnit {
    */
   detach() {
     const DETACHABLE = new Set([
-      S.TRANSIT, S.APPROACH, S.FISHING, S.TANGLED, S.NETTING, S.GRAPPLED, S.ADRIFT
+      S.TRANSIT, S.APPROACH, S.TANGLED, S.NETTING, S.GRAPPLED, S.ADRIFT
     ]);
     if (!DETACHABLE.has(this.state)) return false;
     if (this.isDetached) return false;
@@ -2084,9 +2028,6 @@ export class ArmUnit {
     this._manualCapture = false;
     this._fuelAtDeploy = 100;
     this._autoFailChance = 0;
-    this._fishingMode = false;
-    this._fishingDir = null;
-    this._fishingDeployTarget = 0;
     this._nearbyDebris = [];
     this._webShotCooldown = 0;
     this._webShotTarget = null;
@@ -2175,7 +2116,6 @@ export class ArmUnit {
      case S.DOCKING:    this._updateDocking(dt, parentPos, parentQuat); break;
       case S.RELOADING:  this._updateReloading(dt); break;
       case S.HOLDING_CATCH: this._updateHoldingCatch(dt, parentPos, parentQuat); break;
-     case S.FISHING:    this._updateFishing(dt, parentPos); break;
      case S.TRAWLING:   this._updateTrawling(dt, parentPos); break;
      case S.DEORBITING: this._updateDeorbiting(dt); break;
      case S.WEB_SHOT:   this._updateWebShot(dt, parentPos); break;
@@ -2264,7 +2204,7 @@ export class ArmUnit {
       if (this._webShotCooldown < 0) this._webShotCooldown = 0;
     }
 
-    // Fuel consumption (when active — fishing/trawling use minimal power)
+    // Fuel consumption (when active — trawling uses minimal power)
     // DEORBITING handles its own burn rate in _updateDeorbiting()
     // TRAWLING handles its own fuel consumption in _updateTrawling()
     // WEB_SHOT fuel is consumed upfront in fireWebShot()
@@ -2377,7 +2317,7 @@ export class ArmUnit {
         }
         this.group.quaternion.slerp(targetQuat, sRate);
       } else if (parentQuat) {
-        // No heading available (velocity ≈ 0 in FISHING, etc.)
+        // No heading available (velocity ≈ 0 when stationary, etc.)
         // Inherit mother's orientation so daughters don't appear to counter-rotate
         // when the camera follows the mother's pitch.
         this.group.quaternion.slerp(parentQuat, 0.1);
@@ -2614,12 +2554,6 @@ export class ArmUnit {
           text: `${this.displayName}: Trawling mode. Slow sweep for debris`,
           priority: 'info',
         });
-      } else if (this._fishingMode) {
-        this._transitionTo(S.FISHING);
-        eventBus.emit(Events.COMMS_MESSAGE, {
-          text: `${this.displayName}: Fishing mode. Extending on tether, hibernating`,
-          priority: 'info',
-        });
       } else {
         this._transitionTo(S.TRANSIT);
         // Legacy: still uses old launch impulse for backward compat
@@ -2663,7 +2597,7 @@ export class ArmUnit {
       // entry, during the magnetic-clamp-release hold).
       eventBus.emit(Events.ARM_SPRING_FIRED, {
         armId: this.id, type: this.type, speed: this.launchSpeed,
-        mode: this._fishingMode ? 'fishing' : (this._trawlingMode ? 'trawl' : 'normal'),
+        mode: this._trawlingMode ? 'trawl' : 'normal',
       });
     }
 
@@ -2679,12 +2613,6 @@ export class ArmUnit {
         this._transitionTo(S.TRAWLING);
         eventBus.emit(Events.COMMS_MESSAGE, {
           text: `${this.displayName}: Trawling mode. Slow sweep for debris`,
-          priority: 'info',
-        });
-      } else if (this._fishingMode) {
-        this._transitionTo(S.FISHING);
-        eventBus.emit(Events.COMMS_MESSAGE, {
-          text: `${this.displayName}: Fishing mode. Extending on tether, hibernating`,
           priority: 'info',
         });
       } else {
@@ -5171,7 +5099,6 @@ export class ArmUnit {
       // Empty return (e.g., a recoverable net failure sent her home without a
       // catch): the legacy reload path still applies.
       this.target = null;
-      this._fishingMode = false;          // clear fishing flag on re-dock
       this._manualCapture = false;        // reset manual capture flag on re-dock
       this._nearbyDebris = [];
 
@@ -5348,54 +5275,6 @@ export class ArmUnit {
     }
   }
 
-  /** FISHING: passive ambush — hibernate at end of tether, auto-capture on proximity */
-  _updateFishing(dt, parentPos) {
-    this.mesh.visible = true;
-    this.tetherLine.visible = true;
-
-    // If still deploying outward, move along fishing direction
-    const currentTether = this.position.distanceTo(parentPos) / M;
-    this.tetherLength = currentTether;
-    const targetDist = this._fishingDeployTarget || this.config.tetherMax * 0.8;
-
-    if (currentTether < targetDist) {
-      // Still extending — slow drift outward (§4.6 fix: fallback uses world dir)
-      const dir = this._fishingDir || this._worldDockDirection(this._lastParentQuat);
-      this.position.add(dir.clone().multiplyScalar(this.config.approachSpeed * 0.5 * dt));
-    }
-    // else: at position, hibernating — very low power
-
-    // Check proximity to any nearby debris (auto-capture)
-    // Uses _nearbyDebris array injected by ArmManager each frame
-    if (this._nearbyDebris && this._nearbyDebris.length > 0) {
-      const captureRadius = this.config.netSize * M * 0.5; // half net size as capture radius
-      for (const debris of this._nearbyDebris) {
-        if (!debris.alive || !debris._scenePosition) continue;
-        const dist = this.position.distanceTo(debris._scenePosition);
-        if (dist < captureRadius) {
-          // Auto-capture triggered!
-          this.target = debris;
-          this.capturedDebris = debris;
-          debris._captured = true;  // UX Fix E+: hide reticle immediately
-          debris._capturedByArm = this; // POLISH FIX issue #2: pin debris visual to arm during REELING
-          this._fishingMode = false;
-          this._transitionTo(S.GRAPPLED);
-          eventBus.emit(Events.ARM_CAPTURED, {
-            armId: this.id, targetId: debris.id, type: this.type, mode: 'fishing',
-            detached: this.isDetached,
-            mass: debris.mass || 0, debrisType: debris.type || 'unknown',
-            manual: false,
-          });
-          eventBus.emit(Events.COMMS_MESSAGE, {
-            text: `${this.displayName}: 🎣 Ambush capture! Target ${debris.id} caught passively.`,
-            priority: 'success',
-          });
-          break;
-        }
-      }
-    }
-  }
-
   /** TRAWLING: slow sweep — passive debris collection along orbit path (Phase 6) */
   _updateTrawling(dt, parentPos) {
     this.mesh.visible = true;
@@ -5512,7 +5391,7 @@ export class ArmUnit {
       maxMass: maxCaptureMass,
     });
 
-    // Also check _nearbyDebris (same as fishing)
+    // Also check _nearbyDebris (passive proximity capture)
     if (this._nearbyDebris && this._nearbyDebris.length > 0) {
       for (const debris of this._nearbyDebris) {
         if (!debris.alive || !debris._scenePosition) continue;
@@ -5801,7 +5680,6 @@ export class ArmUnit {
       [S.RETURNING]: 1.2,
       [S.DOCKING]: 0.2,
       [S.RELOADING]: 0.0,         // V5: worm gear — zero FEEP fuel (no stored-energy model)
-      [S.FISHING]: 0.02,          // Hibernate mode — ~10 mW, near-zero consumption
       [S.WEB_SHOT]: 0.0,          // Fuel consumed upfront in fireWebShot()
       [S.ABLATING]: 0.0,          // V5: laser de-spin — zero FEEP fuel (no stored-energy model)
       [S.SCANNING]: 0.0,          // V5: sensor mode — zero FEEP fuel (no stored-energy model)
@@ -6138,7 +6016,6 @@ export class ArmUnit {
       case S.RETURNING:  this._statusLightMat.color.setHex(0x4488ff); break;
       case S.DOCKING:    this._statusLightMat.color.setHex(blink ? 0xffff00 : 0x444400); break;
       case S.RELOADING:  this._statusLightMat.color.setHex(blink ? 0xaaaa00 : 0x333300); break;
-      case S.FISHING:    this._statusLightMat.color.setHex(blink ? 0x00aa44 : 0x002200); break;
       case S.TRAWLING:   this._statusLightMat.color.setHex(blink ? 0x44aaff : 0x002244); break;
       case S.DEORBITING: this._statusLightMat.color.setHex(blink ? 0xff4400 : 0x441100); break;
       case S.WEB_SHOT:   this._statusLightMat.color.setHex(blink ? 0xffffff : 0x448844); break;

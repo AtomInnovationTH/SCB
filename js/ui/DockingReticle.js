@@ -286,7 +286,7 @@ export class DockingReticle {
     // Also stop any active alignment tone for the same reason.
     const POST_APPROACH_STATES = new Set([
       'STATION_KEEP', 'NETTING', 'GRAPPLED', 'REELING', 'DOCKING',
-      'FISHING', 'TRAWLING', 'HAULING',
+      'TRAWLING', 'HAULING',
     ]);
     const inPostApproach = this._arm && POST_APPROACH_STATES.has(this._arm.state);
     if (inPostApproach) {

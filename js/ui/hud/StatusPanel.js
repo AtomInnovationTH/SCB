@@ -1640,8 +1640,8 @@ export class StatusPanel {
         return { label: 'Returning', color: '#00ffff' };
       case 'HOLDING_CATCH':
         return { label: 'Catch aboard', color: '#ffaa00' };
-      case 'FISHING': case 'TRAWLING':
-        return { label: 'Fishing', color: '#00ff88' };
+      case 'TRAWLING':
+        return { label: 'Trawling', color: '#00ff88' };
       case 'SCANNING':
         return { label: 'Scanning', color: '#4488ff' };
       case 'ABLATING':

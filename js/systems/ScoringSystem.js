@@ -32,7 +32,6 @@ const METHOD_BONUS = {
   climber:    1.3,
   arm:        1.0,    // Auto-capture (base — V3 arm system)
   armManual:  2.0,    // Manual arm piloting (future Phase 4)
-  armFishing: 1.1,    // Passive fishing capture
 };
 
 export class ScoringSystem {
@@ -221,7 +220,7 @@ export class ScoringSystem {
     // UX-3 N3: First-time arm capture comms hints (once per session)
     // Guard: manualCapture !== undefined distinguishes arm path (always sets it)
     // from lasso path (emits SCORING_AWARD with method:'arm' but no manualCapture)
-    if ((data.method === 'arm' || data.method === 'armManual' || data.method === 'armFishing')
+    if ((data.method === 'arm' || data.method === 'armManual')
         && data.manualCapture !== undefined) {
       if (data.manualCapture && !this._firstManualArmMsg) {
         this._firstManualArmMsg = true;
