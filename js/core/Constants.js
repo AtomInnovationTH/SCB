@@ -1191,11 +1191,6 @@ export const Constants = {
     { name: 'Metamat T5',    maxSpeed: 25.0, reloadMult: 6.25, cost: 30000 },
   ],
 
-  // --- Tangle Resolution ---
-  TANGLE_DETECT_ANGLE: 0.52,             // radians (~30°) — crossing angle threshold
-  TANGLE_RESOLVE_TIME: 8.0,              // seconds — auto-resolution duration
-  TANGLE_SLACK_PULSE: 0.5,               // N — gentle tension pulse for untangle
-
   // =========================================================================
   // SALVAGE SYSTEM — Recoverable resources from captured debris (Session 10)
   // =========================================================================

@@ -337,7 +337,7 @@ export function buildGameState(deps) {
     const activeStates = new Set([
       AS.TRANSIT, AS.APPROACH, AS.NETTING, AS.GRAPPLED,
       AS.HAULING, AS.REELING, AS.LAUNCHING, AS.ABLATING,
-      AS.SCANNING, AS.TANGLED, AS.WEB_SHOT,
+      AS.SCANNING, AS.WEB_SHOT,
     ]);
 
     for (const arm of armManager.arms) {
