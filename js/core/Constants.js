@@ -2343,6 +2343,34 @@ export const Constants = {
   },
 
   // =========================================================================
+  // COLLISION MODEL (D2, ROADMAP §4 P2) — graduated debris-contact consequences
+  // Consumed by the pure classifier `js/systems/collisionModel.js` and emitted
+  // from CollisionAvoidanceSystem's existing 4 Hz scan (no new per-frame scan).
+  // CA (when enabled) dodges most threats before contact; this model fires on
+  // the genuine failures CA can't prevent (CA off, manual ramming, kessler
+  // storms). All distances metres, speeds m/s, energy kJ. See COLLISION_MODEL
+  // classifier + KesslerSystem GAME_COLLISION router.
+  // =========================================================================
+  COLLISION_MODEL: {
+    HULL_RADIUS_M:        12,   // mother-ship contact radius (fallback when caller omits it)
+    CONTACT_MARGIN_M:     8,    // added to hull radius → physical-contact envelope (~20 m)
+    WARN_RADIUS_M:        300,  // near-miss proximity-warning envelope (matches CA WARN_THRESHOLD_M)
+    GLANCING_MIN_SPEED_MS: 2,   // below this closing speed a contact is inert (docking/reel drift-in)
+    HARD_IMPACT_KJ:       250,  // kinetic energy ≥ this → 'hard' (shield/game-over); else 'glancing'
+    // Per-debris re-fire cooldowns so a single lingering pass ≠ machine-gun events.
+    WARN_COOLDOWN_S:      6,    // seconds between repeat COLLISION_WARNING for the same debris
+    CONTACT_COOLDOWN_S:   5,    // seconds between repeat contact consequences for the same debris
+    // Load-bearing new-player guard: the emitter stays disarmed for this many
+    // gameplay seconds after entering play, and while onboarding runs, and for
+    // any welcome-field / captured / pinned debris (see CollisionAvoidanceSystem).
+    SPAWN_GRACE_S:        6,    // gameplay seconds before the emitter arms
+    // Glancing-hit subsystem consequence (applied via ResourceSystem).
+    GLANCING_SOLAR_DAMAGE_FRAC: 0.12, // solar-panel health lost per glancing hit
+    GLANCING_BATTERY_DRAIN:     30,   // Wh battery drained per glancing hit
+  },
+
+
+  // =========================================================================
   // AUTOPILOT — Trailing-rendezvous controller (see AUTOPILOT_ANALYSIS.md §D)
   // All distances in metres, velocities in m/s unless noted. Scene conversion
   // uses M = 1e-5 scene units / metre. See AutopilotSystem.js for usage.

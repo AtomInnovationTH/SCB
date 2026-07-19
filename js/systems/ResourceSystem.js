@@ -147,6 +147,41 @@ export class ResourceSystem {
   }
 
   /**
+   * Apply impact damage to the solar panels (D2 glancing-collision consequence).
+   * Floors at 0.1 so a hit degrades but never fully destroys the array (some
+   * recharge always remains). Distinct from passive degradation (floors at 0.3).
+   * @param {number} fraction - health lost, e.g. 0.12
+   */
+  damageSolarPanel(fraction) {
+    if (!(fraction > 0)) return;
+    this.solarPanelHealth = Math.max(0.1, this.solarPanelHealth - fraction);
+    this._syncToPlayer();
+    eventBus.emit(Events.RESOURCE_CHANGED, {
+      resource: 'solarPanelHealth',
+      value: this.solarPanelHealth,
+      delta: -fraction,
+    });
+  }
+
+  /**
+   * Drain battery by up to `amount` Wh (D2 glancing-collision consequence).
+   * Unlike consume(), this never fails — it drains whatever is available and
+   * clamps at 0 (a hit drains what it can).
+   * @param {number} amount - Wh to drain
+   */
+  drainBattery(amount) {
+    if (!(amount > 0)) return;
+    const drained = Math.min(amount, this.battery);
+    this.battery -= drained;
+    this._syncToPlayer();
+    eventBus.emit(Events.RESOURCE_CHANGED, {
+      resource: 'battery',
+      value: this.battery,
+      delta: -drained,
+    });
+  }
+
+  /**
    * Check whether the player can afford a cost.
    * @param {string} resource
    * @param {number} amount

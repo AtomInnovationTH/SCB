@@ -18,6 +18,8 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
 import { orbitToSceneCartesian } from '../entities/OrbitalMechanics.js';
+import { classifyContact, sweptClosestDistM } from './collisionModel.js';
+import { audioSystem } from './AudioSystem.js';
 
 // ============================================================================
 // LOCAL CONSTANTS (derived from Constants.COLLISION_AVOIDANCE)
@@ -91,6 +93,20 @@ export class CollisionAvoidanceSystem {
     /** @type {number} Epoch ms of last CA comms emit (any kind) */
     this._lastCommsEmitMs = -Infinity;
 
+    // --- D2 collision-consequence emitter state (ROADMAP §4 P2) -------------
+    /** @type {boolean} In a gameplay state (tracked via GAME_STATE_CHANGE) */
+    this._inGameplay = false;
+    /** @type {boolean} Onboarding tutorial running — collisions disarmed */
+    this._onboardingActive = false;
+    /** @type {boolean} A launch/net ceremony is playing — collisions disarmed */
+    this._ceremonyActive = false;
+    /** @type {number} Seconds of eligible gameplay accrued (spawn-grace clock) */
+    this._gameplayElapsed = 0;
+    /** @type {Map<*, {warn:number, contact:number}>} Per-debris event cooldowns */
+    this._contactCooldowns = new Map();
+    /** @type {object|null} ResourceSystem ref for glancing-hit damage */
+    this._resourceSystem = null;
+
     this._setupListeners();
   }
 
@@ -108,6 +124,7 @@ export class CollisionAvoidanceSystem {
     this._armManager = deps.armManager || null;
     this._inputManager = deps.inputManager || null;
     this._conjunctionSystem = deps.conjunctionSystem || null;
+    this._resourceSystem = deps.resourceSystem || null;
   }
 
   // ==========================================================================
@@ -170,12 +187,29 @@ export class CollisionAvoidanceSystem {
     eventBus.on(Events.GAME_STATE_CHANGE, (data) => {
       // Disable during non-gameplay states (menu, shop, briefing, game over)
       const gameplay = ['ORBITAL_VIEW', 'APPROACH', 'INTERACTION'];
-      if (data?.to && !gameplay.includes(data.to)) {
-        // Not in gameplay — freeze scanning but don't disable toggle
+      const nowGameplay = !!(data?.to && gameplay.includes(data.to));
+      this._inGameplay = nowGameplay;
+      if (!nowGameplay) {
+        // Not in gameplay — freeze scanning but don't disable toggle. Reset the
+        // spawn-grace clock so re-entering gameplay re-arms after the grace.
         this._scanTimer = 0;
         this._currentThreat = null;
+        this._gameplayElapsed = 0;
       }
     });
+
+    // --- D2 collision-consequence gating (load-bearing new-player guard) -----
+    // Onboarding tutorial: keep the collision emitter disarmed so the curated
+    // welcome field (spawned deliberately close) can never kill a new player.
+    eventBus.on(Events.ONBOARDING_STARTED, () => { this._onboardingActive = true; });
+    eventBus.on(Events.ONBOARDING_COMPLETE, () => {
+      this._onboardingActive = false;
+      this._gameplayElapsed = 0; // re-grace after the tutorial ends
+    });
+    // Launch / net ceremonies: suppress while the camera cinematic plays and the
+    // mother is being flung/repositioned (arm deploy), so a ceremony ≠ a collision.
+    eventBus.on(Events.LAUNCH_CEREMONY_START, () => { this._ceremonyActive = true; });
+    eventBus.on(Events.LAUNCH_CEREMONY_COMPLETE, () => { this._ceremonyActive = false; });
   }
 
   // ==========================================================================
@@ -216,6 +250,13 @@ export class CollisionAvoidanceSystem {
     this._lastSuppressedReason = null;
     this._missionNumber = 1;
     this._lastCommsEmitMs = -Infinity;
+    // D2 collision-consequence state. Note _inGameplay is NOT reset here — a
+    // GAME_RESET is followed by a fresh GAME_STATE_CHANGE that sets it, and the
+    // grace clock restart below keeps a new run guarded regardless.
+    this._onboardingActive = false;
+    this._ceremonyActive = false;
+    this._gameplayElapsed = 0;
+    this._contactCooldowns.clear();
   }
 
   /**
@@ -263,19 +304,17 @@ export class CollisionAvoidanceSystem {
    * @param {number} dt — delta time in seconds
    */
   update(dt) {
-    if (!this._enabled || !this._player || !this._debrisField) return;
+    if (!this._player || !this._debrisField) return;
 
     this._elapsedTime += dt;
+    if (this._inGameplay) this._gameplayElapsed += dt;
 
     const CA = Constants.COLLISION_AVOIDANCE;
 
-    // --- Suppress conditions ---
-    if (this._armPilotMode) return;
-
-    // Track player movement input for override detection
+    // Track player movement input for override detection (cheap, every frame).
     this._detectPlayerInput();
 
-    // --- Scan throttle (4 Hz) ---
+    // --- Scan throttle (4 Hz) — shared by the dodge scan AND the contact scan ---
     this._scanTimer += dt;
     if (this._scanTimer < CA.SCAN_INTERVAL) return;
     this._scanTimer = 0;
@@ -283,6 +322,18 @@ export class CollisionAvoidanceSystem {
     // --- Scan for threats ---
     const playerPos = this._player.getPosition();
     const playerVel = this._player.getVelocity();
+
+    // --- D2 collision consequences (ROADMAP §4 P2) --------------------------
+    // Runs INDEPENDENT of the dodge enable-toggle and ARM_PILOT so that turning
+    // auto-dodge off (or piloting a daughter) can't make the mother invincible
+    // to debris. Internally gated (gameplay / onboarding / spawn-grace /
+    // ceremony / per-debris cooldown / captured-pinned exemption). Reuses this
+    // 4 Hz cadence + the already-computed player state — no new per-frame scan.
+    this._scanAndProcessContacts(playerPos, playerVel);
+
+    // --- Auto-dodge (gated by the enable toggle + ARM_PILOT suppression) -----
+    if (!this._enabled || this._armPilotMode) return;
+
     const threat = this._scanForThreats(playerPos, playerVel);
 
     if (threat) {
@@ -309,6 +360,160 @@ export class CollisionAvoidanceSystem {
     } else {
       this._clearThreat();
     }
+  }
+
+  // ==========================================================================
+  // D2 COLLISION CONSEQUENCES (ROADMAP §4 P2)
+  // ==========================================================================
+
+  /**
+   * Is the collision-consequence emitter armed this tick?
+   * All four gates are load-bearing — the onboarding + grace gates are what keep
+   * a new player un-killable by the deliberately-close welcome field.
+   * @private
+   * @returns {boolean}
+   */
+  _collisionArmed() {
+    const CM = Constants.COLLISION_MODEL || {};
+    return this._inGameplay
+      && !this._onboardingActive
+      && !this._ceremonyActive
+      && this._gameplayElapsed >= (CM.SPAWN_GRACE_S || 0);
+  }
+
+  /**
+   * Scan the same candidate set as the dodge scan for genuine CONTACTS (not
+   * near-misses to dodge) and route graduated consequences. Called once per
+   * 4 Hz tick, independent of the dodge toggle. No per-iteration allocation.
+   * @private
+   * @param {THREE.Vector3} playerPos
+   * @param {{x,y,z}} playerVel — km/s
+   */
+  _scanAndProcessContacts(playerPos, playerVel) {
+    if (!this._collisionArmed()) return;
+
+    const CA = Constants.COLLISION_AVOIDANCE;
+    const CM = Constants.COLLISION_MODEL || {};
+    const scanInterval = CA.SCAN_INTERVAL;
+    const hullRadiusM = CM.HULL_RADIUS_M || 12;
+
+    const list = this._debrisField.debrisList;
+    if (!list) return;
+
+    for (let i = 0, len = list.length; i < len; i++) {
+      const debris = list[i];
+      if (!debris || !debris.alive) continue;
+
+      // --- Exemptions (order = cheapest first) ---
+      // Onboarding / tutorial cluster: never lethal (belt-and-suspenders on top
+      // of the onboarding gate — a drifted welcome piece can't kill anyone).
+      if (debris.welcomeSpawn || debris.welcomeField) continue;
+      // Captured / pinned / in-hold debris is not a collision (we're holding it).
+      if (debris._captured || debris._armPinned || debris._capturedByArm) continue;
+      // Threats we're deliberately approaching to capture are exempt.
+      if (debris.id === this._activeTargetId) continue;
+      if (this._autopilotLockId != null && debris.id === this._autopilotLockId) continue;
+      if (this._isArmTarget(debris.id)) continue;
+
+      // --- Fast distance² pre-filter using cached scene position (same as the
+      //     dodge scan's candidate envelope) ---
+      const sp = debris._scenePosition;
+      if (!sp) continue;
+      const dx = sp.x - playerPos.x;
+      const dy = sp.y - playerPos.y;
+      const dz = sp.z - playerPos.z;
+      const distSq = dx * dx + dy * dy + dz * dz;
+      if (distSq > CA.SCAN_RADIUS_SQ) continue;
+
+      // --- Closing speed from full cartesian state (m/s) ---
+      const cart = orbitToSceneCartesian(debris.orbit);
+      const rvx = (cart.velocity.x - playerVel.x) * KM_TO_SCENE;
+      const rvy = (cart.velocity.y - playerVel.y) * KM_TO_SCENE;
+      const rvz = (cart.velocity.z - playerVel.z) * KM_TO_SCENE;
+      const rLen = Math.sqrt(distSq);
+      // Positive when approaching (distance shrinking).
+      const closingScene = rLen > 1e-12 ? -(dx * rvx + dy * rvy + dz * rvz) / rLen : 0;
+      const closingMs = closingScene / M;
+      const distM = rLen / M;
+      const effDistM = sweptClosestDistM(distM, closingMs, scanInterval);
+
+      const severity = classifyContact({
+        distanceM: effDistM,
+        hullRadiusM,
+        closingSpeedMs: closingMs,
+        massKg: debris.mass,
+      }, CM);
+
+      if (severity === 'none') continue;
+      this._handleContact(severity, debris, closingMs, effDistM);
+    }
+  }
+
+  /**
+   * Route one classified contact to its consequence, honoring per-debris
+   * cooldowns so a single lingering pass-through can't machine-gun events.
+   * @private
+   * @param {'warning'|'glancing'|'hard'} severity
+   * @param {object} debris
+   * @param {number} closingMs
+   * @param {number} distM
+   */
+  _handleContact(severity, debris, closingMs, distM) {
+    const CM = Constants.COLLISION_MODEL || {};
+    const id = debris.id;
+    const now = this._elapsedTime;
+    let cd = this._contactCooldowns.get(id);
+    if (!cd) { cd = { warn: -Infinity, contact: -Infinity }; this._contactCooldowns.set(id, cd); }
+
+    if (severity === 'warning') {
+      if (now - cd.warn < (CM.WARN_COOLDOWN_S || 0)) return;
+      cd.warn = now;
+      eventBus.emit(Events.COLLISION_WARNING, {
+        debrisId: id,
+        distanceM: Math.round(distM),
+        closingSpeedMs: Math.round(closingMs * 10) / 10,
+      });
+      return;
+    }
+
+    // glancing + hard are physical contacts — share the contact cooldown.
+    if (now - cd.contact < (CM.CONTACT_COOLDOWN_S || 0)) return;
+    cd.contact = now;
+
+    if (severity === 'glancing') {
+      // Subsystem damage: solar-panel health hit + battery drain (via ResourceSystem).
+      if (this._resourceSystem) {
+        if (typeof this._resourceSystem.damageSolarPanel === 'function') {
+          this._resourceSystem.damageSolarPanel(CM.GLANCING_SOLAR_DAMAGE_FRAC || 0);
+        }
+        if (typeof this._resourceSystem.drainBattery === 'function') {
+          this._resourceSystem.drainBattery(CM.GLANCING_BATTERY_DRAIN || 0);
+        }
+      }
+      // Signal the collision (KesslerSystem's DEBRIS_COLLISION listener safely
+      // ignores this — no debris1/debris2 — so a glancing hit sheds no fragments).
+      eventBus.emit(Events.DEBRIS_COLLISION, {
+        severity: 'glancing',
+        debrisId: id,
+        closingSpeedMs: Math.round(closingMs * 10) / 10,
+        massKg: debris.mass,
+      });
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        sender: 'CA',
+        text: `⚠ GLANCING IMPACT — debris ${id}. Solar panel + battery damage`,
+        priority: 'critical',
+      });
+      if (audioSystem && typeof audioSystem.playWarning === 'function') audioSystem.playWarning(0.7);
+      return;
+    }
+
+    // severity === 'hard' → route to the Whipple-shield absorb / game-over path.
+    eventBus.emit(Events.GAME_COLLISION, {
+      source: 'debris',
+      debrisId: id,
+      relSpeed: Math.round(closingMs * 10) / 10,
+      massKg: debris.mass,
+    });
   }
 
   // ==========================================================================
@@ -600,6 +805,15 @@ export class CollisionAvoidanceSystem {
       debrisId: threat.debrisId,
       direction: dirLabel,
       magnitude: dodgeDvMs,
+    });
+
+    // --- D2: the CA autopilot performed an avoidance burn → COLLISION_EVASION
+    //     (HUD banner + comms consumers). Naturally rate-limited by the dodge
+    //     cooldown (≥ COOLDOWN s between dodges). ---
+    eventBus.emit(Events.COLLISION_EVASION, {
+      debrisId: threat.debrisId,
+      distanceM: Math.round(threat.missDistM),
+      direction: dirLabel,
     });
 
     // --- Comms notification (gated — see _emitCaComms JSDoc) ---

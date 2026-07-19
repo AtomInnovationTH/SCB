@@ -621,11 +621,15 @@ export class HUD {
     });
 
     eventBus.on(Events.COLLISION_WARNING, (data) => {
-      this.showWarning(`⚠ Active satellite ${data.name} at ${data.distance.toFixed(1)}km`, 'critical');
+      // D2 (ROADMAP §4 P2): debris proximity warning from CollisionAvoidanceSystem.
+      const closing = (data.closingSpeedMs != null) ? `, closing ${Math.round(data.closingSpeedMs)} m/s` : '';
+      this.showWarning(`⚠ Debris ${data.debrisId} — ${Math.round(data.distanceM)} m${closing}`, 'critical');
     });
 
     eventBus.on(Events.COLLISION_EVASION, (data) => {
-      this.showWarning(`⚡ Auto-evasion! ${data.name} at ${data.distance.toFixed(0)}m`, 'critical');
+      // D2: CA autopilot performed an avoidance burn.
+      const dir = data.direction ? ` (${data.direction})` : '';
+      this.showWarning(`⚡ Auto-evasion! Debris ${data.debrisId} at ${Math.round(data.distanceM)} m${dir}`, 'critical');
     });
 
     eventBus.on(Events.INTERACTION_DATA_CAPTURE, (data) => {

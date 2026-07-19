@@ -1018,7 +1018,7 @@ async function init() {
 
   // --- Collision Avoidance System (after inputManager so ref is valid) ---
   collisionAvoidanceSystem.init({
-    player, debrisField, armManager, inputManager,
+    player, debrisField, armManager, inputManager, resourceSystem,
   });
 
   // --- Event listeners for game flow (delegated to GameFlowManager) ---

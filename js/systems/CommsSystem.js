@@ -576,10 +576,11 @@ export class CommsSystem {
     // Collision evasion
     eventBus.on(Events.COLLISION_EVASION, (data) => {
       if (!this._canSend('evasionManeuver')) return;
+      // D2 (ROADMAP §4 P2): payload is { debrisId, distanceM, direction }.
       this.addMessage(
         CommsPriority.CRITICAL,
         'SPACECRAFT',
-        `⚡ Emergency dodge! ${data.name} at ${(data.distance / Constants.SCENE_SCALE * 1000).toFixed(0)}m. Burned some cold-gas thruster fuel to get clear.`
+        `⚡ Emergency dodge! Debris ${data.debrisId} at ${Math.round(data.distanceM)}m. Burned some cold-gas thruster fuel to get clear.`
       );
     });
 

@@ -94,8 +94,19 @@ export class KesslerSystem {
     });
 
     eventBus.on(Events.GAME_COLLISION, (data) => {
-      if (data.type !== 'activeSatellite' || !gameState.isGameplay()) return;
-      this._tryAbsorbOrGameOver('collision', 'collision');
+      if (!gameState.isGameplay()) return;
+      // Active-satellite collision (pre-existing path).
+      if (data.type === 'activeSatellite') {
+        this._tryAbsorbOrGameOver('collision', 'collision');
+        return;
+      }
+      // D2 (ROADMAP §4 P2): a hard debris contact from CollisionAvoidanceSystem.
+      // Single-path shield accounting — same absorb-then-game-over as kessler /
+      // active-sat hits, so the Whipple Shield covers debris strikes too.
+      if (data.source === 'debris') {
+        this._tryAbsorbOrGameOver('debris', 'debris impact');
+        return;
+      }
     });
 
     eventBus.on(Events.ACTIVE_SAT_COLLISION, () => {

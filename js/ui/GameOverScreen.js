@@ -13,6 +13,7 @@ import { scoringSystem } from '../systems/ScoringSystem.js';
 const GAME_OVER_REASONS = {
   kessler: 'KESSLER CASCADE EVENT',
   collision: 'COLLISION WITH ACTIVE SATELLITE',
+  debris: 'CATASTROPHIC DEBRIS COLLISION',
   fuel: 'FUEL DEPLETED. STRANDED IN ORBIT',
   reentry: 'UNCONTROLLED REENTRY',
   battery: 'COMPLETE POWER FAILURE',
