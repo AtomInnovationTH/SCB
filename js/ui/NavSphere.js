@@ -129,7 +129,7 @@ export class NavSphere {
     this._height = 0;
 
     this._visible = true;
-    this._hidden = false;
+    this._hidden = true;                 // off by default — press 8 to bring the nav orb up
     this._minimized = false;             // 9-key style minimize → lat/lon/alt one-liner (8 key)
     this._time = 0;
     this._selectedTargetId = null;
@@ -182,13 +182,14 @@ export class NavSphere {
       const gameplay = (to === GameStates.ORBITAL_VIEW || to === GameStates.APPROACH || to === GameStates.INTERACTION);
       if (!gameplay) this.setVisible(false);
     });
-    // Declutter the first mission: hold the nav orb off by default so new
-    // players aren't faced with the radar before they've learned the loop.
-    // Press 8 to bring it up (see toggleMinimized). It returns automatically
-    // from mission 2 on. `_hidden` is honoured by setVisible(), so the view
-    // config's showNavSphere:true can't override the first-mission hold.
-    eventBus.on(Events.MISSION_START, ({ missionNumber } = {}) => {
-      this._hidden = (missionNumber === 1);
+    // The nav orb is held off by default (see the constructor) so players
+    // aren't faced with the radar before they've chosen to bring it up. Press 8
+    // to show it (see toggleMinimized); the choice then persists across
+    // missions. `_hidden` is honoured by setVisible(), so the view config's
+    // showNavSphere:true can't override the manual hold. This listener just
+    // refreshes the canvas state on a mission boundary without forcing the orb
+    // back on.
+    eventBus.on(Events.MISSION_START, () => {
       this._frameSkip = -1;
       if (this.canvas) {
         this.canvas.style.display = (this._hidden || !this._visible) ? 'none' : 'block';
@@ -219,6 +220,7 @@ export class NavSphere {
       position: fixed; top: 0; left: 0;
       width: 100%; height: 100%;
       pointer-events: none; z-index: 9;
+      display: none;
     `;
     document.body.appendChild(this.canvas);
     this.ctx = this.canvas.getContext('2d');
@@ -275,9 +277,9 @@ export class NavSphere {
    */
   toggleMinimized() {
     if (!this.canvas) return;
-    // If the orb is being held off (default-off in the first mission, or a
-    // prior manual hide), the first 8 press brings it up rather than collapsing
-    // an already-hidden orb. Subsequent presses minimize/expand as normal.
+    // If the orb is being held off (off by default, or a prior manual hide),
+    // the first 8 press brings it up rather than collapsing an already-hidden
+    // orb. Subsequent presses minimize/expand as normal.
     if (this._hidden) {
       this._hidden = false;
       this._minimized = false;

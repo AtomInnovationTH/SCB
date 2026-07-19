@@ -255,6 +255,11 @@ export class PlayerSatellite extends THREE.Group {
     // Previously these were two separate setHullOutlineVisible() calls, so a
     // CAMERA_VIEW_CHANGE to ORBIT fired during the zoom path would clobber the
     // hull-outline signal and make the outline flicker.
+    //
+    // SECOND CONSUMER: `_orientAlongVelocity()` also reads these two flags
+    // (OR'd) to suspend the prograde auto-orient during close inspection so the
+    // hull holds still for the player. Keep both flags reset on inspection exit
+    // or the ship stays frozen — don't fold this into the outline plumbing.
     this._hullInspectView = false; // discrete INSPECTION view active?
     this._hullInspectZoom = false; // OVERVIEW zoom sub-state active?
     eventBus.on(Events.CAMERA_VIEW_CHANGE, ({ view } = {}) => {
@@ -4652,24 +4657,36 @@ export class PlayerSatellite extends THREE.Group {
     // Autopilot has exclusive orientation control — skip prograde tracking entirely
     if (this.autopilotEngaged) return;
 
+    // Close-inspection hold (V / zoom-in). While the pilot is studying the hull up
+    // close, suspend ONLY the prograde auto-orient below — the manual-rotation
+    // offset further down still applies, so the player can freely turn the ship to
+    // look at a detail without the "autostabilize" slerp dragging it back toward
+    // prograde and fighting them. Gated on the same signals that raise the
+    // hull-outline overlay so the two stay in lockstep. Prograde settling resumes
+    // automatically on exit.
+    const inspecting = this._hullInspectView || this._hullInspectZoom;
+
     const v = this._cartesian.velocity;
     const vLen = Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
-    if (vLen < 1e-10) return;
 
-    const velDir = new THREE.Vector3(v.x, v.y, v.z).normalize();
-    const radial = this.position.clone().normalize();
+    if (!inspecting && vLen >= 1e-10) {
+      const velDir = new THREE.Vector3(v.x, v.y, v.z).normalize();
+      const radial = this.position.clone().normalize();
 
-    // lookAt: eye=pos+vel, target=pos → +Z = velDir (model +Z = forward/prograde).
-    // Model convention: thrusters at -Z (aft), sensors at +Z (fore).
-    const mat = new THREE.Matrix4();
-    const eye = this.position.clone().add(velDir);
-    mat.lookAt(eye, this.position, radial);
+      // lookAt: eye=pos+vel, target=pos → +Z = velDir (model +Z = forward/prograde).
+      // Model convention: thrusters at -Z (aft), sensors at +Z (fore).
+      const mat = new THREE.Matrix4();
+      const eye = this.position.clone().add(velDir);
+      mat.lookAt(eye, this.position, radial);
 
-    // Slerp toward velocity heading — preserves spin momentum on startup
-    const targetQuat = new THREE.Quaternion().setFromRotationMatrix(mat);
-    this.quaternion.slerp(targetQuat, 0.02); // Low alpha = slow settling, longer spin
+      // Slerp toward velocity heading — preserves spin momentum on startup
+      const targetQuat = new THREE.Quaternion().setFromRotationMatrix(mat);
+      this.quaternion.slerp(targetQuat, 0.02); // Low alpha = slow settling, longer spin
+    }
 
-    // F13: Apply manual rotation offset on top of velocity alignment
+    // F13: Apply manual rotation offset. During normal flight this rides on top of
+    // the velocity alignment above; during inspection it is the sole attitude
+    // driver, letting the player rotate the hull freely.
     if (this._manualRotation.x !== 0 || this._manualRotation.y !== 0 || this._manualRotation.z !== 0) {
       this.quaternion.multiply(this._manualRotation);
       this.quaternion.normalize();
