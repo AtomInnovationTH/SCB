@@ -125,6 +125,16 @@ export const Constants = {
   // E1 retune: per debris-tier scaling of the capture base so a tiny fragment
   // (tier 1) no longer earns the same flat base as a rocket body (tier 3/4).
   DEBRIS_TIER_BASE_WEIGHT: { 1: 0.4, 2: 0.7, 3: 1.0, 4: 1.3 },
+  // S1 economy closure (2026-07-19): the salvaged-metal material bonus. Paid at
+  // MATERIAL_BONUS_CR_PER_KG credits per kg of recovered metal, clamped per catch
+  // at MATERIAL_BONUS_CAP_CR, and added AFTER the situational soft-cap multiply
+  // (ScoringSystem.awardPoints) so it is no longer amplified ×up-to-2.5. Before
+  // this, a heavy-salvage catch paid metalMassKg×2 THEN ×2.5, driving skilled
+  // catalog income to ~8.6–9.3× (see ECONOMY_BALANCE.md §Live certification). The
+  // cap (750 ≈ a heavy defunct-sat's metal worth) keeps salvage rewarding via the
+  // ×1.15 salvage multiplier while stopping whales from paying many× catalog.
+  MATERIAL_BONUS_CR_PER_KG: 2,    // credits per kg of recovered metal
+  MATERIAL_BONUS_CAP_CR: 750,     // per-catch clamp on the material bonus
 
   // === DEBRIS TYPES ===
   DEBRIS_TYPES: {

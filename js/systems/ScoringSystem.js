@@ -184,11 +184,9 @@ export class ScoringSystem {
       : 1.0;
     points = Math.round(points * bountyPremium);
 
-    // Phase 5: Material mass bonus — 2 credits per kg of metal captured
-    if (data.metalMassKg && data.metalMassKg > 0) {
-      const materialBonus = Math.round(data.metalMassKg * 2);
-      points += materialBonus;
-    }
+    // S1 economy closure (2026-07-19): the material bonus is applied AFTER the
+    // situational soft-cap multiply below (no longer amplified), so its addition
+    // is deferred — see the `materialBonus` clamp after the multiply.
 
     // E1 retune: the situational multipliers below are ACCUMULATED into a single
     // product, then soft-capped (SITUATIONAL_MULT_SOFT_CAP) before a single apply.
@@ -295,6 +293,19 @@ export class ScoringSystem {
     // E1 retune: soft-cap the accumulated situational product, then apply once.
     const cap = Constants.SITUATIONAL_MULT_SOFT_CAP || 2.5;
     points = Math.round(points * Math.min(situationalMult, cap));
+
+    // S1 economy closure (2026-07-19): add the salvaged-metal material bonus
+    // AFTER the situational multiply so it is NOT amplified ×up-to-2.5, and clamp
+    // it per catch. Previously this addition sat BEFORE the multiply, so a
+    // heavy-salvage catch paid (base + metalMassKg×2) × situational, letting
+    // whales earn many× catalog. Salvage stays rewarding via the ×1.15 salvage
+    // multiplier; the material top-up is now a bounded flat add. (ECONOMY_BALANCE.md)
+    if (data.metalMassKg && data.metalMassKg > 0) {
+      const perKg = Constants.MATERIAL_BONUS_CR_PER_KG != null ? Constants.MATERIAL_BONUS_CR_PER_KG : 2;
+      const capCr = Constants.MATERIAL_BONUS_CAP_CR != null ? Constants.MATERIAL_BONUS_CAP_CR : Infinity;
+      const materialBonus = Math.min(Math.round(data.metalMassKg * perKg), capCr);
+      points += materialBonus;
+    }
 
     this.totalScore += points;
     this.credits += points;
