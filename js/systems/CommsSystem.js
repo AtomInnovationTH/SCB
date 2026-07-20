@@ -704,7 +704,7 @@ export class CommsSystem {
     // §4 item 4: STATION_KEEP_ENTERED → ON STATION comms with key hints.
     // New-player guidance: speak plainly about what the daughter is doing and
     // exactly which keys move things forward. Capture is fired with [N] (the
-    // same key onboarding teaches for the net); [P] takes manual pilot control.
+    // same key onboarding teaches for the net); the digits 1-4 take manual pilot control.
     eventBus.on(Events.STATION_KEEP_ENTERED, (data) => {
       const standoff = data?.standoffR != null ? Math.round(data.standoffR) : '?';
       const targetId = data?.targetId != null ? data.targetId : '?';

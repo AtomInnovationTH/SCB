@@ -10,6 +10,7 @@ import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { gameState, GameStates } from '../core/GameState.js';
+import { getMissionProgress } from '../core/missionProgress.js';
 import timerManager from './TimerManager.js';
 import { CameraViews } from './CameraSystem.js';
 import { scoringSystem } from './ScoringSystem.js';
@@ -475,11 +476,49 @@ class GameFlowManager {
         }
       }
 
-      this.transitionToState(GameStates.BRIEFING);
+      // Continue routes straight to flight (like new game) — no BRIEFING card
+      // on startup. _firstOrbitalView is false (set above), so the ORBITAL_VIEW
+      // entry skips the new-player intro zoom / boot trickle / score-group timer.
+      // MENU → ORBITAL_VIEW is a valid transition (js/core/GameState.js:27).
+      this.transitionToState(GameStates.ORBITAL_VIEW);
+
+      // Welcome-back comms uplink — mission context (mission #, objective)
+      // arrives as a short HOUSTON trickle AFTER the handoff, replacing the
+      // BRIEFING card's decision UI. Emitted after the transition so CommsSystem
+      // has self-started on GAME_STATE_CHANGE → ORBITAL_VIEW (js/systems/CommsSystem.js:404).
+      //
+      // Mission-arc math is shared with BriefingScreen via getMissionProgress
+      // (js/core/missionProgress.js) so the comms line can never drift from the
+      // briefing card. getStats() reads debrisCleared from gameState (set above),
+      // so it reflects the restored save.
+      const stats = scoringSystem.getStats();
+      const { perMission, missionNum, debrisUntilShop } = getMissionProgress(stats.debrisCleared);
+      const objectiveText = debrisUntilShop >= perMission
+        ? `Clear ${perMission} debris to reach the depot.`
+        : `Clear ${debrisUntilShop} more debris for depot resupply.`;
+
+      // Both lines tagged _onboarding to pass the tier-0 suppression gate: on
+      // continue resetGame()'s GAME_RESET restarts the OnboardingDirector pipeline,
+      // so comms may sit at tier 0 when these fire (all non-tagged lines muted,
+      // js/systems/commsSuppression.js:59-62). channel: 'HOUSTON' passes at ramp
+      // tier 1; the _onboarding tag covers tier 0 (same precedent as the boot
+      // trickle's "EVA crew clear." line, GFM:233-238). owner=this for teardown.
+      timerManager.setTimeout(() => {
+        eventBus.emit(Events.COMMS_MESSAGE, {
+          source: 'HOUSTON', channel: 'HOUSTON', priority: 'info',
+          text: `Welcome back, Cowboy. Resuming Mission ${missionNum}.`, _onboarding: true,
+        });
+      }, 900, { owner: this });
+      timerManager.setTimeout(() => {
+        eventBus.emit(Events.COMMS_MESSAGE, {
+          source: 'HOUSTON', channel: 'HOUSTON', priority: 'info',
+          text: objectiveText, _onboarding: true,
+        });
+      }, 2200, { owner: this });
     });
 
     // ==================================================================
-    // BRIEFING EVENTS
+    // BRIEFING EVENTS (retry path only — GAMEOVER_RETRY → BRIEFING)
     // ==================================================================
 
     // Briefing → Approach with selected target
@@ -1586,7 +1625,7 @@ class GameFlowManager {
     const target = targetSelector.getActiveTarget();
     if (!target || !target.alive) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: 'DAUGHTER: No target selected. Press [Tab] to cycle targets',
+        text: 'DAUGHTER: No target selected. Press [T] to cycle targets',
         priority: 'warning',
       });
       return;

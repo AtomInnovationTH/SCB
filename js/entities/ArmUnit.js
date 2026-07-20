@@ -948,7 +948,7 @@ export class ArmUnit {
         text: `${this.displayName}: Target too massive (${target.mass}kg > ${this.config.maxCaptureMass}kg)`,
         priority: 'warning',
       });
-      this._postDeployRefusalHint('mass', 'Target too massive for this daughter. Pick a lighter one [Tab]');
+      this._postDeployRefusalHint('mass', 'Target too massive for this daughter. Pick a lighter one [T]');
       return false;
     }
     this.target = target;

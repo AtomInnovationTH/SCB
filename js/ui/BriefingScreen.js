@@ -8,6 +8,7 @@ import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { GameStates } from '../core/GameState.js';
+import { getMissionProgress } from '../core/missionProgress.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import { scoringSystem } from '../systems/ScoringSystem.js';
 import { decorateGlossary } from '../systems/codex/glossary.js';
@@ -262,17 +263,12 @@ export class BriefingScreen {
       sdaEl.textContent = SDA_PROVIDERS[Math.floor(Math.random() * SDA_PROVIDERS.length)];
     }
 
-    // Update mission context from scoring system
+    // Update mission context from scoring system. Mission-arc math (mission #
+    // + debris-until-depot clamps) is shared with the continue-flow welcome-back
+    // comms via getMissionProgress (js/core/missionProgress.js) so the two stay
+    // in sync.
     const stats = scoringSystem.getStats();
-    // Mission number = floor(cleared/perMission)+1, clamped to the 12-chapter arc
-    // so a boundary briefing at exactly WIN_DEBRIS_COUNT (continue-past-threshold)
-    // doesn't read "MISSION 13 BRIEFING" (F2/F3, mirrors GameOverScreen clamp).
-    const perMission = (Constants.MISSIONS && Constants.MISSIONS.DEBRIS_PER_MISSION) || 5;
-    const maxMission = Math.max(1, Math.floor((Constants.WIN_DEBRIS_COUNT || 60) / perMission));
-    const missionNum = Math.min(maxMission, Math.floor(stats.debrisCleared / perMission) + 1);
-    // Debris until the next depot, clamped ≥ 0 so continue-past-threshold never
-    // renders "Clear -N debris" (F3 residual). Modulo keeps this in [1, perMission].
-    const debrisUntilShop = Math.max(0, perMission - (stats.debrisCleared % perMission));
+    const { perMission, missionNum, debrisUntilShop } = getMissionProgress(stats.debrisCleared);
 
     const titleEl = this.element.querySelector('#briefing-mission-title');
     if (titleEl) titleEl.textContent = `MISSION ${missionNum} BRIEFING`;

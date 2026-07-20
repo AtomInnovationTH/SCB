@@ -15,7 +15,7 @@
  * #hud-overlay) and the Strategic Map's wireframe Earth (projected with the
  * map camera into the map overlay) — so the toggle/persistence state is shared.
  *
- * Toggle: Shift+C (InputManager emits Events.CITY_LABELS_TOGGLE). OFF by
+ * Toggle: 5 key (InputManager emits Events.CITY_LABELS_TOGGLE). OFF by
  * default; the on/off preference persists in localStorage (offline-first).
  *
  * Pure helpers (`parseCityList`, `isCityVisible`, `distanceFade`) are
@@ -360,13 +360,16 @@ export class CityLabels {
     if (item.shown) { item.el.style.display = 'none'; item.shown = false; }
   }
 
-  /** Toggle on/off (Shift+C) — persists and announces the new state. */
+  /** Toggle on/off (5 key) — persists and announces the new state. */
   toggle() {
     this.setVisible(!this._visible);
     eventBus.emit(Events.COMMS_MESSAGE, {
-      text: this._visible ? 'City labels ON (Shift+C to hide)' : 'City labels OFF',
+      text: this._visible ? 'City labels ON (5 to hide)' : 'City labels OFF (5 to show)',
       priority: 'info',
-      _postOnboarding: true,
+      // Reactive: the player just pressed 5. Must reach comms even at
+      // suppression tier 0 (onboarding / just after Continue) — the previous
+      // `_postOnboarding` tag was muted there, which was the reported bug.
+      _reactive: true,
     });
   }
 

@@ -9,8 +9,8 @@ export const Constants = {
   // value; VERSION_LABEL is the exact string the UI renders (menu title tag,
   // and any other ES-module UI). NON-module consumers (e.g. sw.js cache name)
   // must be updated by hand — keep them in sync here.
-  VERSION: '0.996',
-  VERSION_LABEL: 'V.996',
+  VERSION: '0.997',
+  VERSION_LABEL: 'V.997',
 
   // ============================================================================
   // === INPUT (Delegation 1, 2026-05-31) ===
@@ -2588,7 +2588,7 @@ export const Constants = {
 
       // ── Tier 5: Mastery (7 skills) ──────────────────────────────────────
       { id: 'nav_hohmann',        label: 'Hohmann Transfer',     key: null,  tier: 5, category: 'nav',       hudGroup: null,  prereqs: ['nav_orbit_mfd'],  prereqType: 'soft',   noReminder: false, triggerEvent: 'AUTOPILOT_ARRIVED' },
-      { id: 'collect_arm_pilot',  label: 'DAUGHTER PILOT Mode',       key: 'P',   tier: 5, category: 'collect',   hudGroup: null,  prereqs: [],                  prereqType: 'soft',   noReminder: false, triggerEvent: 'ARM_SELECT' },
+      { id: 'collect_arm_pilot',  label: 'DAUGHTER PILOT Mode',       key: '1-4',   tier: 5, category: 'collect',   hudGroup: null,  prereqs: [],                  prereqType: 'soft',   noReminder: false, triggerEvent: 'ARM_SELECT' },
       { id: 'mastery_detach',     label: 'Risk Detach',          key: 'X',   tier: 5, category: 'collect',   hudGroup: null,  prereqs: ['collect_deploy'],  prereqType: 'safety', noReminder: false, triggerEvent: 'ARM_DETACHED',       safetyGate: { minCatches: 2 } },
       // F5: was key 'T' + triggerEvent 'TOOL_CYCLE'. T is now "Target debris"
       // and TOOL_CYCLE has no emitter; the tool-cycle verb moved to Backquote in
@@ -3174,19 +3174,19 @@ export const Constants = {
 
       // ── Chapter 9 is the Starlink cascade boss (StarlinkCascadeBoss.js); this
       //    beat teaches dual-arm throughput for the 35-frag race. The C-hold
-      //    radial wheel was removed (UX-11 #9) — direct keys now: 1-4 deploy-select &
-      //    switch/pilot daughters, Shift+R recalls the fleet. Satisfied by any
-      //    daughter deployment during the chapter. ──
+      //    radial wheel was removed (UX-11 #9) — direct keys now: D deploys,
+      //    1-4 select & switch/pilot daughters, Shift+R recalls the fleet.
+      //    Satisfied by any daughter deployment during the chapter. ──
       9: [
         {
           id: 'ch9_radial',
           type: 'interactive',
           source: 'HOUSTON',
-          text: 'Field\'s getting thick. Two daughters beat one. Run both daughters: [1]/[2] deploy and switch, [1-4] to pilot, [Shift+R] recalls the whole fleet. You\'ll need the throughput.',
+          text: 'Field\'s getting thick. Two daughters beat one. Run both daughters: [D] deploys, [1-4] select and pilot (press again to switch back), [Shift+R] recalls the whole fleet. You\'ll need the throughput.',
           skillId: 'radial_menu',
           triggerEvent: 'ARM_DEPLOYED',
           title: 'DUAL-DAUGHTER COMMAND',
-          body: 'Deploy both daughters ([1] and [2]) and work two catches at once.',
+          body: 'Press D twice to deploy both daughters, then [1]/[2] to switch between them.',
         },
       ],
 
@@ -3491,7 +3491,7 @@ export const Constants = {
   ARM_PILOT_IDLE: {
     idleS: 45, hintId: 'arm_pilot_return',
     title: 'Piloting a daughter', icon: '🕹',
-    text: 'Press her number again (1-4), Esc, or V to back out to Command view.',
+    text: 'Press her number again (1-4) or Esc to back out to Command view.',
   },
 
   STATION_KEEP: {

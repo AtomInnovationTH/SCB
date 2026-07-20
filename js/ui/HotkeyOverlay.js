@@ -88,6 +88,8 @@ const HOTKEY_GROUPS = [
       [['8'], 'Nav orb (show / minimize)'],
       [['9'], 'toggle: Debris pane'],
       [['0'], 'toggle: Target pane'],
+      [['−', '+'], 'Declutter HUD one layer at a time — down to a bare orbit view (+ restores)'],
+      [['Shift −', 'Shift +'], 'Mother throttle'],
       [['.', ','], 'Stow struts (.) / roll up panels (,) to tuck in'],
       [[',', 'Shift'], 'Feather panels (quick edge-on dodge)'],
     ],

@@ -453,12 +453,37 @@ export class ArmManager {
   }
 
   /**
+   * Pane-density pure-scenery rung: hide/show every daughter's scene group for
+   * an empty-orbit view. Prior per-arm group visibility is remembered so a
+   * restore never resurrects an EXPENDED/lost daughter (ArmUnit hides its group
+   * on deorbit-complete, ArmUnit.js). A daughter deployed while hidden is not
+   * retroactively hidden — an accepted edge of the pure-scenery mode.
+   * @param {boolean} visible
+   */
+  setFleetVisible(visible) {
+    if (!visible) {
+      if (!this._fleetVisMemory) this._fleetVisMemory = new Map();
+      for (const arm of this.arms) {
+        if (!arm || !arm.group) continue;
+        this._fleetVisMemory.set(arm, arm.group.visible);
+        arm.group.visible = false;
+      }
+    } else {
+      const mem = this._fleetVisMemory;
+      for (const arm of this.arms) {
+        if (!arm || !arm.group) continue;
+        arm.group.visible = mem && mem.has(arm) ? mem.get(arm) : true;
+      }
+      this._fleetVisMemory = null;
+    }
+  }
+
+  /**
    * Deploy a docked arm in trawling mode — slow sweep for passive debris collection.
    * @param {{ x: number, y: number, z: number }|null} direction — trawl direction
    * @returns {boolean}
    */
-  deployTrawl(direction = null) {
-    // Power distribution: block deployment if ARM bus is at 0%
+  deployTrawl(direction = null) {    // Power distribution: block deployment if ARM bus is at 0%
     if (powerDistribution.armMultiplier <= 0) {
       eventBus.emit(Events.COMMS_MESSAGE, {
         text: '⚠ DAUGHTER BEACON OFFLINE. Increase DAUGHTER power to deploy',

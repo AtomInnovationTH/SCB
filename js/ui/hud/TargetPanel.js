@@ -234,13 +234,28 @@ export class TargetPanel {
 
   /**
    * Show/hide the target pane (hotkey revamp 2026-06-14 — the 0 key,
-   * "Target pane" toggle). Toggles the panel container's display.
+   * "Target pane" toggle). Toggles the panel container's display and emits a
+   * reactive comms line naming the undo key. Pressing 0 ALWAYS re-reveals the
+   * pane, even when the pane-density ladder (−) hid it.
    */
   toggleVisible() {
     const panel = this.panels && this.panels.targets;
     if (!panel) return;
-    const hidden = panel.style.display === 'none';
-    panel.style.display = hidden ? '' : 'none';
+    let nowVisible;
+    if (panel.hasAttribute('data-density-hidden')) {
+      // Density ladder hid it — this press reveals it regardless of inline state.
+      panel.removeAttribute('data-density-hidden');
+      panel.style.display = '';
+      nowVisible = true;
+    } else {
+      nowVisible = panel.style.display === 'none';   // was hidden → now shown
+      panel.style.display = nowVisible ? '' : 'none';
+    }
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      text: nowVisible ? 'Target pane shown (0 to hide)' : 'Target pane hidden (0 to show)',
+      priority: 'info',
+      _reactive: true,
+    });
   }
 
   /** @private */
@@ -261,7 +276,7 @@ export class TargetPanel {
 
     this.panels.targets.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;padding-right:24px;">
-        <span class="target-section-header" style="color:#00ff88;padding:0;">TRACKED TARGETS <span style="opacity:0.4;font-size:10px;">[Tab]</span></span>
+        <span class="target-section-header" style="color:#00ff88;padding:0;">TRACKED TARGETS <span style="opacity:0.4;font-size:10px;">[T]</span></span>
         <button id="hud-sort-btn" class="target-sort-btn" title="Click to cycle sort">TPI ↑</button>
       </div>
       <div id="hud-targets-min-summary" data-pane-show="min" style="display:none;font-size:11px;color:#00ff88;opacity:0.7;">. </div>
@@ -313,11 +328,11 @@ export class TargetPanel {
     // min: header + one-line count only. normal: standard list. max: taller list.
     this._chrome = new PaneChrome({
       pane: this.panels.targets,
-      keyLabel: 'Tab',
+      keyLabel: '0',
       steps: ['min', 'normal', 'max'],
       initial: 'normal',
       color: '#00ff88',
-      title: 'Targets size. Click to cycle min / normal / max',
+      title: 'Target pane — 0 shows / hides · click to resize min / normal / max',
       onStep: (step) => {
         // Grow the scroll cap when maximised; restore otherwise.
         this.panels.targets.style.maxHeight = (step === 'max')

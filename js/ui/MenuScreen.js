@@ -960,8 +960,10 @@ export class MenuScreen {
   /**
    * @private Continue from saved game (T8). Play a SHORT departure (0.6s) then
    * emit MENU_CONTINUE — replaces the previous hard cut so returning players
-   * get the same live-scene handoff as a new game (albeit briefer, since the
-   * destination is the BRIEFING card rather than straight to flight).
+   * get the same live-scene handoff as a new game. Continue now routes straight
+   * to ORBITAL_VIEW flight (no BRIEFING card); mission context arrives as a
+   * welcome-back comms trickle. The departure stays brief — returning players
+   * value speed.
    */
   _continueGame() {
     if (this._departing) { this._finishDeparture(true); return; }

@@ -277,22 +277,53 @@ export class NavSphere {
    */
   toggleMinimized() {
     if (!this.canvas) return;
-    // If the orb is being held off (off by default, or a prior manual hide),
-    // the first 8 press brings it up rather than collapsing an already-hidden
-    // orb. Subsequent presses minimize/expand as normal.
+    let shown;
+    // If the orb is being held off (off by default, a prior manual hide, or the
+    // pane-density ladder hid it via setOrbHidden), the first 8 press brings it
+    // up rather than collapsing an already-hidden orb. Subsequent presses
+    // minimize/expand as normal.
     if (this._hidden) {
       this._hidden = false;
       this._minimized = false;
       this._frameSkip = -1;
       this.canvas.style.display = this._visible ? 'block' : 'none';
-      return;
+      shown = true;
+    } else {
+      this._minimized = !this._minimized;
+      this._frameSkip = -1; // redraw immediately on the next frame
+      shown = !this._minimized;
     }
-    this._minimized = !this._minimized;
-    this._frameSkip = -1; // redraw immediately on the next frame
+    // Reactive feedback for the 8 key (never suppressed — see commsSuppression).
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      text: shown ? 'Nav orb shown (8 to hide)' : 'Nav orb hidden (8 to show)',
+      priority: 'info',
+      _reactive: true,
+    });
   }
 
   /** @returns {boolean} */
   get isMinimized() { return this._minimized; }
+
+  /**
+   * Pane-density ladder — is the orb currently ON (the player's show/hide
+   * intent)? Reads the same `_hidden` flag the 8 key drives, so the ladder and
+   * the 8 key compose: an individual 8 press re-reveals a density-hidden orb.
+   * @returns {boolean}
+   */
+  isOrbVisible() { return !this._hidden; }
+
+  /**
+   * Pane-density ladder — show/hide the orb by driving the manual `_hidden`
+   * flag (NOT the view-config `_visible` flag), so the density hide survives a
+   * camera-view switch and the 8 key can re-reveal it.
+   * @param {boolean} hidden
+   */
+  setOrbHidden(hidden) {
+    if (!this.canvas) return;
+    this._hidden = !!hidden;
+    this._frameSkip = -1;
+    this.canvas.style.display = (this._hidden || !this._visible) ? 'none' : 'block';
+  }
 
   /**
    * Effective vertical footprint (in px) the NavSphere occupies below the comms
@@ -604,6 +635,24 @@ export class NavSphere {
       }
     }
 
+    // [8] hotkey badge at the sphere's top-right corner (matches [7]/[0]).
+    this._drawKeyBadge(ctx, cx + R - 4, cy - R + 4);
+
+    ctx.restore();
+  }
+
+  /**
+   * @private Draw the `[8]` hotkey badge at the sphere's top-right corner —
+   * matches the [7]/[0] pane badges (dim green, right-aligned) so the player
+   * can see the key that toggles the nav orb.
+   */
+  _drawKeyBadge(ctx, rightX, topY) {
+    ctx.save();
+    ctx.font = 'bold 10px "Courier New", monospace';
+    ctx.fillStyle = 'rgba(0,255,136,0.35)';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'top';
+    ctx.fillText('[8]', rightX, topY);
     ctx.restore();
   }
 

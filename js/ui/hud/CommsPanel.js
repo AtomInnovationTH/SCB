@@ -240,15 +240,15 @@ export class CommsPanel {
     delegateGlossaryClicks(this._logEl);
 
     // --- Resize chrome (3-step: line / normal / large) ---
-    // Clickable top-right [C] badge cycles the size; the C key also cycles via
+    // Clickable top-right [7] badge cycles the size; the 7 key also cycles via
     // _expandPane(). No "GROUND COMMS" label — keep the pane clean.
     this._chrome = new PaneChrome({
       pane: this.panels.comms,
-      keyLabel: 'C',
+      keyLabel: '7',
       steps: COMMS_STEPS,
       initial: 'normal',
       color: COMMS_COLOR_NORMAL,
-      title: 'Comms size (C). Click to cycle line / normal / large',
+      title: 'Comms size (7). Click to cycle line / normal / large',
       onStep: () => this._applyCommsStep(),
     });
   }
@@ -259,8 +259,11 @@ export class CommsPanel {
 
   /** @private */
   _setupListeners() {
-    // C-tap → expand pane temporarily
+    // 7-tap → expand pane temporarily
     eventBus.on(Events.COMMS_FOCUS, () => {
+      // 7 always re-reveals the comms pane, even when the pane-density ladder
+      // (−) hid it — clear the density flag before expanding.
+      if (this.panels.comms) this.panels.comms.removeAttribute('data-density-hidden');
       this._expandPane();
     });
 

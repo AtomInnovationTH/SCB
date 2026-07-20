@@ -794,6 +794,15 @@ async function init() {
   //     vertical slot and reclaims it when the sphere is minimized/hidden ---
   if (typeof hud.setNavSphere === 'function') hud.setNavSphere(navSphere);
 
+  // Pane-density pure-scenery rung also drops the constellation name labels.
+  if (typeof hud.setStarfield === 'function') hud.setStarfield(starfield);
+
+  // …and the Sun / Moon / planet name labels (sky-labels rung).
+  if (typeof hud.setSunLight === 'function') hud.setSunLight(sunLight);
+
+  // Pure-scenery rung can also hide the mother ship for an empty-orbit view.
+  if (typeof hud.setMotherCraft === 'function') hud.setMotherCraft(player);
+
   // --- Connect V3 arm manager to HUD + player satellite ---
   if (armManager) hud.setArmManager(armManager);
   if (armManager) player.setArmManager(armManager);
@@ -902,7 +911,7 @@ async function init() {
   });
   strategicMap.init();
 
-  // --- UX-11 #5: Earth city labels (Shift+C, off by default, persisted) ---
+  // --- UX-11 #5: Earth city labels (5 key, off by default, persisted) ---
   // Offline-first local JSON; attaches to BOTH the command-view Earth and the
   // Strategic Map's wireframe Earth so one toggle drives both surfaces.
   cityLabels.load().then((count) => {

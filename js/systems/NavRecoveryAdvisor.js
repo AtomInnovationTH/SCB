@@ -265,7 +265,7 @@ export class NavRecoveryAdvisor {
       // here we only route the player to the next cluster.
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'HOUSTON',
-        text: 'No live contacts remain in this field. Open the Debris Map (`) to pick your next cluster, then press A.',
+        text: 'No live contacts remain in this field. Open the Debris Map (M) to pick your next cluster, then Shift+A to engage.',
         priority: 'info',
         _postOnboarding: true,
       });

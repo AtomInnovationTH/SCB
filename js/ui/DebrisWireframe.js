@@ -1227,6 +1227,32 @@ export class DebrisWireframe {
       });
       this._minLine.textContent = '. No target. ';
       container.appendChild(this._minLine);
+
+      // Keep a container ref so the 9 key can clear a density-ladder hide.
+      this._container = container;
+
+      // [9] hotkey badge (top-right corner) — matches the [7]/[0] pane badges
+      // so the player can see the key that shows/hides the Debris pane. The
+      // container carries data-activate-key='Tab'; offset right to clear that
+      // (invisible while dimming is disabled) dormant keycap glyph, mirroring
+      // PaneChrome's badge offset.
+      container.style.position = container.style.position || 'relative';
+      const keyBadge = document.createElement('div');
+      keyBadge.className = 'hud-pane-badge';
+      keyBadge.textContent = '[9]';
+      Object.assign(keyBadge.style, {
+        position: 'absolute',
+        top: '5px',
+        right: container.dataset && container.dataset.activateKey ? '34px' : '7px',
+        font: "bold 10px 'Courier New', monospace",
+        color: 'rgba(0,255,136,0.35)',
+        letterSpacing: '0.5px',
+        pointerEvents: 'none',
+        userSelect: 'none',
+        zIndex: '5',
+      });
+      container.appendChild(keyBadge);
+      this._keyBadge = keyBadge;
     } else {
       // Legacy fixed positioning (fallback) — top-right below NavSphere so it
       // never collides with bottom-anchored panels (DaughterWireframe bottom-
@@ -1513,6 +1539,18 @@ export class DebrisWireframe {
   toggleMinimized() {
     if (!this._hasContainer || !this._minLine) {
       this.setVisible(!this._visible);
+      this._emitPaneToggle(this._visible);
+      return;
+    }
+    // 9 always re-reveals the pane, even when the pane-density ladder (−) hid
+    // it: clear the density-hidden flag first so this press shows the canvas.
+    if (this._container && this._container.hasAttribute('data-density-hidden')) {
+      this._container.removeAttribute('data-density-hidden');
+      this._minimized = false;
+      this._minLine.style.display = 'none';
+      this._canvas.style.display = 'block';
+      this._frameSkip = -1;
+      this._emitPaneToggle(true);
       return;
     }
     this._minimized = !this._minimized;
@@ -1525,6 +1563,16 @@ export class DebrisWireframe {
       this._canvas.style.display = 'block';
       this._frameSkip = -1; // redraw the wireframe immediately on restore
     }
+    this._emitPaneToggle(!this._minimized);
+  }
+
+  /** @private Reactive comms line for the 9 key (never suppressed). */
+  _emitPaneToggle(shown) {
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      text: shown ? 'Debris pane shown (9 to hide)' : 'Debris pane hidden (9 to show)',
+      priority: 'info',
+      _reactive: true,
+    });
   }
 
   /** @private Populate the minimized one-liner from the current target. */

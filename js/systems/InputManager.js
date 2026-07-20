@@ -1194,15 +1194,22 @@ export class InputManager {
       //   9 Debris pane · 0 Target pane.
       // (Forge moved to F, FEEP fuel cycle lost its key, NavSphere moved off O.)
       case 'Digit5':
-        if (isGameplay) {
+        if (isGameplay && !e.repeat) {
           eventBus.emit(Events.CITY_LABELS_TOGGLE);
           d.audioSystem?.playClick();
           e.preventDefault();
         }
         break;
       case 'Digit6':
-        if (isGameplay && d.starfield && typeof d.starfield.toggleConstellations === 'function') {
-          d.starfield.toggleConstellations();
+        if (isGameplay && !e.repeat && d.starfield && typeof d.starfield.toggleConstellations === 'function') {
+          const on = d.starfield.toggleConstellations();
+          // Reactive feedback (the player just pressed 6). Starfield is a
+          // THREE object with no comms of its own, so InputManager narrates.
+          eventBus.emit(Events.COMMS_MESSAGE, {
+            text: on ? 'Constellation names ON (6 to hide)' : 'Constellation names OFF (6 to show)',
+            priority: 'info',
+            _reactive: true,
+          });
           d.audioSystem?.playClick();
           e.preventDefault();
         }
@@ -1252,39 +1259,61 @@ export class InputManager {
         }
         break;
 
-      // --- F14: Throttle level +/- in 10% increments ---
+      // --- Pane density (bare +/-) · Mother throttle (Shift + +/-) ---
+      // Hotkey pass (pane-priority ladder): bare +/- now drive the HUD pane
+      // density ladder (hide/show panes one rung at a time). The Mother
+      // throttle ±10% verb moved to Shift+=/Shift+-. The STATION_KEEP
+      // standoff-distance reuse of bare +/- (while piloting a station-keeping
+      // daughter) is preserved via the carve-out below; the held-key radius
+      // loop lives in processInput.
       case 'Equal':      // + key (=/+ on US keyboards)
       case 'NumpadAdd':   // Numpad +
-        if (isGameplay && d.player) {
-          // ST-8.2.1: +/- reused for orbital radius in STATION_KEEP
+        if (isGameplay) {
+          // ST-8.2.1: +/- reused for orbital radius in STATION_KEEP (carve-out
+          // FIRST so piloting a station-keeping daughter is unchanged).
           const _skPlus = this.armPilotMode && d.cameraSystem?.getPilotedArm();
           if (_skPlus && _skPlus.state === Constants.ARM_STATES.STATION_KEEP) break;
-          const newUp = Math.min(1.0, d.player.throttleLevel + 0.1);
-          d.player.setThrottleLevel(Math.round(newUp * 10) / 10);
-          d.audioSystem.playClick();
-          e.preventDefault();
-          // Phase C: Notify tutorial of throttle change
-          eventBus.emit(Events.TUTORIAL_THROTTLE_INPUT);
-          // Delegation 2 onboarding (2026-05-31): +/- doubles as a zoom verb
-          // for the camera-zoom beat (mouse wheel is canonical, but the
-          // keyboard alias should also satisfy the beat).
-          eventBus.emit(Events.CAMERA_ZOOM_INPUT);
+          if (e.shiftKey) {
+            // Mother throttle +10% (keeps the TUTORIAL/ZOOM aliases so the
+            // onboarding camera-zoom + throttle beats still accept a keyboard).
+            if (d.player) {
+              const newUp = Math.min(1.0, d.player.throttleLevel + 0.1);
+              d.player.setThrottleLevel(Math.round(newUp * 10) / 10);
+              eventBus.emit(Events.TUTORIAL_THROTTLE_INPUT);
+              eventBus.emit(Events.CAMERA_ZOOM_INPUT);
+            }
+            d.audioSystem?.playClick();
+            e.preventDefault();
+          } else if (!e.repeat) {
+            // Pane density: restore the highest-priority hidden pane.
+            eventBus.emit(Events.HUD_DENSITY_UP);
+            d.audioSystem?.playClick();
+            e.preventDefault();
+          }
         }
         break;
       case 'Minus':       // - key
       case 'NumpadSubtract': // Numpad -
-        if (isGameplay && d.player) {
+        if (isGameplay) {
           // ST-8.2.1: +/- reused for orbital radius in STATION_KEEP
           const _skMinus = this.armPilotMode && d.cameraSystem?.getPilotedArm();
           if (_skMinus && _skMinus.state === Constants.ARM_STATES.STATION_KEEP) break;
-          const newDown = Math.max(0.0, d.player.throttleLevel - 0.1);
-          d.player.setThrottleLevel(Math.round(newDown * 10) / 10);
-          d.audioSystem.playClick();
-          e.preventDefault();
-          // Phase C: Notify tutorial of throttle change
-          eventBus.emit(Events.TUTORIAL_THROTTLE_INPUT);
-          // Delegation 2 onboarding (2026-05-31): see Equal case above.
-          eventBus.emit(Events.CAMERA_ZOOM_INPUT);
+          if (e.shiftKey) {
+            // Mother throttle -10% (see Equal case above).
+            if (d.player) {
+              const newDown = Math.max(0.0, d.player.throttleLevel - 0.1);
+              d.player.setThrottleLevel(Math.round(newDown * 10) / 10);
+              eventBus.emit(Events.TUTORIAL_THROTTLE_INPUT);
+              eventBus.emit(Events.CAMERA_ZOOM_INPUT);
+            }
+            d.audioSystem?.playClick();
+            e.preventDefault();
+          } else if (!e.repeat) {
+            // Pane density: hide the lowest-priority visible pane.
+            eventBus.emit(Events.HUD_DENSITY_DOWN);
+            d.audioSystem?.playClick();
+            e.preventDefault();
+          }
         }
         break;
 
@@ -1609,13 +1638,12 @@ export class InputManager {
     if (arm.enableManual) arm.enableManual();
     d.cameraSystem.setPilotArm(arm);
 
-    // Unambiguous get-out guidance: in ARM_PILOT the V key does NOT toggle to
-    // Overview — it backs the camera out to Command view (and releases the
-    // daughter). New players can otherwise feel "stuck" piloting the daughter,
-    // so spell out the way home the moment they enter.
+    // Unambiguous get-out guidance: exits are Esc or re-pressing the active
+    // digit (her number again). New players can otherwise feel "stuck" piloting
+    // the daughter, so spell out the way home the moment they enter.
     if (!wasPiloting) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `Piloting ${arm.displayName}. Arrow keys fly it · press V to back out to Command view.`,
+        text: `Piloting ${arm.displayName}. Arrow keys fly it · press Esc or her number again to back out to Command view.`,
         source: 'HOUSTON',
         channel: 'CMD',
         priority: 'info',

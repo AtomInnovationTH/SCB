@@ -426,7 +426,7 @@ export class SunLight {
         ? new THREE.Vector3(0, -1, 0).applyQuaternion(this.camera.quaternion)
         : new THREE.Vector3(0, -1, 0);
       this._sunLabel.position.copy(sunPos).add(down.multiplyScalar(12));
-      this._sunLabel.visible = !sunHidden;
+      this._sunLabel.visible = !sunHidden && !this._labelsHidden;
     }
   }
 
@@ -515,7 +515,7 @@ export class SunLight {
       const moonOccluded = this._isOccludedByEarth(this.moonMesh.position, this.camera.position);
       this.moonMesh.visible = !moonOccluded;
       if (this._moonDepthMask) this._moonDepthMask.visible = !moonOccluded;
-      if (this._moonLabel) this._moonLabel.visible = !moonOccluded;
+      if (this._moonLabel) this._moonLabel.visible = !moonOccluded && !this._labelsHidden;
     }
   }
 
@@ -621,9 +621,25 @@ export class SunLight {
         const occluded = this._isOccludedByEarth(p.disc.position, this.camera.position);
         p.disc.visible = !occluded;
         p.glow.visible = !occluded;
-        p.label.visible = !occluded;
+        p.label.visible = !occluded && !this._labelsHidden;
         if (p.depthMask) p.depthMask.visible = !occluded;
       }
+    }
+  }
+
+  /**
+   * Pane-density "sky labels" rung: show/hide the planetarium NAME labels for
+   * the Sun, Moon, and planets (the discs themselves stay — they are scenery).
+   * A master flag gates the per-frame occlusion logic; hiding is applied
+   * immediately, showing is re-derived on the next update tick.
+   * @param {boolean} visible
+   */
+  setBodyLabelsVisible(visible) {
+    this._labelsHidden = !visible;
+    if (this._labelsHidden) {
+      if (this._sunLabel) this._sunLabel.visible = false;
+      if (this._moonLabel) this._moonLabel.visible = false;
+      if (this._planets) for (const p of this._planets) { if (p.label) p.label.visible = false; }
     }
   }
 

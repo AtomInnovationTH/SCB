@@ -201,7 +201,7 @@ export const Events = {
   COMMS_PANEL_RESIZED:    'comms:panelResized',    // { step, height } — pane stepped to a new size (line/normal/large)
 
   // === CITY LABELS (UX-11 #5) ===
-  CITY_LABELS_TOGGLE:     'cityLabels:toggle',     // Shift+C → toggle Earth city labels
+  CITY_LABELS_TOGGLE:     'cityLabels:toggle',     // 5 key → toggle Earth city labels
 
   // === LOCALE / LANGUAGE ===
   /** Player changed the menu language / region. Payload: { code, lang } where
@@ -622,6 +622,15 @@ export const Events = {
   /** Transient pilot notification (bottom-center).
    *  Payload: { text: string, duration?: number } */
   SHOW_NOTIFICATION:      'ui:showNotification',
+
+  // === HUD PANE DENSITY (pane-priority ladder) ===
+  /** Bare `-` — hide the lowest-priority currently-visible HUD pane (one rung
+   *  per press; final press = pure space scenery). Emitted by InputManager,
+   *  consumed by the PaneDensity ladder. Payload: {} */
+  HUD_DENSITY_DOWN:       'hud:densityDown',
+  /** Bare `+`/`=` — restore the highest-priority currently-hidden HUD pane
+   *  (reverse of HUD_DENSITY_DOWN). Payload: {} */
+  HUD_DENSITY_UP:         'hud:densityUp',
 
   // === Epic 8 events — STATION_KEEP & FEEP ===
   /** Orbit adjust input. Payload: { armId, theta, phi, radius, fine, dt } */

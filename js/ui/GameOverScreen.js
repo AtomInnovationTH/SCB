@@ -7,6 +7,7 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
 import { GameStates } from '../core/GameState.js';
+import { getMissionProgress } from '../core/missionProgress.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import { scoringSystem } from '../systems/ScoringSystem.js';
 
@@ -189,11 +190,10 @@ export class GameOverScreen {
     const stats = scoringSystem.getStats();
     const credits = scoringSystem.credits || 0;
     const carriedCredits = Math.floor(credits * 0.5);
-    // Mission number = floor(cleared/5)+1, but clamp to the 12-chapter arc so a
-    // boundary death at exactly WIN_DEBRIS_COUNT doesn't read "Mission 13" (F2/F3).
-    const perMission = (Constants.MISSIONS && Constants.MISSIONS.DEBRIS_PER_MISSION) || 5;
-    const maxMission = Math.max(1, Math.floor((Constants.WIN_DEBRIS_COUNT || 60) / perMission));
-    const missionNum = Math.min(maxMission, Math.floor(stats.debrisCleared / perMission) + 1);
+    // Mission number shares the clamped mission-arc math with the Briefing card
+    // and continue-flow comms via getMissionProgress (js/core/missionProgress.js)
+    // so a boundary death at exactly WIN_DEBRIS_COUNT never drifts to "Mission 13".
+    const { missionNum } = getMissionProgress(stats.debrisCleared);
     const upgradeCount = this._getUpgradeCount();
     statsEl.innerHTML = `
       <div style="color:#00ff88;font-size:0.95rem;margin-bottom:6px;">Mission ${missionNum} Summary</div>
@@ -305,11 +305,10 @@ export class GameOverScreen {
     reasonEl.textContent = 'The orbital environment has been stabilized. Outstanding work, Cowboy.';
 
     const stats = scoringSystem.getStats();
-    // Missions completed, derived from the constant and clamped to the 12-chapter
-    // arc so the victory report never overshoots (F2/F3, mirrors _showStats clamp).
-    const perMission = (Constants.MISSIONS && Constants.MISSIONS.DEBRIS_PER_MISSION) || 5;
-    const maxMission = Math.max(1, Math.floor((Constants.WIN_DEBRIS_COUNT || 60) / perMission));
-    const missionCount = Math.min(maxMission, Math.floor(stats.debrisCleared / perMission));
+    // Missions completed — shares the clamped mission-arc math with the Briefing
+    // card, death summary, and continue-flow comms via getMissionProgress
+    // (js/core/missionProgress.js) so the victory count can never drift.
+    const { missionsCompleted: missionCount } = getMissionProgress(stats.debrisCleared);
     const upgradeCount = this._getUpgradeCount();
     statsEl.innerHTML = `
       <div style="color:#00ff88;font-size:1rem;margin-bottom:8px;">★ Final Report ★</div>

@@ -612,9 +612,17 @@ export class Starfield {
     }
   }
 
-  /** Toggle constellation outlines + labels (6 key). */
+  /** Toggle constellation outlines + labels (6 key).
+   *  @returns {boolean} the NEW visibility state (for reactive comms feedback). */
   toggleConstellations() {
     this.setConstellationsVisible(!(this._constellationsVisible ?? true));
+    return this._constellationsVisible;
+  }
+
+  /** @returns {boolean} whether constellation outlines + labels are visible.
+   *  The effective default is visible (true) until the player first toggles. */
+  isConstellationsVisible() {
+    return this._constellationsVisible ?? true;
   }
 
   /**

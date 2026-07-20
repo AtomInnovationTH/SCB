@@ -28,6 +28,11 @@ export const SUPPRESSION_TIER_CHANNELS = {
  *
  * Tag bypasses (spec §2.1):
  *   • `_critical: true`     — passes at ANY tier (live-asset/conjunction, survival).
+ *   • `_reactive: true`     — direct feedback to a key the player JUST pressed
+ *                             (e.g. a display toggle). Never muted at any tier —
+ *                             suppressing a line the player's own keypress caused
+ *                             reads as a broken control (same rationale as the
+ *                             `_lassoFeedback` capture-denial bypass).
  *   • `_lassoFeedback: true`— actionable capture-DENIAL (player pressed a key, it
  *                             failed), always passes (reactive feedback).
  *   • `_onboarding: true`   — the Director's own lines (the only thing at tier 0).
@@ -51,6 +56,11 @@ export function messagePassesSuppression(tier, channel, data = {}, priority = nu
 
   // Explicit critical tag bypasses every tier (incl. 0) — never mute these.
   if (d._critical === true) return true;
+  // Reactive feedback for a key the player JUST pressed (e.g. a display toggle)
+  // is never muted — otherwise the control reads as broken while the Director
+  // runs (tier 0) or right after a GAME_RESET restarts the pipeline. Same
+  // rationale as the `_lassoFeedback` capture-denial bypass below.
+  if (d._reactive === true) return true;
   // Actionable lasso/net DENIAL always reaches the player (reactive: they
   // pressed a key and it failed). Proactive invitations (`_proactive`) do NOT
   // get this bypass — they are tier-gated below so they never override tier 0.

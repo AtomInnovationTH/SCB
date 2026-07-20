@@ -393,7 +393,7 @@ export class StrategicMap {
       this._openHintShown = true;
       this._eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'HOUSTON',
-        text: 'Strategic view: red = high MOID threat, green stations = downlink. Pick your next cluster on the Debris Map (`), then Shift+A to engage.',
+        text: 'Strategic view: red = high MOID threat, green stations = downlink. Pick your next cluster on the Debris Map (M), then Shift+A to engage.',
         priority: 'info',
         _postOnboarding: true,
       });

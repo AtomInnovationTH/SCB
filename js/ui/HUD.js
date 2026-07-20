@@ -16,6 +16,7 @@ import { TargetPanel } from './hud/TargetPanel.js';
 import { CommsPanel } from './hud/CommsPanel.js';
 import { HintTicker } from './hud/HintTicker.js';
 import { NetInventoryPanel } from './hud/NetInventoryPanel.js';
+import { PaneDensity } from './hud/PaneDensity.js';
  import { DebrisWireframe }   from './DebrisWireframe.js';
  import { DaughterWireframe } from './DaughterWireframe.js';
 import { StrutLabels }       from './hud/StrutLabels.js';
@@ -367,6 +368,17 @@ export class HUD {
       const catchStyle = document.createElement('style');
       catchStyle.id = 'catch-effects-style';
       catchStyle.textContent = `
+        /* Pane-density ladder (-/+): panes tagged data-density-hidden are hard
+         * off. !important beats the inline display writes from view-switch code
+         * (HUD._applyViewConfig) and the content-driven warnings re-show in the
+         * update loop, so a density-hidden pane cannot be resurrected by those
+         * paths — only the ladder (+) or the pane's own toggle (7/8/9/0) clears it. */
+        [data-density-hidden] { display: none !important; }
+        /* Pane-density "quiet" mode (Reticles & alerts rung engaged): mute
+         * transient teaching/hint POPUPS that are re-created per show() and so
+         * can't be tagged individually on the keypress. A body-level attribute +
+         * CSS catches current AND future cards continuously. */
+        body[data-density-quiet] .teaching-overlay { display: none !important; }
         /* Progressive luminance: dormant/active states (§2.2) */
         .hud-dormant {
             opacity: 0.5;
@@ -511,6 +523,173 @@ export class HUD {
     document.body.appendChild(this._notificationZone);
     /** @type {number|null} Timer handle for notification auto-hide */
     this._notifTimer = null;
+
+    // --- Pane-density ladder (bare -/+ keys) ---
+    this._initPaneDensity();
+  }
+
+  /**
+   * @private Build the pane-priority density ladder and wire it to the
+   * HUD_DENSITY_DOWN/UP events. Rungs are ordered lowest-priority → highest:
+   *   NavSphere → Debris → Target → Score+ticker → Comms → Fleet/arms → Mother
+   *   → everything-else (pure scenery). `-` hides the lowest visible rung, `+`
+   * restores the highest hidden rung. Adapters read/drive LIVE pane state so the
+   * ladder needs no counter and composes with the 7/8/9/0 toggles.
+   */
+  _initPaneDensity() {
+    // DOM rung: hidden via the data-density-hidden attribute (CSS !important),
+    // which survives inline display writes from view-switch / update code.
+    // isVisible() also honours ANCESTOR visibility (getClientRects): the
+    // debris/target/arms/mother panes live inside the right/left columns that
+    // _applyViewConfig() collapses in minimal views (e.g. Overview). Without the
+    // rects check the ladder would "hide" a pane that isn't on screen, waste a
+    // rung, and leave it density-hidden after the view switches back.
+    const domRung = (id, label, getEls) => ({
+      id, label,
+      isVisible: () => getEls().some(el =>
+        el && !el.hasAttribute('data-density-hidden') && el.getClientRects().length > 0),
+      setVisible: (v) => getEls().forEach(el => {
+        if (!el) return;
+        if (v) el.removeAttribute('data-density-hidden');
+        else el.setAttribute('data-density-hidden', '');
+      }),
+    });
+    const byId = (id) => () => [document.getElementById(id)];
+    const bySelector = (sel) => () => Array.from(document.querySelectorAll(sel));
+
+    // Flag rung: a "suppression category" whose hidden state is a HUD-level flag
+    // (NOT read from the DOM) so it ENGAGES even when its target is not
+    // momentarily on screen — hiding the reticle / warning category keeps future
+    // brackets & alerts suppressed in pure scenery, and the craft / constellation
+    // categories drive scene objects that carry no data-density attribute.
+    // `apply(hidden)` performs the concrete hide/show.
+    const flagRung = (id, label, apply) => {
+      const rung = {
+        id, label, _hidden: false,
+        isVisible: () => !rung._hidden,
+        setVisible: (v) => { rung._hidden = !v; apply(rung._hidden); },
+      };
+      return rung;
+    };
+
+    // Toggle data-density-hidden across a fixed selector set (flag rungs whose
+    // DOM targets are frequently display:none when inactive).
+    const applyAttr = (selectors, hidden) => {
+      for (const sel of selectors) {
+        document.querySelectorAll(sel).forEach(el => {
+          if (hidden) el.setAttribute('data-density-hidden', '');
+          else el.removeAttribute('data-density-hidden');
+        });
+      }
+    };
+
+    // Constellation names + celestial body (Sun / Moon / planet) NAME labels —
+    // world annotations, not HUD (the discs & stars stay). Remember the player's
+    // prior constellation choice and only restore it on `+`; the body labels are
+    // occlusion-gated with no player toggle, so they just follow the flag.
+    this._constellationsWereOn = false;
+    const applySkyLabels = (hidden) => {
+      const sf = this._starfield;
+      if (sf && typeof sf.setConstellationsVisible === 'function') {
+        if (hidden) {
+          this._constellationsWereOn = typeof sf.isConstellationsVisible === 'function'
+            ? sf.isConstellationsVisible() : true;
+          sf.setConstellationsVisible(false);
+        } else if (this._constellationsWereOn) {
+          sf.setConstellationsVisible(true);
+          this._constellationsWereOn = false;
+        }
+      }
+      const sl = this._sunLight;
+      if (sl && typeof sl.setBodyLabelsVisible === 'function') sl.setBodyLabelsVisible(!hidden);
+    };
+
+    // Craft — the mother ship + all daughters. Prior visibility is remembered so
+    // a restore never fights the external owners that also toggle these (main.js
+    // hides the mother during menu/cutscene handoffs; ArmUnit hides a daughter's
+    // group on deorbit).
+    const applyCraft = (hidden) => {
+      const mother = this._motherCraft;
+      if (mother) {
+        if (hidden) { this._motherPrevVisible = mother.visible; mother.visible = false; }
+        else if (this._motherPrevVisible != null) {
+          mother.visible = this._motherPrevVisible;
+          this._motherPrevVisible = null;
+        }
+      }
+      const am = this._armManager;
+      if (am && typeof am.setFleetVisible === 'function') am.setFleetVisible(!hidden);
+    };
+
+    // Rungs ordered lowest-priority → highest (index 0 hides FIRST on `-`,
+    // restores LAST on `+`). Interactive panes read LIVE visibility so they
+    // compose with the 7/8/9/0 toggles + view config; suppression categories
+    // (constellations / chrome / reticles / craft) are flag rungs so they engage
+    // even when momentarily inactive. Per design: constellations + discoveries
+    // are reprioritized among the panes, debris reticles are 2nd-to-last, and the
+    // craft (mother + daughters) are last.
+    const rungs = [
+      // 0 — Sky labels: constellation names + Sun/Moon/planet NAME labels (pure
+      //     sky decoration → first to go; the discs & stars themselves stay).
+      flagRung('skylabels', 'Sky labels', applySkyLabels),
+      // 1 — NavSphere orb (canvas; off by default → isVisible false → `-` skips).
+      {
+        id: 'navsphere', label: 'Nav orb',
+        isVisible: () => !!(this._navSphere && this._navSphere.isOrbVisible && this._navSphere.isOrbVisible()),
+        setVisible: (v) => { if (this._navSphere && this._navSphere.setOrbHidden) this._navSphere.setOrbHidden(!v); },
+      },
+      // 2 — Discoveries pane (.skills-pane, non-critical info).
+      domRung('discoveries', 'Discoveries', bySelector('.skills-pane')),
+      // 3 — Debris analysis pane (9 key re-reveals it).
+      domRung('debris', 'Debris pane', byId('hud-wireframe-container')),
+      // 4 — Target pane (0 key re-reveals it).
+      domRung('targets', 'Target pane', byId('hud-targets-panel')),
+      // 5 — Score strip + hint ticker (one rung).
+      domRung('score', 'Score strip', () => [
+        document.getElementById('hud-score-panel'),
+        document.getElementById('hud-hint-ticker'),
+      ]),
+      // 6 — Comms pane (7 key re-reveals it).
+      domRung('comms', 'Comms', byId('hud-comms-panel')),
+      // 7 — Fleet / arms pane.
+      domRung('arms', 'Fleet pane', byId('hud-arms-panel')),
+      // 8 — Mother pane (HUD readout).
+      domRung('mother', 'Mother pane', byId('hud-mother-panel')),
+      // 9 — Debris reticles + remaining alert/indicator chrome + transient
+      //     gameplay toasts — 2ND-TO-LAST. Merged (the old standalone "chrome"
+      //     rung had no visible effect when no warning/target was active, so `-`
+      //     read as a dead press). This one visibly clears the targeting brackets
+      //     & their "▸ N" action prompt (both drawn on #reticle-canvas), hides the
+      //     warnings / progress / conjunction / weather / arm-pilot / view chrome,
+      //     AND mutes transient SHOW_NOTIFICATION toasts so pure scenery is quiet.
+      flagRung('reticles', 'Reticles & alerts', (hidden) => {
+        applyAttr([
+          '#reticle-canvas', '#docking-reticle-canvas',
+          '#hud-warnings-panel', '#hud-progress-panel', '#hud-conjunction-panel',
+          '#hud-weather-indicator', '#arm-pilot-controls', '#camera-view-indicator',
+        ], hidden);
+        // Mute gameplay toasts (autopilot/view/inspection); the ladder's own
+        // toasts pass force:true and still show (see showNotification). The body
+        // attribute additionally CSS-hides transient teaching/hint popups
+        // (.teaching-overlay) that are re-created per show() (onboarding
+        // escalations like "LAUNCH NET (N)"), which per-element tagging misses.
+        this._transientPopupsQuiet = hidden;
+        if (typeof document !== 'undefined' && document.body) {
+          document.body.toggleAttribute('data-density-quiet', hidden);
+        }
+      }),
+      // 10 — Craft: mother ship + daughters (empty-orbit view) — LAST.
+      flagRung('craft', 'Ships', applyCraft),
+    ];
+
+    this._paneDensity = new PaneDensity({
+      rungs,
+      notify: (text) => this.showNotification(text, 2500, { force: true }),
+      log: (text) => eventBus.emit(Events.COMMS_MESSAGE, {
+        text, priority: 'info', source: 'HUD', _reactive: true,
+      }),
+    });
+    this._paneDensity.attach(eventBus, Events);
   }
 
   // ==========================================================================
@@ -906,6 +1085,7 @@ export class HUD {
    * @param {import('../entities/ArmManager.js').ArmManager} armManager
    */
   setArmManager(armManager) {
+    this._armManager = armManager;
     this.statusPanel.setArmManager(armManager);
     this.targetPanel.setArmManager(armManager);
     // (commsPanel.setArmManager removed — dead store after RadialMenu deletion)
@@ -931,6 +1111,36 @@ export class HUD {
    */
   setNavSphere(navSphere) {
     this._navSphere = navSphere;
+  }
+
+  /**
+   * Set the Starfield reference so the pane-density ladder's pure-scenery rung
+   * can also drop the constellation name labels (a THREE world annotation with
+   * no DOM). Wired from main.js after Starfield construction.
+   * @param {import('../scene/Starfield.js').Starfield} starfield
+   */
+  setStarfield(starfield) {
+    this._starfield = starfield;
+  }
+
+  /**
+   * Set the SunLight reference so the pane-density "sky labels" rung can also
+   * drop the Sun / Moon / planet NAME labels alongside the constellation names
+   * (the discs stay — they are scenery). Wired from main.js.
+   * @param {import('../scene/SunLight.js').SunLight} sunLight
+   */
+  setSunLight(sunLight) {
+    this._sunLight = sunLight;
+  }
+
+  /**
+   * Set the mother-craft (PlayerSatellite, a THREE.Group) reference so the
+   * pane-density pure-scenery rung can hide the ship itself for an empty-orbit
+   * view. Wired from main.js after PlayerSatellite construction.
+   * @param {import('three').Object3D} craft
+   */
+  setMotherCraft(craft) {
+    this._motherCraft = craft;
   }
 
   /**
@@ -1461,9 +1671,17 @@ export class HUD {
    * Show a transient notification in the bottom-center zone.
    * @param {string} text — Notification text
    * @param {number} [durationMs=2500] — Display duration in ms
+   * @param {{ force?: boolean }} [opts] — force:true bypasses pane-density quiet
+   *   mode (used by the density ladder's own toasts, which are the exit
+   *   affordance and must always show).
    */
-  showNotification(text, durationMs = 2500) {
+  showNotification(text, durationMs = 2500, opts = {}) {
     if (!this._notificationZone) return;
+    // Pane-density: once the "Reticles & alerts" rung is engaged, transient
+    // GAMEPLAY toasts (SHOW_NOTIFICATION — autopilot/view/inspection, etc.) are
+    // muted so pure scenery stays quiet. The ladder's own notify() passes
+    // force:true so its restore/pure-scenery toasts still appear.
+    if (!opts.force && this._transientPopupsQuiet) return;
     this._notificationZone.textContent = text;
     this._notificationZone.style.opacity = '1';
     // PR 5 / P2.8: TimerManager-tracked notification timer (debounced).
@@ -1965,7 +2183,7 @@ export class HUD {
         '<span class="apc-sep">│</span>' +
         '<span class="apc-key">N</span> Capture ' +
         '<span class="apc-sep">│</span>' +
-        '<span class="apc-key">ESC</span> Exit';
+        '<span class="apc-key">ESC</span> Recall';
     } else {
       this._armStripMode = 'pilot';
       // Hotkey revamp 2026-06-14: WASD/Q-E daughter thrust was removed — the

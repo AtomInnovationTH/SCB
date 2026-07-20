@@ -82,7 +82,7 @@ export function formatMilestoneLine(track, threshold, current, target) {
 export function formatObjectiveRecap(cleared, clearTarget, contractKg, contractTargetKg) {
   return `Status: ${cleared}/${clearTarget} cleared · contract ` +
     `${Math.round(contractKg).toLocaleString()}/${Math.round(contractTargetKg).toLocaleString()} kg. ` +
-    'Pick a cluster on the Debris Map (`), then press A.';
+    'Pick a cluster on the Debris Map (M), then Shift+A to engage.';
 }
 
 // ============================================================================
