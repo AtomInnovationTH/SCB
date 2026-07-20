@@ -88,7 +88,7 @@ const HOTKEY_GROUPS = [
       [['8'], 'Nav orb (show / minimize)'],
       [['9'], 'toggle: Debris pane'],
       [['0'], 'toggle: Target pane'],
-      [['−', '+'], 'Declutter HUD one layer at a time — down to a bare orbit view (+ restores)'],
+      [['−', '+'], 'Hide / show HUD panes'],
       [['Shift −', 'Shift +'], 'Mother throttle'],
       [['.', ','], 'Stow struts (.) / roll up panels (,) to tuck in'],
       [[',', 'Shift'], 'Feather panels (quick edge-on dodge)'],
@@ -241,8 +241,10 @@ export class HotkeyOverlay {
       flex: '0 0 96px', flexWrap: 'wrap',
     });
     for (const k of keys) {
-      // Separators ('/', '–', '+') render as plain dim text, not key caps.
-      if (k === '/' || k === '–' || k === '+') {
+      // Separators ('/', '–') render as plain dim text, not key caps. A bare
+      // '+' is a real key cap (the pane-density chip, paired with the '−' cap),
+      // so it is NOT treated as a separator.
+      if (k === '/' || k === '–') {
         const sep = document.createElement('span');
         sep.textContent = k;
         sep.style.color = '#666';
