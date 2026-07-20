@@ -271,7 +271,7 @@ export class StatusPanel {
       left: '10px',
       display: 'flex',
       flexDirection: 'column',
-      gap: '20px',
+      gap: '10px',           // Pane-to-pane vertical gap — keep in sync with right column (HUD.js)
       width: '260px',
       maxHeight: 'calc(100vh - 60px)',
       overflowY: 'auto',

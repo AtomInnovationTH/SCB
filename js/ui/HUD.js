@@ -209,7 +209,7 @@ export class HUD {
       width: '280px',       // Match NavSphere diameter for aligned left edges
       display: 'flex',
       flexDirection: 'column',
-      gap: '6px',
+      gap: '10px',          // Pane-to-pane vertical gap — keep in sync with left column (StatusPanel.js)
       maxHeight: 'calc(100vh - 480px)',  // Adjusted for new top offset
       overflowY: 'auto',
       zIndex: '10',
