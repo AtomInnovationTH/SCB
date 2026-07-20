@@ -2137,7 +2137,6 @@ export const Constants = {
   CATCH_SLOWMO_FACTOR: 0.1,            // time scale during slo-mo
   CATCH_SHAKE_DURATION: 0.3,           // seconds — camera micro-shake on capture
   CATCH_SHAKE_INTENSITY: 0.003,        // scene units — shake amplitude
-  CATCH_FLASH_DURATION: 250,           // ms — screen border pulse duration
 
   // --- Field Clearing (Phase 5 — reserve constants) ---
   FIELD_CLEAR_100_BONUS: 2000,         // credits for 100% sector clear
@@ -2686,6 +2685,8 @@ export const Constants = {
         untracked: 0,         // count of untracked (scan-reveal) debris
         weather: false,       // suppress weather events
         activeSats: false,    // no active satellite hazards
+        collisionWarnings: false, // Phase 3: mission 1 is onboarding — suppress
+                                  // the steady debris-proximity warning strip
       },
       {
         minMission: 2,
@@ -2698,6 +2699,7 @@ export const Constants = {
         untracked: 0,
         weather: false,
         activeSats: false,
+        collisionWarnings: true, // steady-display collision warnings from mission 2
       },
       {
         minMission: 4,
@@ -2710,6 +2712,7 @@ export const Constants = {
         untracked: 2,         // 2 scan-reveal untracked debris
         weather: false,
         activeSats: false,
+        collisionWarnings: true,
       },
       {
         minMission: 7,
@@ -2722,6 +2725,7 @@ export const Constants = {
         untracked: 4,
         weather: false,
         activeSats: false,
+        collisionWarnings: true,
       },
       {
         minMission: 10,
@@ -2734,6 +2738,7 @@ export const Constants = {
         untracked: null,      // null = random distribution
         weather: true,
         activeSats: true,
+        collisionWarnings: true,
       },
     ],
   },

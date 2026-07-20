@@ -479,21 +479,6 @@ export class SkillsPane {
     animation: spSlideIn 250ms ease-out forwards;
 }
 
-/* ── Screen-edge glow ──────────────────────────────────────────────────── */
-@keyframes spEdgeGlow {
-    0%   { opacity: 0; }
-    30%  { opacity: 0.5; }
-    100% { opacity: 0; }
-}
-.sp-edge-glow {
-    position: fixed;
-    top: 0; left: 0; bottom: 0;
-    width: 40px;
-    pointer-events: none;
-    z-index: 199;
-    animation: spEdgeGlow 500ms ease-out forwards;
-}
-
 /* ── Expanded view. Backdrop ──────────────────────────────────────────── */
 .sp-backdrop {
     position: fixed;
@@ -921,8 +906,6 @@ export class SkillsPane {
         this._unsubs.push(
             eventBus.on(Events.MASTERY_FANFARE, (d) => {
                 if (!d?.skillId) return;
-                const color = this._getTierColor(d.tier);
-                this._showEdgeGlow(color);
                 this._flashSkillEntry(d.skillId, 'mastered');
             })
         );
@@ -935,7 +918,7 @@ export class SkillsPane {
      * @private
      */
     _onSkillDiscovered(data) {
-        const { skillId, tier } = data;
+        const { skillId } = data;
         const def = this._defMap.get(skillId);
         if (!def) return;
 
@@ -953,9 +936,6 @@ export class SkillsPane {
 
         // Render compact with highlight on the new skill
         this._renderCompact(skillId);
-
-        // Edge glow in tier color
-        this._showEdgeGlow(this._getTierColor(tier));
 
         // Show pane (auto-hides per level policy)
         this.show();
@@ -1467,25 +1447,6 @@ export class SkillsPane {
     // ═══════════════════════════════════════════════════════════════════════
     //  ANIMATIONS
     // ═══════════════════════════════════════════════════════════════════════
-
-    /**
-     * Flash a subtle left-edge glow in the given tier color when a skill
-     * is discovered. Creates a temporary DOM element that auto-removes
-     * after its CSS animation completes.
-     * @param {string} tierColor — CSS color string (e.g. '#00ff88')
-     * @private
-     */
-    _showEdgeGlow(tierColor) {
-        const glow = document.createElement('div');
-        glow.className = 'sp-edge-glow';
-        glow.style.background = `linear-gradient(to right, ${tierColor}50, transparent)`;
-        document.body.appendChild(glow);
-        glow.addEventListener('animationend', () => {
-            if (glow.parentNode) glow.remove();
-        });
-        // Safety fallback: remove after 800ms even if animationend doesn't fire
-        timerManager.setTimeout(() => { if (glow.parentNode) glow.remove(); }, 800, { owner: this });
-    }
 
     /**
      * Flash a skill entry row to celebrate PRACTICED or MASTERED transitions.

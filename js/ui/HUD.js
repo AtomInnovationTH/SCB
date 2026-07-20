@@ -124,6 +124,15 @@ export class HUD {
     /** @type {Set<string>} Active CATALOG hudGroup names (e.g. 'targets', 'fleet') */
     this._skillActiveGroups = new Set();
 
+    // Phase 3 (onboarding gating): current mission awareness. MISSION_START is
+    // NOT emitted for mission 1 (ScoringSystem._lastMissionNumber starts at 1,
+    // so the 1→1 transition is a no-op — see OnboardingDirector note), so the
+    // default here MUST behave as mission 1: collision warnings suppressed.
+    /** @type {number} Current mission number (default 1). */
+    this._missionNumber = 1;
+    /** @type {object|null} Current mission profile from MISSION_START (null ⇒ mission 1). */
+    this._missionProfile = null;
+
     /** @type {object|null} Current camera-view info config */
     this._currentViewConfig = null;
 
@@ -379,6 +388,11 @@ export class HUD {
          * can't be tagged individually on the keypress. A body-level attribute +
          * CSS catches current AND future cards continuously. */
         body[data-density-quiet] .teaching-overlay { display: none !important; }
+        /* Mission-1 onboarding: while the guided pipeline runs, suppress the
+         * dormant-panel keycap badges so the teaching beats own attention.
+         * Mirrors the density-quiet rule above; cleared on ONBOARDING_COMPLETE /
+         * GAME_RESET. Veteran-skip (COMPLETE without STARTED) never sets it. */
+        body[data-onboarding-active] [data-hud-group].hud-dormant[data-activate-key]::after { display: none; }
         /* Progressive luminance: dormant/active states (§2.2) */
         .hud-dormant {
             opacity: 0.5;
@@ -415,56 +429,15 @@ export class HUD {
             pointer-events: none;
             opacity: 1;
             transition: opacity 0.45s ease;
-            animation: hud-keycap-pulse 1.8s ease-in-out infinite;
             z-index: 20;
         }
         [data-hud-group].hud-active[data-activate-key]::after {
             opacity: 0;
-            animation: none;
-        }
-        @keyframes hud-keycap-pulse {
-            0%, 100% { box-shadow: 0 0 6px rgba(255, 200, 80, 0.25); }
-            50%      { box-shadow: 0 0 10px rgba(255, 200, 80, 0.7); }
-        }
-        @keyframes catchFlash {
-          0% { opacity: 1; }
-          100% { opacity: 0; }
-        }
-        @keyframes catchBorderPulse {
-          0%   { box-shadow: inset 0 0 60px 20px rgba(255, 204, 0, 0.5); }
-          50%  { box-shadow: inset 0 0 30px 10px rgba(0, 255, 136, 0.3); }
-          100% { box-shadow: inset 0 0 0 0 rgba(0, 255, 136, 0); }
-        }
-        @keyframes captureNotifPop {
-          0%   { transform: translateX(-50%) scale(0.6); opacity: 0; }
-          40%  { transform: translateX(-50%) scale(1.15); opacity: 1; }
-          70%  { transform: translateX(-50%) scale(0.95); opacity: 1; }
-          100% { transform: translateX(-50%) scale(1.0); opacity: 1; }
-        }
-        @keyframes detachFlash {
-          0% { opacity: 0.8; }
-          50% { opacity: 0.5; }
-          100% { opacity: 0; }
         }
         @keyframes detachTextFloat {
           0%   { opacity: 1; transform: translate(-50%, -50%) scale(1.5); }
           30%  { opacity: 1; transform: translate(-50%, -70%) scale(1.2); }
           100% { opacity: 0; transform: translate(-50%, -130%) scale(0.9); }
-        }
-        @keyframes scoreFloat {
-          0%   { opacity: 1; transform: translate(-50%, -50%) scale(1.2); }
-          30%  { opacity: 1; transform: translate(-50%, -70%) scale(1.0); }
-          100% { opacity: 0; transform: translate(-50%, -120%) scale(0.8); }
-        }
-        @keyframes synergyFloat {
-          0%   { opacity: 1; transform: translate(-50%, -50%) scale(1.3); }
-          20%  { opacity: 1; transform: translate(-50%, -65%) scale(1.1); }
-          100% { opacity: 0; transform: translate(-50%, -140%) scale(0.85); }
-        }
-        @keyframes weatherPulse {
-          0%   { opacity: 0.85; }
-          50%  { opacity: 1; }
-          100% { opacity: 0.85; }
         }
         @keyframes salvageRevealIn {
           0%   { opacity: 0; transform: translate(-50%, 0) scale(0.8); }
@@ -486,6 +459,11 @@ export class HUD {
         @media (prefers-reduced-motion: reduce) {
           @keyframes hud-poweron { 0% { opacity: 0; } 100% { opacity: 1; } }
           .hud-poweron { animation: hud-poweron 0.2s ease both; }
+          /* Phase 1 #12: silence the remaining finite alert animations — the
+           * conjunction RED pulse and the floating alert texts. The elements
+           * still show (steady) and self-remove on their timers. */
+          #hud-conjunction-panel { animation: none !important; }
+          .hud-alert-float { animation: none !important; }
         }
       `;
       document.head.appendChild(catchStyle);
@@ -758,12 +736,19 @@ export class HUD {
       this._credits = data.credits != null ? data.credits : this._credits;
       this._debrisCleared = data.debrisCleared || this._debrisCleared;
       this._totalMassKg = data.totalMassKg || this._totalMassKg || 0;
-      // Flash capture notification when score increases
-      if (data.delta > 0) {
-        this.statusPanel.showCaptureNotification(
-          data.delta, this._debrisCleared, data.massKg || 0, this._totalMassKg
-        );
+      // Phase 3 (onboarding gating): keep the mission number current from the
+      // debris count too. MISSION_START is the authoritative profile source but
+      // is NOT emitted on a bare continue, and the direct-points SCORE_UPDATE
+      // path (scan rewards / mission events) fires WITHOUT a MISSION_START — so
+      // this keeps the collision-warning gate correct on continued games as soon
+      // as any score event arrives. Mirrors CollisionAvoidanceSystem.
+      if (typeof data.debrisCleared === 'number') {
+        const per = Constants.MISSIONS?.DEBRIS_PER_MISSION || 5;
+        this._missionNumber = Math.floor(data.debrisCleared / per) + 1;
       }
+      // Phase 2 (capture feedback): the delivery moment is confirmed by the
+      // salvage-reveal card (SALVAGE_REVEAL) + the top-strip CLEARED counter +
+      // comms. The old center-screen capture-notif pop was redundant — removed.
     });
 
     // ST-9.11 C-5: Launch sequence phase indicator with countdown
@@ -801,26 +786,32 @@ export class HUD {
 
     eventBus.on(Events.COLLISION_WARNING, (data) => {
       // D2 (ROADMAP §4 P2): debris proximity warning from CollisionAvoidanceSystem.
+      // Phase 3 gate: suppressed in mission 1 (onboarding). Steady-display
+      // collision warnings begin at mission 2 (profile.collisionWarnings).
+      if (!this._collisionWarningsEnabled()) return;
       const closing = (data.closingSpeedMs != null) ? `, closing ${Math.round(data.closingSpeedMs)} m/s` : '';
       this.showWarning(`⚠ Debris ${data.debrisId} — ${Math.round(data.distanceM)} m${closing}`, 'critical');
     });
 
     eventBus.on(Events.COLLISION_EVASION, (data) => {
-      // D2: CA autopilot performed an avoidance burn.
+      // D2: CA autopilot performed an avoidance burn. Phase 1 #3: not actionable
+      // (the ship already dodged) → quiet bottom toast, not the critical strip.
+      // Phase 3 gate: suppressed in mission 1 (onboarding).
+      if (!this._collisionWarningsEnabled()) return;
       const dir = data.direction ? ` (${data.direction})` : '';
-      this.showWarning(`⚡ Auto-evasion! Debris ${data.debrisId} at ${Math.round(data.distanceM)} m${dir}`, 'critical');
+      this.showNotification(`⚡ Auto-evasion — Debris ${data.debrisId} at ${Math.round(data.distanceM)} m${dir}`);
     });
 
     eventBus.on(Events.INTERACTION_DATA_CAPTURE, (data) => {
-      this.showWarning(`✓ Data captured! +${data.points} pts`, 'success');
+      this.showNotification(`✓ Data captured! +${data.points} pts`);
     });
 
     eventBus.on(Events.INTERACTION_DEORBIT, (data) => {
-      this.showWarning(`✓ Target deorbited! +${data.points} pts`, 'success');
+      this.showNotification(`✓ Target deorbited! +${data.points} pts`);
     });
 
     eventBus.on(Events.INTERACTION_CAPTURE, (data) => {
-      this.showWarning(`✓ Target captured! +${data.points} pts`, 'success');
+      this.showNotification(`✓ Target captured! +${data.points} pts`);
     });
 
     eventBus.on(Events.PLAYER_LOW_BATTERY, () => {
@@ -836,19 +827,14 @@ export class HUD {
     eventBus.on(Events.ARM_DEPLOYED, () => this.statusPanel.renderArmPanel());
     eventBus.on(Events.ARM_CAPTURED, (data) => {
       this.statusPanel.renderArmPanel();
-      // Phase 1C: catch juice effects
-      this.showCatchFlash();
+      // Phase 2 (capture feedback): one confirmation per moment. The catch is
+      // already reflected by the arm pane + comms + status lights, so the catch
+      // moment gets a single quiet bottom toast (no center-screen float).
       const armLabel = (data.type || 'arm').charAt(0).toUpperCase() + (data.type || 'arm').slice(1);
       const debrisLabel = data.debrisType || 'debris';
-      this.showScorePopup(
-        data.mass || 0,
-        `${armLabel}. ${debrisLabel} secured`
-      );
-    });
-
-    // S4: Catch juice on lasso captures too
-    eventBus.on(Events.LASSO_CAPTURED, () => {
-      this.showCatchFlash();
+      const massKg = data.mass || 0;
+      const massText = massKg > 0 ? ` (+${massKg.toLocaleString()} kg)` : '';
+      this.showNotification(`${armLabel} — ${debrisLabel} secured${massText}`);
     });
 
     eventBus.on(Events.ARM_RETURNED, () => this.statusPanel.renderArmPanel());
@@ -878,9 +864,11 @@ export class HUD {
       this._hideConjunctionAlert();
     });
 
-    // --- Synergy bonus popup (Phase 5 Rewards) ---
+    // --- Synergy bonus (Phase 5 Rewards) ---
+    // Phase 2 (capture feedback): downgraded from a center-screen cyan float to
+    // the quiet bottom toast; RewardSystem already narrates the synergy in comms.
     eventBus.on(Events.SYNERGY_BONUS, (data) => {
-      this.showSynergyPopup(data.points, data.name);
+      this.showNotification(`⚡ +${data.points} ${data.name} — SYNERGY BONUS`);
     });
 
     // ST-3.4: Mastery celebration toast (first N masteries only)
@@ -1066,6 +1054,75 @@ export class HUD {
         }
       }
     });
+
+    // --- Phase 3 (onboarding gating): mission awareness -------------------
+    // Store the mission number + profile so display-layer gates (e.g. collision
+    // warnings) can consult the active difficulty profile. MISSION_START does
+    // NOT fire for mission 1, so the constructor default (mission 1, suppressed)
+    // stands until the first 1→2 transition.
+    eventBus.on(Events.MISSION_START, (data) => {
+      if (data && typeof data.missionNumber === 'number') {
+        this._missionNumber = data.missionNumber;
+      }
+      this._missionProfile = (data && data.profile) || null;
+    });
+
+    // Keycap badges during the guided pipeline: while onboarding runs, a body
+    // attribute suppresses the dormant-panel activate-key glyphs (CSS in the
+    // injected HUD styles) so the teaching beats own attention. The veteran-skip
+    // path fires COMPLETE without STARTED and so never sets the attribute.
+    eventBus.on(Events.ONBOARDING_STARTED, () => {
+      if (typeof document !== 'undefined') {
+        document.body.setAttribute('data-onboarding-active', '');
+      }
+    });
+    eventBus.on(Events.ONBOARDING_COMPLETE, () => {
+      if (typeof document !== 'undefined') {
+        document.body.removeAttribute('data-onboarding-active');
+      }
+    });
+
+    // GAME_RESET: clear onboarding + mission state so a new game starts fresh
+    // (back to mission-1 suppressed defaults).
+    eventBus.on(Events.GAME_RESET, () => {
+      if (typeof document !== 'undefined') {
+        document.body.removeAttribute('data-onboarding-active');
+      }
+      this._missionNumber = 1;
+      this._missionProfile = null;
+    });
+  }
+
+  /**
+   * @private Phase 3: whether steady-display collision warnings are enabled for
+   * the current mission. Suppressed during mission 1 (onboarding) and enabled
+   * from mission 2 up via the profile flag `collisionWarnings`. Prefers the
+   * authoritative profile from MISSION_START; when that hasn't arrived (e.g. a
+   * continued game, before the next score event) it resolves the profile from
+   * the tracked mission number so a mission-≥2 continue isn't wrongly muted.
+   * @returns {boolean}
+   */
+  _collisionWarningsEnabled() {
+    const profile = this._missionProfile || this._profileForMission(this._missionNumber);
+    return !!(profile && profile.collisionWarnings);
+  }
+
+  /**
+   * @private Resolve the mission difficulty profile for a mission number using
+   * the highest-matching `minMission` rule (mirrors ScoringSystem._getMissionProfile).
+   * Keeps `collisionWarnings` (and other flags) as the single source of truth so
+   * the gate can never drift from Constants.MISSIONS.PROFILES.
+   * @param {number} missionNumber
+   * @returns {object|null}
+   */
+  _profileForMission(missionNumber) {
+    const profiles = Constants.MISSIONS?.PROFILES;
+    if (!Array.isArray(profiles) || profiles.length === 0) return null;
+    let best = profiles[0];
+    for (const p of profiles) {
+      if (missionNumber >= p.minMission) best = p;
+    }
+    return best;
   }
 
   // ==========================================================================
@@ -1404,14 +1461,13 @@ export class HUD {
       if (warning.severity === 'critical') {
         textEl.style.color = '#ff4444';
         this.panels.warnings.style.borderColor = 'rgba(255,68,68,0.5)';
-        // Pulse animation
-        const pulse = Math.sin(Date.now() * 0.01) > 0;
-        textEl.style.opacity = pulse ? '1' : '0.6';
-      } else if (warning.severity === 'success') {
-        textEl.style.color = '#00ff88';
+        // Phase 1 #1: severity reads as steady colour (red text/border), not a
+        // sub-second opacity strobe. The old Math.sin(Date.now()) toggle blinked
+        // for the entire time a long-lived critical warning was queued.
         textEl.style.opacity = '1';
-        this.panels.warnings.style.borderColor = 'rgba(0,255,136,0.5)';
       } else {
+        // 'warning' (default) — steady amber. The former 'success' severity was
+        // retired (success feedback now routes to the quiet bottom toast).
         textEl.style.color = '#ffaa00';
         textEl.style.opacity = '1';
         this.panels.warnings.style.borderColor = 'rgba(255,170,0,0.3)';
@@ -1582,38 +1638,19 @@ export class HUD {
   }
 
   // ==========================================================================
-  // CATCH EFFECTS (Phase 1C)
+  // DETACH / TETHER FEEDBACK
   // ==========================================================================
 
   /**
-   * S9-A: Show a subtle green-cyan flash + border pulse overlay on successful catch.
-   * Self-removes after animation completes — no stacking issues.
-   */
-  showCatchFlash() {
-    // Sim-appropriate: NO screen flash, NO border pulse.
-    // Previously emitted a green radial + gold->green border pulse ("catch juice"),
-    // which read as arcade-style sparks. Removed per user feedback: this is a sim.
-    // Capture confirmation lives in the comms panel text + score popup only.
-  }
-
-  /**
-   * Show a red tinted flash + floating "TETHER CUT" text on detach.
+   * Show a floating "TETHER CUT" text on detach.
    * Phase 6: Risk-Reward detach dramatic feedback.
+   * Phase 1 #11: the full-screen radial flash was removed — floating text +
+   * comms + audio carry the event.
    */
   showDetachFlash() {
-    // Red radial flash
-    const flash = document.createElement('div');
-    flash.style.cssText = `
-      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-      background: radial-gradient(circle, rgba(255,50,50,0.5) 0%, rgba(255,0,0,0) 70%);
-      pointer-events: none; z-index: 100;
-      animation: detachFlash 0.5s ease-out forwards;
-    `;
-    document.body.appendChild(flash);
-    timerManager.setTimeout(() => flash.remove(), 550, { owner: this });
-
     // Floating "TETHER CUT" text
     const text = document.createElement('div');
+    text.className = 'hud-alert-float';
     text.style.cssText = `
       position: fixed; top: 40%; left: 50%;
       transform: translate(-50%, -50%);
@@ -1627,41 +1664,6 @@ export class HUD {
     document.body.appendChild(text);
     timerManager.setTimeout(() => text.remove(), 1300, { owner: this });
   }
-
-  /**
-   * Show a floating mass popup that drifts upward and fades.
-   * @param {number} massKg - Mass in kg to display
-   * @param {string} [label] - Optional descriptive label
-   */
-  showScorePopup(massKg, label) {
-    const popup = document.createElement('div');
-    popup.style.cssText = `
-      position: fixed;
-      top: 45%; left: 50%;
-      transform: translate(-50%, -50%);
-      color: #00ff88;
-      font-family: 'Courier New', monospace;
-      font-size: 28px;
-      font-weight: bold;
-      text-shadow: 0 0 10px rgba(0, 255, 136, 0.5);
-      pointer-events: none;
-      z-index: 101;
-      animation: scoreFloat 1.5s ease-out forwards;
-    `;
-    // S9-A: Show mass in kg instead of abstract points
-    const massText = massKg > 0 ? `+${massKg.toLocaleString()} kg` : '+0 kg';
-    if (label) {
-      popup.innerHTML = `${massText}<br><span style="font-size:14px;color:#88ccff">${label}</span>`;
-    } else {
-      popup.textContent = massText;
-    }
-    document.body.appendChild(popup);
-    timerManager.setTimeout(() => popup.remove(), 1600, { owner: this });
-  }
-
-  // ==========================================================================
-  // SYNERGY POPUP (Phase 5 Rewards)
-  // ==========================================================================
 
   // ==========================================================================
   // NOTIFICATION ZONE (UX-2 #12)
@@ -1690,32 +1692,6 @@ export class HUD {
       this._notificationZone.style.opacity = '0';
       this._notifTimer = null;
     }, durationMs, { owner: this });
-  }
-
-  /**
-   * Show a floating synergy bonus popup (cyan/teal, distinct from gold score popup).
-   * @param {number} points - Bonus points
-   * @param {string} name - Synergy name
-   */
-  showSynergyPopup(points, name) {
-    const popup = document.createElement('div');
-    popup.style.cssText = `
-      position: fixed;
-      top: 38%; left: 50%;
-      transform: translate(-50%, -50%);
-      color: #00e5ff;
-      font-family: 'Courier New', monospace;
-      font-size: 24px;
-      font-weight: bold;
-      text-shadow: 0 0 12px rgba(0, 229, 255, 0.6), 0 0 24px rgba(0, 229, 255, 0.3);
-      pointer-events: none;
-      z-index: 102;
-      text-align: center;
-      animation: synergyFloat 2.0s ease-out forwards;
-    `;
-    popup.innerHTML = `+${points} ${name}<br><span style="font-size:12px;color:#4dd0e1;">⚡ SYNERGY BONUS</span>`;
-    document.body.appendChild(popup);
-    timerManager.setTimeout(() => popup.remove(), 2100, { owner: this });
   }
 
   // ==========================================================================
@@ -1764,9 +1740,13 @@ export class HUD {
         `<span style="color:${tc.text};font-size:14px;">${evDir}</span>`;
     }
 
-    // RED tier: add pulsing animation via inline style
+    // RED tier: finite attention-grab. Phase 1 #8: ~3 pulses (6 alternate
+    // half-cycles) then settle to the steady full-opacity red-bordered panel —
+    // no longer an infinite strobe. This is the single retained alert pulse
+    // (imminent collision, mission ≥7). _hideConjunctionAlert clears the
+    // animation on CONJUNCTION_CLEAR, so a later distinct RED re-pulses.
     if (data.tier === 'RED') {
-      panel.style.animation = 'conjunction-pulse 0.6s ease-in-out infinite alternate';
+      panel.style.animation = 'conjunction-pulse 0.6s ease-in-out 6 alternate';
       // Inject keyframes if not yet present
       if (!document.getElementById('conjunction-pulse-style')) {
         const style = document.createElement('style');
@@ -1834,7 +1814,6 @@ export class HUD {
       border-radius: 4px; padding: 4px 10px;
       font-family: 'Courier New', monospace; font-size: 10px;
       color: ${data.color || '#ccc'}; white-space: nowrap;
-      animation: weatherPulse 2s ease-in-out infinite;
       pointer-events: none;
     `;
     badge.innerHTML = `<span style="font-size:12px;">${data.icon || '🌐'}</span><span>${data.name}</span>`;
@@ -1924,23 +1903,14 @@ export class HUD {
 
   /**
    * V5: Show dramatic "TETHER SNAP" alert on tether break.
-   * Red flash for 2 seconds with floating text, similar to detach flash.
+   * Floating text + queued critical warning + audio carry the event.
+   * Phase 1 #11: the full-screen radial flash was removed.
    * @param {{ armIndex: number, cause: string }} data
    */
   showTetherSnapAlert(data) {
-    // Red radial flash (more intense than detach)
-    const flash = document.createElement('div');
-    flash.style.cssText = `
-      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-      background: radial-gradient(circle, rgba(255,50,50,0.6) 0%, rgba(255,0,0,0) 70%);
-      pointer-events: none; z-index: 100;
-      animation: detachFlash 0.8s ease-out forwards;
-    `;
-    document.body.appendChild(flash);
-    timerManager.setTimeout(() => flash.remove(), 850, { owner: this });
-
     // Floating "TETHER SNAP" text
     const text = document.createElement('div');
+    text.className = 'hud-alert-float';
     text.style.cssText = `
       position: fixed; top: 35%; left: 50%;
       transform: translate(-50%, -50%);
@@ -1960,23 +1930,14 @@ export class HUD {
   }
 
   /**
-   * Recoverable net failure: amber flash + "NET FAILED" text. Less severe than
-   * a tether snap (the daughter survives and the debris is re-capturable).
+   * Recoverable net failure: "NET FAILED" text + queued warning. Less severe
+   * than a tether snap (the daughter survives and the debris is re-capturable).
+   * Phase 1 #11: the full-screen radial flash was removed.
    */
   showNetFailedAlert(data) {
-    // Amber radial flash (softer than the red tether-snap flash)
-    const flash = document.createElement('div');
-    flash.style.cssText = `
-      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-      background: radial-gradient(circle, rgba(255,170,40,0.45) 0%, rgba(255,140,0,0) 70%);
-      pointer-events: none; z-index: 100;
-      animation: detachFlash 0.8s ease-out forwards;
-    `;
-    document.body.appendChild(flash);
-    timerManager.setTimeout(() => flash.remove(), 850, { owner: this });
-
     // Floating "NET FAILED" text
     const text = document.createElement('div');
+    text.className = 'hud-alert-float';
     text.style.cssText = `
       position: fixed; top: 35%; left: 50%;
       transform: translate(-50%, -50%);
@@ -1995,22 +1956,14 @@ export class HUD {
 
   /**
    * Phase 3b (capture-feedback overhaul): fragmentation alert — the impact
-   * broke debris into new tracked fragments (Kessler ticks up). Red flash;
-   * the mercy waiver is named when it applies.
+   * broke debris into new tracked fragments (Kessler ticks up). Floating text +
+   * queued warning; the mercy waiver is named when it applies.
+   * Phase 1 #11: the full-screen radial flash was removed.
    * @param {{ debrisId:*, fragmentCount:number, mercyApplied:boolean }} data
    */
   showFragmentationAlert(data) {
-    const flash = document.createElement('div');
-    flash.style.cssText = `
-      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-      background: radial-gradient(circle, rgba(255,80,40,0.5) 0%, rgba(255,40,0,0) 70%);
-      pointer-events: none; z-index: 100;
-      animation: detachFlash 0.8s ease-out forwards;
-    `;
-    document.body.appendChild(flash);
-    timerManager.setTimeout(() => flash.remove(), 850, { owner: this });
-
     const text = document.createElement('div');
+    text.className = 'hud-alert-float';
     text.style.cssText = `
       position: fixed; top: 35%; left: 50%;
       transform: translate(-50%, -50%);
@@ -2033,8 +1986,9 @@ export class HUD {
   }
 
   /**
-   * V5: Show blinking "STABILIZE" warning when angular velocity is too
-   * high for safe crossbow fire.
+   * V5: Show a steady "STABILIZE" warning when angular velocity is too
+   * high for safe crossbow fire. Phase 1 #4: steady amber text (no strobe);
+   * show/hide logic unchanged.
    * @private
    */
   _showStabilizeWarning() {
@@ -2048,7 +2002,6 @@ export class HUD {
         font-size: 14px; font-weight: bold; letter-spacing: 2px;
         color: #ffaa00; text-shadow: 0 0 8px rgba(255,170,0,0.5);
         pointer-events: none; z-index: 110;
-        animation: deltav-pulse 0.6s ease-in-out infinite;
       `;
       this._stabilizeEl.textContent = '⚠ STABILIZE';
       this.container.appendChild(this._stabilizeEl);
@@ -2072,7 +2025,7 @@ export class HUD {
 
   /**
    * Display a centered "Mastery Unlocked — {label}" banner for the first few masteries.
-   * Fades after MASTERY_TOAST_DURATION_MS. Pattern follows showSynergyPopup().
+   * Fades after MASTERY_TOAST_DURATION_MS.
    * @param {{ label: string }} data
    */
   showMasteryToast(data) {

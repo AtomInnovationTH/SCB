@@ -44,8 +44,6 @@ export class StatusPanel {
     this._container = container;
     this._armManager = null;
     this._initialDeltaV = null;
-    this._captureNotifTimer = null;
-    this._captureNotifEl = null;
     this._forgeRevealed = false;
     this._cargoStatus = null;   // cached from CARGO_UPDATED events
     this._lastPowerState = null;
@@ -586,42 +584,10 @@ export class StatusPanel {
     // slot. The comms zone already narrates the contract milestones
     // (MissionMilestones), so the tracker and its narration share one cluster.
 
-    this._buildDeltaVBar();
-    this._buildCaptureNotification();
-  }
-
-  /** @private Inject ΔV pulse animation — bar lives inside resources panel */
-  _buildDeltaVBar() {
-    if (!document.getElementById('deltav-pulse-style')) {
-      const style = document.createElement('style');
-      style.id = 'deltav-pulse-style';
-      style.textContent = `
-        @keyframes deltav-pulse {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0.3; }
-        }
-      `;
-      document.head.appendChild(style);
-    }
-  }
-
-  /** @private Build the capture notification overlay */
-  _buildCaptureNotification() {
-    const notif = document.createElement('div');
-    notif.id = 'capture-notification';
-    Object.assign(notif.style, {
-      position: 'fixed', top: '15%', left: '50%', transform: 'translateX(-50%)',
-      textAlign: 'center', pointerEvents: 'none', opacity: '0',
-      transition: 'opacity 0.2s ease-in', zIndex: '20',
-    });
-    notif.innerHTML = `
-      <div id="capture-notif-delta" style="font-size:28px;color:#00ff88;
-           text-shadow:0 0 10px #00ff88;font-family:'Courier New',monospace;font-weight:bold;"></div>
-      <div id="capture-notif-count" style="font-size:14px;color:#88ffcc;margin-top:4px;
-           font-family:'Courier New',monospace;"></div>
-    `;
-    document.body.appendChild(notif);
-    this._captureNotifEl = notif;
+    // Phase 1 #13 / Phase 2: the ΔV pulse keyframe (deltav-pulse) and the
+    // center-screen capture-notification overlay were both retired — low-fuel
+    // urgency is steady red + audio, and the delivery moment is confirmed by the
+    // salvage-reveal card + CLEARED counter + comms. No build step needed here.
   }
 
   // ==========================================================================
@@ -800,7 +766,6 @@ export class StatusPanel {
     count.style.color = color;
 
     if (reloadGlyph) reloadGlyph.style.display = reloading ? '' : 'none';
-    seg.classList.toggle('reloading', reloading);
 
     // Nominal = plenty of charges, not reloading, not just denied. Drives the
     // dark-cockpit dimming of the whole digest line.
@@ -845,23 +810,8 @@ export class StatusPanel {
     seg.style.color = color;
   }
 
-  /**
-   * Show a capture notification flash.
-   * @param {number} delta  — score delta
-   * @param {number} debrisCleared — total debris captured so far
-   */
-  showCaptureNotification(delta, debrisCleared, massKg, totalMassKg) {
-    this._showCaptureNotification(delta, debrisCleared, massKg, totalMassKg);
-  }
-
   /** Clean up DOM elements appended outside the HUD container. */
   dispose() {
-    if (this._captureNotifEl && this._captureNotifEl.parentNode) {
-      this._captureNotifEl.parentNode.removeChild(this._captureNotifEl);
-    }
-    if (this._captureNotifTimer) {
-      clearTimeout(this._captureNotifTimer);
-    }
     // Body-mounted priority panels (objective) are appended to document.body
     // by _createTopPanel, so they are not torn down with the HUD container —
     // remove them explicitly to avoid orphaned duplicate-id nodes.
@@ -1210,13 +1160,6 @@ export class StatusPanel {
         min-width: 16px;
         text-align: right;
       }
-      @keyframes mother-net-reload {
-        0%, 100% { opacity: 1; }
-        50% { opacity: 0.3; }
-      }
-      #mother-digest-net.reloading #mother-digest-net-fill {
-        animation: mother-net-reload 0.7s ease-in-out infinite;
-      }
       #mother-digest-net-reload { opacity: 0.8; }
     `;
     document.head.appendChild(style);
@@ -1548,10 +1491,10 @@ export class StatusPanel {
   _dvColorTier(pct, nominalColor) {
     if (pct > 30) return { color: nominalColor, anim: 'none' };
     if (pct > 15) return { color: '#ffaa00', anim: 'none' };
-    if (pct > 5)  return { color: '#ff4444', anim: 'none' };
-    // 5%-1%: pulsing red. <1%: faster strobe matching the continuous audio warble.
-    if (pct > 1)  return { color: '#ff4444', anim: 'deltav-pulse 0.8s ease-in-out infinite' };
-    return { color: '#ff4444', anim: 'deltav-pulse 0.3s ease-in-out infinite' };
+    // Phase 1 #5: low-fuel urgency reads as steady red colour + the existing
+    // audio warble. The old sub-second opacity strobe (deltav-pulse) blinked
+    // continuously while the tank stayed low — removed for all tiers.
+    return { color: '#ff4444', anim: 'none' };
   }
 
   /** @private Render the V5 crossbow arm status panel */
@@ -1727,45 +1670,6 @@ export class StatusPanel {
       + detailLine
       + keysLine
       + `</div>`;
-  }
-
-  /**
-   * @private Show a capture notification flash.
-   * @param {number} delta — score delta
-   * @param {number} debrisCleared — total debris captured so far
-   */
-  _showCaptureNotification(delta, debrisCleared, massKg, totalMassKg) {
-    const notif = this._captureNotifEl;
-    if (!notif) return;
-
-    const deltaEl = document.getElementById('capture-notif-delta');
-    const countEl = document.getElementById('capture-notif-count');
-    // S9-A: Show mass if available, fall back to credits
-    if (deltaEl) deltaEl.textContent = massKg > 0 ? `+${massKg.toLocaleString()} kg` : `+${delta.toLocaleString()} cr`;
-    if (countEl) countEl.textContent = totalMassKg > 0
-      ? `${debrisCleared} cleared · Mass recovered: ${totalMassKg.toLocaleString()} kg`
-      : `${debrisCleared}/${Constants.WIN_DEBRIS_COUNT} CAPTURED · +${delta.toLocaleString()} cr`;
-
-    // Clear any pending fade-out
-    if (this._captureNotifTimer) {
-      clearTimeout(this._captureNotifTimer);
-    }
-
-    // S4: Pop-in animation — scale up from 60% with overshoot
-    notif.style.transition = 'none';
-    notif.style.animation = 'none';
-    // Force reflow to restart animation
-    void notif.offsetWidth;
-    notif.style.animation = 'captureNotifPop 0.35s ease-out forwards';
-    notif.style.opacity = '1';
-
-    // Fade out slowly (0.8s) after 2 seconds
-    this._captureNotifTimer = setTimeout(() => {
-      notif.style.animation = 'none';
-      notif.style.transition = 'opacity 0.8s ease-out';
-      notif.style.opacity = '0';
-      this._captureNotifTimer = null;
-    }, 2000);
   }
 
   /** @private Update forge panel from ForgeSystem state (Sprint A2: enhanced) */
