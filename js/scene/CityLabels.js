@@ -31,7 +31,7 @@ import { latLonToPosition } from '../ui/StrategicMap.js';
 import { StorageKeys } from '../core/StorageKeys.js';
 
 /** Hard cap on rendered labels (performance + clutter). */
-export const MAX_CITIES = 220;
+export const MAX_CITIES = 300;
 
 /**
  * Number of LOD tiers. tier 1 = always shown (major cities + isolated ocean /
