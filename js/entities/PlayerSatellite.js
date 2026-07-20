@@ -44,6 +44,12 @@ const _tipLocal    = new THREE.Vector3();
 const _armQuat     = new THREE.Quaternion();
 /* Scratch world-space target quat for DOCKING slerp / HOLDING_CATCH snap. */
 const _armDockTargetQuat = new THREE.Quaternion();
+
+// P3 (2026-07-20): per-frame animation temps (solar tracking, sensor gimbal,
+// solar power). Written+consumed within one call; single PlayerSatellite instance.
+const _qInvTmp = new THREE.Quaternion();
+const _v3TmpA  = new THREE.Vector3();
+const _v3TmpB  = new THREE.Vector3();
 /* Deterministic docked-arm roll basis now lives in ArmDockBasis.js (shared SSOT
  * with ArmUnit's DOCKING/HOLDING_CATCH self-alignment — see HANDOFF §10 Rule B).
  * `_composeDockedArmQuat` is a thin local alias kept for call-site readability. */
@@ -2680,7 +2686,7 @@ export class PlayerSatellite extends THREE.Group {
 
     // --- RCS fine-positioning (Phase 1: additive to orbital motion) ---
     if (this._rcsVelocity.lengthSq() > 1e-20) {
-      this.position.add(this._rcsVelocity.clone().multiplyScalar(dt));
+      this.position.addScaledVector(this._rcsVelocity, dt);
       // Damping: velocity decays when not thrusting (stops quickly on key release)
       this._rcsVelocity.multiplyScalar(Constants.RCS_DAMPING);
       // Zero out when negligible
@@ -2893,7 +2899,7 @@ export class PlayerSatellite extends THREE.Group {
     if ((this._rosaFurlProgress ?? 1) < 0.5) return;
 
     // Convert sun direction to satellite body space
-    const localSun = sunDirection.clone().applyQuaternion(this.quaternion.clone().invert());
+    const localSun = _v3TmpA.copy(sunDirection).applyQuaternion(_qInvTmp.copy(this.quaternion).invert());
 
     // Optimal tilt: align panel normal with sun's projection in the YZ plane
     // (perpendicular to the boom axis X).
@@ -3013,10 +3019,9 @@ export class PlayerSatellite extends THREE.Group {
     if (!this._sensorTarget || !this.sensorGimbal) return;
 
     // Get target direction in local space
-    const worldPos = new THREE.Vector3();
-    this.sensorGimbal.getWorldPosition(worldPos);
-    const dir = this._sensorTarget.clone().sub(worldPos);
-    const localDir = dir.applyQuaternion(this.quaternion.clone().invert());
+    this.sensorGimbal.getWorldPosition(_v3TmpA);
+    const localDir = _v3TmpB.copy(this._sensorTarget).sub(_v3TmpA)
+      .applyQuaternion(_qInvTmp.copy(this.quaternion).invert());
 
     // Compute yaw/pitch for gimbal
     const yaw = Math.atan2(localDir.x, localDir.z);
@@ -4707,7 +4712,7 @@ export class PlayerSatellite extends THREE.Group {
       return;
     }
 
-    const panelNormal = new THREE.Vector3(0, 1, 0).applyQuaternion(this.quaternion);
+    const panelNormal = _v3TmpA.set(0, 1, 0).applyQuaternion(this.quaternion);
     const sunAngle = Math.max(0, panelNormal.dot(sunDirection));
 
     const pos = this._cartesian.position;

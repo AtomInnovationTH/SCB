@@ -191,6 +191,15 @@ export class SunLight {
     // Pre-allocated vectors for Earth occlusion checks (avoid per-frame GC)
     this._occToEarth = new THREE.Vector3();
     this._occToBody = new THREE.Vector3();
+
+    // P2 (2026-07-20): hot-path temps — update() previously allocated ~15-20
+    // Vector3/frame across _updateSunDisc/_updateLensFlare/_updateMoon/
+    // _updatePlanets (GC churn). Reuse order is safe: every consumer .copy()s
+    // out of the temp before the next method reuses it.
+    this._bodyPos = new THREE.Vector3();   // sun/moon/planet world-pos temp
+    this._bodyDir = new THREE.Vector3();   // moon direction temp
+    this._downTmp = new THREE.Vector3();   // camera-relative "below" temp
+    this._labelTmp = new THREE.Vector3();  // per-label offset temp
   }
 
   // ==========================================================================
@@ -405,7 +414,7 @@ export class SunLight {
 
   /** @private */
   _updateSunDisc() {
-    const sunPos = this.sunDirection.clone().multiplyScalar(450);
+    const sunPos = this._bodyPos.copy(this.sunDirection).multiplyScalar(450);
     this.sunSprite.position.copy(sunPos);
 
     // Geometric Earth-occlusion: hide sun when behind Earth's disc from camera POV
@@ -422,9 +431,8 @@ export class SunLight {
 
     // Sun label: camera-relative "below"
     if (this._sunLabel) {
-      const down = this.camera
-        ? new THREE.Vector3(0, -1, 0).applyQuaternion(this.camera.quaternion)
-        : new THREE.Vector3(0, -1, 0);
+      const down = this._downTmp.set(0, -1, 0);
+      if (this.camera) down.applyQuaternion(this.camera.quaternion);
       this._sunLabel.position.copy(sunPos).add(down.multiplyScalar(12));
       this._sunLabel.visible = !sunHidden && !this._labelsHidden;
     }
@@ -448,7 +456,7 @@ export class SunLight {
     }
     this.flareGroup.visible = true;
 
-    const sunPos = this.sunDirection.clone().multiplyScalar(450);
+    const sunPos = this._bodyPos.copy(this.sunDirection).multiplyScalar(450);
     const camPos = this.camera.position;
 
     // Camera forward vector
@@ -477,13 +485,13 @@ export class SunLight {
     // Rotated 110° around Y-axis from sun direction, then tilted above ecliptic.
     const sunAngle = Math.atan2(this.sunDirection.z, this.sunDirection.x);
     const moonAngle = sunAngle + (110 * Math.PI / 180); // 110° offset
-    const moonDir = new THREE.Vector3(
+    const moonDir = this._bodyDir.set(
       Math.cos(moonAngle),
       0.25 + Math.sin(this.elapsedTime * 0.0001) * 0.1,  // above ecliptic — clears Earth
       Math.sin(moonAngle)
     ).normalize();
 
-    const moonPos = moonDir.clone().multiplyScalar(430);
+    const moonPos = this._bodyPos.copy(moonDir).multiplyScalar(430);
     this.moonMesh.position.copy(moonPos);
 
     // Update moon depth mask — placed at DEPTH_MASK_DIST along moon direction (inside star sphere)
@@ -499,9 +507,8 @@ export class SunLight {
 
     // Moon label: camera-relative "below" — no parallax regardless of orbital orientation
     if (this._moonLabel) {
-      const down = this.camera
-        ? new THREE.Vector3(0, -1, 0).applyQuaternion(this.camera.quaternion)
-        : new THREE.Vector3(0, -1, 0);
+      const down = this._downTmp.set(0, -1, 0);
+      if (this.camera) down.applyQuaternion(this.camera.quaternion);
       this._moonLabel.position.copy(moonPos).add(down.multiplyScalar(17));
       // One-time diagnostic
       if (!this._moonLabelLogged) {
@@ -596,12 +603,11 @@ export class SunLight {
 
     // Sun angle on the ecliptic (XZ plane)
     const sunAngle = Math.atan2(this.sunDirection.z, this.sunDirection.x);
-    const _pos = new THREE.Vector3();
+    const _pos = this._bodyPos;
 
     // Camera-relative "below" direction — eliminates parallax between disc and label
-    const _down = this.camera
-      ? new THREE.Vector3(0, -1, 0).applyQuaternion(this.camera.quaternion)
-      : new THREE.Vector3(0, -1, 0);
+    const _down = this._downTmp.set(0, -1, 0);
+    if (this.camera) _down.applyQuaternion(this.camera.quaternion);
 
     for (const p of this._planets) {
       const angle = sunAngle + p.deg * (Math.PI / 180);
@@ -614,7 +620,7 @@ export class SunLight {
 
       // Label: camera-relative below — always visually centered under disc
       const labelOffset = p.radius + 8;
-      p.label.position.copy(_pos).add(_down.clone().multiplyScalar(labelOffset));
+      p.label.position.copy(_pos).add(this._labelTmp.copy(_down).multiplyScalar(labelOffset));
 
       // Earth occlusion — hide planet when behind Earth's disc from camera POV
       if (this.camera) {
@@ -641,6 +647,18 @@ export class SunLight {
       if (this._moonLabel) this._moonLabel.visible = false;
       if (this._planets) for (const p of this._planets) { if (p.label) p.label.visible = false; }
     }
+  }
+
+  /**
+   * Whether the sun disc is currently visible (not geometrically occluded by
+   * Earth from the camera POV). Updated every frame by _updateSunDisc().
+   * Drives SceneManager's bloom pass gate (P2): every scene source that can
+   * cross the 2.5 bloom threshold is sun-driven (limb Mie, ocean glint), so
+   * bloom is pure cost while the sun is behind the planet.
+   * @returns {boolean}
+   */
+  isSunVisible() {
+    return !!(this.sunSprite && this.sunSprite.visible);
   }
 
   // ==========================================================================

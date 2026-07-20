@@ -3723,7 +3723,12 @@ export const Constants = {
     // PR 6 / P3.11: GPU runtime probe — EXT_disjoint_timer_query_webgl2.
     // If the median GPU frame time over the probe window exceeds this (ms),
     // request a tier downshift. Only runs once at startup.
-    GPU_PROBE_THRESHOLD_MS: 14,
+    // P3 (2026-07-20): 14 → 7. Calibrated against the pre-Sprint-3 23.65 ms
+    // warm-GPU baseline; post-fix HIGH runs ~3.5-4 ms so 14 could never trigger
+    // and runtime adapt was effectively disabled (GPU_PROFILING_REPORT §10.4).
+    // 7 ms ≈ 2× the post-fix HIGH baseline: fires only on genuinely struggling
+    // devices, still far under the 16.7 ms frame budget.
+    GPU_PROBE_THRESHOLD_MS: 7,
     // Number of frames in the probe sampling window.
     GPU_PROBE_FRAMES: 60,
     // Warmup/settle guard (ms). Adaptive tier changes — both the one-shot GPU

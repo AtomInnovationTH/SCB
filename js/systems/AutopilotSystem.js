@@ -118,6 +118,27 @@ export class AutopilotSystem {
     this._tmpV2 = new THREE.Vector3();
     this._tmpV3 = new THREE.Vector3();
 
+    // P3 (2026-07-20): hot-path temps for update()/_resolveTargetState/
+    // _rotateTowardWorld — previously ~12 allocations per engaged frame.
+    // Each is written+consumed within one call; _goalPosV/_headingTargetV are
+    // OWNED persistent vectors so we never .copy() into a foreign object
+    // (engageCluster/heading paths can assign foreign refs to _headingTarget).
+    this._relP = new THREE.Vector3();
+    this._relVv = new THREE.Vector3();
+    this._noseWorld = new THREE.Vector3();
+    this._goalDir = new THREE.Vector3();
+    this._relVmps = new THREE.Vector3();
+    this._velCtrlErr = new THREE.Vector3();
+    this._dvCmd = new THREE.Vector3();
+    this._goalPosV = new THREE.Vector3();
+    this._headingTargetV = new THREE.Vector3();
+    this._PdV = new THREE.Vector3();
+    this._VdV = new THREE.Vector3();
+    this._rotRadial = new THREE.Vector3();
+    this._rotEye = new THREE.Vector3();
+    this._rotMat = new THREE.Matrix4();
+    this._rotQuat = new THREE.Quaternion();
+
     // Sprint 2 / PR A — scratch outputs for [`orbitToSceneCartesianInto`](js/entities/OrbitalMechanics.js:1).
     // Used by [`_resolveTargetState`](js/systems/AutopilotSystem.js:802) to avoid
     // allocating a fresh `{position:{x,y,z},velocity:{x,y,z}}` literal on every AP tick.
@@ -455,8 +476,8 @@ export class AutopilotSystem {
 
     // --- Goal pose: P_m* = P_d − v̂_d · D_trail ---
     const Pm_goal = this._tmpV2.copy(Pd).addScaledVector(vHat, -Dtrail_scene);
-    this._goalPos = Pm_goal.clone();
-    this._headingTarget = Pd.clone(); // keep legacy HUD field populated
+    this._goalPos = this._goalPosV.copy(Pm_goal);
+    this._headingTarget = this._headingTargetV.copy(Pd); // keep legacy HUD field populated
 
     // --- Errors ---
     const Pm = this._player.getPosition();                 // scene units
@@ -464,15 +485,15 @@ export class AutopilotSystem {
     const Vm = this._tmpV3.set(pvel.x, pvel.y, pvel.z);    // km/s
 
     // relP = Pm_goal − Pm (scene units)
-    const relP = new THREE.Vector3().subVectors(Pm_goal, Pm);
+    const relP = this._relP.subVectors(Pm_goal, Pm);
     // relV = Vd − Vm (km/s)
-    const relV = new THREE.Vector3().subVectors(Vd, Vm);
+    const relV = this._relVv.subVectors(Vd, Vm);
 
     const posErrM = relP.length() / M;                     // metres
     const velErrMps = relV.length() * 1000;                // m/s
 
     // Angle error: ship nose (+Z local) vs. v̂_d
-    const noseWorld = new THREE.Vector3(0, 0, 1).applyQuaternion(this._player.quaternion);
+    const noseWorld = this._noseWorld.set(0, 0, 1).applyQuaternion(this._player.quaternion);
     const dotNose = Math.max(-1, Math.min(1, noseWorld.dot(vHat)));
     const angleRad = Math.acos(dotNose);
 
@@ -499,15 +520,15 @@ export class AutopilotSystem {
     const vStar = Math.min(AP.V_CAP, vStarBrake);          // m/s
 
     // goalDir in world frame (scene-unit direction == world-direction since M is scalar)
-    const goalDir = new THREE.Vector3();
+    const goalDir = this._goalDir.set(0, 0, 0);
     if (relP.lengthSq() > 1e-20) goalDir.copy(relP).normalize();
     // relV in m/s (relV is Vd − Vm in km/s → ×1000)
-    const relV_mps = relV.clone().multiplyScalar(1000);
+    const relV_mps = this._relVmps.copy(relV).multiplyScalar(1000);
     // Velocity-control error: v*·goalDir + relV_mps. This is the impulse
     // direction that drives the player toward the desired closing profile.
-    const velCtrlErr = goalDir.clone().multiplyScalar(vStar).add(relV_mps);
+    const velCtrlErr = this._velCtrlErr.copy(goalDir).multiplyScalar(vStar).add(relV_mps);
 
-    const dvCmd = new THREE.Vector3(0, 0, 0);
+    const dvCmd = this._dvCmd.set(0, 0, 0);
 
     switch (this._phase) {
       case PHASE.RENDEZVOUS_FAR: {
@@ -829,8 +850,8 @@ export class AutopilotSystem {
       );
       const p = this._tmpAPCartPos, v = this._tmpAPCartVel;
       return {
-        Pd: new THREE.Vector3(p.x, p.y, p.z),
-        Vd: new THREE.Vector3(v.x, v.y, v.z),
+        Pd: this._PdV.set(p.x, p.y, p.z),
+        Vd: this._VdV.set(v.x, v.y, v.z),
         mode: 'TARGET',
       };
     }
@@ -848,7 +869,7 @@ export class AutopilotSystem {
         // Sprint 2 / PR A — scratch-output variant.
         orbitToSceneCartesianInto(t.orbit, this._tmpAPCartPos, this._tmpAPCartVel);
         const v = this._tmpAPCartVel;
-        Vd = new THREE.Vector3(v.x, v.y, v.z);
+        Vd = this._VdV.set(v.x, v.y, v.z);
       }
     } else if (heading.mode === 'TRAWL' &&
                this._trawlManager && this._trawlManager.activeCluster) {
@@ -862,7 +883,7 @@ export class AutopilotSystem {
         this._cachedDebrisResult.orbit, this._tmpAPCartPos, this._tmpAPCartVel
       );
       const v = this._tmpAPCartVel;
-      Vd = new THREE.Vector3(v.x, v.y, v.z);
+      Vd = this._VdV.set(v.x, v.y, v.z);
     } else if (heading.mode === 'PROGRADE') {
       return null; // prograde coast — no rendezvous geometry
     }
@@ -870,7 +891,7 @@ export class AutopilotSystem {
     if (!Vd) {
       // Fallback: use player's own velocity direction
       const pv = this._player.getVelocity();
-      Vd = new THREE.Vector3(pv.x, pv.y, pv.z);
+      Vd = this._VdV.set(pv.x, pv.y, pv.z);
     }
 
     return { Pd: heading.position, Vd, mode: heading.mode };
@@ -879,7 +900,9 @@ export class AutopilotSystem {
   /** @private Prograde fallback: face velocity, no thrust. */
   _updateProgradeOnly(dt) {
     const pv = this._player.getVelocity();
-    const dir = new THREE.Vector3(pv.x, pv.y, pv.z);
+    // P3: _tmpV1 is free here — the main control law (vHat) only runs when
+    // _resolveTargetState() returns non-null, which routes AWAY from this path.
+    const dir = this._tmpV1.set(pv.x, pv.y, pv.z);
     if (dir.lengthSq() > 1e-20) {
       dir.normalize();
       this._rotateTowardWorld(dir, dt);
@@ -1041,14 +1064,12 @@ export class AutopilotSystem {
    * @private
    */
   _rotateTowardWorld(worldDir, dt) {
-    const pos = this._player.getPosition();
-    const radial = pos.clone().normalize();
+    const pos = this._player.getPosition(); // getPosition() clones — API boundary
+    const radial = this._rotRadial.copy(pos).normalize();
 
     // lookAt: eye=pos+dir, target=pos → +Z = worldDir (model +Z = forward).
-    const mat = new THREE.Matrix4();
-    const lookEye = pos.clone().add(worldDir);
-    mat.lookAt(lookEye, pos, radial);
-    const targetQuat = new THREE.Quaternion().setFromRotationMatrix(mat);
+    this._rotMat.lookAt(this._rotEye.copy(pos).add(worldDir), pos, radial);
+    const targetQuat = this._rotQuat.setFromRotationMatrix(this._rotMat);
 
     const angle = this._player.quaternion.angleTo(targetQuat);
     if (angle < AP_ROT_DEADZONE) return;

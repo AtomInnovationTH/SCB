@@ -295,6 +295,9 @@ export class CameraSystem {
     this._tmpVecA = new THREE.Vector3();
     this._tmpVecB = new THREE.Vector3();
     this._tmpVecC = new THREE.Vector3();
+    this._tmpVecD = new THREE.Vector3();   // P3: _computeTargetLock toTarget / ceremony up
+    this._radialDir = new THREE.Vector3(); // P3: per-frame radial-up (same reuse
+                                           // pattern as _lastVelDir above)
 
     // V-7: Launch ceremony state
     this._launchCeremony = {
@@ -563,7 +566,7 @@ export class CameraSystem {
 
     this._lastVelDir.set(playerVel.x, playerVel.y, playerVel.z).normalize();
     const velDir = this._lastVelDir;
-    const radialDir = playerPos.clone().normalize();
+    const radialDir = this._radialDir.copy(playerPos).normalize();
     this._lastPlayerPos.copy(playerPos); // Cache for setView()
 
     // V-7: Launch ceremony override — bypass normal view computation
@@ -575,7 +578,7 @@ export class CameraSystem {
         // Mother's radialDir diverges as tether extends — same fix as ARM_PILOT (line 489).
         const c = this._launchCeremony;
         const ceremonyUp = (c.phase >= 2 && c.arm?.position)
-          ? c.arm.position.clone().normalize()
+          ? this._tmpVecD.copy(c.arm.position).normalize()
           : radialDir;
         this.camera.up.copy(ceremonyUp);
         this.camera.lookAt(result.look);
@@ -688,7 +691,7 @@ export class CameraSystem {
         if (targetUp && targetUp.lengthSq() > 1e-12) {
           this.camera.up.copy(targetUp);
         } else {
-          this.camera.up.copy(this.armPilot.arm.position.clone().normalize());
+          this.camera.up.copy(this.armPilot.arm.position).normalize();
         }
       } else {
         this.camera.up.copy(radialDir);
@@ -833,8 +836,8 @@ export class CameraSystem {
   _computeFirstPerson(dt, playerPos, velDir, radialDir, playerQuat) {
     // Camera mounted at front of satellite, looking along velocity
     const pos = playerPos.clone()
-      .add(velDir.clone().multiplyScalar(this.firstPerson.offsetForward))
-      .add(radialDir.clone().multiplyScalar(this.firstPerson.offsetUp));
+      .addScaledVector(velDir, this.firstPerson.offsetForward)
+      .addScaledVector(radialDir, this.firstPerson.offsetUp);
 
     // Head-bob during thrust
     if (this._thrustMagnitude > 0.01) {
@@ -843,17 +846,17 @@ export class CameraSystem {
       const bobY = Math.cos(this.firstPerson.headBobPhase * 0.7) * this.firstPerson.headBobAmplitude * 0.5 * this._thrustMagnitude;
       const lateral = this._tmpVecA.crossVectors(velDir, radialDir).normalize();
       pos.add(lateral.multiplyScalar(bobX));
-      pos.add(radialDir.clone().multiplyScalar(bobY));
+      pos.addScaledVector(radialDir, bobY);
     }
 
     // Look direction: along velocity with optional free-look
-    let look = playerPos.clone().add(velDir.clone().multiplyScalar(0.001));
+    let look = playerPos.clone().addScaledVector(velDir, 0.001);
 
     if (this.firstPerson.freeLookActive) {
       // Apply yaw/pitch offsets to look direction
       const lateral = this._tmpVecA.crossVectors(velDir, radialDir).normalize();
       look.add(lateral.multiplyScalar(this.firstPerson.freeLookYaw * 0.001));
-      look.add(radialDir.clone().multiplyScalar(this.firstPerson.freeLookPitch * 0.001));
+      look.addScaledVector(radialDir, this.firstPerson.freeLookPitch * 0.001);
     }
 
     return { pos, look };
@@ -870,12 +873,12 @@ export class CameraSystem {
 
     // Position: behind (opposite velocity) and above (along radial out)
     const pos = playerPos.clone()
-      .sub(velDir.clone().multiplyScalar(this.chase.offsetBehind * s))
-      .add(radialDir.clone().multiplyScalar(this.chase.offsetAbove * s));
+      .addScaledVector(velDir, -this.chase.offsetBehind * s)
+      .addScaledVector(radialDir, this.chase.offsetAbove * s);
 
     // Look target: at the player with a tiny forward offset (keeps spacecraft centered)
     const look = playerPos.clone()
-      .add(velDir.clone().multiplyScalar(this.chase.lookAhead));
+      .addScaledVector(velDir, this.chase.lookAhead);
 
     // 2026-06-03: Folded-in TARGET_LOCK behaviour. When a debris target is
     // locked (set each frame during APPROACH) and reasonably close, gently bias
@@ -893,7 +896,7 @@ export class CameraSystem {
         // Pull back proportional to separation (capped) so the target does not
         // crowd the edge of frame as it nears.
         const pullback = Math.min(sep * 0.4, this.chase.offsetBehind * 1.5);
-        pos.sub(velDir.clone().multiplyScalar(pullback));
+        pos.addScaledVector(velDir, -pullback);
       }
     }
 
@@ -1117,13 +1120,13 @@ export class CameraSystem {
     }
 
     // Midpoint between player and target
-    const midpoint = playerPos.clone().add(target).multiplyScalar(0.5);
+    const midpoint = this._tmpVecC.copy(playerPos).add(target).multiplyScalar(0.5);
 
     // Distance between player and target
     const separation = playerPos.distanceTo(target);
 
     // Camera should be offset perpendicular to the player-target line
-    const toTarget = target.clone().sub(playerPos).normalize();
+    const toTarget = this._tmpVecD.subVectors(target, playerPos).normalize();
     const perpendicular = this._tmpVecA.crossVectors(toTarget, radialDir).normalize();
     if (perpendicular.lengthSq() < 0.001) {
       // Fallback if parallel
@@ -1138,8 +1141,8 @@ export class CameraSystem {
 
     // Position camera to the side and above, looking at midpoint
     const pos = midpoint.clone()
-      .add(perpendicular.clone().multiplyScalar(camDist * 0.5))
-      .add(radialDir.clone().multiplyScalar(camDist * 0.3));
+      .addScaledVector(perpendicular, camDist * 0.5)
+      .addScaledVector(radialDir, camDist * 0.3);
 
     // Look at a point weighted 85% satellite + 15% target
     const look = playerPos.clone().lerp(target, 0.15);
@@ -1461,7 +1464,7 @@ export class CameraSystem {
 
     // Orthogonalize localUp against fwd so "behind" and "above" offsets
     // stay perpendicular — matches _computeArmPilot pattern (~line 1376).
-    localUp.sub(fwd.clone().multiplyScalar(fwd.dot(localUp))).normalize();
+    localUp.addScaledVector(fwd, -fwd.dot(localUp)).normalize();
 
     switch (c.phase) {
 
@@ -1541,15 +1544,15 @@ export class CameraSystem {
         // Daughter mesh (~0.3m) fills ~8.5% of screen height at 45° FOV — clearly visible.
         // Several meters of tether are also in frame at this distance.
         const behindDaughter = armPos.clone()
-          .sub(fwd.clone().multiplyScalar(0.00004))    // 4m behind
-          .add(localUp.clone().multiplyScalar(0.000013)); // 1.3m above
+          .addScaledVector(fwd, -0.00004)    // 4m behind
+          .addScaledVector(localUp, 0.000013); // 1.3m above
 
         pos = new THREE.Vector3().lerpVectors(chasePos, behindDaughter, ease);
 
         // Look ahead (same 0.001 = 100m pattern as _computeArmPilot)
         // — keeps daughter in lower frame, tether trailing behind visible.
-        const lookAhead = armPos.clone().add(fwd.clone().multiplyScalar(0.001));
-        look = new THREE.Vector3().lerpVectors(armPos.clone(), lookAhead, ease);
+        const lookAhead = armPos.clone().addScaledVector(fwd, 0.001);
+        look = new THREE.Vector3().lerpVectors(armPos, lookAhead, ease);
         break;
       }
 
@@ -1564,9 +1567,9 @@ export class CameraSystem {
         // Start: behind-daughter (same geometry as Phase 2 endpoint).
         // Offsets are already boosted at Phase 2→3 transition (4m/1.3m).
         const startPos = armPos.clone()
-          .sub(fwd.clone().multiplyScalar(this.armPilot.offsetBehind))
-          .add(localUp.clone().multiplyScalar(this.armPilot.offsetAbove));
-        const startLook = armPos.clone().add(fwd.clone().multiplyScalar(0.001));
+          .addScaledVector(fwd, -this.armPilot.offsetBehind)
+          .addScaledVector(localUp, this.armPilot.offsetAbove);
+        const startLook = armPos.clone().addScaledVector(fwd, 0.001);
 
         pos = new THREE.Vector3().lerpVectors(startPos, apResult.pos, ease);
         look = new THREE.Vector3().lerpVectors(startLook, apResult.look, ease);
@@ -2263,13 +2266,13 @@ export class CameraSystem {
       const upDot = lockedUp.dot(armToDebris);
       const localUp = Math.abs(upDot) > 0.999
         ? lockedUp.clone()
-        : lockedUp.clone().sub(armToDebris.clone().multiplyScalar(upDot)).normalize();
+        : lockedUp.clone().addScaledVector(armToDebris, -upDot).normalize();
 
       // Camera position: 5 m behind daughter (away from debris), 1.6 m above
       // along the daughter's local up.  Same offsets as the rest of ARM_PILOT.
       const pos = armPos.clone()
-        .sub(armToDebris.clone().multiplyScalar(this.armPilot.offsetBehind))
-        .add(localUp.clone().multiplyScalar(this.armPilot.offsetAbove));
+        .addScaledVector(armToDebris, -this.armPilot.offsetBehind)
+        .addScaledVector(localUp, this.armPilot.offsetAbove);
 
       // CRITICAL: look-target uses LIVE debris position every frame, NO LERP.
       // A 0.5s-time-constant lerp on _skLookTarget that previously lived here
@@ -2355,12 +2358,12 @@ export class CameraSystem {
     // drifts steadily closer to the daughter.
     const rawUp = armPos.clone().normalize();
     const upDot = rawUp.dot(forwardDir);
-    const localUp = rawUp.clone().sub(forwardDir.clone().multiplyScalar(upDot)).normalize();
+    const localUp = rawUp.clone().addScaledVector(forwardDir, -upDot).normalize();
 
     // Position camera behind the arm (constant distance = √(behind² + above²))
     const pos = armPos.clone()
-      .sub(forwardDir.clone().multiplyScalar(this.armPilot.offsetBehind))
-      .add(localUp.clone().multiplyScalar(this.armPilot.offsetAbove));
+      .addScaledVector(forwardDir, -this.armPilot.offsetBehind)
+      .addScaledVector(localUp, this.armPilot.offsetAbove);
 
     // Look at the actual debris position when a target exists, so the debris
     // stays locked in screen space as the daughter circles or approaches it.
@@ -2372,7 +2375,7 @@ export class CameraSystem {
     // No-target fallback: keep the original "100 m ahead of arm" behavior.
     const look = lookTarget !== null
       ? lookTarget
-      : armPos.clone().add(forwardDir.clone().multiplyScalar(0.001));
+      : armPos.clone().addScaledVector(forwardDir, 0.001);
 
     return { pos, look };
   }

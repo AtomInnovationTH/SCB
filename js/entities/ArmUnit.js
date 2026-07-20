@@ -28,6 +28,23 @@ const M = 0.00001;
 /** World up axis (reused for the HOLDING_CATCH lateral-bias cross product). */
 const _WORLD_UP = new THREE.Vector3(0, 1, 0);
 
+// P3 (2026-07-20): hot-path temps — update()/state handlers allocated ~10-15
+// Vector3+Matrix4+Quaternion per frame PER ARM. Module-level is safe: JS is
+// single-threaded, ArmManager updates arms sequentially, and every temp is
+// written and fully consumed within one method call (nothing crosses calls).
+const _orientRadial = new THREE.Vector3();
+const _orientEye    = new THREE.Vector3();
+const _orientMat    = new THREE.Matrix4();
+const _orientQuat   = new THREE.Quaternion();
+const _tetherDir    = new THREE.Vector3();
+const _driftTDelta  = new THREE.Vector3();
+const _driftPDelta  = new THREE.Vector3();
+const _driftRaw     = new THREE.Vector3();
+const _relVel       = new THREE.Vector3();
+const _goalDir      = new THREE.Vector3();
+const _posCmd       = new THREE.Vector3();
+const _dockOffTmp   = new THREE.Vector3();
+
 // ──────────────────────────────────────────────────────────────────────────
 const S = Constants.ARM_STATES;
 
@@ -1321,9 +1338,9 @@ export class ArmUnit {
     up = new THREE.Vector3().crossVectors(right, forward).normalize(); // re-orthogonalize
 
     // Apply thrust in world space
-    this.velocity.add(right.clone().multiplyScalar(direction.x * dv));
-    this.velocity.add(up.clone().multiplyScalar(direction.y * dv));
-    this.velocity.add(forward.clone().multiplyScalar(direction.z * dv));
+    this.velocity.addScaledVector(right, direction.x * dv);
+    this.velocity.addScaledVector(up, direction.y * dv);
+    this.velocity.addScaledVector(forward, direction.z * dv);
   }
 
   // ══════════════════════════════════════════════════════════════════
@@ -2275,11 +2292,10 @@ export class ArmUnit {
 
       if (headingDir) {
         // Use Earth-radial as "up" (same convention as mother satellite)
-        const radial = this.position.clone().normalize();
-        const mat = new THREE.Matrix4();
-        const eye = this.position.clone().add(headingDir);
-        mat.lookAt(eye, this.position, radial);
-        const targetQuat = new THREE.Quaternion().setFromRotationMatrix(mat);
+        const radial = _orientRadial.copy(this.position).normalize();
+        const eye = _orientEye.copy(this.position).add(headingDir);
+        _orientMat.lookAt(eye, this.position, radial);
+        const targetQuat = _orientQuat.setFromRotationMatrix(_orientMat);
         // V-8 fix: faster slerp for target-tracking states so daughter visually
         // snaps to face debris promptly. 0.05 was ~1s to converge — too slow for
         // APPROACH/STATION_KEEP where the daughter should clearly face the debris.
@@ -2492,9 +2508,12 @@ export class ArmUnit {
   /** DOCKED: follow parent at dock offset */
   _updateDocked(dt, parentPos, parentQuat) {
     // Cache parent quat so externally-invoked deploy*() methods can derive
-    // a world-space launch direction (§4.6 fix).
-    this._lastParentQuat = parentQuat ? parentQuat.clone() : null;
-    const offset = this.dockOffset.clone();
+    // a world-space launch direction (§4.6 fix). P3: owned persistent quat —
+    // consumers (_worldDockDirection) read it at deploy time, never store it.
+    this._lastParentQuat = parentQuat
+      ? (this._lastParentQuatV || (this._lastParentQuatV = new THREE.Quaternion())).copy(parentQuat)
+      : null;
+    const offset = _dockOffTmp.copy(this.dockOffset);
     if (parentQuat) offset.applyQuaternion(parentQuat);
     this.position.copy(parentPos).add(offset);
     // POLISH FIX: do NOT unconditionally hide the daughter mesh on DOCKED.
@@ -2612,14 +2631,14 @@ export class ArmUnit {
       // Autopilot (proportional controller, pings, thruster audio) is
       // intentionally skipped to suppress approach beep + thruster hum
       // that were reported as annoying in ARM_PILOT mode.
-      this.position.add(this.velocity.clone().multiplyScalar(dt));
+      this.position.addScaledVector(this.velocity, dt);
       this.tetherLength = this.position.distanceTo(parentPos) / M;
       if (!this.isDetached && this.tetherLength > this.config.tetherMax) {
-        const dir = this.position.clone().sub(parentPos).normalize();
+        const dir = _tetherDir.subVectors(this.position, parentPos).normalize();
         this.position.copy(parentPos).add(dir.multiplyScalar(this.config.tetherMax * M));
         const velAlongTether = this.velocity.dot(dir);
         if (velAlongTether > 0) {
-          this.velocity.sub(dir.clone().multiplyScalar(velAlongTether));
+          this.velocity.addScaledVector(dir, -velAlongTether);
         }
       }
       // ── STILL CHECK APPROACH THRESHOLD even in manual mode ──
@@ -2629,7 +2648,7 @@ export class ArmUnit {
       if (this.target) {
         const _tPos = this._getTargetScenePos();
         if (_tPos) {
-          const _dist = _tPos.clone().sub(this.position).length();
+          const _dist = _tPos.distanceTo(this.position);
           const _dSz = (this.target.sizeMeter) || 1;
           const _so = Math.max(Constants.STATION_KEEP.DEFAULT_STANDOFF,
             Math.min(Constants.STATION_KEEP.MAX_STANDOFF,
@@ -2690,10 +2709,10 @@ export class ArmUnit {
     // Orbital drift velocity: how the target moves relative to parent frame
     // Raw finite-difference is noisy (catastrophic cancellation when tDelta ≈ pDelta
     // for co-orbiting objects). EMA smoothing eliminates frame-to-frame jitter.
-    let rawDriftVel = new THREE.Vector3(0, 0, 0);
+    let rawDriftVel = _driftRaw.set(0, 0, 0);
     if (this._prevTargetScenePos && this._prevParentPos && parentPos && dt > 0) {
-      const tDelta = targetPos.clone().sub(this._prevTargetScenePos);
-      const pDelta = parentPos.clone().sub(this._prevParentPos);
+      const tDelta = _driftTDelta.subVectors(targetPos, this._prevTargetScenePos);
+      const pDelta = _driftPDelta.subVectors(parentPos, this._prevParentPos);
       rawDriftVel = tDelta.sub(pDelta).divideScalar(dt);
     }
     if (!this._prevTargetScenePos) this._prevTargetScenePos = targetPos.clone();
@@ -2706,7 +2725,7 @@ export class ArmUnit {
     const driftVelT = this._smoothDriftVel;
 
     // Velocity error: when relV → 0, arm matches target orbital velocity
-    const relVT = driftVelT.clone().sub(this.velocity);
+    const relVT = _relVel.subVectors(driftVelT, this.velocity);
 
     // Quadratic braking: v*(r) = min(V_CAP, √(2·A_BRAKE·posErr))
     // V_CAP = actual launch speed so the arm COASTS, never accelerates beyond spring speed
@@ -2717,7 +2736,7 @@ export class ArmUnit {
     const vStarT = vStarMT * M; // scene units/s
 
     // Velocity control error = goalDir × v* + relV
-    const goalDirT = toTarget.clone().normalize();
+    const goalDirT = _goalDir.copy(toTarget).normalize();
     const velCtrlErrT = goalDirT.multiplyScalar(vStarT).add(relVT);
 
     // Commanded impulse = KP × velCtrlErr, clamped by MAX_ACCEL × gameDt
@@ -2729,7 +2748,7 @@ export class ArmUnit {
 
     // Apply thrust impulse (NOT lerp — direct impulse like mother autopilot)
     this.velocity.add(dvCmdT);
-    this.position.add(this.velocity.clone().multiplyScalar(dt));
+    this.position.addScaledVector(this.velocity, dt);
 
     // Close enough for fine approach — threshold must be >= standoff distance
     // so APPROACH controller has room to decelerate before reaching standoff.
@@ -2754,15 +2773,15 @@ export class ArmUnit {
       // Manual mode: coast with current velocity. Autopilot (proportional
       // controller, approach pings, thruster audio) intentionally skipped
       // to suppress annoying beep/hum in ARM_PILOT mode.
-      this.position.add(this.velocity.clone().multiplyScalar(dt));
+      this.position.addScaledVector(this.velocity, dt);
       if (parentPos) {
         this.tetherLength = this.position.distanceTo(parentPos) / M;
         if (!this.isDetached && this.tetherLength > this.config.tetherMax) {
-          const dir = this.position.clone().sub(parentPos).normalize();
+          const dir = _tetherDir.subVectors(this.position, parentPos).normalize();
           this.position.copy(parentPos).add(dir.multiplyScalar(this.config.tetherMax * M));
           const velAlongTether = this.velocity.dot(dir);
           if (velAlongTether > 0) {
-            this.velocity.sub(dir.clone().multiplyScalar(velAlongTether));
+            this.velocity.addScaledVector(dir, -velAlongTether);
           }
         }
       }
@@ -2776,8 +2795,7 @@ export class ArmUnit {
       if (this.target) {
         const _tPos = this._getTargetScenePos();
         if (_tPos) {
-          const _toTgt = _tPos.clone().sub(this.position);
-          const _distM = _toTgt.length() / M;
+          const _distM = _tPos.distanceTo(this.position) / M;
           const _dSz = (this.target.sizeMeter) || 1;
           const _so = Math.max(Constants.STATION_KEEP.DEFAULT_STANDOFF,
             Math.min(Constants.STATION_KEEP.MAX_STANDOFF,
@@ -2840,11 +2858,11 @@ export class ArmUnit {
     const distMetres = dist / M;
 
     // Orbital drift velocity — EMA-smoothed (shared with TRANSIT via _smoothDriftVel)
-    let rawDriftVelA = new THREE.Vector3(0, 0, 0);
+    let rawDriftVelA = _driftRaw.set(0, 0, 0);
     const targetScenePos = this._getTargetScenePos();
     if (targetScenePos && this._prevTargetScenePos && this._prevParentPos && parentPos && dt > 0) {
-      const tDelta = targetScenePos.clone().sub(this._prevTargetScenePos);
-      const pDelta = parentPos.clone().sub(this._prevParentPos);
+      const tDelta = _driftTDelta.subVectors(targetScenePos, this._prevTargetScenePos);
+      const pDelta = _driftPDelta.subVectors(parentPos, this._prevParentPos);
       rawDriftVelA = tDelta.sub(pDelta).divideScalar(dt);
     }
     if (targetScenePos) {
@@ -2859,7 +2877,7 @@ export class ArmUnit {
     const driftVelA = this._smoothDriftVel;
 
     // Velocity error
-    const relVA = driftVelA.clone().sub(this.velocity);
+    const relVA = _relVel.subVectors(driftVelA, this.velocity);
 
     // Signed excess distance: positive = outside standoff, negative = inside
     // Inside standoff → restoring spring pushes arm back OUT (fixes no-retreat bug)
@@ -2871,10 +2889,9 @@ export class ArmUnit {
 
     // Velocity control error + commanded impulse
     // goalDir toward target when outside standoff; AWAY from target when inside
-    const goalDirA = toTarget.clone().normalize();
-    const posCmd = signedExcess >= 0
-      ? goalDirA.clone().multiplyScalar(vStarA)     // approach: drive toward target
-      : goalDirA.clone().multiplyScalar(-vStarA);    // retreat: drive away from target
+    const goalDirA = _goalDir.copy(toTarget).normalize();
+    // approach: drive toward target (+vStarA); retreat: drive away (−vStarA)
+    const posCmd = _posCmd.copy(goalDirA).multiplyScalar(signedExcess >= 0 ? vStarA : -vStarA);
     const velCtrlErrA = posCmd.add(relVA);
     const dvCmdA = velCtrlErrA.multiplyScalar(DAP_A.KP_VEL);
     const gameDtA = dt * Constants.TIME_SCALE_GAMEPLAY;
@@ -2883,14 +2900,13 @@ export class ArmUnit {
     if (dvMagA > maxDvA && dvMagA > 1e-18) dvCmdA.multiplyScalar(maxDvA / dvMagA);
 
     this.velocity.add(dvCmdA);
-    this.position.add(this.velocity.clone().multiplyScalar(dt));
+    this.position.addScaledVector(this.velocity, dt);
 
     // ── Epic 8: Check for STATION_KEEP entry before netting ──
     if (this.target && !this._manualMode) {
       // Relative velocity to TARGET using EMA-smoothed drift (not raw — avoids noise).
       // At steady state, arm.velocity ≈ smoothDriftVel, so relVelToTarget → 0.
-      const relVelToTarget = this.velocity.clone().sub(driftVelA);
-      const relVel = relVelToTarget.length() / M;
+      const relVel = this.velocity.distanceTo(driftVelA) / M;
 
       // SK entry gate — distance + velocity thresholds.  Both are constants
       // so they can be tuned without code changes (debug session 2026-05-09:
@@ -4582,7 +4598,7 @@ export class ArmUnit {
     toParent.normalize();
     const haulSpeed = this.config.haulSpeed * (this._beaconSpeedScale || 1);
     this.velocity.lerp(toParent.multiplyScalar(haulSpeed), 0.05);
-    this.position.add(this.velocity.clone().multiplyScalar(dt));
+    this.position.addScaledVector(this.velocity, dt);
 
     // Note: captured debris uses InstancedMesh — its visual is handled by
     // DebrisField (and marked not-alive after capture). No mesh to move.
@@ -5002,7 +5018,7 @@ export class ArmUnit {
     toParent.normalize();
     const returnSpeed = this.config.approachSpeed * (this._beaconSpeedScale || 1);
     this.velocity.lerp(toParent.multiplyScalar(returnSpeed), 0.08);
-    this.position.add(this.velocity.clone().multiplyScalar(dt));
+    this.position.addScaledVector(this.velocity, dt);
 
     this.tetherLength = this.position.distanceTo(parentPos) / M;
 
@@ -5017,7 +5033,7 @@ export class ArmUnit {
 
   /** DOCKING: final alignment to dock offset (3s) */
   _updateDocking(dt, parentPos, parentQuat) {
-    const dockWorldPos = this.dockOffset.clone();
+    const dockWorldPos = _dockOffTmp.copy(this.dockOffset);
     if (parentQuat) dockWorldPos.applyQuaternion(parentQuat);
     dockWorldPos.add(parentPos);
 
@@ -5100,9 +5116,11 @@ export class ArmUnit {
    */
   _updateHoldingCatch(dt, parentPos, parentQuat) {
     // Clamp the daughter to her strut-tip dock (mirrors _updateDocked).
-    this._lastParentQuat = parentQuat ? parentQuat.clone() : null;
+    this._lastParentQuat = parentQuat
+      ? (this._lastParentQuatV || (this._lastParentQuatV = new THREE.Quaternion())).copy(parentQuat)
+      : null;
     if (parentPos) {
-      const offset = this.dockOffset.clone();
+      const offset = _dockOffTmp.copy(this.dockOffset);
       if (parentQuat) offset.applyQuaternion(parentQuat);
       this.position.copy(parentPos).add(offset);
     }
@@ -5411,11 +5429,11 @@ export class ArmUnit {
     // The old cross-product assumed an equatorial orbit and pointed the wrong
     // way for inclined tracks (e.g. the 51.6° ISS-like orbits the sim uses).
     // (normalize() of a zero vector returns zero in THREE, so no NaN risk.)
-    const retrograde = this.velocity.clone().normalize().negate();
+    const retrograde = _goalDir.copy(this.velocity).normalize().negate();
     // ST-8.3.4: Use metal-specific thrust calculation
     const thrustDV = (this._computeMetalThrust() / (this.config.mass + (this.capturedDebris?.mass || 0))) * dt;
     this.velocity.add(retrograde.multiplyScalar(thrustDV));
-    this.position.add(this.velocity.clone().multiplyScalar(dt));
+    this.position.addScaledVector(this.velocity, dt);
 
     // Visual: mesh visible, thruster plume active
     this.mesh.visible = true;
@@ -5556,7 +5574,7 @@ export class ArmUnit {
    * line and tension are handled by _updateTether as for any deployed daughter.
    */
   _updateAdrift(dt) {
-    this.position.add(this.velocity.clone().multiplyScalar(dt * 0.5));
+    this.position.addScaledVector(this.velocity, dt * 0.5);
     this.velocity.multiplyScalar(0.99); // slow residual drift; the tether holds her
     this.mesh.visible = true;
   }
@@ -5583,7 +5601,7 @@ export class ArmUnit {
 
   /** EXPENDED: no fuel, drifting */
   _updateExpended(dt) {
-    this.position.add(this.velocity.clone().multiplyScalar(dt * 0.5));
+    this.position.addScaledVector(this.velocity, dt * 0.5);
     this.velocity.multiplyScalar(0.999);
     this.mesh.visible = true;
     // A severed tether shows no line back to the mother (the cable parted).
