@@ -1747,6 +1747,10 @@ function gameLoop(timestamp) {
   const sunDir = sunLight.update(dt, player.getPosition());
   earth.setSunDirection(sunDir);
   earth.update(dt);
+  // P2: bloom gate — sun-driven sources are the only ones that can cross the
+  // bloom threshold (see SceneManager.setBloomEnabled). Skips the whole
+  // UnrealBloom mip chain on night-side/eclipse frames.
+  sceneManager.setBloomEnabled(sunLight.isSunVisible());
   // B2: feed the renderer's CAPPED pixel ratio (HIGH tier caps at 1.5), not
   // window.devicePixelRatio (=2.0), so gl_PointSize maps to the true physical
   // render-target and stars aren't ~33% oversized.

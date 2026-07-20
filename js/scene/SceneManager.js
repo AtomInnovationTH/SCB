@@ -267,7 +267,7 @@ export class SceneManager {
     // (/2) to quarter-physical (/4). Post-C.1+C.2 measurement (HIGH/IN-MISSION):
     // bloom pass cost 1.74 ms (50% of the 3.44 ms baseline) at half-physical.
     // Bloom is a low-frequency, threshold-gated effect (only the sun disc, a few
-    // engine sprites, and rare overbright pixels exceed threshold=1.5) — its
+    // engine sprites, and rare overbright pixels exceed the threshold) — its
     // visible silhouette is fundamentally blurry, so quartering the mip-chain
     // base resolution is visually indistinguishable at orbital altitudes but
     // drops the Gaussian-blur fragment count by 4× across the entire 5-mip chain.
@@ -286,13 +286,18 @@ export class SceneManager {
         this._bloomRes,
         0.08,  // strength — subtle bloom for sun disc + engine glow sparkle
         0.4,   // radius
-        // threshold — only the very brightest (sun disc, engine plumes) bloom.
-        // Raised from 1.5 so the directional sun's specular highlight on the
-        // spacecraft hull/panels no longer blooms into a glint/glow as the ship
-        // rolls. `?bloomThreshold=N` overrides it (P3 roll-glint A/B).
+        // threshold — P2 re-aim (2026-07-20): 4.0 → 2.5. Full HDR-source audit
+        // found NOTHING reaches 4.0 (max static emissive 0.6; fireEmissive 1.5;
+        // LED flash 2.0; ROSA 0.82; plumes/laser/sun sprite LDR ≤ 0.95;
+        // atmosphere Mie limb ≈ 2.7 luma; ocean glint ≈ 2.2–2.7) — the pass
+        // produced literally ZERO output while burning its full mip chain
+        // (~1.35 ms, GPU_PROFILING_REPORT §10.3). At 2.5 the two brightest real
+        // sources (sun-facing limb, peak glint sparkle) bloom subtly — the cost
+        // buys visuals again — while staying above the hull-glint range that
+        // motivated the raise from 1.5. `?bloomThreshold=N` still overrides.
         (profileFlags.bloomThresholdOverride !== null)
           ? profileFlags.bloomThresholdOverride
-          : 4.0
+          : 2.5
       );
       this.composer.addPass(bloomPass);
       this.bloomPass = bloomPass;
@@ -310,6 +315,42 @@ export class SceneManager {
     const outputPass = new OutputPass();
     this.composer.addPass(outputPass);
     this.outputPass = outputPass;
+
+    // P1 (2026-07-20): dither the final 8-bit quantization. The HDR chain is
+    // HalfFloat end-to-end and the atmosphere shell already self-dithers, but
+    // the OutputPass ACES→sRGB conversion re-quantizes the whole frame — dark
+    // ocean/night gradients could re-band. three's OutputShader has no
+    // dithering hook, so inject the core chunks (<common> first: it supplies
+    // rand(); tonemapping_pars self-guards its saturate #ifndef).
+    outputPass.material.fragmentShader = outputPass.material.fragmentShader
+      .replace('#include <tonemapping_pars_fragment>',
+        '#include <common>\n\t\t#include <dithering_pars_fragment>\n\t\t#include <tonemapping_pars_fragment>')
+      .replace(/\}\s*$/, '\t#include <dithering_fragment>\n}');
+    outputPass.material.defines = outputPass.material.defines || {};
+    outputPass.material.defines.DITHERING = '';
+    outputPass.material.needsUpdate = true;
+    // Guard against silent no-ops: if a future three upgrade reshapes
+    // OutputShader, the string replaces above fail QUIETLY (dithering() gets
+    // defined but never called — no compile error, just no dithering).
+    if (!outputPass.material.fragmentShader.includes('dithering_fragment')) {
+      console.warn('[SceneManager] OutputPass dither injection failed — OutputShader changed shape (three upgrade?)');
+    }
+    // ...but the construction-time define alone is NOT enough: OutputPass.render()
+    // rebuilds material.defines from scratch (`defines = {}`) whenever
+    // renderer.outputColorSpace/toneMapping differ from its cached values — which
+    // is ALWAYS true on the first frame (both cached as null) and again on any
+    // later tone-map/color-space change. That wipe silently drops DITHERING, and
+    // the text guard above can't detect it (the #include directive stays in the
+    // source string). Re-assert the define AFTER three's rebuild so the feature
+    // actually engages — one extra recompile the frame after a wipe, stable after.
+    const _origOutputRender = outputPass.render.bind(outputPass);
+    outputPass.render = (...args) => {
+      _origOutputRender(...args);
+      if (outputPass.material.defines.DITHERING === undefined) {
+        outputPass.material.defines.DITHERING = '';
+        outputPass.material.needsUpdate = true;
+      }
+    };
 
     // 4. Anti-aliasing: SMAA (HIGH) → FXAA (MEDIUM) → none (LOW + MSAA only).
     // Sprint 3 GPU profiling — `?disableSMAA=1` forces *both* SMAA and FXAA off
@@ -682,6 +723,19 @@ export class SceneManager {
    */
   enableBloom(_object3D) {
     // No-op: bloom is now threshold-based (emissive > 0.85 blooms automatically)
+  }
+
+  /**
+   * P2 (2026-07-20): enable/disable the bloom pass for this frame. Called from
+   * the game loop with SunLight.isSunVisible() — when the sun is occluded by
+   * Earth nothing in the scene can cross the 2.5 threshold, so the whole
+   * UnrealBloom mip chain (~1.35 ms measured) is skipped via Pass.enabled.
+   * No-op when the tier has no bloom pass. Safe across applyTier() rebuilds
+   * (the new pass defaults to enabled=true and is re-gated next frame).
+   * @param {boolean} enabled
+   */
+  setBloomEnabled(enabled) {
+    if (this.bloomPass) this.bloomPass.enabled = enabled !== false;
   }
 
   /**

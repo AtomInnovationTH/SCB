@@ -117,13 +117,28 @@ float lambertTerm(float NdotL) {
 }
 `;
 
+// ============================================================================
+// SHARED CLOUD COVERAGE RAMP (GLSL)
+// ============================================================================
+// The alpha window that turns a grayscale cloud texel into coverage. Interpolated
+// into BOTH the cloud layer (its rendered alpha, cloudFragmentShader) and the
+// surface shader (its cast shadow, earthSurfaceFragmentShader) so the two can
+// never drift out of registration — retune the window HERE once and the rendered
+// clouds and their cast shadows follow together (P1, 2026-07-20). Dial wider
+// (e.g. 0.36→0.86) or narrower to taste; both consumers track it.
+const cloudCoverageRampGLSL = /* glsl */ `
+#define CLOUD_COVERAGE_LO 0.42
+#define CLOUD_COVERAGE_HI 0.80
+`;
+
 const earthSurfaceFragmentShader = /* glsl */ `
 #include <logdepthbuf_pars_fragment>
 
 uniform sampler2D uDayTexture;
 uniform sampler2D uNightTexture;
+uniform sampler2D uCloudTexture;   // shared with the cloud layer — read for surface shadows
+uniform float uCloudRotation;      // cloudMesh.rotation.y, radians (CPU-fed per frame)
 uniform vec3 uSunDirection;
-uniform float uTime;
 
 varying vec3 vNormal;
 varying vec3 vPosition;
@@ -131,6 +146,7 @@ varying vec2 vUv;
 varying vec3 vWorldPosition;
 ${simplexNoiseGLSL}
 ${lambertTermGLSL}
+${cloudCoverageRampGLSL}
 // Sprint 2 / PR C. LOW_DETAIL define skips the 7-octave noise stack entirely.
 // At LOW tier the base 8k/16k AVIF texture is detailed enough on its own;
 // the procedural noise was an ~7-octave/fragment burn that ate 2–4 ms on iGPUs.
@@ -158,11 +174,16 @@ float detailTiling(vec3 p) {
 
 void main() {
   vec3 normal = normalize(vNormal);
-  vec3 pos = normalize(vPosition);
+
+  // UV derivatives hoisted OUTSIDE all branches (P1, 2026-07-20): the night and
+  // cloud-shadow fetches below are gated by divergent conditions; implicit-LOD
+  // sampling inside such branches is undefined (mip derivatives). textureGrad
+  // with these keeps mip/aniso selection well-defined in the boundary quads.
+  vec2 uvDx = dFdx(vUv);
+  vec2 uvDy = dFdy(vUv);
 
   // Sample textures
   vec3 dayColor = texture2D(uDayTexture, vUv).rgb;
-  vec3 nightColor = texture2D(uNightTexture, vUv).rgb;
 
   // BOLD GRADE (visible pass) — WATER-AWARE (2026-07-19). Applied pre-shading /
   // pre-ACES so it reads across the whole disc regardless of view distance:
@@ -191,11 +212,6 @@ void main() {
     float gLuma = dot(dayColor, vec3(0.299, 0.587, 0.114));
     dayColor = mix(vec3(gLuma), dayColor, satAmt);
   }
-
-  // Boost night lights. They're dim in the source texture
-  nightColor *= 2.5;
-  // Warm tint for city lights
-  nightColor *= vec3(1.0, 0.85, 0.6);
 
   // === LIGHTING ===
   float NdotL = dot(normal, uSunDirection);
@@ -291,15 +307,58 @@ void main() {
     * 1.8 * oceanMask * dayFactor;
   vec3 oceanGlint = oceanGlintTerm * vec3(1.0, 0.95, 0.8);
 
+  // === CLOUD SHADOWS (P1 visual, 2026-07-20) ===
+  // Project the cloud layer's coverage straight down onto the surface and
+  // attenuate the direct-sun terms — the orbital-photo depth cue the two-layer
+  // stack was missing. Straight-down is near-exact: 10 km cloud altitude means
+  // the true sun-projected displacement is ≤ ~2 texels of the 8k map. +Y cloud
+  // rotation advances a texel's world longitude by +rot (three SphereGeometry),
+  // so the same world point samples the cloud map at u − rot/2π. Shares the
+  // CLOUD_COVERAGE_LO→HI ramp (cloudCoverageRampGLSL) with the cloud shader so
+  // shadow silhouettes match the rendered clouds. LOW_DETAIL compiles the fetch out (iGPU tier); NO_CLOUD_SHADOWS
+  // keeps the ?disableClouds cost-isolation A/B pure; the night hemisphere
+  // skips it (litDay ≈ 0 there anyway).
+  float cloudShade = 1.0;
+#if !defined(LOW_DETAIL) && !defined(NO_CLOUD_SHADOWS)
+  if (dayFactor > 0.0) {
+    vec2 cloudUv = vec2(fract(vUv.x - uCloudRotation * 0.15915494), vUv.y);
+    // Gradients ×3 (P2): biases the fetch ~+1.6 mips — a soft, physically
+    // plausible penumbra instead of a cloud-sharp cutout, and a slightly
+    // cheaper fetch. Registration (cloudUv) untouched.
+    float cloudCover = textureGrad(uCloudTexture, cloudUv, uvDx * 3.0, uvDy * 3.0).r;
+    cloudShade = 1.0 - smoothstep(CLOUD_COVERAGE_LO, CLOUD_COVERAGE_HI, cloudCover) * 0.35;
+  }
+#endif
+
   // === NIGHT SIDE ===
   float nightFactor = smoothstep(0.05, -0.15, NdotL);
+
+  // City lights (P1 perf, 2026-07-20): the 16k/8k night texture is fetched ONLY
+  // where nightFactor > 0 — it previously ran on every lit fragment and
+  // contributed exactly zero there (nightFactor == 0 across the day side).
+  vec3 nightColor = vec3(0.0);
+  if (nightFactor > 0.0) {
+    nightColor = textureGrad(uNightTexture, vUv, uvDx, uvDy).rgb;
+    nightColor *= 2.5;                  // dim in the source texture
+    nightColor *= vec3(1.0, 0.85, 0.6); // warm city-light tint
+  }
+
+  // === TERMINATOR WARMTH (P2 visual, 2026-07-20) ===
+  // Low-sun ground gets warm direct light — the orange band along the dawn/dusk
+  // line. The atmosphere (sunset band) and clouds (terminator scatter) already
+  // warm here; the surface was the one layer crossing the terminator neutrally.
+  // Pure ALU (~5 ops) on values already in scope; zero fetches. Band spans
+  // NdotL ∈ (-0.05, 0.30), peaking near 0.08 (~85° sun zenith). Dial: 0.55
+  // peak mix strength (range 0.4–0.7), tint (1.0, 0.62, 0.38).
+  float sunsetZone = smoothstep(-0.05, 0.08, NdotL) * smoothstep(0.30, 0.08, NdotL);
+  vec3 sunTint = mix(vec3(1.0), vec3(1.0, 0.62, 0.38), sunsetZone * 0.55);
 
   // === COMPOSE ===
   // A2: Lambert modeling term (shared lambertTerm() helper). dayFactor alone
   // saturated to 1.0 across the disc (flat albedo = "map on a ball"); this adds a
   // real luminance gradient from the sub-solar point toward the terminator.
   float lambert = lambertTerm(NdotL);
-  vec3 litDay = dayColor * max(0.02, dayFactor * lambert) + oceanSpec + oceanGlint;
+  vec3 litDay = (dayColor * sunTint * max(0.02, dayFactor * lambert) + oceanSpec + oceanGlint) * cloudShade;
 
   // Earthshine: faint cool-blue ambient reveals terrain shapes on the dark side
   float nightAmbient = 0.03;
@@ -357,13 +416,13 @@ const cloudFragmentShader = /* glsl */ `
 
 uniform sampler2D uCloudTexture;
 uniform vec3 uSunDirection;
-uniform float uTime;
 
 varying vec3 vNormal;
 varying vec3 vPosition;
 varying vec2 vUv;
 varying vec3 vWorldPosition;
 ${lambertTermGLSL}
+${cloudCoverageRampGLSL}
 void main() {
   vec3 normal = normalize(vNormal);
 
@@ -373,13 +432,21 @@ void main() {
 
   // Shape: crisp cloud edges via a TIGHT alpha ramp + high opacity (bold pass,
   // 2026-07-19). The 8k cloud map is bilinear-magnified (~5 km/texel), which
-  // smears the day/clear boundary into haze. A narrow (0.42→0.80) contrast window
-  // sharpens that transition across the WHOLE disc — the altitude-independent
-  // replacement for the reverted near-field C5 erosion. Higher max opacity (0.92)
-  // reads as denser, more solid cloud masses instead of washed-out translucency.
-  // Trade-off: the tight low edge drops the faintest wisps (<0.42). Dial the
-  // window wider (e.g. 0.36→0.86) or opacity down if it looks hard/aliased.
-  cloudAlpha = smoothstep(0.42, 0.80, cloudAlpha);
+  // smears the day/clear boundary into haze. A narrow contrast window
+  // (CLOUD_COVERAGE_LO→HI, shared with the surface shadow ramp) sharpens that
+  // transition across the WHOLE disc — the altitude-independent replacement for
+  // the reverted near-field C5 erosion. Higher max opacity (0.92) reads as
+  // denser, more solid cloud masses instead of washed-out translucency.
+  // Trade-off: the tight low edge drops the faintest wisps. Retune the window in
+  // cloudCoverageRampGLSL (both clouds + their cast shadows follow) or opacity
+  // down here if it looks hard/aliased.
+  cloudAlpha = smoothstep(CLOUD_COVERAGE_LO, CLOUD_COVERAGE_HI, cloudAlpha);
+  // P2 (2026-07-20): clear-sky early-out. smoothstep is exactly 0.0 at/below
+  // CLOUD_COVERAGE_LO, so ~half the sphere's fragments (clear sky) previously
+  // ran the full lighting path plus a blend op that contributed nothing.
+  // Bit-exact zero visual delta; skips ALU + ROP/blend (the overdraw-heaviest
+  // layer). Same pattern as the atmosphere's lum < 0.002 discard.
+  if (cloudAlpha <= 0.0) discard;
   cloudAlpha *= 0.92; // Max opacity
 
   // Lighting
@@ -722,7 +789,6 @@ export class Earth {
     this.group.name = 'EarthGroup';
 
     this.sunDirection = new THREE.Vector3(1, 0.3, 0.5).normalize();
-    this.elapsedTime = 0;
 
     // Sprint 2 / PR C — LOW_DETAIL fragment-shader branch flag.
     // Toggled by [`Earth.setLowDetail`](js/scene/Earth.js:1), wired through
@@ -751,7 +817,10 @@ export class Earth {
     // Load textures at detected quality tier
     this.dayTexture = loadTexture(`textures/earth_day${texSuffix}.jpg`, texAniso);
     this.nightTexture = loadTexture(`textures/earth_night${texSuffix}.jpg`, texAniso);
-    this.cloudTexture = loadTexture(`textures/earth_clouds${cloudSuffix}.jpg`, texAniso);
+    // Clouds are low-frequency; anisotropy cost concentrates at grazing angles
+    // (the limb) where clouds are softest — 4x is indistinguishable from the tier
+    // aniso and trims bandwidth on the overdraw-heaviest (transparent) layer.
+    this.cloudTexture = loadTexture(`textures/earth_clouds${cloudSuffix}.jpg`, Math.min(texAniso, 4));
 
     this._createSurface();
     // Sprint 3 GPU profiling — `?disableClouds=1` skips the 8K-textured
@@ -787,13 +856,20 @@ export class Earth {
       uniforms: {
         uDayTexture: { value: this.dayTexture },
         uNightTexture: { value: this.nightTexture },
+        uCloudTexture: { value: this.cloudTexture },
+        uCloudRotation: { value: 0 },
         uSunDirection: { value: this.sunDirection },
-        uTime: { value: 0 },
       },
       // Sprint 2 / PR C — `defines` controls the LOW_DETAIL branch. Mutated
       // at runtime by [`Earth.setLowDetail`](js/scene/Earth.js:1) when the
-      // quality tier changes.
-      defines: this._useLowDetail ? { LOW_DETAIL: 1 } : {},
+      // quality tier changes. NO_CLOUD_SHADOWS compiles the surface cloud-shadow
+      // fetch out when clouds are profiling-disabled so the ?disableClouds
+      // cost-isolation A/B stays pure. setLowDetail() only touches the LOW_DETAIL
+      // key on this object, so NO_CLOUD_SHADOWS survives tier flips.
+      defines: {
+        ...(this._useLowDetail ? { LOW_DETAIL: 1 } : {}),
+        ...(profileFlags.disableClouds ? { NO_CLOUD_SHADOWS: 1 } : {}),
+      },
     });
 
     this.surfaceMesh = new THREE.Mesh(geometry, this.surfaceMaterial);
@@ -870,7 +946,6 @@ export class Earth {
       uniforms: {
         uCloudTexture: { value: this.cloudTexture },
         uSunDirection: { value: this.sunDirection },
-        uTime: { value: 0 },
       },
       transparent: true,
       depthWrite: false,
@@ -937,26 +1012,23 @@ export class Earth {
   }
 
   /**
-   * Per-frame update: animate clouds, advance time uniform
+   * Per-frame update: animate clouds, sync analytic uniforms.
    * @param {number} dt — delta time (seconds)
    */
   update(dt) {
-    this.elapsedTime += dt;
-
-    // Advance time uniforms
-    this.surfaceMaterial.uniforms.uTime.value = this.elapsedTime;
-    // Sprint 3 GPU profiling — guarded for `?disableClouds=1` / `?disableAtmosphere=1`.
-    if (this.cloudMaterial) {
-      this.cloudMaterial.uniforms.uTime.value = this.elapsedTime;
-    }
+    // Sprint 3 GPU profiling — atmosphere may be null when `?disableAtmosphere=1`.
     if (this.atmosphereMaterial) {
       // Keep the analytic shader's Earth-center uniform in sync (group may move).
       this.atmosphereMesh.getWorldPosition(this.atmosphereMaterial.uniforms.uCenter.value);
     }
 
-    // Sidereal cloud rotation — visible drift over a game hour (ST-5.3)
+    // Sidereal cloud rotation — visible drift over a game hour (ST-5.3).
+    // Null-safe for `?disableClouds=1`. Feed the live rotation to the surface
+    // shader so its straight-down cloud-shadow projection stays registered to
+    // the drifting cloud layer (P1, 2026-07-20).
     if (this.cloudMesh) {
       this.cloudMesh.rotation.y += Constants.EARTH.CLOUD_ROTATION_RATE * dt;
+      this.surfaceMaterial.uniforms.uCloudRotation.value = this.cloudMesh.rotation.y;
     }
   }
 
