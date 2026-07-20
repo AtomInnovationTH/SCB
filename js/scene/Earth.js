@@ -105,11 +105,15 @@ float snoise(vec3 v) {
 // template interpolation so their day-side shading curves cannot drift. Adds a
 // luminance gradient from the sub-solar point toward the terminator; the 0.25
 // floor keeps the terminator from crushing to black (earthshine lifts the dark
-// side further below). pow(..., 0.6) softens the falloff so the lit disc doesn't
-// read as a hard-shaded ball.
+// side further below).
+// B4 (2026-07-20): pow(NdotL, 0.6) → 0.8. The 0.6 curve was so flat it erased the
+// sub-solar → terminator gradient, so a full-phase disc read as a flat bright ball
+// (a compounding cause of the "milky/washed" look). 0.8 restores a visible falloff
+// while staying softer than a literal Lambert (1.0); the 0.25 floor is unchanged so
+// the terminator band and cloud shading near the terminator do not crush.
 const lambertTermGLSL = /* glsl */ `
 float lambertTerm(float NdotL) {
-  return mix(0.25, 1.0, pow(clamp(NdotL, 0.0, 1.0), 0.6));
+  return mix(0.25, 1.0, pow(clamp(NdotL, 0.0, 1.0), 0.8));
 }
 `;
 
@@ -169,10 +173,18 @@ void main() {
   // amplified 8-bit banding in the smooth sea gradient. Fix: detect blue-dominant
   // water from the raw texel and fade the grade toward flat over it — land and
   // clouds keep the full punch, water stays soft and natural.
+  //
+  // B4.1 (2026-07-20): water metrics hoisted OUT of this block and computed once
+  // from the RAW texel, shared with the ocean specular mask below. Previously the
+  // spec mask read POST-grade dayColor, so any grade retune (e.g. plan Task 4
+  // contrast/sat punch) silently shifted the sheen's spatial extent. Raw-texel
+  // inputs make the two water detectors drift-proof; each keeps its own tuned
+  // window (grade fade: any water incl. shallow; spec mask: dark open water only).
+  float rawSum  = dayColor.r + dayColor.g + dayColor.b;
+  float blueDom = dayColor.b / max(rawSum, 0.001);      // ~0.33 neutral, >0.42 water
+  float rawDark = 1.0 - rawSum / 3.0;
+  float waterW  = smoothstep(0.36, 0.44, blueDom);      // 1 over ocean, 0 over land
   {
-    float gsum    = dayColor.r + dayColor.g + dayColor.b;
-    float blueDom = dayColor.b / max(gsum, 0.001);      // ~0.33 neutral, >0.42 water
-    float waterW  = smoothstep(0.36, 0.44, blueDom);    // 1 over ocean, 0 over land
     float contrastAmt = mix(1.15, 1.02, waterW);        // full on land, near-flat on water
     float satAmt      = mix(1.25, 1.08, waterW);
     dayColor = max(vec3(0.0), (dayColor - 0.18) * contrastAmt + 0.18);
@@ -191,15 +203,20 @@ void main() {
   // Terminator: smooth transition over ~6 degrees
   float dayFactor = smoothstep(-0.1, 0.15, NdotL);
 
-  // Specular for oceans. Ratio-based detection for robust ocean masking
+  // Specular for oceans. Ratio-based detection for robust ocean masking.
+  // B4 (2026-07-20): pow 64 → 160 tightens the broad ocean sheen lobe. With A1
+  // fixed, this pow-64 lobe was un-masked and spread a wide white patch centred on
+  // the sun mirror point (the "moving milky disc"); ocean albedo is ~0.05 so even
+  // a small linear lift reads as wash. 160 keeps a soft sheen but shrinks its area.
   vec3 viewDir = normalize(cameraPosition - vWorldPosition);
   vec3 halfVec = normalize(uSunDirection + viewDir);
-  float specular = pow(max(dot(normal, halfVec), 0.0), 64.0);
+  float specular = pow(max(dot(normal, halfVec), 0.0), 160.0);
 
-  // Ocean detection: blue channel dominates, overall dark (moved up for detail calc)
-  float blueRatio = dayColor.b / max(dayColor.r + dayColor.g + dayColor.b, 0.001);
-  float darkness = 1.0 - (dayColor.r + dayColor.g + dayColor.b) / 3.0;
-  float oceanMask = smoothstep(0.35, 0.55, blueRatio) * smoothstep(0.3, 0.7, darkness);
+  // Ocean detection: blue-dominant AND overall dark — raw-texel metrics from above
+  // (B4.1: decoupled from the grade so grade retunes can't shift the spec mask).
+  // Also feeds the E1 glint and the terrain-detail damping; their extents shift
+  // marginally (tighter) with the raw-texel input — benign.
+  float oceanMask = smoothstep(0.35, 0.55, blueDom) * smoothstep(0.3, 0.7, rawDark);
 
   // Sprint 2 / PR C. Terrain detail stack is gated by LOW_DETAIL.
   // viewDist is still needed below for other effects, so it's defined either way.
@@ -240,14 +257,32 @@ void main() {
   }
 #endif
 
-  // Fresnel-enhanced ocean reflection. Grazing angles more reflective
-  float oceanFresnel = pow(1.0 - max(dot(normal, viewDir), 0.0), 3.0);
-  float oceanSpec = oceanMask * (specular + oceanFresnel * 0.3) * dayFactor * 0.5;
+  // Fresnel-enhanced ocean reflection. Grazing angles more reflective.
+  // B4.1 (2026-07-20) restructure:
+  //  * pow lobe: weight 0.25 (was 0.5), scaled by the incident sun cosine
+  //    (clamp(NdotL)) so sheen intensity physically tracks sun elevation —
+  //    dayFactor saturates by NdotL=0.15 (~8.6°) and used to leave the sheen
+  //    angle-independent from there to noon. NOT lambertTerm(): its 0.25 floor
+  //    would keep a quarter of the sheen at the terminator. Warm-tinted
+  //    (softer than the E1 glint) so residual sheen reads as sunlight, not milk.
+  //  * grazing fresnel RECONTOURED (user decision, headless A/B-measured): at
+  //    exponent 3 this term was only "limb-only" at nadir — on oblique views
+  //    (menu, horizon-ward gameplay) (1-NdotV)^3 painted a broad pale band over
+  //    30-150% of the dark ocean albedo, and pixel diffs proved that band WAS
+  //    the oblique milky wash (the lobe/lambert/exposure retunes measured
+  //    <2/255 there). Exponent 3→5 + weight 0.15→0.30 keeps the bright thin
+  //    rim at the true limb (crossover NdotV≈0.3) while collapsing the broad
+  //    band to ~18-50% of its old lift.
+  float oceanFresnel = pow(1.0 - max(dot(normal, viewDir), 0.0), 5.0);
+  float sheenLobe = specular * 0.25 * clamp(NdotL, 0.0, 1.0);
+  vec3 oceanSpec = oceanMask * dayFactor
+    * (sheenLobe * vec3(1.0, 0.97, 0.90) + vec3(oceanFresnel * 0.30));
 
   // E1 — Tight ocean sun-glint (the iconic orbital-photo cue). A very sharp
   // (pow 300) highlight where the sun mirrors off the water gives a moving
-  // glitter point distinct from the broad pow-64 sheen. Warm-tinted like real
-  // sun-on-water.
+  // glitter point distinct from the broad sheen lobe above (B4: pow 160).
+  // Left untouched by the B4 milky-disc retune — this tight sparkle is working
+  // as designed. Warm-tinted like real sun-on-water.
   // B3: with A1 fixed, halfVec now tracks the true sun mirror point (it was
   // misplaced pre-fix). Strength 1.2 → 1.8 starting point (plan allows up to 2.0);
   // pow-300 keeps it tight — may bloom slightly past threshold 4.0 (acceptable
@@ -264,7 +299,7 @@ void main() {
   // saturated to 1.0 across the disc (flat albedo = "map on a ball"); this adds a
   // real luminance gradient from the sub-solar point toward the terminator.
   float lambert = lambertTerm(NdotL);
-  vec3 litDay = dayColor * max(0.02, dayFactor * lambert) + vec3(oceanSpec) + oceanGlint;
+  vec3 litDay = dayColor * max(0.02, dayFactor * lambert) + oceanSpec + oceanGlint;
 
   // Earthshine: faint cool-blue ambient reveals terrain shapes on the dark side
   float nightAmbient = 0.03;

@@ -662,21 +662,31 @@ export class SunLight {
     // Gentle auto-exposure (now live — the gameplay OutputPass finally applies it).
     // T2.1 retune under ACES: away 1.05→1.12, sun-facing 0.8→0.85, eclipse 1.3→1.25.
     // The filmic shoulder means values >1 are usable without washing out.
+    // B4 (2026-07-20): away-from-sun 1.12 → 1.05. The boost fired precisely when
+    // looking away from the sun — i.e. when the day-side disc is fully lit — and
+    // scaled up the whole washed frame. 1.05 keeps a slight lift for metallic
+    // ship/debris readability while removing most of the full-phase disc wash.
+    // (Sun-facing 0.85 and eclipse 1.25 unchanged.)
     let targetExposure;
     if (this._inShadow) {
       targetExposure = 1.25;  // Boost when in Earth's shadow — simulate eye adaptation
     } else if (sunDot > 0.85) {
       targetExposure = 0.85;  // Looking directly at sun — slight dim
     } else if (sunDot < 0.3) {
-      targetExposure = 1.12;  // Looking away from sun — subtle boost without washing out metallic surfaces
+      targetExposure = 1.05;  // Looking away from sun — subtle boost without washing out metallic surfaces
     } else {
       // Smooth interpolation in the transition zone [0.3, 0.85]
       const t = (sunDot - 0.3) / (0.85 - 0.3);
-      targetExposure = THREE.MathUtils.lerp(1.12, 0.85, t);
+      targetExposure = THREE.MathUtils.lerp(1.05, 0.85, t);
     }
 
+    // B4.1 (2026-07-20): adaptation speed is dt-normalized. The fixed 0.02
+    // per-frame lerp made eye adaptation frame-rate dependent (120 Hz adapted
+    // 2× faster than 60 Hz). Exponential decay, k = 1.2/s, matches the old
+    // feel at 60 fps exactly and is identical at any refresh rate.
+    const adapt = 1 - Math.exp(-1.2 * dt);
     this._currentExposure = THREE.MathUtils.lerp(
-      this._currentExposure, targetExposure, 0.02
+      this._currentExposure, targetExposure, adapt
     );
     this.renderer.toneMappingExposure = this._currentExposure;
   }
