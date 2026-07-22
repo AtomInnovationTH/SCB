@@ -220,6 +220,18 @@ export class PlayerSatellite extends THREE.Group {
     this._rcsPuffIndex = 0;       // Round-robin pool index
     this._rcsPuffLastFire = {};   // Per-nozzle cooldown timestamps (seconds)
 
+    // Eclipse cache (Phase 3 §4): _updateSolarPower caches the shadow flag here
+    // every frame so puff/plume dimming can read it. Defaults false so headless/
+    // Node builds (which never call update, and where _updateSolarPower
+    // early-returns on null sunDirection) treat the craft as sunlit.
+    this._inShadow = false;
+
+    // §2 sun-scatter cache: camera world pos (set from main.js each frame) and
+    // the current sun direction (cached in update). Both null → scatter = 1
+    // (headless / null-sun frames stay scatter-free).
+    this._camWorldPos = null;
+    this._sunDirWorld = null;
+
     // Detail-LOD cull set (Phase 6): inert mm-scale hardware hidden when the
     // camera is far. Populated by _collectDetailMeshes() after _buildModel;
     // toggled only on threshold crossing by setCameraDistance().
@@ -469,9 +481,11 @@ export class PlayerSatellite extends THREE.Group {
       emissive: 0x334466, emissiveIntensity: 0.3,
       side: THREE.BackSide,
     });
-    // RCS attitude thruster nozzles — standard aerospace gray
+    // RCS attitude thruster nozzles — standard aerospace gray. DoubleSide so the
+    // interior bell wall renders when looking straight down the mouth (otherwise
+    // the back faces cull and you see through the wall past the inset liner).
     this._matRCS = new THREE.MeshStandardMaterial({
-      color: 0x555566, metalness: 0.65, roughness: 0.45,
+      color: 0x555566, metalness: 0.65, roughness: 0.45, side: THREE.DoubleSide,
     });
 
     // --- 1. MAIN BUS — Config G cylindrical barrel (Epic 10 V-1) ---
@@ -1824,97 +1838,100 @@ export class PlayerSatellite extends THREE.Group {
       this._thrusterGlowTargets.set(thruster, { glow, plume, outerGlow, innerLiner, intensity: 0 });
     });
 
-    // ── RCS: 4 doghouse quad pods (visual-detail audit Task 1, revised) ──────
-    // WAS: 8 bare 10-seg nozzles at the 45° azimuth family, z=±0.6 m — dead-
-    // centre of the fore/aft PV rows (|z| 0.48–0.72 m) and INSIDE the weaver
-    // stow pockets' angular span (60°/240° ± 18.6°), so nozzles hovered over
-    // carved pockets and sat on panel corners (user-reported eyesore).
-    // NOW: 4 doghouse QUAD pods (2 azimuth columns × 2 z-stations) in the clean
-    // gap CENTRED BETWEEN THE ROSA WINGS (wings at 0°/180°). Each pod carries 3
-    // nozzles — RADIAL (±Y), AXIAL (±Z), TANGENTIAL (±X) — so all six local
-    // translation directions still show a plume (a real Draco-style cluster),
-    // with the exhausts distributed across the 4 pods for full ±X/±Y/±Z cover.
+    // ── RCS: 4 doghouse quad pods (visual-detail audit Task 1, rev 2) ────────
+    // WAS (rev 1): 4 quad pods on a "plinth" — but the plinth was a broken
+    // CylinderGeometry (outer/inner radii fed into radiusTop/radiusBottom → a
+    // single tapered OPEN sheet, no thickness, no side walls). With a 5 mm
+    // standoff the whole housing hovered 15–19 mm off the 0.40 m hull with a
+    // visible under-gap (user-reported "floating above mother").
+    // NOW (rev 2): NO plinth. The doghouse housing is SEMI-RECESSED — its base
+    // is buried RCS_BURY (10 mm) BELOW the hull surface, so its flat bottom edges
+    // land inside the hull and no under-gap can ever show from any angle (the
+    // box sides cross the MLI at a steep angle → no log-depth z-fight; that only
+    // bites near-parallel coincident surfaces). This is how real doghouses read:
+    // the MLI blanket closes out around a base that emerges from the hull.
+    // Each pod (2 azimuth columns × 2 z-stations) carries 3 nozzles — RADIAL
+    // (±Y), AXIAL (±Z), TANGENTIAL (canted ±X) — so all six local translation
+    // directions show a plume (a real Draco-style cluster), with 2 nozzles per
+    // ±X/±Y/±Z axis → single-nozzle-failure redundancy.
     // Placement (all guarded from BUILT geometry by test-RcsPlacement.js — never
     // trust these comments):
-    //   • azimuth = CENTRE of the clear window between the weaver pocket (60/240°
-    //     ±~18.6°) and the spinner pocket (120/300° ±~9.3°) → ~94.65°/274.65°,
-    //     ~8° clear of both pockets AND ~85° clear of the ROSA rolls. Computed
-    //     from _stowGrooveHalfWidths so it tracks the daughter body sizes.
+    //   • azimuth = 90°/274.65°... SNAPPED to 90°/270° so each pod is centred on
+    //     the body PV "gap" cells at those azimuths (the nearest solar panels on
+    //     the mother body). ~11° clear of the weaver pocket and ~21° of the
+    //     spinner pocket. Kept ORTHOGONAL to the ROSA wings (0°/180°) so
+    //     radial/axial exhaust never washes the blankets.
     //   • |z| = 0.795 m, housing 0.10 m long → pod z-span 0.745–0.845 m: 2.5 cm
-    //     clear of the PV end rows (edge 0.72) and of the collar cluster
-    //     (rings z 0.869–0.933, r ≤ 0.415 — the corner-mounted axial bells pass
-    //     OUTSIDE them at r ≥ 0.457).
+    //     clear of the PV end rows (edge 0.72) and of the collar cluster.
+    //   • TANGENTIAL bells are canted RCS_TANG_CANT (18°) radially outward: an
+    //     uncanted ±X plume runs parallel just ~0.44 m above the wing plane and a
+    //     ~25° cold-gas boundary would clip the outer wing beyond ~0.8 m; the
+    //     cant lifts the boundary clear (≥0.24 m above the plane at the wing tip)
+    //     while still firing at cos18°=0.95 intensity for ±X demand.
     const RCS_POD_Z    = 0.795;   // m — pod centre |z| station (fore/aft)
     const RCS_POD_W    = 0.12;    // m — tangential width
     const RCS_POD_L    = 0.10;    // m — axial length
     const RCS_POD_H    = 0.055;   // m — radial height
-    const RCS_STANDOFF = 0.005;   // m — housing base proud of hull (≥4 mm rule)
-    const RCS_BELL_LEN = 0.08;    // m — nozzle bell length (throat 0.02 → exit 0.035)
-    // Mounting base (plinth) — the fix for the "floating pod" look. A flat box
-    // tangent to the 0.4 m-radius barrel leaves a visible wedge gap under its
-    // ends (the 0.12 m tangential span drops ~4.5 mm at the centre over the
-    // curvature). The plinth is a short ARC SEGMENT whose underside conforms to
-    // the hull, sized wider than the housing so the housing reads as bolted on.
-    // The overhang is TANGENTIAL-only (a flange look); axially the plinth stays
-    // INSIDE the housing's z-footprint so it never reaches toward the PV band
-    // (|z|min must clear 0.72 m) or the collar rings (|z|max must clear 0.885 m).
-    const RCS_BASE_PAD_T = 0.018;  // m — tangential overhang (flange look, each side)
-    const RCS_BASE_H     = 0.012;  // m — plinth radial thickness
+    const RCS_BURY     = 0.010;   // m — housing base buried below hull (no under-gap, no plinth)
+    const RCS_BELL_LEN = 0.06;    // m — nozzle bell length (throat 0.015 → exit 0.025), ~25% smaller
+    const RCS_TANG_CANT = 18 * Math.PI / 180;  // rad — tangential bell outward cant (ROSA plume clearance)
 
-    // Liner inset: FEEP uses 0.92 on a 0.06 m exit (gap 4.8 mm); the RCS exit is
-    // 0.035 m so 0.92 would leave only 2.8 mm (< 4 mm log-depth minimum). 0.88
-    // gives 0.035·0.12 = 4.2 mm — deterministic tie-pass at the bell mouth.
-    const RCS_LINER_INSET = 0.88;
+    // Liner inset: the RCS exit is now 0.025 m, so 0.88 would leave only 3.0 mm
+    // (< 4 mm log-depth minimum). 0.82 gives 0.025·0.18 = 4.5 mm — deterministic
+    // tie-pass at the bell mouth.
+    const RCS_LINER_INSET = 0.82;
 
-    // Azimuth columns: the centre of each strut-free window. Neighbours of the
-    // +Y gap are the weaver pocket @60° and the spinner pocket @120°; of the −Y
-    // gap, weaver @240° and spinner @300°. Derive the half-widths from the SSOT
-    // so the pods re-centre if daughter body sizes ever change.
+    // Azimuth columns: SNAPPED to 90°/270° so each pod is centred on the body PV
+    // "gap" cells that sit at exactly 90°/270° (see the fore/aft gap-cell loop in
+    // _buildMainBus) — the nearest solar panels on the mother body. 90° stays
+    // ~11° clear of the weaver pocket (edge ~78.6°) and ~21° clear of the spinner
+    // pocket (edge ~110.7°), so the groove-clearance guard (≥2°) still holds. The
+    // SSOT half-widths are still read below only for the clearance context; the
+    // column azimuth itself is now panel-anchored, not window-centred.
     const barrelR_m = Constants.OCTOPUS_V5?.COLLAR_RADIUS ?? 0.40;
-    const wHa = this._stowGrooveHalfWidths((Constants.WEAVER_BODY ?? [0.2])[0], barrelR_m).pocketHa * 180 / Math.PI;
-    const sHa = this._stowGrooveHalfWidths((Constants.SPINNER_BODY ?? [0.1])[0], barrelR_m).pocketHa * 180 / Math.PI;
-    const gap90  = ((60 + wHa) + (120 - sHa)) / 2;    // ~94.65°
-    const gap270 = ((240 + wHa) + (300 - sHa)) / 2;   // ~274.65°
-    const RCS_POD_AZ_DEG = [gap90, gap270];
+    const RCS_POD_AZ_DEG = [90, 270];
 
     const podGeo = new THREE.BoxGeometry(M * RCS_POD_W, M * RCS_POD_L, M * RCS_POD_H);
     const podMat = new THREE.MeshStandardMaterial({
       color: 0x9090a8, metalness: 0.72, roughness: 0.30,   // 6061-T6 CNC (matches A-frame gray)
     });
-    // Mounting plinth — a short ARC SEGMENT of a cylinder so its underside follows
-    // the barrel curvature (no floating wedge gap). Built around the hull radius
-    // + a small standoff; we rotate it into place per-pod. Radial thickness =
-    // RCS_BASE_H; the inner face sits RCS_STANDOFF above the hull.
-    const RCS_BASE_R = 0.40 + RCS_STANDOFF + RCS_BASE_H / 2; // plinth centre radius (m)
-    const baseArcHalf = (RCS_POD_W / 2 + RCS_BASE_PAD_T) / 0.40; // angular half-width (rad)
-    const baseGeo = new THREE.CylinderGeometry(
-      M * (RCS_BASE_R + RCS_BASE_H / 2),  // outer radius
-      M * (RCS_BASE_R - RCS_BASE_H / 2),  // inner radius (hull-side, conforms)
-      M * RCS_POD_L,                       // axial length = housing (NO axial overhang → clears PV + collar)
-      20, 1, true,                        // radial segs (enough for smooth arc)
-      Math.PI / 2 - baseArcHalf,          // thetaStart — centred on local +X (rotated per-pod)
-      baseArcHalf * 2,                    // thetaLength
-    );
-    // Pre-lay the cylinder's length axis along Z (as built it's Y). After this,
-    // the arc centre sits at local +X and only a single mesh rotation.z = az
-    // is needed per pod — avoids Euler-order splaying of the axial span.
-    baseGeo.rotateX(Math.PI / 2);
-    const baseMat = new THREE.MeshStandardMaterial({
-      color: 0x7a7a8c, metalness: 0.70, roughness: 0.34,   // slightly darker than housing
+    // §3 MLI close-out boot — the darker gold/bronze frame/lip where the housing
+    // emerges from the blanket (close-out tape read). One per pod, buried base.
+    const bootMat = new THREE.MeshStandardMaterial({
+      color: 0x6e5a30, metalness: 0.55, roughness: 0.55,   // darker gold/bronze close-out
     });
+    const bootGeo = new THREE.BoxGeometry(
+      M * (RCS_POD_W + 0.006), M * (RCS_POD_L + 0.016), M * 0.012,
+    );
+    // §3 Corner bolts — Ti fasteners on the housing outer face (Ti recipe; the
+    // collar's boltMat is function-local to _buildCollar, so a fresh one here).
+    const podBoltMat = new THREE.MeshStandardMaterial({
+      color: 0x99aabb, metalness: 0.80, roughness: 0.20,
+    });
+    const podBoltGeo = new THREE.CylinderGeometry(M * 0.004, M * 0.004, M * 0.005, 6);
     // 14-seg bells (was 10): pods are end-mounted focal hardware at inspect zoom.
-    const bellGeo = new THREE.CylinderGeometry(M * 0.02, M * 0.035, M * RCS_BELL_LEN, 14, 1, true);
+    // Throat 0.015 → exit 0.025 (Ø50 mm), 0.06 m long — ~25% smaller than rev 1.
+    const bellGeo = new THREE.CylinderGeometry(M * 0.015, M * 0.025, M * RCS_BELL_LEN, 14, 1, true);
     const linerGeo = new THREE.CylinderGeometry(
-      M * 0.02 * RCS_LINER_INSET, M * 0.035 * RCS_LINER_INSET, M * RCS_BELL_LEN, 14, 1, true,
+      M * 0.015 * RCS_LINER_INSET, M * 0.025 * RCS_LINER_INSET, M * RCS_BELL_LEN, 14, 1, true,
     );
     const linerMat = new THREE.MeshStandardMaterial({
       color: 0x22242c, metalness: 0.6, roughness: 0.5,     // dark cold-gas throat
       side: THREE.BackSide,
     });
+    // Throat cap (injector/poppet plate) — closes the small throat aperture so
+    // that LOOKING DOWN THE BELL shows a dark injector face, not an open hole
+    // through the throat into the housing/hull. Mirrors the FEEP grid-disc idea.
+    // Reused across all 12 bells; oriented per-bell as a child of the bell.
+    const throatCapGeo = new THREE.CircleGeometry(M * 0.015 * RCS_LINER_INSET, 14);
+    const throatCapMat = new THREE.MeshStandardMaterial({
+      color: 0x15161c, metalness: 0.55, roughness: 0.6,    // darker than the liner (recessed injector)
+      side: THREE.DoubleSide, emissive: 0x000000,
+    });
     // RCS plume — diverging cold-gas puff (Phase 4): short/puffy, white-gray cold
     // gas (NOT ion blue). Near end welds to the nozzle exit; +Y beam axis aimed
-    // along each nozzle's exhaust dir.
-    const rcsPlumeGeo = makePlumeFrustum(M * 0.02, M * 0.055, M * 0.13, 8, 2);
+    // along each nozzle's exhaust dir. Scaled ~0.75× to match the smaller bell.
+    const rcsPlumeGeo = makePlumeFrustum(M * 0.015, M * 0.041, M * 0.10, 8, 2);
     const rcsPlumeMat = new THREE.MeshBasicMaterial({
       color: 0xccd2dc, transparent: true, opacity: 0.0, vertexColors: true,
       blending: THREE.AdditiveBlending, depthWrite: false,
@@ -1926,24 +1943,40 @@ export class PlayerSatellite extends THREE.Group {
     // snapping. Replaces the radial-only `_rcsOutward`.
     this._rcsExhaustDir = [];
     this._rcsNozzleLocalPos = [];
+    // Per-bell liner meshes (index-aligned with attitudeThrusterPlumes) so the
+    // plume loop can brighten only the firing bells' throats. Liners get a CLONED
+    // material each (was a single shared linerMat) — a shared material would light
+    // all 12 throats whenever any one fires.
+    this._rcsLiners = [];
 
     /** Build one bell+liner+plume cluster. exhaustDir = unit vector the plume
      *  exits along (bell throat faces −exhaustDir, wide mouth faces exhaust). */
     const buildNozzle = (name, centre, exhaustDir) => {
       const bell = new THREE.Mesh(bellGeo, this._matRCS);
       bell.position.copy(centre);
-      // CylinderGeometry: +Y = radiusTop (throat 0.02), −Y = radiusBottom (exit
-      // 0.035). Map +Y → −exhaust so the wide mouth flares along the exhaust —
+      // CylinderGeometry: +Y = radiusTop (throat 0.015), −Y = radiusBottom (exit
+      // 0.025). Map +Y → −exhaust so the wide mouth flares along the exhaust —
       // the OLD build had this backwards (bells flared into the hull).
       bell.quaternion.setFromUnitVectors(yUpBeam, _v3TmpA.copy(exhaustDir).negate());
       bell.name = name;
       this.add(bell);
       this.attitudeThrusters.push(bell);
 
-      const liner = new THREE.Mesh(linerGeo, linerMat);
+      const liner = new THREE.Mesh(linerGeo, linerMat.clone());
       liner.name = name.replace('RCSThruster', 'RCSLiner');
       liner.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
       bell.add(liner);   // inherits bell orientation; concentric inset cone
+      this._rcsLiners.push(liner);   // index-aligned with attitudeThrusterPlumes
+
+      // Throat cap at the +Y (throat) end, inset 2 mm toward the exit so it sits
+      // just inside the throat. Normal faces −Y (out the mouth) so it's visible
+      // looking down the bell. Child of bell → inherits orientation.
+      const throatCap = new THREE.Mesh(throatCapGeo, throatCapMat);
+      throatCap.position.set(0, M * (RCS_BELL_LEN / 2 - 0.002), 0);
+      throatCap.rotation.x = Math.PI / 2;   // circle normal +Z → −Y (out the mouth)
+      throatCap.name = name.replace('RCSThruster', 'RCSThroat');
+      throatCap.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      bell.add(throatCap);
 
       const exit = _v3TmpB.copy(centre).addScaledVector(exhaustDir, M * (RCS_BELL_LEN / 2));
       const plume = new THREE.Mesh(rcsPlumeGeo, rcsPlumeMat.clone());
@@ -1956,7 +1989,13 @@ export class PlayerSatellite extends THREE.Group {
       this.attitudeThrusterPlumes.push(plume);
 
       this._rcsExhaustDir.push(exhaustDir.clone());
-      this._rcsNozzleLocalPos.push(centre.clone());
+      // Puff origin = the nozzle MOUTH (exit + 1 cm outward), NOT the bell centre:
+      // a glow at the centre sits inside the bell cone and gets occluded by the
+      // (now depth-tested) bell wall, reading as "in the wrong place". Spawning at
+      // the mouth matches the plume and reads as gas leaving the nozzle. Torque
+      // sign is unchanged (same radial line, slightly longer arm).
+      const puffOrigin = _v3TmpB.copy(centre).addScaledVector(exhaustDir, M * (RCS_BELL_LEN / 2 + 0.01));
+      this._rcsNozzleLocalPos.push(puffOrigin.clone());
     };
 
     let podIdx = 0;
@@ -1973,20 +2012,12 @@ export class PlayerSatellite extends THREE.Group {
       for (const station of [1, -1]) {   // fore (+z) / aft (−z)
         const podZ = station * M * RCS_POD_Z;
 
-        // Mounting plinth — conforming arc segment flush to the hull. The geometry
-        // is pre-rotated so its length runs along world Z and the arc centre sits
-        // at +X; a single rotation.z spins it to the pod azimuth. Positioned on
-        // the barrel axis (x=y=0), only offset in z to the pod station.
-        const base = new THREE.Mesh(baseGeo, baseMat);
-        base.rotation.z = az;   // arc centre → pod azimuth
-        base.position.set(0, 0, podZ);
-        base.name = `RCSPodBase_${podIdx}`;
-        base.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
-        this.add(base);
-
-        // Housing sits ON the plinth (base face buried 2 mm into the plinth top
-        // so no gap line shows). Plinth top is at radius RCS_BASE_R + RCS_BASE_H/2.
-        const housingBaseR = M * (RCS_BASE_R + RCS_BASE_H / 2 - 0.002); // bury 2 mm
+        // Doghouse housing — SEMI-RECESSED, NO plinth. Its base is buried
+        // RCS_BURY (10 mm) below the hull surface so the flat bottom edges land
+        // inside the hull and no under-gap shows (box sides cross the MLI at a
+        // steep angle → no z-fight). The housing centre sits at hull − BURY +
+        // half-height; its outer face is faceR.
+        const housingBaseR = M * (barrelR_m - RCS_BURY);   // base buried below hull
         const podR = housingBaseR + M * (RCS_POD_H / 2);
         const pod = new THREE.Mesh(podGeo, podMat);
         pod.position.set(radial.x * podR, radial.y * podR, podZ);
@@ -1995,7 +2026,42 @@ export class PlayerSatellite extends THREE.Group {
         pod.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
         this.add(pod);
 
-        const faceR = podR + M * (RCS_POD_H / 2);  // housing outer face radius
+        // §3 MLI close-out boot: a low lip framing the housing where it emerges
+        // from the blanket. Base buried like the housing (bottom at hull −4 mm),
+        // top ~8 mm proud. Its centre radius = hullR − 4 mm + 6 mm = hullR + 2 mm.
+        const bootR = M * (barrelR_m + 0.002);
+        const boot = new THREE.Mesh(bootGeo, bootMat);
+        boot.position.set(radial.x * bootR, radial.y * bootR, podZ);
+        boot.quaternion.setFromRotationMatrix(podBasis);
+        boot.name = `RCSPodBoot_${podIdx}`;
+        boot.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
+        this.add(boot);
+
+        // §3 Corner bolts: 4 on the housing outer face, inset ~12 mm from the
+        // face corners, oriented radially. Positioned in pod-local space (x =
+        // tangential, y = axial, z = radial) then baked into the mother frame via
+        // pod.matrix and parented to `this` — attaching them as pod children makes
+        // Box3.setFromObject miss the pod transform for the placement guards.
+        pod.updateMatrix();
+        const boltInsetX = M * (RCS_POD_W / 2 - 0.012);
+        const boltInsetY = M * (RCS_POD_L / 2 - 0.012);
+        const boltZ = M * (RCS_POD_H / 2);   // on the outer face
+        let boltN = 0;
+        for (const sx of [-1, 1]) {
+          for (const sy of [-1, 1]) {
+            const bolt = new THREE.Mesh(podBoltGeo, podBoltMat);
+            bolt.position.set(sx * boltInsetX, sy * boltInsetY, boltZ);
+            bolt.rotation.x = Math.PI / 2;   // +Y → pod-local +z (radial)
+            bolt.updateMatrix();
+            bolt.applyMatrix4(pod.matrix);   // bake pod transform → mother-local
+            bolt.name = `RCSPodBolt_${podIdx}_${boltN}`;
+            bolt.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+            this.add(bolt);
+            boltN++;
+          }
+        }
+
+        const faceR = podR + M * (RCS_POD_H / 2);  // housing outer face radius (~0.445 m)
 
         // RADIAL nozzle: on the outer face, exhaust radially outward (±Y column).
         const radialCentre = new THREE.Vector3(
@@ -2006,10 +2072,10 @@ export class PlayerSatellite extends THREE.Group {
         buildNozzle(`RCSThruster_${podIdx}_R`, radialCentre, radial.clone());
 
         // AXIAL nozzle: corner-mounted at the pod's outboard-z edge, buried 3 mm
-        // into the housing face, exhaust ±Z (fore pods +Z, aft −Z). Radial
-        // station 0.492 m keeps its whole radial span (≥0.457) OUTSIDE the
-        // collar rings (max r 0.415) as its mouth passes the collar z-band.
-        const axialR = faceR + M * 0.032;   // 0.492 m centre (0.035 bell − 3 mm bury)
+        // into the housing face, exhaust ±Z (fore pods +Z, aft −Z). Its whole
+        // radial span stays OUTSIDE the collar rings (max r ~0.415) as its mouth
+        // passes the collar z-band (test-RcsPlacement guards the meridian gap).
+        const axialR = faceR + M * (0.025 - 0.003);   // exit r 0.025 − 3 mm bury
         const axialCentre = new THREE.Vector3(
           radial.x * axialR,
           radial.y * axialR,
@@ -2017,25 +2083,33 @@ export class PlayerSatellite extends THREE.Group {
         );
         buildNozzle(`RCSThruster_${podIdx}_A`, axialCentre, new THREE.Vector3(0, 0, station));
 
-        // TANGENTIAL nozzle: exhaust along ±X for lateral-X trim (RADIAL only
-        // gives ±Y in these columns). The ±X sign is distributed across the 4
-        // pods (fore/aft × col) so BOTH +X and −X exhaust exist somewhere:
+        // TANGENTIAL nozzle: canted RCS_TANG_CANT (18°) radially OUTWARD from the
+        // pure ±X axis so its cold-gas plume boundary clears the ROSA wing plane
+        // (an uncanted ±X plume runs parallel just above the blanket and would
+        // clip the outer wing). Still fires at cos18°=0.95 for ±X demand. The ±X
+        // sign is distributed across the 4 pods (fore/aft × col) so BOTH +X and
+        // −X exhaust exist somewhere:
         //   +Y col: fore→+X, aft→−X ;  −Y col: fore→−X, aft→+X.
-        // Mounted at the outer face, offset a half-bell along its exhaust so the
-        // mouth clears the housing; the ±X swing stays ≥6° clear of the pockets
-        // because the pod is centred in the window.
         const tangSignX = station * azSign;
-        const tangDir = new THREE.Vector3(tangSignX, 0, 0);
+        const tangDir = new THREE.Vector3(tangSignX, 0, 0)
+          .multiplyScalar(Math.cos(RCS_TANG_CANT))
+          .addScaledVector(radial, Math.sin(RCS_TANG_CANT))
+          .normalize();
         const tangCentre = new THREE.Vector3(
-          radial.x * faceR + tangSignX * M * (RCS_BELL_LEN / 2),
+          radial.x * faceR,
           radial.y * faceR,
           podZ,
-        );
+        ).addScaledVector(tangDir, M * (RCS_BELL_LEN / 2));
         buildNozzle(`RCSThruster_${podIdx}_T`, tangCentre, tangDir);
 
         podIdx++;
       }
     }
+
+    // Per-nozzle ATTITUDE flash intensity (Phase 3 §1): rotation demand lights
+    // the couple bells' plume cones/liners directly, decoupled from the puff
+    // cadence. Index-aligned with attitudeThrusterPlumes / _rcsLiners.
+    this._rcsAttitudeFlash = new Float32Array(this.attitudeThrusterPlumes.length);
   }
 
   // --------------------------------------------------------------------------
@@ -2860,12 +2934,14 @@ export class PlayerSatellite extends THREE.Group {
 
     const puffMat = new THREE.SpriteMaterial({
       map: tex || null,
-      color: 0xffffff,
+      color: 0xcfe0ff,   // cool translucent cold-gas (N₂) white-blue, not a hot flash
       blending: THREE.AdditiveBlending,
       transparent: true,
       opacity: 0,
       depthWrite: false,
-      depthTest: false,
+      // depthTest ON so the hull/pods occlude puffs — previously false, which
+      // drew the puffs THROUGH the mother body from any angle.
+      depthTest: true,
     });
 
     // Nozzle positions: keyed by THRUST-axis sign (exhaust appears OPPOSITE to
@@ -2885,25 +2961,69 @@ export class PlayerSatellite extends THREE.Group {
     const dirs = this._rcsExhaustDir || [];
     const nozzles = this._rcsNozzleLocalPos || [];
     this._rcsPuffNozzles = {};
+    this._rcsPuffDirs = {};   // exhaust dir per key — gas drifts along this in vacuum
     for (const key of Object.keys(thrustAxis)) {
       const thrust = thrustAxis[key];
-      let best = null;
+      let best = null, bestDir = null;
       let bestDot = Infinity;   // want the MOST-opposing exhaust (most negative dot)
       for (let i = 0; i < dirs.length; i++) {
         const d = dirs[i].dot(thrust);
-        if (d < bestDot) { bestDot = d; best = nozzles[i]; }
+        if (d < bestDot) { bestDot = d; best = nozzles[i]; bestDir = dirs[i]; }
       }
       this._rcsPuffNozzles[key] = best ? best.clone() : new THREE.Vector3();
+      this._rcsPuffDirs[key] = bestDir ? bestDir.clone() : new THREE.Vector3(0, 1, 0);
     }
 
-    // Create 8 pooled sprites (round-robin reuse)
-    for (let i = 0; i < 8; i++) {
+    // Attitude couples — which pod nozzles puff for pitch/yaw rotation. The RCS
+    // pods are the attitude hardware, so arrow-key rotation puffs these (and
+    // costs cold gas; see fireRcsRotation). Torque on the craft from a nozzle is
+    // τ = r × F, with thrust F = −exhaust. rotatePitch spins about +X, rotateYaw
+    // about +Y. We pick the two nozzles with the largest same-sign torque about
+    // the axis → a visible couple (pitch resolves to the radial ±Y bells, yaw to
+    // the tangential bells, by geometry).
+    this._rcsAttitudeNozzles = {};
+    this._rcsAttitudeDirs = {};   // exhaust dir per couple nozzle (index-aligned)
+    this._rcsAttitudeIdx = {};    // nozzle INDICES per couple (into attitudeThrusterPlumes / _rcsLiners)
+    const pickCouple = (comp, sign) => {
+      const scored = [];
+      for (let i = 0; i < dirs.length; i++) {
+        const F = dirs[i].clone().multiplyScalar(-1);              // thrust = −exhaust
+        const t = new THREE.Vector3().crossVectors(nozzles[i], F); // torque
+        const v = t[comp] * sign;                                   // want positive
+        if (v > 1e-9) scored.push({ i, v });
+      }
+      scored.sort((a, b) => b.v - a.v);
+      const top = scored.slice(0, 2);
+      return {
+        pos: top.map(s => nozzles[s.i].clone()),
+        dir: top.map(s => dirs[s.i].clone()),
+        idx: top.map(s => s.i),
+      };
+    };
+    for (const [key, comp, sign] of [
+      ['pitchPos', 'x', +1], ['pitchNeg', 'x', -1],
+      ['yawPos', 'y', +1], ['yawNeg', 'y', -1],
+    ]) {
+      const c = pickCouple(comp, sign);
+      this._rcsAttitudeNozzles[key] = c.pos;
+      this._rcsAttitudeDirs[key] = c.dir;
+      this._rcsAttitudeIdx[key] = c.idx;
+    }
+
+    // Pooled sprites (round-robin reuse). A single RCS burst emits a small
+    // multi-sprite cloud, so keep enough in the pool to avoid thrash.
+    for (let i = 0; i < 16; i++) {
       const sprite = new THREE.Sprite(puffMat.clone());
-      sprite.scale.set(M * 0.5, M * 0.5, M * 0.5);
+      sprite.scale.set(M * 0.05, M * 0.05, M * 0.05);
       sprite.visible = false;
       sprite.name = `RcsPuff_${i}`;
       this.add(sprite);
-      this._rcsPuffs.push({ sprite, startTime: 0, active: false });
+      this._rcsPuffs.push({
+        sprite, startTime: 0, active: false,
+        startPos: new THREE.Vector3(), dir: new THREE.Vector3(0, 1, 0),
+        life: 0.3, maxScale: M * 0.3, baseOp: 0.5, drift: M * 0.5,
+        rot: 0, spin: 0,
+      });
     }
   }
 
@@ -2979,6 +3099,15 @@ export class PlayerSatellite extends THREE.Group {
    */
   update(dt, sunDirection) {
     const gameDt = dt * Constants.TIME_SCALE_GAMEPLAY;
+
+    // §2 cache the sun direction for puff sun-scatter (null when unavailable, so
+    // headless / null-sun frames stay scatter-free — no per-frame alloc).
+    if (sunDirection) {
+      this._sunDirWorld ||= new THREE.Vector3();
+      this._sunDirWorld.copy(sunDirection);
+    } else {
+      this._sunDirWorld = null;
+    }
 
     // --- V5: Thruster interlock check ---
     this._updateThrusterInterlock();
@@ -3531,18 +3660,43 @@ export class PlayerSatellite extends THREE.Group {
     const haveLat = lMag > 1e-12 && transScale > 0.001;
     if (haveLat) _rcsLn.copy(_rcsL).divideScalar(lMag);
     const plumes = this.attitudeThrusterPlumes;
+    const shadowMul = this._inShadow ? 0.35 : 1;   // §4 eclipse dimming (cold gas isn't self-luminous)
+    const flash = this._rcsAttitudeFlash;
     for (let k = 0; k < plumes.length; k++) {
       const plume = plumes[k];
       const exhaust = this._rcsExhaustDir[k];
       // A nozzle fires when its exhaust opposes the thrust demand:
       // intensity = max(0, dot(-exhaust, L̂)) · transScale.
-      let inten = 0;
-      if (haveLat && exhaust) inten = Math.max(0, -exhaust.dot(_rcsLn)) * transScale;
+      let transInten = 0;
+      if (haveLat && exhaust) transInten = Math.max(0, -exhaust.dot(_rcsLn)) * transScale;
+      // Attitude rotation lights the couple bells directly (§1), decoupled from
+      // the puff cadence. Composite = max(translation, attitude flash).
+      const attInten = flash ? flash[k] : 0;
+      const inten = Math.max(transInten, attInten);
       plume.visible = inten > 0.1;
       if (plume.visible && plume.material) {
-        plume.material.opacity = inten * 0.5;
+        plume.material.opacity = inten * 0.5 * shadowMul;
+        // Jet-core streak (§2): grow the plume along its beam axis (+Y) with
+        // intensity — root welded to the bell mouth, so it stretches outward.
         const s = 0.7 + inten * 0.6;              // puffier with demand
-        plume.scale.set(s, s, s);
+        plume.scale.set(s, s * (1 + 0.4 * inten), s);
+      }
+      // Liner throat glow (§1): brighten only firing bells; emissive → 0 as the
+      // flash decays, so no restore bookkeeping is needed (driven every frame).
+      const liner = this._rcsLiners && this._rcsLiners[k];
+      if (liner && liner.material) {
+        liner.material.emissive.setHex(0x8fb0d8);
+        liner.material.emissiveIntensity = 0.6 * inten;
+      }
+    }
+
+    // Decay the attitude flash toward 0 (§1). Held keys re-raise it each frame in
+    // fireRcsRotation; released keys fade over ~1/8 s.
+    if (flash) {
+      const decay = Math.exp(-8 * dt);
+      for (let k = 0; k < flash.length; k++) {
+        flash[k] *= decay;
+        if (flash[k] < 1e-3) flash[k] = 0;
       }
     }
   }
@@ -4575,6 +4729,160 @@ export class PlayerSatellite extends THREE.Group {
   }
 
   /**
+   * @private — Emit a cold-gas RCS burst at a nozzle mouth: a small diffuse
+   * cloud of pooled sprites that free-expands and drifts along the exhaust and
+   * thins out fast, the way a cold-gas jet reads in vacuum (no atmospheric
+   * flame, no lingering smoke). Each mini-puff is randomised so repeated bursts
+   * don't look identical.
+   * @param {THREE.Vector3} pos — nozzle-mouth local position
+   * @param {THREE.Vector3} dir — exhaust (drift) direction
+   * @param {number} now — seconds (performance.now * 0.001)
+   */
+  _emitColdGas(pos, dir, now) {
+    if (!this._rcsPuffs.length) return;
+    const base = (dir && dir.lengthSq() > 1e-9)
+      ? _v3TmpA.copy(dir).normalize()
+      : _v3TmpA.set(0, 1, 0);
+    const CLOUD = 2;   // mini-puffs per burst → diffuse, not a single ball
+    for (let k = 0; k < CLOUD; k++) {
+      const puff = this._rcsPuffs[this._rcsPuffIndex];
+      this._rcsPuffIndex = (this._rcsPuffIndex + 1) % this._rcsPuffs.length;
+
+      // Position jitter: a few mm off the mouth so the cloud isn't a point.
+      puff.startPos.set(
+        pos.x + (Math.random() - 0.5) * M * 0.012,
+        pos.y + (Math.random() - 0.5) * M * 0.012,
+        pos.z + (Math.random() - 0.5) * M * 0.012,
+      );
+      // Direction jitter: ±~8° cone spread so the jet fans slightly.
+      puff.dir.set(
+        base.x + (Math.random() - 0.5) * 0.28,
+        base.y + (Math.random() - 0.5) * 0.28,
+        base.z + (Math.random() - 0.5) * 0.28,
+      ).normalize();
+
+      puff.life     = 0.22 + Math.random() * 0.12;        // 0.22–0.34 s (brief)
+      puff.maxScale = M * (0.20 + Math.random() * 0.16);  // expands to 0.20–0.36 m
+      puff.baseOp   = 0.32 + Math.random() * 0.16;        // 0.32–0.48 peak, translucent
+      puff.drift    = M * (0.45 + Math.random() * 0.35);  // travels 0.45–0.80 m along exhaust
+      puff.startTime = now - k * 0.012;                   // tiny stagger between the two
+      puff.rot  = Math.random() * Math.PI * 2;            // §3 random initial sprite angle
+      puff.spin = (Math.random() - 0.5) * 1.6;            // §3 ±0.8 rad/s slow tumble
+
+      puff.sprite.position.copy(puff.startPos);
+      puff.sprite.material.opacity = 0;
+      puff.sprite.scale.set(M * 0.04, M * 0.04, M * 0.04);
+      puff.sprite.visible = true;
+      puff.active = true;
+    }
+  }
+
+  /**
+   * Fire the RCS attitude couple for a pitch/yaw rotation demand: puffs the pod
+   * nozzles that produce the torque (visual) and consumes cold gas (N₂). Called
+   * per-frame while an arrow key is held. Rotation kinematics stay in
+   * rotatePitch/rotateYaw — this is the propellant + plume side of it.
+   * @param {'pitch'|'yaw'} axis
+   * @param {number} sign — +1 / −1 rotation direction
+   * @param {number} magnitude — 0..1 firing intensity (spring-reduced under tether)
+   * @param {number} dt — frame delta (s) for propellant scaling
+   */
+  fireRcsRotation(axis, sign, magnitude, dt) {
+    if (!this._rcsPuffs.length || !this._rcsAttitudeNozzles) return;
+    const key = axis + (sign >= 0 ? 'Pos' : 'Neg');
+    const nozzles = this._rcsAttitudeNozzles[key];
+    if (!nozzles || !nozzles.length) return;
+
+    // Cold-gas (N₂) cost while attitude-thrusting — only when propellant remains
+    // (rotation itself is never hard-blocked, to avoid an attitude soft-lock).
+    if (magnitude > 0.01 && this.resources.coldGas > 0 && dt > 0) {
+      const RCS_ATTITUDE_N2_FACTOR = 0.3;   // attitude puffs cost less than translation
+      eventBus.emit(Events.RESOURCE_CONSUME, {
+        resource: 'coldGas',
+        amount: this._coldGasRate * RCS_ATTITUDE_N2_FACTOR * Math.min(1, magnitude) * dt,
+      });
+    }
+
+    // Attitude cone/liner flash (Phase 3 §1): light the couple bells' plume
+    // meshes directly from rotation demand, BEFORE the puff cooldown early-return
+    // so a held key keeps the cones lit steadily while the cloud puffs at its own
+    // 0.12 s cadence. Decayed in _animateThrusterGlow.
+    if (this._rcsAttitudeFlash && this._rcsAttitudeIdx) {
+      const idx = this._rcsAttitudeIdx[key] || [];
+      for (let n = 0; n < idx.length; n++) {
+        const i = idx[n];
+        // §5 first-pulse spike: a valve-opening transient. When the couple is
+        // effectively cold (<0.05), overshoot to 1.25× so the plume pops on
+        // start; the exp(−8·dt) decay eats it in ~30 ms, after which held keys
+        // re-raise to exactly `magnitude` (spike=1.0). Do NOT clamp to 1.
+        const spike = this._rcsAttitudeFlash[i] < 0.05 ? 1.25 : 1.0;
+        this._rcsAttitudeFlash[i] = Math.max(this._rcsAttitudeFlash[i], magnitude * spike);
+      }
+    }
+
+    // Puff visual — per-couple cooldown so held keys puff at a steady cadence.
+    const now = performance.now() * 0.001;
+    const ck = `att_${key}`;
+    if (this._rcsPuffLastFire[ck] && (now - this._rcsPuffLastFire[ck]) < 0.12) return;
+    this._rcsPuffLastFire[ck] = now;
+    const ndirs = this._rcsAttitudeDirs[key] || [];
+    for (let i = 0; i < nozzles.length; i++) this._emitColdGas(nozzles[i], ndirs[i], now);
+  }
+
+  /**
+   * §2 — Cache the camera world position for cold-gas sun-scatter brightening.
+   * Called from the main render loop each frame (no per-frame alloc).
+   * @param {THREE.Vector3} v
+   */
+  setCameraWorldPos(v) {
+    if (!v) return;
+    this._camWorldPos ||= new THREE.Vector3();
+    this._camWorldPos.copy(v);
+  }
+
+  /**
+   * Fire a single counter-firing RCS stop pulse on arrow-key RELEASE. Rotation
+   * is kinematic (rotatePitch applies angle directly while held), so a real
+   * craft nulls the residual rate by firing the OPPOSITE couple once on release.
+   * Visual pop only + a fixed N₂ sip; never blocks.
+   * @param {'pitch'|'yaw'} axis
+   * @param {number} heldSign — the sign of the rotation that WAS held
+   */
+  fireRcsStopPulse(axis, heldSign) {
+    if (!this._rcsPuffs.length || !this._rcsAttitudeIdx) return;
+    // The OPPOSITE couple nulls the rate.
+    const key = axis + (heldSign >= 0 ? 'Neg' : 'Pos');
+
+    // Flash pop: flat 1.0 (decays in ~1/8 s via _animateThrusterGlow). Does NOT
+    // route through the §5 spike branch — this flat value IS the pop.
+    const flash = this._rcsAttitudeFlash;
+    if (flash) {
+      const idx = this._rcsAttitudeIdx[key] || [];
+      for (let n = 0; n < idx.length; n++) {
+        const i = idx[n];
+        flash[i] = Math.max(flash[i], 1.0);
+      }
+    }
+
+    // Fixed N₂ sip (≈ one 0.1 s attitude burn); never blocks the visual.
+    if (this.resources.coldGas > 0) {
+      eventBus.emit(Events.RESOURCE_CONSUME, {
+        resource: 'coldGas',
+        amount: this._coldGasRate * 0.3 * 0.1,
+      });
+    }
+
+    // One puff burst, guarded against key-repeat bounce double-fires.
+    const now = performance.now() * 0.001;
+    const ck = `stop_${key}`;
+    if (this._rcsPuffLastFire[ck] && (now - this._rcsPuffLastFire[ck]) < 0.25) return;
+    this._rcsPuffLastFire[ck] = now;
+    const nozzles = this._rcsAttitudeNozzles[key] || [];
+    const ndirs = this._rcsAttitudeDirs[key] || [];
+    for (let i = 0; i < nozzles.length; i++) this._emitColdGas(nozzles[i], ndirs[i], now);
+  }
+
+  /**
    * @private — Fire RCS puff sprites opposite to the given thrust direction.
    * Uses a round-robin pool of 8 sprites with per-nozzle cooldown.
    * @param {{ x: number, y: number, z: number }} direction
@@ -4601,44 +4909,63 @@ export class PlayerSatellite extends THREE.Group {
       if (this._rcsPuffLastFire[nozzleKey] &&
           (now - this._rcsPuffLastFire[nozzleKey]) < cooldown) continue;
       this._rcsPuffLastFire[nozzleKey] = now;
-
-      // Grab next sprite from pool (round-robin)
-      const puff = this._rcsPuffs[this._rcsPuffIndex];
-      this._rcsPuffIndex = (this._rcsPuffIndex + 1) % this._rcsPuffs.length;
-
-      const nozzlePos = this._rcsPuffNozzles[nozzleKey];
-      puff.sprite.position.copy(nozzlePos);
-      puff.sprite.material.opacity = 0.6;
-      puff.sprite.scale.set(M * 0.5, M * 0.5, M * 0.5);
-      puff.sprite.visible = true;
-      puff.startTime = now;
-      puff.active = true;
+      this._emitColdGas(this._rcsPuffNozzles[nozzleKey], this._rcsPuffDirs[nozzleKey], now);
     }
   }
 
   /**
-   * @private — Animate active RCS puff sprites (fade out + slight expansion).
+   * @private — Animate active cold-gas puffs. In vacuum a cold-gas jet appears
+   * at the nozzle, free-expands and drifts along the exhaust, and thins out
+   * fast. Each puff drifts (constant velocity), grows quickly (∝√t), and fades
+   * with a quick rise-then-decay — no lingering atmospheric smoke.
    * @param {number} dt — frame delta (unused; uses absolute time)
    */
   _updateRcsPuffs(dt) {
     const now = performance.now() * 0.001;
-    const fadeDuration = 0.5;
+    const shadowMul = this._inShadow ? 0.35 : 1;   // §4 eclipse dimming (readability floor)
+
+    // §2 sun-scatter: ONE forward-lobe factor per frame (puffs cluster within
+    // ~1 m of the craft, so a single view vector suffices). Falls back to 1 in
+    // shadow / headless / null-sun frames.
+    let scatter = 1;
+    if (!this._inShadow && this._camWorldPos && this._sunDirWorld) {
+      this.getWorldPosition(_v3TmpA);                       // craft world pos
+      const viewDir = _v3TmpB.copy(_v3TmpA).sub(this._camWorldPos).normalize();
+      const g = Math.max(0, viewDir.dot(this._sunDirWorld));
+      scatter = 1 + 0.5 * g * g * g * g;                    // sharp forward lobe, max 1.5×
+    }
+    // §4 earthshine tint colour for active puffs.
+    const tint = this._inShadow ? 0x8fa0c8 : 0xcfe0ff;
 
     for (const puff of this._rcsPuffs) {
       if (!puff.active) continue;
       const age = now - puff.startTime;
+      const life = puff.life || 0.3;
 
-      if (age >= fadeDuration) {
+      if (age >= life) {
         puff.sprite.visible = false;
         puff.sprite.material.opacity = 0;
         puff.active = false;
         continue;
       }
 
-      const t = age / fadeDuration;
-      puff.sprite.material.opacity = 0.6 * (1 - t);
-      const s = M * (0.5 + 0.5 * t);
+      const t = age / life;                 // 0 → 1
+      // Drift along exhaust at constant velocity (free jet).
+      puff.sprite.position.copy(puff.startPos).addScaledVector(puff.dir, puff.drift * t);
+      // Rapid free-expansion (fast early, ∝√t) from a small mouth size.
+      const startS = M * 0.04;
+      const s = startS + (puff.maxScale - startS) * Math.sqrt(t);
       puff.sprite.scale.set(s, s, s);
+      // §3 slow tumble (cloned mats → per-puff safe).
+      puff.sprite.material.rotation = puff.rot + puff.spin * age;
+      // §4 earthshine tint, driven every frame (no restore bookkeeping).
+      puff.sprite.material.color.setHex(tint);
+      // Quick rise (~first 10%) then thin out — translucent, gone fast.
+      const rise = Math.min(1, t / 0.1);
+      const fall = Math.pow(1 - t, 1.5);
+      // §2 scatter brightening, capped at 0.85 so stacked additive sprites
+      // can't blow out.
+      puff.sprite.material.opacity = Math.min(0.85, puff.baseOp * rise * fall * shadowMul * scatter);
     }
   }
 
@@ -5116,6 +5443,7 @@ export class PlayerSatellite extends THREE.Group {
   _updateSolarPower(sunDirection) {
     if (!sunDirection) {
       this.resources.solarRate = 0;
+      this._inShadow = false;   // §4 keep the eclipse cache safe when sun dir is unavailable
       return;
     }
 
@@ -5125,6 +5453,7 @@ export class PlayerSatellite extends THREE.Group {
     const pos = this._cartesian.position;
     const sunDir = { x: sunDirection.x, y: sunDirection.y, z: sunDirection.z };
     const inShadow = isInShadow(pos, sunDir, Constants.EARTH_RADIUS);
+    this._inShadow = inShadow;   // §4 cache for puff/plume eclipse dimming
 
     if (inShadow) {
       this.resources.solarRate = 0;

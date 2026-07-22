@@ -1901,6 +1901,22 @@ export class InputManager {
     const _inStationKeep = _skGuardArm && _skGuardArm.state === Constants.ARM_STATES.STATION_KEEP;
 
     if (!apEngaged && !_inStationKeep) {
+      // Phase 4 §1: RCS stop-pulse on arrow-key RELEASE — a real craft fires the
+      // OPPOSITE couple once to null the kinematic rate. Detect release edges
+      // BEFORE the tier branch so it covers free-flight AND tether. Signs match
+      // the fireRcsRotation calls below (Up=pitch+1, Down=pitch−1, Left=yaw+1,
+      // Right=yaw−1).
+      if (!this._prevArrowKeys) this._prevArrowKeys = { up: false, down: false, left: false, right: false };
+      const _pk = this._prevArrowKeys;
+      if (_pk.up    && !this.keys['ArrowUp'])    d.player.fireRcsStopPulse('pitch',  1);
+      if (_pk.down  && !this.keys['ArrowDown'])  d.player.fireRcsStopPulse('pitch', -1);
+      if (_pk.left  && !this.keys['ArrowLeft'])  d.player.fireRcsStopPulse('yaw',    1);
+      if (_pk.right && !this.keys['ArrowRight']) d.player.fireRcsStopPulse('yaw',   -1);
+      _pk.up    = !!this.keys['ArrowUp'];
+      _pk.down  = !!this.keys['ArrowDown'];
+      _pk.left  = !!this.keys['ArrowLeft'];
+      _pk.right = !!this.keys['ArrowRight'];
+
       // FIX_PLAN §3: Tether-aware rotation with exponential spring resistance.
       //   effectiveRate = baseRate · (1 − |θ|/θ_max)^STIFFNESS    (when pushing toward limit)
       //   effectiveRate = baseRate                                 (when relieving toward neutral)
@@ -1912,10 +1928,10 @@ export class InputManager {
         // Free flight — reset spring bookkeeping so next deployment starts at neutral
         this._tetherPitchDisp = 0;
         this._tetherYawDisp   = 0;
-        if (this.keys['ArrowUp'])    { d.player.rotatePitch( baseRate * dt); d.player.setThrusterFire('pitch',  1, 1); }
-        if (this.keys['ArrowDown'])  { d.player.rotatePitch(-baseRate * dt); d.player.setThrusterFire('pitch', -1, 1); }
-        if (this.keys['ArrowLeft'])  { d.player.rotateYaw( baseRate * dt);  d.player.setThrusterFire('yaw',    1, 1); }
-        if (this.keys['ArrowRight']) { d.player.rotateYaw(-baseRate * dt);  d.player.setThrusterFire('yaw',   -1, 1); }
+        if (this.keys['ArrowUp'])    { d.player.rotatePitch( baseRate * dt); d.player.setThrusterFire('pitch',  1, 1); d.player.fireRcsRotation('pitch',  1, 1, dt); }
+        if (this.keys['ArrowDown'])  { d.player.rotatePitch(-baseRate * dt); d.player.setThrusterFire('pitch', -1, 1); d.player.fireRcsRotation('pitch', -1, 1, dt); }
+        if (this.keys['ArrowLeft'])  { d.player.rotateYaw( baseRate * dt);  d.player.setThrusterFire('yaw',    1, 1); d.player.fireRcsRotation('yaw',    1, 1, dt); }
+        if (this.keys['ArrowRight']) { d.player.rotateYaw(-baseRate * dt);  d.player.setThrusterFire('yaw',   -1, 1); d.player.fireRcsRotation('yaw',   -1, 1, dt); }
       } else {
         const TR         = Constants.TETHER_ROTATION;
         const maxDisp    = (tier === 'block') ? TR.MAX_DISPLACEMENT_BLOCK : TR.MAX_DISPLACEMENT_SOFT;
@@ -1962,11 +1978,13 @@ export class InputManager {
           // Differential plume: magnitude = fraction of baseRate actually applied (spring reduces it)
           const pMag = dt > 0 ? Math.min(1, Math.abs(pitchRes.delta) / (baseRate * dt)) : 0;
           d.player.setThrusterFire('pitch', Math.sign(pitchRes.delta), pMag);
+          d.player.fireRcsRotation('pitch', Math.sign(pitchRes.delta), pMag, dt);
         }
         if (yawRes.delta !== 0) {
           d.player.rotateYaw(yawRes.delta);
           const yMag = dt > 0 ? Math.min(1, Math.abs(yawRes.delta) / (baseRate * dt)) : 0;
           d.player.setThrusterFire('yaw', Math.sign(yawRes.delta), yMag);
+          d.player.fireRcsRotation('yaw', Math.sign(yawRes.delta), yMag, dt);
         }
         this._tetherPitchDisp = pitchRes.newDisp;
         this._tetherYawDisp   = yawRes.newDisp;
@@ -1981,6 +1999,10 @@ export class InputManager {
           this._maybeEmitTetherLockMsg();
         }
       }
+    } else {
+      // AP / station-keep active: drop the held-key record so re-enabling manual
+      // control can't fire a phantom stop pulse from a stale "held" state.
+      this._prevArrowKeys = null;
     }
   }
 

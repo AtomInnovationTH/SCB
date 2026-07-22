@@ -87,7 +87,7 @@ const SYSTEMS = [
       { name: 'FEEP ION THRUSTERS', mass: 6, risk: 'YELLOW', tier: 'major',
         anchor: [ 0, -0.20 * M, -1.05 * M ], labelOffset: [ -1.1 * M, -1.0 * M, -1.2 * M ] },
       { name: 'RCS ATTITUDE', mass: 2, risk: 'GREEN', tier: 'major',
-        anchor: [ 0.297 * M, 0.297 * M, 0.60 * M ], labelOffset: [ 1.2 * M, 1.0 * M, 0.60 * M ] },
+        anchor: [ -0.03 * M, 0.42 * M, -0.795 * M ], labelOffset: [ 1.2 * M, 1.0 * M, -0.9 * M ] },
       { name: 'MLI THERMAL BANDS', mass: 0, risk: 'GREEN', tier: 'detail',
         anchor: [ 0.43 * M, 0, 0.50 * M ], labelOffset: [ 1.1 * M, 0.5 * M, 0.50 * M ] },
     ],

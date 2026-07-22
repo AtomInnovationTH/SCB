@@ -2280,6 +2280,7 @@ function updateCamera(dt) {
   if (_cam) {
     const camDist = _cam.position.distanceTo(playerPos);
     if (typeof player.setCameraDistance === 'function') player.setCameraDistance(camDist);
+    if (typeof player.setCameraWorldPos === 'function') player.setCameraWorldPos(_cam.position);
     if (armManager && typeof armManager.setCameraDistance === 'function') {
       armManager.setCameraDistance(camDist);
     }
