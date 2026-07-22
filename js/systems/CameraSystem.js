@@ -915,6 +915,11 @@ export class CameraSystem {
       }
     }
 
+    // Scale the near-plane to the live camera→ship distance so the closest hull
+    // parts don't clip when zoomed in and the ship rotates toward the camera.
+    // Proportional scaling keeps depth precision sane at all chase distances.
+    this._applyDynamicNearPlane(pos.distanceTo(playerPos));
+
     return { pos, look };
   }
 
@@ -2510,7 +2515,9 @@ export class CameraSystem {
       // Adjust chase distance (smooth 5% steps, min ~10m behind)
       const zoomDelta = e.deltaY > 0 ? 1.05 : 0.95;
       this.chase.offsetBehind *= zoomDelta;
-      this.chase.offsetBehind = Math.max(0.0001, Math.min(0.001, this.chase.offsetBehind));
+      // Min lowered to ~4m (was 10m) so FLY can zoom in closer to the ship;
+      // stays outside the ~3m near-clip (CAMERA_NEAR) to avoid hull clipping.
+      this.chase.offsetBehind = Math.max(0.00004, Math.min(0.001, this.chase.offsetBehind));
       this.chase.offsetAbove = this.chase.offsetBehind * 0.48;
     } else if (this.currentView === CameraViews.TARGET_LOCK) {
       // Unreachable as of 2026-06-03 (TARGET_LOCK removed from VIEW_CYCLE);

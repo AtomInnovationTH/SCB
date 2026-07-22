@@ -43,7 +43,9 @@ export function createSunDiscTexture(size = 64) {
  * @returns {THREE.CanvasTexture}
  */
 function createPlanetLabelTexture(text) {
-  return createLabelTexture(text);
+  // Dim grey glyphs (not pure white) so the label reads as a quiet caption
+  // under the planet rather than competing with the disc for attention.
+  return createLabelTexture(text, { color: '#8f9aa6' });
 }
 
 /**
@@ -661,7 +663,7 @@ export class SunLight {
     // --- Sun label (planetarium-style, centered below disc) ---
     this._sunLabel = new THREE.Sprite(new THREE.SpriteMaterial({
       map: createPlanetLabelTexture('Sun'),
-      transparent: true, opacity: 1.0, depthWrite: false, depthTest: true,
+      transparent: true, opacity: 0.34, depthWrite: false, depthTest: true,
     }));
     this._sunLabel.scale.set(50, 12, 1);
     this._sunLabel.renderOrder = 10;
@@ -765,7 +767,7 @@ export class SunLight {
     // --- Moon label (planetarium-style, centered below disc) ---
     this._moonLabel = new THREE.Sprite(new THREE.SpriteMaterial({
       map: createPlanetLabelTexture('Moon'),
-      transparent: true, opacity: 1.0, depthWrite: false, depthTest: true,
+      transparent: true, opacity: 0.34, depthWrite: false, depthTest: true,
     }));
     this._moonLabel.scale.set(50, 12, 1);
     this._moonLabel.renderOrder = 10;
@@ -1028,7 +1030,7 @@ export class SunLight {
       // --- Planetarium text label (sprite — centered directly under planet) ---
       const label = new THREE.Sprite(new THREE.SpriteMaterial({
         map: createPlanetLabelTexture(def.name),
-        transparent: true, opacity: 1.0, depthWrite: false,
+        transparent: true, opacity: 0.34, depthWrite: false,
       }));
       label.scale.set(50, 12, 1);
       label.frustumCulled = false;

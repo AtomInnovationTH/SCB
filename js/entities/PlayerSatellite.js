@@ -18,6 +18,7 @@ import { makePlumeFrustum } from '../scene/plumeGeometry.js';
 import { applyDetailLod } from '../scene/detailLodCull.js';
 import { getOrbitalFoilEnv } from '../scene/orbitalFoilEnv.js';
 import { powerDistribution } from '../systems/PowerDistribution.js';
+import { persistenceManager } from '../systems/PersistenceManager.js';
 import {
   computeCoM, computeCoMDrift, computeCoMDriftVector,
   getActiveBlocks,
@@ -183,7 +184,6 @@ export class PlayerSatellite extends THREE.Group {
     // ANIMATION STATE
     // ========================================================================
     this._blinkTimer = 0;
-    this._strobeTimer = 0;
     this._lidarPulseTimer = 0;
 
     // ROSA furl/unfurl state (Comma key). 1 = unfurled (deployed), 0 = furled
@@ -607,35 +607,79 @@ export class PlayerSatellite extends THREE.Group {
    * @private
    */
   _stowGrooveProfile(body, barrelH) {
-    const barrelR_m = (Constants.OCTOPUS_V5?.COLLAR_RADIUS ?? 0.40); // metres
+    const V5 = Constants.OCTOPUS_V5 ?? {};
+    const barrelR_m = (V5.COLLAR_RADIUS ?? 0.40); // metres
     const crossW = body[0];                 // body width (m), cross-section
     const bodyLen = body[2];                // body length (m), along barrel Z
     // Pocket angular half-width so the arc spans ~1.3× the body width (a little
     // clearance around the cradled body): arcWidth = barrelR * 2*ha = 1.3*crossW.
     // Shared with the pyro-pin lip placement via _stowGrooveHalfWidths.
     const { pocketHa, chanHa } = this._stowGrooveHalfWidths(crossW, barrelR_m);
-    // Pocket depth scales with daughter size and is capped at ~15% of the
-    // barrel radius. Was 50% (0.20 m), which read as an impact crater; ~15%
-    // (0.06 m) with the plateau profile below reads as a machined pocket. The
-    // largest daughter (Weaver, crossW 0.20) hits the cap; the smaller Spinner
-    // (crossW 0.10) scales down proportionally. Convert metre depth to scene
-    // units (×M).
-    const maxDepth_m = barrelR_m * 0.15;            // 0.06 m ≈ 15% of 0.40 m radius
+    // Pocket depth scales with daughter size. A small MLI standoff is baked in
+    // so the cradle floor sits a few mm clear of the stowed daughter's blanket
+    // (avoids MLI-on-MLI scrubbing). Cap ~18% of the barrel radius: the old 50%
+    // (0.20 m) read as an impact crater and 15% (0.06 m) left the body looking
+    // jammed against the floor; ~18% (0.072 m) with the plateau profile reads as
+    // a machined recess with visible clearance. Weaver (crossW 0.20) hits the
+    // cap; the smaller Spinner (crossW 0.10) scales down proportionally.
+    const MLI_GAP_M = 0.006;                        // ~6 mm blanket standoff
+    const maxDepth_m = barrelR_m * 0.18;            // 0.072 m ≈ 18% of 0.40 m radius
     const WEAVER_CROSS = (Constants.WEAVER_BODY ?? [0.2])[0];  // reference (largest)
-    const pocketDepth = Math.min(maxDepth_m, maxDepth_m * (crossW / WEAVER_CROSS)) * M;
-    // Pocket axial half-length ≈ body length / 2 plus a little clearance.
-    const pocketHl = (bodyLen * 0.6) * M;
+    const pocketDepth =
+      (Math.min(maxDepth_m, maxDepth_m * (crossW / WEAVER_CROSS)) + MLI_GAP_M) * M;
+    // Pocket axial CENTRE derived from the true stowed-daughter geometry rather
+    // than a magic barrelH fraction: when an arm is STOWED (sweep α = 0) the strut
+    // lies along −Z, so the daughter body parks at its tip — z = COLLAR_Y −
+    // STRUT_LENGTH (≈ 0.90 − 1.60 = −0.70 m). Centring the pocket exactly there
+    // makes both the large (Weaver) and small (Spinner) daughters sit dead-centre
+    // in their cradle instead of ~2 cm forward of it. Falls back to the previous
+    // −0.34·barrelH constant if the tier constants are missing.
+    const pocketZc = (V5.COLLAR_Y != null && V5.STRUT_LENGTH != null)
+      ? (V5.COLLAR_Y - V5.STRUT_LENGTH) * M
+      : -barrelH * 0.34;
+    // Pocket axial half-length ≈ body half-length + clearance + MLI standoff so
+    // the daughter's end caps clear the pocket end walls.
+    const pocketHl = (bodyLen * 0.6 + MLI_GAP_M) * M;
     // Stow channel: a shallower, narrower groove the folded strut lies in,
     // running forward of the pocket. chanHa comes from the shared helper above.
     const chanDepth = pocketDepth * 0.55;
     return [
       { zc: barrelH * 0.08,  hl: barrelH * 0.38, ha: chanHa,   d: chanDepth },  // stow channel
-      { zc: -barrelH * 0.34, hl: pocketHl,       ha: pocketHa, d: pocketDepth }, // cradle pocket
+      { zc: pocketZc,        hl: pocketHl,       ha: pocketHa, d: pocketDepth }, // cradle pocket
     ];
   }
 
+  /**
+   * Resolve the active arm-tier config (azimuth ring) the same way ArmManager
+   * does — from the persisted save — so the carved stow pockets and pyro-pin
+   * launch locks land at the SAME azimuths where daughters actually dock. Falls
+   * back to Y0_QUAD for fresh/headless builds with no save. Consumed by
+   * `_carveStowGrooves` and the pyro-pin placement so the two can't drift from
+   * ArmManager.generateDockPositions.
+   *
+   * NOTE: the barrel is carved once at construction, so an in-session tier refit
+   * (which does not reconstruct the ship) only re-aligns the pockets on the next
+   * load; that is still strictly better than the old hard-coded Y0_QUAD, which
+   * left Hex/Octo tiers permanently mismatched.
+   * @returns {{azimuths:number[]}} the active tier config
+   * @private
+   */
+  _activeArmTierConfig() {
+    let key = 'Y0_QUAD';
+    try {
+      const persisted = persistenceManager?.getArmTier?.();
+      if (persisted && Constants.ARM_LADDER?.[persisted]) key = persisted;
+    } catch (_) { /* headless / no save → default quad */ }
+    return Constants.ARM_LADDER?.[key] ?? Constants.ARM_LADDER?.Y0_QUAD
+      ?? { azimuths: [60, 120, 240, 300] };
+  }
+
   _carveStowGrooves(geo, barrelR, barrelH) {
-    const azimuths = (Constants.ARM_LADDER?.Y0_QUAD?.azimuths ?? [60, 120, 240, 300])
+    // Carve at the ACTIVE tier's ring azimuths (Quad/Hex/Octo), not a hard-coded
+    // Y0_QUAD, so the pockets land where daughters really dock in the current
+    // configuration. (End-face Octo arms dock on the ±Z caps, not the barrel
+    // side, so they need no side pocket — only the ring azimuths are carved.)
+    const azimuths = (this._activeArmTierConfig().azimuths ?? [60, 120, 240, 300])
       .map(d => d * Math.PI / 180);
 
     // Daughter body specs [x, y, z] in metres. The pocket cradles the body
@@ -1066,7 +1110,9 @@ export class PlayerSatellite extends THREE.Group {
     // in a band at each strut azimuth (_carveStowGrooves). That gives a real
     // conforming depression with zero coincident geometry. Here we only add the
     // pyro-pin launch locks at the groove lips.
-    const channelTier = Constants.ARM_LADDER.Y0_QUAD;
+    // Active tier's ring (matches _carveStowGrooves) so each launch lock lands on
+    // a real carved groove lip, not a phantom Y0_QUAD azimuth after a refit.
+    const channelTier = this._activeArmTierConfig();
 
     // Groove angular half-widths at the stow-channel band (matches the profile
     // used by _carveStowGrooves): the pin sits at z=-barrelH*0.21, inside the
@@ -2895,32 +2941,6 @@ export class PlayerSatellite extends THREE.Group {
     this.starboardLight.name = 'NavLight_Starboard';
     this.add(this.starboardLight);
     this.starboardLight.add(this._makeLightHalo(0x00ff00, HALO, 1.6, LFX.NAV_HALO_OPACITY));
-
-    // White strobe — top. Core is transparent so the flash envelope can drive it.
-    this._strobeMat = new THREE.MeshBasicMaterial({
-      color: 0xffffff, transparent: true, opacity: 1.0,
-    });
-    this.strobeTop = new THREE.Mesh(navGeo, this._strobeMat.clone());
-    this.strobeTop.position.set(0, M * 0.42, 0);
-    this.strobeTop.name = 'StrobeTop';
-    this.add(this.strobeTop);
-
-    // White strobe — bottom
-    this.strobeBottom = new THREE.Mesh(navGeo, this._strobeMat.clone());
-    this.strobeBottom.position.set(0, -M * 0.42, 0);
-    this.strobeBottom.name = 'StrobeBottom';
-    this.add(this.strobeBottom);
-
-    // Strobe halos are pushed HDR-white (×STROBE_HDR → luma > 2.5) so ONLY the flash
-    // peak blooms — a real anti-collision strobe pop. Opacity is driven in _animateNavLights.
-    this._strobeHalos = [
-      this._makeLightHalo(0xffffff, M * LFX.STROBE_HALO, LFX.STROBE_HDR, 0.0),
-      this._makeLightHalo(0xffffff, M * LFX.STROBE_HALO, LFX.STROBE_HDR, 0.0),
-    ];
-    this.strobeTop.add(this._strobeHalos[0]);
-    this.strobeBottom.add(this._strobeHalos[1]);
-    // Cached once so the per-frame flash loop allocates no array (GC discipline).
-    this._strobeCores = [this.strobeTop, this.strobeBottom];
   }
 
   // --------------------------------------------------------------------------
@@ -3504,32 +3524,9 @@ export class PlayerSatellite extends THREE.Group {
     this.sensorGimbal.rotation.x += (-clampedPitch - this.sensorGimbal.rotation.x) * speed;
   }
 
-  /** @private Navigation and strobe lights blinking */
+  /** @private Navigation and docking lights blinking */
   _animateNavLights(dt) {
     // Port/Starboard nav lights: always on (constant core + steady halo, set at build).
-
-    // White strobes: short anti-collision flash — fast attack, exponential decay,
-    // ~80 ms flash every 1.3 s (replaces the old 1 s ON / 1 s OFF square wave).
-    const STROBE_PERIOD = 1.3;
-    const STROBE_FLASH = 0.08;
-    const STROBE_ATTACK = 0.012;
-    const STROBE_TAU = 0.035;
-    this._strobeTimer += dt;
-    const sp = this._strobeTimer % STROBE_PERIOD;
-    let strobeEnv = 0;
-    if (sp < STROBE_FLASH) {
-      strobeEnv = sp < STROBE_ATTACK
-        ? sp / STROBE_ATTACK                          // fast linear attack
-        : Math.exp(-(sp - STROBE_ATTACK) / STROBE_TAU); // exp decay
-    }
-    const strobeOn = strobeEnv > 0.02;
-    for (const core of this._strobeCores) {
-      core.visible = strobeOn;                        // hides its halo child too when off
-      if (core.material) core.material.opacity = strobeEnv;
-    }
-    if (this._strobeHalos) {
-      for (const halo of this._strobeHalos) halo.material.opacity = strobeEnv;
-    }
 
     // Docking lights: alternate every 0.8 s but with soft ~100 ms ramps instead
     // of a hard on/off (reads as a breathing status light, not a square wave).

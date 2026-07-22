@@ -1038,9 +1038,15 @@ export class InputManager {
         } else if (isGameplay && d.armManager) {
           const arms = d.armManager.arms;
           // Toggle: if any docked strut is past halfway-deployed, stow all;
-          // otherwise deploy all (α → π zenith).
+          // otherwise deploy all (α → π zenith). Read the ACTUAL sweep angle
+          // (getAimAlpha), falling back to a pending slew target — NOT
+          // _strutTargetAlpha alone, which is cleared to undefined once the slew
+          // finishes. Reading only the target made the toggle stop stowing after
+          // the struts finished opening (it read undefined → 0 → "not deployed").
+          const armAlpha = (a) =>
+            a._strutTargetAlpha ?? (a.getAimAlpha ? a.getAimAlpha() : 0);
           const anyDeployed = arms.some(a =>
-            a.state === Constants.ARM_STATES.DOCKED && (a._strutTargetAlpha ?? 0) >= Math.PI / 2);
+            a.state === Constants.ARM_STATES.DOCKED && armAlpha(a) >= Math.PI / 2);
           const targetAlpha = anyDeployed ? 0 : Math.PI;
           for (const arm of arms) {
             if (arm.state === Constants.ARM_STATES.DOCKED) {

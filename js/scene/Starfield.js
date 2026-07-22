@@ -177,7 +177,7 @@ function createConstellationLabel(text) {
   ctx.font = '700 224px Arial, "Helvetica Neue", Helvetica, sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillStyle = '#cce0ff';
+  ctx.fillStyle = '#8792a8';
   ctx.globalAlpha = 1.0;
   ctx.fillText(text, 1024, 256);
   return new THREE.CanvasTexture(c);
@@ -588,11 +588,19 @@ export class Starfield {
       const label = new THREE.Sprite(new THREE.SpriteMaterial({
         map: createConstellationLabel(cst.name),
         transparent: true,
-        opacity: 0.9,            // brighter labels (§18 Fix 3 — was 0.7)
+        opacity: 0.34,           // dimmed to match quiet planet labels (was 0.9)
         depthWrite: false,
         depthTest: true,         // occlude behind Earth mesh and celestial body depth masks
       }));
-      label.position.copy(center);
+      // Nudge the label sideways (tangent to the star sphere) so the glyphs sit
+      // beside the constellation lines instead of on top of them — e.g. Orion's
+      // "i" previously landed directly over the belt line.
+      const tangent = new THREE.Vector3()
+        .crossVectors(center, new THREE.Vector3(0, 1, 0));
+      // Fall back to world X if the centroid is near the poles (degenerate cross).
+      if (tangent.lengthSq() < 1e-6) tangent.set(1, 0, 0);
+      tangent.normalize().multiplyScalar(-30); // shift toward screen-left
+      label.position.copy(center).add(tangent);
       label.scale.set(50, 12, 1);
       label.frustumCulled = false;
       this.group.add(label);
