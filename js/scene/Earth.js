@@ -776,6 +776,28 @@ function getTextureQuality() {
   return quality;
 }
 
+/**
+ * Sphere tessellation per texture-quality tier (visual-detail audit Task 3b).
+ * Pure + exported for tests, mirroring {@link selectLOD}. The Earth sphere was
+ * a hard-coded 256×256 (~131k tris) on EVERY device — the single biggest
+ * static vertex load in the scene — while only its textures/shaders were
+ * tiered. Segment counts ride the same hardware signal the textures use:
+ * a GPU that only rates base/8k textures does not resolve 256² geometry either.
+ * Applied at CONSTRUCTION only: live tier changes do NOT rebuild geometry
+ * (a mid-session downgrade keeps the built spheres — acceptable, geometry is
+ * static vertex cost, and rebuilding Earth live would hitch).
+ *
+ * @param {'16k'|'8k'|''} quality  from selectLOD()/getTextureQuality()
+ * @returns {{surface:number, clouds:number, atmosphere:number}} widthSegments
+ *   (heightSegments uses the same value; atmosphere is analytic-shaded and
+ *   needs the least)
+ */
+export function selectSphereSegments(quality) {
+  if (quality === '16k') return { surface: 256, clouds: 128, atmosphere: 64 }; // unchanged top tier
+  if (quality === '8k')  return { surface: 160, clouds: 96,  atmosphere: 64 };
+  return { surface: 96, clouds: 64, atmosphere: 48 };                          // base/weak GPUs
+}
+
 // ============================================================================
 // EARTH CLASS
 // ============================================================================
@@ -804,6 +826,9 @@ export class Earth {
     const quality = getTextureQuality();
     const texSuffix = quality ? `_${quality}` : '';
     const cloudSuffix = quality === '16k' ? '_8k' : (quality === '8k' ? '_8k' : '');
+    // Sphere tessellation rides the same hardware signal (Task 3b) — see
+    // selectSphereSegments() for the rationale + construction-only caveat.
+    this._sphereSegments = selectSphereSegments(quality);
 
     console.log(`[Earth] Texture quality: ${quality || 'base'} (suffix: "${texSuffix}")`);
 
@@ -846,9 +871,10 @@ export class Earth {
     scene.add(this.group);
   }
 
-  // --- SURFACE SPHERE (M4 Max: 256×256 segments for silky smooth) ---
+  // --- SURFACE SPHERE (tier-tessellated: 256² top tier … 96² base — Task 3b) ---
   _createSurface() {
-    const geometry = new THREE.SphereGeometry(Constants.EARTH_RADIUS, 256, 256);
+    const segs = this._sphereSegments.surface;
+    const geometry = new THREE.SphereGeometry(Constants.EARTH_RADIUS, segs, segs);
 
     this.surfaceMaterial = new THREE.ShaderMaterial({
       vertexShader: earthSurfaceVertexShader,
@@ -936,9 +962,10 @@ export class Earth {
     this.surfaceMaterial.needsUpdate = true;
   }
 
-  // --- CLOUD LAYER (128×128 segments for smooth rendering) ---
+  // --- CLOUD LAYER (tier-tessellated: 128² top tier … 64² base — Task 3b) ---
   _createClouds() {
-    const geometry = new THREE.SphereGeometry(Constants.CLOUD_RADIUS, 128, 128);
+    const segs = this._sphereSegments.clouds;
+    const geometry = new THREE.SphereGeometry(Constants.CLOUD_RADIUS, segs, segs);
 
     this.cloudMaterial = new THREE.ShaderMaterial({
       vertexShader: cloudVertexShader,
@@ -965,9 +992,10 @@ export class Earth {
     this.group.add(this.cloudMesh);
   }
 
-  // --- ATMOSPHERE (64×64 segments, BackSide, additive blending) ---
+  // --- ATMOSPHERE (tier-tessellated 64²…48², BackSide, additive blending) ---
   _createAtmosphere() {
-    const geometry = new THREE.SphereGeometry(Constants.ATMOSPHERE_RADIUS, 64, 64);
+    const segs = this._sphereSegments.atmosphere;
+    const geometry = new THREE.SphereGeometry(Constants.ATMOSPHERE_RADIUS, segs, segs);
     // Shading is fully analytic — only `position` is read.
     geometry.deleteAttribute('normal');
     geometry.deleteAttribute('uv');

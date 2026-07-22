@@ -576,6 +576,22 @@ async function init() {
   // rest of the ship/debris. Per-material envMap ignores scene.environmentIntensity;
   // brightness set via envMapIntensity here.
   player.applyFoilEnv(sceneManager.getRenderer(), 1.0); // v6.1 calm: 1.4→1.0
+  // Z-layer fix: render the ship in the near-field depth pass. At 1 unit = 100 km
+  // with a log-depth buffer + far=500, the ~2 m ship sits on the flat toe of the
+  // depth curve and its hull layers (PV cells, seams, caps…) z-fight. The
+  // near-field pass re-renders it in a tight depth range (~500× more precision),
+  // matching the clean look the menu gets from its ×1e5 scaled hero. Registered
+  // AFTER SunLight so registerNearFieldRoot() can tag the scene lights too.
+  // GUARDED: a stale service-worker-cached SceneManager.js (older than this
+  // main.js) would lack this method — degrade gracefully (sim still boots; the
+  // z-fix is simply inactive until the cache refreshes) instead of hard-crashing
+  // init into "SYSTEMS OFFLINE". A hard refresh / SW cache bump restores it.
+  if (typeof sceneManager.registerNearFieldRoot === 'function') {
+    sceneManager.registerNearFieldRoot(player);
+  } else {
+    console.warn('[main] SceneManager.registerNearFieldRoot missing — likely a ' +
+      'stale service-worker cache. Near-field z-fix inactive; hard-refresh to update.');
+  }
   _bootMark('Starfield + SunLight + Player constructed');
 
   // --- Debris Field (ST-6.1: hybrid mode consumes catalogLoader if ready) ---
@@ -589,6 +605,11 @@ async function init() {
   armManager = new ArmManager(scene, player);
   armManager.setDebrisField(debrisField);
   armManager.setCatalogLoader(catalogLoader);    // ST-6.1: active-sat treaty guard
+  // z-layer fix (A.6): let docked/close daughters join the near-field depth pass
+  // so they aren't occluded by it and don't z-fight the mother's strut-tip collars.
+  if (typeof armManager.setSceneManager === 'function') {
+    armManager.setSceneManager(sceneManager);
+  }
 
   // --- Target Selector: imported singleton from TargetSelector.js ---
 
@@ -725,7 +746,7 @@ async function init() {
   player.setCargoSystem(cargoSystem);
 
   // --- Camera System (replaces old manual follow) ---
-  cameraSystem = new CameraSystem(camera, canvas, scene);
+  cameraSystem = new CameraSystem(camera, canvas, scene, sceneManager);
 
   // --- Mothership inspection callouts (in-world 3D labels; replaces the 2D
   // wireframe pane). Gated internally on the inspection events. ---
@@ -812,7 +833,7 @@ async function init() {
 
   // V-7: Launch cinematic visual effects (flag-gated internally)
   if (Constants.FEATURE_FLAGS && Constants.FEATURE_FLAGS.LAUNCH_SEQUENCE) {
-    launchCinematic.init(scene, player);
+    launchCinematic.init(scene, player, sceneManager);
   }
 
   // V-8: Capture net system + visual effects
@@ -2251,6 +2272,18 @@ function updateCamera(dt) {
 
   // Update the camera system
   cameraSystem.update(dt, playerPos, playerVel, playerQuat);
+
+  // Detail-LOD cull (Phase 6): feed the fresh camera→craft distance (scene units)
+  // to the Mother + daughters so their inert mm-scale hardware hides when far.
+  // Craft code stays camera-agnostic; this is the single owner of the distance.
+  const _cam = sceneManager.getCamera();
+  if (_cam) {
+    const camDist = _cam.position.distanceTo(playerPos);
+    if (typeof player.setCameraDistance === 'function') player.setCameraDistance(camDist);
+    if (armManager && typeof armManager.setCameraDistance === 'function') {
+      armManager.setCameraDistance(camDist);
+    }
+  }
 
   // Inspection callouts — run AFTER the camera so band/facing use this frame's
   // camera pose. Cheap no-op internally unless inspection is engaged.

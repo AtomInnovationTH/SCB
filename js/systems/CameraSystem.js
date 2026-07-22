@@ -74,8 +74,12 @@ export class CameraSystem {
   /**
    * @param {THREE.PerspectiveCamera} camera - The scene camera
    * @param {HTMLCanvasElement} canvas - For mouse events (orbit mode)
+   * @param {THREE.Scene} [scene] - Scene to attach the fill/rim lights to
+   * @param {import('../scene/SceneManager.js').SceneManager} [sceneManager] -
+   *   optional; used to enroll the fill/rim follow lights in the near-field
+   *   depth pass so they light the ×S ship (z-layer fix).
    */
-  constructor(camera, canvas, scene = null) {
+  constructor(camera, canvas, scene = null, sceneManager = null) {
     /** @type {THREE.PerspectiveCamera} */
     this.camera = camera;
 
@@ -131,6 +135,17 @@ export class CameraSystem {
       this._rimLight = new THREE.PointLight(0xbcd0ff, 2.0, 0.01, 0);
       this._rimLight.name = 'cameraRimLight';
       scene.add(this._rimLight);
+
+      // z-layer fix: enroll both follow lights in the near-field depth pass.
+      // They are created AFTER main.js's registerNearFieldRoot(player), so
+      // without this they never gain NEAR_FIELD_LAYER and the ship renders UNLIT
+      // in the near sub-render (flat, unlike the menu hero). The pass also scales
+      // their `distance` cutoff into ×S space each near render so their reach
+      // tracks the scaled ship. No-op when no sceneManager is supplied (tests).
+      if (sceneManager && typeof sceneManager.registerNearFieldLight === 'function') {
+        sceneManager.registerNearFieldLight(this._fillLight);
+        sceneManager.registerNearFieldLight(this._rimLight);
+      }
     }
 
     /** @private scene reference for fill-light cleanup */

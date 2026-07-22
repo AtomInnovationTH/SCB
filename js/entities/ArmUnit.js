@@ -14,6 +14,9 @@ import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { getSolarCellTexture } from '../scene/solarCellTexture.js';
+import { makeLightHalo } from '../scene/glowSpriteTexture.js';
+import { makePlumeFrustum } from '../scene/plumeGeometry.js';
+import { applyDetailLod } from '../scene/detailLodCull.js';
 import { tetherReel } from '../systems/TetherReel.js';
 import { captureNetSystem, getNetClassForType, computeLeadAim, computeFragRisk, effectiveFragility, presentedWidthForApproach } from './CaptureNet.js';
 import { audioSystem } from '../systems/AudioSystem.js';
@@ -379,6 +382,9 @@ export class ArmUnit {
     this._thrusterPlumes = [];
     this._statusLightMat = null;
     this._netMesh = null;
+    // Detail-LOD cull set (Phase 6): inert daughter hardware hidden when far.
+    this._detailMeshes = [];
+    this._detailHidden = false;
 
     // Selection highlight (hotkey revamp 2026-06-14, D4): when a DOCKED daughter
     // is selected with 1-4 it glows/flashes so the player can see which plate
@@ -556,7 +562,7 @@ export class ArmUnit {
     // --- S3.5: Aft FEEP nozzle (stub, centered on −Z face) ---
     const aftNozR = (isWeaver ? 0.015 : 0.010) * M;
     const aftNozL = (isWeaver ? 0.025 : 0.015) * M;
-    const aftNozGeo = new THREE.CylinderGeometry(aftNozR, aftNozR * 1.1, aftNozL, 6, 1, true);
+    const aftNozGeo = new THREE.CylinderGeometry(aftNozR, aftNozR * 1.1, aftNozL, 10, 1, true);  // was 6-seg
     const feepMat = new THREE.MeshStandardMaterial({
       color: 0x444455, metalness: 0.85, roughness: 0.25,
     });
@@ -582,28 +588,50 @@ export class ArmUnit {
     boss.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
     this.mesh.add(boss);
 
-    // Aft thruster plume (additive blend, hidden by default)
-    const plumeGeo = new THREE.ConeGeometry(aftNozR * 3, bz * 0.5 * M, 6, 1, true);
-    const plumeMat = new THREE.MeshBasicMaterial({
-      color: isWeaver ? 0x4488ff : 0x44ff88,
-      transparent: true, opacity: 0.0,
+    // Aft thruster plume (additive, hidden by default) — HYBRID (Phase 3):
+    // a physically-consistent silver-blue FEEP core (0x99bbdd, same propellant as
+    // the Mother) inside a fainter TYPE-TINTED outer halo (Weaver blue / Spinner
+    // green) so per-type identification survives at distance. Both are diverging
+    // frustums (narrow at the exit, widening + alpha-fading aft) welded at the
+    // nozzle exit; both are pushed to _thrusterPlumes so the single _updatePlumes
+    // driver shows/flickers them together.
+    const plumeLen = bz * 0.55 * M;
+    const coreGeo = makePlumeFrustum(aftNozR * 1.0, aftNozR * 2.2, plumeLen, 10, 3);
+    const coreMat = new THREE.MeshBasicMaterial({
+      color: 0x99bbdd, transparent: true, opacity: 0.0, vertexColors: true,
       blending: THREE.AdditiveBlending, depthWrite: false,
     });
-    const plume = new THREE.Mesh(plumeGeo, plumeMat);
+    const plume = new THREE.Mesh(coreGeo, coreMat);
     // §2-followup (round 4): additive plume must draw AFTER solid geometry, like
     // the mother's plumes — without this the untagged plume sorted by raw depth
     // against the (separate) mother object and punched through inconsistently.
     plume.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;
-    plume.position.set(0, 0, -bz * 0.75 * M);
-    plume.rotation.x = -Math.PI / 2;
+    plume.position.set(0, 0, -bz * 0.5 * M);   // near end welded to aft nozzle exit
+    plume.rotation.x = -Math.PI / 2;           // beam local +Y → world -Z (aft)
     plume.visible = false;
+    plume.name = `${this.id}-feep-plume-core`;
     this.mesh.add(plume);
     this._thrusterPlumes.push(plume);
+
+    const haloGeo = makePlumeFrustum(aftNozR * 1.0, aftNozR * 3.0, plumeLen * 1.35, 10, 3);
+    const haloMat = new THREE.MeshBasicMaterial({
+      color: isWeaver ? 0x4488ff : 0x44ff88, transparent: true, opacity: 0.0, vertexColors: true,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    });
+    const plumeHalo = new THREE.Mesh(haloGeo, haloMat);
+    plumeHalo.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;
+    plumeHalo.position.set(0, 0, -bz * 0.5 * M);
+    plumeHalo.rotation.x = -Math.PI / 2;
+    plumeHalo.visible = false;
+    plumeHalo.name = `${this.id}-feep-plume-halo`;
+    this.mesh.add(plumeHalo);
+    this._thrusterPlumes.push(plumeHalo);
+    this._plumeHalo = plumeHalo;   // tagged so _updatePlumes can dim it to ~0.4×
 
     // --- S3.5: Fore FEEP nozzle (braking/attitude, offset on +Z face) ---
     const foreNozR = (isWeaver ? 0.010 : 0.007) * M;
     const foreNozL = (isWeaver ? 0.015 : 0.010) * M;
-    const foreNozGeo = new THREE.CylinderGeometry(foreNozR, foreNozR * 1.1, foreNozL, 6, 1, true);
+    const foreNozGeo = new THREE.CylinderGeometry(foreNozR, foreNozR * 1.1, foreNozL, 10, 1, true);  // was 6-seg
     const foreNozzle = new THREE.Mesh(foreNozGeo, feepMat);
     // Protrude past the fore face (halfLen = bz·0.5·M) with the base embedded so
     // it reads as a real nozzle, not a stub buried inside the hull. The brake
@@ -685,12 +713,20 @@ export class ArmUnit {
     this.mesh.add(mrr);
 
     // --- Status light (blinks to show state) ---
-    const lightGeo = new THREE.SphereGeometry(0.015 * M, 4, 4);
+    const lightGeo = new THREE.SphereGeometry(0.010 * M, 8, 6);  // was 0.015 (Batch 1 shrink)
     this._statusLightMat = new THREE.MeshBasicMaterial({ color: 0x00ff44 });
     const statusLight = new THREE.Mesh(lightGeo, this._statusLightMat);
     statusLight.position.set(0, by * 0.55 * M, -bz * 0.3 * M);
     statusLight.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE; // FIX_PLAN §2-followup
     this.mesh.add(statusLight);
+    // Additive glow halo so the state light reads as an alive lamp, not a painted
+    // dot. Built via the shared makeLightHalo factory (same recipe as the Mother's
+    // nav/dock halos). Colour + opacity track the core in _updateStatusLight (the
+    // per-state hex already encodes the blink bright/dim phase, so it breathes).
+    // Size/opacity from Constants.LIGHT_FX (Batch 1 light-shrink SSOT).
+    this._statusLightHalo = makeLightHalo(
+      0x00ff44, Constants.LIGHT_FX.STATUS_HALO * M, 1.8, Constants.LIGHT_FX.STATUS_HALO_OPACITY);
+    statusLight.add(this._statusLightHalo);
 
     // --- S3.4: EPM docking collar (replaces flat dock plate) ---
     const epmR = (isWeaver ? 0.025 : 0.020) * M;
@@ -782,8 +818,39 @@ export class ArmUnit {
     this._bridleLegB = legB;
     this._bridleLegMat = bridleLegMat;
 
+    // Detail-LOD cull set (Phase 6): collect inert daughter hardware by name
+    // suffix. Excludes body, status light + halo, plumes, tether, bridle legs
+    // (communicative / connector). Only sub-pixel-at-distance detail is listed.
+    this._collectDetailMeshes();
+
     // Start hidden (docked = part of core visually)
     this.mesh.visible = false;
+  }
+
+  /**
+   * @private — Gather inert daughter hardware into `_detailMeshes` for the
+   * distance LOD cull. Selected by the `${id}-` name suffix so it's auditable.
+   */
+  _collectDetailMeshes() {
+    const CULL_SUFFIXES = [
+      '-panel-lines', '-mrr-patch', '-epm-housing', '-epm-pole', '-gimbal-ring',
+      '-bridle-hp-A', '-bridle-hp-B', '-feep-aft-boss',
+    ];
+    this._detailMeshes.length = 0;
+    if (!this.mesh) return;
+    this.mesh.traverse((o) => {
+      if (!(o.isMesh || o.isLine) || !o.name) return;   // isLine covers panel-lines
+      if (CULL_SUFFIXES.some((s) => o.name.endsWith(s))) this._detailMeshes.push(o);
+    });
+  }
+
+  /**
+   * Feed the live camera→craft distance (SCENE UNITS) so inert detail is hidden
+   * when far. Flip applied only on hysteresis-threshold crossing (state change).
+   * @param {number} distSceneUnits
+   */
+  setCameraDistance(distSceneUnits) {
+    this._detailHidden = applyDetailLod(distSceneUnits, this._detailMeshes, this._detailHidden);
   }
 
   /** @private Create tether line geometry */
@@ -5949,11 +6016,17 @@ export class ArmUnit {
   /** @private Thruster plume animation */
   _updatePlumes(dt) {
     const isThrusting = [S.TRANSIT, S.APPROACH, S.HAULING, S.RETURNING, S.WEB_SHOT, S.REELING].includes(this.state);
+    // Frame-rate-independent shimmer (two sines, ±~5%) — replaces per-frame
+    // Math.random() fire flicker; ion emission is steady.
+    const t = Date.now() * 0.001;
+    const shimmer = 1 + 0.035 * Math.sin(t * 6.7) + 0.02 * Math.sin(t * 12.1);
+    const lenS = 0.85 * shimmer;
     for (const plume of this._thrusterPlumes) {
       if (isThrusting) {
         plume.visible = true;
-        const flicker = 0.4 + Math.random() * 0.3;
-        plume.material.opacity = flicker;
+        plume.scale.set(1, lenS, 1);                 // grow aft; width steady
+        // Type-tinted outer halo runs ~0.4× the core opacity (per-type ID at range).
+        plume.material.opacity = (plume === this._plumeHalo) ? 0.24 : 0.6;
       } else {
         plume.visible = false;
         plume.material.opacity = 0;
@@ -5970,6 +6043,7 @@ export class ArmUnit {
     if (this.isDetached) {
       const fastPulse = Math.sin(this.stateTimer * 10) > 0; // 2.5× faster pulse
       this._statusLightMat.color.setHex(fastPulse ? 0xff0000 : 0x440000);
+      this._syncStatusHalo();
       return;
     }
 
@@ -5995,6 +6069,18 @@ export class ArmUnit {
       case S.ADRIFT:     this._statusLightMat.color.setHex(blink ? 0xffaa00 : 0x442200); break;
       case S.EXPENDED:   this._statusLightMat.color.setHex(0xff0000); break;
     }
+    this._syncStatusHalo();
+  }
+
+  /**
+   * @private Mirror the status-light core colour onto its additive halo (×HDR),
+   * so the glow always matches the current state and breathes with the blink
+   * (the bright/dim per-state hex carries the phase). Cheap, null-safe.
+   */
+  _syncStatusHalo() {
+    const halo = this._statusLightHalo;
+    if (!halo) return;
+    halo.material.color.copy(this._statusLightMat.color).multiplyScalar(1.8);
   }
 
   /**

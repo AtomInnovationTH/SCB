@@ -7,7 +7,6 @@
 
 import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js';
 // Sprint 2 / PR D — FXAA fallback for MEDIUM tier (cheaper than SMAA).
@@ -20,6 +19,23 @@ import { FXAAShader } from 'three/addons/shaders/FXAAShader.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Constants } from '../core/Constants.js';
+import { NearFieldRenderPass, NEAR_FIELD_LAYER, NEAR_FIELD_SCALE } from './NearFieldRenderPass.js';
+import { nearFieldBrackets } from './nearFieldMath.js';
+
+// Near-field depth-pass tuning (z-layer fix — see NearFieldRenderPass.js).
+// NEAR_FIELD_RADIUS is a half-extent (scene units) bracketing the player ship
+// incl. deployed ROSA wings (1×2 m, OCTOPUS_V5) + 1.6 m struts — true extent is
+// < 6 m, so 0.0001 units = 10 m is generous slack. Multiplied by NEAR_FIELD_SCALE
+// each frame to set the scaled near camera's near/far around the ship. 1 unit =
+// 100 km. (Shrunk from 40 m: the old bracket predated the ×S sub-render, where
+// the bracket lives in metre-scale space and a tight one improves conditioning.)
+const NEAR_FIELD_RADIUS = 0.0001;
+// Scaled-space near-plane floor (5 cm). In the ×S sub-render M·S = 1 so units are
+// metres; 5 cm is well-conditioned under log depth and below any real standoff.
+const NEAR_FIELD_NEAR_FLOOR = 0.05;
+const NEAR_FIELD_FAR_DEFAULT = 0.01;   // 1 km — construction default, replaced per frame
+const _nfWorldPos = new THREE.Vector3();   // scratch for _updateNearCamera (no per-frame alloc)
+const _nfSetNearLayer = (o) => { o.layers.set(NEAR_FIELD_LAYER); };  // traverse cb (no per-frame closure alloc)
 import { profileFlags } from '../core/ProfileFlags.js';
 import { selectInitialTier } from '../systems/QualityManager.js';
 import { GpuProbe } from '../systems/GpuProbe.js';
@@ -103,6 +119,28 @@ export class SceneManager {
       Constants.CAMERA_NEAR,
       Constants.CAMERA_FAR
     );
+
+    // --- Near-field camera (z-layer fix) ---
+    // Sits at the ORIGIN each frame, mirroring the main camera's orientation +
+    // intrinsics, and renders ONLY the near-field layer (the player ship) after
+    // NearFieldRenderPass scales the ship into ×S camera-relative space. That
+    // moves the ship off the flat toe of the log-depth curve (w ~2e-4 → ~16),
+    // killing the fp32 `1.0 + w` depth-tie quantum. See NearFieldRenderPass.js
+    // for the full rationale. position/near/far are set per frame in
+    // _updateNearCamera(); these are just sane construction defaults.
+    this.nearCamera = new THREE.PerspectiveCamera(
+      Constants.CAMERA_FOV,
+      window.innerWidth / window.innerHeight,
+      Constants.CAMERA_NEAR,
+      NEAR_FIELD_FAR_DEFAULT
+    );
+    this.nearCamera.layers.set(NEAR_FIELD_LAYER);   // renders ONLY the near-field layer
+    /** @type {THREE.Object3D[]} roots whose subtrees render in the near pass */
+    this._nearFieldRoots = [];
+    /** @type {THREE.Light[]} camera/ship-follow point lights transformed into ×S
+     * space during the near render (fill/rim + launch pyro). Directional/hemi/
+     * ambient are direction- or position-independent and are NOT listed here. */
+    this._nearFieldLights = [];
 
     // --- Clock ---
     this.clock = new THREE.Clock();
@@ -256,10 +294,18 @@ export class SceneManager {
     );
     this.composer = new EffectComposer(this.renderer, customRT);
 
-    // 1. Render the full scene
-    const renderPass = new RenderPass(this.scene, this.camera);
+    // 1. Render the full scene. NearFieldRenderPass draws the far scene with the
+    //    main camera, then (depth cleared) the near-field layer — the player ship
+    //    — with the tight-range near camera, into the SAME buffer in one pass, so
+    //    the downstream bloom/SMAA/output chain is unchanged. (z-layer fix.)
+    const renderPass = new NearFieldRenderPass(this.scene, this.camera, this.nearCamera);
     this.composer.addPass(renderPass);
     this.renderPass = renderPass;
+    // Hand the pass the LIVE shared arrays (re-pointed on every applyTier()
+    // rebuild) so it can scale the ship + its follow lights into ×S space.
+    renderPass.nearFieldRoots = this._nearFieldRoots;
+    renderPass.nearFieldLights = this._nearFieldLights;
+    renderPass.nearFieldScale = NEAR_FIELD_SCALE;
 
     // 2. Threshold bloom at QUARTER PHYSICAL resolution (gated by tier).
     //
@@ -412,6 +458,7 @@ export class SceneManager {
       let channelName;
       switch (ctorName) {
         case 'RenderPass':       channelName = 'render'; break;
+        case 'NearFieldRenderPass': channelName = 'render'; break; // z-layer two-range beauty pass
         case 'UnrealBloomPass':  channelName = 'bloom'; break;
         case 'SMAAPass':         channelName = 'smaa'; break;
         case 'ShaderPass':       channelName = 'fxaa'; break; // we only use ShaderPass for FXAA
@@ -710,6 +757,7 @@ export class SceneManager {
     if (useFrameQuery) {
       this.gpuProbe.beginFrame();
     }
+    this._updateNearCamera();   // z-layer fix: sync near camera + tight depth range
     this.composer.render();
     if (useFrameQuery) {
       this.gpuProbe.endFrame();
@@ -758,6 +806,13 @@ export class SceneManager {
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
 
+    // Keep the near-field camera's aspect in lockstep (pose/near/far are synced
+    // per frame in _updateNearCamera, but aspect must be right for the resize).
+    if (this.nearCamera) {
+      this.nearCamera.aspect = w / h;
+      this.nearCamera.updateProjectionMatrix();
+    }
+
     this.renderer.setSize(w, h);
 
     // Keep the fat-line net web's LineMaterial resolution in sync with the
@@ -802,6 +857,163 @@ export class SceneManager {
   /** @returns {THREE.Scene} */
   getScene() {
     return this.scene;
+  }
+
+  /**
+   * Register an object whose subtree renders in the near-field depth pass (the
+   * z-layer fix). The subtree is moved onto NEAR_FIELD_LAYER (so the main/far
+   * camera skips it), and every light currently in the scene is ALSO enabled on
+   * that layer (so the near camera still lights the subtree). Call after the
+   * object and the scene lights are constructed. Idempotent per root.
+   *
+   * @param {THREE.Object3D} root  e.g. the player PlayerSatellite group
+   */
+  registerNearFieldRoot(root) {
+    if (!root || this._nearFieldRoots.includes(root)) return;
+    this._nearFieldRoots.push(root);
+    // Move the whole subtree to the near-field layer ONLY (off layer 0) so the
+    // far camera (layer 0) skips it and the near camera (NEAR_FIELD_LAYER) owns
+    // it. Groups/lines/sprites included — harmless on non-render nodes.
+    root.traverse((o) => { o.layers.set(NEAR_FIELD_LAYER); });
+    // Lights must be visible to BOTH cameras or the ship goes dark in the near
+    // pass — enable (not set) the near layer so they keep lighting layer 0 too.
+    this.scene.traverse((o) => { if (o.isLight) o.layers.enable(NEAR_FIELD_LAYER); });
+  }
+
+  /**
+   * Remove a previously-registered near-field root and return its subtree to
+   * layer 0 (so the FAR camera renders it again). Used for DYNAMIC membership:
+   * a daughter's hull is a near root only while it is docked/close to the mother
+   * (where it overlaps the hull and would be occluded by the depth-cleared near
+   * pass or z-fight the strut-tip collar); once it deploys away it leaves the
+   * near set and renders normally in the far pass. No-op if not registered.
+   *
+   * NOTE: only resets to the default layer 0. Scene lights keep their enabled
+   * near layer (harmless, and other roots still need them).
+   *
+   * @param {THREE.Object3D} root
+   */
+  unregisterNearFieldRoot(root) {
+    const i = this._nearFieldRoots.indexOf(root);
+    if (i === -1) return;
+    this._nearFieldRoots.splice(i, 1);
+    if (root && typeof root.traverse === 'function') {
+      root.traverse((o) => { o.layers.set(0); });
+    }
+  }
+
+  /**
+   * Register a camera/ship-follow POINT light so the near pass (a) renders it on
+   * NEAR_FIELD_LAYER and (b) transforms it into ×S camera-relative space during
+   * the near sub-render (position for scene-level lights, `distance` cutoff for
+   * all). Without this, camera fill/rim lights created AFTER registerNearFieldRoot
+   * never get the near layer, so the ship renders UNLIT in sim (flat vs the menu
+   * hero); and unscaled `distance` cutoffs would fall to ~1/S of the ×S ship,
+   * killing the light's reach. Idempotent per light.
+   *
+   * Only pass lights whose POSITION matters (PointLight fill/rim/pyro). Do NOT
+   * pass Directional/Hemisphere/Ambient lights — they are direction- or
+   * position-independent, so the ×S reposition is meaningless (and the generic
+   * scene-light layer enable in registerNearFieldRoot already covers them).
+   *
+   * @param {THREE.Light} light
+   */
+  registerNearFieldLight(light) {
+    if (!light || this._nearFieldLights.includes(light)) return;
+    this._nearFieldLights.push(light);
+    if (light.layers && typeof light.layers.enable === 'function') {
+      light.layers.enable(NEAR_FIELD_LAYER);
+    }
+  }
+
+  /**
+   * Drop a previously-registered near-field light (e.g. a transient launch pyro
+   * flash being disposed) so the near pass stops transforming it. No-op if the
+   * light was never registered.
+   * @param {THREE.Light} light
+   */
+  unregisterNearFieldLight(light) {
+    const i = this._nearFieldLights.indexOf(light);
+    if (i !== -1) this._nearFieldLights.splice(i, 1);
+  }
+
+  /**
+   * Re-tag a near-field root's subtree onto NEAR_FIELD_LAYER. Call if a root
+   * gains children AFTER registration (dynamically added meshes default to
+   * layer 0 and would otherwise leak into the far pass). Cheap; safe to skip.
+   * @param {THREE.Object3D} [root] specific root, or all registered roots
+   */
+  refreshNearFieldLayers(root) {
+    const roots = root ? [root] : this._nearFieldRoots;
+    for (const r of roots) {
+      if (r) r.traverse((o) => { o.layers.set(NEAR_FIELD_LAYER); });
+    }
+    this.scene.traverse((o) => { if (o.isLight) o.layers.enable(NEAR_FIELD_LAYER); });
+  }
+
+  /**
+   * @private Sync the near camera to the main camera and bracket its (scaled)
+   * near/far around the near-field roots. The near camera sits at the ORIGIN;
+   * NearFieldRenderPass scales the ship into ×S camera-relative space so it lands
+   * in front of this camera. Owns near-camera STATE only (the transform swap is
+   * the pass's job). Called once per frame in render().
+   */
+  _updateNearCamera() {
+    const nc = this.nearCamera;
+    const c = this.camera;
+    if (!nc || !this._nearFieldRoots || this._nearFieldRoots.length === 0) return;
+
+    // Re-tag the near-field subtree(s) onto NEAR_FIELD_LAYER every frame. A
+    // one-time tag at registration is NOT enough: systems that initialise AFTER
+    // the ship (ArmManager, tether/net/lasso kits, pooled FX, launch pyro)
+    // parent extra meshes/lights into it, and those default to layer 0 — so
+    // they'd render in the FAR pass at low precision and z-fight (the exact bug
+    // this pass kills). Traversing a few hundred nodes/frame to set an int mask
+    // is sub-0.1 ms.
+    for (const r of this._nearFieldRoots) {
+      if (r) r.traverse(_nfSetNearLayer);
+    }
+
+    // The near camera renders from the ORIGIN with the main camera's orientation
+    // + intrinsics. The ship is brought to it (scaled, camera-relative) by the
+    // pass, so mirroring position would be wrong — it must stay at (0,0,0).
+    nc.position.set(0, 0, 0);
+    nc.quaternion.copy(c.quaternion);
+    nc.fov = c.fov;
+    nc.aspect = c.aspect;
+    nc.zoom = c.zoom;
+    nc.filmGauge = c.filmGauge;
+    nc.filmOffset = c.filmOffset;
+
+    // Bracket the depth range tightly around the roots (unscaled distances; the
+    // helper multiplies by NEAR_FIELD_SCALE).
+    let dMin = Infinity;
+    let dMax = -Infinity;
+    for (const r of this._nearFieldRoots) {
+      if (!r || r.visible === false) continue;
+      r.getWorldPosition(_nfWorldPos);
+      const d = c.position.distanceTo(_nfWorldPos);
+      if (d < dMin) dMin = d;
+      if (d > dMax) dMax = d;
+    }
+    if (!isFinite(dMin)) return;
+
+    // CRITICAL: mirror the LIVE main-camera near (dropped to distance·0.02 during
+    // inspect by _applyDynamicNearPlane), NOT the static Constants.CAMERA_NEAR —
+    // clamping to the 3 m constant is what made close inspect clip through the
+    // hull (see plan B.1). The scaled 5 cm floor keeps it well-conditioned.
+    const { near, far } = nearFieldBrackets({
+      dMin,
+      dMax,
+      cameraNear: c.near,
+      radius: NEAR_FIELD_RADIUS,
+      scale: NEAR_FIELD_SCALE,
+      nearFloor: NEAR_FIELD_NEAR_FLOOR,
+    });
+    nc.near = near;
+    nc.far = far;
+    nc.updateProjectionMatrix();
+    nc.updateMatrixWorld(true);
   }
 
   /** @returns {THREE.PerspectiveCamera} */

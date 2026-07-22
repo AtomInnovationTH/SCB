@@ -168,6 +168,15 @@ export class ArmManager {
     /** @type {ArmUnit[]} */
     this.arms = [];
 
+    /**
+     * SceneManager ref for DYNAMIC near-field membership (z-layer fix). A
+     * daughter's hull is added to the near-field depth pass only while it is
+     * docked/close to the mother; set via setSceneManager(). Null in headless /
+     * menu-backdrop contexts, where the toggling is a no-op.
+     * @type {import('../scene/SceneManager.js').SceneManager|null}
+     */
+    this._sceneManager = null;
+
     // ST-9.2: Resolve active tier from persistence (default Y0_QUAD)
     this._activeTierKey = this._resolveActiveTierKey();
     const tierConfig = Constants.ARM_LADDER[this._activeTierKey] || Constants.ARM_LADDER.Y0_QUAD;
@@ -479,6 +488,20 @@ export class ArmManager {
   }
 
   /**
+   * Forward the live camera→craft distance (scene units) to each daughter so its
+   * inert detail hardware can be culled at range (Phase 6 detail LOD). Cheap:
+   * each daughter only does work when a hysteresis threshold is crossed.
+   * @param {number} distSceneUnits
+   */
+  setCameraDistance(distSceneUnits) {
+    for (const arm of this.arms) {
+      if (arm && typeof arm.setCameraDistance === 'function') {
+        arm.setCameraDistance(distSceneUnits);
+      }
+    }
+  }
+
+  /**
    * Deploy a docked arm in trawling mode — slow sweep for passive debris collection.
    * @param {{ x: number, y: number, z: number }|null} direction — trawl direction
    * @returns {boolean}
@@ -587,6 +610,17 @@ export class ArmManager {
    */
   setResourceSystem(rs) {
     this._resourceSystem = rs;
+  }
+
+  /**
+   * Wire the SceneManager so docked/close daughters can join the near-field
+   * depth pass (z-layer fix). Without this, daughters render on layer 0 (far
+   * pass) and get occluded by the depth-cleared near pass — and z-fight the
+   * mother's strut-tip collars where they overlap. Null-safe.
+   * @param {import('../scene/SceneManager.js').SceneManager} sceneManager
+   */
+  setSceneManager(sceneManager) {
+    this._sceneManager = sceneManager || null;
   }
 
   /**
@@ -1426,6 +1460,54 @@ export class ArmManager {
   // ==========================================================================
 
   /**
+   * z-layer fix (A.6): add/remove each daughter's HULL (`arm.mesh`, a child of
+   * `arm.group`) to the near-field depth pass based on its distance to the
+   * mother, with hysteresis to avoid flip-flop mid-deploy.
+   *
+   * WHY the hull, not the whole group: everything the daughter renders lives on
+   * `arm.mesh`; only the mother-spanning `arm.tetherLine` hangs on `arm.group`.
+   * Registering `arm.mesh` brings the hull into the ×S near pass (so it depth-
+   * tests correctly against the mother's strut-tip collars and is not occluded
+   * by the depth clear) while LEAVING the tether on layer 0 (far pass) — a
+   * tether can span from a near daughter out to far debris and must not be
+   * scaled into the near sub-render. Because the ×S transform preserves screen
+   * projection, the far-pass tether still lines up with the near-pass hull.
+   *
+   * Only daughters that overlap the mother on screen (i.e. are close) need this;
+   * a deployed daughter far away renders fine in the far pass, so it leaves the
+   * near set. Distances are in scene units (1 unit = 100 km; M = 1e-5 /m).
+   *
+   * @param {THREE.Vector3} parentPos mother world position (scene units)
+   * @private
+   */
+  _updateNearFieldMembership(parentPos) {
+    const sm = this._sceneManager;
+    if (!sm || typeof sm.registerNearFieldRoot !== 'function' || !parentPos) return;
+
+    const M = 1e-5;                 // 1 metre in scene units
+    const INCLUDE_D = 10 * M;       // ≤ 10 m from mother → join near pass
+    const EXCLUDE_D = 15 * M;       // ≥ 15 m → leave (hysteresis band avoids flip-flop)
+
+    for (const arm of this.arms) {
+      const hull = arm && arm.mesh;
+      if (!hull) continue;
+      const pos = arm.position || arm.group?.position;
+      if (!pos) continue;
+
+      const d = pos.distanceTo(parentPos);
+      const isMember = arm._nearFieldMember === true;
+
+      if (!isMember && d <= INCLUDE_D) {
+        sm.registerNearFieldRoot(hull);
+        arm._nearFieldMember = true;
+      } else if (isMember && d >= EXCLUDE_D) {
+        sm.unregisterNearFieldRoot(hull);
+        arm._nearFieldMember = false;
+      }
+    }
+  }
+
+  /**
    * Update all arms.
    * @param {number} dt - Real-time delta in seconds
    */
@@ -1489,6 +1571,11 @@ export class ArmManager {
       arm._beaconSpeedScale = speedScale;
       arm.update(dt, parentPos, parentQuat);
     }
+
+    // z-layer fix: toggle each daughter's hull in/out of the near-field depth
+    // pass by distance to the mother (runs AFTER arm.update so positions are
+    // current for this frame).
+    this._updateNearFieldMembership(parentPos);
 
     // AUTHORITATIVE CATCH PIN (runs AFTER arms move, and after DebrisField.update
     // which ran earlier this frame): force each reeling/docking arm's captured

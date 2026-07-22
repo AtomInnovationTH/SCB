@@ -47,6 +47,7 @@ export class LaunchCinematic {
     constructor() {
         this._scene = null;
         this._player = null;
+        this._sceneManager = null;
         this._enabled = false;
         this._disposed = false;
 
@@ -79,14 +80,19 @@ export class LaunchCinematic {
      * Initialise the cinematic. No-op when feature flag is disabled.
      * @param {THREE.Scene} scene — root scene (used for any world-space FX)
      * @param {THREE.Object3D} player — PlayerSatellite group
+     * @param {import('./SceneManager.js').SceneManager} [sceneManager] — optional;
+     *   used to enroll the liftoff/pyro PointLights in the near-field depth pass
+     *   so their falloff cutoff is scaled into the ×S sub-render and they keep
+     *   lighting the hull during launch (z-layer fix).
      */
-    init(scene, player) {
+    init(scene, player, sceneManager = null) {
         if (!Constants.FEATURE_FLAGS || !Constants.FEATURE_FLAGS.LAUNCH_SEQUENCE) {
             this._enabled = false;
             return;
         }
         this._scene = scene;
         this._player = player;
+        this._sceneManager = sceneManager || null;
         this._enabled = true;
         this._disposed = false;
 
@@ -171,6 +177,9 @@ export class LaunchCinematic {
 
     _disposeLiftoffLight() {
         if (this._liftoffLight) {
+            if (this._sceneManager && typeof this._sceneManager.unregisterNearFieldLight === 'function') {
+                this._sceneManager.unregisterNearFieldLight(this._liftoffLight);
+            }
             if (this._liftoffLight.parent) this._liftoffLight.parent.remove(this._liftoffLight);
             this._liftoffLight = null;
         }
@@ -222,6 +231,11 @@ export class LaunchCinematic {
         light.name = 'LiftoffExhaustGlow';
         this._player.add(light);
         this._liftoffLight = light;
+        // z-layer fix: scale this ship-child light's `distance` cutoff into ×S
+        // space during the near render so it still reaches the (S× larger) hull.
+        if (this._sceneManager && typeof this._sceneManager.registerNearFieldLight === 'function') {
+            this._sceneManager.registerNearFieldLight(light);
+        }
     }
 
     _beginFairingSeparation() {
@@ -281,6 +295,10 @@ export class LaunchCinematic {
         flashLight.name = `PyroFlash_${idx}`;
         const parent = led.parent || this._player;
         parent.add(flashLight);
+        // z-layer fix: scale this ship-child light's cutoff into ×S space.
+        if (this._sceneManager && typeof this._sceneManager.registerNearFieldLight === 'function') {
+            this._sceneManager.registerNearFieldLight(flashLight);
+        }
 
         this._pyroFlashes.push({
             light: flashLight,
@@ -348,6 +366,9 @@ export class LaunchCinematic {
                 const flash = this._pyroFlashes[i];
                 flash.timer -= dt;
                 if (flash.timer <= 0) {
+                    if (this._sceneManager && typeof this._sceneManager.unregisterNearFieldLight === 'function') {
+                        this._sceneManager.unregisterNearFieldLight(flash.light);
+                    }
                     if (flash.light && flash.light.parent) flash.light.parent.remove(flash.light);
                     if (flash.led && flash.led.material) {
                         if (flash.prevColor != null && flash.led.material.color
@@ -366,6 +387,9 @@ export class LaunchCinematic {
 
     _clearPyroFlashes() {
         for (const flash of this._pyroFlashes) {
+            if (this._sceneManager && typeof this._sceneManager.unregisterNearFieldLight === 'function') {
+                this._sceneManager.unregisterNearFieldLight(flash.light);
+            }
             if (flash.light && flash.light.parent) flash.light.parent.remove(flash.light);
             if (flash.led && flash.led.material) {
                 if (flash.prevColor != null && flash.led.material.color

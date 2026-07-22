@@ -497,16 +497,7 @@ export class MenuScreen {
     this.container.appendChild(this.element);
 
     // Initialise 3D hero scene
-    const canvas3d = this.element.querySelector('#menu-scene-3d');
-    if (canvas3d) {
-      try {
-        this._menuScene3D = new MenuScene3D(this._initialTier);
-        this._menuScene3D.init(canvas3d);
-      } catch (err) {
-        console.warn('MenuScene3D init failed (fallback to blank):', err);
-        this._menuScene3D = null;
-      }
-    }
+    this._ensureScene3D();
 
     // Button interactions — Start
     const btn = this.element.querySelector('#menu-start-btn');
@@ -973,6 +964,26 @@ export class MenuScreen {
     this._beginDeparture(Events.MENU_CONTINUE, 600, 0.6);
   }
 
+  /**
+   * Build the 3D hero scene if it does not already exist (idempotent). Normally
+   * built once and kept alive across hide/show (stop/start), so this is a no-op
+   * after construction; it exists so `show()` self-heals if the instance is ever
+   * null (e.g. a failed initial init) rather than leaving a permanently blank
+   * hero. Mirrors the original constructor build path + its try/catch.
+   */
+  _ensureScene3D() {
+    if (this._menuScene3D) return;
+    const canvas3d = this.element.querySelector('#menu-scene-3d');
+    if (!canvas3d) return;
+    try {
+      this._menuScene3D = new MenuScene3D(this._initialTier);
+      this._menuScene3D.init(canvas3d);
+    } catch (err) {
+      console.warn('MenuScene3D init failed (fallback to blank):', err);
+      this._menuScene3D = null;
+    }
+  }
+
   show() {
     this.visible = true;
     // Clear any leftover departure state from a prior run (e.g. returning to
@@ -1000,7 +1011,8 @@ export class MenuScreen {
     this.element.style.opacity = '1';
     // Listen for keyboard input while menu is shown
     window.addEventListener('keydown', this._boundKeyHandler);
-    // Start 3D scene
+    // Start 3D scene — lazily rebuild it if a prior hide() disposed it.
+    this._ensureScene3D();
     if (this._menuScene3D) this._menuScene3D.start();
   }
 
@@ -1017,7 +1029,14 @@ export class MenuScreen {
     this._resetDepartureState();
     this._closeLangMenu();
     if (this._hideLoreTip) this._hideLoreTip();
-    // Stop 3D scene
+    // Stop 3D scene. NOTE: we intentionally do NOT dispose()+rebuild the hero
+    // here. A dispose/rebuild cycle would poison shared caches — ArmUnit.dispose()
+    // frees the module-shared bridle geometry (`_sharedBridleGeo`) and the cached
+    // additive-glow texture, and PlayerSatellite has no eventBus teardown — so the
+    // rebuilt hero on a later menu visit would reference disposed GPU resources and
+    // leak listeners. Keeping the single instance alive (stop on hide, start on
+    // show) is the safe baseline; a true teardown needs hardened
+    // ArmUnit/PlayerSatellite dispose() paths + menu QA (tracked as follow-up).
     if (this._menuScene3D) this._menuScene3D.stop();
     setTimeout(() => {
       if (!this.visible) this.element.style.display = 'none';

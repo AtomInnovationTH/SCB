@@ -85,6 +85,43 @@ export const Constants = {
     HUD: 10,
   },
 
+  // === DETAIL LOD CULL (Epic — visual-audit Phase 6) ===
+  // Distance-hysteresis switch for the Mother's + daughters' mm-scale INERT
+  // hardware (pins, clips, rib rings, seams, accent rings, bolts, bushings, FEEP
+  // liners/grid discs/bosses, spring coils, guide rails, cable lines; daughter
+  // EPM rings/hardpoints/gimbals/panel-lines). Beyond ~40 m these are sub-pixel
+  // yet still cost a draw call + vertex work every frame. main.js feeds the live
+  // camera→craft distance (scene units) to player/armManager.setCameraDistance();
+  // the flip happens only when a threshold is CROSSED (state change, not per
+  // frame). Hysteresis (hide>40, show<30) prevents flip-flop at the boundary.
+  // Gameplay-communicative meshes (nav/strobe/dock lights, daughter status
+  // lights, reel LEDs, plumes, tethers) are NEVER in the cull set — they carry
+  // state at distance. Values in METRES (multiplied by M at the call site).
+  // View configs (CameraSystem): CHASE ≈16.5 m, ARM_PILOT ≈5 m keep full detail;
+  // OVERVIEW zoomed out drops it.
+  DETAIL_CULL: { HIDE_M: 40, SHOW_M: 30 },
+
+  // === LIGHT FX SIZES (z-layer-and-lights-fix Batch 1) ===
+  // Single tunable block for nav/dock/status light core + halo sizes and steady
+  // opacities. User feedback: the prior lights were TOO BIG — this shrinks them.
+  // ALL sizes are in METRES; call sites multiply by M (1 m = 1e-5 scene units).
+  // Halo values feed makeLightHalo(scaleM) — pass as `M * LIGHT_FX.<HALO>`.
+  // Keep this the ONLY place these sizes live so iteration is a one-line edit.
+  // STROBE_HDR is the near-white flash peak multiplier — only that peak crosses
+  // the sim bloom threshold (2.5) to pop; do not drop below ~2.6 or the sim
+  // strobe stops blooming (menu bloom threshold is ~1.0 — see MenuScene3D).
+  LIGHT_FX: {
+    NAV_CORE_R: 0.025,        // m — port/starboard/strobe core sphere radius (was 0.04)
+    NAV_HALO: 0.14,           // m — nav halo sprite size (was 0.30)
+    NAV_HALO_OPACITY: 0.40,   // steady port/starboard halo opacity (was 0.65)
+    STROBE_HALO: 0.17,        // m — strobe halo sprite size (was 0.345 = 0.30×1.15)
+    STROBE_HDR: 3.5,          // strobe flash-peak HDR multiplier (keep ≥ ~2.6)
+    DOCK_CORE_R: 0.02,        // m — docking green/red lamp core radius (was 0.03)
+    DOCK_HALO: 0.10,          // m — docking lamp halo sprite size (was 0.22)
+    STATUS_HALO: 0.05,        // m — daughter status-light halo size (was 0.11)
+    STATUS_HALO_OPACITY: 0.6, // daughter status-light halo opacity (was 0.85)
+  },
+
   // === CAMERA ===
   CAMERA_NEAR: 0.00003,           // ~3 m minimum (lowered from 10m to prevent panel clipping at close zoom)
   CAMERA_FAR: 500,                // ~50,000 km maximum

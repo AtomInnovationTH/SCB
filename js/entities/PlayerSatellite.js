@@ -13,6 +13,9 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { getSolarCellTexture, getRosaBackTexture } from '../scene/solarCellTexture.js';
 import { getMLIFoilMaps } from '../scene/mliFoilTexture.js';
+import { getRadialGlowTexture, makeLightHalo } from '../scene/glowSpriteTexture.js';
+import { makePlumeFrustum } from '../scene/plumeGeometry.js';
+import { applyDetailLod } from '../scene/detailLodCull.js';
 import { getOrbitalFoilEnv } from '../scene/orbitalFoilEnv.js';
 import { powerDistribution } from '../systems/PowerDistribution.js';
 import {
@@ -50,6 +53,9 @@ const _armDockTargetQuat = new THREE.Quaternion();
 const _qInvTmp = new THREE.Quaternion();
 const _v3TmpA  = new THREE.Vector3();
 const _v3TmpB  = new THREE.Vector3();
+/* RCS direction-aware firing temps (per-frame, single instance — no alloc). */
+const _rcsL  = new THREE.Vector3();
+const _rcsLn = new THREE.Vector3();
 /* Deterministic docked-arm roll basis now lives in ArmDockBasis.js (shared SSOT
  * with ArmUnit's DOCKING/HOLDING_CATCH self-alignment — see HANDOFF §10 Rule B).
  * `_composeDockedArmQuat` is a thin local alias kept for call-site readability. */
@@ -213,6 +219,12 @@ export class PlayerSatellite extends THREE.Group {
     this._rcsPuffs = [];          // Array of { sprite, startTime, active }
     this._rcsPuffIndex = 0;       // Round-robin pool index
     this._rcsPuffLastFire = {};   // Per-nozzle cooldown timestamps (seconds)
+
+    // Detail-LOD cull set (Phase 6): inert mm-scale hardware hidden when the
+    // camera is far. Populated by _collectDetailMeshes() after _buildModel;
+    // toggled only on threshold crossing by setCameraDistance().
+    this._detailMeshes = [];
+    this._detailHidden = false;
 
     // ========================================================================
     // EDT — Electrodynamic Tether (Phase 6)
@@ -471,7 +483,7 @@ export class PlayerSatellite extends THREE.Group {
     // --- 1.6. STRUTS + SWEEP PIVOTS (Epic 10 V-3) ---
     this._buildStruts();
 
-    // --- 2. FEEP THRUSTERS (4 main dual-metal FEEP + 8 RCS attitude) — Config G ---
+    // --- 2. FEEP THRUSTERS (4 main dual-metal FEEP + 4 RCS doghouse quad pods) — Config G ---
     this._buildThrusters();
 
     // --- 3. ROSA SOLAR ARRAYS (Epic 10 V-5) ---
@@ -492,6 +504,44 @@ export class PlayerSatellite extends THREE.Group {
 
     // --- 9. RCS THRUSTER PUFF SPRITES ---
     this._buildRcsPuffPool();
+
+    // --- 10. Detail-LOD cull set (Phase 6) — collect inert mm-scale hardware ---
+    this._collectDetailMeshes();
+  }
+
+  /**
+   * @private — Gather inert, mm-scale hardware into `_detailMeshes` for the
+   * distance LOD cull (Phase 6). Selected by NAME so the set is auditable in one
+   * place and can never accidentally include a gameplay-communicative mesh
+   * (nav/strobe/dock lights, reel LEDs, plumes, tethers are additive/connector
+   * meshes with different names and are deliberately excluded). Structural
+   * silhouette pieces (hull, struts, caps, collar ring, joint collars, sensor
+   * deck, docking ring) are NOT listed — only sub-pixel-at-distance detail.
+   */
+  _collectDetailMeshes() {
+    const CULL_PREFIXES = [
+      'PyroPin_', 'PClip_', 'CableHarness_', 'SpringHousing_', 'SpringCoil_',
+      'GuideRail_', 'RibRing_', 'FEEPInner_', 'FlangeBolt_', 'MountBolt_', 'Bushing_',
+    ];
+    const CULL_EXACT = new Set(['MLI_Seam', 'AccentRing', 'FEEP_Boss', 'FEEP_GridDisc']);
+    this._detailMeshes.length = 0;
+    this.traverse((o) => {
+      if (!(o.isMesh || o.isLine) || !o.name) return;   // isLine covers CableHarness lines
+      if (CULL_EXACT.has(o.name) || CULL_PREFIXES.some((p) => o.name.startsWith(p))) {
+        this._detailMeshes.push(o);
+      }
+    });
+  }
+
+  /**
+   * Feed the live camera→craft distance (SCENE UNITS) so the inert detail set can
+   * be hidden when far. Called once per frame from main.js. The flip is applied
+   * only when a hysteresis threshold is CROSSED (state change), never per frame,
+   * so it does not fight systems that own `visible` on other meshes.
+   * @param {number} distSceneUnits camera.position.distanceTo(craft.position)
+   */
+  setCameraDistance(distSceneUnits) {
+    this._detailHidden = applyDetailLod(distSceneUnits, this._detailMeshes, this._detailHidden);
   }
 
   // --------------------------------------------------------------------------
@@ -532,6 +582,44 @@ export class PlayerSatellite extends THREE.Group {
     return { pocketHa, chanHa: pocketHa * 0.55 };
   }
 
+  /**
+   * SSOT groove profile (stow channel + cradle pocket) for one daughter body.
+   * Consumed by `_carveStowGrooves` (the actual vertex carve) AND by
+   * test-RcsPlacement.js (which asserts the RCS doghouse pods clear these
+   * bands) — extract-shared so the two can never drift apart.
+   * @param {number[]} body     daughter [x,y,z] in metres
+   * @param {number}   barrelH  barrel length (scene units)
+   * @returns {Array<{zc:number,hl:number,ha:number,d:number}>} scene-unit bands
+   * @private
+   */
+  _stowGrooveProfile(body, barrelH) {
+    const barrelR_m = (Constants.OCTOPUS_V5?.COLLAR_RADIUS ?? 0.40); // metres
+    const crossW = body[0];                 // body width (m), cross-section
+    const bodyLen = body[2];                // body length (m), along barrel Z
+    // Pocket angular half-width so the arc spans ~1.3× the body width (a little
+    // clearance around the cradled body): arcWidth = barrelR * 2*ha = 1.3*crossW.
+    // Shared with the pyro-pin lip placement via _stowGrooveHalfWidths.
+    const { pocketHa, chanHa } = this._stowGrooveHalfWidths(crossW, barrelR_m);
+    // Pocket depth scales with daughter size and is capped at ~15% of the
+    // barrel radius. Was 50% (0.20 m), which read as an impact crater; ~15%
+    // (0.06 m) with the plateau profile below reads as a machined pocket. The
+    // largest daughter (Weaver, crossW 0.20) hits the cap; the smaller Spinner
+    // (crossW 0.10) scales down proportionally. Convert metre depth to scene
+    // units (×M).
+    const maxDepth_m = barrelR_m * 0.15;            // 0.06 m ≈ 15% of 0.40 m radius
+    const WEAVER_CROSS = (Constants.WEAVER_BODY ?? [0.2])[0];  // reference (largest)
+    const pocketDepth = Math.min(maxDepth_m, maxDepth_m * (crossW / WEAVER_CROSS)) * M;
+    // Pocket axial half-length ≈ body length / 2 plus a little clearance.
+    const pocketHl = (bodyLen * 0.6) * M;
+    // Stow channel: a shallower, narrower groove the folded strut lies in,
+    // running forward of the pocket. chanHa comes from the shared helper above.
+    const chanDepth = pocketDepth * 0.55;
+    return [
+      { zc: barrelH * 0.08,  hl: barrelH * 0.38, ha: chanHa,   d: chanDepth },  // stow channel
+      { zc: -barrelH * 0.34, hl: pocketHl,       ha: pocketHa, d: pocketDepth }, // cradle pocket
+    ];
+  }
+
   _carveStowGrooves(geo, barrelR, barrelH) {
     const azimuths = (Constants.ARM_LADDER?.Y0_QUAD?.azimuths ?? [60, 120, 240, 300])
       .map(d => d * Math.PI / 180);
@@ -543,42 +631,9 @@ export class PlayerSatellite extends THREE.Group {
     // groove at azimuths[i] is sized for that daughter.
     const WEAVER_BODY  = Constants.WEAVER_BODY  ?? [0.2, 0.2, 0.3];
     const SPINNER_BODY = Constants.SPINNER_BODY ?? [0.1, 0.1, 0.15];
-    const barrelR_m = (Constants.OCTOPUS_V5?.COLLAR_RADIUS ?? 0.40); // metres
 
-    /**
-     * Build the groove profile (stow channel + cradle pocket) for one daughter.
-     * @param {number[]} body  daughter [x,y,z] in metres
-     * @returns {Array<{zc:number,hl:number,ha:number,d:number}>}
-     */
-    const profileFor = (body) => {
-      const crossW = body[0];                 // body width (m), cross-section
-      const bodyLen = body[2];                // body length (m), along barrel Z
-      // Pocket angular half-width so the arc spans ~1.3× the body width (a little
-      // clearance around the cradled body): arcWidth = barrelR * 2*ha = 1.3*crossW.
-      // Shared with the pyro-pin lip placement via _stowGrooveHalfWidths.
-      const { pocketHa, chanHa } = this._stowGrooveHalfWidths(crossW, barrelR_m);
-      // Pocket depth scales with daughter size and is capped at ~15% of the
-      // barrel radius. Was 50% (0.20 m), which read as an impact crater; ~15%
-      // (0.06 m) with the plateau profile below reads as a machined pocket. The
-      // largest daughter (Weaver, crossW 0.20) hits the cap; the smaller Spinner
-      // (crossW 0.10) scales down proportionally. Convert metre depth to scene
-      // units (×M).
-      const maxDepth_m = barrelR_m * 0.15;            // 0.06 m ≈ 15% of 0.40 m radius
-      const WEAVER_CROSS = (Constants.WEAVER_BODY ?? [0.2])[0];  // reference (largest)
-      const pocketDepth = Math.min(maxDepth_m, maxDepth_m * (crossW / WEAVER_CROSS)) * M;
-      // Pocket axial half-length ≈ body length / 2 plus a little clearance.
-      const pocketHl = (bodyLen * 0.6) * M;
-      // Stow channel: a shallower, narrower groove the folded strut lies in,
-      // running forward of the pocket. chanHa comes from the shared helper above.
-      const chanDepth = pocketDepth * 0.55;
-      return [
-        { zc: barrelH * 0.08,  hl: barrelH * 0.38, ha: chanHa,   d: chanDepth },  // stow channel
-        { zc: -barrelH * 0.34, hl: pocketHl,       ha: pocketHa, d: pocketDepth }, // cradle pocket
-      ];
-    };
-
-    const weaverProfile  = profileFor(WEAVER_BODY);
-    const spinnerProfile = profileFor(SPINNER_BODY);
+    const weaverProfile  = this._stowGrooveProfile(WEAVER_BODY, barrelH);
+    const spinnerProfile = this._stowGrooveProfile(SPINNER_BODY, barrelH);
 
     const pos = geo.attributes.position;
     const v = new THREE.Vector3();
@@ -660,23 +715,11 @@ export class PlayerSatellite extends THREE.Group {
 
     // Diagnostic hull edge-outline (2026-06-03) — shown only in the INSPECT
     // camera view to give a "technical scan" read without a full scene
-    // wireframe. EdgesGeometry on the open 16-seg barrel yields the axial seams
-    // + rim circles (clean silhouette). Hidden by default; toggled via
-    // setHullOutlineVisible() from the CAMERA_VIEW_CHANGE listener below.
-    const INS = Constants.INSPECTION || {};
-    const outlineEdges = new THREE.EdgesGeometry(bodyGeo, INS.HULL_OUTLINE_THRESHOLD_DEG ?? 20);
-    this._hullOutline = new THREE.LineSegments(
-      outlineEdges,
-      new THREE.LineBasicMaterial({
-        color: INS.HULL_OUTLINE_COLOR ?? 0x00ffcc,
-        transparent: true,
-        opacity: 0.85,
-      }),
-    );
-    this._hullOutline.rotation.x = Math.PI / 2; // match this.body orientation
-    this._hullOutline.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE; // draw on top
-    this._hullOutline.visible = false;
-    this.add(this._hullOutline);
+    // wireframe. Built LAZILY on the first setHullOutlineVisible(true) call
+    // (visual-detail audit Task 3a): the EdgesGeometry walk over the carved
+    // 64×24 barrel is pure boot waste for the many sessions that never open
+    // INSPECT. `null` until first use; see setHullOutlineVisible().
+    this._hullOutline = null;
 
     // Body-mount GaAs solar cells (610W per ARM_PIVOT_ANALYSIS §10.15 —
     // supplements the deployable ROSA wings).
@@ -811,7 +854,8 @@ export class PlayerSatellite extends THREE.Group {
     // daughters stow at the strut azimuths [60,120,240,300]; the widest clear
     // azimuth windows sit at 90° and 270° (between a Weaver, ±18.6°, and a
     // Spinner, ±9.3°). At the fore/aft end Z-bands those windows are clear of
-    // daughters, struts, the RCS thrusters (45/135/225/315°) and the collar, so
+    // daughters, struts and the collar; the RCS quad pods share the 90/270°
+    // columns but sit at |z| ≥ 0.745 (clear of these cells' z-band 0.48–0.72), so
     // one cell fits in each — reclaiming otherwise-bare MLI. (The strobe lights
     // at 90/270 sit at the equator Z=0, not at these end bands, so no conflict.)
     const gapMat = makeRowMat(1);
@@ -839,12 +883,14 @@ export class PlayerSatellite extends THREE.Group {
     // redundant solid gold bands we add thin darker tape/seam rings that divide
     // the blanket into quilted sections (the characteristic MLI look). Purely
     // visual definition over the gold body.
-    // §2-followup (round 21): thin Kapton tape at radial 0.998–1.006R (tube
-    // radius M*0.0016). Thinner than before (was M*0.005 → 1.017R outer, which
-    // the round-8 comment mis-stated) so it reads like real tape and stays well
-    // inside the PV panel centre radius (1.014R). Torus tube radius is in
-    // M-units, NOT a fraction of barrelR — the earlier comments confused the two.
-    const seamGeo = new THREE.TorusGeometry(barrelR * 1.002, M * 0.0016, 4, 24);
+    // §2-followup (z-layer-and-lights-fix Batch 3, Z3): the seam tape was
+    // centred at 1.002R with tube M*0.0016 → radial span 0.998–1.006R, so its
+    // NEAR arc dipped BELOW the hull (1.000R) and crossed it at near-tangent —
+    // the classic near-parallel-at-equal-depth flicker under log-depth. Recentre
+    // fully PROUD at 1.006R → span 1.002–1.010R (min 1.002R > hull 1.000R): no
+    // crossing, deterministic tie-pass. Still well inside the PV panel outer face
+    // (1.014R). Tube radius is in M-units, NOT a fraction of barrelR.
+    const seamGeo = new THREE.TorusGeometry(barrelR * 1.006, M * 0.0016, 4, 24);
     const seamMat = new THREE.MeshStandardMaterial({
       color: 0x8a6d24, metalness: 0.7, roughness: 0.5,  // darker gold tape
       // §2-followup (round 5): MLI seam rings are DECALS on the gold body.
@@ -867,22 +913,27 @@ export class PlayerSatellite extends THREE.Group {
 
 
     // Panel-line accent rings (thin dark seam grooves) marking the cell-band
-    // seams: one at centre, two at the cell/MLI boundaries.
-    // §2-followup (round 21): the round-8 comment claimed the accent reached
-    // 1.014–1.026R and cleared the seam — but the tube radius is M-units, so the
-    // old TorusGeometry(barrelR*1.02, M*0.006) actually spanned 1.005–1.035R and
-    // poked OUTSIDE the PV panels near facet centres. New tight stack:
-    // accents at barrelR*1.008 with tube M*0.0016 → radial 1.004–1.012R, above
-    // the seam tape (≤1.006R) and below the panel centre (1.014R). Keep the
-    // existing z-nudge so accent and seam z-bands never coincide.
+    // seams at the central-row edges.
+    // §2-followup (z-layer-and-lights-fix Batch 3, Z4): the accents span radial
+    // 1.004–1.012R, INSIDE the PV panel radial span (panel outer face 1.014R,
+    // buried back to ~0.989R). The old z=0 ring ran straight THROUGH the central
+    // PV row — buried except for its facet-gap arcs, and its side-wall crossings
+    // flickered. Fix: DELETE the z=0 ring, and push the two band-edge rings OUT of
+    // the panel rows into the bare-MLI band at z = ±(cellBandH*0.5 + M*0.015).
+    // That +15 mm clears BOTH the central row edge (top at cellBandH*0.5) and the
+    // seam tape sitting at cellBandH*0.5 (round-21 "never coincide" z rule), while
+    // staying inboard of the fore/aft rows (inner edge endZ − endH/2 = barrelH*0.24
+    // = 0.48M; the accent at 0.475M ± tube stays clear). Now the accents sit fully
+    // proud on bare MLI — no panel crossing, deterministic tie-pass.
     const lineGeo = new THREE.TorusGeometry(barrelR * 1.008, M * 0.0016, 4, 24);
     const lineMat = this._matDark.clone();
     lineMat.depthWrite = false;
-    const accentZNudge = barrelH * 0.015; // shift accent bands off the seam bands
-    for (const z of [-(cellBandH * 0.5) + accentZNudge, 0, cellBandH * 0.5 - accentZNudge]) {
+    const accentZ = cellBandH * 0.5 + M * 0.015; // bare-MLI band, +15 mm off the row edge/seam
+    for (const z of [-accentZ, accentZ]) {
       const line = new THREE.Mesh(lineGeo, lineMat);
       line.position.z = z;
       line.rotation.x = Math.PI / 2;
+      line.name = 'AccentRing';   // Phase 6 detail-cull tag
       // Sub-order 2.03 — paints last (over panels + seam tape).
       line.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL + 0.03;
       this.add(line);
@@ -895,7 +946,7 @@ export class PlayerSatellite extends THREE.Group {
     // rather than seating the pieces flush (which would regress that fix).
     // OPAQUE band so the disc (DETAIL) still paints in front of the bezel mouth.
     const bezelLen = M * 0.02;
-    const bezelGeo = new THREE.CylinderGeometry(M * 0.13, M * 0.135, bezelLen, 8, 1, true);
+    const bezelGeo = new THREE.CylinderGeometry(M * 0.13, M * 0.135, bezelLen, 24, 1, true);  // was 8-seg (visibly octagonal at inspect zoom)
     const bezelMat = new THREE.MeshStandardMaterial({
       color: 0x3a3a44, metalness: 0.7, roughness: 0.45,
     });
@@ -915,7 +966,7 @@ export class PlayerSatellite extends THREE.Group {
     // Moved viewport to z=barrelH*0.5 + 0.001 (1 mm IN FRONT of cap) and
     // apertureRing to +0.002 m. They now sit flush on the cap face, fully
     // visible, with renderOrder layering keeping the gold rim on top.
-    const viewportGeo = new THREE.CircleGeometry(M * 0.12, 8);
+    const viewportGeo = new THREE.CircleGeometry(M * 0.12, 24);  // was 8-seg (match bezel)
     const viewportMat = new THREE.MeshStandardMaterial({
       color: 0x112244, metalness: 0.3, roughness: 0.2,
       emissive: 0x1133aa, emissiveIntensity: 0.4,
@@ -932,7 +983,7 @@ export class PlayerSatellite extends THREE.Group {
     this.add(this.viewport);
 
     // Laser aperture ring (gold, forward-facing)
-    const apertureRingGeo = new THREE.RingGeometry(M * 0.10, M * 0.14, 8);
+    const apertureRingGeo = new THREE.RingGeometry(M * 0.10, M * 0.14, 24);  // was 8-seg (match bezel)
     const apertureRingMat = this._matGoldMLI.clone();
     // The clone shares the barrel-scale foil textures; this ring is only a few cm,
     // so swap in [1,1] foil clones with the smallPart roughness variant (higher
@@ -968,7 +1019,15 @@ export class PlayerSatellite extends THREE.Group {
     // phases align). Rim rows are uncarved (groove z-spans stay clear of the
     // ±barrelH/2 rims), so the flat 64-gon caps seat exactly on the barrel edge
     // and no longer leave see-through slits from the 16↔64 segment mismatch.
-    const capGeo = new THREE.CircleGeometry(barrelR, 64);
+    // §2-followup (z-layer-and-lights-fix Batch 3, Z5): the cap edge circle used
+    // to share the EXACT barrel-rim circle (both at 1.000R, same z) — two
+    // coincident rim curves that flickered along the whole silhouette under
+    // log-depth. Bump the cap to a lid LIP at 1.004R (+1.6 mm overhang): the rim
+    // curves are no longer coincident, and the barrel wall now meets the cap
+    // underside perpendicular (a stable crossing, not a parallel tie). Do NOT
+    // inset the cap in z — that would open a slit at the rim. Silhouette change
+    // (1.6 mm) is invisible at gameplay range.
+    const capGeo = new THREE.CircleGeometry(barrelR * 1.004, 64);
     // End caps are structural plates (optics bench forward, thruster deck aft),
     // not blanket — keep them dark metallic, distinct from the gold MLI body.
     const capMat = new THREE.MeshStandardMaterial({
@@ -1138,7 +1197,7 @@ export class PlayerSatellite extends THREE.Group {
     // depth buffer. Widened the stagger to ±0.025·M (25 mm) — larger than the
     // sum of the half-tube-thicknesses (0.015+0.008) — so the tubes are fully
     // separated in z at every zoom.
-    const collarGeo = new THREE.TorusGeometry(collarR, M * 0.015, 8, 32);
+    const collarGeo = new THREE.TorusGeometry(collarR, M * 0.015, 12, 48);  // was 8×32 (largest ring on the craft)
     this.collarRing = new THREE.Mesh(collarGeo, collarMat);
     this.collarRing.rotation.x = Math.PI / 2;   // torus plane ⊥ barrel Z
     this.collarRing.position.z = collarY;
@@ -1198,7 +1257,7 @@ export class PlayerSatellite extends THREE.Group {
     const bushingGeo = new THREE.TorusGeometry(M * 0.008, M * 0.003, 6, 8);
     const brakeGeo   = new THREE.CylinderGeometry(M * 0.015, M * 0.015, M * 0.003, 12);
     const mountBoltGeo = new THREE.CylinderGeometry(M * 0.003, M * 0.003, M * 0.004, 6);
-    const ledGeo     = new THREE.SphereGeometry(M * 0.01, 4, 4);
+    const ledGeo     = new THREE.SphereGeometry(M * 0.01, 8, 6);  // was 4×4 (Phase 5)
 
     // ── Per-hinge Double-A clevis assemblies ─────────────────────────────
     this.hingeMounts = [];
@@ -1398,17 +1457,33 @@ export class PlayerSatellite extends THREE.Group {
     });
 
     // ── S3.3: Reel cartridge shared geometry + materials ──
-    const housingGeo = new THREE.CylinderGeometry(M * 0.055, M * 0.055, M * 0.065, 8, 1, true);
+    // Z-fix (Phase 1): the housing was open-ended (…, 8, 1, true), so looking
+    // through either open end showed a culled/see-through interior and the drum
+    // end-caps (which are coaxial with, and pierced by, the strut) read as
+    // interpenetrating geometry. Closing the ends (openEnded=false) resolves both
+    // — the opaque shell now caps the cartridge and hides the enclosed drum/strut
+    // overlap. Done by swapping the geometry flag (NOT adding cap meshes) so the
+    // keyed child order (housing[0], drum[1], led[2]) is preserved.
+    const housingGeo = new THREE.CylinderGeometry(M * 0.055, M * 0.055, M * 0.065, 12, 1, false);  // was 8-seg (4× always in chase view)
     const housingMat = new THREE.MeshStandardMaterial({
       color: 0x505868, metalness: 0.40, roughness: 0.50,  // hard-anodized 6061-T6
     });
-    const drumGeo = new THREE.CylinderGeometry(M * 0.045, M * 0.045, M * 0.055, 8);
+    const drumGeo = new THREE.CylinderGeometry(M * 0.045, M * 0.045, M * 0.055, 12);  // was 8-seg (match housing)
     const drumMat = new THREE.MeshStandardMaterial({
       color: 0xddddee, metalness: 0.20, roughness: 0.60,  // Dyneema SK78 T0
     });
-    const ledGeo = new THREE.PlaneGeometry(M * 0.008, M * 0.008);
+    // Status LED — Z-fix (Phase 1): was a flat PlaneGeometry sitting only 1 mm
+    // off the housing wall (z 0.056 vs wall r 0.055) — below reliable log-depth
+    // separation at distance, so it z-fought the shell. Now a small solid box
+    // whose inner face stands REEL_LED_STANDOFF (4 mm) proud of the wall so the
+    // pad reads as a raised indicator and never shares a depth plane with the
+    // housing. Colour is still driven via .material.color in _animateTetherIndicators.
+    const REEL_LED_STANDOFF = M * 0.004;      // 4 mm ≥ log-depth min separation
+    const ledDepth = M * 0.004;
+    const ledGeo = new THREE.BoxGeometry(M * 0.008, M * 0.008, ledDepth);
+    const ledZ = M * 0.055 + REEL_LED_STANDOFF + ledDepth * 0.5; // inner face 4 mm proud
     const ledMatBase = new THREE.MeshBasicMaterial({
-      color: 0x00ff44, side: THREE.DoubleSide,  // green = STOWED
+      color: 0x00ff44,  // green = STOWED
     });
 
     // ── S3.3: Cable harness (Line geometry, simplified from TubeGeometry) ──
@@ -1484,8 +1559,7 @@ export class PlayerSatellite extends THREE.Group {
       const drum = new THREE.Mesh(drumGeo, drumMat);
       drum.name = `ReelDrum_${i}`;
       const led = new THREE.Mesh(ledGeo, ledMatBase.clone());
-      led.position.set(0, M * 0.034, M * 0.056);  // forward face of housing
-      led.rotation.x = Math.PI / 2;                // face outward
+      led.position.set(0, M * 0.02, ledZ);  // on the housing wall, standing proud
       led.name = `ReelLED_${i}`;
 
       const reelCartridge = new THREE.Group();
@@ -1594,6 +1668,16 @@ export class PlayerSatellite extends THREE.Group {
   // --------------------------------------------------------------------------
   // 2. Thrusters
   // --------------------------------------------------------------------------
+  /**
+   * @private — Build a diverging, open-ended plume frustum with a per-vertex
+   * alpha fade to zero at the far (downstream) end. Thin delegate to the shared
+   * `makePlumeFrustum` (scene/plumeGeometry.js), which the daughters reuse so the
+   * Mother and daughter beams share one shape/fade SSOT.
+   */
+  _makePlumeFrustum(rNear, rFar, len, radial = 12, rings = 4) {
+    return makePlumeFrustum(rNear, rFar, len, radial, rings);
+  }
+
   /** @private — Config G FEEP thruster array + RCS attitude thrusters */
   _buildThrusters() {
     this.mainThrusters = [];
@@ -1602,13 +1686,7 @@ export class PlayerSatellite extends THREE.Group {
     this.attitudeThrusterPlumes = [];
 
     // Config G main FEEP nozzle — smaller proportions for 0.4m barrel
-    const nozzleGeo = new THREE.CylinderGeometry(M * 0.03, M * 0.06, M * 0.15, 6, 1, true);
-
-    // FEEP plume — silvery-blue (indium/cesium field-emission, distinct from Hall-effect blue)
-    const plumeMat = new THREE.MeshBasicMaterial({
-      color: 0x99bbdd, transparent: true, opacity: 0.0,
-      blending: THREE.AdditiveBlending, depthWrite: false,
-    });
+    const nozzleGeo = new THREE.CylinderGeometry(M * 0.03, M * 0.06, M * 0.15, 16, 1, true);  // was 12-seg (aft-view focal)
 
     // Map thruster index → Constants.THRUSTERS id (for interlock visual)
     const thrusterIds = ['HT_TOP', 'HT_BOTTOM', 'HT_RIGHT', 'HT_LEFT'];
@@ -1618,7 +1696,7 @@ export class PlayerSatellite extends THREE.Group {
     // the aft cap. Sits just aft of the rear cap (z=-M*1.0) on a distinct z-plane
     // (z=-M*1.008) with DETAIL order so it does not z-fight the cap face; radius
     // covers the ±0.2M cross while staying inside the 0.40M hull.
-    const deckGeo = new THREE.CylinderGeometry(M * 0.30, M * 0.30, M * 0.04, 16);
+    const deckGeo = new THREE.CylinderGeometry(M * 0.30, M * 0.30, M * 0.04, 24);  // was 16-seg (60 cm disc edge)
     const deckMat = new THREE.MeshStandardMaterial({
       color: 0x3a3a44, metalness: 0.7, roughness: 0.45,
     });
@@ -1651,10 +1729,16 @@ export class PlayerSatellite extends THREE.Group {
       // §2-followup (round 8): the liner used the SAME nozzleGeo as the thruster
       // with zero offset — a coincident shell (exactly the daughter cell-skin
       // bug). Under logarithmicDepthBuffer two coincident surfaces z-fight
-      // regardless of depth flags. Give the liner its own geometry at 0.97× the
-      // nozzle radius so it is a genuine interior wall with a real ~1.8mm gap,
-      // never coincident with the outer nozzle.
-      const linerGeo = new THREE.CylinderGeometry(M * 0.03 * 0.97, M * 0.06 * 0.97, M * 0.15, 6, 1, true);
+      // regardless of depth flags. Give the liner its own geometry inset from the
+      // nozzle radius so it is a genuine interior wall with a real gap, never
+      // coincident with the outer nozzle.
+      // §2-followup (z-layer-and-lights-fix Batch 4, Z6): the inset was 0.97×,
+      // leaving only a ~1.8 mm exit gap — below the ~4 mm log-depth reliable
+      // separation, so the mouth still shimmered. Tighten the inset to 0.92× so
+      // the exit gap is M*0.06*0.08 = 4.8 mm (≥ 4 mm), deterministic tie-pass at
+      // the visible nozzle mouth. Single factor on both radii keeps the cone taper.
+      const LINER_INSET = 0.92;
+      const linerGeo = new THREE.CylinderGeometry(M * 0.03 * LINER_INSET, M * 0.06 * LINER_INSET, M * 0.15, 16, 1, true);  // was 12-seg (match bell)
       const innerLiner = new THREE.Mesh(linerGeo, this._matFEEPInner.clone());
       innerLiner.name = `FEEPInner_${i}`;
       innerLiner.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
@@ -1703,25 +1787,34 @@ export class PlayerSatellite extends THREE.Group {
       glow.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE; // FIX_PLAN §2
       this.add(glow);
 
-      // FEEP plume cone (shorter, tighter than Hall-effect)
-      const plumeGeo = new THREE.ConeGeometry(M * 0.08, M * 0.3, 6, 1, true);
-      const plume = new THREE.Mesh(plumeGeo, plumeMat.clone());
-      plume.position.set(pos.x, pos.y, -M * 1.2);
-      plume.rotation.x = -Math.PI / 2;
+      // FEEP plume — diverging ion beam (Phase 3). Was a converging cone (base at
+      // nozzle, apex 30 cm aft) which reads as a chemical flame, physically wrong
+      // for field-emission. Now an open frustum, narrow at the exit (r=nozzle exit
+      // 0.06M) widening to ~2.2× downstream, vertex-alpha fading to 0 at the tip.
+      // Kept in mainThrusterPlumes as a Mesh with .material.opacity/.color/.visible
+      // — the exact hooks LaunchCinematic + _animateThrusterGlow drive.
+      const plumeGeo = this._makePlumeFrustum(M * 0.06, M * 0.13, M * 0.35);
+      const feepPlumeMat = new THREE.MeshBasicMaterial({
+        color: 0x99bbdd, transparent: true, opacity: 0.0, vertexColors: true,
+        blending: THREE.AdditiveBlending, depthWrite: false,
+      });
+      const plume = new THREE.Mesh(plumeGeo, feepPlumeMat);
+      plume.position.set(pos.x, pos.y, -M * 1.075);  // near end welded to nozzle exit
+      plume.rotation.x = -Math.PI / 2;               // beam local +Y → world -Z (aft)
       plume.name = `MainFEEPPlume_${i}`;
       plume.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE; // FIX_PLAN §2
       plume.visible = false;
       this.add(plume);
       this.mainThrusterPlumes.push(plume);
 
-      // Outer glow halo — larger, softer cone for volumetric plume effect
-      const outerGlowGeo = new THREE.ConeGeometry(M * 0.14, M * 0.45, 8, 1, true);
+      // Outer glow halo — longer, wider, fainter diverging frustum around the core.
+      const outerGlowGeo = this._makePlumeFrustum(M * 0.06, M * 0.17, M * 0.75);
       const outerGlowMat = new THREE.MeshBasicMaterial({
-        color: 0xaaccee, transparent: true, opacity: 0.0,
+        color: 0xaaccee, transparent: true, opacity: 0.0, vertexColors: true,
         blending: THREE.AdditiveBlending, depthWrite: false,
       });
       const outerGlow = new THREE.Mesh(outerGlowGeo, outerGlowMat);
-      outerGlow.position.set(pos.x, pos.y, -M * 1.25);
+      outerGlow.position.set(pos.x, pos.y, -M * 1.075);
       outerGlow.rotation.x = -Math.PI / 2;
       outerGlow.name = `MainFEEPOuterGlow_${i}`;
       outerGlow.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE; // FIX_PLAN §2
@@ -1731,47 +1824,216 @@ export class PlayerSatellite extends THREE.Group {
       this._thrusterGlowTargets.set(thruster, { glow, plume, outerGlow, innerLiner, intensity: 0 });
     });
 
-    // 8 RCS attitude thrusters (2 per quadrant, Config G barrel radius)
-    const attitudeNozzleGeo = new THREE.CylinderGeometry(M * 0.02, M * 0.035, M * 0.08, 4, 1, true);
-    const attPlumeGeo = new THREE.ConeGeometry(M * 0.04, M * 0.12, 4, 1, true);
+    // ── RCS: 4 doghouse quad pods (visual-detail audit Task 1, revised) ──────
+    // WAS: 8 bare 10-seg nozzles at the 45° azimuth family, z=±0.6 m — dead-
+    // centre of the fore/aft PV rows (|z| 0.48–0.72 m) and INSIDE the weaver
+    // stow pockets' angular span (60°/240° ± 18.6°), so nozzles hovered over
+    // carved pockets and sat on panel corners (user-reported eyesore).
+    // NOW: 4 doghouse QUAD pods (2 azimuth columns × 2 z-stations) in the clean
+    // gap CENTRED BETWEEN THE ROSA WINGS (wings at 0°/180°). Each pod carries 3
+    // nozzles — RADIAL (±Y), AXIAL (±Z), TANGENTIAL (±X) — so all six local
+    // translation directions still show a plume (a real Draco-style cluster),
+    // with the exhausts distributed across the 4 pods for full ±X/±Y/±Z cover.
+    // Placement (all guarded from BUILT geometry by test-RcsPlacement.js — never
+    // trust these comments):
+    //   • azimuth = CENTRE of the clear window between the weaver pocket (60/240°
+    //     ±~18.6°) and the spinner pocket (120/300° ±~9.3°) → ~94.65°/274.65°,
+    //     ~8° clear of both pockets AND ~85° clear of the ROSA rolls. Computed
+    //     from _stowGrooveHalfWidths so it tracks the daughter body sizes.
+    //   • |z| = 0.795 m, housing 0.10 m long → pod z-span 0.745–0.845 m: 2.5 cm
+    //     clear of the PV end rows (edge 0.72) and of the collar cluster
+    //     (rings z 0.869–0.933, r ≤ 0.415 — the corner-mounted axial bells pass
+    //     OUTSIDE them at r ≥ 0.457).
+    const RCS_POD_Z    = 0.795;   // m — pod centre |z| station (fore/aft)
+    const RCS_POD_W    = 0.12;    // m — tangential width
+    const RCS_POD_L    = 0.10;    // m — axial length
+    const RCS_POD_H    = 0.055;   // m — radial height
+    const RCS_STANDOFF = 0.005;   // m — housing base proud of hull (≥4 mm rule)
+    const RCS_BELL_LEN = 0.08;    // m — nozzle bell length (throat 0.02 → exit 0.035)
+    // Mounting base (plinth) — the fix for the "floating pod" look. A flat box
+    // tangent to the 0.4 m-radius barrel leaves a visible wedge gap under its
+    // ends (the 0.12 m tangential span drops ~4.5 mm at the centre over the
+    // curvature). The plinth is a short ARC SEGMENT whose underside conforms to
+    // the hull, sized wider than the housing so the housing reads as bolted on.
+    // The overhang is TANGENTIAL-only (a flange look); axially the plinth stays
+    // INSIDE the housing's z-footprint so it never reaches toward the PV band
+    // (|z|min must clear 0.72 m) or the collar rings (|z|max must clear 0.885 m).
+    const RCS_BASE_PAD_T = 0.018;  // m — tangential overhang (flange look, each side)
+    const RCS_BASE_H     = 0.012;  // m — plinth radial thickness
 
-    for (let q = 0; q < 4; q++) {
-      const angle = (q * Math.PI / 2) + Math.PI / 4;
-      for (let j = 0; j < 2; j++) {
-        const zOff = j === 0 ? M * 0.6 : -M * 0.6;
-        const x = Math.cos(angle) * M * 0.42;
-        const y = Math.sin(angle) * M * 0.42;
+    // Liner inset: FEEP uses 0.92 on a 0.06 m exit (gap 4.8 mm); the RCS exit is
+    // 0.035 m so 0.92 would leave only 2.8 mm (< 4 mm log-depth minimum). 0.88
+    // gives 0.035·0.12 = 4.2 mm — deterministic tie-pass at the bell mouth.
+    const RCS_LINER_INSET = 0.88;
 
-        const att = new THREE.Mesh(attitudeNozzleGeo, this._matRCS);
-        att.position.set(x, y, zOff);
-        // Orient radially outward. lookAt aims the mesh +Z at the target, but the
-        // CylinderGeometry axis is +Y — without this rotate the nozzle lies
-        // sideways ("shark fin"). rotateX(π/2) tips the cylinder axis onto the
-        // outward look direction, mirroring the plume fix at L1484.
-        // (attitudeThrusters is write-once: only pushed here at build time and
-        // never re-oriented at runtime, so mutating orientation after lookAt is
-        // safe.)
-        att.lookAt(x * 2, y * 2, zOff);
-        att.rotateX(Math.PI / 2);
-        att.name = `RCSThruster_${q}_${j}`;
-        this.add(att);
-        this.attitudeThrusters.push(att);
+    // Azimuth columns: the centre of each strut-free window. Neighbours of the
+    // +Y gap are the weaver pocket @60° and the spinner pocket @120°; of the −Y
+    // gap, weaver @240° and spinner @300°. Derive the half-widths from the SSOT
+    // so the pods re-centre if daughter body sizes ever change.
+    const barrelR_m = Constants.OCTOPUS_V5?.COLLAR_RADIUS ?? 0.40;
+    const wHa = this._stowGrooveHalfWidths((Constants.WEAVER_BODY ?? [0.2])[0], barrelR_m).pocketHa * 180 / Math.PI;
+    const sHa = this._stowGrooveHalfWidths((Constants.SPINNER_BODY ?? [0.1])[0], barrelR_m).pocketHa * 180 / Math.PI;
+    const gap90  = ((60 + wHa) + (120 - sHa)) / 2;    // ~94.65°
+    const gap270 = ((240 + wHa) + (300 - sHa)) / 2;   // ~274.65°
+    const RCS_POD_AZ_DEG = [gap90, gap270];
 
-        // RCS plume
-        const attPlume = new THREE.Mesh(attPlumeGeo, plumeMat.clone());
-        const outDir = new THREE.Vector3(x, y, 0).normalize();
-        attPlume.position.set(
-          x + outDir.x * M * 0.1,
-          y + outDir.y * M * 0.1,
-          zOff
+    const podGeo = new THREE.BoxGeometry(M * RCS_POD_W, M * RCS_POD_L, M * RCS_POD_H);
+    const podMat = new THREE.MeshStandardMaterial({
+      color: 0x9090a8, metalness: 0.72, roughness: 0.30,   // 6061-T6 CNC (matches A-frame gray)
+    });
+    // Mounting plinth — a short ARC SEGMENT of a cylinder so its underside follows
+    // the barrel curvature (no floating wedge gap). Built around the hull radius
+    // + a small standoff; we rotate it into place per-pod. Radial thickness =
+    // RCS_BASE_H; the inner face sits RCS_STANDOFF above the hull.
+    const RCS_BASE_R = 0.40 + RCS_STANDOFF + RCS_BASE_H / 2; // plinth centre radius (m)
+    const baseArcHalf = (RCS_POD_W / 2 + RCS_BASE_PAD_T) / 0.40; // angular half-width (rad)
+    const baseGeo = new THREE.CylinderGeometry(
+      M * (RCS_BASE_R + RCS_BASE_H / 2),  // outer radius
+      M * (RCS_BASE_R - RCS_BASE_H / 2),  // inner radius (hull-side, conforms)
+      M * RCS_POD_L,                       // axial length = housing (NO axial overhang → clears PV + collar)
+      20, 1, true,                        // radial segs (enough for smooth arc)
+      Math.PI / 2 - baseArcHalf,          // thetaStart — centred on local +X (rotated per-pod)
+      baseArcHalf * 2,                    // thetaLength
+    );
+    // Pre-lay the cylinder's length axis along Z (as built it's Y). After this,
+    // the arc centre sits at local +X and only a single mesh rotation.z = az
+    // is needed per pod — avoids Euler-order splaying of the axial span.
+    baseGeo.rotateX(Math.PI / 2);
+    const baseMat = new THREE.MeshStandardMaterial({
+      color: 0x7a7a8c, metalness: 0.70, roughness: 0.34,   // slightly darker than housing
+    });
+    // 14-seg bells (was 10): pods are end-mounted focal hardware at inspect zoom.
+    const bellGeo = new THREE.CylinderGeometry(M * 0.02, M * 0.035, M * RCS_BELL_LEN, 14, 1, true);
+    const linerGeo = new THREE.CylinderGeometry(
+      M * 0.02 * RCS_LINER_INSET, M * 0.035 * RCS_LINER_INSET, M * RCS_BELL_LEN, 14, 1, true,
+    );
+    const linerMat = new THREE.MeshStandardMaterial({
+      color: 0x22242c, metalness: 0.6, roughness: 0.5,     // dark cold-gas throat
+      side: THREE.BackSide,
+    });
+    // RCS plume — diverging cold-gas puff (Phase 4): short/puffy, white-gray cold
+    // gas (NOT ion blue). Near end welds to the nozzle exit; +Y beam axis aimed
+    // along each nozzle's exhaust dir.
+    const rcsPlumeGeo = makePlumeFrustum(M * 0.02, M * 0.055, M * 0.13, 8, 2);
+    const rcsPlumeMat = new THREE.MeshBasicMaterial({
+      color: 0xccd2dc, transparent: true, opacity: 0.0, vertexColors: true,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    });
+    const yUpBeam = new THREE.Vector3(0, 1, 0);  // bell/plume geometry axis
+
+    // Per-nozzle exhaust dirs + local positions — direction-aware firing (a
+    // nozzle lights when its EXHAUST opposes the thrust demand) and puff-spawn
+    // snapping. Replaces the radial-only `_rcsOutward`.
+    this._rcsExhaustDir = [];
+    this._rcsNozzleLocalPos = [];
+
+    /** Build one bell+liner+plume cluster. exhaustDir = unit vector the plume
+     *  exits along (bell throat faces −exhaustDir, wide mouth faces exhaust). */
+    const buildNozzle = (name, centre, exhaustDir) => {
+      const bell = new THREE.Mesh(bellGeo, this._matRCS);
+      bell.position.copy(centre);
+      // CylinderGeometry: +Y = radiusTop (throat 0.02), −Y = radiusBottom (exit
+      // 0.035). Map +Y → −exhaust so the wide mouth flares along the exhaust —
+      // the OLD build had this backwards (bells flared into the hull).
+      bell.quaternion.setFromUnitVectors(yUpBeam, _v3TmpA.copy(exhaustDir).negate());
+      bell.name = name;
+      this.add(bell);
+      this.attitudeThrusters.push(bell);
+
+      const liner = new THREE.Mesh(linerGeo, linerMat);
+      liner.name = name.replace('RCSThruster', 'RCSLiner');
+      liner.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      bell.add(liner);   // inherits bell orientation; concentric inset cone
+
+      const exit = _v3TmpB.copy(centre).addScaledVector(exhaustDir, M * (RCS_BELL_LEN / 2));
+      const plume = new THREE.Mesh(rcsPlumeGeo, rcsPlumeMat.clone());
+      plume.position.copy(exit).addScaledVector(exhaustDir, M * 0.005);
+      plume.quaternion.setFromUnitVectors(yUpBeam, exhaustDir);  // +Y beam → exhaust
+      plume.name = name.replace('RCSThruster', 'RCSPlume');
+      plume.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;
+      plume.visible = false;
+      this.add(plume);
+      this.attitudeThrusterPlumes.push(plume);
+
+      this._rcsExhaustDir.push(exhaustDir.clone());
+      this._rcsNozzleLocalPos.push(centre.clone());
+    };
+
+    let podIdx = 0;
+    for (let col = 0; col < RCS_POD_AZ_DEG.length; col++) {
+      const az = RCS_POD_AZ_DEG[col] * Math.PI / 180;
+      const azSign = col === 0 ? 1 : -1;   // +Y column (0) / −Y column (1)
+      const radial = new THREE.Vector3(Math.cos(az), Math.sin(az), 0);
+      const podBasis = new THREE.Matrix4().makeBasis(
+        new THREE.Vector3().crossVectors(new THREE.Vector3(0, 0, 1), radial).normalize(), // tangent
+        new THREE.Vector3(0, 0, 1),
+        radial,
+      );
+
+      for (const station of [1, -1]) {   // fore (+z) / aft (−z)
+        const podZ = station * M * RCS_POD_Z;
+
+        // Mounting plinth — conforming arc segment flush to the hull. The geometry
+        // is pre-rotated so its length runs along world Z and the arc centre sits
+        // at +X; a single rotation.z spins it to the pod azimuth. Positioned on
+        // the barrel axis (x=y=0), only offset in z to the pod station.
+        const base = new THREE.Mesh(baseGeo, baseMat);
+        base.rotation.z = az;   // arc centre → pod azimuth
+        base.position.set(0, 0, podZ);
+        base.name = `RCSPodBase_${podIdx}`;
+        base.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
+        this.add(base);
+
+        // Housing sits ON the plinth (base face buried 2 mm into the plinth top
+        // so no gap line shows). Plinth top is at radius RCS_BASE_R + RCS_BASE_H/2.
+        const housingBaseR = M * (RCS_BASE_R + RCS_BASE_H / 2 - 0.002); // bury 2 mm
+        const podR = housingBaseR + M * (RCS_POD_H / 2);
+        const pod = new THREE.Mesh(podGeo, podMat);
+        pod.position.set(radial.x * podR, radial.y * podR, podZ);
+        pod.quaternion.setFromRotationMatrix(podBasis);
+        pod.name = `RCSPod_${podIdx}`;
+        pod.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
+        this.add(pod);
+
+        const faceR = podR + M * (RCS_POD_H / 2);  // housing outer face radius
+
+        // RADIAL nozzle: on the outer face, exhaust radially outward (±Y column).
+        const radialCentre = new THREE.Vector3(
+          radial.x * (faceR + M * RCS_BELL_LEN / 2),
+          radial.y * (faceR + M * RCS_BELL_LEN / 2),
+          podZ,
         );
-        attPlume.lookAt(x + outDir.x * 2, y + outDir.y * 2, zOff);
-        attPlume.rotateX(Math.PI / 2);
-        attPlume.name = `RCSPlume_${q}_${j}`;
-        attPlume.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE; // additive/transparent — sort after solid geometry
-        attPlume.visible = false;
-        this.add(attPlume);
-        this.attitudeThrusterPlumes.push(attPlume);
+        buildNozzle(`RCSThruster_${podIdx}_R`, radialCentre, radial.clone());
+
+        // AXIAL nozzle: corner-mounted at the pod's outboard-z edge, buried 3 mm
+        // into the housing face, exhaust ±Z (fore pods +Z, aft −Z). Radial
+        // station 0.492 m keeps its whole radial span (≥0.457) OUTSIDE the
+        // collar rings (max r 0.415) as its mouth passes the collar z-band.
+        const axialR = faceR + M * 0.032;   // 0.492 m centre (0.035 bell − 3 mm bury)
+        const axialCentre = new THREE.Vector3(
+          radial.x * axialR,
+          radial.y * axialR,
+          podZ + station * M * (RCS_POD_L / 2 - 0.02),
+        );
+        buildNozzle(`RCSThruster_${podIdx}_A`, axialCentre, new THREE.Vector3(0, 0, station));
+
+        // TANGENTIAL nozzle: exhaust along ±X for lateral-X trim (RADIAL only
+        // gives ±Y in these columns). The ±X sign is distributed across the 4
+        // pods (fore/aft × col) so BOTH +X and −X exhaust exist somewhere:
+        //   +Y col: fore→+X, aft→−X ;  −Y col: fore→−X, aft→+X.
+        // Mounted at the outer face, offset a half-bell along its exhaust so the
+        // mouth clears the housing; the ±X swing stays ≥6° clear of the pockets
+        // because the pod is centred in the window.
+        const tangSignX = station * azSign;
+        const tangDir = new THREE.Vector3(tangSignX, 0, 0);
+        const tangCentre = new THREE.Vector3(
+          radial.x * faceR + tangSignX * M * (RCS_BELL_LEN / 2),
+          radial.y * faceR,
+          podZ,
+        );
+        buildNozzle(`RCSThruster_${podIdx}_T`, tangCentre, tangDir);
+
+        podIdx++;
       }
     }
   }
@@ -1789,8 +2051,8 @@ export class PlayerSatellite extends THREE.Group {
    * ```
    *   panelRightPivot (Group — sun-tracking tilt / feather rotation)
    *     ├─ _rosaPanelWrapper1 (Group — scale.x drives roll-out)
-   *     │    ├─ ROSA_Panel_Front_0deg (PlaneGeometry — FrontSide cell-string surface)
-   *     │    └─ ROSA_Panel_Back_0deg  (PlaneGeometry — BackSide copper-Kapton substrate)
+   *     │    ├─ ROSA_Panel_Front_0deg (PlaneGeometry — FrontSide cell-string surface, local z = +2 mm)
+   *     │    └─ ROSA_Panel_Back_0deg  (PlaneGeometry — BackSide copper-Kapton substrate, local z = −2 mm)
    *     └─ ROSA_Roll_0deg             (CylinderGeometry — stowed roll)
    * ```
    *
@@ -1874,11 +2136,24 @@ export class PlayerSatellite extends THREE.Group {
     });
 
     // ── Square-cornered blanket planes (local XY, rotated to XZ via wrapper) ──
-    // PlaneGeometry is centred on the origin; shift +X by rosaW/2 (or -X for the
-    // -X wing) so the inboard edge sits at the barrel surface (local x=0) and the
-    // blanket grows outboard as the wrapper scale.x rolls it out.
+    // §2-followup (z-layer-and-lights-fix Batch 2, Option A): the front + back
+    // blanket faces are the user-confirmed "solar cells" flicker source. They
+    // WERE both at local z=0 (exactly coincident); under logarithmicDepthBuffer
+    // two near-parallel surfaces at equal depth shimmer at the wing's edge-on
+    // sweep even with complementary Front/BackSide culling. Fix: give the blanket
+    // a real 4 mm thickness — front at +M*0.002 (2 mm), back at −M*0.002 (2 mm) —
+    // so the faces never tie. (Kept as two named meshes, NOT a merged box, because
+    // test-RosaFurl.js + the inverted-visibility guard bind ROSA_Panel_Front/Back
+    // and their Front/BackSide semantics.) These offsets are M-SCALED mm: 1 scene
+    // unit = 100 km, so M*0.002 = 2 mm. The old raw −0.001 was −100 m (see the
+    // panel1Back note) — always multiply real mm by M here.
+    // Z2: the inboard edge is also pushed +M*0.005 (5 mm) outboard so it starts
+    // clear of the bus; the root drum/bracket masks the small gap. Furled
+    // (wrapper scale.x→0) collapses the panel toward the pivot — visually unchanged.
+    const ROSA_HALF_THICK = M * 0.002;   // 2 mm — half the blanket thickness (Z1)
+    const ROSA_INBOARD_GAP = M * 0.005;  // 5 mm — inboard-edge standoff (Z2)
     const panelGeo = new THREE.PlaneGeometry(rosaW, rosaL);
-    const rollGeo  = new THREE.CylinderGeometry(M * 0.05, M * 0.05, rosaL, 8);
+    const rollGeo  = new THREE.CylinderGeometry(M * 0.05, M * 0.05, rosaL, 16);  // was 8-seg (2 m-long visible roll)
 
     // ── Shared solar array pivot — groups both wings as one rigid
     //    assembly so they stay coplanar through the satellite centre. ──
@@ -1901,20 +2176,20 @@ export class PlayerSatellite extends THREE.Group {
     this.panelRightPivot.add(this._rosaPanelWrapper1);
 
     const panel1Front = new THREE.Mesh(panelGeo, panelMatFront);
-    panel1Front.position.x = rosaW / 2;   // inboard edge at local x=0
+    panel1Front.position.set(rosaW / 2 + ROSA_INBOARD_GAP, 0, ROSA_HALF_THICK); // +2 mm proud (Z1), +5 mm inboard gap (Z2)
     panel1Front.name = 'ROSA_Panel_Front_0deg';
     panel1Front.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
     this._rosaPanelWrapper1.add(panel1Front);
 
-    // Back substrate shares the EXACT same plane (z=0) as the front. FrontSide
-    // and BackSide are complementary — for any camera only one of the two ever
-    // rasterizes (the other is back-face culled), so coincident geometry can't
-    // z-fight and no separation offset is needed. (A previous −0.001 "1 mm"
-    // offset was actually −100 m: 1 scene unit = 100 km, so it flung the back
-    // face 100 m off the front and opened a dead zone where the inverted wing
-    // rendered nothing. Keep this at z=0.)
+    // Back substrate: 4 mm behind the front face (local z = −2 mm) so the blanket
+    // reads as a real thin panel, not a zero-thickness sheet. FrontSide/BackSide
+    // remain complementary (only one rasterizes per camera) AND now sit at
+    // distinct depths, so the edge-on sweep no longer shimmers. (A previous −0.001
+    // "1 mm" offset was actually −100 m: 1 scene unit = 100 km, so it flung the
+    // back face 100 m off and opened a dead zone where the inverted wing rendered
+    // nothing. All offsets here are M-scaled real mm — never raw literals.)
     const panel1Back = new THREE.Mesh(panelGeo, panelMatBack);
-    panel1Back.position.set(rosaW / 2, 0, 0);
+    panel1Back.position.set(rosaW / 2 + ROSA_INBOARD_GAP, 0, -ROSA_HALF_THICK);
     panel1Back.name = 'ROSA_Panel_Back_0deg';
     panel1Back.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
     this._rosaPanelWrapper1.add(panel1Back);
@@ -1939,13 +2214,13 @@ export class PlayerSatellite extends THREE.Group {
     this.panelLeftPivot.add(this._rosaPanelWrapper2);
 
     const panel2Front = new THREE.Mesh(panelGeo, panelMatFront);
-    panel2Front.position.x = -rosaW / 2;  // inboard edge at local x=0 (mirrored)
+    panel2Front.position.set(-(rosaW / 2 + ROSA_INBOARD_GAP), 0, ROSA_HALF_THICK); // mirrored; +2 mm proud, +5 mm gap
     panel2Front.name = 'ROSA_Panel_Front_180deg';
     panel2Front.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
     this._rosaPanelWrapper2.add(panel2Front);
 
-    const panel2Back = new THREE.Mesh(panelGeo, panelMatBack); // z=0: see panel1Back note
-    panel2Back.position.set(-rosaW / 2, 0, 0);
+    const panel2Back = new THREE.Mesh(panelGeo, panelMatBack); // −2 mm behind front: see panel1Back note
+    panel2Back.position.set(-(rosaW / 2 + ROSA_INBOARD_GAP), 0, -ROSA_HALF_THICK);
     panel2Back.name = 'ROSA_Panel_Back_180deg';
     panel2Back.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
     this._rosaPanelWrapper2.add(panel2Back);
@@ -2157,7 +2432,7 @@ export class PlayerSatellite extends THREE.Group {
     pivot.add(spoolPivot);
 
     // Root roller drum / mandrel — the bare spool the blanket rolls onto.
-    const drumGeo = new THREE.CylinderGeometry(drumR, drumR, rosaL * 1.02, 12);
+    const drumGeo = new THREE.CylinderGeometry(drumR, drumR, rosaL * 1.02, 16);  // was 12-seg
     const drum = new THREE.Mesh(drumGeo, drumMat);
     drum.name = `ROSA_Drum_${wing === 1 ? '0' : '180'}deg`;
     spoolPivot.add(drum);
@@ -2165,7 +2440,7 @@ export class PlayerSatellite extends THREE.Group {
 
     // Stowed-coil bulge — coaxial fat roll of blanket when stowed, shrinking to a
     // bare mandrel as the wing rolls out (scaled radially by _setRosaWingProgress).
-    const coilGeo = new THREE.CylinderGeometry(drumR * 1.05, drumR * 1.05, rosaL, 12);
+    const coilGeo = new THREE.CylinderGeometry(drumR * 1.05, drumR * 1.05, rosaL, 16);  // was 12-seg (match drum)
     const stowRoll = new THREE.Mesh(coilGeo, drumMat);
     stowRoll.name = `ROSA_StowRoll_${wing === 1 ? '0' : '180'}deg`;
     spoolPivot.add(stowRoll);
@@ -2307,7 +2582,7 @@ export class PlayerSatellite extends THREE.Group {
     this.add(this.sensorGimbal);
 
     // EO Camera: small cylinder with dark lens
-    const camGeo = new THREE.CylinderGeometry(M * 0.12, M * 0.12, M * 0.3, 6);
+    const camGeo = new THREE.CylinderGeometry(M * 0.12, M * 0.12, M * 0.3, 12);  // was 6-seg
     const camLensMat = new THREE.MeshStandardMaterial({
       color: 0x111122, metalness: 0.7, roughness: 0.3,
     });
@@ -2345,7 +2620,7 @@ export class PlayerSatellite extends THREE.Group {
     this.sensorGimbal.add(irSensor);
 
     // LIDAR: small dome with pulsing green light
-    const lidarGeo = new THREE.SphereGeometry(M * 0.1, 8, 6, 0, Math.PI * 2, 0, Math.PI / 2);
+    const lidarGeo = new THREE.SphereGeometry(M * 0.1, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2);  // was 8×6
     const lidarMat = new THREE.MeshStandardMaterial({
       color: 0x888888, metalness: 0.7, roughness: 0.3,
     });
@@ -2354,8 +2629,25 @@ export class PlayerSatellite extends THREE.Group {
     this.lidarDome.name = 'LIDAR_Dome';
     this.sensorGimbal.add(this.lidarDome);
 
+    // §2-followup (z-layer-and-lights-fix Batch 4, Z7): the dome is an OPEN
+    // FrontSide hemisphere — from below the equator the back faces cull and the
+    // interior shows through (a see-through hollow). Cap the equator with a dark
+    // base disc so the dome reads solid. A base disc (not DoubleSide on the dome)
+    // avoids the doubled dome overdraw. The disc overhangs the rim slightly
+    // (×1.02) so its edge — not a rim coincident with the dome equator — defines
+    // the silhouette; the dome wall meets the disc perpendicular (stable, not a
+    // parallel tie). DoubleSide so it caps from any view of the tiny lip.
+    const lidarBaseGeo = new THREE.CircleGeometry(M * 0.1 * 1.02, 16);
+    const lidarBaseMat = new THREE.MeshStandardMaterial({
+      color: 0x2a2a30, metalness: 0.6, roughness: 0.5, side: THREE.DoubleSide,
+    });
+    const lidarBase = new THREE.Mesh(lidarBaseGeo, lidarBaseMat);
+    lidarBase.rotation.x = -Math.PI / 2;  // lie flat in the equator (XZ) plane
+    lidarBase.name = 'LIDAR_DomeBase';
+    this.lidarDome.add(lidarBase);  // child of the dome → tracks it exactly (local origin = equator centre)
+
     // LIDAR pulse light
-    const lidarLightGeo = new THREE.SphereGeometry(M * 0.04, 4, 4);
+    const lidarLightGeo = new THREE.SphereGeometry(M * 0.04, 8, 6);  // was 4×4
     this._lidarLightMat = new THREE.MeshBasicMaterial({
       color: 0x00ff44, transparent: true, opacity: 0.0,
     });
@@ -2425,7 +2717,7 @@ export class PlayerSatellite extends THREE.Group {
   /** @private */
   _buildDockingPort() {
     // Docking ring on front end — scaled for Config G (barrel front at Z = +M*1.0)
-    const dockRingGeo = new THREE.TorusGeometry(M * 0.25, M * 0.04, 6, 12);
+    const dockRingGeo = new THREE.TorusGeometry(M * 0.25, M * 0.04, 12, 36);  // was 8×24 (50 cm aft focal ring)
     const dockMat = new THREE.MeshStandardMaterial({
       color: 0x888899, metalness: 0.65, roughness: 0.4,
     });
@@ -2440,7 +2732,7 @@ export class PlayerSatellite extends THREE.Group {
     // axis (0, -0.15M), r just inside the ring major radius, spanning z 1.0→1.05.
     // Kept clear of the guide cone at z=1.1M.
     const collarLen = M * 0.05;
-    const collarGeo = new THREE.CylinderGeometry(M * 0.23, M * 0.23, collarLen, 12, 1, true);
+    const collarGeo = new THREE.CylinderGeometry(M * 0.23, M * 0.23, collarLen, 20, 1, true);  // was 12-seg (46 cm collar)
     const collar = new THREE.Mesh(collarGeo, dockMat);
     collar.rotation.x = Math.PI / 2;
     collar.position.set(0, -M * 0.15, M * 1.0 + collarLen * 0.5);
@@ -2449,7 +2741,7 @@ export class PlayerSatellite extends THREE.Group {
     this.add(collar);
 
     // Docking guide cone
-    const guideGeo = new THREE.ConeGeometry(M * 0.22, M * 0.12, 6, 1, true);
+    const guideGeo = new THREE.ConeGeometry(M * 0.22, M * 0.12, 20, 1, true);  // was 12-seg (match dock collar)
     const guide = new THREE.Mesh(guideGeo, this._matDark);
     guide.position.set(0, -M * 0.15, M * 1.1);
     this.add(guide);
@@ -2460,32 +2752,58 @@ export class PlayerSatellite extends THREE.Group {
     // sphere outer (0.20+0.03=0.23) physically pierced the tube. Pulled
     // lights inward to radial 0.15 → sphere outer 0.18, well clear of tube
     // hole rim. Visual still reads as "lights flanking the docking port".
-    const dockLightGeo = new THREE.SphereGeometry(M * 0.03, 4, 4);
+    const dockLightGeo = new THREE.SphereGeometry(M * Constants.LIGHT_FX.DOCK_CORE_R, 8, 6);  // was 4×4
 
-    this._dockGreenMat = new THREE.MeshBasicMaterial({ color: 0x00ff44 });
+    this._dockGreenMat = new THREE.MeshBasicMaterial({ color: 0x00ff44, transparent: true, opacity: 1.0 });
     const dockGreen = new THREE.Mesh(dockLightGeo, this._dockGreenMat);
     dockGreen.position.set(M * 0.15, -M * 0.15, M * 1.05);                  // FIX_PLAN §2-followup (round 3)
     dockGreen.name = 'DockLight_Green';
     dockGreen.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;     // FIX_PLAN §2-followup (round 3)
     this.add(dockGreen);
+    const dockGreenHalo = this._makeLightHalo(0x00ff44, M * Constants.LIGHT_FX.DOCK_HALO, 1.8, 1.0);
+    dockGreen.add(dockGreenHalo);
 
-    this._dockRedMat = new THREE.MeshBasicMaterial({ color: 0xff2222 });
+    this._dockRedMat = new THREE.MeshBasicMaterial({ color: 0xff2222, transparent: true, opacity: 0.0 });
     const dockRed = new THREE.Mesh(dockLightGeo, this._dockRedMat);
     dockRed.position.set(-M * 0.15, -M * 0.15, M * 1.05);                   // FIX_PLAN §2-followup (round 3)
     dockRed.name = 'DockLight_Red';
     dockRed.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;       // FIX_PLAN §2-followup (round 3)
     this.add(dockRed);
+    const dockRedHalo = this._makeLightHalo(0xff2222, M * Constants.LIGHT_FX.DOCK_HALO, 1.8, 0.0);
+    dockRed.add(dockRedHalo);
 
-    this._dockGreenLight = dockGreen;
-    this._dockRedLight = dockRed;
+    this._dockGreenHalo = dockGreenHalo;
+    this._dockRedHalo = dockRedHalo;
+    // Soft-ramp alternation state (replaces the hard visible on/off square wave).
+    this._dockGreenOn = true;   // which lamp is currently the "on" target
+    this._dockGreenLevel = 1.0; // ramped brightness 0..1
+    this._dockRedLevel = 0.0;
   }
 
   // --------------------------------------------------------------------------
   // 8. Navigation Lights
   // --------------------------------------------------------------------------
+  /**
+   * @private — Thin delegate to the shared `makeLightHalo` factory
+   * (scene/glowSpriteTexture.js), so the Mother and daughters build halos from one
+   * SSOT. Kept as a method for call-site readability inside the builders.
+   *
+   * The bare emissive spheres read as flat painted dots; a co-located additive
+   * radial-gradient sprite gives real spill (the "ship is alive" cue). Gameplay
+   * only — the menu hero has its own standalone model. Bloom threshold is 2.5, so
+   * coloured halos glow additively without blooming; only near-white strobe peaks
+   * (×hdrMul) cross 2.5 to bloom in the HalfFloat target, keeping the hull clean.
+   */
+  _makeLightHalo(colorHex, scaleM, hdrMul = 1.6, opacity = 0.0) {
+    return makeLightHalo(colorHex, scaleM, hdrMul, opacity);
+  }
+
   /** @private */
   _buildNavLights() {
-    const navGeo = new THREE.SphereGeometry(M * 0.04, 4, 4);
+    // Sizes read from Constants.LIGHT_FX (Batch 1 light-shrink; the SSOT block).
+    const LFX = Constants.LIGHT_FX;
+    const navGeo = new THREE.SphereGeometry(M * LFX.NAV_CORE_R, 8, 6);  // was 4×4 faceted lump
+    const HALO = M * LFX.NAV_HALO;  // steady nav halo sprite size
 
     // Port (left) — Red (repositioned for Config G barrel)
     this._portLightMat = new THREE.MeshBasicMaterial({ color: 0xff0000 });
@@ -2493,6 +2811,8 @@ export class PlayerSatellite extends THREE.Group {
     this.portLight.position.set(-M * 0.42, 0, M * 0.3);
     this.portLight.name = 'NavLight_Port';
     this.add(this.portLight);
+    // Port/starboard are STEADY (running lights) — a constant modest halo.
+    this.portLight.add(this._makeLightHalo(0xff0000, HALO, 1.6, LFX.NAV_HALO_OPACITY));
 
     // Starboard (right) — Green
     this._starboardLightMat = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
@@ -2500,8 +2820,9 @@ export class PlayerSatellite extends THREE.Group {
     this.starboardLight.position.set(M * 0.42, 0, M * 0.3);
     this.starboardLight.name = 'NavLight_Starboard';
     this.add(this.starboardLight);
+    this.starboardLight.add(this._makeLightHalo(0x00ff00, HALO, 1.6, LFX.NAV_HALO_OPACITY));
 
-    // White strobe — top
+    // White strobe — top. Core is transparent so the flash envelope can drive it.
     this._strobeMat = new THREE.MeshBasicMaterial({
       color: 0xffffff, transparent: true, opacity: 1.0,
     });
@@ -2515,6 +2836,17 @@ export class PlayerSatellite extends THREE.Group {
     this.strobeBottom.position.set(0, -M * 0.42, 0);
     this.strobeBottom.name = 'StrobeBottom';
     this.add(this.strobeBottom);
+
+    // Strobe halos are pushed HDR-white (×STROBE_HDR → luma > 2.5) so ONLY the flash
+    // peak blooms — a real anti-collision strobe pop. Opacity is driven in _animateNavLights.
+    this._strobeHalos = [
+      this._makeLightHalo(0xffffff, M * LFX.STROBE_HALO, LFX.STROBE_HDR, 0.0),
+      this._makeLightHalo(0xffffff, M * LFX.STROBE_HALO, LFX.STROBE_HDR, 0.0),
+    ];
+    this.strobeTop.add(this._strobeHalos[0]);
+    this.strobeBottom.add(this._strobeHalos[1]);
+    // Cached once so the per-frame flash loop allocates no array (GC discipline).
+    this._strobeCores = [this.strobeTop, this.strobeBottom];
   }
 
   // --------------------------------------------------------------------------
@@ -2522,25 +2854,12 @@ export class PlayerSatellite extends THREE.Group {
   // --------------------------------------------------------------------------
   /** @private — Create sprite pool for RCS thruster puff visual effects */
   _buildRcsPuffPool() {
-    // Procedural soft radial gradient texture (32×32 canvas)
-    const size = 32;
-    const canvas = document.createElement('canvas');
-    canvas.width = size;
-    canvas.height = size;
-    const ctx = canvas.getContext('2d');
-    const gradient = ctx.createRadialGradient(
-      size / 2, size / 2, 0,
-      size / 2, size / 2, size / 2
-    );
-    gradient.addColorStop(0, 'rgba(255,255,255,1)');
-    gradient.addColorStop(0.4, 'rgba(255,255,255,0.4)');
-    gradient.addColorStop(1, 'rgba(255,255,255,0)');
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, size, size);
-    const tex = new THREE.CanvasTexture(canvas);
+    // Shared procedural soft radial gradient (headless-safe: null without a DOM,
+    // so this builder — and the whole model — constructs cleanly in Node tests).
+    const tex = getRadialGlowTexture({ size: 32 });
 
     const puffMat = new THREE.SpriteMaterial({
-      map: tex,
+      map: tex || null,
       color: 0xffffff,
       blending: THREE.AdditiveBlending,
       transparent: true,
@@ -2549,16 +2868,33 @@ export class PlayerSatellite extends THREE.Group {
       depthTest: false,
     });
 
-    // Nozzle positions: keyed by direction sign — exhaust appears OPPOSITE to thrust
-    // Ship model: +Z = forward (prograde), -Z = rear (aft thrusters)
-    this._rcsPuffNozzles = {
-      'pz': new THREE.Vector3(0, 0, -M * 1.1),   // thrust prograde (+Z) → exhaust at rear (-Z, aft end)
-      'nz': new THREE.Vector3(0, 0,  M * 1.1),   // thrust retrograde (-Z) → exhaust at front (+Z)
-      'px': new THREE.Vector3(-M * 0.5, 0, 0),    // thrust +X → exhaust at -X (Config G radius 0.4m + offset)
-      'nx': new THREE.Vector3( M * 0.5, 0, 0),    // thrust -X → exhaust at +X
-      'py': new THREE.Vector3(0, -M * 0.5, 0),    // thrust +Y → exhaust at -Y
-      'ny': new THREE.Vector3(0,  M * 0.5, 0),    // thrust -Y → exhaust at +Y
+    // Nozzle positions: keyed by THRUST-axis sign (exhaust appears OPPOSITE to
+    // thrust). Ship model: +Z = forward (prograde), −Z = rear.
+    // Each key snaps to the nozzle whose EXHAUST best opposes that thrust
+    // (min exhaust·thrust) — robust to the doghouse-quad layout (radial=±Y,
+    // axial=±Z, tangential=±X across the 4 pods). The 6-key API (_fireRcsPuff
+    // callers pass local thrust dir) is unchanged — only the lookup.
+    const thrustAxis = {
+      'pz': new THREE.Vector3(0, 0, 1),
+      'nz': new THREE.Vector3(0, 0, -1),
+      'px': new THREE.Vector3(1, 0, 0),
+      'nx': new THREE.Vector3(-1, 0, 0),
+      'py': new THREE.Vector3(0, 1, 0),
+      'ny': new THREE.Vector3(0, -1, 0),
     };
+    const dirs = this._rcsExhaustDir || [];
+    const nozzles = this._rcsNozzleLocalPos || [];
+    this._rcsPuffNozzles = {};
+    for (const key of Object.keys(thrustAxis)) {
+      const thrust = thrustAxis[key];
+      let best = null;
+      let bestDot = Infinity;   // want the MOST-opposing exhaust (most negative dot)
+      for (let i = 0; i < dirs.length; i++) {
+        const d = dirs[i].dot(thrust);
+        if (d < bestDot) { bestDot = d; best = nozzles[i]; }
+      }
+      this._rcsPuffNozzles[key] = best ? best.clone() : new THREE.Vector3();
+    }
 
     // Create 8 pooled sprites (round-robin reuse)
     for (let i = 0; i < 8; i++) {
@@ -3041,24 +3377,47 @@ export class PlayerSatellite extends THREE.Group {
 
   /** @private Navigation and strobe lights blinking */
   _animateNavLights(dt) {
-    // Port/Starboard nav lights: always on (constant)
+    // Port/Starboard nav lights: always on (constant core + steady halo, set at build).
 
-    // White strobes: blink at ~1Hz
+    // White strobes: short anti-collision flash — fast attack, exponential decay,
+    // ~80 ms flash every 1.3 s (replaces the old 1 s ON / 1 s OFF square wave).
+    const STROBE_PERIOD = 1.3;
+    const STROBE_FLASH = 0.08;
+    const STROBE_ATTACK = 0.012;
+    const STROBE_TAU = 0.035;
     this._strobeTimer += dt;
-    if (this._strobeTimer > 1.0) {
-      this._strobeTimer = 0;
-      const on = !this.strobeTop.visible;
-      this.strobeTop.visible = on;
-      this.strobeBottom.visible = on;
+    const sp = this._strobeTimer % STROBE_PERIOD;
+    let strobeEnv = 0;
+    if (sp < STROBE_FLASH) {
+      strobeEnv = sp < STROBE_ATTACK
+        ? sp / STROBE_ATTACK                          // fast linear attack
+        : Math.exp(-(sp - STROBE_ATTACK) / STROBE_TAU); // exp decay
+    }
+    const strobeOn = strobeEnv > 0.02;
+    for (const core of this._strobeCores) {
+      core.visible = strobeOn;                        // hides its halo child too when off
+      if (core.material) core.material.opacity = strobeEnv;
+    }
+    if (this._strobeHalos) {
+      for (const halo of this._strobeHalos) halo.material.opacity = strobeEnv;
     }
 
-    // Docking lights alternate blink
+    // Docking lights: alternate every 0.8 s but with soft ~100 ms ramps instead
+    // of a hard on/off (reads as a breathing status light, not a square wave).
     this._blinkTimer += dt;
     if (this._blinkTimer > 0.8) {
       this._blinkTimer = 0;
-      this._dockGreenLight.visible = !this._dockGreenLight.visible;
-      this._dockRedLight.visible = !this._dockRedLight.visible;
+      this._dockGreenOn = !this._dockGreenOn;
     }
+    const rampRate = Math.min(1, dt / 0.1);           // full swing in ~100 ms
+    const gTarget = this._dockGreenOn ? 1 : 0;
+    const rTarget = this._dockGreenOn ? 0 : 1;
+    this._dockGreenLevel += (gTarget - this._dockGreenLevel) * rampRate;
+    this._dockRedLevel += (rTarget - this._dockRedLevel) * rampRate;
+    if (this._dockGreenMat) this._dockGreenMat.opacity = this._dockGreenLevel;
+    if (this._dockRedMat) this._dockRedMat.opacity = this._dockRedLevel;
+    if (this._dockGreenHalo) this._dockGreenHalo.material.opacity = this._dockGreenLevel;
+    if (this._dockRedHalo) this._dockRedHalo.material.opacity = this._dockRedLevel;
   }
 
   /** @private Thruster glow — per-nozzle differential for attitude + uniform prograde */
@@ -3106,31 +3465,35 @@ export class PlayerSatellite extends THREE.Group {
         }
       }
 
-      // Plume visibility, scale, and flickering
+      // Plume visibility, scale, and steady ion shimmer.
       if (data.plume) {
         data.plume.visible = data.intensity > 0.05;
         if (data.plume.visible) {
-          // Enhanced flicker: multi-frequency noise for realistic ion thruster shimmer
-          const flicker = 1.0 + Math.random() * 0.25 - 0.125 + Math.sin(Date.now() * 0.03) * 0.08;
-          const s = (0.5 + data.intensity * 1.5) * flicker;
-          data.plume.scale.set(s, s + Math.random() * 0.3, s);
-          data.plume.material.opacity = data.intensity * 0.45 * flicker;
-          // Red-shift plume when interlock active
-          if (blocked) {
-            data.plume.material.color.setHex(0xff6644);
-          } else {
-            data.plume.material.color.setHex(0x99bbdd);
-          }
+          // Frame-rate-independent shimmer: sum of two sines (±~5%), NOT per-frame
+          // Math.random() (which produced frame-rate-dependent fire flicker). Ion
+          // emission is steady — length breathes with thrust, width stays ~constant.
+          const t = Date.now() * 0.001;
+          const shimmer = 1 + 0.032 * Math.sin(t * 6.1 + i * 1.7)
+                            + 0.02 * Math.sin(t * 11.3 + i * 2.9);
+          const lenS = (0.55 + data.intensity * 0.9) * shimmer; // grows aft with thrust
+          const wS = 0.9 + data.intensity * 0.12;               // width nearly constant
+          data.plume.scale.set(wS, lenS, wS);                   // local +Y = beam length
+          data.plume.material.opacity = data.intensity * 0.5;   // steady (fade is vertex-alpha)
+          // Red-shift plume when interlock active (C-9 — preserved)
+          data.plume.material.color.setHex(blocked ? 0xff6644 : 0x99bbdd);
         }
       }
 
-      // Outer volumetric glow — softer, larger halo
+      // Outer volumetric glow — softer, larger, slightly slower shimmer.
       if (data.outerGlow) {
         data.outerGlow.visible = data.intensity > 0.08;
         if (data.outerGlow.visible) {
-          const gs = 0.6 + data.intensity * 1.2;
-          data.outerGlow.scale.set(gs, gs, gs);
-          data.outerGlow.material.opacity = data.intensity * 0.15;
+          const t = Date.now() * 0.001;
+          const shimmer = 1 + 0.028 * Math.sin(t * 4.3 + i * 2.3);
+          const lenS = (0.6 + data.intensity * 0.8) * shimmer;
+          const wS = 0.95 + data.intensity * 0.1;
+          data.outerGlow.scale.set(wS, lenS, wS);
+          data.outerGlow.material.opacity = data.intensity * 0.16;
           data.outerGlow.material.color.setHex(blocked ? 0xff4422 : 0xaaccee);
         }
       }
@@ -3154,14 +3517,34 @@ export class PlayerSatellite extends THREE.Group {
     this._differentialFireTargets[2] = 0;
     this._differentialFireTargets[3] = 0;
 
-    // Attitude thrusters: glow based on lateral/normal thrust
-    const attitudeIntensity = hasThrust ? Math.min(1.0, (Math.abs(ti.x) + Math.abs(ti.y)) * 5000) : 0;
-    this.attitudeThrusterPlumes.forEach(plume => {
-      plume.visible = attitudeIntensity > 0.1;
+    // Attitude (RCS) thrusters — DIRECTION-AWARE (Phase 4; generalized to 3-D
+    // for the doghouse pods). thrustInput carries LOCAL translation ΔV. Each
+    // nozzle stores its EXHAUST direction (`_rcsExhaustDir`: radial for the
+    // lateral bells, ±Z for the pod axial bells), and fires when its exhaust
+    // opposes the demand: to thrust +X, the exhaust must exit −X. The z demand
+    // now lights the axial bells too (fore pods exhaust +Z for retro trim, aft
+    // pods −Z for prograde trim) — previously ±Z translation had NO RCS visuals.
+    // Replaces the old shared attitudeIntensity that lit all 8 regardless.
+    _rcsL.set(ti.x, ti.y, ti.z);
+    const lMag = _rcsL.length();
+    const transScale = Math.min(1, lMag * 5000);   // keep the established ·5000 scale
+    const haveLat = lMag > 1e-12 && transScale > 0.001;
+    if (haveLat) _rcsLn.copy(_rcsL).divideScalar(lMag);
+    const plumes = this.attitudeThrusterPlumes;
+    for (let k = 0; k < plumes.length; k++) {
+      const plume = plumes[k];
+      const exhaust = this._rcsExhaustDir[k];
+      // A nozzle fires when its exhaust opposes the thrust demand:
+      // intensity = max(0, dot(-exhaust, L̂)) · transScale.
+      let inten = 0;
+      if (haveLat && exhaust) inten = Math.max(0, -exhaust.dot(_rcsLn)) * transScale;
+      plume.visible = inten > 0.1;
       if (plume.visible && plume.material) {
-        plume.material.opacity = attitudeIntensity * 0.3;
+        plume.material.opacity = inten * 0.5;
+        const s = 0.7 + inten * 0.6;              // puffier with demand
+        plume.scale.set(s, s, s);
       }
-    });
+    }
   }
 
   /**
@@ -3277,12 +3660,36 @@ export class PlayerSatellite extends THREE.Group {
   /**
    * Show/hide the diagnostic hull edge-outline (INSPECT view treatment).
    * Gated by Constants.INSPECTION.HULL_OUTLINE so it can be disabled globally.
+   * The LineSegments is built lazily on the FIRST show (visual-detail audit
+   * Task 3a): EdgesGeometry over the carved barrel is boot waste for sessions
+   * that never open INSPECT. Cached after first build.
    * @param {boolean} visible
    */
   setHullOutlineVisible(visible) {
-    if (!this._hullOutline) return;
     const enabled = Constants.INSPECTION?.HULL_OUTLINE !== false;
-    this._hullOutline.visible = !!visible && enabled;
+    const want = !!visible && enabled;
+    if (want && !this._hullOutline && this.body) {
+      // First show — build from the live (groove-carved) barrel geometry so the
+      // outline matches the hull exactly. EdgesGeometry yields the axial seams
+      // + rim circles (clean silhouette).
+      const INS = Constants.INSPECTION || {};
+      const outlineEdges = new THREE.EdgesGeometry(
+        this.body.geometry, INS.HULL_OUTLINE_THRESHOLD_DEG ?? 20,
+      );
+      this._hullOutline = new THREE.LineSegments(
+        outlineEdges,
+        new THREE.LineBasicMaterial({
+          color: INS.HULL_OUTLINE_COLOR ?? 0x00ffcc,
+          transparent: true,
+          opacity: 0.85,
+        }),
+      );
+      this._hullOutline.rotation.x = Math.PI / 2; // match this.body orientation
+      this._hullOutline.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE; // draw on top
+      this.add(this._hullOutline);
+    }
+    if (!this._hullOutline) return;
+    this._hullOutline.visible = want;
   }
 
   // ==========================================================================
