@@ -153,7 +153,7 @@ export const UPGRADES = [
   { id: 'gsl_tether_v4', cat: 'Graphene', name: 'GSL Tether v4', cost: 3000,
     desc: 'Graphene tether extends reach to 12.5km', effect: 'v4TetherRange',
     value: Constants.V4_TETHER_LENGTH_MULT, maxLevel: 1,
-    trl: 2, trlRationale: 'Graphene Structural Lattice. Paper-stage; HBN-coated Dyneema arriving 2026' },
+    trl: 2, trlRationale: 'Graphene Super Laminate. Paper-stage; HBN-coated Dyneema arriving 2026' },
   { id: 'gsl_net_v4', cat: 'Graphene', name: 'GSL Net v4', cost: 3500,
     desc: '10× capture net area', effect: 'v4NetArea',
     value: Math.sqrt(Constants.V4_NET_SIZE_MULT), maxLevel: 1,

@@ -270,6 +270,21 @@ export class CodexViewerUI {
     middle.appendChild(filterBar);
     middle.appendChild(entryList);
 
+    // Search lost-click fix: delegate row clicks to the stable container instead
+    // of binding per-row. The list is rebuilt (innerHTML='') on every debounced
+    // search keystroke, so a mousedown/mouseup straddling a rebuild would lose
+    // its per-row 'click'. This container survives rebuilds, so the click always
+    // resolves via the row's dataset.id.
+    entryList.addEventListener('click', (e) => {
+      const rowEl = e.target.closest && e.target.closest('.codex-row');
+      if (!rowEl || !entryList.contains(rowEl)) return;
+      const id = rowEl.dataset && rowEl.dataset.id;
+      if (!id) return;
+      const entry = this._codex && this._codex.getEntry ? this._codex.getEntry(id) : null;
+      if (!entry) return;
+      this._selectEntry(entry, { focusPane: this._narrow });
+    });
+
     // --- Reading pane (column 3) ---
     const reading = document.createElement('div');
     reading.id = 'codex-reading';
@@ -572,7 +587,7 @@ export class CodexViewerUI {
       const empty = document.createElement('div');
       Object.assign(empty.style, { color: '#667', fontSize: '13px', padding: '18px 14px' });
       empty.textContent = this._searchQuery
-        ? `No topics match “${this._searchQuery}”.`
+        ? `No topics match “${this._searchQuery}”. Try a shorter word, or clear the search to browse by category.`
         : 'No topics match the current filter.';
       listEl.appendChild(empty);
     }
@@ -589,7 +604,7 @@ export class CodexViewerUI {
         border: '1px solid rgba(90,220,150,0.2)', borderRadius: '4px',
         pointerEvents: 'none',
       });
-      banner.textContent = '🔒 All locked for now — these unlock as you fly. Open any entry to see how.';
+      banner.textContent = '🔒 Locked for now. Entries unlock as you fly. Open one to see how.';
       listEl.appendChild(banner);
     }
     entries.forEach((entry, i) => listEl.appendChild(this._makeRow(entry, i)));
@@ -714,9 +729,8 @@ export class CodexViewerUI {
     row.addEventListener('mouseleave', () => {
       if (index !== this._focusIdx) row.style.background = 'transparent';
     });
-    row.addEventListener('click', () => {
-      this._selectEntry(entry, { focusPane: this._narrow });
-    });
+    // Click is handled by delegation on #codex-entry-list (see build()), so a
+    // click is never lost when the list rebuilds under the search debounce.
     return row;
   }
 
@@ -1013,8 +1027,9 @@ export class CodexViewerUI {
       trlHtml = `
         <div style="margin-bottom:22px;">
           ${sectionHeader('⚠ TECH LEVEL', col)}
-          <div title="Tech Level (real-world readiness) ${dTrl}. ${lbl}"
-               style="display:flex;align-items:center;gap:10px;
+          <div class="codex-related-chip" data-id="tech_level"
+               title="Tech Level (real-world readiness) ${dTrl}. ${lbl}. Click to read 'Tech Level' in the Playbook."
+               style="display:flex;align-items:center;gap:10px;cursor:pointer;
                       padding:8px 12px;border:1px solid ${col};border-radius:3px;
                       background:rgba(0,0,0,0.35);font-size:13px;${isLocked ? 'opacity:0.7;' : ''}">
             <span style="font-weight:bold;letter-spacing:0.05em;color:${col};
@@ -1255,8 +1270,8 @@ export class CodexViewerUI {
     const chips = picks.map(({ r, kind }) => {
       const hint = r.unlockHint || 'Discover through gameplay.';
       const text = (kind === 'locked')
-        ? `What's behind 🔒 ${r.title}? — ${hint}`
-        : `Haven't read ${r.title} yet — it's in your library.`;
+        ? `Locked: ${r.title}. To unlock: ${hint}`
+        : `${r.title} is in your library, unread.`;
       const inner = `<span>${r.icon || '📄'}</span><span>${text}</span>`;
       return this._relatedChipHtml(r.id, kind === 'locked', accentBg, inner,
         'gap:6px;padding:7px 12px;line-height:1.4;');

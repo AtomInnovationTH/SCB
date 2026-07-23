@@ -192,7 +192,7 @@
       ],
       "i18n": {
         "title": "Delta-V Budget",
-        "shortText": "ΔV is the total change in velocity your tanks can buy, the real currency of moving in space.",
+        "shortText": "ΔV is the total change in velocity your tanks can buy, the currency of moving in space.",
         "fullText": "On the ground you measure a vehicle by range; in space you measure it by delta-V (ΔV), the total change in velocity it can still produce. Every maneuver spends from that budget: raising an orbit, matching a target's plane, killing a captured object's spin, or dropping something into a deorbit.\n\nThe Tsiolkovsky rocket equation sets the exchange rate, linking ΔV to exhaust velocity and the fraction of your mass that is propellant. It rewards efficiency without mercy: higher specific impulse buys more ΔV from the same tank, which is why your mothership leans on an efficient ion drive and your daughters sip their propellant. When the budget runs dry, you are wherever you are, for good.",
         "realWorld": "LEO→GEO ≈ 3.9 km/s; low-orbit drag makeup tens of m/s per year; the sizing number behind every mission.",
         "formula": "Δv = Isp · g₀ · ln(m₀ / m_f)   (Tsiolkovsky, 1903)",
@@ -399,7 +399,7 @@
       ],
       "i18n": {
         "title": "Specific Impulse",
-        "shortText": "How many seconds a kilo of propellant holds up one newton of thrust — the efficiency yardstick every engine is judged by.",
+        "shortText": "How many seconds a kilo of propellant holds up one newton of thrust. The efficiency yardstick every engine is judged by.",
         "fullText": "Specific impulse (Isp), measured in seconds, is the efficiency rating of a thruster: how much velocity change it wrings from each kilogram of propellant. Higher is better, and the range is enormous. A chemical rocket manages around 300 seconds, a xenon ion drive around 3,000, and a FEEP thruster over 6,000.\n\nThe universal catch is that efficiency and thrust trade against each other: the most efficient engines are also the weakest. That single tension shapes your whole ship, which is why the mothership cruises on an efficient ion drive while the attitude thrusters use responsive, thirsty cold gas. You pick the engine to match the job, not the other way around.",
         "realWorld": "Cold gas ~70 s · hydrazine ~230 s · xenon ion ~3,000 s · FEEP ~6,000 s.",
         "formula": "Isp = F / (ṁ · g₀)",
@@ -448,7 +448,7 @@
       ],
       "i18n": {
         "title": "FEEP Propellant: Indium",
-        "shortText": "The baseline FEEP metal — flight-proven, well-behaved, and reliable enough to be the boring default.",
+        "shortText": "The baseline FEEP metal: flight-proven, well-behaved, and reliable enough to be the boring default.",
         "fullText": "Indium melts at a modest 156.6°C and has been the workhorse FEEP propellant since the 1990s. Enpulsion's IFM Nano uses a porous indium needle emitter to reach 4,000-19,000 seconds of specific impulse at micronewton thrust, and its high surface tension and low vapour pressure make it ideal for capillary feed systems.\n\nCrucially, it is flight-proven: indium FEEP has flown on LISA Pathfinder, on ESA's GOCE gravity mapper, and on numerous CubeSats, earning a full TRL 9. Your daughters ship with indium as the default for the same reason the industry does, because it is reliable, well-characterised, and available off the shelf. It is the propellant you pick when you want no surprises.",
         "realWorld": "Enpulsion IFM Nano; LISA Pathfinder (2016), GOCE; Isp ≈ 4,000-19,000 s.",
         "formula": "Isp ≈ 4,000-19,000 s",
@@ -470,7 +470,7 @@
       ],
       "i18n": {
         "title": "FEEP Propellant: Gallium",
-        "shortText": "Gallium melts at 29.8°C, warm enough to liquefy in your hand — simpler feed heating, higher Isp than indium.",
+        "shortText": "Gallium melts at 29.8°C, warm enough to liquefy in your hand. That means simpler feed heating and higher Isp than indium.",
         "fullText": "Gallium's remarkable trait is that it melts at just 29.8°C, warm enough to go liquid in your hand. For a FEEP thruster that low melting point means less heater power and a simpler feed system, a real operational saving over indium.\n\nGround studies under ESA's Horizon 2000+ programme showed gallium FEEP reaching specific impulses up to about 25,000 seconds, some 31% above the indium baseline, at slightly lower thrust per watt. The complication is that gallium tends to supercool below its freezing point, so the feed system has to actively prevent it from solidifying during the cold of an eclipse pass. Higher performance, in exchange for a fussier thermal design.",
         "realWorld": "ESA Horizon 2000+ FEEP studies (ground); Isp up to ~25,000 s at ~0.028 N/W.",
         "formula": "Isp ≈ up to 25,000 s · 0.028 N/W",
@@ -514,7 +514,7 @@
       ],
       "i18n": {
         "title": "FEEP Propellant: Iodine",
-        "shortText": "Cheap and storable as a solid, needing no pressurised tank — but viciously corrosive to the hardware.",
+        "shortText": "Cheap and storable as a solid, needing no pressurised tank, but viciously corrosive to the hardware.",
         "fullText": "Iodine stores as a solid at room temperature, so it needs no heavy pressurised tank, and at roughly the cost of indium it packs into a far denser volume. ThrustMe's NPT30-I2 flew on ESA's SpaceVan in 2020, validating iodine electric propulsion at TRL 7, with excellent thrust per watt around 60 millinewtons per kilowatt at a modest 2,000-4,500 seconds of specific impulse.\n\nThe catch is chemistry: iodine is viciously corrosive, attacking spacecraft surfaces, feed lines, and even thruster grids over time. That hostility is also an opportunity; JAXA has explored iodine for air-breathing thrusters that scoop atmospheric particles below 200 km. Cheap and compact, if you can keep it from eating the ship.",
         "realWorld": "ThrustMe NPT30-I2 on ESA SpaceVan (2020); Isp ~2,000-4,500 s at ~60 mN/W; corrosive.",
         "formula": "Isp ≈ 2,000-4,500 s · ~60 mN/W",
@@ -535,7 +535,7 @@
       ],
       "i18n": {
         "title": "FEEP Propellant: Mercury",
-        "shortText": "The first ion-drive propellant ever flown — mechanically simple, genuinely effective, and far too toxic to use today.",
+        "shortText": "The first ion-drive propellant ever flown: mechanically simple, effective, and far too toxic to use today.",
         "fullText": "Mercury was the very first ion-thruster propellant flown in space: NASA's SERT-I in 1964 and the Soviet Zond programme both used mercury bombardment thrusters. It works well, offering 3,000-10,000 seconds of specific impulse at a solid 40 millinewtons per kilowatt, and being liquid at room temperature with a high atomic mass makes it mechanically simple to handle.\n\nThe dealbreaker is toxicity. Contamination risk led NASA to abandon mercury propulsion in the 1980s, and modern planetary-protection rules effectively ban it. Your forge can still extract mercury from old switchgear salvage, so it remains an option of last resort, but the codex is blunt about it: use it only if you are desperate, and handle it with extreme caution.",
         "realWorld": "NASA SERT-I (1964) and Soviet Zond used mercury; abandoned ~1980s over toxicity; effectively banned now.",
         "formula": "Isp ≈ 3,000-10,000 s · ~40 mN/W",
@@ -557,8 +557,8 @@
       ],
       "i18n": {
         "title": "FEEP Propellant: Cesium",
-        "shortText": "The specific-impulse king, thanks to the lowest ionisation energy of any stable element — and violently reactive with air.",
-        "fullText": "Cesium holds the FEEP specific-impulse record, reaching 8,000-22,000 seconds in flight-representative tests. It owes that to the lowest ionisation energy of any stable element, just 3.89 electronvolts, so its ions come free easily and efficiently even at low power. Early FEEP research at ESA's ESTEC in the 1970s and 80s leaned heavily on cesium emitters.\n\nThe problem is that cesium reacts explosively with water and air, so it must be handled in inert-atmosphere gloveboxes, and contamination of spacecraft surfaces causes long-term outgassing and arcing. The industry drifted to indium precisely because it is chemically boring. Cesium's efficiency is tempting, but really only for a spacecraft that is never coming home.",
+        "shortText": "The specific-impulse king, thanks to the lowest ionisation energy of any stable element, and violently reactive with air.",
+        "fullText": "Cesium holds the FEEP specific-impulse record, reaching 8,000-22,000 seconds in flight-representative tests. It owes that to the lowest ionisation energy of any stable element, just 3.89 electronvolts, so its ions come free easily and efficiently even at low power. Early FEEP research at ESA's ESTEC in the 1970s and 80s leaned heavily on cesium emitters.\n\nThe problem is that cesium reacts explosively with water and air, so it must be handled in inert-atmosphere gloveboxes, and contamination of spacecraft surfaces causes long-term outgassing and arcing. The industry drifted to indium precisely because it is chemically boring. Cesium's efficiency is tempting, but only for a spacecraft that is never coming home.",
         "realWorld": "ESA/ESTEC cesium FEEP research (1970s-80s); Isp ~8,000-22,000 s (highest); reactive with air/water.",
         "formula": "Isp ≈ 8,000-22,000 s (highest)",
         "trlRationale": "Cesium FEEP demonstrated; handling hazards limit use.",
@@ -623,7 +623,7 @@
       ],
       "i18n": {
         "title": "Xenon Propellant",
-        "shortText": "Heavy, inert, and easy to ionise — the default ion-drive propellant for half a century, and expensive.",
+        "shortText": "Heavy, inert, and easy to ionise: the default ion-drive propellant for half a century, and expensive.",
         "fullText": "Xenon has been the propellant of choice for electric propulsion for decades because it checks every box: it is heavy, giving good momentum per ion, chemically inert and therefore safe to store, and easy to ionise. Your mothership's main ion drive burns it.\n\nThe drawback is price, around 3,000 dollars a kilogram, which is one more reason efficiency matters when every gram counts. It is why the propellant gauge is a resource to respect rather than ignore, and why cheaper substitutes like krypton and argon exist as deliberate trade-downs. Xenon is the gold standard you burn when performance outweighs cost.",
         "realWorld": "Xenon flown on Dawn, SMART-1, and most GEO comsat electric thrusters; ~$3,000/kg.",
         "trlRationale": "Standard electric-propulsion propellant.",
@@ -643,7 +643,7 @@
       ],
       "i18n": {
         "title": "Krypton Propellant",
-        "shortText": "Cheaper than xenon at a slight efficiency cost — the trade SpaceX made to fly thousands of thrusters.",
+        "shortText": "Cheaper than xenon at a slight efficiency cost: the trade SpaceX made to fly thousands of thrusters.",
         "fullText": "Krypton costs around 400 dollars a kilogram against xenon's 3,000, and that gap is the whole story. It is lighter, at 83.8 atomic mass units versus xenon's 131.3, which costs roughly 15% in specific impulse, but the savings let a mission carry far more propellant for the same budget.\n\nSpaceX made exactly this trade for the first-generation Starlink satellites, whose Hall thrusters run on krypton because flying thousands of them on xenon would have been prohibitive. Upgrading your thrusters to krypton opens the same door: cheaper bulk operations, accepting a modest efficiency hit in exchange for burning far more freely.",
         "realWorld": "SpaceX Starlink v1 Hall thrusters use krypton (~$400/kg vs xenon ~$3,000/kg; ~15% lower Isp).",
         "trlRationale": "Krypton Hall thrusters operational at scale.",
@@ -663,7 +663,7 @@
       ],
       "i18n": {
         "title": "Argon Propellant",
-        "shortText": "Dirt-cheap and abundant, at a further efficiency hit — the next step down the propellant cost curve.",
+        "shortText": "Dirt-cheap and abundant, at a further efficiency hit: the next step down the propellant cost curve.",
         "fullText": "Argon makes up about 1% of Earth's atmosphere, so it is extraordinarily cheap to produce, on the order of 5 dollars a kilogram, roughly 600 times cheaper than xenon. The price of that abundance is performance: at 39.9 atomic mass units it is much lighter, giving around 2,000 seconds of specific impulse against xenon's 3,000.\n\nFor bulk work the arithmetic can still favour it. When you are processing thousands of objects, argon's cost advantage can outweigh its lower efficiency, and SpaceX moved its second-generation Starlink thrusters to argon for exactly that reason. It is the propellant for operations measured in tonnes and volume rather than in precision.",
         "realWorld": "SpaceX Starlink v2 Hall thrusters use argon (~$5/kg, ~600× cheaper than xenon; Isp ~2,000 s).",
         "trlRationale": "Argon Hall thrusters operational on Starlink v2.",
@@ -745,7 +745,7 @@
       ],
       "i18n": {
         "title": "Spring-Launched Daughters",
-        "shortText": "Stored elastic energy flings a daughter clear at zero propellant cost — the thrusters only handle final approach.",
+        "shortText": "Stored elastic energy flings a daughter clear at zero propellant cost. The thrusters only handle final approach.",
         "fullText": "Instead of burning propellant to release a daughter, your cradle stores mechanical energy in a compressed spring, wound up through a worm gear to hold a couple of joules. On release that elastic energy accelerates the 2-7 kilogram daughter to roughly half a metre to a metre and a half per second, enough to open a working gap for proximity operations.\n\nThe launch itself costs no propellant at all, only the electricity that wound the spring, which is the whole appeal, since fuel is the resource you cannot refill up here. The daughter's own FEEP thrusters then take over for the final approach. It is a deliberately low-energy shove: cheap, gentle, and repeatable.",
         "realWorld": "Stored elastic energy (½kx²) for propellant-free deployment; a game-speculative cradle mechanism.",
         "formula": "E = ½ k x²",
@@ -842,18 +842,21 @@
       "category": "POWER",
       "trl": 9,
       "icon": "✨",
+      "startUnlocked": true,
       "related": [
         "thermal_management",
         "atomic_oxygen",
         "hbn_coating",
-        "kevlar_mli"
+        "kevlar_mli",
+        "thermal_cycling",
+        "vacuum_of_space"
       ],
       "i18n": {
         "title": "Multi-Layer Insulation (MLI)",
         "shortText": "Those gold and silver blankets aren't styling: they're the most mass-efficient thermal armour there is.",
         "fullText": "The gold and silver sheen of a spacecraft comes from multi-layer insulation (MLI): stacks of thin aluminised film separated by fine mesh spacers. Each layer reflects infrared radiation back, and twenty or thirty layers together cut radiative heat transfer by around 99%.\n\nBecause the layers are feather-light, MLI is the most mass-efficient thermal protection available, which is why nearly every spacecraft wears it. It keeps the deep cold of shadow out and trapped heat in, smoothing the brutal swing between sunlight and eclipse. On your ship it is the first line of the thermal system, the passive blanket the heaters and radiators only have to trim.",
         "realWorld": "20-30 layers of aluminised film cut radiative transfer ~99%; standard exterior on essentially all spacecraft.",
-        "trlRationale": "Ubiquitous — standard exterior on all spacecraft.",
+        "trlRationale": "Ubiquitous: standard exterior on all spacecraft.",
         "unlockHint": "Fly until the mothership notes MLI thermal load."
       }
     },
@@ -894,7 +897,7 @@
       "i18n": {
         "title": "Radioisotope Generators",
         "shortText": "Plutonium-238 decays and the heat becomes electricity: decades of steady power, no moving parts, no fuel to burn.",
-        "fullText": "A radioisotope thermoelectric generator (RTG) is elegantly simple. Plutonium-238 decays and gives off heat; thermocouples spanning the hot core and cold radiator fins turn that temperature difference straight into electricity, through the Seebeck effect. Nothing spins, nothing combusts, and the fuel fades on a half-life of 87.7 years.\n\nVoyager 1 has run on three of them for over 45 years and still transmits from interstellar space on a dwindling budget of watts. Your micro-RTG scales down the Multi-Mission RTG design flown on the Curiosity and Perseverance rovers. It ignores eclipse and cold entirely, quietly outlasting every other component you carry.",
+        "fullText": "A radioisotope thermoelectric generator (RTG) is elegantly simple. Plutonium-238 decays and gives off heat; thermocouples spanning the hot core and cold radiator fins turn that temperature difference straight into electricity, through the Seebeck effect. Nothing spins, nothing combusts, and the fuel fades on a half-life of 87.7 years.\n\nVoyager 1 has run on three of them for over 45 years and still transmits from interstellar space on a dwindling budget of watts. Your micro-RTG scales down the Multi-Mission RTG design flown on the Curiosity and Perseverance rovers. It ignores eclipse and cold entirely, outlasting every other component you carry.",
         "realWorld": "Flown since SNAP-3 (1961); Voyager (45+ yrs), Curiosity and Perseverance (MMRTG); Pu-238 half-life 87.7 yr.",
         "formula": "V ∝ ΔT   (Seebeck effect: output tracks the temperature difference)",
         "trlRationale": "Flown since SNAP-3 (1961); Voyager, Curiosity, Perseverance.",
@@ -1083,16 +1086,18 @@
       "category": "SPACE_ENVIRONMENT",
       "trl": 9,
       "icon": "🫧",
+      "startUnlocked": true,
       "related": [
         "uv_degradation",
         "mmod_impact",
         "heritage_ldef",
         "mli_insulation",
-        "hbn_coating"
+        "hbn_coating",
+        "rosa_solar_array"
       ],
       "i18n": {
         "title": "Atomic Oxygen Erosion",
-        "shortText": "Single oxygen atoms in low orbit sandblast spacecraft surfaces, quietly eating coatings and film.",
+        "shortText": "Single oxygen atoms in low orbit sandblast spacecraft surfaces, eating away coatings and film.",
         "fullText": "Below about 700 km, solar ultraviolet light splits molecular oxygen into single, highly reactive atoms. A spacecraft plowing through them at 7.7 km/s meets each atom with roughly 5 electronvolts of impact energy, enough to break chemical bonds and slowly erode the surface. Kapton film, silver, and some carbon materials are especially vulnerable.\n\nThe Long Duration Exposure Facility, retrieved in 1990 after nearly six years in orbit, came home with surfaces visibly eaten away, turning atomic oxygen from a theory into a measured design constraint. Your salvaged thermal blankets carry this damage; erosion is one reason hardware pulled from an old derelict cannot simply be trusted as new.",
         "realWorld": "Characterised by the Long Duration Exposure Facility (LDEF, 1984-1990); dominant erosion agent below ~700 km.",
         "trlRationale": "Characterised by LDEF (1984-1990).",
@@ -1145,7 +1150,7 @@
       ],
       "i18n": {
         "title": "Kessler Syndrome",
-        "shortText": "Past a critical debris density, collisions become self-sustaining — a cascade that can close an orbit for generations.",
+        "shortText": "Past a critical debris density, collisions become self-sustaining: a cascade that can close an orbit for generations.",
         "fullText": "In 1978 NASA scientist Donald Kessler described the failure mode that now bears his name: above a critical density of objects, collisions produce fragments that trigger further collisions, faster than atmospheric drag can sweep them away. The population then grows on its own, whether or not anyone launches again.\n\nA fully cascading shell could stay hazardous for generations, the long shadow over every crowded orbit. It also explains why your work matters beyond each individual catch: every object removed lowers the local density and pushes the tipping point further off. Some analysts argue two low-orbit bands are already past critical, and a cascade need not look dramatic while it slowly builds.",
         "realWorld": "Kessler & Cour-Palais (1978); the 900-1,000 km and ~1,500 km LEO bands are argued to be near or past critical density.",
         "trlRationale": "Kessler & Cour-Palais (1978); observed during 2007, 2009 events.",
@@ -1242,7 +1247,9 @@
       "related": [
         "atomic_oxygen",
         "radiation_dose",
-        "solar_cell_degradation"
+        "solar_cell_degradation",
+        "rosa_solar_array",
+        "hbn_coating"
       ],
       "i18n": {
         "title": "UV Degradation",
@@ -1269,7 +1276,7 @@
         "shortText": "Two doughnuts of trapped high-energy particles ring the Earth; your low orbit slips beneath them.",
         "fullText": "Earth's magnetic field traps charged particles from the Sun and cosmic rays into two nested, doughnut-shaped zones, discovered by instruments on Explorer 1 in 1958. The inner belt, from roughly 1,000 to 6,000 km, is thick with high-energy protons; the outer belt, out around 13,000 to 60,000 km, holds energetic electrons.\n\nYour low orbit runs beneath both, one reason crewed and low-flying spacecraft can operate for years without prohibitive shielding. The exception is the South Atlantic Anomaly, where the inner belt dips low enough to matter. The belts are also why climbing through to higher orbits is planned carefully: lingering in them is a fast way to spend an electronics radiation budget.",
         "realWorld": "Discovered by Explorer 1 (1958, James Van Allen); inner belt ~1,000-6,000 km, outer ~13,000-60,000 km.",
-        "trlRationale": "Explorer 1 (1958) — foundational discovery.",
+        "trlRationale": "Explorer 1 (1958); foundational discovery.",
         "unlockHint": "Fly until the mothership mentions the Van Allen belts."
       }
     },
@@ -1301,7 +1308,8 @@
         "cnt",
         "graphene_gsl",
         "titanium_alloys",
-        "aluminum_space"
+        "aluminum_space",
+        "thermal_cycling"
       ],
       "i18n": {
         "title": "Carbon Fiber Composites",
@@ -1317,14 +1325,16 @@
       "category": "MATERIALS",
       "trl": 9,
       "icon": "☀️",
+      "startUnlocked": true,
       "related": [
         "multijunction_pv",
         "solar_power",
-        "solar_cell_degradation"
+        "solar_cell_degradation",
+        "rosa_solar_array"
       ],
       "i18n": {
         "title": "Gallium Arsenide Solar Cells",
-        "shortText": "GaAs cells convert ~30% of sunlight and shrug off radiation — the gold standard for space power, at a gold-standard price.",
+        "shortText": "GaAs cells convert ~30% of sunlight and shrug off radiation. They are the gold standard for space power, at a gold-standard price.",
         "fullText": "Gallium arsenide (GaAs) is the semiconductor of choice for space solar power. It converts around 30% of incident sunlight, close to double a silicon cell, and it tolerates radiation far better, which matters over a long mission. Nearly every high-value satellite flies GaAs multi-junction cells.\n\nThe drawback is cost: GaAs runs on the order of a hundred times more per watt than silicon. That flips the economics for a salvager, because a dead satellite's array is studded with a material worth far more than its mass in scrap aluminium. Your forge can recover gallium from captured panels, turning a derelict's wings into genuinely valuable feedstock.",
         "realWorld": "Space GaAs cells ~29-32% efficient and radiation-tolerant; ~100× the per-watt cost of silicon.",
         "trlRationale": "GaAs cells standard on GEO satellites and deep-space probes.",
@@ -1336,15 +1346,16 @@
       "category": "MATERIALS",
       "trl": 2,
       "icon": "🕸️",
+      "startUnlocked": true,
       "related": [
         "cnt",
         "carbyne",
         "carbon_composites"
       ],
       "i18n": {
-        "title": "Graphene Structural Lattice",
+        "title": "Graphene Super Laminate",
         "shortText": "A graphene-and-aramid net material, aiming for ~200× the strength of steel by weight to catch tumbling debris.",
-        "fullText": "Graphene structural lattice (GSL) is a proposed capture material: sheets of graphene backed by aramid fibre. On paper it reaches roughly 200 times the strength of steel by weight while staying flexible enough to absorb the impact energy of a tumbling target instead of shattering against it.\n\nThat combination is what a debris net wants, strength to hold and give to cushion. Your Weaver daughters deploy GSL nets rated to envelop objects up to about eight metres across. The material is early-stage, sharing the graphene lattice of carbon nanotubes but woven into a sheet; treat its rating as an engineering target, not flight-proven hardware.",
+        "fullText": "Graphene super laminate (GSL) is a proposed capture material: sheets of graphene backed by aramid fibre. On paper it reaches roughly 200 times the strength of steel by weight while staying flexible enough to absorb the impact energy of a tumbling target instead of shattering against it.\n\nThat combination is what a debris net wants, strength to hold and give to cushion. Your Weaver daughters deploy GSL nets rated to envelop objects up to about eight metres across. The material is early-stage, sharing the graphene lattice of carbon nanotubes but woven into a sheet; treat its rating as an engineering target, not flight-proven hardware.",
         "realWorld": "Speculative graphene/aramid capture net; extends real graphene strength research (no flight heritage).",
         "trlRationale": "Graphene sheet strength demonstrated in lab; woven capture lattice is speculative.",
         "unlockHint": "Capture a target with a Weaver daughter."
@@ -1355,16 +1366,21 @@
       "category": "MATERIALS",
       "trl": 5,
       "icon": "🛡️",
+      "startUnlocked": true,
       "related": [
         "atomic_oxygen",
         "mli_insulation",
-        "titanium_alloys"
+        "titanium_alloys",
+        "uv_degradation",
+        "vacuum_of_space",
+        "thermal_cycling",
+        "rosa_solar_array"
       ],
       "i18n": {
         "title": "Hexagonal Boron Nitride Coating",
         "shortText": "A ceramic coating that shields spacecraft surfaces from the slow sandblasting of atomic oxygen in low orbit.",
-        "fullText": "Below about 700 km, single oxygen atoms erode exposed spacecraft surfaces at roughly a micrometre a year, quietly eating coatings, films, and optics. Hexagonal boron nitride (HBN) is a ceramic that forms a hard, chemically inert barrier against that attack.\n\nA thin HBN layer keeps solar panels, thermal blankets, and optical surfaces from fogging and degrading over a long exposure. Your mothership's exterior panels are HBN-coated for exactly this reason. It is the same erosion that ages the salvage you pull off old derelicts, which is part of why a scavenged surface rarely performs like a new one.",
-        "realWorld": "HBN ceramic coatings resist atomic-oxygen erosion (~1 µm/yr below ~700 km); developed for LEO surface protection.",
+        "fullText": "Below about 700 km, single oxygen atoms erode exposed spacecraft surfaces at roughly a micrometre a year, eating away coatings, films, and optics. Hexagonal boron nitride (HBN) is a ceramic that forms a hard, chemically inert barrier against that attack. A thin HBN layer keeps solar panels, thermal blankets, and optical surfaces from fogging and degrading over a long exposure, and it resists ultraviolet damage as well. Your mothership's exterior panels are HBN-coated for exactly this reason.\n\nHBN earns its keep in other ways too. It is a solid lubricant, often called white graphite, that keeps working in vacuum where ordinary oils boil away and fail. It is a rare combination of electrical insulator and good heat conductor, so it can isolate a circuit while still spreading heat. And it stays stable at extreme temperatures, which is why it shows up in crucibles and thruster liners. The same atomic-oxygen erosion it resists is what ages the salvage you pull off old derelicts, which is part of why a scavenged surface rarely performs like a new one.",
+        "realWorld": "HBN ceramic coatings resist atomic-oxygen erosion (~1 µm/yr below ~700 km); also a vacuum solid lubricant, dielectric heat spreader, and high-temperature liner.",
         "trlRationale": "HBN coatings demonstrated; not yet ubiquitous flight hardware.",
         "unlockHint": "Take an atomic-oxygen erosion warning."
       }
@@ -1380,7 +1396,7 @@
       ],
       "i18n": {
         "title": "Iridium in Spacecraft",
-        "shortText": "One of Earth’s rarest metals, used in thruster catalysts and thermal coatings — and scattered by a famous 2009 collision.",
+        "shortText": "One of Earth’s rarest metals, used in thruster catalysts and thermal coatings, and scattered by a famous 2009 collision.",
         "fullText": "Iridium is among the rarest elements in Earth's crust, and it earns its place on spacecraft as a hydrazine-thruster catalyst and in high-temperature thermal coatings. A little goes a long way, so recovering it from salvage is disproportionately valuable.\n\nThe metal shares a name with the Iridium communications constellation, 66 satellites launched from 1997 to 2002, whose debris still carries recoverable components. One of them, Iridium 33, was destroyed in the 2009 collision with the derelict Cosmos 2251 that scattered more than 2,000 tracked fragments, a reminder that today's valuable hardware is tomorrow's hazard, and salvage.",
         "realWorld": "Iridium used as hydrazine-thruster catalyst and thermal coating; Iridium 33 lost in the 2009 Iridium-Cosmos collision.",
         "trlRationale": "Flight-proven catalyst and coating material.",
@@ -1392,10 +1408,12 @@
       "category": "MATERIALS",
       "trl": 9,
       "icon": "🧥",
+      "startUnlocked": true,
       "related": [
         "mli_insulation",
         "thermal_management",
-        "hypervelocity"
+        "hypervelocity",
+        "thermal_cycling"
       ],
       "i18n": {
         "title": "Kevlar & MLI Shielding",
@@ -1421,7 +1439,7 @@
       ],
       "i18n": {
         "title": "Titanium Aerospace Alloys",
-        "shortText": "Ti-6Al-4V: half the weight of steel, corrosion-proof, and strong up past 400°C — the aerospace workhorse alloy.",
+        "shortText": "Ti-6Al-4V: half the weight of steel, corrosion-proof, and strong up past 400°C. The aerospace workhorse alloy.",
         "fullText": "Titanium alloy Ti-6Al-4V is the workhorse where aluminium is too weak and steel too heavy. It holds its strength well above 400°C, resists corrosion including atomic-oxygen attack, and does it all at roughly half the density of steel, which is why it turns up in engine parts, thruster nozzles, and load-bearing satellite frames.\n\nFor a salvager that resilience is a gift. Titanium comes off a derelict already refined and formed, effectively pre-processed ore ready for the forge, and it has usually survived years in orbit better than the softer metals around it. A captured titanium fitting is some of the most useful mass you can bring home.",
         "realWorld": "Ti-6Al-4V in engines, nozzles, and frames; strong to ~400°C+ at ~half steel density; corrosion-resistant.",
         "trlRationale": "Ubiquitous aerospace structural alloy.",
@@ -1439,8 +1457,8 @@
         "tether_materials"
       ],
       "i18n": {
-        "title": "Capture Net — Weighted Mesh",
-        "shortText": "Capture net. A weighted Dyneema mesh spun open by gyroscopic rotation. Gentle enough for delicate debris — and it still works in vacuum.",
+        "title": "Capture Net: Weighted Mesh",
+        "shortText": "Capture net. A weighted Dyneema mesh spun open by gyroscopic rotation. Gentle enough for delicate debris, and it still works in vacuum.",
         "fullText": "The lasso is a spinning octagonal net of lightweight Dyneema lines, its perimeter studded with small weights that centrifugal force holds spread open in flight. Launched on a tether, it needs no rigid frame and no propellant of its own.\n\nOn contact the mesh wraps around the target rather than striking it, gentle enough for a fragile or oddly shaped derelict that a rigid grab would shatter or send tumbling. Then the reel takes over and draws the whole bundle back to the mothership intact. It is a deliberately low-violence capture: catch first, ask questions later, without adding fresh fragments to the field you are trying to clear.",
         "realWorld": "Spinning-net (bolas) capture is conceptual; nets flown on RemoveDEBRIS (2018).",
         "trlRationale": "Spinning net / bolas capture is conceptual; no flight heritage.",
@@ -1522,7 +1540,8 @@
         "miura_ori_net",
         "bolas_weapon",
         "reel_mechanics",
-        "spin_stabilization"
+        "spin_stabilization",
+        "spinner_pad"
       ],
       "i18n": {
         "title": "Net Spin & the Yo-Yo Despin",
@@ -1597,7 +1616,7 @@
       "i18n": {
         "title": "Tether Materials: Dyneema & Zylon",
         "shortText": "Dyneema and Zylon fibres out-pull steel at an eighth the weight: the reason a thread can haul a satellite.",
-        "fullText": "A tether has to be impossibly strong and impossibly light at once, so it is spun from ultra-high-strength polymer fibre. Dyneema (ultra-high-molecular-weight polyethylene) and Zylon (PBO) reach tensile strengths of 3-6 gigapascals, matching steel at roughly an eighth of the density.\n\nEach has a catch. Zylon is stronger but degrades under ultraviolet light, while Dyneema holds up better in the low-orbit environment. Your tether upgrades climb through progressively tougher fibres, and each step buys longer deployments and heavier captures. The fibre's strength-to-weight is the real limit: it sets how big a derelict a thread the width of a shoelace can safely drag.",
+        "fullText": "A tether has to be impossibly strong and impossibly light at once, so it is spun from ultra-high-strength polymer fibre. Dyneema (ultra-high-molecular-weight polyethylene) and Zylon (PBO) reach tensile strengths of 3-6 gigapascals, matching steel at roughly an eighth of the density.\n\nEach has a catch. Zylon is stronger but degrades under ultraviolet light, while Dyneema holds up better in the low-orbit environment. Your tether upgrades climb through progressively tougher fibres, and each step buys longer deployments and heavier captures. The fibre's strength-to-weight is the limit: it sets how big a derelict a thread the width of a shoelace can safely drag.",
         "realWorld": "Dyneema (UHMWPE) and Zylon (PBO) reach 3-6 GPa at ~1/8 steel's density; Zylon degrades under UV.",
         "formula": "specific strength = tensile strength / density   (the figure of merit)",
         "trlRationale": "Dyneema/Zylon flown as lanyards; fibre properties well-characterised.",
@@ -1639,7 +1658,7 @@
         "shortText": "Cross two tethers under tension and friction locks them; freeing the snarl takes a timed slack pulse.",
         "fullText": "Run several daughters on tethers at once and the lines can cross. Under tension, friction at the crossing point locks them together, and pulling harder only cinches the snarl tighter, the bane of multi-tether operations.\n\nThe fix is counterintuitive: inject a precisely timed slack pulse into one line so it briefly floats free of the other while the second stays taut, letting the crossing slip apart. Your cradle watches tension across all the tethers and auto-resolves minor crossings this way, but a bad tangle still needs a manual hand, or, as a last resort, cutting a line free and writing off the catch on it.",
         "realWorld": "Multi-tether operations not yet flown; slack-pulse untangling is a game concept grounded in cable-friction mechanics.",
-        "trlRationale": "Game concept — multi-tether space operations not yet flown.",
+        "trlRationale": "Game concept; multi-tether space operations not yet flown.",
         "unlockHint": "Tangle two tethers."
       }
     },
@@ -1648,6 +1667,7 @@
       "category": "DEBRIS",
       "trl": 7,
       "icon": "🚀",
+      "startUnlocked": true,
       "related": [
         "breakup_events",
         "debris_tracking",
@@ -1689,7 +1709,7 @@
         "shortText": "One collision at orbital speed can spawn thousands of fragments, each a new bullet on its own orbit.",
         "fullText": "When two objects meet at orbital speed the closing rate can top 10 km/s, and the impact energy dwarfs any chemical explosion. A single event shatters both bodies into thousands of fragments, and each shard enters its own orbit, spreading over months into a band of altitudes that threatens everything crossing it.\n\nThe 2009 Iridium-Cosmos collision produced more than 2,000 trackable fragments; the 2007 Fengyun-1C weapon test made more than 3,000. This is the engine behind the Kessler syndrome: every breakup seeds the collisions that cause the next breakup. When the mothership registers fresh fragments joining the field, you are watching that engine turn.",
         "realWorld": "Iridium-Cosmos (2009): 2,000+ tracked fragments; Fengyun-1C (2007): 3,000+, the largest single event.",
-        "trlRationale": "Iridium-Cosmos 2009, Fengyun-1C 2007 — documented.",
+        "trlRationale": "Iridium-Cosmos 2009, Fengyun-1C 2007; documented.",
         "unlockHint": "See a collision or breakup spawn fresh fragments."
       },
       "track": "the_debris_crisis",
@@ -1708,7 +1728,7 @@
       "i18n": {
         "title": "Cascade Contained",
         "shortText": "You swept a fresh fragmentation cloud before it could seed a Kessler cascade.",
-        "fullText": "When a satellite breaks up, the real danger is not the first cloud but the second: fragments striking other objects, each hit breeding more debris until a shell turns unusable for generations. That runaway is the Kessler syndrome, and the window to stop it is short.\n\nSweeping a fresh cloud fast is the single highest-leverage move a debris tug can make, because you remove the seeds before they multiply. Here, speed matters more than tonnage. You caught this one in time; the fragments that would have spawned the next collision are in your cradle instead of loose in the shell.",
+        "fullText": "When a satellite breaks up, the danger is not the first cloud but the second: fragments striking other objects, each hit breeding more debris until a shell turns unusable for generations. That runaway is the Kessler syndrome, and the window to stop it is short.\n\nSweeping a fresh cloud fast is the single highest-leverage move a debris tug can make, because you remove the seeds before they multiply. Here, speed matters more than tonnage. You caught this one in time; the fragments that would have spawned the next collision are in your cradle instead of loose in the shell.",
         "realWorld": "ADR rationale; fragmentation-cloud risk characterised in ESA and NASA debris models.",
         "trlRationale": "ADR rationale; fragmentation-cloud risk is well-characterised.",
         "unlockHint": "Contain a fresh fragmentation cloud before it cascades."
@@ -1847,7 +1867,7 @@
       "i18n": {
         "title": "Hubble Watch",
         "shortText": "The Hubble Space Telescope shares the low-mid band and is strictly off-limits: a live asset, not salvage.",
-        "fullText": "Hubble orbits near 540 km at 28.5°, a working observatory rather than a derelict. Treaty and plain sense make active, crewed, or functioning spacecraft no-fire targets, and your daughters refuse to engage them; a net or a nudge aimed at a live asset is a fault, not a catch.\n\nThe skill this teaches is identification. Before you commit fuel, a grip, or a net, you confirm what a contact actually is, because at this altitude the field mixes priceless working hardware with genuine junk. Reading a target correctly is the difference between a clean removal and an incident.",
+        "fullText": "Hubble orbits near 540 km at 28.5°, a working observatory rather than a derelict. Treaty and plain sense make active, crewed, or functioning spacecraft no-fire targets, and your daughters refuse to engage them; a net or a nudge aimed at a live asset is a fault, not a catch.\n\nThe skill this teaches is identification. Before you commit fuel, a grip, or a net, you confirm what a contact is, because at this altitude the field mixes priceless working hardware with genuine junk. Reading a target correctly is the difference between a clean removal and an incident.",
         "realWorld": "Hubble Space Telescope operational since 1990 (~540 km, 28.5°); active-asset no-fire is standard policy.",
         "trlRationale": "HST operational since 1990; active-asset no-fire is policy.",
         "unlockHint": "Encounter the Hubble Space Telescope on a scan."
@@ -1865,7 +1885,7 @@
       ],
       "i18n": {
         "title": "Hydrazine Reboost",
-        "shortText": "The station dodged at the last minute, spending about 3 kg of hydrazine — cheap on the ground, costly up here.",
+        "shortText": "The station dodged at the last minute, spending about 3 kg of hydrazine: cheap on the ground, costly up here.",
         "fullText": "You engaged the threat but ran out of time before closest approach, so the International Space Station had to make a late avoidance reboost of its own. It cleared the conjunction, but not for free.\n\nHydrazine is inexpensive on Earth and eye-watering once launched; a rushed few-kilogram burn runs into tens of thousands of dollars and interrupts the science running aboard. Finishing the intercept earlier would have saved both the propellant and the experiments. The station is safe, which is what matters, but this one goes in the ledger as a near-miss you could have closed out sooner.",
         "realWorld": "Hydrazine avoidance reboosts are routine, documented ISS operations.",
         "trlRationale": "Hydrazine avoidance reboosts are routine, documented ISS ops.",
@@ -1910,7 +1930,7 @@
       ],
       "i18n": {
         "title": "ISS PDAM",
-        "shortText": "You waved the ISS off to fly its own Predetermined Debris Avoidance Maneuver — a valid call, no penalty.",
+        "shortText": "You waved the ISS off to fly its own Predetermined Debris Avoidance Maneuver. A valid call, no penalty.",
         "fullText": "A predetermined debris avoidance maneuver (PDAM) is the routine response when a conjunction's collision probability climbs past roughly 1-in-10,000. Mission control commands a reboost using the Zvezda module or a docked Progress, nudging the International Space Station clear by about half a metre per second.\n\nThe station has done this dozens of times since 1999. Declining the intercept and letting it maneuver itself is a perfectly good decision, not a failure; it costs a little propellant and a little schedule, and the crew stays safe. Sometimes the right move is to let the professionals downstairs handle their own house.",
         "realWorld": "PDAM reboosts via Zvezda or a docked Progress; performed dozens of times since 1999.",
         "trlRationale": "PDAM reboosts performed dozens of times since 1999.",
@@ -1930,7 +1950,7 @@
       ],
       "i18n": {
         "title": "ISS Saver",
-        "shortText": "You cleared a Cosmos-1408 fragment cloud before it reached the ISS — the crew never had to dodge.",
+        "shortText": "You cleared a Cosmos-1408 fragment cloud before it reached the ISS. The crew never had to dodge.",
         "fullText": "On 15 November 2021 Russia destroyed the defunct Cosmos-1408 in a direct-ascent anti-satellite test at about 450 km, generating more than 1,500 trackable fragments in a 51.6° band that crosses the International Space Station. The crew sheltered in their Soyuz and Crew Dragon for several orbits while the cloud spread.\n\nClearing a converging fragment cloud yourself means the station never has to burn propellant to dodge, and the crew keeps working. That is the quiet version of the job: no headline, no near-miss in the ledger, just a hazard removed before it ever became one. This is the outcome to aim for.",
         "realWorld": "Cosmos-1408 ASAT (15 Nov 2021, ~450 km): 1,500+ trackable fragments; ISS crew sheltered.",
         "trlRationale": "Cosmos-1408 ASAT event (2021) + ISS conjunction ops documented.",
@@ -1952,7 +1972,7 @@
         "shortText": "Too many fragments escaped the sweep, and the collisional cascade is now feeding itself.",
         "fullText": "Donald Kessler warned in 1978 that past a critical density, debris collisions become self-sustaining: each impact throws off fragments that cause further impacts, faster than drag can clear them. A runaway cascade can leave an entire orbital shell unusable for generations.\n\nThis cloud got away from you. Enough fragments stayed loose to keep seeding new collisions, and the shell will pay for it long after this mission ends. Every piece you did clear lowered the density a little and bought a little time, which is not nothing. The lesson is speed: against a fresh cloud, arriving early beats arriving strong.",
         "realWorld": "Kessler syndrome (1978); the 2009 Iridium-Cosmos collision is the clearest real cascade seed to date.",
-        "trlRationale": "Kessler syndrome (1978) — established, observed (2009 Iridium-Cosmos).",
+        "trlRationale": "Kessler syndrome (1978): established, observed (2009 Iridium-Cosmos).",
         "unlockHint": "Let a fragmentation cloud slip into a cascade."
       }
     },
@@ -2017,7 +2037,7 @@
       ],
       "i18n": {
         "title": "Trackable vs Dark Debris",
-        "shortText": "Only objects above ~10 cm are reliably tracked; the rest is dark debris — invisible to radar, lethal to hardware.",
+        "shortText": "Only objects above ~10 cm are reliably tracked; the rest is dark debris: invisible to radar, lethal to hardware.",
         "fullText": "Ground surveillance reliably tracks objects down to roughly 10 cm in low Earth orbit. Everything smaller is dark debris: present, dangerous, and effectively invisible to the catalogue. For every tracked object there are estimated to be dozens of untracked pieces in the 1-10 cm range.\n\nThat mismatch is the core hazard of a working orbit. Dark debris is too small to dodge because nobody sees it coming, yet large enough to end a mission on impact. Onboard sensing is the only answer at close range, and your daughters' scanners and lidar pick out returns the ground network never logged, turning some of the dark population back into targets you can avoid or remove.",
         "realWorld": "SSN tracks to ~10 cm; an estimated 25-30 untracked 1-10 cm pieces exist per tracked object (published studies).",
         "trlRationale": "Gap characterised by multiple published studies.",
@@ -2041,7 +2061,7 @@
         "shortText": "Time pulses from daughters spread across hundreds of metres and the swarm acts as one giant radar dish.",
         "fullText": "A single small radar antenna sees the sky coarsely; its resolution is set by its size, and a daughter's dish is tiny. The distributed pulse scan gets around that by firing radar pulses from several daughters spread across hundreds of metres and combining the returns with precise timing.\n\nThat synthesises an aperture the size of the whole constellation, a virtual antenna far larger than any one craft carries, sharp enough to pick out debris down to a centimetre at ranges the mothership's own radar could never reach. It is the same principle as ground radio-telescope arrays, applied to a formation of small spacecraft. The concept is speculative, but the physics of aperture synthesis is well proven.",
         "realWorld": "Aperture synthesis is proven in radio astronomy; a debris-scanning distributed array across daughters is game-speculative.",
-        "trlRationale": "Distributed synthetic aperture across daughter arms — game-speculative.",
+        "trlRationale": "Distributed synthetic aperture across daughter arms; game-speculative.",
         "unlockHint": "Complete a pulse scan (W)."
       }
     },
@@ -2116,7 +2136,7 @@
         "pose_estimation"
       ],
       "i18n": {
-        "title": "LIDAR — Time of Flight",
+        "title": "LIDAR: Time of Flight",
         "shortText": "Fire a laser pulse, time the echo: at light speed, one nanosecond of delay is 30 cm of distance.",
         "fullText": "Lidar (light detection and ranging) measures distance by timing light. It fires a short laser pulse, waits for the reflection, and converts the round-trip time into range; because light covers 30 centimetres per nanosecond, precise timing gives precise distance.\n\nSweep the beam and you get more than a single number: a point cloud of the target's surface, and, by watching how points shift between pulses, a read on how it is rotating. Your sensor suite uses lidar to range nearby debris and gauge its tumble. Unlike a camera it does not need sunlight, which matters when half of every orbit is spent in shadow.",
         "realWorld": "Flash lidar flown for rendezvous on Dragon and Cygnus since ~2012; light-time ranging at 30 cm/ns.",
@@ -2203,7 +2223,7 @@
       ],
       "i18n": {
         "title": "Detumbling Captured Debris",
-        "shortText": "Stopping a spinning derelict takes reaction torque and patience — and a bad tumble can defeat the grab entirely.",
+        "shortText": "Stopping a spinning derelict takes reaction torque and patience, and a bad tumble can defeat the grab entirely.",
         "fullText": "Dead satellites and debris tumble unpredictably, sometimes at rates up to 60° per second, and you cannot safely haul a spinning target. Before it comes home it has to be de-spun, which means applying a counter-torque through the grapple point using thrusters or reaction wheels.\n\nThe difficulty is that real objects are not simple. An asymmetric body tumbles about all three axes at once, so the spin does not lie on a single clean axis, and knowing its moment of inertia is what tells you how much effort the job will take. A fast, awkward tumble can defeat a grab outright, which is why reading the target's motion comes before committing a net or an arm.",
         "realWorld": "Debris tumbles up to ~60°/s; de-spin via grapple-point counter-torque is a core active-debris-removal problem.",
         "trlRationale": "Detumble control demonstrated; non-cooperative capture still maturing.",
@@ -2220,11 +2240,12 @@
       "related": [
         "momentum_dumping",
         "gravity_gradient_stabilization",
-        "reaction_wheels"
+        "reaction_wheels",
+        "epm_grapple"
       ],
       "i18n": {
         "title": "Magnetorquers",
-        "shortText": "Electromagnetic coils that push against Earth's magnetic field — weak, but propellant-free and effectively eternal.",
+        "shortText": "Electromagnetic coils that push against Earth's magnetic field: weak, but propellant-free and effectively eternal.",
         "fullText": "A magnetorquer is a coil of wire that becomes a magnetic dipole when powered, and that dipole pushes against Earth's magnetic field to produce a torque. It uses no propellant, has no moving parts, and never wears out; the trade is that the torque is weak, so it cannot slew a spacecraft quickly.\n\nIts main job is quiet housekeeping: desaturating reaction wheels by slowly bleeding off the momentum they have stored, against the planet's own field. That makes magnetorquers the free, patient partner to the fast, finite thrusters. On a small satellite they may be the primary actuator; on a large one they are the reset switch for the wheels.",
         "realWorld": "Magnetorquers give propellant-free torque against Earth’s field; standard reaction-wheel desaturation on most satellites.",
         "trlRationale": "Ubiquitous, especially on small satellites.",
@@ -2244,7 +2265,7 @@
       ],
       "i18n": {
         "title": "Reaction Wheels",
-        "shortText": "Spin up a flywheel and the spacecraft turns the other way — propellant-free pointing by conservation of momentum.",
+        "shortText": "Spin up a flywheel and the spacecraft turns the other way. Propellant-free pointing by conservation of momentum.",
         "fullText": "A reaction wheel is an electric motor spinning a heavy disc. Speed the disc up and, by conservation of angular momentum, the spacecraft rotates the opposite way; three wheels give full three-axis control with no propellant spent, just electricity.\n\nThe limit is saturation. Every disturbance the wheels absorb makes them spin a little faster, until they reach their maximum rate and can take no more. At that point they must be desaturated by applying an external torque, usually magnetorquers pushing against Earth's magnetic field. Wheels do the quiet, precise, fuel-free pointing; something external periodically bleeds off what they have stored.",
         "realWorld": "Reaction wheels provide propellant-free 3-axis control on most satellites; desaturated via magnetorquers or thrusters.",
         "trlRationale": "Ubiquitous fine-pointing actuator.",
@@ -2264,7 +2285,7 @@
       "i18n": {
         "title": "Error-Correcting Memory",
         "shortText": "Radiation flips bits in RAM; ECC memory carries extra bits that catch and fix a single-bit error automatically.",
-        "fullText": "Cosmic rays and trapped particles flip bits in memory, and in low orbit a spacecraft may see several such single-event upsets a day. Error-correcting code (ECC) memory guards against them by storing extra check bits alongside the data.\n\nThose check bits let the memory detect and automatically correct any single-bit error, and detect, though not fix, a double-bit error. Without ECC a navigation computer would quietly return wrong answers on a routine basis, corrupted by radiation it never noticed. It is a cheap, constant insurance policy that makes the difference between trustworthy memory and a slow drip of silent faults.",
+        "fullText": "Cosmic rays and trapped particles flip bits in memory, and in low orbit a spacecraft may see several such single-event upsets a day. Error-correcting code (ECC) memory guards against them by storing extra check bits alongside the data.\n\nThose check bits let the memory detect and automatically correct any single-bit error, and detect, though not fix, a double-bit error. Without ECC a navigation computer would return wrong answers on a routine basis, corrupted by radiation it never noticed. It is a cheap, constant insurance policy that makes the difference between trustworthy memory and a slow drip of silent faults.",
         "realWorld": "ECC memory corrects single-bit and detects double-bit errors; standard against LEO single-event upsets.",
         "trlRationale": "Standard spacecraft memory protection.",
         "unlockHint": "Fly until the mothership logs a single-bit memory error."
@@ -2280,9 +2301,9 @@
         "spacewire_bus"
       ],
       "i18n": {
-        "title": "Telemetry — Everything Is Measured",
+        "title": "Telemetry: Everything Is Measured",
         "shortText": "Thousands of channels report temperature, voltage, current, and pressure every second, so the ground sees trouble coming.",
-        "fullText": "A typical spacecraft monitors somewhere between 2,000 and 5,000 telemetry channels continuously. Every temperature sensor, voltage rail, current draw, pressure reading, wheel speed, and tank level is measured and logged, second by second.\n\nThe point is prediction. Ground controllers watch the trends in that flood of numbers to catch a failing part before it actually fails, reading a slow voltage droop or a warming bearing as an early warning. Your status panels show a tiny curated subset of what the vehicle actually tracks; underneath, the full stream is the difference between a surprise and a scheduled repair.",
+        "fullText": "A typical spacecraft monitors somewhere between 2,000 and 5,000 telemetry channels continuously. Every temperature sensor, voltage rail, current draw, pressure reading, wheel speed, and tank level is measured and logged, second by second.\n\nThe point is prediction. Ground controllers watch the trends in that flood of numbers to catch a failing part before it fails, reading a slow voltage droop or a warming bearing as an early warning. Your status panels show a tiny curated subset of what the vehicle tracks; underneath, the full stream is the difference between a surprise and a scheduled repair.",
         "realWorld": "Spacecraft monitor ~2,000-5,000 telemetry channels; ground trend analysis predicts failures before they happen.",
         "trlRationale": "Fundamental to all spacecraft operations.",
         "unlockHint": "Fly until the mothership flags a telemetry frame."
@@ -2400,7 +2421,7 @@
       "i18n": {
         "title": "Ground Station Passes",
         "shortText": "You can only talk when a station is in view: a few minutes per orbit, then silence until the next pass.",
-        "fullText": "A low-orbit spacecraft can only reach a ground station while it has line of sight, and that window is short: five to fifteen minutes per pass, depending on how high overhead the track runs. Between passes there is nothing but the onboard recorder.\n\nGlobal networks with sites like Houston, Canberra, and Madrid stitch the passes into near-continuous coverage for those who can afford it, but a commercial operator may get only a handful of contacts a day. That rhythm shapes operations: you store data, prioritise what to dump, and plan the important conversations for when a station is actually above the horizon.",
+        "fullText": "A low-orbit spacecraft can only reach a ground station while it has line of sight, and that window is short: five to fifteen minutes per pass, depending on how high overhead the track runs. Between passes there is nothing but the onboard recorder.\n\nGlobal networks with sites like Houston, Canberra, and Madrid stitch the passes into near-continuous coverage for those who can afford it, but a commercial operator may get only a handful of contacts a day. That rhythm shapes operations: you store data, prioritise what to dump, and plan the important conversations for when a station is above the horizon.",
         "realWorld": "LEO passes last ~5-15 min; global networks (Houston, Canberra, Madrid) approach continuous coverage; a fundamental constraint.",
         "trlRationale": "Fundamental LEO constraint.",
         "unlockHint": "Make a ground-station pass."
@@ -2458,10 +2479,10 @@
       "i18n": {
         "title": "Signal Propagation Delay",
         "shortText": "Light to low orbit takes barely a millisecond, yet relays and processing stretch the round trip past half a second.",
-        "fullText": "Radio travels at the speed of light, so the raw hop to a 400 km orbit is only about 1.3 milliseconds. The delay you actually feel is almost entirely the rest of the chain: encoding, error correction, ground processing, network routing, and any relay hops.\n\nGo through a geostationary relay and the signal climbs to 36,000 km and back, adding a couple hundred milliseconds by itself. Total round-trip latency lands around 400-800 milliseconds, enough to feel when you fly a daughter by hand: the view is a little stale and your command lands a little late. It is why close, fast work leans on onboard autonomy rather than a joystick from the ground.",
+        "fullText": "Radio travels at the speed of light, so the raw hop to a 400 km orbit is only about 1.3 milliseconds. The delay you feel is almost entirely the rest of the chain: encoding, error correction, ground processing, network routing, and any relay hops.\n\nGo through a geostationary relay and the signal climbs to 36,000 km and back, adding a couple hundred milliseconds by itself. Total round-trip latency lands around 400-800 milliseconds, enough to feel when you fly a daughter by hand: the view is a little stale and your command lands a little late. It is why close, fast work leans on onboard autonomy rather than a joystick from the ground.",
         "realWorld": "Raw LEO light-time ~1.3 ms; a GEO relay hop adds ~240 ms; real round-trip latency ~400-800 ms.",
         "formula": "t = d / c   (c ≈ 300,000 km/s)",
-        "trlRationale": "Speed of light — established science.",
+        "trlRationale": "Speed of light: established science.",
         "unlockHint": "Take a message from Houston."
       }
     },
@@ -2516,7 +2537,7 @@
       ],
       "i18n": {
         "title": "ISRO Launch Vehicle Families",
-        "shortText": "PSLV, LVM3, and SSLV — India's three-tier fleet, from small satellites to lunar landers.",
+        "shortText": "PSLV, LVM3, and SSLV: India's three-tier fleet, from small satellites to lunar landers.",
         "fullText": "India's space agency flies three launch vehicles covering the payload range. The PSLV (Polar Satellite Launch Vehicle) is the workhorse, with 64 flights and 59 successes and a knack for rideshare; it once deployed 104 satellites on a single mission and lifts about 1,750 kg to Sun-synchronous orbit in its XL configuration.\n\nThe LVM3 is the heavy lifter, carrying roughly 4,200 kg to geostationary transfer or up to 10,000 kg to low orbit on an indigenous CE-20 cryogenic upper stage, and it launched the Chandrayaan-2 and Chandrayaan-3 lunar missions. The SSLV (Small Satellite Launch Vehicle), operational since 2024, puts up to 500 kg into low orbit on three solid stages with a liquid trimming module for quick, dedicated small launches.",
         "realWorld": "PSLV: 64 flights, 59 successes, ~1,750 kg to SSO (XL). LVM3: ~4,200 kg GTO / ~10,000 kg LEO; flew Chandrayaan-2/-3. SSLV: ~500 kg to LEO, operational since 2024.",
         "trlRationale": "All three vehicle families operational.",
@@ -2534,7 +2555,7 @@
       ],
       "i18n": {
         "title": "ISTRAC Bangalore",
-        "shortText": "ISRO's Telemetry, Tracking and Command network — the ground eyes that fly every Indian spacecraft.",
+        "shortText": "ISRO's Telemetry, Tracking and Command network: the ground eyes that fly every Indian spacecraft.",
         "fullText": "The ISRO Telemetry, Tracking and Command Network (ISTRAC), headquartered in Bangalore since 1976, is the ground half of every Indian mission. It handles telemetry, tracking, and commanding from liftoff through the full operational life of a satellite: determining orbits, monitoring health, and sending up commands.\n\nIts reach is global. Indian stations at Sriharikota, Lucknow, Port Blair and elsewhere are backed by international sites from Mauritius to Svalbard to Antarctica, giving near-continuous downrange coverage. For an orbital cleanup operation, that kind of tracking network is exactly what turns a vague radar blip into an orbit precise enough to plan an intercept against.",
         "realWorld": "ISTRAC (Bangalore, est. 1976) runs ISRO TTC via a global station network incl. Svalbard and Antarctica.",
         "trlRationale": "Operational tracking network for decades.",
@@ -2552,7 +2573,7 @@
         "what_10000kg_buys"
       ],
       "i18n": {
-        "title": "JWST — The Next Horizon",
+        "title": "JWST: The Next Horizon",
         "shortText": "A million miles out at L2, the James Webb telescope watches a sky you helped keep clear.",
         "fullText": "The James Webb Space Telescope orbits the Sun-Earth L2 point, about 1.5 million km away, far beyond the debris fields, beyond reach, beyond salvage. It is the work that becomes possible when low orbit is kept clear: the deep-sky science that needs a clean launch corridor and a stable platform.\n\nYou will never tow JWST. But the sky it looks out from is a little safer because of the field you swept, and the launches that carry its successors depend on corridors that stay usable. That is the quiet dividend of debris removal, the science you enable without ever touching it. That is the job, Cowboy.",
         "realWorld": "JWST operates at Sun-Earth L2 (~1.5 million km); launched 2021, beyond any servicing or debris risk.",
@@ -2591,7 +2612,7 @@
       ],
       "i18n": {
         "title": "The Space Elevator",
-        "shortText": "A tether from a ground anchor past GEO to a counterweight — and debris is the cheapest counterweight mass on orbit.",
+        "shortText": "A tether from a ground anchor past GEO to a counterweight, and debris is the cheapest counterweight mass on orbit.",
         "fullText": "Konstantin Tsiolkovsky imagined it in 1895. A space elevator is a tether running from a ground station past geostationary altitude to a counterweight, letting payloads climb to orbit on electric power instead of riding rockets. The physics works; the material does not exist yet, which is why carbon nanotubes and carbyne matter so much.\n\nThe other hard part is mass, both the counterweight and the climbers, and the cheapest mass available is already up here as debris. Every kilogram you deliver to the anchor is a kilogram nobody had to launch from the ground. Cleaning the sky and building the road off it turn out to be the same job.",
         "realWorld": "Concept from Tsiolkovsky (1895); blocked by tether material limits (see CNT, carbyne); no flight hardware.",
         "trlRationale": "Concept only; no material can yet build the tether.",
@@ -2609,7 +2630,7 @@
       ],
       "i18n": {
         "title": "What 10,000 kg Buys",
-        "shortText": "Ten tonnes of salvaged orbital mass is a real counterweight anchor — and, more quietly, a cleared sky.",
+        "shortText": "Ten tonnes of salvaged mass makes a real counterweight anchor, and every kilogram of it is debris no longer in orbit.",
         "fullText": "Ten thousand kilograms is roughly the dry mass of a Hubble-class observatory, or a third of the International Space Station's Zarya module. Assembled at the anchor it is enough structural counterweight to tension a first-generation space-elevator tether.\n\nBut the deeper value is subtractive. Every tonne you removed is debris that will never again fragment, never force a station to dodge, never end another satellite's life. You did not only build something at the top of the tether; you took the same mass out of the collision problem below. Both halves of that ledger count, and the cleanup is the half that lasts.",
         "realWorld": "10,000 kg ≈ a Hubble-class dry mass; enough counterweight to tension a first-generation elevator tether.",
         "trlRationale": "Illustrative mass milestone.",
@@ -2628,7 +2649,7 @@
         "isro_kulasekarapattinam"
       ],
       "i18n": {
-        "title": "Why Launch from India?",
+        "title": "Launching from India",
         "shortText": "Sriharikota's low latitude, a deep tracking network, and a reliable, cost-conscious fleet make India a strong launch base.",
         "fullText": "Sriharikota sits at about 13.7°N, and a low-latitude site gives an eastward launch a useful boost from Earth's rotation for equatorial and low-inclination orbits. India pairs that geography with a launch fleet known for reliability and low fixed mission cost, which is why so many rideshare and government payloads fly on it.\n\nIt is not that Indian launch is dramatically cheaper per kilogram than modern reusable rockets; its edge is dependable service, rideshare flexibility, and a modest per-mission price. For a mothership, an Indian launch also means working from insertion within reach of ISTRAC's tracking network, which shortens the path from orbit to useful debris-intercept planning.",
         "realWorld": "Sriharikota ~13.7°N (rotational launch assist); PSLV valued for reliability and low mission cost, plus ISTRAC tracking.",
@@ -2646,7 +2667,7 @@
       ],
       "i18n": {
         "title": "AST SpaceMobile BW3",
-        "shortText": "A 64 m² phased-array test satellite, tumbling in the busy ISS corridor — and a high-value capture contract lands on your desk.",
+        "shortText": "A 64 m² phased-array test satellite, tumbling in the busy ISS corridor. A high-value capture contract lands on your desk.",
         "fullText": "AST SpaceMobile's BlueWalker 3 is a 64 m² phased-array test satellite launched in 2022 to prove direct-to-cell connectivity, beaming ordinary phone signals from orbit.\n\nIn this mission scenario a reaction-wheel failure has left it tumbling at 2°/s in the crowded 350 km ISS corridor, where its huge array makes it a serious Kessler risk. At 700 kg it is a rich capture: gallium arsenide in the solar cells, indium and gold in the phased array. A ₹25,000 bounty rides on a safe deorbit.",
         "realWorld": "AST SpaceMobile BlueWalker 3: real 64 m² direct-to-cell test satellite, launched Sept 2022. (Tumble and bounty are a mission scenario.)",
         "unlockHint": "Fly the AST SpaceMobile contract when it breaks."
@@ -2681,8 +2702,8 @@
       ],
       "i18n": {
         "title": "Thaicom 4 (IPSTAR)",
-        "shortText": "At 6,505 kg, the largest commercial satellite ever built — now a GEO derelict with a first-of-its-kind removal contract.",
-        "fullText": "Thaicom 4, also called IPSTAR, was at 6,505 kg the largest commercial communications satellite ever built when Arianespace launched it in 2005, serving Southeast Asia's broadband from geostationary orbit.\n\nIn this scenario, after twenty years Thailand's regulator has ordered its removal from the graveyard band — the first GEO active-debris-removal contract, demanding a full orbit-raise, precise station-keeping, and a grapple on its wide arrays and reflectors. The ₹100,000 bounty reflects the difficulty; a deep-space dish is recommended for tracking it out at GEO.",
+        "shortText": "At 6,505 kg, the largest commercial satellite ever built. Now a GEO derelict with a first-of-its-kind removal contract.",
+        "fullText": "Thaicom 4, also called IPSTAR, was at 6,505 kg the largest commercial communications satellite ever built when Arianespace launched it in 2005, serving Southeast Asia's broadband from geostationary orbit.\n\nIn this scenario, after twenty years Thailand's regulator has ordered its removal from the graveyard band: the first GEO active-debris-removal contract, demanding a full orbit-raise, precise station-keeping, and a grapple on its wide arrays and reflectors. The ₹100,000 bounty reflects the difficulty; a deep-space dish is recommended for tracking it out at GEO.",
         "realWorld": "Thaicom 4 (IPSTAR): real ~6,505 kg GEO satellite, launched 2005. (The removal contract is a mission scenario.)",
         "unlockHint": "Fly the Thaicom 4 GEO contract when it breaks."
       },
@@ -2701,7 +2722,7 @@
       ],
       "i18n": {
         "title": "Carbon Nanotubes (CNT)",
-        "shortText": "Roll a graphene sheet into a straw and you get the strongest fibre we can actually make — the leading space-elevator candidate.",
+        "shortText": "Roll a graphene sheet into a straw and you get the strongest fibre we can make. The leading space-elevator candidate.",
         "fullText": "A carbon nanotube is a single graphene sheet rolled into a cylinder about a nanometre across. Individual multi-walled tubes have been pulled to tensile strengths around 11-63 gigapascals in the lab, dozens of times stronger than steel by weight, with a theoretical ceiling above 100 GPa.\n\nThe catch is length. Defect-free tubes are microscopic, and spinning them into metre-scale yarn loses most of that strength to slippage between tubes, so real CNT fibre today is short and imperfect. It remains the leading credible material for a space-elevator tether, and it shares its lattice with the graphene in your Weaver capture nets, the same chemistry in a different geometry.",
         "realWorld": "Space-elevator tether studies (NASA/ISEC); CNT yarns in aerospace composites; lab tubes 11-63 GPa.",
         "formula": "σ_measured ≈ 11-63 GPa  ·  σ_theoretical > 100 GPa",
@@ -2720,8 +2741,8 @@
         "graphene_gsl"
       ],
       "i18n": {
-        "title": "Carbyne — The Dream Tether",
-        "shortText": "A single chain of carbon atoms, predicted to be the strongest material possible — and we can barely make a strand of it.",
+        "title": "Carbyne: The Dream Tether",
+        "shortText": "A single chain of carbon atoms, predicted to be the strongest material possible, and we can barely make a strand of it.",
         "fullText": "Carbyne is linear acetylenic carbon: one chain of carbon atoms, alternating single and triple bonds. Calculations put its specific strength at roughly twice that of carbon nanotubes or graphene, which by that measure makes it the strongest material theoretically possible, the textbook dream cable for a space elevator.\n\nReality is humbling. Free carbyne is wildly unstable and reacts with itself on contact, so the longest chains ever made, in Vienna in 2016, ran about 6,000 atoms and survived only by being sealed inside double-walled nanotubes. It belongs in the codex as an honest TRL 1: spectacular on paper, and decades away from a usable cable.",
         "realWorld": "Confined carbyne synthesised inside nanotubes (Univ. Vienna, 2016, ~6,000-atom chains); no bulk material.",
         "formula": "predicted specific strength ≈ 2× CNT/graphene",
@@ -2786,7 +2807,8 @@
         "docking_precision",
         "news_mev1_servicing",
         "world_servicing",
-        "heritage_solar_max"
+        "heritage_solar_max",
+        "robotic_arm"
       ],
       "i18n": {
         "title": "Docking vs Berthing",
@@ -2807,11 +2829,12 @@
       "related": [
         "kessler_syndrome",
         "adr_methods_real",
-        "delta_v"
+        "delta_v",
+        "tech_level"
       ],
       "i18n": {
         "title": "Welcome, Cowboy",
-        "shortText": "Low orbit is getting dangerous to use. You're here to clean it up — one piece of junk at a time.",
+        "shortText": "Low orbit is getting dangerous to use. You're here to clean it up, one piece of junk at a time.",
         "fullText": "Welcome to space, Cowboy. Decades of launches left low Earth orbit littered with dead satellites and shrapnel, and every collision makes more, the runaway feedback called Kessler syndrome. Your job is active debris removal: fly your mothership and its daughter drones out to derelict objects, capture them, and either drag them down to burn up or salvage them for parts.\n\nThe core loop is simple: scan for targets, let autopilot bring you alongside, capture, and bank the haul. Clear enough debris, sixty pieces to win the shift, and you have helped keep orbit usable. This library fills in as you go, every system you touch unlocking the science behind it. Press I anytime to come back here.",
         "unlockHint": "Reach orbit."
       },
@@ -2829,9 +2852,9 @@
         "catalog_kosmos482"
       ],
       "i18n": {
-        "title": "Envisat — The 8-Tonne Derelict",
+        "title": "Envisat: The 8-Tonne Derelict",
         "shortText": "Europe's largest Earth-observation satellite went silent in 2012 and never came down: eight tonnes, tumbling, in a busy lane.",
-        "fullText": "Envisat was ESA's flagship Earth-observation satellite, at roughly 8,200 kg and the size of a bus one of the largest objects ever placed in low orbit. It abruptly stopped responding in April 2012 and now drifts, uncontrolled, near 770 km, in the middle of a heavily-used sun-synchronous corridor.\n\nIt cannot deorbit naturally for about 150 years, and a single collision could shower the region with thousands of fragments, which is exactly why it tops nearly every active-debris-removal target list. It is the marquee big, dead, and dangerous object: the kind of capture that actually moves the needle.",
+        "fullText": "Envisat was ESA's flagship Earth-observation satellite, at roughly 8,200 kg and the size of a bus one of the largest objects ever placed in low orbit. It abruptly stopped responding in April 2012 and now drifts, uncontrolled, near 770 km, in the middle of a heavily-used sun-synchronous corridor.\n\nIt cannot deorbit naturally for about 150 years, and a single collision could shower the region with thousands of fragments, which is exactly why it tops nearly every active-debris-removal target list. It is the marquee big, dead, and dangerous object: the kind of capture that moves the needle.",
         "realWorld": "ESA, launched 2002; contact lost 2012; drifts near 770 km; perennial top-priority ADR target.",
         "unlockHint": "Clear 7 pieces of debris."
       },
@@ -2857,7 +2880,7 @@
       ],
       "i18n": {
         "title": "Cleanup Is Now Mandatory",
-        "shortText": "For decades, deorbiting your dead satellite was polite. Now it's the law — and a real industry is racing to do it.",
+        "shortText": "For decades, deorbiting your dead satellite was polite. Now it's the law, and a real industry is racing to do it.",
         "fullText": "The rules of orbit are tightening fast. Deorbiting a dead satellite used to be a courtesy; increasingly it is a legal obligation, and that shift has created a market for exactly the work you do.\n\nThe US Federal Communications Commission (FCC) now requires licensed low-orbit satellites to deorbit within 5 years of end-of-life, down from 25, a rule in force since 2024. ESA's Zero Debris Charter targets no new debris by 2030, the EU proposed a Space Act in 2025, and India's ISRO has pledged debris-free missions by 2030. Companies like Astroscale and ClearSpace fly the first removal missions while trackers such as LeoLabs and Slingshot map the junk. The removal operator you are playing is no longer science fiction; it is an industry with contracts, regulators, and deadlines.",
         "realWorld": "FCC 5-year rule (effective 2024) · ESA Zero Debris Charter (2030 goal) · EU Space Act proposed 2025 · ISRO Debris-Free 2030 · Astroscale, ClearSpace, LeoLabs",
         "unlockHint": "Start clearing debris to learn why the work exists."
@@ -2877,12 +2900,13 @@
         "salvage_economy",
         "reading_the_hud",
         "autopilot_first",
-        "capture_quality"
+        "capture_quality",
+        "tech_level"
       ],
       "i18n": {
         "title": "The Core Loop",
         "shortText": "Scan, pick a target, let autopilot fly you there, capture, cash in. Repeat. That's the whole job.",
-        "fullText": "Five steps, and then you do them again. That is the entire job.\n\n1. Scan (S) to find debris. 2. Target (T) to pick one. 3. Autopilot (A) flies you alongside — you don't hand-fly there. 4. Capture it with a daughter's net. 5. Bank the haul: drag it down to burn up, or salvage it for parts.\n\nClear 60 pieces and the shift is won. Everything else in this library just explains one of these five steps in more depth.",
+        "fullText": "Five steps, and then you do them again. That is the entire job.\n\n1. Scan (S) to find debris. 2. Target (T) to pick one. 3. Autopilot (A) flies you alongside. You don't hand-fly there. 4. Capture it with a daughter's net. 5. Bank the haul: drag it down to burn up, or salvage it for parts.\n\nClear 60 pieces and the shift is won. Everything else in this library just explains one of these five steps in more depth.",
         "unlockHint": "Reach orbit."
       },
       "track": "cowboy_basics",
@@ -2955,12 +2979,16 @@
         "detumble",
         "recoil_cancellation",
         "core_loop",
-        "capture_quality"
+        "capture_quality",
+        "robotic_arm",
+        "epm_grapple",
+        "weaver_gripper",
+        "spinner_pad"
       ],
       "i18n": {
         "title": "Net, Gripper, or Magnet?",
-        "shortText": "Different junk wants different tools. The game suggests one — and you can cycle to the rest.",
-        "fullText": "Your daughters carry several capture tools: a net is the workhorse, backed by grippers, magnets, and pads.\n\nThe game reads each target and marks a recommended tool with a ▶. While piloting a daughter, tap the backtick key ( ` ) to cycle through the options. Big tumbling slab? Net. Small iron fragment? Magnet. When in doubt, take the suggestion — it is usually right.",
+        "shortText": "Different junk wants different tools. The game suggests one, and you can cycle to the rest.",
+        "fullText": "Your daughters carry several capture tools: a net is the workhorse, backed by grippers, magnets, and pads.\n\nThe game reads each target and marks a recommended tool with a ▶. While piloting a daughter, tap the backtick key ( ` ) to cycle through the options. Big tumbling slab? Net. Small iron fragment? Magnet. The suggestion is usually the right call.",
         "unlockHint": "Reach orbit."
       },
       "track": "cowboy_basics",
@@ -2973,11 +3001,12 @@
       "startUnlocked": true,
       "related": [
         "docking_berthing",
-        "detumble"
+        "detumble",
+        "tech_level"
       ],
       "i18n": {
         "title": "When to Sacrifice an Arm",
-        "shortText": "Bring a daughter home to reuse it — or ride it down with the junk for a bigger payout.",
+        "shortText": "Bring a daughter home to reuse it, or ride it down with the junk for a bigger payout.",
         "fullText": "Most captures mean tethering the target and reeling it in. But for stubborn or massive debris you can send a daughter down with it on a deorbit burn, sacrificing the arm for a bonus worth up to ×2.5 the score.\n\nIt is a genuine trade: lose hardware now for a bigger clear, or keep your fleet and play the long game. Early on, keep your arms. Once you can spare one, the deorbit bonus adds up fast.",
         "unlockHint": "Reach orbit."
       },
@@ -2996,8 +3025,8 @@
       ],
       "i18n": {
         "title": "The Salvage Economy",
-        "shortText": "Dead satellites are a gas station. Grab the metal, run the Forge, refuel — your only way to top up.",
-        "fullText": "A captured object isn't just a tick on the counter; it is raw material. Salvage yields metal, and sometimes a splash of propellant or an on-the-spot panel repair.\n\nFeed salvaged metal into the Forge in propellant mode and it becomes fuel you can burn. Because the tanks never refill for free, the salvage-to-Forge-to-propellant loop is the heartbeat that keeps you flying. You clean up and gas up in the same move.",
+        "shortText": "Dead satellites are a gas station. Grab the metal, run the Forge, refuel. It's your only way to top up.",
+        "fullText": "A captured object is more than a tick on the counter. It is raw material. Salvage yields metal, and sometimes a splash of propellant or an on-the-spot panel repair.\n\nFeed salvaged metal into the Forge in propellant mode and it becomes fuel you can burn. Because the tanks never refill for free, the salvage-to-Forge-to-propellant loop is the heartbeat that keeps you flying. You clean up and gas up in the same move.",
         "unlockHint": "Reach orbit."
       },
       "track": "cowboy_basics",
@@ -3028,7 +3057,8 @@
       "startUnlocked": true,
       "related": [
         "tool_choice",
-        "core_loop"
+        "core_loop",
+        "weaver_gripper"
       ],
       "i18n": {
         "title": "Capture Quality Pays",
@@ -3054,7 +3084,7 @@
       ],
       "i18n": {
         "title": "Who Actually Cleans Orbit",
-        "shortText": "Debris removal isn't science fiction — real companies are flying the first missions right now.",
+        "shortText": "Debris removal isn't science fiction. Real companies are flying the first missions right now.",
         "fullText": "A handful of companies are turning orbital cleanup into a business, inventing the removal-operator role in real time.\n\nAstroscale of Japan flew ELSA-d in 2021 to test magnetic capture, and in 2024 its ADRAS-J closed to about 15 metres from a spent rocket stage, the closest look yet at uncontrolled debris; a capture follow-on, ADRAS-J2, is due around 2027. Europe's ClearSpace-1 is being built to grab and deorbit the defunct PROBA-1 satellite, now targeting a launch around 2028, while firms like Starfish Space and D-Orbit develop tugs and de-orbit services. The job you play is exactly the one these teams are building toward.",
         "realWorld": "Astroscale ELSA-d (2021), ADRAS-J (~15 m, 2024), ADRAS-J2 (~2027); ClearSpace-1 (PROBA-1, ~2028); Starfish Space, D-Orbit.",
         "unlockHint": "Reach orbit."
@@ -3098,7 +3128,7 @@
         "world_sustainability_rating"
       ],
       "i18n": {
-        "title": "Why Now?",
+        "title": "The Debris Economy Arrives",
         "shortText": "Orbit got crowded fast. Decades of leftovers plus mega-constellations turned 'someday' into 'this decade.'",
         "fullText": "Two things turned cleanup from a someday-problem into a this-decade one.\n\nFirst, the leftovers: sixty-odd years of launches left thousands of dead satellites and spent stages that will not decay for decades. Second, the boom: mega-constellations are adding satellites by the thousand, so the odds of a collision, and of a runaway Kessler cascade, climb every year. Regulators answered with hard deadlines like the FCC's five-year rule, and that wave of obligation is the one you are riding.",
         "realWorld": "Tracked population ~40,000 and rising (2025); mega-constellation growth drives the collision-rate concern.",
@@ -3118,7 +3148,7 @@
         "catalog_telstar1"
       ],
       "i18n": {
-        "title": "Vanguard 1 — The Elder",
+        "title": "Vanguard 1: The Elder",
         "shortText": "Launched in 1958, this grapefruit-sized satellite is the oldest human-made object still in orbit.",
         "fullText": "Vanguard 1 went up in March 1958, the fourth satellite ever launched, and although it fell silent in 1964 it is still up there, making it the oldest human-made object in orbit.\n\nIts orbit is high enough that atmospheric drag barely touches it, so it will keep circling for centuries. A museum piece you cannot visit, and a quiet reminder that what we put up tends to stay up far longer than the mission that placed it.",
         "realWorld": "Launched 17 Mar 1958 (4th satellite ever); silent since 1964; oldest human-made object still in orbit.",
@@ -3135,7 +3165,7 @@
         "comms_blackout"
       ],
       "i18n": {
-        "title": "LES-1 — The Zombie Sat",
+        "title": "LES-1: The Zombie Sat",
         "shortText": "Dead since 1967, it started transmitting again in 2013. Nobody told it to.",
         "fullText": "LES-1, a small US military communications satellite, was stranded in the wrong orbit in 1965 and went dark in 1967.\n\nThen in 2013 an amateur astronomer picked up its signal again. It had woken up, most likely because failed batteries let sunlight power the transmitter directly as the satellite tumbled through the light. A derelict that talks: proof that dead hardware can still surprise the people who thought they were done with it.",
         "realWorld": "MIT Lincoln Laboratory LES-1; launched 1965, silent 1967; re-detected transmitting 2013.",
@@ -3155,7 +3185,7 @@
       ],
       "i18n": {
         "title": "Iridium 33 × Cosmos 2251",
-        "shortText": "In 2009 a working satellite and a dead one slammed together at ~11.7 km/s — the first big accidental collision.",
+        "shortText": "In 2009 a working satellite and a dead one slammed together at ~11.7 km/s. The first big accidental collision.",
         "fullText": "On 10 February 2009 the active Iridium 33 communications satellite and the defunct Russian Cosmos 2251 collided over Siberia at roughly 11.7 km/s, destroying both.\n\nThe crash scattered thousands of trackable fragments that still circle today. It was the first major accidental satellite collision, the event that turned Kessler syndrome from a theory into headlines and put conjunction screening and debris removal on the industry's agenda.",
         "realWorld": "Iridium 33 (active) + Cosmos 2251 (derelict), 10 Feb 2009, ~11.7 km/s; 2,000+ tracked fragments.",
         "unlockHint": "Clear 11 pieces of debris."
@@ -3173,8 +3203,8 @@
         "catalog_kosmos1408"
       ],
       "i18n": {
-        "title": "Fengyun-1C — The Worst Cloud",
-        "shortText": "A 2007 anti-satellite test shattered one weather satellite into 3,000+ trackable pieces — the largest debris cloud ever made.",
+        "title": "Fengyun-1C: The Worst Cloud",
+        "shortText": "A 2007 anti-satellite test shattered one weather satellite into 3,000+ trackable pieces. The largest debris cloud ever made.",
         "fullText": "In January 2007 China destroyed its own defunct Fengyun-1C weather satellite in an anti-satellite missile test.\n\nThe impact created more than 3,000 trackable fragments, the single largest debris-generating event on record, much of it in a long-lived orbit near 865 km. Years later its shrapnel still forces collision-avoidance manoeuvres across low orbit. One test, a generation of hazard.",
         "realWorld": "Fengyun-1C ASAT test, 11 Jan 2007, ~865 km; 3,000+ tracked fragments; largest single debris event on record.",
         "unlockHint": "Clear 15 pieces of debris."
@@ -3191,7 +3221,7 @@
         "catalog_envisat"
       ],
       "i18n": {
-        "title": "Kosmos 482 — The Venus Lander That Stayed",
+        "title": "Kosmos 482: The Venus Lander That Stayed",
         "shortText": "A 1972 Soviet probe meant for Venus never left Earth orbit. Built to survive Venus, it fell back intact 53 years later.",
         "fullText": "In March 1972 the Soviet Union launched a Venera-program probe toward Venus, but a timer fault cut its escape burn short and stranded it in low Earth orbit. Renamed Kosmos 482, its roughly 495 kg descent capsule was engineered to survive the crushing heat and pressure of a Venus landing, so it shrugged off decades in orbit.\n\nOn 10 May 2025, after 53 years, it finally reentered and fell into the Indian Ocean, likely in one hardened piece rather than burning up. A reminder that some derelicts are built tougher than the spacecraft sent to chase them.",
         "realWorld": "Soviet Venera program; launched 31 Mar 1972; reentered 10 May 2025 (confirmed).",
@@ -3209,8 +3239,8 @@
         "catalog_vanguard1"
       ],
       "i18n": {
-        "title": "Telstar 1 — First Voice in the Sky",
-        "shortText": "It relayed the first live TV across the Atlantic in 1962 — then a nuclear test in the radiation belts killed it.",
+        "title": "Telstar 1: First Voice in the Sky",
+        "shortText": "It relayed the first live TV across the Atlantic in 1962. Then a nuclear test in the radiation belts killed it.",
         "fullText": "Telstar 1, launched 10 July 1962, was the first active communications satellite, carrying the first live transatlantic television and the first satellite phone call.\n\nIts life was short. The day before launch, a high-altitude US nuclear test, Starfish Prime, pumped extra radiation into the Van Allen belts, the zones of charged particles trapped by Earth's magnetic field. That radiation overwhelmed Telstar's fragile transistors, and it fell silent in early 1963. The 77 kg sphere has circled, dead, ever since, a working monument to the dawn of satellite communications.",
         "realWorld": "AT&T / Bell Labs / NASA; launched 10 Jul 1962; failed Feb 1963; still in orbit.",
         "unlockHint": "Clear 5 pieces of debris."
@@ -3227,7 +3257,7 @@
         "world_who_removes"
       ],
       "i18n": {
-        "title": "SL-16 Rocket Bodies — The Heavy Hazards",
+        "title": "SL-16 Rocket Bodies: The Heavy Hazards",
         "shortText": "Spent Soviet rocket stages, nine tonnes each, abandoned in busy orbits. Trackers rank them the most dangerous junk up there.",
         "fullText": "When a rocket lofts a satellite, the empty upper stage is often left in orbit. The Zenit-2 second stage, catalogued by trackers as SL-16, is the worst offender: each is a roughly 8.8-9 tonne steel cylinder, and about 17-20 of them drift near 800-1,000 km.\n\nA 2020 risk analysis found the 20 most dangerous objects in low Earth orbit were all SL-16 stages, heavy, intact, and parked where a single collision would spray thousands of fragments. They sit at the top of nearly every active debris removal (ADR) shopping list, including yours.",
         "realWorld": "Zenit-2 upper stages; ~17-20 in orbit near 800-1,000 km; top-ranked ADR targets (2020 risk analysis).",
@@ -3245,7 +3275,7 @@
         "news_iss_pallet"
       ],
       "i18n": {
-        "title": "Long March 5B — The Falling Core",
+        "title": "Long March 5B: The Falling Core",
         "shortText": "A 21-tonne rocket core that reaches orbit, then falls back uncontrolled. Four of them have rained debris on three continents.",
         "fullText": "Most big rockets steer their spent stages to a safe ocean splashdown. China's Long March 5B does not: its roughly 21.6 tonne core stage reaches orbit with the payload, then reenters uncontrolled days later, scattering surviving debris along an unpredictable track.\n\nIt has happened four times, in May 2020 (pipes landed in Ivory Coast), May 2021 (near the Maldives), July 2022, and November 2022 (fragments recovered in Malaysia and Indonesia). At 21 tonnes it is among the most massive objects to make an uncontrolled return, and a recurring flashpoint in the debate over who answers for what falls.",
         "realWorld": "CZ-5B core stage ~21.6 t; uncontrolled reentries 2020, 2021, 2022 (×2).",
@@ -3264,7 +3294,7 @@
         "catalog_fengyun1c"
       ],
       "i18n": {
-        "title": "Kosmos 1408 — The 2021 Debris Cloud",
+        "title": "Kosmos 1408: The 2021 Debris Cloud",
         "shortText": "Russia blew up its own dead satellite in a 2021 missile test. The Space Station crew had to shelter in their escape capsules.",
         "fullText": "On 15 November 2021 Russia destroyed Kosmos 1408, a defunct 1982 spy satellite, in an anti-satellite (ASAT) weapon test, firing a ground-launched missile at its own spacecraft. The impact produced at least 1,500 trackable fragments spread between about 300 and 1,100 km, and the seven astronauts aboard the International Space Station were ordered into their return capsules as the cloud swept past every 90 minutes.\n\nThere is a hopeful coda: the cloud sat low enough that atmospheric drag has done its work, and by late 2025 only a handful of tracked fragments remained. It was the fourth major ASAT test to litter orbit, and a stark lesson in how fast one deliberate act multiplies the hazard, and how slowly the low ones fade.",
         "realWorld": "Russian ASAT test, 15 Nov 2021; ~1,500 trackable fragments; ISS crew sheltered; ~99.7% decayed by late 2025.",
@@ -3301,7 +3331,7 @@
       ],
       "i18n": {
         "title": "A Space Station Dodges Twice",
-        "shortText": "In 2021 China told the UN its crewed station had to swerve around Starlink satellites — twice. Crowded orbits got personal.",
+        "shortText": "In 2021 China told the UN its crewed station had to swerve around Starlink satellites, twice. Crowded orbits got personal.",
         "fullText": "In a December 2021 note to the United Nations, China reported that its crewed Tiangong space station had performed two collision-avoidance maneuvers earlier that year, on 1 July and 21 October 2021, to dodge passing SpaceX Starlink satellites.\n\nWhether or not the risk was as sharp as claimed, the filing marked a turning point: as mega-constellations add thousands of satellites, even crewed stations now have to actively get out of the way. Conjunction, a close approach between two orbiting objects, used to be rare news. It is becoming routine traffic management.",
         "realWorld": "China UN filing, Dec 2021; Tiangong maneuvers 1 Jul & 21 Oct 2021.",
         "unlockHint": "Clear 6 pieces of debris."
@@ -3336,8 +3366,8 @@
         "atmospheric_drag"
       ],
       "i18n": {
-        "title": "Aeolus — A Tidy Way Down",
-        "shortText": "Europe's wind satellite was nudged down on purpose in 2023 — the first 'assisted reentry,' lowering the odds of hitting anyone.",
+        "title": "Aeolus: A Tidy Way Down",
+        "shortText": "Europe's wind satellite was nudged down on purpose in 2023: the first 'assisted reentry,' lowering the odds of hitting anyone.",
         "fullText": "When the European Space Agency's Aeolus wind-mapping satellite, launched in 2018, ran out of life, controllers tried something new. Aeolus was never designed to steer its own reentry.\n\nOn 28 July 2023 the team used its last fuel to fly a series of commanded burns, guiding the falling satellite over the empty Southern Ocean before atmospheric drag finished the job. This first-ever assisted reentry cut the already-small risk to people on the ground by a large factor, and set a template for retiring older satellites responsibly rather than letting them drop where they may.",
         "realWorld": "ESA Aeolus (launched 2018); first assisted reentry, 28 Jul 2023.",
         "unlockHint": "Clear 12 pieces of debris."
@@ -3359,7 +3389,7 @@
       ],
       "i18n": {
         "title": "A Robot Refuels a Satellite",
-        "shortText": "In 2020 one spacecraft flew up, latched onto a dying satellite, and became its new engine — the first commercial docking in high orbit.",
+        "shortText": "In 2020 one spacecraft flew up, latched onto a dying satellite, and became its new engine. The first commercial docking in high orbit.",
         "fullText": "In February 2020 Northrop Grumman's Mission Extension Vehicle (MEV-1) caught up with Intelsat 901, a communications satellite running low on fuel in geostationary orbit, the ring about 35,800 km up where satellites hover over a fixed spot on Earth.\n\nMEV-1 docked to it and took over steering and station-keeping, effectively becoming a strap-on engine, and returned the satellite to service for five more years. It was the first time one commercial spacecraft serviced another in orbit. The same rendezvous-and-grab skills that extend a satellite's life are the skills that capture a dead one.",
         "realWorld": "Northrop Grumman MEV-1 + Intelsat 901; docked 25 Feb 2020 (first commercial GEO docking).",
         "unlockHint": "Clear 16 pieces of debris."
@@ -3379,7 +3409,7 @@
       ],
       "i18n": {
         "title": "Hit by a 1996 Rocket",
-        "shortText": "In 2021 a working Chinese satellite was struck by a shard from a rocket launched 25 years earlier. Old junk never really goes away.",
+        "shortText": "In 2021 a working Chinese satellite was struck by a shard from a rocket launched 25 years earlier. Old junk never goes away.",
         "fullText": "On about 18 March 2021 the Chinese satellite Yunhai-1 02 was clipped by a small fragment of a Russian Zenit-2 rocket stage, debris from a launch back in 1996. Tracking analysts spotted the satellite suddenly shedding pieces and traced the cause to the quarter-century-old shard.\n\nYunhai survived and kept partially working, but it became only the second confirmed accidental collision between catalogued objects, after Iridium 33 and Cosmos 2251 in 2009. The lesson is sobering: debris you ignore today can come back to wreck a working satellite decades later.",
         "realWorld": "Yunhai-1 02 struck by a 1996 Zenit-2 fragment, ~18 Mar 2021 (2nd confirmed collision).",
         "unlockHint": "Clear 20 pieces of debris."
@@ -3423,7 +3453,7 @@
       ],
       "i18n": {
         "title": "Control Moment Gyroscopes",
-        "shortText": "A spinning wheel on a gimbal: tilt it and the whole spacecraft swings — the muscle behind steering a station.",
+        "shortText": "A spinning wheel on a gimbal: tilt it and the whole spacecraft swings. The muscle behind steering a station.",
         "fullText": "A control moment gyroscope (CMG) spins a heavy rotor at constant speed, then tilts that rotor on a gimbal. Changing the direction of the rotor's angular momentum exerts a large gyroscopic torque on the spacecraft, far more than a reaction wheel of similar mass and for a fraction of the power.\n\nThat leverage is why stations use them: the International Space Station holds attitude with four CMGs on its Z1 truss, Skylab pioneered them in 1973, and Mir flew the same idea. The catch is geometry. Certain gimbal angles line up into singularities where the cluster briefly produces no useful torque, so the steering software works constantly to route around them.",
         "realWorld": "ISS: 4 CMGs on the Z1 truss (since 2000); Skylab (1973) first; Mir flew 18 gyrodynes.",
         "formula": "τ = H · θ̇   (output torque = rotor momentum × gimbal rate)",
@@ -3445,7 +3475,7 @@
       ],
       "i18n": {
         "title": "Thruster Attitude Control (RCS)",
-        "shortText": "Fire two small thrusters in opposite directions and the craft spins in place — crude, fast, and strong.",
+        "shortText": "Fire two small thrusters in opposite directions and the craft spins in place: crude, fast, and strong.",
         "fullText": "A reaction control system (RCS) is a set of small thrusters arranged so that firing them in balanced, opposing pairs produces a pure rotation, a torque with no net push, letting the spacecraft turn without drifting off course.\n\nThrusters deliver far more torque than wheels or magnetorquers, so they take the heavy jobs: large fast slews, arresting a dangerous tumble, and dumping momentum when the wheels saturate. The price is propellant, which is finite, so thrusters do the coarse, urgent work while wheels and gyroscopes handle the steady, fuel-free fine pointing. Reaction thrusters have flown since Mercury and Gemini.",
         "realWorld": "RCS thrusters flown since Mercury and Gemini; the ISS burns propellant when its CMGs saturate during spacewalks.",
         "trlRationale": "Flown since the earliest crewed spacecraft.",
@@ -3568,8 +3598,8 @@
       ],
       "i18n": {
         "title": "Spacecraft Data Buses",
-        "shortText": "Before boxes from five builders can fly together they must agree how to talk — space has its own wiring standards for that.",
-        "fullText": "A spacecraft is a network of separate boxes, computer, sensors, radios, and power, that must exchange commands and data reliably, so the industry standardises the wiring. MIL-STD-1553, a one-megabit-per-second military data bus from the 1970s, is still flown for its ruggedness and predictable timing.\n\nSpaceWire, a faster network standard coordinated by the European Space Agency, carries high-rate instrument data on many modern missions. Standard buses let a builder integrate hardware from many suppliers without rewiring the whole vehicle, the same reason desktop computers settled on USB. Interoperability, not raw speed, is what these standards are really selling.",
+        "shortText": "Before boxes from five builders can fly together they must agree how to talk. Space has its own wiring standards for that.",
+        "fullText": "A spacecraft is a network of separate boxes, computer, sensors, radios, and power, that must exchange commands and data reliably, so the industry standardises the wiring. MIL-STD-1553, a one-megabit-per-second military data bus from the 1970s, is still flown for its ruggedness and predictable timing.\n\nSpaceWire, a faster network standard coordinated by the European Space Agency, carries high-rate instrument data on many modern missions. Standard buses let a builder integrate hardware from many suppliers without rewiring the whole vehicle, the same reason desktop computers settled on USB. Interoperability, not raw speed, is what these standards are selling.",
         "realWorld": "MIL-STD-1553 (1 Mbit/s, 1970s); SpaceWire (ESA/ECSS standard) flown on NASA, ESA, and JAXA missions.",
         "trlRationale": "Standard data buses flown across agencies.",
         "unlockHint": "Clear 13 pieces of debris."
@@ -3588,7 +3618,7 @@
       ],
       "i18n": {
         "title": "FDIR & Safe Mode",
-        "shortText": "When something breaks and the ground is over the horizon, the spacecraft has to save itself — so it assumes the worst and waits.",
+        "shortText": "When something breaks and the ground is over the horizon, the spacecraft has to save itself, so it assumes the worst and waits.",
         "fullText": "Fault detection, isolation, and recovery (FDIR) is the spacecraft's self-preservation reflex. Onboard monitors watch for trouble, a sensor reading out of range, a subsystem drawing too much current, a computer that stops responding.\n\nWhen FDIR detects a fault it isolates the suspect part and takes recovery action, often dropping into safe mode: a stripped-down survival state that points the solar panels at the Sun, keeps the craft warm and powered, and calls home for instructions. Safe mode has rescued countless missions by buying time until engineers on the ground can diagnose the problem, trading capability for survival until help arrives.",
         "realWorld": "Standard ESA/NASA fault management; 'safe mode' is the canonical survival state.",
         "trlRationale": "Standard fault-management practice.",
@@ -3608,7 +3638,7 @@
       ],
       "i18n": {
         "title": "The Rules of the Road",
-        "shortText": "You can't just grab a dead satellite and keep it — half-century-old treaties say it still belongs to whoever launched it.",
+        "shortText": "You can't just grab a dead satellite and keep it. Half-century-old treaties say it still belongs to whoever launched it.",
         "fullText": "Space has law, and it is old. The Outer Space Treaty, in force since 1967, says the state that launches an object keeps jurisdiction and control over it, even after it dies.\n\nThat single rule shapes the whole debris-removal business: you cannot legally salvage someone else's derelict without permission, so every cleanup needs the original owner's consent. The Liability Convention of 1972 adds teeth, making a launching state liable for damage its objects cause. The removal-for-hire job you do, with the owner's blessing, exists precisely because the junk is never truly abandoned.",
         "realWorld": "Outer Space Treaty (in force 1967); Liability Convention (in force 1972).",
         "unlockHint": "Reach orbit."
@@ -3629,7 +3659,7 @@
       ],
       "i18n": {
         "title": "Who Pays When It Falls",
-        "shortText": "Only one country has ever been billed for a space crash — when a Soviet nuclear satellite scattered over Canada in 1978.",
+        "shortText": "Only one country has ever been billed for a space crash: when a Soviet nuclear satellite scattered over Canada in 1978.",
         "fullText": "Under the 1972 Liability Convention, a launching state is liable for damage its space objects cause on Earth or in the air. It has been formally invoked exactly once.\n\nIn 1978 the Soviet satellite Kosmos 954, carrying a nuclear reactor, broke up over northern Canada and spread radioactive debris across thousands of square kilometres; Canada billed the USSR for the cleanup and was partly paid. As uncontrolled reentries grow more common, spent stages, retired satellites, even a piece of ISS battery pallet that punched through a Florida roof in 2024, this half-century-old rule is the framework everyone reaches for when something lands where it should not.",
         "realWorld": "Liability Convention (1972); sole claim filed: Kosmos 954 crash in Canada, 1978.",
         "unlockHint": "Reach orbit."
@@ -3673,7 +3703,7 @@
       ],
       "i18n": {
         "title": "The Servicing Economy",
-        "shortText": "Why scrap a satellite that only needs fuel? A new industry flies up to refuel and repair — the same skills that catch the dead ones.",
+        "shortText": "Why scrap a satellite that only needs fuel? A new industry flies up to refuel and repair, using the same skills that catch the dead ones.",
         "fullText": "A growing business treats satellites as repairable assets rather than disposables. Called on-orbit servicing, assembly, and manufacturing (OSAM), it covers refuelling a satellite, towing one to a new orbit, or building structures in space.\n\nThe first commercial demonstration came in 2020, when Northrop Grumman's Mission Extension Vehicle docked to an aging Intelsat and became its new engine for five more years. The rendezvous-and-grab techniques that extend a working satellite's life are the very same ones that capture a tumbling derelict, which is why servicing companies and debris-removal companies keep turning out to be the same companies.",
         "realWorld": "On-orbit servicing (OSAM); first commercial demo: Northrop Grumman MEV-1 + Intelsat 901, 2020.",
         "unlockHint": "Reach orbit."
@@ -3712,13 +3742,14 @@
         "news_mev1_servicing",
         "world_servicing",
         "docking_berthing",
-        "heritage_hubble_servicing"
+        "heritage_hubble_servicing",
+        "robotic_arm"
       ],
       "i18n": {
-        "title": "Solar Max — The First House Call",
-        "shortText": "In 1984 a Space Shuttle crew caught a broken satellite, fixed it, and let it go again — the first repair job in orbit.",
+        "title": "Solar Max: The First House Call",
+        "shortText": "In 1984 a Space Shuttle crew caught a broken satellite, fixed it, and let it go again. The first repair job in orbit.",
         "fullText": "The Solar Maximum Mission, launched in 1980 to study the Sun, lost its attitude control within a year. Rather than write it off, NASA sent the Space Shuttle Challenger to catch it.\n\nIn April 1984, on mission STS-41-C, astronauts grappled the tumbling satellite, swapped out the faulty modules, and released it back to work, the first time a satellite was ever repaired in orbit. It proved that spacecraft could be serviced instead of discarded, planting the seed for Hubble's later rescues and for today's refuel-and-capture industry. Everything you do with a robotic arm has a lineage that runs back to this catch.",
-        "realWorld": "Solar Maximum Mission repaired on STS-41-C (Challenger), April 1984 — first on-orbit satellite repair.",
+        "realWorld": "Solar Maximum Mission repaired on STS-41-C (Challenger), April 1984; first on-orbit satellite repair.",
         "trlRationale": "Historical mission (1984).",
         "unlockHint": "Clear 36 pieces of debris."
       }
@@ -3735,7 +3766,7 @@
         "hypervelocity"
       ],
       "i18n": {
-        "title": "LDEF — Six Years in the Open",
+        "title": "LDEF: Six Years in the Open",
         "shortText": "Left exposed to space for nearly six years, this bus-sized satellite came home peppered with impact craters.",
         "fullText": "The Long Duration Exposure Facility (LDEF) was a passive, bus-sized cylinder carrying 57 experiments, deployed by the Space Shuttle in April 1984 to see how materials, coatings, and electronics endure prolonged exposure to space. It was meant to be retrieved within a year.\n\nShuttle delays, including the Challenger accident, stranded it in orbit for nearly six years until Columbia recovered it in January 1990. It returned peppered with tens of thousands of micrometeoroid and debris craters and surfaces eroded by atomic oxygen, giving engineers their richest real-world dataset on the debris environment and on how low Earth orbit slowly destroys hardware.",
         "realWorld": "LDEF deployed 6 Apr 1984 (STS-41-C), retrieved 12 Jan 1990 (STS-32); ~5.7 years; 57 experiments.",
@@ -3755,7 +3786,7 @@
         "hubble_watch"
       ],
       "i18n": {
-        "title": "Hubble — Saved Five Times",
+        "title": "Hubble: Saved Five Times",
         "shortText": "Launched with a famously flawed mirror, the most beloved telescope in history was rescued by astronauts five times.",
         "fullText": "When the Hubble Space Telescope reached orbit in 1990, its primary mirror had been ground to the wrong shape and its images came back blurred. Instead of abandoning a flagship, NASA flew the first of five Space Shuttle servicing missions in December 1993, installing corrective optics that restored its sight.\n\nFour more visits, in 1997, 1999, 2002, and a final one in 2009, replaced instruments, gyroscopes, and batteries, rebuilding the telescope in place and extending its life by decades. Hubble is the proof of what on-orbit servicing can be worth: a spacecraft kept world-class for more than thirty years by sending people up to fix it.",
         "realWorld": "Hubble (launched 1990); 5 Shuttle servicing missions: 1993, 1997, 1999, 2002, 2009.",
@@ -3805,6 +3836,174 @@
       },
       "track": "how_we_catch",
       "trackOrder": 0
+    },
+    {
+      "id": "rosa_solar_array",
+      "category": "POWER",
+      "trl": 9,
+      "icon": "🌞",
+      "startUnlocked": true,
+      "related": [
+        "gallium_arsenide",
+        "uv_degradation",
+        "atomic_oxygen",
+        "hbn_coating",
+        "thermal_cycling"
+      ],
+      "i18n": {
+        "title": "Roll-Out Solar Array (ROSA)",
+        "shortText": "A solar panel that unrolls like a tape measure. Composite booms store the spring energy, so there are no motors to deploy it.",
+        "fullText": "A roll-out solar array ships coiled up like a window shade. Its structure is a pair of flexible composite booms that hold strain energy while rolled. Released, they straighten under their own stored energy and pull the blanket of solar cells out flat. Nothing drives the deployment: no motors, no explosive bolts, so there is far less to fail.\n\nROSA was demonstrated on the International Space Station in June 2017. Larger iROSA arrays began upgrading the station's power in June 2021, and the DART asteroid mission flew ROSA wings the same year. Rolled up, the array is lighter and far more compact than rigid hinged panels of the same output. The deployable panels on your ship are roll-out arrays built on this design.",
+        "realWorld": "Demonstrated on the ISS June 2017; iROSA upgrade arrays installed from June 2021; DART flew ROSA wings (2021).",
+        "trlRationale": "Flown and operational on the ISS and DART.",
+        "unlockHint": "Deploy the ship's solar arrays."
+      },
+      "lastVerified": "2026-07"
+    },
+    {
+      "id": "thermal_cycling",
+      "category": "SPACE_ENVIRONMENT",
+      "trl": 9,
+      "icon": "🌡️",
+      "startUnlocked": true,
+      "related": [
+        "kevlar_mli",
+        "mli_insulation",
+        "carbon_composites",
+        "rosa_solar_array",
+        "vacuum_of_space",
+        "hbn_coating"
+      ],
+      "i18n": {
+        "title": "Thermal Cycling",
+        "shortText": "A low orbit lasts about 90 minutes, so a surface bakes and freezes roughly 16 times a day. That endless swing fatigues everything.",
+        "fullText": "A low Earth orbit takes about 90 minutes, which means roughly 16 sunrise-and-sunset cycles every day and several thousand every year. An exposed surface swings from about +120 °C in sunlight to about -150 °C in shadow, over and over. Materials expand in the heat and contract in the cold, and repeating that flexing thousands of times is a slow form of fatigue.\n\nThe cycling cracks solder joints, delaminates coatings and composites, and works fasteners loose. It is one reason spacecraft wear multi-layer insulation blankets, which soften the swing. It is also why salvaged parts are often brittle: the hardware you pull off an old derelict has already been flexed to exhaustion.",
+        "realWorld": "LEO orbit ~90 min → ~16 thermal cycles/day; surfaces swing ~+120 °C to -150 °C; drives fatigue in joints, coatings, and composites.",
+        "trlRationale": "Well-characterized environmental effect on every spacecraft.",
+        "unlockHint": "Fly through an orbital eclipse."
+      }
+    },
+    {
+      "id": "vacuum_of_space",
+      "category": "SPACE_ENVIRONMENT",
+      "trl": 9,
+      "icon": "🕳️",
+      "startUnlocked": true,
+      "related": [
+        "hbn_coating",
+        "thermal_cycling",
+        "mli_insulation"
+      ],
+      "i18n": {
+        "title": "The Vacuum of Space",
+        "shortText": "No air changes every rule. Heat leaves only by radiation, oils boil away, and clean bare metals can weld themselves together.",
+        "fullText": "Space is very close to empty, and that changes how hardware behaves. With no air there is no convection, so a spacecraft can shed heat only by radiating it away, and parts overheat far more easily than they would on the ground. Ordinary oils and greases boil off in vacuum, a process called outgassing, and the vapor can drift onto cold optics and fog them. Some plastics slowly sublimate away entirely.\n\nBare, clean metal surfaces pressed together can cold-weld, bonding as if they were one piece because no oxide layer or air separates them. Galileo's high-gain antenna, which failed to open fully in 1991, is the classic suspected case of stuck, lubricant-starved metal. Every material choice on a spacecraft, from dry lubricants to vented enclosures, is shaped by these facts.",
+        "realWorld": "No convective cooling; outgassing of oils and plastics; cold-welding of bare metals (Galileo high-gain antenna, 1991, suspected).",
+        "trlRationale": "Fundamental, well-understood spaceflight environment.",
+        "unlockHint": "Reach orbit."
+      }
+    },
+    {
+      "id": "robotic_arm",
+      "category": "TETHERS",
+      "trl": 9,
+      "icon": "🦾",
+      "startUnlocked": true,
+      "related": [
+        "heritage_solar_max",
+        "docking_berthing",
+        "tech_level",
+        "tool_choice"
+      ],
+      "i18n": {
+        "title": "Robotic Arm",
+        "shortText": "The daughter arm is a jointed robot that reaches out, grapples a target, and holds it steady for capture or salvage.",
+        "fullText": "A robotic arm is a chain of powered joints that positions a hand, or end effector, exactly where the work is. Your daughter units are small robotic arms: they reach out to a target, grapple it, hold it steady, and help berth or salvage it. More joints and more reach mean a wider range of captures, which is why the arm comes in tiers.\n\nThe lineage is real. Canada built the Shuttle's Canadarm, flown from 1981, then the larger Canadarm2 for the International Space Station in 2001, and Europe added its own European Robotic Arm in 2021. These arms berth visiting vehicles, move cargo, and support spacewalks. Your arm tiers unlock at higher Tech Levels, earned by clearing debris.",
+        "realWorld": "Canadarm (Shuttle, 1981), Canadarm2 (ISS, 2001), European Robotic Arm (2021).",
+        "trlRationale": "Flight-proven on the Shuttle and ISS for decades.",
+        "unlockHint": "Launch a daughter arm."
+      },
+      "lastVerified": "2026-07"
+    },
+    {
+      "id": "epm_grapple",
+      "category": "TETHERS",
+      "trl": 5,
+      "icon": "🧲",
+      "startUnlocked": true,
+      "related": [
+        "magnetorquers",
+        "tool_choice"
+      ],
+      "i18n": {
+        "title": "Electropermanent Magnet Grapple",
+        "shortText": "A magnet you switch on and off with a pulse of current, then hold with zero power. It grips ferromagnetic surfaces.",
+        "fullText": "An electropermanent magnet (EPM) combines two permanent magnets, one of them easy to reverse. A brief pulse of current flips that magnet so the two either add up to a strong external field or cancel to almost nothing. Once switched, it needs no power to keep its state: it holds a load with the coil completely off, and lets go on command with another pulse.\n\nThat zero-power hold makes EPMs attractive for docking and debris capture, and they have been researched for CubeSat docking and grappling. The catch is that magnets only pull on ferromagnetic materials like steel. If a target is aluminum, composite, or glass, the magnet finds nothing to grip, which is why the tool advisor checks the target before recommending it.",
+        "realWorld": "Electropermanent magnets switch state with a current pulse and hold at zero power; studied for CubeSat docking and debris capture.",
+        "trlRationale": "Demonstrated in labs and CubeSat docking research; not yet routine flight hardware.",
+        "unlockHint": "Capture a target with the magnet tool."
+      },
+      "lastVerified": "2026-07"
+    },
+    {
+      "id": "weaver_gripper",
+      "category": "TETHERS",
+      "trl": 4,
+      "icon": "✋",
+      "startUnlocked": true,
+      "related": [
+        "tool_choice",
+        "capture_quality"
+      ],
+      "i18n": {
+        "title": "Mechanical Gripper",
+        "shortText": "Jaws or adhesive pads that grasp a solid feature on the target. It gives a firm, reusable hold a net cannot.",
+        "fullText": "A gripper captures by grasping rather than wrapping. Some designs close mechanical jaws around a rail or fitting; others use gecko-inspired adhesive pads that stick to a smooth surface without needing anything to hook onto. Either way the result is a firm, precise, reusable hold on a specific feature of the target.\n\nResearch hardware points the way. NASA JPL's LEMUR robot climbed with gecko-adhesive grippers, and Astroscale has tested capture mechanisms for grabbing satellites. A gripper beats a net when the target has a solid rail or fitting to grab and you want a clean hold you can release and reuse, instead of wrapping the whole object in mesh.",
+        "realWorld": "Mechanical and gecko-adhesion grippers (JPL LEMUR, Astroscale capture research); firm reusable grasp of a solid feature.",
+        "trlRationale": "Demonstrated on research robots; capture grippers still maturing.",
+        "unlockHint": "Capture a target with the gripper tool."
+      },
+      "lastVerified": "2026-07"
+    },
+    {
+      "id": "spinner_pad",
+      "category": "TETHERS",
+      "trl": 4,
+      "icon": "🌀",
+      "startUnlocked": true,
+      "related": [
+        "net_yo_yo_despin",
+        "tool_choice"
+      ],
+      "i18n": {
+        "title": "Contact Pad",
+        "shortText": "A pad that touches a tumbling object and matches its spin, slowing it enough to handle without a hard grab.",
+        "fullText": "Most debris tumbles, and grabbing a spinning object hard can fling your daughter away or add fresh damage. A contact pad handles it gently. It touches the target and, by matching spin before and during contact, bleeds off rotation instead of fighting it, bringing a tumbling object under control for a proper capture.\n\nThe idea is related to yo-yo despin, a long-standing technique for slowing a spinning spacecraft. Contact and despin handling trades the firm grip of a gripper or magnet for a softer touch that suits fragile or fast-tumbling targets. When a piece is spinning too hard to net or grab safely, the pad is the way in.",
+        "realWorld": "Contact-based despin handling of tumbling objects; related to the flight-proven yo-yo despin technique.",
+        "trlRationale": "Builds on proven despin methods; contact despin capture is still developmental.",
+        "unlockHint": "Capture a tumbling target with the pad tool."
+      },
+      "lastVerified": "2026-07"
+    },
+    {
+      "id": "tech_level",
+      "category": "PLAYBOOK",
+      "icon": "🎯",
+      "startUnlocked": true,
+      "related": [
+        "welcome_cowboy",
+        "core_loop",
+        "arm_sacrifice",
+        "robotic_arm"
+      ],
+      "i18n": {
+        "title": "Tech Level Explained",
+        "shortText": "Every library entry carries a Tech Level from 1 to 9. It is NASA's readiness scale: 9 is flown and proven, 1 is a paper idea.",
+        "fullText": "Tech Level is NASA's Technology Readiness Level scale, worked out at NASA in the 1970s, standardized in the 1990s, and now written into the ISO 16290 standard. Level 1 and 2 are paper concepts. Levels 5 and 6 are tested prototypes. Level 9 means the technology has flown and proven itself in space. The badge on every library entry shows where that real-world technology sits on this scale.\n\nThe game uses the same scale for your hardware. Arm upgrades unlock at higher Tech Levels, which you earn by clearing debris. A higher Tech Level means a more capable, more flight-proven tool. When an upgrade says it needs a Tech Level you do not have yet, clear more debris to reach it.",
+        "unlockHint": "Reach orbit."
+      },
+      "track": "cowboy_basics",
+      "trackOrder": 10
     }
   ]
 }

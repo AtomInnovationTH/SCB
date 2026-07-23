@@ -3858,7 +3858,7 @@ export function trlToLabel(trl, C) {
 /**
  * UX-11 #10: player-facing "Tech Level" presentation strings.
  * The internal data keys stay TRL (Constants.TRL, entry.trl) — only the
- * vocabulary shown to the player changes. Badge: "Tech Lvl n"; full label:
+ * vocabulary shown to the player changes. Badge: "Tech Level n"; full label:
  * "Tech Level n: <tier word>". Apply in BOTH CodexViewerUI and ShopScreen
  * so "TRL" never survives anywhere player-facing.
  * @param {number} trl
@@ -3870,12 +3870,12 @@ export function trlToTechLevelLabel(trl, C) {
 }
 
 /**
- * Short badge text for cards/chips: "Tech Lvl n".
+ * Short badge text for cards/chips: "Tech Level n".
  * @param {number} trl
  * @returns {string}
  */
 export function techLevelBadgeText(trl) {
-  return `Tech Lvl ${trl}`;
+  return `Tech Level ${trl}`;
 }
 
 // CJS guard — expose pure helpers for Node.js tests (same pattern as Epic 5).

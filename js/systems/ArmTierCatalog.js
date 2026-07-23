@@ -214,7 +214,7 @@ export function canUpgrade(currentTier, targetTier, gameState) {
   if (effectiveTRL < target.unlockTRL) {
     return {
       allowed: false,
-      reason: `Requires Tech Lvl ${target.unlockTRL} (clear ${target.debrisGate}+ debris, have ${debrisCleared})`,
+      reason: `Requires Tech Level ${target.unlockTRL} (clear ${target.debrisGate}+ debris; you have ${debrisCleared})`,
     };
   }
 
