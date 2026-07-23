@@ -879,15 +879,23 @@ export class ArmManager {
   }
 
   /**
-   * Recall the single deployed daughter closest to the mother.
+   * Recall a deployed daughter: the SELECTED one first, closest as fallback.
    *
-   * Delegation 1 (2026-05-31) onboarding helper for the bare-R rebind:
-   *   • Iterates this.arms.
+   * Delegation 1 (2026-05-31) onboarding helper for the bare-R rebind;
+   * selection-aware since the pick-then-launch fix:
+   *   • If `selectedArmIndex` points at an eligible deployed daughter (in a
+   *     recallable state and not detached), recall HER — this covers the
+   *     pick-then-launch → skip-ceremony path that leaves a deployed daughter
+   *     selected in mother mode. A DOCKED selection (picked but never
+   *     launched) is NOT recallable, so it intentionally falls through to the
+   *     closest scan; selection alone must never short-circuit eligibility.
+   *   • Otherwise iterates this.arms.
    *   • Selects arms in any non-resting state (i.e. NOT DOCKED, EXPENDED,
    *     RETURNING, DOCKING — those are already on their way home or unable
    *     to be recalled).
    *   • Picks the candidate with the smallest world-space distance from
-   *     the mother.
+   *     the mother. When `motherPos`/`arm.position` is unresolvable the scan
+   *     silently keeps `eligible[0]` — acceptable fallback.
    *   • Calls the existing recall path used by `recallArm()` / `recallAll()`
    *     (i.e. `arm.recall()`), which is the same flow `H` triggers.
    *
@@ -899,15 +907,29 @@ export class ArmManager {
    */
   recallClosestDeployed() {
     const S = ARM_STATES;
+    const isRecallable = (a) => a
+      && a.state !== S.DOCKED
+      && a.state !== S.EXPENDED
+      && a.state !== S.RETURNING
+      && a.state !== S.DOCKING;
+
+    // (0) Selection-aware: recall the SELECTED deployed daughter first.
+    if (this.selectedArmIndex >= 0) {
+      const sel = this.arms[this.selectedArmIndex];
+      if (sel && isRecallable(sel) && !sel.isDetached
+          && typeof sel.recall === 'function') {
+        sel.recall();
+        return this.selectedArmIndex;
+      }
+      // Ineligible selection (e.g. DOCKED pick-then-launch) → fall through.
+    }
+
     // Any non-resting state — exclude arms already homing or expended.
     const eligible = [];
     for (let i = 0; i < this.arms.length; i++) {
       const a = this.arms[i];
       if (!a) continue;
-      if (a.state === S.DOCKED) continue;
-      if (a.state === S.EXPENDED) continue;
-      if (a.state === S.RETURNING) continue;
-      if (a.state === S.DOCKING) continue;
+      if (!isRecallable(a)) continue;
       eligible.push({ idx: i, arm: a });
     }
     if (eligible.length === 0) return null;

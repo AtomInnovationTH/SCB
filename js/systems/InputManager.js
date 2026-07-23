@@ -673,7 +673,7 @@ export class InputManager {
       // reeled NOTHING (the AP-abort branch sat ahead of the recall branch)
       // made R feel dead for the deployed daughter. Order now:
       //   (1) ARM_PILOT       → reel the piloted daughter home (any live state)
-      //   (2) Mother + deployed → recall closest deployed daughter
+      //   (2) Mother + deployed → recall SELECTED daughter if eligible, else closest
       //   (3) Mother + nothing to reel BUT autopilot engaged → abort autopilot
       //   (4) Otherwise        → "nothing to reel" comms (never silent)
       // Shift+R = recall ALL deployed daughters (mother AND daughter mode);
@@ -727,7 +727,8 @@ export class InputManager {
             }
             break;
           }
-          // (2) Mother mode: reel the closest deployed daughter FIRST. Reeling
+          // (2) Mother mode: reel the SELECTED deployed daughter FIRST (falls
+          // back to the closest when nothing eligible is selected). Reeling
           // is R's documented job, so it wins over the autopilot-abort even
           // when the AP is engaged (the AP keeps the mother on-station while
           // the daughter comes home; abort it explicitly with Esc).
