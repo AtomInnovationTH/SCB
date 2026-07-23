@@ -977,7 +977,10 @@ class GameFlowManager {
         // on ARM_CAPTURED / LASSO_CAPTURED. Only provide fallback if nothing selected.
         const currentTarget = targetSelector.activeTarget;
         if (currentTarget && debris && currentTarget.id === (debris.id ?? data.debrisId)) {
-          targetSelector.setTarget(null);
+          // Silent: this clear is capture bookkeeping — the capture voice
+          // (clamp/success/ka-ching) already tells the story; a descending
+          // "target lost" earcon here would contradict the reward.
+          targetSelector.setTarget(null, { silent: true });
         }
         if (!targetSelector.activeTarget) {
           const playerPos = player ? player.getPosition() : null;

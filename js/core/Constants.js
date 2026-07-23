@@ -2344,7 +2344,13 @@ export const Constants = {
   // =========================================================================
   CODEX: {
     UNLOCK_COOLDOWN: 20,              // seconds between unlocks (reduced from 30 for better game feel)
-    STARTUP_GRACE_S: 3,              // defer unlock chimes during mission start so they don't dogpile the comms-crackle / departure cluster
+    // Startup legibility (2026-07-24): passive codex triggers (e.g. the first
+    // delayed comms message) fire 5-20 s into a mission — the original 3 s
+    // grace still let the 3-note unlock chime land inside the opening
+    // comms/departure cluster with zero player action. Unlocks QUEUE during
+    // grace (not dropped): toast + chime release together once the opening
+    // settles, so the pairing that teaches the sound stays intact.
+    STARTUP_GRACE_S: 30,
   },
 
   // =========================================================================

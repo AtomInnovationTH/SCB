@@ -216,7 +216,12 @@ export class TargetSelector {
    */
   _onDebrisRemoved(data) {
     if (this.activeTarget && data && data.id === this.activeTarget.id) {
-      this.clearTarget();
+      // Silent: the target ceasing to EXIST already has its own story (capture
+      // ceremony sounds, deorbit visuals). The descending "target lost" earcon
+      // means exactly one thing — lock/selection lost while the target still
+      // exists (drift or deliberate deselect). Voicing it here stacked a
+      // contradictory "lost" cue on top of every successful capture.
+      this.setTarget(null, { silent: true });
     }
   }
 

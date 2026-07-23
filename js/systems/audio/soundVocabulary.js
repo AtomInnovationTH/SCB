@@ -47,7 +47,7 @@ export const soundVocabulary = {
   playTerminalBlip:    { family: 'PING', meaning: 'terminal/manifest row reveal',  trigger: 'salvage manifest typewriter (silent during mission-start grace)' },
   playApproachBeep:    { family: 'PING', meaning: 'approach proximity beep',       trigger: 'ARM_APPROACH_PING' },
   playTargetLock:      { family: 'PING', meaning: 'sensor lock acquired',          trigger: 'target in net range / manual lock' },
-  playTargetLost:      { family: 'PING', meaning: 'sensor lock lost',              trigger: 'target lost' },
+  playTargetLost:      { family: 'PING', meaning: 'sensor lock lost',          trigger: 'player deselect / lock lost while target persists (capture+removal clears are silent)' },
   playDockingBeep:     { family: 'PING', meaning: 'docking range beep',            trigger: 'docking reticle range tier' },
   playWindowImminent:  { family: 'PING', meaning: 'transfer window imminent',      trigger: 'CLUSTER_WINDOW_IMMINENT' },
   playWindowOpen:      { family: 'PING', meaning: 'transfer window open',          trigger: 'CLUSTER_WINDOW_OPEN' },
