@@ -535,9 +535,9 @@ export class PlayerSatellite extends THREE.Group {
   _collectDetailMeshes() {
     const CULL_PREFIXES = [
       'PyroPin_', 'PClip_', 'CableHarness_', 'SpringHousing_', 'SpringCoil_',
-      'GuideRail_', 'RibRing_', 'FEEPInner_', 'FlangeBolt_', 'MountBolt_', 'Bushing_',
+      'GuideRail_', 'RibRing_', 'FEEPInner_', 'MountBolt_', 'Bushing_',
     ];
-    const CULL_EXACT = new Set(['MLI_Seam', 'AccentRing', 'FEEP_Boss', 'FEEP_GridDisc']);
+    const CULL_EXACT = new Set(['AccentRing', 'FEEP_Boss', 'FEEP_GridDisc']);
     this._detailMeshes.length = 0;
     this.traverse((o) => {
       if (!(o.isMesh || o.isLine) || !o.name) return;   // isLine covers CableHarness lines
@@ -937,37 +937,11 @@ export class PlayerSatellite extends THREE.Group {
       }
     }
 
-    // MLI quilting seams — the body shell IS the gold blanket, so instead of
-    // redundant solid gold bands we add thin darker tape/seam rings that divide
-    // the blanket into quilted sections (the characteristic MLI look). Purely
-    // visual definition over the gold body.
-    // §2-followup (z-layer-and-lights-fix Batch 3, Z3): the seam tape was
-    // centred at 1.002R with tube M*0.0016 → radial span 0.998–1.006R, so its
-    // NEAR arc dipped BELOW the hull (1.000R) and crossed it at near-tangent —
-    // the classic near-parallel-at-equal-depth flicker under log-depth. Recentre
-    // fully PROUD at 1.006R → span 1.002–1.010R (min 1.002R > hull 1.000R): no
-    // crossing, deterministic tie-pass. Still well inside the PV panel outer face
-    // (1.014R). Tube radius is in M-units, NOT a fraction of barrelR.
-    const seamGeo = new THREE.TorusGeometry(barrelR * 1.006, M * 0.0016, 4, 24);
-    const seamMat = new THREE.MeshStandardMaterial({
-      color: 0x8a6d24, metalness: 0.7, roughness: 0.5,  // darker gold tape
-      // §2-followup (round 5): MLI seam rings are DECALS on the gold body.
-      // polygonOffset(-0.5) shimmered under logarithmicDepthBuffer; use
-      // depthWrite:false + renderOrder so the seam always paints on the body.
-      // The body shell still writes depth, so the seam's far arc is correctly
-      // occluded (depthTest stays on).
-      depthWrite: false,
-    });
-    // Seams at the cell-band edges and in the two bare-MLI end sections.
-    for (const z of [-barrelH * 0.40, -cellBandH * 0.5, cellBandH * 0.5, barrelH * 0.40]) {
-      const seam = new THREE.Mesh(seamGeo, seamMat);
-      seam.position.z = z;
-      seam.rotation.x = Math.PI / 2;
-      seam.name = 'MLI_Seam';
-      // Sub-order 2.02 — paints over the PV panels (2.01) but under accents.
-      seam.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL + 0.02;
-      this.add(seam);
-    }
+    // MLI quilting seam rings REMOVED (2026-07-23): four thin gold tape hoops
+    // (z = ±0.50 m, ±0.80 m) were sub-pixel in normal play and read as floating
+    // distractions at inspect zoom; the ±0.80 pair also ran through the RCS pod
+    // housings (z ±0.795). The MLI foil texture carries the quilted read.
+    // (−4 draw calls, −768 tris.)
 
 
     // Panel-line accent rings (thin dark seam grooves) marking the cell-band
@@ -1222,9 +1196,6 @@ export class PlayerSatellite extends THREE.Group {
     const _yUpCollar = new THREE.Vector3(0, 1, 0);  // reusable Y-up for quaternion ops
 
     // ── Materials (§13.1.1 Material Selection Table) ─────────────────────
-    const collarMat = new THREE.MeshStandardMaterial({
-      color: 0x8888a0, metalness: 0.75, roughness: 0.28,   // 7075-T6 clear-anodized
-    });
     const aframeMat = new THREE.MeshStandardMaterial({
       color: 0x9090a8, metalness: 0.72, roughness: 0.30,   // 6061-T6 CNC
     });
@@ -1240,66 +1211,37 @@ export class PlayerSatellite extends THREE.Group {
     const boltMat = new THREE.MeshStandardMaterial({
       color: 0x99aabb, metalness: 0.80, roughness: 0.20,   // Ti-6Al-4V
     });
-    const seatMat = new THREE.MeshStandardMaterial({
-      color: 0x777788, metalness: 0.70, roughness: 0.32,   // barrel seat ring
+
+    // Collar ring cluster REMOVED (2026-07-23): the full-circumference torus belt
+    // (+ flange ring, seat ring, 12 flange bolts) read as a loose hoop slipped
+    // over the hull, was overkill for 4 hinge points, and sat in the fore axial
+    // RCS exhaust path (~27 mm clearance). Struts now mount on discrete hinge
+    // pads (see below). this.collarRing is intentionally no longer set
+    // (TierVisualManager guards on it and no-ops).
+
+    // ── Hinge mounting pads — discrete feet replacing the old collar ring ──
+    // One low plate per strut hinge. Base buried 2 mm below the hull surface
+    // (bury-don't-touch, same anti-z-fight pattern as the RCS doghouses); top
+    // face ~6 mm proud, sitting under the A-frame brackets.
+    const PAD_W = 0.10, PAD_L = 0.10, PAD_T = 0.008;   // m: tangential × axial × radial
+    const padGeo = new THREE.BoxGeometry(M * PAD_W, M * PAD_L, M * PAD_T);
+    const padMat = new THREE.MeshStandardMaterial({
+      color: 0x8888a0, metalness: 0.75, roughness: 0.28,   // 7075-T6 (matches hinge metal)
     });
-
-    // ── Component A: Collar Ring (enhanced) ──────────────────────────────
-    // FIX_PLAN §2-followup: all three rings (collarRing, flangeRing, seatRing)
-    // were coplanar at z=collarY with overlapping radial extents:
-    //   collarRing  major 0.40 ± 0.015 → covers 0.385–0.415
-    //   flangeRing  major 0.388 ± 0.006 → covers 0.382–0.394
-    //   seatRing    major 0.402 ± 0.008 → covers 0.394–0.410
-    // → seatRing radially overlaps collarRing (0.394–0.410 ⊂ 0.385–0.415).
-    // §2-followup (round 8): the original ±2 mm z-stagger was SMALLER than the
-    // rings' own tube radii (collar ±0.015, seat ±0.008), so at the overlapping
-    // radius their tubes still intersected in z → residual z-fight under the log
-    // depth buffer. Widened the stagger to ±0.025·M (25 mm) — larger than the
-    // sum of the half-tube-thicknesses (0.015+0.008) — so the tubes are fully
-    // separated in z at every zoom.
-    const collarGeo = new THREE.TorusGeometry(collarR, M * 0.015, 12, 48);  // was 8×32 (largest ring on the craft)
-    this.collarRing = new THREE.Mesh(collarGeo, collarMat);
-    this.collarRing.rotation.x = Math.PI / 2;   // torus plane ⊥ barrel Z
-    this.collarRing.position.z = collarY;
-    this.collarRing.name = 'CollarRing';
-    this.collarRing.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL; // FIX_PLAN §2-followup
-    this.add(this.collarRing);
-
-    // Inner flange ring (collar-to-barrel shelf) — pushed 25 mm aft
-    const flangeRingGeo = new THREE.TorusGeometry(collarR - M * 0.012, M * 0.006, 4, 32);
-    const flangeRing = new THREE.Mesh(flangeRingGeo, collarMat);
-    flangeRing.rotation.x = Math.PI / 2;
-    flangeRing.position.z = collarY - M * 0.025;                            // §2-followup (round 8)
-    flangeRing.name = 'CollarFlangeRing';
-    flangeRing.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;      // FIX_PLAN §2-followup
-    this.add(flangeRing);
-
-    // Barrel seat ring (raised interface ring on barrel skin) — pushed 25 mm fore
-    const seatRingGeo = new THREE.TorusGeometry(collarR + M * 0.002, M * 0.008, 4, 32);
-    const seatRing = new THREE.Mesh(seatRingGeo, seatMat);
-    seatRing.rotation.x = Math.PI / 2;
-    seatRing.position.z = collarY + M * 0.025;                              // §2-followup (round 8)
-    seatRing.name = 'BarrelSeatRing';
-    seatRing.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;        // FIX_PLAN §2-followup
-    this.add(seatRing);
-
-    // 12× flange bolts (Ti M5, collar-to-barrel, 30° intervals on inner ring)
-    const flangeBoltGeo = new THREE.CylinderGeometry(
-      M * 0.004, M * 0.004, M * 0.005, 6,
-    );
-    const flangeR = collarR - M * 0.012;        // bolt circle radius = inner flange
-    for (let i = 0; i < 12; i++) {
-      const a = (i / 12) * Math.PI * 2;
-      const bolt = new THREE.Mesh(flangeBoltGeo, boltMat);
-      const bx = Math.cos(a) * flangeR;
-      const by = Math.sin(a) * flangeR;
-      bolt.position.set(bx, by, collarY);
-      // Orient bolt head radially outward (cylinder Y → radial)
-      const radBolt = new THREE.Vector3(Math.cos(a), Math.sin(a), 0);
-      bolt.quaternion.setFromUnitVectors(_yUpCollar, radBolt);
-      bolt.name = `FlangeBolt_${i}`;
-      this.add(bolt);
-    }
+    tier.azimuths.forEach((azDeg, i) => {
+      const azRad  = azDeg * Math.PI / 180;
+      const radial = new THREE.Vector3(Math.cos(azRad), Math.sin(azRad), 0);
+      const tangent = new THREE.Vector3(-Math.sin(azRad), Math.cos(azRad), 0);
+      const padR = collarR - M * 0.002 + M * (PAD_T / 2);  // base 2 mm under hull
+      const pad = new THREE.Mesh(padGeo, padMat);
+      pad.position.set(radial.x * padR, radial.y * padR, collarY);
+      pad.quaternion.setFromRotationMatrix(
+        new THREE.Matrix4().makeBasis(tangent, new THREE.Vector3(0, 0, 1), radial),
+      );
+      pad.name = `HingePad_${i}`;
+      pad.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
+      this.add(pad);
+    });
 
     // ── Shared hinge geometries (§13.1.5, create once, clone per hinge) ──
     const aframeGeo = new THREE.ExtrudeGeometry(this._aframeShape(), {
@@ -1335,10 +1277,10 @@ export class PlayerSatellite extends THREE.Group {
       // Offset ±19 mm along tangent (gap = 38 mm, clears 25 mm strut + bushings)
       // Orientation: shape +Y → radial, extrude +Z → tangent×side, shape +X → barrel Z
       // FIX_PLAN §2-followup (round 3): hinge cluster (brackets, mount bolts,
-      // bushings, pin, c-clips, brake disc) sits ON the collar ring at z=0.90
-      // with overlapping radial extents → multiple z-fights between bracket
-      // body and collar/seat ring torus surfaces. Tag every part DETAIL so
-      // they render after the ring stack and win the depth ties cleanly.
+      // bushings, pin, c-clips, brake disc) sits on the hinge pad at z=0.90
+      // with overlapping radial extents → potential z-fights between bracket
+      // body and pad/hull surfaces. Tag every part DETAIL so they render after
+      // the pad/hull and win the depth ties cleanly.
       for (const side of [-1, 1]) {
         const bracket = new THREE.Mesh(aframeGeo, aframeMat);
         // Position: on collar surface, offset tangentially, centered at half bracket height
@@ -1487,14 +1429,14 @@ export class PlayerSatellite extends THREE.Group {
     // collar/seat rings. §2-followup (round 5) replaced the old polygonOffset
     // depth bias with a real outboard standoff (see ROOT_COLLAR_STANDOFF below).
     const ROOT_COLLAR_LEN = M * 0.025;          // cylinder length (half = inner-face offset)
-    // Forward reach of the body collar cluster toward the strut, measured from
-    // the hinge plane (collarY). The collarRing (tube radius 0.015 at z=collarY)
-    // dominates; seat/flange rings sit within it. Keep in sync with _buildCollar.
-    const COLLAR_RING_REACH = M * 0.015;
+    // Forward reach of the hinge PAD toward the strut, measured from the hinge
+    // plane (collarY). Was COLLAR_RING_REACH = M*0.015 for the removed collar
+    // ring; now the pad's proud height + nothing else.
+    const PAD_REACH = M * 0.006;
     const STANDOFF_MARGIN   = M * 0.004;        // clearance so metal never grazes the ring
     // Distance the collar centre must sit outboard (-Y) of the pivot so its
     // inner face clears the ring cluster: half-length + ring reach + margin.
-    const ROOT_COLLAR_STANDOFF = ROOT_COLLAR_LEN * 0.5 + COLLAR_RING_REACH + STANDOFF_MARGIN;
+    const ROOT_COLLAR_STANDOFF = ROOT_COLLAR_LEN * 0.5 + PAD_REACH + STANDOFF_MARGIN;
     const rootCollarGeo = new THREE.CylinderGeometry(
       strutR * 1.20, strutR * 1.20, ROOT_COLLAR_LEN, 12
     );
@@ -2742,7 +2684,8 @@ export class PlayerSatellite extends THREE.Group {
     // LIDAR: small dome with pulsing green light
     const lidarGeo = new THREE.SphereGeometry(M * 0.1, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2);  // was 8×6
     const lidarMat = new THREE.MeshStandardMaterial({
-      color: 0x888888, metalness: 0.7, roughness: 0.3,
+      color: 0x55585f, metalness: 0.5, roughness: 0.55,   // gunmetal — was 0x888888/0.7/0.3,
+      // which bloomed to a white blob (same fix class as the IR box above).
     });
     this.lidarDome = new THREE.Mesh(lidarGeo, lidarMat);
     this.lidarDome.position.set(0, M * 0.15, M * 0.15);
@@ -2765,6 +2708,24 @@ export class PlayerSatellite extends THREE.Group {
     lidarBase.rotation.x = -Math.PI / 2;  // lie flat in the equator (XZ) plane
     lidarBase.name = 'LIDAR_DomeBase';
     this.lidarDome.add(lidarBase);  // child of the dome → tracks it exactly (local origin = equator centre)
+
+    // LIDAR aperture — small dark lens facet on the dome's forward face so the
+    // labelled "LIDAR DOME" reads as an instrument, not a bead. Sits proud of
+    // the dome surface by 1 mm along +Z (bury-don't-touch: avoid a coincident
+    // curved-on-flat tie under log-depth).
+    const lidarLensGeo = new THREE.CircleGeometry(M * 0.045, 16);
+    const lidarLensMat = new THREE.MeshStandardMaterial({
+      color: 0x0a0a12, metalness: 0.4, roughness: 0.15,
+    });
+    const lidarLens = new THREE.Mesh(lidarLensGeo, lidarLensMat);
+    // Dome-local: dome is a hemisphere (equator at y=0, pole +Y). Place the lens
+    // on the +Z side at ~40° elevation so it faces forward-out, at radius+1 mm.
+    const lensEl = 40 * Math.PI / 180;
+    lidarLens.position.set(0, Math.sin(lensEl) * M * 0.101, Math.cos(lensEl) * M * 0.101);
+    lidarLens.lookAt(lidarLens.position.clone().multiplyScalar(2)); // face outward along the radial
+    lidarLens.name = 'LIDAR_Lens';
+    lidarLens.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+    this.lidarDome.add(lidarLens);
 
     // LIDAR pulse light
     const lidarLightGeo = new THREE.SphereGeometry(M * 0.04, 8, 6);  // was 4×4

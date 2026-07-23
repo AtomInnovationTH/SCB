@@ -129,8 +129,6 @@ const SYSTEMS = [
     parts: [
       { name: 'CAPTURE DAUGHTERS', mass: 9, risk: 'YELLOW', tier: 'major', live: 'arms',
         anchor: [ 0.20 * M, 0.346 * M, 0.90 * M ], labelOffset: [ 1.3 * M, 1.0 * M, 0.6 * M ] },
-      { name: 'COLLAR RING', mass: 5, risk: 'GREEN', tier: 'major',
-        anchor: [ 0, 0.40 * M, 0.90 * M ], labelOffset: [ -1.4 * M, 0.5 * M, 0.6 * M ] },
       { name: 'MAIN BUS', mass: 35, risk: 'GREEN', tier: 'major', omnipresent: true,
         anchor: [ 0, 0.40 * M, 0 ], labelOffset: [ -1.6 * M, -0.2 * M, 0 ] },
       { name: 'HINGE PIVOTS', mass: 0, risk: 'YELLOW', tier: 'detail',
