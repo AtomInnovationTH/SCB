@@ -1707,6 +1707,16 @@ export const Constants = {
       reward: 1.0,
       pad: 1.0,
     },
+    // P6 — core-loop range-closing ticker: a soft PING blip whose cadence
+    // rises as the player closes on a selected out-of-net-range target (the
+    // audio partner of the reticle distance readout).
+    RANGE_TICKER: {
+      ENABLED: true,
+      START_M: 2000, // only tick when distM < START_M
+      MIN_HZ: 0.5,   // cadence at START_M (far)
+      MAX_HZ: 3,     // cadence just outside net range (close)
+      GAIN: 0.05,
+    },
   },
 
   // =========================================================================

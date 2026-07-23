@@ -63,6 +63,12 @@ class AudioSystem {
     // Ducking state: re-entrancy counter so overlapping duck requests don't
     // restore early. voiceBus TTS hook shares the same counter.
     this._duckHolds = 0;
+    // P6 — range-closing ticker state.
+    this._rangeTickerActive = false;
+    this._rangeTickerId = null;
+    this._rangeTickerHz = 1;
+    this._rangeTickerSuppressedUntil = 0;
+    this._apEngaged = false;
     this.available = false;
     this.activeSources = new Map();
     this._initialized = false;
@@ -292,6 +298,58 @@ class AudioSystem {
    */
   duckForVoice(on) {
     this._duckOthers(on);
+  }
+
+  /**
+   * @private P6 — handle a throttled TARGET_RANGE readout: map distance to a
+   * tick cadence and (re)start the range ticker. Cadence rises as the player
+   * closes; below net range the lock ping takes over so we stop.
+   */
+  _onTargetRange(d) {
+    const RT = (Constants.AUDIO && Constants.AUDIO.RANGE_TICKER) || {};
+    if (!RT.ENABLED || !this.available || !d) { this._stopRangeTicker(); return; }
+    const distM = d.distM;
+    const netRangeM = d.netRangeM || 90;
+    const startM = RT.START_M || 2000;
+    if (!(distM > netRangeM && distM < startM)) { this._stopRangeTicker(); return; }
+    // Linear 0 (far, at startM) → 1 (close, at netRangeM).
+    const t = 1 - (distM - netRangeM) / (startM - netRangeM);
+    const minHz = RT.MIN_HZ || 0.5;
+    const maxHz = RT.MAX_HZ || 3;
+    this._rangeTickerHz = minHz + (maxHz - minHz) * Math.max(0, Math.min(1, t));
+    if (!this._rangeTickerActive) {
+      this._rangeTickerActive = true;
+      this._scheduleRangeTick();
+    }
+  }
+
+  /** @private Self-rescheduling range tick using the latest cadence. */
+  _scheduleRangeTick() {
+    if (!this._rangeTickerActive) return;
+    const hz = this._rangeTickerHz || 1;
+    const periodMs = Math.max(120, 1000 / hz);
+    this._rangeTickerId = timerManager.setTimeout(() => {
+      if (!this._rangeTickerActive) return;
+      // Pause while the DockingReticle owns the PING channel (alignment tone or
+      // recent docking beeps) so two range sonifications never overlap.
+      const now = this.ctx ? this.ctx.currentTime : 0;
+      const suppressed = !!this._alignmentToneOsc
+        || (this._rangeTickerSuppressedUntil && now < this._rangeTickerSuppressedUntil);
+      if (!suppressed && this.available && this.ctx && this.ctx.state === 'running') {
+        const g = (Constants.AUDIO.RANGE_TICKER && Constants.AUDIO.RANGE_TICKER.GAIN) || 0.05;
+        this._playSineBlip(now, 1000, 0.03, g, this.pingBus);
+      }
+      this._scheduleRangeTick();
+    }, periodMs, { owner: this });
+  }
+
+  /** @private Kill the range ticker immediately. */
+  _stopRangeTicker() {
+    this._rangeTickerActive = false;
+    if (this._rangeTickerId != null) {
+      timerManager.clear(this._rangeTickerId);
+      this._rangeTickerId = null;
+    }
   }
 
   /**
@@ -573,7 +631,17 @@ class AudioSystem {
 
     // Phase 7: Autopilot disengage tone
     eventBus.on(Events.AUTOPILOT_DISENGAGE, () => {
+      this._apEngaged = false;
       this.playAPDisengage();
+    });
+
+    // P6 coverage gap: autopilot engage cue (inverse of disengage). Deduped to
+    // a genuine off→on transition — AUTOPILOT_ENGAGE also fires on mid-flight
+    // heading-mode changes, which should NOT re-announce "engaged".
+    eventBus.on(Events.AUTOPILOT_ENGAGE, () => {
+      if (this._apEngaged) return;
+      this._apEngaged = true;
+      this.playAPEngage();
     });
 
     // Autopilot arrival — distinctive ascending chime (ready to capture)
@@ -584,6 +652,13 @@ class AudioSystem {
     // CP-3: transfer-window cues — T-minus beep + window-open chime
     eventBus.on(Events.CLUSTER_WINDOW_IMMINENT, () => this.playWindowImminent());
     eventBus.on(Events.CLUSTER_WINDOW_OPEN, () => this.playWindowOpen());
+
+    // P6 — core-loop range-closing ticker.
+    eventBus.on(Events.TARGET_RANGE, (d) => this._onTargetRange(d));
+    eventBus.on(Events.TARGET_CLEARED, () => this._stopRangeTicker());
+    eventBus.on(Events.TARGET_IN_RANGE, () => this._stopRangeTicker());
+    eventBus.on(Events.DEBRIS_CAPTURED, () => this._stopRangeTicker());
+    eventBus.on(Events.STATE_CHANGE, () => this._stopRangeTicker());
 
     // Salvage reveal — loot box moment
     eventBus.on(Events.SALVAGE_REVEAL, () => {
@@ -2932,6 +3007,9 @@ class AudioSystem {
     if (!this.available) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
+    // P6: while docking beeps own the PING channel, pause the range ticker
+    // (~0.5 s window) so two range sonifications never overlap.
+    this._rangeTickerSuppressedUntil = now + 0.5;
     const osc = ctx.createOscillator();
     osc.type = 'sine';
     osc.frequency.value = freq;
@@ -2988,6 +3066,24 @@ class AudioSystem {
     this._alignmentToneOsc.stop(now + 0.25);
     this._alignmentToneOsc = null;
     this._alignmentToneGain = null;
+  }
+
+  /** P6 — autopilot engage tone: ascending 400→800Hz (inverse of disengage), 500ms fade. PING family. */
+  playAPEngage() {
+    if (!this.available) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(400, now);
+    osc.frequency.exponentialRampToValueAtTime(800, now + 0.5);
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.12, now);
+    gain.gain.linearRampToValueAtTime(0.001, now + 0.5);
+    osc.connect(gain);
+    gain.connect(this.pingBus);
+    osc.start(now);
+    osc.stop(now + 0.55);
   }
 
   /** Play autopilot disengage tone: descending 800→400Hz, 500ms fade. */

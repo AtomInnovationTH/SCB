@@ -50,6 +50,10 @@ export const Events = {
    *  teaching gate. Lock earcon is SUPPRESSED in this state.
    *  Payload: { id, distanceM } */
   TARGET_OUT_OF_RANGE: 'target:outOfRange',
+  /** Throttled (~4 Hz) live range readout for the selected out-of-net-range
+   *  target — drives the core-loop range-closing audio ticker (P6).
+   *  Payload: { id, distM, netRangeM } */
+  TARGET_RANGE:        'target:range',
 
   // === CAMERA ===
   CAMERA_VIEW_CHANGE: 'camera:viewChange',

@@ -258,8 +258,20 @@ export class AutoLockController {
     const dz = sp.z - playerPos.z;
     const distScene = Math.sqrt(dx * dx + dy * dy + dz * dz);
     const distM = (distScene / Constants.SCENE_SCALE) * 1000;
-    const inRange = distM <= (Constants.NET_LOCK_RANGE_M || 90);
+    const netRangeM = Constants.NET_LOCK_RANGE_M || 90;
+    const inRange = distM <= netRangeM;
     const state = inRange ? 'in' : 'out';
+
+    // P6 — throttled (~4 Hz) range readout feeding the audio range-ticker. Only
+    // meaningful while out of net range (the closing approach); the in-range
+    // lock ping takes over inside netRangeM. AudioSystem kills the ticker on
+    // capture/clear/in-range, so a coarse emit here is enough.
+    const nowMs = (typeof performance !== 'undefined' && performance.now)
+      ? performance.now() : Date.now();
+    if (!inRange && (nowMs - (this._lastRangeEmit || 0) >= 250)) {
+      this._lastRangeEmit = nowMs;
+      eventBus.emit(Events.TARGET_RANGE, { id: active.id, distM, netRangeM });
+    }
 
     if (state === this._lastRangeState) return;
     this._lastRangeState = state;
