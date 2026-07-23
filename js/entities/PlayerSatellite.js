@@ -514,6 +514,12 @@ export class PlayerSatellite extends THREE.Group {
     //        greeble — nothing in the game ever docked with the mother, and
     //        getDockingPortPosition() had no callers. Removed to declutter the
     //        fore end. Capture/berthing is handled by the arms, not a nose port.
+    //        In its place: real hardware for a real mechanic — the Large Net pods.
+
+    // --- 7b. LARGE NET PODS (2026-07-23): fore-end launcher hardware for the
+    //         Mother's whale-class capture net ([N] fire). Two pods on the lower
+    //         fore face, each a 2-cell magazine whose caps show loaded/spent.
+    this._buildNetPods();
 
     // --- 8. NAVIGATION LIGHTS ---
     this._buildNavLights();
@@ -2846,6 +2852,112 @@ export class PlayerSatellite extends THREE.Group {
   }
 
   // --------------------------------------------------------------------------
+  // 7b. Large Net Pods — fore-end launcher hardware
+  // --------------------------------------------------------------------------
+  /**
+   * @private — Build the two Large Net launcher pods on the lower fore face.
+   * The Mother's whale-class capture net (`[N]`) is a real 2-pod × 2-net
+   * magazine mechanic (CaptureNetSystem._motherPodInventory); this is its
+   * hardware. Each pod is a squat gunmetal launcher tube whose front face has
+   * two cell bores — the magazine made visible: a pale Dyneema cap per LOADED
+   * net, a dark open bore for a spent cell. An invisible muzzle anchor at each
+   * pod's front centre is the launch point used by fireMotherNet (via
+   * getNetPodPosition), so nets depart from the pod, not the hull origin.
+   *
+   * Placement (verified clear of the sensor deck (0, 0.15M, r 0.26M) and inside
+   * hull r 0.40M): pods at (±0.18M, −0.18M), axes +Z, tails buried ~5 mm into
+   * the front cap (aft face z≈0.995M, front face z≈1.155M).
+   */
+  _buildNetPods() {
+    // Shared pod housing material — gunmetal, same recipe as the LIDAR dome /
+    // sensor yoke so the launchers read as part of the same machined assembly.
+    const gunmetalMat = new THREE.MeshStandardMaterial({
+      color: 0x55585f, metalness: 0.5, roughness: 0.55,
+    });
+    // Cell bore (dark recessed): same recipe as LIDAR_Lens / IR_Aperture.
+    const cellHoleMat = new THREE.MeshStandardMaterial({
+      color: 0x0a0a12, metalness: 0.4, roughness: 0.15,
+    });
+    // Loaded-net cap — pale Dyneema face, visible only while that net is loaded.
+    const cellCapMat = new THREE.MeshStandardMaterial({
+      color: 0xd8d8d0, metalness: 0.1, roughness: 0.7,
+    });
+
+    this._netPodMuzzles = [];
+    this._netPodCaps = [];
+
+    // podIndex 0 → +X, podIndex 1 → −X.
+    const podX = [M * 0.18, -M * 0.18];
+    for (let pod = 0; pod < 2; pod++) {
+      const x = podX[pod];
+
+      // Housing: 12-seg cylinder, length 0.16M. rotation.x = π/2 maps the
+      // cylinder axis (local +Y) → ship +Z (fore); default caps are kept
+      // (closed ends) so no extra front disc is needed. Centre at z=1.075M →
+      // aft face z=0.995M (buried in the cap), front face z=1.155M.
+      const housingGeo = new THREE.CylinderGeometry(M * 0.11, M * 0.11, M * 0.16, 12);
+      const housing = new THREE.Mesh(housingGeo, gunmetalMat);
+      housing.rotation.x = Math.PI / 2;
+      housing.position.set(x, -M * 0.18, M * 1.075);
+      housing.name = `NetPod_${pod}`;
+      housing.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      this.add(housing);
+
+      // Two cells per pod at cylinder-local (0, ±0.045M) on the front face.
+      // rotation.x = π/2 on the housing maps cylinder-local +Y → ship +Z, so
+      // the front face is at cylinder-local y = +0.08M (half the 0.16M length);
+      // facets sit 1–1.5 mm proud with rotation.x = −π/2 (same pre-verified EO
+      // lens mapping). Cell offset ±0.045M is cylinder-local X (→ ship X).
+      const caps = [];
+      for (let cell = 0; cell < 2; cell++) {
+        const cx = cell === 0 ? M * 0.045 : -M * 0.045;
+
+        const holeGeo = new THREE.CircleGeometry(M * 0.032, 12);
+        const hole = new THREE.Mesh(holeGeo, cellHoleMat);
+        hole.position.set(cx, M * 0.081, 0);   // 1 mm proud of the 0.08M half-length
+        hole.rotation.x = -Math.PI / 2;
+        hole.name = `NetPodCellHole_${pod}_${cell}`;
+        hole.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+        housing.add(hole);
+
+        const capGeo = new THREE.CircleGeometry(M * 0.030, 12);
+        const cap = new THREE.Mesh(capGeo, cellCapMat);
+        cap.position.set(cx, M * 0.0815, 0);   // distinct offset — no coplanar tie
+        cap.rotation.x = -Math.PI / 2;
+        cap.name = `NetPodCellCap_${pod}_${cell}`;
+        cap.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+        cap.visible = true;                      // default full; init() emit syncs
+        housing.add(cap);
+        caps.push(cap);
+      }
+      this._netPodCaps.push(caps);
+
+      // Muzzle anchor — invisible Object3D at the pod front centre, a child of
+      // the ship frame (NOT the rotated housing) so its world position is the
+      // launch point regardless of housing-local axis rotation.
+      const muzzle = new THREE.Object3D();
+      muzzle.position.set(x, -M * 0.18, M * 1.155);
+      muzzle.name = `NetPodMuzzle_${pod}`;
+      this.add(muzzle);
+      this._netPodMuzzles.push(muzzle);
+    }
+
+    // Inventory subscription — mirror the pale caps to the live magazine.
+    // Session singleton: follows the same fire-and-forget eventBus.on pattern as
+    // the constructor listeners above (no teardown). Filters to mother-source
+    // emits carrying a podInventory array (init/fire/restore/restock all do).
+    this._onNetInventoryChanged = (p) => {
+      if (!p || p.source !== 'mother' || !Array.isArray(p.podInventory)) return;
+      for (let pod = 0; pod < 2; pod++) {
+        const n = p.podInventory[pod] ?? 0;
+        const caps = this._netPodCaps?.[pod] || [];
+        caps.forEach((cap, i) => { cap.visible = i < n; });
+      }
+    };
+    eventBus.on(Events.NET_INVENTORY_CHANGED, this._onNetInventoryChanged);
+  }
+
+  // --------------------------------------------------------------------------
   // 5. Tether Reels — REMOVED for Config G (strut-mounted reels in V-3/V-7)
   // --------------------------------------------------------------------------
   // V3 bus-mounted tether reels removed. Config G uses strut-mounted reels
@@ -2863,7 +2975,22 @@ export class PlayerSatellite extends THREE.Group {
   // The fore docking port (ring, collar, dark guide cone, blinking green/red
   // lamps + halos) was cosmetic greeble: nothing in the game docked with the
   // mother (capture/berthing is done by the arms), and getDockingPortPosition()
-  // had no callers. Removed to declutter the fore end and reclaim tris.
+  // had no callers. Removed to declutter the fore end and reclaim tris. The
+  // Large Net pods (§7b, _buildNetPods) now occupy the lower fore face.
+
+  /**
+   * World position of a Large Net pod muzzle — the launch point for
+   * fireMotherNet (fore-end hardware, not the hull origin). Falls back to pod 0
+   * for an out-of-range index, then to the ship origin if pods weren't built.
+   * @param {number} podIndex 0 (+X) or 1 (−X)
+   * @returns {THREE.Vector3} world-space muzzle position
+   */
+  getNetPodPosition(podIndex) {
+    const m = this._netPodMuzzles?.[podIndex] ?? this._netPodMuzzles?.[0];
+    const pos = new THREE.Vector3();
+    if (m) m.getWorldPosition(pos); else this.getWorldPosition(pos);
+    return pos;
+  }
 
   // --------------------------------------------------------------------------
   // 8. Navigation Lights

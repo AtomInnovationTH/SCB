@@ -691,13 +691,14 @@ export class ArmManager {
 
   /**
    * Get the best candidate arm for detach.
-   * Priority: APPROACH > TRANSIT > NETTING > GRAPPLED.
-   * If ARM PILOT is active, prefer the piloted arm.
+   * Priority: APPROACH > TRANSIT > NETTING > GRAPPLED > STATION_KEEP > ADRIFT.
+   * If ARM PILOT is active, prefer the piloted arm (including a station-keeping
+   * or adrift daughter, so X cuts HER tether).
    * @returns {ArmUnit|null}
    */
   getActiveDetachCandidate() {
     const S = ARM_STATES;
-    const PRIORITY = [S.APPROACH, S.TRANSIT, S.NETTING, S.GRAPPLED];
+    const PRIORITY = [S.APPROACH, S.TRANSIT, S.NETTING, S.GRAPPLED, S.STATION_KEEP, S.ADRIFT];
     // If a specific arm is selected (arm pilot mode), prefer it
     const selected = this.getSelectedDeployedArm();
     if (selected && !selected.isDetached) {

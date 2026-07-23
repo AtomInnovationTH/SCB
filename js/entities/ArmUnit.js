@@ -246,7 +246,6 @@ export class ArmUnit {
     this._skPitch0 = 0;                     // rad — entry pitch (so θ=φ=0 reproduces arrival pose)
     /** @private Pattern-C auto-return state (set during STATION_KEEP) */
     this._skIdleS = 0;                      // s — accumulated time since last arrow input
-    this._skSnapBack = false;               // true while a "recenter now" request is in flight
     this._standoffR = 5;                    // current standoff radius in metres
     this._standoffTargetR = 5;              // m — radius the settle-in eases toward
     this._standoffSettling = false;         // true while easing entry distance → nominal standoff
@@ -1311,7 +1310,7 @@ export class ArmUnit {
    */
   detach() {
     const DETACHABLE = new Set([
-      S.TRANSIT, S.APPROACH, S.NETTING, S.GRAPPLED, S.ADRIFT
+      S.TRANSIT, S.APPROACH, S.NETTING, S.GRAPPLED, S.ADRIFT, S.STATION_KEEP
     ]);
     if (!DETACHABLE.has(this.state)) return false;
     if (this.isDetached) return false;
@@ -3108,41 +3107,30 @@ export class ArmUnit {
     // Pilot-friendly recovery: daughter holds her position for a quiet window
     // after the pilot releases the arrows, THEN gently eases back toward the
     // entry pose.  Any new arrow input cancels the ease and resets the dwell.
-    // A separate "snap-back" mode (triggered by requestSkRecenter()) skips the
-    // dwell and uses a faster τ for an explicit recenter command.
     const _hasInput = Math.abs(this._thetaRate) > 1e-4
                    || Math.abs(this._phiRate) > 1e-4
                    || Math.abs(this._radiusRate) > 1e-4;
     if (_hasInput) {
       // Any pilot input → cancel auto-return entirely, reset the dwell clock
       this._skIdleS = 0;
-      this._skSnapBack = false;
     } else {
       this._skIdleS = (this._skIdleS || 0) + dt;
-      // Determine which time constant to use:
-      //  - SnapBack mode (R key pressed): fast τ, no dwell.
-      //  - Idle but inside dwell window: hold position (no motion).
-      //  - Idle past dwell: standard ease.
+      // Idle but inside dwell window: hold position. Idle past dwell: ease back.
       const dwell = SK.AUTO_RETURN_DWELL_S || 3.0;
       const tauSlow = SK.AUTO_RETURN_TIME_CONSTANT_S || 4.0;
-      const tauSnap = SK.AUTO_RETURN_SNAP_TAU_S || 0.8;
       let tau = null;
-      if (this._skSnapBack) {
-        tau = tauSnap;
-      } else if (this._skIdleS >= dwell) {
+      if (this._skIdleS >= dwell) {
         tau = tauSlow;
       }
       if (tau !== null) {
         const k = 1 - Math.exp(-dt / tau);
         this._orbitTheta += (0 - this._orbitTheta) * k;
         this._orbitPhi   += (0 - this._orbitPhi)   * k;
-        // Dead-zone snap so we don't asymptote forever — also clears the
-        // snap-back request once the camera is essentially home.
+        // Dead-zone snap so we don't asymptote forever.
         const deadRad = (SK.AUTO_RETURN_DEADZONE_DEG || 2.0) * Math.PI / 180;
         if (Math.abs(this._orbitTheta) < deadRad && Math.abs(this._orbitPhi) < deadRad) {
           this._orbitTheta = 0;
           this._orbitPhi   = 0;
-          this._skSnapBack = false;
         }
       }
     }
@@ -3228,17 +3216,6 @@ export class ArmUnit {
     this._thetaRate = 0;
     this._phiRate = 0;
     this._radiusRate = 0;
-  }
-
-  /**
-   * Pilot-triggered recenter: skip the dwell and snap back to the entry pose
-   * over ~AUTO_RETURN_SNAP_TAU_S.  No-op outside STATION_KEEP.
-   * Wired to the R key in InputManager.
-   */
-  requestSkRecenter() {
-    if (this.state !== S.STATION_KEEP) return;
-    this._skSnapBack = true;
-    this._skIdleS = Constants.STATION_KEEP.AUTO_RETURN_DWELL_S || 3.0; // bypass dwell
   }
 
   /**
@@ -3341,7 +3318,6 @@ export class ArmUnit {
     this._skRightVec  = null;
     this._skPitch0    = 0;
     this._skIdleS     = 0;
-    this._skSnapBack  = false;
     this._transitionTo(S.RETURNING);
   }
 
@@ -3429,7 +3405,6 @@ export class ArmUnit {
     this._skRightVec  = null;
     this._skPitch0    = 0;
     this._skIdleS     = 0;
-    this._skSnapBack  = false;
     this._transitionTo(S.REELING);
     eventBus.emit(Events.COMMS_MESSAGE, {
       text: `${this.displayName}: Reeling in. Strut motor engaged`,

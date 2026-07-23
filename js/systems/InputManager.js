@@ -624,12 +624,14 @@ export class InputManager {
         break;
 
       // Camera view toggle (V key) / Strategic Map (Shift+V).
-      // 2026-06-15 (2-cycle): V toggles FLY ↔ LOOK AROUND in BOTH mother and
-      // daughter (ARM_PILOT) modes — the menu lists "View" as a daughter verb
-      // too. Close inspection is no longer a cycle stop; it engages by zooming
-      // in while in LOOK AROUND. Backing out of piloting is done by re-pressing
-      // the active digit or pressing Esc (the old "V exits pilot" special-case
-      // was removed).
+      // 2026-07-23 audit: V in MOTHER mode cycles FLY ↔ LOOK AROUND (close
+      // inspection engages by zooming in while in LOOK AROUND). V while PILOTING
+      // a daughter = hop back to mother — camera AND input together, so we don't
+      // strand the player in a hybrid state where the mother is on screen but the
+      // invisible daughter still steers (deliberate reinstatement of the "V
+      // exits pilot" behavior). Unlike Esc (which recalls from STATION_KEEP), V
+      // exits cleanly from any state without recalling — the daughter keeps
+      // working ("spinning plates"). Shift+V (strategic map) unchanged.
       case 'KeyV':
         if (isGameplay) {
           if (e.shiftKey) {
@@ -637,6 +639,11 @@ export class InputManager {
             eventBus.emit(Events.STRATEGIC_MAP_TOGGLE);
             d.audioSystem?.playClick();
             e.preventDefault();
+          } else if (this.armPilotMode) {
+            // Hop back to mother: exit pilot camera + deselect, no recall.
+            this._exitArmPilotCamera();
+            d.armManager?.deselectArm();
+            d.audioSystem?.playClick();
           } else if (d.cameraSystem) {
             const lockedId = d.targetSelector?.getActiveTarget?.()?.id ?? null;
             d.cameraSystem.cycleView(lockedId);
@@ -947,7 +954,8 @@ export class InputManager {
       // C key — FREED (hotkey cleanup 2026-06-16). Bare C used to duplicate the
       // 7 key's comms expand (both emitted COMMS_FOCUS + COMMS_OPENED), so the
       // redundant binding was removed: 7 is the single comms key now. C is left
-      // unbound/available (joining the already-free W, Y, O, ',').
+      // unbound/available (joining the already-free W, Y, O). Note: ',' is NOT
+      // free — Comma is the ROSA furl/unfurl toggle (see the 'Comma' case).
       // Shift+C city-labels moved to 5 in the 2026-06-14 revamp and is also free.
 
       // ST-5.1: PageUp / PageDown — comms history scrolling
@@ -2151,7 +2159,11 @@ export class InputManager {
     let podIndex = 0;
     if (cns.getMotherPodInventory(0) <= 0 && cns.getMotherPodInventory(1) > 0) podIndex = 1;
 
-    const pos = d.player.getPosition();
+    // Launch from the selected pod's muzzle (fore-end hardware), not the hull
+    // origin. Fallback keeps older mocks/headless callers working.
+    const pos = (typeof d.player.getNetPodPosition === 'function')
+      ? d.player.getNetPodPosition(podIndex)
+      : d.player.getPosition();
     const launchPos = { x: pos.x, y: pos.y, z: pos.z };
     // Aim from the Mother toward the target using the canonical scene-position
     // resolver (single source of truth shared with LassoSystem/rendering; falls

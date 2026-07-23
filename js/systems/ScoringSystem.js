@@ -36,6 +36,14 @@ export class ScoringSystem {
   constructor() {
     this.totalScore = 0;
     this.credits = 0;
+    // S1 credits rebalance (2026-07-23): cumulative per-RUN credits paid through
+    // the capture path ONLY (not direct-points awards, sales, contracts, or the
+    // FIRST_DEPOT_FLOOR top-up). Drives CAPTURE_CREDITS_TAPER. Persisted; defaults
+    // to 0 for old saves (a loaded late-game save briefly escapes the taper —
+    // acceptable one-run distortion).
+    this.captureCreditsEarned = 0;
+    /** @private one-shot per-run flavor comms when the taper first activates */
+    this._taperCommsFired = false;
     this.debrisCleared = 0;
     this.debrisByTier = { data: 0, deorbit: 0, capture: 0 };
     this.totalMassRecovered = 0;
@@ -289,24 +297,62 @@ export class ScoringSystem {
     }
 
     // E1 retune: soft-cap the accumulated situational product, then apply once.
-    const cap = Constants.SITUATIONAL_MULT_SOFT_CAP || 2.5;
-    points = Math.round(points * Math.min(situationalMult, cap));
+    // S1 credits rebalance (2026-07-23): the SCORE and CREDITS ledgers now split
+    // here. The situational product is capped at 2.5 for score (skill rating) but
+    // at a lower SITUATIONAL_MULT_SOFT_CAP_CREDITS (1.5) for the wallet, so
+    // skilled manual play earns ~+50% credits over auto-capture instead of the
+    // pre-fix ~6–7× that let a skilled player buy out the shop early. The shared
+    // `points` (base × bounty) feeds both.
+    const scoreCap = Constants.SITUATIONAL_MULT_SOFT_CAP || 2.5;
+    const creditsCap = Constants.SITUATIONAL_MULT_SOFT_CAP_CREDITS != null
+      ? Constants.SITUATIONAL_MULT_SOFT_CAP_CREDITS
+      : scoreCap;
+    let scorePoints = Math.round(points * Math.min(situationalMult, scoreCap));
+    let creditPoints = Math.round(points * Math.min(situationalMult, creditsCap));
 
     // S1 economy closure (2026-07-19): add the salvaged-metal material bonus
     // AFTER the situational multiply so it is NOT amplified ×up-to-2.5, and clamp
     // it per catch. Previously this addition sat BEFORE the multiply, so a
     // heavy-salvage catch paid (base + metalMassKg×2) × situational, letting
     // whales earn many× catalog. Salvage stays rewarding via the ×1.15 salvage
-    // multiplier; the material top-up is now a bounded flat add. (ECONOMY_BALANCE.md)
+    // multiplier; the material top-up is now a bounded flat add. It adds the same
+    // flat amount to BOTH ledgers. (ECONOMY_BALANCE.md)
     if (data.metalMassKg && data.metalMassKg > 0) {
       const perKg = Constants.MATERIAL_BONUS_CR_PER_KG != null ? Constants.MATERIAL_BONUS_CR_PER_KG : 2;
       const capCr = Constants.MATERIAL_BONUS_CAP_CR != null ? Constants.MATERIAL_BONUS_CAP_CR : Infinity;
       const materialBonus = Math.min(Math.round(data.metalMassKg * perKg), capCr);
-      points += materialBonus;
+      scorePoints += materialBonus;
+      creditPoints += materialBonus;
     }
 
-    this.totalScore += points;
-    this.credits += points;
+    // S1 credits rebalance (2026-07-23): per-RUN capture-credits taper. Apply the
+    // taper to the FULL creditPoints (post-cap, incl. material bonus) so the
+    // ceiling is a true guarantee, then hard-clamp per award so a single large
+    // award cannot overshoot CEILING_X×catalog. Score is NEVER tapered — the
+    // chase/rating loop stays fully intact; only the wallet saturates late-run,
+    // shifting the endgame money loop toward refine-and-contribute.
+    const taperCfg = Constants.CAPTURE_CREDITS_TAPER || { START_X: 1.5, CEILING_X: 2.5 };
+    const catalogCr = (Constants.SHOP && Constants.SHOP.CATALOG_TOTAL_CR) || 46400;
+    const ceilingCr = taperCfg.CEILING_X * catalogCr;
+    const startCr = taperCfg.START_X * catalogCr;
+    const taper = taperMultiplier(this.captureCreditsEarned, catalogCr, taperCfg);
+    creditPoints = Math.round(creditPoints * taper);
+    // Hard ceiling clamp (never overshoot; floor at 0).
+    creditPoints = Math.max(0, Math.min(creditPoints, Math.round(ceilingCr - this.captureCreditsEarned)));
+    // One-shot flavor comms the first time the taper actually bites this run, so
+    // shrinking payouts read as fiction, not a bug.
+    if (!this._taperCommsFired && this.captureCreditsEarned >= startCr) {
+      this._taperCommsFired = true;
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        source: 'HOUSTON',
+        text: "Salvage market's saturating, Cowboy. Rates are dropping.",
+        priority: 1,
+      });
+    }
+    this.captureCreditsEarned += creditPoints;
+
+    this.totalScore += scorePoints;
+    this.credits += creditPoints;
     // S1 Fix M1: Do NOT increment this.debrisCleared here.
     // gameState.debrisCleared (incremented by GameFlowManager → gameState.clearDebris())
     // is the single source of truth for debris count.
@@ -325,7 +371,12 @@ export class ScoringSystem {
     eventBus.emit(Events.SCORE_UPDATE, {
       total: this.totalScore,
       credits: this.credits,
-      delta: points,
+      // S1 credits rebalance (2026-07-23): the ledgers now diverge, so expose
+      // both deltas. Legacy `delta` aliases the CREDITS delta (wallet-adjacent
+      // consumers read it); `scoreDelta`/`creditsDelta` are explicit.
+      delta: creditPoints,
+      scoreDelta: scorePoints,
+      creditsDelta: creditPoints,
       debrisCleared: gameState.debrisCleared,  // S1 Fix M1: single source of truth
       streak: this.currentStreak,
       massKg: debrisMassKg,
@@ -338,7 +389,7 @@ export class ScoringSystem {
     // S1 Fix M1+L2: Win check REMOVED from ScoringSystem.
     // GameState.update() is the sole win-condition emitter.
 
-    return points;
+    return creditPoints;
   }
 
   /**
@@ -437,6 +488,7 @@ export class ScoringSystem {
     return {
       credits: this.credits,
       totalScore: this.totalScore,
+      captureCreditsEarned: this.captureCreditsEarned,  // S1 taper (per-run)
       missionNumber: Math.floor(gameState.debrisCleared / 5) + 1,  // S1 Fix M1
       debrisCleared: gameState.debrisCleared,  // S1 Fix M1
       totalCaptures: gameState.debrisCleared,  // S1 Fix M1
@@ -460,6 +512,9 @@ export class ScoringSystem {
     // restore into a state that blocks shop purchases.
     this.totalScore = Math.max(0, data.totalScore || 0);
     this.credits = Math.max(0, data.credits || 0);
+    // S1 taper: default 0 for old saves (a loaded late-game save briefly escapes
+    // the taper — acceptable one-run distortion).
+    this.captureCreditsEarned = Math.max(0, data.captureCreditsEarned || 0);
     this.debrisCleared = data.debrisCleared || 0;
     this.debrisByTier = data.debrisByTier || { data: 0, deorbit: 0, capture: 0 };
     this.currentStreak = data.currentStreak || 0;
@@ -473,6 +528,8 @@ export class ScoringSystem {
   reset() {
     this.totalScore = 0;
     this.credits = 0;
+    this.captureCreditsEarned = 0;   // S1 taper (per-run)
+    this._taperCommsFired = false;
     this.debrisCleared = 0;
     this.debrisByTier = { data: 0, deorbit: 0, capture: 0 };
     this.currentStreak = 0;
@@ -680,6 +737,28 @@ export default scoringSystem;
 // PURE ECONOMY HELPERS — market sale value + elevator contribution payout
 // (exported for tests and shared by ShopScreen sell/contribute paths; E3/E6)
 // ============================================================================
+
+/**
+ * S1 credits rebalance (2026-07-23): per-RUN capture-credits taper multiplier.
+ * Pure — returns a factor in [0..1] applied to a capture award's credit payout:
+ *   • 1.0 while cumulative capture credits earned < START_X×catalog;
+ *   • linear falloff `max(0, 1 - (earned - start)/(ceiling - start))` after that,
+ *     so cumulative capture credits asymptotically approach CEILING_X×catalog.
+ * Monotonic non-increasing in `earnedCr`. Score is never tapered.
+ * @param {number} earnedCr - cumulative per-run capture credits earned so far
+ * @param {number} catalogCr - full catalog value (SHOP.CATALOG_TOTAL_CR)
+ * @param {{START_X:number, CEILING_X:number}} taperCfg
+ * @returns {number} factor in [0..1]
+ */
+export function taperMultiplier(earnedCr, catalogCr, taperCfg) {
+  const cfg = taperCfg || { START_X: 1.5, CEILING_X: 2.5 };
+  const start = cfg.START_X * catalogCr;
+  const ceiling = cfg.CEILING_X * catalogCr;
+  const earned = Math.max(0, earnedCr || 0);
+  if (earned <= start) return 1.0;
+  if (ceiling <= start) return 0; // degenerate config guard
+  return Math.max(0, 1 - (earned - start) / (ceiling - start));
+}
 
 /**
  * Market sale-value math (SSOT for cargo sales AND elevator contributions):

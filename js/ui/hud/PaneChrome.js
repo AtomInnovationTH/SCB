@@ -29,7 +29,7 @@
 /**
  * @typedef {Object} PaneChromeOptions
  * @property {HTMLElement} pane         The pane element to attach chrome to.
- * @property {string}      keyLabel     Short hotkey label, e.g. 'C', 'A', 'Tab'.
+ * @property {string}      keyLabel     Short hotkey label, e.g. '7', '0'.
  * @property {boolean}     [bracket]    Wrap keyLabel in [ ] (default true). Set
  *                                       false for badge-only panes with no key.
  * @property {string[]}    steps        Ordered step names (>=2). Last = largest.

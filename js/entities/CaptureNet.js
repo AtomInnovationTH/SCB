@@ -1584,6 +1584,15 @@ export class CaptureNetSystem {
       this._playerHasFragmented = state.playerHasFragmented;
     }
     this._initialized = true;
+
+    // Emit so listeners (pod caps, HUD NetInventoryPanel) sync to the restored
+    // magazine — restore previously mutated inventory silently, leaving any
+    // listener showing stale state after a load. Mirrors init()'s emit.
+    eventBus.emit(Events.NET_INVENTORY_CHANGED, {
+      source: 'mother',
+      podInventory: [...this._motherPodInventory],
+      podMax: [...this._motherPodMax],
+    });
   }
 }
 

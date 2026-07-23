@@ -520,6 +520,11 @@ export const Constants = {
     // "first cleanup contract settled" bonus tops the wallet UP TO this floor
     // if below it — enough for one 500 starter, not two and not the 800 net.
     FIRST_DEPOT_FLOOR: 600,
+    // Single source of truth for the full non-consumable upgrade catalog value
+    // (Σ cost×maxLevel over UPGRADES). Used by the capture-credits taper and the
+    // shop-pacing guardrail test, which asserts this equals the computed sum so
+    // it can never silently drift when the catalog changes.
+    CATALOG_TOTAL_CR: 46400,
     // Ordered recommendation preference for the ⭐ starter highlight. The shop
     // ⭐-marks the first item here that is un-owned and currently affordable.
     RECOMMENDED_STARTERS: ['capture_net', 'fast_reel', 'enhanced_eo', 'efficient_ion'],
@@ -1281,6 +1286,21 @@ export const Constants = {
   // deorbit). Stacked, these reached ~×7.5 and made a single lucky catch pay a
   // whole shop tier. Capped so the ceiling is a deliberate skill target, tunable.
   SITUATIONAL_MULT_SOFT_CAP: 2.5,
+  // S1 credits rebalance (2026-07-23): a SEPARATE, lower soft cap applied only to
+  // the CREDITS ledger's situational product inside awardPoints(). The score
+  // ledger keeps the 2.5 cap (skill rating untouched); the wallet is capped
+  // lower so skilled manual play earns ~+50% credits over auto-capture rather
+  // than the pre-fix ~6–7× catalog that let a skilled player buy out the shop
+  // early and kill the accumulate-and-upgrade loop. Tunable; must stay
+  // ≤ SITUATIONAL_MULT_SOFT_CAP (guardrail test asserts this).
+  SITUATIONAL_MULT_SOFT_CAP_CREDITS: 1.5,
+  // S1 credits rebalance: per-RUN capture-credits taper. Capture credits pay
+  // full value until cumulative per-run capture earnings reach START_X×catalog,
+  // then scale down linearly so cumulative capture credits asymptotically
+  // approach CEILING_X×catalog. Multiples of SHOP.CATALOG_TOTAL_CR. Sales and
+  // contract income (addCredits) are OUTSIDE the taper by design — the late-game
+  // money loop shifts from raw captures to refine-and-contribute.
+  CAPTURE_CREDITS_TAPER: { START_X: 1.5, CEILING_X: 2.5 },
   SALVAGE_XENON_CREDIT_BONUS: 200,    // Flat credits for Xenon recovery
   SALVAGE_INDIUM_CREDIT_BONUS: 500,   // Flat credits for Indium (scarce)
   SALVAGE_HAZMAT_MULTIPLIER: 1.4,     // ×1.4 for hydrazine recovery (risky)
@@ -3574,15 +3594,14 @@ export const Constants = {
     // 2. Release → daughter freezes for AUTO_RETURN_DWELL_S (no motion).
     // 3. After dwell → exponential ease back to entry (τ = AUTO_RETURN_TIME_CONSTANT_S).
     // 4. Press any arrow → cancel ease, reset dwell.
-    // 5. Press 'R' (recenter) → skip dwell, fast snap back (τ_SNAP).
+    // Recentering is fully automatic (dwell-then-ease); there is no manual
+    // recenter key.
     AUTO_RETURN_DWELL_S:        3.0,  // s — quiet time before auto-return begins.
                                       // Long enough to read a label or line up a
                                       // screenshot without the camera fighting you.
     AUTO_RETURN_TIME_CONSTANT_S: 4.0, // s — exponential time constant during
                                       // ease-back.  Gentle: 92 % returned by
                                       // t_dwell+9 s ≈ 12 s.
-    AUTO_RETURN_SNAP_TAU_S:     0.8,  // s — fast time constant when the pilot
-                                      // explicitly presses the recenter key.
     AUTO_RETURN_DEADZONE_DEG:   2.0,  // deg — once |θ| AND |φ| are inside this
                                       // band, snap to exact 0 so the camera
                                       // doesn't asymptote forever.

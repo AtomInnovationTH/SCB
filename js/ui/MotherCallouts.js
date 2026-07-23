@@ -99,8 +99,8 @@ const SYSTEMS = [
     parts: [
       { name: 'LASER APERTURE', mass: 6, risk: 'RED', tier: 'major',
         anchor: [ 0, 0.20 * M, 1.0 * M ], labelOffset: [ -1.3 * M, 0.7 * M, 1.1 * M ] },
-      { name: 'DOCKING PORT', mass: 3, risk: 'GREEN', tier: 'major',
-        anchor: [ 0, -0.15 * M, 1.10 * M ], labelOffset: [ -1.2 * M, -0.8 * M, 1.1 * M ] },
+      { name: 'LARGE NET PODS', mass: 3, risk: 'GREEN', tier: 'major',
+        anchor: [ 0, -0.18 * M, 1.155 * M ], labelOffset: [ -1.2 * M, -0.8 * M, 1.1 * M ] },
     ],
   },
   {

@@ -22,8 +22,11 @@
 //   • Advanced + Maps — cross-mode controls: maps, overlays, panes, ship
 //     systems, deep tools.
 //   Originated as a pure regroup of the older topic cards; labels have since
-//   been hand-tuned (2026-06-14). Several rows are descriptive/cosmetic — the
-//   live bindings are owned by InputManager, not this list.
+//   been hand-tuned. Full hotkey audit + Daughter-card rewrite 2026-07-23:
+//   the Daughter card now lists ONLY keys that genuinely act on the piloted
+//   daughter (mother verbs S/T/A/D/E were removed). Several rows are
+//   descriptive/cosmetic — the live bindings are owned by InputManager, not
+//   this list.
 // Keep in sync with InputManager._handleKeyDown and ARCHITECTURE §6.
 const HOTKEY_GROUPS = [
   {
@@ -37,7 +40,9 @@ const HOTKEY_GROUPS = [
       [['␣'], 'Auto-advance — do the next step'],
       [['S'], 'Scan'],
       [['T'], 'Target debris'],
+      [['Tab'], 'Cycle target'],
       [['A'], 'Autopilot to target'],
+      [['Enter'], 'Begin approach'],
       [['N'], 'Net launch'],
       [['D'], 'Daughter launch'],
       [['R'], 'Reel-in'],
@@ -48,25 +53,24 @@ const HOTKEY_GROUPS = [
       [['N', 'Shift'], 'Auto-target + launch at debris in range'],
       [['D', 'Shift'], 'Daughters launch all'],
       [['R', 'Shift'], 'Reel-in all'],
+      [['G', 'Shift'], 'Trawl sweep'],
     ],
   },
   {
-    // Selecting / operating a deployed daughter arm.
+    // Operating the daughter you are piloting. Only keys that act on/around
+    // her are listed (mother verbs live on the Mother card).
     title: 'Daughter',
     rows: [
-      [['↑ ↓ ← →'], 'Rotate around debris'],
-      [['V'], 'View — fly / look around'],
-      [['S'], 'Scan'],
-      [['T'], 'Target debris with tools'],
-      [['A'], 'Autopilot to target'],
-      [['N'], 'Net launch'],
-      [['D'], 'Daughter launch'],
-      [['R'], 'Reel-in'],
-      'spacer',
-      [['1', '–', '4'], 'Select daughter'],
-      [['L'], 'Hold steady with laser'],
-      [['E'], 'Electro Dynamic Tether'],
-      [['X'], 'Tether detach'],
+      [['1', '–', '4'], 'Select / pilot daughter (re-press = hop out)'],
+      [['↑ ↓ ← →'], 'Orbit around debris (station-keep)'],
+      [['`'], 'Cycle tool (net / magnet / gripper / pad)'],
+      [['N'], 'Fire selected tool / net'],
+      [['L'], 'Hold steady with laser (station-keep, mother-fired)'],
+      [['R'], 'Reel-in this daughter'],
+      [['X'], 'Cut tether (detach this daughter)'],
+      [['F2'], 'Cycle thruster metal'],
+      [['Shift'], 'Reel boost (hold)'],
+      [['V', '/', 'Esc'], 'Back to mother (Esc while station-keeping recalls her)'],
     ],
   },
   {
@@ -79,6 +83,7 @@ const HOTKEY_GROUPS = [
       [['J'], 'Journal'],
       [['I'], 'Info'],
       [['M'], 'Map'],
+      [['`'], 'Debris map (when not piloting)'],
       [['?'], 'Help'],
       [['Esc'], 'Pause / back'],
       'spacer',
@@ -88,8 +93,13 @@ const HOTKEY_GROUPS = [
       [['8'], 'Nav orb (show / minimize)'],
       [['9'], 'toggle: Debris pane'],
       [['0'], 'toggle: Target pane'],
+      [['PgUp', 'PgDn'], 'Scroll comms history'],
       [['−', '+'], 'Hide / show HUD panes'],
       [['Shift −', 'Shift +'], 'Mother throttle'],
+      [['E'], 'Electrodynamic tether (mother)'],
+      [['Z', '/', 'Shift Z'], 'Cycle debris wireframe zone'],
+      [['Shift 1', '2', '3'], 'Select power bus'],
+      [['[', ']'], 'Adjust selected bus'],
       [['.', ','], 'Stow struts (.) / roll up panels (,) to tuck in'],
       [[',', 'Shift'], 'Feather panels (quick edge-on dodge)'],
     ],
