@@ -471,7 +471,7 @@ export class RewardSystem {
     this._checkFieldClearing();
 
     // Celebration: audio cue + compiled star report (reuses SweepReportUI).
-    eventBus.emit(Events.AUDIO_CUE, { cue: 'sweepComplete' });
+    eventBus.emit(Events.AUDIO_CUE, { cue: 'fieldCleared' });
     this._compileSweepReport(
       { duration: 0, targetsEntered: this._fieldTotal },
       { title: 'CLUSTER CLEARED', clusterName: data.name || this._activeClusterName || null }

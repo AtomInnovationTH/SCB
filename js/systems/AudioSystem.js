@@ -17,14 +17,21 @@ const CODEX_CHIME_BASE = [587, 880]; // D5, A5
 const CODEX_PENTATONIC = [0, 2, 4, 7, 9]; // major-pentatonic semitone offsets
 
 /**
- * Deterministic two-note frequency pair for a codex-unlock chime, transposed
- * from the base D5→A5 pair by a per-category pentatonic offset.
- * @param {string} [category] - codex category key; unknown/missing → base pair.
- * @returns {[number, number]} two finite ascending frequencies.
+ * Deterministic three-note frequency triad for a codex-unlock chime, transposed
+ * from the base D5→A5 pair by a per-category pentatonic offset. The third note
+ * is the octave above the base note (D6) so the chime's 3-note LENGTH sets it
+ * apart from every 2-note cue (P4 — chime differentiation).
+ * @param {string} [category] - codex category key; unknown/missing → base triad.
+ * @returns {[number, number, number]} three finite ascending frequencies.
  */
 export function codexChimeNotes(category) {
+  const triad = (factor) => [
+    CODEX_CHIME_BASE[0] * factor,
+    CODEX_CHIME_BASE[1] * factor,
+    CODEX_CHIME_BASE[0] * 2 * factor, // octave above the base note
+  ];
   if (typeof category !== 'string' || category.length === 0) {
-    return [CODEX_CHIME_BASE[0], CODEX_CHIME_BASE[1]];
+    return triad(1);
   }
   // Stable string hash → pentatonic bucket.
   let h = 0;
@@ -33,7 +40,7 @@ export function codexChimeNotes(category) {
   }
   const semi = CODEX_PENTATONIC[Math.abs(h) % CODEX_PENTATONIC.length];
   const factor = Math.pow(2, semi / 12);
-  return [CODEX_CHIME_BASE[0] * factor, CODEX_CHIME_BASE[1] * factor];
+  return triad(factor);
 }
 
 class AudioSystem {
@@ -625,8 +632,8 @@ class AudioSystem {
 
     // Delegation 2 (2026-05-31) — onboarding "hint posted" soft chime.
     // Generic AUDIO_CUE channel — payload: { id|cue: string, volume?: number }.
-    // Currently we only recognise `hint_post` and `sweepComplete`; unknown cues
-    // are no-ops.
+    // Recognised cues: `hint_post`, `sweepComplete` (trawl sweep), and
+    // `fieldCleared` (P4 — milestone, its own voice); unknown cues are no-ops.
     eventBus.on(Events.AUDIO_CUE, (data) => {
       if (!data) return;
       const id = data.id || data.cue;
@@ -634,8 +641,10 @@ class AudioSystem {
         const v = (typeof data.volume === 'number') ? data.volume : 0.4;
         this.playHintPost(v);
       } else if (id === 'sweepComplete') {
-        // defer-trawl: cluster-cleared ceremony reuses the sweep-complete sting.
         this.playSweepComplete();
+      } else if (id === 'fieldCleared') {
+        // P4 (fixes #8) — cluster-cleared milestone gets its own bigger voice.
+        this.playFieldCleared();
       }
     });
   }
@@ -754,6 +763,26 @@ class AudioSystem {
     noise.start(now);
     noise.stop(now + 0.08);
   }
+
+  /**
+   * ==========================================================================
+   * REWARD FAMILY — note map (P4). Every "you gained something" cue. Kept
+   * distinct in contour + length so they never blur together:
+   *   playCaptureSuccess  single A5 (880)            — debris captured
+   *   playPurchase        700 → 1050 (triangle)      — credits spent (shop)
+   *   playCashRegister    1200 → 1800 (triangle)     — credits earned
+   *   playScoreTally      (see method)               — per-point tick (HUD)
+   *   playHintPost        G4 → B4 (392→494)          — onboarding hint
+   *   playPracticeChime   A5 → C#6 (880→1108)        — PRACTICED transition
+   *   playTrawlCapture    single C5                  — trawl catch
+   *   playCodexUnlock     3-note triad (per-category) — codex entry unlocked
+   *   playSweepComplete   C4·E4·G4·C5 echo fanfare   — trawl sweep finished
+   *   playFieldCleared    C5·E5·G5·C6 echo fanfare   — cluster/field cleared
+   *   playMasteryFanfare  C5·E5·G5 arpeggio          — MASTERED transition
+   *   playVictory         (see method)               — run victory
+   * PING chimes for reference: targetLock C5→E5, targetLost E5→C5.
+   * ==========================================================================
+   */
 
   /**
    * Capture success confirmation — single clean beep (A5, 880Hz, 150ms).
@@ -2497,10 +2526,29 @@ class AudioSystem {
   }
 
   /**
-   * Sweep complete — brief success fanfare C4→E4→G4→C5.
+   * Sweep complete — brief success fanfare C4→E4→G4→C5 (trawl sweep only, P4).
    * Sawtooth + sine blend with echo tail via delay node.
    */
   playSweepComplete() {
+    this._playEchoFanfare([262, 330, 392, 523]); // C4, E4, G4, C5
+  }
+
+  /**
+   * P4 (fixes #8) — field-cleared milestone. Its OWN voice, no longer sharing
+   * playSweepComplete. Same echo-fanfare DNA but a full octave span
+   * (C5→E5→G5→C6) so it reads as a bigger milestone than any 2–3 note chime,
+   * yet smaller than the victory fanfare. REWARD family.
+   */
+  playFieldCleared() {
+    this._playEchoFanfare([523, 659, 784, 1047]); // C5, E5, G5, C6
+  }
+
+  /**
+   * @private Shared ascending 4-note fanfare (sawtooth+sine blend) with an echo
+   * tail. Used by playSweepComplete and playFieldCleared. REWARD family.
+   * @param {number[]} notes — ascending frequencies (Hz).
+   */
+  _playEchoFanfare(notes) {
     if (!this.available) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
@@ -2517,7 +2565,6 @@ class AudioSystem {
     delay.connect(delayGain);
     delayGain.connect(this.rewardBus);
 
-    const notes = [262, 330, 392, 523]; // C4, E4, G4, C5
     notes.forEach((freq, i) => {
       const start = now + i * 0.15;
       // Sawtooth layer
@@ -3235,9 +3282,10 @@ class AudioSystem {
   playPracticeChime() {
     if (!this.available) return;
     const now = this.ctx.currentTime;
-    // Two-note ascending sine: 880 Hz → 1320 Hz, 80 ms apart, short decay
+    // Two-note ascending sine: A5 (880 Hz) → C#6 (1108 Hz), 80 ms apart, short
+    // decay. Distinct from the hint (G4→B4) and lock (C5→E5) contours.
     this._playSineBlip(now,        880, 0.08, 0.18);
-    this._playSineBlip(now + 0.08, 1320, 0.10, 0.22);
+    this._playSineBlip(now + 0.08, 1108, 0.10, 0.22);
   }
 
   /** Celebratory 3-note arpeggio for MASTERED transitions. ~650 ms total. */
