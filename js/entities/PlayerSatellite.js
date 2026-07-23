@@ -183,7 +183,6 @@ export class PlayerSatellite extends THREE.Group {
     // ========================================================================
     // ANIMATION STATE
     // ========================================================================
-    this._blinkTimer = 0;
     this._lidarPulseTimer = 0;
 
     // ROSA furl/unfurl state (Comma key). 1 = unfurled (deployed), 0 = furled
@@ -510,8 +509,11 @@ export class PlayerSatellite extends THREE.Group {
 
     // --- 6. (V3 magnetic ring removed — not in Config G) ---
 
-    // --- 7. DOCKING PORT (rear/front adapter) ---
-    this._buildDockingPort();
+    // --- 7. DOCKING PORT REMOVED (2026-07-23): the fore docking port (ring,
+    //        collar, dark guide cone, blinking green/red lamps) was cosmetic
+    //        greeble — nothing in the game ever docked with the mother, and
+    //        getDockingPortPosition() had no callers. Removed to declutter the
+    //        fore end. Capture/berthing is handled by the arms, not a nose port.
 
     // --- 8. NAVIGATION LIGHTS ---
     this._buildNavLights();
@@ -2643,16 +2645,44 @@ export class PlayerSatellite extends THREE.Group {
     this.sensorGimbal.name = 'SensorGimbal';
     this.add(this.sensorGimbal);
 
-    // EO Camera: small cylinder with dark lens
+    // Shared gunmetal — same recipe as the LIDAR dome; used by the EO barrel and
+    // the gimbal yoke members so the mechanism reads as one machined assembly.
+    const gunmetalMat = new THREE.MeshStandardMaterial({
+      color: 0x55585f, metalness: 0.5, roughness: 0.55,
+    });
+
+    // EO Camera: gunmetal barrel with a recessed dark lens + bright bezel
     const camGeo = new THREE.CylinderGeometry(M * 0.12, M * 0.12, M * 0.3, 12);  // was 6-seg
     const camLensMat = new THREE.MeshStandardMaterial({
-      color: 0x111122, metalness: 0.7, roughness: 0.3,
+      color: 0x111122, metalness: 0.7, roughness: 0.3,   // now the lens disc material
     });
-    const eoCam = new THREE.Mesh(camGeo, camLensMat);
+    const eoCam = new THREE.Mesh(camGeo, gunmetalMat);   // barrel reads as metal housing
     eoCam.rotation.x = Math.PI / 2;
     eoCam.position.set(M * 0.25, 0, M * 0.1);
     eoCam.name = 'EO_Camera';
     this.sensorGimbal.add(eoCam);
+
+    // Lens: dark disc 1 mm proud of the front (+Z) face (bury-don't-touch).
+    // eoCam.rotation.x = +π/2 maps cylinder-local +Y → gimbal +Z (fore); the
+    // front face is at cylinder-local y = +0.15M (half the 0.3M length).
+    const eoLensGeo = new THREE.CircleGeometry(M * 0.085, 16);
+    const eoLens = new THREE.Mesh(eoLensGeo, camLensMat);
+    eoLens.position.set(0, M * 0.151, 0);
+    eoLens.rotation.x = -Math.PI / 2;   // circle +Z normal → cylinder-local +Y (outward)
+    eoLens.name = 'EO_Lens';
+    eoLens.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+    eoCam.add(eoLens);
+    // Bezel: thin bright-steel ring around the lens, 0.5 mm proud
+    const eoBezelMat = new THREE.MeshStandardMaterial({
+      color: 0xaabbcc, metalness: 0.85, roughness: 0.15,
+    });
+    const eoBezelGeo = new THREE.RingGeometry(M * 0.085, M * 0.115, 16);
+    const eoBezel = new THREE.Mesh(eoBezelGeo, eoBezelMat);
+    eoBezel.position.set(0, M * 0.1505, 0);   // distinct proud offset avoids a coplanar tie with the lens
+    eoBezel.rotation.x = -Math.PI / 2;
+    eoBezel.name = 'EO_Bezel';
+    eoBezel.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+    eoCam.add(eoBezel);
 
     // IR Sensor: gold-foil box
     const irGeo = new THREE.BoxGeometry(M * 0.2, M * 0.15, M * 0.2);
@@ -2680,6 +2710,18 @@ export class PlayerSatellite extends THREE.Group {
     irSensor.position.set(-M * 0.25, 0, M * 0.1);
     irSensor.name = 'IR_Sensor';
     this.sensorGimbal.add(irSensor);
+
+    // IR aperture window — one dark facet so the foil box reads as an instrument
+    // (same recipe as the LIDAR lens). 1 mm proud of the +Z face (local z=0.1M).
+    const irWinGeo = new THREE.CircleGeometry(M * 0.05, 12);
+    const irWinMat = new THREE.MeshStandardMaterial({
+      color: 0x0a0a12, metalness: 0.4, roughness: 0.15,   // matches LIDAR_Lens
+    });
+    const irWin = new THREE.Mesh(irWinGeo, irWinMat);
+    irWin.position.set(0, 0, M * 0.101);   // CircleGeometry +Z normal already faces outward
+    irWin.name = 'IR_Aperture';
+    irWin.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+    irSensor.add(irWin);
 
     // LIDAR: small dome with pulsing green light
     const lidarGeo = new THREE.SphereGeometry(M * 0.1, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2);  // was 8×6
@@ -2733,9 +2775,14 @@ export class PlayerSatellite extends THREE.Group {
       color: 0x00ff44, transparent: true, opacity: 0.0,
     });
     this.lidarLight = new THREE.Mesh(lidarLightGeo, this._lidarLightMat);
-    this.lidarLight.position.set(0, M * 0.2, M * 0.15);
+    // Co-located with LIDAR_Lens (~40° elevation, +Z side), centre ON the dome
+    // surface (r 0.10) so half the r 0.04 pulse sphere protrudes — reads as the
+    // emitter firing through the aperture. Reparented onto the dome: previously
+    // a gimbal child fully enclosed by the opaque dome, so the pulse never showed.
+    this.lidarLight.position.set(0, Math.sin(lensEl) * M * 0.10, Math.cos(lensEl) * M * 0.10);
     this.lidarLight.name = 'LIDAR_Light';
-    this.sensorGimbal.add(this.lidarLight);
+    this.lidarLight.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;
+    this.lidarDome.add(this.lidarLight);
 
     // Sensor base plate — FIXED deck, re-parented from the articulating gimbal
     // to the hull (`this`). Only the instruments (EO/IR/LIDAR, children of
@@ -2768,16 +2815,34 @@ export class PlayerSatellite extends THREE.Group {
     skirt.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
     this.add(skirt);
 
-    // Small mount feet under the instruments (fixed to the deck, x=±0.25M).
-    const footGeo = new THREE.CylinderGeometry(M * 0.04, M * 0.05, M * 0.04, 6);
-    for (const fx of [M * 0.25, -M * 0.25]) {
-      const foot = new THREE.Mesh(footGeo, this._matDark);
-      foot.position.set(fx, M * 0.15, M * 1.045);
-      foot.rotation.x = Math.PI / 2;
-      foot.name = 'SensorMountFoot';
-      foot.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
-      this.add(foot);
-    }
+    // Static mount feet REMOVED (2026-07-23): they stayed put while the gimballed instruments articulated away from them; replaced by the gimbal-child yoke below.
+
+    // ── Gimbal yoke — visible mechanism connecting the instruments to the ship.
+    // The gimbal bearing itself is implied, hidden at the deck/cap junction
+    // (gimbal origin sits behind the deck slab); these members are gimbal
+    // children so they swivel with the instruments and always emerge from the
+    // hidden-bearing region regardless of articulation (yaw ±60°, pitch ±45° —
+    // points near the origin sweep tiny radii and stay inside the junction).
+    const yokeBarGeo = new THREE.BoxGeometry(M * 0.56, M * 0.05, M * 0.05);  // x span ±0.28: through both instrument bodies
+    const yokeBar = new THREE.Mesh(yokeBarGeo, gunmetalMat);
+    yokeBar.position.set(0, 0, M * 0.03);
+    yokeBar.name = 'SensorYokeBar';
+    yokeBar.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+    this.sensorGimbal.add(yokeBar);
+
+    // Dome column — slanted strut from the bar/junction region up to the dome
+    // centre. Endpoint-oriented via setFromUnitVectors (never hand-set rotation
+    // on slanted runs). Its top ends inside the dome, hidden behind LIDAR_DomeBase.
+    const colA = new THREE.Vector3(0, 0, M * 0.03);            // buried in the yoke bar
+    const colB = new THREE.Vector3(0, M * 0.15, M * 0.15);     // dome centre (inside the dome, under its base cap)
+    const colDir = colB.clone().sub(colA);
+    const colGeo = new THREE.CylinderGeometry(M * 0.028, M * 0.035, colDir.length(), 10);
+    const yokeCol = new THREE.Mesh(colGeo, gunmetalMat);
+    yokeCol.position.copy(colA).addScaledVector(colDir, 0.5);
+    yokeCol.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), colDir.clone().normalize());
+    yokeCol.name = 'SensorYokeColumn';
+    yokeCol.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+    this.sensorGimbal.add(yokeCol);
   }
 
   // --------------------------------------------------------------------------
@@ -2793,73 +2858,12 @@ export class PlayerSatellite extends THREE.Group {
   // V3 magnetic coil ring removed — not present in Config G design.
 
   // --------------------------------------------------------------------------
-  // 7. Docking Port (repositioned for Config G barrel)
+  // 7. Docking Port — REMOVED (2026-07-23)
   // --------------------------------------------------------------------------
-  /** @private */
-  _buildDockingPort() {
-    // Docking ring on front end — scaled for Config G (barrel front at Z = +M*1.0)
-    const dockRingGeo = new THREE.TorusGeometry(M * 0.25, M * 0.04, 12, 36);  // was 8×24 (50 cm aft focal ring)
-    const dockMat = new THREE.MeshStandardMaterial({
-      color: 0x888899, metalness: 0.65, roughness: 0.4,
-    });
-    this.dockingPort = new THREE.Mesh(dockRingGeo, dockMat);
-    this.dockingPort.position.set(0, -M * 0.15, M * 1.05);
-    this.dockingPort.name = 'DockingPort';
-    this.add(this.dockingPort);
-
-    // Short docking collar bridging the 10 mm gap between the cap face (z=1.0M)
-    // and the ring (tube nearest point z=1.01M) so the port reads as attached to
-    // the hull rather than floating. Open-ended cylinder centred on the ring
-    // axis (0, -0.15M), r just inside the ring major radius, spanning z 1.0→1.05.
-    // Kept clear of the guide cone at z=1.1M.
-    const collarLen = M * 0.05;
-    const collarGeo = new THREE.CylinderGeometry(M * 0.23, M * 0.23, collarLen, 20, 1, true);  // was 12-seg (46 cm collar)
-    const collar = new THREE.Mesh(collarGeo, dockMat);
-    collar.rotation.x = Math.PI / 2;
-    collar.position.set(0, -M * 0.15, M * 1.0 + collarLen * 0.5);
-    collar.name = 'DockingCollar';
-    collar.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
-    this.add(collar);
-
-    // Docking guide cone
-    const guideGeo = new THREE.ConeGeometry(M * 0.22, M * 0.12, 20, 1, true);  // was 12-seg (match dock collar)
-    const guide = new THREE.Mesh(guideGeo, this._matDark);
-    guide.position.set(0, -M * 0.15, M * 1.1);
-    this.add(guide);
-
-    // Green/Red docking lights
-    // FIX_PLAN §2-followup (round 3): lights were at radial 0.20 from torus
-    // centre; torus tube inner edge at major(0.25) − minor(0.04) = 0.21, so
-    // sphere outer (0.20+0.03=0.23) physically pierced the tube. Pulled
-    // lights inward to radial 0.15 → sphere outer 0.18, well clear of tube
-    // hole rim. Visual still reads as "lights flanking the docking port".
-    const dockLightGeo = new THREE.SphereGeometry(M * Constants.LIGHT_FX.DOCK_CORE_R, 8, 6);  // was 4×4
-
-    this._dockGreenMat = new THREE.MeshBasicMaterial({ color: 0x00ff44, transparent: true, opacity: 1.0 });
-    const dockGreen = new THREE.Mesh(dockLightGeo, this._dockGreenMat);
-    dockGreen.position.set(M * 0.15, -M * 0.15, M * 1.05);                  // FIX_PLAN §2-followup (round 3)
-    dockGreen.name = 'DockLight_Green';
-    dockGreen.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;     // FIX_PLAN §2-followup (round 3)
-    this.add(dockGreen);
-    const dockGreenHalo = this._makeLightHalo(0x00ff44, M * Constants.LIGHT_FX.DOCK_HALO, 1.8, 1.0);
-    dockGreen.add(dockGreenHalo);
-
-    this._dockRedMat = new THREE.MeshBasicMaterial({ color: 0xff2222, transparent: true, opacity: 0.0 });
-    const dockRed = new THREE.Mesh(dockLightGeo, this._dockRedMat);
-    dockRed.position.set(-M * 0.15, -M * 0.15, M * 1.05);                   // FIX_PLAN §2-followup (round 3)
-    dockRed.name = 'DockLight_Red';
-    dockRed.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;       // FIX_PLAN §2-followup (round 3)
-    this.add(dockRed);
-    const dockRedHalo = this._makeLightHalo(0xff2222, M * Constants.LIGHT_FX.DOCK_HALO, 1.8, 0.0);
-    dockRed.add(dockRedHalo);
-
-    this._dockGreenHalo = dockGreenHalo;
-    this._dockRedHalo = dockRedHalo;
-    // Soft-ramp alternation state (replaces the hard visible on/off square wave).
-    this._dockGreenOn = true;   // which lamp is currently the "on" target
-    this._dockGreenLevel = 1.0; // ramped brightness 0..1
-    this._dockRedLevel = 0.0;
-  }
+  // The fore docking port (ring, collar, dark guide cone, blinking green/red
+  // lamps + halos) was cosmetic greeble: nothing in the game docked with the
+  // mother (capture/berthing is done by the arms), and getDockingPortPosition()
+  // had no callers. Removed to declutter the fore end and reclaim tris.
 
   // --------------------------------------------------------------------------
   // 8. Navigation Lights
@@ -3038,13 +3042,6 @@ export class PlayerSatellite extends THREE.Group {
     } else {
       this.getWorldPosition(pos);
     }
-    return pos;
-  }
-
-  /** Get world position of the docking port */
-  getDockingPortPosition() {
-    const pos = new THREE.Vector3();
-    this.dockingPort.getWorldPosition(pos);
     return pos;
   }
 
@@ -3487,24 +3484,10 @@ export class PlayerSatellite extends THREE.Group {
 
   /** @private Navigation and docking lights blinking */
   _animateNavLights(dt) {
-    // Port/Starboard nav lights: always on (constant core + steady halo, set at build).
-
-    // Docking lights: alternate every 0.8 s but with soft ~100 ms ramps instead
-    // of a hard on/off (reads as a breathing status light, not a square wave).
-    this._blinkTimer += dt;
-    if (this._blinkTimer > 0.8) {
-      this._blinkTimer = 0;
-      this._dockGreenOn = !this._dockGreenOn;
-    }
-    const rampRate = Math.min(1, dt / 0.1);           // full swing in ~100 ms
-    const gTarget = this._dockGreenOn ? 1 : 0;
-    const rTarget = this._dockGreenOn ? 0 : 1;
-    this._dockGreenLevel += (gTarget - this._dockGreenLevel) * rampRate;
-    this._dockRedLevel += (rTarget - this._dockRedLevel) * rampRate;
-    if (this._dockGreenMat) this._dockGreenMat.opacity = this._dockGreenLevel;
-    if (this._dockRedMat) this._dockRedMat.opacity = this._dockRedLevel;
-    if (this._dockGreenHalo) this._dockGreenHalo.material.opacity = this._dockGreenLevel;
-    if (this._dockRedHalo) this._dockRedHalo.material.opacity = this._dockRedLevel;
+    // Port/Starboard nav lights: always on (constant core + steady halo, set at
+    // build). No per-frame work remains here now that the blinking docking
+    // lights are gone (docking port removed 2026-07-23); kept as a no-op so the
+    // update loop and menu hero call sites stay stable.
   }
 
   /** @private Thruster glow — per-nozzle differential for attitude + uniform prograde */

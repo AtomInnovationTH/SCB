@@ -116,8 +116,6 @@ export const Constants = {
     NAV_HALO_OPACITY: 0.40,   // steady port/starboard halo opacity (was 0.65)
     STROBE_HALO: 0.17,        // m — strobe halo sprite size (was 0.345 = 0.30×1.15)
     STROBE_HDR: 3.5,          // strobe flash-peak HDR multiplier (keep ≥ ~2.6)
-    DOCK_CORE_R: 0.02,        // m — docking green/red lamp core radius (was 0.03)
-    DOCK_HALO: 0.10,          // m — docking lamp halo sprite size (was 0.22)
     STATUS_HALO: 0.05,        // m — daughter status-light halo size (was 0.11)
     STATUS_HALO_OPACITY: 0.6, // daughter status-light halo opacity (was 0.85)
   },

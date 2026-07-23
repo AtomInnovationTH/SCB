@@ -1212,9 +1212,8 @@ export class MenuScene3D {
     // scene.environmentIntensity, so brightness is set via envMapIntensity here.
     mother.applyFoilEnv(this.renderer, 1.0); // v6.1 calm: 1.4→1.0
 
-    // Cull geometry the fixed hero framing never shows: the docking port sits on
-    // the −X face (away from the camera) after the roll.
-    if (mother.dockingPort) mother.dockingPort.visible = false;
+    // (Docking-port hero cull removed 2026-07-23: the fore docking port was
+    // deleted from the mother model — nothing to hide here anymore.)
 
     // Daughters — the REAL ArmUnit models docked on the Mother's actual strut
     // tips (drift-proof, same as the mother). Full Y0 Quad loadout: 2 Weavers +

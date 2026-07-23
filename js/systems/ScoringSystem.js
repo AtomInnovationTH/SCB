@@ -15,23 +15,21 @@ export const CAPTURE_TIERS = {
   CAPTURE: 3,    // Physical capture
 };
 
-/** Base points per debris tier */
-const TIER_BASE_POINTS = {
-  1: 100,
-  2: 300,
-  3: 800,
-  4: 2000,
-};
-
-/** Method bonus multipliers */
+/**
+ * Method bonus multipliers.
+ *
+ * S1 economy closure (2026-07-23): the only method emitted by the shipped build
+ * is `arm` (GameFlowManager.js, LassoSystem.js all hard-code `method:'arm'`).
+ * The former speculative entries (laser/ionBeam/magnetic/tether/climber and the
+ * ×2.0 `armManual`) were dead — and `armManual: 2.0` was a latent double-count:
+ * it multiplied inside `calculateScore()` BEFORE the situational soft-cap, so
+ * any future `method:'armManual'` + `manualCapture:true` would have stacked
+ * ×2.0 (method) × ×2.0 (manual) outside the cap. Deleted. Manual-piloting reward
+ * lives solely in the situational `manualCapture` ×2.0, under the soft caps.
+ * `arm: 1.0` is a no-op kept only to document the shipped method.
+ */
 const METHOD_BONUS = {
-  laser:      1.3,
-  ionBeam:    1.4,
-  magnetic:   1.2,
-  tether:     1.25,
-  climber:    1.3,
-  arm:        1.0,    // Auto-capture (base — V3 arm system)
-  armManual:  2.0,    // Manual arm piloting (future Phase 4)
+  arm: 1.0,    // Auto-capture (base — V3 arm system); the only emitted method
 };
 
 export class ScoringSystem {
