@@ -59,6 +59,12 @@ export class StatusPanel {
 
     // V5: Crossbow arm HUD state
     this._tetherTensions = {};          // {armIndex: fraction} — cached from events
+
+    // Daughter telemetry: per-id finite-difference range-rate cache. Live
+    // velocity fields are absolute scene-space (~orbital speed) and useless to a
+    // pilot, so the HUD differences the displayed range itself. Keyed by daughter
+    // id → { range, t, targeting } so a target change invalidates the sample.
+    this._daughterRangeCache = new Map();
     this._pulseScanState = 'READY';     // READY | SCANNING | COOLDOWN
 
     // ST-1.3: Lasso cooldown ring state
@@ -1529,6 +1535,16 @@ export class StatusPanel {
       return gap + this._renderDaughterLine(e.a, e.idx);
     }).join('');
 
+    // Prune range-rate cache entries for daughters no longer present (destroyed
+    // mid-flight without passing through EXPENDED) so the Map can't grow across
+    // a long session.
+    if (this._daughterRangeCache.size > statuses.length) {
+      const live = new Set(statuses.map((s) => s.id));
+      for (const id of this._daughterRangeCache.keys()) {
+        if (!live.has(id)) this._daughterRangeCache.delete(id);
+      }
+    }
+
     this._updateFleetHeader();
   }
 
@@ -1602,6 +1618,105 @@ export class StatusPanel {
   }
 
   /**
+   * @private Scene-units → metres. SCENE_SCALE is scene-units/km, so
+   * metres = scene / SCENE_SCALE × 1000 (canonical conversion, see
+   * InputManager.js:2349). Positions (arm, mothership, debris `_scenePosition`)
+   * all share the same scene-space frame, so no frame conversion is needed.
+   */
+  _sceneToMetres(distScene) {
+    const s = Constants.SCENE_SCALE || 0.01;
+    return (distScene / s) * 1000;
+  }
+
+  /** @private Euclidean distance between two {x,y,z} points, or null. */
+  _pointDist(p1, p2) {
+    if (!p1 || !p2) return null;
+    const dx = p1.x - p2.x, dy = p1.y - p2.y, dz = p1.z - p2.z;
+    return Math.sqrt(dx * dx + dy * dy + dz * dz);
+  }
+
+  /**
+   * @private Finite-difference range-rate for one daughter (m/s, positive =
+   * closing). `targeting` distinguishes the mothership-drift sample from the
+   * target-approach sample so a retarget invalidates the cache rather than
+   * spiking off a stale range. Returns null until two consecutive samples of
+   * the same kind exist.
+   */
+  _daughterRangeRate(id, rangeM, targeting) {
+    const now = performance.now();
+    const prev = this._daughterRangeCache.get(id);
+    this._daughterRangeCache.set(id, { range: rangeM, t: now, targeting });
+    if (!prev || prev.targeting !== targeting) return null;
+    const dt = (now - prev.t) / 1000;
+    if (dt <= 0 || dt > 1) return null; // stale (paused / hidden) → resample
+    return (prev.range - rangeM) / dt;
+  }
+
+  /** @private Format a distance in metres: whole m below 1 km, else km @2dp. */
+  _fmtDist(m) {
+    return m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(2)} km`;
+  }
+
+  /**
+   * @private The launched-daughter telemetry line: mothership range + drift +
+   * tether, swapped for target range + closing rate when a target exists.
+   * Returns '' for docked/reloading/expended daughters (no telemetry line).
+   */
+  _renderDaughterTelemetry(a, armObj, idx) {
+    const grounded = a.state === 'DOCKED' || a.state === 'RELOADING' || a.state === 'EXPENDED';
+    if (grounded) { this._daughterRangeCache.delete(a.id); return ''; }
+    const dim = 'color:#e8e4d0;opacity:0.7;';
+    const parts = [];
+
+    const target = armObj && armObj.target;
+    const targetPos = target ? (target._scenePosition || (target.mesh && target.mesh.position)) : null;
+
+    if (target && targetPos) {
+      // Targeting: show target range + closing rate (mothership range hidden).
+      const rng = this._sceneToMetres(this._pointDist(targetPos, a.position) || 0);
+      const rate = this._daughterRangeRate(a.id, rng, true);
+      parts.push(`<span style="${dim}">tgt ${this._fmtDist(rng)}</span>`);
+      if (rate !== null) {
+        // Red when closing fast at short range — imminent contact needs a glance.
+        const hot = rate > 5 && rng < 100;
+        const c = hot ? '#ff4444' : '#e8e4d0';
+        const verb = rate >= 0 ? 'clsg' : 'opng';
+        parts.push(`<span style="color:${c};opacity:0.85;">${verb} ${Math.abs(rate).toFixed(1)} m/s</span>`);
+      }
+    } else {
+      // No target: mothership range + drift rate.
+      const ps = this._armManager && this._armManager.playerSatellite;
+      const motherPos = ps && (ps.position || (ps.mesh && ps.mesh.position));
+      const d = this._pointDist(motherPos, a.position);
+      if (d !== null) {
+        const rng = this._sceneToMetres(d);
+        const rate = this._daughterRangeRate(a.id, rng, false);
+        parts.push(`<span style="${dim}">↦ ${this._fmtDist(rng)}</span>`);
+        if (rate !== null) {
+          parts.push(`<span style="${dim}">Δ ${Math.abs(rate).toFixed(1)} m/s</span>`);
+        }
+      } else {
+        this._daughterRangeCache.delete(a.id);
+      }
+    }
+
+    // Tether length — only meaningful while attached. Reuse the amber/red
+    // tension styling so a stressed tether reads consistently with the status.
+    if (!a.isDetached && a.tetherLength > 0) {
+      const tens = idx >= 0 ? this._tetherTensions[idx] : undefined;
+      const crit = Constants.REEL_TENSION_CRITICAL || 0.9;
+      const tc = tens !== undefined && tens >= crit ? '#ff4444'
+        : tens !== undefined && tens >= crit * 0.7 ? '#ffaa00' : '#e8e4d0';
+      parts.push(`<span style="color:${tc};opacity:0.7;">⛓ ${Math.round(a.tetherLength)} m</span>`);
+    }
+
+    if (parts.length === 0) return '';
+    return `<div style="padding-left:28px;font-size:10px;margin-top:1px;white-space:nowrap;">`
+      + parts.join('<span style="opacity:0.4;"> · </span>')
+      + `</div>`;
+  }
+
+  /**
    * @private One daughter row. Unselected = a single details line
    * (number · status · nets · fuel). Selected = two lines: the details line,
    * plus a 2nd line listing the hotkey(s) relevant to its current state.
@@ -1656,8 +1771,11 @@ export class StatusPanel {
       + dvHtml
       + `</div>`;
 
+    // 2nd line: pilot telemetry for launched daughters (empty when docked).
+    const telemetryLine = this._renderDaughterTelemetry(a, armObj, idx);
+
     if (!isSel) {
-      return `<div style="padding:1px 4px;border-left:2px solid transparent;">${detailLine}</div>`;
+      return `<div style="padding:1px 4px;border-left:2px solid transparent;">${detailLine}${telemetryLine}</div>`;
     }
 
     // Line 2 — the relevant hotkey(s), indented to sit under the status column.
@@ -1668,6 +1786,7 @@ export class StatusPanel {
 
     return `<div style="padding:2px 4px;background:rgba(0,255,255,0.08);border-left:2px solid #00ffff;">`
       + detailLine
+      + telemetryLine
       + keysLine
       + `</div>`;
   }
