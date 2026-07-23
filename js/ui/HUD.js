@@ -17,6 +17,7 @@ import { CommsPanel } from './hud/CommsPanel.js';
 import { HintTicker } from './hud/HintTicker.js';
 import { NetInventoryPanel } from './hud/NetInventoryPanel.js';
 import { PaneDensity } from './hud/PaneDensity.js';
+import { pinProgress } from './ShopScreen.js'; // S1 retention: pinned-upgrade progress math (SSOT)
  import { DebrisWireframe }   from './DebrisWireframe.js';
  import { DaughterWireframe } from './DaughterWireframe.js';
 import { StrutLabels }       from './hud/StrutLabels.js';
@@ -504,6 +505,87 @@ export class HUD {
 
     // --- Pane-density ladder (bare -/+ keys) ---
     this._initPaneDensity();
+
+    // --- S1 retention: pinned next-upgrade progress widget ---
+    this._buildPinWidget();
+  }
+
+  /**
+   * @private Build the compact pinned-next-upgrade HUD widget (S1 retention).
+   * One glanceable line near the credits readout: `▸ NAME 2,140/3,000 cr` with a
+   * thin progress bar; switches to a highlighted READY state when affordable.
+   * No modal, no interruption. Hidden until an upgrade is pinned.
+   */
+  _buildPinWidget() {
+    const el = document.createElement('div');
+    el.id = 'hud-pin-widget';
+    Object.assign(el.style, {
+      position: 'absolute',
+      top: '150px',
+      left: '12px',
+      minWidth: '200px',
+      maxWidth: '260px',
+      padding: '4px 8px',
+      background: 'rgba(0,20,40,0.55)',
+      border: '1px solid rgba(240,192,64,0.35)',
+      borderRadius: '3px',
+      fontFamily: "'Courier New', monospace",
+      fontSize: '11px',
+      color: '#f0c040',
+      letterSpacing: '0.03em',
+      pointerEvents: 'none',
+      display: 'none',
+      zIndex: '40',
+    });
+    el.innerHTML = `
+      <div id="hud-pin-label" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></div>
+      <div style="height:3px;margin-top:3px;background:rgba(240,192,64,0.15);border-radius:2px;overflow:hidden;">
+        <div id="hud-pin-bar" style="height:100%;width:0%;background:#f0c040;transition:width 0.3s ease;"></div>
+      </div>`;
+    this.container.appendChild(el);
+    this._pinWidget = el;
+    /** @type {{id:string,name:string,cost:number}|null} */
+    this._pinned = null;
+    /** @private guards the one-shot READY comms per pin */
+    this._pinReadyFired = false;
+  }
+
+  /**
+   * @private Update the pinned-upgrade widget from the current pin + credits.
+   * Uses the pure pinProgress helper so display math is unit-tested.
+   */
+  _updatePinWidget() {
+    if (!this._pinWidget) return;
+    if (!this._pinned || !this._pinned.id || !(this._pinned.cost > 0)) {
+      this._pinWidget.style.display = 'none';
+      return;
+    }
+    const { pct, remaining, affordable } = pinProgress(this._credits, this._pinned);
+    const label = this._pinWidget.querySelector('#hud-pin-label');
+    const bar = this._pinWidget.querySelector('#hud-pin-bar');
+    if (affordable) {
+      this._pinWidget.style.borderColor = 'rgba(0,255,136,0.55)';
+      this._pinWidget.style.color = '#00ff88';
+      if (label) label.textContent = `▸ ${this._pinned.name} — READY AT DEPOT`;
+      if (bar) { bar.style.width = '100%'; bar.style.background = '#00ff88'; }
+      if (!this._pinReadyFired) {
+        this._pinReadyFired = true;
+        eventBus.emit(Events.COMMS_MESSAGE, {
+          source: 'HOUSTON',
+          text: `You've got the credits for ${this._pinned.name}. See you at the depot.`,
+          priority: 1,
+        });
+      }
+    } else {
+      this._pinWidget.style.borderColor = 'rgba(240,192,64,0.35)';
+      this._pinWidget.style.color = '#f0c040';
+      if (label) {
+        label.textContent = `▸ ${this._pinned.name} ${Math.round(this._credits).toLocaleString()}/${this._pinned.cost.toLocaleString()} cr`;
+      }
+      if (bar) { bar.style.width = `${Math.round(pct * 100)}%`; bar.style.background = '#f0c040'; }
+      void remaining;
+    }
+    this._pinWidget.style.display = 'block';
   }
 
   /**
@@ -749,6 +831,28 @@ export class HUD {
       // Phase 2 (capture feedback): the delivery moment is confirmed by the
       // salvage-reveal card (SALVAGE_REVEAL) + the top-strip CLEARED counter +
       // comms. The old center-screen capture-notif pop was redundant — removed.
+      // S1 retention: advance the pinned-upgrade progress on every credit change.
+      this._updatePinWidget();
+    });
+
+    // S1 retention: pinned next-upgrade widget lifecycle.
+    eventBus.on(Events.UPGRADE_PINNED, (data) => {
+      if (data && data.id) {
+        this._pinned = { id: data.id, name: data.name, cost: data.cost };
+        this._pinReadyFired = false; // reset one-shot READY comms for the new pin
+        if (data.credits != null) this._credits = data.credits;
+      } else {
+        this._pinned = null;
+      }
+      this._updatePinWidget();
+    });
+    eventBus.on(Events.UPGRADE_PURCHASED, (data) => {
+      // Clear the pin display when the pinned item is purchased; ShopScreen
+      // re-broadcasts a fresh pin on the next shop close.
+      if (data && this._pinned && data.id === this._pinned.id) {
+        this._pinned = null;
+        this._updatePinWidget();
+      }
     });
 
     // ST-9.11 C-5: Launch sequence phase indicator with countdown
@@ -1005,6 +1109,12 @@ export class HUD {
     eventBus.on(Events.GAME_RESET, () => {
       if (!this._skillRevealActive) return;
       this._skillActiveGroups.clear();
+    });
+    // S1 retention: clear the pinned-upgrade widget on a new game.
+    eventBus.on(Events.GAME_RESET, () => {
+      this._pinned = null;
+      this._pinReadyFired = false;
+      this._updatePinWidget();
     });
 
     // Direct HUD group activation (bypasses skill discovery)

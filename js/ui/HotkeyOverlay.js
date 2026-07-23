@@ -232,7 +232,7 @@ export class HotkeyOverlay {
     const hr = document.createElement('div');
     Object.assign(hr.style, {
       height: '0', borderTop: '1px solid rgba(0,212,255,0.18)',
-      margin: '18px 0',
+      margin: '10px 0',
     });
     return hr;
   }
@@ -242,7 +242,7 @@ export class HotkeyOverlay {
     const row = document.createElement('div');
     Object.assign(row.style, {
       display: 'flex', alignItems: 'center', gap: '7px',
-      margin: '5px 0', fontSize: '13px',
+      margin: '3px 0', fontSize: '13px',
     });
 
     const keyWrap = document.createElement('div');

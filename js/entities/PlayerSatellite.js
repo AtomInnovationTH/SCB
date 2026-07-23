@@ -2864,9 +2864,16 @@ export class PlayerSatellite extends THREE.Group {
    * pod's front centre is the launch point used by fireMotherNet (via
    * getNetPodPosition), so nets depart from the pod, not the hull origin.
    *
-   * Placement (verified clear of the sensor deck (0, 0.15M, r 0.26M) and inside
-   * hull r 0.40M): pods at (±0.18M, −0.18M), axes +Z, tails buried ~5 mm into
-   * the front cap (aft face z≈0.995M, front face z≈1.155M).
+   * Placement: as close to the ship's long axis as the fore cap allows. Dead
+   * centre (0,0) and the whole +Y half are owned by the sensor turret (deck disc
+   * (0, 0.15M), r 0.26M — its footprint reaches down to y≈−0.11M) and the laser
+   * aperture (0, 0.20M, r≈0.14M), so the launchers can't sit on the axis itself.
+   * The closest on-axis home is the free −Y band directly BELOW the deck: two
+   * tubes straddling x=0 at (±0.115M, −0.24M), r 0.10M, inner edges nearly
+   * meeting at the centreline — a twin launcher aimed along +Z, on-axis for
+   * recoil and aim. Verified clear of the deck (centre-to-centre 0.41M >
+   * r_deck+r_pod 0.36M) and inside the hull (radial 0.27M + r 0.10M < 0.40M).
+   * Axes +Z, tails buried ~5 mm into the front cap (aft z≈0.995M, front z≈1.155M).
    */
   _buildNetPods() {
     // Shared pod housing material — gunmetal, same recipe as the LIDAR dome /
@@ -2886,8 +2893,9 @@ export class PlayerSatellite extends THREE.Group {
     this._netPodMuzzles = [];
     this._netPodCaps = [];
 
-    // podIndex 0 → +X, podIndex 1 → −X.
-    const podX = [M * 0.18, -M * 0.18];
+    // podIndex 0 → +X, podIndex 1 → −X (both hug the long axis, low-centre).
+    const podX = [M * 0.115, -M * 0.115];
+    const podY = -M * 0.24;
     for (let pod = 0; pod < 2; pod++) {
       const x = podX[pod];
 
@@ -2895,10 +2903,10 @@ export class PlayerSatellite extends THREE.Group {
       // cylinder axis (local +Y) → ship +Z (fore); default caps are kept
       // (closed ends) so no extra front disc is needed. Centre at z=1.075M →
       // aft face z=0.995M (buried in the cap), front face z=1.155M.
-      const housingGeo = new THREE.CylinderGeometry(M * 0.11, M * 0.11, M * 0.16, 12);
+      const housingGeo = new THREE.CylinderGeometry(M * 0.10, M * 0.10, M * 0.16, 12);
       const housing = new THREE.Mesh(housingGeo, gunmetalMat);
       housing.rotation.x = Math.PI / 2;
-      housing.position.set(x, -M * 0.18, M * 1.075);
+      housing.position.set(x, podY, M * 1.075);
       housing.name = `NetPod_${pod}`;
       housing.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
       this.add(housing);
@@ -2936,7 +2944,7 @@ export class PlayerSatellite extends THREE.Group {
       // the ship frame (NOT the rotated housing) so its world position is the
       // launch point regardless of housing-local axis rotation.
       const muzzle = new THREE.Object3D();
-      muzzle.position.set(x, -M * 0.18, M * 1.155);
+      muzzle.position.set(x, podY, M * 1.155);
       muzzle.name = `NetPodMuzzle_${pod}`;
       this.add(muzzle);
       this._netPodMuzzles.push(muzzle);

@@ -281,6 +281,7 @@ export const Events = {
   // === UPGRADES ===
   UPGRADE_PURCHASED:  'upgrade:purchased',
   UPGRADE_V4_TECH:    'upgrade:v4Tech',
+  UPGRADE_PINNED:     'upgrade:pinned',   // S1 retention: player pinned a shop upgrade as the next chase target
 
   // === POWER ===
   POWER_CHANGED:      'power:changed',

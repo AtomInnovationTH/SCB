@@ -228,6 +228,53 @@ export function recommendedStarter(upgrades, owned, credits, preference = STARTE
   return null;
 }
 
+/**
+ * S1 retention (2026-07-23): live progress toward a pinned shop upgrade, for the
+ * "visible next goal" HUD widget. Pure — exported for tests.
+ * @param {number} credits - current spendable credits
+ * @param {{cost:number}|null|undefined} upgrade - the pinned upgrade catalog row
+ * @returns {{pct:number, remaining:number, affordable:boolean}}
+ */
+export function pinProgress(credits, upgrade) {
+  if (!upgrade || !(upgrade.cost > 0)) {
+    return { pct: 0, remaining: 0, affordable: false };
+  }
+  const c = Math.max(0, credits || 0);
+  const pct = Math.max(0, Math.min(1, c / upgrade.cost));
+  const remaining = Math.max(0, upgrade.cost - c);
+  return { pct, remaining, affordable: c >= upgrade.cost };
+}
+
+/**
+ * S1 retention: pick the auto-pin chase target — the cheapest gated-open,
+ * un-owned, non-consumable upgrade the player cannot yet afford. Falls back to
+ * the cheapest gated-open un-owned upgrade if everything gated-open is already
+ * affordable (so the chase target is never empty while items remain). Pure —
+ * exported for tests.
+ * @param {Array} upgrades - upgrade catalog (UPGRADES)
+ * @param {{has:(id:string)=>boolean}} owned - purchasedUpgrades Map/Set
+ * @param {number} credits - current spendable credits
+ * @param {(flag:string)=>boolean} [isFeatureEnabled]
+ * @returns {string|null} upgrade id, or null when nothing remains
+ */
+export function cheapestChaseTarget(upgrades, owned, credits, isFeatureEnabled) {
+  const has = (id) => (owned && typeof owned.has === 'function' ? owned.has(id) : false);
+  const level = (id) => (owned && typeof owned.get === 'function' ? (owned.get(id) || 0) : (has(id) ? 1 : 0));
+  let cheapestUnaffordable = null;
+  let cheapestAny = null;
+  for (const u of upgrades || []) {
+    if (u.consumable || u.maxLevel === Infinity) continue;
+    if (level(u.id) >= (u.maxLevel || 1)) continue; // maxed / owned
+    if (!upgradePrereqsMet(u, owned, isFeatureEnabled)) continue;
+    if (cheapestAny === null || u.cost < cheapestAny.cost) cheapestAny = u;
+    if ((credits || 0) < u.cost && (cheapestUnaffordable === null || u.cost < cheapestUnaffordable.cost)) {
+      cheapestUnaffordable = u;
+    }
+  }
+  const pick = cheapestUnaffordable || cheapestAny;
+  return pick ? pick.id : null;
+}
+
 /** Spring tier descriptions for shop display */
 const SPRING_DESCRIPTIONS = [
   "Factory steel springs. Reliable but slow.",
@@ -252,6 +299,10 @@ export class ShopScreen {
     this.element = null;
     this.visible = false;
     this.purchasedUpgrades = new Map(); // upgradeId → level
+    // S1 retention (2026-07-23): the pinned "next upgrade" chase target (id or
+    // null). Persisted via the serialized-upgrade array (sentinel). Drives the
+    // pinned-next-upgrade HUD widget between depots.
+    this.pinnedUpgradeId = null;
     this._lastPurchasedId = null; // for flash animation
     this._springTier = 0;  // Current spring tier index (0 = T1 starter)
     this._tetherTier = 0;  // Current tether tier index (0 = T1 starter)
@@ -742,6 +793,15 @@ export class ShopScreen {
       });
     });
 
+    // S1 retention: pin toggle handlers
+    catContainer.querySelectorAll('.shop-pin-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.togglePin(btn.dataset.pinId);
+        this.refresh();
+      });
+    });
+
     // Tier buy button handlers (springs & tethers)
     catContainer.querySelectorAll('.shop-tier-buy-btn').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -796,6 +856,9 @@ export class ShopScreen {
     const consumableFull = upgrade.effect === 'motherNetRestock'
       && !captureNetSystem.hasMotherPodSpace();
     const available = !maxed && canAfford && requiresMet && !consumableFull;
+    // S1 retention: pinnable = gated-open, not-maxed, non-consumable.
+    const pinnable = !maxed && requiresMet && !upgrade.consumable && upgrade.maxLevel !== Infinity;
+    const isPinned = this.pinnedUpgradeId === upgrade.id;
 
     const opacity = maxed ? 0.5 : (available ? 1.0 : 0.5);
     const borderColor = maxed ? 'rgba(0,255,136,0.2)' : (available ? 'rgba(0,255,136,0.3)' : 'rgba(255,68,68,0.15)');
@@ -828,6 +891,13 @@ export class ShopScreen {
       ? `<span title="Recommended starter" style="margin-left:6px;font-size:0.75rem;
                color:#f0c040;">★</span>`
       : '';
+    // S1 retention: pin toggle badge (📌) on the name row for pinnable items.
+    const pinBadge = pinnable
+      ? `<span class="shop-pin-btn" data-pin-id="${upgrade.id}"
+              title="${isPinned ? 'Unpin chase target' : 'Pin as next-upgrade goal'}"
+              style="margin-left:6px;font-size:0.72rem;cursor:pointer;user-select:none;
+                     opacity:${isPinned ? 1 : 0.4};color:${isPinned ? '#f0c040' : 'rgba(0,255,136,0.6)'};">📌</span>`
+      : '';
     const whyLine = isRecommended && STARTER_WHY[upgrade.id]
       ? `<div style="font-size:0.65rem;color:rgba(240,192,64,0.85);margin-top:2px;">
            ★ ${STARTER_WHY[upgrade.id]}</div>`
@@ -841,7 +911,7 @@ export class ShopScreen {
                   opacity:${opacity};transition:all 0.3s;">
         <div style="flex:1;">
           <div style="font-size:0.85rem;color:${maxed ? 'rgba(0,255,136,0.6)' : '#00ff88'};">
-            ${upgrade.name}${levelBadge}${trlBadge}${starBadge}
+            ${upgrade.name}${levelBadge}${trlBadge}${starBadge}${pinBadge}
           </div>
           <div style="font-size:0.7rem;color:rgba(0,255,136,0.5);">${decorateGlossary(upgrade.desc, { once: true })}</div>
           ${whyLine}
@@ -1221,6 +1291,13 @@ export class ShopScreen {
     this._lastPurchasedId = upgradeId; // trigger flash on next refresh
     audioSystem.playCaptureSuccess();
 
+    // S1 retention: clear the pin when the pinned item is purchased (or once it
+    // reaches maxLevel); the HUD re-advances to a fresh chase target on next hide.
+    if (this.pinnedUpgradeId === upgradeId) {
+      this.pinnedUpgradeId = null;
+      this._emitPinnedUpgrade();
+    }
+
     // Emit upgrade event for game to apply
     eventBus.emit(Events.UPGRADE_PURCHASED, {
       id: upgradeId,
@@ -1316,6 +1393,9 @@ export class ShopScreen {
     // Serialize tier upgrades (tier 0 is free starter, store purchased tiers)
     for (let i = 0; i < this._springTier; i++) ids.push('_springTier');
     for (let i = 0; i < this._tetherTier; i++) ids.push('_tetherTier');
+    // S1 retention: persist the pinned chase target as a sentinel token so it
+    // survives save/load through the existing upgrade-array channel.
+    if (this.pinnedUpgradeId) ids.push(`__pin__${this.pinnedUpgradeId}`);
     return ids;
   }
 
@@ -1327,16 +1407,26 @@ export class ShopScreen {
     this.purchasedUpgrades.clear();
     this._springTier = 0;
     this._tetherTier = 0;
+    this.pinnedUpgradeId = null;
     if (!Array.isArray(upgradeIds)) return;
+    let restoredPin = null;
     for (const id of upgradeIds) {
       if (id === '_springTier') {
         this._springTier++;
       } else if (id === '_tetherTier') {
         this._tetherTier++;
+      } else if (typeof id === 'string' && id.startsWith('__pin__')) {
+        restoredPin = id.slice('__pin__'.length);
       } else {
         const current = this.purchasedUpgrades.get(id) || 0;
         this.purchasedUpgrades.set(id, current + 1);
       }
+    }
+    // Stale-save safety: drop the pin if it no longer exists in UPGRADES or is
+    // already maxed after restoring purchases.
+    if (restoredPin) {
+      this.pinnedUpgradeId = restoredPin;
+      if (!this.getPinnedUpgrade()) this.pinnedUpgradeId = null;
     }
   }
 
@@ -1384,10 +1474,74 @@ export class ShopScreen {
 
   hide() {
     this.visible = false;
+    // S1 retention: ensure the chase target is never empty when leaving the shop
+    // with unaffordable items remaining, then broadcast the current pin so the
+    // HUD widget shows live progress until the next depot.
+    this._autoPinIfNeeded();
+    this._emitPinnedUpgrade();
     this.element.style.opacity = '0';
     setTimeout(() => {
       if (!this.visible) this.element.style.display = 'none';
     }, 300);
+  }
+
+  // ========================================================================
+  // S1 retention: pinned "next upgrade" chase target
+  // ========================================================================
+
+  /** Resolve the pinned upgrade catalog row (null if unset/stale/maxed). */
+  getPinnedUpgrade() {
+    if (!this.pinnedUpgradeId) return null;
+    const u = UPGRADES.find((x) => x.id === this.pinnedUpgradeId);
+    if (!u) { this.pinnedUpgradeId = null; return null; }
+    const level = this.purchasedUpgrades.get(u.id) || 0;
+    if (level >= (u.maxLevel || 1)) { this.pinnedUpgradeId = null; return null; }
+    return u;
+  }
+
+  /**
+   * Pin (or re-pin) an upgrade as the chase target. Only gated-open, not-maxed,
+   * non-consumable items are pinnable. Emits UPGRADE_PINNED.
+   * @param {string} id
+   * @returns {boolean} whether the pin was set
+   */
+  pinUpgrade(id) {
+    const u = UPGRADES.find((x) => x.id === id);
+    if (!u || u.consumable || u.maxLevel === Infinity) return false;
+    const level = this.purchasedUpgrades.get(u.id) || 0;
+    if (level >= (u.maxLevel || 1)) return false;
+    if (!upgradePrereqsMet(u, this.purchasedUpgrades, (f) => Constants.isFeatureEnabled(f))) return false;
+    this.pinnedUpgradeId = id;
+    this._emitPinnedUpgrade();
+    return true;
+  }
+
+  /** Toggle the pin on an upgrade (unpins if already pinned). */
+  togglePin(id) {
+    if (this.pinnedUpgradeId === id) {
+      this.pinnedUpgradeId = null;
+      this._emitPinnedUpgrade();
+      return false;
+    }
+    return this.pinUpgrade(id);
+  }
+
+  /** @private Auto-pin the cheapest gated-open unaffordable upgrade if unset/stale. */
+  _autoPinIfNeeded() {
+    if (this.getPinnedUpgrade()) return; // valid pin already set (also clears stale)
+    const credits = this._scoringSystem ? this._scoringSystem.credits : scoringSystem.credits;
+    const id = cheapestChaseTarget(UPGRADES, this.purchasedUpgrades, credits,
+      (f) => Constants.isFeatureEnabled(f));
+    this.pinnedUpgradeId = id;
+  }
+
+  /** @private Emit UPGRADE_PINNED with the current pin (or a cleared payload). */
+  _emitPinnedUpgrade() {
+    const u = this.getPinnedUpgrade();
+    const credits = this._scoringSystem ? this._scoringSystem.credits : scoringSystem.credits;
+    eventBus.emit(Events.UPGRADE_PINNED, u
+      ? { id: u.id, name: u.name, cost: u.cost, credits }
+      : { id: null, name: null, cost: 0, credits });
   }
 }
 
