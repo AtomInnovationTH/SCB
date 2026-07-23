@@ -17,7 +17,7 @@ import { CommsPanel } from './hud/CommsPanel.js';
 import { HintTicker } from './hud/HintTicker.js';
 import { NetInventoryPanel } from './hud/NetInventoryPanel.js';
 import { PaneDensity } from './hud/PaneDensity.js';
-import { pinProgress } from './ShopScreen.js'; // S1 retention: pinned-upgrade progress math (SSOT)
+import { pinProgress } from './shopPin.js'; // S1 retention: pinned-upgrade progress math (pure, DOM-free)
  import { DebrisWireframe }   from './DebrisWireframe.js';
  import { DaughterWireframe } from './DaughterWireframe.js';
 import { StrutLabels }       from './hud/StrutLabels.js';

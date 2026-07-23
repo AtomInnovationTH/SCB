@@ -228,52 +228,10 @@ export function recommendedStarter(upgrades, owned, credits, preference = STARTE
   return null;
 }
 
-/**
- * S1 retention (2026-07-23): live progress toward a pinned shop upgrade, for the
- * "visible next goal" HUD widget. Pure — exported for tests.
- * @param {number} credits - current spendable credits
- * @param {{cost:number}|null|undefined} upgrade - the pinned upgrade catalog row
- * @returns {{pct:number, remaining:number, affordable:boolean}}
- */
-export function pinProgress(credits, upgrade) {
-  if (!upgrade || !(upgrade.cost > 0)) {
-    return { pct: 0, remaining: 0, affordable: false };
-  }
-  const c = Math.max(0, credits || 0);
-  const pct = Math.max(0, Math.min(1, c / upgrade.cost));
-  const remaining = Math.max(0, upgrade.cost - c);
-  return { pct, remaining, affordable: c >= upgrade.cost };
-}
-
-/**
- * S1 retention: pick the auto-pin chase target — the cheapest gated-open,
- * un-owned, non-consumable upgrade the player cannot yet afford. Falls back to
- * the cheapest gated-open un-owned upgrade if everything gated-open is already
- * affordable (so the chase target is never empty while items remain). Pure —
- * exported for tests.
- * @param {Array} upgrades - upgrade catalog (UPGRADES)
- * @param {{has:(id:string)=>boolean}} owned - purchasedUpgrades Map/Set
- * @param {number} credits - current spendable credits
- * @param {(flag:string)=>boolean} [isFeatureEnabled]
- * @returns {string|null} upgrade id, or null when nothing remains
- */
-export function cheapestChaseTarget(upgrades, owned, credits, isFeatureEnabled) {
-  const has = (id) => (owned && typeof owned.has === 'function' ? owned.has(id) : false);
-  const level = (id) => (owned && typeof owned.get === 'function' ? (owned.get(id) || 0) : (has(id) ? 1 : 0));
-  let cheapestUnaffordable = null;
-  let cheapestAny = null;
-  for (const u of upgrades || []) {
-    if (u.consumable || u.maxLevel === Infinity) continue;
-    if (level(u.id) >= (u.maxLevel || 1)) continue; // maxed / owned
-    if (!upgradePrereqsMet(u, owned, isFeatureEnabled)) continue;
-    if (cheapestAny === null || u.cost < cheapestAny.cost) cheapestAny = u;
-    if ((credits || 0) < u.cost && (cheapestUnaffordable === null || u.cost < cheapestUnaffordable.cost)) {
-      cheapestUnaffordable = u;
-    }
-  }
-  const pick = cheapestUnaffordable || cheapestAny;
-  return pick ? pick.id : null;
-}
+// S1 retention: pinned "next upgrade" chase-target math lives in the pure
+// ./shopPin.js module (shared with the HUD, DOM-free). Re-exported here so the
+// existing `../ui/ShopScreen.js` import sites (and tests) keep working.
+export { pinProgress, cheapestChaseTarget } from './shopPin.js';
 
 /** Spring tier descriptions for shop display */
 const SPRING_DESCRIPTIONS = [
@@ -1426,7 +1384,7 @@ export class ShopScreen {
     // already maxed after restoring purchases.
     if (restoredPin) {
       this.pinnedUpgradeId = restoredPin;
-      if (!this.getPinnedUpgrade()) this.pinnedUpgradeId = null;
+      this._clearStalePin();
     }
   }
 
@@ -1489,14 +1447,25 @@ export class ShopScreen {
   // S1 retention: pinned "next upgrade" chase target
   // ========================================================================
 
-  /** Resolve the pinned upgrade catalog row (null if unset/stale/maxed). */
+  /**
+   * Resolve the pinned upgrade catalog row, or null if unset/stale/maxed.
+   * Pure read — does NOT mutate `pinnedUpgradeId` (use `_clearStalePin()` to
+   * drop an invalid pin).
+   */
   getPinnedUpgrade() {
     if (!this.pinnedUpgradeId) return null;
     const u = UPGRADES.find((x) => x.id === this.pinnedUpgradeId);
-    if (!u) { this.pinnedUpgradeId = null; return null; }
+    if (!u) return null;
     const level = this.purchasedUpgrades.get(u.id) || 0;
-    if (level >= (u.maxLevel || 1)) { this.pinnedUpgradeId = null; return null; }
+    if (level >= (u.maxLevel || 1)) return null;
     return u;
+  }
+
+  /** @private Drop the pin if it is stale (unknown id) or already maxed. */
+  _clearStalePin() {
+    if (this.pinnedUpgradeId && !this.getPinnedUpgrade()) {
+      this.pinnedUpgradeId = null;
+    }
   }
 
   /**
@@ -1528,7 +1497,8 @@ export class ShopScreen {
 
   /** @private Auto-pin the cheapest gated-open unaffordable upgrade if unset/stale. */
   _autoPinIfNeeded() {
-    if (this.getPinnedUpgrade()) return; // valid pin already set (also clears stale)
+    this._clearStalePin();
+    if (this.getPinnedUpgrade()) return; // valid pin already set
     const credits = this._scoringSystem ? this._scoringSystem.credits : scoringSystem.credits;
     const id = cheapestChaseTarget(UPGRADES, this.purchasedUpgrades, credits,
       (f) => Constants.isFeatureEnabled(f));
@@ -1537,6 +1507,7 @@ export class ShopScreen {
 
   /** @private Emit UPGRADE_PINNED with the current pin (or a cleared payload). */
   _emitPinnedUpgrade() {
+    this._clearStalePin();
     const u = this.getPinnedUpgrade();
     const credits = this._scoringSystem ? this._scoringSystem.credits : scoringSystem.credits;
     eventBus.emit(Events.UPGRADE_PINNED, u
