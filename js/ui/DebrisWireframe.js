@@ -2051,7 +2051,9 @@ export class DebrisWireframe {
       // Plan 1.5: soft chime per newly-revealed row (typewriter only — a
       // re-selected, already-profiled target shows everything silently).
       if (rowsShown > this._lastRowsShown && this._lastRowsShown < rows.length + 1) {
-        audioSystem.playTerminalBlip();
+        // P5 (#4): pitch-step each row so the manifest reads as one rising
+        // "data loading" gesture instead of repeated identical clicks.
+        audioSystem.playTerminalBlip(Math.max(0, rowsShown - 1));
       }
     }
     this._lastRowsShown = rowsShown;

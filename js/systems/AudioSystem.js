@@ -368,11 +368,10 @@ class AudioSystem {
       this.playCollision();
     });
 
-    eventBus.on(Events.SCORE_UPDATE, (data) => {
-      if (data.points > 0) {
-        this.playScoreTally();
-      }
-    });
+    // P5 (fixes #4): SCORE_UPDATE → playScoreTally subscription REMOVED. A
+    // capture already fires cashRegister (SCORING_AWARD = "credits in"); the
+    // tally tick added nothing and doubled the reward voice for one capture.
+    // playScoreTally is kept as a method for a future score-HUD count-up.
 
     // Scan initiated — radar sweep/ping sound
     eventBus.on(Events.SCAN_INITIATED, () => {
@@ -864,18 +863,22 @@ class AudioSystem {
   }
 
   /**
-   * Terminal blip — short FM sweep 800→400Hz, 50ms duration, low volume.
-   * Used for comms boot sequence messages (UX-2 #10B).
+   * Terminal blip — short FM sweep, ~50ms, low volume. Used for comms boot
+   * messages and the salvage-manifest typewriter reveal.
+   * P5 (#4): optional `step` pitches each row up (+60 Hz/row) so a run of blips
+   * reads as one rising "data loading" gesture, not repeated identical clicks.
+   * @param {number} [step=0] — row index; 0 = original 800→400 Hz sweep.
    */
-  playTerminalBlip() {
+  playTerminalBlip(step = 0) {
     if (!this.available) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
 
+    const bump = Math.max(0, step) * 60;
     const osc = ctx.createOscillator();
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(800, now);
-    osc.frequency.exponentialRampToValueAtTime(400, now + 0.05);
+    osc.frequency.setValueAtTime(800 + bump, now);
+    osc.frequency.exponentialRampToValueAtTime(400 + bump, now + 0.05);
 
     const gain = ctx.createGain();
     gain.gain.setValueAtTime(0.12, now);
