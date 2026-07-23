@@ -62,22 +62,37 @@ const SPARK_LIFE  = 0.45;     // short — die quickly for crisp look
 const EXIT_TURN_Y   = 0.52;   // acknowledgment turn about Y (~30°), toward camera
 const EXIT_ARM_TUCK = -0.42;  // welding-arm shoulder pitch delta (tucks tool to chest)
 const EXIT_BODY_ROLL = 0.12;  // slight roll during translation (not a rigid statue)
-const BEAT_TURN_START   = 0.08;  // fraction of dur — glance-back begins
-const BEAT_TURN_END     = 0.34;  // glance-back complete
-const BEAT_TETHER_START = 0.31;  // umbilical pulls taut
-const BEAT_TETHER_END   = 0.45;  // umbilical fully reeled
-const BEAT_JETOFF       = 0.47;  // cold-gas push-off begins
-const BEAT_ORIENT_GATE  = 0.50;  // de-roll / fly-around begins (AFTER push-off)
+const BEAT_TURN_START   = 0.06;  // fraction of dur — glance-back begins
+const BEAT_TURN_END     = 0.24;  // glance-back complete
+const BEAT_TETHER_START = 0.14;  // umbilical pulls taut
+const BEAT_TETHER_END   = 0.24;  // umbilical fully reeled (before jet-off)
+const BEAT_JETOFF       = 0.26;  // cold-gas push-off begins (early → long coast, more travel)
+const BEAT_ORIENT_GATE  = 0.29;  // de-roll / fly-around begins (AFTER push-off)
+// 'flyaround' camera arc gets its OWN earlier, gentler gate so the rotation has
+// more time to sweep and finish calmly (mirrors the unhurried 'partial' feel).
+const BEAT_FLYAROUND_GATE = 0.22;
 // Jet-off is a Newtonian push-off: a brief cold-gas IMPULSE accelerates her to a
-// modest drift speed, then CONSTANT-velocity coast (no ease-in "whip"/yank). Speed
-// is stylized + slowed (~1.4 m/s) for a calm, legible drift over the longer ramp.
-const EXIT_DRIFT_SPEED  = 1.4;   // m/s constant drift after the impulse
-const EXIT_IMPULSE_RAMP = 0.30;  // s to accelerate from rest to drift speed
+// modest drift speed, then CONSTANT-velocity coast (no ease-in "whip"/yank).
+// Both treatments share ONE calm "space pace": slow enough to feel unhurried, but
+// with the early jet-off above there's enough coast time to still carry her near
+// the screen edge before the cut. Distance = speed x coast-time, so a slow speed
+// only reaches the edge because the push-off now starts early.
+const EXIT_DRIFT_SPEED  = 1.4;   // m/s constant drift after the impulse (partial)
+const EXIT_IMPULSE_RAMP = 0.45;  // s to accelerate from rest to drift speed
+// 'flyaround' mirrors 'partial': same drift + ramp so both read identically;
+// camera rotation is ~20% slower (see FLYAROUND_ANG_END).
+const EXIT_DRIFT_SPEED_FLY  = 1.4;   // m/s — flyaround drift (mirrors partial)
+const EXIT_IMPULSE_RAMP_FLY = 0.45;  // s  — flyaround impulse ramp
 // Drift direction: screen DOWN-and-RIGHT. She welds on the camera-near (+X) side,
 // so drifting toward the lower-right carries her off the near edge WITHOUT crossing
 // in front of the hull (screen up-left, the old vector, crossed the silhouette).
 const EXIT_RIGHT_BIAS = 0.86;
 const EXIT_DOWN_BIAS  = 0.52;
+// 'partial' uses a STEEPER downward angle so she drops off the BOTTOM of the
+// screen (matching the flyaround exit angle better). Flyaround keeps the shallower
+// lower-right vector above.
+const EXIT_RIGHT_BIAS_PARTIAL = 0.55;
+const EXIT_DOWN_BIAS_PARTIAL  = 0.85;
 // #5 orientation-continuity (deep-polish-4). TWO treatments, chosen at RANDOM per
 // new-game departure (see beginDeparture → this._orientMode):
 //   'partial'   — migrate the camera sway centre modestly toward the sim view +
@@ -92,7 +107,9 @@ const MOTHER_BASE_ROLL_Z = -Math.PI / 2;   // the menu build roll (wings vertica
 const EXIT_DEROLL       = Math.PI / 6.4;    // 'partial': ~28° de-roll toward horizontal
 const EXIT_CAM_ANG_END  = 1.05;             // 'partial': sway-centre azimuth at the cut
 const EXIT_CAM_CAMY_END = 0.45;             // 'partial': sway-centre elevation at the cut
-const FLYAROUND_ANG_END  = -Math.PI / 2;    // 'flyaround': camera azimuth → directly behind
+const FLYAROUND_ANG_END  = -1.157;          // 'flyaround': camera azimuth arc end. Sweep from
+                                            // SWAY_ANG_CENTRE (0.5) reduced 20% (was -PI/2) so the
+                                            // camera rotates ~20% slower over the same window.
 const FLYAROUND_CAMY_END = 2.0;             // 'flyaround': slightly above (sim radial-above chase)
 // Shared camera-sway parameters (used by BOTH orientation branches in _tick and
 // by _applyReducedMotionPose). Centralized so a sway tuning change can't drift
@@ -1750,15 +1767,16 @@ export class MenuScene3D {
       // 'flyaround': camera ARCS behind + hull FULLY de-rolls in lockstep, look
       // target recenters on the hull, sway damps to 0 → the last menu frame lands
       // on the sim chase framing (seamless). She dissolves out over the final 10%.
-      const fa = orientGate * orientGate * (3 - 2 * orientGate);   // smoothstep
+      // Own gate (earlier than the shared orient gate) → more time to rotate.
+      const flyGate = _clamp01((bt - BEAT_FLYAROUND_GATE) / Math.max(0.001, 1 - BEAT_FLYAROUND_GATE));
+      const fa = flyGate * flyGate * (3 - 2 * flyGate);   // smoothstep
       const angCentre  = SWAY_ANG_CENTRE  + (FLYAROUND_ANG_END  - SWAY_ANG_CENTRE)  * fa;
       const camYCentre = SWAY_CAMY_CENTRE + (FLYAROUND_CAMY_END - SWAY_CAMY_CENTRE) * fa;
       this._positionSwayCamera(angCentre, camYCentre, orbitR, 1 - fa);
       if (this._mother) this._mother.rotation.z = MOTHER_BASE_ROLL_Z * (1 - fa);
       this._tmpLook.copy(this._lookTarget).multiplyScalar(1 - fa);   // → hull centre (no per-frame alloc)
       this.camera.lookAt(this._tmpLook);
-      const fadeStart = 0.90;   // fraction of dur
-      this._setAstroOpacity(bt >= fadeStart ? _clamp01(1 - (bt - fadeStart) / (1 - fadeStart)) : 1);
+      this._setAstroOpacity(1);   // no dissolve — she drifts to the edge like 'partial'
     } else {
       // 'partial': modest end-pose bias toward the sim view + a gentle ~28°
       // de-roll (gated after push-off); the power-up flash (main.js) masks the
@@ -1904,7 +1922,11 @@ export class MenuScene3D {
       this._maybeFirePuff(0, jetoffT + 0.06, t);
       this._maybeFirePuff(1, jetoffT + 0.28, t);
       const tm = t - jetoffT;                            // seconds since push-off
-      const v = EXIT_DRIFT_SPEED, ramp = EXIT_IMPULSE_RAMP;
+      // Flyaround drifts at half speed over a longer ramp (calmer, dissolves out);
+      // partial keeps the faster values so it clears frame before the cut.
+      const fly = this._orientMode === 'flyaround';
+      const v = fly ? EXIT_DRIFT_SPEED_FLY : EXIT_DRIFT_SPEED;
+      const ramp = fly ? EXIT_IMPULSE_RAMP_FLY : EXIT_IMPULSE_RAMP;
       const dist = tm < ramp
         ? 0.5 * (v / ramp) * tm * tm                     // impulse: x = ½at²
         : 0.5 * v * ramp + v * (tm - ramp);              // then constant-velocity coast
@@ -1927,8 +1949,13 @@ export class MenuScene3D {
     const fwd = this._lookTarget.clone().sub(this.camera.position).normalize();
     const right = fwd.clone().cross(new THREE.Vector3(0, 1, 0)).normalize();
     const up = right.clone().cross(fwd).normalize();
-    return right.multiplyScalar(EXIT_RIGHT_BIAS)
-      .addScaledVector(up, -EXIT_DOWN_BIAS)
+    // 'partial' drops off the bottom (steeper); 'flyaround' keeps the shallower
+    // lower-right vector.
+    const fly = this._orientMode === 'flyaround';
+    const rb = fly ? EXIT_RIGHT_BIAS : EXIT_RIGHT_BIAS_PARTIAL;
+    const db = fly ? EXIT_DOWN_BIAS  : EXIT_DOWN_BIAS_PARTIAL;
+    return right.multiplyScalar(rb)
+      .addScaledVector(up, -db)
       .normalize();
   }
 

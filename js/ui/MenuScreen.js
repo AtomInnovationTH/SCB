@@ -809,11 +809,11 @@ export class MenuScreen {
     audioSystem.init();
     audioSystem.resume();
     audioSystem.playClick();
-    // New game → cinematic pull-back, then MENU_START. ~50% slower (2.1→3.15s;
-    // cameraDur 2.0→3.0) so the astronaut exit + the orientation move (random
-    // partial-flash or fly-around) play calmly. cameraDur also clamps the
-    // fraction-based astronaut beat timeline.
-    this._beginDeparture(Events.MENU_START, 3150, 3.0);
+    // New game → cinematic pull-back, then MENU_START. Extended to 3.65s
+    // (cameraDur 3.5) so the astronaut exit drifts further from the mother and
+    // the orientation move (random partial-flash or fly-around) plays calmly.
+    // cameraDur also clamps the fraction-based astronaut beat timeline.
+    this._beginDeparture(Events.MENU_START, 3650, 3.5);
   }
 
   /**
