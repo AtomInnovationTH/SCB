@@ -41,6 +41,21 @@ class AudioSystem {
     this.ctx = null;
     this.master = null;
     this.sfxBus = null;
+    // Audio Vocabulary Overhaul (P2) — per-family bus nodes (created in init()).
+    this.physicalBus = null;
+    this.radioBus = null;
+    this.pingBus = null;
+    this.tickBus = null;
+    this.denyBus = null;
+    this.alarmBus = null;
+    this.rewardBus = null;
+    this.padBus = null;
+    // Reserved, silent, unused — prepared for future music + TTS narration.
+    this.musicBus = null;
+    this.voiceBus = null;
+    // Ducking state: re-entrancy counter so overlapping duck requests don't
+    // restore early. voiceBus TTS hook shares the same counter.
+    this._duckHolds = 0;
     this.available = false;
     this.activeSources = new Map();
     this._initialized = false;
@@ -55,6 +70,7 @@ class AudioSystem {
 
     // Phase R9: 4-tier ΔV alarm state
     this._dvAlarmTier = 0;
+    this._dvDucked = false;
     this._dvAlarmInterval = null;
     this._dvAlarmOsc = null;
     this._dvAlarmLfo = null;
@@ -142,6 +158,39 @@ class AudioSystem {
       this.sfxBus = this.ctx.createGain();
       this.sfxBus.gain.value = 0.7;
       this.sfxBus.connect(this.master);
+      // Audio Vocabulary Overhaul (P2) — family bus graph. Every family bus
+      // routes → sfxBus → master → destination. Ducking (see _duckOthers)
+      // ramps all non-alarm family buses; the alarm bus is never ducked so
+      // danger always outranks. musicBus/voiceBus are reserved (silent) and
+      // connect straight to master so future music/TTS bypass sfx volume and
+      // can be ducked independently.
+      const FG = (Constants.AUDIO && Constants.AUDIO.FAMILY_GAIN) || {};
+      const mkFamily = (gainVal) => {
+        const g = this.ctx.createGain();
+        g.gain.value = (typeof gainVal === 'number') ? gainVal : 1.0;
+        g.connect(this.sfxBus);
+        return g;
+      };
+      this.physicalBus = mkFamily(FG.physical);
+      this.radioBus = mkFamily(FG.radio);
+      this.pingBus = mkFamily(FG.ping);
+      this.tickBus = mkFamily(FG.tick);
+      this.denyBus = mkFamily(FG.deny);
+      this.alarmBus = mkFamily(FG.alarm);
+      this.rewardBus = mkFamily(FG.reward);
+      this.padBus = mkFamily(FG.pad);
+      // Reserved buses → master (silent until music/TTS ships).
+      this.musicBus = this.ctx.createGain();
+      this.musicBus.gain.value = 1.0;
+      this.musicBus.connect(this.master);
+      this.voiceBus = this.ctx.createGain();
+      this.voiceBus.gain.value = 1.0;
+      this.voiceBus.connect(this.master);
+      // Non-alarm family buses that duck when an alarm is active.
+      this._duckableBuses = [
+        this.physicalBus, this.radioBus, this.pingBus, this.tickBus,
+        this.denyBus, this.rewardBus, this.padBus, this.musicBus, this.voiceBus,
+      ];
       this.master.connect(this.ctx.destination);
       this.available = true;
       this._initialized = true;
@@ -186,6 +235,56 @@ class AudioSystem {
   /** Set master volume 0..1 */
   setVolume(v) {
     if (this.master) this.master.gain.value = Math.max(0, Math.min(1, v));
+  }
+
+  /**
+   * Duck all non-alarm family buses so an ALARM cue reads clearly over the
+   * rest of the mix (danger outranks everything — Design law (d)). Uses a
+   * re-entrancy counter (`_duckHolds`) so overlapping alarms don't restore
+   * the mix early. 0.15 s down-ramp, 0.5 s up-ramp.
+   * @param {boolean} on
+   * @private
+   */
+  _duckOthers(on) {
+    if (!this.available || !this.ctx || !this._duckableBuses) return;
+    if (on) {
+      this._duckHolds++;
+      if (this._duckHolds > 1) return; // already ducked
+    } else {
+      this._duckHolds = Math.max(0, this._duckHolds - 1);
+      if (this._duckHolds > 0) return; // another hold still active
+    }
+    const now = this.ctx.currentTime;
+    const target = on ? 0.5 : 1.0;
+    const ramp = on ? 0.15 : 0.5;
+    for (const bus of this._duckableBuses) {
+      if (!bus) continue;
+      try {
+        bus.gain.cancelScheduledValues(now);
+        bus.gain.setValueAtTime(bus.gain.value, now);
+        bus.gain.linearRampToValueAtTime(target, now + ramp);
+      } catch (_e) { /* headless stub */ }
+    }
+  }
+
+  /**
+   * One-shot duck for a transient alarm: duck on, restore after `ms`.
+   * @param {number} ms
+   * @private
+   */
+  _duckPulse(ms) {
+    if (!this.available) return;
+    this._duckOthers(true);
+    timerManager.setTimeout(() => this._duckOthers(false), ms, { owner: this });
+  }
+
+  /**
+   * TTS-ready hook (reserved): duck the mix for spoken narration. Shares the
+   * same re-entrancy counter as alarm ducking. No voice content ships yet.
+   * @param {boolean} on
+   */
+  duckForVoice(on) {
+    this._duckOthers(on);
   }
 
   /**
@@ -258,6 +357,7 @@ class AudioSystem {
 
     // Game events
     eventBus.on(Events.GAME_KESSLER, () => {
+      this._duckPulse(2000); // P2 ducking: Kessler collision is game-ending danger
       this.playCollision();
     });
 
@@ -571,7 +671,7 @@ class AudioSystem {
     gain.gain.linearRampToValueAtTime(0.001, now + duration);
 
     osc.connect(gain);
-    gain.connect(this.sfxBus);
+    gain.connect(this.physicalBus);
     osc.start(now);
     lfo.start(now);
     osc.stop(now + duration);
@@ -596,7 +696,7 @@ class AudioSystem {
       gain.gain.setValueAtTime(0.15, start);
       gain.gain.exponentialRampToValueAtTime(0.001, start + 0.12);
       osc.connect(gain);
-      gain.connect(this.master);
+      gain.connect(this.alarmBus);
       osc.start(start);
       osc.stop(start + 0.15);
     });
@@ -618,7 +718,7 @@ class AudioSystem {
     thud.frequency.exponentialRampToValueAtTime(40, now + 0.15);
     thudGain.gain.setValueAtTime(0.3, now);
     thudGain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
-    thud.connect(thudGain).connect(this.sfxBus);
+    thud.connect(thudGain).connect(this.physicalBus);
     thud.start(now);
     thud.stop(now + 0.2);
 
@@ -630,7 +730,7 @@ class AudioSystem {
     ring.frequency.exponentialRampToValueAtTime(400, now + 0.5);
     ringGain.gain.setValueAtTime(0.15, now + 0.02);
     ringGain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
-    ring.connect(ringGain).connect(this.sfxBus);
+    ring.connect(ringGain).connect(this.physicalBus);
     ring.start(now + 0.02);
     ring.stop(now + 0.5);
 
@@ -650,7 +750,7 @@ class AudioSystem {
     noiseFilter.type = 'bandpass';
     noiseFilter.frequency.value = 2000;
     noiseFilter.Q.value = 2;
-    noise.connect(noiseFilter).connect(noiseGain).connect(this.sfxBus);
+    noise.connect(noiseFilter).connect(noiseGain).connect(this.physicalBus);
     noise.start(now);
     noise.stop(now + 0.08);
   }
@@ -673,7 +773,7 @@ class AudioSystem {
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
 
     osc.connect(gain);
-    gain.connect(this.sfxBus);
+    gain.connect(this.rewardBus);
     osc.start(now);
     osc.stop(now + 0.15);
   }
@@ -707,7 +807,7 @@ class AudioSystem {
 
     noise.connect(filter);
     filter.connect(gain);
-    gain.connect(this.sfxBus);
+    gain.connect(this.physicalBus);
     noise.start(now);
     noise.stop(now + 0.5);
   }
@@ -729,7 +829,7 @@ class AudioSystem {
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
 
     osc.connect(gain);
-    gain.connect(this.sfxBus);
+    gain.connect(this.tickBus);
     osc.start(now);
     osc.stop(now + 0.05);
   }
@@ -753,7 +853,7 @@ class AudioSystem {
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
 
     osc.connect(gain);
-    gain.connect(this.sfxBus);
+    gain.connect(this.pingBus);
     osc.start(now);
     osc.stop(now + 0.06);
   }
@@ -775,7 +875,7 @@ class AudioSystem {
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.06);
 
     osc.connect(gain);
-    gain.connect(this.sfxBus);
+    gain.connect(this.rewardBus);
     osc.start(now);
     osc.stop(now + 0.06);
   }
@@ -803,7 +903,7 @@ class AudioSystem {
 
     osc.connect(filter);
     filter.connect(gain);
-    gain.connect(this.sfxBus);
+    gain.connect(this.alarmBus);
     osc.start(now);
     osc.stop(now + 2.0);
   }
@@ -835,7 +935,7 @@ class AudioSystem {
         gain.gain.linearRampToValueAtTime(0.001, start + 0.5);
 
         osc.connect(gain);
-        gain.connect(this.sfxBus);
+        gain.connect(this.rewardBus);
         osc.start(start);
         osc.stop(start + 0.5);
       });
@@ -881,7 +981,7 @@ class AudioSystem {
 
     noise.connect(filter);
     filter.connect(gain);
-    gain.connect(this.sfxBus);
+    gain.connect(this.physicalBus);
     noise.start(now);
     noise.stop(now + dur);
   }
@@ -906,7 +1006,7 @@ class AudioSystem {
     gain1.gain.linearRampToValueAtTime(0, now + dur);
 
     osc1.connect(gain1);
-    gain1.connect(this.sfxBus);
+    gain1.connect(this.physicalBus);
     osc1.start(now);
     osc1.stop(now + dur);
 
@@ -921,7 +1021,7 @@ class AudioSystem {
     gain2.gain.linearRampToValueAtTime(0, now + dur);
 
     osc2.connect(gain2);
-    gain2.connect(this.sfxBus);
+    gain2.connect(this.physicalBus);
     osc2.start(now);
     osc2.stop(now + dur);
   }
@@ -969,7 +1069,7 @@ class AudioSystem {
 
     noise.connect(filter);
     filter.connect(gain);
-    gain.connect(this.sfxBus);
+    gain.connect(this.physicalBus);
     noise.start(now);
     lfo.start(now);
     noise.stop(now + dur);
@@ -1003,7 +1103,7 @@ class AudioSystem {
     snapGain.gain.exponentialRampToValueAtTime(0.001, now + snapDur);
     snapSrc.connect(snapFilter);
     snapFilter.connect(snapGain);
-    snapGain.connect(this.sfxBus);
+    snapGain.connect(this.physicalBus);
     snapSrc.start(now);
     snapSrc.stop(now + snapDur);
 
@@ -1016,7 +1116,7 @@ class AudioSystem {
     whipGain.gain.setValueAtTime(0.15, now);
     whipGain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
     whipOsc.connect(whipGain);
-    whipGain.connect(this.sfxBus);
+    whipGain.connect(this.physicalBus);
     whipOsc.start(now);
     whipOsc.stop(now + 0.3);
 
@@ -1028,7 +1128,7 @@ class AudioSystem {
     rumbleGain.gain.setValueAtTime(0.2, now + 0.05);
     rumbleGain.gain.exponentialRampToValueAtTime(0.001, now + 0.8);
     rumbleOsc.connect(rumbleGain);
-    rumbleGain.connect(this.sfxBus);
+    rumbleGain.connect(this.physicalBus);
     rumbleOsc.start(now + 0.05);
     rumbleOsc.stop(now + 0.8);
   }
@@ -1054,7 +1154,7 @@ class AudioSystem {
     gain.gain.linearRampToValueAtTime(0, now + dur);
 
     osc.connect(gain);
-    gain.connect(this.sfxBus);
+    gain.connect(this.alarmBus);
     osc.start(now);
     osc.stop(now + dur);
   }
@@ -1082,7 +1182,7 @@ class AudioSystem {
     gain.gain.linearRampToValueAtTime(0, now + dur);
 
     osc.connect(gain);
-    gain.connect(this.sfxBus);
+    gain.connect(this.denyBus);
     osc.start(now);
     osc.stop(now + dur);
   }
@@ -1121,7 +1221,7 @@ class AudioSystem {
 
     noise.connect(filter);
     filter.connect(noiseGain);
-    noiseGain.connect(this.sfxBus);
+    noiseGain.connect(this.physicalBus);
     noise.start(now);
     noise.stop(now + dur);
 
@@ -1138,7 +1238,7 @@ class AudioSystem {
     oscGain.gain.linearRampToValueAtTime(0, now + dur);
 
     osc.connect(oscGain);
-    oscGain.connect(this.sfxBus);
+    oscGain.connect(this.physicalBus);
     osc.start(now);
     osc.stop(now + dur);
   }
@@ -1164,7 +1264,7 @@ class AudioSystem {
     gain.gain.setValueAtTime(0.08, this.ctx.currentTime);
     gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.12);
     osc.connect(gain);
-    gain.connect(this.master);
+    gain.connect(this.tickBus);
     osc.start(this.ctx.currentTime);
     osc.stop(this.ctx.currentTime + 0.12);
   }
@@ -1182,7 +1282,7 @@ class AudioSystem {
     gain.gain.setValueAtTime(0.15, this.ctx.currentTime);
     gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.12);
     osc.connect(gain);
-    gain.connect(this.master);
+    gain.connect(this.physicalBus);
     osc.start(this.ctx.currentTime);
     osc.stop(this.ctx.currentTime + 0.15);
   }
@@ -1212,8 +1312,8 @@ class AudioSystem {
 
     osc.connect(gain);
     osc2.connect(gain2);
-    gain.connect(this.master);
-    gain2.connect(this.master);
+    gain.connect(this.rewardBus);
+    gain2.connect(this.rewardBus);
     osc.start(now);
     osc2.start(now);
     osc.stop(now + 0.7);
@@ -1233,7 +1333,7 @@ class AudioSystem {
     gain.gain.setValueAtTime(0.08, this.ctx.currentTime);
     gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.25);
     osc.connect(gain);
-    gain.connect(this.master);
+    gain.connect(this.rewardBus);
     osc.start(this.ctx.currentTime);
     osc.stop(this.ctx.currentTime + 0.3);
   }
@@ -1291,11 +1391,11 @@ class AudioSystem {
     // Connect chains
     this._ambientNoise.connect(this._ambientFilter);
     this._ambientFilter.connect(this._ambientGain);
-    this._ambientGain.connect(this.master);
+    this._ambientGain.connect(this.padBus);
 
     this._solarNoise.connect(this._solarFilter);
     this._solarFilter.connect(this._solarGain);
-    this._solarGain.connect(this.master);
+    this._solarGain.connect(this.padBus);
 
     this._ambientNoise.start();
     this._solarNoise.start();
@@ -1388,7 +1488,7 @@ class AudioSystem {
 
       osc.connect(filter);
       filter.connect(gain);
-      gain.connect(this.sfxBus);
+      gain.connect(this.physicalBus);
       osc.start();
 
       this._forgeOsc = osc;
@@ -1403,7 +1503,7 @@ class AudioSystem {
         noise.frequency.value = 37; // low crackle
         noiseGain.gain.value = 0.015;
         noise.connect(noiseGain);
-        noiseGain.connect(this.sfxBus);
+        noiseGain.connect(this.physicalBus);
         noise.start();
         this._forgeCrackle = noise;
         this._forgeCrackleGain = noiseGain;
@@ -1429,7 +1529,7 @@ class AudioSystem {
 
         noiseSrc.connect(bp);
         bp.connect(ng);
-        ng.connect(this.sfxBus);
+        ng.connect(this.physicalBus);
         noiseSrc.start(ctx.currentTime);
       }
 
@@ -1448,7 +1548,7 @@ class AudioSystem {
           const cg = ctx.createGain();
           cg.gain.value = 0.06;
           clickSrc.connect(cg);
-          cg.connect(this.sfxBus);
+          cg.connect(this.physicalBus);
           clickSrc.start(clickTime);
         }
       }
@@ -1472,7 +1572,7 @@ class AudioSystem {
           blp.frequency.value = 800 + Math.random() * 400;
           burstSrc.connect(blp);
           blp.connect(bg);
-          bg.connect(this.sfxBus);
+          bg.connect(this.physicalBus);
           burstSrc.start(burstTime);
         }
       }
@@ -1487,7 +1587,7 @@ class AudioSystem {
         sweepGain.gain.setValueAtTime(0.05, ctx.currentTime);
         sweepGain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 4);
         sweepOsc.connect(sweepGain);
-        sweepGain.connect(this.sfxBus);
+        sweepGain.connect(this.physicalBus);
         sweepOsc.start(ctx.currentTime);
         sweepOsc.stop(ctx.currentTime + 4);
         this._forgeSweep = sweepOsc;
@@ -1662,7 +1762,7 @@ class AudioSystem {
       nodes.push(retroLfo);
     }
 
-    gain.connect(this.sfxBus);
+    gain.connect(this.physicalBus);
     this.activeSources.set('thruster', { nodes, gain, type, _direction: direction, _intensity: intensity, _retroLfo: retroLfo });
   }
 
@@ -1728,6 +1828,18 @@ class AudioSystem {
     this._dvAlarmTier = tier;
     this._stopDvAlarm();
 
+    // P2 ducking: sustain a duck hold while the ΔV alarm is at tier ≥ 2 so the
+    // beeps read clearly over the mix. Symmetric on/off keyed off _dvDucked so
+    // the re-entrancy counter never leaks a hold.
+    const wantDuck = tier >= 2;
+    if (wantDuck && !this._dvDucked) {
+      this._dvDucked = true;
+      this._duckOthers(true);
+    } else if (!wantDuck && this._dvDucked) {
+      this._dvDucked = false;
+      this._duckOthers(false);
+    }
+
     if (tier === 0) return;
 
     if (tier === 4) {
@@ -1770,7 +1882,7 @@ class AudioSystem {
       gain.gain.setValueAtTime(Constants.AUDIO.ALERT_GAIN, start);
       gain.gain.exponentialRampToValueAtTime(0.001, start + 0.12);
       osc.connect(gain);
-      gain.connect(this.master);
+      gain.connect(this.alarmBus);
       osc.start(start);
       osc.stop(start + 0.15);
     }
@@ -1797,7 +1909,7 @@ class AudioSystem {
 
     gain.gain.value = Constants.AUDIO.ALERT_GAIN * 0.7;
     osc.connect(gain);
-    gain.connect(this.master);
+    gain.connect(this.alarmBus);
 
     osc.start();
     lfo.start();
@@ -1901,7 +2013,7 @@ class AudioSystem {
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
 
     osc.connect(gain);
-    gain.connect(this.sfxBus);
+    gain.connect(this.pingBus);
     osc.start(now);
     osc.stop(now + 0.15);
   }
@@ -1937,7 +2049,7 @@ class AudioSystem {
       gain.gain.exponentialRampToValueAtTime(0.001, now + dur);
       noise.connect(filter);
       filter.connect(gain);
-      gain.connect(this.sfxBus);
+      gain.connect(this.physicalBus);
       noise.start(now);
       noise.stop(now + dur);
     } else if (t < 0.8) {
@@ -1955,7 +2067,7 @@ class AudioSystem {
       gain.gain.exponentialRampToValueAtTime(0.001, now + dur);
       osc.connect(filter);
       filter.connect(gain);
-      gain.connect(this.sfxBus);
+      gain.connect(this.physicalBus);
       osc.start(now);
       osc.stop(now + dur);
     } else {
@@ -1977,7 +2089,7 @@ class AudioSystem {
       noiseGain.gain.exponentialRampToValueAtTime(0.001, now + dur);
       noise.connect(noiseFilter);
       noiseFilter.connect(noiseGain);
-      noiseGain.connect(this.sfxBus);
+      noiseGain.connect(this.physicalBus);
       noise.start(now);
       noise.stop(now + dur);
 
@@ -1995,7 +2107,7 @@ class AudioSystem {
       oscGain.gain.exponentialRampToValueAtTime(0.001, now + dur);
       osc.connect(oscFilter);
       oscFilter.connect(oscGain);
-      oscGain.connect(this.sfxBus);
+      oscGain.connect(this.physicalBus);
       osc.start(now);
       osc.stop(now + dur);
     }
@@ -2029,7 +2141,7 @@ class AudioSystem {
     sealGain.gain.exponentialRampToValueAtTime(0.001, now + sealDur);
     sealNoise.connect(sealFilter);
     sealFilter.connect(sealGain);
-    sealGain.connect(this.sfxBus);
+    sealGain.connect(this.rewardBus);
     sealNoise.start(now);
     sealNoise.stop(now + sealDur);
 
@@ -2049,7 +2161,7 @@ class AudioSystem {
     hissGain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
     hissNoise.connect(hissFilter);
     hissFilter.connect(hissGain);
-    hissGain.connect(this.sfxBus);
+    hissGain.connect(this.rewardBus);
     hissNoise.start(now + 0.2);
     hissNoise.stop(now + 0.35);
 
@@ -2065,7 +2177,7 @@ class AudioSystem {
       gain.gain.setValueAtTime(0.12, start);
       gain.gain.exponentialRampToValueAtTime(0.001, start + 0.4);
       osc.connect(gain);
-      gain.connect(this.sfxBus);
+      gain.connect(this.rewardBus);
       osc.start(start);
       osc.stop(start + 0.4);
 
@@ -2077,7 +2189,7 @@ class AudioSystem {
       gain2.gain.setValueAtTime(0.06, start);
       gain2.gain.exponentialRampToValueAtTime(0.001, start + 0.35);
       osc2.connect(gain2);
-      gain2.connect(this.sfxBus);
+      gain2.connect(this.rewardBus);
       osc2.start(start);
       osc2.stop(start + 0.35);
     });
@@ -2112,7 +2224,7 @@ class AudioSystem {
     swell.gain.linearRampToValueAtTime(0.06, now + dur * 0.5);
     swell.gain.linearRampToValueAtTime(0.0001, now + dur);
     filter.connect(swell);
-    swell.connect(this.sfxBus);
+    swell.connect(this.padBus);
 
     freqs.forEach((f, i) => {
       const osc = ctx.createOscillator();
@@ -2158,7 +2270,7 @@ class AudioSystem {
     ng.gain.exponentialRampToValueAtTime(0.001, now + nDur);
     noise.connect(bp);
     bp.connect(ng);
-    ng.connect(this.sfxBus);
+    ng.connect(this.radioBus);
     noise.start(now);
     noise.stop(now + nDur + 0.02);
 
@@ -2174,7 +2286,7 @@ class AudioSystem {
       g.gain.exponentialRampToValueAtTime(0.035, start + 0.01);
       g.gain.exponentialRampToValueAtTime(0.001, start + 0.06);
       osc.connect(g);
-      g.connect(this.sfxBus);
+      g.connect(this.radioBus);
       osc.start(start);
       osc.stop(start + 0.07);
     });
@@ -2207,7 +2319,7 @@ class AudioSystem {
     g.gain.exponentialRampToValueAtTime(0.0008, now + dur);
     noise.connect(hp);
     hp.connect(g);
-    g.connect(this.sfxBus);
+    g.connect(this.physicalBus);
     noise.start(now);
     noise.stop(now + dur + 0.02);
   }
@@ -2239,7 +2351,7 @@ class AudioSystem {
         gain.gain.setValueAtTime(0.12, now);
         gain.gain.exponentialRampToValueAtTime(0.001, now + dur);
         osc.connect(gain);
-        gain.connect(this.sfxBus);
+        gain.connect(this.alarmBus);
         osc.start(now);
         lfo.start(now);
         osc.stop(now + dur);
@@ -2263,7 +2375,7 @@ class AudioSystem {
         lfoGain.connect(gain.gain);
         gain.gain.linearRampToValueAtTime(0.001, now + dur);
         osc.connect(gain);
-        gain.connect(this.sfxBus);
+        gain.connect(this.alarmBus);
         osc.start(now);
         lfo.start(now);
         osc.stop(now + dur);
@@ -2285,7 +2397,7 @@ class AudioSystem {
           gain.gain.setValueAtTime(0.12, start);
           gain.gain.exponentialRampToValueAtTime(0.001, start + burstDur);
           noise.connect(gain);
-          gain.connect(this.sfxBus);
+          gain.connect(this.alarmBus);
           noise.start(start);
           noise.stop(start + burstDur);
         }
@@ -2302,7 +2414,7 @@ class AudioSystem {
         gain.gain.setValueAtTime(0.06, now);
         gain.gain.exponentialRampToValueAtTime(0.001, now + dur);
         osc.connect(gain);
-        gain.connect(this.sfxBus);
+        gain.connect(this.alarmBus);
         osc.start(now);
         osc.stop(now + dur);
         break;
@@ -2316,7 +2428,7 @@ class AudioSystem {
         gain.gain.setValueAtTime(0.08, now);
         gain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
         osc.connect(gain);
-        gain.connect(this.sfxBus);
+        gain.connect(this.alarmBus);
         osc.start(now);
         osc.stop(now + 0.2);
       }
@@ -2344,7 +2456,7 @@ class AudioSystem {
       gain.gain.setValueAtTime(0.07, start);
       gain.gain.exponentialRampToValueAtTime(0.001, start + 0.3);
       osc.connect(gain);
-      gain.connect(this.sfxBus);
+      gain.connect(this.rewardBus);
       osc.start(start);
       osc.stop(start + 0.3);
     });
@@ -2369,7 +2481,7 @@ class AudioSystem {
     const delayGain = ctx.createGain();
     delayGain.gain.value = 0.4;
     delay.connect(delayGain);
-    delayGain.connect(this.sfxBus);
+    delayGain.connect(this.rewardBus);
 
     const notes = [262, 330, 392, 523]; // C4, E4, G4, C5
     notes.forEach((freq, i) => {
@@ -2382,7 +2494,7 @@ class AudioSystem {
       sawGain.gain.setValueAtTime(0.06, start);
       sawGain.gain.exponentialRampToValueAtTime(0.001, start + 0.3);
       saw.connect(sawGain);
-      sawGain.connect(this.sfxBus);
+      sawGain.connect(this.rewardBus);
       sawGain.connect(delay); // feed into echo
       saw.start(start);
       saw.stop(start + 0.3);
@@ -2395,7 +2507,7 @@ class AudioSystem {
       sinGain.gain.setValueAtTime(0.08, start);
       sinGain.gain.exponentialRampToValueAtTime(0.001, start + 0.35);
       sin.connect(sinGain);
-      sinGain.connect(this.sfxBus);
+      sinGain.connect(this.rewardBus);
       sinGain.connect(delay); // feed into echo
       sin.start(start);
       sin.stop(start + 0.35);
@@ -2434,6 +2546,9 @@ class AudioSystem {
     };
     const cfg = configs[tier] || configs.GREEN;
 
+    // P2 ducking: RED conjunction is act-now danger — duck the mix for 2 s.
+    if (tier === 'RED') this._duckPulse(2000);
+
     for (let i = 0; i < cfg.count; i++) {
       const start = now + i * (cfg.dur + cfg.gap);
 
@@ -2461,7 +2576,7 @@ class AudioSystem {
         osc.connect(gain);
       }
 
-      gain.connect(this.sfxBus);
+      gain.connect(this.alarmBus);
       osc.start(start);
       osc.stop(start + cfg.dur + 0.01);
     }
@@ -2500,7 +2615,7 @@ class AudioSystem {
     noiseGain.gain.exponentialRampToValueAtTime(0.001, now + dur);
     noise.connect(filter);
     filter.connect(noiseGain);
-    noiseGain.connect(this.sfxBus);
+    noiseGain.connect(this.physicalBus);
     noise.start(now);
     noise.stop(now + dur);
 
@@ -2513,7 +2628,7 @@ class AudioSystem {
     oscGain.gain.setValueAtTime(0.12, now);
     oscGain.gain.exponentialRampToValueAtTime(0.001, now + dur);
     osc.connect(oscGain);
-    oscGain.connect(this.sfxBus);
+    oscGain.connect(this.physicalBus);
     osc.start(now);
     osc.stop(now + dur);
   }
@@ -2547,7 +2662,7 @@ class AudioSystem {
 
     noise.connect(filter);
     filter.connect(gain);
-    gain.connect(this.sfxBus);
+    gain.connect(this.physicalBus);
     noise.start(now);
 
     this._lassoWhistleNodes = { noise, filter, gain };
@@ -2614,7 +2729,7 @@ class AudioSystem {
 
     noise.connect(filter);
     filter.connect(gain);
-    gain.connect(this.sfxBus);
+    gain.connect(this.physicalBus);
     noise.start(now);
     lfo.start(now);
     noise.stop(now + dur);
@@ -2640,7 +2755,7 @@ class AudioSystem {
     gain.gain.linearRampToValueAtTime(0, now + dur);
 
     osc.connect(gain);
-    gain.connect(this.sfxBus);
+    gain.connect(this.denyBus);
     osc.start(now);
     osc.stop(now + dur);
   }
@@ -2685,7 +2800,7 @@ class AudioSystem {
     const delayGain = ctx.createGain();
     delayGain.gain.value = 0.25;
     delay.connect(delayGain);
-    delayGain.connect(this.sfxBus);
+    delayGain.connect(this.pingBus);
 
     // Delay 100ms so visual animation plays before audio confirms (§5.2)
     const lockDelay = 0.1;
@@ -2698,7 +2813,7 @@ class AudioSystem {
       gain.gain.setValueAtTime(0.14, start);
       gain.gain.exponentialRampToValueAtTime(0.001, start + noteDur + 0.06);
       osc.connect(gain);
-      gain.connect(this.sfxBus);
+      gain.connect(this.pingBus);
       gain.connect(delay); // feed into reverb
       osc.start(start);
       osc.stop(start + noteDur + 0.06);
@@ -2738,7 +2853,7 @@ class AudioSystem {
       gain.gain.setValueAtTime(0.10, start);
       gain.gain.exponentialRampToValueAtTime(0.001, start + noteDur + 0.04);
       osc.connect(gain);
-      gain.connect(this.sfxBus);
+      gain.connect(this.pingBus);
       osc.start(start);
       osc.stop(start + noteDur + 0.04);
     });
@@ -2765,7 +2880,7 @@ class AudioSystem {
     gain.gain.linearRampToValueAtTime(vol, now + 0.03);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
     osc.connect(gain);
-    gain.connect(this.sfxBus);
+    gain.connect(this.pingBus);
     osc.start(now);
     osc.stop(now + 0.12);
   }
@@ -2799,7 +2914,7 @@ class AudioSystem {
     gain.gain.setValueAtTime(0, now);
     gain.gain.linearRampToValueAtTime(0.1, now + 0.3);
     osc.connect(gain);
-    gain.connect(this.sfxBus);
+    gain.connect(this.pingBus);
     osc.start(now);
     this._alignmentToneOsc = osc;
     this._alignmentToneGain = gain;
@@ -2828,7 +2943,7 @@ class AudioSystem {
     gain.gain.setValueAtTime(0.12, now);
     gain.gain.linearRampToValueAtTime(0.001, now + 0.5);
     osc.connect(gain);
-    gain.connect(this.sfxBus);
+    gain.connect(this.pingBus);
     osc.start(now);
     osc.stop(now + 0.55);
   }
@@ -2850,7 +2965,7 @@ class AudioSystem {
       gain.gain.linearRampToValueAtTime(0.15, t + 0.03);
       gain.gain.linearRampToValueAtTime(0.001, t + 0.1);
       osc.connect(gain);
-      gain.connect(this.sfxBus);
+      gain.connect(this.pingBus);
       osc.start(t);
       osc.stop(t + 0.12);
     });
@@ -2889,7 +3004,7 @@ class AudioSystem {
 
       osc.connect(filter);
       filter.connect(gain);
-      gain.connect(this.sfxBus);
+      gain.connect(this.physicalBus);
       osc.start(now);
       osc.stop(now + 0.55);
     } catch (e) { /* audio error — non-critical */ }
@@ -2920,7 +3035,7 @@ class AudioSystem {
 
       osc.connect(filter);
       filter.connect(gain);
-      gain.connect(this.sfxBus);
+      gain.connect(this.physicalBus);
       osc.start(now);
       osc.stop(now + 0.4);
 
@@ -2936,7 +3051,7 @@ class AudioSystem {
       const clickGain = ctx.createGain();
       clickGain.gain.value = 0.15;
       click.connect(clickGain);
-      clickGain.connect(this.sfxBus);
+      clickGain.connect(this.physicalBus);
       click.start(now + 0.05);
     } catch (e) { /* audio error — non-critical */ }
   }
@@ -2946,6 +3061,7 @@ class AudioSystem {
    */
   playMPDOverheat() {
     if (!this.available) return;
+    this._duckPulse(1500); // P2 ducking: overheat danger
     try {
       const ctx = this.ctx;
       const now = ctx.currentTime;
@@ -2965,7 +3081,7 @@ class AudioSystem {
       }
 
       osc.connect(alarmGain);
-      alarmGain.connect(this.sfxBus);
+      alarmGain.connect(this.alarmBus);
       osc.start(now);
       osc.stop(now + 1.0);
 
@@ -2989,7 +3105,7 @@ class AudioSystem {
 
       noise.connect(hissFilter);
       hissFilter.connect(hissGain);
-      hissGain.connect(this.sfxBus);
+      hissGain.connect(this.alarmBus);
       noise.start(now + 0.1);
     } catch (e) { /* audio error — non-critical */ }
   }
@@ -3022,7 +3138,7 @@ class AudioSystem {
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
 
     osc.connect(gain);
-    gain.connect(this.sfxBus);
+    gain.connect(this.pingBus);
     osc.start(now);
     osc.stop(now + 0.5);
   }
@@ -3046,7 +3162,7 @@ class AudioSystem {
       gain.gain.linearRampToValueAtTime(0.2, now + i * 0.08 + 0.01);
       gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.08 + 0.15);
       osc.connect(gain);
-      gain.connect(this.sfxBus);
+      gain.connect(this.rewardBus);
       osc.start(now + i * 0.08);
       osc.stop(now + i * 0.08 + 0.15);
     }
@@ -3063,7 +3179,7 @@ class AudioSystem {
    * @param {number} peakGain — Peak gain (0–1)
    * @private
    */
-  _playSineBlip(startTime, freq, dur, peakGain) {
+  _playSineBlip(startTime, freq, dur, peakGain, dest) {
     const ctx = this.ctx;
     const osc = ctx.createOscillator();
     osc.type = 'sine';
@@ -3072,7 +3188,9 @@ class AudioSystem {
     gain.gain.setValueAtTime(0, startTime);
     gain.gain.linearRampToValueAtTime(peakGain, startTime + 0.01);
     gain.gain.exponentialRampToValueAtTime(0.001, startTime + dur);
-    osc.connect(gain).connect(this.sfxBus);
+    // Shared helper across families — REWARD chimes by default, PING for the
+    // range ticker (P6). Caller passes an explicit family bus when needed.
+    osc.connect(gain).connect(dest || this.rewardBus || this.sfxBus);
     osc.start(startTime);
     osc.stop(startTime + dur + 0.02);
   }
@@ -3115,7 +3233,7 @@ class AudioSystem {
     const v = Math.max(0, Math.min(1, volume));
     const ctx = this.ctx;
     const now = ctx.currentTime;
-    const dest = this.sfxBus || this.master || ctx.destination;
+    const dest = this.rewardBus || this.sfxBus || this.master || ctx.destination;
     // Two-note rising notification: G4 (392 Hz) → B4 (494 Hz), triangle wave,
     // soft attack and a long decay tail. Total ~350 ms. Deliberately pitched
     // below playTargetLock (C5→E5) so a hint never sounds like a sensor lock.

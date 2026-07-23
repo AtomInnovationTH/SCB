@@ -1693,6 +1693,20 @@ export const Constants = {
       CONFIRM: [600, 600],          // two same-pitch blips
       CYCLE: [400, 450, 500, 550, 600],  // ascending steps for T key
     },
+    // Audio Vocabulary Overhaul (2026-07-23) — per-family bus default gains.
+    // Tuning-only table (see plan §P2); NOT surfaced as settings sliders.
+    // Every family bus routes → sfxBus → master. Start flat at 1.0 except a
+    // slightly quieter TICK so input confirms sit under informative cues.
+    FAMILY_GAIN: {
+      physical: 1.0,
+      radio: 1.0,
+      ping: 1.0,
+      tick: 0.8,
+      deny: 1.0,
+      alarm: 1.0,
+      reward: 1.0,
+      pad: 1.0,
+    },
   },
 
   // =========================================================================
