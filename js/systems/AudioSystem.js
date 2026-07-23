@@ -3291,8 +3291,9 @@ class AudioSystem {
     const ctx = this.ctx;
     const now = ctx.currentTime;
     const dest = this.sfxBus || this.master || ctx.destination;
-    // Two-note rising notification: C5 (523 Hz) → E5 (659 Hz), triangle wave,
-    // soft attack and a long decay tail. Total ~350 ms.
+    // Two-note rising notification: G4 (392 Hz) → B4 (494 Hz), triangle wave,
+    // soft attack and a long decay tail. Total ~350 ms. Deliberately pitched
+    // below playTargetLock (C5→E5) so a hint never sounds like a sensor lock.
     const playNote = (freq, startOffset, durSec) => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
@@ -3308,8 +3309,8 @@ class AudioSystem {
       osc.start(now + startOffset);
       osc.stop(now + startOffset + durSec + 0.02);
     };
-    playNote(523, 0.000, 0.24);
-    playNote(659, 0.130, 0.34);
+    playNote(392, 0.000, 0.24);
+    playNote(494, 0.130, 0.34);
   }
 }
 
