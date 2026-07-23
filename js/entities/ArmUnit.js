@@ -1556,7 +1556,7 @@ export class ArmUnit {
     // a console.warn fallback inside _updateNettingFSM with no UI cue.
     if (Constants.isFeatureEnabled('CAPTURE_NET') && this._netInventory <= 0) {
       eventBus.emit(Events.NET_EMPTY_CLICK, { armId: this.id });
-      audioSystem.playClickFail();
+      audioSystem.playDeny();
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: this.displayName,
         text: `${this.displayName}: No nets remaining. Return to mother for reload.`,
@@ -3395,7 +3395,7 @@ export class ArmUnit {
     // remedy (return to mother for reload).
     if (Constants.isFeatureEnabled('CAPTURE_NET') && this._netInventory <= 0) {
       eventBus.emit(Events.NET_EMPTY_CLICK, { armId: this.id });
-      audioSystem.playClickFail();
+      audioSystem.playDeny();
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: this.displayName,
         text: `${this.displayName}: No nets remaining. Return to mother for reload.`,
@@ -3658,7 +3658,7 @@ export class ArmUnit {
 
   /** @private Graceful feedback for a not-yet-equipped verb (P3/P4). */
   _toolOffline(kind) {
-    audioSystem.playClickFail();
+    audioSystem.playDeny();
     eventBus.emit(Events.COMMS_MESSAGE, {
       source: this.displayName,
       text: `${this.displayName}: ${kind} tool offline. Not yet equipped. Cycle (\`) to NET or MAGNET.`,
@@ -3687,7 +3687,7 @@ export class ArmUnit {
   magneticGrapple() {
     if (this.state !== S.STATION_KEEP) return false;
     const target = this._stationKeepTarget || this.target;
-    if (!target) { audioSystem.playClickFail(); return false; }
+    if (!target) { audioSystem.playDeny(); return false; }
 
     eventBus.emit(Events.STATION_KEEP_EXITED, { armId: this.id, reason: 'magnet' });
     this._magPhase = 'ENERGIZING';
@@ -3782,7 +3782,7 @@ export class ArmUnit {
   _failMagneticGrip(reason) {
     const target = this._stationKeepTarget || this.target;
     this._magPhase = null;
-    audioSystem.playClickFail();
+    audioSystem.playDeny();
     if (target) {
       eventBus.emit(Events.MAGNETIC_GRIP_FAILED, { armId: this.id, targetId: target.id, reason });
       eventBus.emit(Events.MAGNETIC_RELEASE, { armId: this.id, targetId: target.id });
@@ -3845,7 +3845,7 @@ export class ArmUnit {
     if (this.state !== S.STATION_KEEP) return false;
     if (!Constants.isFeatureEnabled('WEAVER_GRIPPER')) return this._toolOffline('GRIPPER');
     const target = this._stationKeepTarget || this.target;
-    if (!target) { audioSystem.playClickFail(); return false; }
+    if (!target) { audioSystem.playDeny(); return false; }
 
     eventBus.emit(Events.STATION_KEEP_EXITED, { armId: this.id, reason: 'gripper' });
     this._gripPhase = 'EXTEND';
@@ -3914,7 +3914,7 @@ export class ArmUnit {
   _failGripperGrip(reason) {
     const target = this._stationKeepTarget || this.target;
     this._gripPhase = null;
-    audioSystem.playClickFail();
+    audioSystem.playDeny();
     if (target) {
       eventBus.emit(Events.GRIPPER_SLIPPED, { armId: this.id, targetId: target.id, reason });
       eventBus.emit(Events.GRIPPER_RELEASED, { armId: this.id, targetId: target.id });
@@ -3960,7 +3960,7 @@ export class ArmUnit {
     if (this.state !== S.STATION_KEEP) return false;
     if (!Constants.isFeatureEnabled('SPINNER_PAD')) return this._toolOffline('PAD');
     const target = this._stationKeepTarget || this.target;
-    if (!target) { audioSystem.playClickFail(); return false; }
+    if (!target) { audioSystem.playDeny(); return false; }
 
     eventBus.emit(Events.STATION_KEEP_EXITED, { armId: this.id, reason: 'pad' });
     this._padPhase = 'APPROACH';
@@ -4038,7 +4038,7 @@ export class ArmUnit {
   _failPadContact(reason) {
     const target = this._stationKeepTarget || this.target;
     this._padPhase = null;
-    audioSystem.playClickFail();
+    audioSystem.playDeny();
     if (target) {
       eventBus.emit(Events.PAD_BOUNCED, { armId: this.id, targetId: target.id, reason });
       eventBus.emit(Events.PAD_RELEASED, { armId: this.id, targetId: target.id });

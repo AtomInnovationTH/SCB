@@ -1156,7 +1156,7 @@ export class ShopScreen {
 
     const check = canUpgrade(currentTier, targetTier, gs);
     if (!check.allowed) {
-      audioSystem.playWarning(0.3);
+      audioSystem.playDeny();
       eventBus.emit(Events.COMMS_MESSAGE, {
         sender: 'SHIPYARD',
         text: `Tier upgrade denied: ${check.reason}`,
@@ -1186,9 +1186,9 @@ export class ShopScreen {
 
     if (result.success) {
       this._lastPurchasedId = `arm-${targetTier}`;
-      audioSystem.playCaptureSuccess();
+      audioSystem.playPurchase();
     } else {
-      audioSystem.playWarning(0.3);
+      audioSystem.playDeny();
     }
 
     this.refresh();
@@ -1209,15 +1209,15 @@ export class ShopScreen {
       if (upgrade.requiresFeature && !Constants.isFeatureEnabled(upgrade.requiresFeature)) return;
       // Don't charge for a net that can't be loaded (both pods already full).
       if (upgrade.effect === 'motherNetRestock' && !captureNetSystem.hasMotherPodSpace()) {
-        audioSystem.playWarning(0.3);
+        audioSystem.playDeny();
         return;
       }
       if (!scoringSystem.spendCredits(upgrade.cost)) {
-        audioSystem.playWarning(0.3);
+        audioSystem.playDeny();
         return;
       }
       this._lastPurchasedId = upgradeId;
-      audioSystem.playCaptureSuccess();
+      audioSystem.playPurchase();
       eventBus.emit(Events.UPGRADE_PURCHASED, {
         id: upgradeId,
         effect: upgrade.effect,
@@ -1236,18 +1236,18 @@ export class ShopScreen {
     // locked upgrade (e.g. graphene_supercap before solid_state_battery) and
     // spend the credits anyway. Refuse before charging — wallet untouched.
     if (!upgradePrereqsMet(upgrade, this.purchasedUpgrades, (f) => Constants.isFeatureEnabled(f))) {
-      audioSystem.playWarning(0.3);
+      audioSystem.playDeny();
       return;
     }
 
     if (!scoringSystem.spendCredits(upgrade.cost)) {
-      audioSystem.playWarning(0.3);
+      audioSystem.playDeny();
       return;
     }
 
     this.purchasedUpgrades.set(upgradeId, currentLevel + 1);
     this._lastPurchasedId = upgradeId; // trigger flash on next refresh
-    audioSystem.playCaptureSuccess();
+    audioSystem.playPurchase();
 
     // S1 retention: clear the pin when the pinned item is purchased (or once it
     // reaches maxLevel); the HUD re-advances to a fresh chase target on next hide.
@@ -1283,7 +1283,7 @@ export class ShopScreen {
 
     const tier = tiers[tierIndex];
     if (!scoringSystem.spendCredits(tier.cost)) {
-      audioSystem.playWarning(0.3);
+      audioSystem.playDeny();
       return;
     }
 
@@ -1295,7 +1295,7 @@ export class ShopScreen {
     }
 
     this._lastPurchasedId = `${tierType}-${tierIndex}`; // trigger flash on next refresh
-    audioSystem.playCaptureSuccess();
+    audioSystem.playPurchase();
 
     // Emit upgrade event — ArmManager.applyUpgrade() handles springTier / tetherTier
     eventBus.emit(Events.UPGRADE_PURCHASED, {

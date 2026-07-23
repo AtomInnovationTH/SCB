@@ -601,7 +601,7 @@ class AudioSystem {
     });
 
     eventBus.on(Events.LASSO_DENIED, () => {
-      this.playLassoDenied();
+      this.playDeny();
     });
 
     // S3b: MPD Burst Mode audio
@@ -1160,31 +1160,28 @@ class AudioSystem {
   }
 
   /**
-   * Short dry "no-go" click for empty-inventory actions (e.g. NET at 0).
-   * Real-time audio — uses dt, not gameDt. Under 200 ms total.
+   * P3 — canonical DENY voice: the single "input refused, nothing broke" sound.
+   * Low dull square buzz, ~120 ms (the playFailBuzz DNA shortened). Replaces the
+   * former four deny voices (playClickFail, playLassoDenied, shop playWarning(0.3),
+   * playFailBuzz-as-denial). One meaning, one word. DENY family.
    */
-  playClickFail() {
+  playDeny() {
     if (!this.available) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
     const dur = 0.12;
-
-    // Low-pitched square blip — deliberate "denied" character
     const osc = ctx.createOscillator();
     osc.type = 'square';
-    osc.frequency.setValueAtTime(220, now);
-    osc.frequency.linearRampToValueAtTime(110, now + dur);
-
+    osc.frequency.value = 150;
     const gain = ctx.createGain();
     gain.gain.setValueAtTime(0, now);
-    gain.gain.linearRampToValueAtTime(0.18, now + 0.005);
-    gain.gain.setValueAtTime(0.18, now + 0.04);
-    gain.gain.linearRampToValueAtTime(0, now + dur);
-
+    gain.gain.linearRampToValueAtTime(0.14, now + 0.008);
+    gain.gain.setValueAtTime(0.14, now + 0.07);
+    gain.gain.linearRampToValueAtTime(0.0001, now + dur);
     osc.connect(gain);
     gain.connect(this.denyBus);
     osc.start(now);
-    osc.stop(now + dur);
+    osc.stop(now + dur + 0.02);
   }
 
   /**
@@ -2293,6 +2290,43 @@ class AudioSystem {
   }
 
   /**
+   * P3 — comms message notice. Replaces playWarning for comms priority sounds so
+   * a radio message never sounds like a danger ALARM. Short squelch burst
+   * (commsCrackle DNA, no handshake blips). RADIO family.
+   * @param {string} [priority] — 'CRITICAL' doubles the squelch; otherwise single.
+   */
+  playRadioNotice(priority) {
+    if (!this.available) return;
+    const ctx = this.ctx;
+    const squelch = (offset) => {
+      const now = ctx.currentTime + offset;
+      const nDur = 0.14;
+      const bufSize = Math.ceil(ctx.sampleRate * nDur);
+      const buf = ctx.createBuffer(1, bufSize, ctx.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
+      const noise = ctx.createBufferSource();
+      noise.buffer = buf;
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.Q.value = 4;
+      bp.frequency.setValueAtTime(1400, now);
+      bp.frequency.exponentialRampToValueAtTime(2200, now + nDur);
+      const ng = ctx.createGain();
+      ng.gain.setValueAtTime(0.0001, now);
+      ng.gain.exponentialRampToValueAtTime(0.08, now + 0.02);
+      ng.gain.exponentialRampToValueAtTime(0.001, now + nDur);
+      noise.connect(bp);
+      bp.connect(ng);
+      ng.connect(this.radioBus);
+      noise.start(now);
+      noise.stop(now + nDur + 0.02);
+    };
+    squelch(0);
+    if (priority === 'CRITICAL') squelch(0.18); // double squelch = urgent traffic
+  }
+
+  /**
    * T6 — SAFER cold-gas puff: a tiny highpassed-noise "pfft" (~0.05 s, quiet),
    * layered under the departure pad swell as the astronaut thrusters fire on her
    * jet-off exit. Deliberately subtle — a texture cue, not a bang.
@@ -2736,30 +2770,6 @@ class AudioSystem {
     lfo.stop(now + dur);
   }
 
-  /**
-   * Lasso denied — brief buzz when Space pressed during cooldown or no target.
-   * 50ms square wave, low pitch.
-   */
-  playLassoDenied() {
-    if (!this.available) return;
-    const ctx = this.ctx;
-    const now = ctx.currentTime;
-    const dur = 0.05;
-
-    const osc = ctx.createOscillator();
-    osc.type = 'square';
-    osc.frequency.value = 120; // Low pitch
-
-    const gain = ctx.createGain();
-    gain.gain.setValueAtTime(0.12, now);
-    gain.gain.linearRampToValueAtTime(0, now + dur);
-
-    osc.connect(gain);
-    gain.connect(this.denyBus);
-    osc.start(now);
-    osc.stop(now + dur);
-  }
-
   // ==========================================================================
   // PHASE 5 — TARGET LOCK CEREMONY SOUNDS
   // ==========================================================================
@@ -3160,6 +3170,32 @@ class AudioSystem {
       osc.frequency.setValueAtTime(i === 0 ? 1200 : 1800, now + i * 0.08);
       gain.gain.setValueAtTime(0, now + i * 0.08);
       gain.gain.linearRampToValueAtTime(0.2, now + i * 0.08 + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.08 + 0.15);
+      osc.connect(gain);
+      gain.connect(this.rewardBus);
+      osc.start(now + i * 0.08);
+      osc.stop(now + i * 0.08 + 0.15);
+    }
+  }
+
+  /**
+   * P3 — shop purchase confirm. REWARD family, ka-ching (triangle pair) DNA but
+   * pitched below playCashRegister (700/1050 Hz vs 1200/1800) so "spent credits"
+   * is audibly distinct from "earned credits". Replaces the former shop use of
+   * playCaptureSuccess (which is now capture-only).
+   */
+  playPurchase() {
+    if (!this.available) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+    const freqs = [700, 1050];
+    for (let i = 0; i < 2; i++) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(freqs[i], now + i * 0.08);
+      gain.gain.setValueAtTime(0, now + i * 0.08);
+      gain.gain.linearRampToValueAtTime(0.18, now + i * 0.08 + 0.01);
       gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.08 + 0.15);
       osc.connect(gain);
       gain.connect(this.rewardBus);

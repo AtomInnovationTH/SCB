@@ -821,7 +821,7 @@ export class InputManager {
             despinTarget = d.targetSelector ? d.targetSelector.getActiveTarget() : null;
           }
           if (!despinTarget) {
-            d.audioSystem?.playClickFail?.();
+            d.audioSystem?.playDeny?.();
             eventBus.emit(Events.COMMS_MESSAGE, {
               source: 'MOTHER',
               text: this.armPilotMode
@@ -2126,7 +2126,7 @@ export class InputManager {
           priority: 'warning',
           _lassoFeedback: true,
         });
-        d.audioSystem?.playClickFail?.() ?? d.audioSystem?.playClick?.();
+        d.audioSystem?.playDeny?.() ?? d.audioSystem?.playClick?.();
         return;
       }
       // else band === 'lasso' (≤ 10 kg) → fall through to the lasso path below.

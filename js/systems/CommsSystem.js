@@ -1105,12 +1105,10 @@ export class CommsSystem {
 
     switch (priority) {
       case CommsPriority.CRITICAL:
-        audioSystem.playWarning(0.9);
-        // Double beep for critical
-        timerManager.setTimeout(() => audioSystem.playWarning(0.9), 150, { owner: this });
+        audioSystem.playRadioNotice('CRITICAL');
         break;
       case CommsPriority.WARNING:
-        audioSystem.playWarning(0.5);
+        audioSystem.playRadioNotice('WARNING');
         break;
       case CommsPriority.INFO:
         // Removed: INFO blip audio not needed per UX decision
