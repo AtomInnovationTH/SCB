@@ -2356,27 +2356,7 @@ class AudioSystem {
     const now = ctx.currentTime;
 
     // Squelch burst: bandpass-filtered noise, quick in/out (radio keying).
-    const nDur = 0.16;
-    const bufSize = Math.ceil(ctx.sampleRate * nDur);
-    const buf = ctx.createBuffer(1, bufSize, ctx.sampleRate);
-    const data = buf.getChannelData(0);
-    for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
-    const noise = ctx.createBufferSource();
-    noise.buffer = buf;
-    const bp = ctx.createBiquadFilter();
-    bp.type = 'bandpass';
-    bp.Q.value = 4;
-    bp.frequency.setValueAtTime(1400, now);
-    bp.frequency.exponentialRampToValueAtTime(2200, now + nDur);
-    const ng = ctx.createGain();
-    ng.gain.setValueAtTime(0.0001, now);
-    ng.gain.exponentialRampToValueAtTime(0.09, now + 0.02);
-    ng.gain.exponentialRampToValueAtTime(0.001, now + nDur);
-    noise.connect(bp);
-    bp.connect(ng);
-    ng.connect(this.radioBus);
-    noise.start(now);
-    noise.stop(now + nDur + 0.02);
+    this._playSquelch(now, 0.16, 0.09);
 
     // Two-blip "online" confirm after the squelch (comms handshake).
     const blips = [880, 1320];
@@ -2397,40 +2377,51 @@ class AudioSystem {
   }
 
   /**
+   * @private Shared RADIO squelch burst: bandpass-filtered noise, quick in/out
+   * (radio keying). Single source of the squelch DNA so playCommsCrackle and
+   * playRadioNotice can't drift apart. Routed to radioBus.
+   * @param {number} startTime — AudioContext time to begin.
+   * @param {number} [dur=0.16] — burst length (s).
+   * @param {number} [peakGain=0.09] — envelope peak.
+   */
+  _playSquelch(startTime, dur = 0.16, peakGain = 0.09) {
+    if (!this.available) return;
+    const ctx = this.ctx;
+    const bufSize = Math.ceil(ctx.sampleRate * dur);
+    const buf = ctx.createBuffer(1, bufSize, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
+    const noise = ctx.createBufferSource();
+    noise.buffer = buf;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.Q.value = 4;
+    bp.frequency.setValueAtTime(1400, startTime);
+    bp.frequency.exponentialRampToValueAtTime(2200, startTime + dur);
+    const ng = ctx.createGain();
+    ng.gain.setValueAtTime(0.0001, startTime);
+    ng.gain.exponentialRampToValueAtTime(peakGain, startTime + 0.02);
+    ng.gain.exponentialRampToValueAtTime(0.001, startTime + dur);
+    noise.connect(bp);
+    bp.connect(ng);
+    ng.connect(this.radioBus);
+    noise.start(startTime);
+    noise.stop(startTime + dur + 0.02);
+  }
+
+  /**
    * P3 — comms message notice. Replaces playWarning for comms priority sounds so
    * a radio message never sounds like a danger ALARM. Short squelch burst
-   * (commsCrackle DNA, no handshake blips). RADIO family.
+   * (shares _playSquelch with commsCrackle; slightly shorter/quieter). RADIO family.
    * @param {string} [priority] — 'CRITICAL' doubles the squelch; otherwise single.
    */
   playRadioNotice(priority) {
     if (!this.available) return;
-    const ctx = this.ctx;
-    const squelch = (offset) => {
-      const now = ctx.currentTime + offset;
-      const nDur = 0.14;
-      const bufSize = Math.ceil(ctx.sampleRate * nDur);
-      const buf = ctx.createBuffer(1, bufSize, ctx.sampleRate);
-      const data = buf.getChannelData(0);
-      for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
-      const noise = ctx.createBufferSource();
-      noise.buffer = buf;
-      const bp = ctx.createBiquadFilter();
-      bp.type = 'bandpass';
-      bp.Q.value = 4;
-      bp.frequency.setValueAtTime(1400, now);
-      bp.frequency.exponentialRampToValueAtTime(2200, now + nDur);
-      const ng = ctx.createGain();
-      ng.gain.setValueAtTime(0.0001, now);
-      ng.gain.exponentialRampToValueAtTime(0.08, now + 0.02);
-      ng.gain.exponentialRampToValueAtTime(0.001, now + nDur);
-      noise.connect(bp);
-      bp.connect(ng);
-      ng.connect(this.radioBus);
-      noise.start(now);
-      noise.stop(now + nDur + 0.02);
-    };
-    squelch(0);
-    if (priority === 'CRITICAL') squelch(0.18); // double squelch = urgent traffic
+    this._playSquelch(this.ctx.currentTime, 0.14, 0.08);
+    if (priority === 'CRITICAL') {
+      // double squelch = urgent traffic
+      this._playSquelch(this.ctx.currentTime + 0.18, 0.14, 0.08);
+    }
   }
 
   /**

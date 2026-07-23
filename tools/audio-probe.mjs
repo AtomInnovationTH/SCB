@@ -19,11 +19,29 @@
  * Each `at` maps directly to a play/start method connect site in AudioSystem.js.
  */
 import { createRequire } from 'node:module';
+import fs from 'node:fs';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
 
-const exe = process.env.PW_EXE || undefined;
+// PW_EXE is an optional dev override for the Chromium binary. It is passed to
+// chromium.launch({ executablePath }), which executes it — so only honor it
+// when it resolves to an existing regular file. An unset/invalid value falls
+// back to Playwright's bundled browser resolution. This tool is a local dev
+// harness (never shipped, never imported by app code); the check is just to
+// avoid launching an unexpected path from a stray/misconfigured env.
+let exe;
+if (process.env.PW_EXE) {
+  const candidate = fs.realpathSync.native
+    ? (() => { try { return fs.realpathSync(process.env.PW_EXE); } catch { return null; } })()
+    : process.env.PW_EXE;
+  if (candidate && fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+    exe = candidate;
+  } else {
+    console.warn(`[audio-probe] Ignoring PW_EXE (not an existing file): ${process.env.PW_EXE}`);
+    exe = undefined;
+  }
+}
 const url = process.env.PROBE_URL || 'http://localhost:8080/';
 const waitMs = Number(process.env.PROBE_WAIT_MS || 8000);
 
