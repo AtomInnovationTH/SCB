@@ -17,6 +17,7 @@ import { getSolarCellTexture } from '../scene/solarCellTexture.js';
 import { makeLightHalo } from '../scene/glowSpriteTexture.js';
 import { makePlumeFrustum } from '../scene/plumeGeometry.js';
 import { applyDetailLod } from '../scene/detailLodCull.js';
+import { AVIONICS_GUNMETAL, AVIONICS_DARK_OPTIC, AVIONICS_THERMAL_WHITE } from '../scene/avionicsMaterials.js';
 import { tetherReel } from '../systems/TetherReel.js';
 import { captureNetSystem, getNetClassForType, computeLeadAim, computeFragRisk, effectiveFragility, presentedWidthForApproach } from './CaptureNet.js';
 import { audioSystem } from '../systems/AudioSystem.js';
@@ -641,19 +642,79 @@ export class ArmUnit {
     foreNozzle.name = `${this.id}-feep-fore`;
     this.mesh.add(foreNozzle);
 
-    // --- Net canister (forward, cylindrical) ---
-    const canR = isWeaver ? 0.06 : 0.03;
-    const canH = isWeaver ? 0.08 : 0.05;
-    // Closed-ended so the outboard face reads as a capped canister lid rather
-    // than a see-through tube protruding from the fore face.
-    const canGeo = new THREE.CylinderGeometry(canR * M, canR * M, canH * M, 8, 1, false);
-    const canMat = new THREE.MeshStandardMaterial({
-      color: 0x666677, metalness: 0.6, roughness: 0.4,
-    });
+    // --- Mini net launcher (forward, cylindrical) — mirrors the mother's
+    // launcher design language (2026-07-23, fore-end-hardware-labels-rework):
+    // a single central gunmetal housing on the fore centreline (+Z, anti-spin
+    // doctrine) whose front face is an inventory-driven magazine window: a pale
+    // Dyneema cap per LOADED net over a dark bore. Replaces the old bare canister.
+    const isWeaverLaunch = isWeaver;
+    const netClass = Constants.CAPTURE_NET?.[isWeaverLaunch ? 'MEDIUM' : 'SMALL'];
+    // Cell count = magazine size. Fall back to the drift-guarded ARM_NET_CAPACITY
+    // constant (which a test enforces == CAPTURE_NET.*.MAGAZINE_SIZE) rather than
+    // a third hardcoded literal, so the cap slots always match inventory capacity.
+    const cellCount = (netClass && netClass.MAGAZINE_SIZE)
+      ?? Constants.ARM_NET_CAPACITY?.[isWeaverLaunch ? 'weaver' : 'spinner'] ?? 0;
+    const canR = isWeaverLaunch ? 0.055 : 0.035;
+    const canH = isWeaverLaunch ? 0.07 : 0.05;
+    const canGeo = new THREE.CylinderGeometry(canR * M, canR * M, canH * M, 12, 1, false);
+    const canMat = new THREE.MeshStandardMaterial({ ...AVIONICS_GUNMETAL });   // matches mother (SSOT recipe)
     const canister = new THREE.Mesh(canGeo, canMat);
-    canister.position.set(0, 0, bz * 0.55 * M);
-    canister.rotation.x = Math.PI / 2;
+    const canCz = bz * 0.55 * M;                 // housing centre z (fore centreline)
+    canister.position.set(0, 0, canCz);
+    canister.rotation.x = Math.PI / 2;           // cylinder axis → +Z
+    canister.name = `${this.id}-net-launcher`;
     this.mesh.add(canister);
+
+    // Front-face magazine cells (front face = housing centre + half-length in +Z).
+    // Layout derived from the magazine count (drift-guarded — never hardcode 2/4):
+    // ≤2 → side-by-side in X; else a 2×2 grid.
+    const cellFaceZ = canCz + (canH * M) / 2;
+    const cellSpread = (isWeaverLaunch ? 0.024 : 0.014) * M;
+    const cellBoreR = (isWeaverLaunch ? 0.018 : 0.010) * M;
+    const cellOffsets = [];
+    if (cellCount <= 2) {
+      for (let i = 0; i < cellCount; i++) {
+        cellOffsets.push([ (cellCount === 1 ? 0 : (i === 0 ? -cellSpread : cellSpread)), 0 ]);
+      }
+    } else {
+      // 2×2 (and beyond) grid.
+      const cols = 2;
+      for (let i = 0; i < cellCount; i++) {
+        const cx = (i % cols) === 0 ? -cellSpread : cellSpread;
+        const cy = (i < cols) ? cellSpread : -cellSpread;
+        cellOffsets.push([cx, cy]);
+      }
+    }
+    const boreMat = new THREE.MeshStandardMaterial({ ...AVIONICS_DARK_OPTIC });    // dark bore (matches mother)
+    const capMat = new THREE.MeshStandardMaterial({ ...AVIONICS_THERMAL_WHITE });  // pale Dyneema cap (matches mother)
+    this._netCellCaps = [];
+    for (let i = 0; i < cellCount; i++) {
+      const [cx, cy] = cellOffsets[i];
+      // Dark bore disc — always visible (an empty cell shows the bore).
+      const bore = new THREE.Mesh(new THREE.CircleGeometry(cellBoreR, 12), boreMat);
+      bore.position.set(cx, cy, cellFaceZ + 0.001 * M);   // 1 mm proud (EO-lens pattern)
+      bore.name = `${this.id}-DNetCellHole_${i}`;
+      bore.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      this.mesh.add(bore);
+      // Pale cap — visible only when the cell is LOADED (inventory-driven).
+      const cap = new THREE.Mesh(new THREE.CircleGeometry(cellBoreR * 0.9, 12), capMat.clone());
+      cap.position.set(cx, cy, cellFaceZ + 0.0015 * M);   // 1.5 mm proud (over the bore)
+      cap.name = `${this.id}-DNetCellCap_${i}`;
+      cap.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      this.mesh.add(cap);
+      this._netCellCaps.push(cap);
+    }
+
+    // Inventory wiring — the daughter net emits use TWO field shapes: CaptureNet
+    // emits {remaining}, ArmUnit's own set/decrement/reload emit {nets}. Accept
+    // BOTH (PAYLOAD SHAPE WART — unifying is a follow-up SSOT cleanup, not here).
+    this._onNetInventoryChanged = (p) => {
+      if (!p || p.source !== 'daughter' || p.armIndex !== this.index) return;
+      const n = (p.remaining ?? p.nets) ?? 0;
+      this._syncNetCells(n);
+    };
+    eventBus.on(Events.NET_INVENTORY_CHANGED, this._onNetInventoryChanged);
+
 
     // --- Laser power receiver (top face) — a small optical rectenna, NOT a
     // solar array. A round photodiode recessed inside a short metallic housing.
@@ -6123,6 +6184,22 @@ export class ArmUnit {
     this._netInventory = capacity;
     this._netRatedMass = (netClass && netClass.MAX_CAPTURE_MASS) || 0;
     this._netDiameter = (netClass && netClass.DIAMETER) || 0;
+    // initNetInventory() seeds the magazine WITHOUT emitting (and runs after
+    // construction), so event-only caps would start stale. Sync directly.
+    this._syncNetCells(this._netInventory);
+  }
+
+  /**
+   * Show exactly `n` loaded Dyneema caps on the mini launcher's front face
+   * (empty cells show only the dark bore). Direct (no-emit) helper called from
+   * the inventory listener AND initNetInventory(). @private
+   * @param {number} n loaded net count
+   */
+  _syncNetCells(n) {
+    if (!this._netCellCaps) return;
+    for (let i = 0; i < this._netCellCaps.length; i++) {
+      this._netCellCaps[i].visible = i < n;
+    }
   }
 
   /** Current net count remaining in magazine. */
@@ -6186,6 +6263,12 @@ export class ArmUnit {
    * Dispose of all Three.js resources.
    */
   dispose() {
+    // Arms are NOT session singletons (unlike the mother) — unsubscribe the net
+    // inventory listener so disposed arms don't leak / react to stale emits.
+    if (this._onNetInventoryChanged) {
+      eventBus.off(Events.NET_INVENTORY_CHANGED, this._onNetInventoryChanged);
+      this._onNetInventoryChanged = null;
+    }
     const disposeMat = (m) => {
       if (!m) return;
       // Dispose per-instance textures (e.g. cloned solar-cell map/emissiveMap)

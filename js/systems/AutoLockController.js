@@ -265,7 +265,10 @@ export class AutoLockController {
     this._lastRangeState = state;
 
     if (inRange) {
-      eventBus.emit(Events.TARGET_IN_RANGE, { id: active.id, distanceM: distM });
+      // autoLock: this crossing came from the automatic assist (not a manual
+      // pick), so the audio layer suppresses the lock earcon — an unprompted
+      // ping teaches the player nothing.
+      eventBus.emit(Events.TARGET_IN_RANGE, { id: active.id, distanceM: distM, autoLock: !this._manualOverride });
     } else {
       eventBus.emit(Events.TARGET_OUT_OF_RANGE, { id: active.id, distanceM: distM });
     }

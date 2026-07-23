@@ -1686,6 +1686,12 @@ export class LassoSystem {
                 if (this._player._rcsVelocity.length() > maxV) {
                     this._player._rcsVelocity.normalize().multiplyScalar(maxV);
                 }
+                // (b) Angular coupling: a heavy OFF-AXIS catch also tugs the
+                // Mother's nose toward it while hauling. Fed to the recoil
+                // attitude springs (RCS-nulled). Centreline catches → no tug.
+                if (typeof this._player.applyReelTorque === 'function') {
+                    this._player.applyReelTorque(toCatch, massRatio, dt);
+                }
             }
         }
 

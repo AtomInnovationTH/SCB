@@ -87,6 +87,7 @@ import { HotkeyOverlay } from './ui/HotkeyOverlay.js';
 import { SkillsPane } from './ui/hud/SkillsPane.js';
 import { TeachingSystem } from './systems/TeachingSystem.js';
 import { armIdleAdvisor } from './systems/ArmIdleAdvisor.js';
+import { GlintSystem } from './systems/GlintSystem.js';
 import { guidanceTelemetry } from './systems/GuidanceTelemetry.js';
 import { navRecoveryAdvisor } from './systems/NavRecoveryAdvisor.js';
 import { targetAcquisition } from './systems/TargetAcquisition.js';
@@ -436,6 +437,7 @@ let autoLockController;
  *  the OnboardingDirector contextProvider for the `range_wall` gate. */
 let _onboardingTargetOutOfRange = false;
 let missionCoach;
+let glintSystem;
 let issConjunctionBoss;
 let starlinkCascadeBoss;
 let resourceSystem;
@@ -750,7 +752,7 @@ async function init() {
 
   // --- Mothership inspection callouts (in-world 3D labels; replaces the 2D
   // wireframe pane). Gated internally on the inspection events. ---
-  motherCallouts = new MotherCallouts(player, camera, { armManager });
+  motherCallouts = new MotherCallouts(player, camera, { canvas });
 
   // --- Camera: start following the player ---
   const startPos = player.getPosition();
@@ -1035,6 +1037,19 @@ async function init() {
     debrisWireframe,
     skillsSystem,
     guidanceDirector,
+  });
+
+  // --- Debris attention glint (fake sun-plausible specular flash) ---
+  // Directed (M1 onboarding idle) + ambient (post-onboarding wayfinding).
+  // Read-only candidate scan via targetAcquisition.getEligibleTargets().
+  glintSystem = new GlintSystem({
+    scene,
+    camera,
+    debrisField,
+    targetSelector,
+    sunLight,
+    onboardingDirector,
+    targetAcquisition,
   });
 
   // --- UX-11 #12: dual-objective milestone comms (25/50/75/90% of either win track) ---
@@ -1850,6 +1865,10 @@ function gameLoop(timestamp) {
     // dead target is cleared first, allowing immediate reacquire).
     try { if (autoLockController) autoLockController.update(dt); } catch (e) { console.error('[GameLoop] autoLockController:', e); }
 
+    // Debris attention glint — read fresh target state (after targetSelector +
+    // autoLock) so directed/ambient policies see the current selection.
+    try { if (glintSystem) glintSystem.update(dt); } catch (e) { console.error('[GameLoop] glintSystem:', e); }
+
     // Update extracted systems
     try { resourceSystem.update(dt); } catch (e) { console.error('[GameLoop] resourceSystem:', e); }
     try { sensorSystem.update(dt, player.getPosition(), debrisField); } catch (e) { console.error('[GameLoop] sensorSystem:', e); }
@@ -2289,7 +2308,7 @@ function updateCamera(dt) {
   // Inspection callouts — run AFTER the camera so band/facing use this frame's
   // camera pose. Cheap no-op internally unless inspection is engaged.
   if (motherCallouts) {
-    try { motherCallouts.update(dt, armManager); }
+    try { motherCallouts.update(dt); }
     catch (e) { console.error('[GameLoop] motherCallouts:', e); }
   }
 }

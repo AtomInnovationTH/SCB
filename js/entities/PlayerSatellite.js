@@ -17,6 +17,7 @@ import { getRadialGlowTexture, makeLightHalo } from '../scene/glowSpriteTexture.
 import { makePlumeFrustum } from '../scene/plumeGeometry.js';
 import { applyDetailLod } from '../scene/detailLodCull.js';
 import { getOrbitalFoilEnv } from '../scene/orbitalFoilEnv.js';
+import { AVIONICS_GUNMETAL, AVIONICS_DARK_OPTIC, AVIONICS_THERMAL_WHITE } from '../scene/avionicsMaterials.js';
 import { powerDistribution } from '../systems/PowerDistribution.js';
 import { persistenceManager } from '../systems/PersistenceManager.js';
 import {
@@ -205,7 +206,6 @@ export class PlayerSatellite extends THREE.Group {
     this._rosaGlowIdleFloor = 0;
     this._thrusterGlowTargets = new Map(); // thruster mesh → { glow, plume, outerGlow, intensity }
     this._differentialFireTargets = [0, 0, 0, 0]; // per-nozzle attitude rotation intensity [TOP, BOTTOM, RIGHT, LEFT]
-    this._sensorTarget = null; // THREE.Vector3 world position to track
     this._activeThrustDir = { x: 0, y: 0, z: 0 };
 
     // Tether reel states: 'ready', 'deployed', 'empty' — V5: expanded to 8 reels
@@ -262,10 +262,33 @@ export class PlayerSatellite extends THREE.Group {
     this._frameRecoilCount = 0;     // Number of crossbow fires this frame
     this._frameN2Consumed = 0;      // Actual N₂ consumed (kg) this frame for refund on dual-fire
     this._recoilAngularVel = 0;     // C-11: Pending recoil angular velocity (rad/s) for RCS nulling
+    // Mother-net recoil (2026-07-23, sim-fidelity fix): a whale-net launch is a
+    // real momentum event. `_recoilPitchAngle` is the integrated transient hull
+    // pitch (rad) from the OFF-AXIS muzzle lever arm; RCS springs it back to 0
+    // (attitude hold) while `_recoilAngularVel` is nulled. Because the muzzle
+    // sits 0.25 m below the CoM (packaging around the sensor turret), an
+    // uncompensated shot pitches the ship — the sim now reflects that and bills
+    // the correction in cold-gas N₂. A centred muzzle would produce zero torque.
+    this._recoilPitchAngle = 0;
+    this._recoilPitchVel = 0;                 // mother-net pitch rate (rad/s), separate from the crossbow C-11 _recoilAngularVel
+    // Crossbow / dual-fire angular recoil now perturbs a REAL transient yaw
+    // (2026-07-23): the legacy scalar _recoilAngularVel above still exists for
+    // the C-11 magnitude bookkeeping + its RCS null, but it was never applied to
+    // the hull. These drive the visible transient yaw and settle it (ζ≈1, ~2 s).
+    this._recoilYawAngle = 0;
+    this._recoilYawVel = 0;
+    this._qRecoil = new THREE.Quaternion();   // scratch: transient recoil rotation
+    this._vRecoilPitchAxis = new THREE.Vector3(1, 0, 0); // ship-local pitch axis (+X)
+    this._vRecoilYawAxis = new THREE.Vector3(0, 1, 0);   // ship-local yaw axis (+Y)
 
     // V5: Subscribe to crossbow fire events for recoil handling
     eventBus.on(Events.CROSSBOW_FIRE, (data) => this._applyCrossbowRecoil(data));
     eventBus.on(Events.DUAL_FIRE_RECOIL, (data) => this._applyDualFireRecoil(data));
+    // Mother whale-net launch → real linear + angular recoil (source-filtered).
+    eventBus.on(Events.NET_FIRED, (data) => {
+      if (data && data.source === 'mother') this._applyMotherNetRecoil(data);
+    });
+
 
     // Scan visual feedback — emissive flash on body material
     this._scanFlashTimer = 0;
@@ -524,6 +547,10 @@ export class PlayerSatellite extends THREE.Group {
 
     // --- 8. NAVIGATION LIGHTS ---
     this._buildNavLights();
+
+    // --- 8b. AVIONICS HARDWARE (2026-07-23, fore-end-hardware-labels-rework):
+    //         star trackers, TT&C omnis + MGA patch, sun sensors, GPS patches.
+    this._buildAvionics();
 
     // --- 9. RCS THRUSTER PUFF SPRITES ---
     this._buildRcsPuffPool();
@@ -980,75 +1007,15 @@ export class PlayerSatellite extends THREE.Group {
       this.add(line);
     }
 
-    // Aperture bezel/housing — a short 8-gon cylinder wall bridging the cap face
-    // (z=1.0M) to the back of the viewport disc, sharing the -0.2 tilt so bezel,
-    // glass disc, and gold ring read as one aimed optic assembly. This FILLS the
-    // deliberate §2-followup log-depth standoff gap (8mm/12mm) with structure
-    // rather than seating the pieces flush (which would regress that fix).
-    // OPAQUE band so the disc (DETAIL) still paints in front of the bezel mouth.
-    const bezelLen = M * 0.02;
-    const bezelGeo = new THREE.CylinderGeometry(M * 0.13, M * 0.135, bezelLen, 24, 1, true);  // was 8-seg (visibly octagonal at inspect zoom)
-    const bezelMat = new THREE.MeshStandardMaterial({
-      color: 0x3a3a44, metalness: 0.7, roughness: 0.45,
-    });
-    const bezel = new THREE.Mesh(bezelGeo, bezelMat);
-    // Cylinder axis Y → point it along +Z, then apply the shared -0.2 tilt.
-    bezel.rotation.x = Math.PI / 2 - 0.2;
-    // Sit its aft mouth on the cap face and its fore mouth just under the disc.
-    bezel.position.set(0, M * 0.2, barrelH * 0.5 + M * 0.001 + bezelLen * 0.5);
-    bezel.name = 'LaserBezel';
-    bezel.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
-    this.add(bezel);
-
-    // Front viewport/window — laser aperture (20cm Cassegrain)
-    // FIX_PLAN §2-followup (round 3): viewport was at z=barrelH*0.5 − 0.05 =
-    // 0.95, i.e. 5 CM BEHIND the front cap at z=1.0 — polygonOffset cannot
-    // cover a 5 cm gap in depth, so the cap was occluding the aperture.
-    // Moved viewport to z=barrelH*0.5 + 0.001 (1 mm IN FRONT of cap) and
-    // apertureRing to +0.002 m. They now sit flush on the cap face, fully
-    // visible, with renderOrder layering keeping the gold rim on top.
-    const viewportGeo = new THREE.CircleGeometry(M * 0.12, 24);  // was 8-seg (match bezel)
-    const viewportMat = new THREE.MeshStandardMaterial({
-      color: 0x112244, metalness: 0.3, roughness: 0.2,
-      emissive: 0x1133aa, emissiveIntensity: 0.4,
-    });
-    this.viewport = new THREE.Mesh(viewportGeo, viewportMat);
-    // §2-followup (round 8): was +0.001·M (1 mm) in front of the cap — the disc
-    // (r 0.12) overlaps the cap (r 0.40) in screen space, and 1 mm is below the
-    // log depth buffer's reliable separation → z-fight on the front face. Pushed
-    // to +0.008·M (8 mm) for a decisive, zoom-independent standoff.
-    this.viewport.position.set(0, M * 0.2, barrelH * 0.5 + M * 0.008);
-    this.viewport.rotation.x = -0.2;
-    this.viewport.name = 'LaserAperture';
-    this.viewport.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL; // FIX_PLAN §2-followup
-    this.add(this.viewport);
-
-    // Laser aperture ring (gold, forward-facing)
-    const apertureRingGeo = new THREE.RingGeometry(M * 0.10, M * 0.14, 24);  // was 8-seg (match bezel)
-    const apertureRingMat = this._matGoldMLI.clone();
-    // The clone shares the barrel-scale foil textures; this ring is only a few cm,
-    // so swap in [1,1] foil clones with the smallPart roughness variant (higher
-    // floor) + a scalar roughness ≈0.6 so the small metallic part doesn't clip to
-    // white under bloom (F2 exposure fix). Null-safe headless (leaves inherited
-    // maps). Override ALL THREE maps so the repeat stays consistent across them.
-    const ringFoil = getMLIFoilMaps({ repeat: [1, 1], smallPart: true });
-    apertureRingMat.roughness = 0.6;
-    if (ringFoil) {
-      apertureRingMat.map = ringFoil.albedoMap;
-      apertureRingMat.normalMap = ringFoil.normalMap;
-      apertureRingMat.roughnessMap = ringFoil.roughnessMap;
-      apertureRingMat.emissiveMap = ringFoil.albedoMap;
-      apertureRingMat.needsUpdate = true;
-    }
-    this._foilMats.push(apertureRingMat);       // v6 orbital envMap target
-    const apertureRing = new THREE.Mesh(apertureRingGeo, apertureRingMat);
-    // §2-followup (round 8): +0.012·M (12 mm), 4 mm proud of the viewport so the
-    // gold rim sits clearly in front of the aperture glass.
-    apertureRing.position.set(0, M * 0.2, barrelH * 0.5 + M * 0.012);
-    apertureRing.rotation.x = -0.2;
-    apertureRing.name = 'LaserRing';
-    apertureRing.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;  // FIX_PLAN §2-followup
-    this.add(apertureRing);
+    // TOMBSTONE (2026-07-23, fore-end-hardware-labels-rework): the flat laser
+    // "aperture" — LaserBezel (bezel wall), LaserAperture (this.viewport glass
+    // disc), and LaserRing (gold apertureRing) — was DELETED here. It was a fixed
+    // forward-facing emissive disc physically embedded in the sensor-deck slab
+    // (xy inside the deck footprint, z 1.008 piercing 1.005–1.055) that only
+    // rendered via renderOrder tricks, and a fixed aperture can't track targets.
+    // Replaced by a gimbal-mounted Cassegrain telescope (LaserTelescope) built in
+    // _buildSensors, co-boresighted with the EO camera and articulation-tracked.
+    // this.viewport had NO external readers so the property is gone outright.
 
     // End caps
     // FIX_PLAN §2-followup (round 3): removed polygonOffset from cap material
@@ -2646,11 +2613,29 @@ export class PlayerSatellite extends THREE.Group {
   // --------------------------------------------------------------------------
   /** @private */
   _buildSensors() {
-    // Gimbal platform group (articulates toward targets — repositioned for Config G barrel)
+    // CENTRELINE REDESIGN (2026-07-23): the whale-net launcher owns the fore-cap
+    // CoM axis (0,0) so its recoil is torque-free. The sensor instruments are
+    // therefore arranged in a SYMMETRIC RING around that central launcher (not
+    // shoved to one side, which overhung an arm's strut-deploy path) and are all
+    // kept SHORTER than the launcher so a reeled-in catch parks on the protruding
+    // muzzle without smashing the optics. RING_R is the instrument ring radius;
+    // the four instruments sit at 45/135/225/315° so no single arm strut is
+    // blocked. The turret is FIXED (no gimbal tracking — that was dead code that
+    // never had a target set; removed 2026-07-23), so the ring geometry only has
+    // to clear the launcher at rest, which it does with margin (0.26−0.10 > 0.12).
+    const RING_R = M * 0.26;
+    this._sensorRingR = RING_R;
+    // Gimbal platform group — pivot on the CoM axis, at the fore cap (z=1.0M).
     this.sensorGimbal = new THREE.Group();
-    this.sensorGimbal.position.set(0, M * 0.25, M * 1.0);
+    this.sensorGimbal.position.set(0, 0, M * 1.0);
     this.sensorGimbal.name = 'SensorGimbal';
     this.add(this.sensorGimbal);
+    // Ring azimuths (deg) for EO / TELESCOPE / IR / LIDAR — a symmetric quad.
+    const RING_AZ = { eo: 45, tele: 135, ir: 225, lidar: 315 };
+    const ringXY = (azDeg) => new THREE.Vector2(
+      Math.cos(azDeg * Math.PI / 180) * RING_R,
+      Math.sin(azDeg * Math.PI / 180) * RING_R,
+    );
 
     // Shared gunmetal — same recipe as the LIDAR dome; used by the EO barrel and
     // the gimbal yoke members so the mechanism reads as one machined assembly.
@@ -2658,23 +2643,26 @@ export class PlayerSatellite extends THREE.Group {
       color: 0x55585f, metalness: 0.5, roughness: 0.55,
     });
 
-    // EO Camera: gunmetal barrel with a recessed dark lens + bright bezel
-    const camGeo = new THREE.CylinderGeometry(M * 0.12, M * 0.12, M * 0.3, 12);  // was 6-seg
+    // EO Camera: gunmetal barrel with a recessed dark lens + bright bezel.
+    // Ring slot (RING_AZ.eo); shortened to 0.22M so it stays aft of the launcher
+    // muzzle. Barrel axis +Z (fore).
+    const eoXY = ringXY(RING_AZ.eo);
+    const camGeo = new THREE.CylinderGeometry(M * 0.10, M * 0.10, M * 0.22, 12);
     const camLensMat = new THREE.MeshStandardMaterial({
       color: 0x111122, metalness: 0.7, roughness: 0.3,   // now the lens disc material
     });
     const eoCam = new THREE.Mesh(camGeo, gunmetalMat);   // barrel reads as metal housing
     eoCam.rotation.x = Math.PI / 2;
-    eoCam.position.set(M * 0.25, 0, M * 0.1);
+    eoCam.position.set(eoXY.x, eoXY.y, M * 0.11);
     eoCam.name = 'EO_Camera';
     this.sensorGimbal.add(eoCam);
 
     // Lens: dark disc 1 mm proud of the front (+Z) face (bury-don't-touch).
     // eoCam.rotation.x = +π/2 maps cylinder-local +Y → gimbal +Z (fore); the
-    // front face is at cylinder-local y = +0.15M (half the 0.3M length).
-    const eoLensGeo = new THREE.CircleGeometry(M * 0.085, 16);
+    // front face is at cylinder-local y = +0.11M (half the 0.22M length).
+    const eoLensGeo = new THREE.CircleGeometry(M * 0.07, 16);
     const eoLens = new THREE.Mesh(eoLensGeo, camLensMat);
-    eoLens.position.set(0, M * 0.151, 0);
+    eoLens.position.set(0, M * 0.111, 0);
     eoLens.rotation.x = -Math.PI / 2;   // circle +Z normal → cylinder-local +Y (outward)
     eoLens.name = 'EO_Lens';
     eoLens.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
@@ -2683,9 +2671,9 @@ export class PlayerSatellite extends THREE.Group {
     const eoBezelMat = new THREE.MeshStandardMaterial({
       color: 0xaabbcc, metalness: 0.85, roughness: 0.15,
     });
-    const eoBezelGeo = new THREE.RingGeometry(M * 0.085, M * 0.115, 16);
+    const eoBezelGeo = new THREE.RingGeometry(M * 0.07, M * 0.095, 16);
     const eoBezel = new THREE.Mesh(eoBezelGeo, eoBezelMat);
-    eoBezel.position.set(0, M * 0.1505, 0);   // distinct proud offset avoids a coplanar tie with the lens
+    eoBezel.position.set(0, M * 0.1115, 0);   // distinct proud offset avoids a coplanar tie with the lens
     eoBezel.rotation.x = -Math.PI / 2;
     eoBezel.name = 'EO_Bezel';
     eoBezel.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
@@ -2714,7 +2702,8 @@ export class PlayerSatellite extends THREE.Group {
     }
     this._foilMats.push(irMat);                 // v6 orbital envMap target
     const irSensor = new THREE.Mesh(irGeo, irMat);
-    irSensor.position.set(-M * 0.25, 0, M * 0.1);
+    const irXY = ringXY(RING_AZ.ir);
+    irSensor.position.set(irXY.x, irXY.y, M * 0.08);
     irSensor.name = 'IR_Sensor';
     this.sensorGimbal.add(irSensor);
 
@@ -2737,7 +2726,8 @@ export class PlayerSatellite extends THREE.Group {
       // which bloomed to a white blob (same fix class as the IR box above).
     });
     this.lidarDome = new THREE.Mesh(lidarGeo, lidarMat);
-    this.lidarDome.position.set(0, M * 0.15, M * 0.15);
+    const lidarXY = ringXY(RING_AZ.lidar);
+    this.lidarDome.position.set(lidarXY.x, lidarXY.y, M * 0.10);
     this.lidarDome.name = 'LIDAR_Dome';
     this.sensorGimbal.add(this.lidarDome);
 
@@ -2791,65 +2781,122 @@ export class PlayerSatellite extends THREE.Group {
     this.lidarLight.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;
     this.lidarDome.add(this.lidarLight);
 
-    // Sensor base plate — FIXED deck, re-parented from the articulating gimbal
-    // to the hull (`this`). Only the instruments (EO/IR/LIDAR, children of
-    // sensorGimbal) articulate; the deck they mount to stays put. Ship-local
-    // position is the gimbal origin (0, 0.25M, 1.0M) plus the old gimbal-local
-    // offset (0, -0.1M, +0.03M) = (0, 0.15M, 1.03M).
-    // §2-followup: keep the aft face clear of the front cap plane (z=1.0M); the
-    // deck sits forward of it so nothing straddles/z-fights the cap face.
-    // Plate shrunk r 0.35M → 0.26M so its silhouette stays inside the hull
-    // radius (0.40M) while still covering the instruments at x=±0.25M.
-    const basePlateR = M * 0.26;
+    // Sensor base plate — FIXED deck, an ANNULUS (ring) around the central net
+    // launcher (2026-07-23 centreline redesign): the launcher passes through the
+    // deck's centre bore on the CoM axis, and the four ring instruments mount to
+    // the deck's rim. Inner bore r 0.15M clears the launcher (r 0.12M); outer
+    // r 0.34M carries the RING_R=0.26M instrument circle and stays inside the
+    // hull (0.40M). Fixed to the hull (only the instruments articulate).
+    const deckInnerR = M * 0.15;
+    const deckOuterR = M * 0.34;
     const basePlateT = M * 0.05;
-    const basePlateGeo = new THREE.CylinderGeometry(basePlateR, basePlateR, basePlateT, 16);
+    const basePlateGeo = new THREE.RingGeometry(deckInnerR, deckOuterR, 32);
     const basePlate = new THREE.Mesh(basePlateGeo, this._matDark);
-    basePlate.rotation.x = Math.PI / 2;
-    basePlate.position.set(0, M * 0.15, M * 1.03);
+    // RingGeometry lies in the XY plane (+Z normal) → already faces fore; place
+    // it just fore of the cap plane (z=1.0M) with the §2-followup standoff.
+    basePlate.position.set(0, 0, M * 1.03);
     basePlate.name = 'SensorDeck';
     basePlate.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
     this.add(basePlate);
 
     // Thin fixed flange/skirt ring bridging the cap face (z=1.0M) to the deck's
-    // aft face. A short open cylinder from the cap plane to just under the plate,
-    // keeping the §2-followup 5 mm stagger (deck aft face ≈ z=1.0055M) so it
-    // does not re-straddle the cap plane.
-    const skirtGeo = new THREE.CylinderGeometry(basePlateR * 0.98, basePlateR * 0.98, M * 0.03, 16, 1, true);
+    // aft face — now a wider ring matching the annular deck's outer rim.
+    const skirtGeo = new THREE.CylinderGeometry(deckOuterR * 0.98, deckOuterR * 0.98, M * 0.03, 32, 1, true);
     const skirt = new THREE.Mesh(skirtGeo, this._matDark);
     skirt.rotation.x = Math.PI / 2;
-    skirt.position.set(0, M * 0.15, M * 1.015);
+    skirt.position.set(0, 0, M * 1.015);
     skirt.name = 'SensorDeckSkirt';
     skirt.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
     this.add(skirt);
 
-    // Static mount feet REMOVED (2026-07-23): they stayed put while the gimballed instruments articulated away from them; replaced by the gimbal-child yoke below.
+    // ── Gimbal hub ring — the articulating mount the four ring instruments sit
+    // on. An ANNULUS (inner r 0.14M clears the central launcher r 0.12M; outer
+    // r 0.22M) so the launcher passes through the gimbal's centre without ever
+    // touching it, at any articulation. Gimbal child → swivels with the optics.
+    const hubGeo = new THREE.RingGeometry(M * 0.14, M * 0.22, 32);
+    const hubRing = new THREE.Mesh(hubGeo, gunmetalMat);
+    hubRing.position.set(0, 0, M * 0.02);   // just fore of the pivot plane
+    hubRing.name = 'SensorHubRing';
+    hubRing.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+    this.sensorGimbal.add(hubRing);
 
-    // ── Gimbal yoke — visible mechanism connecting the instruments to the ship.
-    // The gimbal bearing itself is implied, hidden at the deck/cap junction
-    // (gimbal origin sits behind the deck slab); these members are gimbal
-    // children so they swivel with the instruments and always emerge from the
-    // hidden-bearing region regardless of articulation (yaw ±60°, pitch ±45° —
-    // points near the origin sweep tiny radii and stay inside the junction).
-    const yokeBarGeo = new THREE.BoxGeometry(M * 0.56, M * 0.05, M * 0.05);  // x span ±0.28: through both instrument bodies
-    const yokeBar = new THREE.Mesh(yokeBarGeo, gunmetalMat);
-    yokeBar.position.set(0, 0, M * 0.03);
-    yokeBar.name = 'SensorYokeBar';
-    yokeBar.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
-    this.sensorGimbal.add(yokeBar);
+    // Thin radial spokes from the hub rim out to each ring instrument, so the
+    // optics read as mounted to the turret rather than floating.
+    const spokeMat = gunmetalMat;
+    for (const azDeg of Object.values(RING_AZ)) {
+      const p = ringXY(azDeg);
+      const spoke = new THREE.Mesh(new THREE.BoxGeometry(M * 0.10, M * 0.03, M * 0.03), spokeMat);
+      spoke.position.set(p.x * 0.85, p.y * 0.85, M * 0.04);
+      spoke.rotation.z = azDeg * Math.PI / 180;   // long axis (local X) points radially
+      spoke.name = 'SensorSpoke';
+      spoke.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      this.sensorGimbal.add(spoke);
+    }
 
-    // Dome column — slanted strut from the bar/junction region up to the dome
-    // centre. Endpoint-oriented via setFromUnitVectors (never hand-set rotation
-    // on slanted runs). Its top ends inside the dome, hidden behind LIDAR_DomeBase.
-    const colA = new THREE.Vector3(0, 0, M * 0.03);            // buried in the yoke bar
-    const colB = new THREE.Vector3(0, M * 0.15, M * 0.15);     // dome centre (inside the dome, under its base cap)
-    const colDir = colB.clone().sub(colA);
-    const colGeo = new THREE.CylinderGeometry(M * 0.028, M * 0.035, colDir.length(), 10);
-    const yokeCol = new THREE.Mesh(colGeo, gunmetalMat);
-    yokeCol.position.copy(colA).addScaledVector(colDir, 0.5);
-    yokeCol.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), colDir.clone().normalize());
-    yokeCol.name = 'SensorYokeColumn';
-    yokeCol.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
-    this.sensorGimbal.add(yokeCol);
+    // ── Despin laser telescope (2026-07-23) — mounted in the RING_AZ.tele slot
+    // (co-boresighted with the EO camera: both are gimbal children pointing +Z,
+    // so their lines of sight stay parallel). Shortened (0.20M, r 0.09M) so its
+    // mouth stays AFT of the central net-launcher muzzle — a reeled-in catch
+    // parks on the protruding launcher, never on the optics. Tube axis +Z.
+    const teleXY = ringXY(RING_AZ.tele);
+    const teleR = M * 0.09;
+    const teleLen = M * 0.20;
+    const teleCenter = new THREE.Vector3(teleXY.x, teleXY.y, M * 0.10);
+    const teleGeo = new THREE.CylinderGeometry(teleR, teleR, teleLen, 16);
+    const telescope = new THREE.Mesh(teleGeo, gunmetalMat);
+    telescope.rotation.x = Math.PI / 2;   // cylinder +Y → +Z
+    telescope.position.copy(teleCenter);
+    telescope.name = 'LaserTelescope';
+    telescope.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+    this.sensorGimbal.add(telescope);
+
+    // Stray-light baffle — short open ring proud of the tube mouth (fore, +Z).
+    const baffleGeo = new THREE.CylinderGeometry(M * 0.10, M * 0.10, M * 0.05, 16, 1, true);
+    const baffleMat = new THREE.MeshStandardMaterial({
+      color: 0x2a2a30, metalness: 0.6, roughness: 0.5, side: THREE.DoubleSide,
+    });
+    const baffle = new THREE.Mesh(baffleGeo, baffleMat);
+    // Coaxial with the tube: the tube mesh is already rotated (axis → world +Z),
+    // so a child keeps tube-local +Y as the axis with NO extra rotation. (The old
+    // extra rotation.x=π/2 double-rotated it, poking its radius out past the fore
+    // face — which is how it used to over-protrude the net launcher.)
+    baffle.position.set(0, teleLen * 0.5 + M * 0.025, 0);
+    baffle.name = 'LaserBaffle';
+    baffle.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+    telescope.add(baffle);   // child of tube → tube-local Y is tube axis
+
+    // Recessed primary mirror — dark optic disc, ~2 cm INSIDE the tube mouth,
+    // with a faint blue emissive. Tube-local +Y is the fore axis.
+    const primaryGeo = new THREE.CircleGeometry(M * 0.075, 16);
+    const primaryMat = new THREE.MeshStandardMaterial({
+      color: 0x0a0a12, metalness: 0.4, roughness: 0.15,
+      emissive: 0x1133aa, emissiveIntensity: 0.25,
+    });
+    const primary = new THREE.Mesh(primaryGeo, primaryMat);
+    primary.position.set(0, teleLen * 0.5 - M * 0.02, 0);
+    primary.rotation.x = Math.PI / 2;   // circle +Z normal → tube-local +Y (fore)
+    primary.name = 'LaserPrimary';
+    primary.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+    telescope.add(primary);
+
+    // Secondary-obstruction dot — dark disc, 1 mm proud of the primary.
+    const secondaryGeo = new THREE.CircleGeometry(M * 0.025, 12);
+    const secondaryMat = new THREE.MeshStandardMaterial({
+      color: 0x0a0a12, metalness: 0.4, roughness: 0.15,
+    });
+    const secondary = new THREE.Mesh(secondaryGeo, secondaryMat);
+    secondary.position.set(0, teleLen * 0.5 - M * 0.019, 0);
+    secondary.rotation.x = Math.PI / 2;
+    secondary.name = 'LaserSecondary';
+    secondary.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+    telescope.add(secondary);
+
+    // Muzzle anchor — gimbal-local at the telescope mouth (articulation-tracked).
+    // Used as the DespinLaser beam origin via getLaserAperturePosition().
+    this._laserMuzzle = new THREE.Object3D();
+    this._laserMuzzle.position.set(teleXY.x, teleXY.y, M * 0.10 + teleLen * 0.5);
+    this._laserMuzzle.name = 'LaserMuzzle';
+    this.sensorGimbal.add(this._laserMuzzle);
   }
 
   // --------------------------------------------------------------------------
@@ -2871,19 +2918,18 @@ export class PlayerSatellite extends THREE.Group {
    * it). Because the magazine fires ONE pod at a time, two side-by-side tubes
    * would yaw the ship left or right per shot — the worst asymmetry. So this is
    * a SINGLE central launcher whose muzzles sit ON the x=0 centreline: every
-   * shot leaves from the axis → zero yaw. (Net-launch recoil is not simulated
-   * today, so this is correct-hardware plausibility now and future-proof if it
-   * ever is.)
+   * shot leaves from the axis → zero yaw. Net-launch recoil IS now simulated
+   * (see _applyMotherNetRecoil): the small residual y-offset produces a real
+   * pitch that RCS auto-nulls at an N₂ cost.
    *
-   * Dead-centre (0,0) itself is owned by the sensor turret (deck (0, 0.15M),
-   * r 0.26M, reaching down to y≈−0.11M); the laser aperture (0, 0.20M) is in
-   * the +Y half and is NOT the blocker. The closest on-axis home is the free
-   * −Y band directly below the deck: one launcher block on x=0 at y=−0.25M,
-   * r 0.12M. Verified clear of the deck (centre-to-centre 0.40M > r_deck+r 0.38M)
-   * and inside the hull (0.25M + 0.12M < 0.40M). Axis +Z, tail buried ~5 mm into
-   * the front cap (aft z≈0.995M, front z≈1.155M). The two "pods" are the upper
-   * and lower cell rows; both pods' muzzles are on x=0 (a small y stagger only),
-   * so neither pod's shot yaws the ship.
+   * Re-centering (2026-07-23): the launcher now sits DEAD-CENTRE on the CoM axis
+   * (0,0) — zero launch torque. The sensor turret was redesigned around it: the
+   * gimbal pivots on the axis and its four instruments (EO/IR/LIDAR/telescope)
+   * ring the launcher at RING_R=0.26M (45/135/225/315°), symmetric so no single
+   * arm strut is overhung, and all SHORTER than the launcher (muzzle z=1.30M vs
+   * optics ≤ z≈1.20M) so a reeled-in catch parks on the protruding launcher, not
+   * the optics. r 0.12M; inside the hull (0.12M < 0.40M). The two "pods" are the
+   * upper/lower cell rows straddling the axis by ±0.06M; both muzzles on x=0.
    */
   _buildNetPods() {
     // Shared pod housing material — gunmetal, same recipe as the LIDAR dome /
@@ -2903,15 +2949,24 @@ export class PlayerSatellite extends THREE.Group {
     this._netPodMuzzles = [];
     this._netPodCaps = [];
 
-    // Single central launcher block on the long axis (x=0), low-centre.
-    // 12-seg cylinder, length 0.16M. rotation.x = π/2 maps the cylinder axis
-    // (local +Y) → ship +Z (fore); default caps stay (closed ends). Centre at
-    // z=1.075M → aft face z=0.995M (buried in the cap), front face z=1.155M.
-    const launcherY = -M * 0.25;
-    const housingGeo = new THREE.CylinderGeometry(M * 0.12, M * 0.12, M * 0.16, 12);
+    // Single central launcher block on the long axis (x=0), now RE-CENTERED
+    // (2026-07-23): with the sensor turret lifted +0.18M, the launcher rises to
+    // y=−0.05M — essentially on the CoM centreline (was −0.25M). The residual
+    // 5 cm is the last clearance under the raised deck's aft rim; recoil torque
+    // now scales with this small offset (see _applyMotherNetRecoil), ~80% less
+    // than before, and RCS auto-nulls it. 12-seg cylinder, length 0.16M.
+    const launcherY = 0;                 // CENTRELINE: dead-centre on the CoM axis (zero launch torque)
+    this._netLauncherY = launcherY;      // SSOT for the recoil lever arm (now 0)
+    // Length 0.30M so the muzzle protrudes to z=1.30M — FURTHER FORE than every
+    // ring instrument (EO/IR/LIDAR/telescope reach ≤ z≈1.20M) — so a reeled-in
+    // catch parks on the launcher, never on the optics. Centre z = 1.0 + 0.15.
+    const LAUNCH_LEN = M * 0.30;
+    const LAUNCH_HALF = LAUNCH_LEN * 0.5;              // 0.15M
+    const launchCz = M * 1.0 + LAUNCH_HALF;            // 1.15M
+    const housingGeo = new THREE.CylinderGeometry(M * 0.12, M * 0.12, LAUNCH_LEN, 12);
     const housing = new THREE.Mesh(housingGeo, gunmetalMat);
     housing.rotation.x = Math.PI / 2;
-    housing.position.set(0, launcherY, M * 1.075);
+    housing.position.set(0, launcherY, launchCz);
     housing.name = 'NetLauncher';
     housing.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
     this.add(housing);
@@ -2920,9 +2975,11 @@ export class PlayerSatellite extends THREE.Group {
     // are the upper (pod 0) and lower (pod 1) rows; the two cells in a row are
     // side by side in ship X. On the housing (rotation.x = π/2) the local axes
     // map: local X → ship X, local Z → ship −Y, local Y → ship +Z (the proud
-    // offset). Front face is at local y = +0.08M (half the 0.16M length).
+    // offset). Front face is at local y = +0.15M (half the 0.30M length).
+    const faceLocalY = LAUNCH_HALF;                    // front face in housing-local Y
     const CELL_DX = M * 0.055;   // ship-X half-spacing of the two cells in a row
     const ROW_DZ  = M * 0.06;    // local-Z (→ ship ∓Y) half-spacing of the rows
+    const muzzleZ = launchCz + LAUNCH_HALF;            // world z of the front face (1.30M)
     for (let pod = 0; pod < 2; pod++) {
       // pod 0 → upper row (local Z = −ROW_DZ → ship +Y), pod 1 → lower row.
       const lz = pod === 0 ? -ROW_DZ : ROW_DZ;
@@ -2932,7 +2989,7 @@ export class PlayerSatellite extends THREE.Group {
 
         const holeGeo = new THREE.CircleGeometry(M * 0.030, 12);
         const hole = new THREE.Mesh(holeGeo, cellHoleMat);
-        hole.position.set(lx, M * 0.081, lz);   // 1 mm proud of the 0.08M half-length
+        hole.position.set(lx, faceLocalY + M * 0.001, lz);   // 1 mm proud of the front face
         hole.rotation.x = -Math.PI / 2;
         hole.name = `NetPodCellHole_${pod}_${cell}`;
         hole.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
@@ -2940,7 +2997,7 @@ export class PlayerSatellite extends THREE.Group {
 
         const capGeo = new THREE.CircleGeometry(M * 0.028, 12);
         const cap = new THREE.Mesh(capGeo, cellCapMat);
-        cap.position.set(lx, M * 0.0815, lz);   // distinct offset — no coplanar tie
+        cap.position.set(lx, faceLocalY + M * 0.0015, lz);   // distinct offset — no coplanar tie
         cap.rotation.x = -Math.PI / 2;
         cap.name = `NetPodCellCap_${pod}_${cell}`;
         cap.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
@@ -2952,12 +3009,11 @@ export class PlayerSatellite extends THREE.Group {
 
       // Muzzle anchor — invisible Object3D at the pod-row front centre, a child
       // of the ship frame (NOT the rotated housing). CRITICAL: x = 0 for BOTH
-      // pods so neither shot yaws the ship; the two pods differ only in a small
-      // y stagger (matching their cell rows). Recoil for either pod runs down
-      // the ship's centreline.
+      // pods so neither shot yaws the ship; with launcherY=0 the two pods differ
+      // only by a tiny ±ROW_DZ y stagger straddling the CoM axis → ~zero pitch.
       const muzzleY = launcherY - lz;   // ship Y = housingY − localZ
       const muzzle = new THREE.Object3D();
-      muzzle.position.set(0, muzzleY, M * 1.155);
+      muzzle.position.set(0, muzzleY, muzzleZ);
       muzzle.name = `NetPodMuzzle_${pod}`;
       this.add(muzzle);
       this._netPodMuzzles.push(muzzle);
@@ -3013,6 +3069,18 @@ export class PlayerSatellite extends THREE.Group {
     return pos;
   }
 
+  /**
+   * World position of the despin-laser telescope muzzle (gimbal-mounted, so it
+   * tracks sensor articulation). Used by DespinLaser for the BEAM VISUAL origin;
+   * falls back to the hull origin when the muzzle anchor is missing (headless
+   * builds without the sensor suite).
+   */
+  getLaserAperturePosition() {
+    const pos = new THREE.Vector3();
+    if (this._laserMuzzle) this._laserMuzzle.getWorldPosition(pos); else this.getWorldPosition(pos);
+    return pos;
+  }
+
   // --------------------------------------------------------------------------
   // 8. Navigation Lights
   // --------------------------------------------------------------------------
@@ -3054,6 +3122,126 @@ export class PlayerSatellite extends THREE.Group {
     this.starboardLight.name = 'NavLight_Starboard';
     this.add(this.starboardLight);
     this.starboardLight.add(this._makeLightHalo(0x00ff00, HALO, 1.6, LFX.NAV_HALO_OPACITY));
+  }
+
+  // --------------------------------------------------------------------------
+  // 8b. Avionics hardware (star trackers, TT&C, sun sensors, GPS)
+  // --------------------------------------------------------------------------
+  /**
+   * @private — Body-mounted (NOT gimbal) attitude/navigation/comms hardware.
+   * All DETAIL renderOrder; buried-don't-touch standoffs (no coplanar ties).
+   * Mounted only in the usable bare-MLI zones (fore/aft shoulder bands + the
+   * fore-shoulder azimuth wedges between keep-outs) — never on PV cells. Not
+   * added to the _detailMeshes cull allowlist (they read at inspect range).
+   * (2026-07-23, fore-end-hardware-labels-rework.)
+   */
+  _buildAvionics() {
+    const barrelR = M * 0.40;
+    const barrelHZ = M * 1.0;   // fore cap plane (half of the 2.0M barrel)
+    const deg = Math.PI / 180;
+    const gunmetal = new THREE.MeshStandardMaterial({ ...AVIONICS_GUNMETAL });
+    const darkOptic = new THREE.MeshStandardMaterial({ ...AVIONICS_DARK_OPTIC });
+    const thermalWhite = new THREE.MeshStandardMaterial({ ...AVIONICS_THERMAL_WHITE });
+    const yUp = new THREE.Vector3(0, 1, 0);
+    const zFwd = new THREE.Vector3(0, 0, 1);
+    const radialAt = (azDeg) => new THREE.Vector3(Math.cos(azDeg * deg), Math.sin(azDeg * deg), 0);
+
+    // ── Star trackers ×2 — baffle tubes with a recessed dark optic in the mouth.
+    // Fore shoulder band az 84°/96°, z 0.90; boresights canted ~30° off +Z toward
+    // up-outward (the ±15° azimuth split comes from the 84°/96° mount pair).
+    const stR = M * 0.05;
+    const stLen = M * 0.14;
+    [84, 96].forEach((azDeg, i) => {
+      const radial = radialAt(azDeg);
+      const boresight = zFwd.clone().multiplyScalar(Math.cos(30 * deg))
+        .addScaledVector(radial, Math.sin(30 * deg)).normalize();
+      const base = radial.clone().multiplyScalar(barrelR).setZ(barrelHZ * 0.90);
+      const tubeGeo = new THREE.CylinderGeometry(stR, stR, stLen, 12);
+      const tube = new THREE.Mesh(tubeGeo, gunmetal);
+      tube.quaternion.setFromUnitVectors(yUp, boresight);   // tube axis (+Y) → boresight
+      tube.position.copy(base).addScaledVector(boresight, stLen * 0.5);
+      tube.name = `StarTracker_${i}`;
+      tube.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      this.add(tube);
+      // Recessed optic disc ~1 cm inside the mouth (tube-local +Y is the mouth).
+      const optic = new THREE.Mesh(new THREE.CircleGeometry(stR * 0.8, 12), darkOptic);
+      optic.position.set(0, stLen * 0.5 - M * 0.01, 0);
+      optic.rotation.x = Math.PI / 2;   // circle +Z → tube-local +Y (mouth)
+      optic.name = `StarTracker_${i}_Optic`;
+      optic.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      tube.add(optic);
+    });
+
+    // ── TT&C omni antennas ×2 — whips on a small base puck, radially outward.
+    // Opposite hemispheres: az 270° z +0.92 (fore) and az 90° z −0.92 (aft).
+    [[270, 0.92], [90, -0.92]].forEach(([azDeg, zFrac], i) => {
+      const radial = radialAt(azDeg);
+      const base = radial.clone().multiplyScalar(barrelR).setZ(barrelHZ * zFrac);
+      const puck = new THREE.Mesh(new THREE.CylinderGeometry(M * 0.02, M * 0.02, M * 0.02, 12), gunmetal);
+      puck.quaternion.setFromUnitVectors(yUp, radial);
+      puck.position.copy(base).addScaledVector(radial, M * 0.008);   // base sits proud
+      puck.name = `TTC_Omni_${i}_Base`;
+      puck.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      this.add(puck);
+      const whipGeo = new THREE.CylinderGeometry(M * 0.008, M * 0.008, M * 0.18, 8);
+      const whip = new THREE.Mesh(whipGeo, gunmetal);
+      whip.quaternion.setFromUnitVectors(yUp, radial);
+      whip.position.copy(base).addScaledVector(radial, M * 0.09);
+      whip.name = `TTC_Omni_${i}`;
+      whip.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      this.add(whip);
+    });
+
+    // ── MGA patch — tangent-mounted flat box, 2 mm proud, pale thermal-white.
+    // az ~25° fore-shoulder wedge, z 0.87.
+    {
+      const azDeg = 25, radial = radialAt(azDeg);
+      const patch = new THREE.Mesh(new THREE.BoxGeometry(M * 0.16, M * 0.16, M * 0.02), thermalWhite);
+      patch.quaternion.setFromUnitVectors(zFwd, radial);   // box +Z (face) → radial
+      patch.position.copy(radial).multiplyScalar(barrelR + M * 0.012).setZ(barrelHZ * 0.87);
+      patch.name = 'MGA_Patch';
+      patch.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      this.add(patch);
+    }
+
+    // ── Sun sensors ×4 — pucks with a tiny dark window disc. Two on the fore
+    // cap's −Y band flanking the net launcher; two on barrel fore-shoulder wedges.
+    const ssR = M * 0.025, ssT = M * 0.015;
+    const makeSunSensor = (idx, pos, axis) => {
+      const puck = new THREE.Mesh(new THREE.CylinderGeometry(ssR, ssR, ssT, 12), gunmetal);
+      puck.quaternion.setFromUnitVectors(yUp, axis);
+      puck.position.copy(pos);
+      puck.name = `SunSensor_${idx}`;
+      puck.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      this.add(puck);
+      const win = new THREE.Mesh(new THREE.CircleGeometry(ssR * 0.5, 10), darkOptic);
+      win.position.set(0, ssT * 0.5 + M * 0.001, 0);
+      win.rotation.x = Math.PI / 2;
+      win.name = `SunSensor_${idx}_Window`;
+      win.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      puck.add(win);
+    };
+    // Fore-cap pair: flank the −Y net launcher, facing +Z.
+    makeSunSensor(0, new THREE.Vector3(M * 0.28, -M * 0.20, barrelHZ + ssT * 0.5), zFwd);
+    makeSunSensor(1, new THREE.Vector3(-M * 0.28, -M * 0.20, barrelHZ + ssT * 0.5), zFwd);
+    // Barrel pair: az 150° and 205°, z 0.90, radial-out.
+    [150, 205].forEach((azDeg, k) => {
+      const radial = radialAt(azDeg);
+      const pos = radial.clone().multiplyScalar(barrelR + ssT * 0.5).setZ(barrelHZ * 0.90);
+      makeSunSensor(2 + k, pos, radial);
+    });
+
+    // ── GPS patches ×2 — flat squares 0.07M, az ~340° fore-shoulder wedge,
+    // z 0.87 and 0.95, 2 mm proud.
+    [0.87, 0.95].forEach((zFrac, i) => {
+      const azDeg = 340, radial = radialAt(azDeg);
+      const patch = new THREE.Mesh(new THREE.BoxGeometry(M * 0.07, M * 0.07, M * 0.02), thermalWhite);
+      patch.quaternion.setFromUnitVectors(zFwd, radial);
+      patch.position.copy(radial).multiplyScalar(barrelR + M * 0.012).setZ(barrelHZ * zFrac);
+      patch.name = `GPS_Patch_${i}`;
+      patch.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      this.add(patch);
+    });
   }
 
   // --------------------------------------------------------------------------
@@ -3197,10 +3385,6 @@ export class PlayerSatellite extends THREE.Group {
   // ANIMATION CONTROL API
   // ==========================================================================
 
-  /** Set sensor gimbal target (world position vector or null) */
-  setSensorTarget(worldPos) {
-    this._sensorTarget = worldPos;
-  }
 
   /** Set tether reel state (index 0-7, state: 'ready'|'deployed'|'empty') */
   setTetherState(index, state) {
@@ -3242,6 +3426,12 @@ export class PlayerSatellite extends THREE.Group {
     if (Constants.FEATURE_FLAGS.RECOIL_PHYSICS) {
       this._tickRecoilRcs(gameDt);
     }
+
+    // --- Mother-net recoil: integrate the transient hull pitch and let RCS
+    // (attitude hold) spring it back to zero. Ungated — only the mother net
+    // feeds _recoilAngularVel/_recoilPitchAngle (crossbow angular stays behind
+    // RECOIL_PHYSICS above), so this never touches unrelated behaviour.
+    this._tickRecoilAttitude(gameDt);
 
     // --- Apply accumulated thrust ---
     this._applyThrust(gameDt);
@@ -3300,6 +3490,20 @@ export class PlayerSatellite extends THREE.Group {
 
     this._orientAlongVelocity();
 
+    // Transient recoil attitude rides on top of the settled heading (applied
+    // here so it also shows under autopilot/inspection holds, which
+    // _orientAlongVelocity early-returns from). Both springs settle in ~2 s.
+    //   • pitch (+X): mother whale-net launch off the CoM axis
+    //   • yaw   (+Y): crossbow / dual-fire angular residual (C-11)
+    if (this._recoilPitchAngle !== 0) {
+      this._qRecoil.setFromAxisAngle(this._vRecoilPitchAxis, this._recoilPitchAngle);
+      this.quaternion.multiply(this._qRecoil);
+    }
+    if (this._recoilYawAngle !== 0) {
+      this._qRecoil.setFromAxisAngle(this._vRecoilYawAxis, this._recoilYawAngle);
+      this.quaternion.multiply(this._qRecoil);
+    }
+
     // --- Solar power ---
     this._updateSolarPower(sunDirection);
 
@@ -3356,7 +3560,8 @@ export class PlayerSatellite extends THREE.Group {
     this._updateRosaPanels(dt);
     this._animateSolarTracking(dt, sunDirection);
     this._animateRosaGlow(dt);
-    this._animateSensorGimbal(dt);
+    // (sensor gimbal tracking removed 2026-07-23 — see _buildSensors: the turret
+    // is a FIXED ring around the central launcher; _sensorTarget was never set.)
     this._animateNavLights(dt);
     this._animateThrusterGlow(dt);
     this._animateLidarPulse(dt);
@@ -3603,31 +3808,6 @@ export class PlayerSatellite extends THREE.Group {
       mat.emissive.setHex(hex);
       mat.emissiveIntensity = intensity;
     }
-  }
-
-  /** @private Sensor gimbal points toward selected target */
-  _animateSensorGimbal(dt) {
-    if (!this._sensorTarget || !this.sensorGimbal) return;
-
-    // Get target direction in local space
-    this.sensorGimbal.getWorldPosition(_v3TmpA);
-    const localDir = _v3TmpB.copy(this._sensorTarget).sub(_v3TmpA)
-      .applyQuaternion(_qInvTmp.copy(this.quaternion).invert());
-
-    // Compute yaw/pitch for gimbal
-    const yaw = Math.atan2(localDir.x, localDir.z);
-    const pitch = Math.atan2(localDir.y, Math.sqrt(localDir.x * localDir.x + localDir.z * localDir.z));
-
-    // Clamp rotation range
-    const maxYaw = Math.PI / 3;
-    const maxPitch = Math.PI / 4;
-    const clampedYaw = Math.max(-maxYaw, Math.min(maxYaw, yaw));
-    const clampedPitch = Math.max(-maxPitch, Math.min(maxPitch, pitch));
-
-    // Smooth interpolation
-    const speed = 2.0 * dt;
-    this.sensorGimbal.rotation.y += (clampedYaw - this.sensorGimbal.rotation.y) * speed;
-    this.sensorGimbal.rotation.x += (-clampedPitch - this.sensorGimbal.rotation.x) * speed;
   }
 
   /** @private Navigation and docking lights blinking */
@@ -3948,6 +4128,98 @@ export class PlayerSatellite extends THREE.Group {
   }
 
   /**
+   * (b) Reel-in momentum — ANGULAR coupling (2026-07-23). Hauling a heavy catch
+   * on a tether that attaches at the fore muzzle applies a torque that swings
+   * the Mother's nose toward the catch. LassoSystem already applies the LINEAR
+   * CoM pull (`_rcsVelocity`); this adds the attitude tug: the lateral (off
+   * fore-axis) component of the tether direction, scaled by the catch/ship mass
+   * ratio, drives the yaw/pitch springs (which RCS then nulls back to neutral).
+   * A catch reeled straight down the centreline (lateral ≈ 0) produces no tug —
+   * mirroring the launch doctrine that only OFF-axis loads disturb attitude.
+   *
+   * @param {THREE.Vector3} worldToCatchDir — unit direction from ship to catch (world)
+   * @param {number} massRatio — m_catch / (m_catch + m_ship), 0..1
+   * @param {number} dt — seconds
+   */
+  applyReelTorque(worldToCatchDir, massRatio, dt) {
+    if (!Constants.FEATURE_FLAGS.RECOIL_PHYSICS) return;
+    if (!worldToCatchDir || !(massRatio > 0)) return;
+    this._qInvScratch = this._qInvScratch || new THREE.Quaternion();
+    this._vReelScratch = this._vReelScratch || new THREE.Vector3();
+    this._qInvScratch.copy(this.quaternion).invert();
+    const local = this._vReelScratch.copy(worldToCatchDir).applyQuaternion(this._qInvScratch);
+    const GAIN = Constants.LASSO_REEL_TORQUE_GAIN ?? 0.8;
+    // Yaw (+Y): nose (+Z) turns toward +X for +θ → tug by +local.x.
+    // Pitch (+X): nose (+Z) turns toward −Y for +θ → tug toward +Y by −local.y.
+    this._recoilYawVel   += GAIN * massRatio * local.x * dt;
+    this._recoilPitchVel += -GAIN * massRatio * local.y * dt;
+  }
+
+  /**
+   * Apply REAL recoil from a Mother whale-net launch (Newton's 3rd law).
+   *
+   * Unlike the crossbow (which only recoils translationally), the Mother net
+   * muzzle sits OFF the centre of mass — on x=0 (no yaw) but 0.25 m below the
+   * CoM in y (the launcher is packaged in the free −Y band below the sensor
+   * turret that owns dead-centre). So a shot produces BOTH:
+   *   • linear recoil  Δv = m_net·v_launch / m_mother  (along −fore)
+   *   • pitch torque    τ = r_muzzle × F_recoil        (about +X, from the y offset)
+   * Both are auto-nulled by RCS at a cold-gas N₂ cost (mirrors the crossbow's
+   * auto-compensation), so the visible result is a transient shudder+pitch that
+   * settles, and the real, permanent cost is propellant. A CENTRED muzzle would
+   * make the τ term vanish — this is exactly the "launch off-axis destabilises
+   * the Mother" doctrine, now actually simulated.
+   *
+   * @param {{ podIndex?: number }} data — NET_FIRED payload (source: 'mother')
+   * @private
+   */
+  _applyMotherNetRecoil(data) {
+    const LARGE = Constants.CAPTURE_NET?.LARGE;
+    if (!LARGE) return;
+    const netMass = LARGE.MASS || 1.95;            // kg (net + hub)
+    const vLaunch = LARGE.LAUNCH_SPEED || 10.0;    // m/s
+    const motherMass = this.mass || 130;           // kg
+    const podIndex = data?.podIndex ?? 0;
+
+    // ── Linear recoil: p = m_net·v / m_mother, backward along the ship's fore
+    // axis (net departs +Z fore → hull recoils −Z). Same RECOIL_SCALE + RCS
+    // auto-null as the crossbow so the two read consistently.
+    const RECOIL_SCALE = 0.1;
+    const recoilSpeed = (netMass * vLaunch) / motherMass;   // m/s
+    const recoilDv = recoilSpeed * M * RECOIL_SCALE;        // scene units/s
+    const backward = new THREE.Vector3(0, 0, -1)
+      .applyQuaternion(this.quaternion)
+      .multiplyScalar(recoilDv);
+    this._rcsVelocity.add(backward);
+    this._autoRcsCompensation(recoilDv);   // null it + bill N₂ (crossbow pattern)
+    this._frameRecoilDv = 0;               // one-shot; not part of dual-fire tracking
+    this._frameRecoilCount = 0;
+    this._frameN2Consumed = 0;
+
+    // ── Angular recoil: torque impulse from the muzzle lever arm about the CoM.
+    // Force impulse magnitude J = m_net·v (N·s) acts along −fore at the muzzle;
+    // the y-offset of the FIRING pod's muzzle turns it into a pitch impulse
+    // J·|y| (N·m·s). With the launcher centred (launcherY=0) the muzzles only
+    // straddle the axis by ±ROW_DZ, so this is now a TINY residual that averages
+    // to zero across the magazine (upper vs lower pod pitch opposite ways).
+    const podMuzzle = this._netPodMuzzles && this._netPodMuzzles[podIndex];
+    const muzzleLocalY = podMuzzle ? podMuzzle.position.y : (this._netLauncherY ?? 0);
+    const leverY_m = Math.abs(muzzleLocalY) / M;             // metres off the CoM axis
+    const impulse = netMass * vLaunch;                       // N·s
+    const torqueImpulse = impulse * leverY_m;                // N·m·s (pitch about +X)
+    const I_mother = motherMass * 0.25;                      // kg·m² (r≈0.5 m cylinder)
+    // Pitch sign follows the firing muzzle's side of the axis, so the upper and
+    // lower pods kick opposite ways (net-zero bias across the magazine). RCS
+    // nulls it regardless. A truly centred muzzle (y=0) → zero pitch.
+    const pitchSign = muzzleLocalY >= 0 ? -1 : 1;
+    this._recoilPitchVel += pitchSign * (torqueImpulse / I_mother);   // rad/s
+
+    // Cosmetic + comms: a whale launch is a heavy event; a subtle mesh kick is
+    // handled by LassoSystem's _recoilOffset. Nothing else to do here.
+    void podIndex;
+  }
+
+  /**
    * Apply recoil momentum from crossbow arm firing.
    * Newton's 3rd law: p_recoil = m_arm × v_launch / m_mother
    * Single Weaver at 10 m/s: 6.6 × 10 / 130 = 0.508 m/s recoil
@@ -4065,7 +4337,11 @@ export class PlayerSatellite extends THREE.Group {
     // Approximate MOI for a 130 kg cylinder of radius 0.5 m
     const I_mother = (this.mass || 130) * 0.25; // kg·m²
     const deltaOmega = torqueImpulse / I_mother;
-    this._recoilAngularVel += deltaOmega;
+    this._recoilAngularVel += deltaOmega;      // legacy C-11 scalar (RCS-nulled, HUD bookkeeping)
+    // 2026-07-23: also drive the REAL transient yaw so the dual-fire residual
+    // actually perturbs the hull (the scalar above was never applied to
+    // orientation). Yaw about the ship's +Y axis; RCS springs it back in ~2 s.
+    this._recoilYawVel += deltaOmega;
   }
 
   /**
@@ -4091,6 +4367,39 @@ export class PlayerSatellite extends THREE.Group {
   }
 
   /**
+   * Integrate the mother-net recoil pitch and let RCS attitude-hold spring it
+   * back to zero. Models the muzzle-lever-arm kick as a critically-damped 2nd
+   * order system: the launch injects angular velocity (`_recoilAngularVel`),
+   * RCS applies a restoring torque proportional to the pitch error and a
+   * damping torque proportional to the rate, so the hull kicks then recovers to
+   * neutral in ~2 s (ζ≈1). The propellant cost of the correction is billed at
+   * fire time (via _autoRcsCompensation for the linear part); this method is the
+   * visible attitude transient. No-op once both settle. @private
+   * @param {number} dt seconds
+   */
+  _tickRecoilAttitude(dt) {
+    const settling = this._recoilPitchVel !== 0 || this._recoilPitchAngle !== 0
+      || this._recoilYawVel !== 0 || this._recoilYawAngle !== 0;
+    if (!settling) return;
+    // Natural frequency ω (rad/s) for a ~2 s settle; ζ=1 → c=2ω, k=ω².
+    const OMEGA = Math.PI;            // ~2 s period → ~2 s critically-damped settle
+    const k = OMEGA * OMEGA;
+    const c = 2 * OMEGA;
+    // Semi-implicit integration (stable at large dt) for each axis independently.
+    this._recoilPitchVel += (-k * this._recoilPitchAngle - c * this._recoilPitchVel) * dt;
+    this._recoilPitchAngle += this._recoilPitchVel * dt;
+    this._recoilYawVel += (-k * this._recoilYawAngle - c * this._recoilYawVel) * dt;
+    this._recoilYawAngle += this._recoilYawVel * dt;
+    // Settle to exact zero once negligible (avoids perpetual tiny residuals).
+    if (Math.abs(this._recoilPitchVel) < 1e-5 && Math.abs(this._recoilPitchAngle) < 1e-5) {
+      this._recoilPitchVel = 0; this._recoilPitchAngle = 0;
+    }
+    if (Math.abs(this._recoilYawVel) < 1e-5 && Math.abs(this._recoilYawAngle) < 1e-5) {
+      this._recoilYawVel = 0; this._recoilYawAngle = 0;
+    }
+  }
+
+  /**
    * C-11: Apply induced torque from CoM offset during recoil.
    * Called by ArmManager when both RECOIL_PHYSICS and COM_TRACKING are enabled.
    * The torque vector comes from computeInducedTorque(comPos, recoilForce).
@@ -4104,6 +4413,10 @@ export class PlayerSatellite extends THREE.Group {
     const I_mother = (this.mass || 130) * 0.25; // kg·m²
     const mag = Math.sqrt(torqueVec.x ** 2 + torqueVec.y ** 2 + torqueVec.z ** 2);
     this._recoilAngularVel += mag / I_mother;
+    // 2026-07-23: also perturb the visible transient. The CoM-offset induced
+    // torque from asymmetric fire is dominantly a yaw/roll about +Y at ship
+    // scale; feed the magnitude into the yaw spring (sign follows the residual).
+    this._recoilYawVel += (torqueVec.y >= 0 ? 1 : -1) * (mag / I_mother);
   }
 
   /**

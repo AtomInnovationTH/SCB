@@ -606,7 +606,8 @@ class GameFlowManager {
       this._applyStartLocation();
 
       // Reset target selection (imported singleton — emits TARGET_CLEARED → DebrisWireframe self-clears)
-      targetSelector.setTarget(null);
+      // silent: reset clear, not a real target loss — suppresses the audio earcon.
+      targetSelector.setTarget(null, { silent: true });
 
       // Reset arms (fresh ArmUnits — upgrades re-applied below)
       if (armManager) armManager.reset();
@@ -1421,7 +1422,8 @@ class GameFlowManager {
     if (player.resetRosaFurlState) player.resetRosaFurlState();
 
     // Reset target selection (imported singleton — emits TARGET_CLEARED → DebrisWireframe self-clears)
-    targetSelector.setTarget(null);
+    // silent: reset clear, not a real target loss — suppresses the audio earcon.
+    targetSelector.setTarget(null, { silent: true });
 
     // Reset V3 arm manager
     if (armManager) armManager.reset();

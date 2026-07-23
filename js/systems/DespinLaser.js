@@ -140,7 +140,13 @@ export class DespinLaser {
   /** @private update/create the cyan mother→target beam (no-op without a scene). */
   _drawBeam(target) {
     if (!this._scene || !this._player) return;
-    const motherPos = this._player.getPosition ? this._player.getPosition() : null;
+    // BEAM VISUAL origin uses the gimbal-mounted telescope muzzle so the beam
+    // emerges from the aperture and tracks sensor articulation. NOTE: the range
+    // check in _inRange() intentionally stays on getPosition() (hull-center
+    // range is the gameplay-correct metric); only the visual origin moves here.
+    const motherPos = (this._player && typeof this._player.getLaserAperturePosition === 'function')
+      ? this._player.getLaserAperturePosition()
+      : (this._player.getPosition ? this._player.getPosition() : null);
     const tPos = this._targetPos();
     if (!motherPos || !tPos) return;
     if (!this._beam) {

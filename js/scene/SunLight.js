@@ -1247,6 +1247,17 @@ export class SunLight {
     return perpendicular.length() < Constants.EARTH_RADIUS;
   }
 
+  /**
+   * Public: is a world position currently in sunlight (i.e. NOT in Earth's
+   * cylindrical shadow)? Wraps `_isInEarthShadow` so callers (e.g. GlintSystem)
+   * can eclipse-gate effects without duplicating the shadow math.
+   * @param {THREE.Vector3} pos — world position to test
+   * @returns {boolean}
+   */
+  isPointSunlit(pos) {
+    return !this._isInEarthShadow(pos);
+  }
+
   // ==========================================================================
   // PUBLIC ACCESSORS
   // ==========================================================================

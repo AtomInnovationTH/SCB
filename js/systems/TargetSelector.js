@@ -66,7 +66,10 @@ export class TargetSelector {
       this._recommendedTool = null;
       this._toolAlternatives = [];
       this._toolIndex = 0;
-      eventBus.emit(Events.TARGET_CLEARED);
+      // Forward context so a programmatic reset clear (context.silent) can
+      // suppress the "target lost" earcon — a reset never had a target the
+      // player engaged, so the descending cue would just be startup noise.
+      eventBus.emit(Events.TARGET_CLEARED, context);
     }
   }
 

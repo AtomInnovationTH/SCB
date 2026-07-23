@@ -318,14 +318,22 @@ class AudioSystem {
       this._playLockDeduped();
     });
 
-    eventBus.on(Events.TARGET_CLEARED, () => {
+    eventBus.on(Events.TARGET_CLEARED, (data) => {
+      // A programmatic reset clear (mission init) passes silent:true — no target
+      // was ever engaged, so skip the "target lost" earcon.
+      if (data && data.silent) return;
       this.playTargetLost();
     });
 
     // Net-range crossing INTO range → the lock earcon (the "there it is" payoff
     // after autopilot closes the gap, and the tease lock at start). This is the
     // single trustworthy "now actionable" cue.
-    eventBus.on(Events.TARGET_IN_RANGE, () => {
+    eventBus.on(Events.TARGET_IN_RANGE, (data) => {
+      // Only the player selecting a target should ping. The game's automatic
+      // lock (startup tease debris, ambient reacquire) fires TARGET_IN_RANGE
+      // unprompted — an anonymous earcon the player did nothing to cause teaches
+      // no vocabulary, so it is tagged autoLock and stays silent here.
+      if (data && data.autoLock) return;
       this._playLockDeduped();
     });
 
@@ -372,12 +380,6 @@ class AudioSystem {
       this.playDepartureSwell(dur);
     });
     eventBus.on(Events.HUD_POWER_ON, () => {
-      // Record when comms crackle fires so a near-simultaneous lock earcon can
-      // be deferred out of its shadow (startup legibility — see
-      // _playLockDeduped). Use ctx time when available to match scheduling.
-      this._powerOnAt = (this.ctx && typeof this.ctx.currentTime === 'number')
-        ? this.ctx.currentTime
-        : (Date.now() / 1000);
       this.playCommsCrackle();
     });
 
@@ -2806,33 +2808,7 @@ class AudioSystem {
    */
   _playLockDeduped() {
     const t = (this.ctx && typeof this.ctx.currentTime === 'number') ? this.ctx.currentTime : (Date.now() / 1000);
-    // A startup lock is already scheduled to play — drop any further trigger
-    // until it resolves so nothing plays out-of-band before the deferred ping.
-    if (this._lockDeferPending) return;
     if (this._lastLockAt != null && (t - this._lastLockAt) < 0.25) return;
-
-    // Startup legibility: the comms crackle ("comms online") and this lock
-    // earcon ("target locked") both fire in the first ~0.4 s of a new mission
-    // (the tease debris is already in range at spawn) and read as one
-    // undifferentiated blip cluster. If a lock would land within ~1.0 s of the
-    // HUD power-on, defer it so the crackle finishes first and the ping lands
-    // ~1.0 s later as its own readable event. Only the first post-power-on lock
-    // is deferred; further triggers are dropped by the _lockDeferPending guard
-    // above until the deferred play resolves.
-    if (this._powerOnAt != null && !this._lockDeferPending) {
-      const sincePowerOn = t - this._powerOnAt;
-      if (sincePowerOn >= 0 && sincePowerOn < 1.0) {
-        this._lastLockAt = t;
-        this._lockDeferPending = true;
-        const delayMs = Math.max(0, (1.0 - sincePowerOn) * 1000);
-        timerManager.setTimeout(() => {
-          this._lockDeferPending = false;
-          this.playTargetLock();
-        }, delayMs, { owner: this });
-        return;
-      }
-    }
-
     this._lastLockAt = t;
     this.playTargetLock();
   }
@@ -2850,16 +2826,15 @@ class AudioSystem {
     const notes = [523, 659];
     const noteDur = 0.06; // 60ms each
 
-    // Delay node for a slightly longer reverb tail so the lock reads as a
-    // "sensor ping" distinct from the dry UI/comms blips.
-    const delay = ctx.createDelay(0.5);
-    delay.delayTime.value = 0.11;
+    // Delay node for slight reverb tail
+    const delay = ctx.createDelay(0.3);
+    delay.delayTime.value = 0.08;
     const feedback = ctx.createGain();
-    feedback.gain.value = 0.32;
+    feedback.gain.value = 0.2;
     delay.connect(feedback);
     feedback.connect(delay);
     const delayGain = ctx.createGain();
-    delayGain.gain.value = 0.28;
+    delayGain.gain.value = 0.25;
     delay.connect(delayGain);
     delayGain.connect(this.sfxBus);
 
@@ -2887,7 +2862,7 @@ class AudioSystem {
         feedback.disconnect();
         delayGain.disconnect();
       } catch (e) { /* already disconnected */ }
-    }, 900, { owner: this });
+    }, 500, { owner: this });
   }
 
   /**

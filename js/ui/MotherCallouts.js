@@ -9,8 +9,8 @@
  * Zoom-driven level-of-detail (player request, 2026-06-03) keeps clutter under
  * control — the closer you zoom, the more detail is revealed:
  *
- *   Band 1  SYSTEM   (far, ~12–8 m)  : 5 system-group labels only (POWER /
- *                                       PROPULSION / PAYLOAD / SENSORS /
+ *   Band 1  SYSTEM   (far, ~12–8 m)  : 6 system-group labels only (POWER /
+ *                                       PROPULSION / PAYLOAD / SENSORS / COMMS /
  *                                       CAPTURE).
  *   Band 2  PART     (mid, ~8–4 m)   : every part label + mass/risk detail; the
  *                                       system labels fade out.
@@ -71,9 +71,9 @@ const SYSTEMS = [
     anchor: [ 1.0 * M, 0, 0 ],
     labelOffset: [ 1.9 * M, 1.0 * M, 0 ],
     parts: [
-      { name: 'ROSA SOLAR WINGS', mass: 18, risk: 'GREEN', tier: 'major',
+      { name: 'ROSA SOLAR WINGS', mass: 18, risk: 'GREEN', tier: 'major', codexId: 'rosa_solar_array',
         anchor: [ 1.1 * M, 0, 0 ], labelOffset: [ 2.0 * M, 0.5 * M, 0 ] },
-      { name: 'BODY SOLAR CELLS', mass: 0, risk: 'GREEN', tier: 'detail',
+      { name: 'BODY SOLAR CELLS', mass: 0, risk: 'GREEN', tier: 'detail', codexId: 'solar_cell_degradation',
         anchor: [ 0.40 * M, 0, 0.30 * M ], labelOffset: [ 1.0 * M, 0.55 * M, 0.30 * M ] },
       { name: 'ARRAY ROLL', mass: 0, risk: 'GREEN', tier: 'detail',
         anchor: [ 0.45 * M, 0, 0 ], labelOffset: [ 0.95 * M, -0.45 * M, 0 ] },
@@ -84,11 +84,11 @@ const SYSTEMS = [
     anchor: [ 0, 0, -1.0 * M ],
     labelOffset: [ 0, -1.3 * M, -1.3 * M ],
     parts: [
-      { name: 'FEEP ION THRUSTERS', mass: 6, risk: 'YELLOW', tier: 'major',
+      { name: 'FEEP ION THRUSTERS', mass: 6, risk: 'YELLOW', tier: 'major', codexId: 'feep_thruster',
         anchor: [ 0, -0.20 * M, -1.05 * M ], labelOffset: [ -1.1 * M, -1.0 * M, -1.2 * M ] },
-      { name: 'RCS ATTITUDE', mass: 2, risk: 'GREEN', tier: 'major',
+      { name: 'RCS ATTITUDE', mass: 2, risk: 'GREEN', tier: 'major', codexId: 'cold_gas_rcs',
         anchor: [ -0.03 * M, 0.42 * M, -0.795 * M ], labelOffset: [ 1.2 * M, 1.0 * M, -0.9 * M ] },
-      { name: 'MLI THERMAL BANDS', mass: 0, risk: 'GREEN', tier: 'detail',
+      { name: 'MLI THERMAL BANDS', mass: 0, risk: 'GREEN', tier: 'detail', codexId: 'mli_insulation',
         anchor: [ 0.43 * M, 0, 0.50 * M ], labelOffset: [ 1.1 * M, 0.5 * M, 0.50 * M ] },
     ],
   },
@@ -97,29 +97,54 @@ const SYSTEMS = [
     anchor: [ 0, 0.10 * M, 1.05 * M ],
     labelOffset: [ -1.4 * M, 1.4 * M, 1.2 * M ],
     parts: [
-      { name: 'LASER APERTURE', mass: 6, risk: 'RED', tier: 'major',
-        anchor: [ 0, 0.20 * M, 1.0 * M ], labelOffset: [ -1.3 * M, 0.7 * M, 1.1 * M ] },
-      { name: 'LARGE NET LAUNCHER', mass: 3, risk: 'GREEN', tier: 'major',
-        anchor: [ 0, -0.25 * M, 1.155 * M ], labelOffset: [ -1.2 * M, -0.8 * M, 1.1 * M ] },
+      // DESPIN LASER — telescope in the sensor ring (RING_AZ.tele=135°):
+      // gimbal (0,0,1.0) + ring slot (−0.18, 0.18) + fore → ≈ (−0.18, 0.18, 1.22).
+      { name: 'DESPIN LASER', mass: 6, risk: 'RED', tier: 'major', codexId: 'power_beaming',
+        anchor: [ -0.18 * M, 0.18 * M, 1.22 * M ], labelOffset: [ -1.3 * M, 0.9 * M, 1.2 * M ] },
+      // LARGE NET LAUNCHER — dead-centre on the CoM axis, protruding to z=1.30M.
+      { name: 'LARGE NET LAUNCHER', mass: 3, risk: 'GREEN', tier: 'major', codexId: 'miura_ori_net',
+        anchor: [ 0, 0, 1.30 * M ], labelOffset: [ -1.2 * M, -0.9 * M, 1.2 * M ] },
     ],
   },
   {
     id: 'SENSORS', label: 'SENSORS',
-    // Articulating sensor turret on the fore cap (+Z), offset +Y. Group label
-    // floats up-and-right so it doesn't collide with PAYLOAD's fore-cap label.
-    anchor: [ 0, 0.40 * M, 1.15 * M ],
+    // Turret ringed symmetrically around the central net launcher (2026-07-23
+    // centreline redesign). Group label floats up-and-right off the fore cap.
+    anchor: [ 0, 0.26 * M, 1.12 * M ],
     labelOffset: [ 1.5 * M, 1.4 * M, 1.0 * M ],
     parts: [
       { name: 'SENSOR GIMBAL', mass: 4, risk: 'GREEN', tier: 'major',
-        anchor: [ 0, 0.40 * M, 1.15 * M ], labelOffset: [ 1.4 * M, 1.0 * M, 1.0 * M ] },
-      { name: 'EO CAMERA', mass: 0, risk: 'GREEN', tier: 'detail',
-        anchor: [ 0.25 * M, 0.25 * M, 1.10 * M ], labelOffset: [ 1.1 * M, 0.55 * M, 1.0 * M ] },
-      { name: 'IR SENSOR', mass: 0, risk: 'GREEN', tier: 'detail',
-        anchor: [ -0.25 * M, 0.25 * M, 1.10 * M ], labelOffset: [ -1.1 * M, 0.45 * M, 1.0 * M ] },
-      { name: 'LIDAR DOME', mass: 0, risk: 'GREEN', tier: 'detail',
-        anchor: [ 0, 0.40 * M, 1.15 * M ], labelOffset: [ 0.55 * M, 1.3 * M, 1.0 * M ] },
+        anchor: [ 0, 0, 1.05 * M ], labelOffset: [ 1.4 * M, 1.2 * M, 1.0 * M ] },
+      { name: 'EO CAMERA', mass: 0, risk: 'GREEN', tier: 'major',
+        anchor: [ 0.18 * M, 0.18 * M, 1.15 * M ], labelOffset: [ 1.1 * M, 0.9 * M, 1.0 * M ] },
+      { name: 'IR SENSOR', mass: 0, risk: 'GREEN', tier: 'major',
+        anchor: [ -0.18 * M, -0.18 * M, 1.12 * M ], labelOffset: [ -1.1 * M, -0.9 * M, 1.0 * M ] },
+      { name: 'LIDAR DOME', mass: 0, risk: 'GREEN', tier: 'major', codexId: 'lidar_ranging',
+        anchor: [ 0.18 * M, -0.18 * M, 1.12 * M ], labelOffset: [ 1.1 * M, -0.9 * M, 1.0 * M ] },
+      // Star trackers ×2 — anchor at StarTracker_0 (az 84°, z 0.90 on the shoulder).
+      { name: 'STAR TRACKERS', mass: 1, risk: 'GREEN', tier: 'major', codexId: 'star_tracker',
+        anchor: [ 0.042 * M, 0.398 * M, 0.90 * M ], labelOffset: [ 1.2 * M, 1.3 * M, 0.7 * M ] },
+      // Sun sensors — anchor at the fore-cap puck flanking the net launcher.
+      { name: 'SUN SENSORS', mass: 0, risk: 'GREEN', tier: 'detail', codexId: 'sun_sensor',
+        anchor: [ 0.28 * M, -0.20 * M, 1.0 * M ], labelOffset: [ 1.1 * M, -0.5 * M, 1.0 * M ] },
       { name: 'NAV LIGHTS', mass: 1, risk: 'GREEN', tier: 'detail',
         anchor: [ 0.42 * M, 0, 0.30 * M ], labelOffset: [ 1.1 * M, -0.2 * M, 0.30 * M ] },
+    ],
+  },
+  {
+    id: 'COMMS', label: 'COMMS',
+    // Barrel fore-shoulder near the MGA patch (az ~25°, z 0.87).
+    anchor: [ 0.363 * M, 0.169 * M, 0.87 * M ],
+    labelOffset: [ 1.6 * M, 0.7 * M, 0.6 * M ],
+    parts: [
+      // TT&C omnis — anchor at TTC_Omni_0 (az 270°, z +0.92, i.e. −Y).
+      { name: 'TT&C ANTENNAS', mass: 1, risk: 'GREEN', tier: 'major', codexId: 'comms_blackout',
+        anchor: [ 0, -0.40 * M, 0.92 * M ], labelOffset: [ -1.2 * M, -1.0 * M, 0.6 * M ] },
+      { name: 'MGA PATCH', mass: 0, risk: 'GREEN', tier: 'detail', codexId: 'laser_comms',
+        anchor: [ 0.363 * M, 0.169 * M, 0.87 * M ], labelOffset: [ 1.2 * M, 0.35 * M, 0.6 * M ] },
+      // GPS patches — anchor at GPS_Patch_0 (az 340°, z 0.87).
+      { name: 'GPS ANTENNAS', mass: 0, risk: 'GREEN', tier: 'detail', codexId: 'gps_denied',
+        anchor: [ 0.376 * M, -0.137 * M, 0.87 * M ], labelOffset: [ 1.2 * M, -0.35 * M, 0.6 * M ] },
     ],
   },
   {
@@ -127,21 +152,21 @@ const SYSTEMS = [
     anchor: [ 0, 0.40 * M, 0.90 * M ],
     labelOffset: [ 0, 1.5 * M, 0.5 * M ],
     parts: [
-      { name: 'CAPTURE DAUGHTERS', mass: 9, risk: 'YELLOW', tier: 'major', live: 'arms',
-        anchor: [ 0.20 * M, 0.346 * M, 0.90 * M ], labelOffset: [ 1.3 * M, 1.0 * M, 0.6 * M ] },
-      { name: 'MAIN BUS', mass: 35, risk: 'GREEN', tier: 'major', omnipresent: true,
-        anchor: [ 0, 0.40 * M, 0 ], labelOffset: [ -1.6 * M, -0.2 * M, 0 ] },
+      { name: 'DAUGHTER CRADLES', mass: 0, risk: 'GREEN', tier: 'major',
+        anchor: [ 0.20 * M, 0.35 * M, -0.70 * M ], labelOffset: [ 1.3 * M, 0.7 * M, -0.7 * M ] },
+      { name: 'TETHER REELS', mass: 0, risk: 'GREEN', tier: 'major', codexId: 'reel_mechanics',
+        anchor: [ 0.20 * M, 0.346 * M, 0.55 * M ], labelOffset: [ 1.15 * M, 0.3 * M, 0.4 * M ] },
       { name: 'HINGE PIVOTS', mass: 0, risk: 'YELLOW', tier: 'detail',
         anchor: [ 0.22 * M, 0.381 * M, 0.90 * M ], labelOffset: [ 1.1 * M, 0.65 * M, 0.85 * M ] },
-      { name: 'TETHER REELS', mass: 0, risk: 'GREEN', tier: 'detail',
-        anchor: [ 0.20 * M, 0.346 * M, 0.55 * M ], labelOffset: [ 1.15 * M, 0.3 * M, 0.4 * M ] },
       { name: 'CRADLE SPRING', mass: 0, risk: 'YELLOW', tier: 'detail',
         anchor: [ 0.20 * M, 0.346 * M, 0.20 * M ], labelOffset: [ 1.1 * M, -0.3 * M, 0.1 * M ] },
-      { name: 'DAUGHTER POCKETS', mass: 0, risk: 'GREEN', tier: 'detail',
-        anchor: [ 0.20 * M, 0.35 * M, -0.70 * M ], labelOffset: [ 1.1 * M, 0.3 * M, -0.7 * M ] },
+      // Daughter mini net launchers — anchored at a docked cradle canister pose.
+      { name: 'NET LAUNCHERS (DAUGHTERS)', mass: 0, risk: 'GREEN', tier: 'detail',
+        anchor: [ 0.20 * M, 0.35 * M, -0.65 * M ], labelOffset: [ 1.15 * M, -0.1 * M, -0.6 * M ] },
     ],
   },
 ];
+
 
 // LOD band edges, in METRES of camera-to-ship distance. Hysteresis: descend
 // (zoom in) on the lower number, ascend (zoom out) on the higher.
@@ -149,7 +174,9 @@ const BAND = {
   // SYSTEM ↔ PART
   partIn:  8.0,  partOut:  9.0,
   // PART ↔ COMPONENT
-  compIn:  4.0,  compOut:  4.8,
+  // COMPONENT band relaxed (2026-07-23) so the now-denser fore-end detail tier
+  // (EO/IR/LIDAR promoted to major + new COMMS/SENSORS parts) reveals sooner.
+  compIn:  5.5,  compOut:  6.5,
 };
 
 const GUIDE_STEP_S = 1.1;   // seconds each system stays highlighted in the tour
@@ -172,12 +199,13 @@ export class MotherCallouts {
    * @param {THREE.Object3D} playerGroup  The PlayerSatellite group (labels parent here).
    * @param {THREE.Camera}   camera
    * @param {object} [opts]
-   * @param {object|null} [opts.armManager]  For the live "x/4 ARMS DOCKED" line.
+   * @param {HTMLCanvasElement|null} [opts.canvas]  Render canvas, for clickable
+   *   label pointer events (codex deep-links). Null → labels are not clickable.
    */
-  constructor(playerGroup, camera, { armManager = null } = {}) {
+  constructor(playerGroup, camera, { canvas = null } = {}) {
     this.player = playerGroup;
     this.camera = camera;
-    this.armManager = armManager;
+    this.canvas = canvas;
 
     this._active = false;       // inspection engaged?
     this._band = 'SYSTEM';      // current LOD band (hysteresis output)
@@ -206,6 +234,19 @@ export class MotherCallouts {
     this._rC3 = new THREE.Vector3();
     this._vCamLocal = new THREE.Vector3();   // camera position in player-local space
     this._leaderHalfWidth = 0;               // local-space half-width for leader ribbons
+
+    // ── Clickable-label interaction (codex deep-links). Listeners are attached
+    // only while inspection is active (see _setActive). Click vs drag is
+    // discriminated here so CameraSystem's drag-orbit is never disturbed.
+    this._raycaster = new THREE.Raycaster();
+    this._ndc = new THREE.Vector2();
+    this._pointerDown = null;      // { x, y, t } screen-space press record
+    this._hoverT = 0;              // pointermove hover throttle accumulator (s)
+    this._cursorSet = false;       // did we set body cursor='pointer'?
+    this._listening = false;       // pointer listeners currently attached?
+    this._onPointerMove = (e) => this._handlePointerMove(e);
+    this._onPointerDown = (e) => this._handlePointerDown(e);
+    this._onPointerUp = (e) => this._handlePointerUp(e);
 
     this._group = new THREE.Group();
     this._group.name = 'MotherCallouts';
@@ -325,7 +366,10 @@ export class MotherCallouts {
       for (const part of sys.parts) {
         const isDetail = part.tier === 'detail';
         const color = RISK[part.risk] || '#ffffff';
-        const pLabel = this._makeSprite(part.name, color, isDetail ? 56 : 70,
+        // Labels mapped to an existing codex entry get a trailing "▸" affordance
+        // glyph (plain canvas text — no texture-format change) and are clickable.
+        const labelText = part.codexId ? `${part.name} ▸` : part.name;
+        const pLabel = this._makeSprite(labelText, color, isDetail ? 56 : 70,
           (isDetail ? 0.42 : 0.58) * M, true);
         // Detail line ("Mass: X%  Risk: Y" / live data) — shown only in Band 3
         // for major parts (detail-tier parts have no secondary line).
@@ -357,9 +401,118 @@ export class MotherCallouts {
       // Start the one-shot guided tour the first time only.
       if (!this._guidedDone) this._guideT = -GUIDE_HOLD_S;
       this._band = 'SYSTEM';
+      this._attachPointer();
     } else {
       this._guideT = -1;
       this._focusPart = null;
+      this._detachPointer();
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // CLICKABLE LABELS → CODEX DEEP-LINKS
+  // --------------------------------------------------------------------------
+
+  /** Attach pointer listeners (only while inspection is active). @private */
+  _attachPointer() {
+    if (this._listening || !this.canvas) return;
+    this.canvas.addEventListener('pointermove', this._onPointerMove);
+    this.canvas.addEventListener('pointerdown', this._onPointerDown);
+    this.canvas.addEventListener('pointerup', this._onPointerUp);
+    this._listening = true;
+  }
+
+  /** Detach pointer listeners + restore the cursor. @private */
+  _detachPointer() {
+    if (!this._listening || !this.canvas) return;
+    this.canvas.removeEventListener('pointermove', this._onPointerMove);
+    this.canvas.removeEventListener('pointerdown', this._onPointerDown);
+    this.canvas.removeEventListener('pointerup', this._onPointerUp);
+    this._listening = false;
+    this._pointerDown = null;
+    this._restoreCursor();
+  }
+
+  /** Restore the default cursor if we set it. @private */
+  _restoreCursor() {
+    if (this._cursorSet && typeof document !== 'undefined') {
+      document.body.style.cursor = '';
+      this._cursorSet = false;
+    }
+  }
+
+  /** Update the NDC pointer vector from a pointer event. @private */
+  _pointerNDC(e) {
+    const rect = this.canvas.getBoundingClientRect();
+    this._ndc.set(
+      ((e.clientX - rect.left) / rect.width) * 2 - 1,
+      -((e.clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    return this._ndc;
+  }
+
+  /**
+   * Nearest clickable label sprite under the pointer (codexId + visible).
+   * @private @returns {{def:object}|null} the part record hit, or null.
+   */
+  _pickLabel(e) {
+    if (!this.camera) return null;
+    this._raycaster.setFromCamera(this._pointerNDC(e), this.camera);
+    let best = null, bestDist = Infinity;
+    for (const p of this._partLabels) {
+      if (!p.def.codexId || !p.sprite.visible) continue;
+      if ((p.sprite.material.opacity ?? 0) <= 0.3) continue;
+      const hits = this._raycaster.intersectObject(p.sprite, false);
+      if (hits.length && hits[0].distance < bestDist) {
+        bestDist = hits[0].distance;
+        best = p;
+      }
+    }
+    return best;
+  }
+
+  /** Hover cursor feedback (throttled ~10 Hz). @private */
+  _handlePointerMove(e) {
+    if (!this._active) return;
+    const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    if (now - this._hoverT < 100) return;   // ~10 Hz
+    this._hoverT = now;
+    const hit = this._pickLabel(e);
+    if (hit && !this._cursorSet) {
+      document.body.style.cursor = 'pointer';
+      this._cursorSet = true;
+    } else if (!hit && this._cursorSet) {
+      this._restoreCursor();
+    }
+  }
+
+  /** Record the press for click-vs-drag discrimination. @private */
+  _handlePointerDown(e) {
+    if (!this._active) return;
+    this._pointerDown = {
+      x: e.clientX, y: e.clientY,
+      t: (typeof performance !== 'undefined' ? performance.now() : Date.now()),
+    };
+  }
+
+  /**
+   * A press+release within 5 px and 400 ms is a click (not a drag-orbit). On a
+   * clickable label, deep-link the codex viewer. Never preventDefault — the
+   * CameraSystem drag handler shares this canvas.
+   * @private
+   */
+  _handlePointerUp(e) {
+    if (!this._active || !this._pointerDown) return;
+    const down = this._pointerDown;
+    this._pointerDown = null;
+    const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
+    if (moved > 5 || (now - down.t) > 400) return;   // drag / long-press → ignore
+    const hit = this._pickLabel(e);
+    if (hit && hit.def.codexId) {
+      // Locked entries safely open in their teaser state (CodexViewerUI.openEntry
+      // resolves aliases and renders locked teasers) — no gating needed here.
+      eventBus.emit(Events.CODEX_OPEN_ENTRY, { id: hit.def.codexId });
     }
   }
 
@@ -369,10 +522,8 @@ export class MotherCallouts {
 
   /**
    * @param {number} dt  seconds
-   * @param {object} [armManager]  optional live arm manager (for the arms line)
    */
-  update(dt, armManager) {
-    if (armManager) this.armManager = armManager;
+  update(dt) {
     if (!this._active || !this.camera) return;
 
     // Ensure the ship's world matrix reflects this frame's transform before we
@@ -628,8 +779,7 @@ export class MotherCallouts {
       const color = RISK[p.def.risk] || '#ffffff';
       // Gate by whether the PART itself is on the camera-facing side of the
       // hull — don't draw a marker/leader on geometry hidden behind the barrel.
-      // `omnipresent` parts (e.g. the whole bus barrel) skip the gate.
-      if (!p.def.omnipresent) op *= this._anchorVisible(p.def.anchor, camDirWorld);
+      op *= this._anchorVisible(p.def.anchor, camDirWorld);
       const off = this._facingSideOffset(p.def.labelOffset, p._off || (p._off = [0, 0, 0]));
       this._applyLabel(p, op, dt, off, color, color);
 
@@ -698,16 +848,9 @@ export class MotherCallouts {
     }
   }
 
-  /** Rebuild the detail texture when live data changes (arms docked count). @private */
+  /** Rebuild the detail texture when live data changes. @private */
   _refreshDetail(p) {
-    let text;
-    if (p.def.live === 'arms' && this.armManager) {
-      const arms = this.armManager.getArms?.() || this.armManager.arms || [];
-      const docked = arms.filter(a => a?.state === 'DOCKED').length;
-      text = `${docked}/${arms.length || 4} DAUGHTERS DOCKED`;
-    } else {
-      text = `Mass: ${p.def.mass}%   Risk: ${RISK_TXT[p.def.risk]}`;
-    }
+    const text = `Mass: ${p.def.mass}%   Risk: ${RISK_TXT[p.def.risk]}`;
     if (p._detailText === text) return; // no change — skip canvas rebuild
     p._detailText = text;
     const old = p.detailSprite.material.map;
@@ -717,6 +860,7 @@ export class MotherCallouts {
   }
 
   dispose() {
+    this._detachPointer();
     eventBus.off?.(Events.CAMERA_VIEW_CHANGE, this._onViewChange);
     eventBus.off?.(Events.INSPECT_HULL_OUTLINE, this._onHullOutline);
     const sprites = [...this._systemLabels, ...this._partLabels];
@@ -732,3 +876,6 @@ export class MotherCallouts {
     this.player.remove(this._group);
   }
 }
+
+// Exported for tests (drift guard on the label table / codexId mapping).
+export { SYSTEMS as MOTHER_CALLOUT_SYSTEMS };

@@ -108,6 +108,14 @@ export class CodexSystem {
     this._unlockQueue = [];
     /** @type {number} cooldown timer (seconds remaining) */
     this._cooldownTimer = 0;
+    /**
+     * @type {number} mission-time (s) before which unlocks are queued rather
+     * than performed immediately. Many entries trigger on the first telemetry
+     * frame; performing them at t≈0 dogpiles the mission-start comms crackle /
+     * departure cluster into a "click click click" pile. Deferring drains them
+     * one-at-a-time (cooldown-spaced) once the player is actually flying.
+     */
+    this._startupGraceUntil = 0;
     /** @type {Set<string>} event names already subscribed */
     this._subscribedEvents = new Set();
 
@@ -220,7 +228,11 @@ export class CodexSystem {
       if (p && Number.isFinite(p.altitude)) this._lastAltKm = p.altitude;
     });
     // Reset the mission clock (and per-mission completion latches) on a new run.
-    const resetMissionClock = () => { this._missionTime = 0; this._completionsFired.clear(); };
+    const resetMissionClock = () => {
+      this._missionTime = 0;
+      this._completionsFired.clear();
+      this._startupGraceUntil = (Constants.CODEX && Constants.CODEX.STARTUP_GRACE_S) || 0;
+    };
     eventBus.on(Events.MISSION_START, resetMissionClock);
     eventBus.on(Events.GAME_RESET, resetMissionClock);
   }
@@ -258,7 +270,11 @@ export class CodexSystem {
   _queueUnlock(entry) {
     if (entry.unlocked) return;
     if (this._unlockQueue.some(e => e.id === entry.id)) return;
-    if (this._cooldownTimer <= 0 && this._unlockQueue.length === 0) {
+    // During the mission-start grace window, always queue — the update() drain
+    // releases entries one-at-a-time once _missionTime passes the grace, so no
+    // unlock chime collides with the startup comms/departure cluster.
+    const inStartupGrace = this._missionTime < this._startupGraceUntil;
+    if (!inStartupGrace && this._cooldownTimer <= 0 && this._unlockQueue.length === 0) {
       this._performUnlock(entry);
     } else {
       this._unlockQueue.push(entry);
@@ -345,6 +361,10 @@ export class CodexSystem {
     if (Number.isFinite(dt)) this._missionTime += dt;
 
     if (this._cooldownTimer > 0) this._cooldownTimer -= dt;
+
+    // Hold the queue until the mission-start grace passes so the first unlock
+    // chime doesn't land on the startup comms/departure cluster.
+    if (this._missionTime < this._startupGraceUntil) return;
 
     if (this._cooldownTimer <= 0 && this._unlockQueue.length > 0) {
       const next = this._unlockQueue.shift();

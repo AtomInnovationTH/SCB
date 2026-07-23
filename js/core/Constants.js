@@ -905,7 +905,7 @@ export const Constants = {
     TIER_UPGRADES:             false,  // ST-9.8 C-10 — Y0/Y1/Y3 tier shop entries + upgrade flow
 
     // NEW — C-11 Integration: Recoil Physics (deferred from C-3)
-    RECOIL_PHYSICS:            false,  // C-11 — angular impulse from dual-fire applied to Mother
+    RECOIL_PHYSICS:            true,   // C-11 — angular impulse from dual-fire + mother-net launch applied to Mother (2026-07-23: wired to a real transient-attitude integrator; was a dead accumulator)
 
     // NEW — Q2 Net-Launch Ceremony (CEREMONY_REDESIGN.md §5)
     NET_CEREMONY:              true,   // Q2 net-launch ceremony; default ON (Stage 6 flip, 2026-05-24)
@@ -1746,6 +1746,7 @@ export const Constants = {
   LASSO_TENSION_PER_KG: 0.1,          // N per kg of captured mass (mirrors CaptureNet model)
   LASSO_NET_RATED_MASS_KG: 50,        // kg — Mother-net rated payload; strain = capturedMass / rated
   LASSO_REEL_PULL_GAIN: 0.6,          // dimensionless — CoM nudge scale (× mass/shipMass × reelRate), clamped by RCS_MAX_SPEED
+  LASSO_REEL_TORQUE_GAIN: 0.8,        // dimensionless — attitude tug scale: reeling a heavy OFF-AXIS catch swings the Mother's nose toward it (× massRatio × lateral tether dir), fed to the recoil-attitude springs and RCS-nulled (2026-07-23)
   LASSO_NET_BREAK_TIME_S: 2.0,        // seconds above NET_STRAIN_SAFE_FRACTION before the tether snaps
 
   // --- Mother-net capture ceremony Phase 4 (stow → furnace lifecycle) ---
@@ -1790,6 +1791,36 @@ export const Constants = {
     RANGE_M: 5000,                     // candidate search radius (m); the in-range test uses NET_LOCK_RANGE_M
     REACQUIRE: true,                   // auto-advance to next candidate after a capture
     REACQUIRE_DELAY_MS: 800,           // pause after a catch before the next lock (lets the reward register)
+  },
+
+  // --- Debris attention glint (fake, sun-plausible specular flash) ---
+  // A camera-facing additive halo flashed on a chosen debris piece to draw the
+  // eye. NOT physical — debris tumble stays fully random (physics + despin
+  // scoring untouched). Eclipse- and geometry-gated so it reads as a genuine
+  // sun catch. Two policies: DIRECTED (Mission 1 onboarding, fills the gap left
+  // by OnboardingDirector's one-shot escalation) and AMBIENT (post-onboarding
+  // soft wayfinding). See .kilo/plans/1784774215497-debris-attention-glint.md.
+  GLINT: {
+    ENABLED: true,               // master toggle
+    // --- directed (onboarding) ---
+    DIRECTED_IDLE_MS: 8000,      // beat active + no relevant progress → first glint
+    DIRECTED_REPEAT_MS: 6000,    // repeat cadence while still stuck on the beat
+    // --- ambient ---
+    AMBIENT_NO_TARGET_MS: 25000, // no active target for this long → eligible
+    AMBIENT_MIN_GAP_MS: 20000,   // min gap between ambient glints
+    AMBIENT_NEAR_WEIGHT: 3,      // weighting multiplier toward nearest capturable piece
+    AMBIENT_MAX_RANGE_M: 5000,   // only glint pieces within this range (match AUTOLOCK.RANGE_M)
+    // --- flash envelope ---
+    FLASH_ATTACK_S: 0.08,        // opacity ramp-up (sharp, reads as a sun catch)
+    FLASH_DECAY_S: 0.45,         // opacity fall-off
+    FLASHES_PER_PING: 2,         // quick double-flash reads better than one
+    FLASH_GAP_S: 0.35,           // gap between flashes in a ping
+    SPRITE_SCALE_M: 4,           // world size of halo sprite (metres)
+    SPRITE_COLOR: 0xfff4d6,      // warm sun-white
+    HDR_MUL: 2.2,                // brighter than nav halos (1.6) — it must pop
+    // --- gating ---
+    REQUIRE_SUNLIT: true,        // skip glints while debris is in Earth shadow
+    EDGE_NDC_MIN: 0.15,          // don't glint pieces already dead-center (|ndc| below this) — no need
   },
 
 
@@ -2282,6 +2313,7 @@ export const Constants = {
   // =========================================================================
   CODEX: {
     UNLOCK_COOLDOWN: 20,              // seconds between unlocks (reduced from 30 for better game feel)
+    STARTUP_GRACE_S: 3,              // defer unlock chimes during mission start so they don't dogpile the comms-crackle / departure cluster
   },
 
   // =========================================================================
