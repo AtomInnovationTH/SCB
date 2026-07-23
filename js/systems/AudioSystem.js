@@ -372,6 +372,12 @@ class AudioSystem {
       this.playDepartureSwell(dur);
     });
     eventBus.on(Events.HUD_POWER_ON, () => {
+      // Record when comms crackle fires so a near-simultaneous lock earcon can
+      // be deferred out of its shadow (startup legibility — see
+      // _playLockDeduped). Use ctx time when available to match scheduling.
+      this._powerOnAt = (this.ctx && typeof this.ctx.currentTime === 'number')
+        ? this.ctx.currentTime
+        : (Date.now() / 1000);
       this.playCommsCrackle();
     });
 
@@ -2314,7 +2320,7 @@ class AudioSystem {
       osc.frequency.value = f;
       const g = ctx.createGain();
       g.gain.setValueAtTime(0.0001, start);
-      g.gain.exponentialRampToValueAtTime(0.05, start + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.035, start + 0.01);
       g.gain.exponentialRampToValueAtTime(0.001, start + 0.06);
       osc.connect(g);
       g.connect(this.sfxBus);
@@ -2800,7 +2806,33 @@ class AudioSystem {
    */
   _playLockDeduped() {
     const t = (this.ctx && typeof this.ctx.currentTime === 'number') ? this.ctx.currentTime : (Date.now() / 1000);
+    // A startup lock is already scheduled to play — drop any further trigger
+    // until it resolves so nothing plays out-of-band before the deferred ping.
+    if (this._lockDeferPending) return;
     if (this._lastLockAt != null && (t - this._lastLockAt) < 0.25) return;
+
+    // Startup legibility: the comms crackle ("comms online") and this lock
+    // earcon ("target locked") both fire in the first ~0.4 s of a new mission
+    // (the tease debris is already in range at spawn) and read as one
+    // undifferentiated blip cluster. If a lock would land within ~1.0 s of the
+    // HUD power-on, defer it so the crackle finishes first and the ping lands
+    // ~1.0 s later as its own readable event. Only the first post-power-on lock
+    // is deferred; further triggers are dropped by the _lockDeferPending guard
+    // above until the deferred play resolves.
+    if (this._powerOnAt != null && !this._lockDeferPending) {
+      const sincePowerOn = t - this._powerOnAt;
+      if (sincePowerOn >= 0 && sincePowerOn < 1.0) {
+        this._lastLockAt = t;
+        this._lockDeferPending = true;
+        const delayMs = Math.max(0, (1.0 - sincePowerOn) * 1000);
+        timerManager.setTimeout(() => {
+          this._lockDeferPending = false;
+          this.playTargetLock();
+        }, delayMs, { owner: this });
+        return;
+      }
+    }
+
     this._lastLockAt = t;
     this.playTargetLock();
   }
@@ -2818,15 +2850,16 @@ class AudioSystem {
     const notes = [523, 659];
     const noteDur = 0.06; // 60ms each
 
-    // Delay node for slight reverb tail
-    const delay = ctx.createDelay(0.3);
-    delay.delayTime.value = 0.08;
+    // Delay node for a slightly longer reverb tail so the lock reads as a
+    // "sensor ping" distinct from the dry UI/comms blips.
+    const delay = ctx.createDelay(0.5);
+    delay.delayTime.value = 0.11;
     const feedback = ctx.createGain();
-    feedback.gain.value = 0.2;
+    feedback.gain.value = 0.32;
     delay.connect(feedback);
     feedback.connect(delay);
     const delayGain = ctx.createGain();
-    delayGain.gain.value = 0.25;
+    delayGain.gain.value = 0.28;
     delay.connect(delayGain);
     delayGain.connect(this.sfxBus);
 
@@ -2854,7 +2887,7 @@ class AudioSystem {
         feedback.disconnect();
         delayGain.disconnect();
       } catch (e) { /* already disconnected */ }
-    }, 500, { owner: this });
+    }, 900, { owner: this });
   }
 
   /**
@@ -3264,10 +3297,11 @@ class AudioSystem {
   }
 
   /**
-   * Delegation 2 (2026-05-31) — soft "hint posted" two-note ascending arpeggio.
+   * Delegation 2 (2026-05-31) — soft "hint posted" notification cue.
+   * Startup-legibility rework (2026-07-23): a gentle, longer, lower triangle
+   * swell (~520→660 Hz, ~350 ms, soft attack) so it reads as a "gentle
+   * notification" rather than another UI click in the startup blip family.
    * Quiet enough to fade into the ambient mix; peak gain capped at ~0.15.
-   * Fallback path uses raw oscillators so it works even if `_playSineBlip` isn't
-   * present in older builds.
    * @param {number} [volume=0.4] — caller-side scale; clamped to [0, 1].
    */
   playHintPost(volume = 0.4) {
@@ -3281,29 +3315,26 @@ class AudioSystem {
     const v = Math.max(0, Math.min(1, volume));
     const ctx = this.ctx;
     const now = ctx.currentTime;
-    // Two-note rising chord: A5 (880 Hz) → C#6 (1108 Hz).
-    // Total ~250 ms; gentle exponential decay tail.
     const dest = this.sfxBus || this.master || ctx.destination;
+    // Two-note rising notification: C5 (523 Hz) → E5 (659 Hz), triangle wave,
+    // soft attack and a long decay tail. Total ~350 ms.
     const playNote = (freq, startOffset, durSec) => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
-      osc.type = 'sine';
+      osc.type = 'triangle';
       osc.frequency.setValueAtTime(freq, now + startOffset);
-      // TODO: Confirm chime volume in browser playtest — peer cues
-      // (playClick, playLaser) sit at peak 0.08–0.20; current 0.15·volume
-      // → effective 0.06 at the default volume=0.4 caller.  May be too
-      // quiet over ambient mix; consider 0.20 if unhearable.
       const peak = 0.15 * v;
       gain.gain.setValueAtTime(0.0001, now + startOffset);
-      gain.gain.exponentialRampToValueAtTime(peak, now + startOffset + 0.015);
+      // Gentle attack (~50 ms) so it swells rather than clicks.
+      gain.gain.exponentialRampToValueAtTime(peak, now + startOffset + 0.05);
       gain.gain.exponentialRampToValueAtTime(0.0001, now + startOffset + durSec);
       osc.connect(gain);
       gain.connect(dest);
       osc.start(now + startOffset);
       osc.stop(now + startOffset + durSec + 0.02);
     };
-    playNote(880,  0.000, 0.14);
-    playNote(1108, 0.100, 0.18);
+    playNote(523, 0.000, 0.24);
+    playNote(659, 0.130, 0.34);
   }
 }
 
