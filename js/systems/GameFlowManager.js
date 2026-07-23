@@ -379,6 +379,7 @@ class GameFlowManager {
 
       // Clean slate first, then restore saved progression
       this.resetGame();
+      this._applyStartLocation();   // place ground track over the player's home region
       gameState.currentState = GameStates.MENU; // Allow transition from MENU
 
       // Skip first-experience guidance for returning players
@@ -573,6 +574,7 @@ class GameFlowManager {
     eventBus.on(Events.GAMEOVER_RETRY, () => {
       persistenceManager.deleteSave(); // clear stale save on retry
       this.resetGame();
+      this._applyStartLocation();   // place ground track over the player's home region
       this.transitionToState(GameStates.BRIEFING);
     });
 
@@ -598,9 +600,10 @@ class GameFlowManager {
       // Reset resources
       resourceSystem.reset();
 
-      // Reset player orbit to starting position
+      // Reset player orbit to starting position (over the player's home region)
       player.orbit.semiMajorAxis = Constants.EARTH_RADIUS + Constants.START_ALTITUDE;
       player.orbit.trueAnomaly = 0;
+      this._applyStartLocation();
 
       // Reset target selection (imported singleton — emits TARGET_CLEARED → DebrisWireframe self-clears)
       targetSelector.setTarget(null);
@@ -1358,6 +1361,12 @@ class GameFlowManager {
     }
   }
 
+  /**
+   * Apply the per-language starting orbit (ground track over the player's home
+   * region). Called on ALL restart paths — New Game (MENU_START/FAST_START),
+   * Continue (MENU_CONTINUE), and game-over Continue/Retry — so language choice
+   * always determines the start orbit regardless of whether a save exists.
+   */
   _applyStartLocation() {
     const { player } = this._refs;
     if (!player || !player.orbit) return;
@@ -1372,6 +1381,12 @@ class GameFlowManager {
     player.orbit.inclination = inclination;
     player.orbit.raan = raan;
     player.orbit.trueAnomaly = trueAnomaly;
+    // subPointToOrbit() assumes a circular orbit with argPerigee=0
+    // (OrbitalMechanics.js:229). Neither field is reset elsewhere on restart,
+    // so a played (thrusted) session could mis-aim the anchor pass. Reset here
+    // to keep this the one authoritative "starting orbit" function.
+    player.orbit.eccentricity = 0.0001;
+    player.orbit.argPerigee = 0;
   }
 
   /** Reset game state for new attempt */
