@@ -538,105 +538,11 @@ class AudioSystem {
         this.playSweepComplete();
       }
     });
-
-    // Removed: per-debris discovery blip subscription — too many rapid blips during staggered reveal
-    // eventBus.on(Events.TARGET_DISCOVERED, () => this.playDiscoveryBlip());
   }
 
   // ==========================================================================
   // PROCEDURAL SOUND GENERATORS
   // ==========================================================================
-
-  /**
-   * Thruster sound — filtered white noise + low oscillator
-   * @param {number} [duration=0.3]
-   */
-  playThruster(duration = 0.3) {
-    if (!this.available) return;
-    const ctx = this.ctx;
-    const now = ctx.currentTime;
-
-    // White noise buffer
-    const bufferSize = ctx.sampleRate * duration;
-    const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
-    const data = buffer.getChannelData(0);
-    for (let i = 0; i < bufferSize; i++) {
-      data[i] = (Math.random() * 2 - 1) * 0.3;
-    }
-
-    const noise = ctx.createBufferSource();
-    noise.buffer = buffer;
-
-    const filter = ctx.createBiquadFilter();
-    filter.type = 'bandpass';
-    filter.frequency.value = 250;
-    filter.Q.value = 1.5;
-
-    const gain = ctx.createGain();
-    gain.gain.setValueAtTime(0.15, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
-
-    noise.connect(filter);
-    filter.connect(gain);
-    gain.connect(this.sfxBus);
-    noise.start(now);
-    noise.stop(now + duration);
-  }
-
-  /**
-   * Laser hum — frequency-modulated oscillator
-   * @param {number} [duration=0.5]
-   */
-  playLaser(duration = 0.5) {
-    if (!this.available) return;
-    const ctx = this.ctx;
-    const now = ctx.currentTime;
-
-    const osc = ctx.createOscillator();
-    osc.type = 'sawtooth';
-    osc.frequency.setValueAtTime(440, now);
-    osc.frequency.linearRampToValueAtTime(880, now + duration * 0.5);
-    osc.frequency.linearRampToValueAtTime(660, now + duration);
-
-    const gain = ctx.createGain();
-    gain.gain.setValueAtTime(0.08, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
-
-    osc.connect(gain);
-    gain.connect(this.sfxBus);
-    osc.start(now);
-    osc.stop(now + duration);
-  }
-
-  /**
-   * Ion beam — low rumble
-   * @param {number} [duration=0.4]
-   */
-  playIonBeam(duration = 0.4) {
-    if (!this.available) return;
-    const ctx = this.ctx;
-    const now = ctx.currentTime;
-
-    const osc = ctx.createOscillator();
-    osc.type = 'sine';
-    osc.frequency.value = 80;
-
-    const osc2 = ctx.createOscillator();
-    osc2.type = 'triangle';
-    osc2.frequency.value = 120;
-
-    const gain = ctx.createGain();
-    gain.gain.setValueAtTime(0.1, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
-
-    osc.connect(gain);
-    osc2.connect(gain);
-    gain.connect(this.sfxBus);
-    osc.start(now);
-    osc2.start(now);
-    osc.stop(now + duration);
-    osc2.stop(now + duration);
-  }
 
   /**
    * Magnetic field hum — pulsing low tone
@@ -670,30 +576,6 @@ class AudioSystem {
     lfo.start(now);
     osc.stop(now + duration);
     lfo.stop(now + duration);
-  }
-
-  /**
-   * Tether deploy — wire singing sound
-   * @param {number} [duration=0.6]
-   */
-  playTetherDeploy(duration = 0.6) {
-    if (!this.available) return;
-    const ctx = this.ctx;
-    const now = ctx.currentTime;
-
-    const osc = ctx.createOscillator();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(2000, now);
-    osc.frequency.exponentialRampToValueAtTime(200, now + duration);
-
-    const gain = ctx.createGain();
-    gain.gain.setValueAtTime(0.06, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
-
-    osc.connect(gain);
-    gain.connect(this.sfxBus);
-    osc.start(now);
-    osc.stop(now + duration);
   }
 
   /**
@@ -1264,30 +1146,6 @@ class AudioSystem {
   // ==========================================================================
   // PHASE R8 — NEW SOUND METHODS
   // ==========================================================================
-
-  /**
-   * Target selected via Tab — pitch varies with distance.
-   * Closer = higher pitch = more urgent.
-   * @param {number} [distanceKm=10]
-   */
-  playTabSelect(distanceKm = 10) {
-    if (!this.available) return;
-    // Closer targets = higher pitch. Range: 400Hz (far) to 1200Hz (close)
-    const maxDist = 50; // km
-    const t = Math.max(0, Math.min(1, 1 - (distanceKm / maxDist)));
-    const freq = 400 + t * 800;
-
-    const osc = this.ctx.createOscillator();
-    const gain = this.ctx.createGain();
-    osc.type = 'sine';
-    osc.frequency.value = freq;
-    gain.gain.setValueAtTime(0.12, this.ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.15);
-    osc.connect(gain);
-    gain.connect(this.master);
-    osc.start(this.ctx.currentTime);
-    osc.stop(this.ctx.currentTime + 0.15);
-  }
 
   /**
    * Ascending step tone for fuel cycling with T key.
@@ -1888,15 +1746,6 @@ class AudioSystem {
       // Play first beep pattern immediately
       this._playAlarmBeeps(tier);
     }
-  }
-
-  /**
-   * Legacy start — treated as tier 2 (double beep) for backward compatibility.
-   * @param {number} [percentage] — ignored, kept for API compat
-   */
-  startDeltaVAlarm(percentage) {
-    // Legacy: treated as tier 2 (double beep)
-    this.updateDeltaVAlarm(0.10);
   }
 
   /**
@@ -3245,30 +3094,6 @@ class AudioSystem {
     this._playSineBlip(now,        523, 0.18, 0.32);
     this._playSineBlip(now + 0.14, 659, 0.18, 0.32);
     this._playSineBlip(now + 0.28, 784, 0.28, 0.40); // held longer for finale
-  }
-
-  /**
-   * UX-3 #9: Short ascending pip for target discovery reveal.
-   * 200Hz→800Hz sweep, 40ms duration, volume 0.12.
-   */
-  playDiscoveryBlip() {
-    if (!this.available) return;
-    const ctx = this.ctx;
-    const now = ctx.currentTime;
-
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(200, now);
-    osc.frequency.exponentialRampToValueAtTime(800, now + 0.04);
-
-    gain.gain.setValueAtTime(0.12, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.06);
-
-    osc.connect(gain);
-    gain.connect(this.masterGain);
-    osc.start(now);
-    osc.stop(now + 0.06);
   }
 
   /**
