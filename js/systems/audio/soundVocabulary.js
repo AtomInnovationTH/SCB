@@ -44,7 +44,7 @@ export const soundVocabulary = {
   playRadioNotice:     { family: 'RADIO', meaning: 'comms message notice',         trigger: 'comms priority message' },
 
   // ---- PING — sensor/lock/docking state change ----
-  playTerminalBlip:    { family: 'PING', meaning: 'terminal/manifest row reveal',  trigger: 'salvage manifest typewriter' },
+  playTerminalBlip:    { family: 'PING', meaning: 'terminal/manifest row reveal',  trigger: 'salvage manifest typewriter (silent during mission-start grace)' },
   playApproachBeep:    { family: 'PING', meaning: 'approach proximity beep',       trigger: 'ARM_APPROACH_PING' },
   playTargetLock:      { family: 'PING', meaning: 'sensor lock acquired',          trigger: 'target in net range / manual lock' },
   playTargetLost:      { family: 'PING', meaning: 'sensor lock lost',              trigger: 'target lost' },

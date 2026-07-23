@@ -1717,6 +1717,13 @@ export const Constants = {
       MAX_HZ: 3,     // cadence just outside net range (close)
       GAIN: 0.05,
     },
+    // Startup legibility (2026-07-24): the auto-locked first target's passive
+    // proximity survey completes with ZERO player action a few seconds into a
+    // mission, and the dossier manifest typewriter then fires ~5 terminal
+    // blips — unexplained clicks at the busiest audio moment. Suppress the
+    // typewriter blips for this window after entering gameplay from the menu;
+    // the rows still animate visually. Deliberate mid-game surveys keep blips.
+    MANIFEST_BLIP_STARTUP_GRACE_S: 30,
   },
 
   // =========================================================================

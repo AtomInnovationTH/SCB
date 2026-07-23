@@ -69,6 +69,8 @@ class AudioSystem {
     this._rangeTickerHz = 1;
     this._rangeTickerSuppressedUntil = 0;
     this._apEngaged = false;
+    // Startup legibility: set on MENU → ORBITAL_VIEW; gates manifest blips.
+    this._missionStartMs = null;
     this.available = false;
     this.activeSources = new Map();
     this._initialized = false;
@@ -526,6 +528,13 @@ class AudioSystem {
     //   ?noAmbient=1 — force-disable (default behaviour, kept for symmetry)
     eventBus.on(Events.STATE_CHANGE, (data) => {
       const playStates = ['ORBITAL_VIEW', 'APPROACH', 'INTERACTION'];
+      // Startup legibility: mark mission start (MENU → gameplay) so cues tied
+      // to automatic startup processes (manifest typewriter blips) can hold
+      // their tongue during the opening cluster.
+      if (data.to === 'ORBITAL_VIEW' && data.from === 'MENU') {
+        this._missionStartMs = (typeof performance !== 'undefined' && performance.now)
+          ? performance.now() : Date.now();
+      }
       if (playStates.includes(data.to) && !this._ambientActive && this._isAmbientLoopEnabled()) {
         this.startAmbientLoop();
       } else if (['MENU', 'GAME_OVER', 'WIN'].includes(data.to)) {
@@ -942,10 +951,20 @@ class AudioSystem {
    * messages and the salvage-manifest typewriter reveal.
    * P5 (#4): optional `step` pitches each row up (+60 Hz/row) so a run of blips
    * reads as one rising "data loading" gesture, not repeated identical clicks.
+   * Startup legibility (2026-07-24): silent during the mission-start grace
+   * window — the auto-locked first target's passive survey completes with no
+   * player action and would otherwise fire ~5 unexplained clicks into the
+   * opening cluster. The typewriter rows still animate visually.
    * @param {number} [step=0] — row index; 0 = original 800→400 Hz sweep.
    */
   playTerminalBlip(step = 0) {
     if (!this.available) return;
+    if (this._missionStartMs != null) {
+      const graceS = (Constants.AUDIO && Constants.AUDIO.MANIFEST_BLIP_STARTUP_GRACE_S) || 0;
+      const nowMs = (typeof performance !== 'undefined' && performance.now)
+        ? performance.now() : Date.now();
+      if (nowMs - this._missionStartMs < graceS * 1000) return;
+    }
     const ctx = this.ctx;
     const now = ctx.currentTime;
 
