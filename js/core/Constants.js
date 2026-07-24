@@ -1717,13 +1717,16 @@ export const Constants = {
       MAX_HZ: 3,     // cadence just outside net range (close)
       GAIN: 0.05,
     },
-    // Startup legibility (2026-07-24): the auto-locked first target's passive
-    // proximity survey completes with ZERO player action a few seconds into a
-    // mission, and the dossier manifest typewriter then fires ~5 terminal
-    // blips — unexplained clicks at the busiest audio moment. Suppress the
-    // typewriter blips for this window after entering gameplay from the menu;
-    // the rows still animate visually. Deliberate mid-game surveys keep blips.
-    MANIFEST_BLIP_STARTUP_GRACE_S: 30,
+    // Startup legibility (2026-07-24): several cues fire from AUTOMATION in
+    // the first seconds of a mission with zero player action — the dossier
+    // manifest typewriter (auto-locked target's passive survey) and the first
+    // onboarding hint chime. Each lands as an unexplained noise while the
+    // player is still parsing the departure handoff. Suppress these
+    // non-essential cues for this window after entering gameplay from the
+    // menu; their visuals (typewriter rows, hint card) still appear, and cues
+    // fired after the window keep their voice. Danger/ALARM cues are never
+    // gated by this.
+    STARTUP_CUE_GRACE_S: 30,
   },
 
   // =========================================================================

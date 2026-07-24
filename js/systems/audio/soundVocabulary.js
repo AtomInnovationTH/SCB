@@ -40,7 +40,7 @@ export const soundVocabulary = {
   startThrusterHum:    { family: 'PHYSICAL', meaning: 'thruster hum',              trigger: 'thrust active' },
 
   // ---- RADIO — comms channel activity ----
-  playCommsCrackle:    { family: 'RADIO', meaning: 'comms channel activity',       trigger: 'comms handshake' },
+  playCommsCrackle:    { family: 'RADIO', meaning: 'comms channel activity',       trigger: 'comms online at mission handoff (squelch only — no blips)' },
   playRadioNotice:     { family: 'RADIO', meaning: 'comms message notice',         trigger: 'comms priority message' },
 
   // ---- PING — sensor/lock/docking state change ----
@@ -86,7 +86,7 @@ export const soundVocabulary = {
   playPurchase:        { family: 'REWARD', meaning: 'credits spent (shop)',        trigger: 'shop purchase' },
   playPracticeChime:   { family: 'REWARD', meaning: 'practiced-skill transition',  trigger: 'skill PRACTICED' },
   playMasteryFanfare:  { family: 'REWARD', meaning: 'mastered-skill transition',   trigger: 'skill MASTERED' },
-  playHintPost:        { family: 'REWARD', meaning: 'onboarding hint posted',      trigger: "AUDIO_CUE{cue:'hint_post'}" },
+  playHintPost:        { family: 'REWARD', meaning: 'onboarding hint posted',      trigger: "AUDIO_CUE{cue:'hint_post'} (silent during mission-start grace)" },
 
   // ---- PAD — scene transition mood ----
   startAmbientLoop:    { family: 'PAD', meaning: 'ambient engine-room loop',       trigger: 'gameplay ambient (opt-in)' },

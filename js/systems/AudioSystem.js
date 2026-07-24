@@ -303,6 +303,22 @@ class AudioSystem {
   }
 
   /**
+   * @private Startup legibility: true while inside the mission-start cue grace
+   * window (Constants.AUDIO.STARTUP_CUE_GRACE_S after MENU → gameplay).
+   * Non-essential automation-fired cues (manifest typewriter blips, hint
+   * chime) hold their tongue during this window; their visuals still appear.
+   * Never used for ALARM/danger cues.
+   * @returns {boolean}
+   */
+  _inStartupCueGrace() {
+    if (this._missionStartMs == null) return false;
+    const graceS = (Constants.AUDIO && Constants.AUDIO.STARTUP_CUE_GRACE_S) || 0;
+    const nowMs = (typeof performance !== 'undefined' && performance.now)
+      ? performance.now() : Date.now();
+    return (nowMs - this._missionStartMs) < graceS * 1000;
+  }
+
+  /**
    * @private P6 — handle a throttled TARGET_RANGE readout: map distance to a
    * tick cadence and (re)start the range ticker. Cadence rises as the player
    * closes; below net range the lock ping takes over so we stop.
@@ -721,6 +737,11 @@ class AudioSystem {
       if (!data) return;
       const id = data.id || data.cue;
       if (id === 'hint_post') {
+        // Startup legibility: the first onboarding hints post seconds into the
+        // mission with no player action — the chime read as an unexplained
+        // tone. The hint card still appears; only the sound waits out the
+        // opening. Hints posted after the grace window keep their chime.
+        if (this._inStartupCueGrace()) return;
         const v = (typeof data.volume === 'number') ? data.volume : 0.4;
         this.playHintPost(v);
       } else if (id === 'sweepComplete') {
@@ -959,12 +980,7 @@ class AudioSystem {
    */
   playTerminalBlip(step = 0) {
     if (!this.available) return;
-    if (this._missionStartMs != null) {
-      const graceS = (Constants.AUDIO && Constants.AUDIO.MANIFEST_BLIP_STARTUP_GRACE_S) || 0;
-      const nowMs = (typeof performance !== 'undefined' && performance.now)
-        ? performance.now() : Date.now();
-      if (nowMs - this._missionStartMs < graceS * 1000) return;
-    }
+    if (this._inStartupCueGrace()) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
 
@@ -2375,24 +2391,12 @@ class AudioSystem {
     const now = ctx.currentTime;
 
     // Squelch burst: bandpass-filtered noise, quick in/out (radio keying).
+    // Startup legibility (2026-07-24): the former two-note square "online
+    // confirm" (880→1320 Hz) that followed the squelch was heard as an
+    // unexplained high double blip at mission handoff — square tones sit in
+    // the PING register, not RADIO. RADIO family speaks in static only; the
+    // squelch alone is self-labeling.
     this._playSquelch(now, 0.16, 0.09);
-
-    // Two-blip "online" confirm after the squelch (comms handshake).
-    const blips = [880, 1320];
-    blips.forEach((f, i) => {
-      const start = now + 0.18 + i * 0.09;
-      const osc = ctx.createOscillator();
-      osc.type = 'square';
-      osc.frequency.value = f;
-      const g = ctx.createGain();
-      g.gain.setValueAtTime(0.0001, start);
-      g.gain.exponentialRampToValueAtTime(0.035, start + 0.01);
-      g.gain.exponentialRampToValueAtTime(0.001, start + 0.06);
-      osc.connect(g);
-      g.connect(this.radioBus);
-      osc.start(start);
-      osc.stop(start + 0.07);
-    });
   }
 
   /**
