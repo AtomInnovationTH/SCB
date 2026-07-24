@@ -3704,12 +3704,13 @@ export class PlayerSatellite extends THREE.Group {
     }
 
     // Deployed: framerate-correct exponential smoothing toward the target
-    // (~0.3 s time constant, stable at any dt). The rate constant must be brisk
-    // enough to keep up with attitude slews (aim/launch/autopilot) — the old
-    // 0.3 (~3.3 s) badly trailed those swings and read as "laggy" panels. The
-    // exponential filter still rejects attitude micro-noise, so there is no
-    // deadband — a deadband turns settled motion into freeze/nudge/freeze steps.
-    const alpha = 1 - Math.exp(-3.5 * dt);
+    // (~0.57 s time constant, stable at any dt). The rate constant must be brisk
+    // enough to keep up with attitude slews (aim/launch/autopilot) without the
+    // old 0.3 (~3.3 s) trailing them, but not so fast it snaps — 1.75 reads as a
+    // deliberate motorized gimbal. The exponential filter still rejects attitude
+    // micro-noise, so there is no deadband (a deadband turns settled motion into
+    // freeze/nudge/freeze steps).
+    const alpha = 1 - Math.exp(-1.75 * dt);
 
     if (this.panelRightPivot) {
       const cur = this.panelRightPivot.rotation.x;
