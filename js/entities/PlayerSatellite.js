@@ -2386,29 +2386,26 @@ export class PlayerSatellite extends THREE.Group {
     // bug). Half the boom radius sits the tube tangent to the blanket surface.
     const zNudge = boomOD * 0.6; // ≈ 1.2 cm in metres, M-scaled (~1.2e-7 scene units)
 
-    // ── Two edge booms — run along X (roll-out dir) at both long edges (±Y) ──
+    // ── One edge boom per long edge (±Y), centred on the blanket plane (z=0) ──
     // Cylinder default axis is Y; rotate Z by 90° so it lies along local X.
-    // Booms are added on BOTH faces (±zNudge): the front pair sits on the cell
-    // side, the back pair on the copper-Kapton substrate side so the featureless
-    // back face now carries matching structure. All parented to `wrapper` so the
-    // roll-out scale.x extends them with the blanket. (Booms are not in `struct`
-    // handles, so _setRosaWingProgress leaves them untouched — safe.)
-    const boomGeo = new THREE.CylinderGeometry(boomOD / 2, boomOD / 2, rosaW, 6);
+    // The boom OD (2 cm) far exceeds the 4 mm blanket sandwich, so a SINGLE
+    // centred spar embeds the blanket edge and reads from BOTH faces at once.
+    // This replaces the old ±zNudge front/back boom PAIR: that pair straddled
+    // the blanket ~1.2 cm to each side, leaving a ~1 cm see-through channel
+    // between the two bars that showed background when viewed near edge-on.
+    // Parented to `wrapper` so the roll-out scale.x extends them with the
+    // blanket. Names A/B are bound in test-RosaFurl.js. (Booms are not in
+    // `struct` handles, so _setRosaWingProgress leaves them untouched — safe.)
+    const boomGeo = new THREE.CylinderGeometry(boomOD / 2, boomOD / 2, rosaW, 8);
     for (const edgeY of [rosaL / 2, -rosaL / 2]) {
-      for (const face of [zNudge, -zNudge]) {
-        const boom = new THREE.Mesh(boomGeo, boomMat);
-        boom.rotation.z = Math.PI / 2;           // Y-axis → X-axis (blanket length)
-        // Center at half-width so it spans local x ∈ [0, rosaW]; for the -X wing
-        // the wrapper geometry runs x ∈ [-rosaW, 0], so mirror via sign.
-        boom.position.set(sign * rosaW / 2, edgeY, face);
-        // Keep the original front-boom names (asserted in test-RosaFurl.js); the
-        // new back-face pair gets a distinct "_K" (Kapton side) suffix.
-        boom.name = (face > 0)
-          ? `ROSA_Boom_${wing === 1 ? '0' : '180'}deg_${edgeY > 0 ? 'A' : 'B'}`
-          : `ROSA_Boom_${wing === 1 ? '0' : '180'}deg_${edgeY > 0 ? 'A' : 'B'}_K`;
-        boom.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
-        wrapper.add(boom);
-      }
+      const boom = new THREE.Mesh(boomGeo, boomMat);
+      boom.rotation.z = Math.PI / 2;           // Y-axis → X-axis (blanket length)
+      // Center at half-width so it spans local x ∈ [0, rosaW]; for the -X wing
+      // the wrapper geometry runs x ∈ [-rosaW, 0], so mirror via sign.
+      boom.position.set(sign * rosaW / 2, edgeY, 0);
+      boom.name = `ROSA_Boom_${wing === 1 ? '0' : '180'}deg_${edgeY > 0 ? 'A' : 'B'}`;
+      boom.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      wrapper.add(boom);
     }
 
     // ── Tip spreader bar — at the outboard edge (x = ±rosaW), spans width (Y) ──
