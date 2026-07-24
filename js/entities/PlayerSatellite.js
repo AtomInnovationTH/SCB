@@ -3689,11 +3689,49 @@ export class PlayerSatellite extends THREE.Group {
   _animateSolarTracking(dt, sunDirection) {
     if (!sunDirection) return;
 
-    // A rolled-up (furled) array shouldn't gimbal — freeze tracking when the
-    // wings are mostly furled so the panels hold their tilt while retracted.
-    // Furl takes precedence over feather.
-    if ((this._rosaFurlProgress ?? 1) < 0.5) return;
+    const desired = this._rosaDesiredTilt(sunDirection);
 
+    // While the wing is mostly furled it reads as a rolled-up cylinder — the
+    // pivot tilt is invisible. Keep snapping it straight to the target so it is
+    // always correct and "pre-seeded": when it unrolls past 50% the tilt is
+    // already right, so there is no wake-up sweep AND no visible snap (the old
+    // seed-at-0.5 approach snapped up to 30° while the panel was half-visible).
+    // Furl takes precedence over feather; a furled wing never gimbals visibly.
+    if ((this._rosaFurlProgress ?? 1) < 0.5) {
+      if (this.panelRightPivot) this.panelRightPivot.rotation.x = desired;
+      if (this.panelLeftPivot) this.panelLeftPivot.rotation.x = desired;
+      return;
+    }
+
+    // Deployed: framerate-correct exponential smoothing toward the target
+    // (~0.3 s time constant, stable at any dt). The rate constant must be brisk
+    // enough to keep up with attitude slews (aim/launch/autopilot) — the old
+    // 0.3 (~3.3 s) badly trailed those swings and read as "laggy" panels. The
+    // exponential filter still rejects attitude micro-noise, so there is no
+    // deadband — a deadband turns settled motion into freeze/nudge/freeze steps.
+    const alpha = 1 - Math.exp(-3.5 * dt);
+
+    if (this.panelRightPivot) {
+      const cur = this.panelRightPivot.rotation.x;
+      this.panelRightPivot.rotation.x = cur + (desired - cur) * alpha;
+    }
+    if (this.panelLeftPivot) {
+      const cur = this.panelLeftPivot.rotation.x;
+      this.panelLeftPivot.rotation.x = cur + (desired - cur) * alpha;
+    }
+  }
+
+  /**
+   * @private Compute the desired ROSA pivot tilt (rad) for a sun direction.
+   *
+   * Converts the sun direction into body space, finds the optimal boom-axis
+   * tilt (panel normal → sun projection in the YZ plane), applies the
+   * tier-aware clamp, and blends toward the edge-on park angle when feathered.
+   * Shared by live tracking and first-frame seeding so both use identical math.
+   * @param {THREE.Vector3} sunDirection — world-space sun direction
+   * @returns {number} desired pivot rotation.x in radians
+   */
+  _rosaDesiredTilt(sunDirection) {
     // Convert sun direction to satellite body space
     const localSun = _v3TmpA.copy(sunDirection).applyQuaternion(_qInvTmp.copy(this.quaternion).invert());
 
@@ -3709,26 +3747,12 @@ export class PlayerSatellite extends THREE.Group {
     // (sun-track target + 90°) instead of tracking. This minimises the blanket's
     // sun-facing cross-section to dodge a hazard while staying deployed.
     const feather = this._rosaFeatherProgress ?? 0;
-    let desired;
     if (feather > 0) {
       const edgeOn = targetTilt + Math.PI / 2;             // 90° off sun = edge-on
       const tracked = Math.max(-maxTilt, Math.min(maxTilt, targetTilt));
-      desired = tracked + (edgeOn - tracked) * feather;    // blend track → edge-on
-    } else {
-      desired = Math.max(-maxTilt, Math.min(maxTilt, targetTilt));
+      return tracked + (edgeOn - tracked) * feather;       // blend track → edge-on
     }
-
-    const trackSpeed = 0.3 * dt; // Slow, smooth tracking
-
-    // Apply identical tilt to both panel pivots (coplanar tracking)
-    if (this.panelRightPivot) {
-      const cur = this.panelRightPivot.rotation.x;
-      this.panelRightPivot.rotation.x += (desired - cur) * trackSpeed;
-    }
-    if (this.panelLeftPivot) {
-      const cur = this.panelLeftPivot.rotation.x;
-      this.panelLeftPivot.rotation.x += (desired - cur) * trackSpeed;
-    }
+    return Math.max(-maxTilt, Math.min(maxTilt, targetTilt));
   }
 
   /**
