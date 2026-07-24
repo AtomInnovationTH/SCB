@@ -843,7 +843,18 @@ export class SunLight {
 
   /** @private */
   _updateSunDisc() {
-    const sunPos = this._bodyPos.copy(this.sunDirection).multiplyScalar(450);
+    // Camera-relative placement: the disc sits at a fixed distance along the
+    // sun direction *from the camera*, so its apparent direction equals the
+    // lighting's uSunDirection exactly (no finite-distance parallax toward
+    // Earth). This is what makes the disc breach the limb precisely when the
+    // ocean-glint NdotL gate turns on. Fall back to origin-relative when the
+    // camera is null (menu/first frames); the occlusion path then uses
+    // _inShadow. The sun is special-cased this way because lighting depends on
+    // it — the moon/planets stay origin-centered (tiny, arguably-realistic
+    // parallax) and are left untouched.
+    const sunPos = this.camera
+      ? this._bodyPos.copy(this.sunDirection).multiplyScalar(450).add(this.camera.position)
+      : this._bodyPos.copy(this.sunDirection).multiplyScalar(450);
     this.sunSprite.position.copy(sunPos);
 
     // Geometric Earth-occlusion: hide sun when behind Earth's disc from camera POV
@@ -852,10 +863,33 @@ export class SunLight {
       : this._inShadow;
     this.sunSprite.visible = !sunHidden;
 
-    // Update sun depth mask — placed at DEPTH_MASK_DIST along sun direction (inside star sphere)
+    // Update sun depth mask — camera-relative, placed just inside the star shell
+    // along the sun direction so it occludes stars behind the disc. A fixed
+    // origin-centered DEPTH_MASK_DIST breaks at altitude: stars along the sun
+    // direction can be as close as (R − camDist), which would leave the mask
+    // *behind* them. Solve the camera→star-shell ray for its length t, place the
+    // mask at 0.98·t, and rescale so its angular size (geometry built for
+    // DEPTH_MASK_DIST) is preserved.
     if (this._sunDepthMask) {
-      this._sunDepthMask.position.copy(this.sunDirection).multiplyScalar(DEPTH_MASK_DIST);
-      this._sunDepthMask.visible = !sunHidden;
+      if (this.camera) {
+        const R = Constants.STAR_SPHERE_RADIUS;
+        const cam = this.camera.position;
+        const s = cam.dot(this.sunDirection);
+        const disc = R * R - cam.lengthSq() + s * s;
+        if (disc <= 0) {
+          // Camera at/outside the star shell (shouldn't happen in gameplay).
+          this._sunDepthMask.visible = false;
+        } else {
+          const t = (-s + Math.sqrt(disc)) * 0.98;
+          this._sunDepthMask.position.copy(this.sunDirection).multiplyScalar(t).add(cam);
+          this._sunDepthMask.scale.setScalar(t / DEPTH_MASK_DIST);
+          this._sunDepthMask.visible = !sunHidden;
+        }
+      } else {
+        this._sunDepthMask.position.copy(this.sunDirection).multiplyScalar(DEPTH_MASK_DIST);
+        this._sunDepthMask.scale.setScalar(1);
+        this._sunDepthMask.visible = !sunHidden;
+      }
     }
 
     // Sun label: camera-relative "below"
@@ -885,8 +919,10 @@ export class SunLight {
     }
     this.flareGroup.visible = true;
 
-    const sunPos = this._bodyPos.copy(this.sunDirection).multiplyScalar(450);
+    // Camera-relative sun position (matches _updateSunDisc) so flare sprites
+    // lerp along the true camera→sun axis.
     const camPos = this.camera.position;
+    const sunPos = this._bodyPos.copy(this.sunDirection).multiplyScalar(450).add(camPos);
 
     // Camera forward vector
     this._camForward.set(0, 0, -1).applyQuaternion(this.camera.quaternion);
@@ -920,6 +956,9 @@ export class SunLight {
       Math.sin(moonAngle)
     ).normalize();
 
+    // Origin-centered (not camera-relative like the sun): the small finite-
+    // distance parallax is visually negligible and arguably realistic. Only the
+    // sun is special-cased, because the lighting direction depends on it.
     const moonPos = this._bodyPos.copy(moonDir).multiplyScalar(430);
     this.moonMesh.position.copy(moonPos);
 
