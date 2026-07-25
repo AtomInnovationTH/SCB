@@ -1,6 +1,6 @@
 /**
  * DaughterWireframe.js — Part-callout wireframe for a deployed ArmUnit (daughter craft)
- * Canvas2D panel — same pipeline as MotherWireframe.js / DebrisWireframe.js.
+ * Canvas2D panel — same pipeline as DebrisWireframe.js.
  *
  * Positioning: bottom-left slot so it never overlaps DebrisWireframe (bottom-right).
  *

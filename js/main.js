@@ -54,6 +54,7 @@ import { IssConjunctionBoss } from './systems/IssConjunctionBoss.js';
 import { StarlinkCascadeBoss } from './systems/StarlinkCascadeBoss.js';
 import { LassoSystem } from './systems/LassoSystem.js';
 import { despinLaser } from './systems/DespinLaser.js';
+import { tetherReel } from './systems/TetherReel.js';
 import { RewardSystem } from './systems/RewardSystem.js';
 import { CodexSystem } from './systems/CodexSystem.js';import { loadCodexData } from './systems/codex/codexData.js';
 import { SpaceWeatherSystem } from './systems/SpaceWeatherSystem.js';
@@ -765,6 +766,16 @@ async function init() {
   // --- CP-4 MissionCoach (chapters 2+ coaching; chapter 1 stays with OnboardingDirector) ---
   missionCoach = new MissionCoach({ eventBus, scoringSystem, persistenceManager, commsSystem });
   missionCoach.init();
+
+  // Late-bind live-data + codex context into the inspection callouts. Done here
+  // (not in the constructor) because motherCallouts is built before commsSystem;
+  // every reference is optional and cards degrade to static rows if missing.
+  if (motherCallouts?.setLiveCtx) {
+    motherCallouts.setLiveCtx({
+      resourceSystem, commsSystem, codexSystem,
+      powerDistribution, tetherReel, despinLaser, player, armManager,
+    });
+  }
 
   // --- Build UI ---
   hud = new HUD();

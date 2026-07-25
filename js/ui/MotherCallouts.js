@@ -1,32 +1,43 @@
 /**
  * MotherCallouts.js — In-world 3D inspection callouts for the mothership.
  *
- * Replaces the separate 2D MotherWireframe pane: instead of forcing the player
- * to look back and forth between the 3D ship and a schematic panel, part labels,
- * leader lines and detail text are anchored directly onto the real model in the
- * world.
+ * Part labels, leader lines and detail cards are anchored onto the real model
+ * in the world (no separate 2D schematic pane). A screen-space side-rail layout
+ * flanks the ship with two stacked columns of cards joined to their anchors by
+ * elbow leaders, so labels never crowd the fore cap or cross each other.
  *
- * Zoom-driven level-of-detail (player request, 2026-06-03) keeps clutter under
- * control — the closer you zoom, the more detail is revealed:
+ * Zoom-driven level-of-detail keeps clutter under control:
  *
- *   Band 1  SYSTEM   (far, ~12–8 m)  : 6 system-group labels only (POWER /
- *                                       PROPULSION / PAYLOAD / SENSORS / COMMS /
- *                                       CAPTURE).
- *   Band 2  PART     (mid, ~8–4 m)   : every part label + mass/risk detail; the
- *                                       system labels fade out.
- *   Band 3  COMPONENT(close, <4 m)   : the part nearest screen-centre gets a
- *                                       brightened focus + live data line.
+ *   Band 1  SYSTEM   (far, ~12–8 m)  : 6 system-group labels only.
+ *   Band 2  PART     (mid, ~8–5.5 m) : every major part card; system labels fade.
+ *   Band 3  COMPONENT(close, <5.5 m) : the part nearest screen-centre gets a
+ *                                       full detail card (specs + TRL + live data)
+ *                                       placed by its anchor; its system's detail
+ *                                       sub-parts appear on the rails.
  *
- * Within a band, labels on the far side of the hull fade by camera-facing angle
- * so the near side stays readable. Band edges use hysteresis (Schmitt trigger)
- * so labels don't flicker when the camera parks on a boundary.
+ * Identity: hue = system (6 hues), risk = a small badge dot on the card. Anchors
+ * on the far side of the hull fade by camera-facing angle (dot-product proxy).
+ * Card positions ease in SCREEN space (NDC) so ship rotation reads as smooth
+ * sliding rather than object-space wobble. Rail side and stack order use
+ * hysteresis so orbiting doesn't thrash sides or flash leader crossings.
  *
  * First time inspection engages, a one-shot "guided pulse" sweeps a highlight
- * through the five systems so a new player learns the vocabulary passively.
+ * through the systems so a new player learns the vocabulary passively.
  *
- * Gating mirrors the hull outline (PlayerSatellite): active while either the
- * discrete INSPECTION view (CAMERA_VIEW_CHANGE) or the OVERVIEW zoom sub-state
- * (INSPECT_HULL_OUTLINE) reports inspection on.
+ * Gating mirrors the hull outline: active while either the discrete INSPECTION
+ * view (CAMERA_VIEW_CHANGE) or the OVERVIEW zoom sub-state (INSPECT_HULL_OUTLINE)
+ * reports inspection on.
+ *
+ * Render pipeline (corrects the round-1 plan note): the callout group is a child
+ * of `player`, and SceneManager._updateNearCamera() re-tags every near-field root
+ * subtree onto NEAR_FIELD_LAYER EVERY FRAME (SceneManager.js:966-975), so these
+ * sprites render in the NEAR pass alongside the hull — after clearDepth(), so the
+ * hull can never overpaint them. The pass's uniform ×1e5 camera-relative scale is
+ * applied to the shared root, and every position here goes through
+ * player.worldToLocal / local anchors, so screen size and position are preserved
+ * exactly. Near-plane clipping of dots/leader tips is provably dead: min inspect
+ * distance is 2 m (CameraSystem.js:208) vs a 1.33 m clip threshold for the
+ * fore-most anchor (1.3 m) — unreachable.
  *
  * @module ui/MotherCallouts
  */
@@ -35,236 +46,306 @@ import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
-import { createLabelTexture } from '../scene/labelTexture.js';
+import { createCardTexture, CARD_W_OVER_TITLE_H, wrapHint } from '../scene/labelTexture.js';
+import { orderRail } from '../scene/railOrder.js';
 
 // 1 metre in scene units (mirrors PlayerSatellite's M = 0.00001).
 const M = 0.00001;
+const DEG2RAD = Math.PI / 180;
 
-const RISK = {
-  GREEN:  Constants.WIREFRAMES?.COLOR_GREEN  ?? '#3fb950',
-  YELLOW: Constants.WIREFRAMES?.COLOR_YELLOW ?? '#d29922',
-  RED:    Constants.WIREFRAMES?.COLOR_RED    ?? '#f85149',
-};
-const RISK_TXT = { GREEN: 'LOW', YELLOW: 'MED', RED: 'HIGH' };
+const CFG = Constants.CALLOUTS;
+const HUES = CFG.SYSTEM_HUES;
+const RISK = CFG.RISK_COLORS;
 
 // ----------------------------------------------------------------------------
 // SYSTEM / PART ANCHOR TABLE
 // ----------------------------------------------------------------------------
-// Anchors are LOCAL model coordinates (parented to the PlayerSatellite group,
-// so they track the ship's transform). `anchor` is the point on the part the
-// leader line touches; `labelOffset` is where the text sprite sits (offset
-// outward so it floats beside the ship). Values in metres × M, taken from the
-// real model build in PlayerSatellite.js (+Z fore, −Z aft, XY radial; barrel
-// r=0.40, L=2.0 → caps at z=±1.0; collar at z=+0.90).
+// Anchors are LOCAL model coordinates (parented to the PlayerSatellite group),
+// in metres × M, taken from the real model build in PlayerSatellite.js
+// (+Z fore, −Z aft, XY radial; barrel r=0.40, L=2.0 → caps at z=±1.0).
 //
-// `tier`:
-//   'major'  → shown in the PART band (mid zoom) and COMPONENT band.
-//   'detail' → fine sub-part; shown ONLY in the COMPONENT band, and only when
-//              its system owns the focused part (so deep-zoom reveals detail
-//              instead of crowding the mid band).
-// The five player-facing systems regroup the 11 MotherWireframe zones plus the
-// previously un-labelled hardware (MLI bands, tether reels, crossbow springs,
-// EO/IR/LIDAR split, nav/strobe lights, daughter pockets).
+// Per part:
+//   id       stable lookup key (tests + internal; display copy may change freely).
+//   tier     'major' → PART + COMPONENT bands; 'detail' → COMPONENT band only,
+//            and only when its system owns the focused part OR it sits near the
+//            focused part on screen (proximity reveal, T6).
+//   massKg   real-flavoured dry mass (kg) shown on the detail card.
+//   specs    1–2 static spec lines for the detail card.
+//   priority higher = kept when a rail overflows (culling drops lowest first).
+//   risk     GREEN/YELLOW/RED → badge dot colour.
+//   codexId  existing codex entry id/alias → clickable deep-link.
+//   live     id consumed by _liveRows() for phase-2 dynamic rows (optional).
+//   mesh     PlayerSatellite mesh name; the anchor is resolved from the live
+//            mesh position instead of the static coordinate (T1). Falls back to
+//            `anchor` with a one-time console.warn if the name doesn't resolve.
+//   dynamic  re-resolve the mesh anchor EVERY frame (the mesh moves, e.g. the
+//            strut-mounted reel cartridges). Static meshes resolve once.
 const SYSTEMS = [
   {
     id: 'POWER', label: 'POWER',
     anchor: [ 1.0 * M, 0, 0 ],
-    labelOffset: [ 1.9 * M, 1.0 * M, 0 ],
     parts: [
-      { name: 'ROSA SOLAR WINGS', mass: 18, risk: 'GREEN', tier: 'major', codexId: 'rosa_solar_array',
-        anchor: [ 1.1 * M, 0, 0 ], labelOffset: [ 2.0 * M, 0.5 * M, 0 ] },
-      { name: 'BODY SOLAR CELLS', mass: 0, risk: 'GREEN', tier: 'detail', codexId: 'solar_cell_degradation',
-        anchor: [ 0.40 * M, 0, 0.30 * M ], labelOffset: [ 1.0 * M, 0.55 * M, 0.30 * M ] },
-      { name: 'ARRAY ROLL', mass: 0, risk: 'GREEN', tier: 'detail',
-        anchor: [ 0.45 * M, 0, 0 ], labelOffset: [ 0.95 * M, -0.45 * M, 0 ] },
+      { id: 'rosa_wings', name: 'ROLL-OUT SOLAR WINGS', risk: 'GREEN', tier: 'major', codexId: 'rosa_solar_array',
+        massKg: 22, priority: 9, live: 'rosa',
+        specs: ['2× 1×2 m roll-out arrays', '~2.2 kW peak (BOL)'],
+        anchor: [ 1.1 * M, 0, 0 ] },
+      { id: 'body_cells', name: 'HULL SOLAR CELLS', risk: 'GREEN', tier: 'detail', codexId: 'solar_cell_degradation',
+        massKg: 3, priority: 2, specs: ['Body-mounted GaAs cells'],
+        // az 33.75° facet centre, central PV row (face radius barrelR×1.014).
+        // The old az-0° anchor sat in the ROSA-root keep-out on bare hull and
+        // collided with NAV LIGHTS (2 cm).
+        anchor: [ 0.337 * M, 0.2254 * M, 0 ] },
+      { id: 'array_roll', name: 'SOLAR WING SPOOL', risk: 'GREEN', tier: 'detail', codexId: 'solar_power',
+        massKg: 4, priority: 2, specs: ['Roll-out drum + drive'],
+        // The real spool/drum sits rootX = brkLen + drumR×0.4 = 0.08 outboard
+        // of the pivot at barrelR → x = 0.48.
+        anchor: [ 0.48 * M, 0, 0 ] },
     ],
   },
   {
     id: 'PROPULSION', label: 'PROPULSION',
     anchor: [ 0, 0, -1.0 * M ],
-    labelOffset: [ 0, -1.3 * M, -1.3 * M ],
     parts: [
-      { name: 'FEEP ION THRUSTERS', mass: 6, risk: 'YELLOW', tier: 'major', codexId: 'feep_thruster',
-        anchor: [ 0, -0.20 * M, -1.05 * M ], labelOffset: [ -1.1 * M, -1.0 * M, -1.2 * M ] },
-      { name: 'RCS ATTITUDE', mass: 2, risk: 'GREEN', tier: 'major', codexId: 'cold_gas_rcs',
-        anchor: [ -0.03 * M, 0.42 * M, -0.795 * M ], labelOffset: [ 1.2 * M, 1.0 * M, -0.9 * M ] },
-      { name: 'MLI THERMAL BANDS', mass: 0, risk: 'GREEN', tier: 'detail', codexId: 'mli_insulation',
-        anchor: [ 0.43 * M, 0, 0.50 * M ], labelOffset: [ 1.1 * M, 0.5 * M, 0.50 * M ] },
+      { id: 'feep', name: 'ION THRUSTERS (FEEP)', risk: 'YELLOW', tier: 'major', codexId: 'feep_thruster',
+        massKg: 8, priority: 8, live: 'feep',
+        specs: ['4× emitter clusters', 'Isp ~4000 s'],
+        anchor: [ 0, -0.20 * M, -1.05 * M ] },
+      { id: 'rcs', name: 'COLD-GAS STEERING', risk: 'GREEN', tier: 'major', codexId: 'cold_gas_rcs',
+        massKg: 3, priority: 5, specs: ['GN2 thruster ring'],
+        anchor: [ -0.03 * M, 0.42 * M, -0.795 * M ] },
+      { id: 'mli', name: 'THERMAL BLANKET (MLI)', risk: 'GREEN', tier: 'detail', codexId: 'mli_insulation',
+        massKg: 2, priority: 2, specs: ['Multi-layer insulation'],
+        // Bare-MLI shoulder band above the fore cell row (cells end at z=0.72).
+        // The old z=0.50 anchor pointed at MLI seam rings deleted 2026-07-23.
+        anchor: [ 0.404 * M, 0, 0.78 * M ] },
+      { id: 'aft_deck', name: 'AFT THRUSTER DECK', risk: 'GREEN', tier: 'detail',
+        massKg: 4, priority: 1, specs: ['Aft plate — 0.6 m deck'],
+        mesh: 'AftThrusterDeck',
+        anchor: [ 0, 0.20 * M, -1.008 * M ] },
     ],
   },
   {
     id: 'PAYLOAD', label: 'PAYLOAD',
     anchor: [ 0, 0.10 * M, 1.05 * M ],
-    labelOffset: [ -1.4 * M, 1.4 * M, 1.2 * M ],
     parts: [
-      // DESPIN LASER — telescope in the sensor ring (RING_AZ.tele=135°):
-      // gimbal (0,0,1.0) + ring slot (−0.18, 0.18) + fore → ≈ (−0.18, 0.18, 1.22).
-      { name: 'DESPIN LASER', mass: 6, risk: 'RED', tier: 'major', codexId: 'power_beaming',
-        anchor: [ -0.18 * M, 0.18 * M, 1.22 * M ], labelOffset: [ -1.3 * M, 0.9 * M, 1.2 * M ] },
-      // LARGE NET LAUNCHER — dead-centre on the CoM axis, protruding to z=1.30M.
-      { name: 'LARGE NET LAUNCHER', mass: 3, risk: 'GREEN', tier: 'major', codexId: 'miura_ori_net',
-        anchor: [ 0, 0, 1.30 * M ], labelOffset: [ -1.2 * M, -0.9 * M, 1.2 * M ] },
+      { id: 'despin', name: 'SPIN-BRAKE LASER', risk: 'RED', tier: 'major', codexId: 'power_beaming',
+        massKg: 9, priority: 9, live: 'despin',
+        specs: ['Photon-pressure despin', '~5 W fibre laser'],
+        // Gimbal child — dynamic so the anchor tracks if the turret articulates.
+        mesh: 'LaserMuzzle', dynamic: true,
+        anchor: [ -0.184 * M, 0.184 * M, 1.20 * M ] },
+      { id: 'net_launcher', name: 'LARGE NET LAUNCHER', risk: 'GREEN', tier: 'major', codexId: 'miura_ori_net',
+        massKg: 5, priority: 7, specs: ['Miura-ori net, ~5 m span'],
+        anchor: [ 0, 0, 1.30 * M ] },
     ],
   },
   {
     id: 'SENSORS', label: 'SENSORS',
-    // Turret ringed symmetrically around the central net launcher (2026-07-23
-    // centreline redesign). Group label floats up-and-right off the fore cap.
     anchor: [ 0, 0.26 * M, 1.12 * M ],
-    labelOffset: [ 1.5 * M, 1.4 * M, 1.0 * M ],
     parts: [
-      { name: 'SENSOR GIMBAL', mass: 4, risk: 'GREEN', tier: 'major',
-        anchor: [ 0, 0, 1.05 * M ], labelOffset: [ 1.4 * M, 1.2 * M, 1.0 * M ] },
-      { name: 'EO CAMERA', mass: 0, risk: 'GREEN', tier: 'major',
-        anchor: [ 0.18 * M, 0.18 * M, 1.15 * M ], labelOffset: [ 1.1 * M, 0.9 * M, 1.0 * M ] },
-      { name: 'IR SENSOR', mass: 0, risk: 'GREEN', tier: 'major',
-        anchor: [ -0.18 * M, -0.18 * M, 1.12 * M ], labelOffset: [ -1.1 * M, -0.9 * M, 1.0 * M ] },
-      { name: 'LIDAR DOME', mass: 0, risk: 'GREEN', tier: 'major', codexId: 'lidar_ranging',
-        anchor: [ 0.18 * M, -0.18 * M, 1.12 * M ], labelOffset: [ 1.1 * M, -0.9 * M, 1.0 * M ] },
-      // Star trackers ×2 — anchor at StarTracker_0 (az 84°, z 0.90 on the shoulder).
-      { name: 'STAR TRACKERS', mass: 1, risk: 'GREEN', tier: 'major', codexId: 'star_tracker',
-        anchor: [ 0.042 * M, 0.398 * M, 0.90 * M ], labelOffset: [ 1.2 * M, 1.3 * M, 0.7 * M ] },
-      // Sun sensors — anchor at the fore-cap puck flanking the net launcher.
-      { name: 'SUN SENSORS', mass: 0, risk: 'GREEN', tier: 'detail', codexId: 'sun_sensor',
-        anchor: [ 0.28 * M, -0.20 * M, 1.0 * M ], labelOffset: [ 1.1 * M, -0.5 * M, 1.0 * M ] },
-      { name: 'NAV LIGHTS', mass: 1, risk: 'GREEN', tier: 'detail',
-        anchor: [ 0.42 * M, 0, 0.30 * M ], labelOffset: [ 1.1 * M, -0.2 * M, 0.30 * M ] },
+      { id: 'gimbal', name: 'SENSOR TURRET', risk: 'GREEN', tier: 'major', codexId: 'pose_estimation',
+        massKg: 5, priority: 6, specs: ['2-axis pointing platform'],
+        anchor: [ 0, 0, 1.00 * M ] },
+      { id: 'eo_cam', name: 'DAYLIGHT CAMERA', risk: 'GREEN', tier: 'major', codexId: 'debris_tracking',
+        massKg: 2, priority: 4, specs: ['Visible-band imager (EO)'],
+        anchor: [ 0.184 * M, 0.184 * M, 1.11 * M ] },
+      { id: 'ir_cam', name: 'HEAT (INFRARED) CAM', risk: 'GREEN', tier: 'major', codexId: 'trackable_vs_dark',
+        massKg: 2, priority: 4, specs: ['LWIR — spots dark debris'],
+        anchor: [ -0.184 * M, -0.184 * M, 1.08 * M ] },
+      { id: 'lidar', name: 'LASER RANGEFINDER', risk: 'GREEN', tier: 'major', codexId: 'lidar_ranging',
+        massKg: 3, priority: 5, specs: ['Flash LIDAR — range + pose'],
+        anchor: [ 0.184 * M, -0.184 * M, 1.10 * M ] },
+      { id: 'star_trackers', name: 'STAR TRACKERS', risk: 'GREEN', tier: 'major', codexId: 'star_tracker',
+        massKg: 1, priority: 3, specs: ['2× — attitude from starfield'],
+        anchor: [ 0.042 * M, 0.398 * M, 0.90 * M ] },
+      { id: 'fore_bulkhead', name: 'FORE BULKHEAD', risk: 'GREEN', tier: 'major',
+        massKg: 6, priority: 3, specs: ['Fore end cap — 0.8 m plate', 'Carries the sensor deck'],
+        mesh: 'FrontCap_ConfigG',
+        anchor: [ 0.30 * M, -0.28 * M, 1.005 * M ] },
+      { id: 'sensor_deck', name: 'SENSOR DECK', risk: 'GREEN', tier: 'detail',
+        massKg: 2, priority: 2, specs: ['Instrument mounting annulus'],
+        mesh: 'SensorDeck',
+        anchor: [ 0, 0.30 * M, 1.03 * M ] },
+      { id: 'sun_sensors', name: 'SUN SENSORS', risk: 'GREEN', tier: 'detail', codexId: 'sun_sensor',
+        massKg: 0.5, priority: 2, specs: ['Coarse sun sensing, 4×'],
+        anchor: [ 0.28 * M, -0.20 * M, 1.0 * M ] },
+      { id: 'nav_lights', name: 'NAVIGATION LIGHTS', risk: 'GREEN', tier: 'detail',
+        massKg: 1, priority: 1, specs: ['Port/starboard running lights'],
+        anchor: [ 0.42 * M, 0, 0.30 * M ] },
     ],
   },
   {
     id: 'COMMS', label: 'COMMS',
-    // Barrel fore-shoulder near the MGA patch (az ~25°, z 0.87).
     anchor: [ 0.363 * M, 0.169 * M, 0.87 * M ],
-    labelOffset: [ 1.6 * M, 0.7 * M, 0.6 * M ],
     parts: [
-      // TT&C omnis — anchor at TTC_Omni_0 (az 270°, z +0.92, i.e. −Y).
-      { name: 'TT&C ANTENNAS', mass: 1, risk: 'GREEN', tier: 'major', codexId: 'comms_blackout',
-        anchor: [ 0, -0.40 * M, 0.92 * M ], labelOffset: [ -1.2 * M, -1.0 * M, 0.6 * M ] },
-      { name: 'MGA PATCH', mass: 0, risk: 'GREEN', tier: 'detail', codexId: 'laser_comms',
-        anchor: [ 0.363 * M, 0.169 * M, 0.87 * M ], labelOffset: [ 1.2 * M, 0.35 * M, 0.6 * M ] },
-      // GPS patches — anchor at GPS_Patch_0 (az 340°, z 0.87).
-      { name: 'GPS ANTENNAS', mass: 0, risk: 'GREEN', tier: 'detail', codexId: 'gps_denied',
-        anchor: [ 0.376 * M, -0.137 * M, 0.87 * M ], labelOffset: [ 1.2 * M, -0.35 * M, 0.6 * M ] },
+      { id: 'ttc', name: 'S-BAND RADIO OMNIS', risk: 'GREEN', tier: 'major', codexId: 'comms_blackout',
+        massKg: 2, priority: 5, live: 'ttc', specs: ['Pair — command + telemetry'],
+        anchor: [ 0, -0.40 * M, 0.92 * M ] },
+      { id: 'mga', name: 'MEDIUM-GAIN ANTENNA', risk: 'GREEN', tier: 'detail', codexId: 'laser_comms',
+        massKg: 1, priority: 2, specs: ['Tangent patch, higher rate'],
+        anchor: [ 0.363 * M, 0.169 * M, 0.87 * M ] },
+      { id: 'gps', name: 'GPS ANTENNAS', risk: 'GREEN', tier: 'detail', codexId: 'gps_denied',
+        massKg: 0.5, priority: 2, specs: ['GNSS patch pair'],
+        anchor: [ 0.376 * M, -0.137 * M, 0.87 * M ] },
+      { id: 'ttc_aft', name: 'S-BAND OMNI (AFT)', risk: 'GREEN', tier: 'detail', codexId: 'comms_blackout',
+        massKg: 1, priority: 1, specs: ['Aft whip of the omni pair'],
+        anchor: [ 0, 0.40 * M, -0.92 * M ] },
     ],
   },
   {
     id: 'CAPTURE', label: 'CAPTURE',
     anchor: [ 0, 0.40 * M, 0.90 * M ],
-    labelOffset: [ 0, 1.5 * M, 0.5 * M ],
     parts: [
-      { name: 'DAUGHTER CRADLES', mass: 0, risk: 'GREEN', tier: 'major',
-        anchor: [ 0.20 * M, 0.35 * M, -0.70 * M ], labelOffset: [ 1.3 * M, 0.7 * M, -0.7 * M ] },
-      { name: 'TETHER REELS', mass: 0, risk: 'GREEN', tier: 'major', codexId: 'reel_mechanics',
-        anchor: [ 0.20 * M, 0.346 * M, 0.55 * M ], labelOffset: [ 1.15 * M, 0.3 * M, 0.4 * M ] },
-      { name: 'HINGE PIVOTS', mass: 0, risk: 'YELLOW', tier: 'detail',
-        anchor: [ 0.22 * M, 0.381 * M, 0.90 * M ], labelOffset: [ 1.1 * M, 0.65 * M, 0.85 * M ] },
-      { name: 'CRADLE SPRING', mass: 0, risk: 'YELLOW', tier: 'detail',
-        anchor: [ 0.20 * M, 0.346 * M, 0.20 * M ], labelOffset: [ 1.1 * M, -0.3 * M, 0.1 * M ] },
-      // Daughter mini net launchers — anchored at a docked cradle canister pose.
-      { name: 'NET LAUNCHERS (DAUGHTERS)', mass: 0, risk: 'GREEN', tier: 'detail',
-        anchor: [ 0.20 * M, 0.35 * M, -0.65 * M ], labelOffset: [ 1.15 * M, -0.1 * M, -0.6 * M ] },
+      { id: 'berths', name: 'DAUGHTER BERTHS', risk: 'GREEN', tier: 'major', codexId: 'docking_berthing',
+        massKg: 6, priority: 6, specs: ['4× — 2 large, 2 small', 'Spring ejector + hinge strut'],
+        // az 60° pocket's aft lip (z=-0.85, hull rim of the carved groove) —
+        // real hull edge, ~15 cm clear of the docked daughter's own callout,
+        // whose anchor is the craft body mid-pocket (z=-0.70).
+        anchor: [ 0.20 * M, 0.346 * M, -0.85 * M ] },
+      { id: 'tether_reels', name: 'TETHER WINCHES', risk: 'GREEN', tier: 'major', codexId: 'reel_mechanics',
+        massKg: 4, priority: 6, live: 'tether', specs: ['4× Dyneema SK78 reels'],
+        // Reel cartridges ride the struts (stowed z≈−0.46, deployed ≈1.5 m out).
+        mesh: 'ReelCartridge_0', dynamic: true,
+        anchor: [ 0.20 * M, 0.346 * M, -0.46 * M ] },
+      { id: 'hinges', name: 'STRUT HINGES', risk: 'YELLOW', tier: 'detail', codexId: 'robotic_arm',
+        massKg: 2, priority: 2, specs: ['Double-A clevis, 4×'],
+        anchor: [ 0.22 * M, 0.381 * M, 0.90 * M ] },
+      { id: 'cradle_spring', name: 'CROSSBOW SPRING', risk: 'YELLOW', tier: 'detail', codexId: 'spring_energy',
+        massKg: 1, priority: 2, specs: ['Spring ejector — launches daughters'],
+        // Spring group rides the strut (stowed z≈−0.62, deployed ≈1.7 m out).
+        mesh: 'CrossbowSpring_0', dynamic: true,
+        anchor: [ 0.20 * M, 0.346 * M, -0.62 * M ] },
+      // NET LAUNCHERS (DAUGHTERS) deleted: that hardware lives on the ArmUnit
+      // (ArmUnit.js:660-667), never on the Mother. The fact moved into the
+      // daughter cards' specs (T3).
+    ],
+  },
+  {
+    // Docked daughters — dynamic recs that follow each docked ArmUnit (T3).
+    // Titles are static (berth i%2 alternates Large/Small, ArmManager.js:113),
+    // so cards are built once; visibility is gated per frame on the arm's state.
+    id: 'DAUGHTERS', label: 'DAUGHTERS',
+    anchor: [ 0.20 * M, 0.35 * M, -0.70 * M ],
+    daughters: true,
+    parts: [
+      { id: 'daughter_0', name: 'LARGE DAUGHTER', risk: 'GREEN', tier: 'major', codexId: 'robotic_arm',
+        massKg: 6.6, priority: 7, live: 'daughter', armIndex: 0,
+        specs: ['Weaver — medium net', 'Tethered capture craft'],
+        anchor: [ 0.20 * M, 0.35 * M, -0.70 * M ] },
+      { id: 'daughter_1', name: 'SMALL DAUGHTER', risk: 'GREEN', tier: 'major', codexId: 'robotic_arm',
+        massKg: 3.7, priority: 7, live: 'daughter', armIndex: 1,
+        specs: ['Spinner — small net', 'Tethered capture craft'],
+        anchor: [ 0.20 * M, 0.35 * M, -0.70 * M ] },
+      { id: 'daughter_2', name: 'LARGE DAUGHTER', risk: 'GREEN', tier: 'major', codexId: 'robotic_arm',
+        massKg: 6.6, priority: 7, live: 'daughter', armIndex: 2,
+        specs: ['Weaver — medium net', 'Tethered capture craft'],
+        anchor: [ 0.20 * M, 0.35 * M, -0.70 * M ] },
+      { id: 'daughter_3', name: 'SMALL DAUGHTER', risk: 'GREEN', tier: 'major', codexId: 'robotic_arm',
+        massKg: 3.7, priority: 7, live: 'daughter', armIndex: 3,
+        specs: ['Spinner — small net', 'Tethered capture craft'],
+        anchor: [ 0.20 * M, 0.35 * M, -0.70 * M ] },
     ],
   },
 ];
 
-
 // LOD band edges, in METRES of camera-to-ship distance. Hysteresis: descend
 // (zoom in) on the lower number, ascend (zoom out) on the higher.
 const BAND = {
-  // SYSTEM ↔ PART
   partIn:  8.0,  partOut:  9.0,
-  // PART ↔ COMPONENT
-  // COMPONENT band relaxed (2026-07-23) so the now-denser fore-end detail tier
-  // (EO/IR/LIDAR promoted to major + new COMMS/SENSORS parts) reveals sooner.
   compIn:  5.5,  compOut:  6.5,
 };
 
 const GUIDE_STEP_S = 1.1;   // seconds each system stays highlighted in the tour
 const GUIDE_HOLD_S = 0.6;   // initial hold before the tour starts
 
-const FADE_RATE = 6.0;      // opacity ease rate (~165 ms to 63%) for band crossfades
-// Leader lines read as the *connection*, so keep them proportionally present
-// relative to their (lighter, smaller) label rather than as a vanishing hairline.
-const LINE_OP_FLOOR = 0.7;  // min line opacity (× label op) once a label is visible
-const LINE_OP_SCALE = 0.95; // line opacity = labelOp * this (clamped to floor)
-// Leader ribbon half-width as a fraction of camera→ship distance, so the leader
-// holds a steady on-screen thickness across the zoom bands instead of the 1px
-// hairline a LineBasicMaterial collapses to on most GPUs. ~0.0024 reads as a
-// clear ~3px connector at typical inspection range.
-const LINE_HALF_WIDTH_FRAC = 0.0024;
-const DECLUTTER_NDC = 0.072; // min vertical screen gap between labels (NDC units)
+const FADE_RATE = 6.0;      // opacity ease rate for band crossfades
+const LINE_OP_SCALE = 0.95; // line opacity = labelOp × this (R11: LINE_OP_FLOOR dropped — it was dead code)
+const LINE_HALF_WIDTH_FRAC = 0.0024; // leader ribbon half-width / camera-ship dist
 
 export class MotherCallouts {
   /**
    * @param {THREE.Object3D} playerGroup  The PlayerSatellite group (labels parent here).
    * @param {THREE.Camera}   camera
    * @param {object} [opts]
-   * @param {HTMLCanvasElement|null} [opts.canvas]  Render canvas, for clickable
-   *   label pointer events (codex deep-links). Null → labels are not clickable.
+   * @param {HTMLCanvasElement|null} [opts.canvas]  Render canvas for pointer events.
    */
   constructor(playerGroup, camera, { canvas = null } = {}) {
     this.player = playerGroup;
     this.camera = camera;
     this.canvas = canvas;
 
-    this._active = false;       // inspection engaged?
-    this._band = 'SYSTEM';      // current LOD band (hysteresis output)
-    this._guideT = -1;          // guided-pulse timer (<0 = not running / done)
-    this._guidedDone = false;   // one-shot: tour only on first inspection
-    this._focusPart = null;     // nearest-to-centre part in COMPONENT band
+    this._active = false;
+    this._band = 'SYSTEM';
+    this._guideT = -1;
+    this._guidedDone = false;
+    this._focusPart = null;
+    this._liveCtx = null;       // late-bound live-data context (task 7)
+    this._lastLiveT = 0;        // live-refresh cadence guard
 
     // Reusable scratch vectors (zero per-frame alloc).
     this._vShip = new THREE.Vector3();
     this._vCam = new THREE.Vector3();
     this._vAnchor = new THREE.Vector3();
-    this._vLabel = new THREE.Vector3();
     this._vTmp = new THREE.Vector3();
     this._vFace = new THREE.Vector3();
     this._vCamDir = new THREE.Vector3();
     this._qTmp = new THREE.Quaternion();
-    // Ribbon-leader scratch (world-space endpoints + perpendicular).
+    this._camRight = new THREE.Vector3();
+    this._camUp = new THREE.Vector3();
+    this._shipNDC = new THREE.Vector3();
+    this._vAttach = new THREE.Vector3();
+    this._vElbow = new THREE.Vector3();
+    // Ribbon-leader scratch.
     this._rA = new THREE.Vector3();
     this._rB = new THREE.Vector3();
     this._rDir = new THREE.Vector3();
     this._rView = new THREE.Vector3();
     this._rPerp = new THREE.Vector3();
+    this._rMid = new THREE.Vector3();
     this._rC0 = new THREE.Vector3();
     this._rC1 = new THREE.Vector3();
     this._rC2 = new THREE.Vector3();
     this._rC3 = new THREE.Vector3();
-    this._vCamLocal = new THREE.Vector3();   // camera position in player-local space
-    this._leaderHalfWidth = 0;               // local-space half-width for leader ribbons
+    this._vCamLocal = new THREE.Vector3();
+    this._leaderHalfWidth = 0;
 
-    // ── Clickable-label interaction (codex deep-links). Listeners are attached
-    // only while inspection is active (see _setActive). Click vs drag is
-    // discriminated here so CameraSystem's drag-orbit is never disturbed.
+    // Per-frame projection state (populated in update()).
+    this._halfH = 1; this._halfW = 1;
+    this._railL = -0.5; this._railR = 0.5;
+
+    // Clickable-label interaction (codex deep-links).
     this._raycaster = new THREE.Raycaster();
     this._ndc = new THREE.Vector2();
-    this._pointerDown = null;      // { x, y, t } screen-space press record
-    this._hoverT = 0;              // pointermove hover throttle accumulator (s)
-    this._cursorSet = false;       // did we set body cursor='pointer'?
-    this._listening = false;       // pointer listeners currently attached?
+    this._pointerDown = null;
+    this._hoverT = 0;
+    this._cursorSet = false;
+    this._listening = false;
+    this._hoverRec = null;
+    this._pointerPos = null;   // last pointer client coords, for hover re-pick (R13)
+    this._hoverPickT = 0;      // hover re-pick cadence guard (R13)
     this._onPointerMove = (e) => this._handlePointerMove(e);
     this._onPointerDown = (e) => this._handlePointerDown(e);
     this._onPointerUp = (e) => this._handlePointerUp(e);
+    this._onPointerCancel = () => { this._pointerDown = null; };
+    this._onPointerLeave = () => {
+      this._hoverRec = null;
+      this._pointerPos = null;   // stop re-picking once the pointer exits (R13)
+      this._restoreCursor();
+    };
 
     this._group = new THREE.Group();
     this._group.name = 'MotherCallouts';
     this._group.visible = false;
     this.player.add(this._group);
 
-    this._systemLabels = [];  // { def, sprite, line }
-    this._partLabels = [];    // { def, sysId, sprite, detailSprite, line }
+    this._partLabels = [];
+    this._allRecs = []; // cached union of system + part labels (LOW-16)
+    this._leftRail = [];  // persistent rail arrays (LOW-16)
+    this._rightRail = [];
     this._build();
 
-    // Gating — same two signals that drive the hull outline. They are
-    // INDEPENDENT inputs: the discrete INSPECTION view reports via
-    // CAMERA_VIEW_CHANGE, the OVERVIEW zoom sub-state via INSPECT_HULL_OUTLINE
-    // (which keeps the view as ORBIT). We OR them so a CAMERA_VIEW_CHANGE to
-    // ORBIT (fired during the zoom path) can't clobber the hull-outline signal
-    // and cause the active flag to flip-flop.
-    this._viewInspect = false;   // discrete INSPECTION view active?
-    this._zoomInspect = false;   // OVERVIEW zoom sub-state active?
+    this._viewInspect = false;
+    this._zoomInspect = false;
     this._onViewChange = ({ view } = {}) => {
       this._viewInspect = (view === 'INSPECTION');
       this._setActive(this._viewInspect || this._zoomInspect);
@@ -277,47 +358,21 @@ export class MotherCallouts {
     eventBus.on(Events.INSPECT_HULL_OUTLINE, this._onHullOutline);
   }
 
+  /**
+   * Late-bind the live-data context (task 7). Called from main.js after all
+   * systems are constructed (construction-order gotcha: motherCallouts is built
+   * before commsSystem). Every reference is optional — cards degrade to static
+   * rows if a system is missing.
+   * @param {object} ctx { resourceSystem, commsSystem, codexSystem,
+   *   powerDistribution, tetherReel, despinLaser, player }
+   */
+  setLiveCtx(ctx) {
+    this._liveCtx = ctx || null;
+  }
+
   // --------------------------------------------------------------------------
   // BUILD
   // --------------------------------------------------------------------------
-
-  _makeSprite(text, color, fontPx, scaleM, pill = false) {
-    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: createLabelTexture(text, { color, fontPx, pill }),
-      transparent: true, opacity: 1.0, depthWrite: false, depthTest: false,
-    }));
-    // Sprite scale is in scene units; label canvas is 4:1 (1024×256).
-    sprite.scale.set(scaleM * 4, scaleM, 1);
-    sprite.renderOrder = 30;
-    sprite.frustumCulled = false;
-    return sprite;
-  }
-
-  /**
-   * Build a leader as a thin, camera-facing ribbon (a 2-triangle quad) rather
-   * than a THREE.Line. LineBasicMaterial.linewidth is ignored by most WebGL
-   * drivers (clamped to 1px hairline), so the leader vanished against the
-   * heavier label text. A quad gives genuine, GPU-independent thickness without
-   * pulling in Line2/LineMaterial from the examples addons.
-   *
-   * Geometry is 4 vertices / 2 triangles; positions are rewritten each frame in
-   * {@link _setLineLocal} so the ribbon hugs the anchor→label segment and keeps
-   * a constant on-screen width regardless of zoom.
-   * @private
-   */
-  _makeLine(color) {
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(12), 3)); // 4 verts
-    geo.setIndex([0, 1, 2, 0, 2, 3]);
-    const mat = new THREE.MeshBasicMaterial({
-      color, transparent: true, opacity: 0.0, depthWrite: false, depthTest: false,
-      side: THREE.DoubleSide,
-    });
-    const line = new THREE.Mesh(geo, mat);
-    line.renderOrder = 29;
-    line.frustumCulled = false;
-    return line;
-  }
 
   /** Shared soft-dot texture for leader anchor markers. @private */
   static _dotTexture() {
@@ -338,14 +393,42 @@ export class MotherCallouts {
     return t;
   }
 
-  /** Small filled marker placed where a leader line touches its part. @private */
-  _makeDot(color, scaleM) {
+  /** Card sprite (texture assigned lazily). @private */
+  _makeCardSprite() {
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+      transparent: true, opacity: 0.0, depthWrite: false, depthTest: false,
+    }));
+    sprite.renderOrder = 30;
+    sprite.frustumCulled = false;
+    return sprite;
+  }
+
+  /**
+   * Two-segment elbow leader as camera-facing ribbon quads (8 verts / 4 tris).
+   * Positions rewritten each frame in _setElbowLocal.
+   * @private
+   */
+  _makeLine(color) {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(24), 3)); // 8 verts
+    geo.setIndex([0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7]);
+    const mat = new THREE.MeshBasicMaterial({
+      color, transparent: true, opacity: 0.0, depthWrite: false, depthTest: false,
+      side: THREE.DoubleSide,
+    });
+    const line = new THREE.Mesh(geo, mat);
+    line.renderOrder = 29;
+    line.frustumCulled = false;
+    return line;
+  }
+
+  /** Small filled marker where a leader touches its part. @private */
+  _makeDot(color) {
     const dot = new THREE.Sprite(new THREE.SpriteMaterial({
       map: MotherCallouts._dotTexture(),
       color: new THREE.Color(color),
       transparent: true, opacity: 0.0, depthWrite: false, depthTest: false,
     }));
-    dot.scale.set(scaleM, scaleM, 1);
     dot.renderOrder = 31;
     dot.frustumCulled = false;
     return dot;
@@ -353,40 +436,291 @@ export class MotherCallouts {
 
   _build() {
     for (const sys of SYSTEMS) {
-      // System-group label (Band 1). Smaller + pill chip so the heavy text no
-      // longer dwarfs the hairline leader; lighter blue keeps it secondary.
-      const sLabel = this._makeSprite(sys.label, '#cfe6ff', 84, 0.72 * M, true);
-      const sLine = this._makeLine(0x88c0ff);
-      const sDot = this._makeDot(0x9fd0ff, 0.18 * M);
+      const hue = HUES[sys.id] || HUES.CAPTURE; // DAUGHTERS reuses the CAPTURE hue
+      const sLabel = this._makeCardSprite();
+      const sLine = this._makeLine(hue);
+      const sDot = this._makeDot(hue);
       this._group.add(sLine, sDot, sLabel);
-      this._systemLabels.push({ def: sys, sprite: sLabel, line: sLine, dot: sDot, op: 0 });
+      const sRec = {
+        def: sys, isSystem: true, hue, sprite: sLabel, line: sLine, dot: sDot,
+        op: 0, side: null, sx: 0, sy: 0, primed: false,
+        cardKey: null, card: null,
+        anchor: new THREE.Vector3(...sys.anchor),
+        _mesh: null, _meshTried: false,
+        _cardCache: null, _railOrder: null, _targetOp: 0,
+        _h: 0, _wasFocus: false, _isFocus: false,
+        _anchorX: 0, _anchorY: 0, _anchorZ: 0,
+      };
+      this._applyCard(sRec); // initial static card
+      this._allRecs.push(sRec);
+      // The DAUGHTERS pseudo-group has no visible system label — its parts are
+      // the docked craft themselves (T3); keep the rec for the tour but never show.
+      if (sys.daughters) sRec._neverShow = true;
 
-      // Per-part labels (Bands 2/3). Detail-tier parts are smaller and only
-      // appear in the COMPONENT band near the focused major part.
       for (const part of sys.parts) {
-        const isDetail = part.tier === 'detail';
-        const color = RISK[part.risk] || '#ffffff';
-        // Labels mapped to an existing codex entry get a trailing "▸" affordance
-        // glyph (plain canvas text — no texture-format change) and are clickable.
-        const labelText = part.codexId ? `${part.name} ▸` : part.name;
-        const pLabel = this._makeSprite(labelText, color, isDetail ? 56 : 70,
-          (isDetail ? 0.42 : 0.58) * M, true);
-        // Detail line ("Mass: X%  Risk: Y" / live data) — shown only in Band 3
-        // for major parts (detail-tier parts have no secondary line).
-        const detail = `Mass: ${part.mass}%   Risk: ${RISK_TXT[part.risk]}`;
-        const dLabel = isDetail ? null
-          : this._makeSprite(detail, '#c8d6e5', 54, 0.42 * M, true);
-        if (dLabel) dLabel.userData.detail = true;
-        const pLine = this._makeLine(color);
-        const pDot = this._makeDot(color, (isDetail ? 0.11 : 0.15) * M);
+        const pLabel = this._makeCardSprite();
+        const color = RISK[part.risk] || RISK.GREEN;
+        const pLine = this._makeLine(hue);
+        const pDot = this._makeDot(hue);
         this._group.add(pLine, pDot, pLabel);
-        if (dLabel) this._group.add(dLabel);
-        this._partLabels.push({
-          def: part, sysId: sys.id, isDetail, sprite: pLabel, detailSprite: dLabel,
-          line: pLine, dot: pDot, op: 0,
-        });
+        const rec = {
+          def: part, sysId: sys.id, hue, isDetail: part.tier === 'detail',
+          riskColor: color, sprite: pLabel, line: pLine, dot: pDot,
+          op: 0, side: null, sx: 0, sy: 0, primed: false,
+          cardKey: null, card: null,
+          anchor: new THREE.Vector3(...part.anchor),
+          _mesh: null, _meshTried: false,
+          _cardCache: null, _railOrder: null, _targetOp: 0,
+          _h: 0, _wasFocus: false, _isFocus: false,
+          _anchorX: 0, _anchorY: 0, _anchorZ: 0,
+        };
+        this._applyCard(rec);
+        this._partLabels.push(rec);
+        this._allRecs.push(rec);
       }
     }
+  }
+
+  /**
+   * Resolve a rec's anchor for this frame (T1). Static parts copy their table
+   * coordinate; `mesh` parts resolve from the live PlayerSatellite mesh (once,
+   * cached); `dynamic` parts re-resolve every frame because the mesh moves
+   * (strut-mounted reels/springs); daughter recs follow their docked ArmUnit.
+   * Falls back to the static coordinate with a one-time warn on a mesh miss.
+   * @private
+   */
+  _resolveAnchor(rec) {
+    const def = rec.def;
+    // Daughter recs follow their docked ArmUnit (T3).
+    if (def.armIndex !== undefined) {
+      const arm = this._liveCtx?.armManager?.arms?.[def.armIndex];
+      if (arm && arm.state === 'DOCKED' && arm.group) {
+        arm.group.getWorldPosition(this._vTmp);
+        this.player.worldToLocal(this._vTmp);
+        rec.anchor.copy(this._vTmp);
+        rec._armGone = false;
+      } else {
+        rec._armGone = true; // away or missing → hidden by _targetOpacity
+      }
+      return;
+    }
+    if (!def.mesh) {
+      rec.anchor.set(def.anchor[0], def.anchor[1], def.anchor[2]);
+      return;
+    }
+    if (!rec._mesh && !rec._meshTried) {
+      rec._meshTried = true;
+      rec._mesh = this.player.getObjectByName(def.mesh) || null;
+      if (!rec._mesh && typeof console !== 'undefined') {
+        console.warn(`[MotherCallouts] mesh "${def.mesh}" not found for "${def.name}" — using static anchor`);
+      }
+    }
+    if (rec._mesh) {
+      // Static meshes resolve once and cache; `dynamic` meshes (strut-mounted
+      // reels/springs, gimbal children) re-resolve every frame.
+      if (rec._meshResolved && !def.dynamic) return;
+      rec._mesh.getWorldPosition(this._vTmp);
+      this.player.worldToLocal(this._vTmp);
+      rec.anchor.copy(this._vTmp);
+      rec._meshResolved = true;
+    } else {
+      rec.anchor.set(def.anchor[0], def.anchor[1], def.anchor[2]);
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // CARD TEXTURE MANAGEMENT
+  // --------------------------------------------------------------------------
+
+  /** Codex link state for a part: 'linked' | 'locked' | null. @private */
+  _codexState(def) {
+    if (!def.codexId) return null;
+    const cs = this._liveCtx?.codexSystem;
+    if (!cs || typeof cs.getEntry !== 'function') return 'linked';
+    const entry = cs.getEntry(def.codexId);
+    if (!entry) return 'linked';
+    return entry.unlocked ? 'linked' : 'locked';
+  }
+
+  /** Read TRL for a part's codex entry, or null. @private */
+  _partTRL(def) {
+    const cs = this._liveCtx?.codexSystem;
+    if (!def.codexId || !cs || typeof cs.getEntry !== 'function') return null;
+    const e = cs.getEntry(def.codexId);
+    return (e && typeof e.trl === 'number') ? e.trl : null;
+  }
+
+  /**
+   * Build the spec for a rec's current state and (re)generate its card texture
+   * only when the content string changes. `full` → focused detail card with
+   * spec/TRL/live rows; otherwise a compact title-only card.
+   *
+   * Cards are cached per rec by VARIANT ('compact' | 'focused'), not by content,
+   * so a live-data refresh on the focused card regenerates only that variant and
+   * never evicts the permanently-resident compact card (round-2 R3/R14).
+   * @private
+   */
+  _applyCard(rec, { full = false } = {}) {
+    const def = rec.def;
+    const codex = rec.isSystem ? null : this._codexState(def);
+    let rows = [];
+    if (full && !rec.isSystem) {
+      // Deterministic row budget: 6 slots total.
+      // Locked: reserve hint lines (1-2), fill [mass, ...specs, ...live(≤2)], append hint last. TRL dropped.
+      // Unlocked: [mass, ...specs(≤2), ...live(≤2), TRL], capped at 6.
+      const isLocked = codex === 'locked';
+      // Only the first two live rows survive the budget (R12).
+      const live = this._liveRows(def).slice(0, 2);
+
+      // Pre-wrap the unlock hint with the single shared wrap implementation;
+      // its line count IS the budget reservation, so budget and draw agree (review).
+      let hintLines = [];
+      if (isLocked) {
+        const hintText = this._liveCtx?.codexSystem?.getUnlockHint?.(def.codexId) || null;
+        if (hintText) hintLines = wrapHint(hintText, 2);
+      }
+
+      const budget = 6 - hintLines.length;
+      if (typeof def.massKg === 'number') rows.push({ text: `Mass: ${def.massKg} kg` });
+      if (Array.isArray(def.specs)) {
+        for (const s of def.specs.slice(0, 2)) rows.push({ text: s });
+      }
+      for (const lr of live) rows.push({ text: lr, dim: false });
+
+      if (!isLocked) {
+        // T7: clickable affordance on the focused card (whole card is clickable).
+        // Pushed BEFORE TRL so it survives the budget slice — discoverability
+        // of the deep-link outranks decorative readiness metadata.
+        if (codex === 'linked') rows.push({ text: '▸ open tech library', dim: true, color: rec.hue });
+        const trl = this._partTRL(def);
+        if (trl != null) rows.push({ text: `Readiness: L${trl}`, dim: true });
+      }
+
+      rows = rows.slice(0, budget);
+
+      // Hint lines appended last, amber (R8).
+      for (const line of hintLines) {
+        rows.push({ text: line, dim: false, color: '#ffaa00' });
+      }
+    }
+    const title = rec.isSystem ? def.label : def.name;
+    const variant = full ? 'focused' : 'compact';
+    const key = [
+      title, rec.isSystem ? 'sys' : def.risk, codex || '-',
+      full ? rows.map((r) => r.text).join('|') : 'compact',
+    ].join('::');
+
+    // Early-out: content unchanged → keep the current texture (R3).
+    if (rec.cardKey === key && rec.card) return;
+
+    // Reuse the cached variant if its content key still matches.
+    if (!rec._cardCache) rec._cardCache = new Map();
+    const cached = rec._cardCache.get(variant);
+    if (cached && cached.contentKey === key) {
+      rec.card = cached;
+      rec.cardKey = key;
+      rec.sprite.material.map = cached.texture;
+      rec.sprite.material.needsUpdate = true;
+      return;
+    }
+
+    // Generate a fresh card for this variant.
+    const card = createCardTexture({
+      title,
+      titleColor: rec.isSystem ? rec.hue : '#e6f0ff',
+      rows,
+      riskColor: rec.isSystem ? null : rec.riskColor,
+      systemColor: rec.hue,
+      codex,
+    });
+    card.contentKey = key;
+    // Dispose only the previous entry for THIS variant (not the other variant).
+    if (cached && cached.texture) cached.texture.dispose();
+    rec._cardCache.set(variant, card);
+    rec.card = card;
+    rec.cardKey = key;
+    rec.sprite.material.map = card.texture;
+    rec.sprite.material.needsUpdate = true;
+  }
+
+  /**
+   * Dynamic live-data rows for a part (graceful degradation: returns [] if the
+   * live context or a referenced system is absent). @private
+   */
+  _liveRows(def) {
+    const ctx = this._liveCtx;
+    if (!ctx || !def.live) return [];
+    const out = [];
+    try {
+      switch (def.live) {
+        case 'rosa': {
+          if (ctx.powerDistribution?.getSolarInput) {
+            out.push(`Solar: ${Math.round(ctx.powerDistribution.getSolarInput())} W`);
+          }
+          // Wings state (round-3 T10): makes the furl state legible on the card.
+          // Supersedes round-2 R12's Battery row — battery is already on the HUD.
+          const furl = ctx.player?._rosaFurlProgress;
+          if (typeof furl === 'number') {
+            out.push(furl >= 0.98 ? 'Wings: DEPLOYED' : furl <= 0.02 ? 'Wings: FURLED' : `Wings: ${Math.round(furl * 100)}%`);
+          }
+          break;
+        }
+        case 'feep': {
+          const rs = ctx.resourceSystem;
+          if (rs?.getStatus && typeof rs.getStatus === 'function') {
+            const st = rs.getStatus();
+            // currentFuelName may be a cargo-fed metal (fromCargo), which is NOT
+            // drawn from the xenon tank — don't report xenon kg under its name (R4).
+            const fuel = rs.getCurrentFuel?.();
+            if (fuel && !fuel.fromCargo) {
+              out.push(`Fuel: ${st.currentFuelName} ${Math.round(st.xenon)}/${st.xenonMax} kg`);
+            } else if (fuel) {
+              out.push(`Fuel: ${st.currentFuelName} (cargo)`);
+            } else {
+              out.push(`Fuel: ${Math.round(st.xenon)}/${st.xenonMax} kg`);
+            }
+          }
+          // No "Thrust" row: its data source (player.thrustInput) is dead —
+          // thrustIon/thrustColdGas/thrustMPD have no production callers and
+          // _applyThrust zeroes the accumulator before callouts update (review).
+          break;
+        }
+        case 'tether': {
+          const tr = ctx.tetherReel;
+          if (tr?.getAllReelStates) {
+            const states = tr.getAllReelStates() || [];
+            const active = states.filter((s) => s?.state && s.state !== 'STOWED').length;
+            out.push(`Reels active: ${active}/${states.length || 4}`);
+          } else if (tr?.getReelState) {
+            out.push(`Reel 0: ${tr.getReelState(0) ?? '—'}`);
+          }
+          break;
+        }
+        case 'ttc': {
+          const cm = ctx.commsSystem;
+          if (cm?.getSuppressionTier) {
+            const tier = cm.getSuppressionTier();
+            out.push(`Link: ${tier > 0 ? `SUPPRESSED (${tier})` : 'NOMINAL'}`);
+          }
+          break;
+        }
+        case 'despin': {
+          if (ctx.despinLaser?.isFiring) {
+            out.push(`Laser: ${ctx.despinLaser.isFiring() ? 'FIRING' : 'safe'}`);
+          }
+          break;
+        }
+        case 'daughter': {
+          const arm = ctx.armManager?.arms?.[def.armIndex];
+          if (arm) {
+            if (typeof arm.fuel === 'number') out.push(`Fuel: ${Math.round(arm.fuel)}%`);
+            out.push(`Spring: ${arm.springCharged ? 'charged' : 'reloading'}`);
+          }
+          break;
+        }
+      }
+    } catch (_e) { /* live data is best-effort; never throw from a card build */ }
+    return out;
   }
 
   // --------------------------------------------------------------------------
@@ -398,10 +732,12 @@ export class MotherCallouts {
     this._active = on;
     this._group.visible = on;
     if (on) {
-      // Start the one-shot guided tour the first time only.
       if (!this._guidedDone) this._guideT = -GUIDE_HOLD_S;
       this._band = 'SYSTEM';
       this._attachPointer();
+      // Refresh all compact cards so codex lock state is current (MED-9).
+      // Content-key check makes unchanged cards a no-op (R3).
+      for (const rec of this._allRecs) this._applyCard(rec, { full: false });
     } else {
       this._guideT = -1;
       this._focusPart = null;
@@ -413,27 +749,29 @@ export class MotherCallouts {
   // CLICKABLE LABELS → CODEX DEEP-LINKS
   // --------------------------------------------------------------------------
 
-  /** Attach pointer listeners (only while inspection is active). @private */
   _attachPointer() {
     if (this._listening || !this.canvas) return;
     this.canvas.addEventListener('pointermove', this._onPointerMove);
     this.canvas.addEventListener('pointerdown', this._onPointerDown);
     this.canvas.addEventListener('pointerup', this._onPointerUp);
+    this.canvas.addEventListener('pointercancel', this._onPointerCancel);
+    this.canvas.addEventListener('pointerleave', this._onPointerLeave);
     this._listening = true;
   }
 
-  /** Detach pointer listeners + restore the cursor. @private */
   _detachPointer() {
     if (!this._listening || !this.canvas) return;
     this.canvas.removeEventListener('pointermove', this._onPointerMove);
     this.canvas.removeEventListener('pointerdown', this._onPointerDown);
     this.canvas.removeEventListener('pointerup', this._onPointerUp);
+    this.canvas.removeEventListener('pointercancel', this._onPointerCancel);
+    this.canvas.removeEventListener('pointerleave', this._onPointerLeave);
     this._listening = false;
     this._pointerDown = null;
     this._restoreCursor();
+    if (this._hoverRec) { this._hoverRec = null; }
   }
 
-  /** Restore the default cursor if we set it. @private */
   _restoreCursor() {
     if (this._cursorSet && typeof document !== 'undefined') {
       document.body.style.cursor = '';
@@ -441,7 +779,6 @@ export class MotherCallouts {
     }
   }
 
-  /** Update the NDC pointer vector from a pointer event. @private */
   _pointerNDC(e) {
     const rect = this.canvas.getBoundingClientRect();
     this._ndc.set(
@@ -452,41 +789,87 @@ export class MotherCallouts {
   }
 
   /**
-   * Nearest clickable label sprite under the pointer (codexId + visible).
-   * @private @returns {{def:object}|null} the part record hit, or null.
+   * Shared raycast pick over the part labels with the camera ray already set.
+   * Returns the nearest eligible label as {rec, uv} or null. Single source for
+   * the eligibility filter so hover and click can never drift apart (review).
+   * @private
    */
-  _pickLabel(e) {
-    if (!this.camera) return null;
-    this._raycaster.setFromCamera(this._pointerNDC(e), this.camera);
-    let best = null, bestDist = Infinity;
+  _pickBestRec() {
+    let best = null, bestDist = Infinity, bestUV = null;
     for (const p of this._partLabels) {
       if (!p.def.codexId || !p.sprite.visible) continue;
-      if ((p.sprite.material.opacity ?? 0) <= 0.3) continue;
+      // Gate on whichever is larger of eased vs target opacity, so picking
+      // follows what the player can actually see and clears the tour dim (R5).
+      if (Math.max(p.op ?? 0, p._targetOp ?? 0) <= 0.15) continue;
       const hits = this._raycaster.intersectObject(p.sprite, false);
       if (hits.length && hits[0].distance < bestDist) {
         bestDist = hits[0].distance;
         best = p;
+        bestUV = hits[0].uv || null;
       }
     }
-    return best;
+    return best ? { rec: best, uv: bestUV } : null;
   }
 
-  /** Hover cursor feedback (throttled ~10 Hz). @private */
+  /**
+   * Nearest clickable label sprite under the pointer, plus the UV of the hit
+   * (mapped against the card's clickable regions).
+   * @private @returns {{rec:object, uv:THREE.Vector2}|null}
+   */
+  _pickLabel(e) {
+    if (!this.camera) return null;
+    this._raycaster.setFromCamera(this._pointerNDC(e), this.camera);
+    return this._pickBestRec();
+  }
+
   _handlePointerMove(e) {
     if (!this._active) return;
+    // Always record the latest position so _layout can re-pick under a
+    // stationary pointer as cards slide (R13); the pick itself is throttled.
+    this._pointerPos = { clientX: e.clientX, clientY: e.clientY };
     const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
     if (now - this._hoverT < 100) return;   // ~10 Hz
     this._hoverT = now;
     const hit = this._pickLabel(e);
-    if (hit && !this._cursorSet) {
+    const rec = hit?.rec || null;
+    if (rec && !this._cursorSet) {
       document.body.style.cursor = 'pointer';
       this._cursorSet = true;
-    } else if (!hit && this._cursorSet) {
+    } else if (!rec && this._cursorSet) {
       this._restoreCursor();
+    }
+    this._hoverRec = rec;
+  }
+
+  /**
+   * Re-pick the hovered card from the stored pointer position (R13). Cards slide
+   * in screen space as the ship rotates, so with a stationary pointer the hover
+   * would otherwise go stale. Runs at ~10 Hz from _layout; cheap (29 raycasts).
+   * @private
+   */
+  _refreshHover() {
+    if (!this._pointerPos || !this.canvas) return;
+    const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    if (now - this._hoverPickT < 100) return;
+    this._hoverPickT = now;
+    const rect = this.canvas.getBoundingClientRect();
+    this._ndc.set(
+      ((this._pointerPos.clientX - rect.left) / rect.width) * 2 - 1,
+      -((this._pointerPos.clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    this._raycaster.setFromCamera(this._ndc, this.camera);
+    const best = this._pickBestRec()?.rec || null;
+    if (best !== this._hoverRec) {
+      this._hoverRec = best;
+      if (best && !this._cursorSet) {
+        document.body.style.cursor = 'pointer';
+        this._cursorSet = true;
+      } else if (!best && this._cursorSet) {
+        this._restoreCursor();
+      }
     }
   }
 
-  /** Record the press for click-vs-drag discrimination. @private */
   _handlePointerDown(e) {
     if (!this._active) return;
     this._pointerDown = {
@@ -495,12 +878,6 @@ export class MotherCallouts {
     };
   }
 
-  /**
-   * A press+release within 5 px and 400 ms is a click (not a drag-orbit). On a
-   * clickable label, deep-link the codex viewer. Never preventDefault — the
-   * CameraSystem drag handler shares this canvas.
-   * @private
-   */
   _handlePointerUp(e) {
     if (!this._active || !this._pointerDown) return;
     const down = this._pointerDown;
@@ -509,10 +886,10 @@ export class MotherCallouts {
     const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
     if (moved > 5 || (now - down.t) > 400) return;   // drag / long-press → ignore
     const hit = this._pickLabel(e);
-    if (hit && hit.def.codexId) {
-      // Locked entries safely open in their teaser state (CodexViewerUI.openEntry
-      // resolves aliases and renders locked teasers) — no gating needed here.
-      eventBus.emit(Events.CODEX_OPEN_ENTRY, { id: hit.def.codexId });
+    // T7: the WHOLE card is clickable — hover and click now agree (the old
+    // title-strip UV gate made ~⅔ of a focused card a dead zone with a hand cursor).
+    if (hit && hit.rec.def.codexId) {
+      eventBus.emit(Events.CODEX_OPEN_ENTRY, { id: hit.rec.def.codexId });
     }
   }
 
@@ -520,46 +897,63 @@ export class MotherCallouts {
   // PER-FRAME UPDATE
   // --------------------------------------------------------------------------
 
-  /**
-   * @param {number} dt  seconds
-   */
   update(dt) {
     if (!this._active || !this.camera) return;
 
-    // Ensure the ship's world matrix reflects this frame's transform before we
-    // read it for anchor/line/facing math (render() refreshes matrices later).
     this.player.updateWorldMatrix(true, false);
+    this.camera.updateMatrixWorld();
 
-    // Camera → ship distance in metres.
     this.player.getWorldPosition(this._vShip);
     this._vCam.copy(this.camera.position);
     const distWorld = this._vCam.distanceTo(this._vShip);
     const distM = distWorld / M;
 
-    // Camera position in player-local space, plus the leader ribbon half-width
-    // (scaled by distance → constant on-screen thickness). Both are consumed by
-    // _setLineLocal when it rebuilds each leader quad this frame.
+    // Camera basis (world) + view metrics at the ship-centre depth plane.
+    this._camRight.setFromMatrixColumn(this.camera.matrixWorld, 0).normalize();
+    this._camUp.setFromMatrixColumn(this.camera.matrixWorld, 1).normalize();
+    const fov = (this.camera.fov || 55) * DEG2RAD;
+    this._halfH = distWorld * Math.tan(fov / 2);
+    this._halfW = this._halfH * (this.camera.aspect || 1);
+
+    // Camera position in player-local space + leader ribbon half-width.
     this._vCamLocal.copy(this._vCam);
     this.player.worldToLocal(this._vCamLocal);
     this._leaderHalfWidth = distWorld * LINE_HALF_WIDTH_FRAC;
 
+    // Ship centre + silhouette radius in NDC → rail X positions.
+    this._shipNDC.copy(this._vShip).project(this.camera);
+    // Ship world-quaternion, hoisted here so _pickFocusPart (below) and _layout
+    // both read the CURRENT rotation, not last frame's or identity (R6).
+    this.player.getWorldQuaternion(this._qTmp);
+    const shipBoundR = CFG.SHIP_BOUND_M * M;
+    this._vTmp.copy(this._vShip).addScaledVector(this._camRight, shipBoundR).project(this.camera);
+    const screenR = Math.abs(this._vTmp.x - this._shipNDC.x);
+    const margin = CFG.RAIL_MARGIN_NDC;
+
+    // Reserve the widest rail-card width on both sides (R15). aspect × heightFactor
+    // is invariant (= CARD_W_OVER_TITLE_H ≈ 4.83) for every card, so the widest rail
+    // card is always the SIZE_MAJOR tier — a constant, no per-rec loop, no frame lag.
+    const camAspect = this.camera.aspect || 1;
+    const railCardW = 2 * CFG.SIZE_MAJOR * CARD_W_OVER_TITLE_H / camAspect;
+
+    this._railL = Math.max(-1 + margin + railCardW, this._shipNDC.x - screenR - CFG.RAIL_INSET_NDC);
+    this._railR = Math.min(1 - margin - railCardW, this._shipNDC.x + screenR + CFG.RAIL_INSET_NDC);
+
     this._updateBand(distM);
     this._updateGuide(dt);
 
-    // Ship-centre → camera direction (world), for facing fade.
     this._vCamDir.copy(this._vCam).sub(this._vShip).normalize();
-    const camDirWorld = this._vCamDir;
 
-    // Determine focus part in COMPONENT band (nearest label to screen centre).
+    // Resolve every rec's anchor for this frame BEFORE focus picking and layout
+    // read them (T1; mirrors the R6 quaternion hoist).
+    for (const rec of this._allRecs) this._resolveAnchor(rec);
+
     if (this._band === 'COMPONENT') this._focusPart = this._pickFocusPart();
     else this._focusPart = null;
 
-    this._layoutSystemLabels(camDirWorld, dt);
-    this._layoutPartLabels(camDirWorld, dt);
-    this._declutter();
+    this._layout(dt);
   }
 
-  /** Hysteresis band selection. @private */
   _updateBand(distM) {
     const b = this._band;
     if (b === 'SYSTEM') {
@@ -567,38 +961,38 @@ export class MotherCallouts {
     } else if (b === 'PART') {
       if (distM > BAND.partOut) this._band = 'SYSTEM';
       else if (distM < BAND.compIn) this._band = 'COMPONENT';
-    } else { // COMPONENT
+    } else {
       if (distM > BAND.compOut) this._band = 'PART';
     }
   }
 
-  /** Advance the one-shot guided pulse. @private */
   _updateGuide(dt) {
     if (this._guideT < -GUIDE_HOLD_S - 0.001 || this._guidedDone) return;
     this._guideT += dt;
-    const total = SYSTEMS.length * GUIDE_STEP_S;
-    if (this._guideT >= total) {
-      this._guidedDone = true;
-      this._guideT = -1;
-    }
+    const total = SYSTEMS.filter((s) => !s.daughters).length * GUIDE_STEP_S;
+    if (this._guideT >= total) { this._guidedDone = true; this._guideT = -1; }
   }
 
-  /** Which system (if any) the guided pulse is currently highlighting. @private */
   _guideSystemId() {
     if (this._guidedDone || this._guideT < 0) return null;
+    // Tour only the groups with a visible system label (the DAUGHTERS
+    // pseudo-group is excluded — its recs are the docked craft themselves).
+    const tourable = SYSTEMS.filter((s) => !s.daughters);
     const idx = Math.floor(this._guideT / GUIDE_STEP_S);
-    return SYSTEMS[idx]?.id ?? null;
+    return tourable[idx]?.id ?? null;
   }
 
-  /** Nearest MAJOR part-label to screen centre (NDC) for COMPONENT focus. @private */
   _pickFocusPart() {
     let best = null, bestD = Infinity;
     for (const p of this._partLabels) {
-      if (p.isDetail) continue; // detail parts never become the focus
-      this._vAnchor.set(...p.def.anchor);
+      if (p.isDetail) continue;
+      // Skip hull-hidden parts (far side of ship) so focus doesn't reveal
+      // a system detail tier at ~0 opacity (LOW-13).
+      if (this._anchorVisible(p.anchor) < 0.2) continue;
+      this._vAnchor.copy(p.anchor);
       this.player.localToWorld(this._vAnchor);
       this._vTmp.copy(this._vAnchor).project(this.camera);
-      if (this._vTmp.z > 1) continue; // behind camera
+      if (this._vTmp.z > 1) continue;
       const d = this._vTmp.x * this._vTmp.x + this._vTmp.y * this._vTmp.y;
       if (d < bestD) { bestD = d; best = p; }
     }
@@ -606,272 +1000,411 @@ export class MotherCallouts {
   }
 
   /**
-   * Opacity from camera-facing angle: labels whose outward direction faces the
-   * camera stay bright; far-side labels fade. `outwardLocal` is the label's
-   * local offset direction; we compare it (in world) to the ship→camera dir.
+   * Anchor visibility gate (camera-facing dot proxy). Anchors on the far side
+   * of the hull fade to 0. Returns 0..1.
+   * Uses the ship world-quaternion hoisted in update() (R6).
+   * T8: the anchor's RADIAL component is the surface normal; near-axial parts
+   * (net launcher, turret, FEEP) are exempt — they read in silhouette at every
+   * angle and must not fade to ~0.2 when viewed broadside.
    * @private
    */
-  _facingOpacity(labelOffsetLocal, camDirWorld) {
-    // World-space outward direction of the label from ship centre.
-    this._vFace.set(labelOffsetLocal[0], labelOffsetLocal[1], labelOffsetLocal[2]);
-    // Rotate into world (ignore translation): use ship quaternion.
-    this._vFace.applyQuaternion(this.player.getWorldQuaternion(this._qTmp));
+  _anchorVisible(anchorLocal) {
+    // Near-axial anchor: no meaningful radial normal → always face-visible.
+    const r2 = anchorLocal.x * anchorLocal.x + anchorLocal.y * anchorLocal.y;
+    const axialFloor = 0.15 * M;
+    if (r2 < axialFloor * axialFloor) return 1;
+    this._vFace.set(anchorLocal.x, anchorLocal.y, 0); // radial component only
+    this._vFace.applyQuaternion(this._qTmp); // hoisted in update()
     if (this._vFace.lengthSq() < 1e-20) return 1;
     this._vFace.normalize();
-    const d = this._vFace.dot(camDirWorld); // 1 = faces camera, -1 = away
-    // Map [-1,1] → [0.12, 1]; keep a little visibility on the back side.
-    return 0.12 + 0.88 * Math.max(0, (d + 0.25) / 1.25);
+    const d = this._vFace.dot(this._vCamDir);
+    // Softened ramp: a part 90° off still reads ~0.42 instead of ~0.22 (T8).
+    return Math.max(0, Math.min(1, (d + 0.25) / 0.6));
+  }
+
+  // --------------------------------------------------------------------------
+  // RAIL LAYOUT
+  // --------------------------------------------------------------------------
+
+  /** On-screen height fraction (of viewport height) for a rec's tier. @private */
+  _sizeFrac(rec, isFocus) {
+    if (isFocus) return CFG.SIZE_CARD;
+    if (rec.isSystem) return CFG.SIZE_SYSTEM;
+    return rec.isDetail ? CFG.SIZE_DETAIL : CFG.SIZE_MAJOR;
   }
 
   /**
-   * Visibility gate for the PART ITSELF (not the label): is the anchor point on
-   * the camera-facing side of the hull, or hidden behind the barrel? We treat
-   * the anchor's direction from ship centre as its surface normal and dot it
-   * with the ship→camera direction. Parts on the far side (normal points away)
-   * return ~0 so their callout + dot fade out — you shouldn't see a marker on
-   * geometry occluded by the hull. Cheap proxy (no raycast): correct for the
-   * convex barrel + caps that make up the bus. Returns 0..1.
+   * Full per-frame layout: compute target opacity + anchor NDC for every rec,
+   * assign rail sides (with hysteresis), stack + cull each rail, ease positions
+   * in NDC, then unproject to local sprite positions and rebuild leaders.
    * @private
    */
-  _anchorVisible(anchorLocal, camDirWorld) {
-    this._vFace.set(anchorLocal[0], anchorLocal[1], anchorLocal[2]);
-    this._vFace.applyQuaternion(this.player.getWorldQuaternion(this._qTmp));
-    if (this._vFace.lengthSq() < 1e-20) return 1; // centre-anchored (e.g. bus) — always ok
-    this._vFace.normalize();
-    const d = this._vFace.dot(camDirWorld); // 1 = anchor faces camera, -1 = behind hull
-    // Hard-ish gate: fully visible facing the camera, fading to 0 as it rounds
-    // past the limb (d ≈ 0). Slightly past the limb (d < -0.1) → hidden.
-    return Math.max(0, Math.min(1, (d + 0.1) / 0.45));
-  }
-
-  // Labels and lines are children of _group (a child of the player), so their
-  // positions are expressed in PLAYER-LOCAL space — the anchor/offset arrays
-  // are already in that space. (Earlier bug: these were set to world coords via
-  // localToWorld, which then got compounded by the parent transform and flung
-  // the labels ~67 units out to the ship's orbital position.)
-  _setLabelLocal(sprite, offset) {
-    sprite.position.set(offset[0], offset[1], offset[2]);
-  }
-
-  /**
-   * Rewrite a leader ribbon's 4 corners so it spans fromLocal→toLocal as a thin
-   * camera-facing quad of (roughly) constant on-screen width.
-   *
-   * All math is done in player-LOCAL space (the ribbon mesh is a child of
-   * `_group`): we take the segment direction and the local view direction
-   * (segment-midpoint → camera, in local space), cross them for an in-view-plane
-   * perpendicular, and push the two endpoints ±halfWidth along it.
-   * @private
-   */
-  _setLineLocal(line, fromLocal, toLocal, opacity, color) {
-    const a = this._rA.set(fromLocal[0], fromLocal[1], fromLocal[2]);
-    const b = this._rB.set(toLocal[0], toLocal[1], toLocal[2]);
-
-    // View direction in local space: from segment midpoint toward the camera.
-    // (this._vCamLocal is refreshed once per frame in update().)
-    this._rView.copy(this._vCamLocal)
-      .sub(this._rC0.copy(a).add(b).multiplyScalar(0.5));
-
-    this._rDir.copy(b).sub(a);
-    this._rPerp.copy(this._rDir).cross(this._rView);
-    if (this._rPerp.lengthSq() < 1e-30) {
-      // Degenerate (segment points straight at camera) — fall back to up-ish.
-      this._rPerp.set(0, 1, 0).cross(this._rDir);
-    }
-    this._rPerp.normalize().multiplyScalar(this._leaderHalfWidth || 0);
-
-    // Quad corners: a-side then b-side, wound CCW for the [0,1,2,0,2,3] index.
-    this._rC0.copy(a).add(this._rPerp);   // 0
-    this._rC1.copy(a).sub(this._rPerp);   // 1
-    this._rC2.copy(b).sub(this._rPerp);   // 2
-    this._rC3.copy(b).add(this._rPerp);   // 3
-
-    const pos = line.geometry.attributes.position;
-    pos.setXYZ(0, this._rC0.x, this._rC0.y, this._rC0.z);
-    pos.setXYZ(1, this._rC1.x, this._rC1.y, this._rC1.z);
-    pos.setXYZ(2, this._rC2.x, this._rC2.y, this._rC2.z);
-    pos.setXYZ(3, this._rC3.x, this._rC3.y, this._rC3.z);
-    pos.needsUpdate = true;
-    line.material.opacity = opacity;
-    if (color !== undefined) line.material.color.set(color);
-  }
-
-  /**
-   * Pick the label offset on the camera-facing side so the leader doesn't spear
-   * through the hull to reach a label hiding behind the model. We flip the
-   * lateral (X) component of the offset to match the side the camera is on.
-   * Writes into the provided 3-array `out`.
-   * @private
-   */
-  _facingSideOffset(offset, out) {
-    out[0] = offset[0]; out[1] = offset[1]; out[2] = offset[2];
-    // Camera position in the ship's local frame.
-    this._vTmp.copy(this._vCam);
-    this.player.worldToLocal(this._vTmp);
-    // If the label's lateral side is opposite the camera, mirror X.
-    if (Math.sign(out[0] || 1) !== Math.sign(this._vTmp.x || out[0] || 1)
-        && Math.abs(this._vTmp.x) > 0.05 * M) {
-      out[0] = -out[0];
-    }
-    return out;
-  }
-
-  /** Ease one label record's opacity toward target, apply to label/line/dot. @private */
-  _applyLabel(rec, targetOp, dt, offset, color, lineColor) {
-    rec.op += (targetOp - rec.op) * Math.min(1, FADE_RATE * dt);
-    const op = rec.op;
-    const visible = op > 0.02;
-
-    rec.sprite.material.opacity = op;
-    rec.sprite.visible = visible;
-    this._setLabelLocal(rec.sprite, offset);
-
-    // Leader line: keep proportionally present relative to the label, with a
-    // floor so it never dwindles to an invisible hairline while text shouts.
-    const lineOp = visible ? Math.max(op * LINE_OP_FLOOR, op * LINE_OP_SCALE) : 0;
-    this._setLineLocal(rec.line, rec.def.anchor, offset, lineOp, lineColor);
-    rec.line.visible = visible;
-
-    // Anchor dot at the part end of the leader.
-    if (rec.dot) {
-      rec.dot.position.set(rec.def.anchor[0], rec.def.anchor[1], rec.def.anchor[2]);
-      rec.dot.material.opacity = op;
-      rec.dot.visible = visible;
-    }
-  }
-
-  /** Band 1 group labels. @private */
-  _layoutSystemLabels(camDirWorld, dt) {
-    const showGroups = this._band === 'SYSTEM';
-    const guideId = this._guideSystemId();
-    for (const s of this._systemLabels) {
-      let op = showGroups ? this._facingOpacity(s.def.labelOffset, camDirWorld) : 0;
-      // Guided pulse: brighten the highlighted system, dim the rest.
-      if (guideId) op = (s.def.id === guideId) ? 1.0 : op * 0.25;
-      const off = this._facingSideOffset(s.def.labelOffset, s._off || (s._off = [0, 0, 0]));
-      this._applyLabel(s, op, dt, off, undefined, 0x88c0ff);
-    }
-  }
-
-  /** Bands 2/3 part labels + detail/live text. @private */
-  _layoutPartLabels(camDirWorld, dt) {
+  _layout(dt) {
     const band = this._band;
     const guideId = this._guideSystemId();
-    const focusSys = this._focusPart?.sysId ?? null;
+    const focus = this._focusPart;
+    const focusSys = focus?.sysId ?? null;
+    const ease = 1 - Math.exp(-CFG.EASE_RATE * Math.max(dt, 0));
+    const fadeK = Math.min(1, FADE_RATE * Math.max(dt, 0));
 
-    for (const p of this._partLabels) {
-      let op;
-      if (p.isDetail) {
-        // Detail tier: revealed only at closest zoom, and only for the system
-        // that owns the focused part — deep-zoom shows fine detail without
-        // crowding the mid band.
-        const reveal = band === 'COMPONENT' && p.sysId === focusSys;
-        op = reveal ? this._facingOpacity(p.def.labelOffset, camDirWorld) : 0;
-      } else {
-        // Major tier: PART + COMPONENT bands.
-        const showParts = band === 'PART' || band === 'COMPONENT';
-        op = showParts ? this._facingOpacity(p.def.labelOffset, camDirWorld) : 0;
-        if (guideId && showParts) op = (p.sysId === guideId) ? op : op * 0.2;
-        const isFocus = band === 'COMPONENT' && this._focusPart === p;
-        if (band === 'COMPONENT' && !isFocus) op *= 0.4; // de-emphasise non-focus majors
-      }
+    // Refresh the focused card's live data at ≤ LIVE_REFRESH_HZ.
+    const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    const liveDue = (now - this._lastLiveT) >= (1000 / (CFG.LIVE_REFRESH_HZ || 2));
+    if (liveDue) this._lastLiveT = now;
 
-      const color = RISK[p.def.risk] || '#ffffff';
-      // Gate by whether the PART itself is on the camera-facing side of the
-      // hull — don't draw a marker/leader on geometry hidden behind the barrel.
-      op *= this._anchorVisible(p.def.anchor, camDirWorld);
-      const off = this._facingSideOffset(p.def.labelOffset, p._off || (p._off = [0, 0, 0]));
-      this._applyLabel(p, op, dt, off, color, color);
+    // Re-pick hover from the stored pointer position so it tracks cards sliding
+    // under a stationary pointer (R13).
+    this._refreshHover();
 
-      // Secondary detail/live line — only major parts, only when focused.
-      if (p.detailSprite) {
-        const isFocus = band === 'COMPONENT' && this._focusPart === p;
-        if (isFocus) {
-          this._refreshDetail(p);
-          const dOff = [ off[0], off[1] - 0.42 * M, off[2] ];
-          this._setLabelLocal(p.detailSprite, dOff);
-          p.detailSprite.material.opacity = p.op;
-          p.detailSprite.visible = p.op > 0.02;
-        } else if (p.detailSprite.visible) {
-          p.detailSprite.material.opacity = 0;
-          p.detailSprite.visible = false;
-        }
-      }
+    // Reuse persistent rail arrays (LOW-16: zero per-frame alloc).
+    const leftList = this._leftRail;
+    const rightList = this._rightRail;
+    leftList.length = 0;
+    rightList.length = 0;
+
+    // T6: project the focused part's anchor once so detail parts NEAR it on
+    // screen can reveal even when they belong to another system.
+    let focusNX = 0, focusNY = 0;
+    if (focus) {
+      this._vTmp.copy(focus.anchor);
+      this.player.localToWorld(this._vTmp);
+      this._vTmp.project(this.camera);
+      focusNX = this._vTmp.x; focusNY = this._vTmp.y;
     }
+
+    for (const rec of this._allRecs) {
+      const isFocus = !rec.isSystem && band === 'COMPONENT' && rec === focus;
+
+      // Anchor NDC (computed before target opacity: T6 proximity reveal reads it).
+      this._vAnchor.copy(rec.anchor);
+      this.player.localToWorld(this._vAnchor);
+      this._vAnchor.project(this.camera);
+      const ax = this._vAnchor.x, ay = this._vAnchor.y, az = this._vAnchor.z;
+      rec._anchorX = ax; rec._anchorY = ay; rec._anchorZ = az;
+
+      let targetOp = this._targetOpacity(rec, band, guideId, focusSys, focusNX, focusNY);
+      const off = CFG.OFFSCREEN_NDC;
+      if (az > 1 || ax < -off || ax > off || ay < -off || ay > off) targetOp = 0;
+
+      rec._targetOp = targetOp;
+
+      // Card content: focused → full detail card, else compact (R14: no hover variant).
+      if (isFocus) {
+        if (liveDue || !rec._wasFocus) this._applyCard(rec, { full: true });
+        rec._wasFocus = true;
+      } else if (rec._wasFocus) {
+        this._applyCard(rec, { full: false });
+        rec._wasFocus = false;
+      }
+
+      if (targetOp <= 0.001 && rec.op <= 0.02) {
+        // Fully hidden — still ease opacity down, keep off rails.
+        rec._isFocus = false;
+        rec.op += (0 - rec.op) * fadeK;
+        if (rec.op <= 0.02) {
+          rec.primed = false; // reappear snaps to new slot, no sweep
+          rec._railOrder = null; // reset rail ordinal when hidden
+        }
+        this._hideRec(rec);
+        continue;
+      }
+
+      // Focused card is placed by its anchor, not on a rail.
+      rec._isFocus = isFocus;
+      if (isFocus) continue;
+
+      // Side assignment with hysteresis.
+      const desired = (ax < this._shipNDC.x) ? 'L' : 'R';
+      if (rec.side == null) {
+        rec.side = desired;
+        rec._railOrder = null; // reset ordinal on side entry
+      } else if (rec.side !== desired
+        && Math.abs(ax - this._shipNDC.x) > CFG.SIDE_HYSTERESIS) {
+        rec.side = desired;
+        rec._railOrder = null; // reset ordinal on side change
+      }
+
+      (rec.side === 'L' ? leftList : rightList).push(rec);
+    }
+
+    this._stackRail(leftList, this._railL, dt, ease, fadeK);
+    this._stackRail(rightList, this._railR, dt, ease, fadeK);
+    this._placeFocus(dt, ease, fadeK);
+  }
+
+  /** Target opacity for a rec given band/guide/focus, before anchor gating. @private */
+  _targetOpacity(rec, band, guideId, focusSys, focusNX, focusNY) {
+    if (rec._neverShow) return 0; // DAUGHTERS pseudo-group has no system label
+    if (rec._armGone) return 0;   // daughter away from its berth (T3)
+    if (rec.isSystem) {
+      let op = (band === 'SYSTEM') ? 1 : 0;
+      if (op > 0 && guideId) op = (rec.def.id === guideId) ? 1 : op * 0.25;
+      return op * this._anchorVisible(rec.anchor);
+    }
+    let op;
+    if (rec.isDetail) {
+      let reveal = band === 'COMPONENT' && rec.sysId === focusSys;
+      // T6: proximity reveal — detail parts near the focused part on screen
+      // appear even when they belong to another system.
+      if (!reveal && band === 'COMPONENT' && this._focusPart) {
+        const dx = rec._anchorX - focusNX, dy = rec._anchorY - focusNY;
+        const r = CFG.DETAIL_REVEAL_NDC || 0.25;
+        if (dx * dx + dy * dy < r * r) reveal = true;
+      }
+      op = reveal ? 1 : 0;
+    } else {
+      const showParts = band === 'PART' || band === 'COMPONENT';
+      op = showParts ? 1 : 0;
+      if (op > 0 && guideId) op = (rec.sysId === guideId) ? op : op * 0.2;
+      const isFocus = band === 'COMPONENT' && rec === this._focusPart;
+      if (band === 'COMPONENT' && !isFocus) op *= 0.5;
+    }
+    return op * this._anchorVisible(rec.anchor);
   }
 
   /**
-   * Screen-space declutter: project visible labels to NDC and, where two would
-   * overlap vertically, nudge the lower one's local Y down so stacked labels
-   * separate. Operates on local Y because labels are camera-billboarded sprites;
-   * a small local-Y push reads as vertical separation on screen.
-   *
-   * Runs a few relaxation passes so chains of 3+ stacked labels (common on the
-   * fore cap where SENSORS / PAYLOAD / CAPTURE crowd together) fully fan out
-   * rather than just splitting the first colliding pair. The leader ribbon is
-   * rebuilt for each nudged label so it keeps tracking the moved text.
+   * Stack one rail's cards: order top → bottom (with hysteresis, via the pure
+   * `orderRail` helper), priority-cull on overflow, assign slot Ys centred on
+   * the anchors' mean, then ease + place.
    * @private
    */
-  _declutter() {
-    const NUDGE = 0.26 * M;   // local-Y push per overlap (was 0.18×M)
-    const PASSES = 3;
-    for (let pass = 0; pass < PASSES; pass++) {
-      const items = [];
-      const all = [...this._systemLabels, ...this._partLabels];
-      for (const rec of all) {
-        if (!rec.sprite.visible) continue;
-        this._vTmp.copy(rec.sprite.position);
-        this.player.localToWorld(this._vTmp);
-        this._vTmp.project(this.camera);
-        if (this._vTmp.z > 1) continue;
-        items.push({ rec, x: this._vTmp.x, y: this._vTmp.y });
-      }
-      items.sort((a, b) => b.y - a.y); // top-down
-      let moved = false;
-      for (let i = 1; i < items.length; i++) {
-        const a = items[i - 1], b = items[i];
-        const dx = Math.abs(a.x - b.x);
-        const dy = a.y - b.y;
-        if (dx < DECLUTTER_NDC * 3 && dy < DECLUTTER_NDC) {
-          b.rec.sprite.position.y -= NUDGE;
-          // Rebuild the leader ribbon so it still reaches the nudged label.
-          this._setLineLocal(
-            b.rec.line, b.rec.def.anchor,
-            [b.rec.sprite.position.x, b.rec.sprite.position.y, b.rec.sprite.position.z],
-            b.rec.line.material.opacity, b.rec.line.material.color,
-          );
-          b.y -= DECLUTTER_NDC; // approximate so subsequent comparisons use new pos
-          moved = true;
+  _stackRail(list, railX, dt, ease, fadeK) {
+    if (list.length === 0) return;
+
+    // Top → bottom order with persistent ordinals + hysteresis (R2).
+    orderRail(list, CFG.ORDER_HYSTERESIS || 0.04);
+
+    const gap = CFG.RAIL_GAP_NDC;
+    const marginY = CFG.RAIL_MARGIN_NDC;
+    const avail = 2 - 2 * marginY;
+
+    // Heights (NDC full height = 2 * sizeFrac * heightFactor).
+    for (const rec of list) {
+      const heightFactor = rec.card?.heightFactor || 1;
+      rec._h = 2 * this._sizeFrac(rec, false) * heightFactor;
+    }
+
+    // Priority culling if the stack overflows.
+    let total = list.reduce((s, r) => s + r._h, 0) + gap * (list.length - 1);
+    if (total > avail) {
+      const sorted = [...list].sort((a, b) => this._cullScore(a) - this._cullScore(b));
+      let i = 0;
+      while (total > avail && i < sorted.length && list.length > 1) {
+        const drop = sorted[i++];
+        const idx = list.indexOf(drop);
+        if (idx >= 0) {
+          list.splice(idx, 1);
+          drop._targetOp = 0;
+          // Fade out and hide the culled rec this frame so it doesn't freeze.
+          drop.op += (0 - drop.op) * fadeK;
+          if (drop.op <= 0.02) drop.primed = false;
+          drop._railOrder = null; // renumber when it re-enters (R2)
+          this._hideRec(drop);
+          total = list.reduce((s, r) => s + r._h, 0) + gap * (list.length - 1);
         }
       }
-      if (!moved) break; // settled — skip remaining passes
+      // Renumber the survivors so ordinals stay contiguous after a cull.
+      for (let i = 0; i < list.length; i++) list[i]._railOrder = i;
+    }
+
+    // Centre the stack on the anchors' mean Y, clamped to the viewport.
+    let meanY = 0;
+    for (const rec of list) meanY += rec._anchorY;
+    meanY /= list.length;
+    total = list.reduce((s, r) => s + r._h, 0) + gap * (list.length - 1);
+    let topY = meanY + total / 2;
+    const hiLimit = 1 - marginY;
+    const loLimit = -1 + marginY;
+    if (topY > hiLimit) topY = hiLimit;
+    if (topY - total < loLimit) topY = loLimit + total;
+
+    let cursor = topY;
+    for (const rec of list) {
+      const slotY = cursor - rec._h / 2;
+      cursor -= rec._h + gap;
+      this._placeRailRec(rec, railX, slotY, dt, ease, fadeK);
     }
   }
 
-  /** Rebuild the detail texture when live data changes. @private */
-  _refreshDetail(p) {
-    const text = `Mass: ${p.def.mass}%   Risk: ${RISK_TXT[p.def.risk]}`;
-    if (p._detailText === text) return; // no change — skip canvas rebuild
-    p._detailText = text;
-    const old = p.detailSprite.material.map;
-    p.detailSprite.material.map = createLabelTexture(text, { color: '#c8d6e5', fontPx: 54, pill: true });
-    p.detailSprite.material.needsUpdate = true;
-    if (old) old.dispose();
+  /** Higher = keep. Detail tier culled first, then low priority/mass. @private */
+  _cullScore(rec) {
+    const tierBonus = rec.isDetail ? 0 : 1000;
+    return tierBonus + (rec.def.priority || 0) * 10 + (rec.def.massKg || 0);
+  }
+
+  /** Ease a rail rec to (railX, slotY) NDC and place its sprite + leader. @private */
+  _placeRailRec(rec, railX, slotY, dt, ease, fadeK) {
+    if (!rec.primed) { rec.sx = railX; rec.sy = slotY; rec.primed = true; }
+    else { rec.sx += (railX - rec.sx) * ease; rec.sy += (slotY - rec.sy) * ease; }
+
+    const side = rec.side;
+    // Card inner edge sits on the rail: left rail → right edge (center.x=1),
+    // right rail → left edge (center.x=0). Leader attaches at sprite.position.
+    rec.sprite.center.x = (side === 'L') ? 1 : 0;
+    this._positionCard(rec, rec.sx, rec.sy, false, side, fadeK);
+  }
+
+  /** Place the focused COMPONENT card near its anchor (not on a rail). @private */
+  _placeFocus(dt, ease, fadeK) {
+    const rec = this._focusPart;
+    if (!rec || !rec._isFocus) return;
+    const side = (rec._anchorX < this._shipNDC.x) ? 'L' : 'R';
+    rec.side = side;
+
+    // Clamp focus card to viewport, accounting for card width on the extending side.
+    // aspect × heightFactor = CARD_W_OVER_TITLE_H for every card (R15).
+    const frac = this._sizeFrac(rec, true);
+    const heightFactor = rec.card?.heightFactor || 1;
+    const camAspect = this.camera.aspect || 1;
+    const cardW = 2 * frac * CARD_W_OVER_TITLE_H / camAspect;
+    const cardH = 2 * frac * heightFactor;
+    const margin = CFG.RAIL_MARGIN_NDC;
+
+    // Small fixed offset toward the nearer rail side.
+    let tx = rec._anchorX + (side === 'L' ? -0.12 : 0.12);
+    let ty = rec._anchorY + 0.07;
+
+    // Clamp X: card extends outward from anchor, so reserve width on that side.
+    if (side === 'L') tx = Math.max(tx, -1 + margin + cardW);
+    else tx = Math.min(tx, 1 - margin - cardW);
+    // Clamp Y: card is centred vertically on ty.
+    ty = Math.max(-1 + margin + cardH / 2, Math.min(1 - margin - cardH / 2, ty));
+
+    if (!rec.primed) { rec.sx = tx; rec.sy = ty; rec.primed = true; }
+    else { rec.sx += (tx - rec.sx) * ease; rec.sy += (ty - rec.sy) * ease; }
+    rec.sprite.center.x = (side === 'L') ? 1 : 0;
+    this._positionCard(rec, rec.sx, rec.sy, true, side, fadeK);
+  }
+
+  /**
+   * Given a rec's eased NDC slot, unproject to local space, size the sprite
+   * screen-constant, ease opacity, and rebuild the elbow leader + dot.
+   * @private
+   */
+  _positionCard(rec, nx, ny, isFocus, side, fadeK) {
+    // Unproject NDC slot at ship-centre depth → world → local.
+    // Use (nx − shipNDC.x) and (ny − shipNDC.y) so the offset is relative to
+    // the ship's actual screen position, not absolute NDC (which would double-
+    // shift when the inspection look-at carries a forward offset).
+    this._vAttach.copy(this._vShip)
+      .addScaledVector(this._camRight, (nx - this._shipNDC.x) * this._halfW)
+      .addScaledVector(this._camUp, (ny - this._shipNDC.y) * this._halfH);
+    this._vTmp.copy(this._vAttach);
+    this.player.worldToLocal(this._vTmp);
+    rec.sprite.position.copy(this._vTmp);
+
+    // Screen-constant sizing (manual dist scaling; see plan task 6 fallback).
+    // SIZE_* defines the on-screen height of the TITLE BLOCK; scale by heightFactor
+    // so the whole card grows proportionally and text stays the same size.
+    // aspect × heightFactor = CARD_W_OVER_TITLE_H for every card (R15), so derive
+    // the width factor from the invariant instead of reading a possibly-stale card.
+    const frac = this._sizeFrac(rec, isFocus);
+    const heightFactor = rec.card?.heightFactor || 1;
+    const h = frac * 2 * this._halfH * heightFactor;
+    const aspect = CARD_W_OVER_TITLE_H / heightFactor;
+    rec.sprite.scale.set(h * aspect, h, 1);
+
+    // Ease opacity. Hover lifts it a little; the colour lift below carries the
+    // affordance at full opacity where this boost is a no-op.
+    rec.op += (rec._targetOp - rec.op) * fadeK;
+    const hovered = this._hoverRec === rec;
+    const op = hovered ? Math.min(1, rec.op + 0.15) : rec.op;
+    const visible = op > 0.02;
+    rec.sprite.material.opacity = op;
+    rec.sprite.visible = visible;
+    // Material-level hover cue (R14): base state slightly down, hover full bright.
+    rec.sprite.material.color.setScalar(hovered ? 1.0 : 0.88);
+    // Depth sort: nearer anchor draws last.
+    rec.sprite.renderOrder = 30 + Math.round((1 - rec._anchorZ) * 200);
+
+    // Dot at the anchor.
+    const dotWorldH = CFG.DOT_SIZE * 2 * this._halfH;
+    rec.dot.position.copy(rec.anchor);
+    rec.dot.scale.set(dotWorldH, dotWorldH, 1);
+    rec.dot.material.opacity = op;
+    rec.dot.visible = visible;
+    rec.dot.renderOrder = 31 + Math.round((1 - rec._anchorZ) * 200);
+
+    // Elbow leader (opacity tracks the card, slightly dimmer).
+    const lineOp = visible ? op * LINE_OP_SCALE : 0;
+    if (hovered) rec.line.material.color.set('#ffffff');
+    else rec.line.material.color.set(rec.hue);
+    this._setElbowLocal(rec.line, this._vAttach, rec.anchor, side, lineOp);
+    rec.line.visible = visible;
+  }
+
+  /** Hide a rec fully (opacity 0), keeping it off the rails. @private */
+  _hideRec(rec) {
+    const vis = rec.op > 0.02;
+    rec.sprite.material.opacity = rec.op;
+    rec.sprite.visible = vis;
+    rec.line.material.opacity = rec.op * LINE_OP_SCALE;
+    rec.line.visible = vis;
+    rec.dot.material.opacity = rec.op;
+    rec.dot.visible = vis;
+  }
+
+  /**
+   * Build a two-segment elbow leader ribbon: a horizontal screen-space stub off
+   * the card edge (toward the ship), then a straight run to the anchor.
+   * `attachWorld` is the card's on-rail edge (world); `anchorLocal` the part.
+   * @private
+   */
+  _setElbowLocal(line, attachWorld, anchorLocal, side, opacity) {
+    // Attach point in local space.
+    this._rA.copy(attachWorld);
+    this.player.worldToLocal(this._rA);
+    // Anchor in local space (Vector3, resolved per frame — T1).
+    const anchorL = this._rB.copy(anchorLocal);
+    // Elbow joint: attach + a horizontal screen stub toward the ship.
+    const stubWorld = CFG.ELBOW_STUB_NDC * this._halfW;
+    const dir = (side === 'L') ? 1 : -1; // left rail → stub goes right (toward ship)
+    this._vElbow.copy(attachWorld).addScaledVector(this._camRight, dir * stubWorld);
+    this.player.worldToLocal(this._vElbow);
+
+    const pos = line.geometry.attributes.position;
+    this._ribbonQuad(pos, 0, this._rA, this._vElbow);
+    this._ribbonQuad(pos, 4, this._vElbow, anchorL);
+    pos.needsUpdate = true;
+    line.material.opacity = opacity;
+  }
+
+  /** Write a 4-vertex camera-facing ribbon quad (local space) at index base. @private */
+  _ribbonQuad(pos, base, aLocal, bLocal) {
+    this._rMid.copy(aLocal).add(bLocal).multiplyScalar(0.5);
+    this._rView.copy(this._vCamLocal).sub(this._rMid);
+    this._rDir.copy(bLocal).sub(aLocal);
+    this._rPerp.copy(this._rDir).cross(this._rView);
+    if (this._rPerp.lengthSq() < 1e-30) this._rPerp.set(0, 1, 0).cross(this._rDir);
+    this._rPerp.normalize().multiplyScalar(this._leaderHalfWidth || 0);
+
+    this._rC0.copy(aLocal).add(this._rPerp);
+    this._rC1.copy(aLocal).sub(this._rPerp);
+    this._rC2.copy(bLocal).sub(this._rPerp);
+    this._rC3.copy(bLocal).add(this._rPerp);
+    pos.setXYZ(base + 0, this._rC0.x, this._rC0.y, this._rC0.z);
+    pos.setXYZ(base + 1, this._rC1.x, this._rC1.y, this._rC1.z);
+    pos.setXYZ(base + 2, this._rC2.x, this._rC2.y, this._rC2.z);
+    pos.setXYZ(base + 3, this._rC3.x, this._rC3.y, this._rC3.z);
   }
 
   dispose() {
     this._detachPointer();
     eventBus.off?.(Events.CAMERA_VIEW_CHANGE, this._onViewChange);
     eventBus.off?.(Events.INSPECT_HULL_OUTLINE, this._onHullOutline);
-    const sprites = [...this._systemLabels, ...this._partLabels];
-    for (const s of sprites) {
-      s.sprite?.material?.map?.dispose();
+    for (const s of this._allRecs) {
+      // Dispose all cached card variants.
+      if (s._cardCache) {
+        for (const card of s._cardCache.values()) {
+          card?.texture?.dispose();
+        }
+        s._cardCache.clear();
+      }
+      s.card?.texture?.dispose();
       s.sprite?.material?.dispose();
-      s.detailSprite?.material?.map?.dispose();
-      s.detailSprite?.material?.dispose();
       s.line?.geometry?.dispose();
       s.line?.material?.dispose();
-      s.dot?.material?.dispose(); // shared dot texture not disposed (static singleton)
+      s.dot?.material?.dispose();
     }
     this.player.remove(this._group);
   }

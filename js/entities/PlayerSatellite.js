@@ -1349,10 +1349,12 @@ export class PlayerSatellite extends THREE.Group {
       disc.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;            // FIX_PLAN §2-followup (round 3)
       this.add(disc);
 
-      // ── LED indicator (forward of outboard A-frame, per §13.1.1) ──
+      // ── LED indicator (seated on the outboard A-frame's fore face, per §13.1.1) ──
+      // Round-3: was collarY + 0.03 — a 1 cm bead floating 26 mm proud of the
+      // bracket face (brackets are 8 mm deep centred at collarY → face at +0.004).
       const ledMat = new THREE.MeshBasicMaterial({ color: 0x00ff44 });
       const led = new THREE.Mesh(ledGeo, ledMat);
-      led.position.set(cx, cy, collarY + M * 0.03);
+      led.position.set(cx, cy, collarY + M * 0.005);
       led.name = `HingeLED_${azDeg}`;
       led.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;           // FIX_PLAN §2-followup (round 3)
       this.add(led);
@@ -2096,7 +2098,7 @@ export class PlayerSatellite extends THREE.Group {
    *     ├─ _rosaPanelWrapper1 (Group — scale.x drives roll-out)
    *     │    ├─ ROSA_Panel_Front_0deg (PlaneGeometry — FrontSide cell-string surface, local z = +2 mm)
    *     │    └─ ROSA_Panel_Back_0deg  (PlaneGeometry — BackSide copper-Kapton substrate, local z = −2 mm)
-   *     └─ ROSA_Roll_0deg             (CylinderGeometry — stowed roll)
+   *     └─ ROSA_Spool_0deg            (Group — drum + stow-coil bulge; the rolled-up read)
    * ```
    *
    * Accuracy pass (Option B): the blanket is a plain square-cornered rectangle
@@ -2174,9 +2176,12 @@ export class PlayerSatellite extends THREE.Group {
       side: THREE.BackSide,
       emissive: 0x3e2c14, emissiveIntensity: 0.25,
     });
-    const rollMat = new THREE.MeshStandardMaterial({
-      color: 0x333344, metalness: 0.5, roughness: 0.4,
-    });
+    // Round-3 (user report: z-layer flicker at the rolled-up barrel end): the
+    // legacy ROSA_Roll_* cylinders were REMOVED. When furled they sat entirely
+    // INSIDE the stow-coil bulge (roll x∈[0,0.10] vs bulge x∈[−0.077,0.237])
+    // with end caps exactly coplanar at z=±1.0 — a guaranteed depth tie, and a
+    // second, off-axis roll body next to the real spool. The ROSA_StowRoll_*
+    // bulge on the spool axis now carries the rolled-up read alone.
 
     // ── Square-cornered blanket planes (local XY, rotated to XZ via wrapper) ──
     // §2-followup (z-layer-and-lights-fix Batch 2, Option A): the front + back
@@ -2196,7 +2201,6 @@ export class PlayerSatellite extends THREE.Group {
     const ROSA_HALF_THICK = M * 0.002;   // 2 mm — half the blanket thickness (Z1)
     const ROSA_INBOARD_GAP = M * 0.005;  // 5 mm — inboard-edge standoff (Z2)
     const panelGeo = new THREE.PlaneGeometry(rosaW, rosaL);
-    const rollGeo  = new THREE.CylinderGeometry(M * 0.05, M * 0.05, rosaL, 16);  // was 8-seg (2 m-long visible roll)
 
     // ── Shared solar array pivot — groups both wings as one rigid
     //    assembly so they stay coplanar through the satellite centre. ──
@@ -2237,12 +2241,6 @@ export class PlayerSatellite extends THREE.Group {
     panel1Back.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
     this._rosaPanelWrapper1.add(panel1Back);
 
-    this._rosaRoll1 = new THREE.Mesh(rollGeo, rollMat);
-    this._rosaRoll1.position.set(M * 0.05, 0, 0); // just beyond barrel edge
-    this._rosaRoll1.rotation.x = Math.PI / 2; // Y-axis → Z-axis (barrel axis)
-    this._rosaRoll1.name = 'ROSA_Roll_0deg';
-    this.panelRightPivot.add(this._rosaRoll1);
-
     // ── ROSA structural detail: edge booms + tip spreader + root drum/bracket ──
     this._buildRosaStructure(1, this._rosaPanelWrapper1, this.panelRightPivot, +1);
 
@@ -2268,12 +2266,6 @@ export class PlayerSatellite extends THREE.Group {
     panel2Back.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
     this._rosaPanelWrapper2.add(panel2Back);
 
-    this._rosaRoll2 = new THREE.Mesh(rollGeo, rollMat);
-    this._rosaRoll2.position.set(-M * 0.05, 0, 0); // just beyond barrel edge
-    this._rosaRoll2.rotation.x = Math.PI / 2;
-    this._rosaRoll2.name = 'ROSA_Roll_180deg';
-    this.panelLeftPivot.add(this._rosaRoll2);
-
     this._buildRosaStructure(2, this._rosaPanelWrapper2, this.panelLeftPivot, -1);
 
     // ── Default state: fully deployed ─────────────────────────
@@ -2288,13 +2280,11 @@ export class PlayerSatellite extends THREE.Group {
    */
   _setRosaWingProgress(wing, progress) {
     const wrapper = wing === 1 ? this._rosaPanelWrapper1 : this._rosaPanelWrapper2;
-    const roll    = wing === 1 ? this._rosaRoll1 : this._rosaRoll2;
     const struct  = wing === 1 ? this._rosaStruct1 : this._rosaStruct2;
     // Booms + spreader live INSIDE the wrapper, so scale.x stretches/extends
     // them with the blanket automatically. The blanket starts at 5% (a thin
     // rolled stub) and grows to full width as progress → 1.
     if (wrapper) wrapper.scale.x = 0.05 + 0.95 * progress;
-    if (roll)    roll.visible = progress < 0.5;
 
     if (struct) {
       // Spool spin: the blanket reels off the drum as it deploys, so spin the
@@ -2480,7 +2470,9 @@ export class PlayerSatellite extends THREE.Group {
 
     // Stowed-coil bulge — coaxial fat roll of blanket when stowed, shrinking to a
     // bare mandrel as the wing rolls out (scaled radially by _setRosaWingProgress).
-    const coilGeo = new THREE.CylinderGeometry(drumR * 1.05, drumR * 1.05, rosaL, 16);  // was 12-seg (match drum)
+    // Length is 0.98×rosaL so its end caps (z=±0.98) never tie with the drum
+    // (±1.02) or the spool curls (±1.00) — round-3 z-fight fix.
+    const coilGeo = new THREE.CylinderGeometry(drumR * 1.05, drumR * 1.05, rosaL * 0.98, 16);  // was 12-seg (match drum)
     const stowRoll = new THREE.Mesh(coilGeo, drumMat);
     stowRoll.name = `ROSA_StowRoll_${wing === 1 ? '0' : '180'}deg`;
     spoolPivot.add(stowRoll);
@@ -2852,8 +2844,14 @@ export class PlayerSatellite extends THREE.Group {
     telescope.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
     this.sensorGimbal.add(telescope);
 
-    // Stray-light baffle — short open ring proud of the tube mouth (fore, +Z).
-    const baffleGeo = new THREE.CylinderGeometry(M * 0.10, M * 0.10, M * 0.05, 16, 1, true);
+    // Stray-light baffle — short TAPERED open ring seated on the tube mouth
+    // (fore, +Z). Round-3 fix (user report: "dark grey ring floating unattached"):
+    // the old shell was radius 0.10 over a 0.09 tube and stood entirely PROUD of
+    // the mouth with nothing bridging the 1 cm radial step. Now the base radius
+    // matches teleR and the shell overlaps the tube by ~5 mm, so it reads as a
+    // collar grown out of the barrel. Mouth stays aft of the net-launcher muzzle
+    // (z = 1.30): spans tube-local 0.095→0.145 → world z ≈ 1.195→1.245.
+    const baffleGeo = new THREE.CylinderGeometry(M * 0.10, M * 0.09, M * 0.05, 16, 1, true);
     const baffleMat = new THREE.MeshStandardMaterial({
       color: 0x2a2a30, metalness: 0.6, roughness: 0.5, side: THREE.DoubleSide,
     });
@@ -2862,7 +2860,7 @@ export class PlayerSatellite extends THREE.Group {
     // so a child keeps tube-local +Y as the axis with NO extra rotation. (The old
     // extra rotation.x=π/2 double-rotated it, poking its radius out past the fore
     // face — which is how it used to over-protrude the net launcher.)
-    baffle.position.set(0, teleLen * 0.5 + M * 0.025, 0);
+    baffle.position.set(0, teleLen * 0.5 + M * 0.020, 0);
     baffle.name = 'LaserBaffle';
     baffle.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
     telescope.add(baffle);   // child of tube → tube-local Y is tube axis
@@ -3694,29 +3692,47 @@ export class PlayerSatellite extends THREE.Group {
    *  Rotation.x = α tilts the normal to (0, cos α, sin α) in body space.
    *  Optimal α = atan2(localSun.z, localSun.y) — maximises dot(normal, sun).
    *
-   *  Precedence: furl wins (a furled wing is frozen, no gimbal). When deployed
-   *  and feathered, the pivot is driven to the edge-on park angle (sun-track is
-   *  skipped). Otherwise the pivot tracks the sun, clamped to the tier-aware
-   *  maximum so the trailing edge clears the arm struts.
+   *  Precedence: furl wins — a furled wing is parked at 0° (the rolled cylinder
+   *  is a pivot child, so tracking would visibly tilt it) and the target blends
+   *  to the sun angle across the deploy stroke. When deployed and feathered,
+   *  the pivot is driven to the edge-on park angle (sun-track is skipped).
+   *  Otherwise the pivot tracks the sun, clamped to the tier-aware maximum so
+   *  the trailing edge clears the arm struts.
    */
   _animateSolarTracking(dt, sunDirection) {
     if (!sunDirection) return;
 
     const desired = this._rosaDesiredTilt(sunDirection);
 
-    // While the wing is mostly furled it reads as a rolled-up cylinder — the
-    // pivot tilt is invisible. Keep snapping it straight to the target so it is
-    // always correct and "pre-seeded": when it unrolls past 50% the tilt is
-    // already right, so there is no wake-up sweep AND no visible snap (the old
-    // seed-at-0.5 approach snapped up to 30° while the panel was half-visible).
-    // Furl takes precedence over feather; a furled wing never gimbals visibly.
-    if ((this._rosaFurlProgress ?? 1) < 0.5) {
-      if (this.panelRightPivot) this.panelRightPivot.rotation.x = desired;
-      if (this.panelLeftPivot) this.panelLeftPivot.rotation.x = desired;
-      return;
+    // Round-3 (user report): a furled wing must NOT track the sun. The rolled
+    // cylinder, drum, spool curls and brackets are all children of this pivot,
+    // so the old snap-to-target-while-furled branch visibly tilted (and jumped)
+    // the 2 m roll with every attitude slew — the old comment claiming the tilt
+    // was "invisible" when furled was wrong. Instead park at 0° (roll parallel
+    // to the hull) and blend to the sun target across the deploy stroke; the
+    // blend is smoothed by the same exponential filter, so unfurling reads as a
+    // motorized gimbal waking up. This deliberately supersedes the no-wake-up-
+    // sweep goal of plans/1784853499179-rosa-panel-start-jitter.md — the sweep
+    // now runs across the 2.5 s furl stroke, not as a post-deploy twitch.
+    const furl = this._rosaFurlProgress ?? 1;
+    const blend = Math.min(1, Math.max(0, (furl - 0.15) / 0.5)); // 0 furled → 1 by ~65%
+    const target = desired * blend; // stow tilt = 0
+
+    // First-frame seed for the spawn-already-deployed case (jitter plan): assign
+    // directly so a sim that starts deployed doesn't sweep from 0. Only when the
+    // wing is ALREADY essentially deployed on the first tracking frame — during
+    // a launch-sequence deploy (progress rising through 0.9) the smooth blend
+    // above must carry the gimbal up, not a one-frame snap.
+    if (!this._rosaTrackSeeded) {
+      this._rosaTrackSeeded = true;
+      if (furl > 0.98) {
+        if (this.panelRightPivot) this.panelRightPivot.rotation.x = target;
+        if (this.panelLeftPivot) this.panelLeftPivot.rotation.x = target;
+        return;
+      }
     }
 
-    // Deployed: framerate-correct exponential smoothing toward the target
+    // Deployed/blending: framerate-correct exponential smoothing toward the target
     // (~0.57 s time constant, stable at any dt). The rate constant must be brisk
     // enough to keep up with attitude slews (aim/launch/autopilot) without the
     // old 0.3 (~3.3 s) trailing them, but not so fast it snaps — 1.75 reads as a
@@ -3727,11 +3743,11 @@ export class PlayerSatellite extends THREE.Group {
 
     if (this.panelRightPivot) {
       const cur = this.panelRightPivot.rotation.x;
-      this.panelRightPivot.rotation.x = cur + (desired - cur) * alpha;
+      this.panelRightPivot.rotation.x = cur + (target - cur) * alpha;
     }
     if (this.panelLeftPivot) {
       const cur = this.panelLeftPivot.rotation.x;
-      this.panelLeftPivot.rotation.x = cur + (desired - cur) * alpha;
+      this.panelLeftPivot.rotation.x = cur + (target - cur) * alpha;
     }
   }
 

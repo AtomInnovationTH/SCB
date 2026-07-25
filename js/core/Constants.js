@@ -130,12 +130,67 @@ export const Constants = {
   // Light visual treatment when the INSPECT view is active: a vignette that
   // dims the surroundings so the inspected craft reads clearly, plus an
   // optional edge-outline on the mothership hull. NOT a full scene wireframe —
-  // the schematic wireframe + callouts live in the MotherWireframe panel.
+  // the callouts live in the in-world ui/MotherCallouts.js overlay.
   INSPECTION: {
     DIM: 0.6,                     // vignette outer-edge darkness (0 = off, 1 = black)
     HULL_OUTLINE: true,           // toggle the mothership hull edge-outline
     HULL_OUTLINE_COLOR: 0x00ffcc, // cyan diagnostic tint
     HULL_OUTLINE_THRESHOLD_DEG: 20, // EdgesGeometry thresholdAngle (deg)
+  },
+
+  // === INSPECT CALLOUTS (side-rail label overhaul, 2026-07-25) ===
+  // Config for the in-world inspection callouts (ui/MotherCallouts.js): system
+  // identity hues, risk badge colours, screen-space side-rail layout params, and
+  // per-tier on-screen label sizes. Kept here (not hardcoded in MotherCallouts)
+  // so the look is tunable in one place.
+  CALLOUTS: {
+    // Hue = system identity (6 groups). Risk is shown as a small badge dot on
+    // the card, NOT by label colour (the old scheme read all-green).
+    SYSTEM_HUES: {
+      POWER:      '#e3b341', // amber
+      PROPULSION: '#bc8cff', // violet
+      PAYLOAD:    '#ff7b72', // red-orange
+      SENSORS:    '#39d2c0', // cyan
+      COMMS:      '#58a6ff', // blue
+      CAPTURE:    '#3fb950', // green
+    },
+    // Risk badge dot colours reuse the shared wireframe palette.
+    RISK_COLORS: {
+      GREEN:  '#3fb950',
+      YELLOW: '#d29922',
+      RED:    '#f85149',
+    },
+
+    // --- Side-rail layout (all NDC unless noted) ---
+    RAIL_INSET_NDC:    0.16,  // rail X offset outward from the ship's screen bound
+    RAIL_MARGIN_NDC:   0.06,  // keep rails at least this far inside the viewport edge
+    RAIL_GAP_NDC:      0.03,  // vertical PADDING between stacked cards (min gap)
+    SIDE_HYSTERESIS:   0.05,  // |ΔNDC.x| past centre before a label flips rail side
+    ORDER_HYSTERESIS:  0.04,  // anchor-Y separation before two labels swap stack order
+    EASE_RATE:         12.0,  // screen-space position ease rate (k = 1 − exp(−rate·dt))
+    OFFSCREEN_NDC:     1.1,   // hide callouts whose anchor projects beyond ±this
+    ELBOW_STUB_NDC:    0.05,  // horizontal leader stub length off the card edge
+    DETAIL_REVEAL_NDC: 0.25,  // T6: detail parts within this NDC radius of the
+                              // focused part reveal even across systems
+
+    // --- On-screen label heights, as a fraction of viewport height (NDC-ish) ---
+    // Each value is the on-screen height of the card's TITLE BLOCK (the 0-row
+    // height, 106 logical px); total card height = this × card.heightFactor.
+    // Sized MANUALLY from distWorld × tan(fov/2) in MotherCallouts._positionCard
+    // (NOT sizeAttenuation:false — that attenuation branch is skipped, see
+    // three/src/objects/Sprite.js:144). Card aspect scales the width, and
+    // aspect × heightFactor = CARD_W_OVER_TITLE_H ≈ 6.04 for every card (R15;
+    // card canvas widened 512→640 in round-3 T4 for plain-English titles).
+    // Texture budget (R14/T4): ~46 MB resident (33 compact + 1 focused card) —
+    // hover is a material-level effect, not a per-rec texture variant.
+    SIZE_SYSTEM:  0.052,  // Band-1 system group labels
+    SIZE_MAJOR:   0.040,  // major part cards
+    SIZE_DETAIL:  0.030,  // detail-tier cards (COMPONENT band only)
+    SIZE_CARD:    0.046,  // focused COMPONENT card (~15% larger than major: 0.040 × 1.15)
+    DOT_SIZE:     0.012,  // anchor dot on-screen size
+
+    LIVE_REFRESH_HZ: 2,   // max focused-card live-data refresh rate
+    SHIP_BOUND_M:   1.5,  // approx ship silhouette radius (wings) in metres for rail X
   },
 
   // === RESOURCE DEFAULTS ===
@@ -3895,8 +3950,8 @@ export const Constants = {
   // ============================================================================
   // === WIREFRAMES (Delegation 3, 2026-05-31) ===
   // Shared visual constants for Mother / Daughter / Debris wireframe panels.
-  // New wireframes (MotherWireframe, DaughterWireframe) import these; existing
-  // DebrisWireframe keeps its own internal constants for backward compatibility.
+  // DaughterWireframe imports these; existing DebrisWireframe keeps its own
+  // internal constants for backward compatibility.
   // ============================================================================
   WIREFRAMES: {
     PANEL_SIZE_NORMAL:    { w: 280, h: 200 },
