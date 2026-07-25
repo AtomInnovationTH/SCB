@@ -19,6 +19,7 @@ import { makePlumeFrustum } from '../scene/plumeGeometry.js';
 import { applyDetailLod } from '../scene/detailLodCull.js';
 import { AVIONICS_GUNMETAL, AVIONICS_DARK_OPTIC, AVIONICS_THERMAL_WHITE } from '../scene/avionicsMaterials.js';
 import { tetherReel } from '../systems/TetherReel.js';
+import { strutLocalDirection } from './ArmDockBasis.js';
 import { captureNetSystem, getNetClassForType, computeLeadAim, computeFragRisk, effectiveFragility, presentedWidthForApproach } from './CaptureNet.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import { recommendArmTool } from '../systems/ToolRecommender.js';
@@ -1119,7 +1120,24 @@ export class ArmUnit {
         this.target = null;
         return false;
       }
-      this.launchDirection = tPos.clone().sub(this.position).normalize();
+      // Aim-before-launch: when the aim ceremony rotated the Mother + slewed
+      // this strut to the target, fire along the PHYSICAL strut-tip direction
+      // (shared SSOT with the rendered strut pose). Any residual aim error is
+      // intentional — the TRANSIT FEEP controller corrects it in flight.
+      //
+      // Non-ceremony deploy paths (deployArmByIndex / deployAllToTarget /
+      // deploySpecificArm) never slew _aimAlpha toward the target, so firing
+      // along the (stowed) strut would launch the wrong way. Fall back to the
+      // direct target bearing for those, preserving pre-aim behavior.
+      if (this._aimConverged) {
+        const az = Math.atan2(this.dockOffset.y, this.dockOffset.x);
+        const strutLocal = strutLocalDirection(this._aimAlpha, az, new THREE.Vector3());
+        if (this._lastParentQuat) strutLocal.applyQuaternion(this._lastParentQuat);
+        this.launchDirection = strutLocal.normalize();
+      } else {
+        this.launchDirection = tPos.clone().sub(this.position).normalize();
+      }
+      this._aimConverged = false;
     } else {
       // Fallback: deploy outward along world-space dock direction (§4.6 fix)
       this.launchDirection = this._worldDockDirection(this._lastParentQuat);

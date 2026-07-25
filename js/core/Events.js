@@ -532,6 +532,11 @@ export const Events = {
   AUTOPILOT_TARGET_LOCK:   'autopilot:targetLock',     // { debrisId } — AP acquired a debris lock (exempt from CA)
   AUTOPILOT_TARGET_UNLOCK: 'autopilot:targetUnlock',   // { debrisId } — AP released debris lock
 
+  // === AIM-BEFORE-LAUNCH (aim-before-launch plan) ===
+  AIM_SEQUENCE_START:     'aim:sequenceStart',         // { mode: 'net'|'daughter' }
+  AIM_SEQUENCE_END:       'aim:sequenceEnd',           // { mode, result: 'resolved'|'rejected', reason? }
+  MOTHER_MANUAL_ROTATE:   'mother:manualRotate',       // arrow-key attitude input in mother mode (cancels aim seq)
+
   // === THRUST VISUAL (Phase 4 — Velocity Streaks) ===
   THRUST_VISUAL:          'thrust:visual',             // { magnitude, direction, type }
 

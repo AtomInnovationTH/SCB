@@ -153,10 +153,13 @@ export function effectiveCatchRadius(mouthRadius, range) {
  * @param {{x,y,z}} targetPos — target position now
  * @param {{x,y,z}|null} relVel — target velocity relative to launcher (units/s)
  * @param {number} launchSpeed — net speed in the same length units per second
+ * @param {{dir:{x,y,z}, offAxisDeg:number}} [out] — optional preallocated result to
+ *   write into (avoids per-frame allocation on hot aim paths). When omitted a
+ *   fresh object is returned.
  * @returns {{ dir: {x,y,z}, offAxisDeg: number }} lead direction + angle between
  *   the lead direction and the direct bearing (0 when no lead is needed)
  */
-export function computeLeadAim(armPos, targetPos, relVel, launchSpeed) {
+export function computeLeadAim(armPos, targetPos, relVel, launchSpeed, out = null) {
   const bx = targetPos.x - armPos.x;
   const by = targetPos.y - armPos.y;
   const bz = targetPos.z - armPos.z;
@@ -171,12 +174,14 @@ export function computeLeadAim(armPos, targetPos, relVel, launchSpeed) {
   }
   const dx = ax - armPos.x, dy = ay - armPos.y, dz = az - armPos.z;
   const dLen = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
-  const dir = { x: dx / dLen, y: dy / dLen, z: dz / dLen };
+  const dir = out ? out.dir : { x: 0, y: 0, z: 0 };
+  dir.x = dx / dLen; dir.y = dy / dLen; dir.z = dz / dLen;
 
   // Angle between lead dir and direct bearing
   const dot = Math.max(-1, Math.min(1,
     (dir.x * bx + dir.y * by + dir.z * bz) / bLen));
   const offAxisDeg = Math.acos(dot) * (180 / Math.PI);
+  if (out) { out.offAxisDeg = offAxisDeg; return out; }
   return { dir, offAxisDeg };
 }
 

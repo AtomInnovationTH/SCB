@@ -206,6 +206,9 @@ export class OnboardingDirector {
     /** @type {object|null} state of currently-active beat. */
     this._active = null;
 
+    /** @type {boolean} True while an aim-before-launch rotation slew is active. */
+    this._aimActive = false;
+
     /** @type {Array<{ event: string, at: number }>} recent trigger event buffer. */
     this._recentInputs = [];
 
@@ -455,6 +458,47 @@ export class OnboardingDirector {
     // falls silent after the unheeded cap; veterans get a ticker, never a modal.
     if (Events.STATION_KEEP_ENTERED) {
       on(Events.STATION_KEEP_ENTERED, () => this._onStationKeepArrowsHint());
+    }
+
+    // Aim-before-launch: a multi-second auto-rotation slew precedes the actual
+    // fire/deploy. Pause idle-escalation + auto-advance fallback timers and
+    // freeze the unrelated-input counter for its duration so the player isn't
+    // nagged (idle) or force-advanced before the delayed fire happens, and
+    // repeated N/D presses during the slew don't count as unrelated input.
+    if (Events.AIM_SEQUENCE_START) on(Events.AIM_SEQUENCE_START, () => this._onAimSequenceStart());
+    if (Events.AIM_SEQUENCE_END)   on(Events.AIM_SEQUENCE_END,   () => this._onAimSequenceEnd());
+  }
+
+  /** @private Pause beat timers while the aim-rotation slew is active. */
+  _onAimSequenceStart() {
+    this._aimActive = true;
+    const a = this._active;
+    if (a && typeof clearTimeout === 'function') {
+      if (a.idleTimer != null) { clearTimeout(a.idleTimer); a.idleTimer = null; }
+      if (a.autoAdvanceTimer != null) { clearTimeout(a.autoAdvanceTimer); a.autoAdvanceTimer = null; }
+    }
+  }
+
+  /** @private Restart the paused beat timers once the slew resolves/aborts. */
+  _onAimSequenceEnd() {
+    this._aimActive = false;
+    const a = this._active;
+    if (!a || !a.beat) return;
+    const beat = a.beat;
+    const idleMs = Constants.ONBOARDING?.IDLE_ESCALATION_MS || 15000;
+    if (beat.escalationText && a.idleTimer == null) {
+      a.idleTimer = this._setTimeout(() => this._escalate(beat), idleMs);
+    }
+    if (Number.isFinite(beat.autoAdvanceAfter) && a.autoAdvanceTimer == null) {
+      a.autoAdvanceTimer = this._setTimeout(() => {
+        if (this._active && this._active.beat.id === beat.id) {
+          if (!beat.triggerEvent && beat.onEnter === 'mastered=true') this._mastered = true;
+          this._completedBeats.add(beat.id);
+          this._persist();
+          this._active = null;
+          this._advanceToNextBeat();
+        }
+      }, beat.autoAdvanceAfter);
     }
   }
 
@@ -1001,6 +1045,9 @@ export class OnboardingDirector {
     // Unrelated-input counter against the active beat.
     const beat = this._active.beat;
     if (Events[beat.triggerEvent] === eventName) return; // related — handled in _onTrigger
+    // Aim-before-launch: freeze the counter during the auto-rotation slew so
+    // repeated N/D presses (the beat's own action, pre-fire) don't escalate.
+    if (this._aimActive) return;
     this._active.unrelatedInputs++;
     const threshold = Constants.ONBOARDING?.UNRELATED_INPUT_THRESHOLD || 6;
     if (this._active.unrelatedInputs > threshold) {

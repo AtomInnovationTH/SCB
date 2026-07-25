@@ -920,6 +920,8 @@ async function init() {
     player, targetSelector, trawlManager, debrisField, armManager,
     targetAcquisition,
   });
+  // Aim-before-launch: give ArmManager the autopilot for the daughter ceremony.
+  if (typeof armManager.setAutopilot === 'function') armManager.setAutopilot(autopilotSystem);
 
   // --- ST-6.4: Strategic Map (Shift+V orbital overview) ---
   strategicMap = new StrategicMap({
@@ -1905,11 +1907,18 @@ function gameLoop(timestamp) {
 
     // Update lasso system (Phase 4A — projectile flight + reel-in)
     try {
-      const _lv = player.getVelocity();
-      const _lvDir = (_lv && (_lv.x || _lv.y || _lv.z))
-        ? _lassoVelScratch.set(_lv.x, _lv.y, _lv.z).normalize()
-        : null;
-      lassoSystem.update(dt, player.getPosition(), debrisField, targetSelector.getActiveTarget(), _lvDir);
+      // Aim-before-launch: the lasso geometry (muzzle, flight, reel-in
+      // destination, cargo cells) is built around this "forward" dir. Feed it the
+      // ship's actual NOSE (+Z) rather than the velocity vector, so after the
+      // mother slews to face the debris the catch reels straight back to the
+      // current nose instead of the old prograde-relative spot off to the side.
+      // When idle the nose already tracks prograde, so idle behaviour is unchanged.
+      const _noseDir = player.quaternion
+        ? _lassoVelScratch.set(0, 0, 1).applyQuaternion(player.quaternion).normalize()
+        : (() => { const _lv = player.getVelocity();
+            return (_lv && (_lv.x || _lv.y || _lv.z))
+              ? _lassoVelScratch.set(_lv.x, _lv.y, _lv.z).normalize() : null; })();
+      lassoSystem.update(dt, player.getPosition(), debrisField, targetSelector.getActiveTarget(), _noseDir);
     } catch (e) { console.error('[GameLoop] lassoSystem:', e); }
 
     // Update reward system (Phase 5 Rewards — milestone checks)

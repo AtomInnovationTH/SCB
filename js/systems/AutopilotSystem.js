@@ -18,8 +18,8 @@ import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { orbitToSceneCartesian, orbitToSceneCartesianInto } from '../entities/OrbitalMechanics.js';
-import { decomposeAimTarget } from './AimDecomposition.js';
 import { findNearestLiveDebris } from './NavRecoveryAdvisor.js';
+import { strutLocalDirection } from '../entities/ArmDockBasis.js';
 
 /** 1 metre in scene units (1 scene unit = 100 km) */
 const M = 0.00001;
@@ -148,8 +148,22 @@ export class AutopilotSystem {
     /** @type {number} Cumulative ΔV spent on station-keeping recoil compensation (m/s) */
     this._stationKeepDeltaV = 0;
 
-    /** @type {object|null} C-11: Active aim coroutine state (Phase 1-2-3 sequencing) */
+    /** @type {object|null} Active aim-before-launch coroutine state (net/daughter) */
     this._aimCoroutine = null;
+
+    /** @type {boolean} Attitude hold (steady freeze) during a catch reel-in. */
+    this._attitudeHold = false;
+    /** @type {number} Seconds the current attitude hold has been active (safety cap). */
+    this._attitudeHoldElapsed = 0;
+
+    // Aim-before-launch: scratch for the attitude coroutine (net + daughter modes).
+    this._aimBoresightWorld = new THREE.Vector3();
+    this._aimTargetDir = new THREE.Vector3();
+    this._aimErrAxis = new THREE.Vector3();
+    this._aimDeltaQuat = new THREE.Quaternion();
+    this._aimTargetQuat = new THREE.Quaternion();
+    this._aimInvQuat = new THREE.Quaternion();
+    this._aimLocalDir = new THREE.Vector3();
 
     this._setupListeners();
   }
@@ -182,6 +196,40 @@ export class AutopilotSystem {
    * @returns {'OFF'|'RENDEZVOUS_FAR'|'MATCH_ORBIT'|'TRAIL_ALIGN'|'HOLD'}
    */
   getCurrentPhase() { return this._phase; }
+
+  /** @returns {boolean} True while an aim-before-launch attitude sequence is active. */
+  isAiming() { return !!this._aimCoroutine; }
+
+  /**
+   * Hold the mother's orientation steady (catch capture/reel-in). Suppresses the
+   * prograde auto-orient and the autopilot's steering so the attitude stays put
+   * — no active slew runs, so it cannot waver. Released on reel-in end.
+   */
+  holdAttitude() {
+    this._attitudeHold = true;
+    this._attitudeHoldElapsed = 0;
+    if (this._player) this._player.aimHold = true;
+  }
+
+  /** Release the reel-in attitude hold (unless an aim seq owns it). */
+  releaseAttitudeHold() {
+    this._attitudeHold = false;
+    this._attitudeHoldElapsed = 0;
+    if (this._player && !this._aimCoroutine) this._player.aimHold = false;
+  }
+
+  /**
+   * Tick the attitude hold. The hold is a steady freeze (no active rotation —
+   * the prograde auto-orient and autopilot steering are already suppressed), so
+   * this only enforces the safety cap in case a reel-in end event is missed.
+   * @param {number} dt
+   * @private
+   */
+  _tickAttitudeHold(dt) {
+    if (!this._attitudeHold) return;
+    this._attitudeHoldElapsed += dt;
+    if (this._attitudeHoldElapsed > Constants.AIM.AIM_TIMEOUT_S) this.releaseAttitudeHold();
+  }
 
   // ==========================================================================
   // ENGAGE / DISENGAGE / TOGGLE
@@ -421,6 +469,11 @@ export class AutopilotSystem {
   update(dt) {
     // C-11: Tick aim coroutine independently of autopilot engagement
     this._tickAimCoroutine(dt);
+
+    // Attitude-hold: actively track the catch during reel-in (also independent
+    // of engagement). Reel-in always ends with a stow/snap/miss event; the
+    // internal safety cap releases if one is ever missed.
+    this._tickAttitudeHold(dt);
 
     if (!this._engaged || !this._player) return;
 
@@ -811,7 +864,12 @@ export class AutopilotSystem {
     }
 
     // --- Rotate ship toward nose* = v̂_d ---
-    this._rotateTowardWorld(vHat, dt);
+    // Aim-before-launch mutual exclusion: while an aim coroutine is slewing the
+    // attitude, OR a catch reel-in has frozen the orientation, that controller
+    // owns the quaternion — don't let the HOLD-phase prograde steer fight it.
+    if (!this._aimCoroutine && !this._attitudeHold) {
+      this._rotateTowardWorld(vHat, dt);
+    }
   }
 
   /**
@@ -905,7 +963,10 @@ export class AutopilotSystem {
     const dir = this._tmpV1.set(pv.x, pv.y, pv.z);
     if (dir.lengthSq() > 1e-20) {
       dir.normalize();
-      this._rotateTowardWorld(dir, dt);
+      // Aim-before-launch mutual exclusion: the aim coroutine / reel-in freeze
+      // owns the quaternion while active — don't let prograde-hold fight it
+      // (mirrors the guard on the main control path).
+      if (!this._aimCoroutine && !this._attitudeHold) this._rotateTowardWorld(dir, dt);
     }
   }
 
@@ -1130,6 +1191,23 @@ export class AutopilotSystem {
 
   /** @private Wire up external event listeners for auto-disengage and trawl awareness. */
   _setupListeners() {
+    // Attitude-hold across a lasso capture: HOLD the mother's orientation steady
+    // from the moment it fires (the aim-before-launch has just put +Z on the
+    // debris) through the entire reel-in, until the catch is stowed/lost. A
+    // steady hold — not active tracking — because during reel-in the catch is
+    // pulled to the ship's own nose (+Z), so "point at the catch" is circular and
+    // oscillates. Holding steady keeps the tethered mass on the launcher axis so
+    // it reels straight in instead of swinging into the fore sensors / ROSA
+    // panels. The hold suppresses the prograde auto-orient (_orientAlongVelocity
+    // via player.aimHold) and the autopilot's _rotateTowardWorld (guarded on
+    // _attitudeHold); no active slew runs, so the attitude can't waver.
+    eventBus.on(Events.LASSO_FIRED, () => this.holdAttitude());
+    const endHold = () => this.releaseAttitudeHold();
+    eventBus.on(Events.LASSO_STOWED, endHold);
+    eventBus.on(Events.LASSO_SNAPPED, endHold);
+    eventBus.on(Events.LASSO_MISSED, endHold);
+    eventBus.on(Events.LASSO_DENIED, endHold);
+
     // Conjunction warning (tier ≥ 2) → auto-disengage (CA overrides AP)
     eventBus.on(Events.CONJUNCTION_WARNING, (data) => {
       if (this._engaged && data && data.tier >= 2) {
@@ -1314,160 +1392,219 @@ export class AutopilotSystem {
    * @param {import('../entities/ArmManager.js').ArmManager} [armManager] — for pair geometry
    * @returns {Promise<{ pairIndex: number, alpha: number }>} Resolves when aimed
    */
-  requestAimRotation(targetDir, armManager) {
-    // Feature flag gate
+  /**
+   * Aim-before-launch: rotate the Mother (and, for daughter mode, slew the
+   * chosen strut pair) so the physical launcher axis points at the target,
+   * then resolve so the caller can fire along the ACTUAL attitude.
+   *
+   * Two modes:
+   *   'net'      — align ship +Z with the lead-intercept direction. Tight
+   *                tolerance (NET_AIM_TOLERANCE_DEG); the net cannot steer.
+   *   'daughter' — align the physical strut fire direction of the chosen arm
+   *                with the target and concurrently slew α. Loose tolerance
+   *                (DAUGHTER_AIM_TOLERANCE_DEG); TRANSIT FEEP corrects residual.
+   *
+   * Attitude is driven by directly slerping this._player.quaternion toward a
+   * minimal-arc target quaternion (same 3-DOF authority AutopilotSystem already
+   * uses in _rotateTowardWorld), while plumes + N₂ draw are fired through the
+   * manual RCS path for feel.
+   *
+   * @param {(function():{x,y,z}|null)|{x,y,z}} dirProvider — callback returning the
+   *   current WORLD aim direction (recomputed per tick so it tracks a moving
+   *   target), or a static world dir object.
+   * @param {object} [opts]
+   * @param {'net'|'daughter'} [opts.mode='net']
+   * @param {import('../entities/ArmManager.js').ArmManager} [opts.armManager]
+   * @param {import('../entities/ArmUnit.js').ArmUnit} [opts.arm] — daughter arm (for α slew)
+   * @param {number} [opts.pairIndex] — chosen pair primary index (daughter)
+   * @returns {Promise<{ mode:string, launchDir:{x,y,z} }>}
+   */
+  requestAimRotation(dirProvider, opts = {}) {
     if (!Constants.FEATURE_FLAGS.SEMI_AUTO_AIM) {
-      return Promise.reject(new Error(
-        'SEMI_AUTO_AIM feature flag is disabled. Enable Constants.FEATURE_FLAGS.SEMI_AUTO_AIM to use autopilot aim rotation.'
-      ));
+      return Promise.reject(new Error('SEMI_AUTO_AIM feature flag is disabled.'));
+    }
+    if (!this._player) {
+      return Promise.reject(new Error('AutopilotSystem not initialized (no player).'));
     }
 
-    if (!this._player || !armManager) {
-      return Promise.reject(new Error('AutopilotSystem not initialized or armManager not provided'));
-    }
+    const mode = opts.mode === 'daughter' ? 'daughter' : 'net';
+    const provider = (typeof dirProvider === 'function')
+      ? dirProvider
+      : () => dirProvider;
 
-    // Cancel any existing aim coroutine
+    // Supersede any existing coroutine.
     if (this._aimCoroutine) {
-      this._aimCoroutine.reject(new Error('Superseded by new aim request'));
-      this._aimCoroutine = null;
+      this._rejectAim('Superseded by new aim request');
     }
 
-    const dockPositions = armManager._dockPositions;
-    const dir = { x: targetDir.x, y: targetDir.y, z: targetDir.z };
-
-    // Decompose target into pair + rotation + alpha
-    const { pairIndex, motherRotationRad, strutAlpha } = decomposeAimTarget(dir, dockPositions);
+    const AIM = Constants.AIM;
+    const tolRad = (mode === 'net' ? AIM.NET_AIM_TOLERANCE_DEG : AIM.DAUGHTER_AIM_TOLERANCE_DEG)
+      * Math.PI / 180;
+    const rate = AIM.AP_ROT_RATE * (AIM.ONBOARDING_ROT_RATE_MULT || 1);
 
     return new Promise((resolve, reject) => {
-      const TOLERANCE_RAD = 1 * Math.PI / 180; // 1° tolerance
-      const TIMEOUT_S = 30;
-      const SETTLE_DURATION = 0.5; // seconds of stability required
+      // Cancel handlers — manual attitude input, target change, superseding.
+      const onManualRotate = () => this._rejectAim('Manual attitude input');
+      const onTargetChange = () => this._rejectAim('Target changed');
+      eventBus.on(Events.MOTHER_MANUAL_ROTATE, onManualRotate);
+      eventBus.on(Events.TARGET_SELECTED, onTargetChange);
+      eventBus.on(Events.TARGET_CLEARED, onTargetChange);
 
-      // Cancel on manual input
-      const cancelHandler = () => {
-        if (this._aimCoroutine) {
-          const rej = this._aimCoroutine.reject;
-          this._aimCoroutine = null;
-          eventBus.off(Events.ARM_MANUAL_THRUST, cancelHandler);
-          rej(new Error('Aim rotation cancelled by manual input'));
-        }
-      };
-      eventBus.on(Events.ARM_MANUAL_THRUST, cancelHandler);
+      this._player.aimHold = true;
 
-      // Houston comms
-      const estTime = Math.abs(motherRotationRad) / AP_ROT_RATE;
+      // One-time "on fumes" advisory when starting to slew with empty cold gas.
+      if (this._player.resources && this._player.resources.coldGas <= 0) {
+        eventBus.emit(Events.COMMS_MESSAGE, {
+          text: 'Attitude control on fumes — rotating anyway.',
+          priority: 'warning', source: 'HOUSTON',
+        });
+      }
+
+      eventBus.emit(Events.AIM_SEQUENCE_START, { mode });
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: `Rotating to launch attitude. ${Math.ceil(estTime)} seconds.`,
-        priority: 'info',
-        source: 'HOUSTON',
+        text: `Rotating to launch attitude. ~${Math.ceil(Math.PI / rate)}s max.`,
+        priority: 'info', source: 'HOUSTON',
       });
 
-      // C-11: Store coroutine state — ticked by _tickAimCoroutine(dt) in update()
       this._aimCoroutine = {
-        phase: 1,                    // 1=RCS rotate, 2=strut slew, 3=settle
-        pairIndex,
-        motherRotationRemaining: motherRotationRad,
-        strutAlpha,
-        armManager,
+        mode, provider, tolRad, rate,
+        armManager: opts.armManager || this._armManager,
+        arm: opts.arm || null,
+        pairIndex: (opts.pairIndex != null) ? opts.pairIndex : null,
+        azRad: null,               // resolved lazily from dock geometry
         elapsed: 0,
-        timeout: TIMEOUT_S,
-        tolerance: TOLERANCE_RAD,
-        settleDuration: SETTLE_DURATION,
-        settleTimer: 0,
-        cancelHandler,
-        resolve: (val) => {
-          eventBus.off(Events.ARM_MANUAL_THRUST, cancelHandler);
-          resolve(val);
+        timeout: AIM.AIM_TIMEOUT_S,
+        _cleanup: () => {
+          eventBus.off(Events.MOTHER_MANUAL_ROTATE, onManualRotate);
+          eventBus.off(Events.TARGET_SELECTED, onTargetChange);
+          eventBus.off(Events.TARGET_CLEARED, onTargetChange);
+          // Preserve an active reel-in freeze — don't clobber its aimHold.
+          if (this._player) this._player.aimHold = this._attitudeHold;
         },
-        reject: (err) => {
-          eventBus.off(Events.ARM_MANUAL_THRUST, cancelHandler);
-          reject(err);
-        },
+        resolve, reject,
       };
     });
   }
 
+  /** @private Resolve the active aim coroutine (fire may proceed). */
+  _resolveAim(launchDir) {
+    const c = this._aimCoroutine;
+    if (!c) return;
+    this._aimCoroutine = null;
+    c._cleanup();
+    eventBus.emit(Events.AIM_SEQUENCE_END, { mode: c.mode, result: 'resolved' });
+    c.resolve({ mode: c.mode, launchDir });
+  }
+
+  /** @private Reject the active aim coroutine (nothing fired/spent). */
+  _rejectAim(reason) {
+    const c = this._aimCoroutine;
+    if (!c) return;
+    this._aimCoroutine = null;
+    c._cleanup();
+    eventBus.emit(Events.AIM_SEQUENCE_END, { mode: c.mode, result: 'rejected', reason });
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      text: `Launch aborted — ${reason}.`, priority: 'warning', source: 'HOUSTON',
+    });
+    c.reject(new Error(reason));
+  }
+
   /**
-   * C-11: Tick the aim coroutine through Phase 1 → 2 → 3.
-   * Called each frame from update(), regardless of autopilot engagement.
-   *
-   * Phase 1 — RCS rotate Mother toward target meridian plane (at AP_ROT_RATE).
-   * Phase 2 — Slew both arms in chosen pair to target α (via setAimAlpha).
-   * Phase 3 — Settle: hold within ±1° for SETTLE_DURATION, then resolve.
-   *
+   * Tick the aim coroutine. Called each frame from update() regardless of
+   * autopilot engagement. Drives attitude (and daughter α) toward the target
+   * and resolves with the ACTUAL launcher direction at convergence.
    * @param {number} dt — frame time in seconds
    * @private
    */
   _tickAimCoroutine(dt) {
     const c = this._aimCoroutine;
-    if (!c) return;
+    if (!c || !this._player) return;
 
     c.elapsed += dt;
-    if (c.elapsed >= c.timeout) {
-      const rej = c.reject;
-      this._aimCoroutine = null;
-      rej(new Error('Aim coroutine timeout'));
+    if (c.elapsed >= c.timeout) { this._rejectAim('attitude not held (timeout)'); return; }
+
+    // Current world aim direction (recomputed per tick — tracks moving target).
+    const raw = c.provider();
+    if (!raw) { this._rejectAim('target lost'); return; }
+    const T = this._aimTargetDir.set(raw.x, raw.y, raw.z);
+    if (T.lengthSq() < 1e-12) return; // degenerate this frame; wait
+    T.normalize();
+
+    const q = this._player.quaternion;
+
+    // Resolve the boresight (launcher axis) in LOCAL frame.
+    // net      → ship +Z.
+    // daughter → physical strut fire dir (sinα·cos az, sinα·sin az, −cosα).
+    let boresightLocalX = 0, boresightLocalY = 0, boresightLocalZ = 1;
+    if (c.mode === 'daughter') {
+      // Resolve azimuth from dock geometry once.
+      if (c.azRad == null && c.armManager && c.armManager._dockPositions && c.pairIndex != null) {
+        const dp = c.armManager._dockPositions[c.pairIndex];
+        c.azRad = dp ? (dp.azimuthDeg * Math.PI / 180) : 0;
+      }
+      const az = c.azRad || 0;
+
+      // Slew α toward the in-plane solution (transform target into local frame).
+      this._aimInvQuat.copy(q).invert();
+      const tl = this._aimLocalDir.copy(T).applyQuaternion(this._aimInvQuat);
+      const radialComp = tl.x * Math.cos(az) + tl.y * Math.sin(az);
+      let alphaDesired = Math.atan2(radialComp, -tl.z);
+      alphaDesired = Math.max(0, Math.min(Math.PI, alphaDesired));
+
+      let alpha = alphaDesired;
+      if (c.arm && typeof c.arm.setAimAlpha === 'function') {
+        const ok = c.arm.setAimAlpha(alphaDesired, dt);
+        if (ok === false) { this._rejectAim('hinge LOCKED — release the hinge brake [H]'); return; }
+        if (typeof c.arm.getAimAlpha === 'function') alpha = c.arm.getAimAlpha();
+      }
+      // Shared SSOT strut-direction convention (ArmDockBasis.strutLocalDirection).
+      strutLocalDirection(alpha, az, this._aimBoresightWorld);
+      boresightLocalX = this._aimBoresightWorld.x;
+      boresightLocalY = this._aimBoresightWorld.y;
+      boresightLocalZ = this._aimBoresightWorld.z;
+    }
+
+    // Boresight in world frame.
+    const b = this._aimBoresightWorld.set(boresightLocalX, boresightLocalY, boresightLocalZ)
+      .applyQuaternion(q).normalize();
+
+    const dot = Math.max(-1, Math.min(1, b.dot(T)));
+    const errAngle = Math.acos(dot);
+
+    // Converged? Resolve with the ACTUAL current launcher direction.
+    if (errAngle <= c.tolRad) {
+      this._resolveAim({ x: b.x, y: b.y, z: b.z });
       return;
     }
 
-    const partnerIndex = c.armManager.getDualFirePair(c.pairIndex);
-    const arm1 = c.armManager.arms[c.pairIndex];
-    const arm2 = partnerIndex !== null ? c.armManager.arms[partnerIndex] : null;
+    // Minimal-arc rotation that maps the current boresight onto the target.
+    this._aimDeltaQuat.setFromUnitVectors(b, T);
+    this._aimTargetQuat.copy(this._aimDeltaQuat).multiply(q);
 
-    switch (c.phase) {
-      case 1: {
-        // Phase 1: Simulate RCS rotation toward target
-        const rotDelta = AP_ROT_RATE * dt;
-        if (Math.abs(c.motherRotationRemaining) <= rotDelta) {
-          c.motherRotationRemaining = 0;
-          c.phase = 2; // Advance to strut slew
-        } else {
-          c.motherRotationRemaining -= Math.sign(c.motherRotationRemaining) * rotDelta;
-        }
-        break;
+    // Slerp toward it, capped at the autopilot slew rate.
+    const maxStep = c.rate * dt;
+    const alphaSlerp = Math.min(maxStep / errAngle, 1.0);
+    q.slerp(this._aimTargetQuat, alphaSlerp);
+    q.normalize();
+
+    // Plumes + N₂ draw via the manual RCS path (feel only). Decompose the error
+    // rotation axis into local pitch (X) / yaw (Y) components to pick nozzles.
+    this._aimErrAxis.crossVectors(b, T);
+    if (this._aimErrAxis.lengthSq() > 1e-12) {
+      this._aimInvQuat.copy(q).invert();
+      const axLocal = this._aimErrAxis.applyQuaternion(this._aimInvQuat).normalize();
+      const mag = Math.min(1, errAngle / (10 * Math.PI / 180));
+      const pitchSign = axLocal.x >= 0 ? 1 : -1;
+      const yawSign = axLocal.y >= 0 ? 1 : -1;
+      const pMag = Math.abs(axLocal.x) * mag;
+      const yMag = Math.abs(axLocal.y) * mag;
+      if (pMag > 0.02) {
+        this._player.setThrusterFire('pitch', pitchSign, pMag);
+        this._player.fireRcsRotation('pitch', pitchSign, pMag, dt);
       }
-
-      case 2: {
-        // Phase 2: Slew both struts to target α
-        if (arm1 && typeof arm1.setAimAlpha === 'function') arm1.setAimAlpha(c.strutAlpha, dt);
-        if (arm2 && typeof arm2.setAimAlpha === 'function') arm2.setAimAlpha(c.strutAlpha, dt);
-
-        const alpha1 = arm1 && typeof arm1.getAimAlpha === 'function' ? arm1.getAimAlpha() : c.strutAlpha;
-        const alpha2 = arm2 && typeof arm2.getAimAlpha === 'function' ? arm2.getAimAlpha() : c.strutAlpha;
-
-        const close1 = Math.abs(alpha1 - c.strutAlpha) < c.tolerance;
-        const close2 = Math.abs(alpha2 - c.strutAlpha) < c.tolerance;
-
-        if (close1 && close2) {
-          c.phase = 3;        // Advance to settle
-          c.settleTimer = 0;
-        }
-        break;
-      }
-
-      case 3: {
-        // Phase 3: Verify both arms hold within tolerance
-        const alpha1 = arm1 && typeof arm1.getAimAlpha === 'function' ? arm1.getAimAlpha() : c.strutAlpha;
-        const alpha2 = arm2 && typeof arm2.getAimAlpha === 'function' ? arm2.getAimAlpha() : c.strutAlpha;
-
-        const close1 = Math.abs(alpha1 - c.strutAlpha) < c.tolerance;
-        const close2 = Math.abs(alpha2 - c.strutAlpha) < c.tolerance;
-
-        if (!close1 || !close2) {
-          // Went out of tolerance — back to Phase 2
-          c.phase = 2;
-          c.settleTimer = 0;
-          break;
-        }
-
-        c.settleTimer += dt;
-        if (c.settleTimer >= c.settleDuration) {
-          // Settled — resolve the promise
-          const res = c.resolve;
-          this._aimCoroutine = null;
-          res({ pairIndex: c.pairIndex, alpha: c.strutAlpha });
-        }
-        break;
+      if (yMag > 0.02) {
+        this._player.setThrusterFire('yaw', yawSign, yMag);
+        this._player.fireRcsRotation('yaw', yawSign, yMag, dt);
       }
     }
   }

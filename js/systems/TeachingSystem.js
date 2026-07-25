@@ -487,6 +487,11 @@ export class TeachingSystem {
     if (Events.LAUNCH_CEREMONY_COMPLETE) on(Events.LAUNCH_CEREMONY_COMPLETE, () => this._blockers.delete('launchCeremony'));
     if (Events.NET_CEREMONY_START)    on(Events.NET_CEREMONY_START,    () => this._blockers.add('netCeremony'));
     if (Events.NET_CEREMONY_COMPLETE) on(Events.NET_CEREMONY_COMPLETE, () => this._blockers.delete('netCeremony'));
+    // Aim-before-launch: block queued teaching moments during the multi-second
+    // auto-rotation slew so they don't pop mid-rotation (closes the window the
+    // camera ceremony alone left open — the slew precedes the ceremony).
+    if (Events.AIM_SEQUENCE_START) on(Events.AIM_SEQUENCE_START, () => this._blockers.add('aimSequence'));
+    if (Events.AIM_SEQUENCE_END)   on(Events.AIM_SEQUENCE_END,   () => this._blockers.delete('aimSequence'));
     if (Events.ONBOARDING_STARTED)  on(Events.ONBOARDING_STARTED,  () => { this._onboardingActive = true; });
     if (Events.ONBOARDING_COMPLETE) on(Events.ONBOARDING_COMPLETE, () => { this._onboardingActive = false; });
     if (Events.MISSION_BEAT_STARTED)   on(Events.MISSION_BEAT_STARTED,   (d) => { this._activeCoachBeat = d || {}; });

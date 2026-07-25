@@ -165,6 +165,10 @@ export class ArmManager {
     this.scene = scene;
     this.playerSatellite = playerSatellite;
 
+    /** @type {import('../systems/AutopilotSystem.js').AutopilotSystem|null}
+     *  Injected post-construction for the aim-before-launch daughter ceremony. */
+    this._autopilot = null;
+
     /** @type {ArmUnit[]} */
     this.arms = [];
 
@@ -396,8 +400,94 @@ export class ArmManager {
       return false;
     }
 
-    return arm.deploy(target);
+    // Aim-before-launch daughter ceremony: slew the chosen strut + rotate the
+    // Mother so the physical strut fire direction points at the target, THEN
+    // launch. Loose tolerance — TRANSIT FEEP corrects residual. Falls back to
+    // an immediate launch when the autopilot/feature is unavailable.
+    return this._deployWithCeremony(arm, target);
   }
+
+  /**
+   * Run the daughter launch ceremony for a selected+validated arm, then deploy.
+   * Returns true when the ceremony starts (or the immediate fallback fires).
+   * @param {ArmUnit} arm
+   * @param {object} target
+   * @returns {boolean}
+   * @private
+   */
+  _deployWithCeremony(arm, target) {
+    const ap = this._autopilot;
+    const player = this.playerSatellite;
+    const canCeremony = ap && typeof ap.requestAimRotation === 'function'
+      && Constants.FEATURE_FLAGS.SEMI_AUTO_AIM
+      && player && target && target._scenePosition;
+
+    // Pre-ceremony max-deploy-range refusal (moved earlier so it stays instant;
+    // ArmUnit.deploy still backstops it at fire time).
+    if (target._scenePosition && arm.position) {
+      const distM = target._scenePosition.clone().sub(arm.position).length() / M;
+      const maxRange = Math.min(500, arm.config.tetherMax * 0.5);
+      if (distM > maxRange) {
+        eventBus.emit(Events.COMMS_MESSAGE, {
+          text: `${arm.displayName}: Target ${Math.round(distM)}m away (max ${Math.round(maxRange)}m). Press A to autopilot closer first.`,
+          priority: 'warning',
+        });
+        return false;
+      }
+    }
+
+    if (!canCeremony) {
+      return arm.deploy(target);
+    }
+
+    // Concurrency guard: don't supersede an in-flight aim sequence (e.g. a
+    // Mother net aim already rotating). Defer, matching InputManager.fireMotherNet.
+    if (typeof ap.isAiming === 'function' && ap.isAiming()) {
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        text: 'Rotating to launch attitude — stand by.', priority: 'info',
+      });
+      return false;
+    }
+
+    // Reserve the arm so a second D-press doesn't grab it mid-ceremony.
+    arm._aimReserved = true;
+
+    // World-direction provider: strut-tip → target scene position (recomputed
+    // per tick so it tracks the moving target). No lead — TRANSIT corrects.
+    // Reuses one scratch output object (no per-frame allocation).
+    const provOut = { x: 0, y: 0, z: 0 };
+    const provider = () => {
+      const tp = (target._scenePosition) ? target._scenePosition
+        : (typeof target.getScenePosition === 'function' ? target.getScenePosition() : null);
+      if (!tp || !arm.position) return null;
+      const dx = tp.x - arm.position.x, dy = tp.y - arm.position.y, dz = tp.z - arm.position.z;
+      const len = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
+      provOut.x = dx / len; provOut.y = dy / len; provOut.z = dz / len;
+      return provOut;
+    };
+
+    ap.requestAimRotation(provider, {
+      mode: 'daughter', armManager: this, arm, pairIndex: arm.index,
+    }).then(() => {
+      arm._aimReserved = false;
+      // Tell deploy() the strut was physically aimed at the target, so it fires
+      // along the strut basis (SSOT) rather than the direct-bearing fallback.
+      arm._aimConverged = true;
+      const ok = arm.deploy(target);
+      // Camera ceremony must start when the arm ACTUALLY deploys (post-rotation),
+      // not during the slew. The synchronous InputManager emit is skipped for
+      // ceremony deploys (arm isn't deployed yet at that point), so emit here.
+      if (ok) eventBus.emit(Events.LAUNCH_CEREMONY_START, { arm });
+    }).catch(() => {
+      arm._aimReserved = false;
+      // Abort comms already emitted by AutopilotSystem.
+    });
+
+    return true;
+  }
+
+  /** Inject the autopilot for the aim-before-launch daughter ceremony. */
+  setAutopilot(autopilot) { this._autopilot = autopilot; }
 
   /**
    * Deploy a specific arm by ID.
@@ -1899,7 +1989,8 @@ export class ArmManager {
    */
   _findDockedArm(type, targetDir = null) {
     const eligible = this.arms
-      .filter(a => a.type === type && a.state === ARM_STATES.DOCKED && a.springCharged && a.fuel > 5);
+      .filter(a => a.type === type && a.state === ARM_STATES.DOCKED && a.springCharged && a.fuel > 5
+        && !a._aimReserved);
     if (eligible.length === 0) return null;
 
     if (targetDir && targetDir.lengthSq() > 0) {

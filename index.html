@@ -514,15 +514,31 @@
   </script>
 
   <!-- PR P0.3 — Service Worker registration. Relative path resolves to
-       the page's directory: '/' locally, '/SCB/' on GitHub Pages. -->
+       the page's directory: '/' locally, '/SCB/' on GitHub Pages.
+       Dev-safety: on localhost the SW is NOT registered and any previously
+       installed SW + its caches are torn down, so local edits always load
+       fresh (the SW's cache-first/precache otherwise serves stale modules
+       across reloads and masks code changes). Production (GitHub Pages) keeps
+       the offline-first SW. -->
   <script>
-    if ('serviceWorker' in navigator) {
+    (function () {
+      const isLocalDev = ['localhost', '127.0.0.1', '::1', '0.0.0.0'].includes(location.hostname);
+      if (!('serviceWorker' in navigator)) return;
+      if (isLocalDev) {
+        navigator.serviceWorker.getRegistrations()
+          .then((regs) => regs.forEach((r) => r.unregister()))
+          .catch(() => {});
+        if (window.caches && caches.keys) {
+          caches.keys().then((keys) => keys.forEach((k) => caches.delete(k))).catch(() => {});
+        }
+        return;
+      }
       window.addEventListener('load', () => {
         navigator.serviceWorker.register('./sw.js').catch((err) => {
           console.warn('[SW] registration failed:', err);
         });
       });
-    }
+    })();
   </script>
 </body>
 </html>

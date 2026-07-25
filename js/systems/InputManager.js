@@ -15,6 +15,7 @@ import timerManager from './TimerManager.js';
 import { despinLaser } from './DespinLaser.js';
 import { DEV_ACTIONS, resolveNextDevAction } from './DevSequenceAdvancer.js';
 import { classifyNetTarget } from './netRouting.js';
+import { computeLeadAim } from '../entities/CaptureNet.js';
 
 export class InputManager {
   constructor() {
@@ -1927,10 +1928,18 @@ export class InputManager {
       if (_pk.down  && !this.keys['ArrowDown'])  d.player.fireRcsStopPulse('pitch', -1);
       if (_pk.left  && !this.keys['ArrowLeft'])  d.player.fireRcsStopPulse('yaw',    1);
       if (_pk.right && !this.keys['ArrowRight']) d.player.fireRcsStopPulse('yaw',   -1);
+      const _prevUp = _pk.up, _prevDown = _pk.down, _prevLeft = _pk.left, _prevRight = _pk.right;
       _pk.up    = !!this.keys['ArrowUp'];
       _pk.down  = !!this.keys['ArrowDown'];
       _pk.left  = !!this.keys['ArrowLeft'];
       _pk.right = !!this.keys['ArrowRight'];
+
+      // Aim-before-launch: a fresh manual attitude input cancels any active
+      // auto-rotation aim sequence (nothing has been fired/spent yet).
+      if ((_pk.up && !_prevUp) || (_pk.down && !_prevDown) ||
+          (_pk.left && !_prevLeft) || (_pk.right && !_prevRight)) {
+        eventBus.emit(Events.MOTHER_MANUAL_ROTATE);
+      }
 
       // FIX_PLAN §3: Tether-aware rotation with exponential spring resistance.
       //   effectiveRate = baseRate · (1 − |θ|/θ_max)^STIFFNESS    (when pushing toward limit)
@@ -2132,17 +2141,101 @@ export class InputManager {
       // else band === 'lasso' (≤ 10 kg) → fall through to the lasso path below.
     }
 
+    // ── Aim-before-launch for the lasso cast ────────────────────────────────
+    // The mother's net launcher physically points at the selected target before
+    // casting (parity with the Large Net path). Only when a target is selected,
+    // in lasso range, and we have autopilot + live attitude — the no-target
+    // welcome-field auto-aim stays instant (nothing to aim at).
+    const ap = d.autopilotSystem;
+    if (ap && typeof ap.isAiming === 'function' && ap.isAiming()) {
+      // A net aim is already slewing — don't double-book or bypass it.
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        text: 'Rotating to launch attitude — stand by.', priority: 'info', source: 'HOUSTON',
+      });
+      return;
+    }
+    const canAim = ap && typeof ap.requestAimRotation === 'function'
+      && d.player.quaternion && activeTarget
+      && d.targetSelector && typeof d.targetSelector.getActiveTargetPosition === 'function';
+    if (canAim) {
+      const M = 0.00001;
+      const pos0 = d.player.getPosition();
+      const tp0 = d.targetSelector.getActiveTargetPosition();
+      const inRange = tp0 && (new THREE.Vector3(tp0.x - pos0.x, tp0.y - pos0.y, tp0.z - pos0.z)
+        .length() <= Constants.LASSO_RANGE * M);
+      if (inRange) {
+        // Scratch reused across ticks — the provider is polled every frame by
+        // the aim coroutine during the slew, and the result is copied into
+        // _aimTargetDir immediately (AutopilotSystem._tickAimCoroutine), so
+        // returning the same mutated object is safe. Avoids one Vector3 clone
+        // (getPosition) + one fresh direction object per frame.
+        const dirOut = { x: 0, y: 0, z: 0 };
+        const provider = () => {
+          const pos = d.player.position || d.player.getPosition();
+          const tp = d.targetSelector.getActiveTargetPosition();
+          if (!tp) return null;
+          const bx = tp.x - pos.x, by = tp.y - pos.y, bz = tp.z - pos.z;
+          const len = Math.sqrt(bx * bx + by * by + bz * bz) || 1;
+          dirOut.x = bx / len; dirOut.y = by / len; dirOut.z = bz / len;
+          return dirOut;
+        };
+        // Fast path: already aligned within tolerance → cast immediately.
+        const aimDir = provider();
+        let aligned = false;
+        if (aimDir) {
+          const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(d.player.quaternion).normalize();
+          const dot = Math.max(-1, Math.min(1, fwd.dot(new THREE.Vector3(aimDir.x, aimDir.y, aimDir.z))));
+          aligned = (Math.acos(dot) * 180 / Math.PI) <= Constants.AIM.NET_AIM_TOLERANCE_DEG;
+        }
+        if (!aligned) {
+          ap.requestAimRotation(provider, { mode: 'net' })
+            .then(() => this._castLasso())
+            .catch(() => { /* aborted — nothing cast */ });
+          return;
+        }
+      }
+    }
+
+    this._castLasso();
+  }
+
+  /**
+   * The lasso windup → cast, extracted so the aim-before-launch flow can defer
+   * it until the mother has slewed to face the target. Safe to call directly
+   * (headless mocks / no-target auto-aim / already-aligned fast path).
+   */
+  _castLasso() {
+    const d = this._deps; if (!d || !d.lassoSystem) return;
+    if (this._lassoWindingUp || d.lassoSystem.active) return;
+    // Hold attitude from the instant we commit to the cast — BEFORE the windup —
+    // so the prograde auto-orient can't slew the nose off-target during the
+    // windup gap (that was the ~5° backslide between aim-resolve and LASSO_FIRED).
+    // Released on reel-in end (LASSO_STOWED/SNAPPED/MISSED) by AutopilotSystem.
+    d.autopilotSystem?.holdAttitude?.();
     this._lassoWindingUp = true;
     d.audioSystem?.playClick?.();
     const windupMs = (Constants.LASSO_CAST_WINDUP || 0.15) * 1000;
     this._lassoWindupTimeout = setTimeout(() => {
       this._lassoWindingUp = false;
       this._lassoWindupTimeout = null;
-      const vel = d.player.getVelocity();
-      const velDir = new THREE.Vector3(vel.x, vel.y, vel.z);
-      if (velDir.lengthSq() > 0) velDir.normalize();
+      // Fire along the ship's actual NOSE (+Z) — the mother has slewed to face
+      // the target, and the lasso geometry (muzzle/flight/reel) must use that
+      // same frame so the catch reels back to the current nose, not the old
+      // prograde spot. Falls back to velocity when there's no attitude (headless).
+      let fwdDir;
+      if (d.player.quaternion) {
+        fwdDir = new THREE.Vector3(0, 0, 1).applyQuaternion(d.player.quaternion);
+      } else {
+        const vel = d.player.getVelocity();
+        fwdDir = new THREE.Vector3(vel.x, vel.y, vel.z);
+      }
+      if (fwdDir.lengthSq() > 0) fwdDir.normalize();
       const target = d.targetSelector ? d.targetSelector.getActiveTarget() : null;
-      d.lassoSystem.fire(d.player.getPosition(), d.debrisField, velDir, target);
+      const cast = d.lassoSystem.fire(d.player.getPosition(), d.debrisField, fwdDir, target);
+      // If the cast was refused (out of arc, cargo full, no ammo, cooldown…),
+      // no reel-in end event will fire — release the attitude hold now so the
+      // ship isn't frozen until the safety cap.
+      if (cast === false) d.autopilotSystem?.releaseAttitudeHold?.();
     }, windupMs);
   }
 
@@ -2154,32 +2247,127 @@ export class InputManager {
   fireMotherNet(target) {
     const d = this._deps; if (!d || !d.captureNetSystem || !d.player) return;
     const cns = d.captureNetSystem;
+    const ap = d.autopilotSystem;
+
     // Pick the first pod with inventory; if both empty, fire pod 0 so the
     // system's own "magazine empty — restock at shop" comms fires.
     let podIndex = 0;
     if (cns.getMotherPodInventory(0) <= 0 && cns.getMotherPodInventory(1) > 0) podIndex = 1;
 
-    // Launch from the selected pod's muzzle (fore-end hardware), not the hull
-    // origin. Fallback keeps older mocks/headless callers working.
-    const pos = (typeof d.player.getNetPodPosition === 'function')
-      ? d.player.getNetPodPosition(podIndex)
-      : d.player.getPosition();
-    const launchPos = { x: pos.x, y: pos.y, z: pos.z };
-    // Aim from the Mother toward the target using the canonical scene-position
-    // resolver (single source of truth shared with LassoSystem/rendering; falls
-    // back to the target's orbit when no cached _scenePosition exists — whale
-    // targets are the most likely to need that fallback).
-    const tPos = d.targetSelector ? d.targetSelector.getActiveTargetPosition() : null;
-    let launchDir = { x: 0, y: 0, z: 1 };
-    if (tPos) {
-      const dir = new THREE.Vector3(tPos.x - pos.x, tPos.y - pos.y, tPos.z - pos.z);
-      if (dir.lengthSq() > 0) { dir.normalize(); launchDir = { x: dir.x, y: dir.y, z: dir.z }; }
+    // Empty-magazine pre-check FIRST — never start a rotation when there is
+    // nothing to fire. The system emits the "empty / reloading" comms.
+    if (cns.getMotherPodInventory(podIndex) <= 0 ||
+        (typeof cns.isMotherPodOnCooldown === 'function' && cns.isMotherPodOnCooldown(podIndex))) {
+      cns.fireMotherNet(podIndex, d.player.getPosition(), { x: 0, y: 0, z: 1 }, target);
+      return;
     }
-    // mode omitted → CaptureNet auto-selects SLAM/CINCH.
-    const net = cns.fireMotherNet(podIndex, launchPos, launchDir, target);
-    if (net) {
-      d.audioSystem?.playClick?.();
+
+    // Re-press during an active aim sequence — ignore (don't double-book).
+    if (ap && typeof ap.isAiming === 'function' && ap.isAiming()) {
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        text: 'Rotating to launch attitude — stand by.', priority: 'info', source: 'HOUSTON',
+      });
+      return;
     }
+
+    const M = 0.00001; // 1 metre in scene units
+    const netClass = (typeof cns.getMotherNetClass === 'function')
+      ? cns.getMotherNetClass(podIndex) : null;
+    const launchSpeedScene = ((netClass && netClass.LAUNCH_SPEED) || 10.0) * M;
+
+    // Lead-aim provider: recomputed per tick so it tracks the moving target.
+    // relVel = target scene-velocity − mother scene-velocity (EMA-smoothed from
+    // per-frame position deltas, same pattern as ArmUnit._updateNettingFSM).
+    // Scratch objects are reused across ticks (no per-frame allocation): the
+    // muzzle is written into muzzleScratch via getNetPodPositionInto().
+    const muzzleScratch = new THREE.Vector3();
+    const lead = {
+      prevT: { x: 0, y: 0, z: 0 }, prevM: { x: 0, y: 0, z: 0 }, prevTime: null,
+      relVel: null, relVelBuf: { x: 0, y: 0, z: 0 },
+      leadOut: { dir: { x: 0, y: 0, z: 0 }, offAxisDeg: 0 },
+    };
+    const provider = () => {
+      const muzzle = (typeof d.player.getNetPodPositionInto === 'function')
+        ? d.player.getNetPodPositionInto(podIndex, muzzleScratch)
+        : (typeof d.player.getNetPodPosition === 'function')
+          ? d.player.getNetPodPosition(podIndex) : d.player.getPosition();
+      const tPos = d.targetSelector ? d.targetSelector.getActiveTargetPosition() : null;
+      if (!tPos) return null;
+      const now = performance.now() * 0.001;
+      if (lead.prevTime != null) {
+        const dtp = Math.max(1e-3, now - lead.prevTime);
+        const rvx = (tPos.x - lead.prevT.x) / dtp - (muzzle.x - lead.prevM.x) / dtp;
+        const rvy = (tPos.y - lead.prevT.y) / dtp - (muzzle.y - lead.prevM.y) / dtp;
+        const rvz = (tPos.z - lead.prevT.z) / dtp - (muzzle.z - lead.prevM.z) / dtp;
+        if (!lead.relVel) {
+          lead.relVel = lead.relVelBuf;
+          lead.relVel.x = rvx; lead.relVel.y = rvy; lead.relVel.z = rvz;
+        } else {
+          const a = 0.2; // EMA smoothing
+          lead.relVel.x += a * (rvx - lead.relVel.x);
+          lead.relVel.y += a * (rvy - lead.relVel.y);
+          lead.relVel.z += a * (rvz - lead.relVel.z);
+        }
+      }
+      lead.prevT.x = tPos.x; lead.prevT.y = tPos.y; lead.prevT.z = tPos.z;
+      lead.prevM.x = muzzle.x; lead.prevM.y = muzzle.y; lead.prevM.z = muzzle.z;
+      lead.prevTime = now;
+      const { dir } = computeLeadAim(muzzle, tPos, lead.relVel, launchSpeedScene, lead.leadOut);
+      return dir;
+    };
+
+    // Fire helper — launches along the ACTUAL ship +Z at fire time (honest to
+    // attitude), from the current muzzle position. Falls back to a direct
+    // bearing when no attitude is available (headless mocks).
+    const fireNow = () => {
+      const pos = (typeof d.player.getNetPodPosition === 'function')
+        ? d.player.getNetPodPosition(podIndex) : d.player.getPosition();
+      let dir;
+      if (d.player.quaternion) {
+        const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(d.player.quaternion);
+        if (fwd.lengthSq() > 0) fwd.normalize();
+        dir = { x: fwd.x, y: fwd.y, z: fwd.z };
+      } else {
+        const tp = d.targetSelector ? d.targetSelector.getActiveTargetPosition() : null;
+        if (tp) {
+          const b = new THREE.Vector3(tp.x - pos.x, tp.y - pos.y, tp.z - pos.z);
+          if (b.lengthSq() > 0) b.normalize();
+          dir = { x: b.x, y: b.y, z: b.z };
+        } else {
+          dir = { x: 0, y: 0, z: 1 };
+        }
+      }
+      const net = cns.fireMotherNet(podIndex,
+        { x: pos.x, y: pos.y, z: pos.z }, dir, target);
+      if (net) {
+        d.audioSystem?.playClick?.();
+        eventBus.emit(Events.COMMS_MESSAGE, {
+          text: 'Attitude locked — net away.', priority: 'info', source: 'HOUSTON',
+        });
+      }
+    };
+
+    // No attitude-aware aiming available (no autopilot or no live attitude) →
+    // immediate fire, preserving the pre-aim behavior for headless mocks.
+    if (!ap || typeof ap.requestAimRotation !== 'function' || !d.player.quaternion) {
+      fireNow();
+      return;
+    }
+
+    // Fast path: already aligned within tolerance → fire immediately.
+    const aimDir = provider();
+    if (aimDir) {
+      const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(d.player.quaternion).normalize();
+      const dot = Math.max(-1, Math.min(1, fwd.dot(new THREE.Vector3(aimDir.x, aimDir.y, aimDir.z))));
+      const errDeg = Math.acos(dot) * 180 / Math.PI;
+      if (errDeg <= Constants.AIM.NET_AIM_TOLERANCE_DEG) { fireNow(); return; }
+    }
+
+    // Otherwise rotate to attitude, then fire on resolve. Reject = no fire, no
+    // inventory decrement (abort comms emitted by AutopilotSystem).
+    ap.requestAimRotation(provider, { mode: 'net' })
+      .then(() => fireNow())
+      .catch(() => { /* aborted — nothing fired/spent */ });
   }
 
   /** Smart-default helper — deploys the next docked daughter (mirrors `case 'KeyD':`). */

@@ -66,3 +66,25 @@ export function composeDockedArmQuat(strutDir, azRad, outQuat) {
   outQuat.setFromRotationMatrix(_armBasis);
   return outQuat;
 }
+
+/**
+ * Single source of truth for the player-LOCAL strut/fire direction as a function
+ * of strut sweep angle α and collar azimuth. This is the exact convention driven
+ * by [`PlayerSatellite._updateStruts`](js/entities/PlayerSatellite.js:1) for the
+ * rendered strut pose, so every consumer (the rendered strut, the daughter's
+ * launch direction, and the autopilot aim-convergence boresight) stays in lockstep:
+ *
+ *     d̂_local = ( sinα·cos(az), sinα·sin(az), −cosα )
+ *       α=0   → −Z (stowed aft, against the barrel)
+ *       α=π/2 → radial-outward (equatorial)
+ *       α=π   → +Z (zenith / forward)
+ *
+ * @param {number} alpha - strut sweep angle (radians)
+ * @param {number} azRad - collar azimuth (radians)
+ * @param {THREE.Vector3} out - receives the local direction (not normalized; it is unit by construction)
+ * @returns {THREE.Vector3} out (for chaining)
+ */
+export function strutLocalDirection(alpha, azRad, out) {
+  const sinA = Math.sin(alpha);
+  return out.set(sinA * Math.cos(azRad), sinA * Math.sin(azRad), -Math.cos(alpha));
+}

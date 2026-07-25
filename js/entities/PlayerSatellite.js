@@ -24,7 +24,7 @@ import {
   computeCoM, computeCoMDrift, computeCoMDriftVector,
   getActiveBlocks,
 } from '../systems/CoMCalculator.js';
-import { composeDockedArmQuat } from './ArmDockBasis.js';
+import { composeDockedArmQuat, strutLocalDirection } from './ArmDockBasis.js';
 import {
   propagateOrbit,
   orbitToSceneCartesian,
@@ -174,6 +174,11 @@ export class PlayerSatellite extends THREE.Group {
 
     // Autopilot flag — suppresses orientation decay when autopilot is steering (Fix 2)
     this.autopilotEngaged = false;
+
+    // Aim-before-launch: while an aim sequence is slewing attitude the coroutine
+    // writes this.quaternion directly (like autopilot). Suppress the prograde
+    // auto-orient slerp so it doesn't drag the nose off the aim solution.
+    this.aimHold = false;
 
     // Phase 4: Dual-mode fuel system references
     /** @type {import('../systems/ResourceSystem.js').ResourceSystem|null} */
@@ -3060,10 +3065,21 @@ export class PlayerSatellite extends THREE.Group {
    * @returns {THREE.Vector3} world-space muzzle position
    */
   getNetPodPosition(podIndex) {
+    return this.getNetPodPositionInto(podIndex, new THREE.Vector3());
+  }
+
+  /**
+   * Allocation-free variant of getNetPodPosition for per-frame callers (e.g.
+   * the net-fire lead-aim provider polled every tick by the aim coroutine).
+   * Same fallback chain: pod → pod 0 → ship origin.
+   * @param {number} podIndex 0 (+X) or 1 (−X)
+   * @param {THREE.Vector3} out — receives the world-space muzzle position
+   * @returns {THREE.Vector3} out (for chaining)
+   */
+  getNetPodPositionInto(podIndex, out) {
     const m = this._netPodMuzzles?.[podIndex] ?? this._netPodMuzzles?.[0];
-    const pos = new THREE.Vector3();
-    if (m) m.getWorldPosition(pos); else this.getWorldPosition(pos);
-    return pos;
+    if (m) m.getWorldPosition(out); else this.getWorldPosition(out);
+    return out;
   }
 
   /**
@@ -5442,15 +5458,10 @@ export class PlayerSatellite extends THREE.Group {
         }
       }
 
-      // Compute desired strut direction: sin(α)·radial − cos(α)·Z
+      // Compute desired strut direction (shared SSOT convention):
+      //   sin(α)·radial − cos(α)·Z  →  strutLocalDirection(α, az)
       // α=0 → −Z (stowed aft), α=π/2 → radial (equatorial), α=π → +Z (zenith)
-      const sinA = Math.sin(alpha);
-      const cosA = Math.cos(alpha);
-      _strutTo.set(
-        sinA * Math.cos(sg.azRad),
-        sinA * Math.sin(sg.azRad),
-        -cosA,
-      );
+      strutLocalDirection(alpha, sg.azRad, _strutTo);
 
       // Rotate local -Y → desired direction
       _strutQuat.setFromUnitVectors(_strutFrom, _strutTo);
@@ -5827,7 +5838,7 @@ export class PlayerSatellite extends THREE.Group {
     // prograde and fighting them. Gated on the same signals that raise the
     // hull-outline overlay so the two stay in lockstep. Prograde settling resumes
     // automatically on exit.
-    const inspecting = this._hullInspectView || this._hullInspectZoom;
+    const inspecting = this._hullInspectView || this._hullInspectZoom || this.aimHold;
 
     const v = this._cartesian.velocity;
     const vLen = Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z);

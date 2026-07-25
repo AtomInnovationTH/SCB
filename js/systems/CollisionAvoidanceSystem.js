@@ -213,6 +213,11 @@ export class CollisionAvoidanceSystem {
     // mother is being flung/repositioned (arm deploy), so a ceremony ≠ a collision.
     eventBus.on(Events.LAUNCH_CEREMONY_START, () => { this._ceremonyActive = true; });
     eventBus.on(Events.LAUNCH_CEREMONY_COMPLETE, () => { this._ceremonyActive = false; });
+    // Aim-before-launch: the auto-rotation slew repositions the mother's
+    // attitude for several seconds — treat it like a ceremony so avoidance
+    // impulses don't fight the slew (and an aim ≠ a collision).
+    eventBus.on(Events.AIM_SEQUENCE_START, () => { this._ceremonyActive = true; });
+    eventBus.on(Events.AIM_SEQUENCE_END, () => { this._ceremonyActive = false; });
   }
 
   // ==========================================================================

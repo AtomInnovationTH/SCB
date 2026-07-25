@@ -216,8 +216,20 @@ void main() {
   // === LIGHTING ===
   float NdotL = dot(normal, uSunDirection);
 
-  // Terminator: smooth transition over ~6 degrees
+  // Terminator: smooth transition over ~6 degrees. dayFactor deliberately
+  // extends to NdotL = -0.1 so the DIFFUSE surface fades out softly across the
+  // terminator (atmospheric refraction / twilight lift the illuminated band a
+  // little past the geometric horizon).
   float dayFactor = smoothstep(-0.1, 0.15, NdotL);
+
+  // A specular reflection of the sun (ocean sheen + tight sun-glint) can only
+  // exist while the sun is ACTUALLY above the local horizon. normal and
+  // uSunDirection are both world-space (A1), so NdotL is the cosine of the sun
+  // above the surface tangent plane: NdotL > 0 == sun above horizon. Gate the
+  // reflection terms on this rather than dayFactor, which leaks glint up to
+  // ~6° below the horizon (mirror point on the far side of the terminator).
+  // Tiny 0.5° smoothstep ramp avoids a hard aliased edge at the exact horizon.
+  float sunAboveHorizon = smoothstep(0.0, 0.009, NdotL);
 
   // Specular for oceans. Ratio-based detection for robust ocean masking.
   // B4 (2026-07-20): pow 64 → 160 tightens the broad ocean sheen lobe. With A1
@@ -291,7 +303,7 @@ void main() {
   //    band to ~18-50% of its old lift.
   float oceanFresnel = pow(1.0 - max(dot(normal, viewDir), 0.0), 5.0);
   float sheenLobe = specular * 0.25 * clamp(NdotL, 0.0, 1.0);
-  vec3 oceanSpec = oceanMask * dayFactor
+  vec3 oceanSpec = oceanMask * dayFactor * sunAboveHorizon
     * (sheenLobe * vec3(1.0, 0.97, 0.90) + vec3(oceanFresnel * 0.30));
 
   // E1 — Tight ocean sun-glint (the iconic orbital-photo cue). A very sharp
@@ -304,7 +316,7 @@ void main() {
   // pow-300 keeps it tight — may bloom slightly past threshold 4.0 (acceptable
   // sparkle). Verify on screenshots.
   float oceanGlintTerm = pow(max(dot(normal, halfVec), 0.0), 300.0)
-    * 1.8 * oceanMask * dayFactor;
+    * 1.8 * oceanMask * dayFactor * sunAboveHorizon;
   vec3 oceanGlint = oceanGlintTerm * vec3(1.0, 0.95, 0.8);
 
   // === CLOUD SHADOWS (P1 visual, 2026-07-20) ===

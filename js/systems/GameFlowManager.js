@@ -1654,8 +1654,17 @@ class GameFlowManager {
 
     const deployed = armManager.deployArm(target);
 
+    // Aim-before-launch: when a rotation ceremony is in flight, deployArm returns
+    // true at ceremony START (the daughter hasn't launched yet). Suppress the
+    // premature "deployed" confirmation — AutopilotSystem already posted the
+    // "Rotating to launch attitude" comms, and the real launch fires after the
+    // slew resolves. Only confirm here for immediate (non-ceremony) deploys.
+    const ceremonyInFlight = armManager._autopilot
+      && typeof armManager._autopilot.isAiming === 'function'
+      && armManager._autopilot.isAiming();
+
     // UX: Confirm deployment via comms (ARM_PILOT is auto-entered by InputManager)
-    if (deployed) {
+    if (deployed && !ceremonyInFlight) {
       eventBus.emit(Events.COMMS_MESSAGE, {
         text: 'Daughter deployed. Arrow keys to steer; press its number again (or V) to back out to Fly view',
         source: 'SYSTEM',

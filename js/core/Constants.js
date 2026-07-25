@@ -876,7 +876,7 @@ export const Constants = {
     LAUNCH_SEQUENCE:           false,  // ST-9.11 — launch lock cinematic
     COM_TRACKING:              false,  // ST-9.12 — center-of-mass tracking
     THRUSTER_INTERLOCK:        false,  // ST-9.12 — plume geometry check
-    SEMI_AUTO_AIM:             false,  // ST-9.3  — Mother auto-rotation aim
+    SEMI_AUTO_AIM:             true,   // ST-9.3  — Mother auto-rotation aim (aim-before-launch)
     LOCKABLE_HINGE:            false,  // ST-9.3  — ROTATE ↔ LOCKED hinge
 
     // Manual-flight navigation aids: prograde/retrograde velocity markers +
@@ -2501,6 +2501,24 @@ export const Constants = {
   // All distances in metres, velocities in m/s unless noted. Scene conversion
   // uses M = 1e-5 scene units / metre. See AutopilotSystem.js for usage.
   // =========================================================================
+  // ==========================================================================
+  // AIM-BEFORE-LAUNCH (aim-before-launch plan §Tolerances)
+  // Physical alignment tolerances + rotation rate for the Mother net /
+  // daughter launch ceremony. Kept in one block for playtest tuning.
+  // ==========================================================================
+  AIM: {
+    /** Mother net: ship +Z must align with the lead-intercept dir this tightly. */
+    NET_AIM_TOLERANCE_DEG: 0.5,
+    /** Daughter deploy: physical strut fire dir vs target, loose (TRANSIT corrects). */
+    DAUGHTER_AIM_TOLERANCE_DEG: 5,
+    /** Abort the aim sequence if it cannot converge within this many seconds. */
+    AIM_TIMEOUT_S: 30,
+    /** Autopilot-managed slew rate (rad/s) — matches AutopilotSystem AP_ROT_RATE. */
+    AP_ROT_RATE: 0.2,
+    /** Onboarding may scale AP_ROT_RATE for the very first net/daughter beats. */
+    ONBOARDING_ROT_RATE_MULT: 1.0,
+  },
+
   AUTOPILOT: {
     // --- Tool-aware trailing distance (metres behind debris along V_d) ---
     D_TRAIL_LASSO:   120,  // m — lasso within 200 m projectile range
