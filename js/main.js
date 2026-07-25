@@ -965,10 +965,10 @@ async function init() {
         // and the command view.
         mirrorLon: true,
         // The map camera orbits much farther out (initial ~12.5 Earth radii,
-        // zoom range ~0.8–78 r) than the command view, so widen the LOD ramp:
-        // all tiers only when zoomed well in, tier 1 only when far out.
+        // zoom range ~0.8–78 r) than the command view. Default zoom shows
+        // tier 1 only; zoom in to reveal tiers 2–3.
         lodNear: Constants.EARTH_RADIUS * 6,
-        lodFar: Constants.EARTH_RADIUS * 22,
+        lodFar: Constants.EARTH_RADIUS * 13,
       });
     }
   }).catch((e) => console.warn('[main] cityLabels:', e));

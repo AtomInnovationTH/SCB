@@ -31,7 +31,10 @@ import { latLonToPosition } from '../ui/StrategicMap.js';
 import { StorageKeys } from '../core/StorageKeys.js';
 
 /** Hard cap on rendered labels (performance + clutter). */
-export const MAX_CITIES = 300;
+export const MAX_CITIES = 420;
+
+/** Recognised label categories; unknown/missing kinds fall back to 'city'. */
+export const CITY_KINDS = ['city', 'launch', 'strait', 'landmark'];
 
 /**
  * Number of LOD tiers. tier 1 = always shown (major cities + isolated ocean /
@@ -52,6 +55,35 @@ const LABEL_H_PX = 18;
 
 /** localStorage key for the persisted on/off preference. */
 const STORAGE_KEY = StorageKeys.CITY_LABELS;
+
+/**
+ * Per-kind dot/text styling. Cities and natural landmarks keep the original
+ * amber palette; launch pads read as cyan-white infrastructure and straits /
+ * chokepoints as pale blue-grey so the three categories are distinguishable
+ * at a glance. Declutter priority is unchanged (tier, distance).
+ */
+const KIND_STYLE = {
+  city: {
+    dot: '#fff3cc',
+    dotGlow: '0 0 6px 2px rgba(255,210,90,0.9),0 0 2px 1px rgba(255,235,160,1)',
+    text: '#ffedb0',
+  },
+  landmark: {
+    dot: '#fff3cc',
+    dotGlow: '0 0 6px 2px rgba(255,210,90,0.9),0 0 2px 1px rgba(255,235,160,1)',
+    text: '#ffedb0',
+  },
+  launch: {
+    dot: '#e6faff',
+    dotGlow: '0 0 7px 2px rgba(80,210,255,0.95),0 0 2px 1px rgba(200,245,255,1)',
+    text: '#cfefff',
+  },
+  strait: {
+    dot: '#dbe9ef',
+    dotGlow: '0 0 5px 2px rgba(130,190,215,0.75)',
+    text: '#dceaf0',
+  },
+};
 
 // Module-level scratch vectors — update() runs every frame; no per-frame
 // allocations (project scratch-vector discipline).
@@ -77,7 +109,7 @@ function _byPriority(a, b) {
  * Validate + clamp a parsed cities.json payload.
  * @param {object|Array} json — parsed JSON ({ cities: [...] } or bare array)
  * @param {number} [maxCount=MAX_CITIES]
- * @returns {Array<{name:string, lat:number, lon:number, tier:number}>}
+ * @returns {Array<{name:string, lat:number, lon:number, tier:number, kind:string}>}
  */
 export function parseCityList(json, maxCount = MAX_CITIES) {
   const raw = Array.isArray(json) ? json : (json && Array.isArray(json.cities) ? json.cities : []);
@@ -90,7 +122,9 @@ export function parseCityList(json, maxCount = MAX_CITIES) {
     // LOD tier: clamp to [1, TIER_MAX]; default 2 (mid) when missing/invalid.
     const tRaw = Math.round(Number(c.tier));
     const tier = isFinite(tRaw) ? Math.min(Math.max(tRaw, 1), TIER_MAX) : 2;
-    out.push({ name: c.name.trim(), lat, lon, tier });
+    // Category: unknown/missing → 'city' (keeps every existing entry valid).
+    const kind = CITY_KINDS.includes(c.kind) ? c.kind : 'city';
+    out.push({ name: c.name.trim(), lat, lon, tier, kind });
     if (out.length >= maxCount) break;
   }
   return out;
@@ -249,10 +283,10 @@ export class CityLabels {
     for (const city of this._cities) {
       const lonDeg = (mirrorLon ? -city.lon : city.lon) + lonOffsetDeg;
       const pos = latLonToPosition(city.lat, lonDeg, surfaceLift);
-      const el = this._makeLabelEl(city.name);
+      const el = this._makeLabelEl(city.name, city.kind);
       root.appendChild(el);
       items.push({
-        el, name: city.name, tier: city.tier || 2,
+        el, name: city.name, kind: city.kind, tier: city.tier || 2,
         // Estimated on-screen box width (monospace ⇒ length-proportional),
         // used by the screen-space overlap declutter in update().
         w: LABEL_FIXED_PX + city.name.length * CHAR_PX,
@@ -406,7 +440,8 @@ export class CityLabels {
    * by the city name. Styled inline (no stylesheet dependency) and sized in CSS
    * px so it stays constant on screen. Positioned each frame by `update()`.
    */
-  _makeLabelEl(name) {
+  _makeLabelEl(name, kind = 'city') {
+    const style = KIND_STYLE[kind] || KIND_STYLE.city;
     const el = document.createElement('div');
     el.className = 'sc-city-label';
     el.style.cssText = [
@@ -422,8 +457,8 @@ export class CityLabels {
     dot.style.cssText = [
       `width:${DOT_PX}px`, `height:${DOT_PX}px`,
       'border-radius:50%',
-      'background:#fff3cc',
-      'box-shadow:0 0 6px 2px rgba(255,210,90,0.9),0 0 2px 1px rgba(255,235,160,1)',
+      `background:${style.dot}`,
+      `box-shadow:${style.dotGlow}`,
       'flex:0 0 auto',
     ].join(';');
 
@@ -433,7 +468,7 @@ export class CityLabels {
       'margin-left:6px',
       "font:500 12px/1 'Courier New',monospace",
       'letter-spacing:0.5px',
-      'color:#ffedb0',
+      `color:${style.text}`,
       // Subtle dark pill keeps the name legible over bright clouds, deserts,
       // ice and the sunlit limb without looking heavy over dark ocean/night.
       'padding:2px 5px',

@@ -1220,7 +1220,8 @@ class GameFlowManager {
         // Landmark reference callout — points out the homeland feature visible
         // on the opening pass (Languages.sight). Staggered a beat after the
         // contacts hint so the arrival isn't a text wall. No-ops when the
-        // language has no `sight`.
+        // language has no `sight`. The side is data-driven (Languages.sightSide)
+        // because the hard-coded "port" was measurably wrong for ja/es/hi.
         timerManager.setTimeout(() => {
           const { player } = this._refs;
           if (!player) return;
@@ -1229,9 +1230,13 @@ class GameFlowManager {
             const lang = settingsManager.getLanguageEntry();
             const sight = lang && lang.sight;
             if (sight) {
+              const side = lang && lang.sightSide;
+              const text = (side === 'port' || side === 'starboard')
+                ? `Off your ${side} side: the ${sight}. Your reference point.`
+                : `Dead ahead: the ${sight}. Your reference point.`;
               eventBus.emit(Events.COMMS_MESSAGE, {
                 sender: 'SPACECRAFT',
-                text: `Off your port side: the ${sight}. Your reference point.`,
+                text,
                 priority: 'info',
               });
             }
@@ -1380,6 +1385,10 @@ class GameFlowManager {
    *    whole pass.
    *  • LEAD (START_TRACK_LEAD_DEG): the spawn is backed off along-track so
    *    the city first appears AHEAD and then drifts past abeam.
+   *
+   * Branch selection: Languages.descending picks the southbound (descending)
+   * solution of subPointToOrbit when the interesting corridor lies on that
+   * half of the orbit (e.g. English over the Eastern Seaboard).
    */
   _applyStartLocation() {
     const { player } = this._refs;
@@ -1391,7 +1400,8 @@ class GameFlowManager {
     // Inclination from launch geography (Languages.incDeg), default 51.6°.
     const incDeg = (lang && Number.isFinite(lang.incDeg)) ? lang.incDeg : 51.6;
     const inclination = incDeg * Math.PI / 180;
-    let { raan, trueAnomaly } = subPointToOrbit(start.lat, start.lon, inclination);
+    const ascending = !(lang && lang.descending === true);
+    let { raan, trueAnomaly } = subPointToOrbit(start.lat, start.lon, inclination, ascending);
 
     // ── Cross-track offset: pass the city abeam, not underneath ──
     // A fixed longitude shift would give wildly different abeam distances per
@@ -1421,7 +1431,7 @@ class GameFlowManager {
     const az = c.z * cb + (hz / hl) * sb;
     const aimLatDeg = Math.asin(Math.max(-1, Math.min(1, ay))) * 180 / Math.PI;
     const aimLonEastDeg = -Math.atan2(az, ax) * 180 / Math.PI; // inverse of latLonToUnitVec
-    ({ raan, trueAnomaly } = subPointToOrbit(aimLatDeg, aimLonEastDeg, inclination));
+    ({ raan, trueAnomaly } = subPointToOrbit(aimLatDeg, aimLonEastDeg, inclination, ascending));
 
     player.orbit.inclination = inclination;
     player.orbit.raan = raan;

@@ -37,8 +37,17 @@
  *                             homeland reads as a usable reference when its
  *                             latitude ≤ incDeg + ~10° (off-track but in view
  *                             near the limb from 350 km).
+ * @property {boolean} [descending] Aim the anchor on the southbound (descending)
+ *                             pass instead of the default northbound one; needed
+ *                             when the interesting corridor lies on the
+ *                             descending half.
  * @property {string} [sight]  Iconic landmark called out in opening comms as the
  *                             player's reference point. Omitted → no callout.
+ * @property {'port'|'starboard'|'ahead'} [sightSide]
+ *                             Which side of the ship the `sight` actually
+ *                             appears on at spawn, for the opening callout.
+ *                             Derived data — recompute if `incDeg`, `start`,
+ *                             `descending` or `sight` changes.
  */
 
 /**
@@ -54,26 +63,30 @@
  * and the scattered debris cluster seeds ~5–85° — see GameFlowManager.
  * _applyStartLocation / OrbitalMechanics.subPointToOrbit / DebrisField.
  *
- * English is LOCKED to the original default route (Gulf of Guinea 0°N/0°E,
- * 51.6°, raan=0, ν=0) — do not change it.
+ * English: inclination stays 51.6° (ISS band). The anchor was moved off Gulf
+ * of Guinea 0/0 because the Earth mesh does not rotate, so the old corridor
+ * was permanently ~40 % empty Pacific and touched neither the USA nor Europe.
+ * New corridor: ascending node 63.0°E, opening pass Nova Scotia → New York →
+ * Norfolk → New Orleans → Mexico City, later in the same orbit Suez/Nile →
+ * Athens → Rome → Paris → London.
  *
  * @type {LanguageEntry[]}
  */
 export const LANGUAGES = [
-  { code: 'en', label: 'English',  native: 'English',  flag: 'USA', incDeg: 51.6,
-    start: { name: 'Gulf of Guinea', lat: 0, lon: 0 }, sight: 'West African coast' },  // LOCKED original default route: ascending node at 0°N 0°E (raan=0, ν=0); first labeled city the ground track climbs over is Abidjan
+  { code: 'en', label: 'English',  native: 'English',  flag: 'USA', incDeg: 51.6, descending: true,
+    start: { name: 'New York', lat: 40.71, lon: -74.01 }, sight: 'Eastern Seaboard', sightSide: 'ahead' },
   { code: 'th', label: 'Thai',     native: 'ไทย',      flag: 'THA', incDeg: 28.5,
-    start: { name: 'Bangkok',   lat: 13.76, lon: 100.50 }, sight: 'Gulf of Thailand' }, // Thailand / GISTDA — regional low LEO
+    start: { name: 'Bangkok',   lat: 13.76, lon: 100.50 }, sight: 'Gulf of Thailand', sightSide: 'port' }, // Thailand / GISTDA — regional low LEO
   { code: 'ja', label: 'Japanese', native: '日本語',    flag: 'JPN', incDeg: 30.0,
-    start: { name: 'South of Honshu', lat: 28.0, lon: 135.0 }, sight: 'Mt Fuji' },      // Japan / JAXA — Tanegashima 30.4°N; anchor offshore S of Honshu (Tokyo 35.7° sits just N of track)
+    start: { name: 'South of Honshu', lat: 28.0, lon: 135.0 }, sight: 'Mt Fuji', sightSide: 'starboard' }, // Japan / JAXA — Tanegashima 30.4°N; anchor offshore S of Honshu (Tokyo 35.7° sits just N of track)
   { code: 'es', label: 'Spanish',  native: 'Español',  flag: 'ESP', incDeg: 45.0,
-    start: { name: 'Madrid',    lat: 40.42, lon: -3.70 }, sight: 'Pyrenees' },          // Spain / ESA — plausible mid-LEO over Iberia (no national pad)
+    start: { name: 'Madrid',    lat: 40.42, lon: -3.70 }, sight: 'Pyrenees', sightSide: 'starboard' },     // Spain / ESA — plausible mid-LEO over Iberia (no national pad)
   { code: 'pt', label: 'Portuguese', native: 'Português', flag: 'BRA', incDeg: 5.0,
-    start: { name: 'Amazon', lat: -3.10, lon: -60.02 }, sight: 'Amazon Rainforest' },   // Brazil / AEB — Alcântara 2.3°S equatorial launch
+    start: { name: 'Amazon', lat: -3.10, lon: -60.02 }, sight: 'Amazon Rainforest', sightSide: 'ahead' },  // Brazil / AEB — Alcântara 2.3°S equatorial launch
   { code: 'hi', label: 'Hindi',    native: 'हिन्दी',   flag: 'IND', incDeg: 97.5,
-    start: { name: 'New Delhi', lat: 28.61, lon: 77.21 }, sight: 'Himalayas' },         // India / ISRO — Sriharikota; Sun-synch = densest debris regime
+    start: { name: 'New Delhi', lat: 28.61, lon: 77.21 }, sight: 'Himalayas', sightSide: 'starboard' },    // India / ISRO — Sriharikota; Sun-synch = densest debris regime
   { code: 'ta', label: 'Tamil',    native: 'தமிழ்',    flag: 'IND', incDeg: 18.0,
-    start: { name: 'Chennai',   lat: 13.08, lon: 80.27 }, sight: 'Western Ghats' },     // India / ISRO — Sriharikota 13.7°N (Tamil region), low LEO
+    start: { name: 'Chennai',   lat: 13.08, lon: 80.27 }, sight: 'Western Ghats', sightSide: 'port' },     // India / ISRO — Sriharikota 13.7°N (Tamil region), low LEO
 ];
 
 /** Default language code when nothing is stored / an unknown code is supplied. */
