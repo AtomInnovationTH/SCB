@@ -115,6 +115,13 @@ export function keplerianToOrbitPoints(orbit, segments, mu) {
  * Convention: Y-up (Three.js default). lat=0, lon=0 → +X axis.
  * lat=90 → +Y (north pole).
  *
+ * NOTE: this is a RAW spherical helper — it does NOT apply the game's
+ * mirrored-longitude convention. Callers converting real geographic east
+ * longitude must negate it themselves (see the `-lon` call sites here and
+ * `mirrorLon` in CityLabels), or use scene/Ephemeris.js `latLonToUnitVec`,
+ * which applies the mirror internally and is the authoritative
+ * geographic→scene entry point.
+ *
  * @param {number} lat_deg - Latitude in degrees (-90…+90)
  * @param {number} lon_deg - Longitude in degrees (-180…+180)
  * @param {number} radius  - Sphere radius

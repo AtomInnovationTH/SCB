@@ -22,7 +22,8 @@ import { kesslerSystem } from './KesslerSystem.js';
 import { captureNetSystem } from '../entities/CaptureNet.js';
 import { trawlManager } from './TrawlManager.js';
 import { launchSequence } from './LaunchSequence.js';
-import { orbitToSceneCartesian, subPointToOrbit } from '../entities/OrbitalMechanics.js';
+import { orbitToSceneCartesian, subPointToOrbit, keplerianToCartesian } from '../entities/OrbitalMechanics.js';
+import { latLonToUnitVec } from '../scene/Ephemeris.js';
 import { settingsManager } from './SettingsManager.js';
 import { VIEW_INFO_LEVELS } from '../ui/HUD.js';
 import {
@@ -1370,6 +1371,15 @@ class GameFlowManager {
    * region). Called on ALL restart paths — New Game (MENU_START/FAST_START),
    * Continue (MENU_CONTINUE), and game-over Continue/Retry — so language choice
    * always determines the start orbit regardless of whether a save exists.
+   *
+   * Two staging tweaks make the opening pass read well:
+   *  • ABEAM (START_ABEAM_DEG): the track is re-aimed at a point offset
+   *    perpendicular to the pass, so the home city slides by ~200 km off the
+   *    STARBOARD side instead of vanishing under the nose — noticeable out the
+   *    "right window", never shoved in the player's face, and visible for the
+   *    whole pass.
+   *  • LEAD (START_TRACK_LEAD_DEG): the spawn is backed off along-track so
+   *    the city first appears AHEAD and then drifts past abeam.
    */
   _applyStartLocation() {
     const { player } = this._refs;
@@ -1381,10 +1391,50 @@ class GameFlowManager {
     // Inclination from launch geography (Languages.incDeg), default 51.6°.
     const incDeg = (lang && Number.isFinite(lang.incDeg)) ? lang.incDeg : 51.6;
     const inclination = incDeg * Math.PI / 180;
-    const { raan, trueAnomaly } = subPointToOrbit(start.lat, start.lon, inclination);
+    let { raan, trueAnomaly } = subPointToOrbit(start.lat, start.lon, inclination);
+
+    // ── Cross-track offset: pass the city abeam, not underneath ──
+    // A fixed longitude shift would give wildly different abeam distances per
+    // language (the shift decomposes into along/cross-track by pass heading:
+    // ~70 km for ja vs ~350 km for en), so instead offset PERPENDICULAR to the
+    // pass: take the orbit normal ĥ = r̂×v̂ of the direct-overhead aim, rotate
+    // the city direction START_ABEAM_DEG toward +ĥ, and re-aim at that point.
+    // City then sits along −ĥ = v̂×r̂ = starboard of the track, a uniform
+    // ~200 km for every language. If the offset nudges the aim latitude past
+    // the inclination (near-equatorial pt at 5°), subPointToOrbit clamps to
+    // the highest reachable parallel — still within ~1° of the intent.
+    const START_ABEAM_DEG = 1.8; // ≈200 km ground offset ≈27° off nadir @400 km
+    const beta = START_ABEAM_DEG * Math.PI / 180;
+    const probe = keplerianToCartesian({
+      semiMajorAxis: 6771, eccentricity: 0.0001, inclination,
+      raan, argPerigee: 0, trueAnomaly,
+    });
+    const r = probe.position, v = probe.velocity;
+    const hx = r.y * v.z - r.z * v.y;
+    const hy = r.z * v.x - r.x * v.z;
+    const hz = r.x * v.y - r.y * v.x;
+    const hl = Math.hypot(hx, hy, hz) || 1;
+    const c = latLonToUnitVec(start.lat, start.lon);
+    const cb = Math.cos(beta), sb = Math.sin(beta);
+    const ax = c.x * cb + (hx / hl) * sb;
+    const ay = c.y * cb + (hy / hl) * sb;
+    const az = c.z * cb + (hz / hl) * sb;
+    const aimLatDeg = Math.asin(Math.max(-1, Math.min(1, ay))) * 180 / Math.PI;
+    const aimLonEastDeg = -Math.atan2(az, ax) * 180 / Math.PI; // inverse of latLonToUnitVec
+    ({ raan, trueAnomaly } = subPointToOrbit(aimLatDeg, aimLonEastDeg, inclination));
+
     player.orbit.inclination = inclination;
     player.orbit.raan = raan;
-    player.orbit.trueAnomaly = trueAnomaly;
+    // Spawn slightly behind the abeam point along-track (ν decreases against
+    // the direction of motion; inc/RAAN — and therefore the ground track — are
+    // untouched). 10° of arc ≈ 1,100 km ground distance ≈ 15 s real time at
+    // gameplay scale before the closest approach; from ~400 km altitude the
+    // horizon is ~20° of arc away, so the city starts well inside the forward
+    // view and then drifts past on the right.
+    const START_TRACK_LEAD_DEG = 10;
+    const TWO_PI = 2 * Math.PI;
+    const lead = START_TRACK_LEAD_DEG * Math.PI / 180;
+    player.orbit.trueAnomaly = (((trueAnomaly - lead) % TWO_PI) + TWO_PI) % TWO_PI;
     // subPointToOrbit() assumes a circular orbit with argPerigee=0
     // (OrbitalMechanics.js:229). Neither field is reset elsewhere on restart,
     // so a played (thrusted) session could mis-aim the anchor pass. Reset here

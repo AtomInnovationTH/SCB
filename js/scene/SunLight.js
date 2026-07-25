@@ -7,6 +7,12 @@
 import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
 import { createLabelTexture } from './labelTexture.js';
+import { sunEphemeris, moonEphemeris, latLonToUnitVec } from './Ephemeris.js';
+
+// Tilt of the stylized day/night cycle's sun circle vs the equator (~23.5°,
+// mirroring Earth's axial tilt). Module-level because both the per-frame sun
+// motion and the real-clock seeding solve against the same circle.
+const SUN_CYCLE_TILT = 0.41;
 
 // ============================================================================
 // CANVAS TEXTURE HELPERS
@@ -578,6 +584,18 @@ export class SunLight {
     this.directionalLight.name = 'SunLight';
 
     this.sunDirection = new THREE.Vector3(1, 0.3, 0.5).normalize();
+
+    // --- Real-clock sky seeding ---
+    // Defaults reproduce the legacy stylized sky; _seedSkyFromClock() then
+    // overrides them so the sun + moon at startup match the player's actual
+    // date/time (sub-solar point from UTC, today's lunar phase). The stylized
+    // 92-min day/night cycle proceeds forward from that seed.
+    this._sunPhase0 = 0;                        // parametric start angle on the sun circle
+    this._sunYaw0 = 0;                          // yaw (about +Y) to the real sub-solar longitude
+    this._moonAzOffset = 110 * Math.PI / 180;   // legacy fixed elongation fallback
+    this._moonTanDecl = 0.25;                   // legacy y-lift fallback (≈14°)
+    this._seedSkyFromClock(new Date());
+
     this._updateLightPosition();
     scene.add(this.directionalLight);
 
@@ -777,6 +795,65 @@ export class SunLight {
   }
 
   // ==========================================================================
+  // REAL-CLOCK SKY SEEDING
+  // ==========================================================================
+
+  /**
+   * Align the stylized sky with the real one at startup: the sun starts over
+   * the actual sub-solar point for `now` (so a player launching over Bangkok
+   * at 07:44 local sees morning light on Thailand) and the moon starts at its
+   * real elongation + declination, which makes today's phase fall out of the
+   * existing dot-product phase math in _updateMoon().
+   *
+   * The per-frame model is unchanged — the sun still rides a circle tilted
+   * SUN_CYCLE_TILT from the equator with a ~92-min period. Seeding solves that
+   * circle for (a) the parametric phase whose declination matches today's,
+   * picking the branch that matches the real seasonal trend, and (b) a fixed
+   * yaw about +Y that carries the whole circle to the real sub-solar
+   * longitude. Wall-clock and game-clock diverge immediately after start
+   * (TIME_SCALE_GAMEPLAY compresses a day into ~9 min) — this is a seed, not
+   * a live ephemeris.
+   *
+   * Failure-safe: any exception leaves the legacy fixed-sky defaults intact.
+   *
+   * @param {Date} now — real wall-clock time (UTC-based internally)
+   * @private
+   */
+  _seedSkyFromClock(now) {
+    try {
+      const sun = sunEphemeris(now);
+      const moon = moonEphemeris(now);
+      const s = latLonToUnitVec(sun.declDeg, sun.subLonEastDeg);
+
+      // (a) Phase whose declination matches today's. Real |declination| ≤
+      // 23.44° < SUN_CYCLE_TILT (23.49°), so the clamp never bites in practice.
+      const ratio = Math.max(-1, Math.min(1, s.y / Math.sin(SUN_CYCLE_TILT)));
+      let a0 = Math.asin(ratio);
+      const declTomorrow =
+        sunEphemeris(new Date(now.getTime() + 86400000)).declDeg;
+      if (declTomorrow < sun.declDeg) a0 = Math.PI - a0; // southbound branch
+
+      // (b) Yaw the circle so the seeded point sits at the real sub-solar
+      // longitude (azimuth measured atan2(z, x) in the equatorial plane).
+      const bx = Math.cos(a0);
+      const bz = Math.sin(a0) * Math.cos(SUN_CYCLE_TILT);
+      this._sunPhase0 = a0;
+      this._sunYaw0 = Math.atan2(s.z, s.x) - Math.atan2(bz, bx);
+      this.sunDirection.set(s.x, s.y, s.z).normalize();
+
+      // Moon: azimuth offset from the sun + tan(declination) y-lift, both
+      // captured from the real sky. _updateMoon() keeps the moon locked to the
+      // sun's fast cycle at this offset, so today's phase persists all session.
+      const m = latLonToUnitVec(moon.declDeg, moon.subLonEastDeg);
+      this._moonAzOffset =
+        Math.atan2(m.z, m.x) - Math.atan2(s.z, s.x);
+      this._moonTanDecl = Math.tan(moon.declDeg * Math.PI / 180);
+    } catch (e) {
+      console.warn('[SunLight] Real-clock sky seeding failed; using stylized defaults:', e);
+    }
+  }
+
+  // ==========================================================================
   // LIGHT POSITION
   // ==========================================================================
 
@@ -806,15 +883,19 @@ export class SunLight {
     this.elapsedTime += dt;
 
     // --- Sun orbital motion ---
+    // Stylized ~92-min day/night circle, seeded from the real clock: phase
+    // starts at _sunPhase0 (today's declination) and the whole circle is yawed
+    // by _sunYaw0 (today's sub-solar longitude). See _seedSkyFromClock().
     const angularSpeed = (2 * Math.PI) / this.sunOrbitPeriod;
-    const angle = this.elapsedTime * angularSpeed * Constants.TIME_SCALE_GAMEPLAY;
-    const tilt = 0.41; // ~23.5° in radians
+    const angle = this._sunPhase0 +
+      this.elapsedTime * angularSpeed * Constants.TIME_SCALE_GAMEPLAY;
 
-    this.sunDirection.set(
-      Math.cos(angle),
-      Math.sin(tilt) * Math.sin(angle),
-      Math.sin(angle) * Math.cos(tilt)
-    ).normalize();
+    const bx = Math.cos(angle);
+    const by = Math.sin(SUN_CYCLE_TILT) * Math.sin(angle);
+    const bz = Math.sin(angle) * Math.cos(SUN_CYCLE_TILT);
+    const cy = Math.cos(this._sunYaw0);
+    const sy = Math.sin(this._sunYaw0);
+    this.sunDirection.set(bx * cy - bz * sy, by, bx * sy + bz * cy).normalize();
 
     this._updateLightPosition();
 
@@ -945,14 +1026,20 @@ export class SunLight {
 
   /** @private */
   _updateMoon() {
-    // Moon direction: ~110° from the sun on the ecliptic, with exaggerated inclination.
-    // Not placed at 180° (opposite sun) because Earth blocks the view from LEO.
-    // Rotated 110° around Y-axis from sun direction, then tilted above ecliptic.
+    // Moon direction: real elongation + declination captured at startup
+    // (_seedSkyFromClock), so the moon sits where it actually is in today's
+    // sky and shows today's phase. The offset then rides the sun's fast
+    // stylized cycle, keeping the phase constant for the whole session.
+    // Near full moon the real elongation approaches 180° (opposite the sun);
+    // that's correct — it's visible from the orbit's night side, and the
+    // Earth-occlusion check below hides it when Earth is in the way. The
+    // legacy fixed 110° offset remains the fallback if seeding failed.
     const sunAngle = Math.atan2(this.sunDirection.z, this.sunDirection.x);
-    const moonAngle = sunAngle + (110 * Math.PI / 180); // 110° offset
+    const moonAngle = sunAngle + this._moonAzOffset;
     const moonDir = this._bodyDir.set(
       Math.cos(moonAngle),
-      0.25 + Math.sin(this.elapsedTime * 0.0001) * 0.1,  // above ecliptic — clears Earth
+      // tan(declination) lift (normalized below) + slow libration-ish wobble
+      this._moonTanDecl + Math.sin(this.elapsedTime * 0.0001) * 0.05,
       Math.sin(moonAngle)
     ).normalize();
 
@@ -972,8 +1059,10 @@ export class SunLight {
     // (new moon, dark), −1 opposite the sun (full moon, bright). Illuminated
     // fraction = (1 − cosθ)/2. (An earlier version had this inverted, which the
     // old additive glow hid; with an opaque NormalBlending disc it pinned the
-    // moon at ~0.3 opacity — dimmer than every planet.) The moon's fixed ~110°
-    // elongation makes this a ~2/3-lit gibbous.
+    // moon at ~0.3 opacity — dimmer than every planet.) With the elongation
+    // seeded from the real sky (_seedSkyFromClock), this fraction IS today's
+    // real lunar phase — full moon nights are bright, new moon nights rely on
+    // the 0.3 opacity floor for readability.
     const phase = this.sunDirection.dot(moonDir);
     const brightness = Math.max(0.15, (1 - phase) * 0.5);
     // Retuned for NormalBlending: floor at 0.3 keeps thin phases visible while

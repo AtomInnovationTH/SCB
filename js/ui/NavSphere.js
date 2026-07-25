@@ -12,6 +12,7 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { GameStates } from '../core/GameState.js';
 import { orbitToSceneCartesian } from '../entities/OrbitalMechanics.js';
+import { gmstDeg } from '../scene/Ephemeris.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -100,13 +101,12 @@ function _eciToGeodeticWithGMST(x, y, z, gmst) {
  * ECI → WGS-84 geodetic using Date.now() for GMST.
  * Approximate but sufficient: visible LAT/LON drift is correct.
  * Uses Date.now() because no sim-epoch is available in GameState.
+ * GMST comes from the shared scene/Ephemeris.js helper (same source the
+ * real-clock sky seeding uses) so nav readouts and the sky stay in lockstep.
  */
 function _eciToGeodetic(x, y, z) {
   const jd = Date.now() / 86400000 + 2440587.5;
-  const T = (jd - 2451545.0) / 36525.0;
-  const gmstDeg = 280.46061837 + 360.98564736629 * (jd - 2451545.0)
-    + T * T * (0.000387933 - T / 38710000);
-  const gmst = ((gmstDeg % 360) + 360) % 360 * Math.PI / 180;
+  const gmst = gmstDeg(jd - 2451545.0) * Math.PI / 180;
   return _eciToGeodeticWithGMST(x, y, z, gmst);
 }
 
