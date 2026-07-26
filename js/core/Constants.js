@@ -144,15 +144,25 @@ export const Constants = {
   // per-tier on-screen label sizes. Kept here (not hardcoded in MotherCallouts)
   // so the look is tunable in one place.
   CALLOUTS: {
+    // Blueprint / engineering-HUD accent family (round 4). One hue family,
+    // mono type, corner brackets, hairline leaders.
+    ACCENT:      '#7fd4e8',
+    ACCENT_DIM:  '#3d6e7e',
+    // Text ink for card titles + data rows (round 4 blueprint). Single source
+    // so the card generator and any caller-side override can't drift.
+    INK:         '#dfeef5',
+    INK_DIM:     '#9fb8c4',
     // Hue = system identity (6 groups). Risk is shown as a small badge dot on
     // the card, NOT by label colour (the old scheme read all-green).
+    // Round 4: re-valued to low-saturation tints within ~±20° of cyan so the
+    // whole callout layer reads as one blueprint family.
     SYSTEM_HUES: {
-      POWER:      '#e3b341', // amber
-      PROPULSION: '#bc8cff', // violet
-      PAYLOAD:    '#ff7b72', // red-orange
-      SENSORS:    '#39d2c0', // cyan
-      COMMS:      '#58a6ff', // blue
-      CAPTURE:    '#3fb950', // green
+      POWER:      '#9adfd2', // pale teal
+      PROPULSION: '#8fb8e8', // steel blue
+      PAYLOAD:    '#a8c8e0', // light slate
+      SENSORS:    '#7fd4e8', // accent cyan
+      COMMS:      '#74c4e6', // sky cyan
+      CAPTURE:    '#8fdcc4', // seafoam
     },
     // Risk badge dot colours reuse the shared wireframe palette.
     RISK_COLORS: {
@@ -165,7 +175,9 @@ export const Constants = {
     RAIL_INSET_NDC:    0.16,  // rail X offset outward from the ship's screen bound
     RAIL_MARGIN_NDC:   0.06,  // keep rails at least this far inside the viewport edge
     RAIL_GAP_NDC:      0.03,  // vertical PADDING between stacked cards (min gap)
-    SIDE_HYSTERESIS:   0.05,  // |ΔNDC.x| past centre before a label flips rail side
+    SIDE_HYSTERESIS:   0.12,  // |ΔNDC.x| past centre before a label flips rail side
+                              // wide-ish — flips should be rare; the 1.5 s dwell
+                              // + fade-swap hide the rest (round 4)
     ORDER_HYSTERESIS:  0.04,  // anchor-Y separation before two labels swap stack order
     EASE_RATE:         12.0,  // screen-space position ease rate (k = 1 − exp(−rate·dt))
     OFFSCREEN_NDC:     1.1,   // hide callouts whose anchor projects beyond ±this
@@ -187,7 +199,8 @@ export const Constants = {
     SIZE_MAJOR:   0.040,  // major part cards
     SIZE_DETAIL:  0.030,  // detail-tier cards (COMPONENT band only)
     SIZE_CARD:    0.046,  // focused COMPONENT card (~15% larger than major: 0.040 × 1.15)
-    DOT_SIZE:     0.012,  // anchor dot on-screen size
+    DOT_SIZE:     0.016,  // anchor dot on-screen size (round 5: 0.012 → 0.016 —
+                          // bracket ticks were sub-pixel over bright hull)
 
     LIVE_REFRESH_HZ: 2,   // max focused-card live-data refresh rate
     SHIP_BOUND_M:   1.5,  // approx ship silhouette radius (wings) in metres for rail X
@@ -929,6 +942,11 @@ export const Constants = {
     // NEW — Epic 9 Config G gaps
     STOW_DEPLOY_STATE_MACHINE: false,  // ST-9.10 — arm stow/deploy gating
     LAUNCH_SEQUENCE:           false,  // ST-9.11 — launch lock cinematic
+    // Scripted launch-plume cameo from the player's home spaceport during the
+    // opening orbital pass (js/scene/LaunchCameo.js). Ambient random launches
+    // are a separate, reserved flag — the scheduler is not built yet.
+    LAUNCH_CAMEO:              true,
+    LAUNCH_CAMEO_AMBIENT:      false,
     COM_TRACKING:              false,  // ST-9.12 — center-of-mass tracking
     THRUSTER_INTERLOCK:        false,  // ST-9.12 — plume geometry check
     SEMI_AUTO_AIM:             true,   // ST-9.3  — Mother auto-rotation aim (aim-before-launch)

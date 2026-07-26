@@ -94,6 +94,8 @@ import { navRecoveryAdvisor } from './systems/NavRecoveryAdvisor.js';
 import { targetAcquisition } from './systems/TargetAcquisition.js';
 import { missionMilestones } from './systems/MissionMilestones.js';
 import { cityLabels } from './scene/CityLabels.js';
+import { launchCameo } from './scene/LaunchCameo.js';
+import { menuOrbitPreview } from './systems/MenuOrbitPreview.js';
 import { TeachingOverlay } from './ui/TeachingOverlay.js';
 import { OnboardingDirector } from './systems/OnboardingDirector.js';
 import { GuidanceDirector } from './systems/GuidanceDirector.js';
@@ -963,6 +965,11 @@ async function init() {
       mirrorLon: true,
       // Hide command-view labels while the Strategic Map covers the screen.
       isActive: () => !(strategicMap && strategicMap.isOpen()),
+      // Selectivity caps: in-view peaks are 22-39 labels, so 28 binds only in
+      // the densest stretches (Europe, East Asia, Ganges plain). 6 = measured
+      // global peak pads-in-one-view, so pads are never truncated here.
+      maxVisible: 28,
+      maxVisibleLaunch: 6,
     });
     if (strategicMap && strategicMap._earthMesh && strategicMap._camera) {
       cityLabels.attach({
@@ -980,8 +987,27 @@ async function init() {
         // tier 1 only; zoom in to reveal tiers 2–3.
         lodNear: Constants.EARTH_RADIUS * 6,
         lodFar: Constants.EARTH_RADIUS * 13,
+        // The whole hemisphere is a candidate at default zoom; cap the mix so
+        // it stays a strategic overview, with a bounded pad budget so the map
+        // doesn't read pad-only.
+        maxVisible: 30,
+        maxVisibleLaunch: 8,
       });
     }
+
+    // --- Launch cameo: a single plume rises from the player's home spaceport
+    // during the opening pass. Anchored to the same Earth group + mirrorLon
+    // convention as the city labels; fired by GameFlowManager on first ORBITAL_VIEW.
+    launchCameo.attach({
+      parent: earth.getGroup(),
+      radius: Constants.EARTH_RADIUS,
+      camera,
+      mirrorLon: true,
+      sunLight,
+    });
+    // A reset within the 16 s cameo window must clear _active, or the next
+    // game's fire() is silently refused (review finding).
+    eventBus.on(Events.GAME_RESET, () => launchCameo.reset());
   }).catch((e) => console.warn('[main] cityLabels:', e));
 
   // --- Input Manager ---
@@ -1356,6 +1382,11 @@ async function init() {
   gameState.currentState = GameStates.MENU;
   gameFlowManager.transitionToState(GameStates.MENU);
 
+  // --- Menu orbit preview: aim the live backdrop at the selected language's
+  // home corridor, and re-aim it (eased morph) on LANGUAGE_CHANGED. Cosmetic
+  // only — game start paths re-stage the same orbit authoritatively.
+  menuOrbitPreview.init({ player });
+
   console.log('[Space Cowboy] Engine initialized. Starting game loop…');
 
   // PR 3 / P1.6 — Pre-compile shaders before first RAF to avoid first-frame stutter
@@ -1478,6 +1509,35 @@ async function init() {
         return next;
       };
       window.__netShot = _netCapture;
+
+      // ── Inspection camera hook (round-5 visual QA) ──
+      //   window.__scbInspect(thetaDeg, phiDeg, distM)
+      //     → ORBIT view at the given orbit angles + camera-ship distance in
+      //       metres; engages the zoom-inspection sub-state when distM < 12
+      //       via the normal Schmitt trigger (so vignette/FOV/callouts all
+      //       follow the real code path).
+      //   window.__scbInspectView(distM)
+      //     → discrete INSPECTION view at the given distance.
+      // Distances map to callout bands: SYSTEM ≥ 9 m, PART 5.5–8 m,
+      // COMPONENT < 5.5 m (BAND in ui/MotherCallouts.js).
+      window.__scbInspect = (thetaDeg = 0, phiDeg = 90, distM = 10) => {
+        if (!cameraSystem) return 'no cameraSystem';
+        cameraSystem.setView('ORBIT');
+        const o = cameraSystem.orbit;
+        o.theta = thetaDeg * Math.PI / 180;
+        o.phi = phiDeg * Math.PI / 180;
+        o.distance = distM * 1e-5;
+        o.velocityTheta = 0;
+        o.velocityPhi = 0;
+        cameraSystem._evaluateInspectZoom();
+        return { view: cameraSystem.currentView, inspectActive: o.inspectActive, distM };
+      };
+      window.__scbInspectView = (distM = 7) => {
+        if (!cameraSystem) return 'no cameraSystem';
+        cameraSystem.setView('INSPECTION');
+        cameraSystem.inspection.distance = distM * 1e-5;
+        return { view: cameraSystem.currentView, distM };
+      };
 
       // ── Deterministic auto-capture at net FSM key beats ──
       let _autoOn = _shotParams.get('shotauto') === '1' || _shotParams.has('shotauto');
@@ -1806,6 +1866,8 @@ function gameLoop(timestamp) {
   starfield.update(dt, sceneManager.getRenderer().getPixelRatio());
   // UX-11 #5: city-label cull/fade (no-op while hidden)
   try { cityLabels.update(); } catch (e) { console.error('[GameLoop] cityLabels:', e); }
+  try { launchCameo.update(dt); } catch (e) { console.error('[GameLoop] launchCameo:', e); }
+  try { menuOrbitPreview.update(dt); } catch (e) { console.error('[GameLoop] menuOrbitPreview:', e); }
 
   // --- Update entities only in active gameplay states ---
   const isActive = gameState.isGameplay();

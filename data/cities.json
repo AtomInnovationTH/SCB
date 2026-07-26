@@ -1,426 +1,2654 @@
 {
-  "version": 7,
-  "description": "Curated city + island/natural-landmark reference list for the Earth city-label layer (UX-11 #5). Offline-first; lat/lon in degrees. 'tier' drives zoom-based LOD: tier 1 = always shown (major cities + isolated ocean/remote references), tier 2 = medium zoom, tier 3 = close zoom only (dense-cluster / minor). Isolated references stay tier 1 so empty oceans always have a landmark. 'kind' is one of city|launch|strait|landmark and is honoured by the renderer (dot colour); unknown kinds fall back to 'city'. New-entry tiers are derived from proximity to the 7 language ground tracks (launch/strait/city/landmark base 2, promoted to 1 within 5° of a corridor, demoted to 3 beyond 20°); existing isolated ocean/island tier-1 fillers are unchanged. The file is at the MAX_CITIES cap (420) — adding an entry requires raising the cap in CityLabels.js first. Includes ocean-floor landmarks (deep-sea trenches and the Mid-Atlantic Ridge) tagged kind:landmark, pinned to point locations that fill otherwise-empty ocean.",
+  "version": 8,
+  "description": "Curated city + island/natural-landmark reference list for the Earth city-label layer (UX-11 #5). Offline-first; lat/lon in degrees. NAME POLICY: no abbreviations, no jargon, ASCII only, <= 22 characters (Strait not Str, Mountains not Mts, Island(s) not Is, Mount not Mt, Saint not St; parentheses/hyphens allowed). KIND: city = a populated place; landmark = island, archipelago, range, desert, sea, gulf, delta, plateau, reef, ice sheet, trench, pole; launch = pad or range; strait = strait, canal, channel, passage, cape. TIER: 1 = school-atlas recognisable, ALL launch sites, isolated ocean/polar references; 2 = regionally recognisable; 3 = dense-cluster secondary, close zoom only. BUDGET: one in, one out — the file stays <= 405 so MAX_CITIES (420) keeps headroom; a new entry retires one of equal or lower recognition. KEEP-CRITERIA (any one suffices): (a) recognition — a non-local would know the name; (b) coverage criticality — in view during stretches with <= 5 labels; (c) corridor landfall — marks where a track crosses from ocean onto land (e.g. Visakhapatnam).",
   "cities": [
-    { "name": "New York",        "lat": 40.71,  "lon": -74.01,  "tier": 1 },
-    { "name": "Washington",      "lat": 38.91,  "lon": -77.04,  "tier": 3 },
-    { "name": "Toronto",         "lat": 43.65,  "lon": -79.38,  "tier": 2 },
-    { "name": "Montreal",        "lat": 45.50,  "lon": -73.57,  "tier": 3 },
-    { "name": "Chicago",         "lat": 41.88,  "lon": -87.63,  "tier": 2 },
-    { "name": "Minneapolis",     "lat": 44.98,  "lon": -93.27,  "tier": 3 },
-    { "name": "Atlanta",         "lat": 33.75,  "lon": -84.39,  "tier": 3 },
-    { "name": "Miami",           "lat": 25.76,  "lon": -80.19,  "tier": 2 },
-    { "name": "Houston",         "lat": 29.76,  "lon": -95.37,  "tier": 2 },
-    { "name": "Dallas",          "lat": 32.78,  "lon": -96.80,  "tier": 3 },
-    { "name": "Denver",          "lat": 39.74,  "lon": -104.99, "tier": 2 },
-    { "name": "Phoenix",         "lat": 33.45,  "lon": -112.07, "tier": 3 },
-    { "name": "Los Angeles",     "lat": 34.05,  "lon": -118.24, "tier": 1 },
-    { "name": "San Francisco",   "lat": 37.77,  "lon": -122.42, "tier": 2 },
-    { "name": "Seattle",         "lat": 47.61,  "lon": -122.33, "tier": 2 },
-    { "name": "Vancouver",       "lat": 49.28,  "lon": -123.12, "tier": 3 },
-    { "name": "Calgary",         "lat": 51.05,  "lon": -114.07, "tier": 3 },
-    { "name": "Winnipeg",        "lat": 49.90,  "lon": -97.14,  "tier": 3 },
-    { "name": "Anchorage",       "lat": 61.22,  "lon": -149.90, "tier": 2 },
-    { "name": "Yellowknife",     "lat": 62.45,  "lon": -114.37, "tier": 2 },
-    { "name": "Nuuk",            "lat": 64.18,  "lon": -51.69,  "tier": 1 },
-    { "name": "Honolulu",        "lat": 21.31,  "lon": -157.86, "tier": 1 },
-    { "name": "Midway",          "lat": 28.21,  "lon": -177.38, "tier": 2 },
-    { "name": "Guadalajara",     "lat": 20.67,  "lon": -103.35, "tier": 3 },
-    { "name": "Monterrey",       "lat": 25.69,  "lon": -100.32, "tier": 3 },
-    { "name": "Mexico City",     "lat": 19.43,  "lon": -99.13,  "tier": 1 },
-    { "name": "Havana",          "lat": 23.11,  "lon": -82.37,  "tier": 2 },
-    { "name": "Nassau",          "lat": 25.06,  "lon": -77.34,  "tier": 3 },
-    { "name": "Bermuda",         "lat": 32.29,  "lon": -64.78,  "tier": 2 },
-    { "name": "Santo Domingo",   "lat": 18.49,  "lon": -69.93,  "tier": 3 },
-    { "name": "San Juan",        "lat": 18.47,  "lon": -66.10,  "tier": 3 },
-    { "name": "Kingston",        "lat": 17.97,  "lon": -76.79,  "tier": 3 },
-    { "name": "Guatemala City",  "lat": 14.63,  "lon": -90.51,  "tier": 3 },
-    { "name": "San Jose",        "lat": 9.93,   "lon": -84.08,  "tier": 3 },
-    { "name": "Panama City",     "lat": 8.98,   "lon": -79.52,  "tier": 2 },
-    { "name": "Bogota",          "lat": 4.71,   "lon": -74.07,  "tier": 2 },
-    { "name": "Caracas",         "lat": 10.48,  "lon": -66.90,  "tier": 2 },
-    { "name": "Quito",           "lat": -0.18,  "lon": -78.47,  "tier": 3 },
-    { "name": "Galapagos",       "lat": -0.74,  "lon": -90.31,  "tier": 1 },
-    { "name": "Lima",            "lat": -12.05, "lon": -77.04,  "tier": 2 },
-    { "name": "La Paz",          "lat": -16.50, "lon": -68.15,  "tier": 3 },
-    { "name": "Santiago",        "lat": -33.45, "lon": -70.67,  "tier": 2 },
-    { "name": "Buenos Aires",    "lat": -34.60, "lon": -58.38,  "tier": 1 },
-    { "name": "Montevideo",      "lat": -34.90, "lon": -56.16,  "tier": 3 },
-    { "name": "Asuncion",        "lat": -25.30, "lon": -57.64,  "tier": 3 },
-    { "name": "Brasilia",        "lat": -15.79, "lon": -47.88,  "tier": 2 },
-    { "name": "Manaus",          "lat": -3.12,  "lon": -60.02,  "tier": 2 },
-    { "name": "Recife",          "lat": -8.05,  "lon": -34.88,  "tier": 3 },
-    { "name": "Sao Paulo",       "lat": -23.55, "lon": -46.63,  "tier": 1 },
-    { "name": "Rio de Janeiro",  "lat": -22.91, "lon": -43.17,  "tier": 1 },
-    { "name": "Falklands",       "lat": -51.69, "lon": -57.85,  "tier": 1 },
-    { "name": "Reykjavik",       "lat": 64.15,  "lon": -21.94,  "tier": 1 },
-    { "name": "Azores",          "lat": 37.74,  "lon": -25.67,  "tier": 1 },
-    { "name": "Dublin",          "lat": 53.35,  "lon": -6.26,   "tier": 3 },
-    { "name": "London",          "lat": 51.51,  "lon": -0.13,   "tier": 1 },
-    { "name": "Lisbon",          "lat": 38.72,  "lon": -9.14,   "tier": 2 },
-    { "name": "Madrid",          "lat": 40.42,  "lon": -3.70,   "tier": 1 },
-    { "name": "Barcelona",       "lat": 41.39,  "lon": 2.17,    "tier": 3 },
-    { "name": "Paris",           "lat": 48.86,  "lon": 2.35,    "tier": 1 },
-    { "name": "Amsterdam",       "lat": 52.37,  "lon": 4.90,    "tier": 3 },
-    { "name": "Brussels",        "lat": 50.85,  "lon": 4.35,    "tier": 3 },
-    { "name": "Berlin",          "lat": 52.52,  "lon": 13.41,   "tier": 1 },
-    { "name": "Rome",            "lat": 41.90,  "lon": 12.50,   "tier": 1 },
-    { "name": "Vienna",          "lat": 48.21,  "lon": 16.37,   "tier": 3 },
-    { "name": "Zurich",          "lat": 47.37,  "lon": 8.54,    "tier": 3 },
-    { "name": "Stockholm",       "lat": 59.33,  "lon": 18.07,   "tier": 2 },
-    { "name": "Oslo",            "lat": 59.91,  "lon": 10.75,   "tier": 3 },
-    { "name": "Tromso",          "lat": 69.65,  "lon": 18.96,   "tier": 2 },
-    { "name": "Copenhagen",      "lat": 55.68,  "lon": 12.57,   "tier": 3 },
-    { "name": "Helsinki",        "lat": 60.17,  "lon": 24.94,   "tier": 3 },
-    { "name": "Warsaw",          "lat": 52.23,  "lon": 21.01,   "tier": 2 },
-    { "name": "Athens",          "lat": 37.98,  "lon": 23.73,   "tier": 2 },
-    { "name": "Kyiv",            "lat": 50.45,  "lon": 30.52,   "tier": 2 },
-    { "name": "Moscow",          "lat": 55.76,  "lon": 37.62,   "tier": 1 },
-    { "name": "Istanbul",        "lat": 41.01,  "lon": 28.98,   "tier": 1 },
-    { "name": "Canary Is",       "lat": 28.12,  "lon": -15.44,  "tier": 1 },
-    { "name": "Casablanca",      "lat": 33.57,  "lon": -7.59,   "tier": 2 },
-    { "name": "Marrakech",       "lat": 31.63,  "lon": -7.99,   "tier": 3 },
-    { "name": "Algiers",         "lat": 36.75,  "lon": 3.06,    "tier": 2 },
-    { "name": "Tunis",           "lat": 36.81,  "lon": 10.18,   "tier": 3 },
-    { "name": "Tripoli",         "lat": 32.89,  "lon": 13.19,   "tier": 2 },
-    { "name": "Cairo",           "lat": 30.04,  "lon": 31.24,   "tier": 1 },
-    { "name": "Cape Verde",      "lat": 14.93,  "lon": -23.51,  "tier": 1 },
-    { "name": "Dakar",           "lat": 14.69,  "lon": -17.45,  "tier": 2 },
-    { "name": "Bamako",          "lat": 12.65,  "lon": -8.00,   "tier": 2 },
-    { "name": "Kano",            "lat": 12.00,  "lon": 8.52,    "tier": 3 },
-    { "name": "Lagos",           "lat": 6.52,   "lon": 3.38,    "tier": 1 },
-    { "name": "Accra",           "lat": 5.60,   "lon": -0.19,   "tier": 2 },
-    { "name": "Abidjan",         "lat": 5.36,   "lon": -4.01,   "tier": 1 },
-    { "name": "Khartoum",        "lat": 15.50,  "lon": 32.56,   "tier": 2 },
-    { "name": "Addis Ababa",     "lat": 9.03,   "lon": 38.74,   "tier": 2 },
-    { "name": "Mogadishu",       "lat": 2.05,   "lon": 45.34,   "tier": 2 },
-    { "name": "Nairobi",         "lat": -1.29,  "lon": 36.82,   "tier": 1 },
-    { "name": "Kampala",         "lat": 0.35,   "lon": 32.58,   "tier": 3 },
-    { "name": "Dar es Salaam",   "lat": -6.79,  "lon": 39.21,   "tier": 3 },
-    { "name": "Kinshasa",        "lat": -4.32,  "lon": 15.31,   "tier": 2 },
-    { "name": "Luanda",          "lat": -8.84,  "lon": 13.23,   "tier": 2 },
-    { "name": "Lusaka",          "lat": -15.42, "lon": 28.28,   "tier": 3 },
-    { "name": "Harare",          "lat": -17.83, "lon": 31.05,   "tier": 3 },
-    { "name": "Maputo",          "lat": -25.97, "lon": 32.57,   "tier": 3 },
-    { "name": "Windhoek",        "lat": -22.56, "lon": 17.08,   "tier": 2 },
-    { "name": "Johannesburg",    "lat": -26.20, "lon": 28.05,   "tier": 1 },
-    { "name": "Cape Town",       "lat": -33.92, "lon": 18.42,   "tier": 2 },
-    { "name": "Antananarivo",    "lat": -18.88, "lon": 47.51,   "tier": 2 },
-    { "name": "Mauritius",       "lat": -20.16, "lon": 57.50,   "tier": 1 },
-    { "name": "Seychelles",      "lat": -4.62,  "lon": 55.45,   "tier": 1 },
-    { "name": "Tel Aviv",        "lat": 32.08,  "lon": 34.78,   "tier": 2 },
-    { "name": "Beirut",          "lat": 33.89,  "lon": 35.50,   "tier": 3 },
-    { "name": "Amman",           "lat": 31.95,  "lon": 35.93,   "tier": 3 },
-    { "name": "Baghdad",         "lat": 33.31,  "lon": 44.36,   "tier": 2 },
-    { "name": "Riyadh",          "lat": 24.71,  "lon": 46.68,   "tier": 1 },
-    { "name": "Jeddah",          "lat": 21.49,  "lon": 39.19,   "tier": 3 },
-    { "name": "Kuwait City",     "lat": 29.38,  "lon": 47.99,   "tier": 3 },
-    { "name": "Doha",            "lat": 25.29,  "lon": 51.53,   "tier": 3 },
-    { "name": "Dubai",           "lat": 25.20,  "lon": 55.27,   "tier": 1 },
-    { "name": "Muscat",          "lat": 23.59,  "lon": 58.41,   "tier": 3 },
-    { "name": "Sanaa",           "lat": 15.37,  "lon": 44.19,   "tier": 3 },
-    { "name": "Tehran",          "lat": 35.69,  "lon": 51.39,   "tier": 1 },
-    { "name": "Kabul",           "lat": 34.53,  "lon": 69.17,   "tier": 2 },
-    { "name": "Karachi",         "lat": 24.86,  "lon": 67.01,   "tier": 2 },
-    { "name": "Mumbai",          "lat": 19.08,  "lon": 72.88,   "tier": 1 },
-    { "name": "Delhi",           "lat": 28.61,  "lon": 77.21,   "tier": 1 },
-    { "name": "Bangalore",       "lat": 12.97,  "lon": 77.59,   "tier": 2 },
-    { "name": "Colombo",         "lat": 6.93,   "lon": 79.85,   "tier": 2 },
-    { "name": "Maldives",        "lat": 4.18,   "lon": 73.51,   "tier": 1 },
-    { "name": "Kathmandu",       "lat": 27.72,  "lon": 85.32,   "tier": 3 },
-    { "name": "Dhaka",           "lat": 23.81,  "lon": 90.41,   "tier": 2 },
-    { "name": "Tashkent",        "lat": 41.30,  "lon": 69.24,   "tier": 2 },
-    { "name": "Almaty",          "lat": 43.24,  "lon": 76.89,   "tier": 3 },
-    { "name": "Astana",          "lat": 51.17,  "lon": 71.43,   "tier": 2 },
-    { "name": "Bishkek",         "lat": 42.87,  "lon": 74.59,   "tier": 3 },
-    { "name": "Novosibirsk",     "lat": 55.01,  "lon": 82.93,   "tier": 2 },
-    { "name": "Ulaanbaatar",     "lat": 47.89,  "lon": 106.91,  "tier": 2 },
-    { "name": "Irkutsk",         "lat": 52.29,  "lon": 104.30,  "tier": 3 },
-    { "name": "Yakutsk",         "lat": 62.04,  "lon": 129.73,  "tier": 2 },
-    { "name": "Vladivostok",     "lat": 43.12,  "lon": 131.89,  "tier": 2 },
-    { "name": "Beijing",         "lat": 39.90,  "lon": 116.41,  "tier": 1 },
-    { "name": "Chengdu",         "lat": 30.57,  "lon": 104.07,  "tier": 3 },
-    { "name": "Shanghai",        "lat": 31.23,  "lon": 121.47,  "tier": 1 },
-    { "name": "Guangzhou",       "lat": 23.13,  "lon": 113.26,  "tier": 3 },
-    { "name": "Hong Kong",       "lat": 22.32,  "lon": 114.17,  "tier": 1 },
-    { "name": "Taipei",          "lat": 25.03,  "lon": 121.57,  "tier": 2 },
-    { "name": "Seoul",           "lat": 37.57,  "lon": 126.98,  "tier": 1 },
-    { "name": "Tokyo",           "lat": 35.68,  "lon": 139.69,  "tier": 1 },
-    { "name": "Osaka",           "lat": 34.69,  "lon": 135.50,  "tier": 3 },
-    { "name": "Sapporo",         "lat": 43.06,  "lon": 141.35,  "tier": 3 },
-    { "name": "Bangkok",         "lat": 13.76,  "lon": 100.50,  "tier": 1 },
-    { "name": "Ho Chi Minh",     "lat": 10.82,  "lon": 106.63,  "tier": 2 },
-    { "name": "Kuala Lumpur",    "lat": 3.14,   "lon": 101.69,  "tier": 2 },
-    { "name": "Singapore",       "lat": 1.35,   "lon": 103.82,  "tier": 1 },
-    { "name": "Jakarta",         "lat": -6.21,  "lon": 106.85,  "tier": 1 },
-    { "name": "Manila",          "lat": 14.60,  "lon": 120.98,  "tier": 1 },
-    { "name": "Guam",            "lat": 13.44,  "lon": 144.79,  "tier": 1 },
-    { "name": "Perth",           "lat": -31.95, "lon": 115.86,  "tier": 2 },
-    { "name": "Darwin",          "lat": -12.46, "lon": 130.84,  "tier": 2 },
-    { "name": "Alice Springs",   "lat": -23.70, "lon": 133.88,  "tier": 2 },
-    { "name": "Adelaide",        "lat": -34.93, "lon": 138.60,  "tier": 3 },
-    { "name": "Brisbane",        "lat": -27.47, "lon": 153.03,  "tier": 3 },
-    { "name": "Sydney",          "lat": -33.87, "lon": 151.21,  "tier": 1 },
-    { "name": "Melbourne",       "lat": -37.81, "lon": 144.96,  "tier": 2 },
-    { "name": "Auckland",        "lat": -36.85, "lon": 174.76,  "tier": 1 },
-    { "name": "Wellington",      "lat": -41.29, "lon": 174.78,  "tier": 3 },
-    { "name": "Port Moresby",    "lat": -9.44,  "lon": 147.18,  "tier": 2 },
-    { "name": "Honiara",         "lat": -9.43,  "lon": 159.95,  "tier": 1 },
-    { "name": "Noumea",          "lat": -22.28, "lon": 166.46,  "tier": 2 },
-    { "name": "Suva",            "lat": -18.14, "lon": 178.44,  "tier": 1 },
-    { "name": "Apia",            "lat": -13.83, "lon": -171.77, "tier": 1 },
-    { "name": "Tahiti",          "lat": -17.54, "lon": -149.57, "tier": 1 },
-    { "name": "Easter Is",       "lat": -27.11, "lon": -109.35, "tier": 1 },
-    { "name": "Pitcairn",        "lat": -25.07, "lon": -130.10, "tier": 1 },
-    { "name": "Marquesas",       "lat": -8.92,  "lon": -140.10, "tier": 1 },
-    { "name": "Kiritimati",      "lat": 1.87,   "lon": -157.43, "tier": 1 },
-    { "name": "Wake Is",         "lat": 19.28,  "lon": 166.65,  "tier": 1 },
-    { "name": "Marshall Is",     "lat": 7.12,   "lon": 171.18,  "tier": 1 },
-    { "name": "Diego Garcia",    "lat": -7.31,  "lon": 72.41,   "tier": 1 },
-    { "name": "Cocos Is",        "lat": -12.17, "lon": 96.83,   "tier": 1 },
-    { "name": "Christmas Is",    "lat": -10.49, "lon": 105.62,  "tier": 1 },
-    { "name": "Ascension",       "lat": -7.95,  "lon": -14.36,  "tier": 1 },
-    { "name": "St Helena",       "lat": -15.96, "lon": -5.71,   "tier": 1 },
-    { "name": "Tristan",         "lat": -37.11, "lon": -12.28,  "tier": 1 },
-    { "name": "McMurdo",         "lat": -77.85, "lon": 166.67,  "tier": 1 },
-    { "name": "Mt Everest",      "lat": 27.99,  "lon": 86.93,   "tier": 1, "kind": "landmark" },
-    { "name": "Mt Fuji",         "lat": 35.36,  "lon": 138.73,  "tier": 1, "kind": "landmark" },
-    { "name": "Mt Kilimanjaro",  "lat": -3.07,  "lon": 37.35,   "tier": 1, "kind": "landmark" },
-    { "name": "Grand Canyon",    "lat": 36.10,  "lon": -112.11, "tier": 1, "kind": "landmark" },
-    { "name": "Amazon Rainforest","lat": -3.47, "lon": -62.22,  "tier": 1, "kind": "landmark" },
-    { "name": "Aconcagua",       "lat": -32.65, "lon": -70.01,  "tier": 1, "kind": "landmark" },
-    { "name": "Iguazu Falls",    "lat": -25.69, "lon": -54.44,  "tier": 2, "kind": "landmark" },
-    { "name": "Sahara",          "lat": 23.29,  "lon": 5.53,    "tier": 1, "kind": "landmark" },
-    { "name": "Victoria Falls",  "lat": -17.92, "lon": 25.86,   "tier": 2, "kind": "landmark" },
-    { "name": "Great Barrier Reef","lat": -18.29,"lon": 147.70, "tier": 1, "kind": "landmark" },
-    { "name": "Uluru",           "lat": -25.34, "lon": 131.04,  "tier": 2, "kind": "landmark" },
-    { "name": "Pyrenees",        "lat": 42.63,  "lon": 0.66,    "tier": 2, "kind": "landmark" },
-    { "name": "Western Ghats",   "lat": 10.17,  "lon": 77.06,   "tier": 2, "kind": "landmark" },
-    { "name": "Angkor Wat",      "lat": 13.41,  "lon": 103.87,  "tier": 2, "kind": "landmark" },
-    { "name": "Lake Baikal",     "lat": 53.50,  "lon": 108.20,  "tier": 2, "kind": "landmark" },
-    { "name": "Mariana Trench",  "lat": 11.35,  "lon": 142.20,  "tier": 1, "kind": "landmark" },
-    { "name": "Mid-Atlantic Ridge","lat": 0.00,   "lon": -28.00,  "tier": 1, "kind": "landmark" },
-    { "name": "Puerto Rico Trench","lat": 19.75,  "lon": -66.00,  "tier": 2, "kind": "landmark" },
-    { "name": "Tonga Trench",    "lat": -23.00, "lon": -174.00, "tier": 2, "kind": "landmark" },
-    { "name": "Java Trench",     "lat": -11.00, "lon": 109.50,  "tier": 2, "kind": "landmark" },
-    { "name": "Peru-Chile Trench","lat": -20.00, "lon": -71.50,  "tier": 2, "kind": "landmark" },
-    { "name": "Svalbard",        "lat": 78.22,  "lon": 15.65,   "tier": 1 },
-    { "name": "Jan Mayen",       "lat": 71.03,  "lon": -8.29,   "tier": 2 },
-    { "name": "Faroe Is",        "lat": 62.01,  "lon": -6.79,   "tier": 2 },
-    { "name": "Novaya Zemlya",   "lat": 74.00,  "lon": 57.00,   "tier": 1 },
-    { "name": "Franz Josef Land","lat": 80.62,  "lon": 54.50,   "tier": 2 },
-    { "name": "Wrangel Is",      "lat": 71.23,  "lon": -179.30, "tier": 2 },
-    { "name": "Baffin Is",       "lat": 69.50,  "lon": -72.00,  "tier": 2 },
-    { "name": "Madeira",         "lat": 32.76,  "lon": -16.96,  "tier": 2 },
-    { "name": "Fernando de Noronha","lat": -3.85,  "lon": -32.42,  "tier": 1 },
-    { "name": "South Georgia",   "lat": -54.28, "lon": -36.51,  "tier": 1 },
-    { "name": "Bouvet Is",       "lat": -54.42, "lon": 3.36,    "tier": 1 },
-    { "name": "Kerguelen",       "lat": -49.35, "lon": 70.22,   "tier": 1 },
-    { "name": "Crozet Is",       "lat": -46.43, "lon": 51.86,   "tier": 2 },
-    { "name": "Reunion",         "lat": -21.11, "lon": 55.53,   "tier": 2 },
-    { "name": "Comoros",         "lat": -11.65, "lon": 43.33,   "tier": 2 },
-    { "name": "Zanzibar",        "lat": -6.16,  "lon": 39.20,   "tier": 3 },
-    { "name": "Socotra",         "lat": 12.46,  "lon": 53.82,   "tier": 1 },
-    { "name": "Andaman Is",      "lat": 11.74,  "lon": 92.65,   "tier": 1 },
-    { "name": "Palau",           "lat": 7.51,   "lon": 134.58,  "tier": 1 },
-    { "name": "Okinawa",         "lat": 26.33,  "lon": 127.80,  "tier": 2 },
-    { "name": "Iwo Jima",        "lat": 24.78,  "lon": 141.32,  "tier": 2 },
-    { "name": "Sakhalin",        "lat": 50.29,  "lon": 142.95,  "tier": 2 },
-    { "name": "Kuril Is",        "lat": 46.09,  "lon": 151.59,  "tier": 2 },
-    { "name": "Aleutian Is",     "lat": 51.88,  "lon": -176.66, "tier": 1 },
-    { "name": "Vanuatu",         "lat": -17.73, "lon": 168.32,  "tier": 2 },
-    { "name": "Tonga",           "lat": -21.14, "lon": -175.20, "tier": 1 },
-    { "name": "Tarawa",          "lat": 1.45,   "lon": 173.03,  "tier": 1 },
-    { "name": "Tuvalu",          "lat": -8.52,  "lon": 179.20,  "tier": 2 },
-    { "name": "Cook Is",         "lat": -21.23, "lon": -159.78, "tier": 2 },
-    { "name": "Chatham Is",      "lat": -43.95, "lon": -176.55, "tier": 1 },
-    { "name": "Macquarie Is",    "lat": -54.62, "lon": 158.86,  "tier": 1 },
-    { "name": "Norfolk Is",      "lat": -29.03, "lon": 167.95,  "tier": 2 },
-    { "name": "Tasmania",        "lat": -42.04, "lon": 146.59,  "tier": 2 },
-    { "name": "Clipperton",      "lat": 10.28,  "lon": -109.22, "tier": 1 },
-    { "name": "Juan Fernandez",  "lat": -33.64, "lon": -78.85,  "tier": 2 },
-    { "name": "Broglio LBMSC",         "lat":   -2.94, "lon":    40.21, "tier": 1, "kind": "launch" },
-    { "name": "Kourou CSG",            "lat":    5.24, "lon":   -52.77, "tier": 1, "kind": "launch" },
-    { "name": "Alcantara",             "lat":   -2.37, "lon":   -44.40, "tier": 1, "kind": "launch" },
-    { "name": "Barreira do Inferno",   "lat":   -5.92, "lon":   -35.16, "tier": 1, "kind": "launch" },
-    { "name": "Cape Canaveral",        "lat":   28.49, "lon":   -80.55, "tier": 2, "kind": "launch" },
-    { "name": "Starbase",              "lat":   25.99, "lon":   -97.16, "tier": 1, "kind": "launch" },
-    { "name": "Vandenberg",            "lat":   34.63, "lon":  -120.61, "tier": 2, "kind": "launch" },
-    { "name": "Wallops",               "lat":   37.94, "lon":   -75.46, "tier": 1, "kind": "launch" },
-    { "name": "Kodiak",                "lat":   57.44, "lon":  -152.34, "tier": 2, "kind": "launch" },
-    { "name": "Baikonur",              "lat":   45.96, "lon":    63.30, "tier": 2, "kind": "launch" },
-    { "name": "Plesetsk",              "lat":   62.93, "lon":    40.57, "tier": 3, "kind": "launch" },
-    { "name": "Vostochny",             "lat":   51.88, "lon":   128.33, "tier": 3, "kind": "launch" },
-    { "name": "Jiuquan",               "lat":   40.96, "lon":   100.29, "tier": 2, "kind": "launch" },
-    { "name": "Xichang",               "lat":   28.25, "lon":   102.03, "tier": 1, "kind": "launch" },
-    { "name": "Taiyuan",               "lat":   38.85, "lon":   111.61, "tier": 2, "kind": "launch" },
-    { "name": "Wenchang",              "lat":   19.61, "lon":   110.95, "tier": 2, "kind": "launch" },
-    { "name": "Tanegashima",           "lat":   30.40, "lon":   130.97, "tier": 1, "kind": "launch" },
-    { "name": "Naro Space Center",     "lat":   34.43, "lon":   127.54, "tier": 2, "kind": "launch" },
-    { "name": "Sohae",                 "lat":   39.66, "lon":   124.71, "tier": 2, "kind": "launch" },
-    { "name": "Sriharikota",           "lat":   13.72, "lon":    80.23, "tier": 1, "kind": "launch" },
-    { "name": "Kulasekarapattinam",    "lat":    8.39, "lon":    78.06, "tier": 1, "kind": "launch" },
-    { "name": "Palmachim",             "lat":   31.88, "lon":    34.68, "tier": 1, "kind": "launch" },
-    { "name": "Semnan",                "lat":   35.23, "lon":    53.92, "tier": 2, "kind": "launch" },
-    { "name": "Mahia LC-1",            "lat":  -39.26, "lon":   177.86, "tier": 1, "kind": "launch" },
-    { "name": "Woomera",               "lat":  -31.15, "lon":   136.81, "tier": 2, "kind": "launch" },
-    { "name": "Esrange",               "lat":   67.89, "lon":    21.10, "tier": 3, "kind": "launch" },
-    { "name": "Andoya",                "lat":   69.29, "lon":    16.02, "tier": 3, "kind": "launch" },
-    { "name": "Odyssey Platform",      "lat":    0.00, "lon":  -154.00, "tier": 1, "kind": "launch" },
-    { "name": "Str of Hormuz",         "lat":   26.57, "lon":    56.25, "tier": 1, "kind": "strait" },
-    { "name": "Bab-el-Mandeb",         "lat":   12.58, "lon":    43.33, "tier": 1, "kind": "strait" },
-    { "name": "Str of Malacca",        "lat":    2.50, "lon":   101.00, "tier": 1, "kind": "strait" },
-    { "name": "Sunda Str",             "lat":   -6.00, "lon":   105.40, "tier": 2, "kind": "strait" },
-    { "name": "Lombok Str",            "lat":   -8.60, "lon":   115.80, "tier": 2, "kind": "strait" },
-    { "name": "Taiwan Str",            "lat":   24.50, "lon":   119.50, "tier": 2, "kind": "strait" },
-    { "name": "Luzon Str",             "lat":   20.50, "lon":   121.00, "tier": 2, "kind": "strait" },
-    { "name": "Str of Gibraltar",      "lat":   35.95, "lon":    -5.60, "tier": 1, "kind": "strait" },
-    { "name": "Bosphorus",             "lat":   41.10, "lon":    29.05, "tier": 1, "kind": "strait" },
-    { "name": "Dardanelles",           "lat":   40.20, "lon":    26.40, "tier": 1, "kind": "strait" },
-    { "name": "Suez Canal",            "lat":   30.50, "lon":    32.35, "tier": 1, "kind": "strait" },
-    { "name": "Panama Canal",          "lat":    9.10, "lon":   -79.70, "tier": 2, "kind": "strait" },
-    { "name": "Str of Florida",        "lat":   24.50, "lon":   -80.50, "tier": 2, "kind": "strait" },
-    { "name": "Yucatan Channel",       "lat":   21.50, "lon":   -85.80, "tier": 2, "kind": "strait" },
-    { "name": "Mozambique Channel",    "lat":  -19.00, "lon":    40.50, "tier": 2, "kind": "strait" },
-    { "name": "Torres Str",            "lat":   -9.80, "lon":   142.50, "tier": 1, "kind": "strait" },
-    { "name": "Bass Str",              "lat":  -39.50, "lon":   145.50, "tier": 2, "kind": "strait" },
-    { "name": "Cook Str",              "lat":  -41.30, "lon":   174.50, "tier": 1, "kind": "strait" },
-    { "name": "Bering Str",            "lat":   65.80, "lon":  -168.90, "tier": 2, "kind": "strait" },
-    { "name": "Str of Dover",          "lat":   51.00, "lon":     1.50, "tier": 1, "kind": "strait" },
-    { "name": "Str of Magellan",       "lat":  -53.50, "lon":   -70.50, "tier": 2, "kind": "strait" },
-    { "name": "Drake Passage",         "lat":  -58.00, "lon":   -65.00, "tier": 2, "kind": "strait" },
-    { "name": "Cape Horn",             "lat":  -55.98, "lon":   -67.27, "tier": 2, "kind": "strait" },
-    { "name": "Cape of Good Hope",     "lat":  -34.36, "lon":    18.47, "tier": 3, "kind": "strait" },
-    { "name": "Palk Str",              "lat":    9.70, "lon":    79.50, "tier": 1, "kind": "strait" },
-    { "name": "Str of Tiran",          "lat":   27.95, "lon":    34.55, "tier": 1, "kind": "strait" },
-    { "name": "Hainan Str",            "lat":   20.15, "lon":   110.20, "tier": 2, "kind": "strait" },
-    { "name": "Str of Sicily",         "lat":   37.00, "lon":    11.50, "tier": 1, "kind": "strait" },
-    { "name": "Makassar Str",          "lat":   -2.00, "lon":   118.00, "tier": 1, "kind": "strait" },
-    { "name": "Chennai",               "lat":   13.08, "lon":    80.27, "tier": 1, "kind": "city" },
-    { "name": "Kolkata",               "lat":   22.57, "lon":    88.36, "tier": 1, "kind": "city" },
-    { "name": "Yangon",                "lat":   16.87, "lon":    96.19, "tier": 1, "kind": "city" },
-    { "name": "Hyderabad",             "lat":   17.39, "lon":    78.49, "tier": 1, "kind": "city" },
-    { "name": "Ahmedabad",             "lat":   23.02, "lon":    72.57, "tier": 1, "kind": "city" },
-    { "name": "Busan",                 "lat":   35.10, "lon":   129.04, "tier": 2, "kind": "city" },
-    { "name": "Nagoya",                "lat":   35.18, "lon":   136.91, "tier": 2, "kind": "city" },
-    { "name": "Tianjin",               "lat":   39.08, "lon":   117.20, "tier": 2, "kind": "city" },
-    { "name": "Shenzhen",              "lat":   22.54, "lon":   114.06, "tier": 2, "kind": "city" },
-    { "name": "Surabaya",              "lat":   -7.25, "lon":   112.75, "tier": 2, "kind": "city" },
-    { "name": "Alexandria",            "lat":   31.20, "lon":    29.92, "tier": 1, "kind": "city" },
-    { "name": "Naples",                "lat":   40.85, "lon":    14.27, "tier": 1, "kind": "city" },
-    { "name": "Marseille",             "lat":   43.30, "lon":     5.37, "tier": 1, "kind": "city" },
-    { "name": "Hamburg",               "lat":   53.55, "lon":     9.99, "tier": 2, "kind": "city" },
-    { "name": "St Petersburg",         "lat":   59.94, "lon":    30.31, "tier": 2, "kind": "city" },
-    { "name": "Baku",                  "lat":   40.41, "lon":    49.87, "tier": 2, "kind": "city" },
-    { "name": "Durban",                "lat":  -29.86, "lon":    31.02, "tier": 3, "kind": "city" },
-    { "name": "Boston",                "lat":   42.36, "lon":   -71.06, "tier": 1, "kind": "city" },
-    { "name": "New Orleans",           "lat":   29.95, "lon":   -90.07, "tier": 1, "kind": "city" },
-    { "name": "San Diego",             "lat":   32.72, "lon":  -117.16, "tier": 1, "kind": "city" },
-    { "name": "Salvador",              "lat":  -12.97, "lon":   -38.50, "tier": 2, "kind": "city" },
-    { "name": "Fortaleza",             "lat":   -3.73, "lon":   -38.53, "tier": 1, "kind": "city" },
-    { "name": "Guayaquil",             "lat":   -2.19, "lon":   -79.88, "tier": 1, "kind": "city" },
-    { "name": "Basra",                 "lat":   30.51, "lon":    47.78, "tier": 1, "kind": "city" },
-    { "name": "Chittagong",            "lat":   22.33, "lon":    91.80, "tier": 2, "kind": "city" },
-    { "name": "Visakhapatnam",         "lat":   17.69, "lon":    83.30, "tier": 2, "kind": "city" },
-    { "name": "Kochi",                 "lat":    9.93, "lon":    76.27, "tier": 2, "kind": "city" },
-    { "name": "Surat",                 "lat":   21.17, "lon":    72.83, "tier": 2, "kind": "city" },
-    { "name": "Da Nang",               "lat":   16.05, "lon":   108.22, "tier": 3, "kind": "city" },
-    { "name": "Haiphong",              "lat":   20.86, "lon":   106.68, "tier": 3, "kind": "city" },
-    { "name": "Sanya",                 "lat":   18.25, "lon":   109.51, "tier": 3, "kind": "city" },
-    { "name": "Xiamen",                "lat":   24.48, "lon":   118.09, "tier": 3, "kind": "city" },
-    { "name": "Kaohsiung",             "lat":   22.63, "lon":   120.30, "tier": 3, "kind": "city" },
-    { "name": "Fukuoka",               "lat":   33.59, "lon":   130.40, "tier": 2, "kind": "city" },
-    { "name": "Qingdao",               "lat":   36.07, "lon":   120.38, "tier": 3, "kind": "city" },
-    { "name": "Dalian",                "lat":   38.91, "lon":   121.61, "tier": 3, "kind": "city" },
-    { "name": "Makassar",              "lat":   -5.13, "lon":   119.41, "tier": 3, "kind": "city" },
-    { "name": "Cebu",                  "lat":   10.32, "lon":   123.90, "tier": 3, "kind": "city" },
-    { "name": "Davao",                 "lat":    7.07, "lon":   125.61, "tier": 2, "kind": "city" },
-    { "name": "Penang",                "lat":    5.41, "lon":   100.34, "tier": 2, "kind": "city" },
-    { "name": "Phuket",                "lat":    7.88, "lon":    98.39, "tier": 2, "kind": "city" },
-    { "name": "Medan",                 "lat":    3.59, "lon":    98.67, "tier": 2, "kind": "city" },
-    { "name": "Bandar Abbas",          "lat":   27.18, "lon":    56.28, "tier": 2, "kind": "city" },
-    { "name": "Dammam",                "lat":   26.43, "lon":    50.10, "tier": 2, "kind": "city" },
-    { "name": "Aden",                  "lat":   12.79, "lon":    45.04, "tier": 2, "kind": "city" },
-    { "name": "Djibouti",              "lat":   11.59, "lon":    43.15, "tier": 2, "kind": "city" },
-    { "name": "Benghazi",              "lat":   32.12, "lon":    20.07, "tier": 2, "kind": "city" },
-    { "name": "Tangier",               "lat":   35.79, "lon":    -5.81, "tier": 2, "kind": "city" },
-    { "name": "Valencia",              "lat":   39.47, "lon":    -0.38, "tier": 2, "kind": "city" },
-    { "name": "Porto",                 "lat":   41.15, "lon":    -8.61, "tier": 2, "kind": "city" },
-    { "name": "Genoa",                 "lat":   44.41, "lon":     8.93, "tier": 2, "kind": "city" },
-    { "name": "Rotterdam",             "lat":   51.92, "lon":     4.48, "tier": 2, "kind": "city" },
-    { "name": "Gdansk",                "lat":   54.35, "lon":    18.65, "tier": 3, "kind": "city" },
-    { "name": "Odesa",                 "lat":   46.48, "lon":    30.73, "tier": 3, "kind": "city" },
-    { "name": "Mombasa",               "lat":   -4.04, "lon":    39.67, "tier": 2, "kind": "city" },
-    { "name": "Walvis Bay",            "lat":  -22.96, "lon":    14.51, "tier": 3, "kind": "city" },
-    { "name": "Beira",                 "lat":  -19.84, "lon":    34.84, "tier": 3, "kind": "city" },
-    { "name": "Port Harcourt",         "lat":    4.82, "lon":     7.04, "tier": 3, "kind": "city" },
-    { "name": "Douala",                "lat":    4.05, "lon":     9.77, "tier": 3, "kind": "city" },
-    { "name": "Libreville",            "lat":    0.39, "lon":     9.45, "tier": 3, "kind": "city" },
-    { "name": "Monrovia",              "lat":    6.31, "lon":   -10.80, "tier": 3, "kind": "city" },
-    { "name": "Freetown",              "lat":    8.48, "lon":   -13.23, "tier": 2, "kind": "city" },
-    { "name": "Conakry",               "lat":    9.51, "lon":   -13.71, "tier": 2, "kind": "city" },
-    { "name": "Nouakchott",            "lat":   18.09, "lon":   -15.98, "tier": 2, "kind": "city" },
-    { "name": "Belem",                 "lat":   -1.46, "lon":   -48.50, "tier": 2, "kind": "city" },
-    { "name": "Natal",                 "lat":   -5.79, "lon":   -35.21, "tier": 2, "kind": "city" },
-    { "name": "Santos",                "lat":  -23.96, "lon":   -46.33, "tier": 2, "kind": "city" },
-    { "name": "Valparaiso",            "lat":  -33.05, "lon":   -71.62, "tier": 2, "kind": "city" },
-    { "name": "Cartagena",             "lat":   10.39, "lon":   -75.51, "tier": 3, "kind": "city" },
-    { "name": "Veracruz",              "lat":   19.17, "lon":   -96.13, "tier": 2, "kind": "city" },
-    { "name": "Acapulco",              "lat":   16.86, "lon":   -99.88, "tier": 2, "kind": "city" },
-    { "name": "Tampa",                 "lat":   27.95, "lon":   -82.46, "tier": 3, "kind": "city" },
-    { "name": "Cancun",                "lat":   21.16, "lon":   -86.85, "tier": 3, "kind": "city" },
-    { "name": "Halifax",               "lat":   44.65, "lon":   -63.57, "tier": 2, "kind": "city" },
-    { "name": "Norfolk VA",            "lat":   36.85, "lon":   -76.29, "tier": 2, "kind": "city" },
-    { "name": "Cairns",                "lat":  -16.92, "lon":   145.77, "tier": 3, "kind": "city" },
-    { "name": "Christchurch",          "lat":  -43.53, "lon":   172.64, "tier": 2, "kind": "city" },
-    { "name": "Petropavlovsk",         "lat":   53.02, "lon":   158.65, "tier": 3, "kind": "city" },
-    { "name": "Point Nemo",            "lat":  -48.88, "lon":  -123.39, "tier": 2, "kind": "landmark" },
-    { "name": "Nazca Lines",           "lat":  -14.74, "lon":   -75.13, "tier": 1, "kind": "landmark" },
-    { "name": "Salar de Uyuni",        "lat":  -20.13, "lon":   -67.49, "tier": 2, "kind": "landmark" },
-    { "name": "Atacama",               "lat":  -24.50, "lon":   -69.25, "tier": 2, "kind": "landmark" },
-    { "name": "Danakil",               "lat":   14.24, "lon":    40.30, "tier": 1, "kind": "landmark" },
-    { "name": "Namib Desert",          "lat":  -24.50, "lon":    15.20, "tier": 2, "kind": "landmark" },
-    { "name": "Dead Sea",              "lat":   31.50, "lon":    35.47, "tier": 1, "kind": "landmark" },
-    { "name": "Aral Sea",              "lat":   45.00, "lon":    59.00, "tier": 2, "kind": "landmark" },
-    { "name": "Lake Chad",             "lat":   13.20, "lon":    14.30, "tier": 1, "kind": "landmark" },
-    { "name": "Chicxulub",             "lat":   21.30, "lon":   -89.51, "tier": 2, "kind": "landmark" },
-    { "name": "Nile Delta",            "lat":   30.80, "lon":    31.10, "tier": 1, "kind": "landmark" },
-    { "name": "Ganges Delta",          "lat":   22.00, "lon":    89.50, "tier": 1, "kind": "landmark" },
-    { "name": "Tibetan Plateau",       "lat":   32.00, "lon":    88.00, "tier": 1, "kind": "landmark" },
-    { "name": "Taklamakan",            "lat":   39.00, "lon":    83.00, "tier": 1, "kind": "landmark" },
-    { "name": "Rub al Khali",          "lat":   19.00, "lon":    47.00, "tier": 1, "kind": "landmark" },
-    { "name": "Okavango Delta",        "lat":  -19.30, "lon":    22.90, "tier": 2, "kind": "landmark" },
-    { "name": "Etosha Pan",            "lat":  -18.80, "lon":    16.30, "tier": 2, "kind": "landmark" },
-    { "name": "Lake Victoria",         "lat":   -1.00, "lon":    33.00, "tier": 1, "kind": "landmark" },
-    { "name": "Lake Turkana",          "lat":    3.50, "lon":    36.10, "tier": 1, "kind": "landmark" },
-    { "name": "Great Rift Valley",     "lat":    0.50, "lon":    36.00, "tier": 1, "kind": "landmark" },
-    { "name": "Caspian Sea",           "lat":   41.50, "lon":    50.50, "tier": 2, "kind": "landmark" },
-    { "name": "Persian Gulf",          "lat":   27.00, "lon":    52.00, "tier": 1, "kind": "landmark" },
-    { "name": "Red Sea",               "lat":   20.00, "lon":    38.50, "tier": 1, "kind": "landmark" },
-    { "name": "Gulf of Aden",          "lat":   12.50, "lon":    48.00, "tier": 1, "kind": "landmark" },
-    { "name": "Pantanal",              "lat":  -17.50, "lon":   -57.00, "tier": 2, "kind": "landmark" },
-    { "name": "Sahel",                 "lat":   15.00, "lon":    10.00, "tier": 1, "kind": "landmark" },
-    { "name": "Tassili n'Ajjer",       "lat":   25.50, "lon":     9.00, "tier": 1, "kind": "landmark" },
-    { "name": "Nullarbor",             "lat":  -31.50, "lon":   129.00, "tier": 2, "kind": "landmark" },
-    { "name": "Lake Eyre",             "lat":  -28.40, "lon":   137.40, "tier": 2, "kind": "landmark" },
-    { "name": "Sundarbans",            "lat":   21.95, "lon":    89.18, "tier": 1, "kind": "landmark" },
-    { "name": "Mekong Delta",          "lat":    9.80, "lon":   106.20, "tier": 1, "kind": "landmark" },
-    { "name": "Halong Bay",            "lat":   20.90, "lon":   107.10, "tier": 2, "kind": "landmark" },
-    { "name": "Krakatoa",              "lat":   -6.10, "lon":   105.42, "tier": 2, "kind": "landmark" },
-    { "name": "Popocatepetl",          "lat":   19.02, "lon":   -98.62, "tier": 1, "kind": "landmark" },
-    { "name": "Chagos Bank",           "lat":   -6.00, "lon":    71.50, "tier": 1, "kind": "landmark" },
-    { "name": "Congo Basin",           "lat":   -1.00, "lon":    22.00, "tier": 1, "kind": "landmark" },
-    { "name": "Kalahari",              "lat":  -23.00, "lon":    22.00, "tier": 2, "kind": "landmark" },
-    { "name": "Gobi Desert",           "lat":   43.00, "lon":   105.00, "tier": 2, "kind": "landmark" },
-    { "name": "Zagros Mts",            "lat":   32.00, "lon":    50.00, "tier": 1, "kind": "landmark" },
-    { "name": "Hindu Kush",            "lat":   36.00, "lon":    71.00, "tier": 2, "kind": "landmark" },
-    { "name": "Marianas Arc",          "lat":   18.00, "lon":   145.00, "tier": 2, "kind": "landmark" },
-    { "name": "Sargasso Sea",          "lat":   28.00, "lon":   -60.00, "tier": 2, "kind": "landmark" },
-    { "name": "Ninetyeast Ridge",      "lat":   -5.00, "lon":    90.00, "tier": 2, "kind": "landmark" },
-    { "name": "Kerguelen Plateau",     "lat":  -53.00, "lon":    74.00, "tier": 2, "kind": "landmark" },
-    { "name": "Amazon Mouth",          "lat":   -0.50, "lon":   -50.00, "tier": 1, "kind": "landmark" },
-    { "name": "Chesapeake Bay",        "lat":   37.50, "lon":   -76.20, "tier": 1, "kind": "landmark" },
-    { "name": "Sinai",                 "lat":   29.50, "lon":    33.80, "tier": 1, "kind": "landmark" },
-    { "name": "Baja California",       "lat":   27.00, "lon":  -113.00, "tier": 1, "kind": "landmark" }
+    {
+      "name": "New York",
+      "lat": 40.71,
+      "lon": -74.01,
+      "tier": 1
+    },
+    {
+      "name": "Washington",
+      "lat": 38.91,
+      "lon": -77.04,
+      "tier": 3
+    },
+    {
+      "name": "Toronto",
+      "lat": 43.65,
+      "lon": -79.38,
+      "tier": 2
+    },
+    {
+      "name": "Montreal",
+      "lat": 45.5,
+      "lon": -73.57,
+      "tier": 3
+    },
+    {
+      "name": "Chicago",
+      "lat": 41.88,
+      "lon": -87.63,
+      "tier": 2
+    },
+    {
+      "name": "Atlanta",
+      "lat": 33.75,
+      "lon": -84.39,
+      "tier": 3
+    },
+    {
+      "name": "Miami",
+      "lat": 25.76,
+      "lon": -80.19,
+      "tier": 2
+    },
+    {
+      "name": "Houston",
+      "lat": 29.76,
+      "lon": -95.37,
+      "tier": 2
+    },
+    {
+      "name": "Dallas",
+      "lat": 32.78,
+      "lon": -96.8,
+      "tier": 3
+    },
+    {
+      "name": "Denver",
+      "lat": 39.74,
+      "lon": -104.99,
+      "tier": 2
+    },
+    {
+      "name": "Los Angeles",
+      "lat": 34.05,
+      "lon": -118.24,
+      "tier": 1
+    },
+    {
+      "name": "San Francisco",
+      "lat": 37.77,
+      "lon": -122.42,
+      "tier": 2
+    },
+    {
+      "name": "Seattle",
+      "lat": 47.61,
+      "lon": -122.33,
+      "tier": 2
+    },
+    {
+      "name": "Vancouver",
+      "lat": 49.28,
+      "lon": -123.12,
+      "tier": 3
+    },
+    {
+      "name": "Anchorage",
+      "lat": 61.22,
+      "lon": -149.9,
+      "tier": 2
+    },
+    {
+      "name": "Yellowknife",
+      "lat": 62.45,
+      "lon": -114.37,
+      "tier": 2
+    },
+    {
+      "name": "Nuuk",
+      "lat": 64.18,
+      "lon": -51.69,
+      "tier": 1
+    },
+    {
+      "name": "Honolulu",
+      "lat": 21.31,
+      "lon": -157.86,
+      "tier": 1
+    },
+    {
+      "name": "Midway Island",
+      "lat": 28.21,
+      "lon": -177.38,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Guadalajara",
+      "lat": 20.67,
+      "lon": -103.35,
+      "tier": 3
+    },
+    {
+      "name": "Mexico City",
+      "lat": 19.43,
+      "lon": -99.13,
+      "tier": 1
+    },
+    {
+      "name": "Havana",
+      "lat": 23.11,
+      "lon": -82.37,
+      "tier": 2
+    },
+    {
+      "name": "Nassau",
+      "lat": 25.06,
+      "lon": -77.34,
+      "tier": 3
+    },
+    {
+      "name": "Bermuda",
+      "lat": 32.29,
+      "lon": -64.78,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "San Juan",
+      "lat": 18.47,
+      "lon": -66.1,
+      "tier": 3
+    },
+    {
+      "name": "Kingston",
+      "lat": 17.97,
+      "lon": -76.79,
+      "tier": 3
+    },
+    {
+      "name": "Guatemala City",
+      "lat": 14.63,
+      "lon": -90.51,
+      "tier": 3
+    },
+    {
+      "name": "Bogota",
+      "lat": 4.71,
+      "lon": -74.07,
+      "tier": 2
+    },
+    {
+      "name": "Caracas",
+      "lat": 10.48,
+      "lon": -66.9,
+      "tier": 2
+    },
+    {
+      "name": "Quito",
+      "lat": -0.18,
+      "lon": -78.47,
+      "tier": 3
+    },
+    {
+      "name": "Galapagos",
+      "lat": -0.74,
+      "lon": -90.31,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Lima",
+      "lat": -12.05,
+      "lon": -77.04,
+      "tier": 2
+    },
+    {
+      "name": "La Paz",
+      "lat": -16.5,
+      "lon": -68.15,
+      "tier": 3
+    },
+    {
+      "name": "Santiago",
+      "lat": -33.45,
+      "lon": -70.67,
+      "tier": 2
+    },
+    {
+      "name": "Buenos Aires",
+      "lat": -34.6,
+      "lon": -58.38,
+      "tier": 1
+    },
+    {
+      "name": "Montevideo",
+      "lat": -34.9,
+      "lon": -56.16,
+      "tier": 3
+    },
+    {
+      "name": "Brasilia",
+      "lat": -15.79,
+      "lon": -47.88,
+      "tier": 2
+    },
+    {
+      "name": "Manaus",
+      "lat": -3.12,
+      "lon": -60.02,
+      "tier": 2
+    },
+    {
+      "name": "Sao Paulo",
+      "lat": -23.55,
+      "lon": -46.63,
+      "tier": 1
+    },
+    {
+      "name": "Rio de Janeiro",
+      "lat": -22.91,
+      "lon": -43.17,
+      "tier": 1
+    },
+    {
+      "name": "Falkland Islands",
+      "lat": -51.69,
+      "lon": -57.85,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Reykjavik",
+      "lat": 64.15,
+      "lon": -21.94,
+      "tier": 1
+    },
+    {
+      "name": "Azores",
+      "lat": 37.74,
+      "lon": -25.67,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Dublin",
+      "lat": 53.35,
+      "lon": -6.26,
+      "tier": 3
+    },
+    {
+      "name": "London",
+      "lat": 51.51,
+      "lon": -0.13,
+      "tier": 1
+    },
+    {
+      "name": "Lisbon",
+      "lat": 38.72,
+      "lon": -9.14,
+      "tier": 2
+    },
+    {
+      "name": "Madrid",
+      "lat": 40.42,
+      "lon": -3.7,
+      "tier": 1
+    },
+    {
+      "name": "Barcelona",
+      "lat": 41.39,
+      "lon": 2.17,
+      "tier": 3
+    },
+    {
+      "name": "Paris",
+      "lat": 48.86,
+      "lon": 2.35,
+      "tier": 1
+    },
+    {
+      "name": "Amsterdam",
+      "lat": 52.37,
+      "lon": 4.9,
+      "tier": 3
+    },
+    {
+      "name": "Brussels",
+      "lat": 50.85,
+      "lon": 4.35,
+      "tier": 3
+    },
+    {
+      "name": "Berlin",
+      "lat": 52.52,
+      "lon": 13.41,
+      "tier": 1
+    },
+    {
+      "name": "Rome",
+      "lat": 41.9,
+      "lon": 12.5,
+      "tier": 1
+    },
+    {
+      "name": "Vienna",
+      "lat": 48.21,
+      "lon": 16.37,
+      "tier": 3
+    },
+    {
+      "name": "Zurich",
+      "lat": 47.37,
+      "lon": 8.54,
+      "tier": 3
+    },
+    {
+      "name": "Stockholm",
+      "lat": 59.33,
+      "lon": 18.07,
+      "tier": 2
+    },
+    {
+      "name": "Oslo",
+      "lat": 59.91,
+      "lon": 10.75,
+      "tier": 3
+    },
+    {
+      "name": "Tromso",
+      "lat": 69.65,
+      "lon": 18.96,
+      "tier": 2
+    },
+    {
+      "name": "Copenhagen",
+      "lat": 55.68,
+      "lon": 12.57,
+      "tier": 3
+    },
+    {
+      "name": "Helsinki",
+      "lat": 60.17,
+      "lon": 24.94,
+      "tier": 3
+    },
+    {
+      "name": "Warsaw",
+      "lat": 52.23,
+      "lon": 21.01,
+      "tier": 2
+    },
+    {
+      "name": "Athens",
+      "lat": 37.98,
+      "lon": 23.73,
+      "tier": 2
+    },
+    {
+      "name": "Kyiv",
+      "lat": 50.45,
+      "lon": 30.52,
+      "tier": 2
+    },
+    {
+      "name": "Moscow",
+      "lat": 55.76,
+      "lon": 37.62,
+      "tier": 1
+    },
+    {
+      "name": "Istanbul",
+      "lat": 41.01,
+      "lon": 28.98,
+      "tier": 1
+    },
+    {
+      "name": "Canary Islands",
+      "lat": 28.12,
+      "lon": -15.44,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Casablanca",
+      "lat": 33.57,
+      "lon": -7.59,
+      "tier": 2
+    },
+    {
+      "name": "Marrakech",
+      "lat": 31.63,
+      "lon": -7.99,
+      "tier": 3
+    },
+    {
+      "name": "Algiers",
+      "lat": 36.75,
+      "lon": 3.06,
+      "tier": 2
+    },
+    {
+      "name": "Tunis",
+      "lat": 36.81,
+      "lon": 10.18,
+      "tier": 3
+    },
+    {
+      "name": "Tripoli",
+      "lat": 32.89,
+      "lon": 13.19,
+      "tier": 2
+    },
+    {
+      "name": "Cairo",
+      "lat": 30.04,
+      "lon": 31.24,
+      "tier": 1
+    },
+    {
+      "name": "Cape Verde",
+      "lat": 14.93,
+      "lon": -23.51,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Dakar",
+      "lat": 14.69,
+      "lon": -17.45,
+      "tier": 2
+    },
+    {
+      "name": "Bamako",
+      "lat": 12.65,
+      "lon": -8,
+      "tier": 2
+    },
+    {
+      "name": "Lagos",
+      "lat": 6.52,
+      "lon": 3.38,
+      "tier": 1
+    },
+    {
+      "name": "Accra",
+      "lat": 5.6,
+      "lon": -0.19,
+      "tier": 2
+    },
+    {
+      "name": "Abidjan",
+      "lat": 5.36,
+      "lon": -4.01,
+      "tier": 2
+    },
+    {
+      "name": "Khartoum",
+      "lat": 15.5,
+      "lon": 32.56,
+      "tier": 2
+    },
+    {
+      "name": "Addis Ababa",
+      "lat": 9.03,
+      "lon": 38.74,
+      "tier": 2
+    },
+    {
+      "name": "Mogadishu",
+      "lat": 2.05,
+      "lon": 45.34,
+      "tier": 2
+    },
+    {
+      "name": "Nairobi",
+      "lat": -1.29,
+      "lon": 36.82,
+      "tier": 1
+    },
+    {
+      "name": "Kinshasa",
+      "lat": -4.32,
+      "lon": 15.31,
+      "tier": 2
+    },
+    {
+      "name": "Luanda",
+      "lat": -8.84,
+      "lon": 13.23,
+      "tier": 2
+    },
+    {
+      "name": "Harare",
+      "lat": -17.83,
+      "lon": 31.05,
+      "tier": 3
+    },
+    {
+      "name": "Maputo",
+      "lat": -25.97,
+      "lon": 32.57,
+      "tier": 3
+    },
+    {
+      "name": "Johannesburg",
+      "lat": -26.2,
+      "lon": 28.05,
+      "tier": 1
+    },
+    {
+      "name": "Cape Town",
+      "lat": -33.92,
+      "lon": 18.42,
+      "tier": 2
+    },
+    {
+      "name": "Madagascar",
+      "lat": -19,
+      "lon": 46.5,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Mauritius",
+      "lat": -20.16,
+      "lon": 57.5,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Seychelles",
+      "lat": -4.62,
+      "lon": 55.45,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Tel Aviv",
+      "lat": 32.08,
+      "lon": 34.78,
+      "tier": 2
+    },
+    {
+      "name": "Beirut",
+      "lat": 33.89,
+      "lon": 35.5,
+      "tier": 3
+    },
+    {
+      "name": "Baghdad",
+      "lat": 33.31,
+      "lon": 44.36,
+      "tier": 2
+    },
+    {
+      "name": "Riyadh",
+      "lat": 24.71,
+      "lon": 46.68,
+      "tier": 1
+    },
+    {
+      "name": "Kuwait City",
+      "lat": 29.38,
+      "lon": 47.99,
+      "tier": 3
+    },
+    {
+      "name": "Doha",
+      "lat": 25.29,
+      "lon": 51.53,
+      "tier": 3
+    },
+    {
+      "name": "Dubai",
+      "lat": 25.2,
+      "lon": 55.27,
+      "tier": 1
+    },
+    {
+      "name": "Muscat",
+      "lat": 23.59,
+      "lon": 58.41,
+      "tier": 3
+    },
+    {
+      "name": "Tehran",
+      "lat": 35.69,
+      "lon": 51.39,
+      "tier": 1
+    },
+    {
+      "name": "Kabul",
+      "lat": 34.53,
+      "lon": 69.17,
+      "tier": 2
+    },
+    {
+      "name": "Karachi",
+      "lat": 24.86,
+      "lon": 67.01,
+      "tier": 2
+    },
+    {
+      "name": "Mumbai",
+      "lat": 19.08,
+      "lon": 72.88,
+      "tier": 1
+    },
+    {
+      "name": "Delhi",
+      "lat": 28.61,
+      "lon": 77.21,
+      "tier": 1
+    },
+    {
+      "name": "Bangalore",
+      "lat": 12.97,
+      "lon": 77.59,
+      "tier": 2
+    },
+    {
+      "name": "Colombo",
+      "lat": 6.93,
+      "lon": 79.85,
+      "tier": 2
+    },
+    {
+      "name": "Maldives",
+      "lat": 4.18,
+      "lon": 73.51,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Kathmandu",
+      "lat": 27.72,
+      "lon": 85.32,
+      "tier": 3
+    },
+    {
+      "name": "Dhaka",
+      "lat": 23.81,
+      "lon": 90.41,
+      "tier": 2
+    },
+    {
+      "name": "Tashkent",
+      "lat": 41.3,
+      "lon": 69.24,
+      "tier": 2
+    },
+    {
+      "name": "Almaty",
+      "lat": 43.24,
+      "lon": 76.89,
+      "tier": 3
+    },
+    {
+      "name": "Astana",
+      "lat": 51.17,
+      "lon": 71.43,
+      "tier": 2
+    },
+    {
+      "name": "Bishkek",
+      "lat": 42.87,
+      "lon": 74.59,
+      "tier": 3
+    },
+    {
+      "name": "Novosibirsk",
+      "lat": 55.01,
+      "lon": 82.93,
+      "tier": 2
+    },
+    {
+      "name": "Ulaanbaatar",
+      "lat": 47.89,
+      "lon": 106.91,
+      "tier": 2
+    },
+    {
+      "name": "Irkutsk",
+      "lat": 52.29,
+      "lon": 104.3,
+      "tier": 3
+    },
+    {
+      "name": "Yakutsk",
+      "lat": 62.04,
+      "lon": 129.73,
+      "tier": 2
+    },
+    {
+      "name": "Vladivostok",
+      "lat": 43.12,
+      "lon": 131.89,
+      "tier": 2
+    },
+    {
+      "name": "Beijing",
+      "lat": 39.9,
+      "lon": 116.41,
+      "tier": 1
+    },
+    {
+      "name": "Chengdu",
+      "lat": 30.57,
+      "lon": 104.07,
+      "tier": 3
+    },
+    {
+      "name": "Shanghai",
+      "lat": 31.23,
+      "lon": 121.47,
+      "tier": 1
+    },
+    {
+      "name": "Guangzhou",
+      "lat": 23.13,
+      "lon": 113.26,
+      "tier": 3
+    },
+    {
+      "name": "Hong Kong",
+      "lat": 22.32,
+      "lon": 114.17,
+      "tier": 1
+    },
+    {
+      "name": "Taipei",
+      "lat": 25.03,
+      "lon": 121.57,
+      "tier": 2
+    },
+    {
+      "name": "Seoul",
+      "lat": 37.57,
+      "lon": 126.98,
+      "tier": 1
+    },
+    {
+      "name": "Tokyo",
+      "lat": 35.68,
+      "lon": 139.69,
+      "tier": 1
+    },
+    {
+      "name": "Osaka",
+      "lat": 34.69,
+      "lon": 135.5,
+      "tier": 3
+    },
+    {
+      "name": "Sapporo",
+      "lat": 43.06,
+      "lon": 141.35,
+      "tier": 3
+    },
+    {
+      "name": "Bangkok",
+      "lat": 13.76,
+      "lon": 100.5,
+      "tier": 1
+    },
+    {
+      "name": "Ho Chi Minh City",
+      "lat": 10.82,
+      "lon": 106.63,
+      "tier": 2
+    },
+    {
+      "name": "Kuala Lumpur",
+      "lat": 3.14,
+      "lon": 101.69,
+      "tier": 2
+    },
+    {
+      "name": "Singapore",
+      "lat": 1.35,
+      "lon": 103.82,
+      "tier": 1
+    },
+    {
+      "name": "Jakarta",
+      "lat": -6.21,
+      "lon": 106.85,
+      "tier": 1
+    },
+    {
+      "name": "Manila",
+      "lat": 14.6,
+      "lon": 120.98,
+      "tier": 1
+    },
+    {
+      "name": "Guam",
+      "lat": 13.44,
+      "lon": 144.79,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Perth",
+      "lat": -31.95,
+      "lon": 115.86,
+      "tier": 2
+    },
+    {
+      "name": "Darwin",
+      "lat": -12.46,
+      "lon": 130.84,
+      "tier": 2
+    },
+    {
+      "name": "Alice Springs",
+      "lat": -23.7,
+      "lon": 133.88,
+      "tier": 2
+    },
+    {
+      "name": "Brisbane",
+      "lat": -27.47,
+      "lon": 153.03,
+      "tier": 3
+    },
+    {
+      "name": "Sydney",
+      "lat": -33.87,
+      "lon": 151.21,
+      "tier": 1
+    },
+    {
+      "name": "Melbourne",
+      "lat": -37.81,
+      "lon": 144.96,
+      "tier": 2
+    },
+    {
+      "name": "Auckland",
+      "lat": -36.85,
+      "lon": 174.76,
+      "tier": 1
+    },
+    {
+      "name": "Wellington",
+      "lat": -41.29,
+      "lon": 174.78,
+      "tier": 3
+    },
+    {
+      "name": "Port Moresby",
+      "lat": -9.44,
+      "lon": 147.18,
+      "tier": 2
+    },
+    {
+      "name": "Honiara",
+      "lat": -9.43,
+      "lon": 159.95,
+      "tier": 1
+    },
+    {
+      "name": "Noumea",
+      "lat": -22.28,
+      "lon": 166.46,
+      "tier": 2
+    },
+    {
+      "name": "Suva",
+      "lat": -18.14,
+      "lon": 178.44,
+      "tier": 1
+    },
+    {
+      "name": "Apia",
+      "lat": -13.83,
+      "lon": -171.77,
+      "tier": 1
+    },
+    {
+      "name": "Tahiti",
+      "lat": -17.54,
+      "lon": -149.57,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Easter Island",
+      "lat": -27.11,
+      "lon": -109.35,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Pitcairn",
+      "lat": -25.07,
+      "lon": -130.1,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Marquesas",
+      "lat": -8.92,
+      "lon": -140.1,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Kiritimati",
+      "lat": 1.87,
+      "lon": -157.43,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Wake Island",
+      "lat": 19.28,
+      "lon": 166.65,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Marshall Islands",
+      "lat": 7.12,
+      "lon": 171.18,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Diego Garcia",
+      "lat": -7.31,
+      "lon": 72.41,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Cocos Islands",
+      "lat": -12.17,
+      "lon": 96.83,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Christmas Island",
+      "lat": -10.49,
+      "lon": 105.62,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Ascension",
+      "lat": -7.95,
+      "lon": -14.36,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Saint Helena",
+      "lat": -15.96,
+      "lon": -5.71,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Tristan da Cunha",
+      "lat": -37.11,
+      "lon": -12.28,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "McMurdo",
+      "lat": -77.85,
+      "lon": 166.67,
+      "tier": 1
+    },
+    {
+      "name": "Mount Everest",
+      "lat": 27.99,
+      "lon": 86.93,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Himalayas",
+      "lat": 29.0,
+      "lon": 85.5,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Mount Fuji",
+      "lat": 35.36,
+      "lon": 138.73,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Mount Kilimanjaro",
+      "lat": -3.07,
+      "lon": 37.35,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Grand Canyon",
+      "lat": 36.1,
+      "lon": -112.11,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Amazon Rainforest",
+      "lat": -3.47,
+      "lon": -62.22,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Aconcagua",
+      "lat": -32.65,
+      "lon": -70.01,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Iguazu Falls",
+      "lat": -25.69,
+      "lon": -54.44,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Sahara",
+      "lat": 23.29,
+      "lon": 5.53,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Victoria Falls",
+      "lat": -17.92,
+      "lon": 25.86,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Great Barrier Reef",
+      "lat": -18.29,
+      "lon": 147.7,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Uluru",
+      "lat": -25.34,
+      "lon": 131.04,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Pyrenees",
+      "lat": 42.63,
+      "lon": 0.66,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Western Ghats",
+      "lat": 10.17,
+      "lon": 77.06,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Angkor Wat",
+      "lat": 13.41,
+      "lon": 103.87,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Lake Baikal",
+      "lat": 53.5,
+      "lon": 108.2,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Mariana Trench",
+      "lat": 11.35,
+      "lon": 142.2,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Mid-Atlantic Ridge",
+      "lat": 0,
+      "lon": -28,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Svalbard",
+      "lat": 78.22,
+      "lon": 15.65,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Jan Mayen",
+      "lat": 71.03,
+      "lon": -8.29,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Faroe Islands",
+      "lat": 62.01,
+      "lon": -6.79,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Novaya Zemlya",
+      "lat": 74,
+      "lon": 57,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Franz Josef Land",
+      "lat": 80.62,
+      "lon": 54.5,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Wrangel Island",
+      "lat": 71.23,
+      "lon": -179.3,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Baffin Island",
+      "lat": 69.5,
+      "lon": -72,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Madeira",
+      "lat": 32.76,
+      "lon": -16.96,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Fernando de Noronha",
+      "lat": -3.85,
+      "lon": -32.42,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "South Georgia",
+      "lat": -54.28,
+      "lon": -36.51,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Bouvet Island",
+      "lat": -54.42,
+      "lon": 3.36,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Kerguelen",
+      "lat": -49.35,
+      "lon": 70.22,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Crozet Islands",
+      "lat": -46.43,
+      "lon": 51.86,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Reunion",
+      "lat": -21.11,
+      "lon": 55.53,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Comoros",
+      "lat": -11.65,
+      "lon": 43.33,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Zanzibar",
+      "lat": -6.16,
+      "lon": 39.2,
+      "tier": 3,
+      "kind": "landmark"
+    },
+    {
+      "name": "Socotra",
+      "lat": 12.46,
+      "lon": 53.82,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Andaman Islands",
+      "lat": 11.74,
+      "lon": 92.65,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Palau",
+      "lat": 7.51,
+      "lon": 134.58,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Okinawa",
+      "lat": 26.33,
+      "lon": 127.8,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Iwo Jima",
+      "lat": 24.78,
+      "lon": 141.32,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Sakhalin",
+      "lat": 50.29,
+      "lon": 142.95,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Kuril Islands",
+      "lat": 46.09,
+      "lon": 151.59,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Aleutian Islands",
+      "lat": 51.88,
+      "lon": -176.66,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Vanuatu",
+      "lat": -17.73,
+      "lon": 168.32,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Tonga",
+      "lat": -21.14,
+      "lon": -175.2,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Tarawa",
+      "lat": 1.45,
+      "lon": 173.03,
+      "tier": 1
+    },
+    {
+      "name": "Tuvalu",
+      "lat": -8.52,
+      "lon": 179.2,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Cook Islands",
+      "lat": -21.23,
+      "lon": -159.78,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Chatham Islands",
+      "lat": -43.95,
+      "lon": -176.55,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Macquarie Island",
+      "lat": -54.62,
+      "lon": 158.86,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Norfolk Island",
+      "lat": -29.03,
+      "lon": 167.95,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Tasmania",
+      "lat": -42.04,
+      "lon": 146.59,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Clipperton",
+      "lat": 10.28,
+      "lon": -109.22,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Juan Fernandez",
+      "lat": -33.64,
+      "lon": -78.85,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Malindi",
+      "lat": -2.94,
+      "lon": 40.21,
+      "tier": 1,
+      "kind": "launch"
+    },
+    {
+      "name": "Kourou",
+      "lat": 5.24,
+      "lon": -52.77,
+      "tier": 1,
+      "kind": "launch"
+    },
+    {
+      "name": "Alcantara",
+      "lat": -2.37,
+      "lon": -44.4,
+      "tier": 1,
+      "kind": "launch"
+    },
+    {
+      "name": "Cape Canaveral",
+      "lat": 28.49,
+      "lon": -80.55,
+      "tier": 1,
+      "kind": "launch"
+    },
+    {
+      "name": "Starbase",
+      "lat": 25.99,
+      "lon": -97.16,
+      "tier": 1,
+      "kind": "launch"
+    },
+    {
+      "name": "Vandenberg",
+      "lat": 34.63,
+      "lon": -120.61,
+      "tier": 1,
+      "kind": "launch"
+    },
+    {
+      "name": "Wallops",
+      "lat": 37.94,
+      "lon": -75.46,
+      "tier": 1,
+      "kind": "launch"
+    },
+    {
+      "name": "Kodiak",
+      "lat": 57.44,
+      "lon": -152.34,
+      "tier": 1,
+      "kind": "launch"
+    },
+    {
+      "name": "Baikonur",
+      "lat": 45.96,
+      "lon": 63.3,
+      "tier": 1,
+      "kind": "launch"
+    },
+    {
+      "name": "Plesetsk",
+      "lat": 62.93,
+      "lon": 40.57,
+      "tier": 1,
+      "kind": "launch"
+    },
+    {
+      "name": "Vostochny",
+      "lat": 51.88,
+      "lon": 128.33,
+      "tier": 1,
+      "kind": "launch"
+    },
+    {
+      "name": "Jiuquan",
+      "lat": 40.96,
+      "lon": 100.29,
+      "tier": 1,
+      "kind": "launch"
+    },
+    {
+      "name": "Xichang",
+      "lat": 28.25,
+      "lon": 102.03,
+      "tier": 1,
+      "kind": "launch"
+    },
+    {
+      "name": "Taiyuan",
+      "lat": 38.85,
+      "lon": 111.61,
+      "tier": 1,
+      "kind": "launch"
+    },
+    {
+      "name": "Wenchang",
+      "lat": 19.61,
+      "lon": 110.95,
+      "tier": 1,
+      "kind": "launch"
+    },
+    {
+      "name": "Tanegashima",
+      "lat": 30.4,
+      "lon": 130.97,
+      "tier": 1,
+      "kind": "launch"
+    },
+    {
+      "name": "Naro",
+      "lat": 34.43,
+      "lon": 127.54,
+      "tier": 1,
+      "kind": "launch"
+    },
+    {
+      "name": "Sohae",
+      "lat": 39.66,
+      "lon": 124.71,
+      "tier": 1,
+      "kind": "launch"
+    },
+    {
+      "name": "Sriharikota",
+      "lat": 13.72,
+      "lon": 80.23,
+      "tier": 1,
+      "kind": "launch"
+    },
+    {
+      "name": "Kulasekarapattinam",
+      "lat": 8.39,
+      "lon": 78.06,
+      "tier": 1,
+      "kind": "launch"
+    },
+    {
+      "name": "Palmachim",
+      "lat": 31.88,
+      "lon": 34.68,
+      "tier": 1,
+      "kind": "launch"
+    },
+    {
+      "name": "Semnan",
+      "lat": 35.23,
+      "lon": 53.92,
+      "tier": 1,
+      "kind": "launch"
+    },
+    {
+      "name": "Mahia",
+      "lat": -39.26,
+      "lon": 177.86,
+      "tier": 1,
+      "kind": "launch"
+    },
+    {
+      "name": "Woomera",
+      "lat": -31.15,
+      "lon": 136.81,
+      "tier": 1,
+      "kind": "launch"
+    },
+    {
+      "name": "Esrange",
+      "lat": 67.89,
+      "lon": 21.1,
+      "tier": 1,
+      "kind": "launch"
+    },
+    {
+      "name": "Andoya",
+      "lat": 69.29,
+      "lon": 16.02,
+      "tier": 1,
+      "kind": "launch"
+    },
+    {
+      "name": "Strait of Hormuz",
+      "lat": 26.57,
+      "lon": 56.25,
+      "tier": 1,
+      "kind": "strait"
+    },
+    {
+      "name": "Bab-el-Mandeb",
+      "lat": 12.58,
+      "lon": 43.33,
+      "tier": 2,
+      "kind": "strait"
+    },
+    {
+      "name": "Strait of Malacca",
+      "lat": 2.5,
+      "lon": 101,
+      "tier": 1,
+      "kind": "strait"
+    },
+    {
+      "name": "Lombok Strait",
+      "lat": -8.6,
+      "lon": 115.8,
+      "tier": 2,
+      "kind": "strait"
+    },
+    {
+      "name": "Taiwan Strait",
+      "lat": 24.5,
+      "lon": 119.5,
+      "tier": 2,
+      "kind": "strait"
+    },
+    {
+      "name": "Luzon Strait",
+      "lat": 20.5,
+      "lon": 121,
+      "tier": 2,
+      "kind": "strait"
+    },
+    {
+      "name": "Strait of Gibraltar",
+      "lat": 35.95,
+      "lon": -5.6,
+      "tier": 1,
+      "kind": "strait"
+    },
+    {
+      "name": "Bosphorus",
+      "lat": 41.1,
+      "lon": 29.05,
+      "tier": 1,
+      "kind": "strait"
+    },
+    {
+      "name": "Dardanelles",
+      "lat": 40.2,
+      "lon": 26.4,
+      "tier": 2,
+      "kind": "strait"
+    },
+    {
+      "name": "Suez Canal",
+      "lat": 30.5,
+      "lon": 32.35,
+      "tier": 1,
+      "kind": "strait"
+    },
+    {
+      "name": "Panama Canal",
+      "lat": 9.1,
+      "lon": -79.7,
+      "tier": 2,
+      "kind": "strait"
+    },
+    {
+      "name": "Strait of Florida",
+      "lat": 24.5,
+      "lon": -80.5,
+      "tier": 2,
+      "kind": "strait"
+    },
+    {
+      "name": "Mozambique Channel",
+      "lat": -19,
+      "lon": 40.5,
+      "tier": 2,
+      "kind": "strait"
+    },
+    {
+      "name": "Torres Strait",
+      "lat": -9.8,
+      "lon": 142.5,
+      "tier": 2,
+      "kind": "strait"
+    },
+    {
+      "name": "Bass Strait",
+      "lat": -39.5,
+      "lon": 145.5,
+      "tier": 2,
+      "kind": "strait"
+    },
+    {
+      "name": "Bering Strait",
+      "lat": 65.8,
+      "lon": -168.9,
+      "tier": 2,
+      "kind": "strait"
+    },
+    {
+      "name": "Strait of Dover",
+      "lat": 51,
+      "lon": 1.5,
+      "tier": 1,
+      "kind": "strait"
+    },
+    {
+      "name": "Strait of Magellan",
+      "lat": -53.5,
+      "lon": -70.5,
+      "tier": 2,
+      "kind": "strait"
+    },
+    {
+      "name": "Drake Passage",
+      "lat": -58,
+      "lon": -65,
+      "tier": 2,
+      "kind": "strait"
+    },
+    {
+      "name": "Cape Horn",
+      "lat": -55.98,
+      "lon": -67.27,
+      "tier": 2,
+      "kind": "strait"
+    },
+    {
+      "name": "Cape of Good Hope",
+      "lat": -34.36,
+      "lon": 18.47,
+      "tier": 3,
+      "kind": "strait"
+    },
+    {
+      "name": "Palk Strait",
+      "lat": 9.7,
+      "lon": 79.5,
+      "tier": 1,
+      "kind": "strait"
+    },
+    {
+      "name": "Makassar Strait",
+      "lat": -2,
+      "lon": 118,
+      "tier": 2,
+      "kind": "strait"
+    },
+    {
+      "name": "Chennai",
+      "lat": 13.08,
+      "lon": 80.27,
+      "tier": 1,
+      "kind": "city"
+    },
+    {
+      "name": "Kolkata",
+      "lat": 22.57,
+      "lon": 88.36,
+      "tier": 1,
+      "kind": "city"
+    },
+    {
+      "name": "Yangon",
+      "lat": 16.87,
+      "lon": 96.19,
+      "tier": 1,
+      "kind": "city"
+    },
+    {
+      "name": "Hyderabad",
+      "lat": 17.39,
+      "lon": 78.49,
+      "tier": 2,
+      "kind": "city"
+    },
+    {
+      "name": "Busan",
+      "lat": 35.1,
+      "lon": 129.04,
+      "tier": 2,
+      "kind": "city"
+    },
+    {
+      "name": "Nagoya",
+      "lat": 35.18,
+      "lon": 136.91,
+      "tier": 2,
+      "kind": "city"
+    },
+    {
+      "name": "Surabaya",
+      "lat": -7.25,
+      "lon": 112.75,
+      "tier": 2,
+      "kind": "city"
+    },
+    {
+      "name": "Alexandria",
+      "lat": 31.2,
+      "lon": 29.92,
+      "tier": 1,
+      "kind": "city"
+    },
+    {
+      "name": "Naples",
+      "lat": 40.85,
+      "lon": 14.27,
+      "tier": 1,
+      "kind": "city"
+    },
+    {
+      "name": "Marseille",
+      "lat": 43.3,
+      "lon": 5.37,
+      "tier": 2,
+      "kind": "city"
+    },
+    {
+      "name": "Hamburg",
+      "lat": 53.55,
+      "lon": 9.99,
+      "tier": 2,
+      "kind": "city"
+    },
+    {
+      "name": "Saint Petersburg",
+      "lat": 59.94,
+      "lon": 30.31,
+      "tier": 2,
+      "kind": "city"
+    },
+    {
+      "name": "Baku",
+      "lat": 40.41,
+      "lon": 49.87,
+      "tier": 2,
+      "kind": "city"
+    },
+    {
+      "name": "Durban",
+      "lat": -29.86,
+      "lon": 31.02,
+      "tier": 3,
+      "kind": "city"
+    },
+    {
+      "name": "Boston",
+      "lat": 42.36,
+      "lon": -71.06,
+      "tier": 1,
+      "kind": "city"
+    },
+    {
+      "name": "New Orleans",
+      "lat": 29.95,
+      "lon": -90.07,
+      "tier": 1,
+      "kind": "city"
+    },
+    {
+      "name": "San Diego",
+      "lat": 32.72,
+      "lon": -117.16,
+      "tier": 2,
+      "kind": "city"
+    },
+    {
+      "name": "Salvador",
+      "lat": -12.97,
+      "lon": -38.5,
+      "tier": 2,
+      "kind": "city"
+    },
+    {
+      "name": "Fortaleza",
+      "lat": -3.73,
+      "lon": -38.53,
+      "tier": 2,
+      "kind": "city"
+    },
+    {
+      "name": "Guayaquil",
+      "lat": -2.19,
+      "lon": -79.88,
+      "tier": 2,
+      "kind": "city"
+    },
+    {
+      "name": "Basra",
+      "lat": 30.51,
+      "lon": 47.78,
+      "tier": 2,
+      "kind": "city"
+    },
+    {
+      "name": "Chittagong",
+      "lat": 22.33,
+      "lon": 91.8,
+      "tier": 2,
+      "kind": "city"
+    },
+    {
+      "name": "Visakhapatnam",
+      "lat": 17.69,
+      "lon": 83.3,
+      "tier": 2,
+      "kind": "city"
+    },
+    {
+      "name": "Kochi",
+      "lat": 9.93,
+      "lon": 76.27,
+      "tier": 2,
+      "kind": "city"
+    },
+    {
+      "name": "Fukuoka",
+      "lat": 33.59,
+      "lon": 130.4,
+      "tier": 2,
+      "kind": "city"
+    },
+    {
+      "name": "Davao",
+      "lat": 7.07,
+      "lon": 125.61,
+      "tier": 2,
+      "kind": "city"
+    },
+    {
+      "name": "Penang",
+      "lat": 5.41,
+      "lon": 100.34,
+      "tier": 2,
+      "kind": "city"
+    },
+    {
+      "name": "Phuket",
+      "lat": 7.88,
+      "lon": 98.39,
+      "tier": 2,
+      "kind": "city"
+    },
+    {
+      "name": "Medan",
+      "lat": 3.59,
+      "lon": 98.67,
+      "tier": 2,
+      "kind": "city"
+    },
+    {
+      "name": "Aden",
+      "lat": 12.79,
+      "lon": 45.04,
+      "tier": 2,
+      "kind": "city"
+    },
+    {
+      "name": "Djibouti",
+      "lat": 11.59,
+      "lon": 43.15,
+      "tier": 2,
+      "kind": "city"
+    },
+    {
+      "name": "Valencia",
+      "lat": 39.47,
+      "lon": -0.38,
+      "tier": 2,
+      "kind": "city"
+    },
+    {
+      "name": "Porto",
+      "lat": 41.15,
+      "lon": -8.61,
+      "tier": 2,
+      "kind": "city"
+    },
+    {
+      "name": "Mombasa",
+      "lat": -4.04,
+      "lon": 39.67,
+      "tier": 2,
+      "kind": "city"
+    },
+    {
+      "name": "Belem",
+      "lat": -1.46,
+      "lon": -48.5,
+      "tier": 2,
+      "kind": "city"
+    },
+    {
+      "name": "Natal",
+      "lat": -5.79,
+      "lon": -35.21,
+      "tier": 2,
+      "kind": "city"
+    },
+    {
+      "name": "Cartagena",
+      "lat": 10.39,
+      "lon": -75.51,
+      "tier": 3,
+      "kind": "city"
+    },
+    {
+      "name": "Veracruz",
+      "lat": 19.17,
+      "lon": -96.13,
+      "tier": 2,
+      "kind": "city"
+    },
+    {
+      "name": "Acapulco",
+      "lat": 16.86,
+      "lon": -99.88,
+      "tier": 2,
+      "kind": "city"
+    },
+    {
+      "name": "Tampa",
+      "lat": 27.95,
+      "lon": -82.46,
+      "tier": 3,
+      "kind": "city"
+    },
+    {
+      "name": "Cancun",
+      "lat": 21.16,
+      "lon": -86.85,
+      "tier": 3,
+      "kind": "city"
+    },
+    {
+      "name": "Point Nemo",
+      "lat": -48.88,
+      "lon": -123.39,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Nazca Lines",
+      "lat": -14.74,
+      "lon": -75.13,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Salar de Uyuni",
+      "lat": -20.13,
+      "lon": -67.49,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Atacama",
+      "lat": -24.5,
+      "lon": -69.25,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Danakil Depression",
+      "lat": 14.24,
+      "lon": 40.3,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Namib Desert",
+      "lat": -24.5,
+      "lon": 15.2,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Dead Sea",
+      "lat": 31.5,
+      "lon": 35.47,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Aral Sea",
+      "lat": 45,
+      "lon": 59,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Lake Chad",
+      "lat": 13.2,
+      "lon": 14.3,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Chicxulub Crater",
+      "lat": 21.3,
+      "lon": -89.51,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Ganges Delta",
+      "lat": 22,
+      "lon": 89.5,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Tibetan Plateau",
+      "lat": 32,
+      "lon": 88,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Taklamakan",
+      "lat": 39,
+      "lon": 83,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Rub al Khali",
+      "lat": 19,
+      "lon": 47,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Okavango Delta",
+      "lat": -19.3,
+      "lon": 22.9,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Lake Victoria",
+      "lat": -1,
+      "lon": 33,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Lake Turkana",
+      "lat": 3.5,
+      "lon": 36.1,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Great Rift Valley",
+      "lat": 0.5,
+      "lon": 36,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Caspian Sea",
+      "lat": 41.5,
+      "lon": 50.5,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Persian Gulf",
+      "lat": 27,
+      "lon": 52,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Red Sea",
+      "lat": 20,
+      "lon": 38.5,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Gulf of Aden",
+      "lat": 12.5,
+      "lon": 48,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Pantanal",
+      "lat": -17.5,
+      "lon": -57,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Sahel",
+      "lat": 15,
+      "lon": 10,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Nullarbor",
+      "lat": -31.5,
+      "lon": 129,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Lake Eyre",
+      "lat": -28.4,
+      "lon": 137.4,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Mekong Delta",
+      "lat": 9.8,
+      "lon": 106.2,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Halong Bay",
+      "lat": 20.9,
+      "lon": 107.1,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Krakatoa",
+      "lat": -6.1,
+      "lon": 105.42,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Popocatepetl",
+      "lat": 19.02,
+      "lon": -98.62,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Congo Basin",
+      "lat": -1,
+      "lon": 22,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Kalahari",
+      "lat": -23,
+      "lon": 22,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Gobi Desert",
+      "lat": 43,
+      "lon": 105,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Zagros Mountains",
+      "lat": 32,
+      "lon": 50,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Hindu Kush",
+      "lat": 36,
+      "lon": 71,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Heard Island",
+      "lat": -53.1,
+      "lon": 73.51,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Amazon Mouth",
+      "lat": -0.5,
+      "lon": -50,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Chesapeake Bay",
+      "lat": 37.5,
+      "lon": -76.2,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Sinai",
+      "lat": 29.5,
+      "lon": 33.8,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Baja California",
+      "lat": 27,
+      "lon": -113,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Chiang Mai",
+      "lat": 18.79,
+      "lon": 98.98,
+      "tier": 1,
+      "kind": "city"
+    },
+    {
+      "name": "Pattaya",
+      "lat": 12.93,
+      "lon": 100.88,
+      "tier": 1,
+      "kind": "city"
+    },
+    {
+      "name": "Ayutthaya",
+      "lat": 14.35,
+      "lon": 100.58,
+      "tier": 2,
+      "kind": "city"
+    },
+    {
+      "name": "Niagara Falls",
+      "lat": 43.08,
+      "lon": -79.07,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Great Lakes",
+      "lat": 44.5,
+      "lon": -84,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Appalachian Mountains",
+      "lat": 37.5,
+      "lon": -81,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Philadelphia",
+      "lat": 39.95,
+      "lon": -75.16,
+      "tier": 2,
+      "kind": "city"
+    },
+    {
+      "name": "Cape Cod",
+      "lat": 41.7,
+      "lon": -70,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Angel Falls",
+      "lat": 5.97,
+      "lon": -62.54,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Serengeti",
+      "lat": -2.33,
+      "lon": 34.83,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Borneo",
+      "lat": 0.5,
+      "lon": 114,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Sumatra",
+      "lat": -0.5,
+      "lon": 101.5,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "New Guinea",
+      "lat": -5,
+      "lon": 141,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Mount Roraima",
+      "lat": 5.14,
+      "lon": -60.76,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Trinidad",
+      "lat": 10.5,
+      "lon": -61.3,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Orinoco Delta",
+      "lat": 9,
+      "lon": -61.5,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Gulf of Guinea",
+      "lat": 2,
+      "lon": 5,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Mount Kenya",
+      "lat": -0.15,
+      "lon": 37.31,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Kyoto",
+      "lat": 35.01,
+      "lon": 135.77,
+      "tier": 2,
+      "kind": "city"
+    },
+    {
+      "name": "Hiroshima",
+      "lat": 34.39,
+      "lon": 132.46,
+      "tier": 2,
+      "kind": "city"
+    },
+    {
+      "name": "Sakurajima",
+      "lat": 31.59,
+      "lon": 130.66,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Philippine Sea",
+      "lat": 18,
+      "lon": 132,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Bodh Gaya",
+      "lat": 24.7,
+      "lon": 84.99,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Sarnath (Deer Park)",
+      "lat": 25.38,
+      "lon": 83.03,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Lumbini",
+      "lat": 27.47,
+      "lon": 83.28,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Bagan",
+      "lat": 21.17,
+      "lon": 94.86,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Borobudur",
+      "lat": -7.61,
+      "lon": 110.2,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Lhasa",
+      "lat": 29.65,
+      "lon": 91.12,
+      "tier": 1,
+      "kind": "city"
+    },
+    {
+      "name": "Kushinagar",
+      "lat": 26.74,
+      "lon": 83.89,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Kandy",
+      "lat": 7.29,
+      "lon": 80.64,
+      "tier": 2,
+      "kind": "city"
+    },
+    {
+      "name": "Mount Kailash",
+      "lat": 31.07,
+      "lon": 81.31,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Taj Mahal",
+      "lat": 27.17,
+      "lon": 78.04,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Madurai",
+      "lat": 9.93,
+      "lon": 78.12,
+      "tier": 2,
+      "kind": "city"
+    },
+    {
+      "name": "Goa",
+      "lat": 15.3,
+      "lon": 74.08,
+      "tier": 2,
+      "kind": "city"
+    },
+    {
+      "name": "Rameswaram",
+      "lat": 9.29,
+      "lon": 79.31,
+      "tier": 2,
+      "kind": "city"
+    },
+    {
+      "name": "Puri",
+      "lat": 19.81,
+      "lon": 85.83,
+      "tier": 2,
+      "kind": "city"
+    },
+    {
+      "name": "Mecca",
+      "lat": 21.42,
+      "lon": 39.83,
+      "tier": 1,
+      "kind": "city"
+    },
+    {
+      "name": "Jerusalem",
+      "lat": 31.78,
+      "lon": 35.22,
+      "tier": 1,
+      "kind": "city"
+    },
+    {
+      "name": "Petra",
+      "lat": 30.33,
+      "lon": 35.44,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Machu Picchu",
+      "lat": -13.16,
+      "lon": -72.55,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Andes",
+      "lat": -10,
+      "lon": -76.5,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Chichen Itza",
+      "lat": 20.68,
+      "lon": -88.57,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Stonehenge",
+      "lat": 51.18,
+      "lon": -1.83,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Alps",
+      "lat": 46.5,
+      "lon": 9.5,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "El Arenosillo",
+      "lat": 37.1,
+      "lon": -6.74,
+      "tier": 1,
+      "kind": "launch"
+    },
+    {
+      "name": "Seville",
+      "lat": 37.39,
+      "lon": -5.99,
+      "tier": 2,
+      "kind": "city"
+    },
+    {
+      "name": "Balearic Islands",
+      "lat": 39.57,
+      "lon": 2.65,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Bay of Biscay",
+      "lat": 44.5,
+      "lon": -4,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Corsica",
+      "lat": 42.15,
+      "lon": 9.13,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "North Pole",
+      "lat": 89.9,
+      "lon": 0,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "South Pole",
+      "lat": -89.9,
+      "lon": 0,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
+      "name": "Kamchatka",
+      "lat": 56,
+      "lon": 159,
+      "tier": 2,
+      "kind": "landmark"
+    },
+    {
+      "name": "Greenland Ice Sheet",
+      "lat": 72,
+      "lon": -40,
+      "tier": 2,
+      "kind": "landmark"
+    }
   ]
 }

@@ -41,13 +41,6 @@
  *                             pass instead of the default northbound one; needed
  *                             when the interesting corridor lies on the
  *                             descending half.
- * @property {string} [sight]  Iconic landmark called out in opening comms as the
- *                             player's reference point. Omitted → no callout.
- * @property {'port'|'starboard'|'ahead'} [sightSide]
- *                             Which side of the ship the `sight` actually
- *                             appears on at spawn, for the opening callout.
- *                             Derived data — recompute if `incDeg`, `start`,
- *                             `descending` or `sight` changes.
  */
 
 /**
@@ -74,19 +67,19 @@
  */
 export const LANGUAGES = [
   { code: 'en', label: 'English',  native: 'English',  flag: 'USA', incDeg: 51.6, descending: true,
-    start: { name: 'New York', lat: 40.71, lon: -74.01 }, sight: 'Eastern Seaboard', sightSide: 'ahead' },
+    start: { name: 'New York', lat: 40.71, lon: -74.01 } },
   { code: 'th', label: 'Thai',     native: 'ไทย',      flag: 'THA', incDeg: 28.5,
-    start: { name: 'Bangkok',   lat: 13.76, lon: 100.50 }, sight: 'Gulf of Thailand', sightSide: 'port' }, // Thailand / GISTDA — regional low LEO
+    start: { name: 'Bangkok',   lat: 13.76, lon: 100.50 } }, // Thailand / GISTDA — regional low LEO
   { code: 'ja', label: 'Japanese', native: '日本語',    flag: 'JPN', incDeg: 30.0,
-    start: { name: 'South of Honshu', lat: 28.0, lon: 135.0 }, sight: 'Mt Fuji', sightSide: 'starboard' }, // Japan / JAXA — Tanegashima 30.4°N; anchor offshore S of Honshu (Tokyo 35.7° sits just N of track)
+    start: { name: 'South of Honshu', lat: 28.0, lon: 135.0 } }, // Japan / JAXA — Tanegashima 30.4°N; anchor offshore S of Honshu (Tokyo 35.7° sits just N of track)
   { code: 'es', label: 'Spanish',  native: 'Español',  flag: 'ESP', incDeg: 45.0,
-    start: { name: 'Madrid',    lat: 40.42, lon: -3.70 }, sight: 'Pyrenees', sightSide: 'starboard' },     // Spain / ESA — plausible mid-LEO over Iberia (no national pad)
+    start: { name: 'Madrid',    lat: 40.42, lon: -3.70 } },     // Spain / ESA — plausible mid-LEO over Iberia (no national pad)
   { code: 'pt', label: 'Portuguese', native: 'Português', flag: 'BRA', incDeg: 5.0,
-    start: { name: 'Amazon', lat: -3.10, lon: -60.02 }, sight: 'Amazon Rainforest', sightSide: 'ahead' },  // Brazil / AEB — Alcântara 2.3°S equatorial launch
+    start: { name: 'Amazon', lat: -3.10, lon: -60.02 } },  // Brazil / AEB — Alcântara 2.3°S equatorial launch
   { code: 'hi', label: 'Hindi',    native: 'हिन्दी',   flag: 'IND', incDeg: 97.5,
-    start: { name: 'New Delhi', lat: 28.61, lon: 77.21 }, sight: 'Himalayas', sightSide: 'starboard' },    // India / ISRO — Sriharikota; Sun-synch = densest debris regime
+    start: { name: 'New Delhi', lat: 28.61, lon: 77.21 } },    // India / ISRO — Sriharikota; Sun-synch = densest debris regime
   { code: 'ta', label: 'Tamil',    native: 'தமிழ்',    flag: 'IND', incDeg: 18.0,
-    start: { name: 'Chennai',   lat: 13.08, lon: 80.27 }, sight: 'Western Ghats', sightSide: 'port' },     // India / ISRO — Sriharikota 13.7°N (Tamil region), low LEO
+    start: { name: 'Chennai',   lat: 13.08, lon: 80.27 } },     // India / ISRO — Sriharikota 13.7°N (Tamil region), low LEO
 ];
 
 /** Default language code when nothing is stored / an unknown code is supplied. */

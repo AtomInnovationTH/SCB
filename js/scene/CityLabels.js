@@ -15,8 +15,9 @@
  * #hud-overlay) and the Strategic Map's wireframe Earth (projected with the
  * map camera into the map overlay) — so the toggle/persistence state is shared.
  *
- * Toggle: 5 key (InputManager emits Events.CITY_LABELS_TOGGLE). OFF by
- * default; the on/off preference persists in localStorage (offline-first).
+ * Toggle: 5 key (InputManager emits Events.CITY_LABELS_TOGGLE). ON by
+ * default (first-timers get reference points immediately); an explicit
+ * 5-press to hide persists in localStorage (offline-first).
  *
  * Pure helpers (`parseCityList`, `isCityVisible`, `distanceFade`) are
  * Node-testable; everything THREE/DOM lives behind init guards.
@@ -48,19 +49,35 @@ const DOT_PX = 8;
 // --- Screen-space declutter geometry (estimated label box, for collision) ---
 /** Per-character advance for the 12px Courier label text (incl. letter-spacing). */
 const CHAR_PX = 7.7;
+/** Per-character advance for the 11px tier-2/3 label text. */
+const CHAR_PX_SMALL = 7.1;
 /** Fixed label-box width overhead: dot + gap + pill padding (CSS px). */
 const LABEL_FIXED_PX = 24;
 /** Estimated label-box height in CSS px (one text line + pill padding). */
 const LABEL_H_PX = 18;
 
+/**
+ * Text-pill placement slots around the anchored dot, evaluated in order. The
+ * dot never leaves its surface point; only the pill moves, so no leader lines
+ * are needed. dx/dy are the pill's top-left offset from the dot centre.
+ * E = right of the dot (default), W = left, NE/SE = stacked above/below.
+ */
+export const LABEL_SLOTS = ['E', 'W', 'NE', 'SE'];
+/**
+ * Vertical offset for the NE/SE slots. Must exceed LABEL_H_PX so the stacked
+ * pills don't self-overlap — otherwise a blocker on E would also block NE and
+ * SE, collapsing four genuinely-distinct slots into two.
+ */
+const SLOT_DY = 20;
+
 /** localStorage key for the persisted on/off preference. */
 const STORAGE_KEY = StorageKeys.CITY_LABELS;
 
 /**
- * Per-kind dot/text styling. Cities and natural landmarks keep the original
- * amber palette; launch pads read as cyan-white infrastructure and straits /
- * chokepoints as pale blue-grey so the three categories are distinguishable
- * at a glance. Declutter priority is unchanged (tier, distance).
+ * Per-kind dot/text styling. Cities keep the filled amber disc; natural
+ * landmarks use a hollow amber ring so "settlement" and "terrain" are
+ * distinguishable at a glance without adding a fourth hue. Launch pads read as
+ * cyan-white infrastructure and straits / chokepoints as pale blue-grey.
  */
 const KIND_STYLE = {
   city: {
@@ -70,8 +87,11 @@ const KIND_STYLE = {
   },
   landmark: {
     dot: '#fff3cc',
-    dotGlow: '0 0 6px 2px rgba(255,210,90,0.9),0 0 2px 1px rgba(255,235,160,1)',
+    // Hollow ring: transparent fill + border. Slightly tighter glow than the
+    // filled disc — a ring reads optically smaller, so it needs less halo.
+    dotGlow: '0 0 5px 1px rgba(255,210,90,0.75)',
     text: '#ffedb0',
+    ring: true,
   },
   launch: {
     dot: '#e6faff',
@@ -84,6 +104,17 @@ const KIND_STYLE = {
     text: '#dceaf0',
   },
 };
+
+/**
+ * Resolved dot style for a kind (pure, Node-testable). `ring === true` marks a
+ * hollow-ring dot (landmarks); everything else is a filled disc. Unknown kinds
+ * fall back to the filled city style.
+ * @param {string} kind
+ * @returns {{dot:string, dotGlow:string, text:string, ring?:boolean}}
+ */
+export function dotStyleFor(kind) {
+  return KIND_STYLE[kind] || KIND_STYLE.city;
+}
 
 // Module-level scratch vectors — update() runs every frame; no per-frame
 // allocations (project scratch-vector discipline).
@@ -202,6 +233,87 @@ export function distanceFade(dist, near, far) {
   return 1 - (dist - near) / (far - near);
 }
 
+/**
+ * The text-pill collision box for a label whose dot is anchored at screen
+ * (sx, sy), in a given slot. Coordinates are CSS px, origin top-left.
+ * Pass `out` to write into a reused object (allocation-free in the hot loop);
+ * omit it for a fresh object (convenient for tests / one-off callers).
+ * @param {number} sx @param {number} sy — dot centre on screen
+ * @param {number} textW — estimated pill width
+ * @param {string} slot — one of LABEL_SLOTS
+ * @param {object} [out] — optional target {x,y,w,h} to mutate and return
+ * @returns {{x:number, y:number, w:number, h:number}}
+ */
+export function slotBox(sx, sy, textW, slot, out) {
+  const gap = DOT_PX / 2 + 6;
+  let x, y = sy - LABEL_H_PX / 2;
+  switch (slot) {
+    case 'W':  x = sx - gap - textW; break;
+    case 'NE': x = sx + gap; y = sy - LABEL_H_PX / 2 - SLOT_DY; break;
+    case 'SE': x = sx + gap; y = sy - LABEL_H_PX / 2 + SLOT_DY; break;
+    case 'E':
+    default:   x = sx + gap; break;
+  }
+  const b = out || {};
+  b.x = x; b.y = y; b.w = textW; b.h = LABEL_H_PX;
+  return b;
+}
+
+/**
+ * The CSS `transform` that moves a label's text pill into its slot around the
+ * anchored dot. Pure and Node-testable — this is the rendered counterpart of
+ * `slotBox`'s collision geometry, and the two MUST agree (a desync means the
+ * pill renders somewhere the collision system didn't reserve).
+ * @param {string} slot — one of LABEL_SLOTS
+ * @param {number} textW — estimated pill width (for the W slot)
+ * @returns {string} CSS transform value
+ */
+export function slotTransform(slot, textW) {
+  const gap = DOT_PX / 2 + 6;
+  switch (slot) {
+    case 'W':  return `translate(${-(textW + gap)}px, 0)`;
+    case 'NE': return `translate(${gap}px, ${-SLOT_DY}px)`;
+    case 'SE': return `translate(${gap}px, ${SLOT_DY}px)`;
+    case 'E':
+    default:   return `translate(${gap}px, 0)`;
+  }
+}
+
+/** Axis-aligned box overlap. */
+function _boxesOverlap(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+// Module scratch box for the pickSlot scan loop (no per-frame allocation).
+const _scanBox = { x: 0, y: 0, w: 0, h: 0 };
+
+/**
+ * Pick the first free slot for a label, honouring hysteresis: if `prevSlot`
+ * is still collision-free it is reused (prevents flicker as labels drift).
+ * `keptBoxes` is an array-like of {x,y,w,h} already-reserved boxes (text pills
+ * and dot squares); only the first `keptCount` entries are considered.
+ * Returns the slot name, or null when every slot is blocked.
+ * @param {number} sx @param {number} sy @param {number} textW
+ * @param {Array<{x,y,w,h}>} keptBoxes
+ * @param {string|null} [prevSlot]
+ * @param {number} [keptCount=keptBoxes.length]
+ * @returns {string|null}
+ */
+export function pickSlot(sx, sy, textW, keptBoxes, prevSlot = null, keptCount = keptBoxes.length) {
+  const order = prevSlot && LABEL_SLOTS.includes(prevSlot)
+    ? [prevSlot, ...LABEL_SLOTS.filter(s => s !== prevSlot)]
+    : LABEL_SLOTS;
+  for (const slot of order) {
+    slotBox(sx, sy, textW, slot, _scanBox);
+    let blocked = false;
+    for (let j = 0; j < keptCount; j++) {
+      if (_boxesOverlap(_scanBox, keptBoxes[j])) { blocked = true; break; }
+    }
+    if (!blocked) return slot;
+  }
+  return null;
+}
+
 // ============================================================================
 // CITY LABELS (browser-only past this point)
 // ============================================================================
@@ -212,8 +324,8 @@ export class CityLabels {
     this._cities = [];
     /** @type {Array<object>} attached render layers */
     this._layers = [];
-    /** @type {boolean} master visibility (persisted; default OFF) */
-    this._visible = false;
+    /** @type {boolean} master visibility (persisted; default ON) */
+    this._visible = true;
     this._loadPreference();
 
     eventBus.on(Events.CITY_LABELS_TOGGLE, () => this.toggle());
@@ -221,6 +333,20 @@ export class CityLabels {
 
   /** @returns {boolean} */
   isVisible() { return this._visible; }
+
+  /**
+   * Whether the player has ever explicitly toggled labels (stored '0' or '1').
+   * Used to show the one-time "press 5 to hide" hint only to first-timers.
+   * @returns {boolean}
+   */
+  hasStoredPreference() {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        return localStorage.getItem(STORAGE_KEY) !== null;
+      }
+    } catch (_) { /* private mode etc. */ }
+    return false;
+  }
 
   /** @returns {Array<{name,lat,lon}>} */
   getCities() { return this._cities; }
@@ -261,10 +387,15 @@ export class CityLabels {
    * @param {number} [opts.fadeNear=radius*2] @param {number} [opts.fadeFar=radius*18]
    * @param {number} [opts.lodNear=radius*3] — at/under this camera distance all
    *   tiers show; @param {number} [opts.lodFar=radius*10] — at/over this only tier 1.
+   * @param {number} [opts.maxVisible=Infinity] — cap on placed non-launch labels
+   *   per frame (priority-sorted, so the most recognisable survive).
+   * @param {number} [opts.maxVisibleLaunch=Infinity] — separate cap for launch
+   *   pads, which are placed in a first pass so they never lose a collision.
    */
   attach({ parent, radius, camera, container, isActive = null,
            lonOffsetDeg = 0, mirrorLon = false,
-           fadeNear, fadeFar, lodNear, lodFar }) {
+           fadeNear, fadeFar, lodNear, lodFar,
+           maxVisible = Infinity, maxVisibleLaunch = Infinity }) {
     if (!parent || !camera || !this._cities.length) return null;
     if (typeof document === 'undefined') return null;
 
@@ -283,15 +414,23 @@ export class CityLabels {
     for (const city of this._cities) {
       const lonDeg = (mirrorLon ? -city.lon : city.lon) + lonOffsetDeg;
       const pos = latLonToPosition(city.lat, lonDeg, surfaceLift);
-      const el = this._makeLabelEl(city.name, city.kind);
+      const el = this._makeLabelEl(city.name, city.kind, city.tier);
       root.appendChild(el);
+      const tier = city.tier || 2;
+      const charPx = tier === 1 ? CHAR_PX : CHAR_PX_SMALL;
       items.push({
-        el, name: city.name, kind: city.kind, tier: city.tier || 2,
-        // Estimated on-screen box width (monospace ⇒ length-proportional),
-        // used by the screen-space overlap declutter in update().
-        w: LABEL_FIXED_PX + city.name.length * CHAR_PX,
+        el, textEl: el._textEl, dotEl: el._dotEl, name: city.name, kind: city.kind, tier,
+        // Estimated on-screen pill width (monospace ⇒ length-proportional),
+        // used by the screen-space slot placement in update().
+        w: LABEL_FIXED_PX + city.name.length * charPx,
         anchor: new THREE.Vector3(pos.x, pos.y, pos.z),
         shown: false, _sx: 0, _sy: 0, _op: 1, _dist: 0,
+        _slot: null,
+        // Tier-based type hierarchy: tier 1 full strength, 2/3 dimmer.
+        _opScale: tier === 1 ? 1.0 : (tier === 2 ? 0.85 : 0.70),
+        // Cameo pulse: ms timestamp when the highlight ends (0 = inactive).
+        _pulseEnd: 0,
+        _pillShadow: el._pillShadow,
       });
     }
 
@@ -299,12 +438,22 @@ export class CityLabels {
       parent, camera, root, items, isActive,
       // Reusable scratch for the per-frame declutter (no per-frame allocation).
       _cand: [],
-      _keptX: [], _keptY: [], _keptW: [], _keptH: [],
+      // Preallocated collision-box pool: 2 boxes (pill + dot) per placeable
+      // label. Sized to the caps (or the full item count when uncapped).
+      _kept: [],
       fadeNear: fadeNear != null ? fadeNear : radius * 2,
       fadeFar: fadeFar != null ? fadeFar : radius * 18,
       lodNear: lodNear != null ? lodNear : radius * 3,
       lodFar: lodFar != null ? lodFar : radius * 10,
+      maxVisible, maxVisibleLaunch,
     };
+    // Preallocate the box pool (2 per placeable label).
+    const poolSize = 2 * Math.min(
+      items.length,
+      (isFinite(maxVisible) ? maxVisible : items.length) +
+      (isFinite(maxVisibleLaunch) ? maxVisibleLaunch : items.length),
+    );
+    for (let i = 0; i < poolSize; i++) layer._kept.push({ x: 0, y: 0, w: 0, h: 0 });
     this._layers.push(layer);
     return layer;
   }
@@ -363,28 +512,66 @@ export class CityLabels {
         cand.push(item);
       }
 
-      // --- PASS 2: screen-space overlap declutter ---
+      // --- PASS 2: screen-space placement with slots + two-pass pads ---
       // Priority: lower tier first (major cities win), then nearer the camera.
       cand.sort(_byPriority);
-      const kx = layer._keptX, ky = layer._keptY, kw = layer._keptW, kh = layer._keptH;
-      let kept = 0;
-      for (const item of cand) {
-        const x0 = item._sx - DOT_PX / 2;
-        const y0 = item._sy - LABEL_H_PX / 2;
-        const w = item.w, h = LABEL_H_PX;
-        let collides = false;
-        for (let j = 0; j < kept; j++) {
-          if (x0 < kx[j] + kw[j] && x0 + w > kx[j] &&
-              y0 < ky[j] + kh[j] && y0 + h > ky[j]) { collides = true; break; }
-        }
-        if (collides) { this._hide(item); continue; }
-        kx[kept] = x0; ky[kept] = y0; kw[kept] = w; kh[kept] = h; kept++;
+      const kept = layer._kept;
+      let keptCount = 0;
+      let placedLaunch = 0, placedOther = 0;
 
-        // Anchor the marker dot on the surface point; the name sits to its right.
+      // Place one candidate: find a free slot (with hysteresis), reserve its
+      // pill box AND its dot square, position the DOM. Returns true if placed.
+      // Allocation-free: writes into the preallocated `kept` pool.
+      const place = (item) => {
+        const slot = pickSlot(item._sx, item._sy, item.w, kept, item._slot, keptCount);
+        if (!slot) { this._hide(item); return false; }
+        // Pill box.
+        slotBox(item._sx, item._sy, item.w, slot, kept[keptCount++]);
+        // Dot square (so no pill covers another entry's dot).
+        const d = kept[keptCount++];
+        d.x = item._sx - DOT_PX / 2; d.y = item._sy - DOT_PX / 2; d.w = DOT_PX; d.h = DOT_PX;
+
+        // Anchor the marker dot on the surface point; the pill sits in its slot.
         item.el.style.transform =
           `translate(${item._sx.toFixed(1)}px, ${item._sy.toFixed(1)}px) translate(${-DOT_PX / 2}px, -50%)`;
-        item.el.style.opacity = item._op.toFixed(3);
+        if (slot !== item._slot) {
+          item.textEl.style.transform = slotTransform(slot, item.w);
+          item._slot = slot;
+        }
+        item.el.style.opacity = (item._op * item._opScale).toFixed(3);
         if (!item.shown) { item.el.style.display = 'flex'; item.shown = true; }
+
+        // Cameo pulse — the fired pad's pill breathes cyan (dot scale + pill
+        // glow) until _pulseEnd. At most one label pulses at a time, so the
+        // per-frame style writes here cost nothing measurable.
+        if (item._pulseEnd) {
+          const nowMs = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+          if (nowMs >= item._pulseEnd) {
+            item._pulseEnd = 0;
+            item.dotEl.style.transform = '';
+            item.textEl.style.boxShadow = item._pillShadow;
+          } else {
+            const k = 0.5 + 0.5 * Math.sin(nowMs / 150);   // ~1 Hz breathing
+            item.dotEl.style.transform = `scale(${(1 + 0.6 * k).toFixed(3)})`;
+            item.textEl.style.boxShadow =
+              `0 0 ${(5 + 7 * k).toFixed(1)}px ${(1 + 2 * k).toFixed(1)}px rgba(80,210,255,${(0.55 + 0.35 * k).toFixed(3)})`;
+          }
+        }
+        return true;
+      };
+
+      // PASS 2a — launch pads first (own budget). They can never lose a
+      // collision to a city, which is what keeps Sriharikota beside Chennai.
+      for (const item of cand) {
+        if (item.kind !== 'launch') continue;
+        if (placedLaunch >= layer.maxVisibleLaunch) { this._hide(item); continue; }
+        if (place(item)) placedLaunch++;
+      }
+      // PASS 2b — everything else, colliding against the pads' reserved boxes.
+      for (const item of cand) {
+        if (item.kind === 'launch') continue;
+        if (placedOther >= layer.maxVisible) { this._hide(item); continue; }
+        if (place(item)) placedOther++;
       }
     }
   }
@@ -392,6 +579,13 @@ export class CityLabels {
   /** @private Hide a label if currently shown (single style write). */
   _hide(item) {
     if (item.shown) { item.el.style.display = 'none'; item.shown = false; }
+    // A pulse that outlives visibility must not leave stale glow/scale styles
+    // on the element for when it next rotates into view.
+    if (item._pulseEnd) {
+      item._pulseEnd = 0;
+      item.dotEl.style.transform = '';
+      item.textEl.style.boxShadow = item._pillShadow;
+    }
   }
 
   /** Toggle on/off (5 key) — persists and announces the new state. */
@@ -419,11 +613,16 @@ export class CityLabels {
 
   /** @private */
   _loadPreference() {
+    // Default ON: an absent key means the player has never chosen, so show
+    // labels (first-timers get reference points immediately). Only an explicit
+    // '0' (a 5-press to hide) turns them off, and that choice persists.
     try {
       if (typeof localStorage !== 'undefined') {
-        this._visible = localStorage.getItem(STORAGE_KEY) === '1';
+        this._visible = localStorage.getItem(STORAGE_KEY) !== '0';
+        return;
       }
-    } catch (_) { this._visible = false; }
+    } catch (_) { /* fall through to default */ }
+    this._visible = true;
   }
 
   /** @private */
@@ -439,9 +638,12 @@ export class CityLabels {
    * @private Build a screen-space label element: a glowing marker dot followed
    * by the city name. Styled inline (no stylesheet dependency) and sized in CSS
    * px so it stays constant on screen. Positioned each frame by `update()`.
+   * The dot is anchored on the surface point; the text span carries a
+   * `transform` set by the slot placement, so it can shift around the dot.
+   * Landmarks render as a hollow ring dot (terrain) vs the filled city disc.
    */
-  _makeLabelEl(name, kind = 'city') {
-    const style = KIND_STYLE[kind] || KIND_STYLE.city;
+  _makeLabelEl(name, kind = 'city', tier = 1) {
+    const style = dotStyleFor(kind);
     const el = document.createElement('div');
     el.className = 'sc-city-label';
     el.style.cssText = [
@@ -454,19 +656,32 @@ export class CityLabels {
     ].join(';');
 
     const dot = document.createElement('span');
-    dot.style.cssText = [
+    const dotCss = [
       `width:${DOT_PX}px`, `height:${DOT_PX}px`,
       'border-radius:50%',
-      `background:${style.dot}`,
+      'box-sizing:border-box',        // keep the ring inside DOT_PX (load-bearing)
       `box-shadow:${style.dotGlow}`,
       'flex:0 0 auto',
-    ].join(';');
+    ];
+    if (style.ring) {
+      dotCss.push('background:transparent', `border:1.5px solid ${style.dot}`);
+    } else {
+      dotCss.push(`background:${style.dot}`);
+    }
+    dot.style.cssText = dotCss.join(';');
 
     const text = document.createElement('span');
     text.textContent = name;
+    const fontPx = tier === 1 ? 12 : 11;
     text.style.cssText = [
-      'margin-left:6px',
-      "font:500 12px/1 'Courier New',monospace",
+      // Negative margin pulls the pill's base-flow left edge back over the
+      // dot's right half so it lands exactly on the dot centre (sx) — making
+      // slotTransform()'s from-dot offsets exact and the rendered pill agree
+      // with the collision box slotBox()/pickSlot() reserved. (The old
+      // margin-left:6px added a second ~10px offset on top of slotTransform,
+      // desyncing every slot and overlapping W-slot pills onto their own dot.)
+      `margin-left:${-DOT_PX / 2}px`,
+      `font:500 ${fontPx}px/1 'Courier New',monospace`,
       'letter-spacing:0.5px',
       `color:${style.text}`,
       // Subtle dark pill keeps the name legible over bright clouds, deserts,
@@ -476,11 +691,33 @@ export class CityLabels {
       'background:rgba(4,10,18,0.5)',
       'box-shadow:0 0 0 1px rgba(120,170,150,0.12)',
       'text-shadow:0 1px 2px rgba(0,0,0,0.95),0 0 3px rgba(0,0,0,0.9)',
+      // The slot placement moves the pill around the anchored dot.
+      'will-change:transform',
     ].join(';');
 
     el.appendChild(dot);
     el.appendChild(text);
+    el._textEl = text;   // exposed for the slot placement in update()
+    el._dotEl = dot;     // exposed for the cameo pulse in update()
+    el._pillShadow = '0 0 0 1px rgba(120,170,150,0.12)';  // base pill shadow (pulse restores this)
     return el;
+  }
+
+  /**
+   * Briefly highlight a label — used when the launch cameo fires so the pad's
+   * pill breathes cyan for the plume's duration, tying the 3D event to the
+   * reference layer ("THAT'S where it launched from"). No-op for unknown names.
+   * @param {string} name — city name as listed in cities.json
+   * @param {number} durationS — highlight duration in seconds
+   */
+  pulse(name, durationS = 16) {
+    const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    const end = now + durationS * 1000;
+    for (const layer of this._layers) {
+      for (const item of layer.items) {
+        if (item.name === name) item._pulseEnd = end;
+      }
+    }
   }
 
   /** Remove all layers + DOM elements. */

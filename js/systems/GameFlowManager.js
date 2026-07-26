@@ -22,9 +22,11 @@ import { kesslerSystem } from './KesslerSystem.js';
 import { captureNetSystem } from '../entities/CaptureNet.js';
 import { trawlManager } from './TrawlManager.js';
 import { launchSequence } from './LaunchSequence.js';
-import { orbitToSceneCartesian, subPointToOrbit, keplerianToCartesian } from '../entities/OrbitalMechanics.js';
-import { latLonToUnitVec } from '../scene/Ephemeris.js';
+import { orbitToSceneCartesian } from '../entities/OrbitalMechanics.js';
+import { computeStartOrbit } from './startOrbitMath.js';
 import { settingsManager } from './SettingsManager.js';
+import { cityLabels } from '../scene/CityLabels.js';
+import { launchCameo, padFor, CAMEO_DURATION_S } from '../scene/LaunchCameo.js';
 import { VIEW_INFO_LEVELS } from '../ui/HUD.js';
 import {
   resolveEffectRoute,
@@ -1217,31 +1219,54 @@ class GameFlowManager {
           }
         }, 3600, { owner: this });
 
-        // Landmark reference callout — points out the homeland feature visible
-        // on the opening pass (Languages.sight). Staggered a beat after the
-        // contacts hint so the arrival isn't a text wall. No-ops when the
-        // language has no `sight`. The side is data-driven (Languages.sightSide)
-        // because the hard-coded "port" was measurably wrong for ja/es/hi.
+        // One-time label hint — labels default ON, so tell first-timers how to
+        // hide them. Only shown when labels are actually visible AND the player
+        // has never toggled them (hasStoredPreference false = never pressed 5).
+        // Delayed to 14 s so it lands AFTER the opening arc (contacts 3.6 s →
+        // launch cameo 7 s) instead of interrupting it.
         timerManager.setTimeout(() => {
-          const { player } = this._refs;
-          if (!player) return;
-          if (!this._firstTimeComms.has('orbital_view_landmark')) {
-            this._firstTimeComms.add('orbital_view_landmark');
-            const lang = settingsManager.getLanguageEntry();
-            const sight = lang && lang.sight;
-            if (sight) {
-              const side = lang && lang.sightSide;
-              const text = (side === 'port' || side === 'starboard')
-                ? `Off your ${side} side: the ${sight}. Your reference point.`
-                : `Dead ahead: the ${sight}. Your reference point.`;
-              eventBus.emit(Events.COMMS_MESSAGE, {
-                sender: 'SPACECRAFT',
-                text,
-                priority: 'info',
-              });
-            }
+          if (this._firstTimeComms.has('orbital_view_labels')) return;
+          this._firstTimeComms.add('orbital_view_labels');
+          if (cityLabels.isVisible() && !cityLabels.hasStoredPreference()) {
+            eventBus.emit(Events.COMMS_MESSAGE, {
+              sender: 'SPACECRAFT',
+              text: 'Place names are on your Earth view. Press 5 to hide them.',
+              priority: 'info',
+            });
           }
-        }, 4400, { owner: this });
+        }, 14000, { owner: this });
+
+        // Launch cameo — a single plume rises from the player's home spaceport
+        // during the opening pass. Gated on the pad being on the visible
+        // hemisphere; one silent retry, then give up (no distraction mid-game).
+        timerManager.setTimeout(() => {
+          if (this._firstTimeComms.has('orbital_view_cameo')) return;
+          this._firstTimeComms.add('orbital_view_cameo');
+          const lang = settingsManager.getLanguageEntry();
+          // Pad coordinates resolve from the shared cities list (single source).
+          const pad = padFor(lang && lang.code, cityLabels.getCities());
+          if (!pad) return;
+          const announce = () => {
+            // Tie the 3D event to the reference layer: the pad's label pill
+            // breathes cyan for the plume's duration ("THAT'S where it launched").
+            cityLabels.pulse(pad.name, CAMEO_DURATION_S);
+            eventBus.emit(Events.COMMS_MESSAGE, {
+              sender: 'SPACECRAFT',
+              text: `${pad.vehicle} lifting off from ${pad.name} — 350 km below you.`,
+              priority: 'info',
+            });
+          };
+          const fired = launchCameo.fire(pad);
+          if (fired) {
+            announce();
+          } else {
+            // Pad not in view yet — retry once as the pass carries it into view.
+            timerManager.setTimeout(() => {
+              const ok = launchCameo.fire(pad);
+              if (ok) announce();
+            }, 2000, { owner: this });
+          }
+        }, 7000, { owner: this });
       }
     });
 
@@ -1394,57 +1419,12 @@ class GameFlowManager {
     const { player } = this._refs;
     if (!player || !player.orbit) return;
     const lang = settingsManager.getLanguageEntry();
-    const start = lang && lang.start;
-    if (!start) return;
+    const orbit = computeStartOrbit(lang);
+    if (!orbit) return;
 
-    // Inclination from launch geography (Languages.incDeg), default 51.6°.
-    const incDeg = (lang && Number.isFinite(lang.incDeg)) ? lang.incDeg : 51.6;
-    const inclination = incDeg * Math.PI / 180;
-    const ascending = !(lang && lang.descending === true);
-    let { raan, trueAnomaly } = subPointToOrbit(start.lat, start.lon, inclination, ascending);
-
-    // ── Cross-track offset: pass the city abeam, not underneath ──
-    // A fixed longitude shift would give wildly different abeam distances per
-    // language (the shift decomposes into along/cross-track by pass heading:
-    // ~70 km for ja vs ~350 km for en), so instead offset PERPENDICULAR to the
-    // pass: take the orbit normal ĥ = r̂×v̂ of the direct-overhead aim, rotate
-    // the city direction START_ABEAM_DEG toward +ĥ, and re-aim at that point.
-    // City then sits along −ĥ = v̂×r̂ = starboard of the track, a uniform
-    // ~200 km for every language. If the offset nudges the aim latitude past
-    // the inclination (near-equatorial pt at 5°), subPointToOrbit clamps to
-    // the highest reachable parallel — still within ~1° of the intent.
-    const START_ABEAM_DEG = 1.8; // ≈200 km ground offset ≈27° off nadir @400 km
-    const beta = START_ABEAM_DEG * Math.PI / 180;
-    const probe = keplerianToCartesian({
-      semiMajorAxis: 6771, eccentricity: 0.0001, inclination,
-      raan, argPerigee: 0, trueAnomaly,
-    });
-    const r = probe.position, v = probe.velocity;
-    const hx = r.y * v.z - r.z * v.y;
-    const hy = r.z * v.x - r.x * v.z;
-    const hz = r.x * v.y - r.y * v.x;
-    const hl = Math.hypot(hx, hy, hz) || 1;
-    const c = latLonToUnitVec(start.lat, start.lon);
-    const cb = Math.cos(beta), sb = Math.sin(beta);
-    const ax = c.x * cb + (hx / hl) * sb;
-    const ay = c.y * cb + (hy / hl) * sb;
-    const az = c.z * cb + (hz / hl) * sb;
-    const aimLatDeg = Math.asin(Math.max(-1, Math.min(1, ay))) * 180 / Math.PI;
-    const aimLonEastDeg = -Math.atan2(az, ax) * 180 / Math.PI; // inverse of latLonToUnitVec
-    ({ raan, trueAnomaly } = subPointToOrbit(aimLatDeg, aimLonEastDeg, inclination, ascending));
-
-    player.orbit.inclination = inclination;
-    player.orbit.raan = raan;
-    // Spawn slightly behind the abeam point along-track (ν decreases against
-    // the direction of motion; inc/RAAN — and therefore the ground track — are
-    // untouched). 10° of arc ≈ 1,100 km ground distance ≈ 15 s real time at
-    // gameplay scale before the closest approach; from ~400 km altitude the
-    // horizon is ~20° of arc away, so the city starts well inside the forward
-    // view and then drifts past on the right.
-    const START_TRACK_LEAD_DEG = 10;
-    const TWO_PI = 2 * Math.PI;
-    const lead = START_TRACK_LEAD_DEG * Math.PI / 180;
-    player.orbit.trueAnomaly = (((trueAnomaly - lead) % TWO_PI) + TWO_PI) % TWO_PI;
+    player.orbit.inclination = orbit.inclination;
+    player.orbit.raan = orbit.raan;
+    player.orbit.trueAnomaly = orbit.trueAnomaly;
     // subPointToOrbit() assumes a circular orbit with argPerigee=0
     // (OrbitalMechanics.js:229). Neither field is reset elsewhere on restart,
     // so a played (thrusted) session could mis-aim the anchor pass. Reset here
