@@ -84,6 +84,14 @@ export function createLabelTexture(text, { color = '#ffffff', fontPx = 112, pill
 // MULTI-LINE INSPECTION CARD
 // ---------------------------------------------------------------------------
 
+// Round 4: blueprint / engineering-HUD type. Single mono stack used for BOTH
+// drawing and measurement so the wrap budget can never drift from the draw.
+// Exported so the HUD breadcrumb shares the same stack (no drift).
+export const MONO = `'IBM Plex Mono', 'SF Mono', Menlo, Consolas, monospace`;
+const CARD_TITLE_FONT = `600 36px ${MONO}`;
+const CARD_ROW_FONT   = `400 28px ${MONO}`;
+const CARD_GLYPH_FONT = `600 40px "Helvetica Neue", Helvetica, Arial, sans-serif`;
+
 const CARD_W = 640;          // logical canvas width (px, pre-DPR) — widened from
                              // 512 (+25%) so plain-English titles (~22 chars) fit
                              // at the same on-screen text size (round-3 T4)
@@ -91,7 +99,7 @@ const CARD_PAD_TOP = 22;
 const CARD_PAD_BOTTOM = 22;
 const CARD_TITLE_H = 62;     // title-row block height
 const CARD_ROW_H = 44;       // each data-row block height
-const CARD_TAB_W = 12;       // system-hue tab on the left edge
+const CARD_TAB_W = 2;        // round 4: 2 px accent line (was 12 px rounded tab)
 const CARD_PAD_L = 24;       // content left pad (after tab)
 const CARD_PAD_R = 18;       // content right pad
 
@@ -122,8 +130,8 @@ export function wrapHint(text, maxLines = 2) {
   const maxW = _contentWidth();
 
   if (!probe) {
-    // Fallback: ~14.5 px/char at 30px Helvetica-500 → chars-per-line from width.
-    const perLine = Math.max(1, Math.floor(maxW / 14.5));
+    // Fallback: mono advance ≈ 0.6 em → ~17 px/char at 28 px.
+    const perLine = Math.max(1, Math.floor(maxW / 17));
     const out = [];
     let cur = '';
     for (const word of words) {
@@ -172,7 +180,7 @@ function _measureCtx() {
   if (_probe) return _probe;
   const c = (typeof document !== 'undefined') ? document.createElement('canvas') : null;
   _probe = c ? c.getContext('2d') : null;
-  if (_probe) _probe.font = '500 30px "Helvetica Neue", Helvetica, Arial, sans-serif';
+  if (_probe) _probe.font = CARD_ROW_FONT;
   return _probe;
 }
 function _contentWidth() {
@@ -206,28 +214,33 @@ function _roundRect(ctx, x, y, w, h, r) {
  *
  * @param {object} spec
  * @param {string} spec.title
- * @param {string} [spec.titleColor='#e6f0ff']  title glyph colour (system hue tint)
+ * @param {string} [spec.titleColor='#dfeef5']  title glyph colour (system hue tint)
  * @param {Array<{text:string,dim?:boolean,color?:string}>} [spec.rows]
  *   up to 6 data rows, pre-wrapped by the caller (see wrapHint). `color`
  *   overrides the fill (e.g. the amber unlock-hint).
  * @param {string} [spec.riskColor]     risk badge dot colour (omit → no dot)
- * @param {string} [spec.systemColor='#58a6ff']  left tab + accents
+ * @param {string} [spec.systemColor='#7fd4e8']  left tab + accents
+ * @param {string} [spec.inkColor='#dfeef5']  default row text colour (dim=false)
+ * @param {string} [spec.inkDimColor='#9fb8c4']  dim row text colour (dim=true)
  * @param {'linked'|'locked'|null} [spec.codex=null]  codex affordance state
- * @returns {{ texture: THREE.CanvasTexture, regions: object, heightFactor: number }}
- *   `regions` = UV-space rects ({x,y,w,h}, origin bottom-left) for clickable
- *   zones: `body` (whole card) and, when linked/locked, `codex` (the title
- *   strip). `heightFactor` = logicalH / 106 (106 = 0-row height) so the caller
+ * @returns {{ texture: THREE.CanvasTexture, heightFactor: number }}
+ *   `heightFactor` = logicalH / 106 (106 = 0-row height) so the caller
  *   can scale sprite height proportionally; width derives from the exported
  *   CARD_W_OVER_TITLE_H invariant (aspect × heightFactor), so no aspect field
  *   is returned.
  */
 export function createCardTexture(spec = {}) {
+  // Defaults mirror Constants.CALLOUTS.INK / INK_DIM / ACCENT — this module
+  // stays a leaf render helper with no Constants import, so the caller
+  // (MotherCallouts) is the source of truth and passes explicit values.
   const {
     title = '',
-    titleColor = '#e6f0ff',
+    titleColor = '#dfeef5',
     rows = [],
     riskColor = null,
-    systemColor = '#58a6ff',
+    systemColor = '#7fd4e8',
+    inkColor = '#dfeef5',
+    inkDimColor = '#9fb8c4',
     codex = null,
   } = spec;
 
@@ -247,21 +260,35 @@ export function createCardTexture(spec = {}) {
   const ctx = c.getContext('2d');
   ctx.scale(dpr, dpr);
 
-  // --- Chip background ---
+  // --- Chip background (round 4: blueprint — sharp rect, transparent) ---
+  // Round 5: fill 0.60 → 0.75 — screenshots showed cards washing out over the
+  // bright solar wing and the white radar dome (LARGE DAUGHTER, "Mass" row).
   const inset = 3;
-  _roundRect(ctx, inset, inset, logicalW - inset * 2, logicalH - inset * 2, 16);
-  ctx.fillStyle = 'rgba(3, 8, 16, 0.82)';
-  ctx.fill();
-  ctx.lineWidth = 2.5;
+  ctx.fillStyle = 'rgba(4, 12, 20, 0.75)';
+  ctx.fillRect(inset, inset, logicalW - inset * 2, logicalH - inset * 2);
+  ctx.lineWidth = 1.5;
   ctx.strokeStyle = systemColor;
-  ctx.globalAlpha = 0.6;
-  ctx.stroke();
+  ctx.globalAlpha = 0.7;
+  ctx.strokeRect(inset, inset, logicalW - inset * 2, logicalH - inset * 2);
   ctx.globalAlpha = 1.0;
 
-  // --- System-hue tab on the left edge ---
-  _roundRect(ctx, inset, inset + 6, CARD_TAB_W, logicalH - inset * 2 - 12, 5);
+  // --- Corner ticks (the blueprint signature) ---
+  const tick = 10;
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = systemColor;
+  ctx.globalAlpha = 1.0;
+  // top-left
+  ctx.beginPath(); ctx.moveTo(inset, inset + tick); ctx.lineTo(inset, inset); ctx.lineTo(inset + tick, inset); ctx.stroke();
+  // top-right
+  ctx.beginPath(); ctx.moveTo(logicalW - inset - tick, inset); ctx.lineTo(logicalW - inset, inset); ctx.lineTo(logicalW - inset, inset + tick); ctx.stroke();
+  // bottom-left
+  ctx.beginPath(); ctx.moveTo(inset, logicalH - inset - tick); ctx.lineTo(inset, logicalH - inset); ctx.lineTo(inset + tick, logicalH - inset); ctx.stroke();
+  // bottom-right
+  ctx.beginPath(); ctx.moveTo(logicalW - inset - tick, logicalH - inset); ctx.lineTo(logicalW - inset, logicalH - inset); ctx.lineTo(logicalW - inset, logicalH - inset - tick); ctx.stroke();
+
+  // --- System-hue accent line on the left edge (round 4: 2 px, was 12 px tab) ---
   ctx.fillStyle = systemColor;
-  ctx.fill();
+  ctx.fillRect(inset, inset, CARD_TAB_W, logicalH - inset * 2);
 
   const contentL = inset + CARD_TAB_W + CARD_PAD_L;
   const contentR = logicalW - CARD_PAD_R;
@@ -297,7 +324,7 @@ export function createCardTexture(spec = {}) {
 
     if (isLocked) {
       // ▸ in system colour, then a small muted padlock to its right.
-      ctx.font = '600 40px "Helvetica Neue", Helvetica, Arial, sans-serif';
+      ctx.font = CARD_GLYPH_FONT;
       ctx.fillStyle = systemColor;
       ctx.globalAlpha = 0.9;
       const linkW = ctx.measureText(linkGlyph).width;
@@ -309,7 +336,7 @@ export function createCardTexture(spec = {}) {
       glyphL = linkR - linkW - 12;
     } else {
       // Unlocked: just ▸ in system colour.
-      ctx.font = '600 40px "Helvetica Neue", Helvetica, Arial, sans-serif';
+      ctx.font = CARD_GLYPH_FONT;
       ctx.fillStyle = systemColor;
       ctx.globalAlpha = 0.9;
       ctx.fillText(linkGlyph, contentR, titleCY);
@@ -320,11 +347,12 @@ export function createCardTexture(spec = {}) {
   }
 
   // Title text (clipped to available width before the glyph).
-  // 38px (down from 40) + the 25% wider card fit ~22 uppercase chars — enough for
-  // the plain-English titles (round-3 T4) at unchanged on-screen text size.
-  ctx.font = '700 38px "Helvetica Neue", Helvetica, Arial, sans-serif';
+  // Round 4: mono 36px. Letter-spacing affects measureText, so set it BEFORE
+  // the truncation loop and reset to '0px' before drawing rows.
+  ctx.font = CARD_TITLE_FONT;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
+  if ('letterSpacing' in ctx) ctx.letterSpacing = '2px';
   const availW = glyphL - textL;
   let titleTxt = title;
   while (titleTxt.length > 1 && ctx.measureText(titleTxt).width > availW) {
@@ -337,9 +365,10 @@ export function createCardTexture(spec = {}) {
   ctx.strokeText(titleTxt, textL, titleCY);
   ctx.fillStyle = titleColor;
   ctx.fillText(titleTxt, textL, titleCY);
+  if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
 
   // --- Data rows ---
-  ctx.font = '500 30px "Helvetica Neue", Helvetica, Arial, sans-serif';
+  ctx.font = CARD_ROW_FONT;
   for (let i = 0; i < nRows; i++) {
     const row = rows[i];
     const cy = CARD_PAD_TOP + CARD_TITLE_H + CARD_ROW_H * i + CARD_ROW_H / 2;
@@ -356,7 +385,7 @@ export function createCardTexture(spec = {}) {
     if (row.color) {
       ctx.fillStyle = row.color;
     } else {
-      ctx.fillStyle = row.dim === false ? '#e6f0ff' : '#c8d6e5';
+      ctx.fillStyle = row.dim === false ? inkColor : inkDimColor;
     }
     ctx.fillText(rowTxt, contentL, cy);
   }
@@ -368,22 +397,7 @@ export function createCardTexture(spec = {}) {
   tex.generateMipmaps = true;
   tex.anisotropy = 4;
 
-  // UV regions (origin bottom-left). Title strip is the codex click target.
-  const titleTopUV = 1 - (CARD_PAD_TOP + CARD_TITLE_H) / logicalH;
-  const titleBotUV = 1 - CARD_PAD_TOP / logicalH; // not used directly
-  const regions = {
-    body: { x: 0, y: 0, w: 1, h: 1 },
-  };
-  if (codex) {
-    regions.codex = {
-      x: 0,
-      y: titleTopUV,
-      w: 1,
-      h: (titleBotUV - titleTopUV),
-    };
-  }
-
-  return { texture: tex, regions, heightFactor };
+  return { texture: tex, heightFactor };
 }
 
 /**

@@ -22,6 +22,7 @@ import { pinProgress } from './shopPin.js'; // S1 retention: pinned-upgrade prog
  import { DaughterWireframe } from './DaughterWireframe.js';
 import { StrutLabels }       from './hud/StrutLabels.js';
 import { updateDriftWarning, updateThrusterBlocks } from '../systems/CoMCalculator.js';
+import { MONO } from '../scene/labelTexture.js';
 
 /** Camera view → HUD info-level mapping */
 const VIEW_INFO_LEVELS = {
@@ -372,6 +373,53 @@ export class HUD {
     this.container.appendChild(this._weatherContainer);
     /** @type {Map<string, HTMLElement>} Active weather badge elements by type */
     this._weatherBadges = new Map();
+
+    // --- Inspection depth breadcrumb + one-time zoom hint (round 4, T5) ---
+    this._calloutBreadcrumb = document.createElement('div');
+    this._calloutBreadcrumb.id = 'hud-callout-breadcrumb';
+    Object.assign(this._calloutBreadcrumb.style, {
+      position: 'absolute',
+      bottom: '148px',
+      left: '50%',
+      transform: 'translateX(-50%)',
+      pointerEvents: 'none',
+      display: 'none',
+      fontFamily: MONO,
+      fontSize: '11px',
+      letterSpacing: '2px',
+      textAlign: 'center',
+      // Round 5: dark halo — the breadcrumb washed out over bright Earth limb
+      // (screenshots: clouds at band edge). Matches the canvas card halos.
+      textShadow: '0 0 6px rgba(2,6,12,0.95), 0 1px 3px rgba(2,6,12,0.95)',
+      zIndex: '10',
+    });
+    this.container.appendChild(this._calloutBreadcrumb);
+    this._calloutHintShown = false; // session-scoped, matches _guidedDone
+
+    // --- Inspection pane-dim (round 5) ---
+    // While callouts are active (either inspection path), ghost the HUD pane
+    // columns so the blueprint cards own the screen. The panes stay glanceable
+    // (NET/ΔV) but stop competing: screenshots showed right-rail cards sliding
+    // under the dossier/tracked panes and the old green palette clashing with
+    // the cyan blueprint chrome. ID-scoped selectors beat `.hud-active`'s
+    // `opacity: 1.0` (specificity 1,2,1 vs 0,1,0); the class is toggled from
+    // the CALLOUT_BAND_CHANGE handler below.
+    if (!document.getElementById('callout-dim-style')) {
+      const dimStyle = document.createElement('style');
+      dimStyle.id = 'callout-dim-style';
+      dimStyle.textContent = `
+        #hud-left-column, #hud-right-column, #hud-comms-panel {
+          transition: opacity 450ms ease;
+        }
+        #hud-overlay.callouts-active #hud-left-column,
+        #hud-overlay.callouts-active #hud-right-column,
+        #hud-overlay.callouts-active #hud-comms-panel {
+          opacity: 0.2;
+          pointer-events: none;
+        }
+      `;
+      document.head.appendChild(dimStyle);
+    }
 
     // --- Inject catch-effect CSS animations (Phase 1C) + detach flash (Phase 6) + codex/weather (Phase 7) ---
     if (!document.getElementById('catch-effects-style')) {
@@ -1200,6 +1248,56 @@ export class HUD {
       }
       this._missionNumber = 1;
       this._missionProfile = null;
+      // T2b: hide the callout breadcrumb and re-arm the one-time zoom hint so
+      // a new game re-teaches the depth axis.
+      if (this._calloutBreadcrumb) {
+        this._calloutBreadcrumb.style.display = 'none';
+        this._calloutHintShown = false;
+      }
+      this.container.classList.remove('callouts-active'); // restore panes
+    });
+
+    // Round 4 (T5): inspection depth breadcrumb + one-time zoom hint.
+    this._calloutHintTimer = null; // T2c: tracked so we can clear it on rebuild
+    eventBus.on(Events.CALLOUT_BAND_CHANGE, ({ band } = {}) => {
+      if (!this._calloutBreadcrumb) return;
+      // T2c: clear any pending hint timer before rebuilding or hiding.
+      if (this._calloutHintTimer) {
+        timerManager.clear(this._calloutHintTimer);
+        this._calloutHintTimer = null;
+      }
+      if (band == null) {
+        this._calloutBreadcrumb.style.display = 'none';
+        this.container.classList.remove('callouts-active'); // restore panes
+        return;
+      }
+      this.container.classList.add('callouts-active'); // ghost panes (round 5)
+      const BAND_WORD = { SYSTEM: 'SYSTEMS', PART: 'PARTS', COMPONENT: 'DETAIL' };
+      const accent = Constants.CALLOUTS?.ACCENT || '#7fd4e8';
+      const dim = Constants.CALLOUTS?.ACCENT_DIM || '#3d6e7e';
+      let html = 'INSPECT ▸ ';
+      for (const b of ['SYSTEM', 'PART', 'COMPONENT']) {
+        const word = BAND_WORD[b];
+        const lit = b === band;
+        html += `<span style="color:${lit ? accent : dim}">${word}</span>`;
+        if (b !== 'COMPONENT') html += ' · ';
+      }
+      if (band === 'COMPONENT') html += ` <span style="color:${accent}">— MAX DETAIL</span>`;
+      this._calloutBreadcrumb.innerHTML = html;
+      this._calloutBreadcrumb.style.display = 'block';
+
+      // One-time hint: fires on the first non-null band.
+      if (!this._calloutHintShown) {
+        this._calloutHintShown = true;
+        const hint = document.createElement('div');
+        hint.style.cssText = 'margin-top:4px;font-size:10px;color:rgba(127,212,232,0.5);letter-spacing:1px;';
+        hint.textContent = 'scroll in for part detail';
+        this._calloutBreadcrumb.appendChild(hint);
+        this._calloutHintTimer = timerManager.setTimeout(() => {
+          hint.remove();
+          this._calloutHintTimer = null;
+        }, 6000, { owner: this });
+      }
     });
   }
 

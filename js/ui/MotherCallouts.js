@@ -84,6 +84,7 @@ const SYSTEMS = [
   {
     id: 'POWER', label: 'POWER',
     anchor: [ 1.0 * M, 0, 0 ],
+    role: 'solar wings + hull cells',
     parts: [
       { id: 'rosa_wings', name: 'ROLL-OUT SOLAR WINGS', risk: 'GREEN', tier: 'major', codexId: 'rosa_solar_array',
         massKg: 22, priority: 9, live: 'rosa',
@@ -105,6 +106,7 @@ const SYSTEMS = [
   {
     id: 'PROPULSION', label: 'PROPULSION',
     anchor: [ 0, 0, -1.0 * M ],
+    role: 'ion + cold-gas steering',
     parts: [
       { id: 'feep', name: 'ION THRUSTERS (FEEP)', risk: 'YELLOW', tier: 'major', codexId: 'feep_thruster',
         massKg: 8, priority: 8, live: 'feep',
@@ -127,6 +129,7 @@ const SYSTEMS = [
   {
     id: 'PAYLOAD', label: 'PAYLOAD',
     anchor: [ 0, 0.10 * M, 1.05 * M ],
+    role: 'net launcher + spin-brake',
     parts: [
       { id: 'despin', name: 'SPIN-BRAKE LASER', risk: 'RED', tier: 'major', codexId: 'power_beaming',
         massKg: 9, priority: 9, live: 'despin',
@@ -142,6 +145,7 @@ const SYSTEMS = [
   {
     id: 'SENSORS', label: 'SENSORS',
     anchor: [ 0, 0.26 * M, 1.12 * M ],
+    role: 'tracking turret + cameras',
     parts: [
       { id: 'gimbal', name: 'SENSOR TURRET', risk: 'GREEN', tier: 'major', codexId: 'pose_estimation',
         massKg: 5, priority: 6, specs: ['2-axis pointing platform'],
@@ -177,6 +181,7 @@ const SYSTEMS = [
   {
     id: 'COMMS', label: 'COMMS',
     anchor: [ 0.363 * M, 0.169 * M, 0.87 * M ],
+    role: 'radio omnis + antennas',
     parts: [
       { id: 'ttc', name: 'S-BAND RADIO OMNIS', risk: 'GREEN', tier: 'major', codexId: 'comms_blackout',
         massKg: 2, priority: 5, live: 'ttc', specs: ['Pair — command + telemetry'],
@@ -194,7 +199,12 @@ const SYSTEMS = [
   },
   {
     id: 'CAPTURE', label: 'CAPTURE',
-    anchor: [ 0, 0.40 * M, 0.90 * M ],
+    // Berth groove, centreline — next to the docked daughters, the only
+    // capture hardware the player can actually SEE. The old fore-deck anchor
+    // (z=+0.90, the hinge line) pointed at the opposite end from 3 of the
+    // system's 4 parts and contradicted what it summarized (round 5).
+    anchor: [ 0, 0.35 * M, -0.75 * M ],
+    role: '4× daughter craft + berths',
     parts: [
       { id: 'berths', name: 'DAUGHTER BERTHS', risk: 'GREEN', tier: 'major', codexId: 'docking_berthing',
         massKg: 6, priority: 6, specs: ['4× — 2 large, 2 small', 'Spring ejector + hinge strut'],
@@ -259,8 +269,8 @@ const GUIDE_STEP_S = 1.1;   // seconds each system stays highlighted in the tour
 const GUIDE_HOLD_S = 0.6;   // initial hold before the tour starts
 
 const FADE_RATE = 6.0;      // opacity ease rate for band crossfades
-const LINE_OP_SCALE = 0.95; // line opacity = labelOp × this (R11: LINE_OP_FLOOR dropped — it was dead code)
-const LINE_HALF_WIDTH_FRAC = 0.0024; // leader ribbon half-width / camera-ship dist
+const LINE_OP_SCALE = 0.8;  // line opacity = labelOp × this (round 4: hairline)
+const LINE_HALF_WIDTH_FRAC = 0.0012; // leader ribbon half-width / camera-ship dist (round 4: hairline)
 
 export class MotherCallouts {
   /**
@@ -281,6 +291,9 @@ export class MotherCallouts {
     this._focusPart = null;
     this._liveCtx = null;       // late-bound live-data context (task 7)
     this._lastLiveT = 0;        // live-refresh cadence guard
+    this._bandChangedAt = 0;    // T3: timestamp of last band change (scan-in hold)
+    this._revealSeq = 0;        // T3: stagger sequence counter
+    this._nowMs = 0;            // T3: frame timestamp stored for _positionCard
 
     // Reusable scratch vectors (zero per-frame alloc).
     this._vShip = new THREE.Vector3();
@@ -374,23 +387,37 @@ export class MotherCallouts {
   // BUILD
   // --------------------------------------------------------------------------
 
-  /** Shared soft-dot texture for leader anchor markers. @private */
+  /** Shared target-bracket texture for leader anchor markers. @private */
   static _dotTexture() {
     if (MotherCallouts._dotTex) return MotherCallouts._dotTex;
     const c = document.createElement('canvas');
     c.width = c.height = 64;
     const ctx = c.getContext('2d');
-    const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
-    g.addColorStop(0.0, 'rgba(255,255,255,1)');
-    g.addColorStop(0.45, 'rgba(255,255,255,0.95)');
-    g.addColorStop(0.75, 'rgba(255,255,255,0.25)');
-    g.addColorStop(1.0, 'rgba(255,255,255,0)');
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, 64, 64);
-    const t = new THREE.CanvasTexture(c);
-    t.colorSpace = THREE.SRGBColorSpace;
-    MotherCallouts._dotTex = t;
-    return t;
+    // White — _makeDot tints via material.color, and hover brightening reads it.
+    // Round 5: thicker strokes + bigger centre dot — at DOT_SIZE 0.016 the
+    // sprite lands ~17 px at 1080p; 5 px texture strokes ≈ 1.3 px on screen,
+    // and the r=4 core keeps a solid point readable even when ticks blur over
+    // bright hull (gold MLI / white dome washed the old 3 px/r=2 version out).
+    ctx.strokeStyle = '#ffffff';
+    ctx.fillStyle = '#ffffff';
+    ctx.lineWidth = 5;
+    const t = 16; // tick length
+    const m = 4;  // margin from edge
+    // Four corner ticks (L-shaped brackets).
+    // top-left
+    ctx.beginPath(); ctx.moveTo(m, m + t); ctx.lineTo(m, m); ctx.lineTo(m + t, m); ctx.stroke();
+    // top-right
+    ctx.beginPath(); ctx.moveTo(64 - m - t, m); ctx.lineTo(64 - m, m); ctx.lineTo(64 - m, m + t); ctx.stroke();
+    // bottom-left
+    ctx.beginPath(); ctx.moveTo(m, 64 - m - t); ctx.lineTo(m, 64 - m); ctx.lineTo(m + t, 64 - m); ctx.stroke();
+    // bottom-right
+    ctx.beginPath(); ctx.moveTo(64 - m - t, 64 - m); ctx.lineTo(64 - m, 64 - m); ctx.lineTo(64 - m, 64 - m - t); ctx.stroke();
+    // Centre dot.
+    ctx.beginPath(); ctx.arc(32, 32, 4, 0, Math.PI * 2); ctx.fill();
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    MotherCallouts._dotTex = tex;
+    return tex;
   }
 
   /** Card sprite (texture assigned lazily). @private */
@@ -450,6 +477,8 @@ export class MotherCallouts {
         _cardCache: null, _railOrder: null, _targetOp: 0,
         _h: 0, _wasFocus: false, _isFocus: false,
         _anchorX: 0, _anchorY: 0, _anchorZ: 0,
+        _armGone: false, _revealAt: null,
+        _pendingSide: null, _sideT: 0,
       };
       this._applyCard(sRec); // initial static card
       this._allRecs.push(sRec);
@@ -473,6 +502,8 @@ export class MotherCallouts {
           _cardCache: null, _railOrder: null, _targetOp: 0,
           _h: 0, _wasFocus: false, _isFocus: false,
           _anchorX: 0, _anchorY: 0, _anchorZ: 0,
+          _armGone: false, _revealAt: null,
+          _pendingSide: null, _sideT: 0,
         };
         this._applyCard(rec);
         this._partLabels.push(rec);
@@ -494,7 +525,7 @@ export class MotherCallouts {
     // Daughter recs follow their docked ArmUnit (T3).
     if (def.armIndex !== undefined) {
       const arm = this._liveCtx?.armManager?.arms?.[def.armIndex];
-      if (arm && arm.state === 'DOCKED' && arm.group) {
+      if (arm && arm.state === Constants.ARM_STATES.DOCKED && arm.group) {
         arm.group.getWorldPosition(this._vTmp);
         this.player.worldToLocal(this._vTmp);
         rec.anchor.copy(this._vTmp);
@@ -564,6 +595,10 @@ export class MotherCallouts {
     const def = rec.def;
     const codex = rec.isSystem ? null : this._codexState(def);
     let rows = [];
+    // Round 5: system cards get a single dim role line — a title-only chip
+    // made the player guess what the system IS (CAPTURE was the worst case:
+    // it pointed at an invisible hinge line with no explanation).
+    if (rec.isSystem && def.role) rows.push({ text: def.role });
     if (full && !rec.isSystem) {
       // Deterministic row budget: 6 slots total.
       // Locked: reserve hint lines (1-2), fill [mass, ...specs, ...live(≤2)], append hint last. TRL dropped.
@@ -627,10 +662,12 @@ export class MotherCallouts {
     // Generate a fresh card for this variant.
     const card = createCardTexture({
       title,
-      titleColor: rec.isSystem ? rec.hue : '#e6f0ff',
+      titleColor: rec.isSystem ? rec.hue : CFG.INK,
       rows,
       riskColor: rec.isSystem ? null : rec.riskColor,
       systemColor: rec.hue,
+      inkColor: CFG.INK,
+      inkDimColor: CFG.INK_DIM,
       codex,
     });
     card.contentKey = key;
@@ -735,13 +772,20 @@ export class MotherCallouts {
       if (!this._guidedDone) this._guideT = -GUIDE_HOLD_S;
       this._band = 'SYSTEM';
       this._attachPointer();
+      eventBus.emit(Events.CALLOUT_BAND_CHANGE, { band: 'SYSTEM' });
       // Refresh all compact cards so codex lock state is current (MED-9).
       // Content-key check makes unchanged cards a no-op (R3).
-      for (const rec of this._allRecs) this._applyCard(rec, { full: false });
+      for (const rec of this._allRecs) {
+        rec._revealAt = null; // T3: no stale reveal hold across re-entry
+        rec._pendingSide = null; // T4: no stale flip across re-entry
+        rec._sideT = 0;
+        this._applyCard(rec, { full: false });
+      }
     } else {
       this._guideT = -1;
       this._focusPart = null;
       this._detachPointer();
+      eventBus.emit(Events.CALLOUT_BAND_CHANGE, { band: null });
     }
   }
 
@@ -790,12 +834,12 @@ export class MotherCallouts {
 
   /**
    * Shared raycast pick over the part labels with the camera ray already set.
-   * Returns the nearest eligible label as {rec, uv} or null. Single source for
-   * the eligibility filter so hover and click can never drift apart (review).
+   * Returns the nearest eligible rec or null. Single source for the
+   * eligibility filter so hover and click can never drift apart (review).
    * @private
    */
   _pickBestRec() {
-    let best = null, bestDist = Infinity, bestUV = null;
+    let best = null, bestDist = Infinity;
     for (const p of this._partLabels) {
       if (!p.def.codexId || !p.sprite.visible) continue;
       // Gate on whichever is larger of eased vs target opacity, so picking
@@ -805,16 +849,14 @@ export class MotherCallouts {
       if (hits.length && hits[0].distance < bestDist) {
         bestDist = hits[0].distance;
         best = p;
-        bestUV = hits[0].uv || null;
       }
     }
-    return best ? { rec: best, uv: bestUV } : null;
+    return best;
   }
 
   /**
-   * Nearest clickable label sprite under the pointer, plus the UV of the hit
-   * (mapped against the card's clickable regions).
-   * @private @returns {{rec:object, uv:THREE.Vector2}|null}
+   * Nearest clickable label sprite under the pointer.
+   * @private @returns {object|null}
    */
   _pickLabel(e) {
     if (!this.camera) return null;
@@ -831,7 +873,7 @@ export class MotherCallouts {
     if (now - this._hoverT < 100) return;   // ~10 Hz
     this._hoverT = now;
     const hit = this._pickLabel(e);
-    const rec = hit?.rec || null;
+    const rec = hit || null;
     if (rec && !this._cursorSet) {
       document.body.style.cursor = 'pointer';
       this._cursorSet = true;
@@ -858,7 +900,7 @@ export class MotherCallouts {
       -((this._pointerPos.clientY - rect.top) / rect.height) * 2 + 1,
     );
     this._raycaster.setFromCamera(this._ndc, this.camera);
-    const best = this._pickBestRec()?.rec || null;
+    const best = this._pickBestRec() || null;
     if (best !== this._hoverRec) {
       this._hoverRec = best;
       if (best && !this._cursorSet) {
@@ -888,8 +930,8 @@ export class MotherCallouts {
     const hit = this._pickLabel(e);
     // T7: the WHOLE card is clickable — hover and click now agree (the old
     // title-strip UV gate made ~⅔ of a focused card a dead zone with a hand cursor).
-    if (hit && hit.rec.def.codexId) {
-      eventBus.emit(Events.CODEX_OPEN_ENTRY, { id: hit.rec.def.codexId });
+    if (hit && hit.def.codexId) {
+      eventBus.emit(Events.CODEX_OPEN_ENTRY, { id: hit.def.codexId });
     }
   }
 
@@ -931,7 +973,7 @@ export class MotherCallouts {
     const margin = CFG.RAIL_MARGIN_NDC;
 
     // Reserve the widest rail-card width on both sides (R15). aspect × heightFactor
-    // is invariant (= CARD_W_OVER_TITLE_H ≈ 4.83) for every card, so the widest rail
+    // is invariant (= CARD_W_OVER_TITLE_H ≈ 6.04) for every card, so the widest rail
     // card is always the SIZE_MAJOR tier — a constant, no per-rec loop, no frame lag.
     const camAspect = this.camera.aspect || 1;
     const railCardW = 2 * CFG.SIZE_MAJOR * CARD_W_OVER_TITLE_H / camAspect;
@@ -956,6 +998,7 @@ export class MotherCallouts {
 
   _updateBand(distM) {
     const b = this._band;
+    const prev = b;
     if (b === 'SYSTEM') {
       if (distM < BAND.partIn) this._band = 'PART';
     } else if (b === 'PART') {
@@ -963,6 +1006,13 @@ export class MotherCallouts {
       else if (distM < BAND.compIn) this._band = 'COMPONENT';
     } else {
       if (distM > BAND.compOut) this._band = 'PART';
+    }
+    if (this._band !== prev) {
+      this._bandChangedAt = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+      this._revealSeq = 0;
+      // T3: clear stale reveal holds so every rec gets a fresh stagger slot.
+      for (const rec of this._allRecs) rec._revealAt = null;
+      eventBus.emit(Events.CALLOUT_BAND_CHANGE, { band: this._band });
     }
   }
 
@@ -1049,6 +1099,7 @@ export class MotherCallouts {
 
     // Refresh the focused card's live data at ≤ LIVE_REFRESH_HZ.
     const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    this._nowMs = now;
     const liveDue = (now - this._lastLiveT) >= (1000 / (CFG.LIVE_REFRESH_HZ || 2));
     if (liveDue) this._lastLiveT = now;
 
@@ -1088,6 +1139,14 @@ export class MotherCallouts {
 
       rec._targetOp = targetOp;
 
+      // T3: scan-in stagger — assign a reveal timestamp when a card transitions
+      // from hidden to visible after a band change. 150 ms hold so the old band
+      // clears, then 40 ms/card stagger capped at 300 ms.
+      if (rec._targetOp > 0.02 && rec.op <= 0.02 && rec._revealAt == null) {
+        rec._revealAt = this._bandChangedAt + 150 + Math.min(300, (this._revealSeq++) * 40);
+      }
+      if (rec.op > 0.05) rec._revealAt = null;
+
       // Card content: focused → full detail card, else compact (R14: no hover variant).
       if (isFocus) {
         if (liveDue || !rec._wasFocus) this._applyCard(rec, { full: true });
@@ -1097,6 +1156,22 @@ export class MotherCallouts {
         rec._wasFocus = false;
       }
 
+      // T4: pending side-flip — commit when faded out, force fade otherwise.
+      // Placed BEFORE the hidden early-continue so a rec fading out for a band
+      // change while a flip is pending can't get stuck invisible.
+      if (rec._pendingSide) {
+        if (rec.op <= 0.05) {
+          rec.side = rec._pendingSide;
+          rec._pendingSide = null;
+          rec._railOrder = null;
+          rec.primed = false;
+          rec._sideT = now;
+        } else {
+          targetOp = 0;
+          rec._targetOp = 0;
+        }
+      }
+
       if (targetOp <= 0.001 && rec.op <= 0.02) {
         // Fully hidden — still ease opacity down, keep off rails.
         rec._isFocus = false;
@@ -1104,6 +1179,9 @@ export class MotherCallouts {
         if (rec.op <= 0.02) {
           rec.primed = false; // reappear snaps to new slot, no sweep
           rec._railOrder = null; // reset rail ordinal when hidden
+          rec._pendingSide = null; // T4: clear pending flip on hide
+          rec.side = null; // T4: fresh side assignment on reappear (sets _sideT=now)
+          rec._sideT = 0;
         }
         this._hideRec(rec);
         continue;
@@ -1113,15 +1191,20 @@ export class MotherCallouts {
       rec._isFocus = isFocus;
       if (isFocus) continue;
 
-      // Side assignment with hysteresis.
+      // Side assignment with hysteresis + 1.5 s dwell (T4: fade-swap, never sweep).
       const desired = (ax < this._shipNDC.x) ? 'L' : 'R';
+      // Cancel a queued flip if the anchor reverted back to the committed side.
+      if (rec._pendingSide != null && desired === rec.side) {
+        rec._pendingSide = null;
+      }
       if (rec.side == null) {
         rec.side = desired;
         rec._railOrder = null; // reset ordinal on side entry
+        rec._sideT = now;
       } else if (rec.side !== desired
-        && Math.abs(ax - this._shipNDC.x) > CFG.SIDE_HYSTERESIS) {
-        rec.side = desired;
-        rec._railOrder = null; // reset ordinal on side change
+        && Math.abs(ax - this._shipNDC.x) > CFG.SIDE_HYSTERESIS
+        && (now - rec._sideT) > 1500) {
+        rec._pendingSide = desired; // commit happens in the block above next frames
       }
 
       (rec.side === 'L' ? leftList : rightList).push(rec);
@@ -1248,8 +1331,20 @@ export class MotherCallouts {
   _placeFocus(dt, ease, fadeK) {
     const rec = this._focusPart;
     if (!rec || !rec._isFocus) return;
-    const side = (rec._anchorX < this._shipNDC.x) ? 'L' : 'R';
-    rec.side = side;
+    const now = this._nowMs;
+    const desired = (rec._anchorX < this._shipNDC.x) ? 'L' : 'R';
+    // T4: same 1.5 s dwell as rail flips — keep the last committed side until
+    // dwell + hysteresis allow the change.
+    if (rec.side == null) {
+      rec.side = desired;
+      rec._sideT = now;
+    } else if (rec.side !== desired
+      && Math.abs(rec._anchorX - this._shipNDC.x) > CFG.SIDE_HYSTERESIS
+      && (now - rec._sideT) > 1500) {
+      rec.side = desired;
+      rec._sideT = now;
+    }
+    const side = rec.side;
 
     // Clamp focus card to viewport, accounting for card width on the extending side.
     // aspect × heightFactor = CARD_W_OVER_TITLE_H for every card (R15).
@@ -1304,9 +1399,11 @@ export class MotherCallouts {
     const aspect = CARD_W_OVER_TITLE_H / heightFactor;
     rec.sprite.scale.set(h * aspect, h, 1);
 
-    // Ease opacity. Hover lifts it a little; the colour lift below carries the
-    // affordance at full opacity where this boost is a no-op.
-    rec.op += (rec._targetOp - rec.op) * fadeK;
+    // Ease opacity. T3: hold at 0 while waiting for the scan-in reveal slot.
+    // Hover lifts it a little; the colour lift below carries the affordance at
+    // full opacity where this boost is a no-op.
+    const tgt = (rec._revealAt != null && this._nowMs < rec._revealAt) ? 0 : rec._targetOp;
+    rec.op += (tgt - rec.op) * fadeK;
     const hovered = this._hoverRec === rec;
     const op = hovered ? Math.min(1, rec.op + 0.15) : rec.op;
     const visible = op > 0.02;
@@ -1390,6 +1487,12 @@ export class MotherCallouts {
 
   dispose() {
     this._detachPointer();
+    // T2a: if inspection was active, tell the HUD breadcrumb to hide before
+    // we tear down — otherwise it stays on screen permanently.
+    if (this._active) {
+      eventBus.emit(Events.CALLOUT_BAND_CHANGE, { band: null });
+      this._active = false;
+    }
     eventBus.off?.(Events.CAMERA_VIEW_CHANGE, this._onViewChange);
     eventBus.off?.(Events.INSPECT_HULL_OUTLINE, this._onHullOutline);
     for (const s of this._allRecs) {

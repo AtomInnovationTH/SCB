@@ -184,6 +184,14 @@ export const Events = {
    */
   INSPECT_HULL_OUTLINE: 'inspection:hullOutline',
   /**
+   * CALLOUT_BAND_CHANGE (round 4, 2026-07-26).
+   * Fired by MotherCallouts when the inspection zoom band changes (SYSTEM /
+   * PART / COMPONENT) and when inspection activates/deactivates. Payload:
+   * `{ band: 'SYSTEM'|'PART'|'COMPONENT'|null }`. HUD listens to show a depth
+   * breadcrumb + one-time zoom hint.
+   */
+  CALLOUT_BAND_CHANGE: 'callout:bandChange',
+  /**
    * MOTHER_INSPECTION_ENGAGED (2026-06-04 onboarding).
    * Fired ONCE each time the OVERVIEW zoom-driven inspection sub-state ENGAGES
    * for the mothership (i.e. the player pushed in close enough that the hull
