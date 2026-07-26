@@ -26,7 +26,8 @@ import { orbitToSceneCartesian } from '../entities/OrbitalMechanics.js';
 import { computeStartOrbit } from './startOrbitMath.js';
 import { settingsManager } from './SettingsManager.js';
 import { cityLabels } from '../scene/CityLabels.js';
-import { launchCameo, padFor, CAMEO_DURATION_S } from '../scene/LaunchCameo.js';
+import { launchCameo, padFor, LAUNCH_FLASH_S } from '../scene/LaunchCameo.js';
+import { ambientLaunchScheduler } from './AmbientLaunchScheduler.js';
 import { VIEW_INFO_LEVELS } from '../ui/HUD.js';
 import {
   resolveEffectRoute,
@@ -1199,6 +1200,14 @@ class GameFlowManager {
     // hold is gone; guidance now trickles in AFTER the boot comms + settle, and
     // the two lines are split into separate timers so they never land together.
     eventBus.on(Events.GAME_STATE_CHANGE, ({ to }) => {
+      // Any ORBITAL_VIEW entry WITHOUT the opening beats (Continue, or
+      // returning from a screen): no scripted cameo is coming, so the ambient
+      // scheduler's defer window is pointless — open it immediately. Without
+      // this, Continue sessions waited out the 30 s defer and the watchable
+      // window for pads like Sriharikota-on-th (~17–26 s) closed unfired.
+      if (to === 'ORBITAL_VIEW' && !this._firstOrbitalView) {
+        ambientLaunchScheduler.skipScriptedDefer();
+      }
       if (to === 'ORBITAL_VIEW' && this._firstOrbitalView) {
         this._firstOrbitalView = false;
 
@@ -1237,8 +1246,10 @@ class GameFlowManager {
         }, 14000, { owner: this });
 
         // Launch cameo — a single plume rises from the player's home spaceport
-        // during the opening pass. Gated on the pad being on the visible
-        // hemisphere; one silent retry, then give up (no distraction mid-game).
+        // during the opening pass. The pad may not be above the horizon at the
+        // 7 s mark (e.g. en/Canaveral rises ~15 s in), so poll every 2 s for up
+        // to 90 s and fire the moment it's in view; give up silently after that
+        // (no distraction mid-game).
         timerManager.setTimeout(() => {
           if (this._firstTimeComms.has('orbital_view_cameo')) return;
           this._firstTimeComms.add('orbital_view_cameo');
@@ -1247,25 +1258,30 @@ class GameFlowManager {
           const pad = padFor(lang && lang.code, cityLabels.getCities());
           if (!pad) return;
           const announce = () => {
-            // Tie the 3D event to the reference layer: the pad's label pill
-            // breathes cyan for the plume's duration ("THAT'S where it launched").
-            cityLabels.pulse(pad.name, CAMEO_DURATION_S);
+            // Tie the 3D event to the reference layer: a short cyan flash on
+            // the pad's pill at ignition ("launching NOW") — then the plume
+            // itself holds the eye.
+            cityLabels.pulse(pad.name, LAUNCH_FLASH_S);
             eventBus.emit(Events.COMMS_MESSAGE, {
               sender: 'SPACECRAFT',
               text: `${pad.vehicle} lifting off from ${pad.name} — 350 km below you.`,
               priority: 'info',
             });
           };
-          const fired = launchCameo.fire(pad);
-          if (fired) {
-            announce();
-          } else {
-            // Pad not in view yet — retry once as the pass carries it into view.
-            timerManager.setTimeout(() => {
-              const ok = launchCameo.fire(pad);
-              if (ok) announce();
-            }, 2000, { owner: this });
-          }
+          let tries = 0;
+          const attempt = () => {
+            if (launchCameo.fire(pad)) {
+              // The scripted fire owns this pad for the pass — ambient must
+              // not double-fire it when the pad's watchable edge registers.
+              ambientLaunchScheduler.markFiredExternally(pad.name);
+              announce();
+              return;
+            }
+            // 45 × 2 s = 90 s of coverage — a pad rising from behind the limb
+            // at spawn (en ≈ 15 s, ja ≈ 3 s) is caught well inside the pass.
+            if (++tries < 45) timerManager.setTimeout(attempt, 2000, { owner: this });
+          };
+          attempt();
         }, 7000, { owner: this });
       }
     });

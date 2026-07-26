@@ -96,6 +96,7 @@ import { missionMilestones } from './systems/MissionMilestones.js';
 import { cityLabels } from './scene/CityLabels.js';
 import { launchCameo } from './scene/LaunchCameo.js';
 import { menuOrbitPreview } from './systems/MenuOrbitPreview.js';
+import { ambientLaunchScheduler } from './systems/AmbientLaunchScheduler.js';
 import { TeachingOverlay } from './ui/TeachingOverlay.js';
 import { OnboardingDirector } from './systems/OnboardingDirector.js';
 import { GuidanceDirector } from './systems/GuidanceDirector.js';
@@ -1008,6 +1009,18 @@ async function init() {
     // A reset within the 16 s cameo window must clear _active, or the next
     // game's fire() is silently refused (review finding).
     eventBus.on(Events.GAME_RESET, () => launchCameo.reset());
+
+    // --- Ambient launches: any pad fires a plume as it orbits into view
+    // (e.g. Sriharikota rises ~30 s into the Thai orbit). Silent by design —
+    // the pad's label pill pulses instead of a comms line. Cooldown-limited.
+    ambientLaunchScheduler.init({
+      camera,
+      parent: earth.getGroup(),
+      radius: Constants.EARTH_RADIUS,
+      mirrorLon: true,
+      cities: cityLabels.getCities(),
+      canFire: () => !(strategicMap && strategicMap.isOpen()),
+    });
   }).catch((e) => console.warn('[main] cityLabels:', e));
 
   // --- Input Manager ---
@@ -1538,6 +1551,8 @@ async function init() {
         cameraSystem.inspection.distance = distM * 1e-5;
         return { view: cameraSystem.currentView, distM };
       };
+      // Debug handle for click-path / layout introspection (codex click debug).
+      window.__callouts = motherCallouts;
 
       // ── Deterministic auto-capture at net FSM key beats ──
       let _autoOn = _shotParams.get('shotauto') === '1' || _shotParams.has('shotauto');
@@ -1867,6 +1882,7 @@ function gameLoop(timestamp) {
   // UX-11 #5: city-label cull/fade (no-op while hidden)
   try { cityLabels.update(); } catch (e) { console.error('[GameLoop] cityLabels:', e); }
   try { launchCameo.update(dt); } catch (e) { console.error('[GameLoop] launchCameo:', e); }
+  try { ambientLaunchScheduler.update(dt); } catch (e) { console.error('[GameLoop] ambientLaunch:', e); }
   try { menuOrbitPreview.update(dt); } catch (e) { console.error('[GameLoop] menuOrbitPreview:', e); }
 
   // --- Update entities only in active gameplay states ---

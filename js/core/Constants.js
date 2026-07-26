@@ -943,10 +943,10 @@ export const Constants = {
     STOW_DEPLOY_STATE_MACHINE: false,  // ST-9.10 — arm stow/deploy gating
     LAUNCH_SEQUENCE:           false,  // ST-9.11 — launch lock cinematic
     // Scripted launch-plume cameo from the player's home spaceport during the
-    // opening orbital pass (js/scene/LaunchCameo.js). Ambient random launches
-    // are a separate, reserved flag — the scheduler is not built yet.
+    // opening orbital pass (js/scene/LaunchCameo.js). AMBIENT extends it: any
+    // pad fires a plume as it orbits into visual range (rate-limited, silent).
     LAUNCH_CAMEO:              true,
-    LAUNCH_CAMEO_AMBIENT:      false,
+    LAUNCH_CAMEO_AMBIENT:      true,
     COM_TRACKING:              false,  // ST-9.12 — center-of-mass tracking
     THRUSTER_INTERLOCK:        false,  // ST-9.12 — plume geometry check
     SEMI_AUTO_AIM:             true,   // ST-9.3  — Mother auto-rotation aim (aim-before-launch)

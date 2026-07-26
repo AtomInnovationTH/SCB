@@ -41,20 +41,77 @@ const TRAIL_POINTS = 32;
 const MAX_OPACITY = 0.7;
 
 /**
- * Per-language home pad. Each is verified to sit inside that language's
- * ~19° starting window (great-circle Δ from the spawn anchor), so the cameo is
- * actually visible when it fires. `azimuthDeg` is the launch heading.
- * Coordinates are NOT stored here — they come from the shared cities list
- * (data/cities.json, kind:'launch', matched by name) so a data correction
- * can't desync the cameo from the pad's city label (review finding).
+ * Pill-flash duration at ignition (seconds). The flash is a short "launching
+ * NOW" cue that pulls the eye to the pad — then the plume itself holds it.
+ * A flash that runs the whole plume duration competes with the plume.
+ */
+export const LAUNCH_FLASH_S = 3.5;
+
+/**
+ * Fire gate: a pad launches the instant its label pill BEGINS to fade into
+ * view (city labels fade in over fd ∈ [0, 0.55]; fd = 0 is the geometric
+ * horizon). At 10°/15 s ground speed, 0.15 cost ~8.5 s of "pill visible, no
+ * launch" (owner: "Expecting launch IMMEDIATELY when the city pill first
+ * begins to fade into view"). 0.03 sits a hair above the horizon so the
+ * plume's climb emerges over the limb as the pill appears.
+ */
+export const FIRE_GATE = 0.03;
+
+/**
+ * Max simultaneous plumes. The Thai opening needs two: Wenchang (scripted,
+ * 7 s) is still climbing when Sriharikota's pill appears (~17 s) and the
+ * ambient launch must fire immediately rather than wait out the first plume.
+ */
+export const MAX_PLUMES = 2;
+
+/**
+ * Frustum margin for the visibility gate. 1.0 = exact frame edge; 1.1 lets the
+ * ignition flash start just as the pad reaches the visible edge rather than
+ * popping in from off-screen.
+ */
+export const FRAME_MARGIN = 1.1;
+
+// Scratch for the projection in launchVisible (no per-call allocation).
+const _ndc = new THREE.Vector3();
+
+/**
+ * THE visibility gate, shared by fire() and the ambient scheduler: the pad is
+ * both above the horizon (cityFacingDot > FIRE_GATE) AND inside the camera
+ * frustum (NDC within FRAME_MARGIN). A launch the player cannot see is a bug,
+ * not a feature — measured 2026-07-26: Wenchang is NEVER on screen from the
+ * Thai chase view (NDC x 1.4–8.5), and Sriharikota's on-screen window on th
+ * is only ~17–26 s, so firing on facing-dot alone put plumes off-frame.
+ * @param {THREE.Vector3} padWorld — pad world position
+ * @param {THREE.Vector3} centre — Earth centre (world)
+ * @param {THREE.Vector3} camPos — camera world position
+ * @param {THREE.Camera} camera — for projection
+ * @param {number} [margin=FRAME_MARGIN]
+ * @returns {boolean}
+ */
+export function launchVisible(padWorld, centre, camPos, camera, margin = FRAME_MARGIN) {
+  if (cityFacingDot(padWorld, centre, camPos) <= FIRE_GATE) return false;
+  _ndc.copy(padWorld).project(camera);
+  return _ndc.z < 1 && Math.abs(_ndc.x) <= margin && Math.abs(_ndc.y) <= margin;
+}
+
+/**
+ * Per-language home pad for the SCRIPTED opening cameo. Chosen by measured
+ * on-screen visibility from the chase view (launchVisible), not map distance —
+ * the old distance-based picks were wrong where it mattered: Wenchang is NEVER
+ * in frame from the th orbit (owner report), and hi's Sriharikota only enters
+ * the frame ~518 s in, so hi gets Baikonur (visible at ~18 s). pt has NO pad
+ * visible in the opening window, so it gets no scripted cameo — the ambient
+ * scheduler fires Alcantara when it enters the frame (~514 s).
+ * `azimuthDeg` is the launch heading. Coordinates are NOT stored here — they
+ * come from the shared cities list (data/cities.json, kind:'launch', matched
+ * by name) so a data correction can't desync the cameo from the pad's label.
  */
 export const CAMEO_PADS = {
   en: { name: 'Cape Canaveral', vehicle: 'Falcon 9', azimuthDeg: 90 },
-  th: { name: 'Wenchang', vehicle: 'Long March 5', azimuthDeg: 100 },
+  th: { name: 'Sriharikota', vehicle: 'PSLV', azimuthDeg: 140 },
   ja: { name: 'Tanegashima', vehicle: 'H3', azimuthDeg: 100 },
   es: { name: 'El Arenosillo', vehicle: 'sounding rocket', azimuthDeg: 230 },
-  pt: { name: 'Alcantara', vehicle: 'VLS', azimuthDeg: 80 },
-  hi: { name: 'Sriharikota', vehicle: 'PSLV', azimuthDeg: 140 },
+  hi: { name: 'Baikonur', vehicle: 'Soyuz', azimuthDeg: 60 },
   ta: { name: 'Sriharikota', vehicle: 'PSLV', azimuthDeg: 140 },
 };
 
@@ -133,6 +190,19 @@ export function cameoIntensity(sunDot) {
   return Math.max(0.45, Math.min(1.0, v));
 }
 
+/**
+ * Limb compensation for the cameo. A pad seen at grazing angle (small facing
+ * dot) is ~2000 km away and heavily foreshortened, so the plume is boosted in
+ * brightness and scale — physically defensible (twilight limb plumes are
+ * famously bright), and what makes the th/hi cameos readable at all.
+ * @param {number} facingDot — cityFacingDot of the pad (0 = horizon, 1 = nadir)
+ * @returns {number} multiplier ∈ [1.0, 1.8] (fd ≥ 0.5 → 1.0, fd ≤ 0 → 1.8)
+ */
+export function limbBoost(facingDot) {
+  const k = Math.max(0, Math.min(1, 1 - facingDot / 0.5));
+  return 1 + 0.8 * k;
+}
+
 // Module scratch vectors (no per-frame allocation).
 const _v = new THREE.Vector3();
 const _c = new THREE.Vector3();
@@ -143,13 +213,17 @@ const _trailPt = { x: 0, y: 0, z: 0, alt: 0 };
 export class LaunchCameo {
   constructor() {
     this._layer = null;
-    this._active = false;
-    this._t = 0;
-    this._pad = null;
-    this._sprite = null;
-    this._trail = null;
-    this._trailPos = null;
+    // Plume slots (pool of MAX_PLUMES). Each: {active, t, pad, padWorld,
+    // sprite, trail, trailPos}. Meshes are built lazily per slot on first use.
+    this._plumes = [];
+    for (let i = 0; i < MAX_PLUMES; i++) {
+      this._plumes.push({ active: false, t: 0, pad: null, padWorld: null, sprite: null, trail: null, trailPos: null });
+    }
+    this.firedOnce = false;   // set on first successful fire(); read by the ambient scheduler
   }
+
+  /** @returns {boolean} true while any plume is active (compat for callers). */
+  get _active() { return this._plumes.some((p) => p.active); }
 
   /**
    * Attach the cameo to an Earth group.
@@ -167,76 +241,99 @@ export class LaunchCameo {
   }
 
   /**
-   * Fire the cameo from a pad, if the pad is on the visible hemisphere.
+   * Fire the cameo from a pad, if the pad is on the visible hemisphere and a
+   * plume slot is free (up to MAX_PLUMES concurrent).
    * @param {{lat:number,lon:number,name:string,vehicle:string,azimuthDeg?:number}} pad
-   * @returns {boolean} true if the cameo started, false if gated out
+   * @returns {boolean} true if the cameo started, false if gated out / pool full
    */
   fire(pad) {
-    if (!this._layer || this._active || !pad) return false;
+    if (!this._layer || !pad) return false;
     if (!Constants.FEATURE_FLAGS.LAUNCH_CAMEO) return false;
+    const slot = this._plumes.find((p) => !p.active);
+    if (!slot) return false;
     const { parent, radius, camera, mirrorLon } = this._layer;
 
-    // Hemisphere gate: only fire when the pad faces the camera.
+    // Gate: launch only when the pad is BOTH above the horizon AND on screen —
+    // a plume outside the frustum is invisible by definition (owner: "why am I
+    // not seeing the launch", 2026-07-26).
     const lonDeg = mirrorLon ? -pad.lon : pad.lon;
     const surf = latLonToPosition(pad.lat, lonDeg, radius);
     _v.set(surf.x, surf.y, surf.z);
     parent.localToWorld(_v);
     parent.getWorldPosition(_c);
     camera.getWorldPosition(this._camPos || (this._camPos = new THREE.Vector3()));
-    if (cityFacingDot(_v, _c, this._camPos) <= 0.15) return false;
+    if (!launchVisible(_v, _c, this._camPos, camera)) return false;
 
-    this._pad = pad;
-    this._t = 0;
-    this._active = true;
-    this._build();
+    slot.pad = pad;
+    slot.t = 0;
+    slot.active = true;
+    /** Set on the first successful fire() since the last reset(). The ambient
+     * scheduler defers to the scripted opening cameo until this is true. */
+    this.firedOnce = true;
+    // Cache the pad's world position for the per-frame limb-boost in update().
+    slot.padWorld = slot.padWorld || new THREE.Vector3();
+    slot.padWorld.copy(_v);
+    this._build(slot);
     return true;
   }
 
-  /** @private Build the sprite + trail (lazily, on first fire). */
-  _build() {
+  /** @private Build a slot's sprite + trail (lazily, on first fire). */
+  _build(slot) {
     const { parent } = this._layer;
-    if (!this._sprite) {
+    if (!slot.sprite) {
       const map = getRadialGlowTexture({ size: 64, coreStop: 0.0, midStop: 0.35, midAlpha: 0.5 });
       const mat = new THREE.SpriteMaterial({
         map, color: 0xfff2c8, blending: THREE.AdditiveBlending,
         depthWrite: false, transparent: true, opacity: 0,
       });
-      this._sprite = new THREE.Sprite(mat);
-      this._sprite.scale.setScalar(0.06);
-      parent.add(this._sprite);
+      slot.sprite = new THREE.Sprite(mat);
+      slot.sprite.scale.setScalar(0.06);
+      parent.add(slot.sprite);
 
       const geo = new THREE.BufferGeometry();
-      this._trailPos = new Float32Array(TRAIL_POINTS * 3);
-      geo.setAttribute('position', new THREE.BufferAttribute(this._trailPos, 3));
+      slot.trailPos = new Float32Array(TRAIL_POINTS * 3);
+      geo.setAttribute('position', new THREE.BufferAttribute(slot.trailPos, 3));
       const colors = new Float32Array(TRAIL_POINTS * 3);
       geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
       const lmat = new THREE.LineBasicMaterial({
         vertexColors: true, blending: THREE.AdditiveBlending,
         depthWrite: false, transparent: true, opacity: 0,
       });
-      this._trail = new THREE.Line(geo, lmat);
-      this._trail.frustumCulled = false;
-      parent.add(this._trail);
+      slot.trail = new THREE.Line(geo, lmat);
+      slot.trail.frustumCulled = false;
+      parent.add(slot.trail);
     }
   }
 
   /**
-   * Per-frame update. Advances the ascent, fades the trail, frees at the end.
+   * Per-frame update. Advances every active plume, frees finished slots.
    * @param {number} dt — seconds
    */
   update(dt) {
-    if (!this._active || !this._layer || !this._sprite) return;
-    this._t += dt;
-    const t = this._t / CAMEO_DURATION_S;
-    if (t >= 1) { this._end(); return; }
+    if (!this._layer) return;
+    for (const slot of this._plumes) {
+      if (slot.active) this._updatePlume(slot, dt);
+    }
+  }
 
-    const { radius, mirrorLon, sunLight } = this._layer;
-    const pad = this._pad;
+  /** @private Advance one plume slot. */
+  _updatePlume(slot, dt) {
+    slot.t += dt;
+    const t = slot.t / CAMEO_DURATION_S;
+    if (t >= 1) { this._end(slot); return; }
+
+    const { radius, mirrorLon, sunLight, camera, parent } = this._layer;
+    const pad = slot.pad;
+
+    // Limb compensation: grazing-angle pads get a bigger, brighter plume.
+    parent.getWorldPosition(_c);
+    camera.getWorldPosition(this._camPos || (this._camPos = new THREE.Vector3()));
+    const boost = limbBoost(cityFacingDot(slot.padWorld, _c, this._camPos));
 
     // Head position.
     const head = ascentPoint(pad.lat, pad.lon, radius, t, mirrorLon, pad.azimuthDeg, _headPt);
-    this._sprite.position.set(head.x, head.y, head.z);
-    this._sprite.scale.setScalar(0.06 + 0.12 * t);
+    slot.sprite.position.set(head.x, head.y, head.z);
+    slot.sprite.scale.setScalar((0.06 + 0.12 * t) * boost);
 
     // Brightness from sun geometry (brightest near the terminator).
     let intensity = 0.8;
@@ -246,20 +343,25 @@ export class LaunchCameo {
       const sunDot = (head.x * sd.x + head.y * sd.y + head.z * sd.z) / nLen;
       intensity = cameoIntensity(sunDot);
     }
-    // Fade in over the first 10%, out over the last 25%.
-    const envelope = Math.min(1, t / 0.1) * (1 - Math.max(0, (t - 0.75) / 0.25));
-    const op = Math.min(MAX_OPACITY, intensity * envelope);
-    this._sprite.material.opacity = op;
+    // Ignition is near-instant (real launches are bright immediately) — a
+    // 4% fade-in (0.64 s) so the flash is visible the moment it matters;
+    // then fade out over the last 25%.
+    const envelope = Math.min(1, t / 0.04) * (1 - Math.max(0, (t - 0.75) / 0.25));
+    // Opacity cap rises with the boost: 0.70 steep (the original restraint)
+    // → 0.85 at the limb, where the extra brightness is spent on readability.
+    const cap = MAX_OPACITY + 0.15 * (boost - 1) / 0.8;
+    const op = Math.min(cap, intensity * envelope * boost);
+    slot.sprite.material.opacity = op;
 
     // Trail: sample the path behind the head, alpha ramping down the tail.
-    const posAttr = this._trail.geometry.attributes.position;
-    const colAttr = this._trail.geometry.attributes.color;
+    const posAttr = slot.trail.geometry.attributes.position;
+    const colAttr = slot.trail.geometry.attributes.color;
     for (let i = 0; i < TRAIL_POINTS; i++) {
       const ti = t * (i / (TRAIL_POINTS - 1));
       const p = ascentPoint(pad.lat, pad.lon, radius, ti, mirrorLon, pad.azimuthDeg, _trailPt);
-      this._trailPos[i * 3] = p.x;
-      this._trailPos[i * 3 + 1] = p.y;
-      this._trailPos[i * 3 + 2] = p.z;
+      slot.trailPos[i * 3] = p.x;
+      slot.trailPos[i * 3 + 1] = p.y;
+      slot.trailPos[i * 3 + 2] = p.z;
       const a = (i / (TRAIL_POINTS - 1)) * op;
       colAttr.array[i * 3] = a;
       colAttr.array[i * 3 + 1] = a * 0.92;
@@ -267,35 +369,38 @@ export class LaunchCameo {
     }
     posAttr.needsUpdate = true;
     colAttr.needsUpdate = true;
-    this._trail.material.opacity = 1;   // alpha carried per-vertex
+    slot.trail.material.opacity = 1;   // alpha carried per-vertex
   }
 
-  /** @private End the cameo and hide the meshes. */
-  _end() {
-    this._active = false;
-    if (this._sprite) this._sprite.material.opacity = 0;
-    if (this._trail) this._trail.material.opacity = 0;
+  /** @private End a plume and free its slot. */
+  _end(slot) {
+    slot.active = false;
+    if (slot.sprite) slot.sprite.material.opacity = 0;
+    if (slot.trail) slot.trail.material.opacity = 0;
   }
 
   /**
    * Force-reset on GAME_RESET. Without this, a reset within the 16 s cameo
-   * window left `_active` stuck true and the next game's fire() silently
+   * window left plumes stuck active and the next game's fire() silently
    * returned false — dropping the cameo and its comms line (review finding).
    */
   reset() {
-    this._end();
+    this.firedOnce = false;
+    for (const slot of this._plumes) this._end(slot);
   }
 
   /** Remove meshes from the parent. */
   dispose() {
-    if (this._layer && this._sprite) {
-      this._layer.parent.remove(this._sprite);
-      this._layer.parent.remove(this._trail);
+    if (this._layer) {
+      for (const slot of this._plumes) {
+        if (slot.sprite) this._layer.parent.remove(slot.sprite);
+        if (slot.trail) this._layer.parent.remove(slot.trail);
+        slot.sprite = null;
+        slot.trail = null;
+        slot.active = false;
+      }
     }
-    this._sprite = null;
-    this._trail = null;
     this._layer = null;
-    this._active = false;
   }
 }
 
