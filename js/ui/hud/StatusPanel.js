@@ -10,6 +10,7 @@ import { Events } from '../../core/Events.js';
 import { powerDistribution } from '../../systems/PowerDistribution.js';
 import { tetherReel } from '../../systems/TetherReel.js';
 import { BridleRing } from '../../entities/BridleRing.js';
+import { captureNetSystem } from '../../entities/CaptureNet.js';
 import { PaneChrome } from './PaneChrome.js';
 
 // ST-6.6: Active-tool → NASA TRL metadata used to live here, feeding a
@@ -669,6 +670,11 @@ export class StatusPanel {
 
     // ST-1.3: Update lasso cooldown ring at 10Hz for smooth arc depletion
     this._updateNetDigest();
+
+    // Mother pod cooldown countdown (§12) — tick at 10 Hz so the ·Ns suffix
+    // clears itself when the cooldown expires (the digest is otherwise
+    // event-driven and would show a stale countdown until the next shot).
+    if (Array.isArray(this._motherPods)) this._updateMotherPodDigest();
   }
 
   /** Re-render the arm status panel (call on arm state-change events). */
@@ -814,6 +820,33 @@ export class StatusPanel {
     count.textContent = `${nets}/${maxNets}`;
     count.style.color = color;
     seg.style.color = color;
+
+    // Mother-net-reel plan §4.14/§12: surface the pod reload cooldown, which
+    // previously had NO HUD reader — a cooling pod looked identical to a
+    // ready one until the player pressed N and ate the refusal. Polled from
+    // the system (10 Hz update cadence) and appended as ` · Ns` while any
+    // pod is cooling. Deliberately separate from the count so "no ammo"
+    // (red 0/max) and "reloading" (amber ·Ns) never conflate.
+    const cd = (typeof captureNetSystem?.getCooldown === 'function')
+      ? Math.max(captureNetSystem.getCooldown('pod', 0), captureNetSystem.getCooldown('pod', 1))
+      : 0;
+    if (cd > 0) {
+      count.textContent = `${nets}/${maxNets} ·${Math.ceil(cd)}s`;
+      count.style.color = '#ffaa00';
+    }
+
+    // §8 A2 launcher-state indicator: a berthed catch blocks the launcher
+    // independently of ammo and cooldown. Explicit BERTHED tag — never faked
+    // by zeroing the count (which would conflate "no ammo" with "blocked").
+    const docked = (typeof captureNetSystem?.getDockedCatch === 'function')
+      ? captureNetSystem.getDockedCatch() : null;
+    if (docked) {
+      count.textContent = `${nets}/${maxNets} BERTHED`;
+      count.style.color = '#66ddff';
+      seg.title = 'Catch berthed at the launcher — [K] jettison';
+    } else {
+      seg.title = 'Mother Large Net pods (whale hunts)';
+    }
   }
 
   /** Clean up DOM elements appended outside the HUD container. */
@@ -1383,6 +1416,11 @@ export class StatusPanel {
         <span>Mass:</span>
         <span>${mb.wetMass} kg</span>
       </div>
+      ${mb.berthedMass > 0 ? `
+      <div style="display:flex;justify-content:space-between;color:#ffaa00;">
+        <span>Berthed:</span>
+        <span>+${mb.berthedMass} kg</span>
+      </div>` : ''}
       <div style="display:flex;justify-content:space-between;opacity:0.5;font-size:10px;">
         <span>Daughters: ${mb.dockedArmMass}kg docked</span>
         <span>${mb.deployedArmMass}kg out</span>

@@ -1774,8 +1774,18 @@ export class ArmManager {
       }
     }
 
-    const wetMass = coreDry + xenonCurrent + coldGasCurrent + dockedArmMass;
-    const dryMass = coreDry + dockedArmMass;
+    // Mother-net-reel plan §4.16: a berthed whale is real mass the Tsiolkovsky
+    // readout and the autopilot's pre-engage ΔV gate must both see. Add it to
+    // wetMass AND dryMass (it rides along whether or not the tanks are full —
+    // it is not propellant). Without this the HUD promises ΔV the laden ship
+    // can no longer deliver and the AP happily engages.
+    const berthedMass = (this.playerSatellite
+        && this.playerSatellite._captureNetSystem
+        && typeof this.playerSatellite._captureNetSystem.getBerthedMassKg === 'function')
+      ? this.playerSatellite._captureNetSystem.getBerthedMassKg() : 0;
+
+    const wetMass = coreDry + xenonCurrent + coldGasCurrent + dockedArmMass + berthedMass;
+    const dryMass = coreDry + dockedArmMass + berthedMass;
 
     // Tsiolkovsky: ΔV = Isp × g0 × ln(m_wet / m_dry)
     const isp = Constants.OCTOPUS_CORE_HALL_ISP;
@@ -1796,6 +1806,7 @@ export class ArmManager {
       armMassTotal: Math.round(armMassTotal * 10) / 10,
       wetMass: Math.round(wetMass),
       dryMass: Math.round(dryMass),
+      berthedMass: Math.round(berthedMass * 10) / 10,
       deltaV: Math.round(deltaV),
       isp,
     };

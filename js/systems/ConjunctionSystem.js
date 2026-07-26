@@ -247,6 +247,11 @@ export class ConjunctionSystem {
     for (let i = 0, len = debrisList.length; i < len; i++) {
       const debris = debrisList[i];
       if (!debris.alive || !debris.orbit) continue;
+      // Mother-net-reel plan §1.3: a pinned/captured catch must never raise a
+      // MOID badge against its own captor — same exemption predicate as
+      // CollisionAvoidanceSystem._isThreatExempt. Transient for arm/lasso
+      // catches, PERMANENT for a berthed whale without this filter.
+      if (debris._captured || debris._armPinned || debris._capturedByArm) continue;
 
       const moid = _computeMOID(playerMoidOrbit, debris.orbit);
       this._moidCache.set(debris.id, moid);
@@ -359,6 +364,12 @@ export class ConjunctionSystem {
     for (let i = 0, len = debrisList.length; i < len; i++) {
       const debris = debrisList[i];
       if (!debris.alive) continue;
+      // Mother-net-reel plan §1.3: pinned/captured catches are threat-exempt —
+      // a berthed whale sits ~5 m off the nose (trivially inside SCAN_RADIUS)
+      // with a co-orbitally matched velocity, so without this filter it wins
+      // bestDist EVERY scan, masks every genuine threat, burns the 3-alert
+      // budget, and repeatedly auto-disengages the autopilot.
+      if (debris._captured || debris._armPinned || debris._capturedByArm) continue;
 
       // --- Fast pre-filter using cached scene position ---
       let dx, dy, dz;

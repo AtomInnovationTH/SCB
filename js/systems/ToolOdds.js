@@ -38,6 +38,7 @@ import {
   recommendCaptureMode,
   getNetClassForType,
   captureNetSystem,
+  netMaxReachM,
 } from '../entities/CaptureNet.js';
 
 /** Preference order for ▶ tie-breaks (matches ToolRecommender). */
@@ -146,12 +147,10 @@ function computeNetOdds(opts) {
     return { p: 0, blocker: 'WIDE', hint: 'too wide for the net mouth' };
   }
   // Range: beyond tether pay-out or max flight time the shot times out — a
-  // deterministic miss (CaptureNet._updateFlight).
+  // deterministic miss (CaptureNet._updateFlight). SSOT: netMaxReachM honours
+  // the per-class MAX_FLIGHT_TIME override (LARGE = 11 s → 100 m reach).
   const launchSpeed = (netClass && netClass.LAUNCH_SPEED) || 10;
-  const maxReach = Math.min(
-    (netClass && netClass.TETHER_MAX) || Infinity,
-    launchSpeed * (CN.MAX_FLIGHT_TIME || Infinity),
-  );
+  const maxReach = netMaxReachM(netClass) || Infinity;
   if (range > maxReach) {
     return { p: 0, blocker: 'RANGE', hint: 'too far. Close in' };
   }

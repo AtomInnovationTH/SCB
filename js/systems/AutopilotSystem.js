@@ -211,10 +211,27 @@ export class AutopilotSystem {
     if (this._player) this._player.aimHold = true;
   }
 
+  /**
+   * Mother-net-reel plan §8 A3: the net hold gets its OWN timeout. Flight
+   * (≤11 s) + reel (≤25 s) + berth margin exceeds the shared
+   * AIM.AIM_TIMEOUT_S (30 s) the aim coroutine uses, so reusing it would drop
+   * the hold mid-reel and resume the prograde auto-orient with a whale on
+   * the line.
+   */
+  holdAttitudeForNet() {
+    this._attitudeHold = true;
+    this._attitudeHoldElapsed = 0;
+    this._attitudeHoldTimeoutS = (Constants.CAPTURE_NET && Constants.CAPTURE_NET.LARGE
+      ? (Constants.CAPTURE_NET.LARGE.MAX_FLIGHT_TIME ?? 11) : 11)
+      + 25 + (Constants.CAPTURE_NET?.BERTH_SECURE_S ?? 4) + 6; // flight + reel + berth + margin
+    if (this._player) this._player.aimHold = true;
+  }
+
   /** Release the reel-in attitude hold (unless an aim seq owns it). */
   releaseAttitudeHold() {
     this._attitudeHold = false;
     this._attitudeHoldElapsed = 0;
+    this._attitudeHoldTimeoutS = null;
     if (this._player && !this._aimCoroutine) this._player.aimHold = false;
   }
 
@@ -228,7 +245,8 @@ export class AutopilotSystem {
   _tickAttitudeHold(dt) {
     if (!this._attitudeHold) return;
     this._attitudeHoldElapsed += dt;
-    if (this._attitudeHoldElapsed > Constants.AIM.AIM_TIMEOUT_S) this.releaseAttitudeHold();
+    const timeout = this._attitudeHoldTimeoutS ?? Constants.AIM.AIM_TIMEOUT_S;
+    if (this._attitudeHoldElapsed > timeout) this.releaseAttitudeHold();
   }
 
   // ==========================================================================
@@ -1150,6 +1168,7 @@ export class AutopilotSystem {
    *   spinner → D_TRAIL_ARMS
    *   weaver  → D_TRAIL_ARMS
    *   trawl   → D_TRAIL_TRAWL
+   *   mother  → D_TRAIL_NET (20 m — inside the Large Net sure-shot band)
    *   default → D_TRAIL_DEFAULT
    * @returns {number} trailing distance in metres
    * @private
@@ -1162,6 +1181,7 @@ export class AutopilotSystem {
       case 'spinner': return AP.D_TRAIL_ARMS;
       case 'weaver':  return AP.D_TRAIL_ARMS;
       case 'trawl':   return AP.D_TRAIL_TRAWL;
+      case 'mother':  return AP.D_TRAIL_NET;
       default:        return AP.D_TRAIL_DEFAULT;
     }
   }
@@ -1207,6 +1227,24 @@ export class AutopilotSystem {
     eventBus.on(Events.LASSO_SNAPPED, endHold);
     eventBus.on(Events.LASSO_MISSED, endHold);
     eventBus.on(Events.LASSO_DENIED, endHold);
+
+    // Mother-net attitude hold (mother-net-reel plan §8 A3) — mirrors the
+    // lasso wiring, mother-only (podIndex ≥ 0), with the dedicated net
+    // timeout (flight + reel + berth, not the shared 30 s AIM_TIMEOUT_S).
+    // The hold is a FREEZE; manual rotation stays available by design.
+    eventBus.on(Events.NET_FIRED, (data) => {
+      if (data && data.podIndex >= 0) this.holdAttitudeForNet();
+    });
+    const endNetHold = (data) => {
+      if (data && data.podIndex >= 0) this.releaseAttitudeHold();
+    };
+    eventBus.on(Events.NET_CATCH_MISS, endNetHold);
+    eventBus.on(Events.NET_RELEASED, endNetHold);
+    eventBus.on(Events.NET_BERTHED, endNetHold);
+    // NET_FAILED / TETHER_SNAP are ArmUnit-only emitters — subscribed
+    // defensively; never relied on for mother cleanup (plan §8 A3).
+    eventBus.on(Events.NET_FAILED, endNetHold);
+    eventBus.on(Events.TETHER_SNAP, endNetHold);
 
     // Conjunction warning (tier ≥ 2) → auto-disengage (CA overrides AP)
     eventBus.on(Events.CONJUNCTION_WARNING, (data) => {

@@ -829,10 +829,13 @@ class GameFlowManager {
         // Check if debris has salvageable resources
         const hasSalvage = debris && debris.hasSalvage && debris.salvage;
 
-        // Award score via scoring system
+        // Award score via scoring system. `method` honours the emitter —
+        // 'arm' for daughters, 'mother' for a berthed whale (§4.8/§19).
+        // ScoringSystem's METHOD_BONUS[method] || 1.0 accepts any string, so
+        // a new method needs no scoring-model change.
         scoringSystem.awardPoints({
           debris: debris || { type: 'fragment', mass: 100, tumbleRate: 0, brittleness: 0 },
-          method: 'arm',
+          method: data.method || 'arm',
           captureTier: 3, // CAPTURE tier (physical capture)
           tacticalAssessment: assessed,
           manualCapture: manualCapture,
@@ -846,9 +849,10 @@ class GameFlowManager {
           returningArm._manualCapture = false;
         }
 
-        // Comms notification (via EventBus — CommsSystem self-manages)
+        // Comms notification (via EventBus — CommsSystem self-manages).
+        // §4.8: honour data.source so a mother catch stops reading "DAUGHTER".
         eventBus.emit(Events.COMMS_SEND, {
-          source: (data.armId || 'DAUGHTER').toUpperCase(),
+          source: (data.source || data.armId || 'DAUGHTER').toUpperCase(),
           text: 'Catch fully processed. Salvage in the bin',
           priority: 'INFO',
         });

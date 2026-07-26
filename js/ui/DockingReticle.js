@@ -14,6 +14,7 @@ import { Constants } from '../core/Constants.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import {
   getNetClassForType, computeLeadAim, assessNetFit, presentedWidthForApproach,
+  netMaxReachM,
 } from '../entities/CaptureNet.js';
 import { dossierSystem } from '../systems/DossierSystem.js';
 import { toolShortLabel } from '../systems/ToolOdds.js';
@@ -1320,7 +1321,7 @@ export class DockingReticle {
         advisory = 'ASPECT: BROADSIDE \u2014 orbit to end-on';
         advisoryCol = '#ffd166';
       }
-    } else if (range > (CN.ENVELOPE_RANGE || 100)) advisory = 'too far. Close in';
+    } else if (range > (netMaxReachM(netClass) || CN.ENVELOPE_RANGE || 100)) advisory = 'too far. Close in';
     else if (range > (CN.BASELINE_RANGE_MAX || 75)) advisory = 'edge of envelope';
     else if (offAxisDeg > offAxisWarn) {
       advisory = `OFF AXIS ${Math.round(offAxisDeg)}°. Re-aim`;

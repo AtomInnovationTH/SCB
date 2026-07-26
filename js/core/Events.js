@@ -409,7 +409,7 @@ export const Events = {
   INVENTORY_LOW:          'inventory:low',
 
   // === TOOL RECOMMENDATION ===
-  TOOL_RECOMMENDED:       'tool:recommended',      // { tool: 'lasso'|'spinner'|'grapple'|'weaver'|'trawl', targetId }
+  TOOL_RECOMMENDED:       'tool:recommended',      // { tool: 'lasso'|'spinner'|'grapple'|'weaver'|'trawl'|'mother', targetId }
   TOOL_CYCLE:             'tool:cycle',             // T key — cycle tool alternatives
   // TOOL_DEPLOY removed 2026-06-14 (was deprecated 2026-06-13b with no emitter;
   // deploy is via FOCUS_ACTION / F). Do not re-add — T emits TOOL_CYCLE.
@@ -721,6 +721,8 @@ export const Events = {
   NET_REEL_COMPLETED:        'net:reelCompleted',
   /** Player aborted — net + debris released. Payload: { armIndex, podIndex, debrisId? } */
   NET_RELEASED:              'net:released',
+  /** Mother catch berthed at the launcher (mother-net-reel plan §8). Payload: { debrisId, mass, podIndex } */
+  NET_BERTHED:               'net:berthed',
   /** Net lost grip on a captured catch (recoverable). Payload: { armId, armIndex, debrisId, strain, recoverable } */
   NET_FAILED:                'net:failed',
   /** Net inventory changed (fire/reload). Payload: { source:'mother'|'daughter', armIndex?, podInventory?, remaining? } */

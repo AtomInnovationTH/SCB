@@ -189,7 +189,14 @@ export class CaptureNetVisual {
    * remove immediately — the miss fade timer owns that path.
    */
   _onReelCompleted(payload) {
-    const { key } = resolveNetId(payload);
+    const { key, podIndex } = resolveNetId(payload);
+    // Mother-net-reel plan §8 A2: a MOTHER catch transitions to BERTHED on
+    // reel completion — the cinched bag must PERSIST at the launcher (with a
+    // short taut tether stub), not fade. The daughter hand-off fade below is
+    // for the furnace chop; the mother berth has no chop in Phase A. Removal
+    // happens on NET_RELEASED (jettison) or when the securing timer splices
+    // the net out of activeNets (the update loop's _getNet → null path).
+    if (podIndex >= 0) return;
     if (payload && payload.capturedMass > 0) {
       const vis = this._activeVisuals.get(key);
       if (vis) {
@@ -439,9 +446,12 @@ export class CaptureNetVisual {
       if (vis.detached) {
         if (vis.armIndex >= 0 && this._player?.strutTipNodes?.[vis.armIndex]) {
           this._player.strutTipNodes[vis.armIndex].getWorldPosition(vis.group.position);
-        } else if (this._player?.group) {
-          // Mother-pod catch — seat the fading bag on the mother body.
-          vis.group.position.copy(this._player.group.position);
+        } else if (vis.podIndex >= 0 && typeof this._player?.getNetPodPositionInto === 'function') {
+          // Mother-pod catch — seat the fading bag on the pod muzzle (the
+          // dead `player.group` branch seated NOTHING — PlayerSatellite
+          // extends THREE.Group, so `player.group` is undefined and a
+          // detached mother bag streaked away at 70 km/s; plan §2 C2).
+          this._player.getNetPodPositionInto(vis.podIndex, vis.group.position);
         }
         continue;
       }
@@ -565,6 +575,18 @@ export class CaptureNetVisual {
           }
           break;
 
+        case STATES.BERTHED:
+          // Mother berth (§8 A2): cinched bag persists at the launcher with a
+          // short taut tether stub. The bag follows net.position, which the
+          // berth hold keeps synced onto the pinned catch. (Flag-off path —
+          // the ceremony switch above has its own BERTHED case.)
+          canisterMesh.visible = false;
+          discMesh.visible = true;
+          tetherLine.visible = true;
+          discMesh.material.color.setHex(COL_DISC);
+          discMesh.material.opacity = 0.6;
+          break;
+
         case STATES.STOWED:
         case STATES.RELEASED:
           this._removeNetVisual(key);
@@ -576,14 +598,17 @@ export class CaptureNetVisual {
 
       } // end else (non-ceremony)
 
-      // ── Tether update: strut tip (or player origin) → net position ──
+      // ── Tether update: launcher anchor (strut tip / pod muzzle) → net ──
       if (tetherLine.visible && this._player) {
-        // Daughter arms use strutTipNodes; mother pods fall back to player group position
+        // Daughter arms use strutTipNodes; mother pods anchor at the pod
+        // muzzle via getNetPodPositionInto (allocation-free). The old
+        // `player.group` fallback was dead — PlayerSatellite extends
+        // THREE.Group so `player.group` is undefined and the tether fell
+        // through to getPosition(), cloning a Vector3 every frame (§2 C2).
         if (vis.armIndex >= 0 && this._player.strutTipNodes && this._player.strutTipNodes[vis.armIndex]) {
           this._player.strutTipNodes[vis.armIndex].getWorldPosition(_v3a);
-        } else if (this._player.group) {
-          // Mother pod: approximate tether origin at player body
-          _v3a.copy(this._player.group.position);
+        } else if (vis.podIndex >= 0 && typeof this._player.getNetPodPositionInto === 'function') {
+          this._player.getNetPodPositionInto(vis.podIndex, _v3a);
         } else if (this._player.getPosition) {
           const pp = this._player.getPosition();
           _v3a.set(pp.x, pp.y, pp.z);
@@ -879,6 +904,20 @@ export class CaptureNetVisual {
           drawstringLine.visible = false;
           apexHub.visible = false;
         }
+        break;
+
+      case STATES.BERTHED:
+        // Mother berth (mother-net-reel plan §8 A2): the cinched bag PERSISTS
+        // at the launcher with a short taut tether stub — identical rendering
+        // to the successful REELING case above. Explicit case so persistence
+        // is by design, not by the default: break accident (the plain-switch
+        // BERTHED case below is dead code under NET_CEREMONY).
+        canisterMesh.visible = false;
+        coneMesh.visible = true;
+        vis.tetherLine.visible = true;
+        coneMesh.material.color.setHex(COL_DISC);
+        coneMesh.material.opacity = 0.55;
+        this._setCinchedRim(vis);
         break;
 
       case STATES.STOWED:

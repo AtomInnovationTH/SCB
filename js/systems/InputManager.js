@@ -15,7 +15,7 @@ import timerManager from './TimerManager.js';
 import { despinLaser } from './DespinLaser.js';
 import { DEV_ACTIONS, resolveNextDevAction } from './DevSequenceAdvancer.js';
 import { classifyNetTarget } from './netRouting.js';
-import { computeLeadAim } from '../entities/CaptureNet.js';
+import { computeLeadAim, netMaxReachM } from '../entities/CaptureNet.js';
 
 export class InputManager {
   constructor() {
@@ -1014,6 +1014,21 @@ export class InputManager {
       // by SkillsPane.toggleExpanded() — we leave the no-op here as a marker.
       case 'KeyJ':
         // Toggle handled by SkillsPane._onKeyDown (document listener).
+        break;
+
+      // K: jettison the berthed mother catch (mother-net-reel plan §4.10).
+      // Verified free in gameplay: no other case 'KeyK' and no module-level
+      // KeyK listener anywhere in js/. The abort path for a slipped, dead or
+      // mis-berthed catch — and for a player who wants the launcher back
+      // before the securing timer commits the catch for score.
+      case 'KeyK':
+        if (isGameplay && !e.repeat && d.captureNetSystem
+            && typeof d.captureNetSystem.releaseDockedCatch === 'function') {
+          if (d.captureNetSystem.releaseDockedCatch()) {
+            d.audioSystem?.playClick?.();
+          }
+          e.preventDefault();
+        }
         break;
 
       // Comma (,): ROSA panel furl/unfurl toggle (mirrors "." struts). Rolls the
@@ -2275,23 +2290,102 @@ export class InputManager {
       ? cns.getMotherNetClass(podIndex) : null;
     const launchSpeedScene = ((netClass && netClass.LAUNCH_SPEED) || 10.0) * M;
 
+    // ── Pre-flight refusals (mother-net-reel plan §7.5 / §4.1) ────────────
+    // All scene-unit endpoint math lives HERE (InputManager owns both
+    // endpoints); CaptureNetSystem keeps only frame-free gates so unit tests
+    // that fire with metre positions are unaffected. Evaluated twice: now
+    // (pre-slew, so a refused shot never starts a rotation) and again inside
+    // fireNow() (so a shot that drifted out of envelope during the slew is
+    // caught at fire time).
+    const maxReachM = netClass ? netMaxReachM(netClass) : 0;
+    const DRIFT_REFUSE_MS = 5.0; // apparent m/s — beyond this the lead solution is unreachable
+    const refuse = (text) => {
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        text, source: 'SYSTEM', channel: 'CMD', priority: 'warning',
+      });
+      d.audioSystem?.playDeny?.();
+    };
+    // relVelScratch is filled by the lead provider's EMA on every provider
+    // tick; the pre-slew check seeds it with one synchronous sample below.
+    const checkRefusals = (relVelScenePerS) => {
+      if (!target || target.alive === false) {
+        refuse('Target lost.'); return true;
+      }
+      // Mass rating — hard refuse above the net's rated mass (strain roll in
+      // the 80–100% band lands with Phase A; a 23 t CZ-5B can never be held).
+      const mass = target.mass || 0;
+      const rated = (netClass && netClass.MAX_CAPTURE_MASS) || 0;
+      if (rated > 0 && mass > rated) {
+        refuse(`Beyond net rating — ${mass >= 1000 ? `${(mass / 1000).toFixed(1)} t` : `${Math.round(mass)} kg`} exceeds the ${(rated / 1000).toFixed(0)} t ${(netClass && netClass.NAME) || 'Large Net'}.`);
+        return true;
+      }
+      // Range — scene-unit distance / M → metres.
+      const muzzle = (typeof d.player.getNetPodPositionInto === 'function')
+        ? d.player.getNetPodPositionInto(podIndex, muzzleScratch)
+        : (typeof d.player.getNetPodPosition === 'function')
+          ? d.player.getNetPodPosition(podIndex) : d.player.getPosition();
+      const tp = getTargetPos();
+      if (tp && maxReachM > 0) {
+        const dx = tp.x - muzzle.x, dy = tp.y - muzzle.y, dz = tp.z - muzzle.z;
+        const rangeM = Math.sqrt(dx * dx + dy * dy + dz * dz) / M;
+        if (rangeM > maxReachM) {
+          refuse(`Out of net envelope — close to under ${Math.round(maxReachM)} m.`);
+          return true;
+        }
+      }
+      // Apparent drift — relVel is scene units/s; ÷ M → m/s apparent.
+      if (relVelScenePerS) {
+        const rv = relVelScenePerS;
+        const driftMs = Math.sqrt(rv.x * rv.x + rv.y * rv.y + rv.z * rv.z) / M;
+        if (driftMs > DRIFT_REFUSE_MS) {
+          refuse('Match velocity first [A].');
+          return true;
+        }
+      }
+      // Launcher busy — a second mother net while one is airborne gets no
+      // visual (the visual map is keyed per pod and early-returns) and the
+      // HUD tracks the wrong net (§4.5).
+      if (typeof cns.hasMotherNetInFlight === 'function' && cns.hasMotherNetInFlight()) {
+        refuse('Net already away.');
+        return true;
+      }
+      // Launcher blocked — a berthed catch obstructs every cell (§8 A2).
+      if (typeof cns.getDockedCatch === 'function' && cns.getDockedCatch()) {
+        refuse('Launcher blocked — jettison catch [K] to clear.');
+        return true;
+      }
+      return false;
+    };
+
     // Lead-aim provider: recomputed per tick so it tracks the moving target.
     // relVel = target scene-velocity − mother scene-velocity (EMA-smoothed from
     // per-frame position deltas, same pattern as ArmUnit._updateNettingFSM).
     // Scratch objects are reused across ticks (no per-frame allocation): the
     // muzzle is written into muzzleScratch via getNetPodPositionInto().
     const muzzleScratch = new THREE.Vector3();
+    const targetScratch = new THREE.Vector3();
     const lead = {
       prevT: { x: 0, y: 0, z: 0 }, prevM: { x: 0, y: 0, z: 0 }, prevTime: null,
       relVel: null, relVelBuf: { x: 0, y: 0, z: 0 },
       leadOut: { dir: { x: 0, y: 0, z: 0 }, offAxisDeg: 0 },
+    };
+    // Allocation-free target position (review fix: the provider is polled
+    // every aim tick and previously cloned a Vector3 per call via
+    // getActiveTargetPosition()).
+    const getTargetPos = () => {
+      const ts = d.targetSelector;
+      if (!ts) return null;
+      if (typeof ts.getActiveTargetPositionInto === 'function') {
+        return ts.getActiveTargetPositionInto(targetScratch);
+      }
+      return ts.getActiveTargetPosition ? ts.getActiveTargetPosition() : null;
     };
     const provider = () => {
       const muzzle = (typeof d.player.getNetPodPositionInto === 'function')
         ? d.player.getNetPodPositionInto(podIndex, muzzleScratch)
         : (typeof d.player.getNetPodPosition === 'function')
           ? d.player.getNetPodPosition(podIndex) : d.player.getPosition();
-      const tPos = d.targetSelector ? d.targetSelector.getActiveTargetPosition() : null;
+      const tPos = getTargetPos();
       if (!tPos) return null;
       const now = performance.now() * 0.001;
       if (lead.prevTime != null) {
@@ -2316,29 +2410,43 @@ export class InputManager {
       return dir;
     };
 
+    // Pre-slew refusal gate — seed the relVel EMA with one provider tick,
+    // then run the checks. A refusal here must fire BEFORE any rotation is
+    // requested (plan §7 acceptance).
+    provider();
+    if (checkRefusals(lead.relVel)) return;
+
     // Fire helper — launches along the ACTUAL ship +Z at fire time (honest to
     // attitude), from the current muzzle position. Falls back to a direct
     // bearing when no attitude is available (headless mocks).
     const fireNow = () => {
-      const pos = (typeof d.player.getNetPodPosition === 'function')
+      // Fire-time re-check: the slew can take several seconds, during which
+      // the range/drift picture changes (the AP's own VEL_TOL residual moves
+      // the range ~45 m over a 9 s slew+flight — plan §3).
+      if (checkRefusals(lead.relVel)) return;
+      const posScene = (typeof d.player.getNetPodPosition === 'function')
         ? d.player.getNetPodPosition(podIndex) : d.player.getPosition();
+      // TRAP 2 (plan §0): NetProjectile works in METRES; the pod accessor
+      // returns SCENE UNITS. Divide by M exactly as ArmUnit.js:4162 does —
+      // skipping this is the live "net doesn't move / vanished instantly"
+      // defect.
+      const pos = { x: posScene.x / M, y: posScene.y / M, z: posScene.z / M };
       let dir;
       if (d.player.quaternion) {
         const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(d.player.quaternion);
         if (fwd.lengthSq() > 0) fwd.normalize();
         dir = { x: fwd.x, y: fwd.y, z: fwd.z };
       } else {
-        const tp = d.targetSelector ? d.targetSelector.getActiveTargetPosition() : null;
+        const tp = getTargetPos();
         if (tp) {
-          const b = new THREE.Vector3(tp.x - pos.x, tp.y - pos.y, tp.z - pos.z);
+          const b = new THREE.Vector3(tp.x - posScene.x, tp.y - posScene.y, tp.z - posScene.z);
           if (b.lengthSq() > 0) b.normalize();
           dir = { x: b.x, y: b.y, z: b.z };
         } else {
           dir = { x: 0, y: 0, z: 1 };
         }
       }
-      const net = cns.fireMotherNet(podIndex,
-        { x: pos.x, y: pos.y, z: pos.z }, dir, target);
+      const net = cns.fireMotherNet(podIndex, pos, dir, target);
       if (net) {
         d.audioSystem?.playClick?.();
         eventBus.emit(Events.COMMS_MESSAGE, {

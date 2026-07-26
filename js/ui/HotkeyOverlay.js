@@ -46,6 +46,7 @@ const HOTKEY_GROUPS = [
       [['N'], 'Net launch'],
       [['D'], 'Daughter launch'],
       [['R'], 'Reel-in'],
+      [['K'], 'Jettison berthed catch'],
       'spacer',
       [['V', 'Shift'], 'View big picture'],
       [['S', 'Shift'], 'Scan big area'],

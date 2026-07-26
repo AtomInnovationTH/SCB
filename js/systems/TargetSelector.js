@@ -103,6 +103,23 @@ export class TargetSelector {
     return cart.position;
   }
 
+  /**
+   * Allocation-free variant of getActiveTargetPosition for per-frame callers
+   * (the mother-net lead-aim provider is polled every aim tick; the cloning
+   * variant allocated a Vector3 per call — mother-net-reel plan §4.12).
+   * @param {THREE.Vector3} out — receives the position
+   * @returns {THREE.Vector3|null} out, or null when no target/position
+   */
+  getActiveTargetPositionInto(out) {
+    const t = this.activeTarget;
+    if (!t) return null;
+    if (t._scenePosition) return out.copy(t._scenePosition);
+    if (!t.orbit) return null;
+    const cart = orbitToSceneCartesian(t.orbit);
+    if (!cart || !cart.position) return null;
+    return out.copy(cart.position);
+  }
+
   // ======================================================================
   // AUTO-TOOL RECOMMENDATION (CONTROL_REDESIGN §3)
   // ======================================================================
@@ -124,6 +141,24 @@ export class TargetSelector {
     const mass = target.mass || 0;
     const TR = Constants.TOOL_RECOMMENDATION;
     const tools = [];
+
+    // Whale band FIRST (mother-net-reel plan §7.6): above MOTHER_MIN_MASS no
+    // daughter tool can take the catch — ArmUnit hard-refuses > 500 kg, the
+    // lasso caps at 10 kg and trawl auto-capture at 50 kg — so the mother's
+    // Large Net pod is the ONLY legal tool. Previously a 2000 kg whale fell
+    // through to 'weaver' (whose net caps at 500 kg), the tool chip read
+    // WEAVER, and the autopilot parked at D_TRAIL_ARMS purely by accident.
+    if (mass > (TR.MOTHER_MIN_MASS ?? TR.GRAPPLE_MAX_MASS)) {
+      this._recommendedTool = 'mother';
+      this._toolAlternatives = ['mother'];
+      this._toolIndex = 0;
+      eventBus.emit(Events.TOOL_RECOMMENDED, {
+        tool: this._recommendedTool,
+        alternatives: this._toolAlternatives,
+        targetId: target.id,
+      });
+      return;
+    }
 
     // Build list of viable tools based on mass thresholds
     // Priority order: lasso (smallest/cheapest) → spinner → weaver → trawl
@@ -258,6 +293,18 @@ export class TargetSelector {
 
     // Event-driven cleanup: clear target when its debris is removed
     eventBus.on(Events.DEBRIS_REMOVED, (data) => this._onDebrisRemoved(data));
+
+    // Mother-net-reel plan §4.7: clear the active target on NET_BERTHED —
+    // explicitly, silently, and ONLY at berth. NOT from the shared per-frame
+    // gate (a `_captured` check there would emit TARGET_CLEARED for every
+    // arm/lasso catch, playing the "target lost" earcon and cancelling any
+    // running aim coroutine), and NOT before berth or the player loses the
+    // survey bounty that auto-fires during the reel (§4.18).
+    eventBus.on(Events.NET_BERTHED, (data) => {
+      if (this.activeTarget && data && data.debrisId === this.activeTarget.id) {
+        this.setTarget(null, { silent: true });
+      }
+    });
   }
 }
 

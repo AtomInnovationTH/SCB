@@ -1243,6 +1243,12 @@ export const Constants = {
     WEAVER_MIN_MASS: 200,       // kg — weaver for large debris
     TRAWL_MIN_COUNT: 3,         // minimum cluster size for trawl recommendation
     TRAWL_MAX_INDIVIDUAL_MASS: 20, // kg — trawl only for small fragments
+    // Whale band: above WEAVER_MAX_CAPTURE_MASS (500 kg) no daughter tool can
+    // take the catch (ArmUnit hard-refuses > 500 kg, lasso caps at 10, trawl at
+    // 50) — the mother's Large Net pod is the only legal tool. Recommend
+    // 'mother' so the tool chip stops reading WEAVER for a whale and the
+    // autopilot trail distance picks up D_TRAIL_NET instead of D_TRAIL_ARMS.
+    MOTHER_MIN_MASS: 500,       // kg — mother Large Net pod above this mass
   },
 
   // =========================================================================
@@ -2033,6 +2039,12 @@ export const Constants = {
       REELING:       'REELING',       // motor reel-in
       STOWED:        'STOWED',        // back at platform
       RELEASED:      'RELEASED',      // player abort — net+debris float free
+      // Mother-net-reel plan §8 A2: terminal mother-catch state. The catch is
+      // pinned at the pod muzzle standoff, visible in the cinched net, adds
+      // translational mass, and slews/burns with the ship until the securing
+      // timer (BERTH_SECURE_S) commits it for score + salvage + field removal,
+      // or the player jettisons it [K]. Replaces STOWED for mother catches.
+      BERTHED:       'BERTHED',       // catch docked at the mother launcher
     },
 
     // ── Capture Modes ──
@@ -2070,6 +2082,35 @@ export const Constants = {
     // ── Cooldowns (seconds) ──
     COOLDOWN_CATCH:       2,      // after success before re-fire (LASSO_COOLDOWN_CATCH)
     COOLDOWN_MISS:        1,      // after miss before re-fire (LASSO_COOLDOWN_MISS)
+
+    // ── Mother berth (mother-net-reel plan §8) ──
+    // Berth clearance: the reel completes when the catch's near face is this
+    // far from the muzzle (mirrors ARM_HOLD_CLEARANCE_M). Completion range =
+    // debris.sizeMeter/2 + BERTH_CLEARANCE_M.
+    BERTH_CLEARANCE_M:    1.0,
+    // Securing ceremony: after NET_BERTHED the catch sits at the launcher for
+    // this long while Houston reads the mass, then CATCH_PROCESSED fires with
+    // source:'mother' (score + salvage + clearDebris + field removal + autosave
+    // via the existing GameFlowManager path — plan §19). Jettison [K] before
+    // expiry aborts with NO score and the whale back in the field.
+    BERTH_SECURE_S:       4.0,
+    // Long-tether reel speed-up: at REEL_SPEED 2.0 a 100 m shot would reel for
+    // ~50 s wall-clock. The ease below is monotonic (never decelerates mid-
+    // reel, so the tether cannot re-slack and re-snap) and lands the duration
+    // in the ~5–25 s window. remainingM is the single source for reelProgress.
+    REEL_LONG_TETHER_M:   40,     // beyond this the reel speeds up
+    REEL_LONG_TETHER_MULT: 3.0,   // speed multiplier at/above the long-tether range
+    // Berthed-mass translational effect (plan §8 A2 / §4.4). Applied ONLY in
+    // PlayerSatellite._applyThrust as one massFactor scaling ti AND mag;
+    // rotation stays kinematic and applyCartesianImpulse is deliberately
+    // unscaled (the AP models RCS/station-keeping, not the main engine).
+    // The clamp is NOT optional: raw (130+5000)/130 ≈ 39× and 23 t ≈ 178×
+    // would leave thrust authority at 0.5–2.5% — a soft-lock.
+    MASS_EFFECT_MULT:     1.0,
+    MASS_EFFECT_MAX:      2.0,    // max massFactor divisor (2–3× per plan)
+    // Render floor for a pinned mother catch (scene units × M) — keeps a
+    // 500 kg+ catch legible at the muzzle standoff.
+    MOTHER_CATCH_MIN_RENDER_M: 2.0,
 
     // ── Reel-cycle lifetime ──
     REEL_CYCLE_LIFE:      20,     // §6.6: deploy/reel cycles before tether replacement
@@ -2191,6 +2232,12 @@ export const Constants = {
       TETHER_MAX:       100,       // m (§6.1)
       RANGE:            100,       // m engagement envelope (§2.8)
       LAUNCH_SPEED:     10.0,      // m/s (§2.8)
+      // Per-class flight-time override (mother-net-reel plan §7.5): the shared
+      // CN.MAX_FLIGHT_TIME (8 s) caps the LARGE net at 80 m — short of the
+      // 100 m tether and the 100 m ENVELOPE_RANGE the reticle advertises.
+      // 11 s puts reach at min(100 tether, 10×11) = 100 m so reticle, odds,
+      // refusal and doc all agree. Daughters keep the shared 8 s default.
+      MAX_FLIGHT_TIME:  11,        // s — overrides CN.MAX_FLIGHT_TIME for this class
       SPRING_ENERGY:    100,       // J (§2.8)
       REPLACEMENT_COST: 250,       // credits (§6.1)
     },
@@ -2598,6 +2645,12 @@ export const Constants = {
     D_TRAIL_ARMS:    35,   // m — spinner/weaver arm reach (~50 m)
     D_TRAIL_TRAWL:   150,  // m — trawl sweep trailing centroid
     D_TRAIL_DEFAULT: 80,   // m — fallback when no tool recommendation
+    // Mother Large Net (whale) hold. Must sit INSIDE the sure-shot band:
+    // SURE_SHOT_MIN_CLING needs range ≤ CLOSE_RANGE(30) AND spinFraction ≥ 0.8,
+    // and spinFraction = 1 − 0.08·(range/10) hits 0.8 at exactly 25 m. 20 m
+    // leaves margin against the AP's own VEL_TOL (0.5 m/s orbital = 5 m/s
+    // apparent) residual, which moves the range ~45 m over a 9 s slew+flight.
+    D_TRAIL_NET:     20,   // m — mother pod Large Net sure-shot hold
 
     // --- In-reach rotate-only thresholds ------------------------------------
     // When the debris is ALREADY within the active tool's capture reach there

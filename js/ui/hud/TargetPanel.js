@@ -9,7 +9,8 @@ import { Constants } from '../../core/Constants.js';
 import { eventBus } from '../../core/EventBus.js';
 import { Events } from '../../core/Events.js';
 import { computeTotalSalvageDeltaV } from '../../entities/OrbitalMechanics.js';
-import { assessNetFit } from '../../entities/CaptureNet.js';
+import { assessNetFit, presentedWidthForApproach } from '../../entities/CaptureNet.js';
+import { classifyNetTarget } from '../../systems/netRouting.js';
 import { computeToolOdds, computeBestTool, toolShortLabel } from '../../systems/ToolOdds.js';
 import { dossierSystem, appraiseSalvage } from '../../systems/DossierSystem.js';
 import { PaneChrome } from './PaneChrome.js';
@@ -430,6 +431,37 @@ export class TargetPanel {
   }
 
   /**
+   * @private Mother-net-reel plan §12: whale-class odds row. The model was
+   * built and unused — computeToolOdds({armType:'mother'}) defaults netCount
+   * from captureNetSystem.getMotherNetCount() and accepts netClass +
+   * presentedWidthM; no caller ever passed 'mother', so the panel showed
+   * daughter odds (or a lying L badge) for the one target class only the
+   * mother can take.
+   * @returns {string} HTML span
+   */
+  _renderMotherOddsBadge(t) {
+    const CN = Constants.CAPTURE_NET;
+    const odds = computeToolOdds({
+      armType: 'mother',
+      target: t,
+      netClass: CN && CN.LARGE,
+      presentedWidthM: presentedWidthForApproach(t, null),
+    });
+    const o = odds && odds.NET;
+    if (o && o.p != null && o.p > 0) {
+      const cap = (Constants.TOOL_ODDS && Constants.TOOL_ODDS.DISPLAY_CAP) ?? 0.99;
+      const pct = Math.round(Math.min(o.p, cap) * 100);
+      const col = pct >= 80 ? '#00ffaa' : pct >= 50 ? '#ffd166' : '#ff7755';
+      return `<span style="color:${col};font-size:9px;font-weight:bold;" title="Mother Large Net odds">${pct}% [N]</span>`;
+    }
+    const blocker = (o && o.blocker) || 'NO NET';
+    const word = blocker === 'WIDE' ? 'TOO WIDE'
+      : blocker === 'HEAVY' ? 'TOO HEAVY'
+      : blocker === 'EMPTY' ? 'NO NETS' : blocker;
+    return `<span style="color:#ff7755;font-size:9px;font-weight:bold;" title="Mother Large Net">${word}</span>`;
+  }
+
+  /**
    * Update the target list display. Called at 2 Hz from the coordinator.
    * @param {object} data
    * @param {Array}  data.cachedTargets
@@ -535,7 +567,16 @@ export class TargetPanel {
             // the arm that would take the shot — same ToolOdds model as the
             // reticle strip, so the panel and the strip can never disagree.
             // No arm context → dual W/S fit badge (Phase 0.1 fallback).
+            // Mother-net-reel plan §12: a WHALE (>500 kg) short-circuits to
+            // the mother row — the daughter badge was showing "L✗ TOO HEAVY"
+            // (judged against the weaver's 500 kg MEDIUM net) exactly when
+            // the mother's LARGE net is the right tool, and `_getFitBadgeArm`
+            // would show daughter odds for a target no daughter can take.
             let fitBadge;
+            const isWhale = classifyNetTarget(t.mass || 0).band === 'whale';
+            if (isWhale) {
+              fitBadge = this._renderMotherOddsBadge(t);
+            } else {
             const badgeArm = this._getFitBadgeArm();
             if (badgeArm) {
               fitBadge = this._renderBestToolBadge(badgeArm, t);
@@ -545,9 +586,10 @@ export class TargetPanel {
               const seg = (tag, f) => {
                 const ok = f.fit === 'OK';
                 const col = ok ? '#00ffaa' : f.fit === 'DESPIN_FIRST' ? '#ffd166' : '#ff7755';
-                return `<span style="color:${col}">${tag}${ok ? '\u2713' : '\u2717'}</span>`;
+                return `<span style="color:${col}">${tag}${ok ? '✓' : '✗'}</span>`;
               };
               fitBadge = `<span style="font-size:9px;font-weight:bold;" title="Capture fit: Large / Small nets">${seg('L', wFit)} ${seg('S', sFit)}</span>`;
+            }
             }
 
             // Phase 1.5: appraised value — only once the close-range survey

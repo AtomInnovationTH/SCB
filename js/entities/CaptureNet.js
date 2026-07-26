@@ -19,11 +19,23 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { BridleRing } from './BridleRing.js';
 import { CeremonyTimeScale } from '../systems/CeremonyTimeScale.js';
+import { cartesianToKeplerian } from './OrbitalMechanics.js';
+import * as THREE from 'three';
 
 const CN = Constants.CAPTURE_NET;
 const STATES = CN.STATES;
 const MODES = CN.MODES;
 const FEATURE_FLAGS = Constants.FEATURE_FLAGS;
+
+// Module-level scratch objects for the mother reel/berth per-frame math —
+// the reel/berth path must not allocate per frame (plan §13: use the Into
+// accessors and scratch vectors).
+const _v3a = new THREE.Vector3();
+const _v3b = new THREE.Vector3();
+const _v3c = new THREE.Vector3();
+const _v3d = new THREE.Vector3();
+const _v3e = new THREE.Vector3();
+const _q0  = new THREE.Quaternion();
 
 // ═══════════════════════════════════════════════════════════════════════════
 // §1  Pure Functions — Cling Probability + Frag Risk
@@ -39,6 +51,25 @@ export function getNetClassForType(type) {
   if (type === 'weaver')  return CN.MEDIUM;
   if (type === 'spinner') return CN.SMALL;
   return CN.MEDIUM; // fallback
+}
+
+/**
+ * Single source of truth for "how far can this net class reach" (metres).
+ * Reach is tether-limited AND flight-time-limited: the projectile misses with
+ * 'timeout' at MAX_FLIGHT_TIME (per-class override, else the shared default)
+ * and with 'tether_limit' at TETHER_MAX, whichever comes first
+ * (NetProjectile._updateFlight). Used by the InputManager refusal, ToolOdds
+ * and DockingReticle so all three agree on the same number.
+ * @param {object} netClass — one of CN.LARGE / CN.MEDIUM / CN.SMALL
+ * @returns {number} max reach in metres
+ */
+export function netMaxReachM(netClass) {
+  if (!netClass) return 0;
+  const maxFlightTime = netClass.MAX_FLIGHT_TIME ?? CN.MAX_FLIGHT_TIME;
+  return Math.min(
+    netClass.TETHER_MAX ?? Infinity,
+    (netClass.LAUNCH_SPEED ?? 0) * maxFlightTime,
+  );
 }
 
 /**
@@ -468,6 +499,18 @@ export class NetProjectile {
     /** @type {object|null} Reference to source arm for inventory restoration (§3.5) */
     this._sourceArm     = config.sourceArm || null;
 
+    /** @type {function(THREE.Vector3):THREE.Vector3|null} Mother-pod launcher
+     *  anchor provider — writes the pod muzzle's CURRENT world position (scene
+     *  units) into the supplied scratch vector. This is the mother-path
+     *  replacement for `_sourceArm.position`: the ship translates at ~0.7 scene
+     *  units/s (70 km/s apparent), so any anchor read once at launch is ~45 km
+     *  stale by the end of the first 0.65 s. The provider is polled every frame
+     *  the net needs the launcher frame. Null on the headless test path. */
+    this._anchorProvider = config.anchorProvider || null;
+    /** @type {THREE.Vector3|null} Scratch for the anchor provider (allocated
+     *  lazily on first use — headless tests never touch it). */
+    this._anchorScratch  = null;
+
     /** @type {boolean} Daughter capture being hauled by the ArmUnit — hold the
      *  net's own reel (bag stays cinched on the debris) until the arm delivers. */
     this._heldByArm     = false;
@@ -497,6 +540,43 @@ export class NetProjectile {
     // Flag for CaptureNetSystem to detect state changes from forceResolve()
     this._resultProcessed  = false;
 
+    // ── Mother berth (mother-net-reel plan §8) — podIndex ≥ 0 && armIndex < 0 ──
+    /** @type {object|null} Injected context { player, debrisField } — set by
+     *  CaptureNetSystem.fireMotherNet from init(deps). Backs the ship-relative
+     *  reel pin and the pinCapturedDebris API. */
+    this._ctx            = null;
+    /** @type {number|null} Ship-relative reel: remaining distance muzzle→catch
+     *  in METRES. Seeded at REELING entry from the debris's live _scenePosition,
+     *  then monotonically eased to the berth standoff. Single source for
+     *  reelProgress on the mother path. */
+    this._remainingM     = null;
+    /** @type {number|null} The seeded _remainingM at REELING entry — the
+     *  reelProgress denominator (review fix: do NOT derive from tetherPaidOut,
+     *  which disagrees with the live seed after contact→reel drift). */
+    this._reelSeedM      = null;
+    /** @type {THREE.Vector3|null} Lateral offset (scene units), decayed to 0. */
+    this._lateral        = null;
+    /** @type {THREE.Vector3|null} Lagged ship-forward (scene units) — a raw
+     *  live fwd would whip a 5 t catch across the sky on a mid-reel slew. */
+    this._fwdLagged      = null;
+    /** @type {THREE.Quaternion|null} Catch attitude in the SHIP frame, captured
+     *  at berth entry: qLocal = shipQuat⁻¹ × qCatch. Every frame the berth hold
+     *  writes shipQuat × qLocal back into tumbleAxis/tumbleAngle so the catch
+     *  rotates rigidly WITH the ship (plan §1.2 — otherwise it visibly swivels
+     *  inside the net on every slew). */
+    this._qLocal         = null;
+    /** @type {number} BERTH_SECURE_S countdown once BERTHED; ≤ 0 → processed. */
+    this._berthTimer     = -1;
+    /** @type {boolean} True once CATCH_PROCESSED has been emitted for this net. */
+    this._berthProcessed = false;
+    /** @type {number|null} Deterministic strain-roll override for tests. */
+    this._strainRollOverride = null;
+    /** @type {boolean} Set when the mother reel has no berth context (headless
+     *  test path — no player/debrisField): the reel falls through to the
+     *  daughter-style reel-back so the net still stows/prunes instead of
+     *  looping MISSED→REELING on the re-armed auto-reel. */
+    this._motherReelFallback = false;
+
     // ── Q2 Ceremony event emission guards (CEREMONY_REDESIGN.md §5.2) ──
     this._ceremonyStartEmitted    = false;
     this._brakeImminentEmitted    = false;
@@ -507,6 +587,23 @@ export class NetProjectile {
   }
 
   // ── Tick ────────────────────────────────────────────────────────────────
+
+  /**
+   * Launcher anchor in scene units, current frame. Daughter path reads the
+   * source arm's live position; mother-pod path polls the anchor provider
+   * (pod muzzle world position). Returns null on the headless test path —
+   * callers fall back to the metres-based absolute-position logic.
+   * @returns {THREE.Vector3|null}
+   * @private
+   */
+  _anchorScene() {
+    if (this._sourceArm?.position) return this._sourceArm.position;
+    if (this._anchorProvider) {
+      if (!this._anchorScratch) this._anchorScratch = new THREE.Vector3();
+      return this._anchorProvider(this._anchorScratch);
+    }
+    return null;
+  }
 
   /**
    * Advance the state machine by dt seconds.
@@ -571,18 +668,27 @@ export class NetProjectile {
     //     REELING started.  Now we track the arm AND slide the effective
     //     launch distance from `tetherPaidOut → 0` as reelProgress
     //     advances 0→1, so the net visually reels in toward the arm.
-    if (this._sourceArm?.position
-        && (this.state === STATES.CONTACT
+    // Mother-net-reel plan §7.3: the sync now ALSO covers LAUNCHING and
+    // SPINNING_UP (the first 0.65 s). Previously the net sat at its absolute
+    // launch point for those states while the launcher co-orbited at ~0.7
+    // scene units/s — ~0.45 units (~45 km apparent) of drift before FLIGHT
+    // even began. distanceTraveled is 0 during both states, so the sync seats
+    // the net exactly on the moving muzzle. (Fixes the daughter's first
+    // 0.65 s too — daughter regression pass required.)
+    const anchor = this._anchorScene();
+    if (anchor
+        && (this.state === STATES.LAUNCHING
+            || this.state === STATES.SPINNING_UP
+            || this.state === STATES.CONTACT
             || this.state === STATES.BRAKE
             || this.state === STATES.ENVELOP
             || this.state === STATES.CINCH_CLOSING
             || this.state === STATES.SECURE_CHECK)) {
       const M_NET = 0.00001;
-      const ap = this._sourceArm.position;
-      this.position.x = ap.x / M_NET + this.launchDirection.x * this.distanceTraveled;
-      this.position.y = ap.y / M_NET + this.launchDirection.y * this.distanceTraveled;
-      this.position.z = ap.z / M_NET + this.launchDirection.z * this.distanceTraveled;
-    } else if (this._sourceArm?.position && this.state === STATES.REELING) {
+      this.position.x = anchor.x / M_NET + this.launchDirection.x * this.distanceTraveled;
+      this.position.y = anchor.y / M_NET + this.launchDirection.y * this.distanceTraveled;
+      this.position.z = anchor.z / M_NET + this.launchDirection.z * this.distanceTraveled;
+    } else if (anchor && this.state === STATES.REELING) {
       const M_NET = 0.00001;
       // 2026-06-05 (v2 — visual-only, no physics coupling): for a SUCCESSFUL
       // catch, keep the bag locked ONTO the captured debris so the cinched net
@@ -602,15 +708,14 @@ export class NetProjectile {
         this.position.y = sp.y / M_NET - this.launchDirection.y * back;
         this.position.z = sp.z / M_NET - this.launchDirection.z * back;
       } else {
-        // Empty net (miss) — reel the bag back to the arm. Effective launch
-        // distance shrinks from `tetherPaidOut` (contact distance) toward 0 as
-        // `reelProgress` advances 0→1; at progress=1 the net rendezvous with the
-        // arm.
-        const ap = this._sourceArm.position;
+        // Empty net (miss) — reel the bag back to the launcher. Effective
+        // launch distance shrinks from `tetherPaidOut` (contact distance)
+        // toward 0 as `reelProgress` advances 0→1; at progress=1 the net
+        // rendezvous with the launcher.
         const eff = this.tetherPaidOut * Math.max(0, 1 - this.reelProgress);
-        this.position.x = ap.x / M_NET + this.launchDirection.x * eff;
-        this.position.y = ap.y / M_NET + this.launchDirection.y * eff;
-        this.position.z = ap.z / M_NET + this.launchDirection.z * eff;
+        this.position.x = anchor.x / M_NET + this.launchDirection.x * eff;
+        this.position.y = anchor.y / M_NET + this.launchDirection.y * eff;
+        this.position.z = anchor.z / M_NET + this.launchDirection.z * eff;
       }
     }
 
@@ -631,7 +736,16 @@ export class NetProjectile {
       case STATES.RELEASED:
       case STATES.FOLDED:
         break;
+      // Mother berth: the per-frame hold is driven by CaptureNetSystem (which
+      // owns the player/debrisField refs), not by the projectile's own switch.
+      case STATES.BERTHED:
+        break;
     }
+  }
+
+  /** True for a mother-pod net (the only path the berth machinery runs on). */
+  get _isMother() {
+    return this.podIndex >= 0 && this.armIndex < 0;
   }
 
   // ── State transitions ──────────────────────────────────────────────────
@@ -686,18 +800,21 @@ export class NetProjectile {
     this.position.y += this.launchDirection.y * dist;
     this.position.z += this.launchDirection.z * dist;
 
-    // PROD path: also update position from arm's current co-orbiting frame
-    // so CaptureNetVisual renders the net near the arm, not 7 km behind.
+    // PROD path: also update position from the launcher's current co-orbiting
+    // frame so CaptureNetVisual renders the net near the ship, not 7 km behind.
     const M_NET = 0.00001;  // 1 m in scene units (matches ArmUnit.M)
-    if (this._sourceArm?.position) {
-      const ap = this._sourceArm.position;  // THREE.Vector3, scene units, updated each frame
-      this.position.x = ap.x / M_NET + this.launchDirection.x * this.distanceTraveled;
-      this.position.y = ap.y / M_NET + this.launchDirection.y * this.distanceTraveled;
-      this.position.z = ap.z / M_NET + this.launchDirection.z * this.distanceTraveled;
+    const anchor = this._anchorScene();
+    if (anchor) {
+      this.position.x = anchor.x / M_NET + this.launchDirection.x * this.distanceTraveled;
+      this.position.y = anchor.y / M_NET + this.launchDirection.y * this.distanceTraveled;
+      this.position.z = anchor.z / M_NET + this.launchDirection.z * this.distanceTraveled;
     }
 
-    // Check max flight time (§2.4 phase 3)
-    if (this.flightTime >= CN.MAX_FLIGHT_TIME) {
+    // Check max flight time (§2.4 phase 3). Per-class override (LARGE gets
+    // 11 s so its reach reaches the 100 m tether limit); daughters keep the
+    // shared CN.MAX_FLIGHT_TIME.
+    const maxFlightTime = this.netClass.MAX_FLIGHT_TIME ?? CN.MAX_FLIGHT_TIME;
+    if (this.flightTime >= maxFlightTime) {
       this._miss('timeout');
       return;
     }
@@ -708,12 +825,21 @@ export class NetProjectile {
       return;
     }
 
+    // Mother-net-reel plan §7.7: dead-target guard. DebrisField.removeDebris
+    // sets alive=false and FREEZES _scenePosition, so a stale truthy position
+    // would keep passing the intersection check below against a body that no
+    // longer exists. Route to the miss path instead.
+    if (this.targetDebris && this.targetDebris.alive === false) {
+      this._miss('target_lost');
+      return;
+    }
+
     // Check range to target (intersection = distance < net radius)
-    // PROD: use arm-relative scene position (co-orbiting reference frame).
-    // TEST: use absolute metres (mock .position, no _sourceArm).
+    // PROD: use launcher-relative scene position (co-orbiting reference frame).
+    // TEST: use absolute metres (mock .position, no anchor).
     if (this.targetDebris) {
       const sp = this.targetDebris._scenePosition;
-      const ap = this._sourceArm?.position;
+      const ap = anchor;
       if (sp && ap) {
         // Net scene pos = arm scene pos + flight displacement (scene units)
         const netX = ap.x + this.launchDirection.x * this.distanceTraveled * M_NET;
@@ -846,6 +972,23 @@ export class NetProjectile {
 
   /** Phase 7: Reel-in — motor pulls net+debris back */
   _updateReeling(dt) {
+    // ── MOTHER PHYSICAL REEL (mother-net-reel plan §8 A1) ─────────────────
+    // Ship-relative, pinned through debrisField.pinCapturedDebris every frame.
+    // TRAP 1 (plan §0): NEVER step the pin toward the pod in absolute
+    // coordinates — the ship translates ~0.7 scene units/s while the reel
+    // closes at 2e-5 units/s, so an absolute reel diverges ~35,000×.
+    // TRAP 3: NEVER write _armPinPos raw and rely on DebrisField.update to
+    // render it — that ran EARLIER this frame, so the catch lands one frame
+    // (~1.17 km at 60 fps) behind the nose. pinCapturedDebris force-writes
+    // the instance matrix in the same call, so frame order stops mattering.
+    if (this._isMother && this.catchResult === 'success' && !this._motherReelFallback) {
+      this._updateMotherReel(dt);
+      // _updateMotherReel sets _motherReelFallback when no berth context
+      // exists (headless path) — fall through to the daughter reel-back so
+      // the net still stows and prunes instead of looping on a miss.
+      if (!this._motherReelFallback) return;
+    }
+
     // ── Held daughter catch: keep the bag cinched on the debris until the arm
     // delivers it. The net's own reel is short (tetherPaidOut/REEL_SPEED) and
     // would otherwise STOW — removing the bag visual — long before the daughter
@@ -895,10 +1038,262 @@ export class NetProjectile {
     }
   }
 
+  // ── Mother physical reel + berth (mother-net-reel plan §8) ─────────────
+
+  /**
+   * @private Mother REELING entry: strain/oversize roll, then seed the
+   * ship-relative reel state from the debris's LIVE _scenePosition (one frame
+   * only — LassoSystem.js:1401-1409 documents why the seed must start from
+   * where the debris actually is, not where the flight model left it).
+   * @returns {boolean} false when the entry itself failed (strain slip → miss)
+   */
+  _enterMotherReel() {
+    const d = this.targetDebris;
+    const player = this._ctx?.player;
+    if (!d || !player) return false;
+
+    // §4.3 strain/oversize roll — the odds model already prices this
+    // (ToolOdds.computeNetOdds multiplies by 1 − computeStrainFailProbability),
+    // so the HUD would otherwise promise a slip that can never happen.
+    const rated = this.netClass.MAX_CAPTURE_MASS || 0;
+    const mass = d.mass || 0;
+    const presented = this._presentedWidthM ?? d.sizeMeter ?? 0;
+    const netDia = this.netClass.DIAMETER || 0;
+    if (netDia > 0 && presented > netDia) {
+      this._miss('oversize_aspect');
+      return false;
+    }
+    if (rated > 0 && mass > 0) {
+      const strain = mass / rated;
+      const safe = Constants.NET_STRAIN_SAFE_FRACTION ?? 0.8;
+      if (strain > safe) {
+        const pMax = Constants.NET_STRAIN_FAIL_PROB_MAX ?? 0;
+        const t = Math.min(1, (strain - safe) / Math.max(1e-6, 1 - safe));
+        const roll = (this._strainRollOverride != null) ? this._strainRollOverride : Math.random();
+        if (roll < pMax * t) {
+          eventBus.emit(Events.COMMS_MESSAGE, {
+            text: `Net strain slip — catch was ${Math.round(strain * 100)}% of the net's rated mass. `
+              + `Slips become likely above ${Math.round(safe * 100)}%.`,
+            source: 'SYSTEM', channel: 'CMD', priority: 'warning',
+          });
+          this._miss('strain_slip');
+          return false;
+        }
+      }
+    }
+
+    // Seed ship-relative reel state.
+    const M_NET = 0.00001;
+    const podWorld = (typeof player.getNetPodPositionInto === 'function')
+      ? player.getNetPodPositionInto(this.podIndex, new THREE.Vector3())
+      : new THREE.Vector3();
+    const sp = d._scenePosition;
+    if (sp) {
+      const dx = sp.x - podWorld.x, dy = sp.y - podWorld.y, dz = sp.z - podWorld.z;
+      this._remainingM = Math.sqrt(dx * dx + dy * dy + dz * dz) / M_NET;
+      // Lateral = component of (debris − pod) perpendicular to ship forward.
+      const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(player.quaternion).normalize();
+      const along = dx * fwd.x + dy * fwd.y + dz * fwd.z;
+      this._lateral = new THREE.Vector3(dx - fwd.x * along, dy - fwd.y * along, dz - fwd.z * along);
+    } else {
+      this._remainingM = this.tetherPaidOut;
+      this._lateral = new THREE.Vector3();
+    }
+    // Review fix: the reelProgress denominator must be the ACTUAL seeded
+    // remaining distance, not tetherPaidOut — the two disagree whenever the
+    // catch drifted between contact and reel entry (or a close target made
+    // tetherPaidOut < berthStandoffM), which collapsed the denominator to
+    // ~0 and snapped progress 0→1 instead of easing.
+    this._reelSeedM = Math.max(this._remainingM, 1e-3);
+    this._fwdLagged = new THREE.Vector3(0, 0, 1).applyQuaternion(player.quaternion).normalize();
+
+    // Capture the catch's attitude in the SHIP frame so the berth hold can
+    // rotate it rigidly with the ship (plan §1.2).
+    if (d.tumbleAxis && player.quaternion) {
+      const qCatch = new THREE.Quaternion().setFromAxisAngle(d.tumbleAxis, d.tumbleAngle || 0);
+      this._qLocal = player.quaternion.clone().invert().multiply(qCatch);
+    } else {
+      this._qLocal = new THREE.Quaternion();
+    }
+    return true;
+  }
+
+  /**
+   * @private Mother REELING per-frame tick: monotonically ease remainingM to
+   * the berth standoff and pin the catch through debrisField.pinCapturedDebris.
+   */
+  _updateMotherReel(dt) {
+    const d = this.targetDebris;
+    const player = this._ctx?.player;
+    const debrisField = this._ctx?.debrisField;
+    // No berth context (headless test path, or a mother net fired without
+    // init(deps)): fall through to the daughter-style reel-back below rather
+    // than missing — a miss here would loop MISSED→REELING→MISSED via the
+    // re-armed auto-reel and never prune.
+    if (!d || !player || !debrisField) { this._motherReelFallback = true; return; }
+    if (d.alive === false) { this._miss('target_lost'); return; }
+
+    if (this._remainingM == null) {
+      if (!this._enterMotherReel()) return;   // strain slip / oversize → missed
+    }
+
+    const M_NET = 0.00001;
+    const berthStandoffM = (d.sizeMeter || 2) / 2 + (CN.BERTH_CLEARANCE_M ?? 1.0);
+
+    // Monotonic ease-in (never decelerate mid-reel so the tether cannot
+    // re-slack and re-snap). Mild long-tether speed-up lands the duration in
+    // the ~5–25 s window (REEL_SPEED 2.0 on a 100 m shot would else be ~50 s).
+    const reelSpeed = (this._remainingM >= (CN.REEL_LONG_TETHER_M ?? 40))
+      ? this.netClass.REEL_SPEED * (CN.REEL_LONG_TETHER_MULT ?? 3.0)
+      : this.netClass.REEL_SPEED;
+    this._remainingM = Math.max(berthStandoffM, this._remainingM - reelSpeed * dt);
+
+    // reelProgress: remainingM is the single source (no external consumer, so
+    // free to redefine). 0 at the seeded range (_reelSeedM), 1 at the standoff.
+    const seedM = Math.max(berthStandoffM + 1e-3, this._reelSeedM ?? this.tetherPaidOut ?? berthStandoffM + 1e-3);
+    this.reelProgress = Math.min(1, Math.max(0,
+      1 - (this._remainingM - berthStandoffM) / (seedM - berthStandoffM)));
+
+    // Rotation lag: run the ship forward through a critically damped spring so
+    // a mid-reel slew lags and settles instead of whipping the catch.
+    const fwdTarget = _v3a.set(0, 0, 1).applyQuaternion(player.quaternion).normalize();
+    const omega = 2 * Math.PI * 0.8;                    // ~0.8 Hz settle
+    const zeta = 1.0;                                   // critically damped
+    const k = omega * omega, c = 2 * zeta * omega;
+    _v3b.copy(fwdTarget).sub(this._fwdLagged);          // displacement
+    this._fwdLagged.addScaledVector(_v3b, Math.min(1, k * dt * dt + c * dt));
+    this._fwdLagged.normalize();
+
+    // Lateral decay (catch swings onto the boresight as it reels in).
+    this._lateral.multiplyScalar(Math.max(0, 1 - 2.0 * dt));
+
+    // Pin: pod + lagged-fwd · remainingM + lateral (scene units).
+    const podWorld = (typeof player.getNetPodPositionInto === 'function')
+      ? player.getNetPodPositionInto(this.podIndex, _v3c) : _v3c.set(0, 0, 0);
+    _v3d.copy(podWorld)
+      .addScaledVector(this._fwdLagged, this._remainingM * M_NET)
+      .add(this._lateral);
+
+    // Orientation follows the ship (plan §1.2).
+    if (this._qLocal && d.tumbleAxis) {
+      _q0.copy(player.quaternion).multiply(this._qLocal);
+      const axis = _v3e.set(0, 1, 0);
+      let angle = 0;
+      // Quaternion → axis/angle for the tumbleAxis/tumbleAngle channel.
+      const w = Math.max(-1, Math.min(1, _q0.w));
+      angle = 2 * Math.acos(w);
+      const s = Math.sqrt(Math.max(0, 1 - w * w));
+      if (s > 1e-6) axis.set(_q0.x / s, _q0.y / s, _q0.z / s);
+      else axis.set(0, 1, 0);
+      d.tumbleAxis.copy(axis);
+      d.tumbleAngle = angle;
+    }
+
+    d._armPinned = true;
+    d._captured = true;
+    d._catchRenderMin = (CN.MOTHER_CATCH_MIN_RENDER_M ?? 2.0) * M_NET;
+    debrisField.pinCapturedDebris(d, _v3d);
+
+    // Keep the bag visual seated on the catch (CaptureNetVisual reads
+    // net.position × M every frame).
+    this.position.x = _v3d.x / M_NET;
+    this.position.y = _v3d.y / M_NET;
+    this.position.z = _v3d.z / M_NET;
+
+    // Tension readout (HUD): base + mass factor, same shape as the daughter.
+    this.tensionN = 1.0 + this.capturedMass * 0.1;
+
+    // Completion → BERTHED.
+    if (this._remainingM <= berthStandoffM + 1e-6) {
+      this._transitionTo(STATES.BERTHED);
+      this._berthTimer = CN.BERTH_SECURE_S ?? 4.0;
+      eventBus.emit(Events.NET_REEL_COMPLETED, {
+        armIndex:     this.armIndex,
+        podIndex:     this.podIndex,
+        capturedMass: this.capturedMass,
+        debrisId:     d.id,
+      });
+      eventBus.emit(Events.NET_BERTHED, {
+        debrisId: d.id,
+        mass:     this.capturedMass,
+        podIndex: this.podIndex,
+      });
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        text: `Catch secured — berthed at pod ${this.podIndex + 1}. Securing ${Math.round(this.capturedMass)} kg…`,
+        source: 'HOUSTON', priority: 'info',
+      });
+    }
+  }
+
+  /**
+   * Mother BERTHED per-frame hold (driven by CaptureNetSystem.update — the
+   * projectile's own switch no-ops on BERTHED). Freezes the reel formula at
+   * the standoff: same code path, same pin API, same ship-relative frame.
+   * @param {number} dt
+   * @returns {boolean} false when the berth should tear down (dead target)
+   */
+  updateBerthHold(dt) {
+    const d = this.targetDebris;
+    const player = this._ctx?.player;
+    const debrisField = this._ctx?.debrisField;
+    if (!d || !player || !debrisField) return false;
+    // §4.19: the berth-hold alive guard is what cleans up a mission transition
+    // (a BERTHED net survives getState holding a debris ref that no longer
+    // exists). NOT optional polish.
+    if (d.alive === false) return false;
+
+    const M_NET = 0.00001;
+    const berthStandoffM = (d.sizeMeter || 2) / 2 + (CN.BERTH_CLEARANCE_M ?? 1.0);
+    this._remainingM = berthStandoffM;
+
+    const fwdTarget = _v3a.set(0, 0, 1).applyQuaternion(player.quaternion).normalize();
+    const omega = 2 * Math.PI * 0.8, zeta = 1.0;
+    const k = omega * omega, c = 2 * zeta * omega;
+    _v3b.copy(fwdTarget).sub(this._fwdLagged);
+    this._fwdLagged.addScaledVector(_v3b, Math.min(1, k * dt * dt + c * dt));
+    this._fwdLagged.normalize();
+    this._lateral.multiplyScalar(Math.max(0, 1 - 2.0 * dt));
+
+    const podWorld = (typeof player.getNetPodPositionInto === 'function')
+      ? player.getNetPodPositionInto(this.podIndex, _v3c) : _v3c.set(0, 0, 0);
+    _v3d.copy(podWorld)
+      .addScaledVector(this._fwdLagged, berthStandoffM * M_NET)
+      .add(this._lateral);
+
+    if (this._qLocal && d.tumbleAxis) {
+      _q0.copy(player.quaternion).multiply(this._qLocal);
+      const w = Math.max(-1, Math.min(1, _q0.w));
+      const angle = 2 * Math.acos(w);
+      const s = Math.sqrt(Math.max(0, 1 - w * w));
+      if (s > 1e-6) d.tumbleAxis.set(_q0.x / s, _q0.y / s, _q0.z / s);
+      else d.tumbleAxis.set(0, 1, 0);
+      d.tumbleAngle = angle;
+    }
+
+    d._armPinned = true;
+    d._captured = true;
+    d._catchRenderMin = (CN.MOTHER_CATCH_MIN_RENDER_M ?? 2.0) * M_NET;
+    debrisField.pinCapturedDebris(d, _v3d);
+
+    // Keep the bag visual seated on the berthed catch.
+    this.position.x = _v3d.x / M_NET;
+    this.position.y = _v3d.y / M_NET;
+    this.position.z = _v3d.z / M_NET;
+    return true;
+  }
+
   // ── Catch resolution ───────────────────────────────────────────────────
 
   /** @private Roll cling probability and resolve capture */
   _resolveCatch() {
+    // Dead-target guard (mother-net-reel plan §7.7): the body may have been
+    // removed (fragmented by another interaction, deorbited) while the net
+    // was wrapping. Never award a catch against a dead reference.
+    if (this.targetDebris && this.targetDebris.alive === false) {
+      this._miss('target_lost');
+      return;
+    }
+
     // Phase 2 (ASPECT_CAPTURE): presented width at CONTACT — the moment the
     // mouth meets the body decides whether it can swallow it. Broadside on an
     // oversize presentation is a deterministic bounce, not a bad roll.
@@ -1009,6 +1404,12 @@ export class NetProjectile {
   _miss(reason) {
     this.catchResult = 'miss';
     this._transitionTo(STATES.MISSED);
+    // Review fix (strain-slip lifecycle): a miss can fire AFTER the net already
+    // passed CAPTURED→REELING (the mother strain roll at reel entry), which
+    // set _resultProcessed in CaptureNetSystem.update(). Without resetting it,
+    // needsAutoReel never re-arms and the net strands in MISSED forever —
+    // never pruned, inventory never restored, pins never cleared.
+    this._resultProcessed = false;
 
     eventBus.emit(Events.NET_CATCH_MISS, {
       armIndex:    this.armIndex,
@@ -1051,22 +1452,34 @@ export class NetProjectile {
 
   /**
    * Release / abort: let debris and net go. Net inventory is consumed.
+   * BERTHED is the manual jettison ([K]) — clears pins, re-seats the orbit,
+   * frees the launcher. The securing timer (if still running) is cancelled.
    * @returns {boolean} Whether release occurred
    */
   release() {
     if (this.state !== STATES.CAPTURED &&
         this.state !== STATES.REELING &&
-        this.state !== STATES.FLIGHT) return false;
+        this.state !== STATES.FLIGHT &&
+        this.state !== STATES.BERTHED) return false;
 
+    const wasBerthed = this.state === STATES.BERTHED;
     this._transitionTo(STATES.RELEASED);
     this.capturedMass = 0;
     this.isActive = false;
+    this._berthTimer = -1;
 
     eventBus.emit(Events.NET_RELEASED, {
       armIndex: this.armIndex,
       podIndex: this.podIndex,
       debrisId: this.targetDebris?.id,
     });
+    if (wasBerthed) {
+      // §4.9: jettison consumes the net — say so.
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        text: 'Catch released — net expended, launcher clear.',
+        source: 'HOUSTON', priority: 'info',
+      });
+    }
     return true;
   }
 
@@ -1115,6 +1528,12 @@ export class CaptureNetSystem {
 
     // First-fragmentation mercy rule (§5.7)
     this._playerHasFragmented = false;
+
+    /** @type {object|null} Injected deps (player, debrisField) — stored by
+     *  init(deps) BEFORE the feature-flag check so a flag-off init still
+     *  leaves the references usable when the flag flips on later. */
+    this._player = null;
+    this._debrisField = null;
   }
 
   // ── Lifecycle ──────────────────────────────────────────────────────────
@@ -1122,8 +1541,14 @@ export class CaptureNetSystem {
   /**
    * Initialise inventory to Dyneema Y0 defaults.
    * Called once at game start / after load.
+   * @param {object} [deps] — { player, debrisField } context references.
+   *   `player` backs the mother-pod anchor provider; `debrisField` backs the
+   *   Phase-A pin API (pinCapturedDebris). Optional — the no-arg call stays
+   *   valid for headless tests and test-main-wiring.
    */
-  init() {
+  init(deps = {}) {
+    this._player = deps.player || this._player || null;
+    this._debrisField = deps.debrisField || this._debrisField || null;
     if (!Constants.FEATURE_FLAGS.CAPTURE_NET) return;
 
     this._motherPodInventory = [CN.LARGE.MAGAZINE_SIZE, CN.LARGE.MAGAZINE_SIZE];
@@ -1186,15 +1611,61 @@ export class CaptureNetSystem {
         net.startReel();
       }
 
-      // Remove terminal nets + handle inventory / cargo consequences
+      // ── Mother BERTHED hold + securing timer (mother-net-reel plan §8 A2) ──
+      // The projectile's own switch no-ops on BERTHED; the per-frame hold runs
+      // here because the system owns the player/debrisField refs. The berth
+      // survives pruning (isActive stays true, state never STOWED/RELEASED).
+      if (net.state === STATES.BERTHED) {
+        const holding = net.updateBerthHold(dt);
+        if (!holding) {
+          // Dead target while docked (§4.19 mission-transition guard): clear
+          // the dock, pins and visual, free the launcher. Do NOT stow as if
+          // the catch succeeded (the daughter's death-in-hand behaviour).
+          this._teardownBerth(net, { processed: false });
+          this.activeNets.splice(i, 1);
+          continue;
+        }
+        if (!net._berthProcessed && net._berthTimer > 0) {
+          net._berthTimer -= dt;
+          if (net._berthTimer <= 0) {
+            // §19 terminal credit: the existing GameFlowManager CATCH_PROCESSED
+            // path awards score + salvage + clearDebris() + removeDebris +
+            // autosave. Order matters — removeDebris emits DEBRIS_REMOVED, so
+            // pins + visual are cleared on that signal too (idempotently).
+            net._berthProcessed = true;
+            eventBus.emit(Events.CATCH_PROCESSED, {
+              debrisId: net.targetDebris?.id,
+              armId:    null,
+              source:   'mother',
+              podIndex: net.podIndex,
+              method:   'mother',
+            });
+            this._teardownBerth(net, { processed: true });
+            this.activeNets.splice(i, 1);
+            continue;
+          }
+        }
+      }
+
+      // Remove terminal nets + handle inventory / cargo consequences.
+      // BERTHED is deliberately absent — a berthed net must hit neither the
+      // prune predicate nor the STOWED cargo hand-off (§8 A2).
       if (!net.isActive || net.state === STATES.STOWED || net.state === STATES.RELEASED) {
+        // Mother exits (miss / release / forceResolve) — clear any pins the
+        // reel/berth wrote. Idempotent; most exits fire before any pin exists.
+        if (net._isMother) this._clearCatchPins(net.targetDebris);
+
         // §3.5: Net is NOT consumed on miss — restore inventory when empty net reels back
         if (net.state === STATES.STOWED && net.catchResult === 'miss') {
           this._restoreNetInventory(net);
         }
 
-        // ST-9.4d: Cargo hand-off — successful capture reeled to platform
-        if (net.state === STATES.STOWED && net.catchResult === 'success' && net.capturedMass > 0) {
+        // ST-9.4d: Cargo hand-off — successful capture reeled to platform.
+        // Gated OFF for mother catches (§8 A2): the berth + securing timer
+        // replaces the daughter's cargo-store path (a mother catch berths, it
+        // is never stuffed into a cargo cell it cannot fit).
+        if (net.state === STATES.STOWED && net.catchResult === 'success' && net.capturedMass > 0
+            && !(net.podIndex >= 0 && net.armIndex < 0)) {
           // ST-9.7 C-8: Route through bridle ring if both flags enabled
           if (Constants.FEATURE_FLAGS.BRIDLE_RING && Constants.FEATURE_FLAGS.CAPTURE_NET && net.armIndex >= 0) {
             const freePoint = BridleRing.findFreePoint(net.armIndex);
@@ -1216,9 +1687,137 @@ export class CaptureNetSystem {
           });
         }
 
+        // Manual jettison from BERTHED ([K]) — re-seat the orbit so the whale
+        // resumes from where it was released, not wherever its own orbit
+        // propagated to while pinned (§8 A2). Net is expended (no restore).
+        if (net.state === STATES.RELEASED && net._isMother) {
+          this._reseatOrbitOnRelease(net);
+        }
+
         this.activeNets.splice(i, 1);
       }
     }
+  }
+
+  /**
+   * §8 A2 — the pin-clearing chokepoint that did not exist. Mother nets have
+   * no ArmUnit, so nothing else ever clears the debris pin flags the
+   * reel/berth writes. Idempotent by design; call from EVERY mother exit.
+   * @param {object|null} debris
+   * @private
+   */
+  _clearCatchPins(debris) {
+    if (!debris) return;
+    debris._captured = false;
+    debris._armPinned = false;
+    debris._armPinPos = null;
+    debris._catchRenderMin = 0;
+  }
+
+  /**
+   * §8 A2 — tear down a berthed catch: clear pins, drop the docked slot, free
+   * the launcher. The bag visual is removed by CaptureNetVisual's own
+   * STOWED/RELEASED handling via the fade path; here we emit nothing visual —
+   * the net is spliced out of activeNets by the caller, and _getNet then
+   * returns null so the visual removes itself next frame.
+   * @param {NetProjectile} net
+   * @param {{ processed: boolean }} opts — true when the securing timer fired
+   * @private
+   */
+  _teardownBerth(net, opts) {
+    this._clearCatchPins(net.targetDebris);
+    net.isActive = false;
+    net._berthTimer = -1;
+  }
+
+  /**
+   * §8 A2 — re-seat the released catch's orbit from the release position +
+   * the mother's velocity. DebrisField.update skips orbit propagation only
+   * for _onboardingPinned, NOT _armPinned, so a pinned catch's trueAnomaly
+   * kept advancing and a jettisoned whale would snap to wherever its own
+   * orbit went. Rebuild debris.orbit from the pin following
+   * applyCartesianImpulse's recipe. The arm path deliberately accepts the
+   * snap (ArmUnit.js:4494-4497) — do not copy that 2 m in front of the camera.
+   * @param {NetProjectile} net
+   * @private
+   */
+  _reseatOrbitOnRelease(net) {
+    const d = net.targetDebris;
+    const player = this._player;
+    if (!d || !player || !d._scenePosition || !d.orbit) return;
+    // Review fix: no metres-scale fallback — Constants.SCENE_SCALE is 0.01
+    // (km-scale); the old `|| 0.00001` silently produced a ~1000× error on a
+    // falsy read (headless mock).
+    const SCENE_SCALE = Constants.SCENE_SCALE;
+    if (!(SCENE_SCALE > 0)) return;
+    // cartesianToKeplerian wants km / km/s in the Y-up scene frame (the same
+    // convention applyCartesianImpulse uses: scene units ÷ SCENE_SCALE → km).
+    const rKm = {
+      x: d._scenePosition.x / SCENE_SCALE,
+      y: d._scenePosition.y / SCENE_SCALE,
+      z: d._scenePosition.z / SCENE_SCALE,
+    };
+    const v = (typeof player.getVelocity === 'function') ? player.getVelocity() : null;
+    if (!v) return;
+    const newOrbit = cartesianToKeplerian(rKm, { x: v.x, y: v.y, z: v.z });
+    // Review fix: validate EVERY element before writing — inclination comes
+    // from acos(hz/h) and is NaN on the degenerate h=0 geometry (radial
+    // release velocity), and only semiMajorAxis was checked, so a jettison
+    // could permanently corrupt the whale's orbit with NaN.
+    if (!newOrbit
+        || !isFinite(newOrbit.semiMajorAxis) || newOrbit.semiMajorAxis <= 0
+        || !isFinite(newOrbit.eccentricity)
+        || !isFinite(newOrbit.inclination)
+        || !isFinite(newOrbit.raan)
+        || !isFinite(newOrbit.argPerigee)
+        || !isFinite(newOrbit.trueAnomaly)) return;
+    // DebrisField orbits store semiMajorAxis in SCENE UNITS (same convention
+    // as PlayerSatellite.orbit — applyCartesianImpulse writes sma × SCENE_SCALE).
+    d.orbit.semiMajorAxis = newOrbit.semiMajorAxis * SCENE_SCALE;
+    d.orbit.eccentricity  = Math.max(0, Math.min(0.1, newOrbit.eccentricity));
+    d.orbit.inclination   = newOrbit.inclination;
+    d.orbit.raan          = newOrbit.raan;
+    d.orbit.argPerigee    = newOrbit.argPerigee;
+    d.orbit.trueAnomaly   = newOrbit.trueAnomaly;
+    if (typeof newOrbit.meanMotion === 'number' && isFinite(newOrbit.meanMotion)) {
+      d.orbit.meanMotion = newOrbit.meanMotion;
+    }
+  }
+
+  /**
+   * §8 A2 — berthed mass for the translational thrust scaling (plan §4.4).
+   * Structured as a sum over attachments so a future CoM upgrade is
+   * non-breaking. Replaces the dead getCapturedNetMass for the mother path.
+   * @returns {number} kg currently berthed at the mother launcher
+   */
+  getBerthedMassKg() {
+    let sum = 0;
+    for (const net of this.activeNets) {
+      if (net._isMother && net.state === STATES.BERTHED) sum += net.capturedMass || 0;
+    }
+    return sum;
+  }
+
+  /**
+   * §8 A2 — single docked catch slot. The launcher is one nose patch; a
+   * berthed whale obstructs every cell, so a second fire is refused while
+   * anything is berthed.
+   * @returns {NetProjectile|null}
+   */
+  getDockedCatch() {
+    return this.activeNets.find(n => n._isMother && n.state === STATES.BERTHED) || null;
+  }
+
+  /**
+   * §8 A2 — manual jettison ([K]). Releases the berthed catch: pins cleared,
+   * orbit re-seated, net expended, launcher freed. The securing timer (if
+   * still running) is cancelled — jettison before expiry means NO score.
+   * @returns {boolean} whether a docked catch was released
+   */
+  releaseDockedCatch() {
+    const net = this.getDockedCatch();
+    if (!net) return false;
+    return net.release();
   }
 
   /**
@@ -1298,6 +1897,18 @@ export class CaptureNetSystem {
       });
       return null;
     }
+    // §8 A2 launcher-blocked gate: one nose patch, one docked catch. A berthed
+    // whale obstructs every cell, so a second fire is refused until the catch
+    // is processed (securing timer) or jettisoned [K].
+    if (this.getDockedCatch()) {
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        text: 'Launcher blocked — jettison catch [K] to clear.',
+        source: 'SYSTEM',
+        channel: 'CMD',
+        priority: 'warning',
+      });
+      return null;
+    }
 
     // Deplete inventory
     this._motherPodInventory[podIndex]--;
@@ -1327,7 +1938,21 @@ export class CaptureNetSystem {
       launchDirection: launchDir,
       targetDebris:   target,
       captureMode:    resolvedMode,
+      // Mother-pod launcher anchor: polled every frame for the pod muzzle's
+      // CURRENT world position (scene units). Without it every
+      // `_sourceArm?.position` block is skipped and the net renders at a
+      // stale absolute point that drifts ~45 km apparent in the first 0.65 s
+      // (mother-net-reel plan §7.2). Falls back to the metres-based test
+      // path when no player ref was injected (headless mocks).
+      anchorProvider: this._player
+        ? (out) => (typeof this._player.getNetPodPositionInto === 'function'
+            ? this._player.getNetPodPositionInto(podIndex, out)
+            : out)
+        : null,
     });
+    // Phase-A berth context (player for the ship-relative reel frame,
+    // debrisField for the pinCapturedDebris API — plan §1.1).
+    net._ctx = { player: this._player, debrisField: this._debrisField };
 
     this.activeNets.push(net);
 
@@ -1490,6 +2115,47 @@ export class CaptureNetSystem {
   /** Get the active net projectile for a given mother pod (if any). */
   getActiveNetForPod(podIndex) {
     return this.activeNets.find(n => n.podIndex === podIndex) || null;
+  }
+
+  /**
+   * Whether a mother pod is in its post-fire cooldown. InputManager's
+   * pre-slew gate calls this (it was wired behind a `typeof` guard against a
+   * method that never existed — mother-net-reel plan §2 C4 — so a cooldown
+   * fire used to run the entire aim slew before being refused).
+   * @param {number} podIndex
+   * @returns {boolean}
+   */
+  isMotherPodOnCooldown(podIndex) {
+    return this.getCooldown('pod', podIndex) > 0;
+  }
+
+  /**
+   * Net class fired by a mother pod. The lead-aim provider in InputManager
+   * calls this for the launch speed (previously hardcoded `10.0 * M` behind
+   * another typeof guard — §2 C4 — which silently desynced from any retune).
+   * @param {number} podIndex — currently both pods fire LARGE
+   * @returns {object} CN.LARGE
+   */
+  getMotherNetClass(podIndex) { // eslint-disable-line no-unused-vars
+    return CN.LARGE;
+  }
+
+  /**
+   * True when any mother-pod net (podIndex ≥ 0) is in a non-terminal,
+   * non-berthed state. Firing a second net from the same launcher frame
+   * breaks the VISUAL (the visual map is keyed `pod_${podIndex}` and
+   * early-returns when the key exists — mother-net-reel plan §4.5) as well
+   * as the physics, so the InputManager refusal gates on this. BERTHED is
+   * excluded — a berthed catch has its own dedicated refusal ("Launcher
+   * blocked — jettison [K]") via getDockedCatch(), and including it here
+   * made that message unreachable (review finding).
+   * @returns {boolean}
+   */
+  hasMotherNetInFlight() {
+    return this.activeNets.some(n =>
+      n.podIndex >= 0 && n.isActive
+      && n.state !== STATES.STOWED && n.state !== STATES.RELEASED
+      && n.state !== STATES.BERTHED);
   }
 
   /**

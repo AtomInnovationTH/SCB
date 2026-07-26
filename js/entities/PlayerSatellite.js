@@ -4182,6 +4182,17 @@ export class PlayerSatellite extends THREE.Group {
   }
 
   /**
+   * Mother-net-reel plan §4.4: inject the CaptureNetSystem so _applyThrust can
+   * read getBerthedMassKg(). Deliberately a setter (not an import) — the
+   * CaptureNet module imports OrbitalMechanics and Constants, and a direct
+   * PlayerSatellite → CaptureNet import would risk a cycle.
+   * @param {import('./CaptureNet.js').CaptureNetSystem} cns
+   */
+  setCaptureNetSystem(cns) {
+    this._captureNetSystem = cns;
+  }
+
+  /**
    * (b) Reel-in momentum — ANGULAR coupling (2026-07-23). Hauling a heavy catch
    * on a tether that attaches at the fore muzzle applies a torque that swings
    * the Mother's nose toward the catch. LassoSystem already applies the LINEAR
@@ -5765,10 +5776,30 @@ export class PlayerSatellite extends THREE.Group {
   /** @private */
   _applyThrust(gameDt) {
     const ti = this.thrustInput;
-    const mag = Math.sqrt(ti.x * ti.x + ti.y * ti.y + ti.z * ti.z);
+    let mag = Math.sqrt(ti.x * ti.x + ti.y * ti.y + ti.z * ti.z);
     if (mag < 1e-12) {
       ti.x = ti.y = ti.z = 0;
       return;
+    }
+
+    // Mother-net-reel plan §4.4/§8 A2: berthed-catch translational mass.
+    // ONE massFactor scales ti AND mag at the top — the CoM-leak block below
+    // reads mag, and _deltaVSpent += mag happens first, so both must see the
+    // laden value. The clamp is NOT optional: raw (130+5000)/130 ≈ 39× and
+    // 23 t ≈ 178× would leave thrust authority at 0.5–2.5% — a soft-lock.
+    // Rotation stays kinematic (unscaled) and applyCartesianImpulse is
+    // deliberately unscaled (the AP models RCS/station-keeping, not the main
+    // engine) — RCS translation stays brisk while main thrust is heavy.
+    // this.mass is NEVER mutated (recoil, I_mother and drag all read it).
+    const berthed = (this._captureNetSystem && typeof this._captureNetSystem.getBerthedMassKg === 'function')
+      ? this._captureNetSystem.getBerthedMassKg() : 0;
+    if (berthed > 0) {
+      const CN = Constants.CAPTURE_NET || {};
+      const mult = CN.MASS_EFFECT_MULT ?? 1.0;
+      const maxFactor = CN.MASS_EFFECT_MAX ?? 2.0;
+      const massFactor = 1 / (1 + Math.min(berthed * mult / this.mass, maxFactor));
+      ti.x *= massFactor; ti.y *= massFactor; ti.z *= massFactor;
+      mag *= massFactor;
     }
 
     // Accumulate ΔV spent (mag is the actual |Δv| applied this tick)
