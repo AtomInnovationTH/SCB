@@ -328,6 +328,14 @@ export class MotherCallouts {
 
     // Clickable-label interaction (codex deep-links).
     this._raycaster = new THREE.Raycaster();
+    // The callouts group rides inside the player subtree, which SceneManager
+    // registers as a NEAR_FIELD root — moving every sprite to
+    // NEAR_FIELD_LAYER (layer 1) at close range. A default raycaster only
+    // tests layer 0, so every pick silently missed at inspection depth and
+    // click-to-open was dead (round 5 autopsy: spriteLayers 2 vs rcLayers 1,
+    // ray dead-centre at 2.8e-14 miss distance). Test all layers: the pick
+    // loop only ever sees these ~37 sprites, so the mask costs nothing.
+    this._raycaster.layers.enableAll();
     this._ndc = new THREE.Vector2();
     this._pointerDown = null;
     this._hoverT = 0;
