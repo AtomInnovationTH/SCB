@@ -854,7 +854,7 @@ async function init() {
 
   // V-8: Capture net system + visual effects
   if (Constants.FEATURE_FLAGS.CAPTURE_NET) {
-    captureNetSystem.init({ player, debrisField, audioSystem });   // ST-9.4: initialize mother pod inventory + set _initialized; deps back the mother-pod anchor provider + Phase-A pin API + Phase-B winch pitch
+    captureNetSystem.init({ player, debrisField, audioSystem, armManager, lassoSystem });   // ST-9.4: initialize mother pod inventory + set _initialized; deps back the mother-pod anchor provider + Phase-A pin API + Phase-B winch pitch + Phase C-lite corridor test
     player.setCaptureNetSystem(captureNetSystem);     // §4.4: berthed-mass translational scaling in _applyThrust
     captureNetVisual.init(scene, player, captureNetSystem);
     // Item 1: staged furnace-breakdown choreography (chunks → furnace, net drawn in).

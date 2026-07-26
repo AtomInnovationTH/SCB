@@ -2100,6 +2100,26 @@ export const Constants = {
     // in the ~5–25 s window. remainingM is the single source for reelProgress.
     REEL_LONG_TETHER_M:   40,     // beyond this the reel speeds up
     REEL_LONG_TETHER_MULT: 3.0,   // speed multiplier at/above the long-tether range
+
+    // ── Reel corridor clearance (mother-net-reel plan §10 Phase C-lite) ──
+    // The reel pauses its final approach CORRIDOR_HOLD_M from the muzzle until
+    // the corridor test passes (a cylinder along ship-local +Z from the muzzle,
+    // radius = debris.sizeMeter/2 + BERTH_CLEARANCE_M, must contain no strut
+    // tip / held daughter catch / lasso cargo cell). Analytic — no mesh
+    // collision exists anywhere in this codebase. On CORRIDOR_TIMEOUT_S the
+    // reel berths at CORRIDOR_EXTENDED_STANDOFF_M instead of clipping through.
+    // Full clear-the-deck choreography (auto-park intruding struts) is
+    // deferred until playtest shows real clipping.
+    CORRIDOR_HOLD_M:              10,   // m from the muzzle where the gate arms
+    CORRIDOR_TIMEOUT_S:           8,    // s held before berthing at extended standoff
+    // Extended standoff: berth here on timeout. Must be ≥ CORRIDOR_HOLD_M —
+    // the hold range is already clear of every intruder: a π-swept strut tip
+    // reaches only ~2.5 m fore, and at the 10 m hold even an 11 m whale's near
+    // face sits at 4.5 m — also clear of the 4 m lasso cargo row. That is the
+    // §4.13 overlap settlement: the gate holds until the furnace feed
+    // (FEED_S ≤ 9 s) frees the cell, else the timeout berth is geometrically
+    // clear of it. No lateral-spread constant needed.
+    CORRIDOR_EXTENDED_STANDOFF_M: 10,
     // Berthed-mass translational effect (plan §8 A2 / §4.4). Applied ONLY in
     // PlayerSatellite._applyThrust as one massFactor scaling ti AND mag;
     // rotation stays kinematic and applyCartesianImpulse is deliberately

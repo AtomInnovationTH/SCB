@@ -20,6 +20,7 @@ import { Events } from '../core/Events.js';
 import { BridleRing } from './BridleRing.js';
 import { CeremonyTimeScale } from '../systems/CeremonyTimeScale.js';
 import { cartesianToKeplerian, orbitToSceneCartesianInto } from './OrbitalMechanics.js';
+import { strutLocalDirection } from './ArmDockBasis.js';
 import * as THREE from 'three';
 
 const CN = Constants.CAPTURE_NET;
@@ -35,6 +36,7 @@ const _v3b = new THREE.Vector3();
 const _v3c = new THREE.Vector3();
 const _v3d = new THREE.Vector3();
 const _v3e = new THREE.Vector3();
+const _v3g = new THREE.Vector3();
 const _q0  = new THREE.Quaternion();
 // Tug scratch (Phase B §9) — catch/ship velocity sampling at CAPTURED.
 const _tugScratchPos = { x: 0, y: 0, z: 0 };
@@ -579,6 +581,27 @@ export class NetProjectile {
      *  daughter-style reel-back so the net still stows/prunes instead of
      *  looping MISSED→REELING on the re-armed auto-reel. */
     this._motherReelFallback = false;
+    // ── Reel corridor clearance (mother-net-reel plan §10 Phase C-lite) ──
+    /** @type {boolean} True while the reel is holding at CORRIDOR_HOLD_M
+     *  waiting for the recovery corridor to clear. */
+    this._corridorHold = false;
+    /** @type {number} Seconds spent in the corridor hold; at CORRIDOR_TIMEOUT_S
+     *  the reel berths at CORRIDOR_EXTENDED_STANDOFF_M rather than clip through. */
+    this._corridorTimer = 0;
+    /** @type {boolean} True once the corridor gate has timed out — latches the
+     *  gate OFF for the rest of the reel so it cannot re-arm against the same
+     *  still-blocked corridor (the berth completes at the held range). */
+    this._corridorTimedOut = false;
+    /** @type {number} The _remainingM at corridor-hold engagement — the hold
+     *  freezes the approach HERE (never pushes it back out). */
+    this._corridorHoldLevelM = 0;
+    /** @type {boolean} True once the corridor gate has emitted its Houston line
+     *  (once per net — a corridor that clears and re-blocks does not re-announce). */
+    this._corridorAnnounced = false;
+    /** @type {number|null} The berth standoff actually in force — normally
+     *  sizeMeter/2 + BERTH_CLEARANCE_M, raised to CORRIDOR_EXTENDED_STANDOFF_M
+     *  after a corridor timeout. */
+    this._effectiveStandoffM = null;
     /** @type {boolean} Phase B §9: the line-taut tug fires exactly once, at
      *  the CAPTURED transition (mother path only). */
     this._tugApplied = false;
@@ -1151,7 +1174,63 @@ export class NetProjectile {
     }
 
     const M_NET = 0.00001;
-    const berthStandoffM = (d.sizeMeter || 2) / 2 + (CN.BERTH_CLEARANCE_M ?? 1.0);
+    // The standoff in force: raised to CORRIDOR_EXTENDED_STANDOFF_M after a
+    // corridor-timeout berth (Phase C-lite, plan §10).
+    const baseStandoffM = (d.sizeMeter || 2) / 2 + (CN.BERTH_CLEARANCE_M ?? 1.0);
+    if (this._effectiveStandoffM == null) this._effectiveStandoffM = baseStandoffM;
+    const berthStandoffM = Math.max(baseStandoffM, this._effectiveStandoffM);
+
+    // ── Corridor gate (Phase C-lite, plan §10): pause the final approach
+    // CORRIDOR_HOLD_M out until the recovery corridor (a cylinder along
+    // ship-local +Z from the muzzle, radius = sizeMeter/2 + BERTH_CLEARANCE_M)
+    // is clear of strut tips, held daughter catches and lasso cargo. On
+    // timeout, berth at the extended standoff rather than clip through.
+    const holdM = Math.max(berthStandoffM, CN.CORRIDOR_HOLD_M ?? 10);
+    if (!this._corridorTimedOut && this._remainingM <= holdM && !this._corridorClear(d)) {
+      if (!this._corridorHold) {
+        this._corridorHold = true;
+        this._corridorTimer = 0;
+        // Freeze at the CURRENT range, never above it: a catch seeded inside
+        // the gate range (a very close shot) must not pop outward to holdM.
+        this._corridorHoldLevelM = this._remainingM;
+      }
+      this._corridorTimer += dt;
+      if (!this._corridorAnnounced) {
+        this._corridorAnnounced = true;
+        eventBus.emit(Events.COMMS_MESSAGE, {
+          text: 'Clearing deck for recovery…',
+          source: 'HOUSTON', priority: 'info',
+        });
+      }
+      if (this._corridorTimer >= (CN.CORRIDOR_TIMEOUT_S ?? 8)) {
+        // Timeout — berth AT the held position (clamped into [base, extended]).
+        // The hold level is already outside every intruder's reach — that is
+        // why the gate froze the approach there — so completing at the held
+        // range neither slides inward past the intruder nor pops outward.
+        const extended = Math.max(holdM, CN.CORRIDOR_EXTENDED_STANDOFF_M ?? 10);
+        this._effectiveStandoffM = Math.min(Math.max(baseStandoffM, this._corridorHoldLevelM), extended);
+        // Keep _corridorHold TRUE for the rest of this frame: berthStandoffM
+        // was derived at the top of the tick from the OLD standoff, so letting
+        // the ease run now would step remainingM below the new standoff and
+        // the next frame would clamp it back OUT — a one-frame outward pop
+        // violating the monotonic-ease invariant. The latch below makes the
+        // gate condition false next frame, and the resume branch clears the
+        // hold there, when the ease runs against the correct standoff.
+        this._corridorTimedOut = true;   // latch: the gate must not re-arm
+                                         // against the same blocked corridor
+                                         // while the berth completes.
+        eventBus.emit(Events.COMMS_MESSAGE, {
+          text: `Deck not clear — berthing at extended standoff (${Math.round(this._effectiveStandoffM)} m).`,
+          source: 'HOUSTON', priority: 'warning',
+        });
+      }
+      // Hold: freeze the approach at the engagement range (still pinned below).
+      if (this._corridorHold) this._remainingM = this._corridorHoldLevelM;
+    } else if (this._corridorHold) {
+      // Corridor cleared (or we were never blocked) — resume the approach.
+      this._corridorHold = false;
+      this._corridorTimer = 0;
+    }
 
     // Monotonic ease-in (never decelerate mid-reel so the tether cannot
     // re-slack and re-snap). Mild long-tether speed-up lands the duration in
@@ -1159,10 +1238,14 @@ export class NetProjectile {
     const reelSpeed = (this._remainingM >= (CN.REEL_LONG_TETHER_M ?? 40))
       ? this.netClass.REEL_SPEED * (CN.REEL_LONG_TETHER_MULT ?? 3.0)
       : this.netClass.REEL_SPEED;
-    this._remainingM = Math.max(berthStandoffM, this._remainingM - reelSpeed * dt);
+    if (!this._corridorHold) {
+      this._remainingM = Math.max(berthStandoffM, this._remainingM - reelSpeed * dt);
+    }
 
     // reelProgress: remainingM is the single source (no external consumer, so
     // free to redefine). 0 at the seeded range (_reelSeedM), 1 at the standoff.
+    // During a corridor hold remainingM freezes, so progress freezes with it —
+    // the honest read (the catch IS parked at the gate).
     const seedM = Math.max(berthStandoffM + 1e-3, this._reelSeedM ?? this.tetherPaidOut ?? berthStandoffM + 1e-3);
     this.reelProgress = Math.min(1, Math.max(0,
       1 - (this._remainingM - berthStandoffM) / (seedM - berthStandoffM)));
@@ -1239,6 +1322,117 @@ export class NetProjectile {
   }
 
   /**
+   * @private Recovery-corridor test (mother-net-reel plan §10 Phase C-lite).
+   * Analytic — no mesh collision exists anywhere in this codebase. The
+   * corridor is a cylinder along ship-local +Z from the muzzle, radius =
+   * debris.sizeMeter/2 + BERTH_CLEARANCE_M. It must contain:
+   *   1. no strut tip (strutLocalDirection(α, az) × STRUT_LENGTH from the
+   *      collar pivot — at α≈π a 1.60 m strut tip reaches ~2.5 m fore, past
+   *      the muzzle plane at z ≈ 1.30 m; a forward-swept strut blocks whether
+   *      or not it holds a catch),
+   *   2. no lasso cargo cell (parked at MOTHER_CARGO_FWD_OFFSET_M dead ahead).
+   * Everything is evaluated in the SHIP-LOCAL frame with the origin at the pod
+   * muzzle (the corridor is defined there), so the test is attitude- and
+   * position-free and needs no world-space round-trip.
+   * @param {object} d — the caught debris (for the corridor radius)
+   * @returns {boolean} true when the corridor is clear
+   */
+  _corridorClear(d) {
+    const player = this._ctx?.player;
+    if (!player || typeof player.getNetPodPositionInto !== 'function') return true;
+    const V5 = Constants.OCTOPUS_V5;
+    if (!V5) return true;
+
+    const radiusM = (d.sizeMeter || 2) / 2 + (CN.BERTH_CLEARANCE_M ?? 1.0);
+    const radiusSq = radiusM * radiusM;
+    const M_NET = 0.00001;
+
+    // Everything is evaluated SHIP-LOCAL with the origin at the pod muzzle —
+    // the corridor is defined in that frame, so the test is attitude- and
+    // position-free. Muzzle ship-local (from _buildNetPods): x=0, y=±0.06,
+    // z=1.30 — recovered exactly from the muzzle anchor's local position when
+    // the real ship is present, falling back to the documented constants.
+    const muzzle = player._netPodMuzzles?.[this.podIndex] ?? player._netPodMuzzles?.[0];
+    const mx = muzzle ? muzzle.position.x / M_NET : 0;
+    const my = muzzle ? muzzle.position.y / M_NET : 0;
+    const mz = muzzle ? muzzle.position.z / M_NET : 1.30;
+
+    // Cylinder axis = ship-local +Z. A point is INSIDE when its axial
+    // coordinate z > 0 (fore of the muzzle plane) — intruders aft of the
+    // muzzle can't be clipped by an incoming catch — AND its radial
+    // (x,y) distance from the axis < radiusM.
+    const testLocal = (lx, ly, lz) => {
+      if (lz <= 0) return false;                       // aft of the muzzle plane
+      return (lx * lx + ly * ly) < radiusSq;
+    };
+
+    // ── 1. Strut tips ──
+    // Strut geometry is ship-local by construction: pivot at
+    // (cos az·collarR, sin az·collarR, collarY), tip at pivot +
+    // strutLocalDirection(α, az) × STRUT_LENGTH. A forward-swept strut is the
+    // blocker whether or not it holds a catch — no separate held-catch test:
+    // whenever a tip is fore of the muzzle plane (tipZ > 0) its radial is
+    // ≤ 2.01 m, while the smallest whale-class corridor radius in the catalog
+    // is 2.40 m (FENGYUN-1C, 2.8 m), so the tip test always fires first. (And
+    // capturedDebris is set at CAPTURED/GRAPPLED — long before the daughter is
+    // back at the tip — so a held-catch check keyed on it would test the wrong
+    // position anyway.) Revisit if strut length, collar radius or the minimum
+    // whale size changes enough to close that 0.39 m margin.
+    const armManager = this._ctx?.armManager;
+    const arms = armManager?.arms;
+    if (arms && arms.length) {
+      const strutLen = V5.STRUT_LENGTH ?? 1.60;
+      const collarR  = V5.COLLAR_RADIUS ?? 0.40;
+      const collarY  = V5.COLLAR_Y ?? 0.90;
+      for (let i = 0; i < arms.length; i++) {
+        const arm = arms[i];
+        if (!arm) continue;
+        // Stowed/locked struts sit at α=0 (aft, against the barrel) — clear
+        // by construction, and getAimAlpha already reflects the forced α=0,
+        // but skip them explicitly so a mid-stow strut doesn't flicker the
+        // gate.
+        const ds = (typeof arm.getDeployState === 'function') ? arm.getDeployState() : 'DEPLOYED';
+        if (ds === 'LOCKED' || ds === 'STOWED') continue;
+        const alpha = (typeof arm.getAimAlpha === 'function') ? arm.getAimAlpha() : Math.PI / 2;
+        const azRad = (arm._azimuthDeg || 0) * Math.PI / 180;
+        strutLocalDirection(alpha, azRad, _v3g);
+        const tipX = Math.cos(azRad) * collarR + _v3g.x * strutLen - mx;
+        const tipY = Math.sin(azRad) * collarR + _v3g.y * strutLen - my;
+        const tipZ = collarY + _v3g.z * strutLen - mz;
+        if (testLocal(tipX, tipY, tipZ)) return false;
+      }
+    }
+
+    // ── 2. Lasso cargo cells ──
+    // Cells park at MOTHER_CARGO_FWD_OFFSET_M (4 m) ahead of the HULL ORIGIN
+    // on the centreline — squarely inside the corridor (the §4.13 overlap).
+    // Settled in §10 by ACCEPTING the overlap and letting the gate manage it:
+    // the reel holds at CORRIDOR_HOLD_M until the furnace feed (FEED_S ≤ 9 s)
+    // clears the cell; on timeout the berth completes at the extended
+    // standoff, whose near face (≥ HOLD_M − sizeMeter/2 ≥ 4.5 m for an 11 m
+    // whale) clears the 4 m cargo row. No lateral-spread constant needed.
+    const lasso = this._ctx?.lassoSystem;
+    const cargo = lasso?._cargo;
+    if (cargo && cargo.length) {
+      const fwdOff = Constants.MOTHER_CARGO_FWD_OFFSET_M ?? 4;
+      const spread = Constants.MOTHER_CARGO_CELL_SPREAD_M ?? 0;
+      const cells = Math.max(1, Constants.MOTHER_CARGO_CELLS ?? 3);
+      for (const item of cargo) {
+        const t = item?.target;
+        if (!t || t.alive === false) continue;
+        const lat = (item.cellIndex - (cells - 1) / 2) * spread;
+        const catchR = ((t.sizeMeter || 1) / 2);
+        const lx = lat - mx, ly = -my, lz = fwdOff - mz;
+        if (lz > 0 && (lx * lx + ly * ly) < (radiusM + catchR) * (radiusM + catchR)) {
+          return false;
+        }
+      }
+    }
+
+    return true;
+  }
+
+  /**
    * Mother BERTHED per-frame hold (driven by CaptureNetSystem.update — the
    * projectile's own switch no-ops on BERTHED). Freezes the reel formula at
    * the standoff: same code path, same pin API, same ship-relative frame.
@@ -1256,7 +1450,11 @@ export class NetProjectile {
     if (d.alive === false) return false;
 
     const M_NET = 0.00001;
-    const berthStandoffM = (d.sizeMeter || 2) / 2 + (CN.BERTH_CLEARANCE_M ?? 1.0);
+    // Respect the corridor-timeout extended standoff (Phase C-lite): a berth
+    // forced out to CORRIDOR_EXTENDED_STANDOFF_M must HOLD there — recomputing
+    // the base standoff here would slide the catch inward at the berth.
+    const baseStandoffM = (d.sizeMeter || 2) / 2 + (CN.BERTH_CLEARANCE_M ?? 1.0);
+    const berthStandoffM = Math.max(baseStandoffM, this._effectiveStandoffM ?? baseStandoffM);
     this._remainingM = berthStandoffM;
 
     const fwdTarget = _v3a.set(0, 0, 1).applyQuaternion(player.quaternion).normalize();
@@ -1699,6 +1897,11 @@ export class CaptureNetSystem {
      *  (Phase B §9.3). Injected via init(deps.audioSystem); optional-chained
      *  so headless tests and the no-audio path stay silent. */
     this._audioSystem = null;
+    /** @type {object|null} Optional ArmManager + LassoSystem refs for the
+     *  Phase C-lite recovery-corridor test (strut tips, held daughter
+     *  catches, lasso cargo cells). Absent ⇒ corridor vacuously clear. */
+    this._armManager = null;
+    this._lassoSystem = null;
   }
 
   // ── Lifecycle ──────────────────────────────────────────────────────────
@@ -1706,16 +1909,19 @@ export class CaptureNetSystem {
   /**
    * Initialise inventory to Dyneema Y0 defaults.
    * Called once at game start / after load.
-   * @param {object} [deps] — { player, debrisField, audioSystem } context
-   *   references. `player` backs the mother-pod anchor provider; `debrisField`
-   *   backs the Phase-A pin API (pinCapturedDebris); `audioSystem` backs the
-   *   Phase-B winch pitch. Optional — the no-arg call stays valid for
-   *   headless tests and test-main-wiring.
+   * @param {object} [deps] — { player, debrisField, audioSystem, armManager,
+   *   lassoSystem } context references. `player` backs the mother-pod anchor
+   *   provider; `debrisField` backs the Phase-A pin API (pinCapturedDebris);
+   *   `audioSystem` backs the Phase-B winch pitch; `armManager`/`lassoSystem`
+   *   back the Phase C-lite recovery-corridor test. Optional — the no-arg
+   *   call stays valid for headless tests and test-main-wiring.
    */
   init(deps = {}) {
     this._player = deps.player || this._player || null;
     this._debrisField = deps.debrisField || this._debrisField || null;
     this._audioSystem = deps.audioSystem || this._audioSystem || null;
+    this._armManager = deps.armManager || this._armManager || null;
+    this._lassoSystem = deps.lassoSystem || this._lassoSystem || null;
     if (!Constants.FEATURE_FLAGS.CAPTURE_NET) return;
 
     this._motherPodInventory = [CN.LARGE.MAGAZINE_SIZE, CN.LARGE.MAGAZINE_SIZE];
@@ -2165,8 +2371,14 @@ export class CaptureNetSystem {
         : null,
     });
     // Phase-A berth context (player for the ship-relative reel frame,
-    // debrisField for the pinCapturedDebris API — plan §1.1).
-    net._ctx = { player: this._player, debrisField: this._debrisField };
+    // debrisField for the pinCapturedDebris API — plan §1.1). Phase C-lite
+    // adds armManager + lassoSystem for the recovery-corridor test (§10).
+    net._ctx = {
+      player: this._player,
+      debrisField: this._debrisField,
+      armManager: this._armManager,
+      lassoSystem: this._lassoSystem,
+    };
 
     this.activeNets.push(net);
 
