@@ -83,6 +83,20 @@ class AudioSystem {
     this._tetherTensionTimers = new Map();
     this._tetherTensionCooldown = 3.0; // seconds between tension sounds
 
+    // Mother net (Phase B §9): loop node state for the flight whistle and the
+    // reel winch. Null when no loop is running; _stopNetLoops() is the
+    // chokepoint every terminal path calls so a loop can never stick.
+    this._netWhistleNodes = null;
+    this._netWinchNodes = null;
+    // Ceremony duck guard (review item 4): the NET_CEREMONY_START duck is
+    // paired with NET_CEREMONY_COMPLETE, which fires only from
+    // _captureSuccess/_miss — a net abandoned before either (release from
+    // FLIGHT, CaptureNetSystem.reset()) would leave _duckHolds at 1 forever
+    // (every non-alarm bus stuck at half gain). The flag makes acquire
+    // idempotent and _releaseNetDuck() rides the _stopNetLoops() chokepoint,
+    // so the duck cannot outlive a net.
+    this._netCeremonyDucked = false;
+
     // Phase R9: 4-tier ΔV alarm state
     this._dvAlarmTier = 0;
     this._dvDucked = false;
@@ -708,6 +722,106 @@ class AudioSystem {
 
     eventBus.on(Events.LASSO_DENIED, () => {
       this.playDeny();
+    });
+
+    // === Mother net (mother-net-reel plan §9 Phase B) — the whale sequence ===
+    // Every listener is mother-gated on podIndex ≥ 0: the daughter net shares
+    // these events (armIndex ≥ 0) and keeps its existing sounds. The two loops
+    // (flight whistle, reel winch) are killed via _stopNetLoops() from EVERY
+    // terminal path — a stuck loop is the classic bug.
+
+    // Fire: canister thump + flight whistle (stopped on any terminal event).
+    eventBus.on(Events.NET_FIRED, (data) => {
+      if (!data || data.podIndex < 0) return;
+      this.playNetCanisterThump();
+      this.startNetFlightWhistle();
+    });
+
+    // Catch: whistle stops, the tug's clamp lands (the line-taut beat).
+    eventBus.on(Events.NET_CATCH_SUCCESS, (data) => {
+      if (!data || data.podIndex < 0) return;
+      this.stopNetFlightWhistle();
+      this.playNetCinchClamp();
+    });
+
+    // Miss: DENY buzz + kill the whistle. The strain slip gets its own rip
+    // voice (§9.7) — the comms line already names the rated-mass band.
+    eventBus.on(Events.NET_CATCH_MISS, (data) => {
+      if (!data || data.podIndex < 0) return;
+      this._stopNetLoops();
+      if (data.reason === 'strain_slip') {
+        this.playNetStrainRip();
+      } else {
+        this.playDeny();
+      }
+    });
+
+    // Reel: winch loop (pitch mapped to remainingM via updateNetReelPitch,
+    // polled from CaptureNetSystem.update). Only for a successful catch — the
+    // empty miss reel-back is a quiet rewind.
+    eventBus.on(Events.NET_REEL_STARTED, (data) => {
+      if (!data || data.podIndex < 0) return;
+      if (data.hasCatch) this.startNetReelWinch();
+    });
+
+    // Berth: winch stops, dock clunk + short reward chime.
+    eventBus.on(Events.NET_BERTHED, (data) => {
+      if (!data || data.podIndex < 0) return;
+      this._stopNetLoops();
+      this.playNetBerthClunk();
+      this.playNetBerthChime();
+    });
+
+    // Reel completed: belt-and-braces loop stop. The berth path already stops
+    // them via NET_BERTHED; this covers the fallback STOWED exit (the headless
+    // mother reel-back) and any future reel-end path that skips the berth.
+    eventBus.on(Events.NET_REEL_COMPLETED, (data) => {
+      if (!data || data.podIndex < 0) return;
+      this._stopNetLoops();
+    });
+
+    // Release / jettison: kill every loop (the abort path).
+    eventBus.on(Events.NET_RELEASED, (data) => {
+      if (!data || data.podIndex < 0) return;
+      this._stopNetLoops();
+    });
+
+    // Fragmentation while a mother net is on the field: kill the loops.
+    // (NET_FRAGMENTATION carries no podIndex — the debris went; the net's own
+    // miss path fires separately and also stops the loops.)
+    eventBus.on(Events.NET_FRAGMENTATION, () => {
+      this._stopNetLoops();
+    });
+
+    // Ceremony stings (already emitted behind FEATURE_FLAGS.NET_CEREMONY):
+    // brake retro hiss, envelop sweep, per-10% cinch ratchet ticks.
+    eventBus.on(Events.NET_BRAKE_FIRED, (data) => {
+      if (!data || data.podIndex < 0) return;
+      this.playNetBrakeHiss();
+    });
+    eventBus.on(Events.NET_ENVELOP_PEAK, (data) => {
+      if (!data || data.podIndex < 0) return;
+      this.playNetEnvelopSting();
+    });
+    eventBus.on(Events.NET_CINCH_PROGRESS, (data) => {
+      if (!data || data.podIndex < 0) return;
+      this.playNetCinchTick(data.fraction);
+    });
+
+    // Ceremony ducking: the mix ducks under the ceremony so the net voices
+    // read clearly (alarm bus is never ducked — danger still outranks).
+    // Idempotent acquire; release rides _stopNetLoops() so an abandoned net
+    // cannot leak a permanent 50% mix (review item 4).
+    eventBus.on(Events.NET_CEREMONY_START, (data) => {
+      if (!data || data.podIndex < 0) return;
+      if (!this._netCeremonyDucked) {
+        this._netCeremonyDucked = true;
+        this._duckOthers(true);
+      }
+    });
+    eventBus.on(Events.NET_CEREMONY_COMPLETE, (data) => {
+      if (!data || data.podIndex < 0) return;
+      this._releaseNetDuck();
     });
 
     // S3b: MPD Burst Mode audio
@@ -2907,6 +3021,526 @@ class AudioSystem {
     lfo.start(now);
     noise.stop(now + dur);
     lfo.stop(now + dur);
+  }
+
+  // ==========================================================================
+  // MOTHER NET (mother-net-reel plan §9 Phase B) — the whale sequence.
+  //
+  // The mother Large Net was 100% silent. Every voice below is mother-gated
+  // (podIndex ≥ 0) at the listener; the daughter/lasso keep their existing
+  // sounds. Two loops (flight whistle, reel winch) have explicit stop methods
+  // and a single _stopNetLoops() chokepoint called from EVERY terminal path —
+  // a stuck loop is the classic bug.
+  // ==========================================================================
+
+  /**
+   * Mother canister thump — the 1.95 kg net canister leaving the pod muzzle.
+   * Low body thud + a short pressure "pfft" (the cold-gas ejection), distinct
+   * from the lasso's electromagnetic THWIP (playLassoFire) and the daughter's
+   * crossbow WOOSH (playArmDeploy). PHYSICAL.
+   */
+  playNetCanisterThump() {
+    if (!this.available) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+
+    // Layer 1: body thud (low sine burst, 60→35 Hz, ~180 ms)
+    const thud = ctx.createOscillator();
+    thud.type = 'sine';
+    thud.frequency.setValueAtTime(60, now);
+    thud.frequency.exponentialRampToValueAtTime(35, now + 0.18);
+    const thudGain = ctx.createGain();
+    thudGain.gain.setValueAtTime(0.35, now);
+    thudGain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
+    thud.connect(thudGain);
+    thudGain.connect(this.physicalBus);
+    thud.start(now);
+    thud.stop(now + 0.22);
+
+    // Layer 2: ejection pfft (short noise burst through a lowpass, ~120 ms)
+    const dur = 0.12;
+    const buf = ctx.createBuffer(1, Math.ceil(ctx.sampleRate * dur), ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) {
+      data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (data.length * 0.4));
+    }
+    const noise = ctx.createBufferSource();
+    noise.buffer = buf;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 900;
+    const noiseGain = ctx.createGain();
+    noiseGain.gain.setValueAtTime(0.18, now);
+    noiseGain.gain.exponentialRampToValueAtTime(0.001, now + dur);
+    noise.connect(lp);
+    lp.connect(noiseGain);
+    noiseGain.connect(this.physicalBus);
+    noise.start(now);
+    noise.stop(now + dur);
+  }
+
+  /**
+   * Mother flight whistle — continuous loop while the net is airborne. Same
+   * idiom as startLassoWireWhistle but a separate instance (the two can never
+   * overlap by mass routing, but they must not share state) and a lower,
+   * heavier band (600 Hz vs 800 Hz — the Large Net reads heavier). PHYSICAL.
+   */
+  startNetFlightWhistle() {
+    this.stopNetFlightWhistle();
+    if (!this.available) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+
+    const bufSize = ctx.sampleRate * 2;
+    const buf = ctx.createBuffer(1, bufSize, ctx.sampleRate);
+    const bufData = buf.getChannelData(0);
+    for (let i = 0; i < bufSize; i++) bufData[i] = Math.random() * 2 - 1;
+    const noise = ctx.createBufferSource();
+    noise.buffer = buf;
+    noise.loop = true;
+
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.value = 600;
+    filter.Q.value = 7;
+
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(0.035, now + 0.12);
+
+    noise.connect(filter);
+    filter.connect(gain);
+    gain.connect(this.physicalBus);
+    noise.start(now);
+
+    this._netWhistleNodes = { noise, filter, gain };
+  }
+
+  /** Stop the mother flight whistle with a short fade. */
+  stopNetFlightWhistle() {
+    if (!this._netWhistleNodes) return;
+    const { noise, gain } = this._netWhistleNodes;
+    try {
+      if (this.ctx) {
+        gain.gain.linearRampToValueAtTime(0, this.ctx.currentTime + 0.1);
+      }
+      const n = noise;
+      timerManager.setTimeout(() => {
+        try { n.stop(); } catch (e) { /* already stopped */ }
+        try { n.disconnect(); } catch (e) { /* already disconnected */ }
+      }, 150, { owner: this });
+    } catch (e) { /* audio not available */ }
+    this._netWhistleNodes = null;
+  }
+
+  /**
+   * Mother cinch clamp — the wrapped bundle ratcheting shut on a whale.
+   * Heavier than playCatchClamp (whose meaning "net clamp on catch" is taken
+   * by ARM_CAPTURED): a low metallic CLUNK + a ratchet buzz tail. PHYSICAL.
+   */
+  playNetCinchClamp() {
+    if (!this.available) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+
+    // Low metallic clunk (sine 70→45 Hz + triangle ring 500→250 Hz)
+    const clunk = ctx.createOscillator();
+    clunk.type = 'sine';
+    clunk.frequency.setValueAtTime(70, now);
+    clunk.frequency.exponentialRampToValueAtTime(45, now + 0.2);
+    const clunkGain = ctx.createGain();
+    clunkGain.gain.setValueAtTime(0.4, now);
+    clunkGain.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
+    clunk.connect(clunkGain);
+    clunkGain.connect(this.physicalBus);
+    clunk.start(now);
+    clunk.stop(now + 0.28);
+
+    const ring = ctx.createOscillator();
+    ring.type = 'triangle';
+    ring.frequency.setValueAtTime(500, now + 0.02);
+    ring.frequency.exponentialRampToValueAtTime(250, now + 0.5);
+    const ringGain = ctx.createGain();
+    ringGain.gain.setValueAtTime(0.18, now + 0.02);
+    ringGain.gain.exponentialRampToValueAtTime(0.001, now + 0.55);
+    ring.connect(ringGain);
+    ringGain.connect(this.physicalBus);
+    ring.start(now + 0.02);
+    ring.stop(now + 0.55);
+
+    // Ratchet buzz tail (12 Hz square LFO on a noise band, ~300 ms)
+    const dur = 0.3;
+    const buf = ctx.createBuffer(1, Math.ceil(ctx.sampleRate * dur), ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+    const noise = ctx.createBufferSource();
+    noise.buffer = buf;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 1400;
+    bp.Q.value = 4;
+    const lfo = ctx.createOscillator();
+    lfo.type = 'square';
+    lfo.frequency.value = 12;
+    const lfoGain = ctx.createGain();
+    lfoGain.gain.value = 0.05;
+    lfo.connect(lfoGain);
+    const noiseGain = ctx.createGain();
+    noiseGain.gain.setValueAtTime(0.12, now + 0.05);
+    lfoGain.connect(noiseGain.gain);
+    noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.05 + dur);
+    noise.connect(bp);
+    bp.connect(noiseGain);
+    noiseGain.connect(this.physicalBus);
+    noise.start(now + 0.05);
+    lfo.start(now + 0.05);
+    noise.stop(now + 0.05 + dur);
+    lfo.stop(now + 0.05 + dur);
+  }
+
+  /**
+   * Mother reel winch — continuous loop while the catch reels in, pitch mapped
+   * to the remaining distance (updateNetReelPitch). Mechanical ratcheting like
+   * playLassoWinch but a LOOP (the mother reel runs 5–25 s, not 500 ms).
+   * PHYSICAL.
+   */
+  startNetReelWinch() {
+    this.stopNetReelWinch();
+    if (!this.available) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+
+    const bufSize = ctx.sampleRate * 2;
+    const buf = ctx.createBuffer(1, bufSize, ctx.sampleRate);
+    const bufData = buf.getChannelData(0);
+    for (let i = 0; i < bufSize; i++) bufData[i] = Math.random() * 2 - 1;
+    const noise = ctx.createBufferSource();
+    noise.buffer = buf;
+    noise.loop = true;
+
+    // Bandpass centre driven by remainingM (see updateNetReelPitch): starts
+    // high (far) and falls as the catch closes — the audible range readout.
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.value = 900;
+    filter.Q.value = 3;
+
+    // Mechanical ratchet LFO.
+    const lfo = ctx.createOscillator();
+    lfo.type = 'square';
+    lfo.frequency.value = 11;
+    const lfoGain = ctx.createGain();
+    lfoGain.gain.value = 0.04;
+    lfo.connect(lfoGain);
+
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(0.12, now + 0.15);
+    lfoGain.connect(gain.gain);
+
+    noise.connect(filter);
+    filter.connect(gain);
+    gain.connect(this.physicalBus);
+    noise.start(now);
+    lfo.start(now);
+
+    this._netWinchNodes = { noise, filter, gain, lfo };
+  }
+
+  /**
+   * Map the winch pitch to the reel's remaining distance. Called per frame
+   * from CaptureNetSystem.update while a mother net reels (cheap — one
+   * setTargetAtTime on a live loop, no-op when no winch is running).
+   * @param {number} remainingM — metres left to reel (≥ 0)
+   * @param {number} seedM — the seeded reel distance (for normalisation)
+   */
+  updateNetReelPitch(remainingM, seedM) {
+    const nodes = this._netWinchNodes;
+    if (!nodes || !this.ctx) return;
+    const seed = Math.max(1e-3, seedM || 1);
+    const t = Math.max(0, Math.min(1, remainingM / seed));   // 1 = far, 0 = at the muzzle
+    // 900 Hz far → 350 Hz at the berth. setTargetAtTime smooths the steps.
+    const freq = 350 + 550 * t;
+    try {
+      nodes.filter.frequency.setTargetAtTime(freq, this.ctx.currentTime, 0.05);
+    } catch (e) { /* headless stub */ }
+  }
+
+  /** Stop the mother reel winch with a short fade. */
+  stopNetReelWinch() {
+    if (!this._netWinchNodes) return;
+    const { noise, gain, lfo } = this._netWinchNodes;
+    try {
+      if (this.ctx) {
+        gain.gain.linearRampToValueAtTime(0, this.ctx.currentTime + 0.12);
+      }
+      const n = noise, l = lfo;
+      timerManager.setTimeout(() => {
+        try { n.stop(); } catch (e) { /* already stopped */ }
+        try { n.disconnect(); } catch (e) { /* already disconnected */ }
+        try { l.stop(); } catch (e) { /* already stopped */ }
+        try { l.disconnect(); } catch (e) { /* already disconnected */ }
+      }, 180, { owner: this });
+    } catch (e) { /* audio not available */ }
+    this._netWinchNodes = null;
+  }
+
+  /**
+   * Mother berth clunk — the wrapped package settling onto the launcher at the
+   * standoff. A single deep docking thud (distinct from playDockClick's small
+   * arm-latch click). PHYSICAL.
+   */
+  playNetBerthClunk() {
+    if (!this.available) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+
+    // Deep thud (sine 55→30 Hz, ~350 ms) + a short contact noise tick.
+    const thud = ctx.createOscillator();
+    thud.type = 'sine';
+    thud.frequency.setValueAtTime(55, now);
+    thud.frequency.exponentialRampToValueAtTime(30, now + 0.35);
+    const thudGain = ctx.createGain();
+    thudGain.gain.setValueAtTime(0.45, now);
+    thudGain.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
+    thud.connect(thudGain);
+    thudGain.connect(this.physicalBus);
+    thud.start(now);
+    thud.stop(now + 0.4);
+
+    const tickDur = 0.04;
+    const buf = ctx.createBuffer(1, Math.ceil(ctx.sampleRate * tickDur), ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) {
+      data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (data.length * 0.2));
+    }
+    const noise = ctx.createBufferSource();
+    noise.buffer = buf;
+    const hp = ctx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.value = 1200;
+    const noiseGain = ctx.createGain();
+    noiseGain.gain.setValueAtTime(0.15, now);
+    noiseGain.gain.exponentialRampToValueAtTime(0.001, now + tickDur);
+    noise.connect(hp);
+    hp.connect(noiseGain);
+    noiseGain.connect(this.physicalBus);
+    noise.start(now);
+    noise.stop(now + tickDur);
+  }
+
+  /**
+   * Mother berth chime — short two-note REWARD for a secured whale. Distinct
+   * from playCaptureSuccess (single A5, daughter-flavoured): a lower, longer
+   * G4→D5 pair that reads as "heavy cargo signed off". REWARD.
+   */
+  playNetBerthChime() {
+    if (!this.available) return;
+    const now = this.ctx.currentTime;
+    this._playSineBlip(now,        392, 0.16, 0.20);   // G4
+    this._playSineBlip(now + 0.12, 587, 0.22, 0.24);   // D5, held
+  }
+
+  /**
+   * Mother retro-brake hiss — the corner retros firing to arrest the net at
+   * BRAKE entry. A mid-band noise burst (~400 ms), distinct from the lasso's
+   * contact clank. PHYSICAL.
+   */
+  playNetBrakeHiss() {
+    if (!this.available) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+    const dur = 0.4;
+
+    const buf = ctx.createBuffer(1, Math.ceil(ctx.sampleRate * dur), ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) {
+      data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (data.length * 0.6));
+    }
+    const noise = ctx.createBufferSource();
+    noise.buffer = buf;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.setValueAtTime(2500, now);
+    bp.frequency.exponentialRampToValueAtTime(900, now + dur);
+    bp.Q.value = 1.5;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.2, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + dur);
+    noise.connect(bp);
+    bp.connect(gain);
+    gain.connect(this.physicalBus);
+    noise.start(now);
+    noise.stop(now + dur);
+  }
+
+  /**
+   * Mother envelop sting — the rim weights sweeping past the whale at
+   * ENVELOP peak. A soft fabric "shh" sweep (noise band 1800→600 Hz).
+   * PHYSICAL.
+   */
+  playNetEnvelopSting() {
+    if (!this.available) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+    const dur = 0.35;
+
+    const buf = ctx.createBuffer(1, Math.ceil(ctx.sampleRate * dur), ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) {
+      data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (data.length * 0.5));
+    }
+    const noise = ctx.createBufferSource();
+    noise.buffer = buf;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.setValueAtTime(1800, now);
+    bp.frequency.exponentialRampToValueAtTime(600, now + dur);
+    bp.Q.value = 2.5;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(0.16, now + 0.06);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + dur);
+    noise.connect(bp);
+    bp.connect(gain);
+    gain.connect(this.physicalBus);
+    noise.start(now);
+    noise.stop(now + dur);
+  }
+
+  /**
+   * Mother cinch-progress tick — one short ratchet click per 10% cinch
+   * threshold. Pitched up slightly as the fraction closes (the drawstring
+   * tightening). PHYSICAL.
+   * @param {number} [fraction=0] — cinch fraction 0..1
+   */
+  playNetCinchTick(fraction = 0) {
+    if (!this.available) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+    const f = Math.max(0, Math.min(1, fraction));
+    const freq = 900 + 500 * f;   // 900 Hz open → 1400 Hz cinched
+    const dur = 0.03;
+
+    const osc = ctx.createOscillator();
+    osc.type = 'square';
+    osc.frequency.value = freq;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.07, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + dur);
+    osc.connect(gain);
+    gain.connect(this.physicalBus);
+    osc.start(now);
+    osc.stop(now + dur);
+  }
+
+  /**
+   * Mother strain rip — the net letting go at the 80–100% rated-mass band.
+   * Creak-then-let-go: a rising tension creak (sawtooth 180→400 Hz) that cuts
+   * to a noise rip + release drop. Pairs with the strain-slip comms line.
+   * PHYSICAL.
+   */
+  playNetStrainRip() {
+    if (!this.available) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+
+    // Creak (rising sawtooth, ~350 ms)
+    const creak = ctx.createOscillator();
+    creak.type = 'sawtooth';
+    creak.frequency.setValueAtTime(180, now);
+    creak.frequency.linearRampToValueAtTime(400, now + 0.35);
+    const creakGain = ctx.createGain();
+    creakGain.gain.setValueAtTime(0.08, now);
+    creakGain.gain.linearRampToValueAtTime(0.16, now + 0.3);
+    creakGain.gain.exponentialRampToValueAtTime(0.001, now + 0.38);
+    creak.connect(creakGain);
+    creakGain.connect(this.physicalBus);
+    creak.start(now);
+    creak.stop(now + 0.38);
+
+    // Rip (noise burst, ~200 ms, at the creak peak)
+    const ripDur = 0.2;
+    const buf = ctx.createBuffer(1, Math.ceil(ctx.sampleRate * ripDur), ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) {
+      data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (data.length * 0.25));
+    }
+    const noise = ctx.createBufferSource();
+    noise.buffer = buf;
+    const hp = ctx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.value = 1500;
+    const noiseGain = ctx.createGain();
+    noiseGain.gain.setValueAtTime(0.25, now + 0.32);
+    noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.32 + ripDur);
+    noise.connect(hp);
+    hp.connect(noiseGain);
+    noiseGain.connect(this.physicalBus);
+    noise.start(now + 0.32);
+    noise.stop(now + 0.32 + ripDur);
+
+    // Release drop (sine 300→80 Hz — the let-go)
+    const drop = ctx.createOscillator();
+    drop.type = 'sine';
+    drop.frequency.setValueAtTime(300, now + 0.34);
+    drop.frequency.exponentialRampToValueAtTime(80, now + 0.34 + 0.3);
+    const dropGain = ctx.createGain();
+    dropGain.gain.setValueAtTime(0.18, now + 0.34);
+    dropGain.gain.exponentialRampToValueAtTime(0.001, now + 0.34 + 0.35);
+    drop.connect(dropGain);
+    dropGain.connect(this.physicalBus);
+    drop.start(now + 0.34);
+    drop.stop(now + 0.34 + 0.35);
+  }
+
+  /**
+   * Aim-resolve double-tick — the mother slew settling on the launch attitude.
+   * Two short TICK clicks ~70 ms apart (the "locked, then confirmed" gesture).
+   * Distinct from playClick (single UI tick) and the target-lock PING earcon.
+   * TICK.
+   */
+  playAimResolveTick() {
+    if (!this.available) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+    for (let i = 0; i < 2; i++) {
+      const start = now + i * 0.07;
+      const osc = ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.value = i === 0 ? 1000 : 1250;
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.09, start);
+      gain.gain.exponentialRampToValueAtTime(0.001, start + 0.04);
+      osc.connect(gain);
+      gain.connect(this.tickBus);
+      osc.start(start);
+      osc.stop(start + 0.04);
+    }
+  }
+
+  /**
+   * _stopNetLoops — the loop chokepoint (§9.5). Called from EVERY mother
+   * terminal path (catch, miss, release, frag, strain, berth, reel-completed,
+   * tab-hide, reset) so no loop can stick. Idempotent. Also releases the
+   * ceremony duck (review item 4) — the duck must not outlive the net.
+   * @private
+   */
+  _stopNetLoops() {
+    this.stopNetFlightWhistle();
+    this.stopNetReelWinch();
+    this._releaseNetDuck();
+  }
+
+  /**
+   * Idempotent release of the mother-net ceremony duck (review item 4).
+   * Paired with the guarded acquire in the NET_CEREMONY_START handler.
+   * @private
+   */
+  _releaseNetDuck() {
+    if (!this._netCeremonyDucked) return;
+    this._netCeremonyDucked = false;
+    this._duckOthers(false);
   }
 
   // ==========================================================================

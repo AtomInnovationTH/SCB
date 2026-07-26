@@ -854,7 +854,7 @@ async function init() {
 
   // V-8: Capture net system + visual effects
   if (Constants.FEATURE_FLAGS.CAPTURE_NET) {
-    captureNetSystem.init({ player, debrisField });   // ST-9.4: initialize mother pod inventory + set _initialized; deps back the mother-pod anchor provider + Phase-A pin API
+    captureNetSystem.init({ player, debrisField, audioSystem });   // ST-9.4: initialize mother pod inventory + set _initialized; deps back the mother-pod anchor provider + Phase-A pin API + Phase-B winch pitch
     player.setCaptureNetSystem(captureNetSystem);     // §4.4: berthed-mass translational scaling in _applyThrust
     captureNetVisual.init(scene, player, captureNetSystem);
     // Item 1: staged furnace-breakdown choreography (chunks → furnace, net drawn in).
@@ -1329,6 +1329,7 @@ async function init() {
         if (typeof audioSystem.stopAmbientLoop === 'function') audioSystem.stopAmbientLoop();
         if (typeof audioSystem.stopLassoWireWhistle === 'function') audioSystem.stopLassoWireWhistle();
         if (typeof audioSystem.stopAlignmentTone === 'function') audioSystem.stopAlignmentTone();
+        if (typeof audioSystem._stopNetLoops === 'function') audioSystem._stopNetLoops();   // mother net whistle + winch (Phase B)
       }
       _syncAudioCtxState();
     } else {
@@ -1364,6 +1365,7 @@ async function init() {
       if (typeof audioSystem.stopAmbientLoop === 'function') audioSystem.stopAmbientLoop();
       if (typeof audioSystem.stopLassoWireWhistle === 'function') audioSystem.stopLassoWireWhistle();
       if (typeof audioSystem.stopAlignmentTone === 'function') audioSystem.stopAlignmentTone();
+      if (typeof audioSystem._stopNetLoops === 'function') audioSystem._stopNetLoops();   // mother net whistle + winch (Phase B)
     }
     _syncAudioCtxState();
     // Do NOT call _setHudHidden(true) — when the user alt-tabs back the

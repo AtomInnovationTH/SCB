@@ -19,7 +19,7 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { BridleRing } from './BridleRing.js';
 import { CeremonyTimeScale } from '../systems/CeremonyTimeScale.js';
-import { cartesianToKeplerian } from './OrbitalMechanics.js';
+import { cartesianToKeplerian, orbitToSceneCartesianInto } from './OrbitalMechanics.js';
 import * as THREE from 'three';
 
 const CN = Constants.CAPTURE_NET;
@@ -36,6 +36,9 @@ const _v3c = new THREE.Vector3();
 const _v3d = new THREE.Vector3();
 const _v3e = new THREE.Vector3();
 const _q0  = new THREE.Quaternion();
+// Tug scratch (Phase B §9) — catch/ship velocity sampling at CAPTURED.
+const _tugScratchPos = { x: 0, y: 0, z: 0 };
+const _tugScratchVel = { x: 0, y: 0, z: 0 };
 
 // ═══════════════════════════════════════════════════════════════════════════
 // §1  Pure Functions — Cling Probability + Frag Risk
@@ -576,6 +579,16 @@ export class NetProjectile {
      *  daughter-style reel-back so the net still stows/prunes instead of
      *  looping MISSED→REELING on the re-armed auto-reel. */
     this._motherReelFallback = false;
+    /** @type {boolean} Phase B §9: the line-taut tug fires exactly once, at
+     *  the CAPTURED transition (mother path only). */
+    this._tugApplied = false;
+    /** @type {THREE.Vector3|null} §9.8 windowed tug delivery: the feel vector
+     *  (scene units/s) fed into _rcsVelocity over NET_TUG_WINDOW_S by
+     *  CaptureNetSystem.update. Null when no window is active. Dies with the
+     *  net, so a jettison mid-window correctly abandons the remainder. */
+    this._tugFeelScene = null;
+    /** @type {number} Seconds of the tug window already delivered. */
+    this._tugElapsed = 0;
 
     // ── Q2 Ceremony event emission guards (CEREMONY_REDESIGN.md §5.2) ──
     this._ceremonyStartEmitted    = false;
@@ -1372,12 +1385,160 @@ export class NetProjectile {
     }
   }
 
+  /**
+   * Phase B §9.8–9.10 — the line-taut tug (mother path only).
+   *
+   * At CAPTURED the tether snaps straight: the whale's residual momentum
+   * relative to the Mother transfers through the net. Honest ratio up to
+   * 177:1 (23 t vs 130 kg), so the NET_TUG_MAX_DV_MS cap does nearly all the
+   * work. Three coupled effects:
+   *
+   *   1. Spring soft-capture (the shock absorber, §9.8): the feel component is
+   *      spread over NET_TUG_WINDOW_S into _rcsVelocity by the windowed
+   *      delivery in CaptureNetSystem.update — Σ(step/window) === 1 exactly at
+   *      any frame rate, so the delivered impulse is dt-robust. The residual
+   *      decay is RCS_DAMPING's inherited per-frame behaviour (shared with
+   *      manual RCS, deliberately out of scope). Feel-only; never mutates the
+   *      orbit. NET_TUG_FEEL_MULT scales the share so the ~2× transient (same
+   *      magnitude drives orbit + _rcsVelocity) is deliberate, not accidental.
+   *   2. Kept orbit impulse (one-shot, NOT spread): the capped Δv goes through
+   *      applyCartesianImpulse with { noBill: true } — passive momentum
+   *      transfer bills no fuel/battery and ignores the power gates. The kept
+   *      Δv is a genuine ΔV-economy event (comms'd, cancellable with RCS, NOT
+   *      auto-nulled — keep-or-cancel by design). A false return means the
+   *      altitude-envelope guard refused it: comms must say so honestly
+   *      ("tug damped — envelope limit") rather than claiming kept Δv.
+   *   3. Angular kick: τ_x = r_y·F_z — the ROW_DZ muzzle lever (±6 cm in ship
+   *      Y) × the AXIAL tug, the single term _applyMotherNetRecoil models.
+   *      Signed so a forward pull pitches opposite to an aft recoil at the
+   *      same muzzle. RCS springs it back (~2 s, ζ=1); attitude hold survives.
+   *
+   * relVel derivation: the catch's orbital velocity (orbitToSceneCartesianInto
+   * on its own elements — it keeps propagating while pinned) minus the
+   * Mother's getVelocity(). This is the same quantity the pre-fire drift
+   * refusal measures via its EMA, but sampled exactly once at the taut moment.
+   *
+   * @private
+   */
+  _applyCaptureTug() {
+    if (this._tugApplied) return;
+    this._tugApplied = true;
+    const d = this.targetDebris;
+    const player = this._ctx?.player;
+    if (!d || !player || !d.orbit) return;
+    if (typeof player.applyCartesianImpulse !== 'function') return;
+    if (typeof player.getVelocity !== 'function') return;
+
+    // Catch orbital velocity (km/s) at its current elements.
+    orbitToSceneCartesianInto(d.orbit, _tugScratchPos, _tugScratchVel);
+    const shipV = player.getVelocity();
+    // Relative velocity catch − ship, converted km/s → m/s.
+    const rvx = (_tugScratchVel.x - shipV.x) * 1000;
+    const rvy = (_tugScratchVel.y - shipV.y) * 1000;
+    const rvz = (_tugScratchVel.z - shipV.z) * 1000;
+    const relSpeed = Math.sqrt(rvx * rvx + rvy * rvy + rvz * rvz);
+    if (relSpeed < 1e-3) return;   // matched velocity → no tug (zero-relVel case)
+
+    // Momentum the catch carries relative to the ship, shared by mass ratio,
+    // capped. m_catch·v_rel is the full momentum; the ship's share of the
+    // velocity change is m_catch/(m_catch + m_ship) of v_rel.
+    const mCatch = d.mass || this.capturedMass || 1;
+    const mShip = player.mass || 130;
+    const share = mCatch / (mCatch + mShip);
+    const cap = CN.NET_TUG_MAX_DV_MS ?? 0.5;
+    const dvMag = Math.min(relSpeed * share, cap);
+
+    // Direction the ship gets PULLED: toward the catch's relative motion
+    // (the tether drags the Mother after the whale).
+    const inv = 1 / relSpeed;
+    const dvWorld = _v3e.set(rvx * inv, rvy * inv, rvz * inv).multiplyScalar(dvMag);
+
+    // Minor 5 (review): snapshot everything needed AFTER the impulse call into
+    // plain locals BEFORE it. applyCartesianImpulse synchronously emits
+    // COMMS_MESSAGE / THRUST_VISUAL / RESOURCE_CONSUME, and a future listener
+    // re-entering CaptureNet would clobber the module scratch (_v3e/_v3b/_q0)
+    // the comms dirTag and the angular kick are computed from.
+    let localTugX = 0, localTugY = 0, localTugZ = 0;
+    if (player.quaternion) {
+      _q0.copy(player.quaternion).invert();
+      _v3b.copy(dvWorld).applyQuaternion(_q0);   // tug dir in ship frame (m/s)
+      localTugX = _v3b.x; localTugY = _v3b.y; localTugZ = _v3b.z;
+    }
+
+    // (2) Kept orbit impulse — one-shot, no billing, envelope guard surfaced.
+    const applied = player.applyCartesianImpulse(dvWorld, 0, { noBill: true });
+
+    // (1) Spring soft-capture (§9.8): seed the windowed delivery. The feel
+    // vector is stored on the net and fed into _rcsVelocity over
+    // NET_TUG_WINDOW_S by CaptureNetSystem.update — Σ(step/window) === 1
+    // exactly at any frame rate. M = 1e-5 scene-units-per-metre.
+    const windowS = CN.NET_TUG_WINDOW_S ?? 0.65;
+    const feelMult = CN.NET_TUG_FEEL_MULT ?? 1.0;
+    if (player._rcsVelocity && feelMult > 0 && windowS > 0) {
+      if (!this._tugFeelScene) this._tugFeelScene = new THREE.Vector3();
+      this._tugFeelScene.copy(dvWorld).multiplyScalar(1e-5 * feelMult);
+      this._tugElapsed = 0;
+    }
+
+    // (3) Angular kick: τ_x = r_y·F_z — the ROW_DZ lever × the AXIAL tug
+    // (review item 1: the previous |F_y| term zeroed the pitch for a
+    // boresight tug — the dominant case — and mis-levered the lateral one).
+    if (player.quaternion && typeof player.mass === 'number') {
+      const muzzles = player._netPodMuzzles;
+      const muzzle = muzzles && muzzles[this.podIndex];
+      const muzzleLocalY = muzzle ? muzzle.position.y : 0;
+      if (Math.abs(muzzleLocalY) > 1e-9) {
+        // Angular impulse ∝ linear momentum transferred × lever / I. Reuse
+        // the recoil shape: I = m·0.25; momentum = m_ship·dv (N·s).
+        const I = mShip * 0.25;
+        const leverM = Math.abs(muzzleLocalY) / 1e-5;   // scene units → metres
+        const j = mShip * dvMag;                        // N·s (kg·m/s)
+        const pitchSign = muzzleLocalY >= 0 ? -1 : 1;
+        // Signed axial component: −Z (aft, the recoil case) → +1 so the
+        // expression reduces exactly to _applyMotherNetRecoil; +Z (forward
+        // pull) → −1. Clamped to ±1.
+        const axial = Math.max(-1, Math.min(1, -localTugZ / Math.max(1e-9, dvMag)));
+        player._recoilPitchVel += pitchSign * (j * leverM / I) * axial;
+      }
+    }
+
+    // Comms — magnitude + direction, or the honest envelope refusal.
+    if (applied) {
+      const dirTag = Math.abs(localTugZ) > Math.max(Math.abs(localTugX), Math.abs(localTugY))
+        ? (localTugZ > 0 ? 'prograde' : 'retrograde') : 'lateral';
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        text: `Tug absorbed: ${dvMag.toFixed(2)} m/s ${dirTag}.`,
+        source: 'HOUSTON', priority: 'info',
+      });
+    } else {
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        text: 'Tug damped — envelope limit.',
+        source: 'HOUSTON', priority: 'info',
+      });
+    }
+
+    // Camera micro-shake payload (CameraSystem listens, whale-only, scaled by
+    // imparted Δv, skipped under prefers-reduced-motion — §9.11).
+    eventBus.emit(Events.NET_MOTHER_TUG, {
+      podIndex: this.podIndex,
+      dvMs: applied ? dvMag : 0,
+      windowS,
+    });
+  }
+
   /** @private Transition to CAPTURED + emit event */
   _captureSuccess() {
     this.catchResult = 'success';
     this.capturedMass = this.targetDebris?.mass || 1.0;
     this.tangleQuality = this._clingProbability;
     this._transitionTo(STATES.CAPTURED);
+
+    // Phase B §9 — the line-taut tug. The tether just snapped straight on a
+    // whale with residual relative velocity: the catch yanks the Mother.
+    // Runs BEFORE the event emits so the tug's comms/camera payloads read as
+    // part of the capture beat. Mother path only (the daughter's arm absorbs
+    // its own catch momentum).
+    if (this._isMother) this._applyCaptureTug();
 
     eventBus.emit(Events.NET_CATCH_SUCCESS, {
       armIndex:      this.armIndex,
@@ -1534,6 +1695,10 @@ export class CaptureNetSystem {
      *  leaves the references usable when the flag flips on later. */
     this._player = null;
     this._debrisField = null;
+    /** @type {object|null} Optional AudioSystem ref for the winch pitch
+     *  (Phase B §9.3). Injected via init(deps.audioSystem); optional-chained
+     *  so headless tests and the no-audio path stay silent. */
+    this._audioSystem = null;
   }
 
   // ── Lifecycle ──────────────────────────────────────────────────────────
@@ -1541,14 +1706,16 @@ export class CaptureNetSystem {
   /**
    * Initialise inventory to Dyneema Y0 defaults.
    * Called once at game start / after load.
-   * @param {object} [deps] — { player, debrisField } context references.
-   *   `player` backs the mother-pod anchor provider; `debrisField` backs the
-   *   Phase-A pin API (pinCapturedDebris). Optional — the no-arg call stays
-   *   valid for headless tests and test-main-wiring.
+   * @param {object} [deps] — { player, debrisField, audioSystem } context
+   *   references. `player` backs the mother-pod anchor provider; `debrisField`
+   *   backs the Phase-A pin API (pinCapturedDebris); `audioSystem` backs the
+   *   Phase-B winch pitch. Optional — the no-arg call stays valid for
+   *   headless tests and test-main-wiring.
    */
   init(deps = {}) {
     this._player = deps.player || this._player || null;
     this._debrisField = deps.debrisField || this._debrisField || null;
+    this._audioSystem = deps.audioSystem || this._audioSystem || null;
     if (!Constants.FEATURE_FLAGS.CAPTURE_NET) return;
 
     this._motherPodInventory = [CN.LARGE.MAGAZINE_SIZE, CN.LARGE.MAGAZINE_SIZE];
@@ -1609,6 +1776,49 @@ export class CaptureNetSystem {
 
         // Auto-start reel (player can still release / override)
         net.startReel();
+      }
+
+      // ── Mother per-frame housekeeping (Phase B) ─────────────────────────
+      if (net._isMother) {
+        // §9.8 — dt-robust tug delivery. The feel vector seeded at CAPTURED is
+        // fed into _rcsVelocity over NET_TUG_WINDOW_S; step is clamped to the
+        // remaining window, so Σ(step/window) === 1 exactly at any frame rate.
+        // The residual decay is RCS_DAMPING's inherited per-frame behaviour
+        // (shared with manual RCS — deliberately out of scope).
+        if (net._tugFeelScene && net._tugElapsed < (CN.NET_TUG_WINDOW_S ?? 0.65)) {
+          const player = this._player;
+          if (player && player._rcsVelocity) {
+            const windowS = CN.NET_TUG_WINDOW_S ?? 0.65;
+            const step = Math.min(dt, windowS - net._tugElapsed);
+            net._tugElapsed += step;
+            player._rcsVelocity.addScaledVector(net._tugFeelScene, step / windowS);
+            // Minor 6 (review): mirror the manual-RCS clamp
+            // (PlayerSatellite.js:5193) — the tug must not stack past
+            // RCS_MAX_SPEED on top of existing drift.
+            const maxV = Constants.RCS_MAX_SPEED;
+            if (maxV > 0 && player._rcsVelocity.length() > maxV) {
+              player._rcsVelocity.normalize().multiplyScalar(maxV);
+            }
+          } else {
+            net._tugElapsed = CN.NET_TUG_WINDOW_S ?? 0.65;   // no player: close the window
+          }
+        }
+
+        // Review item 3: the flight whistle means "projectile in flight" —
+        // stop it the frame the net leaves LAUNCHING/SPINNING_UP/FLIGHT. A
+        // state poll, NOT the NET_BRAKE_FIRED hook: that event is gated on
+        // FEATURE_FLAGS.NET_CEREMONY, and plan §6 forbids routing anything
+        // load-bearing through a flag REALITY_MODE forces false.
+        const inFlight = net.state === STATES.LAUNCHING
+          || net.state === STATES.SPINNING_UP
+          || net.state === STATES.FLIGHT;
+        if (!inFlight) this._audioSystem?.stopNetFlightWhistle?.();
+
+        // §9.3: drive the winch pitch from the live reel distance.
+        // Cheap — one setTargetAtTime on a running loop, no-op otherwise.
+        if (net.state === STATES.REELING && net._remainingM != null) {
+          this._audioSystem?.updateNetReelPitch?.(net._remainingM, net._reelSeedM);
+        }
       }
 
       // ── Mother BERTHED hold + securing timer (mother-net-reel plan §8 A2) ──
@@ -1858,6 +2068,10 @@ export class CaptureNetSystem {
     this._motherPodMax       = [0, 0];
     this._initialized = false;
     this._playerHasFragmented = false;
+    // Phase B §9.5: kill any running net loops — a reset drops every net with
+    // no terminal events, so the whistle/winch would otherwise stick (the
+    // classic bug). Optional-chained: headless tests inject no audioSystem.
+    this._audioSystem?._stopNetLoops?.();
   }
 
   // ── Fire Commands ──────────────────────────────────────────────────────

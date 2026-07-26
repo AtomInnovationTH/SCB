@@ -288,6 +288,11 @@ export class CameraSystem {
     this._catchShakeTimer = 0;     // seconds remaining for shake effect
     this._catchShakeDuration = Constants.CATCH_SHAKE_DURATION || 0.3; // total shake duration
     this._catchShakeIntensity = Constants.CATCH_SHAKE_INTENSITY || 0.003; // scene units offset
+    // Whale-tug amplitude scale (§9.11, review minor 7): the NET_MOTHER_TUG
+    // handler stores ONLY this multiplier — the base intensity/duration
+    // constants above stay immutable so any future consumer of
+    // _catchShakeTimer doesn't inherit the last tug's scaled amplitude.
+    this._catchShakeScale = 1.0;
 
     // Phase 4: FOV breathe during sustained thrust (I-War heritage)
     this._fovBreathOffset = 0;       // current FOV offset in degrees
@@ -371,6 +376,27 @@ export class CameraSystem {
     // ARM_CAPTURED / LASSO_CAPTURED ("catch juice"), which read as arcade
     // feedback. A real ADR sat catching sub-kg debris would feel nothing.
     // Listeners removed per user feedback.
+    //
+    // EXCEPTION (mother-net-reel plan §9.11): the WHALE tug is different — a
+    // 0.5–23 t catch yanking the Mother at line-taut is a real momentum event
+    // the crew WOULD feel. Re-subscribed for the mother path only
+    // (NET_MOTHER_TUG, emitted once at CAPTURED with the imparted Δv), amplitude
+    // scaled by that Δv, duration ≈ the spring window, and skipped entirely
+    // under prefers-reduced-motion. Arm/lasso captures stay silent — that
+    // decision stands.
+    eventBus.on(Events.NET_MOTHER_TUG, (data) => {
+      if (!data || data.podIndex < 0) return;              // mother pods only
+      if (this._prefersReducedMotion()) return;            // accessibility gate
+      const dv = data.dvMs || 0;
+      if (dv <= 0) return;                                 // envelope-damped tug: no shake
+      // Amplitude scales with the imparted Δv against the cap (0.5 m/s →
+      // full CATCH_SHAKE_INTENSITY); duration follows the spring window.
+      // Store ONLY the scale — the base constants stay immutable (minor 7).
+      const cap = Constants.CAPTURE_NET?.NET_TUG_MAX_DV_MS ?? 0.5;
+      this._catchShakeScale = Math.min(1, dv / Math.max(1e-9, cap));
+      this._catchShakeDuration = data.windowS || Constants.CATCH_SHAKE_DURATION || 0.3;
+      this._catchShakeTimer = this._catchShakeDuration;
+    });
 
     // Phase 4: Listen for thrust visual events for FOV breathe
     eventBus.on(Events.THRUST_VISUAL, (data) => {
@@ -718,10 +744,14 @@ export class CameraSystem {
     // Phase 8: Apply camera shake offset (catches, not ARM_PILOT)
     if (this._catchShakeTimer > 0) {
       this._catchShakeTimer -= dt;
-      const intensity = this._catchShakeIntensity * (this._catchShakeTimer / this._catchShakeDuration);
+      const intensity = this._catchShakeIntensity * this._catchShakeScale
+        * (this._catchShakeTimer / this._catchShakeDuration);
       this.camera.position.x += (Math.random() - 0.5) * 2 * intensity;
       this.camera.position.y += (Math.random() - 0.5) * 2 * intensity;
       this.camera.position.z += (Math.random() - 0.5) * 2 * intensity;
+      // One-shot scale: restore to neutral when the shake ends so a future
+      // armer starts from the base amplitude (minor 7).
+      if (this._catchShakeTimer <= 0) this._catchShakeScale = 1.0;
     }
 
     // Update view indicator timer (skipped while the indicator is persistent —
@@ -2155,6 +2185,23 @@ export class CameraSystem {
     eventBus.emit(Events.INSPECTION_TOGGLE, { subject, targetId });
 
     console.log(`[CameraSystem] Inspection mode (${subject}). Zoom 2–50m, FOV 35°`);
+  }
+
+  /**
+   * Guarded for the Node test runner (no window/matchMedia). Used to skip
+   * motion-heavy feedback (the whale-tug micro-shake, §9.11) for users who
+   * opt out of motion. Mirrors GameFlowManager._prefersReducedMotion.
+   * @returns {boolean}
+   * @private
+   */
+  _prefersReducedMotion() {
+    try {
+      return !!(typeof window !== 'undefined' &&
+        typeof window.matchMedia === 'function' &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    } catch (_e) {
+      return false;
+    }
   }
 
   /**

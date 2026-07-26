@@ -723,6 +723,10 @@ export const Events = {
   NET_RELEASED:              'net:released',
   /** Mother catch berthed at the launcher (mother-net-reel plan §8). Payload: { debrisId, mass, podIndex } */
   NET_BERTHED:               'net:berthed',
+  /** Line-taut tug on a mother catch (mother-net-reel plan §9). Fired once at
+   *  CAPTURED with the imparted Δv so the camera can scale the whale-tug
+   *  micro-shake. Payload: { podIndex, dvMs, windowS } */
+  NET_MOTHER_TUG:            'net:motherTug',
   /** Net lost grip on a captured catch (recoverable). Payload: { armId, armIndex, debrisId, strain, recoverable } */
   NET_FAILED:                'net:failed',
   /** Net inventory changed (fire/reload). Payload: { source:'mother'|'daughter', armIndex?, podInventory?, remaining? } */

@@ -5665,35 +5665,49 @@ export class PlayerSatellite extends THREE.Group {
    *
    * @param {THREE.Vector3} dvWorld - World-frame ΔV in m/s
    * @param {number} dt - Frame delta (s) for resource bookkeeping
+   * @param {object} [opts]
+   * @param {boolean} [opts.noBill=false] — skip fuel/battery billing AND the
+   *   resource/power gates (mother-net-reel plan §9.10: the line-taut tug is
+   *   passive momentum transfer — it costs no propellant, so it must not be
+   *   refused by an empty tank or a powered-down bus either).
+   * @returns {boolean} true when the impulse was applied; false when refused
+   *   (envelope guard, degenerate orbit, or — with billing on — resource gates).
+   *   Callers that keep the Δv (the tug) must surface a false return honestly
+   *   ("tug damped — envelope limit") rather than lying about kept Δv.
    */
-  applyCartesianImpulse(dvWorld, dt) {
-    if (!dvWorld) return;
+  applyCartesianImpulse(dvWorld, dt, opts = {}) {
+    if (!dvWorld) return false;
     const dvMag = dvWorld.length();
-    if (dvMag < 1e-9 || !isFinite(dvMag)) return;
+    if (dvMag < 1e-9 || !isFinite(dvMag)) return false;
+    const noBill = opts.noBill === true;
 
-    // --- Resource / power gating (mirrors thrustIon) ---
-    if (powerDistribution.thrustMultiplier <= 0) {
-      const now = performance.now();
-      if (now - this._lastThrustOfflineWarning > 3000) {
-        this._lastThrustOfflineWarning = now;
-        eventBus.emit(Events.COMMS_MESSAGE, {
-          text: '⚠ ION DRIVE OFFLINE. Increase THRUST power allocation',
-          priority: 'warning',
-        });
+    // --- Resource / power gating (mirrors thrustIon) — skipped for a no-bill
+    // passive impulse (the tug is not a burn; it needs no ion drive and no
+    // propellant). ---
+    if (!noBill) {
+      if (powerDistribution.thrustMultiplier <= 0) {
+        const now = performance.now();
+        if (now - this._lastThrustOfflineWarning > 3000) {
+          this._lastThrustOfflineWarning = now;
+          eventBus.emit(Events.COMMS_MESSAGE, {
+            text: '⚠ ION DRIVE OFFLINE. Increase THRUST power allocation',
+            priority: 'warning',
+          });
+        }
+        return false;
       }
-      return;
-    }
-    if (this._thrusterInterlock) return;
-    if (this.resources.battery <= 0) {
-      eventBus.emit(Events.PLAYER_THRUST_FAILED, { reason: 'no_fuel', type: 'ion' });
-      return;
-    }
-    const fuel = this._resourceSystem
-      ? this._resourceSystem.getCurrentFuel()
-      : (Constants.FUELS && Constants.FUELS.xenon) || null;
-    if (fuel && !fuel.fromCargo && this.resources.xenon <= 0) {
-      eventBus.emit(Events.PLAYER_THRUST_FAILED, { reason: 'no_fuel', type: 'ion' });
-      return;
+      if (this._thrusterInterlock) return false;
+      if (this.resources.battery <= 0) {
+        eventBus.emit(Events.PLAYER_THRUST_FAILED, { reason: 'no_fuel', type: 'ion' });
+        return false;
+      }
+      const fuel = this._resourceSystem
+        ? this._resourceSystem.getCurrentFuel()
+        : (Constants.FUELS && Constants.FUELS.xenon) || null;
+      if (fuel && !fuel.fromCargo && this.resources.xenon <= 0) {
+        eventBus.emit(Events.PLAYER_THRUST_FAILED, { reason: 'no_fuel', type: 'ion' });
+        return false;
+      }
     }
 
     // --- Recompute Cartesian state (km / km/s) from current orbit ---
@@ -5713,7 +5727,7 @@ export class PlayerSatellite extends THREE.Group {
     };
 
     const newOrbit = cartesianToKeplerian(rKm, vKms);
-    if (!isFinite(newOrbit.semiMajorAxis) || newOrbit.semiMajorAxis <= 0) return;
+    if (!isFinite(newOrbit.semiMajorAxis) || newOrbit.semiMajorAxis <= 0) return false;
 
     // Altitude guard (same envelope as _applyThrust)
     const newSmaScene = newOrbit.semiMajorAxis * Constants.SCENE_SCALE;
@@ -5721,7 +5735,7 @@ export class PlayerSatellite extends THREE.Group {
     const maxAlt = Constants.LEO_MAX + Constants.EARTH_RADIUS;
     if (newSmaScene < minAlt || newSmaScene > maxAlt) {
       // Refuse the burn rather than silently clip — keeps orbital energy accounting honest
-      return;
+      return false;
     }
 
     // --- Write back Keplerian elements ---
@@ -5740,20 +5754,23 @@ export class PlayerSatellite extends THREE.Group {
     this._deltaVSpent += dvMag;
 
     // Resource consumption: scale with |dv| vs. one ion-thrust tick baseline.
-    const baselineDv_mps =
-      (this._ionDeltaV || 0.0003) * (this.throttleLevel || 1) * 1000; // rough m/s per tick proxy
-    const usage = baselineDv_mps > 1e-6
-      ? Math.min(5.0, dvMag / baselineDv_mps)
-      : 1.0;
-    const fuelAmount = this._ionThrustXenonRate * dt * usage;
-    const batteryAmount = this._ionThrustPowerRate * dt * usage;
+    // Skipped for a no-bill passive impulse (mother-net tug — §9.10).
+    if (!noBill) {
+      const baselineDv_mps =
+        (this._ionDeltaV || 0.0003) * (this.throttleLevel || 1) * 1000; // rough m/s per tick proxy
+      const usage = baselineDv_mps > 1e-6
+        ? Math.min(5.0, dvMag / baselineDv_mps)
+        : 1.0;
+      const fuelAmount = this._ionThrustXenonRate * dt * usage;
+      const batteryAmount = this._ionThrustPowerRate * dt * usage;
 
-    if (this._resourceSystem) {
-      this._resourceSystem.consumeIonFuel(fuelAmount);
-    } else {
-      eventBus.emit(Events.RESOURCE_CONSUME, { resource: 'xenon', amount: fuelAmount });
+      if (this._resourceSystem) {
+        this._resourceSystem.consumeIonFuel(fuelAmount);
+      } else {
+        eventBus.emit(Events.RESOURCE_CONSUME, { resource: 'xenon', amount: fuelAmount });
+      }
+      eventBus.emit(Events.RESOURCE_CONSUME, { resource: 'battery', amount: batteryAmount });
     }
-    eventBus.emit(Events.RESOURCE_CONSUME, { resource: 'battery', amount: batteryAmount });
 
     // --- Visual: fire RCS puff opposite to the impulse direction (in local frame) ---
     const localDir = dvWorld.clone().applyQuaternion(
@@ -5771,6 +5788,7 @@ export class PlayerSatellite extends THREE.Group {
       type: 'ion',
     });
 
+    return true;
   }
 
   /** @private */

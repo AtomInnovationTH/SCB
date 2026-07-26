@@ -2112,6 +2112,28 @@ export const Constants = {
     // 500 kg+ catch legible at the muzzle standoff.
     MOTHER_CATCH_MIN_RENDER_M: 2.0,
 
+    // ── Line-taut tug (mother-net-reel plan §9 Phase B) ──
+    // When the net cinches onto a whale with residual relative velocity, the
+    // tether goes taut and the catch yanks the Mother. The honest momentum
+    // ratio is up to 177:1 (23 t vs 130 kg), so the cap below does nearly all
+    // the work — it is the difference between "the Mother is visibly yanked"
+    // and "the Mother is flung off-station". The tug is applied two ways:
+    //   1. a 0.5–0.8 s critically damped spring window into _rcsVelocity
+    //      (the shock absorber — feel-only, decays), and
+    //   2. a REAL orbit impulse via applyCartesianImpulse with billing
+    //      SKIPPED (passive momentum transfer costs no propellant) — the kept
+    //      Δv is a genuine ΔV-economy event, comms'd and cancellable with RCS.
+    // Do NOT call _autoRcsCompensation on the tug (keep-or-cancel by design).
+    NET_TUG_MAX_DV_MS:    0.5,    // m/s — cap on the kept orbit impulse
+    NET_TUG_WINDOW_S:     0.65,   // s — spring soft-capture window (0.5–0.8)
+    // Share of the tug Δv that also drives _rcsVelocity (the feel component,
+    // spread over NET_TUG_WINDOW_S — dt-robust by construction). The same
+    // magnitude drives the orbit AND _rcsVelocity, so at 1.0 the transient
+    // reads as ~2× the permanent Δv for the window duration: that overshoot is
+    // the yank, now deliberate and tunable rather than accidental. Lower it
+    // (0.5) if playtest says the yank overshoots.
+    NET_TUG_FEEL_MULT:    1.0,
+
     // ── Reel-cycle lifetime ──
     REEL_CYCLE_LIFE:      20,     // §6.6: deploy/reel cycles before tether replacement
 

@@ -2474,7 +2474,12 @@ export class InputManager {
     // Otherwise rotate to attitude, then fire on resolve. Reject = no fire, no
     // inventory decrement (abort comms emitted by AutopilotSystem).
     ap.requestAimRotation(provider, { mode: 'net' })
-      .then(() => fireNow())
+      .then(() => {
+        // §9.6: aim-resolve double-tick — the slew settled on the launch
+        // attitude (the "locked, then confirmed" gesture before the thump).
+        d.audioSystem?.playAimResolveTick?.();
+        fireNow();
+      })
       .catch(() => { /* aborted — nothing fired/spent */ });
   }
 

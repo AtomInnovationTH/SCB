@@ -34,6 +34,15 @@ export const soundVocabulary = {
   playLassoFire:       { family: 'PHYSICAL', meaning: 'lasso fire',                trigger: 'lasso launched' },
   startLassoWireWhistle:{ family: 'PHYSICAL', meaning: 'lasso wire whistle',       trigger: 'lasso wire in flight' },
   playLassoWinch:      { family: 'PHYSICAL', meaning: 'lasso winch',               trigger: 'lasso reel-in' },
+  playNetCanisterThump:{ family: 'PHYSICAL', meaning: 'mother net canister launch', trigger: 'NET_FIRED (mother pod)' },
+  startNetFlightWhistle:{ family: 'PHYSICAL', meaning: 'mother net flight whistle', trigger: 'mother net airborne' },
+  playNetCinchClamp:   { family: 'PHYSICAL', meaning: 'mother net cinch clamp on a whale', trigger: 'NET_CATCH_SUCCESS (mother pod)' },
+  startNetReelWinch:   { family: 'PHYSICAL', meaning: 'mother reel winch loop',    trigger: 'NET_REEL_STARTED with catch (mother pod)' },
+  playNetBerthClunk:   { family: 'PHYSICAL', meaning: 'mother catch berthed on the launcher', trigger: 'NET_BERTHED' },
+  playNetBrakeHiss:    { family: 'PHYSICAL', meaning: 'mother net retro-brake',    trigger: 'NET_BRAKE_FIRED (mother pod)' },
+  playNetEnvelopSting: { family: 'PHYSICAL', meaning: 'mother net envelop sweep',  trigger: 'NET_ENVELOP_PEAK (mother pod)' },
+  playNetCinchTick:    { family: 'PHYSICAL', meaning: 'mother net cinch ratchet progress', trigger: 'NET_CINCH_PROGRESS (mother pod)' },
+  playNetStrainRip:    { family: 'PHYSICAL', meaning: 'mother net strain slip let-go', trigger: "NET_CATCH_MISS reason 'strain_slip'" },
   playMPDArm:          { family: 'PHYSICAL', meaning: 'MPD burst armed',           trigger: 'MPD_BURST_START' },
   playMPDDisarm:       { family: 'PHYSICAL', meaning: 'MPD burst disarmed',        trigger: 'MPD burst end' },
   startForgeHum:       { family: 'PHYSICAL', meaning: 'forge hum',                 trigger: 'forge active' },
@@ -60,6 +69,7 @@ export const soundVocabulary = {
   // ---- TICK — your input registered ----
   playClick:           { family: 'TICK', meaning: 'input registered',              trigger: 'UI click / key press' },
   playFuelCycle:       { family: 'TICK', meaning: 'fuel type cycled',              trigger: 'T key fuel cycle' },
+  playAimResolveTick:  { family: 'TICK', meaning: 'mother aim resolved on launch attitude', trigger: 'mother net aim coroutine resolved' },
 
   // ---- DENY — input refused, nothing broke ----
   playDeny:            { family: 'DENY', meaning: 'input refused',                 trigger: 'invalid/empty action, LASSO_DENIED, shop refusal' },
@@ -74,6 +84,7 @@ export const soundVocabulary = {
 
   // ---- REWARD — you gained something ----
   playCaptureSuccess:  { family: 'REWARD', meaning: 'debris captured',             trigger: 'ARM_RETURNED' },
+  playNetBerthChime:   { family: 'REWARD', meaning: 'mother whale secured at the berth', trigger: 'NET_BERTHED' },
   playScoreTally:      { family: 'REWARD', meaning: 'score tick (reserved HUD count-up)', trigger: 'reserved (unsubscribed)' },
   playVictory:         { family: 'REWARD', meaning: 'run victory',                 trigger: 'victory' },
   playForgeComplete:   { family: 'REWARD', meaning: 'forge complete',              trigger: 'forge done' },
