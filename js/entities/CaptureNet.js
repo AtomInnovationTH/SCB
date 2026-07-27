@@ -2112,7 +2112,7 @@ export class CaptureNetSystem {
           // Dead target while docked (§4.19 mission-transition guard): clear
           // the dock, pins and visual, free the launcher. Do NOT stow as if
           // the catch succeeded (the daughter's death-in-hand behaviour).
-          this._teardownBerth(net, { processed: false });
+          this._teardownBerth(net);
           this.activeNets.splice(i, 1);
           continue;
         }
@@ -2131,7 +2131,7 @@ export class CaptureNetSystem {
               podIndex: net.podIndex,
               method:   'mother',
             });
-            this._teardownBerth(net, { processed: true });
+            this._teardownBerth(net);
             this.activeNets.splice(i, 1);
             continue;
           }
@@ -2211,11 +2211,10 @@ export class CaptureNetSystem {
    * STOWED/RELEASED handling via the fade path; here we emit nothing visual —
    * the net is spliced out of activeNets by the caller, and _getNet then
    * returns null so the visual removes itself next frame.
-   * @param {NetProjectile} net
-   * @param {{ processed: boolean }} opts — true when the securing timer fired
-   * @private
-   */
-  _teardownBerth(net, opts) {
+    * @param {NetProjectile} net
+    * @private
+    */
+  _teardownBerth(net) {
     this._clearCatchPins(net.targetDebris);
     net.isActive = false;
     net._berthTimer = -1;

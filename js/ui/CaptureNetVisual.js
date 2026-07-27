@@ -51,7 +51,10 @@ const CN = Constants.CAPTURE_NET;
 // glint on the tungsten weights, not a recolour of the fabric.)
 const COL_CANISTER  = 0x556677;
 const COL_DISC      = 0xcfeaff;   // ivory Dyneema — the net's ONLY fabric colour, every state
-const COL_TETHER    = 0xddddee;
+// NOTE: the tether's colour is NOT defined here — it is Constants.CAPTURE_NET
+// .NET_TETHER.BASE_COLOR, aliased below as TETHER_BASE_COLOR. Keeping a second
+// local copy let the material's base colour drift from the emissive-pulse reset
+// (which reads the constant), so the two must share one source.
 
 // Scratch vectors (avoid per-frame allocation)
 const _v3a = new THREE.Vector3();
@@ -118,8 +121,6 @@ export class CaptureNetVisual {
     this._disposed = false;
     /** @type {Array<{key:string, timer:number, duration:number}>} */
     this._fadeTimers = [];
-    /** @type {object|null} SceneManager ref for the Phase D.8 tier gate. */
-    this._sceneManager = null;
     /** @type {string} Current quality tier (LOW drops the garnish, §11.8). */
     this._tier = 'HIGH';
 
@@ -152,7 +153,6 @@ export class CaptureNetVisual {
     this._scene = scene;
     this._player = player;
     this._captureNetSystem = captureNetSystem;
-    this._sceneManager = sceneManager;
     this._enabled = true;
     this._disposed = false;
 
@@ -313,7 +313,7 @@ export class CaptureNetVisual {
     const tetherGeo = new LineGeometry();
     tetherGeo.setPositions(tetherPositions);
     const tetherMat = new LineMaterial({
-      color: COL_TETHER,
+      color: TETHER_BASE_COLOR,
       transparent: true,
       opacity: 0.7,
       linewidth: 2.0,          // screen-space px — slim but AA-legible
@@ -397,7 +397,7 @@ export class CaptureNetVisual {
     const tetherGeo = new LineGeometry();
     tetherGeo.setPositions(tetherPositions);
     const tetherMat = new LineMaterial({
-      color: COL_TETHER,
+      color: TETHER_BASE_COLOR,
       transparent: true,
       opacity: 0.7,
       linewidth: 2.0,

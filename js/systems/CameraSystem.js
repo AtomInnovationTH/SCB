@@ -2330,9 +2330,11 @@ export class CameraSystem {
 
     // Set first-deploy flag at end of first-ever SUCCESSFUL ceremony. The
     // mother path writes its own flag (§11.3) so a first whale catch after a
-    // daughter deploy still gets the full beat list, and GameFlowManager's
-    // saveGame() preserves it through the ceremonyFlags whitelist passthrough
-    // (GameFlowManager.js:1624) — no separate persistence wiring needed.
+    // daughter deploy still gets the full beat list. NOTE: the flag must also be
+    // listed in PersistenceManager.save()'s ceremonyFlags WHITELIST
+    // (PersistenceManager.js:93) — GameFlowManager's saveGame() passthrough
+    // (GameFlowManager.js:1624) only forwards flags that already survived that
+    // whitelist, so the whitelist entry is what actually makes this persist.
     if (completedNormally && c.isFirstEver && c.success !== false) {
       persistenceManager.setCeremonyFlag(
         c.podIndex >= 0 ? 'FIRST_MOTHER_NET_DEPLOY' : 'FIRST_NET_DEPLOY', true);

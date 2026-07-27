@@ -96,6 +96,13 @@ class PersistenceManager {
           // gates the one-time affordability floor and the investment-framing
           // shop header. Profile-permanent — survives GAMEOVER_CONTINUE.
           FIRST_DEPOT_VISITED: data.ceremonyFlags?.FIRST_DEPOT_VISITED ?? false,
+          // Mother whale-net first deploy (mother-net-reel plan §11.3): gates
+          // the full 7-beat first-ever cinematic vs the trimmed highlights cut.
+          // MUST be listed here — this block is a WHITELIST, so any flag that
+          // setCeremonyFlag() writes but that is missing from this list is
+          // silently dropped on the next save() (setCeremonyFlag still returns
+          // true), and getCeremonyFlag() then reads false forever.
+          FIRST_MOTHER_NET_DEPLOY: data.ceremonyFlags?.FIRST_MOTHER_NET_DEPLOY ?? false,
         },
       };
 
