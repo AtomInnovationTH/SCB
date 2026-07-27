@@ -1925,37 +1925,6 @@ export const Constants = {
     REACQUIRE_DELAY_MS: 800,           // pause after a catch before the next lock (lets the reward register)
   },
 
-  // --- Debris attention glint (fake, sun-plausible specular flash) ---
-  // A camera-facing additive halo flashed on a chosen debris piece to draw the
-  // eye. NOT physical — debris tumble stays fully random (physics + despin
-  // scoring untouched). Eclipse- and geometry-gated so it reads as a genuine
-  // sun catch. Two policies: DIRECTED (Mission 1 onboarding, fills the gap left
-  // by OnboardingDirector's one-shot escalation) and AMBIENT (post-onboarding
-  // soft wayfinding). See .kilo/plans/1784774215497-debris-attention-glint.md.
-  GLINT: {
-    ENABLED: true,               // master toggle
-    // --- directed (onboarding) ---
-    DIRECTED_IDLE_MS: 8000,      // beat active + no relevant progress → first glint
-    DIRECTED_REPEAT_MS: 6000,    // repeat cadence while still stuck on the beat
-    // --- ambient ---
-    AMBIENT_NO_TARGET_MS: 25000, // no active target for this long → eligible
-    AMBIENT_MIN_GAP_MS: 20000,   // min gap between ambient glints
-    AMBIENT_NEAR_WEIGHT: 3,      // weighting multiplier toward nearest capturable piece
-    AMBIENT_MAX_RANGE_M: 5000,   // only glint pieces within this range (match AUTOLOCK.RANGE_M)
-    // --- flash envelope ---
-    FLASH_ATTACK_S: 0.08,        // opacity ramp-up (sharp, reads as a sun catch)
-    FLASH_DECAY_S: 0.45,         // opacity fall-off
-    FLASHES_PER_PING: 2,         // quick double-flash reads better than one
-    FLASH_GAP_S: 0.35,           // gap between flashes in a ping
-    SPRITE_SCALE_M: 4,           // world size of halo sprite (metres)
-    SPRITE_COLOR: 0xfff4d6,      // warm sun-white
-    HDR_MUL: 2.2,                // brighter than nav halos (1.6) — it must pop
-    // --- gating ---
-    REQUIRE_SUNLIT: true,        // skip glints while debris is in Earth shadow
-    EDGE_NDC_MIN: 0.15,          // don't glint pieces already dead-center (|ndc| below this) — no need
-  },
-
-
   // --- Capture Net Visual (ST-2.4 → FIX-2.4a → v2 polish) ---
   NET_SPIN_HZ: 4,                       // rotations per second during flight (gyroscopic stabilisation)
   NET_WEIGHT_COUNT: 4,                   // perimeter weight spheres (keep net spread open)
