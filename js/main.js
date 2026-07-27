@@ -1400,8 +1400,8 @@ async function init() {
   gameFlowManager.transitionToState(GameStates.MENU);
 
   // --- Menu orbit preview: aim the live backdrop at the selected language's
-  // home corridor, and re-aim it (eased morph) on LANGUAGE_CHANGED. Cosmetic
-  // only — game start paths re-stage the same orbit authoritatively.
+  // home corridor, and re-aim it (rate-capped ramp up/down) on LANGUAGE_CHANGED.
+  // Cosmetic only — game start paths re-stage the same orbit authoritatively.
   menuOrbitPreview.init({ player });
 
   console.log('[Space Cowboy] Engine initialized. Starting game loop…');

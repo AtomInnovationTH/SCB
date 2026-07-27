@@ -654,8 +654,9 @@ export class MenuScreen {
    * @private Build the top-right language/region selector. Each option carries
    * a procedurally-painted flag swatch (same flag system as the EVA patch).
    * Selecting a language persists it, repaints the astronaut's shoulder patch,
-   * and emits Events.LANGUAGE_CHANGED (consumed by GameFlowManager for the
-   * regional start orbit, and available to a future i18n string layer).
+   * and emits Events.LANGUAGE_CHANGED (consumed by MenuOrbitPreview to re-aim
+   * the live backdrop toward the regional start orbit, and available to a
+   * future i18n string layer).
    */
   _buildLangSelector() {
     const root = this.element.querySelector('#menu-lang');
