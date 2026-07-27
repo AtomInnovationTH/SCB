@@ -2420,6 +2420,25 @@ export const Constants = {
       RIM_WEIGHT_EMISSIVE_BRAKE:     0x66ccff, // colour-tint on NET_BRAKE_FIRED
       TETHER_TENSION_THICKEN_FACTOR: 2.5,    // line width × this on NET_BRAKE_FIRED
     },
+
+    // ── Phase D.4/D.5 tether + web-drape garnish (§11.8: one tuning surface) ──
+    // Moved out of CaptureNetVisual module-locals so every garnish item lives
+    // behind a Constant. The catenary strand bows with slack, snaps taut with a
+    // decaying lateral twang, and pulses emissive above the bloom threshold; the
+    // web settle-jiggles as it drapes and shrink-wraps.
+    NET_TETHER: {
+      SEGMENTS:          20,      // catenary samples (16–24 per plan)
+      TWANG_S:           0.2,     // decaying lateral twang window (s)
+      TWANG_AMP_M:       0.35,    // peak lateral twang amplitude (m)
+      SAG_FRAC:          0.06,    // sag = slack × this (of straight distance)
+      TAUT_SLACK:        0.02,    // slack ratio below which the line is taut
+      EMISSIVE_S:        0.35,    // bloom pulse window at line-taut (s)
+      EMISSIVE_HDR:      2.8,     // > 2.5 bloom threshold (SceneManager)
+      BASE_COLOR:        0xddddee,
+      DRAPE_JIGGLE_ENVELOP_FRAC: 0.04,  // mouthRadius × this — settle-jiggle amp during ENVELOP
+      DRAPE_JIGGLE_CINCH_FRAC:   0.02,  // mouthRadius × this — settle-jiggle amp during CINCH_CLOSING
+      DRAPE_JIGGLE_HZ:           2.5,   // settle-jiggle rate
+    },
   },
 
   // --- Mothership RCS Fine Positioning ---

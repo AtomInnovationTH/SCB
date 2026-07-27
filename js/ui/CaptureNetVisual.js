@@ -22,6 +22,9 @@ import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
 import { CeremonyTimeScale } from '../systems/CeremonyTimeScale.js';
 import { NetMeshKit } from './NetMeshKit.js';
+import { Line2 } from 'three/addons/lines/Line2.js';
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
+import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 
 /** 1 metre in scene units (1 scene unit = 100 km). Same as PlayerSatellite.js */
 const M = 1e-5;
@@ -53,6 +56,27 @@ const COL_TETHER    = 0xddddee;
 // Scratch vectors (avoid per-frame allocation)
 const _v3a = new THREE.Vector3();
 const _v3b = new THREE.Vector3();
+const _v3c = new THREE.Vector3();
+const _v3d = new THREE.Vector3();
+
+// ── Tether catenary (mother-net-reel plan §11.4 Phase D.4) ───────────────
+// The 2-point THREE.Line is replaced by a Line2/LineMaterial fat-line strand
+// (the LassoSystem idiom) sampled along a quadratic slack curve. Sag is
+// quadratic in the slack ratio: a paying-out tether bows, a taut one snaps
+// straight. At CAPTURED the strand goes taut with a 0.2 s decaying lateral
+// twang, and pulses briefly emissive above the 2.5 bloom threshold.
+// Phase D hardening (F5): the tunables now live in Constants.CAPTURE_NET.NET_TETHER
+// (one tuning surface, §11.8). These thin module-local aliases keep the hot
+// tether/drape loops readable.
+const _NT = Constants.CAPTURE_NET.NET_TETHER;
+const TETHER_SEGMENTS = _NT.SEGMENTS;
+const TETHER_TWANG_S = _NT.TWANG_S;
+const TETHER_TWANG_AMP_M = _NT.TWANG_AMP_M;
+const TETHER_SAG_FRAC = _NT.SAG_FRAC;
+const TETHER_TAUT_SLACK = _NT.TAUT_SLACK;
+const TETHER_EMISSIVE_S = _NT.EMISSIVE_S;
+const TETHER_EMISSIVE_HDR = _NT.EMISSIVE_HDR;
+const TETHER_BASE_COLOR = _NT.BASE_COLOR;
 
 // ════════════════════════════════════════════════════════════════════════
 // CaptureNetVisual
@@ -94,6 +118,10 @@ export class CaptureNetVisual {
     this._disposed = false;
     /** @type {Array<{key:string, timer:number, duration:number}>} */
     this._fadeTimers = [];
+    /** @type {object|null} SceneManager ref for the Phase D.8 tier gate. */
+    this._sceneManager = null;
+    /** @type {string} Current quality tier (LOW drops the garnish, §11.8). */
+    this._tier = 'HIGH';
 
     /** @type {boolean} Cached ceremony flag — frozen at construct time (§2.4.1) */
     this._useCeremony = !!Constants.FEATURE_FLAGS.NET_CEREMONY;
@@ -104,6 +132,7 @@ export class CaptureNetVisual {
     this._boundNetMiss = null;
     this._boundReelCompleted = null;
     this._boundNetReleased = null;
+    this._boundTierChanged = null;
   }
 
   // ── Lifecycle ──────────────────────────────────────────────────────────
@@ -113,13 +142,17 @@ export class CaptureNetVisual {
    * @param {THREE.Scene} scene
    * @param {object} player   — PlayerSatellite instance
    * @param {object} captureNetSystem — CaptureNetSystem singleton
+   * @param {object} [sceneManager] — optional; backs the Phase D.8 LOW-tier
+   *   garnish gate (twang, drape jiggle, tether pulse, pendulum, micro-shake
+   *   drop at LOW; structure stays). Live changes arrive via PERF_TIER_CHANGED.
    */
-  init(scene, player, captureNetSystem) {
+  init(scene, player, captureNetSystem, sceneManager = null) {
     if (!Constants.FEATURE_FLAGS.CAPTURE_NET) return;
 
     this._scene = scene;
     this._player = player;
     this._captureNetSystem = captureNetSystem;
+    this._sceneManager = sceneManager;
     this._enabled = true;
     this._disposed = false;
 
@@ -128,12 +161,28 @@ export class CaptureNetVisual {
     this._boundNetMiss       = this._onNetMiss.bind(this);
     this._boundReelCompleted = this._onReelCompleted.bind(this);
     this._boundNetReleased   = this._onNetReleased.bind(this);
+    this._boundTierChanged   = (p) => { this._tier = p?.to ?? this._tier; };
 
     eventBus.on(Events.NET_FIRED,          this._boundNetFired);
     eventBus.on(Events.NET_CATCH_SUCCESS,  this._boundNetCaught);
     eventBus.on(Events.NET_CATCH_MISS,     this._boundNetMiss);
     eventBus.on(Events.NET_REEL_COMPLETED, this._boundReelCompleted);
     eventBus.on(Events.NET_RELEASED,       this._boundNetReleased);
+    eventBus.on(Events.PERF_TIER_CHANGED,  this._boundTierChanged);
+    this._tier = sceneManager?.currentTier ?? 'HIGH';
+  }
+
+  /**
+   * Phase D.8 (mother-net-reel plan §11.8) — true when the current quality
+   * tier keeps a garnish item. LOW keeps structure (the net web, tether,
+   * cinch) and drops the garnish: tether twang, drape jiggle, tether emissive
+   * pulse, berthed pendulum, camera micro-shake. Every garnish item reads this
+   * gate (its own constant lives in Constants.CAPTURE_NET).
+   * @returns {boolean}
+   * @private
+   */
+  _garnishOn() {
+    return this._tier !== 'LOW';
   }
 
   // ── Net lookup helper ──────────────────────────────────────────────────
@@ -259,19 +308,26 @@ export class CaptureNetVisual {
     discMesh.visible = false;
     group.add(discMesh);
 
-    // ── Tether line ──
-    const tetherPositions = new Float32Array(6); // 2 points × 3 components
-    const tetherGeo = new THREE.BufferGeometry();
-    tetherGeo.setAttribute('position', new THREE.BufferAttribute(tetherPositions, 3));
-    const tetherMat = new THREE.LineBasicMaterial({
+    // ── Tether line — Line2 catenary (Phase D.4, plan §11.4) ──
+    const tetherPositions = new Float32Array((TETHER_SEGMENTS + 1) * 3);
+    const tetherGeo = new LineGeometry();
+    tetherGeo.setPositions(tetherPositions);
+    const tetherMat = new LineMaterial({
       color: COL_TETHER,
       transparent: true,
       opacity: 0.7,
+      linewidth: 2.0,          // screen-space px — slim but AA-legible
+      worldUnits: false,
+      dashed: false,
+      blending: THREE.NormalBlending,
+      depthWrite: false,
     });
-    const tetherLine = new THREE.Line(tetherGeo, tetherMat);
+    NetMeshKit.registerLineMaterial(tetherMat);
+    const tetherLine = new Line2(tetherGeo, tetherMat);
     tetherLine.name = 'tether';
     tetherLine.visible = false;
     tetherLine.frustumCulled = false;
+    tetherLine.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_CONNECTOR;
     group.add(tetherLine);
 
     this._scene.add(group);
@@ -283,6 +339,10 @@ export class CaptureNetVisual {
       tetherPositions,
       armIndex,
       podIndex,
+      // Phase D.4 catenary state
+      _tetherTwangT: -1,        // seconds since line-taut; <0 = no twang
+      _tetherEmissiveT: -1,     // seconds since taut pulse; <0 = no pulse
+      _tetherWasTaut: false,    // edge detect for the taut snap
     });
   }
 
@@ -332,19 +392,26 @@ export class CaptureNetVisual {
     const apexHub = kitHandle.apexHub;
     group.add(kitHandle.group);
 
-    // ── Tether line (same as flag-OFF path) ──
-    const tetherPositions = new Float32Array(6); // 2 points × 3 components
-    const tetherGeo = new THREE.BufferGeometry();
-    tetherGeo.setAttribute('position', new THREE.BufferAttribute(tetherPositions, 3));
-    const tetherMat = new THREE.LineBasicMaterial({
+    // ── Tether line (same Line2 catenary as the flag-OFF path) ──
+    const tetherPositions = new Float32Array((TETHER_SEGMENTS + 1) * 3);
+    const tetherGeo = new LineGeometry();
+    tetherGeo.setPositions(tetherPositions);
+    const tetherMat = new LineMaterial({
       color: COL_TETHER,
       transparent: true,
       opacity: 0.7,
+      linewidth: 2.0,
+      worldUnits: false,
+      dashed: false,
+      blending: THREE.NormalBlending,
+      depthWrite: false,
     });
-    const tetherLine = new THREE.Line(tetherGeo, tetherMat);
+    NetMeshKit.registerLineMaterial(tetherMat);
+    const tetherLine = new Line2(tetherGeo, tetherMat);
     tetherLine.name = 'tether';
     tetherLine.visible = false;
     tetherLine.frustumCulled = false;
+    tetherLine.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_CONNECTOR;
     group.add(tetherLine);
 
     this._scene.add(group);
@@ -370,6 +437,10 @@ export class CaptureNetVisual {
       armIndex,
       podIndex,
       useCeremony: true,
+      // Phase D.4 catenary state
+      _tetherTwangT: -1,
+      _tetherEmissiveT: -1,
+      _tetherWasTaut: false,
     });
   }
 
@@ -398,6 +469,7 @@ export class CaptureNetVisual {
     }
 
     vis.tetherLine.geometry.dispose();
+    NetMeshKit.unregisterLineMaterial(vis.tetherLine.material);
     vis.tetherLine.material.dispose();
 
     this._activeVisuals.delete(key);
@@ -617,15 +689,104 @@ export class CaptureNetVisual {
         }
         _v3b.copy(group.position);
 
-        tetherPositions[0] = _v3a.x;
-        tetherPositions[1] = _v3a.y;
-        tetherPositions[2] = _v3a.z;
-        tetherPositions[3] = _v3b.x;
-        tetherPositions[4] = _v3b.y;
-        tetherPositions[5] = _v3b.z;
-        tetherLine.geometry.attributes.position.needsUpdate = true;
+        this._updateTetherCatenary(vis, net, _v3a, _v3b, dt);
       }
     }
+  }
+
+  /**
+   * Phase D.4 (mother-net-reel plan §11.4) — sample the tether as a quadratic
+   * slack curve into the Line2 strand. Sag is quadratic in the slack ratio
+   * (pay-out vs straight-line distance): a paying-out tether bows, a taut one
+   * snaps straight. At the slack→taut transition (CAPTURED) a 0.2 s decaying
+   * lateral twang fires and the strand pulses briefly emissive above the 2.5
+   * bloom threshold. Anchor-relative vertices (the LassoSystem DEFECT-1 fix):
+   * the line object is parked at the launcher anchor and every vertex is
+   * stored relative to it, so the ~64-unit orbital magnitude never snaps the
+   * strand onto the float32 grid.
+   *
+   * @param {object} vis — entry from _activeVisuals
+   * @param {object} net — NetProjectile (tetherPaidOut, state)
+   * @param {THREE.Vector3} anchor — launcher anchor, scene units (muzzle/strut tip)
+   * @param {THREE.Vector3} netPos — net position, scene units
+   * @param {number} dt — seconds
+   * @private
+   */
+  _updateTetherCatenary(vis, net, anchor, netPos, dt) {
+    const { tetherLine, tetherPositions } = vis;
+
+    // Park the strand at the anchor; vertices are anchor-relative.
+    tetherLine.position.copy(anchor);
+
+    const dx = netPos.x - anchor.x;
+    const dy = netPos.y - anchor.y;
+    const dz = netPos.z - anchor.z;
+    const straight = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+    // Slack ratio: how much paid-out tether exceeds the straight distance.
+    // tetherPaidOut is metres; straight is scene units → convert.
+    const paidScene = (net.tetherPaidOut ?? straight / M) * M;
+    const slack = Math.max(0, paidScene - straight);
+    const slackRatio = straight > 1e-12 ? slack / straight : 0;
+    const taut = slackRatio < TETHER_TAUT_SLACK;
+
+    // Taut-snap edge: twang + emissive pulse (line goes straight under load).
+    // Phase D.8 (§11.8): both are garnish — dropped at LOW tier.
+    const garnish = this._garnishOn();
+    if (taut && !vis._tetherWasTaut && garnish) {
+      vis._tetherTwangT = 0;
+      vis._tetherEmissiveT = 0;
+    }
+    vis._tetherWasTaut = taut;
+
+    // Twang: decaying lateral oscillation perpendicular to the tether axis.
+    let twangAmp = 0;
+    if (vis._tetherTwangT >= 0) {
+      vis._tetherTwangT += dt;
+      const t = vis._tetherTwangT / TETHER_TWANG_S;
+      if (t >= 1) { vis._tetherTwangT = -1; }
+      else {
+        // Damped sine: a few visible cycles decaying to zero over the window.
+        twangAmp = TETHER_TWANG_AMP_M * M * Math.sin(t * Math.PI * 4) * (1 - t) * (1 - t);
+      }
+    }
+
+    // Emissive pulse: brief HDR flash above the bloom threshold at line-taut.
+    if (vis._tetherEmissiveT >= 0) {
+      vis._tetherEmissiveT += dt;
+      const t = vis._tetherEmissiveT / TETHER_EMISSIVE_S;
+      if (t >= 1) {
+        vis._tetherEmissiveT = -1;
+        tetherLine.material.color.setHex(TETHER_BASE_COLOR);
+      } else {
+        const k = (1 - t) * TETHER_EMISSIVE_HDR;
+        tetherLine.material.color.setHex(TETHER_BASE_COLOR);
+        tetherLine.material.color.multiplyScalar(1 + k);
+      }
+    }
+
+    // Sag direction: perpendicular to the tether axis, biased "down" the
+    // lateral component so the bow reads as slack, not as a rigid arc.
+    // Perp = normalize(cross(axis, up-ish)); degenerate axis → any perp.
+    _v3c.set(dx, dy, dz).normalize();
+    _v3d.set(0, 1, 0);
+    if (Math.abs(_v3c.y) > 0.95) _v3d.set(1, 0, 0);
+    _v3d.cross(_v3c).normalize();      // lateral perpendicular (twang dir)
+    const sagDirX = _v3d.x, sagDirY = _v3d.y, sagDirZ = _v3d.z;
+
+    const sag = slack * TETHER_SAG_FRAC;
+    for (let i = 0; i <= TETHER_SEGMENTS; i++) {
+      const t = i / TETHER_SEGMENTS;
+      // Quadratic slack profile: 4·t·(1−t) peaks 1 at the midpoint, 0 at ends.
+      const bow = 4 * t * (1 - t);
+      const px = dx * t + sagDirX * (sag * bow) + sagDirX * twangAmp * Math.sin(t * Math.PI);
+      const py = dy * t + sagDirY * (sag * bow) + sagDirY * twangAmp * Math.sin(t * Math.PI);
+      const pz = dz * t + sagDirZ * (sag * bow) + sagDirZ * twangAmp * Math.sin(t * Math.PI);
+      tetherPositions[i * 3]     = px;
+      tetherPositions[i * 3 + 1] = py;
+      tetherPositions[i * 3 + 2] = pz;
+    }
+    tetherLine.geometry.setPositions(tetherPositions);
   }
 
   // ── Ceremony state handler (flag-ON only) ──────────────────────────────
@@ -644,6 +805,41 @@ export class CaptureNetVisual {
             apexHub, mouthRadius, coneHeight, closedRadius,
             weightCount, rimWeightMats, canisterMesh } = vis;
     const state = net.state;
+
+    // ── Phase D.5 drape driver (mother-net-reel plan §11.5) ──
+    // Map the net FSM onto the kit's per-frame drape state. The web drapes
+    // onto the catch through ENVELOP, settle-jiggles at ~2.5 Hz with a decaying
+    // envelope, then shrink-wraps through CINCH_CLOSING to the bunched point
+    // that persists through REELING and BERTHED. FLIGHT keeps a slight cone
+    // bow (drape 0). Driven every frame so the jiggle phase advances and the
+    // envelope decays; allocation-free (the kit reuses its webPositions buffer).
+    if (vis.kitHandle) {
+      // Phase D.8 (§11.8): the settle-jiggle is garnish — dropped at LOW tier
+      // (the drape/cinch deformation itself is structure and stays).
+      const garnish = this._garnishOn();
+      let drape = 0, cinchFrac = 0, jiggleAmp = 0;
+      if (state === STATES.ENVELOP) {
+        drape = Math.min(1, Math.max(0, net.stateTimer / CN.ENVELOP_TIME));
+        // Settle-jiggle: strongest mid-drape, decaying as the bag seats.
+        if (garnish) jiggleAmp = mouthRadius * _NT.DRAPE_JIGGLE_ENVELOP_FRAC * Math.sin(Math.PI * drape);
+      } else if (state === STATES.CINCH_CLOSING) {
+        drape = 1;
+        cinchFrac = Math.min(1, Math.max(0, net.stateTimer / CN.CINCH_CLOSE_TIME));
+        if (garnish) jiggleAmp = mouthRadius * _NT.DRAPE_JIGGLE_CINCH_FRAC * (1 - cinchFrac);
+      } else if (state === STATES.CAPTURED || state === STATES.REELING
+                 || state === STATES.BERTHED || state === STATES.SECURE_CHECK) {
+        drape = 1; cinchFrac = 1;   // welded shrink-wrap, no jiggle
+      }
+      if (drape > 0 || cinchFrac > 0 || vis.kitHandle._drape > 0 || vis.kitHandle._cinchFrac > 0) {
+        vis.kitHandle._jigglePhase = (vis.kitHandle._jigglePhase || 0) + dt * Math.PI * 2 * _NT.DRAPE_JIGGLE_HZ;
+        NetMeshKit.updateWebDrape(vis.kitHandle, {
+          drape,
+          cinchFrac,
+          jigglePhase: vis.kitHandle._jigglePhase,
+          jiggleAmp,
+        });
+      }
+    }
 
     switch (state) {
       case STATES.FOLDED:
@@ -1042,12 +1238,14 @@ export class CaptureNetVisual {
     if (this._boundNetMiss)       eventBus.off(Events.NET_CATCH_MISS,     this._boundNetMiss);
     if (this._boundReelCompleted) eventBus.off(Events.NET_REEL_COMPLETED, this._boundReelCompleted);
     if (this._boundNetReleased)   eventBus.off(Events.NET_RELEASED,       this._boundNetReleased);
+    if (this._boundTierChanged)   eventBus.off(Events.PERF_TIER_CHANGED,  this._boundTierChanged);
 
     this._boundNetFired = null;
     this._boundNetCaught = null;
     this._boundNetMiss = null;
     this._boundReelCompleted = null;
     this._boundNetReleased = null;
+    this._boundTierChanged = null;
 
     this._fadeTimers = [];
     this._enabled = false;

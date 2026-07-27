@@ -110,6 +110,99 @@ function buildWebPositions(mouthRadius, coneHeight, radialSpokes, rings) {
   return new Float32Array(positions);
 }
 
+/**
+ * Phase D.5 (mother-net-reel plan §11.5) — rebuild the web vertex positions
+ * per-frame with a drape/shrink-wrap deformation. The kit's `setPositions` is
+ * construction-time only; this is the per-frame update path the plan calls
+ * the largest new-code item. Pure-local-space rule preserved: the deformation
+ * is a function of (mouthRadius, coneHeight, drape) only — no world/frame
+ * state, no group transforms.
+ *
+ * Three phases (driven by the consumer from the net FSM):
+ *   flight  (drape ≈ 0)  — straight cone, slight cone bow at the mouth.
+ *   envelop (0 < drape < 1) — the web drapes onto the debris ellipsoid: each
+ *     ring's radius is pulled in toward the catch silhouette and its z is
+ *     pushed forward past the mouth plane, with a decaying 2–3 Hz settle-jiggle.
+ *   cinch   (drape → 1, cinchFrac 0→1) — the web shrink-wraps: rings collapse
+ *     toward the closed (bunched) radius at the mouth plane.
+ *
+ * @param {Float32Array} out — target buffer (same length as buildWebPositions)
+ * @param {object} p
+ * @param {number} p.mouthRadius   open mouth radius (scene units)
+ * @param {number} p.coneHeight    apex→mouth axial length (scene units)
+ * @param {number} p.radialSpokes
+ * @param {number} p.rings
+ * @param {number} p.drape         0 = flight cone, 1 = fully draped on the catch
+ * @param {number} [p.cinchFrac=0] 0 = open, 1 = bunched point (shrink-wrap)
+ * @param {number} [p.jigglePhase=0] settle-jiggle phase (rad) — decaying 2–3 Hz
+ * @param {number} [p.jiggleAmp=0]   settle-jiggle amplitude (scene units)
+ */
+function buildWebPositionsDraped(out, p) {
+  const { mouthRadius, coneHeight, radialSpokes, rings } = p;
+  const drape = Math.max(0, Math.min(1, p.drape ?? 0));
+  const cinch = Math.max(0, Math.min(1, p.cinchFrac ?? 0));
+  const jigP = p.jigglePhase ?? 0;
+  const jigA = p.jiggleAmp ?? 0;
+  let idx = 0;
+
+  // Drape profile: at drape d, a ring at axial fraction t is pulled inward by
+  // d·(1−t·0.35) and pushed forward past the mouth by d·coneHeight·(1−t)·0.9 —
+  // the bag engulfs the catch (weights overshoot the mouth plane, matching the
+  // rim-weight envZ sweep in CaptureNetVisual). The settle-jiggle is a radial
+  // ripple, strongest at the mouth, decaying toward the apex.
+  const ringRadius = (t, spokeAngle) => {
+    let r = mouthRadius * t;
+    if (drape > 0) {
+      // Pull toward the catch silhouette: the draped radius shrinks toward
+      // ~55% of open at the mouth (the catch is smaller than the 8 m mouth),
+      // less toward the apex (the bag necks down behind the catch).
+      const pull = drape * (0.45 + 0.55 * (1 - t));
+      r *= (1 - pull * 0.45);
+    }
+    if (cinch > 0) {
+      // Shrink-wrap: collapse every ring toward the closed radius fraction.
+      const closed = NET_CER.DRAWSTRING_RADIUS_FRAC_CLOSED;   // SSOT (was hardcoded 0.15)
+      r = r + (mouthRadius * closed * t - r) * cinch;
+    }
+    if (jigA > 0) {
+      r += jigA * t * Math.sin(jigP + spokeAngle * 3);
+    }
+    return r;
+  };
+  const ringZ = (t) => {
+    let z = -coneHeight * t;
+    if (drape > 0) {
+      // Push the mouth-side rings forward past the mouth plane (engulf).
+      z -= drape * coneHeight * (1 - t) * 0.9 * t;
+    }
+    return z;
+  };
+
+  // Radial spokes: apex → rim.
+  for (let s = 0; s < radialSpokes; s++) {
+    const a = (2 * Math.PI * s) / radialSpokes;
+    out[idx++] = 0; out[idx++] = 0; out[idx++] = 0;
+    const r = ringRadius(1, a);
+    out[idx++] = Math.cos(a) * r;
+    out[idx++] = Math.sin(a) * r;
+    out[idx++] = ringZ(1);
+  }
+  // Rings.
+  for (let k = 1; k <= rings; k++) {
+    const t = k / rings;
+    const z = ringZ(t);
+    for (let s = 0; s < radialSpokes; s++) {
+      const a0 = (2 * Math.PI * s) / radialSpokes;
+      const a1 = (2 * Math.PI * (s + 1)) / radialSpokes;
+      const r0 = ringRadius(t, a0);
+      const r1 = ringRadius(t, a1);
+      out[idx++] = Math.cos(a0) * r0; out[idx++] = Math.sin(a0) * r0; out[idx++] = z;
+      out[idx++] = Math.cos(a1) * r1; out[idx++] = Math.sin(a1) * r1; out[idx++] = z;
+    }
+  }
+  return out;
+}
+
 export const NetMeshKit = {
   /**
    * Build a net-mesh handle. Apex at local origin, mouth along local −Z.
@@ -271,10 +364,17 @@ export const NetMeshKit = {
       coneHeight,
       closedRadius: mouthRadius * closedRadiusFrac,
       weightCount,
+      radialSpokes,
+      rings,
       // kit-internal layout state (used by setMouthFraction / setSpinAngle)
       _rimAngles: rimAngles,
       _mouthZ: mouthZ,
       _spinAngle: 0,
+      // Phase D.5 drape state (per-frame update path)
+      _drape: 0,
+      _cinchFrac: 0,
+      _jigglePhase: 0,
+      _jiggleAmp: 0,
     };
 
     // Seed the drawstring from the initial rim layout.
@@ -415,6 +515,39 @@ export const NetMeshKit = {
   /** Stop syncing a previously-registered LineMaterial (call on dispose). */
   unregisterLineMaterial(mat) {
     if (mat) _liveLineMats.delete(mat);
+  },
+
+  /**
+   * Phase D.5 (mother-net-reel plan §11.5) — per-frame drape/shrink-wrap
+   * update. Rebuilds the web vertex positions from the drape state and pushes
+   * them into the fat-line geometry. Allocation-free: the handle's
+   * webPositions buffer is reused; `setPositions` copies into the GPU-side
+   * instanced-interleaved buffer.
+   *
+   * @param {object} h handle
+   * @param {object} drapeState
+   * @param {number} drapeState.drape       0 = flight cone, 1 = draped on catch
+   * @param {number} [drapeState.cinchFrac] 0 = open, 1 = bunched point
+   * @param {number} [drapeState.jigglePhase] settle-jiggle phase (rad)
+   * @param {number} [drapeState.jiggleAmp]   settle-jiggle amplitude (scene units)
+   */
+  updateWebDrape(h, { drape = 0, cinchFrac = 0, jigglePhase = 0, jiggleAmp = 0 } = {}) {
+    if (!h || !h.webPositions || !h.coneMesh) return;
+    h._drape = drape;
+    h._cinchFrac = cinchFrac;
+    h._jigglePhase = jigglePhase;
+    h._jiggleAmp = jiggleAmp;
+    buildWebPositionsDraped(h.webPositions, {
+      mouthRadius: h.mouthRadius,
+      coneHeight: h.coneHeight,
+      radialSpokes: h.radialSpokes,
+      rings: h.rings,
+      drape,
+      cinchFrac,
+      jigglePhase,
+      jiggleAmp,
+    });
+    h.coneMesh.geometry.setPositions(h.webPositions);
   },
 
   /**
