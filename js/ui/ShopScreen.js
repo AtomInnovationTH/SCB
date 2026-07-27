@@ -231,7 +231,8 @@ export function recommendedStarter(upgrades, owned, credits, preference = STARTE
 // S1 retention: pinned "next upgrade" chase-target math lives in the pure
 // ./shopPin.js module (shared with the HUD, DOM-free). Re-exported here so the
 // existing `../ui/ShopScreen.js` import sites (and tests) keep working.
-export { pinProgress, cheapestChaseTarget } from './shopPin.js';
+import { pinProgress, cheapestChaseTarget } from './shopPin.js';
+export { pinProgress, cheapestChaseTarget };
 
 /** Spring tier descriptions for shop display */
 const SPRING_DESCRIPTIONS = [
