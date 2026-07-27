@@ -546,19 +546,33 @@ export class Starfield {
     // the 6 key ("Constellation names" toggle) can show/hide them without
     // affecting the star field itself.
     this._constellationObjects = this._constellationObjects || [];
+    // Label sprites also tracked on their own: the lines get their limb fade
+    // in-shader, the sprites get the CPU twin in update().
+    this._constellationLabels = this._constellationLabels || [];
+    // Scratch vectors for _limbFadeFactor — allocated once, never per frame.
+    this._limbScratchA = this._limbScratchA || new THREE.Vector3();
+    this._limbScratchB = this._limbScratchB || new THREE.Vector3();
+    this._limbScratchC = this._limbScratchC || new THREE.Vector3();
 
     // Shared Line2 material — screenspace-width lines that stay visible at any distance.
-    // LineMaterial renders 2px-wide lines via geometry shaders, bypassing the
-    // WebGL 1px lineWidth hardware clamp that made LineBasicMaterial invisible.
+    // LineMaterial renders sub-pixel-to-few-pixel lines via geometry shaders,
+    // bypassing the WebGL 1px lineWidth hardware clamp that made
+    // LineBasicMaterial invisible.
+    //
+    // Styling lives in Constants.CONSTELLATION_* so it can be tuned in one
+    // place. NOTE: do NOT enable alphaToCoverage here — the renderer runs
+    // antialias:false behind an EffectComposer (SceneManager), so there is no
+    // MSAA for it to resolve against; thin lines rely on the SMAA/FXAA pass.
     this._constellationLineMaterial = new LineMaterial({
-      color: 0x6688cc,          // brighter blue (§18 Fix 3 — was 0x5577bb, crushed by ACES)
+      color: Constants.CONSTELLATION_LINE_COLOR,
       transparent: true,
-      opacity: 0.7,             // higher opacity (§18 Fix 3 — was 0.5)
-      linewidth: 2.0,           // pixels — slightly thicker for visibility (was 1.5)
+      opacity: Constants.CONSTELLATION_LINE_OPACITY,
+      linewidth: Constants.CONSTELLATION_LINE_WIDTH,
       depthWrite: false,
       depthTest: true,           // occlude behind Earth mesh and celestial body depth masks
       resolution: new THREE.Vector2(window.innerWidth, window.innerHeight),
     });
+    this._installLimbFade(this._constellationLineMaterial);
 
     for (const cst of CONSTELLATIONS) {
       // Convert RA/Dec star positions → 3D vectors on the sphere
@@ -588,7 +602,7 @@ export class Starfield {
       const label = new THREE.Sprite(new THREE.SpriteMaterial({
         map: createConstellationLabel(cst.name),
         transparent: true,
-        opacity: 0.34,           // dimmed to match quiet planet labels (was 0.9)
+        opacity: Constants.CONSTELLATION_LABEL_OPACITY,
         depthWrite: false,
         depthTest: true,         // occlude behind Earth mesh and celestial body depth masks
       }));
@@ -605,7 +619,153 @@ export class Starfield {
       label.frustumCulled = false;
       this.group.add(label);
       this._constellationObjects.push(label);
+      // Also tracked separately so update() can apply the same limb fade the
+      // lines get in-shader (8 sprites — negligible per-frame cost).
+      this._constellationLabels.push(label);
     }
+  }
+
+  /**
+   * Inject a soft Earth-limb fade into the constellation LineMaterial.
+   *
+   * WHY: with depthTest:true a constellation edge crossing the Earth limb is
+   * chopped dead at the silhouette, leaving a straight saturated line with a
+   * hard endpoint apparently ON the surface — which reads unmistakably as a
+   * rocket launch plume. Fading the lines out BEFORE they reach the limb glow
+   * removes that cue entirely (the z-test then only ever hides already-invisible
+   * pixels).
+   *
+   * HOW: per-fragment angular fade. Earth sits at the world origin (Earth.js
+   * never moves its group; the floating origin is DebrisField-local), so
+   * Earth's view-space centre is just viewMatrix[3].xyz — no per-frame uniform
+   * plumbing needed. A varying carries each fragment's view-space position;
+   * because varyings interpolate perspective-correctly along the segment, every
+   * fragment gets the true 3D point beneath it without subdividing the geometry.
+   * Chord-vs-great-circle error is a couple of degrees and irrelevant to a soft
+   * ramp.
+   *
+   * The fade reference radius is ATMOSPHERE_RADIUS (not EARTH_RADIUS) so the
+   * ramp completes outside the visible airglow band — the atmosphere shell is
+   * depthWrite:false, so lines would otherwise punch straight through it.
+   * @param {LineMaterial} material
+   * @private
+   */
+  _installLimbFade(material) {
+    const uniforms = {
+      uLimbRadius:    { value: Constants.ATMOSPHERE_RADIUS },
+      uLimbFadeScale: { value: Constants.CONSTELLATION_LIMB_FADE_SCALE },
+      uLimbFadeMin:   { value: Constants.CONSTELLATION_LIMB_FADE_MIN },
+      uLimbFadeMax:   { value: Constants.CONSTELLATION_LIMB_FADE_MAX },
+    };
+
+    // Anchors below are tied to vendored three r184
+    // (vendor/three/examples/jsm/lines/LineMaterial.js). A silently-missed
+    // replace would drop the fade with no error, so each one is asserted.
+    const VERT_DECL_ANCHOR = 'uniform float linewidth;\n\t\tuniform vec2 resolution;';
+    const VERT_BODY_ANCHOR = 'vec4 start = modelViewMatrix * vec4( instanceStart, 1.0 );';
+    const FRAG_DECL_ANCHOR = 'uniform vec3 diffuse;';
+    const FRAG_BODY_ANCHOR = 'gl_FragColor = vec4( diffuseColor.rgb, alpha );';
+
+    const warn = (what) => {
+      if (this._limbFadeWarned) return;
+      this._limbFadeWarned = true;
+      console.warn(
+        `[Starfield] Constellation limb-fade injection failed (${what} anchor not ` +
+        'found in LineMaterial). Lines will hard-clip at the Earth limb. The ' +
+        'vendored three.js LineMaterial shader has probably changed.'
+      );
+    };
+
+    material.onBeforeCompile = (shader) => {
+      Object.assign(shader.uniforms, uniforms);
+
+      const vertDecl = /* glsl */`
+        uniform float linewidth;
+        uniform vec2 resolution;
+        varying vec3 vLimbViewPos;
+        varying vec3 vLimbEarthView;`;
+
+      // position.y < 0.5 is the same start/end selector the stock shader
+      // already uses for instanceColorStart/End. Use the raw endpoint (not the
+      // screen-space-expanded quad corner) so the fade varies ALONG the line
+      // rather than across its width.
+      const vertBody = /* glsl */`${VERT_BODY_ANCHOR}
+			vec4 limbEnd = modelViewMatrix * vec4( instanceEnd, 1.0 );
+			vLimbViewPos = ( position.y < 0.5 ) ? start.xyz : limbEnd.xyz;
+			vLimbEarthView = viewMatrix[ 3 ].xyz;`;
+
+      const fragDecl = /* glsl */`
+        uniform vec3 diffuse;
+        uniform float uLimbRadius;
+        uniform float uLimbFadeScale;
+        uniform float uLimbFadeMin;
+        uniform float uLimbFadeMax;
+        varying vec3 vLimbViewPos;
+        varying vec3 vLimbEarthView;`;
+
+      // Injected after the endcap discards so it modulates the final alpha.
+      const fragBody = /* glsl */`
+			float limbDist  = length( vLimbEarthView );
+			float sinLimb   = clamp( uLimbRadius / max( limbDist, uLimbRadius + 1e-3 ), 0.0, 1.0 );
+			float thetaLimb = asin( sinLimb );
+			float theta     = acos( clamp( dot( normalize( vLimbViewPos ), normalize( vLimbEarthView ) ), -1.0, 1.0 ) );
+			float limbBand  = clamp( uLimbFadeScale * thetaLimb, uLimbFadeMin, uLimbFadeMax );
+			alpha *= smoothstep( thetaLimb, thetaLimb + limbBand, theta );
+			${FRAG_BODY_ANCHOR}`;
+
+      if (shader.vertexShader.includes(VERT_DECL_ANCHOR)) {
+        shader.vertexShader = shader.vertexShader.replace(VERT_DECL_ANCHOR, vertDecl);
+      } else warn('vertex declaration');
+
+      if (shader.vertexShader.includes(VERT_BODY_ANCHOR)) {
+        shader.vertexShader = shader.vertexShader.replace(VERT_BODY_ANCHOR, vertBody);
+      } else warn('vertex body');
+
+      if (shader.fragmentShader.includes(FRAG_DECL_ANCHOR)) {
+        shader.fragmentShader = shader.fragmentShader.replace(FRAG_DECL_ANCHOR, fragDecl);
+      } else warn('fragment declaration');
+
+      if (shader.fragmentShader.includes(FRAG_BODY_ANCHOR)) {
+        shader.fragmentShader = shader.fragmentShader.replace(FRAG_BODY_ANCHOR, fragBody);
+      } else warn('fragment body');
+    };
+
+    // Keep the injected variant from sharing a compiled program with a stock
+    // LineMaterial (ShaderMaterial cache keys ignore onBeforeCompile).
+    material.customProgramCacheKey = () => 'constellationLimbFade';
+  }
+
+  /**
+   * CPU-side twin of the in-shader limb fade, for the name-label sprites.
+   * Returns the 0..1 ramp for a world-space point as seen from `camera`.
+   * @param {THREE.Vector3} worldPos
+   * @param {THREE.Camera} camera
+   * @returns {number}
+   * @private
+   */
+  _limbFadeFactor(worldPos, camera) {
+    // Earth is at the world origin, so camera.position doubles as the
+    // camera→Earth-centre vector (negated).
+    const limbRadius = Constants.ATMOSPHERE_RADIUS;
+    const camDist = camera.position.length();
+    if (!(camDist > limbRadius)) return 1; // inside the shell: no meaningful limb
+    const thetaLimb = Math.asin(Math.min(1, limbRadius / camDist));
+
+    const toPoint = this._limbScratchA.copy(worldPos).sub(camera.position);
+    const toEarth = this._limbScratchB.copy(camera.position).negate();
+    const lp = toPoint.length();
+    if (lp < 1e-6) return 1;
+    const cos = toPoint.dot(toEarth) / (lp * camDist);
+    const theta = Math.acos(Math.max(-1, Math.min(1, cos)));
+
+    const band = Math.min(
+      Constants.CONSTELLATION_LIMB_FADE_MAX,
+      Math.max(Constants.CONSTELLATION_LIMB_FADE_MIN,
+        Constants.CONSTELLATION_LIMB_FADE_SCALE * thetaLimb)
+    );
+    // smoothstep(thetaLimb, thetaLimb + band, theta)
+    const t = Math.max(0, Math.min(1, (theta - thetaLimb) / band));
+    return t * t * (3 - 2 * t);
   }
 
   /**
@@ -640,8 +800,12 @@ export class Starfield {
    * @param {number} [pixelRatio] — the RENDERER's capped pixel ratio (B2). Falls
    *   back to window.devicePixelRatio when undefined so the class stays usable
    *   standalone (e.g. in tests / menu preview).
+   * @param {THREE.Camera} [camera] — active camera, used to apply the Earth-limb
+   *   fade to the constellation name sprites (the lines do it in-shader). When
+   *   omitted the sprites keep their static opacity — same defensive style as
+   *   pixelRatio above, so the class stays usable standalone.
    */
-  update(_dt, pixelRatio) {
+  update(_dt, pixelRatio, camera) {
     const dt = (typeof _dt === 'number' && isFinite(_dt)) ? _dt : 0;
     // B3: wrap the accumulator to keep float32 precision. 251.327 = 100 twinkle
     // periods (2π / 2.5 ≈ 2.51327 s); wrapping on a whole multiple keeps
@@ -669,6 +833,19 @@ export class Starfield {
       this._constellationLineMaterial.resolution.set(
         window.innerWidth, window.innerHeight
       );
+    }
+
+    // Match the in-shader limb fade on the name sprites so a label does not
+    // hang crisply over the airglow band after its lines have dissolved.
+    // Opacity only — `visible` stays owned by setConstellationsVisible().
+    if (camera && this._constellationLabels && this._constellationLabels.length) {
+      const base = Constants.CONSTELLATION_LABEL_OPACITY;
+      for (const label of this._constellationLabels) {
+        // The star group is never transformed today, but resolve world space
+        // anyway so a future sky rotation cannot silently desync the fade.
+        const worldPos = label.getWorldPosition(this._limbScratchC);
+        label.material.opacity = base * this._limbFadeFactor(worldPos, camera);
+      }
     }
   }
 }

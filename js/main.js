@@ -1892,7 +1892,7 @@ function gameLoop(timestamp) {
   // B2: feed the renderer's CAPPED pixel ratio (HIGH tier caps at 1.5), not
   // window.devicePixelRatio (=2.0), so gl_PointSize maps to the true physical
   // render-target and stars aren't ~33% oversized.
-  starfield.update(dt, sceneManager.getRenderer().getPixelRatio());
+  starfield.update(dt, sceneManager.getRenderer().getPixelRatio(), sceneManager.getCamera());
   // UX-11 #5: city-label cull/fade (no-op while hidden)
   try { cityLabels.update(); } catch (e) { console.error('[GameLoop] cityLabels:', e); }
   try { launchCameo.update(dt); } catch (e) { console.error('[GameLoop] launchCameo:', e); }

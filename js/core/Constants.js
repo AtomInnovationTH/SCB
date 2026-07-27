@@ -297,6 +297,25 @@ export const Constants = {
   STAR_COUNT: 10000,
   STAR_SPHERE_RADIUS: 400,        // Must be < CAMERA_FAR (500)
 
+  // --- Constellation stick figures (Starfield._createConstellations) ---
+  // Deliberately faint: "noticeable if you look, not distracting". The earlier
+  // pass (§18 Fix 3) pushed these UP to fight ACES crush, which made the lines
+  // read as rocket launch trails where they were hard-clipped by the Earth
+  // silhouette. The clipping — not the brightness — was the real cue, so it is
+  // now solved by the LIMB_FADE_* ramp below and these can come back down.
+  CONSTELLATION_LINE_COLOR: 0x7d8ba3,   // desaturated slate blue-grey (was 0x6688cc)
+  CONSTELLATION_LINE_OPACITY: 0.30,     // was 0.7
+  CONSTELLATION_LINE_WIDTH: 1.25,       // px — was 2.0 (no MSAA; SMAA/FXAA carries it)
+  CONSTELLATION_LABEL_OPACITY: 0.28,    // was 0.34
+  // Soft limb fade: constellation lines dissolve BEFORE they reach the Earth
+  // limb glow instead of being hard-clipped at the silhouette by depthTest.
+  // The fade band is a fraction of Earth's apparent angular radius (so it
+  // behaves both in LEO, where Earth fills the frame, and in far orbit where
+  // the disc is small), then clamped to absolute radians at both ends.
+  CONSTELLATION_LIMB_FADE_SCALE: 0.35,
+  CONSTELLATION_LIMB_FADE_MIN: 0.035,   // ~2°
+  CONSTELLATION_LIMB_FADE_MAX: 0.35,    // ~20°
+
   // =========================================================================
   // V3 OCTOPUS ADR SATELLITE (from V3 Octopus.md Appendix F)
   // 6-arm configuration: 3 Weaver (large) + 3 Spinner (small), hexagonal
