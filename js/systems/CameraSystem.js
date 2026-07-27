@@ -157,6 +157,12 @@ export class CameraSystem {
     /** @type {string|null} Previous view (for transition) */
     this._previousView = null;
 
+    /** @type {object|null} PlayerSatellite ref — backs the mother-pod net
+     *  ceremony launcher (pod muzzle world position via getNetPodPositionInto).
+     *  Injected via setPlayer(); optional so headless tests (no player) keep
+     *  the daughter arm ceremony working and the pod ceremony no-ops. */
+    this._player = null;
+
     /** @type {('mother'|'debris'|'daughter')|null} Focused subject while in INSPECTION */
     this._inspectSubject = null;
 
@@ -343,6 +349,19 @@ export class CameraSystem {
       savedFov: 0,         // pre-ceremony _baseFov
       isFirstEver: false,  // true if this is the first-ever net deploy
       success: null,       // null until NET_CEREMONY_COMPLETE event
+      // ── Launcher abstraction (mother-net-reel plan §11.1) ──
+      // The ceremony was arm-centric: arm.position anchored every beat,
+      // getActiveNetForArm found the net, arm.target._scenePosition found the
+      // debris. A mother-pod shot has armIndex=-1 and no arm, so all three
+      // early-exited. _launcher generalises the anchor:
+      //   daughter: getPos → arm.position,        getDebrisPos → arm.target._scenePosition
+      //   mother:   getPos → pod muzzle (live),   getDebrisPos → net.targetDebris._scenePosition
+      // Both allocation-free; null when no launcher could be resolved (the
+      // ceremony then refuses to start — the same contract as the old no-arm
+      // early-exit).
+      _launcher: null,     // { getPos(out), getDebrisPos(out) } | null
+      _net: null,          // the NetProjectile (either path)
+      _reelBeatChained: false, // Phase D.2 — the REEL_IN beat chains at most once
       // Persistent geometry (set once at ceremony start)
       _launchFwd: new THREE.Vector3(),     // launch direction (unit)
       _sideDir: new THREE.Vector3(),       // port-side (cross fwd × radialUp)
@@ -354,6 +373,7 @@ export class CameraSystem {
       _v3d: new THREE.Vector3(),  // debrisPos
       _v3e: new THREE.Vector3(),  // general scratch
       _scratchNetPos: new THREE.Vector3(), // net scene position
+      _scratchLauncherPos: new THREE.Vector3(), // launcher (arm/pod) scene position
     };
 
     // ========================================================================
@@ -384,7 +404,13 @@ export class CameraSystem {
     // scaled by that Δv, duration ≈ the spring window, and skipped entirely
     // under prefers-reduced-motion. Arm/lasso captures stay silent — that
     // decision stands.
-    eventBus.on(Events.NET_MOTHER_TUG, (data) => {
+    // F3 (Phase D hardening): collect every eventBus subscription so dispose()
+    // can drain them. Without this, every CameraSystem ever constructed stays
+    // subscribed to NET_CEREMONY_START for the process lifetime — a stale
+    // instance re-arms on the next start and pins CeremonyTimeScale (test
+    // pollution + a production leak after a ceremony loses its update() driver).
+    this._unsubs = this._unsubs || [];
+    this._unsubs.push(eventBus.on(Events.NET_MOTHER_TUG, (data) => {
       if (!data || data.podIndex < 0) return;              // mother pods only
       if (this._prefersReducedMotion()) return;            // accessibility gate
       const dv = data.dvMs || 0;
@@ -396,29 +422,32 @@ export class CameraSystem {
       this._catchShakeScale = Math.min(1, dv / Math.max(1e-9, cap));
       this._catchShakeDuration = data.windowS || Constants.CATCH_SHAKE_DURATION || 0.3;
       this._catchShakeTimer = this._catchShakeDuration;
-    });
+    }));
 
     // Phase 4: Listen for thrust visual events for FOV breathe
-    eventBus.on(Events.THRUST_VISUAL, (data) => {
+    this._unsubs.push(eventBus.on(Events.THRUST_VISUAL, (data) => {
       this._thrustVisualMag = data.magnitude || 0;
       this._thrustVisualDir = data.direction || null;
-    });
+    }));
 
     // V-7: Launch ceremony trigger
-    eventBus.on(Events.LAUNCH_CEREMONY_START, ({ arm }) => {
+    this._unsubs.push(eventBus.on(Events.LAUNCH_CEREMONY_START, ({ arm }) => {
       this.startLaunchCeremony(arm);
-    });
+    }));
 
     // Q2: Net ceremony event subscriptions (gated at handler entry)
-    eventBus.on(Events.NET_CEREMONY_START, (payload) => {
+    this._unsubs.push(eventBus.on(Events.NET_CEREMONY_START, (payload) => {
       this._onNetCeremonyStart(payload);
-    });
-    eventBus.on(Events.NET_BRAKE_FIRED, (payload) => {
+    }));
+    this._unsubs.push(eventBus.on(Events.NET_BRAKE_FIRED, (payload) => {
       this._onNetBrakeFired(payload);
-    });
-    eventBus.on(Events.NET_CEREMONY_COMPLETE, (payload) => {
+    }));
+    this._unsubs.push(eventBus.on(Events.NET_CEREMONY_COMPLETE, (payload) => {
       this._onNetCeremonyComplete(payload);
-    });
+    }));
+    this._unsubs.push(eventBus.on(Events.NET_BERTHED, (payload) => {
+      this._onNetBerthed(payload);
+    }));
 
     this._boundMouseDown = this._onMouseDown.bind(this);
     this._boundMouseMove = this._onMouseMove.bind(this);
@@ -1209,10 +1238,19 @@ export class CameraSystem {
    * Narrows FOV and switches to ARM_PILOT view.
    * @param {import('../entities/ArmUnit.js').ArmUnit} arm
    */
+  /**
+   * Wire the PlayerSatellite so the mother-pod net ceremony can anchor on the
+   * pod muzzle (mother-net-reel plan §11.1). Optional — when unset the pod
+   * ceremony no-ops (same early-exit contract as a missing arm).
+   * @param {object} player — PlayerSatellite with getNetPodPositionInto()
+   */
+  setPlayer(player) {
+    this._player = player || null;
+  }
+
   setPilotArm(arm) {
     if (!arm) return;
-    this.armPilot.arm = arm;
-    // Phase 4: Save base FOV (without breathe offset) and reset breathe state
+    this.armPilot.arm = arm;    // Phase 4: Save base FOV (without breathe offset) and reset breathe state
     this.armPilot.fovNormal = this._baseFov;
     this._fovBreathOffset = 0;
     this._fovBreathTarget = 0;
@@ -1672,8 +1710,15 @@ export class CameraSystem {
     const HCB = NC.HIGHLIGHTS_CUT_BEATS;
     const HTS = NC.HIGHLIGHTS_TIME_SCALE;
 
-    // Read first-deploy flag from PersistenceManager
-    const firstDeployDone = persistenceManager.getCeremonyFlag('FIRST_NET_DEPLOY');
+    // Read first-deploy flags from PersistenceManager. The mother path gets
+    // its own flag (mother-net-reel plan §11.3): the FIRST_NET_DEPLOY flag is
+    // daughter-flavoured (set by the arm ceremony), so without a mother flag
+    // the first-ever WHALE catch would play the trimmed highlights cut even
+    // though the player has never seen the pod fire.
+    const isMotherShot = (payload.podIndex ?? -1) >= 0 && (payload.armIndex ?? -1) < 0;
+    const firstDeployDone = isMotherShot
+      ? persistenceManager.getCeremonyFlag('FIRST_MOTHER_NET_DEPLOY')
+      : persistenceManager.getCeremonyFlag('FIRST_NET_DEPLOY');
     const isFirstEver = !firstDeployDone;
 
     // FOV targets per beat (design doc §5.3)
@@ -1740,12 +1785,46 @@ export class CameraSystem {
       });
     }
 
-    // Resolve arm reference — should be the arm in ARM_PILOT
-    const arm = this.armPilot.arm;
-    if (!arm || !arm.position) return;
-
-    // Resolve net projectile for diameter and launch direction
-    const net = captureNetSystem.getActiveNetForArm(payload.armIndex);
+    // ── Resolve the launcher (mother-net-reel plan §11.1) ──
+    // Daughter path (armIndex ≥ 0): the ARM_PILOT arm anchors the ceremony.
+    // Mother path (podIndex ≥ 0, armIndex < 0): the pod muzzle anchors it —
+    // polled live each frame because the pod rides the ship. Either path
+    // yields { getPos, getDebrisPos, net }; neither ⇒ refuse to start (the
+    // same contract as the old no-arm early-exit, which test-NetCinematic.js:431
+    // asserts for the daughter path).
+    const isMother = (payload.podIndex ?? -1) >= 0 && (payload.armIndex ?? -1) < 0;
+    let launcher = null;
+    let net = null;
+    let arm = null;
+    if (isMother) {
+      net = captureNetSystem.getActiveNetForPod
+        ? captureNetSystem.getActiveNetForPod(payload.podIndex)
+        : null;
+      const player = this._player;
+      const podIndex = payload.podIndex;
+      if (net && player && typeof player.getNetPodPositionInto === 'function') {
+        launcher = {
+          getPos: (out) => player.getNetPodPositionInto(podIndex, out),
+          getDebrisPos: (out) => {
+            const sp = net.targetDebris?._scenePosition;
+            return sp ? out.copy(sp) : null;
+          },
+        };
+      }
+    } else {
+      arm = this.armPilot.arm;
+      net = captureNetSystem.getActiveNetForArm(payload.armIndex);
+      if (arm && arm.position) {
+        launcher = {
+          getPos: (out) => out.copy(arm.position),
+          getDebrisPos: (out) => {
+            const sp = arm.target?._scenePosition ?? arm._stationKeepTarget?._scenePosition;
+            return sp ? out.copy(sp) : null;
+          },
+        };
+      }
+    }
+    if (!launcher) return;
 
     c.active = true;
     c.beatIndex = 0;
@@ -1754,12 +1833,17 @@ export class CameraSystem {
     c.armIndex = payload.armIndex;
     c.podIndex = payload.podIndex;
     c.arm = arm;
+    c._launcher = launcher;
+    c._net = net;
     c.savedView = this.currentView;
     c.savedFov = this._baseFov;
     c.isFirstEver = isFirstEver;
     c.success = null;
+    c._reelBeatChained = false;
 
-    // Store launch direction (unit vector)
+    // Store launch direction (unit vector) + radial/side frame, anchored on
+    // the launcher's CURRENT position.
+    const launcherPos = launcher.getPos(c._scratchLauncherPos);
     if (net) {
       c._launchFwd.set(
         net.launchDirection.x,
@@ -1767,8 +1851,8 @@ export class CameraSystem {
         net.launchDirection.z
       ).normalize();
       c._netDiameterScene = (net.netClass?.DIAMETER || 5) * M;
-    } else if (arm.target && arm.target._scenePosition) {
-      c._launchFwd.copy(arm.target._scenePosition).sub(arm.position).normalize();
+    } else if (launcher.getDebrisPos(c._v3d)) {
+      c._launchFwd.copy(c._v3d).sub(launcherPos).normalize();
       c._netDiameterScene = 5 * M;
     } else {
       c._launchFwd.copy(this._lastVelDir);
@@ -1776,7 +1860,7 @@ export class CameraSystem {
     }
 
     // Side direction: cross(fwd, radialUp) — consistent "port side"
-    const radialUp = c._v3e.copy(arm.position).normalize();
+    const radialUp = c._v3e.copy(launcherPos).normalize();
     c._sideDir.crossVectors(c._launchFwd, radialUp).normalize();
     if (c._sideDir.lengthSq() < 0.001) {
       c._sideDir.crossVectors(c._launchFwd, c._v3e.set(0, 1, 0)).normalize();
@@ -1807,7 +1891,12 @@ export class CameraSystem {
     if (!Constants.FEATURE_FLAGS.NET_CEREMONY) return;
     const c = this._netCeremony;
     if (!c.active) return;
-    if (c.armIndex !== payload.armIndex) return;
+    // Identity filter (mother-net-reel plan §11.1): match on the launcher
+    // axis that started this ceremony — armIndex for daughter, podIndex for
+    // mother. (Two mother pods share armIndex=-1, so armIndex alone cannot
+    // discriminate pod ceremonies.)
+    if (c.podIndex >= 0 ? (c.podIndex !== payload.podIndex)
+                       : (c.armIndex !== payload.armIndex)) return;
 
     const beat = c.beats[c.beatIndex];
     if (beat && beat.key === 'APPROACH_DOLLY') {
@@ -1824,7 +1913,9 @@ export class CameraSystem {
     if (!Constants.FEATURE_FLAGS.NET_CEREMONY) return;
     const c = this._netCeremony;
     if (!c.active) return;
-    if (c.armIndex !== payload.armIndex) return;
+    // Identity filter (mother-net-reel plan §11.1) — see _onNetBrakeFired.
+    if (c.podIndex >= 0 ? (c.podIndex !== payload.podIndex)
+                       : (c.armIndex !== payload.armIndex)) return;
 
     c.success = payload.success;
 
@@ -1834,6 +1925,77 @@ export class CameraSystem {
     }
     // Success path: let the ceremony beats play out naturally.
     // _updateNetCeremony will call _exitNetCeremony(true) when all beats finish.
+  }
+
+  /**
+   * Phase D.2 (mother-net-reel plan §11.2) — chain a trailing REEL_IN beat
+   * onto the ceremony when a mother catch is mid-reel as the capture beats
+   * complete. The beat frames mother + incoming catch in a 3/4 view and is
+   * released to the player cam at berth (NET_BERTHED → _onNetBerthed) or at
+   * the REEL_BEAT_MAX_S wall-clock cap — never a 40 s hold.
+   *
+   * Runs at 1.0× timeScale: CeremonyTimeScale multiplies the reel's dt
+   * (§4.15), so a slowmo beat would literally slow the winch. Skipped under
+   * prefers-reduced-motion, for daughter catches, and when the reel already
+   * finished inside the capture beats (a close-range shot).
+   *
+   * @param {object} c — the _netCeremony state
+   * @returns {boolean} true when the REEL_IN beat was chained
+   * @private
+   */
+  _tryChainReelBeat(c) {
+    if (c.podIndex < 0) return false;                    // daughter — exit as before
+    if (c._reelBeatChained) return false;                // chain once — the cap is
+                                                       // the release valve; re-chaining
+                                                       // would hold the cinematic for
+                                                       // the whole reel (§11.2: never 40 s)
+    if (this._prefersReducedMotion()) return false;      // accessibility gate
+    const net = c._net;
+    if (!net || net.state !== 'REELING' || net.catchResult !== 'success') return false;
+    if (net._motherReelFallback) return false;           // headless fallback reel
+
+    const NC = Constants.CAPTURE_NET.NET_CEREMONY;
+    // Wall-clock estimate: remaining distance ÷ reel speed, padded, capped.
+    // The beat force-advances on NET_BERTHED, so this is only a safety bound —
+    // and the corridor hold can add up to CORRIDOR_TIMEOUT_S, which the cap
+    // absorbs (release mid-hold is the intended pressure valve).
+    const reelSpeed = net.netClass?.REEL_SPEED || 2.0;
+    const remaining = net._remainingM ?? 0;
+    // Effectively berthed — a close-range shot that finished its reel inside
+    // the capture beats. (remaining/speed)×1.2+0.5 floors at 0.5 s, so a raw
+    // duration check can never exclude this case; gate on the distance itself.
+    if (remaining <= 0.5) return false;
+    const estimate = (remaining / reelSpeed) * 1.2 + 0.5;
+    const duration = Math.min(estimate, NC.REEL_BEAT_MAX_S ?? 12.0);
+    if (duration <= 0.25) return false;
+
+    c.beats.push({
+      key: 'REEL_IN',
+      duration,
+      fov: NC.REEL_BEAT_FOV ?? 42,
+      timeScale: 1.0,                                    // §4.15 — never dilate the reel
+    });
+    c._reelBeatChained = true;
+    // beatIndex currently == beats.length - 1 (just incremented past the old
+    // last beat) — point it at the new trailing beat.
+    c.beatIndex = c.beats.length - 1;
+    return true;
+  }
+
+  /**
+   * NET_BERTHED handler — release the REEL_IN beat to the player cam.
+   * Outside the reel beat this is a no-op (the berth can also land after the
+   * beat's wall-clock cap released us already).
+   * @private
+   */
+  _onNetBerthed(payload) {
+    const c = this._netCeremony;
+    if (!c.active) return;
+    if (c.podIndex < 0 || c.podIndex !== payload.podIndex) return;
+    const beat = c.beats[c.beatIndex];
+    if (beat && beat.key === 'REEL_IN') {
+      this._exitNetCeremony(true);
+    }
   }
 
   /**
@@ -1915,6 +2077,20 @@ export class CameraSystem {
           .addScaledVector(side, 0.4 * D_M)
           .addScaledVector(fwd, 2.0 * D_M)
           .addScaledVector(localUp, 0.4 * D_M);
+      case 'REEL_IN': {
+        // Phase D.2 — 3/4 view framing mother (armPos = pod muzzle) AND the
+        // incoming catch (debrisPos). Camera sits off the pod↔catch axis at
+        // the midpoint, offset side+up by a fraction of the separation so the
+        // framing widens as the catch pays in and tightens as it berths.
+        // Floor the offset at ~2 whale-lengths so a near-berthed catch still
+        // reads against the hull instead of clipping the near plane.
+        const mid = this._netCeremony._v3e.copy(armPos).add(debrisPos).multiplyScalar(0.5);
+        const sep = armPos.distanceTo(debrisPos);
+        const off = Math.max(sep * 0.45, 2 * D_M);
+        return out.copy(mid)
+          .addScaledVector(side, off * 0.8)
+          .addScaledVector(localUp, off * 0.6);
+      }
       default:
         return out.copy(armPos);
     }
@@ -1959,6 +2135,11 @@ export class CameraSystem {
       case 'APPROACH_DOLLY':
         // Midpoint of net and debris
         return out.copy(netPos).add(debrisPos).multiplyScalar(0.5);
+      case 'REEL_IN':
+        // Phase D.2 — track the incoming catch biased slightly toward the
+        // muzzle, so the berth destination stays in frame as it closes.
+        return out.copy(debrisPos).multiplyScalar(0.7)
+          .addScaledVector(armPos, 0.3);
       default:
         return out.copy(armPos);
     }
@@ -1966,20 +2147,30 @@ export class CameraSystem {
 
   /**
    * Compute net scene position into c._scratchNetPos. No allocation.
+   * Daughter: arm position + launchDirection × distanceTraveled (the arm is
+   * the flight anchor). Mother: the net's own live position × M — the mother
+   * reel/berth writes net.position in metres every frame from the ship-relative
+   * pin (mother-net-reel plan §8), which IS the correct scene anchor; the
+   * flight phase reads the same field via the anchor provider.
    * @private
    */
   _computeNetScenePos(c) {
     const M = 0.00001;
-    const net = captureNetSystem.getActiveNetForArm(c.armIndex);
-    if (net && net._sourceArm?.position) {
+    const net = c._net ?? (c.podIndex >= 0
+      ? (captureNetSystem.getActiveNetForPod ? captureNetSystem.getActiveNetForPod(c.podIndex) : null)
+      : captureNetSystem.getActiveNetForArm(c.armIndex));
+    if (net && c.podIndex >= 0 && net.position) {
+      // Mother: net.position is metres (CaptureNet.js:454) — scale to scene.
+      c._scratchNetPos.set(net.position.x * M, net.position.y * M, net.position.z * M);
+    } else if (net && net._sourceArm?.position) {
       const ap = net._sourceArm.position;
       c._scratchNetPos.set(
         ap.x + net.launchDirection.x * net.distanceTraveled * M,
         ap.y + net.launchDirection.y * net.distanceTraveled * M,
         ap.z + net.launchDirection.z * net.distanceTraveled * M
       );
-    } else if (c.arm?.position) {
-      c._scratchNetPos.copy(c.arm.position);
+    } else if (c._launcher && c._launcher.getPos(c._scratchNetPos)) {
+      // fall through — launcher position is the anchor
     } else {
       c._scratchNetPos.set(0, 0, 0);
     }
@@ -1997,42 +2188,64 @@ export class CameraSystem {
     c.beatTimer += dt;
     let beat = c.beats[c.beatIndex];
 
+    // Phase D.2 guard: the REEL_IN beat ends the frame the net leaves REELING
+    // for any reason other than the berth (which NET_BERTHED covers) — a
+    // mid-reel miss (dead target, strain slip) does NOT re-emit
+    // NET_CEREMONY_COMPLETE (already spent at CAPTURED), so poll the state.
+    if (beat && beat.key === 'REEL_IN' && c._net && c._net.state !== 'REELING') {
+      this._exitNetCeremony(false);
+      return null;
+    }
+
     // Beat advance
     if (c.beatTimer >= beat.duration) {
       c.beatTimer -= beat.duration;
       c.beatIndex++;
       if (c.beatIndex >= c.beats.length) {
-        this._exitNetCeremony(true);
-        return null;
+        // Phase D.2: chain into the REEL_IN beat instead of exiting when a
+        // mother catch is mid-reel (3/4 view of mother + incoming catch,
+        // released at berth or the wall-clock cap). Daughter catches exit
+        // here as before.
+        if (this._tryChainReelBeat(c)) {
+          beat = c.beats[c.beatIndex];
+          CeremonyTimeScale.set(beat.timeScale ?? 1.0);
+        } else {
+          this._exitNetCeremony(true);
+          return null;
+        }
+      } else {
+        beat = c.beats[c.beatIndex];
+        // Stage 4: publish new beat's physics time-scale (CEREMONY_REDESIGN.md §5.1)
+        CeremonyTimeScale.set(beat.timeScale ?? 1.0);
       }
-      beat = c.beats[c.beatIndex];
-      // Stage 4: publish new beat's physics time-scale (CEREMONY_REDESIGN.md §5.1)
-      CeremonyTimeScale.set(beat.timeScale ?? 1.0);
     }
 
     const t = c.beatTimer / beat.duration;
     const ease = t * t * (3 - 2 * t); // smoothstep
 
-    const arm = c.arm;
-    if (!arm || !arm.position) {
+    // Launcher anchor (mother-net-reel plan §11.1): arm.position for daughter,
+    // the live pod muzzle for mother. Polled every frame — the pod rides the
+    // ship, and a stale absolute anchor drifts ~45 km apparent in 0.65 s.
+    if (!c._launcher) {
+      this._exitNetCeremony(false);
+      return null;
+    }
+    const armPos = c._launcher.getPos(c._scratchLauncherPos);
+    if (!armPos) {
       this._exitNetCeremony(false);
       return null;
     }
 
-    const armPos = arm.position;
     this._computeNetScenePos(c);
     const netPos = c._scratchNetPos;
     const fwd = c._launchFwd;
     const side = c._sideDir;
     const D_M = c._netDiameterScene;
 
-    // Debris scene position (into c._v3d)
+    // Debris scene position (into c._v3d) — live on both paths (the debris
+    // keeps propagating while pinned).
     const debrisPos = c._v3d;
-    if (arm.target?._scenePosition) {
-      debrisPos.copy(arm.target._scenePosition);
-    } else if (arm._stationKeepTarget?._scenePosition) {
-      debrisPos.copy(arm._stationKeepTarget._scenePosition);
-    } else {
+    if (!c._launcher.getDebrisPos(debrisPos)) {
       debrisPos.copy(armPos).addScaledVector(fwd, 0.0005);
     }
 
@@ -2097,6 +2310,9 @@ export class CameraSystem {
     c.beatTimer = 0;
     c.beats = [];
     c.arm = null;
+    c._launcher = null;
+    c._reelBeatChained = false;
+    c._net = null;
     c.success = null;
 
     // Stage 4: clear ceremony time-scale (world dt back to 1.0× — §6 R1)
@@ -2112,9 +2328,14 @@ export class CameraSystem {
     const c = this._netCeremony;
     if (!c.active) return;
 
-    // Set first-deploy flag at end of first-ever SUCCESSFUL ceremony
+    // Set first-deploy flag at end of first-ever SUCCESSFUL ceremony. The
+    // mother path writes its own flag (§11.3) so a first whale catch after a
+    // daughter deploy still gets the full beat list, and GameFlowManager's
+    // saveGame() preserves it through the ceremonyFlags whitelist passthrough
+    // (GameFlowManager.js:1624) — no separate persistence wiring needed.
     if (completedNormally && c.isFirstEver && c.success !== false) {
-      persistenceManager.setCeremonyFlag('FIRST_NET_DEPLOY', true);
+      persistenceManager.setCeremonyFlag(
+        c.podIndex >= 0 ? 'FIRST_MOTHER_NET_DEPLOY' : 'FIRST_NET_DEPLOY', true);
     }
 
     // Restore FOV
@@ -2131,12 +2352,29 @@ export class CameraSystem {
     c.beatTimer = 0;
     c.beats = [];
     c.arm = null;
+    c._launcher = null;
+    c._reelBeatChained = false;
+    c._net = null;
     c.success = null;
 
     // Stage 4: clear ceremony time-scale (world dt back to 1.0× — §6 R1)
     CeremonyTimeScale.reset();
 
     this.setView(prevView);
+  }
+
+  /**
+   * Public skip for the net ceremony (parent §11.2 — the REEL_IN beat, and every
+   * other beat, must be skippable via the `skipLaunchCeremony` pattern). Routes
+   * through `_exitNetCeremony(false)` so the saved view is restored and
+   * `CeremonyTimeScale.reset()` runs (world dt back to 1.0× — §6 R1). No-op when
+   * no ceremony is active.
+   * @returns {boolean} true if a ceremony was skipped
+   */
+  skipNetCeremony() {
+    if (!this._netCeremony.active) return false;
+    this._exitNetCeremony(false);
+    return true;
   }
 
   // ==========================================================================
@@ -2680,6 +2918,18 @@ export class CameraSystem {
    * Remove event listeners (call on destroy).
    */
   dispose() {
+    // F3: drain eventBus subscriptions so a disposed instance can never re-arm
+    // a ceremony (and pin CeremonyTimeScale) on a later NET_CEREMONY_START.
+    if (this._unsubs) {
+      for (const off of this._unsubs) { try { off(); } catch { /* already gone */ } }
+      this._unsubs.length = 0;
+    }
+    // If this instance is tearing down mid-ceremony, hand the world clock back
+    // (§6 R1) rather than leaving the global time scale pinned.
+    if (this._netCeremony && this._netCeremony.active) {
+      this._exitNetCeremony(false);
+    }
+
     this.canvas.removeEventListener('mousedown', this._boundMouseDown);
     this.canvas.removeEventListener('mousemove', this._boundMouseMove);
     this.canvas.removeEventListener('mouseup', this._boundMouseUp);

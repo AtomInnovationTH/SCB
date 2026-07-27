@@ -2387,6 +2387,19 @@ export const Constants = {
       HIGHLIGHTS_CUT_BEATS:   ['GLAMOUR_SHOT', 'APPROACH_DOLLY', 'BRAKE_ENVELOP', 'CINCH', 'SECURED_SETTLE'],
       HIGHLIGHTS_TIME_SCALE:  1.0,
 
+      // ── REEL_IN beat (mother-net-reel plan §11.2 Phase D.2) ──
+      // A trailing beat chained after SECURED_SETTLE for mother catches only:
+      // a 3/4 view framing mother + incoming catch, released to the player cam
+      // at berth (NET_BERTHED) or at this wall-clock cap — whichever first.
+      // The cap exists so a corridor hold (≤ 8 s) or a 100 m long-tether reel
+      // never holds a cinematic for the full ~25 s. The beat runs at 1.0×
+      // timeScale: CeremonyTimeScale multiplies the reel's dt (§4.15), so a
+      // slowmo beat would literally slow the winch — the reel IS the
+      // spectacle, don't dilate it. Skipped entirely under
+      // prefers-reduced-motion and for daughter catches (arm-framed already).
+      REEL_BEAT_MAX_S:      12.0,   // wall-clock cap (never hold for 40 s)
+      REEL_BEAT_FOV:        42,
+
       // ── Visual geometry ratios — §5.1 ──
       CONE_OPEN_RADIUS_FRAC:         1.0,    // mouth radius / (D_mesh × 0.5)
       // 2026-05-28 (Item 1 tuning): CONE_LENGTH_FRAC bumped from 0.55 → 0.85.

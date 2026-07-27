@@ -540,6 +540,23 @@ export class InputManager {
       }
     }
 
+    // Net ceremony (parent §11.2) — ESC / Space / Enter always release the
+    // camera takeover, mirroring the launch-ceremony contract above. This is
+    // the skip path for the REEL_IN beat (up to REEL_BEAT_MAX_S) and every
+    // other net beat; skipNetCeremony() routes through _exitNetCeremony so the
+    // saved view is restored and CeremonyTimeScale resets to 1.0×.
+    if (d.cameraSystem?._netCeremony?.active) {
+      if (e.code === 'Escape' || e.code === 'Space' || e.code === 'Enter') {
+        d.cameraSystem.skipNetCeremony();
+        e.preventDefault();
+        return;
+      } else {
+        // Block other keys so the player does not accidentally jump views.
+        e.preventDefault();
+        return;
+      }
+    }
+
     // ST-5.1: Comms menu intercept removed — center popup deleted.
     // UX-11 #9: the C-hold RadialMenu was also removed. Bare C is now unbound
     // (2026-06-16 cleanup); comms expand lives on the 7 key.
