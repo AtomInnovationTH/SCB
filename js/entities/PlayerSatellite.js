@@ -55,6 +55,7 @@ const _armDockTargetQuat = new THREE.Quaternion();
 const _qInvTmp = new THREE.Quaternion();
 const _v3TmpA  = new THREE.Vector3();
 const _v3TmpB  = new THREE.Vector3();
+const _v3TmpC  = new THREE.Vector3();
 /* RCS direction-aware firing temps (per-frame, single instance — no alloc). */
 const _rcsL  = new THREE.Vector3();
 const _rcsLn = new THREE.Vector3();
@@ -291,7 +292,33 @@ export class PlayerSatellite extends THREE.Group {
     eventBus.on(Events.DUAL_FIRE_RECOIL, (data) => this._applyDualFireRecoil(data));
     // Mother whale-net launch → real linear + angular recoil (source-filtered).
     eventBus.on(Events.NET_FIRED, (data) => {
-      if (data && data.source === 'mother') this._applyMotherNetRecoil(data);
+      if (data && data.source === 'mother') {
+        this._applyMotherNetRecoil(data);
+        // Phase D.6 — muzzle puff + flash. F6 decision (Phase D hardening):
+        // muzzle FX hangs off NET_FIRED, which is NOT flag-gated, so it fires
+        // in REALITY_MODE too — whereas the brake FX below only runs when
+        // FEATURE_FLAGS.NET_CEREMONY is on (NET_BRAKE_FIRED is gated at its
+        // emit site, CaptureNet.js:2087-2089). This asymmetry is ACCEPTED, not
+        // a bug: these are cosmetic FX, not load-bearing logic, so §6 (no
+        // load-bearing logic behind the flag) is not breached. The muzzle puff
+        // is tied to the physical launch event and reads correctly in either
+        // mode; the brake puff is part of the cinch-path spectacle that only
+        // exists when the ceremony feature is on.
+        this._fireNetMuzzleFx(data.podIndex ?? 0);
+      }
+    });
+    // Phase D.6 (mother-net-reel plan §11.6) — 4 radial retro puffs at the
+    // tether-brake moment. The brake is the cinch-path deceleration: the net
+    // fires its rim-weight retros inward (radially, toward the cone axis) to
+    // shed closing velocity before the envelop. Puffs sit at the net's live
+    // position (the contact point), NOT at the muzzle — the brake happens at
+    // the target, metres to tens of metres downrange.
+    // F6 decision (Phase D hardening): NET_BRAKE_FIRED is emitted only under
+    // FEATURE_FLAGS.NET_CEREMONY (CaptureNet.js:2087-2089), so these retro
+    // puffs are silent in REALITY_MODE while the muzzle puff above is not.
+    // Accepted as a cosmetic-only asymmetry (see the NET_FIRED note above).
+    eventBus.on(Events.NET_BRAKE_FIRED, (data) => {
+      if (data && data.podIndex >= 0) this._fireNetBrakeFx(data.podIndex);
     });
 
 
@@ -5241,6 +5268,67 @@ export class PlayerSatellite extends THREE.Group {
       puff.sprite.scale.set(M * 0.04, M * 0.04, M * 0.04);
       puff.sprite.visible = true;
       puff.active = true;
+    }
+  }
+
+  /**
+   * Phase D.6 (mother-net-reel plan §11.6) — muzzle FX on a mother net launch:
+   * a cold-gas puff burst at the firing pod's muzzle (the canister ejection
+   * reads as a gas jet, not a flame) plus a brief plume-frustum flash. The
+   * puffs reuse the pooled RCS sprites; the flash reuses the attitude plume
+   * nearest the muzzle (spiked, then decayed by the normal plume loop).
+   * @param {number} podIndex
+   * @private
+   */
+  _fireNetMuzzleFx(podIndex) {
+    const muzzle = this._netPodMuzzles?.[podIndex] ?? this._netPodMuzzles?.[0];
+    if (!muzzle) return;
+    const now = performance.now() * 0.001;
+    // Puff burst: exhaust forward (+Z ship-local) — the canister leaves the
+    // muzzle and the gas follows it out.
+    _v3TmpA.set(0, 0, 1);
+    this._emitColdGas(muzzle.position, _v3TmpA, now);
+    this._emitColdGas(muzzle.position, _v3TmpA, now + 0.02);
+    // Plume flash: spike the attitude plume nearest the muzzle so it reads as
+    // a muzzle flash. The plume loop decays it back (no restore bookkeeping).
+    if (this._rcsAttitudeFlash && this._rcsNozzleLocalPos) {
+      let best = -1, bestD = Infinity;
+      for (let k = 0; k < this._rcsNozzleLocalPos.length; k++) {
+        const d = this._rcsNozzleLocalPos[k].distanceToSquared(muzzle.position);
+        if (d < bestD) { bestD = d; best = k; }
+      }
+      if (best >= 0) this._rcsAttitudeFlash[best] = 1.25;
+    }
+  }
+
+  /**
+   * Phase D.6 (mother-net-reel plan §11.6) — 4 radial retro puffs at the
+   * tether-brake moment. The brake fires the rim-weight retros INWARD (toward
+   * the cone axis) to shed closing velocity, so the puffs sit at the net's
+   * live position (the contact point downrange) and point radially inward.
+   * Reads the net's position from the active mother net on this pod.
+   * @param {number} podIndex
+   * @private
+   */
+  _fireNetBrakeFx(podIndex) {
+    if (!this._captureNetSystem) return;
+    const net = (typeof this._captureNetSystem.getActiveNetForPod === 'function')
+      ? this._captureNetSystem.getActiveNetForPod(podIndex) : null;
+    if (!net || !net.position) return;
+    const now = performance.now() * 0.001;
+    // Net position is metres (CaptureNet.js:454) → scene units, and the puff
+    // pool lives in the ship's LOCAL frame — convert world → local.
+    _v3TmpA.set(net.position.x * M, net.position.y * M, net.position.z * M);
+    this.worldToLocal(_v3TmpA);
+    // 4 radial retros, 90° apart, pointing inward (toward the cone axis =
+    // the launch direction). In ship-local terms the cone axis ≈ +Z, so the
+    // radial plane is XY; exhaust inward = −radial.
+    for (let i = 0; i < 4; i++) {
+      const a = (i / 4) * Math.PI * 2;
+      _v3TmpB.set(Math.cos(a), Math.sin(a), 0);   // radial outward (local)
+      _v3TmpC.copy(_v3TmpA).addScaledVector(_v3TmpB, M * 4);  // rim radius ~4 m
+      _v3TmpB.negate();                            // exhaust inward
+      this._emitColdGas(_v3TmpC, _v3TmpB, now + i * 0.015);
     }
   }
 

@@ -753,6 +753,7 @@ async function init() {
 
   // --- Camera System (replaces old manual follow) ---
   cameraSystem = new CameraSystem(camera, canvas, scene, sceneManager);
+  cameraSystem.setPlayer(player);   // mother-net-reel plan §11.1 — pod-muzzle anchor for the mother net ceremony
 
   // --- Mothership inspection callouts (in-world 3D labels; replaces the 2D
   // wireframe pane). Gated internally on the inspection events. ---
@@ -856,7 +857,7 @@ async function init() {
   if (Constants.FEATURE_FLAGS.CAPTURE_NET) {
     captureNetSystem.init({ player, debrisField, audioSystem, armManager, lassoSystem });   // ST-9.4: initialize mother pod inventory + set _initialized; deps back the mother-pod anchor provider + Phase-A pin API + Phase-B winch pitch + Phase C-lite corridor test
     player.setCaptureNetSystem(captureNetSystem);     // §4.4: berthed-mass translational scaling in _applyThrust
-    captureNetVisual.init(scene, player, captureNetSystem);
+    captureNetVisual.init(scene, player, captureNetSystem, sceneManager);   // sceneManager backs the Phase D.8 LOW-tier garnish gate
     // Item 1: staged furnace-breakdown choreography (chunks → furnace, net drawn in).
     furnaceBreakdownVisual.init(scene, player);
   }
