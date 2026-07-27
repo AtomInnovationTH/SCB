@@ -337,6 +337,11 @@ export class CaptureNetVisual {
       discMesh,
       tetherLine,
       tetherPositions,
+      // P1: the tether's instanced-interleaved buffer (pairs format). Captured
+      // once so _updateTetherCatenary writes it in place instead of calling
+      // LineGeometry.setPositions (double allocation per frame — polyline→pairs
+      // Float32Array + a fresh InstancedInterleavedBuffer/attrs/bounds).
+      tetherSegBuffer: tetherGeo.attributes.instanceStart.data,
       armIndex,
       podIndex,
       // Phase D.4 catenary state
@@ -423,6 +428,7 @@ export class CaptureNetVisual {
       kitHandle,                   // owns cone/weights/drawstring/apex geometry+materials
       tetherLine,
       tetherPositions,
+      tetherSegBuffer: tetherGeo.attributes.instanceStart.data,   // P1 (see flag-OFF path)
       rimWeights,
       rimWeightMats,
       weightGeo: kitHandle.weightGeo,
@@ -714,7 +720,6 @@ export class CaptureNetVisual {
    */
   _updateTetherCatenary(vis, net, anchor, netPos, dt) {
     const { tetherLine, tetherPositions } = vis;
-
     // Park the strand at the anchor; vertices are anchor-relative.
     tetherLine.position.copy(anchor);
 
@@ -786,7 +791,27 @@ export class CaptureNetVisual {
       tetherPositions[i * 3 + 1] = py;
       tetherPositions[i * 3 + 2] = pz;
     }
-    tetherLine.geometry.setPositions(tetherPositions);
+    // P1: write the pairs-format interleaved buffer in place (segment j = point
+    // j → point j+1), mirroring LineGeometry.setPositions' polyline→pairs
+    // conversion, then flag it dirty. No per-frame allocation, no bounds
+    // recompute (tetherLine.frustumCulled = false covers culling).
+    const seg = vis.tetherSegBuffer;
+    if (seg) {
+      const arr = seg.array;
+      for (let j = 0; j < TETHER_SEGMENTS; j++) {
+        const a = j * 3, b = (j + 1) * 3, o = j * 6;
+        arr[o]     = tetherPositions[a];
+        arr[o + 1] = tetherPositions[a + 1];
+        arr[o + 2] = tetherPositions[a + 2];
+        arr[o + 3] = tetherPositions[b];
+        arr[o + 4] = tetherPositions[b + 1];
+        arr[o + 5] = tetherPositions[b + 2];
+      }
+      seg.needsUpdate = true;
+    } else {
+      // Fallback (buffer not captured, e.g. an externally-built vis): safe path.
+      tetherLine.geometry.setPositions(tetherPositions);
+    }
   }
 
   // ── Ceremony state handler (flag-ON only) ──────────────────────────────

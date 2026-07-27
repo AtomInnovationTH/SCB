@@ -137,67 +137,86 @@ function buildWebPositions(mouthRadius, coneHeight, radialSpokes, rings) {
  * @param {number} [p.jigglePhase=0] settle-jiggle phase (rad) — decaying 2–3 Hz
  * @param {number} [p.jiggleAmp=0]   settle-jiggle amplitude (scene units)
  */
+// ── Drape deformation math (module-scope — defined once, no per-frame closure) ─
+// P2 (visual-centerpiece plan §6): these were per-call arrow closures allocated
+// inside buildWebPositionsDraped on every frame. Hoisted to module scope so the
+// per-frame update path allocates nothing. Pure functions of their arguments.
+
+// Drape profile: at drape d, a ring at axial fraction t is pulled inward by
+// d·(0.45+0.55·(1−t)) and pushed forward past the mouth by d·coneHeight·(1−t)·0.9
+// — the bag engulfs the catch (weights overshoot the mouth plane, matching the
+// rim-weight envZ sweep in CaptureNetVisual). The settle-jiggle is a radial
+// ripple, strongest at the mouth, decaying toward the apex.
+function drapeRingRadius(t, spokeAngle, mouthRadius, drape, cinch, closed, jigA, jigP) {
+  let r = mouthRadius * t;
+  if (drape > 0) {
+    // Pull toward the catch silhouette: the draped radius shrinks toward
+    // ~55% of open at the mouth (the catch is smaller than the 8 m mouth),
+    // less toward the apex (the bag necks down behind the catch).
+    const pull = drape * (0.45 + 0.55 * (1 - t));
+    r *= (1 - pull * 0.45);
+  }
+  if (cinch > 0) {
+    // Shrink-wrap: collapse every ring toward the closed radius fraction.
+    r = r + (mouthRadius * closed * t - r) * cinch;
+  }
+  if (jigA > 0) {
+    r += jigA * t * Math.sin(jigP + spokeAngle * 3);
+  }
+  return r;
+}
+function drapeRingZ(t, coneHeight, drape) {
+  let z = -coneHeight * t;
+  if (drape > 0) {
+    // Push the mouth-side rings forward past the mouth plane (engulf).
+    z -= drape * coneHeight * (1 - t) * 0.9 * t;
+  }
+  return z;
+}
+
 function buildWebPositionsDraped(out, p) {
   const { mouthRadius, coneHeight, radialSpokes, rings } = p;
   const drape = Math.max(0, Math.min(1, p.drape ?? 0));
   const cinch = Math.max(0, Math.min(1, p.cinchFrac ?? 0));
   const jigP = p.jigglePhase ?? 0;
   const jigA = p.jiggleAmp ?? 0;
+  const closed = NET_CER.DRAWSTRING_RADIUS_FRAC_CLOSED;   // SSOT (was hardcoded 0.15)
+  // P2: per-spoke cos/sin/angle are fixed for the life of the handle (radialSpokes
+  // never changes), so the consumer passes cached tables in. When absent (a test
+  // calling this directly), fall back to computing them — correctness over speed.
+  const cosA = (p.cosA && p.cosA.length === radialSpokes) ? p.cosA : null;
+  const sinA = (p.sinA && p.sinA.length === radialSpokes) ? p.sinA : null;
+  const angA = (p.angA && p.angA.length === radialSpokes) ? p.angA : null;
   let idx = 0;
 
-  // Drape profile: at drape d, a ring at axial fraction t is pulled inward by
-  // d·(1−t·0.35) and pushed forward past the mouth by d·coneHeight·(1−t)·0.9 —
-  // the bag engulfs the catch (weights overshoot the mouth plane, matching the
-  // rim-weight envZ sweep in CaptureNetVisual). The settle-jiggle is a radial
-  // ripple, strongest at the mouth, decaying toward the apex.
-  const ringRadius = (t, spokeAngle) => {
-    let r = mouthRadius * t;
-    if (drape > 0) {
-      // Pull toward the catch silhouette: the draped radius shrinks toward
-      // ~55% of open at the mouth (the catch is smaller than the 8 m mouth),
-      // less toward the apex (the bag necks down behind the catch).
-      const pull = drape * (0.45 + 0.55 * (1 - t));
-      r *= (1 - pull * 0.45);
-    }
-    if (cinch > 0) {
-      // Shrink-wrap: collapse every ring toward the closed radius fraction.
-      const closed = NET_CER.DRAWSTRING_RADIUS_FRAC_CLOSED;   // SSOT (was hardcoded 0.15)
-      r = r + (mouthRadius * closed * t - r) * cinch;
-    }
-    if (jigA > 0) {
-      r += jigA * t * Math.sin(jigP + spokeAngle * 3);
-    }
-    return r;
-  };
-  const ringZ = (t) => {
-    let z = -coneHeight * t;
-    if (drape > 0) {
-      // Push the mouth-side rings forward past the mouth plane (engulf).
-      z -= drape * coneHeight * (1 - t) * 0.9 * t;
-    }
-    return z;
-  };
-
-  // Radial spokes: apex → rim.
+  // Radial spokes: apex → rim (t = 1; the drape z-term vanishes at the mouth).
+  const zRim = drapeRingZ(1, coneHeight, drape);
   for (let s = 0; s < radialSpokes; s++) {
-    const a = (2 * Math.PI * s) / radialSpokes;
+    const a  = angA ? angA[s] : (2 * Math.PI * s) / radialSpokes;
+    const ca = cosA ? cosA[s] : Math.cos(a);
+    const sa = sinA ? sinA[s] : Math.sin(a);
+    const r = drapeRingRadius(1, a, mouthRadius, drape, cinch, closed, jigA, jigP);
     out[idx++] = 0; out[idx++] = 0; out[idx++] = 0;
-    const r = ringRadius(1, a);
-    out[idx++] = Math.cos(a) * r;
-    out[idx++] = Math.sin(a) * r;
-    out[idx++] = ringZ(1);
+    out[idx++] = ca * r; out[idx++] = sa * r; out[idx++] = zRim;
   }
   // Rings.
   for (let k = 1; k <= rings; k++) {
     const t = k / rings;
-    const z = ringZ(t);
+    const z = drapeRingZ(t, coneHeight, drape);
     for (let s = 0; s < radialSpokes; s++) {
-      const a0 = (2 * Math.PI * s) / radialSpokes;
-      const a1 = (2 * Math.PI * (s + 1)) / radialSpokes;
-      const r0 = ringRadius(t, a0);
-      const r1 = ringRadius(t, a1);
-      out[idx++] = Math.cos(a0) * r0; out[idx++] = Math.sin(a0) * r0; out[idx++] = z;
-      out[idx++] = Math.cos(a1) * r1; out[idx++] = Math.sin(a1) * r1; out[idx++] = z;
+      const s1 = (s + 1) % radialSpokes;
+      const a0 = angA ? angA[s]  : (2 * Math.PI * s) / radialSpokes;
+      // a1 is spoke s+1; its jiggle phase (a1·3) is 2π·3-periodic, so the wrapped
+      // index (angle 0 for the seam spoke) yields the identical sine as 2π.
+      const a1 = angA ? angA[s1] : (2 * Math.PI * (s + 1)) / radialSpokes;
+      const c0 = cosA ? cosA[s]  : Math.cos(a0);
+      const n0 = sinA ? sinA[s]  : Math.sin(a0);
+      const c1 = cosA ? cosA[s1] : Math.cos(a1);
+      const n1 = sinA ? sinA[s1] : Math.sin(a1);
+      const r0 = drapeRingRadius(t, a0, mouthRadius, drape, cinch, closed, jigA, jigP);
+      const r1 = drapeRingRadius(t, a1, mouthRadius, drape, cinch, closed, jigA, jigP);
+      out[idx++] = c0 * r0; out[idx++] = n0 * r0; out[idx++] = z;
+      out[idx++] = c1 * r1; out[idx++] = n1 * r1; out[idx++] = z;
     }
   }
   return out;
@@ -347,11 +366,29 @@ export const NetMeshKit = {
     apexHub.visible = childrenVisible;
     group.add(apexHub);
 
+    // P2: cache per-spoke cos/sin/angle once (radialSpokes is fixed for the life
+    // of the handle), so the per-frame drape rebuild does no projection trig.
+    const _cosA = new Float32Array(radialSpokes);
+    const _sinA = new Float32Array(radialSpokes);
+    const _angA = new Float32Array(radialSpokes);
+    for (let s = 0; s < radialSpokes; s++) {
+      const a = (2 * Math.PI * s) / radialSpokes;
+      _angA[s] = a; _cosA[s] = Math.cos(a); _sinA[s] = Math.sin(a);
+    }
+
+    // P1: `webPositions` IS the backing store of the web's instanced-interleaved
+    // buffer (LineSegmentsGeometry.setPositions wrapped it at construction — no
+    // copy), so the per-frame drape path writes it in place and flags this buffer
+    // dirty instead of re-running setPositions (which reallocates the buffer, both
+    // interleaved attributes, and both bounding volumes every frame).
+    const webBuffer = coneMesh.geometry.attributes.instanceStart.data;
+
     const handle = {
       group,
       coneMesh,
       webLines: coneMesh,   // alias — the cone IS the fat-line spoke+ring web
       webPositions,         // raw Float32Array of web segment endpoints (apex→rim + rings)
+      webBuffer,            // InstancedInterleavedBuffer whose .array === webPositions
       lineMaterial: coneMat, // the web's LineMaterial (resolution-synced)
       rimWeights,
       rimWeightMats,
@@ -375,6 +412,10 @@ export const NetMeshKit = {
       _cinchFrac: 0,
       _jigglePhase: 0,
       _jiggleAmp: 0,
+      // P2: cached per-spoke trig (projection is fixed; only jiggle recomputes)
+      _cosA,
+      _sinA,
+      _angA,
     };
 
     // Seed the drawstring from the initial rim layout.
@@ -520,9 +561,16 @@ export const NetMeshKit = {
   /**
    * Phase D.5 (mother-net-reel plan §11.5) — per-frame drape/shrink-wrap
    * update. Rebuilds the web vertex positions from the drape state and pushes
-   * them into the fat-line geometry. Allocation-free: the handle's
-   * webPositions buffer is reused; `setPositions` copies into the GPU-side
-   * instanced-interleaved buffer.
+   * them into the fat-line geometry.
+   *
+   * P1 (visual-centerpiece plan §6): fully allocation-free. `h.webPositions` is
+   * the backing `.array` of the instanced-interleaved buffer captured at build
+   * (`h.webBuffer`), so we write it in place and flag the buffer dirty. This
+   * replaces the old `geometry.setPositions(webPositions)` call, which allocated
+   * a fresh `InstancedInterleavedBuffer` + two `InterleavedBufferAttribute`s and
+   * recomputed both bounding volumes on every frame. Frustum culling is unaffected
+   * because `coneMesh.frustumCulled = false` (set at build) — the dropped
+   * per-frame `computeBoundingSphere()` would otherwise be required for culling.
    *
    * @param {object} h handle
    * @param {object} drapeState
@@ -546,8 +594,13 @@ export const NetMeshKit = {
       cinchFrac,
       jigglePhase,
       jiggleAmp,
+      cosA: h._cosA,
+      sinA: h._sinA,
+      angA: h._angA,
     });
-    h.coneMesh.geometry.setPositions(h.webPositions);
+    // In-place GPU push: no new geometry/attribute/buffer, no bounds recompute.
+    const buf = h.webBuffer || h.coneMesh.geometry.attributes.instanceStart.data;
+    buf.needsUpdate = true;
   },
 
   /**

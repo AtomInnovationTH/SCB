@@ -1476,8 +1476,10 @@ async function init() {
   //
   // Auto-capture (on by default with `?shotauto=1`, or `__netAuto(true)`) snaps a
   // frame at the net's deterministic ceremony beats (fired / envelop / brake /
-  // cinch / captured / reel) for BOTH the Mother (lasso:*) and Daughter (net:*)
-  // — removing manual-timing guesswork. Files: netshot-auto-<beat>-<ts>.png.
+  // cinch / captured / reel / berth / reelin / secured) for BOTH the Mother
+  // (lasso:*) and Daughter (net:*) — removing manual-timing guesswork. The last
+  // three are the Phase D mother beats (berth, reel-in end, secured) this net
+  // visual plan is judged on. Files: netshot-auto-<beat>-<ts>.png.
   try {
     const _shotParams = new URLSearchParams(window.location.search);
     if (_shotParams.get('shot') === '1' || _shotParams.has('shot') ||
@@ -1593,6 +1595,14 @@ async function init() {
         });
         if (Events.NET_CATCH_SUCCESS) eventBus.on(Events.NET_CATCH_SUCCESS, () => _snap('captured', 250));
         if (Events.NET_REEL_STARTED)  eventBus.on(Events.NET_REEL_STARTED,  () => _snap('reel', 250));
+        // Phase D mother beats (visual-centerpiece plan §5 S1) — the berth,
+        // reel-in end, and secured beats this plan is judged on. NET_BERTHED
+        // fires the clunk-settle at the launcher (the REEL_IN cinematic is
+        // released here, so `berth` captures its resolved pose); NET_REEL_COMPLETED
+        // marks the reel-in cinematic's end; NET_CEREMONY_COMPLETE the secured pose.
+        if (Events.NET_BERTHED)         eventBus.on(Events.NET_BERTHED,         () => _snap('berth', 350));
+        if (Events.NET_REEL_COMPLETED)  eventBus.on(Events.NET_REEL_COMPLETED,  () => _snap('reelin', 300));
+        if (Events.NET_CEREMONY_COMPLETE) eventBus.on(Events.NET_CEREMONY_COMPLETE, () => _snap('secured', 400));
       }
 
       console.info(`[netShot] ready. __netShot("name") to grab, __netPause(true) to freeze, __netAuto(true) for auto-capture (currently ${_autoOn ? 'ON' : 'OFF'}).`);
