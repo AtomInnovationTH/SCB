@@ -2164,13 +2164,21 @@ export const Constants = {
     TUMBLE_CARRYOVER_DECAY_S: 5.0,   // s — residual spin decays to ~0 over 4–6 s
     TUMBLE_CARRYOVER_MAX_RAD_S: 0.6, // rad/s — cap on the carried residual
     // (b) Berthed pendulum: the berthed bundle swings on the same critically
-    // damped spring the reel-direction lag uses (~0.5 Hz, decays ~5 s),
-    // re-excited by RCS translation. Angle is an offset off the lagged-forward
-    // axis; the spring is semi-implicit (dt-robust at 30/120 fps).
-    BERTH_PENDULUM_FREQ_HZ:  0.5,    // Hz — swing frequency
-    BERTH_PENDULUM_DECAY_S:  5.0,    // s — amplitude decays to ~0
+    // damped spring the reel-direction lag uses (~0.5 Hz), re-excited by RCS
+    // translation. Angle is an offset off the lagged-forward axis; the spring is
+    // semi-implicit (dt-robust at 30/120 fps). NOTE: at critical damping (zeta=1)
+    // the decay time is fully determined by FREQ_HZ — there is deliberately no
+    // separate DECAY_S knob, because a second constant would not be read and
+    // would drift from the real behaviour (~1 s to 1/e at 0.5 Hz).
+    BERTH_PENDULUM_FREQ_HZ:  0.5,    // Hz — swing frequency (also sets the decay)
     BERTH_PENDULUM_MAX_RAD:  0.06,   // rad — cap (~3.4°) so the bundle never clips the launcher
-    BERTH_PENDULUM_RCS_EXCITE: 0.12, // rad/s of swing-vel per (m/s) of RCS translation — re-excite (call site converts _rcsVelocity to m/s); ~1 m/s tap → ~0.01 rad peak, well inside MAX_RAD
+    // rad/s of swing velocity per METRE of RCS drift. The call site converts
+    // _rcsVelocity to m/s and scales by dt, so the total kick over a burst is the
+    // RCS displacement — framerate-independent. Tuned against real input: RCS
+    // equilibrium is ~0.38 m/s (RCS_IMPULSE vs RCS_DAMPING) and RCS_MAX_SPEED is
+    // 0.5 m/s, so a ~1 s burst gives ~0.02 rad (~⅓ of MAX_RAD) and a short tap
+    // reads as a gentle sway. Do NOT tune this against a single-frame kick.
+    BERTH_PENDULUM_RCS_EXCITE: 0.6,
     // Phase D.8 (§11.8): every garnish item sits behind its own constant so a
     // LOW tier (or a tuning pass) can drop it without touching the structure.
     // The pendulum is a physics-side garnish (it feeds the berth-hold pin), so

@@ -1507,10 +1507,17 @@ export class NetProjectile {
       const pK = pOmega * pOmega, pC = 2 * pZeta * pOmega;
       // RCS re-excite: translation velocity kicks the pendulum. _rcsVelocity is
       // in scene-units/s; convert to m/s (÷ M_NET) so the coefficient reads in
-      // rad-per-(m/s) and matches how the rest of this file reasons in metres.
+      // rad-per-metre and matches how the rest of this file reasons in metres.
+      // Scaled by dt like every other term in this integrator: the excitation is
+      // applied EVERY frame the RCS velocity is non-zero (thrust plus its
+      // RCS_DAMPING tail), so an unscaled kick made the swing framerate-dependent
+      // (~2.1× at 120 fps vs 60 fps) AND saturated BERTH_PENDULUM_MAX_RAD after
+      // ~0.3 s of held thrust, turning the damped swing into a hard clamp.
+      // With dt, the total kick over a burst is ∫v·dt = the RCS displacement in
+      // metres, so the coefficient is rad/s of swing per metre of drift.
       if (player._rcsVelocity) {
         const rcsMps = player._rcsVelocity.length() / M_NET;
-        this._pendulumVel += rcsMps * (CN.BERTH_PENDULUM_RCS_EXCITE ?? 0.12);
+        this._pendulumVel += rcsMps * dt * (CN.BERTH_PENDULUM_RCS_EXCITE ?? 0.6);
       }
       // Spring toward 0 (the boresight), capped.
       const pAccel = -pK * this._pendulumAngle - pC * this._pendulumVel;
