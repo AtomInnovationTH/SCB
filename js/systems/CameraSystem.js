@@ -449,6 +449,24 @@ export class CameraSystem {
       this._onNetBerthed(payload);
     }));
 
+    // P3 (visual-centerpiece plan §6): guarantee CeremonyTimeScale is released
+    // when a net ceremony stops receiving update() — otherwise the net FSM keeps
+    // reading a <1.0× scale and runs in slow-motion indefinitely (the leak the
+    // comment above warns about, but from the driver side rather than dispose).
+    //   • A hard game-state transition (mission end, back to menu) cannot carry a
+    //     cinematic across it, so abort any live ceremony — that restores the
+    //     view/FOV and resets the scale.
+    //   • The pause menu should resume the SAME ceremony, so only release the
+    //     scale this system owns; _updateNetCeremony re-asserts the active beat's
+    //     scale on the next served frame (self-healing).
+    this._unsubs.push(eventBus.on(Events.GAME_STATE_CHANGE, () => {
+      if (this._netCeremony && this._netCeremony.active) this._abortNetCeremony();
+      else CeremonyTimeScale.reset(this);
+    }));
+    this._unsubs.push(eventBus.on(Events.PAUSE_MENU, () => {
+      CeremonyTimeScale.reset(this);
+    }));
+
     this._boundMouseDown = this._onMouseDown.bind(this);
     this._boundMouseMove = this._onMouseMove.bind(this);
     this._boundMouseUp = this._onMouseUp.bind(this);
@@ -1872,7 +1890,7 @@ export class CameraSystem {
     // The very first NetProjectile sub-step that emitted NET_CEREMONY_START
     // already ran at 1.0× (one-frame lag accepted; beats are multi-frame).
     if (beats.length > 0) {
-      CeremonyTimeScale.set(beats[0].timeScale ?? 1.0);
+      CeremonyTimeScale.set(beats[0].timeScale ?? 1.0, this);
     }
 
     // Switch to NET_CINEMATIC mode
@@ -2208,17 +2226,24 @@ export class CameraSystem {
         // here as before.
         if (this._tryChainReelBeat(c)) {
           beat = c.beats[c.beatIndex];
-          CeremonyTimeScale.set(beat.timeScale ?? 1.0);
         } else {
           this._exitNetCeremony(true);
           return null;
         }
       } else {
         beat = c.beats[c.beatIndex];
-        // Stage 4: publish new beat's physics time-scale (CEREMONY_REDESIGN.md §5.1)
-        CeremonyTimeScale.set(beat.timeScale ?? 1.0);
       }
     }
+
+    // P3: publish the active beat's physics time-scale (CEREMONY_REDESIGN.md §5.1),
+    // re-asserted every served frame so it is the single source of truth for the
+    // beat scale in this method. Idempotent (same value, same owner), and it makes
+    // the scale self-healing — if the pause path (or any owner-scoped reset)
+    // cleared it, the first ceremony frame after resume restores it, while the
+    // exit/abort paths clear it for good. (The ceremony-start set in
+    // _onNetCeremonyStart stays — it must run inside the synchronous
+    // NET_CEREMONY_START handler, before the projectile's next tick.)
+    CeremonyTimeScale.set(beat.timeScale ?? 1.0, this);
 
     const t = c.beatTimer / beat.duration;
     const ease = t * t * (3 - 2 * t); // smoothstep

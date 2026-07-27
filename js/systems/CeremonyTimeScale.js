@@ -27,6 +27,7 @@
  */
 
 let _scale = 1.0;
+let _owner = null;
 
 export const CeremonyTimeScale = {
   /**
@@ -38,25 +39,48 @@ export const CeremonyTimeScale = {
   },
 
   /**
+   * The object that currently owns a non-1.0 scale (recorded on `set`), or
+   * `null` when unscaled. Single-writer bookkeeping (visual-centerpiece plan
+   * §6 P3): lets the owner detect and clear a scale it pinned but abandoned.
+   * @returns {*} owner token or null
+   */
+  owner() {
+    return _owner;
+  },
+
+  /**
    * Write the current ceremony time-scale. Non-positive or non-finite values
    * are coerced to 1.0 for safety (a runaway zero would freeze the projectile
    * FSM mid-flight).
    * @param {number} s — desired multiplier (typically 0.3 – 1.0)
+   * @param {*} [owner] — token identifying the writer. Recorded so the same
+   *   writer (or an unconditional reset) can later clear the scale. When
+   *   omitted, the existing owner is preserved (re-assert of one's own scale).
    */
-  set(s) {
+  set(s, owner) {
     if (typeof s === 'number' && isFinite(s) && s > 0) {
       _scale = s;
+      if (owner !== undefined) _owner = owner;
     } else {
       _scale = 1.0;
+      _owner = null;
     }
   },
 
   /**
-   * Reset to 1.0× (no scaling). Used by CameraSystem._exitNetCeremony() and
-   * by tests in teardown.
+   * Reset to 1.0× (no scaling). Single-writer discipline (§6 P3): an owned
+   * scale is cleared only by its owner, or by an unconditional (no-owner)
+   * reset. Teardown, the pause path, and hard state transitions all use the
+   * unconditional form — `reset()` — so a pinned scale can never survive a
+   * ceremony that stopped receiving `update()`. Passing a non-matching owner
+   * is a no-op, so one ceremony cannot clobber another's scale.
+   * @param {*} [owner] — when supplied, only clears if it matches the recorded owner
    */
-  reset() {
-    _scale = 1.0;
+  reset(owner) {
+    if (owner === undefined || owner === _owner) {
+      _scale = 1.0;
+      _owner = null;
+    }
   },
 };
 
