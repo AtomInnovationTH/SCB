@@ -2154,6 +2154,30 @@ export const Constants = {
     // (0.5) if playtest says the yank overshoots.
     NET_TUG_FEEL_MULT:    1.0,
 
+    // ── Phase D.7 garnish (mother-net-reel plan §11.7) ──
+    // (a) Tumble carryover: the wrapped bundle keeps a decaying spin at ENVELOP
+    // instead of the hard tumble freeze (_advanceTumble returns early on
+    // _armPinned). The residual decays over TUMBLE_CARRYOVER_DECAY_S and feeds
+    // a small extra pitch term into the berth-hold orientation. Shares the
+    // orientation channel with §1.2 (ship-frame qLocal), so the two are built
+    // together: the carryover is an offset ON TOP of the ship-rigid attitude.
+    TUMBLE_CARRYOVER_DECAY_S: 5.0,   // s — residual spin decays to ~0 over 4–6 s
+    TUMBLE_CARRYOVER_MAX_RAD_S: 0.6, // rad/s — cap on the carried residual
+    // (b) Berthed pendulum: the berthed bundle swings on the same critically
+    // damped spring the reel-direction lag uses (~0.5 Hz, decays ~5 s),
+    // re-excited by RCS translation. Angle is an offset off the lagged-forward
+    // axis; the spring is semi-implicit (dt-robust at 30/120 fps).
+    BERTH_PENDULUM_FREQ_HZ:  0.5,    // Hz — swing frequency
+    BERTH_PENDULUM_DECAY_S:  5.0,    // s — amplitude decays to ~0
+    BERTH_PENDULUM_MAX_RAD:  0.06,   // rad — cap (~3.4°) so the bundle never clips the launcher
+    BERTH_PENDULUM_RCS_EXCITE: 0.12, // rad/s of swing-vel per (m/s) of RCS translation — re-excite (call site converts _rcsVelocity to m/s); ~1 m/s tap → ~0.01 rad peak, well inside MAX_RAD
+    // Phase D.8 (§11.8): every garnish item sits behind its own constant so a
+    // LOW tier (or a tuning pass) can drop it without touching the structure.
+    // The pendulum is a physics-side garnish (it feeds the berth-hold pin), so
+    // its gate lives here rather than in CaptureNetVisual's tier check.
+    BERTH_PENDULUM_ENABLED:  true,
+    TUMBLE_CARRYOVER_ENABLED: true,
+
     // ── Reel-cycle lifetime ──
     REEL_CYCLE_LIFE:      20,     // §6.6: deploy/reel cycles before tether replacement
 

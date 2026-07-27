@@ -38,6 +38,7 @@ const _v3d = new THREE.Vector3();
 const _v3e = new THREE.Vector3();
 const _v3g = new THREE.Vector3();
 const _q0  = new THREE.Quaternion();
+const _q1  = new THREE.Quaternion();
 // Tug scratch (Phase B §9) — catch/ship velocity sampling at CAPTURED.
 const _tugScratchPos = { x: 0, y: 0, z: 0 };
 const _tugScratchVel = { x: 0, y: 0, z: 0 };
@@ -612,6 +613,17 @@ export class NetProjectile {
     this._tugFeelScene = null;
     /** @type {number} Seconds of the tug window already delivered. */
     this._tugElapsed = 0;
+    // ── Phase D.7 garnish (mother-net-reel plan §11.7) ──
+    /** @type {number} (a) Tumble carryover: residual spin (rad/s) the wrapped
+     *  bundle keeps at ENVELOP, decaying over TUMBLE_CARRYOVER_DECAY_S. Fed
+     *  into the berth-hold orientation as a small extra pitch term. */
+    this._tumbleCarryover = 0;
+    /** @type {number} (b) Berthed pendulum: angular offset (rad) of the
+     *  berthed bundle off the lagged-forward axis, driven by the same
+     *  critically damped spring as the reel-direction lag, re-excited by RCS. */
+    this._pendulumAngle = 0;
+    /** @type {number} Pendulum angular velocity (rad/s). */
+    this._pendulumVel = 0;
 
     // ── Q2 Ceremony event emission guards (CEREMONY_REDESIGN.md §5.2) ──
     this._ceremonyStartEmitted    = false;
@@ -1151,6 +1163,12 @@ export class NetProjectile {
     } else {
       this._qLocal = new THREE.Quaternion();
     }
+
+    // Phase D.7 (a) — tumble carryover: seed the residual spin the wrapped
+    // bundle keeps at ENVELOP (the plan's "decaying spin over ~4–6 s instead
+    // of the hard stop"). Capped; decays in _updateMotherReel/updateBerthHold.
+    const tumbleRate = Math.abs(d.tumbleRate || 0);
+    this._tumbleCarryover = Math.min(tumbleRate, CN.TUMBLE_CARRYOVER_MAX_RAD_S ?? 0.6);
     return true;
   }
 
@@ -1270,9 +1288,21 @@ export class NetProjectile {
       .addScaledVector(this._fwdLagged, this._remainingM * M_NET)
       .add(this._lateral);
 
-    // Orientation follows the ship (plan §1.2).
+    // Orientation follows the ship (plan §1.2), PLUS the Phase D.7 (a)
+    // tumble-carryover offset: a small extra pitch term on top of the
+    // ship-rigid attitude, decaying over TUMBLE_CARRYOVER_DECAY_S. The two
+    // share the orientation channel (tumbleAxis/tumbleAngle), so the carryover
+    // is composed as an additional rotation about the ship-local X (pitch)
+    // axis — the same axis the tug's angular kick uses.
     if (this._qLocal && d.tumbleAxis) {
       _q0.copy(player.quaternion).multiply(this._qLocal);
+      if (this._tumbleCarryover > 1e-6 && CN.TUMBLE_CARRYOVER_ENABLED !== false) {
+        const carryAngle = this._tumbleCarryover * dt;
+        _q1.setFromAxisAngle(_v3e.set(1, 0, 0), carryAngle);
+        _q0.multiply(_q1);
+        // Decay the residual (exponential, dt-robust).
+        this._tumbleCarryover *= Math.exp(-dt / (CN.TUMBLE_CARRYOVER_DECAY_S ?? 5.0));
+      }
       const axis = _v3e.set(0, 1, 0);
       let angle = 0;
       // Quaternion → axis/angle for the tumbleAxis/tumbleAngle channel.
@@ -1465,6 +1495,44 @@ export class NetProjectile {
     this._fwdLagged.normalize();
     this._lateral.multiplyScalar(Math.max(0, 1 - 2.0 * dt));
 
+    // Phase D.7 (b) — berthed pendulum: the bundle swings on a critically
+    // damped spring (~0.5 Hz, decays ~5 s), re-excited by RCS translation.
+    // The swing is an angular offset off the lagged-forward axis, applied as a
+    // small lateral displacement at the standoff distance. Semi-implicit
+    // (dt-robust at 30/120 fps). Phase D.8 (§11.8): garnish — dropped at LOW
+    // tier (the berth hold itself is structure and stays).
+    if (CN.BERTH_PENDULUM_ENABLED !== false) {
+      const pOmega = 2 * Math.PI * (CN.BERTH_PENDULUM_FREQ_HZ ?? 0.5);
+      const pZeta = 1.0;
+      const pK = pOmega * pOmega, pC = 2 * pZeta * pOmega;
+      // RCS re-excite: translation velocity kicks the pendulum. _rcsVelocity is
+      // in scene-units/s; convert to m/s (÷ M_NET) so the coefficient reads in
+      // rad-per-(m/s) and matches how the rest of this file reasons in metres.
+      if (player._rcsVelocity) {
+        const rcsMps = player._rcsVelocity.length() / M_NET;
+        this._pendulumVel += rcsMps * (CN.BERTH_PENDULUM_RCS_EXCITE ?? 0.12);
+      }
+      // Spring toward 0 (the boresight), capped.
+      const pAccel = -pK * this._pendulumAngle - pC * this._pendulumVel;
+      this._pendulumVel += pAccel * dt;
+      this._pendulumAngle += this._pendulumVel * dt;
+      const pMax = CN.BERTH_PENDULUM_MAX_RAD ?? 0.06;
+      if (Math.abs(this._pendulumAngle) > pMax) {
+        this._pendulumAngle = Math.sign(this._pendulumAngle) * pMax;
+        this._pendulumVel = 0;
+      }
+      // Apply the swing as a lateral offset at the standoff distance.
+      if (Math.abs(this._pendulumAngle) > 1e-9) {
+        // Swing direction: perpendicular to fwd, in the ship's local XZ plane
+        // (a yaw swing — reads as the bundle swaying side-to-side on the line).
+        _v3e.crossVectors(this._fwdLagged, _v3a.set(0, 1, 0).applyQuaternion(player.quaternion)).normalize();
+        if (_v3e.lengthSq() > 1e-9) {
+          const swingM = Math.tan(this._pendulumAngle) * berthStandoffM;
+          this._lateral.addScaledVector(_v3e, swingM * M_NET);
+        }
+      }
+    }
+
     const podWorld = (typeof player.getNetPodPositionInto === 'function')
       ? player.getNetPodPositionInto(this.podIndex, _v3c) : _v3c.set(0, 0, 0);
     _v3d.copy(podWorld)
@@ -1473,6 +1541,13 @@ export class NetProjectile {
 
     if (this._qLocal && d.tumbleAxis) {
       _q0.copy(player.quaternion).multiply(this._qLocal);
+      // Phase D.7 (a) — tumble carryover (same as the reel path).
+      if (this._tumbleCarryover > 1e-6 && CN.TUMBLE_CARRYOVER_ENABLED !== false) {
+        const carryAngle = this._tumbleCarryover * dt;
+        _q1.setFromAxisAngle(_v3e.set(1, 0, 0), carryAngle);
+        _q0.multiply(_q1);
+        this._tumbleCarryover *= Math.exp(-dt / (CN.TUMBLE_CARRYOVER_DECAY_S ?? 5.0));
+      }
       const w = Math.max(-1, Math.min(1, _q0.w));
       const angle = 2 * Math.acos(w);
       const s = Math.sqrt(Math.max(0, 1 - w * w));
