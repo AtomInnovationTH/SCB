@@ -545,16 +545,20 @@ export class InputManager {
     // the skip path for the REEL_IN beat (up to REEL_BEAT_MAX_S) and every
     // other net beat; skipNetCeremony() routes through _exitNetCeremony so the
     // saved view is restored and CeremonyTimeScale resets to 1.0×.
-    if (d.cameraSystem?._netCeremony?.active) {
-      if (e.code === 'Escape' || e.code === 'Space' || e.code === 'Enter') {
-        d.cameraSystem.skipNetCeremony();
-        e.preventDefault();
-        return;
-      } else {
-        // Block other keys so the player does not accidentally jump views.
-        e.preventDefault();
-        return;
-      }
+    //
+    // Deliberately does NOT block other keys, unlike the launch-ceremony block.
+    // The launch ceremony is a short, player-initiated deploy; the net ceremony
+    // fires passively on a catch during active play and runs 15.2 s of beats
+    // plus up to REEL_BEAT_MAX_S (12 s) of chained REEL_IN — up to ~27 s. A
+    // blanket block there costs the player every discrete action (view, scan,
+    // autopilot, deploy, power presets) for that whole window, which is a worse
+    // failure than an accidental view change. Held/polled controls were never
+    // affected either way (this.keys is written above, before these intercepts).
+    if (d.cameraSystem?._netCeremony?.active
+        && (e.code === 'Escape' || e.code === 'Space' || e.code === 'Enter')) {
+      d.cameraSystem.skipNetCeremony();
+      e.preventDefault();
+      return;
     }
 
     // ST-5.1: Comms menu intercept removed — center popup deleted.
