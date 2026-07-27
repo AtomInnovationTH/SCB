@@ -291,15 +291,48 @@ export class HotkeyOverlay {
 
   /** @private */
   _setupListeners() {
-    // ESC closes (capture phase intercepts before InputManager). The ?/Slash
-    // toggle itself is driven by InputManager so it can respect game state.
-    window.addEventListener('keydown', (e) => {
-      if (e.code === 'Escape' && this._visible) {
-        e.stopImmediatePropagation();
-        e.preventDefault();
-        this.hide();
-      }
-    }, true);
+    // Stored bound ref (MenuScreen / BriefingScreen convention) so a future
+    // dispose() can actually detach this.
+    this._boundKeyDown = this._onKeyDown.bind(this);
+    window.addEventListener('keydown', this._boundKeyDown, true);
+  }
+
+  /**
+   * @private Capture-phase key handling while the list is open.
+   *
+   * While visible this SWALLOWS every game/UI key (capture phase, so it runs
+   * before everyone else) and only ESC (close) is acted on. The ?/Slash toggle
+   * is deliberately passed through — InputManager's open-overlay intercept owns
+   * the close-on-? path (and its click SFX).
+   *
+   * Why blanket-block rather than block a key list: since 2026-07-28 the list
+   * opens from ANY screen, and several screens own their own window keydown
+   * listeners that InputManager cannot suppress for us — MenuScreen starts the
+   * mission on Enter, and BriefingScreen launches on Enter, quick-starts on Q,
+   * and moves target selection on ↑/↓/Tab. All of those would otherwise fire
+   * behind the open overlay. SkillsPane's expanded overlay uses the same
+   * block-everything shape. Nothing is lost in gameplay: InputManager already
+   * ignores every key while this overlay is visible.
+   *
+   * Modifier combos (Cmd/Ctrl/Alt) and F-keys are passed through untouched so
+   * browser shortcuts (reload, devtools, tab switching) keep working.
+   *
+   * @param {KeyboardEvent} e
+   */
+  _onKeyDown(e) {
+    if (!this._visible) return;
+
+    // Browser-level shortcuts stay live.
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (/^F\d{1,2}$/.test(e.code)) return;
+
+    // InputManager owns ? → close (keeps the click SFX on that path).
+    if (e.code === 'Slash') return;
+
+    e.stopImmediatePropagation();
+    e.preventDefault();
+
+    if (e.code === 'Escape') this.hide();
   }
 }
 

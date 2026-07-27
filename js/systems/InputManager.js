@@ -1414,9 +1414,16 @@ export class InputManager {
 
       // --- ? (Slash) — Toggle the grouped keyboard-shortcut reference overlay.
       //     Backquote (~) is already the Debris Map toggle, so the help list
-      //     uses the conventional "?" key instead. ---
+      //     uses the conventional "?" key instead.
+      //     Like the Codex (KeyI above), the shortcut list opens from ANY screen
+      //     (menu, briefing, shop, paused, win, gameplay) — it's reference
+      //     material, not a gameplay-only HUD, and a player on the menu asking
+      //     "what are the controls?" is exactly the case to answer. The
+      //     open-overlay intercept above (lines ~431) already handles ?/ESC while
+      //     it's open regardless of game state, so this only needs to drop
+      //     isGameplay. ---
       case 'Slash':
-        if (isGameplay && d.hotkeyOverlay && !e.repeat) {
+        if (d.hotkeyOverlay && !e.repeat) {
           d.hotkeyOverlay.toggle();
           d.audioSystem?.playClick();
           e.preventDefault();
