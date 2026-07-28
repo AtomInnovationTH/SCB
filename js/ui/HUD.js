@@ -414,7 +414,7 @@ export class HUD {
         #hud-overlay.callouts-active #hud-left-column,
         #hud-overlay.callouts-active #hud-right-column,
         #hud-overlay.callouts-active #hud-comms-panel {
-          opacity: 0.2;
+          opacity: 0.35;
           pointer-events: none;
         }
       `;

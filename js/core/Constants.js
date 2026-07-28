@@ -209,6 +209,12 @@ export const Constants = {
 
     LIVE_REFRESH_HZ: 2,   // max focused-card live-data refresh rate
     SHIP_BOUND_M:   1.5,  // approx ship silhouette radius (wings) in metres for rail X
+    // Round 6 (binary legibility): a shown card's target opacity is floored here
+    // so a card is always clearly readable, never a muddy translucent ghost.
+    // Declutter is done by HIDING (target → 0), not by fading toward invisible.
+    // The band crossfade still eases through lower values in-flight; this floors
+    // only the TARGET. Kept in lockstep with the _pickBestRec pick gate.
+    MIN_CARD_OP:    0.5,
   },
 
   // === RESOURCE DEFAULTS ===

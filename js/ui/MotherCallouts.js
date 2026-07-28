@@ -90,7 +90,7 @@ const SYSTEMS = [
         massKg: 22, priority: 9, live: 'rosa',
         specs: ['2× 1×2 m roll-out arrays', '~2.2 kW peak (BOL)'],
         anchor: [ 1.1 * M, 0, 0 ] },
-      { id: 'body_cells', name: 'HULL SOLAR CELLS', risk: 'GREEN', tier: 'detail', codexId: 'solar_cell_degradation',
+      { id: 'body_cells', name: 'HULL SOLAR CELLS', risk: 'GREEN', tier: 'detail', codexId: 'gallium_arsenide',
         massKg: 3, priority: 2, specs: ['Body-mounted GaAs cells'],
         // az 33.75° facet centre, central PV row (face radius barrelR×1.014).
         // The old az-0° anchor sat in the ROSA-root keep-out on bare hull and
@@ -131,7 +131,7 @@ const SYSTEMS = [
     anchor: [ 0, 0.10 * M, 1.05 * M ],
     role: 'net launcher + spin-brake',
     parts: [
-      { id: 'despin', name: 'SPIN-BRAKE LASER', risk: 'RED', tier: 'major', codexId: 'power_beaming',
+      { id: 'despin', name: 'SPIN-BRAKE LASER', risk: 'RED', tier: 'major', codexId: 'detumble',
         massKg: 9, priority: 9, live: 'despin',
         specs: ['Photon-pressure despin', '~5 W fibre laser'],
         // Gimbal child — dynamic so the anchor tracks if the turret articulates.
@@ -147,10 +147,10 @@ const SYSTEMS = [
     anchor: [ 0, 0.26 * M, 1.12 * M ],
     role: 'tracking turret + cameras',
     parts: [
-      { id: 'gimbal', name: 'SENSOR TURRET', risk: 'GREEN', tier: 'major', codexId: 'pose_estimation',
+      { id: 'gimbal', name: 'SENSOR TURRET', risk: 'GREEN', tier: 'major', codexId: 'docking_precision',
         massKg: 5, priority: 6, specs: ['2-axis pointing platform'],
         anchor: [ 0, 0, 1.00 * M ] },
-      { id: 'eo_cam', name: 'DAYLIGHT CAMERA', risk: 'GREEN', tier: 'major', codexId: 'debris_tracking',
+      { id: 'eo_cam', name: 'DAYLIGHT CAMERA', risk: 'GREEN', tier: 'major', codexId: 'pose_estimation',
         massKg: 2, priority: 4, specs: ['Visible-band imager (EO)'],
         anchor: [ 0.184 * M, 0.184 * M, 1.11 * M ] },
       { id: 'ir_cam', name: 'HEAT (INFRARED) CAM', risk: 'GREEN', tier: 'major', codexId: 'trackable_vs_dark',
@@ -183,10 +183,10 @@ const SYSTEMS = [
     anchor: [ 0.363 * M, 0.169 * M, 0.87 * M ],
     role: 'radio omnis + antennas',
     parts: [
-      { id: 'ttc', name: 'S-BAND RADIO OMNIS', risk: 'GREEN', tier: 'major', codexId: 'comms_blackout',
+      { id: 'ttc', name: 'S-BAND RADIO OMNIS', risk: 'GREEN', tier: 'major', codexId: 'frequency_bands',
         massKg: 2, priority: 5, live: 'ttc', specs: ['Pair — command + telemetry'],
         anchor: [ 0, -0.40 * M, 0.92 * M ] },
-      { id: 'mga', name: 'MEDIUM-GAIN ANTENNA', risk: 'GREEN', tier: 'detail', codexId: 'laser_comms',
+      { id: 'mga', name: 'MEDIUM-GAIN ANTENNA', risk: 'GREEN', tier: 'detail', codexId: 'bandwidth_limits',
         massKg: 1, priority: 2, specs: ['Tangent patch, higher rate'],
         anchor: [ 0.363 * M, 0.169 * M, 0.87 * M ] },
       { id: 'gps', name: 'GPS ANTENNAS', risk: 'GREEN', tier: 'detail', codexId: 'gps_denied',
@@ -238,19 +238,19 @@ const SYSTEMS = [
     anchor: [ 0.20 * M, 0.35 * M, -0.70 * M ],
     daughters: true,
     parts: [
-      { id: 'daughter_0', name: 'LARGE DAUGHTER', risk: 'GREEN', tier: 'major', codexId: 'robotic_arm',
+      { id: 'daughter_0', name: 'LARGE DAUGHTER', risk: 'GREEN', tier: 'major', codexId: 'weaver_gripper',
         massKg: 6.6, priority: 7, live: 'daughter', armIndex: 0,
         specs: ['Weaver — medium net', 'Tethered capture craft'],
         anchor: [ 0.20 * M, 0.35 * M, -0.70 * M ] },
-      { id: 'daughter_1', name: 'SMALL DAUGHTER', risk: 'GREEN', tier: 'major', codexId: 'robotic_arm',
+      { id: 'daughter_1', name: 'SMALL DAUGHTER', risk: 'GREEN', tier: 'major', codexId: 'spinner_pad',
         massKg: 3.7, priority: 7, live: 'daughter', armIndex: 1,
         specs: ['Spinner — small net', 'Tethered capture craft'],
         anchor: [ 0.20 * M, 0.35 * M, -0.70 * M ] },
-      { id: 'daughter_2', name: 'LARGE DAUGHTER', risk: 'GREEN', tier: 'major', codexId: 'robotic_arm',
+      { id: 'daughter_2', name: 'LARGE DAUGHTER', risk: 'GREEN', tier: 'major', codexId: 'weaver_gripper',
         massKg: 6.6, priority: 7, live: 'daughter', armIndex: 2,
         specs: ['Weaver — medium net', 'Tethered capture craft'],
         anchor: [ 0.20 * M, 0.35 * M, -0.70 * M ] },
-      { id: 'daughter_3', name: 'SMALL DAUGHTER', risk: 'GREEN', tier: 'major', codexId: 'robotic_arm',
+      { id: 'daughter_3', name: 'SMALL DAUGHTER', risk: 'GREEN', tier: 'major', codexId: 'spinner_pad',
         massKg: 3.7, priority: 7, live: 'daughter', armIndex: 3,
         specs: ['Spinner — small net', 'Tethered capture craft'],
         anchor: [ 0.20 * M, 0.35 * M, -0.70 * M ] },
@@ -577,8 +577,27 @@ export class MotherCallouts {
     const cs = this._liveCtx?.codexSystem;
     if (!cs || typeof cs.getEntry !== 'function') return 'linked';
     const entry = cs.getEntry(def.codexId);
-    if (!entry) return 'linked';
+    if (!entry) {
+      // A codexId that no longer resolves would render a clickable ▸ that
+      // silently no-ops (CodexViewerUI.openEntry returns false). Treat it as
+      // unlinked and warn once so the drift is loud, not invisible.
+      if (!MotherCallouts._warnedMissingCodex) MotherCallouts._warnedMissingCodex = new Set();
+      if (typeof console !== 'undefined' && !MotherCallouts._warnedMissingCodex.has(def.codexId)) {
+        MotherCallouts._warnedMissingCodex.add(def.codexId);
+        console.warn(`[MotherCallouts] codexId "${def.codexId}" for "${def.name || def.id}" does not resolve — no deep-link`);
+      }
+      return null;
+    }
     return entry.unlocked ? 'linked' : 'locked';
+  }
+
+  /** Codex entry title for a part's linked entry, or null. @private */
+  _codexTitle(def) {
+    if (!def.codexId) return null;
+    const cs = this._liveCtx?.codexSystem;
+    if (!cs || typeof cs.getEntry !== 'function') return null;
+    const e = cs.getEntry(def.codexId);
+    return (e && e.title) ? e.title : null;
   }
 
   /** Read TRL for a part's codex entry, or null. @private */
@@ -630,13 +649,20 @@ export class MotherCallouts {
       }
       for (const lr of live) rows.push({ text: lr, dim: false });
 
-      if (!isLocked) {
-        // T7: clickable affordance on the focused card (whole card is clickable).
-        // Pushed BEFORE TRL so it survives the budget slice — discoverability
-        // of the deep-link outranks decorative readiness metadata.
-        if (codex === 'linked') rows.push({ text: '▸ open tech library', dim: true, color: rec.hue });
+      // Deep-link affordance NAMES its destination (round 6): the row shows the
+      // exact Tech Library entry the click opens, not a generic "open tech
+      // library". Pushed before TRL so it survives the budget slice.
+      const codexTitle = codex ? this._codexTitle(def) : null;
+      if (codex === 'linked') {
+        rows.push({ text: `▸ ${codexTitle || 'open tech library'}`, dim: true, color: rec.hue });
         const trl = this._partTRL(def);
         if (trl != null) rows.push({ text: `Readiness: L${trl}`, dim: true });
+      } else if (codex === 'locked' && codexTitle) {
+        // Locked cards still name where the ▸ leads (amber, matches the hint).
+        rows.push({ text: `▸ ${codexTitle}`, dim: true, color: '#ffaa00' });
+      } else if (codex === null) {
+        // Structural part with no briefing — explain the dead click (round 6).
+        rows.push({ text: 'structure — no briefing', dim: true });
       }
 
       rows = rows.slice(0, budget);
@@ -792,6 +818,9 @@ export class MotherCallouts {
     } else {
       this._guideT = -1;
       this._focusPart = null;
+      // Round 6: the guided tour is a one-shot. Mark it done on the first exit so
+      // a quick dip in/out of inspection can't replay the dim tour indefinitely.
+      this._guidedDone = true;
       this._detachPointer();
       eventBus.emit(Events.CALLOUT_BAND_CHANGE, { band: null });
     }
@@ -850,9 +879,16 @@ export class MotherCallouts {
     let best = null, bestDist = Infinity;
     for (const p of this._partLabels) {
       if (!p.def.codexId || !p.sprite.visible) continue;
+      // Round 6 review: gate on RESOLVABILITY, not codexId truthiness — a drifted
+      // codexId renders "structure — no briefing" (see _codexState) and must not
+      // stay clickable with a dead no-op click.
+      if (this._codexState(p.def) === null) continue;
       // Gate on whichever is larger of eased vs target opacity, so picking
-      // follows what the player can actually see and clears the tour dim (R5).
-      if (Math.max(p.op ?? 0, p._targetOp ?? 0) <= 0.15) continue;
+      // follows what the player can actually see. Derived from the legibility
+      // floor (MIN_CARD_OP) so the two can't drift: a card is either clearly
+      // readable-and-clickable or hidden — no muddy half-pickable band. The
+      // 0.8 factor keeps the gate strictly below the floor (round 6).
+      if (Math.max(p.op ?? 0, p._targetOp ?? 0) <= (CFG.MIN_CARD_OP ?? 0.5) * 0.8) continue;
       const hits = this._raycaster.intersectObject(p.sprite, false);
       if (hits.length && hits[0].distance < bestDist) {
         bestDist = hits[0].distance;
@@ -1141,7 +1177,11 @@ export class MotherCallouts {
       const ax = this._vAnchor.x, ay = this._vAnchor.y, az = this._vAnchor.z;
       rec._anchorX = ax; rec._anchorY = ay; rec._anchorZ = az;
 
-      let targetOp = this._targetOpacity(rec, band, guideId, focusSys, focusNX, focusNY);
+      // Facing ramp (0..1) — applied to the dot + leader (which sit on the hull)
+      // in _positionCard, NOT to the card. Stored once per frame.
+      rec._facing = this._anchorVisible(rec.anchor);
+
+      let targetOp = this._targetOpacity(rec, band, guideId, focusSys, focusNX, focusNY, rec._facing);
       const off = CFG.OFFSCREEN_NDC;
       if (az > 1 || ax < -off || ax > off || ay < -off || ay > off) targetOp = 0;
 
@@ -1223,16 +1263,28 @@ export class MotherCallouts {
     this._placeFocus(dt, ease, fadeK);
   }
 
-  /** Target opacity for a rec given band/guide/focus, before anchor gating. @private */
-  _targetOpacity(rec, band, guideId, focusSys, focusNX, focusNY) {
+  /** Target opacity for a rec given band/guide/focus, before anchor gating. @private
+   * Round 6: binary legibility. The card's opacity is band/guide/focus only —
+   * the facing ramp (which belongs to hardware on the hull, not a card on a
+   * screen-edge rail) is a hard GATE here (back-facing → 0) and is applied as a
+   * soft fade only to the dot + leader in _positionCard. Non-hidden targets are
+   * floored to MIN_CARD_OP so a shown card is always readable, never muddy.
+   * @param {number} [facing] pre-computed _anchorVisible(rec.anchor) for this
+   *   frame (from _layout); recomputed only if not supplied (e.g. unit tests). */
+  _targetOpacity(rec, band, guideId, focusSys, focusNX, focusNY, facing) {
     if (rec._neverShow) return 0; // DAUGHTERS pseudo-group has no system label
     if (rec._armGone) return 0;   // daughter away from its berth (T3)
+    // Hard facing gate: a card whose anchor faces away is hidden outright
+    // (the dot/leader carry the on-hull fade; the card does not).
+    const face = (facing != null) ? facing : this._anchorVisible(rec.anchor);
+    if (face < 0.15) return 0;
+    const floor = CFG.MIN_CARD_OP ?? 0.5;
     if (rec.isSystem) {
-      let op = (band === 'SYSTEM') ? 1 : 0;
-      if (op > 0 && guideId) op = (rec.def.id === guideId) ? 1 : op * 0.25;
-      return op * this._anchorVisible(rec.anchor);
+      if (band !== 'SYSTEM') return 0;
+      // Guided tour: highlighted system full, the rest dimmed (but still legible).
+      if (guideId) return (rec.def.id === guideId) ? 1 : 0.5;
+      return 1;
     }
-    let op;
     if (rec.isDetail) {
       let reveal = band === 'COMPONENT' && rec.sysId === focusSys;
       // T6: proximity reveal — detail parts near the focused part on screen
@@ -1242,15 +1294,18 @@ export class MotherCallouts {
         const r = CFG.DETAIL_REVEAL_NDC || 0.25;
         if (dx * dx + dy * dy < r * r) reveal = true;
       }
-      op = reveal ? 1 : 0;
-    } else {
-      const showParts = band === 'PART' || band === 'COMPONENT';
-      op = showParts ? 1 : 0;
-      if (op > 0 && guideId) op = (rec.sysId === guideId) ? op : op * 0.2;
-      const isFocus = band === 'COMPONENT' && rec === this._focusPart;
-      if (band === 'COMPONENT' && !isFocus) op *= 0.5;
+      return reveal ? 1 : 0;
     }
-    return op * this._anchorVisible(rec.anchor);
+    // Major part.
+    const showParts = band === 'PART' || band === 'COMPONENT';
+    if (!showParts) return 0;
+    let op = 1;
+    // Guided tour: non-highlighted systems dimmed but legible.
+    if (guideId && rec.sysId !== guideId) op = 0.5;
+    // COMPONENT band, not the focused part: recede a little (still readable).
+    const isFocus = band === 'COMPONENT' && rec === this._focusPart;
+    if (band === 'COMPONENT' && !isFocus) op = Math.min(op, 0.8);
+    return Math.max(op, floor);
   }
 
   /**
@@ -1417,21 +1472,27 @@ export class MotherCallouts {
     const visible = op > 0.02;
     rec.sprite.material.opacity = op;
     rec.sprite.visible = visible;
-    // Material-level hover cue (R14): base state slightly down, hover full bright.
-    rec.sprite.material.color.setScalar(hovered ? 1.0 : 0.88);
+    // Round 6: cards are full-bright (no non-hover dim scalar — the vignette no
+    // longer touches them, so a global dim only muddied them). The hover cue is
+    // carried by the leader whitening (below), the +0.15 opacity lift, and a
+    // small screen-constant scale bump.
+    rec.sprite.material.color.setScalar(1.0);
+    const hoverScale = hovered ? 1.04 : 1.0;
+    rec.sprite.scale.multiplyScalar(hoverScale);
     // Depth sort: nearer anchor draws last.
     rec.sprite.renderOrder = 30 + Math.round((1 - rec._anchorZ) * 200);
 
-    // Dot at the anchor.
+    // Dot at the anchor. The facing ramp fades the on-hull marker (not the card).
+    const facing = rec._facing != null ? rec._facing : 1;
     const dotWorldH = CFG.DOT_SIZE * 2 * this._halfH;
     rec.dot.position.copy(rec.anchor);
     rec.dot.scale.set(dotWorldH, dotWorldH, 1);
-    rec.dot.material.opacity = op;
+    rec.dot.material.opacity = op * facing;
     rec.dot.visible = visible;
     rec.dot.renderOrder = 31 + Math.round((1 - rec._anchorZ) * 200);
 
-    // Elbow leader (opacity tracks the card, slightly dimmer).
-    const lineOp = visible ? op * LINE_OP_SCALE : 0;
+    // Elbow leader (opacity tracks the card, slightly dimmer, faded by facing).
+    const lineOp = visible ? op * LINE_OP_SCALE * facing : 0;
     if (hovered) rec.line.material.color.set('#ffffff');
     else rec.line.material.color.set(rec.hue);
     this._setElbowLocal(rec.line, this._vAttach, rec.anchor, side, lineOp);
