@@ -359,7 +359,6 @@ export const Constants = {
     DYNAMICS_ENABLED: true,     // master switch; legacy kinematic path when false
     NOZZLE_THRUST_N: 25.0,      // per-nozzle cold-gas thrust — the single feel dial (D1)
     MAX_RATE: 0.6,              // rad/s angular-rate cap (D1: 34°/s)
-    MAX_ALPHA_STOWED: 0.6,      // rad/s² reference spin-up accel stowed (~1.0 s ramp, D1)
     HOLD_RECENTER_FRAC: 0.15,   // recenter torque as a fraction of τ_max
     HOLD_DEADBAND_RAD: 0.035,   // ~2°, no recenter inside this
     HOLD_ARREST_S: 1.5,         // target critically-damped arrest time from MAX_RATE
