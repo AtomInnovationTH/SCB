@@ -5061,15 +5061,19 @@ export class PlayerSatellite extends THREE.Group {
       }
     }
 
-    // Phase 4 hook: tether restoring torque (no-op until Phase 4 wires it).
-    if (this._attitudeConstraintTier && this._attitudeConstraintTier !== 'none') {
-      this._applyTetherTorque(tau, h);
-    }
-
-    // Clamp each axis to the physically available couple torque.
+    // Clamp the RCS torque (command + hold) to the physically available couple
+    // authority.
     tau.x = clampAbs(tau.x, this._coupleTauMag('x'));
     tau.y = clampAbs(tau.y, this._coupleTauMag('y'));
     tau.z = clampAbs(tau.z, this._coupleTauMag('z'));
+
+    // Phase 4: tether rotation-limit restoring torque. This is a STRUCTURAL
+    // constraint (the taut tether), not RCS authority, so it is added AFTER the
+    // couple clamp — a stiffening spring that comfortably exceeds τ_max at the
+    // limit, so angular momentum physically cannot carry the offset past it.
+    if (this._attitudeConstraintTier && this._attitudeConstraintTier !== 'none') {
+      this._applyTetherTorque(tau, h);
+    }
 
     // Semi-implicit Euler: advance ω from τ/I, then the offset from ω.
     omega.x += (tau.x / I.ixx) * h;
@@ -5111,12 +5115,70 @@ export class PlayerSatellite extends THREE.Group {
   }
 
   /**
-   * Phase 4 hook — add the tether rotation-limit restoring torque into `tau`
-   * (N·m, body frame) when a constraint tier is active. No-op until Phase 4
-   * wires `setAttitudeConstraintTier`.
-   * @param {THREE.Vector3} tau @param {number} dt @private
+   * Phase 4 — set the active tether rotation-limit tier ('none' | 'soft' |
+   * 'block'). Drives the restoring-torque constraint in _applyTetherTorque.
+   * Owns the displacement state (moved off InputManager). @param {string} tier
    */
-  _applyTetherTorque(tau, dt) { void tau; void dt; }
+  setAttitudeConstraintTier(tier) {
+    this._attitudeConstraintTier = tier || 'none';
+  }
+
+  /**
+   * Phase 4 — is the tether offset saturated AND being pushed further into the
+   * limit on the demanded axes? Used by InputManager to gate the comms warning.
+   * @param {number} pitchIn @param {number} yawIn @returns {boolean}
+   */
+  isAttitudeConstraintSaturated(pitchIn, yawIn) {
+    const tier = this._attitudeConstraintTier;
+    if (!tier || tier === 'none') return false;
+    const TR = Constants.TETHER_ROTATION;
+    const maxDisp = tier === 'block' ? TR.MAX_DISPLACEMENT_BLOCK : TR.MAX_DISPLACEMENT_SOFT;
+    const th = this._tetherOffsetAngles(_v3AttA);
+    const sat = TR.SATURATION_THRESHOLD * maxDisp;
+    const pitchSat = Math.abs(th.x) >= sat && Math.sign(th.x) === Math.sign(pitchIn) && pitchIn !== 0;
+    const yawSat = Math.abs(th.y) >= sat && Math.sign(th.y) === Math.sign(yawIn) && yawIn !== 0;
+    return pitchSat || yawSat;
+  }
+
+  /**
+   * Decompose the manual offset into per-axis rotation-vector angles (rad) in
+   * body frame: {x: pitch, y: yaw, z: roll}. @param {THREE.Vector3} out @private
+   */
+  _tetherOffsetAngles(out) {
+    const mr = this._manualRotation;
+    const ang = 2 * Math.acos(Math.min(1, Math.abs(mr.w)));
+    const s = Math.sqrt(Math.max(0, 1 - mr.w * mr.w)) || 1;
+    const sign = mr.w >= 0 ? 1 : -1;
+    return out.set(ang * sign * mr.x / s, ang * sign * mr.y / s, ang * sign * mr.z / s);
+  }
+
+  /**
+   * Phase 4 — tether rotation-limit restoring torque added into `tau` (N·m, body
+   * frame). Per pitch/yaw axis: a stiffening spring −sign(θ)·τ_wall·(|θ|/θ_max)^n
+   * (n = STIFFNESS_EXPONENT) plus a damping term beyond half-limit. τ_wall is set
+   * to several × the couple authority so the momentum equilibrium sits well below
+   * θ_max — the offset physically cannot reach the limit.
+   * @param {THREE.Vector3} tau @param {number} h @private
+   */
+  _applyTetherTorque(tau, h) {
+    void h;
+    const tier = this._attitudeConstraintTier;
+    const TR = Constants.TETHER_ROTATION;
+    const maxDisp = tier === 'block' ? TR.MAX_DISPLACEMENT_BLOCK : TR.MAX_DISPLACEMENT_SOFT;
+    const stiff = TR.STIFFNESS_EXPONENT;
+    const I = this.getAttitudeInertia();
+    const w = this._rcsOmega;
+    const th = this._tetherOffsetAngles(_v3AttB);
+    const wall = 6 * Math.max(this._coupleTauMag('x'), this._coupleTauMag('y')); // ≫ τ_max
+    const axis = (thv, wv, Iax) => {
+      const n = Math.min(1, Math.abs(thv) / maxDisp);
+      let t = -Math.sign(thv) * wall * Math.pow(n, stiff);   // stiffening spring
+      if (n > 0.5) t += -Iax * 6 * wv;                        // damp inward momentum near the wall
+      return t;
+    };
+    tau.x += axis(th.x, w.x, I.ixx);
+    tau.y += axis(th.y, w.y, I.iyy);
+  }
 
   // ==========================================================================
   // THRUST
