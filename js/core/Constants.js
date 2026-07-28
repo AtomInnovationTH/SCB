@@ -347,7 +347,21 @@ export const Constants = {
   OCTOPUS_CORE_LENGTH: 1.2,             // m
   OCTOPUS_CORE_HALL_THRUST: 0.01,       // N (2× HT-100, 10 mN each)
   OCTOPUS_CORE_HALL_ISP: 1500,          // s
-  SATELLITE_ROTATION_RATE: 0.08,        // rad/s — manual arrow-key rotation (~4.6°/s, realistic for 500kg ADR satellite)
+
+  // ── Rigid-body attitude dynamics (supersedes kinematic rotation) ──
+  // Lives OUTSIDE FEATURE_FLAGS deliberately (D7): REALITY_MODE forces every
+  // FEATURE_FLAGS.* false, and disabling *physics* is not what REALITY_MODE means.
+  // DYNAMICS_ENABLED is a plain master switch — false restores the legacy kinematic
+  // path (old mass*0.25 MOI + kinematic slerp) with no rollback needed.
+  ATTITUDE: {
+    DYNAMICS_ENABLED: true,     // master switch; legacy kinematic path when false
+    NOZZLE_THRUST_N: 25.0,      // per-nozzle cold-gas thrust — the single feel dial (D1)
+    MAX_RATE: 0.6,              // rad/s angular-rate cap (D1: 34°/s)
+    HOLD_RECENTER_FRAC: 0.15,   // recenter torque as a fraction of τ_max
+    HOLD_DEADBAND_RAD: 0.035,   // ~2°, no recenter inside this
+    INERTIA_MAX_FACTOR: 3.0,    // D6 berthed-mass clamp: total ≤ 3× stowed transverse
+    RCS_ATTITUDE_N2_FACTOR: 1.0, // D9: was 0.3 — ~1 kg (5% of tank) per committed turn
+  },
 
   // FIX_PLAN §3: Tether-aware rotation limits (exponential spring-resistance model).
   // When daughters are tethered, the mother's rotation is dampened by an "elastic" tether:
@@ -1138,8 +1152,9 @@ export const Constants = {
   //   pitch −1 (nose down)  → HT_BOTTOM(idx 1, at −Y): thrust below CoM dips nose
   //   yaw   +1 (nose left)  → HT_LEFT  (idx 3, at −X): thrust left of CoM yaws left
   //   yaw   −1 (nose right) → HT_RIGHT (idx 2, at +X): thrust right of CoM yaws right
-  // Note: Code sign convention — positive yaw = ArrowLeft = nose-left (matches
-  // rotateYaw(+angle) around +Y via right-hand rule).
+  // Note: Code sign convention — positive yaw = ArrowLeft = nose-left (a positive
+  // yaw command torques about +Y by the right-hand rule; see ATTITUDE and
+  // PlayerSatellite.commandAttitude — the former rotateYaw(+angle) is retired).
   DIFFERENTIAL_THRUST: {
     NOZZLE_MAP: {
       pitch: { '1': 0, '-1': 1 },   // +1→HT_TOP, −1→HT_BOTTOM

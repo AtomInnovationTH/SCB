@@ -1528,6 +1528,12 @@ export class HUD {
         plumeBlocks = updateThrusterBlocks(player.armManager);
       }
 
+      // Attitude: live body angular rate (deg/s) for the rigid-body dynamics
+      // readout. getAngularRate exists on the real player; guard for headless
+      // mocks that don't implement it.
+      const angularRate = (typeof player.getAngularRate === 'function')
+        ? player.getAngularRate() : null;
+
       this.statusPanel.update({
         score: this._score,
         credits: this._credits,
@@ -1541,6 +1547,7 @@ export class HUD {
         comDriftM,
         comSuggestedStowArm,
         plumeBlocks,
+        angularRate,
       });
 
       // V5: STABILIZE warning when angular velocity too high for crossbow fire

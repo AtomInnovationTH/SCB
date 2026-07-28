@@ -22,7 +22,7 @@ import { powerDistribution } from '../systems/PowerDistribution.js';
 import { persistenceManager } from '../systems/PersistenceManager.js';
 import {
   computeCoM, computeCoMDrift, computeCoMDriftVector,
-  getActiveBlocks,
+  computeInertia, getActiveBlocks,
 } from '../systems/CoMCalculator.js';
 import { composeDockedArmQuat, strutLocalDirection } from './ArmDockBasis.js';
 import {
@@ -59,6 +59,16 @@ const _v3TmpC  = new THREE.Vector3();
 /* RCS direction-aware firing temps (per-frame, single instance — no alloc). */
 const _rcsL  = new THREE.Vector3();
 const _rcsLn = new THREE.Vector3();
+/* Attitude-dynamics scratch (Phase 3) — per-frame, single instance, no alloc. */
+const _v3AttA = new THREE.Vector3();
+const _v3AttB = new THREE.Vector3();
+const _v3AttC = new THREE.Vector3();
+const _v3AttD = new THREE.Vector3();
+const _qAttA  = new THREE.Quaternion();
+const _qAttB  = new THREE.Quaternion();
+const _matAtt = new THREE.Matrix4();
+/** Clamp a scalar to ±limit. */
+const clampAbs = (v, limit) => (v > limit ? limit : (v < -limit ? -limit : v));
 /* Deterministic docked-arm roll basis now lives in ArmDockBasis.js (shared SSOT
  * with ArmUnit's DOCKING/HOLDING_CATCH self-alignment — see HANDOFF §10 Rule B).
  * `_composeDockedArmQuat` is a thin local alias kept for call-site readability. */
@@ -173,6 +183,14 @@ export class PlayerSatellite extends THREE.Group {
     // F13: Manual rotation offset (applied on top of velocity-aligned orientation)
     this._manualRotation = new THREE.Quaternion(); // identity = no offset
 
+    // Phase 3: rigid-body attitude state. _rcsOmega is body-frame angular
+    // velocity (rad/s): x pitch, y yaw, z roll (D10 — recoil/parasitic torques
+    // can roll the hull; the hold nulls it, no player roll input). _attitudeCmd
+    // is the latched per-frame rate command (−1..1) from commandAttitude, read by
+    // _tickAttitudeDynamics and cleared when nothing commands attitude.
+    this._rcsOmega = new THREE.Vector3();
+    this._attitudeCmd = null;
+
     // Autopilot flag — suppresses orientation decay when autopilot is steering (Fix 2)
     this.autopilotEngaged = false;
 
@@ -263,6 +281,15 @@ export class PlayerSatellite extends THREE.Group {
     this._comCache = null;          // C-9: Cached CoM result from last computation
     this._comDriftM = 0;            // C-9: Cached scalar drift (m) for HUD
     this._comDriftVec = { x: 0, y: 0, z: 0 }; // C-9: Drift vector (actual − balanced) for torque coupling
+    // Attitude-dynamics inertia SSOT (Phase 1). Lazily computed from the mass
+    // tree, cached, and invalidated ONLY on arm-state/berth changes — never per
+    // frame. null = needs (re)compute.
+    this._attitudeInertia = null;
+    const _invalidateInertia = () => { this._attitudeInertia = null; };
+    eventBus.on(Events.ARM_STATE_CHANGE, _invalidateInertia);
+    eventBus.on(Events.ARM_DEPLOY_COMPLETED, _invalidateInertia);
+    eventBus.on(Events.ARM_STOW_COMPLETED, _invalidateInertia);
+    eventBus.on(Events.NET_BERTHED, _invalidateInertia);
     this._crossbowAutoRcs = true;   // Auto-compensate crossbow recoil with RCS
     this._frameRecoilDv = 0;        // Accumulated recoil ΔV this frame (for dual-fire tracking)
     this._frameRecoilCount = 0;     // Number of crossbow fires this frame
@@ -3369,6 +3396,30 @@ export class PlayerSatellite extends THREE.Group {
       this._rcsAttitudeIdx[key] = c.idx;
     }
 
+    // Phase 3 §8: per-couple RESULTANT torque and force in SI, the line that
+    // finally makes pod position physically meaningful. For the selected couple
+    // nozzles: τ = Σ (r × F) with r = nozzle pos → metres (× 1/M), F = −exhaust ×
+    // NOZZLE_THRUST_N; and the net force Σ F (≈0 for the pitch couple, non-zero
+    // for yaw — the D8 parasitic side force we deliberately model). These are the
+    // authority ceilings the integrator clamps against and the source of the
+    // yaw parasitic thrust fed into _rcsVelocity.
+    const thrustN = Constants.ATTITUDE?.NOZZLE_THRUST_N ?? 25.0;
+    this._rcsCoupleTorque = {};
+    this._rcsCoupleForce = {};
+    for (const key of Object.keys(this._rcsAttitudeIdx)) {
+      const idx = this._rcsAttitudeIdx[key] || [];
+      const tau = new THREE.Vector3();
+      const force = new THREE.Vector3();
+      for (const i of idx) {
+        const rM = nozzles[i].clone().multiplyScalar(1 / M);        // metres
+        const F = dirs[i].clone().multiplyScalar(-thrustN);         // N (thrust = −exhaust)
+        tau.add(new THREE.Vector3().crossVectors(rM, F));
+        force.add(F);
+      }
+      this._rcsCoupleTorque[key] = tau;
+      this._rcsCoupleForce[key] = force;
+    }
+
     // Pooled sprites (round-robin reuse). A single RCS burst emits a small
     // multi-sprite cloud, so keep enough in the pool to avoid thrash.
     for (let i = 0; i < 16; i++) {
@@ -3526,7 +3577,14 @@ export class PlayerSatellite extends THREE.Group {
       if (this._recoilOffset.lengthSq() < 1e-26) this._recoilOffset.set(0, 0, 0);
     }
 
+    // Rigid-body attitude integration (Phase 3, D2 — REAL dt, never gameDt). Runs
+    // BEFORE _orientAlongVelocity composes quaternion = prograde · _manualRotation.
+    // Placed here (not earlier): _updateCartesian already ran, so the prograde base
+    // and the handback continuity read the current velocity/position.
+    if (Constants.ATTITUDE?.DYNAMICS_ENABLED) this._tickAttitudeDynamics(dt);
+
     this._orientAlongVelocity();
+
 
     // Transient recoil attitude rides on top of the settled heading (applied
     // here so it also shows under autopilot/inspection holds, which
@@ -4299,7 +4357,7 @@ export class PlayerSatellite extends THREE.Group {
     const leverY_m = Math.abs(muzzleLocalY) / M;             // metres off the CoM axis
     const impulse = netMass * vLaunch;                       // N·s
     const torqueImpulse = impulse * leverY_m;                // N·m·s (pitch about +X)
-    const I_mother = motherMass * 0.25;                      // kg·m² (r≈0.5 m cylinder)
+    const I_mother = this._attitudeMOI('x');                 // kg·m² (real pitch MOI, SSOT)
     // Pitch sign follows the firing muzzle's side of the axis, so the upper and
     // lower pods kick opposite ways (net-zero bias across the magazine). RCS
     // nulls it regardless. A truly centred muzzle (y=0) → zero pitch.
@@ -4426,8 +4484,8 @@ export class PlayerSatellite extends THREE.Group {
    */
   applyRecoilAngularImpulse(torqueImpulse) {
     if (!Constants.FEATURE_FLAGS.RECOIL_PHYSICS) return;
-    // Approximate MOI for a 130 kg cylinder of radius 0.5 m
-    const I_mother = (this.mass || 130) * 0.25; // kg·m²
+    // Real yaw MOI from the mass tree (SSOT); legacy mass*0.25 when dynamics off.
+    const I_mother = this._attitudeMOI('y');
     const deltaOmega = torqueImpulse / I_mother;
     this._recoilAngularVel += deltaOmega;      // legacy C-11 scalar (RCS-nulled, HUD bookkeeping)
     // 2026-07-23: also drive the REAL transient yaw so the dual-fire residual
@@ -4502,7 +4560,7 @@ export class PlayerSatellite extends THREE.Group {
     if (!Constants.FEATURE_FLAGS.RECOIL_PHYSICS) return;
     if (!torqueVec) return;
     // Convert torque vector magnitude to angular velocity (simplified)
-    const I_mother = (this.mass || 130) * 0.25; // kg·m²
+    const I_mother = this._attitudeMOI('y'); // real yaw MOI (SSOT); legacy when off
     const mag = Math.sqrt(torqueVec.x ** 2 + torqueVec.y ** 2 + torqueVec.z ** 2);
     this._recoilAngularVel += mag / I_mother;
     // 2026-07-23: also perturb the visible transient. The CoM-offset induced
@@ -4607,6 +4665,7 @@ export class PlayerSatellite extends THREE.Group {
     this._comCache = null;
     this._comDriftM = 0;
     this._comDriftVec = { x: 0, y: 0, z: 0 };
+    this._attitudeInertia = null;
     this._crossbowAutoRcs = true;
     this._frameRecoilDv = 0;
     this._frameRecoilCount = 0;
@@ -4632,6 +4691,35 @@ export class PlayerSatellite extends THREE.Group {
    * @returns {number}
    */
   getCoMDrift() { return this._comDriftM; }
+
+  /**
+   * Attitude-dynamics inertia SSOT. Returns {ixx, iyy, izz} kg·m² about the
+   * barrel origin, computed lazily from the mass tree and cached until an arm
+   * state-change / berth event invalidates it. Never recomputed per frame.
+   * @returns {{ ixx:number, iyy:number, izz:number }}
+   */
+  getAttitudeInertia() {
+    if (!this._attitudeInertia) {
+      this._attitudeInertia = computeInertia(this.armManager, this);
+    }
+    return this._attitudeInertia;
+  }
+
+  /**
+   * Moment of inertia about a body axis for the recoil/attitude integrators.
+   * With ATTITUDE.DYNAMICS_ENABLED (default) this is the real MOI from the mass
+   * tree (SSOT); with the master switch off it falls back to the legacy
+   * mass*0.25 so the old kinematic path is byte-for-byte restorable.
+   * @param {'x'|'y'|'z'} axis
+   * @returns {number} kg·m²
+   */
+  _attitudeMOI(axis) {
+    if (Constants.ATTITUDE?.DYNAMICS_ENABLED) {
+      const I = this.getAttitudeInertia();
+      return axis === 'x' ? I.ixx : (axis === 'z' ? I.izz : I.iyy);
+    }
+    return (this.mass || 130) * 0.25;
+  }
 
   /**
    * C-9: Get the plume-blocked thruster map from this frame.
@@ -4731,36 +4819,13 @@ export class PlayerSatellite extends THREE.Group {
   // ==========================================================================
   // ROTATION (F13)
   // ==========================================================================
-
-  /**
-   * Apply pitch rotation (around local X axis).
-   * Positive angle = nose up.
-   * @param {number} angle — radians to rotate
-   */
-  rotatePitch(angle) {
-    const q = new THREE.Quaternion().setFromAxisAngle(
-      new THREE.Vector3(1, 0, 0), angle
-    );
-    this._manualRotation.multiply(q);
-    this._manualRotation.normalize();
-  }
-
-  /**
-   * Apply yaw rotation (around local Y axis).
-   * Positive angle = nose left.
-   * @param {number} angle — radians to rotate
-   */
-  rotateYaw(angle) {
-    const q = new THREE.Quaternion().setFromAxisAngle(
-      new THREE.Vector3(0, 1, 0), angle
-    );
-    this._manualRotation.multiply(q);
-    this._manualRotation.normalize();
-  }
+  // Phase 4 retirement: the kinematic `rotatePitch`/`rotateYaw` offset-writers
+  // were removed — manual attitude is now rate-commanded through `commandAttitude`
+  // and integrated as real angular momentum in `_tickAttitudeDynamics`.
 
   /**
    * Differential FEEP plume — set per-nozzle firing intensity for attitude rotation.
-   * Visual only: does NOT apply torque (rotatePitch/rotateYaw handle that).
+   * Visual only: does NOT apply torque (the rigid-body integrator handles that).
    *
    * Nozzle mapping (same-side nozzle fires, +Z = forward model convention):
    *   pitch +1 (nose up)    → HT_TOP    (idx 0, at +Y)
@@ -4782,6 +4847,366 @@ export class PlayerSatellite extends THREE.Group {
       this._differentialFireTargets[idx],
       Math.min(1, magnitude)
     );
+  }
+
+  // ==========================================================================
+  // ATTITUDE DYNAMICS (Phase 3) — real RCS torque, angular momentum, feedback
+  // ==========================================================================
+
+  /**
+   * Rate-command the attitude thrusters. `pitchCmd`/`yawCmd` ∈ [−1, 1] are the
+   * player's demand this frame; they are latched for _tickAttitudeDynamics
+   * (which does the physics). The puff/flash/liner feedback AND the N₂ billing are
+   * driven at the ACTUAL post-rate-cap fraction: once |ω| has reached MAX_RATE in
+   * the demanded direction the thrusters produce no torque (coasting is free —
+   * §3), so the visual goes dark and no gas is billed for holding the stick at the
+   * cap. This mirrors the identical gate in _integrateAttitudeStep so feel, cost,
+   * and physics never disagree. setThrusterFire's signature is preserved
+   * (test-DifferentialThrust asserts it).
+   * @param {number} pitchCmd −1..1 (nose up +)
+   * @param {number} yawCmd   −1..1 (nose left +)
+   * @param {number} dt seconds
+   */
+  commandAttitude(pitchCmd, yawCmd, dt) {
+    const p = Math.max(-1, Math.min(1, pitchCmd || 0));
+    const y = Math.max(-1, Math.min(1, yawCmd || 0));
+    // Latch the RAW demand — the integrator re-applies the rate-cap gate itself
+    // (it must, since ω changes across substeps within the frame).
+    this._attitudeCmd = (p !== 0 || y !== 0) ? { pitch: p, yaw: y } : null;
+
+    // Rate-cap gate for FEEDBACK/BILLING (mirrors _integrateAttitudeStep): drop
+    // the demand on an axis already at the cap in the demanded direction, so the
+    // plume darkens and billing stops while coasting.
+    const A = Constants.ATTITUDE;
+    const w = this._rcsOmega || _v3AttA.set(0, 0, 0);
+    let pv = p, yv = y;
+    if (pv > 0 && w.x >=  A.MAX_RATE) pv = 0;
+    if (pv < 0 && w.x <= -A.MAX_RATE) pv = 0;
+    if (yv > 0 && w.y >=  A.MAX_RATE) yv = 0;
+    if (yv < 0 && w.y <= -A.MAX_RATE) yv = 0;
+
+    // fireRcsRotation owns the flash raise, the puff cadence AND the N₂ billing
+    // (kept there so test-RcsPlacement's cost/flash guards still hold).
+    if (pv !== 0) { this.fireRcsRotation('pitch', Math.sign(pv), Math.abs(pv), dt); this.setThrusterFire('pitch', Math.sign(pv), Math.abs(pv)); }
+    if (yv !== 0) { this.fireRcsRotation('yaw', Math.sign(yv), Math.abs(yv), dt); this.setThrusterFire('yaw', Math.sign(yv), Math.abs(yv)); }
+  }
+
+  /**
+   * Continuity on handback (Phase 2/3, load-bearing). When attitude ownership
+   * returns to PLAYER, fold the current world attitude into the manual offset so
+   * `quaternion = prograde · _manualRotation` reproduces it exactly — no snap —
+   * and zero the body rate so the hull is not left spinning.
+   * @private
+   */
+  _handAttitudeToPlayer() {
+    const pg = this._progradeQuat(_qAttA);
+    if (pg) {
+      // _manualRotation = prograde⁻¹ · quaternion
+      this._manualRotation.copy(pg).invert().multiply(this.quaternion).normalize();
+    } else {
+      this._manualRotation.identity();
+    }
+    if (this._rcsOmega) this._rcsOmega.set(0, 0, 0);
+  }
+
+  /**
+   * Peak torque magnitude available about a body axis, from the couple SSOT.
+   * @param {'x'|'y'|'z'} axis @returns {number} N·m @private
+   */
+  _coupleTauMag(axis) {
+    const ct = this._rcsCoupleTorque;
+    if (!ct) return 0;
+    if (axis === 'x') return Math.max(Math.abs(ct.pitchPos?.x || 0), Math.abs(ct.pitchNeg?.x || 0));
+    if (axis === 'y') return Math.max(Math.abs(ct.yawPos?.y || 0), Math.abs(ct.yawNeg?.y || 0));
+    // roll authority is only the parasitic z-leak of the pitch/yaw couples
+    return Math.max(
+      Math.abs(ct.pitchPos?.z || 0), Math.abs(ct.pitchNeg?.z || 0),
+      Math.abs(ct.yawPos?.z || 0), Math.abs(ct.yawNeg?.z || 0), 1e-6,
+    );
+  }
+
+  /**
+   * Integrate rigid-body attitude on REAL dt (D2 — never gameDt). One owner per
+   * frame; only PLAYER and the CINEMATIC inspection hold integrate torque, AP and
+   * AIM keep ω=0 and their direct-quaternion writes.
+   *
+   * dt-invariance (headline guard): the physics runs on a FIXED internal substep
+   * (1/120 s) with a remainder, so 30/60/120 fps integrate through identical
+   * sub-steps and agree to fp — plain semi-implicit Euler only gives O(dt).
+   * Frame-level feedback (N₂ billing, arrest-burn visual, empty-tank comms) runs
+   * ONCE after the loop.
+   * @param {number} dt seconds @private
+   */
+  _tickAttitudeDynamics(dt) {
+    if (!this._rcsOmega) this._rcsOmega = new THREE.Vector3();
+    const owner = this._updateAttitudeOwner();
+
+    // Handback continuity: when a DIRECT-quaternion owner (AUTOPILOT/AIM) releases
+    // into a manual-compose owner (PLAYER or the CINEMATIC inspect hold), fold the
+    // current world attitude into _manualRotation so `prograde · _manualRotation`
+    // reproduces it exactly. Must cover PLAYER *and* CINEMATIC: both compose the
+    // quaternion from _manualRotation, so entering CINEMATIC straight from AP/AIM
+    // (camera zoom while AP disengages) would otherwise snap to a stale offset.
+    const prev = this._prevAttitudeOwner;
+    const wasDirect = prev === 'AUTOPILOT' || prev === 'AIM';
+    const entersManual = owner === 'PLAYER' || owner === 'CINEMATIC';
+    if (entersManual && wasDirect) {
+      this._handAttitudeToPlayer();
+    }
+
+    // AP / AIM drive the quaternion directly — hold zero body rate under them.
+    if (owner !== 'PLAYER' && owner !== 'CINEMATIC') {
+      this._rcsOmega.set(0, 0, 0);
+      this._attitudeCmd = null;
+      return;
+    }
+    if (dt <= 0) return;
+
+    const STEP = 1 / 120;
+    let holdFired = false;
+    this._frameHoldWork = 0; // accumulated hold torque·time (full-throttle-seconds)
+    let remaining = Math.min(dt, 0.1);
+    while (remaining > 1e-9) {
+      const h = remaining > STEP + 1e-12 ? STEP : remaining;
+      if (this._integrateAttitudeStep(h, owner)) holdFired = true;
+      remaining -= h;
+    }
+
+    // ── Frame-level feedback + billing (once per frame) ──
+    const A = Constants.ATTITUDE;
+    const omega = this._rcsOmega;
+    const coldGas = this.resources ? (this.resources.coldGas || 0) : 0;
+    const cmd = this._attitudeCmd;
+
+    // Frame-level hold billing/visual is the ARREST + RECENTER burn, billed ONLY
+    // when nothing is being commanded — while a command is held, fireRcsRotation
+    // (via commandAttitude) already bills that maneuver, so billing here too would
+    // double-charge. Billing is by ACTUAL applied torque (_frameHoldWork, gas ∝
+    // thrust), so the rate-null's long low-ω exponential tail bills ~nothing and a
+    // committed turn costs two real burns (spin-up + arrest), per D9 (~5% tank).
+    if (holdFired && coldGas > 0 && !cmd && this._frameHoldWork > 0) {
+      eventBus.emit(Events.RESOURCE_CONSUME, {
+        resource: 'coldGas',
+        amount: this._coldGasRate * (A.RCS_ATTITUDE_N2_FACTOR ?? 1.0) * this._frameHoldWork,
+      });
+      // Real arrest-burn visual on the opposing couple (§16) — driven by the hold
+      // controller now, not an input-side release.
+      if (Math.abs(omega.x) > 0.05) this.fireRcsStopPulse('pitch', omega.x > 0 ? 1 : -1);
+      if (Math.abs(omega.y) > 0.05) this.fireRcsStopPulse('yaw', omega.y > 0 ? 1 : -1);
+    }
+
+    if (coldGas <= 0 && cmd && this.resources) {
+      const now = performance.now();
+      if (now - (this._lastColdGasEmptyMsg ?? 0) > 5000) {
+        this._lastColdGasEmptyMsg = now;
+        eventBus.emit(Events.COMMS_MESSAGE, {
+          sender: 'PROPULSION',
+          text: 'RCS cold-gas depleted — attitude authority lost',
+          priority: 'warning',
+        });
+      }
+    }
+  }
+
+  /**
+   * One fixed-step attitude integration substep: torque law (command + hold +
+   * tether), clamp to couple authority, advance ω (τ/I) then the manual offset
+   * (semi-implicit), inject the D8 parasitic force.
+   * @param {number} h seconds @param {string} owner @returns {boolean} holdFired @private
+   */
+  _integrateAttitudeStep(h, owner) {
+    const A = Constants.ATTITUDE;
+    const I = this.getAttitudeInertia();
+    const omega = this._rcsOmega;
+    const cmd = this._attitudeCmd || { pitch: 0, yaw: 0 };
+    const ct = this._rcsCoupleTorque || {};
+    const inspecting = (owner === 'CINEMATIC');
+
+    // ── Commanded torque (rate-command with an authority ceiling) ──
+    // `cmdP`/`cmdY` = the raw player demand on each axis; `p`/`y` = that demand
+    // after the rate-cap gate. Drop the DRIVEN component once |ω| has reached the
+    // cap in the commanded direction (a ceiling, not a wall). CRITICAL: the hold
+    // controller keys off the RAW demand (cmdP/cmdY), NOT the gated p/y — using
+    // the gated value would let the rate-null fight the command at the cap, so ω
+    // would stall just below the cap and the thrusters would oscillate/burn gas
+    // forever instead of coasting free.
+    const cmdP = cmd.pitch, cmdY = cmd.yaw;
+    let p = cmdP, y = cmdY;
+    if (p > 0 && omega.x >=  A.MAX_RATE) p = 0;
+    if (p < 0 && omega.x <= -A.MAX_RATE) p = 0;
+    if (y > 0 && omega.y >=  A.MAX_RATE) y = 0;
+    if (y < 0 && omega.y <= -A.MAX_RATE) y = 0;
+
+    const tau = _v3AttA.set(0, 0, 0);
+    if (p > 0 && ct.pitchPos) tau.addScaledVector(ct.pitchPos, p);
+    else if (p < 0 && ct.pitchNeg) tau.addScaledVector(ct.pitchNeg, -p);
+    if (y > 0 && ct.yawPos) tau.addScaledVector(ct.yawPos, y);
+    else if (y < 0 && ct.yawNeg) tau.addScaledVector(ct.yawNeg, -y);
+
+    // ── Hold controller: RATE-NULL (arrest) + RECENTER (return to prograde) ──
+    // RATE-NULL is bang-bang — real RCS thrusters are on/off, so arrest fires the
+    // FULL opposing couple until |ω| enters a small linear anti-chatter zone
+    // (OMEGA_LIN). This gives a physics-set ~1 s arrest and ~17° overshoot from
+    // the cap, and (billed by torque) ~one burn's worth of gas — a proportional
+    // −c·ω law instead has a long low-ω tail that is both slow and over-billed.
+    // Gated on the RAW demand cmdP/cmdY (never fight an active command).
+    // RECENTER (additive): drives _manualRotation→identity, capped, suppressed
+    // while inspecting / inside the deadband / when dry.
+    const OMEGA_LIN = 0.03; // rad/s — below this, ramp arrest torque down (anti-chatter)
+    let holdFired = false;
+    const arrest = (w, axis) => -Math.sign(w) * this._coupleTauMag(axis) * Math.min(1, Math.abs(w) / OMEGA_LIN);
+    if (cmdP === 0 && Math.abs(omega.x) > 1e-4) { tau.x += arrest(omega.x, 'x'); holdFired = true; }
+    if (cmdY === 0 && Math.abs(omega.y) > 1e-4) { tau.y += arrest(omega.y, 'y'); holdFired = true; }
+    if (Math.abs(omega.z) > 1e-4) { tau.z += arrest(omega.z, 'z'); holdFired = true; } // D10 roll null
+
+    const coldGas = this.resources ? (this.resources.coldGas || 0) : 0;
+    const tethered = this._attitudeConstraintTier && this._attitudeConstraintTier !== 'none';
+    const recentering = !inspecting && coldGas > 0;
+    // Decompose the manual offset to its body-frame rotation vector ONCE (shared
+    // by RECENTER and the tether spring — both read the same unmutated
+    // _manualRotation). th_i = ang·axis_i, so |th| = ang (the total offset angle).
+    const th = (recentering || tethered) ? this._tetherOffsetAngles(_v3AttD) : null;
+
+    if (recentering && th) {
+      const ang = th.length();
+      if (ang > A.HOLD_DEADBAND_RAD) {
+        const capX = A.HOLD_RECENTER_FRAC * this._coupleTauMag('x');
+        const capY = A.HOLD_RECENTER_FRAC * this._coupleTauMag('y');
+        const capZ = A.HOLD_RECENTER_FRAC * this._coupleTauMag('z');
+        if (cmdP === 0) { tau.x += clampAbs(-capX * th.x / A.HOLD_DEADBAND_RAD, capX); holdFired = true; }
+        if (cmdY === 0) { tau.y += clampAbs(-capY * th.y / A.HOLD_DEADBAND_RAD, capY); holdFired = true; }
+        tau.z += clampAbs(-capZ * th.z / A.HOLD_DEADBAND_RAD, capZ);
+      }
+    }
+
+    // Clamp the RCS torque (command + hold) to the physically available couple
+    // authority.
+    tau.x = clampAbs(tau.x, this._coupleTauMag('x'));
+    tau.y = clampAbs(tau.y, this._coupleTauMag('y'));
+    tau.z = clampAbs(tau.z, this._coupleTauMag('z'));
+
+    // Phase 4: tether rotation-limit restoring torque. This is a STRUCTURAL
+    // constraint (the taut tether), not RCS authority, so it is added AFTER the
+    // couple clamp — a stiffening spring that comfortably exceeds τ_max at the
+    // limit, so angular momentum physically cannot carry the offset past it.
+    if (tethered && th) {
+      this._applyTetherTorque(tau, th);
+    }
+
+    // N₂ accounting for the HOLD (arrest + recenter). Bill by ACTUAL applied
+    // torque fraction (gas ∝ thrust), NOT by |ω|: a proportional rate-null has a
+    // long low-ω exponential tail that fires almost nothing, so ω-based billing
+    // would massively over-charge it. Accumulated only on frames with no active
+    // command (command frames bill via commandAttitude→fireRcsRotation instead).
+    // τ here is hold+tether only, since command is zero when cmdP===cmdY===0.
+    if (cmdP === 0 && cmdY === 0) {
+      const tauMaxRef = Math.max(1e-6, this._coupleTauMag('x'), this._coupleTauMag('y'));
+      const eff = Math.min(1, Math.hypot(tau.x, tau.y) / tauMaxRef);
+      this._frameHoldWork = (this._frameHoldWork || 0) + eff * h;
+    }
+
+    // Semi-implicit Euler: advance ω from τ/I, then the offset from ω.
+    omega.x += (tau.x / I.ixx) * h;
+    omega.y += (tau.y / I.iyy) * h;
+    omega.z += (tau.z / I.izz) * h;
+    omega.x = clampAbs(omega.x, A.MAX_RATE);
+    omega.y = clampAbs(omega.y, A.MAX_RATE);
+    omega.z = clampAbs(omega.z, A.MAX_RATE);
+
+    const wLen = omega.length();
+    if (wLen > 1e-9) {
+      _qAttB.setFromAxisAngle(_v3AttB.copy(omega).divideScalar(wLen), wLen * h);
+      this._manualRotation.multiply(_qAttB).normalize();
+    }
+
+    // D8: parasitic net force from the commanded couples (yaw is not a pure
+    // couple) → _rcsVelocity in the WORLD frame; damping bleeds it off.
+    const cf = this._rcsCoupleForce;
+    if (cf) {
+      _v3AttC.set(0, 0, 0);
+      if (p > 0 && cf.pitchPos) _v3AttC.addScaledVector(cf.pitchPos, p);
+      else if (p < 0 && cf.pitchNeg) _v3AttC.addScaledVector(cf.pitchNeg, -p);
+      if (y > 0 && cf.yawPos) _v3AttC.addScaledVector(cf.yawPos, y);
+      else if (y < 0 && cf.yawNeg) _v3AttC.addScaledVector(cf.yawNeg, -y);
+      if (_v3AttC.lengthSq() > 1e-12) {
+        const mass = this.mass || 130;
+        _v3AttC.applyQuaternion(this.quaternion).multiplyScalar((M / mass) * h);
+        this._rcsVelocity.add(_v3AttC);
+      }
+    }
+    return holdFired;
+  }
+
+  /** @returns {{pitch:number, yaw:number, roll:number}} live body angular rate (deg/s). */
+  getAngularRate() {
+    const w = this._rcsOmega || _v3AttA.set(0, 0, 0);
+    const R = 180 / Math.PI;
+    return { pitch: w.x * R, yaw: w.y * R, roll: w.z * R };
+  }
+
+  /**
+   * Phase 4 — set the active tether rotation-limit tier ('none' | 'soft' |
+   * 'block'). Drives the restoring-torque constraint in _applyTetherTorque.
+   * Owns the displacement state (moved off InputManager). @param {string} tier
+   */
+  setAttitudeConstraintTier(tier) {
+    this._attitudeConstraintTier = tier || 'none';
+  }
+
+  /**
+   * Phase 4 — is the tether offset saturated AND being pushed further into the
+   * limit on the demanded axes? Used by InputManager to gate the comms warning.
+   * @param {number} pitchIn @param {number} yawIn @returns {boolean}
+   */
+  isAttitudeConstraintSaturated(pitchIn, yawIn) {
+    const tier = this._attitudeConstraintTier;
+    if (!tier || tier === 'none') return false;
+    const TR = Constants.TETHER_ROTATION;
+    const maxDisp = tier === 'block' ? TR.MAX_DISPLACEMENT_BLOCK : TR.MAX_DISPLACEMENT_SOFT;
+    const th = this._tetherOffsetAngles(_v3AttA);
+    const sat = TR.SATURATION_THRESHOLD * maxDisp;
+    const pitchSat = Math.abs(th.x) >= sat && Math.sign(th.x) === Math.sign(pitchIn) && pitchIn !== 0;
+    const yawSat = Math.abs(th.y) >= sat && Math.sign(th.y) === Math.sign(yawIn) && yawIn !== 0;
+    return pitchSat || yawSat;
+  }
+
+  /**
+   * Decompose the manual offset into per-axis rotation-vector angles (rad) in
+   * body frame: {x: pitch, y: yaw, z: roll}. @param {THREE.Vector3} out @private
+   */
+  _tetherOffsetAngles(out) {
+    const mr = this._manualRotation;
+    const ang = 2 * Math.acos(Math.min(1, Math.abs(mr.w)));
+    const s = Math.sqrt(Math.max(0, 1 - mr.w * mr.w)) || 1;
+    const sign = mr.w >= 0 ? 1 : -1;
+    return out.set(ang * sign * mr.x / s, ang * sign * mr.y / s, ang * sign * mr.z / s);
+  }
+
+  /**
+   * Phase 4 — tether rotation-limit restoring torque added into `tau` (N·m, body
+   * frame). Per pitch/yaw axis: a stiffening spring −sign(θ)·τ_wall·(|θ|/θ_max)^n
+   * (n = STIFFNESS_EXPONENT) plus a damping term beyond half-limit. τ_wall is set
+   * to several × the couple authority so the momentum equilibrium sits well below
+   * θ_max — the offset physically cannot reach the limit.
+   * @param {THREE.Vector3} tau @param {THREE.Vector3} th precomputed body-frame
+   *   offset rotation vector (from `_tetherOffsetAngles`, shared with RECENTER) @private
+   */
+  _applyTetherTorque(tau, th) {
+    const tier = this._attitudeConstraintTier;
+    const TR = Constants.TETHER_ROTATION;
+    const maxDisp = tier === 'block' ? TR.MAX_DISPLACEMENT_BLOCK : TR.MAX_DISPLACEMENT_SOFT;
+    const stiff = TR.STIFFNESS_EXPONENT;
+    const I = this.getAttitudeInertia();
+    const w = this._rcsOmega;
+    const wall = 6 * Math.max(this._coupleTauMag('x'), this._coupleTauMag('y')); // ≫ τ_max
+    const axis = (thv, wv, Iax) => {
+      const n = Math.min(1, Math.abs(thv) / maxDisp);
+      let t = -Math.sign(thv) * wall * Math.pow(n, stiff);   // stiffening spring
+      if (n > 0.5) t += -Iax * 6 * wv;                        // damp inward momentum near the wall
+      return t;
+    };
+    tau.x += axis(th.x, w.x, I.ixx);
+    tau.y += axis(th.y, w.y, I.iyy);
   }
 
   // ==========================================================================
@@ -5351,7 +5776,7 @@ export class PlayerSatellite extends THREE.Group {
     // Cold-gas (N₂) cost while attitude-thrusting — only when propellant remains
     // (rotation itself is never hard-blocked, to avoid an attitude soft-lock).
     if (magnitude > 0.01 && this.resources.coldGas > 0 && dt > 0) {
-      const RCS_ATTITUDE_N2_FACTOR = 0.3;   // attitude puffs cost less than translation
+      const RCS_ATTITUDE_N2_FACTOR = Constants.ATTITUDE?.RCS_ATTITUDE_N2_FACTOR ?? 0.3; // D9: 0.3→1.0
       eventBus.emit(Events.RESOURCE_CONSUME, {
         resource: 'coldGas',
         amount: this._coldGasRate * RCS_ATTITUDE_N2_FACTOR * Math.min(1, magnitude) * dt,
@@ -5419,13 +5844,10 @@ export class PlayerSatellite extends THREE.Group {
       }
     }
 
-    // Fixed N₂ sip (≈ one 0.1 s attitude burn); never blocks the visual.
-    if (this.resources.coldGas > 0) {
-      eventBus.emit(Events.RESOURCE_CONSUME, {
-        resource: 'coldGas',
-        amount: this._coldGasRate * 0.3 * 0.1,
-      });
-    }
+    // N₂ for the arrest is billed by the hold controller in _tickAttitudeDynamics
+    // (torque-proportional _frameHoldWork). This method is now VISUAL-ONLY — it is
+    // driven every arrest frame by the hold controller, so billing a fixed sip
+    // here too would double-charge (it was ~0.9 kg over a 1 s arrest).
 
     // One puff burst, guarded against key-repeat bounce double-fires.
     const now = performance.now() * 0.001;
@@ -5980,18 +6402,73 @@ export class PlayerSatellite extends THREE.Group {
 
   /** @private Orient the satellite so +Z faces velocity direction (slerp-damped),
    *  then apply manual rotation offset (F13) */
-  _orientAlongVelocity() {
-    // Autopilot has exclusive orientation control — skip prograde tracking entirely
-    if (this.autopilotEngaged) return;
+  /**
+   * Attitude ownership arbiter (Phase 2). Derives the single current attitude
+   * owner from pre-existing signals — no new state. Order matters: AUTOPILOT and
+   * AIM take the quaternion directly, then the close-inspection CINEMATIC hold,
+   * else PLAYER. Stored on `_attitudeOwner`; the previous value is retained on
+   * `_prevAttitudeOwner` so the Phase 3 dynamics can detect handback edges.
+   * @returns {'PLAYER'|'AUTOPILOT'|'AIM'|'CINEMATIC'}
+   * @private
+   */
+  _updateAttitudeOwner() {
+    let owner;
+    if (this.autopilotEngaged) owner = 'AUTOPILOT';
+    else if (this.aimHold) owner = 'AIM';
+    else if (this._hullInspectView || this._hullInspectZoom) owner = 'CINEMATIC';
+    else owner = 'PLAYER';
+    this._prevAttitudeOwner = this._attitudeOwner;
+    this._attitudeOwner = owner;
+    return owner;
+  }
 
-    // Close-inspection hold (V / zoom-in). While the pilot is studying the hull up
-    // close, suspend ONLY the prograde auto-orient below — the manual-rotation
-    // offset further down still applies, so the player can freely turn the ship to
-    // look at a detail without the "autostabilize" slerp dragging it back toward
-    // prograde and fighting them. Gated on the same signals that raise the
-    // hull-outline overlay so the two stay in lockstep. Prograde settling resumes
-    // automatically on exit.
-    const inspecting = this._hullInspectView || this._hullInspectZoom || this.aimHold;
+  /**
+   * Build the exact prograde attitude quaternion (nose +Z along velocity, panel
+   * +Y along the radial). lookAt: eye = pos + velDir, target = pos → +Z = velDir.
+   * @param {THREE.Quaternion} out
+   * @returns {THREE.Quaternion|null} out, or null when velocity is ~0
+   * @private
+   */
+  _progradeQuat(out) {
+    const v = this._cartesian.velocity;
+    const vLen = Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+    if (vLen < 1e-10) return null;
+    const velDir = _v3TmpA.set(v.x, v.y, v.z).divideScalar(vLen);
+    const radial = _v3TmpB.copy(this.position).normalize();
+    const eye = _v3TmpC.copy(this.position).add(velDir);
+    _matAtt.lookAt(eye, this.position, radial);
+    return out.setFromRotationMatrix(_matAtt);
+  }
+
+  _orientAlongVelocity() {
+    const dyn = Constants.ATTITUDE?.DYNAMICS_ENABLED;
+    // Owner: under dynamics it was already resolved (with handback) by
+    // _tickAttitudeDynamics this frame; under the legacy path resolve it here.
+    const owner = dyn ? (this._attitudeOwner || 'PLAYER') : this._updateAttitudeOwner();
+
+    // AUTOPILOT writes this.quaternion directly (slerp) on both paths — leave it.
+    // AIM: under the dynamics path it too owns the quaternion directly (the
+    // latent-bug fix). Under the LEGACY path it must behave EXACTLY as pre-diff —
+    // grouped into `inspecting` so the manual-offset apply/decay below still runs
+    // (a faithful DYNAMICS_ENABLED=false revert). So only short-circuit AIM here
+    // when dynamics are on.
+    if (owner === 'AUTOPILOT') return;
+    if (owner === 'AIM' && dyn) return;
+
+    // ── Rigid-body path (D4): base = EXACT prograde, no slerp, no decay. The
+    // offset (_manualRotation) is advanced by the integrator in
+    // _tickAttitudeDynamics. Applies to PLAYER and the CINEMATIC inspect hold.
+    if (dyn) {
+      const pg = this._progradeQuat(_qAttA);
+      if (pg) this.quaternion.copy(pg).multiply(this._manualRotation).normalize();
+      else this.quaternion.copy(this._manualRotation).normalize();
+      return;
+    }
+
+    // ── Legacy kinematic path (DYNAMICS_ENABLED = false) ──────────────────
+    // CINEMATIC (hull inspection) and AIM suspend the prograde slerp; the manual
+    // offset still applies so the player can turn the hull while inspecting.
+    const inspecting = (owner === 'CINEMATIC' || owner === 'AIM');
 
     const v = this._cartesian.velocity;
     const vLen = Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
