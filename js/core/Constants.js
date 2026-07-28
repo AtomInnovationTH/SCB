@@ -1155,8 +1155,9 @@ export const Constants = {
   //   pitch −1 (nose down)  → HT_BOTTOM(idx 1, at −Y): thrust below CoM dips nose
   //   yaw   +1 (nose left)  → HT_LEFT  (idx 3, at −X): thrust left of CoM yaws left
   //   yaw   −1 (nose right) → HT_RIGHT (idx 2, at +X): thrust right of CoM yaws right
-  // Note: Code sign convention — positive yaw = ArrowLeft = nose-left (matches
-  // rotateYaw(+angle) around +Y via right-hand rule).
+  // Note: Code sign convention — positive yaw = ArrowLeft = nose-left (a positive
+  // yaw command torques about +Y by the right-hand rule; see ATTITUDE and
+  // PlayerSatellite.commandAttitude — the former rotateYaw(+angle) is retired).
   DIFFERENTIAL_THRUST: {
     NOZZLE_MAP: {
       pitch: { '1': 0, '-1': 1 },   // +1→HT_TOP, −1→HT_BOTTOM
