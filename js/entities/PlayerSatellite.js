@@ -22,7 +22,7 @@ import { powerDistribution } from '../systems/PowerDistribution.js';
 import { persistenceManager } from '../systems/PersistenceManager.js';
 import {
   computeCoM, computeCoMDrift, computeCoMDriftVector,
-  getActiveBlocks,
+  computeInertia, getActiveBlocks,
 } from '../systems/CoMCalculator.js';
 import { composeDockedArmQuat, strutLocalDirection } from './ArmDockBasis.js';
 import {
@@ -263,6 +263,15 @@ export class PlayerSatellite extends THREE.Group {
     this._comCache = null;          // C-9: Cached CoM result from last computation
     this._comDriftM = 0;            // C-9: Cached scalar drift (m) for HUD
     this._comDriftVec = { x: 0, y: 0, z: 0 }; // C-9: Drift vector (actual − balanced) for torque coupling
+    // Attitude-dynamics inertia SSOT (Phase 1). Lazily computed from the mass
+    // tree, cached, and invalidated ONLY on arm-state/berth changes — never per
+    // frame. null = needs (re)compute.
+    this._attitudeInertia = null;
+    const _invalidateInertia = () => { this._attitudeInertia = null; };
+    eventBus.on(Events.ARM_STATE_CHANGE, _invalidateInertia);
+    eventBus.on(Events.ARM_DEPLOY_COMPLETED, _invalidateInertia);
+    eventBus.on(Events.ARM_STOW_COMPLETED, _invalidateInertia);
+    eventBus.on(Events.NET_BERTHED, _invalidateInertia);
     this._crossbowAutoRcs = true;   // Auto-compensate crossbow recoil with RCS
     this._frameRecoilDv = 0;        // Accumulated recoil ΔV this frame (for dual-fire tracking)
     this._frameRecoilCount = 0;     // Number of crossbow fires this frame
@@ -4299,7 +4308,7 @@ export class PlayerSatellite extends THREE.Group {
     const leverY_m = Math.abs(muzzleLocalY) / M;             // metres off the CoM axis
     const impulse = netMass * vLaunch;                       // N·s
     const torqueImpulse = impulse * leverY_m;                // N·m·s (pitch about +X)
-    const I_mother = motherMass * 0.25;                      // kg·m² (r≈0.5 m cylinder)
+    const I_mother = this._attitudeMOI('x');                 // kg·m² (real pitch MOI, SSOT)
     // Pitch sign follows the firing muzzle's side of the axis, so the upper and
     // lower pods kick opposite ways (net-zero bias across the magazine). RCS
     // nulls it regardless. A truly centred muzzle (y=0) → zero pitch.
@@ -4426,8 +4435,8 @@ export class PlayerSatellite extends THREE.Group {
    */
   applyRecoilAngularImpulse(torqueImpulse) {
     if (!Constants.FEATURE_FLAGS.RECOIL_PHYSICS) return;
-    // Approximate MOI for a 130 kg cylinder of radius 0.5 m
-    const I_mother = (this.mass || 130) * 0.25; // kg·m²
+    // Real yaw MOI from the mass tree (SSOT); legacy mass*0.25 when dynamics off.
+    const I_mother = this._attitudeMOI('y');
     const deltaOmega = torqueImpulse / I_mother;
     this._recoilAngularVel += deltaOmega;      // legacy C-11 scalar (RCS-nulled, HUD bookkeeping)
     // 2026-07-23: also drive the REAL transient yaw so the dual-fire residual
@@ -4502,7 +4511,7 @@ export class PlayerSatellite extends THREE.Group {
     if (!Constants.FEATURE_FLAGS.RECOIL_PHYSICS) return;
     if (!torqueVec) return;
     // Convert torque vector magnitude to angular velocity (simplified)
-    const I_mother = (this.mass || 130) * 0.25; // kg·m²
+    const I_mother = this._attitudeMOI('y'); // real yaw MOI (SSOT); legacy when off
     const mag = Math.sqrt(torqueVec.x ** 2 + torqueVec.y ** 2 + torqueVec.z ** 2);
     this._recoilAngularVel += mag / I_mother;
     // 2026-07-23: also perturb the visible transient. The CoM-offset induced
@@ -4607,6 +4616,7 @@ export class PlayerSatellite extends THREE.Group {
     this._comCache = null;
     this._comDriftM = 0;
     this._comDriftVec = { x: 0, y: 0, z: 0 };
+    this._attitudeInertia = null;
     this._crossbowAutoRcs = true;
     this._frameRecoilDv = 0;
     this._frameRecoilCount = 0;
@@ -4632,6 +4642,35 @@ export class PlayerSatellite extends THREE.Group {
    * @returns {number}
    */
   getCoMDrift() { return this._comDriftM; }
+
+  /**
+   * Attitude-dynamics inertia SSOT. Returns {ixx, iyy, izz} kg·m² about the
+   * barrel origin, computed lazily from the mass tree and cached until an arm
+   * state-change / berth event invalidates it. Never recomputed per frame.
+   * @returns {{ ixx:number, iyy:number, izz:number }}
+   */
+  getAttitudeInertia() {
+    if (!this._attitudeInertia) {
+      this._attitudeInertia = computeInertia(this.armManager, this);
+    }
+    return this._attitudeInertia;
+  }
+
+  /**
+   * Moment of inertia about a body axis for the recoil/attitude integrators.
+   * With ATTITUDE.DYNAMICS_ENABLED (default) this is the real MOI from the mass
+   * tree (SSOT); with the master switch off it falls back to the legacy
+   * mass*0.25 so the old kinematic path is byte-for-byte restorable.
+   * @param {'x'|'y'|'z'} axis
+   * @returns {number} kg·m²
+   */
+  _attitudeMOI(axis) {
+    if (Constants.ATTITUDE?.DYNAMICS_ENABLED) {
+      const I = this.getAttitudeInertia();
+      return axis === 'x' ? I.ixx : (axis === 'z' ? I.izz : I.iyy);
+    }
+    return (this.mass || 130) * 0.25;
+  }
 
   /**
    * C-9: Get the plume-blocked thruster map from this frame.
