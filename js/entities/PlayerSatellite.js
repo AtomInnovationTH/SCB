@@ -4856,9 +4856,13 @@ export class PlayerSatellite extends THREE.Group {
   /**
    * Rate-command the attitude thrusters. `pitchCmd`/`yawCmd` ∈ [−1, 1] are the
    * player's demand this frame; they are latched for _tickAttitudeDynamics
-   * (which does the physics) and drive the puff/flash/liner feedback at an
-   * intensity equal to the ACTUAL commanded torque fraction. setThrusterFire's
-   * signature is preserved (test-DifferentialThrust asserts it).
+   * (which does the physics). The puff/flash/liner feedback AND the N₂ billing are
+   * driven at the ACTUAL post-rate-cap fraction: once |ω| has reached MAX_RATE in
+   * the demanded direction the thrusters produce no torque (coasting is free —
+   * §3), so the visual goes dark and no gas is billed for holding the stick at the
+   * cap. This mirrors the identical gate in _integrateAttitudeStep so feel, cost,
+   * and physics never disagree. setThrusterFire's signature is preserved
+   * (test-DifferentialThrust asserts it).
    * @param {number} pitchCmd −1..1 (nose up +)
    * @param {number} yawCmd   −1..1 (nose left +)
    * @param {number} dt seconds
@@ -4866,15 +4870,25 @@ export class PlayerSatellite extends THREE.Group {
   commandAttitude(pitchCmd, yawCmd, dt) {
     const p = Math.max(-1, Math.min(1, pitchCmd || 0));
     const y = Math.max(-1, Math.min(1, yawCmd || 0));
+    // Latch the RAW demand — the integrator re-applies the rate-cap gate itself
+    // (it must, since ω changes across substeps within the frame).
     this._attitudeCmd = (p !== 0 || y !== 0) ? { pitch: p, yaw: y } : null;
 
-    // Feedback: light the couple bells + spawn puffs for the commanded couples.
+    // Rate-cap gate for FEEDBACK/BILLING (mirrors _integrateAttitudeStep): drop
+    // the demand on an axis already at the cap in the demanded direction, so the
+    // plume darkens and billing stops while coasting.
+    const A = Constants.ATTITUDE;
+    const w = this._rcsOmega || _v3AttA.set(0, 0, 0);
+    let pv = p, yv = y;
+    if (pv > 0 && w.x >=  A.MAX_RATE) pv = 0;
+    if (pv < 0 && w.x <= -A.MAX_RATE) pv = 0;
+    if (yv > 0 && w.y >=  A.MAX_RATE) yv = 0;
+    if (yv < 0 && w.y <= -A.MAX_RATE) yv = 0;
+
     // fireRcsRotation owns the flash raise, the puff cadence AND the N₂ billing
     // (kept there so test-RcsPlacement's cost/flash guards still hold).
-    if (p !== 0) this.fireRcsRotation('pitch', Math.sign(p), Math.abs(p), dt);
-    if (y !== 0) this.fireRcsRotation('yaw', Math.sign(y), Math.abs(y), dt);
-    if (p !== 0) this.setThrusterFire('pitch', Math.sign(p), Math.abs(p));
-    if (y !== 0) this.setThrusterFire('yaw', Math.sign(y), Math.abs(y));
+    if (pv !== 0) { this.fireRcsRotation('pitch', Math.sign(pv), Math.abs(pv), dt); this.setThrusterFire('pitch', Math.sign(pv), Math.abs(pv)); }
+    if (yv !== 0) { this.fireRcsRotation('yaw', Math.sign(yv), Math.abs(yv), dt); this.setThrusterFire('yaw', Math.sign(yv), Math.abs(yv)); }
   }
 
   /**
@@ -4950,6 +4964,7 @@ export class PlayerSatellite extends THREE.Group {
 
     const STEP = 1 / 120;
     let holdFired = false;
+    this._frameHoldWork = 0; // accumulated hold torque·time (full-throttle-seconds)
     let remaining = Math.min(dt, 0.1);
     while (remaining > 1e-9) {
       const h = remaining > STEP + 1e-12 ? STEP : remaining;
@@ -4966,13 +4981,13 @@ export class PlayerSatellite extends THREE.Group {
     // Frame-level hold billing/visual is the ARREST + RECENTER burn, billed ONLY
     // when nothing is being commanded — while a command is held, fireRcsRotation
     // (via commandAttitude) already bills that maneuver, so billing here too would
-    // double-charge (the always-on roll rate-null sets holdFired every frame). This
-    // keeps D9's "two burns per committed turn: spin-up + arrest" honest.
-    if (holdFired && coldGas > 0 && !cmd) {
-      const frac = Math.min(1, omega.length() / A.MAX_RATE + 0.1);
+    // double-charge. Billing is by ACTUAL applied torque (_frameHoldWork, gas ∝
+    // thrust), so the rate-null's long low-ω exponential tail bills ~nothing and a
+    // committed turn costs two real burns (spin-up + arrest), per D9 (~5% tank).
+    if (holdFired && coldGas > 0 && !cmd && this._frameHoldWork > 0) {
       eventBus.emit(Events.RESOURCE_CONSUME, {
         resource: 'coldGas',
-        amount: this._coldGasRate * (A.RCS_ATTITUDE_N2_FACTOR ?? 1.0) * frac * dt,
+        amount: this._coldGasRate * (A.RCS_ATTITUDE_N2_FACTOR ?? 1.0) * this._frameHoldWork,
       });
       // Real arrest-burn visual on the opposing couple (§16) — driven by the hold
       // controller now, not an input-side release.
@@ -5008,10 +5023,15 @@ export class PlayerSatellite extends THREE.Group {
     const inspecting = (owner === 'CINEMATIC');
 
     // ── Commanded torque (rate-command with an authority ceiling) ──
-    // Drop the *commanded* component once |ω| along that axis has reached the cap
-    // in the commanded direction. This is a ceiling, not a wall — counter-torque
-    // (opposite command / hold) must still be able to act at the cap.
-    let p = cmd.pitch, y = cmd.yaw;
+    // `cmdP`/`cmdY` = the raw player demand on each axis; `p`/`y` = that demand
+    // after the rate-cap gate. Drop the DRIVEN component once |ω| has reached the
+    // cap in the commanded direction (a ceiling, not a wall). CRITICAL: the hold
+    // controller keys off the RAW demand (cmdP/cmdY), NOT the gated p/y — using
+    // the gated value would let the rate-null fight the command at the cap, so ω
+    // would stall just below the cap and the thrusters would oscillate/burn gas
+    // forever instead of coasting free.
+    const cmdP = cmd.pitch, cmdY = cmd.yaw;
+    let p = cmdP, y = cmdY;
     if (p > 0 && omega.x >=  A.MAX_RATE) p = 0;
     if (p < 0 && omega.x <= -A.MAX_RATE) p = 0;
     if (y > 0 && omega.y >=  A.MAX_RATE) y = 0;
@@ -5023,16 +5043,21 @@ export class PlayerSatellite extends THREE.Group {
     if (y > 0 && ct.yawPos) tau.addScaledVector(ct.yawPos, y);
     else if (y < 0 && ct.yawNeg) tau.addScaledVector(ct.yawNeg, -y);
 
-    // ── Hold controller: RATE-NULL (τ=−c·ω on un-commanded axes) + RECENTER
-    // (drives _manualRotation→identity, capped, suppressed while inspecting /
-    // inside the deadband / when dry). c tuned for a ~HOLD_ARREST_S first-order
-    // arrest at the current inertia.
-    const kArrest = 3 / Math.max(0.1, A.HOLD_ARREST_S);
+    // ── Hold controller: RATE-NULL (arrest) + RECENTER (return to prograde) ──
+    // RATE-NULL is bang-bang — real RCS thrusters are on/off, so arrest fires the
+    // FULL opposing couple until |ω| enters a small linear anti-chatter zone
+    // (OMEGA_LIN). This gives a physics-set ~1 s arrest and ~17° overshoot from
+    // the cap, and (billed by torque) ~one burn's worth of gas — a proportional
+    // −c·ω law instead has a long low-ω tail that is both slow and over-billed.
+    // Gated on the RAW demand cmdP/cmdY (never fight an active command).
+    // RECENTER (additive): drives _manualRotation→identity, capped, suppressed
+    // while inspecting / inside the deadband / when dry.
+    const OMEGA_LIN = 0.03; // rad/s — below this, ramp arrest torque down (anti-chatter)
     let holdFired = false;
-    const cX = I.ixx * kArrest, cY = I.iyy * kArrest, cZ = I.izz * kArrest;
-    if (p === 0 && Math.abs(omega.x) > 1e-4) { tau.x += -cX * omega.x; holdFired = true; }
-    if (y === 0 && Math.abs(omega.y) > 1e-4) { tau.y += -cY * omega.y; holdFired = true; }
-    if (Math.abs(omega.z) > 1e-4) { tau.z += -cZ * omega.z; holdFired = true; } // D10 roll null
+    const arrest = (w, axis) => -Math.sign(w) * this._coupleTauMag(axis) * Math.min(1, Math.abs(w) / OMEGA_LIN);
+    if (cmdP === 0 && Math.abs(omega.x) > 1e-4) { tau.x += arrest(omega.x, 'x'); holdFired = true; }
+    if (cmdY === 0 && Math.abs(omega.y) > 1e-4) { tau.y += arrest(omega.y, 'y'); holdFired = true; }
+    if (Math.abs(omega.z) > 1e-4) { tau.z += arrest(omega.z, 'z'); holdFired = true; } // D10 roll null
 
     const coldGas = this.resources ? (this.resources.coldGas || 0) : 0;
     const tethered = this._attitudeConstraintTier && this._attitudeConstraintTier !== 'none';
@@ -5048,8 +5073,8 @@ export class PlayerSatellite extends THREE.Group {
         const capX = A.HOLD_RECENTER_FRAC * this._coupleTauMag('x');
         const capY = A.HOLD_RECENTER_FRAC * this._coupleTauMag('y');
         const capZ = A.HOLD_RECENTER_FRAC * this._coupleTauMag('z');
-        if (p === 0) { tau.x += clampAbs(-capX * th.x / A.HOLD_DEADBAND_RAD, capX); holdFired = true; }
-        if (y === 0) { tau.y += clampAbs(-capY * th.y / A.HOLD_DEADBAND_RAD, capY); holdFired = true; }
+        if (cmdP === 0) { tau.x += clampAbs(-capX * th.x / A.HOLD_DEADBAND_RAD, capX); holdFired = true; }
+        if (cmdY === 0) { tau.y += clampAbs(-capY * th.y / A.HOLD_DEADBAND_RAD, capY); holdFired = true; }
         tau.z += clampAbs(-capZ * th.z / A.HOLD_DEADBAND_RAD, capZ);
       }
     }
@@ -5066,6 +5091,18 @@ export class PlayerSatellite extends THREE.Group {
     // limit, so angular momentum physically cannot carry the offset past it.
     if (tethered && th) {
       this._applyTetherTorque(tau, th);
+    }
+
+    // N₂ accounting for the HOLD (arrest + recenter). Bill by ACTUAL applied
+    // torque fraction (gas ∝ thrust), NOT by |ω|: a proportional rate-null has a
+    // long low-ω exponential tail that fires almost nothing, so ω-based billing
+    // would massively over-charge it. Accumulated only on frames with no active
+    // command (command frames bill via commandAttitude→fireRcsRotation instead).
+    // τ here is hold+tether only, since command is zero when cmdP===cmdY===0.
+    if (cmdP === 0 && cmdY === 0) {
+      const tauMaxRef = Math.max(1e-6, this._coupleTauMag('x'), this._coupleTauMag('y'));
+      const eff = Math.min(1, Math.hypot(tau.x, tau.y) / tauMaxRef);
+      this._frameHoldWork = (this._frameHoldWork || 0) + eff * h;
     }
 
     // Semi-implicit Euler: advance ω from τ/I, then the offset from ω.
@@ -5807,13 +5844,10 @@ export class PlayerSatellite extends THREE.Group {
       }
     }
 
-    // Fixed N₂ sip (≈ one 0.1 s attitude burn); never blocks the visual.
-    if (this.resources.coldGas > 0) {
-      eventBus.emit(Events.RESOURCE_CONSUME, {
-        resource: 'coldGas',
-        amount: this._coldGasRate * 0.3 * 0.1,
-      });
-    }
+    // N₂ for the arrest is billed by the hold controller in _tickAttitudeDynamics
+    // (torque-proportional _frameHoldWork). This method is now VISUAL-ONLY — it is
+    // driven every arrest frame by the hold controller, so billing a fixed sip
+    // here too would double-charge (it was ~0.9 kg over a 1 s arrest).
 
     // One puff burst, guarded against key-repeat bounce double-fires.
     const now = performance.now() * 0.001;
