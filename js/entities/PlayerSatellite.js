@@ -4936,9 +4936,13 @@ export class PlayerSatellite extends THREE.Group {
   /**
    * Integrate rigid-body attitude on REAL dt (D2 — never gameDt). One owner per
    * frame; only PLAYER and the CINEMATIC inspection hold integrate torque, AP and
-   * AIM keep ω=0 and their direct-quaternion writes. Torque sources: the latched
-   * rate command, the two-mode hold controller, and (Phase 4) the tether limit.
-   * Semi-implicit Euler → dt-invariant at 30/60/120 fps.
+   * AIM keep ω=0 and their direct-quaternion writes.
+   *
+   * dt-invariance (headline guard): the physics runs on a FIXED internal substep
+   * (1/120 s) with a remainder, so 30/60/120 fps integrate through identical
+   * sub-steps and agree to fp — plain semi-implicit Euler only gives O(dt).
+   * Frame-level feedback (N₂ billing, arrest-burn visual, empty-tank comms) runs
+   * ONCE after the loop.
    * @param {number} dt seconds @private
    */
   _tickAttitudeDynamics(dt) {
@@ -4958,6 +4962,54 @@ export class PlayerSatellite extends THREE.Group {
     }
     if (dt <= 0) return;
 
+    const STEP = 1 / 120;
+    let holdFired = false;
+    let remaining = Math.min(dt, 0.1);
+    while (remaining > 1e-9) {
+      const h = remaining > STEP + 1e-12 ? STEP : remaining;
+      if (this._integrateAttitudeStep(h, owner)) holdFired = true;
+      remaining -= h;
+    }
+
+    // ── Frame-level feedback + billing (once per frame) ──
+    const A = Constants.ATTITUDE;
+    const omega = this._rcsOmega;
+    const coldGas = this.resources ? (this.resources.coldGas || 0) : 0;
+    const cmd = this._attitudeCmd;
+    const p = cmd ? cmd.pitch : 0, y = cmd ? cmd.yaw : 0;
+
+    if (holdFired && coldGas > 0) {
+      const frac = Math.min(1, omega.length() / A.MAX_RATE + 0.1);
+      eventBus.emit(Events.RESOURCE_CONSUME, {
+        resource: 'coldGas',
+        amount: this._coldGasRate * (A.RCS_ATTITUDE_N2_FACTOR ?? 1.0) * frac * dt,
+      });
+      // Real arrest-burn visual on the opposing couple (§16) — driven by the hold
+      // controller now, not an input-side release.
+      if (Math.abs(omega.x) > 0.05 && p === 0) this.fireRcsStopPulse('pitch', omega.x > 0 ? 1 : -1);
+      if (Math.abs(omega.y) > 0.05 && y === 0) this.fireRcsStopPulse('yaw', omega.y > 0 ? 1 : -1);
+    }
+
+    if (coldGas <= 0 && cmd && this.resources) {
+      const now = performance.now();
+      if (now - (this._lastColdGasEmptyMsg ?? 0) > 5000) {
+        this._lastColdGasEmptyMsg = now;
+        eventBus.emit(Events.COMMS_MESSAGE, {
+          sender: 'PROPULSION',
+          text: 'RCS cold-gas depleted — attitude authority lost',
+          priority: 'warning',
+        });
+      }
+    }
+  }
+
+  /**
+   * One fixed-step attitude integration substep: torque law (command + hold +
+   * tether), clamp to couple authority, advance ω (τ/I) then the manual offset
+   * (semi-implicit), inject the D8 parasitic force.
+   * @param {number} h seconds @param {string} owner @returns {boolean} holdFired @private
+   */
+  _integrateAttitudeStep(h, owner) {
     const A = Constants.ATTITUDE;
     const I = this.getAttitudeInertia();
     const omega = this._rcsOmega;
@@ -4981,44 +5033,37 @@ export class PlayerSatellite extends THREE.Group {
     if (y > 0 && ct.yawPos) tau.addScaledVector(ct.yawPos, y);
     else if (y < 0 && ct.yawNeg) tau.addScaledVector(ct.yawNeg, -y);
 
-    // ── Hold controller ──
-    // RATE-NULL (always, on axes with no active command): τ = −c·ω, with c tuned
-    // for a ~HOLD_ARREST_S first-order arrest at stowed inertia. Billed only when
-    // it actually fires. RECENTER (additive): drives _manualRotation → identity,
-    // capped at HOLD_RECENTER_FRAC·τ_max, suppressed while inspecting, inside the
-    // deadband, or when the N₂ tank is dry (drifting off-prograde dry is a valid
-    // failure mode).
-    const kArrest = 3 / Math.max(0.1, A.HOLD_ARREST_S); // 1/τ_c for ~arrest time
+    // ── Hold controller: RATE-NULL (τ=−c·ω on un-commanded axes) + RECENTER
+    // (drives _manualRotation→identity, capped, suppressed while inspecting /
+    // inside the deadband / when dry). c tuned for a ~HOLD_ARREST_S first-order
+    // arrest at the current inertia.
+    const kArrest = 3 / Math.max(0.1, A.HOLD_ARREST_S);
     let holdFired = false;
     const cX = I.ixx * kArrest, cY = I.iyy * kArrest, cZ = I.izz * kArrest;
     if (p === 0 && Math.abs(omega.x) > 1e-4) { tau.x += -cX * omega.x; holdFired = true; }
     if (y === 0 && Math.abs(omega.y) > 1e-4) { tau.y += -cY * omega.y; holdFired = true; }
-    // roll is never commanded — always rate-null it (D10: hold nulls the roll)
-    if (Math.abs(omega.z) > 1e-4) { tau.z += -cZ * omega.z; holdFired = true; }
+    if (Math.abs(omega.z) > 1e-4) { tau.z += -cZ * omega.z; holdFired = true; } // D10 roll null
 
     const coldGas = this.resources ? (this.resources.coldGas || 0) : 0;
     if (!inspecting && coldGas > 0) {
-      // RECENTER: rotation-vector of the manual offset (small-angle ≈ 2·(x,y,z)).
       const mr = this._manualRotation;
-      const ang = 2 * Math.acos(Math.min(1, Math.abs(mr.w))); // total offset angle
+      const ang = 2 * Math.acos(Math.min(1, Math.abs(mr.w)));
       if (ang > A.HOLD_DEADBAND_RAD) {
         const s = Math.sqrt(Math.max(0, 1 - mr.w * mr.w)) || 1;
         const sign = mr.w >= 0 ? 1 : -1;
-        // axis·angle of the offset, in body frame
         const ex = sign * mr.x / s, ey = sign * mr.y / s, ez = sign * mr.z / s;
         const capX = A.HOLD_RECENTER_FRAC * this._coupleTauMag('x');
         const capY = A.HOLD_RECENTER_FRAC * this._coupleTauMag('y');
         const capZ = A.HOLD_RECENTER_FRAC * this._coupleTauMag('z');
-        // restoring torque toward identity, only on un-commanded axes
         if (p === 0) { tau.x += clampAbs(-capX * (ang * ex) / A.HOLD_DEADBAND_RAD, capX); holdFired = true; }
         if (y === 0) { tau.y += clampAbs(-capY * (ang * ey) / A.HOLD_DEADBAND_RAD, capY); holdFired = true; }
         tau.z += clampAbs(-capZ * (ang * ez) / A.HOLD_DEADBAND_RAD, capZ);
       }
     }
 
-    // ── Phase 4 hook: tether restoring torque (no-op until Phase 4 wires it). ──
+    // Phase 4 hook: tether restoring torque (no-op until Phase 4 wires it).
     if (this._attitudeConstraintTier && this._attitudeConstraintTier !== 'none') {
-      this._applyTetherTorque(tau, dt);
+      this._applyTetherTorque(tau, h);
     }
 
     // Clamp each axis to the physically available couple torque.
@@ -5026,24 +5071,22 @@ export class PlayerSatellite extends THREE.Group {
     tau.y = clampAbs(tau.y, this._coupleTauMag('y'));
     tau.z = clampAbs(tau.z, this._coupleTauMag('z'));
 
-    // Semi-implicit Euler: advance ω from τ/I, then advance the offset from ω.
-    omega.x += (tau.x / I.ixx) * dt;
-    omega.y += (tau.y / I.iyy) * dt;
-    omega.z += (tau.z / I.izz) * dt;
-    // Hard safety clamp on rate (the command ceiling already limits the driven axes).
+    // Semi-implicit Euler: advance ω from τ/I, then the offset from ω.
+    omega.x += (tau.x / I.ixx) * h;
+    omega.y += (tau.y / I.iyy) * h;
+    omega.z += (tau.z / I.izz) * h;
     omega.x = clampAbs(omega.x, A.MAX_RATE);
     omega.y = clampAbs(omega.y, A.MAX_RATE);
     omega.z = clampAbs(omega.z, A.MAX_RATE);
 
     const wLen = omega.length();
     if (wLen > 1e-9) {
-      _qAttB.setFromAxisAngle(_v3AttB.copy(omega).divideScalar(wLen), wLen * dt);
+      _qAttB.setFromAxisAngle(_v3AttB.copy(omega).divideScalar(wLen), wLen * h);
       this._manualRotation.multiply(_qAttB).normalize();
     }
 
-    // D8: parasitic net force from the yaw couple (and any leak), scaled by the
-    // command, pushed into _rcsVelocity in the WORLD frame. The existing 0.95/
-    // frame damping bleeds it off. Only the commanded couples contribute force.
+    // D8: parasitic net force from the commanded couples (yaw is not a pure
+    // couple) → _rcsVelocity in the WORLD frame; damping bleeds it off.
     const cf = this._rcsCoupleForce;
     if (cf) {
       _v3AttC.set(0, 0, 0);
@@ -5053,37 +5096,11 @@ export class PlayerSatellite extends THREE.Group {
       else if (y < 0 && cf.yawNeg) _v3AttC.addScaledVector(cf.yawNeg, -y);
       if (_v3AttC.lengthSq() > 1e-12) {
         const mass = this.mass || 130;
-        // F (N) → accel (m/s²) → ΔV (m/s) → scene units (× M)
-        _v3AttC.applyQuaternion(this.quaternion).multiplyScalar((M / mass) * dt);
+        _v3AttC.applyQuaternion(this.quaternion).multiplyScalar((M / mass) * h);
         this._rcsVelocity.add(_v3AttC);
       }
     }
-
-    // Bill the hold controller's own N₂ when it fired (command billing lives in
-    // fireRcsRotation via commandAttitude). Proportional to the arrest effort.
-    if (holdFired && coldGas > 0) {
-      const frac = Math.min(1, omega.length() / A.MAX_RATE + 0.1);
-      eventBus.emit(Events.RESOURCE_CONSUME, {
-        resource: 'coldGas',
-        amount: this._coldGasRate * (A.RCS_ATTITUDE_N2_FACTOR ?? 1.0) * frac * dt,
-      });
-      // Real arrest burn visual on the opposing couple (Phase 3 §16).
-      if (Math.abs(omega.x) > 0.05 && p === 0) this.fireRcsStopPulse('pitch', omega.x > 0 ? 1 : -1);
-      if (Math.abs(omega.y) > 0.05 && y === 0) this.fireRcsStopPulse('yaw', omega.y > 0 ? 1 : -1);
-    }
-
-    // Empty-tank surfacing (comms, not silent) — throttled.
-    if (coldGas <= 0 && (this._attitudeCmd) && (this.resources)) {
-      const now = performance.now();
-      if (now - (this._lastColdGasEmptyMsg ?? 0) > 5000) {
-        this._lastColdGasEmptyMsg = now;
-        eventBus.emit(Events.COMMS_MESSAGE, {
-          sender: 'PROPULSION',
-          text: 'RCS cold-gas depleted — attitude authority lost',
-          priority: 'warning',
-        });
-      }
-    }
+    return holdFired;
   }
 
   /** @returns {{pitch:number, yaw:number, roll:number}} live body angular rate (deg/s). */
