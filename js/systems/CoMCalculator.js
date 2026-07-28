@@ -191,97 +191,6 @@ export function computeCoM(armManager, playerSatellite) {
 }
 
 /**
- * Compute the rigid-body moment of inertia about the barrel origin, in body
- * axes (kg·m²): ixx pitch (about +X), iyy yaw (about +Y), izz roll (about +Z,
- * the barrel long axis). This is the attitude-dynamics SSOT — it mirrors
- * computeCoM's mass tree exactly (same strut midpoint / daughter tip helpers,
- * same detached/expended exclusions) so inertia and CoM never diverge.
- *
- * Model:
- *   - Core bus: thin cylindrical shell, mass = CORE_DRY_MASS, at the origin.
- *       transverse (x,y) = m·(R²/2 + L²/12);  roll (z) = m·R².
- *       (R = COLLAR_RADIUS, L = CORE_LENGTH. Stowed transverse ≈ 66.5 kg·m².)
- *   - Struts: point mass STRUT_MASS at the α-dependent midpoint (parallel axis).
- *   - Daughters: point mass WEAVER/SPINNER at the α-dependent tip (parallel axis).
- *   - Bridle rings: same as computeCoM, only when the flags are on.
- *   - Berthed catch mass (D6): included as a fore point mass but the ADDED
- *     transverse/roll contribution is clamped so the total never exceeds
- *     INERTIA_MAX_FACTOR × the stowed bus inertia. 23 t unclamped would freeze
- *     rotation; the clamp mirrors the translation MASS_EFFECT_MAX soft-lock.
- *
- * @param {object} armManager — ArmManager (may be null/empty → bus-only inertia)
- * @param {object} [playerSatellite] — for getBerthedMassKg() via _captureNetSystem
- * @returns {{ ixx:number, iyy:number, izz:number }} kg·m² about the origin
- */
-export function computeInertia(armManager, playerSatellite) {
-  const R = V5.COLLAR_RADIUS;   // 0.40 m
-  const L = V5.CORE_LENGTH;     // 2.0 m
-  const coreMass = V5.CORE_DRY_MASS; // 161.0 kg
-
-  // Bare-bus thin-shell inertia (also the stowed reference for the D6 clamp).
-  const busTransverse = coreMass * (R * R / 2 + L * L / 12); // ≈ 66.5
-  const busRoll = coreMass * R * R;                          // ≈ 25.76
-
-  let ixx = busTransverse;
-  let iyy = busTransverse;
-  let izz = busRoll;
-
-  // Point-mass contribution via parallel axis: for mass m at (x,y,z),
-  //   Ixx += m(y²+z²), Iyy += m(x²+z²), Izz += m(x²+y²).
-  const addPoint = (m, p) => {
-    if (m <= 0) return;
-    ixx += m * (p.y * p.y + p.z * p.z);
-    iyy += m * (p.x * p.x + p.z * p.z);
-    izz += m * (p.x * p.x + p.y * p.y);
-  };
-
-  const arms = (armManager && armManager.arms) || [];
-  const docks = (armManager && armManager._dockPositions) || [];
-
-  for (let i = 0; i < arms.length; i++) {
-    const arm = arms[i];
-    const dp = docks[i];
-    if (!dp) continue;
-
-    const alpha = arm.getAimAlpha ? arm.getAimAlpha() : (arm._aimAlpha || 0);
-
-    // Strut structural mass at midpoint (matches computeCoM).
-    addPoint(V5.STRUT_MASS, strutMidpointMeters(dp, alpha));
-
-    // Daughter mass at tip (0 when detached/expended — same exclusion).
-    const dMass = getDaughterMass(arm);
-    if (dMass > 0) addPoint(dMass, strutTipMeters(dp, alpha));
-
-    // Bridle rings — only when both flags are on (mirror computeCoM).
-    if (Constants.FEATURE_FLAGS.BRIDLE_RING && Constants.FEATURE_FLAGS.COM_TRACKING) {
-      const bridleMass = BridleRing.getRingMassKg(i);
-      if (bridleMass > 0) addPoint(bridleMass, strutTipMeters(dp, alpha));
-    }
-  }
-
-  // D6: berthed catch mass, included but clamped. Model it as a fore point mass
-  // one barrel half-length ahead; then bound the ADDED inertia so the total per
-  // axis never exceeds INERTIA_MAX_FACTOR × the stowed bus inertia. The max()
-  // guard ensures a legitimately heavy *deployed* configuration is never pulled
-  // BELOW its real inertia by the clamp (the clamp only reins in berthed mass).
-  const cns = playerSatellite && playerSatellite._captureNetSystem;
-  const berthed = (cns && typeof cns.getBerthedMassKg === 'function')
-    ? cns.getBerthedMassKg() : 0;
-  if (berthed > 0) {
-    const factor = Constants.ATTITUDE?.INERTIA_MAX_FACTOR ?? 3.0;
-    const leverT2 = (L / 2) * (L / 2); // transverse lever² (fore capture point)
-    const leverR2 = (R / 2) * (R / 2); // small roll radius²
-    const capT = factor * busTransverse;
-    const capR = factor * busRoll;
-    ixx = Math.min(ixx + berthed * leverT2, Math.max(ixx, capT));
-    iyy = Math.min(iyy + berthed * leverT2, Math.max(iyy, capT));
-    izz = Math.min(izz + berthed * leverR2, Math.max(izz, capR));
-  }
-
-  return { ixx, iyy, izz };
-}
-
-/**
  * Compute scalar CoM drift — the *asymmetric* displacement of CoM from the
  * "balanced" reference position (all arms at mean alpha). This isolates the
  * player-correctable asymmetry from the permanent collar-height offset.
@@ -715,7 +624,6 @@ export function computeInducedTorque(comPos, thrustForce) {
 // Default export: namespace convenience
 export default {
   computeCoM,
-  computeInertia,
   computeCoMDrift,
   computeCoMDriftVector,
   computeCoMOffsetFromThrustVector,

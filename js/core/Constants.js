@@ -347,25 +347,7 @@ export const Constants = {
   OCTOPUS_CORE_LENGTH: 1.2,             // m
   OCTOPUS_CORE_HALL_THRUST: 0.01,       // N (2× HT-100, 10 mN each)
   OCTOPUS_CORE_HALL_ISP: 1500,          // s
-  SATELLITE_ROTATION_RATE: 0.08,        // rad/s — legacy kinematic arrow-key rate (single reader: InputManager).
-                                        // Phase 3 routes manual rotation through ATTITUDE.MAX_RATE and retires this.
-
-  // ── Rigid-body attitude dynamics (supersedes kinematic rotation) ──
-  // Lives OUTSIDE FEATURE_FLAGS deliberately (D7): REALITY_MODE forces every
-  // FEATURE_FLAGS.* false, and disabling *physics* is not what REALITY_MODE means.
-  // DYNAMICS_ENABLED is a plain master switch — false restores the legacy kinematic
-  // path (old mass*0.25 MOI + kinematic slerp) with no rollback needed.
-  ATTITUDE: {
-    DYNAMICS_ENABLED: true,     // master switch; legacy kinematic path when false
-    NOZZLE_THRUST_N: 25.0,      // per-nozzle cold-gas thrust — the single feel dial (D1)
-    MAX_RATE: 0.6,              // rad/s angular-rate cap (D1: 34°/s)
-    MAX_ALPHA_STOWED: 0.6,      // rad/s² reference spin-up accel stowed (~1.0 s ramp, D1)
-    HOLD_RECENTER_FRAC: 0.15,   // recenter torque as a fraction of τ_max
-    HOLD_DEADBAND_RAD: 0.035,   // ~2°, no recenter inside this
-    HOLD_ARREST_S: 1.5,         // target critically-damped arrest time from MAX_RATE
-    INERTIA_MAX_FACTOR: 3.0,    // D6 berthed-mass clamp: total ≤ 3× stowed transverse
-    RCS_ATTITUDE_N2_FACTOR: 1.0, // D9: was 0.3 — ~1 kg (5% of tank) per committed turn
-  },
+  SATELLITE_ROTATION_RATE: 0.08,        // rad/s — manual arrow-key rotation (~4.6°/s, realistic for 500kg ADR satellite)
 
   // FIX_PLAN §3: Tether-aware rotation limits (exponential spring-resistance model).
   // When daughters are tethered, the mother's rotation is dampened by an "elastic" tether:
