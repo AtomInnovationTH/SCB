@@ -102,6 +102,24 @@ export function chooseAmbientPad(pads, cooldownOk) {
   return best ? best.name : null;
 }
 
+/**
+ * Deterministic per-pad launch heading (Task 6). cities.json stores no
+ * azimuthDeg for its 27 launch pads, so without this every ambient launch flew
+ * due east (90°) and repeats looked canned. Real equatorial/mid-latitude pads
+ * launch into a rotation-assisted EAST-ISH corridor, so we hash the pad name to
+ * a heading in [45°, 135°] (90° ± 45°): varied enough that two passes over the
+ * same pad don't trace the identical arc, plausible enough to read as a real
+ * ascent corridor. Deterministic → reproducible in tests and across sessions.
+ * Pure — Node-testable.
+ * @param {string} name — pad name
+ * @returns {number} azimuth degrees ∈ [45, 135)
+ */
+export function ambientAzimuth(name) {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  return 45 + (h % 90);   // 90° ± 45°
+}
+
 const _cam = new THREE.Vector3();
 const _centre = new THREE.Vector3();
 
@@ -134,6 +152,7 @@ export class AmbientLaunchScheduler {
       .filter((c) => c.kind === 'launch')
       .map((c) => ({
         name: c.name, lat: c.lat, lon: c.lon,
+        azimuthDeg: (typeof c.azimuthDeg === 'number') ? c.azimuthDeg : ambientAzimuth(c.name),
         world: null, fd: 0, prevFd: 0, firedThisPass: false,
       }));
     eventBus.on(Events.GAME_RESET, this._onReset);
