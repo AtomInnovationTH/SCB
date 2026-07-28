@@ -1960,17 +1960,12 @@ export class InputManager {
     const _inStationKeep = _skGuardArm && _skGuardArm.state === Constants.ARM_STATES.STATION_KEEP;
 
     if (!apEngaged && !_inStationKeep) {
-      // Phase 4 §1: RCS stop-pulse on arrow-key RELEASE — a real craft fires the
-      // OPPOSITE couple once to null the kinematic rate. Detect release edges
-      // BEFORE the tier branch so it covers free-flight AND tether. Signs match
-      // the fireRcsRotation calls below (Up=pitch+1, Down=pitch−1, Left=yaw+1,
-      // Right=yaw−1).
+      // Phase 3: attitude is now rate-commanded through the rigid-body integrator.
+      // Derive per-axis input (+1/0/−1), emit the manual-rotate cancel on a fresh
+      // press, pass the tether lock tier, and hand off to commandAttitude — the
+      // hold controller (not an input-side stop-pulse) owns arrest now.
       if (!this._prevArrowKeys) this._prevArrowKeys = { up: false, down: false, left: false, right: false };
       const _pk = this._prevArrowKeys;
-      if (_pk.up    && !this.keys['ArrowUp'])    d.player.fireRcsStopPulse('pitch',  1);
-      if (_pk.down  && !this.keys['ArrowDown'])  d.player.fireRcsStopPulse('pitch', -1);
-      if (_pk.left  && !this.keys['ArrowLeft'])  d.player.fireRcsStopPulse('yaw',    1);
-      if (_pk.right && !this.keys['ArrowRight']) d.player.fireRcsStopPulse('yaw',   -1);
       const _prevUp = _pk.up, _prevDown = _pk.down, _prevLeft = _pk.left, _prevRight = _pk.right;
       _pk.up    = !!this.keys['ArrowUp'];
       _pk.down  = !!this.keys['ArrowDown'];
@@ -1984,91 +1979,29 @@ export class InputManager {
         eventBus.emit(Events.MOTHER_MANUAL_ROTATE);
       }
 
-      // FIX_PLAN §3: Tether-aware rotation with exponential spring resistance.
-      //   effectiveRate = baseRate · (1 − |θ|/θ_max)^STIFFNESS    (when pushing toward limit)
-      //   effectiveRate = baseRate                                 (when relieving toward neutral)
-      // On no-input frames, displacement bleeds toward 0 at SPRINGBACK_RATE.
-      const tier     = d.armManager?.getRotationLockTier?.() || 'none';
-      const baseRate = Constants.SATELLITE_ROTATION_RATE;
+      // Net per-axis rate demand (Up=pitch+, Down=pitch−, Left=yaw+, Right=yaw−).
+      let pitchIn = 0, yawIn = 0;
+      if (_pk.up)    pitchIn += 1;
+      if (_pk.down)  pitchIn -= 1;
+      if (_pk.left)  yawIn   += 1;
+      if (_pk.right) yawIn   -= 1;
 
-      if (tier === 'none') {
-        // Free flight — reset spring bookkeeping so next deployment starts at neutral
-        this._tetherPitchDisp = 0;
-        this._tetherYawDisp   = 0;
-        if (this.keys['ArrowUp'])    { d.player.rotatePitch( baseRate * dt); d.player.setThrusterFire('pitch',  1, 1); d.player.fireRcsRotation('pitch',  1, 1, dt); }
-        if (this.keys['ArrowDown'])  { d.player.rotatePitch(-baseRate * dt); d.player.setThrusterFire('pitch', -1, 1); d.player.fireRcsRotation('pitch', -1, 1, dt); }
-        if (this.keys['ArrowLeft'])  { d.player.rotateYaw( baseRate * dt);  d.player.setThrusterFire('yaw',    1, 1); d.player.fireRcsRotation('yaw',    1, 1, dt); }
-        if (this.keys['ArrowRight']) { d.player.rotateYaw(-baseRate * dt);  d.player.setThrusterFire('yaw',   -1, 1); d.player.fireRcsRotation('yaw',   -1, 1, dt); }
-      } else {
-        const TR         = Constants.TETHER_ROTATION;
-        const maxDisp    = (tier === 'block') ? TR.MAX_DISPLACEMENT_BLOCK : TR.MAX_DISPLACEMENT_SOFT;
-        const springback = (tier === 'block') ? TR.SPRINGBACK_RATE_BLOCK   : TR.SPRINGBACK_RATE_SOFT;
-        const stiffness  = TR.STIFFNESS_EXPONENT;
+      // Tether lock tier gates the command magnitude AND drives the Phase 4
+      // restoring-torque constraint on the satellite. Full authority when 'none'.
+      const tier = d.armManager?.getRotationLockTier?.() || 'none';
+      d.player.setAttitudeConstraintTier?.(tier);
 
-        // Lazy-init per-axis displacement bookkeeping
-        if (this._tetherPitchDisp === undefined) this._tetherPitchDisp = 0;
-        if (this._tetherYawDisp   === undefined) this._tetherYawDisp   = 0;
-
-        // Net per-axis input direction (+1 / 0 / -1)
-        let pitchIn = 0, yawIn = 0;
-        if (this.keys['ArrowUp'])    pitchIn += 1;
-        if (this.keys['ArrowDown'])  pitchIn -= 1;
-        if (this.keys['ArrowLeft'])  yawIn   += 1;
-        if (this.keys['ArrowRight']) yawIn   -= 1;
-
-        // Closure: compute (rotation delta, new displacement) for one axis
-        const applyAxis = (disp, input) => {
-          if (input === 0) {
-            // No input → spring-back decay toward 0
-            const decay = springback * dt;
-            if (Math.abs(disp) <= decay) return { delta: 0, newDisp: 0 };
-            return { delta: 0, newDisp: disp - Math.sign(disp) * decay };
-          }
-          // Input present — relief or resistance?
-          const movingTowardCenter = (disp !== 0) && (Math.sign(disp) !== input);
-          let rate;
-          if (movingTowardCenter) {
-            rate = baseRate; // unconstrained re-centering
-          } else {
-            const norm = Math.min(1, Math.abs(disp) / maxDisp);
-            rate = baseRate * Math.pow(1 - norm, stiffness);
-          }
-          const delta   = input * rate * dt;
-          const newDisp = Math.max(-maxDisp, Math.min(maxDisp, disp + delta));
-          return { delta, newDisp };
-        };
-
-        const pitchRes = applyAxis(this._tetherPitchDisp, pitchIn);
-        const yawRes   = applyAxis(this._tetherYawDisp,   yawIn);
-        if (pitchRes.delta !== 0) {
-          d.player.rotatePitch(pitchRes.delta);
-          // Differential plume: magnitude = fraction of baseRate actually applied (spring reduces it)
-          const pMag = dt > 0 ? Math.min(1, Math.abs(pitchRes.delta) / (baseRate * dt)) : 0;
-          d.player.setThrusterFire('pitch', Math.sign(pitchRes.delta), pMag);
-          d.player.fireRcsRotation('pitch', Math.sign(pitchRes.delta), pMag, dt);
-        }
-        if (yawRes.delta !== 0) {
-          d.player.rotateYaw(yawRes.delta);
-          const yMag = dt > 0 ? Math.min(1, Math.abs(yawRes.delta) / (baseRate * dt)) : 0;
-          d.player.setThrusterFire('yaw', Math.sign(yawRes.delta), yMag);
-          d.player.fireRcsRotation('yaw', Math.sign(yawRes.delta), yMag, dt);
-        }
-        this._tetherPitchDisp = pitchRes.newDisp;
-        this._tetherYawDisp   = yawRes.newDisp;
-
-        // Comms warning — only when actively pushing into a saturated limit
-        const satThresh     = TR.SATURATION_THRESHOLD;
-        const pitchSat      = Math.abs(this._tetherPitchDisp) >= maxDisp * satThresh;
-        const yawSat        = Math.abs(this._tetherYawDisp)   >= maxDisp * satThresh;
-        const fightingPitch = pitchIn !== 0 && Math.sign(this._tetherPitchDisp) === pitchIn;
-        const fightingYaw   = yawIn   !== 0 && Math.sign(this._tetherYawDisp)   === yawIn;
-        if ((pitchSat && fightingPitch) || (yawSat && fightingYaw)) {
-          this._maybeEmitTetherLockMsg();
-        }
+      // Comms warning when pushing into a saturated tether limit (Phase 4 tracks
+      // displacement on the satellite; here we only surface the message).
+      if (tier !== 'none' && (pitchIn !== 0 || yawIn !== 0) &&
+          d.player.isAttitudeConstraintSaturated?.(pitchIn, yawIn)) {
+        this._maybeEmitTetherLockMsg();
       }
+
+      d.player.commandAttitude(pitchIn, yawIn, dt);
     } else {
       // AP / station-keep active: drop the held-key record so re-enabling manual
-      // control can't fire a phantom stop pulse from a stale "held" state.
+      // control can't fire a phantom command from a stale "held" state.
       this._prevArrowKeys = null;
     }
   }
