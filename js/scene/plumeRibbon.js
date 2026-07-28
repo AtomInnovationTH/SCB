@@ -65,11 +65,11 @@ export const MIN_HALF_WIDTH_PX = 0.75;
 // Module scratch (no per-frame allocation in the hot loop).
 const _p = new THREE.Vector3();
 const _pNext = new THREE.Vector3();
+const _pPrev = new THREE.Vector3();
 const _tangent = new THREE.Vector3();
 const _toCam = new THREE.Vector3();
 const _side = new THREE.Vector3();
 const _camWorld = new THREE.Vector3();
-const _centreWorld = new THREE.Vector3();
 
 /**
  * Build the ribbon mesh. Geometry is allocated once and rewritten per frame by
@@ -128,16 +128,23 @@ export function updateRibbon(mesh, opts) {
   const pos = posAttr.array, col = colAttr.array;
 
   camera.getWorldPosition(_camWorld);
-  parent.getWorldPosition(_centreWorld);
 
+  // Rolling point evaluation (Fix: perf + head tangent). Each sample's ascent
+  // point is computed ONCE and carried forward — the "next" point peeked for
+  // sample i becomes the "current" point at i+1, so the loop makes n ascentPoint
+  // calls, not 2n. The tangent uses the NEXT sample for i < n-1, and the
+  // PREVIOUS sample at the head (i = n-1), where next === current would be
+  // degenerate (the old code sampled tN === t and always fell back to "up").
+  pointAt(0, _p);                            // current point (starts at the pad)
   for (let i = 0; i < n; i++) {
-    const s = i / (n - 1);                 // 0 = pad, 1 = head
-    const t = tHead * s;
-    pointAt(t, _p);
-    // Tangent from the next sample (fallback: previous at the head).
-    const tN = tHead * Math.min(1, (i + 1) / (n - 1));
-    pointAt(tN, _pNext);
-    _tangent.set(_pNext.x - _p.x, _pNext.y - _p.y, _pNext.z - _p.z);
+    const s = i / (n - 1);                   // 0 = pad, 1 = head
+    // Peek the next sample's point (or reuse current at the head).
+    if (i < n - 1) {
+      pointAt(tHead * ((i + 1) / (n - 1)), _pNext);
+      _tangent.subVectors(_pNext, _p);
+    } else {
+      _tangent.subVectors(_p, _pPrev);       // head: real flight direction
+    }
     if (_tangent.lengthSq() < 1e-12) _tangent.set(0, 1, 0);   // degenerate → up
     _tangent.normalize();
 
@@ -183,6 +190,9 @@ export function updateRibbon(mesh, opts) {
       col[ci + 2] = color.b * a;
       col[ci + 3] = a;
     }
+
+    _pPrev.copy(_p);                         // carry forward: current → previous
+    if (i < n - 1) _p.copy(_pNext);          // …and next → current (no recompute)
   }
   posAttr.needsUpdate = true;
   colAttr.needsUpdate = true;

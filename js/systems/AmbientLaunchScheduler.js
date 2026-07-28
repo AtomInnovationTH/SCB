@@ -253,10 +253,21 @@ export class AmbientLaunchScheduler {
           // the moment the cooldown lifts — if the pad is still in view.
           pad.prevFd = -1;
         } else {
-          // Pool full (MAX_PLUMES): same rule — a refusal keeps the edge live
-          // until a slot frees, it never consumes the pass.
+          // A refusal no longer always keeps the edge live. Distinguish:
+          //  • TRANSIENT ('pool' — MAX_PLUMES full): pin the edge (prevFd = -1)
+          //    so it fires the moment a slot frees; the pass is not consumed.
+          //  • PERMANENT ('gate'/'geometry' — pad or its plume is off-frame this
+          //    pass): re-trying next tick refuses again, so pinning would let this
+          //    pad win chooseAmbientPad every ~0.5 s and starve fireable pads
+          //    (review finding). Consume the edge instead: mark firedThisPass so
+          //    the pad re-arms only after it fully sets, and let updatePadEdges
+          //    (next tick) roll prevFd naturally. We do NOT pin.
           const fired = launchCameo.fire(pad);
-          if (!fired) { pad.prevFd = -1; return; }
+          if (!fired) {
+            if (launchCameo.lastRefusal === 'pool') { pad.prevFd = -1; return; }
+            pad.firedThisPass = true;   // permanent refusal — consume the pass
+            return;
+          }
           pad.firedThisPass = true;
           this._lastFireAt = now;
           // Short cyan flash on the pad's pill at ignition ("launching NOW") —

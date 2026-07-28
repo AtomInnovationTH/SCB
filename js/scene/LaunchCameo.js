@@ -322,6 +322,18 @@ export function worldSizeForPx(px, slantKm, pxPerDeg) {
 }
 
 /**
+ * The shared ignition ramp (Fix: dedup). Real launches are bright near-instantly,
+ * so both the head envelope and the ribbon's sustain ramp reach full brightness
+ * over the first 4% (~0.5 s at 12 s). Extracted so the head and trail can't
+ * drift if the ramp is ever tuned. Pure and Node-testable.
+ * @param {number} t — progress ∈ [0,1]
+ * @returns {number} ramp ∈ [0,1]
+ */
+export function plumeFadeIn(t) {
+  return Math.min(1, Math.max(0, t) / 0.04);
+}
+
+/**
  * The show-arc envelope (Task 4.1–4.2). The OLD envelope faded out over the last
  * 25% — opacity was ~0.15 at the payoff, a straight bug. The new envelope:
  * near-instant ignition (real launches are bright immediately), a sustained
@@ -334,9 +346,8 @@ export function worldSizeForPx(px, slantKm, pxPerDeg) {
  */
 export function plumeEnvelope(t) {
   const tc = Math.max(0, Math.min(1, t));
-  const fadeIn = Math.min(1, tc / 0.04);                 // 4% in (~0.5 s at 12 s)
   const fadeOut = 1 - Math.max(0, (tc - 0.88) / 0.12);   // fade last 12%
-  return fadeIn * fadeOut;
+  return plumeFadeIn(tc) * fadeOut;
 }
 
 // Module scratch vectors (no per-frame allocation).
@@ -353,9 +364,13 @@ export class LaunchCameo {
     // sprite, trail, trailPos}. Meshes are built lazily per slot on first use.
     this._plumes = [];
     for (let i = 0; i < MAX_PLUMES; i++) {
-      this._plumes.push({ active: false, t: 0, phase: 'rise', endOpacity: 0, pad: null, azimuthDeg: 90, padWorld: null, sprite: null, halo: null, ribbon: null });
+      this._plumes.push({ active: false, t: 0, phase: 'rise', endOpacity: 0, pad: null, azimuthDeg: 90, padWorld: null, pointAt: null, sprite: null, halo: null, ribbon: null });
     }
     this.firedOnce = false;   // set on first successful fire(); read by the ambient scheduler
+    /** Why the last fire() returned false: 'pool' (transient), 'gate'/'geometry'
+     * (permanent this pass), 'unavailable', or null (last call succeeded / never
+     * called). Read by the ambient scheduler to decide edge pinning. */
+    this.lastRefusal = null;
   }
 
   /** @returns {boolean} true while any plume is active (compat for callers). */
@@ -379,14 +394,22 @@ export class LaunchCameo {
   /**
    * Fire the cameo from a pad, if the pad is on the visible hemisphere and a
    * plume slot is free (up to MAX_PLUMES concurrent).
+   *
+   * On a `false` return, `this.lastRefusal` records WHY so the ambient scheduler
+   * can tell a TRANSIENT refusal ('pool' — a slot frees shortly, keep the edge
+   * live) from a PERMANENT one ('gate'/'geometry' — the pad/plume is off-frame
+   * this pass and retrying next tick will refuse again, so consume the edge).
+   * Review finding: pinning the edge on a permanent refusal let a geometrically-
+   * doomed pad win chooseAmbientPad every tick and starve fireable pads.
    * @param {{lat:number,lon:number,name:string,vehicle:string,azimuthDeg?:number}} pad
    * @returns {boolean} true if the cameo started, false if gated out / pool full
    */
   fire(pad) {
-    if (!this._layer || !pad) return false;
-    if (!Constants.FEATURE_FLAGS.LAUNCH_CAMEO) return false;
+    this.lastRefusal = null;
+    if (!this._layer || !pad) { this.lastRefusal = 'unavailable'; return false; }
+    if (!Constants.FEATURE_FLAGS.LAUNCH_CAMEO) { this.lastRefusal = 'unavailable'; return false; }
     const slot = this._plumes.find((p) => !p.active);
-    if (!slot) return false;
+    if (!slot) { this.lastRefusal = 'pool'; return false; }   // transient — a slot frees soon
     const { parent, radius, camera, mirrorLon } = this._layer;
 
     // Gate: launch only when the pad is BOTH above the horizon AND on screen —
@@ -398,15 +421,14 @@ export class LaunchCameo {
     parent.localToWorld(_v);
     parent.getWorldPosition(_c);
     camera.getWorldPosition(this._camPos || (this._camPos = new THREE.Vector3()));
-    if (!launchVisible(_v, _c, this._camPos, camera)) return false;
+    if (!launchVisible(_v, _c, this._camPos, camera)) { this.lastRefusal = 'gate'; return false; }
 
     // Gate 2 (Task 1): the PAD being on screen is not enough — require the
-    // plume's mid-flight head to be on screen too. Refuse otherwise (the
-    // scheduler treats this exactly like the pool-full refusal: prevFd = -1,
-    // the edge stays live, the pass is not consumed). Use the SAME azimuth the
-    // flight will use so the gate predicts the real arc (Task 6).
+    // plume's mid-flight head to be on screen too. This is a PERMANENT geometric
+    // refusal for this pass (unlike the transient pool-full case). Use the SAME
+    // azimuth the flight will use so the gate predicts the real arc (Task 6).
     const azimuthDeg = (typeof pad.azimuthDeg === 'number') ? pad.azimuthDeg : 90;
-    if (!plumeHeadVisible(pad.lat, pad.lon, radius, mirrorLon, azimuthDeg, camera)) return false;
+    if (!plumeHeadVisible(pad.lat, pad.lon, radius, mirrorLon, azimuthDeg, camera)) { this.lastRefusal = 'geometry'; return false; }
 
     slot.pad = pad;
     slot.azimuthDeg = azimuthDeg;   // resolved at fire time; flight matches the gate
@@ -418,6 +440,12 @@ export class LaunchCameo {
     // Cache the pad's world position for the per-frame limb-boost in update().
     slot.padWorld = slot.padWorld || new THREE.Vector3();
     slot.padWorld.copy(_v);
+    // Build the ribbon's ascent-path closure ONCE here (Fix 4): it captures the
+    // fire-time pad/azimuth and the layer's radius/mirrorLon, so _drawRibbon
+    // doesn't allocate a fresh closure every frame. Rebuilt each fire (cheap,
+    // once per launch) so a reused slot always points at its own pad.
+    const lat = pad.lat, lon = pad.lon;
+    slot.pointAt = (tt, out) => ascentPoint(lat, lon, radius, tt, mirrorLon, azimuthDeg, out);
     this._build(slot);
     return true;
   }
@@ -477,6 +505,11 @@ export class LaunchCameo {
     slot.t += dt;
     const { radius, mirrorLon, sunLight, camera, parent } = this._layer;
     const pad = slot.pad;
+    // Viewport scale, computed ONCE per slot-frame and shared by the core-sprite
+    // sizing and the ribbon (Fix 5 — they must agree or head and trail drift).
+    // Headless fallback = the audit's 1440×763 reference.
+    const heightPx = (typeof window !== 'undefined' && window.innerHeight) ? window.innerHeight : 763;
+    const pxPerDeg = heightPx / Constants.CAMERA_FOV;
 
     // Task 8 — SOFT END. The head (core+halo) plays the rise and is hidden at
     // t=1 (the vehicle "arrives"); the RIBBON then lingers and dissipates over
@@ -485,7 +518,7 @@ export class LaunchCameo {
     if (slot.phase === 'fade') {
       const k = (slot.t - CAMEO_DURATION_S) / RIBBON_FADE_S;
       if (k >= 1) { this._end(slot); return; }
-      this._drawRibbon(slot, 1, (1 - k) * slot.endOpacity);
+      this._drawRibbon(slot, 1, (1 - k) * slot.endOpacity, pxPerDeg);
       return;
     }
 
@@ -517,10 +550,7 @@ export class LaunchCameo {
     // Task 3.3 — clamp APPARENT size: derive the sprite world size from the
     // actual slant range so the core holds a ~6–16 px band on every gated fire
     // (was 4.3–44 px under facing-dot-only scaling). The halo is a fixed
-    // multiple of the core. pxPerDeg from the live viewport (headless fallback
-    // = the audit's 1440×763 reference).
-    const heightPx = (typeof window !== 'undefined' && window.innerHeight) ? window.innerHeight : 763;
-    const pxPerDeg = heightPx / Constants.CAMERA_FOV;
+    // multiple of the core. pxPerDeg is the shared per-frame value (Fix 5).
     const corePx = coreTargetPx(t);
     const coreWorld = worldSizeForPx(corePx, slantKm, pxPerDeg);
     slot.sprite.scale.setScalar(coreWorld);
@@ -556,29 +586,30 @@ export class LaunchCameo {
     // collapse): the head fades as it arrives, but the exhaust trail must HOLD
     // through arrival so Task 8 can dissipate it in the 'fade' phase. Without
     // this the ribbon would inherit the head's end-fade and vanish at t=1.
-    const sustain = Math.min(1, t / 0.04);
-    const opRibbon = Math.min(cap, intensity * sustain * boost * areaComp);
+    // Shares plumeFadeIn with the head envelope so the two can't drift (Fix 6).
+    const opRibbon = Math.min(cap, intensity * plumeFadeIn(t) * boost * areaComp);
     slot.endOpacity = opRibbon;   // remembered for the Task-8 'fade' phase
-    this._drawRibbon(slot, t, opRibbon);
+    this._drawRibbon(slot, t, opRibbon, pxPerDeg);
   }
 
   /**
    * @private Rewrite the slot's ribbon to follow the ascent path up to `tHead`,
    * at master opacity `opacity`. Shared by the 'rise' and 'fade' phases.
+   * Uses the per-slot `pointAt` closure built once at fire time (Fix 4 — no
+   * per-frame allocation) and the shared per-frame `pxPerDeg` (Fix 5).
    * @param {object} slot @param {number} tHead ∈ [0,1] @param {number} opacity
+   * @param {number} pxPerDeg — shared viewport scale from _updatePlume
    */
-  _drawRibbon(slot, tHead, opacity) {
-    if (!slot.ribbon) return;
-    const { radius, mirrorLon, camera, parent } = this._layer;
-    const pad = slot.pad;
-    const heightPx = (typeof window !== 'undefined' && window.innerHeight) ? window.innerHeight : 763;
+  _drawRibbon(slot, tHead, opacity, pxPerDeg) {
+    if (!slot.ribbon || !slot.pointAt) return;
+    const { camera, parent } = this._layer;
     updateRibbon(slot.ribbon, {
-      pointAt: (tt, out) => ascentPoint(pad.lat, pad.lon, radius, tt, mirrorLon, slot.azimuthDeg, out),
+      pointAt: slot.pointAt,
       tHead,
       apogeeKm: CAMEO_APOGEE_U * 100,
       parent,
       camera,
-      pxPerDeg: heightPx / Constants.CAMERA_FOV,
+      pxPerDeg,
       opacity,
       color: _ribbonColor,
     });
