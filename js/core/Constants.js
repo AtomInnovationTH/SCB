@@ -131,8 +131,13 @@ export const Constants = {
   // dims the surroundings so the inspected craft reads clearly, plus an
   // optional edge-outline on the mothership hull. NOT a full scene wireframe —
   // the callouts live in the in-world ui/MotherCallouts.js overlay.
+  //
+  // 2026-07 (round 6): the vignette is now drawn IN-ENGINE, in the seam between
+  // the far and near render passes (NearFieldRenderPass), so DIM darkens ONLY the
+  // background (Earth/stars/debris) — never the ship or the callout cards. It was
+  // a DOM overlay painted over the whole canvas, which unevenly dimmed the rails.
   INSPECTION: {
-    DIM: 0.6,                     // vignette outer-edge darkness (0 = off, 1 = black)
+    DIM: 0.6,                     // background vignette peak (corner) darkness (0 = off, 1 = black)
     HULL_OUTLINE: true,           // toggle the mothership hull edge-outline
     HULL_OUTLINE_COLOR: 0x00ffcc, // cyan diagnostic tint
     HULL_OUTLINE_THRESHOLD_DEG: 20, // EdgesGeometry thresholdAngle (deg)

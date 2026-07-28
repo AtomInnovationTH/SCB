@@ -301,6 +301,9 @@ export class SceneManager {
     const renderPass = new NearFieldRenderPass(this.scene, this.camera, this.nearCamera);
     this.composer.addPass(renderPass);
     this.renderPass = renderPass;
+    // Inspect background-dim (NearFieldRenderPass seam vignette) ease state.
+    this._inspectDimTarget = 0;
+    this._inspectDimLastMs = 0;
     // Hand the pass the LIVE shared arrays (re-pointed on every applyTier()
     // rebuild) so it can scale the ship + its follow lights into ×S space.
     renderPass.nearFieldRoots = this._nearFieldRoots;
@@ -758,6 +761,7 @@ export class SceneManager {
       this.gpuProbe.beginFrame();
     }
     this._updateNearCamera();   // z-layer fix: sync near camera + tight depth range
+    this._updateInspectDim();   // ease the inspect background-dim vignette
     this.composer.render();
     if (useFrameQuery) {
       this.gpuProbe.endFrame();
@@ -949,6 +953,34 @@ export class SceneManager {
       if (r) r.traverse((o) => { o.layers.set(NEAR_FIELD_LAYER); });
     }
     this.scene.traverse((o) => { if (o.isLight) o.layers.enable(NEAR_FIELD_LAYER); });
+  }
+
+  /**
+   * Set the inspect background-dim target (peak vignette alpha). 0 fades it out.
+   * The dim is drawn in NearFieldRenderPass's far→near seam so it darkens only
+   * the surroundings, not the ship or the callout layer. Eased per frame in
+   * render() so entering/leaving inspection reads as a ~300 ms fade.
+   * @param {number} target01  peak alpha (typically Constants.INSPECTION.DIM), or 0
+   */
+  setInspectDim(target01) {
+    this._inspectDimTarget = Math.max(0, Math.min(1, target01 || 0));
+  }
+
+  /** @private Ease renderPass.vignetteOpacity toward the target (~300 ms fade). */
+  _updateInspectDim() {
+    if (!this.renderPass) return;
+    const target = this._inspectDimTarget || 0;
+    let cur = this.renderPass.vignetteOpacity || 0;
+    const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    if (Math.abs(target - cur) < 0.002) {
+      cur = target;
+      this._inspectDimLastMs = 0;
+    } else {
+      const dt = this._inspectDimLastMs ? Math.min(0.1, (now - this._inspectDimLastMs) / 1000) : 0.016;
+      cur += (target - cur) * (1 - Math.exp(-8 * dt));
+      this._inspectDimLastMs = now;
+    }
+    this.renderPass.vignetteOpacity = cur;
   }
 
   /**

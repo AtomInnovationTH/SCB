@@ -53,7 +53,7 @@
  * @module scene/NearFieldRenderPass
  */
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-import { Vector3 } from 'three';
+import { Vector3, Scene, OrthographicCamera, PlaneGeometry, Mesh, ShaderMaterial } from 'three';
 
 /**
  * Layer index for near-field objects + the lights that illuminate them.
@@ -123,6 +123,93 @@ export class NearFieldRenderPass extends RenderPass {
     /** @private */ this._lightSaves = [];
     /** @private */ this._savedRootCount = 0;
     /** @private */ this._savedLightCount = 0;
+
+    /**
+     * Inspect background-dim vignette. Peak (corner) alpha, 0 → skip the extra
+     * draw entirely (zero cost when not inspecting). Driven by
+     * SceneManager.setInspectDim() and eased there. The vignette is drawn in the
+     * SEAM between the far beauty pass and the near (ship) pass, so it darkens
+     * ONLY the surroundings (Earth/stars/debris) and never the ship or the
+     * in-world callout sprites. Its private scene is NEVER added to the shared
+     * scene, so neither camera can pick it up.
+     * @type {number}
+     */
+    this.vignetteOpacity = 0;
+    /** @private */ this._vigScene = null;
+    /** @private */ this._vigCamera = null;
+    /** @private */ this._vigMesh = null;
+    /** @private */ this._vigMaterial = null;
+  }
+
+  /**
+   * Lazily build the fullscreen vignette (private scene + ortho camera + quad).
+   * Reproduces the old #inspection-vignette look:
+   *   alpha = peak · clamp((len(ndc)/√2 − 0.42) / 0.58, 0, 1)
+   * i.e. clear out to ~42% of the ray to the corner, ramping to `peak` at the
+   * corner — but composited BEFORE the ship, so the ship/callouts stay full.
+   * @private
+   */
+  _ensureVignette() {
+    if (this._vigMesh) return;
+    this._vigScene = new Scene();
+    this._vigCamera = new OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    this._vigMaterial = new ShaderMaterial({
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+      uniforms: { uPeak: { value: 0 } },
+      vertexShader: `
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = vec4(position.xy, 0.0, 1.0);
+        }
+      `,
+      fragmentShader: `
+        precision mediump float;
+        varying vec2 vUv;
+        uniform float uPeak;
+        void main() {
+          vec2 ndc = vUv * 2.0 - 1.0;           // viewport-normalized (ellipse fit)
+          float r = length(ndc) * 0.7071067811865476; // /√2 → corner = 1.0
+          float t = clamp((r - 0.42) / 0.58, 0.0, 1.0);
+          float a = uPeak * t;
+          gl_FragColor = vec4(vec3(0.0, 0.031, 0.063), a);
+        }
+      `,
+    });
+    this._vigMesh = new Mesh(new PlaneGeometry(2, 2), this._vigMaterial);
+    this._vigMesh.frustumCulled = false;
+    this._vigScene.add(this._vigMesh);
+  }
+
+  /**
+   * Draw the inspect vignette into the current render target (no clears). Called
+   * in the far→near seam, and after super.render() on the disabled path.
+   * @param {import('three').WebGLRenderer} renderer
+   * @private
+   */
+  _drawVignette(renderer) {
+    if (!(this.vignetteOpacity > 0.001)) return;
+    this._ensureVignette();
+    this._vigMaterial.uniforms.uPeak.value = this.vignetteOpacity;
+    renderer.render(this._vigScene, this._vigCamera);
+  }
+
+  /** Release the vignette GPU resources. Safe to call when never built. */
+  disposeVignette() {
+    if (this._vigMesh) this._vigMesh.geometry?.dispose();
+    this._vigMaterial?.dispose();
+    this._vigMesh = null;
+    this._vigMaterial = null;
+    this._vigScene = null;
+    this._vigCamera = null;
+  }
+
+  /** Composer teardown hook — free the vignette then defer to the base pass. */
+  dispose() {
+    this.disposeVignette();
+    if (typeof super.dispose === 'function') super.dispose();
   }
 
   /**
@@ -131,9 +218,18 @@ export class NearFieldRenderPass extends RenderPass {
    * @param {import('three').WebGLRenderTarget} readBuffer
    */
   render(renderer, writeBuffer, readBuffer /*, deltaTime, maskActive */) {
-    // No near camera / disabled → identical to the stock RenderPass.
+    // No near camera / disabled → identical to the stock RenderPass, plus the
+    // seam vignette drawn on top afterwards (dims everything incl. the ship here;
+    // this is only the safety-valve/headless fallback path).
     if (!this.nearFieldEnabled || !this.nearCamera) {
       super.render(renderer, writeBuffer, readBuffer);
+      if (this.vignetteOpacity > 0.001) {
+        const prevAutoClear = renderer.autoClear;
+        renderer.autoClear = false;
+        renderer.setRenderTarget(this.renderToScreen ? null : readBuffer);
+        this._drawVignette(renderer);
+        renderer.autoClear = prevAutoClear;
+      }
       return;
     }
 
@@ -146,6 +242,14 @@ export class NearFieldRenderPass extends RenderPass {
     // autoClear* flags exactly as the stock RenderPass does, then draw layer 0.
     renderer.clear(renderer.autoClearColor, renderer.autoClearDepth, renderer.autoClearStencil);
     renderer.render(this.scene, this.camera);
+
+    // INSPECT DIM: draw the vignette in the seam — after the far beauty pass,
+    // BEFORE the depth clear + near (ship) pass — so it darkens only the
+    // surroundings and leaves the ship + callouts at full brightness. Drawn
+    // while scene.background is still non-null is fine: we render our OWN private
+    // scene (whose background is null), not this.scene. autoClear is already
+    // false, and _drawVignette issues no clears, so the far color is preserved.
+    this._drawVignette(renderer);
 
     // NEAR beauty pass: wipe ONLY depth (keep the far color), scale the near-
     // field set into ×S camera-relative space, then draw it on top.

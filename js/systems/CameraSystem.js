@@ -86,6 +86,11 @@ export class CameraSystem {
     /** @type {HTMLCanvasElement} */
     this.canvas = canvas;
 
+    /** @type {import('../scene/SceneManager.js').SceneManager|null}
+     *  Optional — used to drive the in-engine inspect background dim
+     *  (NearFieldRenderPass vignette). Null in headless tests. */
+    this._sceneManager = sceneManager;
+
     // ========================================================================
     // CAMERA FILL LIGHT
     // Warm PointLight that follows the camera — illuminates the spacecraft
@@ -386,8 +391,6 @@ export class CameraSystem {
      * in LOOK AROUND. Cleared when returning to the default FLY view. */
     this._viewIndicatorPersistent = false;
     this._createViewIndicator();
-    this._inspectionVignette = null;
-    this._createInspectionVignette();
 
     // ========================================================================
     // MOUSE EVENT HANDLERS
@@ -589,8 +592,8 @@ export class CameraSystem {
       this._hideViewIndicator();
     }
 
-    // Diagnostic vignette — fade in only for the INSPECT view.
-    this._updateInspectionVignette(view);
+    // Diagnostic background dim — fade in only for the INSPECT view.
+    this._applyInspectDim(view === CameraViews.INSPECTION);
 
     // Notify other systems of the view change
     eventBus.emit(Events.CAMERA_VIEW_CHANGE, { view, label: VIEW_LABELS[view] });
@@ -1112,8 +1115,8 @@ export class CameraSystem {
       this._fovBreathTarget = 0;
       this._fovBreathTimer = 0;
 
-      // Diagnostic vignette + mothership hull/wireframe overlay.
-      this._updateInspectionVignette(CameraViews.INSPECTION);
+      // Diagnostic background dim + mothership hull/wireframe overlay.
+      this._applyInspectDim(true);
       eventBus.emit(Events.INSPECTION_TOGGLE, { subject: 'mother', targetId: null });
       eventBus.emit(Events.INSPECT_HULL_OUTLINE, { visible: true });
       // Onboarding signal: fires only on mother-inspection ENGAGE (never exit)
@@ -1133,8 +1136,8 @@ export class CameraSystem {
       this.camera.near = Constants.CAMERA_NEAR;
       this.camera.updateProjectionMatrix();
 
-      // Fade vignette back out (any non-inspect view clears it) + hide overlay.
-      this._updateInspectionVignette(CameraViews.ORBIT);
+      // Fade the background dim back out (any non-inspect view clears it) + hide overlay.
+      this._applyInspectDim(false);
       eventBus.emit(Events.INSPECTION_TOGGLE, { subject: 'mother' });
       eventBus.emit(Events.INSPECT_HULL_OUTLINE, { visible: false });
     }
@@ -2874,33 +2877,18 @@ export class CameraSystem {
   }
 
   /**
-   * @private Create the INSPECT-view vignette overlay.
-   * A radial gradient (clear center → dark edges) that dims the surroundings so
-   * the inspected craft reads clearly. Pure DOM (no 3D/material/lighting risk),
-   * pointer-events:none, fades in only while the INSPECT view is active.
+   * @private Drive the in-engine inspect background dim.
+   * The dim is a fullscreen vignette drawn in NearFieldRenderPass, in the seam
+   * between the far beauty pass and the near (ship) pass, so it darkens ONLY the
+   * surroundings (Earth/stars/debris) and never the ship or the callout layer.
+   * Replaces the old #inspection-vignette DOM overlay, which painted over the
+   * whole canvas and unevenly dimmed the callout cards. No-op in headless tests
+   * (no sceneManager).
+   * @param {boolean} on
    */
-  _createInspectionVignette() {
-    const overlay = document.getElementById('hud-overlay');
-    if (!overlay) return;
+  _applyInspectDim(on) {
     const dim = Constants.INSPECTION?.DIM ?? 0.6;
-    this._inspectionVignette = document.createElement('div');
-    this._inspectionVignette.id = 'inspection-vignette';
-    this._inspectionVignette.style.cssText = `
-      position: absolute; inset: 0;
-      pointer-events: none;
-      opacity: 0; transition: opacity 0.3s ease;
-      z-index: 1;
-      background: radial-gradient(ellipse at center,
-        rgba(0,8,16,0) 42%, rgba(0,8,16,${dim}) 100%);
-    `;
-    overlay.appendChild(this._inspectionVignette);
-  }
-
-  /** @private Fade the inspection vignette in (INSPECT) or out (any other view). */
-  _updateInspectionVignette(view) {
-    if (!this._inspectionVignette) return;
-    const on = (view === CameraViews.INSPECTION) && (Constants.INSPECTION?.DIM ?? 0.6) > 0;
-    this._inspectionVignette.style.opacity = on ? '1' : '0';
+    this._sceneManager?.setInspectDim?.(on && dim > 0 ? dim : 0);
   }
 
   /** @private Show the view indicator with a label */
@@ -2965,10 +2953,6 @@ export class CameraSystem {
 
     if (this._viewIndicator && this._viewIndicator.parentNode) {
       this._viewIndicator.parentNode.removeChild(this._viewIndicator);
-    }
-
-    if (this._inspectionVignette && this._inspectionVignette.parentNode) {
-      this._inspectionVignette.parentNode.removeChild(this._inspectionVignette);
     }
 
     // Remove fill + rim lights from scene
