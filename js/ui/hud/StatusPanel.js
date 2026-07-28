@@ -442,6 +442,9 @@ export class StatusPanel {
           <span style="opacity:0.7;">CoM Δ: </span><span id="com-drift-val" style="font-weight:bold;color:#00ff88;">0.000 m</span>
           <span id="com-stow-hint" style="display:none;color:#ffaa00;margin-left:4px;font-size:9px;"></span>
         </div>
+        <div id="att-rate-row" style="display:none;font-size:10px;margin-top:1px;margin-bottom:2px;">
+          <span style="opacity:0.7;">Rate: </span><span id="att-rate-val" style="font-weight:bold;color:#00ff88;">P 0.0°/s · Y 0.0°/s · R 0.0°/s</span>
+        </div>
         <div id="plume-block-row" style="display:none;font-size:10px;margin-top:1px;margin-bottom:2px;color:#ff4444;font-weight:bold;">
           ⚠ PLUME BLOCK
         </div>
@@ -665,6 +668,9 @@ export class StatusPanel {
     // C-9: Update CoM drift display + plume block indicator
     this._updateCoMDisplay(data);
 
+    // Attitude: live body angular-rate readout (rigid-body dynamics legibility)
+    this._updateAttitudeRate(data);
+
     // V5: Re-render arm panel at 10Hz for live tension/scan/flash updates
     this._renderArmPanel();
 
@@ -734,6 +740,32 @@ export class StatusPanel {
     } else if (plumeRow) {
       plumeRow.style.display = 'none';
     }
+  }
+
+  /**
+   * Live body angular-rate readout (rigid-body attitude dynamics). Shown only
+   * while the hull is actually turning (|rate| above a small threshold on any
+   * axis) so it doesn't add noise when the ship is steady. Color: green while
+   * under the rate cap, amber as it approaches the cap.
+   * @param {object} data — from HUD update() call; expects data.angularRate
+   *   {pitch,yaw,roll} in deg/s (from PlayerSatellite.getAngularRate)
+   * @private
+   */
+  _updateAttitudeRate(data) {
+    const row = document.getElementById('att-rate-row');
+    const val = document.getElementById('att-rate-val');
+    if (!row || !val) return;
+    const r = data.angularRate;
+    if (!r) { row.style.display = 'none'; return; }
+
+    const maxAbs = Math.max(Math.abs(r.pitch), Math.abs(r.yaw), Math.abs(r.roll));
+    const capDeg = (Constants.ATTITUDE?.MAX_RATE ?? 0.6) * 180 / Math.PI; // ~34°/s
+    const show = maxAbs > 0.05; // deg/s — hide when effectively steady
+    row.style.display = show ? '' : 'none';
+    if (!show) return;
+
+    val.textContent = `P ${r.pitch.toFixed(1)}°/s · Y ${r.yaw.toFixed(1)}°/s · R ${r.roll.toFixed(1)}°/s`;
+    val.style.color = maxAbs >= capDeg * 0.9 ? '#ffaa00' : '#00ff88';
   }
 
   /**
