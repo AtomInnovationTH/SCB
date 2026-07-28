@@ -411,6 +411,7 @@
     },
     {
       "id": "feep_thruster",
+      "hardwareNames": ["ION THRUSTERS (FEEP)"],
       "category": "PROPULSION",
       "trl": 7,
       "icon": "🔥",
@@ -696,6 +697,7 @@
     },
     {
       "id": "cold_gas_rcs",
+      "hardwareNames": ["COLD-GAS STEERING"],
       "category": "PROPULSION",
       "trl": 9,
       "icon": "💨",
@@ -736,6 +738,7 @@
     },
     {
       "id": "spring_energy",
+      "hardwareNames": ["CROSSBOW SPRING"],
       "category": "PROPULSION",
       "trl": 2,
       "icon": "🛰️",
@@ -839,6 +842,7 @@
     },
     {
       "id": "mli_insulation",
+      "hardwareNames": ["THERMAL BLANKET (MLI)"],
       "category": "POWER",
       "trl": 9,
       "icon": "✨",
@@ -930,6 +934,7 @@
     },
     {
       "id": "solar_power",
+      "hardwareNames": ["SOLAR WING SPOOL"],
       "category": "POWER",
       "trl": 9,
       "icon": "☀️",
@@ -1322,6 +1327,7 @@
     },
     {
       "id": "gallium_arsenide",
+      "hardwareNames": ["HULL SOLAR CELLS"],
       "category": "MATERIALS",
       "trl": 9,
       "icon": "☀️",
@@ -1489,6 +1495,7 @@
     },
     {
       "id": "miura_ori_net",
+      "hardwareNames": ["LARGE NET LAUNCHER"],
       "category": "TETHERS",
       "trl": 7,
       "icon": "📐",
@@ -1510,6 +1517,7 @@
     },
     {
       "id": "reel_mechanics",
+      "hardwareNames": ["TETHER WINCHES"],
       "category": "TETHERS",
       "trl": 3,
       "icon": "🎣",
@@ -2027,6 +2035,7 @@
     },
     {
       "id": "trackable_vs_dark",
+      "hardwareNames": ["HEAT (INFRARED) CAM"],
       "category": "DEBRIS",
       "trl": 9,
       "icon": "👁️",
@@ -2067,6 +2076,7 @@
     },
     {
       "id": "gps_denied",
+      "hardwareNames": ["GPS ANTENNAS"],
       "category": "SENSORS",
       "trl": 8,
       "icon": "📡",
@@ -2147,6 +2157,7 @@
     },
     {
       "id": "lidar_ranging",
+      "hardwareNames": ["LASER RANGEFINDER"],
       "category": "SENSORS",
       "trl": 9,
       "icon": "🔦",
@@ -2166,6 +2177,7 @@
     },
     {
       "id": "docking_precision",
+      "hardwareNames": ["SENSOR TURRET"],
       "category": "SENSORS",
       "trl": 9,
       "icon": "🎯",
@@ -2190,6 +2202,7 @@
     },
     {
       "id": "star_tracker",
+      "hardwareNames": ["STAR TRACKERS"],
       "category": "SENSORS",
       "trl": 9,
       "icon": "⭐",
@@ -2212,6 +2225,7 @@
     },
     {
       "id": "detumble",
+      "hardwareNames": ["SPIN-BRAKE LASER"],
       "category": "ATTITUDE",
       "trl": 9,
       "icon": "🌀",
@@ -2349,6 +2363,7 @@
     },
     {
       "id": "bandwidth_limits",
+      "hardwareNames": ["MEDIUM-GAIN ANTENNA"],
       "category": "COMMS",
       "trl": 9,
       "icon": "📶",
@@ -2370,6 +2385,7 @@
     },
     {
       "id": "comms_blackout",
+      "hardwareNames": ["S-BAND OMNI (AFT)"],
       "category": "COMMS",
       "trl": 9,
       "icon": "📵",
@@ -2448,6 +2464,7 @@
     },
     {
       "id": "frequency_bands",
+      "hardwareNames": ["S-BAND RADIO OMNIS"],
       "category": "COMMS",
       "trl": 9,
       "icon": "📡",
@@ -2798,6 +2815,7 @@
     },
     {
       "id": "docking_berthing",
+      "hardwareNames": ["DAUGHTER BERTHS"],
       "category": "ORBITAL_MECHANICS",
       "trl": 9,
       "icon": "🤝",
@@ -3796,6 +3814,7 @@
     },
     {
       "id": "sun_sensor",
+      "hardwareNames": ["SUN SENSORS"],
       "category": "SENSORS",
       "trl": 9,
       "icon": "🌞",
@@ -3816,6 +3835,7 @@
     },
     {
       "id": "pose_estimation",
+      "hardwareNames": ["DAYLIGHT CAMERA"],
       "category": "SENSORS",
       "trl": 8,
       "icon": "👁️",
@@ -3839,6 +3859,7 @@
     },
     {
       "id": "rosa_solar_array",
+      "hardwareNames": ["ROLL-OUT SOLAR WINGS"],
       "category": "POWER",
       "trl": 9,
       "icon": "🌞",
@@ -3905,6 +3926,7 @@
     },
     {
       "id": "robotic_arm",
+      "hardwareNames": ["STRUT HINGES"],
       "category": "TETHERS",
       "trl": 9,
       "icon": "🦾",
@@ -3947,6 +3969,7 @@
     },
     {
       "id": "weaver_gripper",
+      "hardwareNames": ["LARGE DAUGHTER"],
       "category": "TETHERS",
       "trl": 4,
       "icon": "✋",
@@ -3967,6 +3990,7 @@
     },
     {
       "id": "spinner_pad",
+      "hardwareNames": ["SMALL DAUGHTER"],
       "category": "TETHERS",
       "trl": 4,
       "icon": "🌀",

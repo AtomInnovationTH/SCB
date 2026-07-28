@@ -2903,7 +2903,7 @@ export const Constants = {
       { id: 'scan_quick',       label: 'Quick Scan',   key: 'S',         tier: 1, category: 'scan',      hudGroup: 'targets',       prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'SCAN_QUICK' },
       // ── Delegation 4 (2026-05-31): two Tier-1 skills added to back the onboarding `struts` and `inspect` beats. ──
       { id: 'arm_struts',       label: 'Strut Deployment', key: '.',      tier: 1, category: 'collect',   hudGroup: 'fleet',         prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'STRUT_DEPLOY_INPUT' },
-      { id: 'inspect_mother',   label: 'Spacecraft Inspection', key: 'V', tier: 1, category: 'awareness', hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'INSPECTION_TOGGLE' },
+      { id: 'inspect_mother',   label: 'Spacecraft Inspection (V, then scroll in)', key: 'V', tier: 1, category: 'awareness', hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'INSPECTION_TOGGLE' },
       // ── Tier 2: Core Tools (6 skills) ───────────────────────────────────
       { id: 'scan_wide',            label: 'Wide Scan',    key: 'Shift+S',     tier: 2, category: 'scan',      hudGroup: null,            prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'SCAN_WIDE' },
       { id: 'nav_target',           label: 'Target Selection', key: 'T', tier: 2, category: 'nav',     hudGroup: 'target-info',   prereqs: [],  prereqType: 'soft', noReminder: false, triggerEvent: 'TARGET_SELECTED' },

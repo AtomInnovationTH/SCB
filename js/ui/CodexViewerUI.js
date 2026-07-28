@@ -157,6 +157,13 @@ export class CodexViewerUI {
     const resolvedId = (ALIASES && ALIASES[id]) || id;
     const entry = this._codex.getEntry(resolvedId);
     if (!entry) return false;
+    // A deep-link must always land on a list where the target row is present:
+    // clear any active search query and reset the filter to 'all' so a prior
+    // 'unlocked'/'locked' filter or search can't hide the entry we're opening.
+    this._searchQuery = '';
+    this._filter = 'all';
+    const searchInput = document.getElementById('codex-search');
+    if (searchInput) searchInput.value = '';
     // Land on the entry's real category (not a `track:` pseudo-key) BEFORE
     // show() so show()'s auto-select resolves the right list — no transient
     // render/mark-seen of the stale category's first entry. _pendingOpenId tells

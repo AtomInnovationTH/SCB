@@ -71,6 +71,8 @@ export function entryMatchesQuery(entry, query) {
   return (entry.title || '').toLowerCase().includes(q)
     || (entry.shortText || '').toLowerCase().includes(q)
     || (entry.fullText || '').toLowerCase().includes(q)
+    || (Array.isArray(entry.hardwareNames)
+        && entry.hardwareNames.some((n) => String(n).toLowerCase().includes(q)))
     || (entry.category || '').toLowerCase().replace(/_/g, ' ').includes(q);
 }
 
@@ -149,6 +151,9 @@ export class CodexSystem {
       trl: hasTrl ? e.trl : null,         // PLAYBOOK/CATALOG/WORLD_INDUSTRY → null
       icon: e.icon || '📄',
       related: Array.isArray(e.related) ? e.related : [],
+      // In-game hardware name(s) this entry documents (bridges the callout
+      // vocabulary → Tech Library search; MotherCallouts links here).
+      hardwareNames: Array.isArray(e.hardwareNames) ? e.hardwareNames : [],
       track: e.track || null,
       trackOrder: (typeof e.trackOrder === 'number') ? e.trackOrder : null,
       // Currency stamp (WORLD_INDUSTRY/NEWS/CATALOG). "YYYY-MM" or null.

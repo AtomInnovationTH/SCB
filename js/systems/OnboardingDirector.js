@@ -1,9 +1,10 @@
 /**
  * OnboardingDirector.js — orchestrates the 16-beat first-experience pipeline.
  *
- * Delegation 2 (2026-05-31). Walks new players through:
- *   boot → handshake → arrows → struts → zoom → inspect → scan → target →
- *   autopilot → decision → (lasso || daughter) → complete
+ * Delegation 2 (2026-05-31). Walks new players through the reward-first capture
+ * spine (v3 beat list, 2026-06-17):
+ *   boot → handshake → tease_lock → first_catch → second_catch → range_wall →
+ *   close_and_catch → free_clear → final
  *
  * Each beat may emit:
  *   • [`Events.COMMS_MESSAGE`](js/core/Events.js:117) on the comms channel
@@ -260,7 +261,7 @@ export class OnboardingDirector {
    * can still press `I` directly without consequence.
    *
    * @param {object} inputManager — must expose fireScan, cycleTarget,
-   *   engageAutopilot, fireLasso, deployDaughter, toggleInspection (any subset).
+   *   engageAutopilot, fireLasso, deployDaughter (any subset).
    * @returns {boolean} true if a synthetic action was dispatched.
    */
   pressActiveHint(inputManager) {
@@ -289,14 +290,8 @@ export class OnboardingDirector {
       case 'KeyN':
         if (typeof im.fireLasso === 'function') { im.fireLasso(); dispatched = true; }
         break;
-      case 'KeyV':
-        if (typeof im.cycleView === 'function') { im.cycleView(); dispatched = true; }
-        break;
       case 'KeyD':
         if (typeof im.deployDaughter === 'function') { im.deployDaughter(); dispatched = true; }
-        break;
-      case 'KeyI':
-        if (typeof im.toggleInspection === 'function') { im.toggleInspection(); dispatched = true; }
         break;
       default:
         // For arrow / comma-period / zoom beats Space doesn't map onto a
