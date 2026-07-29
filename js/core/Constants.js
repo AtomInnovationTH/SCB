@@ -1775,6 +1775,10 @@ export const Constants = {
     PANEL_WIDTH: 220,
     LABEL_WIDTH: 42,
     DV_ALARM_INTERVALS: [15, 8, 3, 0],  // seconds between beeps per tier
+    // Calm-HUD ceiling: no HUD pulse may exceed this rate. Standing states
+    // read steady (colour/glyph carry severity); events pulse finitely.
+    // Route retained pulses through js/ui/hudPulse.js, which enforces this.
+    MAX_ALERT_PULSE_HZ: 0.5,
   },
 
   // === Audio Configuration (Phase R4) ===
@@ -2573,7 +2577,8 @@ export const Constants = {
     STALK_MAX_FRACTION: 0.25,            // stalk length as fraction of sphere radius R
     STALK_LINE_WIDTH: 0.8,
     STALK_ALPHA: 0.5,
-    LOCK_ON_PULSE_RATE: 2.0,             // Hz — ring pulse frequency
+    // Calm-HUD: LOCK_ON_PULSE_RATE removed — the lock-on ring is steady for all
+    // MOID badges (colour differentiates threat); no standing ring oscillation.
     LOCK_ON_OUTER_RADIUS_MULT: 1.5,      // × dot radius
     LOCK_ON_INNER_RADIUS_MULT: 1.1,      // × dot radius
     GEO_UPDATE_HZ: 2,                    // geolocation readout refresh rate
@@ -3013,7 +3018,6 @@ export const Constants = {
   SELECTED_ROW_GLOW_ALPHA: 0.4,         // Inset box-shadow glow
   SELECTED_ROW_TEXT_GLOW: 0.5,          // Text-shadow on selected name
   WIREFRAME_BG_ALPHA: 0.95,             // Debris wireframe panel background
-  RETICLE_PULSE_HZ: 0.8,               // Bracket breathing oscillation frequency
   RETICLE_BRACKET_WIDTH: 2.0,           // Unselected bracket lineWidth (up from 1.5)
   RETICLE_BRACKET_WIDTH_SELECTED: 3.0,  // Selected bracket lineWidth (up from 2.5)
 
@@ -3821,8 +3825,10 @@ export const Constants = {
     DOT_COLOR_INACTIVE:    '#444488',
     DOT_COLOR_ACTIVE:      '#eeeeff',
     DOT_COLOR_FRAGMENT:    '#555555',
-    DOT_COLOR_FALLBACK:    '#666666',
-    MOID_PULSE_SPEED:      4,               // Hz — red pulse speed for HI-badge debris
+    DOT_COLOR_FALLBACK:   '#666666',
+    // Calm-HUD: MOID_PULSE_SPEED removed — it was declared but never consumed
+    // (the NavSphere HI badge is now steady red; StrategicMap's modal-map
+    // shimmer uses its own local rate and is deliberately out of scope).
   },
 
   // =========================================================================

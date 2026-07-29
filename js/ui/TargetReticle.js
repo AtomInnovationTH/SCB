@@ -14,6 +14,7 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { GameStates } from '../core/GameState.js';
 import { orbitToSceneCartesian, orbitToSceneCartesianInto, keplerianToCartesian, orbitToKm } from '../entities/OrbitalMechanics.js';
+import { calmBreathe, prefersReducedMotion } from './hudPulse.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -26,7 +27,6 @@ const EDGE_PADDING = 40;              // px from screen edge for arrows
 const RETICLE_MIN_SIZE = 12;          // px minimum bracket size
 const RETICLE_MAX_SIZE = 60;          // px maximum bracket size
 const SELECTED_RETICLE_SCALE = 1.6;   // Selected target is bigger
-const PULSE_SPEED = 3.0;             // Hz for pulsing effects
 const CALLOUT_DURATION = 8;          // seconds for first-encounter callout labels
 
 /** Color scheme */
@@ -117,16 +117,19 @@ export class TargetReticle {
     this._apTargetName = '';
     this._selectedScreenPos = null;   // { x, y } screen coords of selected target
 
-    // Listen for target events to trigger lock ceremonies
+    // Listen for target events to trigger lock ceremonies.
+    // Calm-HUD: under prefers-reduced-motion the ceremonies are skipped (the
+    // CSS media block can't reach canvas draws) — selection still works, just
+    // without the 300 ms size pop.
     eventBus.on(Events.TARGET_SELECTED, () => {
       this._lockAnimT = 0;
-      this._lockAnimActive = true;
+      this._lockAnimActive = !prefersReducedMotion();
       this._lockLostAnimActive = false; // Cancel any active lost animation
     });
 
     eventBus.on(Events.TARGET_CLEARED, () => {
       this._lockLostAnimT = 0;
-      this._lockLostAnimActive = true;
+      this._lockLostAnimActive = !prefersReducedMotion();
       this._lockLostTargetId = this._selectedTargetId;
       this._selectedTargetId = null; // Clear so brackets transition to lock-lost rendering
       this._selectedInRange = true;  // reset range state on clear
@@ -773,9 +776,8 @@ export class TargetReticle {
       if (this._lockAnimActive) {
         size *= 1 + 1.5 * (1 - this._easeOutCubic(this._lockAnimT));
       }
-      // ST-2.2: Gentle bracket breathing at 0.8 Hz (±1.5% scale)
-      const breatheHz = Constants.RETICLE_PULSE_HZ || 0.8;
-      size *= 1 + 0.015 * Math.sin(this._time * breatheHz * 2 * Math.PI);
+      // Calm-HUD: no standing size breathe on the selected reticle — the lock
+      // ceremony above covers the selection event; steady brackets after that.
     } else if (isLockLost) {
       // Lock-lost ceremony: start at selected scale, expand to 2×
       size *= SELECTED_RETICLE_SCALE * (1 + this._lockLostAnimT);
@@ -957,13 +959,11 @@ export class TargetReticle {
           // Stays visible until the net is fired, but the pulse is intentionally
           // calm: a slow breath (~0.29 Hz) whose amplitude eases from ±0.16 down
           // to ±0.05 over the first ~6 s, so it greets the eye then settles into
-          // a soft steady glow rather than nagging.
+          // a soft steady glow rather than nagging. (This is the reference shape
+          // calmBreathe() encodes — keep the explicit opts so it stays exact.)
           const shownFor = sinceLock - NUDGE_DELAY_S;
-          const fadeIn = Math.min(1, shownFor / 0.8);
-          const amp = Math.max(0.05, 0.16 - 0.018 * shownFor);
-          const breathe = 0.8 + amp * Math.sin(this._time * 1.8);
           ctx.save();
-          ctx.globalAlpha = fadeIn * breathe;
+          ctx.globalAlpha = calmBreathe(this._time, shownFor, { base: 0.8 });
           ctx.font = 'bold 18px "Courier New", monospace';
           ctx.fillStyle = COLORS.cyan;
           ctx.fillText('\u25B8 N', x, y + half + 70);
@@ -991,8 +991,10 @@ export class TargetReticle {
       ctx.lineWidth = 2.5;
       ctx.shadowColor = COLORS.cyan;
       ctx.shadowBlur = 6;
-      const pulse = 0.7 + 0.3 * Math.sin(this._time * PULSE_SPEED * 2 * Math.PI);
-      ctx.globalAlpha = pulse;
+      // Calm-HUD: steady cyan — the 300 ms lock ceremony covers the selection
+      // event; the old 3 Hz standing pulse was the fastest blink on a
+      // centre-of-attention element.
+      ctx.globalAlpha = 1;
     } else {
       ctx.strokeStyle = color;
       ctx.fillStyle = color;
@@ -1081,8 +1083,9 @@ export class TargetReticle {
 
     // Warning if close
     if (distKm < 5) {
-      const pulse = Math.sin(this._time * 6) > 0;
-      ctx.globalAlpha = pulse ? 0.9 : 0.4;
+      // Calm-HUD: steady red — this is a standing hazard, not an event; the
+      // ⚠ glyph + red already encode severity. (Was a hard on/off square wave.)
+      ctx.globalAlpha = 0.9;
       ctx.fillStyle = COLORS.red;
       ctx.font = 'bold 11px "Courier New", monospace';
       ctx.fillText('⚠ DO NOT APPROACH', x, y + size + 24);
@@ -1102,12 +1105,15 @@ export class TargetReticle {
     ctx.save();
 
     const urgent = distKm < 5;
-    const pulse = urgent ? (Math.sin(this._time * 8) > 0 ? 1.0 : 0.5) : 0.8;
+    // Calm-HUD: steady red when urgent — standing hazard, not an event; the
+    // old hard square wave (0.5↔1.0 @ ~1.27 Hz) was the harshest pattern in
+    // the codebase. Audio (proximity warning) is event-driven elsewhere.
+    const alpha = urgent ? 1.0 : 0.8;
 
     ctx.strokeStyle = urgent ? COLORS.red : COLORS.white;
     ctx.fillStyle = urgent ? COLORS.red : COLORS.white;
     ctx.lineWidth = urgent ? 2.5 : 1.5;
-    ctx.globalAlpha = pulse;
+    ctx.globalAlpha = alpha;
 
     this._drawArrowShape(edge.x, edge.y, edge.angle, urgent ? 12 : 8);
 
@@ -1269,10 +1275,11 @@ export class TargetReticle {
       }
     }
 
-    // Phase 7: Autopilot engaged indicator — amber pulsing text above prograde
+    // Phase 7: Autopilot engaged indicator — steady amber text above prograde
     if (this._apEngaged) {
-      const apAlpha = 0.6 + 0.4 * Math.sin(this._time * Math.PI); // 0.5Hz pulse
-      ctx.globalAlpha = apAlpha;
+      // Calm-HUD: steady — ◉ glyph + amber carry the standing state (was a
+      // full-range 0.5 Hz alpha oscillation).
+      ctx.globalAlpha = 1;
       ctx.font = 'bold 11px "Courier New", monospace';
       ctx.fillStyle = COLORS.yellow;
       ctx.textAlign = 'center';
@@ -1527,9 +1534,9 @@ export class TargetReticle {
       ctx.arc(cx, cy, radius, 0, Math.PI * 2);
       ctx.stroke();
     } else if (this._lassoInFlight) {
-      // In flight: gray pulsing ring (lasso active, can't fire)
-      const pulse = 0.2 + 0.1 * Math.sin(this._time * 4 * Math.PI);
-      ctx.globalAlpha = pulse;
+      // In flight: steady dim gray ring (lasso active, can't fire).
+      // Calm-HUD: was a 2 Hz alpha wobble; the gray already reads "inactive".
+      ctx.globalAlpha = 0.25;
       ctx.strokeStyle = '#888888';
       ctx.beginPath();
       ctx.arc(cx, cy, radius, 0, Math.PI * 2);

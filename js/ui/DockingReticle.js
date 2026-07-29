@@ -18,6 +18,7 @@ import {
 } from '../entities/CaptureNet.js';
 import { dossierSystem } from '../systems/DossierSystem.js';
 import { toolShortLabel } from '../systems/ToolOdds.js';
+import { calmBreathe, finitePulse } from './hudPulse.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -74,6 +75,9 @@ export class DockingReticle {
     // Calm-HUD: timestamp when net readiness last arrived, driving the
     // decaying-breathe arrival cue in _drawNetStatus (null = not ready).
     this._netReadySince = null;
+    // Calm-HUD: timestamp when the fired net last entered CAPTURED, driving
+    // the finite celebration flourish in _drawOddsStripInFlight.
+    this._capturedSince = null;
 
     // Computed metrics
     this._range = 0;
@@ -682,14 +686,13 @@ export class DockingReticle {
     } else {
       this._netReadySince = null;
     }
-    // Arrival cue: 0.8 s fade-in, ~0.29 Hz breathe, amplitude eases ±0.16 →
-    // ±0.05 over ~6 s then settles near-steady (TargetReticle.js "▸ N" shape).
+    // Arrival cue via the shared calm-pulse helper: 0.8 s fade-in, ~0.29 Hz
+    // breathe, amplitude eases ±0.16 → ±0.05 over ~6 s then settles near-steady
+    // (TargetReticle.js "▸ N" shape). Steady 1.0 under prefers-reduced-motion.
     const shownFor = this._netReadySince == null ? 0 : this._time - this._netReadySince;
-    const fadeIn = Math.min(1, shownFor / 0.8);
-    const amp = Math.max(0.05, 0.16 - 0.018 * shownFor);
     const readyAlpha = this._netReadySince == null
       ? 1
-      : fadeIn * (0.9 + amp * Math.sin(this._time * 1.8));
+      : calmBreathe(this._time, shownFor);
 
     if (inSK) {
       const tool = (this._arm.selectedTool || 'NET').toUpperCase();
@@ -910,15 +913,12 @@ export class DockingReticle {
       }
       if (isSel) selectedPct = pct;
 
-      // Odds number — 14px bold, brightness pulse while rising.
+      // Odds number — 14px bold. Calm-HUD: steady; the ↑/↓ glyph already
+      // encodes the trend (the old 1.9 Hz rising-brightness flicker was noise).
       ctx.font = `bold ${HUD.ODDS_FONT_PX || 14}px ${FONT}`;
       ctx.textAlign = 'center';
       ctx.fillStyle = color;
-      if (rising) {
-        ctx.globalAlpha = 0.8 + 0.2 * Math.abs(Math.sin(this._time * 6));
-      }
       ctx.fillText(text, colCx, oddsY);
-      ctx.globalAlpha = 1;
 
       // Label row — 9px, ▶ on selected, ·n magazine count on NET.
       let label = this._oddsColLabel(kind);
@@ -1158,11 +1158,15 @@ export class DockingReticle {
     const statusY = top + 14 + 14 + 8;
     ctx.font = `bold 11px ${FONT}`;
     if (phase) {
-      // CAPTURED is a brief, celebratory pulse before the arm hands off to the
-      // tension-bar (GRAPPLED) view; everything else reads steady.
+      // CAPTURED gets a single calm celebration breathe (one 0.5 Hz cycle,
+      // then steady) before the arm hands off to the tension-bar (GRAPPLED)
+      // view; everything else reads steady.
       const S = Constants.CAPTURE_NET.STATES;
       if (net.state === S.CAPTURED) {
-        ctx.globalAlpha = 0.7 + 0.3 * Math.abs(Math.sin(this._time * 6));
+        if (this._capturedSince == null) this._capturedSince = this._time;
+        ctx.globalAlpha = finitePulse(this._time - this._capturedSince, { cycles: 1 });
+      } else {
+        this._capturedSince = null;
       }
       ctx.fillStyle = phase.color;
       ctx.fillText(phase.label, cx, statusY);
@@ -1208,20 +1212,16 @@ export class DockingReticle {
     const frac = Math.max(0, Math.min(1, (arm.tetherTension || 0) / breakN));
     const warnFrac = Constants.REEL_TENSION_WARNING ?? 0.7;
     const critFrac = Constants.REEL_TENSION_CRITICAL ?? 0.9;
-    const critical = frac >= critFrac;
 
     // Track + fill (solid colour tiers — avoids gradient API in headless tests).
     ctx.fillStyle = 'rgba(0, 255, 170, 0.12)';
     ctx.fillRect(barX, barY, barW, barH);
-    let fillCol = frac < warnFrac ? '#00ffaa' : frac < critFrac ? '#ffd166' : '#ff4444';
-    if (critical) {
-      // Pulse red near snap.
-      ctx.globalAlpha = 0.6 + 0.4 * Math.abs(Math.sin(this._time * 8));
-      fillCol = '#ff4444';
-    }
+    // Calm-HUD: steady fill at every tier, including critical — the red tier
+    // colour plus the SNAP tick and the (separate, event-driven) tension audio
+    // carry the urgency; the old ~2.5 Hz |sin| strobe just agitated.
+    const fillCol = frac < warnFrac ? '#00ffaa' : frac < critFrac ? '#ffd166' : '#ff4444';
     ctx.fillStyle = fillCol;
     ctx.fillRect(barX, barY, barW * frac, barH);
-    ctx.globalAlpha = 1;
 
     // SNAP tick (tether axis only — RIP lives on the strain bar below).
     ctx.strokeStyle = '#ff4444';

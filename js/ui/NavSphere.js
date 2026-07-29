@@ -13,6 +13,7 @@ import { Events } from '../core/Events.js';
 import { GameStates } from '../core/GameState.js';
 import { orbitToSceneCartesian } from '../entities/OrbitalMechanics.js';
 import { gmstDeg } from '../scene/Ephemeris.js';
+import { prefersReducedMotion } from './hudPulse.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -629,9 +630,10 @@ export class NavSphere {
         ctx.font = 'bold 10px "Courier New", monospace';
         ctx.fillStyle = '#ffcc00';
         ctx.textAlign = 'center';
-        ctx.globalAlpha = 0.6 + 0.4 * Math.sin(this._time * 4); // pulse
-        ctx.fillText('⚠ HIGH RECOIL', cx, warnY);
+        // Calm-HUD: steady amber — a standing state, not an event; the ⚠ glyph
+        // and amber already carry the warning (was a 0.64 Hz infinite blink).
         ctx.globalAlpha = 1;
+        ctx.fillText('⚠ HIGH RECOIL', cx, warnY);
       }
     }
 
@@ -907,34 +909,32 @@ export class NavSphere {
     const drawSize = sel ? finalSize + 2.5 : finalSize;
     this._drawContactShape(ctx, sx, sy, target.type, drawSize, dotColor, alpha);
 
-    // Lock-on ring: pulsing double-circle (ST-5.4), colour swapped by MOID badge (ST-6.3)
+    // Lock-on ring: steady double-circle (ST-5.4), colour swapped by MOID badge (ST-6.3)
     if (sel) {
       const NS2 = Constants.NAVSPHERE;
-      const pulseT = Math.sin(this._time * NS2.LOCK_ON_PULSE_RATE * 2 * Math.PI);
 
-      // ST-6.3: MOID badge colour override — HI = pulse red, MD = steady yellow, LO/null = default cyan
+      // ST-6.3: MOID badge colour override — HI = red, MD = yellow, LO/null = cyan.
+      // Calm-HUD: ring is steady for every badge — selection is a standing state
+      // and the colour already differentiates threat level (HI previously pulsed
+      // at 2 Hz; MD was already steady).
       let ringColor = C.selected;
-      let doPulse = true;
       const moidBadge = target.moidBadge || null;
       if (moidBadge === 'HI') {
         ringColor = Constants.CONJUNCTION.BADGE_COLOR_HI;
-        doPulse = true;  // pulse for HI
       } else if (moidBadge === 'MD') {
         ringColor = Constants.CONJUNCTION.BADGE_COLOR_MD;
-        doPulse = false; // steady for MD
       }
-      // LO or null → keep default cyan, keep pulse
 
-      const pulseAlpha = doPulse ? (0.5 + 0.4 * pulseT) : 0.8;
+      const ringAlpha = 0.8;
       ctx.strokeStyle = ringColor;
       ctx.lineWidth = 1.5;
       // Outer ring (1.5× dot size)
-      ctx.globalAlpha = alpha * pulseAlpha;
+      ctx.globalAlpha = alpha * ringAlpha;
       ctx.beginPath();
       ctx.arc(sx, sy, finalSize * NS2.LOCK_ON_OUTER_RADIUS_MULT, 0, Math.PI * 2);
       ctx.stroke();
       // Inner ring (1.1× dot size)
-      ctx.globalAlpha = alpha * pulseAlpha * 0.7;
+      ctx.globalAlpha = alpha * ringAlpha * 0.7;
       ctx.beginPath();
       ctx.arc(sx, sy, finalSize * NS2.LOCK_ON_INNER_RADIUS_MULT, 0, Math.PI * 2);
       ctx.stroke();
@@ -1109,8 +1109,10 @@ export class NavSphere {
       }
     }
 
-    // Pulse effect for active arm types (subtle alpha oscillation)
-    const pulse = 0.5 + 0.5 * Math.sin(this._time * 2);
+    // Pulse effect for active arm types (subtle alpha oscillation).
+    // Calm-HUD: 0.32 Hz / small amplitude — reviewed and kept; frozen under
+    // prefers-reduced-motion (the CSS media block can't reach canvas writes).
+    const pulse = prefersReducedMotion() ? 0.5 : 0.5 + 0.5 * Math.sin(this._time * 2);
 
     // ---- Zone fills (E6) — drawn BEFORE ring strokes ----
     ctx.globalAlpha = 1;
@@ -1254,10 +1256,12 @@ export class NavSphere {
       // Project arm position using distance-encoded sphere projection
       const { sx: px, sy: py, z, distKm } = this._toSphereWithDistance(this._tmpDir, cx, cy, R);
 
-      // Detached arms: pulsing red triangle (no tether line)
+      // Detached arms: steady red triangle (no tether line).
+      // Calm-HUD: a detached arm is a standing hazard, not an event — the red
+      // triangle glyph already reads "untethered / warning" (was a ~0.95 Hz
+      // infinite pulse).
       if (arm.isDetached) {
-        const pulse = 0.5 + 0.5 * Math.sin(this._time * 6); // fast pulse
-        ctx.globalAlpha = 0.6 + 0.4 * pulse;
+        ctx.globalAlpha = 0.9;
 
         // Draw triangle instead of circle (indicates untethered / warning)
         ctx.fillStyle = '#ff4444';
@@ -1268,10 +1272,10 @@ export class NavSphere {
         ctx.closePath();
         ctx.fill();
 
-        // Pulsing red outline ring
+        // Red outline ring
         ctx.strokeStyle = '#ff4444';
         ctx.lineWidth = 1;
-        ctx.globalAlpha = 0.3 + 0.4 * pulse;
+        ctx.globalAlpha = 0.6;
         ctx.beginPath();
         ctx.arc(px, py, 7, 0, Math.PI * 2);
         ctx.stroke();
@@ -1289,7 +1293,9 @@ export class NavSphere {
 
       // Choose color by arm type
       const color = arm.type === 'weaver' ? '#00ccff' : '#00ff88';
-      const alphaBase = 0.5 + 0.2 * Math.sin(this._time * 3); // subtle pulse
+      // Calm-HUD: steady tether line — presence + colour already encode the
+      // arm; the old 0.48 Hz alpha oscillation was a standing-state pulse.
+      const alphaBase = 0.6;
 
       // Draw tether line from center to arm position
       ctx.strokeStyle = color;

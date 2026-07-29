@@ -1060,9 +1060,10 @@ export class StatusPanel {
       } else if (armed) {
         statusEl.textContent = 'ARMED';
         statusEl.style.color = '#ff44ff';
-        // Pulsing effect
-        const pulse = Math.sin(Date.now() * 0.008) * 0.3 + 0.7;
-        statusEl.style.opacity = pulse;
+        // Calm-HUD: steady — the magenta ARMED label already carries the state
+        // (the old per-frame opacity strobe was the same class of infinite DOM
+        // blink the Phase 1 pass removed from the CSS layer).
+        statusEl.style.opacity = 1;
       } else {
         statusEl.textContent = 'STANDBY';
         statusEl.style.color = '#888';
