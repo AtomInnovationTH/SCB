@@ -14,7 +14,7 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { GameStates } from '../core/GameState.js';
 import { orbitToSceneCartesian, orbitToSceneCartesianInto, keplerianToCartesian, orbitToKm } from '../entities/OrbitalMechanics.js';
-import { calmBreathe, prefersReducedMotion } from './hudPulse.js';
+import { calmBreathe, finitePulse, prefersReducedMotion } from './hudPulse.js';
 
 // ============================================================================
 // CONFIGURATION
@@ -28,6 +28,7 @@ const RETICLE_MIN_SIZE = 12;          // px minimum bracket size
 const RETICLE_MAX_SIZE = 60;          // px maximum bracket size
 const SELECTED_RETICLE_SCALE = 1.6;   // Selected target is bigger
 const CALLOUT_DURATION = 8;          // seconds for first-encounter callout labels
+const AP_BADGE_TOP_PX = 92;          // fixed y of the autopilot-engaged chip
 
 /** Color scheme */
 const COLORS = {
@@ -115,6 +116,7 @@ export class TargetReticle {
     this._apEngaged = false;
     this._apMode = '';
     this._apTargetName = '';
+    this._apEngagedSince = null;      // Calm-HUD: drives the one-shot engage dip
     this._selectedScreenPos = null;   // { x, y } screen coords of selected target
 
     // Listen for target events to trigger lock ceremonies.
@@ -225,9 +227,13 @@ export class TargetReticle {
       this._apEngaged = true;
       this._apMode = data.mode || '';
       this._apTargetName = data.targetName || data.mode || '';
+      // Calm-HUD: engagement is an EVENT — timestamp it so the badge gets one
+      // finite acknowledgement dip, then reads steady.
+      this._apEngagedSince = null;
     });
     eventBus.on(Events.AUTOPILOT_DISENGAGE, () => {
       this._apEngaged = false;
+      this._apEngagedSince = null;
     });
 
     // View-config flags (set by CameraSystem progressive info levels)
@@ -558,6 +564,11 @@ export class TargetReticle {
 
     // Phase 6: Restore shake transform
     if (doShake) this.ctx.restore();
+
+    // Calm-HUD: autopilot-engaged badge — drawn from the top level, AFTER the
+    // shake restore (a mode readout should not shake) and outside the
+    // MANUAL_NAV gate above, so it is actually reachable in normal play.
+    if (this._apEngaged) this._drawApBadge();
 
     // Phase 6: Draw lasso cooldown arc (on top, no shake).
     // 2026-05-15 polish task 4: the cooldown arc's "Ready" state is a
@@ -976,6 +987,56 @@ export class TargetReticle {
   }
 
   /**
+   * Draw the autopilot-engaged badge at a FIXED screen position.
+   *
+   * Deliberately independent of the prograde marker. That marker lives behind
+   * `FEATURE_FLAGS.MANUAL_NAV` (false by default) *and* an `if (proProj.visible)`
+   * check, so the AP indicator that used to be nested inside it never rendered
+   * in normal play — a mode as consequential as "the autopilot is flying my
+   * ship" must not inherit a nav aid's visibility.
+   *
+   * Calm-HUD: salience comes from WEIGHT, not motion — a bordered, amber-tinted
+   * chip with a static glow, at a stable position so it is learnable. The only
+   * motion is a single finite dip when AP engages (an event); then dead steady.
+   * @private
+   */
+  _drawApBadge() {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    if (this._apEngagedSince == null) this._apEngagedSince = this._time;
+
+    const label = `\u25C9 AP \u2192 ${this._apTargetName}`;
+    ctx.save();
+    ctx.font = 'bold 12px "Courier New", monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    // measureText is absent from the headless canvas mock — fall back to a
+    // monospace advance estimate so draw code stays test-safe.
+    const textW = typeof ctx.measureText === 'function'
+      ? ctx.measureText(label).width
+      : label.length * 7.2;
+    const padX = 8;
+    const chipW = textW + padX * 2;
+    const chipH = 19;
+    const cx = (this._width || 1280) / 2;
+    const chipY = AP_BADGE_TOP_PX;
+    const chipX = cx - chipW / 2;
+
+    ctx.globalAlpha = finitePulse(this._time - this._apEngagedSince, { cycles: 1 });
+    ctx.fillStyle = 'rgba(255, 170, 0, 0.16)';
+    ctx.fillRect(chipX, chipY, chipW, chipH);
+    ctx.strokeStyle = COLORS.yellow;
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(chipX, chipY, chipW, chipH);
+    ctx.fillStyle = COLORS.yellow;
+    ctx.shadowColor = COLORS.yellow;
+    ctx.shadowBlur = 6;
+    ctx.fillText(label, cx, chipY + chipH / 2);
+    ctx.shadowBlur = 0;
+    ctx.restore();
+  }
+
+  /**
    * Draw off-screen directional arrow.
    * @private
    */
@@ -1275,16 +1336,10 @@ export class TargetReticle {
       }
     }
 
-    // Phase 7: Autopilot engaged indicator — steady amber text above prograde
+    // Phase 7: Autopilot heading aid — dashed amber line from prograde to the
+    // selected target. Stays here because it needs the prograde screen position.
+    // NOTE: the AP *badge* is deliberately NOT drawn here — see _drawApBadge.
     if (this._apEngaged) {
-      // Calm-HUD: steady — ◉ glyph + amber carry the standing state (was a
-      // full-range 0.5 Hz alpha oscillation).
-      ctx.globalAlpha = 1;
-      ctx.font = 'bold 11px "Courier New", monospace';
-      ctx.fillStyle = COLORS.yellow;
-      ctx.textAlign = 'center';
-      ctx.fillText(`◉ AP → ${this._apTargetName}`, x, y - 28);
-
       // Dashed amber heading line from prograde to selected target
       if (this._selectedScreenPos) {
         const tx = this._selectedScreenPos.x;
