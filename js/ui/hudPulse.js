@@ -35,16 +35,26 @@ let _reducedMotionCache = null;
 export function prefersReducedMotion() {
   if (_reducedMotionCache !== null) return _reducedMotionCache;
   try {
-    _reducedMotionCache = !!(typeof window !== 'undefined' &&
-      typeof window.matchMedia === 'function' &&
-      window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+      const mql = window.matchMedia('(prefers-reduced-motion: reduce)');
+      _reducedMotionCache = !!mql.matches;
+      // Live invalidation: the rest of the codebase (main.js, CameraSystem,
+      // MenuScreen) re-queries matchMedia on every call, so respond to a
+      // mid-session OS toggle too. One-shot listener: after it fires, the
+      // next read re-queries and re-registers on a fresh MQL.
+      if (typeof mql.addEventListener === 'function') {
+        mql.addEventListener('change', _resetReducedMotionCache, { once: true });
+      }
+    } else {
+      _reducedMotionCache = false;
+    }
   } catch (_) {
     _reducedMotionCache = false;
   }
   return _reducedMotionCache;
 }
 
-/** Test hook: clear the cached media-query result. */
+/** Clear the cached media-query result (media-query change listener + test hook). */
 export function _resetReducedMotionCache() {
   _reducedMotionCache = null;
 }

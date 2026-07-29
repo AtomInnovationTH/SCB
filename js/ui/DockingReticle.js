@@ -674,7 +674,13 @@ export class DockingReticle {
     const inSK = state === 'STATION_KEEP';
     // Net guidance is only meaningful before the net is committed. Once the
     // arm leaves the pre-capture deployable states, suppress the line entirely.
-    if (!inSK && !PRE_CAPTURE_STATES.has(state)) return;
+    // Also re-arm the arrival cue: exiting the deployable states (net fired /
+    // arm busy) ends the readiness window, so the next ready window gets a
+    // fresh cue instead of the settled tail of the previous one.
+    if (!inSK && !PRE_CAPTURE_STATES.has(state)) {
+      this._netReadySince = null;
+      return;
+    }
 
     const ready = this.isNetReady();
 
