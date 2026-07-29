@@ -69,48 +69,53 @@ export function _resetReducedMotionCache() {
  * @param {object} [opts]
  * @param {number} [opts.hz=0.2865] — breathe frequency (clamped to ceiling);
  *   default matches the reference "▸ N" nudge exactly (sin(t·1.8) rad/s)
- * @param {number} [opts.base=0.9] — steady-state alpha the cue settles to
+ * @param {number} [opts.base=0.84] — steady-state alpha the cue settles to.
+ *   Keep base + amp0 ≤ 1: canvas IGNORES an out-of-range globalAlpha (it keeps
+ *   the previous value), so a peak above 1 would silently flatten the breath.
  * @param {number} [opts.amp0=0.16] — initial amplitude (±)
  * @param {number} [opts.ampMin=0.05] — settled amplitude (±)
  * @param {number} [opts.decayPerSec=0.018] — linear amplitude decay rate
  * @param {number} [opts.fadeInS=0.8] — fade-in duration
- * @returns {number} alpha multiplier in (0, 1]
+ * @returns {number} alpha multiplier in [0, 1]
  */
 export function calmBreathe(time, shownFor, opts = {}) {
   if (prefersReducedMotion()) return 1;
   const ceiling = (Constants.HUD && Constants.HUD.MAX_ALERT_PULSE_HZ) || 0.5;
   const hz = Math.min(opts.hz ?? (1.8 / (2 * Math.PI)), ceiling);
-  const base = opts.base ?? 0.9;
+  const base = opts.base ?? 0.84;
   const amp0 = opts.amp0 ?? 0.16;
   const ampMin = opts.ampMin ?? 0.05;
   const decayPerSec = opts.decayPerSec ?? 0.018;
   const fadeInS = opts.fadeInS ?? 0.8;
-  const fadeIn = Math.min(1, shownFor / fadeInS);
+  const fadeIn = Math.min(1, Math.max(0, shownFor) / fadeInS);
   const amp = Math.max(ampMin, amp0 - decayPerSec * shownFor);
-  return fadeIn * (base + amp * Math.sin(time * hz * 2 * Math.PI));
+  const a = fadeIn * (base + amp * Math.sin(time * hz * 2 * Math.PI));
+  // Clamp: an out-of-range globalAlpha is silently ignored by canvas, which
+  // would leak the previous alpha instead of drawing at the intended value.
+  return Math.max(0, Math.min(1, a));
 }
 
 /**
- * Finite event pulse: `cycles` full oscillations at `hz` starting at
- * `elapsed = 0`, then settles to 1. For events (lock-on, capture), never for
- * standing states. Rate is clamped to Constants.HUD.MAX_ALERT_PULSE_HZ.
+ * Finite event flourish: a single smooth dip that STARTS and ENDS at full
+ * alpha, then settles to 1. For events (capture, lock-on), never for standing
+ * states. Starting and ending at 1 matters — an oscillation around a dim base
+ * makes the element appear faded and then pop to full when the window expires.
+ * Rate is clamped to Constants.HUD.MAX_ALERT_PULSE_HZ.
  *
  * @param {number} elapsed — seconds since the event started
  * @param {object} [opts]
  * @param {number} [opts.hz=0.5] — pulse frequency (clamped to ceiling)
- * @param {number} [opts.cycles=2] — number of full oscillations before settling
- * @param {number} [opts.base=0.7] — oscillation centre
- * @param {number} [opts.amp=0.3] — oscillation amplitude (±)
- * @returns {number} alpha multiplier in (0, 1]
+ * @param {number} [opts.cycles=2] — oscillations' worth of duration (cycles/hz)
+ * @param {number} [opts.depth=0.3] — how far the dip descends below 1
+ * @returns {number} alpha multiplier in [0, 1]
  */
 export function finitePulse(elapsed, opts = {}) {
   if (prefersReducedMotion()) return 1;
   const ceiling = (Constants.HUD && Constants.HUD.MAX_ALERT_PULSE_HZ) || 0.5;
   const hz = Math.min(opts.hz ?? 0.5, ceiling);
-  const cycles = opts.cycles ?? 2;
-  const base = opts.base ?? 0.7;
-  const amp = opts.amp ?? 0.3;
-  const duration = cycles / hz;
-  if (elapsed >= duration) return 1;
-  return base + amp * Math.sin(elapsed * hz * 2 * Math.PI);
+  const duration = (opts.cycles ?? 2) / hz;
+  const depth = opts.depth ?? 0.3;
+  if (!(elapsed > 0) || elapsed >= duration) return 1;
+  const a = 1 - depth * Math.sin(Math.PI * elapsed / duration);
+  return Math.max(0, Math.min(1, a));
 }
