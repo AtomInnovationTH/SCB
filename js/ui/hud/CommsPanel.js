@@ -324,8 +324,10 @@ export class CommsPanel {
   update(dt) {
     if (this._commsFlashTimer > 0) {
       this._commsFlashTimer -= dt;
-      const flash = Math.sin(Date.now() * 0.01) > 0;
-      this.panels.comms.style.borderColor = flash ? 'rgba(255,68,68,0.7)' : 'rgba(255,68,68,0.3)';
+      // Calm-HUD: hold a steady red border for the critical window — the red
+      // already carries severity; the old 1.59 Hz square-wave strobe was the
+      // live JS twin of the .comms-flash class removed in the Phase 1 pass.
+      this.panels.comms.style.borderColor = 'rgba(255,68,68,0.7)';
       if (this._commsFlashTimer <= 0) {
         const step = this._chrome ? this._chrome.step : 'normal';
         this.panels.comms.style.borderColor = (step === 'large')

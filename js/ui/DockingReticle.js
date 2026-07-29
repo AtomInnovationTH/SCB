@@ -71,6 +71,9 @@ export class DockingReticle {
     this._arm = null;
     this._target = null;
     this._time = 0;
+    // Calm-HUD: timestamp when net readiness last arrived, driving the
+    // decaying-breathe arrival cue in _drawNetStatus (null = not ready).
+    this._netReadySince = null;
 
     // Computed metrics
     this._range = 0;
@@ -671,21 +674,35 @@ export class DockingReticle {
 
     const ready = this.isNetReady();
 
+    // Calm-HUD: track readiness transitions so the prompt gets a single calm
+    // arrival cue (decaying breathe that settles to steady) instead of the old
+    // infinite 0.64 Hz blink. Colour/glyph carry the standing state.
+    if (ready) {
+      if (this._netReadySince == null) this._netReadySince = this._time;
+    } else {
+      this._netReadySince = null;
+    }
+    // Arrival cue: 0.8 s fade-in, ~0.29 Hz breathe, amplitude eases ±0.16 →
+    // ±0.05 over ~6 s then settles near-steady (TargetReticle.js "▸ N" shape).
+    const shownFor = this._netReadySince == null ? 0 : this._time - this._netReadySince;
+    const fadeIn = Math.min(1, shownFor / 0.8);
+    const amp = Math.max(0.05, 0.16 - 0.018 * shownFor);
+    const readyAlpha = this._netReadySince == null
+      ? 1
+      : fadeIn * (0.9 + amp * Math.sin(this._time * 1.8));
+
     if (inSK) {
       const tool = (this._arm.selectedTool || 'NET').toUpperCase();
-      const pulse = 0.6 + Math.sin(this._time * 4) * 0.4;
       ctx.font = `bold 13px ${FONT}`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillStyle = ready ? `rgba(0, 255, 136, ${pulse})` : C.gray;
+      ctx.fillStyle = ready ? `rgba(0, 255, 136, ${readyAlpha})` : C.gray;
       ctx.fillText(`\u25CF [N] ${tool} \u00B7 [\`] cycle \u00B7 [R] reel \u00B7 [Esc] recall`, cx, y);
     } else if (ready) {
-      // Pulsing green when in capture range
-      const pulse = 0.6 + Math.sin(this._time * 4) * 0.4;
       ctx.font = `bold 14px ${FONT}`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillStyle = `rgba(0, 255, 136, ${pulse})`;
+      ctx.fillStyle = `rgba(0, 255, 136, ${readyAlpha})`;
       ctx.shadowColor = C.primary;
       ctx.shadowBlur = 10;
       ctx.fillText('\u25CF NET READY: [N] launch', cx, y);
