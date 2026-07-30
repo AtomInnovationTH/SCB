@@ -334,6 +334,14 @@ export class CameraSystem {
     this._radialDir = new THREE.Vector3(); // P3: per-frame radial-up (same reuse
                                            // pattern as _lastVelDir above)
 
+    // Cached LVLH basis for the current frame — write-only on the render path,
+    // read only by the pure solveOrbitAnglesForDirection() helper (the ?shot=1
+    // sky-pose hook). Dedicated vectors, NOT _tmpVecA/B/C: those are live
+    // scratch in _computeOrbit and are reused elsewhere within the same frame.
+    this._lvlhRadial = new THREE.Vector3();
+    this._lvlhLateral = new THREE.Vector3();
+    this._lvlhForward = new THREE.Vector3();
+
     // V-7: Launch ceremony state
     this._launchCeremony = {
       active: false,
@@ -674,6 +682,18 @@ export class CameraSystem {
     const velDir = this._lastVelDir;
     const radialDir = this._radialDir.copy(playerPos).normalize();
     this._lastPlayerPos.copy(playerPos); // Cache for setView()
+
+    // Cache the frame's LVLH basis for solveOrbitAnglesForDirection(). Done
+    // here in update(), not in _computeOrbit, so the basis exists before the
+    // first ORBIT frame and regardless of which view is active. Write-only on
+    // the render path — nothing reads these except the pure solver.
+    // KEEP IN SYNC: this same lateral/forward derivation lives in the view
+    // computations (_computeFirstPerson ×2, _computeOrbit, _computeInspection).
+    // solveOrbitAnglesForDirection() assumes the cache matches the ORBIT
+    // view's basis bit-for-bit; edit one site, edit them all.
+    this._lvlhRadial.copy(radialDir);
+    this._lvlhLateral.crossVectors(velDir, radialDir).normalize();
+    this._lvlhForward.crossVectors(radialDir, this._lvlhLateral).normalize();
 
     // V-7: Launch ceremony override — bypass normal view computation
     if (this._launchCeremony.active) {
@@ -1113,6 +1133,35 @@ export class CameraSystem {
     }
 
     return { pos, look };
+  }
+
+  /**
+   * Solve the ORBIT angles (theta, phi) that centre a given world-space sky
+   * direction in the camera's view. Pure — touches no state.
+   *
+   * The orbit camera sits at `playerPos + offset` looking at `playerPos`, so
+   * its forward is `-offset̂`. To centre a sky direction `d` you therefore need
+   * `offset̂ = -d`. In the LVLH frame (radial = up pole, lateral = right,
+   * forward = ahead) that gives:
+   *   phi   = acos(-d · radial)            — angle from the radial pole
+   *   theta = atan2(-d · lateral, -d · forward)
+   *
+   * The caller must respect _computeOrbit's gimbal clamp phi ∈ [0.1, π-0.1]:
+   * a target within ~5.7° of the ±radial axis will be off-centre by the clamp,
+   * which is harmless for framing a wide figure.
+   *
+   * @param {THREE.Vector3} dir — unit world-space sky direction to centre
+   * @returns {{ theta: number, phi: number }}
+   */
+  solveOrbitAnglesForDirection(dir) {
+    const nx = -dir.x, ny = -dir.y, nz = -dir.z;
+    const r = this._lvlhRadial, l = this._lvlhLateral, f = this._lvlhForward;
+    const dRadial = nx * r.x + ny * r.y + nz * r.z;
+    const dLateral = nx * l.x + ny * l.y + nz * l.z;
+    const dForward = nx * f.x + ny * f.y + nz * f.z;
+    const phi = Math.acos(Math.max(-1, Math.min(1, dRadial)));
+    const theta = Math.atan2(dLateral, dForward);
+    return { theta, phi };
   }
 
   /**

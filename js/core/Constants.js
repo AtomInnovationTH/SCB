@@ -326,6 +326,77 @@ export const Constants = {
   CONSTELLATION_LIMB_FADE_SCALE: 0.35,
   CONSTELLATION_LIMB_FADE_MIN: 0.035,   // ~2°
   CONSTELLATION_LIMB_FADE_MAX: 0.35,    // ~20°
+  // Gap trimmed off each end of a constellation line segment so it stops short
+  // of the star core instead of ending on top of it (a normal-blended line over
+  // an additive star dims the core). 2.5 units at radius 400 ≈ 0.36° ≈ 6 px —
+  // comfortably clear of a ~4.5 px star without reading as a broken figure.
+  // The per-segment trim is clamped to 25% of the segment length so the short
+  // Shaula–Lesath arm (~2.9 units) is not inverted.
+  CONSTELLATION_LINE_GAP: 2.5,
+
+  // --- Named bright stars at the constellation vertices (Starfield._create) ---
+  // The 49 catalogue stars are written into indices 0..48 of the main star
+  // Points. Size carries the magnitude range (stars are capped at 2.0 to stay
+  // under the bloom threshold, so brightness alone cannot separate mag 0.1
+  // from mag 3.5 under ACES); brightness carries the truth. Both are monotone
+  // in magnitude so nothing out-sizes or out-shines something genuinely
+  // brighter. These are tuned from captures — keep them reachable here.
+  STAR_MAG_SIZE_BASE: 4.6,    // size attribute at mag 0 (Rigel ≈ 4.5 → ~6.75 px quad)
+  STAR_MAG_SIZE_SLOPE: 0.75,  // size attribute lost per magnitude
+  STAR_MAG_SIZE_MIN: 1.3,     // floor so the faintest catalogue star (Eta Leo 3.49) stays visible.
+                              // MUST stay strictly above STAR_FIELD_SIZE_FLOOR — the
+                              // catalogue-out-sizes-field hierarchy is guarded by a test.
+  STAR_MAG_BRIGHT_MIN: 0.45,  // knee, NOT a hard floor — pow(10,-0.4(mag-1)) drops below
+                              // 0.45 for mag > ~1.87 (32 of the 49 catalogue stars), and
+                              // a hard clamp there would flatten all of them to identical
+                              // brightness. Below the knee the soft-floor curve (see
+                              // STAR_MAG_BRIGHT_FLOOR_SOFT) keeps strict magnitude ordering
+                              // while holding the faint end above the random field instead
+                              // of crushing to invisible under ACES.
+  STAR_MAG_BRIGHT_FLOOR_SOFT: 0.85, // sub-knee asymptote ratio: brightness never drops
+                              // below MIN×0.85 = 0.3825 no matter how faint the raw value.
+                              // MUST stay strictly above STAR_FIELD_BRIGHT (0.32) with a
+                              // real margin — the faintest named star must out-peak every
+                              // field star — and the test suite asserts this.
+  STAR_MAG_BRIGHT_MAX: 2.0,   // ceiling — COUPLED to the 2.5 bloom threshold
+                              // (SceneManager.js): peak fragment value is 1.0 × 2.0 ×
+                              // uOpacity 0.95 = 1.9. Do NOT raise past 2.0 without reading
+                              // that threshold — stars must not bloom (bloom is reserved
+                              // for the Sun and Venus).
+
+  // --- Faint random field (Starfield._create, indices 49..STAR_COUNT) ---
+  // The ~10k procedural stars are the FAINT TAIL of the same magnitude→size
+  // curve the catalogue stars use — the two populations sit on one curve and
+  // only the faint, unrecognizable end is invented (decorative, per doctrine B).
+  // Counts rise toward the faint end (log N ∝ 0.6·m, the real sky's roughly
+  // exponential star-count law), so most field stars are near-invisible and the
+  // few brighter ones read as a natural tail, not a uniform speckle.
+  STAR_FIELD_MAG_MIN: 4.4,    // brightest random star — MUST stay strictly under the
+                              // faintest catalogue star (Eta Leo 3.49 → attribute 1.98)
+                              // so Stage 1's hierarchy survives. 4.4 → attribute 1.3.
+  STAR_FIELD_MAG_MAX: 7.0,    // faintest random star (~naked-eye limit)
+  // Field brightness is a CONSTANT, not the magnitude curve — deliberately.
+  // pow(10, -0.4*(mag-1)) yields 0.044 at mag 4.4 down to 0.004 at mag 7.0, so
+  // every field star is far below any floor that would keep it visible: the
+  // curve cannot carry brightness information across the field's range at all.
+  // Size (via the 1.2 px floor) and aAlpha carry the magnitude instead — the
+  // same division of labour the catalogue stars use.
+  // MUST stay strictly below the soft-floor asymptote STAR_MAG_BRIGHT_MIN ×
+  // STAR_MAG_BRIGHT_FLOOR_SOFT (0.3825), which is the peak of the FAINTEST
+  // catalogue star (Eta Leo). A field star at or above it ties the named stars
+  // in peak luminance and breaks Stage 1's hierarchy.
+  STAR_FIELD_BRIGHT: 0.32,
+  STAR_FIELD_SIZE_FLOOR: 1.2, // px — size never drops below this; below the floor the
+                              // per-star aAlpha carries the remaining faintness. This is
+                              // the standard cure for sub-pixel crawl (a 0.5 px speck at
+                              // full brightness shimmers as it crosses texel centres).
+                              // MUST stay strictly below STAR_MAG_SIZE_MIN (1.3) — guarded
+                              // by a test; the catalogue-out-sizes-field hierarchy depends
+                              // on it (today it holds only implicitly, via MAG_MIN 4.4
+                              // landing exactly at attribute 1.3).
+  STAR_FIELD_ALPHA_MIN: 0.15, // aAlpha at MAG_MAX — the faintest stars are barely-there
+                              // but not zero (zero would drop them from the draw entirely
+                              // and leave a hard magnitude cutout).
 
   // =========================================================================
   // V3 OCTOPUS ADR SATELLITE (from V3 Octopus.md Appendix F)

@@ -17,7 +17,8 @@ import { runtimeAdapt, TIER_ORDER } from './systems/QualityManager.js';
 
 import { SceneManager } from './scene/SceneManager.js';
 import { Earth } from './scene/Earth.js';
-import { Starfield } from './scene/Starfield.js';
+import { Starfield, raDec2xyz } from './scene/Starfield.js';
+import { BRIGHT_STARS, CONSTELLATION_FIGURES } from './scene/starCatalog.js';
 import { SunLight } from './scene/SunLight.js';
 import { launchCinematic } from './scene/LaunchCinematic.js';
 import { tierVisualManager } from './scene/TierVisualManager.js';
@@ -1541,6 +1542,93 @@ async function init() {
         cameraSystem.setView('INSPECTION');
         cameraSystem.inspection.distance = distM * 1e-5;
         return { view: cameraSystem.currentView, distM };
+      };
+
+      // ── Sky-pose hook (Stage 1 sky realism) ──
+      //   window.__scbSkyPose(target, distM)
+      //     → ORBIT view centred on a fixed patch of sky. `target` is either
+      //       { ra, dec } (RA hours, Dec degrees) or a figure name like
+      //       'CYGNUS' — the name path averages that figure's star directions
+      //       and normalizes, which is exactly what "frame the whole figure"
+      //       needs. Unlike __scbInspect's raw theta/phi (interpreted in the
+      //       ship's rotating LVLH frame), this points at a fixed patch of sky
+      //       regardless of where the ship is in its orbit — the acceptance
+      //       criteria need that reproducibility.
+      //     Returns the solved { theta, phi } plus an `occluded` flag — true
+      //     when the target's angle to the Earth-centre direction is inside the
+      //     limb angle (a figure genuinely behind Earth is physics, not a
+      //     tooling failure, and the flag stops that being debugged as one).
+      window.__scbSkyPose = (target, distM = 60) => {
+        if (!cameraSystem) return 'no cameraSystem';
+        const R = Constants.STAR_SPHERE_RADIUS;
+        // Resolve the target to a unit world-space sky direction, reusing
+        // Starfield's raDec2xyz so the basis convention stays in one place.
+        let dir;
+        if (typeof target === 'string') {
+          const fig = CONSTELLATION_FIGURES.find((f) => f.name === target.toUpperCase());
+          if (!fig) return { error: `unknown figure "${target}"` };
+          dir = new THREE.Vector3();
+          for (const name of fig.stars) {
+            const s = BRIGHT_STARS[name];
+            dir.add(raDec2xyz(s.ra, s.dec, R));
+          }
+          dir.normalize();
+        } else if (target && typeof target.ra === 'number' && typeof target.dec === 'number') {
+          dir = raDec2xyz(target.ra, target.dec, R).normalize();
+        } else {
+          return { error: 'target must be { ra, dec } or a figure name' };
+        }
+
+        // Solve the orbit angles that centre `dir` and write them exactly as
+        // __scbInspect does. The basis must be current — update() caches it
+        // every frame, so by the time a capture harness can call this the
+        // first frame has already run.
+        const { theta, phi } = cameraSystem.solveOrbitAnglesForDirection(dir);
+        cameraSystem.setView('ORBIT');
+        const o = cameraSystem.orbit;
+        o.theta = theta;
+        o.phi = phi;
+        o.distance = distM * 1e-5;
+        o.velocityTheta = 0;
+        o.velocityPhi = 0;
+
+        // Occlusion: is the target inside the Earth limb as seen from the
+        // camera? Reuses _limbFadeFactor's geometry — factor 0 means fully
+        // inside the limb (hidden), 1 means clear.
+        let occluded = false;
+        const cam = cameraSystem.camera;
+        if (cam && starfield) {
+          const worldPos = dir.clone().multiplyScalar(R);
+          occluded = starfield._limbFadeFactor(worldPos, cam) === 0;
+        }
+        return { theta, phi, occluded };
+      };
+
+      // Renderer info snapshot for the sky perf baseline (doctrine A.4) —
+      // draw calls / points / triangles, read at HIGH and LOW so later sky
+      // stages have something to diff against.
+      window.__scbRendererInfo = () => {
+        if (!sceneManager || !sceneManager.renderer) return null;
+        const r = sceneManager.renderer.info.render;
+        return { calls: r.calls, points: r.points, triangles: r.triangles, lines: r.lines };
+      };
+      // Raw handle for the perf harness, which needs to control info.autoReset
+      // to get clean per-frame totals across the composer's multiple passes.
+      window.__scbSceneManager = () => sceneManager;
+
+      // Project a sky direction (ra hours, dec degrees) to canvas pixels, so a
+      // capture harness can aim a crop / measurement at an exact star without
+      // re-deriving the sky basis. Returns { x, y, behind } in CSS pixels.
+      window.__scbProject = (ra, dec) => {
+        const cam = cameraSystem && cameraSystem.camera;
+        if (!cam) return null;
+        const v = raDec2xyz(ra, dec, Constants.STAR_SPHERE_RADIUS).project(cam);
+        const cv = document.getElementById('game-canvas');
+        return {
+          x: (v.x * 0.5 + 0.5) * cv.width,
+          y: (-v.y * 0.5 + 0.5) * cv.height,
+          behind: v.z > 1,
+        };
       };
       // Debug handle for click-path / layout introspection (codex click debug).
       window.__callouts = motherCallouts;
