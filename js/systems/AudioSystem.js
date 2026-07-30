@@ -2053,6 +2053,123 @@ class AudioSystem {
     this.activeSources.delete('thruster');
   }
 
+  /**
+   * Sustained RCS attitude hiss — looping white noise through a 400 Hz bandpass
+   * (the same coldgas recipe as startThrusterHum's 'coldgas' branch), on its own
+   * 'rcsHiss' key so it never fights the ion hum. Driven at the real post-gate
+   * attitude-thrust level, so it is quiet while coasting at the rate cap and
+   * swells during the arrest burn. Kept under the ion hum (0.06 base gain).
+   * @param {number} [level=1.0] — 0..1 commanded attitude-thrust fraction.
+   */
+  startRcsHiss(level = 1.0) {
+    if (!this.available) return;
+    level = Math.max(0, Math.min(1, level));
+
+    // Already playing: just retarget the gain if the level moved.
+    if (this.activeSources.has('rcsHiss')) {
+      const existing = this.activeSources.get('rcsHiss');
+      const target = 0.06 * level;
+      if (Math.abs((existing._level ?? -1) - level) > 1e-3) {
+        existing.gain.gain.cancelScheduledValues(this.ctx.currentTime);
+        existing.gain.gain.setTargetAtTime(target, this.ctx.currentTime, 0.03);
+        existing._level = level;
+      }
+      return;
+    }
+    if (level <= 0) return;
+
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0, now);
+    const nodes = [];
+
+    // White noise buffer (2 seconds, looping) — the coldgas recipe.
+    const bufferSize = ctx.sampleRate * 2;
+    const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    const channelData = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+      channelData[i] = Math.random() * 2 - 1;
+    }
+
+    const noise = ctx.createBufferSource();
+    noise.buffer = buffer;
+    noise.loop = true;
+
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.value = 400;
+    filter.Q.value = 2;
+
+    noise.connect(filter);
+    filter.connect(gain);
+    noise.start(now);
+    nodes.push(noise);
+    nodes.push(filter);
+
+    gain.gain.linearRampToValueAtTime(0.06 * level, now + 0.05);
+
+    gain.connect(this.physicalBus);
+    this.activeSources.set('rcsHiss', { nodes, gain, type: 'coldgas', _level: level });
+  }
+
+  /**
+   * Stop the sustained RCS attitude hiss with a short fade-out.
+   */
+  stopRcsHiss() {
+    if (!this.activeSources.has('rcsHiss')) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+    const entry = this.activeSources.get('rcsHiss');
+
+    entry.gain.gain.cancelScheduledValues(now);
+    entry.gain.gain.setValueAtTime(entry.gain.gain.value, now);
+    entry.gain.gain.linearRampToValueAtTime(0, now + 0.08);
+
+    timerManager.setTimeout(() => {
+      entry.nodes.forEach((node) => {
+        try { node.stop(); } catch (_) { /* not a source node */ }
+        try { node.disconnect(); } catch (_) { /* already disconnected */ }
+      });
+      try { entry.gain.disconnect(); } catch (_) { /* already disconnected */ }
+    }, 100, { owner: this });
+
+    this.activeSources.delete('rcsHiss');
+  }
+
+  /**
+   * RCS ignition accent — a direct copy of playEvaPuff: highpassed noise, ~60 ms,
+   * gain ~0.045. Fired once per fresh couple ignition so the *attack* is instant
+   * even though the hull is slow to respond.
+   */
+  playRcsPuff() {
+    if (!this.available) return;
+    const ctx = this.ctx;
+    const now = ctx.currentTime;
+    const dur = 0.06;
+    const bufSize = Math.ceil(ctx.sampleRate * dur);
+    const buf = ctx.createBuffer(1, bufSize, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
+    const noise = ctx.createBufferSource();
+    noise.buffer = buf;
+    // Highpass ~3 kHz → thin, gassy hiss rather than a low thud.
+    const hp = ctx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.value = 3000;
+    hp.Q.value = 0.5;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.exponentialRampToValueAtTime(0.045, now + 0.008); // quiet, fast attack
+    g.gain.exponentialRampToValueAtTime(0.0008, now + dur);
+    noise.connect(hp);
+    hp.connect(g);
+    g.connect(this.physicalBus);
+    noise.start(now);
+    noise.stop(now + dur + 0.02);
+  }
+
   // ==========================================================================
   // PHASE R9 — 4-TIER ΔV ALARM SYSTEM
   // ==========================================================================

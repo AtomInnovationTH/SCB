@@ -355,12 +355,19 @@ export const Constants = {
   // path (old mass*0.25 MOI + kinematic slerp) with no rollback needed.
   ATTITUDE: {
     DYNAMICS_ENABLED: true,     // master switch; legacy kinematic path when false
-    NOZZLE_THRUST_N: 25.0,      // per-nozzle cold-gas thrust — the single feel dial (D1)
+    NOZZLE_THRUST_N: 40.0,      // per-nozzle cold-gas thrust — the single feel dial (D1).
+                                // 40 N chosen over raising MAX_RATE: higher thrust shortens the
+                                // burn, so overshoot improves (17.1° → 10.7°) instead of degrading
+                                // (17° → 24° at 0.9 rad/s), and spin-up tightens 1.01 s → 0.63 s.
     MAX_RATE: 0.6,              // rad/s angular-rate cap (D1: 34°/s)
-    HOLD_RECENTER_FRAC: 0.15,   // recenter torque as a fraction of τ_max
+    RECENTER_RATE: 0.1,         // rad/s (5.7°/s) — target return rate toward prograde
+    RECENTER_GAIN: 1.0,         // 1/s — ω_target = clamp(GAIN·θ, RECENTER_RATE)
     HOLD_DEADBAND_RAD: 0.035,   // ~2°, no recenter inside this
     INERTIA_MAX_FACTOR: 3.0,    // D6 berthed-mass clamp: total ≤ 3× stowed transverse
-    RCS_ATTITUDE_N2_FACTOR: 1.0, // D9: was 0.3 — ~1 kg (5% of tank) per committed turn
+    RCS_ATTITUDE_N2_FACTOR: 1.6, // D9: gas is billed as rate × time, so 40 N shortens the burn and
+                                // a 90° turn would cost only 1.57% of tank. 1.6 holds the intended
+                                // ~2.5%/turn (was 1.0 at 25 N → 2.50%; the old comment's "~5%" was
+                                // never measured — the real 25 N cost was 2.50%).
   },
 
   // FIX_PLAN §3: Tether-aware rotation limits (exponential spring-resistance model).

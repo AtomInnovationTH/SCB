@@ -47,6 +47,8 @@ export const soundVocabulary = {
   playMPDDisarm:       { family: 'PHYSICAL', meaning: 'MPD burst disarmed',        trigger: 'MPD burst end' },
   startForgeHum:       { family: 'PHYSICAL', meaning: 'forge hum',                 trigger: 'forge active' },
   startThrusterHum:    { family: 'PHYSICAL', meaning: 'thruster hum',              trigger: 'thrust active' },
+  startRcsHiss:        { family: 'PHYSICAL', meaning: 'RCS attitude hiss',         trigger: 'manual RCS couple firing' },
+  playRcsPuff:         { family: 'PHYSICAL', meaning: 'RCS ignition puff',         trigger: 'fresh RCS couple ignition' },
 
   // ---- RADIO — comms channel activity ----
   playCommsCrackle:    { family: 'RADIO', meaning: 'comms channel activity',       trigger: 'comms online at mission handoff (squelch only — no blips)' },

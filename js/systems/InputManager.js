@@ -1974,9 +1974,12 @@ export class InputManager {
 
       // Aim-before-launch: a fresh manual attitude input cancels any active
       // auto-rotation aim sequence (nothing has been fired/spent yet).
-      if ((_pk.up && !_prevUp) || (_pk.down && !_prevDown) ||
-          (_pk.left && !_prevLeft) || (_pk.right && !_prevRight)) {
+      const _freshPress = (_pk.up && !_prevUp) || (_pk.down && !_prevDown) ||
+          (_pk.left && !_prevLeft) || (_pk.right && !_prevRight);
+      if (_freshPress) {
         eventBus.emit(Events.MOTHER_MANUAL_ROTATE);
+        // RCS ignition accent — instant attack even though the hull is slow.
+        d.audioSystem.playRcsPuff?.();
       }
 
       // Net per-axis rate demand (Up=pitch+, Down=pitch−, Left=yaw+, Right=yaw−).
@@ -1999,10 +2002,19 @@ export class InputManager {
       }
 
       d.player.commandAttitude(pitchIn, yawIn, dt);
+
+      // Sustained RCS hiss driven at the REAL attitude-thrust level (post-gate
+      // command + hold/arrest burn) — mirrors the ion hum above. Goes quiet while
+      // coasting at the rate cap, swells during the arrest burn.
+      const rcsLevel = d.player.getAttitudeThrustLevel?.() ?? 0;
+      if (rcsLevel > 0) d.audioSystem.startRcsHiss?.(rcsLevel);
+      else d.audioSystem.stopRcsHiss?.();
     } else {
       // AP / station-keep active: drop the held-key record so re-enabling manual
       // control can't fire a phantom command from a stale "held" state.
       this._prevArrowKeys = null;
+      // Autopilot/station-keep owns attitude — the manual RCS hiss must not stick.
+      d.audioSystem.stopRcsHiss?.();
     }
   }
 

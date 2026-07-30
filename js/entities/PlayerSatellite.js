@@ -4889,6 +4889,35 @@ export class PlayerSatellite extends THREE.Group {
     // (kept there so test-RcsPlacement's cost/flash guards still hold).
     if (pv !== 0) { this.fireRcsRotation('pitch', Math.sign(pv), Math.abs(pv), dt); this.setThrusterFire('pitch', Math.sign(pv), Math.abs(pv)); }
     if (yv !== 0) { this.fireRcsRotation('yaw', Math.sign(yv), Math.abs(yv), dt); this.setThrusterFire('yaw', Math.sign(yv), Math.abs(yv)); }
+
+    // Latch the post-rate-cap commanded fraction for the audio level
+    // (getAttitudeThrustLevel). Post-gate: zero while coasting at the cap, so the
+    // hiss goes quiet exactly when the plume does.
+    this._cmdTauFrac = Math.min(1, Math.hypot(pv, yv));
+  }
+
+  /**
+   * Raw attitude command (−1..1 per axis, 0 when idle) — instant input feed for
+   * the T4 camera kick. Never derived from the quaternion.
+   * @returns {{pitch:number, yaw:number}}
+   */
+  getAttitudeCommand() {
+    const c = this._attitudeCmd;
+    return { pitch: c ? c.pitch : 0, yaw: c ? c.yaw : 0 };
+  }
+
+  /**
+   * 0..1 attitude-thrust level driving the RCS hiss — the MAX of the post-rate-cap
+   * commanded fraction (manual slew) and the instantaneous hold-torque fraction
+   * (arrest/recenter burn). Post-gate + instantaneous, so it is frame-rate
+   * independent, quiet while coasting at the cap, and 0 under AP/AIM. The arrest
+   * burn is included so the audible maneuver matches the visible plume.
+   * @returns {number} 0..1
+   */
+  getAttitudeThrustLevel() {
+    const cmd = this._cmdTauFrac || 0;
+    const hold = this._holdTauFrac || 0;
+    return Math.max(cmd, hold);
   }
 
   /**
@@ -4958,6 +4987,8 @@ export class PlayerSatellite extends THREE.Group {
     if (owner !== 'PLAYER' && owner !== 'CINEMATIC') {
       this._rcsOmega.set(0, 0, 0);
       this._attitudeCmd = null;
+      this._cmdTauFrac = 0;  // no command under AP/AIM
+      this._holdTauFrac = 0; // no hold burn under AP/AIM — keep the audio level honest
       return;
     }
     if (dt <= 0) return;
@@ -4990,9 +5021,26 @@ export class PlayerSatellite extends THREE.Group {
         amount: this._coldGasRate * (A.RCS_ATTITUDE_N2_FACTOR ?? 1.0) * this._frameHoldWork,
       });
       // Real arrest-burn visual on the opposing couple (§16) — driven by the hold
-      // controller now, not an input-side release.
-      if (Math.abs(omega.x) > 0.05) this.fireRcsStopPulse('pitch', omega.x > 0 ? 1 : -1);
-      if (Math.abs(omega.y) > 0.05) this.fireRcsStopPulse('yaw', omega.y > 0 ? 1 : -1);
+      // controller now, not an input-side release. Gate on the rate ERROR (ω −
+      // ω_target) so a recenter burn (ω → ω_target ≠ 0) is never silent, and fire
+      // the couple that opposes the ERROR, not ω — during a return ω and the
+      // needed couple have opposite signs.
+      const pulseGate = 0.5 * A.RECENTER_RATE;
+      const cmdP = cmd ? cmd.pitch : 0, cmdY = cmd ? cmd.yaw : 0;
+      const th = this._tetherOffsetAngles(_v3AttD);
+      // MUST match _integrateAttitudeStep's `recentering` gate (:5102). Under
+      // CINEMATIC the substep never recenters, so ω_target is 0 there; deriving a
+      // non-zero target here would compare ω against a rate the thrusters were
+      // never asked for and flash a plume on an idle couple — visible precisely
+      // when the player is zoomed in inspecting the hull.
+      const inspecting = (owner === 'CINEMATIC');
+      const wTx = (!inspecting && cmdP === 0 && Math.abs(th.x) > A.HOLD_DEADBAND_RAD)
+        ? -clampAbs(A.RECENTER_GAIN * th.x, A.RECENTER_RATE) : 0;
+      const wTy = (!inspecting && cmdY === 0 && Math.abs(th.y) > A.HOLD_DEADBAND_RAD)
+        ? -clampAbs(A.RECENTER_GAIN * th.y, A.RECENTER_RATE) : 0;
+      const errX = omega.x - wTx, errY = omega.y - wTy;
+      if (Math.abs(errX) > pulseGate) this.fireRcsStopPulse('pitch', errX > 0 ? 1 : -1);
+      if (Math.abs(errY) > pulseGate) this.fireRcsStopPulse('yaw', errY > 0 ? 1 : -1);
     }
 
     if (coldGas <= 0 && cmd && this.resources) {
@@ -5043,47 +5091,58 @@ export class PlayerSatellite extends THREE.Group {
     if (y > 0 && ct.yawPos) tau.addScaledVector(ct.yawPos, y);
     else if (y < 0 && ct.yawNeg) tau.addScaledVector(ct.yawNeg, -y);
 
-    // ── Hold controller: RATE-NULL (arrest) + RECENTER (return to prograde) ──
-    // RATE-NULL is bang-bang — real RCS thrusters are on/off, so arrest fires the
-    // FULL opposing couple until |ω| enters a small linear anti-chatter zone
-    // (OMEGA_LIN). This gives a physics-set ~1 s arrest and ~17° overshoot from
-    // the cap, and (billed by torque) ~one burn's worth of gas — a proportional
-    // −c·ω law instead has a long low-ω tail that is both slow and over-billed.
-    // Gated on the RAW demand cmdP/cmdY (never fight an active command).
-    // RECENTER (additive): drives _manualRotation→identity, capped, suppressed
-    // while inspecting / inside the deadband / when dry.
+    // ── Hold controller: ONE rate servo (arrest + recenter folded together) ──
+    // Real RCS thrusters are on/off, so the servo fires the FULL opposing couple
+    // until the rate error |ω − ω_target| enters a small linear anti-chatter zone
+    // (OMEGA_LIN). ω_target is the recenter demand: zero while arresting a slew
+    // (pure rate-null), non-zero when an offset remains (drive ω toward the
+    // return rate). Folding both into ONE error term ends the old two-torque
+    // fight (RECENTER vs RATE-NULL cancelled at ω_eq = FRAC × OMEGA_LIN, which
+    // left the ship drifting for 152.9 s). Gated on the RAW demand cmdP/cmdY
+    // (never fight an active command); roll (z) always servos (D10).
     const OMEGA_LIN = 0.03; // rad/s — below this, ramp arrest torque down (anti-chatter)
     let holdFired = false;
-    const arrest = (w, axis) => -Math.sign(w) * this._coupleTauMag(axis) * Math.min(1, Math.abs(w) / OMEGA_LIN);
-    if (cmdP === 0 && Math.abs(omega.x) > 1e-4) { tau.x += arrest(omega.x, 'x'); holdFired = true; }
-    if (cmdY === 0 && Math.abs(omega.y) > 1e-4) { tau.y += arrest(omega.y, 'y'); holdFired = true; }
-    if (Math.abs(omega.z) > 1e-4) { tau.z += arrest(omega.z, 'z'); holdFired = true; } // D10 roll null
 
     const coldGas = this.resources ? (this.resources.coldGas || 0) : 0;
     const tethered = this._attitudeConstraintTier && this._attitudeConstraintTier !== 'none';
     const recentering = !inspecting && coldGas > 0;
     // Decompose the manual offset to its body-frame rotation vector ONCE (shared
-    // by RECENTER and the tether spring — both read the same unmutated
-    // _manualRotation). th_i = ang·axis_i, so |th| = ang (the total offset angle).
+    // by the recenter ω_target and the tether spring — both read the same
+    // unmutated _manualRotation). th_i = ang·axis_i, so |th| = ang (total offset).
     const th = (recentering || tethered) ? this._tetherOffsetAngles(_v3AttD) : null;
 
-    if (recentering && th) {
-      const ang = th.length();
-      if (ang > A.HOLD_DEADBAND_RAD) {
-        const capX = A.HOLD_RECENTER_FRAC * this._coupleTauMag('x');
-        const capY = A.HOLD_RECENTER_FRAC * this._coupleTauMag('y');
-        const capZ = A.HOLD_RECENTER_FRAC * this._coupleTauMag('z');
-        if (cmdP === 0) { tau.x += clampAbs(-capX * th.x / A.HOLD_DEADBAND_RAD, capX); holdFired = true; }
-        if (cmdY === 0) { tau.y += clampAbs(-capY * th.y / A.HOLD_DEADBAND_RAD, capY); holdFired = true; }
-        tau.z += clampAbs(-capZ * th.z / A.HOLD_DEADBAND_RAD, capZ);
-      }
-    }
+    // Target body rate: default zero (pure arrest); on axes with an offset beyond
+    // the deadband and no raw command, servo toward prograde at ≤ RECENTER_RATE.
+    const wTx = (recentering && th && cmdP === 0 && Math.abs(th.x) > A.HOLD_DEADBAND_RAD)
+      ? -clampAbs(A.RECENTER_GAIN * th.x, A.RECENTER_RATE) : 0;
+    const wTy = (recentering && th && cmdY === 0 && Math.abs(th.y) > A.HOLD_DEADBAND_RAD)
+      ? -clampAbs(A.RECENTER_GAIN * th.y, A.RECENTER_RATE) : 0;
+    const wTz = (recentering && th && Math.abs(th.z) > A.HOLD_DEADBAND_RAD)
+      ? -clampAbs(A.RECENTER_GAIN * th.z, A.RECENTER_RATE) : 0;
+    const servo = (w, wT, axis) => {
+      const err = w - wT;
+      if (Math.abs(err) <= 1e-4) return 0;
+      holdFired = true;
+      return -Math.sign(err) * this._coupleTauMag(axis) * Math.min(1, Math.abs(err) / OMEGA_LIN);
+    };
+    if (cmdP === 0) tau.x += servo(omega.x, wTx, 'x');
+    if (cmdY === 0) tau.y += servo(omega.y, wTy, 'y');
+    tau.z += servo(omega.z, wTz, 'z'); // D10 roll always servos
 
     // Clamp the RCS torque (command + hold) to the physically available couple
     // authority.
     tau.x = clampAbs(tau.x, this._coupleTauMag('x'));
     tau.y = clampAbs(tau.y, this._coupleTauMag('y'));
     tau.z = clampAbs(tau.z, this._coupleTauMag('z'));
+
+    // Latch the instantaneous RCS hold-torque fraction for the audio level
+    // (getAttitudeThrustLevel). RCS-only — the tether spring below is structural,
+    // not thrust, so it must not drive the hiss. Instantaneous, NOT the
+    // _frameHoldWork time-integral (which scales with frame time).
+    {
+      const tauMaxRef = Math.max(1e-6, this._coupleTauMag('x'), this._coupleTauMag('y'));
+      this._holdTauFrac = Math.min(1, Math.hypot(tau.x, tau.y) / tauMaxRef);
+    }
 
     // Phase 4: tether rotation-limit restoring torque. This is a STRUCTURAL
     // constraint (the taut tether), not RCS authority, so it is added AFTER the

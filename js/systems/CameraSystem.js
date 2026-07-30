@@ -294,6 +294,10 @@ export class CameraSystem {
     this._currentTargetPos = new THREE.Vector3();  // Where camera should be
     this._currentTargetLook = new THREE.Vector3(); // Where camera should look
     this._thrustMagnitude = 0; // For head-bob
+    // T4 experiment: transient attitude kick — raw pitch/yaw command + its eased
+    // envelope, so input registers on the view before the slow hull moves.
+    this._attCmd = { pitch: 0, yaw: 0 };
+    this._attKick = { pitch: 0, yaw: 0 };
 
     // S4: Camera shake on catch (enhanced from Phase 8)
     this._catchShakeTimer = 0;     // seconds remaining for shake effect
@@ -641,6 +645,17 @@ export class CameraSystem {
     this._thrustMagnitude = magnitude;
   }
 
+  /**
+   * T4 experiment: raw attitude command (−1..1 per axis) for the transient
+   * camera kick. Pushed from main.js each frame so the kick is instant (never
+   * reads the ship's quaternion — pure input feed-forward).
+   * @param {number} pitch @param {number} yaw
+   */
+  setAttitudeCommand(pitch, yaw) {
+    this._attCmd.pitch = pitch || 0;
+    this._attCmd.yaw = yaw || 0;
+  }
+
   // ==========================================================================
   // UPDATE — Called every frame
   // ==========================================================================
@@ -790,6 +805,54 @@ export class CameraSystem {
       this.camera.lookAt(targetLook);
     }
     } // end V-7 ceremony else
+
+    // T4 experiment: transient attitude kick — a small (~3°) camera rotation
+    // toward the commanded direction so input registers before the hull moves.
+    // CHASE view only, never during transitions or ceremonies (unlike the shake
+    // block below, which intentionally runs in every view). rotateX/rotateY only
+    // — never Z, which would break the roll-free constraint.
+    if (this.currentView === CameraViews.CHASE && !this._transitioning
+        && !this._launchCeremony.active && !this._netCeremony.active) {
+      // Truly transient: ease in ~120 ms on a FRESH command, then decay ~250 ms
+      // back to zero even while the key stays held. A sustained tilt would fight
+      // the hull's own visible rotation (and the T6 recenter on release) and
+      // read as a drunk camera; an onset accent just confirms the input landed.
+      const k = this._attKick, c = this._attCmd;
+      if (c.pitch !== k._lastCmdP || c.yaw !== k._lastCmdY) {
+        // Command edge (fresh press, direction change, or release): re-arm.
+        k.tgtP = c.pitch; k.tgtY = c.yaw;
+        k.age = 0;
+        k._lastCmdP = c.pitch; k._lastCmdY = c.yaw;
+      }
+      k.age = (k.age ?? 0) + dt;
+      const ease = (cur, tgt, rate) => {
+        const next = cur + (tgt - cur) * Math.min(1, dt * rate);
+        return Math.abs(next) < 1e-4 && tgt === 0 ? 0 : next;
+      };
+      if (k.age < 0.12 && (k.tgtP !== 0 || k.tgtY !== 0)) {
+        k.pitch = ease(k.pitch, k.tgtP, 1 / 0.12);  // ease in
+        k.yaw = ease(k.yaw, k.tgtY, 1 / 0.12);
+      } else {
+        k.pitch = ease(k.pitch, 0, 1 / 0.25);       // decay, held or not
+        k.yaw = ease(k.yaw, 0, 1 / 0.25);
+      }
+      if (k.pitch !== 0 || k.yaw !== 0) {
+        const KICK_MAX = 3 * Math.PI / 180; // ~3°
+        // Same sign as the command: pitch+ (nose up) swings the view up, yaw+
+        // (nose left) swings the view left — verified against rotateX/rotateY
+        // view-space probes (the camera anticipates the nose, never opposes it).
+        this.camera.rotateX(k.pitch * KICK_MAX);
+        this.camera.rotateY(k.yaw * KICK_MAX);
+      }
+    } else {
+      this._attKick.pitch = 0;
+      this._attKick.yaw = 0;
+      this._attKick.tgtP = 0;
+      this._attKick.tgtY = 0;
+      this._attKick.age = 0;
+      this._attKick._lastCmdP = 0;
+      this._attKick._lastCmdY = 0;
+    }
 
     // Phase 8: Apply camera shake offset (catches, not ARM_PILOT)
     if (this._catchShakeTimer > 0) {

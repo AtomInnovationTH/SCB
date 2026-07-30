@@ -5,7 +5,9 @@
   "scripts": {
     "start": "npx --yes http-server -p 8080 -c-1 .",
     "serve": "npx --yes http-server -p 8080 -c-1 .",
-    "test": "node js/test/run-tests.js"
+    "test": "node js/test/run-tests.js",
+    "install-hooks": "H=\"$(git rev-parse --git-common-dir)/hooks\"; cp .githooks/lib-runtime.sh .githooks/pre-push .githooks/post-commit .githooks/post-merge \"$H\"/ && chmod +x \"$H\"/pre-push \"$H\"/post-commit \"$H\"/post-merge && git config remote.origin.push refs/heads/publish:refs/heads/main && echo 'hooks installed; git push now deploys the runtime artifact'",
+    "publish": "./publish.sh"
   },
   "dependencies": {
     "three": "0.184.0"
