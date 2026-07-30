@@ -1590,7 +1590,226 @@ async function init() {
         if (Events.NET_CEREMONY_COMPLETE) eventBus.on(Events.NET_CEREMONY_COMPLETE, () => _snap('secured', 400));
       }
 
-      console.info(`[netShot] ready. __netShot("name") to grab, __netPause(true) to freeze, __netAuto(true) for auto-capture (currently ${_autoOn ? 'ON' : 'OFF'}).`);
+      // ── Deterministic whale-capture scenario (mother-net visual plan T2) ──
+      //   window.__netScenario()
+      //     → stages the identical mother-net capture every run: skips the
+      //       intro zoom, pins a fixed rocketBody whale 60 m off the nose,
+      //       fires pod 0 with every capture roll overridden (cling 0 =
+      //       catch, frag/strain 1 = never), so before/after screenshots
+      //       compare the LOOK, not the RNG. Pair with __netAuto(true) to
+      //       collect the 9 ceremony beats.
+      //     Returns { ok, whaleId, mass, distanceM, podIndex } or
+      //     { ok: false, reason } — guarded, never throws.
+      let _scenarioPinReleaseOff = null;
+      let _scenarioNet = null;
+      window.__netScenario = () => {
+        try {
+          if (!player || !debrisField || !cameraSystem) return { ok: false, reason: 'sim not up' };
+          const list = debrisField.debrisList || [];
+          if (!list.length) return { ok: false, reason: 'debris field empty' };
+
+          // 1. The intro zoom eases over real dt — kill it so framing is fixed.
+          cameraSystem.skipIntroZoom?.();
+
+          // 2. Pick the whale deterministically from the LIVE welcome cluster.
+          //
+          //    MEASURED: on mission 1 DebrisField's enforcement pass kills
+          //    every piece that is not `welcomeSpawn` — `alive = false`,
+          //    `tracked = false`, instance scaled to zero (DebrisField.js
+          //    :1428-1436 for the blanket hide, :1478-1487 for the distance
+          //    cull). A naive `find(type === 'rocketBody')` therefore returns
+          //    a CORPSE: dead pieces are skipped by the update loop, so their
+          //    `_scenePosition` freezes (it read 5817 km out, drifting at the
+          //    ship's own 7.7 km/s) and the net has nothing to fly at — a
+          //    pre-flight range refusal, i.e. the missing envelop/brake/cinch
+          //    beats. Restrict to live welcome pieces, prefer a rocketBody,
+          //    else take the heaviest and raise its mass to whale grade.
+          //    `_meshKey` is still NEVER reassigned (see Traps) — only mass,
+          //    which is what MOTHER_MIN_MASS actually gates on.
+          const live = list.filter(d => d && d.alive && d.welcomeSpawn);
+          const whale = live.find(d => d.type === 'rocketBody')
+            || live.slice().sort((a, b) => (b.mass || 0) - (a.mass || 0))[0];
+          if (!whale) return { ok: false, reason: 'no live welcome-field debris (mission-1 enforcement hides catalog pieces)' };
+
+          // 3. Fixed silhouette + physics: 600 kg clears the 500 kg whale
+          //    threshold (MOTHER_MIN_MASS), ~12% of the LARGE net's 5000 kg
+          //    rating so the strain roll never arms; 7 m length presents
+          //    under the 8 m net diameter from any tumble angle (no
+          //    oversize_aspect bounce).
+          whale.mass = 600;
+          whale.sizeMeter = 7;
+          whale.brittleness = 0.3;
+
+          // 4. Put the whale 60 m ahead — CO-ORBITAL FIRST, then pinned.
+          //
+          //    MEASURED, not assumed: `_onboardingPinned` alone does NOT move
+          //    a distant body. With every pin precondition satisfied
+          //    (_onboardingPinned, _motherFwd/_motherRight, instance slot,
+          //    canonical ref) a whale 5817 km away stayed 5817 km away while
+          //    the pin arithmetic itself was correct (~60 m) — the orbit
+          //    branch keeps authoring `_scenePosition`. The tease pin is a
+          //    hold-in-place override for pieces ALREADY co-orbital with the
+          //    mother (spawnWelcomeField repositions them first); it is not a
+          //    teleport. So copy the mother's elements onto the whale and
+          //    advance its true anomaly by the along-track angle for 60 m —
+          //    then the orbit branch and the pin agree, and the net's 11 s
+          //    flight envelope actually reaches it.
+          const M = 0.00001; // 1 metre in scene units (same M as InputManager)
+          const pElems = (typeof player.getOrbitalElements === 'function')
+            ? player.getOrbitalElements() : null;
+          if (!pElems) return { ok: false, reason: 'no player orbit' };
+          if (!whale.orbit) whale.orbit = {};
+          whale.orbit.semiMajorAxis = pElems.semiMajorAxis;
+          whale.orbit.eccentricity  = pElems.eccentricity;
+          whale.orbit.inclination   = pElems.inclination;
+          whale.orbit.raan          = pElems.raan;
+          whale.orbit.argPerigee    = pElems.argPerigee;
+          whale.orbit.meanMotion    = pElems.meanMotion;
+          // Along-track angle for 60 m at this radius (elements are in scene
+          // units: 1 scene unit = 100 km, so 60 m = 60e-5).
+          const dNu = (60 * M) / Math.max(1e-9, pElems.semiMajorAxis);
+          whale.orbit.trueAnomaly = pElems.trueAnomaly + dNu;
+          // Pin as well: it holds the piece steady in the mother's frame for
+          // the render/selection path, and registering the id is what makes
+          // DebrisField compute the _motherFwd/_motherRight basis at all.
+          whale._onboardingPinned = true;
+          whale._onboardingPinFwd = 60 * M;
+          whale._onboardingPinLat = 0;
+          debrisField._onboardingPinIds?.add(whale.id);
+
+          // 5. Select it so every aiming/reticle path agrees on the target.
+          targetSelector.setTarget(whale);
+
+          // 6. Fire pod 0 AT the pinned whale — not along ship +Z. The pin
+          //    sits on the prograde axis, and nose ≠ prograde whenever the
+          //    attitude is driven (launch cinematic, slews), so an aimed
+          //    shot is the only attitude-independent fire. Compute the pin
+          //    position analytically (same math as DebrisField's basis):
+          //    pinnedPos = playerPos + prograde × 60 m; dir = muzzle → pin.
+          const pOrbit = (typeof player.getOrbitalElements === 'function')
+            ? player.getOrbitalElements() : null;
+          if (!pOrbit) return { ok: false, reason: 'no player orbit' };
+          const _cp = { x: 0, y: 0, z: 0 }, _cv = { x: 0, y: 0, z: 0 };
+          orbitToSceneCartesianInto(pOrbit, _cp, _cv);
+          const vl = Math.hypot(_cv.x, _cv.y, _cv.z) || 1;
+          const playerPos = player.getPosition();
+          const pinnedPos = {
+            x: playerPos.x + (_cv.x / vl) * 60 * M,
+            y: playerPos.y + (_cv.y / vl) * 60 * M,
+            z: playerPos.z + (_cv.z / vl) * 60 * M,
+          };
+          const posScene = (typeof player.getNetPodPosition === 'function')
+            ? player.getNetPodPosition(0) : playerPos;
+          const b = new THREE.Vector3(pinnedPos.x - posScene.x, pinnedPos.y - posScene.y, pinnedPos.z - posScene.z);
+          if (b.lengthSq() > 0) b.normalize();
+          const dir = { x: b.x, y: b.y, z: b.z };
+          // TRAP (plan §0): the pod accessor returns SCENE UNITS,
+          // NetProjectile works in METRES — divide by M.
+          const posMetres = { x: posScene.x / M, y: posScene.y / M, z: posScene.z / M };
+
+          // 7. Release the pin the moment the catch resolves (either way):
+          //    the reel/berth drives the whale via its own _armPinned pins,
+          //    and _updateInstanceTransform checks _onboardingPinned FIRST —
+          //    an unreleased tease pin would glue the whale at 60 m while
+          //    the net package reels in empty (the LASSO_CONTACT hazard).
+          if (typeof _scenarioPinReleaseOff === 'function') _scenarioPinReleaseOff();
+          const release = () => {
+            whale._onboardingPinned = false;
+            whale._onboardingPinFwd = 0;
+            whale._onboardingPinLat = 0;
+            debrisField._onboardingPinIds?.delete(whale.id);
+            _scenarioPinReleaseOff = null;
+          };
+          const offOk  = eventBus.on(Events.NET_CATCH_SUCCESS, release);
+          const offNo  = eventBus.on(Events.NET_CATCH_MISS, release);
+          _scenarioPinReleaseOff = () => { offOk?.(); offNo?.(); };
+
+          const net = captureNetSystem.fireMotherNet(0, posMetres, dir, whale);
+          if (!net) { release(); return { ok: false, reason: 'fire refused (magazine / cooldown / launcher blocked)' }; }
+
+          // 8. Override the rolls ON THE NET — never forceResolve(), which
+          //    skips the flight/envelop/brake/cinch beats being photographed.
+          net._clingRollOverride = 0;     // guaranteed catch
+          net._fragRollOverride = 1.0;    // never fragments
+          net._strainRollOverride = 1.0;  // never strain-slips
+          _scenarioNet = net;
+
+          const out = { ok: true, whaleId: whale.id, mass: whale.mass, distanceM: 60, podIndex: 0 };
+          console.info(`[netScenario] staged deterministic whale capture: ${JSON.stringify(out)}`);
+          return out;
+        } catch (e) {
+          console.warn('[netScenario] failed:', e);
+          return { ok: false, reason: String((e && e.message) || e) };
+        }
+      };
+
+      // ── Scenario probe (harness diagnostics) ──
+      //   window.__netScenarioProbe()
+      //     → live state of the staged scenario: the net's FSM state and
+      //       flight progress, and the whale's ACTUAL distance from the pod
+      //       muzzle. This is how you tell a real contact from a flight
+      //       time-out: if whaleDistM is not ~60, the prograde pin never
+      //       took, and the net is flying at empty space.
+      window.__netScenarioProbe = () => {
+        try {
+          const M = 0.00001;
+          const net = _scenarioNet;
+          const whale = net?.targetDebris;
+          const pod = (player && typeof player.getNetPodPosition === 'function')
+            ? player.getNetPodPosition(0) : null;
+          const sp = whale?._scenePosition;
+          const whaleDistM = (pod && sp)
+            ? Math.hypot(sp.x - pod.x, sp.y - pod.y, sp.z - pod.z) / M : null;
+          return {
+            netState:      net?.state ?? null,
+            catchResult:   net?.catchResult ?? null,
+            flightTime:    net ? +net.flightTime.toFixed(2) : null,
+            travelledM:    net ? +net.distanceTraveled.toFixed(1) : null,
+            whaleDistM:    whaleDistM != null ? +whaleDistM.toFixed(1) : null,
+            pinned:        !!whale?._onboardingPinned,
+            pinFwdM:       whale ? +((whale._onboardingPinFwd || 0) / M).toFixed(1) : null,
+            motherFwdSet:  !!debrisField?._motherFwd,
+            motherRightSet: !!debrisField?._motherRight,
+            pinIds:        debrisField?._onboardingPinIds?.size ?? null,
+            clingOverride: net?._clingRollOverride ?? null,
+            // Decisive: the net's OWN distance to the whale. If this stays
+            // ~60 m while travelledM climbs, the net is flying off-axis.
+            netToWhaleM: (() => {
+              if (!net?.position || !sp) return null;
+              return +(Math.hypot(sp.x / M - net.position.x, sp.y / M - net.position.y,
+                                  sp.z / M - net.position.z)).toFixed(1);
+            })(),
+            // Pin-branch forensics: is the whale the object the field
+            // actually renders, and where would the pin put it?
+            hasInstance:   !!debrisField?._instanceLookup?.has(whale?.id),
+            sameAsMapRef:  debrisField?.debrisMap?.get(whale?.id) === whale,
+            sameAsListRef: debrisField?.debrisList?.find(d => d && d.id === whale?.id) === whale,
+            alive:         whale?.alive,
+            whaleSma:      whale?.orbit ? +whale.orbit.semiMajorAxis.toFixed(4) : null,
+            playerSma:     +((player?.orbit?.semiMajorAxis) ?? 0).toFixed(4),
+            whaleInc:      whale?.orbit ? +whale.orbit.inclination.toFixed(4) : null,
+            playerInc:     +((player?.orbit?.inclination) ?? 0).toFixed(4),
+            expectedPinM:  (() => {
+              const f = debrisField?._motherFwd, pp = player?.getPosition?.();
+              if (!f || !pp || !pod) return null;
+              const fwd = (whale?._onboardingPinFwd || 0);
+              const ex = pp.x + f.x * fwd, ey = pp.y + f.y * fwd, ez = pp.z + f.z * fwd;
+              return +(Math.hypot(ex - pod.x, ey - pod.y, ez - pod.z) / M).toFixed(1);
+            })(),
+            sceneVsExpectedM: (() => {
+              const f = debrisField?._motherFwd, pp = player?.getPosition?.();
+              if (!f || !pp || !sp) return null;
+              const fwd = (whale?._onboardingPinFwd || 0);
+              const ex = pp.x + f.x * fwd, ey = pp.y + f.y * fwd, ez = pp.z + f.z * fwd;
+              return +(Math.hypot(sp.x - ex, sp.y - ey, sp.z - ez) / M).toFixed(1);
+            })(),
+          };
+        } catch (e) {
+          return { error: String((e && e.message) || e) };
+        }
+      };
+
+      console.info(`[netShot] ready. __netShot("name") to grab, __netPause(true) to freeze, __netAuto(true) for auto-capture (currently ${_autoOn ? 'ON' : 'OFF'}), __netScenario() for the deterministic whale capture.`);
 
       // ── deep-polish-4 T2: menu→sim handoff apparent-size probe ──
       // Analytic (no pixel classification): projects each model's bounding

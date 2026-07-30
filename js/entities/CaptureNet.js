@@ -577,6 +577,10 @@ export class NetProjectile {
     this._berthProcessed = false;
     /** @type {number|null} Deterministic strain-roll override for tests. */
     this._strainRollOverride = null;
+    /** @type {number|null} Deterministic cling-roll override for tests / the
+     *  shot harness (`__netScenario`). 0 ⇒ guaranteed catch; read at the
+     *  `_clingRoll <= _clingProbability` compare in `_resolveCatch`. */
+    this._clingRollOverride = null;
     /** @type {boolean} Set when the mother reel has no berth context (headless
      *  test path — no player/debrisField): the reel falls through to the
      *  daughter-style reel-back so the net still stows/prunes instead of
@@ -1658,7 +1662,8 @@ export class NetProjectile {
       // Crack: 1-2 frags shed, the capture itself continues to the cling roll.
     }
 
-    if (this._clingRoll <= this._clingProbability) {
+    const clingRoll = (this._clingRollOverride != null) ? this._clingRollOverride : this._clingRoll;
+    if (clingRoll <= this._clingProbability) {
       this._captureSuccess();
     } else {
       this._miss('cling_failed');
