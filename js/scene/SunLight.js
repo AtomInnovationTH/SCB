@@ -548,21 +548,20 @@ export function createMarsTexture(size = 128) {
  *  Sizes are exaggerated planetarium markers (real planets are point sources from LEO). The
  *  hierarchy is Sun≈Moon > Jupiter > Venus > Saturn(+rings) > Mars > Mercury; the Moon reads
  *  as clearly the largest body. `hex` still tints each planet's glow halo. */
-const PLANET_DIST = 440;
 const TEXTURE_FACTORIES = {
   mars: () => createMarsTexture(128),
   jupiter: () => createJupiterTexture(128),
   saturn: () => createSaturnTexture(256),
 };
 const PLANET_DEFS = [
-  { name: 'Mercury', hex: '#c7bfad', glow: 3.0, deg:  20 },
-  { name: 'Venus',   hex: '#ffffcc', glow: 6.0, deg:  40 },
-  { name: 'Mars',    hex: '#ff6633', glow: 4.8, deg: 170 },
-  { name: 'Jupiter', hex: '#ffd699', glow: 7.2, deg:  90 },
-  { name: 'Saturn',  hex: '#f5e6c8', glow: 5.6, deg: 130, planeSize: 15 },
+  { name: 'Mercury', hex: '#c7bfad', glow: Constants.PLANET_MERCURY_GLOW, deg: Constants.PLANET_MERCURY_DEG },
+  { name: 'Venus',   hex: '#ffffcc', glow: Constants.PLANET_VENUS_GLOW,   deg: Constants.PLANET_VENUS_DEG },
+  { name: 'Mars',    hex: '#ff6633', glow: Constants.PLANET_MARS_GLOW,    deg: Constants.PLANET_MARS_DEG },
+  { name: 'Jupiter', hex: '#ffd699', glow: Constants.PLANET_JUPITER_GLOW, deg: Constants.PLANET_JUPITER_DEG },
+  { name: 'Saturn',  hex: '#f5e6c8', glow: Constants.PLANET_SATURN_GLOW,  deg: Constants.PLANET_SATURN_DEG, planeSize: Constants.PLANET_SATURN_PLANE_SIZE },
 ].map((def) => {
   const cat = bodyByName(def.name);
-  const radius = angularToRadius(cat.displayAngularDeg, PLANET_DIST);
+  const radius = angularToRadius(cat.displayAngularDeg, Constants.PLANET_DIST);
   return Object.assign({}, def, {
     radius,
     makeTexture: cat.textureKey ? TEXTURE_FACTORIES[cat.textureKey] : undefined,
@@ -579,8 +578,9 @@ const DEPTH_MASK_MAT = new THREE.MeshBasicMaterial({
  * Distance from origin at which depth masks are placed.
  * Must be slightly INSIDE the star sphere (STAR_SPHERE_RADIUS = 400) so that
  * masks have smaller depth values than stars and can occlude them.
+ * Centralized as Constants.BODY_DEPTH_MASK_DIST (coupled to STAR_SPHERE_RADIUS).
  */
-const DEPTH_MASK_DIST = 398;
+const DEPTH_MASK_DIST = Constants.BODY_DEPTH_MASK_DIST;
 
 // ============================================================================
 // SUN LIGHT CLASS
@@ -675,7 +675,7 @@ export class SunLight {
       map: texture,
       color: 0xffffee,
       transparent: true,
-      opacity: 0.95,
+      opacity: Constants.SUN_GLARE_OPACITY,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
       depthTest: false,          // Mask is closer than body — skip depth test so body isn't self-occluded
@@ -685,16 +685,16 @@ export class SunLight {
     // at distance 450 (Moon is ~1.5°). Glare makes a bright disc read larger than
     // its geometry, so this is tuned by eye slightly under the Moon. Stays within
     // CAMERA_FAR (500).
-    this.sunSprite.scale.set(15, 15, 1);
+    this.sunSprite.scale.set(Constants.SUN_GLARE_SCALE, Constants.SUN_GLARE_SCALE, 1);
     this.sunSprite.name = 'SunDisc';
     this.scene.add(this.sunSprite);
 
     // Depth mask — invisible disc placed inside the star sphere to occlude stars/lines.
     // Radius derived from BODY_CATALOG's Sun displayAngularDeg (opaque core),
     // rescaled to DEPTH_MASK_DIST so its angular size matches the core's.
-    const sunCoreRadius = angularToRadius(bodyByName('Sun').displayAngularDeg, 450);
+    const sunCoreRadius = angularToRadius(bodyByName('Sun').displayAngularDeg, Constants.SUN_DIST);
     this._sunDepthMask = new THREE.Mesh(
-      new THREE.CircleGeometry(sunCoreRadius * (DEPTH_MASK_DIST / 450), 32),
+      new THREE.CircleGeometry(sunCoreRadius * (DEPTH_MASK_DIST / Constants.SUN_DIST), 32),
       DEPTH_MASK_MAT
     );
     this._sunDepthMask.renderOrder = -1;
@@ -704,9 +704,9 @@ export class SunLight {
     // --- Sun label (planetarium-style, centered below disc) ---
     this._sunLabel = new THREE.Sprite(new THREE.SpriteMaterial({
       map: createPlanetLabelTexture('Sun'),
-      transparent: true, opacity: 0.34, depthWrite: false, depthTest: true,
+      transparent: true, opacity: Constants.BODY_LABEL_OPACITY, depthWrite: false, depthTest: true,
     }));
-    this._sunLabel.scale.set(50, 12, 1);
+    this._sunLabel.scale.set(Constants.BODY_LABEL_SCALE_X, Constants.BODY_LABEL_SCALE_Y, 1);
     this._sunLabel.renderOrder = 10;
     this._sunLabel.frustumCulled = false;
     this.scene.add(this._sunLabel);
@@ -772,14 +772,14 @@ export class SunLight {
   _createMoon() {
     // Opaque maria-patterned disc (NormalBlending so the dark maria read as
     // surface, not additive glow). Radius derived from BODY_CATALOG's
-    // displayAngularDeg (~1.5° at distance 430) so the catalogue owns the size.
+    // displayAngularDeg (~1.5° at MOON_DIST) so the catalogue owns the size.
     const moonTexture = createMoonDiscTexture(256);
-    const moonRadius = angularToRadius(bodyByName('Moon').displayAngularDeg, 430);
+    const moonRadius = angularToRadius(bodyByName('Moon').displayAngularDeg, Constants.MOON_DIST);
     const moonGeo = new THREE.CircleGeometry(moonRadius, 32);
     this._moonMaterial = new THREE.MeshBasicMaterial({
       map: moonTexture,
       transparent: true,
-      opacity: 0.85,
+      opacity: Constants.MOON_BASE_OPACITY,
       depthWrite: false,
       depthTest: false,          // Mask is closer than body — skip depth test so body isn't self-occluded
       side: THREE.DoubleSide,
@@ -800,7 +800,7 @@ export class SunLight {
     // Depth mask — invisible disc placed inside the star sphere to occlude stars/lines.
     // Radius scaled to match angular size of moon's opaque core at DEPTH_MASK_DIST.
     this._moonDepthMask = new THREE.Mesh(
-      new THREE.CircleGeometry(5.2 * (DEPTH_MASK_DIST / 430), 32),
+      new THREE.CircleGeometry(Constants.MOON_DEPTH_MASK_RADIUS * (DEPTH_MASK_DIST / Constants.MOON_DIST), 32),
       DEPTH_MASK_MAT
     );
     this._moonDepthMask.renderOrder = -1;
@@ -810,9 +810,9 @@ export class SunLight {
     // --- Moon label (planetarium-style, centered below disc) ---
     this._moonLabel = new THREE.Sprite(new THREE.SpriteMaterial({
       map: createPlanetLabelTexture('Moon'),
-      transparent: true, opacity: 0.34, depthWrite: false, depthTest: true,
+      transparent: true, opacity: Constants.BODY_LABEL_OPACITY, depthWrite: false, depthTest: true,
     }));
-    this._moonLabel.scale.set(50, 12, 1);
+    this._moonLabel.scale.set(Constants.BODY_LABEL_SCALE_X, Constants.BODY_LABEL_SCALE_Y, 1);
     this._moonLabel.renderOrder = 10;
     this._moonLabel.frustumCulled = false;
     this.scene.add(this._moonLabel);
@@ -959,8 +959,8 @@ export class SunLight {
     // it — the moon/planets stay origin-centered (tiny, arguably-realistic
     // parallax) and are left untouched.
     const sunPos = this.camera
-      ? this._bodyPos.copy(this.sunDirection).multiplyScalar(450).add(this.camera.position)
-      : this._bodyPos.copy(this.sunDirection).multiplyScalar(450);
+      ? this._bodyPos.copy(this.sunDirection).multiplyScalar(Constants.SUN_DIST).add(this.camera.position)
+      : this._bodyPos.copy(this.sunDirection).multiplyScalar(Constants.SUN_DIST);
     this.sunSprite.position.copy(sunPos);
 
     // Geometric Earth-occlusion: hide sun when behind Earth's disc from camera POV
@@ -1002,7 +1002,7 @@ export class SunLight {
     if (this._sunLabel) {
       const down = this._downTmp.set(0, -1, 0);
       if (this.camera) down.applyQuaternion(this.camera.quaternion);
-      this._sunLabel.position.copy(sunPos).add(down.multiplyScalar(15));
+      this._sunLabel.position.copy(sunPos).add(down.multiplyScalar(Constants.SUN_LABEL_OFFSET));
       this._sunLabel.visible = !sunHidden && !this._labelsHidden;
     }
   }
@@ -1028,7 +1028,7 @@ export class SunLight {
     // Camera-relative sun position (matches _updateSunDisc) so flare sprites
     // lerp along the true camera→sun axis.
     const camPos = this.camera.position;
-    const sunPos = this._bodyPos.copy(this.sunDirection).multiplyScalar(450).add(camPos);
+    const sunPos = this._bodyPos.copy(this.sunDirection).multiplyScalar(Constants.SUN_DIST).add(camPos);
 
     // Camera forward vector
     this._camForward.set(0, 0, -1).applyQuaternion(this.camera.quaternion);
@@ -1071,7 +1071,7 @@ export class SunLight {
     // Origin-centered (not camera-relative like the sun): the small finite-
     // distance parallax is visually negligible and arguably realistic. Only the
     // sun is special-cased, because the lighting direction depends on it.
-    const moonPos = this._bodyPos.copy(moonDir).multiplyScalar(430);
+    const moonPos = this._bodyPos.copy(moonDir).multiplyScalar(Constants.MOON_DIST);
     this.moonMesh.position.copy(moonPos);
 
     // Update moon depth mask — placed at DEPTH_MASK_DIST along moon direction (inside star sphere)
@@ -1089,16 +1089,16 @@ export class SunLight {
     // real lunar phase — full moon nights are bright, new moon nights rely on
     // the 0.3 opacity floor for readability.
     const phase = this.sunDirection.dot(moonDir);
-    const brightness = Math.max(0.15, (1 - phase) * 0.5);
+    const brightness = Math.max(Constants.MOON_PHASE_BRIGHTNESS_FLOOR, (1 - phase) * 0.5);
     // Retuned for NormalBlending: floor at 0.3 keeps thin phases visible while
     // the gibbous equilibrium (~0.6 opacity) reads punchy against the night sky.
-    let opacity = Math.max(0.3, brightness) * 0.9;
+    let opacity = Math.max(Constants.MOON_PHASE_OPACITY_FLOOR, brightness) * Constants.MOON_PHASE_OPACITY_SCALE;
 
     // Moon label: camera-relative "below" — no parallax regardless of orbital orientation
     if (this._moonLabel) {
       const down = this._downTmp.set(0, -1, 0);
       if (this.camera) down.applyQuaternion(this.camera.quaternion);
-      this._moonLabel.position.copy(moonPos).add(down.multiplyScalar(14));  // ≈ radius(5.6) + 8, matches planet convention
+      this._moonLabel.position.copy(moonPos).add(down.multiplyScalar(Constants.MOON_LABEL_OFFSET));  // ≈ radius + 8, matches planet convention
       // One-time diagnostic
       if (!this._moonLabelLogged) {
         console.log('[SunLight] Moon label pos:', this._moonLabel.position.toArray().map(v => v.toFixed(1)), 'visible:', this._moonLabel.visible);
@@ -1149,7 +1149,7 @@ export class SunLight {
         new THREE.MeshBasicMaterial({
           color: def.makeTexture ? 0xffffff : color,
           map: def.makeTexture ? def.makeTexture() : null,
-          transparent: true, opacity: 0.85,
+          transparent: true, opacity: Constants.PLANET_DISC_OPACITY,
           side: THREE.DoubleSide, depthWrite: false,
           depthTest: false,      // Mask is closer than body — skip depth test so body isn't self-occluded
         })
@@ -1167,10 +1167,10 @@ export class SunLight {
       // hard outer edge that, drawn behind the opaque disc, read as a dark ring
       // between the planet and its label.
       const glow = new THREE.Mesh(
-        new THREE.PlaneGeometry(def.glow * 2, def.glow * 2),
+        new THREE.PlaneGeometry(def.glow * Constants.PLANET_GLOW_SCALE, def.glow * Constants.PLANET_GLOW_SCALE),
         new THREE.MeshBasicMaterial({
           map: _planetGlowTex || (_planetGlowTex = createPlanetGlowTexture()),
-          color, transparent: true, opacity: 0.6,
+          color, transparent: true, opacity: Constants.PLANET_GLOW_OPACITY,
           side: THREE.DoubleSide, depthWrite: false,
           depthTest: false,      // match disc — avoid self-occlusion against mask
           blending: THREE.AdditiveBlending,
@@ -1183,9 +1183,9 @@ export class SunLight {
       // --- Planetarium text label (sprite — centered directly under planet) ---
       const label = new THREE.Sprite(new THREE.SpriteMaterial({
         map: createPlanetLabelTexture(def.name),
-        transparent: true, opacity: 0.34, depthWrite: false,
+        transparent: true, opacity: Constants.BODY_LABEL_OPACITY, depthWrite: false,
       }));
-      label.scale.set(50, 12, 1);
+      label.scale.set(Constants.BODY_LABEL_SCALE_X, Constants.BODY_LABEL_SCALE_Y, 1);
       label.frustumCulled = false;
       this.scene.add(label);
 
@@ -1223,13 +1223,13 @@ export class SunLight {
       const angle = sunAngle + p.deg * (Math.PI / 180);
       _pos.set(Math.cos(angle), 0, Math.sin(angle));
 
-      p.disc.position.copy(_pos).multiplyScalar(440);
+      p.disc.position.copy(_pos).multiplyScalar(Constants.PLANET_DIST);
       if (p.depthMask) p.depthMask.position.copy(_pos).multiplyScalar(DEPTH_MASK_DIST);
-      p.glow.position.copy(_pos).multiplyScalar(438);  // slightly behind disc
-      _pos.multiplyScalar(440);  // restore for label calc
+      p.glow.position.copy(_pos).multiplyScalar(Constants.PLANET_GLOW_DIST);  // slightly behind disc
+      _pos.multiplyScalar(Constants.PLANET_DIST);  // restore for label calc
 
       // Label: camera-relative below — always visually centered under disc
-      const labelOffset = p.radius + 8;
+      const labelOffset = p.radius + Constants.PLANET_LABEL_OFFSET;
       p.label.position.copy(_pos).add(this._labelTmp.copy(_down).multiplyScalar(labelOffset));
 
       // Earth occlusion — hide planet when behind Earth's disc from camera POV

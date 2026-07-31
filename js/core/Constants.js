@@ -399,6 +399,86 @@ export const Constants = {
                               // and leave a hard magnitude cutout).
 
   // =========================================================================
+  // SUN / MOON / PLANETS (SunLight.js) — the naked-eye bodies
+  // =========================================================================
+  // Sizes live in bodyCatalog.js (displayAngularDeg) as the single source of
+  // truth; these constants own the DISTANCES, opacities, halos, labels and the
+  // depth-mask geometry. Every brightness ceiling notes its coupling to the
+  // 2.5 bloom threshold (SceneManager) — bloom is reserved for the Sun and
+  // Venus (D3), so nothing else may cross it.
+
+  // --- Distances (world units) ---
+  // The bodies are camera-facing billboards at fixed distances inside the star
+  // shell. Sun/Moon/planets sit at slightly different distances so their depth
+  // ordering is deterministic; the ANGULAR sizes are what matter visually and
+  // those come from bodyCatalog.displayAngularDeg at these distances.
+  SUN_DIST: 450,                // sun glare sprite + core reference distance
+  MOON_DIST: 430,               // moon disc distance (~1.49° → radius ~5.6)
+  PLANET_DIST: 440,             // planet disc distance
+  PLANET_GLOW_DIST: 438,        // glow halo sits slightly BEHIND its disc
+  // Depth masks are placed just INSIDE the star shell so they have smaller
+  // depth values than the stars and can occlude them. COUPLED to
+  // STAR_SPHERE_RADIUS (400): the mask must be < 400 or it cannot hide stars,
+  // and far enough inside that the 0.98 ray-solve margin in _updateSunDisc
+  // keeps it in front of the shell at altitude.
+  BODY_DEPTH_MASK_DIST: 398,
+
+  // --- Sun ---
+  SUN_GLARE_SCALE: 15,          // glare sprite full width at SUN_DIST → 1.91°.
+                                // COUPLING: this is wider than the opaque core
+                                // (bodyCatalog Sun displayAngularDeg 1.15°), so
+                                // background stars show INSIDE the glare (F6) —
+                                // Stage 4 reconciles glare vs mask.
+  SUN_GLARE_OPACITY: 0.95,      // additive; peak ~0.95 × texture — the Sun is the
+                                // one body MEANT to bloom (threshold 2.5).
+  SUN_LABEL_OFFSET: 15,         // world units below the disc (camera-relative)
+  // --- Moon ---
+  MOON_BASE_OPACITY: 0.85,      // NormalBlending disc; phase scales this (Stage 3
+                                // replaces the whole-disc dimming with a real
+                                // terminator + earthshine — see _updateMoon).
+  MOON_DEPTH_MASK_RADIUS: 5.2,  // opaque core at MOON_DIST; slightly INSIDE the
+                                // 5.6 disc so the mask doesn't peek past the limb.
+                                // Stage 3 keeps this FULL-DISC at every phase —
+                                // the unlit limb still occludes stars.
+  MOON_LABEL_OFFSET: 14,        // ≈ radius (5.6) + 8, the planet convention
+  // Phase floors (F2 — the defect Stage 3 deletes): a hard clamp that flattens
+  // every phase from new through crescent to the same final opacity. Kept here
+  // (not deleted) only until Stage 3 lands the real terminator + earthshine.
+  MOON_PHASE_BRIGHTNESS_FLOOR: 0.15,  // first clamp: brightness = max(0.15, (1-cos)/2)
+  MOON_PHASE_OPACITY_FLOOR: 0.3,      // second clamp: opacity = max(0.3, …) × 0.9
+  MOON_PHASE_OPACITY_SCALE: 0.9,
+
+  // --- Planets (shared) ---
+  PLANET_DISC_OPACITY: 0.85,    // FIXED today for all five (F5 — no magnitude
+                                // model; Venus −4.4 and Mercury −0.4 render
+                                // identically). Stage 5 replaces this with the
+                                // skyBrightness ladder as an HDR color multiplier
+                                // so the effective peak B(mag) × texPeak lands on
+                                // the curve. COUPLING: with NormalBlending the
+                                // rendered peak is color × texture × opacity, so
+                                // the ladder multiplier is B(mag) / opacity.
+  PLANET_GLOW_OPACITY: 0.6,     // additive halo behind the disc
+  PLANET_GLOW_SCALE: 2,         // glow plane = def.glow × this (full width)
+  PLANET_LABEL_OFFSET: 8,       // label sits radius + this below the disc
+  BODY_LABEL_SCALE_X: 50,       // shared planetarium label sprite scale
+  BODY_LABEL_SCALE_Y: 12,
+  BODY_LABEL_OPACITY: 0.34,
+
+  // --- Per-planet halo radii + sun-angle offsets (world units / degrees) ---
+  // glow = halo radius (the disc radius itself comes from bodyCatalog). deg =
+  // fixed elongation from the sun angle (decorative positions, per doctrine B).
+  PLANET_MERCURY_GLOW: 3.0,  PLANET_MERCURY_DEG: 20,
+  PLANET_VENUS_GLOW: 6.0,    PLANET_VENUS_DEG: 40,
+  PLANET_MARS_GLOW: 4.8,     PLANET_MARS_DEG: 170,
+  PLANET_JUPITER_GLOW: 7.2,  PLANET_JUPITER_DEG: 90,
+  PLANET_SATURN_GLOW: 5.6,   PLANET_SATURN_DEG: 130,
+  // Saturn's rings need a full-square PlaneGeometry billboard (the rings extend
+  // past the globe's inscribed circle). planeSize is the FULL width at
+  // PLANET_DIST → 1.95° today (F4: rivals the Sun). Stage 5 → ~7.6 for a 14 px
+  // visible span (the drawn rings fill only ~0.86 of the plane — see the plan).
+  PLANET_SATURN_PLANE_SIZE: 15,
+
+  // =========================================================================
   // V3 OCTOPUS ADR SATELLITE (from V3 Octopus.md Appendix F)
   // 6-arm configuration: 3 Weaver (large) + 3 Spinner (small), hexagonal
   // V4 "Opussy" GSL upgrades available as unlockable tech path
