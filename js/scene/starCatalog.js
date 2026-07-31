@@ -184,6 +184,61 @@ export function magnitudeBrightness(mag, min, max, soft) {
   return min * (soft + (1 - soft) * (raw / min));
 }
 
+// ============================================================================
+// THE ONE BRIGHTNESS CURVE FOR THE WHOLE SKY (stars AND bodies)
+// ============================================================================
+//
+// magnitudeBrightness owns the bottom half: raw 10^(−0.4(m−1)), a soft knee
+// below `min`, and a ceiling at `max`. That ceiling was a HARD clamp — fine
+// while only stars used it (the brightest star, Rigel, sits at raw 2.23, barely
+// past the 2.0 ceiling), but the planets live far above it: Venus raw 145,
+// Jupiter 19, Mars 10, Mercury 3.6. A hard clamp flattens all five to 2.0 —
+// the exact "flatten a population with a hard clamp" defect class the doctrine
+// forbids (F5).
+//
+// The soft ceiling is the mirror image of the soft knee: above `max`, grow
+// logarithmically so ordering survives without letting anything run away:
+//
+//     B(m) = max · (1 + hardness · log10(raw / max))      for raw > max
+//
+// With hardness = 0.20 the whole sky lands on one strictly-monotone curve:
+//
+//     Venus −4.4 → 2.74 (blooms — the ONLY planet allowed to, D3)
+//     Jupiter −2.2 → 2.39
+//     Mars −1.5 → 2.28
+//     Mercury −0.4 → 2.10
+//     Rigel +0.13 → 2.019 (was hard-clamped to exactly 2.0)
+//     Saturn +0.5 → 1.58
+//     Eta Leo +3.49 → 0.398
+//     field 4.4–7.0 → 0.32 constant
+//
+// Bloom coupling: the threshold is 2.5 (SceneManager). Only the Sun and Venus
+// may cross it — Venus lands at 2.74, everything else stays under. Rigel's
+// 2.019 × uOpacity 0.95 = 1.92, still safely below.
+//
+/** Soft-ceiling hardness: how fast brightness grows past `max` (log10 slope). */
+export const SKY_BRIGHT_CEILING_HARDNESS = 0.20;
+
+/**
+ * The whole-sky brightness function: magnitudeBrightness plus the soft ceiling.
+ * Identical to magnitudeBrightness below `max`, logarithmic above it — so stars
+ * and bodies can never diverge onto two curves. Starfield uses this for the
+ * catalogue stars (Rigel 2.019, not a hard 2.0); the body ladder uses it for
+ * the planets (Venus 2.74 blooms, Jupiter 2.39 does not).
+ *
+ * @param {number} mag — visual magnitude
+ * @param {number} min — soft-knee floor (Constants.STAR_MAG_BRIGHT_MIN)
+ * @param {number} max — soft ceiling (Constants.STAR_MAG_BRIGHT_MAX, bloom-coupled)
+ * @param {number} soft — sub-knee asymptote ratio (Constants.STAR_MAG_BRIGHT_FLOOR_SOFT)
+ * @param {number} [hardness] — ceiling slope (SKY_BRIGHT_CEILING_HARDNESS)
+ * @returns {number} brightness multiplier in (min·soft, ∞), strictly monotone in mag
+ */
+export function skyBrightness(mag, min, max, soft, hardness = SKY_BRIGHT_CEILING_HARDNESS) {
+  const raw = Math.pow(10, -0.4 * (mag - 1.0));
+  if (raw > max) return max * (1 + hardness * Math.log10(raw / max));
+  return magnitudeBrightness(mag, min, max, soft);
+}
+
 /**
  * Map a magnitude to a size attribute and alpha on the shared magnitude curve.
  * Size follows `base − slope·mag` but never drops below `floor`; once pinned at

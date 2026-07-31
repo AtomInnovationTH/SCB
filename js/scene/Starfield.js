@@ -12,7 +12,7 @@ import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
 import { Constants } from '../core/Constants.js';
-import { BRIGHT_STARS, CONSTELLATION_FIGURES, sampleFieldMagnitude, fieldSizeAlpha, magnitudeBrightness } from './starCatalog.js';
+import { BRIGHT_STARS, CONSTELLATION_FIGURES, sampleFieldMagnitude, fieldSizeAlpha, magnitudeBrightness, skyBrightness } from './starCatalog.js';
 
 // ============================================================================
 // RA/Dec → Cartesian conversion
@@ -261,7 +261,11 @@ export class Starfield {
         positions[i * 3 + 2] = p.z;
 
         sizes[i] = Math.max(sizeMin, Math.min(sizeBase, sizeBase - sizeSlope * star.mag));
-        const brightness = magnitudeBrightness(star.mag, brightMin, brightMax, brightSoft);
+        // One curve for the whole sky: skyBrightness adds the soft ceiling to
+        // the star curve, so Rigel (raw 2.23) reads 2.019 instead of a hard-
+        // clamped 2.0 — still bloom-safe (2.019 × uOpacity 0.95 = 1.92 < 2.5),
+        // and the planets share the exact same function (bodyCatalog).
+        const brightness = skyBrightness(star.mag, brightMin, brightMax, brightSoft);
         const c = spectralColorFor(star.spec);
         colors[i * 3] = c.r * brightness;
         colors[i * 3 + 1] = c.g * brightness;

@@ -8,6 +8,7 @@ import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
 import { createLabelTexture } from './labelTexture.js';
 import { sunEphemeris, moonEphemeris, latLonToUnitVec } from './Ephemeris.js';
+import { BODY_CATALOG, bodyByName, angularToRadius } from './bodyCatalog.js';
 
 // Tilt of the stylized day/night cycle's sun circle vs the equator (~23.5°,
 // mirroring Earth's axial tilt). Module-level because both the per-frame sun
@@ -534,19 +535,39 @@ export function createMarsTexture(size = 128) {
   return tex;
 }
 
-/** Planet definitions: name, hex color, disc radius, glow radius, angle from sun (degrees),
+/** Planet definitions: name, hex color, glow radius, angle from sun (degrees),
  *  optional procedural `makeTexture` factory, and optional `planeSize` (Saturn's rings need a
  *  full-square PlaneGeometry billboard rather than a CircleGeometry disc).
+ *  Disc radii are DERIVED from BODY_CATALOG's displayAngularDeg via angularToRadius
+ *  (radius = dist·tan(θ/2)) so the catalogue is the single source of truth for body
+ *  sizes — change a size there and disc, glow, depth mask and label offset cannot
+ *  silently desync. The textureKey → factory mapping lives HERE, not in the
+ *  catalogue: the factories call document.createElement('canvas'), so importing
+ *  them into bodyCatalog.js would make that module un-loadable in node and kill
+ *  its tests (the same contract that keeps starCatalog.js testable).
  *  Sizes are exaggerated planetarium markers (real planets are point sources from LEO). The
  *  hierarchy is Sun≈Moon > Jupiter > Venus > Saturn(+rings) > Mars > Mercury; the Moon reads
  *  as clearly the largest body. `hex` still tints each planet's glow halo. */
+const PLANET_DIST = 440;
+const TEXTURE_FACTORIES = {
+  mars: () => createMarsTexture(128),
+  jupiter: () => createJupiterTexture(128),
+  saturn: () => createSaturnTexture(256),
+};
 const PLANET_DEFS = [
-  { name: 'Mercury', hex: '#c7bfad', radius: 2.0,  glow: 3.0, deg:  20 },
-  { name: 'Venus',   hex: '#ffffcc', radius: 4.0,  glow: 6.0, deg:  40 },
-  { name: 'Mars',    hex: '#ff6633', radius: 3.2,  glow: 4.8, deg: 170, makeTexture: () => createMarsTexture(128) },
-  { name: 'Jupiter', hex: '#ffd699', radius: 4.8,  glow: 7.2, deg:  90, makeTexture: () => createJupiterTexture(128) },
-  { name: 'Saturn',  hex: '#f5e6c8', radius: 2.9,  glow: 5.6, deg: 130, makeTexture: () => createSaturnTexture(256), planeSize: 15 },
-];
+  { name: 'Mercury', hex: '#c7bfad', glow: 3.0, deg:  20 },
+  { name: 'Venus',   hex: '#ffffcc', glow: 6.0, deg:  40 },
+  { name: 'Mars',    hex: '#ff6633', glow: 4.8, deg: 170 },
+  { name: 'Jupiter', hex: '#ffd699', glow: 7.2, deg:  90 },
+  { name: 'Saturn',  hex: '#f5e6c8', glow: 5.6, deg: 130, planeSize: 15 },
+].map((def) => {
+  const cat = bodyByName(def.name);
+  const radius = angularToRadius(cat.displayAngularDeg, PLANET_DIST);
+  return Object.assign({}, def, {
+    radius,
+    makeTexture: cat.textureKey ? TEXTURE_FACTORIES[cat.textureKey] : undefined,
+  });
+});
 
 /** Shared material for depth-only occlusion masks — invisible but writes depth */
 const DEPTH_MASK_MAT = new THREE.MeshBasicMaterial({
@@ -669,9 +690,11 @@ export class SunLight {
     this.scene.add(this.sunSprite);
 
     // Depth mask — invisible disc placed inside the star sphere to occlude stars/lines.
-    // Radius scaled to match angular size of the sun's opaque core at DEPTH_MASK_DIST.
+    // Radius derived from BODY_CATALOG's Sun displayAngularDeg (opaque core),
+    // rescaled to DEPTH_MASK_DIST so its angular size matches the core's.
+    const sunCoreRadius = angularToRadius(bodyByName('Sun').displayAngularDeg, 450);
     this._sunDepthMask = new THREE.Mesh(
-      new THREE.CircleGeometry(4.5 * (DEPTH_MASK_DIST / 450), 32),
+      new THREE.CircleGeometry(sunCoreRadius * (DEPTH_MASK_DIST / 450), 32),
       DEPTH_MASK_MAT
     );
     this._sunDepthMask.renderOrder = -1;
@@ -748,9 +771,11 @@ export class SunLight {
    */
   _createMoon() {
     // Opaque maria-patterned disc (NormalBlending so the dark maria read as
-    // surface, not additive glow). ~1.5° apparent size at distance 430.
+    // surface, not additive glow). Radius derived from BODY_CATALOG's
+    // displayAngularDeg (~1.5° at distance 430) so the catalogue owns the size.
     const moonTexture = createMoonDiscTexture(256);
-    const moonGeo = new THREE.CircleGeometry(5.6, 32);  // 11.2 units @ 430 ≈ 1.5° (largest body)
+    const moonRadius = angularToRadius(bodyByName('Moon').displayAngularDeg, 430);
+    const moonGeo = new THREE.CircleGeometry(moonRadius, 32);
     this._moonMaterial = new THREE.MeshBasicMaterial({
       map: moonTexture,
       transparent: true,
