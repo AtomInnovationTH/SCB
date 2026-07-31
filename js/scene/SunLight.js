@@ -685,20 +685,26 @@ export class SunLight {
       depthTest: false,          // Mask is closer than body — skip depth test so body isn't self-occluded
     }));
 
-    // Size-parity with the Moon: the visible bright disc should read at ~1.3–1.5°
-    // at distance 450 (Moon is ~1.5°). Glare makes a bright disc read larger than
-    // its geometry, so this is tuned by eye slightly under the Moon. Stays within
-    // CAMERA_FAR (500).
-    this.sunSprite.scale.set(Constants.SUN_GLARE_SCALE, Constants.SUN_GLARE_SCALE, 1);
+    // Sun/Moon parity + glare/mask reconciliation (Stage 4, F6). The glare
+    // sprite's visible disc and the depth mask BOTH derive from the catalogue's
+    // Sun displayAngularDeg (1.49°, matching the Moon — reality is within 3%),
+    // so they can never desync. Before, the glare (1.91°) was far wider than the
+    // mask (1.15°) and background stars showed inside the glare ring. The
+    // texture's own radial falloff provides the glow skirt INSIDE this disc; the
+    // bloom pass adds the outer halo (stars shine through bloom — physically
+    // correct for instrumental glow, and outside the geometry disc the
+    // acceptance scans). Stays within CAMERA_FAR (500).
+    const sunAngular = bodyByName('Sun').displayAngularDeg;
+    const sunRadius = angularToRadius(sunAngular, Constants.SUN_DIST);  // half-extent at SUN_DIST
+    this.sunSprite.scale.set(sunRadius * 2, sunRadius * 2, 1);          // sprite scale = full width
     this.sunSprite.name = 'SunDisc';
     this.scene.add(this.sunSprite);
 
     // Depth mask — invisible disc placed inside the star sphere to occlude stars/lines.
-    // Radius derived from BODY_CATALOG's Sun displayAngularDeg (opaque core),
-    // rescaled to DEPTH_MASK_DIST so its angular size matches the core's.
-    const sunCoreRadius = angularToRadius(bodyByName('Sun').displayAngularDeg, Constants.SUN_DIST);
+    // Sized to the SAME displayAngularDeg as the glare (rescaled to DEPTH_MASK_DIST),
+    // so it covers the entire visible glare disc — zero star pixels inside it.
     this._sunDepthMask = new THREE.Mesh(
-      new THREE.CircleGeometry(sunCoreRadius * (DEPTH_MASK_DIST / Constants.SUN_DIST), 32),
+      new THREE.CircleGeometry(sunRadius * (DEPTH_MASK_DIST / Constants.SUN_DIST), 32),
       DEPTH_MASK_MAT
     );
     this._sunDepthMask.renderOrder = -1;

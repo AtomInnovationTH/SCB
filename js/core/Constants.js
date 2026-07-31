@@ -424,11 +424,11 @@ export const Constants = {
   BODY_DEPTH_MASK_DIST: 398,
 
   // --- Sun ---
-  SUN_GLARE_SCALE: 15,          // glare sprite full width at SUN_DIST → 1.91°.
-                                // COUPLING: this is wider than the opaque core
-                                // (bodyCatalog Sun displayAngularDeg 1.15°), so
-                                // background stars show INSIDE the glare (F6) —
-                                // Stage 4 reconciles glare vs mask.
+  // The glare sprite scale and the depth-mask radius are BOTH derived from
+  // bodyCatalog's Sun displayAngularDeg (1.49°, Moon parity) in _createSunDisc —
+  // one source of truth so they can never desync (that desync was F6: glare
+  // 1.91° vs mask 1.15° let stars show inside the glare). No SUN_GLARE_SCALE
+  // constant by design.
   SUN_GLARE_OPACITY: 0.95,      // additive; peak ~0.95 × texture — the Sun is the
                                 // one body MEANT to bloom (threshold 2.5).
   SUN_LABEL_OFFSET: 15,         // world units below the disc (camera-relative)

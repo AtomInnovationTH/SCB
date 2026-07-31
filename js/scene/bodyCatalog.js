@@ -98,7 +98,12 @@ export const BODY_CATALOG = [
     name: 'Sun',
     magnitude: -26.74,
     realAngularDeg: 0.533,
-    displayAngularDeg: 1.15,      // opaque core; the 1.91° glare sprite reads larger
+    displayAngularDeg: 1.49,      // Stage 4: parity with the Moon (real 0.533° vs
+                                  // 0.518° = within 3%). The glare sprite AND the
+                                  // depth mask both derive from this one value so
+                                  // they can never desync (that desync was F6:
+                                  // glare 1.91° vs mask 1.15° let stars show
+                                  // inside the glare). Was 1.15° (core only).
     textureKey: 'sun',
   },
   {
