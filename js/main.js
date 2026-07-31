@@ -1630,6 +1630,113 @@ async function init() {
           behind: v.z > 1,
         };
       };
+
+      // ── Body-info hook (sun/moon/planets cleanup, Stage 0) ──
+      //   window.__scbBodyInfo()
+      //     → for each of Sun / Moon / the 5 planets: world position, ra/dec
+      //       (inverse of Starfield's raDec2xyz convention), live
+      //       material.opacity + blending, geometry radius, computed angular
+      //       diameter, and the projected screen x/y + px diameter. The
+      //       measurement harness must never guess object names — the bodies
+      //       are read straight out of SunLight's own structures. px/° uses the
+      //       camera's *live* vertical FOV (the inspect zoom and ARM_PILOT view
+      //       change it, so Constants.CAMERA_FOV is not safe here).
+      window.__scbBodyInfo = () => {
+        const cam = cameraSystem && cameraSystem.camera;
+        const cv = document.getElementById('game-canvas');
+        if (!cam || !cv || !sunLight) return null;
+        const pxPerDeg = cv.height / cam.fov;   // live FOV — see note above
+        const _v = new THREE.Vector3();
+        const project = (mesh, radiusWorld) => {
+          mesh.getWorldPosition(_v);
+          const dist = _v.distanceTo(cam.position);
+          const p = _v.clone().project(cam);
+          // Inverse of raDec2xyz: +Y north, RA 0 at +X, Z negated.
+          const dir = _v.clone().normalize();
+          const raRad = Math.atan2(-dir.z, dir.x);
+          const raH = ((raRad * 12 / Math.PI) % 24 + 24) % 24;
+          const decDeg = Math.asin(Math.max(-1, Math.min(1, dir.y))) * 180 / Math.PI;
+          const angDeg = 2 * Math.atan(radiusWorld / dist) * 180 / Math.PI;
+          return {
+            x: (p.x * 0.5 + 0.5) * cv.width,
+            y: (-p.y * 0.5 + 0.5) * cv.height,
+            behind: p.z > 1,
+            dist,
+            ra: raH,
+            dec: decDeg,
+            angularDiameterDeg: angDeg,
+            pxDiameter: angDeg * pxPerDeg,
+          };
+        };
+        const blendingName = (b) => ({
+          [THREE.NormalBlending]: 'NormalBlending',
+          [THREE.AdditiveBlending]: 'AdditiveBlending',
+          [THREE.CustomBlending]: 'CustomBlending',
+        })[b] || String(b);
+        const out = { pxPerDeg, bodies: {} };
+
+        // Sun: glare sprite scale is the full width at distance 450 (half-extent 7.5).
+        if (sunLight.sunSprite) {
+          out.bodies.Sun = Object.assign(project(sunLight.sunSprite, sunLight.sunSprite.scale.x / 2), {
+            opacity: sunLight.sunSprite.material.opacity,
+            blending: blendingName(sunLight.sunSprite.material.blending),
+            geometryRadius: sunLight.sunSprite.scale.x / 2,
+            visible: sunLight.sunSprite.visible,
+            kind: 'glare-sprite',
+          });
+        }
+        // Moon: CircleGeometry(radius 5.6).
+        if (sunLight.moonMesh) {
+          out.bodies.Moon = Object.assign(project(sunLight.moonMesh, sunLight.moonMesh.geometry.parameters.radius), {
+            opacity: sunLight._moonMaterial.opacity,
+            blending: blendingName(sunLight._moonMaterial.blending),
+            geometryRadius: sunLight.moonMesh.geometry.parameters.radius,
+            visible: sunLight.moonMesh.visible,
+            kind: 'disc',
+          });
+        }
+        // Planets: SunLight._planets holds { name, disc, glow, label, depthMask, deg, radius }.
+        // Saturn's disc is a PlaneGeometry(planeSize²) — report the globe radius
+        // (radius) as the body's angular size, and the plane half-extent as the
+        // ring span, since the two answer different questions.
+        if (sunLight._planets) {
+          for (const p of sunLight._planets) {
+            const gp = p.disc.geometry.parameters;
+            const isPlane = typeof gp.width === 'number';   // PlaneGeometry has .width, CircleGeometry has .radius
+            const bodyRadius = p.radius;                    // the def's globe radius, always meaningful
+            out.bodies[p.name] = Object.assign(project(p.disc, bodyRadius), {
+              opacity: p.disc.material.opacity,
+              blending: blendingName(p.disc.material.blending),
+              geometryRadius: isPlane ? gp.width / 2 : gp.radius,
+              kind: isPlane ? 'ring-plane' : 'disc',
+              visible: p.disc.visible,
+              // Ring span for the ring-plane bodies: the drawn rings end at
+              // ~2.27 globe radii on a texture where globeR = 0.19 × size, so
+              // the visible span is ~0.86 of the plane. Report the plane's
+              // angular width; the harness measures the real span from pixels.
+              planeAngularWidthDeg: isPlane
+                ? 2 * Math.atan(gp.width / 2 / p.disc.position.distanceTo(cam.position)) * 180 / Math.PI
+                : undefined,
+            });
+          }
+        }
+        return out;
+      };
+
+      // ── Moon-phase hook (sun/moon/planets cleanup, Stage 0) ──
+      //   window.__scbSetMoonPhase(frac)
+      //     → forces the moon's elongation so it can be captured at any phase
+      //       without waiting days: 0 = new (beside the sun), 0.5 = full
+      //       (opposite the sun). The lever already exists — _updateMoon builds
+      //       the direction from `moonAngle = sunAngle + _moonAzOffset`, so
+      //       _moonAzOffset *is* the elongation. Setting it to frac × 2π makes
+      //       the existing dot-product phase math follow; there is no parallel
+      //       phase variable. Returns the applied offset in degrees.
+      window.__scbSetMoonPhase = (frac) => {
+        if (!sunLight || typeof frac !== 'number' || !isFinite(frac)) return null;
+        sunLight._moonAzOffset = frac * 2 * Math.PI;
+        return { moonAzOffsetDeg: frac * 360 };
+      };
       // Debug handle for click-path / layout introspection (codex click debug).
       window.__callouts = motherCallouts;
 

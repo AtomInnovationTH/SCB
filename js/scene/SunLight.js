@@ -1174,7 +1174,7 @@ export class SunLight {
       depthMask.onBeforeRender = (_r, _s, cam) => depthMask.lookAt(cam.position);
       this.scene.add(depthMask);
 
-      return { disc, glow, label, depthMask, deg: def.deg, radius: def.radius };
+      return { name: def.name, disc, glow, label, depthMask, deg: def.deg, radius: def.radius };
     });
   }
 
