@@ -134,7 +134,9 @@ export function createMoonDiscTexture(size = 256) {
     ctx.globalAlpha = 1.0;
   };
 
-  const dark = '#767c8a'; // deep mare — blue-gray, ~40% darker than the base
+  const dark = '#6a707c'; // deep mare — blue-gray, ~1.9:1 against the base (real
+                          // mare/highland albedo ratio 0.07 vs 0.12). Was #767c8a
+                          // (~1.7:1); pushed to the real ratio for Stage 3 (F3).
   const mid  = '#8f95a2'; // lighter mare / basin fringe
 
   ctx.filter = `blur(${Math.round(R * 0.022)}px)`; // soften mare edges
@@ -657,6 +659,8 @@ export class SunLight {
     this._bodyDir = new THREE.Vector3();   // moon direction temp
     this._downTmp = new THREE.Vector3();   // camera-relative "below" temp
     this._labelTmp = new THREE.Vector3();  // per-label offset temp
+    this._sunDirView = new THREE.Vector3(); // sun dir in view space (moon shader)
+    this._camQuatInv = new THREE.Quaternion(); // inverse camera quat (moon shader)
   }
 
   // ==========================================================================
@@ -770,20 +774,61 @@ export class SunLight {
    * @private
    */
   _createMoon() {
-    // Opaque maria-patterned disc (NormalBlending so the dark maria read as
-    // surface, not additive glow). Radius derived from BODY_CATALOG's
-    // displayAngularDeg (~1.5° at MOON_DIST) so the catalogue owns the size.
+    // Opaque maria-patterned disc with a REAL terminator (Stage 3). The old
+    // MeshBasicMaterial dimmed the WHOLE disc with phase (F1) — you never saw
+    // a crescent, only a dim grey coin. This ShaderMaterial samples the maria
+    // texture, then shades it with a reconstructed sphere normal so the lit
+    // fraction falls out of the geometry: crescent horns, the elliptical
+    // terminator and the gibbous bulge all come free from the dot product.
+    // Radius derived from BODY_CATALOG's displayAngularDeg (~1.5° at MOON_DIST).
     const moonTexture = createMoonDiscTexture(256);
     const moonRadius = angularToRadius(bodyByName('Moon').displayAngularDeg, Constants.MOON_DIST);
     const moonGeo = new THREE.CircleGeometry(moonRadius, 32);
-    this._moonMaterial = new THREE.MeshBasicMaterial({
-      map: moonTexture,
+    this._moonMaterial = new THREE.ShaderMaterial({
+      uniforms: {
+        uMap: { value: moonTexture },
+        // Sun direction in VIEW space. The mesh copies the camera quaternion
+        // (below), so its local axes ARE the view axes — no extra basis math.
+        uSunDirView: { value: new THREE.Vector3(0, 0, 1) },
+        uEarthshine: { value: Constants.MOON_EARTHSHINE },
+        uTermSoft: { value: Constants.MOON_TERMINATOR_SOFTNESS },
+        uOpacity: { value: Constants.MOON_BASE_OPACITY },
+      },
+      vertexShader: /* glsl */`
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */`
+        uniform sampler2D uMap;
+        uniform vec3 uSunDirView;
+        uniform float uEarthshine;
+        uniform float uTermSoft;
+        uniform float uOpacity;
+        varying vec2 vUv;
+        void main() {
+          vec4 tex = texture2D(uMap, vUv);
+          // Rebuild the near-hemisphere normal from the disc's local coords:
+          // p = (uv − 0.5) × 2 maps the inscribed circle to the unit disc, and
+          // n = (p.x, p.y, sqrt(1 − |p|²)) is the sphere normal there. The
+          // terminator dot(n, sunDir) is then an ELLIPSE on the disc — correct
+          // at crescent and gibbous, where a straight-line split reads wrong.
+          vec2 p = (vUv - 0.5) * 2.0;
+          float r2 = dot(p, p);
+          vec3 n = vec3(p, sqrt(max(0.0, 1.0 - r2)));
+          float lit = smoothstep(-uTermSoft, uTermSoft, dot(n, uSunDirView));
+          // Earthshine on the unlit fraction only — NOT a floor under the whole
+          // disc (that was F2). A new moon is a faint ashen disc for real reasons.
+          vec3 color = tex.rgb * (lit + uEarthshine * (1.0 - lit));
+          gl_FragColor = vec4(color, tex.a * uOpacity);
+        }
+      `,
       transparent: true,
-      opacity: Constants.MOON_BASE_OPACITY,
       depthWrite: false,
       depthTest: false,          // Mask is closer than body — skip depth test so body isn't self-occluded
       side: THREE.DoubleSide,
-      blending: THREE.NormalBlending,
     });
     this.moonMesh = new THREE.Mesh(moonGeo, this._moonMaterial);
     this.moonMesh.name = 'Moon';
@@ -792,8 +837,20 @@ export class SunLight {
     // texture's up to world +Y, but the gameplay camera's up is the Earth-radial
     // direction (CameraSystem), so world-up billboards appear rolled by the
     // orbital angle. Aligning to the camera keeps the classic recognizable view.
+    // LICENSED: real libration would tilt the maria; the upright billboard is a
+    // deliberate readability choice. It is ALSO what makes the shader's view-space
+    // sun direction correct — the mesh's local axes are the camera's view axes.
+    //
+    // uSunDirView is computed HERE, not in _updateMoon: the mesh quaternion copy
+    // and the uniform must read the SAME camera quaternion in the SAME frame, or
+    // a moving camera leaves the texture and its lighting one frame apart (the
+    // terminator lands in the wrong place). onBeforeRender runs at render time
+    // with the exact camera, so the two are frame-consistent by construction.
     this.moonMesh.onBeforeRender = (renderer, scene, camera) => {
       this.moonMesh.quaternion.copy(camera.quaternion);
+      this._camQuatInv.copy(camera.quaternion).invert();
+      this._sunDirView.copy(this.sunDirection).applyQuaternion(this._camQuatInv);
+      this._moonMaterial.uniforms.uSunDirView.value.copy(this._sunDirView);
     };
     this.scene.add(this.moonMesh);
 
@@ -1079,20 +1136,17 @@ export class SunLight {
       this._moonDepthMask.position.copy(moonDir).multiplyScalar(DEPTH_MASK_DIST);
     }
 
-    // Phase calculation — brightness follows the moon's illuminated fraction.
-    // dot(sunDir, moonDir) = cos(elongation): +1 with the moon beside the sun
-    // (new moon, dark), −1 opposite the sun (full moon, bright). Illuminated
-    // fraction = (1 − cosθ)/2. (An earlier version had this inverted, which the
-    // old additive glow hid; with an opaque NormalBlending disc it pinned the
-    // moon at ~0.3 opacity — dimmer than every planet.) With the elongation
-    // seeded from the real sky (_seedSkyFromClock), this fraction IS today's
-    // real lunar phase — full moon nights are bright, new moon nights rely on
-    // the 0.3 opacity floor for readability.
-    const phase = this.sunDirection.dot(moonDir);
-    const brightness = Math.max(Constants.MOON_PHASE_BRIGHTNESS_FLOOR, (1 - phase) * 0.5);
-    // Retuned for NormalBlending: floor at 0.3 keeps thin phases visible while
-    // the gibbous equilibrium (~0.6 opacity) reads punchy against the night sky.
-    let opacity = Math.max(Constants.MOON_PHASE_OPACITY_FLOOR, brightness) * Constants.MOON_PHASE_OPACITY_SCALE;
+    // Phase is now rendered by the SHADER, not by dimming the whole disc (F1/F2
+    // fixed). The lit fraction still comes from the same elongation — but instead
+    // of scaling opacity, the shader shades a reconstructed sphere normal with
+    // uSunDirView (the sun direction in view space), so the terminator is a real
+    // ellipse with crescent horns and a gibbous bulge. uSunDirView is updated in
+    // the mesh's onBeforeRender so it stays frame-consistent with the billboard
+    // quaternion copy. The unlit limb gets the ashen MOON_EARTHSHINE term instead
+    // of a hard opacity floor: a new moon is a faint disc for real reasons. With
+    // the elongation seeded from the real sky (_seedSkyFromClock), the rendered
+    // phase IS today's real lunar phase.
+    // sunDir·moonDir = cos(elongation): +1 beside the sun (new), −1 opposite (full).
 
     // Moon label: camera-relative "below" — no parallax regardless of orbital orientation
     if (this._moonLabel) {
@@ -1107,9 +1161,10 @@ export class SunLight {
     }
 
     // Earth occlusion — hide moon when behind Earth's disc from camera POV.
-    // Now that the moon is an opaque disc (not additive glow), the hard show/hide
-    // would pop; soften it with a limb-fade ramp on opacity as the moon nears
-    // Earth's angular edge. Mask/label keep the binary visibility.
+    // The only opacity the disc still carries is the LIMB FADE as it nears
+    // Earth's angular edge (phase dimming is gone — the shader owns phase).
+    // Mask/label keep the binary visibility.
+    let opacity = Constants.MOON_BASE_OPACITY;
     if (this.camera) {
       const moonOccluded = this._isOccludedByEarth(this.moonMesh.position, this.camera.position);
       opacity *= this._earthLimbFadeFactor(this.moonMesh.position, this.camera.position);
@@ -1118,7 +1173,7 @@ export class SunLight {
       if (this._moonLabel) this._moonLabel.visible = !moonOccluded && !this._labelsHidden;
     }
 
-    this._moonMaterial.opacity = opacity;
+    this._moonMaterial.uniforms.uOpacity.value = opacity;
   }
 
   // ==========================================================================

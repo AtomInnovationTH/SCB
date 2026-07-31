@@ -1688,7 +1688,9 @@ async function init() {
         // Moon: CircleGeometry(radius 5.6).
         if (sunLight.moonMesh) {
           out.bodies.Moon = Object.assign(project(sunLight.moonMesh, sunLight.moonMesh.geometry.parameters.radius), {
-            opacity: sunLight._moonMaterial.opacity,
+            opacity: sunLight._moonMaterial.uniforms
+              ? sunLight._moonMaterial.uniforms.uOpacity.value   // Stage 3 ShaderMaterial
+              : sunLight._moonMaterial.opacity,
             blending: blendingName(sunLight._moonMaterial.blending),
             geometryRadius: sunLight.moonMesh.geometry.parameters.radius,
             visible: sunLight.moonMesh.visible,

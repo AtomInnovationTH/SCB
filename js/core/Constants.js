@@ -441,12 +441,20 @@ export const Constants = {
                                 // Stage 3 keeps this FULL-DISC at every phase —
                                 // the unlit limb still occludes stars.
   MOON_LABEL_OFFSET: 14,        // ≈ radius (5.6) + 8, the planet convention
-  // Phase floors (F2 — the defect Stage 3 deletes): a hard clamp that flattens
-  // every phase from new through crescent to the same final opacity. Kept here
-  // (not deleted) only until Stage 3 lands the real terminator + earthshine.
-  MOON_PHASE_BRIGHTNESS_FLOOR: 0.15,  // first clamp: brightness = max(0.15, (1-cos)/2)
-  MOON_PHASE_OPACITY_FLOOR: 0.3,      // second clamp: opacity = max(0.3, …) × 0.9
-  MOON_PHASE_OPACITY_SCALE: 0.9,
+  // --- Moon Stage 3: real terminator + earthshine ---
+  // (The F2 phase floors — MOON_PHASE_BRIGHTNESS_FLOOR / _OPACITY_FLOOR /
+  // _OPACITY_SCALE — were deleted when Stage 3 landed the terminator: the shader
+  // now shades a sphere normal, so there is no whole-disc opacity to floor.)
+  // Earthshine: the ashen light on the unlit limb (Earth-reflected sunlight).
+  // LICENSED — true earthshine is far dimmer than 6% of the lit side; this is
+  // the value that keeps a new moon readable as a faint disc for real reasons,
+  // replacing the F2 whole-disc opacity floor. Applied to the UNLIT fraction
+  // only: color = tex × (lit + earthshine × (1 − lit)).
+  MOON_EARTHSHINE: 0.06,
+  // Terminator softness: the smoothstep half-width k on dot(normal, sunDirView).
+  // Small enough that the crescent horns stay sharp, large enough that the
+  // terminator doesn't alias across the 24 px disc.
+  MOON_TERMINATOR_SOFTNESS: 0.05,
 
   // --- Planets (shared) ---
   PLANET_DISC_OPACITY: 0.85,    // FIXED today for all five (F5 — no magnitude
