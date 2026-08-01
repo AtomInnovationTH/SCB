@@ -172,13 +172,23 @@ export function sampleFieldMagnitude(u, mMin, mMax) {
  * strictly monotone everywhere (ordering is never lost), and asymptotic to
  * min·soft = 0.3825, which stays strictly above the field's 0.32 with margin.
  *
+ * ⚠ INTERNAL HALF OF THE CURVE — DO NOT CALL FROM RENDERING CODE.
+ * The name says what it is: this is the below-ceiling half, and its ceiling is a
+ * HARD clamp. That clamp is correct here and catastrophic anywhere else — it is
+ * exactly what flattened the planets to a single brightness (F5). Rendering code
+ * must call `skyBrightness`, which wraps this with the soft ceiling so the whole
+ * sky stays on one strictly-monotone curve. A guard test
+ * (test-sky-one-curve.js) fails the build if any non-test module outside this
+ * file calls this function, because "reach for the shorter name" is precisely how
+ * F5 would come back.
+ *
  * @param {number} mag — visual magnitude
  * @param {number} min — knee (Constants.STAR_MAG_BRIGHT_MIN)
- * @param {number} max — ceiling (Constants.STAR_MAG_BRIGHT_MAX, bloom-coupled)
+ * @param {number} max — HARD ceiling (Constants.STAR_MAG_BRIGHT_MAX, bloom-coupled)
  * @param {number} soft — sub-knee asymptote ratio (Constants.STAR_MAG_BRIGHT_FLOOR_SOFT)
- * @returns {number} brightness multiplier in [min·soft, max]
+ * @returns {number} brightness multiplier in [min·soft, max] — CLAMPED at max
  */
-export function magnitudeBrightness(mag, min, max, soft) {
+export function magnitudeBrightnessBelowCeiling(mag, min, max, soft) {
   const raw = Math.pow(10, -0.4 * (mag - 1.0));
   if (raw >= min) return Math.min(raw, max);
   return min * (soft + (1 - soft) * (raw / min));
@@ -188,7 +198,7 @@ export function magnitudeBrightness(mag, min, max, soft) {
 // THE ONE BRIGHTNESS CURVE FOR THE WHOLE SKY (stars AND bodies)
 // ============================================================================
 //
-// magnitudeBrightness owns the bottom half: raw 10^(−0.4(m−1)), a soft knee
+// magnitudeBrightnessBelowCeiling owns the bottom half: raw 10^(−0.4(m−1)), a soft knee
 // below `min`, and a ceiling at `max`. That ceiling was a HARD clamp — fine
 // while only stars used it (the brightest star, Rigel, sits at raw 2.23, barely
 // past the 2.0 ceiling), but the planets live far above it: Venus raw 145,
@@ -220,8 +230,9 @@ export function magnitudeBrightness(mag, min, max, soft) {
 export const SKY_BRIGHT_CEILING_HARDNESS = 0.20;
 
 /**
- * The whole-sky brightness function: magnitudeBrightness plus the soft ceiling.
- * Identical to magnitudeBrightness below `max`, logarithmic above it — so stars
+ * The whole-sky brightness function — THE ONE RENDERING CODE MUST USE.
+ * magnitudeBrightnessBelowCeiling plus the soft ceiling: identical to it below
+ * `max`, logarithmic above it — so stars
  * and bodies can never diverge onto two curves. Starfield uses this for the
  * catalogue stars (Rigel 2.019, not a hard 2.0); the body ladder uses it for
  * the planets (Venus 2.74 blooms, Jupiter 2.39 does not).
@@ -236,7 +247,7 @@ export const SKY_BRIGHT_CEILING_HARDNESS = 0.20;
 export function skyBrightness(mag, min, max, soft, hardness = SKY_BRIGHT_CEILING_HARDNESS) {
   const raw = Math.pow(10, -0.4 * (mag - 1.0));
   if (raw > max) return max * (1 + hardness * Math.log10(raw / max));
-  return magnitudeBrightness(mag, min, max, soft);
+  return magnitudeBrightnessBelowCeiling(mag, min, max, soft);
 }
 
 /**
