@@ -457,34 +457,40 @@ export const Constants = {
   MOON_TERMINATOR_SOFTNESS: 0.05,
 
   // --- Planets (shared) ---
-  PLANET_DISC_OPACITY: 0.85,    // FIXED today for all five (F5 — no magnitude
-                                // model; Venus −4.4 and Mercury −0.4 render
-                                // identically). Stage 5 replaces this with the
-                                // skyBrightness ladder as an HDR color multiplier
-                                // so the effective peak B(mag) × texPeak lands on
-                                // the curve. COUPLING: with NormalBlending the
-                                // rendered peak is color × texture × opacity, so
-                                // the ladder multiplier is B(mag) / opacity.
+  // Stage 5 brightness mechanism (the resolved "pick one"): opacity is 1.0 and
+  // the skyBrightness ladder is applied DIRECTLY as the HDR color multiplier
+  // B(mag) on each disc. COUPLING to the 2.5 bloom threshold (SceneManager):
+  // with NormalBlending the rendered peak is color × texture × opacity = (tint ×
+  // B(mag)) × texPeak × 1.0. For flat discs (texPeak 1) the peak channel is
+  // tint_peak × B(mag) — Venus (near-white) 2.74 blooms, Jupiter 2.39 / Mars
+  // 2.28 / Mercury ~1.6 (tint-weighted) / Saturn 1.58 all stay under. Only Venus
+  // blooms (D3). The multiplier MUST use the same skyBrightness curve the stars
+  // use (starCatalog.js) or the planets and stars fork onto two curves (F5).
+  PLANET_DISC_OPACITY: 1.0,
   PLANET_GLOW_OPACITY: 0.6,     // additive halo behind the disc
-  PLANET_GLOW_SCALE: 2,         // glow plane = def.glow × this (full width)
+  PLANET_GLOW_RADIUS_FACTOR: 1.25, // halo radius = this × body radius (was 1.5×).
+                                // The glow plane's full width = 2 × halo radius.
   PLANET_LABEL_OFFSET: 8,       // label sits radius + this below the disc
   BODY_LABEL_SCALE_X: 50,       // shared planetarium label sprite scale
   BODY_LABEL_SCALE_Y: 12,
   BODY_LABEL_OPACITY: 0.34,
 
-  // --- Per-planet halo radii + sun-angle offsets (world units / degrees) ---
-  // glow = halo radius (the disc radius itself comes from bodyCatalog). deg =
-  // fixed elongation from the sun angle (decorative positions, per doctrine B).
-  PLANET_MERCURY_GLOW: 3.0,  PLANET_MERCURY_DEG: 20,
-  PLANET_VENUS_GLOW: 6.0,    PLANET_VENUS_DEG: 40,
-  PLANET_MARS_GLOW: 4.8,     PLANET_MARS_DEG: 170,
-  PLANET_JUPITER_GLOW: 7.2,  PLANET_JUPITER_DEG: 90,
-  PLANET_SATURN_GLOW: 5.6,   PLANET_SATURN_DEG: 130,
+  // --- Per-planet sun-angle offsets (decorative positions, degrees) ---
+  // deg = fixed elongation from the sun angle (decorative, per doctrine B). The
+  // halo radius now derives from the disc radius (PLANET_GLOW_RADIUS_FACTOR), so
+  // there are no per-planet PLANET_*_GLOW constants.
+  PLANET_MERCURY_DEG: 20,
+  PLANET_VENUS_DEG: 40,
+  PLANET_MARS_DEG: 170,
+  PLANET_JUPITER_DEG: 90,
+  PLANET_SATURN_DEG: 130,
   // Saturn's rings need a full-square PlaneGeometry billboard (the rings extend
   // past the globe's inscribed circle). planeSize is the FULL width at
-  // PLANET_DIST → 1.95° today (F4: rivals the Sun). Stage 5 → ~7.6 for a 14 px
-  // visible span (the drawn rings fill only ~0.86 of the plane — see the plan).
-  PLANET_SATURN_PLANE_SIZE: 15,
+  // PLANET_DIST. Stage 5: 15 → 7.6 for a ~14 px visible ring span — the drawn
+  // rings fill only 0.86 of the plane (globeR = 0.19 × size, A ring outer = 2.27
+  // globe radii → span 0.86 of plane), so 7.6 × 0.86 ≈ 0.85° ≈ 14 px. Measure
+  // the span from a capture, not from the parameter (plan trap 2).
+  PLANET_SATURN_PLANE_SIZE: 7.6,
 
   // =========================================================================
   // V3 OCTOPUS ADR SATELLITE (from V3 Octopus.md Appendix F)

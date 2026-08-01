@@ -117,40 +117,50 @@ export const BODY_CATALOG = [
     name: 'Venus',
     magnitude: -4.4,              // at greatest elongation; the brightest planet
     realAngularDeg: 0.008,
-    displayAngularDeg: 1.04,      // CURRENT (F4 inversion); Stage 5 → 0.58°
+    displayAngularDeg: 0.58,      // Stage 5 (D1): ~9–10 px, the only blooming planet
     textureKey: null,             // flat warm-white disc
   },
   {
     name: 'Jupiter',
     magnitude: -2.2,
     realAngularDeg: 0.008,
-    displayAngularDeg: 1.25,      // CURRENT (F4 inversion); Stage 5 → 0.43°
-    textureKey: 'jupiter',        // Stage 5 parks this (bands can't survive 7 px)
+    displayAngularDeg: 0.43,      // Stage 5 (D1): ~7 px
+    textureKey: null,             // PARKED — band detail can't survive 7 px
+                                  // (createJupiterTexture stays exported as
+                                  // telescope-feature material, unused here)
   },
   {
     name: 'Mars',
     magnitude: -1.5,              // favourable opposition; varies widely
     realAngularDeg: 0.004,
-    displayAngularDeg: 0.83,      // CURRENT (F4 inversion); Stage 5 → 0.37°
-    textureKey: 'mars',           // Stage 5 parks this (cap/detail can't survive 6 px)
+    displayAngularDeg: 0.37,      // Stage 5 (D1): ~6 px
+    textureKey: null,             // PARKED — cap/detail can't survive 6 px
+                                  // (createMarsTexture stays exported, unused)
   },
   {
     name: 'Mercury',
     magnitude: -0.4,              // at greatest elongation
     realAngularDeg: 0.002,
-    displayAngularDeg: 0.52,      // CURRENT; Stage 5 → 0.31°
+    displayAngularDeg: 0.31,      // Stage 5 (D1): ~5 px
     textureKey: null,             // already flat
   },
   {
     name: 'Saturn',
     magnitude: 0.5,               // DIMMER than Rigel (+0.13) — truthfully so
     realAngularDeg: 0.005,
-    displayAngularDeg: 0.76,      // CURRENT globe; Stage 5 → 0.19°
+    displayAngularDeg: 0.374,     // Stage 5 (D1): globe ~6 px. NOT independently
+                                  // chosen — the REAL ring radii (A ring outer =
+                                  // 2.27 Saturn radii) fix globe = span/2.27, so
+                                  // a 0.85° span lands the globe here. (The plan
+                                  // table's "globe 0.19°" is incompatible with
+                                  // span 0.85° under real ratios; D1's "globe
+                                  // ~0.2° (a 3 px dot would waste it)" is the
+                                  // floor, and 6 px clears it.)
     textureKey: 'saturn',         // rings are low-frequency and survive minification
-    // Ring plane span. CURRENT 1.95° rivals the Sun (F4); Stage 5 → 0.85° —
-    // the ONE licensed size inversion (span is ring geometry, not body size,
-    // and Saturn's brightness stays truthfully below Rigel).
-    ringSpanAngularDeg: 1.95,
+    // Ring span ~0.85° (~14 px) — the ONE licensed size inversion (span is ring
+    // geometry, not body size, and Saturn's brightness stays truthfully below
+    // Rigel). Rendered on a planeSize-7.6 plane; the drawn rings fill 0.86 of it.
+    ringSpanAngularDeg: 0.85,
   },
 ];
 

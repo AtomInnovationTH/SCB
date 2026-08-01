@@ -9,6 +9,7 @@ import { Constants } from '../core/Constants.js';
 import { createLabelTexture } from './labelTexture.js';
 import { sunEphemeris, moonEphemeris, latLonToUnitVec } from './Ephemeris.js';
 import { BODY_CATALOG, bodyByName, angularToRadius } from './bodyCatalog.js';
+import { skyBrightness } from './starCatalog.js';
 
 // Tilt of the stylized day/night cycle's sun circle vs the equator (~23.5°,
 // mirroring Earth's axial tilt). Module-level because both the per-frame sun
@@ -547,25 +548,38 @@ export function createMarsTexture(size = 128) {
  *  catalogue: the factories call document.createElement('canvas'), so importing
  *  them into bodyCatalog.js would make that module un-loadable in node and kill
  *  its tests (the same contract that keeps starCatalog.js testable).
- *  Sizes are exaggerated planetarium markers (real planets are point sources from LEO). The
- *  hierarchy is Sun≈Moon > Jupiter > Venus > Saturn(+rings) > Mars > Mercury; the Moon reads
- *  as clearly the largest body. `hex` still tints each planet's glow halo. */
+ *  Stage 5 (D1): the planets sit on the extended star size ladder (Venus ~9–10 px
+ *  down to Mercury ~5 px), Saturn keeps a small ringed disc as the ONE licensed
+ *  size inversion. `hex` tints the disc and its glow halo. */
 const TEXTURE_FACTORIES = {
-  mars: () => createMarsTexture(128),
-  jupiter: () => createJupiterTexture(128),
+  mars: () => createMarsTexture(128),       // PARKED (Stage 5) — kept exported
+  jupiter: () => createJupiterTexture(128), // PARKED (Stage 5) — kept exported
   saturn: () => createSaturnTexture(256),
 };
+// Saturn ring geometry (from createSaturnTexture — the REAL ring radii in Saturn
+// radii, kept true). Needed to size the elliptical ring depth mask (F7). The A
+// ring outer edge is 2.27 globe radii; the texture draws rings with this tilt
+// and squash, so the mask must match or it won't cover the visible rings.
+const SATURN_RING_OUTER = 2.27;  // A ring outer edge, in globe radii (real value)
+const SATURN_RING_TILT = -0.34;  // ring-plane tilt (rad), matches the texture
+const SATURN_RING_SQUASH = 0.36; // ring opening (minor/major), matches the texture
 const PLANET_DEFS = [
-  { name: 'Mercury', hex: '#c7bfad', glow: Constants.PLANET_MERCURY_GLOW, deg: Constants.PLANET_MERCURY_DEG },
-  { name: 'Venus',   hex: '#ffffcc', glow: Constants.PLANET_VENUS_GLOW,   deg: Constants.PLANET_VENUS_DEG },
-  { name: 'Mars',    hex: '#ff6633', glow: Constants.PLANET_MARS_GLOW,    deg: Constants.PLANET_MARS_DEG },
-  { name: 'Jupiter', hex: '#ffd699', glow: Constants.PLANET_JUPITER_GLOW, deg: Constants.PLANET_JUPITER_DEG },
-  { name: 'Saturn',  hex: '#f5e6c8', glow: Constants.PLANET_SATURN_GLOW,  deg: Constants.PLANET_SATURN_DEG, planeSize: Constants.PLANET_SATURN_PLANE_SIZE },
+  { name: 'Mercury', hex: '#c7bfad', deg: Constants.PLANET_MERCURY_DEG },
+  { name: 'Venus',   hex: '#ffffcc', deg: Constants.PLANET_VENUS_DEG },
+  { name: 'Mars',    hex: '#ff6633', deg: Constants.PLANET_MARS_DEG },
+  { name: 'Jupiter', hex: '#ffd699', deg: Constants.PLANET_JUPITER_DEG },
+  { name: 'Saturn',  hex: '#f5e6c8', deg: Constants.PLANET_SATURN_DEG, planeSize: Constants.PLANET_SATURN_PLANE_SIZE },
 ].map((def) => {
   const cat = bodyByName(def.name);
   const radius = angularToRadius(cat.displayAngularDeg, Constants.PLANET_DIST);
+  // Stage 5 brightness ladder: HDR color multiplier B(mag) on the SAME
+  // skyBrightness curve the stars use, so planets and stars share one curve
+  // (F5). Applied to the tint; opacity is 1.0 (see Constants.PLANET_DISC_OPACITY).
+  const brightB = skyBrightness(cat.magnitude,
+    Constants.STAR_MAG_BRIGHT_MIN, Constants.STAR_MAG_BRIGHT_MAX, Constants.STAR_MAG_BRIGHT_FLOOR_SOFT);
   return Object.assign({}, def, {
     radius,
+    brightB,
     makeTexture: cat.textureKey ? TEXTURE_FACTORIES[cat.textureKey] : undefined,
   });
 });
@@ -1188,27 +1202,34 @@ export class SunLight {
 
   /**
    * Create 5 visible planets as billboard discs with glow halos and canvas-based
-   * planetarium-style text labels. Mercury/Venus stay flat-tinted CircleGeometry
-   * discs (bright featureless discs are accurate); Mars/Jupiter/Saturn carry
-   * procedural surface textures (`def.makeTexture`). Saturn's rings need a
-   * full-square PlaneGeometry billboard (`def.planeSize`) rather than a disc.
+   * planetarium-style text labels. All five are now flat-tinted CircleGeometry
+   * discs EXCEPT Saturn, whose rings need a full-square PlaneGeometry billboard
+   * (`def.planeSize`). (Jupiter/Mars detail textures are PARKED — their detail
+   * can't survive 6–7 px; they stay exported as telescope-feature material.)
+   * Each disc carries the HDR brightness ladder B(mag) as a color multiplier, so
+   * Venus blooms and the rest stay under the threshold (see Constants.PLANET_DISC_OPACITY).
    * @private
    */
   _createPlanets() {
     this._planets = PLANET_DEFS.map(def => {
-      const color = new THREE.Color(def.hex);
-
       // --- Main disc ---
-      // Textured bodies use a white base so the texture carries its own colour;
-      // Saturn additionally swaps CircleGeometry for a PlaneGeometry so the rings
-      // (which extend past the globe) aren't clipped to the inscribed circle.
+      // Flat bodies tint with their hex; Saturn (textured) uses a white base so
+      // the texture carries its own colour. BOTH get the HDR ladder multiplier —
+      // that is the whole brightness model (F5 fixed). The multiplier is
+      // brightB / maxChannel, so the peak channel lands EXACTLY on B(mag) while
+      // the hue (channel ratios) is preserved: a dark tint like Mercury's
+      // #c7bfad would otherwise render dimmer than Rigel despite being genuinely
+      // brighter (mag −0.4 vs +0.13) — a brightness-truth violation. For Saturn
+      // (white base) maxChannel is 1, so the peak is B(mag) × texture peak.
+      const baseColor = def.makeTexture ? new THREE.Color(0xffffff) : new THREE.Color(def.hex);
+      baseColor.multiplyScalar(def.brightB / Math.max(baseColor.r, baseColor.g, baseColor.b));
       const discGeo = def.planeSize
         ? new THREE.PlaneGeometry(def.planeSize, def.planeSize)
         : new THREE.CircleGeometry(def.radius, 24);
       const disc = new THREE.Mesh(
         discGeo,
         new THREE.MeshBasicMaterial({
-          color: def.makeTexture ? 0xffffff : color,
+          color: baseColor,
           map: def.makeTexture ? def.makeTexture() : null,
           transparent: true, opacity: Constants.PLANET_DISC_OPACITY,
           side: THREE.DoubleSide, depthWrite: false,
@@ -1216,22 +1237,21 @@ export class SunLight {
         })
       );
       // Screen-aligned billboard (roll-compensated): copy the camera orientation
-      // so textured patterns (Jupiter belts, Saturn rings, Mars features) stay
-      // upright to the viewer. See the Moon billboard note — the gameplay camera
-      // up is Earth-radial, so world-up lookAt() would roll the patterns.
+      // so Saturn's rings stay upright to the viewer. See the Moon billboard note —
+      // the gameplay camera up is Earth-radial, so world-up lookAt() would roll.
       disc.onBeforeRender = (_r, _s, cam) => disc.quaternion.copy(cam.quaternion);
       this.scene.add(disc);
 
       // --- Glow halo (soft radial-gradient texture behind disc) ---
-      // Use a textured PlaneGeometry with a gradient that fades to transparent
-      // rather than a flat CircleGeometry. The old solid additive circle had a
-      // hard outer edge that, drawn behind the opaque disc, read as a dark ring
-      // between the planet and its label.
+      // Halo radius derives from the body (1.25×), so it shrinks with the ladder.
+      // For Saturn it spans the ring system, not just the globe.
+      const haloRadius = Constants.PLANET_GLOW_RADIUS_FACTOR *
+        (def.planeSize ? def.radius * SATURN_RING_OUTER : def.radius);
       const glow = new THREE.Mesh(
-        new THREE.PlaneGeometry(def.glow * Constants.PLANET_GLOW_SCALE, def.glow * Constants.PLANET_GLOW_SCALE),
+        new THREE.PlaneGeometry(haloRadius * 2, haloRadius * 2),
         new THREE.MeshBasicMaterial({
           map: _planetGlowTex || (_planetGlowTex = createPlanetGlowTexture()),
-          color, transparent: true, opacity: Constants.PLANET_GLOW_OPACITY,
+          color: new THREE.Color(def.hex), transparent: true, opacity: Constants.PLANET_GLOW_OPACITY,
           side: THREE.DoubleSide, depthWrite: false,
           depthTest: false,      // match disc — avoid self-occlusion against mask
           blending: THREE.AdditiveBlending,
@@ -1251,13 +1271,27 @@ export class SunLight {
       this.scene.add(label);
 
       // --- Depth mask (invisible, placed inside star sphere to occlude stars/lines) ---
-      // Radius scaled to match angular size of planet disc at DEPTH_MASK_DIST.
-      const depthMask = new THREE.Mesh(
-        new THREE.CircleGeometry(def.radius * (DEPTH_MASK_DIST / 440), 24),
-        DEPTH_MASK_MAT
-      );
+      // Normal planets: a circular mask matching the disc. Saturn (F7): the mask
+      // must cover the RING PLANE, not just the globe, or stars shine through the
+      // rings. Build an ELLIPSE matching the texture's ring tilt/squash, and
+      // billboard it with the camera quaternion (like the disc) so they stay
+      // aligned — a lookAt() mask would roll away from the rings.
+      let depthMask;
+      if (def.planeSize) {
+        const ringMajor = def.radius * SATURN_RING_OUTER * (DEPTH_MASK_DIST / Constants.PLANET_DIST);
+        const maskGeo = new THREE.CircleGeometry(ringMajor, 24);
+        maskGeo.scale(1, SATURN_RING_SQUASH, 1);   // squash to the ring ellipse
+        maskGeo.rotateZ(SATURN_RING_TILT);         // tilt to match the texture
+        depthMask = new THREE.Mesh(maskGeo, DEPTH_MASK_MAT);
+        depthMask.onBeforeRender = (_r, _s, cam) => depthMask.quaternion.copy(cam.quaternion);
+      } else {
+        depthMask = new THREE.Mesh(
+          new THREE.CircleGeometry(def.radius * (DEPTH_MASK_DIST / Constants.PLANET_DIST), 24),
+          DEPTH_MASK_MAT
+        );
+        depthMask.onBeforeRender = (_r, _s, cam) => depthMask.lookAt(cam.position);
+      }
       depthMask.renderOrder = -1;
-      depthMask.onBeforeRender = (_r, _s, cam) => depthMask.lookAt(cam.position);
       this.scene.add(depthMask);
 
       return { name: def.name, disc, glow, label, depthMask, deg: def.deg, radius: def.radius };

@@ -1741,6 +1741,10 @@ async function init() {
       };
       // Debug handle for click-path / layout introspection (codex click debug).
       window.__callouts = motherCallouts;
+      // Debug handle for SunLight — lets a capture harness inspect bodies and
+      // (for verification) temporarily reposition a body that is occluded all
+      // session. Read-only intent; mutations are the harness's responsibility.
+      window.__scbSunLight = sunLight;
 
       // ── Deterministic auto-capture at net FSM key beats ──
       let _autoOn = _shotParams.get('shotauto') === '1' || _shotParams.has('shotauto');
