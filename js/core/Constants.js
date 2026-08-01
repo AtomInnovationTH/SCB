@@ -398,6 +398,49 @@ export const Constants = {
                               // but not zero (zero would drop them from the draw entirely
                               // and leave a hard magnitude cutout).
 
+  // --- Milky Way band (Starfield._createMilkyWay) ---
+  // The band is built on the REAL galactic basis (galacticBasis() in
+  // starCatalog.js: pole RA 12.85h Dec +27.13°, center RA 17.76h Dec −28.9°), so
+  // it runs through Sagittarius / Cygnus / Cassiopeia as it really does. These
+  // constants own the count, presence, size floor, and the licensed structure.
+  MW_COUNT: 5000,               // points (was 3500). Total points = 10,000 field+catalogue
+                                // + MW_COUNT = 15,000 (the 13,500 baseline grows — expected,
+                                // not a regression; see the commit).
+  MW_OPACITY: 0.75,             // uOpacity for the band material (was 0.55 — too faint
+                                // to notice). COUPLING to STAR_FIELD_BRIGHT (0.32): every
+                                // band point's peak = vColor × uOpacity × vAlpha must stay
+                                // BELOW 0.32 so the band never out-points an actual star.
+                                // With MW_BRIGHT_MAX 0.42 and vAlpha ≤ 1 the peak is
+                                // 0.42 × 0.75 = 0.315 < 0.32.
+  MW_BRIGHT_MAX: 0.42,          // brightest band point's color multiplier (pre-opacity).
+                                // See the MW_OPACITY coupling — the product must stay < 0.32.
+  MW_BRIGHT_MIN: 0.10,          // faintest band point (per-point variation for texture).
+  MW_SIZE_FLOOR: 1.2,           // px — MUST equal STAR_FIELD_SIZE_FLOOR. The band's old
+                                // 0.4–0.9 px points were the exact sub-pixel crawl class
+                                // the floor cured; band points get the same floor.
+  MW_SIZE_MAX: 4.5,             // px — the large end of the band point sizes. Presence is
+                                // capped per-point (peak < 0.32), so the haze's visibility
+                                // comes from COVERAGE: bigger soft points overlap additively
+                                // into a continuous glow. Sizes spread floor→max with a
+                                // small bias toward small (keeps a starry texture, not blobs).
+  MW_SIZE_VAR: 3.3,             // max − floor (1.2 → 4.5 px).
+  // Licensed structure (per doctrine B — the shape is real, the contrast is
+  // exaggerated ~2× over real so it reads at a glance):
+  MW_CENTER_CONTRAST: 2.0,      // center:anticenter density/brightness ratio (licensed).
+  MW_BAND_WIDTH: 0.16,          // base latitude half-width (radians) of the band.
+  MW_BAND_WIDTH_CENTER: 1.6,    // width multiplier at the galactic center (band is widest
+                                // near Sagittarius, like the real galaxy).
+  // Great Rift — the dark lane from Cygnus to Sagittarius (negative space, not black paint).
+  MW_RIFT_LONG_MIN: 0.0,        // radians — Sagittarius end (l=0).
+  MW_RIFT_LONG_MAX: 1.4,        // radians — Cygnus end (l≈80°).
+  MW_RIFT_OFFSET: -0.03,        // latitude offset of the lane centre (radians off-plane).
+  MW_RIFT_WIDTH: 0.05,          // lane half-width (radians).
+  MW_RIFT_EDGE: 0.9,            // soft-edge fraction (the mask ramps 0→1 over this).
+  // Cygnus star-cloud enhancement (the bright cloud around Cygnus).
+  MW_CYGNUS_LONG: 1.4,          // radians (l≈80°).
+  MW_CYGNUS_WIDTH: 0.25,        // gaussian width (radians).
+  MW_CYGNUS_BOOST: 1.7,         // density multiplier at the Cygnus centre.
+
   // =========================================================================
   // SUN / MOON / PLANETS (SunLight.js) — the naked-eye bodies
   // =========================================================================

@@ -12,7 +12,7 @@ import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
 import { Constants } from '../core/Constants.js';
-import { BRIGHT_STARS, CONSTELLATION_FIGURES, sampleFieldMagnitude, fieldSizeAlpha, magnitudeBrightness, skyBrightness } from './starCatalog.js';
+import { BRIGHT_STARS, CONSTELLATION_FIGURES, sampleFieldMagnitude, fieldSizeAlpha, magnitudeBrightness, skyBrightness, galacticBasis, mwCenterProfile, mwGreatRiftMask, mwCygnusBoost } from './starCatalog.js';
 
 // ============================================================================
 // RA/Dec → Cartesian conversion
@@ -364,60 +364,82 @@ export class Starfield {
    * @private
    */
   _createMilkyWay() {
-    const count = 3500;
+    const count = Constants.MW_COUNT;
     const radius = Constants.STAR_SPHERE_RADIUS * 0.985; // just inside the star shell
     const positions = new Float32Array(count * 3);
     const colors = new Float32Array(count * 3);
     const sizes = new Float32Array(count);
-    // aAlpha all 1 — the band's faintness is carried by its own dim colors and
-    // lower uOpacity, not the field's magnitude→alpha floor. The shared shader
-    // requires the attribute to be present.
-    const alphas = new Float32Array(count).fill(1.0);
+    // Per-point aAlpha carries faintness variation across the band (was a flat
+    // fill(1.0)) — the haze gets texture from brighter/dimmer regions.
+    const alphas = new Float32Array(count);
     const twinkle = new Float32Array(count); // all 0 (band doesn't twinkle)
     const phase = new Float32Array(count);
 
-    // Band basis: a great circle tilted ~28° so it cuts diagonally across the
-    // sky rather than lying on the ecliptic. u,v span the band plane; w is the
-    // band normal (stars cluster near the u–v plane, i.e. small |w·pos|).
-    const tilt = 0.49; // ~28°
-    const ct = Math.cos(tilt), st = Math.sin(tilt);
-    // rotated basis (rotation about the X axis)
-    const uAxis = new THREE.Vector3(1, 0, 0);
-    const vAxis = new THREE.Vector3(0, ct, st);
-    const wAxis = new THREE.Vector3(0, -st, ct);
+    // REAL galactic basis (Stage 6): the band is built from the galactic frame
+    // (galacticBasis() in starCatalog.js), NOT an invented tilt, so it runs
+    // through the galactic center (Sagittarius), Cygnus and Cassiopeia as it
+    // really does. center = l=0 (Sgr), e2 = l=90 (Cygnus), pole = +b.
+    const basis = galacticBasis();
+    const pole = new THREE.Vector3(basis.pole.x, basis.pole.y, basis.pole.z);
+    const center = new THREE.Vector3(basis.center.x, basis.center.y, basis.center.z);
+    const e2 = new THREE.Vector3(basis.e2.x, basis.e2.y, basis.e2.z);
+
+    const C = Constants;
+    const riftParams = {
+      longMin: C.MW_RIFT_LONG_MIN, longMax: C.MW_RIFT_LONG_MAX,
+      offset: C.MW_RIFT_OFFSET, width: C.MW_RIFT_WIDTH, edge: C.MW_RIFT_EDGE,
+    };
+    const cygnusParams = { long: C.MW_CYGNUS_LONG, width: C.MW_CYGNUS_WIDTH, boost: C.MW_CYGNUS_BOOST };
 
     // Milky-Way palette — faint warm-white with a few dusty blue.
     const c0 = new THREE.Color(0.85, 0.86, 0.95);
     const c1 = new THREE.Color(0.95, 0.92, 0.85);
 
     const tmp = new THREE.Vector3();
-    for (let i = 0; i < count; i++) {
-      // Angle around the band + a gaussian-ish spread across its width.
-      const ang = Math.random() * Math.PI * 2;
-      // Sum of two randoms ≈ triangular → clusters toward band center.
-      const spread = (Math.random() + Math.random() - 1.0) * 0.22; // half-width ~0.22 rad
-      // Longitudinal clumping: bias density with a couple of low-freq lobes so
-      // the band has brighter "clouds" like the real galactic plane.
-      const clump = 0.6 + 0.4 * Math.abs(Math.sin(ang * 1.5 + 0.7));
-      const cosS = Math.cos(spread), sinS = Math.sin(spread);
-      // Point on the tilted great circle, lifted off-plane by `spread`.
-      tmp.copy(uAxis).multiplyScalar(Math.cos(ang) * cosS)
-        .addScaledVector(vAxis, Math.sin(ang) * cosS)
-        .addScaledVector(wAxis, sinS)
+    let placed = 0;
+    let guard = 0;
+    // Rejection-sample longitude so DENSITY peaks at the galactic center and
+    // falls toward the anticenter (the real band is brightest/widest near Sgr);
+    // the Great Rift and Cygnus cloud modulate acceptance further.
+    while (placed < count && guard < count * 40) {
+      guard++;
+      const L = Math.random() * Math.PI * 2 - Math.PI;   // [−π, π]
+      const prof = mwCenterProfile(L, C.MW_CENTER_CONTRAST);          // [1, contrast]
+      const structure = prof / C.MW_CENTER_CONTRAST;                  // [1/contrast, 1]
+      const boost = mwCygnusBoost(L, cygnusParams);                   // ≥1
+      // Density acceptance: profile (center-weighted) × Cygnus boost.
+      const pAccept = structure * Math.min(1, boost / C.MW_CYGNUS_BOOST);
+      if (Math.random() > pAccept) continue;
+
+      // Latitude spread: the band is widest near the galactic center.
+      const width = C.MW_BAND_WIDTH * (1 + (C.MW_BAND_WIDTH_CENTER - 1) * structure);
+      const spread = (Math.random() + Math.random() - 1.0) * width;   // triangular
+
+      // Great Rift: carve the dark lane (negative space) from Cygnus to Sgr.
+      if (Math.random() > mwGreatRiftMask(L, spread, riftParams)) continue;
+
+      // Point in the galactic plane at longitude L, lifted off-plane by `spread`.
+      tmp.copy(center).multiplyScalar(Math.cos(L))
+        .addScaledVector(e2, Math.sin(L));
+      tmp.multiplyScalar(Math.cos(spread))
+        .addScaledVector(pole, Math.sin(spread))
         .normalize().multiplyScalar(radius);
-      positions[i * 3] = tmp.x;
-      positions[i * 3 + 1] = tmp.y;
-      positions[i * 3 + 2] = tmp.z;
+      positions[placed * 3] = tmp.x;
+      positions[placed * 3 + 1] = tmp.y;
+      positions[placed * 3 + 2] = tmp.z;
 
+      // Brightness peaks at the center too, with per-point variation.
+      const b = C.MW_BRIGHT_MIN + (C.MW_BRIGHT_MAX - C.MW_BRIGHT_MIN) * structure * (0.55 + 0.45 * Math.random());
       const col = Math.random() < 0.8 ? c0 : c1;
-      const b = (0.28 + Math.random() * 0.32) * clump;
-      colors[i * 3] = col.r * b;
-      colors[i * 3 + 1] = col.g * b;
-      colors[i * 3 + 2] = col.b * b;
+      colors[placed * 3] = col.r * b;
+      colors[placed * 3 + 1] = col.g * b;
+      colors[placed * 3 + 2] = col.b * b;
 
-      sizes[i] = 0.4 + Math.random() * 0.5; // 0.4–0.9
-      twinkle[i] = 0.0;
-      phase[i] = 0.0;
+      sizes[placed] = C.MW_SIZE_FLOOR + Math.pow(Math.random(), 1.8) * C.MW_SIZE_VAR;   // floor→max, biased small (starry texture, not blobs)
+      alphas[placed] = 0.6 + 0.4 * (b / C.MW_BRIGHT_MAX);                // faintness variation, floor 0.6 for a brighter haze
+      twinkle[placed] = 0.0;
+      phase[placed] = 0.0;
+      placed++;
     }
 
     const geometry = new THREE.BufferGeometry();
@@ -429,8 +451,10 @@ export class Starfield {
     geometry.setAttribute('aPhase', new THREE.BufferAttribute(phase, 1));
 
     // Same shader as the main stars but lower overall opacity for a haze read.
+    // Presence comes from DENSITY + the size floor + collective additive overlap,
+    // not from per-point peak (which stays < STAR_FIELD_BRIGHT — see MW_OPACITY).
     const material = this._starMaterial.clone();
-    material.uniforms.uOpacity.value = 0.55;
+    material.uniforms.uOpacity.value = Constants.MW_OPACITY;
     material.uniforms.uSizeScale.value = 1.5;
 
     const points = new THREE.Points(geometry, material);

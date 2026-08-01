@@ -18,7 +18,7 @@ import { runtimeAdapt, TIER_ORDER } from './systems/QualityManager.js';
 import { SceneManager } from './scene/SceneManager.js';
 import { Earth } from './scene/Earth.js';
 import { Starfield, raDec2xyz } from './scene/Starfield.js';
-import { BRIGHT_STARS, CONSTELLATION_FIGURES } from './scene/starCatalog.js';
+import { BRIGHT_STARS, CONSTELLATION_FIGURES, galacticBasis } from './scene/starCatalog.js';
 import { SunLight } from './scene/SunLight.js';
 import { launchCinematic } from './scene/LaunchCinematic.js';
 import { tierVisualManager } from './scene/TierVisualManager.js';
@@ -1745,6 +1745,25 @@ async function init() {
       // (for verification) temporarily reposition a body that is occluded all
       // session. Read-only intent; mutations are the harness's responsibility.
       window.__scbSunLight = sunLight;
+
+      // ── Galactic-coordinate hook (Milky Way, Stage 6) ──
+      //   window.__scbGalactic(L_deg, b_deg) → { ra, dec }
+      //     Converts galactic longitude/latitude (degrees) to RA/Dec using the
+      //     real galactic basis, so a capture harness can pose at / project any
+      //     band point (the band centerline is b=0). Inverse of the basis that
+      //     orients the band.
+      window.__scbGalactic = (Ldeg, bdeg) => {
+        const b = galacticBasis();
+        const L = Ldeg * Math.PI / 180, lat = bdeg * Math.PI / 180;
+        const cl = Math.cos(L) * Math.cos(lat), sl = Math.sin(L) * Math.cos(lat), sb = Math.sin(lat);
+        const x = b.center.x * cl + b.e2.x * sl + b.pole.x * sb;
+        const y = b.center.y * cl + b.e2.y * sl + b.pole.y * sb;
+        const z = b.center.z * cl + b.e2.z * sl + b.pole.z * sb;
+        // Inverse of raDec2xyz: +Y north, RA 0 at +X, Z negated.
+        const ra = Math.atan2(-z, x) * 12 / Math.PI;
+        const dec = Math.asin(Math.max(-1, Math.min(1, y))) * 180 / Math.PI;
+        return { ra: ((ra % 24) + 24) % 24, dec };
+      };
 
       // ── Deterministic auto-capture at net FSM key beats ──
       let _autoOn = _shotParams.get('shotauto') === '1' || _shotParams.has('shotauto');

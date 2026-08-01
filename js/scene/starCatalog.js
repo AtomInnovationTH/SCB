@@ -253,3 +253,124 @@ export function fieldSizeAlpha(mag, mMax, { base, slope, floor, alphaMin }) {
   const t = Math.min(1, Math.max(0, (mag - magAtFloor) / (mMax - magAtFloor)));
   return { size: floor, alpha: 1.0 + (alphaMin - 1.0) * t };
 }
+
+// ============================================================================
+// GALACTIC FRAME (Stage 6) — pure {x,y,z} math, no `three` import, so the
+// Milky Way band's orientation and structure are testable as a plain node
+// module (the same contract that keeps the catalogue testable). The band is
+// built on the REAL galactic basis, not an invented tilt, so it runs through
+// the galactic center (Sagittarius), Cygnus and Cassiopeia as it really does.
+// ============================================================================
+
+/** Minimal {x,y,z} helpers — plain objects so this module stays `three`-free. */
+function raDecToUnit(raHours, decDeg) {
+  // Same convention as Starfield.raDec2xyz: +Y celestial north, RA 0 at +X, Z negated.
+  const ra = raHours * (Math.PI / 12);
+  const dec = decDeg * (Math.PI / 180);
+  return {
+    x: Math.cos(dec) * Math.cos(ra),
+    y: Math.sin(dec),
+    z: -Math.cos(dec) * Math.sin(ra),
+  };
+}
+// Exported so the galactic-frame test can verify directions without duplicating
+// the convention (the three-free counterpart of Starfield's raDec2xyz).
+export { raDecToUnit };
+const vdot = (a, b) => a.x * b.x + a.y * b.y + a.z * b.z;
+const vcross = (a, b) => ({
+  x: a.y * b.z - a.z * b.y,
+  y: a.z * b.x - a.x * b.z,
+  z: a.x * b.y - a.y * b.x,
+});
+const vlen = (a) => Math.hypot(a.x, a.y, a.z);
+const vnorm = (a) => { const l = vlen(a) || 1; return { x: a.x / l, y: a.y / l, z: a.z / l }; };
+
+/** Galactic north pole, J2000 (RA 12.85h, Dec +27.13°). */
+export const GALACTIC_NORTH_POLE = { ra: 12.85, dec: 27.13 };
+/** Galactic center, J2000 (RA 17.76h, Dec −28.9°, in Sagittarius). Longitude 0. */
+export const GALACTIC_CENTER = { ra: 17.76, dec: -28.9 };
+
+/**
+ * The galactic frame: three orthonormal unit vectors as plain {x,y,z}.
+ *   pole   — galactic north pole (+b direction)
+ *   center — galactic center direction (l = 0)
+ *   e2     — increasing-longitude direction (l = 90°, toward Cygnus), so the
+ *            band circles center → Cygnus → anticenter → Cassiopeia → center.
+ * Right-handed: center × e2 = pole.
+ * @returns {{ pole: object, center: object, e2: object }}
+ */
+export function galacticBasis() {
+  const pole = vnorm(raDecToUnit(GALACTIC_NORTH_POLE.ra, GALACTIC_NORTH_POLE.dec));
+  const center = vnorm(raDecToUnit(GALACTIC_CENTER.ra, GALACTIC_CENTER.dec));
+  const e2 = vnorm(vcross(pole, center));   // l=90 direction (toward Cygnus)
+  return { pole, center, e2 };
+}
+
+/**
+ * Galactic longitude of a direction (unit {x,y,z}), measured from the galactic
+ * center toward e2 (Cygnus). Returns radians in (−π, π].
+ * @param {object} dir — unit {x,y,z}
+ * @param {object} [basis] — from galacticBasis() (recomputed if omitted)
+ * @returns {number} longitude in radians
+ */
+export function galacticLongitude(dir, basis = galacticBasis()) {
+  return Math.atan2(vdot(dir, basis.e2), vdot(dir, basis.center));
+}
+
+/**
+ * Galactic latitude of a direction (unit {x,y,z}) — the angle off the plane.
+ * @param {object} dir — unit {x,y,z}
+ * @param {object} [basis]
+ * @returns {number} latitude in radians (−π/2..π/2)
+ */
+export function galacticLatitude(dir, basis = galacticBasis()) {
+  return Math.asin(Math.max(-1, Math.min(1, vdot(dir, basis.pole))));
+}
+
+// --- Band structure (licensed contrast, documented per constant) ---
+
+/**
+ * Longitudinal density/brightness profile: peaks at the galactic center (L=0)
+ * and fades toward the anticenter (L=π, Gemini). profile(0) = contrast,
+ * profile(π) = 1, so center:anticenter = contrast. The real contrast is larger;
+ * `contrast` (~2) is the LICENSED exaggeration that lets the structure read at
+ * a glance without making the anticenter vanish.
+ * @param {number} L — galactic longitude (radians)
+ * @param {number} contrast — center:anticenter ratio (≥1)
+ * @returns {number} profile value in [1, contrast]
+ */
+export function mwCenterProfile(L, contrast) {
+  return ((contrast + 1) + (contrast - 1) * Math.cos(L)) / 2;
+}
+
+/**
+ * Great Rift density mask: a dark lane carved along the band from Cygnus to
+ * Sagittarius. Negative space reads better than painting black, so points are
+ * SKIPPED inside the lane. Returns a density multiplier in [0,1]: 1 outside the
+ * lane, ramping to ~0 at the lane's centre. The lane sits at `offset` radians
+ * off the plane (slightly below the centreline, as the real rift hugs the
+ * plane) and spans `longMin..longMax` in longitude.
+ * @param {number} L — galactic longitude (radians, in [−π,π])
+ * @param {number} latOff — latitude offset of the point off the plane (radians)
+ * @param {{ longMin: number, longMax: number, offset: number, width: number, edge: number }} p
+ * @returns {number} density multiplier in [0,1]
+ */
+export function mwGreatRiftMask(L, latOff, p) {
+  if (L < p.longMin || L > p.longMax) return 1;
+  const d = Math.abs(latOff - p.offset) / p.width;
+  if (d >= 1) return 1;
+  // Smooth ramp: 0 at the lane centre, 1 at `edge`×width and beyond.
+  const t = Math.min(1, d / Math.max(1e-6, p.edge));
+  return t * t * (3 - 2 * t);   // smoothstep
+}
+
+/**
+ * Cygnus star-cloud enhancement: a density boost around the Cygnus longitude.
+ * @param {number} L — galactic longitude (radians)
+ * @param {{ long: number, width: number, boost: number }} p
+ * @returns {number} density multiplier ≥ 1
+ */
+export function mwCygnusBoost(L, p) {
+  const d = (L - p.long) / p.width;
+  return 1 + (p.boost - 1) * Math.exp(-d * d);
+}
