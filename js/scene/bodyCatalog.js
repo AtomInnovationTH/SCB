@@ -83,6 +83,18 @@ export function phaseIlluminatedFraction(elongationCos) {
 //                       exaggeration factor lives in the ratio, not hidden).
 //   displayAngularDeg — the on-screen angular diameter (licensed exaggeration,
 //                       monotone in the underlying quantity per doctrine B).
+//   laddered          — whether the body's RENDERED peak follows the brightness
+//                       ladder B(mag) as an HDR colour multiplier. True for the
+//                       five planets (Stage 5). FALSE for the Sun and Moon: both
+//                       are deliberately OFF the ladder and render LDR (sun
+//                       sprite ≤ 0.95 additive, moon disc ≤ 0.85), because their
+//                       true magnitudes (−26.7, −12.7) would put them at B 6.3
+//                       and 4.1 — enough to blow the frame and to make the Moon
+//                       bloom, which it must never do. Their magnitudes are kept
+//                       for truthfulness and for the phase/ladder tests, NOT as
+//                       a render input. This flag is what lets the bloom gate ask
+//                       "which bodies can actually cross the threshold?" without
+//                       hardcoding a body name (see ladderBloomBodies below).
 //   textureKey        — string key SunLight maps to a texture factory; NEVER
 //                       the factory itself (see the module header).
 //
@@ -98,6 +110,7 @@ export const BODY_CATALOG = [
     name: 'Sun',
     magnitude: -26.74,
     realAngularDeg: 0.533,
+    laddered: false,              // LDR sprite (0.95 additive) — see the `laddered` note
     displayAngularDeg: 1.49,      // Stage 4: parity with the Moon (real 0.533° vs
                                   // 0.518° = within 3%). The glare sprite AND the
                                   // depth mask both derive from this one value so
@@ -110,6 +123,7 @@ export const BODY_CATALOG = [
     name: 'Moon',
     magnitude: -12.7,             // full moon
     realAngularDeg: 0.518,
+    laddered: false,              // LDR disc (0.85) — the Moon must never bloom
     displayAngularDeg: 1.49,      // D2: stays ~1.5° — fix contrast and phase, not size
     textureKey: 'moon',
   },
@@ -117,6 +131,7 @@ export const BODY_CATALOG = [
     name: 'Venus',
     magnitude: -4.4,              // at greatest elongation; the brightest planet
     realAngularDeg: 0.008,
+    laddered: true,
     displayAngularDeg: 0.58,      // Stage 5 (D1): ~9–10 px, the only blooming planet
     textureKey: null,             // flat warm-white disc
   },
@@ -124,6 +139,7 @@ export const BODY_CATALOG = [
     name: 'Jupiter',
     magnitude: -2.2,
     realAngularDeg: 0.008,
+    laddered: true,
     displayAngularDeg: 0.43,      // Stage 5 (D1): ~7 px
     textureKey: null,             // PARKED — band detail can't survive 7 px
                                   // (createJupiterTexture stays exported as
@@ -133,6 +149,7 @@ export const BODY_CATALOG = [
     name: 'Mars',
     magnitude: -1.5,              // favourable opposition; varies widely
     realAngularDeg: 0.004,
+    laddered: true,
     displayAngularDeg: 0.37,      // Stage 5 (D1): ~6 px
     textureKey: null,             // PARKED — cap/detail can't survive 6 px
                                   // (createMarsTexture stays exported, unused)
@@ -141,6 +158,7 @@ export const BODY_CATALOG = [
     name: 'Mercury',
     magnitude: -0.4,              // at greatest elongation
     realAngularDeg: 0.002,
+    laddered: true,
     displayAngularDeg: 0.31,      // Stage 5 (D1): ~5 px
     textureKey: null,             // already flat
   },
@@ -148,6 +166,7 @@ export const BODY_CATALOG = [
     name: 'Saturn',
     magnitude: 0.5,               // DIMMER than Rigel (+0.13) — truthfully so
     realAngularDeg: 0.005,
+    laddered: true,
     displayAngularDeg: 0.374,     // Stage 5 (D1): globe ~6 px. NOT independently
                                   // chosen — the REAL ring radii (A ring outer =
                                   // 2.27 Saturn radii) fix globe = span/2.27, so
@@ -167,4 +186,41 @@ export const BODY_CATALOG = [
 /** Look up a body by name. @returns {object|undefined} */
 export function bodyByName(name) {
   return BODY_CATALOG.find((b) => b.name === name);
+}
+
+/**
+ * Names of the bodies that can actually cross the bloom threshold — i.e. the
+ * bodies whose rendered peak rides the ladder (`laddered`) AND whose B(mag)
+ * exceeds `threshold`. With the shipped constants this is exactly `['Venus']`
+ * (B 2.74 > 2.5); every other rung stays under (D3).
+ *
+ * This exists so the BLOOM GATE can be derived instead of hardcoded. The gate
+ * (SunLight.isBloomSourceVisible → SceneManager.setBloomEnabled) skips the whole
+ * UnrealBloom mip chain when nothing above the threshold is on screen. It was
+ * originally sun-only, on the premise that "every source that can cross the
+ * threshold is sun-driven" — true until Stage 5 gave the planets HDR
+ * multipliers, at which point Venus became a threshold-crossing source whose
+ * visibility is INDEPENDENT of the sun's. A sun-only gate therefore switched
+ * bloom off in exactly the case D3 exists for: Venus clear of the limb with the
+ * sun behind it (the evening/morning-star case).
+ *
+ * Deriving the list from the curve + the threshold means a magnitude retune, a
+ * curve change or a threshold change automatically extends or shrinks the gate:
+ * push Jupiter past 2.5 and it becomes a gate source without touching SunLight.
+ *
+ * The Sun is handled separately by the gate (it is `laddered: false` and LDR, so
+ * it never appears here) because its own visibility already drives the
+ * sun-driven sources that DO bloom — the atmosphere's Mie limb and ocean glint.
+ *
+ * @param {number} threshold — Constants.BLOOM_THRESHOLD
+ * @param {number} min — Constants.STAR_MAG_BRIGHT_MIN
+ * @param {number} max — Constants.STAR_MAG_BRIGHT_MAX
+ * @param {number} soft — Constants.STAR_MAG_BRIGHT_FLOOR_SOFT
+ * @returns {string[]} body names, brightest first
+ */
+export function ladderBloomBodies(threshold, min, max, soft) {
+  return BODY_CATALOG
+    .filter((b) => b.laddered && skyBrightness(b.magnitude, min, max, soft) > threshold)
+    .sort((a, b) => a.magnitude - b.magnitude)
+    .map((b) => b.name);
 }

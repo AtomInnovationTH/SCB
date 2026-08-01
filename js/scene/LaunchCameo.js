@@ -19,11 +19,14 @@
  *      p10 4.0 s, median 15.3 s, p90 21.3 s, max 24.3 s across all 42 launch
  *      opportunities. CAMEO_DURATION_S = 12 overruns 40% of them (16 overran
  *      52%; 24 would overrun 98%).
- *   2. BLOOM IS OFF ON THE NIGHT SIDE. main.js gates the bloom pass on
- *      isSunVisible(); these launches play on the night side, so the
- *      UnrealBloom mip chain is NOT running. The glow is therefore authored
- *      explicitly (a hot core sprite + a larger dimmer halo sprite, both
- *      additive) — NOT by pushing a colour past the bloom threshold.
+ *   2. BLOOM CANNOT BE RELIED ON HERE. main.js gates the bloom pass on
+ *      SunLight.isBloomSourceVisible(), which is false on most night-side
+ *      frames (it is true only when the sun or a blooming body such as Venus is
+ *      in view), so the UnrealBloom mip chain is usually NOT running while these
+ *      launches play. The glow is therefore authored explicitly (a hot core
+ *      sprite + a larger dimmer halo sprite, both additive) — NOT by pushing a
+ *      colour past the bloom threshold. That also means the cameo looks the same
+ *      whether the gate happens to be open or closed: every colour here is LDR.
  *
  * The plume is anchored to the Earth group and uses the same mirrored-
  * longitude convention as CityLabels (the solid Earth never rotates, and the

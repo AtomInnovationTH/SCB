@@ -8,7 +8,7 @@ import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
 import { createLabelTexture } from './labelTexture.js';
 import { sunEphemeris, moonEphemeris, latLonToUnitVec } from './Ephemeris.js';
-import { BODY_CATALOG, bodyByName, angularToRadius } from './bodyCatalog.js';
+import { BODY_CATALOG, bodyByName, angularToRadius, ladderBloomBodies } from './bodyCatalog.js';
 import { skyBrightness } from './starCatalog.js';
 
 // Tilt of the stylized day/night cycle's sun circle vs the equator (~23.5°,
@@ -563,6 +563,14 @@ const TEXTURE_FACTORIES = {
 const SATURN_RING_OUTER = 2.27;  // A ring outer edge, in globe radii (real value)
 const SATURN_RING_TILT = -0.34;  // ring-plane tilt (rad), matches the texture
 const SATURN_RING_SQUASH = 0.36; // ring opening (minor/major), matches the texture
+// Bodies whose HDR peak crosses the bloom threshold — DERIVED from the same
+// curve and threshold the pass uses, never a hardcoded "Venus" (see
+// bodyCatalog.ladderBloomBodies). These keep the bloom gate alive on their own,
+// independently of the sun: that is the fix for a sun-only gate switching bloom
+// off with Venus in plain view.
+const BLOOM_SOURCE_BODIES = new Set(ladderBloomBodies(
+  Constants.BLOOM_THRESHOLD,
+  Constants.STAR_MAG_BRIGHT_MIN, Constants.STAR_MAG_BRIGHT_MAX, Constants.STAR_MAG_BRIGHT_FLOOR_SOFT));
 const PLANET_DEFS = [
   { name: 'Mercury', hex: '#c7bfad', deg: Constants.PLANET_MERCURY_DEG },
   { name: 'Venus',   hex: '#ffffcc', deg: Constants.PLANET_VENUS_DEG },
@@ -580,6 +588,8 @@ const PLANET_DEFS = [
   return Object.assign({}, def, {
     radius,
     brightB,
+    // Does this body keep the bloom pass alive by itself? (Venus does.)
+    bloomSource: BLOOM_SOURCE_BODIES.has(def.name),
     makeTexture: cat.textureKey ? TEXTURE_FACTORIES[cat.textureKey] : undefined,
   });
 });
@@ -1294,7 +1304,8 @@ export class SunLight {
       depthMask.renderOrder = -1;
       this.scene.add(depthMask);
 
-      return { name: def.name, disc, glow, label, depthMask, deg: def.deg, radius: def.radius };
+      return { name: def.name, disc, glow, label, depthMask, deg: def.deg, radius: def.radius,
+               bloomSource: def.bloomSource };
     });
   }
 
@@ -1357,13 +1368,49 @@ export class SunLight {
   /**
    * Whether the sun disc is currently visible (not geometrically occluded by
    * Earth from the camera POV). Updated every frame by _updateSunDisc().
-   * Drives SceneManager's bloom pass gate (P2): every scene source that can
-   * cross the 2.5 bloom threshold is sun-driven (limb Mie, ocean glint), so
-   * bloom is pure cost while the sun is behind the planet.
+   *
+   * This is a pure sun-geometry query — it is NOT the bloom gate. Use
+   * isBloomSourceVisible() for that: the sun's own sprite is LDR (≤ 0.95) and
+   * never crosses the threshold itself; what it drives are the atmosphere's Mie
+   * limb and the ocean glint, and since Stage 5 it is no longer the only thing
+   * that can bloom (Venus rides the ladder at 2.74).
    * @returns {boolean}
    */
   isSunVisible() {
     return !!(this.sunSprite && this.sunSprite.visible);
+  }
+
+  /**
+   * Whether ANY source that can cross the bloom threshold is currently on
+   * screen — the correct input to SceneManager.setBloomEnabled().
+   *
+   * Two independent families:
+   *  1. sun-driven sources (atmosphere Mie limb ≈ 2.7, ocean glint ≈ 2.2–2.7),
+   *     gated by the sun's own visibility;
+   *  2. laddered BODIES whose HDR peak exceeds Constants.BLOOM_THRESHOLD —
+   *     Venus at B 2.74 (D3). Their visibility is independent of the sun's.
+   *
+   * Family 2 is why this method exists. The gate used to be `isSunVisible()`
+   * alone, on the documented premise that every threshold-crossing source was
+   * sun-driven. Stage 5 broke that premise: Venus sits at a fixed 40° elongation,
+   * so the evening/morning-star case — Venus clear of the limb while the sun is
+   * behind it — switched the pass off precisely when the one deliberately
+   * blooming planet was in view. The source list is derived from the brightness
+   * curve and the threshold (BLOOM_SOURCE_BODIES), so a retune cannot desync it.
+   *
+   * Perf note: the gate still buys its ~1.35 ms mip-chain skip on frames where
+   * neither the sun nor a blooming body is up (deep night side, eclipse). It just
+   * no longer claims those savings on frames that need the pass.
+   * @returns {boolean}
+   */
+  isBloomSourceVisible() {
+    if (this.isSunVisible()) return true;
+    if (this._planets) {
+      for (const p of this._planets) {
+        if (p.bloomSource && p.disc && p.disc.visible) return true;
+      }
+    }
+    return false;
   }
 
   // ==========================================================================

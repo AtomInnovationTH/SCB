@@ -358,11 +358,23 @@ export const Constants = {
                               // MUST stay strictly above STAR_FIELD_BRIGHT (0.32) with a
                               // real margin — the faintest named star must out-peak every
                               // field star — and the test suite asserts this.
-  STAR_MAG_BRIGHT_MAX: 2.0,   // ceiling — COUPLED to the 2.5 bloom threshold
-                              // (SceneManager.js): peak fragment value is 1.0 × 2.0 ×
-                              // uOpacity 0.95 = 1.9. Do NOT raise past 2.0 without reading
-                              // that threshold — stars must not bloom (bloom is reserved
-                              // for the Sun and Venus).
+  STAR_MAG_BRIGHT_MAX: 2.0,   // ceiling — COUPLED to BLOOM_THRESHOLD (2.5): peak fragment
+                              // value is 1.0 × 2.0 × uOpacity 0.95 = 1.9. Do NOT raise past
+                              // 2.0 without reading that threshold — stars must not bloom
+                              // (bloom is reserved for the Sun and Venus).
+
+  // --- Bloom threshold (the one number the whole HDR sky is coupled to) ---
+  // The UnrealBloom pass blooms any fragment above this value; SceneManager owns
+  // the pass and reads this constant (`?bloomThreshold=N` still overrides for
+  // profiling). It lives here, not as a literal in SceneManager, because three
+  // separate systems are coupled to it and must agree:
+  //   1. the star ceiling above (stars must stay under it),
+  //   2. the planet ladder (bodyCatalog/skyBrightness — only Venus crosses it, D3),
+  //   3. the bloom GATE (SunLight.isBloomSourceVisible → SceneManager.setBloomEnabled),
+  //      which skips the whole mip chain when no source above this value is on screen.
+  // Raising or lowering it changes which bodies bloom AND which bodies must keep
+  // the pass alive, so the gate derives its source list from this same number.
+  BLOOM_THRESHOLD: 2.5,
 
   // --- Faint random field (Starfield._create, indices 49..STAR_COUNT) ---
   // The ~10k procedural stars are the FAINT TAIL of the same magnitude→size

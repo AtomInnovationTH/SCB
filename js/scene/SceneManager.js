@@ -343,10 +343,15 @@ export class SceneManager {
         // (~1.35 ms, GPU_PROFILING_REPORT §10.3). At 2.5 the two brightest real
         // sources (sun-facing limb, peak glint sparkle) bloom subtly — the cost
         // buys visuals again — while staying above the hull-glint range that
-        // motivated the raise from 1.5. `?bloomThreshold=N` still overrides.
+        // motivated the raise from 1.5. The number itself lives in
+        // Constants.BLOOM_THRESHOLD because the star ceiling, the planet ladder
+        // and the bloom gate are all coupled to it. `?bloomThreshold=N` still
+        // overrides. NOTE the audit above predates the planet ladder: Venus now
+        // renders at 2.74 (bodyCatalog), so a NON-sun-driven source crosses the
+        // threshold — which is why the gate below is not sun-only.
         (profileFlags.bloomThresholdOverride !== null)
           ? profileFlags.bloomThresholdOverride
-          : 2.5
+          : Constants.BLOOM_THRESHOLD
       );
       this.composer.addPass(bloomPass);
       this.bloomPass = bloomPass;
@@ -779,9 +784,15 @@ export class SceneManager {
 
   /**
    * P2 (2026-07-20): enable/disable the bloom pass for this frame. Called from
-   * the game loop with SunLight.isSunVisible() — when the sun is occluded by
-   * Earth nothing in the scene can cross the 2.5 threshold, so the whole
-   * UnrealBloom mip chain (~1.35 ms measured) is skipped via Pass.enabled.
+   * the game loop with SunLight.isBloomSourceVisible() — when no source above
+   * Constants.BLOOM_THRESHOLD is on screen, the whole UnrealBloom mip chain
+   * (~1.35 ms measured) is skipped via Pass.enabled.
+   *
+   * The gate input is deliberately NOT isSunVisible(). Sun-driven sources (Mie
+   * limb, ocean glint) were the only threshold-crossers until the planet ladder
+   * landed; Venus now renders at 2.74 with sun-independent visibility, so a
+   * sun-only gate disabled bloom with a blooming planet in frame.
+   *
    * No-op when the tier has no bloom pass. Safe across applyTier() rebuilds
    * (the new pass defaults to enabled=true and is re-gated next frame).
    * @param {boolean} enabled

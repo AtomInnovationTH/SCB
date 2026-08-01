@@ -2309,10 +2309,12 @@ function gameLoop(timestamp) {
   const sunDir = sunLight.update(dt, player.getPosition());
   earth.setSunDirection(sunDir);
   earth.update(dt);
-  // P2: bloom gate — sun-driven sources are the only ones that can cross the
-  // bloom threshold (see SceneManager.setBloomEnabled). Skips the whole
-  // UnrealBloom mip chain on night-side/eclipse frames.
-  sceneManager.setBloomEnabled(sunLight.isSunVisible());
+  // P2: bloom gate — skips the whole UnrealBloom mip chain on frames where
+  // nothing can cross the threshold. NOT sun-only: Venus rides the brightness
+  // ladder at 2.74 (> Constants.BLOOM_THRESHOLD) and its visibility is
+  // independent of the sun's, so the gate asks SunLight for any visible
+  // threshold-crossing source (see SunLight.isBloomSourceVisible).
+  sceneManager.setBloomEnabled(sunLight.isBloomSourceVisible());
   // B2: feed the renderer's CAPPED pixel ratio (HIGH tier caps at 1.5), not
   // window.devicePixelRatio (=2.0), so gl_PointSize maps to the true physical
   // render-target and stars aren't ~33% oversized.
