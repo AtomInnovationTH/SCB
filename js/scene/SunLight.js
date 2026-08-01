@@ -8,7 +8,10 @@ import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
 import { createLabelTexture } from './labelTexture.js';
 import { sunEphemeris, moonEphemeris, latLonToUnitVec } from './Ephemeris.js';
-import { BODY_CATALOG, bodyByName, angularToRadius, ladderBloomBodies } from './bodyCatalog.js';
+import { BODY_CATALOG, bodyByName, ladderBloomBodies } from './bodyCatalog.js';
+import {
+  sunGeometry, moonGeometry, planetGeometry, SUN_GLARE_STOPS, SATURN_RING,
+} from './bodyGeometry.js';
 import { skyBrightness } from './starCatalog.js';
 
 // Tilt of the stylized day/night cycle's sun circle vs the equator (~23.5°,
@@ -24,7 +27,9 @@ const SUN_CYCLE_TILT = 0.41;
  * Create a soft radial gradient canvas texture for the sun disc.
  * Defined white-hot core (~60% of sprite width) plus a short glow skirt, so the
  * enlarged sun (size-parity with the Moon) reads as a crisp disc rather than a
- * diffuse blob. Tightened from the old wide-glow stops when the sprite grew.
+ * diffuse blob. The alpha profile is NOT defined here — it comes from
+ * bodyGeometry.SUN_GLARE_STOPS, because the depth mask is sized to the extent
+ * this gradient visibly glows and the two must never drift apart.
  * @param {number} size — canvas pixel dimensions
  * @returns {THREE.CanvasTexture}
  */
@@ -35,10 +40,11 @@ export function createSunDiscTexture(size = 64) {
   const ctx = canvas.getContext('2d');
   const half = size / 2;
   const gradient = ctx.createRadialGradient(half, half, 0, half, half, half);
-  gradient.addColorStop(0.0, 'rgba(255, 255, 255, 1.0)');
-  gradient.addColorStop(0.55, 'rgba(255, 255, 238, 0.95)');
-  gradient.addColorStop(0.75, 'rgba(255, 250, 205, 0.25)');
-  gradient.addColorStop(1.0, 'rgba(255, 250, 190, 0.0)');
+  // Warm tint over the shared alpha profile: white-hot core → pale yellow rim.
+  const RGB = ['255, 255, 255', '255, 255, 238', '255, 250, 205', '255, 250, 190'];
+  SUN_GLARE_STOPS.forEach((stop, i) => {
+    gradient.addColorStop(stop.r, `rgba(${RGB[Math.min(i, RGB.length - 1)]}, ${stop.a})`);
+  });
   ctx.fillStyle = gradient;
   ctx.fillRect(0, 0, size, size);
   return new THREE.CanvasTexture(canvas);
@@ -385,9 +391,12 @@ export function createSaturnTexture(size = 256) {
   canvas.height = size;
   const ctx = canvas.getContext('2d');
   const cx = size / 2, cy = size / 2;
-  const globeR = size * 0.19;    // shrunk so the ~2.27× ring span fits the square
-  const rot = -0.34;             // ring-plane tilt (~ -19°, "wide open" classic view)
-  const squash = 0.36;           // ring opening (minor/major)
+  // Ring proportions from the ONE definition — bodyGeometry.SATURN_RING. The
+  // elliptical depth mask derives from the same block, so the mask can never stop
+  // matching the drawn rings (F7).
+  const globeR = size * SATURN_RING.globeFraction;  // ~2.27× ring span fits the square
+  const rot = SATURN_RING.tilt;                     // ring-plane tilt (~ -19°, "wide open")
+  const squash = SATURN_RING.squash;                // ring opening (minor/major)
 
   // Ring bands, radii in units of the globe radius (≈ Saturn radii), matching
   // the real ring system so the Cassini Division and A/B contrast read true.
@@ -538,13 +547,16 @@ export function createMarsTexture(size = 128) {
   return tex;
 }
 
-/** Planet definitions: name, hex color, glow radius, angle from sun (degrees),
- *  optional procedural `makeTexture` factory, and optional `planeSize` (Saturn's rings need a
- *  full-square PlaneGeometry billboard rather than a CircleGeometry disc).
- *  Disc radii are DERIVED from BODY_CATALOG's displayAngularDeg via angularToRadius
- *  (radius = dist·tan(θ/2)) so the catalogue is the single source of truth for body
- *  sizes — change a size there and disc, glow, depth mask and label offset cannot
- *  silently desync. The textureKey → factory mapping lives HERE, not in the
+/** Planet definitions: name, hex color, angle from sun (degrees), and an optional
+ *  procedural `makeTexture` factory.
+ *  Every DIMENSION (disc radius, glow halo, depth mask, and for Saturn the ring
+ *  plane and its mask ellipse) is DERIVED in bodyGeometry.planetGeometry from
+ *  BODY_CATALOG's displayAngularDeg, so the catalogue is the single source of truth
+ *  for body sizes — change a size there and disc, glow, depth mask and label offset
+ *  cannot silently desync. Keeping that math in a pure module is also what makes the
+ *  couplings testable (test-bodyGeometry.js); they were previously inline literals
+ *  here, which is how F6/F7 happened and stayed latent in two more places.
+ *  The textureKey → factory mapping lives HERE, not in the
  *  catalogue: the factories call document.createElement('canvas'), so importing
  *  them into bodyCatalog.js would make that module un-loadable in node and kill
  *  its tests (the same contract that keeps starCatalog.js testable).
@@ -556,13 +568,10 @@ const TEXTURE_FACTORIES = {
   jupiter: () => createJupiterTexture(128), // PARKED (Stage 5) — kept exported
   saturn: () => createSaturnTexture(256),
 };
-// Saturn ring geometry (from createSaturnTexture — the REAL ring radii in Saturn
-// radii, kept true). Needed to size the elliptical ring depth mask (F7). The A
-// ring outer edge is 2.27 globe radii; the texture draws rings with this tilt
-// and squash, so the mask must match or it won't cover the visible rings.
-const SATURN_RING_OUTER = 2.27;  // A ring outer edge, in globe radii (real value)
-const SATURN_RING_TILT = -0.34;  // ring-plane tilt (rad), matches the texture
-const SATURN_RING_SQUASH = 0.36; // ring opening (minor/major), matches the texture
+// Saturn's ring proportions now live ONCE in bodyGeometry.SATURN_RING, shared by
+// createSaturnTexture (which draws with them) and the elliptical ring depth mask
+// (F7, which must match or it won't cover the visible rings). They used to be
+// duplicated as literals in both places.
 // Bodies whose HDR peak crosses the bloom threshold — DERIVED from the same
 // curve and threshold the pass uses, never a hardcoded "Venus" (see
 // bodyCatalog.ladderBloomBodies). These keep the bloom gate alive on their own,
@@ -576,17 +585,26 @@ const PLANET_DEFS = [
   { name: 'Venus',   hex: '#ffffcc', deg: Constants.PLANET_VENUS_DEG },
   { name: 'Mars',    hex: '#ff6633', deg: Constants.PLANET_MARS_DEG },
   { name: 'Jupiter', hex: '#ffd699', deg: Constants.PLANET_JUPITER_DEG },
-  { name: 'Saturn',  hex: '#f5e6c8', deg: Constants.PLANET_SATURN_DEG, planeSize: Constants.PLANET_SATURN_PLANE_SIZE },
+  { name: 'Saturn',  hex: '#f5e6c8', deg: Constants.PLANET_SATURN_DEG },
 ].map((def) => {
   const cat = bodyByName(def.name);
-  const radius = angularToRadius(cat.displayAngularDeg, Constants.PLANET_DIST);
+  // Disc, halo, mask and (for Saturn) the ring plane + mask ellipse all come from
+  // bodyGeometry — one derivation, testable without `three` (see test-bodyGeometry).
+  const geo = planetGeometry({
+    displayAngularDeg: cat.displayAngularDeg,
+    dist: Constants.PLANET_DIST,
+    maskDist: Constants.BODY_DEPTH_MASK_DIST,
+    haloFactor: Constants.PLANET_GLOW_RADIUS_FACTOR,
+    ringSpanAngularDeg: cat.ringSpanAngularDeg,
+  });
   // Stage 5 brightness ladder: HDR color multiplier B(mag) on the SAME
   // skyBrightness curve the stars use, so planets and stars share one curve
   // (F5). Applied to the tint; opacity is 1.0 (see Constants.PLANET_DISC_OPACITY).
   const brightB = skyBrightness(cat.magnitude,
     Constants.STAR_MAG_BRIGHT_MIN, Constants.STAR_MAG_BRIGHT_MAX, Constants.STAR_MAG_BRIGHT_FLOOR_SOFT);
   return Object.assign({}, def, {
-    radius,
+    geo,
+    radius: geo.radius,
     brightB,
     // Does this body keep the bloom pass alive by itself? (Venus does.)
     bloomSource: BLOOM_SOURCE_BODIES.has(def.name),
@@ -699,36 +717,46 @@ export class SunLight {
   _createSunDisc(sceneManager) {
     const texture = createSunDiscTexture(256);
 
+    // Sun/Moon parity, glare/mask reconciliation, and the Sun's bloom — all three
+    // derived from ONE catalogue angular size via bodyGeometry.sunGeometry.
+    const sunGeo = sunGeometry({
+      displayAngularDeg: bodyByName('Sun').displayAngularDeg,   // 1.49°, Moon parity
+      dist: Constants.SUN_DIST,
+      maskDist: DEPTH_MASK_DIST,
+      visibleAlpha: Constants.SUN_GLARE_VISIBLE_ALPHA,
+    });
+
+    // HDR core so the Sun actually blooms (it never did — the sprite was plain
+    // LDR at ~0.95 and could not reach the 2.5 threshold, so the pass produced
+    // nothing from the one body D3 reserves bloom for). Same mechanism as the
+    // planet ladder: divide the tint by its own peak channel so the rendered peak
+    // lands EXACTLY on SUN_HDR_PEAK while the hue is preserved. Additive blending
+    // means the contribution is colour × texture.a × opacity, hence the /opacity.
+    const sunTint = new THREE.Color(0xffffee);
+    sunTint.multiplyScalar(Constants.SUN_HDR_PEAK /
+      (Math.max(sunTint.r, sunTint.g, sunTint.b) * Constants.SUN_GLARE_OPACITY));
+
     this.sunSprite = new THREE.Sprite(new THREE.SpriteMaterial({
       map: texture,
-      color: 0xffffee,
+      color: sunTint,
       transparent: true,
       opacity: Constants.SUN_GLARE_OPACITY,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
       depthTest: false,          // Mask is closer than body — skip depth test so body isn't self-occluded
     }));
-
-    // Sun/Moon parity + glare/mask reconciliation (Stage 4, F6). The glare
-    // sprite's visible disc and the depth mask BOTH derive from the catalogue's
-    // Sun displayAngularDeg (1.49°, matching the Moon — reality is within 3%),
-    // so they can never desync. Before, the glare (1.91°) was far wider than the
-    // mask (1.15°) and background stars showed inside the glare ring. The
-    // texture's own radial falloff provides the glow skirt INSIDE this disc; the
-    // bloom pass adds the outer halo (stars shine through bloom — physically
-    // correct for instrumental glow, and outside the geometry disc the
-    // acceptance scans). Stays within CAMERA_FAR (500).
-    const sunAngular = bodyByName('Sun').displayAngularDeg;
-    const sunRadius = angularToRadius(sunAngular, Constants.SUN_DIST);  // half-extent at SUN_DIST
-    this.sunSprite.scale.set(sunRadius * 2, sunRadius * 2, 1);          // sprite scale = full width
+    this.sunSprite.scale.set(sunGeo.spriteScale, sunGeo.spriteScale, 1);   // sprite scale = full width
     this.sunSprite.name = 'SunDisc';
     this.scene.add(this.sunSprite);
 
-    // Depth mask — invisible disc placed inside the star sphere to occlude stars/lines.
-    // Sized to the SAME displayAngularDeg as the glare (rescaled to DEPTH_MASK_DIST),
-    // so it covers the entire visible glare disc — zero star pixels inside it.
+    // Depth mask — invisible disc inside the star sphere to occlude stars/lines.
+    // Sized to the VISIBLY GLOWING extent (0.90 of the sprite = 1.341°), not the
+    // sprite square: the texture reaches alpha 0 at its rim, so a full-sprite mask
+    // deleted stars from a ring of effectively empty sky. Now that the core blooms,
+    // that ring is covered by real glow instead of an invisible cutout — which is
+    // how a bright source should hide its neighbours.
     this._sunDepthMask = new THREE.Mesh(
-      new THREE.CircleGeometry(sunRadius * (DEPTH_MASK_DIST / Constants.SUN_DIST), 32),
+      new THREE.CircleGeometry(sunGeo.maskRadius, 32),
       DEPTH_MASK_MAT
     );
     this._sunDepthMask.renderOrder = -1;
@@ -810,10 +838,15 @@ export class SunLight {
     // texture, then shades it with a reconstructed sphere normal so the lit
     // fraction falls out of the geometry: crescent horns, the elliptical
     // terminator and the gibbous bulge all come free from the dot product.
-    // Radius derived from BODY_CATALOG's displayAngularDeg (~1.5° at MOON_DIST).
+    // Radius + full-disc mask derived from BODY_CATALOG via bodyGeometry.
     const moonTexture = createMoonDiscTexture(256);
-    const moonRadius = angularToRadius(bodyByName('Moon').displayAngularDeg, Constants.MOON_DIST);
-    const moonGeo = new THREE.CircleGeometry(moonRadius, 32);
+    const moonGeo = moonGeometry({
+      displayAngularDeg: bodyByName('Moon').displayAngularDeg,
+      dist: Constants.MOON_DIST,
+      maskDist: DEPTH_MASK_DIST,
+      maskFraction: Constants.MOON_MASK_FRACTION,
+    });
+    const moonGeoBuf = new THREE.CircleGeometry(moonGeo.radius, 32);
     this._moonMaterial = new THREE.ShaderMaterial({
       uniforms: {
         uMap: { value: moonTexture },
@@ -860,7 +893,7 @@ export class SunLight {
       depthTest: false,          // Mask is closer than body — skip depth test so body isn't self-occluded
       side: THREE.DoubleSide,
     });
-    this.moonMesh = new THREE.Mesh(moonGeo, this._moonMaterial);
+    this.moonMesh = new THREE.Mesh(moonGeoBuf, this._moonMaterial);
     this.moonMesh.name = 'Moon';
     // Screen-aligned billboard (roll-compensated): copy the camera's orientation
     // so the maria stay upright to the *viewer*. A plain lookAt() anchors the
@@ -887,7 +920,7 @@ export class SunLight {
     // Depth mask — invisible disc placed inside the star sphere to occlude stars/lines.
     // Radius scaled to match angular size of moon's opaque core at DEPTH_MASK_DIST.
     this._moonDepthMask = new THREE.Mesh(
-      new THREE.CircleGeometry(Constants.MOON_DEPTH_MASK_RADIUS * (DEPTH_MASK_DIST / Constants.MOON_DIST), 32),
+      new THREE.CircleGeometry(moonGeo.maskRadius, 32),
       DEPTH_MASK_MAT
     );
     this._moonDepthMask.renderOrder = -1;
@@ -1214,7 +1247,7 @@ export class SunLight {
    * Create 5 visible planets as billboard discs with glow halos and canvas-based
    * planetarium-style text labels. All five are now flat-tinted CircleGeometry
    * discs EXCEPT Saturn, whose rings need a full-square PlaneGeometry billboard
-   * (`def.planeSize`). (Jupiter/Mars detail textures are PARKED — their detail
+   * (`def.geo.planeSize`). (Jupiter/Mars detail textures are PARKED — their detail
    * can't survive 6–7 px; they stay exported as telescope-feature material.)
    * Each disc carries the HDR brightness ladder B(mag) as a color multiplier, so
    * Venus blooms and the rest stay under the threshold (see Constants.PLANET_DISC_OPACITY).
@@ -1233,9 +1266,9 @@ export class SunLight {
       // (white base) maxChannel is 1, so the peak is B(mag) × texture peak.
       const baseColor = def.makeTexture ? new THREE.Color(0xffffff) : new THREE.Color(def.hex);
       baseColor.multiplyScalar(def.brightB / Math.max(baseColor.r, baseColor.g, baseColor.b));
-      const discGeo = def.planeSize
-        ? new THREE.PlaneGeometry(def.planeSize, def.planeSize)
-        : new THREE.CircleGeometry(def.radius, 24);
+      const discGeo = def.geo.planeSize
+        ? new THREE.PlaneGeometry(def.geo.planeSize, def.geo.planeSize)
+        : new THREE.CircleGeometry(def.geo.radius, 24);
       const disc = new THREE.Mesh(
         discGeo,
         new THREE.MeshBasicMaterial({
@@ -1255,8 +1288,7 @@ export class SunLight {
       // --- Glow halo (soft radial-gradient texture behind disc) ---
       // Halo radius derives from the body (1.25×), so it shrinks with the ladder.
       // For Saturn it spans the ring system, not just the globe.
-      const haloRadius = Constants.PLANET_GLOW_RADIUS_FACTOR *
-        (def.planeSize ? def.radius * SATURN_RING_OUTER : def.radius);
+      const haloRadius = def.geo.haloRadius;
       const glow = new THREE.Mesh(
         new THREE.PlaneGeometry(haloRadius * 2, haloRadius * 2),
         new THREE.MeshBasicMaterial({
@@ -1287,16 +1319,18 @@ export class SunLight {
       // billboard it with the camera quaternion (like the disc) so they stay
       // aligned — a lookAt() mask would roll away from the rings.
       let depthMask;
-      if (def.planeSize) {
-        const ringMajor = def.radius * SATURN_RING_OUTER * (DEPTH_MASK_DIST / Constants.PLANET_DIST);
-        const maskGeo = new THREE.CircleGeometry(ringMajor, 24);
-        maskGeo.scale(1, SATURN_RING_SQUASH, 1);   // squash to the ring ellipse
-        maskGeo.rotateZ(SATURN_RING_TILT);         // tilt to match the texture
+      if (def.geo.planeSize) {
+        const maskGeo = new THREE.CircleGeometry(def.geo.ringMaskMajor, 24);
+        // Squash to the ring ellipse — but the minor axis is FLOORED at the globe
+        // radius in bodyGeometry, because a pure ring ellipse is thinner than the
+        // globe is tall and would leave the globe's top/bottom slivers unmasked.
+        maskGeo.scale(1, def.geo.ringMaskSquash, 1);
+        maskGeo.rotateZ(def.geo.ringMaskTilt);     // tilt to match the texture
         depthMask = new THREE.Mesh(maskGeo, DEPTH_MASK_MAT);
         depthMask.onBeforeRender = (_r, _s, cam) => depthMask.quaternion.copy(cam.quaternion);
       } else {
         depthMask = new THREE.Mesh(
-          new THREE.CircleGeometry(def.radius * (DEPTH_MASK_DIST / Constants.PLANET_DIST), 24),
+          new THREE.CircleGeometry(def.geo.maskRadius, 24),
           DEPTH_MASK_MAT
         );
         depthMask.onBeforeRender = (_r, _s, cam) => depthMask.lookAt(cam.position);

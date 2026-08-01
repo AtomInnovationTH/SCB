@@ -480,22 +480,47 @@ export const Constants = {
 
   // --- Sun ---
   // The glare sprite scale and the depth-mask radius are BOTH derived from
-  // bodyCatalog's Sun displayAngularDeg (1.49°, Moon parity) in _createSunDisc —
-  // one source of truth so they can never desync (that desync was F6: glare
-  // 1.91° vs mask 1.15° let stars show inside the glare). No SUN_GLARE_SCALE
-  // constant by design.
-  SUN_GLARE_OPACITY: 0.95,      // additive; peak ~0.95 × texture — the Sun is the
-                                // one body MEANT to bloom (threshold 2.5).
+  // bodyCatalog's Sun displayAngularDeg (1.49°, Moon parity) in bodyGeometry
+  // (sunGeometry) — one source of truth so they can never desync (that desync was
+  // F6: glare 1.91° vs mask 1.15° let stars show inside the glare). No
+  // SUN_GLARE_SCALE constant by design.
+  SUN_GLARE_OPACITY: 0.95,      // additive; multiplies the HDR peak below.
+  // The Sun is the one body MEANT to bloom (D3) — and it did NOT, which was a
+  // latent defect: the sprite was plain LDR (colour ≤ 1 × opacity 0.95 ≈ 0.95),
+  // so it could never reach BLOOM_THRESHOLD 2.5 and the pass produced nothing
+  // from it. The "halo" was only the texture's own skirt. This is the HDR peak
+  // the sprite's core now renders at, applied exactly like the planet ladder
+  // (tint × PEAK / (maxChannel × opacity), so the peak channel lands here).
+  // COUPLING to BLOOM_THRESHOLD: must exceed 2.5 for the core to bloom at all.
+  // At 3.0 the core (texture alpha ≥ 0.88) crosses it and the glow skirt
+  // (alpha 0.25 → 0.75) stays under, so the solid disc blooms and the skirt does
+  // not — which is the intent. Costs nothing: the bloom pass is already running
+  // on every sun-visible frame (the gate is open), it just had no sun to work on.
+  SUN_HDR_PEAK: 3.0,
+  // How far the glare texture visibly glows, as the alpha below which it stops
+  // being perceptible. The depth mask is sized to THIS extent, not to the
+  // sprite's square: the sprite reaches alpha 0 at its rim, so masking to the
+  // full sprite deleted stars from a ~3 px ring of effectively empty sky (an
+  // invisible hole — the inverse of F6, and undetectable by a "zero stars inside
+  // the mask" test, which passes trivially once the mask covers everything).
+  // With the shipped gradient stops (bodyGeometry.SUN_GLARE_STOPS) 0.10 puts the
+  // mask at 0.90 of the sprite = 1.341° vs the 1.49° disc.
+  SUN_GLARE_VISIBLE_ALPHA: 0.10,
   SUN_LABEL_OFFSET: 15,         // world units below the disc (camera-relative)
   // --- Moon ---
-  MOON_BASE_OPACITY: 0.85,      // NormalBlending disc; phase scales this (Stage 3
-                                // replaces the whole-disc dimming with a real
-                                // terminator + earthshine — see _updateMoon).
-  MOON_DEPTH_MASK_RADIUS: 5.2,  // opaque core at MOON_DIST; slightly INSIDE the
-                                // 5.6 disc so the mask doesn't peek past the limb.
-                                // Stage 3 keeps this FULL-DISC at every phase —
-                                // the unlit limb still occludes stars.
-  MOON_LABEL_OFFSET: 14,        // ≈ radius (5.6) + 8, the planet convention
+  MOON_BASE_OPACITY: 0.85,      // NormalBlending disc; the shader owns phase (Stage 3
+                                // replaced whole-disc dimming with a real terminator
+                                // + earthshine — see _updateMoon). MUST stay under
+                                // BLOOM_THRESHOLD: the Moon must never bloom.
+  // Depth-mask radius as a FRACTION of the moon's disc radius (was an independent
+  // literal 5.2, which is this × 5.5915 — the same desync class as F6, just
+  // smaller: changing the Moon's displayAngularDeg silently changed the
+  // relationship). Slightly inside the disc because the texture's limb fade makes
+  // the outer rim translucent, so masking to the geometric edge would hide stars
+  // behind nothing. Stays FULL-DISC at every phase — the unlit limb is still
+  // solid rock and really does occlude stars.
+  MOON_MASK_FRACTION: 0.93,
+  MOON_LABEL_OFFSET: 14,        // ≈ radius (5.59) + 8, the planet convention
   // --- Moon Stage 3: real terminator + earthshine ---
   // (The F2 phase floors — MOON_PHASE_BRIGHTNESS_FLOOR / _OPACITY_FLOOR /
   // _OPACITY_SCALE — were deleted when Stage 3 landed the terminator: the shader
@@ -540,12 +565,13 @@ export const Constants = {
   PLANET_JUPITER_DEG: 90,
   PLANET_SATURN_DEG: 130,
   // Saturn's rings need a full-square PlaneGeometry billboard (the rings extend
-  // past the globe's inscribed circle). planeSize is the FULL width at
-  // PLANET_DIST. Stage 5: 15 → 7.6 for a ~14 px visible ring span — the drawn
-  // rings fill only 0.86 of the plane (globeR = 0.19 × size, A ring outer = 2.27
-  // globe radii → span 0.86 of plane), so 7.6 × 0.86 ≈ 0.85° ≈ 14 px. Measure
-  // the span from a capture, not from the parameter (plan trap 2).
-  PLANET_SATURN_PLANE_SIZE: 7.6,
+  // past the globe's inscribed circle). The plane size is DERIVED in bodyGeometry
+  // (planetGeometry) from the catalogue's ringSpanAngularDeg, because the drawn
+  // rings fill only SATURN_RING.spanFraction (0.8626) of the texture — sizing the
+  // plane to the intended span directly would render the rings 14% small (the
+  // plan's trap 2). No PLANET_SATURN_PLANE_SIZE constant by design; the ring
+  // proportions live once in bodyGeometry.SATURN_RING, shared by the texture and
+  // the elliptical depth mask (F7).
 
   // =========================================================================
   // V3 OCTOPUS ADR SATELLITE (from V3 Octopus.md Appendix F)
