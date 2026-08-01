@@ -451,7 +451,18 @@ export const Constants = {
   // Cygnus star-cloud enhancement (the bright cloud around Cygnus).
   MW_CYGNUS_LONG: 1.4,          // radians (l≈80°).
   MW_CYGNUS_WIDTH: 0.25,        // gaussian width (radians).
-  MW_CYGNUS_BOOST: 1.7,         // density multiplier at the Cygnus centre.
+  // Density multiplier at the Cygnus centre. HARD CEILING, guarded by a test:
+  // the centre profile has already fallen to ~0.792 by this longitude, so any
+  // boost above 1/0.792 = 1.262 makes Cygnus DENSER than Sagittarius — which is
+  // what 1.7 did (1.35× denser), inverting the documented "brightest at the
+  // galactic centre" structure. Because band presence comes from COVERAGE and not
+  // per-point peak (see MW_OPACITY), density IS perceived brightness, so the
+  // brightest region simply sat in the wrong place. Raising MW_CENTER_CONTRAST
+  // cannot buy headroom — that term asymptotes near 0.585 at this longitude and
+  // would need a contrast above 130. See starCatalog.mwDensity, which composes
+  // the two terms for BOTH the builder and the test (they were separate before,
+  // which is how a 1.35× inversion passed a "density falls monotonically" test).
+  MW_CYGNUS_BOOST: 1.25,
 
   // =========================================================================
   // SUN / MOON / PLANETS (SunLight.js) — the naked-eye bodies

@@ -12,7 +12,7 @@ import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
 import { Constants } from '../core/Constants.js';
-import { BRIGHT_STARS, CONSTELLATION_FIGURES, sampleFieldMagnitude, fieldSizeAlpha, magnitudeBrightness, skyBrightness, galacticBasis, mwCenterProfile, mwGreatRiftMask, mwCygnusBoost } from './starCatalog.js';
+import { BRIGHT_STARS, CONSTELLATION_FIGURES, sampleFieldMagnitude, fieldSizeAlpha, skyBrightness, galacticBasis, mwCenterProfile, mwGreatRiftMask, mwDensity } from './starCatalog.js';
 
 // ============================================================================
 // RA/Dec → Cartesian conversion
@@ -355,12 +355,22 @@ export class Starfield {
   }
 
   /**
-   * Build a faint procedural Milky Way band — ~3500 clustered stars along a
-   * tilted great circle. No texture: stars are scattered in a band-local frame
-   * (a thin ribbon around the equator of a rotated basis) then rotated into
-   * world space. Sizes 0.4–0.9, dim additive so it reads as a soft glow rather
-   * than discrete points. Reuses the same star ShaderMaterial (via a clone with
-   * a lower opacity + no twinkle) for a single extra draw call.
+   * Build the Milky Way band: MW_COUNT points scattered on the REAL galactic
+   * frame (starCatalog.galacticBasis — pole RA 12.85h Dec +27.13°, centre RA
+   * 17.76h Dec −28.9°), so it runs through Sagittarius, Cygnus and Cassiopeia as
+   * it really does rather than on an invented tilt.
+   *
+   * Longitude is rejection-sampled against mwDensity (centre profile × Cygnus
+   * cloud, normalized to 1.0 at the galactic centre), latitude gets a triangular
+   * spread that widens toward the centre, and the Great Rift is carved as
+   * NEGATIVE SPACE — points are skipped inside the lane rather than painted dark.
+   *
+   * Presence comes from DENSITY, the 1.2 px size floor (the same sub-pixel crawl
+   * cure the field stars use) and collective additive overlap — never from
+   * per-point peak, which stays below STAR_FIELD_BRIGHT so no band point can
+   * out-shine an actual star. Sizes spread 1.2→4.5 px biased small to keep a
+   * starry texture instead of blobs. Reuses the star ShaderMaterial (a clone with
+   * lower opacity and no twinkle) for a single extra draw call.
    * @private
    */
   _createMilkyWay() {
@@ -401,15 +411,20 @@ export class Starfield {
     // Rejection-sample longitude so DENSITY peaks at the galactic center and
     // falls toward the anticenter (the real band is brightest/widest near Sgr);
     // the Great Rift and Cygnus cloud modulate acceptance further.
+    // mwDensity composes the centre profile with the Cygnus boost and normalizes
+    // the galactic centre to exactly 1.0, so it is directly usable as the
+    // acceptance probability. It is the SAME function the test asserts against —
+    // composing these terms here while the test checked only the profile is how
+    // the band ended up 1.35× denser at Cygnus than at Sagittarius.
     while (placed < count && guard < count * 40) {
       guard++;
       const L = Math.random() * Math.PI * 2 - Math.PI;   // [−π, π]
-      const prof = mwCenterProfile(L, C.MW_CENTER_CONTRAST);          // [1, contrast]
-      const structure = prof / C.MW_CENTER_CONTRAST;                  // [1/contrast, 1]
-      const boost = mwCygnusBoost(L, cygnusParams);                   // ≥1
-      // Density acceptance: profile (center-weighted) × Cygnus boost.
-      const pAccept = structure * Math.min(1, boost / C.MW_CYGNUS_BOOST);
-      if (Math.random() > pAccept) continue;
+      const density = mwDensity(L, C.MW_CENTER_CONTRAST, cygnusParams);   // (0, 1]
+      if (Math.random() > density) continue;
+      // Structure (centre-weighted, no Cygnus term) still drives WIDTH and
+      // per-point BRIGHTNESS: the Cygnus cloud is a density feature, and pushing
+      // it into brightness too would break the per-point peak cap.
+      const structure = mwCenterProfile(L, C.MW_CENTER_CONTRAST) / C.MW_CENTER_CONTRAST;
 
       // Latitude spread: the band is widest near the galactic center.
       const width = C.MW_BAND_WIDTH * (1 + (C.MW_BAND_WIDTH_CENTER - 1) * structure);

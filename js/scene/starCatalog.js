@@ -374,3 +374,36 @@ export function mwCygnusBoost(L, p) {
   const d = (L - p.long) / p.width;
   return 1 + (p.boost - 1) * Math.exp(-d * d);
 }
+
+/**
+ * The band's COMPOSED longitudinal density — the profile and the Cygnus boost
+ * together, normalized so the galactic centre sits at exactly 1.0 and the value
+ * can be used directly as a rejection-sampling acceptance probability.
+ *
+ * WHY THIS FUNCTION EXISTS
+ * Starfield used to compose these two terms inline while test-milkyway asserted
+ * "density falls monotonically centre → anticenter" against `mwCenterProfile`
+ * ALONE. The composed density did not have that property: with a 1.7× Cygnus
+ * boost, l=80° reached 0.79 while the centre sat at 0.59, so the band was 1.35×
+ * DENSER at Cygnus than at Sagittarius — the opposite of the documented
+ * structure, and invisible to a test that only checked one factor of the product.
+ * One function, used by both the builder and the test, is the fix.
+ *
+ * The normalization is what makes it safe as an acceptance probability: it is
+ * ≤ 1 everywhere IF AND ONLY IF the centre is the maximum, so the invariant
+ * "Sagittarius is the brightest part of the band" and the sampler's correctness
+ * are the same condition. That also pins the constants: because the profile has
+ * already fallen to ~0.79 by the Cygnus longitude, a boost above
+ * 1 / 0.79 ≈ 1.26 necessarily out-densifies the centre. Raising
+ * MW_CENTER_CONTRAST cannot buy headroom — that term asymptotes near 0.585 at
+ * that longitude, so it would need a contrast above 130 to help.
+ *
+ * @param {number} L — galactic longitude (radians, in [−π, π])
+ * @param {number} contrast — Constants.MW_CENTER_CONTRAST
+ * @param {{ long: number, width: number, boost: number }} cygnus — the Cygnus params
+ * @returns {number} density in (0, 1], equal to 1 at the galactic centre
+ */
+export function mwDensity(L, contrast, cygnus) {
+  const structure = mwCenterProfile(L, contrast) / contrast;   // (1/contrast .. 1]
+  return structure * mwCygnusBoost(L, cygnus);
+}
