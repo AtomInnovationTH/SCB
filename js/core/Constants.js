@@ -2609,7 +2609,11 @@ export const Constants = {
     // separate DECAY_S knob, because a second constant would not be read and
     // would drift from the real behaviour (~1 s to 1/e at 0.5 Hz).
     BERTH_PENDULUM_FREQ_HZ:  0.5,    // Hz — swing frequency (also sets the decay)
-    BERTH_PENDULUM_MAX_RAD:  0.06,   // rad — cap (~3.4°) so the bundle never clips the launcher
+    BERTH_PENDULUM_MAX_RAD:  0.15,   // rad — cap (~8.6°). V7 garnish rescale from
+                                    // 0.06 (~3.4°, ~1–2% of the bag's silhouette —
+                                    // invisible at the ceremony framing) into the
+                                    // ~5–8% band; the launcher-clip margin at the
+                                    // 4.5 m standoff is preserved (tan 0.15 ≈ 0.68 m).
     // rad/s of swing velocity per METRE of RCS drift. The call site converts
     // _rcsVelocity to m/s and scales by dt, so the total kick over a burst is the
     // RCS displacement — framerate-independent. Tuned against real input: RCS
@@ -2905,8 +2909,10 @@ export const Constants = {
       EMISSIVE_S:        0.35,    // bloom pulse window at line-taut (s)
       EMISSIVE_HDR:      2.8,     // > 2.5 bloom threshold (SceneManager)
       BASE_COLOR:        0xddddee,
-      DRAPE_JIGGLE_ENVELOP_FRAC: 0.04,  // mouthRadius × this — settle-jiggle amp during ENVELOP
-      DRAPE_JIGGLE_CINCH_FRAC:   0.02,  // mouthRadius × this — settle-jiggle amp during CINCH_CLOSING
+      DRAPE_JIGGLE_ENVELOP_FRAC: 0.12,  // mouthRadius × this — V7 garnish rescale
+                                    // (was 0.04 ≈ 2% of the bag silhouette —
+                                    // invisible; now ~6% — the settle reads)
+      DRAPE_JIGGLE_CINCH_FRAC:   0.06,  // mouthRadius × this — V7 rescale (was 0.02)
       DRAPE_JIGGLE_HZ:           2.5,   // settle-jiggle rate
     },
   },

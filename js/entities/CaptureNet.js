@@ -622,6 +622,10 @@ export class NetProjectile {
      *  bundle keeps at ENVELOP, decaying over TUMBLE_CARRYOVER_DECAY_S. Fed
      *  into the berth-hold orientation as a small extra pitch term. */
     this._tumbleCarryover = 0;
+    // V7: ACCUMULATED residual-spin angle (rad). The pre-V7 twin sites applied
+    // one frame's increment to a freshly rebuilt quaternion each frame, so the
+    // carryover never accumulated — a sub-degree offset decaying to nothing.
+    this._tumbleCarryAngle = 0;
     /** @type {number} (b) Berthed pendulum: angular offset (rad) of the
      *  berthed bundle off the lagged-forward axis, driven by the same
      *  critically damped spring as the reel-direction lag, re-excited by RCS. */
@@ -1173,6 +1177,7 @@ export class NetProjectile {
     // of the hard stop"). Capped; decays in _updateMotherReel/updateBerthHold.
     const tumbleRate = Math.abs(d.tumbleRate || 0);
     this._tumbleCarryover = Math.min(tumbleRate, CN.TUMBLE_CARRYOVER_MAX_RAD_S ?? 0.6);
+    this._tumbleCarryAngle = 0;   // V7: accumulation starts fresh each catch
     return true;
   }
 
@@ -1293,31 +1298,9 @@ export class NetProjectile {
       .add(this._lateral);
 
     // Orientation follows the ship (plan §1.2), PLUS the Phase D.7 (a)
-    // tumble-carryover offset: a small extra pitch term on top of the
-    // ship-rigid attitude, decaying over TUMBLE_CARRYOVER_DECAY_S. The two
-    // share the orientation channel (tumbleAxis/tumbleAngle), so the carryover
-    // is composed as an additional rotation about the ship-local X (pitch)
-    // axis — the same axis the tug's angular kick uses.
-    if (this._qLocal && d.tumbleAxis) {
-      _q0.copy(player.quaternion).multiply(this._qLocal);
-      if (this._tumbleCarryover > 1e-6 && CN.TUMBLE_CARRYOVER_ENABLED !== false) {
-        const carryAngle = this._tumbleCarryover * dt;
-        _q1.setFromAxisAngle(_v3e.set(1, 0, 0), carryAngle);
-        _q0.multiply(_q1);
-        // Decay the residual (exponential, dt-robust).
-        this._tumbleCarryover *= Math.exp(-dt / (CN.TUMBLE_CARRYOVER_DECAY_S ?? 5.0));
-      }
-      const axis = _v3e.set(0, 1, 0);
-      let angle = 0;
-      // Quaternion → axis/angle for the tumbleAxis/tumbleAngle channel.
-      const w = Math.max(-1, Math.min(1, _q0.w));
-      angle = 2 * Math.acos(w);
-      const s = Math.sqrt(Math.max(0, 1 - w * w));
-      if (s > 1e-6) axis.set(_q0.x / s, _q0.y / s, _q0.z / s);
-      else axis.set(0, 1, 0);
-      d.tumbleAxis.copy(axis);
-      d.tumbleAngle = angle;
-    }
+    // tumble-carryover offset — shared helper (V7: the twin sites are one
+    // implementation now, so the accumulation fix cannot drift apart again).
+    this._applyCatchOrientation(d, player, dt);
 
     d._armPinned = true;
     d._captured = true;
@@ -1550,22 +1533,8 @@ export class NetProjectile {
       .addScaledVector(this._fwdLagged, berthStandoffM * M_NET)
       .add(this._lateral);
 
-    if (this._qLocal && d.tumbleAxis) {
-      _q0.copy(player.quaternion).multiply(this._qLocal);
-      // Phase D.7 (a) — tumble carryover (same as the reel path).
-      if (this._tumbleCarryover > 1e-6 && CN.TUMBLE_CARRYOVER_ENABLED !== false) {
-        const carryAngle = this._tumbleCarryover * dt;
-        _q1.setFromAxisAngle(_v3e.set(1, 0, 0), carryAngle);
-        _q0.multiply(_q1);
-        this._tumbleCarryover *= Math.exp(-dt / (CN.TUMBLE_CARRYOVER_DECAY_S ?? 5.0));
-      }
-      const w = Math.max(-1, Math.min(1, _q0.w));
-      const angle = 2 * Math.acos(w);
-      const s = Math.sqrt(Math.max(0, 1 - w * w));
-      if (s > 1e-6) d.tumbleAxis.set(_q0.x / s, _q0.y / s, _q0.z / s);
-      else d.tumbleAxis.set(0, 1, 0);
-      d.tumbleAngle = angle;
-    }
+    // Phase D.7 (a) — tumble carryover (shared helper — V7, same as the reel path).
+    this._applyCatchOrientation(d, player, dt);
 
     d._armPinned = true;
     d._captured = true;
@@ -1577,6 +1546,43 @@ export class NetProjectile {
     this.position.y = _v3d.y / M_NET;
     this.position.z = _v3d.z / M_NET;
     return true;
+  }
+
+  /**
+   * @private Shared reel/berth orientation: ship-rigid attitude (plan §1.2)
+   * PLUS the Phase D.7 (a) tumble carryover — a small extra pitch term on top
+   * of the ship-rigid attitude, decaying over TUMBLE_CARRYOVER_DECAY_S. The
+   * two share the orientation channel (tumbleAxis/tumbleAngle), so the
+   * carryover is composed as an additional rotation about the ship-local X
+   * (pitch) axis — the same axis the tug's angular kick uses.
+   *
+   * V7: the residual spin is now ACCUMULATED — `_tumbleCarryAngle` integrates
+   * `_tumbleCarryover × dt` (mod 2π), mirroring how `_pendulumAngle` /
+   * `_pendulumVel` already integrate, so the catch visibly spins down in the
+   * bag. The pre-V7 twin sites applied one frame's increment to a freshly
+   * rebuilt quaternion each frame, so it never accumulated: a sub-degree
+   * offset that decayed to nothing. Hoisted into one helper so the two call
+   * sites cannot drift apart again.
+   * @param {object} d — the caught debris (tumbleAxis/tumbleAngle written)
+   * @param {object} player — mother ship (quaternion read)
+   * @param {number} dt — seconds
+   */
+  _applyCatchOrientation(d, player, dt) {
+    if (!this._qLocal || !d.tumbleAxis) return;
+    _q0.copy(player.quaternion).multiply(this._qLocal);
+    if (this._tumbleCarryover > 1e-6 && CN.TUMBLE_CARRYOVER_ENABLED !== false) {
+      this._tumbleCarryAngle = (this._tumbleCarryAngle + this._tumbleCarryover * dt) % (2 * Math.PI);
+      _q1.setFromAxisAngle(_v3e.set(1, 0, 0), this._tumbleCarryAngle);
+      _q0.multiply(_q1);
+      // Decay the residual (exponential, dt-robust).
+      this._tumbleCarryover *= Math.exp(-dt / (CN.TUMBLE_CARRYOVER_DECAY_S ?? 5.0));
+    }
+    const w = Math.max(-1, Math.min(1, _q0.w));
+    const angle = 2 * Math.acos(w);
+    const s = Math.sqrt(Math.max(0, 1 - w * w));
+    if (s > 1e-6) d.tumbleAxis.set(_q0.x / s, _q0.y / s, _q0.z / s);
+    else d.tumbleAxis.set(0, 1, 0);
+    d.tumbleAngle = angle;
   }
 
   // ── Catch resolution ───────────────────────────────────────────────────
