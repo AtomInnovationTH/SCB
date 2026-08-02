@@ -536,10 +536,12 @@ export class LassoSystem {
         tetherGeo.setPositions([0, 0, 0, 0, 0, M * 10]);
         const tetherMat = new LineMaterial({
             color: 0xcfeaff,        // ivory Dyneema, matching the web
-            linewidth: 2.0,         // screen-space px — slim but AA-legible
+            linewidth: Constants.NET_WEB.TETHER_WIDTH_M, // V3: world units (m) —
+            // the strand thickens on approach and stays AA-smooth at distance
+            // (was fixed 2.0 screen px). The tube this replaces staircased.
             transparent: true,
             opacity: 0,             // faded in on fire()
-            worldUnits: false,
+            worldUnits: true,       // width is metres, not screen px
             dashed: false,
             blending: THREE.NormalBlending,
             depthWrite: false,

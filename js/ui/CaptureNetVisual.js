@@ -405,8 +405,9 @@ export class CaptureNetVisual {
       color: TETHER_BASE_COLOR,
       transparent: true,
       opacity: 0.7,
-      linewidth: 2.0,
-      worldUnits: false,
+      linewidth: Constants.NET_WEB.TETHER_WIDTH_M, // V3: world units (m) — the
+      // strand thickens on approach, AA-smooth at distance (was fixed 2.0 px)
+      worldUnits: true,             // width is metres, not screen px
       dashed: false,
       blending: THREE.NormalBlending,
       depthWrite: false,

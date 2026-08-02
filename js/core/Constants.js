@@ -2423,6 +2423,12 @@ export const Constants = {
     RING_COUNT:         6,      // concentric rings — clear mesh (4–6)
     LINE_WIDTH_PX:      2.4,    // fat-line thread width px — legible ivory strand at the in-game distance
     NODE_ADDITIVE:      true,   // edge-node glints use additive sparkle (threads stay flat/translucent)
+    // V3 — tether width in METRES for the worldUnits Line2 variant: the strand
+    // carries real geometry-like thickness (thickens on approach, AA-smooth at
+    // distance), replacing fixed screen px. Physically sub-mm Dyneema — 5 cm is
+    // the honest gossamer read at the 5–60 m ceremony framing (the rejected
+    // TubeGeometry at r ≈ 0.06 m staircased; the fat line does not).
+    TETHER_WIDTH_M:     0.05,
     // V2 — lit membrane under the threads (the hybrid web). A MeshPhysicalMaterial
     // film driven by the SAME drape functions as the threads, so sun + earthshine
     // read on the bag while the web reveals the catch through it. Inherits the
