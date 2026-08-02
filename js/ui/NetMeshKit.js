@@ -56,6 +56,7 @@ const NET_WEB = Constants.NET_WEB;
 // fallback. Pure-local-space rule (§1.6) preserved: this only touches material
 // resolution, never any transform / world / frame state. Guarded for Node.
 const _liveLineMats = new Set();
+const _liveMembraneMats = new Set();
 const _resolution = { w: 1, h: 1 };
 if (typeof window !== 'undefined') {
   _resolution.w = window.innerWidth || 1;
@@ -222,6 +223,43 @@ function buildWebPositionsDraped(out, p) {
   return out;
 }
 
+/**
+ * V2 — membrane lattice rebuild (the lit film UNDER the threads). Uses the
+ * same `drapeRingRadius` / `drapeRingZ` pure functions and exactly
+ * (rings + 1) × radialSpokes vertices so membrane vertices land ON thread
+ * intersections: the jiggle term is `jigA · t · sin(jigP + spokeAngle·3)`, so
+ * sampling at any other angular resolution makes the membrane crawl out from
+ * under the threads. Module-scope (allocation invariant); writes `out` in
+ * place. Ring k = axial fraction t = k/rings; ring 0 collapses to the apex.
+ *
+ * @param {Float32Array} out — (rings + 1) × radialSpokes × 3
+ * @param {object} p — same params object as buildWebPositionsDraped
+ */
+function updateMembraneLattice(out, p) {
+  const { mouthRadius, coneHeight, radialSpokes, rings } = p;
+  const drape = Math.max(0, Math.min(1, p.drape ?? 0));
+  const cinch = Math.max(0, Math.min(1, p.cinchFrac ?? 0));
+  const jigP = p.jigglePhase ?? 0;
+  const jigA = p.jiggleAmp ?? 0;
+  const closed = NET_CER.DRAWSTRING_RADIUS_FRAC_CLOSED;
+  const cosA = (p.cosA && p.cosA.length === radialSpokes) ? p.cosA : null;
+  const sinA = (p.sinA && p.sinA.length === radialSpokes) ? p.sinA : null;
+  const angA = (p.angA && p.angA.length === radialSpokes) ? p.angA : null;
+  let idx = 0;
+  for (let k = 0; k <= rings; k++) {
+    const t = k / rings;
+    const z = drapeRingZ(t, coneHeight, drape);
+    for (let s = 0; s < radialSpokes; s++) {
+      const a  = angA ? angA[s] : (2 * Math.PI * s) / radialSpokes;
+      const ca = cosA ? cosA[s] : Math.cos(a);
+      const sa = sinA ? sinA[s] : Math.sin(a);
+      const r = drapeRingRadius(t, a, mouthRadius, drape, cinch, closed, jigA, jigP);
+      out[idx++] = ca * r; out[idx++] = sa * r; out[idx++] = z;
+    }
+  }
+  return out;
+}
+
 export const NetMeshKit = {
   /**
    * Build a net-mesh handle. Apex at local origin, mouth along local −Z.
@@ -265,6 +303,11 @@ export const NetMeshKit = {
       apexTransparent = false,
       childrenVisible = false,
       apexHubRadiusM = DEFAULT_APEX_RADIUS_M,
+      membraneOpacity = (NET_WEB && NET_WEB.MEMBRANE_OPACITY) ?? 0.28,
+      membraneRoughness = (NET_WEB && NET_WEB.MEMBRANE_ROUGHNESS) ?? 0.8,
+      membraneTransmission = (NET_WEB && NET_WEB.MEMBRANE_TRANSMISSION) ?? 0.15,
+      membraneSheen = (NET_WEB && NET_WEB.MEMBRANE_SHEEN) ?? 0.5,
+      membraneEnvIntensity = (NET_WEB && NET_WEB.MEMBRANE_ENV_INTENSITY) ?? 0.9,
     } = opts;
 
     const D = diameter || 8;
@@ -301,7 +344,59 @@ export const NetMeshKit = {
     coneMesh.name = 'cone';
     coneMesh.visible = childrenVisible;
     coneMesh.frustumCulled = false;   // scaled per-frame; avoid stale-bounds cull
+    coneMesh.renderOrder = 1;         // threads render OVER the membrane film
     group.add(coneMesh);
+
+    // ── V2 lit membrane (the hybrid web): a drape-driven film UNDER the threads ──
+    // A MeshPhysicalMaterial (roughness/sheen/low transmission, DoubleSide) so the
+    // bag responds to sun + earthshine — the spike's unlit ShaderMaterial could
+    // never satisfy that (plan V2). Inherits the threads' reveal rule:
+    // transparent + depthWrite:false, so the catch reads through it. Driven by the
+    // same drapeRingRadius/drapeRingZ pure functions at exactly
+    // (rings+1) × radialSpokes so membrane vertices land ON thread intersections
+    // (the jiggle term is a function of t and spokeAngle — any other resolution
+    // crawls out from under the threads). envMap arrives via setEnvTexture (null
+    // headless → scene.environment applies). Positions + normals are written in
+    // place per frame — no per-frame allocations.
+    const membranePositions = new Float32Array((rings + 1) * radialSpokes * 3);
+    const membraneGeo = new THREE.BufferGeometry();
+    membraneGeo.setAttribute('position', new THREE.BufferAttribute(membranePositions, 3));
+    {
+      // Static index buffer (topology never changes; only positions/norms move).
+      const memIndex = [];
+      for (let k = 0; k < rings; k++) {
+        for (let s = 0; s < radialSpokes; s++) {
+          const s1 = (s + 1) % radialSpokes;
+          const a = k * radialSpokes + s, b = k * radialSpokes + s1;
+          const c = (k + 1) * radialSpokes + s, d = (k + 1) * radialSpokes + s1;
+          memIndex.push(a, c, b, b, c, d);
+        }
+      }
+      membraneGeo.setIndex(memIndex);
+    }
+    const membraneMat = new THREE.MeshPhysicalMaterial({
+      color,
+      transparent: true,
+      opacity: membraneOpacity,
+      roughness: membraneRoughness,
+      transmission: membraneTransmission,
+      sheen: membraneSheen,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      envMapIntensity: membraneEnvIntensity,
+    });
+    _liveMembraneMats.add(membraneMat);
+    const membraneMesh = new THREE.Mesh(membraneGeo, membraneMat);
+    membraneMesh.name = 'membrane';
+    membraneMesh.visible = childrenVisible;
+    membraneMesh.frustumCulled = false;   // deforms per-frame; avoid stale-bounds cull
+    membraneMesh.renderOrder = 0;         // film UNDER the threads
+    group.add(membraneMesh);
+    // Seed the static flight cone and allocate the normal attribute once — the
+    // per-frame computeVertexNormals in updateWebDrape then writes in place.
+    updateMembraneLattice(membranePositions, { mouthRadius, coneHeight, radialSpokes, rings });
+    membraneGeo.attributes.position.needsUpdate = true;
+    membraneGeo.computeVertexNormals();
 
     // ── Rim weight spheres (tungsten edge-node glints) ──
     // Weights sit at the mouth plane (z = −coneHeight) at the open radius. Ivory
@@ -390,6 +485,13 @@ export const NetMeshKit = {
       webPositions,         // raw Float32Array of web segment endpoints (apex→rim + rings)
       webBuffer,            // InstancedInterleavedBuffer whose .array === webPositions
       lineMaterial: coneMat, // the web's LineMaterial (resolution-synced)
+      membraneMesh,
+      membraneMat,
+      membranePositions,    // (rings+1) × radialSpokes × 3, written in place per frame
+      // Membrane opacity as a fraction of the WEB's canonical full opacity, so
+      // setOpacity(o) fades the film proportionally (o × this) instead of
+      // slamming it to the thread value.
+      _membraneOpacityFrac: membraneOpacity / Math.max(1e-9, DEFAULT_WEB_OPACITY),
       rimWeights,
       rimWeightMats,
       weightGeo,
@@ -439,6 +541,7 @@ export const NetMeshKit = {
       h.rimWeights[i].position.set(Math.cos(a) * r, Math.sin(a) * r, h._mouthZ);
     }
     if (h.coneMesh) h.coneMesh.scale.set(f, f, 1);
+    if (h.membraneMesh) h.membraneMesh.scale.set(f, f, 1);
     if (h.weightCount > 0) this.updateDrawstring(h);
   },
 
@@ -450,6 +553,7 @@ export const NetMeshKit = {
    */
   setColor(h, hex) {
     if (h.coneMesh && h.coneMesh.material) h.coneMesh.material.color.setHex(hex);
+    if (h.membraneMat) h.membraneMat.color.setHex(hex);
   },
 
   /**
@@ -461,6 +565,7 @@ export const NetMeshKit = {
    */
   setOpacity(h, o) {
     if (h.coneMesh && h.coneMesh.material) h.coneMesh.material.opacity = o;
+    if (h.membraneMat) h.membraneMat.opacity = o * h._membraneOpacityFrac;
     if (h.drawstringLine && h.drawstringLine.material) h.drawstringLine.material.opacity = o;
     for (const mat of h.rimWeightMats) { if (mat.transparent) mat.opacity = o; }
     if (h.apexHub && h.apexHub.material && h.apexHub.material.transparent) {
@@ -553,6 +658,18 @@ export const NetMeshKit = {
     if (mat) { mat.resolution.set(_resolution.w, _resolution.h); _liveLineMats.add(mat); }
   },
 
+  /**
+   * V2: apply the synthetic orbital env texture (sun disk + Earth hemisphere,
+   * baked once per renderer by getOrbitalFoilEnv) to every live membrane
+   * material. Null/undefined is a no-op — headless builds leave envMap unset
+   * and scene.environment applies instead. Mirrors setResolution.
+   * @param {THREE.Texture|null} tex
+   */
+  setEnvTexture(tex) {
+    if (!tex) return;
+    for (const m of _liveMembraneMats) { m.envMap = tex; m.needsUpdate = true; }
+  },
+
   /** Stop syncing a previously-registered LineMaterial (call on dispose). */
   unregisterLineMaterial(mat) {
     if (mat) _liveLineMats.delete(mat);
@@ -601,6 +718,26 @@ export const NetMeshKit = {
     // In-place GPU push: no new geometry/attribute/buffer, no bounds recompute.
     const buf = h.webBuffer || h.coneMesh.geometry.attributes.instanceStart.data;
     buf.needsUpdate = true;
+    // V2: the membrane film rebuilds from the SAME drape state + cached trig, so
+    // film and threads deform identically by construction. Normals recomputed in
+    // place (the attribute was allocated once at build).
+    if (h.membraneMesh) {
+      updateMembraneLattice(h.membranePositions, {
+        mouthRadius: h.mouthRadius,
+        coneHeight: h.coneHeight,
+        radialSpokes: h.radialSpokes,
+        rings: h.rings,
+        drape,
+        cinchFrac,
+        jigglePhase,
+        jiggleAmp,
+        cosA: h._cosA,
+        sinA: h._sinA,
+        angA: h._angA,
+      });
+      h.membraneMesh.geometry.attributes.position.needsUpdate = true;
+      h.membraneMesh.geometry.computeVertexNormals();
+    }
   },
 
   /**
@@ -614,6 +751,11 @@ export const NetMeshKit = {
       h.coneMesh.geometry.dispose();
       h.coneMesh.material.dispose();
       _liveLineMats.delete(h.coneMesh.material);
+    }
+    if (h.membraneMesh) {
+      h.membraneMesh.geometry.dispose();
+      h.membraneMesh.material.dispose();
+      _liveMembraneMats.delete(h.membraneMesh.material);
     }
     if (h.weightGeo) h.weightGeo.dispose();
     for (const mat of h.rimWeightMats) mat.dispose();

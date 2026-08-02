@@ -40,6 +40,7 @@ import { profileFlags } from '../core/ProfileFlags.js';
 import { selectInitialTier } from '../systems/QualityManager.js';
 import { GpuProbe } from '../systems/GpuProbe.js';
 import { NetMeshKit } from '../ui/NetMeshKit.js';
+import { getOrbitalFoilEnv } from './orbitalFoilEnv.js';
 
 export class SceneManager {
   /**
@@ -104,6 +105,10 @@ export class SceneManager {
     // Fat-line capture-net web (NetMeshKit) needs the DRAWING-BUFFER size (CSS px
     // × pixelRatio) for correct screen-space thread width — same units SMAA uses.
     this._syncNetMeshResolution();
+    // V2: the net membrane's per-material orbital env (HDR sun disk + Earth
+    // hemisphere) — baked once per renderer by getOrbitalFoilEnv; returns null
+    // headless, where setEnvTexture is a no-op and scene.environment applies.
+    NetMeshKit.setEnvTexture(getOrbitalFoilEnv(this.renderer));
 
     // Shadow maps disabled — no shadow-casting lights in the scene
     this.renderer.shadowMap.enabled = false;

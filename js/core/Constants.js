@@ -2423,6 +2423,17 @@ export const Constants = {
     RING_COUNT:         6,      // concentric rings — clear mesh (4–6)
     LINE_WIDTH_PX:      2.4,    // fat-line thread width px — legible ivory strand at the in-game distance
     NODE_ADDITIVE:      true,   // edge-node glints use additive sparkle (threads stay flat/translucent)
+    // V2 — lit membrane under the threads (the hybrid web). A MeshPhysicalMaterial
+    // film driven by the SAME drape functions as the threads, so sun + earthshine
+    // read on the bag while the web reveals the catch through it. Inherits the
+    // threads' reveal rule: transparent, depthWrite:false. envMap comes from
+    // getOrbitalFoilEnv(renderer) via NetMeshKit.setEnvTexture (null headless →
+    // scene.environment applies).
+    MEMBRANE_OPACITY:   0.28,   // faint film — reads as fabric, never a wall (× web opacity fade)
+    MEMBRANE_ROUGHNESS: 0.8,    // cloth, not film gloss
+    MEMBRANE_TRANSMISSION: 0.15, // low — a hint of light through the film
+    MEMBRANE_SHEEN:     0.5,    // fabric sheen response
+    MEMBRANE_ENV_INTENSITY: 0.9,
   },
 
   // =========================================================================
