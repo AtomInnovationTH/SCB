@@ -4535,11 +4535,22 @@ export class PlayerSatellite extends THREE.Group {
     const OMEGA = Math.PI;            // ~2 s period → ~2 s critically-damped settle
     const k = OMEGA * OMEGA;
     const c = 2 * OMEGA;
-    // Semi-implicit integration (stable at large dt) for each axis independently.
-    this._recoilPitchVel += (-k * this._recoilPitchAngle - c * this._recoilPitchVel) * dt;
-    this._recoilPitchAngle += this._recoilPitchVel * dt;
-    this._recoilYawVel += (-k * this._recoilYawAngle - c * this._recoilYawVel) * dt;
-    this._recoilYawAngle += this._recoilYawVel * dt;
+    // Substep: semi-implicit Euler for this spring is only stable for
+    // h < 2/ω ≈ 0.64 s. On slow machines / software GL (SwiftShader capture
+    // harness) render dt reaches 0.4–1 s and the integration diverges
+    // exponentially — measured _recoilPitchVel ≈ −2.3e150 and ×100/frame
+    // growth after a mother-net catch (2026-08-02, P1 probe), scrambling
+    // every hull/tether-anchored camera anchor. Cap the step at 0.05 s
+    // (12× margin); the designed kick and settle are unchanged at 60 fps.
+    const steps = Math.max(1, Math.ceil(dt / 0.05));
+    const h = dt / steps;
+    for (let i = 0; i < steps; i++) {
+      // Semi-implicit integration (stable at large dt) for each axis independently.
+      this._recoilPitchVel += (-k * this._recoilPitchAngle - c * this._recoilPitchVel) * h;
+      this._recoilPitchAngle += this._recoilPitchVel * h;
+      this._recoilYawVel += (-k * this._recoilYawAngle - c * this._recoilYawVel) * h;
+      this._recoilYawAngle += this._recoilYawVel * h;
+    }
     // Settle to exact zero once negligible (avoids perpetual tiny residuals).
     if (Math.abs(this._recoilPitchVel) < 1e-5 && Math.abs(this._recoilPitchAngle) < 1e-5) {
       this._recoilPitchVel = 0; this._recoilPitchAngle = 0;

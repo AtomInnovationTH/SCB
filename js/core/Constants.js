@@ -2889,7 +2889,13 @@ export const Constants = {
   CATCH_SLOWMO_DURATION: 0.4,          // seconds of slow-motion on contact (was 0.2 — extended for more juice)
   CATCH_SLOWMO_FACTOR: 0.1,            // time scale during slo-mo
   CATCH_SHAKE_DURATION: 0.3,           // seconds — camera micro-shake on capture
-  CATCH_SHAKE_INTENSITY: 0.003,        // scene units — shake amplitude
+  CATCH_SHAKE_INTENSITY: 0.000003,     // scene units (= 0.3 m) — shake amplitude.
+                                       // Was 0.003 "scene units" — a metres-vs-scene-units
+                                       // mis-read that put ±300 m of random jitter on the
+                                       // camera for the whole shake window, in every view,
+                                       // ceremony included (measured 2026-08-02, P1 probe:
+                                       // 150–420 m camera arcs scrambling the mother catch's
+                                       // SECURED_SETTLE frames). A micro-shake is ~0.3 m.
 
   // --- Field Clearing (Phase 5 — reserve constants) ---
   FIELD_CLEAR_100_BONUS: 2000,         // credits for 100% sector clear

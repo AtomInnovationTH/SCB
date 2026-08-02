@@ -1813,7 +1813,7 @@ async function init() {
       // ── Deterministic whale-capture scenario (mother-net visual plan T2) ──
       //   window.__netScenario()
       //     → stages the identical mother-net capture every run: skips the
-      //       intro zoom, pins a fixed rocketBody whale 60 m off the nose,
+      //       intro zoom, pins a fixed rocketBody whale 25 m off the nose,
       //       fires pod 0 with every capture roll overridden (cling 0 =
       //       catch, frag/strain 1 = never), so before/after screenshots
       //       compare the LOOK, not the RNG. Pair with __netAuto(true) to
@@ -1860,7 +1860,7 @@ async function init() {
           whale.sizeMeter = 7;
           whale.brittleness = 0.3;
 
-          // 4. Put the whale 60 m ahead — CO-ORBITAL FIRST, then pinned.
+          // 4. Put the whale 25 m ahead — CO-ORBITAL FIRST, then pinned.
           //
           //    MEASURED, not assumed: `_onboardingPinned` alone does NOT move
           //    a distant body. With every pin precondition satisfied
@@ -1871,9 +1871,20 @@ async function init() {
           //    hold-in-place override for pieces ALREADY co-orbital with the
           //    mother (spawnWelcomeField repositions them first); it is not a
           //    teleport. So copy the mother's elements onto the whale and
-          //    advance its true anomaly by the along-track angle for 60 m —
+          //    advance its true anomaly by the along-track angle for 25 m —
           //    then the orbit branch and the pin agree, and the net's 11 s
           //    flight envelope actually reaches it.
+          //
+          //    25 m, not 60: `launchDirection` is frozen at fire
+          //    (CaptureNet.js:501) while the pinned whale rides the ROTATING
+          //    LVLH frame, and the orbit propagates at TIME_SCALE_GAMEPLAY 10×
+          //    wall while the net flies at ~0.5× ceremony dilation — per metre
+          //    of flight the frame rotates ~2.3 mrad, so a 60 m stage lands
+          //    ~7 m wide of the mouth (measured 2026-08-02: netToWhaleM min
+          //    7.0 m vs the 4 m LARGE radius → deterministic miss, no contact
+          //    beats ever fire). At 25 m the error is ~1.4 m ≪ 4 m, the shot
+          //    is inside CN.CLOSE_RANGE (30 m) so CATCH_RADIUS_FORGIVENESS
+          //    applies, and the catch resolves inside the ceremony beats.
           const M = 0.00001; // 1 metre in scene units (same M as InputManager)
           const pElems = (typeof player.getOrbitalElements === 'function')
             ? player.getOrbitalElements() : null;
@@ -1885,15 +1896,15 @@ async function init() {
           whale.orbit.raan          = pElems.raan;
           whale.orbit.argPerigee    = pElems.argPerigee;
           whale.orbit.meanMotion    = pElems.meanMotion;
-          // Along-track angle for 60 m at this radius (elements are in scene
-          // units: 1 scene unit = 100 km, so 60 m = 60e-5).
-          const dNu = (60 * M) / Math.max(1e-9, pElems.semiMajorAxis);
+          // Along-track angle for 25 m at this radius (elements are in scene
+          // units: 1 scene unit = 100 km, so 25 m = 25e-5).
+          const dNu = (25 * M) / Math.max(1e-9, pElems.semiMajorAxis);
           whale.orbit.trueAnomaly = pElems.trueAnomaly + dNu;
           // Pin as well: it holds the piece steady in the mother's frame for
           // the render/selection path, and registering the id is what makes
           // DebrisField compute the _motherFwd/_motherRight basis at all.
           whale._onboardingPinned = true;
-          whale._onboardingPinFwd = 60 * M;
+          whale._onboardingPinFwd = 25 * M;
           whale._onboardingPinLat = 0;
           debrisField._onboardingPinIds?.add(whale.id);
 
@@ -1905,7 +1916,7 @@ async function init() {
           //    attitude is driven (launch cinematic, slews), so an aimed
           //    shot is the only attitude-independent fire. Compute the pin
           //    position analytically (same math as DebrisField's basis):
-          //    pinnedPos = playerPos + prograde × 60 m; dir = muzzle → pin.
+          //    pinnedPos = playerPos + prograde × 25 m; dir = muzzle → pin.
           const pOrbit = (typeof player.getOrbitalElements === 'function')
             ? player.getOrbitalElements() : null;
           if (!pOrbit) return { ok: false, reason: 'no player orbit' };
@@ -1914,9 +1925,9 @@ async function init() {
           const vl = Math.hypot(_cv.x, _cv.y, _cv.z) || 1;
           const playerPos = player.getPosition();
           const pinnedPos = {
-            x: playerPos.x + (_cv.x / vl) * 60 * M,
-            y: playerPos.y + (_cv.y / vl) * 60 * M,
-            z: playerPos.z + (_cv.z / vl) * 60 * M,
+            x: playerPos.x + (_cv.x / vl) * 25 * M,
+            y: playerPos.y + (_cv.y / vl) * 25 * M,
+            z: playerPos.z + (_cv.z / vl) * 25 * M,
           };
           const posScene = (typeof player.getNetPodPosition === 'function')
             ? player.getNetPodPosition(0) : playerPos;
@@ -1930,14 +1941,18 @@ async function init() {
           // 7. Release the pin the moment the catch resolves (either way):
           //    the reel/berth drives the whale via its own _armPinned pins,
           //    and _updateInstanceTransform checks _onboardingPinned FIRST —
-          //    an unreleased tease pin would glue the whale at 60 m while
+          //    an unreleased tease pin would glue the whale at 25 m while
           //    the net package reels in empty (the LASSO_CONTACT hazard).
+          //    Route through DebrisField._clearOnboardingPin (the same path
+          //    production uses at LASSO_CONTACT): it re-syncs the fallback
+          //    orbit to the CURRENT phase before clearing — propagation is
+          //    skipped while pinned, so a naive clear teleports the whale to
+          //    the stale orbital phase (~1.07e6 m measured 2026-08-02), which
+          //    seeds _enterMotherReel's _remainingM/_lateral with garbage and
+          //    flings the ceremony camera across hundreds of km.
           if (typeof _scenarioPinReleaseOff === 'function') _scenarioPinReleaseOff();
           const release = () => {
-            whale._onboardingPinned = false;
-            whale._onboardingPinFwd = 0;
-            whale._onboardingPinLat = 0;
-            debrisField._onboardingPinIds?.delete(whale.id);
+            debrisField._clearOnboardingPin?.(whale.id);
             _scenarioPinReleaseOff = null;
           };
           const offOk  = eventBus.on(Events.NET_CATCH_SUCCESS, release);
@@ -1954,7 +1969,7 @@ async function init() {
           net._strainRollOverride = 1.0;  // never strain-slips
           _scenarioNet = net;
 
-          const out = { ok: true, whaleId: whale.id, mass: whale.mass, distanceM: 60, podIndex: 0 };
+          const out = { ok: true, whaleId: whale.id, mass: whale.mass, distanceM: 25, podIndex: 0 };
           console.info(`[netScenario] staged deterministic whale capture: ${JSON.stringify(out)}`);
           return out;
         } catch (e) {
@@ -1968,7 +1983,7 @@ async function init() {
       //     → live state of the staged scenario: the net's FSM state and
       //       flight progress, and the whale's ACTUAL distance from the pod
       //       muzzle. This is how you tell a real contact from a flight
-      //       time-out: if whaleDistM is not ~60, the prograde pin never
+      //       time-out: if whaleDistM is not ~25, the prograde pin never
       //       took, and the net is flying at empty space.
       window.__netScenarioProbe = () => {
         try {
@@ -1993,7 +2008,7 @@ async function init() {
             pinIds:        debrisField?._onboardingPinIds?.size ?? null,
             clingOverride: net?._clingRollOverride ?? null,
             // Decisive: the net's OWN distance to the whale. If this stays
-            // ~60 m while travelledM climbs, the net is flying off-axis.
+            // ~25 m while travelledM climbs, the net is flying off-axis.
             netToWhaleM: (() => {
               if (!net?.position || !sp) return null;
               return +(Math.hypot(sp.x / M - net.position.x, sp.y / M - net.position.y,
@@ -2005,6 +2020,25 @@ async function init() {
             sameAsMapRef:  debrisField?.debrisMap?.get(whale?.id) === whale,
             sameAsListRef: debrisField?.debrisList?.find(d => d && d.id === whale?.id) === whale,
             alive:         whale?.alive,
+            // Reel-internals forensics (P1 re-diagnosis): the post-catch pin
+            // writes net.position AND whale._scenePosition to the same point
+            // ~1.2e6 m off-ship. Name the garbage term: _remainingM (m),
+            // _lateral (scene units), _fwdLagged (should be unit), and the
+            // absolute magnitudes that expose a frame mix-up.
+            reelRemainingM:  net?._remainingM != null ? +net._remainingM.toFixed(2) : null,
+            reelLateralMag:  net?._lateral ? +net._lateral.length().toExponential(2) : null,
+            reelFwdLaggedMag: net?._fwdLagged ? +net._fwdLagged.length().toFixed(4) : null,
+            whaleAbsMagM:    sp ? +(Math.hypot(sp.x, sp.y, sp.z) / M).toFixed(0) : null,
+            shipAbsMagM:     (() => { const pp = player?.getPosition?.(); return pp ? +(Math.hypot(pp.x, pp.y, pp.z) / M).toFixed(0) : null; })(),
+            floatOriginMagM: (() => { const fo = debrisField?._floatingOrigin; return fo ? +(Math.hypot(fo.x, fo.y, fo.z) / M).toFixed(0) : null; })(),
+            // Attitude-transient forensics (P1 re-diagnosis #3): the capture
+            // tug's angular kick (CaptureNet.js:1786) injects _recoilPitchVel
+            // with I = mShip×0.25 — a 0.5 m radius of gyration for a ~5 m
+            // hull, ~100× under the real MOI. Watch the actual rad/s at catch.
+            recoilPitchVel:   player?._recoilPitchVel   != null ? +player._recoilPitchVel.toFixed(4)   : null,
+            recoilPitchAngle: player?._recoilPitchAngle != null ? +player._recoilPitchAngle.toFixed(4) : null,
+            recoilYawVel:     player?._recoilYawVel     != null ? +player._recoilYawVel.toFixed(4)     : null,
+            recoilYawAngle:   player?._recoilYawAngle   != null ? +player._recoilYawAngle.toFixed(4)   : null,
             whaleSma:      whale?.orbit ? +whale.orbit.semiMajorAxis.toFixed(4) : null,
             playerSma:     +((player?.orbit?.semiMajorAxis) ?? 0).toFixed(4),
             whaleInc:      whale?.orbit ? +whale.orbit.inclination.toFixed(4) : null,
@@ -2022,6 +2056,82 @@ async function init() {
               const fwd = (whale?._onboardingPinFwd || 0);
               const ex = pp.x + f.x * fwd, ey = pp.y + f.y * fwd, ez = pp.z + f.z * fwd;
               return +(Math.hypot(sp.x - ex, sp.y - ey, sp.z - ez) / M).toFixed(1);
+            })(),
+            // ── P1.1 ceremony-camera forensics (harness-only) ──
+            // The captured/reel/secured beats land inside SECURED_SETTLE, whose
+            // mother-path pose is anchored 5 m BEHIND the pod muzzle (the shared
+            // ARM_PILOT_START branch). Hypothesis: that puts the camera in/behind
+            // the hull with the ship occluding the whale → black frames. Report
+            // the geometry so the hypothesis is confirmed/refuted BEFORE the fix:
+            //   camInsideHullConst — camera within the 12 m contact radius
+            //   camBehindPodM     — signed distance along pod→whale (neg = behind)
+            //   whaleOccluded     — cam→whale segment passes inside the hull radius
+            ceremony: (() => {
+              try {
+                const cs = cameraSystem, c = cs?._netCeremony, cam = cs?.camera;
+                if (!c || !cam || !player) return null;
+                const beat = c.beats?.[c.beatIndex];
+                const ship = player.getPosition?.();
+                if (!ship) return { active: c.active, beatKey: beat?.key ?? null };
+                const dxS = cam.position.x - ship.x, dyS = cam.position.y - ship.y, dzS = cam.position.z - ship.z;
+                const camToShipM = Math.hypot(dxS, dyS, dzS) / M;
+                const hullR = Constants?.COLLISION_MODEL?.HULL_RADIUS_M ?? 12;
+                let boundR = null;
+                try {
+                  const sph = new THREE.Box3().setFromObject(player).getBoundingSphere(new THREE.Sphere());
+                  if (isFinite(sph.radius) && sph.radius > 0) boundR = +(sph.radius / M).toFixed(1);
+                } catch { /* measured bound is best-effort */ }
+                let camBehindPodM = null, camToWhaleM = null, hullHitM = null, whaleOccluded = null;
+                if (pod && sp) {
+                  const pwX = sp.x - pod.x, pwY = sp.y - pod.y, pwZ = sp.z - pod.z;
+                  const pwLen = Math.hypot(pwX, pwY, pwZ);
+                  if (pwLen > 0) {
+                    camBehindPodM = +(((cam.position.x - pod.x) * pwX + (cam.position.y - pod.y) * pwY
+                                     + (cam.position.z - pod.z) * pwZ) / pwLen / M).toFixed(2);
+                  }
+                  camToWhaleM = +(Math.hypot(sp.x - cam.position.x, sp.y - cam.position.y, sp.z - cam.position.z) / M).toFixed(1);
+                  // Decisive occlusion test: raycast camera→whale against the
+                  // actual ship meshes. If a hull mesh is hit before the whale,
+                  // the ship is genuinely between camera and catch (P1 black
+                  // frames). The naive "segment passes near ship centre" proxy
+                  // is useless here — near-hull cameras always trip it.
+                  try {
+                    const ray = new THREE.Raycaster(
+                      cam.position.clone(),
+                      new THREE.Vector3(sp.x - cam.position.x, sp.y - cam.position.y, sp.z - cam.position.z).normalize());
+                    ray.params.Line.threshold = 0; ray.params.Points.threshold = 0;
+                    const hits = ray.intersectObject(player, true).filter(h => h.object.isMesh);
+                    if (hits.length) {
+                      hullHitM = +(hits[0].distance / M).toFixed(2);
+                      whaleOccluded = hullHitM < camToWhaleM - 0.5;
+                    } else {
+                      hullHitM = null; whaleOccluded = false;
+                    }
+                  } catch { /* raycast best-effort */ }
+                }
+                return {
+                  active: c.active, beatKey: beat?.key ?? null, beatIndex: c.beatIndex,
+                  beatTimer: +c.beatTimer.toFixed(2),
+                  camToShipM: +camToShipM.toFixed(2), hullRadiusM: hullR, shipBoundRadiusM: boundR,
+                  camInsideHullConst: camToShipM < hullR,
+                  camInsideBound: boundR != null ? camToShipM < boundR : null,
+                  camBehindPodM, camToWhaleM, hullHitM, whaleOccluded,
+                  // Raw anchor forensics (ship-relative metres): whichever of
+                  // these jumps to 1e5+ is the corrupted ceremony input. The
+                  // post-catch SECURED_SETTLE window flings the camera across
+                  // hundreds of km — name the field, don't guess.
+                  _rel: (() => {
+                    const rel = (v) => v ? [+((v.x - ship.x) / M).toFixed(1), +((v.y - ship.y) / M).toFixed(1), +((v.z - ship.z) / M).toFixed(1)] : null;
+                    return {
+                      cam: rel(cam.position),
+                      pod: rel(pod),
+                      armPos: rel(c._scratchLauncherPos),
+                      netPos: rel(c._scratchNetPos),
+                      debrisPos: rel(sp),
+                    };
+                  })(),
+                };
+              } catch { return null; }
             })(),
           };
         } catch (e) {

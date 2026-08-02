@@ -1714,6 +1714,17 @@ export class NetProjectile {
     if (typeof player.applyCartesianImpulse !== 'function') return;
     if (typeof player.getVelocity !== 'function') return;
 
+    // A tease-pinned catch rides the mother's frame: orbit propagation is
+    // SKIPPED while _onboardingPinned (DebrisField update loop), so the
+    // elements below carry a velocity stale by the whole pin duration —
+    // measured ~1.2 km/s phantom relative velocity after a ~95 s pin
+    // (2026-08-02 P1 probe), which capped dvMag and armed a full-scale camera
+    // shake for a catch that was, physically, co-moving with the ship. The
+    // honest relative velocity of a piece held in the mother's frame is ~0,
+    // and a zero-relative-velocity catch yanks nothing (same early return as
+    // the matched-velocity case below).
+    if (d._onboardingPinned) return;
+
     // Catch orbital velocity (km/s) at its current elements.
     orbitToSceneCartesianInto(d.orbit, _tugScratchPos, _tugScratchVel);
     const shipV = player.getVelocity();

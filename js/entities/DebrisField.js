@@ -605,6 +605,14 @@ export class DebrisField {
     //    zeroes its scale. The LassoSystem reel then drives the piece to the
     //    mother via the authoritative _armPinned/_armPinPos direct-copy pin.
     //  • ARM_CAPTURED — daughter-arm catch path (payload uses targetId/debrisId).
+    //  • NET_CATCH_SUCCESS — the NetProjectile mother path (fireMotherNet, the
+    //    current production mother path) never emits LASSO_CONTACT: without
+    //    this, a tease-pinned whale caught by a mother NET stayed pinned
+    //    through the whole reel — the pin branch beats _armPinned in
+    //    _updateInstanceTransform, so the whale rendered glued at the tease
+    //    offset while the net reeled in empty. NET_CATCH_SUCCESS fires before
+    //    the auto-reel starts, so the handoff to the reel pin is race-free
+    //    (and the orbit re-sync in _clearOnboardingPin makes it seamless).
     //  • DEBRIS_REMOVED — the reliable "tease consumed" backstop (fragmentation,
     //    web de-orbit, or any catch that ends in removeDebris).
     //  • ONBOARDING_COMPLETE — player skipped/finished the guided flow (clear all).
@@ -614,6 +622,7 @@ export class DebrisField {
     };
     if (Events.ARM_CAPTURED) eventBus.on(Events.ARM_CAPTURED, _releaseIfMatch);
     if (Events.LASSO_CONTACT) eventBus.on(Events.LASSO_CONTACT, _releaseIfMatch);
+    if (Events.NET_CATCH_SUCCESS) eventBus.on(Events.NET_CATCH_SUCCESS, _releaseIfMatch);
     if (Events.DEBRIS_REMOVED) eventBus.on(Events.DEBRIS_REMOVED, _releaseIfMatch);
     if (Events.ONBOARDING_COMPLETE) {
       eventBus.on(Events.ONBOARDING_COMPLETE, () => this._clearOnboardingPin());
@@ -1364,6 +1373,12 @@ export class DebrisField {
   update(dt, playerPos, playerOrbit) {
     const gameDt = dt * Constants.TIME_SCALE_GAMEPLAY;
 
+    // Cache the latest player orbit so event-driven paths with no update()
+    // scope (notably _clearOnboardingPin, fired from LASSO_CONTACT etc.) can
+    // re-sync a released pin's fallback orbit to the CURRENT phase. Reference
+    // assignment only — no allocation.
+    if (playerOrbit) this._lastPlayerOrbit = playerOrbit;
+
     // UX-4: Update floating origin to player position (camera-relative rendering)
     if (Constants.FLOATING_ORIGIN_ENABLED && playerPos) {
       // On first frame: adjust all existing background point positions
@@ -2078,15 +2093,43 @@ export class DebrisField {
 
   /**
    * Release onboarding tease pins, handing the curated piece(s) back to normal
-   * co-orbital propagation. Idempotent. Because each orbit was kept synced to
-   * playerOrbit + offset every frame, release is seamless (no snap).
+   * co-orbital propagation. Idempotent. The fallback orbit is re-synced to the
+   * current player orbit + the pin's along-track offset before clearing, so
+   * release is seamless (no snap).
+   *
+   * The re-sync is LOAD-BEARING, not cosmetic: orbit propagation is SKIPPED
+   * while `_onboardingPinned` (update loop, :1569), so the fallback orbit's
+   * trueAnomaly is stale by the whole pin duration. Releasing without a
+   * re-sync teleports the piece to the stale phase — measured ~1.07e6 m off
+   * the ship after a ~95 s pin (2026-08-02, mother-net scenario probe). A
+   * mother-net catch releases the pin at LASSO_CONTACT; the very next
+   * `_enterMotherReel` then seeds `_remainingM`/`_lateral` from the teleported
+   * `_scenePosition`, `pinCapturedDebris` re-pins the catch to that garbage
+   * every reel frame, and the ceremony camera anchors (netPos/debrisPos)
+   * fling the camera across hundreds of km — the black captured/reel/secured
+   * frames. Only the along-track offset is expressible in co-orbital elements;
+   * a lateral pin component (#2) resumes as a small cross-track offset, which
+   * is correct physical handoff, not a bug.
    * @param {number|string} [id] - release just this piece; omit to release all.
    * @private
    */
   _clearOnboardingPin(id = null) {
     const unpin = (pid) => {
       const d = this.debrisMap.get(pid);
-      if (d) { d._onboardingPinned = false; d._onboardingPinFwd = 0; d._onboardingPinLat = 0; }
+      if (!d) return;
+      const po = this._lastPlayerOrbit;
+      if (po && d.orbit && po.semiMajorAxis > 0) {
+        d.orbit.semiMajorAxis = po.semiMajorAxis;
+        d.orbit.eccentricity  = po.eccentricity;
+        d.orbit.inclination   = po.inclination;
+        d.orbit.raan          = po.raan;
+        d.orbit.argPerigee    = po.argPerigee;
+        d.orbit.meanMotion    = po.meanMotion;
+        // _onboardingPinFwd is already scene units (spec.fwdM × METRE_SCENE at
+        // spawn) — along-track angle = arc / radius, same math as :2249.
+        d.orbit.trueAnomaly   = po.trueAnomaly + (d._onboardingPinFwd || 0) / po.semiMajorAxis;
+      }
+      d._onboardingPinned = false; d._onboardingPinFwd = 0; d._onboardingPinLat = 0;
     };
     if (id != null) {
       unpin(id);
