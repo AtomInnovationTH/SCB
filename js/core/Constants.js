@@ -2435,6 +2435,14 @@ export const Constants = {
     // view-depth extent, so the far side of the bag recedes. Self-normalized
     // per frame (bag min/max distance), so it reads at any camera range.
     DEPTH_DIM_FRACTION: 0.5,
+    // V6 — cinch flash: rim-node emissive ramps briefly past the 2.5 bloom
+    // threshold (SceneManager bloomPass.threshold) as the bag seats, then
+    // settles back down. The cinch snap lands at fraction ≥ 0.85, so the ramp
+    // peaks there and holds through the weld, decaying over NODE_FLASH_SETTLE_S
+    // (wall clock — a garnish transient, not a state signal).
+    NODE_EMISSIVE_BASE: 0.6,        // resting rim-node glint (sub-bloom)
+    NODE_EMISSIVE_CINCH_PEAK: 3.2,  // cinch flash peak — 28% over the 2.5 threshold
+    NODE_FLASH_SETTLE_S: 1.2,       // seconds to decay peak → base after the weld
     // V2 — lit membrane under the threads (the hybrid web). A MeshPhysicalMaterial
     // film driven by the SAME drape functions as the threads, so sun + earthshine
     // read on the bag while the web reveals the catch through it. Inherits the

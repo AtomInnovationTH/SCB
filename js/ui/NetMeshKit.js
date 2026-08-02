@@ -531,6 +531,7 @@ export const NetMeshKit = {
       _cinchFrac: 0,
       _jigglePhase: 0,
       _jiggleAmp: 0,
+      _flashPeakT: null,   // V6: wall-clock when cinchFrac first reached 0.85
       // P2: cached per-spoke trig (projection is fixed; only jiggle recomputes)
       _cosA,
       _sinA,
@@ -758,6 +759,28 @@ export const NetMeshKit = {
       });
       h.membraneMesh.geometry.attributes.position.needsUpdate = true;
       h.membraneMesh.geometry.computeVertexNormals();
+    }
+    // V6: cinch flash — the rim-node emissive ramps briefly past the 2.5 bloom
+    // threshold as the bag seats, then settles back down. Driven from the same
+    // cinchFrac state the threads get, so both drape-driven consumers flash by
+    // construction: ramp in over [0.6, 0.85], PEAK from 0.85 (the cinch snap
+    // lands ≥ 0.85), then decay over NODE_FLASH_SETTLE_S of wall clock.
+    {
+      const baseEI = NET_WEB.NODE_EMISSIVE_BASE;
+      const peakEI = NET_WEB.NODE_EMISSIVE_CINCH_PEAK;
+      const now = (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
+      let ei = baseEI;
+      if (cinchFrac >= 0.85) {
+        if (h._flashPeakT == null) h._flashPeakT = now;
+        const settle = Math.max(0, 1 - (now - h._flashPeakT) / NET_WEB.NODE_FLASH_SETTLE_S);
+        ei = baseEI + (peakEI - baseEI) * settle;
+      } else if (cinchFrac >= 0.6) {
+        h._flashPeakT = null;
+        ei = baseEI + (peakEI - baseEI) * ((cinchFrac - 0.6) / 0.25);
+      } else {
+        h._flashPeakT = null;
+      }
+      for (const m of h.rimWeightMats) m.emissiveIntensity = ei;
     }
     // V4: per-thread depth shading — dim each vertex toward DEPTH_DIM_FRACTION of
     // the base colour across the bag's OWN view-depth extent (self-normalizing,
