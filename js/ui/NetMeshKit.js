@@ -66,18 +66,24 @@ if (typeof window !== 'undefined') {
 // ── Default look (shared web vocabulary) ────────────────────────────────────
 // Ivory Dyneema thread — fat-line, soft + legible (replaces the rejected cold
 // 1-px cyan LineSegments).
-const DEFAULT_WEB_COLOR     = (NET_WEB && NET_WEB.WEB_COLOR) || 0xcfeaff;
-const DEFAULT_WEB_OPACITY   = (NET_WEB && NET_WEB.WEB_OPACITY) || 0.6;
+// C0: read Constants.NET_WEB DIRECTLY — the old `|| <fallback>` defaults had
+// drifted from the SSOT (WEB_COLOR, WEB_OPACITY, RADIAL_SPOKES, LINE_WIDTH_PX
+// were all stale) and were an active trap for anyone reading the kit for the
+// net's look (they already misled one planning pass). NET_WEB is always
+// supplied by Constants; a missing key must throw loudly at import, never
+// silently fall back to a made-up value.
+const DEFAULT_WEB_COLOR     = NET_WEB.WEB_COLOR;
+const DEFAULT_WEB_OPACITY   = NET_WEB.WEB_OPACITY;
 const DEFAULT_DRAWSTRING_COLOR = 0xffaa44;
 const DEFAULT_WEIGHT_COLOR  = 0xeef4ff;   // ivory tungsten edge-node glint
 const DEFAULT_APEX_COLOR    = 0x665544;
 const DEFAULT_APEX_RADIUS_M = 0.05;
 // Fat-line web fineness (orb-weaver spoke + ring). Shared source of truth in
 // Constants.NET_WEB so Mother + Daughter render the same web.
-const DEFAULT_RADIAL_SPOKES = (NET_WEB && NET_WEB.RADIAL_SPOKES) || 22;
-const DEFAULT_RING_COUNT    = (NET_WEB && NET_WEB.RING_COUNT) || 6;
-const DEFAULT_LINE_WIDTH_PX = (NET_WEB && NET_WEB.LINE_WIDTH_PX) || 2.0;
-const DEFAULT_NODE_ADDITIVE = (NET_WEB && NET_WEB.NODE_ADDITIVE) !== false;
+const DEFAULT_RADIAL_SPOKES = NET_WEB.RADIAL_SPOKES;
+const DEFAULT_RING_COUNT    = NET_WEB.RING_COUNT;
+const DEFAULT_LINE_WIDTH_PX = NET_WEB.LINE_WIDTH_PX;
+const DEFAULT_NODE_ADDITIVE = NET_WEB.NODE_ADDITIVE;
 
 /**
  * Build the orb-weaver spoke+ring web vertex positions for a single
@@ -303,11 +309,11 @@ export const NetMeshKit = {
       apexTransparent = false,
       childrenVisible = false,
       apexHubRadiusM = DEFAULT_APEX_RADIUS_M,
-      membraneOpacity = (NET_WEB && NET_WEB.MEMBRANE_OPACITY) ?? 0.28,
-      membraneRoughness = (NET_WEB && NET_WEB.MEMBRANE_ROUGHNESS) ?? 0.8,
-      membraneTransmission = (NET_WEB && NET_WEB.MEMBRANE_TRANSMISSION) ?? 0.15,
-      membraneSheen = (NET_WEB && NET_WEB.MEMBRANE_SHEEN) ?? 0.5,
-      membraneEnvIntensity = (NET_WEB && NET_WEB.MEMBRANE_ENV_INTENSITY) ?? 0.9,
+      membraneOpacity = NET_WEB.MEMBRANE_OPACITY,
+      membraneRoughness = NET_WEB.MEMBRANE_ROUGHNESS,
+      membraneTransmission = NET_WEB.MEMBRANE_TRANSMISSION,
+      membraneSheen = NET_WEB.MEMBRANE_SHEEN,
+      membraneEnvIntensity = NET_WEB.MEMBRANE_ENV_INTENSITY,
     } = opts;
 
     const D = diameter || 8;
@@ -760,7 +766,7 @@ export const NetMeshKit = {
     // aligned element-for-element with the position buffer.
     if (localCamPos && h.webColorBuffer) {
       const base = h.coneMesh.material.color;
-      const dim = (NET_WEB && NET_WEB.DEPTH_DIM_FRACTION) ?? 0.5;
+      const dim = NET_WEB.DEPTH_DIM_FRACTION;
       const pos = h.webPositions, col = h.webColorBuffer.array;
       const cx = localCamPos.x, cy = localCamPos.y, cz = localCamPos.z;
       let dMin = Infinity, dMax = -Infinity;

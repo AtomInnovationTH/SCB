@@ -2399,9 +2399,10 @@ export const Constants = {
                                 // 5 m, which read tiny/cold at the real M1 fire
                                 // framing — see plan §B). 7 m fills the frame like
                                 // the approved close-up without dwarfing the ship.
-    WEB_COLOR:          0xeaf1ff, // bright warm-ivory Dyneema. Nudged brighter than
-                                // 0xcfeaff so the thin threads don't gray-out
-                                // against black at the in-game (distant) framing.
+    WEB_COLOR:          0xffe9c8, // warm ivory Dyneema (V5 nudge from 0xeaf1ff —
+                                // the threads read warmer against black + the
+                                // Earth limb; still bright enough not to gray-out
+                                // at the in-game (distant) framing).
     WEB_OPACITY:        0.8,    // translucent but luminous — at the real fire
                                 // distance the fine threads must not gray out
                                 // (was 0.6, read cold/faint in-game — §B luminance).

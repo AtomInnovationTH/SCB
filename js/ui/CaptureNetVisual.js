@@ -51,10 +51,11 @@ const CN = Constants.CAPTURE_NET;
 // glint on the tungsten weights, not a recolour of the fabric.)
 const COL_CANISTER  = 0x556677;
 const COL_DISC      = 0xcfeaff;   // ivory Dyneema — the net's ONLY fabric colour, every state
-// NOTE: the tether's colour is NOT defined here — it is Constants.CAPTURE_NET
-// .NET_TETHER.BASE_COLOR, aliased below as TETHER_BASE_COLOR. Keeping a second
-// local copy let the material's base colour drift from the emissive-pulse reset
-// (which reads the constant), so the two must share one source.
+// NOTE: the tether's colour is NOT defined here — it is Constants.NET_WEB
+// .WEB_COLOR, aliased below as TETHER_BASE_COLOR (C0/V5: cable and net share
+// one colour SSOT — the old NET_TETHER.BASE_COLOR 0xddddee had drifted from
+// the web's ivory). The material's base colour and the emissive-pulse reset
+// must share one source, or the two drift apart.
 
 // Scratch vectors (avoid per-frame allocation)
 const _v3a = new THREE.Vector3();
@@ -79,7 +80,7 @@ const TETHER_SAG_FRAC = _NT.SAG_FRAC;
 const TETHER_TAUT_SLACK = _NT.TAUT_SLACK;
 const TETHER_EMISSIVE_S = _NT.EMISSIVE_S;
 const TETHER_EMISSIVE_HDR = _NT.EMISSIVE_HDR;
-const TETHER_BASE_COLOR = _NT.BASE_COLOR;
+const TETHER_BASE_COLOR = Constants.NET_WEB.WEB_COLOR;   // C0/V5: one colour SSOT
 
 // ════════════════════════════════════════════════════════════════════════
 // CaptureNetVisual

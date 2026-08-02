@@ -101,6 +101,8 @@ export class CameraSystem {
     this._fillLight = null;
     /** @type {THREE.PointLight|null} Cool back/rim light on the far side of the ship. */
     this._rimLight = null;
+    /** @type {THREE.PointLight|null} Dim blue albedo fill on the nadir (Earth-facing) side. */
+    this._earthLight = null;
     if (scene) {
       // Color: slightly warm white (spacecraft instrument lighting feel).
       //
@@ -141,6 +143,30 @@ export class CameraSystem {
       this._rimLight.name = 'cameraRimLight';
       scene.add(this._rimLight);
 
+      // EARTHSHINE FILL (V5) — a dim blue albedo glow on the NADIR side of
+      // the ship: the planet's own light bouncing back up. It lifts the
+      // Earth-facing side of the net's membrane/bag (and hull) that neither
+      // the sun nor the camera key ever reaches, so the bag stops reading as
+      // a flat silhouette over the bright limb. Dim (0.6 vs sun 2.0 / camera
+      // key 2.4), cool blue (albedo, not daylight). Same unit-scale trick
+      // (decay=0 + ~1 km cutoff) so it only ever touches the near
+      // ship/debris. Positioned per-frame in update() toward the planet.
+      this._earthLight = new THREE.PointLight(0x9db8e8, 0.6, 0.01, 0);
+      this._earthLight.name = 'earthshineFill';
+      scene.add(this._earthLight);
+
+      // EARTHSHINE FILL (V5) — a dim blue-white key on the ship's NADIR side:
+      // Earth's albedo glow lifting the planet-facing surfaces of the net/ship
+      // (the membrane's underside, the bag's dark side) so the night-side
+      // framing still reads form instead of a flat silhouette. Same unit-scale
+      // trick as the fill/rim (decay=0 + ~1 km cutoff): constant, zoom-free,
+      // and it never reaches the distant Earth. Positioned per-frame in
+      // update() along the ship→planet axis. Dim by design — it is a fill,
+      // not a second sun (0.7 vs the sun's ~1.5).
+      this._earthshineLight = new THREE.PointLight(0x9db8e8, 0.7, 0.01, 0);
+      this._earthshineLight.name = 'earthshineFillLight';
+      scene.add(this._earthshineLight);
+
       // z-layer fix: enroll both follow lights in the near-field depth pass.
       // They are created AFTER main.js's registerNearFieldRoot(player), so
       // without this they never gain NEAR_FIELD_LAYER and the ship renders UNLIT
@@ -150,6 +176,7 @@ export class CameraSystem {
       if (sceneManager && typeof sceneManager.registerNearFieldLight === 'function') {
         sceneManager.registerNearFieldLight(this._fillLight);
         sceneManager.registerNearFieldLight(this._rimLight);
+        sceneManager.registerNearFieldLight(this._earthLight);
       }
     }
 
@@ -999,6 +1026,19 @@ export class CameraSystem {
         this._rimLight.position.copy(playerPos).add(back);
       } else {
         this._rimLight.position.copy(playerPos);
+      }
+    }
+    if (this._earthLight && playerPos) {
+      // Earthshine: planet centre is the scene origin, so the nadir direction
+      // at the ship is −playerPos/|playerPos|. Sit ~40 m planetward of the
+      // hull — inside the ~1 km cutoff, lighting the Earth-facing side of the
+      // pod/net bag with the planet's albedo glow.
+      const r = playerPos.length();
+      if (r > 1e-9) {
+        this._tmpVecA.copy(playerPos).multiplyScalar(-1 / r);
+        this._earthLight.position.copy(playerPos).addScaledVector(this._tmpVecA, 0.0004);
+      } else {
+        this._earthLight.position.copy(playerPos);
       }
     }
   }
