@@ -1804,10 +1804,17 @@ async function init() {
         // reel-in end, and secured beats this plan is judged on. NET_BERTHED
         // fires the clunk-settle at the launcher (the REEL_IN cinematic is
         // released here, so `berth` captures its resolved pose); NET_REEL_COMPLETED
-        // marks the reel-in cinematic's end; NET_CEREMONY_COMPLETE the secured pose.
-        if (Events.NET_BERTHED)         eventBus.on(Events.NET_BERTHED,         () => _snap('berth', 350));
+        // marks the reel-in cinematic's end. `secured` is wired to NET_BERTHED +
+        // HALF the securing timer — NOT NET_CEREMONY_COMPLETE: that event fires
+        // at catch time, microseconds after NET_CATCH_SUCCESS, so the old wiring
+        // made `secured` a misnamed duplicate of `captured` (P2.3). Mid-hold is
+        // the truthful secured pose (catch settled at the pod) with a safe margin
+        // before CATCH_PROCESSED removes it at the full BERTH_SECURE_S.
+        if (Events.NET_BERTHED)         eventBus.on(Events.NET_BERTHED,         () => {
+          _snap('berth', 350);
+          _snap('secured', (Constants.CAPTURE_NET?.BERTH_SECURE_S ?? 4.0) * 500);
+        });
         if (Events.NET_REEL_COMPLETED)  eventBus.on(Events.NET_REEL_COMPLETED,  () => _snap('reelin', 300));
-        if (Events.NET_CEREMONY_COMPLETE) eventBus.on(Events.NET_CEREMONY_COMPLETE, () => _snap('secured', 400));
       }
 
       // ── Deterministic whale-capture scenario (mother-net visual plan T2) ──
@@ -2112,6 +2119,10 @@ async function init() {
                 return {
                   active: c.active, beatKey: beat?.key ?? null, beatIndex: c.beatIndex,
                   beatTimer: +c.beatTimer.toFixed(2),
+                  // P2.4: whether the trailing REEL_IN beat chained after the
+                  // capture beats (CameraSystem._tryChainReelBeat). Reported so
+                  // the chaining stays a measured fact, not an assumption.
+                  reelBeatChained: c._reelBeatChained === true,
                   camToShipM: +camToShipM.toFixed(2), hullRadiusM: hullR, shipBoundRadiusM: boundR,
                   camInsideHullConst: camToShipM < hullR,
                   camInsideBound: boundR != null ? camToShipM < boundR : null,
