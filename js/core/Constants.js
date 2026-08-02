@@ -2429,6 +2429,11 @@ export const Constants = {
     // the honest gossamer read at the 5–60 m ceremony framing (the rejected
     // TubeGeometry at r ≈ 0.06 m staircased; the fat line does not).
     TETHER_WIDTH_M:     0.05,
+    // V4 — per-thread depth shading (depthWrite stays FALSE by design): vertex
+    // colours dim toward this fraction of the base colour across the bag's own
+    // view-depth extent, so the far side of the bag recedes. Self-normalized
+    // per frame (bag min/max distance), so it reads at any camera range.
+    DEPTH_DIM_FRACTION: 0.5,
     // V2 — lit membrane under the threads (the hybrid web). A MeshPhysicalMaterial
     // film driven by the SAME drape functions as the threads, so sun + earthshine
     // read on the bag while the web reveals the catch through it. Inherits the

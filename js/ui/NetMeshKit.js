@@ -327,12 +327,19 @@ export const NetMeshKit = {
     const webPositions = buildWebPositions(mouthRadius, coneHeight, radialSpokes, rings);
     const webGeo = new LineSegmentsGeometry();
     webGeo.setPositions(webPositions);
+    // V4: per-thread vertex colours for view-depth shading (the far side of the
+    // bag recedes) — depthWrite stays false by design. Seeded white; written in
+    // place per frame from the kit-LOCAL camera position (the kit stays pure
+    // local-space: the consumer world→local transforms the camera and passes it
+    // in as data, like the cached trig tables).
+    webGeo.setColors(new Float32Array(webPositions.length).fill(1));
     const coneMat = new LineMaterial({
       color,
       transparent: true,
       opacity,
       linewidth: lineWidth,    // screen-space pixels (worldUnits:false)
       worldUnits: false,
+      vertexColors: true,
       dashed: false,
       alphaToCoverage: false,
       blending: THREE.NormalBlending,
@@ -477,6 +484,9 @@ export const NetMeshKit = {
     // dirty instead of re-running setPositions (which reallocates the buffer, both
     // interleaved attributes, and both bounding volumes every frame).
     const webBuffer = coneMesh.geometry.attributes.instanceStart.data;
+    // V4: same in-place pattern for the vertex-colour buffer (setColors wrapped
+    // the seed array at construction; instanceColorStart/End share one buffer).
+    const webColorBuffer = coneMesh.geometry.attributes.instanceColorStart.data;
 
     const handle = {
       group,
@@ -484,6 +494,7 @@ export const NetMeshKit = {
       webLines: coneMesh,   // alias — the cone IS the fat-line spoke+ring web
       webPositions,         // raw Float32Array of web segment endpoints (apex→rim + rings)
       webBuffer,            // InstancedInterleavedBuffer whose .array === webPositions
+      webColorBuffer,       // vertex-colour buffer (V4 depth shading), same layout
       lineMaterial: coneMat, // the web's LineMaterial (resolution-synced)
       membraneMesh,
       membraneMat,
@@ -695,8 +706,12 @@ export const NetMeshKit = {
    * @param {number} [drapeState.cinchFrac] 0 = open, 1 = bunched point
    * @param {number} [drapeState.jigglePhase] settle-jiggle phase (rad)
    * @param {number} [drapeState.jiggleAmp]   settle-jiggle amplitude (scene units)
+   * @param {THREE.Vector3} [drapeState.localCamPos] camera position in the kit's
+   *   LOCAL frame (consumer world→local transforms it and passes it in as data,
+   *   preserving the kit's pure-local-space rule). When present, V4 depth
+   *   shading rewrites the vertex colours: the far side of the bag recedes.
    */
-  updateWebDrape(h, { drape = 0, cinchFrac = 0, jigglePhase = 0, jiggleAmp = 0 } = {}) {
+  updateWebDrape(h, { drape = 0, cinchFrac = 0, jigglePhase = 0, jiggleAmp = 0, localCamPos } = {}) {
     if (!h || !h.webPositions || !h.coneMesh) return;
     h._drape = drape;
     h._cinchFrac = cinchFrac;
@@ -737,6 +752,33 @@ export const NetMeshKit = {
       });
       h.membraneMesh.geometry.attributes.position.needsUpdate = true;
       h.membraneMesh.geometry.computeVertexNormals();
+    }
+    // V4: per-thread depth shading — dim each vertex toward DEPTH_DIM_FRACTION of
+    // the base colour across the bag's OWN view-depth extent (self-normalizing,
+    // so the gradient reads at any camera range). depthWrite stays false; this
+    // is the viable path to "the far side of the bag recedes". In-place write,
+    // aligned element-for-element with the position buffer.
+    if (localCamPos && h.webColorBuffer) {
+      const base = h.coneMesh.material.color;
+      const dim = (NET_WEB && NET_WEB.DEPTH_DIM_FRACTION) ?? 0.5;
+      const pos = h.webPositions, col = h.webColorBuffer.array;
+      const cx = localCamPos.x, cy = localCamPos.y, cz = localCamPos.z;
+      let dMin = Infinity, dMax = -Infinity;
+      for (let i = 0; i < pos.length; i += 3) {
+        const dx = pos[i] - cx, dy = pos[i + 1] - cy, dz = pos[i + 2] - cz;
+        const d = dx * dx + dy * dy + dz * dz;
+        if (d < dMin) dMin = d;
+        if (d > dMax) dMax = d;
+      }
+      const d0 = Math.sqrt(dMin);
+      const span = Math.max(1e-12, Math.sqrt(dMax) - d0);
+      for (let i = 0; i < pos.length; i += 3) {
+        const dx = pos[i] - cx, dy = pos[i + 1] - cy, dz = pos[i + 2] - cz;
+        const t = Math.min(1, (Math.sqrt(dx * dx + dy * dy + dz * dz) - d0) / span);
+        const s = 1 - dim * t;
+        col[i] = base.r * s; col[i + 1] = base.g * s; col[i + 2] = base.b * s;
+      }
+      h.webColorBuffer.needsUpdate = true;
     }
   },
 

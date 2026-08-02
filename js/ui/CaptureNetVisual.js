@@ -153,6 +153,7 @@ export class CaptureNetVisual {
     this._scene = scene;
     this._player = player;
     this._captureNetSystem = captureNetSystem;
+    this._sceneManager = sceneManager;   // V4: camera source for depth shading
     this._enabled = true;
     this._disposed = false;
 
@@ -863,6 +864,11 @@ export class CaptureNetVisual {
           cinchFrac,
           jigglePhase: vis.kitHandle._jigglePhase,
           jiggleAmp,
+          // V4: camera in the kit's LOCAL frame for per-thread depth shading
+          // (the kit stays pure-local-space; worldToLocal writes in place).
+          localCamPos: this._sceneManager?.camera
+            ? vis.kitHandle.group.worldToLocal(_v3c.copy(this._sceneManager.camera.position))
+            : undefined,
         });
       }
     }
