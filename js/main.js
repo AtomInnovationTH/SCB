@@ -2027,6 +2027,22 @@ async function init() {
             sameAsMapRef:  debrisField?.debrisMap?.get(whale?.id) === whale,
             sameAsListRef: debrisField?.debrisList?.find(d => d && d.id === whale?.id) === whale,
             alive:         whale?.alive,
+            // P0a: sun state for the determinism contract. The capture scripts
+            // pin _sunPhase0/_sunYaw0/elapsedTime before staging (the defaults
+            // are seeded from the real wall clock — SunLight._seedSkyFromClock
+            // — so unpinned runs are lit by luck of their capture date and S0
+            // vs S1 A/B is meaningless). Logged so a silent regression is
+            // visible in the probe output.
+            sun: (() => {
+              if (!sunLight) return null;
+              const d = sunLight.sunDirection;
+              return {
+                phase0: +((sunLight._sunPhase0 ?? NaN).toFixed?.(4) ?? null),
+                yaw0:   +((sunLight._sunYaw0 ?? NaN).toFixed?.(4) ?? null),
+                elapsedS: +((sunLight.elapsedTime ?? NaN).toFixed?.(2) ?? null),
+                dir: d ? [+d.x.toFixed(4), +d.y.toFixed(4), +d.z.toFixed(4)] : null,
+              };
+            })(),
             // Reel-internals forensics (P1 re-diagnosis): the post-catch pin
             // writes net.position AND whale._scenePosition to the same point
             // ~1.2e6 m off-ship. Name the garbage term: _remainingM (m),
@@ -2123,6 +2139,19 @@ async function init() {
                   // capture beats (CameraSystem._tryChainReelBeat). Reported so
                   // the chaining stays a measured fact, not an assumption.
                   reelBeatChained: c._reelBeatChained === true,
+                  // P0b: the live beat list + the first-ever 7-beat contract.
+                  // A reused browser profile (or a second net) gets the 5-beat
+                  // highlights cut instead — different beats, different
+                  // durations, uncomparable numbers. The capture script aborts
+                  // loudly when this reads false.
+                  beatKeys: (c.beats || []).map(b => b.key),
+                  beatListOk: (() => {
+                    const keys = (c.beats || []).map(b => b.key);
+                    if (!keys.length) return null;
+                    const WANT = ['POD_MUZZLE_PREFIRE', 'MUZZLE_EXIT_SPINUP', 'GLAMOUR_SHOT',
+                                  'APPROACH_DOLLY', 'BRAKE_ENVELOP', 'CINCH', 'SECURED_SETTLE'];
+                    return keys.length >= 7 && keys.slice(0, 7).every((k, i) => k === WANT[i]);
+                  })(),
                   camToShipM: +camToShipM.toFixed(2), hullRadiusM: hullR, shipBoundRadiusM: boundR,
                   camInsideHullConst: camToShipM < hullR,
                   camInsideBound: boundR != null ? camToShipM < boundR : null,
