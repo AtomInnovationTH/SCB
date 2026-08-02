@@ -140,10 +140,13 @@ export const BODY_CATALOG = [
     magnitude: -2.2,
     realAngularDeg: 0.008,
     laddered: true,
-    displayAngularDeg: 0.43,      // Stage 5 (D1): ~7 px
-    textureKey: null,             // PARKED — band detail can't survive 7 px
-                                  // (createJupiterTexture stays exported as
-                                  // telescope-feature material, unused here)
+    displayAngularDeg: 0.54,      // 9.06 px — the Red Spot (drawn 22% of the disc
+                                  // width) reaches 2.0 px and the three bands 2.0 px
+                                  // each. Still under Venus 0.58, so no ladder rule
+                                  // breaks. Was 0.43 ("band detail can't survive
+                                  // 7 px" — true of the OLD 8-band texture, not the
+                                  // 3-band one).
+    textureKey: 'jupiter',
   },
   {
     name: 'Mars',
@@ -151,8 +154,17 @@ export const BODY_CATALOG = [
     realAngularDeg: 0.004,
     laddered: true,
     displayAngularDeg: 0.37,      // Stage 5 (D1): ~6 px
-    textureKey: null,             // PARKED — cap/detail can't survive 6 px
-                                  // (createMarsTexture stays exported, unused)
+    textureKey: null,             // DELIBERATELY FLAT — and this was re-confirmed the
+                                  // hard way. A three-stripe version (polar cap / dark
+                                  // band / rust) was switched on and rejected on sight
+                                  // as "red and yellow": at 6 px the stripes read as a
+                                  // garish two-tone flag, and worse, the ×2.28 ladder
+                                  // multiplier drove the blue-white cap through ACES to
+                                  // rgb(255,191,242) — PINK, because red clips at 255
+                                  // while blue survives. Mars has no naked-eye detail to
+                                  // show; the honest render is a single red ember, so the
+                                  // original author's null here was right. createMarsTexture
+                                  // stays exported but parked (telescope-view material).
   },
   {
     name: 'Mercury',
@@ -167,19 +179,18 @@ export const BODY_CATALOG = [
     magnitude: 0.5,               // DIMMER than Rigel (+0.13) — truthfully so
     realAngularDeg: 0.005,
     laddered: true,
-    displayAngularDeg: 0.374,     // Stage 5 (D1): globe ~6 px. NOT independently
-                                  // chosen — the REAL ring radii (A ring outer =
-                                  // 2.27 Saturn radii) fix globe = span/2.27, so
-                                  // a 0.85° span lands the globe here. (The plan
-                                  // table's "globe 0.19°" is incompatible with
-                                  // span 0.85° under real ratios; D1's "globe
-                                  // ~0.2° (a 3 px dot would waste it)" is the
-                                  // floor, and 6 px clears it.)
+    displayAngularDeg: 0.4846,    // globe ~8 px. NOT independently chosen — the
+                                  // REAL ring radii (A ring outer = 2.27 Saturn
+                                  // radii) fix globe = span/2.27, so the 1.1°
+                                  // span lands the globe here. Still under
+                                  // Jupiter's 0.54°, so no ordering breaks.
     textureKey: 'saturn',         // rings are low-frequency and survive minification
-    // Ring span ~0.85° (~14 px) — the ONE licensed size inversion (span is ring
+    // Ring span 1.1° (~18.5 px) — the ONE licensed size inversion (span is ring
     // geometry, not body size, and Saturn's brightness stays truthfully below
-    // Rigel). Rendered on a planeSize-7.6 plane; the drawn rings fill 0.86 of it.
-    ringSpanAngularDeg: 0.85,
+    // Rigel). Grown from 0.85°: at 0.85° each ring was 1.6 px and, with the ring
+    // hole hidden behind the globe, the whole planet read as a solid bright
+    // diamond. 1.1° opens the hole at the ansae and gives ~1.5 px rings.
+    ringSpanAngularDeg: 1.1,
   },
 ];
 

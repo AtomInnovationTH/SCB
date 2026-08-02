@@ -85,16 +85,162 @@ function applyLimbFade(ctx, size, inner = 0.92) {
   ctx.globalCompositeOperation = prev;
 }
 
+// ============================================================================
+// MOON MARIA — projected from REAL selenographic coordinates
+// ============================================================================
+//
+// The "man in the moon" and the "rabbit in the moon" are pareidolia OF THE REAL
+// MARIA, so the layout cannot be invented — move the maria and you destroy the
+// thing you are trying to reveal. An earlier attempt solved mare positions
+// against a "2 px apart" constraint and produced five evenly-spaced equal blobs
+// that read as a dice face; a second attempt drew a literal smiley. Both were
+// legible and neither was the Moon. This list is DERIVED, at module load, from
+// published coordinates by orthographic projection.
+//
+// Sources:
+//   - Coordinates and diameters: IAU / Wikipedia, "List of plains on the Moon"
+//   - Face identification: Wikipedia, "Man in the Moon" — the figure's eyes are
+//     Mare Imbrium and Mare Serenitatis, its nose is Sinus Aestuum, and its open
+//     mouth is Mare Nubium and Mare Cognitum.
+//
+// Projection: orthographic near side, north up, +y = south (down), lunar EAST
+// (+lon) to the RIGHT — the modern IAU / naked-eye convention, which puts Mare
+// Crisium on the upper-right limb and Oceanus Procellarum on the left, matching
+// any full-moon photograph.
+export const MOON_RADIUS_KM = 1737.4;
+
+// The one licensed liberty: a global shrink on every extent. A catalogued mare
+// "diameter" is its MAXIMUM extent, so an ellipse of that size overstates an
+// irregular region — modelled at full size, neighbouring maria overlap (the
+// Imbrium/Serenitatis pair computes to -0.25 px of gap) even though the real
+// surface has visible highland between them. Shrinking opens those real gaps
+// without moving a single feature off its real position.
+//
+// 0.90 is MEASURED, not eyeballed: at this factor the union of the projected
+// footprints covers 26.0% of the near-side HEMISPHERE, matching the published
+// figure that ~26% of the near side is basalt. (At 1.0 the model reads 31.3% —
+// the ellipses really do overstate.) Note the two fractions are easy to
+// conflate: hemisphere area weights limb regions by 1/cos θ, so the same layout
+// covers 34% of the visible DISC, which is what a full-moon photograph shows.
+// Tune against the hemisphere figure; check the disc figure looks right.
+export const MOON_MARIA_SHRINK = 0.90;
+export const MOON_MARIA_HEMISPHERE_COVERAGE = 0.26; // published near-side basalt fraction
+
+// Real maria differ in albedo — Mare Tranquillitatis is titanium-rich and reads
+// notably darker and bluer, Mare Serenitatis lighter — so shading them
+// differently is real structure, not decoration. It is also what lets Imbrium
+// read as its own basin against the Procellarum mass it opens into.
+//
+// The three tiers were checked against real normal albedo (highlands ~0.12),
+// pushed through the ladder multiplier + ACES + sRGB the same way
+// test-bodyDetail.js does. They land close to reality, which is why they stay:
+//
+//   tier    hex        on screen   real ratio   exaggeration
+//   DARK    #62687a     1.82:1      1.60:1        1.14x     high-Ti mare, albedo ~0.075
+//   MID     #6a707c     1.66:1      1.26:1        1.31x     typical mare, albedo ~0.095
+//   FAINT   #878da0     1.17:1      1.14:1        1.02x     thin flooding, albedo ~0.105
+//
+// All three are modest exaggerations (1.0–1.3×), well inside the ~2× contrast
+// licence this texture already takes, and the ordering follows titanium content.
+// If you restyle these, keep the ordering and re-check the ratios — the
+// highland base is near the top of the tone curve, so contrast can only be
+// bought by darkening the mare, never by brightening the ground.
+export const MOON_MARIA_DARK  = '#62687a'; // titanium-rich / deepest mare
+export const MOON_MARIA_MID   = '#6a707c'; // typical mare
+export const MOON_MARIA_FAINT = '#878da0'; // thin or shallow flooding (Frigoris, Vaporum)
+export const MOON_MARIA_BLUR  = 0.020;     // edge-softening blur, fraction of the disc radius
+
+// Compact, roughly circular basins: centroid + diameter is adequate.
+const MOON_BASINS = [
+  { name: 'Mare Imbrium',       lat:  34.72, lon: -14.91, diamKm: 1145.53, shade: 'dark'  }, // eye
+  { name: 'Mare Serenitatis',   lat:  27.29, lon:  18.36, diamKm:  674.28, shade: 'mid'   }, // eye
+  { name: 'Sinus Aestuum',      lat:  12.10, lon:  -8.34, diamKm:  316.50, shade: 'faint' }, // nose
+  { name: 'Mare Cognitum',      lat: -10.53, lon: -22.31, diamKm:  350.01, shade: 'mid'   }, // mouth
+  { name: 'Mare Humorum',       lat: -24.48, lon: -38.57, diamKm:  419.67, shade: 'mid'   },
+  { name: 'Mare Insularum',     lat:   7.79, lon: -30.64, diamKm:  511.93, shade: 'mid'   },
+  { name: 'Mare Nectaris',      lat: -15.19, lon:  34.60, diamKm:  339.39, shade: 'mid'   },
+  { name: 'Mare Vaporum',       lat:  13.20, lon:   4.09, diamKm:  242.46, shade: 'faint' },
+];
+
+// Elongated regions, given as real lat/lon FOOTPRINTS. Centroid + diameter is
+// wrong for these: the catalogued diameter is the long axis, so as a circle
+// Oceanus Procellarum (2592 km) hangs off the west limb as a slab and the thin
+// Mare Frigoris arc (1446 km) becomes a blob over the north pole.
+const MOON_REGIONS = [
+  { name: 'Oceanus Procellarum',  lat: [-15, 55], lon: [-80, -20], shade: 'mid'   },
+  { name: 'Mare Frigoris',        lat: [ 50, 63], lon: [-40,  50], shade: 'faint' },
+  { name: 'Mare Tranquillitatis', lat: [ -3, 18], lon: [ 20,  45], shade: 'dark'  },
+  { name: 'Mare Fecunditatis',    lat: [-18,  3], lon: [ 40,  65], shade: 'mid'   },
+  { name: 'Mare Crisium',         lat: [ 10, 23], lon: [ 50,  69], shade: 'dark'  },
+  { name: 'Mare Nubium',          lat: [-30,-11], lon: [-28,  -6], shade: 'mid'   }, // mouth
+];
+
+const MOON_SHADES = { dark: MOON_MARIA_DARK, mid: MOON_MARIA_MID, faint: MOON_MARIA_FAINT };
+const MOON_ALPHAS = { dark: 0.92, mid: 0.88, faint: 0.55 };
+const D2R = Math.PI / 180;
+
+/** Orthographic projection of a selenographic lat/lon to disc units. */
+function moonProject(latDeg, lonDeg) {
+  const lat = latDeg * D2R, lon = lonDeg * D2R;
+  return { x: Math.cos(lat) * Math.sin(lon), y: -Math.sin(lat) };
+}
+
 /**
- * Create an opaque Moon disc with a stylized nearside maria pattern.
+ * Project the real maria data into drawable ellipses.
+ * Exported so a test can re-derive the layout and assert the shipped list still
+ * matches the published coordinates — the invariant that stops someone
+ * inventing positions again.
+ * @returns {Array<{name,cx,cy,rx,ry,rot,color,alpha}>}
+ */
+export function projectMoonMaria(shrink = MOON_MARIA_SHRINK) {
+  const out = [];
+  for (const b of MOON_BASINS) {
+    const { x, y } = moonProject(b.lat, b.lon);
+    const d = Math.min(1, Math.hypot(x, y));
+    // A circular feature at angular distance theta from the sub-Earth point
+    // projects to an ellipse: full width tangentially, foreshortened by
+    // cos(theta) radially. Without this, limb features are wrongly circular.
+    const rho = (b.diamKm / 2) / MOON_RADIUS_KM;
+    out.push({
+      name: b.name,
+      cx: x, cy: y,
+      rx: rho * Math.sqrt(Math.max(0, 1 - d * d)) * shrink, // radial (foreshortened)
+      ry: rho * shrink,                                     // tangential
+      rot: Math.atan2(y, x),
+      color: MOON_SHADES[b.shade],
+      alpha: MOON_ALPHAS[b.shade],
+    });
+  }
+  for (const r of MOON_REGIONS) {
+    const lonMid = (r.lon[0] + r.lon[1]) / 2, latMid = (r.lat[0] + r.lat[1]) / 2;
+    const north = moonProject(r.lat[1], lonMid), south = moonProject(r.lat[0], lonMid);
+    const west = moonProject(latMid, r.lon[0]), east = moonProject(latMid, r.lon[1]);
+    out.push({
+      name: r.name,
+      cx: (west.x + east.x) / 2,
+      cy: (north.y + south.y) / 2,
+      rx: Math.abs(east.x - west.x) / 2 * shrink,
+      ry: Math.abs(north.y - south.y) / 2 * shrink,
+      rot: 0, // footprint boxes are already axis-aligned in the projection
+      color: MOON_SHADES[r.shade],
+      alpha: MOON_ALPHAS[r.shade],
+    });
+  }
+  return out;
+}
+
+export const MOON_MARIA = projectMoonMaria();
+
+/**
+ * Create an opaque Moon disc with the real nearside maria pattern.
  *
- * Deliberately exaggerated (~2× real contrast) so the dark maria read as a lunar
- * surface at the game's ~1.5° apparent size, and arranged like the real nearside
- * (Procellarum west, Imbrium upper-left, Serenitatis/Tranquillitatis center,
- * Fecunditatis/Nectaris lower-right, Crisium a distinct oval on the east limb) so
- * both the "man in the moon" and "rabbit in the moon" read. Fully deterministic —
- * no Math.random — so the texture is identical every load. NormalBlending is
- * required on the material (the maria must read as *dark* surface, not glow).
+ * The maria are projected from published selenographic coordinates (see
+ * MOON_MARIA above), not arranged by eye, because the "man in the moon" and
+ * "rabbit in the moon" are pareidolia of the real surface — the pattern only
+ * reads if the real geography is reproduced. Contrast is ~2× real so the maria
+ * survive the game's ~1.5° apparent size. Fully deterministic — no Math.random —
+ * so the texture is identical every load. NormalBlending is required on the
+ * material (the maria must read as *dark* surface, not glow).
  * @param {number} size — canvas pixel dimensions
  * @returns {THREE.CanvasTexture}
  */
@@ -125,77 +271,23 @@ export function createMoonDiscTexture(size = 256) {
 
   // Normalized coord → canvas px (nx,ny in [-1,1]; +y is downward / south).
   const P = (n) => half + n * R;
-  // A mare is a cluster of overlapping soft ellipses → irregular natural edge.
-  const mare = (cx, cy, lobes, color, alpha) => {
-    ctx.globalAlpha = alpha;
-    ctx.fillStyle = color;
-    for (const [dx, dy, rx, ry, rot] of lobes) {
-      ctx.save();
-      ctx.translate(P(cx + dx), P(cy + dy));
-      ctx.rotate(rot);
-      ctx.beginPath();
-      ctx.ellipse(0, 0, rx * R, ry * R, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
-    }
-    ctx.globalAlpha = 1.0;
-  };
 
-  const dark = '#6a707c'; // deep mare — blue-gray, ~1.9:1 against the base (real
-                          // mare/highland albedo ratio 0.07 vs 0.12). Was #767c8a
-                          // (~1.7:1); pushed to the real ratio for Stage 3 (F3).
-  const mid  = '#8f95a2'; // lighter mare / basin fringe
+  ctx.filter = `blur(${Math.round(R * MOON_MARIA_BLUR)}px)`; // soften mare edges
 
-  ctx.filter = `blur(${Math.round(R * 0.022)}px)`; // soften mare edges
-
-  // Oceanus Procellarum — large, western (left)
-  mare(-0.50, -0.02, [
-    [0, 0, 0.20, 0.34, 0.15],
-    [0.03, -0.24, 0.14, 0.17, 0],
-    [-0.02, 0.26, 0.13, 0.20, 0.2],
-    [0.11, 0.02, 0.12, 0.24, 0],
-  ], dark, 0.9);
-
-  // Mare Imbrium — round, upper-left
-  mare(-0.16, -0.42, [
-    [0, 0, 0.19, 0.17, 0],
-    [0.08, 0.05, 0.11, 0.10, 0],
-    [-0.08, 0.03, 0.10, 0.10, 0],
-  ], dark, 0.9);
-
-  // Mare Serenitatis — center, upper
-  mare(0.15, -0.22, [
-    [0, 0, 0.13, 0.14, 0.1],
-    [0.05, 0.05, 0.08, 0.08, 0],
-  ], dark, 0.88);
-
-  // Mare Tranquillitatis — adjoins Serenitatis to the right / below
-  mare(0.34, 0.03, [
-    [0, 0, 0.14, 0.16, -0.2],
-    [-0.08, -0.08, 0.09, 0.09, 0],
-    [0.06, 0.09, 0.10, 0.10, 0],
-  ], dark, 0.86);
-
-  // Mare Fecunditatis — lower-right
-  mare(0.41, 0.34, [
-    [0, 0, 0.11, 0.16, 0.15],
-    [-0.04, -0.07, 0.08, 0.09, 0],
-  ], dark, 0.85);
-
-  // Mare Nectaris — below Tranquillitatis, lower-center-right
-  mare(0.22, 0.35, [
-    [0, 0, 0.08, 0.10, 0],
-  ], dark, 0.84);
-
-  // Mare Crisium — small distinct oval on the east (right) limb
-  mare(0.62, -0.16, [
-    [0, 0, 0.10, 0.08, -0.3],
-  ], dark, 0.94);
-
-  // Mare Nubium / Humorum hint — lower-left, ties Procellarum southward
-  mare(-0.30, 0.36, [
-    [0, 0, 0.10, 0.12, 0.1],
-  ], mid, 0.7);
+  // Each mare is one projected ellipse, rotated to its radial direction so limb
+  // features (Crisium, Fecunditatis) show their real foreshortening.
+  for (const m of MOON_MARIA) {
+    ctx.globalAlpha = m.alpha;
+    ctx.fillStyle = m.color;
+    ctx.save();
+    ctx.translate(P(m.cx), P(m.cy));
+    ctx.rotate(m.rot);
+    ctx.beginPath();
+    ctx.ellipse(0, 0, Math.max(m.rx, 0.004) * R, Math.max(m.ry, 0.004) * R, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1.0;
 
   ctx.filter = 'none';
 
@@ -290,6 +382,51 @@ function createFlareTexture(size = 64) {
   return new THREE.CanvasTexture(canvas);
 }
 
+// ============================================================================
+// JUPITER BANDS + GREAT RED SPOT — exported so tests can measure feature sizes
+// ============================================================================
+//
+// Belt/zone structure north→south. Each band is defined by its (wavy) TOP edge
+// y0 (fraction of the canvas height) and fills DOWN to the canvas bottom; the
+// next band overpaints it, so no gaps open between wavy boundaries.
+//
+// Three bands, not eight: at Jupiter's 9 px disc a stripe needs 2 px, so each
+// band is 0.22 of the disc height ≈ 2.0 px — the old 8-band texture drew them
+// under 1 px and they averaged to a flat cream disc (1.08:1 measured). The
+// three kept are the ones the code's own comment called "the three dominant
+// bands that read at a glance": the dark North & South Equatorial Belts
+// bracketing the bright Equatorial Zone.
+//
+// The belt colours are DARKER than the real ones on purpose and this is
+// essential, not a style choice: between the ladder multiplier (×2.39) and
+// ACES tone mapping the authored contrast largely evaporates — the real
+// #b9835a belt lands on screen at only 1.17:1 against the bright zone. The
+// bright zone is already at the top of the tone curve (brightening it does
+// nothing), so all contrast comes from darkening the belts: #74513a lands at
+// 1.6:1 in the captured screenshot.
+export const JUPITER_BASE = '#f2e6cf'; // polar/northern cream base
+export const JUPITER_BANDS = [
+  { y0: 0.215, color: '#74513a', amp: 0.0, freq: 0.0, ph: 0.0 }, // NEB (dark, prominent)
+  { y0: 0.44, color: '#f6ecd6', amp: 0.0, freq: 0.0, ph: 0.0 }, // EZ (brightest, wide)
+  { y0: 0.665, color: '#6a4832', amp: 0.0, freq: 0.0, ph: 0.0 }, // SEB (dark, prominent;
+                                                                 // darkened by the same
+                                                                 // ratio as the NEB)
+];
+// Great Red Spot: centre (dx from disc centre, cy from canvas top) and radii as
+// fractions of the canvas size. Drawn 22% of the disc across (oversized vs the
+// real ~0.12 on purpose) so it reaches 2.0 × 2.0 px at the 9.06 px disc. It
+// sits inside the South Equatorial Belt (cy 0.74; the disc spans x 0.06–0.94
+// there, the spot covers 0.55–0.77). No pale collar — at 1.35× it would be a
+// 0.70 px ring, invisible. The spot reads by HUE instead: orange-red against
+// tan, colour distance 75 of 441, which survives the renderer with no clear
+// space around it.
+export const JUPITER_GRS = {
+  dx: 0.16, cy: 0.74, rx: 0.115, ry: 0.115,
+  collarColor: null, // dropped — sub-pixel at this budget
+  stops: [0.0, 0.6, 1.0],
+  colors: ['#cf6146', '#c04e34', '#9f4029'],
+};
+
 /**
  * Create a banded Jupiter disc with a Great Red Spot.
  * Cream / tan / brown-orange belts with slightly wavy edges and a rust GRS
@@ -311,26 +448,10 @@ export function createJupiterTexture(size = 128) {
   ctx.arc(half, half, half * 0.995, 0, Math.PI * 2);
   ctx.clip();
 
-  const cream = '#f2e6cf', zone = '#ecdcbe', beltTan = '#c9a877', neb = '#b9835a', seb = '#b07a53';
-  // Belt/zone structure north→south. Each band is defined by its (wavy) TOP edge
-  // and fills DOWN to the canvas bottom; the next band overpaints it, so no gaps
-  // open between wavy boundaries. The three dominant bands read at a glance: the
-  // dark North & South Equatorial Belts (NEB/SEB) bracketing the bright
-  // Equatorial Zone (EZ). The Great Red Spot sits at the south edge of the SEB.
-  ctx.fillStyle = cream; // base = polar/northern cream
+  ctx.fillStyle = JUPITER_BASE; // base = polar/northern cream
   ctx.fillRect(0, 0, size, size);
-  const bands = [
-    { y0: 0.12, color: beltTan, amp: 0.016, freq: 4.5, ph: 0.4 }, // N temperate belt
-    { y0: 0.20, color: zone,    amp: 0.016, freq: 6.0, ph: 2.6 }, // N tropical zone
-    { y0: 0.31, color: neb,     amp: 0.020, freq: 3.5, ph: 0.9 }, // NEB (dark, prominent)
-    { y0: 0.43, color: '#f6ecd6', amp: 0.018, freq: 4.0, ph: 3.0 }, // EZ (brightest, wide)
-    { y0: 0.55, color: seb,     amp: 0.022, freq: 3.2, ph: 1.4 }, // SEB (dark, prominent)
-    { y0: 0.66, color: zone,    amp: 0.018, freq: 5.0, ph: 2.3 }, // S tropical zone
-    { y0: 0.77, color: beltTan, amp: 0.016, freq: 4.5, ph: 0.7 }, // S temperate belt
-    { y0: 0.87, color: cream,   amp: 0.014, freq: 5.5, ph: 1.1 }, // S polar region
-  ];
   const step = Math.max(2, Math.round(size / 48));
-  for (const b of bands) {
+  for (const b of JUPITER_BANDS) {
     const yt = (x) => b.y0 * size + Math.sin(x / size * Math.PI * 2 * b.freq + b.ph) * b.amp * size;
     ctx.beginPath();
     ctx.moveTo(0, yt(0));
@@ -342,23 +463,23 @@ export function createJupiterTexture(size = 128) {
     ctx.fill();
   }
 
-  // Great Red Spot — at ~22°S (south edge of the SEB), east of center, in a pale
-  // "Red Spot Hollow" collar. Oval (wider than tall); ~0.2 of the disk across
-  // (exaggerated a touch from the real ~0.12 so it reads at small on-screen size).
-  const grsX = half + size * 0.16, grsY = size * 0.60;
-  const grsRx = size * 0.11, grsRy = size * 0.072;
+  // Great Red Spot — inside the South Equatorial Belt, east of center. Reads
+  // by hue (orange-red against tan), so it survives with no clear space around
+  // it; the pale collar of the old texture would be a sub-pixel ring here.
+  const grsX = half + size * JUPITER_GRS.dx, grsY = size * JUPITER_GRS.cy;
+  const grsRx = size * JUPITER_GRS.rx, grsRy = size * JUPITER_GRS.ry;
   ctx.save();
   ctx.translate(grsX, grsY);
-  ctx.globalAlpha = 0.75;
-  ctx.fillStyle = '#efd8b0';
-  ctx.beginPath();
-  ctx.ellipse(0, 0, grsRx * 1.35, grsRy * 1.5, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.globalAlpha = 1.0;
+  if (JUPITER_GRS.collarColor) {
+    ctx.globalAlpha = 0.75;
+    ctx.fillStyle = JUPITER_GRS.collarColor;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, grsRx * 1.35, grsRy * 1.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1.0;
+  }
   const grs = ctx.createRadialGradient(-grsRx * 0.2, -grsRy * 0.2, grsRx * 0.15, 0, 0, grsRx);
-  grs.addColorStop(0.0, '#cf6146');
-  grs.addColorStop(0.6, '#c04e34');
-  grs.addColorStop(1.0, '#9f4029');
+  JUPITER_GRS.stops.forEach((stop, i) => grs.addColorStop(stop, JUPITER_GRS.colors[i]));
   ctx.fillStyle = grs;
   ctx.beginPath();
   ctx.ellipse(0, 0, grsRx, grsRy, 0, 0, Math.PI * 2);
@@ -377,10 +498,9 @@ export function createJupiterTexture(size = 128) {
  * Create a ringed Saturn on a transparent square (for a PlaneGeometry billboard,
  * which samples the full square so the rings can extend past the globe). Correct
  * ring/globe overlap is faked by draw order: far ring half → globe → near ring
- * half, split along the tilted ring plane. Ring geometry uses real proportions
- * (radii in units of Saturn radius: C 1.24–1.52, B 1.53–1.95, Cassini gap
- * 1.95–2.03, A 2.03–2.27) with the bright B ring, dimmer A ring, faint C ring,
- * the signature Cassini Division, and a subtle ring shadow on the globe.
+ * half, split along the tilted ring plane. Two rings (bright inner, dimmer
+ * outer) at real outer extent — the four real parts (C ring, B ring, Cassini
+ * Division, A ring) are all sub-pixel at the 14 px span and smeared into one.
  * Deterministic.
  * @param {number} size — canvas pixel dimensions
  * @returns {THREE.CanvasTexture}
@@ -398,15 +518,13 @@ export function createSaturnTexture(size = 256) {
   const rot = SATURN_RING.tilt;                     // ring-plane tilt (~ -19°, "wide open")
   const squash = SATURN_RING.squash;                // ring opening (minor/major)
 
-  // Ring bands, radii in units of the globe radius (≈ Saturn radii), matching
-  // the real ring system so the Cassini Division and A/B contrast read true.
+  // Ring bands come from SATURN_RING — one definition, shared with the depth
+  // mask. Two bands (bright B ring, dimmer A ring) starting at the real B-ring
+  // inner edge; see the notes there for why the inner edge matters so much.
   const R = (m) => globeR * m;
-  const bands = [
-    { rIn: R(1.24), rOut: R(1.52), style: 'rgba(196, 182, 154, 0.26)' }, // C ring (faint, translucent)
-    { rIn: R(1.53), rOut: R(1.95), style: 'rgba(232, 214, 176, 0.95)' }, // B ring (brightest)
-    // Cassini Division 1.95 → 2.03 left transparent — the signature dark gap
-    { rIn: R(2.03), rOut: R(2.27), style: 'rgba(198, 182, 150, 0.55)' }, // A ring (dimmer)
-  ];
+  const bands = SATURN_RING.bands.map((b) => ({
+    rIn: R(b.rIn), rOut: R(b.rOut), style: `rgba(${b.rgb}, ${b.alpha})`,
+  }));
 
   const drawRings = (frontOnly) => {
     ctx.save();
@@ -433,8 +551,8 @@ export function createSaturnTexture(size = 256) {
 
   // 2. Globe — pale gold with soft shading + faint low-contrast band hints.
   const g = ctx.createRadialGradient(cx - globeR * 0.3, cy - globeR * 0.3, globeR * 0.1, cx, cy, globeR);
-  g.addColorStop(0.0, '#faf0d8');
-  g.addColorStop(1.0, '#e2c894');
+  g.addColorStop(0.0, '#fffbea');
+  g.addColorStop(1.0, '#efd9a8');
   ctx.fillStyle = g;
   ctx.beginPath();
   ctx.arc(cx, cy, globeR, 0, Math.PI * 2);
@@ -467,12 +585,34 @@ export function createSaturnTexture(size = 256) {
   return tex;
 }
 
+// ============================================================================
+// MARS FEATURES — exported so tests can measure feature sizes
+// ============================================================================
+//
+// Mars is too small for spots: at radius 3.1 px a 2 px clear gap costs 0.64 of
+// the radius, so a polar cap plus a dark patch plus the gap between them needs
+// 1.93 radii of height and only 1.70 is available. It gets STRIPES, which need
+// no clear space — three horizontal zones, each a third of the disc ≈ 2.07 px:
+// bright blue-white north polar cap, dark albedo band (Syrtis Major flattened
+// from a wedge to a band), rust south. Dropped as sub-pixel: the south cap,
+// Hellas basin, Mare Erythraeum, the Acidalium hint, and the Syrtis flare.
+//
+// The dark band is DARKER than the real albedo feature for the same reason as
+// Jupiter's belts: through the ×2.28 ladder multiplier and ACES, the real
+// #7c4a2c lands at only 1.43:1 against the rust base; #6f4229 lands at 1.5:1.
+// The polar cap reads by HUE (blue-white against rust), not brightness — both
+// are pinned near the top of the tone curve, so it cannot be made brighter.
+export const MARS_ZONES = [
+  // The polar cap zone is GONE. Authored '#f2f4fb' it rendered rgb(255,191,242) —
+  // pink — because the ×2.28 multiplier clips red at 255 through ACES while blue
+  // survives. Any future cap here must be solved through the pipeline first.
+  { y0: 1 / 3, y1: 2 / 3, color: '#6f4229' }, // dark albedo band (Syrtis Major)
+  // below 2/3: the rust base shows through (the southern hemisphere)
+];
+
 /**
- * Create a rust-orange Mars disc with recognizable albedo features and polar caps.
+ * Create a rust-orange Mars disc with three horizontal albedo zones.
  * Deterministic; for a CircleGeometry disc (detail clipped to inscribed circle).
- * Iconic markings (north up): Syrtis Major (dark wedge just north of center),
- * the bright Hellas basin below it, and Mare Erythraeum (dark, southern), with a
- * larger north polar cap and a smaller south cap.
  * @param {number} size — canvas pixel dimensions
  * @returns {THREE.CanvasTexture}
  */
@@ -498,46 +638,12 @@ export function createMarsTexture(size = 128) {
   ctx.fillStyle = base;
   ctx.fillRect(0, 0, size, size);
 
-  // Dark albedo features (grey-brown against the rust). Syrtis Major is the
-  // dominant wedge just north of the equator; Erythraeum trails to the SW.
-  ctx.filter = `blur(${Math.round(R * 0.018)}px)`;
-  const patches = [
-    { cx: 0.14, cy: -0.12, rx: 0.15, ry: 0.30, rot: 0.35, col: '#7c4a2c', a: 0.6 },  // Syrtis Major (wedge)
-    { cx: 0.24, cy: -0.24, rx: 0.10, ry: 0.12, rot: 0.2, col: '#7c4a2c', a: 0.5 },   // Syrtis Major (flare)
-    { cx: -0.34, cy: 0.20, rx: 0.20, ry: 0.13, rot: -0.15, col: '#834326', a: 0.5 }, // Mare Erythraeum
-    { cx: -0.10, cy: -0.36, rx: 0.13, ry: 0.10, rot: 0.1, col: '#8a4a2a', a: 0.4 },  // Mare Acidalium hint
-  ];
-  for (const p of patches) {
-    ctx.globalAlpha = p.a;
-    ctx.fillStyle = p.col;
-    ctx.save();
-    ctx.translate(P(p.cx), P(p.cy));
-    ctx.rotate(p.rot);
-    ctx.beginPath();
-    ctx.ellipse(0, 0, p.rx * R, p.ry * R, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
+  // Three horizontal zones (cap / dark band / rust south). Stripes, not spots:
+  // Mars is too small for spots (a 2 px clear gap costs 0.64 of the radius).
+  for (const z of MARS_ZONES) {
+    ctx.fillStyle = z.color;
+    ctx.fillRect(0, z.y0 * size, size, (z.y1 - z.y0) * size);
   }
-  // Hellas basin — bright pale oval south-east of Syrtis Major.
-  ctx.globalAlpha = 0.35;
-  ctx.fillStyle = '#f0c896';
-  ctx.beginPath();
-  ctx.ellipse(P(0.06), P(0.34), R * 0.20, R * 0.15, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.filter = 'none';
-  ctx.globalAlpha = 1.0;
-
-  // Polar caps — north (top) larger, south (bottom) smaller. Blue-white.
-  ctx.fillStyle = '#f2f4fb';
-  ctx.globalAlpha = 0.95;
-  ctx.beginPath();
-  ctx.ellipse(P(0.0), P(-0.83), R * 0.34, R * 0.16, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.globalAlpha = 0.6;
-  ctx.beginPath();
-  ctx.ellipse(P(-0.03), P(0.87), R * 0.17, R * 0.08, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.globalAlpha = 1.0;
 
   ctx.restore(); // drop clip
   applyLimbFade(ctx, size);
@@ -583,7 +689,11 @@ const BLOOM_SOURCE_BODIES = new Set(ladderBloomBodies(
 const PLANET_DEFS = [
   { name: 'Mercury', hex: '#c7bfad', deg: Constants.PLANET_MERCURY_DEG },
   { name: 'Venus',   hex: '#ffffcc', deg: Constants.PLANET_VENUS_DEG },
-  { name: 'Mars',    hex: '#ff6633', deg: Constants.PLANET_MARS_DEG },
+  // #9c3133, not the obvious #ff6633: Mars carries a ×2.28 ladder multiplier, and
+  // through that + ACES the bright authored value washes out to rgb(255,172,111),
+  // a pale apricot. The darker, more saturated source lands at rgb(232,118,70) —
+  // the red ember Mars actually looks like. Solved, not guessed.
+  { name: 'Mars',    hex: '#9c3133', deg: Constants.PLANET_MARS_DEG },
   { name: 'Jupiter', hex: '#ffd699', deg: Constants.PLANET_JUPITER_DEG },
   { name: 'Saturn',  hex: '#f5e6c8', deg: Constants.PLANET_SATURN_DEG },
 ].map((def) => {

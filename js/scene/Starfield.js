@@ -12,7 +12,7 @@ import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
 import { Constants } from '../core/Constants.js';
-import { BRIGHT_STARS, CONSTELLATION_FIGURES, sampleFieldMagnitude, fieldSizeAlpha, skyBrightness, galacticBasis, mwCenterProfile, mwGreatRiftMask, mwDensity } from './starCatalog.js';
+import { BRIGHT_STARS, CONSTELLATION_FIGURES, sampleFieldMagnitude, fieldSizeAlpha, skyBrightness, galacticBasis, mwCenterProfile, mwGreatRiftMask, mwDensity, raDecToUnit } from './starCatalog.js';
 
 // ============================================================================
 // RA/Dec → Cartesian conversion
@@ -374,7 +374,15 @@ export class Starfield {
    * @private
    */
   _createMilkyWay() {
-    const count = Constants.MW_COUNT;
+    // TWO populations in one buffer. Raising the point count alone does NOT make
+    // a band — it makes spray-paint speckle, because discrete dots stay discrete
+    // however many you add. Haze needs OVERLAP: a few very large, very dim,
+    // additively-blended sprites whose soft falloff (smoothstep in the fragment
+    // shader) sums into continuous glow. The grain points then sit on top to keep
+    // it from looking like an airbrushed smear.
+    //   - HAZE  : MW_HAZE_COUNT points, ~45-105 px across, alpha ~0.05
+    //   - GRAIN : MW_COUNT points, 1.2-4.5 px, the starry texture
+    const count = Constants.MW_COUNT + Constants.MW_HAZE_COUNT;
     const radius = Constants.STAR_SPHERE_RADIUS * 0.985; // just inside the star shell
     const positions = new Float32Array(count * 3);
     const colors = new Float32Array(count * 3);
@@ -398,12 +406,28 @@ export class Starfield {
     const riftParams = {
       longMin: C.MW_RIFT_LONG_MIN, longMax: C.MW_RIFT_LONG_MAX,
       offset: C.MW_RIFT_OFFSET, width: C.MW_RIFT_WIDTH, edge: C.MW_RIFT_EDGE,
+      broaden: C.MW_RIFT_BROADEN, broadenLong: C.MW_RIFT_BROADEN_LONG,
+      broadenWidth: C.MW_RIFT_BROADEN_WIDTH, depth: C.MW_RIFT_DEPTH,
     };
     const cygnusParams = { long: C.MW_CYGNUS_LONG, width: C.MW_CYGNUS_WIDTH, boost: C.MW_CYGNUS_BOOST };
 
     // Milky-Way palette — faint warm-white with a few dusty blue.
     const c0 = new THREE.Color(0.85, 0.86, 0.95);
     const c1 = new THREE.Color(0.95, 0.92, 0.85);
+
+    // Published star clouds → unit directions plus two tangent vectors, so points
+    // can be scattered in a disc on the sky around each centre.
+    const clouds = (C.MW_STAR_CLOUDS || []).map((cd) => {
+      const u = raDecToUnit(cd.ra, cd.dec);
+      const dir = new THREE.Vector3(u.x, u.y, u.z).normalize();
+      const t1 = new THREE.Vector3();
+      // Any vector not parallel to dir gives a stable tangent frame.
+      t1.copy(Math.abs(dir.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0))
+        .cross(dir).normalize();
+      const t2 = new THREE.Vector3().crossVectors(dir, t1).normalize();
+      const D = Math.PI / 180;
+      return { dir, t1, t2, a: Math.tan(cd.aDeg * D), b: Math.tan(cd.bDeg * D) };
+    });
 
     const tmp = new THREE.Vector3();
     let placed = 0;
@@ -426,11 +450,24 @@ export class Starfield {
       // it into brightness too would break the per-point peak cap.
       const structure = mwCenterProfile(L, C.MW_CENTER_CONTRAST) / C.MW_CENTER_CONTRAST;
 
-      // Latitude spread: the band is widest near the galactic center.
-      const width = C.MW_BAND_WIDTH * (1 + (C.MW_BAND_WIDTH_CENTER - 1) * structure);
-      const spread = (Math.random() + Math.random() - 1.0) * width;   // triangular
+      // Latitude spread: the band is widest near the galactic center. A quarter
+      // of the points go into a wide faint halo (3× width, 0.8× brightness) so
+      // the band reads as a bright core in a broad glow and thins out smoothly
+      // instead of stopping dead at the core's edge.
+      // Haze sprites stay in the CORE width. Given the 3x-wide halo they became
+      // isolated 100 px smudges far off the band — the grain points supply the
+      // wide faint fringe instead, where a stray dot reads as a star, not a smear.
+      const isHaze = placed < C.MW_HAZE_COUNT;
+      const halo = !isHaze && Math.random() < C.MW_HALO_FRACTION;
+      const width = C.MW_BAND_WIDTH * (1 + (C.MW_BAND_WIDTH_CENTER - 1) * structure)
+        * (halo ? C.MW_HALO_WIDTH_MULT : 1);
+      // Three uniforms summed → bell-ish spread that arrives at zero smoothly
+      // (two uniforms give a triangular spread with a hard stop and a steep
+      // slope into it — that hard stop was the visible band edge).
+      const spread = ((Math.random() + Math.random() + Math.random()) - 1.5) / 1.5 * width;
 
-      // Great Rift: carve the dark lane (negative space) from Cygnus to Sgr.
+      // Great Rift: carve the dark lane (negative space). Published extent runs
+      // Cygnus → Aquila → Ophiuchus (broadening) → Sagittarius → Centaurus.
       if (Math.random() > mwGreatRiftMask(L, spread, riftParams)) continue;
 
       // Point in the galactic plane at longitude L, lifted off-plane by `spread`.
@@ -438,20 +475,58 @@ export class Starfield {
         .addScaledVector(e2, Math.sin(L));
       tmp.multiplyScalar(Math.cos(spread))
         .addScaledVector(pole, Math.sin(spread))
-        .normalize().multiplyScalar(radius);
+        .normalize();
+
+      // BRIGHT STAR CLOUDS. The real band is patchy — its naked-eye character comes
+      // from discrete bright knots flanking the rift, not from an even glow. A
+      // fraction of points is redirected into the published clouds (see
+      // MW_STAR_CLOUDS). This is a DENSITY concentration, so the per-point peak cap
+      // is untouched; boosting brightness instead would break the star hierarchy.
+      if (clouds.length && Math.random() < C.MW_CLOUD_EXTRA_FRACTION) {
+        const cl = clouds[(Math.random() * clouds.length) | 0];
+        // Centre-weighted with a SOFT taper, not a uniform disc: a uniform fill put
+        // a hard rim on each cloud and read as a cluster with an edge. Three summed
+        // uniforms give a bell that fades out with no boundary.
+        const bell = Math.abs((Math.random() + Math.random() + Math.random() - 1.5) / 1.5);
+        const th = Math.random() * Math.PI * 2;
+        tmp.copy(cl.dir)
+          .addScaledVector(cl.t1, Math.cos(th) * bell * cl.a)
+          .addScaledVector(cl.t2, Math.sin(th) * bell * cl.b)
+          .normalize();
+      }
+      tmp.multiplyScalar(radius);
       positions[placed * 3] = tmp.x;
       positions[placed * 3 + 1] = tmp.y;
       positions[placed * 3 + 2] = tmp.z;
 
-      // Brightness peaks at the center too, with per-point variation.
-      const b = C.MW_BRIGHT_MIN + (C.MW_BRIGHT_MAX - C.MW_BRIGHT_MIN) * structure * (0.55 + 0.45 * Math.random());
+      // Brightness peaks at the center too, with per-point variation. Halo
+      // points are dimmed (the two brightness tiers — core at full, halo at
+      // 0.8× — are the brightness fade; do not add a per-star fade on top,
+      // which measurably worsens the profile by dimming the halo that does
+      // the smoothing).
+      const b = C.MW_BRIGHT_MIN + (C.MW_BRIGHT_MAX - C.MW_BRIGHT_MIN) * structure * (0.55 + 0.45 * Math.random())
+        * (halo ? C.MW_HALO_BRIGHT_MULT : 1);
       const col = Math.random() < 0.8 ? c0 : c1;
-      colors[placed * 3] = col.r * b;
-      colors[placed * 3 + 1] = col.g * b;
-      colors[placed * 3 + 2] = col.b * b;
+      // Haze keeps its own brightness level. Grain and haze must NOT share one
+      // brightness: dimming grain to stop it rivalling real stars would otherwise
+      // dim the glow by the same factor, which is exactly what happened once.
+      // Haze stays safe because its per-point contribution is gated by its tiny
+      // alpha (~0.024), not by this colour.
+      const bp = isHaze ? b * C.MW_HAZE_BRIGHT_MULT : b;
+      colors[placed * 3] = col.r * bp;
+      colors[placed * 3 + 1] = col.g * bp;
+      colors[placed * 3 + 2] = col.b * bp;
 
-      sizes[placed] = C.MW_SIZE_FLOOR + Math.pow(Math.random(), 1.8) * C.MW_SIZE_VAR;   // floor→max, biased small (starry texture, not blobs)
-      alphas[placed] = 0.6 + 0.4 * (b / C.MW_BRIGHT_MAX);                // faintness variation, floor 0.6 for a brighter haze
+      // The first MW_HAZE_COUNT placed points are the haze layer. They share the
+      // band's structure (density, width, Great Rift, Sagittarius bulge) so the
+      // glow follows the real geometry — only their size and alpha differ.
+      if (isHaze) {
+        sizes[placed] = C.MW_HAZE_SIZE_MIN + Math.random() * (C.MW_HAZE_SIZE_MAX - C.MW_HAZE_SIZE_MIN);
+        alphas[placed] = C.MW_HAZE_ALPHA * (0.6 + 0.4 * (b / C.MW_BRIGHT_MAX));
+      } else {
+        sizes[placed] = C.MW_SIZE_FLOOR + Math.pow(Math.random(), 1.8) * C.MW_SIZE_VAR; // biased small (starry texture, not blobs)
+        alphas[placed] = 0.6 + 0.4 * (b / C.MW_BRIGHT_MAX);              // faintness variation
+      }
       twinkle[placed] = 0.0;
       phase[placed] = 0.0;
       placed++;

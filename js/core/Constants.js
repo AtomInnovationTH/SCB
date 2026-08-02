@@ -415,39 +415,125 @@ export const Constants = {
   // starCatalog.js: pole RA 12.85h Dec +27.13°, center RA 17.76h Dec −28.9°), so
   // it runs through Sagittarius / Cygnus / Cassiopeia as it really does. These
   // constants own the count, presence, size floor, and the licensed structure.
-  MW_COUNT: 5000,               // points (was 3500). Total points = 10,000 field+catalogue
-                                // + MW_COUNT = 15,000 (the 13,500 baseline grows — expected,
-                                // not a regression; see the commit).
+  MW_COUNT: 12000,              // GRAIN points. Was 5,000 — and at 5,000 the band was not
+                                // merely faint, it was ABSENT. Per-point peak is capped
+                                // just under STAR_FIELD_BRIGHT so the band can never
+                                // out-shine a real star (see MW_OPACITY), which means
+                                // presence MUST come from coverage and additive overlap —
+                                // the doctrine stated at MW_CYGNUS_BOOST below, "density
+                                // IS perceived brightness". 5,000 points over a band ~30°
+                                // wide and 360° long is far too sparse for that overlap.
+                                //
+                                // Chosen by measurement, not by guess. Camera pointed at
+                                // the galactic centre vs the galactic pole, sampling the
+                                // SAME screen box so the HUD and vignette cancel exactly:
+                                //   count    band mean   band lit%   band / pole
+                                //    5,000     0.92        1.27%       3.7x
+                                //   20,000     2.83        4.10%      11.6x
+                                //   40,000     5.21        7.43%      21.0x
+                                // The off-band background is unchanged at every count
+                                // (0.25 mean / 0.31% lit), so raising this densifies ONLY
+                                // the band — it cannot swamp the constellations, and
+                                // Scorpius stays legible in the 40,000 capture.
+                                //
+                                // Cost is one buffer, not one draw call per point: frame
+                                // rate measured 105 fps at 5,000 and 121 fps at 40,000
+                                // (i.e. no measurable cost; the difference is noise).
+                                // Do NOT instead raise MW_BRIGHT_MAX — that breaks the
+                                // star hierarchy that the whole sky is built on.
+                                // Total sky points = 10,000 field+catalogue + MW_COUNT.
+  // ---- Haze layer: what actually makes it look like a band ----------------
+  // Density alone cannot produce haze. 40,000 grain points measured 21x brighter
+  // than off-band and still read as "splattered spray paint", because discrete
+  // dots stay discrete no matter how many you add. These few large, very dim,
+  // additively-blended sprites overlap into continuous glow instead. The grain
+  // count above then drops back to a texture role rather than doing all the work.
+  MW_HAZE_COUNT: 9000,          // haze sprites (cheap: same buffer, same draw call)
+  MW_HAZE_SIZE_MIN: 16,         // attribute units; x uSizeScale 1.5 => ~24 px
+  MW_HAZE_SIZE_MAX: 38,         //                                   => ~57 px
+  MW_HAZE_BRIGHT_MULT: 1.6,     // haze colour multiplier, applied on top of the band's
+                                // per-point brightness. Decouples the glow from the GRAIN
+                                // brightness: grain must stay well under a real field star,
+                                // while the haze needs to keep its level. Safe against the
+                                // per-point peak rule because haze contribution is
+                                // colour x opacity x MW_HAZE_ALPHA (~0.008), far below the
+                                // 0.32 field-star value — the alpha is what gates it.
+  MW_HAZE_ALPHA: 0.020,         // per-sprite alpha. MUST stay tiny — the glow comes
+                                // from summing many, and the per-point peak rule
+                                // (see MW_OPACITY) still holds because alpha only
+                                // ever reduces a point's contribution.
   MW_OPACITY: 0.75,             // uOpacity for the band material (was 0.55 — too faint
                                 // to notice). COUPLING to STAR_FIELD_BRIGHT (0.32): every
                                 // band point's peak = vColor × uOpacity × vAlpha must stay
                                 // BELOW 0.32 so the band never out-points an actual star.
                                 // With MW_BRIGHT_MAX 0.42 and vAlpha ≤ 1 the peak is
                                 // 0.42 × 0.75 = 0.315 < 0.32.
-  MW_BRIGHT_MAX: 0.42,          // brightest band point's color multiplier (pre-opacity).
+  // Band GRAIN brightness. Was 0.42, which put the brightest band point at
+  // 0.42 x 0.75 = 0.315 against the faintest field star's 0.32 — technically under
+  // the cap, but 98% of it, so band grain was visually indistinguishable from real
+  // catalogue stars. That value dates from when grain had to carry the whole band's
+  // presence; the haze layer does that now, so grain can be what it physically is.
+  // The Milky Way is UNRESOLVED: its individual stars are below naked-eye
+  // separation, so they must be the faintest thing in the sky, not rivals to real
+  // stars. 0.21 x 0.75 = 0.158, about half a faint field star.
+  MW_BRIGHT_MAX: 0.26,          // brightest band point's color multiplier (pre-opacity).
                                 // See the MW_OPACITY coupling — the product must stay < 0.32.
-  MW_BRIGHT_MIN: 0.10,          // faintest band point (per-point variation for texture).
+  MW_BRIGHT_MIN: 0.05,          // faintest band point (per-point variation for texture).
   MW_SIZE_FLOOR: 1.2,           // px — MUST equal STAR_FIELD_SIZE_FLOOR. The band's old
                                 // 0.4–0.9 px points were the exact sub-pixel crawl class
                                 // the floor cured; band points get the same floor.
-  MW_SIZE_MAX: 4.5,             // px — the large end of the band point sizes. Presence is
-                                // capped per-point (peak < 0.32), so the haze's visibility
-                                // comes from COVERAGE: bigger soft points overlap additively
-                                // into a continuous glow. Sizes spread floor→max with a
-                                // small bias toward small (keeps a starry texture, not blobs).
-  MW_SIZE_VAR: 3.3,             // max − floor (1.2 → 4.5 px).
+  MW_SIZE_MAX: 2.6,             // px — the large end of the band GRAIN sizes. Was 4.5, which
+                                // reached 6.75 px on screen (x uSizeScale 1.5) — larger than
+                                // a real field star at 1.8 px, so the band's unresolved stars
+                                // were the biggest dots in the sky. That value dates from
+                                // when grain had to supply the band's glow by itself; the
+                                // MW_HAZE_* layer does that now, via genuinely large soft
+                                // sprites. Grain went back to being fine texture: 1.8-3.9 px,
+                                // spread floor→max with a bias toward small.
+  MW_SIZE_VAR: 1.4,             // max − floor (1.2 → 2.6).
   // Licensed structure (per doctrine B — the shape is real, the contrast is
   // exaggerated ~2× over real so it reads at a glance):
   MW_CENTER_CONTRAST: 2.0,      // center:anticenter density/brightness ratio (licensed).
   MW_BAND_WIDTH: 0.16,          // base latitude half-width (radians) of the band.
   MW_BAND_WIDTH_CENTER: 1.6,    // width multiplier at the galactic center (band is widest
                                 // near Sagittarius, like the real galaxy).
+  // Halo component: a fraction of the band points are scattered 3× wider and
+  // drawn dimmer, giving a bright core in a broad faint glow (like real Milky
+  // Way photographs). The three-uniform scatter (Starfield.js) arrives at zero
+  // smoothly; the halo carries that smooth fall past the core's own edge, so
+  // the band thins out to ~30° instead of stopping dead at ~14°.
+  MW_HALO_FRACTION: 0.25,       // fraction of band points in the wide faint halo
+  MW_HALO_WIDTH_MULT: 3.0,      // halo scatter width multiplier
+  MW_HALO_BRIGHT_MULT: 0.8,     // halo per-point brightness multiplier (only ever
+                                // dims, so the MW_BRIGHT_MAX cap is untouched)
   // Great Rift — the dark lane from Cygnus to Sagittarius (negative space, not black paint).
-  MW_RIFT_LONG_MIN: 0.0,        // radians — Sagittarius end (l=0).
-  MW_RIFT_LONG_MAX: 1.4,        // radians — Cygnus end (l≈80°).
-  MW_RIFT_OFFSET: -0.03,        // latitude offset of the lane centre (radians off-plane).
-  MW_RIFT_WIDTH: 0.05,          // lane half-width (radians).
-  MW_RIFT_EDGE: 0.9,            // soft-edge fraction (the mask ramps 0→1 over this).
+  // The Great Rift — the dark dust lane that SPLITS the band lengthwise. This is
+  // the band's second most recognisable feature after the band itself, and it was
+  // previously both half-missing and far too narrow to read:
+  //   - it ran l=0 → 80° only, stopping dead at Sagittarius. The published extent
+  //     runs Cygnus → Serpens-Aquila → Ophiuchus → Sagittarius → CENTAURUS, so the
+  //     entire Sgr-to-Centaurus half of the feature was simply absent.
+  //   - the half-width was 0.05 rad (5.7° full) against a band ~29° wide. The rift
+  //     "appears as clear as the bright bulge" and "divides the bright band
+  //     vertically" — it cannot do that at 20% of the band's width.
+  // Published span: Cygnus l≈80° to Centaurus l≈310° (= −50°), which is ~130° of
+  // longitude, matching "the Great Rift covers one third of the Milky Way".
+  MW_RIFT_LONG_MIN: -0.87,      // radians — Centaurus end (l≈310°).
+  MW_RIFT_LONG_MAX: 1.40,       // radians — Cygnus end (l≈80°, Northern Coalsack).
+  MW_RIFT_OFFSET: -0.03,        // latitude offset of the lane centre (radians off-plane),
+                                // so the lane splits the band into two flanking strips.
+  MW_RIFT_WIDTH: 0.075,         // lane half-width (radians, ~4.3°) at the narrow Cygnus end.
+                                // Sized to SPLIT the ~29°-wide band into two flanking
+                                // strips, not to erase it: at 0.09 with a 2.2 broadening
+                                // the lane reached 20° at Sagittarius and swallowed the
+                                // bright bulge, which the rift obscures but does not
+                                // remove — the Sagittarius star clouds still flank it.
+  MW_RIFT_BROADEN: 1.5,         // width multiplier where it broadens out (~12° full at Sgr).
+  MW_RIFT_BROADEN_LONG: 0.26,   // radians — Ophiuchus (l≈15°), where the rift is widest.
+  MW_RIFT_BROADEN_WIDTH: 0.55,  // radians — how far the broadening reaches along the lane.
+  MW_RIFT_DEPTH: 0.06,          // residual density in the lane core. The rift is dust
+                                // obscuration, not an empty hole, so keep a few stars.
+  MW_RIFT_EDGE: 0.9,            // soft-edge fraction (the mask ramps depth→1 over this).
   // Cygnus star-cloud enhancement (the bright cloud around Cygnus).
   MW_CYGNUS_LONG: 1.4,          // radians (l≈80°).
   MW_CYGNUS_WIDTH: 0.25,        // gaussian width (radians).
@@ -463,6 +549,45 @@ export const Constants = {
   // the two terms for BOTH the builder and the test (they were separate before,
   // which is how a 1.35× inversion passed a "density falls monotonically" test).
   MW_CYGNUS_BOOST: 1.25,
+
+  // ---- Bright star clouds: the band is PATCHY, not a smooth glow -----------
+  // The Milky Way's naked-eye character comes from discrete bright knots flanking
+  // the Great Rift. These are placed from PUBLISHED coordinates only.
+  //
+  // Researched, and most of the famous names turned out to be unusable: the
+  // Scutum, Cygnus and Norma Star Clouds have NO published coordinates or extent
+  // — no dedicated catalogue entry, no SIMBAD record under those names, they appear
+  // only as examples in prose. Rather than invent plausible positions for them,
+  // they are omitted. (Cygnus still gets its longitude density boost above, which
+  // is a separate, already-tested mechanism.)
+  //
+  // Positions are RA (hours) / Dec (degrees), J2000, converted with raDecToUnit at
+  // build time. Sizes are the published apparent extents, as half-widths here.
+  // Semi-axes are HALF the published apparent size (a = along RA, b = along Dec).
+  MW_STAR_CLOUDS: [
+    // Wikipedia, "Large Sagittarius Star Cloud": apparent size 6°x4°. NOTE the
+    // source gives RA/Dec only to whole hour/degree, so this is a rough locator
+    // by the source's own admission — good enough for a diffuse 6° cloud.
+    { name: 'Large Sagittarius Star Cloud', ra: 18.0,   dec: -29.0,   aDeg: 3.0, bDeg: 2.0 },
+    // Wikipedia, "Small Sagittarius Star Cloud" (M24 / IC 4715), citing O'Meara,
+    // The Messier Objects (2014) p.117: apparent size 2°x1°.
+    { name: 'Small Sagittarius Star Cloud', ra: 18.283, dec: -18.483, aDeg: 1.0, bDeg: 0.5 },
+    // Wikipedia, "Carina Nebula" (NGC 3372), NGC/IC Project data: 120'x120'. Not a
+    // star cloud proper, but it is the bright naked-eye knot of the Carina Milky Way.
+    { name: 'Carina Nebula',                ra: 10.752, dec: -59.868, aDeg: 1.0, bDeg: 1.0 },
+  ],
+  // Fraction of band points redirected into the clouds. Presence comes from DENSITY,
+  // never from per-point brightness — boosting brightness would break the "no band
+  // point out-peaks a star" cap (see MW_OPACITY).
+  //
+  // DERIVED, because eyeballing this failed twice. The clouds total ~23.6 sq deg and
+  // the band's ambient density near the galactic centre is ~5 points/sq deg, so they
+  // already contain ~117 points before any boost. A real star cloud is a 2-3x
+  // brightening of the surrounding band, so the extra budget is only ~120-230 points:
+  //     2.0x -> 0.0056     2.5x -> 0.0084     3.0x -> 0.0112
+  // 0.14 and 0.05 were tried and both rendered as globular clusters with a visible
+  // rim — 0.05 is a 10x spike, which is a cluster by definition, not a cloud.
+  MW_CLOUD_EXTRA_FRACTION: 0.011,
 
   // =========================================================================
   // SUN / MOON / PLANETS (SunLight.js) — the naked-eye bodies

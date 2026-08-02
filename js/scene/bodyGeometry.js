@@ -110,8 +110,30 @@ export function glareVisibleFraction(alphaFloor, stops = SUN_GLARE_STOPS) {
 export const SATURN_RING = {
   globeFraction: 0.19,   // globe radius as a fraction of the texture's half-width
   outer: 2.27,           // A ring outer edge, in globe radii (real value)
+  inner: 1.52,           // B ring INNER edge, in globe radii (real value). Was 1.24 —
+                         // the C ring's inner edge — which was left behind when the
+                         // faint C ring was dropped as sub-pixel. That inconsistency is
+                         // what made Saturn read as a solid diamond: with the ring plane
+                         // squashed to 0.36, an annulus starting at 1.24 has its hole
+                         // (1.24 × 0.36 = 0.45 globe radii tall) entirely hidden behind
+                         // the globe, so globe and rings fused into one convex lozenge.
+                         // At the real B-ring edge the hole clears the globe and the
+                         // ansae show sky — the strongest "this is a ring" cue there is.
   tilt: -0.34,           // ring-plane tilt (rad) — "wide open" classic view
   squash: 0.36,          // ring opening (minor/major)
+  // Two bands, inner→outer, in globe radii. The real system has four parts (C
+  // ring, B ring, Cassini Division, A ring) and all four are sub-pixel at this
+  // size, so they averaged into one flat smear. Kept: the bright B ring and the
+  // dimmer A ring, split at the midpoint. The contrast comes from DARKENING the
+  // outer band — the inner one is already near the top of the tone curve, where
+  // an opacity change of 0.92 → 1.0 moves it by about one byte value.
+  get bands() {
+    const mid = (this.inner + this.outer) / 2;
+    return [
+      { rIn: this.inner, rOut: mid,        rgb: '232, 214, 176', alpha: 0.92 }, // B ring
+      { rIn: mid,        rOut: this.outer, rgb: '138, 122,  94', alpha: 0.45 }, // A ring
+    ];
+  },
   // Fraction of the square texture the drawn rings actually span:
   // 2 × outer × globeFraction. The plan's trap 2 — the rings do NOT fill the
   // texture, so the plane must be sized larger than the intended ring span.

@@ -368,11 +368,20 @@ export function mwCenterProfile(L, contrast) {
  */
 export function mwGreatRiftMask(L, latOff, p) {
   if (L < p.longMin || L > p.longMax) return 1;
-  const d = Math.abs(latOff - p.offset) / p.width;
+  // The rift BROADENS toward Ophiuchus/Sagittarius. Published description: it
+  // starts as the compact Northern Coalsack in Cygnus, runs through the
+  // Serpens-Aquila Rift, "broadens out" at Ophiuchus, and obscures the Galactic
+  // Centre in Sagittarius. So the lane is narrow at the Cygnus end and widest
+  // near l ≈ 15°, which a single fixed width cannot express.
+  const g = (L - p.broadenLong) / Math.max(1e-6, p.broadenWidth);
+  const width = p.width * (1 + (p.broaden - 1) * Math.exp(-g * g));
+  const d = Math.abs(latOff - p.offset) / width;
   if (d >= 1) return 1;
-  // Smooth ramp: 0 at the lane centre, 1 at `edge`×width and beyond.
+  // Smooth ramp from the lane centre outward. `depth` is the residual density in
+  // the core — the rift is dust obscuration, not a hole, so a few stars remain.
   const t = Math.min(1, d / Math.max(1e-6, p.edge));
-  return t * t * (3 - 2 * t);   // smoothstep
+  const ramp = t * t * (3 - 2 * t);   // smoothstep
+  return p.depth + (1 - p.depth) * ramp;
 }
 
 /**
