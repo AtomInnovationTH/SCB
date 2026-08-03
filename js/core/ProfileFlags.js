@@ -26,6 +26,14 @@
  *                            disableBloom + disableSMAA + disableClouds +
  *                            disableAtmosphere + msaa=0 + pixelRatio=1 in
  *                            ONE session.
+ *   `?pinTier=1`           — dev-only: suppress the ADAPTIVE tier changes (both
+ *                            the FPS-history `runtimeAdapt` and the GPU-probe
+ *                            downshift in [`main.js`](js/main.js:1)) so a run
+ *                            HOLDS the `?tier=` override for its whole duration.
+ *                            Unlike `?autoProfile=1` it does NOT start the GPU
+ *                            sweep. Used by the net capture harness to shoot at
+ *                            a known tier instead of the silently-downshifted
+ *                            LOW that degraded every earlier capture.
  *   `?disableEarthNoise=1` — compile out the [`Earth`](js/scene/Earth.js:104)
  *                            fragment shader's 7-octave noise stack (forces
  *                            `LOW_DETAIL` regardless of quality tier).
@@ -90,6 +98,8 @@ function readFloatInRange(params, key, min, max) {
  *
  * @typedef {object} ProfileFlags
  * @property {boolean} profilePasses
+ * @property {boolean} autoProfile
+ * @property {boolean} pinTier                  — suppress adaptive tier changes (dev-only)
  * @property {boolean} disableEarthNoise
  * @property {boolean} disableBloom
  * @property {boolean} disableSMAA
