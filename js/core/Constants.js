@@ -2450,19 +2450,6 @@ export const Constants = {
     CONTACT_COMPRESS_FRAC: 0.08,    // mouthRadius × this — press depth at the seat
     CONTACT_FLASH_PEAK: 1.5,        // rim-node emissive bump at first touch (sub-bloom)
     CONTACT_FLASH_SETTLE_S: 0.6,    // seconds the touch glow takes to settle
-    // V9 — density LOD: 20×6 is sparse at the close ceremony framing. Raise the
-    // web when the camera is near, drop at distance; folded into the D.8 tier
-    // gate (LOW tier always FAR). Applied via NetMeshKit.setDensity behind a
-    // hysteresis band (near < 30 m, far > 80 m) so rebuilds are rare.
-    // NOT WIRED TO ANYTHING (net-look remediation, Task 2): the update-loop
-    // consumer was removed after measurement showed the shipped web stuck at
-    // 12×4. Kept + tested pending the Task 3 keep/delete decision.
-    LOD_NEAR_SPOKES:    32,   // fine web at the close ceremony camera
-    LOD_NEAR_RINGS:     9,
-    LOD_FAR_SPOKES:     12,   // sparse at distance / LOW tier
-    LOD_FAR_RINGS:      4,
-    LOD_NEAR_RANGE_M:   30,   // m — enter the dense web inside this range
-    LOD_FAR_RANGE_M:    80,   // m — drop to the sparse web outside this range
     // V2 — lit membrane under the threads (the hybrid web). A MeshPhysicalMaterial
     // film driven by the SAME drape functions as the threads, so sun + earthshine
     // read on the bag while the web reveals the catch through it. Inherits the

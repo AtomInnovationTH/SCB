@@ -106,7 +106,7 @@ import { persistenceManager } from './systems/PersistenceManager.js';
 import { StrategicMap } from './ui/StrategicMap.js';
 import { captureNetVisual } from './ui/CaptureNetVisual.js';
 import { furnaceBreakdownVisual } from './ui/FurnaceBreakdownVisual.js';
-import { captureNetSystem } from './entities/CaptureNet.js';
+import { captureNetSystem, computeLeadAim } from './entities/CaptureNet.js';
 import perfReportOverlay, { captureBootInfo } from './ui/PerfReportOverlay.js';
 import { isAvifSupported } from './scene/Earth.js';
 import { profileFlags } from './core/ProfileFlags.js';
@@ -1941,7 +1941,34 @@ async function init() {
             ? player.getNetPodPosition(0) : playerPos;
           const b = new THREE.Vector3(pinnedPos.x - posScene.x, pinnedPos.y - posScene.y, pinnedPos.z - posScene.z);
           if (b.lengthSq() > 0) b.normalize();
-          const dir = { x: b.x, y: b.y, z: b.z };
+          let dir = { x: b.x, y: b.y, z: b.z };
+          // Lead the pinned whale (net-look remediation Task 4): the whale rides
+          // the rotating co-orbital/LVLH pin frame while the net flies a FROZEN
+          // world-space line, so a no-lead (.position-only) shot drifts ~1.5 m
+          // off-axis by intercept (measured 2026-08-03) and the net brakes
+          // beside the whale instead of through its mouth. Feed the SAME lead
+          // solution the game uses (computeLeadAim) with the pin-point's
+          // rotational velocity relVel = ω × r_pin, ω = orbital mean motion about
+          // the orbit normal, r_pin = pinned whale − ship. Stable target is the
+          // analytic pinnedPos (whale._scenePosition is transient ~1000 m off
+          // for a frame right after staging). Unit system: scene units.
+          try {
+            const axis = new THREE.Vector3().crossVectors(
+              new THREE.Vector3(_cp.x, _cp.y, _cp.z),
+              new THREE.Vector3(_cv.x, _cv.y, _cv.z));
+            if (axis.lengthSq() > 1e-30) {
+              axis.normalize();
+              const orbR = Math.hypot(_cp.x, _cp.y, _cp.z) || 1;
+              const nOrbit = Math.hypot(_cv.x, _cv.y, _cv.z) / orbR;   // mean motion (rad/s)
+              const rPin = new THREE.Vector3(
+                pinnedPos.x - playerPos.x, pinnedPos.y - playerPos.y, pinnedPos.z - playerPos.z);
+              const omega = axis.multiplyScalar(nOrbit);
+              const relVel = new THREE.Vector3().crossVectors(omega, rPin);
+              const launchSpeedScene = 10 * M;   // LARGE LAUNCH_SPEED, scene units/s
+              const lead = computeLeadAim(posScene, pinnedPos, relVel, launchSpeedScene);
+              if (lead && lead.dir) dir = { x: lead.dir.x, y: lead.dir.y, z: lead.dir.z };
+            }
+          } catch (_e) { /* direct bearing fallback */ }
           // TRAP (plan §0): the pod accessor returns SCENE UNITS,
           // NetProjectile works in METRES — divide by M.
           const posMetres = { x: posScene.x / M, y: posScene.y / M, z: posScene.z / M };
@@ -1966,6 +1993,29 @@ async function init() {
           const offOk  = eventBus.on(Events.NET_CATCH_SUCCESS, release);
           const offNo  = eventBus.on(Events.NET_CATCH_MISS, release);
           _scenarioPinReleaseOff = () => { offOk?.(); offNo?.(); };
+
+          // ── Scenario fire-time forensics (net-look remediation Task 4) ──
+          // The net flies a frozen world-space line, so WHICH point it aims at
+          // decides whether the whale passes through the mouth. Report the lead
+          // direction vs the direct bearing, and the resulting aimed world point
+          // vs the whale's live rendered position, ship-relative metres.
+          try {
+            const ship = player.getPosition?.();
+            const rel = (v) => (v && ship)
+              ? [+((v.x - ship.x) / M).toFixed(2), +((v.y - ship.y) / M).toFixed(2), +((v.z - ship.z) / M).toFixed(2)]
+              : null;
+            const sp = whale?._scenePosition;
+            const muzzRel = rel(posScene);
+            const aimRel = rel(pinnedPos);
+            const whaleRel = rel(sp);
+            const leadPoint = { x: posScene.x + dir.x * 25 * M, y: posScene.y + dir.y * 25 * M, z: posScene.z + dir.z * 25 * M };
+            const leadRel = rel(leadPoint);
+            let whaleAimGap = null;
+            if (sp && leadPoint) {
+              whaleAimGap = +(Math.hypot(sp.x - leadPoint.x, sp.y - leadPoint.y, sp.z - leadPoint.z) / M).toFixed(2);
+            }
+            console.info(`[netScenario/fire] muzzle=${JSON.stringify(muzzRel)} aim(prograde+25m)=${JSON.stringify(aimRel)} leadDir=[${dir.x.toFixed(4)},${dir.y.toFixed(4)},${dir.z.toFixed(4)}] leadAim25m=${JSON.stringify(leadRel)} whaleLive=${JSON.stringify(whaleRel)} whaleAimGapM=${whaleAimGap}`);
+          } catch (_e) { /* best-effort */ }
 
           const net = captureNetSystem.fireMotherNet(0, posMetres, dir, whale);
           if (!net) { release(); return { ok: false, reason: 'fire refused (magazine / cooldown / launcher blocked)' }; }
@@ -2462,7 +2512,7 @@ function gameLoop(timestamp) {
     // configurations (otherwise the disable-X delta-vs-baseline is measuring
     // tier-change drift instead of the toggled feature). Skip runtimeAdapt
     // entirely while a profile sweep session is live.
-    if (sceneManager && gameState.isGameplay() && !profileFlags.autoProfile && timestamp >= _perfSettleUntil && (_framesSinceLastTierChange % _ADAPT_CHECK_INTERVAL) === 0) {
+    if (sceneManager && gameState.isGameplay() && !profileFlags.autoProfile && !profileFlags.pinTier && timestamp >= _perfSettleUntil && (_framesSinceLastTierChange % _ADAPT_CHECK_INTERVAL) === 0) {
       const decision = runtimeAdapt({
         currentTier: sceneManager.currentTier,
         fpsHistory: _fpsHistory,
@@ -2958,7 +3008,7 @@ function gameLoop(timestamp) {
       // fixed tier; an auto-downshift in the first 0.5 s of the session
       // would render every later config's delta meaningless. The downshift
       // recommendation is still logged for visibility.
-      if (medianMs > threshold && sceneManager.currentTier !== 'LOW' && !profileFlags.autoProfile) {
+      if (medianMs > threshold && sceneManager.currentTier !== 'LOW' && !profileFlags.autoProfile && !profileFlags.pinTier) {
         // Find one step down from the current tier
         const idx = TIER_ORDER.indexOf(sceneManager.currentTier);
         const nextTier = (idx >= 0 && idx < TIER_ORDER.length - 1)
@@ -2974,8 +3024,8 @@ function gameLoop(timestamp) {
           to: nextTier,
           reason: 'gpu-probe',
         });
-      } else if (medianMs > threshold && profileFlags.autoProfile) {
-        console.log(`[Perf] GPU probe: median ${medianMs.toFixed(1)}ms > ${threshold}ms but tier downshift suppressed (?autoProfile=1)`);
+      } else if (medianMs > threshold && (profileFlags.autoProfile || profileFlags.pinTier)) {
+        console.log(`[Perf] GPU probe: median ${medianMs.toFixed(1)}ms > ${threshold}ms but tier downshift suppressed (?autoProfile=1 or ?pinTier=1)`);
       }
       // Sprint 3 GPU profiling: keep the probe alive when `?autoProfile=1`
       // is set. Otherwise dispose to free GL queries (the original PR 6

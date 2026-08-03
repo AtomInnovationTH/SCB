@@ -103,45 +103,6 @@ function resolveNetId(payload) {
   return { key: 'arm_0', armIndex: 0, podIndex: -1 };
 }
 
-/**
- * V9 density-LOD level decision — a PURE function so the hysteresis is
- * reviewable and testable without a scene. `NetMeshKit.setDensity` reallocates
- * the web + membrane buffers, so the only thing standing between the LOD and a
- * per-frame rebuild storm is this band logic; it deserves to be pinned by tests
- * rather than inlined in the update loop as two interleaved if/else chains.
- *
- * NOT WIRED TO ANYTHING (net-look remediation, Task 2): the update-loop caller
- * was removed after measurement showed the shipped web stuck at 12×4 for the
- * whole ceremony. Kept + tested pending the Task 3 keep/delete decision.
- *
- * Bands (m, camera→net): enter `near` below `nearM`, leave it above `nearM + 12`;
- * enter `far` above `farM`, leave it below `farM - 18`. Anything in between keeps
- * the current level — that overlap IS the hysteresis. LOW tier (garnish off)
- * forces `far` and pins it there.
- *
- * @param {'near'|'default'|'far'} current level in force this frame
- * @param {number} camD camera→net distance in metres
- * @param {boolean} garnishOn D.8 tier gate (`false` at LOW tier)
- * @param {number} nearM near-band entry range
- * @param {number} farM far-band entry range
- * @returns {'near'|'default'|'far'} the level to run
- */
-export function nextLodLevel(current, camD, garnishOn, nearM, farM) {
-  if (!garnishOn) return 'far';
-  let level = current || 'default';
-  if (level === 'near') {
-    if (camD > nearM + 12) level = 'default';        // leave near (hysteresis gap)
-  } else if (camD < nearM) {
-    level = 'near';                                  // enter near
-  }
-  if (level === 'far') {
-    if (camD < farM - 18) level = 'default';         // leave far (hysteresis gap)
-  } else if (camD > farM) {
-    level = 'far';                                   // enter far
-  }
-  return level;
-}
-
 export class CaptureNetVisual {
   constructor() {
     /** @type {THREE.Scene|null} */

@@ -113,6 +113,7 @@ function parseFromLocation() {
   const defaults = {
     profilePasses: false,
     autoProfile: false,
+    pinTier: false,
     disableEarthNoise: false,
     disableBloom: false,
     disableSMAA: false,
@@ -138,6 +139,7 @@ function parseFromLocation() {
   const flags = {
     profilePasses: params.get('profilePasses') === '1',
     autoProfile: params.get('autoProfile') === '1',
+    pinTier: params.get('pinTier') === '1',
     disableEarthNoise: params.get('disableEarthNoise') === '1',
     disableBloom: params.get('disableBloom') === '1',
     disableSMAA: params.get('disableSMAA') === '1',
@@ -151,6 +153,7 @@ function parseFromLocation() {
   flags.anyEnabled =
     flags.profilePasses ||
     flags.autoProfile ||
+    flags.pinTier ||
     flags.disableEarthNoise ||
     flags.disableBloom ||
     flags.disableSMAA ||
@@ -190,6 +193,7 @@ export function _parseForTest(search) {
   const out = {
     profilePasses: params.get('profilePasses') === '1',
     autoProfile: params.get('autoProfile') === '1',
+    pinTier: params.get('pinTier') === '1',
     disableEarthNoise: params.get('disableEarthNoise') === '1',
     disableBloom: params.get('disableBloom') === '1',
     disableSMAA: params.get('disableSMAA') === '1',
@@ -202,6 +206,7 @@ export function _parseForTest(search) {
   out.anyEnabled =
     out.profilePasses ||
     out.autoProfile ||
+    out.pinTier ||
     out.disableEarthNoise ||
     out.disableBloom ||
     out.disableSMAA ||
