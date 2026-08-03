@@ -248,6 +248,11 @@ function updateMembraneLattice(out, p) {
   const jigP = p.jigglePhase ?? 0;
   const jigA = p.jiggleAmp ?? 0;
   const closed = NET_CER.DRAWSTRING_RADIUS_FRAC_CLOSED;
+  // V8: contact compression — an inward dent where the catch presses into the
+  // bag, peaked at the catch's seat (p.contactT, default ¾ toward the mouth)
+  // and scaled by the same drape parameter driving ENVELOP.
+  const compressM = p.compressM ?? 0;
+  const contactT = p.contactT ?? 0.75;
   const cosA = (p.cosA && p.cosA.length === radialSpokes) ? p.cosA : null;
   const sinA = (p.sinA && p.sinA.length === radialSpokes) ? p.sinA : null;
   const angA = (p.angA && p.angA.length === radialSpokes) ? p.angA : null;
@@ -259,7 +264,11 @@ function updateMembraneLattice(out, p) {
       const a  = angA ? angA[s] : (2 * Math.PI * s) / radialSpokes;
       const ca = cosA ? cosA[s] : Math.cos(a);
       const sa = sinA ? sinA[s] : Math.sin(a);
-      const r = drapeRingRadius(t, a, mouthRadius, drape, cinch, closed, jigA, jigP);
+      let r = drapeRingRadius(t, a, mouthRadius, drape, cinch, closed, jigA, jigP);
+      if (compressM > 0 && drape > 0) {
+        const g = (t - contactT) / 0.18;
+        r = Math.max(0, r - drape * compressM * Math.exp(-g * g));
+      }
       out[idx++] = ca * r; out[idx++] = sa * r; out[idx++] = z;
     }
   }
@@ -532,6 +541,8 @@ export const NetMeshKit = {
       _jigglePhase: 0,
       _jiggleAmp: 0,
       _flashPeakT: null,   // V6: wall-clock when cinchFrac first reached 0.85
+      _contactFlashT: null, // V8: wall-clock of the drape's rising edge (first touch)
+      _drapePrev: 0,       // V8: previous frame's drape (rising-edge detect)
       // P2: cached per-spoke trig (projection is fixed; only jiggle recomputes)
       _cosA,
       _sinA,
@@ -756,6 +767,9 @@ export const NetMeshKit = {
         cosA: h._cosA,
         sinA: h._sinA,
         angA: h._angA,
+        // V8: contact compression — the film (not the threads) dents where the
+        // catch presses, depth from the SSOT fraction of the mouth radius.
+        compressM: NET_WEB.CONTACT_COMPRESS_FRAC * h.mouthRadius,
       });
       h.membraneMesh.geometry.attributes.position.needsUpdate = true;
       h.membraneMesh.geometry.computeVertexNormals();
@@ -779,6 +793,18 @@ export const NetMeshKit = {
         ei = baseEI + (peakEI - baseEI) * ((cinchFrac - 0.6) / 0.25);
       } else {
         h._flashPeakT = null;
+      }
+      // V8: contact rim light — the drape's rising edge marks the bag's first
+      // touch of the catch; a brief sub-bloom bump settles over
+      // CONTACT_FLASH_SETTLE_S (V6's cinch flash owns the bloom crossing).
+      // Cleared at drape 0 so the next touch re-arms cleanly.
+      if (drape <= 0) h._contactFlashT = null;
+      if (drape > 0 && (h._drapePrev ?? 0) <= 0) h._contactFlashT = now;
+      h._drapePrev = drape;
+      if (h._contactFlashT != null) {
+        const settle = Math.max(0, 1 - (now - h._contactFlashT) / NET_WEB.CONTACT_FLASH_SETTLE_S);
+        if (settle <= 0) h._contactFlashT = null;
+        else ei = Math.max(ei, baseEI + (NET_WEB.CONTACT_FLASH_PEAK - baseEI) * settle);
       }
       for (const m of h.rimWeightMats) m.emissiveIntensity = ei;
     }

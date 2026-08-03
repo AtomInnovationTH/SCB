@@ -2443,6 +2443,13 @@ export const Constants = {
     NODE_EMISSIVE_BASE: 0.6,        // resting rim-node glint (sub-bloom)
     NODE_EMISSIVE_CINCH_PEAK: 3.2,  // cinch flash peak — 28% over the 2.5 threshold
     NODE_FLASH_SETTLE_S: 1.2,       // seconds to decay peak → base after the weld
+    // V8 — sell contact: the membrane compresses where the catch presses into
+    // the bag (an inward dent peaked at the catch's seat, scaled by the same
+    // drape parameter driving ENVELOP), and a brief sub-bloom rim light marks
+    // the first touch (V6's cinch flash owns the bloom crossing).
+    CONTACT_COMPRESS_FRAC: 0.08,    // mouthRadius × this — press depth at the seat
+    CONTACT_FLASH_PEAK: 1.5,        // rim-node emissive bump at first touch (sub-bloom)
+    CONTACT_FLASH_SETTLE_S: 0.6,    // seconds the touch glow takes to settle
     // V2 — lit membrane under the threads (the hybrid web). A MeshPhysicalMaterial
     // film driven by the SAME drape functions as the threads, so sun + earthshine
     // read on the bag while the web reveals the catch through it. Inherits the
