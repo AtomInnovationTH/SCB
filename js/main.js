@@ -28,6 +28,7 @@ import { DebrisField } from './entities/DebrisField.js';
 import { ActiveSatellites } from './entities/ActiveSatellite.js';
 import { ArmManager } from './entities/ArmManager.js';
 import { orbitToSceneCartesianInto } from './entities/OrbitalMechanics.js';
+import { CeremonyTimeScale } from './systems/CeremonyTimeScale.js';
 
 // Systems
 import { scoringSystem } from './systems/ScoringSystem.js';
@@ -2027,6 +2028,11 @@ async function init() {
             sameAsMapRef:  debrisField?.debrisMap?.get(whale?.id) === whale,
             sameAsListRef: debrisField?.debrisList?.find(d => d && d.id === whale?.id) === whale,
             alive:         whale?.alive,
+            // Validation: must read 1 after every scenario run (the ceremony
+            // releases the time scale on exit; a stuck value would dilate the
+            // whole world).
+            ceremonyTimeScale: (typeof CeremonyTimeScale !== 'undefined' && CeremonyTimeScale.get)
+              ? +CeremonyTimeScale.get().toFixed(3) : null,
             // P0a: sun state for the determinism contract. The capture scripts
             // pin _sunPhase0/_sunYaw0/elapsedTime before staging (the defaults
             // are seeded from the real wall clock — SunLight._seedSkyFromClock
