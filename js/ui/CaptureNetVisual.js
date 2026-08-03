@@ -110,6 +110,10 @@ function resolveNetId(payload) {
  * per-frame rebuild storm is this band logic; it deserves to be pinned by tests
  * rather than inlined in the update loop as two interleaved if/else chains.
  *
+ * NOT WIRED TO ANYTHING (net-look remediation, Task 2): the update-loop caller
+ * was removed after measurement showed the shipped web stuck at 12×4 for the
+ * whole ceremony. Kept + tested pending the Task 3 keep/delete decision.
+ *
  * Bands (m, camera→net): enter `near` below `nearM`, leave it above `nearM + 12`;
  * enter `far` above `farM`, leave it below `farM - 18`. Anything in between keeps
  * the current level — that overlap IS the hysteresis. LOW tier (garnish off)
@@ -587,26 +591,6 @@ export class CaptureNetVisual {
         net.position.y * M,
         net.position.z * M,
       );
-
-      // ── V9 density LOD: raise the web when the ceremony camera is near,
-      // drop at distance; LOW tier always sparse (folded into the D.8 gate).
-      // Applied via NetMeshKit.setDensity behind a hysteresis band so the
-      // density rebuild (a real reallocation) stays rare — never per-frame.
-      if (vis.kitHandle && this._sceneManager?.camera) {
-        const NW = Constants.NET_WEB;
-        const camD = group.position.distanceTo(this._sceneManager.camera.position) / M;
-        // C0 rule: read the SSOT directly, no `?? <fallback>` — a missing key
-        // must throw loudly, not silently substitute a made-up range.
-        const level = nextLodLevel(
-          vis._lodLevel, camD, this._garnishOn(), NW.LOD_NEAR_RANGE_M, NW.LOD_FAR_RANGE_M,
-        );
-        if (level !== vis._lodLevel) {
-          vis._lodLevel = level;
-          if (level === 'near') NetMeshKit.setDensity(vis.kitHandle, NW.LOD_NEAR_SPOKES, NW.LOD_NEAR_RINGS);
-          else if (level === 'far') NetMeshKit.setDensity(vis.kitHandle, NW.LOD_FAR_SPOKES, NW.LOD_FAR_RINGS);
-          else NetMeshKit.setDensity(vis.kitHandle, NW.RADIAL_SPOKES, NW.RING_COUNT);
-        }
-      }
 
       // ── State-driven visibility + appearance ──
       // ── Ceremony path: separate state handler ──

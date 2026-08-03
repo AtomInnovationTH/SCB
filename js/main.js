@@ -2006,6 +2006,12 @@ async function init() {
           return {
             netState:      net?.state ?? null,
             catchResult:   net?.catchResult ?? null,
+            // Live perf tier. Written in exactly two places, both inside
+            // SceneManager (:95 initial via _detectInitialTier, :562 inside
+            // applyTier), so a plain read here is race-free. Reported on every
+            // probe call so a capture run cannot quietly drift back into
+            // measuring the LOW-tier degraded path while claiming otherwise.
+            tier:          sceneManager?.currentTier ?? null,
             flightTime:    net ? +net.flightTime.toFixed(2) : null,
             travelledM:    net ? +net.distanceTraveled.toFixed(1) : null,
             whaleDistM:    whaleDistM != null ? +whaleDistM.toFixed(1) : null,
@@ -2085,6 +2091,45 @@ async function init() {
               const fwd = (whale?._onboardingPinFwd || 0);
               const ex = pp.x + f.x * fwd, ey = pp.y + f.y * fwd, ez = pp.z + f.z * fwd;
               return +(Math.hypot(sp.x - ex, sp.y - ey, sp.z - ez) / M).toFixed(1);
+            })(),
+            // ── Net-visual density forensics (net-look remediation, Task 0) ──
+            // Per-visual web density, LOD level and camera distance, keyed by
+            // visual key ('pod_0', 'arm_1', …). The V9 regression — the shipped
+            // web stuck at 12×4 (60 membrane verts) instead of the 20×6 build
+            // density (140) — was invisible to every test because they exercise
+            // setDensity/nextLodLevel in isolation and no sceneManager stub
+            // ever had a camera. memVerts is DERIVED from the membrane buffer
+            // (NetMeshKit sizes it (rings+1) × radialSpokes × 3), not invented.
+            nets: (() => {
+              try {
+                const cam = sceneManager?.camera;
+                const shipP = player?.getPosition?.();
+                const relM = (v) => (v && shipP)
+                  ? [+((v.x - shipP.x) / M).toFixed(1), +((v.y - shipP.y) / M).toFixed(1), +((v.z - shipP.z) / M).toFixed(1)]
+                  : null;
+                const visuals = {};
+                for (const [vKey, vis] of (captureNetVisual?._activeVisuals ?? [])) {
+                  const kh = vis.kitHandle;
+                  const gp = vis.group?.position;
+                  visuals[vKey] = {
+                    state: vis.detached ? 'detached'
+                      : (captureNetVisual._getNet?.(vis.armIndex, vis.podIndex)?.state ?? null),
+                    radialSpokes: kh?.radialSpokes ?? null,
+                    rings: kh?.rings ?? null,
+                    memVerts: kh?.membranePositions ? kh.membranePositions.length / 3 : null,
+                    lodLevel: vis._lodLevel ?? null,
+                    // Same expression the V9 LOD block used: vis.group is added
+                    // directly to the scene, so .position IS world space.
+                    camDM: (cam && gp) ? +(gp.distanceTo(cam.position) / M).toFixed(1) : null,
+                    groupRelShipM: relM(gp),
+                  };
+                }
+                return {
+                  count: captureNetVisual?._activeVisuals?.size ?? 0,
+                  cameraRelShipM: relM(cam?.position),
+                  visuals,
+                };
+              } catch { return null; }
             })(),
             // ── P1.1 ceremony-camera forensics (harness-only) ──
             // The captured/reel/secured beats land inside SECURED_SETTLE, whose

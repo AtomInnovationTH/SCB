@@ -2454,6 +2454,9 @@ export const Constants = {
     // web when the camera is near, drop at distance; folded into the D.8 tier
     // gate (LOW tier always FAR). Applied via NetMeshKit.setDensity behind a
     // hysteresis band (near < 30 m, far > 80 m) so rebuilds are rare.
+    // NOT WIRED TO ANYTHING (net-look remediation, Task 2): the update-loop
+    // consumer was removed after measurement showed the shipped web stuck at
+    // 12×4. Kept + tested pending the Task 3 keep/delete decision.
     LOD_NEAR_SPOKES:    32,   // fine web at the close ceremony camera
     LOD_NEAR_RINGS:     9,
     LOD_FAR_SPOKES:     12,   // sparse at distance / LOW tier

@@ -690,6 +690,11 @@ export const NetMeshKit = {
    * be rare — the consumer gates it behind a hysteresis band + the D.8 tier
    * gate, never per-frame. No-op at the current density. Re-seeds the current
    * drape state after the rebuild so the web doesn't pop.
+   *
+   * NOT WIRED TO ANYTHING (net-look remediation, Task 2): the only caller was
+   * the CaptureNetVisual update-loop LOD block, removed after measurement
+   * showed it pinned the shipped web at 12×4. Kept + tested pending the
+   * Task 3 keep/delete decision.
    * @param {object} h handle
    * @param {number} radialSpokes
    * @param {number} rings
