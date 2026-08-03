@@ -43,6 +43,12 @@ const _q1  = new THREE.Quaternion();
 const _tugScratchPos = { x: 0, y: 0, z: 0 };
 const _tugScratchVel = { x: 0, y: 0, z: 0 };
 
+/** C1: base capture-tension readout (N) — one source for the three former
+ *  identical `1.0 + capturedMass × 0.1` sites. HUD-facing garnish only. */
+function baseCaptureTensionN(capturedMass) {
+  return 1.0 + capturedMass * 0.1;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // §1  Pure Functions — Cling Probability + Frag Risk
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1063,7 +1069,7 @@ export class NetProjectile {
         // hold at the base mass formula (legacy behaviour).
         this.tensionN = (this._snugTargetN != null)
           ? this._snugTargetN
-          : 1.0 + this.capturedMass * 0.1;
+          : baseCaptureTensionN(this.capturedMass);
         return;                       // hold: no completion while the arm hauls
       }
       this._heldByArm = false;        // delivered / lost → stow promptly
@@ -1080,7 +1086,7 @@ export class NetProjectile {
     }
 
     // Tension: base + mass factor (simplified — real model in ST-9.5)
-    this.tensionN = 1.0 + this.capturedMass * 0.1;
+    this.tensionN = baseCaptureTensionN(this.capturedMass);
 
     if (this.reelProgress >= 1.0) {
       this._transitionTo(STATES.STOWED);
@@ -1279,16 +1285,7 @@ export class NetProjectile {
 
     // Rotation lag: run the ship forward through a critically damped spring so
     // a mid-reel slew lags and settles instead of whipping the catch.
-    const fwdTarget = _v3a.set(0, 0, 1).applyQuaternion(player.quaternion).normalize();
-    const omega = 2 * Math.PI * 0.8;                    // ~0.8 Hz settle
-    const zeta = 1.0;                                   // critically damped
-    const k = omega * omega, c = 2 * zeta * omega;
-    _v3b.copy(fwdTarget).sub(this._fwdLagged);          // displacement
-    this._fwdLagged.addScaledVector(_v3b, Math.min(1, k * dt * dt + c * dt));
-    this._fwdLagged.normalize();
-
-    // Lateral decay (catch swings onto the boresight as it reels in).
-    this._lateral.multiplyScalar(Math.max(0, 1 - 2.0 * dt));
+    this._settleFwdLagged(player, dt);
 
     // Pin: pod + lagged-fwd · remainingM + lateral (scene units).
     const podWorld = (typeof player.getNetPodPositionInto === 'function')
@@ -1314,7 +1311,7 @@ export class NetProjectile {
     this.position.z = _v3d.z / M_NET;
 
     // Tension readout (HUD): base + mass factor, same shape as the daughter.
-    this.tensionN = 1.0 + this.capturedMass * 0.1;
+    this.tensionN = baseCaptureTensionN(this.capturedMass);
 
     // Completion → BERTHED.
     if (this._remainingM <= berthStandoffM + 1e-6) {
@@ -1474,13 +1471,7 @@ export class NetProjectile {
     const berthStandoffM = Math.max(baseStandoffM, this._effectiveStandoffM ?? baseStandoffM);
     this._remainingM = berthStandoffM;
 
-    const fwdTarget = _v3a.set(0, 0, 1).applyQuaternion(player.quaternion).normalize();
-    const omega = 2 * Math.PI * 0.8, zeta = 1.0;
-    const k = omega * omega, c = 2 * zeta * omega;
-    _v3b.copy(fwdTarget).sub(this._fwdLagged);
-    this._fwdLagged.addScaledVector(_v3b, Math.min(1, k * dt * dt + c * dt));
-    this._fwdLagged.normalize();
-    this._lateral.multiplyScalar(Math.max(0, 1 - 2.0 * dt));
+    this._settleFwdLagged(player, dt);
 
     // Phase D.7 (b) — berthed pendulum: the bundle swings on a critically
     // damped spring (~0.5 Hz, decays ~5 s), re-excited by RCS translation.
@@ -1546,6 +1537,27 @@ export class NetProjectile {
     this.position.y = _v3d.y / M_NET;
     this.position.z = _v3d.z / M_NET;
     return true;
+  }
+
+  /**
+   * @private C1: the reel/berth rotation-lag spring, hoisted from two identical
+   * inline sites (_updateMotherReel + updateBerthHold). Runs the ship forward
+   * through a critically damped spring (~0.8 Hz settle) so a mid-reel slew lags
+   * and settles instead of whipping the catch, and decays the lateral offset
+   * toward the boresight as the bundle reels in. Writes _fwdLagged + _lateral.
+   * @param {object} player — mother ship (quaternion read)
+   * @param {number} dt — seconds
+   */
+  _settleFwdLagged(player, dt) {
+    const fwdTarget = _v3a.set(0, 0, 1).applyQuaternion(player.quaternion).normalize();
+    const omega = 2 * Math.PI * 0.8;                    // ~0.8 Hz settle
+    const zeta = 1.0;                                   // critically damped
+    const k = omega * omega, c = 2 * zeta * omega;
+    _v3b.copy(fwdTarget).sub(this._fwdLagged);          // displacement
+    this._fwdLagged.addScaledVector(_v3b, Math.min(1, k * dt * dt + c * dt));
+    this._fwdLagged.normalize();
+    // Lateral decay (catch swings onto the boresight as it reels in).
+    this._lateral.multiplyScalar(Math.max(0, 1 - 2.0 * dt));
   }
 
   /**
@@ -2240,9 +2252,9 @@ export class CaptureNetSystem {
    * STOWED/RELEASED handling via the fade path; here we emit nothing visual —
    * the net is spliced out of activeNets by the caller, and _getNet then
    * returns null so the visual removes itself next frame.
-    * @param {NetProjectile} net
-    * @private
-    */
+   * @param {NetProjectile} net
+   * @private
+   */
   _teardownBerth(net) {
     this._clearCatchPins(net.targetDebris);
     net.isActive = false;
