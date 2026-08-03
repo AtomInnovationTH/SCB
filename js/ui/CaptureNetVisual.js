@@ -553,6 +553,28 @@ export class CaptureNetVisual {
         net.position.z * M,
       );
 
+      // ── V9 density LOD: raise the web when the ceremony camera is near,
+      // drop at distance; LOW tier always sparse (folded into the D.8 gate).
+      // Applied via NetMeshKit.setDensity behind a hysteresis band so the
+      // density rebuild (a real reallocation) stays rare — never per-frame.
+      if (vis.kitHandle && this._sceneManager?.camera) {
+        const NW = Constants.NET_WEB;
+        const camD = group.position.distanceTo(this._sceneManager.camera.position) / M;
+        const nearM = NW.LOD_NEAR_RANGE_M ?? 30, farM = NW.LOD_FAR_RANGE_M ?? 80;
+        let level = vis._lodLevel || 'default';
+        if (!this._garnishOn()) level = 'far';
+        else if (level === 'near' && camD > (nearM + 12)) level = 'default';
+        else if (level !== 'near' && camD < nearM) level = 'near';
+        if (level !== 'far' && camD > farM) level = 'far';
+        else if (level === 'far' && camD < (farM - 18) && this._garnishOn()) level = 'default';
+        if (level !== vis._lodLevel) {
+          vis._lodLevel = level;
+          if (level === 'near') NetMeshKit.setDensity(vis.kitHandle, NW.LOD_NEAR_SPOKES, NW.LOD_NEAR_RINGS);
+          else if (level === 'far') NetMeshKit.setDensity(vis.kitHandle, NW.LOD_FAR_SPOKES, NW.LOD_FAR_RINGS);
+          else NetMeshKit.setDensity(vis.kitHandle, NW.RADIAL_SPOKES, NW.RING_COUNT);
+        }
+      }
+
       // ── State-driven visibility + appearance ──
       // ── Ceremony path: separate state handler ──
       if (vis.useCeremony) {

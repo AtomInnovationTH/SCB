@@ -229,6 +229,21 @@ function buildWebPositionsDraped(out, p) {
   return out;
 }
 
+/** Membrane triangle index buffer for a (rings+1) × radialSpokes lattice.
+ *  Module-scope so build() and setDensity() share it (V9). */
+function buildMembraneIndex(radialSpokes, rings) {
+  const memIndex = [];
+  for (let k = 0; k < rings; k++) {
+    for (let s = 0; s < radialSpokes; s++) {
+      const s1 = (s + 1) % radialSpokes;
+      const a = k * radialSpokes + s, b = k * radialSpokes + s1;
+      const c = (k + 1) * radialSpokes + s, d = (k + 1) * radialSpokes + s1;
+      memIndex.push(a, c, b, b, c, d);
+    }
+  }
+  return memIndex;
+}
+
 /**
  * V2 — membrane lattice rebuild (the lit film UNDER the threads). Uses the
  * same `drapeRingRadius` / `drapeRingZ` pure functions and exactly
@@ -241,8 +256,7 @@ function buildWebPositionsDraped(out, p) {
  * @param {Float32Array} out — (rings + 1) × radialSpokes × 3
  * @param {object} p — same params object as buildWebPositionsDraped
  */
-function updateMembraneLattice(out, p) {
-  const { mouthRadius, coneHeight, radialSpokes, rings } = p;
+function updateMembraneLattice(out, p) {  const { mouthRadius, coneHeight, radialSpokes, rings } = p;
   const drape = Math.max(0, Math.min(1, p.drape ?? 0));
   const cinch = Math.max(0, Math.min(1, p.cinchFrac ?? 0));
   const jigP = p.jigglePhase ?? 0;
@@ -383,19 +397,7 @@ export const NetMeshKit = {
     const membranePositions = new Float32Array((rings + 1) * radialSpokes * 3);
     const membraneGeo = new THREE.BufferGeometry();
     membraneGeo.setAttribute('position', new THREE.BufferAttribute(membranePositions, 3));
-    {
-      // Static index buffer (topology never changes; only positions/norms move).
-      const memIndex = [];
-      for (let k = 0; k < rings; k++) {
-        for (let s = 0; s < radialSpokes; s++) {
-          const s1 = (s + 1) % radialSpokes;
-          const a = k * radialSpokes + s, b = k * radialSpokes + s1;
-          const c = (k + 1) * radialSpokes + s, d = (k + 1) * radialSpokes + s1;
-          memIndex.push(a, c, b, b, c, d);
-        }
-      }
-      membraneGeo.setIndex(memIndex);
-    }
+    membraneGeo.setIndex(buildMembraneIndex(radialSpokes, rings));
     const membraneMat = new THREE.MeshPhysicalMaterial({
       color,
       transparent: true,
@@ -662,6 +664,64 @@ export const NetMeshKit = {
     drawstringPositions[idx++] = rimWeights[0].position.y;
     drawstringPositions[idx++] = rimWeights[0].position.z;
     drawstringLine.geometry.attributes.position.needsUpdate = true;
+  },
+
+  /**
+   * V9 — density LOD. Rebuilds the web + membrane at a new spoke/ring density.
+   * This REALLOCATES the geometry (the buffers are density-sized), so it must
+   * be rare — the consumer gates it behind a hysteresis band + the D.8 tier
+   * gate, never per-frame. No-op at the current density. Re-seeds the current
+   * drape state after the rebuild so the web doesn't pop.
+   * @param {object} h handle
+   * @param {number} radialSpokes
+   * @param {number} rings
+   */
+  setDensity(h, radialSpokes, rings) {
+    if (!h || !h.coneMesh) return;
+    if (h.radialSpokes === radialSpokes && h.rings === rings) return;
+
+    // Web: new spoke+ring positions + vertex colours at the new density.
+    const webPositions = buildWebPositions(h.mouthRadius, h.coneHeight, radialSpokes, rings);
+    const webGeo = new LineSegmentsGeometry();
+    webGeo.setPositions(webPositions);
+    webGeo.setColors(new Float32Array(webPositions.length).fill(1));
+    h.coneMesh.geometry.dispose();
+    h.coneMesh.geometry = webGeo;
+    h.webPositions = webPositions;
+    h.webBuffer = webGeo.attributes.instanceStart.data;
+    h.webColorBuffer = webGeo.attributes.instanceColorStart.data;
+    h.radialSpokes = radialSpokes;
+    h.rings = rings;
+
+    // Re-cache the per-spoke trig tables the per-frame drape paths read.
+    const cosA = new Float32Array(radialSpokes);
+    const sinA = new Float32Array(radialSpokes);
+    const angA = new Float32Array(radialSpokes);
+    for (let s = 0; s < radialSpokes; s++) {
+      const a = (2 * Math.PI * s) / radialSpokes;
+      angA[s] = a; cosA[s] = Math.cos(a); sinA[s] = Math.sin(a);
+    }
+    h._cosA = cosA; h._sinA = sinA; h._angA = angA;
+
+    // Membrane: new lattice + index at the same density (the film must stay
+    // registered on the thread intersections).
+    const memPos = new Float32Array((rings + 1) * radialSpokes * 3);
+    const memGeo = new THREE.BufferGeometry();
+    memGeo.setAttribute('position', new THREE.BufferAttribute(memPos, 3));
+    memGeo.setIndex(buildMembraneIndex(radialSpokes, rings));
+    if (h.membraneMesh) {
+      h.membraneMesh.geometry.dispose();
+      h.membraneMesh.geometry = memGeo;
+      h.membranePositions = memPos;
+    }
+
+    // Re-seed at the current drape state so the density switch doesn't pop.
+    this.updateWebDrape(h, {
+      drape: h._drape,
+      cinchFrac: h._cinchFrac,
+      jigglePhase: h._jigglePhase,
+      jiggleAmp: h._jiggleAmp,
+    });
   },
 
   /**
