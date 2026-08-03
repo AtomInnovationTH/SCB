@@ -57,6 +57,15 @@ const NET_WEB = Constants.NET_WEB;
 // resolution, never any transform / world / frame state. Guarded for Node.
 const _liveLineMats = new Set();
 const _liveMembraneMats = new Set();
+// V2 membrane env map (HDR sun disk + Earth hemisphere), baked once per renderer
+// by getOrbitalFoilEnv and handed over by SceneManager. CACHED at module scope
+// for the same reason `_resolution` is: SceneManager calls setEnvTexture in its
+// CONSTRUCTOR, long before any net exists, so `_liveMembraneMats` is empty at
+// that moment and a set-only-live-materials implementation silently reached
+// nothing for the whole session (every membrane then fell back to
+// scene.environment, masquerading as the intended headless path). build() reads
+// this so materials created later still get the env. Stays null headless.
+let _envTexture = null;
 const _resolution = { w: 1, h: 1 };
 if (typeof window !== 'undefined') {
   _resolution.w = window.innerWidth || 1;
@@ -256,7 +265,8 @@ function buildMembraneIndex(radialSpokes, rings) {
  * @param {Float32Array} out — (rings + 1) × radialSpokes × 3
  * @param {object} p — same params object as buildWebPositionsDraped
  */
-function updateMembraneLattice(out, p) {  const { mouthRadius, coneHeight, radialSpokes, rings } = p;
+function updateMembraneLattice(out, p) {
+  const { mouthRadius, coneHeight, radialSpokes, rings } = p;
   const drape = Math.max(0, Math.min(1, p.drape ?? 0));
   const cinch = Math.max(0, Math.min(1, p.cinchFrac ?? 0));
   const jigP = p.jigglePhase ?? 0;
@@ -408,6 +418,10 @@ export const NetMeshKit = {
       side: THREE.DoubleSide,
       depthWrite: false,
       envMapIntensity: membraneEnvIntensity,
+      // Null until SceneManager has handed over the baked orbital env (and null
+      // for good headless) — three.js treats a null envMap as "use
+      // scene.environment", which is the intended fallback.
+      envMap: _envTexture,
     });
     _liveMembraneMats.add(membraneMat);
     const membraneMesh = new THREE.Mesh(membraneGeo, membraneMat);
@@ -439,7 +453,11 @@ export const NetMeshKit = {
         metalness: 0.4,
         roughness: 0.25,
         emissive: new THREE.Color(DEFAULT_WEIGHT_COLOR),
-        emissiveIntensity: 0.6,
+        // SSOT (C0): the same resting glint V6's flash ramps away from and back
+        // to. This was a duplicated `0.6` literal that happened to agree with
+        // the constant — the exact drift trap C0 deleted elsewhere in this file,
+        // and it is the ONLY value the non-draping lasso net's nodes ever show.
+        emissiveIntensity: NET_WEB.NODE_EMISSIVE_BASE,
         transparent: weightTransparent,
         opacity,
         blending: nodeAdditive ? THREE.AdditiveBlending : THREE.NormalBlending,
@@ -750,12 +768,17 @@ export const NetMeshKit = {
   /**
    * V2: apply the synthetic orbital env texture (sun disk + Earth hemisphere,
    * baked once per renderer by getOrbitalFoilEnv) to every live membrane
-   * material. Null/undefined is a no-op — headless builds leave envMap unset
-   * and scene.environment applies instead. Mirrors setResolution.
+   * material, AND cache it so membranes built later get it too. That cache is
+   * the load-bearing part: SceneManager calls this from its constructor, before
+   * any net has been built, so the live-material loop alone reached zero
+   * materials and the env never applied in a real session. Null/undefined is a
+   * no-op — headless builds leave envMap null and scene.environment applies
+   * instead. Mirrors setResolution / `_resolution`.
    * @param {THREE.Texture|null} tex
    */
   setEnvTexture(tex) {
     if (!tex) return;
+    _envTexture = tex;
     for (const m of _liveMembraneMats) { m.envMap = tex; m.needsUpdate = true; }
   },
 

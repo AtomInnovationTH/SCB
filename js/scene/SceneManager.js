@@ -108,6 +108,8 @@ export class SceneManager {
     // V2: the net membrane's per-material orbital env (HDR sun disk + Earth
     // hemisphere) — baked once per renderer by getOrbitalFoilEnv; returns null
     // headless, where setEnvTexture is a no-op and scene.environment applies.
+    // This runs before any net exists, so setEnvTexture CACHES the texture for
+    // membranes built later — that cache is what makes this call do anything.
     NetMeshKit.setEnvTexture(getOrbitalFoilEnv(this.renderer));
 
     // Shadow maps disabled — no shadow-casting lights in the scene

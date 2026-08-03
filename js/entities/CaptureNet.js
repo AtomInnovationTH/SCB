@@ -1574,7 +1574,8 @@ export class NetProjectile {
    * bag. The pre-V7 twin sites applied one frame's increment to a freshly
    * rebuilt quaternion each frame, so it never accumulated: a sub-degree
    * offset that decayed to nothing. Hoisted into one helper so the two call
-   * sites cannot drift apart again.
+   * sites cannot drift apart again. The accumulated angle outlives the rate on
+   * purpose — see the in-body note.
    * @param {object} d — the caught debris (tumbleAxis/tumbleAngle written)
    * @param {object} player — mother ship (quaternion read)
    * @param {number} dt — seconds
@@ -1582,12 +1583,25 @@ export class NetProjectile {
   _applyCatchOrientation(d, player, dt) {
     if (!this._qLocal || !d.tumbleAxis) return;
     _q0.copy(player.quaternion).multiply(this._qLocal);
-    if (this._tumbleCarryover > 1e-6 && CN.TUMBLE_CARRYOVER_ENABLED !== false) {
-      this._tumbleCarryAngle = (this._tumbleCarryAngle + this._tumbleCarryover * dt) % (2 * Math.PI);
-      _q1.setFromAxisAngle(_v3e.set(1, 0, 0), this._tumbleCarryAngle);
-      _q0.multiply(_q1);
-      // Decay the residual (exponential, dt-robust).
-      this._tumbleCarryover *= Math.exp(-dt / (CN.TUMBLE_CARRYOVER_DECAY_S ?? 5.0));
+    if (CN.TUMBLE_CARRYOVER_ENABLED !== false) {
+      // Integrate while the RATE is alive…
+      if (this._tumbleCarryover > 1e-6) {
+        this._tumbleCarryAngle = (this._tumbleCarryAngle + this._tumbleCarryover * dt) % (2 * Math.PI);
+        // Decay the residual (exponential, dt-robust).
+        this._tumbleCarryover *= Math.exp(-dt / (CN.TUMBLE_CARRYOVER_DECAY_S ?? 5.0));
+      }
+      // …but KEEP APPLYING the accumulated angle after it dies. The rate and the
+      // angle are separate quantities: the rate decaying to zero means the catch
+      // has finished spinning down, not that it teleports back to its
+      // pre-tumble attitude. Both used to sit behind the same `> 1e-6` gate,
+      // which was harmless pre-V7 (the angle was one frame's sub-degree
+      // increment) but became a one-frame snap of up to ∫0.6·e^(−t/5)dt = 3 rad
+      // ≈ 172° once V7 made the accumulation real. Reachable on any catch held
+      // past ~66 s (corridor timeout / a long berth hold).
+      if (this._tumbleCarryAngle !== 0) {
+        _q1.setFromAxisAngle(_v3e.set(1, 0, 0), this._tumbleCarryAngle);
+        _q0.multiply(_q1);
+      }
     }
     const w = Math.max(-1, Math.min(1, _q0.w));
     const angle = 2 * Math.acos(w);

@@ -2107,9 +2107,13 @@ export class DebrisField {
    * `_scenePosition`, `pinCapturedDebris` re-pins the catch to that garbage
    * every reel frame, and the ceremony camera anchors (netPos/debrisPos)
    * fling the camera across hundreds of km — the black captured/reel/secured
-   * frames. Only the along-track offset is expressible in co-orbital elements;
-   * a lateral pin component (#2) resumes as a small cross-track offset, which
-   * is correct physical handoff, not a bug.
+   * frames. Only the along-track offset is expressible in co-orbital elements,
+   * so a lateral pin component (#2, `latM: 18`) is DROPPED rather than
+   * converted — for a catch that is invisible (the reel pin takes over the same
+   * frame), but an `ONBOARDING_COMPLETE` release of a still-live tease piece
+   * snaps it onto the boresight in one frame. That trade is deliberate: an 18 m
+   * lateral snap is the residue of fixing a ~1e6 m teleport, and faking a
+   * cross-track term by nudging inclination/RAAN would be guesswork.
    * @param {number|string} [id] - release just this piece; omit to release all.
    * @private
    */

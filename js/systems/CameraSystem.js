@@ -155,19 +155,7 @@ export class CameraSystem {
       this._earthLight.name = 'earthshineFill';
       scene.add(this._earthLight);
 
-      // EARTHSHINE FILL (V5) — a dim blue-white key on the ship's NADIR side:
-      // Earth's albedo glow lifting the planet-facing surfaces of the net/ship
-      // (the membrane's underside, the bag's dark side) so the night-side
-      // framing still reads form instead of a flat silhouette. Same unit-scale
-      // trick as the fill/rim (decay=0 + ~1 km cutoff): constant, zoom-free,
-      // and it never reaches the distant Earth. Positioned per-frame in
-      // update() along the ship→planet axis. Dim by design — it is a fill,
-      // not a second sun (0.7 vs the sun's ~1.5).
-      this._earthshineLight = new THREE.PointLight(0x9db8e8, 0.7, 0.01, 0);
-      this._earthshineLight.name = 'earthshineFillLight';
-      scene.add(this._earthshineLight);
-
-      // z-layer fix: enroll both follow lights in the near-field depth pass.
+      // z-layer fix: enroll the follow lights in the near-field depth pass.
       // They are created AFTER main.js's registerNearFieldRoot(player), so
       // without this they never gain NEAR_FIELD_LAYER and the ship renders UNLIT
       // in the near sub-render (flat, unlike the menu hero). The pass also scales
@@ -329,7 +317,13 @@ export class CameraSystem {
     // S4: Camera shake on catch (enhanced from Phase 8)
     this._catchShakeTimer = 0;     // seconds remaining for shake effect
     this._catchShakeDuration = Constants.CATCH_SHAKE_DURATION || 0.3; // total shake duration
-    this._catchShakeIntensity = Constants.CATCH_SHAKE_INTENSITY || 0.003; // scene units offset
+    this._catchShakeIntensity = Constants.CATCH_SHAKE_INTENSITY ?? 0.000003; // scene units (= 0.3 m)
+    // NOTE the fallback magnitude: it must stay a MICRO-shake. It read `|| 0.003`
+    // until 2026-08-03 — the same metres-vs-scene-units mis-read the constant
+    // itself carried (0.003 scene units = ±300 m of camera jitter, which
+    // scrambled the mother catch's post-cinch frames). A dead fallback that
+    // still encodes the bug is a landmine, so it now mirrors the fixed value.
+
     // Whale-tug amplitude scale (§9.11, review minor 7): the NET_MOTHER_TUG
     // handler stores ONLY this multiplier — the base intensity/duration
     // constants above stay immutable so any future consumer of

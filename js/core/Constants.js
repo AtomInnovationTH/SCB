@@ -2629,8 +2629,19 @@ export const Constants = {
     BERTH_PENDULUM_MAX_RAD:  0.15,   // rad — cap (~8.6°). V7 garnish rescale from
                                     // 0.06 (~3.4°, ~1–2% of the bag's silhouette —
                                     // invisible at the ceremony framing) into the
-                                    // ~5–8% band; the launcher-clip margin at the
-                                    // 4.5 m standoff is preserved (tan 0.15 ≈ 0.68 m).
+                                    // ~5–8% band. Clearance is standoff-INVARIANT,
+                                    // which is why raising the cap is safe: the
+                                    // call site applies tan(angle) × berthStandoffM,
+                                    // i.e. the bundle sways on a fixed-angle cone
+                                    // about the muzzle, so the axial
+                                    // BERTH_CLEARANCE_M margin is untouched and the
+                                    // lateral excursion grows only in proportion to
+                                    // how far out the catch already is. Read the cap
+                                    // as the 8.6° cone half-angle, NOT as "0.68 m at
+                                    // the 4.5 m standoff" — that framing invites the
+                                    // false conclusion that a larger standoff
+                                    // (rocketBody 6.5 m, CORRIDOR_EXTENDED_STANDOFF_M
+                                    // 10 m) erodes clearance.
     // rad/s of swing velocity per METRE of RCS drift. The call site converts
     // _rcsVelocity to m/s and scales by dt, so the total kick over a burst is the
     // RCS displacement — framerate-independent. Tuned against real input: RCS
