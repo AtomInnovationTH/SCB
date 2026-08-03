@@ -1945,11 +1945,23 @@ async function init() {
           // Lead the pinned whale (net-look remediation Task 4): the whale rides
           // the rotating co-orbital/LVLH pin frame while the net flies a FROZEN
           // world-space line, so a no-lead (.position-only) shot drifts ~1.5 m
-          // off-axis by intercept (measured 2026-08-03) and the net brakes
-          // beside the whale instead of through its mouth. Feed the SAME lead
-          // solution the game uses (computeLeadAim) with the pin-point's
-          // rotational velocity relVel = ω × r_pin, ω = orbital mean motion about
-          // the orbit normal, r_pin = pinned whale − ship. Stable target is the
+          // off-axis by intercept (measured 2026-08-03) and, worse, the net
+          // transitions to BRAKE the instant it enters the 5 m close-range
+          // forgiveness radius (CaptureNet.js:931) — so a DEAD-ON shot brakes
+          // with the whale still ~5 m ahead of the net centre, outside the 4 m
+          // mouth. A physically-scaled time-of-flight lead here is only ~7 cm
+          // (mean motion 1.1e-3 rad/s × 25 m over a 2.4 s flight) and does NOT
+          // clear that brake-short. What DOES land the whale inside the cone is
+          // a deliberate OFF-AXIS bias that flies the net past the whale so it
+          // envelops rather than braking beside it.
+          //
+          // The bias below is EMPIRICAL, not a calibrated physical lead: it
+          // feeds computeLeadAim a tangential "velocity" whose magnitude is the
+          // orbital-speed-over-radius ratio in mixed units (|v| km/s ÷ |r| scene
+          // units — deliberately NOT a rad/s mean motion). It is tuned by the
+          // harness through-mouth gate, which drove min netToWhaleM from 4.8 m
+          // (dead-on graze) to 2.8 m (inside the 4 m mouth). Direction is the
+          // orbit-normal cross the ship→pin vector; target is the stable
           // analytic pinnedPos (whale._scenePosition is transient ~1000 m off
           // for a frame right after staging). Unit system: scene units.
           try {
@@ -1959,13 +1971,13 @@ async function init() {
             if (axis.lengthSq() > 1e-30) {
               axis.normalize();
               const orbR = Math.hypot(_cp.x, _cp.y, _cp.z) || 1;
-              const nOrbit = Math.hypot(_cv.x, _cv.y, _cv.z) / orbR;   // mean motion (rad/s)
+              // Empirical off-axis bias rate (see note above) — NOT rad/s.
+              const biasRate = Math.hypot(_cv.x, _cv.y, _cv.z) / orbR;
               const rPin = new THREE.Vector3(
                 pinnedPos.x - playerPos.x, pinnedPos.y - playerPos.y, pinnedPos.z - playerPos.z);
-              const omega = axis.multiplyScalar(nOrbit);
-              const relVel = new THREE.Vector3().crossVectors(omega, rPin);
+              const biasVel = new THREE.Vector3().crossVectors(axis.multiplyScalar(biasRate), rPin);
               const launchSpeedScene = 10 * M;   // LARGE LAUNCH_SPEED, scene units/s
-              const lead = computeLeadAim(posScene, pinnedPos, relVel, launchSpeedScene);
+              const lead = computeLeadAim(posScene, pinnedPos, biasVel, launchSpeedScene);
               if (lead && lead.dir) dir = { x: lead.dir.x, y: lead.dir.y, z: lead.dir.z };
             }
           } catch (_e) { /* direct bearing fallback */ }
@@ -2143,13 +2155,15 @@ async function init() {
               return +(Math.hypot(sp.x - ex, sp.y - ey, sp.z - ez) / M).toFixed(1);
             })(),
             // ── Net-visual density forensics (net-look remediation, Task 0) ──
-            // Per-visual web density, LOD level and camera distance, keyed by
-            // visual key ('pod_0', 'arm_1', …). The V9 regression — the shipped
-            // web stuck at 12×4 (60 membrane verts) instead of the 20×6 build
-            // density (140) — was invisible to every test because they exercise
-            // setDensity/nextLodLevel in isolation and no sceneManager stub
-            // ever had a camera. memVerts is DERIVED from the membrane buffer
-            // (NetMeshKit sizes it (rings+1) × radialSpokes × 3), not invented.
+            // Per-visual web density + camera distance, keyed by visual key
+            // ('pod_0', 'arm_1', …). Guards the V9 regression that this plan
+            // fixed: the shipped web had been stuck at 12×4 (60 membrane verts)
+            // instead of the 20×6 build density (140) because the density LOD
+            // (since DELETED) forced LOW-tier nets to the far density. There is
+            // no runtime LOD any more — density is fixed at build density — so
+            // this block reports the raw kit density, not an LOD level. memVerts
+            // is DERIVED from the membrane buffer (NetMeshKit sizes it
+            // (rings+1) × radialSpokes × 3), not invented.
             nets: (() => {
               try {
                 const cam = sceneManager?.camera;
@@ -2167,7 +2181,6 @@ async function init() {
                     radialSpokes: kh?.radialSpokes ?? null,
                     rings: kh?.rings ?? null,
                     memVerts: kh?.membranePositions ? kh.membranePositions.length / 3 : null,
-                    lodLevel: vis._lodLevel ?? null,
                     // Same expression the V9 LOD block used: vis.group is added
                     // directly to the scene, so .position IS world space.
                     camDM: (cam && gp) ? +(gp.distanceTo(cam.position) / M).toFixed(1) : null,
