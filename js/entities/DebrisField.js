@@ -501,6 +501,14 @@ export class DebrisField {
      *  the mother (orbit re-synced each frame) until each is caught. */
     this._onboardingPinIds = new Set();
 
+    /** @type {Map<id,{fwd:{x,y,z}, right:{x,y,z}}>} Per-debris frozen pin-basis
+     *  overrides. When set for a specific pinned id, that piece uses the fixed
+     *  world-space basis instead of the live per-frame prograde/right basis, so
+     *  the ceremony whale does not ride the slewing prograde. Scoped per id so
+     *  any OTHER onboarding-pinned pieces keep their live ship-relative basis.
+     *  Latched/cleared by the ceremony scenario only. */
+    this._onboardingPinBasisOverrides = new Map();
+
     // ST-4.C: Mission profile state
     /** @type {object|null} Current mission profile from Constants.MISSIONS.PROFILES */
     this._currentMissionProfile = null;
@@ -1522,6 +1530,9 @@ export class DebrisField {
     // right = cross-track / horizontal). Computed once per frame; consumed by
     // _updateInstanceTransform to place pinned pieces (#1 dead-centre, #2 off to
     // one side). Cleared when no player orbit so the pin branch falls back safely.
+    // Whale-in-cone plan: a frozen basis override may be latched by the ceremony
+    // scenario so the pinned whale does not ride the live slewing prograde and
+    // walk out of the frozen capture cone during the (10× world-time) flight.
     this._motherFwd = null;
     this._motherRight = null;
     if (playerPos && playerOrbit && this._onboardingPinIds.size > 0) {
@@ -1829,10 +1840,14 @@ export class DebrisField {
     // off-to-one-side (#2) and is selectable/in-range. This _scenePosition is
     // authoritative (TargetSelector/AutoLock/Lasso/reticle all read it). An arm
     // capture (ARM_CAPTURED) releases the pin first, so _armPinned wins after.
+    const _pinBasisOv = this._onboardingPinBasisOverrides?.get(debris.id);
     const _onboardPinned = !!(debris._onboardingPinned && playerPos &&
-      this._motherFwd && this._motherRight);
+      (_pinBasisOv || (this._motherFwd && this._motherRight)));
     if (_onboardPinned) {
-      const f = this._motherFwd, r = this._motherRight;
+      // Per-id frozen basis wins for this piece; every other pinned piece falls
+      // back to the live per-frame ship-relative basis.
+      const f = _pinBasisOv ? _pinBasisOv.fwd : this._motherFwd;
+      const r = _pinBasisOv ? _pinBasisOv.right : this._motherRight;
       const fwd = debris._onboardingPinFwd || 0;
       const lat = debris._onboardingPinLat || 0;
       px = playerPos.x + f.x * fwd + r.x * lat;

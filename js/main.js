@@ -106,7 +106,7 @@ import { persistenceManager } from './systems/PersistenceManager.js';
 import { StrategicMap } from './ui/StrategicMap.js';
 import { captureNetVisual } from './ui/CaptureNetVisual.js';
 import { furnaceBreakdownVisual } from './ui/FurnaceBreakdownVisual.js';
-import { captureNetSystem, computeLeadAim } from './entities/CaptureNet.js';
+import { captureNetSystem, isInsideCone, coneRadiusAtDepth } from './entities/CaptureNet.js';
 import perfReportOverlay, { captureBootInfo } from './ui/PerfReportOverlay.js';
 import { isAvifSupported } from './scene/Earth.js';
 import { profileFlags } from './core/ProfileFlags.js';
@@ -1830,6 +1830,9 @@ async function init() {
       //     { ok: false, reason } — guarded, never throws.
       let _scenarioPinReleaseOff = null;
       let _scenarioNet = null;
+      let _scenarioAimInvariant = null;
+      // Whale-in-cone plan Task 2.5 — read-back for the aim-invariant unit test.
+      window.__netScenarioAimInvariant = () => _scenarioAimInvariant;
       window.__netScenario = () => {
         try {
           if (!player || !debrisField || !cameraSystem) return { ok: false, reason: 'sim not up' };
@@ -1928,8 +1931,12 @@ async function init() {
           const pOrbit = (typeof player.getOrbitalElements === 'function')
             ? player.getOrbitalElements() : null;
           if (!pOrbit) return { ok: false, reason: 'no player orbit' };
+          // orbitToSceneCartesianInto needs a position write-slot, but only the
+          // velocity (_cv) is consumed here — position comes from playerPos.
+          // _cp is a throwaway required by the helper, never read.
           const _cp = { x: 0, y: 0, z: 0 }, _cv = { x: 0, y: 0, z: 0 };
           orbitToSceneCartesianInto(pOrbit, _cp, _cv);
+          void _cp;
           const vl = Math.hypot(_cv.x, _cv.y, _cv.z) || 1;
           const playerPos = player.getPosition();
           const pinnedPos = {
@@ -1937,50 +1944,39 @@ async function init() {
             y: playerPos.y + (_cv.y / vl) * 25 * M,
             z: playerPos.z + (_cv.z / vl) * 25 * M,
           };
+          // Whale-in-cone plan: freeze the whale's pin basis at FIRE-time prograde.
+          // The ceremony runs ~19 s wall-clock but the world/orbit propagate at
+          // TIME_SCALE_GAMEPLAY×10 (~190 s), slewing prograde ~12.5°. The pin
+          // normally tracks live prograde (DebrisField._motherFwd rebuilt each
+          // frame), so the whale would ride that slew and walk laterally out of
+          // the frozen capture cone. Latching the fire-time basis keeps the
+          // pinned target on the same frozen line the net flies. Build the basis
+          // with DebrisField's exact construction (fwd = prograde, right = fwd×radial).
+          const _rl = Math.hypot(playerPos.x, playerPos.y, playerPos.z) || 1;
+          const _fx = _cv.x / vl, _fy = _cv.y / vl, _fz = _cv.z / vl;
+          const _rx = playerPos.x / _rl, _ry = playerPos.y / _rl, _rz = playerPos.z / _rl;
+          let _gx = _fy * _rz - _fz * _ry, _gy = _fz * _rx - _fx * _rz, _gz = _fx * _ry - _fy * _rx;
+          const _gl = Math.hypot(_gx, _gy, _gz) || 1; _gx /= _gl; _gy /= _gl; _gz /= _gl;
+          debrisField._onboardingPinBasisOverrides?.set(whale.id, {
+            fwd: { x: _fx, y: _fy, z: _fz },
+            right: { x: _gx, y: _gy, z: _gz },
+          });
           const posScene = (typeof player.getNetPodPosition === 'function')
             ? player.getNetPodPosition(0) : playerPos;
           const b = new THREE.Vector3(pinnedPos.x - posScene.x, pinnedPos.y - posScene.y, pinnedPos.z - posScene.z);
           if (b.lengthSq() > 0) b.normalize();
           let dir = { x: b.x, y: b.y, z: b.z };
-          // Lead the pinned whale (net-look remediation Task 4): the whale rides
-          // the rotating co-orbital/LVLH pin frame while the net flies a FROZEN
-          // world-space line, so a no-lead (.position-only) shot drifts ~1.5 m
-          // off-axis by intercept (measured 2026-08-03) and, worse, the net
-          // transitions to BRAKE the instant it enters the 5 m close-range
-          // forgiveness radius (CaptureNet.js:931) — so a DEAD-ON shot brakes
-          // with the whale still ~5 m ahead of the net centre, outside the 4 m
-          // mouth. A physically-scaled time-of-flight lead here is only ~7 cm
-          // (mean motion 1.1e-3 rad/s × 25 m over a 2.4 s flight) and does NOT
-          // clear that brake-short. What DOES land the whale inside the cone is
-          // a deliberate OFF-AXIS bias that flies the net past the whale so it
-          // envelops rather than braking beside it.
-          //
-          // The bias below is EMPIRICAL, not a calibrated physical lead: it
-          // feeds computeLeadAim a tangential "velocity" whose magnitude is the
-          // orbital-speed-over-radius ratio in mixed units (|v| km/s ÷ |r| scene
-          // units — deliberately NOT a rad/s mean motion). It is tuned by the
-          // harness through-mouth gate, which drove min netToWhaleM from 4.8 m
-          // (dead-on graze) to 2.8 m (inside the 4 m mouth). Direction is the
-          // orbit-normal cross the ship→pin vector; target is the stable
-          // analytic pinnedPos (whale._scenePosition is transient ~1000 m off
-          // for a frame right after staging). Unit system: scene units.
-          try {
-            const axis = new THREE.Vector3().crossVectors(
-              new THREE.Vector3(_cp.x, _cp.y, _cp.z),
-              new THREE.Vector3(_cv.x, _cv.y, _cv.z));
-            if (axis.lengthSq() > 1e-30) {
-              axis.normalize();
-              const orbR = Math.hypot(_cp.x, _cp.y, _cp.z) || 1;
-              // Empirical off-axis bias rate (see note above) — NOT rad/s.
-              const biasRate = Math.hypot(_cv.x, _cv.y, _cv.z) / orbR;
-              const rPin = new THREE.Vector3(
-                pinnedPos.x - playerPos.x, pinnedPos.y - playerPos.y, pinnedPos.z - playerPos.z);
-              const biasVel = new THREE.Vector3().crossVectors(axis.multiplyScalar(biasRate), rPin);
-              const launchSpeedScene = 10 * M;   // LARGE LAUNCH_SPEED, scene units/s
-              const lead = computeLeadAim(posScene, pinnedPos, biasVel, launchSpeedScene);
-              if (lead && lead.dir) dir = { x: lead.dir.x, y: lead.dir.y, z: lead.dir.z };
-            }
-          } catch (_e) { /* direct bearing fallback */ }
+          // Whale-in-cone plan Task 2 (2026-08-04): the direct muzzle→pin bearing
+          // IS the correct aim. The pinned whale's _scenePosition and this
+          // pinnedPos are the same formula (playerPos + prograde×25 m,
+          // DebrisField.js:1834-1841), both relative to playerPos, so ship
+          // translation cancels exactly and the only residual target drift is
+          // prograde rotation (~1.1e-3 rad/s × 25 m ≈ 0.03 m/s ≈ 7 cm over the
+          // flight) — below any clearance threshold. The previous off-axis bias
+          // (deleted here) flew the net ~4.9 m wide of the whale; it had been
+          // tuned to satisfy a net-centre-range gate that could not see the
+          // miss. A lead term here is unjustified and is the vector for that
+          // regression — do not reintroduce one.
           // TRAP (plan §0): the pod accessor returns SCENE UNITS,
           // NetProjectile works in METRES — divide by M.
           const posMetres = { x: posScene.x / M, y: posScene.y / M, z: posScene.z / M };
@@ -2000,6 +1996,7 @@ async function init() {
           if (typeof _scenarioPinReleaseOff === 'function') _scenarioPinReleaseOff();
           const release = () => {
             debrisField._clearOnboardingPin?.(whale.id);
+            debrisField._onboardingPinBasisOverrides?.delete(whale.id);   // un-freeze this whale's pin basis
             _scenarioPinReleaseOff = null;
           };
           const offOk  = eventBus.on(Events.NET_CATCH_SUCCESS, release);
@@ -2038,6 +2035,16 @@ async function init() {
           net._fragRollOverride = 1.0;    // never fragments
           net._strainRollOverride = 1.0;  // never strain-slips
           _scenarioNet = net;
+
+          // Whale-in-cone plan Task 2.5 — expose the invariant the harness unit
+          // test asserts: the fired launchDirection must be within 0.5° of the
+          // direct muzzle→pin bearing (a lead/bias would violate it). Fire-time
+          // snapshot; never read back into gameplay.
+          _scenarioAimInvariant = {
+            launchDirection: { x: dir.x, y: dir.y, z: dir.z },
+            muzzleScene: { x: posScene.x, y: posScene.y, z: posScene.z },
+            pinnedPosScene: { x: pinnedPos.x, y: pinnedPos.y, z: pinnedPos.z },
+          };
 
           const out = { ok: true, whaleId: whale.id, mass: whale.mass, distanceM: 25, podIndex: 0 };
           console.info(`[netScenario] staged deterministic whale capture: ${JSON.stringify(out)}`);

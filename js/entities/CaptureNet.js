@@ -187,6 +187,60 @@ export function effectiveCatchRadius(mouthRadius, range) {
 }
 
 /**
+ * Local cone radius at an axial depth ahead of the apex.
+ * The bag is a cone: apex at local origin, mouth ring at local z = −coneHeight
+ * (js/ui/NetMeshKit.js:364-365). Depth `a` metres ahead of the apex therefore
+ * sees a local radius mouthRadius × (a / coneHeight). Returns 0 outside
+ * [0, coneHeight] — a target behind the apex or past the mouth plane sees no
+ * cone at all. Pure + Node-safe.
+ * @param {number} mouthRadius — net mouth radius (metres)
+ * @param {number} coneHeight — apex-to-mouth axial length (metres)
+ * @param {number} axialDepth — metres ahead of the apex along the cone axis
+ * @returns {number} local cone radius (metres)
+ */
+export function coneRadiusAtDepth(mouthRadius, coneHeight, axialDepth) {
+  if (!(coneHeight > 0) || axialDepth < 0 || axialDepth > coneHeight) return 0;
+  return mouthRadius * (axialDepth / coneHeight);
+}
+
+/**
+ * Cone containment test for a target expressed in the kit's local frame.
+ * localZ is NEGATIVE ahead of the apex (the mouth sits at local z = −coneHeight);
+ * localR is the lateral off-axis distance (hypot(localX, localY)). Inclusive on
+ * the wall: a target exactly at r == coneRadiusAtDepth(a) counts as inside.
+ * Pure + Node-safe.
+ * @param {number} localZ — kit-local z of the target (negative ahead of apex)
+ * @param {number} localR — lateral off-axis distance (metres)
+ * @param {number} mouthRadius — net mouth radius (metres)
+ * @param {number} coneHeight — apex-to-mouth axial length (metres)
+ * @returns {boolean} true when the target is inside the bag cone
+ */
+export function isInsideCone(localZ, localR, mouthRadius, coneHeight) {
+  const a = -localZ;
+  if (a < 0 || a > coneHeight) return false;
+  return localR <= coneRadiusAtDepth(mouthRadius, coneHeight, a);
+}
+
+/**
+ * Largest lateral offset that still yields containment at the brake instant.
+ * BRAKE fires when the apex-to-target distance equals the catch radius R, so
+ * a² + r² = R² at that instant; containment requires r ≤ k·a with
+ * k = mouthRadius / coneHeight. Solving gives R·mouthRadius / hypot(mouthRadius,
+ * coneHeight). Valid only while R ≤ coneHeight — if the brake sphere exceeds the
+ * bag depth the net brakes with the target still ahead of the mouth plane and
+ * containment at the brake instant is geometrically impossible; returns NaN then.
+ * Pure + Node-safe.
+ * @param {number} catchRadius — the BRAKE-trigger sphere radius (metres)
+ * @param {number} mouthRadius — net mouth radius (metres)
+ * @param {number} coneHeight — apex-to-mouth axial length (metres)
+ * @returns {number} max lateral offset (metres), or NaN when undefined
+ */
+export function maxImpactParameter(catchRadius, mouthRadius, coneHeight) {
+  if (!(catchRadius <= coneHeight)) return NaN;
+  return catchRadius * mouthRadius / Math.hypot(mouthRadius, coneHeight);
+}
+
+/**
  * UX-11 #1: lead-aim direction + off-axis angle for the pre-fire readout.
  * Mirrors the lead computation in ArmUnit._updateNettingFSM: aim where the
  * target will be when the net arrives (targetPos + relVel × dist/launchSpeed).
