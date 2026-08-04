@@ -1185,7 +1185,6 @@ export class CaptureNetVisual {
     // mouth/forward end of the cone is at local z = -coneH, the apex is at
     // local z = 0, and rim weights placed at z = -coneH render past the target
     // along launchDir).
-    //
     // CRITICAL: THREE.js [`Object3D.lookAt`](https://github.com/mrdoob/three.js/blob/master/src/core/Object3D.js)
     // uses the OPPOSITE convention from [`Camera.lookAt`](https://github.com/mrdoob/three.js/blob/master/src/cameras/Camera.js):
     //   - For Camera / Light:  internal _m1.lookAt(position, target, up)   → local -Z points TOWARD target.
@@ -1213,6 +1212,18 @@ export class CaptureNetVisual {
       );
       _v3b.copy(vis.group.position).sub(_v3a);
       vis.group.lookAt(_v3b);
+    }
+
+    // net-fabric-look Task 3: the V2 membrane film was built by NetMeshKit but
+    // NO ceremony state ever set its .visible, so the kit's build default
+    // (childrenVisible=false) left it permanently hidden — measured filmShare 0
+    // (the film never contributed a pixel) while the threads read as cool line
+    // art. Mirror the cone's visibility so the lit film renders under the
+    // threads whenever the bag does. The film's material/deformation are driven
+    // separately (Kit.updateWebDrape writes membranePositions + normals), so
+    // this one line is the entire wiring fix.
+    if (vis.kitHandle && vis.kitHandle.membraneMesh) {
+      vis.kitHandle.membraneMesh.visible = coneMesh.visible;
     }
 
     return false;
