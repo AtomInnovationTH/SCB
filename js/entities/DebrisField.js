@@ -1373,6 +1373,46 @@ export class DebrisField {
   }
 
   /**
+   * SSOT for the sizeMeter ↔ sceneSize pair (1 m = 1e-5 scene units).
+   * Whale-in-cone phase 3 (Task 3): `sizeMeter` is NOT the rendered size — the
+   * renderer scales instances by `sceneSize` (`_updateInstanceTransform`), and
+   * the rendered extent is `renderScale × DebrisWireframe.getBoundingRadius`.
+   * Every size mutation must go through here so the pair can never desync (the
+   * ceremony scenario wrote `sizeMeter = 7` without `sceneSize` and cinched an
+   * 8 m net around a 0.23 m pebble while every gate believed 7 m).
+   * @param {object} debris
+   * @param {number} sizeMeter
+   * @returns {object} debris
+   */
+  static setDebrisSize(debris, sizeMeter) {
+    // NOT updated here: `lengthM` / `widthM` stay at their spawn values (the
+    // review's §Minor coherence trap). Deliberately left alone — they feed
+    // `assessNetFit`'s TOO_WIDE / END-ON ONLY verdicts and the
+    // `oversize_aspect` bounce (js/entities/CaptureNet.js:313, :403) plus
+    // TeachingSystem / DockingReticle readouts, so making them track a resize
+    // is a gameplay/UI change that needs its own tests + measurement, not a
+    // ride-along on a rendering fix. Recorded, not fixed.
+    debris.sizeMeter = sizeMeter;
+    debris.sceneSize = sizeMeter * 0.00001;
+    return debris;
+  }
+
+  /**
+   * The scale the renderer will actually use, including the net-held
+   * readability floor (`_catchRenderMin`, applied only while `_armPinned` —
+   * DebrisField.js `_updateInstanceTransform`). Read-only companion to
+   * setDebrisSize so the probe / visual drivers cannot drift from the
+   * renderer. NOTE: `pinCapturedDebris` recomputes its own unclamped scale
+   * (whale-in-cone W4) — unifying the two write paths is out of scope there.
+   * @param {object} debris
+   * @returns {number} effective uniform instance scale (scene units)
+   */
+  static effectiveRenderScale(debris) {
+    const base = debris.sceneSize || (debris.sizeMeter ? debris.sizeMeter * 0.00001 : 0);
+    return (debris._armPinned && debris._catchRenderMin > base) ? debris._catchRenderMin : base;
+  }
+
+  /**
    * Per-frame update: propagate orbits, update instance transforms, update background.
    * @param {number} dt - Real-time delta (seconds)
    * @param {THREE.Vector3} [playerPos] - Player position for LOD
@@ -2347,8 +2387,8 @@ export class DebrisField {
       if (typeDef) {
         const massFrac = Math.max(0, Math.min(1,
           (debris.mass - typeDef.massMin) / (typeDef.massMax - typeDef.massMin || 1)));
-        debris.sizeMeter = typeDef.sizeMin + massFrac * (typeDef.sizeMax - typeDef.sizeMin);
-        debris.sceneSize = debris.sizeMeter * 0.00001;
+        DebrisField.setDebrisSize(debris,
+          typeDef.sizeMin + massFrac * (typeDef.sizeMax - typeDef.sizeMin));
       }
 
       // Reward-first spine: deterministic visible size for curated welcome
@@ -2356,8 +2396,7 @@ export class DebrisField {
       // speck), so it intentionally bypasses the per-type sizeMax cap — a 3 m
       // fragment renders as a clearly-visible irregular junk chunk.
       if (Number.isFinite(spec.sizeM)) {
-        debris.sizeMeter = spec.sizeM;
-        debris.sceneSize = debris.sizeMeter * 0.00001;
+        DebrisField.setDebrisSize(debris, spec.sizeM);
       }
       // Keep salvage/flags consistent with the intended appearance. The
       // RENDERED colour comes from the candidate's existing mesh slot (selected
@@ -2673,8 +2712,8 @@ export class DebrisField {
       if (typeDef) {
         const massFrac = Math.max(0, Math.min(1,
           (debris.mass - typeDef.massMin) / (typeDef.massMax - typeDef.massMin || 1)));
-        debris.sizeMeter = typeDef.sizeMin + massFrac * (typeDef.sizeMax - typeDef.sizeMin);
-        debris.sceneSize = debris.sizeMeter * 0.00001;
+        DebrisField.setDebrisSize(debris,
+          typeDef.sizeMin + massFrac * (typeDef.sizeMax - typeDef.sizeMin));
       }
       if (debris.dragMultiplier) debris.dragMultiplier = undefined;
 
@@ -3247,8 +3286,7 @@ export class DebrisField {
       debris.shape = 'icosahedron';
       debris._meshKey = null; // No instanced mesh slot for Kessler fragments
       debris.tracked = Math.random() < TRACKING_PROB.fragment;
-      debris.sizeMeter = randRange(0.01, 0.5);
-      debris.sceneSize = debris.sizeMeter * 0.00001;
+      DebrisField.setDebrisSize(debris, randRange(0.01, 0.5));
       debris.mass = mass / actualCount;
       debris.tumbleRate = randRange(30, 180) * Math.PI / 180;
       debris._initialTumbleRate = debris.tumbleRate; // E1: keep spawn-tumble in sync with the override

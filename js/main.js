@@ -79,6 +79,10 @@ import { NavSphere } from './ui/NavSphere.js';
 import { OrbitMFD } from './ui/OrbitMFD.js';
 import { DebrisMap } from './ui/DebrisMap.js';
 // DebrisWireframe is now created by HUD.js (integrated right-column layout)
+// Whale-in-cone phase 3: main ALSO imports it directly for the scenario probe's
+// bounding-radius reads (getBoundingRadius is a static cached accessor).
+import { DebrisWireframe } from './ui/DebrisWireframe.js';
+import { drawnRimRadiusAtDepth, contentsFloorRadius, depthToRingT } from './ui/NetMeshKit.js';
 import { DockingReticle } from './ui/DockingReticle.js';
 import { VelocityStreaks } from './ui/VelocityStreaks.js';
 import { TrailSystem } from './ui/TrailSystem.js';
@@ -1862,13 +1866,34 @@ async function init() {
             || live.slice().sort((a, b) => (b.mass || 0) - (a.mass || 0))[0];
           if (!whale) return { ok: false, reason: 'no live welcome-field debris (mission-1 enforcement hides catalog pieces)' };
 
-          // 3. Fixed silhouette + physics: 600 kg clears the 500 kg whale
-          //    threshold (MOTHER_MIN_MASS), ~12% of the LARGE net's 5000 kg
-          //    rating so the strain roll never arms; 7 m length presents
-          //    under the 8 m net diameter from any tumble angle (no
-          //    oversize_aspect bounce).
+          // 3. Fixed silhouette + physics. Whale-in-cone phase 3 (D1):
+          //    sizeMeter is NOT the rendered size — the renderer scales the
+          //    instance by sceneSize, and the rendered extent is
+          //    renderScale × DebrisWireframe.getBoundingRadius(type, id).
+          //    Derive the size from a DESIRED RENDERED RADIUS, then raise it
+          //    to CN.MOTHER_CATCH_MIN_RENDER_M so the net-held readability
+          //    clamp (DebrisField._updateInstanceTransform, W5) is a no-op and
+          //    the catch cannot pop 1.5× larger at the CAPTURED transition.
+          //    (The old "7 m presents under the 8 m net diameter from any
+          //    tumble angle" comment compared a logical sizeMeter against the
+          //    mouth DIAMETER while the renderer read a different field
+          //    entirely — right intent, wrong arithmetic — and ignored the
+          //    drape/cinch shrink that decides what the beat shows.)
+          //    600 kg clears the 500 kg whale threshold (MOTHER_MIN_MASS),
+          //    ~12% of the LARGE net's 5000 kg rating so the strain roll never
+          //    arms; oversize_aspect is safe (presentedWidthForApproach reads
+          //    lengthM/sizeMeter — 2.0 m ≪ the 8 m DIAMETER). Knock-ons, both
+          //    scenario-only: the berth standoff drops 4.5 m → 2.0 m (W12) and
+          //    the HUD target panel / ToolOdds / ToolRecommender see a 2.0 m
+          //    target instead of 7 m.
           whale.mass = 600;
-          whale.sizeMeter = 7;
+          const TARGET_RENDER_RADIUS_M = 1.5;
+          DebrisWireframe.getGeometry(whale.type, whale.id);   // populate the br cache (uncached ⇒ 1)
+          const br = DebrisWireframe.getBoundingRadius(whale.type, whale.id) || 1;
+          DebrisField.setDebrisSize(whale, Math.max(
+            TARGET_RENDER_RADIUS_M / br,
+            Constants.CAPTURE_NET.MOTHER_CATCH_MIN_RENDER_M,
+          ));                               // cubesat br 0.7610 ⇒ sizeMeter 2.0 ⇒ rendered radius 1.522 m
           whale.brittleness = 0.3;
 
           // 4. Put the whale 25 m ahead — CO-ORBITAL FIRST, then pinned.
@@ -2097,6 +2122,110 @@ async function init() {
               return +(Math.hypot(sp.x / M - net.position.x, sp.y / M - net.position.y,
                                   sp.z / M - net.position.z)).toFixed(1);
             })(),
+            // Cone-containment (net-fabric-look phase 2): the whale in the
+            // ceremony bag's LOCAL frame (apex z=0, mouth z=-coneH). The whale
+            // is visually inside the bag ⇔ zM ∈ [-coneH, 0] and rM (lateral
+            // off-axis) ≤ mouthRadius × t. net-centre distance (netToWhaleM)
+            // cannot see an off-axis whale; this can. The harness tracks the
+            // min rM and whether insideCone was ever true through CONTACT→CINCH.
+            whaleLocal: (() => {
+              try {
+                const vis0 = captureNetVisual?._activeVisuals?.get('pod_0')
+                  ?? [...(captureNetVisual?._activeVisuals?.values() ?? [])].find(v => v?.useCeremony);
+                const kh = vis0?.kitHandle;
+                if (!kh || !sp) return null;
+                kh.group.updateMatrixWorld(true);
+                const lp = new THREE.Vector3(sp.x, sp.y, sp.z);
+                kh.group.worldToLocal(lp);
+                const zM = lp.z / M, rM = Math.hypot(lp.x, lp.y) / M;
+                const mouthRM = kh.mouthRadius / M, coneHM = kh.coneHeight / M;
+                // Containment is computed by the SHARED predicate (whale-in-cone
+                // Task 1) so probe, harness and tests cannot drift.
+                const coneR = coneRadiusAtDepth(mouthRM, coneHM, -zM);
+                const clearance = coneR - rM;
+                // Review §Minor: the deficit must use the RENDERED radius —
+                // sizeMeter/2 is not the rendered size (W5), so the old
+                // expression under-read by ~0.5 m on the ceremony whale.
+                DebrisWireframe.getGeometry(whale.type, whale.id);
+                const brL = DebrisWireframe.getBoundingRadius(whale.type, whale.id) || 1;
+                const whaleHalfM = DebrisField.effectiveRenderScale(whale) * brL / M;
+                return {
+                  zM: +zM.toFixed(2), rM: +rM.toFixed(2),
+                  aM: +(-zM).toFixed(2),
+                  t: +(-zM / coneHM).toFixed(2),
+                  coneRadiusAtZM: +coneR.toFixed(2),
+                  insideCone: isInsideCone(zM, rM, mouthRM, coneHM),
+                  clearanceM: +clearance.toFixed(2),
+                  silhouetteDeficitM: +(rM + whaleHalfM - coneR).toFixed(2),
+                };
+              } catch (_e) { return null; }
+            })(),
+            // ── Whale-in-cone phase 3 (Task 2.1): scale-aware witness block ──
+            // sizeMeter is NOT the rendered size — the renderer scales the
+            // instance by sceneSize (raised to _catchRenderMin while _armPinned,
+            // W5) and the rendered extent is renderScale × boundingRadius. This
+            // block measures the RENDERED whale against the DRAWN bag rim, so a
+            // sub-metre crumb can never again satisfy a 7 m gate. All metre
+            // fields are true metres; renderScale/sceneSize are scene units.
+            whaleScale: (() => {
+              try {
+                if (!whale) return null;
+                // Populate the br cache FIRST — getBoundingRadius returns 1 for
+                // an uncached key (W2 trap), which would mis-size everything
+                // downstream by up to 31%.
+                DebrisWireframe.getGeometry(whale.type, whale.id);
+                const br = DebrisWireframe.getBoundingRadius(whale.type, whale.id) || 1;
+                // Read the effective scale through the Task-3 SSOT helper so
+                // probe and renderer cannot drift.
+                const renderScale = DebrisField.effectiveRenderScale(whale);
+                const renderRadiusM = renderScale * br / M;
+                const sm = whale.sizeMeter ?? null;
+                const ss = whale.sceneSize ?? null;
+                const consistent = (typeof sm === 'number' && typeof ss === 'number')
+                  ? Math.abs(ss - sm * 1e-5) < 1e-12 : null;
+                // Drawn rim at the whale's depth, via the Task-1 NetMeshKit
+                // exports — including the contents floor the Task-5 driver
+                // stores on the handle (absent pre-Task-5 ⇒ floor 0 ⇒ the
+                // natural drape/cinch radius, i.e. exactly what the mesh draws).
+                let drapeFrac = null, cinchFrac = null, drawnRimM = null, pierceM = null, fillFrac = null;
+                const vis0 = captureNetVisual?._activeVisuals?.get('pod_0')
+                  ?? [...(captureNetVisual?._activeVisuals?.values() ?? [])].find(v => v?.useCeremony);
+                const kh = vis0?.kitHandle;
+                if (kh && sp) {
+                  kh.group.updateMatrixWorld(true);
+                  const lp = new THREE.Vector3(sp.x, sp.y, sp.z);
+                  kh.group.worldToLocal(lp);
+                  drapeFrac = kh._drape ?? null;
+                  cinchFrac = kh._cinchFrac ?? null;
+                  const natural = drawnRimRadiusAtDepth(-lp.z, kh.mouthRadius, kh.coneHeight,
+                    kh._drape ?? 0, kh._cinchFrac ?? 0,
+                    Constants.CAPTURE_NET.NET_CEREMONY.DRAWSTRING_RADIUS_FRAC_CLOSED);
+                  // Task 7: the mesh clamps the contents floor to the ring's
+                  // own open-cone radius (mouthRadius·t at the whale's depth)
+                  // — the probe must apply the IDENTICAL clamp or probe and
+                  // mesh drift (R1's apex balloon passed the gate that way).
+                  const tW = depthToRingT(-lp.z, kh.coneHeight, kh._drape ?? 0);
+                  const floor = (kh._drape > 0)
+                    ? Math.min(contentsFloorRadius(lp.z, kh._contentsZ ?? 0, kh._contentsR ?? 0),
+                               kh.mouthRadius * tW)
+                    : 0;
+                  const drawn = Math.max(natural, floor) / M;
+                  drawnRimM = +drawn.toFixed(3);
+                  pierceM = +(renderRadiusM - drawn).toFixed(3);   // > 0 ⇒ bag inside the whale
+                  fillFrac = drawn > 0 ? +(renderRadiusM / drawn).toFixed(3) : null;
+                }
+                return {
+                  type: whale.type ?? null,
+                  boundingRadius: +br.toFixed(4),
+                  sizeMeter: sm, sceneSize: ss,
+                  sceneSizeConsistent: consistent,
+                  renderScale,
+                  renderRadiusM: +renderRadiusM.toFixed(3),
+                  drapeFrac, cinchFrac,
+                  drawnRimAtWhaleM: drawnRimM, pierceM, fillFrac,
+                };
+              } catch (_e) { return null; }
+            })(),
             // Pin-branch forensics: is the whale the object the field
             // actually renders, and where would the pin put it?
             hasInstance:   !!debrisField?._instanceLookup?.has(whale?.id),
@@ -2300,7 +2429,446 @@ async function init() {
         }
       };
 
-      console.info(`[netShot] ready. __netShot("name") to grab, __netPause(true) to freeze, __netAuto(true) for auto-capture (currently ${_autoOn ? 'ON' : 'OFF'}), __netScenario() for the deterministic whale capture.`);
+      // ── Per-frame probe recorder (whale-in-cone plan, Task 1.4) ──
+      // `__netScenarioProbe()` is a stateless getter and the harness polls it at
+      // 1 Hz — too coarse to see the brake instant, which is a single frame
+      // inside a slow-motion beat. This recorder captures a SLIM sample every
+      // frame while enabled. It deliberately does NOT call __netScenarioProbe()
+      // per frame (~40 fields, includes a raycast) — it reuses the few fields
+      // that actually matter. Ring buffer, capped; off by default; zero cost
+      // beyond one boolean check when disabled.
+      //   __netProbeRecord(true|false) → enable/disable capture
+      //   __netProbeDump()             → { samples, dropped, startedAtMs, hz }
+      //   __netProbeClear()            → empty the buffer
+      const _PROBE_REC = {
+        on: false,
+        buf: [],
+        dropped: 0,
+        cap: 20000,          // ~5.5 min at 60 fps
+        startedAtMs: null,
+        lastTsMs: null,
+      };
+      window.__netProbeRecord = (on) => { _PROBE_REC.on = !!on; if (on) _PROBE_REC.startedAtMs ??= performance.now(); return _PROBE_REC.on; };
+      window.__netProbeClear = () => { _PROBE_REC.buf.length = 0; _PROBE_REC.dropped = 0; _PROBE_REC.startedAtMs = null; _PROBE_REC.lastTsMs = null; return true; };
+      window.__netProbeDump = () => {
+        const n = _PROBE_REC.buf.length;
+        const spanMs = (_PROBE_REC.lastTsMs != null && _PROBE_REC.startedAtMs != null)
+          ? Math.max(0, _PROBE_REC.lastTsMs - _PROBE_REC.startedAtMs) : 0;
+        return {
+          samples: _PROBE_REC.buf,
+          dropped: _PROBE_REC.dropped,
+          startedAtMs: _PROBE_REC.startedAtMs,
+          hz: spanMs > 0 ? +(n / (spanMs / 1000)).toFixed(1) : null,
+        };
+      };
+      // Called once per frame from gameLoop (see end of gameLoop). Builds the
+      // slim sample inline; any failure leaves the buffer untouched.
+      window.__netProbeTick = (nowMs) => {
+        if (!_PROBE_REC.on) return;
+        try {
+          const M = 0.00001;
+          const net = _scenarioNet;
+          const whale = net?.targetDebris;
+          const sp = whale?._scenePosition;
+          if (!net || !sp) return;
+          const cs = cameraSystem, c = cs?._netCeremony;
+          const beat = c?.beats?.[c.beatIndex];
+          // Cone-local whale via the SHARED predicates (same frame as the probe).
+          let aM = null, rM = null, zM = null, coneR = null, inside = null;
+          // Whale-in-cone phase 3 (Task 2.1): scale-aware fields on the SLIM
+          // sample. br via the cached accessor (getGeometry first — uncached
+          // returns 1); render scale via the Task-3 SSOT helper.
+          let whaleType = null, whaleRenderRadiusM = null, sceneSizeConsistent = null;
+          let drapeFrac = null, cinchFrac = null, drawnRimAtWhaleM = null, pierceM = null;
+          const vis0 = captureNetVisual?._activeVisuals?.get('pod_0')
+            ?? [...(captureNetVisual?._activeVisuals?.values() ?? [])].find(v => v?.useCeremony);
+          const kh = vis0?.kitHandle;
+          if (kh) {
+            kh.group.updateMatrixWorld(true);
+            const lp = new THREE.Vector3(sp.x, sp.y, sp.z);
+            kh.group.worldToLocal(lp);
+            zM = +(lp.z / M).toFixed(2);
+            rM = +(Math.hypot(lp.x, lp.y) / M).toFixed(2);
+            aM = +(-lp.z / M).toFixed(2);
+            const mouthRM = kh.mouthRadius / M, coneHM = kh.coneHeight / M;
+            coneR = +coneRadiusAtDepth(mouthRM, coneHM, aM).toFixed(2);
+            inside = isInsideCone(zM, rM, mouthRM, coneHM);
+            // Scale witness: rendered whale radius vs the DRAWN rim at its
+            // depth (natural drape/cinch radius + the Task-5 contents floor
+            // when the driver supplies one; absent ⇒ 0 ⇒ natural only).
+            DebrisWireframe.getGeometry(whale.type, whale.id);
+            const br = DebrisWireframe.getBoundingRadius(whale.type, whale.id) || 1;
+            whaleType = whale.type ?? null;
+            whaleRenderRadiusM = +(DebrisField.effectiveRenderScale(whale) * br / M).toFixed(3);
+            const sm = whale.sizeMeter, ss = whale.sceneSize;
+            sceneSizeConsistent = (typeof sm === 'number' && typeof ss === 'number')
+              ? Math.abs(ss - sm * 1e-5) < 1e-12 : null;
+            drapeFrac = kh._drape ?? null;
+            cinchFrac = kh._cinchFrac ?? null;
+            const natural = drawnRimRadiusAtDepth(-lp.z, kh.mouthRadius, kh.coneHeight,
+              kh._drape ?? 0, kh._cinchFrac ?? 0,
+              Constants.CAPTURE_NET.NET_CEREMONY.DRAWSTRING_RADIUS_FRAC_CLOSED);
+            // Task 7: identical open-cone clamp as the mesh (mouthRadius·t at
+            // the whale's depth) — probe/recorder and mesh must never drift.
+            const tW = depthToRingT(-lp.z, kh.coneHeight, kh._drape ?? 0);
+            const floor = (kh._drape > 0)
+              ? Math.min(contentsFloorRadius(lp.z, kh._contentsZ ?? 0, kh._contentsR ?? 0),
+                         kh.mouthRadius * tW)
+              : 0;
+            drawnRimAtWhaleM = +(Math.max(natural, floor) / M).toFixed(3);
+            pierceM = +(whaleRenderRadiusM - drawnRimAtWhaleM).toFixed(3);
+          }
+          // Anchor-drag witness: lateral displacement of the LIVE muzzle anchor
+          // since fire, measured perpendicular to the frozen launchDirection.
+          // Read the live anchor directly (pod muzzle scene position ÷ M →
+          // metres) so units match net.position (metres). This is the single
+          // moving term in the frozen-line update (CaptureNet.js:924): the
+          // whale is pinned (sceneVsExpectedM = 0), launchDirection is frozen,
+          // so ANY growth in the whale's cone-local lateral offset r is exactly
+          // Wrap the per-frame recorder sample. (The former anchorDxM witness was
+          // removed: it measured the anchor's huge absolute orbital drift — the
+          // ship translates ~10× world-time — not the small lateral component,
+          // so it was a red herring. cone-local rM/aM/clearanceM are the honest
+          // containment witnesses.)
+          const netToWhaleM = net.position
+            ? +(Math.hypot(sp.x / M - net.position.x, sp.y / M - net.position.y, sp.z / M - net.position.z)).toFixed(2)
+            : null;
+          const s = {
+            tMs: Math.round(nowMs),
+            netState: net.state ?? null,
+            beatKey: beat?.key ?? null,
+            flightTime: +net.flightTime.toFixed(2),
+            travelledM: +net.distanceTraveled.toFixed(1),
+            netToWhaleM,
+            aM, rM, zM,
+            coneRadiusAtZM: coneR,
+            clearanceM: (coneR != null && rM != null) ? +(coneR - rM).toFixed(2) : null,
+            insideCone: inside,
+            pinned: !!whale._onboardingPinned,
+            // Whale-in-cone phase 3 scale witness (null when no kit handle).
+            whaleType, whaleRenderRadiusM, sceneSizeConsistent,
+            drapeFrac, cinchFrac, drawnRimAtWhaleM, pierceM,
+          };
+          if (_PROBE_REC.buf.length >= _PROBE_REC.cap) { _PROBE_REC.dropped++; return; }
+          _PROBE_REC.buf.push(s);
+          _PROBE_REC.lastTsMs = nowMs;
+          } catch (_e) { /* recorder must never break the game loop */ }
+      };
+
+
+      // ── Net-visual gate (net-fabric-look phase 2, Task 1) ──
+      // Dev-only, same `window.__net*` convention as __netScenarioProbe. Three
+      // hooks that make "looks like fabric" a measured number:
+      //   __netFreeze(true|false)        → alias of __netPause (freeze the sim/
+      //                                    sun/camera so two captures are the
+      //                                    same instant; phase 1 C4 used this).
+      //   __netVisualToggle(part, on)    → set .visible on kit meshes for
+      //                                    part ∈ {membrane, web, nodes,
+      //                                    tether, all}. The A/B differential
+      //                                    C6 needed and never had.
+      //   __netRoi()                     → project the ceremony bag's mouth-rim
+      //                                    ring + apex into screen space and
+      //                                    report a deterministic ROI, plus the
+      //                                    membrane material/env instrumentation
+      //                                    Task 2's H1–H5 forensics read.
+      window.__netFreeze = (val) => window.__netPause(val);
+
+      // Force one render while paused (the game loop early-returns before
+      // render() when paused, so a visibility toggle would otherwise never
+      // reach the canvas). Two calls flush the composer/renderer. Returns true.
+      window.__netRender = () => {
+        try { sceneManager?.render(); sceneManager?.render(); } catch (_e) {}
+        return true;
+      };
+
+      // Grab the current #game-canvas as an opaque-black RGBA data URL. Used by
+      // the gate harness to read back each toggle's frozen frame.
+      window.__netGrab = () => {
+        try {
+          const cv = document.getElementById('game-canvas');
+          if (!cv) return null;
+          const flat = document.createElement('canvas');
+          flat.width = cv.width; flat.height = cv.height;
+          const ctx = flat.getContext('2d');
+          ctx.fillStyle = '#000'; ctx.fillRect(0, 0, flat.width, flat.height);
+          ctx.drawImage(cv, 0, 0);
+          const url = flat.toDataURL('image/png');
+          return url.length > 1000 ? url : null;
+        } catch (_e) { return null; }
+      };
+
+
+      // Dev-only style override for live ceremony visuals (net-fabric-look Task
+      // 3/4 + the gate's prove-fail): lineWidthPx sets the web thread width,
+      // membraneOpacity sets the membrane material opacity directly. Passing a
+      // field as null leaves it untouched (so one field can be A/B'd at a time).
+      window.__netWebStyle = (cfg = {}) => {
+        try {
+          const snap = {};
+          for (const [key, vis] of (captureNetVisual?._activeVisuals ?? [])) {
+            if (!vis?.useCeremony || !vis.kitHandle) continue;
+            if (typeof cfg.lineWidthPx === 'number') {
+              vis.kitHandle.coneMesh.material.linewidth = cfg.lineWidthPx;
+            }
+            if (typeof cfg.membraneOpacity === 'number') {
+              vis.kitHandle.membraneMat.opacity = cfg.membraneOpacity;
+            }
+            snap[key] = {
+              linewidth: vis.kitHandle.coneMesh.material.linewidth,
+              membraneOpacity: vis.kitHandle.membraneMat?.opacity ?? null,
+            };
+          }
+          return snap;
+        } catch (e) { return { error: String((e && e.message) || e) }; }
+      };
+
+      // Dev-only membrane configuration + visibility A/B for Task 2 forensics
+      // (net-fabric-look). The as-shipped membrane mesh is built hidden and no
+      // FSM ever shows it (filmShare measured 0). This forces it visible and
+      // applies one material field at a time so the harness can settle H1–H5.
+      // Fields: { visible, transmission, opacity, side('front'|'double'),
+      //          renderOrder, depthWrite, roughness, sheen, envMapIntensity }.
+      // Omitted fields are left untouched. Returns the applied values.
+      window.__netMembraneCfg = (cfg = {}) => {
+        try {
+          const snap = {};
+          for (const [key, vis] of (captureNetVisual?._activeVisuals ?? [])) {
+            if (!vis?.useCeremony || !vis.kitHandle) continue;
+            const mm = vis.kitHandle.membraneMesh, mat = vis.kitHandle.membraneMat;
+            if (mm && typeof cfg.visible === 'boolean') mm.visible = cfg.visible;
+            if (mat) {
+              if (typeof cfg.transmission === 'number') mat.transmission = cfg.transmission;
+              if (typeof cfg.opacity === 'number') mat.opacity = cfg.opacity;
+              if (typeof cfg.renderOrder === 'number') mm.renderOrder = cfg.renderOrder;
+              if (typeof cfg.depthWrite === 'boolean') mat.depthWrite = cfg.depthWrite;
+              if (typeof cfg.roughness === 'number') mat.roughness = cfg.roughness;
+              if (typeof cfg.sheen === 'number') mat.sheen = cfg.sheen;
+              if (typeof cfg.envMapIntensity === 'number') mat.envMapIntensity = cfg.envMapIntensity;
+              if (cfg.side === 'front') mat.side = 0;      // THREE.FrontSide
+              else if (cfg.side === 'double') mat.side = 2; // THREE.DoubleSide
+              mat.needsUpdate = true;
+            }
+            snap[key] = {
+              visible: mm?.visible ?? null,
+              opacity: mat ? +mat.opacity.toFixed(3) : null,
+              transmission: mat ? +mat.transmission.toFixed(3) : null,
+              side: mat ? mat.side : null,
+              renderOrder: mm?.renderOrder ?? null,
+            };
+          }
+          return snap;
+        } catch (e) { return { error: String((e && e.message) || e) }; }
+      };
+
+      // Dev-only whale visibility toggle for the manual-gate pixel check
+      // (net-fabric-look phase 2): zero-scales the scenario whale's instance so
+      // |A − A_noWhale| isolates exactly the whale's pixels — the one way to
+      // answer "is the whale visibly inside the net?" without eyes on the PNG.
+      let _whaleSavedMatrix = null;
+      window.__netWhaleToggle = (on) => {
+        try {
+          const whale = _scenarioNet?.targetDebris;
+          const df = debrisField;
+          if (!whale || !df) return { ok: false, reason: 'no whale/debrisField' };
+          const lookup = df._instanceLookup?.get(whale.id);
+          const mesh = lookup && df.instancedMeshes?.[lookup.meshKey];
+          if (!mesh) return { ok: false, reason: 'no instance/mesh' };
+          if (!on) {
+            if (!_whaleSavedMatrix) _whaleSavedMatrix = new THREE.Matrix4();
+            mesh.getMatrixAt(lookup.instanceIndex, _whaleSavedMatrix);
+            mesh.setMatrixAt(lookup.instanceIndex, new THREE.Matrix4().makeScale(0, 0, 0));
+          } else if (_whaleSavedMatrix) {
+            mesh.setMatrixAt(lookup.instanceIndex, _whaleSavedMatrix);
+          }
+          mesh.instanceMatrix.needsUpdate = true;
+          return { ok: true, on: !!on };
+        } catch (e) { return { ok: false, reason: String((e && e.message) || e) }; }
+      };
+
+      // Dev-only physics→screen projection for the manual gate (net-fabric-look
+      // phase 2): projects net.position, whale._scenePosition and the pod
+      // muzzle through the camera so the harness can tell whether the RENDERED
+      // whale/bag sit where the physics says they should.
+      window.__netProject = () => {
+        try {
+          const M = 1e-5; // 1 metre in scene units (same M as the probe)
+          const cam = sceneManager?.camera;
+          const renderer = sceneManager?.renderer;
+          if (!cam || !renderer) return { error: 'no camera/renderer' };
+          const bufW = renderer.domElement?.width ?? 0;
+          const bufH = renderer.domElement?.height ?? 0;
+          cam.updateMatrixWorld();
+          cam.matrixWorldInverse.copy(cam.matrixWorld).invert();
+          const proj = (x, y, z) => {
+            const v = new THREE.Vector4(x, y, z, 1)
+              .applyMatrix4(cam.matrixWorldInverse).applyMatrix4(cam.projectionMatrix);
+            if (v.w <= 0) return null;
+            return [Math.round((v.x / v.w * 0.5 + 0.5) * bufW), Math.round((1 - (v.y / v.w * 0.5 + 0.5)) * bufH)];
+          };
+          const net = _scenarioNet;
+          const whale = net?.targetDebris;
+          const sp = whale?._scenePosition;
+          const pod = (player && typeof player.getNetPodPosition === 'function') ? player.getNetPodPosition(0) : null;
+          // Cone-containment: the whale in the ceremony kit's LOCAL frame.
+          // local -Z = launch axis; inside the bag ⇔ local z ∈ [-coneH, 0] and
+          // local radius < mouthRadius(t). This is the deferred phase-1 metric.
+          let whaleLocal = null, insideCone = null;
+          try {
+            const vis0 = captureNetVisual?._activeVisuals?.get('pod_0')
+              ?? [...(captureNetVisual?._activeVisuals?.values() ?? [])].find(v => v?.useCeremony);
+            const kh = vis0?.kitHandle;
+            if (kh && sp) {
+              kh.group.updateMatrixWorld(true);
+              const lp = new THREE.Vector3(sp.x, sp.y, sp.z);
+              kh.group.worldToLocal(lp);
+              const zM = lp.z / M, rM = Math.hypot(lp.x, lp.y) / M;
+              const mouthRM = kh.mouthRadius / M, coneHM = kh.coneHeight / M;
+              const t = -zM / coneHM;
+              whaleLocal = { zM: +zM.toFixed(2), rM: +rM.toFixed(2), t: +t.toFixed(2), mouthRadiusM: +mouthRM.toFixed(2), coneHeightM: +coneHM.toFixed(2) };
+              // Use the SHARED predicate (same as probe + recorder) so the three
+              // containment tools cannot drift.
+              insideCone = isInsideCone(zM, rM, mouthRM, coneHM);
+            }
+          } catch (_e) {}
+          return {
+            bufW, bufH,
+            netPos: net?.position ? proj(net.position.x * M, net.position.y * M, net.position.z * M) : null,
+            whalePos: sp ? proj(sp.x, sp.y, sp.z) : null,
+            podPos: pod ? proj(pod.x, pod.y, pod.z) : null,
+            netToWhaleM: (net?.position && sp)
+              ? +(Math.hypot(sp.x / M - net.position.x, sp.y / M - net.position.y, sp.z / M - net.position.z)).toFixed(2) : null,
+            whaleLocal, insideCone,
+          };
+        } catch (e) { return { error: String((e && e.message) || e) }; }
+      };
+
+      window.__netVisualToggle = (part, on) => {
+        try {
+          const on2 = !!on;
+          const snap = {};
+          for (const [key, vis] of (captureNetVisual?._activeVisuals ?? [])) {
+            if (!vis?.useCeremony || !vis.kitHandle) continue;
+            const set = (m, v) => { if (m) m.visible = v; };
+            if (part === 'all' || part === 'web') set(vis.kitHandle.coneMesh, on2);
+            if (part === 'all' || part === 'membrane') set(vis.kitHandle.membraneMesh, on2);
+            if (part === 'all' || part === 'nodes') {
+              for (const w of vis.kitHandle.rimWeights) set(w, on2);
+              set(vis.kitHandle.apexHub, on2);
+            }
+            if (part === 'all' || part === 'tether') set(vis.tetherLine, on2);
+            snap[key] = {
+              web: vis.kitHandle.coneMesh.visible,
+              membrane: vis.kitHandle.membraneMesh?.visible ?? null,
+              tether: vis.tetherLine.visible,
+            };
+          }
+          return snap;
+        } catch (e) { return { error: String((e && e.message) || e) }; }
+      };
+
+      window.__netRoi = () => {
+        try {
+          const cam = sceneManager?.camera;
+          const renderer = sceneManager?.renderer;
+          if (!cam || !renderer) return { error: 'no camera/renderer' };
+          const bufW = renderer.domElement?.width
+            ?? renderer.getSize(new THREE.Vector2()).width;
+          const bufH = renderer.domElement?.height
+            ?? renderer.getSize(new THREE.Vector2()).height;
+          cam.updateMatrixWorld();
+          cam.matrixWorldInverse.copy(cam.matrixWorld).invert();
+          const proj = cam.projectionMatrix;
+          const v4 = new THREE.Vector4();
+          const lp = new THREE.Vector3();
+
+          let best = null;
+          const visuals = {};
+          for (const [key, vis] of (captureNetVisual?._activeVisuals ?? [])) {
+            if (!vis?.useCeremony || !vis.kitHandle) continue;
+            const kh = vis.kitHandle;
+            kh.group.updateMatrixWorld(true);
+            const mat = kh.group.matrixWorld;
+
+            const pts = [];
+            pts.push([0, 0, 0]);                       // apex
+            pts.push([0, 0, -kh.coneHeight]);          // mouth centre
+            const spokes = Math.max(8, kh.radialSpokes || 20);
+            for (let s = 0; s < spokes; s++) {
+              const a = (2 * Math.PI * s) / spokes;
+              pts.push([
+                Math.cos(a) * kh.mouthRadius,
+                Math.sin(a) * kh.mouthRadius,
+                -kh.coneHeight,
+              ]);
+            }
+            let minPxX = Infinity, minPxY = Infinity, maxPxX = -Infinity, maxPxY = -Infinity;
+            let behind = 0, off = 0;
+            for (const [x, y, z] of pts) {
+              v4.set(x, y, z, 1).applyMatrix4(mat).applyMatrix4(cam.matrixWorldInverse).applyMatrix4(proj);
+              if (v4.w <= 0) { behind++; continue; }
+              const nx = v4.x / v4.w, ny = v4.y / v4.w;
+              if (nx < -1 || nx > 1 || ny < -1 || ny > 1) off++;
+              const px = (nx * 0.5 + 0.5) * bufW;
+              const py = (1 - (ny * 0.5 + 0.5)) * bufH;
+              if (px < minPxX) minPxX = px;
+              if (py < minPxY) minPxY = py;
+              if (px > maxPxX) maxPxX = px;
+              if (py > maxPxY) maxPxY = py;
+            }
+            if (!isFinite(minPxX)) continue;
+            const x0 = Math.max(0, Math.round(minPxX - 1));
+            const y0 = Math.max(0, Math.round(minPxY - 1));
+            const x1 = Math.min(bufW, Math.round(maxPxX + 1));
+            const y1 = Math.min(bufH, Math.round(maxPxY + 1));
+            // camInsideBag: camera inside the cone (local z in [-coneH,0] and
+            // local radius < mouthRadius at that z).
+            let camInsideBag = false;
+            try {
+              lp.copy(cam.position);
+              kh.group.worldToLocal(lp);
+              const r = Math.hypot(lp.x, lp.y);
+              const t = -lp.z / Math.max(1e-9, kh.coneHeight);
+              if (t >= 0 && t <= 1 && r < kh.mouthRadius * (t + 0.05)) camInsideBag = true;
+            } catch {}
+            const entry = {
+              key,
+              roi: { x0, y0, x1, y1 },
+              roiClipped: behind > 0 || off > 0,
+              roiAreaPx: Math.max(0, (x1 - x0) * (y1 - y0)),
+              camInsideBag,
+              behindPoints: behind,
+              offPoints: off,
+              camDM: kh.group
+                ? +((kh.group.getWorldPosition(new THREE.Vector3()).distanceTo(cam.position)) / 1e-5).toFixed(1)
+                : null,
+            };
+            visuals[key] = entry;
+            if (!best || entry.roiAreaPx > best.roiAreaPx) best = entry;
+          }
+          const out = { bufW, bufH, visuals };
+          if (best) {
+            const kh = visuals[best.key] && captureNetVisual._activeVisuals.get(best.key)?.kitHandle;
+            if (kh) {
+              out.primary = best.key;
+              out.roi = best.roi;
+              out.roiClipped = best.roiClipped;
+              out.camInsideBag = best.camInsideBag;
+              out.membrane = {
+                visible: kh.membraneMesh?.visible ?? null,
+                opacity: kh.membraneMat ? +kh.membraneMat.opacity.toFixed(3) : null,
+                transmission: kh.membraneMat ? +kh.membraneMat.transmission.toFixed(3) : null,
+                roughness: kh.membraneMat ? +kh.membraneMat.roughness.toFixed(2) : null,
+                envMapIntensity: kh.membraneMat ? +kh.membraneMat.envMapIntensity.toFixed(2) : null,
+                envMapSet: !!kh.membraneMat?.envMap,
+                sceneEnvSet: !!sceneManager?.scene?.environment,
+              };
+            }
+          }
+          return out;
+        } catch (e) { return { error: String((e && e.message) || e) }; }
+      };
+      console.info('[netRoi] ready. __netRoi(), __netVisualToggle(part, on), __netFreeze(true).');
+
 
       // ── deep-polish-4 T2: menu→sim handoff apparent-size probe ──
       // Analytic (no pixel classification): projects each model's bounding
@@ -3069,6 +3637,10 @@ function gameLoop(timestamp) {
       console.log(`[Profile] calls=${info.calls} triangles=${info.triangles} points=${info.points} lines=${info.lines}`);
     }
   }
+
+  // Whale-in-cone Task 1.4: per-frame probe recorder. One boolean check when
+  // disabled; builds a slim cone-containment sample when __netProbeRecord(true).
+  if (window.__netProbeTick) window.__netProbeTick(timestamp);
 }
 
 // ============================================================================

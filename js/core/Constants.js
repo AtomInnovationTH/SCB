@@ -2908,6 +2908,11 @@ export const Constants = {
       // are kept in sync (they reference 0.85 / 0.425 = coneH/2 directly).
       CONE_LENGTH_FRAC:              0.85,   // apex-to-mouth axial length / (D_mesh × 0.5)
       DRAWSTRING_RADIUS_FRAC_CLOSED: 0.15,   // weight radius at end of cinch / r_open
+      // Whale-in-cone phase 3 (D2): the drawn bag floors on a spherical
+      // envelope around its contents — margin × the ball's cross-section
+      // radius at each ring z (NetMeshKit.contentsFloorRadius). 1.1 = the bag
+      // tightens ONTO the catch with a 10% gap, never through it.
+      CONTENTS_FLOOR_MARGIN:           1.1,
       RIM_WEIGHT_RENDER_RADIUS_M:    0.08,   // visual sphere radius (NOT physics — 75 g tungsten ≈ 1 cm real)
       RIM_WEIGHT_EMISSIVE_BRAKE:     0x66ccff, // colour-tint on NET_BRAKE_FIRED
       TETHER_TENSION_THICKEN_FACTOR: 2.5,    // line width × this on NET_BRAKE_FIRED

@@ -163,7 +163,10 @@ function buildWebPositions(mouthRadius, coneHeight, radialSpokes, rings) {
 // — the bag engulfs the catch (weights overshoot the mouth plane, matching the
 // rim-weight envZ sweep in CaptureNetVisual). The settle-jiggle is a radial
 // ripple, strongest at the mouth, decaying toward the apex.
-function drapeRingRadius(t, spokeAngle, mouthRadius, drape, cinch, closed, jigA, jigP) {
+// Whale-in-cone phase 3 (Task 1): drapeRingRadius / drapeRingZ are EXPORTED so
+// the probe, the harness gates and the unit tests compute the SAME drawn-bag
+// geometry the mesh deforms to — never a re-derived copy. Bodies unchanged.
+export function drapeRingRadius(t, spokeAngle, mouthRadius, drape, cinch, closed, jigA, jigP) {
   let r = mouthRadius * t;
   if (drape > 0) {
     // Pull toward the catch silhouette: the draped radius shrinks toward
@@ -181,13 +184,81 @@ function drapeRingRadius(t, spokeAngle, mouthRadius, drape, cinch, closed, jigA,
   }
   return r;
 }
-function drapeRingZ(t, coneHeight, drape) {
+export function drapeRingZ(t, coneHeight, drape) {
   let z = -coneHeight * t;
   if (drape > 0) {
     // Push the mouth-side rings forward past the mouth plane (engulf).
     z -= drape * coneHeight * (1 - t) * 0.9 * t;
   }
   return z;
+}
+
+// ── Whale-in-cone phase 3 (Task 1): shared drawn-bag geometry ───────────────
+// Three more pure named exports, all scene units (matching mouthRadius /
+// coneHeight). No behaviour change: they only expose and invert maths that
+// already runs per frame.
+
+/**
+ * Invert drapeRingZ: which ring index t sits at `axialDepth` (scene units,
+ * positive = ahead of the apex) for a given drape?  z(t) = −H·(t + k·t·(1−t))
+ * with k = 0.9·drape, so with u = axialDepth/coneHeight:  k·t² − (1+k)·t + u = 0.
+ * Returns the root in [0,1] (clamped); returns u directly when drape === 0.
+ * Ring index t IS the depth fraction only at drape 0 — once the bag engulfs,
+ * every "radius at the whale's depth" must go through this inversion.
+ * @param {number} axialDepth — scene units ahead of the apex (≥ 0)
+ * @param {number} coneHeight — apex→mouth axial length (scene units)
+ * @param {number} drape — 0 = flight cone, 1 = fully draped
+ * @returns {number} ring index t ∈ [0,1]
+ */
+export function depthToRingT(axialDepth, coneHeight, drape) {
+  if (!(coneHeight > 0)) return 0;
+  const u = Math.max(0, Math.min(1, axialDepth / coneHeight));
+  const k = 0.9 * Math.max(0, Math.min(1, drape ?? 0));
+  if (k === 0) return u;
+  const disc = (1 + k) * (1 + k) - 4 * k * u;
+  const t = ((1 + k) - Math.sqrt(Math.max(0, disc))) / (2 * k);
+  return Math.max(0, Math.min(1, t));
+}
+
+/**
+ * The DRAWN rim radius at a given axial depth: drapeRingRadius evaluated at
+ * the ring index drapeRingZ places there. The settle-jiggle is deliberately
+ * excluded — it is a ±ripple around this radius, not a systematic one.
+ * Pure; scene units.
+ * @param {number} axialDepth — scene units ahead of the apex (≥ 0)
+ * @param {number} mouthRadius — open mouth radius (scene units)
+ * @param {number} coneHeight — apex→mouth axial length (scene units)
+ * @param {number} drape — 0 = flight cone, 1 = fully draped
+ * @param {number} cinch — 0 = open, 1 = bunched point
+ * @param {number} closedFrac — DRAWSTRING_RADIUS_FRAC_CLOSED
+ * @returns {number} drawn radius (scene units)
+ */
+export function drawnRimRadiusAtDepth(axialDepth, mouthRadius, coneHeight, drape, cinch, closedFrac) {
+  const t = depthToRingT(axialDepth, coneHeight, drape);
+  return drapeRingRadius(t, 0, mouthRadius, drape, cinch, closedFrac, 0, 0);
+}
+
+/**
+ * Whale-in-cone phase 3 (D2): spherical-envelope floor around the bag's
+ * contents. A net wrapping a ball bulges around the ball and is free to close
+ * everywhere else, so the floor is the ball's cross-section radius at z,
+ * fattened by `margin`:  margin·√(Rc² − (z − zc)²)  for |z − zc| < Rc, else 0.
+ * (A flat floor would balloon the apex and undo the drape's necking behind the
+ * catch.) `contentsRadius` 0 — a miss / no target — floors at 0 everywhere: an
+ * empty net SHOULD bunch to a point; that contrast is what sells a real catch.
+ * Pure; scene units.
+ * @param {number} z — ring axial position (negative = ahead of the apex)
+ * @param {number} contentsZ — contents centre axial position (same frame)
+ * @param {number} contentsRadius — contents rendered radius (scene units)
+ * @param {number} [margin=NET_CER.CONTENTS_FLOOR_MARGIN]
+ * @returns {number} floor radius (scene units), ≥ 0
+ */
+export function contentsFloorRadius(z, contentsZ, contentsRadius, margin = NET_CER.CONTENTS_FLOOR_MARGIN) {
+  if (!(contentsRadius > 0)) return 0;
+  const dz = z - contentsZ;
+  const rr = contentsRadius * contentsRadius - dz * dz;
+  if (rr <= 0) return 0;
+  return margin * Math.sqrt(rr);
 }
 
 function buildWebPositionsDraped(out, p) {
@@ -197,6 +268,13 @@ function buildWebPositionsDraped(out, p) {
   const jigP = p.jigglePhase ?? 0;
   const jigA = p.jiggleAmp ?? 0;
   const closed = NET_CER.DRAWSTRING_RADIUS_FRAC_CLOSED;   // SSOT (was hardcoded 0.15)
+  // Whale-in-cone phase 3 (D2): floor the drawn bag on a spherical envelope
+  // around its contents, so the cinch tightens ONTO the catch and stops
+  // instead of closing to 0.27 m regardless. Drape-gated: during FLIGHT the
+  // catch is not in the bag and a floor would inflate the flight cone.
+  const contentsR = p.contentsRadius ?? 0;
+  const contentsZ = p.contentsZ ?? 0;
+  const floorOn = drape > 0 && contentsR > 0;
   // P2: per-spoke cos/sin/angle are fixed for the life of the handle (radialSpokes
   // never changes), so the consumer passes cached tables in. When absent (a test
   // calling this directly), fall back to computing them — correctness over speed.
@@ -207,11 +285,22 @@ function buildWebPositionsDraped(out, p) {
 
   // Radial spokes: apex → rim (t = 1; the drape z-term vanishes at the mouth).
   const zRim = drapeRingZ(1, coneHeight, drape);
+  // D2: the floor at the RIM's z (not a ring z) — evaluates to 0 whenever the
+  // contents' far face is short of the mouth plane, so the drawstring still
+  // closes; structural insurance against a deeper catch.
+  // Task 7 (R2): clamp the floor to the ring's OWN open-cone radius — at the
+  // rim t = 1, i.e. mouthRadius — so an oversized catch can never inflate the
+  // bag past its own mouth.
+  const rimFloor = floorOn
+    ? Math.min(contentsFloorRadius(zRim, contentsZ, contentsR), mouthRadius)
+    : 0;
   for (let s = 0; s < radialSpokes; s++) {
     const a  = angA ? angA[s] : (2 * Math.PI * s) / radialSpokes;
     const ca = cosA ? cosA[s] : Math.cos(a);
     const sa = sinA ? sinA[s] : Math.sin(a);
-    const r = drapeRingRadius(1, a, mouthRadius, drape, cinch, closed, jigA, jigP);
+    const r = Math.max(
+      drapeRingRadius(1, a, mouthRadius, drape, cinch, closed, jigA, jigP),
+      rimFloor);
     out[idx++] = 0; out[idx++] = 0; out[idx++] = 0;
     out[idx++] = ca * r; out[idx++] = sa * r; out[idx++] = zRim;
   }
@@ -219,6 +308,14 @@ function buildWebPositionsDraped(out, p) {
   for (let k = 1; k <= rings; k++) {
     const t = k / rings;
     const z = drapeRingZ(t, coneHeight, drape);
+    // Task 7 (R1/R2): clamp the floor to the ring's own open-cone radius
+    // (mouthRadius·t). Ring 0's clamp is 0, so the apex can never balloon off
+    // the threads (R1), and no ring can exceed the cone the kit actually has
+    // (R2). A properly aimed catch fits inside the open cone (phase-2
+    // containment), so the clamp cannot clip a contained catch.
+    const ringFloor = floorOn
+      ? Math.min(contentsFloorRadius(z, contentsZ, contentsR), mouthRadius * t)
+      : 0;
     for (let s = 0; s < radialSpokes; s++) {
       const s1 = (s + 1) % radialSpokes;
       const a0 = angA ? angA[s]  : (2 * Math.PI * s) / radialSpokes;
@@ -229,8 +326,8 @@ function buildWebPositionsDraped(out, p) {
       const n0 = sinA ? sinA[s]  : Math.sin(a0);
       const c1 = cosA ? cosA[s1] : Math.cos(a1);
       const n1 = sinA ? sinA[s1] : Math.sin(a1);
-      const r0 = drapeRingRadius(t, a0, mouthRadius, drape, cinch, closed, jigA, jigP);
-      const r1 = drapeRingRadius(t, a1, mouthRadius, drape, cinch, closed, jigA, jigP);
+      const r0 = Math.max(drapeRingRadius(t, a0, mouthRadius, drape, cinch, closed, jigA, jigP), ringFloor);
+      const r1 = Math.max(drapeRingRadius(t, a1, mouthRadius, drape, cinch, closed, jigA, jigP), ringFloor);
       out[idx++] = c0 * r0; out[idx++] = n0 * r0; out[idx++] = z;
       out[idx++] = c1 * r1; out[idx++] = n1 * r1; out[idx++] = z;
     }
@@ -277,6 +374,12 @@ function updateMembraneLattice(out, p) {
   // and scaled by the same drape parameter driving ENVELOP.
   const compressM = p.compressM ?? 0;
   const contactT = p.contactT ?? 0.75;
+  // Whale-in-cone phase 3 (D2): same contents floor as the threads, applied
+  // AFTER the compression dent so the floor always wins — the film can dent
+  // toward the catch but never through it. Drape-gated like the web path.
+  const contentsR = p.contentsRadius ?? 0;
+  const contentsZ = p.contentsZ ?? 0;
+  const floorOn = drape > 0 && contentsR > 0;
   const cosA = (p.cosA && p.cosA.length === radialSpokes) ? p.cosA : null;
   const sinA = (p.sinA && p.sinA.length === radialSpokes) ? p.sinA : null;
   const angA = (p.angA && p.angA.length === radialSpokes) ? p.angA : null;
@@ -284,6 +387,12 @@ function updateMembraneLattice(out, p) {
   for (let k = 0; k <= rings; k++) {
     const t = k / rings;
     const z = drapeRingZ(t, coneHeight, drape);
+    // Task 7 (R1): same open-cone clamp as the web path — ring 0's clamp is 0,
+    // so the membrane apex stays welded to the spoke apex even when the
+    // contents envelope peaks at z = 0 (the REELING/BERTHED co-location).
+    const ringFloor = floorOn
+      ? Math.min(contentsFloorRadius(z, contentsZ, contentsR), mouthRadius * t)
+      : 0;
     for (let s = 0; s < radialSpokes; s++) {
       const a  = angA ? angA[s] : (2 * Math.PI * s) / radialSpokes;
       const ca = cosA ? cosA[s] : Math.cos(a);
@@ -293,6 +402,7 @@ function updateMembraneLattice(out, p) {
         const g = (t - contactT) / 0.18;
         r = Math.max(0, r - drape * compressM * Math.exp(-g * g));
       }
+      r = Math.max(r, ringFloor);
       out[idx++] = ca * r; out[idx++] = sa * r; out[idx++] = z;
     }
   }
@@ -584,7 +694,14 @@ export const NetMeshKit = {
    */
   setMouthFraction(h, frac) {
     const f = Math.max(0.05, Math.min(1, frac));
-    const r = h.mouthRadius * f;
+    // Whale-in-cone phase 3 (D2): never place the rim inside the contents
+    // envelope. Evaluates to 0 whenever the contents are absent or their far
+    // face is short of the mouth plane — structural insurance, not a behaviour
+    // change for the lasso path (which never sets _contentsR).
+    // Task 7 (R2): clamp to the mouth plane's own open radius — the rim can
+    // never be floored past the mouth the kit actually has.
+    const r = Math.max(h.mouthRadius * f,
+      Math.min(contentsFloorRadius(h._mouthZ, h._contentsZ ?? 0, h._contentsR ?? 0), h.mouthRadius));
     for (let i = 0; i < h.weightCount; i++) {
       const a = h._rimAngles[i] + h._spinAngle;
       h.rimWeights[i].position.set(Math.cos(a) * r, Math.sin(a) * r, h._mouthZ);
@@ -647,11 +764,19 @@ export const NetMeshKit = {
    * @param {object} h handle
    */
   setCinchedRim(h) {
+    // Whale-in-cone phase 3 (D2): floor the cinched ring at the contents
+    // envelope evaluated on the mouth plane. For the ceremony geometry the
+    // whale's far face stops short of the mouth, so this evaluates to 0 and the
+    // ring still closes to closedRadius — structural, not lucky.
+    // Task 7 (R2): clamp to mouthRadius — the cinched rim can never be held
+    // open past the kit's own mouth by an oversized catch.
+    const r = Math.max(h.closedRadius,
+      Math.min(contentsFloorRadius(h._mouthZ, h._contentsZ ?? 0, h._contentsR ?? 0), h.mouthRadius));
     for (let i = 0; i < h.weightCount; i++) {
       const a = h._rimAngles[i] + h._spinAngle;
       h.rimWeights[i].position.set(
-        Math.cos(a) * h.closedRadius,
-        Math.sin(a) * h.closedRadius,
+        Math.cos(a) * r,
+        Math.sin(a) * r,
         h._mouthZ,
       );
     }
@@ -749,17 +874,30 @@ export const NetMeshKit = {
    * @param {number} [drapeState.cinchFrac] 0 = open, 1 = bunched point
    * @param {number} [drapeState.jigglePhase] settle-jiggle phase (rad)
    * @param {number} [drapeState.jiggleAmp]   settle-jiggle amplitude (scene units)
+   * @param {number} [drapeState.contentsRadius] whale-in-cone D2 — rendered
+   *   radius of the bag's contents (scene units). The drawn web + membrane floor
+   *   on a spherical envelope around the contents (contentsFloorRadius) once
+   *   drape > 0, so the cinch tightens ONTO the catch and stops. 0 = no
+   *   contents (a miss still bunches to a point — that contrast sells a catch).
+   * @param {number} [drapeState.contentsZ] contents centre in kit-local z
+   *   (scene units, negative = ahead of the apex). Also re-aims the membrane's
+   *   V8 contact dent to the actual seat (W9) instead of the fixed t = 0.75.
    * @param {THREE.Vector3} [drapeState.localCamPos] camera position in the kit's
    *   LOCAL frame (consumer world→local transforms it and passes it in as data,
    *   preserving the kit's pure-local-space rule). When present, V4 depth
    *   shading rewrites the vertex colours: the far side of the bag recedes.
    */
-  updateWebDrape(h, { drape = 0, cinchFrac = 0, jigglePhase = 0, jiggleAmp = 0, localCamPos } = {}) {
+  updateWebDrape(h, { drape = 0, cinchFrac = 0, jigglePhase = 0, jiggleAmp = 0,
+                      contentsRadius = 0, contentsZ = 0, localCamPos } = {}) {
     if (!h || !h.webPositions || !h.coneMesh) return;
     h._drape = drape;
     h._cinchFrac = cinchFrac;
     h._jigglePhase = jigglePhase;
     h._jiggleAmp = jiggleAmp;
+    // D2: stored on the handle so the probe (main.js) and setCinchedRim read
+    // the SAME values the mesh deformed to — never a re-derived copy.
+    h._contentsR = contentsRadius;
+    h._contentsZ = contentsZ;
     buildWebPositionsDraped(h.webPositions, {
       mouthRadius: h.mouthRadius,
       coneHeight: h.coneHeight,
@@ -769,6 +907,8 @@ export const NetMeshKit = {
       cinchFrac,
       jigglePhase,
       jiggleAmp,
+      contentsRadius,
+      contentsZ,
       cosA: h._cosA,
       sinA: h._sinA,
       angA: h._angA,
@@ -789,6 +929,14 @@ export const NetMeshKit = {
         cinchFrac,
         jigglePhase,
         jiggleAmp,
+        contentsRadius,
+        contentsZ,
+        // W9: aim the contact dent at the ACTUAL seat — the ring index of the
+        // contents' depth — instead of the fixed 0.75, which peaked the dent
+        // ~1.4 m ahead of the catch. depthToRingT already clamps to [0,1].
+        contactT: contentsRadius > 0
+          ? depthToRingT(-contentsZ, h.coneHeight, drape)
+          : 0.75,
         cosA: h._cosA,
         sinA: h._sinA,
         angA: h._angA,

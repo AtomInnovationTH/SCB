@@ -22,6 +22,11 @@ import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
 import { CeremonyTimeScale } from '../systems/CeremonyTimeScale.js';
 import { NetMeshKit } from './NetMeshKit.js';
+// Whale-in-cone phase 3 (Task 5): the ceremony driver reads the catch's REAL
+// rendered size to floor the drawn bag on its contents. ui → entities edge;
+// no cycle (DebrisField does not import CaptureNetVisual).
+import { DebrisWireframe } from './DebrisWireframe.js';
+import { DebrisField } from '../entities/DebrisField.js';
 import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
@@ -860,11 +865,29 @@ export class CaptureNetVisual {
       }
       if (drape > 0 || cinchFrac > 0 || vis.kitHandle._drape > 0 || vis.kitHandle._cinchFrac > 0) {
         vis.kitHandle._jigglePhase = (vis.kitHandle._jigglePhase || 0) + dt * Math.PI * 2 * _NT.DRAPE_JIGGLE_HZ;
+        // Whale-in-cone phase 3 (D2): tell the kit what is INSIDE the bag so
+        // the drape/cinch floors on a spherical envelope around the catch
+        // instead of closing to 0.27 m regardless. Scene units throughout.
+        // The miss / no-target case stays 0 — an empty net SHOULD bunch to a
+        // point; that contrast is what sells a real catch. effectiveRenderScale
+        // is the clamp-aware SSOT (W5), so the envelope tracks the size the
+        // renderer actually draws, including the CAPTURED readability floor.
+        let contentsRadius = 0, contentsZ = 0;
+        const d = net.targetDebris;
+        if (d && d._scenePosition && (drape > 0 || cinchFrac > 0)) {
+          DebrisWireframe.getGeometry(d.type, d.id);           // br cache (uncached ⇒ 1)
+          const br = DebrisWireframe.getBoundingRadius(d.type, d.id) || 1;
+          contentsRadius = DebrisField.effectiveRenderScale(d) * br;
+          vis.kitHandle.group.updateMatrixWorld(true);          // same guard the probe uses
+          contentsZ = vis.kitHandle.group.worldToLocal(_v3c.copy(d._scenePosition)).z;
+        }
         NetMeshKit.updateWebDrape(vis.kitHandle, {
           drape,
           cinchFrac,
           jigglePhase: vis.kitHandle._jigglePhase,
           jiggleAmp,
+          contentsRadius,
+          contentsZ,
           // V4: camera in the kit's LOCAL frame for per-thread depth shading
           // (the kit stays pure-local-space; worldToLocal writes in place).
           localCamPos: this._sceneManager?.camera
