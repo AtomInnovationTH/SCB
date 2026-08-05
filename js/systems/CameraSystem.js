@@ -2175,8 +2175,7 @@ export class CameraSystem {
   _netCeremonyBeatPos(out, key, armPos, netPos, debrisPos, fwd, side, localUp, D_M) {
     const M = 0.00001;
     switch (key) {
-      case 'ARM_PILOT_START':
-      case 'SECURED_SETTLE': {
+      case 'ARM_PILOT_START': {
         // ARM_PILOT standard position: behind arm toward debris, above
         const apFwd = this._netCeremony._v3e;
         if (debrisPos.distanceToSquared(armPos) > 1e-20) {
@@ -2187,6 +2186,22 @@ export class CameraSystem {
         return out.copy(armPos)
           .addScaledVector(apFwd, -this.armPilot.offsetBehind)
           .addScaledVector(localUp, this.armPilot.offsetAbove);
+      }
+      case 'SECURED_SETTLE': {
+        // Whale-in-cone follow-up 1 (2026-08-05): OWN pose, side-on to the
+        // reel line. The shared ARM_PILOT_START branch parked the camera 5 m
+        // BEHIND the launcher on the pod↔catch axis, so the beat's lerp from
+        // the CINCH pose (16 m beyond the capture site) ran straight down the
+        // reel line and through the berthed bag — measured camToWhale ≈ 2.6 m
+        // mid-beat, the "thread bundle, no whale" stills (and the fabric
+        // gate's camInsideBag skip). A fixed side/up offset off the reel line
+        // can never enter the bag cone, and looking at the live catch (see
+        // _netCeremonyBeatLook) keeps the payoff framed as it reels to the
+        // pod: at berth the catch rides ~6.5 m ahead of the muzzle (2.0 m
+        // standoff + ~4.5 m seat), so 6 m off-axis frames it large.
+        return out.copy(armPos)
+          .addScaledVector(side, 6 * M)
+          .addScaledVector(localUp, 2.5 * M);
       }
       case 'POD_MUZZLE_PREFIRE':
         return out.copy(armPos)
@@ -2199,8 +2214,16 @@ export class CameraSystem {
       case 'GLAMOUR_SHOT':
         // Stage 3 retune 2026-05-24: 0.8 → 1.5 (D fractions; mouthR=0.5D so
         // distance/radius = 1.5/0.5 = 3.0× — hero-shot silhouette breathing room).
+        // Whale-in-cone follow-up 1 (2026-08-05): dead-astern put the net
+        // exactly ON the camera→whale axis — through the lerp from
+        // MUZZLE_EXIT_SPINUP the whale stayed hidden at the frame edge behind
+        // the flooding net (measured: whale 21 m off, 23 px in the corner).
+        // The 3/4 rear-side pose keeps ratio ≥ 3.0 while parallax separates
+        // net and whale from the first frame of the beat.
         return out.copy(netPos)
-          .addScaledVector(fwd, -1.5 * D_M);
+          .addScaledVector(fwd, -1.3 * D_M)
+          .addScaledVector(side, 0.85 * D_M)
+          .addScaledVector(localUp, 0.3 * D_M);
       case 'APPROACH_DOLLY':
         // Stage 3 retune 2026-05-24: 0.5 → 1.25 (ratio 2.5× — outside cone wall).
         return out.copy(netPos)
