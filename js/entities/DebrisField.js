@@ -2175,7 +2175,12 @@ export class DebrisField {
   _clearOnboardingPin(id = null) {
     const unpin = (pid) => {
       const d = this.debrisMap.get(pid);
-      if (!d) return;
+      // Idempotent: a second release must not re-run the orbit re-sync with
+      // _onboardingPinFwd already zeroed — that seeds trueAnomaly = the ship's
+      // exact phase and TELEPORTS the piece onto the ship (measured 2026-08-05:
+      // a double NET_CATCH_SUCCESS release put the whale at spRelShip = 0,
+      // collapsing the mother reel's seed distance to the standoff).
+      if (!d || !d._onboardingPinned) return;
       const po = this._lastPlayerOrbit;
       if (po && d.orbit && po.semiMajorAxis > 0) {
         d.orbit.semiMajorAxis = po.semiMajorAxis;

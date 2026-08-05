@@ -611,15 +611,26 @@ export class NetProjectile {
      *  CaptureNetSystem.fireMotherNet from init(deps). Backs the ship-relative
      *  reel pin and the pinCapturedDebris API. */
     this._ctx            = null;
-    /** @type {number|null} Ship-relative reel: remaining distance muzzle→catch
-     *  in METRES. Seeded at REELING entry from the debris's live _scenePosition,
-     *  then monotonically eased to the berth standoff. Single source for
-     *  reelProgress on the mother path. */
+    /** @type {number|null} Ship-relative reel: remaining distance muzzle→bag
+     *  APEX (the tether end the winch reels — the catch rides _catchSeatM
+     *  metres deeper) in METRES. Seeded at REELING entry from the debris's
+     *  live _scenePosition minus the seat depth, then monotonically eased to
+     *  the berth standoff. Single source for reelProgress on the mother path. */
     this._remainingM     = null;
     /** @type {number|null} The seeded _remainingM at REELING entry — the
      *  reelProgress denominator (review fix: do NOT derive from tetherPaidOut,
      *  which disagrees with the live seed after contact→reel drift). */
     this._reelSeedM      = null;
+    /** @type {number|null} Depth (metres) the catch rides INSIDE the bag past
+     *  the apex, along the frozen bag axis (launchDirection). Seeded at
+     *  REELING entry from the live capture geometry — the depth the cinch
+     *  left the catch at (aM ≈ 4.5 m on a LARGE net). The reel/berth pin
+     *  writes apex + launchDirection × _catchSeatM so the catch stays wrapped
+     *  in the drawn bag (whale-in-cone follow-up 2: _updateMotherReel /
+     *  updateBerthHold used to pin net.position and the debris to the SAME
+     *  point — the catch rode the bag apex unwrapped, the metres gate's
+     *  COLOCATION-DEFECT). */
+    this._catchSeatM     = null;
     /** @type {THREE.Vector3|null} Lateral offset (scene units), decayed to 0. */
     this._lateral        = null;
     /** @type {THREE.Vector3|null} Lagged ship-forward (scene units) — a raw
@@ -806,6 +817,13 @@ export class NetProjectile {
       this.position.z = anchor.z / M_NET + this.launchDirection.z * this.distanceTraveled;
     } else if (anchor && this.state === STATES.REELING) {
       const M_NET = 0.00001;
+      // Mother physical-reel path: _updateMotherReel owns net.position (it
+      // writes the bag apex from the ship-relative pin every tick), so this
+      // sync is dead — and it must NOT run: it rewrites net.position to
+      // whale − mouthR before _enterMotherReel reads it, which would pollute
+      // the catch-seat measurement (whale-in-cone follow-up 2).
+      const motherPhysical = this._isMother
+        && this.catchResult === 'success' && !this._motherReelFallback;
       // 2026-06-05 (v2 — visual-only, no physics coupling): for a SUCCESSFUL
       // catch, keep the bag locked ONTO the captured debris so the cinched net
       // and its catch never separate while the daughter hauls it home (the
@@ -817,8 +835,10 @@ export class NetProjectile {
       // FAR side (opposite the daughter). This ONLY writes the net's visual
       // position; nothing reads net.position back into the arm/debris/autopilot,
       // so there is no feedback or station-keep coupling.
-      const sp = (this.catchResult === 'success') ? this.targetDebris?._scenePosition : null;
-      if (sp) {
+      const sp = (!motherPhysical && this.catchResult === 'success') ? this.targetDebris?._scenePosition : null;
+      if (motherPhysical) {
+        // _updateMotherReel writes net.position later this same tick.
+      } else if (sp) {
         const back = this.netClass.DIAMETER / 2;   // mouth radius (m), apex standoff
         this.position.x = sp.x / M_NET - this.launchDirection.x * back;
         this.position.y = sp.y / M_NET - this.launchDirection.y * back;
@@ -1206,13 +1226,40 @@ export class NetProjectile {
     const sp = d._scenePosition;
     if (sp) {
       const dx = sp.x - podWorld.x, dy = sp.y - podWorld.y, dz = sp.z - podWorld.z;
-      this._remainingM = Math.sqrt(dx * dx + dy * dy + dz * dz) / M_NET;
+      // Whale-in-cone follow-up 2 (reel/berth co-location): the catch rides
+      // INSIDE the bag at the depth the capture left it — not AT the apex.
+      // The seat is its depth past the brake apex along the frozen bag axis
+      // (launchDirection — the same axis CaptureNetVisual orients the drawn
+      // bag to every frame, so pin, mesh and probe can never drift). The
+      // brake apex is anchor + launchDir × distanceTraveled (the formula the
+      // post-FLIGHT anchor-sync writes every tick, :815). Read the LIVE
+      // anchor — never net.position, which is FROZEN in the absolute frame
+      // from the last SECURE_CHECK tick: one frame of orbital drift is
+      // ~1.17 km at 60 fps (~8 km in the headless harness), which would pin
+      // the catch kilometres from the bag (measured 2026-08-05:
+      // _catchSeatM = 7612.69 m on a one-frame-stale anchor). anchor + sp
+      // are both live, so the seat is drift-free.
+      const L = this.launchDirection;
+      const anchor = this._anchorScene();
+      const seatM = (L && anchor) ? Math.max(0,
+        ((sp.x - anchor.x) / M_NET) * L.x
+        + ((sp.y - anchor.y) / M_NET) * L.y
+        + ((sp.z - anchor.z) / M_NET) * L.z
+        - this.distanceTraveled) : 0;
+      this._catchSeatM = seatM;
+      // _remainingM is the APEX (tether) distance — pod→catch minus the seat —
+      // so the winch hauls the bag's apex anchor to the standoff while the
+      // catch rides seatM metres inside it. At entry the apex lands on the
+      // brake point and the pin reproduces the live catch position exactly
+      // (no teleport at the CAPTURED→REELING hand-off).
+      this._remainingM = Math.max(1e-3, Math.sqrt(dx * dx + dy * dy + dz * dz) / M_NET - seatM);
       // Lateral = component of (debris − pod) perpendicular to ship forward.
       const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(player.quaternion).normalize();
       const along = dx * fwd.x + dy * fwd.y + dz * fwd.z;
       this._lateral = new THREE.Vector3(dx - fwd.x * along, dy - fwd.y * along, dz - fwd.z * along);
     } else {
       this._remainingM = this.tetherPaidOut;
+      this._catchSeatM = 0;
       this._lateral = new THREE.Vector3();
     }
     // Review fix: the reelProgress denominator must be the ACTUAL seeded
@@ -1341,12 +1388,26 @@ export class NetProjectile {
     // a mid-reel slew lags and settles instead of whipping the catch.
     this._settleFwdLagged(player, dt);
 
-    // Pin: pod + lagged-fwd · remainingM + lateral (scene units).
+    // Pin anchor: pod + lagged-fwd · remainingM + lateral (scene units) — the
+    // bag's APEX, i.e. the tether end the winch actually reels.
     const podWorld = (typeof player.getNetPodPositionInto === 'function')
       ? player.getNetPodPositionInto(this.podIndex, _v3c) : _v3c.set(0, 0, 0);
     _v3d.copy(podWorld)
       .addScaledVector(this._fwdLagged, this._remainingM * M_NET)
       .add(this._lateral);
+
+    // net.position is the bag's apex anchor (CaptureNetVisual seats the kit
+    // there × M every frame; the tether draws to it) — written BEFORE the
+    // seat offset goes into the catch pin below.
+    this.position.x = _v3d.x / M_NET;
+    this.position.y = _v3d.y / M_NET;
+    this.position.z = _v3d.z / M_NET;
+
+    // The catch rides _catchSeatM metres INSIDE the bag along the frozen bag
+    // axis (launchDirection — the axis the visual orients to), not AT the
+    // apex (whale-in-cone follow-up 2: co-locating the two left the catch on
+    // the bag apex unwrapped — the metres gate's COLOCATION-DEFECT).
+    if (this._catchSeatM) _v3d.addScaledVector(this.launchDirection, this._catchSeatM * M_NET);
 
     // Orientation follows the ship (plan §1.2), PLUS the Phase D.7 (a)
     // tumble-carryover offset — shared helper (V7: the twin sites are one
@@ -1357,12 +1418,6 @@ export class NetProjectile {
     d._captured = true;
     d._catchRenderMin = (CN.MOTHER_CATCH_MIN_RENDER_M ?? 2.0) * M_NET;
     debrisField.pinCapturedDebris(d, _v3d);
-
-    // Keep the bag visual seated on the catch (CaptureNetVisual reads
-    // net.position × M every frame).
-    this.position.x = _v3d.x / M_NET;
-    this.position.y = _v3d.y / M_NET;
-    this.position.z = _v3d.z / M_NET;
 
     // Tension readout (HUD): base + mass factor, same shape as the daughter.
     this.tensionN = baseCaptureTensionN(this.capturedMass);
@@ -1578,6 +1633,14 @@ export class NetProjectile {
       .addScaledVector(this._fwdLagged, berthStandoffM * M_NET)
       .add(this._lateral);
 
+    // net.position = the bag's apex anchor (the tether end), written BEFORE
+    // the seat offset — same split as _updateMotherReel, so the catch stays
+    // seated INSIDE the bag through the berth hold instead of riding the apex.
+    this.position.x = _v3d.x / M_NET;
+    this.position.y = _v3d.y / M_NET;
+    this.position.z = _v3d.z / M_NET;
+    if (this._catchSeatM) _v3d.addScaledVector(this.launchDirection, this._catchSeatM * M_NET);
+
     // Phase D.7 (a) — tumble carryover (shared helper — V7, same as the reel path).
     this._applyCatchOrientation(d, player, dt);
 
@@ -1585,11 +1648,6 @@ export class NetProjectile {
     d._captured = true;
     d._catchRenderMin = (CN.MOTHER_CATCH_MIN_RENDER_M ?? 2.0) * M_NET;
     debrisField.pinCapturedDebris(d, _v3d);
-
-    // Keep the bag visual seated on the berthed catch.
-    this.position.x = _v3d.x / M_NET;
-    this.position.y = _v3d.y / M_NET;
-    this.position.z = _v3d.z / M_NET;
     return true;
   }
 

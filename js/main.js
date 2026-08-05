@@ -1837,6 +1837,9 @@ async function init() {
       let _scenarioAimInvariant = null;
       // Whale-in-cone plan Task 2.5 — read-back for the aim-invariant unit test.
       window.__netScenarioAimInvariant = () => _scenarioAimInvariant;
+      // Dev-only live-net accessor for scenario forensics (same __net* hook
+      // convention as __netScenarioProbe; read-only — never mutate through it).
+      window.__scbScenarioNet = () => _scenarioNet;
       window.__netScenario = () => {
         try {
           if (!player || !debrisField || !cameraSystem) return { ok: false, reason: 'sim not up' };
@@ -2011,16 +2014,22 @@ async function init() {
           //    and _updateInstanceTransform checks _onboardingPinned FIRST —
           //    an unreleased tease pin would glue the whale at 25 m while
           //    the net package reels in empty (the LASSO_CONTACT hazard).
-          //    Route through DebrisField._clearOnboardingPin (the same path
-          //    production uses at LASSO_CONTACT): it re-syncs the fallback
-          //    orbit to the CURRENT phase before clearing — propagation is
-          //    skipped while pinned, so a naive clear teleports the whale to
-          //    the stale orbital phase (~1.07e6 m measured 2026-08-02), which
-          //    seeds _enterMotherReel's _remainingM/_lateral with garbage and
-          //    flings the ceremony camera across hundreds of km.
+          //    BACKSTOP ONLY: DebrisField's own NET_CATCH_SUCCESS listener
+          //    (DebrisField.js:633) already releases the pin on this event.
+          //    An unconditional second _clearOnboardingPin re-syncs the orbit
+          //    with _onboardingPinFwd already zeroed — trueAnomaly = the
+          //    ship's exact phase — and TELEPORTS the whale onto the ship
+          //    (measured 2026-08-05: spRelShip = 0 at REELING entry, so the
+          //    reel seeded at the standoff and "completed" instantly, the
+          //    REEL_IN beat never chained, and the berth camera geometry was
+          //    measured against a catch that was never reeled). Gate on the
+          //    pin still being held; _clearOnboardingPin is now idempotent
+          //    too, but never rely on a double release being safe.
           if (typeof _scenarioPinReleaseOff === 'function') _scenarioPinReleaseOff();
           const release = () => {
-            debrisField._clearOnboardingPin?.(whale.id);
+            if (debrisField._onboardingPinIds?.has(whale.id)) {
+              debrisField._clearOnboardingPin(whale.id);
+            }
             debrisField._onboardingPinBasisOverrides?.delete(whale.id);   // un-freeze this whale's pin basis
             _scenarioPinReleaseOff = null;
           };

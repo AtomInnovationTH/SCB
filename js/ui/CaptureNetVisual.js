@@ -663,9 +663,11 @@ export class CaptureNetVisual {
 
         case STATES.BERTHED:
           // Mother berth (§8 A2): cinched bag persists at the launcher with a
-          // short taut tether stub. The bag follows net.position, which the
-          // berth hold keeps synced onto the pinned catch. (Flag-off path —
-          // the ceremony switch above has its own BERTHED case.)
+          // short taut tether stub. The bag follows net.position — the bag's
+          // APEX anchor, which the berth hold keeps at the standoff while the
+          // pinned catch rides _catchSeatM metres inside (CaptureNet.js
+          // co-location fix). (Flag-off path — the ceremony switch above has
+          // its own BERTHED case.)
           canisterMesh.visible = false;
           discMesh.visible = true;
           tetherLine.visible = true;
