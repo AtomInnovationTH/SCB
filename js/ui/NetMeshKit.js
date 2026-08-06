@@ -323,8 +323,12 @@ function _toBoxSpace(box, x, y, z) {
 export function contentsFloorRadiusBox(z, cosA, sinA, box, margin = NET_CER.CONTENTS_FLOOR_MARGIN, mouthZ = null) {
   if (!contentsBoxValid(box)) return 0;
   // Ray origin: the point on the bag axis at ring height z, in box space (the
-  // shared point transform — one home of the convention).
-  const [ox, oy, oz] = _toBoxSpace(box, 0, 0, z);
+  // shared point transform — one home of the convention). Read by index, not by
+  // destructuring: item 12's elbow scan calls this ~3.3k times per frame
+  // (20 spokes × the coarse+refine scan), so an iterator allocation here would
+  // be a per-frame allocation on the builders' path (P2/B8).
+  const bs = _toBoxSpace(box, 0, 0, z);
+  const ox = bs[0], oy = bs[1], oz = bs[2];
   // Spoke direction in box space.
   const dx = box.r00 * cosA + box.r01 * sinA;
   const dy = box.r10 * cosA + box.r11 * sinA;
@@ -489,6 +493,149 @@ function _edgeBoxDepth(pos, i0, i1, box, n, worst) {
   return worst;
 }
 
+// ── Register item 12: meridional ring redistribution onto the floor's elbows ──
+// Plan: .kilo/plans/1786029954098-cap-elbow-ring-redistribution.md.
+//
+// The cap-elbow chord class (item-4 Finding 3): the drawn film's meridional
+// ring-to-ring chords straight-line the convex elbow where the apex-side tent
+// hands off to the box's slab faces, cutting up to 0.666 m into the catch's
+// true box while every vertex stays outside it. No floor SHAPE can fix it: the
+// film is anchored at the apex (radius 0), so any envelope reaching the slab
+// has a convex bend somewhere, and a straight chord of a convex bend always
+// sags inside (measured and rejected: margin ≥ 1.22, per-vertex lifts, uniform
+// density to 24 rings, envelope re-seaming — plan FALSIFIED table). The only
+// honest lever is VERTEX PLACEMENT — and the tent (apex→near elbow) and
+// anti-cone (far elbow→mouth) are each a SINGLE straight line, so they need no
+// intermediate rings at all. The rings are therefore REDISTRIBUTED per spoke:
+// ring 1 onto the near elbow, ring rings−1 onto the far elbow, the rest spread
+// across the box's span — no drawn chord spans a convex ridge.
+//
+// The elbows are found by a RATIO-DEPARTURE scan of contentsFloorRadiusBox
+// itself (the one home of the floor maths — nothing re-derived): the tent is a
+// max of corner lines through the origin, so f(z)/z is constant on the tent;
+// the anti-cone is a max of corner lines through the mouth point, so
+// f(z)/(mouthZ−z) is constant there. The elbow is where the floor departs the
+// ratio (the grazing dive and the slab crossing both depart). Coarse scan +
+// binary refine: ~100–160 floor evaluations per spoke — per-frame affordable.
+
+const _ELBOW_COARSE = 64;
+const _ELBOW_REFINE = 16;
+const _ELBOW_BAND = 0.02;              // ratio-departure tolerance (2%)
+// Degenerate-span guard: a redistribution needs a span worth spreading rings
+// across. 0.74% of the bag length ≈ 5 cm on the D=8 kit (coneHeight 6.8 m) —
+// expressed as a FRACTION so it scales with the kit instead of hiding a
+// scene-units conversion inside a magic divisor.
+const _ELBOW_MIN_SPAN_FRAC = 0.0074;
+// P2/B8: the elbow pair is returned in a module scratch — `_floorElbows` runs
+// radialSpokes times per frame, so neither an array return nor a destructuring
+// iterator may allocate there.
+const _elbowScratch = new Float64Array(2);
+
+/**
+ * The two meridional elbows of the box floor at one spoke angle, written into
+ * the module scratch `_elbowScratch` ([0] = near/apex-side, [1] = far/mouth-side
+ * kit z; NaN when not found). Returns the scratch for convenience — never
+ * retain it (mutated on the next call).
+ *
+ * NaN outcomes are all safe: the spoke's ray never meets the box (the empty
+ * side), or the tent/anti-cone run is thinner than one coarse step so the first
+ * in-floor sample already sits past the elbow. The caller then keeps that
+ * spoke's natural ring z's, i.e. the pre-item-12 geometry.
+ */
+function _floorElbows(cosA, sinA, box, mouthZ) {
+  let eN = NaN, eF = NaN;
+  // Near elbow: scan apex → mouth; the tent ratio f(z)/z is constant on the tent.
+  {
+    let r0 = NaN, prevZ = 0;
+    for (let i = 1; i <= _ELBOW_COARSE; i++) {
+      const z = mouthZ * (i / _ELBOW_COARSE);
+      const fz = contentsFloorRadiusBox(z, cosA, sinA, box, 1, mouthZ);
+      if (fz <= 1e-9) { prevZ = z; continue; }
+      const r = fz / z;
+      if (Number.isNaN(r0)) { r0 = r; prevZ = z; continue; }
+      if (Math.abs(r - r0) > _ELBOW_BAND * Math.abs(r0)) {
+        let lo = prevZ, hi = z;                       // lo on-ratio, hi departed
+        for (let j = 0; j < _ELBOW_REFINE; j++) {
+          const mid = (lo + hi) / 2;
+          const fm = contentsFloorRadiusBox(mid, cosA, sinA, box, 1, mouthZ);
+          const rm = fm > 1e-9 ? fm / mid : r0;       // below-floor ⇒ still on the tent
+          if (Math.abs(rm - r0) > _ELBOW_BAND * Math.abs(r0)) hi = mid; else lo = mid;
+        }
+        eN = hi;
+        break;
+      }
+      prevZ = z;
+    }
+  }
+  // Far elbow: scan mouth → apex; the anti-cone ratio f(z)/(mouthZ−z) is
+  // constant on the anti-cone.
+  {
+    let r0 = NaN, prevZ = mouthZ;
+    for (let i = 1; i <= _ELBOW_COARSE; i++) {
+      const z = mouthZ * (1 - i / _ELBOW_COARSE);
+      const fz = contentsFloorRadiusBox(z, cosA, sinA, box, 1, mouthZ);
+      if (fz <= 1e-9) { prevZ = z; continue; }
+      const r = fz / (mouthZ - z);
+      if (Number.isNaN(r0)) { r0 = r; prevZ = z; continue; }
+      if (Math.abs(r - r0) > _ELBOW_BAND * Math.abs(r0)) {
+        let lo = z, hi = prevZ;                       // lo departed, hi on-ratio
+        for (let j = 0; j < _ELBOW_REFINE; j++) {
+          const mid = (lo + hi) / 2;
+          const fm = contentsFloorRadiusBox(mid, cosA, sinA, box, 1, mouthZ);
+          const rm = fm > 1e-9 ? fm / (mouthZ - mid) : r0;
+          if (Math.abs(rm - r0) > _ELBOW_BAND * Math.abs(r0)) lo = mid; else hi = mid;
+        }
+        eF = lo;
+        break;
+      }
+      prevZ = z;
+    }
+  }
+  _elbowScratch[0] = eN;
+  _elbowScratch[1] = eF;
+  return _elbowScratch;
+}
+
+/**
+ * Fill the per-handle ring-z table for one update: per (ring, spoke) z, with
+ * the meridional rings redistributed onto the floor's elbows (D1). Spokes
+ * whose ray never meets the box (no elbows, or a span thinner than
+ * `_ELBOW_MIN_SPAN_FRAC` of the bag) keep their natural drapeRingZ z's; every
+ * z is lerped from natural to redistributed BY DRAPE, so the ENVELOP
+ * transition cannot pop. Ring 0 stays at the apex (R1: z = 0, clamp 0) and
+ * ring `rings` stays at the mouth (R2: mouthZ = drapeRingZ(1) at every drape)
+ * — both checked FIRST so no ring count can redistribute them away.
+ * Reads cos/sin from the cached handle tables; writes `out` in place
+ * ((rings+1) × radialSpokes, per-handle scratch — no per-frame allocation).
+ */
+function _ringZGrid(out, p) {
+  const { coneHeight, radialSpokes, rings, contentsBox } = p;
+  const drape = Math.max(0, Math.min(1, p.drape ?? 0));
+  const mouthZ = -coneHeight;
+  const cosA = p.cosA, sinA = p.sinA;
+  const minSpan = coneHeight * _ELBOW_MIN_SPAN_FRAC;
+  for (let s = 0; s < radialSpokes; s++) {
+    const e = _floorElbows(cosA[s], sinA[s], contentsBox, mouthZ);
+    const eN = e[0], eF = e[1];
+    const redis = Number.isFinite(eN) && Number.isFinite(eF) && eN > eF + minSpan;
+    for (let k = 0; k <= rings; k++) {
+      const zNat = drapeRingZ(k / rings, coneHeight, drape);
+      let zR = zNat;
+      if (redis) {
+        // R1/R2 first: the apex weld and the mouth plane are never moved, for
+        // ANY ring count (a 1- or 2-ring kit must not hand the mouth to eN).
+        if (k === 0) zR = 0;
+        else if (k === rings) zR = mouthZ;
+        else if (k === 1) zR = eN;
+        else if (k === rings - 1) zR = eF;
+        else zR = eN + (eF - eN) * ((k - 1) / (rings - 2));
+      }
+      out[k * radialSpokes + s] = zNat + (zR - zNat) * drape;
+    }
+  }
+  return out;
+}
+
 /**
  * The single mouth-plane ring radius the contents floor demands, given that a
  * box floor varies with angle: the MAX over the spoke directions (the exact
@@ -558,6 +705,7 @@ function buildWebPositionsDraped(out, p) {
     out[idx++] = ca * r; out[idx++] = sa * r; out[idx++] = zRim;
   }
   // Rings.
+  const ringZ = p.ringZ ?? null;   // item 12: redistributed per-(ring,spoke) z (box floor on)
   for (let k = 1; k <= rings; k++) {
     const t = k / rings;
     const z = drapeRingZ(t, coneHeight, drape);
@@ -580,12 +728,22 @@ function buildWebPositionsDraped(out, p) {
       const n0 = sinA ? sinA[s]  : Math.sin(a0);
       const c1 = cosA ? cosA[s1] : Math.cos(a1);
       const n1 = sinA ? sinA[s1] : Math.sin(a1);
-      const f0 = floorOn ? contentsFloorClamped(z, c0, n0, openCone, contentsZ, contentsR, contentsBox, NET_CER.CONTENTS_FLOOR_MARGIN, -coneHeight) : 0;
-      const f1 = floorOn ? contentsFloorClamped(z, c1, n1, openCone, contentsZ, contentsR, contentsBox, NET_CER.CONTENTS_FLOOR_MARGIN, -coneHeight) : 0;
-      const r0 = Math.max(drapeRingRadius(t, a0, mouthRadius, drape, cinch, closed, jigA, jigP), f0);
-      const r1 = Math.max(drapeRingRadius(t, a1, mouthRadius, drape, cinch, closed, jigA, jigP), f1);
-      out[idx++] = c0 * r0; out[idx++] = n0 * r0; out[idx++] = z;
-      out[idx++] = c1 * r1; out[idx++] = n1 * r1; out[idx++] = z;
+      // Item 12: per-spoke z (the elbow redistribution) with the clamp at each
+      // vertex's OWN z — identical rule, per-spoke arguments. The ring slides
+      // ALONG the drape surface, so the natural radius follows the ring's own
+      // z: t' = the natural-ring t at that depth (identity when ringZ is null).
+      const z0 = ringZ ? ringZ[k * radialSpokes + s]  : z;
+      const z1 = ringZ ? ringZ[k * radialSpokes + s1] : z;
+      const t0 = ringZ ? depthToRingT(-z0, coneHeight, drape) : t;
+      const t1 = ringZ ? depthToRingT(-z1, coneHeight, drape) : t;
+      const open0 = ringZ ? mouthRadius * (-z0 / coneHeight) : openCone;
+      const open1 = ringZ ? mouthRadius * (-z1 / coneHeight) : openCone;
+      const f0 = floorOn ? contentsFloorClamped(z0, c0, n0, open0, contentsZ, contentsR, contentsBox, NET_CER.CONTENTS_FLOOR_MARGIN, -coneHeight) : 0;
+      const f1 = floorOn ? contentsFloorClamped(z1, c1, n1, open1, contentsZ, contentsR, contentsBox, NET_CER.CONTENTS_FLOOR_MARGIN, -coneHeight) : 0;
+      const r0 = Math.max(drapeRingRadius(t0, a0, mouthRadius, drape, cinch, closed, jigA, jigP), f0);
+      const r1 = Math.max(drapeRingRadius(t1, a1, mouthRadius, drape, cinch, closed, jigA, jigP), f1);
+      out[idx++] = c0 * r0; out[idx++] = n0 * r0; out[idx++] = z0;
+      out[idx++] = c1 * r1; out[idx++] = n1 * r1; out[idx++] = z1;
     }
   }
   return out;
@@ -642,25 +800,32 @@ function updateMembraneLattice(out, p) {
   const cosA = (p.cosA && p.cosA.length === radialSpokes) ? p.cosA : null;
   const sinA = (p.sinA && p.sinA.length === radialSpokes) ? p.sinA : null;
   const angA = (p.angA && p.angA.length === radialSpokes) ? p.angA : null;
+  const ringZ = p.ringZ ?? null;   // item 12: same per-(ring,spoke) z as the web (the weld)
   let idx = 0;
   for (let k = 0; k <= rings; k++) {
     const t = k / rings;
-    const z = drapeRingZ(t, coneHeight, drape);
+    const zNat = drapeRingZ(t, coneHeight, drape);
     // Task 7 (R1): same open-cone clamp as the web path (inside
     // contentsFloorClamped) — the cone radius at the ring's DRAPED z. Ring 0's
     // clamp is 0, so the membrane apex stays welded to the spoke apex even when
     // the contents envelope peaks at z = 0 (the REELING/BERTHED co-location).
-    const openCone = mouthRadius * (-z / coneHeight);
+    const openCone = mouthRadius * (-zNat / coneHeight);
     for (let s = 0; s < radialSpokes; s++) {
       const a  = angA ? angA[s] : (2 * Math.PI * s) / radialSpokes;
       const ca = cosA ? cosA[s] : Math.cos(a);
       const sa = sinA ? sinA[s] : Math.sin(a);
-      let r = drapeRingRadius(t, a, mouthRadius, drape, cinch, closed, jigA, jigP);
+      const z = ringZ ? ringZ[k * radialSpokes + s] : zNat;
+      const openK = ringZ ? mouthRadius * (-z / coneHeight) : openCone;
+      // Item 12: the ring slides along the drape surface — the natural radius
+      // and the V8 dent follow the ring's own z (t' = the natural-ring t at
+      // that depth; identity when ringZ is null).
+      const tK = ringZ ? depthToRingT(-z, coneHeight, drape) : t;
+      let r = drapeRingRadius(tK, a, mouthRadius, drape, cinch, closed, jigA, jigP);
       if (compressM > 0 && drape > 0) {
-        const g = (t - contactT) / 0.18;
+        const g = (tK - contactT) / 0.18;
         r = Math.max(0, r - drape * compressM * Math.exp(-g * g));
       }
-      if (floorOn) r = Math.max(r, contentsFloorClamped(z, ca, sa, openCone, contentsZ, contentsR, contentsBox, NET_CER.CONTENTS_FLOOR_MARGIN, -coneHeight));
+      if (floorOn) r = Math.max(r, contentsFloorClamped(z, ca, sa, openK, contentsZ, contentsR, contentsBox, NET_CER.CONTENTS_FLOOR_MARGIN, -coneHeight));
       out[idx++] = ca * r; out[idx++] = sa * r; out[idx++] = z;
     }
   }
@@ -935,6 +1100,10 @@ export const NetMeshKit = {
       _cosA,
       _sinA,
       _angA,
+      // Item 12: per-(ring,spoke) ring-z scratch for the elbow redistribution —
+      // allocated once, refilled per updateWebDrape, read by BOTH builders (the
+      // membrane/thread weld consumes the identical z's by construction).
+      _ringZ: new Float32Array((rings + 1) * radialSpokes),
     };
 
     // Seed the drawstring from the initial rim layout.
@@ -1181,6 +1350,17 @@ export const NetMeshKit = {
     } else {
       h._contentsBox = null;
     }
+    // Item 12 (D1/D3): when the BOX floor is active, redistribute the meridional
+    // ring z's onto the floor's cap elbows — ONE table, filled here once, read by
+    // BOTH builders so film and threads deform identically (the weld). Sphere
+    // floor / flight / no-contents ⇒ null ⇒ the builders take the natural
+    // drapeRingZ z's, bit-identical to the pre-item-12 path.
+    const ringZ = (drape > 0 && contentsBoxValid(h._contentsBox))
+      ? _ringZGrid(h._ringZ, {
+        coneHeight: h.coneHeight, radialSpokes: h.radialSpokes, rings: h.rings,
+        drape, contentsBox: h._contentsBox, cosA: h._cosA, sinA: h._sinA,
+      })
+      : null;
     buildWebPositionsDraped(h.webPositions, {
       mouthRadius: h.mouthRadius,
       coneHeight: h.coneHeight,
@@ -1196,6 +1376,7 @@ export const NetMeshKit = {
       cosA: h._cosA,
       sinA: h._sinA,
       angA: h._angA,
+      ringZ,
     });
     // In-place GPU push: no new geometry/attribute/buffer, no bounds recompute.
     const buf = h.webBuffer || h.coneMesh.geometry.attributes.instanceStart.data;
@@ -1225,6 +1406,7 @@ export const NetMeshKit = {
         cosA: h._cosA,
         sinA: h._sinA,
         angA: h._angA,
+        ringZ,
         // V8: contact compression — the film (not the threads) dents where the
         // catch presses, depth from the SSOT fraction of the mouth radius.
         compressM: NET_WEB.CONTACT_COMPRESS_FRAC * h.mouthRadius,
