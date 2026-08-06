@@ -97,6 +97,108 @@ const TETHER_EMISSIVE_S = _NT.EMISSIVE_S;
 const TETHER_EMISSIVE_HDR = _NT.EMISSIVE_HDR;
 const TETHER_BASE_COLOR = Constants.NET_WEB.WEB_COLOR;   // C0/V5: one colour SSOT
 
+// ── Kit-frame attitude helper (register item 13, 2026-08-06) ─────────────
+// Plan: .kilo/plans/1786017377440-pin-scenario-catch-tumble.md (D2).
+//
+// The floor/chord maths and the pixel gate both see the catch's attitude in KIT
+// space: the driver composes `qB2K = qKit⁻¹ ⊗ axisAngle(tumbleAxis, tumbleAngle)`
+// (see the contents-box block below), where `qKit` is the kit group's WORLD
+// quaternion — set by `group.lookAt(position − launchDirection × ε)` in
+// `_updateCeremonyState` (the convention block near the end of this file: local
+// −Z = launchDirection, up = +Y). A dev harness that wants a REPEATABLE attitude
+// must therefore pin the tumble in the kit frame, not the world frame, or every
+// staging bearing yields a different measured attitude.
+//
+// This is that one conversion, in the module that owns the convention, using the
+// IDENTICAL `Object3D.lookAt` call the drawing path uses (never a hand-rolled
+// basis — three's degenerate-up handling is part of the convention). Pure and
+// allocation-light: one scratch Object3D, no scene graph, no side effects.
+const _kitFrameProbe = new THREE.Object3D();
+const _qKit = new THREE.Quaternion();
+const _qDesired = new THREE.Quaternion();
+const _vKitAxis = new THREE.Vector3();
+const _vKitDir = new THREE.Vector3();
+const _mKitRows = new THREE.Matrix4();
+
+/** Finite 3-vector read that accepts {x,y,z} or [x,y,z]; null on any non-finite. */
+function _readFiniteVec3(v, out) {
+  if (!v) return null;
+  const x = v.x ?? v[0], y = v.y ?? v[1], z = v.z ?? v[2];
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return null;
+  out.set(x, y, z);
+  // NaN cannot reach here, so a plain magnitude test is now sound (a
+  // `lengthSq() < eps` guard alone would MISS NaN — `NaN < eps` is false — and
+  // would hand a NaN pin to the harness, which its 10° attitude check cannot
+  // see either: `NaN > 10` is false. Reject at the door instead).
+  return out.lengthSq() < 1e-24 ? null : out.normalize();
+}
+
+/**
+ * World-frame axis/angle that seats a body at a chosen KIT-frame attitude.
+ *
+ * @param {{x:number,y:number,z:number}} launchDirection — the net's frozen launch
+ *        bearing (any non-zero length; normalised internally).
+ * @param {{x:number,y:number,z:number}} kitAxis — desired rotation axis, KIT frame
+ *        (kit −Z is the launch bearing, so kit X/Y lie across the bag mouth).
+ * @param {number} kitAngleRad — desired rotation angle about `kitAxis`.
+ * @returns {{axis:{x:number,y:number,z:number}, angle:number,
+ *            worldQuat:{x:number,y:number,z:number,w:number}}|null}
+ *          `axis` (unit) + `angle` to write into `tumbleAxis`/`tumbleAngle`, plus
+ *          the composed world quaternion (`axisAngle(axis, angle)` — the
+ *          decomposition is lossless; asserted in test-CaptureNetVisual.js).
+ *          `null` on ANY degenerate or non-finite input — never a silently wrong
+ *          pin, because a wrong-but-plausible attitude reads as a valid gate
+ *          measurement of the wrong thing.
+ *          Guarantees `qKit⁻¹ ⊗ axisAngle(axis, angle) === axisAngle(kitAxis, kitAngleRad)`,
+ *          i.e. the box-in-kit rotation the metrics read IS the requested attitude.
+ */
+export function worldTumbleForKitAttitude(launchDirection, kitAxis, kitAngleRad) {
+  if (!Number.isFinite(kitAngleRad)) return null;
+  if (!_readFiniteVec3(launchDirection, _vKitDir)) return null;
+  if (!_readFiniteVec3(kitAxis, _vKitAxis)) return null;
+
+  // Same call, same ε-target formula, same default up as the drawing path.
+  _kitFrameProbe.position.set(0, 0, 0);
+  _kitFrameProbe.quaternion.identity();
+  _kitFrameProbe.lookAt(-_vKitDir.x * 0.001, -_vKitDir.y * 0.001, -_vKitDir.z * 0.001);
+  _qKit.copy(_kitFrameProbe.quaternion);
+
+  _qDesired.setFromAxisAngle(_vKitAxis, kitAngleRad);
+  _qKit.multiply(_qDesired);            // qTumble(world) = qKit ⊗ R_desired(kit)
+
+  // Axis/angle decomposition (same shape as CaptureNet._applyCatchOrientation).
+  const w = Math.max(-1, Math.min(1, _qKit.w));
+  const angle = 2 * Math.acos(w);
+  const s = Math.sqrt(Math.max(0, 1 - w * w));
+  const axis = (s > 1e-6)
+    ? { x: _qKit.x / s, y: _qKit.y / s, z: _qKit.z / s }
+    : { x: 0, y: 1, z: 0 };
+  return { axis, angle, worldQuat: { x: _qKit.x, y: _qKit.y, z: _qKit.z, w: _qKit.w } };
+}
+
+/**
+ * The contents-box spec ROWS a given KIT-frame attitude produces — i.e. the
+ * matrix of `qB2K⁻¹` in the row order the box spec carries (`v_box = R · v_kit`).
+ *
+ * ONE home for the row/transpose convention: the driver's per-frame composition
+ * below writes these same nine numbers from the LIVE tumble, and the harness
+ * compares that live spec against this function's output to prove the pinned
+ * attitude reached the metric. Two independent copies of this convention would
+ * let the check silently validate against a stale one.
+ *
+ * @param {{x:number,y:number,z:number}} kitAxis — rotation axis, KIT frame.
+ * @param {number} kitAngleRad — rotation angle about `kitAxis`.
+ * @returns {number[]|null} `[r00, r01, r02, r10, r11, r12, r20, r21, r22]`, or
+ *          `null` on a degenerate/non-finite input.
+ */
+export function boxRowsForKitAttitude(kitAxis, kitAngleRad) {
+  if (!Number.isFinite(kitAngleRad)) return null;
+  if (!_readFiniteVec3(kitAxis, _vKitAxis)) return null;
+  _qDesired.setFromAxisAngle(_vKitAxis, kitAngleRad).invert();
+  const e = _mKitRows.makeRotationFromQuaternion(_qDesired).elements;   // column-major
+  return [e[0], e[4], e[8], e[1], e[5], e[9], e[2], e[6], e[10]];
+}
+
 // ════════════════════════════════════════════════════════════════════════
 // CaptureNetVisual
 // ════════════════════════════════════════════════════════════════════════

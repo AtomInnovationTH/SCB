@@ -108,7 +108,7 @@ import { GuidanceDirector } from './systems/GuidanceDirector.js';
 import { settingsManager } from './systems/SettingsManager.js';
 import { persistenceManager } from './systems/PersistenceManager.js';
 import { StrategicMap } from './ui/StrategicMap.js';
-import { captureNetVisual } from './ui/CaptureNetVisual.js';
+import { captureNetVisual, worldTumbleForKitAttitude, boxRowsForKitAttitude } from './ui/CaptureNetVisual.js';
 import { furnaceBreakdownVisual } from './ui/FurnaceBreakdownVisual.js';
 import { captureNetSystem, isInsideCone, coneRadiusAtDepth } from './entities/CaptureNet.js';
 import perfReportOverlay, { captureBootInfo } from './ui/PerfReportOverlay.js';
@@ -1832,15 +1832,58 @@ async function init() {
       //       collect the 9 ceremony beats.
       //     Returns { ok, whaleId, mass, distanceM, podIndex } or
       //     { ok: false, reason } — guarded, never throws.
+      //     Options: `__netScenario({ tumble })` where `tumble` is 'nominal'
+      //       (default), 'adverse', 'off', or { kitAxis, kitDeg } — register item
+      //       13: the catch's tumble attitude is pinned in the KIT frame so both
+      //       live gates measure one attitude instead of a per-run draw. Read the
+      //       applied pin back with `__netScenarioTumblePin()`.
       let _scenarioPinReleaseOff = null;
       let _scenarioNet = null;
       let _scenarioAimInvariant = null;
+      let _scenarioTumblePin = null;
+      // ── Register item 13: the catch's pinned tumble presets ──────────────
+      // Plan: .kilo/plans/1786017377440-pin-scenario-catch-tumble.md (D3/D4).
+      // Attitudes are KIT-frame (kit −Z is the launch bearing, so X/Y lie across
+      // the bag mouth), measured with tmp/g6-attitude-{sweep,local}.mjs over the
+      // shared NetMeshKit.chordBoxPenetration export:
+      //   nominal x@120° → chord 0.447 m, flat to ±10 mm per ±5°, presents 2.58 m
+      //   adverse y@150° → chord 0.666 m (the box-core plateau), flat to ±1 mm
+      // Never re-pick a preset by trying attitudes until a gate reads well: both
+      // the pixel band and item 12's before/after are derived from these numbers,
+      // so a move must re-run the sweep and be recorded in the plan.
+      const _SCENARIO_TUMBLE_PRESETS = {
+        nominal: { name: 'nominal', kitAxis: { x: 1, y: 0, z: 0 }, kitDeg: 120 },
+        adverse: { name: 'adverse', kitAxis: { x: 0, y: 1, z: 0 }, kitDeg: 150 },
+      };
+      /** Resolve the `tumble` option: undefined ⇒ nominal, 'off'/null ⇒ no pin. */
+      const _resolveScenarioTumble = (t) => {
+        if (t === undefined) return _SCENARIO_TUMBLE_PRESETS.nominal;
+        if (t === null || t === false || t === 'off' || t === 'none') return null;
+        if (typeof t === 'string') return _SCENARIO_TUMBLE_PRESETS[t] || null;
+        if (typeof t === 'object' && t.kitAxis) {
+          const a = t.kitAxis;
+          // Pass the numbers through UNCOERCED — `+x || 0` would turn a typo'd
+          // angle into a silent 0° pin, which reads as a valid gate measurement
+          // of the wrong attitude. worldTumbleForKitAttitude rejects anything
+          // non-finite, so a bad custom spec becomes "no pin" and the harness
+          // fails loudly instead.
+          return {
+            name: t.name || 'custom',
+            kitAxis: { x: a.x ?? a[0], y: a.y ?? a[1], z: a.z ?? a[2] },
+            kitDeg: Number(t.kitDeg),
+          };
+        }
+        return null;
+      };
       // Whale-in-cone plan Task 2.5 — read-back for the aim-invariant unit test.
       window.__netScenarioAimInvariant = () => _scenarioAimInvariant;
+      // Register item 13 — read-back for the harness's provenance line and its
+      // achieved-vs-intended attitude check (null ⇒ no pin was applied).
+      window.__netScenarioTumblePin = () => _scenarioTumblePin;
       // Dev-only live-net accessor for scenario forensics (same __net* hook
       // convention as __netScenarioProbe; read-only — never mutate through it).
       window.__scbScenarioNet = () => _scenarioNet;
-      window.__netScenario = () => {
+      window.__netScenario = (opts) => {
         try {
           if (!player || !debrisField || !cameraSystem) return { ok: false, reason: 'sim not up' };
           const list = debrisField.debrisList || [];
@@ -2059,6 +2102,64 @@ async function init() {
             }
             console.info(`[netScenario/fire] muzzle=${JSON.stringify(muzzRel)} aim(prograde+25m)=${JSON.stringify(aimRel)} leadDir=[${dir.x.toFixed(4)},${dir.y.toFixed(4)},${dir.z.toFixed(4)}] leadAim25m=${JSON.stringify(leadRel)} whaleLive=${JSON.stringify(whaleRel)} whaleAimGapM=${whaleAimGap}`);
           } catch (_e) { /* best-effort */ }
+
+          // ── 7.5 Pin the catch's tumble (register item 13, 2026-08-06) ──
+          // Plan: .kilo/plans/1786017377440-pin-scenario-catch-tumble.md.
+          // MEASURED: the frozen attitude both live gates measure was FOUR
+          // independent draws — spawn tumbleAxis, spawn tumbleAngle, spawn
+          // tumbleRate and the frame-quantized time to capture. Nothing is
+          // frozen before capture (DebrisField._advanceTumble only early-returns
+          // on _capturedByArm/_armPinned, first set at REELING entry), so the
+          // pixel gate's pinned CINCH still is grabbed off a live 10 °/s tumble
+          // (the DEBRIS_MAX_VISUAL_TUMBLE_DEG_S clamp), and after capture
+          // CaptureNet._applyCatchOrientation rewrites the attitude every frame
+          // from the ship frame plus a spawn-rate-dependent carryover spin.
+          // Cost, measured: whalePxFrac spanned [0.184, 0.361] and chordPierceM
+          // 0.243–0.666 on IDENTICAL code (register items 5/13).
+          //
+          // The pin is three writes and no production change: rate 0 makes
+          // _advanceTumble a no-op AND zeroes _tumbleCarryover (min(0, cap)), so
+          // the attitude holds from staging through BERTHED. It is expressed in
+          // the KIT frame — the frame the floor/chord maths and the CINCH camera
+          // actually read (qB2K = qKit⁻¹ ⊗ tumble) — via the one shared
+          // conversion in CaptureNetVisual, so the pinned number cannot drift if
+          // the staging bearing ever moves. NOMINAL x@120° was chosen on a
+          // 312-attitude sweep: chord 0.447 m (mid-family, 0.2 m under the live
+          // 0.65 sanity bound) and the flattest neighbourhood measured (±10 mm
+          // per ±5°); ADVERSE y@150° is the measured core plateau (0.666 ±1 mm),
+          // kept selectable so pinning does not hide the worst case.
+          // Trade recorded: the harness catch no longer spins down in the bag,
+          // and one attitude is not orientation coverage — that lives in
+          // tmp/g6-attitude-sweep.mjs and the ADVERSE pass.
+          _scenarioTumblePin = null;
+          try {
+            const spec = _resolveScenarioTumble(opts && opts.tumble);
+            if (spec) {
+              const pin = worldTumbleForKitAttitude(dir, spec.kitAxis, spec.kitDeg * Math.PI / 180);
+              if (pin) {
+                if (whale.tumbleAxis && typeof whale.tumbleAxis.set === 'function') {
+                  whale.tumbleAxis.set(pin.axis.x, pin.axis.y, pin.axis.z);
+                } else {
+                  whale.tumbleAxis = new THREE.Vector3(pin.axis.x, pin.axis.y, pin.axis.z);
+                }
+                whale.tumbleAngle = pin.angle;
+                whale.tumbleRate = 0;            // holds the attitude AND kills the carryover
+                whale._initialTumbleRate = 0;    // E1 despin doctrine stays coherent
+                _scenarioTumblePin = {
+                  preset: spec.name,
+                  kitAxis: [spec.kitAxis.x, spec.kitAxis.y, spec.kitAxis.z],
+                  kitDeg: spec.kitDeg,
+                  worldAxis: { x: +pin.axis.x.toFixed(6), y: +pin.axis.y.toFixed(6), z: +pin.axis.z.toFixed(6) },
+                  worldAngleDeg: +(pin.angle * 180 / Math.PI).toFixed(3),
+                  // The rows the box spec will carry (v_box = R·v_kit ⇒ matrix of
+                  // qB2K⁻¹): what the harness compares the LIVE spec against, so a
+                  // convention slip or a lost pin fails loudly instead of silently
+                  // returning both gates to a lottery.
+                  boxInKitRows: boxRowsForKitAttitude(spec.kitAxis, spec.kitDeg * Math.PI / 180),
+                };
+              }
+            }
+          } catch (_e) { /* dev-only staging aid; never break the scenario */ }
 
           const net = captureNetSystem.fireMotherNet(0, posMetres, dir, whale);
           if (!net) { release(); return { ok: false, reason: 'fire refused (magazine / cooldown / launcher blocked)' }; }
