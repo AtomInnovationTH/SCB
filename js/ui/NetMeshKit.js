@@ -262,6 +262,25 @@ export function contentsFloorRadius(z, contentsZ, contentsRadius, margin = NET_C
 }
 
 /**
+ * v_box = R·(v_kit − c) — the ONE point transform into box space (the stored
+ * rows of the contentsBox spec). Shared by contentsFloorRadiusBox (ray origin)
+ * and _edgeBoxDepth (chord samples) so the floor envelope and the chord metric
+ * can never desync on the rotation/origin convention (review, follow-up 4).
+ * Writes the module scratch `_bs` (mutated per call, never retained — the
+ * builders' per-frame path stays allocation-free, B8/P2). The DIRECTION
+ * transform (R·v, no origin shift) and the corner transform (Rᵀ) stay inline
+ * at their call sites — different operations, not this contract.
+ */
+const _bs = [0, 0, 0];
+function _toBoxSpace(box, x, y, z) {
+  const px = x - box.ox, py = y - box.oy, pz = z - box.oz;
+  _bs[0] = box.r00 * px + box.r01 * py + box.r02 * pz;
+  _bs[1] = box.r10 * px + box.r11 * py + box.r12 * pz;
+  _bs[2] = box.r20 * px + box.r21 * py + box.r22 * pz;
+  return _bs;
+}
+
+/**
  * Balloon→fabric (F1): oriented-BOX floor around the bag's contents. The sphere
  * above hugs the catch's bounding sphere, which is set by its extreme points
  * (the cubesat's wingtips) and floats ~0.7–1.0 m off the hull everywhere else —
@@ -303,11 +322,9 @@ export function contentsFloorRadius(z, contentsZ, contentsRadius, margin = NET_C
  */
 export function contentsFloorRadiusBox(z, cosA, sinA, box, margin = NET_CER.CONTENTS_FLOOR_MARGIN, mouthZ = null) {
   if (!contentsBoxValid(box)) return 0;
-  // Ray origin: the point on the bag axis at ring height z, in box space.
-  const px = -box.ox, py = -box.oy, pz = z - box.oz;
-  const ox = box.r00 * px + box.r01 * py + box.r02 * pz;
-  const oy = box.r10 * px + box.r11 * py + box.r12 * pz;
-  const oz = box.r20 * px + box.r21 * py + box.r22 * pz;
+  // Ray origin: the point on the bag axis at ring height z, in box space (the
+  // shared point transform — one home of the convention).
+  const [ox, oy, oz] = _toBoxSpace(box, 0, 0, z);
   // Spoke direction in box space.
   const dx = box.r00 * cosA + box.r01 * sinA;
   const dy = box.r10 * cosA + box.r11 * sinA;
@@ -464,13 +481,8 @@ function _edgeBoxDepth(pos, i0, i1, box, n, worst) {
   const bx = pos[i1], by = pos[i1 + 1], bz = pos[i1 + 2];
   for (let i = 0; i <= n; i++) {
     const f = i / n;
-    // Sample point in box space (v_box = R·v_kit — the stored rows).
-    const px = ax + (bx - ax) * f - box.ox;
-    const py = ay + (by - ay) * f - box.oy;
-    const pz = az + (bz - az) * f - box.oz;
-    const qx = box.r00 * px + box.r01 * py + box.r02 * pz;
-    const qy = box.r10 * px + box.r11 * py + box.r12 * pz;
-    const qz = box.r20 * px + box.r21 * py + box.r22 * pz;
+    // Sample point in box space (the shared point transform).
+    const [qx, qy, qz] = _toBoxSpace(box, ax + (bx - ax) * f, ay + (by - ay) * f, az + (bz - az) * f);
     const d = Math.min(box.hx - Math.abs(qx), box.hy - Math.abs(qy), box.hz - Math.abs(qz));
     if (d > worst) worst = d;
   }
