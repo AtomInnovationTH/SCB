@@ -409,6 +409,75 @@ export function contentsBoxValid(box) {
 }
 
 /**
+ * Whale-in-cone follow-up 4: does the DRAWN polyline touch the catch? The
+ * vertex rule (B7) keeps every lattice VERTEX outside the margined hull by
+ * construction, but the mesh draws CHORDS between vertices, and a chord
+ * spanning an envelope ridge sags inside it. Measured classes (plan
+ * `.kilo/plans/1785984523699-chord-pierce-gate.md`, Finding 3): the
+ * azimuthal-corner graze (+71.3 mm at identity rotation) and the dominant
+ * MERIDIONAL cap-elbow chord (tent→slab handoff, rings 2→3; 0.243–0.583 m
+ * live, harness-labile; 0.665 m over the tumble sweep — register item 12).
+ * This is the ONE home of that measurement — the main.js probe (metres
+ * gate) and the tmp chordcheck instrument both call it, so instrument ≡
+ * gate.
+ *
+ * Signed inside-depth of the UNMARGINED box at samplesPerEdge points per
+ * edge: depth(p) = min(hx−|px|, hy−|py|, hz−|pz|) in box space (rotation
+ * rows honoured); > 0 ⇒ the drawn film is that deep INSIDE the true hull —
+ * genuine contact, not margin erosion (same reference pierceM uses at the
+ * whale's depth: the margin-1 surface). Sampled, not exact: a ridge maximum
+ * can sit between samples (resolution ≈ edge/samplesPerEdge ≈ 1–2 cm on the
+ * 6×20 lattice) — the gate's tolerance absorbs this. Membrane and thread
+ * chords are the SAME lattice (vertices welded on thread intersections), so
+ * one sweep covers both.
+ *
+ * Pure read of the positions the builders produced (the bicone tents are
+ * drawn geometry ⇒ included by construction); no allocations; scene units.
+ * @param {Float32Array} positions — (rings+1) × radialSpokes × 3 lattice
+ *   (the handle's membranePositions — the actual drawn vertices)
+ * @param {number} rings @param {number} radialSpokes — lattice topology
+ * @param {object} box — the handle's stored contentsBox (kit space)
+ * @param {number} [samplesPerEdge=64]
+ * @returns {number|null} worst signed inside-depth (scene units), or null
+ *   when no valid box is supplied (sphere-fallback / flight — the metric is
+ *   box-era)
+ */
+export function chordBoxPenetration(positions, rings, radialSpokes, box, samplesPerEdge = 64) {
+  if (!contentsBoxValid(box)) return null;
+  let worst = -Infinity;
+  for (let k = 0; k <= rings; k++) {
+    for (let s = 0; s < radialSpokes; s++) {
+      const i0 = (k * radialSpokes + s) * 3;
+      const i1 = (k * radialSpokes + ((s + 1) % radialSpokes)) * 3;
+      worst = _edgeBoxDepth(positions, i0, i1, box, samplesPerEdge, worst);
+      if (k < rings) {
+        worst = _edgeBoxDepth(positions, i0, i0 + radialSpokes * 3, box, samplesPerEdge, worst);
+      }
+    }
+  }
+  return worst;
+}
+
+/** One chord's worst signed inside-depth (module-private; see above). */
+function _edgeBoxDepth(pos, i0, i1, box, n, worst) {
+  const ax = pos[i0], ay = pos[i0 + 1], az = pos[i0 + 2];
+  const bx = pos[i1], by = pos[i1 + 1], bz = pos[i1 + 2];
+  for (let i = 0; i <= n; i++) {
+    const f = i / n;
+    // Sample point in box space (v_box = R·v_kit — the stored rows).
+    const px = ax + (bx - ax) * f - box.ox;
+    const py = ay + (by - ay) * f - box.oy;
+    const pz = az + (bz - az) * f - box.oz;
+    const qx = box.r00 * px + box.r01 * py + box.r02 * pz;
+    const qy = box.r10 * px + box.r11 * py + box.r12 * pz;
+    const qz = box.r20 * px + box.r21 * py + box.r22 * pz;
+    const d = Math.min(box.hx - Math.abs(qx), box.hy - Math.abs(qy), box.hz - Math.abs(qz));
+    if (d > worst) worst = d;
+  }
+  return worst;
+}
+
+/**
  * The single mouth-plane ring radius the contents floor demands, given that a
  * box floor varies with angle: the MAX over the spoke directions (the exact
  * angles the drawn film's vertices sit at, so nothing the film needs is

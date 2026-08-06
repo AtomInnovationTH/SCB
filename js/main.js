@@ -82,7 +82,7 @@ import { DebrisMap } from './ui/DebrisMap.js';
 // Whale-in-cone phase 3: main ALSO imports it directly for the scenario probe's
 // bounding-radius reads (getBoundingRadius is a static cached accessor).
 import { DebrisWireframe } from './ui/DebrisWireframe.js';
-import { drawnRimRadiusAtDepth, contentsFloorRadius, contentsFloorRadiusBox, contentsFloorClamped, contentsBoxValid } from './ui/NetMeshKit.js';
+import { drawnRimRadiusAtDepth, contentsFloorRadius, contentsFloorRadiusBox, contentsFloorClamped, contentsBoxValid, chordBoxPenetration } from './ui/NetMeshKit.js';
 import { DockingReticle } from './ui/DockingReticle.js';
 import { VelocityStreaks } from './ui/VelocityStreaks.js';
 import { TrailSystem } from './ui/TrailSystem.js';
@@ -2103,7 +2103,7 @@ async function init() {
       // Returns the SHARED scratch `_netDp` (allocation-free per frame — the
       // recorder calls this every frame while enabled): callers read fields
       // immediately and never retain the reference.
-      const _netDp = { drawnRimM: null, pierceM: null, fillFrac: null, boxFloorM: null };
+      const _netDp = { drawnRimM: null, pierceM: null, fillFrac: null, boxFloorM: null, chordPierceM: null };
       const _netDpBox = [null, null, null];
       function _netDrawnRimPierce(kh, lpZ, natural, renderRadiusM, M) {
         // The open-cone clamp the mesh applies at the whale's depth: the cone
@@ -2134,6 +2134,14 @@ async function init() {
           _netDpBox[1] = +(cB.hy / M).toFixed(3);
           _netDpBox[2] = +(cB.hz / M).toFixed(3);
           _netDp.boxFloorM = _netDpBox;
+          // Follow-up 4: the DRAWN polyline, not just the envelope — worst
+          // chord penetration into the UNMARGINED box over every lattice edge
+          // (positive = the film touches the hull; same sign as pierceM). The
+          // kit export reads the handle's LIVE membranePositions, so the
+          // bicone tents are included by construction and probe ≡ mesh. ~17k
+          // point evals; probe/recorder are dev-only, never a production cost.
+          const chordWorst = chordBoxPenetration(kh.membranePositions, kh.rings, kh.radialSpokes, cB);
+          _netDp.chordPierceM = chordWorst === null ? null : +(chordWorst / M).toFixed(3);
           return _netDp;
         }
         // F4 legacy sphere fallback — unreachable from the production drivers
@@ -2147,6 +2155,7 @@ async function init() {
         _netDp.pierceM = +(renderRadiusM - drawn).toFixed(3);
         _netDp.fillFrac = drawn > 0 ? +(renderRadiusM / drawn).toFixed(3) : null;
         _netDp.boxFloorM = null;
+        _netDp.chordPierceM = null;   // box-era metric; no chord hull on the sphere path
         return _netDp;
       }
 
@@ -2257,7 +2266,7 @@ async function init() {
                 // exports — including the contents floor the Task-5 driver
                 // stores on the handle (absent pre-Task-5 ⇒ floor 0 ⇒ the
                 // natural drape/cinch radius, i.e. exactly what the mesh draws).
-                let drapeFrac = null, cinchFrac = null, drawnRimM = null, pierceM = null, fillFrac = null, boxFloorM = null;
+                let drapeFrac = null, cinchFrac = null, drawnRimM = null, pierceM = null, fillFrac = null, boxFloorM = null, chordPierceM = null;
                 const vis0 = captureNetVisual?._activeVisuals?.get('pod_0')
                   ?? [...(captureNetVisual?._activeVisuals?.values() ?? [])].find(v => v?.useCeremony);
                 const kh = vis0?.kitHandle;
@@ -2279,6 +2288,7 @@ async function init() {
                   pierceM = dp.pierceM;
                   fillFrac = dp.fillFrac;
                   boxFloorM = dp.boxFloorM;
+                  chordPierceM = dp.chordPierceM;
                 }
                 return {
                   type: whale.type ?? null,
@@ -2290,6 +2300,7 @@ async function init() {
                   drapeFrac, cinchFrac,
                   drawnRimAtWhaleM: drawnRimM, pierceM, fillFrac,
                   boxFloorM,
+                  chordPierceM,
                 };
               } catch (_e) { return null; }
             })(),
@@ -2546,7 +2557,7 @@ async function init() {
           // sample. br via the cached accessor (getGeometry first — uncached
           // returns 1); render scale via the Task-3 SSOT helper.
           let whaleType = null, whaleRenderRadiusM = null, sceneSizeConsistent = null;
-          let drapeFrac = null, cinchFrac = null, drawnRimAtWhaleM = null, pierceM = null;
+          let drapeFrac = null, cinchFrac = null, drawnRimAtWhaleM = null, pierceM = null, chordPierceM = null;
           const vis0 = captureNetVisual?._activeVisuals?.get('pod_0')
             ?? [...(captureNetVisual?._activeVisuals?.values() ?? [])].find(v => v?.useCeremony);
           const kh = vis0?.kitHandle;
@@ -2580,6 +2591,7 @@ async function init() {
             const dp = _netDrawnRimPierce(kh, lp.z, natural, whaleRenderRadiusM, M);
             drawnRimAtWhaleM = dp.drawnRimM;
             pierceM = dp.pierceM;
+            chordPierceM = dp.chordPierceM;
           }
           // Anchor-drag witness: lateral displacement of the LIVE muzzle anchor
           // since fire, measured perpendicular to the frozen launchDirection.
@@ -2611,6 +2623,8 @@ async function init() {
             // Whale-in-cone phase 3 scale witness (null when no kit handle).
             whaleType, whaleRenderRadiusM, sceneSizeConsistent,
             drapeFrac, cinchFrac, drawnRimAtWhaleM, pierceM,
+            // Follow-up 4: drawn-polyline chord clearance (null off the box path).
+            chordPierceM,
           };
           if (_PROBE_REC.buf.length >= _PROBE_REC.cap) { _PROBE_REC.dropped++; return; }
           _PROBE_REC.buf.push(s);
@@ -2928,6 +2942,38 @@ async function init() {
             }
           }
           return out;
+        } catch (e) { return { error: String((e && e.message) || e) }; }
+      };
+
+      //   window.__netContentsBox() → the ceremony kit handle's stored contents
+      //   spec EXACTLY as the floor/chord maths sees it: the 15-number box
+      //   (metres for lengths, unitless rotation rows) + the full drape state
+      //   (drape/cinch/jiggle). Follow-up 4 forensics: replay the LIVE spec
+      //   through the kit exports offline (tmp instruments) so a gate reading
+      //   can be dissected edge-by-edge without re-deriving anything.
+      window.__netContentsBox = () => {
+        try {
+          const M = 0.00001;
+          const vis0 = captureNetVisual?._activeVisuals?.get('pod_0')
+            ?? [...(captureNetVisual?._activeVisuals?.values() ?? [])].find(v => v?.useCeremony);
+          const kh = vis0?.kitHandle;
+          if (!kh) return null;
+          const b = kh._contentsBox;
+          return {
+            drape: kh._drape ?? 0,
+            cinchFrac: kh._cinchFrac ?? 0,
+            jigglePhase: kh._jigglePhase ?? 0,
+            jiggleAmpM: +((kh._jiggleAmp ?? 0) / M).toFixed(4),
+            contentsZM: +((kh._contentsZ ?? 0) / M).toFixed(4),
+            contentsRadiusM: +((kh._contentsR ?? 0) / M).toFixed(4),
+            box: b ? {
+              ox: +(b.ox / M).toFixed(4), oy: +(b.oy / M).toFixed(4), oz: +(b.oz / M).toFixed(4),
+              r00: b.r00, r01: b.r01, r02: b.r02,
+              r10: b.r10, r11: b.r11, r12: b.r12,
+              r20: b.r20, r21: b.r21, r22: b.r22,
+              hx: +(b.hx / M).toFixed(4), hy: +(b.hy / M).toFixed(4), hz: +(b.hz / M).toFixed(4),
+            } : null,
+          };
         } catch (e) { return { error: String((e && e.message) || e) }; }
       };
       console.info('[netRoi] ready. __netRoi(), __netVisualToggle(part, on), __netFreeze(true).');
