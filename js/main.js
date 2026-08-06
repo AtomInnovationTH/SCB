@@ -82,7 +82,7 @@ import { DebrisMap } from './ui/DebrisMap.js';
 // Whale-in-cone phase 3: main ALSO imports it directly for the scenario probe's
 // bounding-radius reads (getBoundingRadius is a static cached accessor).
 import { DebrisWireframe } from './ui/DebrisWireframe.js';
-import { drawnRimRadiusAtDepth, contentsFloorRadius, depthToRingT } from './ui/NetMeshKit.js';
+import { drawnRimRadiusAtDepth, contentsFloorRadius, contentsFloorRadiusBox, contentsFloorClamped } from './ui/NetMeshKit.js';
 import { DockingReticle } from './ui/DockingReticle.js';
 import { VelocityStreaks } from './ui/VelocityStreaks.js';
 import { TrailSystem } from './ui/TrailSystem.js';
@@ -2089,6 +2089,58 @@ async function init() {
         }
       };
 
+      // Balloon→fabric (F5): the drawn rim at the whale's depth + the pierce
+      // metric, computed ONLY through the NetMeshKit exports (with the identical
+      // open-cone clamp the mesh uses — Task 7) so probe/recorder and mesh can
+      // never drift. With a contentsBox on the handle the floor varies per spoke
+      // angle, so the honest metric is per-angle: drawnRim = MIN over angles;
+      // pierceM = MAX over angles of (hull surface distance − drawn rim), so a
+      // positive pierceM still means the film cuts into the catch (the gate's
+      // sign convention is unchanged). Sphere fallback keeps the original
+      // bounding-sphere-vs-rim semantics. `natural` is drawnRimRadiusAtDepth at
+      // the whale's depth (scene units); renderRadiusM is the bounding-sphere
+      // render radius in METRES. Allocation-light: locals only.
+      function _netDrawnRimPierce(kh, lpZ, natural, renderRadiusM, M) {
+        // The open-cone clamp the mesh applies at the whale's depth: the cone
+        // radius at the ring's DRAPED z — here the ring AT this depth, i.e. the
+        // static cone radius mouthRadius·(a/H). Identical rule, identical maths
+        // (probe/mesh never drift); mouthRadius at/past the mouth plane.
+        const openCone = kh.mouthRadius * Math.min(1, Math.max(0, -lpZ / kh.coneHeight));
+        const cB = kh._contentsBox ?? null;
+        if (kh._drape > 0 && cB && cB.hx > 0 && cB.hy > 0 && cB.hz > 0) {
+          let drawnMin = Infinity, violMax = null, surfMax = 0;
+          for (let s = 0; s < kh.radialSpokes; s++) {
+            const a = (2 * Math.PI * s) / kh.radialSpokes;
+            const ca = Math.cos(a), sa = Math.sin(a);
+            const floorS = contentsFloorClamped(lpZ, ca, sa, openCone, kh._contentsZ ?? 0, kh._contentsR ?? 0, cB, Constants.CAPTURE_NET.NET_CEREMONY.CONTENTS_FLOOR_MARGIN, -kh.coneHeight);
+            const drawnS = Math.max(natural, floorS);
+            const surfS = contentsFloorRadiusBox(lpZ, ca, sa, cB, 1, -kh.coneHeight);   // margin 1 = the hull itself (incl. bicone)
+            if (drawnS < drawnMin) drawnMin = drawnS;
+            if (surfS > 0) {
+              if (surfS > surfMax) surfMax = surfS;
+              const viol = surfS - drawnS;
+              if (violMax === null || viol > violMax) violMax = viol;
+            }
+          }
+          return {
+            drawnRimM: +(drawnMin / M).toFixed(3),
+            pierceM: violMax === null ? null : +(violMax / M).toFixed(3),
+            fillFrac: (drawnMin > 0 && surfMax > 0) ? +(surfMax / drawnMin).toFixed(3) : null,
+            boxFloorM: [+(cB.hx / M).toFixed(3), +(cB.hy / M).toFixed(3), +(cB.hz / M).toFixed(3)],
+          };
+        }
+        const floor = (kh._drape > 0)
+          ? Math.min(contentsFloorRadius(lpZ, kh._contentsZ ?? 0, kh._contentsR ?? 0), openCone)
+          : 0;
+        const drawn = Math.max(natural, floor) / M;
+        return {
+          drawnRimM: +drawn.toFixed(3),
+          pierceM: +(renderRadiusM - drawn).toFixed(3),
+          fillFrac: drawn > 0 ? +(renderRadiusM / drawn).toFixed(3) : null,
+          boxFloorM: null,
+        };
+      }
+
       // ── Scenario probe (harness diagnostics) ──
       //   window.__netScenarioProbe()
       //     → live state of the staged scenario: the net's FSM state and
@@ -2196,7 +2248,7 @@ async function init() {
                 // exports — including the contents floor the Task-5 driver
                 // stores on the handle (absent pre-Task-5 ⇒ floor 0 ⇒ the
                 // natural drape/cinch radius, i.e. exactly what the mesh draws).
-                let drapeFrac = null, cinchFrac = null, drawnRimM = null, pierceM = null, fillFrac = null;
+                let drapeFrac = null, cinchFrac = null, drawnRimM = null, pierceM = null, fillFrac = null, boxFloorM = null;
                 const vis0 = captureNetVisual?._activeVisuals?.get('pod_0')
                   ?? [...(captureNetVisual?._activeVisuals?.values() ?? [])].find(v => v?.useCeremony);
                 const kh = vis0?.kitHandle;
@@ -2209,19 +2261,15 @@ async function init() {
                   const natural = drawnRimRadiusAtDepth(-lp.z, kh.mouthRadius, kh.coneHeight,
                     kh._drape ?? 0, kh._cinchFrac ?? 0,
                     Constants.CAPTURE_NET.NET_CEREMONY.DRAWSTRING_RADIUS_FRAC_CLOSED);
-                  // Task 7: the mesh clamps the contents floor to the ring's
-                  // own open-cone radius (mouthRadius·t at the whale's depth)
-                  // — the probe must apply the IDENTICAL clamp or probe and
-                  // mesh drift (R1's apex balloon passed the gate that way).
-                  const tW = depthToRingT(-lp.z, kh.coneHeight, kh._drape ?? 0);
-                  const floor = (kh._drape > 0)
-                    ? Math.min(contentsFloorRadius(lp.z, kh._contentsZ ?? 0, kh._contentsR ?? 0),
-                               kh.mouthRadius * tW)
-                    : 0;
-                  const drawn = Math.max(natural, floor) / M;
-                  drawnRimM = +drawn.toFixed(3);
-                  pierceM = +(renderRadiusM - drawn).toFixed(3);   // > 0 ⇒ bag inside the whale
-                  fillFrac = drawn > 0 ? +(renderRadiusM / drawn).toFixed(3) : null;
+                  // F5: the shared helper applies the IDENTICAL floor + open-cone
+                  // clamp the mesh uses (Task 7's rule, now box-aware) — probe
+                  // and mesh must never drift (R1's apex balloon passed the gate
+                  // that way).
+                  const dp = _netDrawnRimPierce(kh, lp.z, natural, renderRadiusM, M);
+                  drawnRimM = dp.drawnRimM;
+                  pierceM = dp.pierceM;
+                  fillFrac = dp.fillFrac;
+                  boxFloorM = dp.boxFloorM;
                 }
                 return {
                   type: whale.type ?? null,
@@ -2232,6 +2280,7 @@ async function init() {
                   renderRadiusM: +renderRadiusM.toFixed(3),
                   drapeFrac, cinchFrac,
                   drawnRimAtWhaleM: drawnRimM, pierceM, fillFrac,
+                  boxFloorM,
                 };
               } catch (_e) { return null; }
             })(),
@@ -2517,15 +2566,11 @@ async function init() {
             const natural = drawnRimRadiusAtDepth(-lp.z, kh.mouthRadius, kh.coneHeight,
               kh._drape ?? 0, kh._cinchFrac ?? 0,
               Constants.CAPTURE_NET.NET_CEREMONY.DRAWSTRING_RADIUS_FRAC_CLOSED);
-            // Task 7: identical open-cone clamp as the mesh (mouthRadius·t at
-            // the whale's depth) — probe/recorder and mesh must never drift.
-            const tW = depthToRingT(-lp.z, kh.coneHeight, kh._drape ?? 0);
-            const floor = (kh._drape > 0)
-              ? Math.min(contentsFloorRadius(lp.z, kh._contentsZ ?? 0, kh._contentsR ?? 0),
-                         kh.mouthRadius * tW)
-              : 0;
-            drawnRimAtWhaleM = +(Math.max(natural, floor) / M).toFixed(3);
-            pierceM = +(whaleRenderRadiusM - drawnRimAtWhaleM).toFixed(3);
+            // F5: identical floor + open-cone clamp as the mesh, box-aware,
+            // via the shared helper — probe/recorder and mesh must never drift.
+            const dp = _netDrawnRimPierce(kh, lp.z, natural, whaleRenderRadiusM, M);
+            drawnRimAtWhaleM = dp.drawnRimM;
+            pierceM = dp.pierceM;
           }
           // Anchor-drag witness: lateral displacement of the LIVE muzzle anchor
           // since fire, measured perpendicular to the frozen launchDirection.

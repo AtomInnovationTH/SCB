@@ -67,6 +67,16 @@ const _v3a = new THREE.Vector3();
 const _v3b = new THREE.Vector3();
 const _v3c = new THREE.Vector3();
 const _v3d = new THREE.Vector3();
+// Balloon→fabric (F1): scratch rotation state for the per-frame contents-BOX
+// spec, plus the scratch spec itself. The kit COPIES the numbers into a
+// per-handle object, so this single scratch can serve every live net.
+const _qA = new THREE.Quaternion();
+const _qB = new THREE.Quaternion();
+const _m4 = new THREE.Matrix4();
+const _vBox = new THREE.Vector3();
+const _contentsBoxScratch = { ox: 0, oy: 0, oz: 0,
+  r00: 1, r01: 0, r02: 0, r10: 0, r11: 1, r12: 0, r20: 0, r21: 0, r22: 1,
+  hx: 0, hy: 0, hz: 0 };
 
 // ── Tether catenary (mother-net-reel plan §11.4 Phase D.4) ───────────────
 // The 2-point THREE.Line is replaced by a Line2/LineMaterial fat-line strand
@@ -874,14 +884,46 @@ export class CaptureNetVisual {
         // point; that contrast is what sells a real catch. effectiveRenderScale
         // is the clamp-aware SSOT (W5), so the envelope tracks the size the
         // renderer actually draws, including the CAPTURED readability floor.
-        let contentsRadius = 0, contentsZ = 0;
+        // Balloon→fabric (F1): also pass the catch's oriented-BOX spec — the
+        // film then wraps the real extents (kill the balloon), keyed to the
+        // tumble orientation, which is FROZEN while pinned (B3) so the wrap
+        // cannot spin or drift.
+        let contentsRadius = 0, contentsZ = 0, contentsBox = null;
         const d = net.targetDebris;
         if (d && d._scenePosition && (drape > 0 || cinchFrac > 0)) {
           DebrisWireframe.getGeometry(d.type, d.id);           // br cache (uncached ⇒ 1)
           const br = DebrisWireframe.getBoundingRadius(d.type, d.id) || 1;
-          contentsRadius = DebrisField.effectiveRenderScale(d) * br;
+          const renderScale = DebrisField.effectiveRenderScale(d);
+          contentsRadius = renderScale * br;
           vis.kitHandle.group.updateMatrixWorld(true);          // same guard the probe uses
-          contentsZ = vis.kitHandle.group.worldToLocal(_v3c.copy(d._scenePosition)).z;
+          const lp = vis.kitHandle.group.worldToLocal(_v3c.copy(d._scenePosition));
+          contentsZ = lp.z;
+          const bb = DebrisWireframe.getBoundingBoxExtents(d.type, d.id);
+          if (bb) {
+            // Catch orientation in kit space: qB2K = qKit⁻¹ ⊗ tumble. The
+            // tumble is the whole instance rotation (DebrisField:1985) and is
+            // frozen while _armPinned (B3).
+            vis.kitHandle.group.getWorldQuaternion(_qA);
+            if (d.tumbleAxis) _qB.setFromAxisAngle(d.tumbleAxis, d.tumbleAngle || 0);
+            else _qB.identity();
+            _qA.invert().multiply(_qB);                          // box-local → kit-space
+            // Box centre in kit space: instance origin + qB2K·(local centre × scale).
+            _vBox.set(bb.cx * renderScale, bb.cy * renderScale, bb.cz * renderScale).applyQuaternion(_qA);
+            _contentsBoxScratch.ox = lp.x + _vBox.x;
+            _contentsBoxScratch.oy = lp.y + _vBox.y;
+            _contentsBoxScratch.oz = lp.z + _vBox.z;
+            // kit→box rotation rows (v_box = R·v_kit): the matrix of qB2K⁻¹.
+            // Matrix4.elements is column-major: e[0]=m11, e[1]=m21, e[4]=m12 …
+            _m4.makeRotationFromQuaternion(_qA.invert());
+            const e = _m4.elements;
+            _contentsBoxScratch.r00 = e[0]; _contentsBoxScratch.r01 = e[4]; _contentsBoxScratch.r02 = e[8];
+            _contentsBoxScratch.r10 = e[1]; _contentsBoxScratch.r11 = e[5]; _contentsBoxScratch.r12 = e[9];
+            _contentsBoxScratch.r20 = e[2]; _contentsBoxScratch.r21 = e[6]; _contentsBoxScratch.r22 = e[10];
+            _contentsBoxScratch.hx = bb.hx * renderScale;
+            _contentsBoxScratch.hy = bb.hy * renderScale;
+            _contentsBoxScratch.hz = bb.hz * renderScale;
+            contentsBox = _contentsBoxScratch;
+          }
         }
         NetMeshKit.updateWebDrape(vis.kitHandle, {
           drape,
@@ -890,6 +932,7 @@ export class CaptureNetVisual {
           jiggleAmp,
           contentsRadius,
           contentsZ,
+          contentsBox,
           // V4: camera in the kit's LOCAL frame for per-thread depth shading
           // (the kit stays pure-local-space; worldToLocal writes in place).
           localCamPos: this._sceneManager?.camera

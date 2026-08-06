@@ -513,6 +513,12 @@ const _geoRadiusCache = new Map();
 /** @type {Map<string, {x:number,y:number,z:number}>} Bounding-box half-extents per geometry */
 const _geoHalfExtentCache = new Map();
 
+/** @type {Map<string, {cx:number,cy:number,cz:number,hx:number,hy:number,hz:number}>} True
+ *  bounding-box centre + half-extents per geometry (balloon→fabric box floor). Distinct from
+ *  `_geoHalfExtentCache`, which is symmetric max-abs for decals — several hulls are NOT centred
+ *  on the origin (cubesat y is −0.322/+0.476), and symmetrising would inflate the wrap. */
+const _geoBBoxCache = new Map();
+
 /**
  * Merge an array of THREE.BufferGeometry into a single BufferGeometry.
  * Supports indexed and non-indexed geometries (position + normal only).
@@ -1112,6 +1118,13 @@ export class DebrisWireframe {
           z: Math.max(Math.abs(bb.min.z), Math.abs(bb.max.z)) }
       : { x: br, y: br, z: br });
 
+    // True centre + half-extents (balloon→fabric): the bag's contents floor
+    // wraps the catch's REAL box, so the asymmetry must survive.
+    _geoBBoxCache.set(cacheKey, bb
+      ? { cx: (bb.min.x + bb.max.x) / 2, cy: (bb.min.y + bb.max.y) / 2, cz: (bb.min.z + bb.max.z) / 2,
+          hx: (bb.max.x - bb.min.x) / 2, hy: (bb.max.y - bb.min.y) / 2, hz: (bb.max.z - bb.min.z) / 2 }
+      : { cx: 0, cy: 0, cz: 0, hx: br, hy: br, hz: br });
+
     _geoCache.set(cacheKey, geo);
     return geo;
   }
@@ -1127,6 +1140,23 @@ export class DebrisWireframe {
     const N = Constants.DEBRIS_FRAGMENT_VARIANTS || 7;
     const cacheKey = type === 'fragment' ? `fragment_${(id >>> 0) % N}` : type;
     return _geoRadiusCache.has(cacheKey) ? _geoRadiusCache.get(cacheKey) : 1;
+  }
+
+  /**
+   * Local-space bounding-box centre + half-extents, keyed like getBoundingRadius
+   * (balloon→fabric box floor). Calls getGeometry internally, so the cache is
+   * always populated (no uncached trap — unlike getBoundingRadius, which
+   * returns 1 for an uncached key). The returned object is SHARED (cached) —
+   * do not mutate. Scale it by the instance's render scale before use.
+   * @param {string} type
+   * @param {number} [id=0] - Debris ID (selects the fragment variant)
+   * @returns {{cx:number,cy:number,cz:number,hx:number,hy:number,hz:number}}
+   */
+  static getBoundingBoxExtents(type, id = 0) {
+    const N = Constants.DEBRIS_FRAGMENT_VARIANTS || 7;
+    const cacheKey = type === 'fragment' ? `fragment_${(id >>> 0) % N}` : type;
+    if (!_geoBBoxCache.has(cacheKey)) this.getGeometry(type, id);
+    return _geoBBoxCache.get(cacheKey);
   }
 
   /**

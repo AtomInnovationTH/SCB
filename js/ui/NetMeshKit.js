@@ -261,6 +261,165 @@ export function contentsFloorRadius(z, contentsZ, contentsRadius, margin = NET_C
   return margin * Math.sqrt(rr);
 }
 
+/**
+ * Balloon→fabric (F1): oriented-BOX floor around the bag's contents. The sphere
+ * above hugs the catch's bounding sphere, which is set by its extreme points
+ * (the cubesat's wingtips) and floats ~0.7–1.0 m off the hull everywhere else —
+ * the "translucent balloon" of the Task-6.5 verdict. The box floor settles the
+ * film onto the catch's real extents, in two parts:
+ *
+ * 1. IN-SPAN — the spoke ray (from the bag axis at height z, horizontal along
+ *    (cosA, sinA)) meets the box in box space: origin inside ⇒ margin × tExit
+ *    (wrap out from the centre); origin outside and the ray hits ⇒ margin ×
+ *    tEnter (drape onto the near face).
+ * 2. CORNER-CONE (bicone) — when the ray MISSES, the film is past one of the
+ *    box's caps, and the floor must NOT vanish: the chord from a floored wrap
+ *    ring to an unfloored natural ring tunnels straight through the hull
+ *    (measured up to 570 mm at the flat-cap orientation, 2026-08-06). The taut
+ *    film is modelled as a cone from the apex over the box's silhouette, and
+ *    an anti-cone from the drawstring (mouthZ) back to it. Each corner
+ *    contributes its PROJECTED extent u = cx·cosA + cy·sinA in the spoke's
+ *    vertical plane (never the 3-D radius — a revolution cone bulges past the
+ *    face at the centre plane), scaled by z/z_C for deeper corners and
+ *    (mouthZ−z)/(mouthZ−z_C) for shallower ones; the floor takes the max.
+ *    Applied ONLY on a miss — the slab hit is the exact surface, the cone is
+ *    the tent past the caps; they meet at the cap plane. The bicone contains
+ *    the box from both sides, so chords can't tunnel; it reads as the gathered
+ *    neck/shoulder of a real bag, and it stays per-angle honest for an
+ *    off-axis box (the empty side still closes).
+ *
+ * The box is convex, so "film vertex radius ≥ this floor" keeps every vertex
+ * outside the margined hull by construction (ring-continuous; chords between
+ * vertices are the chordcheck instrument's domain). Scene units; pure; no
+ * allocations.
+ * @param {number} z — ring axial position in kit space (negative = ahead of the apex)
+ * @param {number} cosA @param {number} sinA — spoke direction (unit, horizontal in kit space)
+ * @param {object} box — {ox,oy,oz, r00…r22, hx,hy,hz}: box centre in kit space,
+ *   kit→box rotation rows (v_box = R·v_kit), half extents; all scene units
+ * @param {number} [margin=NET_CER.CONTENTS_FLOOR_MARGIN]
+ * @param {number} [mouthZ] — kit mouth plane z (drawstring side); enables the
+ *   far anti-cone. Omitted ⇒ the far cap closes freely (legacy behaviour).
+ * @returns {number} floor radius (scene units), ≥ 0
+ */
+export function contentsFloorRadiusBox(z, cosA, sinA, box, margin = NET_CER.CONTENTS_FLOOR_MARGIN, mouthZ = null) {
+  if (!box || !(box.hx > 0) || !(box.hy > 0) || !(box.hz > 0)) return 0;
+  // Ray origin: the point on the bag axis at ring height z, in box space.
+  const px = -box.ox, py = -box.oy, pz = z - box.oz;
+  const ox = box.r00 * px + box.r01 * py + box.r02 * pz;
+  const oy = box.r10 * px + box.r11 * py + box.r12 * pz;
+  const oz = box.r20 * px + box.r21 * py + box.r22 * pz;
+  // Spoke direction in box space.
+  const dx = box.r00 * cosA + box.r01 * sinA;
+  const dy = box.r10 * cosA + box.r11 * sinA;
+  const dz = box.r20 * cosA + box.r21 * sinA;
+  // Slab interval [tN, tF] over the three axes (enter = max of enters, exit = min of exits).
+  let tN = -Infinity, tF = Infinity;
+  if (dx > 1e-12 || dx < -1e-12) {
+    let t1 = (-box.hx - ox) / dx, t2 = (box.hx - ox) / dx;
+    if (t1 > t2) { const tt = t1; t1 = t2; t2 = tt; }
+    if (t1 > tN) tN = t1; if (t2 < tF) tF = t2;
+  } else if (ox > box.hx || ox < -box.hx) {
+    tN = Infinity; tF = -Infinity;   // parallel ray outside the slab ⇒ miss (cone below)
+  }
+  if (dy > 1e-12 || dy < -1e-12) {
+    let t1 = (-box.hy - oy) / dy, t2 = (box.hy - oy) / dy;
+    if (t1 > t2) { const tt = t1; t1 = t2; t2 = tt; }
+    if (t1 > tN) tN = t1; if (t2 < tF) tF = t2;
+  } else if (oy > box.hy || oy < -box.hy) {
+    tN = Infinity; tF = -Infinity;
+  }
+  if (dz > 1e-12 || dz < -1e-12) {
+    let t1 = (-box.hz - oz) / dz, t2 = (box.hz - oz) / dz;
+    if (t1 > t2) { const tt = t1; t1 = t2; t2 = tt; }
+    if (t1 > tN) tN = t1; if (t2 < tF) tF = t2;
+  } else if (oz > box.hz || oz < -box.hz) {
+    tN = Infinity; tF = -Infinity;
+  }
+  const t = (tN <= tF && tF >= 0) ? (tN > 0 ? tN : tF) : 0;   // outside → near face; inside → far face
+  // Bicone: corners in KIT space (v_kit = Rᵀ·v_box — the stored rows transposed),
+  // constrained in the spoke's vertical plane by their PROJECTED extent u.
+  // Evaluated ONLY on a slab miss — the slab hit is the exact surface.
+  if (t > 0) return margin * t;
+  let cone = 0;
+  for (let sx = -1; sx <= 1; sx += 2) {
+    for (let sy = -1; sy <= 1; sy += 2) {
+      for (let sz = -1; sz <= 1; sz += 2) {
+        const bx = sx * box.hx, by = sy * box.hy, bz = sz * box.hz;
+        const cx = box.ox + box.r00 * bx + box.r10 * by + box.r20 * bz;
+        const cy = box.oy + box.r01 * bx + box.r11 * by + box.r21 * bz;
+        const cz = box.oz + box.r02 * bx + box.r12 * by + box.r22 * bz;
+        const u = cx * cosA + cy * sinA;
+        if (u <= 0) continue;             // this corner is behind the spoke direction
+        if (cz <= z && cz < -1e-12 && z < 0) {
+          const v = u * (z / cz);                    // apex-side cone (both negative ⇒ ratio ∈ (0,1])
+          if (v > cone) cone = v;
+        } else if (cz > z && mouthZ != null && z > mouthZ && cz > mouthZ) {
+          const v = u * ((mouthZ - z) / (mouthZ - cz));  // drawstring-side anti-cone
+          if (v > cone) cone = v;
+        }
+      }
+    }
+  }
+  return margin * cone;
+}
+
+/**
+ * The contents floor the mesh actually DRAWS at one (ring z, spoke angle):
+ * the box floor when a valid contentsBox is supplied, else the sphere floor;
+ * the result clamped to `openConeRadius` (the ring's own open-cone radius
+ * `mouthRadius·t` — Task 7: ring 0's clamp is 0 so the apex can never balloon
+ * off the threads (R1), and no ring can exceed the cone the kit actually has
+ * (R2)). This is the ONE home of floor + precedence + clamp: the mesh builders
+ * AND the main.js probe/recorder call it, so they can never drift.
+ * Pure; scene units; no allocations.
+ * @param {number} z — ring axial position in kit space (negative = ahead of the apex)
+ * @param {number} cosA @param {number} sinA — spoke direction
+ * @param {number} openConeRadius — the cone radius at the ring's DRAPED z
+ *   (`mouthRadius·(−z/H)`; `mouthRadius·t` only at drape 0), scene units
+ * @param {number} contentsZ — sphere-floor centre z (kit space, scene units)
+ * @param {number} contentsRadius — sphere-floor radius (scene units; 0 = no contents)
+ * @param {object|null} contentsBox — box-floor spec (null/invalid ⇒ sphere path)
+ * @param {number} [margin=NET_CER.CONTENTS_FLOOR_MARGIN]
+ * @param {number} [mouthZ] — kit mouth plane z, forwarded to the box floor's
+ *   far anti-cone (the kit and the probe both supply it; tests may omit it)
+ * @returns {number} floor radius (scene units), ≥ 0
+ */
+export function contentsFloorClamped(z, cosA, sinA, openConeRadius, contentsZ, contentsRadius, contentsBox, margin = NET_CER.CONTENTS_FLOOR_MARGIN, mouthZ = null) {
+  let f = 0;
+  if (contentsBox && contentsBox.hx > 0 && contentsBox.hy > 0 && contentsBox.hz > 0) {
+    f = contentsFloorRadiusBox(z, cosA, sinA, contentsBox, margin, mouthZ);
+  } else if (contentsRadius > 0) {
+    f = contentsFloorRadius(z, contentsZ, contentsRadius, margin);
+  }
+  return f > 0 ? Math.min(f, openConeRadius) : 0;
+}
+
+/** A box spec is usable for the box floor (all half extents positive). */
+function _contentsBoxValid(box) {
+  return !!(box && box.hx > 0 && box.hy > 0 && box.hz > 0);
+}
+
+/**
+ * The single mouth-plane ring radius the contents floor demands, given that a
+ * box floor varies with angle: the MAX over the spoke directions (the exact
+ * angles the drawn film's vertices sit at, so nothing the film needs is
+ * missed). Sphere-floor / no-contents cases collapse to the old behaviour
+ * (0 whenever the contents' far face is short of the mouth plane).
+ * Module-scope, allocation-free; reads the handle's stored contents fields.
+ */
+function _mouthFloorMax(h) {
+  const cR = h._contentsR ?? 0;
+  const cB = h._contentsBox ?? null;
+  if (!(cR > 0) && !_contentsBoxValid(cB)) return 0;
+  const cZ = h._contentsZ ?? 0;
+  let f = 0;
+  for (let s = 0; s < h.radialSpokes; s++) {
+    const v = contentsFloorClamped(h._mouthZ, h._cosA[s], h._sinA[s], h.mouthRadius, cZ, cR, cB, NET_CER.CONTENTS_FLOOR_MARGIN, h._mouthZ);
+    if (v > f) f = v;
+  }
+  return f;
+}
+
 function buildWebPositionsDraped(out, p) {
   const { mouthRadius, coneHeight, radialSpokes, rings } = p;
   const drape = Math.max(0, Math.min(1, p.drape ?? 0));
@@ -272,9 +431,13 @@ function buildWebPositionsDraped(out, p) {
   // around its contents, so the cinch tightens ONTO the catch and stops
   // instead of closing to 0.27 m regardless. Drape-gated: during FLIGHT the
   // catch is not in the bag and a floor would inflate the flight cone.
+  // Balloon→fabric (F1): a valid contentsBox takes precedence — the film then
+  // floors on the catch's REAL oriented box per (ring, spoke), which is what
+  // kills the balloon silhouette.
   const contentsR = p.contentsRadius ?? 0;
   const contentsZ = p.contentsZ ?? 0;
-  const floorOn = drape > 0 && contentsR > 0;
+  const contentsBox = p.contentsBox ?? null;
+  const floorOn = drape > 0 && (contentsR > 0 || _contentsBoxValid(contentsBox));
   // P2: per-spoke cos/sin/angle are fixed for the life of the handle (radialSpokes
   // never changes), so the consumer passes cached tables in. When absent (a test
   // calling this directly), fall back to computing them — correctness over speed.
@@ -285,19 +448,19 @@ function buildWebPositionsDraped(out, p) {
 
   // Radial spokes: apex → rim (t = 1; the drape z-term vanishes at the mouth).
   const zRim = drapeRingZ(1, coneHeight, drape);
-  // D2: the floor at the RIM's z (not a ring z) — evaluates to 0 whenever the
+  // D2/F1: the floor at the RIM's z (not a ring z) — evaluates to 0 whenever the
   // contents' far face is short of the mouth plane, so the drawstring still
-  // closes; structural insurance against a deeper catch.
-  // Task 7 (R2): clamp the floor to the ring's OWN open-cone radius — at the
-  // rim t = 1, i.e. mouthRadius — so an oversized catch can never inflate the
-  // bag past its own mouth.
-  const rimFloor = floorOn
-    ? Math.min(contentsFloorRadius(zRim, contentsZ, contentsR), mouthRadius)
-    : 0;
+  // closes; structural insurance against a deeper catch. Per-spoke (the box
+  // floor varies with angle). The open-cone clamp lives in contentsFloorClamped
+  // (at the rim it clamps to mouthRadius — an oversized catch can never inflate
+  // the bag past its own mouth, Task 7 R2).
   for (let s = 0; s < radialSpokes; s++) {
     const a  = angA ? angA[s] : (2 * Math.PI * s) / radialSpokes;
     const ca = cosA ? cosA[s] : Math.cos(a);
     const sa = sinA ? sinA[s] : Math.sin(a);
+    const rimFloor = floorOn
+      ? contentsFloorClamped(zRim, ca, sa, mouthRadius, contentsZ, contentsR, contentsBox, NET_CER.CONTENTS_FLOOR_MARGIN, -coneHeight)
+      : 0;
     const r = Math.max(
       drapeRingRadius(1, a, mouthRadius, drape, cinch, closed, jigA, jigP),
       rimFloor);
@@ -308,14 +471,15 @@ function buildWebPositionsDraped(out, p) {
   for (let k = 1; k <= rings; k++) {
     const t = k / rings;
     const z = drapeRingZ(t, coneHeight, drape);
-    // Task 7 (R1/R2): clamp the floor to the ring's own open-cone radius
-    // (mouthRadius·t). Ring 0's clamp is 0, so the apex can never balloon off
-    // the threads (R1), and no ring can exceed the cone the kit actually has
-    // (R2). A properly aimed catch fits inside the open cone (phase-2
-    // containment), so the clamp cannot clip a contained catch.
-    const ringFloor = floorOn
-      ? Math.min(contentsFloorRadius(z, contentsZ, contentsR), mouthRadius * t)
-      : 0;
+    // Task 7 (R1/R2) + balloon→fabric: the floor clamps to the cone radius at
+    // the ring's DRAPED z (mouthRadius·(−z/H) = mouthRadius·t·(1+0.9·d·(1−t)))
+    // — the cone the kit actually has at that z. Ring 0's clamp is still 0, so
+    // the apex can never balloon off the threads (R1); at t = 1 it is exactly
+    // mouthRadius, so no ring exceeds the kit's own mouth (R2); and at drape 0
+    // it reduces to Task 7's mouthRadius·t. (The bare mouthRadius·t form was
+    // TIGHTER than the true cone under drape — it clipped a contained catch's
+    // hull corner at the 4.22 m seat, measured pierceM +0.095 on 2026-08-05.)
+    const openCone = mouthRadius * (-z / coneHeight);
     for (let s = 0; s < radialSpokes; s++) {
       const s1 = (s + 1) % radialSpokes;
       const a0 = angA ? angA[s]  : (2 * Math.PI * s) / radialSpokes;
@@ -326,8 +490,10 @@ function buildWebPositionsDraped(out, p) {
       const n0 = sinA ? sinA[s]  : Math.sin(a0);
       const c1 = cosA ? cosA[s1] : Math.cos(a1);
       const n1 = sinA ? sinA[s1] : Math.sin(a1);
-      const r0 = Math.max(drapeRingRadius(t, a0, mouthRadius, drape, cinch, closed, jigA, jigP), ringFloor);
-      const r1 = Math.max(drapeRingRadius(t, a1, mouthRadius, drape, cinch, closed, jigA, jigP), ringFloor);
+      const f0 = floorOn ? contentsFloorClamped(z, c0, n0, openCone, contentsZ, contentsR, contentsBox, NET_CER.CONTENTS_FLOOR_MARGIN, -coneHeight) : 0;
+      const f1 = floorOn ? contentsFloorClamped(z, c1, n1, openCone, contentsZ, contentsR, contentsBox, NET_CER.CONTENTS_FLOOR_MARGIN, -coneHeight) : 0;
+      const r0 = Math.max(drapeRingRadius(t, a0, mouthRadius, drape, cinch, closed, jigA, jigP), f0);
+      const r1 = Math.max(drapeRingRadius(t, a1, mouthRadius, drape, cinch, closed, jigA, jigP), f1);
       out[idx++] = c0 * r0; out[idx++] = n0 * r0; out[idx++] = z;
       out[idx++] = c1 * r1; out[idx++] = n1 * r1; out[idx++] = z;
     }
@@ -377,9 +543,12 @@ function updateMembraneLattice(out, p) {
   // Whale-in-cone phase 3 (D2): same contents floor as the threads, applied
   // AFTER the compression dent so the floor always wins — the film can dent
   // toward the catch but never through it. Drape-gated like the web path.
+  // Balloon→fabric (F1): box floor per (ring, spoke) when a contentsBox rides
+  // along — the film wraps the catch's real extents, not its bounding sphere.
   const contentsR = p.contentsRadius ?? 0;
   const contentsZ = p.contentsZ ?? 0;
-  const floorOn = drape > 0 && contentsR > 0;
+  const contentsBox = p.contentsBox ?? null;
+  const floorOn = drape > 0 && (contentsR > 0 || _contentsBoxValid(contentsBox));
   const cosA = (p.cosA && p.cosA.length === radialSpokes) ? p.cosA : null;
   const sinA = (p.sinA && p.sinA.length === radialSpokes) ? p.sinA : null;
   const angA = (p.angA && p.angA.length === radialSpokes) ? p.angA : null;
@@ -387,12 +556,11 @@ function updateMembraneLattice(out, p) {
   for (let k = 0; k <= rings; k++) {
     const t = k / rings;
     const z = drapeRingZ(t, coneHeight, drape);
-    // Task 7 (R1): same open-cone clamp as the web path — ring 0's clamp is 0,
-    // so the membrane apex stays welded to the spoke apex even when the
-    // contents envelope peaks at z = 0 (the REELING/BERTHED co-location).
-    const ringFloor = floorOn
-      ? Math.min(contentsFloorRadius(z, contentsZ, contentsR), mouthRadius * t)
-      : 0;
+    // Task 7 (R1): same open-cone clamp as the web path (inside
+    // contentsFloorClamped) — the cone radius at the ring's DRAPED z. Ring 0's
+    // clamp is 0, so the membrane apex stays welded to the spoke apex even when
+    // the contents envelope peaks at z = 0 (the REELING/BERTHED co-location).
+    const openCone = mouthRadius * (-z / coneHeight);
     for (let s = 0; s < radialSpokes; s++) {
       const a  = angA ? angA[s] : (2 * Math.PI * s) / radialSpokes;
       const ca = cosA ? cosA[s] : Math.cos(a);
@@ -402,7 +570,7 @@ function updateMembraneLattice(out, p) {
         const g = (t - contactT) / 0.18;
         r = Math.max(0, r - drape * compressM * Math.exp(-g * g));
       }
-      r = Math.max(r, ringFloor);
+      if (floorOn) r = Math.max(r, contentsFloorClamped(z, ca, sa, openCone, contentsZ, contentsR, contentsBox, NET_CER.CONTENTS_FLOOR_MARGIN, -coneHeight));
       out[idx++] = ca * r; out[idx++] = sa * r; out[idx++] = z;
     }
   }
@@ -698,10 +866,11 @@ export const NetMeshKit = {
     // envelope. Evaluates to 0 whenever the contents are absent or their far
     // face is short of the mouth plane — structural insurance, not a behaviour
     // change for the lasso path (which never sets _contentsR).
-    // Task 7 (R2): clamp to the mouth plane's own open radius — the rim can
-    // never be floored past the mouth the kit actually has.
-    const r = Math.max(h.mouthRadius * f,
-      Math.min(contentsFloorRadius(h._mouthZ, h._contentsZ ?? 0, h._contentsR ?? 0), h.mouthRadius));
+    // Task 7 (R2): clamp to the mouth plane's own open radius (inside
+    // contentsFloorClamped) — the rim can never be floored past the mouth the
+    // kit actually has. F1: max over the spoke angles (a box floor varies
+    // with angle; the ring must clear every one).
+    const r = Math.max(h.mouthRadius * f, _mouthFloorMax(h));
     for (let i = 0; i < h.weightCount; i++) {
       const a = h._rimAngles[i] + h._spinAngle;
       h.rimWeights[i].position.set(Math.cos(a) * r, Math.sin(a) * r, h._mouthZ);
@@ -768,10 +937,10 @@ export const NetMeshKit = {
     // envelope evaluated on the mouth plane. For the ceremony geometry the
     // whale's far face stops short of the mouth, so this evaluates to 0 and the
     // ring still closes to closedRadius — structural, not lucky.
-    // Task 7 (R2): clamp to mouthRadius — the cinched rim can never be held
-    // open past the kit's own mouth by an oversized catch.
-    const r = Math.max(h.closedRadius,
-      Math.min(contentsFloorRadius(h._mouthZ, h._contentsZ ?? 0, h._contentsR ?? 0), h.mouthRadius));
+    // Task 7 (R2): clamp to mouthRadius (inside contentsFloorClamped) — the
+    // cinched rim can never be held open past the kit's own mouth by an
+    // oversized catch. F1: max over the spoke angles (box floor).
+    const r = Math.max(h.closedRadius, _mouthFloorMax(h));
     for (let i = 0; i < h.weightCount; i++) {
       const a = h._rimAngles[i] + h._spinAngle;
       h.rimWeights[i].position.set(
@@ -882,13 +1051,19 @@ export const NetMeshKit = {
    * @param {number} [drapeState.contentsZ] contents centre in kit-local z
    *   (scene units, negative = ahead of the apex). Also re-aims the membrane's
    *   V8 contact dent to the actual seat (W9) instead of the fixed t = 0.75.
+   * @param {object} [drapeState.contentsBox] balloon→fabric F1 — the catch's
+   *   oriented-box spec {ox,oy,oz, r00…r22, hx,hy,hz} (kit space, scene units;
+   *   see contentsFloorRadiusBox). Takes precedence over the sphere floor when
+   *   valid: the film wraps the catch's REAL extents, not its bounding sphere.
+   *   The kit COPIES the 15 numbers into a per-handle spec (allocated once per
+   *   handle) — the consumer may reuse a scratch object across visuals/frames.
    * @param {THREE.Vector3} [drapeState.localCamPos] camera position in the kit's
    *   LOCAL frame (consumer world→local transforms it and passes it in as data,
    *   preserving the kit's pure-local-space rule). When present, V4 depth
    *   shading rewrites the vertex colours: the far side of the bag recedes.
    */
   updateWebDrape(h, { drape = 0, cinchFrac = 0, jigglePhase = 0, jiggleAmp = 0,
-                      contentsRadius = 0, contentsZ = 0, localCamPos } = {}) {
+                      contentsRadius = 0, contentsZ = 0, contentsBox = null, localCamPos } = {}) {
     if (!h || !h.webPositions || !h.coneMesh) return;
     h._drape = drape;
     h._cinchFrac = cinchFrac;
@@ -898,6 +1073,24 @@ export const NetMeshKit = {
     // the SAME values the mesh deformed to — never a re-derived copy.
     h._contentsR = contentsRadius;
     h._contentsZ = contentsZ;
+    // F1: the box spec likewise — COPIED into a per-handle object (allocated
+    // once, then mutated) so several live nets never share a driver scratch
+    // (B8) and the probe reads the identical numbers the mesh deformed to.
+    if (_contentsBoxValid(contentsBox)) {
+      if (!h._contentsBox) {
+        h._contentsBox = { ox: 0, oy: 0, oz: 0,
+          r00: 1, r01: 0, r02: 0, r10: 0, r11: 1, r12: 0, r20: 0, r21: 0, r22: 1,
+          hx: 0, hy: 0, hz: 0 };
+      }
+      const b = h._contentsBox;
+      b.ox = contentsBox.ox; b.oy = contentsBox.oy; b.oz = contentsBox.oz;
+      b.r00 = contentsBox.r00; b.r01 = contentsBox.r01; b.r02 = contentsBox.r02;
+      b.r10 = contentsBox.r10; b.r11 = contentsBox.r11; b.r12 = contentsBox.r12;
+      b.r20 = contentsBox.r20; b.r21 = contentsBox.r21; b.r22 = contentsBox.r22;
+      b.hx = contentsBox.hx; b.hy = contentsBox.hy; b.hz = contentsBox.hz;
+    } else {
+      h._contentsBox = null;
+    }
     buildWebPositionsDraped(h.webPositions, {
       mouthRadius: h.mouthRadius,
       coneHeight: h.coneHeight,
@@ -909,6 +1102,7 @@ export const NetMeshKit = {
       jiggleAmp,
       contentsRadius,
       contentsZ,
+      contentsBox: h._contentsBox,
       cosA: h._cosA,
       sinA: h._sinA,
       angA: h._angA,
@@ -931,6 +1125,7 @@ export const NetMeshKit = {
         jiggleAmp,
         contentsRadius,
         contentsZ,
+        contentsBox: h._contentsBox,
         // W9: aim the contact dent at the ACTUAL seat — the ring index of the
         // contents' depth — instead of the fixed 0.75, which peaked the dent
         // ~1.4 m ahead of the catch. depthToRingT already clamps to [0,1].
