@@ -302,7 +302,7 @@ export function contentsFloorRadius(z, contentsZ, contentsRadius, margin = NET_C
  * @returns {number} floor radius (scene units), ≥ 0
  */
 export function contentsFloorRadiusBox(z, cosA, sinA, box, margin = NET_CER.CONTENTS_FLOOR_MARGIN, mouthZ = null) {
-  if (!box || !(box.hx > 0) || !(box.hy > 0) || !(box.hz > 0)) return 0;
+  if (!contentsBoxValid(box)) return 0;
   // Ray origin: the point on the bag axis at ring height z, in box space.
   const px = -box.ox, py = -box.oy, pz = z - box.oz;
   const ox = box.r00 * px + box.r01 * py + box.r02 * pz;
@@ -386,16 +386,25 @@ export function contentsFloorRadiusBox(z, cosA, sinA, box, margin = NET_CER.CONT
  */
 export function contentsFloorClamped(z, cosA, sinA, openConeRadius, contentsZ, contentsRadius, contentsBox, margin = NET_CER.CONTENTS_FLOOR_MARGIN, mouthZ = null) {
   let f = 0;
-  if (contentsBox && contentsBox.hx > 0 && contentsBox.hy > 0 && contentsBox.hz > 0) {
+  if (contentsBoxValid(contentsBox)) {
     f = contentsFloorRadiusBox(z, cosA, sinA, contentsBox, margin, mouthZ);
   } else if (contentsRadius > 0) {
+    // F4 legacy sphere fallback — unreachable from the production drivers
+    // (CaptureNetVisual always supplies a valid contentsBox whenever it
+    // supplies contentsRadius; the lasso path supplies neither). Kept for the
+    // Task-5/7 sphere test contract; main.js's probe fallback mirrors it.
     f = contentsFloorRadius(z, contentsZ, contentsRadius, margin);
   }
   return f > 0 ? Math.min(f, openConeRadius) : 0;
 }
 
-/** A box spec is usable for the box floor (all half extents positive). */
-function _contentsBoxValid(box) {
+/**
+ * Whether a contents-BOX spec is usable for the box floor (all half extents
+ * positive). THE one home of the box-validity predicate — the kit builders,
+ * contentsFloorClamped AND the main.js probe helper all decide box-vs-sphere
+ * through it, so the floor decision can never drift between probe and mesh.
+ */
+export function contentsBoxValid(box) {
   return !!(box && box.hx > 0 && box.hy > 0 && box.hz > 0);
 }
 
@@ -410,7 +419,7 @@ function _contentsBoxValid(box) {
 function _mouthFloorMax(h) {
   const cR = h._contentsR ?? 0;
   const cB = h._contentsBox ?? null;
-  if (!(cR > 0) && !_contentsBoxValid(cB)) return 0;
+  if (!(cR > 0) && !contentsBoxValid(cB)) return 0;
   const cZ = h._contentsZ ?? 0;
   let f = 0;
   for (let s = 0; s < h.radialSpokes; s++) {
@@ -437,7 +446,7 @@ function buildWebPositionsDraped(out, p) {
   const contentsR = p.contentsRadius ?? 0;
   const contentsZ = p.contentsZ ?? 0;
   const contentsBox = p.contentsBox ?? null;
-  const floorOn = drape > 0 && (contentsR > 0 || _contentsBoxValid(contentsBox));
+  const floorOn = drape > 0 && (contentsR > 0 || contentsBoxValid(contentsBox));
   // P2: per-spoke cos/sin/angle are fixed for the life of the handle (radialSpokes
   // never changes), so the consumer passes cached tables in. When absent (a test
   // calling this directly), fall back to computing them — correctness over speed.
@@ -548,7 +557,7 @@ function updateMembraneLattice(out, p) {
   const contentsR = p.contentsRadius ?? 0;
   const contentsZ = p.contentsZ ?? 0;
   const contentsBox = p.contentsBox ?? null;
-  const floorOn = drape > 0 && (contentsR > 0 || _contentsBoxValid(contentsBox));
+  const floorOn = drape > 0 && (contentsR > 0 || contentsBoxValid(contentsBox));
   const cosA = (p.cosA && p.cosA.length === radialSpokes) ? p.cosA : null;
   const sinA = (p.sinA && p.sinA.length === radialSpokes) ? p.sinA : null;
   const angA = (p.angA && p.angA.length === radialSpokes) ? p.angA : null;
@@ -1076,7 +1085,7 @@ export const NetMeshKit = {
     // F1: the box spec likewise — COPIED into a per-handle object (allocated
     // once, then mutated) so several live nets never share a driver scratch
     // (B8) and the probe reads the identical numbers the mesh deformed to.
-    if (_contentsBoxValid(contentsBox)) {
+    if (contentsBoxValid(contentsBox)) {
       if (!h._contentsBox) {
         h._contentsBox = { ox: 0, oy: 0, oz: 0,
           r00: 1, r01: 0, r02: 0, r10: 0, r11: 1, r12: 0, r20: 0, r21: 0, r22: 1,

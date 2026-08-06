@@ -82,7 +82,7 @@ import { DebrisMap } from './ui/DebrisMap.js';
 // Whale-in-cone phase 3: main ALSO imports it directly for the scenario probe's
 // bounding-radius reads (getBoundingRadius is a static cached accessor).
 import { DebrisWireframe } from './ui/DebrisWireframe.js';
-import { drawnRimRadiusAtDepth, contentsFloorRadius, contentsFloorRadiusBox, contentsFloorClamped } from './ui/NetMeshKit.js';
+import { drawnRimRadiusAtDepth, contentsFloorRadius, contentsFloorRadiusBox, contentsFloorClamped, contentsBoxValid } from './ui/NetMeshKit.js';
 import { DockingReticle } from './ui/DockingReticle.js';
 import { VelocityStreaks } from './ui/VelocityStreaks.js';
 import { TrailSystem } from './ui/TrailSystem.js';
@@ -2099,7 +2099,12 @@ async function init() {
       // sign convention is unchanged). Sphere fallback keeps the original
       // bounding-sphere-vs-rim semantics. `natural` is drawnRimRadiusAtDepth at
       // the whale's depth (scene units); renderRadiusM is the bounding-sphere
-      // render radius in METRES. Allocation-light: locals only.
+      // render radius in METRES.
+      // Returns the SHARED scratch `_netDp` (allocation-free per frame — the
+      // recorder calls this every frame while enabled): callers read fields
+      // immediately and never retain the reference.
+      const _netDp = { drawnRimM: null, pierceM: null, fillFrac: null, boxFloorM: null };
+      const _netDpBox = [null, null, null];
       function _netDrawnRimPierce(kh, lpZ, natural, renderRadiusM, M) {
         // The open-cone clamp the mesh applies at the whale's depth: the cone
         // radius at the ring's DRAPED z — here the ring AT this depth, i.e. the
@@ -2107,7 +2112,7 @@ async function init() {
         // (probe/mesh never drift); mouthRadius at/past the mouth plane.
         const openCone = kh.mouthRadius * Math.min(1, Math.max(0, -lpZ / kh.coneHeight));
         const cB = kh._contentsBox ?? null;
-        if (kh._drape > 0 && cB && cB.hx > 0 && cB.hy > 0 && cB.hz > 0) {
+        if (kh._drape > 0 && contentsBoxValid(cB)) {
           let drawnMin = Infinity, violMax = null, surfMax = 0;
           for (let s = 0; s < kh.radialSpokes; s++) {
             const a = (2 * Math.PI * s) / kh.radialSpokes;
@@ -2122,23 +2127,27 @@ async function init() {
               if (violMax === null || viol > violMax) violMax = viol;
             }
           }
-          return {
-            drawnRimM: +(drawnMin / M).toFixed(3),
-            pierceM: violMax === null ? null : +(violMax / M).toFixed(3),
-            fillFrac: (drawnMin > 0 && surfMax > 0) ? +(surfMax / drawnMin).toFixed(3) : null,
-            boxFloorM: [+(cB.hx / M).toFixed(3), +(cB.hy / M).toFixed(3), +(cB.hz / M).toFixed(3)],
-          };
+          _netDp.drawnRimM = +(drawnMin / M).toFixed(3);
+          _netDp.pierceM = violMax === null ? null : +(violMax / M).toFixed(3);
+          _netDp.fillFrac = (drawnMin > 0 && surfMax > 0) ? +(surfMax / drawnMin).toFixed(3) : null;
+          _netDpBox[0] = +(cB.hx / M).toFixed(3);
+          _netDpBox[1] = +(cB.hy / M).toFixed(3);
+          _netDpBox[2] = +(cB.hz / M).toFixed(3);
+          _netDp.boxFloorM = _netDpBox;
+          return _netDp;
         }
+        // F4 legacy sphere fallback — unreachable from the production drivers
+        // (they always supply a valid box with contentsRadius); kept for parity
+        // with the kit's sphere branch and the Task-5/7 test contract.
         const floor = (kh._drape > 0)
           ? Math.min(contentsFloorRadius(lpZ, kh._contentsZ ?? 0, kh._contentsR ?? 0), openCone)
           : 0;
         const drawn = Math.max(natural, floor) / M;
-        return {
-          drawnRimM: +drawn.toFixed(3),
-          pierceM: +(renderRadiusM - drawn).toFixed(3),
-          fillFrac: drawn > 0 ? +(renderRadiusM / drawn).toFixed(3) : null,
-          boxFloorM: null,
-        };
+        _netDp.drawnRimM = +drawn.toFixed(3);
+        _netDp.pierceM = +(renderRadiusM - drawn).toFixed(3);
+        _netDp.fillFrac = drawn > 0 ? +(renderRadiusM / drawn).toFixed(3) : null;
+        _netDp.boxFloorM = null;
+        return _netDp;
       }
 
       // ── Scenario probe (harness diagnostics) ──
