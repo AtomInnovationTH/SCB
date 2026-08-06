@@ -2976,6 +2976,66 @@ async function init() {
           };
         } catch (e) { return { error: String((e && e.message) || e) }; }
       };
+      // ── Follow-up 5 (2026-08-06): armed cinch freeze — pin the pixel gate's
+      // capture instant to a probe quantity, never a wall-clock poll ──
+      // Plan: .kilo/plans/1786005074767-pin-pixel-gate-capture-instant.md.
+      // The CINCH still used to be grabbed when the harness's 300 ms poll first
+      // saw beatKey 'CINCH', plus a 700 ms wall settle — under the 0.1 s dt cap
+      // the beat's wall duration stretches 8–20+ s with headless frame rate, so
+      // the freeze landed anywhere in the first ~40 % of the camera dolly and
+      // whalePxFrac flaked ±30 % on identical code (0.217–0.402, register item
+      // 5). This hook freezes the sim ITSELF on the first frame where the
+      // ceremony kit's cinchFrac reaches the pinned target during the CINCH
+      // beat — frame-quantized to ≤ 2.5 % of the cinch, never wall-clock.
+      //   __netArmCinchFreeze(target) → arm (null/omitted disarms)
+      //   __netCinchFreezeStatus()    → { armed, target, fired }
+      // Dev-only; one boolean check per frame when disarmed (same cost contract
+      // as the probe recorder).
+      const _CINCH_FREEZE = { armed: false, target: 0, fired: null };
+      window.__netArmCinchFreeze = (target) => {
+        if (typeof target === 'number' && isFinite(target)) {
+          _CINCH_FREEZE.armed = true;
+          _CINCH_FREEZE.target = target;
+          _CINCH_FREEZE.fired = null;
+        } else {
+          _CINCH_FREEZE.armed = false;
+          _CINCH_FREEZE.fired = null;
+        }
+        return { armed: _CINCH_FREEZE.armed, target: _CINCH_FREEZE.target };
+      };
+      window.__netCinchFreezeStatus = () => ({
+        armed: _CINCH_FREEZE.armed,
+        target: _CINCH_FREEZE.target,
+        fired: _CINCH_FREEZE.fired,
+      });
+      // Called once per frame from gameLoop, right after __netProbeTick — i.e.
+      // after updateCamera + render, so the frame the freeze holds is exactly
+      // the frame this check observes. The beatKey conjunct is load-bearing:
+      // cinchFrac stays 1 through REELING/BERTHED, so without it a late cinch
+      // would freeze a SECURED_SETTLE frame and call it CINCH.
+      window.__netCinchFreezeTick = () => {
+        if (!_CINCH_FREEZE.armed) return;
+        try {
+          const c = cameraSystem?._netCeremony;
+          const beat = c?.beats?.[c.beatIndex];
+          if (beat?.key !== 'CINCH') return;
+          // Allocation-free kit-handle lookup (per-frame path): direct pod_0
+          // hit, else scan values without the spread array.
+          const av = captureNetVisual?._activeVisuals;
+          let vis0 = av?.get('pod_0');
+          if (!vis0 && av) for (const v of av.values()) { if (v?.useCeremony) { vis0 = v; break; } }
+          const cinchFrac = vis0?.kitHandle?._cinchFrac;
+          if (typeof cinchFrac !== 'number' || cinchFrac < _CINCH_FREEZE.target) return;
+          _CINCH_FREEZE.fired = {
+            cinchFrac: +cinchFrac.toFixed(3),
+            beatKey: beat.key,
+            beatPhase: +(c.beatTimer / beat.duration).toFixed(3),
+            netState: _scenarioNet?.state ?? null,
+          };
+          _CINCH_FREEZE.armed = false;   // one-shot
+          window.__netPause(true);       // the SAME pause path the manual freeze uses
+        } catch (_e) { /* freeze hook must never break the game loop */ }
+      };
       console.info('[netRoi] ready. __netRoi(), __netVisualToggle(part, on), __netFreeze(true).');
 
 
@@ -3750,6 +3810,10 @@ function gameLoop(timestamp) {
   // Whale-in-cone Task 1.4: per-frame probe recorder. One boolean check when
   // disabled; builds a slim cone-containment sample when __netProbeRecord(true).
   if (window.__netProbeTick) window.__netProbeTick(timestamp);
+  // Whale-in-cone follow-up 5: armed cinch freeze. Runs after the recorder tick
+  // (end of loop, post-render) so the frame the freeze holds is exactly the
+  // frame the check observes. One boolean check when disarmed.
+  if (window.__netCinchFreezeTick) window.__netCinchFreezeTick();
 }
 
 // ============================================================================
