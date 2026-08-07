@@ -3137,6 +3137,66 @@ async function init() {
           window.__netPause(true);       // the SAME pause path the manual freeze uses
         } catch (_e) { /* freeze hook must never break the game loop */ }
       };
+      // ── Register item 6 (2026-08-07): armed beat-PHASE freeze — pin the
+      // fabric gate's per-beat capture instants to the ceremony clock, never a
+      // wall-clock poll. Plan:
+      // .kilo/plans/1786058581397-pin-fabric-gate-capture-instants.md.
+      // The fabric gate's four gated beats were grabbed on first-sight + 700 ms
+      // wall — the same flake class follow-up 5 fixed for the pixel gate's
+      // CINCH still (same-code re-checks failed filmShare by 0.0009). This hook
+      // is the phase-keyed sibling of the cinch freeze: it pauses the sim on
+      // the first frame where beatTimer/beat.duration reaches the pinned phase
+      // DURING the named beat — frame-quantized to ≤ 0.1/duration of the phase.
+      //   __netArmBeatFreeze(beatKey, targetPhase) → arm (null disarms)
+      //   __netBeatFreezeStatus()                 → { armed, beatKey, targetPhase, fired }
+      // Dev-only; one boolean check per frame when disarmed (same cost contract
+      // as the cinch hook). CINCH keeps the cinch hook (cinchFrac is the
+      // composition quantity there); this hook is for the other beats.
+      const _BEAT_FREEZE = { armed: false, beatKey: null, targetPhase: 0, fired: null };
+      window.__netArmBeatFreeze = (beatKey, targetPhase) => {
+        if (typeof beatKey === 'string' && typeof targetPhase === 'number' && isFinite(targetPhase)) {
+          _BEAT_FREEZE.armed = true;
+          _BEAT_FREEZE.beatKey = beatKey;
+          _BEAT_FREEZE.targetPhase = targetPhase;
+          _BEAT_FREEZE.fired = null;
+        } else {
+          _BEAT_FREEZE.armed = false;
+          _BEAT_FREEZE.beatKey = null;
+          _BEAT_FREEZE.fired = null;
+        }
+        return { armed: _BEAT_FREEZE.armed, beatKey: _BEAT_FREEZE.beatKey, targetPhase: _BEAT_FREEZE.targetPhase };
+      };
+      window.__netBeatFreezeStatus = () => ({
+        armed: _BEAT_FREEZE.armed,
+        beatKey: _BEAT_FREEZE.beatKey,
+        targetPhase: _BEAT_FREEZE.targetPhase,
+        fired: _BEAT_FREEZE.fired,
+      });
+      // Same call-site and same-frame doctrine as the cinch tick (runs after
+      // __netProbeTick, post updateCamera + render). The beatKey conjunct is
+      // load-bearing: beatTimer keeps its value when a beat force-advances or
+      // the ceremony exits, so without it a late arm could freeze a frame from
+      // the WRONG beat. A beat whose phase never reaches the target (e.g.
+      // APPROACH_DOLLY force-advancing on NET_BRAKE_FIRED below it) simply
+      // never fires — the harness fails loudly instead of certifying a
+      // mis-timed still.
+      window.__netBeatFreezeTick = () => {
+        if (!_BEAT_FREEZE.armed) return;
+        try {
+          const c = cameraSystem?._netCeremony;
+          const beat = c?.beats?.[c.beatIndex];
+          if (!beat || beat.key !== _BEAT_FREEZE.beatKey) return;
+          const phase = c.beatTimer / beat.duration;
+          if (!(phase >= _BEAT_FREEZE.targetPhase)) return;
+          _BEAT_FREEZE.fired = {
+            beatKey: beat.key,
+            beatPhase: +phase.toFixed(3),
+            netState: _scenarioNet?.state ?? null,
+          };
+          _BEAT_FREEZE.armed = false;   // one-shot
+          window.__netPause(true);       // the SAME pause path the manual freeze uses
+        } catch (_e) { /* freeze hook must never break the game loop */ }
+      };
       console.info('[netRoi] ready. __netRoi(), __netVisualToggle(part, on), __netFreeze(true).');
 
 
@@ -3915,6 +3975,10 @@ function gameLoop(timestamp) {
   // (end of loop, post-render) so the frame the freeze holds is exactly the
   // frame the check observes. One boolean check when disarmed.
   if (window.__netCinchFreezeTick) window.__netCinchFreezeTick();
+  // Register item 6: armed beat-phase freeze. Same call-site doctrine as the
+  // cinch tick above (end of loop, post-render ⇒ the frozen frame IS the
+  // rendered frame). One boolean check when disarmed.
+  if (window.__netBeatFreezeTick) window.__netBeatFreezeTick();
 }
 
 // ============================================================================
