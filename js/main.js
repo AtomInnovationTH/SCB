@@ -3184,8 +3184,16 @@ async function init() {
         if (!_BEAT_FREEZE.armed) return;
         try {
           const c = cameraSystem?._netCeremony;
-          const beat = c?.beats?.[c.beatIndex];
+          // `active` is load-bearing alongside the beatKey conjunct: beatIndex
+          // and beatTimer KEEP their values when the ceremony exits, so an arm
+          // that lands after the exit (or after the beat already passed the
+          // target) would otherwise fire on a frame whose camera has moved on
+          // and label it with the beat's name — certifying a still from outside
+          // the beat. A missed target must fail loudly in the harness instead.
+          if (c?.active !== true) return;
+          const beat = c.beats?.[c.beatIndex];
           if (!beat || beat.key !== _BEAT_FREEZE.beatKey) return;
+          if (!(beat.duration > 0)) return;          // no phase without a duration
           const phase = c.beatTimer / beat.duration;
           if (!(phase >= _BEAT_FREEZE.targetPhase)) return;
           _BEAT_FREEZE.fired = {
