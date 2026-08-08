@@ -76,9 +76,15 @@ const SLOT_DY = 20;
  * opaque at/above HI. Exported as the single source of truth because the pinned
  * path reuses LO as its geometric cutoff — a pinned label skips the dimming but
  * must not render where no other label would appear.
+ *
+ * The band is deliberately narrow. With the old 0.04–0.16 ramp a label at the
+ * horizon sat at 2–16 % alpha — present but unreadable, which is how a city
+ * ~1500 km ahead of a low-orbit player looked like a smudge. At 0.03–0.09 the
+ * same label reads at 24 % on the silhouette and reaches full strength ~4° of
+ * arc sooner, while still fading in softly rather than popping.
  */
-export const LIMB_FADE_LO = 0.04;
-export const LIMB_FADE_HI = 0.16;
+export const LIMB_FADE_LO = 0.03;
+export const LIMB_FADE_HI = 0.09;
 
 /** localStorage key for the persisted on/off preference. */
 const STORAGE_KEY = StorageKeys.CITY_LABELS;

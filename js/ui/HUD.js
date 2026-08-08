@@ -609,6 +609,15 @@ export class HUD {
       return;
     }
     const { pct, remaining, affordable } = pinProgress(this._credits, this._pinned);
+    // The pin is AUTO-selected (ShopScreen._autoPinIfNeeded picks the cheapest
+    // gated-open upgrade), so a brand-new player is shown a goal they never
+    // chose, at "0/400 cr" with an empty bar, before they have earned a single
+    // credit. There is nothing to act on and nothing to track, so stay hidden
+    // until real progress exists. It appears on the first credit earned.
+    if (!affordable && !(this._credits > 0)) {
+      this._pinWidget.style.display = 'none';
+      return;
+    }
     const label = this._pinWidget.querySelector('#hud-pin-label');
     const bar = this._pinWidget.querySelector('#hud-pin-bar');
     if (affordable) {
@@ -740,6 +749,12 @@ export class HUD {
       // 0 — Sky labels: constellation names + Sun/Moon/planet NAME labels (pure
       //     sky decoration → first to go; the discs & stars themselves stay).
       flagRung('skylabels', 'Sky labels', applySkyLabels),
+      // 1 — Pinned next-upgrade goal. A retention nag, not gameplay state, so it
+      //     is the first *pane* the ladder sheds. It was previously absent from
+      //     the ladder entirely, so `-` could never dismiss it no matter how many
+      //     times it was pressed (reported as the widget being stuck on screen).
+      //     isVisible() uses getClientRects, so a hidden widget costs no rung.
+      domRung('pin', 'Upgrade goal', byId('hud-pin-widget')),
       // 1 — NavSphere orb (canvas; off by default → isVisible false → `-` skips).
       {
         id: 'navsphere', label: 'Nav orb',

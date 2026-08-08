@@ -9,8 +9,8 @@ export const Constants = {
   // value; VERSION_LABEL is the exact string the UI renders (menu title tag,
   // and any other ES-module UI). NON-module consumers (e.g. sw.js cache name)
   // must be updated by hand — keep them in sync here.
-  VERSION: '0.999',
-  VERSION_LABEL: 'V.999',
+  VERSION: '0.9991',
+  VERSION_LABEL: 'V.9991',
 
   // Cache-busting stamp for ./data/ reads (js/core/dataUrl.js appends it as
   // ?v=<DATA_VERSION>). Deliberately SEPARATE from VERSION: a curated-content
