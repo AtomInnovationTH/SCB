@@ -1402,8 +1402,10 @@ export class DebrisField {
    * readability floor (`_catchRenderMin`, applied only while `_armPinned` —
    * DebrisField.js `_updateInstanceTransform`). Read-only companion to
    * setDebrisSize so the probe / visual drivers cannot drift from the
-   * renderer. NOTE: `pinCapturedDebris` recomputes its own unclamped scale
-   * (whale-in-cone W4) — unifying the two write paths is out of scope there.
+   * renderer. Register item 9: `pinCapturedDebris` (whale-in-cone W4's second
+   * write path) now reads its scale through THIS helper too — one clamp-aware
+   * computation for the probe, the bag's contents floor, and both matrix
+   * writers.
    * @param {object} debris
    * @returns {number} effective uniform instance scale (scene units)
    */
@@ -1802,7 +1804,9 @@ export class DebrisField {
    *
    * @param {object} debrisRef - the arm's captured debris object (net/camera ref)
    * @param {THREE.Vector3} armScenePos - arm position in scene units
-   * @param {number} [scaleMul=1] - multiplier on rendered size (dock stow-shrink)
+   * @param {number} [scaleMul=1] - multiplier on rendered size (dock stow-shrink);
+   *   applied AFTER the `_catchRenderMin` readability floor (register item 9), so
+   *   the furnace chop can still shrink a held catch below the floor.
    */
   pinCapturedDebris(debrisRef, armScenePos, scaleMul = 1) {
     if (!debrisRef || !armScenePos) return;
@@ -1845,7 +1849,12 @@ export class DebrisField {
     } else {
       this._tempQuat.identity();
     }
-    const baseSize = canonical.sceneSize || (canonical.sizeMeter ? canonical.sizeMeter * 0.00001 : 0.00001);
+    const baseSize = DebrisField.effectiveRenderScale(canonical) || 0.00001;
+    // Register item 9: the pin honours the same net-held readability floor as
+    // _updateInstanceTransform, via the ONE clamp-aware SSOT read (W4/W5 unified
+    // — probe, bag contents floor and BOTH matrix writers now compute one value).
+    // Floor FIRST, scaleMul AFTER: the furnace stow-shrink must still take a held
+    // catch below the floor (the deliberate chunk-mesh swap, ArmManager).
     this._tempScale.setScalar(baseSize * (scaleMul > 0 ? scaleMul : 1));
     this._tempMatrix.compose(this._tempPos, this._tempQuat, this._tempScale);
     mesh.setMatrixAt(lookup.instanceIndex, this._tempMatrix);
@@ -1951,13 +1960,18 @@ export class DebrisField {
       }
     }
 
-    // Net-held catch readability: a lasso-held catch sets `_catchRenderMin`
-    // (scene units). A physically tiny catch (e.g. a 0.6 m M1 fragment) renders
-    // sub-pixel and "disappears" inside the net / at the nose; clamp its apparent
-    // size up to that floor while held so it reads as a real catch. Opt-in per
-    // debris AND gated on _armPinned (actively held) so a stale override can
-    // never inflate a released piece, and the Daughter pipeline (which never sets
-    // it) is unaffected.
+    // Net-held catch readability: a lasso-held catch (LassoSystem, 1.5 m) or a
+    // mother-net-held catch (CaptureNet's reel/berth ticks, 2.0 m) sets
+    // `_catchRenderMin` (scene units, converted from a rendered RADIUS in metres
+    // by DebrisWireframe.scaleForRenderRadiusM — item 8). A physically tiny catch
+    // (e.g. a 0.6 m M1 fragment) renders sub-pixel and "disappears" inside the net
+    // / at the nose; clamp its apparent size up to that floor while held so it
+    // reads as a real catch. Opt-in per debris AND gated on _armPinned (actively
+    // held) so a stale override can never inflate a released piece, and the
+    // Daughter pipeline (which never sets it) is unaffected. Register item 9:
+    // `pinCapturedDebris` — which overwrites this matrix later in the same frame
+    // for a pinned catch — applies the IDENTICAL floor through
+    // `effectiveRenderScale`, so the two writers cannot disagree on the drawn size.
     if (_armPinned && debris._catchRenderMin && scale < debris._catchRenderMin) {
       scale = debris._catchRenderMin;
     }

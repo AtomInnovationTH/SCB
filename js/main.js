@@ -1950,6 +1950,37 @@ async function init() {
       // Dev-only live-net accessor for scenario forensics (same __net* hook
       // convention as __netScenarioProbe; read-only — never mutate through it).
       window.__scbScenarioNet = () => _scenarioNet;
+      // Register item 9: the DRAWN catch scale, decomposed from the instance
+      // matrix the pin actually wrote, beside the clamp-aware SSOT read — the
+      // direct probe-vs-pixels agreement witness (i8a read probe 2.000 while the
+      // unclamped pin drew 1.522). On-demand pure function, no tick, no
+      // per-frame cost (the __net* cost contract).
+      window.__netDrawnScale = () => {
+        try {
+          const M = 0.00001;
+          const whale = _scenarioNet?.targetDebris;
+          if (!whale || whale.id == null || !debrisField) return { ok: false, reason: 'no scenario catch' };
+          const lookup = debrisField._instanceLookup?.get(whale.id);
+          const mesh = lookup && debrisField.instancedMeshes?.[lookup.meshKey];
+          if (!mesh) return { ok: false, reason: 'no instance slot' };
+          const m = new THREE.Matrix4(), p = new THREE.Vector3(), q = new THREE.Quaternion(), s = new THREE.Vector3();
+          mesh.getMatrixAt(lookup.instanceIndex, m);
+          m.decompose(p, q, s);
+          DebrisWireframe.getGeometry(whale.type, whale.id);   // br cache (uncached ⇒ 1)
+          const br = DebrisWireframe.getBoundingRadius(whale.type, whale.id) || 1;
+          const probeScale = DebrisField.effectiveRenderScale(whale);
+          return {
+            ok: true,
+            netState: _scenarioNet?.state ?? null,
+            drawnScale: s.x,
+            drawnRadiusM: +(s.x * br / M).toFixed(3),
+            probeScale,
+            probeRadiusM: +(probeScale * br / M).toFixed(3),
+            agreeM: +((s.x - probeScale) * br / M).toFixed(4),
+            catchRenderMin: typeof whale._catchRenderMin === 'number' ? whale._catchRenderMin : null,
+          };
+        } catch (e) { return { ok: false, reason: String(e) }; }
+      };
       window.__netScenario = (opts) => {
         try {
           if (!player || !debrisField || !cameraSystem) return { ok: false, reason: 'sim not up' };
@@ -2019,6 +2050,12 @@ async function init() {
           // race-free opt-out: dev-only, per-debris, zero production code
           // change — every gate stays bit-comparable with the item-14 family
           // while production catches keep the corrected floor.
+          // Register item 9 (2026-08-08; plan 1786153380617): the freeze now
+          // covers BOTH matrix writers — `pinCapturedDebris` reads the floor
+          // through `effectiveRenderScale` too, whose predicate reads this
+          // getter's 0 exactly as `_updateInstanceTransform`'s does. So the
+          // staged whale still draws at physics size on every frame, and the
+          // measured gate family below is unchanged by that unification.
           try {
             Object.defineProperty(whale, '_catchRenderMin', {
               get: () => 0, set: () => {}, configurable: true,
