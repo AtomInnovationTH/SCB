@@ -2319,6 +2319,9 @@ export const Constants = {
   // Scoped to lasso-held catches only (via debris._catchRenderMin) so the
   // Daughter's small nets are unaffected. Stays well under the 7 m net mouth /
   // ~1.75 m cinched mouth, so it reads as "in the net", never bursting out.
+  // This is a RENDERED RADIUS in metres — the write sites divide by the mesh's
+  // bounding radius via DebrisWireframe.scaleForRenderRadiusM (whale-in-cone
+  // item 8: stored as a raw scale the real floor was minM × br, mesh-dependent).
   MOTHER_CATCH_MIN_RENDER_M: 1.5,     // metres — min apparent size of a net-held catch
 
 
@@ -2573,8 +2576,11 @@ export const Constants = {
     // would leave thrust authority at 0.5–2.5% — a soft-lock.
     MASS_EFFECT_MULT:     1.0,
     MASS_EFFECT_MAX:      2.0,    // max massFactor divisor (2–3× per plan)
-    // Render floor for a pinned mother catch (scene units × M) — keeps a
-    // 500 kg+ catch legible at the muzzle standoff.
+    // Render floor for a pinned mother catch — a RENDERED RADIUS in metres,
+    // converted to an instance scale at the write sites via
+    // DebrisWireframe.scaleForRenderRadiusM (÷ mesh bounding radius —
+    // whale-in-cone item 8) — keeps a 500 kg+ catch legible at the muzzle
+    // standoff.
     MOTHER_CATCH_MIN_RENDER_M: 2.0,
 
     // ── Line-taut tug (mother-net-reel plan §9 Phase B) ──

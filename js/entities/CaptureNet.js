@@ -18,6 +18,7 @@ import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { BridleRing } from './BridleRing.js';
+import { DebrisWireframe } from '../ui/DebrisWireframe.js';
 import { CeremonyTimeScale } from '../systems/CeremonyTimeScale.js';
 import { cartesianToKeplerian, orbitToSceneCartesianInto } from './OrbitalMechanics.js';
 import { strutLocalDirection } from './ArmDockBasis.js';
@@ -1416,7 +1417,7 @@ export class NetProjectile {
 
     d._armPinned = true;
     d._captured = true;
-    d._catchRenderMin = (CN.MOTHER_CATCH_MIN_RENDER_M ?? 2.0) * M_NET;
+    d._catchRenderMin = DebrisWireframe.scaleForRenderRadiusM(CN.MOTHER_CATCH_MIN_RENDER_M ?? 2.0, d.type, d.id);
     debrisField.pinCapturedDebris(d, _v3d);
 
     // Tension readout (HUD): base + mass factor, same shape as the daughter.
@@ -1646,7 +1647,7 @@ export class NetProjectile {
 
     d._armPinned = true;
     d._captured = true;
-    d._catchRenderMin = (CN.MOTHER_CATCH_MIN_RENDER_M ?? 2.0) * M_NET;
+    d._catchRenderMin = DebrisWireframe.scaleForRenderRadiusM(CN.MOTHER_CATCH_MIN_RENDER_M ?? 2.0, d.type, d.id);
     debrisField.pinCapturedDebris(d, _v3d);
     return true;
   }

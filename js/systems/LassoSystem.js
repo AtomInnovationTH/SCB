@@ -14,6 +14,7 @@ import { Events } from '../core/Events.js';
 import { orbitToSceneCartesian } from '../entities/OrbitalMechanics.js';
 import { classifyNetTarget } from './netRouting.js';
 import { NetMeshKit } from '../ui/NetMeshKit.js';
+import { DebrisWireframe } from '../ui/DebrisWireframe.js';
 import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
@@ -1360,7 +1361,7 @@ export class LassoSystem {
                 if (!this.target._armPinPos) this.target._armPinPos = new THREE.Vector3();
                 this.target._armPinPos.copy(this.projectilePos);
                 this.target._armPinned = true;
-                this.target._catchRenderMin = Constants.MOTHER_CATCH_MIN_RENDER_M * M;
+                this.target._catchRenderMin = DebrisWireframe.scaleForRenderRadiusM(Constants.MOTHER_CATCH_MIN_RENDER_M, this.target.type, this.target.id);
             }
         } else {
             // Flight phase: homing projectile tracks target in local frame
@@ -1411,7 +1412,7 @@ export class LassoSystem {
                     if (!this.target._armPinPos) this.target._armPinPos = new THREE.Vector3();
                     this.target._armPinPos.copy(this.target._scenePosition || this._targetScenePos || this.projectilePos);
                     this.target._armPinned = true;
-                    this.target._catchRenderMin = Constants.MOTHER_CATCH_MIN_RENDER_M * M;
+                    this.target._catchRenderMin = DebrisWireframe.scaleForRenderRadiusM(Constants.MOTHER_CATCH_MIN_RENDER_M, this.target.type, this.target.id);
                 }
 
                 // Contact flash removed per user feedback ("NOT an arcade game")
@@ -1555,7 +1556,7 @@ export class LassoSystem {
             this._cargoCellWorld(playerPos, playerVelDir, cellIndex, _scratchMuzzle);
             target._armPinPos.copy(_scratchMuzzle);
             target._armPinned = true;
-            target._catchRenderMin = Constants.MOTHER_CATCH_MIN_RENDER_M * M;
+            target._catchRenderMin = DebrisWireframe.scaleForRenderRadiusM(Constants.MOTHER_CATCH_MIN_RENDER_M, target.type, target.id);
         }
         this._reelPinTarget = null; // hand pin ownership to the cargo system
 
@@ -1615,7 +1616,7 @@ export class LassoSystem {
                 this._cargoCellWorld(playerPos, playerVelDir, item.cellIndex, _scratchMuzzle);
                 target._armPinPos.copy(_scratchMuzzle);
                 target._armPinned = true;
-                target._catchRenderMin = Constants.MOTHER_CATCH_MIN_RENDER_M * M;
+                target._catchRenderMin = DebrisWireframe.scaleForRenderRadiusM(Constants.MOTHER_CATCH_MIN_RENDER_M, target.type, target.id);
             }
 
             item.furnaceTimer += dt;

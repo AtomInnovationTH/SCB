@@ -1143,6 +1143,30 @@ export class DebrisWireframe {
   }
 
   /**
+   * Instance scale (scene units) that renders this mesh at a given RADIUS in
+   * metres: `radiusM × 1e-5 / br` (rendered radius = scale × br, so the
+   * bounding radius must be divided OUT — whale-in-cone follow-up item 8:
+   * `MOTHER_CATCH_MIN_RENDER_M` was stored as a raw scale, making the real
+   * floor `minM × br` metres — mesh-dependent, 1.52 m for a cubesat instead
+   * of the documented 2.0 m). Primes the geometry cache first, so the
+   * `getBoundingRadius` uncached-returns-1 trap cannot silently keep the old
+   * behaviour. A missing/unknown mesh falls back to br = 1, which is exactly
+   * the pre-fix behaviour for legacy objects.
+   * @param {number} radiusM - desired rendered radius in metres
+   * @param {string} [type] - debris type (mesh key)
+   * @param {number} [id=0] - debris ID (selects the fragment variant)
+   * @returns {number} instance scale in scene units
+   */
+  static scaleForRenderRadiusM(radiusM, type, id = 0) {
+    let br = 1;
+    if (type != null) {
+      this.getGeometry(type, id);   // prime the br cache (uncached ⇒ 1 trap)
+      br = this.getBoundingRadius(type, id) || 1;
+    }
+    return (radiusM * 0.00001) / br;
+  }
+
+  /**
    * Local-space bounding-box centre + half-extents, keyed like getBoundingRadius
    * (balloon→fabric box floor). Calls getGeometry internally, so the cache is
    * always populated (no uncached trap — unlike getBoundingRadius, which

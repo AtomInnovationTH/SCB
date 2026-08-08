@@ -2000,6 +2000,30 @@ async function init() {
           //    the HUD target panel / ToolOdds / ToolRecommender see a 2.0 m
           //    target instead of 7 m.
           whale.mass = 600;
+          // Register item 8 (2026-08-07; plan 1786109997497): freeze the staged
+          // whale's `_catchRenderMin` at 0 — swallow the per-frame floor writes
+          // from the reel/berth ticks. The corrected floor (a true rendered-
+          // radius floor in metres now) is a gameplay READABILITY aid that
+          // deliberately draws a sub-floor held catch larger than physics and
+          // fattens the bag's contents box to match (CaptureNetVisual reads the
+          // clamp-aware effectiveRenderScale — W5 by design). The scenario's
+          // measurement subject is the opposite contract (SCALE-GATE + popFactor
+          // ≈ 1.00: the rendered whale IS the whale physics believes in), and
+          // pre-item-8 D1's sizing made the buggy floor a no-op. Post-fix the
+          // floor fires on the staged whale (measured live this session:
+          // rendered radius 1.522 → 2.000 m at the catch, popFactor 1.314, and
+          // the held-state chord family re-basing 0.159 → 0.208 as the box
+          // fattens). A per-frame zeroing tick CANNOT work — the reel/berth
+          // ticks rewrite the field later the same frame, before the visual's
+          // floor read. Freezing the property on the staged object is the only
+          // race-free opt-out: dev-only, per-debris, zero production code
+          // change — every gate stays bit-comparable with the item-14 family
+          // while production catches keep the corrected floor.
+          try {
+            Object.defineProperty(whale, '_catchRenderMin', {
+              get: () => 0, set: () => {}, configurable: true,
+            });
+          } catch (_e) { /* non-configurable (paranoia) — the floor then fires as in production */ }
           const TARGET_RENDER_RADIUS_M = 1.5;
           DebrisWireframe.getGeometry(whale.type, whale.id);   // populate the br cache (uncached ⇒ 1)
           const br = DebrisWireframe.getBoundingRadius(whale.type, whale.id) || 1;
