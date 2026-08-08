@@ -1735,18 +1735,19 @@
     },
     {
       "name": "Hyderabad",
-      "lat": 17.6,
+      "lat": 17.39,
       "lon": 78.49,
       "tier": 2,
       "kind": "city"
     },
     {
       "name": "Skyroot HQ",
-      "lat": 17.0,
-      "lon": 78.43,
+      "lat": 17.05,
+      "lon": 78.35,
       "tier": 1,
       "kind": "landmark",
-      "pin": true
+      "pin": true,
+      "displaced": "Rajiv Gandhi International Airport is at 17.24, 78.43 (17 km straight-line from Hyderabad, 24 km by road). Displaced to 2.4x that distance along the true south-southwest bearing so the two pills clear one pill height at the limb, where foreshortening drops to ~0.5 px/km. True separation renders as ~9 px there and reads as a single cluster."
     },
     {
       "name": "Busan",
