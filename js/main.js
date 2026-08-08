@@ -1880,6 +1880,73 @@ async function init() {
       // Register item 13 — read-back for the harness's provenance line and its
       // achieved-vs-intended attitude check (null ⇒ no pin was applied).
       window.__netScenarioTumblePin = () => _scenarioTumblePin;
+      // ── Register item 14 (2026-08-07): the ship-attitude hold ─────────────
+      // Plan: .kilo/plans/1786068498588-pin-scenario-ship-attitude.md.
+      // The tumble pin (item 13) holds the CATCH's attitude exactly, but from
+      // REELING on CaptureNet._applyCatchOrientation rewrites it every frame as
+      // shipQuat ⊗ _qLocal, and the ship tracks PROGRADE (PlayerSatellite's
+      // rigid path rebuilds quaternion = prograde ⊗ _manualRotation from the
+      // live orbital velocity each frame). As the orbit propagates at 10× world
+      // time, the ship's rotation conjugates the catch away from the pin —
+      // measured ATTITUDE-DRIFT 4.5–9.0° by end of window, BERTHED chord max
+      // 0.282–0.284 vs the stable REELING 0.159. Because the chord metric is a
+      // MAX over the seated window and the berth hold's length is wall-clock/
+      // frame-rate luck (setTimeout snaps under the dt cap), the headline max
+      // was run-length-dependent on identical code. This hold removes the drift
+      // at the root: latch the ship's quaternion at NET_CATCH_SUCCESS (the value
+      // _qLocal is latched against at reel entry, so the catch's attitude stays
+      // EXACTLY the pin in both auto-reel orderings) and overwrite the compose
+      // every frame until CATCH_PROCESSED. Staging-only; zero production change.
+      //   `ship` option: undefined ⇒ hold whenever a tumble pin is applied;
+      //   'off'/null/false ⇒ never hold (the item-13-era control basis).
+      //   TUMBLE off ⇒ never hold (the pre-item-13 lottery stays untouched).
+      const _SHIP_HOLD = { armed: false, engaged: false, everEngaged: false, quat: null };
+      let _scenarioShipHoldOff = null;
+      const _resolveScenarioShip = (s) => {
+        if (s === undefined) return true;    // default: hold when a tumble pin applies
+        if (s === null || s === false || s === 'off' || s === 'none') return false;
+        return s === true || s === 'hold';
+      };
+      // Smooth handback (plan D3): fold the held offset into _manualRotation so
+      // the next prograde compose equals the held attitude and the RECENTER_RATE
+      // servo eases it back to prograde — no ~10° snap in a long-lived dev page.
+      // NOTE: everEngaged is deliberately NOT cleared here — it survives
+      // disengagement so the harness's end-of-window check can distinguish
+      // "held the whole window, then processed" from "never engaged" (a run that
+      // reaches CATCH_PROCESSED before the drift read is a VALID held run).
+      // It resets only where no held measurement can exist: re-staging,
+      // fire-refusal, and a catch MISS (all start a fresh hold lifecycle).
+      const _disengageShipHold = () => {
+        try {
+          if (_SHIP_HOLD.engaged && _SHIP_HOLD.quat && player?._manualRotation) {
+            const pg = typeof player._progradeQuat === 'function'
+              ? player._progradeQuat(new THREE.Quaternion()) : null;
+            if (pg) player._manualRotation.copy(pg.invert()).multiply(_SHIP_HOLD.quat);
+          }
+        } catch (_e) { /* dev-only handback; never break the scenario */ }
+        _SHIP_HOLD.armed = false; _SHIP_HOLD.engaged = false; _SHIP_HOLD.quat = null;
+      };
+      // Called once per frame from gameLoop, IMMEDIATELY after player.update —
+      // the call site is load-bearing: the reel/berth ticks read
+      // player.quaternion inside captureNetSystem.update later this frame, so
+      // the overwrite must land after the prograde compose and before that read
+      // (an end-of-loop site would be overwritten before the net ever sees it).
+      // One null-check per frame when disarmed (the freeze hooks' cost contract).
+      window.__netShipHoldTick = () => {
+        if (!_SHIP_HOLD.armed) return;
+        try {
+          if (_SHIP_HOLD.engaged && _SHIP_HOLD.quat) player.quaternion.copy(_SHIP_HOLD.quat);
+        } catch (_e) { /* dev-only hold must never break the game loop */ }
+      };
+      // Read-back for the harness's provenance line and its engaged check.
+      window.__netScenarioShipHold = () => ({
+        armed: _SHIP_HOLD.armed,
+        engaged: _SHIP_HOLD.engaged,
+        everEngaged: _SHIP_HOLD.everEngaged,
+        quat: _SHIP_HOLD.quat
+          ? { x: +_SHIP_HOLD.quat.x.toFixed(6), y: +_SHIP_HOLD.quat.y.toFixed(6), z: +_SHIP_HOLD.quat.z.toFixed(6), w: +_SHIP_HOLD.quat.w.toFixed(6) }
+          : null,
+      });
       // Dev-only live-net accessor for scenario forensics (same __net* hook
       // convention as __netScenarioProbe; read-only — never mutate through it).
       window.__scbScenarioNet = () => _scenarioNet;
@@ -2161,8 +2228,56 @@ async function init() {
             }
           } catch (_e) { /* dev-only staging aid; never break the scenario */ }
 
+          // ── 7.6 Arm the ship-attitude hold (register item 14, 2026-08-07) ──
+          // Plan: .kilo/plans/1786068498588-pin-scenario-ship-attitude.md. The
+          // latch listens for the SAME catch event the pin release above uses;
+          // engagement is the latch + the per-frame overwrite in
+          // __netShipHoldTick (call site there is load-bearing). Disengagement
+          // at CATCH_PROCESSED hands back smoothly via _manualRotation (D3); a
+          // miss (rolls are overridden, but hygiene) or a re-stage disarms.
+          if (typeof _scenarioShipHoldOff === 'function') _scenarioShipHoldOff();
+          _scenarioShipHoldOff = null;
+          _disengageShipHold();   // smooth handback if a prior hold was engaged (D3); resets flags either way
+          _SHIP_HOLD.everEngaged = false;   // a fresh staging starts a new hold lifecycle
+          try {
+            if (_scenarioTumblePin && _resolveScenarioShip(opts && opts.ship)) {
+              _SHIP_HOLD.armed = true;
+              // Filter by the scenario whale's id: a daughter-net catch/miss in a
+              // busy dev page must not latch (or drop) the mother catch's hold.
+              const engageHold = (e) => {
+                if (e && e.debrisId !== undefined && e.debrisId !== whale.id) return;
+                if (!_SHIP_HOLD.armed || _SHIP_HOLD.engaged) return;
+                _SHIP_HOLD.quat = player.quaternion.clone();
+                _SHIP_HOLD.engaged = true;
+                _SHIP_HOLD.everEngaged = true;
+              };
+              const disarmHold = (e) => {
+                if (e && e.debrisId !== undefined && e.debrisId !== whale.id) return;
+                _SHIP_HOLD.armed = false; _SHIP_HOLD.engaged = false; _SHIP_HOLD.everEngaged = false; _SHIP_HOLD.quat = null;
+                if (typeof _scenarioShipHoldOff === 'function') _scenarioShipHoldOff();
+                _scenarioShipHoldOff = null;
+              };
+              const offHoldOk = eventBus.on(Events.NET_CATCH_SUCCESS, engageHold);
+              const offHoldNo = eventBus.on(Events.NET_CATCH_MISS, disarmHold);
+              const offHoldDone = eventBus.on(Events.CATCH_PROCESSED, (e) => {
+                if (e && e.debrisId === whale.id) {
+                  _disengageShipHold();   // keeps everEngaged — the run WAS held
+                  if (typeof _scenarioShipHoldOff === 'function') _scenarioShipHoldOff();
+                  _scenarioShipHoldOff = null;
+                }
+              });
+              _scenarioShipHoldOff = () => { offHoldOk?.(); offHoldNo?.(); offHoldDone?.(); };
+            }
+          } catch (_e) { /* dev-only staging aid; never break the scenario */ }
+
           const net = captureNetSystem.fireMotherNet(0, posMetres, dir, whale);
-          if (!net) { release(); return { ok: false, reason: 'fire refused (magazine / cooldown / launcher blocked)' }; }
+          if (!net) {
+            release();
+            if (typeof _scenarioShipHoldOff === 'function') _scenarioShipHoldOff();
+            _scenarioShipHoldOff = null;
+            _SHIP_HOLD.armed = false; _SHIP_HOLD.engaged = false; _SHIP_HOLD.everEngaged = false; _SHIP_HOLD.quat = null;
+            return { ok: false, reason: 'fire refused (magazine / cooldown / launcher blocked)' };
+          }
 
           // 8. Override the rolls ON THE NET — never forceResolve(), which
           //    skips the flight/envelop/brake/cinch beats being photographed.
@@ -3524,6 +3639,12 @@ function gameLoop(timestamp) {
 
     // Update entities (with error boundaries — single system crash won't freeze game)
     try { player.update(dt, sunDir); } catch (e) { console.error('[GameLoop] player.update:', e); }
+    // Register item 14: ship-attitude hold. Runs IMMEDIATELY after the prograde
+    // compose so the overwrite lands before the net's reel/berth ticks read
+    // player.quaternion in captureNetSystem.update below — an end-of-loop site
+    // (with the freeze ticks) would be overwritten by the next frame's compose
+    // BEFORE the net sees it. One null-check per frame when disarmed. Dev-only.
+    if (window.__netShipHoldTick) window.__netShipHoldTick();
     try { debrisField.update(dt, player.getPosition(), player.getOrbitalElements()); } catch (e) { console.error('[GameLoop] debrisField:', e); }
     try { activeSatellites.update(dt, player.getPosition()); } catch (e) { console.error('[GameLoop] activeSats:', e); }
 
