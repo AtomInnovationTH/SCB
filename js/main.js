@@ -2887,6 +2887,17 @@ async function init() {
             : null;
           const s = {
             tMs: Math.round(nowMs),
+            // Register item 11: the frame this sample belongs to. `tMs` is the
+            // rAF timestamp and it is NOT unique — measured 2026-08-09, in
+            // roughly half of the runs gameLoop runs TWICE per rAF (second pass
+            // at dt ≈ 0), so two distinct frames share one timestamp and
+            // per-timestamp reasoning cannot tell that from one frame recorded
+            // twice. With `frameCount` (advanced once per pass, inside the
+            // isActive block) the gate proves Δframe = 1 across the whole
+            // buffer — no frame missed, none duplicated — and prints the
+            // DUP-FRAMES witness. One number on an object literal that is
+            // already built: no allocation, recorder-only.
+            frame: frameCount,
             netState: net.state ?? null,
             beatKey: beat?.key ?? null,
             flightTime: +net.flightTime.toFixed(2),
