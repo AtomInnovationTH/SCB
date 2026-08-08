@@ -38,7 +38,7 @@
  * The SW does not intercept its own URL (we never call respondWith for it).
  */
 
-const CACHE_NAME = 'space-cowboy-v14';
+const CACHE_NAME = 'space-cowboy-v15';
 
 // Small, safe pre-cache list. Each entry is wrapped in try/catch so a single
 // 404 (e.g. local dev without ./js/main.js yet) does NOT abort installation.
@@ -119,8 +119,20 @@ function isJSRequest(url) {
 function isCacheFirstURL(url) {
   if (url.pathname.includes('/vendor/')) return true;
   if (url.pathname.includes('/textures/')) return true;
-  if (url.pathname.includes('/data/')) return true;
   return false;
+}
+
+/**
+ * Curated JSON under ./data/ — small, and edited far more often than the code
+ * that reads it. These are deliberately NOT cache-first: a cache-first entry is
+ * pinned until CACHE_NAME changes, so every content edit silently kept serving
+ * the previously cached copy and a shipped data change could never reach a
+ * returning player (a city label added to data/cities.json stayed invisible
+ * through any number of reloads). Network-first keeps them fresh when online
+ * and still falls back to the cached copy offline, so offline-first holds.
+ */
+function isDataURL(url) {
+  return url.pathname.includes('/data/');
 }
 
 /** Synthetic offline response when both network and cache fail. */
@@ -218,17 +230,18 @@ self.addEventListener('fetch', (event) => {
   // Only handle http(s) — skip chrome-extension://, data:, blob:, etc.
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
 
-  // Cache-first: vendored Three.js (./vendor/), textures, data. This MUST be
-  // checked before the JS network-first branch below, otherwise vendored
-  // `.js` modules would match isJSRequest() and go network-first.
+  // Cache-first: vendored Three.js (./vendor/) and textures — immutable blobs.
+  // This MUST be checked before the JS network-first branch below, otherwise
+  // vendored `.js` modules would match isJSRequest() and go network-first.
   if (isCacheFirstURL(url)) {
     event.respondWith(cacheFirst(request));
     return;
   }
 
-  // Network-first: HTML navigations + JS modules (so new deploys take effect
-  // on the next visit; falls back to cache, then a synthetic offline Response).
-  if (isHTMLRequest(request) || isJSRequest(url)) {
+  // Network-first: HTML navigations, JS modules, and ./data/ JSON (so new
+  // deploys and content edits take effect on the next visit; falls back to
+  // cache, then a synthetic offline Response).
+  if (isHTMLRequest(request) || isJSRequest(url) || isDataURL(url)) {
     event.respondWith(networkFirst(request));
     return;
   }
