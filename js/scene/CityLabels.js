@@ -510,7 +510,13 @@ export class CityLabels {
         layer.parent.localToWorld(_world);
 
         // Soft limb fade (also culls the far hemisphere when fade reaches 0).
-        const lf = limbFade(_world, _center, _cam);
+        // Pinned labels skip the ramp: they hold full strength anywhere on the
+        // near hemisphere and only vanish once past the geometric limb. Without
+        // this, a low-orbit player meets the label exactly when it is at the
+        // horizon — i.e. faded to invisible — which reads as "not there at all".
+        const lf = item.pin
+          ? (cityFacingDot(_world, _center, _cam) > 0.02 ? 1 : 0)
+          : limbFade(_world, _center, _cam);
         if (lf <= 0) { this._hide(item); continue; }
 
         // Project to normalised device coords, then to CSS pixels.
@@ -520,7 +526,10 @@ export class CityLabels {
         item._sx = (_proj.x * 0.5 + 0.5) * W;
         item._sy = (_proj.y * -0.5 + 0.5) * H;
         item._dist = _world.distanceTo(_cam);
-        item._op = (0.55 + 0.45 * distanceFade(item._dist, layer.fadeNear, layer.fadeFar)) * lf;
+        // Pinned labels also skip the distance dimming (floor 0.55 otherwise).
+        item._op = item.pin
+          ? lf
+          : (0.55 + 0.45 * distanceFade(item._dist, layer.fadeNear, layer.fadeFar)) * lf;
         cand.push(item);
       }
 

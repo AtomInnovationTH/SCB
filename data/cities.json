@@ -1735,14 +1735,14 @@
     },
     {
       "name": "Hyderabad",
-      "lat": 17.39,
+      "lat": 17.6,
       "lon": 78.49,
       "tier": 2,
       "kind": "city"
     },
     {
       "name": "Skyroot HQ",
-      "lat": 17.24,
+      "lat": 17.0,
       "lon": 78.43,
       "tier": 1,
       "kind": "landmark",
