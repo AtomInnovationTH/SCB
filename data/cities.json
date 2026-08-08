@@ -1,6 +1,6 @@
 {
   "version": 8,
-  "description": "Curated city + island/natural-landmark reference list for the Earth city-label layer (UX-11 #5). Offline-first; lat/lon in degrees. NAME POLICY: no abbreviations, no jargon, ASCII only, <= 22 characters (Strait not Str, Mountains not Mts, Island(s) not Is, Mount not Mt, Saint not St; parentheses/hyphens allowed). KIND: city = a populated place; landmark = island, archipelago, range, desert, sea, gulf, delta, plateau, reef, ice sheet, trench, pole; launch = pad or range; strait = strait, canal, channel, passage, cape. TIER: 1 = school-atlas recognisable, ALL launch sites, isolated ocean/polar references; 2 = regionally recognisable; 3 = dense-cluster secondary, close zoom only. PIN: optional 'pin': true forces a label past BOTH the zoom LOD gate and screen-space declutter — it is placed before every other label, including launch pads, and ignores the maxVisible budgets. Use sparingly (each pinned label costs a slot from the curated set at far zoom); intended for entries that must always be findable regardless of recognition. BUDGET: one in, one out — the file stays <= 405 so MAX_CITIES (420) keeps headroom; a new entry retires one of equal or lower recognition. KEEP-CRITERIA (any one suffices): (a) recognition — a non-local would know the name; (b) coverage criticality — in view during stretches with <= 5 labels; (c) corridor landfall — marks where a track crosses from ocean onto land (e.g. Visakhapatnam).",
+  "description": "Curated city + island/natural-landmark reference list for the Earth city-label layer (UX-11 #5). Offline-first; lat/lon in degrees. NAME POLICY: no abbreviations, no jargon, ASCII only, <= 22 characters (Strait not Str, Mountains not Mts, Island(s) not Is, Mount not Mt, Saint not St; parentheses/hyphens allowed). KIND: city = a populated place; landmark = island, archipelago, range, desert, sea, gulf, delta, plateau, reef, ice sheet, trench, pole; launch = pad or range; strait = strait, canal, channel, passage, cape. TIER: 1 = school-atlas recognisable, ALL launch sites, isolated ocean/polar references; 2 = regionally recognisable; 3 = dense-cluster secondary, close zoom only. PIN: optional 'pin': true forces a label past BOTH the zoom LOD gate and screen-space declutter — it is placed before every other label, including launch pads, and ignores the maxVisible budgets. Use sparingly (each pinned label costs a slot from the curated set at far zoom); intended for entries that must always be findable regardless of recognition. PILL OFFSET: optional 'pillOffsetPx': [dx, dy] shifts only the text pill, in CSS pixels; the anchor dot stays on the TRUE lat/lon. Use this instead of moving coordinates when two genuinely-close entries need separate pills (a city and an airport ~18 km apart are ~9 px apart at the limb, inside one 18 px pill height). Collision boxes honour the offset, so declutter stays correct. Coordinates in this file are always real. BUDGET: one in, one out — the file stays <= 405 so MAX_CITIES (420) keeps headroom; a new entry retires one of equal or lower recognition. KEEP-CRITERIA (any one suffices): (a) recognition — a non-local would know the name; (b) coverage criticality — in view during stretches with <= 5 labels; (c) corridor landfall — marks where a track crosses from ocean onto land (e.g. Visakhapatnam).",
   "cities": [
     {
       "name": "New York",
@@ -1742,12 +1742,12 @@
     },
     {
       "name": "Skyroot HQ",
-      "lat": 17.05,
-      "lon": 78.35,
+      "lat": 17.24,
+      "lon": 78.43,
       "tier": 1,
       "kind": "landmark",
       "pin": true,
-      "displaced": "Rajiv Gandhi International Airport is at 17.24, 78.43 (17 km straight-line from Hyderabad, 24 km by road). Displaced to 2.4x that distance along the true south-southwest bearing so the two pills clear one pill height at the limb, where foreshortening drops to ~0.5 px/km. True separation renders as ~9 px there and reads as a single cluster."
+      "pillOffsetPx": [0, 30]
     },
     {
       "name": "Busan",

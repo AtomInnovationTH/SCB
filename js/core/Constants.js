@@ -12,6 +12,13 @@ export const Constants = {
   VERSION: '0.999',
   VERSION_LABEL: 'V.999',
 
+  // Cache-busting stamp for ./data/ reads (js/core/dataUrl.js appends it as
+  // ?v=<DATA_VERSION>). Deliberately SEPARATE from VERSION: a curated-content
+  // edit must invalidate cached JSON without moving the user-visible release
+  // number. Bump this on every ./data/ content change; leave VERSION for
+  // actual releases.
+  DATA_VERSION: '1000',
+
   // ============================================================================
   // === INPUT (Delegation 1, 2026-05-31) ===
   // Hotkey-handler tuning knobs.  Add new flags here when InputManager grows

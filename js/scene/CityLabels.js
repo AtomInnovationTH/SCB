@@ -162,6 +162,14 @@ export function parseCityList(json, maxCount = MAX_CITIES) {
     // can never lose a screen-space collision. Use sparingly: each pinned label
     // takes a slot away from the recognition-curated set at far zoom.
     if (c.pin === true) entry.pin = true;
+    // Optional screen-space pill displacement [dx, dy] in CSS px. The anchor dot
+    // stays on the TRUE lat/lon; only the text pill moves. This separates two
+    // genuinely-close labels (e.g. a city and an airport ~18 km away, which is
+    // ~9 px at the limb) without falsifying either coordinate.
+    if (Array.isArray(c.pillOffsetPx) && c.pillOffsetPx.length === 2) {
+      const dx = Number(c.pillOffsetPx[0]), dy = Number(c.pillOffsetPx[1]);
+      if (isFinite(dx) && isFinite(dy)) entry.pillOffsetPx = [dx, dy];
+    }
     out.push(entry);
     if (out.length >= maxCount) break;
   }
@@ -251,7 +259,7 @@ export function distanceFade(dist, near, far) {
  * @param {object} [out] — optional target {x,y,w,h} to mutate and return
  * @returns {{x:number, y:number, w:number, h:number}}
  */
-export function slotBox(sx, sy, textW, slot, out) {
+export function slotBox(sx, sy, textW, slot, out, offX = 0, offY = 0) {
   const gap = DOT_PX / 2 + 6;
   let x, y = sy - LABEL_H_PX / 2;
   switch (slot) {
@@ -262,8 +270,43 @@ export function slotBox(sx, sy, textW, slot, out) {
     default:   x = sx + gap; break;
   }
   const b = out || {};
-  b.x = x; b.y = y; b.w = textW; b.h = LABEL_H_PX;
+  b.x = x + offX; b.y = y + offY; b.w = textW; b.h = LABEL_H_PX;
   return b;
+}
+
+/**
+ * Furthest a label's dot or pill can reach from its anchor, in any slot and
+ * with any pill offset — the margin an off-viewport reject must allow.
+ * @param {number} textW @param {number} [offX=0] @param {number} [offY=0]
+ * @returns {{x:number, y:number}} half-extents in CSS px
+ */
+export function labelReach(textW, offX = 0, offY = 0) {
+  const gap = DOT_PX / 2 + 6;
+  return {
+    x: gap + textW + Math.abs(offX) + DOT_PX,
+    y: LABEL_H_PX / 2 + SLOT_DY + Math.abs(offY) + DOT_PX,
+  };
+}
+
+/**
+ * Can a label anchored at (sx, sy) put ANY pixel — dot or pill, in any slot —
+ * inside a W×H viewport? Pure, so the hot loop can reject labels that project
+ * off screen before they consume a placement budget slot. Perspective
+ * projection sends points just outside the frustum to enormous coordinates
+ * (one was measured at x ≈ 729518), and without this they were "placed",
+ * counted against maxVisible, and written to the DOM while invisible —
+ * starving labels that were actually on screen.
+ *
+ * @param {number} sx @param {number} sy — anchor in CSS px
+ * @param {number} textW — estimated pill width
+ * @param {number} W @param {number} H — viewport size in CSS px
+ * @param {number} [offX=0] @param {number} [offY=0] — pill offset
+ * @returns {boolean}
+ */
+export function isLabelInViewport(sx, sy, textW, W, H, offX = 0, offY = 0) {
+  if (!isFinite(sx) || !isFinite(sy)) return false;
+  const r = labelReach(textW, offX, offY);
+  return sx > -r.x && sx < W + r.x && sy > -r.y && sy < H + r.y;
 }
 
 /**
@@ -275,14 +318,14 @@ export function slotBox(sx, sy, textW, slot, out) {
  * @param {number} textW — estimated pill width (for the W slot)
  * @returns {string} CSS transform value
  */
-export function slotTransform(slot, textW) {
+export function slotTransform(slot, textW, offX = 0, offY = 0) {
   const gap = DOT_PX / 2 + 6;
   switch (slot) {
-    case 'W':  return `translate(${-(textW + gap)}px, 0)`;
-    case 'NE': return `translate(${gap}px, ${-SLOT_DY}px)`;
-    case 'SE': return `translate(${gap}px, ${SLOT_DY}px)`;
+    case 'W':  return `translate(${-(textW + gap) + offX}px, ${offY}px)`;
+    case 'NE': return `translate(${gap + offX}px, ${-SLOT_DY + offY}px)`;
+    case 'SE': return `translate(${gap + offX}px, ${SLOT_DY + offY}px)`;
     case 'E':
-    default:   return `translate(${gap}px, 0)`;
+    default:   return `translate(${gap + offX}px, ${offY}px)`;
   }
 }
 
@@ -306,12 +349,13 @@ const _scanBox = { x: 0, y: 0, w: 0, h: 0 };
  * @param {number} [keptCount=keptBoxes.length]
  * @returns {string|null}
  */
-export function pickSlot(sx, sy, textW, keptBoxes, prevSlot = null, keptCount = keptBoxes.length) {
+export function pickSlot(sx, sy, textW, keptBoxes, prevSlot = null, keptCount = keptBoxes.length,
+                         offX = 0, offY = 0) {
   const order = prevSlot && LABEL_SLOTS.includes(prevSlot)
     ? [prevSlot, ...LABEL_SLOTS.filter(s => s !== prevSlot)]
     : LABEL_SLOTS;
   for (const slot of order) {
-    slotBox(sx, sy, textW, slot, _scanBox);
+    slotBox(sx, sy, textW, slot, _scanBox, offX, offY);
     let blocked = false;
     for (let j = 0; j < keptCount; j++) {
       if (_boxesOverlap(_scanBox, keptBoxes[j])) { blocked = true; break; }
@@ -433,6 +477,9 @@ export class CityLabels {
         el, textEl: el._textEl, dotEl: el._dotEl, name: city.name, kind: city.kind, tier,
         // Data-level declutter/LOD override (see parseCityList).
         pin: city.pin === true,
+        // Screen-space pill displacement; the dot stays on the true point.
+        offX: Array.isArray(city.pillOffsetPx) ? city.pillOffsetPx[0] : 0,
+        offY: Array.isArray(city.pillOffsetPx) ? city.pillOffsetPx[1] : 0,
         // Estimated on-screen pill width (monospace ⇒ length-proportional),
         // used by the screen-space slot placement in update().
         w: LABEL_FIXED_PX + city.name.length * charPx,
@@ -530,6 +577,13 @@ export class CityLabels {
 
         item._sx = (_proj.x * 0.5 + 0.5) * W;
         item._sy = (_proj.y * -0.5 + 0.5) * H;
+        // Off-viewport reject: a point just outside the frustum projects to
+        // enormous coordinates, and placing it would burn a maxVisible slot and
+        // a DOM write on a label nobody can see (see isLabelInViewport).
+        if (!isLabelInViewport(item._sx, item._sy, item.w, W, H, item.offX, item.offY)) {
+          this._hide(item);
+          continue;
+        }
         item._dist = _world.distanceTo(_cam);
         // Pinned labels also skip the distance dimming (floor 0.55 otherwise).
         item._op = item.pin
@@ -549,10 +603,11 @@ export class CityLabels {
       // pill box AND its dot square, position the DOM. Returns true if placed.
       // Allocation-free: writes into the preallocated `kept` pool.
       const place = (item) => {
-        const slot = pickSlot(item._sx, item._sy, item.w, kept, item._slot, keptCount);
+        const slot = pickSlot(item._sx, item._sy, item.w, kept, item._slot, keptCount,
+                              item.offX, item.offY);
         if (!slot) { this._hide(item); return false; }
         // Pill box.
-        slotBox(item._sx, item._sy, item.w, slot, kept[keptCount++]);
+        slotBox(item._sx, item._sy, item.w, slot, kept[keptCount++], item.offX, item.offY);
         // Dot square (so no pill covers another entry's dot).
         const d = kept[keptCount++];
         d.x = item._sx - DOT_PX / 2; d.y = item._sy - DOT_PX / 2; d.w = DOT_PX; d.h = DOT_PX;
@@ -561,7 +616,7 @@ export class CityLabels {
         item.el.style.transform =
           `translate(${item._sx.toFixed(1)}px, ${item._sy.toFixed(1)}px) translate(${-DOT_PX / 2}px, -50%)`;
         if (slot !== item._slot) {
-          item.textEl.style.transform = slotTransform(slot, item.w);
+          item.textEl.style.transform = slotTransform(slot, item.w, item.offX, item.offY);
           item._slot = slot;
         }
         item.el.style.opacity = (item._op * item._opScale).toFixed(3);

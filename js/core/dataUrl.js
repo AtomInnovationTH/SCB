@@ -15,8 +15,10 @@
  * test double is not a network and needs no cache busting, so fixtures keyed on
  * bare paths keep working while production requests are always versioned.
  *
- * Bump Constants.VERSION when ./data/ content changes and every loader below
- * picks it up for free.
+ * The stamp reads Constants.DATA_VERSION, which is deliberately separate from
+ * Constants.VERSION: a content edit must invalidate cached JSON without moving
+ * the user-visible release number in the menu. Bump DATA_VERSION whenever
+ * ./data/ content changes and every loader below picks it up for free.
  *
  * @module core/dataUrl
  */
@@ -24,12 +26,12 @@
 import { Constants } from './Constants.js';
 
 /**
- * Append `?v=<app version>` to a ./data/ URL. Pure and idempotent.
+ * Append `?v=<data version>` to a ./data/ URL. Pure and idempotent.
  * @param {string} url — relative path, with or without an existing query
- * @param {string} [version=Constants.VERSION]
+ * @param {string} [version=Constants.DATA_VERSION]
  * @returns {string} the stamped URL (input returned unchanged when not a string)
  */
-export function withDataVersion(url, version = Constants.VERSION) {
+export function withDataVersion(url, version = Constants.DATA_VERSION) {
   if (typeof url !== 'string' || url === '') return url;
   if (/[?&]v=/.test(url)) return url;             // already stamped
   return `${url}${url.includes('?') ? '&' : '?'}v=${encodeURIComponent(version)}`;
