@@ -1741,6 +1741,13 @@
       "kind": "city"
     },
     {
+      "name": "Skyroot HQ",
+      "lat": 17.24,
+      "lon": 78.43,
+      "tier": 1,
+      "kind": "landmark"
+    },
+    {
       "name": "Busan",
       "lat": 35.1,
       "lon": 129.04,

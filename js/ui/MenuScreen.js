@@ -482,7 +482,7 @@ export class MenuScreen {
                 <summary>Rawhide<span class="adr-count">2</span></summary>
                 <ul class="adr-list">
                 <li style="color:rgba(0,255,136,0.72); padding-left:0; margin-bottom:0.35rem;"><em>&ldquo;Rollin', rollin', rollin'&hellip; <strong>Rawhide!</strong>&rdquo;</em></li>
-                <li><a class="adr-name" href="https://www.perplexity.ai/search/b8b73b32-67ff-4ae8-9930-22e451aae625?sm=v" target="_blank" rel="noopener noreferrer" style="color:#00ccff;" title="The Good Ole Boys / chicken-wire bar scene from The Blues Brothers (1980)">▶ The Blues Brothers &mdash; &ldquo;Rawhide&rdquo;</a></li>
+                <li><a class="adr-name" href="https://www.youtube-nocookie.com/embed/RdR6MN2jKYs" target="_blank" rel="noopener noreferrer" style="color:#00ccff;" title="The Good Ole Boys / chicken-wire bar scene from The Blues Brothers (1980) — official Movieclips upload, clean player, no YouTube popups">▶ The Blues Brothers &mdash; &ldquo;Rawhide&rdquo;</a></li>
                 </ul>
               </details>
             </div>
