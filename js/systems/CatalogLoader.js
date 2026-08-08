@@ -20,6 +20,7 @@
 import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
+import { withDataVersion } from '../core/dataUrl.js';
 
 // ============================================================================
 // INTERNAL HELPERS
@@ -43,7 +44,10 @@ function _withTimeout(p, ms) {
  */
 function _resolveFetch(injected) {
   if (typeof injected === 'function') return injected;
-  if (typeof fetch === 'function') return fetch;
+  // Real network reads are version-stamped so a cache-first Service Worker copy
+  // cannot answer them (see js/core/dataUrl.js). Injected doubles are left
+  // alone — they are not a network, and fixtures key on bare paths.
+  if (typeof fetch === 'function') return (path) => fetch(withDataVersion(path));
   // Last-ditch: node's global may still be undefined — caller should inject.
   throw new Error('CatalogLoader: no fetch implementation available (inject fetchImpl for Node).');
 }

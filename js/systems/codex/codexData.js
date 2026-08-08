@@ -12,6 +12,8 @@
  * @module systems/codex/codexData
  */
 
+import { withDataVersion } from '../../core/dataUrl.js';
+
 /**
  * Fetch + parse data/codex.json.
  * @param {{ fetchImpl?: Function, basePath?: string, timeoutMs?: number }} [opts]
@@ -22,7 +24,10 @@ export async function loadCodexData(opts = {}) {
   const timeoutMs = opts.timeoutMs || 8000;
   const fetchFn = (typeof opts.fetchImpl === 'function')
     ? opts.fetchImpl
-    : (typeof fetch === 'function' ? fetch : null);
+    // Real network reads are version-stamped so a cache-first Service Worker
+    // copy cannot answer them (see js/core/dataUrl.js). Injected doubles are
+    // left alone — they are not a network, and fixtures key on bare paths.
+    : (typeof fetch === 'function' ? (p) => fetch(withDataVersion(p)) : null);
 
   if (!fetchFn) {
     console.warn('[codexData] no fetch available — codex will load empty.');

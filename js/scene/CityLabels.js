@@ -30,6 +30,7 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { latLonToPosition } from '../ui/StrategicMap.js';
 import { StorageKeys } from '../core/StorageKeys.js';
+import { fetchData } from '../core/dataUrl.js';
 
 /** Hard cap on rendered labels (performance + clutter). */
 export const MAX_CITIES = 420;
@@ -359,13 +360,17 @@ export class CityLabels {
 
   /**
    * Load the curated list (offline-first local JSON, same pattern as the
-   * catalog loader).
+   * catalog loader). Reads go through fetchData so the request is always
+   * version-stamped and a cache-first Service Worker copy cannot answer it —
+   * the label DOM is built once in attach(), so a stale boot is permanent.
+   * See js/core/dataUrl.js.
+   *
    * @param {string} [url='data/cities.json']
    * @returns {Promise<number>} number of cities loaded
    */
   async load(url = 'data/cities.json') {
     try {
-      const res = await fetch(url);
+      const res = await fetchData(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       this._cities = parseCityList(await res.json());
     } catch (e) {

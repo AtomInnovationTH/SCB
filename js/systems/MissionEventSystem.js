@@ -20,6 +20,7 @@
 import { Constants } from '../core/Constants.js';
 import { eventBus }  from '../core/EventBus.js';
 import { Events }    from '../core/Events.js';
+import { fetchData } from '../core/dataUrl.js';
 
 export class MissionEventSystem {
   constructor() {
@@ -302,7 +303,7 @@ export class MissionEventSystem {
    */
   async loadNewsEvents() {
     try {
-      const resp = await fetch('data/news-events.json');
+      const resp = await fetchData('data/news-events.json');
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
       this._newsEvents = Array.isArray(data.events) ? data.events : [];
