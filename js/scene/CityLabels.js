@@ -155,7 +155,13 @@ export function parseCityList(json, maxCount = MAX_CITIES) {
     const tier = isFinite(tRaw) ? Math.min(Math.max(tRaw, 1), TIER_MAX) : 2;
     // Category: unknown/missing → 'city' (keeps every existing entry valid).
     const kind = CITY_KINDS.includes(c.kind) ? c.kind : 'city';
-    out.push({ name: c.name.trim(), lat, lon, tier, kind });
+    const entry = { name: c.name.trim(), lat, lon, tier, kind };
+    // Optional hard override (`pin: true`): the label ignores the zoom-LOD gate
+    // and is placed BEFORE every other label — including launch pads — so it
+    // can never lose a screen-space collision. Use sparingly: each pinned label
+    // takes a slot away from the recognition-curated set at far zoom.
+    if (c.pin === true) entry.pin = true;
+    out.push(entry);
     if (out.length >= maxCount) break;
   }
   return out;
@@ -420,6 +426,8 @@ export class CityLabels {
       const charPx = tier === 1 ? CHAR_PX : CHAR_PX_SMALL;
       items.push({
         el, textEl: el._textEl, dotEl: el._dotEl, name: city.name, kind: city.kind, tier,
+        // Data-level declutter/LOD override (see parseCityList).
+        pin: city.pin === true,
         // Estimated on-screen pill width (monospace ⇒ length-proportional),
         // used by the screen-space slot placement in update().
         w: LABEL_FIXED_PX + city.name.length * charPx,
@@ -447,9 +455,12 @@ export class CityLabels {
       lodFar: lodFar != null ? lodFar : radius * 10,
       maxVisible, maxVisibleLaunch,
     };
-    // Preallocate the box pool (2 per placeable label).
+    // Preallocate the box pool (2 per placeable label). Pinned labels bypass
+    // both caps, so they need boxes of their own on top of the two budgets.
+    const pinnedCount = items.reduce((n, it) => n + (it.pin ? 1 : 0), 0);
     const poolSize = 2 * Math.min(
       items.length,
+      pinnedCount +
       (isFinite(maxVisible) ? maxVisible : items.length) +
       (isFinite(maxVisibleLaunch) ? maxVisibleLaunch : items.length),
     );
@@ -490,8 +501,9 @@ export class CityLabels {
       const cand = layer._cand;
       cand.length = 0;
       for (const item of layer.items) {
-        // LOD declutter: hide tiers above the current zoom's threshold.
-        if (item.tier > maxTier) { this._hide(item); continue; }
+        // LOD declutter: hide tiers above the current zoom's threshold. Pinned
+        // labels opt out — they stay legible at every zoom.
+        if (item.tier > maxTier && !item.pin) { this._hide(item); continue; }
 
         // City surface point in world space.
         _world.copy(item.anchor);
@@ -560,16 +572,23 @@ export class CityLabels {
         return true;
       };
 
+      // PASS 2a-pre — pinned labels (data-level `pin: true`) are placed before
+      // anything else and outside both budgets, so neither the zoom LOD nor a
+      // pad's reserved box can hide them. They are still limb/frustum culled.
+      for (const item of cand) {
+        if (!item.pin) continue;
+        place(item);
+      }
       // PASS 2a — launch pads first (own budget). They can never lose a
       // collision to a city, which is what keeps Sriharikota beside Chennai.
       for (const item of cand) {
-        if (item.kind !== 'launch') continue;
+        if (item.kind !== 'launch' || item.pin) continue;
         if (placedLaunch >= layer.maxVisibleLaunch) { this._hide(item); continue; }
         if (place(item)) placedLaunch++;
       }
       // PASS 2b — everything else, colliding against the pads' reserved boxes.
       for (const item of cand) {
-        if (item.kind === 'launch') continue;
+        if (item.kind === 'launch' || item.pin) continue;
         if (placedOther >= layer.maxVisible) { this._hide(item); continue; }
         if (place(item)) placedOther++;
       }
