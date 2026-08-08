@@ -71,6 +71,15 @@ export const LABEL_SLOTS = ['E', 'W', 'NE', 'SE'];
  */
 const SLOT_DY = 20;
 
+/**
+ * Limb-fade band on the facing dot: labels are hidden at/below LO and fully
+ * opaque at/above HI. Exported as the single source of truth because the pinned
+ * path reuses LO as its geometric cutoff — a pinned label skips the dimming but
+ * must not render where no other label would appear.
+ */
+export const LIMB_FADE_LO = 0.04;
+export const LIMB_FADE_HI = 0.16;
+
 /** localStorage key for the persisted on/off preference. */
 const STORAGE_KEY = StorageKeys.CITY_LABELS;
 
@@ -227,7 +236,7 @@ export function isCityVisible(cityWorldPos, earthCenter, camPos, threshold = 0.0
  * @param {number} [lo=0.04] @param {number} [hi=0.16] — fade band on the dot
  * @returns {number} fade ∈ [0, 1] (0 = hidden beyond the limb)
  */
-export function limbFade(cityWorldPos, earthCenter, camPos, lo = 0.04, hi = 0.16) {
+export function limbFade(cityWorldPos, earthCenter, camPos, lo = LIMB_FADE_LO, hi = LIMB_FADE_HI) {
   const d = cityFacingDot(cityWorldPos, earthCenter, camPos);
   if (d <= lo) return 0;
   if (d >= hi) return 1;
@@ -562,12 +571,13 @@ export class CityLabels {
         layer.parent.localToWorld(_world);
 
         // Soft limb fade (also culls the far hemisphere when fade reaches 0).
-        // Pinned labels skip the ramp: they hold full strength anywhere on the
-        // near hemisphere and only vanish once past the geometric limb. Without
-        // this, a low-orbit player meets the label exactly when it is at the
-        // horizon — i.e. faded to invisible — which reads as "not there at all".
+        // Pinned labels skip the DIMMING but keep the same geometric cutoff as
+        // everything else (limbFade's `lo`): full strength wherever a normal
+        // label would be visible at all, hidden past that. Using a looser cutoff
+        // made the pinned label the only thing drawn in a sliver right on the
+        // horizon silhouette, which reads as a marker floating above the ground.
         const lf = item.pin
-          ? (cityFacingDot(_world, _center, _cam) > 0.02 ? 1 : 0)
+          ? (cityFacingDot(_world, _center, _cam) > LIMB_FADE_LO ? 1 : 0)
           : limbFade(_world, _center, _cam);
         if (lf <= 0) { this._hide(item); continue; }
 

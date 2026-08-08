@@ -17,7 +17,7 @@ export const Constants = {
   // edit must invalidate cached JSON without moving the user-visible release
   // number. Bump this on every ./data/ content change; leave VERSION for
   // actual releases.
-  DATA_VERSION: '1000',
+  DATA_VERSION: '1001',
 
   // ============================================================================
   // === INPUT (Delegation 1, 2026-05-31) ===
