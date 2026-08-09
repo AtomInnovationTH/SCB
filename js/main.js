@@ -2030,6 +2030,10 @@ async function init() {
           //    scenario-only: the berth standoff drops 4.5 m → 2.0 m (W12) and
           //    the HUD target panel / ToolOdds / ToolRecommender see a 2.0 m
           //    target instead of 7 m.
+          //    Register item 7 (2026-08-10): that oversize line is now TRUE by
+          //    the value it names — post-item-7 the setter re-derives
+          //    lengthM/widthM (2.0 / 1.82) instead of leaving the stale 0.30 /
+          //    0.27 this comment's claim accidentally relied on.
           whale.mass = 600;
           // Register item 8 (2026-08-07; plan 1786109997497): freeze the staged
           // whale's `_catchRenderMin` at 0 — swallow the per-frame floor writes

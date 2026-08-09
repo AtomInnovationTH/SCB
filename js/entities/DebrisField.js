@@ -39,8 +39,10 @@ const BACKGROUND_COUNT  = (Constants.DEBRIS && Constants.DEBRIS.BACKGROUND_COUNT
 
 /** Debris type definitions */
 // Phase 2 (ASPECT_CAPTURE): `aspect` = length:width ratio (1.0 = symmetric).
-// lengthM/widthM are derived per piece in _createDebrisData; keep these in
-// sync with Constants.ASPECT_CAPTURE.ASPECT_BY_TYPE.
+// lengthM/widthM are derived per piece in _createDebrisData and RE-DERIVED on
+// every resize by setDebrisSize (register item 7); keep these in sync with
+// Constants.ASPECT_CAPTURE.ASPECT_BY_TYPE (drift-guarded in
+// test-DebrisField-SizeSSOT.js).
 const DEBRIS_TYPES = {
   fragment:     { weight: 0.60, sizeMin: 0.1, sizeMax: 1.0, massMin: 0.01, massMax: 5, tumbleMin: 10, tumbleMax: 180, shape: 'icosahedron', aspect: 1.0 },
   rocketBody:   { weight: 0.12, sizeMin: 5, sizeMax: 11, massMin: 500, massMax: 5000, tumbleMin: 1, tumbleMax: 20, shape: 'cylinder', aspect: 3.5 },
@@ -1373,27 +1375,35 @@ export class DebrisField {
   }
 
   /**
-   * SSOT for the sizeMeter ↔ sceneSize pair (1 m = 1e-5 scene units).
+   * SSOT for the sizeMeter ↔ sceneSize pair (1 m = 1e-5 scene units) — and,
+   * post-item-7, for the aspect pair lengthM/widthM that feeds the capture
+   * verdicts (assessNetFit / presentedWidthForApproach / oversize_aspect).
    * Whale-in-cone phase 3 (Task 3): `sizeMeter` is NOT the rendered size — the
    * renderer scales instances by `sceneSize` (`_updateInstanceTransform`), and
    * the rendered extent is `renderScale × DebrisWireframe.getBoundingRadius`.
-   * Every size mutation must go through here so the pair can never desync (the
-   * ceremony scenario wrote `sizeMeter = 7` without `sceneSize` and cinched an
-   * 8 m net around a 0.23 m pebble while every gate believed 7 m).
+   * Every size mutation must go through here so the fields can never desync
+   * (the ceremony scenario wrote `sizeMeter = 7` without `sceneSize` and
+   * cinched an 8 m net around a 0.23 m pebble while every gate believed 7 m).
    * @param {object} debris
    * @param {number} sizeMeter
    * @returns {object} debris
    */
   static setDebrisSize(debris, sizeMeter) {
-    // NOT updated here: `lengthM` / `widthM` stay at their spawn values (the
-    // review's §Minor coherence trap). Deliberately left alone — they feed
-    // `assessNetFit`'s TOO_WIDE / END-ON ONLY verdicts and the
-    // `oversize_aspect` bounce (js/entities/CaptureNet.js:313, :403) plus
-    // TeachingSystem / DockingReticle readouts, so making them track a resize
-    // is a gameplay/UI change that needs its own tests + measurement, not a
-    // ride-along on a rendering fix. Recorded, not fixed.
     debris.sizeMeter = sizeMeter;
     debris.sceneSize = sizeMeter * 0.00001;
+    // Register item 7 (2026-08-10; plan 1786279689728): the aspect pair tracks
+    // the resize — same derivation as _createDebrisData (`:828-832`), keyed on
+    // `debris.type` AT CALL TIME so the retype-then-resize sites (`:2401→:2409`,
+    // `:2729→:2734`, `:3304→:3308`) pick up the NEW type's aspect. Was: left at
+    // spawn values, so a Kessler shard kept the blank body's verdict fields
+    // (measured: 26.4% of shards mis-verdicted the SMALL net, 23.6% bounced it
+    // at every attitude). Verdict RULES untouched — only the inputs track.
+    // aspect source is THIS module's table (creation's own); a drift guard in
+    // test-DebrisField-SizeSSOT.js pins it equal to ASPECT_BY_TYPE.
+    const aspect = (debris && DEBRIS_TYPES[debris.type]
+      && DEBRIS_TYPES[debris.type].aspect) || 1.0;
+    debris.lengthM = sizeMeter;
+    debris.widthM = sizeMeter / aspect;
     return debris;
   }
 
