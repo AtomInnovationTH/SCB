@@ -1231,7 +1231,17 @@ export class CaptureNetVisual {
         // (z=0) to the ring at z=-coneHeight render as the long bag-cone
         // strands cinching closed at the debris.
         const cinchProgress = Math.min(1, Math.max(0, net.stateTimer / CN.CINCH_CLOSE_TIME));
-        const curR = mouthRadius + (closedRadius - mouthRadius) * cinchProgress;
+        // Item 10: the sweep closes ONTO the catch and stops — floored at the
+        // mouth-plane contents floor (the kit's mouthFloorRadius), matching
+        // the film's rim ring, instead of sweeping through a catch that
+        // reaches the mouth plane. The floor is 0 whenever the contents stop
+        // short of the mouth (the mother scenario included), so the gated
+        // draw is bit-identical; at cinchProgress 1 this equals
+        // _setCinchedRim's radius exactly.
+        const curR = Math.max(
+          mouthRadius + (closedRadius - mouthRadius) * cinchProgress,
+          NetMeshKit.mouthFloorRadius(vis.kitHandle),
+        );
         vis.spinAngle += net.spinRate * Math.PI * 2 * dt;
         for (let i = 0; i < weightCount; i++) {
           const angle = (2 * Math.PI * i / weightCount) + vis.spinAngle;
@@ -1387,11 +1397,22 @@ export class CaptureNetVisual {
     const { rimWeights, drawstringLine, apexHub, closedRadius, coneHeight, weightCount } = vis;
     apexHub.visible = true;
     drawstringLine.visible = true;
+    // Item 10: the rim furniture honours the same mouth-plane contents floor
+    // the film already draws (the kit's mouthFloorRadius — ONE home, clamped
+    // to mouthRadius). A catch whose silhouette reaches the mouth plane holds
+    // the film's rim ring open; the weights/drawstring now ride that radius
+    // instead of closing to closedRadius THROUGH the catch (measured: every
+    // SMALL-net held catch, 0.75 m film rim vs 0.11 m weights). 0 whenever
+    // the contents stop short of the mouth — the mother scenario included —
+    // so the gated draw is bit-identical. Angles keep the visual's frozen
+    // vis.spinAngle basis (never the kit's _rimAngles/_spinAngle — that swap
+    // would rotate the mother drawstring and move the fabric baseline).
+    const r = Math.max(closedRadius, NetMeshKit.mouthFloorRadius(vis.kitHandle));
     for (let i = 0; i < weightCount; i++) {
       const angle = (2 * Math.PI * i / weightCount) + vis.spinAngle;
       rimWeights[i].position.set(
-        closedRadius * Math.cos(angle),
-        closedRadius * Math.sin(angle),
+        r * Math.cos(angle),
+        r * Math.sin(angle),
         -coneHeight,
       );
       rimWeights[i].visible = true;

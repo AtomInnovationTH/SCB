@@ -1187,6 +1187,28 @@ export const NetMeshKit = {
   },
 
   /**
+   * Item 10 (register: cinch furniture honours the contents floor): the radius
+   * the contents floor demands at the MOUTH plane — the max over the spokes of
+   * the clamped floor at `h._mouthZ` (0 when no contents reach it). This is
+   * the SAME value the kit's own `setCinchedRim` / `setMouthFraction` floor
+   * at (`max(closedRadius, …)` / `max(mouthRadius·f, …)`), exposed so
+   * CaptureNetVisual's cinch furniture (`_setCinchedRim`, the CINCH_CLOSING
+   * sweep) can ride it instead of closing THROUGH a catch whose silhouette
+   * reaches the mouth plane (an oversized catch held the film's rim ring open
+   * at up to mouthRadius while the weights bunched to closedRadius inside the
+   * hull). Reads the handle's stored contents spec — never a re-derived
+   * floor. Pure; no allocations (one clamped-floor slab test per spoke).
+   * Null-safe (a handle-less consumer reads 0), matching the `if (h.kitHandle)`
+   * guard the drape driver already applies.
+   * @param {object} h handle
+   * @returns {number} floor radius at the mouth plane (scene units), ≥ 0
+   */
+  mouthFloorRadius(h) {
+    if (!h) return 0;
+    return _mouthFloorMax(h);
+  },
+
+  /**
    * Render the rim nodes + drawstring as a STATIC fully-cinched ring at the
    * closed radius on the mouth plane (frozen, no spin advance).
    * @param {object} h handle
