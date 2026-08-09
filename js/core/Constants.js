@@ -2589,6 +2589,20 @@ export const Constants = {
     // whale-in-cone item 8) — keeps a 500 kg+ catch legible at the muzzle
     // standoff.
     MOTHER_CATCH_MIN_RENDER_M: 2.0,
+    // Reel-entry engagement ramp for the floor above (whale-in-cone item 15,
+    // 2026-08-09 — owner decision: RAMP, plan 1786237166000). Pre-item-15 the
+    // floor engaged at full strength on the FIRST reel frame — a measured
+    // one-frame pop of 1.31× (2 m catch) to 3.33× (0.6 m fragment) at exactly
+    // the instant the ceremony camera is on the catch. The reel/berth write
+    // sites now ease the WRITTEN VALUE base → floor over this many NET-domain
+    // seconds (the ceremony-scaled dt the net's own update applies, so the
+    // ramp stretches under slow-mo like every other net animation). Readers
+    // are untouched — the one clamp-aware SSOT effectiveRenderScale still owns
+    // the predicate — and the scenario's _catchRenderMin property freeze
+    // swallows the write whatever its value, so every gate stays bit-identical.
+    // 0 degenerates to the pre-item-15 step. Feel knob: retune freely; it is
+    // not a gate quantity.
+    MOTHER_CATCH_MIN_RENDER_RAMP_S: 0.6,
 
     // ── Line-taut tug (mother-net-reel plan §9 Phase B) ──
     // When the net cinches onto a whale with residual relative velocity, the

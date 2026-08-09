@@ -622,6 +622,14 @@ export class NetProjectile {
      *  reelProgress denominator (review fix: do NOT derive from tetherPaidOut,
      *  which disagrees with the live seed after contact→reel drift). */
     this._reelSeedM      = null;
+    /** @type {number} Net-domain seconds since reel entry, accumulated in the
+     *  reel/berth ticks — the ramp key for the readability floor's engagement
+     *  (whale-in-cone item 15: the floor eases in over
+     *  MOTHER_CATCH_MIN_RENDER_RAMP_S instead of popping on the first reel
+     *  frame). Seeded 0 at _enterMotherReel, NEVER reset while held — keying
+     *  on stateTimer would re-ramp at BERTHED entry (stateTimer resets on
+     *  every _transitionTo), a second pop at the nose. */
+    this._floorRampT     = 0;
     /** @type {number|null} Depth (metres) the catch rides INSIDE the bag past
      *  the apex, along the frozen bag axis (launchDirection). Seeded at
      *  REELING entry from the live capture geometry — the depth the cinch
@@ -1269,6 +1277,9 @@ export class NetProjectile {
     // tetherPaidOut < berthStandoffM), which collapsed the denominator to
     // ~0 and snapped progress 0→1 instead of easing.
     this._reelSeedM = Math.max(this._remainingM, 1e-3);
+    // Item 15: the readability floor's engagement ramp starts at reel entry
+    // (see _catchFloorScale). Seeded HERE, once — never at BERTHED.
+    this._floorRampT = 0;
     this._fwdLagged = new THREE.Vector3(0, 0, 1).applyQuaternion(player.quaternion).normalize();
 
     // Capture the catch's attitude in the SHIP frame so the berth hold can
@@ -1287,6 +1298,41 @@ export class NetProjectile {
     this._tumbleCarryover = Math.min(tumbleRate, CN.TUMBLE_CARRYOVER_MAX_RAD_S ?? 0.6);
     this._tumbleCarryAngle = 0;   // V7: accumulation starts fresh each catch
     return true;
+  }
+
+  /**
+   * @private The ramped `_catchRenderMin` VALUE for the reel/berth write sites
+   * (whale-in-cone register item 15, 2026-08-09 — owner decision: RAMP; plan
+   * 1786237166000). Pre-item-15 the floor engaged at full strength on the
+   * first reel frame — a measured one-frame pop of 1.31× (2 m catch,
+   * tmp/i11-step.log) to 3.33× (0.6 m fragment,
+   * test-CaptureNet-CaptureTransition.js) at exactly the instant the ceremony
+   * camera is on the catch. The written value now eases base → fullFloor over
+   * MOTHER_CATCH_MIN_RENDER_RAMP_S of net dt (the ceremony-scaled domain this
+   * tick already runs in, so the ramp stretches under slow-mo like every
+   * other net animation), on a smoothstep so both ends have zero velocity.
+   *
+   * Writer-side ONLY: every reader (the probe, the bag's contents floor, both
+   * matrix writers) still reads the one clamp-aware SSOT
+   * DebrisField.effectiveRenderScale, whose predicate (`_catchRenderMin >
+   * base`, only raises) makes a ramped value ≤ base inert — an at/above-floor
+   * catch's drawn size never moves. The scenario's `_catchRenderMin` property
+   * freeze swallows this write whatever its value, so every gate stays
+   * bit-identical (item-8 D3). The accumulator is seeded at _enterMotherReel
+   * and never reset while held (the berth re-ramp trap — item-15 plan F6).
+   * Scalar arithmetic only — the per-frame path stays allocation-free.
+   * @param {object} d — the canonical catch debris
+   * @param {number} dt — net-domain seconds (already ceremony-scaled)
+   * @returns {number} scene-unit scale floor for `_catchRenderMin`
+   */
+  _catchFloorScale(d, dt) {
+    this._floorRampT += dt;
+    const fullFloor = DebrisWireframe.scaleForRenderRadiusM(CN.MOTHER_CATCH_MIN_RENDER_M ?? 2.0, d.type, d.id);
+    const rampS = Math.max(1e-6, CN.MOTHER_CATCH_MIN_RENDER_RAMP_S ?? 0.6);
+    const frac = Math.min(1, this._floorRampT / rampS);
+    const ease = frac * frac * (3 - 2 * frac);           // smoothstep
+    const base = d.sceneSize || (d.sizeMeter ? d.sizeMeter * 0.00001 : 0);
+    return base + (fullFloor - base) * ease;
   }
 
   /**
@@ -1417,7 +1463,7 @@ export class NetProjectile {
 
     d._armPinned = true;
     d._captured = true;
-    d._catchRenderMin = DebrisWireframe.scaleForRenderRadiusM(CN.MOTHER_CATCH_MIN_RENDER_M ?? 2.0, d.type, d.id);
+    d._catchRenderMin = this._catchFloorScale(d, dt);   // item 15: ramped at reel entry
     debrisField.pinCapturedDebris(d, _v3d);
 
     // Tension readout (HUD): base + mass factor, same shape as the daughter.
@@ -1647,7 +1693,7 @@ export class NetProjectile {
 
     d._armPinned = true;
     d._captured = true;
-    d._catchRenderMin = DebrisWireframe.scaleForRenderRadiusM(CN.MOTHER_CATCH_MIN_RENDER_M ?? 2.0, d.type, d.id);
+    d._catchRenderMin = this._catchFloorScale(d, dt);   // item 15: ramp continues; never restarts at berth
     debrisField.pinCapturedDebris(d, _v3d);
     return true;
   }
