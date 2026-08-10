@@ -5241,11 +5241,14 @@ export class ArmUnit {
 
   /**
    * HOLDING_CATCH: daughter is docked at her strut tip carrying a captured
-   * debris cinched in the net, waiting for the (not-yet-implemented) furnace
-   * transfer. She holds position like DOCKED but is intentionally NOT charged
-   * and NOT in the DOCKED state, so `ArmManager._findDockedArm()` skips her and
-   * the other daughters remain available. The captured debris is re-pinned to
-   * the strut tip every frame (full size) so it never drifts or vanishes.
+   * debris cinched in the net, running the staged FURNACE_TRANSFER timeline
+   * below (hold → chop → feed → `CATCH_PROCESSED` → RELOADING). She holds
+   * position like DOCKED but is intentionally NOT charged and NOT in the DOCKED
+   * state, so `ArmManager._findDockedArm()` skips her and the other daughters
+   * remain available. The captured debris is re-pinned to the strut tip every
+   * frame (full size) so it never drifts or vanishes. `recall()` REFUSES this
+   * state (she is already home, and reeling would dump the cargo) — the timeline
+   * here is the only thing that clears her.
    * @private
    */
   _updateHoldingCatch(dt, parentPos, parentQuat) {
