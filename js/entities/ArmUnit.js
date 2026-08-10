@@ -1324,6 +1324,19 @@ export class ArmUnit {
   recall() {
     if (this.state === S.DOCKED || this.state === S.EXPENDED) return;
 
+    // HOLDING_CATCH: she is already home at her strut tip and OCCUPIED with a
+    // parked catch — recall is meaningless, so refuse it (player-facing, in the
+    // mother-launcher's blocked-refusal idiom). The old fall-through silently
+    // cleared capturedDebris with no CATCH_PROCESSED, no score, no salvage, and
+    // left _armPinned/_capturedByArm/_armPinPos set on the debris: a ghost pin.
+    if (this.state === S.HOLDING_CATCH) {
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        text: `${this.displayName}: Recall refused — holding a catch. Furnace transfer clears her.`,
+        priority: 'warning',
+      });
+      return;
+    }
+
     // Detached arms cannot be recalled — tether severed
     if (this.isDetached) {
       eventBus.emit(Events.COMMS_MESSAGE, {

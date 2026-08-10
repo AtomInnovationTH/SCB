@@ -932,7 +932,9 @@ export class ArmManager {
   /**
    * Recall every *deployed* daughter (Shift+R). Unlike recallAll(), this skips
    * arms that are already resting / homing / spent (DOCKED, EXPENDED, RETURNING,
-   * DOCKING) and returns the number actually commanded home, so the caller can
+   * DOCKING) or parked with a catch (HOLDING_CATCH — recall refuses her, so
+   * commanding her would eat the hold; see ArmUnit.recall) and returns the
+   * number actually commanded home, so the caller can
    * give honest feedback ("Reeling in all daughters (N)" vs "nothing to reel")
    * instead of the old always-positive "All daughters recalled" notice that read
    * as a no-op when nothing was out (2026-06-14 reel-in fix).
@@ -947,6 +949,7 @@ export class ArmManager {
       if (arm.state === S.EXPENDED) continue;
       if (arm.state === S.RETURNING) continue;
       if (arm.state === S.DOCKING) continue;
+      if (arm.state === S.HOLDING_CATCH) continue; // parked with cargo — recall refuses her
       if (typeof arm.recall === 'function') {
         // Zero-fuel reel on the mothership tether motor: stuck / fuel-depleted
         // tethered daughters always come home (never abandoned as EXPENDED).
@@ -982,8 +985,9 @@ export class ArmManager {
    *     closest scan; selection alone must never short-circuit eligibility.
    *   • Otherwise iterates this.arms.
    *   • Selects arms in any non-resting state (i.e. NOT DOCKED, EXPENDED,
-   *     RETURNING, DOCKING — those are already on their way home or unable
-   *     to be recalled).
+   *     RETURNING, DOCKING, HOLDING_CATCH — those are already on their way
+   *     home, unable to be recalled, or parked with a catch recall must not
+   *     destroy).
    *   • Picks the candidate with the smallest world-space distance from
    *     the mother. When `motherPos`/`arm.position` is unresolvable the scan
    *     silently keeps `eligible[0]` — acceptable fallback.
@@ -1002,7 +1006,8 @@ export class ArmManager {
       && a.state !== S.DOCKED
       && a.state !== S.EXPENDED
       && a.state !== S.RETURNING
-      && a.state !== S.DOCKING;
+      && a.state !== S.DOCKING
+      && a.state !== S.HOLDING_CATCH; // parked with cargo — recall refuses her
 
     // (0) Selection-aware: recall the SELECTED deployed daughter first.
     if (this.selectedArmIndex >= 0) {
