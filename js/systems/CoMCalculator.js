@@ -98,9 +98,17 @@ function getDaughterMass(arm) {
   // Active states where the daughter is physically away from the strut tip
   // (TRANSIT, APPROACH, etc.) — the daughter is still tethered but for CoM
   // purposes it's at the strut tip or slightly beyond. Simplify: mass at tip.
-  return arm.config.type === 'weaver'
+  const armMass = arm.config.type === 'weaver'
     ? Constants.V5_WEAVER_MASS
     : Constants.V5_SPINNER_MASS;
+  // Cargo-continuity S2 (bug B2): a daughter parked in HOLDING_CATCH is holding
+  // a captured body — that mass is cargo and must move CoM / inertia. Add it at
+  // the strut tip (same point as the daughter). Guarded so a detached/expended
+  // holder (already returned 0 above) and an empty/null catch contribute nothing.
+  // For CoM this full mass applies directly; computeInertia splits the cargo
+  // contribution out and clamps it with the berthed mass (INERTIA_MAX_FACTOR).
+  const cargoMass = (arm.capturedDebris && arm.capturedDebris.mass) || 0;
+  return armMass + cargoMass;
 }
 
 /**
@@ -238,6 +246,13 @@ export function computeInertia(armManager, playerSatellite) {
   const arms = (armManager && armManager.arms) || [];
   const docks = (armManager && armManager._dockPositions) || [];
 
+  // Cargo-continuity S2 (bug B2): held-catch cargo contributes inertia, but —
+  // like the D6 berthed mass below — a multi-tonne catch at a strut tip would
+  // otherwise freeze rotation. Accumulate the daughter CARGO contribution
+  // separately and clamp it with the berthed mass under INERTIA_MAX_FACTOR, so
+  // the clamp reins in cargo/berth but never the structural config.
+  let cargoIxx = 0, cargoIyy = 0, cargoIzz = 0;
+
   for (let i = 0; i < arms.length; i++) {
     const arm = arms[i];
     const dp = docks[i];
@@ -249,8 +264,20 @@ export function computeInertia(armManager, playerSatellite) {
     addPoint(V5.STRUT_MASS, strutMidpointMeters(dp, alpha));
 
     // Daughter mass at tip (0 when detached/expended — same exclusion).
-    const dMass = getDaughterMass(arm);
-    if (dMass > 0) addPoint(dMass, strutTipMeters(dp, alpha));
+    // Split into structural (unclamped) and held-cargo (clamped below).
+    if (!arm.isDetached && arm.state !== Constants.ARM_STATES.EXPENDED) {
+      const armMass = arm.config.type === 'weaver'
+        ? Constants.V5_WEAVER_MASS
+        : Constants.V5_SPINNER_MASS;
+      const tip = strutTipMeters(dp, alpha);
+      addPoint(armMass, tip);
+      const cargoMass = (arm.capturedDebris && arm.capturedDebris.mass) || 0;
+      if (cargoMass > 0) {
+        cargoIxx += cargoMass * (tip.y * tip.y + tip.z * tip.z);
+        cargoIyy += cargoMass * (tip.x * tip.x + tip.z * tip.z);
+        cargoIzz += cargoMass * (tip.x * tip.x + tip.y * tip.y);
+      }
+    }
 
     // Bridle rings — only when both flags are on (mirror computeCoM).
     if (Constants.FEATURE_FLAGS.BRIDLE_RING && Constants.FEATURE_FLAGS.COM_TRACKING) {
@@ -259,23 +286,27 @@ export function computeInertia(armManager, playerSatellite) {
     }
   }
 
-  // D6: berthed catch mass, included but clamped. Model it as a fore point mass
-  // one barrel half-length ahead; then bound the ADDED inertia so the total per
-  // axis never exceeds INERTIA_MAX_FACTOR × the stowed bus inertia. The max()
-  // guard ensures a legitimately heavy *deployed* configuration is never pulled
-  // BELOW its real inertia by the clamp (the clamp only reins in berthed mass).
+  // D6 + S2: berthed catch mass AND held daughter cargo, included but clamped.
+  // Berthed mass is modelled as a fore point mass one barrel half-length ahead;
+  // daughter cargo was accumulated at its strut tip above. Bound the ADDED
+  // inertia so the total per axis never exceeds INERTIA_MAX_FACTOR × the stowed
+  // bus inertia. The max() guard ensures a legitimately heavy *deployed*
+  // configuration is never pulled BELOW its real inertia by the clamp (the clamp
+  // only reins in berthed/cargo mass).
   const cns = playerSatellite && playerSatellite._captureNetSystem;
   const berthed = (cns && typeof cns.getBerthedMassKg === 'function')
     ? cns.getBerthedMassKg() : 0;
-  if (berthed > 0) {
+  if (berthed > 0 || cargoIxx > 0 || cargoIyy > 0 || cargoIzz > 0) {
     const factor = Constants.ATTITUDE?.INERTIA_MAX_FACTOR ?? 3.0;
     const leverT2 = (L / 2) * (L / 2); // transverse lever² (fore capture point)
     const leverR2 = (R / 2) * (R / 2); // small roll radius²
     const capT = factor * busTransverse;
     const capR = factor * busRoll;
-    ixx = Math.min(ixx + berthed * leverT2, Math.max(ixx, capT));
-    iyy = Math.min(iyy + berthed * leverT2, Math.max(iyy, capT));
-    izz = Math.min(izz + berthed * leverR2, Math.max(izz, capR));
+    const addT = berthed * leverT2;   // berthed transverse addition
+    const addR = berthed * leverR2;   // berthed roll addition
+    ixx = Math.min(ixx + addT + cargoIxx, Math.max(ixx, capT));
+    iyy = Math.min(iyy + addT + cargoIyy, Math.max(iyy, capT));
+    izz = Math.min(izz + addR + cargoIzz, Math.max(izz, capR));
   }
 
   return { ixx, iyy, izz };
