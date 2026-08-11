@@ -773,13 +773,15 @@ export class CaptureNetVisual {
           }
           break;
 
+        case STATES.PARKED:
         case STATES.BERTHED:
-          // Mother berth (§8 A2): cinched bag persists at the launcher with a
-          // short taut tether stub. The bag follows net.position — the bag's
-          // APEX anchor, which the berth hold keeps at the standoff while the
-          // pinned catch rides _catchSeatM metres inside (CaptureNet.js
-          // co-location fix). (Flag-off path — the ceremony switch above has
-          // its own BERTHED case.)
+          // Mother berth/park (§8 A2 + cargo-continuity S3): cinched bag
+          // persists at the launcher with a short taut tether stub. The bag
+          // follows net.position — the bag's APEX anchor, which the berth hold
+          // keeps at the standoff while the pinned catch rides _catchSeatM
+          // metres inside (CaptureNet.js co-location fix). PARKED renders
+          // identically — the bag is the container and is never faded.
+          // (Flag-off path — the ceremony switch above has its own case.)
           canisterMesh.visible = false;
           discMesh.visible = true;
           tetherLine.visible = true;
@@ -957,7 +959,7 @@ export class CaptureNetVisual {
     // Map the net FSM onto the kit's per-frame drape state. The web drapes
     // onto the catch through ENVELOP, settle-jiggles at ~2.5 Hz with a decaying
     // envelope, then shrink-wraps through CINCH_CLOSING to the bunched point
-    // that persists through REELING and BERTHED. FLIGHT keeps a slight cone
+    // that persists through REELING, BERTHED and PARKED. FLIGHT keeps a slight cone
     // bow (drape 0). Driven every frame so the jiggle phase advances and the
     // envelope decays; allocation-free (the kit reuses its webPositions buffer).
     if (vis.kitHandle) {
@@ -974,7 +976,8 @@ export class CaptureNetVisual {
         cinchFrac = Math.min(1, Math.max(0, net.stateTimer / CN.CINCH_CLOSE_TIME));
         if (garnish) jiggleAmp = mouthRadius * _NT.DRAPE_JIGGLE_CINCH_FRAC * (1 - cinchFrac);
       } else if (state === STATES.CAPTURED || state === STATES.REELING
-                 || state === STATES.BERTHED || state === STATES.SECURE_CHECK) {
+                 || state === STATES.BERTHED || state === STATES.PARKED
+                 || state === STATES.SECURE_CHECK) {
         drape = 1; cinchFrac = 1;   // welded shrink-wrap, no jiggle
       }
       if (drape > 0 || cinchFrac > 0 || vis.kitHandle._drape > 0 || vis.kitHandle._cinchFrac > 0) {
@@ -1315,12 +1318,15 @@ export class CaptureNetVisual {
         }
         break;
 
+      case STATES.PARKED:
       case STATES.BERTHED:
-        // Mother berth (mother-net-reel plan §8 A2): the cinched bag PERSISTS
-        // at the launcher with a short taut tether stub — identical rendering
-        // to the successful REELING case above. Explicit case so persistence
-        // is by design, not by the default: break accident (the plain-switch
-        // BERTHED case below is dead code under NET_CEREMONY).
+        // Mother berth/park (mother-net-reel plan §8 A2 + cargo-continuity S3):
+        // the cinched bag PERSISTS at the launcher with a short taut tether
+        // stub — identical rendering to the successful REELING case above, and
+        // identical across BERTHED→PARKED (the net IS the container; the bag is
+        // never faded). Explicit case so persistence is by design, not by the
+        // default: break accident (the plain-switch case below is dead code
+        // under NET_CEREMONY).
         canisterMesh.visible = false;
         coneMesh.visible = true;
         vis.tetherLine.visible = true;

@@ -35,7 +35,7 @@ import {
   KESSLER_SYSTEM, CAPTURE_NET, RUNTIME, ARM_MANAGER_EVENT, CARGO_SYSTEM,
 } from './upgradeEffectRoutes.js';
 
-class GameFlowManager {
+export class GameFlowManager {
   constructor() {
     /** @type {boolean} */
     this.paused = false;
@@ -971,7 +971,10 @@ class GameFlowManager {
         // Furnace consumed the catch — remove it from the field (emits
         // DEBRIS_REMOVED; wireframe/pins self-clear). Deferred here from the old
         // ARM_RETURNED/DEBRIS_CAPTURED path under park-the-catch.
-        if (debrisField && data.debrisId != null) {
+        // Cargo-continuity S3: { parked: true } (a mother catch at the end of
+        // its securing timer) keeps the body — credit landed, but the catch
+        // PARKS at the nose inside its net instead of being removed on camera.
+        if (debrisField && data.debrisId != null && !data.parked) {
           debrisField.removeDebris(data.debrisId);
         }
 

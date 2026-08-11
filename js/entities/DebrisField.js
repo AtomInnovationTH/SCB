@@ -1644,7 +1644,7 @@ export class DebrisField {
 
       // Propagate orbit (re-use pre-allocated temp instead of spread)
       const o = debris.orbit;
-      if (debris._onboardingPinned) {
+      if (debris._onboardingPinned || debris._motherParked) {
         // ── Onboarding tease pin ────────────────────────────────────────────
         // Skip propagation: this piece is held at a fixed offset in the mother's
         // LOCAL frame (forward + lateral), written to _scenePosition in
@@ -1652,6 +1652,14 @@ export class DebrisField {
         // (not the orbit) is the single source of truth all consumers read, so
         // the piece is stable, selectable, dead-ahead/off-to-the-side, and never
         // drifts. The orbit is left as a co-orbital fallback only.
+        // ── Mother berth/park hold (cargo-continuity S3) ───────────────────
+        // _motherParked: same skip. A berthed/parked catch is pinned at the
+        // nose every frame (updateBerthHold → pinCapturedDebris); if its own
+        // orbit kept propagating through an indefinite park, a later jettison
+        // would snap it to wherever the orbit drifted (the released catch was
+        // measured 15.4 km away — tmp/rv-disappear.log). _reseatOrbitOnRelease
+        // rebuilds the orbit from the pin at [K], so the frozen orbit is never
+        // read by anyone while held.
       } else {
         _tmpKmOrbit.semiMajorAxis = o.semiMajorAxis / Constants.SCENE_SCALE;
         _tmpKmOrbit.eccentricity = o.eccentricity;

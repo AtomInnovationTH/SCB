@@ -881,9 +881,10 @@ export class NetProjectile {
       case STATES.RELEASED:
       case STATES.FOLDED:
         break;
-      // Mother berth: the per-frame hold is driven by CaptureNetSystem (which
-      // owns the player/debrisField refs), not by the projectile's own switch.
+      // Mother berth/park: the per-frame hold is driven by CaptureNetSystem
+      // (which owns the player/debrisField refs), not by the projectile's switch.
       case STATES.BERTHED:
+      case STATES.PARKED:
         break;
     }
   }
@@ -1693,6 +1694,11 @@ export class NetProjectile {
 
     d._armPinned = true;
     d._captured = true;
+    // S3 orbit continuity: the mother hold owns this position from berth entry
+    // on — freeze the catch's own orbit propagation (DebrisField skips only
+    // _onboardingPinned otherwise) so a later jettison re-seats from the pin
+    // instead of snapping to an orbit that kept drifting during the hold.
+    d._motherParked = true;
     d._catchRenderMin = this._catchFloorScale(d, dt);   // item 15: ramp continues; never restarts at berth
     debrisField.pinCapturedDebris(d, _v3d);
     return true;
@@ -2100,17 +2106,19 @@ export class NetProjectile {
 
   /**
    * Release / abort: let debris and net go. Net inventory is consumed.
-   * BERTHED is the manual jettison ([K]) — clears pins, re-seats the orbit,
-   * frees the launcher. The securing timer (if still running) is cancelled.
+   * BERTHED/PARKED is the manual jettison ([K]) — clears pins, re-seats the
+   * orbit, frees the launcher. The securing timer (if still running) is
+   * cancelled; a PARKED catch was already credited (that score is not revoked).
    * @returns {boolean} Whether release occurred
    */
   release() {
     if (this.state !== STATES.CAPTURED &&
         this.state !== STATES.REELING &&
         this.state !== STATES.FLIGHT &&
-        this.state !== STATES.BERTHED) return false;
+        this.state !== STATES.BERTHED &&
+        this.state !== STATES.PARKED) return false;
 
-    const wasBerthed = this.state === STATES.BERTHED;
+    const wasBerthed = this.state === STATES.BERTHED || this.state === STATES.PARKED;
     this._transitionTo(STATES.RELEASED);
     this.capturedMass = 0;
     this.isActive = false;
@@ -2316,11 +2324,13 @@ export class CaptureNetSystem {
         }
       }
 
-      // ── Mother BERTHED hold + securing timer (mother-net-reel plan §8 A2) ──
-      // The projectile's own switch no-ops on BERTHED; the per-frame hold runs
-      // here because the system owns the player/debrisField refs. The berth
+      // ── Mother BERTHED/PARKED hold + securing timer (§8 A2 + cargo-continuity S3) ──
+      // The projectile's own switch no-ops on both states; the per-frame hold
+      // runs here because the system owns the player/debrisField refs. The hold
       // survives pruning (isActive stays true, state never STOWED/RELEASED).
-      if (net.state === STATES.BERTHED) {
+      // S3: the hold keeps running in PARKED — if the pin ever stops, the catch
+      // falls back to the orbit branch and reads as released.
+      if (net.state === STATES.BERTHED || net.state === STATES.PARKED) {
         const holding = net.updateBerthHold(dt);
         if (!holding) {
           // Dead target while docked (§4.19 mission-transition guard): clear
@@ -2330,13 +2340,15 @@ export class CaptureNetSystem {
           this.activeNets.splice(i, 1);
           continue;
         }
-        if (!net._berthProcessed && net._berthTimer > 0) {
+        if (net.state === STATES.BERTHED && !net._berthProcessed && net._berthTimer > 0) {
           net._berthTimer -= dt;
           if (net._berthTimer <= 0) {
-            // §19 terminal credit: the existing GameFlowManager CATCH_PROCESSED
-            // path awards score + salvage + clearDebris() + removeDebris +
-            // autosave. Order matters — removeDebris emits DEBRIS_REMOVED, so
-            // pins + visual are cleared on that signal too (idempotently).
+            // §19 terminal credit + S3 parking: the existing GameFlowManager
+            // CATCH_PROCESSED path awards score + salvage + clearDebris() +
+            // autosave. { parked: true } skips ONLY the field removal — the
+            // body is KEPT, held at the nose inside its net (the net IS the
+            // container). No teardown, no splice: the hold above keeps pinning
+            // the catch every frame, and the launcher stays blocked.
             net._berthProcessed = true;
             eventBus.emit(Events.CATCH_PROCESSED, {
               debrisId: net.targetDebris?.id,
@@ -2344,17 +2356,17 @@ export class CaptureNetSystem {
               source:   'mother',
               podIndex: net.podIndex,
               method:   'mother',
+              parked:   true,
             });
-            this._teardownBerth(net);
-            this.activeNets.splice(i, 1);
+            net._transitionTo(STATES.PARKED);
             continue;
           }
         }
       }
 
       // Remove terminal nets + handle inventory / cargo consequences.
-      // BERTHED is deliberately absent — a berthed net must hit neither the
-      // prune predicate nor the STOWED cargo hand-off (§8 A2).
+      // BERTHED and PARKED are deliberately absent — a held net must hit
+      // neither the prune predicate nor the STOWED cargo hand-off (§8 A2, S3).
       if (!net.isActive || net.state === STATES.STOWED || net.state === STATES.RELEASED) {
         // Mother exits (miss / release / forceResolve) — clear any pins the
         // reel/berth wrote. Idempotent; most exits fire before any pin exists.
@@ -2416,6 +2428,7 @@ export class CaptureNetSystem {
     debris._captured = false;
     debris._armPinned = false;
     debris._armPinPos = null;
+    debris._motherParked = false;
     debris._catchRenderMin = 0;
   }
 
@@ -2497,25 +2510,29 @@ export class CaptureNetSystem {
   getBerthedMassKg() {
     let sum = 0;
     for (const net of this.activeNets) {
-      if (net._isMother && net.state === STATES.BERTHED) sum += net.capturedMass || 0;
+      if (net._isMother && (net.state === STATES.BERTHED || net.state === STATES.PARKED)) {
+        sum += net.capturedMass || 0;
+      }
     }
     return sum;
   }
 
   /**
    * §8 A2 — single docked catch slot. The launcher is one nose patch; a
-   * berthed whale obstructs every cell, so a second fire is refused while
-   * anything is berthed.
+   * berthed or parked whale obstructs every cell, so a second fire is refused
+   * while anything is held (S3: the block persists through PARKED).
    * @returns {NetProjectile|null}
    */
   getDockedCatch() {
-    return this.activeNets.find(n => n._isMother && n.state === STATES.BERTHED) || null;
+    return this.activeNets.find(n => n._isMother
+      && (n.state === STATES.BERTHED || n.state === STATES.PARKED)) || null;
   }
 
   /**
-   * §8 A2 — manual jettison ([K]). Releases the berthed catch: pins cleared,
-   * orbit re-seated, net expended, launcher freed. The securing timer (if
-   * still running) is cancelled — jettison before expiry means NO score.
+   * §8 A2 — manual jettison ([K]). Releases the berthed/parked catch: pins
+   * cleared, orbit re-seated, net expended, launcher freed. The securing timer
+   * (if still running) is cancelled — jettison before expiry means NO score;
+   * a parked catch was already credited.
    * @returns {boolean} whether a docked catch was released
    */
   releaseDockedCatch() {
@@ -2869,7 +2886,7 @@ export class CaptureNetSystem {
     return this.activeNets.some(n =>
       n.podIndex >= 0 && n.isActive
       && n.state !== STATES.STOWED && n.state !== STATES.RELEASED
-      && n.state !== STATES.BERTHED);
+      && n.state !== STATES.BERTHED && n.state !== STATES.PARKED);
   }
 
   /**

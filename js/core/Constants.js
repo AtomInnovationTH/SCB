@@ -2497,9 +2497,18 @@ export const Constants = {
       // Mother-net-reel plan §8 A2: terminal mother-catch state. The catch is
       // pinned at the pod muzzle standoff, visible in the cinched net, adds
       // translational mass, and slews/burns with the ship until the securing
-      // timer (BERTH_SECURE_S) commits it for score + salvage + field removal,
-      // or the player jettisons it [K]. Replaces STOWED for mother catches.
+      // timer (BERTH_SECURE_S) commits it for score + salvage and parks it
+      // (cargo-continuity S3), or the player jettisons it [K]. Replaces STOWED
+      // for mother catches.
       BERTHED:       'BERTHED',       // catch docked at the mother launcher
+      // Cargo-continuity S3 (the headline): after the securing timer commits
+      // the credit, the catch PARKS — held at the nose inside its net,
+      // indefinitely, until it is digested/transferred (S6) or jettisoned [K].
+      // Nothing is removed on camera. The berth hold keeps pinning it every
+      // frame; getDockedCatch()/getBerthedMassKg() count PARKED; the launcher
+      // stays blocked with the existing line. The net IS the container — the
+      // bag is never faded.
+      PARKED:        'PARKED',        // credited catch held at the nose in its net
     },
 
     // ── Capture Modes ──
@@ -2545,9 +2554,11 @@ export const Constants = {
     BERTH_CLEARANCE_M:    1.0,
     // Securing ceremony: after NET_BERTHED the catch sits at the launcher for
     // this long while Houston reads the mass, then CATCH_PROCESSED fires with
-    // source:'mother' (score + salvage + clearDebris + field removal + autosave
-    // via the existing GameFlowManager path — plan §19). Jettison [K] before
-    // expiry aborts with NO score and the whale back in the field.
+    // source:'mother' (score + salvage + clearDebris + autosave via the
+    // existing GameFlowManager path — plan §19) and the catch PARKS (S3: the
+    // body is KEPT at the nose — { parked: true } skips only the field
+    // removal). Jettison [K] before expiry aborts with NO score and the whale
+    // back in the field.
     BERTH_SECURE_S:       4.0,
     // Long-tether reel speed-up: at REEL_SPEED 2.0 a 100 m shot would reel for
     // ~50 s wall-clock. The ease below is monotonic (never decelerates mid-
