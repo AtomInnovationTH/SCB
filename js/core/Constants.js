@@ -2918,17 +2918,32 @@ export const Constants = {
       HIGHLIGHTS_TIME_SCALE:  1.0,
 
       // ── REEL_IN beat (mother-net-reel plan §11.2 Phase D.2) ──
-      // A trailing beat chained after SECURED_SETTLE for mother catches only:
-      // a 3/4 view framing mother + incoming catch, released to the player cam
-      // at berth (NET_BERTHED) or at this wall-clock cap — whichever first.
-      // The cap exists so a corridor hold (≤ 8 s) or a 100 m long-tether reel
-      // never holds a cinematic for the full ~25 s. The beat runs at 1.0×
-      // timeScale: CeremonyTimeScale multiplies the reel's dt (§4.15), so a
-      // slowmo beat would literally slow the winch — the reel IS the
-      // spectacle, don't dilate it. Skipped entirely under
-      // prefers-reduced-motion and for daughter catches (arm-framed already).
+      // A trailing beat chained after SECURED_SETTLE for mother catches only,
+      // released to the player cam at berth (NET_BERTHED → the PARK_HOLD chain,
+      // S4) or at this wall-clock cap — whichever first. The cap exists so a
+      // corridor hold (≤ 8 s) or a 100 m long-tether reel never holds a
+      // cinematic for the full ~25 s. The beat runs at 1.0× timeScale:
+      // CeremonyTimeScale multiplies the reel's dt (§4.15), so a slowmo beat
+      // would literally slow the winch — the reel IS the spectacle, don't
+      // dilate it. Skipped entirely under prefers-reduced-motion and for
+      // daughter catches (arm-framed already).
+      // S4 (2026-08-11): the old "3/4 view framing mother + incoming catch"
+      // spec was the measured retreat (REELING 22.6 m / BERTHED 22.9 m — a
+      // 1.5 m catch read ~68 px). REEL_IN now frames THE CATCH (~8–12 m hold,
+      // mother as context) — see CameraSystem._netCeremonyBeatPos.
       REEL_BEAT_MAX_S:      12.0,   // wall-clock cap (never hold for 40 s)
       REEL_BEAT_FOV:        42,
+
+      // ── PARK_HOLD beat (cargo-continuity S4) ──
+      // Chained at NET_BERTHED from the REEL_IN beat: under S3 the catch PARKS
+      // at the nose instead of being deleted, so the berth IS the payoff — the
+      // camera holds on the parked catch (same ~8–12 m catch-framed hold as
+      // REEL_IN, so the chain is seamless) then releases by the clock. The
+      // first-ever mother catch holds longer — the first_net_park teaching
+      // moment (TeachingSystem, fired by CATCH_PROCESSED { parked: true })
+      // lands during it.
+      PARK_HOLD_S:          5.0,
+      PARK_HOLD_FIRST_S:    10.0,
 
       // ── Visual geometry ratios — §5.1 ──
       CONE_OPEN_RADIUS_FRAC:         1.0,    // mouth radius / (D_mesh × 0.5)
@@ -3878,7 +3893,7 @@ export const Constants = {
     DEFAULT_DURATION_MS: 7000,
     PERSISTENCE_KEY: 'teachingSeen',
     QUEUE_DRAIN_INTERVAL_S: 6,   // CP-4 §4 — drain queued overlays at ≤1 per this many seconds
-    TOTAL_MOMENTS: 28,           // UX-3 N1: +first_scan/first_arm_deploy; +first_net_failed/first_tether_snap; Phase 0.6: +first_high_tumble_target/first_despin_in_spec; Phase 1.5: +first_detail_scan; Phase 2: +first_aspect_target; Phase 3b: +first_fragmentation; Net ladder: +first_small_daughter_deploy/first_large_daughter_deploy/first_whale_target/first_deltav_waste
+    TOTAL_MOMENTS: 29,           // UX-3 N1: +first_scan/first_arm_deploy; +first_net_failed/first_tether_snap; Phase 0.6: +first_high_tumble_target/first_despin_in_spec; Phase 1.5: +first_detail_scan; Phase 2: +first_aspect_target; Phase 3b: +first_fragmentation; Net ladder: +first_small_daughter_deploy/first_large_daughter_deploy/first_whale_target/first_deltav_waste; cargo-continuity S4: +first_net_park
   },
 
   // ============================================================================

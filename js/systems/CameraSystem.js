@@ -2150,9 +2150,20 @@ export class CameraSystem {
   }
 
   /**
-   * NET_BERTHED handler — release the REEL_IN beat to the player cam.
-   * Outside the reel beat this is a no-op (the berth can also land after the
-   * beat's wall-clock cap released us already).
+   * NET_BERTHED handler — chain the PARK_HOLD beat off the REEL_IN beat.
+   * Cargo-continuity S4: under S3 the catch PARKS at the nose instead of being
+   * deleted, so the berth IS the payoff — do not release to the player cam
+   * here. The park hold is APPENDED (never a same-index swap) so the lerp's
+   * prevKey is REEL_IN: both share the catch-framed pos/look formula, so
+   * `lerpVectors(REEL_IN, PARK_HOLD, ease)` is position-exact at every ease and
+   * the camera holds rock-steady through the chain. A same-index swap would
+   * leave prevKey = SECURED_SETTLE and reset ease to 0 — snapping the camera
+   * ~5–7 m back to the muzzle-side pose at the payoff frame.
+   *
+   * The normal beat-advance then exits by the clock with completedNormally, so
+   * the first-deploy flag write is preserved. Outside the reel beat this is a
+   * no-op (the berth can also land after the beat's wall-clock cap released us
+   * already, or mid capture-beats on a close-range shot).
    * @private
    */
   _onNetBerthed(payload) {
@@ -2161,7 +2172,17 @@ export class CameraSystem {
     if (c.podIndex < 0 || c.podIndex !== payload.podIndex) return;
     const beat = c.beats[c.beatIndex];
     if (beat && beat.key === 'REEL_IN') {
-      this._exitNetCeremony(true);
+      const NC = Constants.CAPTURE_NET.NET_CEREMONY;
+      c.beats.push({
+        key: 'PARK_HOLD',
+        // First-ever mother catch holds longer — the first_net_park teaching
+        // moment (CATCH_PROCESSED { parked: true }) lands during it.
+        duration: c.isFirstEver ? (NC.PARK_HOLD_FIRST_S ?? 10.0) : (NC.PARK_HOLD_S ?? 5.0),
+        fov: NC.REEL_BEAT_FOV ?? 42,   // unchanged from REEL_IN — no FOV pop
+        timeScale: 1.0,                // §4.15 — never dilate the berth hold
+      });
+      c.beatIndex = c.beats.length - 1;
+      c.beatTimer = 0;
     }
   }
 
@@ -2267,19 +2288,23 @@ export class CameraSystem {
           .addScaledVector(side, 0.4 * D_M)
           .addScaledVector(fwd, 2.0 * D_M)
           .addScaledVector(localUp, 0.4 * D_M);
-      case 'REEL_IN': {
-        // Phase D.2 — 3/4 view framing mother (armPos = pod muzzle) AND the
-        // incoming catch (debrisPos). Camera sits off the pod↔catch axis at
-        // the midpoint, offset side+up by a fraction of the separation so the
-        // framing widens as the catch pays in and tightens as it berths.
-        // Floor the offset at ~2 whale-lengths so a near-berthed catch still
-        // reads against the hull instead of clipping the near plane.
-        const mid = this._netCeremony._v3e.copy(armPos).add(debrisPos).multiplyScalar(0.5);
-        const sep = armPos.distanceTo(debrisPos);
-        const off = Math.max(sep * 0.45, 2 * D_M);
-        return out.copy(mid)
-          .addScaledVector(side, off * 0.8)
-          .addScaledVector(localUp, off * 0.6);
+      case 'REEL_IN':
+      case 'PARK_HOLD': {
+        // Cargo-continuity S4 (2026-08-11) — frame THE CATCH, mother as
+        // context. The old 3/4 "mother + incoming catch" midpoint shot is the
+        // measured retreat (REELING 22.6 m, BERTHED 22.9 m — a 1.5 m catch
+        // read ~68 px in tmp/rv-disappear.log). Hold ~8–12 m off the LIVE
+        // catch instead, side/up off the reel line (the SECURED_SETTLE lesson:
+        // never on the catch↔muzzle axis), scaled by the catch so a 7 m whale
+        // still fits the frame. The mother grows into frame as context as the
+        // catch closes; at berth/park the payoff is the catch AT the nose,
+        // large. REEL_IN and PARK_HOLD share the formula so the NET_BERTHED
+        // chain is seamless (identical pos + look, no camera jump).
+        const sizeM = this._netCeremony._net?.targetDebris?.sizeMeter || 2;
+        const holdM = Math.min(Math.max(2 * sizeM, 8), 12);
+        return out.copy(debrisPos)
+          .addScaledVector(side, holdM * M * 0.8)
+          .addScaledVector(localUp, holdM * M * 0.6);
       }
       default:
         return out.copy(armPos);
@@ -2326,8 +2351,10 @@ export class CameraSystem {
         // Midpoint of net and debris
         return out.copy(netPos).add(debrisPos).multiplyScalar(0.5);
       case 'REEL_IN':
-        // Phase D.2 — track the incoming catch biased slightly toward the
-        // muzzle, so the berth destination stays in frame as it closes.
+      case 'PARK_HOLD':
+        // Phase D.2 + S4 — track the incoming catch biased slightly toward the
+        // muzzle, so the berth destination stays in frame as it closes. Shared
+        // with PARK_HOLD so the berth chain has no look-target jump.
         return out.copy(debrisPos).multiplyScalar(0.7)
           .addScaledVector(armPos, 0.3);
       default:
@@ -2383,6 +2410,15 @@ export class CameraSystem {
     // mid-reel miss (dead target, strain slip) does NOT re-emit
     // NET_CEREMONY_COMPLETE (already spent at CAPTURED), so poll the state.
     if (beat && beat.key === 'REEL_IN' && c._net && c._net.state !== 'REELING') {
+      this._exitNetCeremony(false);
+      return null;
+    }
+
+    // S4: the park hold lives in BERTHED/PARKED — a jettison [K] or a
+    // dead-target teardown ends it the frame the hold breaks (same idiom as
+    // the REEL_IN guard above).
+    if (beat && beat.key === 'PARK_HOLD' && c._net
+        && c._net.state !== 'BERTHED' && c._net.state !== 'PARKED') {
       this._exitNetCeremony(false);
       return null;
     }

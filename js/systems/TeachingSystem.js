@@ -50,6 +50,13 @@ export const TEACHING_MOMENTS = [
     icon: '✅',
   },
   {
+    id: 'first_net_park',
+    title: 'Catch Parked at the Nose',
+    body: 'A caught whale rides at the nose in its net — it is never deleted. It has mass (watch your drift), blocks the net launcher, and stays until you jettison it with K.',
+    duration: 9000,
+    icon: '🎣',
+  },
+  {
     id: 'first_conjunction',
     title: 'Conjunction Warning',
     body: 'A "conjunction" means two objects are about to pass dangerously close. Your Collision Avoidance system will suggest a dodge burn if you need one.',
@@ -322,6 +329,11 @@ export class TeachingSystem {
 
     // 3. first_capture — DEBRIS_CAPTURED
     on(Events.DEBRIS_CAPTURED, () => this._trigger('first_capture'));
+
+    // first_net_park — CATCH_PROCESSED with the body KEPT (cargo-continuity
+    // S3/S4): the mother parks her catch at the nose; the teaching beat lands
+    // during the PARK_HOLD camera hold on the first mother catch.
+    on(Events.CATCH_PROCESSED, (d) => { if (d && d.parked) this._trigger('first_net_park'); });
 
     // 4 & 12. first_conjunction / first_active_sat_warning — CONJUNCTION_ALERT
     on(Events.CONJUNCTION_ALERT, (data) => {
