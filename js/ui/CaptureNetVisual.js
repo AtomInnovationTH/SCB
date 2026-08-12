@@ -335,7 +335,17 @@ export class CaptureNetVisual {
   /** @private */
   _onNetFired(payload) {
     const { key, armIndex, podIndex } = resolveNetId(payload);
-    if (this._activeVisuals.has(key)) return; // already tracking
+    const existing = this._activeVisuals.get(key);
+    if (existing) {
+      // S5: a DYING bag must not block the next net's visual. A staged failure
+      // holds the key for the beat + fade (~2.4 s) where the legacy miss held
+      // it for 1.0 s, and COOLDOWN_MISS is 1 s — so a re-fire would have found
+      // the key taken and rendered NO bag at all. A new net for the same
+      // launcher supersedes a bag that is only fading/detached; a live one
+      // still wins (the duplicate-NET_FIRED guard this replaces).
+      if (!existing.detached && !existing.failure && !existing.fadingOut) return;
+      this._removeNetVisual(key);
+    }
     const net = this._getNet(armIndex, podIndex);
     if (!net) return;
     this._createNetVisual(key, armIndex, podIndex, net);
@@ -425,7 +435,7 @@ export class CaptureNetVisual {
   _onNetTorn(payload) {
     const { key, armIndex, podIndex } = resolveNetId(payload);
     const vis = this._activeVisuals.get(key);
-    if (!vis) return;
+    if (!vis || !vis.kitHandle) return;   // flag-off disc path: no kit to tear, legacy removal
     vis.detached = true;       // we own the bag from here (the projectile is leaving)
     vis.failure = {
       kind: 'rip',
@@ -762,6 +772,10 @@ export class CaptureNetVisual {
               contentsZ: 0,
             });
             beat.cinch = open;
+            // The furniture must open WITH the fabric — the state switch never
+            // runs for a detached bag, so drive the rim ring/strands here or
+            // the weights stay bunched around a bag that has already let go.
+            this._stageFailureFurniture(vis);
           }
           if (f >= 1) this._endFailureBeat(key, vis);
         }

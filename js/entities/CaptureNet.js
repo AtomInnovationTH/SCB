@@ -847,7 +847,20 @@ export class NetProjectile {
             || this.state === STATES.BRAKE
             || this.state === STATES.ENVELOP
             || this.state === STATES.CINCH_CLOSING
-            || this.state === STATES.SECURE_CHECK)) {
+            || this.state === STATES.SECURE_CHECK
+            // S5 failure staging: MISSED used to be a ZERO-frame state (the
+            // system auto-reeled in the same tick), so a frozen position never
+            // rendered. A staged failure now HOLDS MISSED for
+            // FAILURE_STAGING_S — without this the bag would sit at its
+            // absolute contact point while the launcher co-orbits away at
+            // ~0.7 scene units/s (~100 km over the beat), i.e. the beat would
+            // play on a bag that vanishes (TRAP 1 / plan §2 C2 all over again).
+            // Both staged reasons fire while distanceTraveled === tetherPaidOut
+            // (oversize at the SECURE_CHECK resolve; strain slip on the FIRST
+            // reel tick), so this holds the bag exactly where SECURE_CHECK left
+            // it AND matches the empty reel-back's progress-0 value below —
+            // continuous in, continuous out.
+            || this.state === STATES.MISSED)) {
       const M_NET = 0.00001;
       this.position.x = anchor.x / M_NET + this.launchDirection.x * this.distanceTraveled;
       this.position.y = anchor.y / M_NET + this.launchDirection.y * this.distanceTraveled;
