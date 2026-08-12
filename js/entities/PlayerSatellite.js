@@ -4267,10 +4267,13 @@ export class PlayerSatellite extends THREE.Group {
   }
 
   /**
-   * Mother-net-reel plan §4.4: inject the CaptureNetSystem so _applyThrust can
-   * read getBerthedMassKg(). Deliberately a setter (not an import) — the
-   * CaptureNet module imports OrbitalMechanics and Constants, and a direct
-   * PlayerSatellite → CaptureNet import would risk a cycle.
+   * Mother-net-reel plan §4.4: inject the CaptureNetSystem so the berthed-mass
+   * channel (getBerthedMassKg) is reachable — read by computeInertia, by
+   * ArmManager.getCargoMassKg, and by _applyThrust's legacy-mock fallback
+   * (S10: the live thrust path reads ArmManager.getCargoMassKg, berthed +
+   * racks). Deliberately a setter (not an import) — the CaptureNet module
+   * imports OrbitalMechanics and Constants, and a direct PlayerSatellite →
+   * CaptureNet import would risk a cycle.
    * @param {import('./CaptureNet.js').CaptureNetSystem} cns
    */
   setCaptureNetSystem(cns) {
@@ -6380,22 +6383,29 @@ export class PlayerSatellite extends THREE.Group {
       return;
     }
 
-    // Mother-net-reel plan §4.4/§8 A2: berthed-catch translational mass.
-    // ONE massFactor scales ti AND mag at the top — the CoM-leak block below
-    // reads mag, and _deltaVSpent += mag happens first, so both must see the
-    // laden value. The clamp is NOT optional: raw (130+5000)/130 ≈ 39× and
-    // 23 t ≈ 178× would leave thrust authority at 0.5–2.5% — a soft-lock.
-    // Rotation stays kinematic (unscaled) and applyCartesianImpulse is
-    // deliberately unscaled (the AP models RCS/station-keeping, not the main
-    // engine) — RCS translation stays brisk while main thrust is heavy.
-    // this.mass is NEVER mutated (recoil, I_mother and drag all read it).
-    const berthed = (this._captureNetSystem && typeof this._captureNetSystem.getBerthedMassKg === 'function')
-      ? this._captureNetSystem.getBerthedMassKg() : 0;
-    if (berthed > 0) {
+    // Mother-net-reel plan §4.4/§8 A2 + cargo-continuity S10: CARGO translational
+    // mass, wherever it sits. ONE massFactor scales ti AND mag at the top — the
+    // CoM-leak block below reads mag, and _deltaVSpent += mag happens first, so
+    // both must see the laden value. The clamp is NOT optional: raw
+    // (130+5000)/130 ≈ 39× and 23 t ≈ 178× would leave thrust authority at
+    // 0.5–2.5% — a soft-lock. Rotation stays kinematic (unscaled) and
+    // applyCartesianImpulse is deliberately unscaled (the AP models
+    // RCS/station-keeping, not the main engine) — RCS translation stays brisk
+    // while main thrust is heavy. this.mass is NEVER mutated (recoil, I_mother
+    // and drag all read it).
+    // S10: read TOTAL cargo aboard (berthed + daughter racks) via the
+    // ArmManager.getCargoMassKg SSOT — the same quantity getMassBudget folds
+    // into ΔV, so handling and range agree. Falls back to the berthed-only
+    // read for legacy mocks without the accessor (byte-identical to pre-S10).
+    const cargo = (this.armManager && typeof this.armManager.getCargoMassKg === 'function')
+      ? this.armManager.getCargoMassKg()
+      : (this._captureNetSystem && typeof this._captureNetSystem.getBerthedMassKg === 'function')
+        ? this._captureNetSystem.getBerthedMassKg() : 0;
+    if (cargo > 0) {
       const CN = Constants.CAPTURE_NET || {};
       const mult = CN.MASS_EFFECT_MULT ?? 1.0;
       const maxFactor = CN.MASS_EFFECT_MAX ?? 2.0;
-      const massFactor = 1 / (1 + Math.min(berthed * mult / this.mass, maxFactor));
+      const massFactor = 1 / (1 + Math.min(cargo * mult / this.mass, maxFactor));
       ti.x *= massFactor; ti.y *= massFactor; ti.z *= massFactor;
       mag *= massFactor;
     }

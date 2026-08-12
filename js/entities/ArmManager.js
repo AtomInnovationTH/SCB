@@ -1748,6 +1748,42 @@ export class ArmManager {
   }
 
   /**
+   * Cargo-continuity S10 (register item 35): the ONE SSOT for *cargo aboard* —
+   * the mother berth (BERTHED/PARKED/TRANSFERRING, via getBerthedMassKg) PLUS
+   * every daughter's heldCatches rack. Both range (getMassBudget) and handling
+   * (PlayerSatellite._applyThrust) read this, so a catch's kilograms count the
+   * same wherever it sits — that is the mechanism of the campaign loop
+   * (range ↔ cargo ↔ processing during the journey). Guarded exactly like the
+   * S2/S6 CoMCalculator sites: plain-object mocks may lack the fields.
+   *
+   * A detached or expended daughter's rack does NOT count: that mass left with
+   * her, and CoMCalculator.getDaughterMass already returns 0 for those holders —
+   * the two ledgers must agree on what "aboard" means (§6). Unreachable today
+   * (HOLDING_CATCH is in neither detach()'s DETACHABLE set nor deorbit
+   * eligibility), pinned by test so it stays true.
+   *
+   * The in-hand `capturedDebris` scalar is deliberately NOT counted: it is the
+   * haul, and getMassBudget excludes a deployed daughter's own mass too, so
+   * counting her cargo would be inconsistent. (Register item 45 owns the
+   * adjacent gap: a HOLDING_CATCH daughter's own arm mass leaves the budget.)
+   * @returns {number} kg of captured mass currently aboard, wherever it sits
+   */
+  getCargoMassKg() {
+    const berthed = (this.playerSatellite
+        && this.playerSatellite._captureNetSystem
+        && typeof this.playerSatellite._captureNetSystem.getBerthedMassKg === 'function')
+      ? this.playerSatellite._captureNetSystem.getBerthedMassKg() : 0;
+    let rack = 0;
+    for (const arm of this.arms) {
+      if (arm.isDetached || arm.state === ARM_STATES.EXPENDED) continue;
+      if (Array.isArray(arm.heldCatches)) {
+        for (const held of arm.heldCatches) rack += (held && held.mass) || 0;
+      }
+    }
+    return berthed + rack;
+  }
+
+  /**
    * Get mass budget data for HUD display.
    * Computes current system mass and Tsiolkovsky ΔV remaining.
    * Config G (ST-9.2): coreDry = V5 bus dry mass + strut mass (struts stay on mothership).
@@ -1792,13 +1828,17 @@ export class ArmManager {
     // wetMass AND dryMass (it rides along whether or not the tanks are full —
     // it is not propellant). Without this the HUD promises ΔV the laden ship
     // can no longer deliver and the AP happily engages.
+    // S10: the fold is CARGO ABOARD (berthed + every daughter rack) via the
+    // getCargoMassKg SSOT — a transferred catch's kilograms still ride the
+    // ship. berthedMass stays as its own field for the HUD "Berthed:" line.
     const berthedMass = (this.playerSatellite
         && this.playerSatellite._captureNetSystem
         && typeof this.playerSatellite._captureNetSystem.getBerthedMassKg === 'function')
       ? this.playerSatellite._captureNetSystem.getBerthedMassKg() : 0;
+    const cargoMass = this.getCargoMassKg();
 
-    const wetMass = coreDry + xenonCurrent + coldGasCurrent + dockedArmMass + berthedMass;
-    const dryMass = coreDry + dockedArmMass + berthedMass;
+    const wetMass = coreDry + xenonCurrent + coldGasCurrent + dockedArmMass + cargoMass;
+    const dryMass = coreDry + dockedArmMass + cargoMass;
 
     // Tsiolkovsky: ΔV = Isp × g0 × ln(m_wet / m_dry)
     const isp = Constants.OCTOPUS_CORE_HALL_ISP;
@@ -1820,6 +1860,7 @@ export class ArmManager {
       wetMass: Math.round(wetMass),
       dryMass: Math.round(dryMass),
       berthedMass: Math.round(berthedMass * 10) / 10,
+      cargoMass: Math.round(cargoMass * 10) / 10,
       deltaV: Math.round(deltaV),
       isp,
     };
