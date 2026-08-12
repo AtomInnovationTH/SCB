@@ -516,6 +516,116 @@ export function suggestStowArm(armManager, playerSatellite) {
   return bestIdx;
 }
 
+/**
+ * Cargo-continuity S7 — pick the daughter that should receive a parked mother
+ * catch, or `null` when no daughter may take it.
+ *
+ * This is the INVERSE question to `suggestStowArm`, which answers "which arm
+ * contributes most to CoM drift" (its score is the mass-weighted tip projection
+ * ONTO the CoM offset, and its filter keeps DEPLOYED/DEPLOYING arms). A carrier
+ * must instead be HOME with a free cargo cell, and loading it should make trim
+ * BETTER — so this scores the anti-projection: the measured drop in CoM drift
+ * from adding the cargo at that strut tip.
+ *
+ *   score = W_CG · (driftBefore − driftAfter) + W_DEPLOY · (1 − deployability)
+ *
+ * where deployability is the propellant fraction — there is no per-arm panel
+ * health in the tree (only the mother has `solarPanelHealth`). The second term is
+ * the owner's "a daughter that cannot usefully deploy is the right mule".
+ *
+ * This function is also the single gatekeeper for "may this piece go to a
+ * daughter at all", so there is exactly one place that decides:
+ *   • the MASS GATE — above `CARGO_TRANSFER.MAX_KG` the body stays on the tether
+ *     at the nose (at 44–114× the mother's mass the system CoM sits inside the
+ *     cargo, so moving it off the thrust axis is the physically wrong move);
+ *   • the FREE-CELL rule — `heldCatches.length < DAUGHTER_CARGO_CELLS`;
+ *   • the HOME rule — DOCKED or HOLDING_CATCH only, never detached/expended (a
+ *     daughter away from her strut has nothing to pin the cargo to);
+ *   • the LAST-DAUGHTER guard — never consume the last capture-capable daughter,
+ *     so an automatic hand-off can never strand the fleet with zero usable arms.
+ *
+ * @param {object} armManager — ArmManager (or mock) with .arms[], ._dockPositions[]
+ * @param {object} [playerSatellite] — passed through to computeCoM
+ * @param {number} cargoMassKg — mass of the piece being handed over
+ * @returns {number|null} arm index, or null when nothing may carry it
+ */
+export function suggestCargoArm(armManager, playerSatellite, cargoMassKg) {
+  const mass = Number(cargoMassKg) || 0;
+  if (mass <= 0) return null;
+
+  const CT = (Constants.CAPTURE_NET && Constants.CAPTURE_NET.CARGO_TRANSFER) || {};
+  const maxKg = CT.MAX_KG ?? 2000;
+  if (mass > maxKg) return null;                       // monster: stays on the axis
+
+  const arms = armManager.arms || [];
+  const docks = armManager._dockPositions || [];
+  if (!arms.length) return null;
+
+  const S = Constants.ARM_STATES;
+  const cells = Constants.DAUGHTER_CARGO_CELLS ?? 2;
+  const reserve = Constants.ARM_RESERVE_FUEL ?? 0;
+
+  // A daughter that could still take a capture: home, charged, fuelled. Loading
+  // one of these costs the fleet a working arm; loading a HOLDING_CATCH arm costs
+  // nothing extra (she is already occupied).
+  const captureCapable = (arm) => !!arm && !arm.isDetached
+    && arm.state === S.DOCKED
+    && arm.springCharged !== false
+    && (arm.fuel ?? 0) > reserve;
+  const capableCount = arms.reduce((n, a) => n + (captureCapable(a) ? 1 : 0), 0);
+
+  const com = computeCoM(armManager, playerSatellite);
+  const p = com.position;
+  const totalMass = com.totalMass || 0;
+  const driftBefore = Math.sqrt(p.x * p.x + p.y * p.y + p.z * p.z);
+
+  const W_CG = CT.W_CG ?? 1.0;
+  const W_DEPLOY = CT.W_DEPLOY ?? 0.5;
+
+  let bestIdx = null;
+  let bestScore = -Infinity;
+  let bestFuel = Infinity;
+
+  for (let i = 0; i < arms.length; i++) {
+    const arm = arms[i];
+    const dp = docks[i];
+    if (!arm || !dp) continue;
+
+    // Home with a free cell, and still part of the ship.
+    if (arm.isDetached || arm.state === S.EXPENDED) continue;
+    if (arm.state !== S.DOCKED && arm.state !== S.HOLDING_CATCH) continue;
+    const held = Array.isArray(arm.heldCatches) ? arm.heldCatches.length : 0;
+    if (held >= cells) continue;
+
+    // Never spend the last capture-capable daughter on cargo.
+    if (captureCapable(arm) && capableCount <= 1) continue;
+
+    const alpha = arm.getAimAlpha ? arm.getAimAlpha() : (arm._aimAlpha || 0);
+    const tip = strutTipMeters(dp, alpha);
+
+    // CoM after adding `mass` at this tip: (M·p + m·tip) / (M + m).
+    const denom = totalMass + mass;
+    if (denom <= 0) continue;
+    const ax = (totalMass * p.x + mass * tip.x) / denom;
+    const ay = (totalMass * p.y + mass * tip.y) / denom;
+    const az = (totalMass * p.z + mass * tip.z) / denom;
+    const driftAfter = Math.sqrt(ax * ax + ay * ay + az * az);
+
+    const deployability = Math.max(0, Math.min(1, (arm.fuel ?? 0) / 100));
+    const score = W_CG * (driftBefore - driftAfter) + W_DEPLOY * (1 - deployability);
+
+    // Tie-break: the least deployable daughter is the right mule.
+    const fuel = arm.fuel ?? 0;
+    if (score > bestScore + 1e-12 || (Math.abs(score - bestScore) <= 1e-12 && fuel < bestFuel)) {
+      bestScore = score;
+      bestFuel = fuel;
+      bestIdx = i;
+    }
+  }
+
+  return bestIdx;
+}
+
 
 // ═══════════════════════════════════════════════════════════════════════════
 // §2  Plume Interference (Gap #8)

@@ -22,11 +22,17 @@ import { DebrisWireframe } from '../ui/DebrisWireframe.js';
 import { CeremonyTimeScale } from '../systems/CeremonyTimeScale.js';
 import { cartesianToKeplerian, orbitToSceneCartesianInto } from './OrbitalMechanics.js';
 import { strutLocalDirection } from './ArmDockBasis.js';
+// Cargo-continuity S7: the carrier scorer lives with the rest of the CoM maths
+// (ONE quantity, ONE computation — it reuses computeCoM/strutTipMeters).
+import { suggestCargoArm, computeCoMDrift } from '../systems/CoMCalculator.js';
 import * as THREE from 'three';
 
 const CN = Constants.CAPTURE_NET;
 const STATES = CN.STATES;
 const MODES = CN.MODES;
+// Cargo hand-off tuning (cargo-continuity S7). Same aliasing discipline as CN:
+// a live object reference, so a test that retunes a key is seen immediately.
+const CT = CN.CARGO_TRANSFER || {};
 const FEATURE_FLAGS = Constants.FEATURE_FLAGS;
 
 // Module-level scratch objects for the mother reel/berth per-frame math —
@@ -40,6 +46,11 @@ const _v3e = new THREE.Vector3();
 const _v3g = new THREE.Vector3();
 const _q0  = new THREE.Quaternion();
 const _q1  = new THREE.Quaternion();
+// Cargo hand-off scratch (cargo-continuity S7 — the transfer beat runs every
+// frame of the flight, so it allocates nothing either).
+const _v3f = new THREE.Vector3();
+const _qS7 = new THREE.Quaternion();
+const _WORLD_UP_S7 = new THREE.Vector3(0, 1, 0);
 // Tug scratch (Phase B §9) — catch/ship velocity sampling at CAPTURED.
 const _tugScratchPos = { x: 0, y: 0, z: 0 };
 const _tugScratchVel = { x: 0, y: 0, z: 0 };
@@ -2414,6 +2425,44 @@ export class CaptureNetSystem {
             continue;
           }
         }
+
+        // ── Cargo hand-off trigger (cargo-continuity S7) ──────────────────
+        // AUTOMATIC by owner ruling: the player holds no information the ship
+        // lacks, so there is no keypress. After the park ceremony's tail the
+        // ship stows the catch on the best daughter itself; while it cannot
+        // (every daughter out, every rack full, or the body over the mass
+        // gate) the catch stays parked and S3's "Launcher blocked" line stands
+        // as real information. Retry is silent — the refusal speaks once.
+        if (net.state === STATES.PARKED) {
+          net._parkedS = (net._parkedS || 0) + dt;
+          if (net._parkedS >= (CT.DELAY_S ?? 5.0)) {
+            // Throttle the retry: the scorer allocates (computeCoM), and an
+            // unstowable catch can sit parked for minutes — the net path must
+            // not allocate per frame (plan §13). The FIRST attempt is never
+            // throttled, so the hand-off lands on the beat.
+            net._cargoRetryS = (net._cargoRetryS || 0) + dt;
+            if (!net._cargoRefused || net._cargoRetryS >= (CT.RETRY_S ?? 0.5)) {
+              net._cargoRetryS = 0;
+              // `continue` on a successful start, mirroring the BERTHED→PARKED
+              // transition above: one state change per tick, so the flight
+              // always begins at t=0 on its own frame instead of consuming the
+              // trigger frame's (possibly huge) dt in one jump.
+              if (this._tryCargoTransfer(net)) continue;
+            }
+          }
+        }
+      }
+
+      // ── Cargo hand-off beat (cargo-continuity S7) ───────────────────────
+      // The catch + its bag fly the FurnaceBreakdownVisual chunk arc backwards:
+      // nose → strut tip, whole catch, no chunk pool, no scale ramp. The pin is
+      // rewritten EVERY frame (a gap reads as a release — S3's lesson) and the
+      // net's own position rides the same curve so the bag stays the container.
+      if (net.state === STATES.TRANSFERRING) {
+        if (this._updateCargoTransfer(net, dt)) {
+          this.activeNets.splice(i, 1);      // handed over: the net's job is done
+          continue;
+        }
       }
 
       // Remove terminal nets + handle inventory / cargo consequences.
@@ -2466,6 +2515,282 @@ export class CaptureNetSystem {
         this.activeNets.splice(i, 1);
       }
     }
+  }
+
+  /**
+   * Cargo-continuity S7 — try to hand a PARKED catch to a daughter's cargo rack.
+   *
+   * Automatic by owner ruling (2026-08-12): no hotkey. `suggestCargoArm` is the
+   * single gatekeeper for "may this piece go to a daughter, and which one" — it
+   * owns the mass gate, the free-cell rule, the home rule and the
+   * last-capture-capable-daughter guard. When it declines, the catch stays parked
+   * (S3's launcher block is then real information) and the refusal comms fires
+   * exactly ONCE per park; the retry is silent, so the transfer happens by itself
+   * the moment a daughter docks or a cell frees.
+   *
+   * @param {NetProjectile} net — a PARKED mother net
+   * @returns {boolean} true when the beat started
+   * @private
+   */
+  _tryCargoTransfer(net) {
+    const M_NET = 0.00001;  // 1 m in scene units (file convention: a local per method)
+    const d = net.targetDebris;
+    const player = this._player;
+    const armManager = this._armManager;
+    if (!d || !armManager || !Array.isArray(armManager.arms)) return false;
+
+    const massKg = net.capturedMass || d.mass || 0;
+    const armIndex = suggestCargoArm(armManager, player, massKg);
+    if (armIndex == null) {
+      if (!net._cargoRefused) {
+        net._cargoRefused = true;
+        const overGate = massKg > (CT.MAX_KG ?? 2000);
+        eventBus.emit(Events.COMMS_MESSAGE, {
+          source: 'HOUSTON', channel: 'CMD',
+          text: overGate
+            ? `Catch is ${Math.round(massKg)} kg — too heavy for a daughter's cargo rack. It rides the nose until the furnace takes it, or jettison [K].`
+            : 'No daughter can take the catch (none docked with a free cargo cell). Launcher stays blocked — jettison [K] to clear.',
+          priority: 'warning',
+        });
+      }
+      return false;
+    }
+
+    const arm = armManager.arms[armIndex];
+    if (!arm) return false;
+
+    // Endpoints, both exact so neither end snaps. START is the catch's LIVE
+    // drawn position — `_scenePosition`, what `pinCapturedDebris` wrote last
+    // frame (plan correction: NOT the bus centre; the parked catch lives at the
+    // berth-hold pin, and the bag apex sits `_catchSeatM` short of it). END is
+    // the rack SLOT the piece will occupy, so the arc lands exactly where
+    // `_pinHeldCatches` takes over.
+    const seatM = (net._catchSeatM || 0) * M_NET;
+    let start;
+    if (d._scenePosition && d._scenePosition.lengthSq() > 0) {
+      start = _v3f.copy(d._scenePosition);
+    } else {
+      start = _v3f.set(
+        (net.position?.x || 0) * M_NET,
+        (net.position?.y || 0) * M_NET,
+        (net.position?.z || 0) * M_NET,
+      );
+      if (seatM && net.launchDirection) start.addScaledVector(net.launchDirection, seatM);
+    }
+    const end = _v3g.copy(this._cargoSlotWorld(arm, d, _v3g));
+
+    net._cargoFrom = start.clone();
+    net._cargoTo = end.clone();
+    // Quadratic Bézier control point: bulge outward (away from the strut tip)
+    // so the catch arcs around the hull instead of shearing through it — the
+    // same shape as the furnace chunk arc, run backwards.
+    net._cargoCtrl = start.clone().lerp(end, 0.5);
+    _v3a.copy(start).sub(end);
+    if (_v3a.lengthSq() > 1e-12) {
+      _v3a.normalize().multiplyScalar((CT.ARC_BULGE_M ?? 2.0) * M_NET);
+      net._cargoCtrl.add(_v3a);
+    }
+    net._cargoArmIndex = armIndex;
+    // Trim before the hand-off, so the completion line can teach WHY this
+    // daughter was chosen (same quantity the CoM drift warning shows).
+    net._cargoDriftBefore = (armManager && armManager._dockPositions)
+      ? computeCoMDrift(armManager, player) : null;
+    net._cargoS = 0;
+    net._cargoDur = Math.max(1e-3, CT.FLIGHT_S ?? 3.0);
+    net._transitionTo(STATES.TRANSFERRING);
+
+    eventBus.emit(Events.CARGO_TRANSFER_START, {
+      debrisId:  d.id,
+      massKg,
+      podIndex:  net.podIndex,
+      armIndex,
+      armId:     arm.id,
+      durationS: net._cargoDur,
+      from: { kind: 'parkedCatch', debrisId: d.id },
+      to:   { kind: 'strutTip', armIndex },
+    });
+    return true;
+  }
+
+  /**
+   * Cargo-continuity S7 — the transfer beat, one frame.
+   *
+   * Drives ONE curve: the bag's apex anchor (`net.position`) and the catch's pin
+   * both come from the same Bézier evaluation, with the same seat offset the
+   * berth hold uses, so the catch stays seated INSIDE its bag in transit ("cargo
+   * stored in nets"). The pin is rewritten every frame — if it ever stops, the
+   * catch falls back to the orbit branch and reads as released.
+   *
+   * On arrival the piece is stowed on the rack and the daughter is put into
+   * HOLDING_CATCH (the pin loop in ArmManager only services REELING/DOCKING/
+   * HOLDING_CATCH, so a DOCKED carrier must transition or the piece would go
+   * unpinned for a frame). Mother-side fields are cleared to exactly what a
+   * daughter-caught rack piece carries.
+   *
+   * @param {NetProjectile} net — a TRANSFERRING mother net
+   * @param {number} dt — seconds
+   * @returns {boolean} true when the hand-off completed (caller splices the net)
+   * @private
+   */
+  _updateCargoTransfer(net, dt) {
+    const M_NET = 0.00001;  // 1 m in scene units (file convention: a local per method)
+    const d = net.targetDebris;
+    const debrisField = this._debrisField;
+    const armManager = this._armManager;
+    const arm = armManager?.arms?.[net._cargoArmIndex];
+
+    // Target or carrier lost mid-beat (mission transition / detach): put the
+    // catch back on the nose rather than dropping it — cargo is never destroyed.
+    if (!d || d.alive === false || !arm || !net._cargoFrom || !net._cargoTo) {
+      if (d && d.alive !== false) {
+        net._cargoRefused = false;
+        net._parkedS = 0;
+        net._transitionTo(STATES.PARKED);
+        return false;
+      }
+      this._teardownBerth(net);
+      return true;
+    }
+
+    // The carrier LEFT her strut mid-flight (the player can still deploy her —
+    // she is DOCKED, not HOLDING_CATCH, until arrival). Abort: her rack pin only
+    // runs in REELING/DOCKING/HOLDING_CATCH, so delivering to a departing arm
+    // would orphan the piece and it would read as released. The catch goes back
+    // to the nose and the retry re-picks a carrier.
+    const SA = Constants.ARM_STATES;
+    if (arm.state !== SA.DOCKED && arm.state !== SA.HOLDING_CATCH) {
+      net._cargoRefused = false;
+      net._parkedS = 0;
+      net._transitionTo(STATES.PARKED);
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        source: 'HOUSTON', channel: 'CMD',
+        text: `${arm.displayName || arm.id} left the strut — cargo stays at the nose.`,
+        priority: 'info',
+      });
+      return false;
+    }
+
+    net._cargoS = Math.min(net._cargoDur, (net._cargoS || 0) + dt);
+    const t = net._cargoDur > 0 ? net._cargoS / net._cargoDur : 1;
+    // Ease in-out so the catch leaves and arrives gently (an instant start reads
+    // as a kick, which the momentum model does not fund).
+    const te = t < 0.5 ? 2 * t * t : 1 - 2 * (1 - t) * (1 - t);
+
+    // Quadratic Bézier B(te) = (1−te)²·P0 + 2(1−te)·te·C + te²·P1.
+    // This curve carries the CATCH (both endpoints are catch positions), and the
+    // bag apex is derived from it — the same apex/seat split as updateBerthHold,
+    // just in the other direction, so the catch stays seated inside its bag.
+    const u = 1 - te;
+    _v3d.copy(net._cargoFrom).multiplyScalar(u * u)
+      .addScaledVector(net._cargoCtrl, 2 * u * te)
+      .addScaledVector(net._cargoTo, te * te);
+
+    const seatM = (net._catchSeatM || 0) * M_NET;
+    _v3e.copy(_v3d);
+    if (seatM && net.launchDirection) _v3e.addScaledVector(net.launchDirection, -seatM);
+    net.position.x = _v3e.x / M_NET;
+    net.position.y = _v3e.y / M_NET;
+    net.position.z = _v3e.z / M_NET;
+
+    if (debrisField && typeof debrisField.pinCapturedDebris === 'function') {
+      d._armPinned = true;
+      d._captured = true;
+      d._motherParked = true;              // orbit stays frozen for the whole beat
+      if (!d._armPinPos) d._armPinPos = new THREE.Vector3();
+      d._armPinPos.copy(_v3d);
+      debrisField.pinCapturedDebris(d, _v3d);
+    }
+
+    if (net._cargoS < net._cargoDur) return false;
+
+    // ── Arrival: the rack takes ownership ──
+    const stowed = (typeof arm._stowHeldCatch === 'function')
+      ? arm._stowHeldCatch(d)
+      : false;
+    if (!stowed) {
+      // Rack filled during the beat (should be unreachable — the scorer reserved
+      // a cell). Keep the cargo: put it back on the nose and let the retry pick
+      // another carrier.
+      net._cargoRefused = false;
+      net._parkedS = 0;
+      net._transitionTo(STATES.PARKED);
+      return false;
+    }
+
+    // Mother-side fields → exactly what a daughter-caught rack piece carries.
+    // _captured stays true (the rack holds it), _armPinned/_armPinPos are
+    // rewritten by the rack pin below, _motherParked clears so the piece behaves
+    // like every other held piece, and _catchRenderMin is DELIBERATELY kept: the
+    // readability floor is what the player has been looking at for the whole
+    // ceremony, and clearing it would pop the drawn size at the strut.
+    d._motherParked = false;
+    d._capturedByArm = arm;
+
+    const S = Constants.ARM_STATES;
+    if (arm.state !== S.HOLDING_CATCH) {
+      arm._breakdownStarted = false;       // fresh furnace bookkeeping for the piece
+      arm._breakdownChunksFired = 0;
+      // NOTE: `capturedDebris` is deliberately NOT cleared. A DOCKED arm should
+      // have none, but nulling it would destroy cargo if she somehow did — that
+      // is bug B1's exact shape, and the two laws (§1) forbid it.
+      if (typeof arm._transitionTo === 'function') arm._transitionTo(S.HOLDING_CATCH);
+      else arm.state = S.HOLDING_CATCH;
+    }
+    if (typeof arm._pinHeldCatches === 'function') {
+      arm._pinHeldCatches(this._player?.getPosition ? this._player.getPosition() : null);
+    }
+
+    net.isActive = false;
+    net._berthTimer = -1;
+    // The caller splices this net in the SAME tick, so the update loop never
+    // sees it again — which is why the prune's STOWED/RELEASED consequences (pin
+    // clearing, orbit re-seat, inventory restore) cannot fire on a delivered net
+    // and undo the rack's pin. This marker is for any reader holding a stale
+    // reference: the flight is over and the cargo belongs to the arm now.
+    net._cargoDelivered = true;
+    eventBus.emit(Events.CARGO_TRANSFER_COMPLETE, {
+      debrisId:  d.id,
+      massKg:    net.capturedMass || d.mass || 0,
+      podIndex:  net.podIndex,
+      armIndex:  net._cargoArmIndex,
+      armId:     arm.id,
+      cellIndex: Math.max(0, (arm.heldCatches?.length || 1) - 1),
+    });
+
+    // ONE player-facing line for the whole beat (the arc is its own feedback):
+    // who took the cargo, and what it did to the trim. That is how the automatic
+    // CG-first choice teaches itself without an arm-picker UI.
+    const driftAfter = (armManager && armManager._dockPositions)
+      ? computeCoMDrift(armManager, this._player) : null;
+    const trim = (net._cargoDriftBefore != null && driftAfter != null)
+      ? ` — trim ${net._cargoDriftBefore.toFixed(2)} → ${driftAfter.toFixed(2)} m`
+      : '';
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      source: 'HOUSTON', channel: 'CMD',
+      text: `Catch stowed on ${arm.displayName || arm.id}${trim}. Launcher clear.`,
+      priority: 'success',
+    });
+    return true;
+  }
+
+  /**
+   * Cargo-continuity S7 — where a piece will sit once it is on the rack, so the
+   * transfer arc ends exactly where `_pinHeldCatches` will hold it (no arrival
+   * snap). Delegates to `ArmUnit.heldSlotWorldInto` — ONE computation for the
+   * rack's geometry, shared by the pin and the arc, so the two cannot drift.
+   * @param {object} arm — the carrier
+   * @param {object} d — the piece being handed over
+   * @param {THREE.Vector3} out
+   * @returns {THREE.Vector3} out, in scene units
+   * @private
+   */
+  _cargoSlotWorld(arm, d, out) {
+    const slot = Array.isArray(arm.heldCatches) ? arm.heldCatches.length : 0;
+    const parentPos = this._player?.getPosition ? this._player.getPosition() : null;
+    if (typeof arm.heldSlotWorldInto === 'function') {
+      return arm.heldSlotWorldInto(slot, d.sizeMeter, parentPos, out);
+    }
+    return out.copy(arm.position || _v3a.set(0, 0, 0));
   }
 
   /**
@@ -2557,12 +2882,18 @@ export class CaptureNetSystem {
    * §8 A2 — berthed mass for the translational thrust scaling (plan §4.4).
    * Structured as a sum over attachments so a future CoM upgrade is
    * non-breaking. Replaces the dead getCapturedNetMass for the mother path.
-   * @returns {number} kg currently berthed at the mother launcher
+   *
+   * Cargo-continuity S7: TRANSFERRING counts too. The piece is in flight between
+   * the nose and a strut tip, still aboard, and the daughter's rack does not own
+   * it until arrival — so counting it here for the whole beat is what makes the
+   * cargo ledger CONTINUOUS across the hand-off (no double count, no gap).
+   * @returns {number} kg currently held at the mother launcher (incl. in transit)
    */
   getBerthedMassKg() {
     let sum = 0;
     for (const net of this.activeNets) {
-      if (net._isMother && (net.state === STATES.BERTHED || net.state === STATES.PARKED)) {
+      if (net._isMother && (net.state === STATES.BERTHED || net.state === STATES.PARKED
+                            || net.state === STATES.TRANSFERRING)) {
         sum += net.capturedMass || 0;
       }
     }
@@ -2573,11 +2904,16 @@ export class CaptureNetSystem {
    * §8 A2 — single docked catch slot. The launcher is one nose patch; a
    * berthed or parked whale obstructs every cell, so a second fire is refused
    * while anything is held (S3: the block persists through PARKED).
+   *
+   * Cargo-continuity S7: TRANSFERRING keeps the block. The catch is crossing the
+   * firing corridor for the length of the beat — the launcher frees when the
+   * piece lands on the rack, not when it leaves the nose.
    * @returns {NetProjectile|null}
    */
   getDockedCatch() {
     return this.activeNets.find(n => n._isMother
-      && (n.state === STATES.BERTHED || n.state === STATES.PARKED)) || null;
+      && (n.state === STATES.BERTHED || n.state === STATES.PARKED
+          || n.state === STATES.TRANSFERRING)) || null;
   }
 
   /**
@@ -2585,11 +2921,24 @@ export class CaptureNetSystem {
    * cleared, orbit re-seated, net expended, launcher freed. The securing timer
    * (if still running) is cancelled — jettison before expiry means NO score;
    * a parked catch was already credited.
+   *
+   * Cargo-continuity S7: a hand-off in flight is IRREVOCABLE — the beat is ~3 s,
+   * and releasing mid-arc would drop a body that is neither on the tether nor on
+   * the rack (there is no honest position for it). The refusal speaks so [K] is
+   * never silently ignored.
    * @returns {boolean} whether a docked catch was released
    */
   releaseDockedCatch() {
     const net = this.getDockedCatch();
     if (!net) return false;
+    if (net.state === STATES.TRANSFERRING) {
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        source: 'HOUSTON', channel: 'CMD',
+        text: 'Cargo is already in transit to the daughter — too late to jettison.',
+        priority: 'warning',
+      });
+      return false;
+    }
     return net.release();
   }
 

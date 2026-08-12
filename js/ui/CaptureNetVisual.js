@@ -288,6 +288,7 @@ export class CaptureNetVisual {
     this._boundNetReleased   = this._onNetReleased.bind(this);
     this._boundNetTorn       = this._onNetTorn.bind(this);
     this._boundNetFailed     = this._onNetFailed.bind(this);
+    this._boundCargoDone     = this._onCargoTransferred.bind(this);
     this._boundTierChanged   = (p) => { this._tier = p?.to ?? this._tier; };
 
     eventBus.on(Events.NET_FIRED,          this._boundNetFired);
@@ -297,6 +298,7 @@ export class CaptureNetVisual {
     eventBus.on(Events.NET_RELEASED,       this._boundNetReleased);
     eventBus.on(Events.NET_TORN,           this._boundNetTorn);
     eventBus.on(Events.NET_FAILED,         this._boundNetFailed);
+    eventBus.on(Events.CARGO_TRANSFER_COMPLETE, this._boundCargoDone);
     eventBus.on(Events.PERF_TIER_CHANGED,  this._boundTierChanged);
     this._tier = sceneManager?.currentTier ?? 'HIGH';
   }
@@ -422,6 +424,27 @@ export class CaptureNetVisual {
       if (vis) return;         // failure beat in flight — it owns the fade
     }
     this._removeNetVisual(key);
+  }
+
+  /**
+   * Cargo-continuity S7 — the hand-off landed: the piece is now on a daughter's
+   * cargo rack and the mother's net has been spliced out of `activeNets`.
+   *
+   * Without this the bag would POP: the update loop's `_getNet → null` path
+   * removes a vanished net's visual immediately. Reuse the established beat
+   * instead — freeze the bag where it arrived and fade it over 0.8 s (the same
+   * idiom as the daughter's furnace hand-off at NET_REEL_COMPLETED above), so the
+   * equipment leaves on camera while the CARGO it carried stays pinned at the
+   * strut tip by the rack. Continuity law: the catch never stops being drawn.
+   */
+  _onCargoTransferred(payload) {
+    const pi = payload?.podIndex;
+    if (pi == null || pi < 0) return;
+    const key = `pod_${pi}`;
+    const vis = this._activeVisuals.get(key);
+    if (!vis) return;
+    vis.detached = true;      // state-driven updates stop; the fade owns removal
+    this._fadeTimers.push({ key, timer: 0.8, duration: 0.8 });
   }
 
   /** @private
@@ -906,16 +929,21 @@ export class CaptureNetVisual {
 
         case STATES.PARKED:
         case STATES.BERTHED:
+        case STATES.TRANSFERRING:
           // Mother berth/park (§8 A2 + cargo-continuity S3): cinched bag
           // persists at the launcher with a short taut tether stub. The bag
           // follows net.position — the bag's APEX anchor, which the berth hold
           // keeps at the standoff while the pinned catch rides _catchSeatM
           // metres inside (CaptureNet.js co-location fix). PARKED renders
           // identically — the bag is the container and is never faded.
+          // S7: TRANSFERRING renders the same bag, still carrying the catch, but
+          // with NO tether — the hand-off leaves the launcher's line and the bag
+          // is the container in transit. net.position rides the Bézier, so the
+          // bag flies with the catch for free.
           // (Flag-off path — the ceremony switch above has its own case.)
           canisterMesh.visible = false;
           discMesh.visible = true;
-          tetherLine.visible = true;
+          tetherLine.visible = (state !== STATES.TRANSFERRING);
           discMesh.material.color.setHex(COL_DISC);
           discMesh.material.opacity = 0.6;
           break;
@@ -1137,6 +1165,7 @@ export class CaptureNetVisual {
         if (garnish) jiggleAmp = mouthRadius * _NT.DRAPE_JIGGLE_CINCH_FRAC * (1 - cinchFrac);
       } else if (state === STATES.CAPTURED || state === STATES.REELING
                  || state === STATES.BERTHED || state === STATES.PARKED
+                 || state === STATES.TRANSFERRING
                  || state === STATES.SECURE_CHECK) {
         drape = 1; cinchFrac = 1;   // welded shrink-wrap, no jiggle
       }
@@ -1492,6 +1521,7 @@ export class CaptureNetVisual {
 
       case STATES.PARKED:
       case STATES.BERTHED:
+      case STATES.TRANSFERRING:
         // Mother berth/park (mother-net-reel plan §8 A2 + cargo-continuity S3):
         // the cinched bag PERSISTS at the launcher with a short taut tether
         // stub — identical rendering to the successful REELING case above, and
@@ -1499,9 +1529,11 @@ export class CaptureNetVisual {
         // never faded). Explicit case so persistence is by design, not by the
         // default: break accident (the plain-switch case below is dead code
         // under NET_CEREMONY).
+        // S7: TRANSFERRING is the same welded bag in flight to a daughter's rack,
+        // minus the tether — it has left the launcher's line.
         canisterMesh.visible = false;
         coneMesh.visible = true;
-        vis.tetherLine.visible = true;
+        vis.tetherLine.visible = (net.state !== STATES.TRANSFERRING);
         coneMesh.material.color.setHex(COL_DISC);
         coneMesh.material.opacity = 0.55;
         this._setCinchedRim(vis);
@@ -1700,6 +1732,7 @@ export class CaptureNetVisual {
     if (this._boundNetReleased)   eventBus.off(Events.NET_RELEASED,       this._boundNetReleased);
     if (this._boundNetTorn)       eventBus.off(Events.NET_TORN,           this._boundNetTorn);
     if (this._boundNetFailed)     eventBus.off(Events.NET_FAILED,         this._boundNetFailed);
+    if (this._boundCargoDone)     eventBus.off(Events.CARGO_TRANSFER_COMPLETE, this._boundCargoDone);
     if (this._boundTierChanged)   eventBus.off(Events.PERF_TIER_CHANGED,  this._boundTierChanged);
 
     this._boundNetFired = null;

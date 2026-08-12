@@ -4605,20 +4605,22 @@ export class ArmUnit {
   }
 
   /**
-   * Cargo-continuity S6: pin every piece on the parked cargo rack, one slot
-   * per piece. Each piece gets the SAME standoff as the in-hand pin
-   * (`sizeMeter/2 + ARM_HOLD_CLEARANCE_M` along the hold axis); the
-   * lateral-bias direction is rotated `i × 2π/DAUGHTER_CARGO_CELLS` about that
-   * axis so N pieces ring the strut tip instead of stacking in one spot.
-   * Slot 0's rotation is zero, so a one-piece rack lands byte-identically on
-   * the pre-S6 biased `_pinCatchToSelf(parentPos, ARM_HOLD_LATERAL_BIAS)`
-   * position (the no-one-frame-jump contract from _updateDocking).
-   * @param {THREE.Vector3|null} [parentPos] freshest mother position
-   * @private
+   * Cargo-continuity S6/S7: world position of ONE cargo-rack slot.
+   *
+   * Extracted from `_pinHeldCatches` (which now calls it per piece) so the rack's
+   * geometry has exactly ONE computation — the S7 cargo hand-off needs to know
+   * where a piece WILL be pinned before it flies there, and a second copy of this
+   * expression is precisely the drift class register item 19 describes.
+   *
+   * @param {number} slotIndex — rack slot (0-based); slot 0 has zero bias rotation
+   * @param {number} sizeMeter — the piece's size, for the standoff radius
+   * @param {THREE.Vector3|null} parentPos — freshest mother position
+   * @param {THREE.Vector3} out — receives the position, scene units
+   * @returns {THREE.Vector3} out
    */
-  _pinHeldCatches(parentPos = null) {
-    // Resolve the hold axis exactly as _pinCatchToSelf does (net launch
-    // direction while the fired-net ref lives, else outboard from the mother).
+  heldSlotWorldInto(slotIndex, sizeMeter, parentPos, out) {
+    // Hold axis: net launch direction while the fired-net ref lives, else
+    // outboard from the mother.
     const dir = this._tmpHoldDir || (this._tmpHoldDir = new THREE.Vector3());
     let hasDir = false;
     const ld = this._firedNet && this._firedNet.launchDirection;
@@ -4632,27 +4634,49 @@ export class ArmUnit {
       hasDir = dir.lengthSq() > 1e-12;
     }
     if (hasDir) dir.normalize(); else dir.set(0, 0, 0);
+
     const clearance = (Constants.ARM_HOLD_CLEARANCE_M ?? 1.0);
     const bias = Constants.ARM_HOLD_LATERAL_BIAS ?? 0;
     const cells = Constants.DAUGHTER_CARGO_CELLS ?? 2;
-    const lat = this._tmpLatDir || (this._tmpLatDir = new THREE.Vector3());
-    const rot = this._tmpRackQuat || (this._tmpRackQuat = new THREE.Quaternion());
+    const radius = (sizeMeter || 0) / 2 + clearance;
+
+    out.copy(this.position).addScaledVector(dir, radius * M);
+    if (bias !== 0 && hasDir) {
+      const lat = this._tmpLatDir || (this._tmpLatDir = new THREE.Vector3());
+      const rot = this._tmpRackQuat || (this._tmpRackQuat = new THREE.Quaternion());
+      lat.crossVectors(dir, _WORLD_UP);
+      if (lat.lengthSq() < 1e-8) lat.set(1, 0, 0); // holdDir ∥ up — pick world-X
+      lat.normalize();
+      if (slotIndex !== 0) {
+        rot.setFromAxisAngle(dir, (slotIndex * 2 * Math.PI) / cells);
+        lat.applyQuaternion(rot);
+      }
+      out.addScaledVector(lat, radius * M * bias);
+    }
+    return out;
+  }
+
+  /**
+   * Cargo-continuity S6: pin every piece on the parked cargo rack, one slot
+   * per piece. Each piece gets the SAME standoff as the in-hand pin
+   * (`sizeMeter/2 + ARM_HOLD_CLEARANCE_M` along the hold axis); the
+   * lateral-bias direction is rotated `i × 2π/DAUGHTER_CARGO_CELLS` about that
+   * axis so N pieces ring the strut tip instead of stacking in one spot.
+   * Slot 0's rotation is zero, so a one-piece rack lands byte-identically on
+   * the pre-S6 biased `_pinCatchToSelf(parentPos, ARM_HOLD_LATERAL_BIAS)`
+   * position (the no-one-frame-jump contract from _updateDocking).
+   *
+   * S7: the per-slot geometry lives in `heldSlotWorldInto` — one computation,
+   * shared with the cargo hand-off's arc terminus.
+   * @param {THREE.Vector3|null} [parentPos] freshest mother position
+   * @private
+   */
+  _pinHeldCatches(parentPos = null) {
     for (let i = 0; i < this.heldCatches.length; i++) {
       const d = this.heldCatches[i];
       if (!d) continue;
-      const radius = (d.sizeMeter || 0) / 2 + clearance;
       if (!d._armPinPos) d._armPinPos = new THREE.Vector3();
-      d._armPinPos.copy(this.position).addScaledVector(dir, radius * M);
-      if (bias !== 0 && hasDir) {
-        lat.crossVectors(dir, _WORLD_UP);
-        if (lat.lengthSq() < 1e-8) lat.set(1, 0, 0); // holdDir ∥ up — pick world-X
-        lat.normalize();
-        if (i !== 0) {
-          rot.setFromAxisAngle(dir, (i * 2 * Math.PI) / cells);
-          lat.applyQuaternion(rot);
-        }
-        d._armPinPos.addScaledVector(lat, radius * M * bias);
-      }
+      this.heldSlotWorldInto(i, d.sizeMeter, parentPos, d._armPinPos);
       d._armPinned = true;
     }
   }

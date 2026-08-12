@@ -2513,6 +2513,12 @@ export const Constants = {
       // stays blocked with the existing line. The net IS the container — the
       // bag is never faded.
       PARKED:        'PARKED',        // credited catch held at the nose in its net
+      // Cargo-continuity S7: the parked catch is in flight from the nose to a
+      // daughter's cargo rack, still inside its net (the bag is the container in
+      // transit). The launcher stays blocked and the mass keeps counting as
+      // berthed for the whole beat — both drop at arrival, when the rack picks
+      // the piece up, so the cargo ledger is continuous across the hand-off.
+      TRANSFERRING:  'TRANSFERRING',  // parked catch flying nose → strut tip
     },
 
     // ── Capture Modes ──
@@ -2633,6 +2639,52 @@ export const Constants = {
     // 0 degenerates to the pre-item-15 step. Feel knob: retune freely; it is
     // not a gate quantity.
     MOTHER_CATCH_MIN_RENDER_RAMP_S: 0.6,
+
+    // ── Cargo hand-off: parked catch → daughter rack (cargo-continuity S7) ──
+    // The mother's nose is the only place a tethered mass can be towed (it must
+    // ride the thrust axis or every burn torques a non-rigid line), and it is
+    // also where both pods fire from — 12 cm apart, sharing one corridor. So a
+    // parked catch blocks the launcher by PHYSICS, and the only rigid attachment
+    // point this ship models is a daughter's strut tip. Hence the hand-off.
+    //
+    // Owner ruling (2026-08-12 design review): AUTOMATIC, no hotkey — the player
+    // holds no information the ship lacks (fuel, rack occupancy and the CG
+    // arithmetic are all better known to the ship), so a keypress would be a
+    // confirmation dialog with one option. The ship acts, names the carrier in
+    // comms, and refuses ONCE when it cannot.
+    CARGO_TRANSFER: {
+      // Delay from park to hand-off. Sized to the S4 PARK_HOLD camera beat (5 s)
+      // so the arc plays inside the payoff shot, whose framing already tracks the
+      // LIVE catch — the camera follows the transfer for free.
+      DELAY_S:        5.0,
+      // Retry cadence once the delay has elapsed but no carrier qualifies. The
+      // scorer runs computeCoM, which allocates — the net path must not allocate
+      // per frame (plan §13), and a catch can sit unstowable for minutes.
+      RETRY_S:        0.5,
+      // Flight time nose → strut tip. Short deliberately: the physically honest
+      // version is a 20–40 s slow walk (a 3 s toss implies ~5 m/s and ~1.5 m/s of
+      // reaction on the mother before arrest), but that needs momentum
+      // bookkeeping and an abort path — a separate order. 3 s matches the
+      // FurnaceBreakdownVisual chunk-arc idiom this beat reuses.
+      FLIGHT_S:       3.0,
+      // Outward bulge of the quadratic Bézier control point (metres), so the
+      // catch arcs around the hull instead of shearing through it. Same shape as
+      // the furnace chunk arc, run backwards.
+      ARC_BULGE_M:    2.0,
+      // Mass gate (kg). Above this a body stays on the tether at the nose until
+      // it is digested or jettisoned — it does NOT go to a strut tip. Physical
+      // rationale: at 44–114× the 201 kg mother (SL-16 8.9 t, CZ-5B 23 t) the
+      // system CoM sits inside the cargo, so moving that mass OFF the thrust axis
+      // is the wrong move. Measured against data/debris-catalog.json: 24 objects
+      // in 500–2000 kg are stowable, 22 heavier ones are not — so the whale's
+      // SIZE decides the player's options. Tuning, not doctrine.
+      MAX_KG:         2000,
+      // Carrier scorer weights (plan §2.2.1): CG-drift improvement first,
+      // "this daughter can't usefully deploy anyway" second. Deployability is
+      // propellant ONLY — there is no per-arm panel-health field in the tree.
+      W_CG:           1.0,
+      W_DEPLOY:       0.5,
+    },
 
     // ── Line-taut tug (mother-net-reel plan §9 Phase B) ──
     // When the net cinches onto a whale with residual relative velocity, the

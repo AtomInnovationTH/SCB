@@ -119,6 +119,17 @@ export const Events = {
   CATCH_BREAKDOWN_START: 'catch:breakdownStart', // { armId, debrisId, chunkCount } — chop begins
   CATCH_BREAKDOWN_CHUNK: 'catch:breakdownChunk', // { armId, debrisId, index, total } — one chunk fed
   NET_CONSUMED:          'net:consumed',         // { armIndex } — fed-in bag draws toward the mother
+  // Cargo hand-off (cargo-continuity S7). The parked mother catch is carried,
+  // still in its net, from the nose to a daughter's cargo rack. The existing
+  // breakdown events cannot carry this: their chunk pool and bag map are keyed by
+  // armIndex and `resolveArmIndex` returns −1 for an arm-less payload. Hence the
+  // anchor-carrying pair below — `from`/`to` are {kind,…} anchors so a listener
+  // can resolve either end without knowing which system owns it.
+  //   START:    { debrisId, massKg, podIndex, armIndex, armId, durationS,
+  //               from: { kind:'parkedCatch', debrisId }, to: { kind:'strutTip', armIndex } }
+  //   COMPLETE: { debrisId, massKg, podIndex, armIndex, armId, cellIndex }
+  CARGO_TRANSFER_START:    'cargo:transferStart',
+  CARGO_TRANSFER_COMPLETE: 'cargo:transferComplete',
   DEBRIS_REMOVED:     'debris:removed',
   DEBRIS_KESSLER:     'debris:kesslerEvent',
   DEBRIS_COLLISION:   'debris:collision',
