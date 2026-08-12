@@ -515,6 +515,29 @@ export function missReasonToText(reason) {
 }
 
 /**
+ * Cargo-continuity S5 (owner item 7): map a NET_CATCH_MISS reason to its staged
+ * failure beat, or null when the miss gets no staging. ONE home — the logic
+ * side (CaptureNetSystem's deferred auto-reel) and the visual side
+ * (CaptureNetVisual's beat) must never diverge on which failures are staged.
+ *   'bounce' — oversize_aspect: the bag slaps the broadside face and recoils,
+ *              the mouth never closes (drape up, then down).
+ *   'slip'   — strain_slip: the welded cinch releases and the catch slides out
+ *              of the mouth (cinchFrac back toward 0).
+ * cling_failed gets no staging (the wrap never closed — there is nothing to
+ * release), fragmented is owned by the fragmentation machinery, and
+ * timeout/tether_limit/target_lost have no target in frame.
+ * @param {string} reason
+ * @returns {'bounce'|'slip'|null}
+ */
+export function missFailureKind(reason) {
+  switch (reason) {
+    case 'oversize_aspect': return 'bounce';
+    case 'strain_slip':     return 'slip';
+    default:                return null;
+  }
+}
+
+/**
  * Auto-recommend capture mode based on target data.
  * Per CAPTURE_NET.md §3.6.
  *
@@ -666,6 +689,11 @@ export class NetProjectile {
      *  daughter-style reel-back so the net still stows/prunes instead of
      *  looping MISSED→REELING on the re-armed auto-reel. */
     this._motherReelFallback = false;
+    /** @type {'bounce'|'slip'|null} Cargo-continuity S5: the staged failure
+     *  beat this net's miss earned (missFailureKind). While MISSED with a
+     *  non-null kind, the system's auto-reel holds for FAILURE_STAGING_S so
+     *  the beat plays at the contact point before the empty reel-back. */
+    this._failureKind = null;
     // ── Reel corridor clearance (mother-net-reel plan §10 Phase C-lite) ──
     /** @type {boolean} True while the reel is holding at CORRIDOR_HOLD_M
      *  waiting for the recovery corridor to clear. */
@@ -2058,6 +2086,11 @@ export class NetProjectile {
   _miss(reason) {
     this.catchResult = 'miss';
     this._transitionTo(STATES.MISSED);
+    // S5 failure staging: a staged reason (bounce/slip) holds MISSED for
+    // FAILURE_STAGING_S in the system's auto-reel below, so the visual beat
+    // plays at the contact point before the empty reel-back. Unstaged
+    // reasons keep the same-tick auto-reel.
+    this._failureKind = missFailureKind(reason);
     // Review fix (strain-slip lifecycle): a miss can fire AFTER the net already
     // passed CAPTURED→REELING (the mother strain roll at reel entry), which
     // set _resultProcessed in CaptureNetSystem.update(). Without resetting it,
@@ -2259,7 +2292,13 @@ export class CaptureNetSystem {
       // Auto-start reel on capture/miss — detects both in-loop transitions
       // AND external state changes (e.g. forceResolve called between updates)
       const needsAutoReel = (net.state === STATES.CAPTURED || net.state === STATES.MISSED)
-        && !net._resultProcessed;
+        && !net._resultProcessed
+        // S5 failure staging: a staged miss holds at the contact point for
+        // FAILURE_STAGING_S so the bounce/slip beat plays before the empty
+        // reel-back (the visual runs on the same wall-clock dt). The player
+        // can still startReel() manually to cut the beat short.
+        && !(net.state === STATES.MISSED && net._failureKind
+             && net.stateTimer < (CN.FAILURE_STAGING_S ?? 0));
       if (needsAutoReel) {
         net._resultProcessed = true;
         const cooldown = net.catchResult === 'success'

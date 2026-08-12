@@ -4662,6 +4662,13 @@ export class ArmUnit {
       debrisId: debris.id, strain, oversized: false, recoverable: true,
       cause: 'boost_reel',
     });
+    // Cargo-continuity S5: the tear's staging hook — CaptureNetVisual zeroes a
+    // wedge of spokes in the bag's per-vertex colour buffer (a visible hole the
+    // catch drifts out of); audio/comms/teaching can hang off the same event.
+    eventBus.emit(Events.NET_TORN, {
+      armId: this.id, armIndex: this.index,
+      debrisId: debris.id, strain,
+    });
     eventBus.emit(Events.COMMS_MESSAGE, {
       text: `${this.displayName}: Net RIPPED under boost reel (catch was ${Math.round(strain * 100)}% of rated mass). `
         + 'Debris drifting free. Nominal reel speed is safe; boost prices heavy catches.',

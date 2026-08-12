@@ -729,6 +729,10 @@ export const Events = {
   NET_MOTHER_TUG:            'net:motherTug',
   /** Net lost grip on a captured catch (recoverable). Payload: { armId, armIndex, debrisId, strain, recoverable } */
   NET_FAILED:                'net:failed',
+  /** Cargo-continuity S5: the net TORE (boost-reel rip) — the staging hook for
+   *  the visible tear (a wedge of spokes zeroed in the bag's colour buffer) and
+   *  for audio/comms/teaching to hang on. Payload: { armId, armIndex, debrisId, strain } */
+  NET_TORN:                  'net:torn',
   /** Net inventory changed (fire/reload). Payload: { source:'mother'|'daughter', armIndex?, podInventory?, remaining? } */
   NET_INVENTORY_CHANGED:     'net:inventoryChanged',
   /** Cross-debris warning during flight. Payload: { netId, crossDebrisId } */

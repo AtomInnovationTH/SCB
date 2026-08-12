@@ -1500,6 +1500,37 @@ export const NetMeshKit = {
   },
 
   /**
+   * Cargo-continuity S5 (owner item 7): tear a wedge of spokes out of the web —
+   * the boost-reel RIP staging. Zeroes the per-vertex colours of the radial
+   * spoke segments AND their ring segments across [spokeStart, +spokeCount),
+   * so those threads render black (invisible against the sky): a visible hole
+   * the released catch drifts out of. One in-place write on the buffer the V4
+   * depth pass would otherwise rewrite per frame — safe because a torn bag is
+   * DETACHED (CaptureNetVisual) and never re-runs updateWebDrape. Segment
+   * layout (buildWebPositions): radialSpokes apex→rim segments first (6 floats
+   * each), then `rings` rings of radialSpokes rim-neighbour segments. The
+   * membrane (one mesh, no per-face colour) is not torn — the hole reads in
+   * the weave.
+   * @param {object} h handle
+   * @param {number} spokeStart first torn spoke index
+   * @param {number} spokeCount wedge width (spokes)
+   */
+  tearWedge(h, spokeStart, spokeCount) {
+    if (!h || !h.webColorBuffer) return;
+    const col = h.webColorBuffer.array;
+    const spokes = h.radialSpokes, rings = h.rings;
+    for (let w = 0; w < spokeCount; w++) {
+      const s = (((spokeStart + w) % spokes) + spokes) % spokes;
+      col.fill(0, 6 * s, 6 * s + 6);                       // radial spoke segment
+      for (let k = 0; k < rings; k++) {
+        const seg = spokes + k * spokes + s;               // ring k, spoke s→s+1
+        col.fill(0, 6 * seg, 6 * seg + 6);
+      }
+    }
+    h.webColorBuffer.needsUpdate = true;
+  },
+
+  /**
    * Free all geometry + materials owned by the handle. The caller owns removing
    * `handle.group` from the scene.
    * @param {object} h handle

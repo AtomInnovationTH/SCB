@@ -2547,6 +2547,21 @@ export const Constants = {
     COOLDOWN_CATCH:       2,      // after success before re-fire (LASSO_COOLDOWN_CATCH)
     COOLDOWN_MISS:        1,      // after miss before re-fire (LASSO_COOLDOWN_MISS)
 
+    // ── Failure staging (cargo-continuity S5, owner item 7) ──
+    // A failure used to be a state flip to MISSED plus an empty reel-back:
+    // nothing deformed, nothing slid off, nothing tore. The three modelled
+    // failures now get a staged beat built from kit drives that already exist:
+    // a broadside BOUNCE pulses the drape up then recoils (the mouth never
+    // closes), a STRAIN SLIP releases the cinch so the catch slides out of the
+    // mouth, and a boost-reel RIP zeroes a wedge of spokes in the web's
+    // per-vertex colour buffer (a visible hole) for the catch to drift out of.
+    // The net holds MISSED for FAILURE_STAGING_S so the beat plays at the
+    // contact point before the empty reel-back starts. Real seconds —
+    // CaptureNet runs on wall-clock dt (ARCHITECTURE §13).
+    FAILURE_STAGING_S:    1.4,
+    NET_TEAR_SPOKE_START: 2,    // first spoke of the torn wedge (kit web layout)
+    NET_TEAR_SPOKE_COUNT: 5,    // wedge width — 5 of 20 spokes = a 90° gash
+
     // ── Mother berth (mother-net-reel plan §8) ──
     // Berth clearance: the reel completes when the catch's near face is this
     // far from the muzzle (mirrors ARM_HOLD_CLEARANCE_M). Completion range =

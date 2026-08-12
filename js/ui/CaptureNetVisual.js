@@ -27,6 +27,10 @@ import { NetMeshKit } from './NetMeshKit.js';
 // no cycle (DebrisField does not import CaptureNetVisual).
 import { DebrisWireframe } from './DebrisWireframe.js';
 import { DebrisField } from '../entities/DebrisField.js';
+// S5 failure staging: the reason→beat mapper lives with missReasonToText in
+// the entity (one home for "which failures are staged" — logic and visual must
+// never diverge). ui → entities edge; no cycle (CaptureNet does not import ui).
+import { missFailureKind } from '../entities/CaptureNet.js';
 import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
@@ -251,6 +255,8 @@ export class CaptureNetVisual {
     this._boundNetMiss = null;
     this._boundReelCompleted = null;
     this._boundNetReleased = null;
+    this._boundNetTorn = null;
+    this._boundNetFailed = null;
     this._boundTierChanged = null;
   }
 
@@ -280,6 +286,8 @@ export class CaptureNetVisual {
     this._boundNetMiss       = this._onNetMiss.bind(this);
     this._boundReelCompleted = this._onReelCompleted.bind(this);
     this._boundNetReleased   = this._onNetReleased.bind(this);
+    this._boundNetTorn       = this._onNetTorn.bind(this);
+    this._boundNetFailed     = this._onNetFailed.bind(this);
     this._boundTierChanged   = (p) => { this._tier = p?.to ?? this._tier; };
 
     eventBus.on(Events.NET_FIRED,          this._boundNetFired);
@@ -287,6 +295,8 @@ export class CaptureNetVisual {
     eventBus.on(Events.NET_CATCH_MISS,     this._boundNetMiss);
     eventBus.on(Events.NET_REEL_COMPLETED, this._boundReelCompleted);
     eventBus.on(Events.NET_RELEASED,       this._boundNetReleased);
+    eventBus.on(Events.NET_TORN,           this._boundNetTorn);
+    eventBus.on(Events.NET_FAILED,         this._boundNetFailed);
     eventBus.on(Events.PERF_TIER_CHANGED,  this._boundTierChanged);
     this._tier = sceneManager?.currentTier ?? 'HIGH';
   }
@@ -341,9 +351,32 @@ export class CaptureNetVisual {
 
   /** @private Miss: the net goes slack and drifts off, fading out. No red
    * recolour — the mesh stays ivory and simply fades; the MISS reason is
-   * spoken on the comms log / reticle. */
+   * spoken on the comms log / reticle.
+   * S5 failure staging: a STAGED reason (bounce/slip — missFailureKind) arms a
+   * per-visual beat instead of fading immediately. The bag holds at the
+   * contact point (the system's auto-reel is deferred for the same window),
+   * the drape driver plays the beat, and the fade is pushed only when the
+   * beat completes — so the failure plays at full opacity. Unstaged reasons
+   * keep the legacy immediate fade. Ceremony visuals only: the flag-off disc
+   * path has no kit drives to stage. */
   _onNetMiss(payload) {
     const { key } = resolveNetId(payload);
+    const vis = this._activeVisuals.get(key);
+    const kind = missFailureKind(payload?.reason);
+    if (vis && kind && vis.kitHandle) {
+      vis.failure = {
+        kind,
+        t: 0,
+        dur: Constants.CAPTURE_NET.FAILURE_STAGING_S ?? 1.4,
+        // The drape/cinch the failure found the bag in — a cinch-path bounce
+        // starts welded and releases; a slam-path bounce starts at the cone
+        // and slaps. cinch is the beat's last-driven value for the furniture.
+        drape0: vis.kitHandle._drape || 0,
+        cinch0: vis.kitHandle._cinchFrac || 0,
+        cinch: vis.kitHandle._cinchFrac || 0,
+      };
+      return;   // the fade is pushed when the beat completes (see update)
+    }
     this._fadeTimers.push({ key, timer: 1.0, duration: 1.0 });
   }
 
@@ -367,13 +400,69 @@ export class CaptureNetVisual {
     if (podIndex >= 0) return;
     if (payload && payload.capturedMass > 0) {
       const vis = this._activeVisuals.get(key);
-      if (vis) {
+      // S5: a failure beat owns the bag — the daughter's net stows (and this
+      // event fires) when the arm releases the catch on a slip/rip, but the
+      // staged failure must play out, not be cut short by the success
+      // hand-off fade.
+      if (vis && !vis.failure) {
         vis.detached = true;   // state-driven updates stop; fade timer owns removal
         this._fadeTimers.push({ key, timer: 0.8, duration: 0.8 });
         return;
       }
+      if (vis) return;         // failure beat in flight — it owns the fade
     }
     this._removeNetVisual(key);
+  }
+
+  /** @private
+   * S5 rip staging (owner item 7): the daughter's net TORE under boost reel.
+   * The NetProjectile stows + prunes on its next tick, so take the bag over
+   * NOW via the detach idiom (the same one the furnace hand-off uses) and cut
+   * the hole into it: zero a wedge of spokes in the kit's per-vertex colour
+   * buffer. The catch, already released by the arm, drifts out of the torn
+   * bag; the beat clock hands the bag to the fade when done.
+   */
+  _onNetTorn(payload) {
+    const { key, armIndex, podIndex } = resolveNetId(payload);
+    const vis = this._activeVisuals.get(key);
+    if (!vis) return;
+    vis.detached = true;       // we own the bag from here (the projectile is leaving)
+    vis.failure = {
+      kind: 'rip',
+      t: 0,
+      dur: Constants.CAPTURE_NET.FAILURE_STAGING_S ?? 1.4,
+      cinch: 1,
+      // The bag seats on the catch it released (still live this tick — the
+      // projectile prunes on its NEXT update), never on the docked strut tip.
+      debris: this._getNet(armIndex, podIndex)?.targetDebris || null,
+    };
+    if (vis.kitHandle) {
+      NetMeshKit.tearWedge(vis.kitHandle,
+        Constants.CAPTURE_NET.NET_TEAR_SPOKE_START ?? 2,
+        Constants.CAPTURE_NET.NET_TEAR_SPOKE_COUNT ?? 5);
+    }
+  }
+
+  /** @private
+   * S5 slip staging for the daughter's reel-start integrity failure
+   * (_checkNetIntegrityOnReel — oversize or strain): the cinched bag releases
+   * its catch and opens back toward the flight cone. Same detach idiom as the
+   * rip — the boost-reel rip also emits NET_FAILED (cause 'boost_reel') but is
+   * owned by _onNetTorn, so it is skipped here.
+   */
+  _onNetFailed(payload) {
+    if (payload?.cause === 'boost_reel') return;   // NET_TORN owns the rip
+    const { key, armIndex, podIndex } = resolveNetId(payload);
+    const vis = this._activeVisuals.get(key);
+    if (!vis || !vis.kitHandle) return;            // flag-off path: legacy fade
+    vis.detached = true;
+    vis.failure = {
+      kind: 'slip',
+      t: 0,
+      dur: Constants.CAPTURE_NET.FAILURE_STAGING_S ?? 1.4,
+      cinch: 1,
+      debris: this._getNet(armIndex, podIndex)?.targetDebris || null,
+    };
   }
 
   /** @private */
@@ -642,7 +731,13 @@ export class CaptureNetVisual {
       // co-orbiting frame) so it doesn't streak away at orbital speed while
       // the fade timer plays out.
       if (vis.detached) {
-        if (vis.armIndex >= 0 && this._player?.strutTipNodes?.[vis.armIndex]) {
+        if (vis.failure && vis.failure.debris && vis.failure.debris._scenePosition) {
+          // S5: a torn/slipped daughter bag stays on the drifting catch it
+          // released (the failure happened out at the daughter, not at the
+          // dock) — never teleported to the strut tip. The bag opens/fades in
+          // place around the catch; the catch visibly drifts on (continuity).
+          vis.group.position.copy(vis.failure.debris._scenePosition);
+        } else if (vis.armIndex >= 0 && this._player?.strutTipNodes?.[vis.armIndex]) {
           this._player.strutTipNodes[vis.armIndex].getWorldPosition(vis.group.position);
         } else if (vis.podIndex >= 0 && typeof this._player?.getNetPodPositionInto === 'function') {
           // Mother-pod catch — seat the fading bag on the pod muzzle (the
@@ -651,11 +746,33 @@ export class CaptureNetVisual {
           // detached mother bag streaked away at 70 km/s; plan §2 C2).
           this._player.getNetPodPositionInto(vis.podIndex, vis.group.position);
         }
+        // S5: tick a detached failure beat — the slip's un-cinch drives the
+        // kit directly (no state machine remains to drive it); the rip's hole
+        // is already cut (one write at the event). The fade starts at beat end.
+        if (vis.failure) {
+          const beat = vis.failure;
+          beat.t += dt;
+          const f = Math.min(1, beat.t / beat.dur);
+          if (beat.kind === 'slip' && vis.kitHandle) {
+            const open = Math.max(0, 1 - f);
+            NetMeshKit.updateWebDrape(vis.kitHandle, {
+              drape: open,
+              cinchFrac: open,
+              contentsRadius: 0,   // the catch is released — the bag opens empty
+              contentsZ: 0,
+            });
+            beat.cinch = open;
+          }
+          if (f >= 1) this._endFailureBeat(key, vis);
+        }
         continue;
       }
 
       const net = this._getNet(vis.armIndex, vis.podIndex);
       if (!net) {
+        // S5: a net pruned mid-beat (a very short reel-back under ceremony
+        // time-dilation) detaches instead of popping — the beat/fade finish.
+        if (vis.failure) { vis.detached = true; continue; }
         this._removeNetVisual(key);
         continue;
       }
@@ -967,7 +1084,36 @@ export class CaptureNetVisual {
       // (the drape/cinch deformation itself is structure and stays).
       const garnish = this._garnishOn();
       let drape = 0, cinchFrac = 0, jiggleAmp = 0;
-      if (state === STATES.ENVELOP) {
+      if (vis.failure) {
+        // ── S5 failure staging (owner item 7) ──
+        // The beat owns drape/cinch until it completes — in MISSED, and in
+        // the miss REELING when ceremony time-dilation lets the logic's
+        // reel-back begin first (the two clocks differ under the ceremony
+        // scale; keying on the beat, not the state, means no mid-beat cut).
+        // Both beats end at drape 0 / cinch 0 = the flight cone the state map
+        // drives afterwards, so the hand-off to the fade is shape-continuous.
+        const beat = vis.failure;
+        const f = Math.min(1, beat.t / beat.dur);
+        if (beat.kind === 'bounce') {
+          // Broadside bounce: the bag holds the wrap attempt against the face
+          // (or slaps up to it when the catch found the cone open), then
+          // SPRINGS off — the release is deliberately fast (down²) next to
+          // the slip's slow let-go. The cinch never re-closes.
+          const up = Math.min(1, f / 0.3);
+          const down = f < 0.3 ? 0 : (f - 0.3) / 0.7;
+          drape = Math.max(beat.drape0, up) * (1 - down * down);
+          cinchFrac = beat.cinch0 * (1 - down * down);
+        } else {
+          // Strain slip: the welded wrap lets go — cinch and drape release
+          // linearly toward the open cone while the catch slides out of the
+          // mouth (it was never pinned on this path; its orbit owns it).
+          drape = beat.drape0 * (1 - f);
+          cinchFrac = beat.cinch0 * (1 - f);
+        }
+        beat.cinch = cinchFrac;
+        beat.t += dt;
+        if (f >= 1) this._endFailureBeat(key, vis);
+      } else if (state === STATES.ENVELOP) {
         drape = Math.min(1, Math.max(0, net.stateTimer / CN.ENVELOP_TIME));
         // Settle-jiggle: strongest mid-drape, decaying as the bag seats.
         if (garnish) jiggleAmp = mouthRadius * _NT.DRAPE_JIGGLE_ENVELOP_FRAC * Math.sin(Math.PI * drape);
@@ -1293,17 +1439,27 @@ export class CaptureNetVisual {
         coneMesh.visible = true;
         vis.tetherLine.visible = true;
         coneMesh.material.color.setHex(COL_DISC);
-        // Opacity handled by fade timer; hide the cinch furniture so no
-        // weights/strands linger at full opacity through the fade.
-        for (const w of rimWeights) w.visible = false;
-        drawstringLine.visible = false;
+        if (vis.failure) {
+          // S5 failure staging: the beat owns the furniture — the cinch ring
+          // follows the beat's cinchFrac (opening on a slip, springing off on
+          // a bounce) and the strands stay on for the release read.
+          this._stageFailureFurniture(vis);
+        } else {
+          // Opacity handled by fade timer; hide the cinch furniture so no
+          // weights/strands linger at full opacity through the fade.
+          for (const w of rimWeights) w.visible = false;
+          drawstringLine.visible = false;
+        }
         break;
 
       case STATES.REELING:
         canisterMesh.visible = false;
-        coneMesh.visible = net.catchResult === 'success';
+        // S5: a failure beat (or its fade tail) keeps the cone drawn through
+        // the miss reel-back — hiding it the frame REELING starts would cut
+        // the staged bounce/slip (or pop the fading bag).
+        coneMesh.visible = net.catchResult === 'success' || !!vis.failure || !!vis.fadingOut;
         vis.tetherLine.visible = true;
-        if (coneMesh.visible) {
+        if (net.catchResult === 'success') {
           coneMesh.material.color.setHex(COL_DISC);
           // UX-11 #3: the haul/park can last many seconds (REELING is held
           // through HOLDING_CATCH for daughter catches) — render a steady,
@@ -1311,6 +1467,8 @@ export class CaptureNetVisual {
           // at the closed radius. No expand/contract pulse.
           coneMesh.material.opacity = 0.55;
           this._setCinchedRim(vis);
+        } else if (vis.failure) {
+          this._stageFailureFurniture(vis);
         } else {
           for (const w of rimWeights) w.visible = false;
           drawstringLine.visible = false;
@@ -1440,6 +1598,53 @@ export class CaptureNetVisual {
     NetMeshKit.updateDrawstring(vis.kitHandle);
   }
 
+  /**
+   * S5 failure staging: drive the cinch furniture from the beat's cinchFrac
+   * (vis.failure.cinch, freshly written by the drape driver this frame) —
+   * the ring opens toward the mouth on a slip and springs off on a bounce,
+   * floored at the same mouth-plane contents floor CINCH_CLOSING honours so
+   * the ring never sweeps through the catch it is releasing. Weights ride the
+   * frozen spinAngle basis (same as _setCinchedRim — never the kit's).
+   * @param {object} vis — entry from _activeVisuals
+   * @private
+   */
+  _stageFailureFurniture(vis) {
+    const { rimWeights, drawstringLine, apexHub, mouthRadius, closedRadius,
+            coneHeight, weightCount } = vis;
+    apexHub.visible = true;
+    drawstringLine.visible = true;
+    const cinch = vis.failure ? vis.failure.cinch : 0;
+    const r = Math.max(
+      mouthRadius + (closedRadius - mouthRadius) * cinch,
+      NetMeshKit.mouthFloorRadius(vis.kitHandle),
+    );
+    for (let i = 0; i < weightCount; i++) {
+      const angle = (2 * Math.PI * i / weightCount) + vis.spinAngle;
+      rimWeights[i].position.set(
+        r * Math.cos(angle),
+        r * Math.sin(angle),
+        -coneHeight,
+      );
+      rimWeights[i].visible = true;
+    }
+    this._updateDrawstring(vis);
+  }
+
+  /**
+   * S5 failure staging: end a beat — hand the bag to the ordinary fade timer
+   * (which then owns opacity + removal). Idempotent; safe to call from either
+   * clock (the state-machine beat branch or the detached-bag branch).
+   * @param {string} key — visual map key
+   * @param {object} vis — entry from _activeVisuals
+   * @private
+   */
+  _endFailureBeat(key, vis) {
+    if (!vis.failure) return;
+    vis.failure = null;
+    vis.fadingOut = true;
+    this._fadeTimers.push({ key, timer: 1.0, duration: 1.0 });
+  }
+
   // ── Public getters ─────────────────────────────────────────────────────
 
   /**
@@ -1479,6 +1684,8 @@ export class CaptureNetVisual {
     if (this._boundNetMiss)       eventBus.off(Events.NET_CATCH_MISS,     this._boundNetMiss);
     if (this._boundReelCompleted) eventBus.off(Events.NET_REEL_COMPLETED, this._boundReelCompleted);
     if (this._boundNetReleased)   eventBus.off(Events.NET_RELEASED,       this._boundNetReleased);
+    if (this._boundNetTorn)       eventBus.off(Events.NET_TORN,           this._boundNetTorn);
+    if (this._boundNetFailed)     eventBus.off(Events.NET_FAILED,         this._boundNetFailed);
     if (this._boundTierChanged)   eventBus.off(Events.PERF_TIER_CHANGED,  this._boundTierChanged);
 
     this._boundNetFired = null;
@@ -1486,6 +1693,8 @@ export class CaptureNetVisual {
     this._boundNetMiss = null;
     this._boundReelCompleted = null;
     this._boundNetReleased = null;
+    this._boundNetTorn = null;
+    this._boundNetFailed = null;
     this._boundTierChanged = null;
 
     this._fadeTimers = [];
