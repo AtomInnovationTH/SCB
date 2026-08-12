@@ -120,7 +120,8 @@ export class ArmUnit {
     this.fuel = 100;                        // 0–100 percentage
     this.tetherLength = 0;                  // current deployed length in meters
     this.target = null;                     // assigned debris object
-    this.capturedDebris = null;             // debris hauled back
+    this.capturedDebris = null;             // debris hauled back (the in-hand scalar)
+    this.heldCatches = [];                  // S6: the parked cargo rack (HOLDING_CATCH only)
     this.stateTimer = 0;                    // seconds in current state
     this.captures = 0;                      // total captures by this arm
     this._startingDistance = 0;             // distance to target at transit start (for approach beep fraction)
@@ -2167,6 +2168,7 @@ export class ArmUnit {
     this.tetherLength = 0;
     this.target = null;
     this.capturedDebris = null;
+    this.heldCatches = [];               // S6: the parked cargo rack resets too
     this.stateTimer = 0;
     this.captures = 0;
     this._startingDistance = 0;
@@ -2499,7 +2501,7 @@ export class ArmUnit {
       fuel: Math.round(this.fuel),
       tetherLength: Math.round(this.tetherLength),
       targetId: this.target?.id || null,
-      hasCaptured: !!this.capturedDebris,
+      hasCaptured: !!this.capturedDebris || this.heldCatches.length > 0,
       captures: this.captures,
       position: this.position.clone(),
       remainingDeltaV: (this.fuel / 100) * (this.config?.totalDeltaV || 50),
@@ -4579,6 +4581,83 @@ export class ArmUnit {
   }
 
   /**
+   * Cargo-continuity S6: free parked-hold cells on the cargo rack. The S7
+   * transfer's candidate filter — a full rack refuses BEFORE anything moves.
+   * @returns {number}
+   */
+  get holdCellsFree() {
+    return Math.max(0, (Constants.DAUGHTER_CARGO_CELLS ?? 2) - this.heldCatches.length);
+  }
+
+  /**
+   * Cargo-continuity S6: push a piece onto the parked cargo rack. The haul
+   * path can never trip the capacity guard (a daughter parks with exactly one
+   * piece into an empty rack) — it exists so a full rack REFUSES the push
+   * instead of silently dropping cargo (the two laws, §1).
+   * @param {object} debris
+   * @returns {boolean} true if stowed
+   * @private
+   */
+  _stowHeldCatch(debris) {
+    if (this.holdCellsFree <= 0) return false;
+    this.heldCatches.push(debris);
+    return true;
+  }
+
+  /**
+   * Cargo-continuity S6: pin every piece on the parked cargo rack, one slot
+   * per piece. Each piece gets the SAME standoff as the in-hand pin
+   * (`sizeMeter/2 + ARM_HOLD_CLEARANCE_M` along the hold axis); the
+   * lateral-bias direction is rotated `i × 2π/DAUGHTER_CARGO_CELLS` about that
+   * axis so N pieces ring the strut tip instead of stacking in one spot.
+   * Slot 0's rotation is zero, so a one-piece rack lands byte-identically on
+   * the pre-S6 biased `_pinCatchToSelf(parentPos, ARM_HOLD_LATERAL_BIAS)`
+   * position (the no-one-frame-jump contract from _updateDocking).
+   * @param {THREE.Vector3|null} [parentPos] freshest mother position
+   * @private
+   */
+  _pinHeldCatches(parentPos = null) {
+    // Resolve the hold axis exactly as _pinCatchToSelf does (net launch
+    // direction while the fired-net ref lives, else outboard from the mother).
+    const dir = this._tmpHoldDir || (this._tmpHoldDir = new THREE.Vector3());
+    let hasDir = false;
+    const ld = this._firedNet && this._firedNet.launchDirection;
+    if (ld) {
+      dir.set(ld.x, ld.y, ld.z);
+      hasDir = dir.lengthSq() > 1e-12;
+    }
+    const pp = parentPos || this._prevParentPos;
+    if (!hasDir && pp) {
+      dir.subVectors(this.position, pp);
+      hasDir = dir.lengthSq() > 1e-12;
+    }
+    if (hasDir) dir.normalize(); else dir.set(0, 0, 0);
+    const clearance = (Constants.ARM_HOLD_CLEARANCE_M ?? 1.0);
+    const bias = Constants.ARM_HOLD_LATERAL_BIAS ?? 0;
+    const cells = Constants.DAUGHTER_CARGO_CELLS ?? 2;
+    const lat = this._tmpLatDir || (this._tmpLatDir = new THREE.Vector3());
+    const rot = this._tmpRackQuat || (this._tmpRackQuat = new THREE.Quaternion());
+    for (let i = 0; i < this.heldCatches.length; i++) {
+      const d = this.heldCatches[i];
+      if (!d) continue;
+      const radius = (d.sizeMeter || 0) / 2 + clearance;
+      if (!d._armPinPos) d._armPinPos = new THREE.Vector3();
+      d._armPinPos.copy(this.position).addScaledVector(dir, radius * M);
+      if (bias !== 0 && hasDir) {
+        lat.crossVectors(dir, _WORLD_UP);
+        if (lat.lengthSq() < 1e-8) lat.set(1, 0, 0); // holdDir ∥ up — pick world-X
+        lat.normalize();
+        if (i !== 0) {
+          rot.setFromAxisAngle(dir, (i * 2 * Math.PI) / cells);
+          lat.applyQuaternion(rot);
+        }
+        d._armPinPos.addScaledVector(lat, radius * M * bias);
+      }
+      d._armPinned = true;
+    }
+  }
+
+  /**
    * Net-integrity check performed as reel-in begins (GRAPPLED → REELING).
    * Two failure modes, both RECOVERABLE (daughter keeps her tether and returns
    * to reload while the debris drifts free, re-capturable):
@@ -5210,23 +5289,37 @@ export class ArmUnit {
       // furnace-transfer window elapses), NOT on dock arrival — see GameFlowManager.
       if (this.capturedDebris) {
         this.captures++;
-        // Pin with the same lateral bias HOLDING_CATCH will use, so there's no
-        // one-frame jump of the bag when the park state begins.
-        this._pinCatchToSelf(parentPos, Constants.ARM_HOLD_LATERAL_BIAS ?? 0);
-        this._breakdownStarted = false;     // reset staged-furnace bookkeeping (Item 1)
-        this._breakdownChunksFired = 0;
-        this._transitionTo(S.HOLDING_CATCH);
-        eventBus.emit(Events.DEBRIS_CAPTURED, {
-          debrisId: this.capturedDebris.id,
-          armId: this.id,
-          type: this.type,
-          parked: true,                     // held at strut, not removed/processed
-        });
-        eventBus.emit(Events.COMMS_MESSAGE, {
-          text: `${this.displayName}: Catch secured at the strut. Holding in net (awaiting processing). Capture #${this.captures}.`,
-          priority: 'success',
-        });
-        return;
+        // S6: the parked hold is a cargo RACK (heldCatches). Read the debris
+        // into a local BEFORE clearing the scalar — the DEBRIS_CAPTURED emit
+        // below names its id (clearing first would break the first_capture
+        // teaching signal). She hauled exactly one piece and a holding
+        // daughter is not redeployable, so the rack is empty here and the
+        // capacity guard cannot trip — it is the S7 transfer's refusal seam.
+        const debris = this.capturedDebris;
+        if (this._stowHeldCatch(debris)) {
+          this.capturedDebris = null;
+          // Pin with the same lateral bias HOLDING_CATCH will use, so there's no
+          // one-frame jump of the bag when the park state begins. Rack slot 0
+          // is byte-identical to the pre-S6 biased pin.
+          this._pinHeldCatches(parentPos);
+          this._breakdownStarted = false;     // reset staged-furnace bookkeeping (Item 1)
+          this._breakdownChunksFired = 0;
+          this._transitionTo(S.HOLDING_CATCH);
+          eventBus.emit(Events.DEBRIS_CAPTURED, {
+            debrisId: debris.id,
+            armId: this.id,
+            type: this.type,
+            parked: true,                     // held at strut, not removed/processed
+          });
+          eventBus.emit(Events.COMMS_MESSAGE, {
+            text: `${this.displayName}: Catch secured at the strut. Holding in net (awaiting processing). Capture #${this.captures}.`,
+            priority: 'success',
+          });
+          return;
+        }
+        // Full rack (unreachable on the haul path): the push REFUSED, the catch
+        // stays in hand — cargo is never destroyed — and she falls through to
+        // the legacy reload below.
       }
 
       // Empty return (e.g., a recoverable net failure sent her home without a
@@ -5271,8 +5364,8 @@ export class ArmUnit {
     this.tetherLine.visible = false;
     this.velocity.set(0, 0, 0);
 
-    // If the catch was cleared elsewhere, fall back to reload immediately.
-    if (!this.capturedDebris) {
+    // If the rack was cleared elsewhere, fall back to reload immediately.
+    if (this.heldCatches.length === 0) {
       this._transitionTo(S.RELOADING);
       this.reloadProgress = 0;
       this.reloadDuration = 0;
@@ -5304,7 +5397,9 @@ export class ArmUnit {
     const CHOP_S = FT.CHOP_S;
     const FEED_S = FT.FEED_S;
     const CHUNK_COUNT = FT.CHUNK_COUNT;
-    const debris = this.capturedDebris;
+    // S6: the timeline digests the OLDEST piece on the rack first; the rest
+    // wait parked at their slots.
+    const debris = this.heldCatches[0];
     const t = this.stateTimer;
 
     // Lazy-init the per-park breakdown bookkeeping (also reset on entry in
@@ -5315,7 +5410,7 @@ export class ArmUnit {
     if (t < HOLD_S) {
       // hold: catch welded full-size, net still cinched. Lateral bias keeps the
       // bag off the camera→daughter axis so the parked daughter stays visible.
-      this._pinCatchToSelf(parentPos, Constants.ARM_HOLD_LATERAL_BIAS ?? 0);
+      this._pinHeldCatches(parentPos);
       return;
     }
 
@@ -5334,7 +5429,7 @@ export class ArmUnit {
     // Keep the (now-breaking-down) catch pinned to the strut so it never drifts
     // while the furnace visual animates the chop. The visual owns the scale ramp.
     // Same lateral bias as the hold phase so the daughter stays clear of the bag.
-    this._pinCatchToSelf(parentPos, Constants.ARM_HOLD_LATERAL_BIAS ?? 0);
+    this._pinHeldCatches(parentPos);
 
     // feed: emit chunk events evenly across [CHOP_S, FEED_S).
     if (t >= CHOP_S && t < FEED_S) {
@@ -5368,7 +5463,8 @@ export class ArmUnit {
       debris._capturedByArm = null;
       debris._armPinPos = null;
       debris._breakdownActive = false;
-      this.capturedDebris = null;
+      // S6: pop the digested piece off the rack.
+      this.heldCatches.shift();
       this.reeling = false;
       this.tetherTension = 0;
       this._breakdownStarted = false;
@@ -5378,6 +5474,15 @@ export class ArmUnit {
       eventBus.emit(Events.NET_CONSUMED, { armIndex: this.index, armId: this.id });
       eventBus.emit(Events.CATCH_PROCESSED, { armId: this.id, debrisId, type: this.type });
       // Completion comms is owned by GameFlowManager's CATCH_PROCESSED handler.
+      if (this.heldCatches.length > 0) {
+        // S6 sequential digestion: the next piece runs the SAME timeline from
+        // t=0. stateTimer is only zeroed by _transitionTo, and we are NOT
+        // leaving HOLDING_CATCH — zero it explicitly (no ARM_STATE_CHANGE: she
+        // stays parked). ArmManager's chop scale-ramp reads the same
+        // stateTimer against the same FT keys, so it stays per-piece correct.
+        this.stateTimer = 0;
+        return;
+      }
       this._transitionTo(S.RELOADING);
       this.reloadProgress = 0;
       this.reloadDuration = 0;

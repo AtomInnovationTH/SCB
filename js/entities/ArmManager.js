@@ -1703,7 +1703,12 @@ export class ArmManager {
     // debris the arm pinned not being the same object DebrisField rendered.
     if (this._debrisField && this._debrisField.pinCapturedDebris) {
       for (const arm of this.arms) {
-        if (!arm.capturedDebris) continue;
+        // S6: HOLDING_CATCH reads the parked cargo RACK (heldCatches); the haul
+        // states (REELING/DOCKING) read the in-hand scalar — unchanged.
+        const pieces = (arm.state === ARM_STATES.HOLDING_CATCH)
+          ? (arm.heldCatches || [])
+          : (arm.capturedDebris ? [arm.capturedDebris] : null);
+        if (!pieces || pieces.length === 0) continue;
         // PARK-THE-CATCH (2026-06-06): the catch stays FULL SIZE from reel-in,
         // through docking, and while parked on the strut (HOLDING_CATCH) — no
         // stow-shrink/removal any more (furnace transfer is deferred). The old
@@ -1712,28 +1717,31 @@ export class ArmManager {
         if (arm.state === ARM_STATES.REELING ||
             arm.state === ARM_STATES.DOCKING ||
             arm.state === ARM_STATES.HOLDING_CATCH) {
-          // Item 1: once the staged furnace breakdown begins (debris._breakdownActive,
-          // set by ArmUnit at chop start), shrink the ORIGINAL instanced catch out
-          // of view so the FurnaceBreakdownVisual's chunk meshes are the only thing
-          // the player sees being fed to the furnace. Ramp over the chop phase so
-          // the swap reads as the catch coming apart, not popping out.
-          let scaleMul = 1;
-          if (arm.capturedDebris._breakdownActive) {
-            // Phase boundaries from the single authoritative constant (same keys
-            // ArmUnit._updateHoldingCatch drives the chop with — no local defaults
-            // that could desync the scale-out ramp from the chop window).
-            const FT = Constants.FURNACE_TRANSFER;
-            const span = Math.max(1e-6, FT.CHOP_S - FT.HOLD_S);
-            const frac = Math.min(1, Math.max(0, (arm.stateTimer - FT.HOLD_S) / span));
-            scaleMul = Math.max(0.001, 1 - frac);   // 1 → ~0 across the chop window
+          for (const d of pieces) {
+            if (!d) continue;
+            // Item 1: once the staged furnace breakdown begins (debris._breakdownActive,
+            // set by ArmUnit at chop start), shrink the ORIGINAL instanced catch out
+            // of view so the FurnaceBreakdownVisual's chunk meshes are the only thing
+            // the player sees being fed to the furnace. Ramp over the chop phase so
+            // the swap reads as the catch coming apart, not popping out. S6: per
+            // piece — only the rack's oldest (the piece being chopped) ramps.
+            let scaleMul = 1;
+            if (d._breakdownActive) {
+              // Phase boundaries from the single authoritative constant (same keys
+              // ArmUnit._updateHoldingCatch drives the chop with — no local defaults
+              // that could desync the scale-out ramp from the chop window).
+              const FT = Constants.FURNACE_TRANSFER;
+              const span = Math.max(1e-6, FT.CHOP_S - FT.HOLD_S);
+              const frac = Math.min(1, Math.max(0, (arm.stateTimer - FT.HOLD_S) / span));
+              scaleMul = Math.max(0.001, 1 - frac);   // 1 → ~0 across the chop window
+            }
+            // Issue 13 (2026-06-12): honor the arm's standoff pin (_armPinPos =
+            // arm.position + holdDir × clearance, set by _pinCatchToSelf) so the
+            // catch hangs outboard of the daughter instead of being re-snapped
+            // exactly onto her position (daughter rendered INSIDE large catches).
+            const pinPos = (d._armPinned && d._armPinPos) ? d._armPinPos : arm.position;
+            this._debrisField.pinCapturedDebris(d, pinPos, scaleMul);
           }
-          // Issue 13 (2026-06-12): honor the arm's standoff pin (_armPinPos =
-          // arm.position + holdDir × clearance, set by _pinCatchToSelf) so the
-          // catch hangs outboard of the daughter instead of being re-snapped
-          // exactly onto her position (daughter rendered INSIDE large catches).
-          const d = arm.capturedDebris;
-          const pinPos = (d._armPinned && d._armPinPos) ? d._armPinPos : arm.position;
-          this._debrisField.pinCapturedDebris(d, pinPos, scaleMul);
         }
       }
     }
@@ -2145,6 +2153,7 @@ export class ArmManager {
       arm.fuel = 100;
       arm.target = null;
       arm.capturedDebris = null;
+      arm.heldCatches = [];               // S6: the parked cargo rack resets too
       arm.captures = 0;
       arm.stateTimer = 0;
       arm.tetherLength = 0;

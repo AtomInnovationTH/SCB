@@ -1162,6 +1162,10 @@ export const Constants = {
   // the bag never eclipses the ~1 m daughter on the camera→daughter view axis
   // (re-dock "daughter disappeared for 2 s" fix). 0 = pure outboard (old).
   ARM_HOLD_LATERAL_BIAS: 1.0,
+  // Cargo-continuity S6 (2026-08-12): a parked daughter's hold is a cargo RACK —
+  // capacity in pieces pinned at the strut tip (owner: "a daughter may store more
+  // than one piece"). 2 is the smallest honest rack — tuning, not doctrine.
+  DAUGHTER_CARGO_CELLS: 2,
   ARM_NET_DEPLOY_TIME: 3.0,            // seconds (Miura-ori unfold + SMA cinch)
   ARM_GRAPPLE_STABILIZE: 1.5,          // seconds (stabilization after capture)
   ARM_CAPTURE_SUCCESS_RATE: 0.85,      // 85% net capture success (legacy; gated off when CAPTURE_NET ON)

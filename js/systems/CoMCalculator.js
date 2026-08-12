@@ -107,7 +107,12 @@ function getDaughterMass(arm) {
   // holder (already returned 0 above) and an empty/null catch contribute nothing.
   // For CoM this full mass applies directly; computeInertia splits the cargo
   // contribution out and clamps it with the berthed mass (INERTIA_MAX_FACTOR).
-  const cargoMass = (arm.capturedDebris && arm.capturedDebris.mass) || 0;
+  // S6: the parked hold is a rack — sum every held piece plus any in-hand
+  // catch (guarded: plain-object mocks may lack the field).
+  let cargoMass = (arm.capturedDebris && arm.capturedDebris.mass) || 0;
+  if (Array.isArray(arm.heldCatches)) {
+    for (const held of arm.heldCatches) cargoMass += (held && held.mass) || 0;
+  }
   return armMass + cargoMass;
 }
 
@@ -271,7 +276,12 @@ export function computeInertia(armManager, playerSatellite) {
         : Constants.V5_SPINNER_MASS;
       const tip = strutTipMeters(dp, alpha);
       addPoint(armMass, tip);
-      const cargoMass = (arm.capturedDebris && arm.capturedDebris.mass) || 0;
+      // S6: cargo = the in-hand catch plus every piece on the parked rack
+      // (guarded — mocks may lack heldCatches). Same clamp discipline as S2.
+      let cargoMass = (arm.capturedDebris && arm.capturedDebris.mass) || 0;
+      if (Array.isArray(arm.heldCatches)) {
+        for (const held of arm.heldCatches) cargoMass += (held && held.mass) || 0;
+      }
       if (cargoMass > 0) {
         cargoIxx += cargoMass * (tip.y * tip.y + tip.z * tip.z);
         cargoIyy += cargoMass * (tip.x * tip.x + tip.z * tip.z);
