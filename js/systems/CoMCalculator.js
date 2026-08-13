@@ -11,8 +11,21 @@
  * - Thruster nozzle cones vs strut tip positions
  * - Binary block per-thruster when any strut tip falls inside cone
  *
- * All positions are in **mother-local body coordinates** (meters, origin at barrel center).
- * Scene-unit conversion uses M = 0.00001 (1 m in scene units).
+ * All positions are in **mother-local body coordinates** (meters, origin at
+ * barrel center) — in the RENDERED ship's frame: barrel long axis = ship Z,
+ * stowed struts aft at −Z, roll about Z (ArmDockBasis.strutLocalDirection:
+ * α=0 → −Z). Scene-unit conversion uses M = 0.00001 (1 m in scene units).
+ *
+ * FRAME CONTRACT (cargo-continuity S13(a), register item 57): the dock ring is
+ * STORED in generateDockPositions' Y-barrel convention (hinge ring in the XZ
+ * plane, COLLAR_Y in the y slot, stow direction −ŷ) — CameraSystem's
+ * AimDecomposition bridge reads `arm._dockOutward` in that convention, so the
+ * stored fields cannot move. The mass model converts at the ONE boundary —
+ * strutTipMeters / strutMidpointMeters — via the Y/Z swap
+ * (x, y, z)_ship = (x, z, y)_stored, a rigid remapping: every magnitude
+ * (|CoM position|, the drift scalar, totalMass) is byte-comparable across it,
+ * and every downstream consumer (CoM, inertia, drift, both scorers, the plume
+ * cone test) computes in ONE frame.
  *
  * @module systems/CoMCalculator
  */
@@ -32,54 +45,66 @@ const V5 = Constants.OCTOPUS_V5;
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
- * Compute strut tip position in body-local meters.
- * Matches ArmManager.getStrutTipPosition() formula (C-2).
+ * Convert a stored dock position to the rendered ship frame, in meters.
+ * Stored (generateDockPositions, Y-barrel): hinge ring in the XZ plane, collar
+ * height in the y slot, stow direction −ŷ. Ship (Z-barrel, the rendered frame):
+ * hinge ring in the XY plane, collar height in z, stow direction −ẑ.
+ * The map is (x, y, z)_ship = (x, z, y)_stored — the Y/Z swap of register
+ * item 57. S13(a): this is the ONLY place dock geometry enters the mass model.
  *
- * tip = hinge + L × (sin(α)·dockOutward − cos(α)·ŷ)
+ * @param {{hingePosition:{x:number,y:number,z:number}, dockOutward:{x:number,y:number,z:number}}} dockPos
+ * @returns {{hx:number, hy:number, hz:number, ox:number, oy:number, oz:number}}
+ */
+function _dockToShipFrame(dockPos) {
+  const hp = dockPos.hingePosition;
+  const ow = dockPos.dockOutward;
+  return {
+    hx: hp.x / M, hy: hp.z / M, hz: hp.y / M,
+    ox: ow.x, oy: ow.z, oz: ow.y,
+  };
+}
+
+/**
+ * Compute strut tip position in body-local meters, ship frame (see the module
+ * FRAME CONTRACT). Matches ArmManager.getStrutTipPosition() (C-2) — ONE
+ * computation, the twin delegates here.
+ *
+ * tip = hinge + L × (sin(α)·dockOutward − cos(α)·ẑ)     (stowed = aft at −Z)
  *
  * @param {{hingePosition:{x:number,y:number,z:number}, dockOutward:{x:number,y:number,z:number}}} dockPos
  * @param {number} alpha — strut sweep angle (rad), 0=stowed, π/2=equatorial, π=zenith
- * @returns {{x:number, y:number, z:number}} position in meters
+ * @returns {{x:number, y:number, z:number}} position in meters, ship frame
  */
 export function strutTipMeters(dockPos, alpha) {
   const L = V5.STRUT_LENGTH; // 1.60 m
-  const hx = dockPos.hingePosition.x / M;
-  const hy = dockPos.hingePosition.y / M;
-  const hz = dockPos.hingePosition.z / M;
+  const { hx, hy, hz, ox, oy, oz } = _dockToShipFrame(dockPos);
   const sinA = Math.sin(alpha);
   const cosA = Math.cos(alpha);
-  const ox = dockPos.dockOutward.x;
-  const oy = dockPos.dockOutward.y;
-  const oz = dockPos.dockOutward.z;
   return {
     x: hx + L * sinA * ox,
-    y: hy + L * (sinA * oy - cosA),
-    z: hz + L * sinA * oz,
+    y: hy + L * sinA * oy,
+    z: hz + L * (sinA * oz - cosA),
   };
 }
 
 /**
  * Compute strut midpoint position (approximate strut CoM for a uniform rod).
  * Used for the strut structural mass contribution to overall CoM.
+ * Same frame contract as strutTipMeters.
  *
  * @param {{hingePosition:{x:number,y:number,z:number}, dockOutward:{x:number,y:number,z:number}}} dockPos
  * @param {number} alpha — strut sweep angle (rad)
- * @returns {{x:number, y:number, z:number}} midpoint position in meters
+ * @returns {{x:number, y:number, z:number}} midpoint position in meters, ship frame
  */
 export function strutMidpointMeters(dockPos, alpha) {
   const halfL = V5.STRUT_LENGTH / 2;
-  const hx = dockPos.hingePosition.x / M;
-  const hy = dockPos.hingePosition.y / M;
-  const hz = dockPos.hingePosition.z / M;
+  const { hx, hy, hz, ox, oy, oz } = _dockToShipFrame(dockPos);
   const sinA = Math.sin(alpha);
   const cosA = Math.cos(alpha);
-  const ox = dockPos.dockOutward.x;
-  const oy = dockPos.dockOutward.y;
-  const oz = dockPos.dockOutward.z;
   return {
     x: hx + halfL * sinA * ox,
-    y: hy + halfL * (sinA * oy - cosA),
-    z: hz + halfL * sinA * oz,
+    y: hy + halfL * sinA * oy,
+    z: hz + halfL * (sinA * oz - cosA),
   };
 }
 
@@ -209,6 +234,9 @@ export function computeCoM(armManager, playerSatellite) {
  * the barrel long axis). This is the attitude-dynamics SSOT — it mirrors
  * computeCoM's mass tree exactly (same strut midpoint / daughter tip helpers,
  * same detached/expended exclusions) so inertia and CoM never diverge.
+ * S13(a): the arm terms now arrive in the SAME ship frame as the bus-shell
+ * term (roll mR² on izz) — pre-S13(a) they came out Y-barrel, which booked
+ * the cargo's z-lever into roll and over-fired the izz clamp (register 57).
  *
  * Model:
  *   - Core bus: thin cylindrical shell, mass = CORE_DRY_MASS, at the origin.

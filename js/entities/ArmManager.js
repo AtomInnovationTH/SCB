@@ -14,7 +14,7 @@ import { Events } from '../core/Events.js';
 import { powerDistribution } from '../systems/PowerDistribution.js';
 import { checkActiveSatArming } from '../systems/ActiveSatGuard.js';
 import { persistenceManager } from '../systems/PersistenceManager.js';
-import { computeCoM, computeInducedTorque } from '../systems/CoMCalculator.js';
+import { computeCoM, computeInducedTorque, strutTipMeters } from '../systems/CoMCalculator.js';
 import { ArmUnit } from './ArmUnit.js';
 
 /** 1 meter in scene units */
@@ -69,6 +69,13 @@ const _SOFT_ROT_STATES = new Set([
  *
  * Ring arms hinge at the top collar (Y = COLLAR_Y = +0.90 m).
  * End-face arms (Y3 Octo only) hinge at the barrel end caps (±Z faces).
+ *
+ * This is the STORED convention (CameraSystem's AimDecomposition bridge reads
+ * `arm._dockOutward` in it). The mass model does NOT consume it raw:
+ * CoMCalculator converts these fields to the rendered ship frame (barrel = Z,
+ * stowed aft at −Z) at its strutTipMeters/strutMidpointMeters boundary — the
+ * Y/Z swap of register item 57 (S13(a)). Do not "fix" this convention; the
+ * conversion is deliberate and single-sited.
  *
  * @param {string|number} [tierKeyOrCount='Y0_QUAD'] — tier key or arm count (4/6/8)
  * @returns {Array<{type: string, offset: THREE.Vector3, angle: number, azimuthDeg: number,
@@ -1175,40 +1182,25 @@ export class ArmManager {
   /**
    * Compute strut tip position at sweep angle α (ST-9.2 Config G).
    *
-   * Convention (ARM_PIVOT_ANALYSIS.md §10.2):
-   *   α = 0   → STOWED  (alongside barrel, daughter near −Y bottom)
-   *   α = π/2 → EQUATORIAL (radial outward in XZ plane)
-   *   α = π   → ZENITH  (pointing +Y, above Mother)
+   * Convention (ArmDockBasis.strutLocalDirection — the RENDERED ship frame):
+   *   α = 0   → STOWED  (alongside barrel, daughter aft at −Z)
+   *   α = π/2 → EQUATORIAL (radial outward in the collar XY plane)
+   *   α = π   → ZENITH  (pointing +Z, forward of Mother)
    *
-   * Formula: tip = hinge + STRUT_LENGTH × ( sin(α)·outward − cos(α)·ŷ )
+   * Formula: tip = hinge + STRUT_LENGTH × ( sin(α)·outward − cos(α)·ẑ )
    *
    * Returns position in METERS (not scene units). Caller scales by M if needed.
+   * S13(a): delegates to CoMCalculator.strutTipMeters — ONE computation owns
+   * the stored-dock → ship-frame map (register item 57); this twin must never
+   * re-derive it.
    *
    * @param {number} armIndex — arm index
    * @param {number} alpha — sweep angle in radians [0, π]
-   * @returns {{x: number, y: number, z: number}|null} Tip in meters, or null
+   * @returns {{x: number, y: number, z: number}|null} Tip in meters, ship frame, or null
    */
   getStrutTipPosition(armIndex, alpha) {
     if (!this._dockPositions || armIndex < 0 || armIndex >= this._dockPositions.length) return null;
-    const dp = this._dockPositions[armIndex];
-    const L = Constants.OCTOPUS_V5.STRUT_LENGTH; // 1.60 m
-
-    // Hinge in meters (convert from scene units)
-    const hx = dp.hingePosition.x / M;
-    const hy = dp.hingePosition.y / M;
-    const hz = dp.hingePosition.z / M;
-
-    const sinA = Math.sin(alpha);
-    const cosA = Math.cos(alpha);
-    const ox = dp.dockOutward.x;
-    const oy = dp.dockOutward.y; // 0 for ring arms; 0 for end-face Z-axis arms
-    const oz = dp.dockOutward.z;
-
-    return {
-      x: hx + L * sinA * ox,
-      y: hy + L * (sinA * oy - cosA), // −cos(α)·ŷ rotates through Y axis
-      z: hz + L * sinA * oz,
-    };
+    return strutTipMeters(this._dockPositions[armIndex], alpha);
   }
 
   // ==========================================================================
@@ -1293,7 +1285,7 @@ export class ArmManager {
     arm1._autoLockForFire();
     arm2._autoLockForFire();
 
-    // Compute residual recoil (§4.3: 2 × m × v × cos(α) along Y)
+    // Compute residual recoil (§4.3: 2 × m × v × cos(α) along the barrel axis)
     const residualImpulse = arm1.computeRecoilResidual();
 
     // Emit dual-fire event
@@ -1328,8 +1320,11 @@ export class ArmManager {
       if (Constants.FEATURE_FLAGS.COM_TRACKING) {
         const com = computeCoM(this, this.playerSatellite);
         if (com && com.position) {
-          // Recoil force acts along Y (residual from cos(α)) at the collar offset
-          const recoilForce = { x: 0, y: residualImpulse > 0 ? 1 : -1, z: 0 };
+          // Recoil force acts along the barrel axis (residual from cos(α)) —
+          // ship frame: barrel = Z. S13(a): com.position now arrives ship-frame
+          // (register item 57), so the force direction must be ship-frame too
+          // or τ = r × F mixes frames. Dormant while COM_TRACKING is false.
+          const recoilForce = { x: 0, y: 0, z: residualImpulse > 0 ? 1 : -1 };
           const inducedTorque = computeInducedTorque(com.position, recoilForce);
           if (typeof this.playerSatellite.applyInducedTorque === 'function') {
             this.playerSatellite.applyInducedTorque(inducedTorque);
