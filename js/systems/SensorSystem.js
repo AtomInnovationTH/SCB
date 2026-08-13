@@ -584,9 +584,13 @@ export class SensorSystem {
     // Filter to undiscovered only, resolve original debris objects, already sorted by distance.
     // Track whether the field already holds discovered contacts so a re-scan of a
     // known field still fills the selection even when nothing new is revealed.
+    // S11(b): hazard shards (the power-law background cloud) are never revealed
+    // — they are uncapturable furniture, not contacts; the scan's reveal budget
+    // belongs to the authored foreground cast.
     const toReveal = [];
     let hasDiscovered = false;
     for (const copy of nearby) {
+      if (copy.hazard) continue;
       if (copy.discovered) { hasDiscovered = true; continue; }
       const original = debrisField.getDebrisById(copy.id);
       if (original && !original.discovered) {

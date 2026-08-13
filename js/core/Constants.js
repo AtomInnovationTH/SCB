@@ -3927,6 +3927,52 @@ export const Constants = {
       INC_TOL_DEG: 0.5,
       RAAN_TOL_DEG: 0.5,
     },
+    // S11(b) — TWO POPULATIONS, TWO RULES (plan 1786401864178-cargo-continuity
+    // §5 S11 piece (b)). The field = a dense power-law BACKGROUND/HAZARD cloud
+    // (numerous, uncapturable, feeds ConjunctionSystem + the look of the sky)
+    // + exactly DEBRIS_PER_MISSION authored FOREGROUND targets with a
+    // three-act shape (owner: "the first mission needs a beginning, middle,
+    // end… the whale as act three, not as 24 % of the furniture").
+    //
+    // The hazard cloud's fragment SIZES follow the NASA Standard Breakup
+    // Model cumulative count law N(≥Lc) ∝ Lc^−LAMBDA (collision 1.71 /
+    // explosion 1.6; characteristic length Lc). Range is sub-half-metre
+    // shards: honestly uncapturable (no net weave or grapple engages them) —
+    // that is what makes the cloud furniture and a collision hazard, not a
+    // target list. The mass LAW for interactive debris stays with S11(c);
+    // hazard masses follow the existing fragment mass↔size envelope inverted
+    // (no new law introduced here).
+    HAZARD_CLOUD: {
+      LAMBDA: 1.71,          // SBM collision exponent (explosion: 1.6 — the band is [1.6, 1.71])
+      SIZE_MIN_M: 0.1,       // m — lower edge of the shard cloud
+      SIZE_MAX_M: 0.5,       // m — upper edge (sub-half-metre ⇒ uncapturable-class)
+    },
+    // The authored foreground cast — exactly MISSIONS.DEBRIS_PER_MISSION rows
+    // (drift-guarded in test-DebrisFieldPopulations.js), in engagement order:
+    //   act 1 — one easy warm-up: small, slow, every tool works.
+    //   act 2 — three pieces that demand the tools and a decision.
+    //   act 3 — the finale: the intact body (mother-net only; the ONE member
+    //           over TOOL_RECOMMENDATION.MOTHER_MIN_MASS).
+    // Mass/size/tumble are AUTHORED (not drawn) — this is the only place
+    // S11(b) reshapes type/mass/material; orbits are still the seeded
+    // in-regime draw from DebrisField. A real in-band catalogue whale
+    // (> MOTHER_MIN_MASS) substitutes the act-3 row when one exists
+    // (buildRegimeDebrisSeeds owns the pick; the start regime has none —
+    // register item 51 — so the production cast is all-procedural today).
+    // altKm is authored ONLY where gate-critical (see row 4's note); every
+    // other orbit element stays the seeded in-band draw.
+    FOREGROUND_CAST: [
+      { act: 1, type: 'missionDebris', massKg: 1.5, sizeM: 0.35, tumbleDeg: 4, material: 'composite',
+        note: 'warm-up — slow small operational debris; lasso/spinner/daughter all work' },
+      { act: 2, type: 'defunctSat', massKg: 120, sizeM: 2.2, tumbleDeg: 45, material: 'mli_mylar',
+        note: 'the fast tumbler — de-spin [L] first, or take poor net odds (NET_TUMBLE_PENALTY)' },
+      { act: 2, type: 'defunctSat', massKg: 480, sizeM: 4.5, tumbleDeg: 8, material: 'aluminum',
+        note: 'at the daughter cap (500 kg) — the haul decision: ties a daughter up, pays well' },
+      { act: 2, type: 'cubesat', massKg: 6, sizeM: 0.45, tumbleDeg: 12, material: 'aluminum', altKm: 250,
+        note: 'small intact microsat — the precision catch. altKm pinned FAR (never within 3 km of the 350 km start) so the M1 welcome cluster row #7 always finds a cubesat mesh slot — the dev net scenario stages its whale on that slot (gate-critical)' },
+      { act: 3, type: 'rocketBody', massKg: 1600, sizeM: 8, tumbleDeg: 15, material: 'aluminum',
+        note: 'the finale — the intact body; mother-net only, end-on aspect lesson, under the S7 transfer mass gate (2000 kg) so the cargo chain works on it' },
+    ],
     ALT_BANDS: [
       { label: 'VLEO',     min:   180, max:  400, weight: 0.12 },  // ISS, Tiangong, early-reentry debris
       { label: 'LEO-low',  min:   400, max:  600, weight: 0.14 },  // Sentinel, Hubble, Starlink

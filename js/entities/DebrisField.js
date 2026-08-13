@@ -1,6 +1,8 @@
 /**
  * DebrisField.js — Manages all debris objects (interactive + background)
- * 800 interactive debris with InstancedMesh, 5000 background as Points.
+ * Two populations (S11(b)): DEBRIS.FOREGROUND_CAST authored targets (the
+ * three-act cast) + a dense uncapturable power-law hazard shard cloud —
+ * 800 interactive total with InstancedMesh, 5000 background as Points.
  * @module entities/DebrisField
  */
 
@@ -24,7 +26,7 @@ import {
   getUVOffsetForCountry, hasFlag as hasFlagDecal,
   getVisualMode,
 } from '../ui/DebrisWireframe.js';
-import { catalogEntryToDebrisData, buildRegimeDebrisSeeds, regimeFromStartOrbit } from './CatalogConverter.js';
+import { catalogEntryToDebrisData, buildRegimeDebrisSeeds, regimeFromStartOrbit, mulberry32, samplePowerLawSize } from './CatalogConverter.js';
 import { deriveCaptureFlags } from './debrisFerrous.js';
 import { isFlagEligible, pickCountryForId } from '../ui/FlagDecalSystem.js';
 
@@ -285,16 +287,9 @@ const ALT_BANDS = (Constants.DEBRIS && Array.isArray(Constants.DEBRIS.ALT_BANDS)
       { min: 1200, max: 2000, weight: 0.15 },
     ];
 
-/** Inclination clusters (degrees) with relative weights */
-const INC_CLUSTERS = [
-  { center: 28.5, spread: 2.0, weight: 0.10 },   // Cape Canaveral
-  { center: 51.6, spread: 1.5, weight: 0.15 },   // ISS
-  { center: 65.0, spread: 3.0, weight: 0.10 },   // Russian
-  { center: 72.0, spread: 2.0, weight: 0.08 },   // Russian
-  { center: 82.0, spread: 2.0, weight: 0.07 },   // Russian SSO
-  { center: 97.5, spread: 1.5, weight: 0.25 },   // Sun-synchronous
-  { center: 45.0, spread: 40.0, weight: 0.25 },  // Random spread
-];
+// S11(b) removed INC_CLUSTERS (28.5°–97.5° weighted inclination lottery):
+// its only consumer was the old all-sky _generateBackground scatter; the
+// field (foreground + hazard + background) is one orbital regime now.
 
 /**
  * Named inclination clusters used for human-readable field/cluster IDs.
@@ -353,11 +348,6 @@ function gaussRandomRng(rng, mean = 0, stddev = 1) {
   const u1 = rng();
   const u2 = rng();
   return mean + stddev * Math.sqrt(-2 * Math.log(u1 || 1e-10)) * Math.cos(2 * Math.PI * u2);
-}
-
-/** Gaussian random (Box-Muller) — the Math.random entry point. */
-function gaussRandom(mean = 0, stddev = 1) {
-  return gaussRandomRng(Math.random, mean, stddev);
 }
 
 /** Random float in [min, max] */
@@ -593,7 +583,11 @@ export class DebrisField {
           if (d._hiddenForMission1) {
             d._hiddenForMission1 = false;
             d.alive = true;
-            d.tracked = true;
+            // S11(b): hazard shards stay untracked — they are the UNTRACKABLE
+            // population by construction; restoring them must not catalogue
+            // them (the pre-S11(b) blanket `tracked = true` predates the two
+            // populations).
+            d.tracked = !d.hazard;
             restored++;
           }
         }
@@ -672,15 +666,35 @@ export class DebrisField {
    *  (TLE alt+inc in band) and picked by a seeded weighted sampler, replacing
    *  the file-order slice that landed Envisat in the fourth slot of every game
    *  (register item 38); the procedural half is drawn in-band by
-   *  `_createDebrisData(id, rng)` on the same seeded stream. */
+   *  `_createDebrisData(id, rng)` on the same seeded stream.
+   *  S11(b): TWO POPULATIONS (register items 38/39; owner: "the whale as act
+   *  three, not as 24 % of the furniture") — the first DEBRIS.FOREGROUND_CAST.length
+   *  slots are the authored foreground cast (three-act shape, exactly
+   *  MISSIONS.DEBRIS_PER_MISSION pieces; a real in-band whale substitutes the
+   *  finale when one exists — at the start regime the in-band yield is zero,
+   *  register item 51, so the cast is honestly all-procedural); every other
+   *  slot is an uncapturable HAZARD shard from the power-law cloud. */
   _generateDebris() {
     const total = this._interactiveCount;
+    const cast = (Constants.DEBRIS && Array.isArray(Constants.DEBRIS.FOREGROUND_CAST))
+      ? Constants.DEBRIS.FOREGROUND_CAST : [];
+    const finaleMassKg = (Constants.TOOL_RECOMMENDATION
+      && Constants.TOOL_RECOMMENDATION.MOTHER_MIN_MASS) || 500;
 
     const { real, procedural, debug } = buildRegimeDebrisSeeds(
       this._catalogLoader,
       total,
-      (id, rng) => this._createDebrisData(id, rng),
-      { regime: this._fieldRegime, seed: this._fieldSeed },
+      (id, rng, info) => {
+        if (!info) return this._createDebrisData(id, rng);      // legacy assembly (tests)
+        return info.role === 'foreground'
+          ? this._createDebrisData(id, rng, cast[info.slot])
+          : this._createDebrisData(id, rng, this._drawHazardSpec(rng));
+      },
+      {
+        regime: this._fieldRegime,
+        seed: this._fieldSeed,
+        foreground: cast.length ? { count: cast.length, finaleMassKg } : null,
+      },
     );
 
     for (const data of real) {
@@ -697,10 +711,41 @@ export class DebrisField {
 
     const r = this._fieldRegime;
     console.log(`[DebrisField] field regime "${this._fieldRegimeLabel}" seed=${this._fieldSeed}: ` +
-      `${debug.realCount} real (${debug.eligibleCount} in-band) + ${debug.proceduralCount} procedural, ` +
+      `${debug.foregroundCount} authored (${debug.realCount} real finale: ${debug.finaleReal || 'none'}, ` +
+      `${debug.eligibleCount} in-band) + ${debug.hazardCount} hazard, ` +
       `alt ${r.altMinKm}–${r.altMaxKm} km, inc ${r.incCenterDeg.toFixed(1)}±${r.incTolDeg}°`);
 
     // UX-3 #9: All debris starts hidden — auto-discover runs after welcome-field spawn in update()
+  }
+
+  /**
+   * S11(b) — build the per-piece spec for a HAZARD shard: a fragment whose
+   * SIZE follows the NASA Standard Breakup Model cumulative count law
+   * N(≥Lc) ∝ Lc^−λ (Constants.DEBRIS.HAZARD_CLOUD) drawn on the seeded
+   * stream, so the cloud is reproducible from the logged boot seed and its
+   * measured exponent is test-pinned. Mass follows the existing fragment
+   * mass↔size envelope INVERTED (size is drawn, mass derives) — deliberately
+   * NOT a new law: the interactive mass law is S11(c)'s (register item 39).
+   * The shard is flagged uncapturable furniture (`hazard: true`, untracked).
+   * @private
+   * @param {() => number} rng — the assembly's seeded stream
+   * @returns {object} a _createDebrisData spec
+   */
+  _drawHazardSpec(rng) {
+    const HC = (Constants.DEBRIS && Constants.DEBRIS.HAZARD_CLOUD)
+      || { LAMBDA: 1.71, SIZE_MIN_M: 0.1, SIZE_MAX_M: 0.5 };
+    const td = DEBRIS_TYPES.fragment;
+    const sizeMeter = samplePowerLawSize(rng(), HC.SIZE_MIN_M, HC.SIZE_MAX_M, HC.LAMBDA);
+    const span = (td.sizeMax - td.sizeMin) || 1;
+    const frac = Math.max(0, Math.min(1, (sizeMeter - td.sizeMin) / span));
+    const massKg = td.massMin + frac * (td.massMax - td.massMin);
+    return {
+      type: 'fragment',
+      sizeM: sizeMeter,
+      massKg,
+      hazard: true,
+      tracked: false,
+    };
   }
 
   /**
@@ -753,67 +798,23 @@ export class DebrisField {
     if (data._onboardingPinLat === undefined) data._onboardingPinLat = 0;
   }
 
-  /** @private Create a single debris data object.
-   *  S11(a): takes the assembly id and the seeded rng from
-   *  `buildRegimeDebrisSeeds`; legacy callers (Kessler `createFragments`)
-   *  omit both and get the old non-deterministic behaviour. Only the ORBIT
-   *  draws are seeded — type/mass/material stay on Math.random (the mass law
-   *  is S11(c)'s; this session changes geometry, not the spawn table). */
-  _createDebrisData(id = this._nextId++, rng = Math.random) {
-
-    // Pick type by weighted distribution
-    const typeEntries = Object.entries(DEBRIS_TYPES);
-    const typeItem = weightedRandom(typeEntries.map(([k, v]) => ({ key: k, ...v })));
-    const type = typeItem.key;
-    const typeDef = DEBRIS_TYPES[type];
-
-    // Size & mass — debug session 2026-05-15 polish task 6:
-    // sizeMeter and mass were previously **independent** uniform rolls
-    // inside each type's [sizeMin..sizeMax] and [massMin..massMax]
-    // ranges. The visible result was a 5 kg fragment that rendered the
-    // same size as a 200 kg defunctSat, breaking the player's
-    // "big-looking debris should yield big salvage" expectation
-    // (salvage IS roughly linear in mass; the mismatch was upstream).
-    //
-    // New formula: mass is the primary random; sizeMeter follows the
-    // type's mass→size envelope with a ±15 % jitter so visually-
-    // similar masses still look distinct. Matches the regen path
-    // already used at line ~1389 (catalog conversion to procedural).
-    const mass = randRange(typeDef.massMin, typeDef.massMax);
-    const _massSpan = typeDef.massMax - typeDef.massMin;
-    const _massFrac = _massSpan > 0 ? (mass - typeDef.massMin) / _massSpan : 0.5;
-    const _sizeSpan = typeDef.sizeMax - typeDef.sizeMin;
-    const _sizeMid  = typeDef.sizeMin + _massFrac * _sizeSpan;
-    const _sizeJitter = 0.85 + Math.random() * 0.30;   // ±15 %
-    const sizeMeter = Math.max(
-      typeDef.sizeMin * 0.7,
-      Math.min(typeDef.sizeMax * 1.15, _sizeMid * _sizeJitter)
-    );
-
-    // Tumble
-    const tumbleRateDeg = randRange(typeDef.tumbleMin, typeDef.tumbleMax);
-    const tumbleRate = tumbleRateDeg * Math.PI / 180; // rad/s
-    const tumbleAxis = randomUnitVector();
-
-    // Material — weighted by type so gold MLI / blue solar cells stay rare and
-    // concentrated on satellites (real debris is mostly metal/composite).
-    const material = weightedMaterial(type);
-
-    // Brittleness
-    const brittleness = Math.random();
-
-    // Tracked — probability based on debris type (real-world catalog coverage)
-    const tracked = Math.random() < (TRACKING_PROB[type] || 0.5);
-
-    // Orbit: S11(a) — drawn INSIDE the field regime, seeded, so the whole
-    // field is one orbital plane family centred on the player's start orbit
-    // (register item 38: "objects in different planes are not in the same
-    // field"). Altitude spans the containing ALT_BANDS cell (the benign axis:
-    // along-track drift, no plane crossings); inclination/RAAN are gaussian
-    // about the regime centre, clamped to ±tol, so the worst-case pairwise
-    // plane difference is ≤ 2·tol (~1° ≈ 135 m/s at VLEO) — neighbours, not
-    // km/s strangers. The old code drew a weighted ALT_BANDS cell and an
-    // INC_CLUSTERS centre per piece, scattering the field over every plane.
+  /** @private Draw one orbit INSIDE the field regime on the seeded stream.
+   *  S11(a) — the whole field is one orbital plane family centred on the
+   *  player's start orbit (register item 38: "objects in different planes are
+   *  not in the same field"). Altitude spans the containing ALT_BANDS cell
+   *  (the benign axis: along-track drift, no plane crossings); inclination/
+   *  RAAN are gaussian about the regime centre, clamped to ±tol, so the
+   *  worst-case pairwise plane difference is ≤ 2·tol (~1° ≈ 135 m/s at VLEO)
+   *  — neighbours, not km/s strangers. The old code drew a weighted
+   *  ALT_BANDS cell and an INC_CLUSTERS centre per piece, scattering the
+   *  field over every plane.
+   *  Extracted from _createDebrisData for S11(b): the foreground cast, the
+   *  hazard shards AND the 5000-point background cloud all draw the SAME
+   *  in-plane geometry from the same seeded discipline (one computation).
+   *  Consumes the rng in a fixed order (alt gauss ×2, inc ×2, raan ×2, then
+   *  ecc/argP/trueAnomaly singles) — the S11(a) reproducibility pin depends
+   *  on that order never changing. */
+  _drawRegimeOrbit(rng = Math.random) {
     const regime = this._fieldRegime || regimeFromStartOrbit(null);
     const altMidKm = (regime.altMinKm + regime.altMaxKm) / 2;
     const altKm = gaussRandomRng(rng, altMidKm, (regime.altMaxKm - regime.altMinKm) / 4);
@@ -831,7 +832,7 @@ export class DebrisField {
 
     const smaScene = Constants.EARTH_RADIUS + clampedAlt * Constants.SCENE_SCALE;
 
-    const orbit = {
+    return {
       semiMajorAxis: smaScene,
       eccentricity: rng() * 0.02,
       inclination: clampedInc * Math.PI / 180,
@@ -840,6 +841,91 @@ export class DebrisField {
       trueAnomaly: rng() * 2 * Math.PI,
       meanMotion: 0,
     };
+  }
+
+  /** @private Create a single debris data object.
+   *  S11(a): takes the assembly id and the seeded rng from
+   *  `buildRegimeDebrisSeeds`; legacy callers (Kessler `createFragments`)
+   *  omit both and get the old non-deterministic behaviour. Only the ORBIT
+   *  draws are seeded — type/mass/material stay on Math.random (the mass law
+   *  is S11(c)'s; this session changes geometry, not the spawn table).
+   *  S11(b): an optional authored `spec` ({ type, massKg, sizeM, tumbleDeg?,
+   *  material?, altKm?, tracked?, hazard?, act? }) replaces the random
+   *  type/mass/size/tumble/material draws with AUTHORED values — the two
+   *  populations (foreground cast + hazard shards) are built this way.
+   *  Everything not named in the spec keeps today's draws; the orbit stays
+   *  the seeded in-regime draw (`spec.altKm` only overrides the altitude,
+   *  consumed identically so the stream never shifts). */
+  _createDebrisData(id = this._nextId++, rng = Math.random, spec = null) {
+    const specActive = !!spec;
+
+    // Pick type by weighted distribution (authored when a spec drives)
+    const typeEntries = Object.entries(DEBRIS_TYPES);
+    const typeItem = specActive ? null : weightedRandom(typeEntries.map(([k, v]) => ({ key: k, ...v })));
+    const type = specActive ? spec.type : typeItem.key;
+    const typeDef = DEBRIS_TYPES[type] || DEBRIS_TYPES.fragment;
+
+    // Size & mass — debug session 2026-05-15 polish task 6:
+    // sizeMeter and mass were previously **independent** uniform rolls
+    // inside each type's [sizeMin..sizeMax] and [massMin..massMax]
+    // ranges. The visible result was a 5 kg fragment that rendered the
+    // same size as a 200 kg defunctSat, breaking the player's
+    // "big-looking debris should yield big salvage" expectation
+    // (salvage IS roughly linear in mass; the mismatch was upstream).
+    //
+    // New formula: mass is the primary random; sizeMeter follows the
+    // type's mass→size envelope with a ±15 % jitter so visually-
+    // similar masses still look distinct. Matches the regen path
+    // already used at line ~1389 (catalog conversion to procedural).
+    // S11(b): a spec carries AUTHORED mass+size (the three-act cast /
+    // the power-law hazard shards) — the random envelope is skipped.
+    let mass, sizeMeter;
+    if (specActive) {
+      mass = spec.massKg;
+      sizeMeter = spec.sizeM;
+    } else {
+      mass = randRange(typeDef.massMin, typeDef.massMax);
+      const _massSpan = typeDef.massMax - typeDef.massMin;
+      const _massFrac = _massSpan > 0 ? (mass - typeDef.massMin) / _massSpan : 0.5;
+      const _sizeSpan = typeDef.sizeMax - typeDef.sizeMin;
+      const _sizeMid  = typeDef.sizeMin + _massFrac * _sizeSpan;
+      const _sizeJitter = 0.85 + Math.random() * 0.30;   // ±15 %
+      sizeMeter = Math.max(
+        typeDef.sizeMin * 0.7,
+        Math.min(typeDef.sizeMax * 1.15, _sizeMid * _sizeJitter)
+      );
+    }
+
+    // Tumble (authored rate when the spec names one)
+    const tumbleRateDeg = (specActive && Number.isFinite(spec.tumbleDeg))
+      ? spec.tumbleDeg
+      : randRange(typeDef.tumbleMin, typeDef.tumbleMax);
+    const tumbleRate = tumbleRateDeg * Math.PI / 180; // rad/s
+    const tumbleAxis = randomUnitVector();
+
+    // Material — weighted by type so gold MLI / blue solar cells stay rare and
+    // concentrated on satellites (real debris is mostly metal/composite).
+    // A spec authors it directly (the cast's look is deliberate).
+    const material = (specActive && spec.material) ? spec.material : weightedMaterial(type);
+
+    // Brittleness
+    const brittleness = Math.random();
+
+    // Tracked — probability based on debris type (real-world catalog
+    // coverage). The cast is catalogued (tracked); hazard shards are the
+    // untrackable population by construction.
+    const tracked = specActive
+      ? (spec.tracked !== false)
+      : Math.random() < (TRACKING_PROB[type] || 0.5);
+
+    // Orbit: the seeded in-regime draw (see _drawRegimeOrbit); an authored
+    // spec may pin the altitude (the cubesat's gate-critical far slot) —
+    // the altitude draw is consumed identically either way, so the seeded
+    // stream's position never depends on which spec row is being built.
+    const orbit = this._drawRegimeOrbit(rng);
+    if (specActive && Number.isFinite(spec.altKm)) {
+      orbit.semiMajorAxis = Constants.EARTH_RADIUS + spec.altKm * Constants.SCENE_SCALE;
+    }
 
     // Scene-scale size (meters → scene units: 1m = 0.00001 scene units)
     const sceneSize = sizeMeter * 0.00001;
@@ -859,6 +945,12 @@ export class DebrisField {
     const catalogType = (type === 'fragment' && mass < 1)
       ? 'fragment'
       : (PROC_TYPE_TO_CATALOG[type] || 'debris');
+
+    // S11(b): population marks from the driving spec (defaults keep one
+    // hidden class — see the return literal).
+    const hazard = specActive && spec.hazard === true;
+    const foreground = specActive && !hazard && Number.isFinite(spec.act);
+    const act = foreground ? spec.act : 0;
 
     return {
       id,
@@ -898,8 +990,22 @@ export class DebrisField {
       country: null,
       catalogType,
       moidBadge: null,
-      // UX-3 #9: Hidden until scanned — staggered reveal
-      discovered: false,
+      // S11(b) population marks — initialised on every piece so all debris
+      // share one hidden class. `hazard`: uncapturable power-law shard
+      // furniture (excluded from targeting/scan-reveal/trawl; feeds
+      // ConjunctionSystem). `foreground`/`act`: a member of the authored
+      // three-act cast (Constants.DEBRIS.FOREGROUND_CAST).
+      hazard,
+      foreground,
+      act,
+      // UX-3 #9: Hidden until scanned — staggered reveal.
+      // S11(b): the authored cast is the field's KNOWN, catalogued population
+      // — pre-discovered. Five pieces spread around a ~42 000 km ring can
+      // never be scan-found (REVEAL_BASE_RANGE 500 km); the tracked big-body
+      // population of a real field is exactly the stuff the network already
+      // knows. Hazard shards stay undiscovered forever (scan-reveal skips
+      // them; they are furniture, not contacts).
+      discovered: foreground,
       // Onboarding tease pin (init on every piece so all debris share one
       // hidden class). Only the curated M1 tease piece ever flips these on.
       _onboardingPinned: false,
@@ -1291,30 +1397,20 @@ export class DebrisField {
 
     this._backgroundOrbits = [];
 
+    // S11(b): the background is the SAME field the interactive population
+    // lives in — one orbital regime (register item 38), not the old
+    // all-altitude / all-inclination scatter that mixed planes kilometres
+    // per second apart. Orbits draw from the identical in-regime helper as
+    // the interactive pieces, on a seeded stream derived from the boot seed
+    // (XOR-folded so the sky's draws never shift the cast's). Sizes follow
+    // the hazard cloud's NASA-SBM power law (many tiny shards, few big) —
+    // the cloud is the far-field view of the same fragment population.
+    const rng = mulberry32((this._fieldSeed ^ 0x9E3779B9) >>> 0);
+    const HC = (Constants.DEBRIS && Constants.DEBRIS.HAZARD_CLOUD)
+      || { LAMBDA: 1.71, SIZE_MIN_M: 0.1, SIZE_MAX_M: 0.5 };
+
     for (let i = 0; i < BACKGROUND_COUNT; i++) {
-      // Pick altitude band
-      const altBand = weightedRandom(ALT_BANDS);
-      const altKm = gaussRandom(
-        (altBand.min + altBand.max) / 2,
-        (altBand.max - altBand.min) / 4
-      );
-      const clampedAlt = Math.max(180, Math.min(2000, altKm));
-      const smaScene = Constants.EARTH_RADIUS + clampedAlt * Constants.SCENE_SCALE;
-
-      // Pick inclination
-      const incCluster = weightedRandom(INC_CLUSTERS);
-      const incDeg = gaussRandom(incCluster.center, incCluster.spread);
-
-      const orbit = {
-        semiMajorAxis: smaScene,
-        eccentricity: Math.random() * 0.015,
-        inclination: Math.max(0, Math.min(180, incDeg)) * Math.PI / 180,
-        raan: Math.random() * 2 * Math.PI,
-        argPerigee: Math.random() * 2 * Math.PI,
-        trueAnomaly: Math.random() * 2 * Math.PI,
-        meanMotion: 0,
-      };
-
+      const orbit = this._drawRegimeOrbit(rng);
       this._backgroundOrbits.push(orbit);
 
       // Initial position
@@ -1324,12 +1420,15 @@ export class DebrisField {
       positions[i * 3 + 2] = cart.position.z;
 
       // Color: slightly warm grayish
-      colors[i * 3] = 0.6 + Math.random() * 0.3;
-      colors[i * 3 + 1] = 0.55 + Math.random() * 0.25;
-      colors[i * 3 + 2] = 0.5 + Math.random() * 0.2;
+      colors[i * 3] = 0.6 + rng() * 0.3;
+      colors[i * 3 + 1] = 0.55 + rng() * 0.25;
+      colors[i * 3 + 2] = 0.5 + rng() * 0.2;
 
-      // Size: tiny dots
-      sizes[i] = 1.0 + Math.random() * 2.0;
+      // Size: power-law shard size, linearly mapped onto the historical
+      // 1–3 dot-size band (the render attribute is decorative; the LAW it
+      // inherits is the measured one).
+      const lc = samplePowerLawSize(rng(), HC.SIZE_MIN_M, HC.SIZE_MAX_M, HC.LAMBDA);
+      sizes[i] = 1.0 + 2.0 * ((lc - HC.SIZE_MIN_M) / ((HC.SIZE_MAX_M - HC.SIZE_MIN_M) || 1));
     }
 
     const bgGeo = new THREE.BufferGeometry();
@@ -2523,6 +2622,11 @@ export class DebrisField {
       // Mark as welcome spawn, ensure visible
       debris.welcomeSpawn = true;
       debris.alive = true;
+      // S11(b): a reused candidate may have been a hazard shard — promotion
+      // into the curated cluster clears the uncapturable-furniture flag (the
+      // spec re-masses/re-sizes it into a real catch target; the dev net
+      // scenario stages its whale on row #7, so this door is gate-critical).
+      debris.hazard = false;
       // Which curated WELCOME_FIELD spec row realised this piece (0-based).
       // Score-based candidate matching means debrisList order != spec order, so
       // this lets consumers/tests recover the intended progression position.
@@ -2805,6 +2909,9 @@ export class DebrisField {
       debris.alive = true;
       debris.tracked = true;
       debris.discovered = true;
+      // S11(b): a repurposed shard leaves the hazard cloud — boss fragments
+      // are deliberate targets (tracked + discovered), not furniture.
+      debris.hazard = false;
 
       ids.push(debris.id);
       eventBus.emit(Events.TARGET_DISCOVERED, { target: debris });
@@ -2919,6 +3026,9 @@ export class DebrisField {
 
     for (const debris of this.debrisList) {
       if (!debris.alive) continue;
+      // S11(b): hazard shards are not trawl fodder / sensor contacts — they
+      // exist as collision hazards (ConjunctionSystem), not pickups.
+      if (debris.hazard) continue;
       // Only sub-10cm untracked objects
       if (debris.tracked || debris.sizeMeter > 0.1) continue;
 
@@ -3000,6 +3110,8 @@ export class DebrisField {
 
     for (const debris of this.debrisList) {
       if (!debris.alive) continue;
+      // S11(b): hazard shards are not targets (the trawl path reads this list).
+      if (debris.hazard) continue;
 
       // Use pre-allocated orbit temps instead of spread
       _tmpKmOrbit.semiMajorAxis = playerOrbit.semiMajorAxis / Constants.SCENE_SCALE;
@@ -3077,6 +3189,9 @@ export class DebrisField {
 
     for (const debris of this.debrisList) {
       if (!debris.alive || debris._captured) continue;
+      // S11(b): hazard shards are uncapturable furniture — they feed
+      // ConjunctionSystem and the sky, never the HUD target list.
+      if (debris.hazard) continue;
       // UX-3 #9: Only return discovered debris (scanned or auto-discovered)
       if (!debris.discovered) continue;
       // M1 hard contract: ONLY the welcome cluster appears in the HUD list.

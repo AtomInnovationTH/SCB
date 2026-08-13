@@ -622,7 +622,7 @@ async function init() {
   }
   const _fieldSeed = (Date.now() >>> 0);
   debrisField = new DebrisField(scene, { catalogLoader, seed: _fieldSeed, fieldRegime: _fieldRegime });
-  _bootMark('DebrisField constructed (800 interactive + 5000 background)');
+  _bootMark('DebrisField constructed (5 authored + ~795 hazard + 5000 background)');
 
   // --- Active Satellites ---
   activeSatellites = new ActiveSatellites(scene);

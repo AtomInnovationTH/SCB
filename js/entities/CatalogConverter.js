@@ -264,8 +264,10 @@ export function buildHybridDebrisSeeds(catalogLoader, interactiveCount, procedur
 // owns the orbit draws). Node-safe like the rest of this module.
 // ============================================================================
 
-/** Deterministic PRNG (mulberry32) — one stream per field assembly. */
-function _mulberry32(seed) {
+/** Deterministic PRNG (mulberry32) — one stream per field assembly.
+ *  Exported for DebrisField's background cloud (S11(b)) so the whole field —
+ *  cast, hazards AND sky — is reproducible from the one logged boot seed. */
+export function mulberry32(seed) {
   let a = seed >>> 0;
   return function () {
     a |= 0; a = (a + 0x6D2B79F5) | 0;
@@ -273,6 +275,28 @@ function _mulberry32(seed) {
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
+}
+
+/**
+ * S11(b) — the hazard cloud's power-law size draw. NASA Standard Breakup
+ * Model: cumulative fragment counts go as N(≥Lc) ∝ Lc^−lambda (collision
+ * 1.71 / explosion 1.6) over characteristic length Lc. This is the plain
+ * inverse CDF of that law (Lc = min · u^(−1/lambda)) with a hard cap at
+ * `max`: the empirical cumulative below `max` recovers lambda EXACTLY (the
+ * cap only piles the (min/max)^lambda ≈ 6 % top tail AT max — the practical
+ * upper size for "shard"), so the test-pinned measured exponent sits inside
+ * the SBM band instead of being biased by a truncation constant. Node-safe
+ * pure function of one uniform u∈[0,1).
+ *
+ * @param {number} u — one uniform draw (e.g. from mulberry32)
+ * @param {number} min — minimum characteristic length (m)
+ * @param {number} max — maximum characteristic length (m)
+ * @param {number} lambda — the cumulative-law exponent (SBM: 1.6–1.71)
+ * @returns {number} characteristic length in [min, max]
+ */
+export function samplePowerLawSize(u, min, max, lambda) {
+  const uu = Math.min(1 - 1e-12, Math.max(1e-12, u));
+  return Math.min(max, min * Math.pow(uu, -1 / lambda));
 }
 
 /**
@@ -320,20 +344,36 @@ export function regimeFromStartOrbit(startOrbit) {
  * Real entries keep their real TLE orbits (RAAN included) — admission is the
  * filter, not a re-seat; the RAAN band binds only the procedural filler.
  *
+ * S11(b) — `opts.foreground = { count, finaleMassKg }` switches the assembly
+ * to TWO POPULATIONS: the first `count` slots are the authored FOREGROUND
+ * cast (factory called with `info = { role:'foreground', slot }`), every
+ * remaining slot is a HAZARD shard (`info = { role:'hazard' }`). Among the
+ * sampled in-band entries, the first one over `finaleMassKg` SUBSTITUTES the
+ * finale slot (the last foreground slot — "the intact body"); no other real
+ * entries spawn (a field is five authored targets + the cloud — the richer
+ * catalogue integration is S11(c)'s data pass; at the 350 km start regime
+ * the in-band yield is zero — register item 51 — so the cast is honestly
+ * all-procedural today). When `opts.foreground` is absent the behaviour is
+ * exactly the S11(a) assembly (real pick + procedural fill, factory called
+ * as `factory(id, rng)` with no `info`).
+ *
  * @param {object} catalogLoader — must expose isReady() + getAllDebris().
  * @param {number} interactiveCount — total interactive slots.
- * @param {(id:number, rng:()=>number)=>object} proceduralFactory — in-band filler.
- * @param {{regime:object, seed:number}} opts
+ * @param {(id:number, rng:()=>number, info:?object)=>object} proceduralFactory — in-band filler.
+ * @param {{regime:object, seed:number, foreground:?{count:number, finaleMassKg:number}}} opts
  * @returns {{ real: object[], procedural: object[], seed: number,
- *   debug: { realCount: number, proceduralCount: number, eligibleCount: number } }}
+ *   debug: { realCount: number, proceduralCount: number, eligibleCount: number,
+ *            foregroundCount: number, hazardCount: number, finaleReal: string|null } }}
  */
 export function buildRegimeDebrisSeeds(catalogLoader, interactiveCount, proceduralFactory, opts = {}) {
-  const { regime, seed = 0 } = opts;
-  const rng = _mulberry32(seed);
+  const { regime, seed = 0, foreground = null } = opts;
+  const rng = mulberry32(seed);
   const real = [];
   const procedural = [];
   let nextId = 0;
   let eligibleCount = 0;
+  let hazardCount = 0;
+  let finaleReal = null;
 
   const useCatalog = catalogLoader && typeof catalogLoader.isReady === 'function' && catalogLoader.isReady();
   if (useCatalog && typeof catalogLoader.getAllDebris === 'function' && regime) {
@@ -357,19 +397,50 @@ export function buildRegimeDebrisSeeds(catalogLoader, interactiveCount, procedur
       return { entry, key: Math.pow(rng() || 1e-12, 1 / w) };
     });
     keyed.sort((a, b) => b.key - a.key);
-    for (const { entry } of keyed) {
-      if (nextId >= interactiveCount) break;
-      const data = catalogEntryToDebrisData(entry, nextId);
-      if (!data) continue;
-      real.push(data);
+    if (foreground) {
+      // S11(b): only the finale slot accepts a real entry — the first sampled
+      // in-band whale over the mass gate ("the field's finale is the intact
+      // body"). Everything else real stays unspawned.
+      const finaleMassKg = Number.isFinite(foreground.finaleMassKg) ? foreground.finaleMassKg : 500;
+      const pick = keyed.find(k => Number(k.entry.mass_kg) > finaleMassKg);
+      if (pick) finaleReal = pick.entry;
+    } else {
+      for (const { entry } of keyed) {
+        if (nextId >= interactiveCount) break;
+        const data = catalogEntryToDebrisData(entry, nextId);
+        if (!data) continue;
+        real.push(data);
+        nextId++;
+      }
+    }
+  }
+
+  if (foreground) {
+    const count = Math.min(Math.max(0, foreground.count | 0), interactiveCount);
+    for (let slot = 0; slot < count && nextId < interactiveCount; slot++) {
+      if (slot === count - 1 && finaleReal) {
+        const data = catalogEntryToDebrisData(finaleReal, nextId);
+        // The substituted finale is a cast member: mark it foreground and
+        // pre-discovered like the authored rows (a catalogued body the field
+        // is known to hold — five pieces around a ~42 000 km ring can never
+        // be scan-found at 500 km reveal range).
+        if (data) { data.foreground = true; data.discovered = true; real.push(data); nextId++; continue; }
+      }
+      const d = proceduralFactory(nextId, rng, { role: 'foreground', slot });
+      if (!d) break;
+      d.isReal = false;
+      procedural.push(d);
       nextId++;
     }
   }
 
   while (nextId < interactiveCount) {
-    const d = proceduralFactory(nextId, rng);
+    const d = foreground
+      ? proceduralFactory(nextId, rng, { role: 'hazard' })
+      : proceduralFactory(nextId, rng);
     if (!d) break;
     d.isReal = false;
+    if (foreground) hazardCount++;
     procedural.push(d);
     nextId++;
   }
@@ -378,7 +449,14 @@ export function buildRegimeDebrisSeeds(catalogLoader, interactiveCount, procedur
     real,
     procedural,
     seed,
-    debug: { realCount: real.length, proceduralCount: procedural.length, eligibleCount },
+    debug: {
+      realCount: real.length,
+      proceduralCount: procedural.length,
+      eligibleCount,
+      foregroundCount: foreground ? (procedural.length + real.length) - hazardCount : 0,
+      hazardCount,
+      finaleReal: finaleReal ? (finaleReal.name || String(finaleReal.norad)) : null,
+    },
   };
 }
 
@@ -386,5 +464,5 @@ export function buildRegimeDebrisSeeds(catalogLoader, interactiveCount, procedur
 // CJS GUARD
 // ============================================================================
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { catalogEntryToDebrisData, buildHybridDebrisSeeds, buildRegimeDebrisSeeds, regimeFromStartOrbit };
+  module.exports = { catalogEntryToDebrisData, buildHybridDebrisSeeds, buildRegimeDebrisSeeds, regimeFromStartOrbit, mulberry32, samplePowerLawSize };
 }
