@@ -17,7 +17,7 @@ export const Constants = {
   // edit must invalidate cached JSON without moving the user-visible release
   // number. Bump this on every ./data/ content change; leave VERSION for
   // actual releases.
-  DATA_VERSION: '1002',
+  DATA_VERSION: '1003',
 
   // ============================================================================
   // === INPUT (Delegation 1, 2026-05-31) ===
@@ -3939,13 +3939,37 @@ export const Constants = {
     // explosion 1.6; characteristic length Lc). Range is sub-half-metre
     // shards: honestly uncapturable (no net weave or grapple engages them) —
     // that is what makes the cloud furniture and a collision hazard, not a
-    // target list. The mass LAW for interactive debris stays with S11(c);
-    // hazard masses follow the existing fragment mass↔size envelope inverted
-    // (no new law introduced here).
+    // target list. The mass LAW for interactive debris shipped in S11(c)
+    // (MASS_LAW below; register item 39 CLOSED).
     HAZARD_CLOUD: {
       LAMBDA: 1.71,          // SBM collision exponent (explosion: 1.6 — the band is [1.6, 1.71])
       SIZE_MIN_M: 0.1,       // m — lower edge of the shard cloud
       SIZE_MAX_M: 0.5,       // m — upper edge (sub-half-metre ⇒ uncapturable-class)
+    },
+    // S11(c) — THE MASS LAW (plan 1786401864178-cargo-continuity §5 S11 piece
+    // (c); register item 39). NASA Standard Breakup Model (Johnson et al. 2001,
+    // "NASA's New Breakup Model of EVOLVE 4.0", Adv. Space Res. 28(9):1377):
+    //   • cross-sectional area from characteristic length: A = AREA_COEF·Lc^AREA_EXP
+    //     (the SBM's Lc↔A relation, Lc = (A/AREA_COEF)^(1/AREA_EXP));
+    //   • area-to-mass ratio χ = log10(A/M [m²/kg]) log-normal — collision
+    //     fragments in the shard regime carry μ = −0.9, σ = 0.45 (the SOCIT/
+    //     on-orbit collision fit; the <8 cm explosion fit is size-dependent and
+    //     deliberately not modelled — the cloud is a collision-fragment population);
+    //   • hazard mass = A / 10^χ (CatalogConverter.sampleSbmMassKg — size is
+    //     drawn first, mass DERIVES; the measured cumulative mass exponent lands
+    //     ≈0.6 over the cloud's range, inside the SBM band 0.6–0.85 — the
+    //     log-normal scatter flattens the λ/AREA_EXP ≈ 0.853 asymptote).
+    // MASS_CUM_EXP is the interactive fragment/missionDebris draw's cumulative
+    // mass exponent N(≥m) ∝ m^−MASS_CUM_EXP (inverse-CDF, same clamped discipline
+    // as samplePowerLawSize): the collision asymptote λ/AREA_EXP = 1.71/2.0047
+    // ≈ 0.853. Intact bodies are NOT a power law — they are launch history and
+    // draw from the catalogue's real masses (CatalogConverter.buildIntactMassPools).
+    MASS_LAW: {
+      AREA_COEF: 0.556945,   // m² — SBM area–length coefficient
+      AREA_EXP: 2.0047,      // SBM area–length exponent
+      AM_LOG10_MEAN: -0.9,   // μ of log10(A/M [m²/kg]) — collision fragments
+      AM_LOG10_SIGMA: 0.45,  // σ of log10(A/M [m²/kg]) — collision fragments
+      MASS_CUM_EXP: 0.85,    // cumulative mass exponent, interactive fragment draw
     },
     // The authored foreground cast — exactly MISSIONS.DEBRIS_PER_MISSION rows
     // (drift-guarded in test-DebrisFieldPopulations.js), in engagement order:

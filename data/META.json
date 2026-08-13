@@ -12,7 +12,7 @@
     "news-events.json"
   ],
   "counts": {
-    "debris": 107,
+    "debris": 110,
     "active_sats": 51,
     "launches": 30,
     "weather_events": 18,

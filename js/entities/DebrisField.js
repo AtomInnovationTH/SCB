@@ -26,7 +26,7 @@ import {
   getUVOffsetForCountry, hasFlag as hasFlagDecal,
   getVisualMode,
 } from '../ui/DebrisWireframe.js';
-import { catalogEntryToDebrisData, buildRegimeDebrisSeeds, regimeFromStartOrbit, mulberry32, samplePowerLawSize } from './CatalogConverter.js';
+import { catalogEntryToDebrisData, buildRegimeDebrisSeeds, regimeFromStartOrbit, mulberry32, samplePowerLawSize, sampleSbmMassKg, buildIntactMassPools } from './CatalogConverter.js';
 import { deriveCaptureFlags } from './debrisFerrous.js';
 import { isFlagEligible, pickCountryForId } from '../ui/FlagDecalSystem.js';
 
@@ -681,6 +681,14 @@ export class DebrisField {
     const finaleMassKg = (Constants.TOOL_RECOMMENDATION
       && Constants.TOOL_RECOMMENDATION.MOTHER_MIN_MASS) || 500;
 
+    // S11(c): intact bodies are launch history, not a power law (register
+    // item 39) — the procedural intact draw samples the REAL catalogue's
+    // masses. Built once here; empty pools (no loader / tests) fall back to
+    // the legacy uniform in-type draw inside _createDebrisData.
+    this._intactMassPools = buildIntactMassPools(
+      (this._catalogLoader && this._catalogLoader.isReady && this._catalogLoader.isReady())
+        ? this._catalogLoader.getAllDebris() : []);
+
     const { real, procedural, debug } = buildRegimeDebrisSeeds(
       this._catalogLoader,
       total,
@@ -723,9 +731,17 @@ export class DebrisField {
    * SIZE follows the NASA Standard Breakup Model cumulative count law
    * N(≥Lc) ∝ Lc^−λ (Constants.DEBRIS.HAZARD_CLOUD) drawn on the seeded
    * stream, so the cloud is reproducible from the logged boot seed and its
-   * measured exponent is test-pinned. Mass follows the existing fragment
-   * mass↔size envelope INVERTED (size is drawn, mass derives) — deliberately
-   * NOT a new law: the interactive mass law is S11(c)'s (register item 39).
+   * measured exponent is test-pinned.
+   * S11(c) — MASS follows the real SBM area→mass chain (register item 39;
+   * Constants.DEBRIS.MASS_LAW): A = 0.556945·Lc^2.0047, then mass = A/(A/M)
+   * with the area-to-mass ratio log-normal (collision fragments, χ =
+   * log10(A/M) ~ N(−0.9, 0.45)) — replacing the (b) placeholder, which
+   * inverted the fragment mass↔size envelope. The measured cumulative mass
+   * exponent lands ≈0.6 (SBM band 0.6–0.85). Two more uniforms are consumed
+   * per shard (Box–Muller), same fixed order every call, so the seeded
+   * stream stays deterministic. The result is clamped to the fragment
+   * envelope — the cloud stays shard-class furniture (uncapturable by mass
+   * as well as size; ~2–3 % of draws pile at the edges).
    * The shard is flagged uncapturable furniture (`hazard: true`, untracked).
    * @private
    * @param {() => number} rng — the assembly's seeded stream
@@ -734,11 +750,12 @@ export class DebrisField {
   _drawHazardSpec(rng) {
     const HC = (Constants.DEBRIS && Constants.DEBRIS.HAZARD_CLOUD)
       || { LAMBDA: 1.71, SIZE_MIN_M: 0.1, SIZE_MAX_M: 0.5 };
+    const ML = (Constants.DEBRIS && Constants.DEBRIS.MASS_LAW)
+      || { AREA_COEF: 0.556945, AREA_EXP: 2.0047, AM_LOG10_MEAN: -0.9, AM_LOG10_SIGMA: 0.45 };
     const td = DEBRIS_TYPES.fragment;
     const sizeMeter = samplePowerLawSize(rng(), HC.SIZE_MIN_M, HC.SIZE_MAX_M, HC.LAMBDA);
-    const span = (td.sizeMax - td.sizeMin) || 1;
-    const frac = Math.max(0, Math.min(1, (sizeMeter - td.sizeMin) / span));
-    const massKg = td.massMin + frac * (td.massMax - td.massMin);
+    const massKg = Math.max(td.massMin, Math.min(td.massMax,
+      sampleSbmMassKg(sizeMeter, rng(), rng(), ML)));
     return {
       type: 'fragment',
       sizeM: sizeMeter,
@@ -847,8 +864,10 @@ export class DebrisField {
    *  S11(a): takes the assembly id and the seeded rng from
    *  `buildRegimeDebrisSeeds`; legacy callers (Kessler `createFragments`)
    *  omit both and get the old non-deterministic behaviour. Only the ORBIT
-   *  draws are seeded — type/mass/material stay on Math.random (the mass law
-   *  is S11(c)'s; this session changes geometry, not the spawn table).
+   *  draws are seeded — type/mass/material stay on Math.random (S11(c)
+   *  shipped the mass law on that same unseeded discipline: power-law
+   *  fragments/missionDebris, catalogue-pool intacts — the DISTRIBUTION
+   *  changed, not the seeding).
    *  S11(b): an optional authored `spec` ({ type, massKg, sizeM, tumbleDeg?,
    *  material?, altKm?, tracked?, hazard?, act? }) replaces the random
    *  type/mass/size/tumble/material draws with AUTHORED values — the two
@@ -873,18 +892,36 @@ export class DebrisField {
     // "big-looking debris should yield big salvage" expectation
     // (salvage IS roughly linear in mass; the mismatch was upstream).
     //
-    // New formula: mass is the primary random; sizeMeter follows the
+    // Formula: mass is the primary random; sizeMeter follows the
     // type's mass→size envelope with a ±15 % jitter so visually-
     // similar masses still look distinct. Matches the regen path
     // already used at line ~1389 (catalog conversion to procedural).
     // S11(b): a spec carries AUTHORED mass+size (the three-act cast /
     // the power-law hazard shards) — the random envelope is skipped.
+    // S11(c) — THE MASS LAW (register item 39; Constants.DEBRIS.MASS_LAW):
+    // the uniform in-type draw is gone. Fragments and mission debris are
+    // breakup/operational-junk populations → inverse-CDF power-law mass
+    // (cumulative N(≥m) ∝ m^−MASS_CUM_EXP, the SBM collision asymptote
+    // λ/2.0047 ≈ 0.853; the measured exponent pins in band). Intact bodies
+    // (rocketBody/defunctSat/cubesat) are launch history, not a law →
+    // sampled from the REAL catalogue's per-type mass pools (built in
+    // _generateDebris; the legacy uniform draw remains only as the
+    // no-catalogue fallback for tests/legacy constructions).
     let mass, sizeMeter;
     if (specActive) {
       mass = spec.massKg;
       sizeMeter = spec.sizeM;
     } else {
-      mass = randRange(typeDef.massMin, typeDef.massMax);
+      const ML = (Constants.DEBRIS && Constants.DEBRIS.MASS_LAW)
+        || { MASS_CUM_EXP: 0.85 };
+      if (type === 'fragment' || type === 'missionDebris') {
+        mass = samplePowerLawSize(Math.random(), typeDef.massMin, typeDef.massMax, ML.MASS_CUM_EXP);
+      } else {
+        const pool = this._intactMassPools && this._intactMassPools[type];
+        mass = (pool && pool.length)
+          ? pool[Math.floor(Math.random() * pool.length)]
+          : randRange(typeDef.massMin, typeDef.massMax);   // no catalogue — legacy fallback
+      }
       const _massSpan = typeDef.massMax - typeDef.massMin;
       const _massFrac = _massSpan > 0 ? (mass - typeDef.massMin) / _massSpan : 0.5;
       const _sizeSpan = typeDef.sizeMax - typeDef.sizeMin;

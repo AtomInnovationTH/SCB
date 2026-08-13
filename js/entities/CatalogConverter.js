@@ -300,6 +300,63 @@ export function samplePowerLawSize(u, min, max, lambda) {
 }
 
 /**
+ * S11(c) — the SBM area→mass chain (register item 39). Given a fragment's
+ * characteristic length Lc (already drawn — see samplePowerLawSize), derive
+ * its mass the way the NASA Standard Breakup Model does: cross-sectional
+ * area A = AREA_COEF·Lc^AREA_EXP, then mass = A / (A/M) with the area-to-mass
+ * ratio log-normal in χ = log10(A/M [m²/kg]) ~ N(AM_LOG10_MEAN,
+ * AM_LOG10_SIGMA) (collision fragments; Constants.DEBRIS.MASS_LAW). Two
+ * uniform draws → one standard normal via Box–Muller (the same transform as
+ * DebrisField's gaussRandomRng, kept local so this module stays THREE-free),
+ * so the chain is deterministic on the assembly's seeded stream. Over the
+ * hazard cloud's 0.1–0.5 m range the measured cumulative mass exponent lands
+ * ≈0.6 — inside the SBM band 0.6–0.85 (the log-normal scatter flattens the
+ * λ/AREA_EXP ≈ 0.853 asymptote over the narrow range).
+ *
+ * @param {number} lc — characteristic length (m)
+ * @param {number} u1 — uniform draw ∈ [0,1) (normal magnitude)
+ * @param {number} u2 — uniform draw ∈ [0,1) (normal phase)
+ * @param {{AREA_COEF:number, AREA_EXP:number, AM_LOG10_MEAN:number, AM_LOG10_SIGMA:number}} ml
+ * @returns {number} mass in kg (unclamped — the caller owns the envelope)
+ */
+export function sampleSbmMassKg(lc, u1, u2, ml) {
+  const area = ml.AREA_COEF * Math.pow(Math.max(1e-12, lc), ml.AREA_EXP);
+  const z = Math.sqrt(-2 * Math.log(u1 || 1e-10)) * Math.cos(2 * Math.PI * u2);
+  const am = Math.pow(10, ml.AM_LOG10_MEAN + ml.AM_LOG10_SIGMA * z);
+  return area / am;
+}
+
+/**
+ * S11(c) — intact bodies are launch history, not a power law (register item
+ * 39): build the per-type mass pools the procedural intact draw samples from
+ * the REAL catalogue. Mapping follows TYPE_MAP: catalogue `rocket_body` →
+ * rocketBody, `inactive` → defunctSat, with the sub-`cubesatMaxKg` inactives
+ * split off as the cubesat pool (the catalogue carries no cubesat class; the
+ * Vanguard-class microsats are the real objects that live there). Fragment/
+ * missionDebris get no pool — they are power-law populations, not intacts.
+ *
+ * @param {object[]} entries — catalogue entries (CatalogLoader.getAllDebris())
+ * @param {number} [cubesatMaxKg=15] — the intact/cubesat mass cut (kg)
+ * @returns {{rocketBody:number[], defunctSat:number[], cubesat:number[]}}
+ */
+export function buildIntactMassPools(entries, cubesatMaxKg = 15) {
+  const pools = { rocketBody: [], defunctSat: [], cubesat: [] };
+  if (!Array.isArray(entries)) return pools;
+  for (const e of entries) {
+    if (!e) continue;
+    const m = Number(e.mass_kg);
+    if (!Number.isFinite(m) || m <= 0) continue;
+    const t = String(e.type || '').toLowerCase();
+    if (t === 'rocket_body') pools.rocketBody.push(m);
+    else if (t === 'inactive') {
+      if (m <= cubesatMaxKg) pools.cubesat.push(m);
+      else pools.defunctSat.push(m);
+    }
+  }
+  return pools;
+}
+
+/**
  * Derive the field regime from the player's start orbit (the SSOT read shared
  * with GameFlowManager._applyStartLocation: main.js computes the start orbit
  * from the boot language via computeStartOrbit and passes it here).
@@ -464,5 +521,5 @@ export function buildRegimeDebrisSeeds(catalogLoader, interactiveCount, procedur
 // CJS GUARD
 // ============================================================================
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { catalogEntryToDebrisData, buildHybridDebrisSeeds, buildRegimeDebrisSeeds, regimeFromStartOrbit, mulberry32, samplePowerLawSize };
+  module.exports = { catalogEntryToDebrisData, buildHybridDebrisSeeds, buildRegimeDebrisSeeds, regimeFromStartOrbit, mulberry32, samplePowerLawSize, sampleSbmMassKg, buildIntactMassPools };
 }
