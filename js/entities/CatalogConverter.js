@@ -254,8 +254,137 @@ export function buildHybridDebrisSeeds(catalogLoader, interactiveCount, procedur
 }
 
 // ============================================================================
+// S11(a) — REGIME-FIRST FIELD ASSEMBLY (plan 1786401864178-cargo-continuity §5
+// S11; register item 38). A field is ONE orbital regime: an altitude cell × an
+// inclination/RAAN band centred on the player's start orbit. The catalogue
+// half is ADMITTED by the band (TLE alt+inc in range) and then picked by a
+// seeded, deterministic weighted sampler — replacing the file-order slice
+// (`catalogue[0 … interactiveCount)`) that landed Envisat in the fourth slot of
+// every game. Procedural filler is drawn in-band by the factory (DebrisField
+// owns the orbit draws). Node-safe like the rest of this module.
+// ============================================================================
+
+/** Deterministic PRNG (mulberry32) — one stream per field assembly. */
+function _mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/**
+ * Derive the field regime from the player's start orbit (the SSOT read shared
+ * with GameFlowManager._applyStartLocation: main.js computes the start orbit
+ * from the boot language via computeStartOrbit and passes it here).
+ * Altitude comes from Constants.START_ALTITUDE_KM (350 — language-independent)
+ * mapped to its containing DEBRIS.ALT_BANDS cell, so the regime carries the
+ * named cell's identity (e.g. VLEO 180–400 km). A null start orbit yields the
+ * ISS-band default (51.6°, RAAN 0) — deterministic for tests and legacy
+ * constructions.
+ *
+ * @param {{inclination:number, raan:number}|null} startOrbit — radians.
+ * @returns {{altMinKm:number, altMaxKm:number, altLabel:string,
+ *   incCenterDeg:number, incTolDeg:number, raanCenterRad:number, raanTolDeg:number}}
+ */
+export function regimeFromStartOrbit(startOrbit) {
+  const C = Constants;
+  const tol = (C.DEBRIS && C.DEBRIS.FIELD_REGIME) || { INC_TOL_DEG: 0.5, RAAN_TOL_DEG: 0.5 };
+  const altKm = C.START_ALTITUDE_KM || 350;
+  const bands = (C.DEBRIS && Array.isArray(C.DEBRIS.ALT_BANDS)) ? C.DEBRIS.ALT_BANDS : [];
+  const cell = bands.find(b => altKm >= b.min && altKm < b.max)
+    || { min: 180, max: 400, label: 'VLEO' };
+  return {
+    altMinKm: cell.min,
+    altMaxKm: cell.max,
+    altLabel: cell.label || `${cell.min}`,
+    incCenterDeg: startOrbit ? startOrbit.inclination * 180 / Math.PI : 51.6,
+    incTolDeg: tol.INC_TOL_DEG,
+    raanCenterRad: startOrbit ? startOrbit.raan : 0,
+    raanTolDeg: tol.RAAN_TOL_DEG,
+  };
+}
+
+/**
+ * Regime-first sibling of buildHybridDebrisSeeds: admit only catalogue entries
+ * whose TLE lies in the regime band (alt in [altMinKm, altMaxKm), |inc −
+ * incCenterDeg| ≤ incTolDeg, never `active`), then pick up to
+ * `interactiveCount` of them with a seeded weighted sampler (Efraimidis–
+ * Spirakis key = u^(1/w), weight hook `entry.weight ?? 1` — uniform today;
+ * S11(b)/(c) own any real weighting). Remaining slots come from
+ * `proceduralFactory(id, rng)` — the shared rng stream keeps the whole
+ * assembly deterministic from `seed`.
+ *
+ * Real entries keep their real TLE orbits (RAAN included) — admission is the
+ * filter, not a re-seat; the RAAN band binds only the procedural filler.
+ *
+ * @param {object} catalogLoader — must expose isReady() + getAllDebris().
+ * @param {number} interactiveCount — total interactive slots.
+ * @param {(id:number, rng:()=>number)=>object} proceduralFactory — in-band filler.
+ * @param {{regime:object, seed:number}} opts
+ * @returns {{ real: object[], procedural: object[], seed: number,
+ *   debug: { realCount: number, proceduralCount: number, eligibleCount: number } }}
+ */
+export function buildRegimeDebrisSeeds(catalogLoader, interactiveCount, proceduralFactory, opts = {}) {
+  const { regime, seed = 0 } = opts;
+  const rng = _mulberry32(seed);
+  const real = [];
+  const procedural = [];
+  let nextId = 0;
+  let eligibleCount = 0;
+
+  const useCatalog = catalogLoader && typeof catalogLoader.isReady === 'function' && catalogLoader.isReady();
+  if (useCatalog && typeof catalogLoader.getAllDebris === 'function' && regime) {
+    const eligible = [];
+    for (const entry of catalogLoader.getAllDebris()) {
+      if (!entry || !entry.tle) continue;
+      if (String(entry.type).toLowerCase() === 'active') continue;
+      const alt = Number(entry.tle.alt_km);
+      const inc = Number(entry.tle.inc_deg);
+      if (!Number.isFinite(alt) || !Number.isFinite(inc)) continue;
+      if (alt < regime.altMinKm || alt >= regime.altMaxKm) continue;
+      if (Math.abs(inc - regime.incCenterDeg) > regime.incTolDeg) continue;
+      eligible.push(entry);
+    }
+    eligibleCount = eligible.length;
+    // Seeded weighted pick, no replacement: sort by key u^(1/w) descending and
+    // take the first `interactiveCount`. With uniform weights this is a plain
+    // seeded shuffle — the file order no longer decides the cast.
+    const keyed = eligible.map(entry => {
+      const w = Number.isFinite(entry.weight) && entry.weight > 0 ? entry.weight : 1;
+      return { entry, key: Math.pow(rng() || 1e-12, 1 / w) };
+    });
+    keyed.sort((a, b) => b.key - a.key);
+    for (const { entry } of keyed) {
+      if (nextId >= interactiveCount) break;
+      const data = catalogEntryToDebrisData(entry, nextId);
+      if (!data) continue;
+      real.push(data);
+      nextId++;
+    }
+  }
+
+  while (nextId < interactiveCount) {
+    const d = proceduralFactory(nextId, rng);
+    if (!d) break;
+    d.isReal = false;
+    procedural.push(d);
+    nextId++;
+  }
+
+  return {
+    real,
+    procedural,
+    seed,
+    debug: { realCount: real.length, proceduralCount: procedural.length, eligibleCount },
+  };
+}
+
+// ============================================================================
 // CJS GUARD
 // ============================================================================
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { catalogEntryToDebrisData, buildHybridDebrisSeeds };
+  module.exports = { catalogEntryToDebrisData, buildHybridDebrisSeeds, buildRegimeDebrisSeeds, regimeFromStartOrbit };
 }

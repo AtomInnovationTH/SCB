@@ -24,7 +24,7 @@ import {
   getUVOffsetForCountry, hasFlag as hasFlagDecal,
   getVisualMode,
 } from '../ui/DebrisWireframe.js';
-import { catalogEntryToDebrisData } from './CatalogConverter.js';
+import { catalogEntryToDebrisData, buildRegimeDebrisSeeds, regimeFromStartOrbit } from './CatalogConverter.js';
 import { deriveCaptureFlags } from './debrisFerrous.js';
 import { isFlagEligible, pickCountryForId } from '../ui/FlagDecalSystem.js';
 
@@ -348,11 +348,16 @@ function weightedRandom(items) {
   return items[items.length - 1];
 }
 
-/** Gaussian random (Box-Muller) */
-function gaussRandom(mean = 0, stddev = 1) {
-  const u1 = Math.random();
-  const u2 = Math.random();
+/** Gaussian random (Box-Muller) on an explicit stream (S11(a) seeded assembly). */
+function gaussRandomRng(rng, mean = 0, stddev = 1) {
+  const u1 = rng();
+  const u2 = rng();
   return mean + stddev * Math.sqrt(-2 * Math.log(u1 || 1e-10)) * Math.cos(2 * Math.PI * u2);
+}
+
+/** Gaussian random (Box-Muller) — the Math.random entry point. */
+function gaussRandom(mean = 0, stddev = 1) {
+  return gaussRandomRng(Math.random, mean, stddev);
 }
 
 /** Random float in [min, max] */
@@ -401,6 +406,21 @@ export class DebrisField {
     this.scene = scene;
     this._catalogLoader = opts.catalogLoader || null;
     this._interactiveCount = opts.interactiveCount || INTERACTIVE_COUNT;
+
+    // S11(a): the field is ONE orbital regime (register item 38) — assembled
+    // inside the band derived from the player's start orbit (main.js passes
+    // the boot language's computeStartOrbit through regimeFromStartOrbit).
+    // Absent opts, the ISS-band default keeps legacy constructions/tests
+    // deterministic in shape. The seed drives the catalogue pick + the
+    // procedural orbit draws; it is logged so a reported field is reproducible.
+    this._fieldSeed = (opts.seed != null ? opts.seed >>> 0 : (Date.now() >>> 0));
+    this._fieldRegime = opts.fieldRegime || regimeFromStartOrbit(null);
+    // Human/cluster-vocabulary identity for the regime (e.g. 'iss-180') — the
+    // "fields gain identity" half of S11(a); same SSOT as getDebrisClusters.
+    this._fieldRegimeLabel = classifyClusterId(
+      (this._fieldRegime.altMinKm + this._fieldRegime.altMaxKm) / 2,
+      this._fieldRegime.incCenterDeg,
+    ) || 'off-band';
 
     /** @type {number} How many debris ended up sourced from the real catalogue. */
     this.realEntryCount = 0;
@@ -647,37 +667,38 @@ export class DebrisField {
 
   /** @private Generate all interactive debris data.
    *  ST-6.1: hybrid mode — real catalogue entries populate first, then
-   *  procedural entries top up INTERACTIVE_COUNT. */
+   *  procedural entries top up INTERACTIVE_COUNT.
+   *  S11(a): regime-first — the catalogue half is ADMITTED by the field regime
+   *  (TLE alt+inc in band) and picked by a seeded weighted sampler, replacing
+   *  the file-order slice that landed Envisat in the fourth slot of every game
+   *  (register item 38); the procedural half is drawn in-band by
+   *  `_createDebrisData(id, rng)` on the same seeded stream. */
   _generateDebris() {
     const total = this._interactiveCount;
 
-    // --- Phase 1: real catalogue entries (if loader is ready) ---
-    if (this._catalogLoader && this._catalogLoader.isReady && this._catalogLoader.isReady()) {
-      const catalogue = (typeof this._catalogLoader.getAllDebris === 'function')
-        ? this._catalogLoader.getAllDebris() : [];
-      const maxReal = Math.min(catalogue.length, total);
-      for (let i = 0; i < maxReal; i++) {
-        const entry = catalogue[i];
-        if (!entry) continue;
-        const kind = String(entry.type || '').toLowerCase();
-        if (kind === 'active') continue; // never spawn active sats as debris
-        const data = catalogEntryToDebrisData(entry, this._nextId);
-        if (!data) continue;
-        this._finaliseRealDebris(data);
-        this.debrisMap.set(data.id, data);
-        this.debrisList.push(data);
-        this._nextId++;
-        this.realEntryCount++;
-      }
-    }
+    const { real, procedural, debug } = buildRegimeDebrisSeeds(
+      this._catalogLoader,
+      total,
+      (id, rng) => this._createDebrisData(id, rng),
+      { regime: this._fieldRegime, seed: this._fieldSeed },
+    );
 
-    // --- Phase 2: procedural filler ---
-    while (this.debrisList.length < total) {
-      const debris = this._createDebrisData();
-      debris.isReal = false;
+    for (const data of real) {
+      this._finaliseRealDebris(data);
+      this.debrisMap.set(data.id, data);
+      this.debrisList.push(data);
+      this.realEntryCount++;
+    }
+    for (const debris of procedural) {
       this.debrisMap.set(debris.id, debris);
       this.debrisList.push(debris);
     }
+    this._nextId = this.debrisList.length;
+
+    const r = this._fieldRegime;
+    console.log(`[DebrisField] field regime "${this._fieldRegimeLabel}" seed=${this._fieldSeed}: ` +
+      `${debug.realCount} real (${debug.eligibleCount} in-band) + ${debug.proceduralCount} procedural, ` +
+      `alt ${r.altMinKm}–${r.altMaxKm} km, inc ${r.incCenterDeg.toFixed(1)}±${r.incTolDeg}°`);
 
     // UX-3 #9: All debris starts hidden — auto-discover runs after welcome-field spawn in update()
   }
@@ -732,9 +753,13 @@ export class DebrisField {
     if (data._onboardingPinLat === undefined) data._onboardingPinLat = 0;
   }
 
-  /** @private Create a single debris data object */
-  _createDebrisData() {
-    const id = this._nextId++;
+  /** @private Create a single debris data object.
+   *  S11(a): takes the assembly id and the seeded rng from
+   *  `buildRegimeDebrisSeeds`; legacy callers (Kessler `createFragments`)
+   *  omit both and get the old non-deterministic behaviour. Only the ORBIT
+   *  draws are seeded — type/mass/material stay on Math.random (the mass law
+   *  is S11(c)'s; this session changes geometry, not the spawn table). */
+  _createDebrisData(id = this._nextId++, rng = Math.random) {
 
     // Pick type by weighted distribution
     const typeEntries = Object.entries(DEBRIS_TYPES);
@@ -780,24 +805,39 @@ export class DebrisField {
     // Tracked — probability based on debris type (real-world catalog coverage)
     const tracked = Math.random() < (TRACKING_PROB[type] || 0.5);
 
-    // Orbit: pick altitude band and inclination cluster
-    const altBand = weightedRandom(ALT_BANDS);
-    const altKm = gaussRandom((altBand.min + altBand.max) / 2, (altBand.max - altBand.min) / 4);
-    const clampedAlt = Math.max(180, Math.min(2000, altKm));
+    // Orbit: S11(a) — drawn INSIDE the field regime, seeded, so the whole
+    // field is one orbital plane family centred on the player's start orbit
+    // (register item 38: "objects in different planes are not in the same
+    // field"). Altitude spans the containing ALT_BANDS cell (the benign axis:
+    // along-track drift, no plane crossings); inclination/RAAN are gaussian
+    // about the regime centre, clamped to ±tol, so the worst-case pairwise
+    // plane difference is ≤ 2·tol (~1° ≈ 135 m/s at VLEO) — neighbours, not
+    // km/s strangers. The old code drew a weighted ALT_BANDS cell and an
+    // INC_CLUSTERS centre per piece, scattering the field over every plane.
+    const regime = this._fieldRegime || regimeFromStartOrbit(null);
+    const altMidKm = (regime.altMinKm + regime.altMaxKm) / 2;
+    const altKm = gaussRandomRng(rng, altMidKm, (regime.altMaxKm - regime.altMinKm) / 4);
+    const clampedAlt = Math.max(regime.altMinKm, Math.min(regime.altMaxKm - 1e-9, altKm));
 
-    const incCluster = weightedRandom(INC_CLUSTERS);
-    const incDeg = gaussRandom(incCluster.center, incCluster.spread);
-    const clampedInc = Math.max(0, Math.min(180, incDeg));
+    const incTol = regime.incTolDeg;
+    const incDeg = gaussRandomRng(rng, regime.incCenterDeg, incTol / 2);
+    const clampedInc = Math.max(regime.incCenterDeg - incTol,
+      Math.min(regime.incCenterDeg + incTol, incDeg));
+
+    const raanTolRad = (regime.raanTolDeg || 0) * Math.PI / 180;
+    const raanCenter = regime.raanCenterRad || 0;
+    const raan = raanCenter + Math.max(-raanTolRad,
+      Math.min(raanTolRad, gaussRandomRng(rng, 0, raanTolRad / 2)));
 
     const smaScene = Constants.EARTH_RADIUS + clampedAlt * Constants.SCENE_SCALE;
 
     const orbit = {
       semiMajorAxis: smaScene,
-      eccentricity: Math.random() * 0.02,
+      eccentricity: rng() * 0.02,
       inclination: clampedInc * Math.PI / 180,
-      raan: Math.random() * 2 * Math.PI,
-      argPerigee: Math.random() * 2 * Math.PI,
-      trueAnomaly: Math.random() * 2 * Math.PI,
+      raan,
+      argPerigee: rng() * 2 * Math.PI,
+      trueAnomaly: rng() * 2 * Math.PI,
       meanMotion: 0,
     };
 

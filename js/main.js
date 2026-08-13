@@ -25,6 +25,8 @@ import { tierVisualManager } from './scene/TierVisualManager.js';
 
 import { PlayerSatellite } from './entities/PlayerSatellite.js';
 import { DebrisField } from './entities/DebrisField.js';
+import { regimeFromStartOrbit } from './entities/CatalogConverter.js';
+import { computeStartOrbit } from './systems/startOrbitMath.js';
 import { ActiveSatellites } from './entities/ActiveSatellite.js';
 import { ArmManager } from './entities/ArmManager.js';
 import { orbitToSceneCartesianInto } from './entities/OrbitalMechanics.js';
@@ -605,7 +607,21 @@ async function init() {
   _bootMark('Starfield + SunLight + Player constructed');
 
   // --- Debris Field (ST-6.1: hybrid mode consumes catalogLoader if ready) ---
-  debrisField = new DebrisField(scene, { catalogLoader });
+  // S11(a): the field is ONE orbital regime centred on the boot language's
+  // start orbit — the same computeStartOrbit read that GameFlowManager's
+  // _applyStartLocation makes on every start path, so the field is co-orbital
+  // with the player by construction (register item 38). Per-boot seed, logged
+  // so a reported field is reproducible. Known gap (register item 50): a
+  // mid-menu language switch re-aims the player's start orbit but the regime
+  // stays on the boot language — re-derivation needs a field re-seed.
+  let _fieldRegime = null;
+  try {
+    _fieldRegime = regimeFromStartOrbit(computeStartOrbit(settingsManager.getLanguageEntry()));
+  } catch (e) {
+    console.warn('[main] field regime derivation failed, DebrisField default applies:', e?.message);
+  }
+  const _fieldSeed = (Date.now() >>> 0);
+  debrisField = new DebrisField(scene, { catalogLoader, seed: _fieldSeed, fieldRegime: _fieldRegime });
   _bootMark('DebrisField constructed (800 interactive + 5000 background)');
 
   // --- Active Satellites ---

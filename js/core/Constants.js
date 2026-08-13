@@ -3914,6 +3914,19 @@ export const Constants = {
   DEBRIS: {
     INTERACTIVE_COUNT: 800,
     BACKGROUND_COUNT: 5000,
+    // S11(a) — a field is ONE orbital regime (plan 1786401864178-cargo-continuity
+    // S11; register item 38). The interactive field is assembled inside the
+    // player's start plane: altitude = the containing ALT_BANDS cell below,
+    // inclination/RAAN = the start orbit ± these half-widths. ±0.5° keeps the
+    // worst-case pairwise plane difference ≈ 1° (~135 m/s at VLEO) — neighbours,
+    // not the km/s strangers the owner ruled out ("objects in different planes
+    // are not in the same field"). Catalogue admission filters on alt+inc ONLY:
+    // real entries keep their real RAANs (the Zenit shell's RAANs really are
+    // spread 60° apart — measured in data/debris-catalog.json).
+    FIELD_REGIME: {
+      INC_TOL_DEG: 0.5,
+      RAAN_TOL_DEG: 0.5,
+    },
     ALT_BANDS: [
       { label: 'VLEO',     min:   180, max:  400, weight: 0.12 },  // ISS, Tiangong, early-reentry debris
       { label: 'LEO-low',  min:   400, max:  600, weight: 0.14 },  // Sentinel, Hubble, Starlink
