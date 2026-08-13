@@ -95,6 +95,11 @@ export const CODEX_TRIGGERS = {
   // ===== POWER =====
   solar_power:            [{ event: E.PLAYER_TELEMETRY, match: (p) => p.batteryPct < 0.5 }],
   eclipse_cycle:          [{ event: E.COMMS_MESSAGE, match: txt('shadow', 'eclipse') }],
+  // S8: the furnace entry unlocks the first time a catch is processed — mother
+  // park or daughter digestion (both fire CATCH_PROCESSED). Event-based, no
+  // comms-text coupling (the lines live in GameFlowManager, outside the
+  // reachability corpus).
+  solar_furnace:          [{ event: E.CATCH_PROCESSED, match: always }],
   battery_chemistry:      [{ event: E.COMMS_MESSAGE, match: txt('battery cycle') },
                            { event: E.SUBSYSTEM_EVENT, match: src('POWER') }],
   supercapacitors:        [{ event: E.COMMS_MESSAGE, match: txt('supercapacitor') }],

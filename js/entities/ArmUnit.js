@@ -5424,7 +5424,27 @@ export class ArmUnit {
     // S6: the timeline digests the OLDEST piece on the rack first; the rest
     // wait parked at their slots.
     const debris = this.heldCatches[0];
-    const t = this.stateTimer;
+    // S8: the timeline is a pure function of this piece's digestion progress,
+    // not the HOLDING_CATCH stateTimer. Progress accrues on the transit clock
+    // (dt × TIME_SCALE_GAMEPLAY — full rate while flying, a 0.1× crawl in
+    // menu/shop backgrounds because the world itself ticks at 0.1× there),
+    // scaled by the sun gate ArmManager writes each frame (_digestSunScale:
+    // 1.0 in sunlight, ECLIPSE_RATE in eclipse; ?? 1.0 keeps legacy mocks
+    // byte-identical). The span is mass-scaled (register item 40, owner
+    // ruling 2026-08-13): clamp(mass × S_PER_KG, MIN_S, MAX_S) — energy ∝
+    // mass at fixed concentrator power. Mapping progress onto [0, FEED_S]
+    // keeps the hold/chop/feed fractions and the chunk cadence identical;
+    // only the wall-clock pace changes.
+    const span = Math.min(FT.TRANSIT_DIGEST_MAX_S,
+      Math.max(FT.TRANSIT_DIGEST_MIN_S,
+        (debris.mass || 0) * FT.TRANSIT_DIGEST_S_PER_KG));
+    const sunScale = this._digestSunScale ?? 1.0;
+    debris._digestProgress = (debris._digestProgress || 0) +
+      dt * Constants.TIME_SCALE_GAMEPLAY * sunScale;
+    const t = Math.min(FEED_S, (debris._digestProgress / span) * FEED_S);
+    // ArmManager's chop scale-ramp reads this derived phase time (it read
+    // stateTimer pre-S8) — one computation, one home.
+    this._digestPhaseT = t;
 
     // Lazy-init the per-park breakdown bookkeeping (also reset on entry in
     // _updateDocking). Safe if a test sets HOLDING_CATCH directly.
@@ -5502,8 +5522,9 @@ export class ArmUnit {
         // S6 sequential digestion: the next piece runs the SAME timeline from
         // t=0. stateTimer is only zeroed by _transitionTo, and we are NOT
         // leaving HOLDING_CATCH — zero it explicitly (no ARM_STATE_CHANGE: she
-        // stays parked). ArmManager's chop scale-ramp reads the same
-        // stateTimer against the same FT keys, so it stays per-piece correct.
+        // stays parked). S8: the timeline runs off the piece's _digestProgress
+        // (a fresh piece starts at 0, so t=0 automatically); the stateTimer
+        // reset is kept for any other per-state readers.
         this.stateTimer = 0;
         return;
       }

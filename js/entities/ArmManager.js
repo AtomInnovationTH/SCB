@@ -1684,9 +1684,20 @@ export class ArmManager {
     const armMult = powerDistribution.armMultiplier;
     const speedScale = armMult > 0 ? armMult : 0.1;
 
+    // S8: digestion sun scale — 1.0 in sunlight, ECLIPSE_RATE in eclipse. Reads
+    // the resource system's weather solar multiplier (0 = eclipse, 1.0 nominal,
+    // 1.3 flare); flare does not overcook (concentrator saturation). Legacy
+    // mocks without the getter cook at full rate (byte-identical pre-S8).
+    const FTD = Constants.FURNACE_TRANSFER;
+    const solarMult = (this._resourceSystem && typeof this._resourceSystem.getSolarPowerMultiplier === 'function')
+      ? this._resourceSystem.getSolarPowerMultiplier()
+      : 1.0;
+    const digestSunScale = solarMult > 0 ? 1.0 : (FTD.TRANSIT_DIGEST_ECLIPSE_RATE ?? 1.0);
+
     for (const arm of this.arms) {
       // Pass speed scale for returning/hauling arms affected by beacon power
       arm._beaconSpeedScale = speedScale;
+      arm._digestSunScale = digestSunScale;
       arm.update(dt, parentPos, parentQuat);
     }
 
@@ -1730,9 +1741,12 @@ export class ArmManager {
               // Phase boundaries from the single authoritative constant (same keys
               // ArmUnit._updateHoldingCatch drives the chop with — no local defaults
               // that could desync the scale-out ramp from the chop window).
+              // S8: the ramp reads the progress-derived phase time ArmUnit writes
+              // (_digestPhaseT), falling back to stateTimer for legacy mocks.
               const FT = Constants.FURNACE_TRANSFER;
               const span = Math.max(1e-6, FT.CHOP_S - FT.HOLD_S);
-              const frac = Math.min(1, Math.max(0, (arm.stateTimer - FT.HOLD_S) / span));
+              const phaseT = arm._digestPhaseT ?? arm.stateTimer;
+              const frac = Math.min(1, Math.max(0, (phaseT - FT.HOLD_S) / span));
               scaleMul = Math.max(0.001, 1 - frac);   // 1 → ~0 across the chop window
             }
             // Issue 13 (2026-06-12): honor the arm's standoff pin (_armPinPos =

@@ -297,6 +297,15 @@ export class ResourceSystem {
   }
 
   /**
+   * Weather-based solar power multiplier: 0 in eclipse, 1.0 nominal, 1.3 flare
+   * (cargo-continuity S8 — the digestion sun gate reads this).
+   * @returns {number}
+   */
+  getSolarPowerMultiplier() {
+    return this._weatherSolarMult;
+  }
+
+  /**
    * Snapshot for HUD rendering.
    * @returns {object}
    */

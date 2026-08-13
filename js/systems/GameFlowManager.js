@@ -851,9 +851,16 @@ export class GameFlowManager {
 
         // Comms notification (via EventBus — CommsSystem self-manages).
         // §4.8: honour data.source so a mother catch stops reading "DAUGHTER".
+        // Register item 26 (closed by cargo-continuity S8): a mother catch
+        // emits CATCH_PROCESSED { parked: true } at the PARK boundary — credit
+        // lands but the body is visibly still sitting at the nose in its net,
+        // so "fully processed" ran ahead of the visual. Split the line:
+        // parked → secured; digested (daughter furnace, feed-end) → processed.
         eventBus.emit(Events.COMMS_SEND, {
           source: (data.source || data.armId || 'DAUGHTER').toUpperCase(),
-          text: 'Catch fully processed. Salvage in the bin',
+          text: data.parked
+            ? 'Catch secured — parked at the nose'
+            : 'Catch fully processed. Salvage in the bin',
           priority: 'INFO',
         });
 

@@ -786,7 +786,8 @@
       "related": [
         "solar_power",
         "battery_chemistry",
-        "power_bus_management"
+        "power_bus_management",
+        "solar_furnace"
       ],
       "i18n": {
         "title": "Eclipse Cycles",
@@ -798,6 +799,31 @@
       },
       "track": "power_through_the_dark",
       "trackOrder": 3
+    },
+    {
+      "id": "solar_furnace",
+      "category": "POWER",
+      "trl": 5,
+      "icon": "🔥",
+      "related": [
+        "solar_power",
+        "eclipse_cycle",
+        "power_bus_management",
+        "salvage_economy",
+        "aluminum_space",
+        "battery_chemistry"
+      ],
+      "i18n": {
+        "title": "Solar Furnace Digestion",
+        "shortText": "Melting metal costs ~1 MJ/kg — more than the panels can spare. The furnace is a solar concentrator; in eclipse the cook drops to an ember.",
+        "fullText": "Melting a kilogram of structural metal — heating it to its melting point, then through the phase change — costs about one megajoule, whatever the alloy. The mothership's panels deliver two kilowatts: that is eight minutes per kilogram on a good day, and a full battery holds barely two kilograms' worth of melt energy. Electric melting is practical for shards, nothing more.\n\nSo the furnace is a concentrator, not a heating element: a mirror the size of the net mouth focuses sunlight onto the crucible, delivering roughly twenty-five times the panels' power as pure heat. A catch cooks over the long coast between fields, not in the seconds after capture. In Earth's shadow the mirror goes dark and the panels keep the crucible embering at a few percent of full rate — enough to finish a shard, not a stage. Dawn is when the big pieces move.",
+        "realWorld": "Solar furnaces melt steel on Earth (Odeillo, 1970: 3,500 °C on a pot-sized focus). In orbit: CisLunar Industries melts debris into wire, sheet, and metal fuel; the Neumann Drive (first flown 2023) turns metal junk into thruster fuel rods; electromagnetic levitation melting handles gram-scale samples at kilowatt powers.",
+        "formula": "t = m · E_melt / P   (cook time = mass × ~1 MJ/kg ÷ concentrator power)",
+        "trlRationale": "Solar furnaces are TRL 9 on Earth (Odeillo, 1970). Orbital debris melting is proven at component level (Neumann Drive flew 2023; ESA's electromagnetic levitator ran on the ISS), but no integrated capture-and-melt ship has flown.",
+        "unlockHint": "Process a catch through the furnace."
+      },
+      "track": "power_through_the_dark",
+      "trackOrder": 10
     },
     {
       "id": "graphene_supercap",
@@ -875,7 +901,8 @@
         "thermal_management",
         "solar_power",
         "rtg_power",
-        "supercapacitors"
+        "supercapacitors",
+        "solar_furnace"
       ],
       "i18n": {
         "title": "Power Bus ETS",
@@ -948,7 +975,8 @@
         "rtg_power",
         "solar_cell_degradation",
         "power_beaming",
-        "gallium_arsenide"
+        "gallium_arsenide",
+        "solar_furnace"
       ],
       "i18n": {
         "title": "Solar Panel Power Generation",
@@ -993,7 +1021,8 @@
         "eclipse_cycle",
         "supercapacitors",
         "catalog_les1",
-        "news_starlink_breakup"
+        "news_starlink_breakup",
+        "solar_furnace"
       ],
       "i18n": {
         "title": "Space-Grade Batteries",
@@ -1293,7 +1322,8 @@
       "startUnlocked": true,
       "related": [
         "titanium_alloys",
-        "carbon_composites"
+        "carbon_composites",
+        "solar_furnace"
       ],
       "i18n": {
         "title": "Aluminum in Space",
@@ -3039,7 +3069,8 @@
       "related": [
         "delta_v_doctrine",
         "what_10000kg_buys",
-        "core_loop"
+        "core_loop",
+        "solar_furnace"
       ],
       "i18n": {
         "title": "The Salvage Economy",

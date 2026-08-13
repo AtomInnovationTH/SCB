@@ -17,7 +17,7 @@ export const Constants = {
   // edit must invalidate cached JSON without moving the user-visible release
   // number. Bump this on every ./data/ content change; leave VERSION for
   // actual releases.
-  DATA_VERSION: '1001',
+  DATA_VERSION: '1002',
 
   // ============================================================================
   // === INPUT (Delegation 1, 2026-05-31) ===
@@ -969,6 +969,26 @@ export const Constants = {
     // Back-compat: the total window length (was the only field pre-staging). Any
     // reader expecting "the furnace window elapsed" still gets the right total.
     get DURATION_S() { return this.FEED_S; },
+    // ── Cargo-continuity S8 (2026-08-13): digestion on the TRANSIT clock ──
+    // The staged hold/chop/feed timeline above stays as the ANIMATION; its
+    // progress is driven by a slow per-piece digestion clock, not the 9 s
+    // stateTimer window:
+    //   span per piece = clamp(massKg × S_PER_KG, MIN_S, MAX_S)  (game-seconds)
+    //   phase time t   = (progress / span) × FEED_S   — same fractions, same
+    //   chunk cadence; the timeline code is unchanged.
+    // Physics anchor (owner design review 2026-08-13): melting metal costs
+    // ~1 MJ/kg. The mother's 2 kW panels need ~8 min/kg — electric cooking is
+    // practical for small pieces only. A net-mouth-sized solar concentrator
+    // (~50 m² → ~50 kW thermal) gives 20 game-s/kg. Progress accrues at
+    // dt × TIME_SCALE_GAMEPLAY whenever the world ticks (full rate flying,
+    // 0.1× crawl in menu/shop backgrounds — the world itself runs at 0.1×
+    // there), scaled by sun: 1.0 in sunlight, ECLIPSE_RATE in eclipse (the
+    // panel:concentrator ratio ≈ 2 kW / 50 kW — an ember trickle that finishes
+    // shards but barely moves stages; "small = electric, large = solar").
+    TRANSIT_DIGEST_S_PER_KG: 20,  // game-seconds per kg (50 kW thermal ÷ ~1 MJ/kg)
+    TRANSIT_DIGEST_MIN_S: 60,     // floor — even a shard takes a beat (6 wall-s)
+    TRANSIT_DIGEST_MAX_S: 20000,  // pacing cap — biggest transferable piece ≈ 30 wall-min of sun
+    TRANSIT_DIGEST_ECLIPSE_RATE: 0.04,  // eclipse trickle = panel/concentrator ratio
   },
 
   // Tool-selection HUD constants (DAUGHTER_MULTITOOL_SPEC §4.1).
