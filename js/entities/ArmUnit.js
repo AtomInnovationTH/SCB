@@ -79,6 +79,44 @@ function _ensureSharedBridleGeo() {
   return _sharedBridleGeo;
 }
 
+// ── Cargo-continuity S13(b): the ONE rack-slot geometry computation ──────────
+// (register item 58) — extracted from ArmUnit.heldSlotWorldInto so the rack pin
+// and the CoMCalculator mass model share ONE computation (§6 house rules).
+// Frame-free: works in whatever consistent frame `holdDir` and `up` are
+// expressed; `anchor` and `out` are scene-unit positions in that frame.
+// Applies the pin's exact arithmetic, in order (byte-stable by construction):
+//   out = anchor + holdDir·(r·M)          then, when bias applies:
+//   out += lat(slot)·(r·M·bias)           r = sizeMeter/2 + ARM_HOLD_CLEARANCE_M
+// with lat = normalize(holdDir × up), rotated about holdDir by
+// slotIndex × 2π/DAUGHTER_CARGO_CELLS (slot 0: no rotation — the S6 no-jump
+// contract). A zero holdDir lands the piece AT the anchor with no lateral term
+// (the pin's own degenerate case).
+const _slotLatTmp = new THREE.Vector3();   // module temps — the repo hot-path idiom
+const _slotRotTmp = new THREE.Quaternion();
+export function heldSlotAnchorInto(anchor, holdDir, up, slotIndex, sizeMeter, out) {
+  const clearance = (Constants.ARM_HOLD_CLEARANCE_M ?? 1.0);
+  const bias = Constants.ARM_HOLD_LATERAL_BIAS ?? 0;
+  const cells = Constants.DAUGHTER_CARGO_CELLS ?? 2;
+  const radius = (sizeMeter || 0) / 2 + clearance;
+
+  out.copy(anchor).addScaledVector(holdDir, radius * M);
+  // `holdDir.lengthSq() > 1e-12` on the RESOLVED axis is the pin's `hasDir`:
+  // a resolvable source is normalized (lengthSq 1) before we get here; an
+  // unresolvable one arrives as (0,0,0).
+  if (bias !== 0 && holdDir.lengthSq() > 1e-12) {
+    const lat = _slotLatTmp;
+    lat.crossVectors(holdDir, up);
+    if (lat.lengthSq() < 1e-8) lat.set(1, 0, 0); // holdDir ∥ up — pick world-X
+    lat.normalize();
+    if (slotIndex !== 0) {
+      _slotRotTmp.setFromAxisAngle(holdDir, (slotIndex * 2 * Math.PI) / cells);
+      lat.applyQuaternion(_slotRotTmp);
+    }
+    out.addScaledVector(lat, radius * M * bias);
+  }
+  return out;
+}
+
 export class ArmUnit {
   /**
    * @param {string} id - e.g. 'weaver-1', 'spinner-2'
@@ -4612,6 +4650,12 @@ export class ArmUnit {
    * where a piece WILL be pinned before it flies there, and a second copy of this
    * expression is precisely the drift class register item 19 describes.
    *
+   * S13(b): the slot offset itself moved to the module-level
+   * `heldSlotAnchorInto` (register item 58) so the CoMCalculator mass model books
+   * held cargo AT the pin — same axes, same arithmetic, exactly one computation.
+   * This method keeps only the hold-axis resolution (fired net's launch
+   * direction, else outboard from the mother).
+   *
    * @param {number} slotIndex — rack slot (0-based); slot 0 has zero bias rotation
    * @param {number} sizeMeter — the piece's size, for the standoff radius
    * @param {THREE.Vector3|null} parentPos — freshest mother position
@@ -4635,25 +4679,10 @@ export class ArmUnit {
     }
     if (hasDir) dir.normalize(); else dir.set(0, 0, 0);
 
-    const clearance = (Constants.ARM_HOLD_CLEARANCE_M ?? 1.0);
-    const bias = Constants.ARM_HOLD_LATERAL_BIAS ?? 0;
-    const cells = Constants.DAUGHTER_CARGO_CELLS ?? 2;
-    const radius = (sizeMeter || 0) / 2 + clearance;
-
-    out.copy(this.position).addScaledVector(dir, radius * M);
-    if (bias !== 0 && hasDir) {
-      const lat = this._tmpLatDir || (this._tmpLatDir = new THREE.Vector3());
-      const rot = this._tmpRackQuat || (this._tmpRackQuat = new THREE.Quaternion());
-      lat.crossVectors(dir, _WORLD_UP);
-      if (lat.lengthSq() < 1e-8) lat.set(1, 0, 0); // holdDir ∥ up — pick world-X
-      lat.normalize();
-      if (slotIndex !== 0) {
-        rot.setFromAxisAngle(dir, (slotIndex * 2 * Math.PI) / cells);
-        lat.applyQuaternion(rot);
-      }
-      out.addScaledVector(lat, radius * M * bias);
-    }
-    return out;
+    // S13(b): the slot offset itself is ONE computation shared with the
+    // CoMCalculator mass model (register item 58) — this call applies the
+    // pin's exact pre-extraction arithmetic, order included.
+    return heldSlotAnchorInto(this.position, dir, _WORLD_UP, slotIndex, sizeMeter, out);
   }
 
   /**
