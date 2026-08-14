@@ -933,10 +933,10 @@ export class NetProjectile {
       case STATES.RELEASED:
       case STATES.FOLDED:
         break;
-      // Mother berth/park: the per-frame hold is driven by CaptureNetSystem
+      // Mother berth/collar: the per-frame hold is driven by CaptureNetSystem
       // (which owns the player/debrisField refs), not by the projectile's switch.
       case STATES.BERTHED:
-      case STATES.PARKED:
+      case STATES.COLLARED:
         break;
     }
   }
@@ -1676,6 +1676,11 @@ export class NetProjectile {
     // Respect the corridor-timeout extended standoff (Phase C-lite): a berth
     // forced out to CORRIDOR_EXTENDED_STANDOFF_M must HOLD there — recomputing
     // the base standoff here would slide the catch inward at the berth.
+    // S13(c): this IS the collar seat. The collar ring sits at the muzzle plane
+    // (BERTH_COLLAR_Z_M 1.30 == the pod face), so cargo centre at muzzle +
+    // fwd × (sizeMeter/2 + BERTH_CLEARANCE_M 1.0) is exactly "cargo surface at
+    // the ring, centre at ring-z + size/2 + clearance" — the seat the rigid
+    // complete-berth mate holds (no pendulum from COLLARED on, see below).
     const baseStandoffM = (d.sizeMeter || 2) / 2 + (CN.BERTH_CLEARANCE_M ?? 1.0);
     const berthStandoffM = Math.max(baseStandoffM, this._effectiveStandoffM ?? baseStandoffM);
     this._remainingM = berthStandoffM;
@@ -1688,7 +1693,13 @@ export class NetProjectile {
     // small lateral displacement at the standoff distance. Semi-implicit
     // (dt-robust at 30/120 fps). Phase D.8 (§11.8): garnish — dropped at LOW
     // tier (the berth hold itself is structure and stays).
-    if (CN.BERTH_PENDULUM_ENABLED !== false) {
+    // S13(c): the pendulum applies through BERTHED only — a tethered berth
+    // swings; a collar mate is RIGID and does not (the BERTHED→COLLARED
+    // transition zeroes _pendulumAngle/_pendulumVel). In COLLARED the residual
+    // _lateral simply decays to the boresight (the guide cone re-centres the
+    // body over ~½ s — no snap, no pop).
+    const collared = this.state === STATES.COLLARED;
+    if (CN.BERTH_PENDULUM_ENABLED !== false && !collared) {
       const pOmega = 2 * Math.PI * (CN.BERTH_PENDULUM_FREQ_HZ ?? 0.5);
       const pZeta = 1.0;
       const pK = pOmega * pOmega, pC = 2 * pZeta * pOmega;
@@ -2163,9 +2174,9 @@ export class NetProjectile {
 
   /**
    * Release / abort: let debris and net go. Net inventory is consumed.
-   * BERTHED/PARKED is the manual jettison ([K]) — clears pins, re-seats the
+   * BERTHED/COLLARED is the manual jettison ([K]) — clears pins, re-seats the
    * orbit, frees the launcher. The securing timer (if still running) is
-   * cancelled; a PARKED catch was already credited (that score is not revoked).
+   * cancelled; a COLLARED catch was already credited (that score is not revoked).
    * @returns {boolean} Whether release occurred
    */
   release() {
@@ -2173,9 +2184,22 @@ export class NetProjectile {
         this.state !== STATES.REELING &&
         this.state !== STATES.FLIGHT &&
         this.state !== STATES.BERTHED &&
-        this.state !== STATES.PARKED) return false;
+        this.state !== STATES.COLLARED) return false;
 
-    const wasBerthed = this.state === STATES.BERTHED || this.state === STATES.PARKED;
+    const wasBerthed = this.state === STATES.BERTHED || this.state === STATES.COLLARED;
+    // S13(c): a mid-cook jettison — the collar's chop was running when the body
+    // left. Stop the breakdown beat honestly: the unflown chunks + the ghost
+    // bag dispose WITHOUT the draw-in (the body left the furnace, not into it);
+    // chunks already committed keep flying to the bus. The half-cooked piece
+    // keeps its _digestProgress — the invested cook is conserved.
+    const dPre = this.targetDebris;
+    if (dPre && dPre._breakdownActive) {
+      dPre._breakdownActive = false;
+      eventBus.emit(Events.CATCH_BREAKDOWN_CANCEL, {
+        armId: 'mother', debrisId: dPre.id,
+        anchor: { kind: 'collar', podIndex: this.podIndex },
+      });
+    }
     this._transitionTo(STATES.RELEASED);
     this.capturedMass = 0;
     this.isActive = false;
@@ -2387,13 +2411,13 @@ export class CaptureNetSystem {
         }
       }
 
-      // ── Mother BERTHED/PARKED hold + securing timer (§8 A2 + cargo-continuity S3) ──
+      // ── Mother BERTHED/COLLARED hold + securing timer (§8 A2 + cargo-continuity S3) ──
       // The projectile's own switch no-ops on both states; the per-frame hold
       // runs here because the system owns the player/debrisField refs. The hold
       // survives pruning (isActive stays true, state never STOWED/RELEASED).
-      // S3: the hold keeps running in PARKED — if the pin ever stops, the catch
-      // falls back to the orbit branch and reads as released.
-      if (net.state === STATES.BERTHED || net.state === STATES.PARKED) {
+      // S3: the hold keeps running in the terminal state — if the pin ever stops,
+      // the catch falls back to the orbit branch and reads as released.
+      if (net.state === STATES.BERTHED || net.state === STATES.COLLARED) {
         const holding = net.updateBerthHold(dt);
         if (!holding) {
           // Dead target while docked (§4.19 mission-transition guard): clear
@@ -2406,12 +2430,13 @@ export class CaptureNetSystem {
         if (net.state === STATES.BERTHED && !net._berthProcessed && net._berthTimer > 0) {
           net._berthTimer -= dt;
           if (net._berthTimer <= 0) {
-            // §19 terminal credit + S3 parking: the existing GameFlowManager
+            // §19 terminal credit + S13(c) mating: the existing GameFlowManager
             // CATCH_PROCESSED path awards score + salvage + clearDebris() +
             // autosave. { parked: true } skips ONLY the field removal — the
-            // body is KEPT, held at the nose inside its net (the net IS the
-            // container). No teardown, no splice: the hold above keeps pinning
-            // the catch every frame, and the launcher stays blocked.
+            // body is KEPT, now MATED at the nose berthing collar inside its
+            // net (the net IS the container). No teardown, no splice: the hold
+            // above keeps pinning the catch every frame, and the launcher stays
+            // blocked (the pods still share the boresight until S13(e)).
             net._berthProcessed = true;
             eventBus.emit(Events.CATCH_PROCESSED, {
               debrisId: net.targetDebris?.id,
@@ -2421,29 +2446,50 @@ export class CaptureNetSystem {
               method:   'mother',
               parked:   true,
             });
-            net._transitionTo(STATES.PARKED);
+            // A rigid mate does not swing: the berth pendulum applies through
+            // BERTHED only (updateBerthHold) and must not carry energy across
+            // the mate. The residual _lateral decays to the boresight inside
+            // the hold (the guide cone re-centres the body — no snap).
+            net._pendulumAngle = 0;
+            net._pendulumVel = 0;
+            net._transitionTo(STATES.COLLARED);
             continue;
           }
         }
 
+        // ── S13(c): the collar's digestion clock (register item 47) ──────
+        // The collared piece cooks on the SAME sun-scaled transit clock the
+        // daughter rack runs (the concentrator doesn't care where the crucible
+        // is). At completion the beat fires NET_CONSUMED + CATCH_PROCESSED
+        // (digested — the mate already paid the credit, GameFlowManager skips
+        // it) and the collar frees. A completed digest splices the net in-tick
+        // (the same one-state-change-per-tick idiom as the mate above).
+        if (net.state === STATES.COLLARED && this._tickCollarDigestion(net, dt)) {
+          this.activeNets.splice(i, 1);
+          continue;
+        }
+
         // ── Cargo hand-off trigger (cargo-continuity S7) ──────────────────
         // AUTOMATIC by owner ruling: the player holds no information the ship
-        // lacks, so there is no keypress. After the park ceremony's tail the
+        // lacks, so there is no keypress. After the collar ceremony's tail the
         // ship stows the catch on the best daughter itself; while it cannot
         // (every daughter out, every rack full, or the body over the mass
-        // gate) the catch stays parked and S3's "Launcher blocked" line stands
+        // gate) the catch stays collared and S3's "Launcher blocked" line stands
         // as real information. Retry is silent — the refusal speaks once.
-        if (net.state === STATES.PARKED) {
+        // S13(c) routing (the ruling made concrete): the ≤ 2000 kg gate decides
+        // collar-vs-tip — a piece under the gate may leave for a strut tip;
+        // above it, collar-only until digested or dumped.
+        if (net.state === STATES.COLLARED) {
           net._parkedS = (net._parkedS || 0) + dt;
           if (net._parkedS >= (CT.DELAY_S ?? 5.0)) {
             // Throttle the retry: the scorer allocates (computeCoM), and an
-            // unstowable catch can sit parked for minutes — the net path must
+            // unstowable catch can sit collared for minutes — the net path must
             // not allocate per frame (plan §13). The FIRST attempt is never
             // throttled, so the hand-off lands on the beat.
             net._cargoRetryS = (net._cargoRetryS || 0) + dt;
             if (!net._cargoRefused || net._cargoRetryS >= (CT.RETRY_S ?? 0.5)) {
               net._cargoRetryS = 0;
-              // `continue` on a successful start, mirroring the BERTHED→PARKED
+              // `continue` on a successful start, mirroring the BERTHED→COLLARED
               // transition above: one state change per tick, so the flight
               // always begins at t=0 on its own frame instead of consuming the
               // trigger frame's (possibly huge) dt in one jump.
@@ -2466,7 +2512,7 @@ export class CaptureNetSystem {
       }
 
       // Remove terminal nets + handle inventory / cargo consequences.
-      // BERTHED and PARKED are deliberately absent — a held net must hit
+      // BERTHED and COLLARED are deliberately absent — a held net must hit
       // neither the prune predicate nor the STOWED cargo hand-off (§8 A2, S3).
       if (!net.isActive || net.state === STATES.STOWED || net.state === STATES.RELEASED) {
         // Mother exits (miss / release / forceResolve) — clear any pins the
@@ -2518,17 +2564,18 @@ export class CaptureNetSystem {
   }
 
   /**
-   * Cargo-continuity S7 — try to hand a PARKED catch to a daughter's cargo rack.
+   * Cargo-continuity S7 — try to hand a COLLARED catch to a daughter's cargo rack.
    *
    * Automatic by owner ruling (2026-08-12): no hotkey. `suggestCargoArm` is the
    * single gatekeeper for "may this piece go to a daughter, and which one" — it
    * owns the mass gate, the free-cell rule, the home rule and the
-   * last-capture-capable-daughter guard. When it declines, the catch stays parked
-   * (S3's launcher block is then real information) and the refusal comms fires
-   * exactly ONCE per park; the retry is silent, so the transfer happens by itself
-   * the moment a daughter docks or a cell frees.
+   * last-capture-capable-daughter guard. When it declines, the catch stays at
+   * the collar (S3's launcher block is then real information) and the refusal
+   * comms fires exactly ONCE per mate; the retry is silent, so the transfer
+   * happens by itself the moment a daughter docks or a cell frees. S13(c): the
+   * start anchor is the collar seat ({kind:'collar'}).
    *
-   * @param {NetProjectile} net — a PARKED mother net
+   * @param {NetProjectile} net — a COLLARED mother net
    * @returns {boolean} true when the beat started
    * @private
    */
@@ -2538,6 +2585,18 @@ export class CaptureNetSystem {
     const player = this._player;
     const armManager = this._armManager;
     if (!d || !armManager || !Array.isArray(armManager.arms)) return false;
+
+    // S13(c) pre-commit review: once the collar's furnace has COMMITTED to the
+    // piece (the chop START fired), the transfer window is closed — you cannot
+    // crane a half-eaten body. Without this guard a late acceptance (racks were
+    // full past the hold fraction, or a light piece's short span) would fly a
+    // mid-chop/mid-feed body — already shrinking, chunks committed — to the
+    // rack: the collar-anchored ghost bag + unflown pool chunks leak forever
+    // (NET_CONSUMED for that anchor never comes), the rack fires a SECOND
+    // BREAKDOWN_START, and the drawn body rides the crane invisible. Silent
+    // decline (not a refusal — no comms): the furnace owns it now; the cook
+    // completes at the collar and the mass leaves the ledger exactly once.
+    if (net._breakdownStarted) return false;
 
     const massKg = net.capturedMass || d.mass || 0;
     const armIndex = suggestCargoArm(armManager, player, massKg);
@@ -2561,9 +2620,9 @@ export class CaptureNetSystem {
 
     // Endpoints, both exact so neither end snaps. START is the catch's LIVE
     // drawn position — `_scenePosition`, what `pinCapturedDebris` wrote last
-    // frame (plan correction: NOT the bus centre; the parked catch lives at the
-    // berth-hold pin, and the bag apex sits `_catchSeatM` short of it). END is
-    // the rack SLOT the piece will occupy, so the arc lands exactly where
+    // frame (plan correction: NOT the bus centre; the collared catch lives at
+    // the berth-hold pin, and the bag apex sits `_catchSeatM` short of it). END
+    // is the rack SLOT the piece will occupy, so the arc lands exactly where
     // `_pinHeldCatches` takes over.
     const seatM = (net._catchSeatM || 0) * M_NET;
     let start;
@@ -2606,7 +2665,7 @@ export class CaptureNetSystem {
       armIndex,
       armId:     arm.id,
       durationS: net._cargoDur,
-      from: { kind: 'parkedCatch', debrisId: d.id },
+      from: { kind: 'collar', podIndex: net.podIndex },
       to:   { kind: 'strutTip', armIndex },
     });
     return true;
@@ -2640,12 +2699,12 @@ export class CaptureNetSystem {
     const arm = armManager?.arms?.[net._cargoArmIndex];
 
     // Target or carrier lost mid-beat (mission transition / detach): put the
-    // catch back on the nose rather than dropping it — cargo is never destroyed.
+    // catch back at the collar rather than dropping it — cargo is never destroyed.
     if (!d || d.alive === false || !arm || !net._cargoFrom || !net._cargoTo) {
       if (d && d.alive !== false) {
         net._cargoRefused = false;
         net._parkedS = 0;
-        net._transitionTo(STATES.PARKED);
+        net._transitionTo(STATES.COLLARED);
         return false;
       }
       this._teardownBerth(net);
@@ -2656,15 +2715,15 @@ export class CaptureNetSystem {
     // she is DOCKED, not HOLDING_CATCH, until arrival). Abort: her rack pin only
     // runs in REELING/DOCKING/HOLDING_CATCH, so delivering to a departing arm
     // would orphan the piece and it would read as released. The catch goes back
-    // to the nose and the retry re-picks a carrier.
+    // to the collar and the retry re-picks a carrier.
     const SA = Constants.ARM_STATES;
     if (arm.state !== SA.DOCKED && arm.state !== SA.HOLDING_CATCH) {
       net._cargoRefused = false;
       net._parkedS = 0;
-      net._transitionTo(STATES.PARKED);
+      net._transitionTo(STATES.COLLARED);
       eventBus.emit(Events.COMMS_MESSAGE, {
         source: 'HOUSTON', channel: 'CMD',
-        text: `${arm.displayName || arm.id} left the strut — cargo stays at the nose.`,
+        text: `${arm.displayName || arm.id} left the strut — cargo stays at the collar.`,
         priority: 'info',
       });
       return false;
@@ -2709,11 +2768,11 @@ export class CaptureNetSystem {
       : false;
     if (!stowed) {
       // Rack filled during the beat (should be unreachable — the scorer reserved
-      // a cell). Keep the cargo: put it back on the nose and let the retry pick
+      // a cell). Keep the cargo: put it back on the collar and let the retry pick
       // another carrier.
       net._cargoRefused = false;
       net._parkedS = 0;
-      net._transitionTo(STATES.PARKED);
+      net._transitionTo(STATES.COLLARED);
       return false;
     }
 
@@ -2791,6 +2850,122 @@ export class CaptureNetSystem {
       return arm.heldSlotWorldInto(slot, d.sizeMeter, parentPos, out);
     }
     return out.copy(arm.position || _v3a.set(0, 0, 0));
+  }
+
+  /**
+   * Cargo-continuity S13(c) (register item 47) — the collar's digestion clock.
+   * One frame of the mother-side furnace: the collared piece cooks on the SAME
+   * law the daughter rack runs (ArmUnit._updateHoldingCatch) — span
+   * clamp(massKg × TRANSIT_DIGEST_S_PER_KG, MIN_S, MAX_S), progress
+   * dt × TIME_SCALE_GAMEPLAY × sunScale (ArmManager writes _digestSunScale on
+   * this system from the one ResourceSystem multiplier SSOT; ?? 1.0 keeps
+   * legacy mocks byte-identical), phase mapped onto [0, FEED_S] so the
+   * hold/chop/feed fractions and the chunk cadence are identical. The
+   * staged beat reuses the breakdown machinery with the {kind:'collar'}
+   * anchor: chunks arc collar → bus, NET_CONSUMED carries the pod, and the
+   * completion CATCH_PROCESSED carries { digested: true } — the mate already
+   * paid the credit ({ parked: true }), so GameFlowManager runs removal +
+   * comms but pays NOTHING twice (single-fire contract).
+   *
+   * @param {NetProjectile} net — a COLLARED mother net
+   * @param {number} dt — seconds
+   * @returns {boolean} true when digestion completed (caller splices the net)
+   * @private
+   */
+  _tickCollarDigestion(net, dt) {
+    const d = net.targetDebris;
+    if (!d) return false;
+    const FT = Constants.FURNACE_TRANSFER;
+    const HOLD_S = FT.HOLD_S, CHOP_S = FT.CHOP_S, FEED_S = FT.FEED_S;
+    const CHUNK_COUNT = FT.CHUNK_COUNT;
+    const span = Math.min(FT.TRANSIT_DIGEST_MAX_S,
+      Math.max(FT.TRANSIT_DIGEST_MIN_S, (d.mass || 0) * FT.TRANSIT_DIGEST_S_PER_KG));
+    const sunScale = this._digestSunScale ?? 1.0;
+    d._digestProgress = (d._digestProgress || 0) + dt * Constants.TIME_SCALE_GAMEPLAY * sunScale;
+    const t = Math.min(FEED_S, (d._digestProgress / span) * FEED_S);
+    // The chop ramp reads this derived phase time (ArmManager's rack ramp reads
+    // arm._digestPhaseT — one convention, one home per hold).
+    net._digestPhaseT = t;
+
+    // Lazy-init the per-collar breakdown bookkeeping (safe if a test sets
+    // COLLARED directly — same idiom as ArmUnit's HOLDING_CATCH).
+    if (net._breakdownStarted === undefined) net._breakdownStarted = false;
+    if (net._breakdownChunksFired === undefined) net._breakdownChunksFired = 0;
+
+    if (t < HOLD_S) return false;   // hold: welded full-size — the berth hold pins it
+
+    // Fire the chop-start exactly once when we cross into the chop phase.
+    if (!net._breakdownStarted) {
+      net._breakdownStarted = true;
+      d._breakdownActive = true;   // the furnace visual owns scale/disposal
+      eventBus.emit(Events.CATCH_BREAKDOWN_START, {
+        armId: 'mother', debrisId: d.id, chunkCount: CHUNK_COUNT,
+        anchor: { kind: 'collar', podIndex: net.podIndex },
+      });
+    }
+
+    // The staged chop: shrink the original out of view across the chop window
+    // (the same ramp ArmManager's pin loop runs at the rack) so the chunks are
+    // what the player sees being fed — the catch comes apart, never pops.
+    // updateBerthHold pinned at scaleMul 1 earlier this tick; this re-pin is
+    // the last write this frame.
+    if (d._breakdownActive) {
+      const chopSpan = Math.max(1e-6, CHOP_S - HOLD_S);
+      const frac = Math.min(1, Math.max(0, (t - HOLD_S) / chopSpan));
+      const scaleMul = Math.max(0.001, 1 - frac);
+      if (this._debrisField && typeof this._debrisField.pinCapturedDebris === 'function' && d._armPinPos) {
+        this._debrisField.pinCapturedDebris(d, d._armPinPos, scaleMul);
+      }
+    }
+
+    // feed: emit chunk events evenly across [CHOP_S, FEED_S).
+    if (t >= CHOP_S && t < FEED_S) {
+      const feedSpan = Math.max(1e-6, FEED_S - CHOP_S);
+      const feedFrac = (t - CHOP_S) / feedSpan;             // 0 → 1 across feed
+      const due = Math.min(CHUNK_COUNT, Math.floor(feedFrac * CHUNK_COUNT) + 1);
+      while (net._breakdownChunksFired < due) {
+        const index = net._breakdownChunksFired;            // 0-based
+        eventBus.emit(Events.CATCH_BREAKDOWN_CHUNK, {
+          armId: 'mother', debrisId: d.id, index, total: CHUNK_COUNT,
+          anchor: { kind: 'collar', podIndex: net.podIndex },
+        });
+        net._breakdownChunksFired++;
+      }
+      return false;
+    }
+
+    if (t < FEED_S) return false;   // mid-chop: the hold phase pins above; nothing more
+
+    // ── Digestion complete: the furnace ate the body; the collar frees ──
+    // Mirrors the rack feed-end: flush any chunks a long frame skipped, release
+    // the hold first (the body is consumed — the furnace owns it), then
+    // NET_CONSUMED (the bag draws in — the net IS the container, fed in with
+    // the debris), then the ONE CATCH_PROCESSED (digested: true — removal +
+    // the processed comms line run; the mate's credit does not re-fire).
+    while (net._breakdownChunksFired < CHUNK_COUNT) {
+      const index = net._breakdownChunksFired;
+      eventBus.emit(Events.CATCH_BREAKDOWN_CHUNK, {
+        armId: 'mother', debrisId: d.id, index, total: CHUNK_COUNT,
+        anchor: { kind: 'collar', podIndex: net.podIndex },
+      });
+      net._breakdownChunksFired++;
+    }
+    d._breakdownActive = false;
+    this._clearCatchPins(d);
+    net.isActive = false;
+    net._berthTimer = -1;
+    // Marker for any reader holding a stale reference (the transfer beat's
+    // _cargoDelivered idiom): the cargo was digested; the net's job is done.
+    net._digestedOut = true;
+    eventBus.emit(Events.NET_CONSUMED, {
+      podIndex: net.podIndex, armId: 'mother', debrisId: d.id,
+      anchor: { kind: 'collar', podIndex: net.podIndex },
+    });
+    eventBus.emit(Events.CATCH_PROCESSED, {
+      debrisId: d.id, armId: null, source: 'mother', podIndex: net.podIndex,
+      method: 'mother', digested: true,
+    });
+    return true;
   }
 
   /**
@@ -2886,13 +3061,15 @@ export class CaptureNetSystem {
    * Cargo-continuity S7: TRANSFERRING counts too. The piece is in flight between
    * the nose and a strut tip, still aboard, and the daughter's rack does not own
    * it until arrival — so counting it here for the whole beat is what makes the
-   * cargo ledger CONTINUOUS across the hand-off (no double count, no gap).
+   * cargo ledger continuous at the hand-off. S13(c): COLLARED is the nose-side
+   * station — the collar holds the mass until the furnace eats it or the rack
+   * takes it.
    * @returns {number} kg currently held at the mother launcher (incl. in transit)
    */
   getBerthedMassKg() {
     let sum = 0;
     for (const net of this.activeNets) {
-      if (net._isMother && (net.state === STATES.BERTHED || net.state === STATES.PARKED
+      if (net._isMother && (net.state === STATES.BERTHED || net.state === STATES.COLLARED
                             || net.state === STATES.TRANSFERRING)) {
         sum += net.capturedMass || 0;
       }
@@ -2902,8 +3079,8 @@ export class CaptureNetSystem {
 
   /**
    * §8 A2 — single docked catch slot. The launcher is one nose patch; a
-   * berthed or parked whale obstructs every cell, so a second fire is refused
-   * while anything is held (S3: the block persists through PARKED).
+   * berthed or collared whale obstructs every cell, so a second fire is refused
+   * while anything is held (S3: the block persists through the terminal state).
    *
    * Cargo-continuity S7: TRANSFERRING keeps the block. The catch is crossing the
    * firing corridor for the length of the beat — the launcher frees when the
@@ -2912,7 +3089,7 @@ export class CaptureNetSystem {
    */
   getDockedCatch() {
     return this.activeNets.find(n => n._isMother
-      && (n.state === STATES.BERTHED || n.state === STATES.PARKED
+      && (n.state === STATES.BERTHED || n.state === STATES.COLLARED
           || n.state === STATES.TRANSFERRING)) || null;
   }
 
@@ -3287,7 +3464,7 @@ export class CaptureNetSystem {
     return this.activeNets.some(n =>
       n.podIndex >= 0 && n.isActive
       && n.state !== STATES.STOWED && n.state !== STATES.RELEASED
-      && n.state !== STATES.BERTHED && n.state !== STATES.PARKED);
+      && n.state !== STATES.BERTHED && n.state !== STATES.COLLARED);
   }
 
   /**

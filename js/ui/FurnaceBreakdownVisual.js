@@ -2,22 +2,30 @@
  * FurnaceBreakdownVisual.js — staged furnace breakdown choreography (Item 1).
  *
  * THREE-side renderer for the "chop the catch into pieces and feed it into the
- * mother's furnace" sequence that plays while a daughter sits in HOLDING_CATCH.
+ * mother's furnace" sequence that plays while a daughter sits in HOLDING_CATCH,
+ * OR (cargo-continuity S13(c), register item 47) while a whale cooks at the
+ * nose berthing collar — the COLLARED mother catch runs the same staged beat
+ * with chunks arcing collar seat → bus, carried by a `{ kind: 'collar', podIndex }`
+ * anchor instead of an armId (the S7 anchor-abstraction shape — the breakdown
+ * events otherwise resolve an arm index).
  * Pure visuals — gameplay (salvage/score/remove) is owned by GameFlowManager's
  * single CATCH_PROCESSED handler. This module is NOT covered by the Node test
  * harness (it touches THREE + the player render hierarchy); the FSM timing that
- * drives it (ArmUnit._updateHoldingCatch) IS tested.
+ * drives it (ArmUnit._updateHoldingCatch + CaptureNetSystem._tickCollarDigestion)
+ * IS tested.
  *
- * Lifecycle (events emitted by ArmUnit._updateHoldingCatch):
- *   CATCH_BREAKDOWN_START { armId, debrisId, chunkCount }
+ * Lifecycle (events emitted by ArmUnit._updateHoldingCatch or the collar tick):
+ *   CATCH_BREAKDOWN_START { armId, debrisId, chunkCount, [anchor] }
  *     → spawn `chunkCount` small irregular chunk meshes at the strut-tip catch
- *       position with a brief outward "chop" jitter + tumble, plus a short-lived
- *       "ghost bag" (so the net stays visibly cinched after CaptureNetVisual has
- *       already stowed the real bag — see plan §risks ghost-bag note).
- *   CATCH_BREAKDOWN_CHUNK { armId, debrisId, index, total }
- *     → launch that chunk on a curve from the strut tip toward the mother's
+ *       (or the collar seat) with a brief outward "chop" jitter + tumble, plus a
+ *       short-lived "ghost bag" (so the net stays visibly cinched after
+ *       CaptureNetVisual has already stowed the real bag on the daughter path —
+ *       see plan §risks ghost-bag note; at the collar the real bag stays welded
+ *       until NET_CONSUMED).
+ *   CATCH_BREAKDOWN_CHUNK { armId, debrisId, index, total, [anchor] }
+ *     → launch that chunk on a curve from the station toward the mother's
  *       furnace port (bus center), shrinking + warm glow, then dispose.
- *   NET_CONSUMED { armIndex }
+ *   NET_CONSUMED { armIndex } / { podIndex } (collar)
  *     → draw the ghost bag toward the mother (shrink + fade), then dispose.
  *
  * Wire in main.js next to CaptureNetVisual: construct, init(scene, player), update(dt).
@@ -65,10 +73,12 @@ export class FurnaceBreakdownVisual {
 
     /** Active chunk animations: { mesh, t, dur, start:Vector3, ctrl:Vector3, end:Vector3, spin:Vector3, baseScale } */
     this._chunks = [];
-    /** Active ghost bags keyed by arm index: Map<number, { group, t, dur, holding, startScale }> */
+    /** Active ghost bags keyed by station (arm index | 'collar'): Map<number|string, { group, t, dur, holding, startScale, worldOf }> */
     this._bags = new Map();
-    /** Pending chunk-spawn pools keyed by arm index: prebuilt chunk meshes awaiting their CHUNK event. */
+    /** Pending chunk-spawn pools keyed by station (arm index | 'collar'): prebuilt chunk meshes awaiting their CHUNK event. */
     this._pools = new Map();
+    /** S13(c): the last live collar seat (the draw-in keeps it after the splice). */
+    this._collarLastWorld = null;
 
     this._boundStart = null;
     this._boundChunk = null;
@@ -88,16 +98,19 @@ export class FurnaceBreakdownVisual {
     this._boundStart = this._onBreakdownStart.bind(this);
     this._boundChunk = this._onBreakdownChunk.bind(this);
     this._boundConsumed = this._onNetConsumed.bind(this);
+    this._boundCancel = this._onBreakdownCancel.bind(this);
 
     eventBus.on(Events.CATCH_BREAKDOWN_START, this._boundStart);
     eventBus.on(Events.CATCH_BREAKDOWN_CHUNK, this._boundChunk);
     eventBus.on(Events.NET_CONSUMED, this._boundConsumed);
+    eventBus.on(Events.CATCH_BREAKDOWN_CANCEL, this._boundCancel);
   }
 
   dispose() {
     if (this._boundStart) eventBus.off(Events.CATCH_BREAKDOWN_START, this._boundStart);
     if (this._boundChunk) eventBus.off(Events.CATCH_BREAKDOWN_CHUNK, this._boundChunk);
     if (this._boundConsumed) eventBus.off(Events.NET_CONSUMED, this._boundConsumed);
+    if (this._boundCancel) eventBus.off(Events.CATCH_BREAKDOWN_CANCEL, this._boundCancel);
     for (const c of this._chunks) this._disposeMesh(c.mesh);
     this._chunks.length = 0;
     for (const [, bag] of this._bags) this._disposeMesh(bag.group);
@@ -126,6 +139,49 @@ export class FurnaceBreakdownVisual {
     if (p && p.getWorldPosition) { p.getWorldPosition(out); return out; }
     if (p && p.getPosition) { const pp = p.getPosition(); out.set(pp.x, pp.y, pp.z); return out; }
     return out.set(0, 0, 0);
+  }
+
+  /**
+   * S13(c) — the collar station's live world position: the collared catch's
+   * own `_scenePosition` (what pinCapturedDebris wrote this frame).
+   * After the completion splice the docked catch is gone, so fall back to the
+   * LAST live seat (the ghost bag's draw-in reads from where the mated body
+   * actually was), then the pod muzzle, then the bus centre.
+   * @param {THREE.Vector3} out
+   */
+  _collarWorld(out) {
+    try {
+      const cns = this._player && this._player._captureNetSystem;
+      const net = cns && typeof cns.getDockedCatch === 'function' ? cns.getDockedCatch() : null;
+      const sp = net && net.targetDebris && net.targetDebris._scenePosition;
+      if (sp) {
+        this._collarLastWorld = { x: sp.x, y: sp.y, z: sp.z };
+        return out.copy(sp);
+      }
+    } catch (_e) { /* fall through to the last-known seat */ }
+    if (this._collarLastWorld) {
+      return out.set(this._collarLastWorld.x, this._collarLastWorld.y, this._collarLastWorld.z);
+    }
+    if (this._player && typeof this._player.getNetPodPositionInto === 'function') {
+      return this._player.getNetPodPositionInto(0, out);
+    }
+    return this._motherCenter(out);
+  }
+
+  /**
+   * Resolve a breakdown-event payload to a station anchor: the daughter rack's
+   * strut tip (armIndex, the shipped path) or the S13(c) collar
+   * ({anchor:{kind:'collar', podIndex}}). Returns null when nothing resolves.
+   * @returns {{ key: number|string, worldOf: (out: THREE.Vector3) => THREE.Vector3 }|null}
+   * @private
+   */
+  _resolveAnchor(payload) {
+    if (payload && payload.anchor && payload.anchor.kind === 'collar') {
+      return { key: 'collar', worldOf: (out) => this._collarWorld(out) };
+    }
+    const armIndex = resolveArmIndex(this._player, payload);
+    if (armIndex < 0) return null;
+    return { key: armIndex, worldOf: (out) => this._strutTipWorld(armIndex, out) };
   }
 
   _makeChunkMesh() {
@@ -179,13 +235,13 @@ export class FurnaceBreakdownVisual {
   /** @private */
   _onBreakdownStart(payload) {
     if (!this._enabled || !this._scene) return;
-    const armIndex = resolveArmIndex(this._player, payload);
-    if (armIndex < 0) return;
+    const anchor = this._resolveAnchor(payload);
+    if (!anchor) return;
     const count = payload.chunkCount || (Constants.FURNACE_TRANSFER?.CHUNK_COUNT ?? 5);
 
-    const tip = this._strutTipWorld(armIndex, _v3a).clone();
+    const tip = anchor.worldOf(_v3a).clone();
 
-    // Pre-build a pool of chunk meshes parked at the strut tip with a small
+    // Pre-build a pool of chunk meshes parked at the station with a small
     // outward chop jitter + tumble; they wait for their CHUNK event to fly in.
     const pool = [];
     for (let i = 0; i < count; i++) {
@@ -199,21 +255,21 @@ export class FurnaceBreakdownVisual {
       this._scene.add(mesh);
       pool.push(mesh);
     }
-    this._pools.set(armIndex, pool);
+    this._pools.set(anchor.key, pool);
 
-    // Ghost bag holds at the strut tip until NET_CONSUMED draws it in.
+    // Ghost bag holds at the station until NET_CONSUMED draws it in.
     const bag = this._makeGhostBag();
     bag.position.copy(tip);
     this._scene.add(bag);
-    this._bags.set(armIndex, { group: bag, t: 0, dur: 0.6, holding: true, startScale: 1 });
+    this._bags.set(anchor.key, { group: bag, t: 0, dur: 0.6, holding: true, startScale: 1, worldOf: anchor.worldOf });
   }
 
   /** @private */
   _onBreakdownChunk(payload) {
     if (!this._enabled || !this._scene) return;
-    const armIndex = resolveArmIndex(this._player, payload);
-    if (armIndex < 0) return;
-    const pool = this._pools.get(armIndex);
+    const anchor = this._resolveAnchor(payload);
+    if (!anchor) return;
+    const pool = this._pools.get(anchor.key);
     if (!pool || pool.length === 0) return;
     const mesh = pool.shift();
     if (!mesh) return;
@@ -232,16 +288,38 @@ export class FurnaceBreakdownVisual {
       baseScale: mesh.scale.x || 1,
     });
 
-    if (pool.length === 0) this._pools.delete(armIndex);
+    if (pool.length === 0) this._pools.delete(anchor.key);
   }
 
   /** @private */
   _onNetConsumed(payload) {
     if (!this._enabled) return;
-    const armIndex = resolveArmIndex(this._player, payload);
-    if (armIndex < 0) return;
-    const bag = this._bags.get(armIndex);
+    const anchor = this._resolveAnchor(payload);
+    if (!anchor) return;
+    const bag = this._bags.get(anchor.key);
     if (bag) { bag.holding = false; bag.t = 0; bag.dur = 0.7; }
+  }
+
+  /**
+   * @private S13(c) — a mid-cook jettison [K] from the collar ends the beat
+   * WITHOUT the furnace draw-in: the body left the furnace, not into it (the
+   * ghost bag sitting at the seat with no body would be a continuity lie).
+   * Unflown pool chunks dispose; chunks already committed keep flying home.
+   */
+  _onBreakdownCancel(payload) {
+    if (!this._enabled || !this._scene) return;
+    const anchor = this._resolveAnchor(payload);
+    if (!anchor) return;
+    const bag = this._bags.get(anchor.key);
+    if (bag) {
+      this._disposeMesh(bag.group);
+      this._bags.delete(anchor.key);
+    }
+    const pool = this._pools.get(anchor.key);
+    if (pool) {
+      for (const m of pool) this._disposeMesh(m);
+      this._pools.delete(anchor.key);
+    }
   }
 
   // ── Per-frame animation ─────────────────────────────────────────────────
@@ -274,25 +352,24 @@ export class FurnaceBreakdownVisual {
       }
     }
 
-    // Ghost bags: hold a gentle pulse at the strut tip; on NET_CONSUMED draw in.
-    for (const [armIndex, bag] of this._bags) {
+    // Ghost bags: hold a gentle pulse at the station; on NET_CONSUMED draw in.
+    for (const [key, bag] of this._bags) {
       bag.t += dt;
+      const world = bag.worldOf || ((out) => this._strutTipWorld(key, out));
       if (bag.holding) {
-        // Track the strut tip and pulse softly while the chop runs.
-        this._strutTipWorld(armIndex, _v3a);
-        bag.group.position.copy(_v3a);
+        // Track the station and pulse softly while the chop runs.
+        bag.group.position.copy(world(_v3a));
         const pulse = 1 + 0.06 * Math.sin(bag.t * 6);
         bag.group.scale.setScalar(pulse);
       } else {
         const u = Math.min(1, bag.t / bag.dur);
-        this._strutTipWorld(armIndex, _v3a);
         this._motherCenter(_v3b);
-        bag.group.position.copy(_v3a).lerp(_v3b, u);
+        bag.group.position.copy(world(_v3a)).lerp(_v3b, u);
         bag.group.scale.setScalar(Math.max(1e-4, 1 - u));
         bag.group.traverse((n) => { if (n.material && n.material.opacity != null) n.material.opacity = 0.5 * (1 - u); });
         if (u >= 1) {
           this._disposeMesh(bag.group);
-          this._bags.delete(armIndex);
+          this._bags.delete(key);
         }
       }
     }

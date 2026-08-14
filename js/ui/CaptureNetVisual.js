@@ -289,6 +289,7 @@ export class CaptureNetVisual {
     this._boundNetTorn       = this._onNetTorn.bind(this);
     this._boundNetFailed     = this._onNetFailed.bind(this);
     this._boundCargoDone     = this._onCargoTransferred.bind(this);
+    this._boundNetConsumed   = this._onNetConsumed.bind(this);
     this._boundTierChanged   = (p) => { this._tier = p?.to ?? this._tier; };
 
     eventBus.on(Events.NET_FIRED,          this._boundNetFired);
@@ -299,6 +300,7 @@ export class CaptureNetVisual {
     eventBus.on(Events.NET_TORN,           this._boundNetTorn);
     eventBus.on(Events.NET_FAILED,         this._boundNetFailed);
     eventBus.on(Events.CARGO_TRANSFER_COMPLETE, this._boundCargoDone);
+    eventBus.on(Events.NET_CONSUMED,       this._boundNetConsumed);
     eventBus.on(Events.PERF_TIER_CHANGED,  this._boundTierChanged);
     this._tier = sceneManager?.currentTier ?? 'HIGH';
   }
@@ -443,8 +445,49 @@ export class CaptureNetVisual {
     const key = `pod_${pi}`;
     const vis = this._activeVisuals.get(key);
     if (!vis) return;
+    this._captureDetachSeat(vis);
     vis.detached = true;      // state-driven updates stop; the fade owns removal
     this._fadeTimers.push({ key, timer: 0.8, duration: 0.8 });
+  }
+
+  /**
+   * Cargo-continuity S13(c) — the collar's digestion consumed the net with the
+   * body (NET_CONSUMED carries the pod on the mother path, mirroring the
+   * daughter's feed-end consume). Send the bag off with the same freeze-fade
+   * idiom, seated where the catch was mated. Arm-keyed payloads (the daughter
+   * rack's consume) are ignored — that bag was handed off at NET_REEL_COMPLETED.
+   * @param {object} payload — { podIndex, ... } for the collar path
+   * @private
+   */
+  _onNetConsumed(payload) {
+    const pi = payload?.podIndex;
+    if (pi == null || pi < 0) return;
+    const key = `pod_${pi}`;
+    const vis = this._activeVisuals.get(key);
+    if (!vis) return;
+    this._captureDetachSeat(vis);
+    vis.detached = true;      // state-driven updates stop; the fade owns removal
+    this._fadeTimers.push({ key, timer: 0.8, duration: 0.8 });
+  }
+
+  /**
+   * @private S13(c) — remember where the bag is, SHIP-LOCALLY, at the moment it
+   * detaches. The detached fade needs a ship-fixed seat: re-seating at the pod
+   * muzzle every frame (the old branch) jumped the bag back to the launcher —
+   * metre-scale for a transferred piece (S7), up to ~17 m for a collared
+   * monster; freezing the world position would streak the bag at orbital speed
+   * (the camera co-moves with the ship). Ship-local storage + per-frame
+   * localToWorld re-application holds the fade exactly where the net left it.
+   */
+  _captureDetachSeat(vis) {
+    try {
+      if (this._player && typeof this._player.worldToLocal === 'function'
+          && vis.group && vis.group.position) {
+        vis._detachSeatLocal = this._player.worldToLocal(vis.group.position.clone());
+        return;
+      }
+    } catch (_e) { /* fall through to the muzzle seat */ }
+    vis._detachSeatLocal = null;
   }
 
   /** @private
@@ -772,6 +815,13 @@ export class CaptureNetVisual {
           vis.group.position.copy(vis.failure.debris._scenePosition);
         } else if (vis.armIndex >= 0 && this._player?.strutTipNodes?.[vis.armIndex]) {
           this._player.strutTipNodes[vis.armIndex].getWorldPosition(vis.group.position);
+        } else if (vis.podIndex >= 0 && vis._detachSeatLocal
+                   && typeof this._player?.localToWorld === 'function') {
+          // S13(c): the fade plays where the net actually left the bag — the
+          // collar seat (digestion) or the strut tip (transfer-complete), held
+          // ship-fixed. Re-seating at the bare muzzle here teleported the bag
+          // back to the launcher on the very frame it was meant to leave on.
+          this._player.localToWorld(vis.group.position.copy(vis._detachSeatLocal));
         } else if (vis.podIndex >= 0 && typeof this._player?.getNetPodPositionInto === 'function') {
           // Mother-pod catch — seat the fading bag on the pod muzzle (the
           // dead `player.group` branch seated NOTHING — PlayerSatellite
@@ -927,15 +977,16 @@ export class CaptureNetVisual {
           }
           break;
 
-        case STATES.PARKED:
+        case STATES.COLLARED:
         case STATES.BERTHED:
         case STATES.TRANSFERRING:
-          // Mother berth/park (§8 A2 + cargo-continuity S3): cinched bag
-          // persists at the launcher with a short taut tether stub. The bag
+          // Mother berth/collar (§8 A2 + cargo-continuity S3/S13(c)): cinched
+          // bag persists at the launcher with a short taut tether stub. The bag
           // follows net.position — the bag's APEX anchor, which the berth hold
           // keeps at the standoff while the pinned catch rides _catchSeatM
-          // metres inside (CaptureNet.js co-location fix). PARKED renders
-          // identically — the bag is the container and is never faded.
+          // metres inside (CaptureNet.js co-location fix). COLLARED renders
+          // identically — the bag is the container and is never faded while
+          // mated (the digestion NET_CONSUMED hands it the freeze-fade idiom).
           // S7: TRANSFERRING renders the same bag, still carrying the catch, but
           // with NO tether — the hand-off leaves the launcher's line and the bag
           // is the container in transit. net.position rides the Bézier, so the
@@ -1164,7 +1215,7 @@ export class CaptureNetVisual {
         cinchFrac = Math.min(1, Math.max(0, net.stateTimer / CN.CINCH_CLOSE_TIME));
         if (garnish) jiggleAmp = mouthRadius * _NT.DRAPE_JIGGLE_CINCH_FRAC * (1 - cinchFrac);
       } else if (state === STATES.CAPTURED || state === STATES.REELING
-                 || state === STATES.BERTHED || state === STATES.PARKED
+                 || state === STATES.BERTHED || state === STATES.COLLARED
                  || state === STATES.TRANSFERRING
                  || state === STATES.SECURE_CHECK) {
         drape = 1; cinchFrac = 1;   // welded shrink-wrap, no jiggle
@@ -1519,14 +1570,16 @@ export class CaptureNetVisual {
         }
         break;
 
-      case STATES.PARKED:
+      case STATES.COLLARED:
       case STATES.BERTHED:
       case STATES.TRANSFERRING:
-        // Mother berth/park (mother-net-reel plan §8 A2 + cargo-continuity S3):
-        // the cinched bag PERSISTS at the launcher with a short taut tether
-        // stub — identical rendering to the successful REELING case above, and
-        // identical across BERTHED→PARKED (the net IS the container; the bag is
-        // never faded). Explicit case so persistence is by design, not by the
+        // Mother berth/collar (mother-net-reel plan §8 A2 + cargo-continuity
+        // S3/S13(c)): the cinched bag PERSISTS at the launcher with a short taut
+        // tether stub — identical rendering to the successful REELING case
+        // above, and identical across BERTHED→COLLARED (the net IS the
+        // container; the bag is never faded while mated — the collar digestion's
+        // NET_CONSUMED hands it the freeze-fade idiom at the very end).
+        // Explicit case so persistence is by design, not by the
         // default: break accident (the plain-switch case below is dead code
         // under NET_CEREMONY).
         // S7: TRANSFERRING is the same welded bag in flight to a daughter's rack,
@@ -1733,6 +1786,7 @@ export class CaptureNetVisual {
     if (this._boundNetTorn)       eventBus.off(Events.NET_TORN,           this._boundNetTorn);
     if (this._boundNetFailed)     eventBus.off(Events.NET_FAILED,         this._boundNetFailed);
     if (this._boundCargoDone)     eventBus.off(Events.CARGO_TRANSFER_COMPLETE, this._boundCargoDone);
+    if (this._boundNetConsumed)   eventBus.off(Events.NET_CONSUMED,       this._boundNetConsumed);
     if (this._boundTierChanged)   eventBus.off(Events.PERF_TIER_CHANGED,  this._boundTierChanged);
 
     this._boundNetFired = null;
@@ -1742,6 +1796,8 @@ export class CaptureNetVisual {
     this._boundNetReleased = null;
     this._boundNetTorn = null;
     this._boundNetFailed = null;
+    this._boundCargoDone = null;
+    this._boundNetConsumed = null;
     this._boundTierChanged = null;
 
     this._fadeTimers = [];

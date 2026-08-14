@@ -112,21 +112,25 @@ export const Events = {
   // === DEBRIS ===
   DEBRIS_CLEARED:     'debris:cleared',
   DEBRIS_CAPTURED:    'debris:captured',
-  CATCH_PROCESSED:    'catch:processed',   // furnace-transfer complete — { armId, debrisId, type }; owns salvage+scoring
+  CATCH_PROCESSED:    'catch:processed',   // furnace-transfer complete — { armId, debrisId, type }; owns salvage+scoring — mother path: { parked: true } credits at the collar mate; { digested: true } closes it (S13(c): no second credit)
   // Staged furnace breakdown (Item 1, 2026-06-11). Visual-only choreography on the
   // way to CATCH_PROCESSED; gameplay (salvage/score/remove) still keys off the
   // single CATCH_PROCESSED above. Consumed by FurnaceBreakdownVisual + CaptureNetVisual.
-  CATCH_BREAKDOWN_START: 'catch:breakdownStart', // { armId, debrisId, chunkCount } — chop begins
-  CATCH_BREAKDOWN_CHUNK: 'catch:breakdownChunk', // { armId, debrisId, index, total } — one chunk fed
-  NET_CONSUMED:          'net:consumed',         // { armIndex } — fed-in bag draws toward the mother
-  // Cargo hand-off (cargo-continuity S7). The parked mother catch is carried,
-  // still in its net, from the nose to a daughter's cargo rack. The existing
+  // S13(c): the collar's mother-side beat carries `{ anchor: { kind:'collar', podIndex } }`
+  // in place of an armFaced payload (armId 'mother').
+  CATCH_BREAKDOWN_START: 'catch:breakdownStart', // { armId, debrisId, chunkCount, [anchor] } — chop begins
+  CATCH_BREAKDOWN_CHUNK: 'catch:breakdownChunk', // { armId, debrisId, index, total, [anchor] } — one chunk fed
+  CATCH_BREAKDOWN_CANCEL: 'catch:breakdownCancel', // { armId, debrisId, anchor } — S13(c): a mid-cook jettison [K] ends the collar's beat WITHOUT the draw-in (the body left the furnace, not into it)
+  NET_CONSUMED:          'net:consumed',         // { armIndex } | collar: { podIndex, anchor } — fed-in bag draws toward the mother / freeze-fades
+  // Cargo hand-off (cargo-continuity S7). The collared mother catch is carried,
+  // still in its net, from the collar seat to a daughter's cargo rack. The existing
   // breakdown events cannot carry this: their chunk pool and bag map are keyed by
   // armIndex and `resolveArmIndex` returns −1 for an arm-less payload. Hence the
   // anchor-carrying pair below — `from`/`to` are {kind,…} anchors so a listener
-  // can resolve either end without knowing which system owns it.
+  // can resolve either end without knowing which system owns it. (S13(c): the
+  // collar's breakdown choreography now carries the same anchor abstraction.)
   //   START:    { debrisId, massKg, podIndex, armIndex, armId, durationS,
-  //               from: { kind:'parkedCatch', debrisId }, to: { kind:'strutTip', armIndex } }
+  //               from: { kind:'collar', podIndex }, to: { kind:'strutTip', armIndex } }
   //   COMPLETE: { debrisId, massKg, podIndex, armIndex, armId, cellIndex }
   CARGO_TRANSFER_START:    'cargo:transferStart',
   CARGO_TRANSFER_COMPLETE: 'cargo:transferComplete',

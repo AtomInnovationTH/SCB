@@ -604,6 +604,14 @@ export class PlayerSatellite extends THREE.Group {
     //         2×2 magazine window whose caps show loaded/spent nets.
     this._buildNetPods();
 
+    // --- 7c. NOSE BERTHING COLLAR (cargo-continuity S13(c), B is doctrine —
+    //         owner ruling 2026-08-14): the fore docking port reborn as
+    //         functional hardware. Whale-class cargo mates rigidly, on-axis, at
+    //         this ring; until S13(e) moves the pods off the boresight, the
+    //         launcher fires THROUGH the collar bore (the berth IS the corridor,
+    //         S12 M2 reading 8). Ring + guide cone + lamps, one axis.
+    this._buildBerthCollar();
+
     // --- 8. NAVIGATION LIGHTS ---
     this._buildNavLights();
 
@@ -3101,13 +3109,82 @@ export class PlayerSatellite extends THREE.Group {
   // V3 magnetic coil ring removed — not present in Config G design.
 
   // --------------------------------------------------------------------------
-  // 7. Docking Port — REMOVED (2026-07-23)
+  // 7. Docking Port — REMOVED (2026-07-23); REBORN as the berthing collar (S13(c))
   // --------------------------------------------------------------------------
   // The fore docking port (ring, collar, dark guide cone, blinking green/red
   // lamps + halos) was cosmetic greeble: nothing in the game docked with the
   // mother (capture/berthing is done by the arms), and getDockingPortPosition()
   // had no callers. Removed to declutter the fore end and reclaim tris. The
-  // Large Net launcher (§7b, _buildNetPods) now occupies the lower fore centreline.
+  // Large Net launcher (§7b, _buildNetPods) occupies the lower fore centreline.
+  // S13(c) brings the ring back as FUNCTIONAL hardware (§7c, _buildBerthCollar):
+  // whale-class cargo mates rigidly, on-axis, at the collar (owner ruling B).
+
+  /**
+   * @private — Build the nose berthing collar (cargo-continuity S13(c)).
+   * The fore docking port reborn as functional hardware: a ring + guide cone +
+   * stead lamps, dead on the long axis at the muzzle plane (z = 1.30 M). The
+   * bore clears the 0.12 m launcher housing — until S13(e) re-sites the pods,
+   * shots pass through the ring (the berth IS the corridor by design; the S12
+   * M2 clearance table). The collar's seat rule lives in the berth hold
+   * (CaptureNet.updateBerthHold): cargo surface AT the ring plane + the 1.0 m
+   * clearance (muzzle + fwd × (sizeMeter/2 + BERTH_CLEARANCE_M)) — the seat is
+   * geometrically identical because the ring plane IS the muzzle plane.
+   */
+  _buildBerthCollar() {
+    const V5 = Constants.OCTOPUS_V5;
+    const zM = V5.BERTH_COLLAR_Z_M ?? 1.30;
+    const rIn = V5.BERTH_COLLAR_INNER_R_M ?? 0.16;
+    const rOut = V5.BERTH_COLLAR_OUTER_R_M ?? 0.30;
+
+    // Same machined gunmetal as the launcher housing / LIDAR dome family.
+    const gunmetalMat = new THREE.MeshStandardMaterial({
+      color: 0x55585f, metalness: 0.5, roughness: 0.55,
+    });
+
+    // The ring itself — a torus whose bore axis is the long axis (TorusGeometry
+    // already lies in the local XY plane about +Z). Its annulus spans
+    // [innerR, outerR] so it merges with the guide cone's root.
+    const ringR = (rIn + rOut) / 2 * M;
+    const tubeR = (rOut - rIn) / 2 * M;
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(ringR, tubeR, 12, 24), gunmetalMat);
+    ring.position.set(0, 0, zM * M);
+    ring.name = 'BerthCollarRing';
+    ring.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+    this.add(ring);
+
+    // The guide cone: an open funnel that turns a berth's last metre into an
+    // on-axis capture — bore radius at the ring plane, flaring to the outer
+    // radius 0.14 m fore. Open-ended so the launcher bore reads through.
+    const coneH = 0.14 * M;
+    const coneGeo = new THREE.CylinderGeometry(rOut * M, rIn * M, coneH, 16, 1, true);
+    // Funnel-facing: radiusTop (the flared end) points +Z fore after the X
+    // rotation; conical shading reads like the launcher housing family's gunmetal.
+    const cone = new THREE.Mesh(coneGeo, gunmetalMat);
+    cone.rotation.x = Math.PI / 2;              // +Y (the flared radiusTop) → +Z fore
+    cone.position.set(0, 0, (zM * M) + coneH / 2);
+    cone.name = 'BerthCollarGuideCone';
+    cone.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+    this.add(cone);
+
+    // Panel lamps (steady — work lights, not the removed greeble's blink):
+    // green on +X (approach-clear), red on −X.
+    const lampGeo = new THREE.SphereGeometry(0.012 * M, 8, 6);
+    const lampGreen = new THREE.Mesh(lampGeo, new THREE.MeshStandardMaterial({
+      color: 0x0a3016, emissive: 0x2aff66, emissiveIntensity: 0.9,
+    }));
+    lampGreen.position.set(rOut * M, 0, zM * M);
+    lampGreen.name = 'BerthCollarLamp_G';
+    lampGreen.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+    this.add(lampGreen);
+    const lampRed = new THREE.Mesh(lampGeo, new THREE.MeshStandardMaterial({
+      color: 0x300a0a, emissive: 0xff4433, emissiveIntensity: 0.9,
+    }));
+    lampRed.position.set(-rOut * M, 0, zM * M);
+    lampRed.name = 'BerthCollarLamp_R';
+    lampRed.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+    this.add(lampRed);
+  }
 
   /**
    * World position of a Large Net pod muzzle — the launch point for

@@ -1243,6 +1243,18 @@ export const Constants = {
     COLLAR_Y: 0.90,                // m from barrel center (+Y)
     COLLAR_RADIUS: 0.40,           // m
 
+    // ── Nose berthing collar (S13(c) — B is doctrine) ──
+    // The fore docking port reborn as functional hardware: whale-class cargo
+    // mates rigidly, on-axis, at the nose. The ring sits AT the muzzle plane
+    // (z = 1.30) — until S13(e) moves the pods, the launcher fires THROUGH the
+    // collar bore (the berth IS the corridor by design, S12 M2 reading 8), so
+    // the inner radius clears the 0.12 m launcher housing. Seat rule: cargo
+    // surface at the ring plane — cargo centre at BERTH_COLLAR_Z_M + sizeMeter/2
+    // + CAPTURE_NET.BERTH_CLEARANCE_M 1.0 (mirrors ARM_HOLD_CLEARANCE_M).
+    BERTH_COLLAR_Z_M: 1.30,        // m — collar seat plane, ship-local z (== muzzle plane)
+    BERTH_COLLAR_INNER_R_M: 0.16,  // m — bore radius (clears the 0.12 m launcher housing)
+    BERTH_COLLAR_OUTER_R_M: 0.30,  // m — ring outer radius (guide-cone root)
+
     // ── Strut (NEW — replaces short-strut spec) ──
     STRUT_LENGTH: 1.60,            // m (hinge to daughter dock)
     STRUT_TUBE_OD: 0.050,          // m
@@ -1310,10 +1322,14 @@ export const Constants = {
     STOWED_ENVELOPE_LEN: 2.3,      // m
 
     // ── Mass Budget (UPDATED for Config G — §10.11 canonical) ──
-    TOTAL_DRY_MASS: 196.4,         // was 198.4
-    TOTAL_WET_MASS: 242.4,         // was 244.4
-    CORE_DRY_MASS: 161.0,          // was 170 — bus + ROSA + body-mount
-    CORE_WET_MASS: 216,            // unchanged (carries forward propellant calc)
+    // Cargo-continuity S13(c): +15 kg for the nose berthing collar (B is
+    // doctrine — the 2026-08-14 owner ruling): coreDry 161 → 176, the budget's
+    // ship is 179 → 194 kg, wet 242.4 → 257.4, ΔV 3096 → 2897 m/s empty (the
+    // S12 memo's structural row, measured M1).
+    TOTAL_DRY_MASS: 211.4,         // was 196.4
+    TOTAL_WET_MASS: 257.4,         // was 242.4
+    CORE_DRY_MASS: 176.0,          // was 161 — bus + ROSA + body-mount + collar (S13(c))
+    CORE_WET_MASS: 216,            // unchanged (carries forward propellant calc — register item 56)
     WEAVER_MASS: 6.6,              // unchanged
     SPINNER_MASS: 2.1,             // unchanged
     FRONT_ARM_MASS: 6.6,           // retained for Y3
@@ -1377,9 +1393,11 @@ export const Constants = {
   // See CROSSBOW_ARMS.md §12.5 + §25 for mass derivation.
   // ============================================================================
   ARM_LADDER: {
-    Y0_QUAD: { armCount: 4, weaverCount: 2, spinnerCount: 2, frontArmCount: 0, backArmCount: 0, dryMass: 196.4, wetMass: 242.4, unlocked: true,  tier: 0, azimuths: [60, 120, 240, 300] },
-    Y1_HEX:  { armCount: 6, weaverCount: 3, spinnerCount: 3, frontArmCount: 0, backArmCount: 0, dryMass: 208.0, wetMass: 254.0, unlocked: false, tier: 1, azimuths: [30, 90, 150, 210, 270, 330] },
-    Y3_OCTO: { armCount: 8, weaverCount: 3, spinnerCount: 3, frontArmCount: 1, backArmCount: 1, dryMass: 222.0, wetMass: 268.0, unlocked: false, tier: 3, azimuths: [30, 90, 150, 210, 270, 330], endFaceArms: ['+Z', '-Z'] },
+    // S13(c): every tier's bus carries the +15 kg nose collar (the collar is
+    // core hardware, not tier hardware) — Y0 211.4/257.4, deltas unchanged.
+    Y0_QUAD: { armCount: 4, weaverCount: 2, spinnerCount: 2, frontArmCount: 0, backArmCount: 0, dryMass: 211.4, wetMass: 257.4, unlocked: true,  tier: 0, azimuths: [60, 120, 240, 300] },
+    Y1_HEX:  { armCount: 6, weaverCount: 3, spinnerCount: 3, frontArmCount: 0, backArmCount: 0, dryMass: 223.0, wetMass: 269.0, unlocked: false, tier: 1, azimuths: [30, 90, 150, 210, 270, 330] },
+    Y3_OCTO: { armCount: 8, weaverCount: 3, spinnerCount: 3, frontArmCount: 1, backArmCount: 1, dryMass: 237.0, wetMass: 283.0, unlocked: false, tier: 3, azimuths: [30, 90, 150, 210, 270, 330], endFaceArms: ['+Z', '-Z'] },
   },
 
   // ============================================================================
@@ -2525,20 +2543,24 @@ export const Constants = {
       // (cargo-continuity S3), or the player jettisons it [K]. Replaces STOWED
       // for mother catches.
       BERTHED:       'BERTHED',       // catch docked at the mother launcher
-      // Cargo-continuity S3 (the headline): after the securing timer commits
-      // the credit, the catch PARKS — held at the nose inside its net,
-      // indefinitely, until it is digested/transferred (S6) or jettisoned [K].
-      // Nothing is removed on camera. The berth hold keeps pinning it every
-      // frame; getDockedCatch()/getBerthedMassKg() count PARKED; the launcher
-      // stays blocked with the existing line. The net IS the container — the
-      // bag is never faded.
-      PARKED:        'PARKED',        // credited catch held at the nose in its net
-      // Cargo-continuity S7: the parked catch is in flight from the nose to a
+      // Cargo-continuity S3 → S13(c): after the securing timer (BERTH_SECURE_S)
+      // commits the credit, the catch MATES at the nose berthing collar — the
+      // rigid on-axis station the owner ruling made doctrine (2026-08-14, B).
+      // Held at the collar seat inside its net until the mother-side digestion
+      // clock consumes it (the S8 transit clock at the collar), the S7 transfer
+      // hands it to a daughter rack, or it is jettisoned [K]. Nothing is
+      // removed on camera; the berth hold pins it every frame;
+      // getDockedCatch()/getBerthedMassKg() count COLLARED; the launcher stays
+      // blocked — the pods still share the boresight until S13(e). The net IS
+      // the container — the bag is never faded. (Named PARKED pre-S13(c), when
+      // the same hold swung on the tether pendulum — a rigid mate does not.)
+      COLLARED:      'COLLARED',      // credited catch mated at the nose berthing collar
+      // Cargo-continuity S7: the catch is in flight from the collar seat to a
       // daughter's cargo rack, still inside its net (the bag is the container in
       // transit). The launcher stays blocked and the mass keeps counting as
       // berthed for the whole beat — both drop at arrival, when the rack picks
       // the piece up, so the cargo ledger is continuous across the hand-off.
-      TRANSFERRING:  'TRANSFERRING',  // parked catch flying nose → strut tip
+      TRANSFERRING:  'TRANSFERRING',  // collared catch flying nose → strut tip
     },
 
     // ── Capture Modes ──

@@ -1689,6 +1689,11 @@ export class ArmManager {
       : 1.0;
     const digestSunScale = solarMult > 0 ? 1.0 : (FTD.TRANSIT_DIGEST_ECLIPSE_RATE ?? 1.0);
 
+    // S13(c): the collar's digestion clock is the SAME law's mother-side
+    // consumer (register item 47) — one multiplier SSOT, one per-frame write.
+    const cns = this.playerSatellite && this.playerSatellite._captureNetSystem;
+    if (cns) cns._digestSunScale = digestSunScale;
+
     for (const arm of this.arms) {
       // Pass speed scale for returning/hauling arms affected by beacon power
       arm._beaconSpeedScale = speedScale;
@@ -1758,7 +1763,7 @@ export class ArmManager {
 
   /**
    * Cargo-continuity S10 (register item 35): the ONE SSOT for *cargo aboard* —
-   * the mother berth (BERTHED/PARKED/TRANSFERRING, via getBerthedMassKg) PLUS
+   * the mother berth (BERTHED/COLLARED/TRANSFERRING, via getBerthedMassKg) PLUS
    * every daughter's heldCatches rack. Both range (getMassBudget) and handling
    * (PlayerSatellite._applyThrust) read this, so a catch's kilograms count the
    * same wherever it sits — that is the mechanism of the campaign loop

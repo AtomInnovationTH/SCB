@@ -829,6 +829,13 @@ export class GameFlowManager {
         // Check if debris has salvageable resources
         const hasSalvage = debris && debris.hasSalvage && debris.salvage;
 
+        // Cargo-continuity S13(c): a collar completion carries { digested: true } —
+        // a SECOND CATCH_PROCESSED for a body already credited at the mate
+        // ({ parked: true }). The comms split and the field removal still run
+        // below (the body IS consumed now), but credit pays NOTHING twice:
+        // score, manual-capture bookkeeping, salvage, the cleared counter and
+        // the autosave all belong to the single credited event.
+        if (!data.digested) {
         // Award score via scoring system. `method` honours the emitter —
         // 'arm' for daughters, 'mother' for a berthed whale (§4.8/§19).
         // ScoringSystem's METHOD_BONUS[method] || 1.0 accepts any string, so
@@ -848,6 +855,7 @@ export class GameFlowManager {
         if (returningArm) {
           returningArm._manualCapture = false;
         }
+        } // end !data.digested (credit legs)
 
         // Comms notification (via EventBus — CommsSystem self-manages).
         // §4.8: honour data.source so a mother catch stops reading "DAUGHTER".
@@ -855,7 +863,8 @@ export class GameFlowManager {
         // emits CATCH_PROCESSED { parked: true } at the PARK boundary — credit
         // lands but the body is visibly still sitting at the nose in its net,
         // so "fully processed" ran ahead of the visual. Split the line:
-        // parked → secured; digested (daughter furnace, feed-end) → processed.
+        // parked → secured; digested (daughter furnace feed-end, or the
+        // collar's digestion completion — S13(c)) → processed.
         eventBus.emit(Events.COMMS_SEND, {
           source: (data.source || data.armId || 'DAUGHTER').toUpperCase(),
           text: data.parked
@@ -865,7 +874,7 @@ export class GameFlowManager {
         });
 
         // --- SALVAGE RECOVERY (Session 10) ---
-        if (hasSalvage) {
+        if (!data.digested && hasSalvage) {
           const salvage = debris.salvage;
           const refineryMult = this._hasUpgrade('refinery_arm') ? 1.5 : 1.0;
 
@@ -973,20 +982,22 @@ export class GameFlowManager {
         }
 
         // Update game state debris counter (belt-and-suspenders with scoringSystem)
-        gameState.clearDebris();
+        if (!data.digested) gameState.clearDebris();
 
         // Furnace consumed the catch — remove it from the field (emits
         // DEBRIS_REMOVED; wireframe/pins self-clear). Deferred here from the old
         // ARM_RETURNED/DEBRIS_CAPTURED path under park-the-catch.
         // Cargo-continuity S3: { parked: true } (a mother catch at the end of
         // its securing timer) keeps the body — credit landed, but the catch
-        // PARKS at the nose inside its net instead of being removed on camera.
+        // MATES at the nose collar inside its net instead of being removed on
+        // camera (S13(c)). The collar's digestion completion carries
+        // { digested: true } — removal runs (the body IS consumed).
         if (debrisField && data.debrisId != null && !data.parked) {
           debrisField.removeDebris(data.debrisId);
         }
 
         // Auto-save after successful capture
-        this.saveGame();
+        if (!data.digested) this.saveGame();
 
         // Wireframe self-clears via DEBRIS_REMOVED listener (Batch 3)
 
@@ -1027,9 +1038,11 @@ export class GameFlowManager {
         }
 
         // ── Shop trigger: every 5 debris cleared ──
+        // (digested completions didn't advance the counter — the modulo would
+        // re-fire on the mate's multiple of 5; S13(c))
         const debrisCount = gameState.debrisCleared;
         const SHOP_INTERVAL = 5;
-        if (debrisCount > 0 && debrisCount % SHOP_INTERVAL === 0) {
+        if (!data.digested && debrisCount > 0 && debrisCount % SHOP_INTERVAL === 0) {
           if (gameState.isGameplay()) {
             eventBus.emit(Events.COMMS_MESSAGE, {
               text: `${debrisCount} debris cleared. Return to depot for resupply`,

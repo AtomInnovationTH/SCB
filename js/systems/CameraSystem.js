@@ -2414,11 +2414,11 @@ export class CameraSystem {
       return null;
     }
 
-    // S4: the park hold lives in BERTHED/PARKED — a jettison [K] or a
+    // S4: the park hold lives in BERTHED/COLLARED — a jettison [K] or a
     // dead-target teardown ends it the frame the hold breaks (same idiom as
-    // the REEL_IN guard above).
+    // the REEL_IN guard above). S13(c): the terminal state is the collar mate.
     if (beat && beat.key === 'PARK_HOLD' && c._net
-        && c._net.state !== 'BERTHED' && c._net.state !== 'PARKED') {
+        && c._net.state !== 'BERTHED' && c._net.state !== 'COLLARED') {
       this._exitNetCeremony(false);
       return null;
     }
