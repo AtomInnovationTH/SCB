@@ -112,7 +112,7 @@ export const Events = {
   // === DEBRIS ===
   DEBRIS_CLEARED:     'debris:cleared',
   DEBRIS_CAPTURED:    'debris:captured',
-  CATCH_PROCESSED:    'catch:processed',   // furnace-transfer complete — { armId, debrisId, type }; owns salvage+scoring — mother path: { parked: true } credits at the collar mate; { digested: true } closes it (S13(c): no second credit)
+  CATCH_PROCESSED:    'catch:processed',   // furnace-transfer complete — { armId, debrisId, type }; owns salvage+scoring — mother path: { parked: true } credits at the collar mate; { digested: true } closes it (S13(c): no second credit — enforced handler-side by the per-body debris._credited ledger, register item 37)
   // Staged furnace breakdown (Item 1, 2026-06-11). Visual-only choreography on the
   // way to CATCH_PROCESSED; gameplay (salvage/score/remove) still keys off the
   // single CATCH_PROCESSED above. Consumed by FurnaceBreakdownVisual + CaptureNetVisual.

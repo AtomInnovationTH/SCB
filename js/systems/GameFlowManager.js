@@ -829,13 +829,27 @@ export class GameFlowManager {
         // Check if debris has salvageable resources
         const hasSalvage = debris && debris.hasSalvage && debris.salvage;
 
+        // Cargo-continuity register item 37 (2026-08-15): credit pays ONCE
+        // per body, however many times CATCH_PROCESSED fires for it. A mated
+        // body is KEPT ({ parked: true } skips the removal below) and stays
+        // re-targetable: [K] re-seats its orbit and clears _captured, so a
+        // re-capture mates it again and re-emits { parked: true }; and a
+        // mated-then-S7-transferred piece later digests on a daughter rack,
+        // whose feed-end emit carries no digested flag (the rack cannot know
+        // the mate already paid). The emitter-side digested contract (S13(c))
+        // cannot see either path, so the handler keeps its own ledger on the
+        // body. The credit legs skip a body already paid; comms and field
+        // removal still run — the consumption is real.
+        const creditPaid = !!(debris && debris._credited);
+        const payCredit = !data.digested && !creditPaid;
+
         // Cargo-continuity S13(c): a collar completion carries { digested: true } —
         // a SECOND CATCH_PROCESSED for a body already credited at the mate
         // ({ parked: true }). The comms split and the field removal still run
         // below (the body IS consumed now), but credit pays NOTHING twice:
         // score, manual-capture bookkeeping, salvage, the cleared counter and
         // the autosave all belong to the single credited event.
-        if (!data.digested) {
+        if (payCredit) {
         // Award score via scoring system. `method` honours the emitter —
         // 'arm' for daughters, 'mother' for a berthed whale (§4.8/§19).
         // ScoringSystem's METHOD_BONUS[method] || 1.0 accepts any string, so
@@ -855,7 +869,12 @@ export class GameFlowManager {
         if (returningArm) {
           returningArm._manualCapture = false;
         }
-        } // end !data.digested (credit legs)
+
+        // Register item 37: mark the body paid — a re-mate after jettison +
+        // re-capture, or the rack feed-end of a transferred piece, skips
+        // every credit leg above and below.
+        if (debris) debris._credited = true;
+        } // end payCredit (credit legs)
 
         // Comms notification (via EventBus — CommsSystem self-manages).
         // §4.8: honour data.source so a mother catch stops reading "DAUGHTER".
@@ -874,7 +893,7 @@ export class GameFlowManager {
         });
 
         // --- SALVAGE RECOVERY (Session 10) ---
-        if (!data.digested && hasSalvage) {
+        if (payCredit && hasSalvage) {
           const salvage = debris.salvage;
           const refineryMult = this._hasUpgrade('refinery_arm') ? 1.5 : 1.0;
 
@@ -982,7 +1001,7 @@ export class GameFlowManager {
         }
 
         // Update game state debris counter (belt-and-suspenders with scoringSystem)
-        if (!data.digested) gameState.clearDebris();
+        if (payCredit) gameState.clearDebris();
 
         // Furnace consumed the catch — remove it from the field (emits
         // DEBRIS_REMOVED; wireframe/pins self-clear). Deferred here from the old
@@ -997,7 +1016,7 @@ export class GameFlowManager {
         }
 
         // Auto-save after successful capture
-        if (!data.digested) this.saveGame();
+        if (payCredit) this.saveGame();
 
         // Wireframe self-clears via DEBRIS_REMOVED listener (Batch 3)
 
@@ -1039,10 +1058,11 @@ export class GameFlowManager {
 
         // ── Shop trigger: every 5 debris cleared ──
         // (digested completions didn't advance the counter — the modulo would
-        // re-fire on the mate's multiple of 5; S13(c))
+        // re-fire on the mate's multiple of 5; S13(c). Same for a body the
+        // ledger already paid — register item 37.)
         const debrisCount = gameState.debrisCleared;
         const SHOP_INTERVAL = 5;
-        if (!data.digested && debrisCount > 0 && debrisCount % SHOP_INTERVAL === 0) {
+        if (payCredit && debrisCount > 0 && debrisCount % SHOP_INTERVAL === 0) {
           if (gameState.isGameplay()) {
             eventBus.emit(Events.COMMS_MESSAGE, {
               text: `${debrisCount} debris cleared. Return to depot for resupply`,
