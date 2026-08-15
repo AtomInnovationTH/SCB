@@ -2919,11 +2919,16 @@ export const Constants = {
       // captures per load. Whale hunts are the Mother's premium, delta-v-costly
       // job — the scarce magazine enforces "burn only for whales" doctrine.
       MAGAZINE_SIZE:    2,         // nets/pod Dyneema Y0 (§6.4)
-      // No RELOAD_TIME here (register item 42, swept 2026-08-15): the
-      // documented 30 s reload was never in the sim — nothing read it. The
-      // live re-fire gate is the per-pod COOLDOWN_CATCH (2 s) / COOLDOWN_MISS
-      // (1 s) plus the magazine above — scarcity is quantity, not rate.
-      // Wiring a real reload would be a NEW mechanic (an owner question).
+      // No RELOAD_TIME in any net class (register items 42 + 68, swept
+      // 2026-08-15): the documented 30/15/5 s reloads were never in the sim —
+      // nothing read them. The mother's live re-fire gate is the per-pod
+      // COOLDOWN_CATCH (2 s) / COOLDOWN_MISS (1 s) plus the magazine above —
+      // scarcity is quantity, not rate. Daughter magazines refill instantly
+      // (seeded full at arm init; a recovered net returns via
+      // setNetInventory(+1)) — the daughter RELOADING state is the worm-gear
+      // spring re-charge timed by E = ½·m·v² launch energy ÷ (15 W × 0.80)
+      // (ArmUnit.js), not a net timer. Wiring real reload timers would be a
+      // NEW mechanic (an owner question).
       REEL_SPEED:       2.0,       // m/s (§6.1)
       TETHER_MAX:       100,       // m (§6.1)
       RANGE:            100,       // m engagement envelope (§2.8)
@@ -2952,7 +2957,6 @@ export const Constants = {
       SPIN_HZ:          4,
       MAX_CAPTURE_MASS: 500,
       MAGAZINE_SIZE:    2,
-      RELOAD_TIME:      15,
       REEL_SPEED:       2.0,
       TETHER_MAX:       100,
       RANGE:            100,
@@ -2975,7 +2979,6 @@ export const Constants = {
       SPIN_HZ:          6,
       MAX_CAPTURE_MASS: 50,
       MAGAZINE_SIZE:    4,
-      RELOAD_TIME:      5,
       REEL_SPEED:       3.0,
       TETHER_MAX:       100,
       RANGE:            100,
