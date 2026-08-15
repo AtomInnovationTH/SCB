@@ -877,6 +877,7 @@ async function init() {
   if (Constants.FEATURE_FLAGS.CAPTURE_NET) {
     captureNetSystem.init({ player, debrisField, audioSystem, armManager, lassoSystem });   // ST-9.4: initialize mother pod inventory + set _initialized; deps back the mother-pod anchor provider + Phase-A pin API + Phase-B winch pitch + Phase C-lite corridor test
     player.setCaptureNetSystem(captureNetSystem);     // §4.4: berthed-mass translational scaling in _applyThrust
+    lassoSystem.setCaptureNetSystem(captureNetSystem);   // Cargo-continuity S13(d): a lassoed catch adopts onto the nose-collar berth (the one holding model)
     captureNetVisual.init(scene, player, captureNetSystem, sceneManager);   // sceneManager backs the Phase D.8 LOW-tier garnish gate
     // Item 1: staged furnace-breakdown choreography (chunks → furnace, net drawn in).
     furnaceBreakdownVisual.init(scene, player);

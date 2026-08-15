@@ -1417,8 +1417,10 @@ export class NetProjectile {
     // ── Corridor gate (Phase C-lite, plan §10): pause the final approach
     // CORRIDOR_HOLD_M out until the recovery corridor (a cylinder along
     // ship-local +Z from the muzzle, radius = sizeMeter/2 + BERTH_CLEARANCE_M)
-    // is clear of strut tips, held daughter catches and lasso cargo. On
-    // timeout, berth at the extended standoff rather than clip through.
+    // is clear of strut tips (a forward-swept strut blocks whether or not it
+    // holds a daughter catch). S13(d): the lasso-cargo read is gone — the gate
+    // is strut-tips-only. On timeout, berth at the extended standoff rather
+    // than clip through.
     const holdM = Math.max(berthStandoffM, CN.CORRIDOR_HOLD_M ?? 10);
     if (!this._corridorTimedOut && this._remainingM <= holdM && !this._corridorClear(d)) {
       if (!this._corridorHold) {
@@ -1548,12 +1550,14 @@ export class NetProjectile {
    * @private Recovery-corridor test (mother-net-reel plan §10 Phase C-lite).
    * Analytic — no mesh collision exists anywhere in this codebase. The
    * corridor is a cylinder along ship-local +Z from the muzzle, radius =
-   * debris.sizeMeter/2 + BERTH_CLEARANCE_M. It must contain:
-   *   1. no strut tip (strutLocalDirection(α, az) × STRUT_LENGTH from the
-   *      collar pivot — at α≈π a 1.60 m strut tip reaches ~2.5 m fore, past
-   *      the muzzle plane at z ≈ 1.30 m; a forward-swept strut blocks whether
-   *      or not it holds a catch),
-   *   2. no lasso cargo cell (parked at MOTHER_CARGO_FWD_OFFSET_M dead ahead).
+   * debris.sizeMeter/2 + BERTH_CLEARANCE_M. It must contain no strut tip
+   * (strutLocalDirection(α, az) × STRUT_LENGTH from the collar pivot — at α≈π a
+   * 1.60 m strut tip reaches ~2.5 m fore, past the muzzle plane at z ≈ 1.30 m; a
+   * forward-swept strut blocks whether or not it holds a catch).
+   * Cargo-continuity S13(d): the lasso cargo-cell read is GONE — the cells died
+   * with the MOTHER_CARGO_STOW model, and a lassoed piece now rides this same
+   * mother berth path (adoptLassoCatch), so it is never an obstacle to itself.
+   * The corridor reads strut tips only.
    * Everything is evaluated in the SHIP-LOCAL frame with the origin at the pod
    * muzzle (the corridor is defined there), so the test is attitude- and
    * position-free and needs no world-space round-trip.
@@ -1626,31 +1630,10 @@ export class NetProjectile {
       }
     }
 
-    // ── 2. Lasso cargo cells ──
-    // Cells park at MOTHER_CARGO_FWD_OFFSET_M (4 m) ahead of the HULL ORIGIN
-    // on the centreline — squarely inside the corridor (the §4.13 overlap).
-    // Settled in §10 by ACCEPTING the overlap and letting the gate manage it:
-    // the reel holds at CORRIDOR_HOLD_M until the furnace feed (FEED_S ≤ 9 s)
-    // clears the cell; on timeout the berth completes at the extended
-    // standoff, whose near face (≥ HOLD_M − sizeMeter/2 ≥ 4.5 m for an 11 m
-    // whale) clears the 4 m cargo row. No lateral-spread constant needed.
-    const lasso = this._ctx?.lassoSystem;
-    const cargo = lasso?._cargo;
-    if (cargo && cargo.length) {
-      const fwdOff = Constants.MOTHER_CARGO_FWD_OFFSET_M ?? 4;
-      const spread = Constants.MOTHER_CARGO_CELL_SPREAD_M ?? 0;
-      const cells = Math.max(1, Constants.MOTHER_CARGO_CELLS ?? 3);
-      for (const item of cargo) {
-        const t = item?.target;
-        if (!t || t.alive === false) continue;
-        const lat = (item.cellIndex - (cells - 1) / 2) * spread;
-        const catchR = ((t.sizeMeter || 1) / 2);
-        const lx = lat - mx, ly = -my, lz = fwdOff - mz;
-        if (lz > 0 && (lx * lx + ly * ly) < (radiusM + catchR) * (radiusM + catchR)) {
-          return false;
-        }
-      }
-    }
+    // Cargo-continuity S13(d): the corridor's second obstacle class — the lasso
+    // cargo cells — is deleted with the MOTHER_CARGO_STOW model. A lassoed piece
+    // rides this mother berth path (adoptLassoCatch) and is never an obstacle to
+    // its own approach; the gate reads strut tips only.
 
     return true;
   }
@@ -3117,6 +3100,128 @@ export class CaptureNetSystem {
       return false;
     }
     return net.release();
+  }
+
+  /**
+   * Cargo-continuity S13(d) — adopt a lassoed piece onto the ONE holding model.
+   *
+   * The lasso's reel delivers the catch to the collar seat; this builds a mother
+   * net ALREADY BERTHED there, so the piece rides the exact machinery an S3
+   * mother catch does: the berth hold pins it at the collar, the securing timer
+   * mates it (CATCH_PROCESSED { parked: true } — credit lands exactly once), it
+   * joins the berthed ledger (getBerthedMassKg), then the S7 auto-transfer or the
+   * S8 collar-digestion clock finishes it (CATCH_PROCESSED { digested: true } →
+   * removal). This repairs the gap that lasso cargo mass joined NO ledger under
+   * the deleted cell model (the cells were not nets).
+   *
+   * Deliberately emits NEITHER NET_FIRED NOR NET_BERTHED: those chain the mother
+   * launch recoil, the autopilot attitude-hold, the berth clunk/chime and the
+   * PARK_HOLD camera beat — all mother-launch ceremony the lasso's capture UX must
+   * not inherit. The lasso fires its own LASSO_STOWED/CAPTURED beats at reel
+   * completion; this is pure storage machinery.
+   *
+   * @param {object} target — the lassoed debris (alive, pinned by the lasso reel)
+   * @returns {NetProjectile|null} the berthed net, or null when the dock is busy
+   *   (the caller holds the piece off and retries — cargo is never destroyed) or
+   *   the system has no player/debrisField context.
+   */
+  adoptLassoCatch(target) {
+    const player = this._player;
+    const debrisField = this._debrisField;
+    if (!target || target.alive === false || !player || !debrisField) return null;
+    // Single-station guard: the collar holds ONE body. The caller pends while the
+    // dock is busy; refuse here defensively rather than double-berth.
+    if (this.getDockedCatch() || this.hasMotherNetInFlight()) return null;
+
+    const M_NET = 0.00001;
+    const sizeM = target.sizeMeter || 2;
+    const standoffM = sizeM / 2 + (CN.BERTH_CLEARANCE_M ?? 1.0);
+    const muzzle = (typeof player.getNetPodPositionInto === 'function')
+      ? player.getNetPodPositionInto(0, new THREE.Vector3()) : new THREE.Vector3();
+    const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(player.quaternion).normalize();
+
+    const net = new NetProjectile({
+      netClass: CN.LARGE,
+      armIndex: -1,
+      podIndex: 0,
+      launchPosition: { x: muzzle.x / M_NET, y: muzzle.y / M_NET, z: muzzle.z / M_NET },
+      launchDirection: { x: fwd.x, y: fwd.y, z: fwd.z },
+      targetDebris: target,
+      captureMode: MODES.CINCH,
+      anchorProvider: (out) => player.getNetPodPositionInto(0, out),
+    });
+
+    // Berth seeds — the state the mother reel would hand off at the standoff, for
+    // a piece delivered already seated at the collar. The ctx mirrors
+    // fireMotherNet's shape (the corridor gate reads armManager/lassoSystem on
+    // REELING; harmless here — the net is already BERTHED).
+    net._ctx = {
+      player,
+      debrisField,
+      armManager: this._armManager,
+      lassoSystem: this._lassoSystem,
+    };
+    net.catchResult = 'success';
+    net.capturedMass = target.mass || 0;
+    net.tetherPaidOut = standoffM;
+    net._remainingM = standoffM;
+    net._reelSeedM = standoffM;
+    net._effectiveStandoffM = standoffM;
+    // Seat depth 0: the catch pin = the bag apex = pod + fwd × standoff — exactly
+    // the collar seat the lasso reel delivered it to (no hand-off snap) and the
+    // S13(c) collar-seat claim (cargo centre at muzzle + fwd × (size/2 + clearance)).
+    net._catchSeatM = 0;
+    net._lateral = new THREE.Vector3();
+    net._fwdLagged = fwd.clone();
+    if (target.tumbleAxis && player.quaternion) {
+      const qCatch = new THREE.Quaternion().setFromAxisAngle(target.tumbleAxis, target.tumbleAngle || 0);
+      net._qLocal = player.quaternion.clone().invert().multiply(qCatch);
+    } else {
+      net._qLocal = new THREE.Quaternion();
+    }
+    // The lasso reel already floored the catch's render scale; seed the item-15
+    // ramp DONE so updateBerthHold's _catchFloorScale returns the full floor at
+    // once (re-ramping from 0 would pop the drawn size at adoption).
+    net._floorRampT = CN.MOTHER_CATCH_MIN_RENDER_RAMP_S ?? 0.6;
+    net._berthTimer = CN.BERTH_SECURE_S ?? 4.0;
+    net._berthProcessed = false;
+    net._tumbleCarryover = Math.min(Math.abs(target.tumbleRate || 0), CN.TUMBLE_CARRYOVER_MAX_RAD_S ?? 0.6);
+    net._tumbleCarryAngle = 0;
+    net._transitionTo(STATES.BERTHED);
+
+    this.activeNets.push(net);
+
+    // The catch's mass just entered the berthed ledger. A mother berth invalidates
+    // the attitude inertia via NET_BERTHED; this path must not emit that event (it
+    // chains the launch/berth ceremony), so invalidate the cache directly — same
+    // effect, none of the spectacle.
+    if ('_attitudeInertia' in player) player._attitudeInertia = null;
+
+    return net;
+  }
+
+  /**
+   * Cargo-continuity S13(d) — fore extent (metres from the pod-0 muzzle) of the
+   * busiest active mother-net berth, 0 when the collar station is clear. A lassoed
+   * piece waiting for the collar holds this far ahead of the seat so it never
+   * overlaps the occupant (docked or inbound). Conservative: an inbound net
+   * reserves its eventual berth footprint.
+   * @returns {number} metres
+   */
+  getCollarQueueDepthM() {
+    let ext = 0;
+    for (const net of this.activeNets) {
+      if (!net._isMother || !net.isActive) continue;
+      if (net.state === STATES.STOWED || net.state === STATES.RELEASED) continue;
+      const d = net.targetDebris;
+      if (!d || d.alive === false) continue;
+      const half = (d.sizeMeter || 2) / 2;
+      const standoff = half + (CN.BERTH_CLEARANCE_M ?? 1.0);
+      const seat = net._catchSeatM || 0;
+      const fore = standoff + seat + half;   // muzzle → catch far face
+      if (fore > ext) ext = fore;
+    }
+    return ext;
   }
 
   /**

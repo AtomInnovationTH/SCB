@@ -22,6 +22,10 @@ import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 /** 1 meter in scene units (1 unit = 100 km = 100000 m) */
 const M = 0.00001;
 
+/** Cargo-continuity S13(d): seconds a pending catch glides from its wait point
+ *  onto the collar seat before adopting (smooths the hand-off, never a teleport). */
+const LASSO_ADOPT_SETTLE_S = 0.8;
+
 /** Reusable Z-axis vector for quaternion math */
 const _zAxis = new THREE.Vector3(0, 0, 1);
 
@@ -40,9 +44,7 @@ const _scratchFwd = new THREE.Vector3();
 const _scratchToTarget = new THREE.Vector3();
 /** Phase 1B — scratch for the per-frame muzzle world position. */
 const _scratchMuzzle = new THREE.Vector3();
-/** Phase 4 — scratch for the local-frame basis used by aft cargo cells. */
-const _scratchRadial = new THREE.Vector3();
-const _scratchCross = new THREE.Vector3();
+/** Cargo-continuity S13(d) — scratch for the collar-seat reel-end offset. */
 const _scratchCargoOffset = new THREE.Vector3();
 /** Tether — scratch for the nadir (planet-down) sag direction + flight anchor. */
 const _scratchNadir = new THREE.Vector3();
@@ -171,7 +173,7 @@ export class LassoSystem {
         this._evtUnsubs = [
             eventBus.on(Events.ONBOARDING_STARTED, () => { this._onboardingActive = true; }),
             eventBus.on(Events.ONBOARDING_COMPLETE, () => { this._onboardingActive = false; }),
-            eventBus.on(Events.GAME_RESET, () => { this._inRangePromptId = null; this._cargo = []; }),
+            eventBus.on(Events.GAME_RESET, () => { this._inRangePromptId = null; this._clearPendingAdoption(); }),
             // Phase 3: track the active mission so reel-in physics can be gated OFF
             // on Mission 1 (the tutorial reels exactly as today, flag regardless).
             eventBus.on(Events.MISSION_START, (data) => {
@@ -183,8 +185,6 @@ export class LassoSystem {
             eventBus.on(Events.LASSO_STOWED, (e) => this._trace('STOWED', e)),
             eventBus.on(Events.LASSO_SNAPPED, (e) => this._trace('SNAPPED', e)),
             eventBus.on(Events.LASSO_CAPTURED, (e) => this._trace('CAPTURED', e)),
-            eventBus.on(Events.CATCH_BREAKDOWN_START, (e) => { if (e && e.armId === 'lasso') this._trace('FURNACE_START', e); }),
-            eventBus.on(Events.CATCH_PROCESSED, (e) => { if (e && e.armId === 'lasso') this._trace('FURNACE_PROCESSED', e); }),
         ];
 
         /** @type {number} Phase 3 — active mission number (1 = tutorial; gates reel physics). */
@@ -197,12 +197,16 @@ export class LassoSystem {
         /** @type {number} Phase 3 — seconds the tether has spent above the safe strain fraction. */
         this._strainTimer = 0;
 
-        /** @type {Array<object>} Phase 4 — stowed catches awaiting/undergoing furnace breakdown.
-         *  Each: { target, cellIndex, furnaceTimer, breakdownStarted }. Persists across casts. */
-        this._cargo = [];
+        /** @type {object|null} Cargo-continuity S13(d) — a completed catch waiting
+         *  for the nose collar to free before it adopts onto the one holding model.
+         *  { target, phase: 'wait'|'settle', settleT, fromPos, announced }. At most
+         *  one (fire() refuses a new cast while it exists). Null when none. */
+        this._pendingAdoption = null;
 
-        /** @type {number} Phase 4 — cargo cell index chosen for the in-flight catch (−1 = none). */
-        this._reelCellIndex = -1;
+        /** @type {object|null} CaptureNetSystem (wired via setCaptureNetSystem).
+         *  The lasso's completed catch adopts onto its mother berth path; when null
+         *  (headless tests) the catch resolves via the legacy instant path. */
+        this._captureNetSystem = null;
 
         /** @type {object|null} Optional SkillsSystem for hint-gating (Phase 3).
          *  Wired via setSkillsSystem(); when absent the prompt fires ungated
@@ -245,19 +249,17 @@ export class LassoSystem {
             window.__lassoState = () => this._dbgSnapshot();
             // Live flag toggle for A/B testing without a rebuild/restart, e.g.:
             //   window.__lassoFlags()                       → read current
-            //   window.__lassoFlags({ stow:false, phys:false }) → revert Phase 3/4
+            //   window.__lassoFlags({ phys:false })         → revert Phase 3
             //   window.__lassoFlags({ kin:false })          → disable net open/cinch
             window.__lassoFlags = (set) => {
                 const F = Constants.FEATURE_FLAGS;
                 if (set && typeof set === 'object') {
                     if ('kin' in set) F.LASSO_NET_KINEMATICS = !!set.kin;
                     if ('phys' in set) F.LASSO_REEL_PHYSICS = !!set.phys;
-                    if ('stow' in set) F.MOTHER_CARGO_STOW = !!set.stow;
                 }
                 const now = {
                     kin: F.LASSO_NET_KINEMATICS,
                     phys: F.LASSO_REEL_PHYSICS,
-                    stow: F.MOTHER_CARGO_STOW,
                 };
                 console.log('[lasso] flags', now);
                 return now;
@@ -284,7 +286,6 @@ export class LassoSystem {
             flags: {
                 NET_KINEMATICS: Constants.FEATURE_FLAGS.LASSO_NET_KINEMATICS,
                 REEL_PHYSICS: Constants.FEATURE_FLAGS.LASSO_REEL_PHYSICS,
-                CARGO_STOW: Constants.FEATURE_FLAGS.MOTHER_CARGO_STOW,
                 REALITY_MODE: Constants.FEATURE_FLAGS.REALITY_MODE,
             },
             active: this.active,
@@ -294,16 +295,15 @@ export class LassoSystem {
             cooldown: +(this.cooldown || 0).toFixed(2),
             ammo: this._ammo,
             missionNumber: this._missionNumber,
-            reelCellIndex: this._reelCellIndex,
             reelPhysicsActive: this._reelPhysicsActive,
-            cargoCount: this._cargo.length,
-            cargo: this._cargo.map(c => ({ id: c.target && c.target.id, cell: c.cellIndex, t: +c.furnaceTimer.toFixed(2), chop: c.breakdownStarted })),
+            pendingAdoption: this._pendingAdoption
+                ? { id: this._pendingAdoption.target && this._pendingAdoption.target.id, phase: this._pendingAdoption.phase }
+                : null,
             projOffsetFromPlayer_m: off != null ? +off.toFixed(2) : null,
             target: this.target ? { id: this.target.id, mass: this.target.mass, type: this.target.type } : null,
             constants: {
                 MIN_FLIGHT_TIME: Constants.LASSO_MIN_FLIGHT_TIME,
                 MUZZLE_OFFSET_M: Constants.LASSO_MUZZLE_OFFSET_M,
-                CARGO_CELLS: Constants.MOTHER_CARGO_CELLS,
                 FURNACE_FEED_S: Constants.FURNACE_TRANSFER.FEED_S,
             },
         };
@@ -317,6 +317,17 @@ export class LassoSystem {
      */
     setSkillsSystem(skillsSystem) {
         this._skillsSystem = skillsSystem || null;
+    }
+
+    /**
+     * Cargo-continuity S13(d): inject the CaptureNetSystem. A completed lasso
+     * catch adopts onto its mother berth path (the one holding model) instead of
+     * the deleted cargo cells. Optional — when unset (headless tests) the catch
+     * resolves via the legacy instant path.
+     * @param {object} captureNetSystem
+     */
+    setCaptureNetSystem(captureNetSystem) {
+        this._captureNetSystem = captureNetSystem || null;
     }
 
     /**
@@ -424,59 +435,49 @@ export class LassoSystem {
     }
 
     /**
-     * Phase 4: world position of a cargo cell, in the mother's local frame
-     * (prograde / radial-up / cross-track — cf. PlayerSatellite.js:3705-3715).
-     * Cells sit just FORWARD of the hull (near the launch muzzle) with a small
-     * cross-track spread, so the reeled catch returns toward the nose it was
-     * thrown from and is NEVER hauled straight through the hull to the rear
-     * (that read as the net "overshooting the mother on return"). Recomputed each
-     * frame so stowed catches ride the hull as it reorients along velocity.
-     * @param {THREE.Vector3} playerPos
+     * Cargo-continuity S13(d): the berth axis the collar seat sits on — the ship's
+     * live forward (from its attitude) when a player is wired, else the prograde
+     * fallback shared with fire(). Matches CaptureNet.updateBerthHold, which pins
+     * the adopted catch on the ship-forward axis, so the reel delivery and the
+     * adoption pin agree.
      * @param {THREE.Vector3|null} playerVelDir
-     * @param {number} cellIndex
      * @param {THREE.Vector3} out
-     * @returns {THREE.Vector3} world cell anchor
+     * @returns {THREE.Vector3} normalized berth axis
      * @private
      */
-    _cargoCellWorld(playerPos, playerVelDir, cellIndex, out) {
-        const prograde = this._resolveForwardDir(playerVelDir, _scratchFwd);
-        // radial-up = geocentric up (Earth at scene origin); fall back to +Y.
-        const radialUp = playerPos && playerPos.lengthSq() > 0
-            ? _scratchRadial.copy(playerPos).normalize()
-            : _scratchRadial.set(0, 1, 0);
-        const crossTrack = _scratchCross.crossVectors(prograde, radialUp);
-        if (crossTrack.lengthSq() < 1e-9) crossTrack.set(1, 0, 0); else crossTrack.normalize();
-
-        const cells = Math.max(1, Constants.MOTHER_CARGO_CELLS);
-        // Centre the row: lateral = (i - (n-1)/2) × spread.
-        const lateral = (cellIndex - (cells - 1) / 2) * Constants.MOTHER_CARGO_CELL_SPREAD_M * M;
-        out.copy(playerPos)
-            .addScaledVector(prograde, Constants.MOTHER_CARGO_FWD_OFFSET_M * M)
-            .addScaledVector(crossTrack, lateral);
-        return out;
+    _berthAxis(playerVelDir, out) {
+        const player = this._player;
+        if (player && player.quaternion) {
+            return out.set(0, 0, 1).applyQuaternion(player.quaternion).normalize();
+        }
+        return this._resolveForwardDir(playerVelDir, out);
     }
 
     /**
-     * Phase 4: index of the first free cargo cell, or -1 when full.
-     *
-     * Fills cells CENTER-OUT (e.g. for 3 cells the order is [1, 0, 2]) so a lone
-     * catch reels straight back to the nose centerline instead of an off-centre
-     * cell. Cells are laterally spread by MOTHER_CARGO_CELL_SPREAD_M, so the old
-     * left-to-right fill parked the very first catch ~one spread off to the side
-     * (visible as the net "returning off to the left"). Order = ascending lateral
-     * distance from centre, index as the tie-break.
-     * @returns {number}
+     * Cargo-continuity S13(d): world position of the collar seat the one holding
+     * model berths a catch at — pod-0 muzzle + berth-axis × (size/2 + clearance),
+     * the exact standoff CaptureNet.updateBerthHold holds (the S13(c) collar seat).
+     * The lasso reels its package HERE and the adoption pins it HERE, so the
+     * hand-off never snaps. Falls back to the hull centre + prograde when no
+     * player is wired (headless).
+     * @param {object|null} target — the catch (for its size)
+     * @param {THREE.Vector3} playerPos
+     * @param {THREE.Vector3|null} playerVelDir
+     * @param {THREE.Vector3} out
+     * @returns {THREE.Vector3} world collar-seat position
      * @private
      */
-    _firstFreeCell() {
-        const cells = Math.max(1, Constants.MOTHER_CARGO_CELLS);
-        const centre = (cells - 1) / 2;
-        const order = Array.from({ length: cells }, (_, i) => i)
-            .sort((a, b) => (Math.abs(a - centre) - Math.abs(b - centre)) || (a - b));
-        for (const i of order) {
-            if (!this._cargo.some(c => c.cellIndex === i)) return i;
+    _collarSeatWorld(target, playerPos, playerVelDir, out) {
+        const standoffM = ((target && target.sizeMeter ? target.sizeMeter : 2) / 2)
+            + (Constants.CAPTURE_NET.BERTH_CLEARANCE_M ?? 1.0);
+        const player = this._player;
+        if (player && typeof player.getNetPodPositionInto === 'function') {
+            player.getNetPodPositionInto(0, out);
+        } else {
+            out.copy(playerPos);
         }
-        return -1;
+        this._berthAxis(playerVelDir, _scratchFwd);
+        return out.addScaledVector(_scratchFwd, standoffM * M);
     }
 
     /** Create capture net projectile group, tube tether, trail, and flash visuals */
@@ -907,12 +908,15 @@ export class LassoSystem {
             return false;
         }
 
-        // Phase 4 (MOTHER_CARGO_STOW): soft-block when every aft cargo cell is
-        // occupied — the catch has nowhere to go until the furnace clears one.
-        if (Constants.FEATURE_FLAGS.MOTHER_CARGO_STOW && this._firstFreeCell() < 0) {
-            eventBus.emit(Events.LASSO_DENIED, { reason: 'cargo_full' });
+        // Cargo-continuity S13(d): the lasso rides the ONE holding model — a catch
+        // berths at the nose collar. Soft-block when that single station is busy:
+        // a mated/inbound mother net holds the collar, or a catch is already
+        // waiting for it. The catch has nowhere to go until the berth frees.
+        const cns = this._captureNetSystem;
+        if (cns && (cns.getDockedCatch() || cns.hasMotherNetInFlight() || this._pendingAdoption)) {
+            eventBus.emit(Events.LASSO_DENIED, { reason: 'collar_busy' });
             eventBus.emit(Events.COMMS_MESSAGE, {
-                text: 'Cargo full. Furnace still processing. Wait for a cell to clear.',
+                text: 'Cargo berth busy. Wait for the nose collar to clear.',
                 source: 'SYSTEM',
                 channel: 'CMD',
                 priority: 'warning',
@@ -1105,7 +1109,6 @@ export class LassoSystem {
             flags: {
                 kin: Constants.FEATURE_FLAGS.LASSO_NET_KINEMATICS,
                 phys: Constants.FEATURE_FLAGS.LASSO_REEL_PHYSICS,
-                stow: Constants.FEATURE_FLAGS.MOTHER_CARGO_STOW,
             },
         });
 
@@ -1241,9 +1244,11 @@ export class LassoSystem {
         // Phase 6: Update visual effects (run independently of active state)
         this._updateVisualEffects(dt);
 
-        // Phase 4: tick stowed catches (furnace breakdown + cell pinning). Runs
-        // independent of active state — cargo persists across casts.
-        this._updateCargo(dt, playerPos, playerVelDir);
+        // Cargo-continuity S13(d): tick a catch waiting for the nose collar to
+        // free (hold clear of the occupant, settle in, then adopt onto the one
+        // holding model). Runs independent of active state — the wait persists
+        // across casts.
+        this._updatePendingAdoption(dt, playerPos, playerVelDir);
 
         // Proactive "in range — press N" prompt (gap C.3). Fires once when the
         // Tab-selected target first enters a castable state (in range, in the
@@ -1270,13 +1275,10 @@ export class LassoSystem {
             this._reelProgress += dt * Constants.LASSO_REEL_SPEED;
             this._reelProgress = Math.min(this._reelProgress, 1.0); // clamp — prevent overshoot
             if (this._reelProgress >= 1.0) {
-                // Catch complete! Phase 4: route through stow → furnace when the
-                // flag + a cargo cell are available; else the legacy instant catch.
-                if (Constants.FEATURE_FLAGS.MOTHER_CARGO_STOW && this._reelCellIndex >= 0) {
-                    this._stowCatch(playerPos, playerVelDir);
-                } else {
-                    this._completeCatch(debrisField);
-                }
+                // Catch complete! Cargo-continuity S13(d): the catch adopts onto the
+                // ONE holding model (the nose-collar berth) — or, with no capture
+                // system wired (headless), resolves via the legacy instant path.
+                this._resolveCatch(debrisField, playerPos, playerVelDir);
                 return;
             }
 
@@ -1334,15 +1336,13 @@ export class LassoSystem {
                 // REEL: compact package travels player-relative from contact → zero
                 reelT = (this._reelProgress - WRAP_END) / (1 - WRAP_END);
             }
-            // Phase 4: reel the catch back to its FORWARD cargo cell near the
-            // nose (player-relative) — the same side it was thrown from — so it is
-            // never dragged through the hull to the rear. _zeroVec (centre) is the
-            // legacy/flag-off target.
-            let reelEndOffset = _zeroVec;
-            if (Constants.FEATURE_FLAGS.MOTHER_CARGO_STOW && this._reelCellIndex >= 0) {
-                this._cargoCellWorld(playerPos, playerVelDir, this._reelCellIndex, _scratchMuzzle);
-                reelEndOffset = _scratchCargoOffset.copy(_scratchMuzzle).sub(playerPos);
-            }
+            // Cargo-continuity S13(d): reel the catch to the COLLAR SEAT (the one
+            // holding model's berth — pod-0 muzzle + ship-forward × standoff), the
+            // same side it was thrown from, so it is never dragged through the hull
+            // to the rear and the adoption pins it exactly where the reel delivers
+            // it (no hand-off snap).
+            this._collarSeatWorld(this.target, playerPos, playerVelDir, _scratchMuzzle);
+            const reelEndOffset = _scratchCargoOffset.copy(_scratchMuzzle).sub(playerPos);
             const reelOffset = new THREE.Vector3().lerpVectors(
                 this._reelStartOffset, reelEndOffset, reelT
             );
@@ -1393,13 +1393,6 @@ export class LassoSystem {
                 // reels in from the back").
                 this._reelStartOffset.copy(this._projOffset);
                 this._reelProgress = 0;
-
-                // Phase 4: pick the aft cargo cell this catch will be hauled to
-                // (leaves the forward canister clear). -1 when the flag is off, in
-                // which case the package reels to the hull centre as before.
-                this._reelCellIndex = Constants.FEATURE_FLAGS.MOTHER_CARGO_STOW
-                    ? this._firstFreeCell()
-                    : -1;
 
                 // Establish the reel-in pin AT CONTACT, anchored to where the
                 // debris currently is, so it doesn't render for one frame at its
@@ -1534,43 +1527,36 @@ export class LassoSystem {
     }
 
     /**
-     * Phase 4 (MOTHER_CARGO_STOW): clamp/slice the reeled catch free of the
-     * tether into its aft cargo cell. The debris STAYS alive + pinned to the cell
-     * anchor (no removeDebris / no score here) and begins the furnace-transfer
-     * countdown. LASSO_CAPTURED / ARM_CAPTURED fire AT STOW so onboarding beats
-     * (tease_lock / first_catch / second_catch) and reacquire advance promptly —
-     * scoring + salvage + removal happen later, exactly once, at CATCH_PROCESSED.
+     * Cargo-continuity S13(d): resolve a completed reel. The ONE holding model —
+     * the catch adopts onto the CaptureNetSystem's nose-collar berth and rides the
+     * exact machinery an S3 mother catch does (berth hold → securing mate → ledger
+     * → S7 transfer / S8 collar digestion). With no capture system wired
+     * (headless tests) it falls back to the legacy instant resolution.
+     *
+     * LASSO_STOWED / LASSO_CAPTURED / ARM_CAPTURED fire AT reel completion (the
+     * catch IS made now) — unchanged timing from the old _stowCatch, so onboarding
+     * beats (tease_lock / first_catch / second_catch) and the autopilot's lasso
+     * attitude-hold release advance promptly. Scoring + salvage + removal happen
+     * later, exactly once, at the collar's CATCH_PROCESSED.
+     * @param {object} debrisField
      * @param {THREE.Vector3} playerPos
      * @param {THREE.Vector3|null} playerVelDir
      * @private
      */
-    _stowCatch(playerPos, playerVelDir) {
+    _resolveCatch(debrisField, playerPos, playerVelDir) {
         const target = this.target;
-        const cellIndex = this._reelCellIndex;
-
-        // Keep the catch pinned to the cell anchor. Detach the reel-pin reference
-        // so _resetLasso() below does NOT release the pin — the cargo tick now
-        // owns it (persisting on the hull through the furnace window).
-        if (target) {
-            if (!target._armPinPos) target._armPinPos = new THREE.Vector3();
-            this._cargoCellWorld(playerPos, playerVelDir, cellIndex, _scratchMuzzle);
-            target._armPinPos.copy(_scratchMuzzle);
-            target._armPinned = true;
-            target._catchRenderMin = DebrisWireframe.scaleForRenderRadiusM(Constants.MOTHER_CATCH_MIN_RENDER_M, target.type, target.id);
+        const cns = this._captureNetSystem;
+        if (!cns) {
+            // Headless / no capture system — the legacy instant resolution.
+            this._completeCatch(debrisField);
+            return;
         }
-        this._reelPinTarget = null; // hand pin ownership to the cargo system
 
-        this._cargo.push({
-            target,
-            cellIndex,
-            furnaceTimer: 0,
-            breakdownStarted: false,
-        });
-
-        // Onboarding/tutorial advance + capture juice fire at STOW (not furnace end).
+        // The catch is MADE at reel completion — fire the capture-UX beats now,
+        // re-targeted off the deleted cargo cells (no cellIndex exists anymore).
         eventBus.emit(Events.LASSO_STOWED, {
             debrisId: target ? target.id : null,
-            cellIndex,
+            podIndex: 0,
         });
         eventBus.emit(Events.LASSO_CAPTURED, {
             debrisId: target ? target.id : null,
@@ -1581,71 +1567,166 @@ export class LassoSystem {
             armId: 'lasso',
             debrisId: target ? target.id : null,
         });
-        // NOTE: no per-catch comms here — the furnace breakdown (CATCH_BREAKDOWN_START
-        // → GameFlowManager) already narrates, and a sourceless message per catch
-        // spammed both the comms feed and the console.
+
+        // Hand pin ownership off the reel BEFORE _resetLasso clears it — the
+        // adoption (or the pending wait) now owns the pin.
+        this._reelPinTarget = null;
+
+        // The reel delivered the catch to the collar seat, but the completion step
+        // returns before the reel's final pin write, leaving the pin a hair short.
+        // Snap it exactly onto the seat so the adoption hand-off is seamless — the
+        // catch IS at the seat; the next updateBerthHold pins the same point (no
+        // gap, no pop).
+        if (target) {
+            this._collarSeatWorld(target, playerPos, playerVelDir, _scratchMuzzle);
+            if (!target._armPinPos) target._armPinPos = new THREE.Vector3();
+            target._armPinPos.copy(_scratchMuzzle);
+            target._armPinned = true;
+        }
 
         this._resetLasso();
         this.cooldown = Constants.LASSO_COOLDOWN_CATCH;
         this.cooldownMax = Constants.LASSO_COOLDOWN_CATCH;
         eventBus.emit(Events.LASSO_COOLDOWN_START, { duration: Constants.LASSO_COOLDOWN_CATCH });
+
+        if (target) this._adoptOrPend(target, playerPos, playerVelDir);
     }
 
     /**
-     * Phase 4: tick stowed catches — keep them pinned to their (moving) aft cell
-     * anchor and run the staged furnace breakdown. Reuses the daughter timing
-     * (FURNACE_TRANSFER: HOLD → CHOP → FEED) and emits the SAME CATCH_BREAKDOWN_START
-     * + single CATCH_PROCESSED the daughter does, so GameFlowManager's existing
-     * handler performs salvage + scoring + removeDebris exactly once. Runs every
-     * frame (cargo persists across casts), independent of lasso active state.
+     * Cargo-continuity S13(d): adopt the catch onto the collar now, or — when the
+     * single collar station is busy (a mated catch or an inbound mother net) — hold
+     * it clear of the occupant and adopt the moment it frees. Cargo is never
+     * destroyed (continuity law 1), so a busy collar pends, never drops.
+     * @param {object} target
+     * @param {THREE.Vector3} playerPos
+     * @param {THREE.Vector3|null} playerVelDir
+     * @private
+     */
+    _adoptOrPend(target, playerPos, playerVelDir) {
+        const cns = this._captureNetSystem;
+        if (!cns.getDockedCatch() && !cns.hasMotherNetInFlight() && cns.adoptLassoCatch(target)) {
+            return;
+        }
+        // Collar busy, or the adoption was refused (a context race) — hold the
+        // catch clear of the occupant and retry; cargo is never dropped.
+        this._pendingAdoption = { target, phase: 'wait', settleT: 0, fromPos: null, announced: false };
+        this._pinPending(target, playerPos, playerVelDir);
+    }
+
+    /**
+     * Cargo-continuity S13(d): tick a catch waiting for the collar. 'wait' holds it
+     * pinned clear of the occupant (recomputed each frame as the ship reorients and
+     * the queue changes); once the station frees it 'settle's smoothly onto the
+     * collar seat (no teleport), then adopts. Runs every frame, independent of lasso
+     * active state.
      * @param {number} dt
      * @param {THREE.Vector3} playerPos
      * @param {THREE.Vector3|null} playerVelDir
      * @private
      */
-    _updateCargo(dt, playerPos, playerVelDir) {
-        if (!this._cargo.length) return;
-        const FT = Constants.FURNACE_TRANSFER;
-        for (let i = this._cargo.length - 1; i >= 0; i--) {
-            const item = this._cargo[i];
-            const target = item.target;
+    _updatePendingAdoption(dt, playerPos, playerVelDir) {
+        const p = this._pendingAdoption;
+        if (!p) return;
+        const target = p.target;
+        const cns = this._captureNetSystem;
 
-            // Keep the catch riding its aft cell anchor on the (reorienting) hull.
-            if (target && playerPos) {
-                if (!target._armPinPos) target._armPinPos = new THREE.Vector3();
-                this._cargoCellWorld(playerPos, playerVelDir, item.cellIndex, _scratchMuzzle);
-                target._armPinPos.copy(_scratchMuzzle);
-                target._armPinned = true;
-                target._catchRenderMin = DebrisWireframe.scaleForRenderRadiusM(Constants.MOTHER_CATCH_MIN_RENDER_M, target.type, target.id);
-            }
-
-            item.furnaceTimer += dt;
-
-            // CHOP begins at HOLD_S — narrate the breakdown once (single owner is
-            // GameFlowManager's CATCH_BREAKDOWN_START handler).
-            if (!item.breakdownStarted && item.furnaceTimer >= FT.HOLD_S) {
-                item.breakdownStarted = true;
-                eventBus.emit(Events.CATCH_BREAKDOWN_START, {
-                    armId: 'lasso',
-                    debrisId: target ? target.id : null,
-                    chunkCount: FT.CHUNK_COUNT,
-                });
-            }
-
-            // FEED completes at FEED_S — the single CATCH_PROCESSED owns salvage +
-            // scoring + removeDebris (in GameFlowManager). Release our pin and free
-            // the cell.
-            if (item.furnaceTimer >= FT.FEED_S) {
-                if (target) target._armPinned = false;
-                if (target) target._catchRenderMin = 0;
-                eventBus.emit(Events.CATCH_PROCESSED, {
-                    armId: 'lasso',
-                    debrisId: target ? target.id : null,
-                    type: target ? target.type : 'fragment',
-                });
-                this._cargo.splice(i, 1);
-            }
+        // The piece died (Kessler / mission transition) or the system went away —
+        // release the pin and drop the wait. Cargo is never destroyed by US; the
+        // field owns a dead body.
+        if (!target || target.alive === false || !cns) {
+            this._clearPendingAdoption();
+            return;
         }
+
+        const busy = cns.getDockedCatch() || cns.hasMotherNetInFlight();
+        if (p.phase === 'wait') {
+            if (!p.announced) {
+                p.announced = true;
+                eventBus.emit(Events.COMMS_MESSAGE, {
+                    text: 'Collar busy — holding the catch off the berth until it clears.',
+                    source: 'SYSTEM', channel: 'CMD', priority: 'info',
+                    _lassoFeedback: true,
+                });
+            }
+            if (busy) {
+                this._pinPending(target, playerPos, playerVelDir);
+            } else {
+                // Station freed — glide onto the collar seat, then adopt.
+                p.phase = 'settle';
+                p.settleT = 0;
+                p.fromPos = target._armPinPos
+                    ? target._armPinPos.clone()
+                    : this._collarSeatWorld(target, playerPos, playerVelDir, new THREE.Vector3());
+            }
+            return;
+        }
+
+        // 'settle': ease from the wait point onto the collar seat — but only while
+        // the station is actually free; if a mother catch re-takes the collar
+        // mid-glide, abort back to 'wait' (held clear) rather than park on it.
+        const stillBusy = cns.getDockedCatch() || cns.hasMotherNetInFlight();
+        if (stillBusy) {
+            p.phase = 'wait';
+            this._pinPending(target, playerPos, playerVelDir);
+            return;
+        }
+        p.settleT += dt;
+        const f = Math.min(1, p.settleT / LASSO_ADOPT_SETTLE_S);
+        const ease = f * f * (3 - 2 * f);
+        this._collarSeatWorld(target, playerPos, playerVelDir, _scratchMuzzle);
+        if (!target._armPinPos) target._armPinPos = new THREE.Vector3();
+        target._armPinPos.copy(p.fromPos).lerp(_scratchMuzzle, ease);
+        target._armPinned = true;
+        target._motherParked = true;
+        target._catchRenderMin = DebrisWireframe.scaleForRenderRadiusM(Constants.MOTHER_CATCH_MIN_RENDER_M, target.type, target.id);
+        if (f >= 1) {
+            // The seat is reached — adopt. If the collar was re-occupied between
+            // this frame's check and the adoption (belt-and-braces; cargo is never
+            // orphaned at the seat with no owner), fall back to 'wait' and retry.
+            const adopted = cns.adoptLassoCatch(target);
+            if (!adopted) {
+                p.phase = 'wait';
+                return;
+            }
+            this._pendingAdoption = null;
+        }
+    }
+
+    /**
+     * Cargo-continuity S13(d): pin a waiting catch clear of the collar's current
+     * occupant — the collar seat pushed fore along the berth axis by the occupant's
+     * fore extent (getCollarQueueDepthM), so it never overlaps a mated/inbound
+     * mother catch. Follows the (reorienting) ship each frame.
+     * @param {object} target
+     * @param {THREE.Vector3} playerPos
+     * @param {THREE.Vector3|null} playerVelDir
+     * @private
+     */
+    _pinPending(target, playerPos, playerVelDir) {
+        const cns = this._captureNetSystem;
+        this._collarSeatWorld(target, playerPos, playerVelDir, _scratchMuzzle);
+        const depthM = cns ? cns.getCollarQueueDepthM() : 0;
+        this._berthAxis(playerVelDir, _scratchFwd);
+        if (!target._armPinPos) target._armPinPos = new THREE.Vector3();
+        target._armPinPos.copy(_scratchMuzzle).addScaledVector(_scratchFwd, depthM * M);
+        target._armPinned = true;
+        target._motherParked = true;
+        target._catchRenderMin = DebrisWireframe.scaleForRenderRadiusM(Constants.MOTHER_CATCH_MIN_RENDER_M, target.type, target.id);
+    }
+
+    /**
+     * Cargo-continuity S13(d): release the pending wait (game reset / dead target /
+     * system teardown). Clears the pin flags the wait owned; idempotent.
+     * @private
+     */
+    _clearPendingAdoption() {
+        const p = this._pendingAdoption;
+        if (p && p.target) {
+            p.target._armPinned = false;
+            p.target._catchRenderMin = 0;
+            p.target._motherParked = false;
+        }
+        this._pendingAdoption = null;
     }
 
     /**
@@ -1736,7 +1817,13 @@ export class LassoSystem {
         eventBus.emit(Events.LASSO_COOLDOWN_START, { duration: Constants.LASSO_COOLDOWN_MISS });
     }
 
-    /** Complete a successful lasso catch */
+    /**
+     * Legacy instant catch resolution — removeDebris + flat score at once.
+     * Cargo-continuity S13(d): this is now ONLY the headless/test fallback for a
+     * LassoSystem with no CaptureNetSystem wired (production always wires one, so
+     * the real path is the collar adoption in _resolveCatch). Kept so throw-only
+     * tests resolve a catch without a full capture system.
+     */
     _completeCatch(debrisField) {
         const target = this.target;
 
@@ -1883,8 +1970,10 @@ export class LassoSystem {
     /** Reset lasso state */
     _resetLasso() {
         // Release the reel-in pin so a cancelled-mid-reel piece returns to
-        // normal propagation (on a completed catch the debris is already removed,
-        // so this is a harmless no-op cleanup).
+        // normal propagation. On a COMPLETED catch, _resolveCatch has already
+        // nulled _reelPinTarget to hand pin ownership to the adoption/pending
+        // record, so this is a no-op there; on a headless instant catch the
+        // debris is already removed, so it's a harmless cleanup.
         if (this._reelPinTarget) {
             this._reelPinTarget._armPinned = false;
             this._reelPinTarget._catchRenderMin = 0;
@@ -1904,8 +1993,6 @@ export class LassoSystem {
         // Phase 3: clear reel-physics latch + strain accumulator for the next cast.
         this._reelPhysicsActive = false;
         this._strainTimer = 0;
-        // Phase 4: clear the in-flight cargo-cell choice (stowed cargo persists).
-        this._reelCellIndex = -1;
 
         if (this._netGroup) this._netGroup.visible = false;
         // Phase 2: restore the mouth to full radius so the static net geometry is

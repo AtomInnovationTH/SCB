@@ -1490,9 +1490,6 @@ export const Constants = {
     // Phase 3: mass-driven reel tension, CoM pull, tangle/break risk. Still hard-
     // gated OFF on M1 and for ≤ LASSO_MAX_CAPTURE_MASS regardless of this flag.
     LASSO_REEL_PHYSICS:        true,   // Phase 3 — real reel tension + ship pull + break risk (M2+/heavy only)
-    // Phase 4: route the Mother-net catch through stow → clamp/slice → furnace
-    // instead of instant removeDebris + flat TIER3_BASE.
-    MOTHER_CARGO_STOW:         true,   // Phase 4 — aft cargo cells + furnace lifecycle
   },
 
   // ============================================================================
@@ -2349,16 +2346,7 @@ export const Constants = {
   LASSO_REEL_TORQUE_GAIN: 0.8,        // dimensionless — attitude tug scale: reeling a heavy OFF-AXIS catch swings the Mother's nose toward it (× massRatio × lateral tether dir), fed to the recoil-attitude springs and RCS-nulled (2026-07-23)
   LASSO_NET_BREAK_TIME_S: 2.0,        // seconds above NET_STRAIN_SAFE_FRACTION before the tether snaps
 
-  // --- Mother-net capture ceremony Phase 4 (stow → furnace lifecycle) ---
-  // .kilo/plans/mother-net-capture-ceremony.md §PHASE 4 (flag MOTHER_CARGO_STOW).
-  // The reeled catch is hauled to an AFT (−Z, thruster-end) cargo cell — leaving
-  // the forward canister clear — then fed to the furnace via the existing
-  // FURNACE_TRANSFER staging + CATCH_PROCESSED salvage/score path (instead of the
-  // legacy instant removeDebris + flat TIER3_BASE). When the flag is OFF the
-  // legacy instant resolution is used and none of this runs.
-  MOTHER_CARGO_CELLS: 3,              // hull cargo cells (held just forward of the nose)
-  MOTHER_CARGO_FWD_OFFSET_M: 4,       // metres forward (+prograde) — catch reels right up to the nose/hull so it reads as "into the mother" (was 9 m → looked like it vanished short of the ship)
-  MOTHER_CARGO_CELL_SPREAD_M: 0,      // metres lateral spread — 0: every catch reels to the nose centerline (was 4 m → catches #2/#3 reeled off to the side of the mother)
+  // --- Mother-net capture ceremony: net-held catch readability floor ---
   // A captured M1 welcome FRAGMENT is physically tiny (~0.6 m → 0.000006 scene
   // units), so at the gameplay camera distance it rendered sub-pixel: the catch
   // was pinned + reeled to the nose correctly but was INVISIBLE inside the net
