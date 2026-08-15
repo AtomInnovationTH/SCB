@@ -286,7 +286,8 @@ export class PlayerSatellite extends THREE.Group {
     // ledger direct invalidations (lasso adoption entry, collar digestion
     // completion exit — CaptureNet.js, register item 63; [K] jettison from
     // BERTHED/COLLARED and the daughter rack's sequential-digestion feed-end —
-    // register item 67) — never per frame.
+    // register item 67; the mission-reset rack clear — ArmManager.reset(),
+    // register item 69) — never per frame.
     // null = needs (re)compute.
     this._attitudeInertia = null;
     const _invalidateInertia = () => { this._attitudeInertia = null; };
@@ -4838,7 +4839,8 @@ export class PlayerSatellite extends THREE.Group {
    * barrel origin, computed lazily from the mass tree and cached until an arm
    * state-change / berth event or a cargo-ledger direct invalidation (lasso
    * adoption, collar digestion completion — register item 63; [K] jettison
-   * from BERTHED/COLLARED, the rack's stay-parked feed-end — register item 67)
+   * from BERTHED/COLLARED, the rack's stay-parked feed-end — register item 67;
+   * the mission-reset rack clear, ArmManager.reset() — register item 69)
    * clears it. Never recomputed per frame.
    * @returns {{ ixx:number, iyy:number, izz:number }}
    */

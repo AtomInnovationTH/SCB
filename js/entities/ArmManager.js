@@ -2242,6 +2242,15 @@ export class ArmManager {
       arm.launchDirection = null;
     }
 
+    // Register item 69: the loop above clears every rack — a cargo mass-exit —
+    // but sets arm.state directly, so no ARM_STATE_CHANGE crosses it and the
+    // cleared mass would ride the rotational model until the next arm/berth
+    // event. Invalidate the attitude-inertia cache directly at the exit site,
+    // the item-63/67 seam (reset-side). The berthed/collared side needs
+    // nothing: those nets survive the reset with their mass (no reset path
+    // touches captureNetSystem.activeNets), so the ledger never loses them.
+    if (this.playerSatellite) this.playerSatellite._attitudeInertia = null;
+
     // V5: Reset pulse scan state
     this._pulseScanCooldown = 0;
     this._pulseScanTimer = 0;
