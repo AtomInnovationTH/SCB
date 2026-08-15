@@ -765,29 +765,6 @@ export class DebrisField {
     };
   }
 
-  /**
-   * UX-3 #9: Auto-discover the nearest debris to the start position.
-   * Called once after debris generation so the player always has at least one target.
-   * @private
-   */
-  _autoDiscoverNearest() {
-    // Use start orbit SMA as proxy for player position (center of player shell)
-    const startSma = Constants.EARTH_RADIUS + Constants.START_ALTITUDE;
-    let closest = null;
-    let closestDist = Infinity;
-    for (const d of this.debrisList) {
-      if (!d.alive) continue;
-      const dist = Math.abs(d.orbit.semiMajorAxis - startSma);
-      if (dist < closestDist) {
-        closestDist = dist;
-        closest = d;
-      }
-    }
-    if (closest) {
-      closest.discovered = true;
-    }
-  }
-
   /** @private Convert CatalogConverter's Node-safe seed into THREE.js runtime form.
    *  Specifically: tumbleAxis plain {x,y,z} → THREE.Vector3, generate salvage.
    *  Does NOT mutate the catalogue entry — only the debris-data object passed in. */
@@ -1663,9 +1640,13 @@ export class DebrisField {
       // source of the "only 1 target visible" bug — it used a *static*
       // startSma proxy and would sometimes pick a catalog debris that the
       // M1 enforcement (just below) immediately killed, leaving zero
-      // discovered welcome debris. `_spawnWelcomeField` now marks all 7
-      // welcome debris as `discovered=true` directly. Method retained for
-      // potential non-M1 use; just not called from this hot path.
+      // discovered welcome debris. `_spawnWelcomeField` pre-discovers the
+      // two pinned pieces directly instead (see its own comment; #3–#7 wait
+      // for the S-scan). 2026-08-15 (register item 52): the dead definition
+      // deleted — grep- AND git-proven (zero reads repo-wide; no call in
+      // tracked history). The live discovery channels are the welcome
+      // pre-discovery, SensorSystem's scan reveal, and the authored cast's
+      // tracked/pre-discovered flags.
     }
 
     // ── Mission-1 cluster enforcement (runs AFTER welcome field is placed) ──
