@@ -282,8 +282,10 @@ export class PlayerSatellite extends THREE.Group {
     this._comDriftM = 0;            // C-9: Cached scalar drift (m) for HUD
     this._comDriftVec = { x: 0, y: 0, z: 0 }; // C-9: Drift vector (actual − balanced) for torque coupling
     // Attitude-dynamics inertia SSOT (Phase 1). Lazily computed from the mass
-    // tree, cached, and invalidated ONLY on arm-state/berth changes — never per
-    // frame. null = needs (re)compute.
+    // tree, cached, and invalidated on arm-state/berth changes plus the cargo-
+    // ledger direct invalidations (lasso adoption entry, collar digestion
+    // completion exit — CaptureNet.js, register item 63) — never per frame.
+    // null = needs (re)compute.
     this._attitudeInertia = null;
     const _invalidateInertia = () => { this._attitudeInertia = null; };
     eventBus.on(Events.ARM_STATE_CHANGE, _invalidateInertia);
@@ -4832,7 +4834,9 @@ export class PlayerSatellite extends THREE.Group {
   /**
    * Attitude-dynamics inertia SSOT. Returns {ixx, iyy, izz} kg·m² about the
    * barrel origin, computed lazily from the mass tree and cached until an arm
-   * state-change / berth event invalidates it. Never recomputed per frame.
+   * state-change / berth event or a cargo-ledger direct invalidation (lasso
+   * adoption, collar digestion completion — register item 63) clears it.
+   * Never recomputed per frame.
    * @returns {{ ixx:number, iyy:number, izz:number }}
    */
   getAttitudeInertia() {

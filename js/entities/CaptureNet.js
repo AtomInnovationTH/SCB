@@ -2990,6 +2990,15 @@ export class CaptureNetSystem {
     // Marker for any reader holding a stale reference (the transfer beat's
     // _cargoDelivered idiom): the cargo was digested; the net's job is done.
     net._digestedOut = true;
+    // The catch's mass just LEFT the berthed ledger (the caller splices the net
+    // this same tick). A mother berth invalidates the attitude inertia via
+    // NET_BERTHED and a rack arrival via ARM_STATE_CHANGE; this completion emits
+    // only NET_CONSUMED + CATCH_PROCESSED — neither invalidates — so invalidate
+    // the cache directly: the mirror of adoptLassoCatch's entry-side
+    // invalidation, and the seam for any mass-exit that doesn't cross an
+    // arm-state change (register item 63).
+    const player = this._player;
+    if (player && '_attitudeInertia' in player) player._attitudeInertia = null;
     eventBus.emit(Events.NET_CONSUMED, {
       podIndex: net.podIndex, armId: 'mother', debrisId: d.id,
       anchor: { kind: 'collar', podIndex: net.podIndex },
