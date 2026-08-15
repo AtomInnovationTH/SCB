@@ -1426,10 +1426,17 @@ export class NetProjectile {
     // CORRIDOR_HOLD_M out until the recovery corridor (a cylinder along
     // ship-local +Z from the muzzle, radius = sizeMeter/2 + BERTH_CLEARANCE_M)
     // is clear of strut tips (a forward-swept strut blocks whether or not it
-    // holds a daughter catch). S13(d): the lasso-cargo read is gone — the gate
-    // is strut-tips-only. On timeout, berth at the extended standoff rather
-    // than clip through.
-    const holdM = Math.max(berthStandoffM, CN.CORRIDOR_HOLD_M ?? 10);
+    // holds a daughter catch). S13(d): the lasso-cargo read is gone; S13(e): mated
+    // cargo joined the obstacle set (see _corridorClear). On timeout, berth at the
+    // extended standoff rather than clip through.
+    // Register item 66: the mated-cargo hold STACKS — the gate's level is
+    // raised past the queue's fore-extent so each queued catch holds clear of
+    // the previous one's far face (two catches frozen at the same 10 m level
+    // co-locate — co-located reads as one). 0 with an empty queue ⇒ the
+    // CORRIDOR_HOLD_M floor stands byte-identical (the single-catch case —
+    // the gated scenario — never sees the queue term).
+    const queueHoldM = this._queueHoldLevelM(d);
+    const holdM = Math.max(berthStandoffM, CN.CORRIDOR_HOLD_M ?? 10, queueHoldM);
     if (!this._corridorTimedOut && this._remainingM <= holdM && !this._corridorClear(d)) {
       if (!this._corridorHold) {
         this._corridorHold = true;
@@ -1682,6 +1689,61 @@ export class NetProjectile {
     }
 
     return true;
+  }
+
+  /**
+   * @private Register item 66 — the level (metres from the berth anchor) at
+   * which THIS net's corridor gate must hold so its catch clears the queue
+   * already at the station; 0 when no other mother net holds a position
+   * there. The `getCollarQueueDepthM` pattern (the lasso pend's fore-extent
+   * read), with the two refinements the queue stack needs:
+   *   - members are nets HOLDING a station position: a corridor-held REELING
+   *     net (its frozen `_corridorHoldLevelM` slot — the REELING guard keeps
+   *     a stale hold flag from a MISSED net from counting) or a berthed/
+   *     collared/transferring net (its berth standoff, extended-standoff
+   *     honest via `_effectiveStandoffM`). An inbound net not yet at its gate
+   *     is not a member — it takes its slot when its own gate engages (the
+   *     hold latch makes the order first-come, inner-most), and a timed-out
+   *     member reads the same level on both branches, so a held→berthed
+   *     transition never moves the queue.
+   *   - the returned level seats THIS catch's near face one
+   *     BERTH_CLEARANCE_M past the deepest member's far face
+   *     (near = level + _catchSeatM − sizeMeter/2), so two queued catches
+   *     can never freeze at the same level and co-locate (co-located reads
+   *     as one — a continuity-law cosmetic violation).
+   * The timeout's `extended` derives from this holdM, so a queue-raised
+   * hold berths at its queue-cleared level. 0 with an empty queue ⇒ the
+   * gate's CORRIDOR_HOLD_M floor is byte-identical to the pre-66 code.
+   * @param {object} d — this net's caught debris
+   * @returns {number} metres
+   */
+  _queueHoldLevelM(d) {
+    const cns = this._ctx?.captureNetSystem;
+    if (!cns || !Array.isArray(cns.activeNets)) return 0;
+    let ext = 0;
+    for (const net of cns.activeNets) {
+      if (net === this || !net._isMother || !net.isActive) continue;
+      if (net.state === STATES.STOWED || net.state === STATES.RELEASED) continue;
+      const od = net.targetDebris;
+      if (!od || od.alive === false) continue;
+      const held = net.state === STATES.REELING
+        && net._corridorHold && net._corridorHoldLevelM != null;
+      const berthed = net.state === STATES.BERTHED || net.state === STATES.COLLARED
+        || net.state === STATES.TRANSFERRING;
+      if (!held && !berthed) continue;               // not at the station yet
+      const half = (od.sizeMeter || 2) / 2;
+      const base = half + (CN.BERTH_CLEARANCE_M ?? 1.0);
+      const apex = held
+        ? net._corridorHoldLevelM
+        : Math.max(base, net._effectiveStandoffM ?? base);
+      const fore = apex + (net._catchSeatM || 0) + half;
+      if (fore > ext) ext = fore;
+    }
+    if (ext <= 0) return 0;
+    // near face = level + seat − half ≥ ext + clearance.
+    const seat = this._catchSeatM || 0;
+    const halfSelf = (d.sizeMeter || 2) / 2;
+    return ext + (CN.BERTH_CLEARANCE_M ?? 1.0) + halfSelf - seat;
   }
 
   /**
