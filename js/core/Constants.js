@@ -2919,7 +2919,11 @@ export const Constants = {
       // captures per load. Whale hunts are the Mother's premium, delta-v-costly
       // job — the scarce magazine enforces "burn only for whales" doctrine.
       MAGAZINE_SIZE:    2,         // nets/pod Dyneema Y0 (§6.4)
-      RELOAD_TIME:      30,        // seconds (§6.1)
+      // No RELOAD_TIME here (register item 42, swept 2026-08-15): the
+      // documented 30 s reload was never in the sim — nothing read it. The
+      // live re-fire gate is the per-pod COOLDOWN_CATCH (2 s) / COOLDOWN_MISS
+      // (1 s) plus the magazine above — scarcity is quantity, not rate.
+      // Wiring a real reload would be a NEW mechanic (an owner question).
       REEL_SPEED:       2.0,       // m/s (§6.1)
       TETHER_MAX:       100,       // m (§6.1)
       RANGE:            100,       // m engagement envelope (§2.8)
