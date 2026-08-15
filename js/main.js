@@ -3943,13 +3943,12 @@ function gameLoop(timestamp) {
       debrisMap.update(dt, { debrisField, player, autopilotSystem });
     }
 
-    // ΔV alarm monitoring
-    if (armManager) {
-      try {
-        const budget = armManager.getMassBudget();
-        audioSystem.updateDeltaVAlarm(budget.percentage);
-      } catch(e) { /* ignore if not ready */ }
-    }
+    // Register item 43: the per-frame ΔV alarm poll is deleted — it read
+    // `budget.percentage`, a field getMassBudget() has never had (NaN → tier 0
+    // → the idempotence guard tore down the honest alarm every frame). The ONE
+    // driver is StatusPanel's 10 Hz DELTAV_UPDATE event → AudioSystem's
+    // listener (AudioSystem.js). Out-of-gameplay silencing is unchanged —
+    // STATE_CHANGE / pause / blur / visibilitychange all call stopDeltaVAlarm().
 
     // --- Target Reticle update (Canvas 2D overlay) ---
     if (targetReticle) {
