@@ -255,6 +255,10 @@ export class ArmManager {
       const id = type === 'weaver' ? `weaver-${wIdx++}` : `spinner-${sIdx++}`;
       const arm = new ArmUnit(id, type, offset, this.scene);
       arm.index = i;
+      // Register item 67(b): the rack feed-end's direct attitude-inertia
+      // invalidation reaches the cache through this handle (same injection
+      // idiom as _beaconSpeedScale / _digestSunScale).
+      arm._playerSatellite = this.playerSatellite;
       // Config G geometry (ST-9.2): hinge, swing axis, azimuth — used by C-3 strut tip math
       arm._hingePosition = dp.hingePosition.clone();
       arm._dockOutward = dp.dockOutward.clone();

@@ -2244,6 +2244,13 @@ export class NetProjectile {
       debrisId: this.targetDebris?.id,
     });
     if (wasBerthed) {
+      // The jettisoned mass just LEFT the berthed ledger (capturedMass zeroed
+      // above; RELEASED drops out of getBerthedMassKg). NET_RELEASED's
+      // listeners (autopilot hold, visual, audio) never invalidate the
+      // attitude inertia, so invalidate the cache directly — the item-63 seam
+      // for a mass-exit that crosses no arm-state change (register item 67(a)).
+      const player = this._ctx?.player;
+      if (player && '_attitudeInertia' in player) player._attitudeInertia = null;
       // §4.9: jettison consumes the net — say so.
       eventBus.emit(Events.COMMS_MESSAGE, {
         text: 'Catch released — net expended, launcher clear.',

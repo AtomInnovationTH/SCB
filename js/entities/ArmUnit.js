@@ -5555,6 +5555,13 @@ export class ArmUnit {
         // (a fresh piece starts at 0, so t=0 automatically); the stateTimer
         // reset is kept for any other per-state readers.
         this.stateTimer = 0;
+        // Register item 67(b): the digested piece's mass just LEFT the rack
+        // sum computeInertia reads, and staying parked fires no
+        // ARM_STATE_CHANGE (the invalidating event the empty-rack RELOADING
+        // below gets for free) — invalidate the cache directly, the item-63
+        // seam for a mass-exit that crosses no arm-state change.
+        const ps = this._playerSatellite;
+        if (ps && '_attitudeInertia' in ps) ps._attitudeInertia = null;
         return;
       }
       this._transitionTo(S.RELOADING);
