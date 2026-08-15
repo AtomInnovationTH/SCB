@@ -2358,7 +2358,7 @@ async function init() {
             if (typeof _scenarioShipHoldOff === 'function') _scenarioShipHoldOff();
             _scenarioShipHoldOff = null;
             _SHIP_HOLD.armed = false; _SHIP_HOLD.engaged = false; _SHIP_HOLD.everEngaged = false; _SHIP_HOLD.quat = null;
-            return { ok: false, reason: 'fire refused (magazine / cooldown / launcher blocked)' };
+            return { ok: false, reason: 'fire refused (magazine / cooldown / shot fouls collar cargo)' };
           }
 
           // 8. Override the rolls ON THE NET — never forceResolve(), which
