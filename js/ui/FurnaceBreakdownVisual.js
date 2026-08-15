@@ -9,10 +9,11 @@
  * anchor instead of an armId (the S7 anchor-abstraction shape — the breakdown
  * events otherwise resolve an arm index).
  * Pure visuals — gameplay (salvage/score/remove) is owned by GameFlowManager's
- * single CATCH_PROCESSED handler. This module is NOT covered by the Node test
- * harness (it touches THREE + the player render hierarchy); the FSM timing that
- * drives it (ArmUnit._updateHoldingCatch + CaptureNetSystem._tickCollarDigestion)
- * IS tested.
+ * single CATCH_PROCESSED handler. The choreography is NOT covered by the Node
+ * test harness (it touches THREE + the player render hierarchy); the FSM timing
+ * that drives it (ArmUnit._updateHoldingCatch + CaptureNetSystem._tickCollarDigestion)
+ * IS tested, and the `_collarWorld` anchor fallback chain is pinned by
+ * test-FurnaceBreakdownVisual.js (register item 64).
  *
  * Lifecycle (events emitted by ArmUnit._updateHoldingCatch or the collar tick):
  *   CATCH_BREAKDOWN_START { armId, debrisId, chunkCount, [anchor] }
@@ -146,7 +147,10 @@ export class FurnaceBreakdownVisual {
    * own `_scenePosition` (what pinCapturedDebris wrote this frame).
    * After the completion splice the docked catch is gone, so fall back to the
    * LAST live seat (the ghost bag's draw-in reads from where the mated body
-   * actually was), then the pod muzzle, then the bus centre.
+   * actually was), then the berth collar anchor (the on-axis station — S13(e)
+   * moved the pods to ±NET_POD_X_M, so the pod muzzle is 0.45 m off the collar;
+   * the pod-0 read survives only for headless mocks without the anchor — the
+   * CaptureNet/LassoSystem idiom), then the bus centre.
    * @param {THREE.Vector3} out
    */
   _collarWorld(out) {
@@ -161,6 +165,9 @@ export class FurnaceBreakdownVisual {
     } catch (_e) { /* fall through to the last-known seat */ }
     if (this._collarLastWorld) {
       return out.set(this._collarLastWorld.x, this._collarLastWorld.y, this._collarLastWorld.z);
+    }
+    if (this._player && typeof this._player.getNetBerthCollarPositionInto === 'function') {
+      return this._player.getNetBerthCollarPositionInto(out);
     }
     if (this._player && typeof this._player.getNetPodPositionInto === 'function') {
       return this._player.getNetPodPositionInto(0, out);
