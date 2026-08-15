@@ -2965,33 +2965,34 @@ export class PlayerSatellite extends THREE.Group {
   // 7b. Large Net Pods — fore-end launcher hardware
   // --------------------------------------------------------------------------
   /**
-   * @private — Build the Large Net launcher on the lower fore centreline.
+   * @private — Build the Large Net launcher: TWO pods off the boresight (S13(e)).
    * The Mother's whale-class capture net (`[N]`) is a real 2-pod × 2-net
    * magazine mechanic (CaptureNetSystem._motherPodInventory); this is its
-   * hardware — a single squat gunmetal launcher block whose front face is a 2×2
-   * magazine window: a pale Dyneema cap per LOADED net, a dark open bore for a
-   * spent cell. Invisible muzzle anchors on the x=0 axis are the launch points
-   * used by fireMotherNet (via getNetPodPosition), so nets depart from the
-   * centreline, not the hull origin.
+   * hardware — one squat gunmetal launcher per pod on the fore deck at
+   * (±NET_POD_X_M, 0, muzzle z = 1.30 M), each front face carrying that pod's
+   * 2-net magazine window: a pale Dyneema cap per LOADED net, a dark open bore
+   * for a spent cell. The muzzle anchors are the launch points used by
+   * fireMotherNet (via getNetPodPosition).
    *
-   * Anti-spin placement: a net launch fires the net forward and recoils the
-   * Mother backward. If the muzzle is offset from the long axis the recoil has
-   * a lever arm and TORQUES the ship (an x-offset yaws it, a y-offset pitches
-   * it). Because the magazine fires ONE pod at a time, two side-by-side tubes
-   * would yaw the ship left or right per shot — the worst asymmetry. So this is
-   * a SINGLE central launcher whose muzzles sit ON the x=0 centreline: every
-   * shot leaves from the axis → zero yaw. Net-launch recoil IS now simulated
-   * (see _applyMotherNetRecoil): the small residual y-offset produces a real
-   * pitch that RCS auto-nulls at an N₂ cost.
+   * S13(e) — the pods leave the boresight (owner ruling B, 2026-08-14): the
+   * nose berthing collar owns the fore centreline (cargo mates rigidly on-axis;
+   * the berth IS the corridor), so the launch corridors move off it. The site
+   * is probe-measured (tmp/s13e-podsite.log — the S12 memo sited the collar,
+   * not the pods): ±0.45 m is the smallest site with real margin on every
+   * neighbour — collar ring +0.030 m, sensor ring +0.103, ROSA full-rotation
+   * envelope +0.060 (with the housing shortened to z ∈ [1.06, 1.30]), strut
+   * sweep +0.397, RCS doghouses +0.463. The launch-recoil lever RETURNS with
+   * the move: a shot from ±X torques the ship in YAW (τ = J·x about +Y;
+   * `_recoilYawVel`), alternating sign across the magazine — pod 0 (+X) and
+   * pod 1 (−X) kick opposite ways, so the magazine averages to zero, the same
+   * argument the ±0.06 m pitch stagger made when the pods straddled the axis.
+   * RCS nulls the kick and the N₂ cost is billed (see _applyMotherNetRecoil).
+   * The pitch lever is gone (y = 0 on the CoM axis in Y).
    *
-   * Re-centering (2026-07-23): the launcher now sits DEAD-CENTRE on the CoM axis
-   * (0,0) — zero launch torque. The sensor turret was redesigned around it: the
-   * gimbal pivots on the axis and its four instruments (EO/IR/LIDAR/telescope)
-   * ring the launcher at RING_R=0.26M (45/135/225/315°), symmetric so no single
-   * arm strut is overhung, and all SHORTER than the launcher (muzzle z=1.30M vs
-   * optics ≤ z≈1.20M) so a reeled-in catch parks on the protruding launcher, not
-   * the optics. r 0.12M; inside the hull (0.12M < 0.40M). The two "pods" are the
-   * upper/lower cell rows straddling the axis by ±0.06M; both muzzles on x=0.
+   * History: single central launcher on the x=0 axis (zero launch torque,
+   * 2026-07-23) → S13(c) flew shots THROUGH the collar bore (the berth IS the
+   * corridor, S12 M2 reading 8) → S13(e) re-sites the pods off-axis and the
+   * collar owns the axis alone.
    */
   _buildNetPods() {
     // Shared pod housing material — gunmetal, same recipe as the LIDAR dome /
@@ -3011,47 +3012,40 @@ export class PlayerSatellite extends THREE.Group {
     this._netPodMuzzles = [];
     this._netPodCaps = [];
 
-    // Single central launcher block on the long axis (x=0), now RE-CENTERED
-    // (2026-07-23): with the sensor turret lifted +0.18M, the launcher rises to
-    // y=−0.05M — essentially on the CoM centreline (was −0.25M). The residual
-    // 5 cm is the last clearance under the raised deck's aft rim; recoil torque
-    // now scales with this small offset (see _applyMotherNetRecoil), ~80% less
-    // than before, and RCS auto-nulls it. 12-seg cylinder, length 0.16M.
-    const launcherY = 0;                 // CENTRELINE: dead-centre on the CoM axis (zero launch torque)
-    this._netLauncherY = launcherY;      // SSOT for the recoil lever arm (now 0)
-    // Length 0.30M so the muzzle protrudes to z=1.30M — FURTHER FORE than every
-    // ring instrument (EO/IR/LIDAR/telescope reach ≤ z≈1.20M) — so a reeled-in
-    // catch parks on the launcher, never on the optics. Centre z = 1.0 + 0.15.
-    const LAUNCH_LEN = M * 0.30;
-    const LAUNCH_HALF = LAUNCH_LEN * 0.5;              // 0.15M
-    const launchCz = M * 1.0 + LAUNCH_HALF;            // 1.15M
+    // S13(e) probe site (tmp/s13e-podsite.log): muzzles at (±POD_X, 0, 1.30).
+    // The housing front face IS the muzzle plane; the housing runs 0.24 M aft
+    // to z = 1.06 — the ROSA full-rotation envelope (ρ_yz ≤ 1.0) touches a
+    // housing that reaches z = 1.00 at this |x|, so 0.06 M of margin is held.
+    const POD_X = (Constants.OCTOPUS_V5?.NET_POD_X_M ?? 0.45) * M;
+    const LAUNCH_LEN = M * 0.24;
+    const LAUNCH_HALF = LAUNCH_LEN * 0.5;              // 0.12M
+    const muzzleZ = M * 1.30;                          // the collar/muzzle plane
+    const launchCz = muzzleZ - LAUNCH_HALF;            // 1.18M
     const housingGeo = new THREE.CylinderGeometry(M * 0.12, M * 0.12, LAUNCH_LEN, 12);
-    const housing = new THREE.Mesh(housingGeo, gunmetalMat);
-    housing.rotation.x = Math.PI / 2;
-    housing.position.set(0, launcherY, launchCz);
-    housing.name = 'NetLauncher';
-    housing.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
-    this.add(housing);
 
-    // 2 pods × 2 cells = a 2×2 magazine window on the front face. The two pods
-    // are the upper (pod 0) and lower (pod 1) rows; the two cells in a row are
-    // side by side in ship X. On the housing (rotation.x = π/2) the local axes
-    // map: local X → ship X, local Z → ship −Y, local Y → ship +Z (the proud
-    // offset). Front face is at local y = +0.15M (half the 0.30M length).
+    // Per pod: one housing, and a 2-cell magazine window on its front face,
+    // the cells stacked in ship Y. On the housing (rotation.x = π/2) the local
+    // axes map: local X → ship X, local Z → ship −Y, local Y → ship +Z (the
+    // proud offset). Front face is at local y = +LAUNCH_HALF.
     const faceLocalY = LAUNCH_HALF;                    // front face in housing-local Y
-    const CELL_DX = M * 0.055;   // ship-X half-spacing of the two cells in a row
-    const ROW_DZ  = M * 0.06;    // local-Z (→ ship ∓Y) half-spacing of the rows
-    const muzzleZ = launchCz + LAUNCH_HALF;            // world z of the front face (1.30M)
+    const CELL_DZ = M * 0.055;   // local-Z (→ ship ∓Y) half-spacing of the two cells
     for (let pod = 0; pod < 2; pod++) {
-      // pod 0 → upper row (local Z = −ROW_DZ → ship +Y), pod 1 → lower row.
-      const lz = pod === 0 ? -ROW_DZ : ROW_DZ;
+      // pod 0 → +X housing, pod 1 → −X (the yaw kicks alternate sign).
+      const sx = pod === 0 ? POD_X : -POD_X;
+      const housing = new THREE.Mesh(housingGeo, gunmetalMat);
+      housing.rotation.x = Math.PI / 2;
+      housing.position.set(sx, 0, launchCz);
+      housing.name = `NetLauncher_${pod}`;
+      housing.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+      this.add(housing);
+
       const caps = [];
       for (let cell = 0; cell < 2; cell++) {
-        const lx = cell === 0 ? CELL_DX : -CELL_DX;
+        const lz = cell === 0 ? CELL_DZ : -CELL_DZ;
 
         const holeGeo = new THREE.CircleGeometry(M * 0.030, 12);
         const hole = new THREE.Mesh(holeGeo, cellHoleMat);
-        hole.position.set(lx, faceLocalY + M * 0.001, lz);   // 1 mm proud of the front face
+        hole.position.set(0, faceLocalY + M * 0.001, lz);    // 1 mm proud of the front face
         hole.rotation.x = -Math.PI / 2;
         hole.name = `NetPodCellHole_${pod}_${cell}`;
         hole.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
@@ -3059,7 +3053,7 @@ export class PlayerSatellite extends THREE.Group {
 
         const capGeo = new THREE.CircleGeometry(M * 0.028, 12);
         const cap = new THREE.Mesh(capGeo, cellCapMat);
-        cap.position.set(lx, faceLocalY + M * 0.0015, lz);   // distinct offset — no coplanar tie
+        cap.position.set(0, faceLocalY + M * 0.0015, lz);    // distinct offset — no coplanar tie
         cap.rotation.x = -Math.PI / 2;
         cap.name = `NetPodCellCap_${pod}_${cell}`;
         cap.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
@@ -3069,13 +3063,12 @@ export class PlayerSatellite extends THREE.Group {
       }
       this._netPodCaps.push(caps);
 
-      // Muzzle anchor — invisible Object3D at the pod-row front centre, a child
-      // of the ship frame (NOT the rotated housing). CRITICAL: x = 0 for BOTH
-      // pods so neither shot yaws the ship; with launcherY=0 the two pods differ
-      // only by a tiny ±ROW_DZ y stagger straddling the CoM axis → ~zero pitch.
-      const muzzleY = launcherY - lz;   // ship Y = housingY − localZ
+      // Muzzle anchor — invisible Object3D at the pod's front-face centre, a
+      // child of the ship frame (NOT the rotated housing). S13(e): x = ±POD_X
+      // (OFF the boresight — the yaw lever is the site's, and the magazine
+      // averages it to zero), y = 0 (the pitch lever is gone).
       const muzzle = new THREE.Object3D();
-      muzzle.position.set(0, muzzleY, muzzleZ);
+      muzzle.position.set(sx, 0, muzzleZ);
       muzzle.name = `NetPodMuzzle_${pod}`;
       this.add(muzzle);
       this._netPodMuzzles.push(muzzle);
@@ -3115,20 +3108,23 @@ export class PlayerSatellite extends THREE.Group {
   // lamps + halos) was cosmetic greeble: nothing in the game docked with the
   // mother (capture/berthing is done by the arms), and getDockingPortPosition()
   // had no callers. Removed to declutter the fore end and reclaim tris. The
-  // Large Net launcher (§7b, _buildNetPods) occupies the lower fore centreline.
+  // Large Net launcher (§7b, _buildNetPods) took the fore centreline — held it
+  // until S13(e) re-sited the pods to ±NET_POD_X_M.
   // S13(c) brings the ring back as FUNCTIONAL hardware (§7c, _buildBerthCollar):
   // whale-class cargo mates rigidly, on-axis, at the collar (owner ruling B).
 
   /**
    * @private — Build the nose berthing collar (cargo-continuity S13(c)).
    * The fore docking port reborn as functional hardware: a ring + guide cone +
-   * stead lamps, dead on the long axis at the muzzle plane (z = 1.30 M). The
-   * bore clears the 0.12 m launcher housing — until S13(e) re-sites the pods,
-   * shots pass through the ring (the berth IS the corridor by design; the S12
-   * M2 clearance table). The collar's seat rule lives in the berth hold
-   * (CaptureNet.updateBerthHold): cargo surface AT the ring plane + the 1.0 m
-   * clearance (muzzle + fwd × (sizeMeter/2 + BERTH_CLEARANCE_M)) — the seat is
-   * geometrically identical because the ring plane IS the muzzle plane.
+   * stead lamps, dead on the long axis at the muzzle plane (z = 1.30 M).
+   * S13(e): the pods re-sited off the boresight (±NET_POD_X_M) — the collar
+   * owns the fore centreline ALONE, and no shot passes through the ring any
+   * more (the berth IS the corridor by design; the S12 M2 clearance table).
+   * The collar's seat rule lives in the berth hold (CaptureNet.updateBerthHold):
+   * cargo surface AT the ring plane + the 1.0 m clearance (collar anchor +
+   * fwd × (sizeMeter/2 + BERTH_CLEARANCE_M)). Also builds `_netBerthCollar`,
+   * the invisible berth-anchor Object3D the reel/berth pin math re-homed to
+   * in S13(e) (getNetBerthCollarPositionInto).
    */
   _buildBerthCollar() {
     const V5 = Constants.OCTOPUS_V5;
@@ -3184,12 +3180,25 @@ export class PlayerSatellite extends THREE.Group {
     lampRed.name = 'BerthCollarLamp_R';
     lampRed.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
     this.add(lampRed);
+
+    // S13(e) — the berth anchor: invisible Object3D at the collar seat plane
+    // centre (ON the axis — the pods left it). The reel/berth pin math re-homed
+    // from the pod muzzle to this anchor when the pods moved off the boresight
+    // (the berth-approach corridor is the collar's — S12 M2 reading 8), so a
+    // reeled catch mates ON the axis however far the pods sit off it.
+    this._netBerthCollar = new THREE.Object3D();
+    this._netBerthCollar.position.set(0, 0, zM * M);
+    this._netBerthCollar.name = 'NetBerthCollar';
+    this.add(this._netBerthCollar);
   }
 
   /**
    * World position of a Large Net pod muzzle — the launch point for
    * fireMotherNet (fore-end hardware, not the hull origin). Falls back to pod 0
    * for an out-of-range index, then to the ship origin if pods weren't built.
+   * S13(e): the pods sit OFF the boresight at (±NET_POD_X_M, 0, 1.30) —
+   * pod 0 is +X, pod 1 is −X (register item 60: this axis label was wrong
+   * while the pods straddled the axis at x=0; the re-site made it true).
    * @param {number} podIndex 0 (+X) or 1 (−X)
    * @returns {THREE.Vector3} world-space muzzle position
    */
@@ -3208,6 +3217,23 @@ export class PlayerSatellite extends THREE.Group {
   getNetPodPositionInto(podIndex, out) {
     const m = this._netPodMuzzles?.[podIndex] ?? this._netPodMuzzles?.[0];
     if (m) m.getWorldPosition(out); else this.getWorldPosition(out);
+    return out;
+  }
+
+  /**
+   * World position of the berth anchor — the collar seat plane centre, ON the
+   * long axis (S13(e)). The reel/berth pin math homes HERE (the catch mates
+   * on-axis however far the pods sit off it), while the launch origin stays
+   * at the pod muzzle. Fallback chain mirrors getNetPodPositionInto: collar
+   * anchor → pod-0 muzzle → ship origin, so headless mocks without the anchor
+   * keep their pod-anchored geometry self-consistent.
+   * @param {THREE.Vector3} out — receives the world-space berth-anchor position
+   * @returns {THREE.Vector3} out (for chaining)
+   */
+  getNetBerthCollarPositionInto(out) {
+    if (this._netBerthCollar) this._netBerthCollar.getWorldPosition(out);
+    else if (this._netPodMuzzles?.[0]) this._netPodMuzzles[0].getWorldPosition(out);
+    else this.getWorldPosition(out);
     return out;
   }
 
@@ -4388,17 +4414,21 @@ export class PlayerSatellite extends THREE.Group {
   /**
    * Apply REAL recoil from a Mother whale-net launch (Newton's 3rd law).
    *
-   * Unlike the crossbow (which only recoils translationally), the Mother net
-   * muzzle sits OFF the centre of mass — on x=0 (no yaw) but 0.25 m below the
-   * CoM in y (the launcher is packaged in the free −Y band below the sensor
-   * turret that owns dead-centre). So a shot produces BOTH:
+   * S13(e): the pods sit OFF the boresight at (±NET_POD_X_M, 0, 1.30), so the
+   * muzzle has a real lever arm about the CoM and a shot produces BOTH:
    *   • linear recoil  Δv = m_net·v_launch / m_mother  (along −fore)
-   *   • pitch torque    τ = r_muzzle × F_recoil        (about +X, from the y offset)
-   * Both are auto-nulled by RCS at a cold-gas N₂ cost (mirrors the crossbow's
-   * auto-compensation), so the visible result is a transient shudder+pitch that
-   * settles, and the real, permanent cost is propellant. A CENTRED muzzle would
-   * make the τ term vanish — this is exactly the "launch off-axis destabilises
-   * the Mother" doctrine, now actually simulated.
+   *   • angular recoil τ = r_muzzle × F_recoil — pitch −J·y about +X and
+   *     yaw +J·x about +Y. With y = 0 the pitch lever is gone; the x-lever is
+   *     the site's, and the two pods kick in OPPOSITE yaw, so the magazine
+   *     averages to zero (the same argument the ±0.06 m pitch stagger made
+   *     when the pods straddled the axis at x=0).
+   * The linear part is auto-nulled by RCS at a cold-gas N₂ cost (the crossbow
+   * pattern). The angular part is nulled by the attitude-hold springs in
+   * _tickRecoilAttitude — and S13(e) bills THAT null too (today only the
+   * linear part was billed): the torque impulse as an equivalent linear
+   * impulse at the cold-gas doghouse lever, through the same N₂-per-impulse
+   * proportionality (MOTHER_NET_RECOIL_RCS_LEVER_M). The visible result is a
+   * transient shudder+yaw that settles; the real, permanent cost is propellant.
    *
    * @param {{ podIndex?: number }} data — NET_FIRED payload (source: 'mother')
    * @private
@@ -4426,27 +4456,43 @@ export class PlayerSatellite extends THREE.Group {
     this._frameRecoilCount = 0;
     this._frameN2Consumed = 0;
 
-    // ── Angular recoil: torque impulse from the muzzle lever arm about the CoM.
-    // Force impulse magnitude J = m_net·v (N·s) acts along −fore at the muzzle;
-    // the y-offset of the FIRING pod's muzzle turns it into a pitch impulse
-    // J·|y| (N·m·s). With the launcher centred (launcherY=0) the muzzles only
-    // straddle the axis by ±ROW_DZ, so this is now a TINY residual that averages
-    // to zero across the magazine (upper vs lower pod pitch opposite ways).
+    // ── Angular recoil: torque impulse from the muzzle lever arm about the
+    // CoM. Force impulse J = m_net·v (N·s) acts along −fore at the muzzle;
+    // τ = r × F gives pitch −J·y about +X and yaw +J·x about +Y. The inertia
+    // SSOT is the honest one-frame _attitudeMOI (S13(a)).
     const podMuzzle = this._netPodMuzzles && this._netPodMuzzles[podIndex];
-    const muzzleLocalY = podMuzzle ? podMuzzle.position.y : (this._netLauncherY ?? 0);
-    const leverY_m = Math.abs(muzzleLocalY) / M;             // metres off the CoM axis
+    const muzzleLocalX = podMuzzle ? podMuzzle.position.x : 0;
+    const muzzleLocalY = podMuzzle ? podMuzzle.position.y : 0;
     const impulse = netMass * vLaunch;                       // N·s
-    const torqueImpulse = impulse * leverY_m;                // N·m·s (pitch about +X)
-    const I_mother = this._attitudeMOI('x');                 // kg·m² (real pitch MOI, SSOT)
-    // Pitch sign follows the firing muzzle's side of the axis, so the upper and
-    // lower pods kick opposite ways (net-zero bias across the magazine). RCS
-    // nulls it regardless. A truly centred muzzle (y=0) → zero pitch.
-    const pitchSign = muzzleLocalY >= 0 ? -1 : 1;
-    this._recoilPitchVel += pitchSign * (torqueImpulse / I_mother);   // rad/s
+    const pitchImpulse = -impulse * (muzzleLocalY / M);      // N·m·s about +X
+    const yawImpulse = impulse * (muzzleLocalX / M);         // N·m·s about +Y
+    if (pitchImpulse !== 0) {
+      this._recoilPitchVel += pitchImpulse / this._attitudeMOI('x');   // rad/s
+    }
+    if (yawImpulse !== 0) {
+      this._recoilYawVel += yawImpulse / this._attitudeMOI('y');       // rad/s
+    }
+
+    // ── N₂ honesty (S13(e)): bill the angular null too. The attitude-hold
+    // spring always runs (unlike the player-toggleable linear compensation),
+    // so its cost always accrues: torque impulse → equivalent linear impulse
+    // at the cold-gas doghouse lever → the linear pattern's N₂-per-impulse.
+    const angularImpulse = Math.abs(pitchImpulse) + Math.abs(yawImpulse);
+    if (angularImpulse > 0) {
+      const leverM = Constants.MOTHER_NET_RECOIL_RCS_LEVER_M ?? 0.44;
+      const equivDv = (angularImpulse / leverM) / motherMass;   // m/s
+      const n2Grams = (Constants.DUALFIRE_RCS_COMPENSATION_N2 ?? 3.7)
+        * (equivDv / (Constants.DUALFIRE_RECOIL_WEAVER ?? 0.509));
+      if (n2Grams > 0) {
+        eventBus.emit(Events.RESOURCE_CONSUME, {
+          resource: 'coldGas',
+          amount: n2Grams / 1000,
+        });
+      }
+    }
 
     // Cosmetic + comms: a whale launch is a heavy event; a subtle mesh kick is
     // handled by LassoSystem's _recoilOffset. Nothing else to do here.
-    void podIndex;
   }
 
   /**

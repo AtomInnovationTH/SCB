@@ -455,8 +455,10 @@ export class LassoSystem {
 
     /**
      * Cargo-continuity S13(d): world position of the collar seat the one holding
-     * model berths a catch at — pod-0 muzzle + berth-axis × (size/2 + clearance),
+     * model berths a catch at — berth anchor + berth-axis × (size/2 + clearance),
      * the exact standoff CaptureNet.updateBerthHold holds (the S13(c) collar seat).
+     * S13(e): the anchor is the COLLAR (on-axis), not the pod-0 muzzle — the
+     * pods left the boresight; the berth did not.
      * The lasso reels its package HERE and the adoption pins it HERE, so the
      * hand-off never snaps. Falls back to the hull centre + prograde when no
      * player is wired (headless).
@@ -471,7 +473,9 @@ export class LassoSystem {
         const standoffM = ((target && target.sizeMeter ? target.sizeMeter : 2) / 2)
             + (Constants.CAPTURE_NET.BERTH_CLEARANCE_M ?? 1.0);
         const player = this._player;
-        if (player && typeof player.getNetPodPositionInto === 'function') {
+        if (player && typeof player.getNetBerthCollarPositionInto === 'function') {
+            player.getNetBerthCollarPositionInto(out);
+        } else if (player && typeof player.getNetPodPositionInto === 'function') {
             player.getNetPodPositionInto(0, out);
         } else {
             out.copy(playerPos);

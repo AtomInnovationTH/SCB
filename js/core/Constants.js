@@ -1246,14 +1246,22 @@ export const Constants = {
     // ── Nose berthing collar (S13(c) — B is doctrine) ──
     // The fore docking port reborn as functional hardware: whale-class cargo
     // mates rigidly, on-axis, at the nose. The ring sits AT the muzzle plane
-    // (z = 1.30) — until S13(e) moves the pods, the launcher fires THROUGH the
-    // collar bore (the berth IS the corridor by design, S12 M2 reading 8), so
-    // the inner radius clears the 0.12 m launcher housing. Seat rule: cargo
-    // surface at the ring plane — cargo centre at BERTH_COLLAR_Z_M + sizeMeter/2
-    // + CAPTURE_NET.BERTH_CLEARANCE_M 1.0 (mirrors ARM_HOLD_CLEARANCE_M).
+    // (z = 1.30). Seat rule: cargo surface at the ring plane — cargo centre
+    // at BERTH_COLLAR_Z_M + sizeMeter/2 + CAPTURE_NET.BERTH_CLEARANCE_M 1.0
+    // (mirrors ARM_HOLD_CLEARANCE_M).
+    // S13(e): the pods left the boresight (the collar owns the axis alone) —
+    // they re-site at ±NET_POD_X_M on the fore deck (probe tmp/s13e-podsite.log:
+    // smallest site with real collar-ring margin, +0.030 m; sensor ring +0.103,
+    // ROSA +0.060 with the housing shortened to z ∈ [1.06, 1.30], strut sweep
+    // +0.397, RCS doghouses +0.463), so the launch-recoil yaw lever returns
+    // (±J·0.45, alternating sign across the magazine — averages to zero, the
+    // same argument the ±0.06 pitch stagger made) and is billed (see
+    // MOTHER_NET_RECOIL_RCS_LEVER_M). The bore no longer needs to clear the
+    // launcher housing; the 0.16 m inner radius is earned and unchanged.
     BERTH_COLLAR_Z_M: 1.30,        // m — collar seat plane, ship-local z (== muzzle plane)
-    BERTH_COLLAR_INNER_R_M: 0.16,  // m — bore radius (clears the 0.12 m launcher housing)
+    BERTH_COLLAR_INNER_R_M: 0.16,  // m — bore radius
     BERTH_COLLAR_OUTER_R_M: 0.30,  // m — ring outer radius (guide-cone root)
+    NET_POD_X_M: 0.45,             // m — S13(e): pod muzzle |x| off the boresight (probe-sited)
 
     // ── Strut (NEW — replaces short-strut spec) ──
     STRUT_LENGTH: 1.60,            // m (hinge to daughter dock)
@@ -1677,6 +1685,13 @@ export const Constants = {
   DUALFIRE_RECOIL_WEAVER: 0.509,         // m/s — single Weaver recoil on 130kg mothership
   DUALFIRE_RECOIL_SPINNER: 0.171,        // m/s — single Spinner recoil
   DUALFIRE_RCS_COMPENSATION_N2: 3.7,     // grams N₂ — RCS cost per single Weaver shot
+  // Cargo-continuity S13(e): with the pods off the boresight the mother-net
+  // launch recoil has a real ANGULAR channel (yaw impulse J·NET_POD_X_M), and
+  // the RCS null's cold-gas cost is billed too — today only the linear part
+  // was. Billed as the equivalent linear impulse at the cold-gas doghouse
+  // lever (the az-90/270 pods sit 0.44 m off-axis) through the SAME
+  // N₂-per-impulse proportionality as the linear pattern above.
+  MOTHER_NET_RECOIL_RCS_LEVER_M: 0.44,   // m — cold-gas doghouse lever (az 90/270)
 
   // --- Pulse Scan ---
   PULSE_SCAN_DURATION: 2.0,              // seconds — all arms fire simultaneously
@@ -2538,16 +2553,20 @@ export const Constants = {
       // clock consumes it (the S8 transit clock at the collar), the S7 transfer
       // hands it to a daughter rack, or it is jettisoned [K]. Nothing is
       // removed on camera; the berth hold pins it every frame;
-      // getDockedCatch()/getBerthedMassKg() count COLLARED; the launcher stays
-      // blocked — the pods still share the boresight until S13(e). The net IS
-      // the container — the bag is never faded. (Named PARKED pre-S13(c), when
-      // the same hold swung on the tether pendulum — a rigid mate does not.)
+      // getDockedCatch()/getBerthedMassKg() count COLLARED. S13(e): the
+      // occupancy refusal is gone — the pods are off the boresight and a shot
+      // refuses only when its own corridor fouls the mated cargo (per-shot,
+      // geometric). The net IS the container — the bag is never faded. (Named
+      // PARKED pre-S13(c), when the same hold swung on the tether pendulum —
+      // a rigid mate does not.)
       COLLARED:      'COLLARED',      // credited catch mated at the nose berthing collar
       // Cargo-continuity S7: the catch is in flight from the collar seat to a
       // daughter's cargo rack, still inside its net (the bag is the container in
-      // transit). The launcher stays blocked and the mass keeps counting as
-      // berthed for the whole beat — both drop at arrival, when the rack picks
-      // the piece up, so the cargo ledger is continuous across the hand-off.
+      // transit). The mass keeps counting as berthed for the whole beat — it
+      // drops at arrival, when the rack picks the piece up, so the cargo ledger
+      // is continuous across the hand-off. S13(e): getDockedCatch() survives as
+      // an accessor (HUD/status + the per-shot foul read); it no longer gates
+      // the launcher.
       TRANSFERRING:  'TRANSFERRING',  // collared catch flying nose → strut tip
     },
 

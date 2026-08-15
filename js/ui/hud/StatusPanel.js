@@ -867,15 +867,17 @@ export class StatusPanel {
       count.style.color = '#ffaa00';
     }
 
-    // §8 A2 launcher-state indicator: a berthed catch blocks the launcher
-    // independently of ammo and cooldown. Explicit BERTHED tag — never faked
-    // by zeroing the count (which would conflate "no ammo" with "blocked").
+    // §8 A2 launcher-state indicator: a mated catch holds the collar station
+    // (S13(e): it no longer BLOCKS the launcher — the pods are off the
+    // boresight; a shot refuses only per-shot when it fouls the cargo).
+    // Explicit BERTHED tag — never faked by zeroing the count (which would
+    // conflate "no ammo" with "docked").
     const docked = (typeof captureNetSystem?.getDockedCatch === 'function')
       ? captureNetSystem.getDockedCatch() : null;
     if (docked) {
       count.textContent = `${nets}/${maxNets} BERTHED`;
       count.style.color = '#66ddff';
-      seg.title = 'Catch berthed at the launcher — [K] jettison';
+      seg.title = 'Catch mated at the collar — [K] jettison';
     } else {
       seg.title = 'Mother Large Net pods (whale hunts)';
     }

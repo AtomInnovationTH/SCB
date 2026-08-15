@@ -2322,10 +2322,19 @@ export class InputManager {
         refuse('Net already away.');
         return true;
       }
-      // Launcher blocked — a berthed catch obstructs every cell (§8 A2).
-      if (typeof cns.getDockedCatch === 'function' && cns.getDockedCatch()) {
-        refuse('Launcher blocked — jettison catch [K] to clear.');
-        return true;
+      // Shot fouls the mated cargo (S13(e): per-shot and geometric — the pods
+      // are off the boresight, so collar occupancy is NEVER a refusal by
+      // itself; only a shot whose corridor intersects the cargo refuses).
+      // The pre-slew read uses the direct muzzle→target bearing; fireMotherNet
+      // re-checks with the true fire-time direction (ship +Z).
+      if (tp && typeof cns.getCollarShotFoul === 'function') {
+        const pM = { x: muzzle.x / M, y: muzzle.y / M, z: muzzle.z / M };
+        const dM = { x: (tp.x - muzzle.x) / M, y: (tp.y - muzzle.y) / M, z: (tp.z - muzzle.z) / M };
+        const dl = Math.sqrt(dM.x * dM.x + dM.y * dM.y + dM.z * dM.z) || 1;
+        if (cns.getCollarShotFoul(podIndex, pM, { x: dM.x / dl, y: dM.y / dl, z: dM.z / dl })) {
+          refuse('This shot fouls the cargo at the collar — pull off the nose, or jettison [K].');
+          return true;
+        }
       }
       return false;
     };

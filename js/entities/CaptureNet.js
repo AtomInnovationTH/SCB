@@ -1282,12 +1282,20 @@ export class NetProjectile {
 
     // Seed ship-relative reel state.
     const M_NET = 0.00001;
-    const podWorld = (typeof player.getNetPodPositionInto === 'function')
-      ? player.getNetPodPositionInto(this.podIndex, new THREE.Vector3())
-      : new THREE.Vector3();
+    // S13(e): the reel/berth homes on the COLLAR anchor (the berth-approach
+    // corridor is the collar's — the pods left the boresight), while the seat
+    // below keeps the pod muzzle (_anchorScene): the brake apex is on the
+    // launch line. The pod→collar offset rides in the lateral seed and decays
+    // across the reel (the catch swings onto the collar axis as it reels in —
+    // the existing _settleFwdLagged mechanism), so the hand-off never snaps.
+    const anchorWorld = (typeof player.getNetBerthCollarPositionInto === 'function')
+      ? player.getNetBerthCollarPositionInto(new THREE.Vector3())
+      : (typeof player.getNetPodPositionInto === 'function')
+        ? player.getNetPodPositionInto(this.podIndex, new THREE.Vector3())
+        : new THREE.Vector3();
     const sp = d._scenePosition;
     if (sp) {
-      const dx = sp.x - podWorld.x, dy = sp.y - podWorld.y, dz = sp.z - podWorld.z;
+      const dx = sp.x - anchorWorld.x, dy = sp.y - anchorWorld.y, dz = sp.z - anchorWorld.z;
       // Whale-in-cone follow-up 2 (reel/berth co-location): the catch rides
       // INSIDE the bag at the depth the capture left it — not AT the apex.
       // The seat is its depth past the brake apex along the frozen bag axis
@@ -1490,11 +1498,14 @@ export class NetProjectile {
     // a mid-reel slew lags and settles instead of whipping the catch.
     this._settleFwdLagged(player, dt);
 
-    // Pin anchor: pod + lagged-fwd · remainingM + lateral (scene units) — the
-    // bag's APEX, i.e. the tether end the winch actually reels.
-    const podWorld = (typeof player.getNetPodPositionInto === 'function')
-      ? player.getNetPodPositionInto(this.podIndex, _v3c) : _v3c.set(0, 0, 0);
-    _v3d.copy(podWorld)
+    // Pin anchor: berth anchor (the collar — S13(e)) + lagged-fwd · remainingM
+    // + lateral (scene units) — the bag's APEX, i.e. the tether end the winch
+    // actually reels.
+    const anchorWorld = (typeof player.getNetBerthCollarPositionInto === 'function')
+      ? player.getNetBerthCollarPositionInto(_v3c)
+      : (typeof player.getNetPodPositionInto === 'function')
+        ? player.getNetPodPositionInto(this.podIndex, _v3c) : _v3c.set(0, 0, 0);
+    _v3d.copy(anchorWorld)
       .addScaledVector(this._fwdLagged, this._remainingM * M_NET)
       .add(this._lateral);
 
@@ -1549,18 +1560,25 @@ export class NetProjectile {
   /**
    * @private Recovery-corridor test (mother-net-reel plan §10 Phase C-lite).
    * Analytic — no mesh collision exists anywhere in this codebase. The
-   * corridor is a cylinder along ship-local +Z from the muzzle, radius =
-   * debris.sizeMeter/2 + BERTH_CLEARANCE_M. It must contain no strut tip
-   * (strutLocalDirection(α, az) × STRUT_LENGTH from the collar pivot — at α≈π a
-   * 1.60 m strut tip reaches ~2.5 m fore, past the muzzle plane at z ≈ 1.30 m; a
-   * forward-swept strut blocks whether or not it holds a catch).
-   * Cargo-continuity S13(d): the lasso cargo-cell read is GONE — the cells died
-   * with the MOTHER_CARGO_STOW model, and a lassoed piece now rides this same
-   * mother berth path (adoptLassoCatch), so it is never an obstacle to itself.
-   * The corridor reads strut tips only.
-   * Everything is evaluated in the SHIP-LOCAL frame with the origin at the pod
-   * muzzle (the corridor is defined there), so the test is attitude- and
-   * position-free and needs no world-space round-trip.
+   * corridor is a cylinder along ship-local +Z from the berth anchor (S13(e):
+   * the COLLAR — the berth-approach corridor is the collar's, S12 M2 reading
+   * 8; the pods left the boresight and their launch corridors are a separate
+   * matter, owned by the fire-time foul read getCollarShotFoul), radius =
+   * debris.sizeMeter/2 + BERTH_CLEARANCE_M. It must contain:
+   *   1. NO strut tip (strutLocalDirection(α, az) × STRUT_LENGTH from the
+   *      collar pivot — at α≈π a 1.60 m strut tip reaches ~2.5 m fore, past
+   *      the muzzle plane at z ≈ 1.30 m; a forward-swept strut blocks whether
+   *      or not it holds a catch);
+   *   2. NO mated cargo (S13(e): every OTHER mother net's docked catch —
+   *      BERTHED/COLLARED/TRANSFERRING — is an obstacle to THIS approach, so
+   *      a second catch holds at the gate instead of seating inside the
+   *      occupant; a berthing net's own catch exempts itself, as today).
+   * The lasso cargo-cell read is GONE (S13(d)) — a lassoed piece rides this
+   * same mother berth path (adoptLassoCatch), so it is never an obstacle to
+   * itself.
+   * Everything is evaluated in the SHIP-LOCAL frame with the origin at the
+   * berth anchor, so the test is attitude- and position-free and needs no
+   * world-space round-trip.
    * @param {object} d — the caught debris (for the corridor radius)
    * @returns {boolean} true when the corridor is clear
    */
@@ -1574,15 +1592,16 @@ export class NetProjectile {
     const radiusSq = radiusM * radiusM;
     const M_NET = 0.00001;
 
-    // Everything is evaluated SHIP-LOCAL with the origin at the pod muzzle —
-    // the corridor is defined in that frame, so the test is attitude- and
-    // position-free. Muzzle ship-local (from _buildNetPods): x=0, y=±0.06,
-    // z=1.30 — recovered exactly from the muzzle anchor's local position when
-    // the real ship is present, falling back to the documented constants.
-    const muzzle = player._netPodMuzzles?.[this.podIndex] ?? player._netPodMuzzles?.[0];
-    const mx = muzzle ? muzzle.position.x / M_NET : 0;
-    const my = muzzle ? muzzle.position.y / M_NET : 0;
-    const mz = muzzle ? muzzle.position.z / M_NET : 1.30;
+    // Everything is evaluated SHIP-LOCAL with the origin at the berth anchor
+    // (S13(e): the collar, ON the axis at (0, 0, BERTH_COLLAR_Z_M) — read from
+    // the anchor Object3D when the real ship is present, falling back to the
+    // pod muzzle locals (headless mocks without the collar anchor) and then to
+    // the documented constant), so the test is attitude- and position-free.
+    const berthAnchor = player._netBerthCollar
+      ?? player._netPodMuzzles?.[this.podIndex] ?? player._netPodMuzzles?.[0];
+    const mx = berthAnchor ? berthAnchor.position.x / M_NET : 0;
+    const my = berthAnchor ? berthAnchor.position.y / M_NET : 0;
+    const mz = berthAnchor ? berthAnchor.position.z / M_NET : (V5.BERTH_COLLAR_Z_M ?? 1.30);
 
     // Cylinder axis = ship-local +Z. A point is INSIDE when its axial
     // coordinate z > 0 (fore of the muzzle plane) — intruders aft of the
@@ -1630,10 +1649,37 @@ export class NetProjectile {
       }
     }
 
-    // Cargo-continuity S13(d): the corridor's second obstacle class — the lasso
-    // cargo cells — is deleted with the MOTHER_CARGO_STOW model. A lassoed piece
-    // rides this mother berth path (adoptLassoCatch) and is never an obstacle to
-    // its own approach; the gate reads strut tips only.
+    // ── 2. Mated cargo (S13(e)) ──
+    // Every OTHER mother net's docked catch (BERTHED/COLLARED/TRANSFERRING) is
+    // an obstacle to THIS approach: with the occupancy refusal retired, a
+    // second catch can come home while the collar is occupied, and without
+    // this read it would seat INSIDE the occupant (two drawn bodies
+    // interpenetrating — a continuity-law violation). The gate holds the
+    // approach at CORRIDOR_HOLD_M (10 m — 9 m clear of the occupant's near
+    // face, which sits exactly BERTH_CLEARANCE_M fore of the collar plane at
+    // every class by the seat rule) and the existing timeout berths it at the
+    // extended standoff — a tandem hold on the axis, honestly announced.
+    // Exemption (as today): a berthing net's OWN catch is never its own
+    // obstacle — it is the thing coming in.
+    const cns = this._ctx?.captureNetSystem;
+    if (cns && Array.isArray(cns.activeNets) && player.quaternion) {
+      const collarWorld = (typeof player.getNetBerthCollarPositionInto === 'function')
+        ? player.getNetBerthCollarPositionInto(_v3c)
+        : player.getNetPodPositionInto(this.podIndex, _v3c);
+      _q0.copy(player.quaternion).invert();
+      for (const other of cns.activeNets) {
+        if (other === this || !other._isMother) continue;
+        if (other.state !== STATES.BERTHED && other.state !== STATES.COLLARED
+            && other.state !== STATES.TRANSFERRING) continue;
+        const od = other.targetDebris;
+        const sp = od && od.alive !== false ? od._scenePosition : null;
+        if (!sp) continue;
+        // Cargo centre in the corridor frame: q⁻¹·(pin − collarWorld), in
+        // metres, origin at the berth anchor.
+        _v3d.copy(sp).sub(collarWorld).applyQuaternion(_q0);
+        if (testLocal(_v3d.x / M_NET, _v3d.y / M_NET, _v3d.z / M_NET)) return false;
+      }
+    }
 
     return true;
   }
@@ -1659,11 +1705,13 @@ export class NetProjectile {
     // Respect the corridor-timeout extended standoff (Phase C-lite): a berth
     // forced out to CORRIDOR_EXTENDED_STANDOFF_M must HOLD there — recomputing
     // the base standoff here would slide the catch inward at the berth.
-    // S13(c): this IS the collar seat. The collar ring sits at the muzzle plane
-    // (BERTH_COLLAR_Z_M 1.30 == the pod face), so cargo centre at muzzle +
-    // fwd × (sizeMeter/2 + BERTH_CLEARANCE_M 1.0) is exactly "cargo surface at
-    // the ring, centre at ring-z + size/2 + clearance" — the seat the rigid
-    // complete-berth mate holds (no pendulum from COLLARED on, see below).
+    // S13(c): this IS the collar seat. S13(e): the seat is referenced to the
+    // COLLAR anchor (the ring plane IS the muzzle plane at z = 1.30, and the
+    // collar is ON the axis) — cargo centre at collar + fwd × (sizeMeter/2 +
+    // BERTH_CLEARANCE_M 1.0) is exactly "cargo surface at the ring, centre at
+    // ring-z + size/2 + clearance" — the seat the rigid complete-berth mate
+    // holds (no pendulum from COLLARED on, see below). The pods left the
+    // boresight; the berth did not.
     const baseStandoffM = (d.sizeMeter || 2) / 2 + (CN.BERTH_CLEARANCE_M ?? 1.0);
     const berthStandoffM = Math.max(baseStandoffM, this._effectiveStandoffM ?? baseStandoffM);
     this._remainingM = berthStandoffM;
@@ -1721,9 +1769,11 @@ export class NetProjectile {
       }
     }
 
-    const podWorld = (typeof player.getNetPodPositionInto === 'function')
-      ? player.getNetPodPositionInto(this.podIndex, _v3c) : _v3c.set(0, 0, 0);
-    _v3d.copy(podWorld)
+    const anchorWorld = (typeof player.getNetBerthCollarPositionInto === 'function')
+      ? player.getNetBerthCollarPositionInto(_v3c)
+      : (typeof player.getNetPodPositionInto === 'function')
+        ? player.getNetPodPositionInto(this.podIndex, _v3c) : _v3c.set(0, 0, 0);
+    _v3d.copy(anchorWorld)
       .addScaledVector(this._fwdLagged, berthStandoffM * M_NET)
       .add(this._lateral);
 
@@ -2418,8 +2468,7 @@ export class CaptureNetSystem {
             // autosave. { parked: true } skips ONLY the field removal — the
             // body is KEPT, now MATED at the nose berthing collar inside its
             // net (the net IS the container). No teardown, no splice: the hold
-            // above keeps pinning the catch every frame, and the launcher stays
-            // blocked (the pods still share the boresight until S13(e)).
+            // above keeps pinning the catch every frame.
             net._berthProcessed = true;
             eventBus.emit(Events.CATCH_PROCESSED, {
               debrisId: net.targetDebris?.id,
@@ -2457,8 +2506,9 @@ export class CaptureNetSystem {
         // lacks, so there is no keypress. After the collar ceremony's tail the
         // ship stows the catch on the best daughter itself; while it cannot
         // (every daughter out, every rack full, or the body over the mass
-        // gate) the catch stays collared and S3's "Launcher blocked" line stands
-        // as real information. Retry is silent — the refusal speaks once.
+        // gate) the catch stays collared and the refusal comms says so (once —
+        // S13(e): it no longer claims the launcher is blocked; firing is only
+        // ever refused per-shot by the foul read). Retry is silent.
         // S13(c) routing (the ruling made concrete): the ≤ 2000 kg gate decides
         // collar-vs-tip — a piece under the gate may leave for a strut tip;
         // above it, collar-only until digested or dumped.
@@ -2590,8 +2640,8 @@ export class CaptureNetSystem {
         eventBus.emit(Events.COMMS_MESSAGE, {
           source: 'HOUSTON', channel: 'CMD',
           text: overGate
-            ? `Catch is ${Math.round(massKg)} kg — too heavy for a daughter's cargo rack. It rides the nose until the furnace takes it, or jettison [K].`
-            : 'No daughter can take the catch (none docked with a free cargo cell). Launcher stays blocked — jettison [K] to clear.',
+            ? `Catch is ${Math.round(massKg)} kg — too heavy for a daughter's cargo rack. It rides the collar until the furnace takes it, or jettison [K].`
+            : 'No daughter can take the catch (none docked with a free cargo cell). It rides the collar until the furnace takes it, or jettison [K].',
           priority: 'warning',
         });
       }
@@ -3061,19 +3111,71 @@ export class CaptureNetSystem {
   }
 
   /**
-   * §8 A2 — single docked catch slot. The launcher is one nose patch; a
-   * berthed or collared whale obstructs every cell, so a second fire is refused
-   * while anything is held (S3: the block persists through the terminal state).
+   * §8 A2 — the docked catch accessor. S13(e): the occupancy FIRE gate is
+   * retired (the pods left the boresight; a shot refuses only when its own
+   * corridor fouls the mated cargo — getCollarShotFoul). This survives as the
+   * read for HUD/status (StatusPanel), the lasso's single-station soft-block
+   * (the collar holds ONE body), the adoption guard, releaseDockedCatch, and
+   * the foul read.
    *
-   * Cargo-continuity S7: TRANSFERRING keeps the block. The catch is crossing the
-   * firing corridor for the length of the beat — the launcher frees when the
-   * piece lands on the rack, not when it leaves the nose.
+   * Cargo-continuity S7: TRANSFERRING counts. The catch is crossing from the
+   * collar for the length of the beat — the station frees when the piece lands
+   * on the rack, not when it leaves the nose.
    * @returns {NetProjectile|null}
    */
   getDockedCatch() {
     return this.activeNets.find(n => n._isMother
       && (n.state === STATES.BERTHED || n.state === STATES.COLLARED
           || n.state === STATES.TRANSFERRING)) || null;
+  }
+
+  /**
+   * Cargo-continuity S13(e) — the per-shot foul read that REPLACED the
+   * occupancy block. The pods are off the boresight and the collar owns the
+   * axis, so firing is never refused because cargo exists; but a collared body
+   * sits on-axis fore of the nose, and a shot at a dead-ahead target sweeps a
+   * cone no in-board pod site clears (probe tmp/s13e-podsite.log: the cone
+   * reaches cargo radius only fore of the cargo — with whale cargo mated,
+   * EVERY forward shot fouls, foul cone ≥ 90° at every class). So a specific
+   * shot whose corridor intersects the mated cargo refuses per-shot.
+   *
+   * Geometry: closest approach of the shot ray (launchPos + t·launchDir, t>0)
+   * to the docked catch's live pin (the drawn truth — _scenePosition is what
+   * pinCapturedDebris wrote this frame, so BERTHED swing, the TRANSFERRING
+   * arc and the collar seat are all read exactly as drawn). Foul when the
+   * approach is closer than the cargo radius + BERTH_CLEARANCE_M (the berth's
+   * own keep-out — ONE clearance constant).
+   *
+   * @param {number} podIndex — the firing pod (unused today; the cargo read is
+   *   pod-independent, but the signature keeps the call sites honest)
+   * @param {{x:number,y:number,z:number}} launchPos — shot origin, METRES
+   *   (the NetProjectile/fireMotherNet convention)
+   * @param {{x:number,y:number,z:number}} launchDir — unit shot direction
+   * @returns {NetProjectile|null} the fouled docked net, or null when clear
+   */
+  getCollarShotFoul(podIndex, launchPos, launchDir) {
+    if (!launchPos || !launchDir) return null;
+    const M_NET = 0.00001;
+    const dl = Math.hypot(launchDir.x, launchDir.y, launchDir.z) || 1;
+    const nx = launchDir.x / dl, ny = launchDir.y / dl, nz = launchDir.z / dl;
+    for (const net of this.activeNets) {
+      if (!net._isMother) continue;
+      if (net.state !== STATES.BERTHED && net.state !== STATES.COLLARED
+          && net.state !== STATES.TRANSFERRING) continue;
+      const d = net.targetDebris;
+      const sp = d && d.alive !== false ? d._scenePosition : null;
+      if (!sp) continue;
+      const cx = sp.x / M_NET, cy = sp.y / M_NET, cz = sp.z / M_NET;
+      const wx = cx - launchPos.x, wy = cy - launchPos.y, wz = cz - launchPos.z;
+      const t = wx * nx + wy * ny + wz * nz;         // metres along the shot
+      if (t <= 0) continue;   // closest point aft of the muzzle — not this shot
+      const ca = Math.hypot(cx - (launchPos.x + nx * t),
+                            cy - (launchPos.y + ny * t),
+                            cz - (launchPos.z + nz * t));
+      const foulM = (d.sizeMeter || 2) / 2 + (CN.BERTH_CLEARANCE_M ?? 1.0);
+      if (ca < foulM) return net;
+    }
+    return null;
   }
 
   /**
@@ -3136,15 +3238,19 @@ export class CaptureNetSystem {
     const M_NET = 0.00001;
     const sizeM = target.sizeMeter || 2;
     const standoffM = sizeM / 2 + (CN.BERTH_CLEARANCE_M ?? 1.0);
-    const muzzle = (typeof player.getNetPodPositionInto === 'function')
-      ? player.getNetPodPositionInto(0, new THREE.Vector3()) : new THREE.Vector3();
+    // S13(e): the adoption seats on the COLLAR anchor (on-axis), not the pod —
+    // the pods left the boresight; the berth did not.
+    const berthAnchor = (typeof player.getNetBerthCollarPositionInto === 'function')
+      ? player.getNetBerthCollarPositionInto(new THREE.Vector3())
+      : (typeof player.getNetPodPositionInto === 'function')
+        ? player.getNetPodPositionInto(0, new THREE.Vector3()) : new THREE.Vector3();
     const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(player.quaternion).normalize();
 
     const net = new NetProjectile({
       netClass: CN.LARGE,
       armIndex: -1,
       podIndex: 0,
-      launchPosition: { x: muzzle.x / M_NET, y: muzzle.y / M_NET, z: muzzle.z / M_NET },
+      launchPosition: { x: berthAnchor.x / M_NET, y: berthAnchor.y / M_NET, z: berthAnchor.z / M_NET },
       launchDirection: { x: fwd.x, y: fwd.y, z: fwd.z },
       targetDebris: target,
       captureMode: MODES.CINCH,
@@ -3160,6 +3266,7 @@ export class CaptureNetSystem {
       debrisField,
       armManager: this._armManager,
       lassoSystem: this._lassoSystem,
+      captureNetSystem: this,
     };
     net.catchResult = 'success';
     net.capturedMass = target.mass || 0;
@@ -3167,9 +3274,9 @@ export class CaptureNetSystem {
     net._remainingM = standoffM;
     net._reelSeedM = standoffM;
     net._effectiveStandoffM = standoffM;
-    // Seat depth 0: the catch pin = the bag apex = pod + fwd × standoff — exactly
-    // the collar seat the lasso reel delivered it to (no hand-off snap) and the
-    // S13(c) collar-seat claim (cargo centre at muzzle + fwd × (size/2 + clearance)).
+    // Seat depth 0: the catch pin = the bag apex = berth anchor + fwd × standoff —
+    // exactly the collar seat the lasso reel delivered it to (no hand-off snap) and
+    // the S13(c) collar-seat claim (cargo centre at collar + fwd × (size/2 + clearance)).
     net._catchSeatM = 0;
     net._lateral = new THREE.Vector3();
     net._fwdLagged = fwd.clone();
@@ -3201,7 +3308,8 @@ export class CaptureNetSystem {
   }
 
   /**
-   * Cargo-continuity S13(d) — fore extent (metres from the pod-0 muzzle) of the
+   * Cargo-continuity S13(d) — fore extent (metres from the collar plane —
+   * the berth anchor; the pods left the boresight in S13(e)) of the
    * busiest active mother-net berth, 0 when the collar station is clear. A lassoed
    * piece waiting for the collar holds this far ahead of the seat so it never
    * overlaps the occupant (docked or inbound). Conservative: an inbound net
@@ -3305,12 +3413,14 @@ export class CaptureNetSystem {
       });
       return null;
     }
-    // §8 A2 launcher-blocked gate: one nose patch, one docked catch. A berthed
-    // whale obstructs every cell, so a second fire is refused until the catch
-    // is processed (securing timer) or jettisoned [K].
-    if (this.getDockedCatch()) {
+    // S13(e): the §8 A2 occupancy refusal is RETIRED — the pods left the
+    // boresight, so cargo occupancy is no longer a fire refusal. What remains
+    // is per-shot and geometric: a shot whose corridor intersects the mated
+    // cargo refuses with aim information (not a blocked launcher).
+    const foulNet = this.getCollarShotFoul(podIndex, launchPos, launchDir);
+    if (foulNet) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: 'Launcher blocked — jettison catch [K] to clear.',
+        text: 'This shot fouls the cargo at the collar — pull off the nose, or jettison [K].',
         source: 'SYSTEM',
         channel: 'CMD',
         priority: 'warning',
@@ -3361,11 +3471,14 @@ export class CaptureNetSystem {
     // Phase-A berth context (player for the ship-relative reel frame,
     // debrisField for the pinCapturedDebris API — plan §1.1). Phase C-lite
     // adds armManager + lassoSystem for the recovery-corridor test (§10).
+    // S13(e): the system back-reference lets the corridor gate read the OTHER
+    // docked nets' cargo (the mated-cargo obstacle class).
     net._ctx = {
       player: this._player,
       debrisField: this._debrisField,
       armManager: this._armManager,
       lassoSystem: this._lassoSystem,
+      captureNetSystem: this,
     };
 
     this.activeNets.push(net);
@@ -3560,9 +3673,8 @@ export class CaptureNetSystem {
    * breaks the VISUAL (the visual map is keyed `pod_${podIndex}` and
    * early-returns when the key exists — mother-net-reel plan §4.5) as well
    * as the physics, so the InputManager refusal gates on this. BERTHED is
-   * excluded — a berthed catch has its own dedicated refusal ("Launcher
-   * blocked — jettison [K]") via getDockedCatch(), and including it here
-   * made that message unreachable (review finding).
+   * excluded — a berthed catch has its own per-shot read (S13(e):
+   * getCollarShotFoul — firing is never occupancy-refused).
    * @returns {boolean}
    */
   hasMotherNetInFlight() {
