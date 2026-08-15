@@ -4225,14 +4225,6 @@ function updateCamera(dt) {
   );
   cameraSystem.setThrustMagnitude(Math.min(1.0, thrustMag * 1000));
 
-  // T4 experiment: feed the raw attitude command for the transient camera kick.
-  // typeof-guarded so a mock player lacking the getter can't throw (main.js:2394
-  // pattern).
-  if (typeof player.getAttitudeCommand === 'function') {
-    const ac = player.getAttitudeCommand();
-    cameraSystem.setAttitudeCommand(ac.pitch, ac.yaw);
-  }
-
   // Update the camera system
   cameraSystem.update(dt, playerPos, playerVel, playerQuat);
 

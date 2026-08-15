@@ -5043,16 +5043,6 @@ export class PlayerSatellite extends THREE.Group {
   }
 
   /**
-   * Raw attitude command (−1..1 per axis, 0 when idle) — instant input feed for
-   * the T4 camera kick. Never derived from the quaternion.
-   * @returns {{pitch:number, yaw:number}}
-   */
-  getAttitudeCommand() {
-    const c = this._attitudeCmd;
-    return { pitch: c ? c.pitch : 0, yaw: c ? c.yaw : 0 };
-  }
-
-  /**
    * 0..1 attitude-thrust level driving the RCS hiss — the MAX of the post-rate-cap
    * commanded fraction (manual slew) and the instantaneous hold-torque fraction
    * (arrest/recenter burn). Post-gate + instantaneous, so it is frame-rate
