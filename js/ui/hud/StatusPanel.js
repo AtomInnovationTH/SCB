@@ -1451,10 +1451,10 @@ export class StatusPanel {
         <span>Mass:</span>
         <span>${mb.wetMass} kg</span>
       </div>
-      ${mb.berthedMass > 0 ? `
+      ${mb.cargoMass > 0 ? `
       <div style="display:flex;justify-content:space-between;color:#ffaa00;">
-        <span>Berthed:</span>
-        <span>+${mb.berthedMass} kg</span>
+        <span>Cargo:</span>
+        <span>+${mb.cargoMass} kg</span>
       </div>` : ''}
       <div style="display:flex;justify-content:space-between;opacity:0.5;font-size:10px;">
         <span>Daughters: ${mb.dockedArmMass}kg docked</span>

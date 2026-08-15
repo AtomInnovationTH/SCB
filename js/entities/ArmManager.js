@@ -1778,8 +1778,10 @@ export class ArmManager {
    *
    * The in-hand `capturedDebris` scalar is deliberately NOT counted: it is the
    * haul, and getMassBudget excludes a deployed daughter's own mass too, so
-   * counting her cargo would be inconsistent. (Register item 45 owns the
-   * adjacent gap: a HOLDING_CATCH daughter's own arm mass leaves the budget.)
+   * counting her cargo would be inconsistent. (Register item 45, CLOSED: a
+   * HOLDING_CATCH daughter is home-and-occupied, and getMassBudget now counts
+   * her own arm mass in dockedArmMass — the S7 arrival tick no longer dips
+   * the ship mass as the rack gains the cargo.)
    * @returns {number} kg of captured mass currently aboard, wherever it sits
    */
   getCargoMassKg() {
@@ -1829,7 +1831,12 @@ export class ArmManager {
     for (const arm of this.arms) {
       const m = arm.config.type === 'weaver' ? V5_WEAVER_MASS : V5_SPINNER_MASS;
       armMassTotal += m;
-      if (arm.state === ARM_STATES.DOCKED) {
+      // HOLDING_CATCH is home-and-occupied (S1: docked at her strut tip, parked
+      // with cargo) — she is NOT "out". Register item 45: keying on DOCKED only
+      // dipped the ship mass by one arm at the S7 arrival tick, in the same
+      // moment the rack gained the cargo; CoMCalculator counts her throughout
+      // (only detached/expended are excluded) and the two ledgers must agree.
+      if (arm.state === ARM_STATES.DOCKED || arm.state === ARM_STATES.HOLDING_CATCH) {
         dockedArmMass += m;
       } else if (arm.state !== ARM_STATES.EXPENDED) {
         deployedArmMass += m;
@@ -1844,7 +1851,9 @@ export class ArmManager {
     // can no longer deliver and the AP happily engages.
     // S10: the fold is CARGO ABOARD (berthed + every daughter rack) via the
     // getCargoMassKg SSOT — a transferred catch's kilograms still ride the
-    // ship. berthedMass stays as its own field for the HUD "Berthed:" line.
+    // ship. berthedMass stays as its own berth-only field; the HUD's "+N kg"
+    // explanation line reads cargoMass (register item 45), so it survives the
+    // S7 transfer off the nose.
     const berthedMass = (this.playerSatellite
         && this.playerSatellite._captureNetSystem
         && typeof this.playerSatellite._captureNetSystem.getBerthedMassKg === 'function')
