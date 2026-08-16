@@ -61,6 +61,32 @@ function baseCaptureTensionN(capturedMass) {
   return 1.0 + capturedMass * 0.1;
 }
 
+/**
+ * Register item 81 — drop a tether-snapped runaway's stale claim at the moment
+ * a mother-side capture path takes ownership. A tether snap leaves the runaway
+ * re-targetable (`_captured = false`) but back-referenced by the EXPENDED
+ * arm's `_severedCatch`, which re-pins it to the drifting daughter every frame
+ * until TETHER_SNAP_RELEASE_DELAY_S releases it (ArmUnit._updateExpended) —
+ * and would otherwise fire that release on the NEW owner's held catch. The
+ * `_updateExpended` re-capture guard checks only `_capturedByArm !== this`,
+ * which a DAUGHTER re-capture satisfies (pinned: test-ArmUnit-CaptureFailure)
+ * but the mother/lasso paths never write `_capturedByArm`. So the capture-time
+ * seams (`_enterMotherReel` / `adoptLassoCatch`) call this once ownership is
+ * certain (past the entry/adoption refusal gates): the arm-side claim AND the
+ * debris-side back-reference both clear — the latter so a later [K] jettison
+ * can't re-pin the freed piece to the long-gone drifter (DebrisField's
+ * `_pinToArm` branch passes EXPENDED in its state filter). Null-safe: a fresh
+ * catch (`_capturedByArm` unset) is a byte-identical no-op.
+ * @param {object|null} d — the debris being captured
+ */
+function dropSeveredCatchClaim(d) {
+  const severedOwner = d && d._capturedByArm;
+  if (severedOwner && severedOwner._severedCatch === d) {
+    severedOwner._severedCatch = null;
+    d._capturedByArm = null;
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // §1  Pure Functions — Cling Probability + Frag Risk
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1279,6 +1305,14 @@ export class NetProjectile {
         }
       }
     }
+
+    // Register item 81: past the gates, this entry IS the mother taking
+    // ownership — drop a tether-snapped runaway's stale severed claim so the
+    // EXPENDED arm's _updateExpended never fights the berth-line pin (and its
+    // 8 s drift release never fires on this net's held catch). Placed AFTER
+    // the refusal gates above: a refused entry leaves the bounded-drift
+    // release armed (the runaway stays the drifting arm's business).
+    dropSeveredCatchClaim(d);
 
     // Seed ship-relative reel state.
     const M_NET = 0.00001;
@@ -3280,6 +3314,14 @@ export class CaptureNetSystem {
     // Single-station guard: the collar holds ONE body. The caller pends while the
     // dock is busy; refuse here defensively rather than double-berth.
     if (this.getDockedCatch() || this.hasMotherNetInFlight()) return null;
+
+    // Register item 81 (lasso path): adoption is the ownership transfer onto
+    // the one holding model — drop a severed runaway's stale claim HERE, past
+    // the busy guard (a refused adoption pends, and the pend keeps the
+    // EXPENDED arm's bounded-drift release armed; the claim also deliberately
+    // survives the lasso's reel, whose failure paths return the runaway to
+    // that same release — item-78 semantics).
+    dropSeveredCatchClaim(target);
 
     const M_NET = 0.00001;
     const sizeM = target.sizeMeter || 2;
