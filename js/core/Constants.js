@@ -1635,7 +1635,8 @@ export const Constants = {
                                            // (increased from 0.3s so player sees strut aim + charge before launch)
   CROSSBOW_LAUNCH_SPEED_DEFAULT: 10.0,    // m/s — default launch speed (physically justified)
   CROSSBOW_LAUNCH_SPEED_MIN: 3.0,         // m/s — minimum selectable launch speed
-  CROSSBOW_LAUNCH_SPEED_MAX: 20.0,        // m/s — maximum selectable launch speed
+  // Register item 76(b) (2026-08-16): CROSSBOW_LAUNCH_SPEED_MAX (was 20.0) removed —
+  // import-only; the real clamp is setLaunchSpeed's [MIN, tier.maxSpeed] (ArmUnit.js).
 
   // --- Reload Mechanism ---
   CROSSBOW_RELOAD_POWER: 15,              // watts — worm gear motor power draw
@@ -1807,12 +1808,15 @@ export const Constants = {
   ],
 
   // --- Spring Upgrade Tiers ---
+  // Register item 76(a) (2026-08-16): reloadMult (0.5 / 1.0 / 2.25 / 4.0 / 6.25)
+  // removed from all five rows — read nowhere; the shipped reloads carry no tier
+  // multiplier (the FSM reaches reload duration only via the maxSpeed clamp).
   SPRING_TIERS: [
-    { name: 'Steel T1',      maxSpeed: 7.1,  reloadMult: 0.5,  cost: 0 },
-    { name: 'Maraging T2',   maxSpeed: 10.0, reloadMult: 1.0,  cost: 800 },
-    { name: 'Composite T3',  maxSpeed: 15.0, reloadMult: 2.25, cost: 3000 },
-    { name: 'Nanolam T4',    maxSpeed: 20.0, reloadMult: 4.0,  cost: 10000 },
-    { name: 'Metamat T5',    maxSpeed: 25.0, reloadMult: 6.25, cost: 30000 },
+    { name: 'Steel T1',      maxSpeed: 7.1,  cost: 0 },
+    { name: 'Maraging T2',   maxSpeed: 10.0, cost: 800 },
+    { name: 'Composite T3',  maxSpeed: 15.0, cost: 3000 },
+    { name: 'Nanolam T4',    maxSpeed: 20.0, cost: 10000 },
+    { name: 'Metamat T5',    maxSpeed: 25.0, cost: 30000 },
   ],
 
   // =========================================================================
