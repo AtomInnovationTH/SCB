@@ -2116,7 +2116,8 @@ export class ArmManager {
 
   /**
    * Apply a shop upgrade to all arms. Stores the override so it
-   * survives reset() (which recreates arm instances from scratch).
+   * survives reset() (which field-resets and reuses the existing arm
+   * instances — no new ArmUnit construction outside _initArms).
    * @param {object} data - { effect: string, value: number }
    */
   applyUpgrade(data) {
@@ -2141,7 +2142,8 @@ export class ArmManager {
 
   /**
    * Re-apply all stored shop upgrades to current arms.
-   * Called after reset() recreates fresh ArmUnit instances.
+   * Called after reset() has field-reset the existing ArmUnit instances
+   * (they are reused, not recreated).
    * @private
    */
   _reapplyStoredUpgrades() {

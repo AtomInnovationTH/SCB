@@ -613,7 +613,7 @@ export class GameFlowManager {
       // silent: reset clear, not a real target loss — suppresses the audio earcon.
       targetSelector.setTarget(null, { silent: true });
 
-      // Reset arms (fresh ArmUnits — upgrades re-applied below)
+      // Reset arms (field-resets the existing ArmUnit instances — stored upgrades re-applied below)
       if (armManager) armManager.reset();
 
       this.approachTarget = null;
