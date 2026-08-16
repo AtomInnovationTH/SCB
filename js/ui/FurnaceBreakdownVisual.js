@@ -9,11 +9,13 @@
  * anchor instead of an armId (the S7 anchor-abstraction shape — the breakdown
  * events otherwise resolve an arm index).
  * Pure visuals — gameplay (salvage/score/remove) is owned by GameFlowManager's
- * single CATCH_PROCESSED handler. The choreography is NOT covered by the Node
- * test harness (it touches THREE + the player render hierarchy); the FSM timing
- * that drives it (ArmUnit._updateHoldingCatch + CaptureNetSystem._tickCollarDigestion)
- * IS tested, and the `_collarWorld` anchor fallback chain is pinned by
- * test-FurnaceBreakdownVisual.js (register item 64).
+ * single CATCH_PROCESSED handler. The flight choreography is NOT covered by the
+ * Node test harness (it touches THREE + the player render hierarchy); the FSM
+ * timing that drives it (ArmUnit._updateHoldingCatch + CaptureNetSystem._tickCollarDigestion)
+ * IS tested, the `_collarWorld` anchor fallback chain is pinned by
+ * test-FurnaceBreakdownVisual.js (register item 64), and the mission-reset
+ * sweep (`_onMissionReset` / `_cancelStation`) is pinned by the same suite
+ * (register item 79).
  *
  * Lifecycle (events emitted by ArmUnit._updateHoldingCatch or the collar tick):
  *   CATCH_BREAKDOWN_START { armId, debrisId, chunkCount, [anchor] }
@@ -28,6 +30,11 @@
  *       furnace port (bus center), shrinking + warm glow, then dispose.
  *   NET_CONSUMED { armIndex } / { podIndex } (collar)
  *     → draw the ghost bag toward the mother (shrink + fade), then dispose.
+ *   CATCH_BREAKDOWN_CANCEL { armId | anchor } (S13(c), mid-cook [K])
+ *     → dispose the station's ghost bag + unflown pool with no draw-in.
+ *   GAME_RESET / GAMEOVER_CONTINUE (register item 79)
+ *     → the cancel disposal swept per live station: every mission-reset path
+ *       drops the rack mid-cook, so no completion event ever arrives for it.
  *
  * Wire in main.js next to CaptureNetVisual: construct, init(scene, player), update(dt).
  *
@@ -84,6 +91,8 @@ export class FurnaceBreakdownVisual {
     this._boundStart = null;
     this._boundChunk = null;
     this._boundConsumed = null;
+    this._boundCancel = null;
+    this._boundReset = null;
   }
 
   /**
@@ -100,11 +109,18 @@ export class FurnaceBreakdownVisual {
     this._boundChunk = this._onBreakdownChunk.bind(this);
     this._boundConsumed = this._onNetConsumed.bind(this);
     this._boundCancel = this._onBreakdownCancel.bind(this);
+    this._boundReset = this._onMissionReset.bind(this);
 
     eventBus.on(Events.CATCH_BREAKDOWN_START, this._boundStart);
     eventBus.on(Events.CATCH_BREAKDOWN_CHUNK, this._boundChunk);
     eventBus.on(Events.NET_CONSUMED, this._boundConsumed);
     eventBus.on(Events.CATCH_BREAKDOWN_CANCEL, this._boundCancel);
+    // Register item 79: every mission-reset path drops the rack mid-cook.
+    // resetGame() emits GAME_RESET; the GAMEOVER_CONTINUE handler calls
+    // armManager.reset() WITHOUT emitting GAME_RESET (KesslerSystem.js:74
+    // documents the split) — the sweep must ride BOTH.
+    eventBus.on(Events.GAME_RESET, this._boundReset);
+    eventBus.on(Events.GAMEOVER_CONTINUE, this._boundReset);
   }
 
   dispose() {
@@ -112,6 +128,10 @@ export class FurnaceBreakdownVisual {
     if (this._boundChunk) eventBus.off(Events.CATCH_BREAKDOWN_CHUNK, this._boundChunk);
     if (this._boundConsumed) eventBus.off(Events.NET_CONSUMED, this._boundConsumed);
     if (this._boundCancel) eventBus.off(Events.CATCH_BREAKDOWN_CANCEL, this._boundCancel);
+    if (this._boundReset) {
+      eventBus.off(Events.GAME_RESET, this._boundReset);
+      eventBus.off(Events.GAMEOVER_CONTINUE, this._boundReset);
+    }
     for (const c of this._chunks) this._disposeMesh(c.mesh);
     this._chunks.length = 0;
     for (const [, bag] of this._bags) this._disposeMesh(bag.group);
@@ -317,15 +337,45 @@ export class FurnaceBreakdownVisual {
     if (!this._enabled || !this._scene) return;
     const anchor = this._resolveAnchor(payload);
     if (!anchor) return;
-    const bag = this._bags.get(anchor.key);
+    this._cancelStation(anchor.key);
+  }
+
+  /**
+   * @private The cancel path's per-station disposal: the chop-owning ghost
+   * bag and its unflown chunk pool at one key. Chunks already committed to
+   * the furnace (`this._chunks`) are deliberately untouched — they keep
+   * flying home and self-dispose in update().
+   */
+  _cancelStation(key) {
+    const bag = this._bags.get(key);
     if (bag) {
       this._disposeMesh(bag.group);
-      this._bags.delete(anchor.key);
+      this._bags.delete(key);
     }
-    const pool = this._pools.get(anchor.key);
+    const pool = this._pools.get(key);
     if (pool) {
       for (const m of pool) this._disposeMesh(m);
-      this._pools.delete(anchor.key);
+      this._pools.delete(key);
+    }
+  }
+
+  /**
+   * @private Register item 79 — every mission-reset path drops the rack
+   * (ArmManager.reset() from BOTH GameFlowManager.resetGame() — which emits
+   * GAME_RESET — and the GAMEOVER_CONTINUE handler, which does not), so a
+   * mid-chop piece's completion events never fire: without this sweep the
+   * chop-owning ghost bag + unflown pool render forever, keyed to a station
+   * that may host a fresh cook later — and item 71's release clears the
+   * piece's `_breakdownActive`, so the instanced original renders whole
+   * again beside the leaked meshes (a second copy). Runs the
+   * CATCH_BREAKDOWN_CANCEL disposal per live station; committed chunks keep
+   * flying (the cancel path's own discipline — the reset teleports the view,
+   * so their self-disposal is off-camera).
+   */
+  _onMissionReset() {
+    if (this._bags.size === 0 && this._pools.size === 0) return;
+    for (const key of new Set([...this._bags.keys(), ...this._pools.keys()])) {
+      this._cancelStation(key);
     }
   }
 
