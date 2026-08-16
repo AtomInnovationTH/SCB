@@ -6510,11 +6510,13 @@ export class PlayerSatellite extends THREE.Group {
     // CoM-leak block below reads mag, and _deltaVSpent += mag happens first, so
     // both must see the laden value. The clamp is NOT optional: raw
     // (130+5000)/130 ≈ 39× and 23 t ≈ 178× would leave thrust authority at
-    // 0.5–2.5% — a soft-lock. Rotation stays kinematic (unscaled) and
-    // applyCartesianImpulse is deliberately unscaled (the AP models
-    // RCS/station-keeping, not the main engine) — RCS translation stays brisk
-    // while main thrust is heavy. this.mass is NEVER mutated (recoil, I_mother
-    // and drag all read it).
+    // 0.5–2.5% — a soft-lock. Rotation is rigid-body DYNAMIC (mother-rcs
+    // attitude-dynamics plan): it reads the inertia SSOT, which already
+    // carries cargo — so this massFactor is translation-only and must NEVER
+    // scale rotation (live S10 DO-NOT). applyCartesianImpulse is deliberately
+    // unscaled (the AP models RCS/station-keeping, not the main engine) —
+    // RCS translation stays brisk while main thrust is heavy. this.mass is
+    // NEVER mutated (recoil, I_mother and drag all read it).
     // S10: read TOTAL cargo aboard (berthed + daughter racks) via the
     // ArmManager.getCargoMassKg SSOT — the same quantity getMassBudget folds
     // into ΔV, so handling and range agree. Falls back to the berthed-only
