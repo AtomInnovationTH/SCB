@@ -2064,6 +2064,9 @@ export class DebrisField {
     // off-to-one-side (#2) and is selectable/in-range. This _scenePosition is
     // authoritative (TargetSelector/AutoLock/Lasso/reticle all read it). An arm
     // capture (ARM_CAPTURED) releases the pin first, so _armPinned wins after.
+    // Register item 23: _onboardingPinBasisOverrides is production-unreachable
+    // — its only writer is the dev scenario (main.js:2180 set / :2225 delete) —
+    // but it is LOAD-BEARING for the visual gates: record, do NOT delete.
     const _pinBasisOv = this._onboardingPinBasisOverrides?.get(debris.id);
     const _onboardPinned = !!(debris._onboardingPinned && playerPos &&
       (_pinBasisOv || (this._motherFwd && this._motherRight)));

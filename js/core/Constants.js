@@ -2374,6 +2374,10 @@ export const Constants = {
   // This is a RENDERED RADIUS in metres — the write sites divide by the mesh's
   // bounding radius via DebrisWireframe.scaleForRenderRadiusM (whale-in-cone
   // item 8: stored as a raw scale the real floor was minM × br, mesh-dependent).
+  // NAME COLLISION (register item 23): CAPTURE_NET.MOTHER_CATCH_MIN_RENDER_M
+  // (2.0, :2676) is a DIFFERENT floor with the same name — THIS top-level one
+  // (1.5) is the lasso FLIGHT-WEB floor; the CAPTURE_NET one is the ceremony
+  // bag's.
   MOTHER_CATCH_MIN_RENDER_M: 1.5,     // metres — min apparent size of a net-held catch
 
 
@@ -2673,6 +2677,10 @@ export const Constants = {
     // DebrisWireframe.scaleForRenderRadiusM (÷ mesh bounding radius —
     // whale-in-cone item 8) — keeps a 500 kg+ catch legible at the muzzle
     // standoff.
+    // NAME COLLISION (register item 23): the top-level
+    // MOTHER_CATCH_MIN_RENDER_M (1.5, :2377) is a DIFFERENT floor with the
+    // same name — THIS CAPTURE_NET-scoped one (2.0) is the CEREMONY-BAG
+    // floor; the top-level one is the lasso flight-web floor.
     MOTHER_CATCH_MIN_RENDER_M: 2.0,
     // Reel-entry engagement ramp for the floor above (whale-in-cone item 15,
     // 2026-08-09 — owner decision: RAMP, plan 1786237166000). Pre-item-15 the

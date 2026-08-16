@@ -588,7 +588,7 @@ export class TargetPanel {
                 const col = ok ? '#00ffaa' : f.fit === 'DESPIN_FIRST' ? '#ffd166' : '#ff7755';
                 return `<span style="color:${col}">${tag}${ok ? '✓' : '✗'}</span>`;
               };
-              fitBadge = `<span style="font-size:9px;font-weight:bold;" title="Capture fit: Large / Small nets">${seg('L', wFit)} ${seg('S', sFit)}</span>`;
+              fitBadge = `<span style="font-size:9px;font-weight:bold;" title="Capture fit (daughter nets): L = weaver's MEDIUM / LD-NET 5 m class, S = spinner's SMALL / SD-NET 1.5 m class — not the mother net">${seg('L', wFit)} ${seg('S', sFit)}</span>`;
             }
             }
 
