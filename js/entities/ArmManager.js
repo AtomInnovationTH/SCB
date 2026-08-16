@@ -15,6 +15,7 @@ import { powerDistribution } from '../systems/PowerDistribution.js';
 import { checkActiveSatArming } from '../systems/ActiveSatGuard.js';
 import { persistenceManager } from '../systems/PersistenceManager.js';
 import { computeCoM, computeInducedTorque, strutTipMeters } from '../systems/CoMCalculator.js';
+import { reseatOrbitFromScene } from './OrbitalMechanics.js';
 import { ArmUnit } from './ArmUnit.js';
 
 /** 1 meter in scene units */
@@ -2216,7 +2217,19 @@ export class ArmManager {
    * Reset all arms to docked with full fuel, then re-apply stored upgrades.
    */
   reset() {
+    // Register item 71: release the cargo this reset drops BEFORE the fields
+    // clear. Every other unpin lives on a non-reset path (_releaseCapturedDebris
+    // / the rack feed-end / _clearCatchPins / the lasso releases), so a dropped
+    // piece kept _armPinned/_armPinPos/_capturedByArm set and DebrisField
+    // rendered it glued at the stale slot forever — drawn, but in no ledger
+    // (the continuity law's inverse violation). Release to a free,
+    // re-targetable body re-seated at the pin the player last saw.
+    const _player = this.playerSatellite;
+    const _releaseVel = (_player && typeof _player.getVelocity === 'function')
+      ? _player.getVelocity() : null;
     for (const arm of this.arms) {
+      this._releaseDroppedCargo(arm.heldCatches, _releaseVel);
+      if (arm.capturedDebris) this._releaseDroppedCargo([arm.capturedDebris], _releaseVel);
       arm.state = ARM_STATES.DOCKED;
       arm.fuel = 100;
       arm.target = null;
@@ -2261,6 +2274,39 @@ export class ArmManager {
 
     // Re-apply any purchased upgrades to the freshly reset arms
     this._reapplyStoredUpgrades();
+  }
+
+  /**
+   * Register item 71 — release the pieces reset() drops (the rack + the in-hand
+   * scalar) back to the field as free, re-targetable bodies. Mirrors the
+   * release idiom of ArmUnit._releaseCapturedDebris (haul failure) and
+   * CaptureNetSystem._clearCatchPins (mother exits): clears the authoritative
+   * pin AND the captor back-reference — both must go, or DebrisField's
+   * _pinToArm branch re-pins the piece to the freshly re-docked arm (the ghost
+   * in a different costume) — and re-seats the orbit from the shown pin via
+   * the ONE shared computation (reseatOrbitFromScene, the §8 A2
+   * _reseatOrbitOnRelease seam). Without a player velocity the re-seat skips
+   * and the piece resumes its live orbit (the orbit kept propagating under the
+   * pin — DebrisField freezes only _onboardingPinned/_motherParked).
+   * @param {Array<object>|null} pieces
+   * @param {{x:number,y:number,z:number}|null} releaseVel km/s (Y-up scene frame)
+   * @private
+   */
+  _releaseDroppedCargo(pieces, releaseVel) {
+    if (!pieces) return;
+    for (const d of pieces) {
+      if (!d) continue;
+      reseatOrbitFromScene(d.orbit, d._scenePosition, releaseVel);
+      d._armPinned = false;
+      d._armPinPos = null;
+      d._capturedByArm = null;
+      d._captured = false;             // re-targetable — a chase-able object again
+      d._isStationKeepTarget = false;
+      d._committedNetArmId = null;
+      d._netted = true;                // drifting in its net (the haul-failure idiom)
+      d._breakdownActive = false;      // a mid-chop reset owns no furnace timeline
+      d._catchRenderMin = 0;           // the held-readability floor dies with the hold
+    }
   }
 
   // ========================================================================

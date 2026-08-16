@@ -212,6 +212,62 @@ export function cartesianToKeplerian(position, velocity, mu = Constants.MU_EARTH
   };
 }
 
+/**
+ * Re-seat an orbit from a shown scene position + a release velocity — the ONE
+ * orbit-rebuild computation for every held-cargo release (register items §8 A2
+ * / 71). A pinned catch's own orbit is NOT frozen while `_armPinned`
+ * (DebrisField skips propagation only for `_onboardingPinned` / `_motherParked`),
+ * so releasing to the stale orbit snaps the body to wherever the orbit drifted
+ * during the hold; rebuilding from the shown position makes the released body
+ * continue from where the player last saw it. Shared by the mother [K] jettison
+ * (CaptureNetSystem._reseatOrbitOnRelease) and the ArmManager.reset() cargo
+ * release — one quantity, one computation.
+ *
+ * Frame/unit contract follows applyCartesianImpulse: scene units ÷
+ * Constants.SCENE_SCALE → km in the Y-up scene frame; velocity in km/s;
+ * `orbit.semiMajorAxis` is stored back in SCENE UNITS (the DebrisField /
+ * PlayerSatellite convention). Eccentricity clamps to [0, 0.1] (the co-orbital
+ * field band).
+ *
+ * @param {object} orbit         the orbit to rewrite (mutated on success only)
+ * @param {{x:number,y:number,z:number}} scenePos  shown position (scene units, Y-up)
+ * @param {{x:number,y:number,z:number}} velocityKmS  release velocity (km/s, Y-up scene frame)
+ * @returns {boolean} true when re-seated; false on any degenerate input
+ *          (missing refs, non-positive SCENE_SCALE, NaN/∞ element, or
+ *          non-positive semi-major axis) — the caller releases to the live
+ *          orbit instead, and the orbit is left untouched.
+ */
+export function reseatOrbitFromScene(orbit, scenePos, velocityKmS) {
+  const SCENE_SCALE = Constants.SCENE_SCALE;
+  if (!orbit || !scenePos || !velocityKmS || !(SCENE_SCALE > 0)) return false;
+  const rKm = {
+    x: scenePos.x / SCENE_SCALE,
+    y: scenePos.y / SCENE_SCALE,
+    z: scenePos.z / SCENE_SCALE,
+  };
+  const newOrbit = cartesianToKeplerian(rKm, { x: velocityKmS.x, y: velocityKmS.y, z: velocityKmS.z });
+  // Validate EVERY element before writing — inclination comes from acos(hz/h)
+  // and is NaN on the degenerate h=0 geometry (radial release velocity), so an
+  // unchecked write could permanently corrupt the orbit with NaN.
+  if (!newOrbit
+      || !isFinite(newOrbit.semiMajorAxis) || newOrbit.semiMajorAxis <= 0
+      || !isFinite(newOrbit.eccentricity)
+      || !isFinite(newOrbit.inclination)
+      || !isFinite(newOrbit.raan)
+      || !isFinite(newOrbit.argPerigee)
+      || !isFinite(newOrbit.trueAnomaly)) return false;
+  orbit.semiMajorAxis = newOrbit.semiMajorAxis * SCENE_SCALE;
+  orbit.eccentricity  = Math.max(0, Math.min(0.1, newOrbit.eccentricity));
+  orbit.inclination   = newOrbit.inclination;
+  orbit.raan          = newOrbit.raan;
+  orbit.argPerigee    = newOrbit.argPerigee;
+  orbit.trueAnomaly   = newOrbit.trueAnomaly;
+  if (typeof newOrbit.meanMotion === 'number' && isFinite(newOrbit.meanMotion)) {
+    orbit.meanMotion = newOrbit.meanMotion;
+  }
+  return true;
+}
+
 // ============================================================================
 // GROUND-TRACK PLACEMENT
 // ============================================================================

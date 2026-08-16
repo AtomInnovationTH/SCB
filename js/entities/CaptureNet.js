@@ -20,7 +20,7 @@ import { Events } from '../core/Events.js';
 import { BridleRing } from './BridleRing.js';
 import { DebrisWireframe } from '../ui/DebrisWireframe.js';
 import { CeremonyTimeScale } from '../systems/CeremonyTimeScale.js';
-import { cartesianToKeplerian, orbitToSceneCartesianInto } from './OrbitalMechanics.js';
+import { reseatOrbitFromScene, orbitToSceneCartesianInto } from './OrbitalMechanics.js';
 import { strutLocalDirection } from './ArmDockBasis.js';
 // Cargo-continuity S7: the carrier scorer lives with the rest of the CoM maths
 // (ONE quantity, ONE computation — it reuses computeCoM/strutTipMeters).
@@ -3113,11 +3113,14 @@ export class CaptureNetSystem {
   /**
    * §8 A2 — re-seat the released catch's orbit from the release position +
    * the mother's velocity. DebrisField.update skips orbit propagation only
-   * for _onboardingPinned, NOT _armPinned, so a pinned catch's trueAnomaly
-   * kept advancing and a jettisoned whale would snap to wherever its own
-   * orbit went. Rebuild debris.orbit from the pin following
-   * applyCartesianImpulse's recipe. The arm path deliberately accepts the
-   * snap (ArmUnit.js:4494-4497) — do not copy that 2 m in front of the camera.
+   * for _onboardingPinned / _motherParked, NOT _armPinned, so a pinned catch's
+   * trueAnomaly kept advancing and a jettisoned whale would snap to wherever
+   * its own orbit went. The rebuild itself is the ONE shared computation
+   * (reseatOrbitFromScene — applyCartesianImpulse's recipe, all-element
+   * validation, the [0, 0.1] eccentricity clamp), also read by the
+   * ArmManager.reset() cargo release (register item 71). The arm path
+   * deliberately accepts the snap (ArmUnit.js:4494-4497) — do not copy that
+   * 2 m in front of the camera.
    * @param {NetProjectile} net
    * @private
    */
@@ -3125,43 +3128,8 @@ export class CaptureNetSystem {
     const d = net.targetDebris;
     const player = this._player;
     if (!d || !player || !d._scenePosition || !d.orbit) return;
-    // Review fix: no metres-scale fallback — Constants.SCENE_SCALE is 0.01
-    // (km-scale); the old `|| 0.00001` silently produced a ~1000× error on a
-    // falsy read (headless mock).
-    const SCENE_SCALE = Constants.SCENE_SCALE;
-    if (!(SCENE_SCALE > 0)) return;
-    // cartesianToKeplerian wants km / km/s in the Y-up scene frame (the same
-    // convention applyCartesianImpulse uses: scene units ÷ SCENE_SCALE → km).
-    const rKm = {
-      x: d._scenePosition.x / SCENE_SCALE,
-      y: d._scenePosition.y / SCENE_SCALE,
-      z: d._scenePosition.z / SCENE_SCALE,
-    };
     const v = (typeof player.getVelocity === 'function') ? player.getVelocity() : null;
-    if (!v) return;
-    const newOrbit = cartesianToKeplerian(rKm, { x: v.x, y: v.y, z: v.z });
-    // Review fix: validate EVERY element before writing — inclination comes
-    // from acos(hz/h) and is NaN on the degenerate h=0 geometry (radial
-    // release velocity), and only semiMajorAxis was checked, so a jettison
-    // could permanently corrupt the whale's orbit with NaN.
-    if (!newOrbit
-        || !isFinite(newOrbit.semiMajorAxis) || newOrbit.semiMajorAxis <= 0
-        || !isFinite(newOrbit.eccentricity)
-        || !isFinite(newOrbit.inclination)
-        || !isFinite(newOrbit.raan)
-        || !isFinite(newOrbit.argPerigee)
-        || !isFinite(newOrbit.trueAnomaly)) return;
-    // DebrisField orbits store semiMajorAxis in SCENE UNITS (same convention
-    // as PlayerSatellite.orbit — applyCartesianImpulse writes sma × SCENE_SCALE).
-    d.orbit.semiMajorAxis = newOrbit.semiMajorAxis * SCENE_SCALE;
-    d.orbit.eccentricity  = Math.max(0, Math.min(0.1, newOrbit.eccentricity));
-    d.orbit.inclination   = newOrbit.inclination;
-    d.orbit.raan          = newOrbit.raan;
-    d.orbit.argPerigee    = newOrbit.argPerigee;
-    d.orbit.trueAnomaly   = newOrbit.trueAnomaly;
-    if (typeof newOrbit.meanMotion === 'number' && isFinite(newOrbit.meanMotion)) {
-      d.orbit.meanMotion = newOrbit.meanMotion;
-    }
+    reseatOrbitFromScene(d.orbit, d._scenePosition, v);
   }
 
   /**
