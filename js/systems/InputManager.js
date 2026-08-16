@@ -735,10 +735,14 @@ export class InputManager {
           }
           // (1) ARM_PILOT: reel the piloted daughter home — from ANY state.
           // recall() routes STATION_KEEP through reelFromStationKeep and sends
-          // every other live state (TRANSIT / APPROACH / HOLDING_CATCH / …) into
-          // a zero-fuel REELING return on the mother's tether motor, so R always
-          // brings the daughter you're flying back home (was SK-only — R did
-          // nothing mid-flight, 2026-06-14 fix).
+          // every other live state (TRANSIT / APPROACH / …) into a zero-fuel
+          // REELING return on the mother's tether motor, so R always brings the
+          // daughter you're flying back home (was SK-only — R did nothing
+          // mid-flight, 2026-06-14 fix). One exception: since cargo-continuity
+          // S1 (2026-08-11), HOLDING_CATCH is a player-facing REFUSAL, not a
+          // REELING — the pilot session survives dock completion
+          // (CameraSystem.js re-latches armPilot.arm), so that path is
+          // reachable from here.
           if (this.armPilotMode) {
             const pilotArmR = d.cameraSystem?.getPilotedArm?.();
             if (pilotArmR && typeof pilotArmR.recall === 'function'
