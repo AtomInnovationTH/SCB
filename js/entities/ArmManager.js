@@ -2245,6 +2245,16 @@ export class ArmManager {
       }
       arm.state = ARM_STATES.DOCKED;
       arm.fuel = 100;
+      // Register item 80: an SK target's LOD-protection flag must not survive
+      // the reset. The SK session's own reference is _stationKeepTarget (set
+      // together with the debris-side flag at SK entry, ArmUnit.js:3005/:3122)
+      // and every live SK exit clears the flag on it (ArmUnit _exitStationKeep
+      // and siblings). reset() drops the target assignment itself, so clear the
+      // flag on the same reference before dropping both — otherwise the piece
+      // keeps skipping LOD downscaling forever (DebrisField.js:2115), a free
+      // body rendering at full detail past the 50 km cull.
+      if (arm._stationKeepTarget) arm._stationKeepTarget._isStationKeepTarget = false;
+      arm._stationKeepTarget = null;
       arm.target = null;
       arm.capturedDebris = null;
       arm.heldCatches = [];               // S6: the parked cargo rack resets too
