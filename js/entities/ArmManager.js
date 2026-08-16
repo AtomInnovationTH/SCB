@@ -2230,6 +2230,19 @@ export class ArmManager {
     for (const arm of this.arms) {
       this._releaseDroppedCargo(arm.heldCatches, _releaseVel);
       if (arm.capturedDebris) this._releaseDroppedCargo([arm.capturedDebris], _releaseVel);
+      // Register item 78: a tether-snapped catch stays pinned to the drifting
+      // EXPENDED daughter (keepPinned keeps _capturedByArm; _updateExpended
+      // re-pins it every frame until TETHER_SNAP_RELEASE_DELAY_S releases it).
+      // The reset re-docks the arm inside that drift window unless the pin
+      // releases first — else the piece ghosts at the stale drift pin, drawn,
+      // in no ledger, with _capturedByArm on a now-DOCKED arm (the item-71
+      // ghost through the captor back-reference). Same seam: flags + re-seat,
+      // then drop the tracking fields.
+      if (arm._severedCatch) {
+        this._releaseDroppedCargo([arm._severedCatch], _releaseVel);
+        arm._severedCatch = null;
+        arm._severedDriftS = 0;
+      }
       arm.state = ARM_STATES.DOCKED;
       arm.fuel = 100;
       arm.target = null;
