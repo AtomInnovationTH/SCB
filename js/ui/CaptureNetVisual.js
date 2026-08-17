@@ -412,18 +412,22 @@ export class CaptureNetVisual {
     // happens on NET_RELEASED (jettison) or when the securing timer splices
     // the net out of activeNets (the update loop's _getNet → null path).
     if (podIndex >= 0) return;
-    if (payload && payload.capturedMass > 0) {
-      const vis = this._activeVisuals.get(key);
-      // S5: a failure beat owns the bag — the daughter's net stows (and this
-      // event fires) when the arm releases the catch on a slip/rip, but the
-      // staged failure must play out, not be cut short by the success
-      // hand-off fade.
-      if (vis && !vis.failure) {
-        vis.detached = true;   // state-driven updates stop; fade timer owns removal
-        this._fadeTimers.push({ key, timer: 0.8, duration: 0.8 });
-        return;
-      }
-      if (vis) return;         // failure beat in flight — it owns the fade
+    const vis = this._activeVisuals.get(key);
+    // S5: a failure beat owns the bag — the daughter's net stows (and this
+    // event fires) when the arm releases the catch on a slip/rip, but the
+    // staged failure must play out, not be cut short by the success
+    // hand-off fade. Checked BEFORE the payload's mass: register item 28
+    // zeroes capturedMass on a failure stow, so the guard can no longer
+    // depend on entering the mass branch.
+    if (vis && vis.failure) return;  // failure beat in flight — it owns the fade
+    // Register item 28: a failure stow reports capturedMass 0 + releasedMass
+    // kg. The one UNSTAGED loss (tether-snap drift-end — no failure beat) must
+    // still hand the runaway's bag to the fade, not pop it on the spot.
+    const massHome = (payload && payload.capturedMass > 0) || (payload && payload.releasedMass > 0);
+    if (vis && massHome) {
+      vis.detached = true;   // state-driven updates stop; fade timer owns removal
+      this._fadeTimers.push({ key, timer: 0.8, duration: 0.8 });
+      return;
     }
     this._removeNetVisual(key);
   }

@@ -682,6 +682,11 @@ export class NetProjectile {
     /** @type {boolean} Daughter capture being hauled by the ArmUnit — hold the
      *  net's own reel (bag stays cinched on the debris) until the arm delivers. */
     this._heldByArm     = false;
+    /** @type {number} Register item 28: kg the held catch carried when the arm
+     *  LOST it (integrity slip / boost rip / tether-snap drift-end / reset drop
+     *  / severed-claim transfer) instead of delivering it to the furnace. 0 on
+     *  every other path — a delivered catch keeps its mass in capturedMass. */
+    this._releasedMassKg = 0;
 
     // ── Runtime state ──
     this.state         = STATES.LAUNCHING;
@@ -1287,6 +1292,15 @@ export class NetProjectile {
       this._heldByArm = false;        // delivered / lost → stow promptly
       this._snugTargetN = null;
       this.reelProgress = 1.0;
+      // Register item 28: the hold ends two ways — DELIVERED (the arm's furnace
+      // hand-off: _updateHoldingCatch marks the piece _breakdownActive as it
+      // releases the cinch, ArmUnit.js) or LOST (integrity slip / boost rip /
+      // tether-snap drift-end / reset drop / severed-claim transfer — the catch
+      // left the arm without reaching the furnace). Only a delivery may report
+      // its mass at completion; a loss stows EMPTY and reports releasedMass
+      // instead, so no listener reads a successful-looking capturedMass for a
+      // body that drifted away.
+      if (!(d && d._breakdownActive)) this._releasedMassKg = this.capturedMass;
     }
 
     if (this.tetherPaidOut <= 0) {
@@ -1303,10 +1317,12 @@ export class NetProjectile {
     if (this.reelProgress >= 1.0) {
       this._transitionTo(STATES.STOWED);
       this.isActive = false;
+      const releasedKg = this._releasedMassKg || 0;
       eventBus.emit(Events.NET_REEL_COMPLETED, {
         armIndex:     this.armIndex,
         podIndex:     this.podIndex,
-        capturedMass: this.capturedMass,
+        capturedMass: releasedKg > 0 ? 0 : this.capturedMass,
+        releasedMass: releasedKg,
         debrisId:     this.targetDebris?.id,
       });
     }

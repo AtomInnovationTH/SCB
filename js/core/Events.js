@@ -732,7 +732,10 @@ export const Events = {
   NET_CATCH_MISS:            'net:catchMiss',
   /** Reel-in motor started. Payload: { armIndex, podIndex, hasCatch } */
   NET_REEL_STARTED:          'net:reelStarted',
-  /** Reel-in completed — debris at strut tip / pod. Payload: { armIndex, podIndex, capturedMass, debrisId? } */
+  /** Reel-in completed — debris at strut tip / pod. Payload: { armIndex, podIndex, capturedMass, debrisId?, releasedMass? }
+   *  Register item 28: capturedMass is what the reel DELIVERED. A failure stow (the arm lost the
+   *  held catch — integrity slip / boost rip / tether-snap drift-end / reset drop) reports
+   *  capturedMass 0 and the lost catch's mass as releasedMass (0 on every other path). */
   NET_REEL_COMPLETED:        'net:reelCompleted',
   /** Player aborted — net + debris released. Payload: { armIndex, podIndex, debrisId? } */
   NET_RELEASED:              'net:released',
