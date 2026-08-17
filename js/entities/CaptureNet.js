@@ -87,6 +87,47 @@ function dropSeveredCatchClaim(d) {
   }
 }
 
+/**
+ * Register item 74 — ONE fore-extent read for the collar queue, shared by both
+ * consumers (the lasso pend's `getCollarQueueDepthM` and the corridor gate's
+ * `_queueHoldLevelM`): how far a mother net's catch reaches fore of the berth
+ * anchor, in metres — apex + seat + half, where the apex is the net's true
+ * station level:
+ *   - a corridor-held REELING net: its frozen `_corridorHoldLevelM` slot (the
+ *     REELING guard keeps a stale hold flag from a MISSED net from counting);
+ *   - a berthed/collared/transferring net: `max(base, _effectiveStandoffM)` —
+ *     extended-standoff honest;
+ *   - anything else (inbound, missed): the base standoff — an inbound net
+ *     reserves its eventual berth footprint (conservative), byte-identical to
+ *     the pre-74 base formula.
+ * `atStation` is the corridor gate's queue membership (held or berthed — an
+ * inbound net takes its slot when its own gate engages); the lasso pend
+ * counts every member at its level. Pre-74 the pend read the base standoff
+ * for every net, so a waiting lasso catch pinned INSIDE a corridor-held or
+ * extended-standoff body (11.50 reported for an 18.50 far face).
+ * Fills the module scratch (the reel/berth path must not allocate per frame,
+ * plan §13); the returned primitives are copied by destructuring at the call
+ * site, and the helper calls nothing that could re-enter it.
+ * @param {object} net — a mother NetProjectile with a live targetDebris
+ * @returns {{fore: number, atStation: boolean}} the shared scratch
+ */
+const _foreExtent74 = { fore: 0, atStation: false };
+function motherNetForeExtentM(net) {
+  const d = net.targetDebris;
+  const half = (d.sizeMeter || 2) / 2;
+  const base = half + (CN.BERTH_CLEARANCE_M ?? 1.0);
+  const held = net.state === STATES.REELING
+    && net._corridorHold && net._corridorHoldLevelM != null;
+  const berthed = net.state === STATES.BERTHED || net.state === STATES.COLLARED
+    || net.state === STATES.TRANSFERRING;
+  const apex = held
+    ? net._corridorHoldLevelM
+    : berthed ? Math.max(base, net._effectiveStandoffM ?? base) : base;
+  _foreExtent74.fore = apex + (net._catchSeatM || 0) + half;
+  _foreExtent74.atStation = held || berthed;
+  return _foreExtent74;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // §1  Pure Functions — Cling Probability + Frag Risk
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1729,8 +1770,9 @@ export class NetProjectile {
    * @private Register item 66 — the level (metres from the berth anchor) at
    * which THIS net's corridor gate must hold so its catch clears the queue
    * already at the station; 0 when no other mother net holds a position
-   * there. The `getCollarQueueDepthM` pattern (the lasso pend's fore-extent
-   * read), with the two refinements the queue stack needs:
+   * there. Reads the shared `motherNetForeExtentM` (register item 74 — ONE
+   * fore-extent computation for both queue consumers: the two refinements
+   * the queue stack needs, now shared with the lasso pend):
    *   - members are nets HOLDING a station position: a corridor-held REELING
    *     net (its frozen `_corridorHoldLevelM` slot — the REELING guard keeps
    *     a stale hold flag from a MISSED net from counting) or a berthed/
@@ -1760,17 +1802,8 @@ export class NetProjectile {
       if (net.state === STATES.STOWED || net.state === STATES.RELEASED) continue;
       const od = net.targetDebris;
       if (!od || od.alive === false) continue;
-      const held = net.state === STATES.REELING
-        && net._corridorHold && net._corridorHoldLevelM != null;
-      const berthed = net.state === STATES.BERTHED || net.state === STATES.COLLARED
-        || net.state === STATES.TRANSFERRING;
-      if (!held && !berthed) continue;               // not at the station yet
-      const half = (od.sizeMeter || 2) / 2;
-      const base = half + (CN.BERTH_CLEARANCE_M ?? 1.0);
-      const apex = held
-        ? net._corridorHoldLevelM
-        : Math.max(base, net._effectiveStandoffM ?? base);
-      const fore = apex + (net._catchSeatM || 0) + half;
+      const { fore, atStation } = motherNetForeExtentM(net);
+      if (!atStation) continue;                      // not at the station yet
       if (fore > ext) ext = fore;
     }
     if (ext <= 0) return 0;
@@ -3401,7 +3434,11 @@ export class CaptureNetSystem {
    * busiest active mother-net berth, 0 when the collar station is clear. A lassoed
    * piece waiting for the collar holds this far ahead of the seat so it never
    * overlaps the occupant (docked or inbound). Conservative: an inbound net
-   * reserves its eventual berth footprint.
+   * reserves its eventual berth footprint. Register item 74: the read is the
+   * shared `motherNetForeExtentM` — a corridor-held or extended-standoff
+   * member reports its TRUE far face (its frozen slot / honest apex), so the
+   * pend can no longer pin inside the tandem body; with no held/extended
+   * member the base formula stands byte-identical.
    * @returns {number} metres
    */
   getCollarQueueDepthM() {
@@ -3411,10 +3448,7 @@ export class CaptureNetSystem {
       if (net.state === STATES.STOWED || net.state === STATES.RELEASED) continue;
       const d = net.targetDebris;
       if (!d || d.alive === false) continue;
-      const half = (d.sizeMeter || 2) / 2;
-      const standoff = half + (CN.BERTH_CLEARANCE_M ?? 1.0);
-      const seat = net._catchSeatM || 0;
-      const fore = standoff + seat + half;   // muzzle → catch far face
+      const { fore } = motherNetForeExtentM(net);
       if (fore > ext) ext = fore;
     }
     return ext;

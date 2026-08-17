@@ -1700,7 +1700,9 @@ export class LassoSystem {
      * Cargo-continuity S13(d): pin a waiting catch clear of the collar's current
      * occupant — the collar seat pushed fore along the berth axis by the occupant's
      * fore extent (getCollarQueueDepthM), so it never overlaps a mated/inbound
-     * mother catch. Follows the (reorienting) ship each frame.
+     * mother catch. Follows the (reorienting) ship each frame. Register item 74:
+     * the read is corridor-held / extended-standoff honest (the shared
+     * motherNetForeExtentM), so the hold clears a tandem body's TRUE far face.
      * @param {object} target
      * @param {THREE.Vector3} playerPos
      * @param {THREE.Vector3|null} playerVelDir
