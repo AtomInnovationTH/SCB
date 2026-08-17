@@ -1648,7 +1648,10 @@ export const Constants = {
   // --- Tether Reel (on mothership) ---
   REEL_IN_SPEED_EMPTY: 2.0,              // m/s — reel-in speed unloaded (game-scale)
   REEL_IN_SPEED_LOADED: 4.0,             // m/s — reel-in speed with captured debris (POLISH: bumped from 1.4 for snappier retrieval)
-  REEL_MOTOR_POWER: 25,                  // watts — reel motor power draw
+  // Register item 76(c) (2026-08-17): REEL_MOTOR_POWER (was 25 W) removed —
+  // import-only, zero reads; no reel-motor power draw is modelled (reload
+  // energy bills through CROSSBOW_RELOAD_POWER). The reel's live rows
+  // surround this note: the speeds above, the brake/tension rows below.
   REEL_BRAKE_FORCE_MAX: 500,             // N — maximum magnetic clutch brake force
   REEL_TENSION_WARNING: 0.7,             // fraction of break strength → yellow HUD
   REEL_TENSION_CRITICAL: 0.9,            // fraction of break strength → red HUD
