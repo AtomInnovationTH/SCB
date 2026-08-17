@@ -1655,7 +1655,11 @@ export const Constants = {
   REEL_BRAKE_FORCE_MAX: 500,             // N — maximum magnetic clutch brake force
   REEL_TENSION_WARNING: 0.7,             // fraction of break strength → yellow HUD
   REEL_TENSION_CRITICAL: 0.9,            // fraction of break strength → red HUD
-  REEL_LEVEL_WIND_SPEED: 0.02,           // m/s — traverse speed for even spooling
+  // Register item 83(b) (2026-08-17, owner-ruled DELETE): REEL_LEVEL_WIND_SPEED
+  // (was 0.02 m/s — traverse speed for even spooling) removed — zero reads in
+  // tracked history (grep- AND git-proven); no spool/traverse is modelled. The
+  // level-wind mechanism is design narrative (CROSSBOW_ARMS §14.6, :1802); the
+  // reel's live rows are the speeds above and the brake/tension rows here.
 
   // --- Capture-failure model & release dynamics ---
   // Two distinct post-capture failure modes (see ArmUnit._updateGrappled /
