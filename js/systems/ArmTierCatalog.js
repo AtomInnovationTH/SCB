@@ -267,16 +267,23 @@ export function executeUpgrade(currentTier, targetTier, gameState, deps) {
     armManager.setCurrentTier(targetTier);
   }
 
-  // 3. Regenerate dock positions for the new tier
-  if (armManager && typeof armManager.generateDockPositions === 'function') {
-    armManager.generateDockPositions(targetTier);
-  }
+  // 3. Dock-position regeneration — REMOVED 2026-08-17 (register item 62).
+  //    Was: armManager.generateDockPositions(targetTier) guarded by
+  //    `typeof … === 'function'`. The ArmManager class has no such method —
+  //    the guard was false for the real class since the initial commit (only
+  //    test mocks ever satisfied it), and the module-level
+  //    generateDockPositions (ArmManager.js) is a free function that RETURNS a
+  //    new array: it could not mutate `this._dockPositions` even if called.
+  //    The honest contract is reconstruct-on-launch — setCurrentTier's
+  //    docblock: "Does NOT rebuild arms — caller must dispose + reconstruct
+  //    if live." A real in-place regenerateDockPositions(tier) (+ per-arm
+  //    clones) belongs to the session that owns tier upgrades.
 
-  // 4. Reset per-arm state to defaults for the new arms
-  //    New arms start STOWED (if launched) or LOCKED (if pre-launch).
-  //    Net inventory, reel state, bridle state: reset by the ArmUnit constructors
-  //    when arms are rebuilt. If armManager.rebuild() or similar exists, call it.
-  //    Otherwise, we trust setCurrentTier + generateDockPositions handles it.
+  // 4. Per-arm state is NOT rebuilt here. setCurrentTier persists the tier
+  //    key only; arms are rebuilt by reconstruction — new ArmUnit
+  //    constructors start STOWED (if launched) or LOCKED (if pre-launch) and
+  //    reset net inventory, reel state, and bridle state. A live in-place
+  //    rebuild is the tier-upgrades session's, per step 3.
 
   // 5. Additional persistence of the new tier
   if (persistenceManager && typeof persistenceManager.setArmTier === 'function') {
