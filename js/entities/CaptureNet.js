@@ -784,8 +784,17 @@ export class NetProjectile {
      *  still-blocked corridor (the berth completes at the held range). */
     this._corridorTimedOut = false;
     /** @type {number} The _remainingM at corridor-hold engagement — the hold
-     *  freezes the approach HERE (never pushes it back out). */
+     *  freezes the approach HERE (never pushes it back out). Register item 73:
+     *  EXCEPT the queue level — the latch takes max(engagement range, queue
+     *  level) and the hold glides OUT to it at reel speed (see the ease in
+     *  _updateMotherReel). */
     this._corridorHoldLevelM = 0;
+    /** @type {boolean} Register item 73 — true when the corridor-hold latch
+     *  was queue-raised past the engagement range (the drain-race): the hold
+     *  glides OUT to the latch, and a timeout mid-glide completes the glide
+     *  to the raised standoff (never an outward pop). False with an empty
+     *  queue ⇒ the single-catch case is byte-identical. */
+    this._corridorGlide = false;
     /** @type {boolean} True once the corridor gate has emitted its Houston line
      *  (once per net — a corridor that clears and re-blocks does not re-announce). */
     this._corridorAnnounced = false;
@@ -1518,7 +1527,18 @@ export class NetProjectile {
         this._corridorTimer = 0;
         // Freeze at the CURRENT range, never above it: a catch seeded inside
         // the gate range (a very close shot) must not pop outward to holdM.
-        this._corridorHoldLevelM = this._remainingM;
+        // Register item 73 — EXCEPT the queue level: when mated cargo raised
+        // the hold past the current range (the drain-race — this catch sailed
+        // through the gate range while the leader was REELING-not-held, then
+        // the leader berthed and the queue term appeared beneath it), freezing
+        // here pins this catch INSIDE the member's far face (two drawn bodies
+        // interpenetrating — a continuity-law violation). The latch takes the
+        // queue level and the hold glides OUT to it at reel speed (the ease
+        // below) — the one bounded, documented exception to the monotonic-ease
+        // invariant. Empty queue ⇒ queueHoldM 0 ⇒ the latch is the current
+        // range, byte-identical (the single-catch case never glides).
+        this._corridorHoldLevelM = Math.max(this._remainingM, queueHoldM);
+        this._corridorGlide = this._corridorHoldLevelM > this._remainingM;
       }
       this._corridorTimer += dt;
       if (!this._corridorAnnounced) {
@@ -1550,12 +1570,16 @@ export class NetProjectile {
           source: 'HOUSTON', priority: 'warning',
         });
       }
-      // Hold: freeze the approach at the engagement range (still pinned below).
-      if (this._corridorHold) this._remainingM = this._corridorHoldLevelM;
+      // Hold: the approach stays at the latch (still pinned below) — nothing
+      // moves remainingM while held except the item-73 queue-glide, which
+      // runs in the ease below (bounded, at reel speed, never past the latch).
     } else if (this._corridorHold) {
       // Corridor cleared (or we were never blocked) — resume the approach.
       this._corridorHold = false;
       this._corridorTimer = 0;
+      // A timeout mid-glide keeps the glide flag: the berth completes the
+      // glide OUT to the raised standoff (the ease below) — never a pop.
+      if (!this._corridorTimedOut) this._corridorGlide = false;
     }
 
     // Monotonic ease-in (never decelerate mid-reel so the tether cannot
@@ -1565,7 +1589,22 @@ export class NetProjectile {
       ? this.netClass.REEL_SPEED * (CN.REEL_LONG_TETHER_MULT ?? 3.0)
       : this.netClass.REEL_SPEED;
     if (!this._corridorHold) {
-      this._remainingM = Math.max(berthStandoffM, this._remainingM - reelSpeed * dt);
+      if (this._corridorGlide && this._remainingM < berthStandoffM) {
+        // Item 73: a hold that timed out mid-glide completes the glide OUT to
+        // the raised standoff at reel speed — the berth is AT the latch, and
+        // an outward pop to it would violate the continuity law.
+        this._remainingM = Math.min(berthStandoffM, this._remainingM + reelSpeed * dt);
+      } else {
+        this._remainingM = Math.max(berthStandoffM, this._remainingM - reelSpeed * dt);
+      }
+    } else if (this._remainingM < this._corridorHoldLevelM) {
+      // Item 73: the queue-glide — the one bounded OUTWARD move the reel
+      // makes (the documented exception to the monotonic-ease invariant named
+      // above): the drain-race follower backs out to the queue-cleared latch
+      // at reel speed, never past it, so it never freezes inside the leader's
+      // far face. reelProgress reads backward during the glide — the honest
+      // read (the catch IS backing out to the gate).
+      this._remainingM = Math.min(this._corridorHoldLevelM, this._remainingM + reelSpeed * dt);
     }
 
     // reelProgress: remainingM is the single source (no external consumer, so
@@ -1617,8 +1656,14 @@ export class NetProjectile {
     // Tension readout (HUD): base + mass factor, same shape as the daughter.
     this.tensionN = baseCaptureTensionN(this.capturedMass);
 
-    // Completion → BERTHED.
-    if (this._remainingM <= berthStandoffM + 1e-6) {
+    // Completion → BERTHED. Item 73: a queue-glide still travelling OUT to a
+    // timeout-raised standoff has NOT completed — the check below reads
+    // remainingM ≤ standoff as arrival, true from the WRONG side mid-glide
+    // (the berth hold would then snap the pin to the standoff — an outward
+    // pop). Wait for the glide to arrive. glideIncomplete is false on every
+    // pre-73 path (the flag is never set with an empty queue).
+    const glideIncomplete = this._corridorGlide && this._remainingM < berthStandoffM - 1e-9;
+    if (!glideIncomplete && this._remainingM <= berthStandoffM + 1e-6) {
       this._transitionTo(STATES.BERTHED);
       this._berthTimer = CN.BERTH_SECURE_S ?? 4.0;
       eventBus.emit(Events.NET_REEL_COMPLETED, {
