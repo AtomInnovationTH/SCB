@@ -528,6 +528,37 @@ export function fitsMouth(target, netClass, approachDir = null, presentedM = und
 }
 
 /**
+ * The ONE strain-band ramp (register item 88): where in the overload band does
+ * this payload sit? Pre-item-88 the interpolation —
+ * `strain = payloadMass / rated; safe = NET_STRAIN_SAFE_FRACTION ?? 0.8;
+ * t = min(1, (strain − safe) / max(1e-6, 1 − safe))` — was written at FOUR
+ * sites that merely agreed: the daughter reel-start slip
+ * (`ArmUnit._checkNetIntegrityOnReel`), the boost rip (`ArmUnit._updateReeling`),
+ * the mother reel entry (`_enterMotherReel`), and the declared odds mirror
+ * (`ToolOdds.computeStrainFailProbability`). The two ArmUnit sites differ in
+ * CAP semantics (one-shot `pMax × t` vs per-second `pPerS × t × dt`), so what
+ * is shared is the BAND RAMP, not the roll: the ramp lives here (beside
+ * `fitsMouth` — homing it in ToolOdds would force a CaptureNet→ToolOdds
+ * 2-cycle; this adds zero import edges) and each site keeps its own cap.
+ *
+ * Returns 0 for a non-positive mass/rating and at/below the safe fraction —
+ * byte-matching every pre-item-88 site, whose guards made the roll unreachable
+ * there (and the mirror return 0).
+ *
+ * @param {number} payloadMass — kg
+ * @param {number} ratedMass   — the net's rated mass (kg; MAX_CAPTURE_MASS)
+ * @returns {number} band position t ∈ [0, 1]: 0 at/below the safe fraction,
+ *   1 at/above 100 % rated
+ */
+export function strainBandT(payloadMass, ratedMass) {
+  if (!(payloadMass > 0) || !(ratedMass > 0)) return 0;
+  const strain = payloadMass / ratedMass;
+  const safe = Constants.NET_STRAIN_SAFE_FRACTION ?? 0.8;
+  if (strain <= safe) return 0;
+  return Math.min(1, (strain - safe) / Math.max(1e-6, 1 - safe));
+}
+
+/**
  * Compute fragmentation risk based on target fragility and impact KE.
  * Per CAPTURE_NET.md §5.1–§5.4.
  *
@@ -1393,15 +1424,16 @@ export class NetProjectile {
     }
     if (rated > 0 && mass > 0) {
       const strain = mass / rated;
-      const safe = Constants.NET_STRAIN_SAFE_FRACTION ?? 0.8;
-      if (strain > safe) {
+      // The band ramp routes through the ONE strain-band helper (register item
+      // 88); the CAP stays here — a one-shot roll vs NET_STRAIN_FAIL_PROB_MAX.
+      const t = strainBandT(mass, rated);
+      if (t > 0) {
         const pMax = Constants.NET_STRAIN_FAIL_PROB_MAX ?? 0;
-        const t = Math.min(1, (strain - safe) / Math.max(1e-6, 1 - safe));
         const roll = (this._strainRollOverride != null) ? this._strainRollOverride : Math.random();
         if (roll < pMax * t) {
           eventBus.emit(Events.COMMS_MESSAGE, {
             text: `Net strain slip — catch was ${Math.round(strain * 100)}% of the net's rated mass. `
-              + `Slips become likely above ${Math.round(safe * 100)}%.`,
+              + `Slips become likely above ${Math.round((Constants.NET_STRAIN_SAFE_FRACTION ?? 0.8) * 100)}%.`,
             source: 'SYSTEM', channel: 'CMD', priority: 'warning',
           });
           this._miss('strain_slip');

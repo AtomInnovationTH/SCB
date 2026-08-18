@@ -20,7 +20,7 @@ import { applyDetailLod } from '../scene/detailLodCull.js';
 import { AVIONICS_GUNMETAL, AVIONICS_DARK_OPTIC, AVIONICS_THERMAL_WHITE } from '../scene/avionicsMaterials.js';
 import { tetherReel } from '../systems/TetherReel.js';
 import { strutLocalDirection } from './ArmDockBasis.js';
-import { captureNetSystem, getNetClassForType, computeLeadAim, computeFragRisk, effectiveFragility, presentedWidthForApproach, fitsMouth } from './CaptureNet.js';
+import { captureNetSystem, getNetClassForType, computeLeadAim, computeFragRisk, effectiveFragility, presentedWidthForApproach, fitsMouth, strainBandT } from './CaptureNet.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import { recommendArmTool } from '../systems/ToolRecommender.js';
 import { computeToolOdds } from '../systems/ToolOdds.js';
@@ -4748,14 +4748,15 @@ export class ArmUnit {
     const oversized = !fitsMouth(debris, { DIAMETER: this._netDiameter }, null, debrisSize);
 
     // Probabilistic fail: heavy catch near the net's rated mass slips the weave.
+    // The band ramp routes through the ONE strain-band helper (register item
+    // 88); the CAP stays here — a one-shot roll vs NET_STRAIN_FAIL_PROB_MAX.
     let strain = 0;
     let strainFail = false;
     if (!oversized && payloadMass > 0 && rated > 0) {
       strain = payloadMass / rated;
-      const safe = Constants.NET_STRAIN_SAFE_FRACTION ?? 0.8;
-      if (strain > safe) {
+      const t = strainBandT(payloadMass, rated);
+      if (t > 0) {
         const pMax = Constants.NET_STRAIN_FAIL_PROB_MAX ?? 0;
-        const t = Math.min(1, (strain - safe) / Math.max(1e-6, 1 - safe));
         strainFail = Math.random() < pMax * t;
       }
     }
@@ -5193,9 +5194,10 @@ export class ArmUnit {
         && (!this._captureToolKind || this._captureToolKind === 'NET')
         && payloadMass > 0 && (this._netRatedMass || 0) > 0) {
       const strain = payloadMass / this._netRatedMass;
-      const safe = Constants.NET_STRAIN_SAFE_FRACTION ?? 0.8;
-      if (strain > safe) {
-        const t = Math.min(1, (strain - safe) / Math.max(1e-6, 1 - safe));
+      // The band ramp routes through the ONE strain-band helper (register item
+      // 88); the CAP stays here — a PER-SECOND roll vs RIP_PROB_PER_S, dt-scaled.
+      const t = strainBandT(payloadMass, this._netRatedMass);
+      if (t > 0) {
         const pPerS = (Constants.REEL_BOOST && Constants.REEL_BOOST.RIP_PROB_PER_S) ?? 0.10;
         const roll = (this._boostRipRollOverride != null) ? this._boostRipRollOverride : Math.random();
         if (roll < pPerS * t * dt) {

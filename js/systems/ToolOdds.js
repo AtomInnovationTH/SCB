@@ -40,6 +40,7 @@ import {
   captureNetSystem,
   netMaxReachM,
   fitsMouth,
+  strainBandT,
 } from '../entities/CaptureNet.js';
 
 /** Preference order for ▶ tie-breaks (matches ToolRecommender). */
@@ -58,18 +59,18 @@ export function toolShortLabel(kind) {
 
 /**
  * Strain-slip failure probability at reel start — EXACT mirror of the math in
- * ArmUnit._checkNetIntegrityOnReel (the resolve site).
+ * ArmUnit._checkNetIntegrityOnReel (the resolve site). The band ramp is the
+ * ONE shared `strainBandT` (register item 88 — homed in CaptureNet.js so the
+ * extraction adds no import edge); this mirror keeps its public shape and
+ * applies the one-shot cap (× NET_STRAIN_FAIL_PROB_MAX).
  * @param {number} payloadMass — kg
  * @param {number} ratedMass   — net class MAX_CAPTURE_MASS (kg)
  * @returns {number} P(net slips) ∈ [0, NET_STRAIN_FAIL_PROB_MAX]
  */
 export function computeStrainFailProbability(payloadMass, ratedMass) {
-  if (!(payloadMass > 0) || !(ratedMass > 0)) return 0;
-  const strain = payloadMass / ratedMass;
-  const safe = Constants.NET_STRAIN_SAFE_FRACTION ?? 0.8;
-  if (strain <= safe) return 0;
+  const t = strainBandT(payloadMass, ratedMass);
+  if (t <= 0) return 0;
   const pMax = Constants.NET_STRAIN_FAIL_PROB_MAX ?? 0;
-  const t = Math.min(1, (strain - safe) / Math.max(1e-6, 1 - safe));
   return pMax * t;
 }
 
