@@ -39,6 +39,7 @@ import {
   getNetClassForType,
   captureNetSystem,
   netMaxReachM,
+  fitsMouth,
 } from '../entities/CaptureNet.js';
 
 /** Preference order for ▶ tie-breaks (matches ToolRecommender). */
@@ -138,12 +139,12 @@ function computeNetOdds(opts) {
   }
 
   // ── Deterministic gates ──
-  // Width: presented width (Phase 2) falls back to the scalar sizeMeter.
+  // Width: presented width (Phase 2) falls back to the scalar sizeMeter. The
+  // verdict routes through the ONE mouth-fit predicate (register item 21a).
   const widthM = (typeof opts.presentedWidthM === 'number')
     ? opts.presentedWidthM
     : ((target && target.sizeMeter) || 0);
-  const dia = (netClass && netClass.DIAMETER) || 0;
-  if (dia > 0 && widthM > dia) {
+  if (!fitsMouth(target, netClass, null, widthM)) {
     return { p: 0, blocker: 'WIDE', hint: 'too wide for the net mouth' };
   }
   // Range: beyond tether pay-out or max flight time the shot times out — a

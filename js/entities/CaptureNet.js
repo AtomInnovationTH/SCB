@@ -400,8 +400,9 @@ export function assessNetFit(target, netClass, approachDir = null) {
         // Fits end-on only. With a live approach direction report the CURRENT
         // presentation; statically report the aspect opportunity.
         if (approachDir) {
-          const presented = presentedWidthForApproach(target, approachDir);
-          if (presented > dia) return { fit: 'ASPECT', label: 'END-ON ONLY' };
+          // The live presentation routes through the ONE mouth-fit predicate
+          // (register item 21a); the widthM tier above stays a static test.
+          if (!fitsMouth(target, netClass, approachDir)) return { fit: 'ASPECT', label: 'END-ON ONLY' };
           // currently presented end-on → fits; fall through to mass/tumble
         } else {
           return { fit: 'ASPECT', label: 'END-ON ONLY' };
@@ -490,6 +491,40 @@ export function presentedWidthForApproach(debris, approachDir) {
   const cosTheta = Math.abs((axis.x * approachDir.x + axis.y * approachDir.y
     + axis.z * approachDir.z) / len);
   return presentedWidth(lengthM, widthM, cosTheta);
+}
+
+/**
+ * The ONE mouth-fit verdict (register item 21a): does the target's presented
+ * width clear this net class's mouth? Pre-item-21 the comparison was written
+ * at FOUR sites that merely agreed — `assessNetFit`'s live ASPECT tier, the
+ * ToolOdds WIDE blocker, and both oversize_aspect bounces (contact + reel
+ * entry) — while the one-quantity doctrine governed only the geometry
+ * (`presentedWidthForApproach`). Now the verdict has one home too.
+ *
+ * The refusal is STRICTLY-greater and a mouthless class never refuses, so a
+ * NaN presented width never refuses — byte-matching every pre-item-21 site.
+ *
+ * `assessNetFit`'s widthM tier (TOO_WIDE — the static end-on cross-section)
+ * deliberately stays inline: it tests a DIFFERENT quantity (widthM, not the
+ * live presentation), and routing it through here would compute worldLongAxis
+ * only to throw it away.
+ *
+ * @param {object|null} target
+ * @param {{DIAMETER?:number}|null} netClass
+ * @param {{x:number,y:number,z:number}|null} [approachDir] — launcher→target
+ *   (any length); ignored when `presentedM` is given
+ * @param {number} [presentedM] — a PRECOMPUTED presented width: the contact-
+ *   time store (reel entry re-judges the SAME presentation, not the live one
+ *   the drifted tumble would now give) or the odds caller's override. Omit to
+ *   compute the live presentation.
+ * @returns {boolean} true when the mouth fits the presentation
+ */
+export function fitsMouth(target, netClass, approachDir = null, presentedM = undefined) {
+  const dia = (netClass && netClass.DIAMETER) || 0;
+  if (!(dia > 0)) return true;
+  const p = (typeof presentedM === 'number') ? presentedM
+    : presentedWidthForApproach(target, approachDir);
+  return !(p > dia);
 }
 
 /**
@@ -1348,9 +1383,11 @@ export class NetProjectile {
     // so the HUD would otherwise promise a slip that can never happen.
     const rated = this.netClass.MAX_CAPTURE_MASS || 0;
     const mass = d.mass || 0;
+    // Re-judge the SAME presentation contact recorded (not the live one the
+    // carried tumble has drifted to) through the ONE mouth-fit predicate
+    // (register item 21a).
     const presented = this._presentedWidthM ?? d.sizeMeter ?? 0;
-    const netDia = this.netClass.DIAMETER || 0;
-    if (netDia > 0 && presented > netDia) {
+    if (!fitsMouth(d, this.netClass, null, presented)) {
       this._miss('oversize_aspect');
       return false;
     }
@@ -2077,11 +2114,11 @@ export class NetProjectile {
 
     // Phase 2 (ASPECT_CAPTURE): presented width at CONTACT — the moment the
     // mouth meets the body decides whether it can swallow it. Broadside on an
-    // oversize presentation is a deterministic bounce, not a bad roll.
+    // oversize presentation is a deterministic bounce, not a bad roll. The
+    // verdict routes through the ONE mouth-fit predicate (register item 21a).
     if (Constants.isFeatureEnabled('ASPECT_CAPTURE') && this.targetDebris) {
       this._presentedWidthM = presentedWidthForApproach(this.targetDebris, this.launchDirection);
-      const dia = this.netClass.DIAMETER || 0;
-      if (dia > 0 && this._presentedWidthM > dia) {
+      if (!fitsMouth(this.targetDebris, this.netClass, this.launchDirection, this._presentedWidthM)) {
         this._miss('oversize_aspect');
         return;
       }

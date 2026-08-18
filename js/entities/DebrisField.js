@@ -1580,6 +1580,31 @@ export class DebrisField {
   }
 
   /**
+   * The net-held readability floor (`_catchRenderMin`) as ONE computation,
+   * applied to ANY pre-floor uniform scale (register item 21b). Pre-item-21
+   * the predicate had two homes that merely agreed: `effectiveRenderScale`
+   * (the SSOT reader, below) and `_updateInstanceTransform`'s inline
+   * re-implementation — writer A, which must compose with the LOD multipliers
+   * and the reveal smoothstep IN PLACE (and is the ONLY matrix writer for a
+   * lasso-held catch, which never reaches `pinCapturedDebris`). Now both route
+   * here: the SSOT passes `baseRenderScale` and the field-only pinned default;
+   * writer A passes its per-frame scale and its OWN pinned local — deliberately
+   * stricter (`_armPinned && _armPinPos`), because that local also gates the
+   * pin-POSITION read, so the half-cleared state must not floor here either.
+   * Never shrinks: the floor wins only when it exceeds the caller's scale.
+   * @param {object} debris
+   * @param {number} preFloorScale — the caller's pre-floor uniform scale
+   *   (a base, or writer A's per-frame LOD-slot scale)
+   * @param {boolean} [pinned=!!debris._armPinned] — the caller's held
+   *   determination
+   * @returns {number} the floored uniform scale (scene units)
+   */
+  static catchRenderFloorScale(debris, preFloorScale, pinned = !!debris._armPinned) {
+    const min = debris._catchRenderMin;
+    return (pinned && min > preFloorScale) ? min : preFloorScale;
+  }
+
+  /**
    * The scale the renderer will actually use, including the net-held
    * readability floor (`_catchRenderMin`, applied only while `_armPinned` —
    * DebrisField.js `_updateInstanceTransform`). Read-only companion to
@@ -1587,13 +1612,13 @@ export class DebrisField {
    * renderer. Register item 9: `pinCapturedDebris` (whale-in-cone W4's second
    * write path) now reads its scale through THIS helper too — one clamp-aware
    * computation for the probe, the bag's contents floor, and both matrix
-   * writers.
+   * writers. Register item 21b: the floor itself is `catchRenderFloorScale`
+   * (above) — the ONE computation this reader and writer A both route through.
    * @param {object} debris
    * @returns {number} effective uniform instance scale (scene units)
    */
   static effectiveRenderScale(debris) {
-    const base = DebrisField.baseRenderScale(debris);
-    return (debris._armPinned && debris._catchRenderMin > base) ? debris._catchRenderMin : base;
+    return DebrisField.catchRenderFloorScale(debris, DebrisField.baseRenderScale(debris));
   }
 
   /**
@@ -2169,9 +2194,15 @@ export class DebrisField {
     // `pinCapturedDebris` — which overwrites this matrix later in the same frame
     // for a pinned catch — applies the IDENTICAL floor through
     // `effectiveRenderScale`, so the two writers cannot disagree on the drawn size.
-    if (_armPinned && debris._catchRenderMin && scale < debris._catchRenderMin) {
-      scale = debris._catchRenderMin;
-    }
+    // Register item 21b: the floor predicate itself now has ONE home —
+    // `catchRenderFloorScale`. This writer passes its OWN pinned local (the
+    // stricter `_armPinned && _armPinPos` — it also gates the pin-position read
+    // above); the SSOT reader uses the field-only default. This site is the ONLY
+    // matrix writer for a lasso-held catch (LassoSystem never calls
+    // `pinCapturedDebris`), so it composes with the LOD multipliers above and
+    // the reveal smoothstep below IN PLACE — deliberately not a call to
+    // `effectiveRenderScale`, which reads the base, not this frame's LOD slot.
+    scale = DebrisField.catchRenderFloorScale(debris, scale, _armPinned);
 
     // ST-6.2: Store LOD scale for flag overlay sync
     debris._lodScale = scale;
