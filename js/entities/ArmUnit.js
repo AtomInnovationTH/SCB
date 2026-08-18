@@ -20,7 +20,7 @@ import { applyDetailLod } from '../scene/detailLodCull.js';
 import { AVIONICS_GUNMETAL, AVIONICS_DARK_OPTIC, AVIONICS_THERMAL_WHITE } from '../scene/avionicsMaterials.js';
 import { tetherReel } from '../systems/TetherReel.js';
 import { strutLocalDirection } from './ArmDockBasis.js';
-import { captureNetSystem, getNetClassForType, computeLeadAim, computeFragRisk, effectiveFragility, presentedWidthForApproach } from './CaptureNet.js';
+import { captureNetSystem, getNetClassForType, computeLeadAim, computeFragRisk, effectiveFragility, presentedWidthForApproach, fitsMouth } from './CaptureNet.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import { recommendArmTool } from '../systems/ToolRecommender.js';
 import { computeToolOdds } from '../systems/ToolOdds.js';
@@ -4741,7 +4741,11 @@ export class ArmUnit {
     const netDia = this._netDiameter || 0;
 
     // Hard fail: debris wider than the net mouth can't be enveloped/cinched.
-    const oversized = netDia > 0 && debrisSize > netDia;
+    // The verdict routes through the ONE mouth-fit predicate (register item 21a;
+    // the rule's fifth home — register item 87): the bare-number diameter rides
+    // the netClass seam, the stored contact-time width the precomputed seam.
+    // Byte-identical to the legacy inline form (the refusal form — NaN never refuses).
+    const oversized = !fitsMouth(debris, { DIAMETER: this._netDiameter }, null, debrisSize);
 
     // Probabilistic fail: heavy catch near the net's rated mass slips the weave.
     let strain = 0;
