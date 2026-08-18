@@ -9,6 +9,7 @@
 
 import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
+import { devShotGate } from '../core/DevShotGate.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { orbitToSceneCartesian } from '../entities/OrbitalMechanics.js';
@@ -241,10 +242,13 @@ export class LassoSystem {
         /** @type {number} Diagnostics — throttle counter for per-frame trace logs. */
         this._dbgFrame = 0;
         // Diagnostics: expose the live instance + a state dumper so issues can be
-        // inspected from the browser console without a rebuild. Enable tracing with
+        // inspected from the browser console without a rebuild. The hooks install
+        // ONLY under the dev net-shot opt-in — `?shot=1` or `?shotauto=1`
+        // (devShotGate.requested, the same explicit opt-in as the __net* surface;
+        // register item 18). Trace logging keeps its own switch:
         //   window.__lassoDebug = true
         // then fire a net (N). Snapshot anytime with window.__lassoState().
-        if (typeof window !== 'undefined') {
+        if (typeof window !== 'undefined' && devShotGate.requested) {
             window.__lasso = this;
             window.__lassoState = () => this._dbgSnapshot();
             // Live flag toggle for A/B testing without a rebuild/restart, e.g.:

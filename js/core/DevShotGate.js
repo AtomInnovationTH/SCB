@@ -22,9 +22,9 @@
  * idiom): the `main.js` install gate and the `SceneManager`
  * `preserveDrawingBuffer` read both consume `requested`, and the
  * auto-capture default consumes `shotautoRequested`. This singleton is also
- * the explicit opt-in seam register item 18 would gate the ungated
- * `__lasso*` hooks behind (item 18 is its own session — the lasso hooks
- * are NOT gated here).
+ * the explicit opt-in seam register item 18 gates the `__lasso*` hooks
+ * behind (item 18 CLOSED 2026-08-18 — the guard lives in LassoSystem.js,
+ * not here).
  *
  * Safe off-browser (Node test runner): returns the all-defaults struct when
  * `window` / `URLSearchParams` is unavailable.
