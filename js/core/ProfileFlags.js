@@ -4,7 +4,11 @@
  * Centralised parser for `?profile…=1` / `?disable…=1` / `?msaa=N`
  * /`?pixelRatio=N` query parameters used to A/B-isolate GPU costs at
  * runtime. Read **once** at module load so every consumer agrees on the
- * same boolean / numeric values for the entire session.
+ * same boolean / numeric values for the entire session. There is exactly
+ * ONE parser — the module-private `parse(search)`; the live singleton
+ * (`parseFromLocation`) delegates after the window/URLSearchParams guard and
+ * the test seam (`_parseForTest`) delegates without it, so the two cannot
+ * drift (register item 89).
  *
  * Activation pattern mirrors [`main.js`](js/main.js:202)'s `?perfReport=1`
  * convention and [`SceneManager._detectInitialTier()`](js/scene/SceneManager.js:113)'s
@@ -112,40 +116,17 @@ function readFloatInRange(params, key, min, max) {
  */
 
 /**
- * Parse the live URL query string into a frozen {@link ProfileFlags} object.
- * Safe to call from non-browser contexts (Node test runner) — returns a
- * struct with all defaults when `window` / `URLSearchParams` is unavailable.
+ * Parse a query string into a frozen {@link ProfileFlags}. **The ONE parser** —
+ * the live singleton and the test seam both delegate to it, so they cannot
+ * drift (register item 89: this was once written twice — `parseFromLocation`
+ * and `_parseForTest` each parsed all eleven fields — and a mutation in the
+ * singleton's copy was invisible to the suite, the DevShotGate M3 shape).
  *
+ * @param {string} search — query string including leading `?`
  * @returns {ProfileFlags}
  */
-function parseFromLocation() {
-  /** @type {ProfileFlags} */
-  const defaults = {
-    profilePasses: false,
-    autoProfile: false,
-    pinTier: false,
-    disableEarthNoise: false,
-    disableBloom: false,
-    disableSMAA: false,
-    disableClouds: false,
-    disableAtmosphere: false,
-    msaaOverride: null,
-    pixelRatioOverride: null,
-    bloomThresholdOverride: null,
-    anyEnabled: false,
-  };
-
-  if (typeof window === 'undefined' || typeof URLSearchParams === 'undefined') {
-    return Object.freeze(defaults);
-  }
-
-  let params;
-  try {
-    params = new URLSearchParams(window.location.search);
-  } catch (_e) {
-    return Object.freeze(defaults);
-  }
-
+function parse(search) {
+  const params = new URLSearchParams(search || '');
   const flags = {
     profilePasses: params.get('profilePasses') === '1',
     autoProfile: params.get('autoProfile') === '1',
@@ -173,13 +154,53 @@ function parseFromLocation() {
     flags.pixelRatioOverride !== null ||
     flags.bloomThresholdOverride !== null;
 
+  return Object.freeze(flags);
+}
+
+/** @type {ProfileFlags} */
+const DEFAULTS = Object.freeze({
+  profilePasses: false,
+  autoProfile: false,
+  pinTier: false,
+  disableEarthNoise: false,
+  disableBloom: false,
+  disableSMAA: false,
+  disableClouds: false,
+  disableAtmosphere: false,
+  msaaOverride: null,
+  pixelRatioOverride: null,
+  bloomThresholdOverride: null,
+  anyEnabled: false,
+});
+
+/**
+ * Parse the live URL query string into a frozen {@link ProfileFlags} object.
+ * Safe to call from non-browser contexts (Node test runner) — returns the
+ * all-defaults struct when `window` / `URLSearchParams` is unavailable.
+ * Guards, then delegates to the ONE parser (`parse`); the `[ProfileFlags]
+ * active:` log stays on this live path only, so the test seam stays silent.
+ *
+ * @returns {ProfileFlags}
+ */
+function parseFromLocation() {
+  if (typeof window === 'undefined' || typeof URLSearchParams === 'undefined') {
+    return DEFAULTS;
+  }
+
+  let flags;
+  try {
+    flags = parse(window.location.search);
+  } catch (_e) {
+    return DEFAULTS;
+  }
+
   if (flags.anyEnabled && typeof console !== 'undefined') {
     try {
       console.info('[ProfileFlags] active:', flags);
     } catch (_e) { /* noop */ }
   }
 
-  return Object.freeze(flags);
+  return flags;
 }
 
 /**
@@ -192,40 +213,15 @@ function parseFromLocation() {
 export const profileFlags = parseFromLocation();
 
 /**
- * Test helper — exposes the parser so unit tests can drive deterministic
- * inputs without mutating `window.location`. Not part of the runtime API.
+ * Test helper — drives deterministic query strings through the ONE parser
+ * without mutating `window.location`. Not part of the runtime API.
+ * Delegates WITHOUT the window/URLSearchParams guard (the DevShotGate idiom).
  *
  * @param {string} search — query string including leading `?`
  * @returns {ProfileFlags}
  */
 export function _parseForTest(search) {
-  const params = new URLSearchParams(search || '');
-  const out = {
-    profilePasses: params.get('profilePasses') === '1',
-    autoProfile: params.get('autoProfile') === '1',
-    pinTier: params.get('pinTier') === '1',
-    disableEarthNoise: params.get('disableEarthNoise') === '1',
-    disableBloom: params.get('disableBloom') === '1',
-    disableSMAA: params.get('disableSMAA') === '1',
-    disableClouds: params.get('disableClouds') === '1',
-    disableAtmosphere: params.get('disableAtmosphere') === '1',
-    msaaOverride: readIntInRange(params, 'msaa', 0, 8),
-    pixelRatioOverride: readFloatInRange(params, 'pixelRatio', 0.5, 4),
-    bloomThresholdOverride: readFloatInRange(params, 'bloomThreshold', 0.5, 8),
-  };
-  out.anyEnabled =
-    out.profilePasses ||
-    out.autoProfile ||
-    out.pinTier ||
-    out.disableEarthNoise ||
-    out.disableBloom ||
-    out.disableSMAA ||
-    out.disableClouds ||
-    out.disableAtmosphere ||
-    out.msaaOverride !== null ||
-    out.pixelRatioOverride !== null ||
-    out.bloomThresholdOverride !== null;
-  return Object.freeze(out);
+  return parse(search);
 }
 
 export default profileFlags;

@@ -1510,7 +1510,7 @@ async function init() {
         ctx.drawImage(cv, 0, 0);
         const url = flat.toDataURL('image/png');
         if (url.length < 1000) {
-          console.warn('[netShot] canvas read-back looks empty — is ?shot=1 set and a frame rendered?');
+          console.warn('[netShot] canvas read-back looks empty — is ?shot=1 or ?shotauto=1 set and a frame rendered?');
         }
         const safe = String(name || 'frame').replace(/[^a-z0-9_-]/gi, '');
         const ts = new Date().toISOString().replace(/[:.]/g, '-');
