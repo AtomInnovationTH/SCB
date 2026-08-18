@@ -1337,7 +1337,7 @@ export const Constants = {
     TOTAL_DRY_MASS: 211.4,         // was 196.4
     TOTAL_WET_MASS: 257.4,         // was 242.4
     CORE_DRY_MASS: 176.0,          // was 161 — bus + ROSA + body-mount + collar (S13(c))
-    CORE_WET_MASS: 216,            // unchanged (carries forward propellant calc — register item 56)
+    CORE_WET_MASS: 222,            // was 216 — 176 + 40 + 6 (collar-era dry + carried propellant; register item 56)
     WEAVER_MASS: 6.6,              // unchanged
     SPINNER_MASS: 2.1,             // unchanged
     FRONT_ARM_MASS: 6.6,           // retained for Y3
