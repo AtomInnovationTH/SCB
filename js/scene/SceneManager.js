@@ -19,6 +19,7 @@ import { FXAAShader } from 'three/addons/shaders/FXAAShader.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Constants } from '../core/Constants.js';
+import { devShotGate } from '../core/DevShotGate.js';
 import { NearFieldRenderPass, NEAR_FIELD_LAYER, NEAR_FIELD_SCALE } from './NearFieldRenderPass.js';
 import { nearFieldBrackets } from './nearFieldMath.js';
 
@@ -71,16 +72,13 @@ export class SceneManager {
     // (Constants.RENDER_ORDER) plus a tiny geometric Z stagger over polygonOffset.
     // Existing polygonOffset values on the ship hull are legacy from FIX_PLAN §2;
     // do not add more — promote to renderOrder bands instead.
-    // Dev screenshot loop (Phase 0 of the net-visual plan): `?shot=1` enables
-    // `preserveDrawingBuffer` so `window.__netShot()` can read back the exact
-    // `#game-canvas` pixels via `toDataURL`. A plain (non-preserved) buffer
-    // returns black on read-back. Default OFF — this has a measurable perf cost
-    // and must never ship enabled.
-    let _preserveDrawingBuffer = false;
-    try {
-      const _p = new URLSearchParams(window.location.search);
-      _preserveDrawingBuffer = _p.get('shot') === '1' || _p.has('shot');
-    } catch (_e) { /* non-browser env — ignore */ }
+    // Dev screenshot loop (Phase 0 of the net-visual plan): `?shot=1` or
+    // `?shotauto=1` enables `preserveDrawingBuffer` via the ONE shared
+    // predicate (js/core/DevShotGate.js) so `window.__netShot()` can read back
+    // the exact `#game-canvas` pixels via `toDataURL`. A plain (non-preserved)
+    // buffer returns black on read-back. Default OFF — this has a measurable
+    // perf cost and must never ship enabled.
+    const _preserveDrawingBuffer = devShotGate.requested;
     this.renderer = new THREE.WebGLRenderer({
       canvas,
       antialias: false,

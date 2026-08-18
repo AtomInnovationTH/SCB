@@ -116,6 +116,7 @@ import { captureNetSystem, isInsideCone, coneRadiusAtDepth } from './entities/Ca
 import perfReportOverlay, { captureBootInfo } from './ui/PerfReportOverlay.js';
 import { isAvifSupported } from './scene/Earth.js';
 import { profileFlags } from './core/ProfileFlags.js';
+import { devShotGate } from './core/DevShotGate.js';
 import { AutoProfileSweep } from './systems/AutoProfileSweep.js';
 import { gameState as _gameStateRefForProfile } from './core/GameState.js';
 
@@ -1473,8 +1474,9 @@ async function init() {
   }
 
   // --- Net-visual screenshot loop (Phase 0 + auto-capture) ---
-  // Dev-only, gated by `?shot=1` (which also flips on `preserveDrawingBuffer`
-  // in SceneManager). Closes the "blind agent" loop: an agent on this host can
+  // Dev-only, gated by `?shot=1` or `?shotauto=1` — the ONE shared predicate
+  // (js/core/DevShotGate.js), which also flips on `preserveDrawingBuffer`
+  // in SceneManager. Closes the "blind agent" loop: an agent on this host can
   // read back the exact #game-canvas pixels — no screen-recording permission,
   // no foreground-window dependency, no pause overlay obscuring the net.
   //
@@ -1489,15 +1491,14 @@ async function init() {
   // three are the Phase D mother beats (berth, reel-in end, secured) this net
   // visual plan is judged on. Files: netshot-auto-<beat>-<ts>.png.
   try {
-    const _shotParams = new URLSearchParams(window.location.search);
-    if (_shotParams.get('shot') === '1' || _shotParams.has('shot') ||
-        _shotParams.get('shotauto') === '1' || _shotParams.has('shotauto')) {
+    if (devShotGate.requested) {
       const _netCapture = (name) => {
         const cv = document.getElementById('game-canvas');
         if (!cv) { console.error('[netShot] #game-canvas not found'); return; }
-        // preserveDrawingBuffer (set by ?shot) keeps the last rendered frame
-        // readable even while paused. The WebGL frame's alpha is 0 in most
-        // pixels (the composer writes colour without alpha), so a direct
+        // preserveDrawingBuffer (set by the same DevShotGate predicate) keeps
+        // the last rendered frame readable even while paused. The WebGL
+        // frame's alpha is 0 in most pixels (the composer writes colour
+        // without alpha), so a direct
         // toDataURL() yields a *transparent* PNG viewers show as white —
         // composite onto opaque black first so the export matches the screen.
         const flat = document.createElement('canvas');
@@ -1788,7 +1789,7 @@ async function init() {
       };
 
       // ── Deterministic auto-capture at net FSM key beats ──
-      let _autoOn = _shotParams.get('shotauto') === '1' || _shotParams.has('shotauto');
+      let _autoOn = devShotGate.shotautoRequested;
       const _beatsDone = new Set();   // debounce: one shot per beat per net cycle
       // Snap after the new state has had two frames to render (and a touch of
       // settle) so the captured frame shows the beat, not the transition into it.
