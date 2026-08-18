@@ -1561,6 +1561,25 @@ export class DebrisField {
   }
 
   /**
+   * The physical (UNfloored) uniform instance scale — the ONE base expression
+   * every render-scale computation shares: `sceneSize`, else
+   * `sizeMeter × METRE_SCENE`, else 0. Register item 19 (2026-08-18):
+   * extracted so BOTH the clamp-aware reader (`effectiveRenderScale`, below)
+   * and the item-15 ramp's base (`CaptureNet._catchFloorScale`) compute it
+   * through this static — the ramp previously carried a byte-copy of the
+   * expression (hard-coded 1e-5 included), so a base that ever gained a term
+   * here would silently restart item 15's one-frame pop, and the item-8
+   * property freeze makes every gate blind to the written value by
+   * construction. Read-only companion to `setDebrisSize` (which keeps
+   * sceneSize in sync, so this normally just reads it back).
+   * @param {object} debris
+   * @returns {number} base uniform instance scale (scene units)
+   */
+  static baseRenderScale(debris) {
+    return debris.sceneSize || (debris.sizeMeter ? debris.sizeMeter * METRE_SCENE : 0);
+  }
+
+  /**
    * The scale the renderer will actually use, including the net-held
    * readability floor (`_catchRenderMin`, applied only while `_armPinned` —
    * DebrisField.js `_updateInstanceTransform`). Read-only companion to
@@ -1573,7 +1592,7 @@ export class DebrisField {
    * @returns {number} effective uniform instance scale (scene units)
    */
   static effectiveRenderScale(debris) {
-    const base = debris.sceneSize || (debris.sizeMeter ? debris.sizeMeter * 0.00001 : 0);
+    const base = DebrisField.baseRenderScale(debris);
     return (debris._armPinned && debris._catchRenderMin > base) ? debris._catchRenderMin : base;
   }
 

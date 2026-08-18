@@ -18,6 +18,7 @@ import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { BridleRing } from './BridleRing.js';
+import { DebrisField } from './DebrisField.js';
 import { DebrisWireframe } from '../ui/DebrisWireframe.js';
 import { CeremonyTimeScale } from '../systems/CeremonyTimeScale.js';
 import { reseatOrbitFromScene, orbitToSceneCartesianInto } from './OrbitalMechanics.js';
@@ -1492,7 +1493,7 @@ export class NetProjectile {
     const rampS = Math.max(1e-6, CN.MOTHER_CATCH_MIN_RENDER_RAMP_S ?? 0.6);
     const frac = Math.min(1, this._floorRampT / rampS);
     const ease = frac * frac * (3 - 2 * frac);           // smoothstep
-    const base = d.sceneSize || (d.sizeMeter ? d.sizeMeter * 0.00001 : 0);
+    const base = DebrisField.baseRenderScale(d);   // item 19: ONE static — was a byte-copy of the SSOT base
     return base + (fullFloor - base) * ease;
   }
 
