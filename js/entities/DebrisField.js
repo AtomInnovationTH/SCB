@@ -3551,6 +3551,16 @@ export class DebrisField {
       debris.tracked = Math.random() < TRACKING_PROB.fragment;
       DebrisField.setDebrisSize(debris, randRange(0.01, 0.5));
       debris.mass = mass / actualCount;
+      // Register item 55: _createDebrisData generated the salvage triplet from
+      // the DISCARDED draw (weighted type, power-law/pool mass) — regenerate it
+      // for the fragment this ships (the post-hoc regen idiom _spawnWelcomeField
+      // and _spawnThreatField use after their retags).
+      debris.salvage = this._generateSalvage(debris.type, debris.mass, debris.material);
+      debris.hasSalvage = debris.salvage.xenon > 0 || debris.salvage.indium > 0 ||
+        debris.salvage.gaAs > 0 || debris.salvage.battery > 0 || debris.salvage.hydrazine > 0 ||
+        debris.salvage.lithium > 0 ||
+        (debris.salvage.metals && debris.salvage.metals.length > 0);
+      debris.metalMassKg = (debris.salvage.metals || []).reduce((sum, m) => sum + m.amount, 0);
       debris.tumbleRate = randRange(30, 180) * Math.PI / 180;
       debris._initialTumbleRate = debris.tumbleRate; // E1: keep spawn-tumble in sync with the override
 
