@@ -1094,12 +1094,16 @@ export class DebrisField {
         break;
       }
       case 'fragment': {
-        // NOTE: Fragments are now never the `solar_cell` material (see
-        // MATERIAL_WEIGHTS_BY_TYPE) — intact PV cells don't survive as loose
-        // explosion shards, so fragment-sourced GaAs was removed. GaAs salvage
-        // still comes from defunctSat (type-based, above). The orphaned
-        // SALVAGE_PROB_FRAGMENT_GAAS constant is left in Constants.js for any
-        // future re-introduction.
+        // NOTE: no fragment-sourced GaAs. A shard CAN draw the `solar_cell`
+        // material tag — the fragment row gives it 0.06 (shed PV scraps read
+        // as junk, not intact panels — see MATERIAL_WEIGHTS_BY_TYPE's
+        // docblock) — but GaAs salvage is reserved for defunctSat's
+        // intact-array roll (type-based, above): a loose scrap has no
+        // recoverable cell. The orphaned SALVAGE_PROB_FRAGMENT_GAAS constant
+        // is left in Constants.js for any future re-introduction. (This
+        // note's premise previously read "fragments are never solar_cell" —
+        // true only of bbf54bb's original fragment row; c4d1f0b restored the
+        // 0.06 slot for the M1 welcome plates. Register item 91.)
         // Trace Indium in titanium alloys
         if (material === 'titanium' && Math.random() < C.SALVAGE_PROB_FRAGMENT_INDIUM) {
           salvage.indium = C.SALVAGE_INDIUM_MIN +
