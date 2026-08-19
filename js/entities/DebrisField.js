@@ -3551,6 +3551,23 @@ export class DebrisField {
       debris.tracked = Math.random() < TRACKING_PROB.fragment;
       DebrisField.setDebrisSize(debris, randRange(0.01, 0.5));
       debris.mass = mass / actualCount;
+      // Register item 90: the discarded draw rode into the shipped shard beyond
+      // the item-55 triplet — `material` stayed weighted by the discarded
+      // type's MATERIAL_WEIGHTS_BY_TYPE row (a shard drawn AS a rocketBody
+      // carried that row's odds — measured 45/23/22 aluminium/titanium/steel,
+      // never mli_mylar or solar_cell — where the fragment row intends
+      // 34/20/29.5 with ~6 % each MLI/PV), and the deriveCaptureFlags
+      // quadruple in _createDebrisData's return literal kept the discarded
+      // (material, type, mass) — measured 27 % of shipped fragments carrying
+      // hasFerrousFasteners + hasGrappleFixture, both intact-only lists.
+      // Redraw the material from the fragment row BEFORE the item-55 regen
+      // reads it, and re-derive the flags from the shipped triple. Brittleness
+      // is a type-blind uniform roll (:926) — re-rolled for provenance (no
+      // discarded-draw field ships), identical in distribution today, honest
+      // if :926 ever gains a type term.
+      debris.material = weightedMaterial(debris.type);
+      Object.assign(debris, deriveCaptureFlags(debris.material, debris.type, debris.mass));
+      debris.brittleness = Math.random();
       // Register item 55: _createDebrisData generated the salvage triplet from
       // the DISCARDED draw (weighted type, power-law/pool mass) — regenerate it
       // for the fragment this ships (the post-hoc regen idiom _spawnWelcomeField
