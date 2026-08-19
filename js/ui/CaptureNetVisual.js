@@ -800,7 +800,21 @@ export class CaptureNetVisual {
         continue;
       }
       if (vis) {
-        vis.discMesh.material.opacity = Math.max(0, f.timer / f.duration) * 0.6;
+        const fadeOpacity = Math.max(0, f.timer / f.duration) * 0.6;
+        if (vis.kitHandle) {
+          // Register item 30: ride the kit's opacity SSOT so the membrane (and
+          // the transparent drawstring/apex hub it owns) fades WITH the web
+          // instead of popping at _removeNetVisual. vis.discMesh ===
+          // kitHandle.coneMesh (the flash-timer alias), so the cone write
+          // inside setOpacity is byte-identical to the legacy line below; the
+          // membrane follows at o × _membraneOpacityFrac — the kit's own
+          // proportional-fade discipline (MEMBRANE_OPACITY: "× web opacity
+          // fade"). Non-transparent rim-weight mats are skipped by setOpacity
+          // (opacity has no render effect on them), exactly as the kit intends.
+          NetMeshKit.setOpacity(vis.kitHandle, fadeOpacity);
+        } else {
+          vis.discMesh.material.opacity = fadeOpacity;   // legacy flag-off flat disc
+        }
       }
     }
 
