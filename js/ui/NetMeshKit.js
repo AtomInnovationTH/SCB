@@ -1168,6 +1168,56 @@ export const NetMeshKit = {
   },
 
   /**
+   * Capture the handle's live per-surface opacities as a fade SEED (register
+   * item 92). The fade's first frame must equal the last state-driven frame on
+   * every faded surface (the continuity law's "never a pop" applies to the
+   * fade's first frame too): the ceremony state machine holds the cone at 0.55
+   * (or the SECURE_CHECK pulse's last sample) while the membrane / drawstring
+   * / weights / apex hub rest at their build values, so no single scalar seed
+   * can be continuous everywhere. One allocation per capture (one per fade
+   * timer); setOpacityScaled below allocates nothing.
+   * @param {object} h handle
+   * @returns {{cone:number, membrane:number|null, drawstring:number|null,
+   *            weights:number[], apex:number|null}}
+   */
+  captureOpacity(h) {
+    return {
+      cone: (h.coneMesh && h.coneMesh.material) ? h.coneMesh.material.opacity : 1,
+      membrane: h.membraneMat ? h.membraneMat.opacity : null,
+      drawstring: (h.drawstringLine && h.drawstringLine.material) ? h.drawstringLine.material.opacity : null,
+      weights: h.rimWeightMats.map(m => m.opacity),
+      apex: (h.apexHub && h.apexHub.material) ? h.apexHub.material.opacity : null,
+    };
+  },
+
+  /**
+   * Fade every fade-able surface from its captured live seed by s ∈ [0,1] —
+   * the seeded counterpart of setOpacity (which keeps its absolute contract
+   * for the lasso's fade-in/out driver). Non-transparent weight/hub materials
+   * are skipped exactly as setOpacity skips them (opacity has no render effect
+   * there). The membrane fades from ITS OWN live value, so the live frame's
+   * membrane:web ratio holds through the fade instead of snapping to
+   * _membraneOpacityFrac at fade start. No allocations.
+   * @param {object} h handle
+   * @param {object} seed — a captureOpacity() snapshot
+   * @param {number} s fade fraction (1 = the live frame, 0 = gone)
+   */
+  setOpacityScaled(h, seed, s) {
+    if (h.coneMesh && h.coneMesh.material) h.coneMesh.material.opacity = seed.cone * s;
+    if (h.membraneMat && seed.membrane != null) h.membraneMat.opacity = seed.membrane * s;
+    if (h.drawstringLine && h.drawstringLine.material && seed.drawstring != null) {
+      h.drawstringLine.material.opacity = seed.drawstring * s;
+    }
+    for (let i = 0; i < h.rimWeightMats.length; i++) {
+      const mat = h.rimWeightMats[i];
+      if (mat.transparent) mat.opacity = seed.weights[i] * s;
+    }
+    if (h.apexHub && h.apexHub.material && h.apexHub.material.transparent && seed.apex != null) {
+      h.apexHub.material.opacity = seed.apex * s;
+    }
+  },
+
+  /**
    * Rotate the web about its local Z axis by repositioning the rim nodes (used
    * when the consumer drives spin per-node rather than via the group quaternion).
    * @param {object} h handle

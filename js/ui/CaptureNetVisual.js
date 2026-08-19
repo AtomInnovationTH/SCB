@@ -676,6 +676,16 @@ export class CaptureNetVisual {
       diameter,
       weightCount,
       // childrenVisible defaults false — the FSM toggles per-state visibility.
+      // Register item 92(b): fade-able rim-weight glints, so the seeded fade
+      // dims them with the rest of the bag instead of popping them at
+      // _removeNetVisual (the lasso's mother net was already built this way —
+      // LassoSystem.js:514). The glints are AdditiveBlending either way, so
+      // the transparent flag only moves them between render lists; the drawn
+      // frame is identical except where a glint's pixels overlap the catch's
+      // silhouette (the additive contribution now lands OVER the catch instead
+      // of being overwritten by it) — the gate re-adjudication is the item's
+      // own prescribed step.
+      weightTransparent: true,
     });
     const coneMesh = kitHandle.coneMesh;
     const rimWeights = kitHandle.rimWeights;
@@ -800,20 +810,33 @@ export class CaptureNetVisual {
         continue;
       }
       if (vis) {
-        const fadeOpacity = Math.max(0, f.timer / f.duration) * 0.6;
+        const s = Math.max(0, f.timer / f.duration);
         if (vis.kitHandle) {
-          // Register item 30: ride the kit's opacity SSOT so the membrane (and
-          // the transparent drawstring/apex hub it owns) fades WITH the web
-          // instead of popping at _removeNetVisual. vis.discMesh ===
-          // kitHandle.coneMesh (the flash-timer alias), so the cone write
-          // inside setOpacity is byte-identical to the legacy line below; the
-          // membrane follows at o × _membraneOpacityFrac — the kit's own
-          // proportional-fade discipline (MEMBRANE_OPACITY: "× web opacity
-          // fade"). Non-transparent rim-weight mats are skipped by setOpacity
-          // (opacity has no render effect on them), exactly as the kit intends.
-          NetMeshKit.setOpacity(vis.kitHandle, fadeOpacity);
+          // Register items 30 + 92: ride the kit's opacity SSOT so the whole
+          // fade-able family (web, membrane, drawstring, rim-weight glints)
+          // fades together instead of popping at _removeNetVisual —
+          // and SEED the fade from each surface's LIVE opacity so the fade's
+          // first frame equals the last state-driven frame on every surface
+          // (the continuity law's "never a pop" applies there too). The
+          // retired hard-coded × 0.6 stepped the ceremony cone UP from its
+          // 0.55 rest — and from wherever the SECURE_CHECK pulse sampled, its
+          // worst case — while the membrane/drawstring stepped from their own
+          // build rests. The seed is captured lazily on the first tick: the
+          // system fires the pushing event synchronously ahead of this tick
+          // in the same frame (captureNetSystem.update :3758 → this :3759 in
+          // main.js), and no opacity writer runs in between, so the first
+          // tick reads exactly the push-time live values. Non-transparent
+          // mats are skipped by setOpacityScaled exactly as setOpacity skips
+          // them (the apex hub is opaque by build — its residual pop is its
+          // own register item).
+          if (f.kitSeed === undefined) f.kitSeed = NetMeshKit.captureOpacity(vis.kitHandle);
+          NetMeshKit.setOpacityScaled(vis.kitHandle, f.kitSeed, s);
         } else {
-          vis.discMesh.material.opacity = fadeOpacity;   // legacy flag-off flat disc
+          // Legacy flag-off flat disc: same live-seed contract. 0.6 at rest ⇒
+          // byte-identical to the retired hard-coded curve; the SECURE_CHECK
+          // pulse now seeds where it sampled instead of stepping to 0.6.
+          if (f.discSeed === undefined) f.discSeed = vis.discMesh.material.opacity;
+          vis.discMesh.material.opacity = s * f.discSeed;
         }
       }
     }
