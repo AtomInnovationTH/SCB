@@ -14,7 +14,7 @@ import { Constants } from '../core/Constants.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import {
   getNetClassForType, computeLeadAim, assessNetFit, presentedWidthForApproach,
-  netMaxReachM,
+  netMaxReachM, renderedSpanM, renderedSpanOverflows,
 } from '../entities/CaptureNet.js';
 import { dossierSystem } from '../systems/DossierSystem.js';
 import { toolShortLabel } from '../systems/ToolOdds.js';
@@ -1360,6 +1360,15 @@ export class DockingReticle {
       } else if (deg > inSpec) {
         advisory = `tumbling ${Math.round(deg)}\u00B0/s \u2014 de-spin [L]`;
       }
+    }
+    // Register item 17 (2026-08-19): a NET ✓ whose DRAWN span outspans the
+    // bag gets an amber qualifier instead of silence — the verdict stays
+    // logical (item 7b), this is the advisory-only cue. Fires only when the
+    // whole chain above was silent, so range/off-axis/tumble keep priority;
+    // 'good shot' remains the final fallback.
+    if (!advisory && fit.fit === 'OK' && renderedSpanOverflows(target, netClass)) {
+      advisory = `renders ~${Math.round(renderedSpanM(target))} m — the ${netClass.DIAMETER} m bag will visibly overflow`;
+      advisoryCol = '#ffd166';
     }
     if (!advisory && pct >= 80) advisory = 'good shot';
     return advisory ? { text: advisory, color: advisoryCol } : null;

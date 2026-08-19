@@ -420,6 +420,63 @@ export function assessNetFit(target, netClass, approachDir = null) {
   return { fit: 'OK', label: 'NET \u2713' };
 }
 
+/**
+ * Register item 17 (2026-08-19): the DRAWN worst-axis span of a target's
+ * mesh in metres — the rendered truth the verdict deliberately never
+ * consults (item 7b, owner-declined mesh-truthful verdicts: the logical
+ * lengthM/widthM govern, the 0.66×–4.62× per-type stylization is accepted).
+ * Exists for ONE consumer class: HUD advisories that qualify an OK verdict
+ * (DockingReticle's advisory line, TargetPanel's fit badges). MUST NOT feed
+ * a verdict — fitsMouth and the oversize_aspect bounces stay logical;
+ * routing this into a refusal is exactly the declined option.
+ *
+ * span = 2 × baseRenderScale × boundingRadius ÷ (Constants.SCENE_SCALE/1000)
+ * — the free-debris draw scale (DebrisField owns that SSOT; the same
+ * derivation as its METRE_SCENE at DebrisField.js:61, no second hard-coded
+ * 1e-5) × the mesh bounding-SPHERE radius (DebrisWireframe owns it; primed
+ * via getGeometry first, the scaleForRenderRadiusM pattern, so the
+ * uncached-returns-1 trap cannot fire), scene units → metres. Measured
+ * headless (tmp/i17-span.mjs): defunctSat 5 → 18.22 m, rocketBody 5 →
+ * 10.22 m — the worst-axis form deliberately exceeds the review's box-axis
+ * spans (18.1 / 7.8 m); a box-axis rule would slip rocketBody 5 (7.8 < 8)
+ * past the chip although the bag pierces it by 2.210 m.
+ *
+ * Lives here, not in DebrisField: it COMPOSES the two homes and both are
+ * already imported — a DebrisField home would add a DebrisField→
+ * DebrisWireframe import edge.
+ *
+ * Graceful + Node-safe: null target / no type / no size ⇒ 0 (no span claim);
+ * getGeometry builds headless (test-Cubesat proves it).
+ * @param {object|null} target
+ * @returns {number} drawn worst-axis span in metres (0 when unknown)
+ */
+export function renderedSpanM(target) {
+  if (!target || !target.type) return 0;
+  const scale = DebrisField.baseRenderScale(target);
+  if (!(scale > 0)) return 0;
+  DebrisWireframe.getGeometry(target.type, target.id);   // prime the br cache
+  const br = DebrisWireframe.getBoundingRadius(target.type, target.id) || 1;
+  return 2 * scale * br / (Constants.SCENE_SCALE / 1000);
+}
+
+/**
+ * Register item 17: the ONE overflow-advisory rule — does the DRAWN span
+ * exceed this net class's mouth? The verdict-is-OK half stays with the
+ * caller's own signal (assessNetFit at the reticle/fit segs, green NET odds
+ * at the badges); this predicates only the rendered-overflow half so the
+ * HUD surfaces cannot drift on the rule (the item-21 lesson: one home, not
+ * sites that merely agree). Strictly-greater, and a mouthless class never
+ * claims overflow — the same form as fitsMouth. Advisory only.
+ * @param {object|null} target
+ * @param {{DIAMETER?:number}|null} netClass
+ * @returns {boolean}
+ */
+export function renderedSpanOverflows(target, netClass) {
+  const dia = (netClass && netClass.DIAMETER) || 0;
+  if (!(dia > 0)) return false;
+  return renderedSpanM(target) > dia;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // §1b  Orientation-based capture geometry (Phase 2 — ASPECT_CAPTURE)
 // ═══════════════════════════════════════════════════════════════════════════

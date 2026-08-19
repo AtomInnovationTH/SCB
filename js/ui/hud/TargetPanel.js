@@ -9,7 +9,7 @@ import { Constants } from '../../core/Constants.js';
 import { eventBus } from '../../core/EventBus.js';
 import { Events } from '../../core/Events.js';
 import { computeTotalSalvageDeltaV } from '../../entities/OrbitalMechanics.js';
-import { assessNetFit, presentedWidthForApproach } from '../../entities/CaptureNet.js';
+import { assessNetFit, presentedWidthForApproach, getNetClassForType, renderedSpanM, renderedSpanOverflows } from '../../entities/CaptureNet.js';
 import { classifyNetTarget } from '../../systems/netRouting.js';
 import { computeToolOdds, computeBestTool, toolShortLabel } from '../../systems/ToolOdds.js';
 import { dossierSystem, appraiseSalvage } from '../../systems/DossierSystem.js';
@@ -420,8 +420,15 @@ export class TargetPanel {
     if (o && o.p != null && o.p > 0) {
       const cap = (Constants.TOOL_ODDS && Constants.TOOL_ODDS.DISPLAY_CAP) ?? 0.99;
       const pct = Math.round(Math.min(o.p, cap) * 100);
-      const col = pct >= 80 ? '#00ffaa' : pct >= 50 ? '#ffd166' : '#ff7755';
-      return `<span style="color:${col};font-size:9px;font-weight:bold;" title="Best tool odds (${arm.type})">${label} ${pct}%</span>`;
+      // Register item 17: a GREEN NET badge (pct ≥ 80) whose DRAWN span
+      // outspans the bag drops to amber + a span note — the cue only ever
+      // qualifies a confident green, never lifts a red (the odds stay the
+      // primary signal; the verdict is untouched, item 7b).
+      const nc = best === 'NET' ? getNetClassForType(arm.type) : null;
+      const overflow = nc && pct >= 80 && renderedSpanOverflows(t, nc);
+      const col = overflow ? '#ffd166' : pct >= 80 ? '#00ffaa' : pct >= 50 ? '#ffd166' : '#ff7755';
+      const tip = overflow ? ` — drawn hull spans ~${Math.round(renderedSpanM(t))} m vs the ${nc.DIAMETER} m bag: it will visibly overflow (accepted stylization, CAPTURE_NET.md §8)` : '';
+      return `<span style="color:${col};font-size:9px;font-weight:bold;" title="Best tool odds (${arm.type})${tip}">${label} ${pct}%</span>`;
     }
     // Nothing rollable — name the blocker (e.g. TOO WIDE / EMPTY).
     const netBlocker = (odds.NET && odds.NET.blocker) || (o && o.blocker) || 'NO TOOL';
@@ -451,8 +458,12 @@ export class TargetPanel {
     if (o && o.p != null && o.p > 0) {
       const cap = (Constants.TOOL_ODDS && Constants.TOOL_ODDS.DISPLAY_CAP) ?? 0.99;
       const pct = Math.round(Math.min(o.p, cap) * 100);
-      const col = pct >= 80 ? '#00ffaa' : pct >= 50 ? '#ffd166' : '#ff7755';
-      return `<span style="color:${col};font-size:9px;font-weight:bold;" title="Mother Large Net odds">${pct}% [N]</span>`;
+      // Register item 17: same overflow qualifier as the daughter badge —
+      // only ever downgrades a GREEN (pct ≥ 80) to amber, never lifts a red.
+      const overflow = pct >= 80 && renderedSpanOverflows(t, CN && CN.LARGE);
+      const col = overflow ? '#ffd166' : pct >= 80 ? '#00ffaa' : pct >= 50 ? '#ffd166' : '#ff7755';
+      const tip = overflow ? ` — drawn hull spans ~${Math.round(renderedSpanM(t))} m vs the ${CN.LARGE.DIAMETER} m bag: it will visibly overflow (accepted stylization, CAPTURE_NET.md §8)` : '';
+      return `<span style="color:${col};font-size:9px;font-weight:bold;" title="Mother Large Net odds${tip}">${pct}% [N]</span>`;
     }
     const blocker = (o && o.blocker) || 'NO NET';
     const word = blocker === 'WIDE' ? 'TOO WIDE'
@@ -583,12 +594,17 @@ export class TargetPanel {
             } else {
               const wFit = assessNetFit(t, Constants.CAPTURE_NET && Constants.CAPTURE_NET.MEDIUM);
               const sFit = assessNetFit(t, Constants.CAPTURE_NET && Constants.CAPTURE_NET.SMALL);
-              const seg = (tag, f) => {
+              // Register item 17: an OK whose DRAWN span outspans that class's
+              // bag renders as an amber ✓ with a span note — the verdict stays
+              // logical (item 7b); this is the advisory-only cue.
+              const seg = (tag, f, nc) => {
                 const ok = f.fit === 'OK';
-                const col = ok ? '#00ffaa' : f.fit === 'DESPIN_FIRST' ? '#ffd166' : '#ff7755';
-                return `<span style="color:${col}">${tag}${ok ? '✓' : '✗'}</span>`;
+                const overflow = ok && renderedSpanOverflows(t, nc);
+                const col = ok ? (overflow ? '#ffd166' : '#00ffaa') : f.fit === 'DESPIN_FIRST' ? '#ffd166' : '#ff7755';
+                const tip = overflow ? ` title="drawn hull spans ~${Math.round(renderedSpanM(t))} m vs the ${nc.DIAMETER} m bag — it will visibly overflow (accepted stylization, CAPTURE_NET.md §8)"` : '';
+                return `<span style="color:${col}"${tip}>${tag}${ok ? '✓' : '✗'}</span>`;
               };
-              fitBadge = `<span style="font-size:9px;font-weight:bold;" title="Capture fit (daughter nets): L = weaver's MEDIUM / LD-NET 5 m class, S = spinner's SMALL / SD-NET 1.5 m class — not the mother net">${seg('L', wFit)} ${seg('S', sFit)}</span>`;
+              fitBadge = `<span style="font-size:9px;font-weight:bold;" title="Capture fit (daughter nets): L = weaver's MEDIUM / LD-NET 5 m class, S = spinner's SMALL / SD-NET 1.5 m class — not the mother net">${seg('L', wFit, Constants.CAPTURE_NET && Constants.CAPTURE_NET.MEDIUM)} ${seg('S', sFit, Constants.CAPTURE_NET && Constants.CAPTURE_NET.SMALL)}</span>`;
             }
             }
 
