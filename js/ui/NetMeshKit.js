@@ -848,10 +848,15 @@ export const NetMeshKit = {
    * @param {number} [opts.lineWidth]          fat-line thread width (screen px)
    * @param {boolean} [opts.nodeAdditive]      additive-blend glint for the edge nodes
    * @param {number} [opts.color]              base web colour (hex)
-   * @param {number} [opts.opacity]            base web opacity (cone + nodes + apex)
+   * @param {number} [opts.opacity]            base web opacity (cone + nodes; the apex hub too, unless apexOpacity is given)
    * @param {number} [opts.drawstringOpacity=0.8] drawstring line opacity
    * @param {boolean} [opts.weightTransparent=false] make node material fade-able
    * @param {boolean} [opts.apexTransparent=false]   make apex-hub material fade-able
+   * @param {number} [opts.apexOpacity=opacity] apex-hub opacity rest (register item 96:
+   *                  the fade-able hub rests at 1.0 — transparent + 1.0 renders
+   *                  identically to the opaque build (NormalBlending src×1 + dst×0,
+   *                  depthWrite unchanged), while the shared 0.8 would turn the hub
+   *                  20 % see-through in every gated beat)
    * @param {boolean} [opts.childrenVisible=false]   initial visibility of all meshes
    * @param {number} [opts.apexHubRadiusM]     apex-hub sphere radius (m)
    * @returns {object} handle
@@ -873,6 +878,7 @@ export const NetMeshKit = {
       drawstringOpacity = 0.8,
       weightTransparent = false,
       apexTransparent = false,
+      apexOpacity = opacity,
       childrenVisible = false,
       apexHubRadiusM = DEFAULT_APEX_RADIUS_M,
       membraneOpacity = NET_WEB.MEMBRANE_OPACITY,
@@ -1029,7 +1035,7 @@ export const NetMeshKit = {
       metalness: 0.7,
       roughness: 0.4,
       transparent: apexTransparent,
-      opacity,
+      opacity: apexOpacity,
     });
     const apexHub = new THREE.Mesh(apexGeo, apexMat);
     apexHub.name = 'apexHub';

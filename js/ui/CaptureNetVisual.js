@@ -686,6 +686,16 @@ export class CaptureNetVisual {
       // of being overwritten by it) — the gate re-adjudication is the item's
       // own prescribed step.
       weightTransparent: true,
+      // Register item 96: the apex hub joins the fade-able family so it rides
+      // the seeded fade instead of popping at _removeNetVisual (the lasso's
+      // mother net was already built apexTransparent — LassoSystem.js:515).
+      // It rests at opacity 1.0, NOT the shared 0.8: NormalBlending +
+      // transparent at opacity 1.0 renders identically to the opaque build
+      // (src×1 + dst×0, depthWrite unchanged), while at 0.8 the flip would
+      // turn the hub 20 % see-through in every gated beat. The gate
+      // re-adjudication is the item's own prescribed step.
+      apexTransparent: true,
+      apexOpacity: 1.0,
     });
     const coneMesh = kitHandle.coneMesh;
     const rimWeights = kitHandle.rimWeights;
@@ -812,9 +822,10 @@ export class CaptureNetVisual {
       if (vis) {
         const s = Math.max(0, f.timer / f.duration);
         if (vis.kitHandle) {
-          // Register items 30 + 92: ride the kit's opacity SSOT so the whole
-          // fade-able family (web, membrane, drawstring, rim-weight glints)
-          // fades together instead of popping at _removeNetVisual —
+          // Register items 30 + 92 + 96: ride the kit's opacity SSOT so the
+          // whole fade-able family (web, membrane, drawstring, rim-weight
+          // glints, apex hub) fades together instead of popping at
+          // _removeNetVisual —
           // and SEED the fade from each surface's LIVE opacity so the fade's
           // first frame equals the last state-driven frame on every surface
           // (the continuity law's "never a pop" applies there too). The
@@ -827,8 +838,8 @@ export class CaptureNetVisual {
           // main.js), and no opacity writer runs in between, so the first
           // tick reads exactly the push-time live values. Non-transparent
           // mats are skipped by setOpacityScaled exactly as setOpacity skips
-          // them (the apex hub is opaque by build — its residual pop is its
-          // own register item).
+          // them (item 96: the apex hub is now fade-able by build and rides
+          // too).
           if (f.kitSeed === undefined) f.kitSeed = NetMeshKit.captureOpacity(vis.kitHandle);
           NetMeshKit.setOpacityScaled(vis.kitHandle, f.kitSeed, s);
         } else {
