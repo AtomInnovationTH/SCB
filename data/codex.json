@@ -744,15 +744,17 @@
       "icon": "🛰️",
       "related": [
         "recoil_cancellation",
-        "cold_gas_thruster"
+        "cold_gas_thruster",
+        "graphene_gsl",
+        "tether_materials"
       ],
       "i18n": {
         "title": "Spring-Launched Daughters",
-        "shortText": "Stored elastic energy flings a daughter clear at zero propellant cost. The thrusters only handle final approach.",
-        "fullText": "Instead of burning propellant to release a daughter, your cradle stores mechanical energy in a compressed spring, wound up through a worm gear to hold a couple of joules. On release that elastic energy accelerates the 2-7 kilogram daughter to roughly half a metre to a metre and a half per second, enough to open a working gap for proximity operations.\n\nThe launch itself costs no propellant at all, only the electricity that wound the spring, which is the whole appeal, since fuel is the resource you cannot refill up here. The daughter's own FEEP thrusters then take over for the final approach. It is a deliberately low-energy shove: cheap, gentle, and repeatable.",
-        "realWorld": "Stored elastic energy (½kx²) for propellant-free deployment; a game-speculative cradle mechanism.",
-        "formula": "E = ½ k x²",
-        "trlRationale": "Spring deployment concept; game-speculative implementation.",
+        "shortText": "A wound spring flings a daughter free of propellant cost. Spring tier sets the ceiling; the dial picks the shot that sweeps a wide field.",
+        "fullText": "Instead of burning propellant to release a daughter, your cradle stores mechanical energy in a compressed spring, wound up through a worm gear to hold a couple of joules. On release that elastic energy accelerates the daughter to the dialed launch speed. The launch itself costs no propellant at all, only the electricity that wound the spring, which is the whole appeal, since fuel is the resource you cannot refill up here. The daughter's own FEEP thrusters then take over for the final approach.\n\nEvery shot leaves the cradle at the 10 m/s fleet default — the launch-speed dial that would trade reload time for range is designed in but not yet wired to a control. That matters because the shop's upper spring tiers (Composite, Nanolam, Metamat) only raise the ceiling: until the dial exists, a purchased 25 m/s spring still fires at 10 m/s. The physics is honest about the trade — rewind time grows with the square of launch speed (a 6.6 kg Weaver arm needs about 27.5 s at 10 m/s, 172 s at 25 m/s, on the 15 W worm-gear motor at 80 % efficiency), so speed is range, not rate.\n\nPair a top-tier spring with a graphene super laminate tether (rated to 10 km) and the doctrine opens up: daughters on long tethers, fired fast, sweeping a 16 km sphere around Mother clean of small debris — the wide-sweep cleanup the late missions are written for. Today's build still gates launches to 500 m pending the dial, the tether-aware range gate, and the long-range autopilot; the 16 km sweep is the upgrade path those are being built for.",
+        "realWorld": "Stored elastic energy (½kx²) for propellant-free deployment; a game-speculative cradle mechanism. Graphene-laminate tethers of multi-km reach extend real graphene strength research (no flight heritage).",
+        "formula": "E = ½ k x² · reload = ½ m v² / (P η)",
+        "trlRationale": "Spring deployment concept; game-speculative implementation. The 16 km wide-sweep doctrine is game design, not flown practice.",
         "unlockHint": "Fire the crossbow (spring launch)."
       }
     },
@@ -1386,7 +1388,8 @@
       "related": [
         "cnt",
         "carbyne",
-        "carbon_composites"
+        "carbon_composites",
+        "spring_energy"
       ],
       "i18n": {
         "title": "Graphene Super Laminate",
@@ -1649,7 +1652,8 @@
         "tether_reel_in",
         "bolas_weapon",
         "edt_physics",
-        "miura_ori_net"
+        "miura_ori_net",
+        "spring_energy"
       ],
       "i18n": {
         "title": "Tether Materials: Dyneema & Zylon",
