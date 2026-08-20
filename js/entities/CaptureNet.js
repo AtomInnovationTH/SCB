@@ -3213,7 +3213,7 @@ export class CaptureNetSystem {
    * Cargo-continuity S13(c) (register item 47) — the collar's digestion clock.
    * One frame of the mother-side furnace: the collared piece cooks on the SAME
    * law the daughter rack runs (ArmUnit._updateHoldingCatch) — span
-   * clamp(massKg × TRANSIT_DIGEST_S_PER_KG, MIN_S, MAX_S), progress
+   * `FT.digestSpanS(massKg)` (register item 48: the ONE home), progress
    * dt × TIME_SCALE_GAMEPLAY × sunScale (ArmManager writes _digestSunScale on
    * this system from the one ResourceSystem multiplier SSOT; ?? 1.0 keeps
    * legacy mocks byte-identical), phase mapped onto [0, FEED_S] so the
@@ -3235,8 +3235,7 @@ export class CaptureNetSystem {
     const FT = Constants.FURNACE_TRANSFER;
     const HOLD_S = FT.HOLD_S, CHOP_S = FT.CHOP_S, FEED_S = FT.FEED_S;
     const CHUNK_COUNT = FT.CHUNK_COUNT;
-    const span = Math.min(FT.TRANSIT_DIGEST_MAX_S,
-      Math.max(FT.TRANSIT_DIGEST_MIN_S, (d.mass || 0) * FT.TRANSIT_DIGEST_S_PER_KG));
+    const span = FT.digestSpanS(d.mass);   // item 48: the ONE span-law home
     const sunScale = this._digestSunScale ?? 1.0;
     d._digestProgress = (d._digestProgress || 0) + dt * Constants.TIME_SCALE_GAMEPLAY * sunScale;
     const t = Math.min(FEED_S, (d._digestProgress / span) * FEED_S);
@@ -3428,6 +3427,32 @@ export class CaptureNetSystem {
     return this.activeNets.find(n => n._isMother
       && (n.state === STATES.BERTHED || n.state === STATES.COLLARED
           || n.state === STATES.TRANSFERRING)) || null;
+  }
+
+  /**
+   * Register item 48 — the collar cook, readable. The HUD's mother digest
+   * segment polls this at 10 Hz (the `getDockedCatch` precedent): while a
+   * collared piece digests, report its progress through the ONE span-law home
+   * (`FURNACE_TRANSFER.digestSpanS`) so the player sees the cook the S8
+   * transit clock runs. BERTHED is the pre-cook securing window (the berth
+   * tag shows there); TRANSFERRING pauses the cook for the flight and the
+   * daughter's rack reports the piece on arrival — only COLLARED cooks at the
+   * collar. Field-only reads + `|| 0` / `?? 1.0` guards keep legacy mocks
+   * byte-identical.
+   *
+   * @returns {{frac: number, sunScale: number, kg: number}|null} the cook, or
+   *   null when no mother net is COLLARED with a target
+   */
+  getCollarDigestion() {
+    const net = this.activeNets.find(n => n._isMother && n.state === STATES.COLLARED);
+    const d = net && net.targetDebris;
+    if (!d) return null;
+    const span = Constants.FURNACE_TRANSFER.digestSpanS(d.mass);
+    return {
+      frac: Math.min(1, Math.max(0, (d._digestProgress || 0) / span)),
+      sunScale: this._digestSunScale ?? 1.0,
+      kg: d.mass || 0,
+    };
   }
 
   /**

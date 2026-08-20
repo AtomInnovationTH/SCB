@@ -989,6 +989,17 @@ export const Constants = {
     TRANSIT_DIGEST_MIN_S: 60,     // floor — even a shard takes a beat (6 wall-s)
     TRANSIT_DIGEST_MAX_S: 20000,  // pacing cap — biggest transferable piece ≈ 30 wall-min of sun
     TRANSIT_DIGEST_ECLIPSE_RATE: 0.04,  // eclipse trickle = panel/concentrator ratio
+    // Register item 48: the span law's ONE home (was mirrored in-line by both
+    // timeline owners — ArmUnit._updateHoldingCatch and
+    // CaptureNetSystem._tickCollarDigestion — and by every test's spanFor; the
+    // HUD readout would have been a third home). Values byte-identical to the
+    // pre-extraction in-line clamp. The HUD cook readouts divide
+    // `_digestProgress` by this — one law, one computation.
+    digestSpanS(massKg) {
+      return Math.min(this.TRANSIT_DIGEST_MAX_S,
+        Math.max(this.TRANSIT_DIGEST_MIN_S,
+          (massKg || 0) * this.TRANSIT_DIGEST_S_PER_KG));
+    },
   },
 
   // Tool-selection HUD constants (DAUGHTER_MULTITOOL_SPEC §4.1).

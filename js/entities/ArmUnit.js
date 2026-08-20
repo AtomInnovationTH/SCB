@@ -2551,6 +2551,21 @@ export class ArmUnit {
       launchSpeed: this.launchSpeed,
       springTier: this.springTier,
       tetherTier: this.tetherTier,
+      // Register item 48: the furnace cook is VISIBLE. Only the rack's HEAD
+      // piece cooks (the queue is the anticipation — S6 sequential digestion),
+      // so one fraction per arm. frac = _digestProgress / digestSpanS(mass)
+      // read through the ONE span-law home; sunScale lets the HUD tell the
+      // eclipse "embers until dawn" story. null unless actually cooking.
+      digest: (this.state === S.HOLDING_CATCH && this.heldCatches.length > 0)
+        ? {
+          frac: Math.min(1, Math.max(0,
+            (this.heldCatches[0]._digestProgress || 0)
+            / Constants.FURNACE_TRANSFER.digestSpanS(this.heldCatches[0].mass))),
+          sunScale: this._digestSunScale ?? 1.0,
+          queued: this.heldCatches.length - 1,
+          kg: this.heldCatches[0].mass || 0,
+        }
+        : null,
     };
   }
 
@@ -5470,9 +5485,7 @@ export class ArmUnit {
     // mass at fixed concentrator power. Mapping progress onto [0, FEED_S]
     // keeps the hold/chop/feed fractions and the chunk cadence identical;
     // only the wall-clock pace changes.
-    const span = Math.min(FT.TRANSIT_DIGEST_MAX_S,
-      Math.max(FT.TRANSIT_DIGEST_MIN_S,
-        (debris.mass || 0) * FT.TRANSIT_DIGEST_S_PER_KG));
+    const span = FT.digestSpanS(debris.mass);   // item 48: the ONE span-law home
     const sunScale = this._digestSunScale ?? 1.0;
     debris._digestProgress = (debris._digestProgress || 0) +
       dt * Constants.TIME_SCALE_GAMEPLAY * sunScale;

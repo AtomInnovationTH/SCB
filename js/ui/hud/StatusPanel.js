@@ -874,7 +874,22 @@ export class StatusPanel {
     // conflate "no ammo" with "docked").
     const docked = (typeof captureNetSystem?.getDockedCatch === 'function')
       ? captureNetSystem.getDockedCatch() : null;
-    if (docked) {
+    // Register item 48: the collar cook is visible — while the mated catch
+    // digests (COLLARED), the segment reads the live _digestProgress / span
+    // through the system's getter (the getCooldown/getDockedCatch poll
+    // precedent). [K] jettison stays valid through the whole cook (the piece
+    // keeps its _digestProgress), so the title's hint is honest. The berth
+    // tag + title stay byte-identical whenever nothing cooks.
+    const collarCook = (typeof captureNetSystem?.getCollarDigestion === 'function')
+      ? captureNetSystem.getCollarDigestion() : null;
+    if (docked && collarCook) {
+      const pct = Math.round(Math.min(1, Math.max(0, collarCook.frac || 0)) * 100);
+      count.textContent = `${nets}/${maxNets} 🔥${pct}%`;
+      count.style.color = '#ff9800';   // the forge panel's MELT — furnace language
+      seg.title = (collarCook.sunScale ?? 1.0) < 1
+        ? `Solar furnace cooking the catch — ${pct}% · eclipse: embers until dawn · [K] jettison`
+        : `Solar furnace cooking the catch — ${pct}% · [K] jettison`;
+    } else if (docked) {
       count.textContent = `${nets}/${maxNets} BERTHED`;
       count.style.color = '#66ddff';
       seg.title = 'Catch mated at the collar — [K] jettison';
@@ -1650,8 +1665,25 @@ export class StatusPanel {
         return { label: 'Capturing', color: '#00ffff' };
       case 'REELING': case 'HAULING': case 'RETURNING': case 'DOCKING':
         return { label: 'Returning', color: '#00ffff' };
-      case 'HOLDING_CATCH':
+      case 'HOLDING_CATCH': {
+        // Register item 48: the rack cook is visible — the daughter line reads
+        // the head piece's _digestProgress / span (ArmUnit.getStatus().digest).
+        // The eclipse trickle dims to embers; the title tells the dawn story.
+        // No digest field (legacy mocks) → the pre-48 line, byte-identical.
+        if (a.digest) {
+          const pct = Math.round(Math.min(1, Math.max(0, a.digest.frac || 0)) * 100);
+          const q = (a.digest.queued || 0) > 0 ? ` +${a.digest.queued}` : '';
+          const eclipsed = (a.digest.sunScale ?? 1.0) < 1;
+          return {
+            label: `Cooking ${pct}%${q}`,
+            color: eclipsed ? '#cc8800' : '#ffaa00',
+            title: eclipsed
+              ? 'Eclipse — the furnace smoulders on panel embers until dawn'
+              : `Solar furnace cooking the catch — ${pct}%`,
+          };
+        }
         return { label: 'Catch aboard', color: '#ffaa00' };
+      }
       case 'TRAWLING':
         return { label: 'Trawling', color: '#00ff88' };
       case 'SCANNING':
@@ -1804,7 +1836,7 @@ export class StatusPanel {
     if (total > 6 && idx === total - 2) label = 'F';
     else if (total > 6 && idx === total - 1) label = 'B';
 
-    const { label: status, color: statusColor } = this._daughterStatus(a, idx);
+    const { label: status, color: statusColor, title: statusTitle } = this._daughterStatus(a, idx);
     const catchFlag = a.hasCaptured ? ' <span title="Carrying a catch">🎣</span>' : '';
 
     // NET — each daughter's own magazine. Same ivory NET colour as the MOTHER
@@ -1839,7 +1871,7 @@ export class StatusPanel {
     // hangs left of the digit); the ΔV column is right-aligned to the pane edge.
     const detailLine = `<div style="display:grid;grid-template-columns:20px 1fr 50px 56px;column-gap:8px;align-items:baseline;">`
       + `<span style="text-align:right;">${numHtml}</span>`
-      + `<span style="color:${statusColor};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${status}${catchFlag}</span>`
+      + `<span style="color:${statusColor};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"${statusTitle ? ` title="${statusTitle}"` : ''}>${status}${catchFlag}</span>`
       + netHtml
       + dvHtml
       + `</div>`;
