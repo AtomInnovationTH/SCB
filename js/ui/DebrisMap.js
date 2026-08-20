@@ -10,12 +10,15 @@
  * regime's one (band × inclination) cell) — TRUE: the field really is one
  * regime; the multi-cluster ranking premise returns with
  * fields-as-destinations (the journey mechanism). The ranking machinery stays
- * load-bearing for that day and is untouched. MEASURED (register item 97):
- * scoreCluster prices the transfer against the cell's incCenter label rather
- * than the regime's actual plane, so the single row's ΔV is honest only where
- * a language's incDeg sits exactly on its cell centre (en/th/es/hi ≈ 36 m/s),
- * inflated for ja (238 m/s), and the row filters out entirely for ta/pt
- * (the map's empty state renders over a co-planar field).
+ * load-bearing for that day and is untouched. Register item 97 (CLOSED):
+ * scoreCluster priced the transfer against the cell's incCenter label rather
+ * than the regime's actual plane — honest only where a language's incDeg sat
+ * exactly on its cell centre (en/th/es/hi ≈ 36 m/s), inflated for ja
+ * (238 m/s), and filtered out entirely for ta/pt (the map's empty state over
+ * a co-planar field). The score now reads the cluster's avgIncRad — the
+ * members' mean live plane, derived by getDebrisClusters beside avgAltKm —
+ * so every language's row prices the true in-plane Hohmann (~36 m/s,
+ * measured by tmp/i97-score.mjs).
  *
  * Full-screen strategic overlay toggled via M (or Backquote). Hidden by default.
  * @module ui/DebrisMap
@@ -335,10 +338,16 @@ export class DebrisMap {
    * @returns {object} cluster augmented with { dvMs, varietyBonus, conjRisk, reachable, score }
    */
   static scoreCluster(cluster, playerOrbitKm, conjAlerts) {
-    // Build a synthetic orbit for the cluster center (circular, at mean altitude)
+    // Build a synthetic orbit for the cluster center (circular, at mean
+    // altitude). Register item 97: the plane is the members' mean live
+    // inclination (avgIncRad, derived by getDebrisClusters beside avgAltKm) —
+    // NOT the bucket label's centre (incCenter), which mispriced off-centre
+    // languages (ja a phantom 238 m/s; ta/pt filtered to the map's empty
+    // state over a co-planar field). The label remains the fallback for
+    // payload-less (hand-built/legacy) clusters.
     const clusterOrbit = {
       semiMajorAxis: Constants.EARTH_RADIUS_KM + cluster.avgAltKm,
-      inclination: cluster.incCenter * Math.PI / 180,
+      inclination: cluster.avgIncRad ?? (cluster.incCenter * Math.PI / 180),
       eccentricity: 0.001,
       argumentOfPeriapsis: 0,
       raan: 0,

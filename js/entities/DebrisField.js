@@ -3736,15 +3736,18 @@ export class DebrisField {
    * ("the field really is one regime now"; the multi-cluster ranking premise
    * returns with fields-as-destinations). Item 50's reseatFieldRegime moves
    * that cell on a language switch and the _clusterIdOf memo follows (sma/ecc
-   * byte-exact). MEASURED (register item 97): the DebrisMap SCORE prices the
+   * byte-exact). Register item 97 (CLOSED): the DebrisMap SCORE priced the
    * transfer against this cell's incCenter label, not the regime's plane —
    * honest only where a language's incDeg sits exactly on its cell centre
    * (en/th/es/hi), inflated for ja, filtered to the map's empty state
-   * ("No debris clusters detected") for ta/pt.
+   * ("No debris clusters detected") for ta/pt. Fixed at the payload: each
+   * cluster now also carries avgIncRad — the alive members' mean live
+   * inclination (radians), accumulated in the same pass as avgAltKm — and
+   * scoreCluster reads it (the label remains the payload-less fallback).
    * @returns {Array<{id: string, name: string, altRange: {min:number,max:number},
-   *           incCenter: number, count: number, avgAltKm: number,
-   *           totalMassKg: number, types: object, targets: Array,
-   *           center: {x:number,y:number,z:number}}>}
+   *           incCenter: number, avgIncRad: number, count: number,
+   *           avgAltKm: number, totalMassKg: number, types: object,
+   *           targets: Array, center: {x:number,y:number,z:number}}>}
    */
   getDebrisClusters() {
     // Inclination cluster names for human-readable IDs (shared module constant).
@@ -3768,6 +3771,7 @@ export class DebrisField {
           types: {},
           targets: [],       // S7-B: debris objects in this cluster
           _altSum: 0,         // running sum for avg computation
+          _incSum: 0,         // running sum (radians) for the members' mean plane (item 97)
           _centerSum: { x: 0, y: 0, z: 0 }, // running sum for center computation
         });
       }
@@ -3789,6 +3793,7 @@ export class DebrisField {
 
       cluster.count++;
       cluster._altSum += altKm;
+      cluster._incSum += debris.orbit.inclination; // radians — the members' mean plane (item 97)
       cluster.totalMassKg += debris.mass;
       cluster.types[debris.type] = (cluster.types[debris.type] || 0) + 1;
       cluster.targets.push(debris);
@@ -3807,6 +3812,7 @@ export class DebrisField {
     for (const cluster of clusters.values()) {
       if (cluster.count === 0) continue;
       cluster.avgAltKm = cluster._altSum / cluster.count;
+      cluster.avgIncRad = cluster._incSum / cluster.count;
 
       // S7-B: Compute cluster center (average cartesian position of members)
       cluster.center = {
@@ -3816,6 +3822,7 @@ export class DebrisField {
       };
 
       delete cluster._altSum;
+      delete cluster._incSum;
       delete cluster._centerSum;
       delete cluster.incSpread;
       result.push(cluster);
