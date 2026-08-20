@@ -611,10 +611,11 @@ async function init() {
   // S11(a): the field is ONE orbital regime centred on the boot language's
   // start orbit — the same computeStartOrbit read that GameFlowManager's
   // _applyStartLocation makes on every start path, so the field is co-orbital
-  // with the player by construction (register item 38). Per-boot seed, logged
-  // so a reported field is reproducible. Known gap (register item 50): a
-  // mid-menu language switch re-aims the player's start orbit but the regime
-  // stays on the boot language — re-derivation needs a field re-seed.
+  // with the player by construction (register item 38). Register item 50: a
+  // mid-menu language switch re-derives the regime on the start path —
+  // _applyStartLocation calls DebrisField.reseatFieldRegime (orbits only,
+  // same-regime no-op). Per-boot seed, logged so a reported field is
+  // reproducible.
   let _fieldRegime = null;
   try {
     _fieldRegime = regimeFromStartOrbit(computeStartOrbit(settingsManager.getLanguageEntry()));

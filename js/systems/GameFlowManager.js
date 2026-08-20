@@ -24,6 +24,7 @@ import { trawlManager } from './TrawlManager.js';
 import { launchSequence } from './LaunchSequence.js';
 import { orbitToSceneCartesian } from '../entities/OrbitalMechanics.js';
 import { computeStartOrbit } from './startOrbitMath.js';
+import { regimeFromStartOrbit } from '../entities/CatalogConverter.js';
 import { settingsManager } from './SettingsManager.js';
 import { cityLabels } from '../scene/CityLabels.js';
 import { launchCameo, padFor, LAUNCH_FLASH_S } from '../scene/LaunchCameo.js';
@@ -1477,9 +1478,18 @@ export class GameFlowManager {
    * Branch selection: Languages.descending picks the southbound (descending)
    * solution of subPointToOrbit when the interesting corridor lies on that
    * half of the orbit (e.g. English over the Eastern Seaboard).
+   *
+   * Register item 50: the same orbit also re-derives the FIELD regime
+   * (regimeFromStartOrbit → DebrisField.reseatFieldRegime) — a mid-menu
+   * language switch otherwise leaves the assembled field on the boot
+   * language's plane while the player starts on the live one. Orbits only
+   * (sma/ecc preserved; cast/mesh slots are construction-bound); an
+   * unchanged language is a value-compared no-op, so non-switch paths are
+   * untouched. Runs after the player writes so the welcome cluster's lazy
+   * first-frame spawn (player-frame copy) lands on the re-seated plane.
    */
   _applyStartLocation() {
-    const { player } = this._refs;
+    const { player, debrisField } = this._refs;
     if (!player || !player.orbit) return;
     const lang = settingsManager.getLanguageEntry();
     const orbit = computeStartOrbit(lang);
@@ -1494,6 +1504,13 @@ export class GameFlowManager {
     // to keep this the one authoritative "starting orbit" function.
     player.orbit.eccentricity = 0.0001;
     player.orbit.argPerigee = 0;
+
+    // The field shares the player's plane from the SAME orbit computation
+    // (one read — no second computeStartOrbit call). The typeof guard keeps
+    // legacy mocks (no reseatFieldRegime) byte-identical.
+    if (debrisField && typeof debrisField.reseatFieldRegime === 'function') {
+      debrisField.reseatFieldRegime(regimeFromStartOrbit(orbit));
+    }
   }
 
   /** Reset game state for new attempt */

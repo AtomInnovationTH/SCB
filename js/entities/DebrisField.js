@@ -400,6 +400,10 @@ export class DebrisField {
     // S11(a): the field is ONE orbital regime (register item 38) — assembled
     // inside the band derived from the player's start orbit (main.js passes
     // the boot language's computeStartOrbit through regimeFromStartOrbit).
+    // Register item 50: a mid-menu language switch re-derives the regime on
+    // the start path — GameFlowManager._applyStartLocation calls
+    // reseatFieldRegime(), which re-seats every orbit in-band (orbits only;
+    // an unchanged regime is a value-compared no-op).
     // Absent opts, the ISS-band default keeps legacy constructions/tests
     // deterministic in shape. The seed drives the catalogue pick + the
     // procedural orbit draws; it is logged so a reported field is reproducible.
@@ -407,10 +411,7 @@ export class DebrisField {
     this._fieldRegime = opts.fieldRegime || regimeFromStartOrbit(null);
     // Human/cluster-vocabulary identity for the regime (e.g. 'iss-180') — the
     // "fields gain identity" half of S11(a); same SSOT as getDebrisClusters.
-    this._fieldRegimeLabel = classifyClusterId(
-      (this._fieldRegime.altMinKm + this._fieldRegime.altMaxKm) / 2,
-      this._fieldRegime.incCenterDeg,
-    ) || 'off-band';
+    this._fieldRegimeLabel = this._regimeLabelFrom(this._fieldRegime);
 
     /** @type {number} How many debris ended up sourced from the real catalogue. */
     this.realEntryCount = 0;
@@ -792,6 +793,17 @@ export class DebrisField {
     if (data._onboardingPinLat === undefined) data._onboardingPinLat = 0;
   }
 
+  /** @private The regime's human/cluster-vocabulary identity (e.g. 'iss-180')
+   *  — ONE computation shared by the constructor and reseatFieldRegime so the
+   *  label can never drift from the live regime (same classifyClusterId SSOT
+   *  as getDebrisClusters). */
+  _regimeLabelFrom(regime) {
+    return classifyClusterId(
+      (regime.altMinKm + regime.altMaxKm) / 2,
+      regime.incCenterDeg,
+    ) || 'off-band';
+  }
+
   /** @private Draw one orbit INSIDE the field regime on the seeded stream.
    *  S11(a) — the whole field is one orbital plane family centred on the
    *  player's start orbit (register item 38: "objects in different planes are
@@ -835,6 +847,103 @@ export class DebrisField {
       trueAnomaly: rng() * 2 * Math.PI,
       meanMotion: 0,
     };
+  }
+
+  /**
+   * Register item 50 — re-seat the assembled field onto a NEW orbital regime
+   * (a mid-menu language switch re-aims the player's start orbit via
+   * GameFlowManager._applyStartLocation; the field must share that plane or
+   * from mission 2 the player flies a plane the field doesn't share).
+   *
+   * ORBITS ONLY — the cast/mesh slots are construction-bound: each piece keeps
+   * its identity (type/mass/size/material/mesh slot/flags) and its
+   * semiMajorAxis + eccentricity BYTE-EXACT. The altitude cell is shared by
+   * every language (computeStartOrbit returns no altitude; regimeFromStartOrbit
+   * maps the language-independent START_ALTITUDE_KM into the same ALT_BANDS
+   * cell), so preserving sma is distribution-identical to re-drawing in-cell —
+   * and the authored altKm overrides (e.g. the gate-critical 250 km cubesat,
+   * S11(b)) are recorded nowhere else, so re-drawing altitude would destroy
+   * them. Only the plane/phase fields (inclination, raan, argPerigee,
+   * trueAnomaly) are re-drawn, through the ONE _drawRegimeOrbit computation
+   * (its fixed rng consumption order is preserved — the drawn sma/ecc are
+   * consumed and discarded).
+   *
+   * The background cloud re-seats too — the sky is one field (S11(b)).
+   * Positions follow within a frame (interactive) / a 4-batch cycle
+   * (_updateBackground); the _clusterIdOf memo auto-invalidates on the inc
+   * change, so getDebrisClusters/getFieldIdNear/CLUSTER_CLEARED follow.
+   *
+   * Deterministic: the draws run on a fresh mulberry32 stream keyed off the
+   * boot seed XOR a dedicated constant (disjoint from both the assembly
+   * stream and the background stream, so neither reproducibility pin can
+   * move), consuming the interactive list in index order, then the
+   * background orbits in index order. Pieces without an orbit (none exist
+   * by construction) skip WITHOUT consuming the stream.
+   *
+   * An unchanged regime is a VALUE-compared no-op (computeStartOrbit is pure,
+   * so an unchanged language yields byte-identical regime fields — exact
+   * equality, no epsilon): returns false with zero draws and zero writes.
+   *
+   * isReal pieces re-seat uniformly (unreachable at the start regime — the
+   * in-band catalogue yield is zero, register item 51): an admitted real
+   * entry keeps its identity and its (in-cell) sma and takes an in-band
+   * plane — the field is one regime; gameplay already bends TLE-honesty
+   * elsewhere (EDT attract, deorbit).
+   *
+   * EXEMPTION: welcome-spawned / onboarding-tease-pinned pieces are NEVER
+   * re-seated — their positions are pinned to the PLAYER's orbit (the
+   * _spawnWelcomeField frame-copy / the tease pin), so re-seating them would
+   * teleport an already-placed, player-co-orbital cluster off its pins.
+   * Unreachable today (every start path that can carry a CHANGED regime —
+   * MENU_START / FAST_START / CONTINUE / retry — runs resetGame() first,
+   * which clears welcomeSpawn and _welcomeFieldSpawned, so the cluster is
+   * re-spawned lazily AFTER this re-seat) — the guard is the invariant
+   * living in the method, not in the call-site wiring. Skipped pieces do
+   * NOT consume the rng stream (stream position stays a function of the
+   * seated set only).
+   *
+   * @param {object|null} regime — a regimeFromStartOrbit() shape.
+   * @returns {boolean} true when the field was re-seated.
+   */
+  reseatFieldRegime(regime) {
+    if (!regime) return false;
+    const cur = this._fieldRegime;
+    if (cur
+        && cur.altMinKm === regime.altMinKm
+        && cur.altMaxKm === regime.altMaxKm
+        && cur.incCenterDeg === regime.incCenterDeg
+        && cur.raanCenterRad === regime.raanCenterRad) {
+      return false;   // same plane — nothing to move (the common start path)
+    }
+    const oldLabel = this._fieldRegimeLabel;
+    this._fieldRegime = regime;                 // BEFORE the draws: the helper reads it
+    this._fieldRegimeLabel = this._regimeLabelFrom(regime);
+    const rng = mulberry32((this._fieldSeed ^ 0x50E51EED) >>> 0);
+    const reseatOne = (o) => {
+      const drawn = this._drawRegimeOrbit(rng);
+      o.inclination = drawn.inclination;
+      o.raan = drawn.raan;
+      o.argPerigee = drawn.argPerigee;
+      o.trueAnomaly = drawn.trueAnomaly;
+    };
+    let seated = 0;
+    for (const d of this.debrisList) {
+      if (!d || !d.orbit) continue;             // defensive: consumes nothing
+      // Never re-seat a player-pinned piece (the welcome cluster / the
+      // onboarding tease) — its position is pinned to the PLAYER's orbit.
+      if (d.welcomeSpawn || d._onboardingPinned) continue;
+      reseatOne(d.orbit);
+      seated++;
+    }
+    let bgSeated = 0;
+    for (const o of this._backgroundOrbits || []) {
+      if (!o) continue;
+      reseatOne(o);
+      bgSeated++;
+    }
+    console.log(`[DebrisField] field regime re-seated "${this._fieldRegimeLabel}" (was "${oldLabel}"): ` +
+      `${seated} interactive + ${bgSeated} background orbits in-band (seed=${this._fieldSeed})`);
+    return true;
   }
 
   /** @private Create a single debris data object.
