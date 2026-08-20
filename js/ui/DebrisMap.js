@@ -5,6 +5,18 @@
  * ΔV cost, and conjunction risk, and lets the player engage autopilot toward
  * a selected cluster via Shift+A.
  *
+ * S11(a) note (register item 51): the field is ONE orbital regime, so the
+ * cluster list collapses to a single row (every piece classifies into the
+ * regime's one (band × inclination) cell) — TRUE: the field really is one
+ * regime; the multi-cluster ranking premise returns with
+ * fields-as-destinations (the journey mechanism). The ranking machinery stays
+ * load-bearing for that day and is untouched. MEASURED (register item 97):
+ * scoreCluster prices the transfer against the cell's incCenter label rather
+ * than the regime's actual plane, so the single row's ΔV is honest only where
+ * a language's incDeg sits exactly on its cell centre (en/th/es/hi ≈ 36 m/s),
+ * inflated for ja (238 m/s), and the row filters out entirely for ta/pt
+ * (the map's empty state renders over a co-planar field).
+ *
  * Full-screen strategic overlay toggled via M (or Backquote). Hidden by default.
  * @module ui/DebrisMap
  */

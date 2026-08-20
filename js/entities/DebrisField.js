@@ -3729,6 +3729,18 @@ export class DebrisField {
    * A cluster = debris sharing similar altitude band + inclination center.
    * Includes center position (THREE.Vector3) for autopilot heading and
    * targets array for TrawlManager consumption.
+   *
+   * S11(a) note (register item 51): the field is assembled inside ONE orbital
+   * regime, so every alive piece classifies into ONE (band × inclination)
+   * cell and this returns a single non-empty cluster — TRUE, not a defect
+   * ("the field really is one regime now"; the multi-cluster ranking premise
+   * returns with fields-as-destinations). Item 50's reseatFieldRegime moves
+   * that cell on a language switch and the _clusterIdOf memo follows (sma/ecc
+   * byte-exact). MEASURED (register item 97): the DebrisMap SCORE prices the
+   * transfer against this cell's incCenter label, not the regime's plane —
+   * honest only where a language's incDeg sits exactly on its cell centre
+   * (en/th/es/hi), inflated for ja, filtered to the map's empty state
+   * ("No debris clusters detected") for ta/pt.
    * @returns {Array<{id: string, name: string, altRange: {min:number,max:number},
    *           incCenter: number, count: number, avgAltKm: number,
    *           totalMassKg: number, types: object, targets: Array,
