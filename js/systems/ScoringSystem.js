@@ -190,9 +190,9 @@ export class ScoringSystem {
       : 1.0;
     points = Math.round(points * bountyPremium);
 
-    // S1 economy closure (2026-07-19): the material bonus is applied AFTER the
-    // situational soft-cap multiply below (no longer amplified), so its addition
-    // is deferred — see the `materialBonus` clamp after the multiply.
+    // (Register item 98: the S1 material-bonus addition that used to sit after
+    // the situational multiply below was production-dead from inception and is
+    // deleted — see the tombstone comment there.)
 
     // E1 retune: the situational multipliers below are ACCUMULATED into a single
     // product, then soft-capped (SITUATIONAL_MULT_SOFT_CAP) before a single apply.
@@ -310,23 +310,16 @@ export class ScoringSystem {
     let scorePoints = Math.round(points * Math.min(situationalMult, scoreCap));
     let creditPoints = Math.round(points * Math.min(situationalMult, creditsCap));
 
-    // S1 economy closure (2026-07-19): add the salvaged-metal material bonus
-    // AFTER the situational multiply so it is NOT amplified ×up-to-2.5, and clamp
-    // it per catch. Previously this addition sat BEFORE the multiply, so a
-    // heavy-salvage catch paid (base + metalMassKg×2) × situational, letting
-    // whales earn many× catalog. Salvage stays rewarding via the ×1.15 salvage
-    // multiplier; the material top-up is now a bounded flat add. It adds the same
-    // flat amount to BOTH ledgers. (ECONOMY_BALANCE.md)
-    if (data.metalMassKg && data.metalMassKg > 0) {
-      const perKg = Constants.MATERIAL_BONUS_CR_PER_KG != null ? Constants.MATERIAL_BONUS_CR_PER_KG : 2;
-      const capCr = Constants.MATERIAL_BONUS_CAP_CR != null ? Constants.MATERIAL_BONUS_CAP_CR : Infinity;
-      const materialBonus = Math.min(Math.round(data.metalMassKg * perKg), capCr);
-      scorePoints += materialBonus;
-      creditPoints += materialBonus;
-    }
+    // S1 economy closure (2026-07-19) — RETIRED 2026-08-21 (register item 98,
+    // owner ruling): the salvaged-metal material bonus (metalMassKg × 2 cr, cap
+    // 750, added after the situational multiply) was PRODUCTION-DEAD from the
+    // initial commit — no production award site ever passed metalMassKg — and
+    // the pacing projector paid it anyway. The block, both constants and the
+    // projector fixture are deleted; a passed metalMassKg is now ignored
+    // (tombstone pin in test-economy-invariants.js).
 
     // S1 credits rebalance (2026-07-23): per-RUN capture-credits taper. Apply the
-    // taper to the FULL creditPoints (post-cap, incl. material bonus) so the
+    // taper to the FULL creditPoints (post-cap) so the
     // ceiling is a true guarantee, then hard-clamp per award so a single large
     // award cannot overshoot CEILING_X×catalog. Score is NEVER tapered — the
     // chase/rating loop stays fully intact; only the wallet saturates late-run,
