@@ -108,9 +108,10 @@ export class ScoringSystem {
     // fragment no longer earns the same flat base as a rocket body. Previously the
     // flat 500 physical-capture base made early fragment runs pay ~640/catch, so a
     // first depot blew past the intended 600–1,500 cr band. The tier weight
-    // (fragment ≈ 0.4× … boss-class ≈ 1.3×) tracks payout to target value while
-    // the salvage/metal bonus below adds the value share.
-    const tierWeights = Constants.DEBRIS_TIER_BASE_WEIGHT || { 1: 0.4, 2: 0.7, 3: 1.0, 4: 1.3 };
+    // (fragment ≈ 0.4× … rocket body ≈ 1.0×) tracks payout to target value while
+    // the salvage value below adds the mass share. (The ×1.3 tier-4 row was
+    // production-dead — register item 99, deleted 2026-08-21.)
+    const tierWeights = Constants.DEBRIS_TIER_BASE_WEIGHT || { 1: 0.4, 2: 0.7, 3: 1.0 };
     base *= (tierWeights[debrisTier] || 1.0);
 
     // Size factor: bigger = more points
@@ -582,7 +583,10 @@ export class ScoringSystem {
    * @private
    */
   _getDebrisTier(debris) {
-    if (debris.type === 'rocketBody' && debris.mass > 4000) return 4;
+    // (Register item 99, 2026-08-21: the E1 tier-4 row — rocketBody > 4,000 kg
+    // — was production-dead since S11(b)'s two populations (df24e3b): no
+    // production spawn path emits a >4,000 kg rocketBody. Deleted by owner
+    // ruling, item-98 shape; tombstone pin in test-economy-invariants.js.)
     if (debris.type === 'rocketBody') return 3;
     if (debris.type === 'defunctSat') return debris.mass > 500 ? 3 : 2;
     if (debris.type === 'missionDebris') return debris.mass > 5 ? 2 : 1;

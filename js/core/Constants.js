@@ -244,8 +244,15 @@ export const Constants = {
   TUMBLE_DESPIN_SLOPE_DEG: 340,   // degrees/s of above-spec spin per +1.0 tumbleFactor
   TUMBLE_DESPIN_MAX_BONUS: 0.5,   // max tumbleFactor contribution (+50%)
   // E1 retune: per debris-tier scaling of the capture base so a tiny fragment
-  // (tier 1) no longer earns the same flat base as a rocket body (tier 3/4).
-  DEBRIS_TIER_BASE_WEIGHT: { 1: 0.4, 2: 0.7, 3: 1.0, 4: 1.3 },
+  // (tier 1) no longer earns the same flat base as a rocket body (tier 3).
+  // (Register item 99, 2026-08-21: the tier-4 row — ×1.3 for a rocketBody
+  // > 4,000 kg — was production-dead since S11(b)'s two populations (df24e3b):
+  // the authored finale is 1,600 kg, the catalogue-finale substitution's
+  // in-band yield is zero for all 7 language start regimes, boss frags are
+  // small + flat-awarded, and Kessler frags force type fragment. Deleted by
+  // owner ruling, item-98 shape; do not harmonise the row back in — a future
+  // economy pass that wants it re-adds at a measured threshold deliberately.)
+  DEBRIS_TIER_BASE_WEIGHT: { 1: 0.4, 2: 0.7, 3: 1.0 },
   // (Register item 98, 2026-08-21: the S1 salvaged-metal material bonus —
   // MATERIAL_BONUS_CR_PER_KG 2 cr/kg, MATERIAL_BONUS_CAP_CR 750 — was
   // PRODUCTION-DEAD from the initial commit (no award site ever passed
