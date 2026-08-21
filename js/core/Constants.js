@@ -1063,7 +1063,11 @@ export const Constants = {
     // (Σ cost×maxLevel over UPGRADES). Used by the capture-credits taper and the
     // shop-pacing guardrail test, which asserts this equals the computed sum so
     // it can never silently drift when the catalog changes.
-    CATALOG_TOTAL_CR: 46400,
+    // Register item 101 (2026-08-21): 46 400 → 42 800 — the legacy tether cards
+    // (long_tether 600 + gsl_tether_v4 3 000) retired from the catalog; the
+    // tether tier ladder is the one reach track. Re-derived on the SSOT pin's
+    // own sanctioned path (test-shop-pacing computes Σ UPGRADES live).
+    CATALOG_TOTAL_CR: 42800,
     // Ordered recommendation preference for the ⭐ starter highlight. The shop
     // ⭐-marks the first item here that is un-owned and currently affordable.
     RECOMMENDED_STARTERS: ['capture_net', 'fast_reel', 'enhanced_eo', 'efficient_ion'],

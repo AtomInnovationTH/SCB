@@ -70,6 +70,11 @@ export const EFFECT_ROUTES = {
   salvageScan: [SENSOR_EVENT],
 
   // ── Arms → ArmManager ──
+  // Register item 101 (2026-08-21): the `long_tether` catalog row is RETIRED
+  // (owner-ruled) — it wrote the same live config.tetherMax the tier ladder
+  // owns, last-writer-wins. The route + handler STAY: a pre-retirement save's
+  // upgrade replay (`forEachPurchasedUpgrade` → applyUpgradeEffect) re-applies
+  // it, so an owned save keeps its purchased reach. No new purchase can emit it.
   tetherRange: [ARM_MANAGER],
   reelSpeed: [ARM_MANAGER],
   armFuelMax: [ARM_MANAGER],
@@ -95,6 +100,11 @@ export const EFFECT_ROUTES = {
   // ── V4 GSL arm upgrades — dispatched by ArmManager's OWN UPGRADE_PURCHASED
   //    listener (ArmManager.js:279), so applyUpgradeEffect must not re-dispatch
   //    them. Present here so the catalog-coverage test stays honest. ──
+  //    Register item 101 (2026-08-21): `gsl_tether_v4` (v4TetherRange) is
+  //    RETIRED from the catalog — it out-reached the tether ladder top and any
+  //    later tier purchase silently LOWERED reach (last-writer-wins on
+  //    config.tetherMax). The route + handler STAY for owned saves (replay
+  //    keeps the purchased reach). v4NetArea / v4GripForce remain live cards.
   v4TetherRange: [ARM_MANAGER_EVENT],
   v4NetArea: [ARM_MANAGER_EVENT],
   v4GripForce: [ARM_MANAGER_EVENT],

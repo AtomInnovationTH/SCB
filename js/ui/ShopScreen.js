@@ -106,10 +106,14 @@ export const UPGRADES = [
     desc: 'Reveal salvage contents at range', effect: 'salvageScan', value: true, maxLevel: 1,
     trl: 4, trlRationale: 'Remote spectral composition analysis demonstrated on lab targets; no ADR heritage' },
 
-  // Arms (6) — replaces deleted Capture category (laser, ion beam, magnetic, harpoon, net)
-  { id: 'long_tether', cat: 'Daughters', name: 'Extended Tether', cost: 600,
-    desc: '2× tether range', effect: 'tetherRange', value: 2.0, maxLevel: 1,
-    trl: 3, trlRationale: 'Multi-km daughter-mounted tether is game-speculative; RemoveDEBRIS tether was passive' },
+  // Arms (5) — replaces deleted Capture category (laser, ion beam, magnetic, harpoon, net)
+  // Register item 101 (2026-08-21, owner-ruled RETIRE): `long_tether` (600 cr,
+  // effect 'tetherRange' ×2) retired from the catalog — it wrote the same live
+  // config.tetherMax field the tier ladder now owns, last-writer-wins (a tier
+  // purchase after it LOST the player the 600 cr reach with no warning). The
+  // TETHER MATERIALS ladder below is the one tether-reach track; the
+  // applyUpgradeOverride handler + EFFECT_ROUTES entry STAY so a pre-retirement
+  // save's upgrade replay keeps its purchased reach.
   { id: 'fast_reel', cat: 'Daughters', name: 'Fast Reel Motor', cost: 500,
     desc: '+50% reel speed', effect: 'reelSpeed', value: 1.5, maxLevel: 1,
     trl: 4, trlRationale: 'Motorised space reels demonstrated on SFU (1995), not yet for capture ops' },
@@ -149,11 +153,14 @@ export const UPGRADES = [
     desc: 'Faster daughter docking', effect: 'autoDock', value: 0.5, maxLevel: 1,
     trl: 8, trlRationale: 'Auto-docking flown on Progress, Dragon-2; ADR-specific autonomy still emerging' },
 
-  // Graphene (3) — V4 GSL upgrade path (Sprint D5)
-  { id: 'gsl_tether_v4', cat: 'Graphene', name: 'GSL Tether v4', cost: 3000,
-    desc: 'Graphene tether extends reach to 12.5km', effect: 'v4TetherRange',
-    value: Constants.V4_TETHER_LENGTH_MULT, maxLevel: 1,
-    trl: 2, trlRationale: 'Graphene Super Laminate. Paper-stage; HBN-coated Dyneema arriving 2026' },
+  // Graphene (2) — V4 GSL upgrade path (Sprint D5)
+  // Register item 101 (2026-08-21, owner-ruled RETIRE): `gsl_tether_v4`
+  // (3000 cr, effect 'v4TetherRange' ×6.25 → 12.5 km) retired from the catalog
+  // — the 3000 cr card out-reached the 61 500 cr ladder top (T5 GSL-100, 10 km)
+  // and any later tier purchase LOWERED reach 12.5 → the tier's maxLength with
+  // no warning (last-writer-wins on config.tetherMax, measured in
+  // tmp/i101-tether-overlap.mjs). The ladder's T5 GSL-100 (10 km, 800 N break)
+  // is the doctrine ceiling; the handler + route STAY for owned saves.
   { id: 'gsl_net_v4', cat: 'Graphene', name: 'GSL Net v4', cost: 3500,
     desc: '10× capture net area', effect: 'v4NetArea',
     value: Math.sqrt(Constants.V4_NET_SIZE_MULT), maxLevel: 1,

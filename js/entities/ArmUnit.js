@@ -1040,6 +1040,9 @@ export class ArmUnit {
       case 'tetherRange':
         // Multiply tether max length (e.g., 2.0 = 2× range)
         // Use base constant to avoid compounding on re-apply
+        // Register item 101 (2026-08-21): the `long_tether` shop card is
+        // RETIRED — this handler stays as the replay shim so a pre-retirement
+        // save keeps its purchased reach (the tier ladder owns the track now).
         this.config.tetherMax = (this.type === 'weaver'
           ? Constants.WEAVER_TETHER_LENGTH : Constants.SPINNER_TETHER_LENGTH) * value;
         break;
@@ -1073,6 +1076,10 @@ export class ArmUnit {
       // --- V4 GSL upgrades (Sprint D5) ---
       case 'v4TetherRange':
         // V4 GSL tether: 6.25× reach (12.5km)
+        // Register item 101 (2026-08-21): the `gsl_tether_v4` shop card is
+        // RETIRED — 12.5 km out-reached the ladder top (T5 GSL-100 10 km) and
+        // a later tier purchase silently lowered it. Handler stays as the
+        // replay shim so an owned save keeps its reach.
         this.config.tetherMax = (this.type === 'weaver'
           ? Constants.WEAVER_TETHER_LENGTH : Constants.SPINNER_TETHER_LENGTH) * value;
         break;

@@ -332,7 +332,7 @@ export class ScoringSystem {
     // chase/rating loop stays fully intact; only the wallet saturates late-run,
     // shifting the endgame money loop toward refine-and-contribute.
     const taperCfg = Constants.CAPTURE_CREDITS_TAPER || { START_X: 1.5, CEILING_X: 2.5 };
-    const catalogCr = (Constants.SHOP && Constants.SHOP.CATALOG_TOTAL_CR) || 46400;
+    const catalogCr = (Constants.SHOP && Constants.SHOP.CATALOG_TOTAL_CR) || 42800;
     const ceilingCr = taperCfg.CEILING_X * catalogCr;
     const startCr = taperCfg.START_X * catalogCr;
     const taper = taperMultiplier(this.captureCreditsEarned, catalogCr, taperCfg);
