@@ -3440,15 +3440,23 @@ export class DebrisField {
           risk = 'Med';
           riskStars = 2;
         }
-        if (debris.type === 'rocketBody' && debris.mass > 4000) {
-          riskStars = 5;
-          risk = 'Extreme';
-        }
+        // Register item 102 (2026-08-22): the Extreme/★5 row for a rocketBody
+        // over 4 000 kg is DELETED — dead since S11(b) (`df24e3b`'s two
+        // populations), the same kill as DEBRIS_TIER_BASE_WEIGHT's tier-4 row
+        // (register item 99): no production spawn path emits a rocketBody over
+        // 4 000 kg (authored cast max 1 600 kg; the catalogue-finale
+        // substitution's in-band yield is zero at every language start regime;
+        // hazard shards / boss frags / Kessler shards are fragments; the
+        // welcome cluster is clamped ≤ 10 kg; the spec-less draw is
+        // config-absence only). Do not harmonise the row back in — a future
+        // pass re-adds it at a measured threshold deliberately.
 
         // Point estimate (simplified scoring)
+        // Register item 102: the 2 000-point arm for a rocketBody over 4 000 kg
+        // is deleted with its risk-twin above (dead since S11(b) — no reachable
+        // mass; the flat 500 row is the live rocketBody pay).
         let basePoints;
-        if (debris.type === 'rocketBody' && debris.mass > 4000) basePoints = 2000;
-        else if (debris.type === 'rocketBody') basePoints = 500;
+        if (debris.type === 'rocketBody') basePoints = 500;
         else if (debris.type === 'defunctSat') basePoints = debris.mass > 500 ? 500 : 300;
         else if (debris.type === 'missionDebris') basePoints = debris.mass > 5 ? 200 : 100;
         else basePoints = 100;
