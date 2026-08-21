@@ -1609,6 +1609,15 @@ export class StatusPanel {
       return;
     }
 
+    // Register item 100: the speed-dial header — fleet launch speed, the
+    // equipped spring tier's ceiling, and the dial keys. Reads the same
+    // getStatus fields the daughter lines use (null-safe for legacy mocks);
+    // fleet truth is the MAX across arms, matching ArmManager.getFleetLaunchSpeed.
+    // Re-rendered on LAUNCH_SPEED_CHANGED (wired in HUD.js).
+    const _spd = Math.max(...statuses.map((a) => a.launchSpeed ?? Constants.CROSSBOW_LAUNCH_SPEED_DEFAULT));
+    const _ceil = Math.max(...statuses.map((a) => (Constants.SPRING_TIERS[a.springTier ?? 0] || {}).maxSpeed ?? 0)) || _spd;
+    const _dialHeader = `<div style="font-size:0.7rem;color:rgba(0,255,136,0.65);padding-bottom:2px;" title="Fleet launch speed — the item-100 dial. A hotter shot trades reload (∝ v²) for range.">LAUNCH ${_spd.toFixed(1)} m/s · max ${_ceil.toFixed(1)} · <span style="opacity:0.75">[;] down · ['] up</span></div>`;
+
     // List by size: Large daughters (weavers) first, then Small (spinners). A
     // small gap separates the two size groups — no headers, no resized rows.
     const sizeRank = { weaver: 0, spinner: 1 };
@@ -1617,7 +1626,7 @@ export class StatusPanel {
       .sort((x, y) => (sizeRank[x.a.type] ?? 2) - (sizeRank[y.a.type] ?? 2) || x.idx - y.idx);
 
     let prevType = null;
-    el.innerHTML = sorted.map((e) => {
+    el.innerHTML = _dialHeader + sorted.map((e) => {
       const gap = (prevType !== null && e.a.type !== prevType) ? '<div style="height:6px;"></div>' : '';
       prevType = e.a.type;
       return gap + this._renderDaughterLine(e.a, e.idx);

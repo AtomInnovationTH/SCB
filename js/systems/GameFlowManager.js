@@ -437,6 +437,13 @@ export class GameFlowManager {
         this.applyUpgradeEffect(data, { restore: true });
       });
 
+      // Item 100: restore the launch-speed dial AFTER the upgrade replay so a
+      // saved speed clamps to the restored spring tier's ceiling (old saves
+      // carry no key → the clamped default stands).
+      if (typeof save.launchSpeed === 'number' && this._refs.armManager) {
+        this._refs.armManager.setFleetLaunchSpeed(save.launchSpeed);
+      }
+
       // Rollout backfill: FIRST_DEPOT_VISITED is newer than some saves. Without
       // this, _applyFirstDepotFloor() (gated on that flag) would fire its
       // one-time "first cleanup contract settled" credit floor on the next depot
@@ -1677,6 +1684,9 @@ export class GameFlowManager {
       upgrades: upgrades,
       resourceMaxes: resources,
       power: powerDistribution.serialize(),
+      // Item 100: the fleet launch-speed dial setting (restored after the
+      // upgrade replay so the equipped spring tier clamps it).
+      launchSpeed: this._refs.armManager?.getFleetLaunchSpeed?.(),
       contractMassKg: shopScreen ? shopScreen.getContractMass() : 0,
       // Preserve profile-permanent ceremony flags across full saves. Without
       // this, saveGame() would reset the whitelist to defaults (false) and drop

@@ -912,12 +912,23 @@ export class ShopScreen {
       this._renderTierCard(tierType, tier, i, descriptions[i], currentTier)
     ).join('');
 
+    // Register item 100: the "Max X m/s" cards are TRUE now that the dial
+    // ships — the section note names the control (and the tether section names
+    // the reach the tier ladder now drives). The dial default stays 10 m/s.
+    let sectionNote = '';
+    if (tierType === 'spring') {
+      sectionNote = '<div style="font-size:0.65rem;color:rgba(0,255,136,0.4);margin-bottom:6px;">The ceiling your cradle can fire at — set the fleet launch speed in flight with [;] down / [\'] up. Hotter shots reload ∝ v².</div>';
+    } else if (tierType === 'tether') {
+      sectionNote = '<div style="font-size:0.65rem;color:rgba(0,255,136,0.4);margin-bottom:6px;">Sets the real tether length (Spinner carries ¼ of it) and the deploy gate at 80% of that length. Long tethers pair with hot springs for the wide sweep.</div>';
+    }
+
     return `
       <div style="margin-bottom:1rem;">
         <div style="font-size:0.8rem;color:rgba(0,255,136,0.5);letter-spacing:0.1em;
                      margin-bottom:6px;padding-bottom:3px;border-bottom:1px solid rgba(0,255,136,0.15);">
           ${headerLabel}
         </div>
+        ${sectionNote}
         ${cards}
       </div>
     `;

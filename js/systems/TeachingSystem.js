@@ -171,6 +171,15 @@ export const TEACHING_MOMENTS = [
     duration: 8000,
     icon: '🛰️',
   },
+  // Register item 100: the speed dial — taught the moment a T3+ spring makes
+  // the ceiling exceed the cradle default (the purchase that needs it).
+  {
+    id: 'speed_dial',
+    title: 'Launch-Speed Dial',
+    body: 'Your new spring outruns the 10 m/s cradle default. Set the fleet launch speed with [\'] up and [;] down — a hotter shot reaches farther but reloads ∝ v². Pair it with a long tether and sweep the far field.',
+    duration: 9000,
+    icon: '🏹',
+  },
   // Net ladder Phase B: whale doctrine — only the Mother's Large Net holds >500 kg.
   {
     id: 'first_whale_target',
@@ -368,6 +377,15 @@ export class TeachingSystem {
         if (typeof m === 'number' && m > lassoCap && m <= daughterCap) {
           this._trigger('first_deltav_waste');
         }
+      }
+    });
+
+    // 8b. speed_dial (item 100) — first T3+ spring purchase: the ceiling just
+    // passed the cradle default; the dial is how you spend it.
+    on(Events.UPGRADE_PURCHASED, (data) => {
+      if (data && (data.type === 'springTier' || data.effect === 'springTier')
+          && (data.value ?? data.level ?? 0) >= 2) {
+        this._trigger('speed_dial');
       }
     });
 

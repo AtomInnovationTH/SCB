@@ -35,6 +35,7 @@ export const Events = {
   ARM_DEORBIT_CMD:    'arm:deorbitCmd',   // Comms menu / D key deorbit command
   ARM_SELECT:         'arm:select',       // Player selected arm by number key 1-6 (Sprint C2)
   ARM_DESELECT:       'arm:deselect',     // Player deselected arm — back to mothership (key 7)
+  LAUNCH_SPEED_CHANGED: 'arm:launchSpeedChanged', // { speed } — clamped fleet launch speed after a dial move (item 100)
   WEB_SHOT_HIT:       'arm:webShotHit',   // { debrisId, dragMultiplier } — GSL web shot hit debris (Sprint D1)
 
   // === TARGET SELECTION ===

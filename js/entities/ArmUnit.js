@@ -152,6 +152,9 @@ export class ArmUnit {
       approachSpeed: Constants.ARM_APPROACH_SPEED,
       haulSpeed: Constants.ARM_HAUL_SPEED,
       thrust: isWeaver ? Constants.WEAVER_THRUST : Constants.SPINNER_THRUST,
+      // Register item 100: the tank as total Δv — the SSOT for impulse-priced
+      // TRANSIT/APPROACH fuel (was the inline `|| 50` fallback in getStatus).
+      totalDeltaV: Constants.ARM_TOTAL_DELTAV,
     };
 
     // --- Runtime state ---
@@ -211,12 +214,20 @@ export class ArmUnit {
     this.springCharged = true;              // Starts charged (ready to fire)
     this.reloadProgress = 0;               // 0..1 reload completion
     this.reloadDuration = 0;               // Calculated reload time for current speed
-    this.launchSpeed = CROSSBOW_LAUNCH_SPEED_DEFAULT; // Current selected launch speed
+    // Register item 100: clamped at birth — selected must equal fired from the
+    // first frame (min(10, T1 ceiling 7.1)). Kills the two record-only nits the
+    // item-76(d) session measured: the T1 dual-fire residual over-bill (×1.408)
+    // and the _updateReloading fallback's 27.5 s-for-a-13.9 s-shot bill.
+    this.launchSpeed = Math.min(CROSSBOW_LAUNCH_SPEED_DEFAULT, SPRING_TIERS[0].maxSpeed);
     this.launchDirection = null;            // Direction set before launch
+    this._impulseDvAccum = 0;              // Σ|dvCmd| (m/s) the autopilot applied this frame — item 100 impulse fuel
 
     // V5 Tether state
     this.tetherTension = 0;                // Current tension in Newtons
-    this.tetherMaxLength = TETHER_TIERS[0].maxLength; // From current tier
+    // Register item 100: `tetherMaxLength` (TETHER_TIERS[].maxLength mirrored
+    // here) was DEAD — written, never read; the live length is config.tetherMax
+    // (deploy gate, tether-limit recall, position clamps), which setTetherTier
+    // now writes. Deleted — the item-76(a) dead-data shape.
     this.tetherBreakStrength = TETHER_TIERS[0].breakStrength; // From current tier
     this.reeling = false;                  // True when actively reeling in
     this._tetherSevered = false;           // True after a tether SNAP (hides line, drifts)
@@ -1146,10 +1157,15 @@ export class ArmUnit {
     if (tPos) {
       const distToTarget = tPos.distanceTo(this.position) / M;
       // Guard: refuse deployment when target is beyond operational range.
-      // Arm autopilot is designed for ~35-200m (after mother autopilot closes).
-      // Beyond 500m, transit takes minutes and tether may snap. Force player to
-      // use mother autopilot (A key) first.
-      const maxDeployRange = Math.min(500, this.config.tetherMax * 0.5);
+      // Register item 100 (2026-08-21): the gate is tether-tier-aware —
+      // tetherMax × ARM_DEPLOY_RANGE_FRACTION (0.8), replacing the pre-GSL
+      // literal min(500, tetherMax × 0.5). The daughter autopilot is
+      // range-scale-invariant (quadratic braking; braking distance 2v² —
+      // 1.25 km at 25 m/s) and its fuel is impulse-priced, so range costs
+      // transit time, not tank. The 0.8 keeps 0.15 of slack to the 0.95×
+      // tether-limit recall guard. At T5 GSL-100 the weaver radius is 8 km —
+      // the 16 km wide-sweep doctrine (item 76(d), owner-ruled).
+      const maxDeployRange = this.config.tetherMax * Constants.ARM_DEPLOY_RANGE_FRACTION;
       if (distToTarget > maxDeployRange) {
         eventBus.emit(Events.COMMS_MESSAGE, {
           text: `${this.displayName}: Target ${Math.round(distToTarget)}m away (max ${Math.round(maxDeployRange)}m). Press A to autopilot closer first.`,
@@ -1757,12 +1773,20 @@ export class ArmUnit {
 
   /**
    * Upgrade the tether tier (shop upgrade).
+   * Register item 100: the tier ladder now drives the LIVE tether length
+   * (config.tetherMax — the deploy gate, tether-limit recall and position
+   * clamps all read it). The shipped per-type ratio (spinner 500 m / weaver
+   * 2000 m at T1) is carried up the ladder, so T1 is byte-identical to the
+   * pre-ladder bases. Break strength follows the tier as before.
    * @param {number} tier - Tether tier index
    */
   setTetherTier(tier) {
     this.tetherTier = Math.max(0, Math.min(tier, TETHER_TIERS.length - 1));
     const t = TETHER_TIERS[this.tetherTier];
-    this.tetherMaxLength = t.maxLength;
+    const typeRatio = (this.type === 'weaver')
+      ? 1
+      : Constants.SPINNER_TETHER_LENGTH / Constants.WEAVER_TETHER_LENGTH;
+    this.config.tetherMax = Math.round(t.maxLength * typeRatio);
     this.tetherBreakStrength = t.breakStrength;
   }
 
@@ -2962,6 +2986,8 @@ export class ArmUnit {
     // Apply thrust impulse (NOT lerp — direct impulse like mother autopilot)
     this.velocity.add(dvCmdT);
     this.position.addScaledVector(this.velocity, dt);
+    // Item 100: meter the APPLIED impulse (post-clamp) for impulse-priced fuel
+    this._impulseDvAccum += Math.min(dvMagT, maxDvT) / M;
 
     // Close enough for fine approach — threshold must be >= standoff distance
     // so APPROACH controller has room to decelerate before reaching standoff.
@@ -3114,6 +3140,8 @@ export class ArmUnit {
 
     this.velocity.add(dvCmdA);
     this.position.addScaledVector(this.velocity, dt);
+    // Item 100: meter the APPLIED impulse (post-clamp) for impulse-priced fuel
+    this._impulseDvAccum += Math.min(dvMagA, maxDvA) / M;
 
     // ── Epic 8: Check for STATION_KEEP entry before netting ──
     if (this.target && !this._manualMode) {
@@ -3887,6 +3915,20 @@ export class ArmUnit {
   // ── Shared non-net catch plumbing (magnet / gripper / pad) ──────────────
 
   /**
+   * Distance from the mother at the capture instant (metres). Register item
+   * 100: the wide-sweep mission beat filters ARM_CAPTURED on this — a catch
+   * past 1 km is only possible past the tether-tier-aware deploy gate.
+   * Reads _prevParentPos (the per-frame-fresh parent position from the update
+   * loop); null-safe → 0 before the first parent frame.
+   * @private
+   * @returns {number} range in metres
+   */
+  _captureRangeM() {
+    if (!this._prevParentPos) return 0;
+    return this.position.distanceTo(this._prevParentPos) / M;
+  }
+
+  /**
    * @private Secure a non-net catch and hand off to the shared GRAPPLED →
    * REELING → park-the-catch lifecycle. Emits ARM_CAPTURED (tagged with the
    * tool) so scoring/teaching fire exactly as for a net catch.
@@ -3901,7 +3943,7 @@ export class ArmUnit {
       armId: this.id, targetId: target.id, type: this.type,
       detached: this.isDetached, mass: target.mass || 0,
       debrisType: target.type || 'unknown', tool: toolKind,
-      manual: this._manualCapture,
+      manual: this._manualCapture, rangeM: this._captureRangeM(),
     });
     eventBus.emit(Events.COMMS_MESSAGE, {
       source: this.displayName, text: successMsg, channel: 'CMD', priority: 'success',
@@ -4195,7 +4237,7 @@ export class ArmUnit {
           armId: this.id, targetId: this.target.id, type: this.type,
           detached: this.isDetached,
           mass: this.target?.mass || 0, debrisType: this.target?.type || 'unknown',
-          manual: this._manualCapture,
+          manual: this._manualCapture, rangeM: this._captureRangeM(),
         });
         eventBus.emit(Events.COMMS_MESSAGE, {
           text: `${this.displayName}: Target secured! SMA cinch complete.`,
@@ -4347,7 +4389,7 @@ export class ArmUnit {
         armId: this.id, targetId: this.target?.id, type: this.type,
         detached: this.isDetached,
         mass: this.target?.mass || 0, debrisType: this.target?.type || 'unknown',
-        manual: this._manualCapture,
+        manual: this._manualCapture, rangeM: this._captureRangeM(),
       });
       eventBus.emit(Events.COMMS_MESSAGE, {
         text: `${this.displayName}: Target secured! SMA cinch complete.`,
@@ -4395,7 +4437,7 @@ export class ArmUnit {
           armId: this.id, targetId: this.target?.id, type: this.type,
           detached: this.isDetached,
           mass: this.target?.mass || 0, debrisType: this.target?.type || 'unknown',
-          manual: this._manualCapture,
+          manual: this._manualCapture, rangeM: this._captureRangeM(),
         });
       } else {
         // Issue-B GUARD (STOWED miss path): same target-alive check.
@@ -5753,7 +5795,7 @@ export class ArmUnit {
             armId: this.id, targetId: debris.id, type: this.type, mode: 'trawling',
             detached: this.isDetached,
             mass: debris.mass || 0, debrisType: debris.type || 'unknown',
-            manual: false,
+            manual: false, rangeM: this._captureRangeM(),
           });
           eventBus.emit(Events.COMMS_MESSAGE, {
             sender: this.displayName,
@@ -5988,6 +6030,8 @@ export class ArmUnit {
   /** @private Fuel consumption by state */
   _consumeFuel(dt) {
     // Rates in %/sec — tuned so a full deploy-capture-return cycle ≈30-60s gameplay
+    // Register item 100: TRANSIT/APPROACH rates apply ONLY to manual-pilot
+    // flight now; the autopilot path is impulse-priced (below).
     const rates = {
       [S.UNDOCKING]: 0.2,
       [S.LAUNCHING]: 0.0,         // V5: Spring provides energy, no fuel burn
@@ -6010,7 +6054,24 @@ export class ArmUnit {
     // the cycle that fired it so the FEEP burn isn't double-charged. The flag is
     // cleared on the next clean dock/reload cycle (in _transitionTo).
     if (this.state === S.DOCKING && this._redockDebitApplied === true) rate = 0;
-    this.fuel -= rate * dt;
+    // Register item 100 (the wide sweep): autopilot TRANSIT/APPROACH fuel is
+    // IMPULSE-PRICED — the spring pays launch kinetic energy, so the FEEP pays
+    // only the commanded corrective impulse (Σ|dvCmd| the controller applied
+    // this frame) against the tank's total Δv (ARM_TOTAL_DELTAV 50 m/s →
+    // 2 %/m/s). The time-based TRANSIT rate it replaces capped any powered
+    // sortie at ~63 s to the reserve (630 m @10 m/s — the measured wall behind
+    // the old 500 m deploy gate) and billed a slow shot MORE than a fast one
+    // over the same ground. Coasting is free; the arrival kill is the bill.
+    // Manual-pilot TRANSIT/APPROACH keeps the time-based rate (the pilot's
+    // thrust path meters no impulse — recorded split, not an oversight).
+    if ((this.state === S.TRANSIT || this.state === S.APPROACH) && !this._manualMode) {
+      const dvMps = this._impulseDvAccum;
+      this._impulseDvAccum = 0;
+      this.fuel -= (dvMps / (this.config.totalDeltaV || Constants.ARM_TOTAL_DELTAV)) * 100;
+    } else {
+      this._impulseDvAccum = 0;
+      this.fuel -= rate * dt;
+    }
 
     // === Detached arm fuel warnings (Phase 6 — no refuel possible) ===
     if (this.isDetached) {

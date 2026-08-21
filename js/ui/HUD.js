@@ -992,6 +992,8 @@ export class HUD {
     // V3 Arm state changes → re-render arm panel
     eventBus.on(Events.ARM_STATE_CHANGE, () => this.statusPanel.renderArmPanel());
     eventBus.on(Events.ARM_DEPLOYED, () => this.statusPanel.renderArmPanel());
+    // Item 100: the speed dial → arms-panel header readout
+    eventBus.on(Events.LAUNCH_SPEED_CHANGED, () => this.statusPanel.renderArmPanel());
     eventBus.on(Events.ARM_CAPTURED, (data) => {
       this.statusPanel.renderArmPanel();
       // Phase 2 (capture feedback): one confirmation per moment. The catch is

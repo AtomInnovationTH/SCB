@@ -435,10 +435,11 @@ export class ArmManager {
       && player && target && target._scenePosition;
 
     // Pre-ceremony max-deploy-range refusal (moved earlier so it stays instant;
-    // ArmUnit.deploy still backstops it at fire time).
+    // ArmUnit.deploy still backstops it at fire time). Register item 100: same
+    // tether-tier-aware expression as the backstop — tetherMax × fraction.
     if (target._scenePosition && arm.position) {
       const distM = target._scenePosition.clone().sub(arm.position).length() / M;
-      const maxRange = Math.min(500, arm.config.tetherMax * 0.5);
+      const maxRange = arm.config.tetherMax * Constants.ARM_DEPLOY_RANGE_FRACTION;
       if (distM > maxRange) {
         eventBus.emit(Events.COMMS_MESSAGE, {
           text: `${arm.displayName}: Target ${Math.round(distM)}m away (max ${Math.round(maxRange)}m). Press A to autopilot closer first.`,
@@ -1529,13 +1530,16 @@ export class ArmManager {
   // ==========================================================================
 
   /**
-   * Set launch speed for all arms.
+   * Set launch speed for all arms (the item-100 speed dial: `;` down / `'` up).
+   * Emits LAUNCH_SPEED_CHANGED with the clamped fleet value so the HUD arms
+   * panel + persistence see the truth after per-arm tier clamps.
    * @param {number} speed - m/s, clamped to tier limits
    */
   setFleetLaunchSpeed(speed) {
     for (const arm of this.arms) {
       arm.setLaunchSpeed(speed);
     }
+    eventBus.emit(Events.LAUNCH_SPEED_CHANGED, { speed: this.getFleetLaunchSpeed() });
   }
 
   /**
@@ -1546,7 +1550,18 @@ export class ArmManager {
   setArmLaunchSpeed(index, speed) {
     if (this.arms[index]) {
       this.arms[index].setLaunchSpeed(speed);
+      eventBus.emit(Events.LAUNCH_SPEED_CHANGED, { speed: this.getFleetLaunchSpeed() });
     }
+  }
+
+  /**
+   * The fleet launch speed (m/s): max across arms — all arms share the fleet
+   * spring tier, so this is the dial's single truth for HUD + save.
+   * @returns {number}
+   */
+  getFleetLaunchSpeed() {
+    if (!this.arms || this.arms.length === 0) return Constants.CROSSBOW_LAUNCH_SPEED_DEFAULT;
+    return Math.max(...this.arms.map((a) => a.launchSpeed));
   }
 
   // ==========================================================================

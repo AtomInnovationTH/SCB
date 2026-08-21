@@ -1648,6 +1648,11 @@ export const Constants = {
   CROSSBOW_LAUNCH_SPEED_MIN: 3.0,         // m/s — minimum selectable launch speed
   // Register item 76(b) (2026-08-16): CROSSBOW_LAUNCH_SPEED_MAX (was 20.0) removed —
   // import-only; the real clamp is setLaunchSpeed's [MIN, tier.maxSpeed] (ArmUnit.js).
+  // Register item 100 (2026-08-21): the speed DIAL shipped — `;` down / `'` up,
+  // fleet-wide via ArmManager.setFleetLaunchSpeed (default stays DEFAULT; the API
+  // clamps to the equipped spring tier's ceiling). HUD readout lives in the arms
+  // panel header (StatusPanel._renderArmPanel).
+  CROSSBOW_SPEED_STEP: 0.5,               // m/s — one dial notch per keypress (hold to sweep)
 
   // --- Reload Mechanism ---
   CROSSBOW_RELOAD_POWER: 15,              // watts — worm gear motor power draw
@@ -3213,6 +3218,23 @@ export const Constants = {
   //  them — they still expend at zero. See ArmUnit._consumeFuel.)
   ARM_RESERVE_FUEL: 5,                 // % of tank held back for a safe reel-home
 
+  // --- Deploy gate + daughter fuel economy (register item 100, 2026-08-21) ---
+  // The deploy gate is tether-tier-aware: a daughter may launch at a target out
+  // to tetherMax × ARM_DEPLOY_RANGE_FRACTION. The fraction keeps 0.15 of slack
+  // to the 0.95× auto-recall guard against in-transit drift (measured metres-
+  // scale; instrument tmp/i100-sweep.mjs). Replaces the pre-GSL-ladder literal
+  // min(500, tetherMax × 0.5) — at T5 GSL-100 the weaver radius is 8 km, the
+  // 16 km sweep doctrine (item 76(d), owner-ruled).
+  ARM_DEPLOY_RANGE_FRACTION: 0.8,
+  // Daughter FEEP tank as total Δv (m/s) — the economy anchor the HUD's
+  // remainingDeltaV already assumed (ArmUnit.getStatus). TRANSIT/APPROACH
+  // autopilot fuel is billed against it as commanded impulse (Σ|dv| / 50 ×
+  // 100 %): the spring pays launch kinetic energy, the FEEP pays only for
+  // corrections + the arrival kill. Replaces the time-based 1.5 %/s TRANSIT
+  // rate that capped any powered sortie at ~63 s (630 m @10 m/s — measured,
+  // tmp/i100-sweep.mjs) and billed slow shots MORE than fast ones.
+  ARM_TOTAL_DELTAV: 50,                  // m/s of FEEP Δv per 100% daughter tank
+
   // --- NavSphere Tether Zones (Phase 3 — reserve constants) ---
   NAVSPHERE_LASSO_RING_COLOR: 'rgba(255, 255, 255, 0.3)',
   NAVSPHERE_SPINNER_RING_COLOR: 'rgba(0, 255, 136, 0.25)',
@@ -3623,6 +3645,10 @@ export const Constants = {
       //   is the "you timed a Hohmann" moment; the porkchop viz is deferred (EN-5/6).
       { id: 'confirm_before_fire', label: 'Confirm Before Launch', key: null, tier: 3, category: 'awareness', hudGroup: null, prereqs: [], prereqType: 'none', noReminder: true,  triggerEvent: 'CONJUNCTION_ALERT', triggerFilter: (d) => d && d.reason === 'ACTIVE_SAT_ARMING' },
       { id: 'radial_menu',         label: 'Fleet Recall',        key: 'Shift+R',  tier: 3, category: 'collect',   hudGroup: 'fleet', prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'ARM_RECALL_ALL' },
+      // ── item 100 (2026-08-21): the launch-speed dial. Discovered by moving
+      //   the dial (LAUNCH_SPEED_CHANGED); the ch10 wide-sweep beat teaches its
+      //   application (ARM_CAPTURED rangeM ≥ 1000 — the tether-gated unlock).
+      { id: 'speed_dial',          label: 'Launch-Speed Dial',   key: "; / '",   tier: 3, category: 'collect',   hudGroup: 'fleet', prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'LAUNCH_SPEED_CHANGED' },
       { id: 'orbital_hohmann',     label: 'Hohmann Window',      key: null, tier: 4, category: 'nav',       hudGroup: null,    prereqs: [], prereqType: 'soft', noReminder: false, triggerEvent: 'CLUSTER_WINDOW_OPEN' },
 
       // ── Tier 4: Advanced (8 skills) ─────────────────────────────────────
@@ -4133,7 +4159,7 @@ export const Constants = {
     DEFAULT_DURATION_MS: 7000,
     PERSISTENCE_KEY: 'teachingSeen',
     QUEUE_DRAIN_INTERVAL_S: 6,   // CP-4 §4 — drain queued overlays at ≤1 per this many seconds
-    TOTAL_MOMENTS: 29,           // UX-3 N1: +first_scan/first_arm_deploy; +first_net_failed/first_tether_snap; Phase 0.6: +first_high_tumble_target/first_despin_in_spec; Phase 1.5: +first_detail_scan; Phase 2: +first_aspect_target; Phase 3b: +first_fragmentation; Net ladder: +first_small_daughter_deploy/first_large_daughter_deploy/first_whale_target/first_deltav_waste; cargo-continuity S4: +first_net_park
+    TOTAL_MOMENTS: 30,           // UX-3 N1: +first_scan/first_arm_deploy; +first_net_failed/first_tether_snap; Phase 0.6: +first_high_tumble_target/first_despin_in_spec; Phase 1.5: +first_detail_scan; Phase 2: +first_aspect_target; Phase 3b: +first_fragmentation; Net ladder: +first_small_daughter_deploy/first_large_daughter_deploy/first_whale_target/first_deltav_waste; cargo-continuity S4: +first_net_park; item 100 (2026-08-21): +speed_dial (29→30)
   },
 
   // ============================================================================
@@ -4353,6 +4379,22 @@ export const Constants = {
           type: 'narrative',
           source: 'HOUSTON',
           text: 'Watch the South Atlantic Anomaly. The belt dips low there and dose spikes. Run both daughters through the clean windows together; don\'t get caught reeling mid-belt.',
+        },
+        // Register item 100 (2026-08-21): the first mission beat that NEEDS the
+        // wide sweep — a capture past 1 km from Mother is impossible under the
+        // pre-feature 500 m deploy gate. Reachable at Zylon T2 tether (gate
+        // 3.2 km) with any spring; the escalation names the paired purchase +
+        // the dial (100 s transit @10 m/s vs 50 s @20 — the reload∝v² trade).
+        {
+          id: 'ch10_widesweep',
+          type: 'interactive',
+          source: 'HOUSTON',
+          text: 'Belt crossings scatter fragments wide. Don\'t chase every shard with the Mother — reach out. Long tether, hot spring, dial the fleet launch speed up with [\'] (down with [;]) and take a catch past a kilometre.',
+          skillId: 'speed_dial',
+          triggerEvent: 'ARM_CAPTURED',
+          triggerFilter: (d) => !!d && typeof d.rangeM === 'number' && d.rangeM >= 1000,
+          title: 'THE WIDE SWEEP',
+          body: 'Capture debris more than 1,000 m from the Mother. You need reach: a Zylon-or-better tether (Shop → Tether Materials) extends the deploy gate, and a hotter spring plus the [;]/[\'] launch-speed dial makes the transit worth the reload.',
         },
       ],
 

@@ -1315,6 +1315,29 @@ export class InputManager {
         }
         break;
 
+      // --- Crossbow launch-speed dial (register item 100): `;` down / `'` up.
+      //     Fleet-wide on the existing ArmManager API; the arm clamps to its
+      //     spring tier's ceiling, so the default 10 m/s never overruns T1/T2.
+      //     Repeat allowed (hold to sweep). Feedback rides LAUNCH_SPEED_CHANGED
+      //     → the arms-panel header (the power-bus pattern: click + HUD, no
+      //     comms spam). ---
+      case 'Semicolon':
+        if (isGameplay && d.armManager) {
+          const am = d.armManager;
+          am.setFleetLaunchSpeed(am.getFleetLaunchSpeed() - Constants.CROSSBOW_SPEED_STEP);
+          d.audioSystem?.playClick();
+          e.preventDefault();
+        }
+        break;
+      case 'Quote':
+        if (isGameplay && d.armManager) {
+          const am = d.armManager;
+          am.setFleetLaunchSpeed(am.getFleetLaunchSpeed() + Constants.CROSSBOW_SPEED_STEP);
+          d.audioSystem?.playClick();
+          e.preventDefault();
+        }
+        break;
+
       // --- Pane density (bare +/-) · Mother throttle (Shift + +/-) ---
       // Hotkey pass (pane-priority ladder): bare +/- now drive the HUD pane
       // density ladder (hide/show panes one rung at a time). The Mother
