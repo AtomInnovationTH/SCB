@@ -383,8 +383,10 @@ export class CaptureNetVisual {
         t: 0,
         dur: Constants.CAPTURE_NET.FAILURE_STAGING_S ?? 1.4,
         // The drape/cinch the failure found the bag in — a cinch-path bounce
-        // starts welded and releases; a slam-path bounce starts at the cone
-        // and slaps. cinch is the beat's last-driven value for the furniture.
+        // starts welded (the sweep's endpoint held through SECURE_CHECK — the
+        // wrap attempt) and releases; a slam-path bounce starts at the cone
+        // (item 29: SECURE_CHECK no longer pre-welds the slam path) and slaps.
+        // cinch is the beat's last-driven value for the furniture.
         drape0: vis.kitHandle._drape || 0,
         cinch0: vis.kitHandle._cinchFrac || 0,
         cinch: vis.kitHandle._cinchFrac || 0,
@@ -1270,7 +1272,25 @@ export class CaptureNetVisual {
                  || state === STATES.BERTHED || state === STATES.COLLARED
                  || state === STATES.TRANSFERRING
                  || state === STATES.SECURE_CHECK) {
-        drape = 1; cinchFrac = 1;   // welded shrink-wrap, no jiggle
+        if (state === STATES.SECURE_CHECK && net.captureMode === CN.MODES.SLAM_WRAP) {
+          // Register item 29 (OWNER RULED (a), 2026-08-21): no pre-resolve
+          // weld on the slam path — the resolve rolls AT window end
+          // (CaptureNet.js:1371–1373/:2237), so the welded draw lies for the
+          // ~0.2 g-s check window. SLAM_WRAP never cinched (no sweep): hold
+          // the arrived open cone through the check. The success weld lands AT
+          // the resolve (the CAPTURED row above); a slam bounce then seeds the
+          // beat's slap from the cone — its up-phase READS (the comment at
+          // :385–387 is true again). The cinch branch below is byte-identical
+          // to the pre-29 welded row: it writes the same (1, 1) the CINCH_CLOSING
+          // sweep converges to (the honest wrap attempt held through the check).
+          // Production forces CINCH (both fire sites, CaptureNet.js:3781–3784/
+          // :3874–3877; all callers mode-less), so the gated SECURE_CHECK n=2
+          // family, the pixel/fabric stills, and every mode-less mock ride the
+          // cinch branch — no-movement witnesses by construction.
+          drape = 0; cinchFrac = 0;   // hold what the slam path arrived with
+        } else {
+          drape = 1; cinchFrac = 1;   // welded shrink-wrap, no jiggle
+        }
       }
       if (drape > 0 || cinchFrac > 0 || vis.kitHandle._drape > 0 || vis.kitHandle._cinchFrac > 0) {
         vis.kitHandle._jigglePhase = (vis.kitHandle._jigglePhase || 0) + dt * Math.PI * 2 * _NT.DRAPE_JIGGLE_HZ;
