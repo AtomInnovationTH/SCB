@@ -1203,6 +1203,40 @@ export const Constants = {
   // capacity in pieces pinned at the strut tip (owner: "a daughter may store more
   // than one piece"). 2 is the smallest honest rack — tuning, not doctrine.
   DAUGHTER_CARGO_CELLS: 2,
+
+  // ── S9 strut posing (2026-08-22, register item 32): the held-cargo plume
+  // band. Measured, not guessed — tmp/i32s9-box-probe.log (the item-32 sweep
+  // re-run under the BOX volume model: dims from setDebrisSize lengthM/widthM,
+  // oriented by the booking's hold frame, enclosed exactly by a 4-ball chain).
+  // Each row: any piece whose sizeMeter is <= maxSizM bites a 35° aft cone
+  // somewhere on the attitude ring at aim angles UP TO maxBiteADeg (worst
+  // aspect; the fat defunctSat hull, not the skinny rocketBody). safeAlphaMin
+  // adds a +10° margin and is the re-pose DESTINATION FLOOR — a loaded
+  // HOLDING_CATCH daughter parked at α >= her floor can never present cargo to
+  // a plume at ANY attitude (the ring is the bound, i32 V9). The sphere's old
+  // "clear at α >= 71°" bound is FALSIFIED by the box: a 12.4 m fat hull bites
+  // to 106° (exact-box 80°, the chain's rounding is the margin's room).
+  // Read by ArmManager's re-pose driver and the S9 tests; the plume CHECK
+  // itself is band-free (it tests geometry, not policy).
+  PLUME_CARGO_ALPHA_LADDER: [
+    { maxSizM: 0.5,  maxBiteADeg: 11,  safeAlphaMinRad: 21 * Math.PI / 180 },
+    { maxSizM: 1.5,  maxBiteADeg: 30,  safeAlphaMinRad: 40 * Math.PI / 180 },
+    { maxSizM: 2.8,  maxBiteADeg: 45,  safeAlphaMinRad: 55 * Math.PI / 180 },
+    { maxSizM: 5.0,  maxBiteADeg: 65,  safeAlphaMinRad: 75 * Math.PI / 180 },
+    { maxSizM: 8.0,  maxBiteADeg: 86,  safeAlphaMinRad: 96 * Math.PI / 180 },
+    { maxSizM: Infinity, maxBiteADeg: 107, safeAlphaMinRad: 117 * Math.PI / 180 },
+  ],
+  // The ONE band read (the digestSpanS in-table-method precedent): the piece's
+  // re-pose floor for its size class — ceil to the NEXT row (intermediate
+  // sizes inherit the deeper floor; conservative direction preserved).
+  plumeCargoSafeAlphaMin(sizeMeter) {
+    const s = Number.isFinite(sizeMeter) ? sizeMeter : Infinity;
+    for (const row of this.PLUME_CARGO_ALPHA_LADDER) {
+      if (s <= row.maxSizM) return row.safeAlphaMinRad;
+    }
+    return this.PLUME_CARGO_ALPHA_LADDER[this.PLUME_CARGO_ALPHA_LADDER.length - 1].safeAlphaMinRad;
+  },
+
   ARM_NET_DEPLOY_TIME: 3.0,            // seconds (Miura-ori unfold + SMA cinch)
   ARM_GRAPPLE_STABILIZE: 1.5,          // seconds (stabilization after capture)
   ARM_CAPTURE_SUCCESS_RATE: 0.85,      // 85% net capture success (legacy; gated off when CAPTURE_NET ON)

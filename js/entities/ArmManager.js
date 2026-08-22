@@ -14,12 +14,17 @@ import { Events } from '../core/Events.js';
 import { powerDistribution } from '../systems/PowerDistribution.js';
 import { checkActiveSatArming } from '../systems/ActiveSatGuard.js';
 import { persistenceManager } from '../systems/PersistenceManager.js';
-import { computeCoM, computeInducedTorque, strutTipMeters } from '../systems/CoMCalculator.js';
+import { computeCoM, computeInducedTorque, strutTipMeters, heldCargoPlumeConflictAt } from '../systems/CoMCalculator.js';
+import { strutLocalDirection } from './ArmDockBasis.js';
 import { reseatOrbitFromScene } from './OrbitalMechanics.js';
 import { ArmUnit } from './ArmUnit.js';
 
 /** 1 meter in scene units */
 const M = 0.00001;
+
+// S9 re-pose scratch — the destination-tip direction (module temp idiom;
+// never retained across calls).
+const _poseDirTmp = new THREE.Vector3();
 
 // V5 Constants (destructured for readability)
 const {
@@ -1721,6 +1726,14 @@ export class ArmManager {
       arm.update(dt, parentPos, parentQuat);
     }
 
+    // S9 strut posing (cargo-continuity plan §5, part 3; register item 32):
+    // a loaded HOLDING_CATCH daughter whose cargo box sits in a plume cone at
+    // her live booking re-poses to the measured safe band. Live, NOT
+    // flag-gated — this changes how the arm MOVES, never what thrust refuses
+    // (THRUSTER_INTERLOCK stays dormant and untouched). Runs AFTER arm.update
+    // so aim writes land on fresh positions.
+    this._updateCargoPlumePoses(dt);
+
     // z-layer fix: toggle each daughter's hull in/out of the near-field depth
     // pass by distance to the mother (runs AFTER arm.update so positions are
     // current for this frame).
@@ -1817,6 +1830,138 @@ export class ArmManager {
       }
     }
     return berthed + rack;
+  }
+
+  // ── S9: strut posing — held cargo stays out of the plumes (register 32) ───
+
+  /**
+   * S9 re-pose (cargo-continuity plan §5 part 3): on a bite — the arm's held
+   * cargo box in any plume cone at its live booking while she is loaded
+   * HOLDING_CATCH — her aim α eases to the measured safe band
+   * (Constants.plumeCargoSafeAlphaMin for her largest piece; the band rows are
+   * tmp/i32s9-box-probe.log's max-bite angles + a +10° margin, worst aspect).
+   * Constraints, per the work order:
+   *   • CAMERA: nearest feasible destination first — the pose family (a
+   *     catch-relative hold beside the daughter; the lateral bias is untouched)
+   *     survives because the swing takes the SHORTEST legal step, and the
+   *     slew rate (STRUT_SLEW_RATE via setAimAlpha / _updateStruts) makes it
+   *     a swing, never a snap. No comms line — the visible swing is the tell.
+   *   • CORRIDOR: candidates cross no sister station's berth corridor —
+   *     _repPoseCorridorClear, _corridorClear's strut-tip set as a
+   *     destination-feasibility READ only. The live corridor gate stays
+   *     strut-tips-only per S13(d). No feasible pose ⇒ hold course and retry
+   *     next frame (the station clears when the transfer completes).
+   * The aim coroutine already clamps α ∈ [0, π] so every destination here is
+   * reachable. An arm parked at or above her floor can never present cargo to
+   * a cone at ANY attitude (the attitude ring is the measured bound), so the
+   * steady state is silent.
+   * @param {number} dt — frame delta seconds
+   * @private
+   */
+  _updateCargoPlumePoses(dt) {
+    // Headless mocks lack the render-side strut driver — they slew HERE (the
+    // S10 legacy-fallback idiom), including COMPLETING an already-vetted
+    // swing whose bite cleared mid-way (never park half-swung); production
+    // slews once, in _updateStruts, which owns the same latch.
+    const headless = !(this.playerSatellite && this.playerSatellite.strutGroups);
+    for (let i = 0; i < this.arms.length; i++) {
+      const arm = this.arms[i];
+      if (!arm || arm.state !== ARM_STATES.HOLDING_CATCH) continue;
+
+      const conflict = heldCargoPlumeConflictAt(this, i);
+      if (!conflict) {
+        // No bite: keep finishing a latch the previous frames chose (the
+        // _updateStruts contract), else stay silent.
+        if (headless && arm._strutTargetAlpha !== undefined
+          && typeof arm.setAimAlpha === 'function') {
+          arm.setAimAlpha(arm._strutTargetAlpha, dt);
+          if (Math.abs(arm.getAimAlpha() - arm._strutTargetAlpha) < 0.01) {
+            arm._strutTargetAlpha = undefined; // arrived — the render driver's own rule
+          }
+        }
+        continue;
+      }
+
+      // Destination floor from her LARGEST piece (band rows are size-keyed,
+      // worst aspect — conservative for every type).
+      let maxSiz = 0;
+      if (arm.capturedDebris && arm.capturedDebris.mass) {
+        maxSiz = Math.max(maxSiz, arm.capturedDebris.sizeMeter || 0);
+      }
+      if (Array.isArray(arm.heldCatches)) {
+        for (const h of arm.heldCatches) {
+          if (h && h.mass) maxSiz = Math.max(maxSiz, h.sizeMeter || 0);
+        }
+      }
+      const floorRad = Constants.plumeCargoSafeAlphaMin(maxSiz);
+
+      let destRad = null;
+      const floorDeg = Math.ceil(floorRad * 180 / Math.PI);
+      for (let aDeg = floorDeg; aDeg <= 180; aDeg += 5) {
+        const cand = aDeg * Math.PI / 180;
+        if (this._repPoseCorridorClear(i, cand)) { destRad = cand; break; }
+      }
+      if (destRad == null) continue; // no legal pose while the station holds — retry next frame
+
+      arm._strutTargetAlpha = destRad;
+      if (headless && typeof arm.setAimAlpha === 'function') {
+        arm.setAimAlpha(destRad, dt);
+      }
+    }
+  }
+
+  /**
+   * S9 destination-feasibility READ (NOT the live gate): would planting arm
+   * `armIndex`'s strut tip at `alphaDest` put it inside an occupied mother-net
+   * berth corridor? Same ship-local cylinder geometry as CaptureNet's
+   * _corridorClear section 1 (fore of the berth anchor plane, radial < the
+   * mated catch's radius + BERTH_CLEARANCE_M), scoped to the station holders
+   * (BERTHED/COLLARED/TRANSFERRING — the getDockedCatch set). The live
+   * corridor gate itself is untouched (S13(d): strut-tips-only there).
+   * @param {number} armIndex
+   * @param {number} alphaDest — destination sweep angle (rad)
+   * @returns {boolean} true when the destination crosses no occupied corridor
+   * @private
+   */
+  _repPoseCorridorClear(armIndex, alphaDest) {
+    const player = this.playerSatellite;
+    const cns = player && player._captureNetSystem;
+    const nets = cns && Array.isArray(cns.activeNets) ? cns.activeNets : null;
+    if (!nets || nets.length === 0) return true;
+    const V5C = Constants.OCTOPUS_V5;
+    const CN = Constants.CAPTURE_NET;
+    if (!V5C || !CN || !CN.STATES) return true;
+    const M_NET = 0.00001;
+
+    // The ONE berth anchor (S13(e)): the collar object, else pod 0's muzzle,
+    // else the documented collar constant — the same reads _corridorClear makes.
+    const anchor = player._netBerthCollar
+      ?? player._netPodMuzzles?.[0];
+    const mx = anchor ? anchor.position.x / M_NET : 0;
+    const my = anchor ? anchor.position.y / M_NET : 0;
+    const mz = anchor ? anchor.position.z / M_NET : (V5C.BERTH_COLLAR_Z_M ?? 1.30);
+
+    const dp = this._dockPositions[armIndex];
+    const azRad = dp ? (dp.azimuthDeg * Math.PI / 180) : 0;
+    const collarR = V5C.COLLAR_RADIUS ?? 0.40;
+    const collarY = V5C.COLLAR_Y ?? 0.90;
+    const strutLen = V5C.STRUT_LENGTH ?? 1.60;
+    strutLocalDirection(alphaDest, azRad, _poseDirTmp);
+    // Ship-local tip relative to the anchor (the _corridorClear tip formula).
+    const tipX = Math.cos(azRad) * collarR + _poseDirTmp.x * strutLen - mx;
+    const tipY = Math.sin(azRad) * collarR + _poseDirTmp.y * strutLen - my;
+    const tipZ = collarY + _poseDirTmp.z * strutLen - mz;
+    if (tipZ <= 0) return true; // aft of the muzzle plane — cannot clip a corridor
+
+    const S = CN.STATES;
+    for (const net of nets) {
+      if (!net || !net._isMother) continue;
+      if (net.state !== S.BERTHED && net.state !== S.COLLARED && net.state !== S.TRANSFERRING) continue;
+      const d = net.targetDebris;
+      const radiusM = ((d && d.sizeMeter) || 2) / 2 + (CN.BERTH_CLEARANCE_M ?? 1.0);
+      if (tipX * tipX + tipY * tipY < radiusM * radiusM) return false;
+    }
+    return true;
   }
 
   /**

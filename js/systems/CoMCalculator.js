@@ -157,9 +157,14 @@ const _slotPoint = { x: 0, y: 0, z: 0 };
  * @param {number} slotIndex — rack slot (0-based; slot 0 carries no lat rotation)
  * @param {number} sizeMeter — the piece's size, for the standoff radius
  * @param {{x:number,y:number,z:number}} out — receives the booking point, meters
+ * @param {{x:number,y:number,z:null}} [axisOut] — when provided, receives the
+ *   RESOLVED body-frame hold axis (unit; the zero vector when no source
+ *   resolves). The ONE resolution of the axis — S9's volume model rides it
+ *   instead of re-deriving the pin's direction (register item 32 / S13(b)'s
+ *   one-computation rule).
  * @returns {{x:number,y:number,z:number}} out
  */
-export function heldCargoBookingMeters(arm, dp, alpha, playerSatellite, slotIndex, sizeMeter, out) {
+export function heldCargoBookingMeters(arm, dp, alpha, playerSatellite, slotIndex, sizeMeter, out, axisOut) {
   const tip = strutTipMeters(dp, alpha);
   _hcdAnchor.set(tip.x * M, tip.y * M, tip.z * M);
 
@@ -190,6 +195,11 @@ export function heldCargoBookingMeters(arm, dp, alpha, playerSatellite, slotInde
   out.x = _hcdOut.x / M;
   out.y = _hcdOut.y / M;
   out.z = _hcdOut.z / M;
+  if (axisOut) {
+    axisOut.x = hasDir ? _hcdDir.x : 0;
+    axisOut.y = hasDir ? _hcdDir.y : 0;
+    axisOut.z = hasDir ? _hcdDir.z : 0;
+  }
   return out;
 }
 
@@ -797,13 +807,177 @@ export function suggestCargoArm(armManager, playerSatellite, cargoMassKg, sizeMe
 // §2  Plume Interference (Gap #8)
 // ═══════════════════════════════════════════════════════════════════════════
 
+// ── S9: the held-cargo VOLUME model (register item 32) ──────────────────────
+// The box: dims from the item-7 SSOT (DebrisField.setDebrisSize keeps
+// lengthM/widthM tracking sizeMeter per type), oriented by the booking's hold
+// frame — long axis ALONG the resolved hold direction, square widthM × widthM
+// cross-section. The check encloses that box EXACTLY by a chain of
+// PLUME_CARGO_CHAIN_K balls riding the long axis: each slab's half-extents are
+// (L/2K, W/2, W/2), so radius √((L/2K)² + W²/2) covers its slab and the union
+// of the K balls contains the whole box. Box ⊆ chain, therefore a chain CLEAR
+// is decisive for the box and a chain HIT may overstate — the conservative
+// direction the work order mandates ("never shrink below the honest hull").
+// Degenerate dims (missing / non-finite / not elongated) fall back to the
+// legacy single sphere of radius sizeMeter/2 at the booking.
+// Measured basis: tmp/i32s9-box-probe.log — the item-32 sweep re-run under
+// this exact model BEFORE any production edit. The sphere's old "clear at
+// α ≥ 71°" band is dead under the box (a fat 12.4 m hull bites to α ≈ 106°);
+// the re-pose destination floors that answer it live in
+// Constants.PLUME_CARGO_ALPHA_LADDER (measured from the same probe).
+const PLUME_CARGO_CHAIN_K = 4;
+const _plumeChainBall = [];            // module scratch — K reused plain objects
+for (let _i = 0; _i < PLUME_CARGO_CHAIN_K; _i++) _plumeChainBall.push({ x: 0, y: 0, z: 0, r: 0 });
+const _plumeBookingTmp = { x: 0, y: 0, z: 0 };
+const _plumeAxisTmp = { x: 0, y: 0, z: 0 };
+
 /**
- * Check whether any strut tip is inside the plume cone of a specific thruster.
+ * Build the ball-chain enclosure of ONE held piece's SSOT box at its live
+ * booking. REUSES heldCargoBookingMeters — booking point AND hold axis come
+ * from the ONE call (never a duplicate resolution; S13(b)'s rule).
+ *
+ * @param {object} arm — ArmUnit instance or mock (reads arm._firedNet only)
+ * @param {object} dp — dock position (stored convention)
+ * @param {number} alpha — strut sweep angle (rad)
+ * @param {object|null} playerSatellite — source of the attitude quaternion
+ * @param {number} slotIndex — rack slot (0-based)
+ * @param {object|null} debris — the held piece (sizeMeter + lengthM/widthM)
+ * @param {Array<{x:number,y:number,z:number,r:number}>} out — preallocated
+ *   scratch with >= PLUME_CARGO_CHAIN_K entries (module temps on hot paths)
+ * @returns {number} balls written (1 = sphere fallback, else CHAIN_K)
+ */
+export function heldCargoPlumeChainInto(arm, dp, alpha, playerSatellite, slotIndex, debris, out) {
+  const sizeMeter = (debris && debris.sizeMeter) || 0;
+  heldCargoBookingMeters(arm, dp, alpha, playerSatellite, slotIndex, sizeMeter,
+    _plumeBookingTmp, _plumeAxisTmp);
+  const L = debris ? debris.lengthM : undefined;
+  const W = debris ? debris.widthM : undefined;
+  const hasAxis = (_plumeAxisTmp.x !== 0) || (_plumeAxisTmp.y !== 0) || (_plumeAxisTmp.z !== 0);
+  const boxUsable = Number.isFinite(L) && Number.isFinite(W) && L > W && L > 0 && W > 0;
+  if (!boxUsable || !hasAxis) {
+    out[0].x = _plumeBookingTmp.x;
+    out[0].y = _plumeBookingTmp.y;
+    out[0].z = _plumeBookingTmp.z;
+    out[0].r = sizeMeter / 2;
+    return 1;
+  }
+  const step = L / PLUME_CARGO_CHAIN_K;
+  const r = Math.sqrt((step / 2) * (step / 2) + (W * W) / 2);
+  for (let j = 0; j < PLUME_CARGO_CHAIN_K; j++) {
+    const off = (j - (PLUME_CARGO_CHAIN_K - 1) / 2) * step;
+    const b = out[j];
+    b.x = _plumeBookingTmp.x + _plumeAxisTmp.x * off;
+    b.y = _plumeBookingTmp.y + _plumeAxisTmp.y * off;
+    b.z = _plumeBookingTmp.z + _plumeAxisTmp.z * off;
+    b.r = r;
+  }
+  return PLUME_CARGO_CHAIN_K;
+}
+
+/**
+ * Exact ball-vs-infinite-plume-cone test — the i32/S12 instrument's validated
+ * branches (apex-engulf HIT; entirely-upstream CLEAR; else the angular limb
+ * φ − (halfAngle + asin(r/dist)) decides). A CLEAR is decisive for the ball,
+ * hence for anything the ball contains.
+ * @private
+ */
+function _ballInPlumeCone(bx, by, bz, r, n, dx, dy, dz, halfAngle) {
+  const vx = bx - n.x, vy = by - n.y, vz = bz - n.z;
+  const dist = Math.sqrt(vx * vx + vy * vy + vz * vz);
+  if (dist <= r) return true;
+  const axial = vx * dx + vy * dy + vz * dz;
+  if (axial <= -r) return false;
+  let cosPhi = axial / dist;
+  if (cosPhi < -1) cosPhi = -1; else if (cosPhi > 1) cosPhi = 1;
+  const phi = Math.acos(cosPhi);
+  const t = r / dist;
+  return phi <= halfAngle + Math.asin(t > 1 ? 1 : t);
+}
+
+/**
+ * Does ANY piece this arm holds sit — box-chain model, live booking — inside
+ * THIS thruster's cone? Mirrors _forEachArmMassPoint's guards exactly: the
+ * in-hand scalar books at slot 0, then every rack piece at its own slot, each
+ * gated on a truthy mass. An EMPTY arm costs two field reads.
+ * @private
+ */
+function _armHoldsCargoInCone(arm, dp, alpha, playerSatellite, n, dx, dy, dz, halfAngle) {
+  const hand = arm.capturedDebris;
+  if (hand && hand.mass) {
+    const count = heldCargoPlumeChainInto(arm, dp, alpha, playerSatellite, 0, hand, _plumeChainBall);
+    for (let j = 0; j < count; j++) {
+      const b = _plumeChainBall[j];
+      if (_ballInPlumeCone(b.x, b.y, b.z, b.r, n, dx, dy, dz, halfAngle)) return true;
+    }
+  }
+  const rack = arm.heldCatches;
+  if (Array.isArray(rack)) {
+    for (let s = 0; s < rack.length; s++) {
+      const held = rack[s];
+      if (!held || !held.mass) continue;
+      const count = heldCargoPlumeChainInto(arm, dp, alpha, playerSatellite, s, held, _plumeChainBall);
+      for (let j = 0; j < count; j++) {
+        const b = _plumeChainBall[j];
+        if (_ballInPlumeCone(b.x, b.y, b.z, b.r, n, dx, dy, dz, halfAngle)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * S9 driver-facing read (ArmManager's re-pose tick + the tests): does the arm
+ * at `armIndex` hold cargo whose box-chain sits in ANY thruster's cone at its
+ * live booking? Applies the SAME skip filter as checkPlumeInterference
+ * (detached/expended arms and missing dock positions are skipped). READ-ONLY —
+ * what thrust refuses is THRUSTER_INTERLOCK's business, untouched.
+ *
+ * @param {object} armManager — with .arms[], ._dockPositions[]
+ * @param {number} armIndex
+ * @returns {{ armIndex: number, thrusterId: string }|null} first conflict
+ */
+export function heldCargoPlumeConflictAt(armManager, armIndex) {
+  const thrusters = Constants.THRUSTERS;
+  if (!thrusters) return null;
+  const arms = armManager.arms || [];
+  const docks = armManager._dockPositions || [];
+  const arm = arms[armIndex];
+  const dp = docks[armIndex];
+  if (!arm || !dp) return null;
+  if (arm.isDetached || arm.state === Constants.ARM_STATES.EXPENDED) return null;
+  const holdsAnything = (arm.capturedDebris && arm.capturedDebris.mass)
+    || (Array.isArray(arm.heldCatches) && arm.heldCatches.some((h) => h && h.mass));
+  if (!holdsAnything) return null;
+
+  const alpha = arm.getAimAlpha ? arm.getAimAlpha() : (arm._aimAlpha || 0);
+  const playerSatellite = armManager.playerSatellite || null;
+  for (const t of thrusters) {
+    const d = t.thrustDir;
+    const dMag = Math.sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+    const dx = d.x / dMag, dy = d.y / dMag, dz = d.z / dMag;
+    if (_armHoldsCargoInCone(arm, dp, alpha, playerSatellite, t.nozzlePos, dx, dy, dz,
+      Constants.PLUME_HALF_ANGLE)) {
+      return { armIndex, thrusterId: t.id };
+    }
+  }
+  return null;
+}
+
+/**
+ * Check whether any strut tip — or any cargo a strut HOLDS (S9, register
+ * item 32) — is inside the plume cone of a specific thruster.
  *
  * Cone test: A point P is inside the plume cone of thruster at nozzle N
  * firing along direction D (unit) with half-angle θ if:
  *   1. axial = (P − N) · D > 0            (downstream of nozzle)
  *   2. perpDist / axial < tan(θ)           (within cone angle)
+ *
+ * S9 cargo term: for each arm passing the skip filter below, every HELD piece
+ * is tested at its live booking through the box-chain volume model
+ * (heldCargoPlumeChainInto → _ballInPlumeCone). An arm conflicts if its TIP
+ * is in the cone OR any held piece's chain touches it. EMPTY arms take
+ * exactly the pre-S9 path (byte-identical results). The interlock stays
+ * dormant — THRUSTER_INTERLOCK semantics are untouched; S9 changes what this
+ * check SEES, never what thrust REFUSES.
  *
  * @param {object} armManager — with .arms[], ._dockPositions[]
  * @param {string} thrusterId — one of Constants.THRUSTERS[].id
@@ -825,6 +999,7 @@ export function checkPlumeInterference(armManager, thrusterId) {
 
   const arms = armManager.arms || [];
   const docks = armManager._dockPositions || [];
+  const playerSatellite = armManager.playerSatellite || null;
   const conflictingArms = [];
 
   for (let i = 0; i < arms.length; i++) {
@@ -846,16 +1021,28 @@ export function checkPlumeInterference(armManager, thrusterId) {
 
     // Axial projection: (tip − nozzle) · thrustDir
     const axial = vx * dx + vy * dy + vz * dz;
-    if (axial <= 0) continue; // tip is upstream of nozzle — cannot be in plume
+    let conflict = false;
+    if (axial > 0) {
+      // Perpendicular distance from cone axis
+      // perpSq = |v|² − axial²
+      const vLenSq = vx * vx + vy * vy + vz * vz;
+      const perpSq = vLenSq - axial * axial;
+      const perp = perpSq > 0 ? Math.sqrt(perpSq) : 0;
 
-    // Perpendicular distance from cone axis
-    // perpSq = |v|² − axial²
-    const vLenSq = vx * vx + vy * vy + vz * vz;
-    const perpSq = vLenSq - axial * axial;
-    const perp = perpSq > 0 ? Math.sqrt(perpSq) : 0;
+      // Cone test: perp / axial < tan(halfAngle)
+      if (perp < axial * tanHalf) conflict = true;
+    }
 
-    // Cone test: perp / axial < tan(halfAngle)
-    if (perp < axial * tanHalf) {
+    // S9: when the tip tests clear, the check still sees what the pin DRAWS —
+    // every held piece at its live booking through the box-chain model. The
+    // i32 measurement proved the tip NEVER fouls while cargo did, so this
+    // term is where the entire measured bite population becomes visible.
+    if (!conflict) {
+      conflict = _armHoldsCargoInCone(arm, dp, alpha, playerSatellite,
+        n, dx, dy, dz, Constants.PLUME_HALF_ANGLE);
+    }
+
+    if (conflict) {
       conflictingArms.push(i);
     }
   }
@@ -1039,6 +1226,8 @@ export default {
   computeInducedTorque,
   suggestStowArm,
   heldCargoBookingMeters,
+  heldCargoPlumeChainInto,
+  heldCargoPlumeConflictAt,
   strutTipMeters,
   strutMidpointMeters,
   checkPlumeInterference,
