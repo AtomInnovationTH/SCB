@@ -1187,13 +1187,18 @@ export class ShopScreen {
     const target = getAvailableTiers().find(t => t.tierKey === targetTier);
     if (!target) return;
 
-    // Simple confirmation via browser confirm (no custom modal needed)
+    // Simple confirmation via browser confirm (no custom modal needed).
+    // Register item 86 (owner-ruled "make words honest"): executeUpgrade
+    // sets the tier key + persistence only — the live fleet is rebuilt at
+    // reconstruction (the item-62 tombstone's contract), so the copy says
+    // exactly that instead of promising an in-session arm swap.
     const msg = `UPGRADE TO ${target.displayName}?\n\n` +
       `Daughters: ${target.armCount} (${target.features[0]})\n` +
       `Mass: ${target.massDryKg} kg dry / ${target.massWetKg} kg wet\n` +
       `Cost: ${target.costCredits.toLocaleString()} credits\n\n` +
-      `This replaces ALL current daughters with the new configuration.\n` +
-      `Per-daughter state (nets, tethers, bridle) will be reset.`;
+      `Your current daughters finish this flight unchanged.\n` +
+      `The new configuration takes effect at your NEXT LAUNCH\n` +
+      `(per-daughter state — nets, tethers, bridle — resets then).`;
 
     if (!confirm(msg)) return;
 

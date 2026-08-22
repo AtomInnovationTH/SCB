@@ -138,14 +138,24 @@ export function generateDockPositions(tierKeyOrCount) {
   }
 
   // ── End-face arms (Y3 Octo only: +Z and −Z along velocity vector) ──
+  // Register item 61 (2026-08-22, owner-ruled "fix the blueprint"): the rows
+  // ride the SAME stored convention as the ring — ship Z lives in the stored
+  // Y slot (the S13(a) swap) — so hingePosition (0, ±CORE_LENGTH/2, 0)_stored
+  // reads (0, 0, ±CORE_LENGTH/2)_ship: ON the barrel axis at the end faces,
+  // exactly where TierVisualManager._createEndFaceMount draws its mounts.
+  // dockOutward likewise carries ship-Z in its stored-Y slot, so a face's
+  // arm deploys straight off its face at α=π/2. (The pre-fix rows parked
+  // hinge AND outward in the stored-Z slots = side stations at
+  // (0, ±ACROSS_FLATS/2, 0)_ship that matched nothing renderable.)
   if (tier.endFaceArms) {
     for (const face of tier.endFaceArms) {
       const isForward = (face === '+Z');
-      const endZ = (isForward ? 1 : -1) * (V5.CORE_ACROSS_FLATS / 2);
+      const endOff = (isForward ? 1 : -1) * (V5.CORE_LENGTH / 2);
       const azDeg = isForward ? 0 : 180;
       const theta = azDeg * Math.PI / 180;
 
-      const outward = new THREE.Vector3(0, 0, isForward ? 1 : -1);
+      // Stored outward carries ship-Z in its Y slot (deploy off the face).
+      const outward = new THREE.Vector3(0, isForward ? 1 : -1, 0);
       // Swing axis for end-face arms: perpendicular to Z, lies in X direction
       const swingAxis = new THREE.Vector3(1, 0, 0);
 
@@ -155,12 +165,12 @@ export function generateDockPositions(tierKeyOrCount) {
 
       positions.push({
         type,
-        offset: new THREE.Vector3(0, 0, endZ * M),
+        offset: new THREE.Vector3(0, endOff * M, 0),
         angle: theta,
         azimuthDeg: azDeg,
         dockOutward: outward,
         swingAxis,
-        hingePosition: new THREE.Vector3(0, 0, endZ * M), // end-cap hinge (not collar)
+        hingePosition: new THREE.Vector3(0, endOff * M, 0), // end-cap hinge (not collar)
         isEndFace: true,
       });
     }

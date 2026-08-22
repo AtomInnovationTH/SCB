@@ -1627,8 +1627,11 @@ export const Constants = {
   //   Nearest arm plane is 60° from thrust axis (ROSA at 0°/180°, arms at 60°/120°/240°/300°).
   //   Plume half-angle 35° → minimum angular clearance = 60° − 35° = 25°.
   //   At standard deploy angles (α ∈ [0, π]), ring-arm strut tips remain well outside
-  //   the −Z plume cone. Edge case: Y3 Octo end-face arm (−Z) at α≈π/2 places tip
-  //   at z ≈ −2.0 m, directly in the thruster plane — interlock required for Octo tier.
+  //   the −Z plume cone. Edge case (register item 61's reconciled rows): the Y3 Octo
+  //   aft end-face arm (−Z) at α≈π/2 places its tip at z ≈ −2.6 m — past the nozzle
+  //   plane (−2.0) and just outside the bare-tip cones, but any HELD cargo books
+  //   further aft on the axis, where S9's box-chain check sees the foul. The
+  //   interlock answer stays THRUSTER_INTERLOCK's business (dormant).
   THRUSTERS: [
     { id: 'HT_TOP',    nozzlePos: { x:  0,    y:  0.5,  z: -2.0 }, thrustDir: { x: 0, y: 0, z: -1 } },
     { id: 'HT_BOTTOM', nozzlePos: { x:  0,    y: -0.5,  z: -2.0 }, thrustDir: { x: 0, y: 0, z: -1 } },
