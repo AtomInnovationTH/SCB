@@ -1624,6 +1624,30 @@ export class NetProjectile {
   }
 
   /**
+   * Small-catch plan W4 (2026-08-25) — the DRAWN bundle's radius in metres:
+   * what the ceremony camera is actually holding on. `sizeMeter` is the
+   * logical size; the renderer draws effectiveRenderScale × boundingRadius,
+   * which the net-held readability floor (`_catchRenderMin`, ramped in by
+   * `_catchFloorScale` from reel entry) raises to ~MOTHER_CATCH_MIN_RENDER_M
+   * for every sub-floor catch — measured tmp/frag-before: a 0.5 m fragment
+   * draws at 2.0 m radius from REEL_IN on. The camera's hold-distance formula
+   * reads THIS (through the one clamp-aware SSOT chain), so the shot frames
+   * the bundle the player sees, never the invisible logical size. Returns 0
+   * with no target (callers fall back to the sizeMeter-only term); headless
+   * camera mocks simply omit the method — same fallback.
+   * @returns {number} drawn bundle radius in metres (0 = no target)
+   */
+  heldBundleRadiusM() {
+    const d = this.targetDebris;
+    if (!d) return 0;
+    try {
+      DebrisWireframe.getGeometry(d.type, d.id);   // br cache (uncached ⇒ 1 trap)
+      const br = DebrisWireframe.getBoundingRadius(d.type, d.id) || 1;
+      return DebrisField.effectiveRenderScale(d) * br / 0.00001;
+    } catch (_e) { return 0; }
+  }
+
+  /**
    * @private Mother REELING per-frame tick: monotonically ease remainingM to
    * the berth standoff and pin the catch through debrisField.pinCapturedDebris.
    */
@@ -3265,10 +3289,12 @@ export class CaptureNetSystem {
     // what the player sees being fed — the catch comes apart, never pops.
     // updateBerthHold pinned at scaleMul 1 earlier this tick; this re-pin is
     // the last write this frame.
+    // Small-catch plan W3 (2026-08-25): the ramp now reads the ONE law home
+    // (FT.chopScaleMul — byte-identical values) so the collar bag's deflation
+    // (CaptureNetVisual reads the same helper off the same _digestPhaseT) can
+    // never drift from the instance scale it is wrapping.
     if (d._breakdownActive) {
-      const chopSpan = Math.max(1e-6, CHOP_S - HOLD_S);
-      const frac = Math.min(1, Math.max(0, (t - HOLD_S) / chopSpan));
-      const scaleMul = Math.max(0.001, 1 - frac);
+      const scaleMul = FT.chopScaleMul(t);
       if (this._debrisField && typeof this._debrisField.pinCapturedDebris === 'function' && d._armPinPos) {
         this._debrisField.pinCapturedDebris(d, d._armPinPos, scaleMul);
       }

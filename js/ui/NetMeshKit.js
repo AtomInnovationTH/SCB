@@ -1402,14 +1402,21 @@ export const NetMeshKit = {
    *   LOCAL frame (consumer world→local transforms it and passes it in as data,
    *   preserving the kit's pure-local-space rule). When present, V4 depth
    *   shading rewrites the vertex colours: the far side of the bag recedes.
+   * @param {number} [drapeState.catchSizeM] small-catch plan W2a — the catch's
+   *   LOGICAL size in metres (debris.sizeMeter; NOT the floored rendered
+   *   radius, which pops at reel entry). Drives the size-aware welded film
+   *   rest: ≤ 0 / absent keeps the plain MEMBRANE_OPACITY_WELDED fade,
+   *   byte-identical to the pre-W2a path.
    */
   updateWebDrape(h, { drape = 0, cinchFrac = 0, jigglePhase = 0, jiggleAmp = 0,
-                      contentsRadius = 0, contentsZ = 0, contentsBox = null, localCamPos } = {}) {
+                      contentsRadius = 0, contentsZ = 0, contentsBox = null, localCamPos,
+                      catchSizeM = 0 } = {}) {
     if (!h || !h.webPositions || !h.coneMesh) return;
     h._drape = drape;
     h._cinchFrac = cinchFrac;
     h._jigglePhase = jigglePhase;
     h._jiggleAmp = jiggleAmp;
+    h._catchSizeM = catchSizeM;
     // Bubble-look fix (2026-08-25): fade the film toward the welded rest as
     // the drawstring closes, so the catch reads through its own wrap instead
     // of vanishing behind an opaque tent (the closed DoubleSide film at 0.28
@@ -1419,8 +1426,22 @@ export const NetMeshKit = {
     // relax-home call after a miss passes (0, 0), and writing base there
     // would fight the fade timer that owns opacity from the miss on
     // (test-CaptureNetVisual pins that ordering).
+    // Small-catch plan W2a (2026-08-25): the welded rest is size-aware — a
+    // sub-metre catch's closed bag is a thin near-axis bundle whose film at
+    // 0.13 is effectively invisible (measured tmp/frag-before), so the rest
+    // lerps 0.13 → MEMBRANE_OPACITY_WELDED_SMALL across the
+    // [LARGE_SIZE_M … SMALL_SIZE_M] logical-size band. catchSizeM ≤ 0 (miss
+    // bags, legacy mocks, no-target drivers) keeps the plain welded rest —
+    // byte-identical to the pre-W2a fade. Zero geometry change either way.
     if (h.membraneMat && h._membraneBaseOpacity != null && (drape > 0 || cinchFrac > 0)) {
-      const welded = NET_WEB.MEMBRANE_OPACITY_WELDED ?? h._membraneBaseOpacity;
+      let welded = NET_WEB.MEMBRANE_OPACITY_WELDED ?? h._membraneBaseOpacity;
+      const small = NET_WEB.MEMBRANE_OPACITY_WELDED_SMALL;
+      const szHi = NET_WEB.MEMBRANE_WELDED_LARGE_SIZE_M ?? 2.0;
+      const szLo = NET_WEB.MEMBRANE_WELDED_SMALL_SIZE_M ?? 0.8;
+      if (small != null && catchSizeM > 0 && szHi > szLo) {
+        const st = Math.max(0, Math.min(1, (szHi - catchSizeM) / (szHi - szLo)));
+        welded += (small - welded) * st;
+      }
       const k = Math.max(0, Math.min(1, cinchFrac));
       h.membraneMat.opacity = h._membraneBaseOpacity
         + (welded - h._membraneBaseOpacity) * k;

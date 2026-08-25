@@ -2006,6 +2006,19 @@ async function init() {
           const list = debrisField.debrisList || [];
           if (!list.length) return { ok: false, reason: 'debris field empty' };
 
+          // ── Small-catch plan W1 (2026-08-25): `subject` option ──────────
+          // 'whale' (default) = the historical ~2 m cubesat staging below,
+          // byte-identical (the regression subject every recorded gate ran
+          // against). 'fragment' = the owner's REAL catch class: a live
+          // welcome-field icosahedron fragment, sub-metre logical size, real
+          // fragment mass, and — deliberately — NO `_catchRenderMin` freeze:
+          // the production readability floor (CN.MOTHER_CATCH_MIN_RENDER_M
+          // ramp from reel entry) is part of the look under diagnosis (the
+          // "geometric ball" IS the floored icosahedron). Everything else
+          // (25 m prograde pin, aimed fire, roll overrides, tumble pin, ship
+          // hold) is shared so the two subjects differ ONLY in the catch.
+          const subject = (opts && opts.subject === 'fragment') ? 'fragment' : 'whale';
+
           // 1. The intro zoom eases over real dt — kill it so framing is fixed.
           cameraSystem.skipIntroZoom?.();
 
@@ -2025,8 +2038,21 @@ async function init() {
           //    `_meshKey` is still NEVER reassigned (see Traps) — only mass,
           //    which is what MOTHER_MIN_MASS actually gates on.
           const live = list.filter(d => d && d.alive && d.welcomeSpawn);
-          const whale = live.find(d => d.type === 'rocketBody')
-            || live.slice().sort((a, b) => (b.mass || 0) - (a.mass || 0))[0];
+          let whale;
+          if (subject === 'fragment') {
+            // W1: the welcome cluster is mostly `fragment` rows (#1–#6), so a
+            // live pick always exists on mission 1. Prefer a CHUNK variant —
+            // the plate variants are flat shards, and the diagnosis under
+            // repro (D2's "geometric ball") is the icosahedron BODY read.
+            // Deterministic: first match in list order, same idiom as the
+            // whale's find().
+            const NV = Constants.DEBRIS_FRAGMENT_VARIANTS || 7;
+            const frags = live.filter(d => d.type === 'fragment');
+            whale = frags.find(d => !DebrisWireframe.isPlateVariant((d.id >>> 0) % NV)) || frags[0];
+          } else {
+            whale = live.find(d => d.type === 'rocketBody')
+              || live.slice().sort((a, b) => (b.mass || 0) - (a.mass || 0))[0];
+          }
           if (!whale) return { ok: false, reason: 'no live welcome-field debris (mission-1 enforcement hides catalog pieces)' };
 
           // 3. Fixed silhouette + physics. Whale-in-cone phase 3 (D1):
@@ -2053,6 +2079,25 @@ async function init() {
           //    the value it names — post-item-7 the setter re-derives
           //    lengthM/widthM (2.0 / 1.82) instead of leaving the stale 0.30 /
           //    0.27 this comment's claim accidentally relied on.
+          if (subject === 'fragment') {
+            // W1 fragment staging (small-catch plan, 2026-08-25) — production-
+            // faithful on purpose, the OPPOSITE of the whale branch below:
+            //   • 0.5 m logical size — the owner's 0.3–0.6 m band; rendered
+            //     radius = 0.5 × br(variant) ≈ 0.5–0.65 m (sub-metre).
+            //   • 2 kg — the real fragment mass band (0.01–5 kg), so the
+            //     collar digestion runs the digestSpanS FLOOR (60 game-s ≈
+            //     6 wall-s) and the filmstrip can include the whole chop/feed
+            //     tail (D2/W3's subject) inside a sane CAP_MS.
+            //   • NO `_catchRenderMin` freeze and NO mass raise — the
+            //     production readability floor (CN.MOTHER_CATCH_MIN_RENDER_M
+            //     ramp from reel entry, CaptureNet._catchFloorScale) and the
+            //     real small-catch arithmetic ARE the look under diagnosis.
+            //     Every recorded whale gate stays on the frozen branch below,
+            //     bit-comparable with its own history.
+            whale.mass = 2;
+            DebrisField.setDebrisSize(whale, 0.5);
+            whale.brittleness = 0.3;
+          } else {
           whale.mass = 600;
           // Register item 8 (2026-08-07; plan 1786109997497): freeze the staged
           // whale's `_catchRenderMin` at 0 — swallow the per-frame floor writes
@@ -2092,6 +2137,7 @@ async function init() {
             Constants.CAPTURE_NET.MOTHER_CATCH_MIN_RENDER_M,
           ));                               // cubesat br 0.7610 ⇒ sizeMeter 2.0 ⇒ rendered radius 1.522 m
           whale.brittleness = 0.3;
+          }   // end whale-subject staging (W1: fragment branch above)
 
           // 4. Put the whale 25 m ahead — CO-ORBITAL FIRST, then pinned.
           //
@@ -2380,8 +2426,9 @@ async function init() {
             pinnedPosScene: { x: pinnedPos.x, y: pinnedPos.y, z: pinnedPos.z },
           };
 
-          const out = { ok: true, whaleId: whale.id, mass: whale.mass, distanceM: 25, podIndex: 0 };
-          console.info(`[netScenario] staged deterministic whale capture: ${JSON.stringify(out)}`);
+          const out = { ok: true, subject, whaleId: whale.id, type: whale.type,
+            mass: whale.mass, sizeMeter: whale.sizeMeter, distanceM: 25, podIndex: 0 };
+          console.info(`[netScenario] staged deterministic ${subject} capture: ${JSON.stringify(out)}`);
           return out;
         } catch (e) {
           console.warn('[netScenario] failed:', e);
@@ -2479,6 +2526,14 @@ async function init() {
           return {
             netState:      net?.state ?? null,
             catchResult:   net?.catchResult ?? null,
+            // Small-catch plan W1/W3: the collar digestion's live phase — the
+            // filmstrip needs to know when the chop runs (D2's bare-shrink
+            // window) and when the body is consumed (`_digestedOut`, set the
+            // tick the net is spliced), so the capture loop can hold through
+            // the whole tail instead of stopping at COLLARED entry.
+            digestPhaseT:  net?._digestPhaseT != null ? +net._digestPhaseT.toFixed(2) : null,
+            breakdownActive: !!whale?._breakdownActive,
+            digested:      net?._digestedOut === true,
             // Live perf tier. Written in exactly two places, both inside
             // SceneManager (:95 initial via _detectInitialTier, :562 inside
             // applyTier), so a plain read here is race-free. Reported on every
@@ -2567,6 +2622,7 @@ async function init() {
                 // stores on the handle (absent pre-Task-5 ⇒ floor 0 ⇒ the
                 // natural drape/cinch radius, i.e. exactly what the mesh draws).
                 let drapeFrac = null, cinchFrac = null, drawnRimM = null, pierceM = null, fillFrac = null, boxFloorM = null, chordPierceM = null;
+                let membraneOpacity = null;
                 const vis0 = captureNetVisual?._activeVisuals?.get('pod_0')
                   ?? [...(captureNetVisual?._activeVisuals?.values() ?? [])].find(v => v?.useCeremony);
                 const kh = vis0?.kitHandle;
@@ -2576,6 +2632,11 @@ async function init() {
                   kh.group.worldToLocal(lp);
                   drapeFrac = kh._drape ?? null;
                   cinchFrac = kh._cinchFrac ?? null;
+                  // Small-catch plan W2a: the film's LIVE opacity — the welded
+                  // fade is the lever under test, so the harness reads the
+                  // material the mesh actually renders with, not a re-derived
+                  // constant.
+                  membraneOpacity = kh.membraneMat ? +kh.membraneMat.opacity.toFixed(4) : null;
                   const natural = drawnRimRadiusAtDepth(-lp.z, kh.mouthRadius, kh.coneHeight,
                     kh._drape ?? 0, kh._cinchFrac ?? 0,
                     Constants.CAPTURE_NET.NET_CEREMONY.DRAWSTRING_RADIUS_FRAC_CLOSED);
@@ -2598,6 +2659,7 @@ async function init() {
                   renderScale,
                   renderRadiusM: +renderRadiusM.toFixed(3),
                   drapeFrac, cinchFrac,
+                  membraneOpacity,
                   drawnRimAtWhaleM: drawnRimM, pierceM, fillFrac,
                   boxFloorM,
                   chordPierceM,

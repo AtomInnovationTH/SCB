@@ -1002,6 +1002,23 @@ export const Constants = {
         Math.max(this.TRANSIT_DIGEST_MIN_S,
           (massKg || 0) * this.TRANSIT_DIGEST_S_PER_KG));
     },
+    // Small-catch plan W3 (2026-08-25): the chop's scale-out ramp — the ONE
+    // home (the digestSpanS precedent). Was mirrored in-line by both pin
+    // writers (ArmManager's rack loop and CaptureNet._tickCollarDigestion),
+    // and the collar-bag deflation (CaptureNetVisual) would have been a third
+    // copy — three homes for one ramp is how the bag and the catch drift
+    // apart mid-chop. Values byte-identical to the pre-extraction in-line
+    // expression: 1 at/before HOLD_S, easing linearly to the 0.001 floor at
+    // CHOP_S (never 0 — a zero instance scale corrupts the matrix).
+    // @param {number} phaseT — progress-derived phase time on [0, FEED_S]
+    //   (arm._digestPhaseT / net._digestPhaseT; callers may fall back to
+    //   stateTimer for legacy mocks)
+    // @returns {number} instance-scale multiplier in (0.001 … 1]
+    chopScaleMul(phaseT) {
+      const span = Math.max(1e-6, this.CHOP_S - this.HOLD_S);
+      const frac = Math.min(1, Math.max(0, ((phaseT || 0) - this.HOLD_S) / span));
+      return Math.max(0.001, 1 - frac);
+    },
   },
 
   // Tool-selection HUD constants (DAUGHTER_MULTITOOL_SPEC §4.1).
@@ -2593,6 +2610,22 @@ export const Constants = {
     // compounds to ~0.5. Lerped by cinchFrac in NetMeshKit.updateWebDrape, so
     // it is smooth by construction and reverses on a failure release.
     MEMBRANE_OPACITY_WELDED: 0.13,
+    // 2026-08-25 (small-catch plan W2a): the welded rest is SIZE-AWARE. 0.13
+    // was derived on the ~2 m cubesat — a catch you look INTO the bag at, its
+    // silhouette carrying the read. A sub-metre fragment's closed bag is a
+    // thin near-axis bundle (measured tmp/frag-before: drawn rim 0.36–0.42 m
+    // at cinch=1, film 0.13 ⇒ effectively invisible — the owner's "just a
+    // cone, nothing looks like fabric"). The welded target now lerps toward
+    // this SMALL rest as the catch's LOGICAL size (sizeMeter — stable through
+    // the whole ceremony, unlike the floored rendered radius) drops through
+    // the band below: sizeM ≥ LARGE_SIZE_M keeps the 0.13 whale look
+    // bit-identical; sizeM ≤ SMALL_SIZE_M reads as bunched fabric at 0.24.
+    // Applied in NetMeshKit.updateWebDrape (the one welded-fade home); a
+    // missing/zero catch size keeps the plain welded rest, so legacy mocks
+    // and empty (miss) bags are byte-identical.
+    MEMBRANE_OPACITY_WELDED_SMALL: 0.24,
+    MEMBRANE_WELDED_LARGE_SIZE_M: 2.0,   // ≥ this logical size → welded 0.13 (whale class)
+    MEMBRANE_WELDED_SMALL_SIZE_M: 0.8,   // ≤ this logical size → welded 0.24 (fragment class)
     MEMBRANE_ROUGHNESS: 0.8,    // cloth, not film gloss
     MEMBRANE_TRANSMISSION: 0.15, // low — a hint of light through the film
     MEMBRANE_SHEEN:     0.5,    // fabric sheen response
@@ -3175,6 +3208,33 @@ export const Constants = {
       // first-ever hold keeps enough length for the teaching toast, no more.
       PARK_HOLD_S:          4.0,
       PARK_HOLD_FIRST_S:    6.0,
+      // ── Small-catch plan W4 (2026-08-25) — size-aware hold + clean exit ──
+      // HOLD_BUNDLE_FRAME_K: the REEL_IN/PARK_HOLD hold distance tracks the
+      // DRAWN bundle (net.heldBundleRadiusM — the readability floor draws a
+      // sub-metre catch at ~2.0 m radius from reel entry): hold K bundle-radii
+      // off, so the bundle's diameter subtends 2·atan(1/K) ≈ 28° of the 42°
+      // beat FOV at K = 4 — the verified after2 whale composition expressed
+      // as an invariant. The 8 m clamp floor = K × MOTHER_CATCH_MIN_RENDER_M:
+      // both verified subjects sit exactly ON the old 8 m hold.
+      HOLD_BUNDLE_FRAME_K:  4,
+      // Sub-metre catches digest fast (digestSpanS floors at 60 game-s ≈ 6
+      // wall-s sunlit) and the chop used to run right as the PARK_HOLD clock
+      // released the camera — the ball shrank IN THE OPEN over the exit
+      // transition (the owner's "camera drifts after the geometric ball
+      // shrinks"; measured tmp/frag-before f40–f45). For catches under
+      // PARK_HOLD_DIGEST_MAX_SIZE_M the park hold now extends through berth
+      // secure + digestion up to CHOP END (+ pad, capped — eclipse dilates
+      // the digest clock ×25, the cap is the release valve), so the W3
+      // deflate-and-fade plays INSIDE the held shot and the beat ends on a
+      // clean cut. The PARK_HOLD guard also releases the frame `_digestedOut`
+      // lands, whichever comes first.
+      PARK_HOLD_DIGEST_MAX_SIZE_M: 1.0,   // sizeMeter < this → hold through the chop
+      PARK_HOLD_DIGEST_PAD_S:      1.0,   // breath after chop end, before the cut
+      PARK_HOLD_DIGEST_CAP_S:      12.0,  // hard cap (eclipse trickle, huge spans)
+      // Exit cut for tiny subjects: the standard 0.5 s view transition eased
+      // over a subject that just got consumed reads as aimless drift — cut in
+      // this many seconds instead when the parked bundle was sub-metre.
+      EXIT_CUT_SMALL_S:            0.2,
 
       // ── Visual geometry ratios — §5.1 ──
       CONE_OPEN_RADIUS_FRAC:         1.0,    // mouth radius / (D_mesh × 0.5)

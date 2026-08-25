@@ -1786,11 +1786,12 @@ export class ArmManager {
               // that could desync the scale-out ramp from the chop window).
               // S8: the ramp reads the progress-derived phase time ArmUnit writes
               // (_digestPhaseT), falling back to stateTimer for legacy mocks.
+              // Small-catch plan W3 (2026-08-25): the ramp expression moved to
+              // FT.chopScaleMul — the ONE home shared with the collar chop and
+              // the collar bag's deflation. Values byte-identical.
               const FT = Constants.FURNACE_TRANSFER;
-              const span = Math.max(1e-6, FT.CHOP_S - FT.HOLD_S);
               const phaseT = arm._digestPhaseT ?? arm.stateTimer;
-              const frac = Math.min(1, Math.max(0, (phaseT - FT.HOLD_S) / span));
-              scaleMul = Math.max(0.001, 1 - frac);   // 1 → ~0 across the chop window
+              scaleMul = FT.chopScaleMul(phaseT);   // 1 → ~0 across the chop window
             }
             // Issue 13 (2026-06-12): honor the arm's standoff pin (_armPinPos =
             // arm.position + holdDir × clearance, set by _pinCatchToSelf) so the

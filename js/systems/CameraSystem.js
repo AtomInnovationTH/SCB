@@ -192,6 +192,10 @@ export class CameraSystem {
     this._transitioning = false;
     this._transitionProgress = 0;
     this._transitionDuration = 0.5; // seconds
+    // Small-catch plan W4: the ceremony exit over a sub-metre subject cuts in
+    // EXIT_CUT_SMALL_S instead of the default ease — the one-shot override is
+    // restored to this default the frame any transition completes.
+    this._transitionDurationDefault = this._transitionDuration;
     this._transitionStartOffset = new THREE.Vector3(); // Start offset from player for transition
     this._transitionStartLookDir = new THREE.Vector3(); // Start look DIRECTION for transition
     this._lastPlayerPos = new THREE.Vector3(); // Cached player pos for setView
@@ -777,6 +781,9 @@ export class CameraSystem {
       if (this._transitionProgress >= 1.0) {
         this._transitioning = false;
         this._transitionProgress = 1.0;
+        // W4: any one-shot exit-cut override expires with the transition it
+        // shortened — every later view change eases at the default again.
+        this._transitionDuration = this._transitionDurationDefault;
         // UX Fix B: Finalize FOV transition when view transition completes
         if (this._fovTransitionStart !== undefined && this._fovTransitionEnd !== undefined) {
           this._baseFov = this._fovTransitionEnd;
@@ -2131,11 +2138,33 @@ export class CameraSystem {
     const beat = c.beats[c.beatIndex];
     if (beat && beat.key === 'REEL_IN') {
       const NC = Constants.CAPTURE_NET.NET_CEREMONY;
+      // Small-catch plan W4 (2026-08-25): a sub-metre catch digests fast
+      // (min-mass span 60 game-s ≈ 6 wall-s sunlit) and the fixed 4/6 s hold
+      // released the camera right as the chop started — the shrink played
+      // over the exit transition in the open. Extend the hold through berth
+      // secure + digestion to CHOP END (+ pad) so the W3 deflate-and-fade
+      // lands INSIDE the held shot; capped (eclipse dilates the digest clock
+      // ×25 — the cap is the release valve, and the guard's `_digestedOut`
+      // check releases early whenever the feed finishes first). Repeat and
+      // first-ever catches at/above the size gate keep the trimmed 4/6 s
+      // byte-identical.
+      let duration = c.isFirstEver ? (NC.PARK_HOLD_FIRST_S ?? 10.0) : (NC.PARK_HOLD_S ?? 5.0);
+      const d = c._net?.targetDebris;
+      const sizeGateM = NC.PARK_HOLD_DIGEST_MAX_SIZE_M ?? 0;
+      if (d && typeof d.sizeMeter === 'number' && d.sizeMeter < sizeGateM) {
+        const CN = Constants.CAPTURE_NET;
+        const FT = Constants.FURNACE_TRANSFER;
+        const chopEndS = (CN.BERTH_SECURE_S ?? 4.0)
+          + (FT.CHOP_S / FT.FEED_S) * FT.digestSpanS(d.mass)
+            / Math.max(1e-6, Constants.TIME_SCALE_GAMEPLAY)
+          + (NC.PARK_HOLD_DIGEST_PAD_S ?? 1.0);
+        duration = Math.min(Math.max(duration, chopEndS), NC.PARK_HOLD_DIGEST_CAP_S ?? 12.0);
+      }
       c.beats.push({
         key: 'PARK_HOLD',
         // First-ever mother catch holds longer — the first_net_park teaching
         // moment (CATCH_PROCESSED { parked: true }) lands during it.
-        duration: c.isFirstEver ? (NC.PARK_HOLD_FIRST_S ?? 10.0) : (NC.PARK_HOLD_S ?? 5.0),
+        duration,
         fov: NC.REEL_BEAT_FOV ?? 42,   // unchanged from REEL_IN — no FOV pop
         timeScale: 1.0,                // §4.15 — never dilate the berth hold
       });
@@ -2273,8 +2302,25 @@ export class CameraSystem {
         // frame for the whole reel; the flatter profile puts the nose in
         // frame from the first held frame, so the shot reads "package winched
         // to the ship" instead of "lump alone against stars".
+        // Small-catch plan W4 (2026-08-25): the hold tracks the DRAWN BUNDLE,
+        // not just the logical size — `2 × sizeM` read 1 m for a 0.5 m
+        // fragment while the readability floor draws that catch at 2.0 m
+        // radius (net.heldBundleRadiusM — measured tmp/frag-before f20+), so
+        // the old formula was honest only by accident of the 8 m floor. The
+        // bundle term holds HOLD_BUNDLE_FRAME_K = 4 bundle-radii off: the
+        // bundle's diameter subtends 2·atan(1/4) ≈ 28° of the 42° beat FOV —
+        // the after2 whale composition generalized. The [8, 12] clamp is
+        // UNCHANGED: the floor equals 4 × MOTHER_CATCH_MIN_RENDER_M (2.0 m),
+        // i.e. the smallest bundle the reel/park can ever draw already sits
+        // at the composition invariant, so both verified subjects (2 m whale,
+        // sub-metre fragment) hold at exactly 8 m — no regression by
+        // construction. Headless mocks without the accessor fall back to the
+        // sizeM-only term (bundle 0), the pre-W4 formula bit-for-bit.
         const sizeM = this._netCeremony._net?.targetDebris?.sizeMeter || 2;
-        const holdM = Math.min(Math.max(2 * sizeM, 8), 12);
+        const bundleRM = (typeof this._netCeremony._net?.heldBundleRadiusM === 'function')
+          ? (this._netCeremony._net.heldBundleRadiusM() || 0) : 0;
+        const K_BUNDLE = Constants.CAPTURE_NET.NET_CEREMONY.HOLD_BUNDLE_FRAME_K ?? 4;
+        const holdM = Math.min(Math.max(Math.max(2 * sizeM, K_BUNDLE * bundleRM), 8), 12);
         return out.copy(debrisPos)
           .addScaledVector(side, holdM * M * 0.94)
           .addScaledVector(localUp, holdM * M * 0.34);
@@ -2403,6 +2449,16 @@ export class CameraSystem {
     // S4: the park hold lives in BERTHED/COLLARED — a jettison [K] or a
     // dead-target teardown ends it the frame the hold breaks (same idiom as
     // the REEL_IN guard above). S13(c): the terminal state is the collar mate.
+    // Small-catch plan W4 (2026-08-25): `_digestedOut` releases too — the
+    // spliced net keeps its stale COLLARED state forever, so a hold extended
+    // through digestion (sub-metre catches) would otherwise sit out its full
+    // clock over a consumed body. completedNormally: the whole ceremony
+    // played and the payoff finished on camera — this is the clean cut, not
+    // a truncation.
+    if (beat && beat.key === 'PARK_HOLD' && c._net && c._net._digestedOut === true) {
+      this._exitNetCeremony(true);
+      return null;
+    }
     if (beat && beat.key === 'PARK_HOLD' && c._net
         && c._net.state !== 'BERTHED' && c._net.state !== 'COLLARED') {
       this._exitNetCeremony(false);
@@ -2554,6 +2610,17 @@ export class CameraSystem {
     const c = this._netCeremony;
     if (!c.active) return;
 
+    // Small-catch plan W4 (2026-08-25): capture the subject's size BEFORE the
+    // state is cleared below — the exit over a sub-metre bundle cuts in
+    // EXIT_CUT_SMALL_S instead of easing 0.5 s across a frame whose subject
+    // was just consumed (the "aimless drift" tail, tmp/frag-before f41+).
+    // One-shot: the update loop restores the default when the transition
+    // completes. Gate shared with the park-hold digest extension.
+    const NCx = Constants.CAPTURE_NET.NET_CEREMONY;
+    const exitSizeM = c._net?.targetDebris?.sizeMeter;
+    const smallExit = typeof exitSizeM === 'number'
+      && exitSizeM < (NCx.PARK_HOLD_DIGEST_MAX_SIZE_M ?? 0);
+
     // Set first-deploy flag at end of first-ever SUCCESSFUL ceremony. The
     // mother path writes its own flag (§11.3) so a first whale catch after a
     // daughter deploy still gets the full beat list. NOTE: the flag must also be
@@ -2592,6 +2659,7 @@ export class CameraSystem {
     // route (beats done, miss truncation, skip) un-dims the HUD.
     eventBus.emit(Events.NET_CINEMATIC_EXITED, { completedNormally });
 
+    if (smallExit) this._transitionDuration = NCx.EXIT_CUT_SMALL_S ?? this._transitionDurationDefault;
     this.setView(prevView);
   }
 

@@ -471,6 +471,10 @@ export class CaptureNetVisual {
     const key = `pod_${pi}`;
     const vis = this._activeVisuals.get(key);
     if (!vis) return;
+    // Small-catch plan W3: the chop-end handler (ceremony COLLARED case) may
+    // have already detached this bag — the fade owns it; a second timer here
+    // would re-seat and re-fade a bag that is mid-fade (or gone next frame).
+    if (vis.detached) return;
     this._captureDetachSeat(vis);
     vis.detached = true;      // state-driven updates stop; the fade owns removal
     this._fadeTimers.push({ key, timer: 0.8, duration: 0.8 });
@@ -1306,11 +1310,30 @@ export class CaptureNetVisual {
         // tumble orientation, which is FROZEN while pinned (B3) so the wrap
         // cannot spin or drift.
         let contentsRadius = 0, contentsZ = 0, contentsBox = null;
+        let catchSizeM = 0;
         const d = net.targetDebris;
         if (d && d._scenePosition && (drape > 0 || cinchFrac > 0)) {
+          // W2a: the LOGICAL size drives the size-aware welded film rest —
+          // stable through the whole ceremony (the floored rendered radius
+          // pops 0.6 → 2.0 m at reel entry and would re-fade the film).
+          catchSizeM = d.sizeMeter || 0;
           DebrisWireframe.getGeometry(d.type, d.id);           // br cache (uncached ⇒ 1)
           const br = DebrisWireframe.getBoundingRadius(d.type, d.id) || 1;
-          const renderScale = DebrisField.effectiveRenderScale(d);
+          let renderScale = DebrisField.effectiveRenderScale(d);
+          // Small-catch plan W3 (2026-08-25): during the collar digestion's
+          // chop the instance shrinks out of view (CaptureNet re-pins with
+          // FT.chopScaleMul every tick), but the SSOT base above never sees
+          // that multiplier — the bag stayed floored on the FULL-SIZE box
+          // while the bare catch scaled down INSIDE it in the open (the
+          // owner's "debris shrinks in a geodesic bubble" tail). Deflate the
+          // whole contents spec (radius, box extents, box centre) by the SAME
+          // one-home ramp off the SAME phase clock, so the film visibly
+          // collapses WITH the body it is wrapping — probe/mesh parity is by
+          // construction (the handle stores the deflated spec the mesh
+          // deformed to; _netDrawnRimPierce reads the handle).
+          if (state === STATES.COLLARED && d._breakdownActive && net._digestPhaseT != null) {
+            renderScale *= Constants.FURNACE_TRANSFER.chopScaleMul(net._digestPhaseT);
+          }
           contentsRadius = renderScale * br;
           vis.kitHandle.group.updateMatrixWorld(true);          // same guard the probe uses
           const lp = vis.kitHandle.group.worldToLocal(_v3c.copy(d._scenePosition));
@@ -1350,6 +1373,7 @@ export class CaptureNetVisual {
           contentsRadius,
           contentsZ,
           contentsBox,
+          catchSizeM,
           // V4: camera in the kit's LOCAL frame for per-thread depth shading
           // (the kit stays pure-local-space; worldToLocal writes in place).
           localCamPos: this._sceneManager?.camera
@@ -1656,6 +1680,22 @@ export class CaptureNetVisual {
         // under NET_CEREMONY).
         // S7: TRANSFERRING is the same welded bag in flight to a daughter's rack,
         // minus the tether — it has left the launcher's line.
+        // Small-catch plan W3 (2026-08-25): one amendment to "never faded
+        // while mated" — at CHOP END the body is consumed (the instance is at
+        // the 0.001 floor; the chunks are the read) and the bag has deflated
+        // with it (drape driver above). Hand the spent bag to the freeze-fade
+        // HERE instead of holding an invisible near-axis spike through the
+        // whole feed phase (NET_CONSUMED lands at FEED_S — up to 2.7 s of
+        // dead spike on a min-mass catch, measured tmp/frag-before f41–f45).
+        // Same detach idiom as _onNetConsumed, which is now a no-op for an
+        // already-detached bag (guard there).
+        if (state === STATES.COLLARED && net._digestPhaseT != null
+            && net._digestPhaseT >= Constants.FURNACE_TRANSFER.CHOP_S && !vis.detached) {
+          this._captureDetachSeat(vis);
+          vis.detached = true;      // state-driven updates stop; the fade owns removal
+          this._fadeTimers.push({ key, timer: 0.8, duration: 0.8 });
+          break;
+        }
         canisterMesh.visible = false;
         coneMesh.visible = true;
         vis.tetherLine.visible = (net.state !== STATES.TRANSFERRING);
