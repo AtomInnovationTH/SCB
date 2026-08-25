@@ -1943,6 +1943,15 @@ export class CameraSystem {
     }
     if (!launcher) return;
 
+    // A ceremony films a LAUNCH. A net that is already seated at the ship
+    // (the lasso-adoption hand-off constructs one directly in BERTHED —
+    // adoptLassoCatch) has no flight to film: the beat list would replay the
+    // whole launch sequence around a parked bag and drag the camera to the
+    // beats' flight anchors in empty space. Belt-and-braces with the
+    // _ceremonyStartEmitted suppression at the adoption site.
+    if (net && (net.state === 'BERTHED' || net.state === 'COLLARED'
+      || net.state === 'TRANSFERRING' || net.state === 'STOWED')) return;
+
     c.active = true;
     c.beatIndex = 0;
     c.beatTimer = 0;

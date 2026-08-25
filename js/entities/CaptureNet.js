@@ -3652,6 +3652,17 @@ export class CaptureNetSystem {
     net._floorRampT = CN.MOTHER_CATCH_MIN_RENDER_RAMP_S ?? 0.6;
     net._berthTimer = CN.BERTH_SECURE_S ?? 4.0;
     net._berthProcessed = false;
+    // The adopted catch never LAUNCHES — it is born BERTHED at the collar.
+    // NetProjectile.update() emits NET_CEREMONY_START on the first tick of a
+    // fresh net, which replayed the ENTIRE launch beat list (pod prefire →
+    // glamour → approach → envelop → cinch) over a net that never flies: the
+    // letterboxed camera dollied around the nose, then chased beat anchors
+    // hundreds of km into empty space while the catch digested underneath
+    // (tmp/lasso-take frames 010–024: camToShipM 141 810 → 502 981 m during
+    // BRAKE_ENVELOP/CINCH — the owner's "what is the camera doing after the
+    // debris shrinks" report). Same rationale as the NET_BERTHED suppression
+    // below: adoption is the QUIET hand-off — none of the spectacle.
+    net._ceremonyStartEmitted = true;
     net._tumbleCarryover = Math.min(Math.abs(target.tumbleRate || 0), CN.TUMBLE_CARRYOVER_MAX_RAD_S ?? 0.6);
     net._tumbleCarryAngle = 0;
     net._transitionTo(STATES.BERTHED);
