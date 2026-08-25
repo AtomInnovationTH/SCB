@@ -2586,6 +2586,13 @@ export const Constants = {
     // getOrbitalFoilEnv(renderer) via NetMeshKit.setEnvTexture (null headless →
     // scene.environment applies).
     MEMBRANE_OPACITY:   0.28,   // faint film — reads as fabric, never a wall (× web opacity fade)
+    // 2026-08-25 (bubble-look fix): as the drawstring closes, the film fades
+    // toward this rest so the CATCH reads through its own wrap — the closed
+    // bag was a flat opaque tent ("party balloon / paper airplane" in the
+    // tmp/cinema PARK_HOLD frames) because 0.28 × DoubleSide self-overlap
+    // compounds to ~0.5. Lerped by cinchFrac in NetMeshKit.updateWebDrape, so
+    // it is smooth by construction and reverses on a failure release.
+    MEMBRANE_OPACITY_WELDED: 0.13,
     MEMBRANE_ROUGHNESS: 0.8,    // cloth, not film gloss
     MEMBRANE_TRANSMISSION: 0.15, // low — a hint of light through the film
     MEMBRANE_SHEEN:     0.5,    // fabric sheen response
@@ -2880,7 +2887,13 @@ export const Constants = {
     // The pendulum is a physics-side garnish (it feeds the berth-hold pin), so
     // its gate lives here rather than in CaptureNetVisual's tier check.
     BERTH_PENDULUM_ENABLED:  true,
-    TUMBLE_CARRYOVER_ENABLED: true,
+    // 2026-08-25 (capture-lock direction): OFF by default — a caught debris is
+    // WELDED to the ship the moment the wrap takes. The V7 "spins down inside
+    // the bag" garnish read as the catch still tumbling after capture, which
+    // contradicts the capture read (docked = locked, mother and daughter both).
+    // The mechanism + its tests stay (test-CaptureNet-MotherBerth.js forces the
+    // flag on to pin the maths); this default is the shipped behaviour.
+    TUMBLE_CARRYOVER_ENABLED: false,
 
     // ── Reel-cycle lifetime ──
     REEL_CYCLE_LIFE:      20,     // §6.6: deploy/reel cycles before tether replacement
@@ -3138,6 +3151,15 @@ export const Constants = {
       // mother as context) — see CameraSystem._netCeremonyBeatPos.
       REEL_BEAT_MAX_S:      12.0,   // wall-clock cap (never hold for 40 s)
       REEL_BEAT_FOV:        42,
+      // 2026-08-25 (ceremony filmstrip analysis): the REEL_IN dolly used to
+      // ease across its WHOLE duration (up to 12 s), so the camera spent most
+      // of the beat mid-flight between the muzzle-side SECURED_SETTLE pose and
+      // the catch-framed hold — the package read ~100 px against empty stars
+      // for 6–8 s (frames 021–027 of the tmp/cinema strip). The dolly now
+      // saturates in this many seconds, then HOLDS the catch-framed escort
+      // shot while the winch does the work (motion comes from the catch
+      // closing on the nose, not from a camera still in transit).
+      REEL_DOLLY_IN_S:      2.5,
 
       // ── PARK_HOLD beat (cargo-continuity S4) ──
       // Chained at NET_BERTHED from the REEL_IN beat: under S3 the catch PARKS
@@ -3147,8 +3169,12 @@ export const Constants = {
       // first-ever mother catch holds longer — the first_net_park teaching
       // moment (TeachingSystem, fired by CATCH_PROCESSED { parked: true })
       // lands during it.
-      PARK_HOLD_S:          5.0,
-      PARK_HOLD_FIRST_S:    10.0,
+      // 2026-08-25 trim (filmstrip analysis): 5/10 s → 4/6 s. The hold is a
+      // static shot of a parked bag — the payoff lands in the first ~2 s and
+      // the collar digestion continues on the player cam afterwards. The
+      // first-ever hold keeps enough length for the teaching toast, no more.
+      PARK_HOLD_S:          4.0,
+      PARK_HOLD_FIRST_S:    6.0,
 
       // ── Visual geometry ratios — §5.1 ──
       CONE_OPEN_RADIUS_FRAC:         1.0,    // mouth radius / (D_mesh × 0.5)

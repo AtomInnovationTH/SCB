@@ -1991,6 +1991,14 @@ export class CameraSystem {
     this._transitionProgress = 0;
     this._fovTransitionStart = undefined;
     this._fovTransitionEnd = undefined;
+
+    // Cinema-dim contract (2026-08-25): announce that the ceremony cut is
+    // actually LIVE on screen. Emitted here (not at NET_CEREMONY_START) so a
+    // refused ceremony — no launcher, launch ceremony active, flag off —
+    // never dims the HUD. HUD.js listens and letterboxes/dims the overlay.
+    eventBus.emit(Events.NET_CINEMATIC_ENTERED, {
+      armIndex: c.armIndex, podIndex: c.podIndex, isFirstEver,
+    });
   }
 
   /**
@@ -2084,6 +2092,13 @@ export class CameraSystem {
       duration,
       fov: NC.REEL_BEAT_FOV ?? 42,
       timeScale: 1.0,                                    // §4.15 — never dilate the reel
+      // 2026-08-25: saturate the dolly-in early. Without this the smoothstep
+      // eased across the beat's WHOLE duration (up to 12 s), so the camera
+      // spent most of the reel mid-transit between the muzzle-side settle
+      // pose and the catch-framed hold — the catch read tiny against empty
+      // sky. With easeInS the camera arrives in ~2.5 s and HOLDS; the beat's
+      // remaining motion is the winch itself.
+      easeInS: NC.REEL_DOLLY_IN_S ?? 2.5,
     });
     c._reelBeatChained = true;
     // beatIndex currently == beats.length - 1 (just incremented past the old
@@ -2168,9 +2183,17 @@ export class CameraSystem {
           .addScaledVector(localUp, 2.5 * M);
       }
       case 'POD_MUZZLE_PREFIRE':
+        // 2026-08-25 reframe (filmstrip analysis): the old pose (0.6 m behind
+        // the muzzle, 0.15 m up) sat INSIDE the spin-up cone's silhouette —
+        // the disc expands to the full mouth diameter at the muzzle during
+        // SPINNING_UP, so the player's first ceremony frame was a lattice
+        // wall with the pod invisible (tmp/cinema frame 001). A side profile
+        // off the boresight reads the arming device ON the nose: canister
+        // pop, disc spin-up and the ship hull all in one composition.
         return out.copy(armPos)
-          .addScaledVector(fwd, -0.6 * M)
-          .addScaledVector(localUp, 0.15 * M);
+          .addScaledVector(side, 3.0 * M)
+          .addScaledVector(fwd, -1.5 * M)
+          .addScaledVector(localUp, 0.8 * M);
       case 'MUZZLE_EXIT_SPINUP':
         return out.copy(armPos)
           .addScaledVector(localUp, 1.0 * M)
@@ -2243,11 +2266,18 @@ export class CameraSystem {
         // catch closes; at berth/park the payoff is the catch AT the nose,
         // large. REEL_IN and PARK_HOLD share the formula so the NET_BERTHED
         // chain is seamless (identical pos + look, no camera jump).
+        // 2026-08-25 retune (filmstrip): drop the camera toward the reel
+        // plane (up 0.6 → 0.34, side 0.8 → 0.94 — still unit-norm so the
+        // hold distance stays exactly holdM, the S4 test contract). The old
+        // elevated pose looked DOWN at the catch and kept the mother out of
+        // frame for the whole reel; the flatter profile puts the nose in
+        // frame from the first held frame, so the shot reads "package winched
+        // to the ship" instead of "lump alone against stars".
         const sizeM = this._netCeremony._net?.targetDebris?.sizeMeter || 2;
         const holdM = Math.min(Math.max(2 * sizeM, 8), 12);
         return out.copy(debrisPos)
-          .addScaledVector(side, holdM * M * 0.8)
-          .addScaledVector(localUp, holdM * M * 0.6);
+          .addScaledVector(side, holdM * M * 0.94)
+          .addScaledVector(localUp, holdM * M * 0.34);
       }
       default:
         return out.copy(armPos);
@@ -2294,12 +2324,25 @@ export class CameraSystem {
         // Midpoint of net and debris
         return out.copy(netPos).add(debrisPos).multiplyScalar(0.5);
       case 'REEL_IN':
-      case 'PARK_HOLD':
+      case 'PARK_HOLD': {
         // Phase D.2 + S4 — track the incoming catch biased slightly toward the
         // muzzle, so the berth destination stays in frame as it closes. Shared
         // with PARK_HOLD so the berth chain has no look-target jump.
-        return out.copy(debrisPos).multiplyScalar(0.7)
-          .addScaledVector(armPos, 0.3);
+        // 2026-08-25 retune (filmstrip): bias 0.7/0.3 → 0.45 toward the
+        // muzzle, CLAMPED to ≤ 4.5 m from the catch. The unclamped midpoint-
+        // ish bias aimed ~9 m off the catch at reel start (20 m separation) —
+        // atan(9/8) ≈ 48° off the hold axis, past the 42°-FOV horizontal
+        // half-angle (~31.5° at 16:10), so the package sat cropped at the
+        // frame edge (after2 frame 033). 4.5 m keeps the catch inside the
+        // frame at the 8 m hold (atan(4.5/8) ≈ 29°) and at the 12 m hold
+        // (≈ 21°); inside ~10 m separation the 0.45 fraction takes over and
+        // frames catch + nose together, identical to the unclamped berth pose.
+        const toMuzzle = this._netCeremony._v3e.copy(armPos).sub(debrisPos);
+        const dist = toMuzzle.length();
+        const M_LOOK = 0.00001;
+        const f = dist > 1e-12 ? Math.min(0.45, (4.5 * M_LOOK) / dist) : 0.45;
+        return out.copy(debrisPos).addScaledVector(toMuzzle, f);
+      }
       default:
         return out.copy(armPos);
     }
@@ -2396,8 +2439,11 @@ export class CameraSystem {
     // NET_CEREMONY_START handler, before the projectile's next tick.)
     CeremonyTimeScale.set(beat.timeScale ?? 1.0, this);
 
-    const t = c.beatTimer / beat.duration;
-    const ease = t * t * (3 - 2 * t); // smoothstep
+    const t = c.beatTimer / (beat.easeInS
+      ? Math.min(beat.easeInS, beat.duration)
+      : beat.duration);
+    const tc = Math.min(1, t);
+    const ease = tc * tc * (3 - 2 * tc); // smoothstep, saturates at easeInS when set
 
     // Launcher anchor (mother-net-reel plan §11.1): arm.position for daughter,
     // the live pod muzzle for mother. Polled every frame — the pod rides the
@@ -2493,6 +2539,10 @@ export class CameraSystem {
 
     // Stage 4: clear ceremony time-scale (world dt back to 1.0× — §6 R1)
     CeremonyTimeScale.reset();
+
+    // Cinema-dim contract: the abort path leaves the cinematic too (setView's
+    // normal flow takes over) — the HUD must un-dim on every exit route.
+    eventBus.emit(Events.NET_CINEMATIC_EXITED, { completedNormally: false });
   }
 
   /**
@@ -2537,6 +2587,10 @@ export class CameraSystem {
 
     // Stage 4: clear ceremony time-scale (world dt back to 1.0× — §6 R1)
     CeremonyTimeScale.reset();
+
+    // Cinema-dim contract: paired with NET_CINEMATIC_ENTERED — every exit
+    // route (beats done, miss truncation, skip) un-dims the HUD.
+    eventBus.emit(Events.NET_CINEMATIC_EXITED, { completedNormally });
 
     this.setView(prevView);
   }

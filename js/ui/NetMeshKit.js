@@ -1077,6 +1077,10 @@ export const NetMeshKit = {
       // setOpacity(o) fades the film proportionally (o × this) instead of
       // slamming it to the thread value.
       _membraneOpacityFrac: membraneOpacity / Math.max(1e-9, DEFAULT_WEB_OPACITY),
+      // Bubble-look fix (2026-08-25): the consumer's build-time film rest —
+      // updateWebDrape lerps from THIS toward MEMBRANE_OPACITY_WELDED by
+      // cinchFrac, so a custom-opacity consumer keeps its own base.
+      _membraneBaseOpacity: membraneOpacity,
       rimWeights,
       rimWeightMats,
       weightGeo,
@@ -1406,6 +1410,21 @@ export const NetMeshKit = {
     h._cinchFrac = cinchFrac;
     h._jigglePhase = jigglePhase;
     h._jiggleAmp = jiggleAmp;
+    // Bubble-look fix (2026-08-25): fade the film toward the welded rest as
+    // the drawstring closes, so the catch reads through its own wrap instead
+    // of vanishing behind an opaque tent (the closed DoubleSide film at 0.28
+    // compounds to ~0.5 over its own back face). Driven by cinchFrac —
+    // smooth by construction, and a failure release (cinch back to 0) ramps
+    // it home. Written only while the bag is DRIVEN (drape/cinch > 0): the
+    // relax-home call after a miss passes (0, 0), and writing base there
+    // would fight the fade timer that owns opacity from the miss on
+    // (test-CaptureNetVisual pins that ordering).
+    if (h.membraneMat && h._membraneBaseOpacity != null && (drape > 0 || cinchFrac > 0)) {
+      const welded = NET_WEB.MEMBRANE_OPACITY_WELDED ?? h._membraneBaseOpacity;
+      const k = Math.max(0, Math.min(1, cinchFrac));
+      h.membraneMat.opacity = h._membraneBaseOpacity
+        + (welded - h._membraneBaseOpacity) * k;
+    }
     // D2: stored on the handle so the probe (main.js) and setCinchedRim read
     // the SAME values the mesh deformed to — never a re-derived copy.
     h._contentsR = contentsRadius;

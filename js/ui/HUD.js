@@ -421,6 +421,45 @@ export class HUD {
       document.head.appendChild(dimStyle);
     }
 
+    // --- Net-ceremony cinema mode (2026-08-25, filmstrip analysis) ---
+    // Every ceremony frame used to play under the FULL gameplay HUD — five
+    // panels + comms + distance markers overlapped the envelop/cinch action
+    // (the dossier pane sat ON the bag through BRAKE_ENVELOP). While the
+    // camera owns the screen (NET_CINEMATIC_ENTERED → EXITED), ghost the HUD
+    // children and slide in letterbox bars. The pause overlay is excluded
+    // (pausing mid-ceremony must keep a readable menu); teaching toasts live
+    // on document.body and are untouched by construction.
+    if (!document.getElementById('net-cinema-style')) {
+      const cinemaStyle = document.createElement('style');
+      cinemaStyle.id = 'net-cinema-style';
+      cinemaStyle.textContent = `
+        #hud-overlay > * { transition: opacity 500ms ease; }
+        body.net-cinema #hud-overlay > *:not(#hud-pause-overlay) {
+          opacity: 0.10;
+        }
+        .net-cinema-bar {
+          position: fixed; left: 0; width: 100%; height: 0;
+          background: #000; z-index: 9; pointer-events: none;
+          transition: height 700ms cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        #net-cinema-bar-top { top: 0; }
+        #net-cinema-bar-bottom { bottom: 0; }
+        body.net-cinema #net-cinema-bar-top,
+        body.net-cinema #net-cinema-bar-bottom { height: 7vh; }
+      `;
+      document.head.appendChild(cinemaStyle);
+    }
+    if (!document.getElementById('net-cinema-bar-top')) {
+      const barTop = document.createElement('div');
+      barTop.id = 'net-cinema-bar-top';
+      barTop.className = 'net-cinema-bar';
+      const barBottom = document.createElement('div');
+      barBottom.id = 'net-cinema-bar-bottom';
+      barBottom.className = 'net-cinema-bar';
+      document.body.appendChild(barTop);
+      document.body.appendChild(barBottom);
+    }
+
     // --- Inject catch-effect CSS animations (Phase 1C) + detach flash (Phase 6) + codex/weather (Phase 7) ---
     if (!document.getElementById('catch-effects-style')) {
       const catchStyle = document.createElement('style');
@@ -876,6 +915,21 @@ export class HUD {
 
   /** @private */
   _setupEventListeners() {
+    // Net-ceremony cinema mode: dim the HUD + letterbox while the ceremony
+    // camera owns the screen. ENTERED/EXITED are strictly paired by
+    // CameraSystem (every exit route — beats done, miss truncation, skip,
+    // abort-on-view-change — emits EXITED), and GAME_RESET clears the class
+    // as a belt-and-braces recovery.
+    eventBus.on(Events.NET_CINEMATIC_ENTERED, () => {
+      document.body.classList.add('net-cinema');
+    });
+    eventBus.on(Events.NET_CINEMATIC_EXITED, () => {
+      document.body.classList.remove('net-cinema');
+    });
+    eventBus.on(Events.GAME_RESET, () => {
+      document.body.classList.remove('net-cinema');
+    });
+
     eventBus.on(Events.SCORE_UPDATE, (data) => {
       this._score = data.total;
       this._credits = data.credits != null ? data.credits : this._credits;

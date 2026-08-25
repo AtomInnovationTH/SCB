@@ -779,6 +779,16 @@ export const Events = {
   NET_CINCH_PROGRESS:        'net:cinchProgress',
   /** Ceremony complete — camera returns to ARM_PILOT. Payload: { armIndex, podIndex, mode, success } */
   NET_CEREMONY_COMPLETE:     'net:ceremonyComplete',
+  /** Camera entered NET_CINEMATIC (the ceremony cut is live on screen).
+   *  Distinct from NET_CEREMONY_START (the net FSM's intent): this fires only
+   *  when CameraSystem actually takes the view, so HUD cinema-dim can never
+   *  latch on a ceremony the camera refused (no launcher / launch ceremony
+   *  active). Payload: { armIndex, podIndex, isFirstEver } */
+  NET_CINEMATIC_ENTERED:     'net:cinematicEntered',
+  /** Camera left NET_CINEMATIC (beats done, miss truncation, skip, or an
+   *  external view change aborting the ceremony). Always paired with a prior
+   *  NET_CINEMATIC_ENTERED. Payload: { completedNormally: boolean } */
+  NET_CINEMATIC_EXITED:      'net:cinematicExited',
 
   // ── ST-9.5 C-7: Tether Reel Events (strut-mounted, Config G §10.4) ──────
   /** Tether payout started. Payload: { armIndex, targetLengthM } */
