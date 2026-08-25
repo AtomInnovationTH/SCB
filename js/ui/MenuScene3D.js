@@ -111,6 +111,18 @@ const FLYAROUND_ANG_END  = -1.157;          // 'flyaround': camera azimuth arc e
                                             // SWAY_ANG_CENTRE (0.5) reduced 20% (was -PI/2) so the
                                             // camera rotates ~20% slower over the same window.
 const FLYAROUND_CAMY_END = 2.0;             // 'flyaround': slightly above (sim radial-above chase)
+// (skyroot-polish) Exit free-flyer pose — cinematic, CPU-only (rotation deltas).
+// After jet-off she pivots into the Skyroot wall-art free-flyer read: legs trail +
+// deep knee bend + left arm opens + slight chest-open arch. Times are SECONDS
+// after jet-off; poseE (eased 0→1 over EXIT_POSE_DUR) scales the deltas below.
+const EXIT_POSE_DUR   = 0.9;   // seconds to ease into the full free-flyer pose
+const EXIT_LEG_L_X    = 0.30;  // left leg trails back (base ≈ -0.20)
+const EXIT_LEG_R_X    = 0.50;  // right leg trails further (base ≈ -0.44)
+const EXIT_SHANK_L_X  = 1.25;  // left knee folds deep under the trailing leg
+const EXIT_SHANK_R_X  = 1.40;  // right knee folds deeper
+const EXIT_ARM_Z      = -0.85; // free left arm swings outward, away from the work
+const EXIT_ARM_X      = -0.55; // ...and opens up from the tool-hold raise
+const EXIT_CHEST_OPEN = -0.18; // chest opens skyward (astro pitch relaxing back)
 // Shared camera-sway parameters (used by BOTH orientation branches in _tick and
 // by _applyReducedMotionPose). Centralized so a sway tuning change can't drift
 // between the randomly-selected 'partial' and 'flyaround' treatments.
@@ -184,50 +196,37 @@ function makeGlowSprite() {
 }
 
 // ─── Material palette ────────────────────────────────────────────────────────
-// Spacecraft materials mirror PlayerSatellite._buildModel so the hero ship reads
-// as the real Mother: GOLD MLI blanket body, dark GaAs cells, copper FEEP nozzles.
+// Astronaut/prop materials only. The hero ship is a real PlayerSatellite with its
+// own materials, so the old mirrored spacecraft palette (gold MLI, GaAs cells,
+// copper FEEP, struts) was dead weight and has been removed (skyroot-polish);
+// cap/collar/rcs remain because the astronaut's SAFER + tool accents use them.
 function makeMaterials() {
   return {
-    // Body shell = gold MLI thermal blanket (matches PlayerSatellite._matGoldMLI)
-    goldMLI:  new THREE.MeshStandardMaterial({ color: 0xd6a43e, metalness: 0.85, roughness: 0.28,
-                emissive: 0x4a3008, emissiveIntensity: 0.16 }),
-    // Darker gold "tape" for MLI quilting seams
-    mliSeam:  new THREE.MeshStandardMaterial({ color: 0x8a6d24, metalness: 0.7, roughness: 0.5 }),
     // Structural plates (end caps / optics bench / thruster deck) — dark metal
     cap:      new THREE.MeshStandardMaterial({ color: 0x4a4a52, metalness: 0.7, roughness: 0.5 }),
-    dark:     new THREE.MeshStandardMaterial({ color: 0x222233, metalness: 0.6, roughness: 0.4 }),
     // Anodized 7075 collar / rings (matches PlayerSatellite collarMat)
     collar:   new THREE.MeshStandardMaterial({ color: 0x8888a0, metalness: 0.75, roughness: 0.28 }),
-    strut:    new THREE.MeshStandardMaterial({ color: 0x9090a8, metalness: 0.7, roughness: 0.32 }),
-    strutRing:new THREE.MeshStandardMaterial({ color: 0xaabbcc, metalness: 0.85, roughness: 0.18 }),
-    // Dark GaAs solar cells (ROSA front + body-mount), bluish
-    solar:    new THREE.MeshStandardMaterial({ color: 0x0a1133, metalness: 0.4, roughness: 0.5,
-                emissive: 0x0a0a40, emissiveIntensity: 0.15, side: THREE.DoubleSide }),
-    // ROSA Kapton substrate back
-    solarBack:new THREE.MeshStandardMaterial({ color: 0xccccdd, metalness: 0.3, roughness: 0.4,
-                emissive: 0xccccdd, emissiveIntensity: 0.35, side: THREE.DoubleSide }),
-    // Copper/bronze FEEP nozzle (matches PlayerSatellite._matFEEP)
-    feep:     new THREE.MeshStandardMaterial({ color: 0x996644, metalness: 0.8, roughness: 0.35 }),
     rcs:      new THREE.MeshStandardMaterial({ color: 0x555566, metalness: 0.65, roughness: 0.45 }),
-    // Glowing laser aperture / sensor glass
-    aperture: new THREE.MeshStandardMaterial({ color: 0x112244, metalness: 0.3, roughness: 0.2,
-                emissive: 0x1133aa, emissiveIntensity: 0.5 }),
 
     // ── EVA suit (NASA EMU) — mostly soft white TMG fabric; very few bright
     //    metal parts (the bearings are subtle anodized rings, not chrome). ──
-    suitWhite: new THREE.MeshStandardMaterial({ color: 0xe9eaec, metalness: 0.0, roughness: 0.95 }),
-    suitGray:  new THREE.MeshStandardMaterial({ color: 0xb9bcc4, metalness: 0.0, roughness: 0.9 }),
+    // (skyroot-polish) Laddered value hierarchy (Skyroot HQ wall-art read): the
+    // suit sits in a WARM, quiet band (~0.93-0.86 the previous grays), the PLSS
+    // pack drops a clear step below it (≈0.65× suit) so head-vs-pack separates
+    // from the rear quarter, and the red accents read against the cool field.
+    suitWhite: new THREE.MeshStandardMaterial({ color: 0xede9e1, metalness: 0.0, roughness: 0.95 }),
+    suitGray:  new THREE.MeshStandardMaterial({ color: 0x9ea1a9, metalness: 0.0, roughness: 0.9 }),
     // Soft fabric fold/convolute — same family as the suit, slightly shaded so
     // the accordion joints read as cloth, NOT as silver hoops.
-    suitFold:  new THREE.MeshStandardMaterial({ color: 0xd5d7dc, metalness: 0.0, roughness: 1.0 }),
+    suitFold:  new THREE.MeshStandardMaterial({ color: 0xd6cfc4, metalness: 0.0, roughness: 1.0 }),
     visor:     new THREE.MeshStandardMaterial({ color: 0xc8951f, metalness: 0.95, roughness: 0.08,
                  envMapIntensity: 1.5 }),
-    plss:      new THREE.MeshStandardMaterial({ color: 0xdcdce0, metalness: 0.06, roughness: 0.85 }),
-    glove:     new THREE.MeshStandardMaterial({ color: 0xc6c7cc, metalness: 0.0, roughness: 0.95 }),
-    boot:      new THREE.MeshStandardMaterial({ color: 0xcfd0d5, metalness: 0.0, roughness: 0.92 }),
+    plss:      new THREE.MeshStandardMaterial({ color: 0xb6aea4, metalness: 0.06, roughness: 0.8 }),
+    glove:     new THREE.MeshStandardMaterial({ color: 0xcfc9bf, metalness: 0.0, roughness: 0.95 }),
+    boot:      new THREE.MeshStandardMaterial({ color: 0xccc6bc, metalness: 0.0, roughness: 0.92 }),
     bootSole:  new THREE.MeshStandardMaterial({ color: 0x33343a, metalness: 0.1, roughness: 0.8 }),
     // Anodized bearing ring — muted aluminium, NOT chrome (used sparingly)
-    suitRing:  new THREE.MeshStandardMaterial({ color: 0xb4b0a6, metalness: 0.35, roughness: 0.6 }),
+    suitRing:  new THREE.MeshStandardMaterial({ color: 0xa79e90, metalness: 0.35, roughness: 0.6 }),
     tool:      new THREE.MeshStandardMaterial({ color: 0x55565f, metalness: 0.6, roughness: 0.4 }),
     // Red EV-crew identification stripe (NASA EV1 marking on the thigh).
     evRed:     new THREE.MeshStandardMaterial({ color: 0xed1c24, metalness: 0.0, roughness: 0.9 }),
@@ -368,9 +367,11 @@ function buildAstronaut(mat, flagCode = 'USA') {
 
   // Gold sun visor — reflective shield over the front hemisphere of the helmet.
   // Hemisphere dome faces local +Z by default → R_y(-π/2) → world -X (toward Mother) ✓
+  // (skyroot-polish) Sweep widened to 0.80π so the gold wraps low over the rim and
+  // stays visible from the rear-quarter camera, not just dead-on front.
   const visorGeo = new THREE.SphereGeometry(M * 0.165, 18, 14,
-    0, Math.PI, 0, Math.PI * 0.74);
-  const visorMat = mat.visor.clone();
+    0, Math.PI, 0, Math.PI * 0.80);
+  const visorMat = mat.visor;          // sole consumer — set polygonOffset in place (no clone)
   visorMat.polygonOffset = true;
   visorMat.polygonOffsetFactor = -2;
   visorMat.polygonOffsetUnits  = -2;
@@ -382,25 +383,36 @@ function buildAstronaut(mat, flagCode = 'USA') {
   // Expose so the render loop can flash the visor when the weld arc strikes.
   astro.userData.visorMat = visorMat;
 
+  // (skyroot-polish) Helmet identity from the rear quarter: the white helmet was
+  // merging into the white PLSS head-on. A crown valence ridge (ear-to-ear arc)
+  // reads as the helmet cap, and a dark neck ring fakes an AO gap separating the
+  // bubble from the HUT torso below.
+  const crownValence = new THREE.Mesh(
+    new THREE.TorusGeometry(M * 0.148, M * 0.02, 8, 24, Math.PI), mat.suitGray);
+  crownValence.rotation.y = Math.PI / 2;   // arc over the crown, face-on to the rear camera
+  crownValence.position.y = M * 0.72;
+  crownValence.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+  astro.add(crownValence);
+  const neckCollar = new THREE.Mesh(
+    new THREE.CylinderGeometry(M * 0.112, M * 0.112, M * 0.045, 14, 1, true),
+    new THREE.MeshStandardMaterial({ color: 0x35383f, roughness: 1, metalness: 0 }));
+  neckCollar.position.y = M * 0.545;   // fake AO gap detaching helmet from torso
+  astro.add(neckCollar);
+
   // EVA lights / antenna boss on top of helmet (TV camera assembly)
   const camBoss = new THREE.Mesh(
     new THREE.BoxGeometry(M * 0.10, M * 0.04, M * 0.06), mat.suitGray);
   camBoss.position.set(0, M * 0.86, -M * 0.02);
   astro.add(camBoss);
-  // Twin helmet floodlights (front of the camera boss) + lenses
+  // Twin helmet floodlights (front of the camera boss)
   for (const lx of [-M * 0.065, M * 0.065]) {
     const lamp = new THREE.Mesh(
       new THREE.CylinderGeometry(M * 0.015, M * 0.015, M * 0.03, 8), mat.suitGray);
     lamp.rotation.x = Math.PI / 2;
     lamp.position.set(lx, M * 0.85, M * 0.11);
     astro.add(lamp);
-    const lens = new THREE.Mesh(
-      new THREE.CircleGeometry(M * 0.012, 10),
-      new THREE.MeshBasicMaterial({ color: 0xfff2cc }));
-    lens.position.set(lx, M * 0.85, M * 0.126);
-    lens.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
-    astro.add(lens);
   }
+  // (skyroot-polish) Lamp lens discs removed — they faced the satellite, never the camera.
 
   // Neck pressure ring (connects helmet to HUT)
   const neckRing = new THREE.Mesh(
@@ -582,6 +594,14 @@ function buildAstronaut(mat, flagCode = 'USA') {
   lWrist.rotation.x = Math.PI / 2;
   lForearmGroup.add(lWrist);
 
+  // (skyroot-polish) EV-crew red forearm band — echoes the thigh stripe (the only
+  // feature proven to survive small sizes) so the figure still reads from the rear.
+  const lBand = new THREE.Mesh(
+    new THREE.CylinderGeometry(M * 0.064, M * 0.060, M * 0.045, 14, 1, true), mat.evRed);
+  lBand.position.y = -M * 0.16;
+  lBand.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+  lForearmGroup.add(lBand);
+
   // Gripping glove (anatomical right hand) wrapping the secondary tool
   const lHand = buildGrippingGlove(mat, +1);
   lHand.position.y = -M * 0.27;
@@ -608,6 +628,9 @@ function buildAstronaut(mat, flagCode = 'USA') {
   // folds bunch at the elbow, they don't ladder the whole arm. (Was 5 rings.)
   addConvolutes(lShoulder, 2, -M * 0.20, -M * 0.26, M * 0.073);      // elbow, upper side
   addConvolutes(lForearmGroup, 1, -M * 0.035, -M * 0.035, M * 0.064); // elbow, forearm side
+  // (skyroot-polish) Soft-goods quilting — broader self-shadowing bands restore the
+  // puffy TMG read the flat lighting erases (see leg quilting below, same intent).
+  addConvolutes(lForearmGroup, 2, -M * 0.08, -M * 0.17, M * 0.066);
   // Wrist checklist (the iconic EVA cuff checklist) on the forearm
   const cuffList = new THREE.Mesh(new THREE.BoxGeometry(M * 0.055, M * 0.06, M * 0.018), mat.suitWhite);
   cuffList.position.set(-M * 0.05, -M * 0.15, 0);
@@ -651,6 +674,13 @@ function buildAstronaut(mat, flagCode = 'USA') {
   rWrist.rotation.x = Math.PI / 2;
   rForearmGroup.add(rWrist);
 
+  // (skyroot-polish) EV-crew red forearm band (right)
+  const rBand = new THREE.Mesh(
+    new THREE.CylinderGeometry(M * 0.064, M * 0.060, M * 0.045, 14, 1, true), mat.evRed);
+  rBand.position.y = -M * 0.16;
+  rBand.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+  rForearmGroup.add(rBand);
+
   const rGlove = buildGrippingGlove(mat, -1);
   rGlove.position.y = -M * 0.27;
   rForearmGroup.add(rGlove);
@@ -678,12 +708,15 @@ function buildAstronaut(mat, flagCode = 'USA') {
   // Soft-goods convolutes on the welding arm + forearm
   addConvolutes(rShoulder, 2, -M * 0.20, -M * 0.26, M * 0.073);      // elbow, upper side
   addConvolutes(rForearmGroup, 1, -M * 0.035, -M * 0.035, M * 0.064); // elbow, forearm side
+  addConvolutes(rForearmGroup, 2, -M * 0.08, -M * 0.17, M * 0.066);   // (skyroot-polish) quilting
 
   astro.add(rShoulder);
 
   // ── Legs — BAGGY soft-goods (TMG) lower body, not skin-tight tubes. Fat,
   //    near-uniform fabric segments with cloth convolute folds at the joints and
   //    almost no exposed metal. Relaxed, slightly asymmetric micro-g float. ──
+  // (skyroot-polish) Collect both leg/shank groups for the exit free-flyer pose.
+  const legPose = [];
   for (const side of [-1, 1]) {
     const legGroup = new THREE.Group();
     legGroup.position.set(side * M * 0.085, M * 0.0, 0);
@@ -741,6 +774,10 @@ function buildAstronaut(mat, flagCode = 'USA') {
     addConvolutes(legGroup,   2, -M * 0.35, -M * 0.42, M * 0.101);  // lower thigh → knee
     addConvolutes(shankGroup, 2, -M * 0.02, -M * 0.09, M * 0.093);  // knee → upper shin
     addConvolutes(shankGroup, 1, -M * 0.36, -M * 0.36, M * 0.083);  // ankle
+    // (skyroot-polish) Soft-goods quilting — self-shadowing bands restore the
+    // puffy TMG read the flat lighting erases (broad puff bands on thigh/shank).
+    addConvolutes(legGroup,   3, -M * 0.10, -M * 0.30, M * 0.106);  // thigh puff bands
+    addConvolutes(shankGroup, 2, -M * 0.16, -M * 0.28, M * 0.090);  // shank puff bands
 
     // Single dark restraint line down the thigh front (subtle webbing, not chrome)
     const tCable = new THREE.Mesh(
@@ -757,6 +794,7 @@ function buildAstronaut(mat, flagCode = 'USA') {
     legGroup.add(idStripe);
 
     legGroup.add(shankGroup);
+    legPose.push({ leg: legGroup, shank: shankGroup });
     astro.add(legGroup);
   }
 
@@ -814,6 +852,10 @@ function buildAstronaut(mat, flagCode = 'USA') {
   // acknowledgment turn) and the SAFER pack (cold-gas puff anchor at jet-off).
   astro.userData.weldArm = rShoulder;
   astro.userData.safer = safer;
+  // (skyroot-polish) Free-flyer pose handles: the left (free) shoulder + both
+  // leg/shank groups, captured so the exit beat can pose them and reset cleanly.
+  astro.userData.lShoulder = lShoulder;
+  astro.userData.legPose = legPose;
 
   return astro;
 }
@@ -1030,6 +1072,7 @@ export class MenuScene3D {
     this._canvas   = null;      // canvas ref (for resize-on-show)
     this._resizeObserver = null;
     this._weldGlow = null;      // molten weld-pool glow sprite
+    this._contactShadowMat = null;  // (skyroot-polish) contact shadow under the astro
     this._visorMat = null;      // visor material (flashes with the arc)
     this._mother   = null;      // real PlayerSatellite instance (hero ship)
     this._daughters = [];       // real ArmUnit instances docked on the struts
@@ -1071,8 +1114,14 @@ export class MenuScene3D {
     this._astroSafer = null;
     this._astroBasePos = null;
     this._astroBaseRotY = 0;
+    this._astroBaseRotX = 0;   // (skyroot-polish) free-flyer pose base
     this._astroBaseRotZ = 0;
     this._weldArmBaseRotX = 0;
+    this._astroLShoulder = null;
+    this._lShoulderBaseRotX = 0;
+    this._lShoulderBaseRotZ = 0;
+    this._astroLegPose = null;
+    this._astroLegPoseBase = null;
     this._tether = null;
     this._tetherAnchorLocal = null;
     this._tetherEnd = null;
@@ -1311,6 +1360,34 @@ export class MenuScene3D {
     // framed without over-tilting). The old fixed target was tuned to the barrel.
     this._lookTarget.copy(this._weldPos).multiplyScalar(0.7);
 
+    // (skyroot-polish) Contact shadow under the astronaut — standoff-shadow trick
+    // from the Skyroot HQ wall mount; anchors her to the hull for one quad. A soft
+    // radial gradient in an opacity 0.32 quad just past the weld point, facing her.
+    const shadowCanvas = document.createElement('canvas');
+    shadowCanvas.width = shadowCanvas.height = 64;
+    const sctx = shadowCanvas.getContext('2d');
+    const sgrad = sctx.createRadialGradient(32, 32, 4, 32, 32, 32);
+    sgrad.addColorStop(0.0, 'rgba(0,0,0,0.55)');
+    sgrad.addColorStop(1.0, 'rgba(0,0,0,0)');
+    sctx.fillStyle = sgrad;
+    sctx.fillRect(0, 0, 64, 64);
+    const shadowMat = new THREE.MeshBasicMaterial({
+      map: new THREE.CanvasTexture(shadowCanvas),
+      transparent: true, opacity: 0.32, depthWrite: false,
+    });
+    const shadowQuad = new THREE.Mesh(
+      new THREE.PlaneGeometry(M * 1.1, M * 1.6), shadowMat);
+    const n = this._astro.position.clone().sub(this._weldPos).normalize();
+    shadowQuad.position.copy(this._weldPos).addScaledVector(n, 0.02);
+    shadowQuad.lookAt(this._astro.position);
+    this._pivot.add(shadowQuad);
+    this._contactShadowMat = shadowMat;
+
+    // Weld light is a STATIC point light (no new lights — this reuses the existing
+    // one); its position at the weld never changes, so set it once here after
+    // _weldPos is final instead of copying every frame in _tick.
+    this._weldLight.position.copy(this._weldPos);
+
     // Molten weld-pool glow on the hinge — pulses with the arc (see _tick).
     this._weldGlow = makeGlowSprite();
     this._weldGlow.position.copy(this._weldPos);
@@ -1343,6 +1420,18 @@ export class MenuScene3D {
     this._astroBaseRotY = astro.rotation.y;
     this._astroBaseRotZ = astro.rotation.z;
     this._weldArmBaseRotX = this._astroWeldArm ? this._astroWeldArm.rotation.x : 0;
+    // (skyroot-polish) Free-flyer pose bases: capture the left shoulder + both
+    // legs at their built rotation so the exit free-flyer pose can lerp away and
+    // _resetAstronautExit() can restore exactly.
+    this._astroBaseRotX = astro.rotation.x;
+    this._astroLShoulder = astro.userData.lShoulder || null;
+    this._lShoulderBaseRotX = this._astroLShoulder ? this._astroLShoulder.rotation.x : 0;
+    this._lShoulderBaseRotZ = this._astroLShoulder ? this._astroLShoulder.rotation.z : 0;
+    this._astroLegPose = astro.userData.legPose || [];
+    this._astroLegPoseBase = this._astroLegPose.map((lp) => ({
+      legX: lp.leg.rotation.x,
+      shankX: lp.shank.rotation.x,
+    }));
     this._tether = tether;
     // Cold-gas puff sprites (2), reused from the glow-sprite helper, tinted cool
     // white. Hidden until the jet-off beat fires them.
@@ -1619,10 +1708,24 @@ export class MenuScene3D {
     if (this._astro) {
       this._astro.visible = true;
       if (this._astroBasePos) this._astro.position.copy(this._astroBasePos);
+      this._astro.rotation.x = this._astroBaseRotX;   // (skyroot-polish) free-flyer restore
       this._astro.rotation.y = this._astroBaseRotY;
       this._astro.rotation.z = this._astroBaseRotZ;
     }
     if (this._astroWeldArm) this._astroWeldArm.rotation.x = this._weldArmBaseRotX;
+    // (skyroot-polish) Undo the exit free-flyer pose from the captured bases.
+    if (this._astroLShoulder) {
+      this._astroLShoulder.rotation.x = this._lShoulderBaseRotX;
+      this._astroLShoulder.rotation.z = this._lShoulderBaseRotZ;
+    }
+    if (this._astroLegPose && this._astroLegPoseBase) {
+      this._astroLegPose.forEach((lp, i) => {
+        const b = this._astroLegPoseBase[i];
+        if (!lp || !b) return;
+        lp.leg.rotation.x = b.legX;
+        lp.shank.rotation.x = b.shankX;
+      });
+    }
     this._setAstroOpacity(1);   // undo any fly-around exit dissolve
     if (this._mother) this._mother.rotation.z = MOTHER_BASE_ROLL_Z; // undo any de-roll
     if (this._exitPuffs) {
@@ -1649,12 +1752,18 @@ export class MenuScene3D {
     }
     const opaque = k >= 0.999;
     if (opaque && this._astroFaded === false) return;
+    // Flip render-state flags only on the opaque<->faded TRANSITION — re-asserting
+    // needsUpdate every frame forces a per-frame program-key recompute in the
+    // renderer. The per-frame write during a fade is opacity alone.
+    const transition = this._astroFaded !== !opaque;
     this._astroFaded = !opaque;
     this._astroMats.forEach((m) => {
-      m.transparent = !opaque;
       m.opacity = k;
-      m.depthWrite = opaque;
-      m.needsUpdate = true;
+      if (transition) {
+        m.transparent = !opaque;
+        m.depthWrite = opaque;
+        m.needsUpdate = true;
+      }
     });
   }
 
@@ -1776,7 +1885,11 @@ export class MenuScene3D {
       if (this._mother) this._mother.rotation.z = MOTHER_BASE_ROLL_Z * (1 - fa);
       this._tmpLook.copy(this._lookTarget).multiplyScalar(1 - fa);   // → hull centre (no per-frame alloc)
       this.camera.lookAt(this._tmpLook);
-      this._setAstroOpacity(1);   // no dissolve — she drifts to the edge like 'partial'
+      // (skyroot-polish) The dissolve the flyaround was documented to have but never
+      // applied — over the final 14% of the gate she fades out through the existing
+      // lazy fade machinery (_setAstroOpacity), so she melts away instead of drifting.
+      const k = fa > 0.86 ? 1 - Math.min(1, (fa - 0.86) / 0.14) : 1;
+      this._setAstroOpacity(k);
     } else {
       // 'partial': modest end-pose bias toward the sim view + a gentle ~28°
       // de-roll (gated after push-off); the power-up flash (main.js) masks the
@@ -1818,7 +1931,6 @@ export class MenuScene3D {
     // attention "bell"). Reduced motion keeps the old faint fade-with-dep.
     let arc = 0;
     if (this._weldLight) {
-      this._weldLight.position.copy(this._weldPos);
       if (this._departure && !this._reducedMotion) {
         this._weldLight.intensity = this._departure.t < 0.05 ? 1.1 : 0; // one last strike, then off
       } else if (this._reducedMotion) {
@@ -1830,6 +1942,10 @@ export class MenuScene3D {
         this._weldLight.intensity = base + spike;
       }
     }
+
+    // (skyroot-polish) Contact shadow fades with the departure so she doesn't leave
+    // a lingering dark patch behind as the weld glow dies.
+    if (this._contactShadowMat) this._contactShadowMat.opacity = 0.32 * depFade;
 
     // Molten weld-pool glow. Idle: opacity/size track the arc spikes. Departure:
     // a SLOW cooling decay (~1 s) decoupled from the arc snap — the pool stays
@@ -1935,6 +2051,27 @@ export class MenuScene3D {
       // Roll eases in over the push-off then holds (no accelerating spin).
       this._astro.rotation.z = this._astroBaseRotZ
         + EXIT_BODY_ROLL * _easeOutCubic(_clamp01(tm / 0.7));
+      // (skyroot-polish) Free-flyer exit pose: legs trail + deep knee bend + left
+      // arm opens outward + slight chest-open arch (Skyroot wall-art read). CPU-only
+      // — eases each captured base rotation toward its pose target after jet-off.
+      const poseE = _easeOutCubic(_clamp01(tm / EXIT_POSE_DUR));
+      if (this._astroLegPose && this._astroLegPoseBase) {
+        const legs = this._astroLegPose;
+        const bases = this._astroLegPoseBase;
+        if (legs[0]) {
+          legs[0].leg.rotation.x = bases[0].legX + (EXIT_LEG_L_X - bases[0].legX) * poseE;
+          legs[0].shank.rotation.x = bases[0].shankX + (EXIT_SHANK_L_X - bases[0].shankX) * poseE;
+        }
+        if (legs[1]) {
+          legs[1].leg.rotation.x = bases[1].legX + (EXIT_LEG_R_X - bases[1].legX) * poseE;
+          legs[1].shank.rotation.x = bases[1].shankX + (EXIT_SHANK_R_X - bases[1].shankX) * poseE;
+        }
+      }
+      if (this._astroLShoulder) {
+        this._astroLShoulder.rotation.z = this._lShoulderBaseRotZ + (EXIT_ARM_Z - this._lShoulderBaseRotZ) * poseE;
+        this._astroLShoulder.rotation.x = this._lShoulderBaseRotX + (EXIT_ARM_X - this._lShoulderBaseRotX) * poseE;
+      }
+      this._astro.rotation.x = this._astroBaseRotX + EXIT_CHEST_OPEN * poseE;
     }
     this._updatePuffs(dt);
     return turnE;
