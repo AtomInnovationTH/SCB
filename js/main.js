@@ -2941,6 +2941,54 @@ async function init() {
         }
       };
 
+      // ── Lasso per-frame flight recorder (2026-08-26 round 3 — dev-only) ──
+      // The 1 Hz LP lines named the ~7.7 km ghost but not its WRITER: one
+      // clamped SwiftShader frame of apparent orbital travel IS ~7700 m, so a
+      // one-frame-stale anchor and a genuine teleport look identical at
+      // capture cadence. This ring buffer samples END-OF-FRAME truth every
+      // rAF tick while armed (same call-site doctrine as __netProbeTick):
+      // ship, camera, cut/view state, and the piece's anchors (rendered
+      // _scenePosition, the lasso arm pin) — ship-relative metres, so the
+      // frame the garbage lands names its source FIELD directly. Zero cost
+      // beyond one boolean check unless __scbLassoRec(true).
+      const _LREC = { on: false, buf: [], cap: 4000, n: 0 };
+      window.__scbLassoRec = (on) => { _LREC.on = !!on; return _LREC.on; };
+      window.__scbLassoRecDump = () => ({ n: _LREC.n, samples: _LREC.buf });
+      window.__scbLassoRecClear = () => { _LREC.buf.length = 0; _LREC.n = 0; return true; };
+      window.__scbLassoRecTick = (nowMs) => {
+        if (!_LREC.on) return;
+        try {
+          const M = 0.00001;
+          const ship = player?.getPosition?.();
+          if (!ship) return;
+          const rel = (v) => v
+            ? [+((v.x - ship.x) / M).toFixed(1), +((v.y - ship.y) / M).toFixed(1), +((v.z - ship.z) / M).toFixed(1)]
+            : null;
+          const ls = lassoSystem;
+          const lc = cameraSystem?._lassoCut;
+          const cam = sceneManager?.camera;
+          const piece = (ls && ls.target) || (lc && lc.debris) || null;
+          const s = {
+            i: _LREC.n, t: +(nowMs / 1000).toFixed(3),
+            ship: [+ship.x.toFixed(5), +ship.y.toFixed(5), +ship.z.toFixed(5)],
+            cam: cam ? rel(cam.position) : null,
+            view: cameraSystem?.currentView ?? null,
+            trans: cameraSystem && cameraSystem._transitioning
+              ? +cameraSystem._transitionProgress.toFixed(2) : null,
+            cut: lc && lc.active ? +(lc.t ?? 0).toFixed(2) : null,
+            la: ls ? (ls.active ? (ls._reelingIn ? 'reel' : 'fly') : null) : null,
+            reelP: ls && ls.active ? +(ls._reelProgress ?? 0).toFixed(3) : null,
+            proj: ls && ls.active ? rel(ls.projectilePos) : null,
+            sp: piece && piece._scenePosition ? rel(piece._scenePosition) : null,
+            pin: piece && piece._armPinPos ? rel(piece._armPinPos) : null,
+            ob: piece ? (piece._onboardingPinned === true) : null,
+            ap: piece ? (piece._armPinned === true) : null,
+          };
+          _LREC.buf[_LREC.n % _LREC.cap] = s;
+          _LREC.n++;
+        } catch (_e) { /* the recorder must never break the loop */ }
+      };
+
       // ── Per-frame probe recorder (whale-in-cone plan, Task 1.4) ──
       // `__netScenarioProbe()` is a stateless getter and the harness polls it at
       // 1 Hz — too coarse to see the brake instant, which is a single frame
@@ -4328,6 +4376,9 @@ function gameLoop(timestamp) {
   // Whale-in-cone Task 1.4: per-frame probe recorder. One boolean check when
   // disabled; builds a slim cone-containment sample when __netProbeRecord(true).
   if (window.__netProbeTick) window.__netProbeTick(timestamp);
+  // Lasso flight recorder (round 3) — same end-of-loop doctrine: the sample
+  // is END-OF-FRAME truth for exactly the rendered frame.
+  if (window.__scbLassoRecTick) window.__scbLassoRecTick(timestamp);
   // Whale-in-cone follow-up 5: armed cinch freeze. Runs after the recorder tick
   // (end of loop, post-render) so the frame the freeze holds is exactly the
   // frame the check observes. One boolean check when disarmed.

@@ -199,6 +199,14 @@ export class CameraSystem {
     this._transitionStartOffset = new THREE.Vector3(); // Start offset from player for transition
     this._transitionStartLookDir = new THREE.Vector3(); // Start look DIRECTION for transition
     this._lastPlayerPos = new THREE.Vector3(); // Cached player pos for setView
+    // Round 3 (2026-08-26): the PREVIOUS frame's player pos — the epoch the
+    // camera's current position was written in while an override drives it.
+    // Lets an in-update exit rebase the (one-frame-old) camera pose into the
+    // current ship frame before setView captures its transition start offset
+    // (one frame of apparent orbital travel is ~128 m at 60 fps and km-scale
+    // under a clamped SwiftShader frame — tmp/lasso11-rec frames 43-44).
+    this._prevPlayerPos = new THREE.Vector3();
+    this._prevPlayerPosInit = false;
     this._lastVelDir = new THREE.Vector3(0, 0, 1);
 
     // ========================================================================
@@ -435,6 +443,13 @@ export class CameraSystem {
       debris: null,        // the wrapped piece (captured at LASSO_CONTACT)
       savedView: null,
       savedFov: 0,
+      // Round 3 (2026-08-26) — transient-entry retry: a subject-sanity refusal
+      // at LASSO_CONTACT (ghost `_scenePosition`, out-of-range read, degenerate
+      // reel line) arms a per-frame retry while THIS reel is still live on
+      // THIS debris, instead of skipping the whole cut. Policy refusals
+      // (flags, reduced motion, held keys, an owning ceremony) never retry —
+      // they are answers, not races.
+      pendingDebris: null,
       _sideDir: new THREE.Vector3(),   // fixed at entry — stable framing
       _vCatch: new THREE.Vector3(),
       _vUp: new THREE.Vector3(),
@@ -747,7 +762,33 @@ export class CameraSystem {
     this._lastVelDir.set(playerVel.x, playerVel.y, playerVel.z).normalize();
     const velDir = this._lastVelDir;
     const radialDir = this._radialDir.copy(playerPos).normalize();
+    // Round 3: keep the one-frame-old epoch for the in-update exit rebase
+    // (see _exitLassoCut). Seeded to the live pos on the first frame so a
+    // day-one exit can never rebase against the origin.
+    if (this._prevPlayerPosInit) {
+      this._prevPlayerPos.copy(this._lastPlayerPos);
+    } else {
+      this._prevPlayerPos.copy(playerPos);
+      this._prevPlayerPosInit = true;
+    }
     this._lastPlayerPos.copy(playerPos); // Cache for setView()
+
+    // Round 3 — lasso-cut transient-entry retry: a subject-sanity refusal at
+    // LASSO_CONTACT armed `pendingDebris`; re-attempt with THIS frame's ship
+    // position (the contact-time attempt reads the cached one, which is one
+    // frame old relative to the freshly pinned piece under long frames). The
+    // retry dies with the reel, with a retarget, or on any policy refusal.
+    {
+      const lc = this._lassoCut;
+      if (lc && !lc.active && lc.pendingDebris) {
+        const ls = this._lassoSystem;
+        if (!(ls && ls.active && ls._reelingIn && ls.target === lc.pendingDebris)) {
+          lc.pendingDebris = null;
+        } else if (this._tryEnterLassoCut(playerPos) !== 'transient') {
+          lc.pendingDebris = null;
+        }
+      }
+    }
 
     // Cache the frame's LVLH basis for solveOrbitAnglesForDirection(). Done
     // here in update(), not in _computeOrbit, so the basis exists before the
@@ -783,15 +824,25 @@ export class CameraSystem {
         this.camera.up.copy(ncResult.up);
         this.camera.lookAt(ncResult.look);
       }
-    } else if (this._lassoCut.active) {
-      // 2026-08-26: lasso catch cut — same override slot, own tiny driver.
-      const lcResult = this._updateLassoCut(dt, playerPos);
-      if (lcResult) {
-        this.camera.position.copy(lcResult.pos);
-        this.camera.up.copy(lcResult.up);
-        this.camera.lookAt(lcResult.look);
-      }
     } else {
+      // 2026-08-26: lasso catch cut — same override slot, own tiny driver.
+      // Round 3: when the driver returns null the cut EXITED this very tick
+      // (fence / max valve / settle / dropped subject) — fall through to the
+      // normal view path below so THIS frame still gets a camera write. The
+      // old shape skipped the frame entirely, holding a one-frame-old pose
+      // that reads as a km-scale walkabout under long frames (tmp/lasso7
+      // f006; tmp/lasso11-rec frame 43: cam held 7678 m off the ship on the
+      // exit tick).
+      let lcResult = null;
+      if (this._lassoCut.active) {
+        lcResult = this._updateLassoCut(dt, playerPos);
+        if (lcResult) {
+          this.camera.position.copy(lcResult.pos);
+          this.camera.up.copy(lcResult.up);
+          this.camera.lookAt(lcResult.look);
+        }
+      }
+      if (!lcResult) {
     // Compute target camera state based on current view
     let targetPos;
     let targetLook;
@@ -901,6 +952,7 @@ export class CameraSystem {
       }
       this.camera.lookAt(targetLook);
     }
+      } // end !lcResult (round 3 fall-through)
     } // end V-7 ceremony else
 
     // Phase 8: Apply camera shake offset (catches, not ARM_PILOT)
@@ -2805,27 +2857,60 @@ export class CameraSystem {
    * (direct view assignment, the ceremony idiom at _onNetCeremonyStart);
    * exit eases over EXIT_CUT_SMALL_S. NET_CINEMATIC_ENTERED/EXITED stay
    * paired on every route so the HUD dim/letterbox contract holds.
+   *
+   * Round 3 (2026-08-26): the attempt is factored out so a TRANSIENT
+   * subject-sanity refusal (a ghost/out-of-range `_scenePosition` read, a
+   * degenerate reel line) can RETRY on the next camera frames — with the
+   * camera update's own same-frame ship position — instead of skipping the
+   * whole cut (tmp/lasso8-night LP2 / tmp/lasso9-day: one bad read at entry
+   * cost the entire presentation). Policy refusals still answer once.
    * @private
    */
   _onLassoContact() {
-    if (!Constants.FEATURE_FLAGS.NET_CEREMONY) return;
-    if (!Constants.FEATURE_FLAGS.LASSO_CATCH_CUT) return;
+    const verdict = this._tryEnterLassoCut(this._lastPlayerPos);
     const lc = this._lassoCut;
-    if (lc.active) return;
-    if (this._netCeremony.active || this._launchCeremony.active) return;
-    if (this.currentView === CameraViews.NET_CINEMATIC) return;
-    if (this._prefersReducedMotion()) return;
-    if (this._lassoCutInputProbe && this._lassoCutInputProbe()) return;
+    if (verdict === 'transient') {
+      const ls = this._lassoSystem;
+      lc.pendingDebris = (ls && ls.target) || null;
+    } else {
+      lc.pendingDebris = null;
+    }
+  }
+
+  /**
+   * One entry attempt against the given ship position (the event path passes
+   * the cached `_lastPlayerPos`; the per-frame retry passes the live one).
+   * @param {THREE.Vector3} shipPos
+   * @returns {('entered'|'refused'|'transient')} — 'transient' means the
+   *   subject exists but its geometry read insane THIS attempt; retry.
+   * @private
+   */
+  _tryEnterLassoCut(shipPos) {
+    if (!Constants.FEATURE_FLAGS.NET_CEREMONY) return 'refused';
+    if (!Constants.FEATURE_FLAGS.LASSO_CATCH_CUT) return 'refused';
+    const lc = this._lassoCut;
+    if (lc.active) return 'refused';
+    if (this._netCeremony.active || this._launchCeremony.active) return 'refused';
+    if (this.currentView === CameraViews.NET_CINEMATIC) return 'refused';
+    if (this._prefersReducedMotion()) return 'refused';
+    if (this._lassoCutInputProbe && this._lassoCutInputProbe()) return 'refused';
     const ls = this._lassoSystem;
     const debris = ls && ls.active && ls._reelingIn ? ls.target : null;
-    if (!debris || !debris._scenePosition) return;
+    if (!debris) return 'refused';
+    if (!debris._scenePosition || !shipPos) return 'transient';
 
     // Fixed side axis: perpendicular to the reel line in the radial frame at
     // entry (S4 doctrine — never on the catch↔ship axis; stable for the whole
     // shot so the escort reads as one held camera, not a chase).
     const catchPos = lc._vCatch.copy(debris._scenePosition);
-    const reelDir = lc._vLook.copy(this._lastPlayerPos).sub(catchPos);
-    if (reelDir.lengthSq() < 1e-18) return;
+    // Round 3 — entry twin of the 250 m in-shot sanity fence: a lasso subject
+    // lives within LASSO_RANGE of the ship, so a farther read at entry is a
+    // stale/ghost frame, not a subject. Classified TRANSIENT: the reel is
+    // live and next frame's read is fresh (the same-frame pin fix makes this
+    // ~unreachable; the retry is the belt).
+    if (catchPos.distanceTo(shipPos) > 250 * 0.00001) return 'transient';
+    const reelDir = lc._vLook.copy(shipPos).sub(catchPos);
+    if (reelDir.lengthSq() < 1e-18) return 'transient';
     reelDir.normalize();
     const radial = lc._vUp.copy(catchPos).normalize();
     lc._sideDir.crossVectors(radial, reelDir);
@@ -2840,10 +2925,12 @@ export class CameraSystem {
     lc.t = 0;
     lc.settleT = null;
     lc.debris = debris;
+    lc.pendingDebris = null;
     lc.savedView = this.currentView;
     lc.savedFov = this._baseFov;
     this.currentView = CameraViews.NET_CINEMATIC;   // hard cut (ceremony idiom)
     eventBus.emit(Events.NET_CINEMATIC_ENTERED, { lassoCut: true });
+    return 'entered';
   }
 
   /**
@@ -2871,11 +2958,11 @@ export class CameraSystem {
 
     const debris = lc.debris;
     if (!debris || debris.alive === false || !debris._scenePosition) {
-      this._exitLassoCut(false);
+      this._exitLassoCut(false, true);
       return null;
     }
     if (lc.t >= (NCx.LASSO_CUT_MAX_S ?? 4.0)) {
-      this._exitLassoCut(true);
+      this._exitLassoCut(true, true);
       return null;
     }
     const ls = this._lassoSystem;
@@ -2885,12 +2972,12 @@ export class CameraSystem {
       // or dropped it. A held pin is the completed read; a released pin
       // means the catch was lost between the event aborts and this frame.
       if (debris._armPinned !== true) {
-        this._exitLassoCut(false);
+        this._exitLassoCut(false, true);
         return null;
       }
       lc.settleT = (lc.settleT ?? 0) + dt;
       if (lc.settleT >= (NCx.LASSO_CUT_SETTLE_S ?? 0.4)) {
-        this._exitLassoCut(true);
+        this._exitLassoCut(true, true);
         return null;
       }
     }
@@ -2899,13 +2986,14 @@ export class CameraSystem {
     const catchPos = lc._vCatch.copy(debris._scenePosition);
     // Sanity fence: a lasso subject lives within lasso range of the ship
     // (fire() refuses beyond LASSO_RANGE; the reel only pulls INWARD). If the
-    // scene position ever reads outside ~250 m — a pin-priority race can
-    // ghost the piece onto a stale orbit for a frame under long SwiftShader
-    // frames (tmp/lasso7 probe: one 7.7 km frame at exit) — hand the camera
-    // back gracefully instead of framing empty space. The catch itself is
-    // fine (the berth pin owns it); only this shot refuses to chase a ghost.
+    // scene position ever reads outside ~250 m, hand the camera back
+    // gracefully instead of framing empty space. Round 3: the ghost read this
+    // fence kept converting into a skipped/dropped cut is FIXED at the source
+    // (the lasso pin is same-frame now — LassoSystem._pinFresh), so this is a
+    // true last-resort; it exits with the epoch rebase like every other
+    // in-update exit.
     if (catchPos.distanceTo(playerPos) > 250 * M_CUT) {
-      this._exitLassoCut(true);
+      this._exitLassoCut(true, true);
       return null;
     }
     // Shot switch: the wrap is done when the reel passes the WRAP window
@@ -2965,15 +3053,30 @@ export class CameraSystem {
    * transition is the sub-metre cut (every lasso subject is sub-metre class),
    * and NET_CINEMATIC_EXITED fires on every route.
    * @param {boolean} completedNormally
+   * @param {boolean} [rebaseEpoch=false] — Round 3: true for exits taken
+   *   INSIDE update() (fence / valve / settle / dropped subject), where
+   *   `_lastPlayerPos` already holds THIS frame's ship but the camera still
+   *   holds LAST frame's pose. The camera is shifted by the ship's one-frame
+   *   travel so setView captures a ship-relative start offset instead of a
+   *   cross-epoch difference (which is ~128 m at 60 fps and km-scale under
+   *   the SwiftShader dt clamp — tmp/lasso11-rec frame 44: a 0.2 s exit
+   *   transition played from a 7.7 km start offset). Event-driven aborts
+   *   (keydown / wheel / external setView) run between frames where both
+   *   epochs already agree — they keep the default false.
    * @private
    */
-  _exitLassoCut(completedNormally) {
+  _exitLassoCut(completedNormally, rebaseEpoch = false) {
     const lc = this._lassoCut;
     if (!lc.active) return;
 
     lc.active = false;
     lc.debris = null;
     lc.settleT = null;
+    lc.pendingDebris = null;
+
+    if (rebaseEpoch && this._prevPlayerPosInit) {
+      this.camera.position.sub(this._prevPlayerPos).add(this._lastPlayerPos);
+    }
 
     this._baseFov = lc.savedFov || this._baseFov;
     this.camera.fov = this._baseFov;

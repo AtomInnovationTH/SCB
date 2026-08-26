@@ -614,6 +614,16 @@ function _ringZGrid(out, p) {
   const mouthZ = -coneHeight;
   const cosA = p.cosA, sinA = p.sinA;
   const minSpan = coneHeight * _ELBOW_MIN_SPAN_FRAC;
+  // Round 3 (V3 sock gather): when `mouthGather` > 0 the MOUTH ring gathers
+  // toward the contents' mouth-side face (drawstring-rosette language)
+  // instead of trailing at the mouth plane as an empty sock. The face plane
+  // is CLOSED-FORM from the oriented box (extent along kit z) — deliberately
+  // NOT the elbow scan's far elbow: sub-metre pieces (the whole lasso class)
+  // fail the `redis` min-span threshold, and the drawstring gathers ALL
+  // fabric regardless of whether rings redistributed. 0 (default) is byte-
+  // identical: the R2 law (mouth ring ON the mouth plane) is untouched for
+  // every existing caller; the lasso wrap opts in deliberately.
+  const gather = Math.max(0, Math.min(1, p.mouthGather ?? 0));
   for (let s = 0; s < radialSpokes; s++) {
     const e = _floorElbows(cosA[s], sinA[s], contentsBox, mouthZ);
     const eN = e[0], eF = e[1];
@@ -633,6 +643,27 @@ function _ringZGrid(out, p) {
       out[k * radialSpokes + s] = zNat + (zR - zNat) * drape;
     }
   }
+  // Gather pass: pull the WHOLE mouth ring (every spoke — a drawstring pulls
+  // all fabric, box-hit or not) onto ONE common plane between the mouth and
+  // the contents' far face. Lerped by drape like every redistributed z, so
+  // the transition cannot pop. The float64 plane is reported via
+  // p.mouthPlaneOut (NaN = not applied): the grid itself is float32 storage,
+  // and the byte law `_mouthZEff === _mouthZ` for gather-off callers must
+  // never depend on a float32 round-trip.
+  p.mouthPlaneOut = NaN;
+  if (gather > 0 && contentsBox) {
+    const zExt = Math.abs(contentsBox.r02) * contentsBox.hx
+               + Math.abs(contentsBox.r12) * contentsBox.hy
+               + Math.abs(contentsBox.r22) * contentsBox.hz;
+    const zFace = contentsBox.oz - zExt;             // mouth-side face plane
+    if (zFace > mouthZ && zFace < 0) {
+      const zGather = mouthZ + (zFace - mouthZ) * gather;
+      const zNatM = drapeRingZ(1, coneHeight, drape);   // == mouthZ (R2)
+      const zRow = zNatM + (zGather - zNatM) * drape;
+      for (let s = 0; s < radialSpokes; s++) out[rings * radialSpokes + s] = zRow;
+      p.mouthPlaneOut = zRow;
+    }
+  }
   return out;
 }
 
@@ -649,9 +680,15 @@ function _mouthFloorMax(h) {
   const cB = h._contentsBox ?? null;
   if (!(cR > 0) && !contentsBoxValid(cB)) return 0;
   const cZ = h._contentsZ ?? 0;
+  // Round 3 (V3): evaluate at the EFFECTIVE mouth plane — the rosette plane
+  // when the sock gather moved the mouth ring toward the piece (the ring must
+  // clear the contents at ITS OWN z, or the gathered beads would sit inside
+  // the catch). `_mouthZEff` is h._mouthZ whenever the gather is off, so
+  // every pre-round-3 caller reads byte-identical floors.
+  const zEff = h._mouthZEff ?? h._mouthZ;
   let f = 0;
   for (let s = 0; s < h.radialSpokes; s++) {
-    const v = contentsFloorClamped(h._mouthZ, h._cosA[s], h._sinA[s], h.mouthRadius, cZ, cR, cB, NET_CER.CONTENTS_FLOOR_MARGIN, h._mouthZ);
+    const v = contentsFloorClamped(zEff, h._cosA[s], h._sinA[s], h.mouthRadius, cZ, cR, cB, NET_CER.CONTENTS_FLOOR_MARGIN, h._mouthZ);
     if (v > f) f = v;
   }
   return f;
@@ -685,6 +722,11 @@ function buildWebPositionsDraped(out, p) {
 
   // Radial spokes: apex → rim (t = 1; the drape z-term vanishes at the mouth).
   const zRim = drapeRingZ(1, coneHeight, drape);
+  const ringZ = p.ringZ ?? null;   // item 12: redistributed per-(ring,spoke) z (box floor on)
+  // Round 3 (V3 sock gather): when the mouth ring gathered (ringZ carries the
+  // rosette plane on ring `rings`), the spoke TIPS ride the same plane so the
+  // threads end on the gathered rosette instead of trailing to the mouth.
+  const gatherRim = !!p.gatherRim && !!ringZ;
   // D2/F1: the floor at the RIM's z (not a ring z) — evaluates to 0 whenever the
   // contents' far face is short of the mouth plane, so the drawstring still
   // closes; structural insurance against a deeper catch. Per-spoke (the box
@@ -695,17 +737,17 @@ function buildWebPositionsDraped(out, p) {
     const a  = angA ? angA[s] : (2 * Math.PI * s) / radialSpokes;
     const ca = cosA ? cosA[s] : Math.cos(a);
     const sa = sinA ? sinA[s] : Math.sin(a);
+    const zTip = gatherRim ? ringZ[rings * radialSpokes + s] : zRim;
     const rimFloor = floorOn
-      ? contentsFloorClamped(zRim, ca, sa, mouthRadius, contentsZ, contentsR, contentsBox, NET_CER.CONTENTS_FLOOR_MARGIN, -coneHeight)
+      ? contentsFloorClamped(zTip, ca, sa, mouthRadius, contentsZ, contentsR, contentsBox, NET_CER.CONTENTS_FLOOR_MARGIN, -coneHeight)
       : 0;
     const r = Math.max(
       drapeRingRadius(1, a, mouthRadius, drape, cinch, closed, jigA, jigP),
       rimFloor);
     out[idx++] = 0; out[idx++] = 0; out[idx++] = 0;
-    out[idx++] = ca * r; out[idx++] = sa * r; out[idx++] = zRim;
+    out[idx++] = ca * r; out[idx++] = sa * r; out[idx++] = zTip;
   }
   // Rings.
-  const ringZ = p.ringZ ?? null;   // item 12: redistributed per-(ring,spoke) z (box floor on)
   for (let k = 1; k <= rings; k++) {
     const t = k / rings;
     const z = drapeRingZ(t, coneHeight, drape);
@@ -732,10 +774,15 @@ function buildWebPositionsDraped(out, p) {
       // vertex's OWN z — identical rule, per-spoke arguments. The ring slides
       // ALONG the drape surface, so the natural radius follows the ring's own
       // z: t' = the natural-ring t at that depth (identity when ringZ is null).
+      // Round 3 (V3): the GATHERED mouth ring keeps t = 1 — it carries the
+      // cinched drawstring radius onto the rosette plane (a mouth ring that
+      // re-derived t from its gathered depth would re-OPEN to the cone radius
+      // there, undoing the cinch).
       const z0 = ringZ ? ringZ[k * radialSpokes + s]  : z;
       const z1 = ringZ ? ringZ[k * radialSpokes + s1] : z;
-      const t0 = ringZ ? depthToRingT(-z0, coneHeight, drape) : t;
-      const t1 = ringZ ? depthToRingT(-z1, coneHeight, drape) : t;
+      const gRim = gatherRim && k === rings;
+      const t0 = ringZ && !gRim ? depthToRingT(-z0, coneHeight, drape) : t;
+      const t1 = ringZ && !gRim ? depthToRingT(-z1, coneHeight, drape) : t;
       const open0 = ringZ ? mouthRadius * (-z0 / coneHeight) : openCone;
       const open1 = ringZ ? mouthRadius * (-z1 / coneHeight) : openCone;
       const f0 = floorOn ? contentsFloorClamped(z0, c0, n0, open0, contentsZ, contentsR, contentsBox, NET_CER.CONTENTS_FLOOR_MARGIN, -coneHeight) : 0;
@@ -801,6 +848,7 @@ function updateMembraneLattice(out, p) {
   const sinA = (p.sinA && p.sinA.length === radialSpokes) ? p.sinA : null;
   const angA = (p.angA && p.angA.length === radialSpokes) ? p.angA : null;
   const ringZ = p.ringZ ?? null;   // item 12: same per-(ring,spoke) z as the web (the weld)
+  const gatherRim = !!p.gatherRim && !!ringZ;   // round 3 (V3): rosette plane on ring `rings`
   let idx = 0;
   for (let k = 0; k <= rings; k++) {
     const t = k / rings;
@@ -818,8 +866,11 @@ function updateMembraneLattice(out, p) {
       const openK = ringZ ? mouthRadius * (-z / coneHeight) : openCone;
       // Item 12: the ring slides along the drape surface — the natural radius
       // and the V8 dent follow the ring's own z (t' = the natural-ring t at
-      // that depth; identity when ringZ is null).
-      const tK = ringZ ? depthToRingT(-z, coneHeight, drape) : t;
+      // that depth; identity when ringZ is null). Round 3 (V3): the gathered
+      // mouth ring keeps t = 1 so the film's rim carries the cinched radius
+      // onto the rosette plane — same rule as the thread builder (the weld).
+      const tK = ringZ && !(gatherRim && k === rings)
+        ? depthToRingT(-z, coneHeight, drape) : t;
       let r = drapeRingRadius(tK, a, mouthRadius, drape, cinch, closed, jigA, jigP);
       if (compressM > 0 && drape > 0) {
         const g = (tK - contactT) / 0.18;
@@ -1113,6 +1164,10 @@ export const NetMeshKit = {
       // kit-internal layout state (used by setMouthFraction / setSpinAngle)
       _rimAngles: rimAngles,
       _mouthZ: mouthZ,
+      // Round 3 (V3): the EFFECTIVE mouth plane — the sock-gather rosette
+      // plane while the lasso wrap gathers, h._mouthZ otherwise. Maintained
+      // by updateWebDrape; read by setRimCinch and _mouthFloorMax.
+      _mouthZEff: mouthZ,
       _spinAngle: 0,
       // Phase D.5 drape state (per-frame update path)
       _drape: 0,
@@ -1185,9 +1240,14 @@ export const NetMeshKit = {
       h.mouthRadius + (h.closedRadius - h.mouthRadius) * tc,
       _mouthFloorMax(h),
     );
+    // Round 3 (V3): beads + drawstring ride the EFFECTIVE mouth plane — the
+    // sock-gather rosette when the lasso wrap pulled the mouth ring toward
+    // the piece, the kit mouth plane otherwise (`_mouthZEff` === `_mouthZ`
+    // whenever the gather is off — byte-identical for every other caller).
+    const zEff = h._mouthZEff ?? h._mouthZ;
     for (let i = 0; i < h.weightCount; i++) {
       const a = h._rimAngles[i] + h._spinAngle;
-      h.rimWeights[i].position.set(Math.cos(a) * r, Math.sin(a) * r, h._mouthZ);
+      h.rimWeights[i].position.set(Math.cos(a) * r, Math.sin(a) * r, zEff);
     }
     if (h.weightCount > 0) this.updateDrawstring(h);
   },
@@ -1453,13 +1513,18 @@ export const NetMeshKit = {
    */
   updateWebDrape(h, { drape = 0, cinchFrac = 0, jigglePhase = 0, jiggleAmp = 0,
                       contentsRadius = 0, contentsZ = 0, contentsBox = null, localCamPos,
-                      catchSizeM = 0 } = {}) {
+                      catchSizeM = 0, mouthGather = 0 } = {}) {
     if (!h || !h.webPositions || !h.coneMesh) return;
     h._drape = drape;
     h._cinchFrac = cinchFrac;
     h._jigglePhase = jigglePhase;
     h._jiggleAmp = jiggleAmp;
     h._catchSizeM = catchSizeM;
+    // Round 3 (V3 sock gather): 0 (default) is byte-identical everywhere; the
+    // LASSO wrap ramps it after the cinch so the mouth-side fabric gathers
+    // toward the piece (drawstring-rosette language) instead of trailing as
+    // an empty sock. Ring-z lever only — no gate-pinned family moves.
+    h._mouthGather = mouthGather;
     // Bubble-look fix (2026-08-25): fade the film toward the welded rest as
     // the drawstring closes, so the catch reads through its own wrap instead
     // of vanishing behind an opaque tent (the closed DoubleSide film at 0.28
@@ -1516,12 +1581,23 @@ export const NetMeshKit = {
     // BOTH builders so film and threads deform identically (the weld). Sphere
     // floor / flight / no-contents ⇒ null ⇒ the builders take the natural
     // drapeRingZ z's, bit-identical to the pre-item-12 path.
-    const ringZ = (drape > 0 && contentsBoxValid(h._contentsBox))
-      ? _ringZGrid(h._ringZ, {
+    const gridP = (drape > 0 && contentsBoxValid(h._contentsBox))
+      ? {
         coneHeight: h.coneHeight, radialSpokes: h.radialSpokes, rings: h.rings,
         drape, contentsBox: h._contentsBox, cosA: h._cosA, sinA: h._sinA,
-      })
+        mouthGather,
+      }
       : null;
+    const ringZ = gridP ? _ringZGrid(h._ringZ, gridP) : null;
+    // Round 3 (V3): the EFFECTIVE mouth plane — the float64 rosette plane
+    // when the gather moved ring `rings` (reported by the grid pass; never a
+    // float32 read-back), the kit mouth plane otherwise. setRimCinch and
+    // _mouthFloorMax read it so the drawstring beads ride the gathered
+    // fabric; with gather 0 it IS h._mouthZ and every consumer is
+    // byte-identical.
+    h._mouthZEff = (gridP && Number.isFinite(gridP.mouthPlaneOut))
+      ? gridP.mouthPlaneOut : h._mouthZ;
+    const gatherRim = mouthGather > 0 && !!ringZ;
     buildWebPositionsDraped(h.webPositions, {
       mouthRadius: h.mouthRadius,
       coneHeight: h.coneHeight,
@@ -1538,6 +1614,7 @@ export const NetMeshKit = {
       sinA: h._sinA,
       angA: h._angA,
       ringZ,
+      gatherRim,
     });
     // In-place GPU push: no new geometry/attribute/buffer, no bounds recompute.
     const buf = h.webBuffer || h.coneMesh.geometry.attributes.instanceStart.data;
@@ -1568,6 +1645,7 @@ export const NetMeshKit = {
         sinA: h._sinA,
         angA: h._angA,
         ringZ,
+        gatherRim,
         // V8: contact compression — the film (not the threads) dents where the
         // catch presses, depth from the SSOT fraction of the mouth radius.
         compressM: NET_WEB.CONTACT_COMPRESS_FRAC * h.mouthRadius,

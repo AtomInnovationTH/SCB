@@ -760,9 +760,12 @@ export class LassoSystem {
      * drawable scale (bare headless mocks) — the kit treats that as an empty
      * net bunching to a point, its documented contract.
      * @param {number} cinchT wrap progress in [0, 1]
+     * @param {number} [gatherT] round 3 (V3): sock-gather amount in [0, 1] —
+     *   how far the mouth ring has eased toward the contents' far face
+     *   (0 during the wrap window; ramps over WRAP_SOCK_GATHER_RAMP after)
      * @private
      */
-    _driveWrapDrape(cinchT) {
+    _driveWrapDrape(cinchT, gatherT = 0) {
         const kit = this._netKit;
         if (!kit) return;
         const drape = Math.min(1, cinchT * 2);
@@ -813,6 +816,7 @@ export class LassoSystem {
             contentsZ,
             contentsBox,
             catchSizeM,
+            mouthGather: gatherT,
         });
     }
 
@@ -1293,7 +1297,7 @@ export class LassoSystem {
         this._muzzleFlash.scale.setScalar(Constants.LASSO_MUZZLE_FLASH_SCALE);
         this._muzzleFlash.visible = true;
         this._muzzleFlashTimer = Constants.LASSO_MUZZLE_FLASH_TIME;
-        this._muzzleFlash.material.opacity = 0.95;
+        this._muzzleFlash.material.opacity = Constants.LASSO_MUZZLE_FLASH_OPACITY ?? 0.95;
         // Phase 1C: kick the mother mesh opposite the launch (cosmetic only).
         this._launchRecoil(this._lastLaunchDir);
 
@@ -1404,7 +1408,7 @@ export class LassoSystem {
         // free (hold clear of the occupant, settle in, then adopt onto the one
         // holding model). Runs independent of active state — the wait persists
         // across casts.
-        this._updatePendingAdoption(dt, playerPos, playerVelDir);
+        this._updatePendingAdoption(dt, playerPos, playerVelDir, debrisField);
 
         // Proactive "in range — press N" prompt (gap C.3). Fires once when the
         // Tab-selected target first enters a castable state (in range, in the
@@ -1487,8 +1491,19 @@ export class LassoSystem {
                 const cinchT = Math.min(1, this._reelProgress / WRAP_END);
                 if (this._netGroup) this._netGroup.scale.setScalar(1.0);
                 if (this._netKit) {
+                    // Round 3 (V3) — sock gather: once the cinch completes the
+                    // mouth ring eases toward the piece (rosette ON the
+                    // bundle) instead of trailing at the mouth plane as an
+                    // empty sock through the whole reel. Drape first, rim
+                    // second: setRimCinch reads the drape's effective mouth
+                    // plane (_mouthZEff) so the beads ride THIS frame's
+                    // gathered fabric.
+                    const gatherT = (Constants.NET_WEB.WRAP_SOCK_GATHER_FRAC ?? 0)
+                        * Math.min(1, Math.max(0,
+                            (this._reelProgress - WRAP_END)
+                            / (Constants.NET_WEB.WRAP_SOCK_GATHER_RAMP ?? 0.25)));
+                    this._driveWrapDrape(cinchT, gatherT);
                     NetMeshKit.setRimCinch(this._netKit, cinchT);
-                    this._driveWrapDrape(cinchT);
                 }
             } else if (this._netGroup) {
                 this._netGroup.scale.setScalar(
@@ -1555,9 +1570,6 @@ export class LassoSystem {
             // it stays visible inside the net during the haul.
             if (this.target) {
                 this._reelPinTarget = this.target;
-                if (!this.target._armPinPos) this.target._armPinPos = new THREE.Vector3();
-                this.target._armPinPos.copy(piecePos);
-                this.target._armPinned = true;
                 // 2026-08-26 round 2 — pin-priority belt: the onboarding tease
                 // pin OUTRANKS the arm pin in DebrisField._updateInstanceTransform
                 // (:2230 before :2240). Its release rides the LASSO_CONTACT
@@ -1570,6 +1582,11 @@ export class LassoSystem {
                 // ("an arm capture releases the pin first, _armPinned wins after").
                 this.target._onboardingPinned = false;
                 this.target._catchRenderMin = DebrisWireframe.scaleForRenderRadiusM(Constants.MOTHER_CATCH_MIN_RENDER_M, this.target.type, this.target.id);
+                // Round 3: SAME-FRAME pin — pinCapturedDebris force-writes
+                // `_scenePosition` + the rendered instance NOW (debrisField
+                // already ran this frame; a bare `_armPinPos` write would not
+                // draw until NEXT frame = one ship-step behind, see _pinFresh).
+                this._pinFresh(debrisField, this.target, piecePos);
             }
         } else {
             // Flight phase: homing projectile tracks target in local frame
@@ -1645,14 +1662,14 @@ export class LassoSystem {
                 // reel branch then animates _armPinPos toward the mother.
                 if (this.target) {
                     this._reelPinTarget = this.target;
-                    if (!this.target._armPinPos) this.target._armPinPos = new THREE.Vector3();
-                    this.target._armPinPos.copy(this.target._scenePosition || this._targetScenePos || this.projectilePos);
-                    this.target._armPinned = true;
                     // Round-2 pin-priority belt (see the reel-frame twin above):
                     // the arm pin owns the piece from contact on, regardless of
                     // whether the LASSO_CONTACT release listener wins its race.
                     this.target._onboardingPinned = false;
                     this.target._catchRenderMin = DebrisWireframe.scaleForRenderRadiusM(Constants.MOTHER_CATCH_MIN_RENDER_M, this.target.type, this.target.id);
+                    // Round 3: same-frame pin (register-9 idiom — see _pinFresh).
+                    this._pinFresh(debrisField, this.target,
+                        this.target._scenePosition || this._targetScenePos || this.projectilePos);
                 }
 
                 // Contact flash removed per user feedback ("NOT an arcade game")
@@ -1801,6 +1818,40 @@ export class LassoSystem {
     }
 
     /**
+     * Round 3 (2026-08-26) — same-frame pin, the register-9 idiom. THE ROOT
+     * CAUSE of the "ghost piece" / refused catch-cut: DebrisField.update
+     * (main.js:3877) consumes `_armPinPos` BEFORE this system moves it
+     * (main.js:3973), so a bare `_armPinPos` write left the rendered piece —
+     * and `_scenePosition`, which the catch cut and its 250 m sanity fence
+     * read — exactly ONE FRAME of apparent ship travel behind the net:
+     * ~128 m at 60 fps, 7.7 km under the SwiftShader 0.1 s dt clamp
+     * (tmp/lasso11-rec frames 42–56: pin fresh at 22 m, _scenePosition
+     * stale at 7678 m, EVERY reel frame; the fence aborted the cut at entry
+     * in 3/3 takes). ArmManager (:1801) and CaptureNet (:1821/:2140/:3141)
+     * already solve this exact ordering with `pinCapturedDebris` — "force
+     * the rendered instance ... THIS frame, overriding whatever
+     * this.update() computed earlier" — the lasso was the ONLY per-frame
+     * pin writer missing the idiom. Headless mocks without a field (or with
+     * a bare mock lacking the method) keep the old writes bit-for-bit.
+     * @param {object|null} debrisField
+     * @param {object} target
+     * @param {THREE.Vector3} pos — scene position for the pin THIS frame
+     * @private
+     */
+    _pinFresh(debrisField, target, pos) {
+        if (!target || !pos) return;
+        // Own the lasso-side pin state unconditionally (headless mocks may
+        // implement pinCapturedDebris sparsely; the reel/pending math reads
+        // _armPinPos back).
+        if (!target._armPinPos) target._armPinPos = new THREE.Vector3();
+        if (target._armPinPos !== pos) target._armPinPos.copy(pos);
+        target._armPinned = true;
+        if (debrisField && typeof debrisField.pinCapturedDebris === 'function') {
+            debrisField.pinCapturedDebris(target, target._armPinPos);
+        }
+    }
+
+    /**
      * Cargo-continuity S13(d): resolve a completed reel. The ONE holding model —
      * the catch adopts onto the CaptureNetSystem's nose-collar berth and rides the
      * exact machinery an S3 mother catch does (berth hold → securing mate → ledger
@@ -1851,11 +1902,12 @@ export class LassoSystem {
         // Snap it exactly onto the DELIVERY point (seat + adoption's interior
         // seat depth — 2026-08-26 round 2) so the adoption hand-off is seamless:
         // the catch IS there; updateBerthHold pins the same point (no gap, no pop).
+        // Round 3: through the same-frame pin (CaptureNet's berth tick already
+        // ran this frame — a bare write would render the hand-off frame one
+        // ship-step behind; see _pinFresh).
         if (target) {
             this._reelDeliveryWorld(target, playerPos, playerVelDir, _scratchMuzzle);
-            if (!target._armPinPos) target._armPinPos = new THREE.Vector3();
-            target._armPinPos.copy(_scratchMuzzle);
-            target._armPinned = true;
+            this._pinFresh(debrisField, target, _scratchMuzzle);
         }
 
         this._beginWebFadeOut();   // crossfade into the adoption's berthed bag
@@ -1864,7 +1916,7 @@ export class LassoSystem {
         this.cooldownMax = Constants.LASSO_COOLDOWN_CATCH;
         eventBus.emit(Events.LASSO_COOLDOWN_START, { duration: Constants.LASSO_COOLDOWN_CATCH });
 
-        if (target) this._adoptOrPend(target, playerPos, playerVelDir);
+        if (target) this._adoptOrPend(target, playerPos, playerVelDir, debrisField);
     }
 
     /**
@@ -1893,9 +1945,10 @@ export class LassoSystem {
      * @param {object} target
      * @param {THREE.Vector3} playerPos
      * @param {THREE.Vector3|null} playerVelDir
+     * @param {object|null} [debrisField] — same-frame pin when present (round 3)
      * @private
      */
-    _adoptOrPend(target, playerPos, playerVelDir) {
+    _adoptOrPend(target, playerPos, playerVelDir, debrisField = null) {
         const cns = this._captureNetSystem;
         if (!cns.getDockedCatch() && !cns.hasMotherNetInFlight() && cns.adoptLassoCatch(target)) {
             return;
@@ -1903,7 +1956,7 @@ export class LassoSystem {
         // Collar busy, or the adoption was refused (a context race) — hold the
         // catch clear of the occupant and retry; cargo is never dropped.
         this._pendingAdoption = { target, phase: 'wait', settleT: 0, fromPos: null, announced: false };
-        this._pinPending(target, playerPos, playerVelDir);
+        this._pinPending(target, playerPos, playerVelDir, debrisField);
     }
 
     /**
@@ -1917,7 +1970,7 @@ export class LassoSystem {
      * @param {THREE.Vector3|null} playerVelDir
      * @private
      */
-    _updatePendingAdoption(dt, playerPos, playerVelDir) {
+    _updatePendingAdoption(dt, playerPos, playerVelDir, debrisField = null) {
         const p = this._pendingAdoption;
         if (!p) return;
         const target = p.target;
@@ -1942,7 +1995,7 @@ export class LassoSystem {
                 });
             }
             if (busy) {
-                this._pinPending(target, playerPos, playerVelDir);
+                this._pinPending(target, playerPos, playerVelDir, debrisField);
             } else {
                 // Station freed — glide onto the collar seat, then adopt.
                 p.phase = 'settle';
@@ -1960,7 +2013,7 @@ export class LassoSystem {
         const stillBusy = cns.getDockedCatch() || cns.hasMotherNetInFlight();
         if (stillBusy) {
             p.phase = 'wait';
-            this._pinPending(target, playerPos, playerVelDir);
+            this._pinPending(target, playerPos, playerVelDir, debrisField);
             return;
         }
         p.settleT += dt;
@@ -1972,9 +2025,11 @@ export class LassoSystem {
         this._reelDeliveryWorld(target, playerPos, playerVelDir, _scratchMuzzle);
         if (!target._armPinPos) target._armPinPos = new THREE.Vector3();
         target._armPinPos.copy(p.fromPos).lerp(_scratchMuzzle, ease);
-        target._armPinned = true;
         target._motherParked = true;
         target._catchRenderMin = DebrisWireframe.scaleForRenderRadiusM(Constants.MOTHER_CATCH_MIN_RENDER_M, target.type, target.id);
+        // Round 3: same-frame pin (register-9 idiom — see _pinFresh). The glide
+        // must RENDER each eased step this frame, not one ship-step behind.
+        this._pinFresh(debrisField, target, target._armPinPos);
         if (f >= 1) {
             // The seat is reached — adopt. If the collar was re-occupied between
             // this frame's check and the adoption (belt-and-braces; cargo is never
@@ -1998,18 +2053,20 @@ export class LassoSystem {
      * @param {object} target
      * @param {THREE.Vector3} playerPos
      * @param {THREE.Vector3|null} playerVelDir
+     * @param {object|null} [debrisField] — same-frame pin when present (round 3)
      * @private
      */
-    _pinPending(target, playerPos, playerVelDir) {
+    _pinPending(target, playerPos, playerVelDir, debrisField = null) {
         const cns = this._captureNetSystem;
         this._collarSeatWorld(target, playerPos, playerVelDir, _scratchMuzzle);
         const depthM = cns ? cns.getCollarQueueDepthM() : 0;
         this._berthAxis(playerVelDir, _scratchFwd);
         if (!target._armPinPos) target._armPinPos = new THREE.Vector3();
         target._armPinPos.copy(_scratchMuzzle).addScaledVector(_scratchFwd, depthM * M);
-        target._armPinned = true;
         target._motherParked = true;
         target._catchRenderMin = DebrisWireframe.scaleForRenderRadiusM(Constants.MOTHER_CATCH_MIN_RENDER_M, target.type, target.id);
+        // Round 3: same-frame pin (register-9 idiom — see _pinFresh).
+        this._pinFresh(debrisField, target, target._armPinPos);
     }
 
     /**
@@ -2345,7 +2402,8 @@ export class LassoSystem {
         if (this._muzzleFlashTimer > 0) {
             this._muzzleFlashTimer -= dt;
             const flashLife = Constants.LASSO_MUZZLE_FLASH_TIME || 0.2;
-            this._muzzleFlash.material.opacity = Math.max(0, this._muzzleFlashTimer / flashLife) * 0.95;
+            this._muzzleFlash.material.opacity = Math.max(0, this._muzzleFlashTimer / flashLife)
+                * (Constants.LASSO_MUZZLE_FLASH_OPACITY ?? 0.95);
             if (this._muzzleFlashTimer <= 0) {
                 this._muzzleFlash.visible = false;
             }

@@ -2310,11 +2310,15 @@ export class DebrisField {
     // Register item 21b: the floor predicate itself now has ONE home —
     // `catchRenderFloorScale`. This writer passes its OWN pinned local (the
     // stricter `_armPinned && _armPinPos` — it also gates the pin-position read
-    // above); the SSOT reader uses the field-only default. This site is the ONLY
-    // matrix writer for a lasso-held catch (LassoSystem never calls
-    // `pinCapturedDebris`), so it composes with the LOD multipliers above and
-    // the reveal smoothstep below IN PLACE — deliberately not a call to
-    // `effectiveRenderScale`, which reads the base, not this frame's LOD slot.
+    // above); the SSOT reader uses the field-only default. Round 3 (2026-08-26):
+    // LassoSystem now routes its per-frame reel/pending pins through
+    // `pinCapturedDebris` (the register-9 same-frame force-write) because THIS
+    // site runs before lassoSystem.update in the frame — a bare `_armPinPos`
+    // write drew one ship-step behind the net (7.7 km under the SwiftShader dt
+    // clamp; tmp/lasso11-rec). This site still composes with the LOD
+    // multipliers above and the reveal smoothstep below IN PLACE — deliberately
+    // not a call to `effectiveRenderScale`, which reads the base, not this
+    // frame's LOD slot.
     scale = DebrisField.catchRenderFloorScale(debris, scale, _armPinned);
 
     // ST-6.2: Store LOD scale for flag overlay sync

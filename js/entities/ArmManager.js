@@ -1779,6 +1779,16 @@ export class ArmManager {
             // the player sees being fed to the furnace. Ramp over the chop phase so
             // the swap reads as the catch coming apart, not popping out. S6: per
             // piece — only the rack's oldest (the piece being chopped) ramps.
+            // Round 3 (2026-08-26, V5) — REVIEWED and deliberately left as-is:
+            // unlike the collar chop (small-catch W3, which had NO covering
+            // visual until the bag deflation), the rack chop is already
+            // staged honest — FurnaceBreakdownVisual's chunk stream IS the
+            // read, synchronized on the same _digestPhaseT clock, and this
+            // ramp is its crossfade by design. A rack-side wrap stub/shroud
+            // would be fictionally wrong (the daughter's net stowed at
+            // NET_REEL_COMPLETED; the strut holds cargo bare) and would
+            // reopen gate-adjacent choreography on a path no owner report
+            // names. Revisit only on an owner complaint that names the rack.
             let scaleMul = 1;
             if (d._breakdownActive) {
               // Phase boundaries from the single authoritative constant (same keys

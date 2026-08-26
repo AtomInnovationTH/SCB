@@ -584,6 +584,13 @@ export class CaptureNetVisual {
 
     const group = new THREE.Group();
     group.name = `CaptureNetVis_${key}`;
+    // Round 3 (2026-08-26): seed the group AT the net on creation. The group
+    // otherwise sits at the scene origin until the first update tick — and a
+    // NET_ADOPTED visual is born AFTER this system's update ran for the frame
+    // (adoptLassoCatch fires from lassoSystem.update, main.js:3973 vs :3894),
+    // so its creation frame rendered from the origin (tmp/lasso11-rec LP5:
+    // groupPos ≈ −shipPos). One copy; the per-frame track overwrites it.
+    if (netProjectile.position) group.position.copy(netProjectile.position);
 
     // ── Canister (FOLDED / LAUNCHING) ──
     const canGeo = new THREE.CylinderGeometry(M * 0.08, M * 0.08, M * 0.25, 8);
@@ -666,6 +673,10 @@ export class CaptureNetVisual {
   _createCeremonyVisual(key, armIndex, podIndex, netProjectile) {
     const group = new THREE.Group();
     group.name = `CaptureNetVis_${key}`;
+    // Round 3: same creation-frame seed as the flag-OFF path (see
+    // _createNetVisual) — an adopted bag must never spend its birth frame at
+    // the scene origin.
+    if (netProjectile.position) group.position.copy(netProjectile.position);
 
     // ── Canister (FOLDED / LAUNCHING) — same as flag-OFF ──
     const canGeo = new THREE.CylinderGeometry(M * 0.08, M * 0.08, M * 0.25, 8);

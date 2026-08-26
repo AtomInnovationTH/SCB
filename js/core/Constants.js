@@ -2443,7 +2443,14 @@ export const Constants = {
   LASSO_RECOIL_KICK_M: 2.5,           // metres — peak cosmetic mesh kick opposite launch (visual only; no orbit/fuel change)
   LASSO_RECOIL_DECAY: 5.0,            // 1/s — critically-damped spring rate for the recoil kick to settle back
   LASSO_MUZZLE_FLASH_TIME: 0.25,      // seconds — brief muzzle puff lifetime
-  LASSO_MUZZLE_FLASH_SCALE: 0.5,      // multiplier on the muzzle-flash sphere (small puff, not a hull-sized white blob)
+  // Round 3 (2026-08-26, V4): the launch frame read as a blown-out white blob
+  // on every take (tmp/lasso9-day f001) — a 5 m near-solid white sphere
+  // (10 m geo × 0.5 scale at 0.95 opacity) parked at the nose right where the
+  // opening web crosses it in screen space. Tamed to a genuine sub-bloom puff:
+  // ~1.8 m radius at 0.4 peak opacity — the thwip stays visible, the frame
+  // stays readable. Same 0.25 s life.
+  LASSO_MUZZLE_FLASH_SCALE: 0.18,     // multiplier on the muzzle-flash sphere (small puff, not a hull-sized white blob)
+  LASSO_MUZZLE_FLASH_OPACITY: 0.4,    // peak opacity at launch (was a hardcoded 0.95 — solid white)
 
   // --- Mother-net capture ceremony Phase 3 (reel-in physics) ---
   // .kilo/plans/mother-net-capture-ceremony.md §PHASE 3 (flag LASSO_REEL_PHYSICS).
@@ -2677,6 +2684,18 @@ export const Constants = {
     // recedes. Whale-class (≥ LARGE_SIZE_M) and size-less mocks stay at the
     // 0.55 byte — the gated pod subjects never move.
     THREAD_OPACITY_HELD_SMALL: 0.30,
+    // 2026-08-26 (round 3, V3) — sock gather: after the cinch the mouth-side
+    // fabric trailed as an EMPTY gathered sock behind the bundle (the mouth
+    // ring + drawstring park on the mouth plane, ~3 m behind a sub-metre
+    // piece). The LASSO wrap now gathers the mouth ring toward the contents'
+    // far face (drawstring-rosette language) — a ring-z lever of the lasso
+    // kit only (NetMeshKit updateWebDrape `mouthGather`); the pod-path bag
+    // never passes it, so every gate-pinned geometry family is untouched by
+    // construction. FRAC = how far toward the far face the rosette lands
+    // (1 = ON the face); RAMP = reel-progress span after WRAP_END over which
+    // the gather eases in (the wrap itself stays the round-2 look).
+    WRAP_SOCK_GATHER_FRAC: 0.75,
+    WRAP_SOCK_GATHER_RAMP: 0.25,
   },
 
   // =========================================================================
