@@ -3669,6 +3669,19 @@ export class CaptureNetSystem {
 
     this.activeNets.push(net);
 
+    // 2026-08-26 — attach the standard berthed-bag VISUAL. NET_FIRED /
+    // NET_BERTHED / NET_CEREMONY_START stay suppressed on this path (launch
+    // recoil, autopilot attitude-hold, berth clunk, camera beats — the
+    // spectacle adoption must not inherit), but the visual-only gap they left
+    // was real: CaptureNetVisual creates bags on NET_FIRED alone, so every
+    // adopted lasso catch sat at the collar as a BARE floored icosahedron
+    // through berth + digestion and then chop-shrank in the open
+    // (tmp/lasso2-day-before f005–f010 — the owner's "debris shrinks wrapped
+    // in a geodesic bubble" on the REAL catch path). NET_ADOPTED has exactly
+    // one consumer by design: the visual attaches the same cinched bag +
+    // welded film + W3 chop deflation an S3 mother berth gets.
+    eventBus.emit(Events.NET_ADOPTED, { podIndex: 0, armIndex: -1 });
+
     // The catch's mass just entered the berthed ledger. A mother berth invalidates
     // the attitude inertia via NET_BERTHED; this path must not emit that event (it
     // chains the launch/berth ceremony), so invalidate the cache directly — same

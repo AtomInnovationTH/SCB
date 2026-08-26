@@ -16,6 +16,7 @@ import { orbitToSceneCartesian } from '../entities/OrbitalMechanics.js';
 import { classifyNetTarget } from './netRouting.js';
 import { NetMeshKit } from '../ui/NetMeshKit.js';
 import { DebrisWireframe } from '../ui/DebrisWireframe.js';
+import { DebrisField } from '../entities/DebrisField.js';
 import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
@@ -26,6 +27,14 @@ const M = 0.00001;
 /** Cargo-continuity S13(d): seconds a pending catch glides from its wait point
  *  onto the collar seat before adopting (smooths the hand-off, never a teleport). */
 const LASSO_ADOPT_SETTLE_S = 0.8;
+
+/** 2026-08-26 wrap-as-cloth: seconds the welded lasso web fades out over the
+ *  freshly adopted catch instead of blinking off at reel completion. The
+ *  adoption's berthed bag (NET_ADOPTED → CaptureNetVisual) appears at the same
+ *  collar seat the same frame, so the hand-off reads as a crossfade, not a pop.
+ *  Well under both cooldowns (catch 2 s / miss 1 s) — a re-cast can never race
+ *  a live fade in production. */
+const LASSO_WEB_FADE_S = 0.35;
 
 /** Reusable Z-axis vector for quaternion math */
 const _zAxis = new THREE.Vector3(0, 0, 1);
@@ -51,6 +60,21 @@ const _scratchCargoOffset = new THREE.Vector3();
 const _scratchNadir = new THREE.Vector3();
 const _scratchTetherAnchor = new THREE.Vector3();
 
+// 2026-08-26 wrap-as-cloth — scratches for the per-frame drape drive (the
+// contents spec mirrors CaptureNetVisual's; own copies so two live drivers
+// never share a scratch) and for the reel drag orientation.
+const _scratchAway = new THREE.Vector3();
+const _scratchOrientQuat = new THREE.Quaternion();
+const _scratchSpinQuat = new THREE.Quaternion();
+const _vWrapLocal = new THREE.Vector3();
+const _vWrapBox = new THREE.Vector3();
+const _qWrapA = new THREE.Quaternion();
+const _qWrapB = new THREE.Quaternion();
+const _m4Wrap = new THREE.Matrix4();
+const _wrapBoxScratch = { ox: 0, oy: 0, oz: 0,
+    r00: 1, r01: 0, r02: 0, r10: 0, r11: 1, r12: 0, r20: 0, r21: 0, r22: 1,
+    hx: 0, hy: 0, hz: 0 };
+
 export class LassoSystem {
     /**
      * @param {THREE.Scene} scene
@@ -74,6 +98,11 @@ export class LassoSystem {
          *  (_armPinned/_armPinPos), tracked so it can be released on reset even
          *  after this.target is cleared. */
         this._reelPinTarget = null;
+
+        /** @type {{t:number, dur:number, seed:object}|null} 2026-08-26 — live
+         *  web fade-out over a freshly adopted catch (crossfades into the
+         *  berthed bag); ticked by _updateVisualEffects, cleared at zero. */
+        this._webFade = null;
 
         /** @type {string|null} Target debris ID for live lookup */
         this._targetId = null;
@@ -676,6 +705,84 @@ export class LassoSystem {
         if (this._netKit) NetMeshKit.setMouthFraction(this._netKit, radiusFrac);
     }
 
+    /**
+     * 2026-08-26 wrap-as-cloth: drive the shared kit's REAL drape machinery —
+     * ring-collapse cinch onto the caught piece's contents floor, item-12
+     * elbow redistribution, and the W2a size-aware welded film — during the
+     * lasso's WRAP + haul. This is the exact vocabulary the mother pod-net
+     * speaks (CaptureNetVisual.js drape driver); the lasso previously never
+     * called updateWebDrape at all, so its "wrap" was a bare cone XY scale.
+     * Envelop leads (drape saturates by cinchT 0.5), the drawstring completes
+     * (cinchFrac = cinchT, held 1 through the haul), and the film fades
+     * base → the SMALL welded rest (catchSizeM = LOGICAL size — the floored
+     * rendered radius pops at reel entry and would re-fade the film; same
+     * W2a rationale as the mother path).
+     *
+     * The caught piece is pinned AT the projectile each reel frame
+     * (target._armPinPos ← projectilePos), i.e. at the kit-group origin —
+     * contentsZ ≈ 0, the co-located apex-pin case the kit pins in its own
+     * item-12 family. The oriented-box spec mirrors CaptureNetVisual.js
+     * :1341–1365 (own scratches — two live drivers must never share one).
+     * Contents are omitted (0 / null) whenever the debris carries no
+     * drawable scale (bare headless mocks) — the kit treats that as an empty
+     * net bunching to a point, its documented contract.
+     * @param {number} cinchT wrap progress in [0, 1]
+     * @private
+     */
+    _driveWrapDrape(cinchT) {
+        const kit = this._netKit;
+        if (!kit) return;
+        const drape = Math.min(1, cinchT * 2);
+        const d = this.target;
+        let contentsRadius = 0, contentsZ = 0, contentsBox = null, catchSizeM = 0;
+        if (d && d._scenePosition) {
+            catchSizeM = d.sizeMeter || 0;
+            DebrisWireframe.getGeometry(d.type, d.id);            // br cache (uncached ⇒ 1)
+            const br = DebrisWireframe.getBoundingRadius(d.type, d.id) || 1;
+            const renderScale = DebrisField.effectiveRenderScale(d);
+            if (Number.isFinite(renderScale) && renderScale > 0) {
+                contentsRadius = renderScale * br;
+                kit.group.updateMatrixWorld(true);
+                const lp = kit.group.worldToLocal(_vWrapLocal.copy(d._scenePosition));
+                contentsZ = lp.z;
+                const bb = DebrisWireframe.getBoundingBoxExtents(d.type, d.id);
+                if (bb) {
+                    // Catch orientation in kit space: qB2K = qKit⁻¹ ⊗ tumble
+                    // (frozen while _armPinned — the wrap cannot spin/drift).
+                    kit.group.getWorldQuaternion(_qWrapA);
+                    if (d.tumbleAxis) _qWrapB.setFromAxisAngle(d.tumbleAxis, d.tumbleAngle || 0);
+                    else _qWrapB.identity();
+                    _qWrapA.invert().multiply(_qWrapB);           // box-local → kit-space
+                    _vWrapBox.set(bb.cx * renderScale, bb.cy * renderScale, bb.cz * renderScale)
+                        .applyQuaternion(_qWrapA);
+                    _wrapBoxScratch.ox = lp.x + _vWrapBox.x;
+                    _wrapBoxScratch.oy = lp.y + _vWrapBox.y;
+                    _wrapBoxScratch.oz = lp.z + _vWrapBox.z;
+                    // kit→box rotation rows (v_box = R·v_kit): matrix of qB2K⁻¹.
+                    _m4Wrap.makeRotationFromQuaternion(_qWrapA.invert());
+                    const e = _m4Wrap.elements;                    // column-major
+                    _wrapBoxScratch.r00 = e[0]; _wrapBoxScratch.r01 = e[4]; _wrapBoxScratch.r02 = e[8];
+                    _wrapBoxScratch.r10 = e[1]; _wrapBoxScratch.r11 = e[5]; _wrapBoxScratch.r12 = e[9];
+                    _wrapBoxScratch.r20 = e[2]; _wrapBoxScratch.r21 = e[6]; _wrapBoxScratch.r22 = e[10];
+                    _wrapBoxScratch.hx = bb.hx * renderScale;
+                    _wrapBoxScratch.hy = bb.hy * renderScale;
+                    _wrapBoxScratch.hz = bb.hz * renderScale;
+                    contentsBox = _wrapBoxScratch;
+                }
+            }
+        }
+        NetMeshKit.updateWebDrape(kit, {
+            drape,
+            cinchFrac: cinchT,
+            jigglePhase: 0,
+            jiggleAmp: 0,
+            contentsRadius,
+            contentsZ,
+            contentsBox,
+            catchSizeM,
+        });
+    }
+
     // Sparks removed per user feedback — "NOT an arcade game"
 
     /**
@@ -1121,6 +1228,14 @@ export class LassoSystem {
         });
 
         // Show capture net visuals (FIX-2.4a) — reset scale in case prior reel-in collapsed it
+        // 2026-08-26: a still-ticking web fade (tests can re-fire inside the
+        // fade window; production cooldowns cannot) hands the kit back to the
+        // new cast — rebuild the natural cone so the flight web never starts
+        // welded-shaped, then fall through to the normal fire staging.
+        if (this._webFade) {
+            this._webFade = null;
+            if (this._netKit) NetMeshKit.updateWebDrape(this._netKit, {});
+        }
         this._netGroup.visible = true;
         this._netGroup.scale.setScalar(1.0);
         // Phase 2: leave the canister with the mouth compact so the open-on-launch
@@ -1311,16 +1426,37 @@ export class LassoSystem {
             const WRAP_END = 0.2;                              // wrap phase: t ∈ [0, 0.2]
             const COMPACT_SCALE = Constants.NET_COMPACT_SCALE; // Sprint 2 v2: 0.45 (was 0.15 — too small to see)
 
+            // 2026-06-30 realism pass: the web stays ivory Dyneema through the
+            // haul too — a real net doesn't change colour when it grips. Capture
+            // state is signalled on the HUD/comms, not by recolouring the mesh
+            // (matches CaptureNetVisual.js). Hold the translucent web opacity.
+            // 2026-08-26 ORDER MATTERS: this hold runs BEFORE the drape drive
+            // below — setOpacity writes the membrane's plain 0.28 rest, and
+            // updateWebDrape's welded fade (base → size-aware welded by cinch)
+            // must land after it or the film re-brightens every frame and the
+            // fabric read dies (the same write-order law the mother path keeps
+            // between its state rows and its drape driver).
+            if (this._netKit) NetMeshKit.setColor(this._netKit, Constants.NET_WEB.WEB_COLOR);
+            this._setNetOpacity(Constants.NET_WEB.WEB_OPACITY);
+
             if (Constants.FEATURE_FLAGS.LASSO_NET_KINEMATICS) {
-                // Phase 2: drawstring CINCH on the catch — close the mouth radius
-                // around the debris over the WRAP window, then hold it cinched
-                // through the haul. Drive the radius directly (group scale stays 1
-                // so weights cinch toward centre rather than the whole net merely
-                // scaling down).
+                // 2026-08-26 wrap-as-cloth: the old driver here was
+                // _applyNetMouthRadius(mouthFrac) — NetMeshKit.setMouthFraction
+                // scales the cone+membrane XY uniformly, which is EXACTLY the
+                // owner's "debris shrinking wrapped in a geodesic bubble" read
+                // (a linear cone closing on itself, no fabric language). The
+                // wrap now speaks the same drape vocabulary as the mother
+                // pod-net: rim weights cinch onto the kit's own closed radius
+                // (rim-only primitive — the cone/membrane meshes stay at scale
+                // 1), while updateWebDrape bunches threads+film onto the
+                // caught piece's contents floor with the W2a size-aware welded
+                // fade (_driveWrapDrape below). Group scale stays 1 either way.
                 const cinchT = Math.min(1, this._reelProgress / WRAP_END);
-                const mouthFrac = 1.0 - cinchT * (1.0 - Constants.NET_CINCH_RADIUS_FRAC);
                 if (this._netGroup) this._netGroup.scale.setScalar(1.0);
-                this._applyNetMouthRadius(mouthFrac);
+                if (this._netKit) {
+                    NetMeshKit.setRimCinch(this._netKit, cinchT);
+                    this._driveWrapDrape(cinchT);
+                }
             } else if (this._netGroup) {
                 this._netGroup.scale.setScalar(
                     this._reelProgress < WRAP_END
@@ -1328,12 +1464,6 @@ export class LassoSystem {
                         : COMPACT_SCALE
                 );
             }
-            // 2026-06-30 realism pass: the web stays ivory Dyneema through the
-            // haul too — a real net doesn't change colour when it grips. Capture
-            // state is signalled on the HUD/comms, not by recolouring the mesh
-            // (matches CaptureNetVisual.js). Hold the translucent web opacity.
-            if (this._netKit) NetMeshKit.setColor(this._netKit, Constants.NET_WEB.WEB_COLOR);
-            this._setNetOpacity(Constants.NET_WEB.WEB_OPACITY);
             // Tether hidden at contact — no opacity update needed during reel-in
 
             let reelT;
@@ -1381,6 +1511,16 @@ export class LassoSystem {
             if (distToTarget < this._contactRadiusScene &&
                 this.flightTimer >= Constants.LASSO_MIN_FLIGHT_TIME) { // proximity + min-flight gate — contact!
                 this._reelingIn = true;
+                // 2026-08-26 wrap-as-cloth: normalize the kit out of the
+                // open-on-launch mouth scale ONCE at contact (openFrac has
+                // saturated by min-flight — 0.8 s > NET_SPIN_UP_TIME 0.4 s, so
+                // this is (1,1,1) already; the explicit write is the contract).
+                // From here the wrap owns the web via setRimCinch +
+                // updateWebDrape, which rebuild VERTICES in full-mouth space —
+                // any leftover mesh scale would shrink the drape's output.
+                if (Constants.FEATURE_FLAGS.LASSO_NET_KINEMATICS && this._netKit) {
+                    NetMeshKit.setMouthFraction(this._netKit, 1.0);
+                }
                 // Phase 3: latch whether reel-in physics applies to THIS catch.
                 // MANDATORY gate — disabled on Mission 1 and for ≤ the Mother-net
                 // mass cap, so the tutorial / welcome catches reel identically to
@@ -1488,9 +1628,20 @@ export class LassoSystem {
                     this._netGroup.quaternion.multiplyQuaternions(orientQuat, spinQuat);
                 }
             } else {
-                // During reel-in, just spin in place
+                // During reel-in: apex (tether side, kit origin) faces the ship
+                // and the wrapped mouth trails away, so the bundle reads as
+                // DRAGGED home by its tether. The old `rotation.z =` Euler
+                // write wiped the flight quaternion the frame the wrap started
+                // (the pose snapped to a world-axis cone). Spin continues
+                // around the local drag axis. 2026-08-26, wrap-as-cloth pass.
                 this._netSpinAngle += 2 * Math.PI * Constants.NET_SPIN_HZ * dt;
-                this._netGroup.rotation.z = this._netSpinAngle;
+                _scratchAway.copy(this.projectilePos).sub(playerPos);
+                if (_scratchAway.lengthSq() > 1e-18) {
+                    _scratchAway.normalize();
+                    _scratchOrientQuat.setFromUnitVectors(_negZAxis, _scratchAway);
+                    _scratchSpinQuat.setFromAxisAngle(_zAxis, this._netSpinAngle);
+                    this._netGroup.quaternion.multiplyQuaternions(_scratchOrientQuat, _scratchSpinQuat);
+                }
             }
         }
 
@@ -1592,12 +1743,31 @@ export class LassoSystem {
             target._armPinned = true;
         }
 
+        this._beginWebFadeOut();   // crossfade into the adoption's berthed bag
         this._resetLasso();
         this.cooldown = Constants.LASSO_COOLDOWN_CATCH;
         this.cooldownMax = Constants.LASSO_COOLDOWN_CATCH;
         eventBus.emit(Events.LASSO_COOLDOWN_START, { duration: Constants.LASSO_COOLDOWN_CATCH });
 
         if (target) this._adoptOrPend(target, playerPos, playerVelDir);
+    }
+
+    /**
+     * 2026-08-26 wrap-as-cloth: start the welded web's fade-out at reel
+     * completion (success paths only — misses keep the instant retract). The
+     * kit's live opacities are the seed (register-92 idiom) and the welded
+     * SHAPE is frozen: no drape writes run during the fade, so the bunched
+     * fabric dissolves in place over the catch while the adoption's berthed
+     * bag takes over — a crossfade, never a blink-off.
+     * @private
+     */
+    _beginWebFadeOut() {
+        if (!this._netKit || !this._netGroup || !this._netGroup.visible) return;
+        this._webFade = {
+            t: LASSO_WEB_FADE_S,
+            dur: LASSO_WEB_FADE_S,
+            seed: NetMeshKit.captureOpacity(this._netKit),
+        };
     }
 
     /**
@@ -1875,6 +2045,7 @@ export class LassoSystem {
             priority: 'info',
         });
 
+        this._beginWebFadeOut();   // success path — same crossfade as the adoption route
         this._resetLasso();
         this.cooldown = Constants.LASSO_COOLDOWN_CATCH;
         this.cooldownMax = Constants.LASSO_COOLDOWN_CATCH;
@@ -2004,10 +2175,14 @@ export class LassoSystem {
         this._reelPhysicsActive = false;
         this._strainTimer = 0;
 
-        if (this._netGroup) this._netGroup.visible = false;
+        if (this._netGroup && !this._webFade) this._netGroup.visible = false;
         // Phase 2: restore the mouth to full radius so the static net geometry is
         // correct if the flag is toggled off and the next cast starts clean.
-        if (Constants.FEATURE_FLAGS.LASSO_NET_KINEMATICS) this._applyNetMouthRadius(1.0);
+        // 2026-08-26: deferred while a web fade is live — the welded shape must
+        // dissolve in place; the fade's completion tick restores the geometry.
+        if (Constants.FEATURE_FLAGS.LASSO_NET_KINEMATICS && !this._webFade) {
+            this._applyNetMouthRadius(1.0);
+        }
         if (this._tetherMesh) {
             this._tetherMesh.visible = false;
             this._tetherMesh.material.opacity = 0;
@@ -2026,6 +2201,25 @@ export class LassoSystem {
      * @param {number} dt
      */
     _updateVisualEffects(dt) {
+        // 2026-08-26 — welded web fade-out over a freshly adopted catch. The
+        // shape is frozen (no drape writes); opacity rides the captured seed
+        // (register-92 idiom). At zero: hide, then restore the resting
+        // geometry the next cast expects (natural cone, open rim, scale 1 —
+        // the same normalization _resetLasso deferred while the fade lived).
+        if (this._webFade) {
+            this._webFade.t -= dt;
+            const s = Math.max(0, this._webFade.t / this._webFade.dur);
+            if (this._netKit) NetMeshKit.setOpacityScaled(this._netKit, this._webFade.seed, s);
+            if (s <= 0) {
+                this._webFade = null;
+                if (this._netGroup) this._netGroup.visible = false;
+                if (this._netKit) {
+                    NetMeshKit.updateWebDrape(this._netKit, {});   // natural cone; opacity untouched (not driven)
+                    NetMeshKit.setMouthFraction(this._netKit, 1.0);
+                }
+            }
+        }
+
         // Muzzle flash fade (LASSO_MUZZLE_FLASH_TIME)
         if (this._muzzleFlashTimer > 0) {
             this._muzzleFlashTimer -= dt;

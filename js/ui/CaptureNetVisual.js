@@ -251,6 +251,7 @@ export class CaptureNetVisual {
 
     // Bound handler refs for EventBus unsubscription
     this._boundNetFired = null;
+    this._boundNetAdopted = null;
     this._boundNetCaught = null;
     this._boundNetMiss = null;
     this._boundReelCompleted = null;
@@ -293,6 +294,14 @@ export class CaptureNetVisual {
     this._boundTierChanged   = (p) => { this._tier = p?.to ?? this._tier; };
 
     eventBus.on(Events.NET_FIRED,          this._boundNetFired);
+    // 2026-08-26: an ADOPTED lasso catch (fresh net born BERTHED at the
+    // collar — adoptLassoCatch suppresses NET_FIRED and the rest of the
+    // launch spectacle) still needs its BAG: same creation path, same
+    // duplicate/supersede guard, same update-loop staging. Before this, the
+    // adopted catch rendered as a bare floored icosahedron through berth +
+    // digestion (the owner's "geodesic bubble" on the real lasso path).
+    this._boundNetAdopted = this._onNetFired.bind(this);
+    eventBus.on(Events.NET_ADOPTED,        this._boundNetAdopted);
     eventBus.on(Events.NET_CATCH_SUCCESS,  this._boundNetCaught);
     eventBus.on(Events.NET_CATCH_MISS,     this._boundNetMiss);
     eventBus.on(Events.NET_REEL_COMPLETED, this._boundReelCompleted);
@@ -1891,6 +1900,7 @@ export class CaptureNetVisual {
 
     // Unsubscribe events
     if (this._boundNetFired)      eventBus.off(Events.NET_FIRED,          this._boundNetFired);
+    if (this._boundNetAdopted)    eventBus.off(Events.NET_ADOPTED,        this._boundNetAdopted);
     if (this._boundNetCaught)     eventBus.off(Events.NET_CATCH_SUCCESS,  this._boundNetCaught);
     if (this._boundNetMiss)       eventBus.off(Events.NET_CATCH_MISS,     this._boundNetMiss);
     if (this._boundReelCompleted) eventBus.off(Events.NET_REEL_COMPLETED, this._boundReelCompleted);
@@ -1902,6 +1912,7 @@ export class CaptureNetVisual {
     if (this._boundTierChanged)   eventBus.off(Events.PERF_TIER_CHANGED,  this._boundTierChanged);
 
     this._boundNetFired = null;
+    this._boundNetAdopted = null;
     this._boundNetCaught = null;
     this._boundNetMiss = null;
     this._boundReelCompleted = null;

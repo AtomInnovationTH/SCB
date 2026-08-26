@@ -947,6 +947,20 @@ export const NetMeshKit = {
     const membraneGeo = new THREE.BufferGeometry();
     membraneGeo.setAttribute('position', new THREE.BufferAttribute(membranePositions, 3));
     membraneGeo.setIndex(buildMembraneIndex(radialSpokes, rings));
+    // Night-readability emissive floor (2026-08-26): the film is the bag's only
+    // LIT surface — in Earth shadow (directional sun lerps to 0.05) it went
+    // pitch black and an active capture read as bare threads ("no bag, just a
+    // cone"). A heavily desaturated tint of the web colour at
+    // MEMBRANE_EMISSIVE_FLOOR keeps the film's silhouette readable at night and
+    // vanishes into the lit response by day (the DebrisField.js night-side
+    // precedent: s × 0.25, l capped 0.30, low intensity — sub-bloom by an
+    // order of magnitude). Day values (opacity/roughness/sheen/etc.) untouched.
+    const membraneEmissive = new THREE.Color(color);
+    {
+      const hsl = { h: 0, s: 0, l: 0 };
+      membraneEmissive.getHSL(hsl);
+      membraneEmissive.setHSL(hsl.h, hsl.s * 0.25, Math.min(hsl.l, 0.30));
+    }
     const membraneMat = new THREE.MeshPhysicalMaterial({
       color,
       transparent: true,
@@ -957,6 +971,8 @@ export const NetMeshKit = {
       side: THREE.DoubleSide,
       depthWrite: false,
       envMapIntensity: membraneEnvIntensity,
+      emissive: membraneEmissive,
+      emissiveIntensity: NET_WEB.MEMBRANE_EMISSIVE_FLOOR,
       // Null until SceneManager has handed over the baked orbital env (and null
       // for good headless) — three.js treats a null envMap as "use
       // scene.environment", which is the intended fallback.
@@ -1146,6 +1162,33 @@ export const NetMeshKit = {
     }
     if (h.coneMesh) h.coneMesh.scale.set(f, f, 1);
     if (h.membraneMesh) h.membraneMesh.scale.set(f, f, 1);
+    if (h.weightCount > 0) this.updateDrawstring(h);
+  },
+
+  /**
+   * Sweep the RIM WEIGHTS (+ drawstring) from the open mouth toward the kit's
+   * own closed radius WITHOUT touching the cone/membrane meshes — the rim-only
+   * counterpart of setMouthFraction for consumers whose web vertices are owned
+   * by updateWebDrape (2026-08-26, lasso wrap-as-cloth). setMouthFraction's XY
+   * scale on the cone+membrane is exactly the "shrinking geodesic ball" read:
+   * under the drape driver the threads/film bunch onto the contents instead,
+   * so the mesh scale must stay (1,1,1) while the weights still cinch.
+   * Same sweep curve as CaptureNetVisual's CINCH_CLOSING (mouthRadius →
+   * closedRadius, floored at the mouth-plane contents floor), same weight
+   * plane (h._mouthZ) as setMouthFraction.
+   * @param {object} h handle
+   * @param {number} t cinch fraction in [0, 1] — 0 = open rim, 1 = closed rim
+   */
+  setRimCinch(h, t) {
+    const tc = Math.max(0, Math.min(1, t));
+    const r = Math.max(
+      h.mouthRadius + (h.closedRadius - h.mouthRadius) * tc,
+      _mouthFloorMax(h),
+    );
+    for (let i = 0; i < h.weightCount; i++) {
+      const a = h._rimAngles[i] + h._spinAngle;
+      h.rimWeights[i].position.set(Math.cos(a) * r, Math.sin(a) * r, h._mouthZ);
+    }
     if (h.weightCount > 0) this.updateDrawstring(h);
   },
 

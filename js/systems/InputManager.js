@@ -367,6 +367,20 @@ export class InputManager {
   }
 
   /**
+   * 2026-08-26 — true while ANY key is currently held. The lasso catch cut
+   * refuses to START over active piloting: a key held before contact never
+   * produces a fresh keydown, so the cut's any-input abort alone could not
+   * protect that player. Wired to CameraSystem via setLassoCutInputProbe.
+   * @returns {boolean}
+   */
+  anyKeyHeld() {
+    for (const code in this.keys) {
+      if (this.keys[code]) return true;
+    }
+    return false;
+  }
+
+  /**
    * Handle keydown events — routes to game systems.
    * @param {KeyboardEvent} e
    */
@@ -398,6 +412,14 @@ export class InputManager {
     const d = this._deps;
     const currentState = d.gameState.currentState;
     const isGameplay = d.gameState.isGameplay();
+
+    // 2026-08-26 — lasso catch cut: ANY key aborts it instantly and the key
+    // still does its normal job (never eaten, never blocked — the cut is
+    // garnish, not a wall; contrast the launch ceremony's blanket block).
+    if (d.cameraSystem && typeof d.cameraSystem.lassoCutActive === 'function'
+        && d.cameraSystem.lassoCutActive()) {
+      d.cameraSystem.abortLassoCut();
+    }
 
     // Prevent arrow keys from scrolling the page during gameplay
     if (isGameplay && (e.code === 'ArrowUp' || e.code === 'ArrowDown' || e.code === 'ArrowLeft' || e.code === 'ArrowRight')) {

@@ -420,6 +420,35 @@ export class CameraSystem {
       _scratchLauncherPos: new THREE.Vector3(), // launcher (arm/pod) scene position
     };
 
+    // 2026-08-26 — the SHORT lasso-catch cut (FEATURE_FLAGS.LASSO_CATCH_CUT).
+    // One continuous catch-framed shot from wrap contact through the reel
+    // escort, S4 grammar (hold [8,12] m off the catch, side/up off the reel
+    // line, look biased ≤ 4.5 m toward the ship), released the moment the
+    // reel resolves (+ a settle breath) or at LASSO_CUT_MAX_S — always before
+    // the berth-secure clock starts digestion. NOT the beat machinery: no
+    // beat list, no time-scale, no FOV moves; deliberately the smallest
+    // camera statement that reads "you caught it".
+    this._lassoCut = {
+      active: false,
+      t: 0,
+      settleT: null,       // starts counting when the reel resolves
+      debris: null,        // the wrapped piece (captured at LASSO_CONTACT)
+      savedView: null,
+      savedFov: 0,
+      _sideDir: new THREE.Vector3(),   // fixed at entry — stable framing
+      _vCatch: new THREE.Vector3(),
+      _vUp: new THREE.Vector3(),
+      _vSide: new THREE.Vector3(),
+      _vLook: new THREE.Vector3(),
+      _vPos: new THREE.Vector3(),
+    };
+    /** @type {object|null} LassoSystem — wired by main.js (setLassoSystem). */
+    this._lassoSystem = null;
+    /** @type {(function(): boolean)|null} Returns true while any player key is
+     *  held — the cut never STARTS over active piloting (a held key produces
+     *  no new keydown, so the any-input abort alone could not cover it). */
+    this._lassoCutInputProbe = null;
+
     // ========================================================================
     // HUD OVERLAY for view indicator
     // ========================================================================
@@ -491,6 +520,19 @@ export class CameraSystem {
       this._onNetBerthed(payload);
     }));
 
+    // 2026-08-26 — lasso catch cut triggers/aborts. Contact enters (fully
+    // guarded in the handler); a mid-cut miss or tether snap is a truncation
+    // (the catch is NOT made) — the letterbox must drop the same frame.
+    this._unsubs.push(eventBus.on(Events.LASSO_CONTACT, () => {
+      this._onLassoContact();
+    }));
+    this._unsubs.push(eventBus.on(Events.LASSO_MISSED, () => {
+      if (this._lassoCut.active) this._exitLassoCut(false);
+    }));
+    this._unsubs.push(eventBus.on(Events.LASSO_SNAPPED, () => {
+      if (this._lassoCut.active) this._exitLassoCut(false);
+    }));
+
     // P3 (visual-centerpiece plan §6): guarantee CeremonyTimeScale is released
     // when a net ceremony stops receiving update() — otherwise the net FSM keeps
     // reading a <1.0× scale and runs in slow-motion indefinitely (the leak the
@@ -504,6 +546,8 @@ export class CameraSystem {
     this._unsubs.push(eventBus.on(Events.GAME_STATE_CHANGE, () => {
       if (this._netCeremony && this._netCeremony.active) this._abortNetCeremony();
       else CeremonyTimeScale.reset(this);
+      // A hard state transition can't carry the lasso cut across it either.
+      if (this._lassoCut && this._lassoCut.active) this._exitLassoCut(false);
     }));
     this._unsubs.push(eventBus.on(Events.PAUSE_MENU, () => {
       CeremonyTimeScale.reset(this);
@@ -575,6 +619,12 @@ export class CameraSystem {
     // written). NET_CINEMATIC entries from the ceremony itself are exempt.
     if (this._netCeremony.active && view !== CameraViews.NET_CINEMATIC) {
       this._abortNetCeremony();
+    }
+    // Same contract for the lasso cut — any external view intent wins
+    // instantly (the cut is garnish, never a wall). _exitLassoCut clears
+    // `active` before its own setView, so this cannot recurse.
+    if (this._lassoCut.active && view !== CameraViews.NET_CINEMATIC) {
+      this._exitLassoCut(false);
     }
 
     this._previousView = this.currentView;
@@ -732,6 +782,14 @@ export class CameraSystem {
         this.camera.position.copy(ncResult.pos);
         this.camera.up.copy(ncResult.up);
         this.camera.lookAt(ncResult.look);
+      }
+    } else if (this._lassoCut.active) {
+      // 2026-08-26: lasso catch cut — same override slot, own tiny driver.
+      const lcResult = this._updateLassoCut(dt, playerPos);
+      if (lcResult) {
+        this.camera.position.copy(lcResult.pos);
+        this.camera.up.copy(lcResult.up);
+        this.camera.lookAt(lcResult.look);
       }
     } else {
     // Compute target camera state based on current view
@@ -1952,6 +2010,11 @@ export class CameraSystem {
     if (net && (net.state === 'BERTHED' || net.state === 'COLLARED'
       || net.state === 'TRANSFERRING' || net.state === 'STOWED')) return;
 
+    // 2026-08-26: a real pod launch outranks the lasso garnish — if the cut
+    // is somehow live (lasso mid-reel + simultaneous whale fire), release it
+    // before the ceremony takes NET_CINEMATIC, so ENTERED/EXITED stay paired.
+    if (this._lassoCut.active) this._exitLassoCut(false);
+
     c.active = true;
     c.beatIndex = 0;
     c.beatTimer = 0;
@@ -2446,6 +2509,22 @@ export class CameraSystem {
     c.beatTimer += dt;
     let beat = c.beats[c.beatIndex];
 
+    // Subject-death guard (2026-08-26): a ceremony must never keep lerping
+    // beats over a net that has been consumed/deactivated — the pre-guard
+    // failure mode was a letterboxed camera chasing stale anchors while the
+    // world moved on (Kessler kill mid-flight, teardown, release). Keys on
+    // `isActive === false` EXPLICITLY (headless beat mocks without the field
+    // stay served — undefined is not false, and the FLIGHT-control pin keeps
+    // this from ever becoming a blanket refusal). A digested-out subject is
+    // the one COMPLETED payoff (the whole catch played on camera — the same
+    // contract as the PARK_HOLD `_digestedOut` release below, which remains
+    // for the spliced-net case where isActive never flips); everything else
+    // is a truncation.
+    if (beat && c._net && c._net.isActive === false) {
+      this._exitNetCeremony(c._net._digestedOut === true);
+      return null;
+    }
+
     // Phase D.2 guard: the REEL_IN beat ends the frame the net leaves REELING
     // for any reason other than the berth (which NET_BERTHED covers) — a
     // mid-reel miss (dead target, strain slip) does NOT re-emit
@@ -2684,6 +2763,193 @@ export class CameraSystem {
     if (!this._netCeremony.active) return false;
     this._exitNetCeremony(false);
     return true;
+  }
+
+  // ==========================================================================
+  // LASSO CATCH CUT (2026-08-26, FEATURE_FLAGS.LASSO_CATCH_CUT)
+  // ==========================================================================
+
+  /** Wire the LassoSystem (main.js) — the cut reads the live cast state. */
+  setLassoSystem(lassoSystem) {
+    this._lassoSystem = lassoSystem;
+  }
+
+  /** Wire the held-input probe (main.js → InputManager.anyKeyHeld). */
+  setLassoCutInputProbe(probe) {
+    this._lassoCutInputProbe = (typeof probe === 'function') ? probe : null;
+  }
+
+  /** True while the lasso catch cut owns the camera (InputManager reads this). */
+  lassoCutActive() {
+    return !!(this._lassoCut && this._lassoCut.active);
+  }
+
+  /**
+   * Instant abort — ANY player input routes here (keydown via InputManager,
+   * mouse button / wheel via this system's own handlers). The input is never
+   * eaten: the cut steps aside and the action proceeds.
+   * @returns {boolean} true if a cut was aborted
+   */
+  abortLassoCut() {
+    if (!this._lassoCut.active) return false;
+    this._exitLassoCut(false);
+    return true;
+  }
+
+  /**
+   * LASSO_CONTACT — enter the cut if, and only if, every guard agrees:
+   * flags on, no other cinematic owns the camera, motion is welcome
+   * (prefers-reduced-motion skips), and the player is not actively piloting
+   * (any key already held skips — a held key produces no new keydown, so the
+   * any-input abort alone could not protect that player). Entry is a hard cut
+   * (direct view assignment, the ceremony idiom at _onNetCeremonyStart);
+   * exit eases over EXIT_CUT_SMALL_S. NET_CINEMATIC_ENTERED/EXITED stay
+   * paired on every route so the HUD dim/letterbox contract holds.
+   * @private
+   */
+  _onLassoContact() {
+    if (!Constants.FEATURE_FLAGS.NET_CEREMONY) return;
+    if (!Constants.FEATURE_FLAGS.LASSO_CATCH_CUT) return;
+    const lc = this._lassoCut;
+    if (lc.active) return;
+    if (this._netCeremony.active || this._launchCeremony.active) return;
+    if (this.currentView === CameraViews.NET_CINEMATIC) return;
+    if (this._prefersReducedMotion()) return;
+    if (this._lassoCutInputProbe && this._lassoCutInputProbe()) return;
+    const ls = this._lassoSystem;
+    const debris = ls && ls.active && ls._reelingIn ? ls.target : null;
+    if (!debris || !debris._scenePosition) return;
+
+    // Fixed side axis: perpendicular to the reel line in the radial frame at
+    // entry (S4 doctrine — never on the catch↔ship axis; stable for the whole
+    // shot so the escort reads as one held camera, not a chase).
+    const catchPos = lc._vCatch.copy(debris._scenePosition);
+    const reelDir = lc._vLook.copy(this._lastPlayerPos).sub(catchPos);
+    if (reelDir.lengthSq() < 1e-18) return;
+    reelDir.normalize();
+    const radial = lc._vUp.copy(catchPos).normalize();
+    lc._sideDir.crossVectors(radial, reelDir);
+    if (lc._sideDir.lengthSq() < 1e-6) {
+      // Degenerate (catch on the radial line) — any perpendicular will do.
+      lc._sideDir.set(reelDir.z, 0, -reelDir.x);
+      if (lc._sideDir.lengthSq() < 1e-6) lc._sideDir.set(0, 1, 0);
+    }
+    lc._sideDir.normalize();
+
+    lc.active = true;
+    lc.t = 0;
+    lc.settleT = null;
+    lc.debris = debris;
+    lc.savedView = this.currentView;
+    lc.savedFov = this._baseFov;
+    this.currentView = CameraViews.NET_CINEMATIC;   // hard cut (ceremony idiom)
+    eventBus.emit(Events.NET_CINEMATIC_ENTERED, { lassoCut: true });
+  }
+
+  /**
+   * Per-frame driver for the cut — one continuous catch-framed shot.
+   * S4 numbers, reused verbatim: hold clamp(max(2·sizeM, K·bundleR), 8, 12) m
+   * off the catch at the unit-norm (side 0.94, up 0.34) offset; look at the
+   * catch biased ≤ 4.5 m toward the ship (the escort destination). The
+   * bundle term uses the lasso's own render floor (MOTHER_CATCH_MIN_RENDER_M
+   * — LassoSystem pins `_catchRenderMin` from it at contact), so the drawn
+   * package subtends the after2 composition invariant without reaching into
+   * renderer internals. Release: the reel resolves (lasso hands the pin to
+   * the adoption) + LASSO_CUT_SETTLE_S, or LASSO_CUT_MAX_S — both completed
+   * payoffs, both before digestion (berth-secure is 4 s away at adoption).
+   * A dead subject or a dropped pin exits as a truncation.
+   * @private
+   */
+  _updateLassoCut(dt, playerPos) {
+    const lc = this._lassoCut;
+    const NCx = Constants.CAPTURE_NET.NET_CEREMONY;
+    lc.t += dt;
+
+    const debris = lc.debris;
+    if (!debris || debris.alive === false || !debris._scenePosition) {
+      this._exitLassoCut(false);
+      return null;
+    }
+    if (lc.t >= (NCx.LASSO_CUT_MAX_S ?? 4.0)) {
+      this._exitLassoCut(true);
+      return null;
+    }
+    const ls = this._lassoSystem;
+    const reelLive = !!(ls && ls.active && ls.target === debris);
+    if (!reelLive) {
+      // The reel resolved this catch (adoption/pending owns the pin now) —
+      // or dropped it. A held pin is the completed read; a released pin
+      // means the catch was lost between the event aborts and this frame.
+      if (debris._armPinned !== true) {
+        this._exitLassoCut(false);
+        return null;
+      }
+      lc.settleT = (lc.settleT ?? 0) + dt;
+      if (lc.settleT >= (NCx.LASSO_CUT_SETTLE_S ?? 0.4)) {
+        this._exitLassoCut(true);
+        return null;
+      }
+    }
+
+    const M_CUT = 0.00001;
+    const catchPos = lc._vCatch.copy(debris._scenePosition);
+    const sizeM = debris.sizeMeter || 2;
+    const bundleFloorM = Constants.MOTHER_CATCH_MIN_RENDER_M ?? 1.5;
+    const K_BUNDLE = NCx.HOLD_BUNDLE_FRAME_K ?? 4;
+    const bundleRM = Math.max(bundleFloorM, sizeM / 2);
+    const holdM = Math.min(Math.max(Math.max(2 * sizeM, K_BUNDLE * bundleRM), 8), 12);
+
+    // Per-frame frame: radial up at the catch; the entry side axis
+    // re-orthogonalized against it so the (0.94, 0.34) offset keeps its
+    // unit norm ⇒ the camera sits exactly holdM off the catch (S4 contract).
+    const up = lc._vUp.copy(catchPos).normalize();
+    const side = lc._vSide.copy(lc._sideDir).addScaledVector(up, -lc._sideDir.dot(up));
+    if (side.lengthSq() < 1e-9) side.copy(lc._sideDir);
+    side.normalize();
+
+    const pos = lc._vPos.copy(catchPos)
+      .addScaledVector(side, holdM * M_CUT * 0.94)
+      .addScaledVector(up, holdM * M_CUT * 0.34);
+
+    const toShip = lc._vLook.copy(playerPos).sub(catchPos);
+    const dist = toShip.length();
+    const f = dist > 1e-12 ? Math.min(0.45, (4.5 * M_CUT) / dist) : 0.45;
+    const look = toShip.multiplyScalar(f).add(catchPos);   // catch + toShip·f, in place
+
+    return { pos, look, up };
+  }
+
+  /**
+   * Leave the cut — restore FOV + view, un-dim the HUD. Mirrors
+   * _exitNetCeremony's contract in miniature: `active` clears BEFORE the
+   * setView call (no recursion through the setView abort hook), the exit
+   * transition is the sub-metre cut (every lasso subject is sub-metre class),
+   * and NET_CINEMATIC_EXITED fires on every route.
+   * @param {boolean} completedNormally
+   * @private
+   */
+  _exitLassoCut(completedNormally) {
+    const lc = this._lassoCut;
+    if (!lc.active) return;
+
+    lc.active = false;
+    lc.debris = null;
+    lc.settleT = null;
+
+    this._baseFov = lc.savedFov || this._baseFov;
+    this.camera.fov = this._baseFov;
+    this.camera.updateProjectionMatrix();
+
+    const prevView = lc.savedView || CameraViews.CHASE;
+    lc.savedView = null;
+
+    eventBus.emit(Events.NET_CINEMATIC_EXITED, { completedNormally: !!completedNormally });
+
+    const NCx = Constants.CAPTURE_NET.NET_CEREMONY;
+    // One-shot short cut — the update loop restores the default duration when
+    // the transition completes (same idiom as the ceremony's small exit).
+    this._transitionDuration = NCx.EXIT_CUT_SMALL_S ?? this._transitionDurationDefault;
+    this.setView(prevView);
   }
 
   // ==========================================================================
@@ -3009,6 +3275,9 @@ export class CameraSystem {
 
   /** @private */
   _onMouseDown(e) {
+    // 2026-08-26: any mouse button aborts the lasso cut instantly (the cut is
+    // garnish, never a wall) — the press then acts on the restored view.
+    if (this._lassoCut.active) this.abortLassoCut();
     if (this.currentView === CameraViews.ORBIT || this.currentView === CameraViews.INSPECTION) {
       const cfg = this.currentView === CameraViews.INSPECTION ? this.inspection : this.orbit;
       // Left or right click starts orbit/inspection drag
@@ -3080,6 +3349,9 @@ export class CameraSystem {
   /** @private */
   _onWheel(e) {
     e.preventDefault();
+
+    // 2026-08-26: wheel = player input — the lasso cut steps aside instantly.
+    if (this._lassoCut.active) this.abortLassoCut();
 
     // Skills discovery: emit zoom event for any view
     eventBus.emit(Events.CAMERA_ZOOM);

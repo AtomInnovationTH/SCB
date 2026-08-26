@@ -727,6 +727,16 @@ export const Events = {
   // ── ST-9.4 C-6: Capture Net Events ───────────────────────────────────────
   /** Net projectile launched. Payload: { source:'mother'|'daughter', armIndex?, podIndex?, netClass, remaining } */
   NET_FIRED:                 'net:fired',
+  /** 2026-08-26 — a lassoed catch was ADOPTED onto the nose collar as a fresh
+   *  BERTHED mother net (CaptureNetSystem.adoptLassoCatch). Deliberately
+   *  narrow: its ONLY consumer is CaptureNetVisual, which attaches the
+   *  standard berthed-bag visual — before this event the adopted net had NO
+   *  visual at all (visuals are created on NET_FIRED, which adoption
+   *  suppresses along with NET_BERTHED / NET_CEREMONY_START, "none of the
+   *  spectacle"), so every real lasso catch sat at the nose as a bare floored
+   *  icosahedron and then chop-shrank in the open — the owner's "debris
+   *  shrinks wrapped in a geodesic bubble". Payload: { podIndex, armIndex:-1 } */
+  NET_ADOPTED:               'net:adopted',
   /** Net hit target and secured debris. Payload: { armIndex, podIndex, debrisId, tangleQuality, capturedMass, mode } */
   NET_CATCH_SUCCESS:         'net:catchSuccess',
   /** Net missed / cling failed. Payload: { armIndex, podIndex, debrisId?, probability?, reason } */

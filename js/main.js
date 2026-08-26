@@ -880,6 +880,7 @@ async function init() {
     captureNetSystem.init({ player, debrisField, audioSystem, armManager, lassoSystem });   // ST-9.4: initialize mother pod inventory + set _initialized; deps back the mother-pod anchor provider + Phase-A pin API + Phase-B winch pitch + Phase C-lite corridor test
     player.setCaptureNetSystem(captureNetSystem);     // §4.4: berthed-mass translational scaling in _applyThrust
     lassoSystem.setCaptureNetSystem(captureNetSystem);   // Cargo-continuity S13(d): a lassoed catch adopts onto the nose-collar berth (the one holding model)
+    cameraSystem.setLassoSystem(lassoSystem);   // 2026-08-26: the short lasso catch cut reads the live cast state
     captureNetVisual.init(scene, player, captureNetSystem, sceneManager);   // sceneManager backs the Phase D.8 LOW-tier garnish gate
     // Item 1: staged furnace-breakdown choreography (chunks → furnace, net drawn in).
     furnaceBreakdownVisual.init(scene, player);
@@ -1079,6 +1080,10 @@ async function init() {
     setApproachComplete: (v) => { gameFlowManager.approachComplete = v; },
   });
   inputManager.start();
+  // 2026-08-26: the lasso catch cut never STARTS over active piloting — a key
+  // held before wrap contact produces no fresh keydown, so the cut's
+  // any-input abort alone could not protect that player.
+  cameraSystem.setLassoCutInputProbe(() => inputManager.anyKeyHeld());
   _bootMark('InputManager started + gameFlowManager.init');
 
   // --- Item 3: anti-stuck idle watchdog (data-driven, veteran-gated) ---

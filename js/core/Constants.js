@@ -1566,6 +1566,15 @@ export const Constants = {
     // Phase 3: mass-driven reel tension, CoM pull, tangle/break risk. Still hard-
     // gated OFF on M1 and for ≤ LASSO_MAX_CAPTURE_MASS regardless of this flag.
     LASSO_REEL_PHYSICS:        true,   // Phase 3 — real reel tension + ship pull + break risk (M2+/heavy only)
+    // 2026-08-26 — the SHORT lasso-catch cut (owner: "the capture deserves a
+    // tasteful, SHORT presentation — never a beat reel"). A single continuous
+    // ~3 s catch-framed shot from wrap contact through the reel escort,
+    // S4 grammar (catch framed, ship as context), letterboxed only while it
+    // runs, released before digestion, aborted instantly by ANY player input,
+    // skipped under prefers-reduced-motion and while any key is already held.
+    // Rides NET_CEREMONY (the cinema-mode HUD contract); OFF = post-4988797
+    // player-cam-only behaviour, byte-identical.
+    LASSO_CATCH_CUT:           true,
   },
 
   // ============================================================================
@@ -2630,6 +2639,19 @@ export const Constants = {
     MEMBRANE_TRANSMISSION: 0.15, // low — a hint of light through the film
     MEMBRANE_SHEEN:     0.5,    // fabric sheen response
     MEMBRANE_ENV_INTENSITY: 0.9,
+    // 2026-08-26 (night readability): the membrane is the bag's ONLY lit body
+    // surface (MeshPhysicalMaterial) — in Earth shadow the directional sun
+    // drops to 0.05 and the film goes pitch black, so an active capture reads
+    // as bare threads ("no bag, just a cone" — tmp/lasso-take f019,
+    // tmp/lasso2-night-before f003–f008). A tiny UNCONDITIONAL emissive floor
+    // (the DebrisField.js:1304–1329 night-side precedent: heavily desaturated
+    // tint, intensity low enough to vanish in daylight) keeps the film's
+    // silhouette readable at night without moving any day value: the fabric/
+    // pixel gates are day-lit + one-sided (fail only BELOW baseline − tol),
+    // and every opacity constant above is untouched. The web/tether threads
+    // are unlit LineMaterials and never needed this. Nets only exist during
+    // captures, so this IS "active capture reads on the night side".
+    MEMBRANE_EMISSIVE_FLOOR: 0.12,
   },
 
   // =========================================================================
@@ -3235,6 +3257,16 @@ export const Constants = {
       // over a subject that just got consumed reads as aimless drift — cut in
       // this many seconds instead when the parked bundle was sub-metre.
       EXIT_CUT_SMALL_S:            0.2,
+
+      // ── Lasso catch cut (FEATURE_FLAGS.LASSO_CATCH_CUT, 2026-08-26) ──
+      // One continuous catch-framed shot: enter at LASSO_CONTACT (hard cut),
+      // hold the S4 grammar off the wrapped piece while the reel escorts it
+      // to the nose, release ≤ LASSO_CUT_MAX_S after entry (adoption lands at
+      // ~3 s: 0.6 s wrap + 2.4 s haul at LASSO_REEL_SPEED 0.33), well before
+      // the berth-secure clock (4 s) starts digestion. The exit reuses
+      // EXIT_CUT_SMALL_S — every lasso subject is sub-metre class.
+      LASSO_CUT_MAX_S:             4.0,   // hard release valve (binding 2–4 s)
+      LASSO_CUT_SETTLE_S:          0.4,   // breath after the reel resolves, before the cut
 
       // ── Visual geometry ratios — §5.1 ──
       CONE_OPEN_RADIUS_FRAC:         1.0,    // mouth radius / (D_mesh × 0.5)
