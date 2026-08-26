@@ -238,8 +238,11 @@ export function recommendedStarter(upgrades, owned, credits, preference = STARTE
 // S1 retention: pinned "next upgrade" chase-target math lives in the pure
 // ./shopPin.js module (shared with the HUD, DOM-free). Re-exported here so the
 // existing `../ui/ShopScreen.js` import sites (and tests) keep working.
-import { pinProgress, cheapestChaseTarget } from './shopPin.js';
-export { pinProgress, cheapestChaseTarget };
+// The pin is ONLY ever player-chosen (pinUpgrade/togglePin) — there is no
+// auto-pin: manufacturing a cheapest-item goal the player never chose produced
+// noise like "Extra Cold Gas — READY AT DEPOT" while tanks were already full.
+import { pinProgress } from './shopPin.js';
+export { pinProgress };
 
 /** Spring tier descriptions for shop display */
 const SPRING_DESCRIPTIONS = [
@@ -1456,10 +1459,9 @@ export class ShopScreen {
 
   hide() {
     this.visible = false;
-    // S1 retention: ensure the chase target is never empty when leaving the shop
-    // with unaffordable items remaining, then broadcast the current pin so the
-    // HUD widget shows live progress until the next depot.
-    this._autoPinIfNeeded();
+    // S1 retention: broadcast the current (player-chosen) pin so the HUD widget
+    // shows live progress until the next depot. No auto-pin: if the player
+    // never pinned anything, nothing is manufactured here.
     this._emitPinnedUpgrade();
     this.element.style.opacity = '0';
     setTimeout(() => {
@@ -1517,16 +1519,6 @@ export class ShopScreen {
       return false;
     }
     return this.pinUpgrade(id);
-  }
-
-  /** @private Auto-pin the cheapest gated-open unaffordable upgrade if unset/stale. */
-  _autoPinIfNeeded() {
-    this._clearStalePin();
-    if (this.getPinnedUpgrade()) return; // valid pin already set
-    const credits = this._scoringSystem ? this._scoringSystem.credits : scoringSystem.credits;
-    const id = cheapestChaseTarget(UPGRADES, this.purchasedUpgrades, credits,
-      (f) => Constants.isFeatureEnabled(f));
-    this.pinnedUpgradeId = id;
   }
 
   /** @private Emit UPGRADE_PINNED with the current pin (or a cleared payload). */

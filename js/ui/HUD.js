@@ -648,15 +648,8 @@ export class HUD {
       return;
     }
     const { pct, remaining, affordable } = pinProgress(this._credits, this._pinned);
-    // The pin is AUTO-selected (ShopScreen._autoPinIfNeeded picks the cheapest
-    // gated-open upgrade), so a brand-new player is shown a goal they never
-    // chose, at "0/400 cr" with an empty bar, before they have earned a single
-    // credit. There is nothing to act on and nothing to track, so stay hidden
-    // until real progress exists. It appears on the first credit earned.
-    if (!affordable && !(this._credits > 0)) {
-      this._pinWidget.style.display = 'none';
-      return;
-    }
+    // The pin is player-chosen (pinned in the shop), so show it immediately —
+    // even at 0 credits — it is a goal the player actually picked.
     const label = this._pinWidget.querySelector('#hud-pin-label');
     const bar = this._pinWidget.querySelector('#hud-pin-bar');
     if (affordable) {
