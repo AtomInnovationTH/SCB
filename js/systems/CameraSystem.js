@@ -2847,17 +2847,21 @@ export class CameraSystem {
   }
 
   /**
-   * Per-frame driver for the cut — one continuous catch-framed shot.
-   * S4 numbers, reused verbatim: hold clamp(max(2·sizeM, K·bundleR), 8, 12) m
-   * off the catch at the unit-norm (side 0.94, up 0.34) offset; look at the
-   * catch biased ≤ 4.5 m toward the ship (the escort destination). The
-   * bundle term uses the lasso's own render floor (MOTHER_CATCH_MIN_RENDER_M
-   * — LassoSystem pins `_catchRenderMin` from it at contact), so the drawn
-   * package subtends the after2 composition invariant without reaching into
-   * renderer internals. Release: the reel resolves (lasso hands the pin to
-   * the adoption) + LASSO_CUT_SETTLE_S, or LASSO_CUT_MAX_S — both completed
-   * payoffs, both before digestion (berth-secure is 4 s away at adoption).
-   * A dead subject or a dropped pin exits as a truncation.
+   * Per-frame driver for the cut — TWO shots (2026-08-26 round 2):
+   *   1. WRAP close-up — catch-anchored S4 hold while the wrap cinches (the
+   *      piece is stationary through the wrap window, so nothing translates
+   *      but fabric);
+   *   2. hard cut to the ARRIVAL shot — SHIP-anchored at
+   *      LASSO_CUT_ARRIVAL_HOLD_M with the nose steady in frame while the
+   *      PIECE flies in. Round 1 rode the catch for the whole escort and the
+   *      converging ship read as "mother moving to debris" (owner report);
+   *      a ship-rigid vantage makes the causality unambiguous.
+   * S4 numbers throughout: unit-norm (side 0.94, up 0.34) offset, look at the
+   * catch biased ≤ 4.5 m toward the ship. Release: the reel resolves (the
+   * lasso hands the pin to the adoption) + LASSO_CUT_SETTLE_S, or
+   * LASSO_CUT_MAX_S — both completed payoffs, both before digestion
+   * (berth-secure is 4 s away at adoption). A dead subject or a dropped pin
+   * exits as a truncation.
    * @private
    */
   _updateLassoCut(dt, playerPos) {
@@ -2893,28 +2897,63 @@ export class CameraSystem {
 
     const M_CUT = 0.00001;
     const catchPos = lc._vCatch.copy(debris._scenePosition);
-    const sizeM = debris.sizeMeter || 2;
-    const bundleFloorM = Constants.MOTHER_CATCH_MIN_RENDER_M ?? 1.5;
-    const K_BUNDLE = NCx.HOLD_BUNDLE_FRAME_K ?? 4;
-    const bundleRM = Math.max(bundleFloorM, sizeM / 2);
-    const holdM = Math.min(Math.max(Math.max(2 * sizeM, K_BUNDLE * bundleRM), 8), 12);
+    // Sanity fence: a lasso subject lives within lasso range of the ship
+    // (fire() refuses beyond LASSO_RANGE; the reel only pulls INWARD). If the
+    // scene position ever reads outside ~250 m — a pin-priority race can
+    // ghost the piece onto a stale orbit for a frame under long SwiftShader
+    // frames (tmp/lasso7 probe: one 7.7 km frame at exit) — hand the camera
+    // back gracefully instead of framing empty space. The catch itself is
+    // fine (the berth pin owns it); only this shot refuses to chase a ghost.
+    if (catchPos.distanceTo(playerPos) > 250 * M_CUT) {
+      this._exitLassoCut(true);
+      return null;
+    }
+    // Shot switch: the wrap is done when the reel passes the WRAP window
+    // (reelProgress ≥ 0.2), the reel already resolved, or — mocks without a
+    // progress field — a 1.2 s fallback (the real wrap is ~0.6 s).
+    const wrapDone = (ls && typeof ls._reelProgress === 'number' && ls._reelProgress >= 0.2)
+      || !reelLive || lc.t >= 1.2;
 
-    // Per-frame frame: radial up at the catch; the entry side axis
-    // re-orthogonalized against it so the (0.94, 0.34) offset keeps its
-    // unit norm ⇒ the camera sits exactly holdM off the catch (S4 contract).
-    const up = lc._vUp.copy(catchPos).normalize();
+    if (!wrapDone) {
+      // ── Shot 1: WRAP close-up (catch-anchored) ──
+      const sizeM = debris.sizeMeter || 2;
+      const bundleFloorM = Constants.MOTHER_CATCH_MIN_RENDER_M ?? 1.5;
+      const K_BUNDLE = NCx.HOLD_BUNDLE_FRAME_K ?? 4;
+      const bundleRM = Math.max(bundleFloorM, sizeM / 2);
+      const holdM = Math.min(Math.max(Math.max(2 * sizeM, K_BUNDLE * bundleRM), 8), 12);
+
+      const up = lc._vUp.copy(catchPos).normalize();
+      const side = lc._vSide.copy(lc._sideDir).addScaledVector(up, -lc._sideDir.dot(up));
+      if (side.lengthSq() < 1e-9) side.copy(lc._sideDir);
+      side.normalize();
+
+      const pos = lc._vPos.copy(catchPos)
+        .addScaledVector(side, holdM * M_CUT * 0.94)
+        .addScaledVector(up, holdM * M_CUT * 0.34);
+
+      const toShip = lc._vLook.copy(playerPos).sub(catchPos);
+      const dist = toShip.length();
+      const f = dist > 1e-12 ? Math.min(0.45, (4.5 * M_CUT) / dist) : 0.45;
+      const look = toShip.multiplyScalar(f).add(catchPos);   // catch + toShip·f, in place
+
+      return { pos, look, up };
+    }
+
+    // ── Shot 2: ARRIVAL (ship-anchored — the piece flies IN to the nose) ──
+    const holdM = NCx.LASSO_CUT_ARRIVAL_HOLD_M ?? 9.0;
+    const up = lc._vUp.copy(playerPos).normalize();
     const side = lc._vSide.copy(lc._sideDir).addScaledVector(up, -lc._sideDir.dot(up));
     if (side.lengthSq() < 1e-9) side.copy(lc._sideDir);
     side.normalize();
 
-    const pos = lc._vPos.copy(catchPos)
+    const pos = lc._vPos.copy(playerPos)
       .addScaledVector(side, holdM * M_CUT * 0.94)
       .addScaledVector(up, holdM * M_CUT * 0.34);
 
     const toShip = lc._vLook.copy(playerPos).sub(catchPos);
     const dist = toShip.length();
     const f = dist > 1e-12 ? Math.min(0.45, (4.5 * M_CUT) / dist) : 0.45;
-    const look = toShip.multiplyScalar(f).add(catchPos);   // catch + toShip·f, in place
+    const look = toShip.multiplyScalar(f).add(catchPos);     // catch-dominant, nose in frame
 
     return { pos, look, up };
   }

@@ -64,6 +64,8 @@ const _scratchTetherAnchor = new THREE.Vector3();
 // contents spec mirrors CaptureNetVisual's; own copies so two live drivers
 // never share a scratch) and for the reel drag orientation.
 const _scratchAway = new THREE.Vector3();
+const _scratchAway2 = new THREE.Vector3();
+const _scratchPiecePos = new THREE.Vector3();
 const _scratchOrientQuat = new THREE.Quaternion();
 const _scratchSpinQuat = new THREE.Quaternion();
 const _vWrapLocal = new THREE.Vector3();
@@ -103,6 +105,15 @@ export class LassoSystem {
          *  web fade-out over a freshly adopted catch (crossfades into the
          *  berthed bag); ticked by _updateVisualEffects, cleared at zero. */
         this._webFade = null;
+
+        /** @type {number} 2026-08-26 round 2 — flight billow phase (kit jiggle). */
+        this._billowPhase = 0;
+
+        /** @type {number} 2026-08-26 round 2 — apex→piece depth at contact
+         *  (scene units); the wrap eases it to the WRAP_SEAT_FRAC seat so the
+         *  net visibly slides OVER the piece (engulf) instead of pinning the
+         *  piece at the apex tip ("alongside the net"). */
+        this._wrapSeatD0 = 0;
 
         /** @type {string|null} Target debris ID for live lookup */
         this._targetId = null;
@@ -515,6 +526,28 @@ export class LassoSystem {
         }
         this._berthAxis(playerVelDir, _scratchFwd);
         return out.addScaledVector(_scratchFwd, standoffM * M);
+    }
+
+    /**
+     * 2026-08-26 round 2 (ENGULF) — where the reel actually DELIVERS the piece:
+     * the collar seat pushed fore by the adoption's interior seat depth
+     * (CAPTURE_NET.ADOPT_CATCH_SEAT_M). adoptLassoCatch pins the piece at
+     * bag-apex + fwd × _catchSeatM (the whale-in-cone follow-up 2 contract —
+     * the catch rides INSIDE the bag, engulfed, never at the apex tip), so the
+     * reel must land the piece exactly there or the hand-off snaps. The
+     * pending-wait hold (_pinPending) keeps using the bare collar seat — it is
+     * a hold-off point, and the settle glide animates onto THIS point before
+     * adopting.
+     * @private
+     */
+    _reelDeliveryWorld(target, playerPos, playerVelDir, out) {
+        this._collarSeatWorld(target, playerPos, playerVelDir, out);
+        const seatM = Constants.CAPTURE_NET.ADOPT_CATCH_SEAT_M ?? 0;
+        if (seatM > 0) {
+            this._berthAxis(playerVelDir, _scratchFwd);
+            out.addScaledVector(_scratchFwd, seatM * M);
+        }
+        return out;
     }
 
     /** Create capture net projectile group, tube tether, trail, and flash visuals */
@@ -1474,17 +1507,43 @@ export class LassoSystem {
                 // REEL: compact package travels player-relative from contact → zero
                 reelT = (this._reelProgress - WRAP_END) / (1 - WRAP_END);
             }
-            // Cargo-continuity S13(d): reel the catch to the COLLAR SEAT (the one
-            // holding model's berth — pod-0 muzzle + ship-forward × standoff), the
-            // same side it was thrown from, so it is never dragged through the hull
-            // to the rear and the adoption pins it exactly where the reel delivers
-            // it (no hand-off snap).
-            this._collarSeatWorld(this.target, playerPos, playerVelDir, _scratchMuzzle);
+            // Cargo-continuity S13(d) + 2026-08-26 round 2 (ENGULF): the PIECE is
+            // the primary — it lerps contact → the reel DELIVERY point (the
+            // collar seat pushed fore by the adoption's interior seat depth, so
+            // the hand-off still lands pin-exact). The net APEX rides seatScene
+            // BEHIND the piece toward the ship: the piece sits INSIDE the bag
+            // volume (fabric on both sides — engulfed), never at the apex tip
+            // where it read "alongside the net". During the WRAP window the
+            // piece is stationary (reelT = 0) while the seat eases from the
+            // actual contact depth to the WRAP_SEAT_FRAC seat — the net
+            // visibly slides OVER the piece as the mouth cinches behind it.
+            this._reelDeliveryWorld(this.target, playerPos, playerVelDir, _scratchMuzzle);
             const reelEndOffset = _scratchCargoOffset.copy(_scratchMuzzle).sub(playerPos);
-            const reelOffset = new THREE.Vector3().lerpVectors(
+            const pieceOffset = new THREE.Vector3().lerpVectors(
                 this._reelStartOffset, reelEndOffset, reelT
             );
-            this.projectilePos.copy(playerPos).add(reelOffset);
+            const piecePos = _scratchPiecePos.copy(playerPos).add(pieceOffset);
+            // Reel-tick forensics (dev-gated): name the garbage INPUT the frame
+            // the piece pin goes km-scale in a live take. No hot-path allocation
+            // unless the lasso debug flag is on.
+            if (this._dbg()) {
+                this._dbgReel = {
+                    reelT: +reelT.toFixed(3),
+                    startM: +(this._reelStartOffset.length() / M).toFixed(1),
+                    endM: +(reelEndOffset.length() / M).toFixed(1),
+                    pieceOffM: +(pieceOffset.length() / M).toFixed(1),
+                };
+            }
+            let seatScene = 0;
+            _scratchAway2.copy(pieceOffset);
+            if (Constants.FEATURE_FLAGS.LASSO_NET_KINEMATICS && this._netKit
+                && _scratchAway2.lengthSq() > 1e-18) {
+                _scratchAway2.normalize();
+                const seatTarget = this._netKit.coneHeight * (Constants.NET_WEB.WRAP_SEAT_FRAC ?? 0);
+                const cinchT = Math.min(1, this._reelProgress / WRAP_END);
+                seatScene = this._wrapSeatD0 + (seatTarget - this._wrapSeatD0) * cinchT;
+            }
+            this.projectilePos.copy(piecePos).addScaledVector(_scratchAway2, -seatScene);
 
             // Drag the captured debris along with the net package so it visibly
             // reels into the mother. The debris position is otherwise owned by
@@ -1497,8 +1556,19 @@ export class LassoSystem {
             if (this.target) {
                 this._reelPinTarget = this.target;
                 if (!this.target._armPinPos) this.target._armPinPos = new THREE.Vector3();
-                this.target._armPinPos.copy(this.projectilePos);
+                this.target._armPinPos.copy(piecePos);
                 this.target._armPinned = true;
+                // 2026-08-26 round 2 — pin-priority belt: the onboarding tease
+                // pin OUTRANKS the arm pin in DebrisField._updateInstanceTransform
+                // (:2230 before :2240). Its release rides the LASSO_CONTACT
+                // listener + an orbit resync; under long SwiftShader frames that
+                // release intermittently lost the race and the piece rendered
+                // km off the ship mid-reel while our (sane) arm pin was ignored
+                // (tmp/lasso4/5 probes: piece 7.7 km out, pin 22 m). The reel
+                // OWNS this piece — assert the release every frame; one boolean
+                // write, idempotent, and the field's own doc says exactly this
+                // ("an arm capture releases the pin first, _armPinned wins after").
+                this.target._onboardingPinned = false;
                 this.target._catchRenderMin = DebrisWireframe.scaleForRenderRadiusM(Constants.MOTHER_CATCH_MIN_RENDER_M, this.target.type, this.target.id);
             }
         } else {
@@ -1531,15 +1601,40 @@ export class LassoSystem {
                     Constants.FEATURE_FLAGS.LASSO_REEL_PHYSICS &&
                     this._missionNumber !== 1 &&
                     capturedMass > Constants.LASSO_MAX_CAPTURE_MASS;
-                // CRITICAL FIX (v2e): Use _projOffset directly — it's already the
-                // player-relative offset, uncontaminated by per-frame orbital drift.
-                // Previous code (subVectors(projectilePos, playerPos)) was subtracting
-                // playerPos_N from projectilePos_{N-1}, introducing a velocity×dt
-                // error of ~1.3km per frame. At 80km/s apparent orbital velocity
-                // that error FLIPS the offset sign, causing the net to reel in
-                // from ~1.3km BEHIND the ship ("shoots out front, disappears,
-                // reels in from the back").
-                this._reelStartOffset.copy(this._projOffset);
+                // CRITICAL FIX (v2e): use LOCAL (player-relative) offsets only —
+                // absolute-frame mixing introduced a velocity×dt error of ~1.3 km
+                // per frame at 80 km/s apparent orbital velocity ("shoots out
+                // front, disappears, reels in from the back").
+                // 2026-08-26 round 2 (ENGULF): the reel lerp is now PIECE-primary
+                // — the start offset is the CATCH's player-relative offset at
+                // contact (the piece is what reels home; the apex trails it by
+                // the interior seat). The apex→piece depth at contact seeds the
+                // seat ease so the wrap slides the net OVER the stationary piece.
+                const pieceAtContact = (this.target && this.target._scenePosition)
+                    ? this.target._scenePosition
+                    : (this._targetScenePos || this.projectilePos);
+                this._reelStartOffset.copy(pieceAtContact).sub(playerPos);
+                // Contact-tick forensics (dev probe): name the source when the
+                // start offset reads km-scale garbage in a live take.
+                this._dbgContact = {
+                    startOffM: this._reelStartOffset.length() / M,
+                    sceneRelM: this.target && this.target._scenePosition
+                        ? this.target._scenePosition.clone().sub(playerPos).length() / M : null,
+                    liveRelM: this._targetScenePos
+                        ? this._targetScenePos.clone().sub(playerPos).length() / M : null,
+                    projRelM: this._projOffset.length() / M,
+                };
+                this._wrapSeatD0 = 0;
+                if (Constants.FEATURE_FLAGS.LASSO_NET_KINEMATICS && this._netKit) {
+                    _scratchAway.copy(pieceAtContact).sub(playerPos);
+                    if (_scratchAway.lengthSq() > 1e-18) {
+                        _scratchAway.normalize();
+                        const d0 = _scratchToTarget.copy(pieceAtContact)
+                            .sub(this.projectilePos).dot(_scratchAway);
+                        this._wrapSeatD0 = Math.min(
+                            Math.max(d0, 0), this._netKit.coneHeight * 0.8);
+                    }
+                }
                 this._reelProgress = 0;
 
                 // Establish the reel-in pin AT CONTACT, anchored to where the
@@ -1553,6 +1648,10 @@ export class LassoSystem {
                     if (!this.target._armPinPos) this.target._armPinPos = new THREE.Vector3();
                     this.target._armPinPos.copy(this.target._scenePosition || this._targetScenePos || this.projectilePos);
                     this.target._armPinned = true;
+                    // Round-2 pin-priority belt (see the reel-frame twin above):
+                    // the arm pin owns the piece from contact on, regardless of
+                    // whether the LASSO_CONTACT release listener wins its race.
+                    this.target._onboardingPinned = false;
                     this.target._catchRenderMin = DebrisWireframe.scaleForRenderRadiusM(Constants.MOTHER_CATCH_MIN_RENDER_M, this.target.type, this.target.id);
                 }
 
@@ -1610,6 +1709,22 @@ export class LassoSystem {
                         openFrac * (1.0 - Constants.NET_LAUNCH_COMPACT_FRAC);
                     this._applyNetMouthRadius(mouthFrac);
                     spinScale = 0.25 + 0.75 * openFrac; // spin-up while opening
+                    // 2026-08-26 round 2 — organic flight web: the cast net
+                    // BILLOWS (the kit's per-spoke jiggle channel) instead of
+                    // flying as a mathematically perfect cone. Drape stays 0:
+                    // contents floors and the welded fade are untouched by
+                    // construction (both are drape/cinch-gated), and the
+                    // open-on-launch mouth scale composes on top (the jiggle
+                    // deforms vertices in full-mouth space; the scale opens it).
+                    const billowFrac = Constants.NET_WEB.FLIGHT_BILLOW_FRAC ?? 0;
+                    if (this._netKit && billowFrac > 0) {
+                        this._billowPhase += dt * 2 * Math.PI
+                            * (Constants.NET_WEB.FLIGHT_BILLOW_HZ ?? 0);
+                        NetMeshKit.updateWebDrape(this._netKit, {
+                            jigglePhase: this._billowPhase,
+                            jiggleAmp: this._netKit.mouthRadius * billowFrac * openFrac,
+                        });
+                    }
                 }
                 const flightDir = new THREE.Vector3()
                     .subVectors(this._targetScenePos, playerPos).normalize();
@@ -1733,11 +1848,11 @@ export class LassoSystem {
 
         // The reel delivered the catch to the collar seat, but the completion step
         // returns before the reel's final pin write, leaving the pin a hair short.
-        // Snap it exactly onto the seat so the adoption hand-off is seamless — the
-        // catch IS at the seat; the next updateBerthHold pins the same point (no
-        // gap, no pop).
+        // Snap it exactly onto the DELIVERY point (seat + adoption's interior
+        // seat depth — 2026-08-26 round 2) so the adoption hand-off is seamless:
+        // the catch IS there; updateBerthHold pins the same point (no gap, no pop).
         if (target) {
-            this._collarSeatWorld(target, playerPos, playerVelDir, _scratchMuzzle);
+            this._reelDeliveryWorld(target, playerPos, playerVelDir, _scratchMuzzle);
             if (!target._armPinPos) target._armPinPos = new THREE.Vector3();
             target._armPinPos.copy(_scratchMuzzle);
             target._armPinned = true;
@@ -1851,7 +1966,10 @@ export class LassoSystem {
         p.settleT += dt;
         const f = Math.min(1, p.settleT / LASSO_ADOPT_SETTLE_S);
         const ease = f * f * (3 - 2 * f);
-        this._collarSeatWorld(target, playerPos, playerVelDir, _scratchMuzzle);
+        // 2026-08-26 round 2: the glide lands on the DELIVERY point (collar
+        // seat + adoption's interior seat depth) — the exact pin adoptLassoCatch
+        // writes — so the pend→adopt hand-off stays snap-free with the engulf seat.
+        this._reelDeliveryWorld(target, playerPos, playerVelDir, _scratchMuzzle);
         if (!target._armPinPos) target._armPinPos = new THREE.Vector3();
         target._armPinPos.copy(p.fromPos).lerp(_scratchMuzzle, ease);
         target._armPinned = true;
@@ -2174,6 +2292,9 @@ export class LassoSystem {
         // Phase 3: clear reel-physics latch + strain accumulator for the next cast.
         this._reelPhysicsActive = false;
         this._strainTimer = 0;
+        // 2026-08-26 round 2: flight billow + engulf seat re-arm clean.
+        this._billowPhase = 0;
+        this._wrapSeatD0 = 0;
 
         if (this._netGroup && !this._webFade) this._netGroup.visible = false;
         // Phase 2: restore the mouth to full radius so the static net geometry is

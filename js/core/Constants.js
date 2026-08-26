@@ -2652,6 +2652,31 @@ export const Constants = {
     // are unlit LineMaterials and never needed this. Nets only exist during
     // captures, so this IS "active capture reads on the night side".
     MEMBRANE_EMISSIVE_FLOOR: 0.12,
+    // 2026-08-26 (owner round 2) — the wrap/berth ENGULF seat: the caught
+    // piece rides at this fraction of the cone height INSIDE the web/bag
+    // (fabric on both sides = engulfed), never at the apex tip where it read
+    // "alongside the net" (owner: "the debris is not even inside the net").
+    // The pod path already does this (whale-in-cone follow-up 2: _catchSeatM
+    // = the depth the capture left the catch at); this is the lasso/adoption
+    // counterpart, one dial for both kits.
+    WRAP_SEAT_FRAC: 0.42,
+    // 2026-08-26 (owner round 2) — organic flight web: the cast net billows
+    // (per-spoke sinusoidal undulation, the kit's jiggle channel) instead of
+    // flying as a mathematically perfect cone (owner: "a net does NOT need to
+    // look like a boring symmetric cone"). Amp is a fraction of the mouth
+    // radius; drape stays 0 in flight so contents floors and the welded fade
+    // are untouched by construction.
+    FLIGHT_BILLOW_FRAC: 0.08,
+    FLIGHT_BILLOW_HZ: 0.9,
+    // 2026-08-26 (owner round 2) — the held bag over a SUB-METRE catch read
+    // as a bare thread lattice ("WTF is that geodesic globe") because the
+    // floored contents box inflates the dome while the film rests near-clear:
+    // the BERTHED/COLLARED thread opacity now lerps 0.55 → this rest across
+    // the same [SMALL_SIZE_M … LARGE_SIZE_M] band as the welded film, so the
+    // fabric (film + rosette) carries the small-bag read and the lattice
+    // recedes. Whale-class (≥ LARGE_SIZE_M) and size-less mocks stay at the
+    // 0.55 byte — the gated pod subjects never move.
+    THREAD_OPACITY_HELD_SMALL: 0.30,
   },
 
   // =========================================================================
@@ -2762,6 +2787,19 @@ export const Constants = {
     // far from the muzzle (mirrors ARM_HOLD_CLEARANCE_M). Completion range =
     // debris.sizeMeter/2 + BERTH_CLEARANCE_M.
     BERTH_CLEARANCE_M:    1.0,
+    // 2026-08-26 (owner round 2) — the ADOPTED catch's interior seat depth:
+    // the lasso hand-off previously set _catchSeatM = 0, pinning the piece AT
+    // the bag apex — visually "alongside the bag", never inside it (owner:
+    // "net/Bag is supposed to be AROUND the debris, engulfing"). The pod path
+    // already seats catches INSIDE the bag at their capture depth (whale-in-
+    // cone follow-up 2); adoption now uses this fixed seat, and the lasso
+    // reel delivers the piece to collar-seat + fwd × THIS so the hand-off
+    // still lands pin-exact (no snap). ONE-HOME LAW: byte-equal to
+    // WRAP_SEAT_FRAC × the CN.LARGE bag cone height —
+    //   (DIAMETER/2 × CONE_OPEN_RADIUS_FRAC) × 2 × CONE_LENGTH_FRAC ×
+    //   WRAP_SEAT_FRAC = 4.0 × 2 × 0.85 × 0.42 = 2.856 —
+    // pinned by test so the derivation cannot drift from the drawn bag.
+    ADOPT_CATCH_SEAT_M:   2.856,
     // Securing ceremony: after NET_BERTHED the catch sits at the launcher for
     // this long while Houston reads the mass, then CATCH_PROCESSED fires with
     // source:'mother' (score + salvage + clearDebris + autosave via the
@@ -3267,6 +3305,14 @@ export const Constants = {
       // EXIT_CUT_SMALL_S — every lasso subject is sub-metre class.
       LASSO_CUT_MAX_S:             4.0,   // hard release valve (binding 2–4 s)
       LASSO_CUT_SETTLE_S:          0.4,   // breath after the reel resolves, before the cut
+      // 2026-08-26 round 2: the cut is TWO shots — wrap close-up
+      // (catch-anchored, the piece is stationary through the wrap window),
+      // then a hard cut to the ARRIVAL shot: ship-anchored at this hold, the
+      // nose steady in frame while the PIECE flies in. The round-1 escort
+      // rode the catch, so the converging ship read as "mother moving to
+      // debris" (owner report) — anchoring shot 2 to the ship makes the
+      // causality unambiguous: debris gets reeled in to mother.
+      LASSO_CUT_ARRIVAL_HOLD_M:    9.0,
 
       // ── Visual geometry ratios — §5.1 ──
       CONE_OPEN_RADIUS_FRAC:         1.0,    // mouth radius / (D_mesh × 0.5)

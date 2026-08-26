@@ -2874,6 +2874,73 @@ async function init() {
         }
       };
 
+      // ── Lasso capture probe (2026-08-26 round 2 — dev-only, ?shot=1) ──
+      // The lasso path has no __netScenario staging: real-play captures need a
+      // stateless getter for the live cast + cut + adopted-bag geometry, all
+      // ship-relative metres, so a film take can NAME the broken anchor
+      // instead of eyeballing frames. Same devShotGate surface as the __net*
+      // family above.
+      window.__scbLassoProbe = () => {
+        try {
+          const M = 0.00001;
+          const ship = player?.getPosition?.();
+          if (!ship) return null;
+          const rel = (v) => v
+            ? [+((v.x - ship.x) / M).toFixed(1), +((v.y - ship.y) / M).toFixed(1), +((v.z - ship.z) / M).toFixed(1)]
+            : null;
+          const ls = lassoSystem;
+          const lc = cameraSystem?._lassoCut;
+          const cam = sceneManager?.camera;
+          const piece = ls?.target || lc?.debris || null;
+          const sp = piece?._scenePosition || null;
+          const kh = ls?._netKit;
+          const vis0 = captureNetVisual?._activeVisuals?.get('pod_0');
+          return {
+            lasso: ls ? {
+              active: ls.active, reeling: ls._reelingIn,
+              reelP: +(ls._reelProgress ?? 0).toFixed(3),
+              proj: rel(ls.projectilePos),
+              netVisible: ls._netGroup?.visible ?? null,
+              seatD0M: +((ls._wrapSeatD0 ?? 0) / M).toFixed(2),
+              webFade: !!ls._webFade,
+              dbgContact: ls._dbgContact ?? null,
+              dbgReel: ls._dbgReel ?? null,
+            } : null,
+            piece: sp ? { pos: rel(sp), pinned: piece._armPinned === true, alive: piece.alive !== false } : null,
+            pieceToProjM: (sp && ls?.projectilePos)
+              ? +(Math.hypot(sp.x - ls.projectilePos.x, sp.y - ls.projectilePos.y, sp.z - ls.projectilePos.z) / M).toFixed(2)
+              : null,
+            kit: kh ? {
+              drape: +(kh._drape ?? 0).toFixed(2), cinch: +(kh._cinchFrac ?? 0).toFixed(2),
+              contentsZM: +((kh._contentsZ ?? 0) / M).toFixed(2),
+              contentsRM: +((kh._contentsR ?? 0) / M).toFixed(2),
+              jiggle: +(kh._jiggleAmp ?? 0).toExponential(1),
+              memOp: kh.membraneMat ? +kh.membraneMat.opacity.toFixed(3) : null,
+            } : null,
+            cut: lc ? {
+              active: lc.active, t: +(lc.t ?? 0).toFixed(2),
+              settleT: lc.settleT != null ? +lc.settleT.toFixed(2) : null,
+              view: cameraSystem?.currentView ?? null,
+            } : null,
+            cam: cam ? {
+              pos: rel(cam.position),
+              toShipM: +(Math.hypot(cam.position.x - ship.x, cam.position.y - ship.y, cam.position.z - ship.z) / M).toFixed(1),
+              toPieceM: sp ? +(Math.hypot(cam.position.x - sp.x, cam.position.y - sp.y, cam.position.z - sp.z) / M).toFixed(1) : null,
+            } : null,
+            adoptedBag: vis0 ? {
+              detached: !!vis0.detached,
+              groupPos: rel(vis0.group?.position),
+              cinch: vis0.kitHandle ? +(vis0.kitHandle._cinchFrac ?? 0).toFixed(2) : null,
+              contentsZM: vis0.kitHandle ? +((vis0.kitHandle._contentsZ ?? 0) / M).toFixed(2) : null,
+              threadOp: vis0.kitHandle?.coneMesh?.material ? +vis0.kitHandle.coneMesh.material.opacity.toFixed(3) : null,
+            } : null,
+            netState: captureNetSystem?.getActiveNetForPod?.(0)?.state ?? null,
+          };
+        } catch (e) {
+          return { error: String((e && e.message) || e) };
+        }
+      };
+
       // ── Per-frame probe recorder (whale-in-cone plan, Task 1.4) ──
       // `__netScenarioProbe()` is a stateless getter and the harness polls it at
       // 1 Hz — too coarse to see the brake instant, which is a single frame

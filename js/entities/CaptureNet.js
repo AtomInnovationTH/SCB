@@ -3634,10 +3634,18 @@ export class CaptureNetSystem {
     net._remainingM = standoffM;
     net._reelSeedM = standoffM;
     net._effectiveStandoffM = standoffM;
-    // Seat depth 0: the catch pin = the bag apex = berth anchor + fwd × standoff —
-    // exactly the collar seat the lasso reel delivered it to (no hand-off snap) and
-    // the S13(c) collar-seat claim (cargo centre at collar + fwd × (size/2 + clearance)).
-    net._catchSeatM = 0;
+    // 2026-08-26 round 2 (ENGULF) — the piece rides INSIDE the bag, not at the
+    // apex tip. Seat depth 0 pinned the catch AT the bag apex: the drawn bag
+    // extended fore of it, so the piece read "alongside the net" at the nose
+    // (owner: "net/Bag is supposed to be AROUND the debris, engulfing"). The
+    // pod path already seats catches inside the bag at their capture depth
+    // (whale-in-cone follow-up 2, _updateMotherReel); adoption now uses the
+    // fixed ADOPT_CATCH_SEAT_M (byte-equal to WRAP_SEAT_FRAC × the CN.LARGE
+    // bag cone height — the one-home law pinned in test-Constants), and the
+    // lasso reel delivers the piece to collar-seat + fwd × the SAME constant
+    // (LassoSystem._reelDeliveryWorld), so the hand-off stays pin-exact — the
+    // no-snap contract holds with the piece engulfed instead of alongside.
+    net._catchSeatM = CN.ADOPT_CATCH_SEAT_M ?? 0;
     net._lateral = new THREE.Vector3();
     net._fwdLagged = fwd.clone();
     if (target.tumbleAxis && player.quaternion) {

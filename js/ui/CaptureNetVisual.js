@@ -1709,7 +1709,27 @@ export class CaptureNetVisual {
         coneMesh.visible = true;
         vis.tetherLine.visible = (net.state !== STATES.TRANSFERRING);
         coneMesh.material.color.setHex(COL_DISC);
-        coneMesh.material.opacity = 0.55;
+        // 2026-08-26 round 2 ("geodesic globe" kill): a held bag over a
+        // SUB-METRE catch floors its lattice on the readability-floored box —
+        // at 0.55 the threads read as a bare wireframe dome parked on the
+        // nose. The thread rest now lerps toward THREAD_OPACITY_HELD_SMALL
+        // across the SAME size band as the welded film (one vocabulary), so
+        // fabric (film + rosette + weights) carries the small-bag read and
+        // the lattice recedes. Whale class (≥ LARGE_SIZE_M) and size-less
+        // mocks keep the 0.55 byte — every gated pod subject is unmoved.
+        {
+          const NW = Constants.NET_WEB;
+          const dSize = net.targetDebris?.sizeMeter || 0;
+          let threadO = 0.55;
+          const oSmall = NW.THREAD_OPACITY_HELD_SMALL;
+          const szHi = NW.MEMBRANE_WELDED_LARGE_SIZE_M ?? 2.0;
+          const szLo = NW.MEMBRANE_WELDED_SMALL_SIZE_M ?? 0.8;
+          if (oSmall != null && dSize > 0 && szHi > szLo) {
+            const st = Math.max(0, Math.min(1, (szHi - dSize) / (szHi - szLo)));
+            threadO += (oSmall - threadO) * st;
+          }
+          coneMesh.material.opacity = threadO;
+        }
         this._setCinchedRim(vis);
         break;
 
