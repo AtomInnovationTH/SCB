@@ -1182,9 +1182,33 @@ export const Constants = {
   // The +Y wishbone bridle keeps the tether outside the ±Z FEEP exhaust cone;
   // ±15° beam steering is electrostatic (no moving parts, free) — the yoke's
   // job is tether-plume clearance, NOT vectoring.
+  //
+  // Wave2 arrest-gate reconciliation (see ArmUnit._tetherPlumeClearance):
+  // MIN_TETHER_PLUME_DEG 30 is the LEGACY worst-case budget — plume half-angle
+  // 20° + 10° of UNCOMMANDED vector wander (CROSSBOW_ARMS.md: "FEEP plume
+  // half-angle: 20° + vectoring 10° = 30° worst case"). The Rev-3 whole-haul
+  // reel attitude converges the nose ONTO the dock line (probe: 0.00° at the
+  // arrest window), so a nose-referenced 30° test can never pass in production
+  // dock geometry. During the arrest the vector loop is actively COMMANDED, so
+  // the wander term collapses to STEER_JITTER_DEG and the requirement
+  // decomposes into PLUME_HALF_ANGLE_DEG + STEER_JITTER_DEG against the
+  // STEERED axis, fundable by a deliberate attitude offset + electrostatic
+  // beam steer. Geometry at arrest entry (d = ARREST_DISTANCE_M 8, weaver):
+  //   bridle standoff  atan(0.70·by/d) = atan(0.14/8)          ≈  1.0°
+  //   arrest attitude offset ARREST_STEER_DEG                  = 15.0°
+  //   commanded electrostatic steer (≤ VECTOR_ENVELOPE_DEG)    =  6.0° used
+  //   total plume-axis-to-tether angle 15+1+6 = 22 = 20 + 2    ⇒ clear
+  // The bridle standoff alone is ~1° at 8 m (daughters are 0.1–0.3 m craft) —
+  // real, but it cannot carry the clearance; the attitude offset must.
   YOKE_CLEARANCE: {
-    MIN_TETHER_PLUME_DEG:   30,   // required angle between tether line and plume axis to fire FEEP
+    MIN_TETHER_PLUME_DEG:   30,   // legacy no-assist clearance (= 20° cone + 10° uncommanded wander); at/above this no steer is engaged
     REEL_ATTITUDE_SLERP:    0.1,  // slew rate to the nose-at-strut / bridle-trailing attitude
+    PLUME_HALF_ANGLE_DEG:   20,   // indium FEEP exhaust cone half-angle (CROSSBOW_ARMS.md §FEEP; plan Rev-3 §1.2)
+    VECTOR_ENVELOPE_DEG:    15,   // electrostatic beam-steer authority — free, no moving parts (plan Rev-3)
+    STEER_JITTER_DEG:        2,   // closed-loop residual pointing error when the vector is COMMANDED (replaces the 10° open-loop wander term)
+    ARREST_STEER_DEG:       15,   // deliberate arrest-window nose offset AWAY from the bridle side; thrust-along-travel loss 1−cos(15°) ≈ 3.4% is priced into the arrest debit
+    ARREST_STEER_LEAD_M:     6,   // blend lead ahead of ARREST_DISTANCE_M: w(d)=clamp01(((ARREST+LEAD)−d)/LEAD) — engages at 14 m (inside DECEL_DISTANCE_M 15, so the whole maneuver lives in the braking approach), FULL at 8 m, because the one-shot gate/debit fires on the FIRST frame inside the window; a strictly-inside blend would leave the entry-frame nose un-steered and re-create the always-fouls bug. Sized 6 m so the REEL_ATTITUDE_SLERP (per-frame 0.1) still delivers enough of the offset at entry (steerNeeded ≤ VECTOR_ENVELOPE_DEG) even at ~20 fps through the ~12–14 m/s decel band.
+    BRIDLE_APEX_Y_FRAC:   0.70,   // hardware SSOT: bridle gimbal apex at local (0, +0.70·by, 0) — MUST match the bridle-leg geometry in ArmUnit._createMesh (weaver by=0.2 m ⇒ 0.14 m tether standoff)
   },
 
 

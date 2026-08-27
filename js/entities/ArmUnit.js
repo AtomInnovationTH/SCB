@@ -2827,13 +2827,23 @@ export class ArmUnit {
       // for the entire haul (not just the arrest), and recomputed each frame so
       // it tracks a maneuvering mother. Replaces the prograde/inherited fallback
       // that REELING used before (REELING barely sets velocity).
+      // Wave2 arrest-gate reconciliation: inside the arrest approach the aim is
+      // offset ARREST_STEER_DEG away from the bridle side, distance-blended via
+      // _applyArrestSteerToHeading (single owner: this branch — the offset is
+      // part of the SAME aim this slerp has always tracked, so there is no
+      // competing quaternion writer and no snap at the window boundary).
       if (!headingDir && this.state === S.REELING
           && Constants.isFeatureEnabled('REEL_PROFILE_V2') && parentPos && this.dockOffset) {
         const dockWP = this._tmpDockTarget || (this._tmpDockTarget = new THREE.Vector3());
         this._resolveStrutDockWorld(parentPos, parentQuat, dockWP);
         headingDir = this._tmpVec.subVectors(dockWP, this.position);
         if (headingDir.lengthSq() < 1e-20) headingDir = null;
-        else { headingDir.normalize(); reelHeading = true; }
+        else {
+          const distMeters = headingDir.length() / M;
+          headingDir.normalize();
+          this._applyArrestSteerToHeading(headingDir, distMeters);
+          reelHeading = true;
+        }
       }
 
       // Prograde fallback: align nose with velocity vector
@@ -5089,46 +5099,164 @@ export class ArmUnit {
   }
 
   /**
-   * Yoke tether-plume clearance test (REEL_PROFILE_V2, plan Rev-3 / §1.2).
+   * Yoke tether-plume clearance test (REEL_PROFILE_V2, plan Rev-3 / §1.2;
+   * Wave2 arrest-gate reconciliation).
+   *
    * FEEP braking fires the fore nozzle (+Z exhaust) toward the mother — the same
-   * side the tether runs to. The +Y wishbone bridle holds the cable off that
-   * axis. This returns true only when the angle between the tether line (bridle
-   * anchor → strut dock) and the active brake-plume axis (the daughter's world
-   * +Z / nose) is at least MIN_TETHER_PLUME_DEG, i.e. the cable rides outside
-   * the plume cone. When false, FEEP is withheld and the reel finishes on the
-   * motor alone (no §4.2 ablation is simulated). Degenerate/test geometry
-   * (no parent frame) returns true so minimal mocks aren't blocked.
+   * side the tether runs to. Under the Rev-3 whole-haul reel attitude the nose
+   * converges ONTO the dock line, so the original nose-referenced ≥30° test
+   * (MIN_TETHER_PLUME_DEG = 20° plume half-angle + 10° UNCOMMANDED vector
+   * wander) fouled every production dock: 0.00° measured at the arrest window,
+   * the debit never billed, and every loaded dock took the winch fallback.
+   *
+   * Reconciliation (geometry derivation, weaver numbers at entry d = 8 m):
+   *  1. REAL BRIDLE GEOMETRY — the tether anchors at the +Y wishbone bridle
+   *     apex, local (0, +BRIDLE_APEX_Y_FRAC·by, 0) (hardware in _createMesh),
+   *     NOT at the nose. Standoff atan(0.70·0.2/8) ≈ 1.0° at entry, growing as
+   *     she closes — real, but the daughters are 0.1–0.3 m craft, so this term
+   *     alone can never reach 30° (or even 20°) at arrest range.
+   *  2. ARREST STEER ATTITUDE — the whole-haul attitude owner blends the nose
+   *     ARREST_STEER_DEG (15°) AWAY from the bridle side inside the arrest
+   *     approach (see the REELING branch in update()), fully converged at
+   *     entry via ARREST_STEER_LEAD_M. With the beam steered away from the
+   *     bridle, the anchor's +Y elevation keeps the ENTIRE cable on the
+   *     opposite side of the exhaust cone (no near-field crossing) — steering
+   *     toward the bridle side would sweep the beam through the cable at
+   *     ~0.3 m range, which is why the sign matters.
+   *  3. COMMANDED-STEER DECOMPOSITION — during the arrest the vector loop is
+   *     closed, so the 10° open-loop wander budget collapses to
+   *     STEER_JITTER_DEG (2°) and the requirement against the STEERED axis is
+   *     PLUME_HALF_ANGLE_DEG + STEER_JITTER_DEG = 22°. The emitter contributes
+   *     up to VECTOR_ENVELOPE_DEG (15°, electrostatic, free) of commanded
+   *     steer on top of whatever the current nose geometry already provides.
+   *     Production entry: 15° (attitude) + 1° (bridle) + 6° (steer) = 22° ⇒
+   *     clear. Un-converged/seized attitude (nose on the dock line): 1° + 15°
+   *     = 16° < 22° ⇒ genuinely fouled, winch fallback — the "dock dead-ahead
+   *     of the plume with no steer margin available" case.
+   *
+   * Angles ≥ MIN_TETHER_PLUME_DEG (30°) clear unassisted with no commanded
+   * steer (legacy fast path — dock-abeam geometry is byte-identical to the
+   * old gate, and pays no steer surcharge). When `clear` is false FEEP is
+   * withheld and the reel finishes on the motor alone (no §4.2 ablation is
+   * simulated). Degenerate/test geometry (no parent frame) clears so minimal
+   * mocks aren't blocked.
+   *
    * @param {THREE.Vector3} [parentPos] mother world position
    * @param {THREE.Quaternion} [parentQuat] mother world orientation
-   * @returns {boolean} true if the tether clears the plume (FEEP permitted)
+   * @returns {{clear: boolean, steerNeededDeg: number}} `clear` = FEEP
+   *   permitted; `steerNeededDeg` = commanded electrostatic steer engaged for
+   *   the burn (0 when the geometry clears unassisted — drives the cos-loss
+   *   debit surcharge at the call site)
    * @private
    */
-  _tetherPlumeClearOK(parentPos, parentQuat) {
+  _tetherPlumeClearance(parentPos, parentQuat) {
     const YC = Constants.YOKE_CLEARANCE || {};
     const minDeg = YC.MIN_TETHER_PLUME_DEG ?? 30;
-    if (!parentPos || !this.dockOffset) return true;   // test/degenerate geometry
+    if (!parentPos || !this.dockOffset) {
+      return { clear: true, steerNeededDeg: 0 };   // test/degenerate geometry
+    }
 
     // Strut dock world position (tether mother-side anchor) — shared resolver so
     // this gate uses exactly the same dock reference as the reel target.
     const dockWP = this._tmpPlumeDock || (this._tmpPlumeDock = new THREE.Vector3());
     this._resolveStrutDockWorld(parentPos, parentQuat, dockWP);
 
-    // Tether line: daughter (+Y bridle ≈ daughter position for this angle test)
-    // → strut dock. Brake-plume axis: daughter world +Z (nose), the fore-nozzle
-    // exhaust direction under the whole-haul reel attitude.
+    // Tether line: +Y bridle apex (the REAL daughter-side anchor — hardware at
+    // local (0, +BRIDLE_APEX_Y_FRAC·by, 0), see _createMesh) → strut dock.
+    // Brake-plume axis: daughter world +Z (nose), the fore-nozzle exhaust
+    // direction under the whole-haul reel attitude.
+    const apexFrac = YC.BRIDLE_APEX_Y_FRAC ?? 0.70;
+    const apexY = apexFrac * (this.config.bodyDims?.[1] ?? 0.2) * M;   // scene units
+    const anchorWP = this._tmpPlumeAnchor || (this._tmpPlumeAnchor = new THREE.Vector3());
+    anchorWP.set(0, apexY, 0).applyQuaternion(this.group.quaternion).add(this.position);
+
     const tetherDir = this._tmpPlumeTether || (this._tmpPlumeTether = new THREE.Vector3());
-    tetherDir.subVectors(dockWP, this.position);
-    if (tetherDir.lengthSq() < 1e-20) return true;
+    tetherDir.subVectors(dockWP, anchorWP);
+    if (tetherDir.lengthSq() < 1e-20) return { clear: true, steerNeededDeg: 0 };
     tetherDir.normalize();
 
     const noseDir = this._tmpPlumeNose || (this._tmpPlumeNose = new THREE.Vector3());
     noseDir.set(0, 0, 1).applyQuaternion(this.group.quaternion);
-    if (noseDir.lengthSq() < 1e-12) return true;
+    if (noseDir.lengthSq() < 1e-12) return { clear: true, steerNeededDeg: 0 };
     noseDir.normalize();
 
     const cos = Math.max(-1, Math.min(1, tetherDir.dot(noseDir)));
     const angleDeg = Math.acos(cos) * 180 / Math.PI;
-    return angleDeg >= minDeg;
+
+    // Legacy unassisted fast path: cable already rides ≥ 30° outside the
+    // worst-case (wander-inclusive) cone — no steer engaged, no surcharge.
+    if (angleDeg >= minDeg) return { clear: true, steerNeededDeg: 0 };
+
+    // Commanded-steer decomposition: required clearance vs the STEERED axis.
+    const required = (YC.PLUME_HALF_ANGLE_DEG ?? 20) + (YC.STEER_JITTER_DEG ?? 2);
+    const steerNeededDeg = Math.max(0, required - angleDeg);
+    const clear = steerNeededDeg <= (YC.VECTOR_ENVELOPE_DEG ?? 15);
+    return { clear, steerNeededDeg };
+  }
+
+  /**
+   * Boolean-compat wrapper over {@link _tetherPlumeClearance} (the historical
+   * gate API — kept so any external probe/diagnostic keeps working).
+   * @param {THREE.Vector3} [parentPos] mother world position
+   * @param {THREE.Quaternion} [parentQuat] mother world orientation
+   * @returns {boolean} true if the tether clears the plume (FEEP permitted)
+   * @private
+   */
+  _tetherPlumeClearOK(parentPos, parentQuat) {
+    return this._tetherPlumeClearance(parentPos, parentQuat).clear;
+  }
+
+  /**
+   * Arrest-window beam-steer attitude offset (Wave2 arrest-gate
+   * reconciliation; the geometry derivation lives on _tetherPlumeClearance).
+   *
+   * Rotates the whole-haul reel AIM (`headingDir`, unit, in place) by
+   * w(d)·ARREST_STEER_DEG about the axis ⊥(bridle-up, heading), swinging the
+   * nose AWAY from the bridle's world side so the +Y-anchored cable ends up
+   * wholly on the far side of the fore-nozzle exhaust cone during the arrest
+   * burn (steering TOWARD the bridle would sweep the beam through the cable
+   * in the near field — the sign matters, see the gate docstring).
+   *
+   * Blend law: w(d) = clamp01(((ARREST_DISTANCE_M + ARREST_STEER_LEAD_M) − d)
+   * / ARREST_STEER_LEAD_M) — zero at/outside the 14 m engage line, FULL at
+   * the 8 m window entry. The LEAD band exists because the one-shot arrest
+   * gate/debit fires on the FIRST frame inside ARREST_DISTANCE_M: a blend
+   * confined strictly inside the window would guarantee that entry frame sees
+   * the un-steered nose (w≈0), foul the gate, and re-create the audited
+   * always-winches bug. w is continuous in d and the caller's
+   * REEL_ATTITUDE_SLERP smooths the remainder, so the offset blends in AND
+   * back out (window bounce, dock handoff) with no orientation snap at the
+   * 8 m line. Called ONLY from the REELING whole-haul attitude branch in
+   * update() — the single owner of the REELING quaternion (HANDOFF §9 Rule 8
+   * / §10 Rule B); the gate reads the quaternion, never writes it.
+   *
+   * @param {THREE.Vector3} headingDir unit aim (nose target), rotated in place
+   * @param {number} distMeters current daughter→strut-dock distance in metres
+   * @returns {THREE.Vector3} headingDir (for chaining)
+   * @private
+   */
+  _applyArrestSteerToHeading(headingDir, distMeters) {
+    const YC = Constants.YOKE_CLEARANCE || {};
+    const steerDeg = YC.ARREST_STEER_DEG ?? 15;
+    if (!(steerDeg > 0)) return headingDir;
+    const RF = Constants.REDOCK_FEEP || {};
+    const arrestDist = RF.ARREST_DISTANCE_M ?? 8;
+    const leadM = Math.max(YC.ARREST_STEER_LEAD_M ?? 6, 1e-6);
+    const w = Math.min(1, Math.max(0, ((arrestDist + leadM) - distMeters) / leadM));
+    if (w <= 0) return headingDir;
+
+    // Bridle-up in world space (local +Y through the current attitude).
+    const bridleUp = this._tmpSteerUp || (this._tmpSteerUp = new THREE.Vector3());
+    bridleUp.set(0, 1, 0).applyQuaternion(this.group.quaternion);
+    // Axis ⊥ both; rotating heading about cross(bridleUp, heading) tilts the
+    // nose away from the bridle side. Degenerate (bridle ∥ heading — nose ⊥
+    // dock line) geometries already clear the gate unassisted: skip.
+    const axis = this._tmpSteerAxis || (this._tmpSteerAxis = new THREE.Vector3());
+    axis.crossVectors(bridleUp, headingDir);
+    if (axis.lengthSq() < 1e-12) return headingDir;
+    axis.normalize();
+    headingDir.applyAxisAngle(axis, w * steerDeg * Math.PI / 180).normalize();
+    return headingDir;
   }
 
   /**
@@ -5713,12 +5841,31 @@ export class ArmUnit {
         const perMission = Constants.MISSIONS?.DEBRIS_PER_MISSION || 5;
         const missionNumber = Math.floor((gameState.debrisCleared || 0) / perMission) + 1;
         const mission1Free = (RF.MISSION1_FREE !== false) && missionNumber === 1;
-        const plumeClear = this._tetherPlumeClearOK(parentPos, parentQuat);
+        // Wave2 arrest-gate reconciliation: decomposed clearance verdict (real
+        // bridle anchor + commanded electrostatic steer against the 20°+2°
+        // steered-axis requirement — full derivation on _tetherPlumeClearance).
+        // The arrest-window attitude offset that makes production dock-ahead
+        // geometry pass is owned by the REELING branch in update(); by entry
+        // it is converged (ARREST_STEER_LEAD_M), so this gate reads the honest
+        // burn-start nose.
+        const plumeVerdict = this._tetherPlumeClearance(parentPos, parentQuat);
+        const plumeClear = plumeVerdict.clear;
 
         if (mission1Free) {
           this._redockDebitApplied = true;   // free pass still suppresses the DOCKING rate
         } else {
-          const debit = (RF.DEBIT_K ?? 0.0008) * mUnit * vArrest;
+          // Steer-assist pricing: when the clear verdict needed commanded steer
+          // (steerNeededDeg > 0), the burn runs on the ARREST_STEER_DEG offset
+          // plan — thrust component along travel scales as cos(offset), so the
+          // same Δv costs 1/cos(15°) ≈ ×1.035 propellant (the audit's ~3.5%).
+          // Unassisted geometry (≥ MIN_TETHER_PLUME_DEG, e.g. dock abeam) pays
+          // exactly the legacy debit. Priced flat on the committed offset, not
+          // per-degree — one constant, one plan.
+          const YC = Constants.YOKE_CLEARANCE || {};
+          const steerLoss = plumeVerdict.steerNeededDeg > 0
+            ? 1 / Math.cos((YC.ARREST_STEER_DEG ?? 15) * Math.PI / 180)
+            : 1;
+          const debit = (RF.DEBIT_K ?? 0.0008) * mUnit * vArrest * steerLoss;
           if (plumeClear && this.fuel >= debit) {
             this.fuel -= debit;
             this._redockDebitApplied = true;
