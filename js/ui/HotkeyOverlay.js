@@ -100,6 +100,7 @@ const HOTKEY_GROUPS = [
       [['Z'], 'Cycle debris wireframe zone'],
       [['.', ','], 'Open / close struts (.) / panels (,)'],
       [[',', 'Shift'], 'Feather panels (quick edge-on dodge)'],
+      [['O'], 'Aft flower — deploy / stow (once purchased)'],
     ],
   },
 ];

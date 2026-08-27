@@ -232,6 +232,20 @@ export class PlayerSatellite extends THREE.Group {
     this._differentialFireTargets = [0, 0, 0, 0]; // per-nozzle attitude rotation intensity [TOP, BOTTOM, RIGHT, LEFT]
     this._activeThrustDir = { x: 0, y: 0, z: 0 };
 
+    // AFT FLOWER state (P2 thermal arc — observe-only; charter
+    // .kilo/plans/1787839542000-phase2-flower-hardware-charter.md).
+    // Purchase-gated: pairs land via the shop (flower_pair_a/b) → applyUpgrade.
+    // ONE pose for all four struts at P2 (deploy/stow in unison — per-strut
+    // easing is P5's load-aware seam). θ from +Z, α_aft = 180° − θ.
+    this._flowerPairs = { A: false, B: false };
+    /** @type {Array<{hinge: THREE.Group, azDeg: number, pair: string}>} */
+    this._flowerGroups = [];
+    this._flowerThetaRad = (Constants.THERMAL.FLOWER.POSE_STOW_DEG * Math.PI) / 180;
+    /** Slew latch — the daughter `_strutTargetAlpha` contract mirrored:
+     *  player intent wins mid-swing (a new toggle overwrites an in-flight
+     *  target), bounded rate, never a snap, cleared on arrival. */
+    this._flowerTargetTheta = undefined;
+
     // Tether reel states: 'ready', 'deployed', 'empty' — V5: expanded to 8 reels
     this._tetherStates = Array(V5_ARM_COUNT).fill('ready');
     this._tetherDeployAnim = Array(V5_ARM_COUNT).fill(0); // 0..1 spool animation
@@ -2670,6 +2684,281 @@ export class PlayerSatellite extends THREE.Group {
   }
 
   // --------------------------------------------------------------------------
+  // 3.5 AFT FLOWER (P2 — thermal arc, observe-only)
+  // --------------------------------------------------------------------------
+  // 4 rigid aft-pivot struts with radiator plates and inert tip hardpoints at
+  // the P1 allocation table's FLOWER-NE/NW/SW/SE stations (az 45/135/225/315,
+  // hinge ring r=0.40 at the z=−1.0 rim, brackets in the z −1.000..−0.886 /
+  // r 0.34..0.46 band). The struts "open LIKE A FLOWER" — the owner's grammar,
+  // kept verbatim. They DRAW and SLEW but throttle nothing: thermal state is
+  // P3, the digest valve is P4, tip cargo booking is P5.
+  //
+  // Frame per strut: pivotGroup at the hinge point, rotated so local +X =
+  // radial out, +Y = tangential, +Z = ship +Z. The hinge child rotates about
+  // local Y (the physical clevis axis): rotation.y = θ − 90° maps the boom
+  // (built along +X) to sin(θ)·r̂ + cos(θ)·ẑ — θ=90° full bloom at the rim
+  // plane, θ=146° the stow bud (probe-pinned band edge; θ→180° camps the Y3
+  // axial reserve and is plume-illegal beyond R=1.714 m under thrust —
+  // tmp/flower-pose-band.mjs §2).
+
+  /** Number of purchased flower pairs (0..2). */
+  getFlowerPairCount() {
+    return (this._flowerPairs.A ? 1 : 0) + (this._flowerPairs.B ? 1 : 0);
+  }
+
+  /**
+   * Purchased flower dry mass — the mass-budget carrier term read by
+   * ArmManager.getMassBudget() (probe 4: pair taxes −280.7 / −231.0 m/s ΔV
+   * at full tanks; the shop rows say it out loud).
+   * @returns {number} kg
+   */
+  getFlowerDryMassKg() {
+    return this.getFlowerPairCount() * Constants.THERMAL.FLOWER.PAIR_DRY_MASS_KG;
+  }
+
+  /**
+   * Deploy-state snapshot for the thermal HUD group (StatusPanel). EMPTY-SAFE
+   * contract: returns null until a pair is purchased — the HUD renders ''
+   * (byte-identical to the pre-flower panel). Pose readout only, NO thermal
+   * numbers (those are P3).
+   * @returns {{pairCount:number, thetaDeg:number, openFrac:number,
+   *            slewing:boolean, pose:string}|null}
+   */
+  getFlowerStatus() {
+    const pairCount = this.getFlowerPairCount();
+    if (pairCount === 0) return null;
+    const FL = Constants.THERMAL.FLOWER;
+    const thetaDeg = (this._flowerThetaRad * 180) / Math.PI;
+    const span = FL.POSE_STOW_DEG - FL.POSE_CARGO_DEG;
+    const openFrac = Math.max(0, Math.min(1, (FL.POSE_STOW_DEG - thetaDeg) / span));
+    const slewing = this._flowerTargetTheta !== undefined;
+    const near = (deg) => Math.abs(thetaDeg - deg) < 1.0;
+    const pose = near(FL.POSE_STOW_DEG) ? 'STOW'
+      : near(FL.POSE_PARK_DEG) ? 'PARK'
+        : near(FL.POSE_CARGO_DEG) ? 'CARGO' : 'SLEW';
+    return { pairCount, thetaDeg, openFrac, slewing, pose };
+  }
+
+  /**
+   * O key — toggle the aft flower between the stow bud (146°) and the full
+   * bloom (CARGO 90°). Mirrors toggleRosaFurl: the direction is decided from
+   * the LIVE pose so a mid-swing press reverses (player intent wins mid-swing
+   * — the daughter latch contract).
+   * @returns {boolean} true when now deploying (opening toward CARGO)
+   */
+  toggleFlowerDeploy() {
+    const FL = Constants.THERMAL.FLOWER;
+    const mid = ((FL.POSE_STOW_DEG + FL.POSE_CARGO_DEG) / 2) * Math.PI / 180;
+    const deploying = this._flowerThetaRad > mid;
+    this._flowerTargetTheta = ((deploying ? FL.POSE_CARGO_DEG : FL.POSE_STOW_DEG) * Math.PI) / 180;
+    return deploying;
+  }
+
+  /**
+   * Drive the flower to a named ladder pose ('STOW' | 'PARK' | 'CARGO').
+   * The P3 thermal-duty / P5 load-easing entry point (and the test hook).
+   * Targets clamp to the shipped ladder [POSE_CARGO_DEG, POSE_STOW_DEG] —
+   * the pose floor θ ≥ 90° is additionally enforced every frame in the driver.
+   * @param {'STOW'|'PARK'|'CARGO'} pose
+   * @returns {number|null} the accepted target θ in degrees, or null
+   */
+  setFlowerPose(pose) {
+    const FL = Constants.THERMAL.FLOWER;
+    const map = { STOW: FL.POSE_STOW_DEG, PARK: FL.POSE_PARK_DEG, CARGO: FL.POSE_CARGO_DEG };
+    const deg = map[pose];
+    if (deg === undefined || this._flowerGroups.length === 0) return null;
+    const clamped = Math.max(FL.POSE_CARGO_DEG, Math.min(FL.POSE_STOW_DEG, deg));
+    this._flowerTargetTheta = (clamped * Math.PI) / 180;
+    return clamped;
+  }
+
+  /**
+   * @private Install a purchased pair (idempotent — the save-restore path
+   * re-applies shop effects, so a second call is a no-op). Pair A = az 45/225,
+   * pair B = az 135/315 — trim-neutral diagonals (S12 ⟂-CoM 0.0000).
+   */
+  _installFlowerPair(pairKey) {
+    if (this._flowerPairs[pairKey]) return;
+    this._flowerPairs[pairKey] = true;
+    this._buildFlowerPair(pairKey);
+    // New meshes joined the tree: refresh the DETAIL-LOD cull set so the
+    // flower's MountBolt_* hardware rides the existing inert-detail family.
+    this._collectDetailMeshes();
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      sender: 'THERMAL',
+      text: pairKey === 'A'
+        ? 'Aft flower pair A installed — radiator struts at az 45/225. They open LIKE A FLOWER: press O.'
+        : 'Aft flower pair B installed — full four-strut flower at az 45/135/225/315. O deploys and stows.',
+      priority: 'info',
+    });
+  }
+
+  /**
+   * @private Build the two struts of one pair. Names use the P1-reserved
+   * `FlowerStrut_*` LOD prefix (PascalCase_${i} convention); station index i
+   * is fixed by azimuth order (0:45°, 1:135°, 2:225°, 3:315°) regardless of
+   * purchase order. Bolts take the `MountBolt_` prefix so the DETAIL-LOD
+   * inert-hardware family culls them by naming convention alone — no floating
+   * boxes: every piece hangs off the bracket/boom/plate stack.
+   */
+  _buildFlowerPair(pairKey) {
+    const FL = Constants.THERMAL.FLOWER;
+    const azList = pairKey === 'A' ? FL.PAIR_A_AZ_DEG : FL.PAIR_B_AZ_DEG;
+
+    const boomMat = new THREE.MeshStandardMaterial({
+      color: 0x555c66, metalness: 0.7, roughness: 0.4,
+    });
+    // Radiator plate — OSR-class light grey, distinct from the gold MLI body
+    // and the dark deck (P3 will key IR shimmer off these faces).
+    const plateMat = new THREE.MeshStandardMaterial({
+      color: 0xcdd4da, metalness: 0.35, roughness: 0.55,
+    });
+    const bracketMat = new THREE.MeshStandardMaterial({
+      color: 0x3a3a44, metalness: 0.7, roughness: 0.45,
+    });
+    const padMat = new THREE.MeshStandardMaterial({
+      color: 0x444455, metalness: 0.7, roughness: 0.3,
+    });
+
+    const boomLen = FL.STRUT_LENGTH_M * M;
+    const boomGeo = new THREE.CylinderGeometry(FL.STRUT_RADIUS_M * M, FL.STRUT_RADIUS_M * M, boomLen, 10);
+    const plateLen = (FL.PLATE_END_M - FL.PLATE_START_M) * M;
+    const plateGeo = new THREE.BoxGeometry(plateLen, FL.PLATE_HALF_WIDTH_M * 2 * M, FL.PLATE_THICK_M * M);
+    const bracketGeo = new THREE.BoxGeometry(0.10 * M, 0.14 * M, 0.10 * M);
+    const pinGeo = new THREE.CylinderGeometry(0.018 * M, 0.018 * M, 0.16 * M, 8);
+    const padGeo = new THREE.CylinderGeometry(0.05 * M, 0.05 * M, 0.04 * M, 8);
+    const boltGeo = new THREE.CylinderGeometry(0.008 * M, 0.008 * M, 0.012 * M, 6);
+
+    for (const azDeg of azList) {
+      const i = FL.AZIMUTHS_DEG.indexOf(azDeg);
+      const azRad = (azDeg * Math.PI) / 180;
+
+      // Pivot at the hinge point on the rim ring; local +X = radial out,
+      // +Y = tangential, +Z = ship +Z.
+      const pivot = new THREE.Group();
+      pivot.position.set(
+        Math.cos(azRad) * FL.HINGE_R_M * M,
+        Math.sin(azRad) * FL.HINGE_R_M * M,
+        FL.HINGE_Z_M * M,
+      );
+      pivot.rotation.z = azRad;
+      pivot.name = `FlowerStrutPivot_${i}`;
+      this.add(pivot);
+
+      // Hinge bracket — clevis on the barrel FORE of the rim, inside the
+      // allocated band (z −1.000..−0.886, r 0.34..0.46): box spans r
+      // 0.35..0.45, z −1.00..−0.90. Does not rotate with the pose.
+      const bracket = new THREE.Mesh(bracketGeo, bracketMat);
+      bracket.position.set(0, 0, 0.05 * M);
+      bracket.name = `FlowerStrutBracket_${i}`;
+      bracket.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
+      pivot.add(bracket);
+
+      // Hinge pin along the tangential (local Y) clevis axis.
+      const pin = new THREE.Mesh(pinGeo, padMat);
+      pin.name = `FlowerStrutPin_${i}`;
+      pin.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
+      pivot.add(pin);
+
+      // Bracket mount bolts — DETAIL-LOD inert hardware (MountBolt_ prefix
+      // joins the existing cull family; hidden when far, like all mm-scale
+      // fittings).
+      const boltAt = [[0.035, 0.055], [0.035, -0.055], [-0.035, 0.055], [-0.035, -0.055]];
+      boltAt.forEach(([bx, by], k) => {
+        const bolt = new THREE.Mesh(boltGeo, padMat);
+        bolt.rotation.x = Math.PI / 2;
+        bolt.position.set(bx * M, by * M, 0.102 * M);
+        bolt.name = `MountBolt_Flower_${i}_${k}`;
+        bolt.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_DETAIL;
+        pivot.add(bolt);
+      });
+
+      // Hinge group — rotation.y = θ − 90° (set every frame by _updateFlower).
+      const hinge = new THREE.Group();
+      hinge.name = `FlowerStrutHinge_${i}`;
+      pivot.add(hinge);
+
+      // Boom along local +X, hanging from the hinge.
+      const boom = new THREE.Mesh(boomGeo, boomMat);
+      boom.rotation.z = Math.PI / 2;                 // cylinder Y-axis → local X
+      boom.position.x = boomLen / 2;
+      boom.name = `FlowerStrut_${i}`;
+      boom.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
+      hinge.add(boom);
+
+      // Radiator plate ALONG the strut, width TANGENTIAL (local Y — the
+      // allocation table's plate clause), boom embedded flush.
+      const plate = new THREE.Mesh(plateGeo, plateMat);
+      plate.position.x = ((FL.PLATE_START_M + FL.PLATE_END_M) / 2) * M;
+      plate.name = `FlowerStrutPlate_${i}`;
+      plate.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
+      hinge.add(plate);
+
+      // Inert tip hardpoint — a named node + boss pad. NO booking, NO cargo
+      // logic (P5's seam lands on this node).
+      const tip = new THREE.Group();
+      tip.position.x = boomLen;
+      tip.name = `FlowerStrutTip_${i}`;
+      hinge.add(tip);
+      const pad = new THREE.Mesh(padGeo, padMat);
+      pad.rotation.z = Math.PI / 2;                  // pad axis along local X
+      pad.position.x = -0.02 * M;
+      pad.name = `FlowerStrutTipPad_${i}`;
+      pad.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_OPAQUE;
+      tip.add(pad);
+
+      this._flowerGroups.push({ hinge, azDeg, pair: pairKey });
+    }
+
+    // Initialize the new pair at the current shared pose immediately (a pair
+    // bought mid-slew joins the swing on the next driver tick).
+    const rotY = this._flowerThetaRad - Math.PI / 2;
+    for (const fg of this._flowerGroups) fg.hinge.rotation.y = rotY;
+  }
+
+  /**
+   * @private Per-frame flower slew driver — the daughter `_updateStruts`
+   * idiom mirrored (PlayerSatellite.js `_strutTargetAlpha` latch contract):
+   * bounded rate, never a snap; player intent wins mid-swing (toggle/setPose
+   * overwrite the latch); latch cleared on arrival. The struts open LIKE A
+   * FLOWER between the stow bud (146°) and the full bloom (90°).
+   *
+   * POSE FLOOR: θ ≥ POSE_FLOOR_DEG (90°) is enforced HERE every frame — a
+   * fore-of-rim excursion enters daughter-pocket real estate (P1 global
+   * keep-out). The P2 ceiling is the stow bud itself: no legal pose exists
+   * past 146° (Y3 axial reserve + plume band — tmp/flower-pose-band.mjs §2),
+   * so the whole reachable range is thrust-legal and the driver needs NO
+   * thrust-coupled writes.
+   */
+  _updateFlower(dt) {
+    if (this._flowerGroups.length === 0) return;
+    const FL = Constants.THERMAL.FLOWER;
+
+    if (this._flowerTargetTheta !== undefined && dt > 0) {
+      const maxDelta = FL.SLEW_RATE_RAD_S * dt;
+      const delta = this._flowerTargetTheta - this._flowerThetaRad;
+      this._flowerThetaRad += Math.max(-maxDelta, Math.min(delta, maxDelta));
+      if (Math.abs(this._flowerThetaRad - this._flowerTargetTheta) < FL.SETTLE_EPS_RAD) {
+        const thetaDeg = (this._flowerThetaRad * 180) / Math.PI;
+        const near = (deg) => Math.abs(thetaDeg - deg) < 1.0;
+        const pose = near(FL.POSE_STOW_DEG) ? 'STOW'
+          : near(FL.POSE_PARK_DEG) ? 'PARK'
+            : near(FL.POSE_CARGO_DEG) ? 'CARGO' : 'CUSTOM';
+        this._flowerTargetTheta = undefined;
+        eventBus.emit(Events.THERMAL_FLOWER_POSE, { thetaDeg, pose });
+      }
+    }
+
+    // Pose floor + ladder ceiling — clamped in the driver, unconditionally.
+    const floorRad = (FL.POSE_FLOOR_DEG * Math.PI) / 180;
+    const ceilRad = (FL.POSE_STOW_DEG * Math.PI) / 180;
+    this._flowerThetaRad = Math.max(floorRad, Math.min(ceilRad, this._flowerThetaRad));
+
+    const rotY = this._flowerThetaRad - Math.PI / 2;
+    for (const fg of this._flowerGroups) fg.hinge.rotation.y = rotY;
+  }
+
+  // --------------------------------------------------------------------------
   // 4. Sensor Suite
   // --------------------------------------------------------------------------
   /** @private */
@@ -3773,6 +4062,7 @@ export class PlayerSatellite extends THREE.Group {
     this._animateScanFlash(dt);
     this._updateRcsPuffs(dt);
     this._updateStruts(dt);
+    this._updateFlower(dt);
 
     // --- EDT deployment & attraction (Phase 6) ---
     if (this._edtDeployed && !this._edtActive) {
@@ -4944,6 +5234,16 @@ export class PlayerSatellite extends THREE.Group {
           text: 'Graphene supercapacitor bank installed. MPD thermal dissipation improved.',
           priority: 'info',
         });
+        break;
+      case 'flowerPairA':
+        // P2 aft flower — pair A (az 45/225). Observe-only hardware: draws,
+        // slews, throttles nothing. Idempotent via _installFlowerPair guard
+        // (the save-restore path re-applies shop effects).
+        this._installFlowerPair('A');
+        break;
+      case 'flowerPairB':
+        // P2 aft flower — pair B (az 135/315) completes the four-strut flower.
+        this._installFlowerPair('B');
         break;
     }
   }

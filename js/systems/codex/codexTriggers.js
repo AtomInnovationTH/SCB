@@ -284,6 +284,39 @@ export const CODEX_TRIGGERS = {
   news_aeolus_reentry:    [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 12 }],
   news_mev1_servicing:    [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 16 }],
   news_yunhai_collision:  [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 20 }],
+
+  // ===== P2 THERMAL-ARC BATCH (charter TASK H; 20 entries, single
+  // DATA_VERSION stamp '1003'→'1004') =====
+  // Event-keyed triggers only — no comms-substring couplings, so the
+  // test-CodexReachability corpus contract is untouched. Flower-adjacent
+  // entries unlock off the purchase/deploy verbs; encyclopedic ones ride the
+  // SCORE_UPDATE progression thresholds (the krypton/argon idiom);
+  // capture-heritage ones fire on the live capture chain events.
+  space_radiator:         [{ event: E.UPGRADE_APPLIED, match: (p) => !!p.id && p.id.includes('flower') },
+                           { event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 18 }],
+  loop_heat_pipe:         [{ event: E.THERMAL_FLOWER_INPUT, match: always },
+                           { event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 26 }],
+  pcm_bank:               [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 24 }],
+  concentrator_optics:    [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 17 }],
+  selective_surfaces:     [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 21 }],
+  edt_deorbit:            [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 23 }],
+  vleo_survival:          [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 27 }],
+  in_space_metallurgy:    [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 11 }],
+  maple_power_beam:       [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 29 }],
+  vacuum_mechanisms:      [{ event: E.THERMAL_FLOWER_INPUT, match: always },
+                           { event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 31 }],
+  soyuz6_vulkan:          [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 33 }],
+  etpack_tape:            [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 36 }],
+  astroforge_status:      [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 37 }],
+  mev_stinger:            [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 39 }],
+  lee_snare:              [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 41 }],
+  net_neck_winch:         [{ event: E.NET_BERTHED, match: always },
+                           { event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 34 }],
+  entanglement_hazard:    [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 13 }],
+  docking_lineage:        [{ event: E.NET_ADOPTED, match: always },
+                           { event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 38 }],
+  niti_superelastic:      [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 43 }],
+  crush_cartridge:        [{ event: E.SCORE_UPDATE, match: (p) => p.debrisCleared >= 46 }],
 };
 
 export default CODEX_TRIGGERS;

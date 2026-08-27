@@ -63,6 +63,15 @@ export const EFFECT_ROUTES = {
   mpdThruster: [PLAYER],
   mpdCathodeLife: [PLAYER],
 
+  // ── Thermal (P2 aft flower) → PlayerSatellite ──
+  // Purchase-gated hardware install: PlayerSatellite._installFlowerPair builds
+  // the pair meshes (idempotent — the save-restore replay re-applies these).
+  // Mass rides ArmManager.getMassBudget's coreDry carrier via
+  // player.getFlowerDryMassKg(); no resource-side state, so restore replay is
+  // safe by construction.
+  flowerPairA: [PLAYER],
+  flowerPairB: [PLAYER],
+
   // ── Sensors → SENSOR_UPGRADE event (SensorSystem self-manages) ──
   sensorRange: [SENSOR_EVENT],
   detectUntracked: [SENSOR_EVENT],

@@ -163,7 +163,8 @@
         "catalog_cz5b",
         "news_starlink_storm",
         "news_iss_pallet",
-        "news_aeolus_reentry"
+        "news_aeolus_reentry",
+        "vleo_survival"
       ],
       "i18n": {
         "title": "Atmospheric Drag",
@@ -411,7 +412,9 @@
     },
     {
       "id": "feep_thruster",
-      "hardwareNames": ["ION THRUSTERS (FEEP)"],
+      "hardwareNames": [
+        "ION THRUSTERS (FEEP)"
+      ],
       "category": "PROPULSION",
       "trl": 7,
       "icon": "🔥",
@@ -697,7 +700,9 @@
     },
     {
       "id": "cold_gas_rcs",
-      "hardwareNames": ["COLD-GAS STEERING"],
+      "hardwareNames": [
+        "COLD-GAS STEERING"
+      ],
       "category": "PROPULSION",
       "trl": 9,
       "icon": "💨",
@@ -738,7 +743,9 @@
     },
     {
       "id": "spring_energy",
-      "hardwareNames": ["CROSSBOW SPRING"],
+      "hardwareNames": [
+        "CROSSBOW SPRING"
+      ],
       "category": "PROPULSION",
       "trl": 2,
       "icon": "🛰️",
@@ -746,7 +753,9 @@
         "recoil_cancellation",
         "cold_gas_thruster",
         "graphene_gsl",
-        "tether_materials"
+        "tether_materials",
+        "niti_superelastic",
+        "crush_cartridge"
       ],
       "i18n": {
         "title": "Spring-Launched Daughters",
@@ -813,7 +822,10 @@
         "power_bus_management",
         "salvage_economy",
         "aluminum_space",
-        "battery_chemistry"
+        "battery_chemistry",
+        "pcm_bank",
+        "concentrator_optics",
+        "in_space_metallurgy"
       ],
       "i18n": {
         "title": "Solar Furnace Digestion",
@@ -870,7 +882,9 @@
     },
     {
       "id": "mli_insulation",
-      "hardwareNames": ["THERMAL BLANKET (MLI)"],
+      "hardwareNames": [
+        "THERMAL BLANKET (MLI)"
+      ],
       "category": "POWER",
       "trl": 9,
       "icon": "✨",
@@ -881,7 +895,9 @@
         "hbn_coating",
         "kevlar_mli",
         "thermal_cycling",
-        "vacuum_of_space"
+        "vacuum_of_space",
+        "selective_surfaces",
+        "vleo_survival"
       ],
       "i18n": {
         "title": "Multi-Layer Insulation (MLI)",
@@ -963,7 +979,9 @@
     },
     {
       "id": "solar_power",
-      "hardwareNames": ["SOLAR WING SPOOL"],
+      "hardwareNames": [
+        "SOLAR WING SPOOL"
+      ],
       "category": "POWER",
       "trl": 9,
       "icon": "☀️",
@@ -978,7 +996,8 @@
         "solar_cell_degradation",
         "power_beaming",
         "gallium_arsenide",
-        "solar_furnace"
+        "solar_furnace",
+        "maple_power_beam"
       ],
       "i18n": {
         "title": "Solar Panel Power Generation",
@@ -1086,7 +1105,10 @@
         "mli_insulation",
         "power_bus_management",
         "rtg_power",
-        "kevlar_mli"
+        "kevlar_mli",
+        "space_radiator",
+        "loop_heat_pipe",
+        "selective_surfaces"
       ],
       "i18n": {
         "title": "Thermal Management",
@@ -1359,7 +1381,9 @@
     },
     {
       "id": "gallium_arsenide",
-      "hardwareNames": ["HULL SOLAR CELLS"],
+      "hardwareNames": [
+        "HULL SOLAR CELLS"
+      ],
       "category": "MATERIALS",
       "trl": 9,
       "icon": "☀️",
@@ -1514,7 +1538,9 @@
       "related": [
         "space_tether",
         "tether_dynamics",
-        "tether_materials"
+        "tether_materials",
+        "edt_deorbit",
+        "etpack_tape"
       ],
       "i18n": {
         "title": "Electrodynamic Tethers",
@@ -1528,14 +1554,17 @@
     },
     {
       "id": "miura_ori_net",
-      "hardwareNames": ["LARGE NET LAUNCHER"],
+      "hardwareNames": [
+        "LARGE NET LAUNCHER"
+      ],
       "category": "TETHERS",
       "trl": 7,
       "icon": "📐",
       "related": [
         "net_yo_yo_despin",
         "bolas_weapon",
-        "tether_materials"
+        "tether_materials",
+        "net_neck_winch"
       ],
       "i18n": {
         "title": "Miura-Ori Net Folding",
@@ -1550,7 +1579,9 @@
     },
     {
       "id": "reel_mechanics",
-      "hardwareNames": ["TETHER WINCHES"],
+      "hardwareNames": [
+        "TETHER WINCHES"
+      ],
       "category": "TETHERS",
       "trl": 3,
       "icon": "🎣",
@@ -1607,7 +1638,8 @@
         "tether_materials",
         "edt_physics",
         "tether_reel_in",
-        "reel_mechanics"
+        "reel_mechanics",
+        "edt_deorbit"
       ],
       "i18n": {
         "title": "Space Tethers",
@@ -1653,7 +1685,8 @@
         "bolas_weapon",
         "edt_physics",
         "miura_ori_net",
-        "spring_energy"
+        "spring_energy",
+        "entanglement_hazard"
       ],
       "i18n": {
         "title": "Tether Materials: Dyneema & Zylon",
@@ -2069,7 +2102,9 @@
     },
     {
       "id": "trackable_vs_dark",
-      "hardwareNames": ["HEAT (INFRARED) CAM"],
+      "hardwareNames": [
+        "HEAT (INFRARED) CAM"
+      ],
       "category": "DEBRIS",
       "trl": 9,
       "icon": "👁️",
@@ -2110,7 +2145,9 @@
     },
     {
       "id": "gps_denied",
-      "hardwareNames": ["GPS ANTENNAS"],
+      "hardwareNames": [
+        "GPS ANTENNAS"
+      ],
       "category": "SENSORS",
       "trl": 8,
       "icon": "📡",
@@ -2191,7 +2228,9 @@
     },
     {
       "id": "lidar_ranging",
-      "hardwareNames": ["LASER RANGEFINDER"],
+      "hardwareNames": [
+        "LASER RANGEFINDER"
+      ],
       "category": "SENSORS",
       "trl": 9,
       "icon": "🔦",
@@ -2211,7 +2250,9 @@
     },
     {
       "id": "docking_precision",
-      "hardwareNames": ["SENSOR TURRET"],
+      "hardwareNames": [
+        "SENSOR TURRET"
+      ],
       "category": "SENSORS",
       "trl": 9,
       "icon": "🎯",
@@ -2236,7 +2277,9 @@
     },
     {
       "id": "star_tracker",
-      "hardwareNames": ["STAR TRACKERS"],
+      "hardwareNames": [
+        "STAR TRACKERS"
+      ],
       "category": "SENSORS",
       "trl": 9,
       "icon": "⭐",
@@ -2259,7 +2302,9 @@
     },
     {
       "id": "detumble",
-      "hardwareNames": ["SPIN-BRAKE LASER"],
+      "hardwareNames": [
+        "SPIN-BRAKE LASER"
+      ],
       "category": "ATTITUDE",
       "trl": 9,
       "icon": "🌀",
@@ -2397,7 +2442,9 @@
     },
     {
       "id": "bandwidth_limits",
-      "hardwareNames": ["MEDIUM-GAIN ANTENNA"],
+      "hardwareNames": [
+        "MEDIUM-GAIN ANTENNA"
+      ],
       "category": "COMMS",
       "trl": 9,
       "icon": "📶",
@@ -2419,7 +2466,9 @@
     },
     {
       "id": "comms_blackout",
-      "hardwareNames": ["S-BAND OMNI (AFT)"],
+      "hardwareNames": [
+        "S-BAND OMNI (AFT)"
+      ],
       "category": "COMMS",
       "trl": 9,
       "icon": "📵",
@@ -2498,7 +2547,9 @@
     },
     {
       "id": "frequency_bands",
-      "hardwareNames": ["S-BAND RADIO OMNIS"],
+      "hardwareNames": [
+        "S-BAND RADIO OMNIS"
+      ],
       "category": "COMMS",
       "trl": 9,
       "icon": "📡",
@@ -2849,7 +2900,9 @@
     },
     {
       "id": "docking_berthing",
-      "hardwareNames": ["DAUGHTER BERTHS"],
+      "hardwareNames": [
+        "DAUGHTER BERTHS"
+      ],
       "category": "ORBITAL_MECHANICS",
       "trl": 9,
       "icon": "🤝",
@@ -2860,7 +2913,9 @@
         "news_mev1_servicing",
         "world_servicing",
         "heritage_solar_max",
-        "robotic_arm"
+        "robotic_arm",
+        "mev_stinger",
+        "docking_lineage"
       ],
       "i18n": {
         "title": "Docking vs Berthing",
@@ -3849,7 +3904,9 @@
     },
     {
       "id": "sun_sensor",
-      "hardwareNames": ["SUN SENSORS"],
+      "hardwareNames": [
+        "SUN SENSORS"
+      ],
       "category": "SENSORS",
       "trl": 9,
       "icon": "🌞",
@@ -3870,7 +3927,9 @@
     },
     {
       "id": "pose_estimation",
-      "hardwareNames": ["DAYLIGHT CAMERA"],
+      "hardwareNames": [
+        "DAYLIGHT CAMERA"
+      ],
       "category": "SENSORS",
       "trl": 8,
       "icon": "👁️",
@@ -3894,7 +3953,9 @@
     },
     {
       "id": "rosa_solar_array",
-      "hardwareNames": ["ROLL-OUT SOLAR WINGS"],
+      "hardwareNames": [
+        "ROLL-OUT SOLAR WINGS"
+      ],
       "category": "POWER",
       "trl": 9,
       "icon": "🌞",
@@ -3928,7 +3989,8 @@
         "carbon_composites",
         "rosa_solar_array",
         "vacuum_of_space",
-        "hbn_coating"
+        "hbn_coating",
+        "pcm_bank"
       ],
       "i18n": {
         "title": "Thermal Cycling",
@@ -3961,7 +4023,9 @@
     },
     {
       "id": "robotic_arm",
-      "hardwareNames": ["STRUT HINGES"],
+      "hardwareNames": [
+        "STRUT HINGES"
+      ],
       "category": "TETHERS",
       "trl": 9,
       "icon": "🦾",
@@ -4004,7 +4068,9 @@
     },
     {
       "id": "weaver_gripper",
-      "hardwareNames": ["LARGE DAUGHTER"],
+      "hardwareNames": [
+        "LARGE DAUGHTER"
+      ],
       "category": "TETHERS",
       "trl": 4,
       "icon": "✋",
@@ -4025,7 +4091,9 @@
     },
     {
       "id": "spinner_pad",
-      "hardwareNames": ["SMALL DAUGHTER"],
+      "hardwareNames": [
+        "SMALL DAUGHTER"
+      ],
       "category": "TETHERS",
       "trl": 4,
       "icon": "🌀",
@@ -4063,6 +4131,400 @@
       },
       "track": "cowboy_basics",
       "trackOrder": 10
+    },
+    {
+      "id": "space_radiator",
+      "hardwareNames": [
+        "RADIATOR PLATES"
+      ],
+      "category": "POWER",
+      "trl": 9,
+      "icon": "♨️",
+      "related": [
+        "thermal_management",
+        "loop_heat_pipe",
+        "pcm_bank",
+        "selective_surfaces",
+        "vacuum_mechanisms"
+      ],
+      "i18n": {
+        "title": "Space Radiators",
+        "shortText": "Spacecraft can only dump heat by radiating it: big flat panels glowing in infrared. Area, emissivity, and T⁴ set the whole budget.",
+        "fullText": "In vacuum there is no air to blow across a hot part, so every watt a spacecraft makes must eventually leave as infrared light. The only dials that matter are radiator area, surface emissivity, and temperature — and temperature enters as T to the fourth power, so a slightly hotter panel sheds dramatically more heat. The ISS carries hundreds of square metres of white radiator wing for exactly this reason.\n\nYour aft flower is this hardware: four rigid struts carrying flat plates that swing aft of the rim, plumbed to nothing yet. Once the thermal loop is fitted, those panels become the ceiling on how hard the furnace and drives can run — the whole heat budget hangs off how much plate you fly and how hot you dare run it.",
+        "realWorld": "ISS EATCS rejects ~70 kW through deployable ammonia radiators; every spacecraft big or small budgets heat by A·ε·σT⁴.",
+        "trlRationale": "Deployable rigid radiators flown for decades (ISS HRS/EATCS class).",
+        "unlockHint": "Buy the aft flower — the ship's first dedicated radiator hardware."
+      }
+    },
+    {
+      "id": "loop_heat_pipe",
+      "category": "POWER",
+      "trl": 9,
+      "icon": "🔁",
+      "related": [
+        "space_radiator",
+        "thermal_management",
+        "vacuum_mechanisms"
+      ],
+      "i18n": {
+        "title": "Loop Heat Pipes",
+        "shortText": "A fluid loop hauls heat from hot gear out to the radiators. Welded metal bellows survive vacuum where rubber seals age and die.",
+        "fullText": "A loop heat pipe is a small two-phase plumbing circuit: a working fluid evaporates at the hot end, the vapour races to the radiator, condenses, and a porous wick pumps the liquid home with no moving parts. It moves kilowatts through tubing thinner than a finger, passively, for decades.\n\nThe vacuum detail is the seals. Rubber O-rings outgas, harden, and leak; flight loops are all-welded metal with bellows accumulators, because a thermal loop that loses its fluid is a dead cooling system with no repair verb. When the flower's plates get plumbed, this is the plumbing.",
+        "realWorld": "LHPs fly on hundreds of spacecraft (RadioAstron, GOES, commercial GEO buses); all-welded loops are standard practice.",
+        "trlRationale": "Loop heat pipes are standard flight hardware since the 1990s.",
+        "unlockHint": "Deploy the aft flower and think about how the heat gets to it."
+      }
+    },
+    {
+      "id": "pcm_bank",
+      "category": "POWER",
+      "trl": 6,
+      "icon": "🧊",
+      "related": [
+        "space_radiator",
+        "thermal_cycling",
+        "solar_furnace"
+      ],
+      "i18n": {
+        "title": "Phase-Change Thermal Banks",
+        "shortText": "Phase-change material soaks up burst heat by melting, then gives it back as it freezes — a thermal battery for short furnace sprints.",
+        "fullText": "Melting a material takes far more energy than warming it, and that energy comes back out on freezing. A phase-change bank exploits this: run a burst load, let a block of wax or metallic alloy melt and swallow the spike, then let the radiators freeze it back down over the next quiet hour. It is a battery for heat instead of charge.\n\nMetallic PCMs in the aluminium-silicon class store roughly 0.2 MJ per kilogram at furnace-friendly temperatures — a 60 kg bank buys a few minutes of full-burst smelting that the radiators alone could never keep up with. Commercial thermal-capacitor products already sell this trick; your refinery will want it the moment heat becomes real.",
+        "realWorld": "Al-Si PCM stores ~0.5 MJ/kg total around 577°C; commercial thermal capacitors (Q-Store class) ship today.",
+        "trlRationale": "PCM thermal storage flown experimentally; metallic-PCM furnace banks are maturing commercial tech.",
+        "unlockHint": "Push a digestion run hard — burst heat has to go somewhere."
+      }
+    },
+    {
+      "id": "concentrator_optics",
+      "category": "POWER",
+      "trl": 7,
+      "icon": "🔍",
+      "related": [
+        "solar_furnace",
+        "maple_power_beam",
+        "selective_surfaces"
+      ],
+      "i18n": {
+        "title": "Concentrator Optics",
+        "shortText": "Mirrors focus sunlight into furnace heat. Concentration ratio sets the temperature ceiling; secondary optics relax the pointing.",
+        "fullText": "Focus sunlight a hundred times and you can boil water; ten thousand times and you can melt steel. The concentration ratio sets the theoretical temperature ceiling, and nothing else about the furnace matters until the optics deliver it. The catch is pointing: high ratios demand arc-minute sun tracking, which is expensive to hold on a working spacecraft.\n\nThe classic fix is a two-stage system — a big primary that only has to be roughly right, feeding a small secondary that cleans up the last degree. NASA's ISUS and Glenn solar-thermal programs proved the pattern on the ground and in vacuum rigs. Your net-mouth mirror is the primary; the upgrade ladder buys better secondaries, not a bigger dish.",
+        "realWorld": "NASA ISUS/Glenn solar-thermal rigs hit >2000 K with two-stage concentrators; solar furnaces on Earth reach 3500 K.",
+        "trlRationale": "Solar-thermal concentrators demonstrated in vacuum ground rigs; flight units remain experimental.",
+        "unlockHint": "Watch the furnace clock — sunlight is the fuel it runs on."
+      }
+    },
+    {
+      "id": "selective_surfaces",
+      "category": "MATERIALS",
+      "trl": 9,
+      "icon": "🎨",
+      "related": [
+        "space_radiator",
+        "thermal_management",
+        "mli_insulation",
+        "concentrator_optics"
+      ],
+      "i18n": {
+        "title": "Selective Surfaces",
+        "shortText": "Coatings that absorb sunlight strongly but emit infrared weakly — or the reverse — let one surface run hot or cold by design.",
+        "fullText": "A surface has two independent personalities: how well it absorbs sunlight (solar absorptance) and how well it glows in infrared (emittance). Chemistry lets you pick them separately. A solar-furnace absorber wants to drink sunlight and barely glow; a radiator wants the opposite — white paints and quartz mirror tiles that reflect the sun yet radiate hard in the thermal band.\n\nThat is why radiators are white or mirror-finish and absorbers are black-chrome: the same physics, tuned opposite ways. On this ship the gold MLI, the pale radiator plates, and the dark furnace throat are all selective surfaces doing exactly the job their ratios promise.",
+        "realWorld": "OSR quartz tiles: α≈0.08, ε≈0.80; black chrome absorbers: α≈0.95, ε≈0.1 — flown everywhere since the 1960s.",
+        "trlRationale": "Thermal-control coatings are universal flight hardware.",
+        "unlockHint": "Inspect the ship's skins — gold foil, pale plates, dark throats."
+      }
+    },
+    {
+      "id": "edt_deorbit",
+      "category": "TETHERS",
+      "trl": 7,
+      "icon": "🧵",
+      "related": [
+        "edt_physics",
+        "etpack_tape",
+        "space_tether",
+        "vleo_survival"
+      ],
+      "i18n": {
+        "title": "Electrodynamic Deorbit",
+        "shortText": "An electrodynamic tether drags against Earth's magnetic field and deorbits debris without propellant — kilometers of bare wire.",
+        "fullText": "Run a conductor through Earth's magnetic field and the motion itself drives a current; the current crossed with the field pushes back against the motion. An electrodynamic tether turns that physics into a brake: kilometres of bare wire that quietly convert orbital energy into heat and drag a dead satellite down, no propellant spent.\n\nThe seduction is a deorbit kit whose mass never grows with the delta-V it delivers. The risks are equally real — long tethers collect debris hits, arc in dense plasma, and once nearly ended a Shuttle tether experiment. As a bolt-on kit for tagged derelicts, though, it is the cheapest ride down physics offers.",
+        "realWorld": "TSS-1R generated 3,500 V and 0.5 A before arcing; PMG, YES2 and T-Rex flew tether demos; EDT kits are active ESA/JAXA work.",
+        "trlRationale": "Multiple orbital tether current demos; full deorbit kits at flight-model stage (E.T.PACK).",
+        "unlockHint": "Some debris is cheaper to tag for a slow ride down than to haul."
+      }
+    },
+    {
+      "id": "vleo_survival",
+      "category": "SPACE_ENVIRONMENT",
+      "trl": 9,
+      "icon": "🌬️",
+      "related": [
+        "atmospheric_drag",
+        "edt_deorbit",
+        "mli_insulation"
+      ],
+      "i18n": {
+        "title": "Surviving VLEO",
+        "shortText": "Below ~400 km, atomic oxygen sandblasts organics and drag never sleeps. Hardware wants metal skins, SiOx coats, low frontal area.",
+        "fullText": "Very low Earth orbit is a hostile workshop. The residual atmosphere is thin enough to orbit through but dense enough to matter: drag taxes every orbit, and the oxygen there is not O₂ but single atoms — chemically vicious, eroding kapton and paint like a slow sandblaster. Polymers chalk away micrometres per month; silver interconnects corrode black.\n\nHardware that lives there is built like a knife: metal or glass-coated skins (SiOx over polymer works), minimal frontal area flown edge-on, and either continuous thrust or an acceptance that the orbit is a countdown. ESA's GOCE flew an arrow-shaped hull with ion engines running for years — the shape of everything that intends to stay low.",
+        "realWorld": "GOCE flew at 255 km on continuous ion thrust; atomic-oxygen erosion rates are measured on every returned LEO surface.",
+        "trlRationale": "VLEO operations demonstrated (GOCE, Tsubame); AO-hardening is standard materials practice.",
+        "unlockHint": "Chase debris into the low bands where drag starts to bite."
+      }
+    },
+    {
+      "id": "in_space_metallurgy",
+      "category": "MATERIALS",
+      "trl": 4,
+      "icon": "🔩",
+      "related": [
+        "soyuz6_vulkan",
+        "astroforge_status",
+        "solar_furnace",
+        "vacuum_mechanisms"
+      ],
+      "i18n": {
+        "title": "In-Space Metallurgy",
+        "shortText": "Melting and refining metal in vacuum microgravity: no convection, free vacuum distillation. The furnace is a refinery, not a stove.",
+        "fullText": "Metallurgy without gravity or air is a different science. No convection means melts sit still — heat moves only by conduction and radiation, and mixing must be forced. No buoyancy means slag does not float and bubbles do not rise. But vacuum gives gifts too: volatile metals distill away for free, surfaces stay clean enough to weld by touch, and there is no crucible contamination if you levitate the melt.\n\nThat combination makes an orbital furnace a refinery rather than a stove: the same solar heat that melts a debris ingot can fractionate it — zinc and magnesium boiling off first, aluminium alloys separating by vapour pressure. Skylab ran the first melt experiments in 1973; the economics of doing it at scale are exactly what this ship exists to test.",
+        "realWorld": "Skylab M512 melted metals in 1973; ISS furnaces (ELF, MSL) study containerless solidification today.",
+        "trlRationale": "Microgravity melting demonstrated repeatedly; industrial-scale refining remains unflown.",
+        "unlockHint": "Feed the furnace — every digested catch is a small smelter run."
+      }
+    },
+    {
+      "id": "maple_power_beam",
+      "category": "NEWS",
+      "trl": 5,
+      "icon": "📡",
+      "related": [
+        "concentrator_optics",
+        "solar_power",
+        "astroforge_status"
+      ],
+      "i18n": {
+        "title": "MAPLE Beams Power",
+        "shortText": "Caltech's MAPLE (2023) beamed microwave power between arrays in orbit — small, real, and the seed of pass-by power for dark machines.",
+        "fullText": "In 2023 Caltech's SSPD-1 mission carried MAPLE: an array of flexible microwave transmitters that steered beamed power between antennas a few tens of centimetres apart, in orbit, and even lit a detector on the ground. The wattage was tiny; the point was not the wattage. It proved cheap, lightweight phased arrays can aim power in space without moving parts.\n\nScale the idea sideways and you get pass-by power: a servicer sweeping over a dark, battery-dead machine and waking it with a beam — no docking, no plug. For a debris economy full of dead satellites that only need a few watts to answer, that is a service line waiting to exist.",
+        "realWorld": "Caltech SSPD-1/MAPLE (2023): first in-orbit wireless power transfer demo between arrays, plus ground detection.",
+        "trlRationale": "Orbit-demonstrated at watt scale; operational beaming remains developmental.",
+        "unlockHint": "Run your battery low in shadow and imagine being rescued by a beam."
+      },
+      "lastVerified": "2026-08"
+    },
+    {
+      "id": "vacuum_mechanisms",
+      "hardwareNames": [
+        "AFT FLOWER STRUTS",
+        "FLOWER HINGE BRACKETS"
+      ],
+      "category": "MATERIALS",
+      "trl": 9,
+      "icon": "⚙️",
+      "related": [
+        "in_space_metallurgy",
+        "niti_superelastic",
+        "space_radiator",
+        "loop_heat_pipe"
+      ],
+      "i18n": {
+        "title": "Mechanisms in Vacuum",
+        "shortText": "Vacuum kills mechanisms: bare metals cold-weld, oils evaporate. MoS₂ films, gold plate, and heaters keep hinges honest for years.",
+        "fullText": "On Earth every metal surface wears an invisible oxide glove. Vacuum strips the glove and never lets it regrow — press two clean metals together and they simply become one part. Add that ordinary oils boil away at low pressure and that a −150°C cold soak turns grease to brick, and you see why hinges, not electronics, are the classic spacecraft killers. Galileo's main antenna died this way: ribs cold-welded to their pins after the lubricant wore off.\n\nThe survival kit is boring and rigorous: molybdenum-disulphide dry films that lubricate without vapour, gold plating on contacts that must touch, dissimilar metal pairs that refuse to weld, and small heaters that keep mechanisms above their brittle range. The flower's hinge clevises carry exactly this treatment — dull grey films and heater lines, engineering against a failure mode with no repair verb.",
+        "realWorld": "Galileo HGA ribs cold-welded (1991); MoS₂ films and gold plate are standard on every flight mechanism since.",
+        "trlRationale": "Dry-film lubrication and anti-cold-weld practice are universal flight standards.",
+        "unlockHint": "Work the aft flower — hinges live or die by their films."
+      }
+    },
+    {
+      "id": "soyuz6_vulkan",
+      "category": "HERITAGE",
+      "trl": 9,
+      "icon": "🛠️",
+      "related": [
+        "in_space_metallurgy",
+        "docking_lineage"
+      ],
+      "i18n": {
+        "title": "Soyuz 6 and Vulkan",
+        "shortText": "Soyuz 6 (1969) carried Vulkan: the first welding in space. Electron-beam worked; the arc test nearly cut the hull. Metallurgy flies.",
+        "fullText": "In October 1969, with two other Soyuz craft flying formation, cosmonauts aboard Soyuz 6 depressurised their orbital module and let an automated rig called Vulkan run the first metalworking experiments ever done in space: electron-beam welding, low-pressure compressed arc, and consumable-electrode arc on titanium and stainless samples.\n\nThe electron beam performed beautifully — clean penetration, sound joints, the process that vacuum was practically made for. The arc test was the cautionary tale: when the crew repressurised and inspected, the beam had nearly cut through a structural table toward the hull. Space metallurgy arrived on day one carrying both messages — it works, and it will bite the careless.",
+        "realWorld": "Soyuz 6 flew 11–16 Oct 1969; Vulkan's EB weld samples returned for ground analysis; the arc unit damaged the work table.",
+        "trlRationale": "Flown 1969; electron-beam welding later repeated on Salyut and ISS-era experiments.",
+        "unlockHint": "Every furnace run stands on a 1969 welding rig."
+      }
+    },
+    {
+      "id": "etpack_tape",
+      "category": "NEWS",
+      "trl": 8,
+      "icon": "🎗️",
+      "related": [
+        "edt_deorbit",
+        "edt_physics"
+      ],
+      "i18n": {
+        "title": "E.T.PACK Tape Tethers",
+        "shortText": "E.T.PACK's tape tether is a flight-model deorbit kit: a wide conductive ribbon that drags a dead satellite down. TRL-8 class, real.",
+        "fullText": "The European E.T.PACK program builds deorbit kits around a tape instead of a wire: a conductive aluminium ribbon centimetres wide and hundreds of metres long. The geometry is the insight — a tape collects electrons along its whole width in the bare-tether regime, survives micrometeoroid nicks that would sever a round wire, and rolls up like film for stowage.\n\nThe program has pushed through deployer engineering models to flight-model hardware with an in-orbit demonstration on its manifest — which makes it the most credible commercial-class electrodynamic deorbit kit yet. When your services bay stocks deorbit hardware, this is the middle shelf: heavier than a toy, far cheaper than a tug.",
+        "realWorld": "E.T.PACK (EU FET/consortium with SENER) matured a 500 m tape-tether deorbit device to flight-model class with a demo mission planned.",
+        "trlRationale": "Flight-model hardware built; orbital demonstration pending.",
+        "unlockHint": "Price a deorbit against a haul — sometimes the ribbon wins."
+      },
+      "lastVerified": "2026-08"
+    },
+    {
+      "id": "astroforge_status",
+      "category": "NEWS",
+      "trl": 3,
+      "icon": "⛏️",
+      "related": [
+        "in_space_metallurgy",
+        "maple_power_beam"
+      ],
+      "i18n": {
+        "title": "AstroForge's Gamble",
+        "shortText": "AstroForge chases asteroid refining on startup budgets: launch, fail, learn, relaunch. In-space processing is a race, not a paper.",
+        "fullText": "AstroForge is trying to refine asteroid metal as a venture-funded startup: fly small, fly often, accept failures in public. Their first cubesat rode a 2023 rideshare to test a refinery payload in orbit and fought communications problems; their second craft, Odin, launched toward a near-Earth asteroid flyby in 2025 and went silent on the way. The third is already being built.\n\nThe scoreboard so far reads like early rocketry — more lessons than triumphs — but the posture is the story: in-space resource processing has left the paper-study era and entered the crash-and-iterate era. Every failed comm link is still a data point the next PDF never had.",
+        "realWorld": "AstroForge: Brokkr-1 (2023) refinery-demo cubesat, Odin asteroid flyby attempt (2025, lost), Vestri in development.",
+        "trlRationale": "Component demos launched; no successful in-space refining yet.",
+        "unlockHint": "Refine enough salvage to make the startups jealous."
+      },
+      "lastVerified": "2026-08"
+    },
+    {
+      "id": "mev_stinger",
+      "category": "HERITAGE",
+      "trl": 9,
+      "icon": "🐝",
+      "related": [
+        "docking_lineage",
+        "docking_berthing",
+        "lee_snare"
+      ],
+      "i18n": {
+        "title": "MEV and the Stinger",
+        "shortText": "MEV docked by driving a probe into the client's engine nozzle — the nozzle is the drogue. Rocket bodies carry their own docking port.",
+        "fullText": "Northrop Grumman's Mission Extension Vehicles solved a rude problem: how do you dock with a satellite that has no docking port? Their answer — every liquid-fuelled satellite already has one. The engine nozzle is a precision-machined cone pointing conveniently outward. MEV extends a stinger probe into the throat, expands a mechanical head past the narrow point, and pulls the whole spacecraft snug against its docking ring.\n\nMEV-1 proved it on the live Intelsat-901 in 2019 and has since undocked and re-docked to a second client; MEV-2 repeated the trick. The lesson generalises across the debris field: rocket bodies and dead GEO birds all fly with a built-in drogue, if your servicer carries the matching sting.",
+        "realWorld": "MEV-1 docked Intelsat-901 (Feb 2020, GEO graveyard), MEV-2 docked Intelsat 10-02 (2021) — nozzle-probe capture, both operational.",
+        "trlRationale": "Operational commercial system with multiple dockings.",
+        "unlockHint": "Study a rocket body's nozzle like a keyhole."
+      }
+    },
+    {
+      "id": "lee_snare",
+      "category": "HERITAGE",
+      "trl": 9,
+      "icon": "🪢",
+      "related": [
+        "mev_stinger",
+        "docking_lineage",
+        "net_neck_winch"
+      ],
+      "i18n": {
+        "title": "The Canadarm Snare",
+        "shortText": "Canadarm's latching end effector closes three crossing snare wires around a grapple pin — soft capture first, rigid latch second.",
+        "fullText": "The business end of Canadarm is a drum of three steel wires. Drive the open drum over a target's grapple pin and rotate: the wires sweep inward like a camera iris and cross around the pin, centring it perfectly without ever striking it. That is soft capture — gentle, tolerant of misalignment, reversible. Only then does the mechanism pull the pin down and rigidise into a stiff structural joint.\n\nThe two-stage grammar — forgiving snare first, rigid latch second — is the deepest pattern in orbital capture. Every berthing mechanism since copies it, and a net-and-winch capture chain is the same idea wearing work clothes: envelop softly, cinch tight, then treat the catch as structure.",
+        "realWorld": "SRMS/SSRMS latching end effectors have snared hundreds of payloads and visiting vehicles since 1981.",
+        "trlRationale": "Decades of operational captures on Shuttle and ISS arms.",
+        "unlockHint": "Reel a catch snug and feel the two-stage grammar."
+      }
+    },
+    {
+      "id": "net_neck_winch",
+      "category": "HERITAGE",
+      "trl": 8,
+      "icon": "🕸️",
+      "related": [
+        "entanglement_hazard",
+        "lee_snare",
+        "miura_ori_net"
+      ],
+      "i18n": {
+        "title": "The Only Net Capture",
+        "shortText": "RemoveDEBRIS (2018) flew the only net capture ever: winches reeled the net neck closed, then left it. The neck is the handle.",
+        "fullText": "In September 2018 the RemoveDEBRIS mission ejected a cubesat, let it drift a few metres, and fired a net at it — the first and still the only net capture of a free object in orbit. The mesh wrapped the tumbling target, and small winches at the net's mouth reeled the neck closed like a drawstring bag. Then, deliberately, the experiment ended: net and catch were left to burn in together.\n\nNobody has ever done the next step — bringing a netted bag home to a ship and berthing it. The neck winches are the reason the idea survives: a closed neck turns a floppy, snagging mesh into a single handle. Whoever solves neck-to-berth owns the debris trade. That is precisely the seam this ship's nose machine is being designed around.",
+        "realWorld": "RemoveDEBRIS net demo (Sep 2018, Surrey/Airbus): net fired at ~7 m, winch-closed neck, no retrieval attempted.",
+        "trlRationale": "Single successful orbital demo; retrieval/berthing of a netted object never flown.",
+        "unlockHint": "Close a net around a catch — then ask what holds the neck."
+      }
+    },
+    {
+      "id": "entanglement_hazard",
+      "category": "DEBRIS",
+      "trl": 9,
+      "icon": "🌀",
+      "related": [
+        "net_neck_winch",
+        "docking_lineage",
+        "tether_materials"
+      ],
+      "i18n": {
+        "title": "Entanglement",
+        "shortText": "A tethered target once wrapped itself around the test boom — entanglement is THE documented capture disaster. Spool the slack, always.",
+        "fullText": "The one capture failure mode with flight paperwork is entanglement. During RemoveDEBRIS's harpoon test the tethered target plate, struck and spinning, whipped its tether around the deployment boom and wrapped itself there — a benign outcome only because nothing else was nearby. Slack line plus residual spin equals a winding machine, and the machine does not care whether it winds around a boom, a solar wing, or your hull.\n\nThe doctrine writes itself and this ship already flies it: never leave slack in a loaded line, keep tension continuous through every reel, kill tumble before it feeds the wrap. A netted catch that still spins is not a prize yet — it is a loaded spring wearing your rope.",
+        "realWorld": "RemoveDEBRIS harpoon test (2019): tethered target wrapped its line around the boom — the documented entanglement case.",
+        "trlRationale": "Documented on-orbit failure mode; the counter-doctrine (tension-continuous reels) is standard practice.",
+        "unlockHint": "Watch a tumbling catch strain the net — the wrap is one slack line away."
+      }
+    },
+    {
+      "id": "docking_lineage",
+      "category": "HERITAGE",
+      "trl": 9,
+      "icon": "🪆",
+      "related": [
+        "docking_berthing",
+        "mev_stinger",
+        "lee_snare",
+        "soyuz6_vulkan",
+        "entanglement_hazard"
+      ],
+      "i18n": {
+        "title": "Docking's Family Tree",
+        "shortText": "Gemini's cone, Apollo's probe-and-drogue, NDS petals: every docking system funnels misalignment into one forgiving throat.",
+        "fullText": "Every docking mechanism ever flown is the same sentence with different accents: build a funnel, let geometry eat the aim error, soft-capture at the narrow point, then rigidise. Gemini flew a plain cone into Agena's collar. Apollo's probe found the apex of a drogue dish. Russia's pin-and-cone system still docks every Soyuz. The androgynous APAS and today's NASA Docking System replaced the male/female split with rings of petals — but the petals are just a funnel wearing symmetry.\n\nRead the family tree backwards and the design rule appears: the throat forgives, the latch commits. Any berthing machine this ship grows — for nets, for bags, for stingers — will be another branch of the same tree, because misalignment is eternal and funnels are how machines forgive.",
+        "realWorld": "Gemini–Agena (1966), Apollo probe/drogue, Soyuz SSVP, APAS, IDSS/NDS — one funnel grammar across 60 years.",
+        "trlRationale": "Continuous operational lineage since 1966.",
+        "unlockHint": "Berth a catch at the collar and salute six decades of funnels."
+      }
+    },
+    {
+      "id": "niti_superelastic",
+      "category": "MATERIALS",
+      "trl": 9,
+      "icon": "🌡️",
+      "related": [
+        "spring_energy",
+        "vacuum_mechanisms",
+        "crush_cartridge"
+      ],
+      "i18n": {
+        "title": "Nitinol Superelasticity",
+        "shortText": "Above its Af temperature NiTi springs back from 6–8% strain; cold-soaked it stays dented until warmed. Springy petals, memory repair.",
+        "fullText": "Nickel-titanium alloy has two crystal phases and a personality split between them. Warm — above its austenite-finish temperature — it is superelastic: bend it to strains that would wreck steel and it snaps back perfectly, absorbing impacts like a metal made of rubber. Cold-soaked below that threshold it goes quiet: dent it and the dent stays, until warmth returns the crystal and the metal literally remembers its shape and pops back.\n\nBoth personalities are tools. Superelastic petals can eat berthing impacts all day; a heater line doubles as a repair verb, warming a crumpled part back to true. The one design law is thermal: keep NiTi above its Af through eclipse or accept that your springy hardware wakes up frozen and forgetful.",
+        "realWorld": "NiTi superelastic strain recovery of 6–8% is standard; shape-memory actuators and dampers fly on many spacecraft.",
+        "trlRationale": "Flight-proven alloy family (actuators, dampers, frangibolts).",
+        "unlockHint": "Think about what eclipse cold does to springy metal."
+      }
+    },
+    {
+      "id": "crush_cartridge",
+      "category": "HERITAGE",
+      "trl": 9,
+      "icon": "🍯",
+      "related": [
+        "niti_superelastic",
+        "spring_energy"
+      ],
+      "i18n": {
+        "title": "Crushable Honeycomb",
+        "shortText": "Apollo's legs landed on crushable aluminum honeycomb — one-shot energy absorbers, replaced after use. Cheap, scavengeable, honest.",
+        "fullText": "Inside each Apollo lunar-module leg sat a cartridge of aluminium honeycomb that existed to die: on touchdown it crushed progressively, eating the landing energy at a nearly constant force and turning a crash into a firm handshake. No springs to bounce, no fluid to leak — just cheap structured metal that converts kinetic energy into crumpled foil exactly once.\n\nOne-shot absorbers remain the most honest crash protection ever flown: their performance is printed in their geometry, they cannot be overcharged or leak dry, and after use you simply swap the cartridge. For a berthing bed that occasionally catches an out-of-spec bag, a rack of crushable cartridges is both the armour and the receipt — the crumple tells you exactly how bad the hit was.",
+        "realWorld": "Apollo LM struts used crushable Al honeycomb cartridges; automotive crush zones use the same constant-force principle.",
+        "trlRationale": "Flown on every Apollo landing; honeycomb absorbers are standard impact hardware.",
+        "unlockHint": "Bring in a heavy catch slightly hot and wish for a crumple zone."
+      }
     }
   ]
 }

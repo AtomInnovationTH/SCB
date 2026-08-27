@@ -231,6 +231,39 @@ const SYSTEMS = [
     ],
   },
   {
+    // P2 thermal arc — the AFT FLOWER family (charter
+    // .kilo/plans/1787839542000-phase2-flower-hardware-charter.md TASK F; hue
+    // row lives in Constants.CALLOUTS.SYSTEM_HUES.THERMAL — BOTH places, or
+    // the family renders fallback-hued). Purchase-gated hardware: every rec
+    // carries `flowerGated` and hides until a pair is bought (the daughter
+    // `_armGone` idiom), so no callout ever points at empty rim. Anchors are
+    // STATIC station coordinates (the meshes may not exist pre-purchase, so
+    // no `mesh:` refs here). The ship already carries the diegetic thermal
+    // sensor — the HEAT (INFRARED) CAM callout under SENSORS.
+    id: 'THERMAL', label: 'THERMAL',
+    anchor: [ 0.283 * M, 0.283 * M, -1.02 * M ],
+    role: 'aft flower — struts open LIKE A FLOWER',
+    flowerGated: true,
+    parts: [
+      { id: 'flower_plates', name: 'RADIATOR PLATES', risk: 'GREEN', tier: 'major', codexId: 'space_radiator',
+        massKg: 37, priority: 6, flowerGated: true,
+        specs: ['4× 1.70×0.60 m panels along the struts', 'Reject heat as infrared — numbers come with the loop refit'],
+        anchor: [ -0.30 * M, 0.30 * M, -1.15 * M ] },
+      { id: 'flower_struts', name: 'AFT FLOWER STRUTS', risk: 'GREEN', tier: 'major', codexId: 'vacuum_mechanisms',
+        massKg: 10, priority: 6, flowerGated: true,
+        specs: ['4× aft-pivot booms, 2.5 m', 'They open LIKE A FLOWER — O deploys / stows'],
+        anchor: [ 0.283 * M, 0.283 * M, -1.10 * M ] },
+      { id: 'flower_tips', name: 'TIP HARDPOINTS', risk: 'GREEN', tier: 'detail',
+        massKg: 2, priority: 2, flowerGated: true,
+        specs: ['Inert cargo bosses at the strut tips', 'Cold-cell refit will bolt on here'],
+        anchor: [ -0.283 * M, -0.283 * M, -1.12 * M ] },
+      { id: 'flower_hinges', name: 'FLOWER HINGE BRACKETS', risk: 'YELLOW', tier: 'detail', codexId: 'vacuum_mechanisms',
+        massKg: 1, priority: 2, flowerGated: true,
+        specs: ['Rim-band clevises, MoS₂-filmed pins', 'Hinges are the honest jam risk'],
+        anchor: [ 0.283 * M, -0.283 * M, -0.94 * M ] },
+    ],
+  },
+  {
     // Docked daughters — dynamic recs that follow each docked ArmUnit (T3).
     // Titles are static (berth i%2 alternates Large/Small, ArmManager.js:113),
     // so cards are built once; visibility is gated per frame on the arm's state.
@@ -530,6 +563,12 @@ export class MotherCallouts {
    */
   _resolveAnchor(rec) {
     const def = rec.def;
+    // P2: the THERMAL family hides until a flower pair is purchased (the
+    // daughter `_armGone` idiom) — purchase-gated hardware never gets a
+    // floating label pointing at empty rim.
+    if (def.flowerGated) {
+      rec._flowerGone = !this._flowerOn();
+    }
     // Daughter recs follow their docked ArmUnit (T3).
     if (def.armIndex !== undefined) {
       const arm = this._liveCtx?.armManager?.arms?.[def.armIndex];
@@ -1060,18 +1099,28 @@ export class MotherCallouts {
     }
   }
 
+  /** P2: is any aft-flower pair purchased? Gates the THERMAL family. @private */
+  _flowerOn() {
+    return typeof this.player?.getFlowerPairCount === 'function'
+      && this.player.getFlowerPairCount() > 0;
+  }
+
   _updateGuide(dt) {
     if (this._guideT < -GUIDE_HOLD_S - 0.001 || this._guidedDone) return;
     this._guideT += dt;
-    const total = SYSTEMS.filter((s) => !s.daughters).length * GUIDE_STEP_S;
+    const total = this._tourableSystems().length * GUIDE_STEP_S;
     if (this._guideT >= total) { this._guidedDone = true; this._guideT = -1; }
+  }
+
+  /** Tourable groups: visible system labels only — DAUGHTERS excluded (its
+   *  recs are the docked craft), THERMAL excluded pre-purchase (P2). @private */
+  _tourableSystems() {
+    return SYSTEMS.filter((s) => !s.daughters && !(s.flowerGated && !this._flowerOn()));
   }
 
   _guideSystemId() {
     if (this._guidedDone || this._guideT < 0) return null;
-    // Tour only the groups with a visible system label (the DAUGHTERS
-    // pseudo-group is excluded — its recs are the docked craft themselves).
-    const tourable = SYSTEMS.filter((s) => !s.daughters);
+    const tourable = this._tourableSystems();
     const idx = Math.floor(this._guideT / GUIDE_STEP_S);
     return tourable[idx]?.id ?? null;
   }
@@ -1274,6 +1323,7 @@ export class MotherCallouts {
   _targetOpacity(rec, band, guideId, focusSys, focusNX, focusNY, facing) {
     if (rec._neverShow) return 0; // DAUGHTERS pseudo-group has no system label
     if (rec._armGone) return 0;   // daughter away from its berth (T3)
+    if (rec._flowerGone) return 0; // THERMAL family pre-purchase (P2)
     // Hard facing gate: a card whose anchor faces away is hidden outright
     // (the dot/leader carry the on-hull fade; the card does not).
     const face = (facing != null) ? facing : this._anchorVisible(rec.anchor);

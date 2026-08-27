@@ -478,6 +478,18 @@ export const Events = {
    *  Payload: {} (fire-and-forget). */
   CAMERA_ZOOM_INPUT:      'tutorial:zoom_input',
 
+  // === THERMAL (P2 aft flower — 'thermal:*' family reserved by the P1 ledger
+  // .kilo/plans/1787831047000-aft-rim-allocation-and-reservations.md §3;
+  // P3 loop/PCM and P4 throttle-observe events join this family later) ===
+  /** O key — aft flower deploy/stow toggle (all four struts; ROSA-furl input
+   *  idiom). Fire-and-forget for audio/telemetry/codex parity.
+   *  Payload: { deploying: boolean } (true = swinging to CARGO full bloom). */
+  THERMAL_FLOWER_INPUT:   'thermal:flowerInput',
+  /** Flower slew driver settled on its target pose (latch cleared — the
+   *  daughter `_strutTargetAlpha` contract mirrored).
+   *  Payload: { thetaDeg: number, pose: 'STOW'|'PARK'|'CARGO'|'CUSTOM' }. */
+  THERMAL_FLOWER_POSE:    'thermal:flowerPose',
+
   // === ONBOARDING (Delegation 2 — bottom-screen hint ticker + director) ===
   /** OnboardingDirector posts a hint to the bottom-screen ticker.
    *  Payload: { id, text, glyph?, keys?:string[], skillId?, duration?, priority?:'normal'|'high' }

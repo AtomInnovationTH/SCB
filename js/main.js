@@ -1574,6 +1574,23 @@ async function init() {
         return { view: cameraSystem.currentView, distM };
       };
 
+      // ── P2 flower portrait hook (charter TASK J harness) ──
+      //   window.__scbFlower(pairs)   → install aft-flower pair A (≥1) /
+      //     pairs A+B (≥2) through the SAME applyUpgrade effect path a shop
+      //     purchase drives, then report getFlowerStatus().
+      //   window.__scbFlowerPose(p)   → drive the slew latch to a named
+      //     ladder pose ('STOW' | 'PARK' | 'CARGO').
+      window.__scbFlower = (pairs = 2) => {
+        if (!player) return 'no player';
+        if (pairs >= 1) player.applyUpgrade({ effect: 'flowerPairA', value: 1 });
+        if (pairs >= 2) player.applyUpgrade({ effect: 'flowerPairB', value: 1 });
+        return player.getFlowerStatus();
+      };
+      window.__scbFlowerPose = (pose = 'CARGO') => {
+        if (!player) return 'no player';
+        return { target: player.setFlowerPose(pose), status: player.getFlowerStatus() };
+      };
+
       // ── Sky-pose hook (Stage 1 sky realism) ──
       //   window.__scbSkyPose(target, distM)
       //     → ORBIT view centred on a fixed patch of sky. `target` is either

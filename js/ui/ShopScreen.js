@@ -183,6 +183,25 @@ export const UPGRADES = [
     effect: 'cargoCapacity', value: Constants.CARGO_BAY_TIER3_KG, maxLevel: 1,
     requiresAll: ['cargo_bay_2'],
     trl: 4, trlRationale: 'Large pressurised cargo volumes demonstrated; 3 t ADR hold is game-speculative' },
+
+  // Thermal & Services (2) — category #9, created at P2's first row (P1 ledger
+  // §8; charter .kilo/plans/1787839542000-phase2-flower-hardware-charter.md
+  // TASK G). Purchase IS the gate: the pre-purchase tree renders byte-identical
+  // (no feature flag — the FEATURE_FLAGS pin stays 42). Authored hardware =
+  // ALL 4 stations; the shop stages trim-neutral diagonal PAIRS (S12 ⟂-CoM
+  // 0.0000). Observe-only at P2: draws and slews, throttles nothing — the
+  // thermal loop, PCM bank, and loop-fluid ladder join this category at P3+.
+  // Prices are economy-pass placeholders; the ΔV/mass line SAYS the tax out
+  // loud (§8.1 doctrine; numbers from tmp/flower-mass-budget.mjs §1).
+  { id: 'flower_pair_a', cat: 'Thermal & Services', name: 'Aft Flower — Pair A', cost: 1200,
+    desc: 'Two aft-pivot radiator struts at az 45/225 (trim-neutral diagonal): 2.5 m booms, 1.70×0.60 m plates, inert tip hardpoints. They open LIKE A FLOWER — O deploys to the 90° bloom, stows to the 146° bud. Mass tax said out loud: +25 kg dry, ΔV 2896 → 2615 m/s at full tanks (−281). Observe-only: radiates nothing yet — the loop refit prices heat later.',
+    effect: 'flowerPairA', value: 1, maxLevel: 1,
+    trl: 8, trlRationale: 'Rigid deployable radiators flown (ISS HRS/EATCS class); aft-pivot cargo-tip config is this program\'s own' },
+  { id: 'flower_pair_b', cat: 'Thermal & Services', name: 'Aft Flower — Pair B', cost: 1000,
+    desc: 'Completes the four-strut flower with the az 135/315 diagonal. All four struts deploy and stow together on O. Mass tax said out loud: +25 kg dry, ΔV 2615 → 2384 m/s at full tanks (−231). Radiator AREA doubles when the thermal loop arrives.',
+    effect: 'flowerPairB', value: 1, maxLevel: 1,
+    requiresAll: ['flower_pair_a'],
+    trl: 8, trlRationale: 'Same rigid-radiator heritage as Pair A; staging is operational, not technological' },
 ];
 
 /**

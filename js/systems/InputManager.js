@@ -696,8 +696,31 @@ export class InputManager {
         }
         break;
 
-      // O key — FREED (hotkey revamp 2026-06-14). NavSphere toggle moved to the
-      // 8 key (Advanced toggle row). O is currently unbound.
+      // O key — AFT FLOWER deploy/stow toggle (P2 thermal arc; assignment
+      // ratified by the P1 ledger §4). Was FREED by the 2026-06-14 hotkey
+      // revamp (NavSphere moved to 8). ROSA-furl input idiom: guard on the
+      // live method, decide from the live pose (mid-swing press reverses —
+      // player intent wins), click + event + comms line. Silent no-op until a
+      // flower pair is purchased (pre-purchase behavior byte-identical to the
+      // freed key).
+      case 'KeyO':
+        if (isGameplay && !e.repeat && d.player
+            && typeof d.player.toggleFlowerDeploy === 'function'
+            && typeof d.player.getFlowerPairCount === 'function'
+            && d.player.getFlowerPairCount() > 0) {
+          const deploying = d.player.toggleFlowerDeploy();
+          d.audioSystem?.playClick();
+          eventBus.emit(Events.THERMAL_FLOWER_INPUT, { deploying });
+          eventBus.emit(Events.COMMS_MESSAGE, {
+            sender: 'THERMAL',
+            text: deploying
+              ? 'Aft flower deploying — struts open LIKE A FLOWER to the 90° cargo bloom.'
+              : 'Aft flower stowing — folding to the 146° bud.',
+            priority: 'info',
+          });
+          e.preventDefault();
+        }
+        break;
 
       // Open shop (B key during orbital)
       case 'KeyB':

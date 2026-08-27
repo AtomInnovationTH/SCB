@@ -524,6 +524,10 @@ export class StatusPanel {
           </div>
         </div>
         </div>
+        <div class="mother-block mother-block-thermal" id="hud-thermal-panel" data-hud-group="thermal-group" style="display:none;">
+          <div class="pane-title" style="font-size:11px;margin-top:6px;margin-bottom:4px;color:#a3d9c9;opacity:0.7;">🌡 THERMAL</div>
+          <div id="hud-thermal-flower" style="font-size:10px;line-height:1.5;"></div>
+        </div>
       </div>
       `;
     this._leftColumn.appendChild(this.panels.mother);
@@ -677,6 +681,7 @@ export class StatusPanel {
     this._renderMassBudget();
     this._updateDeltaVBar(data.cachedTargets);
     this._updatePowerBars();
+    this._renderThermalGroup();
     if (data.forgeState) {
       this._updateForgePanel(data.forgeState);
     }
@@ -1614,6 +1619,49 @@ export class StatusPanel {
     // audio warble. The old sub-second opacity strobe (deltav-pulse) blinked
     // continuously while the tank stayed low — removed for all tiers.
     return { color: '#ff4444', anim: 'none' };
+  }
+
+  /**
+   * @private P2 thermal HUD group — flower deploy-state/pose line for the
+   * `data-hud-group="thermal-group"` node (declared-and-unbacked at
+   * HUD.js:103/:110 until this panel; the reveal machinery already routes it
+   * with the power group). Pure string builder on the §11.3 wheel-gauge idiom
+   * (StatusPanel._wheelReadout): '' while there is nothing to show — no pairs
+   * purchased returns '' and the panel stays display:none, so the pre-flower
+   * HUD renders byte-identically. EMPTY-SAFE by charter: deploy state + pose
+   * ONLY — NO thermal numbers (heat/PCM/rejection are P3).
+   * @param {{pairCount:number, thetaDeg:number, openFrac:number,
+   *          slewing:boolean, pose:string}|null} st
+   * @returns {string} span HTML, or '' when nothing should be shown
+   */
+  _flowerReadout(st) {
+    if (!st || !st.pairCount) return '';
+    const pairs = st.pairCount === 2 ? 'PAIRS A+B' : 'PAIR A';
+    const pct = Math.round(st.openFrac * 100);
+    const theta = Math.round(st.thetaDeg);
+    const label = st.slewing ? 'SLEWING'
+      : st.pose === 'STOW' ? 'STOWED (BUD)'
+        : st.pose === 'PARK' ? 'PARKED'
+          : st.pose === 'CARGO' ? 'DEPLOYED (BLOOM)' : 'HOLDING';
+    const c = st.slewing ? '#ffaa00' : '#a3d9c9';
+    return `<div style="display:flex;justify-content:space-between;">`
+      + `<span style="opacity:0.7;">Flower ${pairs}</span>`
+      + `<span style="color:${c};">${label} · ${pct}% open · ${theta}°</span>`
+      + '</div>';
+  }
+
+  /** @private Per-frame thermal-group updater — DOM write only on change. */
+  _renderThermalGroup() {
+    const panel = document.getElementById('hud-thermal-panel');
+    const el = document.getElementById('hud-thermal-flower');
+    if (!panel || !el) return;
+    const ps = this._armManager && this._armManager.playerSatellite;
+    const st = (ps && typeof ps.getFlowerStatus === 'function') ? ps.getFlowerStatus() : null;
+    const html = this._flowerReadout(st);
+    if (html === this._lastFlowerHtml) return;
+    this._lastFlowerHtml = html;
+    panel.style.display = html ? '' : 'none';
+    el.innerHTML = html;
   }
 
   /** @private Render the V5 crossbow arm status panel */

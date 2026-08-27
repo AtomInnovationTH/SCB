@@ -2050,7 +2050,17 @@ export class ArmManager {
     const V5 = Constants.OCTOPUS_V5;
     // Config G: bus + ROSA + body-mount + struts (struts are permanent mothership structure)
     const strutMassTotal = V5.STRUT_MASS * this.arms.length;
-    const coreDry = V5.CORE_DRY_MASS + strutMassTotal;
+    // P2 aft flower: purchased pairs are permanent structure too — the ONE
+    // hardware-mass carrier is this coreDry term (V5.CORE_DRY_MASS + dynamic
+    // hardware sums; the strut-mass precedent). The legacy top-level
+    // OCTOPUS_CORE_DRY_MASS twin (170) is deliberately NOT grown — its one
+    // reader is TargetReticle's local ΔV mirror, recorded as prior debt with
+    // numbers in tmp/flower-mass-budget.mjs §3 (pre-existing +626.7 m/s
+    // optimism at tier 0; the flower widens it by the untold pair tax).
+    const flowerMass = (this.playerSatellite
+        && typeof this.playerSatellite.getFlowerDryMassKg === 'function')
+      ? this.playerSatellite.getFlowerDryMassKg() : 0;
+    const coreDry = V5.CORE_DRY_MASS + strutMassTotal + flowerMass;
     const xenonMax = Constants.OCTOPUS_CORE_XENON;
     const coldGasMax = Constants.OCTOPUS_CORE_COLD_GAS;
 
@@ -2112,6 +2122,7 @@ export class ArmManager {
 
     return {
       coreDry,
+      flowerMass: Math.round(flowerMass * 10) / 10,
       xenonCurrent: Math.round(xenonCurrent * 10) / 10,
       xenonMax,
       coldGasCurrent: Math.round(coldGasCurrent * 10) / 10,

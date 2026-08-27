@@ -17,7 +17,9 @@ export const Constants = {
   // edit must invalidate cached JSON without moving the user-visible release
   // number. Bump this on every ./data/ content change; leave VERSION for
   // actual releases.
-  DATA_VERSION: '1003',
+  // '1003'→'1004': P2 thermal-arc codex batch (20 entries, single-stamp rule —
+  // later phases add ZERO codex stamps; P1 ledger §9).
+  DATA_VERSION: '1004',
 
   // ============================================================================
   // === INPUT (Delegation 1, 2026-05-31) ===
@@ -185,6 +187,9 @@ export const Constants = {
       SENSORS:    '#7fd4e8', // accent cyan
       COMMS:      '#74c4e6', // sky cyan
       CAPTURE:    '#8fdcc4', // seafoam
+      THERMAL:    '#a3d9c9', // mint teal — P2 aft flower family (P1 ledger §7:
+                             // EVERY family needs a hue row HERE or it renders
+                             // fallback-hued and the miss is invisible in tests)
     },
     // Risk badge dot colours reuse the shared wireframe palette.
     RISK_COLORS: {
@@ -1107,7 +1112,12 @@ export const Constants = {
     // (long_tether 600 + gsl_tether_v4 3 000) retired from the catalog; the
     // tether tier ladder is the one reach track. Re-derived on the SSOT pin's
     // own sanctioned path (test-shop-pacing computes Σ UPGRADES live).
-    CATALOG_TOTAL_CR: 42800,
+    // P2 flower hardware (2026-08-27): 42 800 → 45 000 — category #9
+    // "Thermal & Services" opens with the aft-flower pair rows
+    // (flower_pair_a 1 200 + flower_pair_b 1 000; placeholder economy-pass
+    // prices per the charter). Same sanctioned path: the pacing test computes
+    // Σ UPGRADES live and this pin re-derives with it.
+    CATALOG_TOTAL_CR: 45000,
     // Ordered recommendation preference for the ⭐ starter highlight. The shop
     // ⭐-marks the first item here that is un-owned and currently affordable.
     RECOMMENDED_STARTERS: ['capture_net', 'fast_reel', 'enhanced_eo', 'efficient_ion'],
@@ -1519,6 +1529,78 @@ export const Constants = {
     Y0_QUAD: { armCount: 4, weaverCount: 2, spinnerCount: 2, frontArmCount: 0, backArmCount: 0, dryMass: 211.4, wetMass: 257.4, unlocked: true,  tier: 0, azimuths: [60, 120, 240, 300] },
     Y1_HEX:  { armCount: 6, weaverCount: 3, spinnerCount: 3, frontArmCount: 0, backArmCount: 0, dryMass: 223.0, wetMass: 269.0, unlocked: false, tier: 1, azimuths: [30, 90, 150, 210, 270, 330] },
     Y3_OCTO: { armCount: 8, weaverCount: 3, spinnerCount: 3, frontArmCount: 1, backArmCount: 1, dryMass: 237.0, wetMass: 283.0, unlocked: false, tier: 3, azimuths: [30, 90, 150, 210, 270, 330], endFaceArms: ['+Z', '-Z'] },
+  },
+
+  // ============================================================================
+  // THERMAL (P2 — flower hardware, observe-only; block reserved by the P1
+  // ledger .kilo/plans/1787831047000-aft-rim-allocation-and-reservations.md §5)
+  // ============================================================================
+  // AFT FLOWER — 4 rigid aft-pivot struts with radiator plates and inert tip
+  // hardpoints. The struts "open LIKE A FLOWER" (owner grammar — keep verbatim).
+  // OBSERVE-ONLY at P2: they draw and slew, throttle nothing; thermal state and
+  // numbers are P3, throttle P4, tip cargo booking P5.
+  //
+  // Every number below is pinned by tmp/flower-pose-band.mjs (probe 2, byte-
+  // stable; P1 re-derivation gate passed: margin = 0.21199·R + 0.20021,
+  // conservative ceiling 147.35° at R=4, straight-aft limit R=1.714 m, cargo
+  // pose 1.9 m bag +0.780 m) and tmp/flower-mass-budget.mjs (probe 4).
+  // The P1 allocation table is BINDING: stations at az 45/135/225/315
+  // ± 11.25°, hinge band z −1.000..−0.886 at r 0.34..0.46, deployed envelope
+  // z ≤ −1.0, pose band θ ∈ [90°,146°] under thrust, θ ≥ 90° ALWAYS.
+  THERMAL: {
+    FLOWER: {
+      // ── Stations (allocation table rows FLOWER-NE/NW/SW/SE, binding) ──
+      AZIMUTHS_DEG: [45, 135, 225, 315],
+      PAIR_A_AZ_DEG: [45, 225],    // trim-neutral diagonal (S12 ⟂-CoM 0.0000)
+      PAIR_B_AZ_DEG: [135, 315],   // second diagonal — shop stages pairs
+      HINGE_R_M: 0.40,             // hinge ring = barrel/rim radius (V5.COLLAR_RADIUS)
+      HINGE_Z_M: -1.0,             // rim plane
+
+      // ── Geometry (probe 2 §1/§4: min enforced-cone clearance with THIS
+      //    plate at stow/park/cargo = 0.571/0.746/1.062 m — all ≥ 0.15 floor;
+      //    plate root 0.601 m off the Y3 X=0 sweep plane vs 0.28 grant) ──
+      STRUT_LENGTH_M: 2.5,         // bare-strut band ceiling 148.76° > reserved 146°
+      STRUT_RADIUS_M: 0.030,       // boom tube
+      PLATE_HALF_WIDTH_M: 0.30,    // TANGENTIAL half-width (allocation clause)
+      PLATE_START_M: 0.75,         // ≥ w/2 + 0.28/sin45 off the sweep plane (probe §1e)
+      PLATE_END_M: 2.45,           // 0.05 m bare at the tip for the hardpoint
+      PLATE_THICK_M: 0.03,
+
+      // ── Pose ladder (probe 2 §4, pinned INSIDE the P1 band [90°,146°];
+      //    θ from +Z, α_aft = 180° − θ — P1 ledger §10 row 7 convention) ──
+      POSE_STOW_DEG: 146,          // band-edge bud: θ→180° camps the Y3 axial
+                                   // reserve (r ≤ 0.45, ANY R — probe §2
+                                   // discovery) and is plume-illegal for
+                                   // R > 1.714 m under thrust
+      POSE_PARK_DEG: 135,          // radiator-duty pose (P3/P5 consume via
+                                   // setFlowerPose; brief §2.1 pose grammar)
+      POSE_CARGO_DEG: 90,          // full bloom — tips at the rim plane, fore
+                                   // of the cone apexes, plume-clear at any R
+      POSE_FLOOR_DEG: 90,          // θ ≥ 90° ALWAYS — enforced IN the driver
+      POSE_THRUST_MAX_DEG: 146,    // P1 global keep-out 7 (reserved band edge)
+
+      // ── Slew (daughter-stack mirror; drift-guarded ===
+      //    OCTOPUS_V5.STRUT_SLEW_RATE by test-FlowerPose.js) ──
+      SLEW_RATE_RAD_S: 15 * Math.PI / 180,   // 15°/s — full O swing 146°→90° in 3.73 s
+      SETTLE_EPS_RAD: 0.01,        // latch clears within 0.01 rad (daughter contract)
+
+      // ── Mass (probe 4: plate 1.02 m² × 9 kg/m² sandwich + 2.5 m boom
+      //    ≈ 1.0 kg/m + bracket/bosses/tip 0.82 kg = 12.5 kg per strut).
+      //    Budget taxes at full tanks: pair A −280.7 m/s, pair B −231.0 m/s
+      //    (the shop rows SAY this out loud — §8.1 doctrine). ──
+      STRUT_DRY_MASS_KG: 12.5,
+      PAIR_DRY_MASS_KG: 25.0,
+
+      // ── Per-size tip-bag pose bands (probe 2 §1c, R=2.5, exact tip-sphere
+      //    vs enforced cones). PAPER PIN for P5 — tips are INERT at P2 (no
+      //    booking, no cargo logic). Whale-class NEVER goes aft (MAX_KG). ──
+      TIP_BAG_BANDS: [
+        { bagRadiusM: 0.5, maxThetaDeg: 146.0 },
+        { bagRadiusM: 1.0, maxThetaDeg: 136.7 },
+        { bagRadiusM: 1.5, maxThetaDeg: 124.8 },
+        { bagRadiusM: 1.9, maxThetaDeg: 114.6 },
+      ],
+    },
   },
 
   // ============================================================================
