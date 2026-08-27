@@ -40,6 +40,13 @@ const _PHASE_LABELS = {
 // learns one colour for "nets". Low/empty still warns amber/red in both.
 const NET_COLOR = '#f0ecd8'; // ivory white
 
+// §11.3 reaction-wheel gauge (DAUGHTER_NET_RECOIL). Fixed 4-entry pip lookup —
+// fill is threshold-relative, so the gauge stays honest if the tuning moves.
+// Below the floor the wheel is "quiet" and the readout is hidden (no HUD noise;
+// also where absent-field legacy mocks and the flag-OFF neutral 0/false land).
+const WHEEL_PIPS = ['▯▯▯', '▮▯▯', '▮▮▯', '▮▮▮'];
+const WHEEL_SHOW_FLOOR = 0.25; // normalized units — one fire (1.0) bleeds past this ~22 s later
+
 export class StatusPanel {
   constructor(container) {
     this._container = container;
@@ -1790,13 +1797,48 @@ export class StatusPanel {
   }
 
   /**
+   * @private §11.3 wheel-saturation readout for one daughter, from the
+   * ArmUnit.getStatus() wheelMomentum/wheelSaturated pair. '' while the wheel
+   * is quiet — absent fields (legacy mocks), the flag-OFF neutral 0/false, or
+   * momentum bled below the floor — so the pre-wheel line renders
+   * byte-identically. A dim→amber pip gauge while momentum accumulates
+   * (amber from 70% of threshold, mirroring the tether-tension tier), and the
+   * red desat-surcharge warning while saturated. Pure string builder — no DOM,
+   * no per-arm state (Node-testable like _daughterStatus).
+   * @returns {string} span HTML, or '' when nothing should be shown
+   */
+  _wheelReadout(a) {
+    if (a.wheelSaturated) {
+      return '<span style="color:#ff4444;white-space:nowrap;" '
+        + 'title="Reaction wheels saturated — every net fire pays the RCS desat surcharge until momentum bleeds off">'
+        + '↻ WHEEL SAT — desat surcharge</span>';
+    }
+    const m = a.wheelMomentum || 0;
+    if (m < WHEEL_SHOW_FLOOR) return '';
+    const th = (Constants.DAUGHTER_NET_RECOIL || {}).WHEEL_SATURATION_THRESHOLD || 3;
+    const filled = Math.max(0, Math.min(3, Math.round((m / th) * 3)));
+    const c = m >= th * 0.7 ? '#ffaa00' : '#e8e4d0';
+    return `<span style="color:${c};opacity:0.7;" title="Reaction-wheel momentum ${m.toFixed(1)} of ${th} — desat surcharge when saturated">↻ ${WHEEL_PIPS[filled]}</span>`;
+  }
+
+  /**
    * @private The launched-daughter telemetry line: mothership range + drift +
    * tether, swapped for target range + closing rate when a target exists.
-   * Returns '' for docked/reloading/expended daughters (no telemetry line).
+   * Returns '' for docked/reloading/expended daughters (no telemetry line),
+   * except that live §11.3 wheel momentum still shows (it survives docking).
    */
   _renderDaughterTelemetry(a, armObj, idx) {
     const grounded = a.state === 'DOCKED' || a.state === 'RELOADING' || a.state === 'EXPENDED';
-    if (grounded) { this._daughterRangeCache.delete(a.id); return ''; }
+    if (grounded) {
+      this._daughterRangeCache.delete(a.id);
+      // §11.3: wheel momentum survives docking (bleeds in every state) — keep
+      // the gauge visible so a desat fee on the next launch isn't a surprise.
+      // '' when quiet → the grounded line stays byte-identical to today.
+      const wheel = this._wheelReadout(a);
+      return wheel
+        ? `<div style="padding-left:28px;font-size:10px;margin-top:1px;white-space:nowrap;">${wheel}</div>`
+        : '';
+    }
     const dim = 'color:#e8e4d0;opacity:0.7;';
     const parts = [];
 
@@ -1841,6 +1883,12 @@ export class StatusPanel {
         : tens !== undefined && tens >= crit * 0.7 ? '#ffaa00' : '#e8e4d0';
       parts.push(`<span style="color:${tc};opacity:0.7;">⛓ ${Math.round(a.tetherLength)} m</span>`);
     }
+
+    // §11.3 reaction-wheel gauge — last, it's advisory. Quiet wheels (absent
+    // fields / flag OFF / bled down) add nothing, keeping the line byte-
+    // identical to the pre-wheel render.
+    const wheel = this._wheelReadout(a);
+    if (wheel) parts.push(wheel);
 
     if (parts.length === 0) return '';
     return `<div style="padding-left:28px;font-size:10px;margin-top:1px;white-space:nowrap;">`
