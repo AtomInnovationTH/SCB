@@ -837,6 +837,17 @@ export const Constants = {
   TETHER_SEGMENTS: 24,                 // line segments for catenary render
   TETHER_SAG_FACTOR: 0.015,           // catenary sag amplitude as fraction of current separation
   TETHER_SAG_PARALLEL_THRESHOLD: 1e-6, // threshold for tether-parallel-to-gravity degeneracy detection
+  // Wave1 tension feedback (2026-08-27): the daughter tether tint is driven by
+  // the TENSION fraction (tetherTension / tetherBreakStrength) through the
+  // REEL_TENSION_WARNING / REEL_TENSION_CRITICAL thresholds — the same pair the
+  // DockingReticle tension bar and StatusPanel stress readout already use — and
+  // eased per frame with this time constant so the line can never strobe (the
+  // retired always-on driver keyed off DISTANCE strain and flashed red/white in
+  // the orbital frame). The creak floor rate-limits the daughter's
+  // Events.TETHER_TENSION emits per arm (AudioSystem's per-armId cooldown still
+  // applies downstream); see ArmUnit._updateReeling for the owner note.
+  TETHER_COLOR_EASE_TAU_S: 0.25,       // s — exponential ease of the tether tint toward its tension target
+  TETHER_CREAK_MIN_INTERVAL_S: 1.5,    // s — hard floor between daughter TETHER_TENSION creak emits (per arm)
 
   // --- Docking (EPM — Electro-Permanent Magnets) ---
   DOCK_EPM_HOLD_FORCE: 50,             // N (pair of modules, zero power)

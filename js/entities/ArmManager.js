@@ -51,6 +51,16 @@ const _HIGH_RISK_ROT_STATES = new Set([
   ARM_STATES.DOCKING,
   ARM_STATES.DEORBITING,
 ]);
+// Wave1 reel-drum feedback (2026-08-27): arm states where the daughter parks
+// AT her strut tip → drum 'ready'. Mirrors ArmUnit._updateTether's hidden-line
+// set (DOCKED/DOCKING/RELOADING/HOLDING_CATCH) minus EXPENDED, whose cartridge
+// maps to 'empty'.
+const _DRUM_HOME_STATES = new Set([
+  ARM_STATES.DOCKED,
+  ARM_STATES.DOCKING,
+  ARM_STATES.RELOADING,
+  ARM_STATES.HOLDING_CATCH,
+]);
 const _SOFT_ROT_STATES = new Set([
   ARM_STATES.UNDOCKING,
   ARM_STATES.LAUNCHING,
@@ -194,6 +204,10 @@ export class ArmManager {
 
     /** @type {ArmUnit[]} */
     this.arms = [];
+
+    // Wave1 reel-drum feedback: last state sent to PlayerSatellite.setTetherState
+    // per strut index (edge-triggered — only transitions emit a call).
+    this._drumStatesSent = [];
 
     /**
      * SceneManager ref for DYNAMIC near-field membership (z-layer fix). A
@@ -1736,6 +1750,9 @@ export class ArmManager {
       arm.update(dt, parentPos, parentQuat);
     }
 
+    // Wave1: spin/amber the strut reel cartridges per live arm state.
+    this._syncTetherDrums();
+
     // S9 strut posing (cargo-continuity plan §5, part 3; register item 32):
     // a loaded HOLDING_CATCH daughter whose cargo box sits in a plume cone at
     // her live booking re-poses to the measured safe band. Live, NOT
@@ -1811,6 +1828,43 @@ export class ArmManager {
             this._debrisField.pinCapturedDebris(d, pinPos, scaleMul);
           }
         }
+      }
+    }
+  }
+
+  /**
+   * Wave1 reel-drum feedback (2026-08-27): ONE OWNER for the strut reel-
+   * cartridge LED/drum states (PlayerSatellite.setTetherState). ArmManager's
+   * per-frame arm poll already reads every arm's state, so the sync lives here
+   * rather than inside ArmUnit — one place that knows the whole fleet, and the
+   * entity stays free of a render-furniture concern.
+   *
+   * Mapping (mirrors ArmUnit._updateTether's tether-visible rules, so the drum
+   * spins exactly while the cable it reels is drawn):
+   *   'deployed' — arm out on tether work (REELING/RETURNING/HAULING and every
+   *                other deployed-away state): amber LED + spool spin
+   *   'ready'    — strut home states (DOCKED/DOCKING/RELOADING/HOLDING_CATCH)
+   *   'empty'    — EXPENDED (tether snapped) or deliberately DETACHED (cable
+   *                cut): she'll never fly this cable again, so the cartridge
+   *                must not read "home" (green) — it reads red.
+   *
+   * Edge-triggered (send on change only) so calls trace a clean sequence.
+   * Guarded for headless/legacy player mocks that lack setTetherState (they
+   * simply carry no drum furniture).
+   * @private
+   */
+  _syncTetherDrums() {
+    const ps = this.playerSatellite;
+    if (!ps || typeof ps.setTetherState !== 'function') return;
+    for (const arm of this.arms) {
+      const idx = arm.index;
+      if (!(idx >= 0)) continue;
+      let want;
+      if (arm.isDetached || arm.state === ARM_STATES.EXPENDED) want = 'empty';
+      else want = _DRUM_HOME_STATES.has(arm.state) ? 'ready' : 'deployed';
+      if (this._drumStatesSent[idx] !== want) {
+        this._drumStatesSent[idx] = want;
+        ps.setTetherState(idx, want);
       }
     }
   }

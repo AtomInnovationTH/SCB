@@ -58,6 +58,11 @@ const _goalDir      = new THREE.Vector3();
 const _posCmd       = new THREE.Vector3();
 const _dockOffTmp   = new THREE.Vector3();
 
+// Wave1 tension feedback — tether tint temps (same module-temp idiom as above:
+// written and fully consumed within one call, never retained across calls).
+const _tintScratch  = new THREE.Color();
+const _tintTarget   = new THREE.Color();
+
 // ──────────────────────────────────────────────────────────────────────────
 const S = Constants.ARM_STATES;
 
@@ -74,6 +79,50 @@ const {
   V5_WEAVER_MASS, V5_SPINNER_MASS,
   SPRING_TIERS, TETHER_TIERS,
 } = Constants;
+
+/**
+ * Wave1 tension feedback — pure tension-fraction → tether tint mapping.
+ *
+ * Drives the DAUGHTER tether line color from the live reel tension
+ * (`tetherTension / tetherBreakStrength`, the scalar _updateReeling computes
+ * for snap physics) — NOT from distance. HISTORY: the original always-on
+ * driver colored by distance strain; in the orbital frame that scalar jitters
+ * frame-to-frame and the line strobed red/white, so it was flag-gated behind
+ * TETHER_REEL (OFF) and the channel went dead (see _updateTether). The tension
+ * fraction is stable within a reel and zero outside one.
+ *
+ * Thresholds are the canonical tension-fraction pair REEL_TENSION_WARNING /
+ * REEL_TENSION_CRITICAL — the SAME constants the DockingReticle tension bar
+ * and StatusPanel stress readout key off (and the exact 0.7 / 0.9 steps the
+ * retired flag-gated path used), so bar, status text, and line color speak one
+ * vocabulary. NET_STRAIN_* is deliberately NOT used here: that pair rates
+ * payload mass vs NET rating (recoverable net rip), a different failure mode
+ * from tether snap (Constants.js "Two distinct post-capture failure modes").
+ *
+ * Piecewise, continuous:
+ *   f ≤ WARNING            → NOMINAL
+ *   WARNING < f ≤ CRITICAL → lerp NOMINAL → STRESSED
+ *   CRITICAL < f < 1.0     → lerp STRESSED → CRITICAL (pure red AT the snap point)
+ *   f ≥ 1.0                → CRITICAL (clamped; snap fires at f > 1)
+ *
+ * @param {number} tensionFraction — tetherTension / tetherBreakStrength
+ * @param {THREE.Color} [out] — target to write (allocates when omitted)
+ * @returns {THREE.Color} out
+ */
+export function tetherTensionTint(tensionFraction, out = new THREE.Color()) {
+  const warn = Constants.REEL_TENSION_WARNING ?? 0.7;
+  const crit = Constants.REEL_TENSION_CRITICAL ?? 0.9;
+  const f = Number.isFinite(tensionFraction) ? tensionFraction : 0;
+  if (f <= warn) return out.setHex(Constants.TETHER_COLOR_NOMINAL);
+  if (f <= crit) {
+    out.setHex(Constants.TETHER_COLOR_NOMINAL);
+    return out.lerp(_tintScratch.setHex(Constants.TETHER_COLOR_STRESSED),
+      (f - warn) / Math.max(1e-6, crit - warn));
+  }
+  out.setHex(Constants.TETHER_COLOR_STRESSED);
+  return out.lerp(_tintScratch.setHex(Constants.TETHER_COLOR_CRITICAL),
+    Math.min(1, (f - crit) / Math.max(1e-6, 1 - crit)));
+}
 
 // S3.6: Shared bridle geometries (created once, reused across all arms)
 let _sharedBridleGeo = null;
@@ -238,6 +287,7 @@ export class ArmUnit {
     // now writes. Deleted — the item-76(a) dead-data shape.
     this.tetherBreakStrength = TETHER_TIERS[0].breakStrength; // From current tier
     this.reeling = false;                  // True when actively reeling in
+    this._tetherCreakCooldown = 0;         // s — rate-limit countdown for the daughter TETHER_TENSION creak (_updateReeling)
     this._tetherSevered = false;           // True after a tether SNAP (hides line, drifts)
     this._severedCatch = null;             // debris still pinned to this arm after a tether snap
     this._severedDriftS = 0;               // s drifting since the snap (bounds the pin)
@@ -2536,6 +2586,7 @@ export class ArmUnit {
     this.reloadDuration = 0;
     this.tetherTension = 0;
     this.tetherLength = 0;
+    this._tetherCreakCooldown = 0;   // re-arm the daughter creak rate-limit on reset
     this.ablationTarget = null;
     this.ablationTimer = 0;
     this.reeling = false;
@@ -5800,6 +5851,39 @@ export class ArmUnit {
       }
     }
 
+    // Wave1 tension feedback — daughter reel creak.
+    //
+    // ONE OWNER DECISION: the creak is emitted HERE (ArmUnit, on the ONE event
+    // the mother lasso already owns: Events.TETHER_TENSION, { tensionFraction,
+    // armId }) rather than teaching AudioSystem to listen to
+    // TETHER_TENSION_UPDATE. Reasons: (1) soundVocabulary.js pins ONE canonical
+    // trigger per sound family — `playTetherTension ← TETHER_TENSION` — so a
+    // daughter-side UPDATE listener would fork the creak's trigger vocabulary;
+    // (2) TETHER_TENSION_UPDATE fires EVERY reel frame regardless of strain —
+    // gating + rate-limiting it inside AudioSystem would duplicate per-arm
+    // bookkeeping the emitter can do once at the source; (3) AudioSystem's
+    // existing per-armId cooldown (_tetherTensionTimers) then covers both
+    // speakers (lasso + daughter) through the ONE chokepoint, and the mother
+    // lasso audio path stays untouched.
+    //
+    // Silent below the strain-safe fraction (REEL_TENSION_WARNING — the old
+    // flag-gated path's 0.7 gate and the HUD bar's yellow tier), rate-limited
+    // at the source to ≤1 emit per TETHER_CREAK_MIN_INTERVAL_S (hard floor
+    // ~1.5 s; AudioSystem's 3 s per-armId cooldown may thin it further). The
+    // payload's live fraction scales playTetherTension's creak volume. The
+    // guard runs AFTER the snap check above so a snapping/docking frame can't
+    // squeak.
+    this._tetherCreakCooldown = Math.max(0, this._tetherCreakCooldown - dt);
+    if (this.state === S.REELING
+        && this.tetherTension > this.tetherBreakStrength * (REEL_TENSION_WARNING ?? 0.7)
+        && this._tetherCreakCooldown <= 0) {
+      this._tetherCreakCooldown = Constants.TETHER_CREAK_MIN_INTERVAL_S ?? 1.5;
+      eventBus.emit(Events.TETHER_TENSION, {
+        tensionFraction: this.tetherTension / this.tetherBreakStrength,
+        armId: this.id,
+      });
+    }
+
     // NO fuel consumption! This is the key V5 benefit.
     // Power draw from reel motor only (handled by PowerDistribution)
 
@@ -6680,6 +6764,12 @@ export class ArmUnit {
     // stray, wrong-direction tether for the whole window.
     if (this.state === S.DOCKED || this.state === S.DOCKING ||
         this.state === S.RELOADING || this.state === S.HOLDING_CATCH) {
+      // Wave1: while the line is hidden, snap the tint home to NOMINAL — a
+      // stressed reel-in tint would otherwise persist across the dock and
+      // re-appear, stale, on the next deploy. (Tension is already 0 here; the
+      // eased driver would fade out only over ~tau while hidden — resetting
+      // avoids the flash entirely.)
+      this.tetherMaterial.color.setHex(Constants.TETHER_COLOR_NOMINAL);
       this.tetherLine.visible = false;
       return;
     }
@@ -6728,9 +6818,16 @@ export class ArmUnit {
       } else {
         this.tetherMaterial.color.setHex(Constants.TETHER_COLOR_NOMINAL);
       }
+    } else {
+      // TETHER_REEL OFF (production): drive the tint from the LIVE REEL TENSION
+      // fraction via tetherTensionTint — replacing the old always-on distance
+      // strain driver whose orbital-frame jitter caused the red/white flashing
+      // artifact documented above. The tension fraction is computed in
+      // _updateReeling for snap physics (stable within a reel, zero outside
+      // one), so the line eases through amber toward red exactly while the
+      // winch is straining, and eases home when the reel ends.
+      this._updateTetherTensionTint(dt);
     }
-    // When TETHER_REEL is OFF: color stays at NOMINAL (set during construction).
-    // No per-frame color updates — eliminates red/white flashing artifact.
     this.tetherMaterial.opacity = (this.state === S.EXPENDED) ? 0.2 : 0.9;
 
     // Compute mother-side anchor point — strut tip via dockOffset (PlayerSatellite frame),
@@ -6833,6 +6930,30 @@ export class ArmUnit {
     // parallel to mother" instead of connecting reel to arm.
     // Counteract the group rotation so tether renders in world orientation.
     this.tetherLine.quaternion.copy(this.group.quaternion).invert();
+  }
+
+  /**
+   * @private Wave1: ease the tether material color toward the tension-fraction
+   * tint (tetherTensionTint). Runs ONLY on the TETHER_REEL-OFF path of
+   * _updateTether (the flag-on reel path owns its own stepped colors).
+   *
+   * Per-frame exponential ease (1 − e^(−dt/tau)) toward the target — never a
+   * step — so a single-frame tension sample can only nudge the line a few
+   * percent of the way to red; the historical strobe required the tint to jump
+   * whole bands per frame. Tension reads 0 outside REELING, so the target is
+   * NOMINAL the moment the reel (or the mission-1 clamp) ends and the line
+   * fades back to cream.
+   * @param {number} [dt] — frame delta seconds (omitted ⇒ snap to target)
+   */
+  _updateTetherTensionTint(dt) {
+    if (!this.tetherMaterial) return;
+    const breakN = this.tetherBreakStrength || 0;
+    const frac = breakN > 0 ? this.tetherTension / breakN : 0;
+    tetherTensionTint(frac, _tintTarget);
+    const tau = Constants.TETHER_COLOR_EASE_TAU_S ?? 0.25;
+    const alpha = (typeof dt === 'number' && dt > 0 && tau > 0)
+      ? 1 - Math.exp(-dt / tau) : 1;
+    this.tetherMaterial.color.lerp(_tintTarget, Math.min(1, alpha));
   }
 
   /** @private S3.6: Update bridle visibility + color to mirror tether state */
