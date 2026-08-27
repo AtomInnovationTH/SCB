@@ -15,8 +15,9 @@
  * "Honest numbers" contract: any % shown on the HUD is the % rolled at
  * resolve time, given the same state. Where the resolve depends on state that
  * only exists after firing (in-flight spin decay), the pre-fire estimate
- * mirrors the flight model (spinFraction = 1 − SPIN_DECAY_PER_S × tof) so the
- * displayed odds and the resolve roll agree.
+ * mirrors the flight model (spinFraction = 1 − decay × tof, with the same
+ * per-class decay override the flight applies) so the displayed odds and
+ * the resolve roll agree.
  *
  * Design notes:
  *   • PURE + Node-safe — no THREE, no DOM, no eventBus. Fully unit-testable
@@ -77,8 +78,12 @@ export function computeStrainFailProbability(payloadMass, ratedMass) {
 /**
  * Pre-fire estimate of the net's spin fraction at contact. Mirrors the flight
  * model: spin settles at SPIN_HZ when FLIGHT begins, then decays at
- * SPIN_HZ × SPIN_DECAY_PER_S per second of flight (CaptureNet._updateFlight),
- * with time-of-flight = range / LAUNCH_SPEED.
+ * SPIN_HZ × decay per second of flight (CaptureNet._updateFlight), with
+ * time-of-flight = range / LAUNCH_SPEED. The decay honours the per-class
+ * override exactly like the flight code (netClass.SPIN_DECAY_PER_S ??
+ * CN.SPIN_DECAY_PER_S — §11.2 LARGE resolution: the whale net bleeds at
+ * 0.04/s, daughters at the shared 0.08/s), so the displayed odds and the
+ * resolve roll agree for every class ("honest numbers" contract above).
  * @param {number} range — metres to target
  * @param {object} netClass — CN.LARGE / MEDIUM / SMALL
  * @returns {number} estimated spinFraction at contact ∈ [0, 1]
@@ -86,7 +91,7 @@ export function computeStrainFailProbability(payloadMass, ratedMass) {
 export function estimateSpinFractionAtContact(range, netClass) {
   const CN = Constants.CAPTURE_NET;
   const launchSpeed = (netClass && netClass.LAUNCH_SPEED) || 10;
-  const decay = CN.SPIN_DECAY_PER_S ?? 0;
+  const decay = (netClass && netClass.SPIN_DECAY_PER_S) ?? CN.SPIN_DECAY_PER_S ?? 0;
   const tof = Math.max(0, range) / Math.max(1e-6, launchSpeed);
   return Math.max(0, 1 - decay * tof);
 }

@@ -851,7 +851,8 @@ export class NetProjectile {
      *  in-flight spin — rimTensionPerWeightN(netClass, spinRate). Updated each
      *  FLIGHT tick (0 before flight: the bag is still folded/blossoming, so a
      *  mouth-tension claim would be meaningless). Telemetry runs for EVERY
-     *  class, including LARGE where the collapse latch is deferred. */
+     *  class; since the §11.2 LARGE resolution (2026-08-27) the collapse
+     *  latch does too — no class is skipped. */
     this.rimTensionN   = 0;
     /** @type {boolean} §11.2 mouth-collapse latch: true once rimTensionN fell
      *  below CN.MOUTH_TENSION_FLOOR_N during FLIGHT (one-way — in-flight decay
@@ -1250,7 +1251,12 @@ export class NetProjectile {
     // Slow in-flight spin decay (Item 2): mesh flexing + rim drag bleed angular
     // momentum, so long shots arrive with spinFraction < 1 → live f_spin penalty
     // in computeClingProbability ("fire inside the envelope or the wrap is weak").
-    const decayPerS = CN.SPIN_DECAY_PER_S != null ? CN.SPIN_DECAY_PER_S : 0;
+    // Per-class override first (the MAX_FLIGHT_TIME idiom): LARGE bleeds at
+    // 0.04/s — its rim carries ~8× the specific angular momentum of the
+    // daughter nets, and the §11.2 LARGE resolution keys off it (derivation
+    // at Constants.js CN.LARGE.SPIN_DECAY_PER_S). SMALL/MEDIUM have no
+    // override and keep the shared CN.SPIN_DECAY_PER_S bit-identically.
+    const decayPerS = this.netClass.SPIN_DECAY_PER_S ?? CN.SPIN_DECAY_PER_S ?? 0;
     if (decayPerS > 0 && this.spinRate > 0) {
       this.spinRate = Math.max(0, this.spinRate - this.netClass.SPIN_HZ * decayPerS * dt);
     }
@@ -1305,11 +1311,16 @@ export class NetProjectile {
     // guards so a net that dies of 'timeout' on the same tick keeps its
     // legacy reason at ANY dt (MEDIUM's floor crossing sits ~51 ms past its
     // 8 s timeout — unreachable by derivation, but the ordering makes it
-    // structural, not arithmetic). LARGE is consciously DEFERRED this wave
-    // (netClass.MOUTH_COLLAPSE_DEFERRED — its post-audit 11 s flight window
-    // exposes 68–100 m whale shots at t* ≈ 6.76 s; enforcing would be a
-    // mother-hunt rebalance this wave does not own; see Constants.js).
-    // Telemetry (rimTensionN) still runs for every class.
+    // structural, not arithmetic). The latch runs for EVERY class — the
+    // wave-2 LARGE deferral (netClass.MOUTH_COLLAPSE_DEFERRED) is RESOLVED
+    // (2026-08-27 owner rebalance): LARGE's per-class SPIN_DECAY_PER_S
+    // override (0.04/s, read above) moves its crossing to t* ≈ 13.51 s
+    // ≈ 135 m, outside every reachable contact (tether pay-out 10 s,
+    // MAX_FLIGHT 11 s) with ≥ 2.5 s margin, so 68–100 m whale shots arrive
+    // above the floor honestly (≥ 17.1 N at max reach) instead of being
+    // skipped. Derivation at Constants.js CN.LARGE.SPIN_DECAY_PER_S; pins in
+    // test-CaptureNet-MouthCollapse.js. Telemetry (rimTensionN) runs for
+    // every class.
     //
     // Gameplay-legibility choice (§11.2 fix option "floor check ⇒ forced
     // MISS", over cutting SD-NET's RANGE/MAX_FLIGHT to ~25 m): the long shot
@@ -1322,7 +1333,6 @@ export class NetProjectile {
     this.rimTensionN = rimTensionPerWeightN(this.netClass, this.spinRate);
     const mouthFloorN = CN.MOUTH_TENSION_FLOOR_N;
     if (!this.mouthCollapsed && mouthFloorN > 0
-        && !this.netClass.MOUTH_COLLAPSE_DEFERRED
         && this.rimTensionN < mouthFloorN) {
       this.mouthCollapsed = true;
       eventBus.emit(Events.NET_MOUTH_COLLAPSED, {

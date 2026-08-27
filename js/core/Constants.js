@@ -2870,8 +2870,11 @@ export const Constants = {
     // LIVE gameplay factor in computeClingProbability: long shots arrive with
     // spinFraction < 1 → f_spin penalty → "fire inside the envelope or the wrap is
     // weak". Tuned (Item 2 risk note) so an in-envelope (≤100 m / ≤~1 s) shot loses
-    // <10% spin → Y0 difficulty does not regress.
-    SPIN_DECAY_PER_S:     0.08,   // fraction of SPIN_HZ lost per second of flight
+    // <10% spin → Y0 difficulty does not regress. Shared default for the
+    // daughter classes; LARGE carries a per-class override (the
+    // MAX_FLIGHT_TIME idiom: netClass.SPIN_DECAY_PER_S ?? this) — §11.2
+    // LARGE resolution, derivation at the LARGE block.
+    SPIN_DECAY_PER_S:     0.08,   // fraction of SPIN_HZ lost per second of flight (SMALL/MEDIUM; LARGE overrides — see class block)
     // ── §11.2 mouth-collapse floor (2026-08-27) ──
     // The mouth-open condition (§11.1 audit table + the test-Crossbow-Constants
     // derivation guard) is F/wt = RIM_WEIGHT_MASS · (2π·spin)² · (DIAMETER/2)
@@ -2888,9 +2891,14 @@ export const Constants = {
     //          'mouth_collapsed' MISS (§11.2 floor-check fix).
     //   MEDIUM F₀ ≈ 79.0 N → t* ≈ 8.05 s — beyond its 8 s MAX_FLIGHT_TIME by
     //          only ~51 ms: unreachable, enforcement provably inert.
-    //   LARGE  F₀ ≈ 47.4 N → t* ≈ 6.76 s ≈ 68 m — INSIDE its flight window
-    //          (min(11 s override, 100 m tether / 10 m/s = 10 s)). Enforcement
-    //          is consciously DEFERRED: see LARGE.MOUTH_COLLAPSE_DEFERRED.
+    //   LARGE  F₀ ≈ 47.4 N → t* ≈ 13.51 s ≈ 135 m at its per-class
+    //          SPIN_DECAY_PER_S 0.04 override (§11.2 LARGE resolution,
+    //          2026-08-27 — see the LARGE block for the full derivation).
+    //          OUTSIDE every reachable contact (tether pay-out 10 s,
+    //          MAX_FLIGHT_TIME 11 s) by ≥ 2.5 s: enforcement live for the
+    //          class and provably inert, and the 100 m whale envelope stays
+    //          honest (worst reachable arrival ≈ 17.1 N ≥ floor). The former
+    //          LARGE.MOUTH_COLLAPSE_DEFERRED escape hatch is retired.
     MOUTH_TENSION_FLOOR_N: 10,    // N per rim weight — mouth-open floor (§11.1/§11.2)
     MAX_FLIGHT_TIME:      8,      // max tether pay-out (§2.4 phase 3)
     SLAM_CONTACT_TIME:    0.5,    // slam-wrap wrap duration (§2.4 phase 5a, min)
@@ -3262,22 +3270,47 @@ export const Constants = {
       // 11 s puts reach at min(100 tether, 10×11) = 100 m so reticle, odds,
       // refusal and doc all agree. Daughters keep the shared 8 s default.
       MAX_FLIGHT_TIME:  11,        // s — overrides CN.MAX_FLIGHT_TIME for this class
-      // §11.2 mouth-collapse floor — consciously DEFERRED for LARGE
-      // (2026-08-27). The floor physics does not spare the whale net: F₀ ≈
-      // 47.4 N decays through MOUTH_TENSION_FLOOR_N at t* ≈ 6.76 s ≈ 68 m,
-      // INSIDE this class's flight window (min(11 s, 10 s tether pay-out)).
-      // The 2026-06-12 audit called LARGE "fine" against the then-shared 8 s
-      // cap; the 2026-07-26 mother-net override above (8 s → 11 s, for 100 m
-      // reach) silently widened the exposure to every 68–100 m whale shot and
-      // nobody re-derived §11.2. Enforcing the floor here would forced-MISS
-      // that entire band — a mother whale-hunt rebalance this wave does not
-      // own (owner sign-off needed; Session wave2-capture-settle holds the
-      // resolve side). The flight latch skips this class; the live
-      // rimTensionN telemetry still runs. The exposure (t* < flight window)
-      // is pinned with its derivation in test-CaptureNet-MouthCollapse.js so
-      // any retune of SPIN_HZ / RIM_WEIGHT_MASS / DIAMETER / SPIN_DECAY_PER_S
-      // / MAX_FLIGHT_TIME re-derives this decision consciously.
-      MOUTH_COLLAPSE_DEFERRED: true,
+      // §11.2 mouth-collapse floor — LARGE RESOLVED by physics retune
+      // (2026-08-27 owner rebalance; replaces the MOUTH_COLLAPSE_DEFERRED
+      // escape hatch that lived here). History: the 2026-06-12 audit called
+      // LARGE "fine" against the then-shared 8 s cap; the 2026-07-26
+      // MAX_FLIGHT_TIME override above (8 s → 11 s, for 100 m reach) put the
+      // shared-decay floor crossing t* ≈ 6.76 s ≈ 68 m INSIDE the flight
+      // window (min(11 s, 10 s tether pay-out)), exposing every 68–100 m
+      // whale shot; wave-2 shipped the floor SMALL-enforced with LARGE
+      // consciously deferred. Resolution: a per-class in-flight spin-decay
+      // override (read as netClass.SPIN_DECAY_PER_S ?? CN.SPIN_DECAY_PER_S —
+      // the MAX_FLIGHT_TIME idiom above), NOT an F-side retune, because
+      // t* = (1 − √(FLOOR/F₀))/decay is √-limited on the F side: clearing
+      // the 11 s window at the shared 0.08 decay needs F₀ ≥ 10/(1−0.08·11)²
+      // ≈ 694 N (14.6×) — SPIN_HZ 7.65 Hz (rim speed ~192 m/s, breaks the
+      // big-slow/small-fast class ladder and the 3× folded-spin visual) or
+      // 1.1 kg rim weights (8.8 kg of rim on a 1.95 kg net — breaks the
+      // MASS/SPRING_ENERGY/LAUNCH_SPEED triple, ½·1.95·10² ≈ 97.5 J ≈ 100 J).
+      // The decay knob is linear in t*, and the physics is honest: the
+      // 8 %/s bleed (mesh flex + rim drag) was tuned on the daughter
+      // classes, while fractional decay scales ∝ τ_drag/(I_rim·ω) and the
+      // whale net carries far more rim inertia per kg of flexing mesh
+      // (LARGE 8×0.075×4² = 9.6 kg·m² / 1.2 kg mesh = 8.0; MEDIUM 3.1;
+      // SMALL 0.84) — halving its fractional bleed is conservative against
+      // that ≥ 2.6× scaling. Result: F₀ ≈ 47.37 N crosses the 10 N floor at
+      // t* = (1 − √(10/47.37))/0.04 ≈ 13.51 s ≈ 135 m — OUTSIDE every
+      // reachable contact (tether pay-out ends flight at 10 s / 100 m,
+      // MAX_FLIGHT_TIME at 11 s) with ≥ 2.5 s margin against BOTH caps, so
+      // the floor latch (now live for LARGE — no class is skipped) is
+      // provably inert and the taught 100 m envelope stays honest: worst
+      // reachable arrival = 47.37·(1 − 0.04·10)² ≈ 17.1 N ≥ 10 N floor.
+      // f_spin knock-on (disclosed, §12.2 re-derived — the cling CURVE and
+      // its clamps are byte-untouched): long-shot arrival spinFraction rises
+      // (80 m: 0.36 → 0.68), lifting long-whale odds; SMALL/MEDIUM carry no
+      // override and keep the shared 0.08 bit-identically. Pre-fire odds
+      // (ToolOdds.estimateSpinFractionAtContact) honour this override so
+      // displayed % and resolve roll agree. Derivation + margins pinned in
+      // test-CaptureNet-MouthCollapse.js; retunes of SPIN_HZ /
+      // RIM_WEIGHT_MASS / DIAMETER / this override / MAX_FLIGHT_TIME /
+      // TETHER_MAX break those pins so the decision is re-derived
+      // consciously.
+      SPIN_DECAY_PER_S: 0.04,      // fraction of SPIN_HZ lost per second — LARGE-only override of CN.SPIN_DECAY_PER_S (§11.2 resolution)
       SPRING_ENERGY:    100,       // J (§2.8)
       REPLACEMENT_COST: 250,       // credits (§6.1)
     },
