@@ -2744,6 +2744,16 @@ export const Constants = {
     // are untouched by construction.
     FLIGHT_BILLOW_FRAC: 0.08,
     FLIGHT_BILLOW_HZ: 0.9,
+    // 2026-08-27 (§11.2 deferred presentation — the "windsock-flutter" beat
+    // missFailureKind deliberately left unstaged in Wave 2): a SMALL net whose
+    // rim spin bled through MOUTH_TENSION_FLOOR_N latches the one-way
+    // NetProjectile.mouthCollapsed; the RENDER side alone (CaptureNetVisual)
+    // eases the mouth toward the drawstring-closed radius and ripples the
+    // slack fabric. Keyed off the queryable latch only — the visual never
+    // recomputes tension physics.
+    MOUTH_COLLAPSE_CINCH_FRAC: 0.65,   // fraction of a FULL drawstring close the dead mouth pinches to — rim lands ≈45% of open: clearly slack, never the welded 1.0 only a real catch earns
+    MOUTH_COLLAPSE_EASE_S: 0.4,        // s, latch → full slack pose — inside the <0.5 s read budget, slow enough not to pop
+    MOUTH_COLLAPSE_FLUTTER_FRAC: 0.10, // mouthRadius × this — windsock ripple amp, seated between the ENVELOP (0.12) / CINCH (0.06) settle-jiggles; garnish-gated like both
     // 2026-08-26 (owner round 2) — the held bag over a SUB-METRE catch read
     // as a bare thread lattice ("WTF is that geodesic globe") because the
     // floored contents box inflates the dome while the film rests near-clear:

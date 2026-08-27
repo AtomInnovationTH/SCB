@@ -100,6 +100,9 @@ const TETHER_TAUT_SLACK = _NT.TAUT_SLACK;
 const TETHER_EMISSIVE_S = _NT.EMISSIVE_S;
 const TETHER_EMISSIVE_HDR = _NT.EMISSIVE_HDR;
 const TETHER_BASE_COLOR = Constants.NET_WEB.WEB_COLOR;   // C0/V5: one colour SSOT
+// §11.2 mouth-collapse (windsock) look constants — same thin-alias idiom as
+// _NT above so the hot flight/drape branches stay readable.
+const _NW = Constants.NET_WEB;
 
 // ── Kit-frame attitude helper (register item 13, 2026-08-06) ─────────────
 // Plan: .kilo/plans/1786017377440-pin-scenario-catch-tumble.md (D2).
@@ -654,6 +657,9 @@ export class CaptureNetVisual {
       tetherSegBuffer: tetherGeo.attributes.instanceStart.data,
       armIndex,
       podIndex,
+      // §11.2 windsock beat clock (flag-OFF disc variant) — see the ceremony
+      // literal for the contract; the disc path derives its scale from it.
+      collapseT: 0,
       // Phase D.4 catenary state
       _tetherTwangT: -1,        // seconds since line-taut; <0 = no twang
       _tetherEmissiveT: -1,     // seconds since taut pulse; <0 = no pulse
@@ -775,6 +781,12 @@ export class CaptureNetVisual {
       closedRadius: kitHandle.closedRadius,
       weightCount,
       spinAngle: 0,
+      // §11.2 windsock beat state — fresh per fire (_onNetFired supersedes a
+      // dying bag, never reuses): seconds since the physics latch, and the
+      // cinch fraction the drape driver last derived from it (the FLIGHT
+      // weight ring reads it so beads and fabric pinch together).
+      collapseT: 0,
+      collapseCinch: 0,
       armIndex,
       podIndex,
       useCeremony: true,
@@ -985,15 +997,26 @@ export class CaptureNetVisual {
           break;
         }
 
-        case STATES.FLIGHT:
+        case STATES.FLIGHT: {
           canisterMesh.visible = false;
           discMesh.visible = true;
           tetherLine.visible = true;
-          discMesh.scale.setScalar(1);
+          // §11.2 windsock (flag-OFF flat disc): the mouth IS the disc here —
+          // ease its scale down to the same slack radius fraction the ceremony
+          // rim collapses to (MOUTH_COLLAPSE_CINCH_FRAC of the full drawstring
+          // close). Keyed off the one-way physics latch only; collapseT stays
+          // 0 for a healthy net, so setScalar(1) is bit-identical.
+          if (net.mouthCollapsed) {
+            vis.collapseT = Math.min(_NW.MOUTH_COLLAPSE_EASE_S, vis.collapseT + dt);
+          }
+          const discSlack = (vis.collapseT / _NW.MOUTH_COLLAPSE_EASE_S)
+            * _NW.MOUTH_COLLAPSE_CINCH_FRAC * (1 - NET_CER.DRAWSTRING_RADIUS_FRAC_CLOSED);
+          discMesh.scale.setScalar(1 - discSlack);
           discMesh.rotation.z += net.spinRate * Math.PI * 2 * dt;
           discMesh.material.color.setHex(COL_DISC);
           discMesh.material.opacity = 0.6;
           break;
+        }
 
         case STATES.CONTACT:
         case STATES.BRAKE:
@@ -1293,6 +1316,26 @@ export class CaptureNetVisual {
         beat.cinch = cinchFrac;
         beat.t += dt;
         if (f >= 1) this._endFailureBeat(key, vis);
+      } else if (net.mouthCollapsed) {
+        // ── §11.2 deferred presentation — the windsock-flutter beat ──
+        // (the one missFailureKind deliberately left unstaged in Wave 2).
+        // Physics latched the ONE-WAY NetProjectile.mouthCollapsed when
+        // rimTensionN fell through the tension floor; this branch is keyed off
+        // that queryable latch alone — never recomputed tension physics. The
+        // mouth eases toward the drawstring-closed radius (a PARTIAL cinch:
+        // a dead slack sock, never the welded 1.0 only a real catch earns)
+        // with a garnish flutter ripple on the fabric. The ease clock lives on
+        // the vis (fresh per fire), completes in MOUTH_COLLAPSE_EASE_S, then
+        // HOLDS: a collapsed net only ever reaches MISSED / RELEASED /
+        // REELING from here (contact resolves as the 'mouth_collapsed' MISS
+        // before any wrap state), and this branch outranks those rows below,
+        // so the sock neither snaps open at the miss nor welds shut on the
+        // empty reel-back.
+        vis.collapseT = Math.min(_NW.MOUTH_COLLAPSE_EASE_S, vis.collapseT + dt);
+        const colFrac = vis.collapseT / _NW.MOUTH_COLLAPSE_EASE_S;
+        cinchFrac = _NW.MOUTH_COLLAPSE_CINCH_FRAC * colFrac;
+        vis.collapseCinch = cinchFrac;
+        if (garnish) jiggleAmp = mouthRadius * _NW.MOUTH_COLLAPSE_FLUTTER_FRAC * colFrac;
       } else if (state === STATES.ENVELOP) {
         drape = Math.min(1, Math.max(0, net.stateTimer / CN.ENVELOP_TIME));
         // Settle-jiggle: strongest mid-drape, decaying as the bag seats.
@@ -1462,7 +1505,7 @@ export class CaptureNetVisual {
         break;
       }
 
-      case STATES.FLIGHT:
+      case STATES.FLIGHT: {
         canisterMesh.visible = false;
         coneMesh.visible = true;
         vis.tetherLine.visible = true;
@@ -1474,12 +1517,17 @@ export class CaptureNetVisual {
         coneMesh.material.color.setHex(COL_DISC);
         coneMesh.material.opacity = 0.55;
 
-        // Place weights at full mouth radius
+        // Place weights at full mouth radius — or, §11.2 windsock: on the SAME
+        // collapsed rim the web's cinch channel draws (the CINCH_CLOSING
+        // radius lerp at t=1), so beads and fabric pinch together.
+        // collapseCinch is 0 until the physics latch, and mouthRadius + 0 × (…)
+        // is bit-identical to the design placement.
+        const wrFlight = mouthRadius + (closedRadius - mouthRadius) * vis.collapseCinch;
         for (let i = 0; i < weightCount; i++) {
           const angle = (2 * Math.PI * i / weightCount) + vis.spinAngle;
           rimWeights[i].position.set(
-            mouthRadius * Math.cos(angle),
-            mouthRadius * Math.sin(angle),
+            wrFlight * Math.cos(angle),
+            wrFlight * Math.sin(angle),
             -coneHeight,
           );
           rimWeights[i].visible = true;
@@ -1487,6 +1535,7 @@ export class CaptureNetVisual {
 
         this._updateDrawstring(vis);
         break;
+      }
 
       case STATES.CONTACT:
       case STATES.BRAKE:

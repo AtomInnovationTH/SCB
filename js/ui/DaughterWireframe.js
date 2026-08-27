@@ -287,6 +287,9 @@ export class DaughterWireframe {
     /** @type {number} Dynamic net risk color index — looked up by name so it
      * stays correct if the zone list changes (e.g. solar wings → body skin). */
     this._netZoneIdx = this._shape.zones.findIndex(z => z.name === 'Net Pack');
+    /** @type {number} §11.3 wheel-saturation accent target — the body shell
+     * carries the whole-craft warning; looked up by name like the net index. */
+    this._bodyZoneIdx = this._shape.zones.findIndex(z => z.name === 'Body Shell (hex)');
     /** @type {string} Dynamic status light color */
     this._statusColor = ZONE_COLORS.GREEN;
     /** @type {number} Arm index for badge label */
@@ -342,6 +345,20 @@ export class DaughterWireframe {
     // Update dynamic zone colors
     const nets = arm.netInventory ?? arm._netInventory ?? 0;
     this._shape.zones[this._netZoneIdx].risk = nets > 0 ? 'GREEN' : 'RED';
+
+    // §11.3 wheel-saturation accent (the wave-2 wheel-hud polish this panel
+    // deferred): while the piloted arm's reaction wheels are saturated, the
+    // body shell carries the panel's warning accent (risk RED — the same
+    // convention as the Net Pack flip above; the desat-surcharge WARNING
+    // itself lives on StatusPanel/comms). Allocation-free read of the
+    // getStatus() wheelSaturated pair's backing field (the `netInventory ??
+    // _netInventory` idiom — getStatus() builds a fresh literal per call,
+    // a per-frame allocation this per-frame setter never makes). Neutral
+    // false when DAUGHTER_NET_RECOIL is OFF (ArmUnit zeroes the pair) and
+    // absent on legacy mocks — the ternary then writes the design 'GREEN',
+    // so the rendered panel stays byte-identical.
+    const wheelSat = arm.wheelSaturated ?? arm._wheelSaturated ?? false;
+    this._shape.zones[this._bodyZoneIdx].risk = wheelSat ? 'RED' : 'GREEN';
 
     // Status light color from _statusLightMat
     const mat = arm._statusLightMat;
