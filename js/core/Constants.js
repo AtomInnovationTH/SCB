@@ -1575,6 +1575,19 @@ export const Constants = {
     // Rides NET_CEREMONY (the cinema-mode HUD contract); OFF = post-4988797
     // player-cam-only behaviour, byte-identical.
     LASSO_CATCH_CUT:           true,
+
+    // 2026-08-27 — CAPTURE_NET.md §11.4/§11.3 momentum-torque audit, daughter
+    // side. ON: a daughter net launch (fireDaughterNet via ArmUnit NETTING)
+    // kicks the daughter back by Δv = m_net·LAUNCH_SPEED / m_daughter
+    // (≈1.03 m/s MEDIUM/Weaver, ≈0.57 m/s SMALL/Spinner — derived live from
+    // Constants, never hardcoded), modeled as a critically-damped transient
+    // the SK/NETTING hold loop visibly fights and re-absorbs (~1–2 s), with a
+    // FUEL_RATE_MANEUVER-style RCS surcharge billed for the recovery, plus the
+    // §11.3 reaction-wheel scalar (per-fire increment, slow bleed, saturation
+    // ⇒ paid RCS desat per subsequent fire). Tuning: Constants.DAUGHTER_NET_RECOIL.
+    // OFF = byte-identical legacy behaviour (zero displacement, zero billing).
+    // Mother pod recoil (PlayerSatellite._applyMotherNetRecoil) is untouched.
+    DAUGHTER_NET_RECOIL:       true,
   },
 
   // ============================================================================
@@ -4980,6 +4993,43 @@ export const Constants = {
     FUEL_RATE_MANEUVER: 0.1,      // kg/s — fuel consumption maneuvering
     ENTRY_MAX_VELOCITY: 3.0,      // m/s — max relative vel to enter SK.  Raised from 2.0: realistic arrivals show relV ~1.9 m/s (controller residual after drift cancellation + V_CAP*0.3 ≈ 2.1 m/s nominal approach speed) which is INSIDE the 2.0 m/s gate by only 0.1 m/s — not enough margin for variation.  3.0 m/s gives 1.0 m/s headroom and matches the actual achievable steady-state of the proportional controller.  See debug session 2026-05-09.
     ENTRY_DISTANCE_MULT: 2.0,     // ×standoff — distance gate for SK entry.  Widened from 1.3 hardcoded: the APPROACH controller's brake profile + EMA-smoothed drift compensation produces a settling band of ~1.5–2.0× standoff (e.g. observed dist=17m for standoff=10m, see debug logs).  1.3× gate (13 m) was inside the achievable band so SK never fired.  2.0× = 20 m comfortably captures the band so the daughter actually transitions to STATION_KEEP and the SK lerp pulls her into the standoff sphere.
+  },
+
+  // =========================================================================
+  // DAUGHTER_NET_RECOIL — CAPTURE_NET.md §11.4 (linear recoil) + §11.3 (wheel
+  // saturation scalar), daughter side. Gated by FEATURE_FLAGS.DAUGHTER_NET_RECOIL.
+  //
+  // The kick itself carries NO magnitude constants — Δv is derived at fire
+  // time from the ACTUAL net class (CAPTURE_NET.*.MASS × LAUNCH_SPEED) over
+  // the arm's config.mass (V5_WEAVER_MASS / V5_SPINNER_MASS). This block only
+  // tunes the RECOVERY response and the §11.3 wheel bookkeeping.
+  //
+  // The daughter's SK/NETTING hold is kinematic (STATIONKEEP_LERP_RATE pulls
+  // position onto the hold sphere at 0.8/frame), so the kick is modeled as a
+  // critically-damped controller transient: an offset x with ẍ = −2ωẋ − ω²x
+  // seeded by the impulse (x=0, ẋ=−Δv·launchDir). The hold goal is displaced
+  // by x each frame — she is visibly shoved off the hold sphere, the RCS
+  // "fights" it, and x returns to 0 with no teleport and no permanent offset.
+  // ω = 3.0 ⇒ peak displacement Δv/(ω·e) (≈13 cm Weaver/MEDIUM, ≈7 cm
+  // Spinner/SMALL) at t≈0.33 s, residual < 5 % of peak by t≈1.95 s — inside
+  // the "hold loop visibly fights over ~1–2 s" design window and settled
+  // before a typical net flight resolves (SK standoff 4–12 m ⇒ contact at
+  // ~0.5–1.3 s, capture phases add ~1+ s). SK entry gates (ENTRY_MAX_VELOCITY
+  // 3.0) and all STATION_KEEP constants are deliberately untouched.
+  // =========================================================================
+  DAUGHTER_NET_RECOIL: {
+    CONTROLLER_OMEGA: 3.0,        // rad/s — critically-damped RCS null response
+    SETTLE_EPS_OFFSET_M: 0.01,    // m — |offset| below this (with vel eps) snaps to settled
+    SETTLE_EPS_VEL_MPS: 0.02,     // m/s — |recoil vel| settle epsilon
+    // §11.3 reaction-wheel scalar — normalized "launch-reaction budget" units.
+    // Each class's launcher spin-table is sized for its own net, so one fire =
+    // one budget unit (deliberately NOT L=Iω per class, which would spread
+    // 20:1 across classes; the audit's fix is a flavor loop, not an attitude sim).
+    WHEEL_INCREMENT_PER_FIRE: 1.0,
+    WHEEL_SATURATION_THRESHOLD: 3.0,  // ≥ 3 fires without recovery ⇒ saturated
+    WHEEL_DECAY_PER_S: 1 / 30,        // magnetorquer bleed — one fire-unit per 30 s
+    WHEEL_DESAT_FUEL_COST: 0.5,       // % tank — RCS desat burn billed per fire while saturated
+    WHEEL_DESAT_DUMP: 1.0,            // momentum units the paid desat burn removes
   },
 
   // =========================================================================

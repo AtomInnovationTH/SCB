@@ -689,6 +689,10 @@ export const Events = {
   ARM_FIRE_BLOCKED_HIGH_RATE: 'arm:fireBlockedHighRate',
   /** Recoil compensation applied after crossbow fire. Payload: { residualImpulse, rcsN2Used } */
   ARM_RECOIL_COMPENSATED:  'arm:recoilCompensated',
+  /** Daughter net-fire recoil kick applied (§11.4, FEATURE_FLAGS.DAUGHTER_NET_RECOIL).
+   *  Visuals hook (counter-burn flash) — emitted by ArmUnit.applyNetFireRecoil.
+   *  Payload: { armIndex, armId, dv: {x,y,z} (m/s, world axes), dvMps, netClass } */
+  ARM_RECOIL_KICK:         'arm:recoilKick',
 
   // ── ST-9.10 C-4: Deploy State Machine Events ──────────────────────────
   /** Deploy started (STOWED → DEPLOYING). Payload: { armIndex, fromState } */

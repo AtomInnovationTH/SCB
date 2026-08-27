@@ -309,6 +309,21 @@ export class ArmUnit {
     this._phiMax = Constants.STATION_KEEP.MAX_LATITUDE * Math.PI / 180;
     this._stationKeepTarget = null;         // reference to target debris
 
+    // ── §11.4/§11.3 daughter net-fire recoil (FEATURE_FLAGS.DAUGHTER_NET_RECOIL) ──
+    // Critically-damped controller transient the SK/NETTING hold loop fights:
+    // the hold GOAL is displaced by _recoilOffsetM (metres, world axes) while
+    // the RCS nulls it (see _updateRecoilKick). Vectors stay exactly zero and
+    // untouched while the flag is OFF (byte-identical hold math).
+    this._recoilOffsetM = new THREE.Vector3();  // m — current displacement off the hold sphere
+    this._recoilVelMps = new THREE.Vector3();   // m/s — recoil velocity being nulled
+    this._recoilActive = false;                 // fast-path gate for the hold loops
+    this._recoilFuelBilled = 0;                 // % tank — cumulative RCS recovery surcharge (telemetry)
+    // §11.3 reaction-wheel scalar — normalized launch-reaction momentum.
+    // Increments per net fire, bleeds at WHEEL_DECAY_PER_S, saturation ⇒ paid
+    // RCS desat per subsequent fire. Exposed via getStatus() for the HUD.
+    this._wheelMomentum = 0;
+    this._wheelSaturated = false;
+
     // ── ST-9.3 C-3: Config G Aim + Hinge State ──
     /** Meridian sweep angle α ∈ [0, π]. 0=stowed(−Y), π/2=equatorial, π=zenith(+Y) */
     this._aimAlpha = 0;
@@ -2345,6 +2360,9 @@ export class ArmUnit {
    // C-4: Tick deploy state animation (DEPLOYING/STOWING strut sweep)
    this._tickDeployState(dt);
 
+   // §11.3: reaction-wheel momentum bleed (magnetorquers) — every state.
+   this._tickWheelDecay(dt);
+
    // --- Orbital frame correction (APPLY): keep deployed arms in ship's co-moving frame ---
    // MUST run BEFORE state machine so _updateTransit / _updateApproach see
    // this.position in the CURRENT frame's co-moving frame (matching the freshly-
@@ -2615,6 +2633,11 @@ export class ArmUnit {
       position: this.position.clone(),
       remainingDeltaV: (this.fuel / 100) * (this.config?.totalDeltaV || 50),
       isDetached: this.isDetached,
+      // §11.3 reaction-wheel scalar (FEATURE_FLAGS.DAUGHTER_NET_RECOIL):
+      // normalized launch-reaction momentum + saturation flag for the HUD
+      // (wired later). Neutral 0/false while the flag is OFF.
+      wheelMomentum: this._wheelMomentum,
+      wheelSaturated: this._wheelSaturated,
       // V5 Crossbow fields
       springCharged: this.springCharged,
       reloadProgress: this.reloadProgress,
@@ -2654,6 +2677,15 @@ export class ArmUnit {
   _transitionTo(newState) {
     const old = this.state;
     if (old === S.NETTING) this._firedNet = null;  // clear net ref when leaving NETTING
+    // §11.4: the recoil transient only integrates inside the SK/NETTING hold
+    // loops — leaving that pair hands control to a different controller
+    // (GRAPPLED reel, RETURNING burn, …) which owns its own residuals. Clear
+    // so a stale kick can't replay on a later SK re-entry.
+    if (this._recoilActive
+        && (old === S.STATION_KEEP || old === S.NETTING)
+        && newState !== S.STATION_KEEP && newState !== S.NETTING) {
+      this._clearRecoilKick();
+    }
     this.state = newState;
     this.stateTimer = 0;
     eventBus.emit(Events.ARM_STATE_CHANGE, {
@@ -3410,9 +3442,20 @@ export class ArmUnit {
     const _oy  = _eqY * _cosP + this._skPolarAxis.y * _sinP;
     const _oz  = _eqZ * _cosP + this._skPolarAxis.z * _sinP;
     const _Rscene = this._standoffR * M;
-    const goalX = targetPos.x + _ox * _Rscene;
-    const goalY = targetPos.y + _oy * _Rscene;
-    const goalZ = targetPos.z + _oz * _Rscene;
+    let goalX = targetPos.x + _ox * _Rscene;
+    let goalY = targetPos.y + _oy * _Rscene;
+    let goalZ = targetPos.z + _oz * _Rscene;
+
+    // §11.4 net-fire recoil: while the kick transient is live, the hold goal
+    // is displaced by the recoil offset — the daughter is visibly shoved off
+    // the hold sphere and eased back as the RCS nulls the kick (the step also
+    // bills the FUEL_RATE_MANEUVER-style recovery surcharge). Inactive or
+    // flag OFF ⇒ goal untouched, byte-identical hold math.
+    if (this._updateRecoilKick(dt)) {
+      goalX += this._recoilOffsetM.x * M;
+      goalY += this._recoilOffsetM.y * M;
+      goalZ += this._recoilOffsetM.z * M;
+    }
 
     // Lerp world position to goal (group.position synced from this.position in update())
     const lerp = SK.STATIONKEEP_LERP_RATE;
@@ -3438,6 +3481,157 @@ export class ArmUnit {
     this._thetaRate = 0;
     this._phiRate = 0;
     this._radiusRate = 0;
+  }
+
+  // =========================================================================
+  // §11.4/§11.3 — DAUGHTER NET-FIRE RECOIL + REACTION-WHEEL ACCOUNTING
+  // (FEATURE_FLAGS.DAUGHTER_NET_RECOIL; tuning in Constants.DAUGHTER_NET_RECOIL)
+  // =========================================================================
+
+  /**
+   * Apply the linear recoil impulse (and §11.3 wheel bookkeeping) for a
+   * daughter net launch. Called from _updateNettingFSM at the ONE production
+   * fire site, immediately after fireDaughterNet succeeds — the mother pod
+   * path (PlayerSatellite._applyMotherNetRecoil) is untouched.
+   *
+   * Δv = m_net · LAUNCH_SPEED / m_daughter, derived LIVE from the fired net's
+   * class object and this arm's config.mass (§11.4: ≈1.03 m/s MEDIUM/Weaver,
+   * ≈0.57 m/s SMALL/Spinner) — never hardcoded. The impulse seeds the
+   * critically-damped transient integrated by _updateRecoilKick; the net's
+   * own flight/capture math is untouched (it re-anchors on the live muzzle,
+   * so the kicked launcher frame is expected and shared).
+   *
+   * @param {object} netClass  — CAPTURE_NET class object ({ MASS, LAUNCH_SPEED, CODE })
+   * @param {{x:number,y:number,z:number}} launchDir — fired direction (unit, world axes)
+   * @returns {number} applied |Δv| in m/s (0 when gated off / degenerate input)
+   */
+  applyNetFireRecoil(netClass, launchDir) {
+    if (!Constants.isFeatureEnabled('DAUGHTER_NET_RECOIL')) return 0;
+    const mNet = netClass && netClass.MASS;
+    const vNet = netClass && netClass.LAUNCH_SPEED;
+    const mArm = this.config?.mass;
+    if (!(mNet > 0) || !(vNet > 0) || !(mArm > 0)) return 0;
+    const dx = launchDir?.x || 0, dy = launchDir?.y || 0, dz = launchDir?.z || 0;
+    const dLen = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (!(dLen > 1e-9)) return 0;
+
+    const dvMps = (mNet * vNet) / mArm;
+    // Impulse opposes the launch direction. Accumulates into any live
+    // transient (rapid double-fire kicks stack, honestly).
+    const kx = -(dx / dLen) * dvMps;
+    const ky = -(dy / dLen) * dvMps;
+    const kz = -(dz / dLen) * dvMps;
+    this._recoilVelMps.x += kx;
+    this._recoilVelMps.y += ky;
+    this._recoilVelMps.z += kz;
+    this._recoilActive = true;
+
+    // ── §11.3 wheel: firing on a saturated wheel forces a paid RCS desat
+    // burn (dump first, then take the new fire's increment).
+    const REC = Constants.DAUGHTER_NET_RECOIL;
+    if (this._wheelMomentum >= REC.WHEEL_SATURATION_THRESHOLD) {
+      this.fuel = Math.max(0, this.fuel - REC.WHEEL_DESAT_FUEL_COST);
+      this._wheelMomentum = Math.max(0, this._wheelMomentum - REC.WHEEL_DESAT_DUMP);
+    }
+    this._wheelMomentum += REC.WHEEL_INCREMENT_PER_FIRE;
+    this._refreshWheelSaturation();
+
+    eventBus.emit(Events.ARM_RECOIL_KICK, {
+      armIndex: this.index,
+      armId: this.id,
+      dv: { x: kx, y: ky, z: kz },
+      dvMps,
+      netClass: netClass.CODE || null,
+    });
+    return dvMps;
+  }
+
+  /**
+   * @private Step the recoil transient one frame and bill the RCS recovery
+   * surcharge. Called from the two kinematic hold loops (_updateStationKeep +
+   * the NETTING hold in _updateNettingFSM) — the loops then displace their
+   * hold goal by _recoilOffsetM while this returns true.
+   *
+   * Exact per-step closed form of the critically-damped system
+   * ẍ = −2ωẋ − ω²x (unconditionally stable at any dt):
+   *   B = v + ω·x;  x' = (x + B·dt)·e^(−ω·dt);  v' = (v − ω·B·dt)·e^(−ω·dt)
+   * Recovery is billed at SK.FUEL_RATE_MANEUVER (the RCS is actively nulling
+   * the kick) ON TOP of whatever the hold loop bills — NETTING bills no base
+   * fuel, so there the surcharge is the whole (and only) debit.
+   * @returns {boolean} true while the transient is live this frame
+   */
+  _updateRecoilKick(dt) {
+    if (!this._recoilActive) return false;
+    // Flag flipped OFF mid-transient (dev toggle / REALITY_MODE): drop the
+    // kick immediately — OFF means zero displacement and zero billing
+    // unconditionally, not "finish the current transient first". Checked
+    // after the fast path so the common inactive frame pays nothing.
+    if (!Constants.isFeatureEnabled('DAUGHTER_NET_RECOIL')) {
+      this._clearRecoilKick();
+      return false;
+    }
+    const REC = Constants.DAUGHTER_NET_RECOIL;
+    const w = REC.CONTROLLER_OMEGA;
+    const decay = Math.exp(-w * dt);
+    const o = this._recoilOffsetM, v = this._recoilVelMps;
+    const bx = v.x + w * o.x, by = v.y + w * o.y, bz = v.z + w * o.z;
+    o.x = (o.x + bx * dt) * decay;
+    o.y = (o.y + by * dt) * decay;
+    o.z = (o.z + bz * dt) * decay;
+    v.x = (v.x - w * bx * dt) * decay;
+    v.y = (v.y - w * by * dt) * decay;
+    v.z = (v.z - w * bz * dt) * decay;
+
+    // RCS recovery surcharge (FUEL_RATE_MANEUVER-style accounting).
+    const surcharge = Constants.STATION_KEEP.FUEL_RATE_MANEUVER * dt;
+    this.fuel = Math.max(0, this.fuel - surcharge);
+    this._recoilFuelBilled += surcharge;
+
+    // Settled → snap exactly to zero so billing stops crisply and the hold
+    // goal returns to the pure hold-sphere math (no asymptote, no residue).
+    if (o.lengthSq() < REC.SETTLE_EPS_OFFSET_M * REC.SETTLE_EPS_OFFSET_M
+        && v.lengthSq() < REC.SETTLE_EPS_VEL_MPS * REC.SETTLE_EPS_VEL_MPS) {
+      this._clearRecoilKick();
+    }
+    return true;
+  }
+
+  /** @private Zero the recoil transient (settled, or hold loop exited). */
+  _clearRecoilKick() {
+    this._recoilOffsetM.set(0, 0, 0);
+    this._recoilVelMps.set(0, 0, 0);
+    this._recoilActive = false;
+  }
+
+  /** @private §11.3: bleed wheel momentum (magnetorquers), every state. */
+  _tickWheelDecay(dt) {
+    if (this._wheelMomentum <= 0) return;
+    if (!Constants.isFeatureEnabled('DAUGHTER_NET_RECOIL')) {
+      // Flag flipped OFF with residual momentum: neutralize instead of
+      // freezing a stale (possibly saturated) reading into getStatus().
+      this._wheelMomentum = 0;
+      this._wheelSaturated = false;
+      return;
+    }
+    const REC = Constants.DAUGHTER_NET_RECOIL;
+    this._wheelMomentum = Math.max(0, this._wheelMomentum - REC.WHEEL_DECAY_PER_S * dt);
+    if (this._wheelSaturated
+        && this._wheelMomentum < REC.WHEEL_SATURATION_THRESHOLD) {
+      this._refreshWheelSaturation();   // falling edge — re-arms the comms warning
+    }
+  }
+
+  /** @private Recompute the saturation flag; comms only on the rising edge. */
+  _refreshWheelSaturation() {
+    const REC = Constants.DAUGHTER_NET_RECOIL;
+    const sat = this._wheelMomentum >= REC.WHEEL_SATURATION_THRESHOLD;
+    if (sat && !this._wheelSaturated) {
+      eventBus.emit(Events.COMMS_MESSAGE, {
+        text: `${this.displayName}: Reaction wheel saturated — desat burns will cost fuel.`,
+        priority: 'warning',
+      });
+    }
+    this._wheelSaturated = sat;
   }
 
   /**
@@ -4384,6 +4578,12 @@ export class ArmUnit {
        return;
      }
      this._firedNet = activeNet;  // store reference for subsequent frames
+
+     // §11.4: the launch is real now — kick the launcher. Uses the FIRED
+     // net's class object (the same MASS/LAUNCH_SPEED the projectile flies
+     // with) and the exact fired direction. One production fire site ⇒ the
+     // impulse is applied exactly once per launch.
+     this.applyNetFireRecoil(activeNet.netClass, launchDir);
    }
 
     // NETTING: track the target at the same SK standoff offset so the camera
@@ -4408,9 +4608,18 @@ export class ArmUnit {
         const _oy = _eqY * _cosP + this._skPolarAxis.y * _sinP;
         const _oz = _eqZ * _cosP + this._skPolarAxis.z * _sinP;
         const _Rscene = (this._standoffR || SK.DEFAULT_STANDOFF) * M;
-        const goalX = tPos.x + _ox * _Rscene;
-        const goalY = tPos.y + _oy * _Rscene;
-        const goalZ = tPos.z + _oz * _Rscene;
+        let goalX = tPos.x + _ox * _Rscene;
+        let goalY = tPos.y + _oy * _Rscene;
+        let goalZ = tPos.z + _oz * _Rscene;
+        // §11.4 net-fire recoil: same goal displacement as _updateStationKeep —
+        // the kick lands DURING NETTING (the net just left), so this hold is
+        // where the fight is mostly visible. The step also bills the recovery
+        // surcharge (NETTING's only fuel debit; flag OFF ⇒ zero, byte-identical).
+        if (this._updateRecoilKick(dt)) {
+          goalX += this._recoilOffsetM.x * M;
+          goalY += this._recoilOffsetM.y * M;
+          goalZ += this._recoilOffsetM.z * M;
+        }
         const lerp = SK.STATIONKEEP_LERP_RATE;
         this.position.x += (goalX - this.position.x) * lerp;
         this.position.y += (goalY - this.position.y) * lerp;
