@@ -341,6 +341,7 @@ export class GameFlowManager {
       // clears the flag. Read once by the ORBITAL_VIEW enter below.
       this._suppressIntroZoom = !!(data && data.skipped);
       this._applyStartLocation();   // place ground track over the player's home region
+      this._stageOpeningLight();    // fresh M1 spawn opens sunlit (new-game paths only)
       gameState.currentState = GameStates.MENU; // Allow transition from MENU
       persistenceManager.backupSave(); // F1 save-guard: back up before New Game clears it
       persistenceManager.deleteSave(); // New Game clears any existing save
@@ -360,6 +361,7 @@ export class GameFlowManager {
     eventBus.on(Events.MENU_FAST_START, () => {
       this.resetGame();
       this._applyStartLocation();   // place ground track over the player's home region
+      this._stageOpeningLight();    // fresh M1 spawn opens sunlit (new-game paths only)
       gameState.currentState = GameStates.MENU;
       persistenceManager.backupSave(); // F1 save-guard: back up before New Game clears it
       persistenceManager.deleteSave(); // New Game clears any existing save
@@ -1518,6 +1520,28 @@ export class GameFlowManager {
     if (debrisField && typeof debrisField.reseatFieldRegime === 'function') {
       debrisField.reseatFieldRegime(regimeFromStartOrbit(orbit));
     }
+  }
+
+  /**
+   * Stage the opening light for a FRESH game start (the initial Mission-1
+   * spawn). Called ONLY from the new-game menu paths (MENU_START /
+   * MENU_FAST_START — the paths that delete the save), immediately after
+   * _applyStartLocation, so the freshly-written start orbit IS the spawn
+   * point. Deliberately NOT called on Continue (saved games keep the pure
+   * real-clock sky), game-over Retry/Continue, or any mid-session path —
+   * and the sun is never re-seeded mid-session, so the staged offset simply
+   * becomes the new anchor the stylized day/night cycle runs forward from
+   * (SunLight.stageOpeningLight — the sun is not frozen).
+   *
+   * The typeof guard keeps legacy mocks/tests (refs without sunLight)
+   * byte-identical, matching the reseatFieldRegime convention above.
+   */
+  _stageOpeningLight() {
+    const { player, sunLight } = this._refs;
+    if (!sunLight || typeof sunLight.stageOpeningLight !== 'function') return;
+    if (!player || !player.orbit) return;
+    const cart = orbitToSceneCartesian(player.orbit);
+    if (cart && cart.position) sunLight.stageOpeningLight(cart.position);
   }
 
   /** Reset game state for new attempt */

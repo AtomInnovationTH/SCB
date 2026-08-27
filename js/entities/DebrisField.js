@@ -257,10 +257,27 @@ const WELCOME_FIELD = [
   // appear/* hints drive Phase-2 candidate selection (which mesh-slot to reuse,
   // since spawn cannot rebind shape/material): plate = flat panel-shard variant,
   // material = the rendered colour (gold mli_mylar foil, blue solar_cell cell).
+  //
+  // tumbleDegS / tumbleAxis (optional, m1-staging) author the OPENING TUMBLE
+  // deterministically. Without them a welcome piece keeps its creation-time
+  // class roll (DEBRIS_TYPES fragment band 10–180 °/s), which made the
+  // player's first-ever object a coin flip: a 180 °/s blender read as chaos,
+  // and anything above NET_TUMBLE_PENALTY.IN_SPEC_DEG (10 °/s) queued the
+  // `first_high_tumble_target` de-spin teach (TeachingSystem) on the very
+  // first lock — an out-of-context lesson, since the M1 lasso ignores tumble.
+  // #1 is authored stately-below-spec (7 °/s < IN_SPEC_DEG, fixed axis so the
+  // opening reads identically every session); #2 a touch livelier (15 °/s);
+  // #3+ deliberately stay on the class roll (variety once the player has
+  // context). Honoured ONLY by the welcome spawn path (_spawnWelcomeField) —
+  // non-welcome spawns are untouched. Guarded by test-WelcomeField
+  // 'authored opening tumble' (threshold referenced from Constants, not a
+  // magic number).
   { types: ['fragment'], sizeM: 0.60, lowValue: true, appearMaterial: 'aluminum', appearPlate: true,
-    massMin: 3, massMax: 3,  pin: true, fwdM: 22, latM: 0 },   // #1 aluminium panel shard (flat) — dead centre, ~22 m, render ~1.15 m
+    massMin: 3, massMax: 3,  pin: true, fwdM: 22, latM: 0,
+    tumbleDegS: 7, tumbleAxis: { x: 0.25, y: 1.0, z: 0.15 } },  // #1 aluminium panel shard (flat) — dead centre, ~22 m, render ~1.15 m; stately authored tumble (< IN_SPEC_DEG)
   { types: ['fragment'], sizeM: 0.70, lowValue: true, appearMaterial: 'mli_mylar', appearPlate: true,
-    massMin: 4, massMax: 4,  pin: true, fwdM: 45, latM: 18 },  // #2 MLI-foil scrap (gold flat) — right, in range (≈48 m), render ~1.33 m
+    massMin: 4, massMax: 4,  pin: true, fwdM: 45, latM: 18,
+    tumbleDegS: 15 },                                           // #2 MLI-foil scrap (gold flat) — right, in range (≈48 m), render ~1.33 m; a touch livelier
   { types: ['fragment'], sizeM: 0.45, appearMaterial: 'solar_cell', appearPlate: true,
     massMin: 5, massMax: 5,  offsetMin: 0.0000195, offsetMax: 0.0000270 }, // #3 RANGE WALL — solar-cell shard ~130–180 m
   // Medium/far tier — still net-only on M1, so ≤10 kg; orbital placement.
@@ -2761,6 +2778,30 @@ export class DebrisField {
       // fragment renders as a clearly-visible irregular junk chunk.
       if (Number.isFinite(spec.sizeM)) {
         DebrisField.setDebrisSize(debris, spec.sizeM);
+      }
+
+      // Deterministic opening tumble (m1-staging): honour the authored
+      // per-piece rate/axis — the WELCOME_FIELD analogue of the cast spec's
+      // `tumbleDeg` in _createDebrisData. Pieces without tumbleDegS keep
+      // their creation-time class-band roll untouched, and non-welcome
+      // spawns never pass through here. _initialTumbleRate mirrors the rate
+      // (same idiom as the Kessler-shard tumble override in
+      // createFragments) so the E1 despin doctrine can't mistake
+      // authoring for a player de-spin.
+      if (Number.isFinite(spec.tumbleDegS)) {
+        debris.tumbleRate = spec.tumbleDegS * Math.PI / 180;
+        debris._initialTumbleRate = debris.tumbleRate;
+      }
+      if (spec.tumbleAxis) {
+        const ax = spec.tumbleAxis.x || 0;
+        const ay = spec.tumbleAxis.y || 0;
+        const az = spec.tumbleAxis.z || 0;
+        const al = Math.hypot(ax, ay, az) || 1;
+        if (debris.tumbleAxis && typeof debris.tumbleAxis.set === 'function') {
+          debris.tumbleAxis.set(ax / al, ay / al, az / al); // prod: THREE.Vector3
+        } else {
+          debris.tumbleAxis = { x: ax / al, y: ay / al, z: az / al }; // mock receivers
+        }
       }
       // Keep salvage/flags consistent with the intended appearance. The
       // RENDERED colour comes from the candidate's existing mesh slot (selected

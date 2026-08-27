@@ -953,6 +953,7 @@ async function init() {
     player, debrisField, armManager, cameraSystem,
     shopScreen,
     resourceSystem, cargoSystem,
+    sunLight, // M1 opening-light staging (_stageOpeningLight, new-game paths only)
   });
 
   // --- F15: Wire autopilot dependencies ---

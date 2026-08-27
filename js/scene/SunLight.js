@@ -8,6 +8,7 @@ import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
 import { createLabelTexture } from './labelTexture.js';
 import { sunEphemeris, moonEphemeris, latLonToUnitVec } from './Ephemeris.js';
+import { stagedSunYaw, rotateAboutY, OPENING_SUN_TARGET_DOT } from './sunStaging.js';
 import { BODY_CATALOG, bodyByName, ladderBloomBodies } from './bodyCatalog.js';
 import {
   sunGeometry, moonGeometry, planetGeometry, SUN_GLARE_STOPS, SATURN_RING,
@@ -1106,6 +1107,40 @@ export class SunLight {
     } catch (e) {
       console.warn('[SunLight] Real-clock sky seeding failed; using stylized defaults:', e);
     }
+  }
+
+  /**
+   * Stage the opening light for a FRESH game start (Mission 1's first spawn).
+   * Called by GameFlowManager on the new-game paths only (MENU_START /
+   * MENU_FAST_START) — never on saved-game loads, later missions, or
+   * mid-session, so returning players keep the pure real-clock sky.
+   *
+   * Applies a one-time staged yaw offset on top of the real-clock seed so the
+   * spawn point starts on the day side with the sun well off the spawn zenith
+   * (warm side key light on the forward welcome cluster — see sunStaging.js
+   * for the targeting/clamp math). Only the cycle's longitude anchor
+   * (_sunYaw0) moves: phase (_sunPhase0 — season/declination), cycle speed,
+   * and the moon's sun-relative elongation (today's lunar phase) are
+   * untouched, so day/night cycling continues normally from the staged offset
+   * — the sun is NOT frozen. The LAUNCH_CAMEO opening cameo is unaffected by
+   * construction: its fire gates are pure camera geometry (launchVisible /
+   * plumeHeadVisible) and its plume brightness handles both day and night
+   * (cameoIntensity) — staging only changes which branch lights the pad.
+   *
+   * @param {{x:number,y:number,z:number}} spawnPos — player spawn scene
+   *   position (any length; direction is what matters)
+   */
+  stageOpeningLight(spawnPos) {
+    if (!spawnPos) return;
+    const yaw = stagedSunYaw(this.sunDirection, spawnPos, OPENING_SUN_TARGET_DOT);
+    if (!Number.isFinite(yaw) || yaw === 0) return;
+    this._sunYaw0 += yaw;
+    // Rotate the live direction now so same-frame consumers (light, shadow
+    // check, disc) are coherent; the next update() recomputes the identical
+    // direction from the biased _sunYaw0 (rotateAboutY IS update()'s yaw).
+    const d = rotateAboutY(this.sunDirection, yaw);
+    this.sunDirection.set(d.x, d.y, d.z).normalize();
+    this._updateLightPosition();
   }
 
   // ==========================================================================
