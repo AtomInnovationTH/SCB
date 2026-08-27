@@ -43,6 +43,29 @@ export function codexChimeNotes(category) {
   return triad(factor);
 }
 
+/**
+ * Daughter-net cue gain scale (2026-08-27). The daughter launchers are the
+ * small crossbow canisters (Medium/Small nets) heard from the daughter's
+ * standoff — smaller hardware, farther away — so every net voice they share
+ * with the mother (canister thump, flight whistle, cinch clamp, brake hiss,
+ * envelop sting, cinch ticks) plays at this scale. The mother pod keeps the
+ * full-volume default (scale omitted ⇒ 1.0 — byte-identical output).
+ * Exported for the regression tests (test-DaughterNetAudio.js).
+ */
+export const DAUGHTER_NET_GAIN = 0.7;
+
+/**
+ * De-dup windows for the daughter catch cue (see the ARM_CAPTURED handler):
+ * an ARM_CAPTURED whose debris id matches a net catch voiced within
+ * DAUGHTER_CATCH_ECHO_ID_S is the same physical catch (the arm's FSM poll
+ * lands 1-2 frames after NET_CATCH_SUCCESS — measured ≤ 34 ms at 60 fps;
+ * the window is generous for slow frames). When either side carries no id
+ * (headless mocks), only the tight DAUGHTER_CATCH_ECHO_FALLBACK_S applies.
+ * Exported for the regression tests.
+ */
+export const DAUGHTER_CATCH_ECHO_ID_S = 5.0;
+export const DAUGHTER_CATCH_ECHO_FALLBACK_S = 1.0;
+
 class AudioSystem {
   constructor() {
     this.ctx = null;
@@ -96,6 +119,19 @@ class AudioSystem {
     // idempotent and _releaseNetDuck() rides the _stopNetLoops() chokepoint,
     // so the duck cannot outlive a net.
     this._netCeremonyDucked = false;
+
+    // Daughter-net audio (2026-08-27): one-owner-per-physical-moment ledger.
+    // NET_CATCH_SUCCESS (armIndex ≥ 0) voices the daughter catch (scaled
+    // cinch clamp) and records the caught debris id + time here; the
+    // ARM_CAPTURED handler — the arm's bookkeeping of the SAME catch, which
+    // lands 1-2 frames later via the arm's FSM poll — consults this ledger
+    // and skips its whoosh+clamp for a catch the net already voiced.
+    // Non-net ARM_CAPTURED paths (lasso, magnetic grapple, legacy netting
+    // with CAPTURE_NET off) never write the ledger and keep their cue.
+    /** @type {Map<string|number, number>} debrisId → catch time (s) */
+    this._daughterNetCatchIds = new Map();
+    /** @type {number|null} last daughter net-catch time (s) — id-less fallback */
+    this._lastDaughterNetCatchAt = null;
 
     // Phase R9: 4-tier ΔV alarm state
     this._dvAlarmTier = 0;
@@ -429,7 +465,19 @@ class AudioSystem {
       this.playArmDeploy();
     });
 
-    eventBus.on(Events.ARM_CAPTURED, () => {
+    // Task D ownership decision (2026-08-27): for a NET capture there is ONE
+    // physical moment — the bag cinching shut — and NET_CATCH_SUCCESS owns
+    // its sound (playNetCinchClamp, daughter-scaled), for both launcher
+    // families. ARM_CAPTURED for that same catch is the ArmUnit's FSM
+    // bookkeeping of the identical moment, emitted 1-2 frames later (the arm
+    // polls the net FSM after CaptureNetSystem.update resolved it — measured
+    // f397 NET_CATCH_SUCCESS → f399 ARM_CAPTURED at 60 fps), so its
+    // whoosh+clamp is skipped when the debris id matches the just-voiced net
+    // catch. Every non-net ARM_CAPTURED (lasso reel-completion, magnetic
+    // grapple, legacy netting with CAPTURE_NET off) has no NET_CATCH_SUCCESS
+    // and keeps this cue unchanged.
+    eventBus.on(Events.ARM_CAPTURED, (data) => {
+      if (this._isDaughterNetCatchEcho(data)) return;
       this.playNetWhoosh(0.3);
       this.playCatchClamp(); // Phase 1C: metallic clamp impact on capture
     });
@@ -724,47 +772,85 @@ class AudioSystem {
       this.playDeny();
     });
 
-    // === Mother net (mother-net-reel plan §9 Phase B) — the whale sequence ===
-    // Every listener is mother-gated on podIndex ≥ 0: the daughter net shares
-    // these events (armIndex ≥ 0) and keeps its existing sounds. The two loops
-    // (flight whistle, reel winch) are killed via _stopNetLoops() from EVERY
-    // terminal path — a stuck loop is the classic bug.
+    // === Net voices (mother-net-reel plan §9 Phase B + daughter extension) ===
+    // TWO launcher families share these events and now BOTH speak:
+    //   mother  — podIndex ≥ 0, full-volume cues (byte-identical to Phase B);
+    //   daughter — armIndex ≥ 0 with podIndex −1 (explicit since 2026-08-27),
+    //              the SAME voices at DAUGHTER_NET_GAIN (smaller hardware,
+    //              heard from the daughter's standoff).
+    // Gating is deliberate on BOTH branches: a payload that names neither
+    // launcher stays silent (the old `podIndex < 0` mother gate read
+    // `undefined < 0 === false` and let id-less daughter fires START the
+    // mother thump+whistle with no reachable stop — the phantom-whistle
+    // leak). The two loops (flight whistle, reel winch) are killed via
+    // _stopNetLoops() from EVERY terminal path of EITHER family — a stuck
+    // loop is the classic bug.
 
     // Fire: canister thump + flight whistle (stopped on any terminal event).
     eventBus.on(Events.NET_FIRED, (data) => {
-      if (!data || data.podIndex < 0) return;
-      this.playNetCanisterThump();
-      this.startNetFlightWhistle();
+      if (!data) return;
+      if (data.podIndex >= 0) {
+        this.playNetCanisterThump();
+        this.startNetFlightWhistle();
+      } else if (data.armIndex >= 0) {
+        this.playNetCanisterThump(DAUGHTER_NET_GAIN);
+        this.startNetFlightWhistle(DAUGHTER_NET_GAIN);
+      }
     });
 
-    // Catch: whistle stops, the tug's clamp lands (the line-taut beat).
+    // Catch: whistle stops, the clamp lands (the line-taut beat). The
+    // daughter catch records itself so ARM_CAPTURED (the arm's bookkeeping of
+    // the same physical moment, 1-2 frames later) doesn't double the clamp —
+    // see the ARM_CAPTURED handler's ownership note.
     eventBus.on(Events.NET_CATCH_SUCCESS, (data) => {
-      if (!data || data.podIndex < 0) return;
-      this.stopNetFlightWhistle();
-      this.playNetCinchClamp();
+      if (!data) return;
+      if (data.podIndex >= 0) {
+        this.stopNetFlightWhistle();
+        this.playNetCinchClamp();
+      } else if (data.armIndex >= 0) {
+        this.stopNetFlightWhistle();
+        this.playNetCinchClamp(DAUGHTER_NET_GAIN);
+        this._recordDaughterNetCatch(data.debrisId);
+      }
     });
 
-    // Miss: DENY buzz + kill the whistle. The strain slip gets its own rip
-    // voice (§9.7) — the comms line already names the rated-mass band.
+    // Miss: kill the loops. Mother keeps her DENY buzz / strain rip (§9.7).
+    // The DAUGHTER branch is loop-hygiene ONLY: the daughter miss voice is
+    // owned by ARM_CAPTURE_FAILED → playFailBuzz (the ArmUnit emits it when
+    // its FSM poll sees MISSED, the same physical moment) — adding a deny
+    // here would double-voice one miss (task-D one-owner rule).
     eventBus.on(Events.NET_CATCH_MISS, (data) => {
-      if (!data || data.podIndex < 0) return;
-      this._stopNetLoops();
-      if (data.reason === 'strain_slip') {
-        this.playNetStrainRip();
-      } else {
-        this.playDeny();
+      if (!data) return;
+      if (data.podIndex >= 0) {
+        this._stopNetLoops();
+        if (data.reason === 'strain_slip') {
+          this.playNetStrainRip();
+        } else {
+          this.playDeny();
+        }
+      } else if (data.armIndex >= 0) {
+        this._stopNetLoops();
       }
     });
 
     // Reel: winch loop (pitch mapped to remainingM via updateNetReelPitch,
-    // polled from CaptureNetSystem.update). Only for a successful catch — the
-    // empty miss reel-back is a quiet rewind.
+    // polled from CaptureNetSystem.update). Mother-only and only for a
+    // successful catch — the empty miss reel-back is a quiet rewind, and the
+    // daughter's catch is hauled home by the ArmUnit (the arm/tether owns
+    // that soundscape). The daughter branch is a whistle backstop: her
+    // auto-reel fires this event in the same tick as catch/miss resolution.
     eventBus.on(Events.NET_REEL_STARTED, (data) => {
-      if (!data || data.podIndex < 0) return;
-      if (data.hasCatch) this.startNetReelWinch();
+      if (!data) return;
+      if (data.podIndex >= 0) {
+        if (data.hasCatch) this.startNetReelWinch();
+      } else if (data.armIndex >= 0) {
+        this.stopNetFlightWhistle();
+      }
     });
 
-    // Berth: winch stops, dock clunk + short reward chime.
+    // Berth: winch stops, dock clunk + short reward chime. Mother-only by
+    // construction — a daughter net never berths (fireDaughterNet catches are
+    // arm-hauled; lasso adoptions suppress NET_BERTHED).
     eventBus.on(Events.NET_BERTHED, (data) => {
       if (!data || data.podIndex < 0) return;
       this._stopNetLoops();
@@ -772,18 +858,19 @@ class AudioSystem {
       this.playNetBerthChime();
     });
 
-    // Reel completed: belt-and-braces loop stop. The berth path already stops
-    // them via NET_BERTHED; this covers the fallback STOWED exit (the headless
-    // mother reel-back) and any future reel-end path that skips the berth.
+    // Reel completed: belt-and-braces loop stop for BOTH families. Mother:
+    // covers the fallback STOWED exit (the headless reel-back). Daughter:
+    // covers the held-catch stow (arm delivery / target death mid-haul) and
+    // any reel-end path that skips the catch/miss hooks.
     eventBus.on(Events.NET_REEL_COMPLETED, (data) => {
-      if (!data || data.podIndex < 0) return;
-      this._stopNetLoops();
+      if (!data) return;
+      if (data.podIndex >= 0 || data.armIndex >= 0) this._stopNetLoops();
     });
 
-    // Release / jettison: kill every loop (the abort path).
+    // Release / jettison: kill every loop (the abort path) — both families.
     eventBus.on(Events.NET_RELEASED, (data) => {
-      if (!data || data.podIndex < 0) return;
-      this._stopNetLoops();
+      if (!data) return;
+      if (data.podIndex >= 0 || data.armIndex >= 0) this._stopNetLoops();
     });
 
     // Fragmentation while a mother net is on the field: kill the loops.
@@ -794,33 +881,48 @@ class AudioSystem {
     });
 
     // Ceremony stings (already emitted behind FEATURE_FLAGS.NET_CEREMONY):
-    // brake retro hiss, envelop sweep, per-10% cinch ratchet ticks.
+    // brake retro hiss, envelop sweep, per-10% cinch ratchet ticks. Daughter
+    // ceremonies (podIndex −1, armIndex ≥ 0) play the same stings at
+    // DAUGHTER_NET_GAIN.
     eventBus.on(Events.NET_BRAKE_FIRED, (data) => {
-      if (!data || data.podIndex < 0) return;
-      this.playNetBrakeHiss();
+      if (!data) return;
+      if (data.podIndex >= 0) this.playNetBrakeHiss();
+      else if (data.armIndex >= 0) this.playNetBrakeHiss(DAUGHTER_NET_GAIN);
     });
     eventBus.on(Events.NET_ENVELOP_PEAK, (data) => {
-      if (!data || data.podIndex < 0) return;
-      this.playNetEnvelopSting();
+      if (!data) return;
+      if (data.podIndex >= 0) this.playNetEnvelopSting();
+      else if (data.armIndex >= 0) this.playNetEnvelopSting(DAUGHTER_NET_GAIN);
     });
     eventBus.on(Events.NET_CINCH_PROGRESS, (data) => {
-      if (!data || data.podIndex < 0) return;
-      this.playNetCinchTick(data.fraction);
+      if (!data) return;
+      if (data.podIndex >= 0) this.playNetCinchTick(data.fraction);
+      else if (data.armIndex >= 0) this.playNetCinchTick(data.fraction, DAUGHTER_NET_GAIN);
     });
 
     // Ceremony ducking: the mix ducks under the ceremony so the net voices
     // read clearly (alarm bus is never ducked — danger still outranks).
-    // Idempotent acquire; release rides _stopNetLoops() so an abandoned net
-    // cannot leak a permanent 50% mix (review item 4).
+    // Extended to daughter ceremonies (NET_CEREMONY_START fires for daughters
+    // too, with podIndex −1 and an armIndex): same guarded acquire, same
+    // release paths. Idempotent acquire keeps the _duckOthers re-entrancy
+    // counter balanced (one hold per live ceremony flag, never stacked), and
+    // release rides the _stopNetLoops() chokepoint — every daughter terminal
+    // path (catch, miss, expire, release, stow, reset) runs it — so an
+    // abandoned net of EITHER family can never leak a permanent 50% mix
+    // (review item 4). The flag is one shared slot: mother and daughter
+    // ceremonies never run concurrently (CameraSystem admits one ceremony at
+    // a time), matching the pre-existing single-ceremony semantics.
     eventBus.on(Events.NET_CEREMONY_START, (data) => {
-      if (!data || data.podIndex < 0) return;
+      if (!data) return;
+      if (!(data.podIndex >= 0) && !(data.armIndex >= 0)) return;
       if (!this._netCeremonyDucked) {
         this._netCeremonyDucked = true;
         this._duckOthers(true);
       }
     });
     eventBus.on(Events.NET_CEREMONY_COMPLETE, (data) => {
-      if (!data || data.podIndex < 0) return;
+      if (!data) return;
+      if (!(data.podIndex >= 0) && !(data.armIndex >= 0)) return;
       this._releaseNetDuck();
     });
 
@@ -3141,22 +3243,27 @@ class AudioSystem {
   }
 
   // ==========================================================================
-  // MOTHER NET (mother-net-reel plan §9 Phase B) — the whale sequence.
+  // NET VOICES (mother-net-reel plan §9 Phase B; daughter extension 2026-08-27)
   //
-  // The mother Large Net was 100% silent. Every voice below is mother-gated
-  // (podIndex ≥ 0) at the listener; the daughter/lasso keep their existing
-  // sounds. Two loops (flight whistle, reel winch) have explicit stop methods
-  // and a single _stopNetLoops() chokepoint called from EVERY terminal path —
-  // a stuck loop is the classic bug.
+  // The mother Large Net was 100% silent; Phase B gave her these voices, and
+  // the daughter crossbow nets now share them. Listener-side gating decides
+  // the family: mother (podIndex ≥ 0) plays full volume — the default
+  // `scale` keeps her output byte-identical to Phase B — and daughter
+  // (armIndex ≥ 0) passes DAUGHTER_NET_GAIN. The lasso keeps its own voices.
+  // Two loops (flight whistle, reel winch) have explicit stop methods and a
+  // single _stopNetLoops() chokepoint called from EVERY terminal path of
+  // either family — a stuck loop is the classic bug.
   // ==========================================================================
 
   /**
-   * Mother canister thump — the 1.95 kg net canister leaving the pod muzzle.
+   * Net canister thump — the net canister leaving the launcher muzzle.
    * Low body thud + a short pressure "pfft" (the cold-gas ejection), distinct
    * from the lasso's electromagnetic THWIP (playLassoFire) and the daughter's
    * crossbow WOOSH (playArmDeploy). PHYSICAL.
+   * @param {number} [scale=1.0] — output gain scale (DAUGHTER_NET_GAIN for
+   *   daughter fires; omitted for the full-volume mother pod)
    */
-  playNetCanisterThump() {
+  playNetCanisterThump(scale = 1.0) {
     if (!this.available) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
@@ -3167,7 +3274,7 @@ class AudioSystem {
     thud.frequency.setValueAtTime(60, now);
     thud.frequency.exponentialRampToValueAtTime(35, now + 0.18);
     const thudGain = ctx.createGain();
-    thudGain.gain.setValueAtTime(0.35, now);
+    thudGain.gain.setValueAtTime(0.35 * scale, now);
     thudGain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
     thud.connect(thudGain);
     thudGain.connect(this.physicalBus);
@@ -3187,7 +3294,7 @@ class AudioSystem {
     lp.type = 'lowpass';
     lp.frequency.value = 900;
     const noiseGain = ctx.createGain();
-    noiseGain.gain.setValueAtTime(0.18, now);
+    noiseGain.gain.setValueAtTime(0.18 * scale, now);
     noiseGain.gain.exponentialRampToValueAtTime(0.001, now + dur);
     noise.connect(lp);
     lp.connect(noiseGain);
@@ -3197,12 +3304,17 @@ class AudioSystem {
   }
 
   /**
-   * Mother flight whistle — continuous loop while the net is airborne. Same
-   * idiom as startLassoWireWhistle but a separate instance (the two can never
+   * Net flight whistle — continuous loop while a net is airborne. Same idiom
+   * as startLassoWireWhistle but a separate instance (the two can never
    * overlap by mass routing, but they must not share state) and a lower,
-   * heavier band (600 Hz vs 800 Hz — the Large Net reads heavier). PHYSICAL.
+   * heavier band (600 Hz vs 800 Hz — the net canister reads heavier).
+   * ONE instance serves both launcher families (a daughter fire restarts it
+   * at DAUGHTER_NET_GAIN); the stop side is event-driven per family plus the
+   * any-net-in-flight poll in CaptureNetSystem.update. PHYSICAL.
+   * @param {number} [scale=1.0] — loop gain scale (DAUGHTER_NET_GAIN for
+   *   daughter fires; omitted for the full-volume mother pod)
    */
-  startNetFlightWhistle() {
+  startNetFlightWhistle(scale = 1.0) {
     this.stopNetFlightWhistle();
     if (!this.available) return;
     const ctx = this.ctx;
@@ -3223,7 +3335,7 @@ class AudioSystem {
 
     const gain = ctx.createGain();
     gain.gain.setValueAtTime(0, now);
-    gain.gain.linearRampToValueAtTime(0.035, now + 0.12);
+    gain.gain.linearRampToValueAtTime(0.035 * scale, now + 0.12);
 
     noise.connect(filter);
     filter.connect(gain);
@@ -3251,11 +3363,16 @@ class AudioSystem {
   }
 
   /**
-   * Mother cinch clamp — the wrapped bundle ratcheting shut on a whale.
+   * Net cinch clamp — the wrapped bundle ratcheting shut on a catch.
    * Heavier than playCatchClamp (whose meaning "net clamp on catch" is taken
-   * by ARM_CAPTURED): a low metallic CLUNK + a ratchet buzz tail. PHYSICAL.
+   * by ARM_CAPTURED): a low metallic CLUNK + a ratchet buzz tail. Owns the
+   * catch moment for NET captures of BOTH families (task-D one-owner rule —
+   * the daughter's trailing ARM_CAPTURED echo is deduped at the listener).
+   * PHYSICAL.
+   * @param {number} [scale=1.0] — output gain scale (DAUGHTER_NET_GAIN for
+   *   daughter catches; omitted for the full-volume mother pod)
    */
-  playNetCinchClamp() {
+  playNetCinchClamp(scale = 1.0) {
     if (!this.available) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
@@ -3266,7 +3383,7 @@ class AudioSystem {
     clunk.frequency.setValueAtTime(70, now);
     clunk.frequency.exponentialRampToValueAtTime(45, now + 0.2);
     const clunkGain = ctx.createGain();
-    clunkGain.gain.setValueAtTime(0.4, now);
+    clunkGain.gain.setValueAtTime(0.4 * scale, now);
     clunkGain.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
     clunk.connect(clunkGain);
     clunkGain.connect(this.physicalBus);
@@ -3278,7 +3395,7 @@ class AudioSystem {
     ring.frequency.setValueAtTime(500, now + 0.02);
     ring.frequency.exponentialRampToValueAtTime(250, now + 0.5);
     const ringGain = ctx.createGain();
-    ringGain.gain.setValueAtTime(0.18, now + 0.02);
+    ringGain.gain.setValueAtTime(0.18 * scale, now + 0.02);
     ringGain.gain.exponentialRampToValueAtTime(0.001, now + 0.55);
     ring.connect(ringGain);
     ringGain.connect(this.physicalBus);
@@ -3300,10 +3417,10 @@ class AudioSystem {
     lfo.type = 'square';
     lfo.frequency.value = 12;
     const lfoGain = ctx.createGain();
-    lfoGain.gain.value = 0.05;
+    lfoGain.gain.value = 0.05 * scale;
     lfo.connect(lfoGain);
     const noiseGain = ctx.createGain();
-    noiseGain.gain.setValueAtTime(0.12, now + 0.05);
+    noiseGain.gain.setValueAtTime(0.12 * scale, now + 0.05);
     lfoGain.connect(noiseGain.gain);
     noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.05 + dur);
     noise.connect(bp);
@@ -3459,11 +3576,13 @@ class AudioSystem {
   }
 
   /**
-   * Mother retro-brake hiss — the corner retros firing to arrest the net at
+   * Net retro-brake hiss — the corner retros firing to arrest the net at
    * BRAKE entry. A mid-band noise burst (~400 ms), distinct from the lasso's
    * contact clank. PHYSICAL.
+   * @param {number} [scale=1.0] — output gain scale (DAUGHTER_NET_GAIN for
+   *   daughter ceremonies; omitted for the full-volume mother pod)
    */
-  playNetBrakeHiss() {
+  playNetBrakeHiss(scale = 1.0) {
     if (!this.available) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
@@ -3482,7 +3601,7 @@ class AudioSystem {
     bp.frequency.exponentialRampToValueAtTime(900, now + dur);
     bp.Q.value = 1.5;
     const gain = ctx.createGain();
-    gain.gain.setValueAtTime(0.2, now);
+    gain.gain.setValueAtTime(0.2 * scale, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + dur);
     noise.connect(bp);
     bp.connect(gain);
@@ -3492,11 +3611,13 @@ class AudioSystem {
   }
 
   /**
-   * Mother envelop sting — the rim weights sweeping past the whale at
+   * Net envelop sting — the rim weights sweeping past the catch at
    * ENVELOP peak. A soft fabric "shh" sweep (noise band 1800→600 Hz).
    * PHYSICAL.
+   * @param {number} [scale=1.0] — output gain scale (DAUGHTER_NET_GAIN for
+   *   daughter ceremonies; omitted for the full-volume mother pod)
    */
-  playNetEnvelopSting() {
+  playNetEnvelopSting(scale = 1.0) {
     if (!this.available) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
@@ -3516,7 +3637,7 @@ class AudioSystem {
     bp.Q.value = 2.5;
     const gain = ctx.createGain();
     gain.gain.setValueAtTime(0, now);
-    gain.gain.linearRampToValueAtTime(0.16, now + 0.06);
+    gain.gain.linearRampToValueAtTime(0.16 * scale, now + 0.06);
     gain.gain.exponentialRampToValueAtTime(0.001, now + dur);
     noise.connect(bp);
     bp.connect(gain);
@@ -3526,12 +3647,14 @@ class AudioSystem {
   }
 
   /**
-   * Mother cinch-progress tick — one short ratchet click per 10% cinch
+   * Net cinch-progress tick — one short ratchet click per 10% cinch
    * threshold. Pitched up slightly as the fraction closes (the drawstring
    * tightening). PHYSICAL.
    * @param {number} [fraction=0] — cinch fraction 0..1
+   * @param {number} [scale=1.0] — output gain scale (DAUGHTER_NET_GAIN for
+   *   daughter ceremonies; omitted for the full-volume mother pod)
    */
-  playNetCinchTick(fraction = 0) {
+  playNetCinchTick(fraction = 0, scale = 1.0) {
     if (!this.available) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
@@ -3543,7 +3666,7 @@ class AudioSystem {
     osc.type = 'square';
     osc.frequency.value = freq;
     const gain = ctx.createGain();
-    gain.gain.setValueAtTime(0.07, now);
+    gain.gain.setValueAtTime(0.07 * scale, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + dur);
     osc.connect(gain);
     gain.connect(this.physicalBus);
@@ -3637,10 +3760,12 @@ class AudioSystem {
   }
 
   /**
-   * _stopNetLoops — the loop chokepoint (§9.5). Called from EVERY mother
-   * terminal path (catch, miss, release, frag, strain, berth, reel-completed,
-   * tab-hide, reset) so no loop can stick. Idempotent. Also releases the
-   * ceremony duck (review item 4) — the duck must not outlive the net.
+   * _stopNetLoops — the loop chokepoint (§9.5). Called from EVERY net
+   * terminal path of BOTH families — mother (catch, miss, release, frag,
+   * strain, berth, reel-completed, tab-hide, reset) and daughter (miss,
+   * reel-completed stow, release, frag, reset) — so no loop can stick.
+   * Idempotent. Also releases the ceremony duck (review item 4, extended to
+   * daughter ceremonies) — the duck must not outlive a net of either family.
    * @private
    */
   _stopNetLoops() {
@@ -3658,6 +3783,61 @@ class AudioSystem {
     if (!this._netCeremonyDucked) return;
     this._netCeremonyDucked = false;
     this._duckOthers(false);
+  }
+
+  /**
+   * @private Seconds clock shared by the daughter catch de-dup ledger — the
+   * audio clock when live, wall clock headless (same idiom as
+   * _playLockDeduped).
+   * @returns {number}
+   */
+  _nowS() {
+    return (this.ctx && typeof this.ctx.currentTime === 'number')
+      ? this.ctx.currentTime : (Date.now() / 1000);
+  }
+
+  /**
+   * @private Record a daughter NET_CATCH_SUCCESS so the trailing ARM_CAPTURED
+   * for the SAME catch (the arm's FSM-poll bookkeeping, 1-2 frames later)
+   * skips its whoosh+clamp — one owner per physical moment (task D).
+   * Stale entries are pruned on insert so the ledger stays a handful deep
+   * even across a long session.
+   * @param {string|number|null|undefined} debrisId
+   */
+  _recordDaughterNetCatch(debrisId) {
+    const now = this._nowS();
+    this._lastDaughterNetCatchAt = now;
+    for (const [id, t] of this._daughterNetCatchIds) {
+      if (now - t > DAUGHTER_CATCH_ECHO_ID_S) this._daughterNetCatchIds.delete(id);
+    }
+    if (debrisId != null) this._daughterNetCatchIds.set(debrisId, now);
+  }
+
+  /**
+   * @private True when this ARM_CAPTURED payload is the echo of a daughter
+   * net catch that playNetCinchClamp already voiced. Primary key: debris id
+   * (ARM_CAPTURED carries targetId on the arm path, debrisId on the lasso
+   * path; NET_CATCH_SUCCESS carries debrisId — same id space) within
+   * DAUGHTER_CATCH_ECHO_ID_S. Id-less payloads fall back to the tight
+   * DAUGHTER_CATCH_ECHO_FALLBACK_S window. Matches are consumed one-shot so
+   * a genuine later capture of the same body keeps its cue.
+   * @param {object|undefined} data — ARM_CAPTURED payload
+   * @returns {boolean}
+   */
+  _isDaughterNetCatchEcho(data) {
+    const now = this._nowS();
+    const id = data ? (data.targetId ?? data.debrisId) : null;
+    if (id != null && this._daughterNetCatchIds.has(id)) {
+      const t = this._daughterNetCatchIds.get(id);
+      this._daughterNetCatchIds.delete(id);   // one-shot
+      if (now - t <= DAUGHTER_CATCH_ECHO_ID_S) return true;
+    }
+    if (id == null && this._lastDaughterNetCatchAt != null
+        && now - this._lastDaughterNetCatchAt <= DAUGHTER_CATCH_ECHO_FALLBACK_S) {
+      this._lastDaughterNetCatchAt = null;    // one-shot
+      return true;
+    }
+    return false;
   }
 
   // ==========================================================================

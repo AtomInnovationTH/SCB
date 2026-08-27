@@ -2712,6 +2712,15 @@ export class CaptureNetSystem {
     }
 
     // Tick active nets
+    // Daughter-net audio fix (2026-08-27): the flight-whistle state poll
+    // (review item 3) is hoisted OUT of the mother-only block — the whistle
+    // means "a net projectile is in flight" for EITHER launcher family now
+    // that daughter fires start it too (at daughter gain). AudioSystem keeps
+    // ONE whistle instance, so the stop must be "no active net is in a
+    // flight state", not "this net left flight": a berthed mother net
+    // parked at the collar would otherwise kill a flying daughter's whistle
+    // every frame (and pod A's berthed cargo would kill pod B's whistle).
+    let anyNetInFlight = false;
     for (let i = this.activeNets.length - 1; i >= 0; i--) {
       const net = this.activeNets[i];
       const prevState = net.state;
@@ -2749,6 +2758,19 @@ export class CaptureNetSystem {
         net.startReel();
       }
 
+      // Review item 3 (both families): the flight whistle means "projectile
+      // in flight" — record whether THIS net still is; the shared stop runs
+      // after the loop when no net is. A state poll, NOT the NET_BRAKE_FIRED
+      // hook: that event is gated on FEATURE_FLAGS.NET_CEREMONY, and plan §6
+      // forbids routing anything load-bearing through a flag REALITY_MODE
+      // forces false. Placed BEFORE any `continue` below so every net is
+      // counted every frame.
+      if (net.state === STATES.LAUNCHING
+          || net.state === STATES.SPINNING_UP
+          || net.state === STATES.FLIGHT) {
+        anyNetInFlight = true;
+      }
+
       // ── Mother per-frame housekeeping (Phase B) ─────────────────────────
       if (net._isMother) {
         // §9.8 — dt-robust tug delivery. The feel vector seeded at CAPTURED is
@@ -2775,15 +2797,10 @@ export class CaptureNetSystem {
           }
         }
 
-        // Review item 3: the flight whistle means "projectile in flight" —
-        // stop it the frame the net leaves LAUNCHING/SPINNING_UP/FLIGHT. A
-        // state poll, NOT the NET_BRAKE_FIRED hook: that event is gated on
-        // FEATURE_FLAGS.NET_CEREMONY, and plan §6 forbids routing anything
-        // load-bearing through a flag REALITY_MODE forces false.
-        const inFlight = net.state === STATES.LAUNCHING
-          || net.state === STATES.SPINNING_UP
-          || net.state === STATES.FLIGHT;
-        if (!inFlight) this._audioSystem?.stopNetFlightWhistle?.();
+        // (Review item 3's whistle stop moved to the shared any-net-in-flight
+        // poll above/below — the whistle is one instance serving BOTH
+        // launcher families now, so a per-net mother stop would clip a
+        // flying daughter's whistle and vice versa.)
 
         // §9.3: drive the winch pitch from the live reel distance.
         // Cheap — one setTargetAtTime on a running loop, no-op otherwise.
@@ -2942,6 +2959,14 @@ export class CaptureNetSystem {
         this.activeNets.splice(i, 1);
       }
     }
+
+    // Review item 3 chokepoint (extended to daughters, 2026-08-27): the
+    // whistle survives only while SOME active net is in a flight state.
+    // Covers every path with no per-launcher stop event — expiry misses are
+    // event-stopped, but this poll is the backstop that makes a leaked
+    // daughter (or mother) whistle structurally impossible. No-op when no
+    // whistle is running; optional-chained for headless tests without audio.
+    if (!anyNetInFlight) this._audioSystem?.stopNetFlightWhistle?.();
   }
 
   /**
@@ -3952,6 +3977,14 @@ export class CaptureNetSystem {
     eventBus.emit(Events.NET_FIRED, {
       source:   'daughter',
       armIndex,
+      // Daughter-net audio fix (2026-08-27): podIndex is EXPLICIT, not absent.
+      // AudioSystem's mother gate used to read `data.podIndex < 0` — with the
+      // field missing, `undefined < 0 === false`, so a DAUGHTER fire started
+      // the mother canister thump + flight-whistle loop, and every pod-gated
+      // stop hook then ignored the daughter's terminal events: a leaked
+      // whistle until session reset. Gating must be deliberate, never an
+      // accident of a missing field.
+      podIndex: -1,
       netClass: netClass === CN.MEDIUM ? 'MEDIUM' : 'SMALL',
       remaining,
     });
