@@ -1662,6 +1662,17 @@ export const Constants = {
     // NEW — ST-9.8 C-10: Arm Tier Upgrades (shop entries)
     TIER_UPGRADES:             false,  // ST-9.8 C-10 — Y0/Y1/Y3 tier shop entries + upgrade flow
 
+    // NEW — P2 aft flower preview (owner ruling 2026-08-27: "just flip it on.
+    // you can flip it off later p3"). ON: both flower pairs are pre-installed
+    // at boot (stowed bud; O deploys) and the two shop rows are HIDDEN so
+    // nobody pays credits for hardware already aboard. The 50 kg mass tax
+    // rides along honestly (hardware aboard = mass aboard). P3 flips this to
+    // false when the thermal loop lands and the shop becomes the real gate —
+    // that flip is a licensed FEATURE_FLAGS-pin re-derive (43→…, count pin in
+    // test-Constants.js) plus nothing else: the purchase path, mass carrier,
+    // and byte-identity tests below it are already flag-agnostic.
+    FLOWER_PREINSTALLED:       true,
+
     // NEW — C-11 Integration: Recoil Physics (deferred from C-3)
     RECOIL_PHYSICS:            true,   // C-11 — angular impulse from dual-fire + mother-net launch applied to Mother (2026-07-23: wired to a real transient-attitude integrator; was a dead accumulator)
 

@@ -743,6 +743,13 @@ export class ShopScreen {
       // Net ladder: hide feature-gated items (e.g. Mother net restock) when the
       // gating flag is off.
       if (u.requiresFeature && !Constants.isFeatureEnabled(u.requiresFeature)) return;
+      // P2 flower: while FLOWER_PREINSTALLED is ON the hardware is already
+      // aboard at boot (owner ruling 2026-08-27) — hide its purchase rows so
+      // nobody pays credits for installed hardware. P3 flips the flag off and
+      // these rows return as the real gate. (Rows stay in UPGRADES: the
+      // CATALOG_TOTAL_CR SSOT and its pacing pins are catalog-shape facts.)
+      if (Constants.FEATURE_FLAGS.FLOWER_PREINSTALLED
+          && (u.id === 'flower_pair_a' || u.id === 'flower_pair_b')) return;
       if (!categories[u.cat]) categories[u.cat] = [];
       categories[u.cat].push(u);
     });

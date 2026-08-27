@@ -583,6 +583,25 @@ async function init() {
 
   // --- Player Satellite ---
   player = new PlayerSatellite(scene);
+
+  // P2 aft flower — ON by default (owner ruling 2026-08-27, FEATURE_FLAGS.
+  // FLOWER_PREINSTALLED: "just flip it on. you can flip it off later p3").
+  // Both pairs install at boot through the SAME applyUpgrade effect path a
+  // shop purchase drives (stowed bud — press O). While the flag is ON the
+  // two shop rows are hidden (ShopScreen) so nobody pays for hardware
+  // already aboard. The `?flower` URL param remains as the preview override
+  // for when P3 flips the flag off:
+  //   ?flower or ?flower=2 → both pairs   ?flower=1 → pair A only
+  //   ?flower=bloom        → both pairs + slews open to the 90° cargo bloom
+  {
+    const fp = new URLSearchParams(window.location.search).get('flower');
+    const pre = Constants.FEATURE_FLAGS.FLOWER_PREINSTALLED;
+    if (pre || fp !== null) {
+      player.applyUpgrade({ effect: 'flowerPairA', value: 1 });
+      if (!(fp === '1' && !pre)) player.applyUpgrade({ effect: 'flowerPairB', value: 1 });
+      if (fp === 'bloom') player.setFlowerPose('CARGO');
+    }
+  }
   // MLI foil v6: per-material orbital envMap on the gold MLI (near-mirror foil
   // needs a contrasty environment to reflect, not the near-uniform RoomEnvironment
   // that leaves it a smooth brass pipe). scene.environment is unchanged for the
