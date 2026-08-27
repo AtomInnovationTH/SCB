@@ -267,6 +267,25 @@ export function effectiveCatchRadius(mouthRadius, range) {
 }
 
 /**
+ * §11.2 mouth-collapse floor: centripetal tension per rim weight at a given
+ * spin — F/wt = m·ω²·r with ω = 2π·spinHz and r = DIAMETER/2. The SAME
+ * quantity the §11.1 audit table and the test-Crossbow-Constants derivation
+ * guard compute at the settled SPIN_HZ; here it runs LIVE on the decaying
+ * in-flight spinRate (the same decayed spin f_spin already reads) so
+ * NetProjectile can check the mouth-open condition
+ * (F/wt ≥ CN.MOUTH_TENSION_FLOOR_N) per flight frame. Pure + Node-safe.
+ * @param {{RIM_WEIGHT_MASS?:number, DIAMETER?:number}|null} netClass
+ * @param {number} spinHz — live spin (Hz)
+ * @returns {number} tension per rim weight (N); 0 when class data is missing
+ */
+export function rimTensionPerWeightN(netClass, spinHz) {
+  const m = (netClass && netClass.RIM_WEIGHT_MASS) || 0;
+  const r = ((netClass && netClass.DIAMETER) || 0) / 2;
+  const omega = 2 * Math.PI * (spinHz || 0);
+  return m * omega * omega * r;
+}
+
+/**
  * Local cone radius at an axial depth ahead of the apex.
  * The bag is a cone: apex at local origin, mouth ring at local z = −coneHeight
  * (js/ui/NetMeshKit.js:364-365). Depth `a` metres ahead of the apex therefore
@@ -691,7 +710,7 @@ export function resolveFragSeverity({ brittleness = 0.5, vRel = 10, vOptimal = 1
  * UX-11 #1: map a NET_CATCH_MISS reason to an actionable player-facing line.
  * Returns null only for 'forced' (scripted/test resolves stay silent); unknown
  * reasons fall through to a generic re-line-the-shot message.
- * @param {string} reason — 'timeout'|'tether_limit'|'cling_failed'|'oversize_aspect'|'fragmented'|'forced'|…
+ * @param {string} reason — 'timeout'|'tether_limit'|'cling_failed'|'oversize_aspect'|'fragmented'|'mouth_collapsed'|'forced'|…
  * @returns {string|null}
  */
 export function missReasonToText(reason) {
@@ -707,6 +726,11 @@ export function missReasonToText(reason) {
     case 'fragmented':
       // Phase 3b: the impact broke the target up — teach the gentle approach.
       return 'Impact broke the target apart. Fragments are now tracked. Approach slower on brittle debris (CINCH wraps gentler).';
+    case 'mouth_collapsed':
+      // §11.2 mouth-collapse floor: rim spin decayed below the tension floor
+      // mid-flight — DISTINCT from the plain-miss default so the player learns
+      // the shot was doomed by range, not by aim.
+      return 'Net mouth collapsed mid-flight — shot too long. Rim spin bled below the tension floor. Close the distance, then re-fire.';
     case 'forced':
       return null;   // scripted/test resolves stay silent
     default:
@@ -727,7 +751,10 @@ export function missReasonToText(reason) {
  *              of the mouth (cinchFrac back toward 0).
  * cling_failed gets no staging (the wrap never closed — there is nothing to
  * release), fragmented is owned by the fragmentation machinery, and
- * timeout/tether_limit/target_lost have no target in frame.
+ * timeout/tether_limit/target_lost have no target in frame. mouth_collapsed
+ * (§11.2) is deliberately unstaged THIS wave — the windsock-flutter beat is a
+ * later visual task keyed off NetProjectile.mouthCollapsed / the
+ * NET_MOUTH_COLLAPSED event, not off this mapper.
  * @param {string} reason
  * @returns {'bounce'|'slip'|null}
  */
@@ -820,6 +847,18 @@ export class NetProjectile {
     this.position      = { ...this.launchPosition };
     this.speed         = this.netClass.LAUNCH_SPEED;
     this.spinRate      = 0;           // current Hz
+    /** @type {number} §11.2: live per-rim-weight tension (N) from the decayed
+     *  in-flight spin — rimTensionPerWeightN(netClass, spinRate). Updated each
+     *  FLIGHT tick (0 before flight: the bag is still folded/blossoming, so a
+     *  mouth-tension claim would be meaningless). Telemetry runs for EVERY
+     *  class, including LARGE where the collapse latch is deferred. */
+    this.rimTensionN   = 0;
+    /** @type {boolean} §11.2 mouth-collapse latch: true once rimTensionN fell
+     *  below CN.MOUTH_TENSION_FLOOR_N during FLIGHT (one-way — in-flight decay
+     *  is monotonic, nothing re-spins a net mid-flight). While true, contact
+     *  resolves as a 'mouth_collapsed' MISS instead of a wrap. Queryable state
+     *  for HUD/visuals; NET_MOUTH_COLLAPSED fires once at the latch. */
+    this.mouthCollapsed = false;
     this.tetherPaidOut = 0;           // metres
     this.reelProgress  = 0;           // 0..1
     this.capturedMass  = 0;           // kg of captured debris
@@ -1180,10 +1219,16 @@ export class NetProjectile {
 
   /** Phase 2: Yo-yo despin spin-up (0.5 s) */
   _updateSpinningUp(dt) {
-    // Real yo-yo despin (Item 2): the folded canister starts spinning FAST and
-    // DESPINS as the rim weights deploy and the bag blossoms (L = Iω conserved,
-    // I ∝ r²). Start at SPIN_HZ × SPIN_FOLDED_MULT and decay toward SPIN_HZ as the
-    // mouth opens. The canister visibly "unwinds fast, blossoms, settles".
+    // Yo-yo despin, STYLIZED (Item 2; §11.6 doc fix 2026-08-27): the folded
+    // canister starts fast and despins as the rim weights deploy and the bag
+    // blossoms. The DIRECTION is the real yo-yo effect (I grows with r, so ω
+    // must fall), but the SPIN_FOLDED_MULT = 3 ratio is a deliberate visual
+    // simplification, NOT closed-form L = Iω conservation: 3× implies a
+    // fictional folded radius of r_open/√3 (≈ 2.3 m on LARGE — not a
+    // canister), while true conservation from a ~5 cm folded radius would
+    // need (r_open/r_fold)² ≈ 6400× on LARGE — an invisible blur. The 3×
+    // keeps the "unwinds fast, blossoms, settles" read animation-legible.
+    // Same note at the constant (Constants.js CAPTURE_NET.SPIN_FOLDED_MULT).
     const foldedMult = CN.SPIN_FOLDED_MULT != null ? CN.SPIN_FOLDED_MULT : 1.0;
     const fraction = Math.min(this.stateTimer / CN.SPIN_UP_TIME, 1);
     const startHz = this.netClass.SPIN_HZ * foldedMult;
@@ -1249,6 +1294,46 @@ export class NetProjectile {
       return;
     }
 
+    // ── §11.2 mouth-collapse floor (2026-08-27) ──
+    // Live rim tension from the SAME decayed spin f_spin reads:
+    // F/wt = m·(2π·spinRate)²·r (rimTensionPerWeightN). Below
+    // CN.MOUTH_TENSION_FLOOR_N the rim weights can no longer hold the bag
+    // mouth open in 0g — the mouth is collapsed, and any contact resolves as
+    // a distinct 'mouth_collapsed' MISS at the intersection check below (the
+    // bag streams like a windsock; it cannot wrap). One-way latch: in-flight
+    // decay is monotonic. Evaluated AFTER the timeout/tether/dead-target
+    // guards so a net that dies of 'timeout' on the same tick keeps its
+    // legacy reason at ANY dt (MEDIUM's floor crossing sits ~51 ms past its
+    // 8 s timeout — unreachable by derivation, but the ordering makes it
+    // structural, not arithmetic). LARGE is consciously DEFERRED this wave
+    // (netClass.MOUTH_COLLAPSE_DEFERRED — its post-audit 11 s flight window
+    // exposes 68–100 m whale shots at t* ≈ 6.76 s; enforcing would be a
+    // mother-hunt rebalance this wave does not own; see Constants.js).
+    // Telemetry (rimTensionN) still runs for every class.
+    //
+    // Gameplay-legibility choice (§11.2 fix option "floor check ⇒ forced
+    // MISS", over cutting SD-NET's RANGE/MAX_FLIGHT to ~25 m): the long shot
+    // stays TAKEABLE and fails honestly with its own comms line
+    // (missReasonToText 'mouth_collapsed' — "shot too long"), teaching the
+    // envelope through consequence. The range-clamp alternative would touch
+    // RANGE/MAX_FLIGHT constants mirrored by the reticle/odds/refusal
+    // surfaces — outside this wave's flight/contact scope — and would
+    // silently forbid the input instead of explaining the failure.
+    this.rimTensionN = rimTensionPerWeightN(this.netClass, this.spinRate);
+    const mouthFloorN = CN.MOUTH_TENSION_FLOOR_N;
+    if (!this.mouthCollapsed && mouthFloorN > 0
+        && !this.netClass.MOUTH_COLLAPSE_DEFERRED
+        && this.rimTensionN < mouthFloorN) {
+      this.mouthCollapsed = true;
+      eventBus.emit(Events.NET_MOUTH_COLLAPSED, {
+        armIndex:    this.armIndex,
+        podIndex:    this.podIndex,
+        netClass:    this.netClass.CODE,
+        flightTime:  this.flightTime,
+        rimTensionN: this.rimTensionN,
+      });
+    }
+
     // Check range to target (intersection = distance < net radius)
     // PROD: use launcher-relative scene position (co-orbiting reference frame).
     // TEST: use absolute metres (mock .position, no anchor).
@@ -1282,6 +1367,12 @@ export class NetProjectile {
           }
         }
         if (distScene <= radiusScene) {
+          // §11.2: contact while the mouth is collapsed cannot wrap — resolve
+          // as the distinct MISS so comms can teach the range limit.
+          if (this.mouthCollapsed) {
+            this._miss('mouth_collapsed');
+            return;
+          }
           if (this.captureMode === MODES.CINCH) {
             this._transitionTo(STATES.BRAKE);
           } else {
@@ -1309,6 +1400,11 @@ export class NetProjectile {
           }
         }
         if (distToTarget <= effectiveCatchRadius(this.netClass.DIAMETER / 2, this.distanceTraveled)) {
+          // §11.2: same collapsed-mouth gate as the scene-frame branch above.
+          if (this.mouthCollapsed) {
+            this._miss('mouth_collapsed');
+            return;
+          }
           if (this.captureMode === MODES.CINCH) {
             this._transitionTo(STATES.BRAKE);
           } else {

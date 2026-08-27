@@ -2810,21 +2810,50 @@ export const Constants = {
     // ── Phase Timings (seconds) — per CAPTURE_NET.md §2.4 ──
     CAST_WINDUP:          0.15,   // crossbow spring release (§2.4 phase 1)
     SPIN_UP_TIME:         0.5,    // yo-yo despin (§2.4 phase 2)
-    // ── Real yo-yo despin spin physics (2026-06-11 Item 2) ──
-    // A folded net canister spins FAST (small radius → high ω by conservation of
-    // angular momentum L = Iω, I ∝ r²), then DESPINS as the rim weights deploy and
-    // the radius grows (RemoveDEBRIS 2018 flight HW spun ~1–2 Hz once blossomed).
-    // So spin must START high and SETTLE to the class SPIN_HZ as the mouth opens —
-    // the previous 0→SPIN_HZ ramp was angular-momentum backwards. The rim-weight
-    // tension table below shows SPIN_HZ alone already holds the mouth open (>10 N
-    // per spoke), so the elevated folded spin is purely the "unwind" transient.
-    SPIN_FOLDED_MULT:     3.0,    // canister starts at SPIN_HZ × this, decays to SPIN_HZ
+    // ── Yo-yo despin spin visual (2026-06-11 Item 2; §11.6 doc fix 2026-08-27:
+    //    STYLIZED, not L-conserving) ──
+    // A folded net canister spins FAST and DESPINS as the rim weights deploy and
+    // the radius grows — the DIRECTION of the effect is the real yo-yo despin
+    // (I ∝ r², so ω falls as the mouth blossoms; RemoveDEBRIS 2018 flight HW spun
+    // ~1–2 Hz once blossomed). The MAGNITUDE is a deliberate visual
+    // simplification: closed-form L = Iω conservation from a ~5 cm folded radius
+    // would demand a ~(r_open/r_fold)² = (4.0/0.05)² ≈ 6400× spin ratio on LARGE
+    // — an invisible blur at 12 kHz-equivalent. The 3× below instead implies a
+    // fictional folded radius of r_open/√3 (≈ 2.3 m on LARGE — not a canister),
+    // chosen so the "unwind fast, blossom, settle" beat reads at
+    // animation-legible rates. So spin STARTS high and SETTLES to the class
+    // SPIN_HZ as the mouth opens — the previous 0→SPIN_HZ ramp was
+    // angular-momentum backwards in DIRECTION, which is the part worth keeping
+    // honest. The rim-weight tension table below shows SPIN_HZ alone already
+    // holds the mouth open (>10 N per spoke), so the elevated folded spin is
+    // purely the "unwind" transient.
+    SPIN_FOLDED_MULT:     3.0,    // canister starts at SPIN_HZ × this, decays to SPIN_HZ (stylized visual ratio — see note above)
     // Slow in-flight spin decay (mesh flexing + rim drag). Makes spinFraction a
     // LIVE gameplay factor in computeClingProbability: long shots arrive with
     // spinFraction < 1 → f_spin penalty → "fire inside the envelope or the wrap is
     // weak". Tuned (Item 2 risk note) so an in-envelope (≤100 m / ≤~1 s) shot loses
     // <10% spin → Y0 difficulty does not regress.
     SPIN_DECAY_PER_S:     0.08,   // fraction of SPIN_HZ lost per second of flight
+    // ── §11.2 mouth-collapse floor (2026-08-27) ──
+    // The mouth-open condition (§11.1 audit table + the test-Crossbow-Constants
+    // derivation guard) is F/wt = RIM_WEIGHT_MASS · (2π·spin)² · (DIAMETER/2)
+    // ≥ 10 N per rim weight — this constant IS that audit figure. With the
+    // linear in-flight decay above (spin(t) = SPIN_HZ · (1 − SPIN_DECAY_PER_S·t))
+    // and F ∝ ω², live tension falls as F(t) = F₀ · (1 − SPIN_DECAY_PER_S·t)²,
+    // so the floor is crossed at
+    //   t* = (1 − √(MOUTH_TENSION_FLOOR_N / F₀)) / SPIN_DECAY_PER_S,
+    // where F₀ = F/wt at the settled SPIN_HZ. From the live class constants
+    // (re-derived + pinned in test-CaptureNet-MouthCollapse.js):
+    //   SMALL  F₀ ≈ 16.0 N → t* ≈ 2.61 s ≈ 26 m at 10 m/s — INSIDE its 8 s /
+    //          100 m envelope: the §11.2 gap. NetProjectile latches
+    //          `mouthCollapsed` in flight and contact resolves as a distinct
+    //          'mouth_collapsed' MISS (§11.2 floor-check fix).
+    //   MEDIUM F₀ ≈ 79.0 N → t* ≈ 8.05 s — beyond its 8 s MAX_FLIGHT_TIME by
+    //          only ~51 ms: unreachable, enforcement provably inert.
+    //   LARGE  F₀ ≈ 47.4 N → t* ≈ 6.76 s ≈ 68 m — INSIDE its flight window
+    //          (min(11 s override, 100 m tether / 10 m/s = 10 s)). Enforcement
+    //          is consciously DEFERRED: see LARGE.MOUTH_COLLAPSE_DEFERRED.
+    MOUTH_TENSION_FLOOR_N: 10,    // N per rim weight — mouth-open floor (§11.1/§11.2)
     MAX_FLIGHT_TIME:      8,      // max tether pay-out (§2.4 phase 3)
     SLAM_CONTACT_TIME:    0.5,    // slam-wrap wrap duration (§2.4 phase 5a, min)
     BRAKE_TIME:           0.5,    // tether-brake application (§2.4 phase 5b)
@@ -3146,10 +3175,12 @@ export const Constants = {
     //   Where does the torque go? (the player-facing physics, also taught in
     //   the Codex "Net spin & the yo-yo despin" entry + first-launch SCI line):
     //   the launcher spin-table torques the canister at launch; the equal-and-
-    //   opposite reaction goes into the daughter's reaction wheel/body. From
-    //   then on the net carries its angular momentum L = Iω unchanged — the
+    //   opposite reaction goes into the daughter's reaction wheel/body. The
     //   mouth-open "despin" from SPIN_HZ × SPIN_FOLDED_MULT down to SPIN_HZ is
-    //   pure radius growth (I ∝ r², yo-yo effect), NOT an external torque.
+    //   radius growth (I ∝ r², yo-yo effect), NOT an external torque — though
+    //   the 3× RATIO is a stylized visual, not closed-form L conservation (see
+    //   the SPIN_FOLDED_MULT note above), and in flight SPIN_DECAY_PER_S
+    //   deliberately bleeds a little L (mesh flex + rim drag) for gameplay.
     //
     //   All three are comfortably above the 5-10 N tension threshold and well
     //   below Dyneema SK78 break strength (~3500 N for a 1 mm² strand).  If
@@ -3193,6 +3224,22 @@ export const Constants = {
       // 11 s puts reach at min(100 tether, 10×11) = 100 m so reticle, odds,
       // refusal and doc all agree. Daughters keep the shared 8 s default.
       MAX_FLIGHT_TIME:  11,        // s — overrides CN.MAX_FLIGHT_TIME for this class
+      // §11.2 mouth-collapse floor — consciously DEFERRED for LARGE
+      // (2026-08-27). The floor physics does not spare the whale net: F₀ ≈
+      // 47.4 N decays through MOUTH_TENSION_FLOOR_N at t* ≈ 6.76 s ≈ 68 m,
+      // INSIDE this class's flight window (min(11 s, 10 s tether pay-out)).
+      // The 2026-06-12 audit called LARGE "fine" against the then-shared 8 s
+      // cap; the 2026-07-26 mother-net override above (8 s → 11 s, for 100 m
+      // reach) silently widened the exposure to every 68–100 m whale shot and
+      // nobody re-derived §11.2. Enforcing the floor here would forced-MISS
+      // that entire band — a mother whale-hunt rebalance this wave does not
+      // own (owner sign-off needed; Session wave2-capture-settle holds the
+      // resolve side). The flight latch skips this class; the live
+      // rimTensionN telemetry still runs. The exposure (t* < flight window)
+      // is pinned with its derivation in test-CaptureNet-MouthCollapse.js so
+      // any retune of SPIN_HZ / RIM_WEIGHT_MASS / DIAMETER / SPIN_DECAY_PER_S
+      // / MAX_FLIGHT_TIME re-derives this decision consciously.
+      MOUTH_COLLAPSE_DEFERRED: true,
       SPRING_ENERGY:    100,       // J (§2.8)
       REPLACEMENT_COST: 250,       // credits (§6.1)
     },

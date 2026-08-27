@@ -745,6 +745,13 @@ export const Events = {
   NET_CATCH_SUCCESS:         'net:catchSuccess',
   /** Net missed / cling failed. Payload: { armIndex, podIndex, debrisId?, probability?, reason } */
   NET_CATCH_MISS:            'net:catchMiss',
+  /** §11.2 mouth-collapse floor: in-flight rim tension fell below
+   *  CAPTURE_NET.MOUTH_TENSION_FLOOR_N — the bag mouth is collapsed and any
+   *  contact resolves as a 'mouth_collapsed' MISS. Emitted once per net at the
+   *  latch (visual hook for a later task; state also queryable as
+   *  NetProjectile.mouthCollapsed / .rimTensionN).
+   *  Payload: { armIndex, podIndex, netClass, flightTime, rimTensionN } */
+  NET_MOUTH_COLLAPSED:       'net:mouthCollapsed',
   /** Reel-in motor started. Payload: { armIndex, podIndex, hasCatch } */
   NET_REEL_STARTED:          'net:reelStarted',
   /** Reel-in completed — debris at strut tip / pod. Payload: { armIndex, podIndex, capturedMass, debrisId?, releasedMass? }
