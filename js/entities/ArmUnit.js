@@ -24,7 +24,7 @@ import { strutLocalDirection } from './ArmDockBasis.js';
 import { captureNetSystem, getNetClassForType, computeLeadAim, computeFragRisk, effectiveFragility, presentedWidthForApproach, fitsMouth, strainBandT } from './CaptureNet.js';
 import { audioSystem } from '../systems/AudioSystem.js';
 import { recommendArmTool } from '../systems/ToolRecommender.js';
-import { computeToolOdds } from '../systems/ToolOdds.js';
+import { computeToolOdds, makeNetOddsLockCache } from '../systems/ToolOdds.js';
 import { gameState } from '../core/GameState.js';
 import { daughterDisplayName } from '../core/daughterNames.js';
 
@@ -4414,6 +4414,10 @@ export class ArmUnit {
       netDepleted,
     });
     this.selectedTool = rec.recommended;
+    // Wave-4 QA #3: SK entry is the lock/re-acquire seam — force the odds lock
+    // cache to rebuild even if the (possibly pool-recycled) target reference
+    // matches, per the invalidation contract (ToolOdds.makeNetOddsLockCache).
+    if (this._toolOddsLockCache) this._toolOddsLockCache.valid = false;
     this._refreshToolOdds();               // Phase 1b: seed the odds strip immediately
     eventBus.emit(Events.TOOL_ARMSET_CHANGED, { armId: this.id, toolset: this.toolset.slice() });
     eventBus.emit(Events.TOOL_SELECTED, { armId: this.id, tool: this.selectedTool });
@@ -4444,6 +4448,12 @@ export class ArmUnit {
         z: tp.z - this.position.z,
       });
     }
+    // Wave-4 QA #3 (CAPTURE_NET.md §10 concern 3): persistent per-arm lock
+    // cache — lock-stable cling factors (mode/pBase, roughness, strain) are
+    // computed once at target-lock and reused across the 10 Hz refreshes;
+    // range/presented-width/projected-spin stay live. Allocated once per arm,
+    // never per refresh. Invalidation contract: ToolOdds.makeNetOddsLockCache.
+    if (!this._toolOddsLockCache) this._toolOddsLockCache = makeNetOddsLockCache();
     const odds = computeToolOdds({
       armType: this.type,
       toolset: this.toolset,
@@ -4452,6 +4462,7 @@ export class ArmUnit {
       netCount,
       padUvDoses: this._padUvCureDosesRemaining,
       presentedWidthM,
+      lockCache: this._toolOddsLockCache,
     });
     this._toolOdds = odds;
     // Pre-fire FRAG risk for the ⚠FRAG chip (same computeFragRisk the resolve

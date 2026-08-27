@@ -11,7 +11,7 @@ import { Events } from '../../core/Events.js';
 import { computeTotalSalvageDeltaV } from '../../entities/OrbitalMechanics.js';
 import { assessNetFit, presentedWidthForApproach, getNetClassForType, renderedSpanM, renderedSpanOverflows } from '../../entities/CaptureNet.js';
 import { classifyNetTarget } from '../../systems/netRouting.js';
-import { computeToolOdds, computeBestTool, toolShortLabel } from '../../systems/ToolOdds.js';
+import { computeToolOdds, computeBestTool, toolShortLabel, makeNetOddsLockCache } from '../../systems/ToolOdds.js';
 import { dossierSystem, appraiseSalvage } from '../../systems/DossierSystem.js';
 import { PaneChrome } from './PaneChrome.js';
 
@@ -448,11 +448,20 @@ export class TargetPanel {
    */
   _renderMotherOddsBadge(t) {
     const CN = Constants.CAPTURE_NET;
+    // Wave-4 QA #3: the mother pod's pre-fire odds surface. One persistent
+    // lock cache for the whale badge — lock-stable cling factors compute once
+    // per locked whale instead of per 2 Hz re-render; the input-keyed contract
+    // (ToolOdds.makeNetOddsLockCache) recomputes on target change, so several
+    // whale rows simply alternate recomputes (== fresh path, still exact).
+    // The per-row daughter planning badges above keep the fresh path: they
+    // sweep MANY targets per render, where a single-slot cache buys nothing.
+    if (!this._motherOddsLockCache) this._motherOddsLockCache = makeNetOddsLockCache();
     const odds = computeToolOdds({
       armType: 'mother',
       target: t,
       netClass: CN && CN.LARGE,
       presentedWidthM: presentedWidthForApproach(t, null),
+      lockCache: this._motherOddsLockCache,
     });
     const o = odds && odds.NET;
     if (o && o.p != null && o.p > 0) {

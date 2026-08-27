@@ -1960,6 +1960,16 @@ export const Constants = {
     IN_SPEC_DEG: 10,     // no penalty at/below this tumble
     PER_DEG:     0.012,  // cling-multiplier loss per °/s above in-spec
     FLOOR:       0.4,    // minimum multiplier (never makes a catch strictly impossible)
+    // Wave-4 QA #3 (CAPTURE_NET.md §10 concern 3): tumble-factor cache
+    // invalidation epsilon for the pre-fire odds lock cache
+    // (ToolOdds.makeNetOddsLockCache). |Δ tumbleRate| beyond this recomputes
+    // f_tumble. tumbleRate only changes via discrete writes (despin laser
+    // 0.30 rad/s², eddy damp 0.10 rad/s², torque settle → 0, remainder
+    // resume), so the smallest real per-frame step is ~0.10 × dt ≈ 4e-4 rad/s
+    // even at 240 fps — 5 orders above this epsilon. Every real write
+    // therefore recomputes (the displayed odds stay numerically identical to
+    // a fresh computation), while bit-stable re-reads skip the work.
+    RATE_EPS_RAD_S: 1e-9,
   },
 
   // --- V5 Arm Configuration ---

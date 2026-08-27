@@ -35,7 +35,9 @@
 
 import { Constants } from '../core/Constants.js';
 import {
-  computeClingProbability,
+  computeClingLockFactors,
+  finishClingProbability,
+  computeTumbleModifier,
   recommendCaptureMode,
   getNetClassForType,
   captureNetSystem,
@@ -131,6 +133,158 @@ export function resolvePadModeForOdds(target, uvDosesRemaining) {
 }
 
 /**
+ * Wave-4 QA #3 (CAPTURE_NET.md §10 concern 3) — pre-fire NET-odds lock cache.
+ *
+ * The §3.3 stack is 6+ multiplicative factors; the QA row requires the HUD
+ * path to cost ≤1 ms/frame with the lock-stable factors precomputed at
+ * target-lock, not per-frame. One cache object per odds OWNER (per arm, and
+ * one for the mother badge), allocated ONCE at owner setup and mutated in
+ * place thereafter — never per frame (CaptureNet scratch discipline).
+ *
+ * What is cached (lock-stable): capture mode → pBase, the cling prefix
+ * pBase×f_velocity×f_contact×f_roughness (+ f_tension and the sure-shot
+ * velocity gate), and strain survival (mass vs rated). What stays live every
+ * call: range gates, presented-width gate, f_distance(range),
+ * f_spin(projected arrival spin, a pure function of range), and the loss
+ * ranking. In between sits f_tumble — see the epsilon trigger below.
+ *
+ * ── INVALIDATION CONTRACT (each trigger + why) ──────────────────────────────
+ * The cache is input-keyed: every echoed input below feeds a cached product,
+ * and the lock-stable bundle recomputes iff one of them changed. Triggers:
+ *  • target changed (reference) — every target-derived product (mode, pBase,
+ *    roughness, strain) may differ on another body.
+ *  • lock re-acquire — owners force `valid = false` on their lock-entry seam
+ *    (ArmUnit SK entry): pooled debris objects can be recycled between locks,
+ *    so reference identity alone is not proof the inputs survived unlock.
+ *  • target.surfaceRoughness / material-derived inputs changed — no shipped
+ *    code mutates these mid-lock (spawn-derived, debrisFerrous.js; upgrades
+ *    route to config.*, audited in upgradeEffectRoutes.js — none touch odds
+ *    inputs), but the dev/QA harness (__netScenario) and future writers do;
+ *    the value echo fails closed to a recompute instead of a stale display.
+ *  • target.mass / netClass.MAX_CAPTURE_MASS changed — strain survival inputs
+ *    (same harness/future-writer rationale; netClass echo pins the pair so a
+ *    future class-fed cached product cannot silently alias).
+ *  • target.hasSolarPanels / target.vRel changed, NET_CEREMONY flipped —
+ *    capture-mode inputs; mode picks pBase (§3.4).
+ *  • LASER_DESPIN flipped (tumbleOn) — governs whether tumble is read at all.
+ *  • |target.tumbleRate − rate-at-compute| > NET_TUMBLE_PENALTY.RATE_EPS_RAD_S
+ *    — the despin laser (0.30 rad/s²) and MAGNET eddy damp (0.10 rad/s²)
+ *    move tumble continuously MID-LOCK, which the QA row's "spin at lock"
+ *    wording predates: a pure at-lock snapshot would freeze the odds-climb
+ *    loop the despin laser exists for. Only f_tumble recomputes on this
+ *    trigger (tumbleComputes), not the lock bundle. A value-delta check is
+ *    used instead of DESPIN_* event wiring because tumbleRate has
+ *    non-despin writers too (capture-torque settle → 0, tumble-remainder
+ *    resume) — a delta check is writer-agnostic and cannot miss one. The
+ *    epsilon sits orders below the smallest real per-frame despin step
+ *    (see Constants.NET_TUMBLE_PENALTY.RATE_EPS_RAD_S), so every real write
+ *    recomputes — the cache-equality contract stays exact — while bit-stable
+ *    reads (tumbleRate only changes via discrete writes) skip the work.
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * Callers that do not pass a cache (TargetPanel per-row planning badges at
+ * 2 Hz, ToolRecommender one-shots, tests) get the fresh path: both phases
+ * recompute into a module scratch — same functions, same order, so cached
+ * and fresh results are IDENTICAL at every frame by construction.
+ *
+ * @returns {object} a new, invalid lock cache (one per odds owner)
+ */
+export function makeNetOddsLockCache() {
+  return {
+    // input echo (staleness key)
+    valid: false,
+    target: undefined, netClass: undefined,
+    ceremony: undefined, tumbleOn: undefined,
+    hasSolarPanels: undefined, vRel: undefined,
+    roughness: undefined, mass: undefined, rated: undefined,
+    // lock-stable products
+    mode: null,
+    pBase: 0,
+    cling: { fVelocity: 1, fContact: 1, fRoughness: 1, fTension: 1, prefix: 0, sureShotVelOK: false },
+    strainFailP: 0,
+    strainSurvival: 1,
+    // slowly-varying tumble factor (epsilon-triggered; undefined = never computed)
+    tumbleRateAtCompute: undefined,
+    fTumble: 1,
+    tumbleDeg: 0,
+    // recompute instrumentation (wave4 #3 tests: once-per-lock guards)
+    lockComputes: 0,
+    tumbleComputes: 0,
+  };
+}
+
+/** Fresh-path scratch: reused on every uncached call, forced invalid so both
+ *  phases recompute — current per-call behaviour, zero per-call allocation. */
+const _freshNetOddsCache = makeNetOddsLockCache();
+
+/**
+ * Refresh the lock-stable bundle iff an input changed (see the invalidation
+ * contract above). @private
+ */
+function refreshNetOddsLockCache(cache, target, netClass, tumbleOn) {
+  const CN = Constants.CAPTURE_NET;
+  const ceremony = !!(Constants.FEATURE_FLAGS && Constants.FEATURE_FLAGS.NET_CEREMONY);
+  const hasSolarPanels = !!(target && target.hasSolarPanels);
+  const vRel = target ? target.vRel : undefined;
+  const roughness = (target && target.surfaceRoughness) ?? 1.0;
+  const mass = (target && target.mass) || 0;
+  const rated = (netClass && netClass.MAX_CAPTURE_MASS) || 0;
+  if (cache.valid
+      && cache.target === target && cache.netClass === netClass
+      && cache.ceremony === ceremony && cache.tumbleOn === tumbleOn
+      && cache.hasSolarPanels === hasSolarPanels && cache.vRel === vRel
+      && cache.roughness === roughness && cache.mass === mass
+      && cache.rated === rated) {
+    return; // lock-stable inputs unchanged — cached products stay exact
+  }
+  cache.valid = true;
+  cache.target = target;
+  cache.netClass = netClass;
+  cache.ceremony = ceremony;
+  cache.tumbleOn = tumbleOn;
+  cache.hasSolarPanels = hasSolarPanels;
+  cache.vRel = vRel;
+  cache.roughness = roughness;
+  cache.mass = mass;
+  cache.rated = rated;
+  // lock-stable products — the display must use the same pBase the resolve will
+  cache.mode = resolveCaptureModeForOdds(target);
+  cache.pBase = cache.mode === CN.MODES.CINCH
+    ? CN.CINCH_P_BASE.RIGHT_HARDER
+    : CN.SLAM_P_BASE.RIGHT_HARDER;
+  const launchSpeed = (netClass && netClass.LAUNCH_SPEED) || 10;
+  computeClingLockFactors({
+    pBase: cache.pBase,
+    vRel: launchSpeed,           // contact speed = launch speed (flight model)
+    vOptimal: launchSpeed,
+    roughness,
+  }, cache.cling);
+  cache.strainFailP = computeStrainFailProbability(mass, rated);
+  cache.strainSurvival = 1 - cache.strainFailP;
+  // a lock recompute drops the tumble sub-cache too (new target = new source)
+  cache.tumbleRateAtCompute = undefined;
+  cache.lockComputes++;
+}
+
+/**
+ * Refresh the slowly-varying tumble factor iff the rate moved beyond the
+ * named epsilon (or nullness changed). @private
+ */
+function refreshTumbleFactor(cache, tumbleRate) {
+  const prev = cache.tumbleRateAtCompute;
+  const eps = (Constants.NET_TUMBLE_PENALTY && Constants.NET_TUMBLE_PENALTY.RATE_EPS_RAD_S) ?? 0;
+  const unchanged = (typeof prev === 'number' && typeof tumbleRate === 'number')
+    ? Math.abs(tumbleRate - prev) <= eps   // NaN compares false → recompute
+    : prev === tumbleRate;                 // null↔number/undefined sentinel → recompute
+  if (unchanged) return;
+  cache.tumbleRateAtCompute = tumbleRate;
+  cache.fTumble = computeTumbleModifier(tumbleRate);
+  cache.tumbleDeg = (typeof tumbleRate === 'number')
+    ? Math.abs(tumbleRate) * (180 / Math.PI) : 0;
+  cache.tumbleComputes++;
+}
+
+/**
  * NET odds: cling probability × strain survival × width/range gates.
  * @private
  */
@@ -144,7 +298,7 @@ function computeNetOdds(opts) {
     return { p: null, blocker: 'EMPTY', hint: 'magazine empty. Restock' };
   }
 
-  // ── Deterministic gates ──
+  // ── Deterministic gates (all live — range/geometry never cached) ──
   // Width: presented width (Phase 2) falls back to the scalar sizeMeter. The
   // verdict routes through the ONE mouth-fit predicate (register item 21a).
   const widthM = (typeof opts.presentedWidthM === 'number')
@@ -156,37 +310,35 @@ function computeNetOdds(opts) {
   // Range: beyond tether pay-out or max flight time the shot times out — a
   // deterministic miss (CaptureNet._updateFlight). SSOT: netMaxReachM honours
   // the per-class MAX_FLIGHT_TIME override (LARGE = 11 s → 100 m reach).
-  const launchSpeed = (netClass && netClass.LAUNCH_SPEED) || 10;
   const maxReach = netMaxReachM(netClass) || Infinity;
   if (range > maxReach) {
     return { p: 0, blocker: 'RANGE', hint: 'too far. Close in' };
   }
 
-  // ── Probabilistic stack (same fn as NetProjectile._resolveCatch) ──
-  const mode = resolveCaptureModeForOdds(target);
-  const pBase = mode === CN.MODES.CINCH
-    ? CN.CINCH_P_BASE.RIGHT_HARDER
-    : CN.SLAM_P_BASE.RIGHT_HARDER;
+  // ── Probabilistic stack (same fns as NetProjectile._resolveCatch) ──
+  // Wave-4 QA #3: lock-stable factors come from the caller's lock cache when
+  // provided (computed once per lock, invalidation contract at
+  // makeNetOddsLockCache); the fresh path recomputes them into the module
+  // scratch — identical output either way.
   const tumbleOn = !Constants.isFeatureEnabled || Constants.isFeatureEnabled('LASER_DESPIN');
   const tumbleRate = (tumbleOn && target && typeof target.tumbleRate === 'number')
     ? target.tumbleRate : null;
-  const spinFraction = estimateSpinFractionAtContact(range, netClass);
+  const cache = opts.lockCache || _freshNetOddsCache;
+  if (cache === _freshNetOddsCache) cache.valid = false; // fresh path: recompute both phases
+  refreshNetOddsLockCache(cache, target, netClass, tumbleOn);
+  refreshTumbleFactor(cache, tumbleRate);
 
-  const pCling = computeClingProbability({
-    pBase,
-    vRel: launchSpeed,           // contact speed = launch speed (flight model)
-    vOptimal: launchSpeed,
+  const spinFraction = estimateSpinFractionAtContact(range, netClass);
+  const pCling = finishClingProbability(cache.cling, {
     range,
-    roughness: (target && target.surfaceRoughness) ?? 1.0,
     spinFraction,
-    targetTumbleRate: tumbleRate,
+    fTumble: cache.fTumble,
   });
 
-  // Strain survival (reel-start slip, ArmUnit._checkNetIntegrityOnReel).
-  const mass = (target && target.mass) || 0;
-  const rated = (netClass && netClass.MAX_CAPTURE_MASS) || 0;
-  const strainFailP = computeStrainFailProbability(mass, rated);
-  const p = pCling * (1 - strainFailP);
+  // Strain survival (reel-start slip, ArmUnit._checkNetIntegrityOnReel) —
+  // lock-stable (mass vs rated), applied outside the §3.3 chain as before.
+  const strainFailP = cache.strainFailP;
+  const p = pCling * cache.strainSurvival;
 
   // ── Dominant suppressor → blocker word + lever hint ──
   const losses = [];
@@ -199,9 +351,9 @@ function computeNetOdds(opts) {
   }
   if (tumbleRate != null) {
     const P = Constants.NET_TUMBLE_PENALTY || { IN_SPEC_DEG: 10, PER_DEG: 0.012, FLOOR: 0.4 };
-    const tumbleDeg = Math.abs(tumbleRate) * (180 / Math.PI);
+    const tumbleDeg = cache.tumbleDeg;
     if (tumbleDeg > P.IN_SPEC_DEG) {
-      const fTumble = Math.max(P.FLOOR, 1 - (tumbleDeg - P.IN_SPEC_DEG) * P.PER_DEG);
+      const fTumble = cache.fTumble;
       losses.push({
         loss: 1 - fTumble,
         blocker: 'TUMBLE',
@@ -312,6 +464,10 @@ function computePadOdds(target, opts) {
  * @param {number} [opts.padUvDoses]      - UV-cure doses remaining
  * @param {number} [opts.contactVel]      - pad approach speed (m/s)
  * @param {number} [opts.presentedWidthM] - Phase 2: orientation-aware presented width
+ * @param {object} [opts.lockCache]       - wave4 #3: persistent per-owner NET lock cache
+ *   from makeNetOddsLockCache(); lock-stable cling factors are then computed once
+ *   per lock instead of per call (invalidation contract at the factory). Omit for
+ *   the fresh path — output is identical either way.
  * @returns {Object<string, {p:number|null, blocker:string|null, hint:string}>}
  */
 export function computeToolOdds(opts = {}) {
@@ -338,7 +494,14 @@ export function computeToolOdds(opts = {}) {
   for (const kind of toolset) {
     switch (kind) {
       case 'NET':
-        odds.NET = computeNetOdds({ target, range, netClass, netCount, presentedWidthM: opts.presentedWidthM });
+        odds.NET = computeNetOdds({
+          target,
+          range,
+          netClass,
+          netCount,
+          presentedWidthM: opts.presentedWidthM,
+          lockCache: opts.lockCache,
+        });
         break;
       case 'MAGNET':
         odds.MAGNET = computeMagnetOdds(target);
@@ -385,4 +548,4 @@ export function computeBestTool(odds, toolset) {
   return (toolset && toolset[0]) || 'NET';
 }
 
-export default { computeToolOdds, computeBestTool, computeStrainFailProbability, estimateSpinFractionAtContact, resolveCaptureModeForOdds, resolvePadModeForOdds, toolShortLabel, TOOL_PREF_ORDER };
+export default { computeToolOdds, computeBestTool, computeStrainFailProbability, estimateSpinFractionAtContact, resolveCaptureModeForOdds, resolvePadModeForOdds, toolShortLabel, makeNetOddsLockCache, TOOL_PREF_ORDER };

@@ -183,35 +183,86 @@ export function netMaxReachM(netClass) {
  */
 export function computeClingProbability(params) {
   const {
+    range = 50,
+    spinFraction = 1.0,
+    targetTumbleRate = null,
+  } = params;
+  // Wave-4 QA #3 (CAPTURE_NET.md §10 concern 3): the factor stack is split into
+  // a lock-stable phase and a live phase so the pre-fire HUD path can cache the
+  // former at target-lock. This fresh path recomputes BOTH phases every call —
+  // it is the composition of the two, so cached and fresh output are identical
+  // by construction (same functions, same multiplication order).
+  const lock = computeClingLockFactors(params, _clingLockScratch);
+  return finishClingProbability(lock, {
+    range,
+    spinFraction,
+    fTumble: computeTumbleModifier(targetTumbleRate),
+  });
+}
+
+/** Module scratch for the fresh (uncached) path — reused per call, never
+ *  allocated per frame (same discipline as the _v3a/_q0 scratch above). */
+const _clingLockScratch = {
+  fVelocity: 1, fContact: 1, fRoughness: 1, fTension: 1,
+  prefix: 0, sureShotVelOK: false,
+};
+
+/**
+ * Wave-4 QA #3 — lock-stable phase of the §3.3 factor stack. Everything here
+ * depends only on inputs that hold still while a target stays locked (pBase
+ * from the capture mode, launch/optimal speed, contact fraction, surface
+ * roughness, tether tension nominal). `prefix` is the left-associated product
+ * pBase × f_velocity × f_contact × f_roughness — exactly the first four steps
+ * of the original chain, so finishing it with the live factors reproduces the
+ * un-split arithmetic bit for bit.
+ * Mutates and returns `out` (caller-owned slot; no per-frame allocation —
+ * the computeLeadAim `out` idiom).
+ * @param {object} params — same shape as computeClingProbability
+ * @param {object} out — {fVelocity, fContact, fRoughness, fTension, prefix, sureShotVelOK}
+ * @returns {object} out
+ */
+export function computeClingLockFactors(params, out) {
+  const {
     pBase,
     vRel,
     vOptimal = 10,
-    range = 50,
     contactFraction = 1.0,
     roughness = 1.0,
-    spinFraction = 1.0,
     tensionFraction = 1.0,
-    targetTumbleRate = null,
   } = params;
-
   const vRange = 10; // m/s velocity range for clamp
-  const fVelocity  = Math.max(0.3, Math.min(1.0, 1.0 - Math.abs(vRel - vOptimal) / vRange));
-  const fContact   = Math.min(contactFraction, 1.0);
+  out.fVelocity  = Math.max(0.3, Math.min(1.0, 1.0 - Math.abs(vRel - vOptimal) / vRange));
+  out.fContact   = Math.min(contactFraction, 1.0);
   // 2026-06-11 tuning: floor the roughness multiplier — smooth surfaces are
   // harder to wrap, but the raw material scale (solar cell 0.2, aluminum 0.4)
   // multiplied a perfect shot down to "feels broken" odds.
-  const fRoughness = Math.max(CN.ROUGHNESS_FLOOR ?? 0, roughness);
-  const fSpin      = Math.max(0.5, Math.min(1.2, spinFraction));
-  const fTension   = Math.max(0.6, Math.min(1.0, tensionFraction));
-  // Distance modifier: f_distance = clamp(1.1 - 0.003 × range, 0.85, 1.1)
-  const fDistance   = Math.max(0.85, Math.min(1.1, 1.1 - 0.003 * range));
-  // CP-2 target-tumble penalty: a fast-tumbling target sheds the net. f_tumble = 1.0
-  // at/below the in-spec spin, ramping down to a floor above it. Omitted (null) ⇒ 1.0,
-  // so callers/tests that don't supply tumble are unaffected. The mother de-spin laser
-  // lowers targetTumbleRate to restore this factor → "detumble, then net it".
-  const fTumble = computeTumbleModifier(targetTumbleRate);
+  out.fRoughness = Math.max(CN.ROUGHNESS_FLOOR ?? 0, roughness);
+  out.fTension   = Math.max(0.6, Math.min(1.0, tensionFraction));
+  out.prefix     = pBase * out.fVelocity * out.fContact * out.fRoughness;
+  // Sure-shot's velocity gate is lock-stable too (pre-fire always evaluates it
+  // at vRel === vOptimal === launch speed ⇒ 1.0).
+  out.sureShotVelOK = out.fVelocity >= 0.99;
+  return out;
+}
 
-  const raw = pBase * fVelocity * fContact * fRoughness * fSpin * fTension * fDistance * fTumble;
+/**
+ * Wave-4 QA #3 — live phase of the §3.3 factor stack: the genuinely per-frame
+ * factors (f_spin from the projected arrival spin, f_distance from range) and
+ * the slowly-varying tumble factor, applied to the cached lock-stable prefix
+ * IN THE ORIGINAL ORDER:
+ *   raw = (((prefix × f_spin) × f_tension) × f_distance) × f_tumble
+ * which is the exact left-to-right association of the un-split §3.3 chain —
+ * the cache-equality contract is arithmetic, not approximate.
+ * @param {object} lock — result of computeClingLockFactors
+ * @param {object} live — {range, spinFraction, fTumble (computeTumbleModifier output)}
+ * @returns {number} P_cling ∈ [0, 1]
+ */
+export function finishClingProbability(lock, live) {
+  const { range = 50, spinFraction = 1.0, fTumble = 1.0 } = live;
+  const fSpin = Math.max(0.5, Math.min(1.2, spinFraction));
+  // Distance modifier: f_distance = clamp(1.1 - 0.003 × range, 0.85, 1.1)
+  const fDistance = Math.max(0.85, Math.min(1.1, 1.1 - 0.003 * range));
+  const raw = lock.prefix * fSpin * lock.fTension * fDistance * fTumble;
   let p = Math.max(0, Math.min(1, raw)); // clamp to valid probability
 
   // 2026-06-11 tuning: SURE-SHOT floor. A well-executed shot — close range,
@@ -221,7 +272,7 @@ export function computeClingProbability(params) {
   // the full physics stack, so aim and setup still matter.
   const sureShot = range <= (CN.CLOSE_RANGE ?? 30)
     && fTumble >= 1.0
-    && fVelocity >= 0.99
+    && lock.sureShotVelOK
     && spinFraction >= 0.8;
   if (sureShot) {
     p = Math.max(p, Math.min(1, CN.SURE_SHOT_MIN_CLING ?? 0));
