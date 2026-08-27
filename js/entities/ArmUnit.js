@@ -720,6 +720,14 @@ export class ArmUnit {
     // Layout derived from the magazine count (drift-guarded — never hardcode 2/4):
     // ≤2 → side-by-side in X; else a 2×2 grid.
     const cellFaceZ = canCz + (canH * M) / 2;
+
+    // Net-launch MUZZLE (SSOT, net-canister continuity fix): the launcher
+    // housing's front face on the fore centreline — the same plane the
+    // magazine cells sit on, captured from the SAME variables that place the
+    // `${id}-net-launcher` mesh above (canCz + canH·M/2), so the launch /
+    // net-tether anchor can never drift from the visible hardware. Read back
+    // in world space via getNetMuzzleWorldInto(). Scene units, mesh-local.
+    this._netMuzzleLocal = new THREE.Vector3(0, 0, cellFaceZ);
     const cellSpread = (isWeaverLaunch ? 0.024 : 0.014) * M;
     const cellBoreR = (isWeaverLaunch ? 0.018 : 0.010) * M;
     const cellOffsets = [];
@@ -2190,6 +2198,38 @@ export class ArmUnit {
 
     // Fallback: return arm world position (pre-C-3 / no strut geometry)
     return this.position.clone();
+  }
+
+  /**
+   * World-space NET-LAUNCH MUZZLE — the front face of the fore net-launcher
+   * canister (the `${this.id}-net-launcher` housing built in _createMesh; its
+   * local offset is captured there as _netMuzzleLocal from the same variables
+   * that place the mesh, so this can never drift from the visible hardware).
+   * Mirrors PlayerSatellite.getNetPodPositionInto: the allocation-free launch
+   * anchor for the daughter's net projectile, ceremony visual and in-flight
+   * net tether — so the net materialises from the canister, not the body
+   * centre.
+   *
+   * READ-ONLY on transforms (HANDOFF §10 Rule B): composes this.position with
+   * the CURRENT group quaternion — whoever owns it (PlayerSatellite.
+   * postArmUpdate for docked states, the ArmUnit attitude branch when
+   * deployed) — and never writes either.
+   *
+   * NOTE: this is the NET tether/launch anchor only. The DAUGHTER-HAUL tether
+   * anchor (strut reel cartridge, getTetherAnchorWorldPosition above) is a
+   * DIFFERENT tether and intentionally stays strut-anchored.
+   *
+   * @param {THREE.Vector3} out — receives the world-space muzzle (scene units)
+   * @returns {THREE.Vector3} out (for chaining)
+   */
+  getNetMuzzleWorldInto(out) {
+    if (this._netMuzzleLocal && this.group) {
+      return out.copy(this._netMuzzleLocal)
+        .applyQuaternion(this.group.quaternion)
+        .add(this.position);
+    }
+    // Defensive fallback (mesh not built): body centre.
+    return out.copy(this.position);
   }
 
   /**

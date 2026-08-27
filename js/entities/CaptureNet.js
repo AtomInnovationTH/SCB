@@ -977,7 +977,19 @@ export class NetProjectile {
    * @private
    */
   _anchorScene() {
-    if (this._sourceArm?.position) return this._sourceArm.position;
+    if (this._sourceArm) {
+      // Daughter path (net-canister continuity fix): anchor at the arm's
+      // net-launcher canister MUZZLE (mesh-derived, scene units) when the arm
+      // exposes it, so the per-frame co-orbiting sync, the contact math and
+      // the rendered net/tether all share the visible launch point instead of
+      // the body centre. Mock arms without the method keep the old
+      // arm-centre anchor (headless back-compat).
+      if (typeof this._sourceArm.getNetMuzzleWorldInto === 'function') {
+        if (!this._anchorScratch) this._anchorScratch = new THREE.Vector3();
+        return this._sourceArm.getNetMuzzleWorldInto(this._anchorScratch);
+      }
+      if (this._sourceArm.position) return this._sourceArm.position;
+    }
     if (this._anchorProvider) {
       if (!this._anchorScratch) this._anchorScratch = new THREE.Vector3();
       return this._anchorProvider(this._anchorScratch);
@@ -3951,6 +3963,22 @@ export class CaptureNetSystem {
 
     const netClass = (arm.config?.type === 'weaver') ? CN.MEDIUM : CN.SMALL;
 
+    // Net-canister continuity fix: the net leaves the arm's fore net-launcher
+    // canister, not the body centre. When the arm exposes the mesh-derived
+    // muzzle (real ArmUnit), override the caller-supplied launch position with
+    // it — the SAME source _anchorScene() polls every frame, so net.position
+    // and the co-orbiting anchor agree from tick 0 and the flight/contact
+    // math shifts by exactly the canister offset (~0.11–0.20 m along the
+    // nose). Mock arms without the method keep the explicit launchPos
+    // (headless test path). Muzzle is scene units → convert to metres.
+    let spawnPos = launchPos;
+    if (typeof arm.getNetMuzzleWorldInto === 'function') {
+      const M_NET = 0.00001;   // 1 m in scene units (matches ArmUnit.M)
+      if (!this._muzzleScratch) this._muzzleScratch = new THREE.Vector3();
+      const mz = arm.getNetMuzzleWorldInto(this._muzzleScratch);
+      spawnPos = { x: mz.x / M_NET, y: mz.y / M_NET, z: mz.z / M_NET };
+    }
+
     // CEREMONY_REDESIGN §4 / NET_CEREMONY alignment (2026-05-25): see fireMotherNet
     // above for full rationale. Force CINCH so beats 5–6 visuals (ENVELOP, CINCH_CLOSING)
     // actually render during the ceremony — SLAM_WRAP path skips those states.
@@ -3963,7 +3991,7 @@ export class CaptureNetSystem {
       netClass,
       armIndex,
       podIndex: -1,
-      launchPosition: launchPos,
+      launchPosition: spawnPos,
       launchDirection: launchDir,
       targetDebris:   target,
       captureMode:    resolvedMode,

@@ -1088,14 +1088,23 @@ export class CaptureNetVisual {
 
       } // end else (non-ceremony)
 
-      // ── Tether update: launcher anchor (strut tip / pod muzzle) → net ──
+      // ── Tether update: launcher anchor (canister muzzle / pod muzzle) → net ──
       if (tetherLine.visible && this._player) {
-        // Daughter arms use strutTipNodes; mother pods anchor at the pod
-        // muzzle via getNetPodPositionInto (allocation-free). The old
-        // `player.group` fallback was dead — PlayerSatellite extends
-        // THREE.Group so `player.group` is undefined and the tether fell
-        // through to getPosition(), cloning a Vector3 every frame (§2 C2).
-        if (vis.armIndex >= 0 && this._player.strutTipNodes && this._player.strutTipNodes[vis.armIndex]) {
+        // Daughter arms anchor at the source arm's net-launcher canister
+        // muzzle (net-canister continuity fix): the in-flight NET tether runs
+        // canister→net. The DAUGHTER-HAUL tether (strut reel cartridge,
+        // ArmUnit.getTetherAnchorWorldPosition) is a DIFFERENT tether and
+        // stays strut-anchored. Fallback chain: strut tip node (pre-muzzle
+        // mocks), mother pod muzzle via getNetPodPositionInto
+        // (allocation-free), then getPosition(). The old `player.group`
+        // fallback was dead — PlayerSatellite extends THREE.Group so
+        // `player.group` is undefined and the tether fell through to
+        // getPosition(), cloning a Vector3 every frame (§2 C2).
+        const srcArm = net._sourceArm;
+        if (vis.armIndex >= 0 && srcArm
+            && typeof srcArm.getNetMuzzleWorldInto === 'function') {
+          srcArm.getNetMuzzleWorldInto(_v3a);
+        } else if (vis.armIndex >= 0 && this._player.strutTipNodes && this._player.strutTipNodes[vis.armIndex]) {
           this._player.strutTipNodes[vis.armIndex].getWorldPosition(_v3a);
         } else if (vis.podIndex >= 0 && typeof this._player.getNetPodPositionInto === 'function') {
           this._player.getNetPodPositionInto(vis.podIndex, _v3a);
