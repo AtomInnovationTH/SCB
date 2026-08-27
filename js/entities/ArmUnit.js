@@ -174,6 +174,48 @@ export function heldSlotAnchorInto(anchor, holdDir, up, slotIndex, sizeMeter, ou
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// §11.5 capture-torque settle — pure physics (exported for headless tests).
+// See the Constants.CAPTURE_TORQUE_SETTLE block for the full derivation.
+// ---------------------------------------------------------------------------
+
+/** I = INERTIA_COEFF·m·d² — uniform solid sphere of diameter sizeMeter (kg·m²). */
+export function captureMomentOfInertia(massKg, sizeMeter) {
+  const CTS = Constants.CAPTURE_TORQUE_SETTLE;
+  const m = massKg > 0 ? massKg : 0;
+  const d = sizeMeter > 0 ? sizeMeter : 0;
+  return CTS.INERTIA_COEFF * m * d * d;
+}
+
+/** L = I·|ω| — spin angular momentum arrested by the cinch (N·m·s). */
+export function captureAngularMomentum(massKg, sizeMeter, tumbleRateRadS) {
+  return captureMomentOfInertia(massKg, sizeMeter) * Math.abs(tumbleRateRadS || 0);
+}
+
+/**
+ * t_settle = L / TETHER_DAMP_TORQUE_NM, clamped to [T_SETTLE_MIN_S,
+ * T_SETTLE_MAX_S] — the audit's τ = L/t_settle solved for time under a fixed
+ * tether torque budget (s).
+ */
+export function captureSettleDuration(L) {
+  const CTS = Constants.CAPTURE_TORQUE_SETTLE;
+  const t = (L || 0) / CTS.TETHER_DAMP_TORQUE_NM;
+  return Math.min(CTS.T_SETTLE_MAX_S, Math.max(CTS.T_SETTLE_MIN_S, t));
+}
+
+/**
+ * Rip band for the strain gate: 0 at/below STRAIN_GATE_DEG_S, 1 at/above
+ * STRAIN_RATE_RATED_DEG_S, linear between. Anchored to ABSOLUTE rates (the
+ * gate is a rate line), unlike strainBandT's rated-mass fractions.
+ */
+export function captureSettleRipBandT(rateDegS) {
+  const CTS = Constants.CAPTURE_TORQUE_SETTLE;
+  const gate = CTS.STRAIN_GATE_DEG_S;
+  const rated = CTS.STRAIN_RATE_RATED_DEG_S;
+  if (!(rated > gate)) return (rateDegS || 0) > gate ? 1 : 0;
+  return Math.min(1, Math.max(0, ((rateDegS || 0) - gate) / (rated - gate)));
+}
+
 export class ArmUnit {
   /**
    * @param {string} id - e.g. 'weaver-1', 'spinner-2'
@@ -381,6 +423,17 @@ export class ArmUnit {
     // RCS desat per subsequent fire. Exposed via getStatus() for the HUD.
     this._wheelMomentum = 0;
     this._wheelSaturated = false;
+
+    // ── §11.5 capture-torque settle (FEATURE_FLAGS.CAPTURE_TORQUE_SETTLE) ──
+    // Live transient state or null. Seeded at the daughter net-FSM cinch
+    // (_seedCaptureTorqueSettle), stepped every frame from update()
+    // (_tickCaptureSettle) with the same critically-damped closed form as
+    // _updateRecoilKick, one angular DOF about the catch's own tumbleAxis.
+    // Stays exactly null while the flag is OFF (byte-identical legacy).
+    this._settle = null;
+    // Test hook mirroring _boostRipRollOverride: when non-null, replaces
+    // Math.random() in the strain-gate rip roll for determinism.
+    this._settleRipRollOverride = null;
 
     // ── ST-9.3 C-3: Config G Aim + Hinge State ──
     /** Meridian sweep angle α ∈ [0, π]. 0=stowed(−Y), π/2=equatorial, π=zenith(+Y) */
@@ -2627,6 +2680,11 @@ export class ArmUnit {
    // §11.3: reaction-wheel momentum bleed (magnetorquers) — every state.
    this._tickWheelDecay(dt);
 
+   // §11.5: capture-torque settle — every state (the transient spans
+   // GRAPPLED → REELING and must survive state changes and follow external
+   // releases honestly; inert single null-check when no settle is live).
+   this._tickCaptureSettle(dt);
+
    // --- Orbital frame correction (APPLY): keep deployed arms in ship's co-moving frame ---
    // MUST run BEFORE state machine so _updateTransit / _updateApproach see
    // this.position in the CURRENT frame's co-moving frame (matching the freshly-
@@ -3939,6 +3997,199 @@ export class ArmUnit {
     this._wheelSaturated = sat;
   }
 
+  // ═════════════════════════════════════════════════════════════════════════
+  // §11.5 CAPTURE-TORQUE SETTLE (FEATURE_FLAGS.CAPTURE_TORQUE_SETTLE)
+  // Derivation + tuning: Constants.CAPTURE_TORQUE_SETTLE. Pure physics
+  // helpers (captureAngularMomentum & co) are exported at module scope.
+  // ═════════════════════════════════════════════════════════════════════════
+
+  /**
+   * @private Seed the capture-torque settle at the daughter net-FSM cinch —
+   * the exact moment legacy code freezes tumble for free (the two
+   * `_capturedByArm = this` writes in _updateNettingFSM). The target's live
+   * spin angular momentum L = Iω becomes a critically-damped wrench of the
+   * caught bundle that the tether damps over t_settle = L/τ.
+   *
+   * Scope (deliberate): daughter NET catches only — mirrors
+   * _checkNetIntegrityOnReel's "net-integrity applies to NET catches"
+   * doctrine. The mother lasso/berth spine, the legacy CAPTURE_NET-OFF dice
+   * path, and the magnet/gripper/pad tool paths keep instant arrest.
+   * A zero/near-zero rate seeds nothing (MIN_SEED_RATE_DEG_S), which keeps
+   * scenario-pinned attitudes (main.js register item 13) byte-frozen.
+   * @param {object} debris — the freshly cinched catch
+   */
+  _seedCaptureTorqueSettle(debris) {
+    if (!Constants.isFeatureEnabled('CAPTURE_TORQUE_SETTLE')) return;
+    if (!debris) return;
+    const CTS = Constants.CAPTURE_TORQUE_SETTLE;
+    const w0 = debris.tumbleRate || 0;                       // rad/s, live (post-lase)
+    if (w0 * 180 / Math.PI < CTS.MIN_SEED_RATE_DEG_S) return;
+    const L = captureAngularMomentum(debris.mass, debris.sizeMeter, w0);
+    const T = captureSettleDuration(L);
+    this._settle = {
+      debris,
+      theta: 0,                        // rad — angular displacement off the cinched pose
+      rate: w0,                        // rad/s — residual wrench rate (θ̇), decays to 0
+      t: 0,                            // s — elapsed
+      T,                               // s — t_settle = clamp(L/τ) for this catch
+      lambda: CTS.SETTLE_U / T,        // 1/s — critically-damped decay rate
+      seedAngle: debris.tumbleAngle || 0,
+      seedRateRad: w0,
+      L,                               // N·m·s — telemetry/tests
+      I: captureMomentOfInertia(debris.mass, debris.sizeMeter),
+    };
+  }
+
+  /**
+   * @private Step the settle one frame — called from update() in EVERY state
+   * (the transient spans GRAPPLED → REELING; external releases can happen in
+   * more). Exact per-step closed form of the critically-damped system, the
+   * _updateRecoilKick law with one angular DOF:
+   *   B = θ̇ + λθ;  θ' = (θ + B·dt)·e^(−λ·dt);  θ̇' = (θ̇ − λ·B·dt)·e^(−λ·dt)
+   * Seeded with θ=0, θ̇=ω₀ this is θ(t) = ω₀·t·e^(−λt): the catch wrenches
+   * forward to ω₀/(λe) at t = 1/λ, then the tether hauls it back — rendered
+   * through debris.tumbleAngle with the same ×TIME_SCALE_GAMEPLAY convention
+   * DebrisField._advanceTumble uses for free tumble (visual rate is
+   * continuous at the cinch instant). _advanceTumble itself early-returns on
+   * _capturedByArm, so this is the sole tumbleAngle writer while held.
+   *
+   * Ends one of three ways:
+   *  - SETTLED (t ≥ T and rendered residue below both snap eps): pose snaps
+   *    exactly back to seedAngle and tumbleRate = 0 — L was fully
+   *    transferred and dissipated; a later drop stays de-spun (honest).
+   *  - RIPPED (strain gate): see _ripNetFromTorque.
+   *  - EXTERNAL RELEASE (mass slip, boost rip, manual drop, handoff, snap):
+   *    the un-transferred remainder resumes as real tumble.
+   */
+  _tickCaptureSettle(dt) {
+    const st = this._settle;
+    if (!st) return;
+    // Flag flipped OFF mid-transient (dev toggle / REALITY_MODE): legacy
+    // semantics unconditionally — attitude back to the frozen cinch pose,
+    // tumbleRate untouched (still ω₀, so a later drop resumes the original
+    // tumble exactly as legacy would). Mirrors _updateRecoilKick's OFF path.
+    if (!Constants.isFeatureEnabled('CAPTURE_TORQUE_SETTLE')) {
+      st.debris.tumbleAngle = st.seedAngle;
+      this._settle = null;
+      return;
+    }
+    const debris = st.debris;
+    // External release mid-settle: the tether stopped damping — hand the
+    // un-transferred remainder back as real tumble and stand down. (Covers
+    // _releaseCapturedDebris in all its callers without touching them; on a
+    // tether snap the catch keeps _capturedByArm while capturedDebris clears,
+    // so the remainder is written now and _advanceTumble resumes it when the
+    // delayed EXPENDED release clears the pin.)
+    if (this.capturedDebris !== debris || !debris._capturedByArm) {
+      this._resumeTumbleFromRemainder(st);
+      return;
+    }
+
+    const CTS = Constants.CAPTURE_TORQUE_SETTLE;
+    const lam = st.lambda;
+    const decay = Math.exp(-lam * dt);
+    const b = st.rate + lam * st.theta;
+    st.theta = (st.theta + b * dt) * decay;
+    st.rate = (st.rate - lam * b * dt) * decay;
+    st.t += dt;
+
+    const TS = Constants.TIME_SCALE_GAMEPLAY;
+    debris.tumbleAngle = st.seedAngle + st.theta * TS;
+
+    // Strain gate — rolled only in the wrench window (GRAPPLED/REELING, the
+    // same states that own the NET_STRAIN_* mass checks), only while the
+    // residual REAL rate still exceeds the gate.
+    const rateDegS = Math.abs(st.rate) * 180 / Math.PI;
+    if ((this.state === S.GRAPPLED || this.state === S.REELING)
+        && rateDegS > CTS.STRAIN_GATE_DEG_S) {
+      const bandT = captureSettleRipBandT(rateDegS);
+      if (bandT > 0) {
+        const roll = (this._settleRipRollOverride != null)
+          ? this._settleRipRollOverride : Math.random();
+        if (roll < CTS.RIP_PROB_PER_S * bandT * dt) {
+          this._ripNetFromTorque(st, rateDegS, bandT);
+          return;
+        }
+      }
+    }
+
+    // Settled → snap crisply (no asymptote, no residue): T reached and the
+    // RENDERED residue is sub-degree on both channels.
+    if (st.t >= st.T
+        && Math.abs(st.theta) * TS < CTS.SNAP_EPS_THETA_RAD
+        && Math.abs(st.rate) * TS < CTS.SNAP_EPS_RATE_RAD_S) {
+      debris.tumbleAngle = st.seedAngle;   // pose exactly back on the cinch
+      debris.tumbleRate = 0;               // L fully transferred — catch is de-spun
+      this._settle = null;
+    }
+  }
+
+  /**
+   * @private The wrench rips the net (strain gate) — recoverable, the
+   * _ripNetDuringBoost idiom: debris drifts free and re-capturable with its
+   * tumble RESUMED from the un-transferred remainder; the daughter keeps her
+   * tether and returns to reload. This consequence is what makes the despin
+   * laser mechanically necessary: lasing below STRAIN_GATE_DEG_S before
+   * netting removes the roll entirely.
+   * @param {object} st — live settle state
+   * @param {number} rateDegS — residual wrench rate at the rip (°/s, real)
+   * @param {number} bandT — rip band 0..1 at the rip (event telemetry)
+   */
+  _ripNetFromTorque(st, rateDegS, bandT) {
+    const debris = this.capturedDebris;
+    if (!debris) return;
+    const CTS = Constants.CAPTURE_TORQUE_SETTLE;
+    // Remainder first (writes tumbleRate/axis), then release (clears pins so
+    // DebrisField._advanceTumble resumes advancing it next frame).
+    this._resumeTumbleFromRemainder(st);
+    this._releaseCapturedDebris({ keepPinned: false });
+    eventBus.emit(Events.NET_FAILED, {
+      armId: this.id, armIndex: this.index,
+      debrisId: debris.id, strain: bandT, oversized: false, recoverable: true,
+      cause: 'capture_settle', tumbleDegS: rateDegS,
+    });
+    // Same staging hook as the boost rip — CaptureNetVisual tears a wedge,
+    // audio/comms/teaching hang off the event.
+    eventBus.emit(Events.NET_TORN, {
+      armId: this.id, armIndex: this.index,
+      debrisId: debris.id, strain: bandT,
+    });
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      text: `${this.displayName}: Net RIPPED — catch still tumbling at `
+        + `${rateDegS.toFixed(0)}°/s and the wrench tore the weave. Debris drifting `
+        + `free, spin resumed. Lase it below ${CTS.STRAIN_GATE_DEG_S.toFixed(0)}°/s `
+        + 'before the next net.',
+      priority: 'warning',
+    });
+    if (this._stationKeepTarget) this._stationKeepTarget._isStationKeepTarget = false;
+    this._stationKeepTarget = null;
+    this.target = null;
+    this._transitionTo(S.RETURNING);
+  }
+
+  /**
+   * @private Hand the un-transferred remainder of the settle back to the
+   * debris as real tumble and stand the transient down. θ̇ < 0 means the rip
+   * happened mid counter-swing (the tether was hauling the catch back), so
+   * the resumed tumble spins the other way: flip the axis, keep the rate
+   * magnitude. tumbleAngle stays at the displaced pose — the body rips free
+   * mid-wrench, continuously. _initialTumbleRate is deliberately untouched
+   * (E1 despin doctrine: spawn history is frozen).
+   * @param {object} st — live settle state
+   */
+  _resumeTumbleFromRemainder(st) {
+    const debris = st.debris;
+    const rem = Math.abs(st.rate);
+    debris.tumbleRate = rem;
+    if (st.rate < 0 && rem > 0 && debris.tumbleAxis) {
+      const ax = debris.tumbleAxis;
+      if (typeof ax.negate === 'function') ax.negate();
+      else { ax.x = -ax.x; ax.y = -ax.y; ax.z = -ax.z; }
+    }
+    this._settle = null;
+  }
+
+
   /**
    * @private Initialise the frozen SK entry frame so arrow keys map to
    * screen-aligned yaw/pitch.
@@ -4947,6 +5198,7 @@ export class ArmUnit {
       if (this.target) {
         this.target._captured = true;
         this.target._capturedByArm = this; // POLISH FIX issue #2: pin debris visual to arm during REELING
+        this._seedCaptureTorqueSettle(this.target); // §11.5: transfer L, don't delete it
       }
       this._transitionTo(S.GRAPPLED);
       eventBus.emit(Events.ARM_CAPTURED, {
@@ -4993,6 +5245,7 @@ export class ArmUnit {
         if (this.target) {
           this.target._captured = true;
           this.target._capturedByArm = this; // POLISH FIX issue #2: pin debris visual to arm during REELING
+          this._seedCaptureTorqueSettle(this.target); // §11.5: transfer L, don't delete it
         }
         if (this._netCommittedTarget) this._netCommittedTarget._committedNetArmId = null;
         this._netCommittedTarget = null;

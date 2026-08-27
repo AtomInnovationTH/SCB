@@ -1626,6 +1626,24 @@ export const Constants = {
     // OFF = byte-identical legacy behaviour (zero displacement, zero billing).
     // Mother pod recoil (PlayerSatellite._applyMotherNetRecoil) is untouched.
     DAUGHTER_NET_RECOIL:       true,
+
+    // 2026-08-27 — CAPTURE_NET.md §11.5 momentum-torque audit, daughter side
+    // (the audit's "highest gameplay value" item, #1 in the §11.8 order).
+    // ON: a daughter NET catch no longer arrests the target's spin angular
+    // momentum for free. L = Iω is computed from the debris' LIVE tumble at
+    // the cinch (I = 0.1·m·d², solid-sphere model) and transferred into a
+    // visible critically-damped settle of the caught bundle over
+    // t_settle = L/τ_tether (clamped ~2–4 s; the audit's τ = L/t_settle,
+    // solved for time). A cleanly settled catch ends de-spun (tumbleRate 0).
+    // Above STRAIN_GATE_DEG_S the wrench rolls a recoverable net rip
+    // (NET_FAILED/NET_TORN, boost-rip idiom): the catch drifts free with the
+    // UN-transferred remainder resumed as real tumble — lasing a tumbler
+    // below the gate before netting is now the correct play, which is what
+    // makes LASER_DESPIN a torque-management necessity instead of a
+    // cling-probability buff. Tuning: Constants.CAPTURE_TORQUE_SETTLE.
+    // Daughter net-FSM captures only; the mother lasso/berth spine (M1
+    // onboarding) is untouched. OFF = byte-identical instant-arrest legacy.
+    CAPTURE_TORQUE_SETTLE:     true,
   },
 
   // ============================================================================
@@ -5115,6 +5133,72 @@ export const Constants = {
     WHEEL_DECAY_PER_S: 1 / 30,        // magnetorquer bleed — one fire-unit per 30 s
     WHEEL_DESAT_FUEL_COST: 0.5,       // % tank — RCS desat burn billed per fire while saturated
     WHEEL_DESAT_DUMP: 1.0,            // momentum units the paid desat burn removes
+  },
+
+  // =========================================================================
+  // CAPTURE_TORQUE_SETTLE — CAPTURE_NET.md §11.5, daughter side. Gated by
+  // FEATURE_FLAGS.CAPTURE_TORQUE_SETTLE. Makes captured-debris angular
+  // momentum real: the cinch transfers L into the tether instead of deleting
+  // it (legacy: DebrisField._advanceTumble simply stops advancing).
+  //
+  // I MODEL — uniform solid sphere of diameter sizeMeter:
+  //   I = (2/5)·m·(d/2)² = INERTIA_COEFF·m·d², INERTIA_COEFF = 0.1.
+  //   Real debris brackets this: a thin rod tumbling transverse is
+  //   (1/12)·m·L² ≈ 0.083·m·L², a solid sphere is exactly 0.1·m·d². Both
+  //   inputs (mass, sizeMeter = max extent) already live on every debris
+  //   record, so the model needs no new authored data.
+  //
+  // τ DERIVATION — the audit's fix sketch is τ = L/t_settle. We hold the
+  //   TORQUE budget fixed (the tether/net rig can only damp so hard) and
+  //   solve for time:  t_settle = L / TETHER_DAMP_TORQUE_NM, clamped to
+  //   [T_SETTLE_MIN_S, T_SETTLE_MAX_S] so every settle stays readable.
+  //   Reference tumbler (the audit's example): 500 kg, 6 m, 10°/s ⇒
+  //   I = 0.1·500·36 = 1800 kg·m²; ω₀ = 0.17453 rad/s; L = 314.16 N·m·s;
+  //   t_settle = 314.16/105 ≈ 2.99 s (mid-band); implied τ ≈ 105 N·m.
+  //   Light fragments clamp to the 2 s floor (tether authority dwarfs their
+  //   L); >420 N·m·s whales clamp to the 4 s ceiling.
+  //
+  // TRANSIENT — same critically-damped closed form as DAUGHTER_NET_RECOIL
+  //   (_updateRecoilKick), one angular DOF about the debris' own tumbleAxis:
+  //   θ̈ = −2λθ̇ − λ²θ with θ(0)=0, θ̇(0)=ω₀ ⇒ θ(t) = ω₀·t·e^(−λt).
+  //   λ = SETTLE_U / t_settle: the envelope vs peak is u·e^(1−u) (u = λt),
+  //   ≈ 4% at u = 6 — so the transient is visually done AT t_settle and the
+  //   eps snap zeroes the sub-degree residue there (no asymptote). The catch
+  //   wrenches forward to θ_peak = ω₀/(λe) at t = t_settle/6, then the
+  //   tether visibly hauls it back to the cinched pose. Reference tumbler:
+  //   θ_peak ≈ 1.84° real ≈ 18.4° rendered (×TIME_SCALE_GAMEPLAY, the same
+  //   visual convention _advanceTumble applies to free tumble) at t ≈ 0.5 s.
+  //   The debris' rendered channel is seedAngle + θ·TIME_SCALE_GAMEPLAY, so
+  //   the wrench rate is continuous with the pre-capture visual spin.
+  //
+  // STRAIN GATE — while the residual wrench rate |θ̇| exceeds
+  //   STRAIN_GATE_DEG_S (real °/s) during GRAPPLED/REELING, the net rolls a
+  //   per-second recoverable rip (REEL_BOOST.RIP_PROB_PER_S idiom; the
+  //   consequence path mirrors _ripNetDuringBoost / NET_STRAIN_*'s
+  //   recoverable slip): rip probability = RIP_PROB_PER_S × band × dt with
+  //   band = clamp((rate − GATE)/(RATED − GATE), 0, 1). The band is anchored
+  //   to ABSOLUTE rates rather than strainBandT's rated-mass fractions
+  //   because the gate is a rate line, not a capacity fraction. GATE = 5°/s
+  //   (audit's number) sits below DESPIN_LASER.IN_SPEC_DEG = 10°/s: a
+  //   just-in-spec catch carries only ~⅕ band for well under a second of
+  //   exposure (≈1% rip), so "Tumble in spec. Net it." stays honest, while
+  //   an un-lased 30°/s+ tumbler rides the full band and rips often.
+  //   On rip the UN-transferred remainder resumes as real tumble
+  //   (tumbleRate = |θ̇|, axis flipped if the tether was mid counter-swing).
+  // =========================================================================
+  CAPTURE_TORQUE_SETTLE: {
+    INERTIA_COEFF: 0.1,            // I = coeff·m·d² — solid sphere of diameter sizeMeter
+    TETHER_DAMP_TORQUE_NM: 105,    // N·m — tether damping-torque budget (τ in τ = L/t_settle)
+    T_SETTLE_MIN_S: 2.0,           // s — settle-duration floor (light catches)
+    T_SETTLE_MAX_S: 4.0,           // s — settle-duration ceiling (whales)
+    SETTLE_U: 6.0,                 // λ = SETTLE_U/t_settle; envelope ≈ 4% of peak at u = 6
+    MIN_SEED_RATE_DEG_S: 0.1,      // °/s — below this the cinch is torque-free (no transient;
+                                   //   keeps scenario-pinned zero-rate attitudes byte-frozen)
+    SNAP_EPS_THETA_RAD: 0.02,      // rad, RENDERED (×TIME_SCALE_GAMEPLAY) — ≈1.1° residue snap
+    SNAP_EPS_RATE_RAD_S: 0.05,     // rad/s, RENDERED — ≈2.9°/s residue snap (both eps + t ≥ T)
+    STRAIN_GATE_DEG_S: 5.0,        // °/s — at/below: guaranteed hold (the despin play)
+    STRAIN_RATE_RATED_DEG_S: 30.0, // °/s — full rip band at this residual wrench rate
+    RIP_PROB_PER_S: 1.0,           // /s — rip chance at full band (× band × dt per frame)
   },
 
   // =========================================================================
