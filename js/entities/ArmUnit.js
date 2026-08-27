@@ -14,8 +14,9 @@ import { Constants } from '../core/Constants.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { getSolarCellTexture } from '../scene/solarCellTexture.js';
-import { makeLightHalo } from '../scene/glowSpriteTexture.js';
+import { makeLightHalo, getRadialGlowTexture } from '../scene/glowSpriteTexture.js';
 import { makePlumeFrustum } from '../scene/plumeGeometry.js';
+import { computeDaughterPlumeIntensity, DAUGHTER_PLUME } from './armPlumeModel.js';
 import { applyDetailLod } from '../scene/detailLodCull.js';
 import { AVIONICS_GUNMETAL, AVIONICS_DARK_OPTIC, AVIONICS_THERMAL_WHITE } from '../scene/avionicsMaterials.js';
 import { tetherReel } from '../systems/TetherReel.js';
@@ -43,7 +44,14 @@ const _orientMat    = new THREE.Matrix4();
 const _orientQuat   = new THREE.Quaternion();
 const _tetherDir    = new THREE.Vector3();
 const _driftTDelta  = new THREE.Vector3();
-const _driftPDelta  = new THREE.Vector3();
+
+// Wave1: reusable plume-signal scratch (hot path — one _updatePlumes call per
+// arm per frame). Written and fully consumed inside a single call, like the
+// vector temps above.
+const _plumeSig = {
+  state: null, fuel: 0, skManeuverGlowS: 0, approachBrake01: 0,
+  arrestFeepActive: false, recoilFlashS: 0,
+};const _driftPDelta  = new THREE.Vector3();
 const _driftRaw     = new THREE.Vector3();
 const _relVel       = new THREE.Vector3();
 const _goalDir      = new THREE.Vector3();
@@ -446,6 +454,17 @@ export class ArmUnit {
     this.tetherLine = null;
     this.tetherMaterial = null;
     this._thrusterPlumes = [];
+    // Wave1 (daughter-plumes): fore FEEP pair + attitude cold-gas puffs.
+    // All visual-only reads of existing physics fields — no fuel/attitude writes.
+    this._forePlumes = [];        // fore core+halo (populated in _createMesh)
+    this._forePlumeHalo = null;   // tagged so the halo dims to HALO_MULT × core
+    this._skManeuverGlowS = 0;    // s left of SK maneuver-input brightening
+    this._recoilFlashS = 0;       // s left of the fore counter-burn flash
+    this._approachBrake01 = 0;    // smoothed APPROACH brake read (0..1)
+    this._attPuffs = [];          // pooled cold-gas sprites (≤ PUFF_POOL_SIZE)
+    this._attPuffIndex = 0;       // round-robin pool cursor
+    this._attPuffLastFire = -Infinity; // global burst cooldown stamp (s)
+    this._attPuffPorts = null;    // 4 fixed local ports {pos,dir} (built once)
     this._statusLightMat = null;
     this._netMesh = null;
     // Detail-LOD cull set (Phase 6): inert daughter hardware hidden when far.
@@ -471,6 +490,19 @@ export class ArmUnit {
 
     this._createMesh();
     this._createTether();
+
+    // Wave1: 0.5 s fore-plume counter-burn flash on the recoil-kick emitter
+    // (a PARALLEL task adds Events.ARM_RECOIL_KICK {armIndex}). Subscribe
+    // DEFENSIVELY: only when the event name actually exists — until then this
+    // is a clean no-op and every other plume behaviour still works. The flash
+    // itself rides `_recoilFlashS`, which armPlumeModel decays to a fore flare.
+    if (typeof Events.ARM_RECOIL_KICK === 'string' && Events.ARM_RECOIL_KICK) {
+      this._onRecoilKick = (p) => {
+        if (!p || p.armIndex !== this.index) return;
+        this._recoilFlashS = DAUGHTER_PLUME.RECOIL_FLASH_S;
+      };
+      eventBus.on(Events.ARM_RECOIL_KICK, this._onRecoilKick);
+    }
 
     // §2-followup (round 4): the daughter is a SEPARATE top-level scene object
     // from the mother, yet docks AT the mother's strut tip where their geometry
@@ -707,6 +739,45 @@ export class ArmUnit {
     foreNozzle.rotation.x = -Math.PI / 2;
     foreNozzle.name = `${this.id}-feep-fore`;
     this.mesh.add(foreNozzle);
+
+    // Fore thruster plume (Wave1 daughter-plumes) — same HYBRID idiom as the
+    // aft pair above (silver-blue FEEP core + type-tinted halo, additive,
+    // hidden by default), sized to the smaller fore nozzle and welded at its
+    // exit plane. Fires when the daughter thrusts TOWARD travel: APPROACH
+    // braking, the REDOCK_FEEP arrest window, and the recoil counter-burn —
+    // driven by the same armPlumeModel mapping in _updatePlumes. LOD: gets the
+    // aft plume's treatment exactly — NOT in the detail cull set (plumes are
+    // communicative; the halo is the per-type ID at range).
+    const forePlumeLen = bz * 0.40 * M;
+    const foreExitZ = bz * 0.5 * M + foreNozL * 0.35 + foreNozL * 0.5;
+    const foreCoreGeo = makePlumeFrustum(foreNozR * 1.0, foreNozR * 2.2, forePlumeLen, 10, 3);
+    const foreCoreMat = new THREE.MeshBasicMaterial({
+      color: 0x99bbdd, transparent: true, opacity: 0.0, vertexColors: true,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    });
+    const forePlume = new THREE.Mesh(foreCoreGeo, foreCoreMat);
+    forePlume.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;
+    forePlume.position.set(bx * 0.25 * M, 0, foreExitZ);  // welded to fore nozzle exit
+    forePlume.rotation.x = Math.PI / 2;                   // beam local +Y → world +Z (fore)
+    forePlume.visible = false;
+    forePlume.name = `${this.id}-feep-plume-fore-core`;
+    this.mesh.add(forePlume);
+    this._forePlumes.push(forePlume);
+
+    const foreHaloGeo = makePlumeFrustum(foreNozR * 1.0, foreNozR * 3.0, forePlumeLen * 1.35, 10, 3);
+    const foreHaloMat = new THREE.MeshBasicMaterial({
+      color: isWeaver ? 0x4488ff : 0x44ff88, transparent: true, opacity: 0.0, vertexColors: true,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    });
+    const forePlumeHalo = new THREE.Mesh(foreHaloGeo, foreHaloMat);
+    forePlumeHalo.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;
+    forePlumeHalo.position.set(bx * 0.25 * M, 0, foreExitZ);
+    forePlumeHalo.rotation.x = Math.PI / 2;
+    forePlumeHalo.visible = false;
+    forePlumeHalo.name = `${this.id}-feep-plume-fore-halo`;
+    this.mesh.add(forePlumeHalo);
+    this._forePlumes.push(forePlumeHalo);
+    this._forePlumeHalo = forePlumeHalo;
 
     // --- Mini net launcher (forward, cylindrical) — mirrors the mother's
     // launcher design language (2026-07-23, fore-end-hardware-labels-rework):
@@ -952,9 +1023,15 @@ export class ArmUnit {
     this._bridleLegB = legB;
     this._bridleLegMat = bridleLegMat;
 
+    // Wave1: pooled attitude cold-gas puffs (discrete-event only, ≤4 sprites).
+    this._buildAttitudePuffPool(bx, bz);
+
     // Detail-LOD cull set (Phase 6): collect inert daughter hardware by name
-    // suffix. Excludes body, status light + halo, plumes, tether, bridle legs
-    // (communicative / connector). Only sub-pixel-at-distance detail is listed.
+    // suffix. Excludes body, status light + halo, plumes (aft AND fore — both
+    // are communicative "she is alive" reads whose halos carry per-type ID at
+    // range), attitude puffs (transient, invisible by default), tether, bridle
+    // legs (communicative / connector). Only sub-pixel-at-distance detail is
+    // listed.
     this._collectDetailMeshes();
 
     // Start hidden (docked = part of core visually)
@@ -986,6 +1063,142 @@ export class ArmUnit {
   setCameraDistance(distSceneUnits) {
     this._detailHidden = applyDetailLod(distSceneUnits, this._detailMeshes, this._detailHidden);
   }
+
+  /**
+   * @private Wave1 — Build the daughter's pooled cold-gas attitude puffs.
+   *
+   * Mirrors the mother's `_buildRcsPuffPool` pattern at daughter scale:
+   * pooled sprites, round-robin reuse, additive soft-glow texture (headless-
+   * safe null), depthTest ON so the hull occludes them. STRICT BUDGET:
+   * exactly DAUGHTER_PLUME.PUFF_POOL_SIZE (4) sprites per daughter, bursts
+   * fire PUFF_BURST_COUNT (2), and nothing here allocates per frame — ports,
+   * pool entries, and their vectors are built once.
+   *
+   * Doctrine (BIG_PICTURE Part IV): cold gas = brief dim puffs, not flames.
+   * Fired ONLY on discrete attitude events (deploy separation, SK entry,
+   * tool-cycle re-aim, dock settle) — see _fireAttitudePuffs call sites.
+   *
+   * @param {number} bx body X dim (m) — facet apothem = bx/2
+   * @param {number} bz body Z dim (m)
+   */
+  _buildAttitudePuffPool(bx, bz) {
+    const tex = getRadialGlowTexture({ size: 32 });
+    const apo = (bx / 2) * M;          // side-facet plane (same as the RX facetY)
+    const portZ = bz * 0.25 * M;       // fore of centre — reads as an attitude couple
+
+    // 4 fixed virtual RCS ports on the side facets (±X yaw pair, ±Y pitch pair).
+    // Gas drifts OUTWARD along the facet normal. Positions/dirs are mesh-local
+    // and frozen — visuals only, never a force on the arm.
+    this._attPuffPorts = [
+      { pos: new THREE.Vector3( apo, 0, portZ), dir: new THREE.Vector3( 1, 0, 0) },
+      { pos: new THREE.Vector3(-apo, 0, portZ), dir: new THREE.Vector3(-1, 0, 0) },
+      { pos: new THREE.Vector3(0,  apo, portZ), dir: new THREE.Vector3(0,  1, 0) },
+      { pos: new THREE.Vector3(0, -apo, portZ), dir: new THREE.Vector3(0, -1, 0) },
+    ];
+
+    for (let i = 0; i < DAUGHTER_PLUME.PUFF_POOL_SIZE; i++) {
+      const mat = new THREE.SpriteMaterial({
+        map: tex || null,
+        color: 0xcfe0ff,   // cool cold-gas (N₂) white-blue — same read as the mother
+        blending: THREE.AdditiveBlending,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+        depthTest: true,   // hull occludes puffs (mother's hard-won fix)
+      });
+      const sprite = new THREE.Sprite(mat);
+      sprite.scale.set(M * 0.015, M * 0.015, M * 0.015);
+      sprite.visible = false;
+      sprite.name = `${this.id}-att-puff-${i}`;
+      sprite.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;
+      this.mesh.add(sprite);
+      this._attPuffs.push({
+        sprite, active: false, startTime: 0,
+        startPos: new THREE.Vector3(), dir: new THREE.Vector3(0, 1, 0),
+        life: 0.24, maxScale: M * 0.08, baseOp: 0.32, drift: M * 0.16,
+      });
+    }
+  }
+
+  /**
+   * @private Wave1 — Fire one discrete attitude burst (2 pooled sprites).
+   *
+   * Event kinds map to a port pair so the couple reads right:
+   *   'deploy' separation trim → ±Y pair   'sk'   arrival null → ±X pair
+   *   'tool'   re-aim yaw      → ±X pair   'dock' settle       → ±Y pair
+   *
+   * Round-robin overwrites the oldest sprite, so the live count can NEVER
+   * exceed the pool size. A global cooldown keeps back-to-back transitions
+   * (e.g. rapid tool cycling) from strobing.
+   *
+   * @param {('deploy'|'sk'|'tool'|'dock')} kind
+   * @param {number} [now] seconds — injectable for tests
+   */
+  _fireAttitudePuffs(kind, now = performance.now() * 0.001) {
+    if (!this._attPuffs.length || !this._attPuffPorts) return;
+    if (now - this._attPuffLastFire < DAUGHTER_PLUME.PUFF_COOLDOWN_S) return;
+    this._attPuffLastFire = now;
+
+    const pair = (kind === 'sk' || kind === 'tool') ? [0, 1] : [2, 3];
+    for (let k = 0; k < DAUGHTER_PLUME.PUFF_BURST_COUNT; k++) {
+      const port = this._attPuffPorts[pair[k % pair.length]];
+      const puff = this._attPuffs[this._attPuffIndex];
+      this._attPuffIndex = (this._attPuffIndex + 1) % this._attPuffs.length;
+
+      // Reuse pooled vectors — jitter of a few mm / ~8° so bursts differ.
+      puff.startPos.set(
+        port.pos.x + (Math.random() - 0.5) * M * 0.006,
+        port.pos.y + (Math.random() - 0.5) * M * 0.006,
+        port.pos.z + (Math.random() - 0.5) * M * 0.006,
+      );
+      puff.dir.set(
+        port.dir.x + (Math.random() - 0.5) * 0.28,
+        port.dir.y + (Math.random() - 0.5) * 0.28,
+        port.dir.z + (Math.random() - 0.5) * 0.28,
+      ).normalize();
+      puff.life     = 0.18 + Math.random() * 0.10;         // 0.18–0.28 s — brief
+      puff.maxScale = M * (0.06 + Math.random() * 0.04);   // expands to 6–10 cm
+      puff.baseOp   = 0.28 + Math.random() * 0.12;         // dim, translucent
+      puff.drift    = M * (0.12 + Math.random() * 0.08);   // 12–20 cm free jet
+      puff.startTime = now - k * 0.012;                    // tiny stagger
+
+      puff.sprite.position.copy(puff.startPos);
+      puff.sprite.material.opacity = 0;
+      puff.sprite.scale.set(M * 0.015, M * 0.015, M * 0.015);
+      puff.sprite.visible = true;
+      puff.active = true;
+    }
+  }
+
+  /**
+   * @private Wave1 — Animate active attitude puffs (free-jet drift, √t
+   * expansion, rise-then-decay fade — the mother's cold-gas math at daughter
+   * scale, minus the sun-scatter garnish). Early-outs on inactive entries:
+   * steady-state cost is a 4-iteration flag check.
+   * @param {number} [now] seconds — injectable for tests
+   */
+  _updateAttitudePuffs(now = performance.now() * 0.001) {
+    for (const puff of this._attPuffs) {
+      if (!puff.active) continue;
+      const age = now - puff.startTime;
+      const life = puff.life || 0.24;
+      if (age >= life) {
+        puff.sprite.visible = false;
+        puff.sprite.material.opacity = 0;
+        puff.active = false;
+        continue;
+      }
+      const t = age / life;
+      puff.sprite.position.copy(puff.startPos).addScaledVector(puff.dir, puff.drift * t);
+      const startS = M * 0.015;
+      const s = startS + (puff.maxScale - startS) * Math.sqrt(t);
+      puff.sprite.scale.set(s, s, s);
+      const rise = Math.min(1, t / 0.1);
+      const fall = Math.pow(1 - t, 1.5);
+      puff.sprite.material.opacity = Math.min(0.85, puff.baseOp * rise * fall);
+    }
+  }
+
 
   /** @private Create tether line geometry */
   _createTether() {
@@ -2609,6 +2822,9 @@ export class ArmUnit {
     // Thruster plume animation
     this._updatePlumes(dt);
 
+    // Wave1: attitude cold-gas puff animation (pooled; 4-flag check when idle)
+    this._updateAttitudePuffs();
+
     // Status light color based on state
     this._updateStatusLight(dt);
 
@@ -2723,6 +2939,18 @@ export class ArmUnit {
     }
     // ST-8.3.4: Auto-adjust ISP based on flight phase for current metal
     this._updateMetalIspForPhase(newState);
+
+    // Wave1: discrete attitude cold-gas puffs (visual-only, pooled). Fired on
+    // the attitude EVENTS, not per-frame: deploy separation (clamp release
+    // trim), SK entry (arrival null), dock settle (contact trim on arrival
+    // from a haul/return). Tool-cycle re-aim puffs from cycleTool().
+    if (newState === S.LAUNCHING || newState === S.UNDOCKING) {
+      this._fireAttitudePuffs('deploy');
+    } else if (newState === S.STATION_KEEP) {
+      this._fireAttitudePuffs('sk');
+    } else if (newState === S.DOCKING && (old === S.REELING || old === S.RETURNING)) {
+      this._fireAttitudePuffs('dock');
+    }
   }
 
   /**
@@ -3217,6 +3445,16 @@ export class ArmUnit {
     const dvMagA = dvCmdA.length();
     if (dvMagA > maxDvA && dvMagA > 1e-18) dvCmdA.multiplyScalar(maxDvA / dvMagA);
 
+    // Wave1 (visual-only): brake read for the plume mapping — the commanded
+    // impulse OPPOSING current travel means the FEEP exhaust points at the
+    // target (nose/+Z tracks the target in APPROACH), i.e. the FORE nozzle
+    // fires. Sampled BEFORE velocity.add so it reflects this frame's command
+    // against this frame's travel; smoothed (~1/8 s) so controller dither
+    // around standoff crossfades instead of strobing. Magnitude floor keeps
+    // steady-state noise from flaring anything.
+    const _brakingA = dvMagA > 1e-15 && dvCmdA.dot(this.velocity) < 0;
+    this._approachBrake01 += ((_brakingA ? 1 : 0) - this._approachBrake01) * Math.min(1, dt * 8);
+
     this.velocity.add(dvCmdA);
     this.position.addScaledVector(this.velocity, dt);
     // Item 100: meter the APPLIED impulse (post-clamp) for impulse-priced fuel
@@ -3469,6 +3707,12 @@ export class ArmUnit {
                        Math.abs(this._radiusRate) > 0.01;
     const fuelRate = isManeuver ? SK.FUEL_RATE_MANEUVER : SK.FUEL_RATE_STATIONKEEP;
     this.fuel -= fuelRate * dt;
+
+    // Wave1 (visual-only): latch the plume maneuver-brightening window off the
+    // SAME isManeuver read that selects FUEL_RATE_MANEUVER — the plume brightens
+    // exactly when the higher burn rate applies. Latched here because the rates
+    // are reset at the end of this method, BEFORE _updatePlumes runs.
+    if (isManeuver) this._skManeuverGlowS = DAUGHTER_PLUME.MANEUVER_GLOW_S;
 
     // Fuel depleted → exit
     if (this.fuel <= 0) {
@@ -3980,6 +4224,9 @@ export class ArmUnit {
     const next = this.toolset[(i + 1) % this.toolset.length];
     this.selectedTool = next;
     audioSystem.playClick();
+    // Wave1: tool-cycle re-aim — a deployed daughter swapping verbs trims her
+    // attitude toward the new tool axis: one cold-gas couple (visual-only).
+    if (this.state === S.STATION_KEEP) this._fireAttitudePuffs('tool');
     eventBus.emit(Events.TOOL_SELECTED, { armId: this.id, tool: next });
     return next;
   }
@@ -6612,20 +6859,66 @@ export class ArmUnit {
     // tether direction). Acceptable at gameplay distances. Future: §13.7.3.
   }
 
-  /** @private Thruster plume animation */
+  /**
+   * @private Thruster plume animation (Wave1 rewrite).
+   *
+   * The which-nozzle/how-bright decision lives in the PURE
+   * `computeDaughterPlumeIntensity` (entities/armPlumeModel.js — Node-tested
+   * mapping table); this method only collects the live signals, decays the
+   * visual timers, and styles the two plume pairs. READ-ONLY on physics:
+   * state, fuel, and the arrest flags are inputs, never outputs.
+   */
   _updatePlumes(dt) {
-    const isThrusting = [S.TRANSIT, S.APPROACH, S.HAULING, S.RETURNING, S.WEB_SHOT, S.REELING].includes(this.state);
+    // Decay the visual-only timers (latched by SK input / the recoil event).
+    if (this._recoilFlashS > 0) this._recoilFlashS = Math.max(0, this._recoilFlashS - dt);
+    if (this._skManeuverGlowS > 0) this._skManeuverGlowS = Math.max(0, this._skManeuverGlowS - dt);
+    // The smoothed APPROACH brake read only updates inside _updateApproach;
+    // zero it in every other state so a stale value can't leak into the next
+    // approach (or into manual-mode coasting, which computes no thrust).
+    if (this.state !== S.APPROACH) this._approachBrake01 = 0;
+
+    const sig = _plumeSig;
+    sig.state = this.state;
+    sig.fuel = this.fuel;
+    sig.skManeuverGlowS = this._skManeuverGlowS;
+    sig.approachBrake01 = this._approachBrake01;
+    // Funded arrest burn only — the FUEL_FALLBACK_SLOW winch finish and the
+    // tether-fouls-plume hold must NOT flare (honesty: no debit, no burn).
+    sig.arrestFeepActive = this._redockArrestStarted === true && this._redockDebitApplied === true;
+    sig.recoilFlashS = this._recoilFlashS;
+    const vis = computeDaughterPlumeIntensity(sig);
+
     // Frame-rate-independent shimmer (two sines, ±~5%) — replaces per-frame
-    // Math.random() fire flicker; ion emission is steady.
+    // Math.random() fire flicker; ion emission is steady. Shared by both
+    // nozzles (one emitter feed system).
     const t = Date.now() * 0.001;
     const shimmer = 1 + 0.035 * Math.sin(t * 6.7) + 0.02 * Math.sin(t * 12.1);
-    const lenS = 0.85 * shimmer;
-    for (const plume of this._thrusterPlumes) {
-      if (isThrusting) {
+    this._stylePlumePair(this._thrusterPlumes, this._plumeHalo, vis.aft, shimmer);
+    this._stylePlumePair(this._forePlumes, this._forePlumeHalo, vis.fore, shimmer);
+  }
+
+  /**
+   * @private Apply one intensity to one core+halo plume pair.
+   * At intensity 1 this reproduces the legacy transit look exactly
+   * (core 0.6 / halo 0.24, length 0.85×shimmer); lower intensities read as a
+   * shorter, fainter thread. Intensity ≤ 0 hides the pair (visible=false —
+   * zero render cost when dark).
+   * @param {THREE.Mesh[]} plumes  core+halo list
+   * @param {THREE.Mesh|null} halo the halo member (dims to HALO_MULT × core)
+   * @param {number} intensity 0..1
+   * @param {number} shimmer  length shimmer factor (~±5%)
+   */
+  _stylePlumePair(plumes, halo, intensity, shimmer) {
+    const P = DAUGHTER_PLUME;
+    const on = intensity > 0.001;
+    const lenS = P.BASE_LEN_SCALE * shimmer
+      * (P.MIN_LEN_SCALE + (1 - P.MIN_LEN_SCALE) * intensity);
+    for (const plume of plumes) {
+      if (on) {
         plume.visible = true;
-        plume.scale.set(1, lenS, 1);                 // grow aft; width steady
-        // Type-tinted outer halo runs ~0.4× the core opacity (per-type ID at range).
-        plume.material.opacity = (plume === this._plumeHalo) ? 0.24 : 0.6;
+        plume.scale.set(1, lenS, 1);                 // grow along beam; width steady
+        plume.material.opacity = P.CORE_OPACITY * intensity
+          * (plume === halo ? P.HALO_MULT : 1);
       } else {
         plume.visible = false;
         plume.material.opacity = 0;
@@ -6831,6 +7124,12 @@ export class ArmUnit {
     if (this._onNetInventoryChanged) {
       eventBus.off(Events.NET_INVENTORY_CHANGED, this._onNetInventoryChanged);
       this._onNetInventoryChanged = null;
+    }
+    // Wave1: the recoil-kick flash listener is registered only when the event
+    // name exists (defensive parallel-task wiring) — mirror that on teardown.
+    if (this._onRecoilKick) {
+      eventBus.off(Events.ARM_RECOIL_KICK, this._onRecoilKick);
+      this._onRecoilKick = null;
     }
     const disposeMat = (m) => {
       if (!m) return;
