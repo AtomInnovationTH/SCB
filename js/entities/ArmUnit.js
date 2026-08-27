@@ -5752,20 +5752,31 @@ export class ArmUnit {
     // Correct guard: 1 mm in scene units (M = 1 m → 0.00001 scene units) — purely
     // to avoid normalize() on a zero-length vector.  Real docking is decided by
     // the `moveDistance >= dist` branch below.
-    if (dist > 1e-7) {
+    //
+    // 2026-08-27 (REEL_PROFILE_V2 flip audit): the dock decision is hoisted
+    // OUT of that normalize guard — exactly what the paragraph above already
+    // promised. Nested inside `dist > 1e-7`, a frame that stepped from just
+    // above the guard to just below it (dist_after ∈ (0, 1 cm), possible
+    // whenever the per-frame step lands in that window) left the arm parked
+    // <1 cm from the dock with the whole branch skipped forever — a phase-
+    // dependent permanent REELING stall on BOTH reel paths (probe-verified:
+    // legacy empty 206 m haul stalls at 4 mm; V2's gentle V_DOCK=1 m/s
+    // approach steps 16.7 mm/frame past a 10 mm window, stalling most hauls).
+    // The dock check needs no normalize (position.copy of the resolved dock),
+    // so only the move branch keeps the zero-length guard. Speeds, tension,
+    // and the legacy constant-speed model are untouched.
+    const moveDistance = reelSpeedScaled * dt;
+    if (moveDistance >= dist) {
+      // Close enough to dock — snap to the strut-tip dock (not mother core).
+      this.position.copy(dockWorldPos);
+      this._transitionTo(S.DOCKING);
+      eventBus.emit(Events.ARM_RETURNED, {
+        armId: this.id, captured: hasPayload, debrisId: this.capturedDebris?.id,
+      });
+    } else if (dist > 1e-7) {
       toMother.normalize();
       // Move toward mothership at reel speed
-      const moveDistance = reelSpeedScaled * dt;
-      if (moveDistance >= dist) {
-        // Close enough to dock — snap to the strut-tip dock (not mother core).
-        this.position.copy(dockWorldPos);
-        this._transitionTo(S.DOCKING);
-        eventBus.emit(Events.ARM_RETURNED, {
-          armId: this.id, captured: hasPayload, debrisId: this.capturedDebris?.id,
-        });
-      } else {
-        this.position.addScaledVector(toMother, moveDistance);
-      }
+      this.position.addScaledVector(toMother, moveDistance);
     }
 
     // Authoritative: drag the captured debris with us every frame so it can

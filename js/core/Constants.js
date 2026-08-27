@@ -1567,9 +1567,12 @@ export const Constants = {
     // NEW — reel-in/re-dock inertia overhaul (reel-in-redock-inertia plan).
     // Trapezoidal haul velocity profile (Q1) + combined-mass tension (Q2) +
     // explicit SNUG rigidize (Q3) + FEEP soft re-dock arrest with yoke
-    // tether-plume clearance (Q4). OFF by default so the legacy constant-speed
-    // reel ships unchanged and the overhaul lands isolated/bisectable.
-    REEL_PROFILE_V2:           false,
+    // tether-plume clearance (Q4). ON since 2026-08-27 (wave1 flip): catch mass
+    // now prices the haul home — power-bounded cruise v=√(P/(m_unit·coeff)),
+    // snap-invariant tension cap, SNUG cinch, one-shot FEEP arrest debit
+    // (MISSION1_FREE). The legacy constant-speed reel (REEL_IN_SPEED_*) remains
+    // the flag-OFF fallback, unchanged and test-covered.
+    REEL_PROFILE_V2:           true,
 
     // NEW — mother-net capture ceremony (.kilo/plans/mother-net-capture-ceremony.md)
     // Phase 2: kinematic net open-on-launch + cinch-on-capture animation.
