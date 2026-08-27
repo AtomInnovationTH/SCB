@@ -1128,12 +1128,12 @@ export class NetProjectile {
             // it AND matches the empty reel-back's progress-0 value below —
             // continuous in, continuous out.
             || this.state === STATES.MISSED)) {
-      const M_NET = 0.00001;
+      const M_NET = Constants.SCENE_UNITS_PER_METER;
       this.position.x = anchor.x / M_NET + this.launchDirection.x * this.distanceTraveled;
       this.position.y = anchor.y / M_NET + this.launchDirection.y * this.distanceTraveled;
       this.position.z = anchor.z / M_NET + this.launchDirection.z * this.distanceTraveled;
     } else if (anchor && this.state === STATES.REELING) {
-      const M_NET = 0.00001;
+      const M_NET = Constants.SCENE_UNITS_PER_METER;
       // Mother physical-reel path: _updateMotherReel owns net.position (it
       // writes the bag apex from the ship-relative pin every tick), so this
       // sync is dead — and it must NOT run: it rewrites net.position to
@@ -1262,7 +1262,7 @@ export class NetProjectile {
 
     // PROD path: also update position from the launcher's current co-orbiting
     // frame so CaptureNetVisual renders the net near the ship, not 7 km behind.
-    const M_NET = 0.00001;  // 1 m in scene units (matches ArmUnit.M)
+    const M_NET = Constants.SCENE_UNITS_PER_METER;  // 1 m in scene units (matches ArmUnit.M)
     const anchor = this._anchorScene();
     if (anchor) {
       this.position.x = anchor.x / M_NET + this.launchDirection.x * this.distanceTraveled;
@@ -1616,7 +1616,7 @@ export class NetProjectile {
     dropSeveredCatchClaim(d);
 
     // Seed ship-relative reel state.
-    const M_NET = 0.00001;
+    const M_NET = Constants.SCENE_UNITS_PER_METER;
     // S13(e): the reel/berth homes on the COLLAR anchor (the berth-approach
     // corridor is the collar's — the pods left the boresight), while the seat
     // below keeps the pod muzzle (_anchorScene): the brake apex is on the
@@ -1774,7 +1774,7 @@ export class NetProjectile {
       if (!this._enterMotherReel()) return;   // strain slip / oversize → missed
     }
 
-    const M_NET = 0.00001;
+    const M_NET = Constants.SCENE_UNITS_PER_METER;
     // The standoff in force: raised to CORRIDOR_EXTENDED_STANDOFF_M after a
     // corridor-timeout berth (Phase C-lite, plan §10).
     const baseStandoffM = (d.sizeMeter || 2) / 2 + (CN.BERTH_CLEARANCE_M ?? 1.0);
@@ -1992,7 +1992,7 @@ export class NetProjectile {
 
     const radiusM = (d.sizeMeter || 2) / 2 + (CN.BERTH_CLEARANCE_M ?? 1.0);
     const radiusSq = radiusM * radiusM;
-    const M_NET = 0.00001;
+    const M_NET = Constants.SCENE_UNITS_PER_METER;
 
     // Everything is evaluated SHIP-LOCAL with the origin at the berth anchor
     // (S13(e): the collar, ON the axis at (0, 0, BERTH_COLLAR_Z_M) — read from
@@ -2150,7 +2150,7 @@ export class NetProjectile {
     // exists). NOT optional polish.
     if (d.alive === false) return false;
 
-    const M_NET = 0.00001;
+    const M_NET = Constants.SCENE_UNITS_PER_METER;
     // Respect the corridor-timeout extended standoff (Phase C-lite): a berth
     // forced out to CORRIDOR_EXTENDED_STANDOFF_M must HOLD there — recomputing
     // the base standoff here would slide the catch inward at the berth.
@@ -2355,7 +2355,26 @@ export class NetProjectile {
       vRel:            this.speed,
       vOptimal:        this.netClass.LAUNCH_SPEED,
       range:           this.distanceTraveled,
-      spinFraction:    this.spinRate / this.netClass.SPIN_HZ,
+      // §11.7 decision (2026-08-27): NEUTRALIZED — resolve-time spin never
+      // reads above design. Derivation: raw spinRate/SPIN_HZ exceeds 1 only
+      // inside the launch transient (CAST_WINDUP 0.15 s + SPIN_UP_TIME 0.5 s
+      // = the first 0.65 s), where the folded canister despins from
+      // SPIN_HZ × SPIN_FOLDED_MULT (3×) down to 1×; an unclamped fraction up
+      // to 3.0 would ride computeClingProbability's f_spin ceiling
+      // (min(1.2, ·)) into a hidden +20% cling bonus for point-blank shots.
+      // That window is UNREACHABLE in the live FSM — contact checks exist
+      // only in FLIGHT and _updateSpinningUp exits with spinRate === SPIN_HZ
+      // exactly — so this clamp changes no reachable path; it pins the
+      // boundary against future FSM edits (e.g. letting point-blank contact
+      // interrupt SPINNING_UP). Neutralized rather than kept-as-reward
+      // because (a) §12.2 already prices ≤ 25 m as sure-shot ≥ 0.80 — the
+      // close-range reward exists and is documented; (b) the 3× transient is
+      // an animation-legibility artifact (§11.6), not a catch-quality claim;
+      // (c) ToolOdds.estimateSpinFractionAtContact is ∈ [0, 1] by contract,
+      // so the HUD could never show the bonus — an "honest numbers" breach.
+      // Sub-1 in-flight decay penalties are untouched. Pinned in
+      // test-CaptureNet-Bookkeeping.js so retunes re-derive consciously.
+      spinFraction:    Math.min(this.spinRate / this.netClass.SPIN_HZ, 1.0),
       tensionFraction: 1.0,
       contactFraction: 1.0,
       roughness:       this.targetDebris?.surfaceRoughness || 1.0,
@@ -3094,7 +3113,7 @@ export class CaptureNetSystem {
    * @private
    */
   _tryCargoTransfer(net) {
-    const M_NET = 0.00001;  // 1 m in scene units (file convention: a local per method)
+    const M_NET = Constants.SCENE_UNITS_PER_METER;  // 1 m in scene units (file convention: a local per method)
     const d = net.targetDebris;
     const player = this._player;
     const armManager = this._armManager;
@@ -3206,7 +3225,7 @@ export class CaptureNetSystem {
    * @private
    */
   _updateCargoTransfer(net, dt) {
-    const M_NET = 0.00001;  // 1 m in scene units (file convention: a local per method)
+    const M_NET = Constants.SCENE_UNITS_PER_METER;  // 1 m in scene units (file convention: a local per method)
     const d = net.targetDebris;
     const debrisField = this._debrisField;
     const armManager = this._armManager;
@@ -3640,7 +3659,7 @@ export class CaptureNetSystem {
    */
   getCollarShotFoul(podIndex, launchPos, launchDir) {
     if (!launchPos || !launchDir) return null;
-    const M_NET = 0.00001;
+    const M_NET = Constants.SCENE_UNITS_PER_METER;
     const dl = Math.hypot(launchDir.x, launchDir.y, launchDir.z) || 1;
     const nx = launchDir.x / dl, ny = launchDir.y / dl, nz = launchDir.z / dl;
     for (const net of this.activeNets) {
@@ -3728,7 +3747,7 @@ export class CaptureNetSystem {
     // that same release — item-78 semantics).
     dropSeveredCatchClaim(target);
 
-    const M_NET = 0.00001;
+    const M_NET = Constants.SCENE_UNITS_PER_METER;
     const sizeM = target.sizeMeter || 2;
     const standoffM = sizeM / 2 + (CN.BERTH_CLEARANCE_M ?? 1.0);
     // S13(e): the adoption seats on the COLLAR anchor (on-axis), not the pod —
@@ -4069,7 +4088,7 @@ export class CaptureNetSystem {
     // (headless test path). Muzzle is scene units → convert to metres.
     let spawnPos = launchPos;
     if (typeof arm.getNetMuzzleWorldInto === 'function') {
-      const M_NET = 0.00001;   // 1 m in scene units (matches ArmUnit.M)
+      const M_NET = Constants.SCENE_UNITS_PER_METER;   // 1 m in scene units (matches ArmUnit.M)
       if (!this._muzzleScratch) this._muzzleScratch = new THREE.Vector3();
       const mz = arm.getNetMuzzleWorldInto(this._muzzleScratch);
       spawnPos = { x: mz.x / M_NET, y: mz.y / M_NET, z: mz.z / M_NET };

@@ -44,6 +44,16 @@ export const Constants = {
   COMMS_RESIZE_SETTLE_MS: 340,
   EARTH_RADIUS: 63.71,            // 6371 km × 0.01
   EARTH_RADIUS_KM: 6371,
+  // Metres → scene units: the ONE authoritative copy (CAPTURE_NET.md §11.7
+  // hoist, 2026-08-27). Derivation: 1 scene unit = 100 km = 1e5 m ⇒ 1 m =
+  // 1e-5 scene units; equivalently SCENE_SCALE (0.01 scene units per km)
+  // ÷ 1000 m/km — 0.01/1000 === 0.00001 is exact in IEEE-754 (pinned in
+  // test-CaptureNet-Bookkeeping.js). Consumed by ArmUnit.js (module `M`)
+  // and every CaptureNet.js per-method `M_NET` local — both previously
+  // re-declared the bare 0.00001 literal ("drift risk if scene scale ever
+  // changes", §11.7). Other modules still carry historical `const M =
+  // 0.00001` mirrors; point new code at this constant instead.
+  SCENE_UNITS_PER_METER: 0.00001,
 
   // === PHYSICAL CONSTANTS ===
   MU_EARTH: 398600.4418,          // km³/s² — gravitational parameter

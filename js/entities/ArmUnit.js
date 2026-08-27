@@ -28,8 +28,11 @@ import { computeToolOdds } from '../systems/ToolOdds.js';
 import { gameState } from '../core/GameState.js';
 import { daughterDisplayName } from '../core/daughterNames.js';
 
-/** 1 meter in scene units (1 scene unit = 100 km) */
-const M = 0.00001;
+/** 1 meter in scene units (1 scene unit = 100 km) — CAPTURE_NET.md §11.7 hoist
+ * (2026-08-27): reads the one authoritative scale (Constants.SCENE_UNITS_PER_METER,
+ * derivation there). Value unchanged (1e-5); positions byte-identical, pinned in
+ * test-CaptureNet-Bookkeeping.js. */
+const M = Constants.SCENE_UNITS_PER_METER;
 
 /** World up axis (reused for the HOLDING_CATCH lateral-bias cross product). */
 const _WORLD_UP = new THREE.Vector3(0, 1, 0);
