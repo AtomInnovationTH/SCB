@@ -76,27 +76,42 @@ export const ONBOARDING_BEATS = [
   {
     // Confirm the first catch landed + name the reward loop. The reticle
     // auto-advances to the next forward piece (AutoLockController REACQUIRE).
+    // M1's guided catches ride the MOTHER web-lasso spine, which never emits
+    // DEBRIS_CAPTURED (daughter-dock only, ArmUnit). LASSO_CAPTURED fires AT
+    // reel completion — the earliest "the catch is definitely secured" signal
+    // (a tether snap can only happen BEFORE it; see LassoSystem._resolveCatch)
+    // — so the ack lands at the visual moment, not ~8 s later at the collar's
+    // CATCH_PROCESSED mate. DEBRIS_CAPTURED stays as the daughter alternative.
     id: 'first_catch',
     commsSource: 'HOUSTON', commsText: 'Capture confirmed. Salvage refines into fuel and credits.',
     commsAck: null,
     glyph: '✓', keys: [], skillId: null,
-    triggerEvent: 'DEBRIS_CAPTURED',
+    triggerEvent: 'LASSO_CAPTURED',
+    altTriggerEvents: ['DEBRIS_CAPTURED'],
     counterTarget: 1,
     credit: 0,
     autoAdvanceAfter: 6000,
   },
   {
     // Second easy catch — repetition, slightly more value. Already locked.
+    // Same mother-path trigger as first_catch (see the note there); a daughter
+    // dock (DEBRIS_CAPTURED) also satisfies it.
     id: 'second_catch',
     commsSource: 'HOUSTON', commsText: 'Good. Keep netting what the reticle locks.',
     commsAck: null,
     text: 'Net the next lock (N)',
     glyph: 'N',
     keys: ['KeyN'],
-    triggerEvent: 'DEBRIS_CAPTURED',
+    triggerEvent: 'LASSO_CAPTURED',
+    altTriggerEvents: ['DEBRIS_CAPTURED'],
     counterTarget: 1,
     skillId: 'collect_lasso',
     credit: 0,
+    // Defensive fallback, consistent with its capture-beat siblings
+    // (first_catch 6 s / close_and_catch 8 s): a missed/failed capture event
+    // can never hang the pipeline here again. Premature advance is harmless —
+    // range_wall HOLDS on its out-of-range gate until the close pieces clear.
+    autoAdvanceAfter: 8000,
     // No-net safety: if the player is out of nets here, graduate past rather
     // than stranding them (the NET_EMPTY_CLICK consolation path).
     netEmptySkip: true,
@@ -122,11 +137,13 @@ export const ONBOARDING_BEATS = [
   },
   {
     // Close-and-catch payoff: AP arrived, range met (cyan + lock sound), net it.
+    // Mother-path trigger (see first_catch note); daughter dock also satisfies.
     id: 'close_and_catch',
     commsSource: 'BANGALORE', commsText: 'In range. Launch the net.',
     commsAck: null,
     glyph: '✓', keys: [], skillId: null,
-    triggerEvent: 'DEBRIS_CAPTURED',
+    triggerEvent: 'LASSO_CAPTURED',
+    altTriggerEvents: ['DEBRIS_CAPTURED'],
     counterTarget: 1,
     credit: 0,
     autoAdvanceAfter: 8000,
@@ -155,6 +172,26 @@ export const ONBOARDING_BEATS = [
 ];
 
 const BEAT_INDEX_BY_ID = new Map(ONBOARDING_BEATS.map((b, i) => [b.id, i]));
+
+/**
+ * All trigger-event NAMES for a beat: the primary `triggerEvent` plus any
+ * `altTriggerEvents` (e.g. capture beats satisfy on the mother path's
+ * LASSO_CAPTURED and, alternatively, a daughter dock's DEBRIS_CAPTURED).
+ * De-duplicated; empty for narrative beats.
+ * @param {object} beat
+ * @returns {string[]}
+ */
+export function beatTriggerEventNames(beat) {
+  if (!beat) return [];
+  const names = [];
+  if (beat.triggerEvent) names.push(beat.triggerEvent);
+  if (Array.isArray(beat.altTriggerEvents)) {
+    for (const n of beat.altTriggerEvents) {
+      if (n && !names.includes(n)) names.push(n);
+    }
+  }
+  return names;
+}
 
 // Set of skills used by onboarding (for veteran-skip threshold check).
 const RELEVANT_SKILLS = new Set(
@@ -412,19 +449,25 @@ export class OnboardingDirector {
     }
 
     // Per-beat trigger handlers wired against the corresponding Events constant.
+    // A beat may declare alternative triggers (altTriggerEvents) — any one of
+    // them satisfies it (capture beats: mother LASSO_CAPTURED ∨ daughter
+    // DEBRIS_CAPTURED). _onTrigger is idempotent per beat, so multi-wiring is safe.
     for (const beat of ONBOARDING_BEATS) {
-      if (!beat.triggerEvent) continue;
-      const evt = Events[beat.triggerEvent];
-      if (!evt) continue;
-      on(evt, () => this._onTrigger(beat));
+      for (const name of beatTriggerEventNames(beat)) {
+        const evt = Events[name];
+        if (!evt) continue;
+        on(evt, () => this._onTrigger(beat));
+      }
     }
 
     // Prompt re-check of a HELD beat's gate the instant relevant state changes
     // (a scan reveals a contact, or the player closes on a target) so the held
     // hint converts to the real beat without waiting for the next poll tick.
+    // LASSO_CAPTURED joins DEBRIS_CAPTURED so a MOTHER catch (the M1 spine)
+    // prompts the same recheck a daughter dock does.
     const gateNudgeEvents = [
       Events.TARGET_DISCOVERED, Events.SCAN_COMPLETE, Events.AUTOPILOT_ENGAGE,
-      Events.TARGET_OUT_OF_RANGE, Events.DEBRIS_CAPTURED,
+      Events.TARGET_OUT_OF_RANGE, Events.DEBRIS_CAPTURED, Events.LASSO_CAPTURED,
     ];
     for (const e of gateNudgeEvents) {
       if (!e) continue;
@@ -1039,7 +1082,11 @@ export class OnboardingDirector {
 
     // Unrelated-input counter against the active beat.
     const beat = this._active.beat;
-    if (Events[beat.triggerEvent] === eventName) return; // related — handled in _onTrigger
+    // Related if it matches ANY of the beat's triggers (primary or alternative)
+    // — handled in _onTrigger.
+    for (const name of beatTriggerEventNames(beat)) {
+      if (Events[name] === eventName) return;
+    }
     // Aim-before-launch: freeze the counter during the auto-rotation slew so
     // repeated N/D presses (the beat's own action, pre-fire) don't escalate.
     if (this._aimActive) return;
@@ -1063,13 +1110,17 @@ export class OnboardingDirector {
       const s = this._skills.getState(beat.skillId);
       if (s === 'practiced' || s === 'mastered') return true;
     }
-    // (b) Trigger event fired in the last RECENT_INPUT_WINDOW_MS.
-    if (beat.triggerEvent && Events[beat.triggerEvent]) {
-      const evt = Events[beat.triggerEvent];
+    // (b) Trigger event (primary or alternative) fired in the last
+    //     RECENT_INPUT_WINDOW_MS.
+    if (beat.triggerEvent) {
       const win = Constants.ONBOARDING?.RECENT_INPUT_WINDOW_MS || 3000;
       const cutoff = Date.now() - win;
-      for (const e of this._recentInputs) {
-        if (e.event === evt && e.at >= cutoff) return true;
+      for (const name of beatTriggerEventNames(beat)) {
+        const evt = Events[name];
+        if (!evt) continue;
+        for (const e of this._recentInputs) {
+          if (e.event === evt && e.at >= cutoff) return true;
+        }
       }
     }
     return false;
@@ -1200,7 +1251,7 @@ export class OnboardingDirector {
 
 // CJS guard — exposes the data for Node-safe tests.
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { OnboardingDirector, ONBOARDING_BEATS };
+  module.exports = { OnboardingDirector, ONBOARDING_BEATS, beatTriggerEventNames };
 }
 
 export default OnboardingDirector;

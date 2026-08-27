@@ -250,9 +250,14 @@ export class GameFlowManager {
             });
           }, 800, { owner: this });
           timerManager.setTimeout(() => {
+            // De-collision (wave0): this line's job is "systems coming alive"
+            // flavor ONLY. The telemetry call-out belongs to the Director's
+            // `handshake` beat (telemetry + "Reticle is live" instruction),
+            // which lands ~1.3 s later — do NOT reintroduce a telemetry clause
+            // here or two near-identical lines stack in the comms panel.
             eventBus.emit(Events.COMMS_MESSAGE, {
               source: 'HOUSTON', channel: 'CMD', priority: 'info',
-              text: 'Comms are up, Cowboy. We have you on telemetry.',
+              text: 'Comms are up, Cowboy. Loud and clear.', _onboarding: true,
             });
           }, 1700, { owner: this });
           timerManager.setTimeout(() => {
