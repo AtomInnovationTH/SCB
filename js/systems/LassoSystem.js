@@ -1833,6 +1833,12 @@ export class LassoSystem {
      * this.update() computed earlier" — the lasso was the ONLY per-frame
      * pin writer missing the idiom. Headless mocks without a field (or with
      * a bare mock lacking the method) keep the old writes bit-for-bit.
+     * 2026-08-27: this routing RESOLVES CAPTURE_NET.md §12.1 trap 3's
+     * adjacent-latent-bug note (the lasso-side one-frame pin lag) — dated
+     * resolution note there; empirically pinned against the REAL DebrisField
+     * write path in live loop order by the §12.1 FRAME ORDER family in
+     * test-LassoSystem.js (bare write trails 1166.67 m at 60 fps / 0.7 u/s;
+     * this routing renders the commanded pin the same frame).
      * @param {object|null} debrisField
      * @param {object} target
      * @param {THREE.Vector3} pos — scene position for the pin THIS frame
