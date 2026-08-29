@@ -9,6 +9,7 @@
 
 import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
+import { TimeAuthority } from '../systems/TimeAuthority.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { getSolarCellTexture, getRosaBackTexture } from '../scene/solarCellTexture.js';
@@ -3890,11 +3891,14 @@ export class PlayerSatellite extends THREE.Group {
 
   /**
    * Per-frame update: propagate orbit, position, solar power, animations.
-   * @param {number} dt - Real-time delta (seconds)
+   * @param {number} dt - Real-time (dtReal) delta seconds — attitude, RCS, resources, animations.
    * @param {THREE.Vector3} sunDirection - Normalized sun direction vector
+   * @param {number} [dtWorld] - World-simulation delta (game seconds) for orbit + drag.
+   *   Threaded from the TimeAuthority choke point (main loop); defaults to the
+   *   shipped base rate for headless/test callers (byte-identical to dt × 10).
    */
-  update(dt, sunDirection) {
-    const gameDt = dt * Constants.TIME_SCALE_GAMEPLAY;
+  update(dt, sunDirection, dtWorld = TimeAuthority.baseGameDt(dt)) {
+    const gameDt = dtWorld;
 
     // §2 cache the sun direction for puff sun-scatter (null when unavailable, so
     // headless / null-sun frames stay scatter-free — no per-frame alloc).
@@ -3940,10 +3944,15 @@ export class PlayerSatellite extends THREE.Group {
         Constants.MU_EARTH
       );
       const dragDecel = atmosphericDrag(altKm, vel, 20, this.mass);
-      const dvDrag = dragDecel * gameDt;
       if (vel > 0) {
-        const factor = 1 - 2 * dvDrag / vel;
-        this.orbit.semiMajorAxis *= factor;
+        // T2 drag chunking: the decay factor (1 − 2·dvDrag/vel) can go negative
+        // at high warp when gameDt is large, flipping the orbit. Integrate in
+        // ≤ DRAG_CHUNK_GAME_S game-second sub-steps. At warp ≤ ~6× (gameDt ≤ 60,
+        // incl. all flag-off frames) this is a single, byte-identical step.
+        const nSub = TimeAuthority.dragSubSteps(gameDt);
+        const subDt = gameDt / nSub;
+        const factor = 1 - 2 * (dragDecel * subDt) / vel;
+        for (let s = 0; s < nSub; s++) this.orbit.semiMajorAxis *= factor;
       }
     }
 

@@ -11,6 +11,7 @@
 
 import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
+import { TimeAuthority } from './TimeAuthority.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { captureNetSystem } from '../entities/CaptureNet.js';
@@ -2314,7 +2315,7 @@ export class CameraSystem {
         const FT = Constants.FURNACE_TRANSFER;
         const chopEndS = (CN.BERTH_SECURE_S ?? 4.0)
           + (FT.CHOP_S / FT.FEED_S) * FT.digestSpanS(d.mass)
-            / Math.max(1e-6, Constants.TIME_SCALE_GAMEPLAY)
+            / Math.max(1e-6, TimeAuthority.BASE_SCALE)
           + (NC.PARK_HOLD_DIGEST_PAD_S ?? 1.0);
         duration = Math.min(Math.max(duration, chopEndS), NC.PARK_HOLD_DIGEST_CAP_S ?? 12.0);
       }

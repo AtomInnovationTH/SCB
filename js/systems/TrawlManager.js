@@ -6,6 +6,7 @@
  */
 
 import { Constants } from '../core/Constants.js';
+import { TimeAuthority } from './TimeAuthority.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 
@@ -164,7 +165,10 @@ export class TrawlManager {
       // traverseSpeed is in scene units/s; convert to orbital angle change
       // angular speed = traverseSpeed / orbitRadius (radians/s)
       const orbitRadius = data.player.orbit.semiMajorAxis || 66.71; // scene units
-      const angularIncrement = (this.traverseSpeed / orbitRadius) * dt * 10; // TIME_SCALE_GAMEPLAY = 10
+      // T2 sweep: the mothership traverse runs at the base game rate. The old
+      // hardcoded ×10 was TIME_SCALE_GAMEPLAY inlined; route it through the ONE
+      // authority (byte-identical — BASE_SCALE === Constants.TIME_SCALE_GAMEPLAY).
+      const angularIncrement = (this.traverseSpeed / orbitRadius) * dt * TimeAuthority.BASE_SCALE;
       data.player.orbit.trueAnomaly += angularIncrement;
       // Wrap true anomaly to [0, 2π]
       if (data.player.orbit.trueAnomaly > 2 * Math.PI) {

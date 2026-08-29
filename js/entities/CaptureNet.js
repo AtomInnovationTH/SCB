@@ -15,6 +15,7 @@
  */
 
 import { Constants } from '../core/Constants.js';
+import { TimeAuthority } from '../systems/TimeAuthority.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { BridleRing } from './BridleRing.js';
@@ -3474,7 +3475,7 @@ export class CaptureNetSystem {
     const CHUNK_COUNT = FT.CHUNK_COUNT;
     const span = FT.digestSpanS(d.mass);   // item 48: the ONE span-law home
     const sunScale = this._digestSunScale ?? 1.0;
-    d._digestProgress = (d._digestProgress || 0) + dt * Constants.TIME_SCALE_GAMEPLAY * sunScale;
+    d._digestProgress = (d._digestProgress || 0) + dt * TimeAuthority.BASE_SCALE * sunScale;
     const t = Math.min(FEED_S, (d._digestProgress / span) * FEED_S);
     // The chop ramp reads this derived phase time (ArmManager's rack ramp reads
     // arm._digestPhaseT — one convention, one home per hold).

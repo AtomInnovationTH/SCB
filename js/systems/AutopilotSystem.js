@@ -15,6 +15,7 @@
 
 import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
+import { TimeAuthority } from './TimeAuthority.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { orbitToSceneCartesian, orbitToSceneCartesianInto } from '../entities/OrbitalMechanics.js';
@@ -492,7 +493,7 @@ export class AutopilotSystem {
    * Advances the rendezvous state machine and commands Cartesian impulses.
    * @param {number} dt — frame delta in seconds (game-scaled)
    */
-  update(dt) {
+  update(dt, dtWorld = TimeAuthority.baseGameDt(dt)) {
     // C-11: Tick aim coroutine independently of autopilot engagement
     this._tickAimCoroutine(dt);
 
@@ -870,12 +871,13 @@ export class AutopilotSystem {
     }
 
     // --- Clamp commanded ΔV by MAX_ACCEL · gameDt ---
-    // Orbit propagation runs at TIME_SCALE_GAMEPLAY × real-time (10× by
-    // default). The control law's acceleration budget must match the
-    // game-time dynamics; otherwise the effective braking authority is only
-    // 1/TIME_SCALE of what the profile assumes, causing decaying oscillation
-    // through the goal (the "10× underdamped" bug — see Retrospective #3).
-    const gameDt = dt * Constants.TIME_SCALE_GAMEPLAY;
+    // Orbit propagation runs at the world rate (dtWorld). The control law's
+    // acceleration budget must match the game-time dynamics; otherwise the
+    // effective braking authority is only 1/scale of what the profile assumes,
+    // causing decaying oscillation through the goal (the "10× underdamped" bug —
+    // see Retrospective #3). dtWorld is the TimeAuthority-owned world delta
+    // (byte-identical to dt × base rate when warp is 1×).
+    const gameDt = dtWorld;
     const maxDv = AP.MAX_ACCEL * gameDt;
     const dvMag = dvCmd.length();
     if (dvMag > maxDv && dvMag > 1e-12) {

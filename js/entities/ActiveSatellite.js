@@ -6,6 +6,7 @@
 
 import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
+import { TimeAuthority } from '../systems/TimeAuthority.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import {
@@ -215,11 +216,13 @@ export class ActiveSatellites {
 
   /**
    * Per-frame update: propagate orbits, update positions, blink strobes.
-   * @param {number} dt - Real-time delta (seconds)
+   * @param {number} dt - Real-time (dtReal) delta seconds — blink/strobe cosmetics.
    * @param {THREE.Vector3} [playerPos] - Player position for proximity warnings
+   * @param {number} [dtWorld] - World-simulation delta (game seconds) for orbit propagation.
+   *   Threaded from the TimeAuthority choke point; defaults to the shipped base rate.
    */
-  update(dt, playerPos) {
-    const gameDt = dt * Constants.TIME_SCALE_GAMEPLAY;
+  update(dt, playerPos, dtWorld = TimeAuthority.baseGameDt(dt)) {
+    const gameDt = dtWorld;
 
     // Blink timer
     this._blinkTimer += dt;

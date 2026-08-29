@@ -9,6 +9,7 @@
 
 import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
+import { TimeAuthority } from './TimeAuthority.js';
 import { devShotGate } from '../core/DevShotGate.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
@@ -128,7 +129,7 @@ export class LassoSystem {
         this._contactRadiusScene = Constants.LASSO_CONTACT_RADIUS_M * M;
 
         /** @type {number} Phase 1A — per-shot eased apparent flight speed (scene units / real second). */
-        this._flightSpeedScene = Constants.LASSO_SPEED * M * Constants.TIME_SCALE_GAMEPLAY;
+        this._flightSpeedScene = Constants.LASSO_SPEED * M * TimeAuthority.BASE_SCALE;
 
         /** @type {THREE.Vector3|null} Phase 1C — last launch direction (world), for cosmetic recoil. */
         this._lastLaunchDir = null;
@@ -1239,7 +1240,7 @@ export class LassoSystem {
         );
         this._contactRadiusScene = contactRadiusM * M;
 
-        const maxApparentSpeed = Constants.LASSO_SPEED * Constants.TIME_SCALE_GAMEPLAY; // 100 m/s apparent
+        const maxApparentSpeed = Constants.LASSO_SPEED * TimeAuthority.BASE_SCALE; // 100 m/s apparent
         const desiredTravelM = Math.max(contactRadiusM, launchDistanceM - contactRadiusM);
         const easedApparentSpeed = Math.max(
             3, // tiny floor so it always visibly moves; near throws glide for the full LASSO_MIN_FLIGHT_TIME

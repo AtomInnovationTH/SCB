@@ -11,6 +11,7 @@
 
 import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
+import { TimeAuthority } from '../systems/TimeAuthority.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { GameStates } from '../core/GameState.js';
@@ -1555,7 +1556,7 @@ export class DebrisWireframe {
       // lower ceiling tuned for Canvas2D perceptual comfort.
       const tumble = this._target.tumbleRate || 0;
       const maxWireRad = Constants.WIREFRAME_MAX_TUMBLE_DEG_S * Math.PI / 180;
-      const rate = Math.max(MIN_TUMBLE_RATE, Math.min(tumble * Constants.TIME_SCALE_GAMEPLAY, maxWireRad));
+      const rate = Math.max(MIN_TUMBLE_RATE, Math.min(tumble * TimeAuthority.BASE_SCALE, maxWireRad));
       this._angle += rate * dt;
     }
 

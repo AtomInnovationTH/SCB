@@ -16,6 +16,7 @@
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
+import { TimeAuthority } from './TimeAuthority.js';
 import { orbitToSceneCartesian, cartesianToKeplerian } from '../entities/OrbitalMechanics.js';
 
 // ST-6.3: Graceful MOID import — back-compat if MoidCalculator unavailable (§C.6)
@@ -142,8 +143,13 @@ export class ConjunctionSystem {
    * @param {THREE.Vector3} playerPos — Player scene position
    * @param {{x:number,y:number,z:number}} playerVel — Player velocity (scene units/s)
    * @param {boolean} isArmPilot  — True when ARM_PILOT camera mode is active
+   * @param {number}  [dtWorld]   — World-simulation delta (game seconds); TimeAuthority-owned.
+   * @param {boolean} [moidScreening] — True above ~10× warp: instantaneous proximity
+   *   positions are meaningless when objects teleport per frame, so detection
+   *   switches to orbit-geometry MOID screening (T2, FloorContract F6/F7 warp-moid).
    */
-  update(dt, gameState, debrisList, playerPos, playerVel, isArmPilot) {
+  update(dt, gameState, debrisList, playerPos, playerVel, isArmPilot,
+         dtWorld = TimeAuthority.baseGameDt(dt), moidScreening = false) {
     // Tick down active alert display timer
     if (this._alertActive) {
       this._alertTimer -= dt;
@@ -157,6 +163,17 @@ export class ConjunctionSystem {
 
     // ST-2.1: Track mission elapsed time
     this._missionElapsed += dt;
+
+    // T2 warp screening: above ~10× the stochastic instantaneous-proximity scan
+    // below is invalid (objects jump kilometres per frame). Use phase-independent
+    // MOID screening instead and skip the proximity path entirely.
+    if (moidScreening) {
+      // Ladder T2: above ~10× warp (F6/F7) the instantaneous proximity scan is
+      // invalid (objects teleport per frame), so detection runs the phase-
+      // independent MOID path instead and skips the proximity scan entirely.
+      this.updateMOID(dt, debrisList, playerPos, playerVel, dtWorld);
+      return;
+    }
 
     // ST-2.1: Tick primer countdown → fire delayed first alert
     if (this._primerTimer > 0) {
@@ -206,14 +223,16 @@ export class ConjunctionSystem {
    * @param {Array}   debrisList  — DebrisField.debrisList
    * @param {THREE.Vector3} playerPos — Player scene position
    * @param {{x,y,z}} playerVel — Player velocity (km/s)
+   * @param {number}  [dtWorld]   — World-simulation delta (game seconds); TimeAuthority-owned.
    */
-  updateMOID(dt, debrisList, playerPos, playerVel) {
+  updateMOID(dt, debrisList, playerPos, playerVel, dtWorld = TimeAuthority.baseGameDt(dt)) {
     if (!_computeMOID || !_classifyMOID) return; // MOID calculator not available
     if (!debrisList || !playerPos || !playerVel) return;
 
     const C = Constants.CONJUNCTION;
-    // Gotcha #4: MOID_RECOMPUTE_INTERVAL_S is in game seconds, dt is wall seconds
-    this._moidTimer += dt * Constants.TIME_SCALE_GAMEPLAY;
+    // Gotcha #4: MOID_RECOMPUTE_INTERVAL_S is in game seconds; dtWorld is the
+    // TimeAuthority-owned world delta (byte-identical to dt × base rate at 1×).
+    this._moidTimer += dtWorld;
 
     // Detect significant velocity change (>10 m/s) → force early recompute
     const velMag = Math.sqrt(

@@ -112,6 +112,8 @@ import { persistenceManager } from './systems/PersistenceManager.js';
 import { StrategicMap } from './ui/StrategicMap.js';
 import { WheelRouter } from './systems/WheelRouter.js';
 import { LadderController } from './systems/LadderController.js';
+import { TimeAuthority } from './systems/TimeAuthority.js';
+import { FloorContract } from './core/FloorContract.js';
 import { RailIndicator } from './ui/RailIndicator.js';
 import { captureNetVisual, worldTumbleForKitAttitude, boxRowsForKitAttitude } from './ui/CaptureNetVisual.js';
 import { furnaceBreakdownVisual } from './ui/FurnaceBreakdownVisual.js';
@@ -501,6 +503,10 @@ let strategicMap;
 let wheelRouter;
 let ladderController;
 let railIndicator;
+
+// Zoom Ladder S3 — the ONE world-time choke point (T2). Owns dtWorld/warp; pins
+// the shipped base rate whenever the ladder is disengaged (byte-identical).
+let timeAuthority;
 
 // Input
 let inputManager;
@@ -1130,6 +1136,9 @@ async function init() {
     gameState,
     rail: railIndicator,
   });
+  // S3 — the ONE dtReal/dtWorld choke point (T2). Ticked each frame from the
+  // game loop; pins the shipped base rate while the ladder is disengaged.
+  timeAuthority = new TimeAuthority();
   wheelRouter = new WheelRouter({
     canvas,
     inputManager,
@@ -3942,6 +3951,34 @@ function gameLoop(timestamp) {
     }
   }
 
+  // --- Zoom Ladder S3: the ONE world-time choke point (T2) ---------------
+  // `dt` above is dtReal (real, slow-mo-scaled) — it drives camera, UI,
+  // ceremonies, attitude, resources, animations. The TimeAuthority derives the
+  // world-simulation delta `dtWorld = dtReal × BASE_SCALE × warp` from it, once
+  // per frame, and hands it to the orbital/environmental systems below. Warp
+  // only ever leaves 1× when the ladder is engaged (flag on + gameplay); while
+  // disengaged the authority pins the shipped base rate with no ramp, so
+  // `dtWorld === dt × Constants.TIME_SCALE_GAMEPLAY` bit-for-bit (byte-identical).
+  //
+  // The warp target is the CURRENT floor's timeCap; during a crossing the
+  // ZoomLadder core already reports the DESTINATION floor as current, so this
+  // pre-ramps toward the arrival rate during the ride. An active conjunction
+  // alert is the danger signal that clamps warp back to 1× (S4 refines this to
+  // the full alarm horizon).
+  const _ladderActive = !!(ladderController && ladderController.isActive && ladderController.isActive());
+  let _floorCap = 1;
+  if (_ladderActive && ladderController.ladder && ladderController.ladder.getState) {
+    const _lf = ladderController.ladder.getState().floor;
+    _floorCap = FloorContract.FLOORS[_lf - 1] ? FloorContract.FLOORS[_lf - 1].timeCap : 1;
+  }
+  // Danger cap: only meaningful while warp can apply (ladder engaged), so skip
+  // the getStatus() read entirely on the shipped flag-off path (no per-frame
+  // allocation there). timeAuthority.update ignores dangerActive when inactive.
+  const _danger = _ladderActive &&
+    !!(conjunctionSystem && conjunctionSystem.getStatus && conjunctionSystem.getStatus().alertActive);
+  timeAuthority.update({ dtReal: dt, active: _ladderActive, targetCap: _floorCap, dangerActive: _danger });
+  const dtWorld = timeAuthority.dtWorld;
+
   const currentState = gameState.currentState;
 
   // --- Always update visuals (scene renders behind menus) ---
@@ -3976,7 +4013,7 @@ function gameLoop(timestamp) {
     inputManager.processInput(dt);
 
     // F15: Autopilot steering + thrust (before player.update applies thrustInput)
-    try { autopilotSystem.update(dt); } catch (e) { console.error('[GameLoop] autopilotSystem:', e); }
+    try { autopilotSystem.update(dt, dtWorld); } catch (e) { console.error('[GameLoop] autopilotSystem:', e); }
 
     // Collision Avoidance — after autopilot, before player.update (dodge impulse applied to _rcsVelocity)
     try { collisionAvoidanceSystem.update(dt); } catch (e) { console.error('[GameLoop] collisionAvoidance:', e); }
@@ -3985,15 +4022,15 @@ function gameLoop(timestamp) {
     gameState.update(dt);
 
     // Update entities (with error boundaries — single system crash won't freeze game)
-    try { player.update(dt, sunDir); } catch (e) { console.error('[GameLoop] player.update:', e); }
+    try { player.update(dt, sunDir, dtWorld); } catch (e) { console.error('[GameLoop] player.update:', e); }
     // Register item 14: ship-attitude hold. Runs IMMEDIATELY after the prograde
     // compose so the overwrite lands before the net's reel/berth ticks read
     // player.quaternion in captureNetSystem.update below — an end-of-loop site
     // (with the freeze ticks) would be overwritten by the next frame's compose
     // BEFORE the net sees it. One null-check per frame when disarmed. Dev-only.
     if (window.__netShipHoldTick) window.__netShipHoldTick();
-    try { debrisField.update(dt, player.getPosition(), player.getOrbitalElements()); } catch (e) { console.error('[GameLoop] debrisField:', e); }
-    try { activeSatellites.update(dt, player.getPosition()); } catch (e) { console.error('[GameLoop] activeSats:', e); }
+    try { debrisField.update(dt, player.getPosition(), player.getOrbitalElements(), dtWorld); } catch (e) { console.error('[GameLoop] debrisField:', e); }
+    try { activeSatellites.update(dt, player.getPosition(), dtWorld); } catch (e) { console.error('[GameLoop] activeSats:', e); }
 
     // Update V3 arm manager
     if (armManager) { try { armManager.update(dt); } catch (e) { console.error('[GameLoop] armManager:', e); } }
@@ -4121,10 +4158,12 @@ function gameLoop(timestamp) {
       });
     } catch (e) { console.error('[GameLoop] subsystemEvents:', e); }
 
-    // Update conjunction alert system (Sprint C1)
+    // Update conjunction alert system (Sprint C1). S3: dtWorld drives the MOID
+    // timer; above ~10× warp detection switches to MOID screening (T2).
     try {
       conjunctionSystem.update(dt, gameState, debrisField.debrisList,
-        player.getPosition(), player.getVelocity(), inputManager.isArmPilotMode());
+        player.getPosition(), player.getVelocity(), inputManager.isArmPilotMode(),
+        dtWorld, timeAuthority.isMoidScreening());
     } catch (e) { console.error('[GameLoop] conjunctionSystem:', e); }
 
     // Update power distribution (warnings for dangerous configs)

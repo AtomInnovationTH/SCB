@@ -24,6 +24,7 @@
 
 import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
+import { TimeAuthority } from './TimeAuthority.js';
 import { ThreatSet, awardElevatorMass } from './_bossLifecycle.js';
 
 export class IssConjunctionBoss {
@@ -80,7 +81,7 @@ export class IssConjunctionBoss {
   /** Per-frame tick — advances the game-time TCA countdown. */
   update(dt) {
     if (this._disposed || !this._active) return;
-    this._tcaRemainingS -= dt * (Constants.TIME_SCALE_GAMEPLAY || 1);
+    this._tcaRemainingS -= dt * (TimeAuthority.BASE_SCALE || 1);
 
     const imminentS = (Constants.ISS_BOSS.IMMINENT_HOURS || 4) * 3600;
     if (!this._imminentFired && this._tcaRemainingS <= imminentS && this._tcaRemainingS > 0) {

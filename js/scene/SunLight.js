@@ -6,6 +6,7 @@
 
 import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
+import { TimeAuthority } from '../systems/TimeAuthority.js';
 import { createLabelTexture } from './labelTexture.js';
 import { sunEphemeris, moonEphemeris, latLonToUnitVec } from './Ephemeris.js';
 import { stagedSunYaw, rotateAboutY, OPENING_SUN_TARGET_DOT } from './sunStaging.js';
@@ -1178,7 +1179,7 @@ export class SunLight {
     // by _sunYaw0 (today's sub-solar longitude). See _seedSkyFromClock().
     const angularSpeed = (2 * Math.PI) / this.sunOrbitPeriod;
     const angle = this._sunPhase0 +
-      this.elapsedTime * angularSpeed * Constants.TIME_SCALE_GAMEPLAY;
+      this.elapsedTime * angularSpeed * TimeAuthority.BASE_SCALE;
 
     const bx = Math.cos(angle);
     const by = Math.sin(SUN_CYCLE_TILT) * Math.sin(angle);

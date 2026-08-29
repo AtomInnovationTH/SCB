@@ -8,6 +8,7 @@
 
 import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
+import { TimeAuthority } from '../systems/TimeAuthority.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import {
@@ -1653,7 +1654,7 @@ export class DebrisField {
    */
   static _advanceTumble(debris, dt, maxVisualRad) {
     if (debris._capturedByArm || debris._armPinned) return; // cinched — no tumble
-    const visualRate = Math.min(debris.tumbleRate * Constants.TIME_SCALE_GAMEPLAY, maxVisualRad);
+    const visualRate = Math.min(debris.tumbleRate * TimeAuthority.BASE_SCALE, maxVisualRad);
     debris.tumbleAngle += visualRate * dt;
   }
 
@@ -1753,12 +1754,15 @@ export class DebrisField {
 
   /**
    * Per-frame update: propagate orbits, update instance transforms, update background.
-   * @param {number} dt - Real-time delta (seconds)
+   * @param {number} dt - Real-time (dtReal) delta seconds — LOD, visual tumble, cosmetics.
    * @param {THREE.Vector3} [playerPos] - Player position for LOD
    * @param {object} [playerOrbit] - Player orbital elements (for tutorial debris spawning)
+   * @param {number} [dtWorld] - World-simulation delta (game seconds) for orbit + drag.
+   *   Threaded from the TimeAuthority choke point; defaults to the shipped base
+   *   rate for headless/test callers (byte-identical to dt × 10).
    */
-  update(dt, playerPos, playerOrbit) {
-    const gameDt = dt * Constants.TIME_SCALE_GAMEPLAY;
+  update(dt, playerPos, playerOrbit, dtWorld = TimeAuthority.baseGameDt(dt)) {
+    const gameDt = dtWorld;
 
     // Cache the latest player orbit so event-driven paths with no update()
     // scope (notably _clearOnboardingPin, fired from LASSO_CONTACT etc.) can
@@ -2015,9 +2019,14 @@ export class DebrisField {
           const debrisArea = debris.sizeMeter * debris.sizeMeter;
           const debrisMass = Math.max(debris.mass || 1, 1);
           const dragDecel = atmosphericDrag(debrisAltKm, debrisVel, debrisArea, debrisMass);
-          const dvDrag = dragDecel * gameDt;
           if (debrisVel > 0) {
-            o.semiMajorAxis *= (1 - 2 * dvDrag / debrisVel);
+            // T2 drag chunking (see PlayerSatellite): ≤ DRAG_CHUNK_GAME_S
+            // game-second Euler sub-steps so the decay factor can't flip
+            // negative at high warp. Single, byte-identical step below ~60 game-s.
+            const nSub = TimeAuthority.dragSubSteps(gameDt);
+            const subDt = gameDt / nSub;
+            const factor = 1 - 2 * (dragDecel * subDt) / debrisVel;
+            for (let s = 0; s < nSub; s++) o.semiMajorAxis *= factor;
           }
         }
       }

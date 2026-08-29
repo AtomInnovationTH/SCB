@@ -12,6 +12,7 @@
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
+import { TimeAuthority } from './TimeAuthority.js';
 
 // ============================================================================
 // WEATHER TYPE DEFINITIONS
@@ -218,7 +219,7 @@ export class SpaceWeatherSystem {
   /** @returns {number} Current game-hour, derived from totalTime (seconds) × TIME_SCALE_GAMEPLAY.
    *  Using TIME_SCALE_GAMEPLAY keeps the timeline aligned with how debris/player orbits tick. */
   _currentGameHour() {
-    const scale = Constants.TIME_SCALE_GAMEPLAY || 1;
+    const scale = TimeAuthority.BASE_SCALE || 1;
     return (this.totalTime * scale) / 3600;
   }
 
@@ -313,7 +314,7 @@ export class SpaceWeatherSystem {
     // so the event lasts the right *game-time* window on the existing totalTime++.
     let duration;
     if (replayOverride && typeof replayOverride.duration_h === 'number') {
-      const scale = Constants.TIME_SCALE_GAMEPLAY || 1;
+      const scale = TimeAuthority.BASE_SCALE || 1;
       duration = (replayOverride.duration_h * 3600) / scale;
     } else {
       duration = randRange(def.minDuration, def.maxDuration);

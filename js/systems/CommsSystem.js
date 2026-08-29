@@ -11,6 +11,7 @@
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
+import { TimeAuthority } from './TimeAuthority.js';
 import { audioSystem } from './AudioSystem.js';
 import timerManager from './TimerManager.js';
 import { messagePassesSuppression, rampSuppressionTier, postOnboardingStartTier } from './commsSuppression.js';
@@ -740,7 +741,7 @@ export class CommsSystem {
   update(dt, gameData) {
     if (!this._active) return;
 
-    const gameDt = dt * Constants.TIME_SCALE_GAMEPLAY;
+    const gameDt = dt * TimeAuthority.BASE_SCALE;
     this._gameTime += gameDt;
 
     // CP-4 — advance the post-onboarding suppression ramp (real dt; pause-safe).

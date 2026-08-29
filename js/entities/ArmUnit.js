@@ -11,6 +11,7 @@
 
 import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
+import { TimeAuthority } from '../systems/TimeAuthority.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { getSolarCellTexture } from '../scene/solarCellTexture.js';
@@ -2789,7 +2790,7 @@ export class ArmUnit {
    // --- ST-5.2: Trail sample emission (10 Hz gated by game time) ---
     if (Constants.TRAILS && Constants.TRAILS.ENABLED !== false &&
         this.state !== S.DOCKED && this.state !== S.RELOADING) {
-      const gameDt = dt * Constants.TIME_SCALE_GAMEPLAY;
+      const gameDt = dt * TimeAuthority.BASE_SCALE;
       this._trailSampleAccum = (this._trailSampleAccum || 0) + gameDt;
       const trailInterval = 1 / (Constants.TRAILS.SAMPLE_RATE_HZ || 10);
       if (this._trailSampleAccum >= trailInterval) {
@@ -3407,7 +3408,7 @@ export class ArmUnit {
 
     // Commanded impulse = KP × velCtrlErr, clamped by MAX_ACCEL × gameDt
     const dvCmdT = velCtrlErrT.multiplyScalar(DAP_T.KP_VEL);
-    const gameDtT = dt * Constants.TIME_SCALE_GAMEPLAY;
+    const gameDtT = dt * TimeAuthority.BASE_SCALE;
     const maxDvT = DAP_T.MAX_ACCEL * M * gameDtT;
     const dvMagT = dvCmdT.length();
     if (dvMagT > maxDvT && dvMagT > 1e-18) dvCmdT.multiplyScalar(maxDvT / dvMagT);
@@ -3562,7 +3563,7 @@ export class ArmUnit {
     const posCmd = _posCmd.copy(goalDirA).multiplyScalar(signedExcess >= 0 ? vStarA : -vStarA);
     const velCtrlErrA = posCmd.add(relVA);
     const dvCmdA = velCtrlErrA.multiplyScalar(DAP_A.KP_VEL);
-    const gameDtA = dt * Constants.TIME_SCALE_GAMEPLAY;
+    const gameDtA = dt * TimeAuthority.BASE_SCALE;
     const maxDvA = DAP_A.MAX_ACCEL * M * gameDtA;
     const dvMagA = dvCmdA.length();
     if (dvMagA > maxDvA && dvMagA > 1e-18) dvCmdA.multiplyScalar(maxDvA / dvMagA);
@@ -4096,7 +4097,7 @@ export class ArmUnit {
     st.rate = (st.rate - lam * b * dt) * decay;
     st.t += dt;
 
-    const TS = Constants.TIME_SCALE_GAMEPLAY;
+    const TS = TimeAuthority.BASE_SCALE;
     debris.tumbleAngle = st.seedAngle + st.theta * TS;
 
     // Strain gate — rolled only in the wrench window (GRAPPLED/REELING, the
@@ -6542,7 +6543,7 @@ export class ArmUnit {
     const span = FT.digestSpanS(debris.mass);   // item 48: the ONE span-law home
     const sunScale = this._digestSunScale ?? 1.0;
     debris._digestProgress = (debris._digestProgress || 0) +
-      dt * Constants.TIME_SCALE_GAMEPLAY * sunScale;
+      dt * TimeAuthority.BASE_SCALE * sunScale;
     const t = Math.min(FEED_S, (debris._digestProgress / span) * FEED_S);
     // ArmManager's chop scale-ramp reads this derived phase time (it read
     // stateTimer pre-S8) — one computation, one home.
