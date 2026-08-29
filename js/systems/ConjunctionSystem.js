@@ -168,10 +168,11 @@ export class ConjunctionSystem {
     // below is invalid (objects jump kilometres per frame). Use phase-independent
     // MOID screening instead and skip the proximity path entirely.
     if (moidScreening) {
-      // Ladder T2: above ~10× warp (F6/F7) the instantaneous proximity scan is
-      // invalid (objects teleport per frame), so detection runs the phase-
-      // independent MOID path instead and skips the proximity scan entirely.
-      this.updateMOID(dt, debrisList, playerPos, playerVel, dtWorld);
+      // Ladder T2: above ~10× warp (F6/F7) detection runs the MOID path. The
+      // alert side of that path is gated with the SAME three guards the
+      // proximity scan enforces below (mission-profile :556, per-mission cap
+      // :194, arm-pilot suppression :197) — see updateMOID / _moidAlertsAllowed.
+      this.updateMOID(dt, debrisList, playerPos, playerVel, dtWorld, isArmPilot);
       return;
     }
 
@@ -224,8 +225,13 @@ export class ConjunctionSystem {
    * @param {THREE.Vector3} playerPos — Player scene position
    * @param {{x,y,z}} playerVel — Player velocity (km/s)
    * @param {number}  [dtWorld]   — World-simulation delta (game seconds); TimeAuthority-owned.
+   * @param {boolean} [isArmPilot] — True when ARM_PILOT camera mode is active. The
+   *   MOID cache/badges still update (CollisionAvoidance's getTopRiskPairs must
+   *   stay live), but ALERT emission is suppressed — the same arm-pilot guard the
+   *   proximity path enforces (:197). Ladder MOID gating.
    */
-  updateMOID(dt, debrisList, playerPos, playerVel, dtWorld = TimeAuthority.baseGameDt(dt)) {
+  updateMOID(dt, debrisList, playerPos, playerVel, dtWorld = TimeAuthority.baseGameDt(dt),
+             isArmPilot = false) {
     if (!_computeMOID || !_classifyMOID) return; // MOID calculator not available
     if (!debrisList || !playerPos || !playerVel) return;
 
@@ -283,9 +289,13 @@ export class ConjunctionSystem {
       debris.moidBadge = newBadge;
       debris.moid_m = moid;
 
-      // De-bounce: emit CONJUNCTION_ALERT only on UPWARD tier transitions
-      if (this._isUpwardTransition(oldBadge, newBadge)) {
+      // De-bounce: emit CONJUNCTION_ALERT only on UPWARD tier transitions AND
+      // only when alerts are allowed (Ladder MOID gating). The badge/cache state
+      // above always advances so CollisionAvoidance's getTopRiskPairs stays live
+      // and a later ungated frame won't re-fire an already-crossed transition.
+      if (this._isUpwardTransition(oldBadge, newBadge) && this._moidAlertsAllowed(isArmPilot)) {
         this._emitMoidAlert(debris, moid, newBadge);
+        this._alertCount++;   // MOID alerts consume the shared per-mission budget (:194)
       }
 
       this._moidBadges.set(debris.id, newBadge);
@@ -683,6 +693,28 @@ export class ConjunctionSystem {
     const oldRank = oldBadge ? (ConjunctionSystem._TIER_ORDER[oldBadge] || 0) : 0;
     const newRank = ConjunctionSystem._TIER_ORDER[newBadge] || 0;
     return newRank > oldRank;
+  }
+
+  /**
+   * Ladder MOID gating (docs/ladder/02-traps.md T2 "MOID screening"): the
+   * warp-time MOID alert path must be gated behind the SAME three guards the
+   * stochastic proximity scan enforces, so F6/F7 MOID screening cannot spam
+   * unbounded, ungated CONJUNCTION_ALERTs the moment it engages:
+   *   1. `_conjunctionAllowed` — mission-profile gate (proximity path :556);
+   *   2. `_alertCount < MAX_ALERTS` — per-mission cap (proximity path :194,
+   *      shared budget: MOID alerts increment `_alertCount` too);
+   *   3. `!isArmPilot` — arm-pilot suppression (proximity path :197).
+   * Note this gates only ALERT EMISSION, never the MOID cache/badge update
+   * (getTopRiskPairs / debris.moidBadge must stay live regardless).
+   * @private
+   * @param {boolean} isArmPilot
+   * @returns {boolean}
+   */
+  _moidAlertsAllowed(isArmPilot) {
+    if (!this._conjunctionAllowed) return false;
+    if (this._alertCount >= MAX_ALERTS) return false;
+    if (isArmPilot) return false;
+    return true;
   }
 
   /**

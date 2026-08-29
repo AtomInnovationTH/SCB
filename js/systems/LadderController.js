@@ -37,6 +37,8 @@ export class LadderController {
    * @param {object} [deps.sceneManager] - per-floor render block: setLadderFloorFidelity(fid|null)
    * @param {object} [deps.gameState]    - isGameplay() gate
    * @param {object} [deps.rail]         - rail indicator stub: show/hide/refresh(state)/flashDenied(hint)
+   * @param {object} [deps.navcom]       - F6 (NAVCOM) content controller (NavcomFloor):
+   *   activate/deactivate/isActive/update/planTransfer. Optional — no-op without it.
    * @param {function} [deps.now]        - monotonic clock (ms); defaults to performance.now
    * @param {object} [deps.ladder]       - injectable ZoomLadder (tests); defaults to a fresh core
    */
@@ -45,6 +47,7 @@ export class LadderController {
     this._sceneManager = deps.sceneManager || null;
     this._gameState = deps.gameState || null;
     this._rail = deps.rail || null;
+    this._navcom = deps.navcom || null;
     this._now = deps.now || (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()));
     this._ladder = deps.ladder || new ZoomLadder();
     this._engaged = false;
@@ -81,6 +84,11 @@ export class LadderController {
 
     const decisions = this._ladder.update(t);
     this._apply(decisions, t);
+    // Tick the active floor content (F6 NAVCOM cluster icons + transfer window).
+    // NavcomFloor uses its own injected projector; the serial track supplies it.
+    if (this._navcom && this._navcom.isActive && this._navcom.isActive() && this._navcom.update) {
+      this._navcom.update();
+    }
     this._refreshRail();
     return decisions;
   }
@@ -125,6 +133,7 @@ export class LadderController {
       this._cameraSystem.ladderEngage(frame);
     }
     this._applyFidelity(s.floor);
+    this._applyFloorContent(s.floor);
     if (this._rail && this._rail.show) this._rail.show();
     this._refreshRail();
   }
@@ -139,6 +148,7 @@ export class LadderController {
     if (this._sceneManager && this._sceneManager.setLadderFloorFidelity) {
       this._sceneManager.setLadderFloorFidelity(null);
     }
+    if (this._navcom && this._navcom.deactivate) this._navcom.deactivate();
     if (this._rail && this._rail.hide) this._rail.hide();
   }
 
@@ -171,10 +181,13 @@ export class LadderController {
           if (this._rail && this._rail.flashDenied) this._rail.flashDenied(d.hint || null);
           break;
 
-        // charge → rail fill (handled by _refreshRail); reaim/verb/alarm → S4+.
+        case 'verb':
+          this._dispatchVerb(d.verb);
+          break;
+
+        // charge → rail fill (handled by _refreshRail); reaim → S4+.
         case 'charge':
         case 'reaim':
-        case 'verb':
         case 'alarm':
         default:
           break;
@@ -191,6 +204,7 @@ export class LadderController {
    */
   _startRide(toFloor, entryZ01, rideMs, tMs) {
     this._applyFidelity(toFloor);
+    this._applyFloorContent(toFloor);
     const frame = this._frame(toFloor, entryZ01);
     const done = () => {
       const t = this._now();
@@ -218,6 +232,35 @@ export class LadderController {
       debrisMode: f.fidelity.debrisMode,
       floor,
     });
+  }
+
+  /**
+   * Consume the arrival floor's `fidelity.debrisMode` (T1 plumbing) to drive the
+   * floor content controllers. F6's 'clusters' mode swaps the full debris meshes
+   * for the NAVCOM cluster-icon + transfer-window costume; every other floor
+   * deactivates it. No-op without a navcom dep (parallel track — the serial track
+   * injects NavcomFloor). @private
+   */
+  _applyFloorContent(floor) {
+    if (!this._navcom) return;
+    const f = FloorContract.FLOORS[floor - 1];
+    const clusters = !!(f && f.fidelity && f.fidelity.debrisMode === 'clusters');
+    if (clusters) {
+      if (this._navcom.activate) this._navcom.activate();
+    } else if (this._navcom.deactivate) {
+      this._navcom.deactivate();
+    }
+  }
+
+  /**
+   * Dispatch a per-floor Space verb decision (FloorContract spaceVerb). Only F6's
+   * 'plan-transfer' is wired here (M3); F3/F4/F5/F7 verbs are S4/S5 follow-ups.
+   * @private
+   */
+  _dispatchVerb(verb) {
+    if (verb === 'plan-transfer' && this._navcom && this._navcom.planTransfer) {
+      this._navcom.planTransfer();
+    }
   }
 
   /**
