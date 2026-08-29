@@ -4661,6 +4661,19 @@ export const Constants = {
   },
 
   // ============================================================================
+  // ZOOM LADDER (M0 — docs/ladder/00-spec.md)
+  // Master switches only. Deliberately NOT in FEATURE_FLAGS (test-Constants.js
+  // pins that object at exactly 43 entries) — named block per the
+  // TEACHING/ONBOARDING precedent. Floor data lives in js/core/FloorContract.js
+  // (pure data, validated by js/test/test-FloorContract.js); visual rules in
+  // js/core/VisualLaw.js.
+  // ============================================================================
+  LADDER: {
+    ENABLED: false,          // master switch — ships false until M6 (docs/ladder/03-plan.md)
+    DEV_FULL_ACCESS: true,   // all 7 floors reachable now; campaign unlock gating is roadmap
+  },
+
+  // ============================================================================
   // MISSION COACH (CP-4 — MISSION_ARC_IMPLEMENTATION.md §2)
   //
   // The per-chapter coaching engine. Triggers on SHOP_DEPLOY into a mission,
