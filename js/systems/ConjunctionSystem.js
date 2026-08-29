@@ -296,6 +296,15 @@ export class ConjunctionSystem {
       if (this._isUpwardTransition(oldBadge, newBadge) && this._moidAlertsAllowed(isArmPilot)) {
         this._emitMoidAlert(debris, moid, newBadge);
         this._alertCount++;   // MOID alerts consume the shared per-mission budget (:194)
+        // M3 review fix: a fired MOID alert must ALSO drive the S3 danger cap —
+        // main.js reads getStatus().alertActive as the warp danger signal, and
+        // on F6/F7 (moidScreening) the proximity path that normally sets it never
+        // runs, so without this the "alarms always land at 1×" invariant is dead
+        // exactly where warp exists. Mirror _doEmitAlert's display window
+        // (LO≈GREEN 5 s / MD≈YELLOW 10 s / HI≈RED 30 s); update()'s alert-timer
+        // countdown runs before the moidScreening early-return, so it decays.
+        this._alertActive = true;
+        this._alertTimer = newBadge === 'HI' ? 30 : newBadge === 'MD' ? 10 : 5;
       }
 
       this._moidBadges.set(debris.id, newBadge);

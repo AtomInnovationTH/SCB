@@ -32,6 +32,7 @@ export class TransferWindows {
     this._root = null;
     this._built = false;
     this._visible = false;
+    this._lastHtml = null;  // last painted markup — skips per-frame innerHTML churn
   }
 
   /**
@@ -135,7 +136,14 @@ export class TransferWindows {
     if (model.showArrive) rows.push(`<div>${model.transferText} → ${model.arriveText}</div>`);
     if (model.dvText) rows.push(`<div>${model.dvText}</div>`);
     rows.push(`<div style="opacity:0.7">${model.periodText}</div>`);
-    this._root.innerHTML = rows.join('');
+    // M3 review fix: refresh() is ticked every frame while F6 is active, but the
+    // readout only changes ~1/s (formatDuration rounds to seconds) — skip the
+    // full innerHTML teardown/re-parse when the markup is unchanged.
+    const html = rows.join('');
+    if (html !== this._lastHtml) {
+      this._root.innerHTML = html;
+      this._lastHtml = html;
+    }
     return model;
   }
 
@@ -143,5 +151,6 @@ export class TransferWindows {
     if (this._root && this._root.remove) this._root.remove();
     this._root = null;
     this._built = false;
+    this._lastHtml = null;
   }
 }

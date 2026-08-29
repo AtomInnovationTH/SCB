@@ -3801,7 +3801,6 @@ export class DebrisField {
    */
   setLadderDebrisMode(mode) {
     const hide = (mode === 'clusters');
-    this._ladderMeshesHidden = hide;
     if (this.group) this.group.visible = !hide;
   }
 

@@ -3679,6 +3679,14 @@ export class CameraSystem {
     return anchor === 'earth' ? out.set(0, 0, 0) : out.copy(playerPos);
   }
 
+  /** @private THE ladder up-frame rule (single source — M3 review): Earth-north
+   *  (0,1,0) for an 'earth' anchor, roll-free radial for a ship anchor. Used by
+   *  BOTH the on-floor branch and the cross-anchor ride interpolation endpoints
+   *  of _updateLadderCamera, so the two can never drift apart. Writes `out`. */
+  _ladderUpFor(anchor, radialDir, out) {
+    return anchor === 'earth' ? out.set(0, 1, 0) : out.copy(radialDir);
+  }
+
   /** @private world position of the frame anchor. */
   _ladderAnchorPos(anchor) {
     // Earth centre = scene origin (radialDir is playerPos.normalize()). The ship
@@ -3742,10 +3750,8 @@ export class CameraSystem {
     // anchor-lerp uses, so the whole reorientation lives inside the ~550 ms
     // flight (01-numbers: camera never rolls ON-floor).
     if (lc.riding && lc.rideAnchorFrom !== lc.anchor) {
-      const fromUp = (lc.rideAnchorFrom === 'earth')
-        ? lc._upFrom.set(0, 1, 0) : lc._upFrom.copy(radialDir);
-      const toUp = (lc.anchor === 'earth')
-        ? lc._upTo.set(0, 1, 0) : lc._upTo.copy(radialDir);
+      const fromUp = this._ladderUpFor(lc.rideAnchorFrom, radialDir, lc._upFrom);
+      const toUp = this._ladderUpFor(lc.anchor, radialDir, lc._upTo);
       const dot = fromUp.dot(toUp);
       if (dot > 0.999999) {
         // Already aligned — no rotation to interpolate (avoids a degenerate quat).
@@ -3758,10 +3764,8 @@ export class CameraSystem {
         lc._upQuatE.identity().slerp(lc._upQuat, ease);
         this.camera.up.copy(fromUp).applyQuaternion(lc._upQuatE).normalize();
       }
-    } else if (lc.anchor === 'earth') {
-      this.camera.up.set(0, 1, 0);
     } else {
-      this.camera.up.copy(radialDir);
+      this._ladderUpFor(lc.anchor, radialDir, this.camera.up);
     }
     this.camera.lookAt(anchorPos);
     this.camera.updateProjectionMatrix();

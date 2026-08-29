@@ -508,6 +508,10 @@ let railIndicator;
 // Zoom Ladder S3 — the ONE world-time choke point (T2). Owns dtWorld/warp; pins
 // the shipped base rate whenever the ladder is disengaged (byte-identical).
 let timeAuthority;
+// Reused per-frame arg object for timeAuthority.update (M3 review: the update
+// runs on the shipped flag-off path too, so the args must not allocate per
+// frame; TimeAuthority.update destructures synchronously and retains nothing).
+const _taFrameArgs = { dtReal: 0, active: false, targetCap: 1, dangerActive: false };
 
 // Zoom Ladder F6 (NAVCOM) floor content orchestrator (S5). Constructed in the
 // ladder block, injected into LadderController (activates/ticks on F6), and
@@ -4019,7 +4023,11 @@ function gameLoop(timestamp) {
   // allocation there). timeAuthority.update ignores dangerActive when inactive.
   const _danger = _ladderActive &&
     !!(conjunctionSystem && conjunctionSystem.getStatus && conjunctionSystem.getStatus().alertActive);
-  timeAuthority.update({ dtReal: dt, active: _ladderActive, targetCap: _floorCap, dangerActive: _danger });
+  _taFrameArgs.dtReal = dt;
+  _taFrameArgs.active = _ladderActive;
+  _taFrameArgs.targetCap = _floorCap;
+  _taFrameArgs.dangerActive = _danger;
+  timeAuthority.update(_taFrameArgs);
   const dtWorld = timeAuthority.dtWorld;
 
   const currentState = gameState.currentState;

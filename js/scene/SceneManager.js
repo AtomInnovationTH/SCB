@@ -664,10 +664,13 @@ export class SceneManager {
       this._ladderDebrisField.setLadderDebrisMode(f.debrisMode);
     }
     if (this._ladderShip) {
-      // nearField:false is the T1 ship-is-icon condition (F6/F7); F1/F2 interiors
-      // keep their debrisMode 'hidden' so this only fires where a chevron replaces
-      // the mesh (F6 'clusters', F7 'massBands').
-      const shipIsIcon = (f.debrisMode === 'clusters' || f.debrisMode === 'massBands');
+      // Ship-is-icon predicate — keep the THREE sibling gates in lockstep (M3
+      // review): this ship hide, DebrisField.setLadderDebrisMode's debris hide,
+      // and LadderController._applyFloorContent's navcom activation ALL key on
+      // debrisMode === 'clusters' (F6), so the mesh only vanishes where the
+      // chevron replaces it. F7's 'massBands' hide lands WITH its M4 costume —
+      // hiding earlier would strand F7 with no ship and full debris visible.
+      const shipIsIcon = (f.debrisMode === 'clusters');
       this._ladderShip.visible = !shipIsIcon;
     }
   }
