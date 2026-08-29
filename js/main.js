@@ -4255,7 +4255,7 @@ function gameLoop(timestamp) {
     }
 
     // --- Camera update via CameraSystem ---
-    updateCamera(dt);
+    updateCamera(dt, timestamp);
 
     // HUD update
     hud.update(dt, {
@@ -4399,7 +4399,7 @@ function gameLoop(timestamp) {
     try { player.postArmUpdate(); } catch (e) { /* bg visibility sync */ }
 
     // Camera still follows (slow) for nice menu background
-    updateCamera(dt);
+    updateCamera(dt, timestamp);
   }
 
   // --- Debug overlay update ---
@@ -4556,8 +4556,11 @@ function gameLoop(timestamp) {
 /**
  * Update camera via CameraSystem.
  * @param {number} dt - Delta time in seconds
+ * @param {number} timestamp - rAF high-res timestamp (ms) — the monotonic clock
+ *   the ladder core runs on (same domain as performance.now(); the WheelRouter
+ *   feeds ladder.wheel() from the same clock).
  */
-function updateCamera(dt) {
+function updateCamera(dt, timestamp) {
   if (!cameraSystem) return;
 
   const playerPos = player.getPosition();
