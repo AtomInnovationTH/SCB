@@ -597,6 +597,12 @@ export class CameraSystem {
       rideAnchorFrom: 'ship',
       onDone: null,
       _tmp: new THREE.Vector3(),
+      // Cross-anchor up-frame interpolation temps (F5↔F6 reorientation lives
+      // INSIDE the ride — see _updateLadderCamera; camera never rolls on-floor).
+      _upFrom: new THREE.Vector3(),
+      _upTo: new THREE.Vector3(),
+      _upQuat: new THREE.Quaternion(),
+      _upQuatE: new THREE.Quaternion(),
     };
 
     this._boundMouseDown = this._onMouseDown.bind(this);
@@ -3727,8 +3733,32 @@ export class CameraSystem {
     }
     // camera = anchor + dir * distance
     this.camera.position.copy(anchorPos).addScaledVector(lc.dir, lc.curDistU);
-    // Up-frame: radial for ship anchor (roll-free), Earth-north for earth anchor.
-    if (lc.anchor === 'earth') {
+    // Up-frame. On-floor (and same-anchor rides) the up rule is exact: radial for
+    // a ship anchor (roll-free), Earth-north for an earth anchor. During a
+    // CROSS-anchor ride (F5↔F6) the destination anchor is live from ride start
+    // (ladderStartRide sets lc.anchor = opts.anchor), so applying the destination
+    // rule directly would SNAP camera.up on frame 1. Instead interpolate up from
+    // the source frame's up to the destination's with the SAME cubic `ease` the
+    // anchor-lerp uses, so the whole reorientation lives inside the ~550 ms
+    // flight (01-numbers: camera never rolls ON-floor).
+    if (lc.riding && lc.rideAnchorFrom !== lc.anchor) {
+      const fromUp = (lc.rideAnchorFrom === 'earth')
+        ? lc._upFrom.set(0, 1, 0) : lc._upFrom.copy(radialDir);
+      const toUp = (lc.anchor === 'earth')
+        ? lc._upTo.set(0, 1, 0) : lc._upTo.copy(radialDir);
+      const dot = fromUp.dot(toUp);
+      if (dot > 0.999999) {
+        // Already aligned — no rotation to interpolate (avoids a degenerate quat).
+        this.camera.up.copy(toUp);
+      } else {
+        // slerp fromUp→toUp by `ease`. setFromUnitVectors is robust to the
+        // near-antiparallel (dot ≈ −1) degenerate case (it picks an orthogonal
+        // axis), so a ship at the sub-Earth pole doesn't blow up the nlerp.
+        lc._upQuat.setFromUnitVectors(fromUp, toUp);
+        lc._upQuatE.identity().slerp(lc._upQuat, ease);
+        this.camera.up.copy(fromUp).applyQuaternion(lc._upQuatE).normalize();
+      }
+    } else if (lc.anchor === 'earth') {
       this.camera.up.set(0, 1, 0);
     } else {
       this.camera.up.copy(radialDir);

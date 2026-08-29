@@ -3787,6 +3787,25 @@ export class DebrisField {
   // ==========================================================================
 
   /**
+   * Zoom Ladder F6 render-block seam (T1, docs/ladder/01-numbers.md per-floor
+   * fidelity). On F6 (NAVCOM) the floor's `debrisMode` is 'clusters': the full
+   * debris meshes are replaced by NAVCOM cluster ring+count icons, so hide the
+   * whole DebrisField group (all InstancedMeshes + background Points). Any other
+   * mode ('full'/'tactical'/'hidden'/null) restores it. `getDebrisClusters()`
+   * reads the debris DATA, not the meshes, so cluster icons keep working while
+   * the meshes are hidden. SceneManager re-asserts this after applyTier() (the
+   * same lifecycle as nearFieldEnabled), and restores it on disengage. Non-hub;
+   * a no-op path for every non-'clusters' mode keeps flag-off byte-identical.
+   * (F7's 'massBands' hide lands with the F7 mass-band render in M4.)
+   * @param {?string} mode - the arrival floor's fidelity.debrisMode (or null)
+   */
+  setLadderDebrisMode(mode) {
+    const hide = (mode === 'clusters');
+    this._ladderMeshesHidden = hide;
+    if (this.group) this.group.visible = !hide;
+  }
+
+  /**
    * Group debris into orbital clusters for mission selection.
    * A cluster = debris sharing similar altitude band + inclination center.
    * Includes center position (THREE.Vector3) for autopilot heading and

@@ -160,6 +160,20 @@ export class SceneManager {
      */
     this._ladderFidelity = null;
 
+    /**
+     * Zoom Ladder F6/F7 render-block content refs (T1 costume 'ship-to-icon').
+     * On floors whose `debrisMode` iconizes the field (F6 'clusters'), the full
+     * debris meshes are replaced by cluster icons and the world ship mesh by a
+     * chevron, so both are hidden and RE-ASSERTED across applyTier() alongside
+     * nearFieldEnabled. Registered once from main.js (setLadderContentRefs); null
+     * (headless/tests/flag-off never registers) makes the hide a guarded no-op,
+     * so applyTier() stays byte-identical to the shipped path.
+     * @type {?{getDebrisClusters?:function, setLadderDebrisMode?:function}}
+     */
+    this._ladderDebrisField = null;
+    /** @type {?{visible:boolean}} world ship mesh hidden on ship-is-icon floors. */
+    this._ladderShip = null;
+
     // --- Clock ---
     this.clock = new THREE.Clock();
 
@@ -608,6 +622,13 @@ export class SceneManager {
           this.camera.far = Constants.CAMERA_FAR;
           this.camera.updateProjectionMatrix();
         }
+        // Restore the full debris meshes + world ship mesh the ship-is-icon
+        // floors hid (F6/F7). Guarded on a prior engaged request, so flag-off
+        // (never engaged) never runs this and applyTier() stays byte-identical.
+        if (this._ladderDebrisField && this._ladderDebrisField.setLadderDebrisMode) {
+          this._ladderDebrisField.setLadderDebrisMode(null);
+        }
+        if (this._ladderShip) this._ladderShip.visible = true;
       }
       this._ladderFidelity = null;
       return;
@@ -635,6 +656,34 @@ export class SceneManager {
       // starfield scaling is needed to keep it inside the far plane (T1).
       if (changed) this.camera.updateProjectionMatrix();
     }
+    // Zoom Ladder F6/F7 costume 'ship-to-icon' (T1): the full debris meshes are
+    // replaced by cluster icons and the world ship mesh by a chevron. Hang the
+    // hide off the SAME re-assert as nearFieldEnabled so it survives applyTier()
+    // rebuilds. Guarded on the registered refs (null on flag-off/headless → no-op).
+    if (this._ladderDebrisField && this._ladderDebrisField.setLadderDebrisMode) {
+      this._ladderDebrisField.setLadderDebrisMode(f.debrisMode);
+    }
+    if (this._ladderShip) {
+      // nearField:false is the T1 ship-is-icon condition (F6/F7); F1/F2 interiors
+      // keep their debrisMode 'hidden' so this only fires where a chevron replaces
+      // the mesh (F6 'clusters', F7 'massBands').
+      const shipIsIcon = (f.debrisMode === 'clusters' || f.debrisMode === 'massBands');
+      this._ladderShip.visible = !shipIsIcon;
+    }
+  }
+
+  /**
+   * Zoom Ladder: register the render-block content the per-floor `debrisMode`
+   * hides on the ship-is-icon floors (F6/F7) — the full debris meshes and the
+   * world ship mesh. Called once from main.js after both exist; refs are optional
+   * so headless/tests need not provide them. Storing refs mutates nothing, and
+   * the hide is applied only from _reassertLadderFidelity (guarded on an engaged
+   * fidelity), so this call is byte-identical while the ladder is disengaged.
+   * @param {{debrisField?:object, ship?:object}} [refs]
+   */
+  setLadderContentRefs({ debrisField, ship } = {}) {
+    this._ladderDebrisField = debrisField || null;
+    this._ladderShip = ship || null;
   }
 
   /**

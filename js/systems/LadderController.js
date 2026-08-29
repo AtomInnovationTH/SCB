@@ -84,11 +84,11 @@ export class LadderController {
 
     const decisions = this._ladder.update(t);
     this._apply(decisions, t);
-    // Tick the active floor content (F6 NAVCOM cluster icons + transfer window).
-    // NavcomFloor uses its own injected projector; the serial track supplies it.
-    if (this._navcom && this._navcom.isActive && this._navcom.isActive() && this._navcom.update) {
-      this._navcom.update();
-    }
+    // NOTE: the F6 (NAVCOM) floor content is NOT ticked here — main.js is the
+    // SINGLE navcom ticker (it ticks navcom.update({project,shipPos,shipAngleRad})
+    // with the live camera projector right after cameraSystem.update, so the icons
+    // read this frame's pose and never render twice). This controller only owns
+    // the navcom activate/deactivate lifecycle (_applyFloorContent / _disengage).
     this._refreshRail();
     return decisions;
   }

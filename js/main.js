@@ -112,6 +112,7 @@ import { persistenceManager } from './systems/PersistenceManager.js';
 import { StrategicMap } from './ui/StrategicMap.js';
 import { WheelRouter } from './systems/WheelRouter.js';
 import { LadderController } from './systems/LadderController.js';
+import { NavcomFloor } from './systems/NavcomFloor.js';
 import { TimeAuthority } from './systems/TimeAuthority.js';
 import { FloorContract } from './core/FloorContract.js';
 import { RailIndicator } from './ui/RailIndicator.js';
@@ -507,6 +508,26 @@ let railIndicator;
 // Zoom Ladder S3 — the ONE world-time choke point (T2). Owns dtWorld/warp; pins
 // the shipped base rate whenever the ladder is disengaged (byte-identical).
 let timeAuthority;
+
+// Zoom Ladder F6 (NAVCOM) floor content orchestrator (S5). Constructed in the
+// ladder block, injected into LadderController (activates/ticks on F6), and
+// ticked explicitly from the loop with the live projector below.
+let navcomFloor;
+
+// Zoom Ladder F6 world→screen projector, built off the live ladder camera.
+// NavcomFloor consumes it to place the cluster ring+count icons and the ship
+// chevron; |z| <= 1 keeps only points inside the camera near/far planes visible.
+const _navProjV = new THREE.Vector3();
+function navcomProject(worldVec3) {
+  const cam = cameraSystem && cameraSystem.camera;
+  if (!cam) return { x: 0, y: 0, visible: false };
+  const v = _navProjV.copy(worldVec3).project(cam);
+  return {
+    x: (v.x * 0.5 + 0.5) * window.innerWidth,
+    y: (-v.y * 0.5 + 0.5) * window.innerHeight,
+    visible: Math.abs(v.z) <= 1,
+  };
+}
 
 // Input
 let inputManager;
@@ -1130,12 +1151,34 @@ async function init() {
   // inert while Constants.LADDER.ENABLED is false (ships false) — shipped
   // behavior stays byte-identical.
   railIndicator = new RailIndicator();
+  // Zoom Ladder F6 (NAVCOM) content orchestrator (S5, M3). Constructed INSIDE the
+  // ladder block (T8: EventBus/costume order = construction order) and injected
+  // into LadderController, which activates/ticks it on F6 arrival and dispatches
+  // its 'plan-transfer' Space verb. The live world→screen projector is built off
+  // the ladder camera; onPlanTransfer routes the planned transfer into the
+  // shipped approach autopilot. Inert while LADDER.ENABLED is false (never
+  // activated), so shipped behavior stays byte-identical.
+  navcomFloor = new NavcomFloor({
+    clusterSource: debrisField,
+    player,
+    project: navcomProject,
+    onPlanTransfer: (cluster) => autopilotSystem.engageCluster(cluster),
+  });
   ladderController = new LadderController({
     cameraSystem,
     sceneManager,
     gameState,
     rail: railIndicator,
+    navcom: navcomFloor,
   });
+  // Zoom Ladder F6/F7 render-block content refs (T1 'ship-to-icon'): SceneManager
+  // hides the full debris meshes + the world ship mesh on floors whose debrisMode
+  // iconizes them (F6 'clusters'), and re-asserts the hide across applyTier().
+  // Storing refs mutates nothing and the hide only fires from an engaged floor's
+  // re-assert, so with LADDER.ENABLED false this is byte-identical.
+  if (sceneManager.setLadderContentRefs) {
+    sceneManager.setLadderContentRefs({ debrisField, ship: player });
+  }
   // S3 — the ONE dtReal/dtWorld choke point (T2). Ticked each frame from the
   // game loop; pins the shipped base rate while the ladder is disengaged.
   timeAuthority = new TimeAuthority();
@@ -4530,6 +4573,27 @@ function updateCamera(dt) {
 
   // Update the camera system
   cameraSystem.update(dt, playerPos, playerVel, playerQuat);
+
+  // Zoom Ladder F6 (NAVCOM): tick the floor content AFTER the camera update so
+  // the cluster icons + ship chevron read THIS frame's camera pose (no one-frame
+  // lag). This is the SINGLE navcom ticker (LadderController no longer ticks it).
+  // NavcomFloor.update() self-gates on active; we ALSO gate the projector/heading
+  // work on isActive() so the shipped flag-off path does zero extra per-frame work
+  // (byte-identical). navcom is active only on F6 while the ladder is engaged.
+  if (navcomFloor && navcomFloor.isActive()) {
+    const shipPos = player.getPosition();
+    const vel = player.getVelocity();
+    const vmag = Math.hypot(vel.x, vel.y, vel.z) || 1;
+    const eps = 0.05; // world-unit nudge along velocity (heading direction only, scale-free)
+    const s0 = navcomProject(shipPos);
+    const s1 = navcomProject({
+      x: shipPos.x + (vel.x / vmag) * eps,
+      y: shipPos.y + (vel.y / vmag) * eps,
+      z: shipPos.z + (vel.z / vmag) * eps,
+    });
+    const shipAngleRad = Math.atan2(s1.y - s0.y, s1.x - s0.x);
+    navcomFloor.update({ project: navcomProject, shipPos, shipAngleRad });
+  }
 
   // Detail-LOD cull (Phase 6): feed the fresh camera→craft distance (scene units)
   // to the Mother + daughters so their inert mm-scale hardware hides when far.
