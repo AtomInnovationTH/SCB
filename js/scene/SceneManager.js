@@ -588,11 +588,31 @@ export class SceneManager {
   /**
    * Zoom Ladder per-floor render block setter (S2, T1). LadderController calls
    * this on floor arrival with the FloorContract fidelity + clip planes, or with
-   * `null` on disengage (which restores the shipped applyTier() path exactly).
+   * `null` on disengage — which RESTORES the shipped render block (near-field on,
+   * camera.near/far back to Constants.CAMERA_NEAR/FAR) so a flag-on session that
+   * reached F6/F7 doesn't leave those at ladder values, and keeps applyTier()
+   * byte-identical to the shipped path afterwards.
    * @param {{nearField:boolean, near:?number, far:?number, debrisMode:?string, floor:?number}|null} fid
    */
   setLadderFloorFidelity(fid) {
-    this._ladderFidelity = fid || null;
+    if (!fid) {
+      // Disengage: restore the SHIPPED render block so a flag-on session that
+      // reached F6/F7 (far 2000, near-field OFF) doesn't leave the clip planes /
+      // near-field pass at ladder values until the next applyTier() rebuild.
+      // Guarded on a prior engaged request, so with the flag off (never engaged)
+      // this is never called and applyTier() stays byte-identical.
+      if (this._ladderFidelity) {
+        if (this.renderPass) this.renderPass.nearFieldEnabled = true;
+        if (this.camera) {
+          this.camera.near = Constants.CAMERA_NEAR;
+          this.camera.far = Constants.CAMERA_FAR;
+          this.camera.updateProjectionMatrix();
+        }
+      }
+      this._ladderFidelity = null;
+      return;
+    }
+    this._ladderFidelity = fid;
     this._reassertLadderFidelity();
   }
 

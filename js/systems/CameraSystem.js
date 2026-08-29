@@ -3635,9 +3635,6 @@ export class CameraSystem {
     lc.anchor = frame.anchor;
     lc.targetDistU = frame.distU;
     lc.fov = frame.fov;
-    // A free move cancels any residual ride bookkeeping (there should be none —
-    // the core ignores wheel while riding — but stay defensive).
-    if (!lc.riding) lc.fov = frame.fov;
   }
 
   /**
@@ -3669,6 +3666,12 @@ export class CameraSystem {
   /** @returns {boolean} whether the ladder camera currently owns the view. */
   isLadderActive() { return this._ladderCam.active; }
 
+  /** @private world position of the frame anchor (Earth centre = scene origin;
+   *  ship = the live player position). Writes into `out` and returns it. */
+  _anchorWorld(anchor, playerPos, out) {
+    return anchor === 'earth' ? out.set(0, 0, 0) : out.copy(playerPos);
+  }
+
   /** @private world position of the frame anchor. */
   _ladderAnchorPos(anchor) {
     // Earth centre = scene origin (radialDir is playerPos.normalize()). The ship
@@ -3684,6 +3687,7 @@ export class CameraSystem {
   _updateLadderCamera(dt, playerPos, radialDir) {
     const lc = this._ladderCam;
 
+    let ease = 0;
     if (lc.riding) {
       lc.rideT += dt / lc.rideDur;
       if (lc.rideT >= 1) {
@@ -3691,7 +3695,7 @@ export class CameraSystem {
         lc.riding = false;
       }
       const t = lc.rideT;
-      const ease = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; // cubic in-out
+      ease = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; // cubic in-out
       lc.curDistU = lc.rideFromDistU + (lc.rideToDistU - lc.rideFromDistU) * ease;
       const fov = lc.rideFromFov + (lc.rideToFov - lc.rideFromFov) * ease;
       this._baseFov = fov;
@@ -3708,9 +3712,18 @@ export class CameraSystem {
       this.camera.fov = lc.fov;
     }
 
-    const anchorPos = (lc.anchor === 'earth')
-      ? this._tmpVecB.set(0, 0, 0)
-      : this._tmpVecB.copy(playerPos);
+    // Anchor position. During a ride the anchor is LERPED from the source frame's
+    // anchor to the destination's using the same cubic ease, so a cross-anchor
+    // crossing (ship→Earth, F5↔F6) flies smoothly instead of snapping the world
+    // origin at ride start. Same-anchor rides (F4↔F5) are unaffected.
+    let anchorPos;
+    if (lc.riding && lc.rideAnchorFrom !== lc.anchor) {
+      const fromA = this._anchorWorld(lc.rideAnchorFrom, playerPos, lc._tmp);
+      const toA = this._anchorWorld(lc.anchor, playerPos, this._tmpVecC);
+      anchorPos = this._tmpVecB.lerpVectors(fromA, toA, ease);
+    } else {
+      anchorPos = this._anchorWorld(lc.anchor, playerPos, this._tmpVecB);
+    }
     // camera = anchor + dir * distance
     this.camera.position.copy(anchorPos).addScaledVector(lc.dir, lc.curDistU);
     // Up-frame: radial for ship anchor (roll-free), Earth-north for earth anchor.
