@@ -568,10 +568,39 @@ export class CameraSystem {
       CeremonyTimeScale.reset(this);
     }));
 
+    // ========================================================================
+    // ZOOM LADDER camera (S2 ride engine — docs/ladder/06-core-api.md, T6).
+    // A separate override slot (parallel to the launch/net ceremonies) driven by
+    // LadderController: it dollies the camera along a fixed world direction from
+    // the floor's anchor (ship for F3–F5, Earth CENTRE for F6–F7 → Earth-fixed
+    // framing, which setView() offset lerps cannot do) at the (floor, z01)
+    // distance, cubic-in-out for crossing rides. Active only while the ladder is
+    // engaged (Constants.LADDER.ENABLED + gameplay); untouched when the flag is
+    // off, so shipped views stay byte-identical.
+    // ========================================================================
+    this._ladderCam = {
+      active: false,
+      anchor: 'ship',            // 'ship' | 'earth'
+      dir: new THREE.Vector3(0, 0.35, 1).normalize(), // anchor→camera unit dir
+      curDistU: 0.0004,          // eased current distance (scene units)
+      targetDistU: 0.0004,       // free-scroll / settle target
+      fov: Constants.CAMERA_FOV,
+      // Ride (crossing / mini): cubic-in-out distance+fov lerp over `dur`.
+      riding: false,
+      rideT: 0,
+      rideDur: 0,
+      rideFromDistU: 0,
+      rideToDistU: 0,
+      rideFromFov: 0,
+      rideToFov: 0,
+      rideAnchorFrom: 'ship',
+      onDone: null,
+      _tmp: new THREE.Vector3(),
+    };
+
     this._boundMouseDown = this._onMouseDown.bind(this);
     this._boundMouseMove = this._onMouseMove.bind(this);
     this._boundMouseUp = this._onMouseUp.bind(this);
-    this._boundWheel = this._onWheel.bind(this);
     this._boundContextMenu = (e) => {
       if (this.currentView === CameraViews.FIRST_PERSON ||
           this.currentView === CameraViews.ORBIT) {
@@ -802,8 +831,13 @@ export class CameraSystem {
     this._lvlhLateral.crossVectors(velDir, radialDir).normalize();
     this._lvlhForward.crossVectors(radialDir, this._lvlhLateral).normalize();
 
-    // V-7: Launch ceremony override — bypass normal view computation
-    if (this._launchCeremony.active) {
+    // Zoom Ladder override (S2) — highest-priority camera driver when engaged.
+    // Bypasses the normal view path entirely; the follow-light rig + shake below
+    // still run so the ship stays lit on the ladder.
+    if (this._ladderCam.active) {
+      this._updateLadderCamera(dt, playerPos, radialDir);
+    } else if (this._launchCeremony.active) {
+      // V-7: Launch ceremony override — bypass normal view computation
       const result = this._updateLaunchCeremony(dt, playerPos, velDir, radialDir, playerQuat);
       if (result) {
         this.camera.position.copy(result.pos);
@@ -998,7 +1032,7 @@ export class CameraSystem {
 
     // Phase 4: FOV breathe during sustained thrust (I-War heritage)
     // Skip during ARM_PILOT (has its own narrow FOV)
-    if (this.currentView !== CameraViews.ARM_PILOT && !this._launchCeremony.active && !this._netCeremony.active) {
+    if (this.currentView !== CameraViews.ARM_PILOT && !this._launchCeremony.active && !this._netCeremony.active && !this._ladderCam.active) {
       const thrustMag = this._thrustVisualMag;
       if (thrustMag > 0.05) {
         // Accumulate sustained thrust timer
@@ -3411,7 +3445,9 @@ export class CameraSystem {
     this.canvas.addEventListener('mousedown', this._boundMouseDown);
     this.canvas.addEventListener('mousemove', this._boundMouseMove);
     this.canvas.addEventListener('mouseup', this._boundMouseUp);
-    this.canvas.addEventListener('wheel', this._boundWheel, { passive: false });
+    // S2: the wheel is owned by the single WheelRouter (window capture). The
+    // zoom logic lives in handleWheelZoom(e), which the router calls on the
+    // legacy (ladder-off) path. No canvas wheel listener here anymore (T3).
     this.canvas.addEventListener('contextmenu', this._boundContextMenu);
   }
 
@@ -3488,8 +3524,14 @@ export class CameraSystem {
     }
   }
 
-  /** @private */
-  _onWheel(e) {
+  /**
+   * Legacy wheel-zoom logic (chase/orbit/inspection/first-person). No longer a
+   * DOM listener — the single WheelRouter (S2, T3) calls this on the ladder-OFF
+   * path so shipped zoom behavior is byte-identical. Still emits CAMERA_ZOOM
+   * (skills discovery) and drives the inspect Schmitt, exactly as before.
+   * @param {WheelEvent} e
+   */
+  handleWheelZoom(e) {
     e.preventDefault();
 
     // 2026-08-26: wheel = player input — the lasso cut steps aside instantly.
@@ -3540,6 +3582,151 @@ export class CameraSystem {
       this._baseFov = Math.max(30, Math.min(90, this._baseFov));
       this.camera.fov = this._baseFov + this._fovBreathOffset;
       this.camera.updateProjectionMatrix();
+    }
+  }
+
+  // ==========================================================================
+  // ZOOM LADDER RIDE ENGINE (S2 — docs/ladder/06-core-api.md, T6)
+  //
+  // The ceremony-BEAT pattern applied to the ladder: LadderController hands the
+  // camera a target FRAME { distU, fov, anchor } derived from (floor, z01), and
+  // this engine dollies along a fixed world direction from the anchor. Rides
+  // (crossings / mini-rides) cubic-in-out interpolate distance + FOV; free
+  // scroll / settle ease toward the live target. Anchor 'earth' aims at the
+  // scene ORIGIN (Earth centre) — the Earth-fixed framing setView() cannot do.
+  // ==========================================================================
+
+  /**
+   * Engage the ladder camera. Captures the current camera direction relative to
+   * the frame's anchor so the first floor doesn't snap the view.
+   * @param {{distU:number, fov:number, anchor:'ship'|'earth'}} frame
+   */
+  ladderEngage(frame) {
+    const lc = this._ladderCam;
+    lc.active = true;
+    lc.riding = false;
+    lc.onDone = null;
+    lc.anchor = frame.anchor;
+    lc.targetDistU = frame.distU;
+    lc.curDistU = frame.distU;
+    lc.fov = frame.fov;
+    // Seed the dolly direction from the live camera pose (fallback: keep prior).
+    const anchorPos = this._ladderAnchorPos(frame.anchor);
+    const d = lc._tmp.copy(this.camera.position).sub(anchorPos);
+    if (d.lengthSq() > 1e-20) lc.dir.copy(d).normalize();
+    this._baseFov = frame.fov;
+  }
+
+  /** Disengage the ladder camera; the normal view path resumes next frame. */
+  ladderDisengage() {
+    const lc = this._ladderCam;
+    lc.active = false;
+    lc.riding = false;
+    lc.onDone = null;
+  }
+
+  /**
+   * Free-scroll / settle target (no ride). The camera eases toward it.
+   * @param {{distU:number, fov:number, anchor:'ship'|'earth'}} frame
+   */
+  ladderSetTarget(frame) {
+    const lc = this._ladderCam;
+    if (!lc.active) return;
+    lc.anchor = frame.anchor;
+    lc.targetDistU = frame.distU;
+    lc.fov = frame.fov;
+    // A free move cancels any residual ride bookkeeping (there should be none —
+    // the core ignores wheel while riding — but stay defensive).
+    if (!lc.riding) lc.fov = frame.fov;
+  }
+
+  /**
+   * Start a crossing / mini ride to a destination frame over `rideMs`, cubic
+   * in-out, invoking `onDone` once when it completes.
+   * @param {{distU:number, fov:number, anchor:'ship'|'earth', rideMs:number, onDone:function}} opts
+   */
+  ladderStartRide(opts) {
+    const lc = this._ladderCam;
+    if (!lc.active) {
+      // Not engaged (defensive) — complete immediately so the core never wedges.
+      if (typeof opts.onDone === 'function') opts.onDone();
+      return;
+    }
+    lc.riding = true;
+    lc.rideT = 0;
+    lc.rideDur = Math.max(0.001, (opts.rideMs || 550) / 1000);
+    lc.rideFromDistU = lc.curDistU;
+    lc.rideToDistU = opts.distU;
+    lc.rideFromFov = this.camera.fov || lc.fov;
+    lc.rideToFov = opts.fov;
+    lc.rideAnchorFrom = lc.anchor;
+    lc.anchor = opts.anchor;           // destination anchor drives the framing
+    lc.targetDistU = opts.distU;
+    lc.fov = opts.fov;
+    lc.onDone = (typeof opts.onDone === 'function') ? opts.onDone : null;
+  }
+
+  /** @returns {boolean} whether the ladder camera currently owns the view. */
+  isLadderActive() { return this._ladderCam.active; }
+
+  /** @private world position of the frame anchor. */
+  _ladderAnchorPos(anchor) {
+    // Earth centre = scene origin (radialDir is playerPos.normalize()). The ship
+    // anchor uses the live cached player position.
+    if (anchor === 'earth') return this._tmpVecA.set(0, 0, 0);
+    return this._tmpVecA.copy(this._lastPlayerPos);
+  }
+
+  /**
+   * Per-frame ladder camera driver (called from update() when engaged).
+   * @private
+   */
+  _updateLadderCamera(dt, playerPos, radialDir) {
+    const lc = this._ladderCam;
+
+    if (lc.riding) {
+      lc.rideT += dt / lc.rideDur;
+      if (lc.rideT >= 1) {
+        lc.rideT = 1;
+        lc.riding = false;
+      }
+      const t = lc.rideT;
+      const ease = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; // cubic in-out
+      lc.curDistU = lc.rideFromDistU + (lc.rideToDistU - lc.rideFromDistU) * ease;
+      const fov = lc.rideFromFov + (lc.rideToFov - lc.rideFromFov) * ease;
+      this._baseFov = fov;
+      this.camera.fov = fov;
+    } else {
+      // Free scroll / settle: ease the current distance toward the target so
+      // per-event z01 steps read as smooth dolly, not jumps.
+      const rate = 14.0; // ~ e-fold per 70 ms
+      lc.curDistU += (lc.targetDistU - lc.curDistU) * Math.min(1, rate * dt);
+      if (Math.abs(lc.curDistU - lc.targetDistU) < lc.targetDistU * 1e-4) {
+        lc.curDistU = lc.targetDistU;
+      }
+      this._baseFov = lc.fov;
+      this.camera.fov = lc.fov;
+    }
+
+    const anchorPos = (lc.anchor === 'earth')
+      ? this._tmpVecB.set(0, 0, 0)
+      : this._tmpVecB.copy(playerPos);
+    // camera = anchor + dir * distance
+    this.camera.position.copy(anchorPos).addScaledVector(lc.dir, lc.curDistU);
+    // Up-frame: radial for ship anchor (roll-free), Earth-north for earth anchor.
+    if (lc.anchor === 'earth') {
+      this.camera.up.set(0, 1, 0);
+    } else {
+      this.camera.up.copy(radialDir);
+    }
+    this.camera.lookAt(anchorPos);
+    this.camera.updateProjectionMatrix();
+
+    // Fire the ride-complete callback once, AFTER the final pose is written.
+    if (!lc.riding && lc.onDone) {
+      const cb = lc.onDone;
+      lc.onDone = null;
+      cb();
     }
   }
 
@@ -3641,7 +3828,6 @@ export class CameraSystem {
     this.canvas.removeEventListener('mousedown', this._boundMouseDown);
     this.canvas.removeEventListener('mousemove', this._boundMouseMove);
     this.canvas.removeEventListener('mouseup', this._boundMouseUp);
-    this.canvas.removeEventListener('wheel', this._boundWheel);
     this.canvas.removeEventListener('contextmenu', this._boundContextMenu);
 
     if (this._viewIndicator && this._viewIndicator.parentNode) {

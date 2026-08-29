@@ -59,7 +59,6 @@ export class InputManager {
     // Bind handlers for add/removeEventListener
     this._onKeyDown = this._handleKeyDown.bind(this);
     this._onKeyUp = this._handleKeyUp.bind(this);
-    this._onWheel = this._handleWheel.bind(this);
     this._onPointerDown = this._handlePointerDown.bind(this);
   }
 
@@ -287,13 +286,10 @@ export class InputManager {
   start() {
     window.addEventListener('keydown', this._onKeyDown);
     window.addEventListener('keyup', this._onKeyUp);
-    // SK mouse-wheel zoom (debug session 2026-05-15 polish).
-    // Capture-phase so we can preventDefault before CameraSystem's canvas
-    // wheel handler (registered separately on the canvas at
-    // CameraSystem.js:1519). We only consume the event when armPilotMode
-    // && SK active — otherwise we pass through so the camera handler
-    // keeps working for the orbital/inspection views.
-    window.addEventListener('wheel', this._onWheel, { passive: false, capture: true });
+    // S2 (T3): the mouse wheel is now owned by the single WheelRouter (window
+    // capture). The arm-pilot STATION_KEEP branch lives on in
+    // handleArmPilotWheel(e), which the router calls first (highest priority) —
+    // verbatim behavior, no separate listener here anymore.
     window.addEventListener('pointerdown', this._onPointerDown);
   }
 
@@ -301,7 +297,6 @@ export class InputManager {
   stop() {
     window.removeEventListener('keydown', this._onKeyDown);
     window.removeEventListener('keyup', this._onKeyUp);
-    window.removeEventListener('wheel', this._onWheel, { capture: true });
     window.removeEventListener('pointerdown', this._onPointerDown);
     // PR 6 / P3.13: Clear pending audio unlock timer on teardown
     if (this._audioUnlockTimerId !== null) {
@@ -311,31 +306,25 @@ export class InputManager {
   }
 
   /**
-   * Mouse-wheel handler — gated to SK arm-pilot mode.
-   * Emits one ARM_ORBIT_ADJUST per wheel tick with a `radiusStep`
-   * (instantaneous metres delta), NOT a rate. See ArmUnit listener
-   * at line ~285 for handling. Direction convention matches the
-   * +/- keys: scroll-up → closer (negative step), scroll-down →
-   * farther (positive step).
+   * Arm-pilot STATION_KEEP wheel branch — called by the single WheelRouter (S2,
+   * T3) with highest priority. Behavior is preserved VERBATIM from the shipped
+   * window-capture listener: when armPilotMode && the piloted arm is in
+   * STATION_KEEP, consume the wheel (preventDefault + stopPropagation) and emit
+   * one ARM_ORBIT_ADJUST with a `radiusStep` (instantaneous metres delta), NOT a
+   * rate. Direction matches +/- keys: scroll-up → closer (negative step),
+   * scroll-down → farther (positive step). Legacy CAMERA_ZOOM_INPUT emission
+   * moved to the router (it fires for every wheel event, arm-SK included).
    * @param {WheelEvent} e
-   * @private
+   * @returns {boolean} true if the event was consumed by the SK branch
    */
-  _handleWheel(e) {
-    // Delegation 2 (2026-05-31) — emit CAMERA_ZOOM_INPUT for the
-    // OnboardingDirector regardless of mode.  The actual zoom action is still
-    // owned by CameraSystem (chase / inspection) or the SK orbit controls
-    // below.  Fire-and-forget; no preventDefault here.
-    if (this._deps) {
-      eventBus.emit(Events.CAMERA_ZOOM_INPUT);
-    }
-
-    if (!this.armPilotMode) return;
+  handleArmPilotWheel(e) {
+    if (!this.armPilotMode) return false;
     const d = this._deps;
     const skArm = d?.cameraSystem?.getPilotedArm?.();
-    if (!skArm || skArm.state !== Constants.ARM_STATES.STATION_KEEP) return;
+    if (!skArm || skArm.state !== Constants.ARM_STATES.STATION_KEEP) return false;
 
-    // Consume the wheel — prevent page scroll AND the camera's own
-    // wheel handler from also zooming the chase camera.
+    // Consume the wheel — prevent page scroll AND any downstream handler from
+    // also zooming.
     e.preventDefault();
     e.stopPropagation();
 
@@ -354,6 +343,7 @@ export class InputManager {
       radiusStep: stepM,
       fine,
     });
+    return true;
   }
 
   /** @returns {boolean} */

@@ -147,6 +147,19 @@ export class SceneManager {
      * ambient are direction- or position-independent and are NOT listed here. */
     this._nearFieldLights = [];
 
+    /**
+     * Zoom Ladder per-floor render block (S2, T1 — docs/ladder/02-traps.md).
+     * When the ladder engages a floor, LadderController pushes its
+     * {nearField, near, far, debrisMode} here; SceneManager RE-ASSERTS it at the
+     * end of applyTier()/applyTierWithOverrides() because _setupPostProcessing()
+     * builds a fresh NearFieldRenderPass that resets nearFieldEnabled to true
+     * (NearFieldRenderPass.js:106). Null when the ladder is disengaged / the
+     * flag is off — the re-assert is then a no-op, so applyTier() stays
+     * byte-identical to the shipped path.
+     * @type {{nearField:boolean, near:?number, far:?number, debrisMode:?string, floor:?number}|null}
+     */
+    this._ladderFidelity = null;
+
     // --- Clock ---
     this.clock = new THREE.Clock();
 
@@ -567,6 +580,41 @@ export class SceneManager {
     if (this._earth && typeof this._earth.setLowDetail === 'function') {
       this._earth.setLowDetail(tierName === 'LOW');
     }
+    // Zoom Ladder (S2, T1): the rebuilt NearFieldRenderPass reset nearFieldEnabled
+    // to true — re-assert the engaged floor's render block. No-op when disengaged.
+    this._reassertLadderFidelity();
+  }
+
+  /**
+   * Zoom Ladder per-floor render block setter (S2, T1). LadderController calls
+   * this on floor arrival with the FloorContract fidelity + clip planes, or with
+   * `null` on disengage (which restores the shipped applyTier() path exactly).
+   * @param {{nearField:boolean, near:?number, far:?number, debrisMode:?string, floor:?number}|null} fid
+   */
+  setLadderFloorFidelity(fid) {
+    this._ladderFidelity = fid || null;
+    this._reassertLadderFidelity();
+  }
+
+  /**
+   * Re-assert the engaged ladder floor's render block over whatever the last
+   * post-processing rebuild / shipped defaults left in place (T1). Guarded: a
+   * null request (flag off / disengaged) does nothing, keeping applyTier()
+   * byte-identical.
+   * @private
+   */
+  _reassertLadderFidelity() {
+    const f = this._ladderFidelity;
+    if (!f) return;
+    if (this.renderPass) this.renderPass.nearFieldEnabled = f.nearField;
+    if (this.camera) {
+      let changed = false;
+      if (f.near != null && this.camera.near !== f.near) { this.camera.near = f.near; changed = true; }
+      if (f.far != null && this.camera.far !== f.far) { this.camera.far = f.far; changed = true; }
+      // STAR_SPHERE_RADIUS (400) < every floor's far (500/2000), so no per-floor
+      // starfield scaling is needed to keep it inside the far plane (T1).
+      if (changed) this.camera.updateProjectionMatrix();
+    }
   }
 
   /**
@@ -648,6 +696,9 @@ export class SceneManager {
     if (overrides.profilePasses) {
       this._installPassProfilers();
     }
+    // Zoom Ladder (S2, T1): re-assert the engaged floor's render block after the
+    // composer rebuild reset the near-field pass. No-op when disengaged.
+    this._reassertLadderFidelity();
   }
 
   /**

@@ -297,7 +297,8 @@ export class StrategicMap {
     this._onMouseDown = this._handleMouseDown.bind(this);
     this._onMouseMove = this._handleMouseMove.bind(this);
     this._onMouseUp = this._handleMouseUp.bind(this);
-    this._onWheel = this._handleWheel.bind(this);
+    // S2 (T3): the wheel is owned by the single WheelRouter, which calls
+    // handleWheel(e) while the map is open — no own-canvas wheel listener here.
   }
 
   // --------------------------------------------------------------------------
@@ -371,7 +372,6 @@ export class StrategicMap {
       canvas.addEventListener('mousedown', this._onMouseDown);
       canvas.addEventListener('mousemove', this._onMouseMove);
       canvas.addEventListener('mouseup', this._onMouseUp);
-      canvas.addEventListener('wheel', this._onWheel);
     }
 
     // Show DOM overlays
@@ -421,7 +421,6 @@ export class StrategicMap {
       canvas.removeEventListener('mousedown', this._onMouseDown);
       canvas.removeEventListener('mousemove', this._onMouseMove);
       canvas.removeEventListener('mouseup', this._onMouseUp);
-      canvas.removeEventListener('wheel', this._onWheel);
     }
 
     // Hide DOM overlays
@@ -523,7 +522,6 @@ export class StrategicMap {
       canvas.removeEventListener('mousedown', this._onMouseDown);
       canvas.removeEventListener('mousemove', this._onMouseMove);
       canvas.removeEventListener('mouseup', this._onMouseUp);
-      canvas.removeEventListener('wheel', this._onWheel);
     }
 
     // Dispose Three.js geometry/materials
@@ -1013,7 +1011,13 @@ export class StrategicMap {
     this._mouseDown = false;
   }
 
-  _handleWheel(e) {
+  /**
+   * Wheel zoom for the map. Public: called by the single WheelRouter (S2, T3)
+   * while the map is open. Preserves the shipped behavior (preventDefault +
+   * spherical-radius zoom).
+   * @param {WheelEvent} e
+   */
+  handleWheel(e) {
     e.preventDefault();
     const SM = Constants.STRATEGIC_MAP;
     const zoomSpeed = this._spherical.radius * 0.1;

@@ -110,6 +110,9 @@ import { GuidanceDirector } from './systems/GuidanceDirector.js';
 import { settingsManager } from './systems/SettingsManager.js';
 import { persistenceManager } from './systems/PersistenceManager.js';
 import { StrategicMap } from './ui/StrategicMap.js';
+import { WheelRouter } from './systems/WheelRouter.js';
+import { LadderController } from './systems/LadderController.js';
+import { RailIndicator } from './ui/RailIndicator.js';
 import { captureNetVisual, worldTumbleForKitAttitude, boxRowsForKitAttitude } from './ui/CaptureNetVisual.js';
 import { furnaceBreakdownVisual } from './ui/FurnaceBreakdownVisual.js';
 import { captureNetSystem, isInsideCone, coneRadiusAtDepth } from './entities/CaptureNet.js';
@@ -493,6 +496,11 @@ let teachingOverlay;
 let onboardingDirector;
 let guidanceDirector;
 let strategicMap;
+
+// Zoom Ladder (S2 skeleton — behind Constants.LADDER.ENABLED)
+let wheelRouter;
+let ladderController;
+let railIndicator;
 
 // Input
 let inputManager;
@@ -1105,6 +1113,31 @@ async function init() {
   // any-input abort alone could not protect that player.
   cameraSystem.setLassoCutInputProbe(() => inputManager.anyKeyHeld());
   _bootMark('InputManager started + gameFlowManager.init');
+
+  // --- Zoom Ladder (S2 walking skeleton — docs/ladder/03-plan.md M1) ---
+  // The single WheelRouter (T3) owns ALL wheel input: it replaces the three
+  // shipped listeners (InputManager window-capture, CameraSystem canvas,
+  // StrategicMap own-canvas — all removed this commit) and dispatches to the
+  // arm-SK branch, the ladder (flag on), or the legacy zoom (flag off).
+  // LadderController owns the pure ZoomLadder core + the CameraSystem ride
+  // engine + the per-floor render block; the rail is the S2 stub. Everything is
+  // inert while Constants.LADDER.ENABLED is false (ships false) — shipped
+  // behavior stays byte-identical.
+  railIndicator = new RailIndicator();
+  ladderController = new LadderController({
+    cameraSystem,
+    sceneManager,
+    gameState,
+    rail: railIndicator,
+  });
+  wheelRouter = new WheelRouter({
+    canvas,
+    inputManager,
+    cameraSystem,
+    strategicMap,
+    ladderController,
+  });
+  wheelRouter.start();
 
   // --- Item 3: anti-stuck idle watchdog (data-driven, veteran-gated) ---
   armIdleAdvisor.init({
@@ -4448,6 +4481,13 @@ function updateCamera(dt) {
     player.thrustInput.z ** 2
   );
   cameraSystem.setThrustMagnitude(Math.min(1.0, thrustMag * 1000));
+
+  // Zoom Ladder (S2): tick the core (charge decay, settle-back, alarm/ride
+  // escalation) + apply decisions BEFORE the camera update reads the ladder
+  // frame. `timestamp` is the shared performance.now-based monotonic clock the
+  // WheelRouter also feeds ladder.wheel(). Internally gated on the flag +
+  // gameplay, so this is inert when Constants.LADDER.ENABLED is false.
+  if (ladderController) ladderController.update(timestamp);
 
   // Update the camera system
   cameraSystem.update(dt, playerPos, playerVel, playerQuat);
