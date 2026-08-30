@@ -660,6 +660,33 @@ export function isAvifSupported() {
 }
 
 /**
+ * OPEN-2 triage (night-side city lights black on 16k / ANGLE-Metal): every
+ * texture-load outcome is also recorded into `window.__earthTexEvents` so the
+ * `?bfp` badge-click dump carries decode/fallback history — the user is done
+ * with console work, and a silent AVIF decode failure of the 512 MB night map
+ * (handle live, image empty → samples black) is exactly the E2 hypothesis this
+ * must witness. Capped ring, try/catch'd, no-op outside the DOM (Node tests).
+ *
+ * @param {string} kind   'loaded' | 'avif-fail' | 'fallback-loaded' | 'error'
+ * @param {string} file   path as requested
+ * @param {{width?: number, height?: number}|null} image  decoded image, if any
+ */
+function recordTexEvent(kind, file, image) {
+  try {
+    if (typeof window === 'undefined') return;
+    const log = (window.__earthTexEvents = window.__earthTexEvents || []);
+    log.push({
+      t: Math.round((typeof performance !== 'undefined' ? performance.now() : 0)),
+      kind,
+      file: String(file).split('/').pop(),
+      w: image && image.width ? image.width : 0,
+      h: image && image.height ? image.height : 0,
+    });
+    if (log.length > 40) log.shift();
+  } catch (_e) { /* diagnostics must never break texture loading */ }
+}
+
+/**
  * Load a texture, preferring the .avif sibling when the browser supports AVIF.
  * On AVIF load failure we automatically reissue the load against the .jpg path
  * and patch the resulting image into the already-returned THREE.Texture so the
@@ -677,6 +704,7 @@ function loadTexture(path, anisotropy = 8) {
     initialPath,
     (loaded) => {
       console.log(`[Earth] Loaded: ${initialPath} (${loaded.image?.width}×${loaded.image?.height})`);
+      recordTexEvent('loaded', initialPath, loaded.image);
       // §13 boot timeline (?logBoot=1). Optional-chained so this is a no-op
       // when the flag is off — `window.__bootMark` is only attached by main.js
       // when `?logBoot=1` is set. This timestamps each Earth texture load (the
@@ -693,19 +721,26 @@ function loadTexture(path, anisotropy = 8) {
       if (useAvif) {
         // AVIF file missing or decode failed at runtime — fall back to JPG.
         console.warn(`[Earth] AVIF load failed for ${initialPath}, falling back to ${path}`, err);
+        recordTexEvent('avif-fail', initialPath, null);
         textureLoader.load(path, (loaded) => {
           tex.image = loaded.image;
           tex.needsUpdate = true;
           console.log(`[Earth] Loaded fallback: ${path} (${loaded.image?.width}×${loaded.image?.height})`);
+          recordTexEvent('fallback-loaded', path, loaded.image);
           try {
             const fname = path.split('/').pop();
             const dims = `${loaded.image?.width}×${loaded.image?.height}`;
             // eslint-disable-next-line no-undef
             window.__bootMark?.(`Earth texture decoded (fallback): ${fname} (${dims})`);
           } catch (_e) { /* swallow */ }
+        }, undefined, (err2) => {
+          // Both AVIF and JPG failed — the texture will sample black forever.
+          console.error(`[Earth] Fallback JPG load ALSO failed: ${path}`, err2);
+          recordTexEvent('error', path, null);
         });
       } else {
         console.error(`[Earth] Texture load failed: ${path}`, err);
+        recordTexEvent('error', path, null);
       }
     }
   );
@@ -759,26 +794,63 @@ export function selectLOD(maxTextureSize, deviceMemory, isAppleGPU = false) {
 }
 
 /**
+ * OPEN-2 mitigation (2026-08): cap the NIGHT map at 8k on Apple GPUs.
+ * Pure + exported for tests, like {@link selectLOD}.
+ *
+ * Field evidence (user's M4 Max / Brave 151+152 / ANGLE-Metal): with the 16k
+ * set, the night-side city lights render pure BLACK in real sessions, and
+ * under DevTools' extra GPU memory the 16k DAY map blanked too — while the
+ * probe shows a perfectly healthy pipeline (decoded 16384×8192, uploaded
+ * version-complete, zero gl.getError, zero context losses). Headed harness
+ * runs on the SAME GPU (tmp/night-ab.mjs, tmp/night-pressure.mjs) render 16k
+ * lights fine in fresh sessions, even under a deliberate 10 GB same-GPU-process
+ * allocation — so the blackout is a long-session Metal residency/eviction
+ * failure of the largest resources (512 MB + mips apiece), which GL cannot
+ * even observe, not a decode/upload/shader bug. Mitigation, not band-aid:
+ * evict-proofing by size. The night map drops to 8k (~171 MB with mips) on the
+ * implicated GPU family only:
+ *   - City lights are viewed at orbital distance → sampled at mip levels where
+ *     the 16k and 8k pyramids converge; headed A/B measured sub-2% disc-bright
+ *     deltas between the tiers (drift-dominated). The 16k night map buys
+ *     nothing visible in gameplay while costing the exact resource class that
+ *     goes black in the field.
+ *   - The DAY map keeps 16k: its detail IS visible (daylit terrain at every
+ *     altitude), and the field blackout hits the night map in normal play.
+ *   - `?tex=16k` still forces BOTH maps to 16k (A/B lever unchanged), so the
+ *     field experiment stays one URL away.
+ *
+ * @param {'16k'|'8k'|''} quality  overall tier from selectLOD()
+ * @param {boolean} [isAppleGPU=false]  WEBGL_debug_renderer_info contains 'Apple'
+ * @returns {'16k'|'8k'|''} night-map tier (== quality except 16k-on-Apple → 8k)
+ */
+export function selectNightLOD(quality, isAppleGPU = false) {
+  if (quality === '16k' && isAppleGPU) return '8k';
+  return quality;
+}
+
+/**
  * Detect hardware capability and return the best texture quality tier.
  * Gathers runtime inputs, delegates to selectLOD() for the actual decision.
- * @returns {'16k'|'8k'|''}
+ * @returns {{quality: '16k'|'8k'|'', nightQuality: '16k'|'8k'|''}}
  */
 function getTextureQuality() {
   // Black-flicker triage (H3) / OPEN-2 (16k night texture renders black on
   // ANGLE-Metal): `?tex=16k|8k|base` overrides hardware LOD detection so the
   // 1.2+ GB 16k day+night set can be A/B'd against 8k in one URL, no rebuild.
   // Opt-in, exact-value only (DevShotGate idiom); any other value falls through
-  // to detection. Dev-only — never ship URLs with it.
+  // to detection. Dev-only — never ship URLs with it. The override forces the
+  // NIGHT map too (bypasses the selectNightLOD Apple cap) — that is the point:
+  // ?tex=16k must reproduce the full failing 16k set on demand.
   try {
     if (typeof window !== 'undefined' && typeof URLSearchParams !== 'undefined') {
       const raw = (new URLSearchParams(window.location.search).get('tex') || '').toLowerCase();
       if (raw === '16k' || raw === '8k') {
         console.info(`[Earth] texture LOD URL override → ${raw}`);
-        return raw;
+        return { quality: raw, nightQuality: raw };
       }
       if (raw === 'base' || raw === '4k') {
         console.info('[Earth] texture LOD URL override → base');
-        return '';
+        return { quality: '', nightQuality: '' };
       }
     }
   } catch (_e) { /* fall through to detection */ }
@@ -800,11 +872,13 @@ function getTextureQuality() {
   }
 
   const quality = selectLOD(maxTextureSize, deviceMemory, isAppleGPU);
+  // OPEN-2: the night map rides one tier lower on Apple GPUs (see selectNightLOD).
+  const nightQuality = selectNightLOD(quality, isAppleGPU);
   // PR 5 / P2.10: gate verbose LOD log behind DEBUG flag (?debug=1).
   if (Constants && Constants.DEBUG && Constants.DEBUG.LOG_RENDERER_DIAGNOSTICS) {
-    console.log(`[Earth] LOD selected: ${quality || '4k (base)'}. MaxTextureSize=${maxTextureSize}`);
+    console.log(`[Earth] LOD selected: ${quality || '4k (base)'} (night: ${nightQuality || '4k (base)'}). MaxTextureSize=${maxTextureSize}`);
   }
-  return quality;
+  return { quality, nightQuality };
 }
 
 /**
@@ -853,15 +927,20 @@ export class Earth {
     // procedural-terrain cost in one session.
     this._useLowDetail = profileFlags.disableEarthNoise === true;
 
-    // Adaptive quality: pick texture resolution based on hardware
-    const quality = getTextureQuality();
+    // Adaptive quality: pick texture resolution based on hardware. The night
+    // map can ride one tier below the day map (OPEN-2: selectNightLOD caps it
+    // at 8k on Apple GPUs, where the 16k night map goes residency-black in
+    // long Brave/ANGLE-Metal sessions; `?tex=` forces both tiers equal).
+    const { quality, nightQuality } = getTextureQuality();
     const texSuffix = quality ? `_${quality}` : '';
+    const nightSuffix = nightQuality ? `_${nightQuality}` : '';
     const cloudSuffix = quality === '16k' ? '_8k' : (quality === '8k' ? '_8k' : '');
     // Sphere tessellation rides the same hardware signal (Task 3b) — see
     // selectSphereSegments() for the rationale + construction-only caveat.
+    // Keyed on the DAY tier: geometry detail tracks the primary map.
     this._sphereSegments = selectSphereSegments(quality);
 
-    console.log(`[Earth] Texture quality: ${quality || 'base'} (suffix: "${texSuffix}")`);
+    console.log(`[Earth] Texture quality: ${quality || 'base'} (suffix: "${texSuffix}", night: "${nightSuffix || 'base'}")`);
 
     // C1 (tier-gated anisotropy): scale the grazing-angle sampling cost with the
     // detected LOD tier so the weakest GPUs — the base tier (low maxTextureSize /
@@ -870,9 +949,10 @@ export class Earth {
     // the full 16x.
     const texAniso = quality === '16k' ? 16 : (quality === '8k' ? 8 : 4);
 
-    // Load textures at detected quality tier
+    // Load textures at detected quality tier (night may sit one tier lower —
+    // aniso stays keyed on the day tier; three.js clamps it at upload anyway).
     this.dayTexture = loadTexture(`textures/earth_day${texSuffix}.jpg`, texAniso);
-    this.nightTexture = loadTexture(`textures/earth_night${texSuffix}.jpg`, texAniso);
+    this.nightTexture = loadTexture(`textures/earth_night${nightSuffix}.jpg`, texAniso);
     // Clouds are low-frequency; anisotropy cost concentrates at grazing angles
     // (the limb) where clouds are softest — 4x is indistinguishable from the tier
     // aniso and trims bandwidth on the overdraw-heaviest (transparent) layer.

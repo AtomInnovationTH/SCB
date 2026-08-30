@@ -25,7 +25,10 @@
  *   3. every CHECK_EVERY frames it samples GL/renderer state: context-lost,
  *      drawingBuffer-vs-canvas size, end-of-frame viewport/scissor, composer +
  *      bloom render-target GL liveness, Earth day/night/cloud texture GL
- *      liveness, info.memory counts, tier/near/far/floor — and console.warns
+ *      liveness PLUS upload truth (image dims / texture.version vs uploaded
+ *      __version / live-handle-empty-image "ghosts") and the queued
+ *      gl.getError() — the OPEN-2 (16k night-lights-black) witnesses —
+ *      info.memory counts, tier/near/far/floor — and console.warns
  *      one rate-limited line whenever any of it turns anomalous.
  *
  * Verdict table for a visible black episode (user just reads the badge):
@@ -225,17 +228,7 @@ export function installBlackFrameProbe({ sceneManager, earth } = {}) {
   try {
     badge.addEventListener('click', () => {
       try {
-        const dump = {
-          mode,
-          ts: Date.now(),
-          ua: navigator.userAgent,
-          dpr: window.devicePixelRatio,
-          win: `${window.innerWidth}x${window.innerHeight}`,
-          visState: document.visibilityState,
-          counters: { visEvents, gapEvents, lastGapMs, starveEvents, blurEvents, ctxEvents },
-          ring: ring.slice(),
-          alertLog: alertLog.slice(),
-        };
+        const dump = buildDump();
         const blob = new Blob([JSON.stringify(dump, null, 1)], { type: 'application/json' });
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
@@ -254,6 +247,93 @@ export function installBlackFrameProbe({ sceneManager, earth } = {}) {
   const glLive = (t) => {
     try { return !!(t && props.get(t) && props.get(t).__webglTexture); } catch (_e) { return false; }
   };
+
+  /**
+   * OPEN-2 (night-side city lights black on 16k): per-texture UPLOAD truth.
+   * The `e` field's GL-handle liveness cannot distinguish "decoded + uploaded"
+   * from "handle allocated, content never/partially uploaded" — three.js sets
+   * `__version = texture.version` only after it runs texImage2D. So:
+   *   w/h  = decoded image dims (0 = decode never completed / image empty)
+   *   ver  = texture.version (bumped by needsUpdate; 1+ once an image landed)
+   *   up   = properties __version (-1 = never uploaded)
+   * ghost = handle live but image empty — the "samples black forever" state.
+   * @param {THREE.Texture|null|undefined} t
+   */
+  const texDetail = (t) => {
+    if (!t) return null;
+    let up = -1;
+    try {
+      const p = props.get(t);
+      if (p && p.__version !== undefined) up = p.__version;
+    } catch (_e) { /* noop */ }
+    const img = t.image;
+    const w = img && img.width ? img.width : 0;
+    const h = img && img.height ? img.height : 0;
+    return { live: glLive(t), w, h, ver: t.version, up, ghost: glLive(t) && w === 0 };
+  };
+  /** Compact ring-snap form: `d:16384/1/1 n:...` = imageW/version/uploadedVersion. */
+  const texdStr = () => {
+    if (!earth) return '';
+    const one = (tag, t) => {
+      const d = texDetail(t);
+      return d ? `${tag}:${d.w}/${d.ver}/${d.up < 0 ? '-' : d.up}` : `${tag}:?`;
+    };
+    return `${one('d', earth.dayTexture)} ${one('n', earth.nightTexture)} ${one('c', earth.cloudTexture)}`;
+  };
+
+  // GL error witness (OPEN-2): WebGL errors are sticky until READ, and neither
+  // three.js nor the game ever calls gl.getError() — so a GL_OUT_OF_MEMORY
+  // (0x0505) raised by the 16k texImage2D/mipgen upload is still queued HERE,
+  // minutes later, on the first probe sample after it happened. The probe is
+  // therefore the only consumer: one call per sample (~8 Hz, same sync-IPC
+  // class as the VIEWPORT/SCISSOR getParameter reads above it).
+  let glErrEvents = 0;
+  let lastGlErr = 0;
+
+  // One-time capability/environment context for dumps (renderer string proves
+  // the ANGLE-Metal vs SwiftShader split when reading a user dump).
+  const caps = { maxTextureSize: -1, unmaskedRenderer: '', deviceMemory: null };
+  try {
+    caps.maxTextureSize = renderer.capabilities ? renderer.capabilities.maxTextureSize : -1;
+    const dbgExt = gl.getExtension('WEBGL_debug_renderer_info');
+    if (dbgExt) caps.unmaskedRenderer = String(gl.getParameter(dbgExt.UNMASKED_RENDERER_WEBGL) || '');
+    caps.deviceMemory = typeof navigator !== 'undefined' ? (navigator.deviceMemory ?? null) : null;
+  } catch (_e) { /* noop */ }
+
+  /**
+   * Single source of truth for the diagnostic dump (badge click AND the
+   * `window.__bfpDump` harness hook return the same shape). `earthTexDetail`,
+   * `texEvents` (Earth.js loadTexture outcome ring — decode failures / JPG
+   * fallbacks), `glErr` and `caps` are the OPEN-2 additions: together they
+   * separate decode-failed (w=0) / never-uploaded (up=-1) / upload-errored
+   * (glErr 0x505) / all-healthy-yet-black (Metal residency, invisible to GL).
+   */
+  function buildDump() {
+    const d = {
+      mode,
+      ts: Date.now(),
+      frame,
+      caps,
+      earthTexDetail: earth ? {
+        day: texDetail(earth.dayTexture),
+        night: texDetail(earth.nightTexture),
+        clouds: texDetail(earth.cloudTexture),
+      } : null,
+      texEvents: null,
+      glErr: { events: glErrEvents, last: lastGlErr, lastHex: lastGlErr ? `0x${lastGlErr.toString(16)}` : '' },
+      counters: { visEvents, gapEvents, lastGapMs, starveEvents, blurEvents, ctxEvents },
+      ring: ring.slice(),
+      alertLog: alertLog.slice(),
+    };
+    try {
+      d.ua = navigator.userAgent;
+      d.dpr = window.devicePixelRatio;
+      d.win = `${window.innerWidth}x${window.innerHeight}`;
+      d.visState = document.visibilityState;
+      d.texEvents = Array.isArray(window.__earthTexEvents) ? window.__earthTexEvents.slice() : null;
+    } catch (_e) { /* noop */ }
+    return d;
+  }
 
   /** Mean 0..1 luma of a PATCH×PATCH read at device-pixel (x, y). */
   function readLuma(x, y) {
@@ -344,6 +424,21 @@ export function installBlackFrameProbe({ sceneManager, earth } = {}) {
     const eStr = earth
       ? (eCh(eDay, texWasLive.day) + eCh(eNight, texWasLive.night) + eCh(eClouds, texWasLive.clouds))
       : '---';
+    // OPEN-2: upload-completion truth + ghost detection (live handle, empty image).
+    const texd = texdStr();
+    const ghosts = [];
+    if (earth) {
+      const gd = texDetail(earth.dayTexture);
+      const gn = texDetail(earth.nightTexture);
+      const gc = texDetail(earth.cloudTexture);
+      if (gd && gd.ghost) ghosts.push('d');
+      if (gn && gn.ghost) ghosts.push('n');
+      if (gc && gc.ghost) ghosts.push('c');
+    }
+    // Consume any queued GL error (sticky-until-read; see witness note above).
+    let glErrNow = 0;
+    try { if (!lost) glErrNow = gl.getError() || 0; } catch (_e) { /* noop */ }
+    if (glErrNow !== 0) { glErrEvents++; lastGlErr = glErrNow; }
 
     const memTex = renderer.info && renderer.info.memory ? renderer.info.memory.textures : -1;
     const programs = renderer.info && renderer.info.programs ? renderer.info.programs.length : -1;
@@ -356,6 +451,8 @@ export function installBlackFrameProbe({ sceneManager, earth } = {}) {
     if (dbw !== canvas.width || dbh !== canvas.height) alerts.push(`dbmm(${dbw}x${dbh}!=${canvas.width}x${canvas.height})`);
     if (rtDied) alerts.push(`rtdead(${rtStr})`);
     if (deadAfterLive) alerts.push(`texdead(${eStr})`);
+    if (ghosts.length) alerts.push(`texghost(${ghosts.join('')})`);
+    if (glErrNow !== 0) alerts.push(`glerr(0x${glErrNow.toString(16)})`);
     if (scTest) alerts.push(`sciss(${sc ? `${sc[0]},${sc[1]},${sc[2]}x${sc[3]}` : '?'})`);
     if (vp && (vp[2] !== dbw || vp[3] !== dbh)) alerts.push(`vp(${vp[0]},${vp[1]},${vp[2]}x${vp[3]})`);
     if (floor === 6 || floor === 7) {
@@ -385,7 +482,8 @@ export function installBlackFrameProbe({ sceneManager, earth } = {}) {
       floor, tier: sm.currentTier, nfOn,
       near: cam.near, far: cam.far,
       memTex, memHi: memTexHighWater, programs, compGen: composerGen,
-      rt: rtStr, earthTex: eStr,
+      rt: rtStr, earthTex: eStr, texd,
+      glErrs: glErrEvents,
       db: `${dbw}x${dbh}`, cv: `${canvas.width}x${canvas.height}`,
       pr: renderer.getPixelRatio(), dpr: window.devicePixelRatio,
       vp: vp ? `${vp[0]},${vp[1]},${vp[2]}x${vp[3]}` : '?',
@@ -416,7 +514,8 @@ export function installBlackFrameProbe({ sceneManager, earth } = {}) {
     badge.textContent =
       `BFP${mode} F${floor || '-'} ${sm.currentTier} nf${nfOn === null ? '?' : (nfOn ? '1' : '0')}` +
       ` n${cam.near}/${cam.far} t${memTex} rt${rtStr} e${eStr} db${dbw}x${dbh}` +
-      `${scTest ? ' SCISS' : ''}${lost ? ' CTXLOST' : ''}${lumaStr} f${Math.round(fpsEst)}` +
+      `${scTest ? ' SCISS' : ''}${lost ? ' CTXLOST' : ''}` +
+      `${glErrEvents ? ` GLERR${glErrEvents}(0x${lastGlErr.toString(16)})` : ''}${lumaStr} f${Math.round(fpsEst)}` +
       (visEvents || gapEvents || starveEvents || blurEvents ? ` v${visEvents} g${gapEvents} s${starveEvents} b${blurEvents}` : '') +
       (alertsStr ? ` | ${alertsStr}` : '');
     const bad = ts < anomalyLatchUntil;
@@ -429,13 +528,7 @@ export function installBlackFrameProbe({ sceneManager, earth } = {}) {
   // at blur-keepalive cadence that is ~30 s, so harnesses must not read
   // liveness from the ring).
   try {
-    window.__bfpDump = () => ({
-      mode,
-      frame,
-      counters: { visEvents, gapEvents, lastGapMs, starveEvents, blurEvents, ctxEvents },
-      ring: ring.slice(),
-      alertLog: alertLog.slice(),
-    });
+    window.__bfpDump = () => buildDump();
   } catch (_e) { /* noop */ }
 
   try { console.info(`[BFP] black-frame probe installed (mode ${mode}, check ${CHECK_EVERY}f, read ${READ_EVERY}f)`); } catch (_e) { /* noop */ }
