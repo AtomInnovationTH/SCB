@@ -204,6 +204,10 @@ export class HUD {
     this._rightColumn = document.createElement('div');
     this._rightColumn.id = 'hud-right-column';
     this._rightColumn.tabIndex = -1; // Prevent Tab focus capture (game keys on document)
+    // Bottom clearance for the dynamic relayout in update() (UX-2 #11): the
+    // shipped value is 30 px; ladder-on it is 189 px so the column bottom
+    // stays 14 px above the bottom-anchored rail (see maxHeight note below).
+    this._rightColBottomClearPx = (Constants.LADDER && Constants.LADDER.ENABLED) ? 189 : 30;
     Object.assign(this._rightColumn.style, {
       position: 'absolute',
       top: '446px',         // Below NavSphere (UX-2 #11: 160 margin + 280 diameter + 6 gap)
@@ -212,17 +216,21 @@ export class HUD {
       display: 'flex',
       flexDirection: 'column',
       gap: '10px',          // Pane-to-pane vertical gap — keep in sync with left column (StatusPanel.js)
-      // Zoom Ladder G4 (post-M3 review follow-up): with the ladder on, the rail
-      // is bottom-anchored on the right edge and occupies the bottom 175 px
-      // (14 px inset + ~161 px body — tmp/g3-rail measurements at 3 viewports).
-      // The shipped cap (100vh - 480) lets this column's bottom reach
-      // 100vh - 34 (top 446 + maxHeight), i.e. up to ~141 px INTO the rail band
-      // once the dossier + tracked-targets fill it (progression saves) — the
-      // G3 play-test complaint would recur. Ladder-on cap: bottom at
-      // 100vh - 189 → 14 px clear of the rail top. Flag-off keeps the shipped
-      // value byte-identical (docs/ladder/01-numbers.md §"Post-M3 glue").
+      // Zoom Ladder G4/G5 (post-M3 review follow-ups): with the ladder on, the
+      // rail is bottom-anchored on the right edge and occupies the bottom
+      // 175 px (14 px inset + ~161 px body — tmp/g3-rail measurements at 3
+      // viewports), so this column must stop 189 px short of the viewport
+      // bottom (14 px clear of the rail top) or a filled dossier/tracked-
+      // targets column slides under the rail (the G3 play-test complaint).
+      // This static value only covers the pre-first-update frames: the LIVE
+      // bound is the dynamic relayout in update() (UX-2 #11), which rewrites
+      // maxHeight from the comms/NavSphere-derived top using the SAME
+      // _rightColBottomClearPx clearance (G5 fix — G4 set only this static
+      // value and was clobbered on frame one). Flag-off both sites keep the
+      // shipped strings byte-identical (docs/ladder/01-numbers.md §"Post-M3
+      // glue").
       maxHeight: (Constants.LADDER && Constants.LADDER.ENABLED)
-        ? 'calc(100vh - 635px)'
+        ? 'calc(100vh - 635px)'   // 446 top + (100vh - 635) height → bottom at 100vh - 189
         : 'calc(100vh - 480px)',  // shipped: adjusted for new top offset
       overflowY: 'auto',
       zIndex: '10',
@@ -1566,7 +1574,11 @@ export class HUD {
       const newTop = Math.round(navSphereBottom + 6);          // 6px gap below NavSphere
       if (this._lastRightColTop !== newTop) {
         this._rightColumn.style.top = newTop + 'px';
-        this._rightColumn.style.maxHeight = `calc(100vh - ${newTop + 30}px)`;
+        // G5: clearance is ladder-aware (shipped 30 px byte-identical; 189 px
+        // with the ladder on so the column bottom clears the bottom-anchored
+        // rail band — this site is the LIVE bound, it overwrites _build()'s
+        // static maxHeight on the first update frame).
+        this._rightColumn.style.maxHeight = `calc(100vh - ${newTop + (this._rightColBottomClearPx ?? 30)}px)`;
         this._lastRightColTop = newTop;
       }
     }

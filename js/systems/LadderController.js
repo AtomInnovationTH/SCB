@@ -103,7 +103,11 @@ export class LadderController {
    */
   adaptHoldoff(nowMs) {
     if (!this.isActive()) return false;
-    if (this._ladder.getState().mode === 'riding') return true;
+    // isRiding() is the allocation-free probe — this runs once per gameLoop
+    // frame and must not materialize a getState() snapshot (G4 follow-up;
+    // guarded for injected ladder stubs that pre-date the accessor).
+    if (this._ladder.isRiding ? this._ladder.isRiding()
+      : this._ladder.getState().mode === 'riding') return true;
     const t = (nowMs === undefined) ? this._now() : nowMs;
     return (t - this._lastInputMs) < ADAPT_HOLDOFF_MS;
   }

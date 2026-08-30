@@ -440,6 +440,15 @@ export class ZoomLadder {
 
   // ── State snapshot (rail + debugging; fresh object, mutation-safe) ───────
 
+  /**
+   * Allocation-free ride probe: true while a ride is in flight (i.e. exactly
+   * when getState().mode === 'riding'). Exists for per-frame callers
+   * (LadderController.adaptHoldoff runs every gameLoop frame) so reading one
+   * bit does not materialize a full snapshot object (G4 review follow-up).
+   * @returns {boolean}
+   */
+  isRiding() { return !!this._ride; }
+
   getState() {
     let mode = 'free';
     if (this._ride) mode = 'riding';

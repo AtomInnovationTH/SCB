@@ -49,20 +49,28 @@ export class RailIndicator {
     this._visible = false;
     this._built = false;
     this._toastTimer = null;
+    // Reused notchState() output — refresh() runs per frame; no per-notch
+    // literal allocation in the hot path (G5 review follow-up).
+    this._notchScratch = { current: false, fillPct: 0 };
   }
 
   /**
    * Pure notch-state law (headless-testable): what a notch shows for a state.
+   * Pass `out` to reuse a scratch object (per-frame callers); omitted, a fresh
+   * object is returned (tests, one-shot reads).
    * @param {{floor:number, charge:number, chargeSide:('up'|'down'|null)}} state
    * @param {number} floorId - 1-based floor id of the notch
+   * @param {{current:boolean, fillPct:number}} [out] - optional scratch target
    * @returns {{current:boolean, fillPct:number}}
    */
-  static notchState(state, floorId) {
+  static notchState(state, floorId, out) {
     const current = floorId === state.floor;
     let pct = 0;
     if (state.chargeSide === 'up' && floorId === state.floor + 1) pct = state.charge * 100;
     if (state.chargeSide === 'down' && floorId === state.floor - 1) pct = state.charge * 100;
-    return { current, fillPct: Math.max(0, Math.min(100, pct)) };
+    const fillPct = Math.max(0, Math.min(100, pct));
+    if (out) { out.current = current; out.fillPct = fillPct; return out; }
+    return { current, fillPct };
   }
 
   /**
@@ -166,7 +174,7 @@ export class RailIndicator {
     for (let i = 0; i < this._notches.length; i++) {
       const n = this._notches[i];
       if (!n) continue;
-      const { current, fillPct } = RailIndicator.notchState(state, i + 1);
+      const { current, fillPct } = RailIndicator.notchState(state, i + 1, this._notchScratch);
       if (n._cur !== current && !n._deny) {
         n.el.style.borderColor = current ? VisualLaw.COLORS.PLAYER : NOTCH_REST_BORDER;
         n.el.style.color = current ? VisualLaw.COLORS.PLAYER : NOTCH_REST_COLOR;
