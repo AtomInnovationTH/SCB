@@ -212,7 +212,18 @@ export class HUD {
       display: 'flex',
       flexDirection: 'column',
       gap: '10px',          // Pane-to-pane vertical gap — keep in sync with left column (StatusPanel.js)
-      maxHeight: 'calc(100vh - 480px)',  // Adjusted for new top offset
+      // Zoom Ladder G4 (post-M3 review follow-up): with the ladder on, the rail
+      // is bottom-anchored on the right edge and occupies the bottom 175 px
+      // (14 px inset + ~161 px body — tmp/g3-rail measurements at 3 viewports).
+      // The shipped cap (100vh - 480) lets this column's bottom reach
+      // 100vh - 34 (top 446 + maxHeight), i.e. up to ~141 px INTO the rail band
+      // once the dossier + tracked-targets fill it (progression saves) — the
+      // G3 play-test complaint would recur. Ladder-on cap: bottom at
+      // 100vh - 189 → 14 px clear of the rail top. Flag-off keeps the shipped
+      // value byte-identical (docs/ladder/01-numbers.md §"Post-M3 glue").
+      maxHeight: (Constants.LADDER && Constants.LADDER.ENABLED)
+        ? 'calc(100vh - 635px)'
+        : 'calc(100vh - 480px)',  // shipped: adjusted for new top offset
       overflowY: 'auto',
       zIndex: '10',
       outline: 'none', // No focus ring

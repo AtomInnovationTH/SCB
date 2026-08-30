@@ -45,11 +45,10 @@ export class RailIndicator {
   constructor() {
     this._root = null;
     this._toast = null;
-    this._notches = [];   // per-floor { el, fill, _cur, _pct, _deny } (index 0 = F1)
+    this._notches = [];   // per-floor { el, fill, _cur, _pct, _deny, _denyTimer } (index 0 = F1)
     this._visible = false;
     this._built = false;
     this._toastTimer = null;
-    this._denyTimer = null;
   }
 
   /**
@@ -119,7 +118,7 @@ export class RailIndicator {
       notch.appendChild(label);
 
       root.appendChild(notch);
-      this._notches[f.id - 1] = { el: notch, fill, _cur: null, _pct: null, _deny: false };
+      this._notches[f.id - 1] = { el: notch, fill, _cur: null, _pct: null, _deny: false, _denyTimer: null };
     }
 
     // Denial toast: sits ABOVE the rail (bottom-right region is otherwise
@@ -184,8 +183,11 @@ export class RailIndicator {
    * Denied feedback for a hard wall (G2i). Flashes the blocked notch
    * THREAT-red once (one-shot, ≤3 Hz law) and, when the FloorContract
    * provides a deniedHint ('DOCK TO ENTER DEPOT'), shows the amber toast.
-   * Re-calls restart both timers. Headless: no DOM → returns before any
-   * timer is allocated.
+   * Re-calls restart both timers. The restore timer is PER NOTCH (G4 review
+   * follow-up): a shared timer let a second denial on a DIFFERENT notch
+   * cancel the first notch's restore, stranding it THREAT-red — unreachable
+   * with one dock-gated floor today, live the moment another one exists.
+   * Headless: no DOM → returns before any timer is allocated.
    * @param {string|null} [hint] - FloorContract humps.deniedHint (null = ladder end)
    * @param {number} [floor] - the BLOCKED floor id (denial decision's `floor`)
    */
@@ -206,9 +208,9 @@ export class RailIndicator {
       n._deny = true;
       n.el.style.borderColor = VisualLaw.COLORS.THREAT;
       n.el.style.color = VisualLaw.COLORS.THREAT;
-      if (this._denyTimer) clearTimeout(this._denyTimer);
-      this._denyTimer = setTimeout(() => {
-        this._denyTimer = null;
+      if (n._denyTimer) clearTimeout(n._denyTimer);
+      n._denyTimer = setTimeout(() => {
+        n._denyTimer = null;
         n._deny = false;
         n._cur = null;             // force the next refresh to repaint it
       }, DENY_FLASH_MS);
@@ -218,8 +220,11 @@ export class RailIndicator {
   /** @private Clear denial timers/visuals (hide/teardown path). */
   _clearDenied() {
     if (this._toastTimer) { clearTimeout(this._toastTimer); this._toastTimer = null; }
-    if (this._denyTimer) { clearTimeout(this._denyTimer); this._denyTimer = null; }
     if (this._toast) this._toast.style.opacity = '0';
-    for (const n of this._notches) if (n && n._deny) { n._deny = false; n._cur = null; }
+    for (const n of this._notches) {
+      if (!n) continue;
+      if (n._denyTimer) { clearTimeout(n._denyTimer); n._denyTimer = null; }
+      if (n._deny) { n._deny = false; n._cur = null; }
+    }
   }
 }
