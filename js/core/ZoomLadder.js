@@ -86,6 +86,10 @@ const DEFAULT_RULES = {
   initialFloor: 4,        // COMMAND — the shipped gameplay floor
   initialZ01: 0.5,
   initialDocked: false,
+  devFullAccess: false,   // true bypasses entry gates (F2 dock gate) — dev-phase
+                          // "all floors reachable now" (00-spec §9 roadmap note);
+                          // LadderController injects Constants.LADDER.DEV_FULL_ACCESS
+                          // into its DEFAULT core only. Ladder ENDS still deny.
   wheelZ01Step: 0.04,     // free-scroll z01 per unit mag (scroll gain)
   knockToKlaxonMs: 1000,  // knock → klaxon (escalation step 1; not doc-pinned)
   autoRideDelayMs: 3000,  // klaxon → auto-ride (locked: VisualLaw 3 s)
@@ -510,8 +514,11 @@ export class ZoomLadder {
     return base * firmness;
   }
 
-  /** True when entering `dest` must be refused for lack of a dock. */
+  /** True when entering `dest` must be refused for lack of a dock.
+   *  rules.devFullAccess bypasses entry gates entirely (dev-phase full access —
+   *  campaign/dock gating is roadmap; ladder ENDS are not gates and still deny). */
   _dockDenies(dest) {
+    if (this._rules.devFullAccess) return false;
     return !!(dest?.humps?.entryRequiresDock && !this._docked);
   }
 

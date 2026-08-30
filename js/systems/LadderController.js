@@ -60,7 +60,14 @@ export class LadderController {
     this._rail = deps.rail || null;
     this._navcom = deps.navcom || null;
     this._now = deps.now || (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()));
-    this._ladder = deps.ladder || new ZoomLadder();
+    // The DEFAULT core (the production path — main.js injects no ladder) honors
+    // the dev-phase full-access flag: Constants.LADDER.DEV_FULL_ACCESS (ships
+    // true until M6 campaign gating) opens the F2 dock gate so every floor is
+    // reachable in play-testing (00-spec §9). Injected ladders (tests) keep
+    // strict gates unless their own rules say otherwise.
+    this._ladder = deps.ladder || new ZoomLadder({
+      rules: { devFullAccess: !!(Constants.LADDER && Constants.LADDER.DEV_FULL_ACCESS) },
+    });
     this._engaged = false;
     this._lastInputMs = -Infinity; // last wheel/command/jump — adaptHoldoff()
   }
