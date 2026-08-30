@@ -279,7 +279,16 @@ export class SceneManager {
     if (profileFlags.pixelRatioOverride !== null) {
       cap = profileFlags.pixelRatioOverride;
     }
-    this.renderer.setPixelRatio(Math.min(devicePR, cap));
+    const target = Math.min(devicePR, cap);
+    // Only touch the renderer when the ratio actually changes: setPixelRatio
+    // unconditionally re-runs setSize, which reassigns canvas.width/height —
+    // and ANY canvas size assignment (even same-value) resets the drawing
+    // buffer to black per the HTML spec. HIGH↔MEDIUM share cap 1.5, so tier
+    // swaps between them used to blank the canvas for a frame every time
+    // (black-square triage).
+    if (this.renderer.getPixelRatio() !== target) {
+      this.renderer.setPixelRatio(target);
+    }
   }
 
   /**
@@ -306,6 +315,10 @@ export class SceneManager {
     const w = window.innerWidth;
     const h = window.innerHeight;
     const pixelRatio = this.renderer.getPixelRatio();
+    // Physical buffer dims, floored exactly like WebGLRenderer.setSize floors
+    // the drawing buffer — every pass/target below sizes from these integers.
+    const pw = Math.floor(w * pixelRatio);
+    const ph = Math.floor(h * pixelRatio);
 
     // Multisampled render target — eliminates temporal aliasing ("shimmer")
     // on rotating debris. WebGL2 only; falls back to 0 on WebGL1.
@@ -317,14 +330,23 @@ export class SceneManager {
     }
     const samples = isWebGL2 ? wantedSamples : 0;
     const customRT = new THREE.WebGLRenderTarget(
-      Math.floor(w * pixelRatio),
-      Math.floor(h * pixelRatio),
+      pw,
+      ph,
       {
         type: THREE.HalfFloatType,
         samples: samples,
       }
     );
     this.composer = new EffectComposer(this.renderer, customRT);
+    // Size discipline (black-square triage): the composer is constructed with a
+    // PHYSICAL-size custom RT, but its _pixelRatio initializes from the renderer
+    // (e.g. 1.5), so a later composer.setSize(cssW, cssH) would compute
+    // css × 1.5 — fractional (e.g. 1888.5×1477.5) and 0.5px LARGER than the
+    // renderer's floored drawing buffer. Pin the composer to ratio 1 and feed it
+    // floored PHYSICAL sizes everywhere (resize() below): integer targets that
+    // exactly match the drawing buffer. setPixelRatio(1) re-runs setSize with
+    // the constructed physical dims — a same-size no-op for the targets.
+    this.composer.setPixelRatio(1);
 
     // 1. Render the full scene. NearFieldRenderPass draws the far scene with the
     //    main camera, then (depth cleared) the near-field layer — the player ship
@@ -359,9 +381,11 @@ export class SceneManager {
     if (cfg.enableBloom && !profileFlags.disableBloom) {
       // P2.9: reuse cached Vector2 — UnrealBloomPass clones the input
       // internally, so it's safe to mutate later for resize/tier swaps.
+      // Quarter of the FLOORED physical size, so construction and resize()
+      // derive from the same integer base.
       this._bloomRes.set(
-        Math.floor(w * pixelRatio / 4),
-        Math.floor(h * pixelRatio / 4)
+        Math.floor(pw / 4),
+        Math.floor(ph / 4)
       );
       const bloomPass = new UnrealBloomPass(
         this._bloomRes,
@@ -442,7 +466,7 @@ export class SceneManager {
     // Sprint 3 GPU profiling — `?disableSMAA=1` forces *both* SMAA and FXAA off
     // (the flag is really "disable post-AA"; tier-MSAA still runs in customRT).
     if (cfg.enableSMAA && !profileFlags.disableSMAA) {
-      const smaaPass = new SMAAPass(w * pixelRatio, h * pixelRatio);
+      const smaaPass = new SMAAPass(pw, ph);
       this.composer.addPass(smaaPass);
       this.smaaPass = smaaPass;
       this.fxaaPass = null;
@@ -451,11 +475,8 @@ export class SceneManager {
       // softer than SMAA, but visibly better than no post-AA on iGPU class GPUs.
       const fxaaPass = new ShaderPass(FXAAShader);
       // FXAAShader expects `resolution` in *inverse pixel* units. We size the
-      // pass to the physical buffer (w * pixelRatio × h * pixelRatio).
-      fxaaPass.material.uniforms['resolution'].value.set(
-        1 / (w * pixelRatio),
-        1 / (h * pixelRatio),
-      );
+      // pass to the physical buffer (integer, drawing-buffer-matched).
+      fxaaPass.material.uniforms['resolution'].value.set(1 / pw, 1 / ph);
       this.composer.addPass(fxaaPass);
       this.fxaaPass = fxaaPass;
       this.smaaPass = null;
@@ -586,9 +607,13 @@ export class SceneManager {
     }
     this.currentTier = tierName;
     this.tierConfig = cfg;
+    // Pixel-ratio cap: _applyRendererPixelRatio only touches the renderer when
+    // the ratio actually changes, and three's setPixelRatio internally re-runs
+    // setSize — so no explicit renderer.setSize is needed here at all. Any
+    // needless setSize reassigns canvas.width, which blanks the drawing buffer
+    // (guaranteed one black frame per tier swap — black-square triage).
+    // Window-size changes are resize()'s job, not applyTier's.
     this._applyRendererPixelRatio(cfg);
-    // Resize renderer in case pixel ratio changed — buffer size depends on it.
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
     this._setupPostProcessing(cfg);
     // Sprint 2 / PR C — Earth surface shader variant.
     if (this._earth && typeof this._earth.setLowDetail === 'function') {
@@ -962,13 +987,18 @@ export class SceneManager {
     // drawing buffer so threads keep their intended screen-space width.
     this._syncNetMeshResolution();
 
-    // EffectComposer.setSize accepts CSS pixels and internally multiplies
-    // by its _pixelRatio (read from renderer in the constructor).
-    this.composer.setSize(w, h);
+    // Physical buffer size, floored exactly like WebGLRenderer.setSize floors
+    // the drawing buffer. The composer's pixel ratio is pinned to 1 (see
+    // _setupPostProcessing), so passing physical dims keeps every pass target
+    // integer-sized and byte-matched to the canvas (was: CSS dims × 1.5 →
+    // fractional 1888.5×1477.5 targets after any window resize).
+    const pw = Math.floor(w * pixelRatio);
+    const ph = Math.floor(h * pixelRatio);
+    this.composer.setSize(pw, ph);
 
     // Update SMAA pass resolution
     if (this.smaaPass) {
-      this.smaaPass.setSize(w * pixelRatio, h * pixelRatio);
+      this.smaaPass.setSize(pw, ph);
     }
 
     // P2.9: update bloom pass resolution by mutating its existing Vector2
@@ -977,8 +1007,8 @@ export class SceneManager {
     // _setupPostProcessing (was /2 here, so a resize silently doubled the bloom
     // RT resolution vs boot).
     if (this.bloomPass) {
-      const bw = Math.floor(w * pixelRatio / 4);
-      const bh = Math.floor(h * pixelRatio / 4);
+      const bw = Math.floor(pw / 4);
+      const bh = Math.floor(ph / 4);
       this._bloomRes.set(bw, bh);
       if (this.bloomPass.resolution && typeof this.bloomPass.resolution.set === 'function') {
         this.bloomPass.resolution.set(bw, bh);
@@ -990,10 +1020,7 @@ export class SceneManager {
 
     // Sprint 2 / PR D — FXAA shader resolution uniform is in inverse-pixel units.
     if (this.fxaaPass && this.fxaaPass.material?.uniforms?.['resolution']) {
-      this.fxaaPass.material.uniforms['resolution'].value.set(
-        1 / (w * pixelRatio),
-        1 / (h * pixelRatio),
-      );
+      this.fxaaPass.material.uniforms['resolution'].value.set(1 / pw, 1 / ph);
     }
   }
 

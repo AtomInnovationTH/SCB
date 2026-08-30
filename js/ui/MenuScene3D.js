@@ -1472,7 +1472,18 @@ export class MenuScene3D {
     // Tier-change subscription: the main-loop adapt check runs during MENU, so
     // PERF_TIER_CHANGED can fire while the menu is up. Rebuild the composer to
     // the new tier's pixelRatio / MSAA / bloom settings.
-    this._tierHandler = ({ to }) => this._applyTier(to);
+    // ZOMBIE GUARD (black-square triage, probe-proven): this subscription
+    // outlives hide() by design (hide() only stop()s; dispose() unsubscribes),
+    // so gameplay tier changes used to rebuild the STOPPED menu's composer —
+    // disposing its bloom/composer render targets mid-session (~13 GPU textures
+    // per tier change, never re-initialized because a stopped scene never
+    // renders). Defer instead: while not running, record the tier and apply it
+    // on the next start().
+    this._pendingTier = null;
+    this._tierHandler = ({ to }) => {
+      if (!this._running) { this._pendingTier = to; return; }
+      this._applyTier(to);
+    };
     eventBus.on(Events.PERF_TIER_CHANGED, this._tierHandler);
 
     // prefers-reduced-motion — read once and live-listen for changes.
@@ -1617,6 +1628,13 @@ export class MenuScene3D {
     if (this._running) return;
     this._running = true;
     this._clock.start();
+    // Apply a tier change that landed while the menu was stopped (zombie
+    // guard in _tierHandler defers it) BEFORE the first frame renders.
+    if (this._pendingTier) {
+      const t = this._pendingTier;
+      this._pendingTier = null;
+      this._applyTier(t);
+    }
     // A fresh MENU entry (first show, or returning from a game) must not carry
     // over a prior departure ramp — reset so the weld/glow/sparks + orbit
     // radius return to their idle values.
