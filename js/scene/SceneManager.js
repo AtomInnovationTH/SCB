@@ -350,6 +350,14 @@ export class SceneManager {
       }
     );
     this.composer = new EffectComposer(this.renderer, customRT);
+    // DIAGNOSTIC SEMANTICS (black-rectangle triage, 2026-08-30): at LOW tier
+    // the chain is [NearFieldRenderPass→renderTarget2, OutputPass→screen], and
+    // EffectComposer's swap is a pure JS reference exchange — renderTarget1 is
+    // NEVER BOUND, so it lazily has no __webglTexture; with bloom disabled
+    // there is no renderTargetBright at all. A GPU-side probe reading target
+    // liveness must use dead-AFTER-live semantics (see BlackFrameProbe.js) or
+    // it will misread this structural state as texture necrosis — that false
+    // lead consumed a chunk of the original black-flicker hunt.
     // Size discipline (black-square triage): the composer is constructed with a
     // PHYSICAL-size custom RT, but its _pixelRatio initializes from the renderer
     // (e.g. 1.5), so a later composer.setSize(cssW, cssH) would compute
@@ -720,6 +728,45 @@ export class SceneManager {
   }
 
   /**
+   * T1 clip-plane OWNERSHIP (2026-08-30): while a ladder floor contract is
+   * engaged, re-assert the contract's near/far EVERY FRAME, not just on
+   * engage/applyTier. Several camera subsystems restore clip planes
+   * unconditionally on their exit paths with zero ladder awareness — inspect
+   * exit, launch/net ceremony teardown (CameraSystem.js:1672/1735/1785/2763/
+   * 2820/3221) and the dynamic near-plane — which produced the field-captured
+   * `near=0.5 far=500` "matches NO contract" pair, and a `far` stomp on F7
+   * (contract 2000) would clip the 1020 u chart framing outright. Patching
+   * every present and future writer is whack-a-mole; the render loop enforcing
+   * ownership is self-healing by construction. Cost: two float compares per
+   * frame; projection rebuild + ONE rate-limited warn only when a stomp
+   * actually happened (the warn is the tripwire that names the next rogue
+   * writer's timing). No-op when disengaged (flag-off stays byte-identical).
+   * While engaged, LadderController owns all legitimate near/far transitions
+   * (contract hops through this setter), so there is nothing to fight.
+   * @private
+   * @returns {boolean} true when a stomp was repaired this frame
+   */
+  _enforceLadderClip() {
+    const f = this._ladderFidelity;
+    if (!f || !this.camera) return false;
+    const cam = this.camera;
+    const wrongNear = f.near != null && cam.near !== f.near;
+    const wrongFar = f.far != null && cam.far !== f.far;
+    if (!wrongNear && !wrongFar) return false;
+    const was = `${cam.near}/${cam.far}`;
+    if (wrongNear) cam.near = f.near;
+    if (wrongFar) cam.far = f.far;
+    cam.updateProjectionMatrix();
+    const now = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+      ? performance.now() : Date.now();
+    if (!this._clipStompWarnAt || now - this._clipStompWarnAt > 5000) {
+      this._clipStompWarnAt = now;
+      console.warn(`[SceneManager] ladder clip stomp repaired: ${was} → ${cam.near}/${cam.far} (F${f.floor} contract)`);
+    }
+    return true;
+  }
+
+  /**
    * Zoom Ladder: register the render-block content the per-floor `debrisMode`
    * hides on the ship-is-icon floors (F6/F7) — the full debris meshes and the
    * world ship mesh. Called once from main.js after both exist; refs are optional
@@ -922,6 +969,9 @@ export class SceneManager {
    * when probe is enabled and supported.
    */
   render() {
+    // T1 clip ownership — repair any off-contract near/far stomp BEFORE this
+    // frame projects anything (see _enforceLadderClip; no-op when disengaged).
+    this._enforceLadderClip();
     // Sprint 3 GPU profiling: when per-pass profilers are installed they wrap
     // each pass with their own TIME_ELAPSED query. WebGL2 forbids nesting, so
     // we MUST skip the per-frame begin/end while the channel API is in use.
