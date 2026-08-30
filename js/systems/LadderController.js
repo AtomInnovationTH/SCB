@@ -47,7 +47,7 @@ export class LadderController {
    *   ladderSetTarget/ladderStartRide (all optional)
    * @param {object} [deps.sceneManager] - per-floor render block: setLadderFloorFidelity(fid|null)
    * @param {object} [deps.gameState]    - isGameplay() gate
-   * @param {object} [deps.rail]         - rail indicator stub: show/hide/refresh(state)/flashDenied(hint)
+   * @param {object} [deps.rail]         - rail indicator: show/hide/refresh(state)/flashDenied(hint, floor)
    * @param {object} [deps.navcom]       - F6 (NAVCOM) content controller (NavcomFloor):
    *   activate/deactivate/isActive/update/planTransfer. Optional — no-op without it.
    * @param {function} [deps.now]        - monotonic clock (ms); defaults to performance.now
@@ -226,7 +226,10 @@ export class LadderController {
           break;
 
         case 'denied':
-          if (this._rail && this._rail.flashDenied) this._rail.flashDenied(d.hint || null);
+          // G2i: pass the BLOCKED floor too so the rail can flash its notch
+          // (hint text comes from FloorContract humps.deniedHint, or null at
+          // the ladder ends). Backward-compatible with the S2 stub signature.
+          if (this._rail && this._rail.flashDenied) this._rail.flashDenied(d.hint || null, d.floor);
           break;
 
         case 'verb':
