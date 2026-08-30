@@ -37,6 +37,18 @@ const NEAR_FIELD_NEAR_FLOOR = 0.05;
 const NEAR_FIELD_FAR_DEFAULT = 0.01;   // 1 km — construction default, replaced per frame
 const _nfWorldPos = new THREE.Vector3();   // scratch for _updateNearCamera (no per-frame alloc)
 const _nfSetNearLayer = (o) => { o.layers.set(NEAR_FIELD_LAYER); };  // traverse cb (no per-frame closure alloc)
+// Black-flicker triage (H1 discriminator): `?nf=1` forces the near-field pass
+// to stay ENABLED on ladder floors whose contract disables it (F6/F7). The
+// disabled path is the only per-floor render-sequence difference on the floors
+// that black out; if a forced-on session never blacks, the disabled path is
+// convicted. Opt-in, exact-value only, parsed once (DevShotGate idiom);
+// Node/test environments always get false so the T1 contract pins stay green.
+const _nfForceOn = (() => {
+  try {
+    return typeof window !== 'undefined' && typeof URLSearchParams !== 'undefined' &&
+      new URLSearchParams(window.location.search).get('nf') === '1';
+  } catch (_e) { return false; }
+})();
 import { profileFlags } from '../core/ProfileFlags.js';
 import { selectInitialTier } from '../systems/QualityManager.js';
 import { GpuProbe } from '../systems/GpuProbe.js';
@@ -672,7 +684,14 @@ export class SceneManager {
   _reassertLadderFidelity() {
     const f = this._ladderFidelity;
     if (!f) return;
-    if (this.renderPass) this.renderPass.nearFieldEnabled = f.nearField;
+    if (this.renderPass) {
+      // `?nf=1` (black-flicker H1 discriminator) overrides the contract's OFF.
+      this.renderPass.nearFieldEnabled = _nfForceOn ? true : f.nearField;
+      if (_nfForceOn && !f.nearField && !this._nfForceLogged) {
+        this._nfForceLogged = true;
+        console.info(`[SceneManager] ?nf=1 — near-field pass FORCED ON over floor F${f.floor} contract (H1 experiment)`);
+      }
+    }
     if (this.camera) {
       let changed = false;
       if (f.near != null && this.camera.near !== f.near) { this.camera.near = f.near; changed = true; }

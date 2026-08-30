@@ -123,6 +123,7 @@ import perfReportOverlay, { captureBootInfo } from './ui/PerfReportOverlay.js';
 import { isAvifSupported } from './scene/Earth.js';
 import { profileFlags } from './core/ProfileFlags.js';
 import { devShotGate } from './core/DevShotGate.js';
+import { installBlackFrameProbe } from './core/BlackFrameProbe.js';
 import { AutoProfileSweep } from './systems/AutoProfileSweep.js';
 import { gameState as _gameStateRefForProfile } from './core/GameState.js';
 
@@ -134,6 +135,9 @@ let sceneManager;
 let earth;
 let starfield;
 let sunLight;
+// Black-flicker triage: `?bfp=1|2` in-page probe (js/core/BlackFrameProbe.js).
+// Null in normal play — the per-frame hook below is a single falsy check.
+let blackFrameProbe = null;
 let lastTime = 0;
 
 // --- Diagnostic: ?logPause=1 — opt-in per-second pause/state log.
@@ -251,6 +255,9 @@ let _rafScheduled = false;
 // cross-check in the blur handler filters false positives from DevTools focus,
 // iframe focus, or child-popup focus. See §14.1 in GPU_PROFILING_REPORT.md.
 let _windowBlurred = false;
+// §14.1-K (2026-08-30 black-rectangle root cause): last keepalive present
+// timestamp while blurred. See the gameLoop blurred branch.
+let _blurKeepalivePresentTs = 0;
 // Diagnostic: tracks every _scheduleNextFrame() invocation (caller + when).
 // Emits a console row once per second under `?logPause=1`. Lets us find the
 // rogue caller that keeps the loop alive while paused.
@@ -626,6 +633,9 @@ async function init() {
   // Sprint 2 / PR C — register so SceneManager.applyTier() can toggle the
   // LOW_DETAIL fragment-shader branch when the tier changes.
   sceneManager.setEarth(earth);
+  // Black-flicker triage: `?bfp=1|2` installs the self-serve verdict probe
+  // (badge + rate-limited console warns). Returns null when the flag is off.
+  blackFrameProbe = installBlackFrameProbe({ sceneManager, earth });
   _bootMark('Earth constructor returned (textures still decoding async)');
 
   // --- Starfield (background) ---
@@ -3863,15 +3873,30 @@ function gameLoop(timestamp) {
     lastTime = timestamp;
     return;
   }
-  // §14.1 (revised) — Window blurred (user Cmd-Tabbed to another macOS app).
-  // Mirror the document.hidden path EXACTLY: zero work, no rAF rescheduling,
-  // browser compositor sleeps. The window `focus` handler calls
-  // _flushScheduledFrame() to wake the loop on focus return. The original
-  // §14.1 fix only throttled to 5 Hz via _getScheduleIntervalMs(), which kept
-  // the GPU busy — the user reported "GPU continues when switching apps".
-  // This early-return is the actual pause.
+  // §14.1 (revised 2, 2026-08-30) — Window blurred (user clicked another macOS
+  // app; the browser window can still be fully VISIBLE beside it). The sim
+  // halts (zero update work, dt frozen via lastTime), but the canvas layer is
+  // KEPT ALIVE by re-presenting one frame every ~2 s on a ~5 Hz wake cadence:
+  // after several seconds with no present, Chromium's compositor purges the
+  // layer's tiles and the visible-but-unfocused window shows a flickering
+  // BLACK RECTANGLE over the canvas (this was the long-hunted "black flicker"
+  // — probe evidence in js/core/BlackFrameProbe.js dumps: 12–28 s rAF
+  // starvations with visibilityState 'visible' and zero occlusion events,
+  // healing on any focus-restoring window event: resize, fullscreen,
+  // DevTools). The original §14.1 full halt is what painted the black.
+  // Wake + re-present is ≈0.4 % of the 120 Hz frame budget, so the §14.1
+  // energy goal ("GPU idles when switching apps") is preserved.
   if (_windowBlurred) {
     lastTime = timestamp;
+    if (timestamp - _blurKeepalivePresentTs >= 2000) {
+      _blurKeepalivePresentTs = timestamp;
+      try {
+        if (strategicMap && strategicMap.isOpen()) strategicMap.render();
+        else if (sceneManager) sceneManager.render();
+        if (blackFrameProbe) blackFrameProbe.tick(timestamp);
+      } catch (_e) { /* keepalive must never break the halt path */ }
+    }
+    _scheduleNextFrame(); // 200 ms interval while blurred (_getScheduleIntervalMs)
     return;
   }
 
@@ -4472,6 +4497,10 @@ function gameLoop(timestamp) {
     _bootSpikeDetect(performance.now() - _bootRenderStart);
   }
 
+  // Black-flicker triage (?bfp): must run INSIDE this rAF task, right after the
+  // frame's final render, so its readbacks see this frame's buffer pre-present.
+  if (blackFrameProbe) blackFrameProbe.tick(timestamp);
+
   // §13 boot-timeline: mark the very first rendered frame. Continuous capture
   // mode — user calls window.__dumpBootTimeline() from DevTools when they want
   // a snapshot; we still emit one auto-summary after 5 s to confirm the
@@ -4652,6 +4681,19 @@ function updateCamera(dt, timestamp) {
 
 function onResize() {
   sceneManager.resize();
+  // Resize-tick repaint (2026-08-30): during a live window drag the compositor
+  // rescales the LAST rendered frame into the new canvas box instantly (no JS),
+  // while the screen-anchored DOM overlays (city/station labels) only move when
+  // the next rAF frame reprojects them — so the Earth visibly stretches ahead
+  // of its labels ("city names lag behind when shrinking horizontally").
+  // Rendering + reprojecting synchronously in the SAME resize tick keeps the
+  // canvas content and the DOM labels locked together. Cost: one extra render
+  // per resize event (~2–3 ms GPU on the reference M4), only while resizing.
+  try {
+    if (strategicMap && strategicMap.isOpen()) strategicMap.render();
+    else sceneManager.render();
+    cityLabels.update();
+  } catch (_e) { /* resize repaint must never break the handler */ }
 }
 
 // ============================================================================

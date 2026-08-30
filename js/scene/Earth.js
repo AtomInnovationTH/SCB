@@ -764,6 +764,25 @@ export function selectLOD(maxTextureSize, deviceMemory, isAppleGPU = false) {
  * @returns {'16k'|'8k'|''}
  */
 function getTextureQuality() {
+  // Black-flicker triage (H3) / OPEN-2 (16k night texture renders black on
+  // ANGLE-Metal): `?tex=16k|8k|base` overrides hardware LOD detection so the
+  // 1.2+ GB 16k day+night set can be A/B'd against 8k in one URL, no rebuild.
+  // Opt-in, exact-value only (DevShotGate idiom); any other value falls through
+  // to detection. Dev-only — never ship URLs with it.
+  try {
+    if (typeof window !== 'undefined' && typeof URLSearchParams !== 'undefined') {
+      const raw = (new URLSearchParams(window.location.search).get('tex') || '').toLowerCase();
+      if (raw === '16k' || raw === '8k') {
+        console.info(`[Earth] texture LOD URL override → ${raw}`);
+        return raw;
+      }
+      if (raw === 'base' || raw === '4k') {
+        console.info('[Earth] texture LOD URL override → base');
+        return '';
+      }
+    }
+  } catch (_e) { /* fall through to detection */ }
+
   // navigator.deviceMemory is Chrome/Edge only (NOT available in Safari/Firefox).
   const deviceMemory = navigator.deviceMemory; // may be undefined
   const gl = document.createElement('canvas').getContext('webgl2') ||
