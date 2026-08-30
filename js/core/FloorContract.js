@@ -44,11 +44,27 @@ export const FloorContract = {
     ENTRY_Z01_FROM_ABOVE: 0.75,  // arrival z01 after crossing downward (zoom-in)
   },
 
-  /** Hump spring gesture physics (locked UX — docs/ladder/00-spec.md §4). */
+  /** Hump spring gesture physics (locked UX — docs/ladder/00-spec.md §4).
+   *  G2 retune (post-M3 play-test): real macOS trackpad pushes ramp up, hold a
+   *  jittery plateau, then ramp down — the strict momentum-tail heuristic
+   *  (decaying mag ⇒ charge zero) rightly zeroes the whole inertia phase, but
+   *  it also zeroes ~half of a deliberate plateau (down-jitter events), so with
+   *  the old S1 default threshold (3.0 outbound / 4.8 firm-in) only a HARD
+   *  push could cross (400-trace sweep, tmp/g2-traces2: firm-push crossed
+   *  0.5% out / 0% in; even hard pushes crossed inbound 2%). The retune keys
+   *  crossing on SUSTAIN rather than raw power: threshold down to 1.2, the
+   *  event gate up to 4 events that must SPAN ≥ 200 ms (a flick's driven
+   *  phase is ≲150 ms — its momentum tail charges nothing, so no flick can
+   *  satisfy the span no matter how violent). Sweep with these numbers:
+   *  firm-push 82% out, hard-push 96% out / 96% in, casual+violent flicks 0%
+   *  (both phases), slow crawl 0%. See docs/ladder/01-numbers.md §hump-spring.
+   */
   HUMP_SPRING: {
     CHARGE_TAU_MS: 250,          // exponential charge decay time constant
     EVENT_WINDOW_MS: 400,        // window for the deliberate-gesture event count
-    MIN_EVENTS: 3,               // >= this many wheel events inside the window
+    MIN_EVENTS: 4,               // >= this many CHARGING wheel events inside the window (G2: was 3)
+    MIN_SPAN_MS: 200,            // the charging events must span >= this (sustain gate; flicks drive ≲150 ms)
+    CHARGE_THRESHOLD: 1.2,       // outbound charge threshold, router-normalized mag units (G2: canonicalized from the S1 default 3.0)
     IN_FIRMNESS_RATIO: 1.6,      // inbound threshold = 1.6 x outbound (firm-in/soft-out)
     CREEP_FRAC: 0.20,            // camera creeps at most this far into the wall
     GESTURE_LOCK_SILENCE_MS: 180, // one crossing per gesture until this input silence

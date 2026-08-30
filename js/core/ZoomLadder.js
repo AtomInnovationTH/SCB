@@ -71,8 +71,15 @@ export function distanceFromZ01(floor, z01) {
 
 /** S1 extension: absolute outbound charge threshold (router-normalized wheel
  *  mag units). The docs lock τ/window/ratio but no absolute value — see
- *  06-core-api.md "S1 implementation notes". Inbound = this × inFirmness. */
-const DEFAULT_SPRING_EXTENSIONS = { CHARGE_THRESHOLD: 3 };
+ *  06-core-api.md "S1 implementation notes". Inbound = this × inFirmness.
+ *  G2 (post-M3): MIN_SPAN_MS is the sustain gate — the charge-contributing
+ *  events inside the window must SPAN at least this many ms for a crossing.
+ *  Intent is sustained pushing, not raw power: a real trackpad flick drives
+ *  for ≲150 ms (then pure momentum, which charges zero), while a deliberate
+ *  push drives 250-400+ ms. 0 disables the gate (pre-G2 behavior). Both
+ *  values are canonical in FloorContract.HUMP_SPRING; these remain only as
+ *  fallbacks for spring-override tests that predate them. */
+const DEFAULT_SPRING_EXTENSIONS = { CHARGE_THRESHOLD: 3, MIN_SPAN_MS: 0 };
 
 /** S1 defaults for behavior knobs the contract leaves to the caller. */
 const DEFAULT_RULES = {
@@ -98,7 +105,10 @@ export class ZoomLadder {
   constructor({ floors, geometry, spring, rules } = {}) {
     this._floors = floors || FloorContract.FLOORS;
     this._geo = { ...FloorContract.LADDER_GEOMETRY, ...(geometry || {}) };
-    this._spring = { ...FloorContract.HUMP_SPRING, ...DEFAULT_SPRING_EXTENSIONS, ...(spring || {}) };
+    // Spread order: S1 extension DEFAULTS are fallbacks UNDER the contract —
+    // FloorContract.HUMP_SPRING now carries CHARGE_THRESHOLD + MIN_SPAN_MS
+    // canonically (G2), so the contract must win; caller overrides win over both.
+    this._spring = { ...DEFAULT_SPRING_EXTENSIONS, ...FloorContract.HUMP_SPRING, ...(spring || {}) };
     this._rules = { ...DEFAULT_RULES, ...(rules || {}) };
 
     this._byId = new Map(this._floors.map((f) => [f.id, f]));
@@ -228,10 +238,18 @@ export class ZoomLadder {
     });
 
     // Crossing requires intent: charge past threshold AND enough deliberate
-    // events inside the window — and at most one cross/denied per gesture.
+    // events inside the window AND a sustained push (the charge events must
+    // span MIN_SPAN_MS — flicks drive ≲150 ms, deliberate pushes 250-400+ ms)
+    // AND the triggering event must itself be deliberate (chargeMag > 0) —
+    // a momentum-tail event may never COMPLETE a crossing either, even when
+    // earlier drive events left the spring past threshold (G2: the trigger
+    // hole let a violent flick cross ~150 ms into its own tail). At most one
+    // cross/denied per gesture.
     const wantsCross = !this._gestureLocked &&
+      chargeMag > 0 &&
       norm >= 1 - EPS &&
-      this._chargeEvents.length >= this._spring.MIN_EVENTS;
+      this._chargeEvents.length >= this._spring.MIN_EVENTS &&
+      (tMs - this._chargeEvents[0]) >= (this._spring.MIN_SPAN_MS || 0);
 
     if (wantsCross && dest && !this._dockDenies(dest)) {
       decisions.push({
