@@ -126,9 +126,12 @@ export class ClusterIcons {
       seen.add(c.id);
       this._paintIcon(c, p, sizePx, focused);
     }
-    // Retire icons no longer in the visible set.
+    // Retire icons no longer in the visible set (idempotent — G1 churn fix).
     for (const [id, rec] of this._icons) {
-      if (!seen.has(id)) { rec.el.style.display = 'none'; }
+      if (!seen.has(id) && rec._display !== 'none') {
+        rec.el.style.display = 'none';
+        rec._display = 'none';
+      }
     }
     return descriptors;
   }
@@ -147,22 +150,42 @@ export class ClusterIcons {
       el.appendChild(ring);
       el.appendChild(label);
       this._root.appendChild(el);
-      rec = { el, ring, label };
+      // The `_`-prefixed fields cache the last WRITTEN value of every property
+      // that rarely changes, so the per-frame render only touches left/top
+      // (world-anchored — legitimately changes every frame). G1 (post-M3
+      // play-test): the unconditional writes re-replaced the label text node
+      // every frame — the instrumented probe measured #ladder-cluster-icons
+      // childList mutations at one add+remove per icon per frame (~17 Hz
+      // headless, would be ~120 Hz at 120 fps) for text that almost never
+      // changes. Same-value style writes are cached on the same principle.
+      rec = { el, ring, label, _display: null, _dim: null, _focused: null, _color: null, _count: null };
       this._icons.set(cluster.id, rec);
     }
     const color = focused ? VisualLaw.COLORS.SELECTION : VisualLaw.COLORS.INFO;
     // Focus is double-encoded: color (white) AND a thicker ring + slight scale.
     const scale = focused ? 1.25 : 1;
     const dim = Math.round(sizePx * scale);
-    rec.el.style.display = 'block';
+    if (rec._display !== 'block') { rec.el.style.display = 'block'; rec._display = 'block'; }
     rec.el.style.left = `${p.x}px`;
     rec.el.style.top = `${p.y}px`;
-    rec.ring.style.width = `${dim}px`;
-    rec.ring.style.height = `${dim}px`;
-    rec.ring.style.borderWidth = focused ? '2px' : '1px';
-    rec.ring.style.borderColor = color;
-    rec.label.style.color = color;
-    rec.label.textContent = String(cluster.count);
+    if (rec._dim !== dim) {
+      rec.ring.style.width = `${dim}px`;
+      rec.ring.style.height = `${dim}px`;
+      rec._dim = dim;
+    }
+    if (rec._focused !== focused) {
+      rec.ring.style.borderWidth = focused ? '2px' : '1px';
+      rec._focused = focused;
+    }
+    if (rec._color !== color) {
+      rec.ring.style.borderColor = color;
+      rec.label.style.color = color;
+      rec._color = color;
+    }
+    if (rec._count !== cluster.count) {
+      rec.label.textContent = String(cluster.count);
+      rec._count = cluster.count;
+    }
   }
 
   /**
@@ -185,7 +208,8 @@ export class ClusterIcons {
       this._root.appendChild(el);
       this._shipEl = el;
     }
-    this._shipEl.style.display = out.visible ? 'block' : 'none';
+    const display = out.visible ? 'block' : 'none';
+    if (this._shipDisplay !== display) { this._shipEl.style.display = display; this._shipDisplay = display; }
     if (out.visible) {
       // The bare corner (border-left+top) reads as a chevron; rotate to heading.
       this._shipEl.style.left = `${out.x}px`;

@@ -24,10 +24,21 @@
 
 import { ZoomLadder, distanceFromZ01 } from '../core/ZoomLadder.js';
 import { FloorContract } from '../core/FloorContract.js';
+import { VisualLaw } from '../core/VisualLaw.js';
 import { Constants } from '../core/Constants.js';
 
 /** Crossing-ride duration: midpoint of the locked 450–650 ms window. */
 const CROSS_RIDE_MS = 550;
+
+/**
+ * G1 (post-M3): runtime-adapt holdoff window after the last ladder input.
+ * DERIVED, not a new tunable: RIDE_MAX_MS (650, VisualLaw.TIMINGS) +
+ * SETTLE_IDLE_MS (250, FloorContract.HUMP_SPRING) = 900 ms — the longest a
+ * single wheel event can still be driving camera motion (a triggered ride)
+ * plus the gesture-settle tail. See docs/ladder/01-numbers.md §"Post-M3 glue".
+ */
+const ADAPT_HOLDOFF_MS =
+  VisualLaw.TIMINGS.RIDE_MAX_MS + FloorContract.HUMP_SPRING.SETTLE_IDLE_MS;
 
 export class LadderController {
   /**
@@ -51,16 +62,50 @@ export class LadderController {
     this._now = deps.now || (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()));
     this._ladder = deps.ladder || new ZoomLadder();
     this._engaged = false;
+    this._lastInputMs = -Infinity; // last wheel/command/jump — adaptHoldoff()
   }
 
   /** The underlying pure core (read-only use — rail/tests). */
   get ladder() { return this._ladder; }
+
+  /** G1 pin surface: the derived holdoff window (ms). */
+  static get ADAPT_HOLDOFF_MS() { return ADAPT_HOLDOFF_MS; }
 
   /** True while the ladder owns input/camera (flag on + gameplay + engaged). */
   isActive() {
     return !!(Constants.LADDER && Constants.LADDER.ENABLED &&
       this._gameState && this._gameState.isGameplay && this._gameState.isGameplay() &&
       this._engaged);
+  }
+
+  /**
+   * G1 (post-M3 play-test): should the runtime quality adapt HOLD OFF this
+   * frame? True while a ladder ride is in flight or within ADAPT_HOLDOFF_MS
+   * (900 ms, derived — see module const) of the last ladder input.
+   *
+   * WHY: ladder rides + wheel bursts are transient camera flights (FOV/near/far
+   * swaps, full-disc Earth fill changes, first-use texture binds). Their frame
+   * times do not represent steady state, but they land in the runtimeAdapt fps
+   * history — and because that history is CLEARED on every tier change, the
+   * next 60-frame check window can be 100% transient frames. On a machine that
+   * sits at the tier boundary (play-test log: GPU probe median 7.53 ms vs the
+   * 7 ms threshold, HIGH→MEDIUM→HIGH within 40 s of boot) this flip-flops the
+   * tier DURING zooming, and every applyTier() is a full composer rebuild +
+   * renderer resize — a visible full-screen flash. Holding the adapt loop off
+   * while the ladder is actually moving removes the trigger; steady-state
+   * adaptation (the shipped behavior) is untouched.
+   *
+   * Flag-off: never engaged → isActive() false → always false → the shipped
+   * adapt path is byte-identical.
+   *
+   * @param {number} [nowMs] - monotonic clock; defaults to now()
+   * @returns {boolean}
+   */
+  adaptHoldoff(nowMs) {
+    if (!this.isActive()) return false;
+    if (this._ladder.getState().mode === 'riding') return true;
+    const t = (nowMs === undefined) ? this._now() : nowMs;
+    return (t - this._lastInputMs) < ADAPT_HOLDOFF_MS;
   }
 
   /** Should the ladder be engaged this frame? (flag on + gameplay). */
@@ -97,6 +142,7 @@ export class LadderController {
   wheel({ tMs, dir, mag }) {
     if (!this._engaged) return [];
     const t = (tMs === undefined) ? this._now() : tMs;
+    this._lastInputMs = t;
     const decisions = this._ladder.wheel({ tMs: t, dir, mag });
     this._apply(decisions, t);
     this._refreshRail();
@@ -107,6 +153,7 @@ export class LadderController {
   command({ tMs, type }) {
     if (!this._engaged) return [];
     const t = (tMs === undefined) ? this._now() : tMs;
+    this._lastInputMs = t;
     const decisions = this._ladder.command({ tMs: t, type });
     this._apply(decisions, t);
     this._refreshRail();
@@ -117,6 +164,7 @@ export class LadderController {
   jump({ tMs, toFloor }) {
     if (!this._engaged) return [];
     const t = (tMs === undefined) ? this._now() : tMs;
+    this._lastInputMs = t;
     const decisions = this._ladder.jump({ tMs: t, toFloor });
     this._apply(decisions, t);
     this._refreshRail();

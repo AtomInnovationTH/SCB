@@ -27,13 +27,55 @@ import { coOrbitalReadout } from '../entities/LaunchWindow.js';
 /** T-minus threshold at which a window reads "imminent" (shared with DebrisMap). */
 const IMMINENT_S = Constants.DEBRIS_MAP.WINDOW_IMMINENT_S;
 
+/**
+ * G1 (post-M3 play-test): minimum real-time interval between innerHTML writes.
+ * The M3-review html cache capped the churn at the rate the TEXT changes —
+ * ~1 Hz at 1× (formatDuration rounds to whole seconds). Under F6 warp (20×)
+ * the countdown text legitimately changes ~20×/s, so the cache alone lets the
+ * panel tear down/re-parse its rows at 20 Hz on a 120 fps machine. This cap
+ * bounds DOM writes to ≤4 Hz REAL regardless of warp; STRUCTURAL changes
+ * (target/emptiness/imminence/ΔV text) bypass it so nothing important lags.
+ * Documented in docs/ladder/01-numbers.md §"Post-M3 glue".
+ */
+const DOM_WRITE_MIN_INTERVAL_MS = 250;
+
+/** Monotonic ms clock (DOM-guarded module — Date.now fallback for headless). */
+const _nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+
 export class TransferWindows {
-  constructor() {
+  /**
+   * @param {object} [deps]
+   * @param {function} [deps.now] - monotonic ms clock (tests); defaults to performance.now
+   */
+  constructor(deps = {}) {
+    this._now = deps.now || _nowMs;
     this._root = null;
     this._built = false;
     this._visible = false;
-    this._lastHtml = null;  // last painted markup — skips per-frame innerHTML churn
+    this._lastHtml = null;      // last painted markup — skips per-frame innerHTML churn
+    this._lastStructKey = null; // last painted STRUCTURAL key (shouldWrite)
+    this._lastWriteMs = -Infinity; // last innerHTML write (real time)
   }
+
+  /**
+   * G1 pure gate: should refresh() write the DOM this frame?
+   * Structural changes always write; countdown-only changes are capped at
+   * DOM_WRITE_MIN_INTERVAL_MS (250 ms → ≤4 Hz real) so F6 warp can't turn the
+   * per-second countdown into a per-frame innerHTML teardown. Pure + static so
+   * the cap is headless-pinnable (test-NavcomFloor).
+   * @param {string} structKey  - structural fingerprint of the new model
+   * @param {string|null} lastStructKey - previously painted fingerprint
+   * @param {number} nowMs      - monotonic clock
+   * @param {number} lastWriteMs - time of the previous DOM write
+   * @returns {boolean}
+   */
+  static shouldWrite(structKey, lastStructKey, nowMs, lastWriteMs) {
+    if (structKey !== lastStructKey) return true;
+    return (nowMs - lastWriteMs) >= DOM_WRITE_MIN_INTERVAL_MS;
+  }
+
+  /** G1 pin surface: the DOM-write cap (ms). */
+  static get DOM_WRITE_MIN_INTERVAL_MS() { return DOM_WRITE_MIN_INTERVAL_MS; }
 
   /**
    * Format a duration in seconds as a compact T-minus string.
@@ -126,6 +168,13 @@ export class TransferWindows {
   refresh(win, opts = {}) {
     const model = TransferWindows.readout(win, opts);
     if (!this._root) return model;
+    // G1 warp churn cap: structural changes paint immediately; countdown-only
+    // ticks are bounded to ≤4 Hz real (see shouldWrite / DOM_WRITE_MIN_INTERVAL_MS).
+    const structKey = `${model.targetName}|${model.empty}|${model.coOrbital}|${model.imminent}|${model.dvText}|${model.showArrive}`;
+    const now = this._now();
+    if (!TransferWindows.shouldWrite(structKey, this._lastStructKey, now, this._lastWriteMs)) {
+      return model;
+    }
     // The window title never pulses (it is INFO/planning, not THREAT). "Imminent"
     // is double-encoded: SELECTION-white depart line + the [IMMINENT] tag.
     const departColor = model.imminent ? VisualLaw.COLORS.SELECTION : VisualLaw.COLORS.INFO;
@@ -137,12 +186,14 @@ export class TransferWindows {
     if (model.dvText) rows.push(`<div>${model.dvText}</div>`);
     rows.push(`<div style="opacity:0.7">${model.periodText}</div>`);
     // M3 review fix: refresh() is ticked every frame while F6 is active, but the
-    // readout only changes ~1/s (formatDuration rounds to seconds) — skip the
-    // full innerHTML teardown/re-parse when the markup is unchanged.
+    // readout only changes ~1/s at 1× (formatDuration rounds to seconds) — skip
+    // the full innerHTML teardown/re-parse when the markup is unchanged.
     const html = rows.join('');
     if (html !== this._lastHtml) {
       this._root.innerHTML = html;
       this._lastHtml = html;
+      this._lastStructKey = structKey;
+      this._lastWriteMs = now;
     }
     return model;
   }
@@ -152,5 +203,7 @@ export class TransferWindows {
     this._root = null;
     this._built = false;
     this._lastHtml = null;
+    this._lastStructKey = null;
+    this._lastWriteMs = -Infinity;
   }
 }

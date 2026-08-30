@@ -414,6 +414,20 @@ const _fpsHistory = [];
 let _framesSinceLastTierChange = Constants.PERF.ADAPT_COOLDOWN_FRAMES; // start "cooled down" so the first decision is gated only by history length
 const _ADAPT_CHECK_INTERVAL = 60; // call runtimeAdapt every N frames
 
+// Zoom Ladder G1 (post-M3 play-test): runtime-adapt holdoff while the ladder is
+// actually moving (mid-ride, or within the derived 900 ms gesture+settle window
+// of the last ladder input — LadderController.ADAPT_HOLDOFF_MS). Ride frames
+// are camera-flight transients (FOV/near/far swaps, full-disc Earth fill,
+// first-use texture binds); feeding them to runtimeAdapt flip-flops the tier on
+// boundary machines (play-test log: GPU probe median 7.53 ms vs 7 ms threshold,
+// HIGH→MEDIUM→HIGH inside 40 s) and every applyTier() rebuild is a visible
+// full-screen flash. While held off we neither SAMPLE fps history nor RUN the
+// check, so a post-ride decision can't be made from mid-ride frames either.
+// Flag-off byte-identical: Constants.LADDER.ENABLED short-circuits first, and
+// with the flag off the controller can never engage anyway.
+const _ladderAdaptHoldoff = (nowMs) => !!(Constants.LADDER && Constants.LADDER.ENABLED &&
+  ladderController && ladderController.adaptHoldoff && ladderController.adaptHoldoff(nowMs));
+
 // PR 6 / P3.15 — Draw-call profiling frame counter (separate from _ADAPT_CHECK_INTERVAL).
 let _profileFrameCount = 0;
 
@@ -3942,7 +3956,11 @@ function gameLoop(timestamp) {
     // the first post-settle decision can't be a median dominated by that jank.
     // Startup/non-gameplay assessment is the GPU probe's job (it measures per-frame
     // GPU ms, which the frame-schedule throttle does not skew).
-    if (gameState.isGameplay() && timestamp >= _perfSettleUntil && Number.isFinite(fps) && fps > 0) {
+    // Zoom Ladder G1: ladder ride/gesture frames are excluded the same way —
+    // they are deliberate camera-flight transients, not steady state (see
+    // _ladderAdaptHoldoff above).
+    const _adaptHold = _ladderAdaptHoldoff(timestamp);
+    if (gameState.isGameplay() && timestamp >= _perfSettleUntil && !_adaptHold && Number.isFinite(fps) && fps > 0) {
       _fpsHistory.push(fps);
       if (_fpsHistory.length > Constants.PERF.FPS_HISTORY_SIZE) _fpsHistory.shift();
     }
@@ -3956,7 +3974,7 @@ function gameLoop(timestamp) {
     // configurations (otherwise the disable-X delta-vs-baseline is measuring
     // tier-change drift instead of the toggled feature). Skip runtimeAdapt
     // entirely while a profile sweep session is live.
-    if (sceneManager && gameState.isGameplay() && !profileFlags.autoProfile && !profileFlags.pinTier && timestamp >= _perfSettleUntil && (_framesSinceLastTierChange % _ADAPT_CHECK_INTERVAL) === 0) {
+    if (sceneManager && gameState.isGameplay() && !profileFlags.autoProfile && !profileFlags.pinTier && timestamp >= _perfSettleUntil && !_adaptHold && (_framesSinceLastTierChange % _ADAPT_CHECK_INTERVAL) === 0) {
       const decision = runtimeAdapt({
         currentTier: sceneManager.currentTier,
         fpsHistory: _fpsHistory,
