@@ -281,12 +281,17 @@ export function installBlackFrameProbe({ sceneManager, earth } = {}) {
     return `${one('d', earth.dayTexture)} ${one('n', earth.nightTexture)} ${one('c', earth.cloudTexture)}`;
   };
 
-  // GL error witness (OPEN-2): WebGL errors are sticky until READ, and neither
-  // three.js nor the game ever calls gl.getError() — so a GL_OUT_OF_MEMORY
-  // (0x0505) raised by the 16k texImage2D/mipgen upload is still queued HERE,
-  // minutes later, on the first probe sample after it happened. The probe is
-  // therefore the only consumer: one call per sample (~8 Hz, same sync-IPC
-  // class as the VIEWPORT/SCISSOR getParameter reads above it).
+  // GL error witness (OPEN-2): WebGL errors are sticky until READ. The game
+  // never calls gl.getError(), and three.js reads it ONLY inside its shader-
+  // link-failure diagnostic (vendor three.module.js:7122) — so outside that
+  // rare path the probe is the sole consumer, and a GL_OUT_OF_MEMORY (0x0505)
+  // raised by the 16k texImage2D/mipgen upload is still queued HERE, minutes
+  // later, on the first probe sample after it happened. (Caveat for dump
+  // readers: a session that ALSO hit a program-link failure may have had an
+  // earlier queued error swallowed by that three.js read — treat glErr:0 as
+  // near-absolute, not absolute, in such sessions.) One call per sample
+  // (~8 Hz, same sync-IPC class as the VIEWPORT/SCISSOR getParameter reads
+  // above it).
   let glErrEvents = 0;
   let lastGlErr = 0;
 
