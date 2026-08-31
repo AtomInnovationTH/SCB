@@ -330,7 +330,20 @@ export const Constants = {
 
   // === STARFIELD ===
   STAR_COUNT: 10000,
-  STAR_SPHERE_RADIUS: 400,        // Must be < CAMERA_FAR (500)
+  // World-fixed shell centered on Earth (StarfieldGroup at the origin) unless
+  // Starfield.setFollowCamera(true). The old note here — "must be < CAMERA_FAR
+  // (500)" — encoded a FALSE invariant: for a world-fixed shell the real
+  // constraint is far >= D_max + R (D = camera distance from Earth center),
+  // because a star directly behind Earth sits at camera distance D + R. The
+  // shipped far (500) therefore only covers D <= 100 u; the ladder's
+  // Earth-anchored floors (F6 D <= 255 @ far 500, F7 D <= 1300 @ far 2000)
+  // break it — far-plane clipping blacks out the F6 sky and the F7 camera
+  // exits the shell entirely. Fix: follow mode (Starfield.setFollowCamera)
+  // re-centers the shell on the camera each update, making stars pure
+  // direction chrome at camera distance exactly R — inside every floor's far
+  // plane by construction. World-fixed callers (the shipped chase ranges,
+  // D ≲ 70 u) still satisfy far >= D_max + R with the shipped 500.
+  STAR_SPHERE_RADIUS: 400,
 
   // --- Constellation stick figures (Starfield._createConstellations) ---
   // Deliberately faint: "noticeable if you look, not distracting". The earlier

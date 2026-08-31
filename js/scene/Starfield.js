@@ -3,7 +3,11 @@
  * round soft sprites; the 49 named catalogue stars sit at the constellation
  * vertices in the same Points), a faint procedural Milky Way band, an
  * occasional shooting star, plus 8 major constellation outlines and
- * planetarium-style labels
+ * planetarium-style labels.
+ *
+ * The whole sky lives in one group ('StarfieldGroup'), world-fixed at the
+ * origin by default. setFollowCamera(true) re-centers that shell on the camera
+ * every update() — the Zoom Ladder F6/F7 BLACK-SKY fix (see setFollowCamera).
  * @module scene/Starfield
  */
 
@@ -100,6 +104,10 @@ export class Starfield {
 
     // Accumulated time for the star twinkle shader uniform.
     this._time = 0;
+    // Camera-follow mode (Zoom Ladder F6/F7 BLACK-SKY fix) — OFF by default:
+    // the shipped shell is world-fixed at the origin and update() never touches
+    // the group transform. See setFollowCamera().
+    this._followCamera = false;
     // Reusable temporaries for the shooting-star update (no per-frame alloc).
     this._tmpMeteorA = new THREE.Vector3();
     this._tmpMeteorB = new THREE.Vector3();
@@ -936,16 +944,75 @@ export class Starfield {
   }
 
   /**
-   * Per-frame update: advance twinkle time, keep pixel-ratio + Line2 material
-   * resolution in sync with the viewport.
+   * Enable/disable camera-follow mode (Zoom Ladder F6/F7 BLACK-SKY fix).
+   *
+   * The starfield is a world-fixed shell of radius STAR_SPHERE_RADIUS (400 u)
+   * centered on Earth. A world-fixed shell is only fully visible while
+   * far >= D_max + R, where D is the camera's distance from Earth center —
+   * a star directly behind Earth sits at camera distance D + R, NOT R. The
+   * shipped pairing (far 500) therefore only covers D <= 100 u, which the
+   * Earth-anchored ladder floors exceed: on F6 (D ∈ [70, 255], far 500)
+   * far-plane point clipping opens a black annulus around Earth's disk
+   * (appearing at D ≈ 123, swallowing the whole sky by D ≈ 167 — F6 max is
+   * 255), and on F7 (D ∈ [500, 1300], far 2000) the camera EXITS the 400 u
+   * shell entirely, leaving stars only in an 18–53° cap.
+   *
+   * Following re-centers the shell on the camera's WORLD position every
+   * update(): stars become pure DIRECTION chrome at camera distance exactly R,
+   * inside every floor's far plane by construction. This is safe because every
+   * starfield child is frustumCulled:false (no culling desync), all materials
+   * are transparent + AdditiveBlending + depthWrite:false (no z-fight from the
+   * moved group), the constellation-line limb fade is computed in VIEW space
+   * from the view matrix (parenting-independent), the label limb fade resolves
+   * labels' ACTUAL world positions via getWorldPosition, and Earth still
+   * occludes stars correctly via depthTest (its limb is always far closer than
+   * R camera-relative).
+   *
+   * Disabled (the default) is exactly the shipped behavior: update() never
+   * touches the group transform. Disabling AFTER following restores the
+   * shipped Earth-centered pose (group back to the origin) so a ladder
+   * disengage cannot strand the shell off-center.
+   *
+   * Known follow-mode limits (cosmetic/dev-only, owned by the ladder wiring):
+   * the ?shot=1 harness (__scbSkyPose/__scbProject, main.js ~1740–1811)
+   * projects the WORLD-fixed shell and desyncs while following; the SunLight
+   * body depth masks (BODY_DEPTH_MASK_DIST, coupled to the world-fixed shell)
+   * can sit beyond the followed stars for far-side bodies, letting stars show
+   * through a body disc at F6/F7 ranges.
+   *
+   * @param {boolean} enabled
+   * @returns {boolean} the NEW follow state
+   */
+  setFollowCamera(enabled) {
+    const on = !!enabled;
+    if (on !== this.isFollowingCamera() && !on) {
+      // Follow → world-fixed: restore the shipped Earth-centered pose now
+      // rather than leaving the shell parked at the last camera position.
+      this.group.position.set(0, 0, 0);
+      this.group.updateMatrixWorld(true);
+    }
+    this._followCamera = on;
+    return on;
+  }
+
+  /** @returns {boolean} whether the shell follows the camera (default false). */
+  isFollowingCamera() {
+    return this._followCamera === true;
+  }
+
+  /**
+   * Per-frame update: apply camera-follow (when enabled), advance twinkle time,
+   * keep pixel-ratio + Line2 material resolution in sync with the viewport.
    * @param {number} _dt — delta time (seconds)
    * @param {number} [pixelRatio] — the RENDERER's capped pixel ratio (B2). Falls
    *   back to window.devicePixelRatio when undefined so the class stays usable
    *   standalone (e.g. in tests / menu preview).
    * @param {THREE.Camera} [camera] — active camera, used to apply the Earth-limb
-   *   fade to the constellation name sprites (the lines do it in-shader). When
-   *   omitted the sprites keep their static opacity — same defensive style as
-   *   pixelRatio above, so the class stays usable standalone.
+   *   fade to the constellation name sprites (the lines do it in-shader) and, in
+   *   follow mode (setFollowCamera), as the position the shell re-centers on.
+   *   When omitted the sprites keep their static opacity and a following shell
+   *   holds its last pose — same defensive style as pixelRatio above, so the
+   *   class stays usable standalone (older call shapes pass no camera).
    */
   update(_dt, pixelRatio, camera) {
     const dt = (typeof _dt === 'number' && isFinite(_dt)) ? _dt : 0;
@@ -953,6 +1020,25 @@ export class Starfield {
     // periods (2π / 2.5 ≈ 2.51327 s); wrapping on a whole multiple keeps
     // sin(uTime*2.5 + phase) continuous across the wrap so twinkle never jumps.
     this._time = (this._time + dt) % 251.327;
+
+    // Camera-follow (F6/F7 BLACK-SKY fix — rationale in setFollowCamera): copy
+    // the camera's WORLD position into the group BEFORE anything below derives
+    // world poses this frame (the label limb fade reads label.getWorldPosition).
+    // Duck-typed cameras without getWorldPosition (tests / older call shapes)
+    // fall back to .position; no camera at all simply holds the last pose.
+    // Disabled (default) this block never touches the group — byte-identical
+    // rendering to the shipped world-fixed shell.
+    if (this._followCamera && camera) {
+      if (typeof camera.getWorldPosition === 'function') {
+        camera.getWorldPosition(this.group.position); // writes the target Vector3 — no alloc
+      } else if (camera.position) {
+        this.group.position.copy(camera.position);
+      }
+      // Necessary matrix update: keep the group's matrixWorld coherent for any
+      // same-frame reader (label fade below, external world-pose queries)
+      // instead of waiting for the renderer's scene.updateMatrixWorld().
+      this.group.updateMatrixWorld(true);
+    }
 
     // Drive the star time uniform (the twinkle path is dormant — every
     // aTwinkle is 0 — until Stage 5 repurposes it).
