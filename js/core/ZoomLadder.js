@@ -28,6 +28,17 @@
  * Decision union (see docs/ladder/06-core-api.md for field semantics):
  *   move | charge | cross | denied | settle | ride | reaim | verb | alarm
  *
+ * G3 (flick grammar, docs/ladder/01-numbers.md §hump-spring G3 rationale):
+ * flicks are the PRIMARY navigation quantum; the G2 sustained push stays as
+ * the additive fallback. A flick = deliberate (non-tail) mags accumulating to
+ * ≥ FLICK_MIN_MAG within FLICK_MAX_DRIVE_MS, where the trigger event must
+ * RISE above the accumulation run's first event (or alone meet the threshold)
+ * — so equal-mag push streams (wheel notches, plateaus) and slow/sparse
+ * scrolling never flick, and tail events neither accumulate nor trigger
+ * (a tail resets + re-arms the detector: a flick's own momentum can never
+ * read as a second flick). One flick mid-floor rides WITHIN the floor to
+ * that wall edge ({type:'ride', kind:'flickWall', miniMs: FLICK_RIDE_MS}).
+ *
  * S1-chosen defaults for contract gaps (documented in 06-core-api.md
  * "S1 implementation notes", all overridable via constructor deps):
  *   spring.CHARGE_THRESHOLD 3, rules.wheelZ01Step 0.04,
@@ -136,6 +147,20 @@ export class ZoomLadder {
     this._lastWheelMag = 0;
     this._lastInputTMs = -Infinity;       // wheel/command/jump/aim — settle idle base
 
+    // G3 flick detector: one same-direction accumulation run of deliberate
+    // (non-tail) events inside FLICK_MAX_DRIVE_MS. `armed` false = a flick
+    // already fired from the current drive; re-armed by a tail event (the
+    // drive demonstrably ended: momentum began), by GESTURE_LOCK_SILENCE_MS
+    // of input silence, or by a direction change.
+    this._flick = { dir: null, events: [], armed: true };
+
+    // G3 undo window: armed when a CROSS ride completes; a reverse-direction
+    // flick inside it crosses straight back (single-flick undo). Cleared by
+    // any new player ride (the player has navigated on — the undo context is
+    // stale). Purely temporal otherwise: free scrolling does not cancel it.
+    this._undoDir = null;                 // 'in' | 'out' — the direction that undoes
+    this._undoUntilTMs = -Infinity;
+
     this._settled = false;                // settle-back latched until next input
     this._ride = null;                    // { kind } while mode === 'riding'
     this._preRide = null;                 // (floor, z01) revert point, alarmAuto only
@@ -159,10 +184,41 @@ export class ZoomLadder {
     // Any scroll input cancels a pending alarm escalation (00-spec.md §6).
     this._cancelPendingAlarm(decisions);
 
+    // Momentum-tail rejection: a same-direction continuation (< gesture-
+    // silence gap) with strictly decaying mag charges ZERO — only deliberate
+    // re-pushes (mag >= previous) count. Sequence heads charge: the flick
+    // itself is deliberate; its decaying tail is not (00-spec.md §4).
+    // Computed BEFORE _recordWheel so the flick detector and the spring share
+    // one causal view of the stream — mid-ride events included (G3).
+    const gap = tMs - this._lastWheelTMs;
+    const isTail = gap < this._spring.GESTURE_LOCK_SILENCE_MS &&
+      dir === this._lastWheelDir && mag < this._lastWheelMag;
+    const flicked = this._flickTrack(tMs, dir, mag, isTail, gap);
+
     if (this._ride) {
       // Scroll cancels only alarm auto-rides, not player rides (06-core-api).
       if (this._ride.kind === 'alarmAuto') {
         this._cancelAlarmAutoRide(decisions);
+      } else if (flicked) {
+        // G3 flick effects DURING player rides (sustained charging stays
+        // ignored mid-ride; the detector above sees every event):
+        //  - flickWall + same dir  → upgrade: the second flick crosses;
+        //  - flickWall + reverse   → re-target the opposite wall edge;
+        //  - cross + reverse       → undo: cross straight back;
+        //  - cross + same dir      → absorbed (the floor change already
+        //    happened; excess same-direction flicks mid-flight do nothing);
+        //  - jump/page/esc/aimDown → detection-only (no flick effects).
+        // Each ride replacement swaps this._ride; S2 replaces the camera
+        // ride params + onDone (the old onDone never fires).
+        if (this._ride.kind === 'flickWall') {
+          if (dir === this._ride.dir) {
+            this._flickCross(dir, decisions);
+          } else {
+            decisions.push(this._startFlickWall(dir));
+          }
+        } else if (this._ride.kind === 'cross' && dir !== this._ride.dir) {
+          this._flickCross(dir, decisions);
+        }
       }
       // Wheel is otherwise ignored while riding (buffered nowhere) — but the
       // gesture bookkeeping still sees it, so a momentum tail spanning the
@@ -178,20 +234,32 @@ export class ZoomLadder {
     const wallHi = 1 - this._geo.WALL_ZONE_FRAC;
     const side = dir === 'in' ? 'down' : 'up';
 
-    // Momentum-tail rejection: a same-direction continuation (< gesture-
-    // silence gap) with strictly decaying mag charges ZERO — only deliberate
-    // re-pushes (mag >= previous) count. Sequence heads charge: the flick
-    // itself is deliberate; its decaying tail is not (00-spec.md §4).
-    const gap = tMs - this._lastWheelTMs;
-    const isTail = gap < this._spring.GESTURE_LOCK_SILENCE_MS &&
-      dir === this._lastWheelDir && mag < this._lastWheelMag;
-
     // Direction reversal releases the spring (the push is let go).
     if (this._chargeSide && this._chargeSide !== side) {
       if (this._rawCharge > EPS) {
         decisions.push({ type: 'charge', side: this._chargeSide, charge: 0, peek: false });
       }
       this._releaseSpring();
+    }
+
+    // G3 undo: a reverse-direction flick within FLICK_UNDO_WINDOW_MS of a
+    // completed cross crosses straight back — from ANYWHERE on the floor
+    // (no wall-zone visit needed) and past the charge gesture lock.
+    if (flicked && dir === this._undoDir && tMs <= this._undoUntilTMs) {
+      this._clearUndoWindow();
+      this._flickCross(dir, decisions);
+      this._recordWheel(tMs, dir, mag);
+      return decisions;
+    }
+
+    // G3: a flick while NOT at/in the flick-direction wall zone rides WITHIN
+    // the floor to that wall edge. The flick consumes the event — no move,
+    // no charge; free-scroll and wall-charge behavior for non-flick input is
+    // unchanged.
+    if (flicked && !this._atOrInWall(dir)) {
+      decisions.push(this._startFlickWall(dir));
+      this._recordWheel(tMs, dir, mag);
+      return decisions;
     }
 
     const target = dir === 'in'
@@ -248,12 +316,15 @@ export class ZoomLadder {
     // a momentum-tail event may never COMPLETE a crossing either, even when
     // earlier drive events left the spring past threshold (G2: the trigger
     // hole let a violent flick cross ~150 ms into its own tail). At most one
-    // cross/denied per gesture.
-    const wantsCross = !this._gestureLocked &&
+    // cross/denied per gesture. G3: a FLICK at/in the wall zone crosses too
+    // (reaching here with `flicked` implies _atOrInWall — the mid-floor case
+    // returned above) — it bypasses the charge gesture lock; the detector's
+    // one-flick-per-drive rule is the flick gesture boundary.
+    const wantsCross = flicked || (!this._gestureLocked &&
       chargeMag > 0 &&
       norm >= 1 - EPS &&
       this._chargeEvents.length >= this._spring.MIN_EVENTS &&
-      (tMs - this._chargeEvents[0]) >= (this._spring.MIN_SPAN_MS || 0);
+      (tMs - this._chargeEvents[0]) >= (this._spring.MIN_SPAN_MS || 0));
 
     if (wantsCross && dest && !this._dockDenies(dest)) {
       decisions.push({
@@ -267,9 +338,10 @@ export class ZoomLadder {
       // The spring released through the wall; S2 flies the reframe ride.
       this._floor = destId;
       this._z01 = decisions[decisions.length - 1].entryZ01;
-      this._ride = { kind: 'cross', toFloor: destId };
+      this._ride = { kind: 'cross', toFloor: destId, dir };
       this._releaseSpring();
       this._gestureLocked = true;
+      this._clearUndoWindow();
       this._recordWheel(tMs, dir, mag);
       return decisions;
     }
@@ -390,6 +462,12 @@ export class ZoomLadder {
   /** S2 reports the crossing/mini ride (or crossfade) completed. */
   rideFinished({ tMs }) {
     this._tick(tMs);
+    // G3: a completed CROSS arms the undo window — a reverse flick within
+    // FLICK_UNDO_WINDOW_MS crosses straight back to the previous floor.
+    if (this._ride && this._ride.kind === 'cross' && this._ride.dir) {
+      this._undoDir = this._ride.dir === 'in' ? 'out' : 'in';
+      this._undoUntilTMs = tMs + this._spring.FLICK_UNDO_WINDOW_MS;
+    }
     this._ride = null;
     this._preRide = null;
     return [];
@@ -499,6 +577,133 @@ export class ZoomLadder {
     this._lastWheelMag = mag;
   }
 
+  /**
+   * G3 flick detector. Feeds one wheel event; returns true when a flick
+   * fires. A flick = accumulated deliberate (non-tail) mag within
+   * FLICK_MAX_DRIVE_MS reaching FLICK_MIN_MAG, with a RISE gate: the trigger
+   * event's mag must exceed the accumulation run's first event's (or alone
+   * meet the threshold). Deliberate events are never mag-decreasing (a
+   * decreasing one is a tail), so an equal-mag stream — a wheel-notch push,
+   * a plateau — never rises and never flicks; slow/sparse scrolling ages out
+   * of the window. Tails neither accumulate nor trigger: a tail RESETS the
+   * run (the drive ended; momentum began) and re-ARMS the detector, which is
+   * exactly what lets a deliberate re-push during the tail read as a second
+   * flick while the tail itself can never be one.
+   * @private
+   */
+  _flickTrack(tMs, dir, mag, isTail, gap) {
+    const F = this._flick;
+    if (gap >= this._spring.GESTURE_LOCK_SILENCE_MS || dir !== F.dir) {
+      F.dir = dir;
+      F.events = [];
+      F.armed = true;
+    }
+    if (isTail) {
+      F.events = [];
+      F.armed = true;
+      return false;
+    }
+    if (!F.armed) return false;              // one flick per drive
+    const cutoff = tMs - this._spring.FLICK_MAX_DRIVE_MS;
+    F.events = F.events.filter((e) => e.tMs >= cutoff);
+    F.events.push({ tMs, mag });
+    let sum = 0;
+    for (const e of F.events) sum += e.mag;
+    if (sum < this._spring.FLICK_MIN_MAG - EPS) return false;
+    const rose = F.events.length === 1
+      ? mag >= this._spring.FLICK_MIN_MAG - EPS
+      : mag > F.events[0].mag + EPS;
+    if (!rose) return false;
+    F.events = [];
+    F.armed = false;
+    return true;
+  }
+
+  /** True when z01 sits at or inside the wall zone the direction points at.
+   *  (The wall EDGE counts as "at" — a flick there crosses, G3.) @private */
+  _atOrInWall(dir) {
+    return dir === 'in'
+      ? this._z01 <= this._geo.WALL_ZONE_FRAC + EPS
+      : this._z01 >= 1 - this._geo.WALL_ZONE_FRAC - EPS;
+  }
+
+  /**
+   * Start a G3 flickWall ride: within the CURRENT floor, to the wall edge the
+   * flick points at. State moves to the edge immediately (the camera never
+   * rests between floors — same law as crossings); the spring releases; the
+   * gesture lock is NOT touched (a flick-to-wall then sustained push-through
+   * must keep working as one composite gesture).
+   * @private
+   */
+  _startFlickWall(dir) {
+    const edge = dir === 'in'
+      ? this._geo.WALL_ZONE_FRAC
+      : 1 - this._geo.WALL_ZONE_FRAC;
+    this._z01 = edge;
+    this._ride = { kind: 'flickWall', toFloor: this._floor, dir };
+    this._settled = false;
+    this._releaseSpring();
+    this._clearUndoWindow();
+    return {
+      type: 'ride', toFloor: this._floor, entryZ01: edge,
+      kind: 'flickWall', miniMs: this._spring.FLICK_RIDE_MS,
+    };
+  }
+
+  /**
+   * G3: attempt a flick-crossing in `dir` from the current floor (used by the
+   * at-wall flick, the double-flick upgrade, the mid-cross undo, and the
+   * post-cross undo window). Bypasses the charge gesture lock — the flick
+   * detector's one-per-drive rule is the flick gesture boundary — but honors
+   * dock gates and ladder ends exactly like the spring path. On success the
+   * state moves to (dest, entry) and the ride REPLACES any in-flight player
+   * ride (S2 swaps the camera ride params + onDone; the old onDone never
+   * fires). Sets the charge gesture lock so the same unbroken input stream
+   * cannot also spring-cross.
+   * @private
+   * @returns {boolean} true when the cross fired (false = denied)
+   */
+  _flickCross(dir, decisions) {
+    const side = dir === 'in' ? 'down' : 'up';
+    const destId = side === 'down' ? this._floor - 1 : this._floor + 1;
+    const dest = this._byId.get(destId);
+    if (!dest) {
+      decisions.push({ type: 'denied', floor: this._floor, reason: 'ladder-end', hint: null });
+      this._gestureLocked = true;
+      return false;
+    }
+    if (this._dockDenies(dest)) {
+      decisions.push({ type: 'denied', floor: dest.id, reason: 'undocked', hint: dest.humps?.deniedHint ?? null });
+      this._gestureLocked = true;
+      return false;
+    }
+    const entryZ01 = side === 'down'
+      ? this._geo.ENTRY_Z01_FROM_ABOVE
+      : this._geo.ENTRY_Z01_FROM_BELOW;
+    decisions.push({
+      type: 'cross',
+      fromFloor: this._floor,
+      toFloor: destId,
+      entryZ01,
+      direction: dir,
+      rideMsRange: [...this._rules.rideMsRange],
+    });
+    this._floor = destId;
+    this._z01 = entryZ01;
+    this._ride = { kind: 'cross', toFloor: destId, dir };
+    this._settled = false;
+    this._releaseSpring();
+    this._gestureLocked = true;
+    this._clearUndoWindow();
+    return true;
+  }
+
+  /** G3: drop a pending post-cross undo window. @private */
+  _clearUndoWindow() {
+    this._undoDir = null;
+    this._undoUntilTMs = -Infinity;
+  }
+
   _releaseSpring() {
     this._rawCharge = 0;
     this._chargeSide = null;
@@ -544,6 +749,7 @@ export class ZoomLadder {
     this._ride = { kind, toFloor: toId };
     this._settled = false;
     this._releaseSpring();
+    this._clearUndoWindow();   // navigating on — a pending flick-undo is stale (G3)
     return [{ type: 'ride', toFloor: toId, entryZ01, kind, miniMs }];
   }
 

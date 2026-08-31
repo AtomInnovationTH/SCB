@@ -71,6 +71,31 @@ export const FloorContract = {
     SETTLE_IDLE_MS: 250,         // idle in a wall zone -> settle back to the wall edge
     PEEK_CHARGE_FRAC: 0.5,       // charge above this ghosts the next floor's UI
     MOMENTUM_TAIL_CHARGE: 0,     // monotonically-decaying delta tails charge nothing
+
+    /* G3 flick grammar (2026-08-31): flicks become the PRIMARY navigation
+     * quantum; the sustained push (G2 above) stays as the additive fallback.
+     * A real macOS flick is 3-6 head events with RISING mags over ~80-150 ms,
+     * then a monotone-decaying momentum tail for 150-400 ms; a deliberate
+     * push is ~constant-mag events (wheel: ~1 notch every 30-60 ms; trackpad:
+     * a jittery plateau) sustained 250-400+ ms. The detector therefore keys
+     * on a short RISING burst: deliberate (non-tail) mags accumulated within
+     * FLICK_MAX_DRIVE_MS fire a flick at FLICK_MIN_MAG only when the trigger
+     * event rose above the run's first event (or alone meets the threshold) —
+     * equal-mag push streams and slow/sparse scrolling can never flick, and
+     * tail events neither accumulate nor trigger (they reset + re-arm the
+     * detector, so a flick's own momentum can never read as a second flick).
+     * One flick mid-floor rides to that wall edge (FLICK_RIDE_MS); a flick
+     * at/inside the wall zone (or a second same-direction flick while the
+     * flickWall ride flies) crosses; a reverse flick mid-ride re-targets, and
+     * within FLICK_UNDO_WINDOW_MS of a completed cross it crosses straight
+     * back (instant reversibility is the forgiveness mechanism). Starting
+     * values — a later research task tunes them from recorded traces; all
+     * overridable via the ZoomLadder constructor spring deps.
+     */
+    FLICK_MAX_DRIVE_MS: 160,     // flick head window: deliberate mags accumulate within this
+    FLICK_MIN_MAG: 2.0,          // accumulated deliberate mag that fires a flick (router-normalized)
+    FLICK_RIDE_MS: 300,          // flickWall ride duration (within-floor, to the wall edge)
+    FLICK_UNDO_WINDOW_MS: 800,   // reverse flick within this of a completed cross = cross back
   },
 
   /** Automatic time-warp rules (S3 TimeAuthority reads these + per-floor timeCap). */

@@ -8,7 +8,12 @@
  *     (ceremony-BEAT pattern, T6 — able to aim Earth-fixed frames);
  *   - per-floor render-block swaps via SceneManager (T1);
  *   - the rail indicator stub (charge fill / current floor).
- * It calls `ladder.rideFinished({tMs})` when a ride completes.
+ * It calls `ladder.rideFinished({tMs})` when a ride completes — via a ride
+ * SEQUENCE TOKEN, because G3 flick upgrades/reversals/undos replace rides
+ * mid-flight: only the LATEST ride's completion may reach the core (a stale
+ * rideFinished would clear the replacement ride). flickWall rides (G3) are
+ * ordinary 'ride' decisions with kind 'flickWall' and miniMs FLICK_RIDE_MS —
+ * same-floor camera flights to a wall edge.
  *
  * This module is NOT a hub file and touches no THREE/DOM directly — every side
  * effect goes through injected deps whose methods are all optional, so the
@@ -70,6 +75,15 @@ export class LadderController {
     });
     this._engaged = false;
     this._lastInputMs = -Infinity; // last wheel/command/jump — adaptHoldoff()
+    // G3: monotone ride token. Flick upgrades/reversals/undos REPLACE the
+    // core's ride mid-flight (a new ladderStartRide supersedes the old one);
+    // the old camera onDone must then never reach ladder.rideFinished — a
+    // stale completion would clear the NEW ride (and could wrongly arm the
+    // flick-undo window). CameraSystem.ladderStartRide already swaps its
+    // params + onDone so the old callback normally never fires; this token
+    // makes the controller safe even against a camera (or test stub) that
+    // fires a superseded onDone anyway.
+    this._rideSeq = 0;
   }
 
   /** The underlying pure core (read-only use — rail/tests). */
@@ -261,14 +275,18 @@ export class LadderController {
    * Start a camera ride to (toFloor, entryZ01). The core has already advanced
    * its state to the destination and is `riding` until rideFinished(); we swap
    * the destination floor's render block immediately (T1) and report the ride
-   * complete via a completion callback.
+   * complete via a completion callback. Each start claims a fresh ride token:
+   * a superseded ride's onDone (replaced mid-flight by a flick upgrade /
+   * reversal / undo) is dropped instead of delivering a STALE rideFinished.
    * @private
    */
   _startRide(toFloor, entryZ01, rideMs, tMs) {
     this._applyFidelity(toFloor);
     this._applyFloorContent(toFloor);
     const frame = this._frame(toFloor, entryZ01);
+    const seq = ++this._rideSeq;
     const done = () => {
+      if (seq !== this._rideSeq) return;   // superseded — the new ride owns completion
       const t = this._now();
       this._ladder.rideFinished({ tMs: t });
       this._refreshRail();
