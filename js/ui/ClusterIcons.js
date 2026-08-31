@@ -11,6 +11,11 @@
  *   - icon sizes are exactly the 3 bands [12, 18, 24] px (count-weighted);
  *   - color is never the SOLE channel: count → size, focus → color AND scale;
  *   - clusters read INFO cyan; the focused cluster reads SELECTION white;
+ *   - FUEL-REACHABILITY (optional opts.assessments): unreachable clusters are
+ *     dimmed + dash-ringed, marginal read VALUE gold + dashed (never
+ *     color-alone), and the FOCUSED cluster's label gains an estimate line
+ *     ('ΔV 320 · Xe 2.1 kg · 14 min'); icon hitboxes (ring + count only — the
+ *     root stays pointer-events:none) click-dispatch to the onSelect sink;
  *   - at most `labelBudget` (F6 = 7) icons carry a text label, the rest are
  *     ranked out (highest count first) — hover would reveal the rest (S6).
  *
@@ -34,6 +39,14 @@ import { FloorContract } from '../core/FloorContract.js';
  *  Three bands ↔ SIZES_PX [12, 18, 24]; endpoints pinned by test. */
 const SIZE_BREAKS = [25, 100]; // <25 → 12px, <100 → 18px, else 24px
 
+/**
+ * FUEL-REACHABILITY (F6): opacity applied to clusters the ΔV budget cannot
+ * reach. Verdict encoding is never color-alone (VisualLaw law): unreachable =
+ * dim + dashed ring; marginal = VALUE gold + dashed ring; reachable = normal
+ * INFO cyan solid. Own-module tunable (house rule: not FloorContract/Constants).
+ */
+export const UNREACHABLE_DIM_OPACITY = 0.35;
+
 export class ClusterIcons {
   constructor() {
     this._root = null;
@@ -41,6 +54,47 @@ export class ClusterIcons {
     this._icons = new Map();  // clusterId → { el, ring, label }
     this._built = false;
     this._visible = false;
+    this._onSelect = null;    // click-to-select sink: (clusterId) => void
+  }
+
+  /**
+   * Wire the click-to-select sink. Individual icon hitboxes (ring + count
+   * label only — the root stays pointer-events:none) dispatch the cluster id
+   * here; NavcomFloor routes it into focusById().
+   * @param {(id:*) => void} fn
+   */
+  setOnSelect(fn) { this._onSelect = (typeof fn === 'function') ? fn : null; }
+
+  /**
+   * Dispatch a click on a cluster icon to the onSelect sink. Public so the
+   * dispatch path is headless-testable (the DOM listener calls this).
+   * @param {*} id - cluster id
+   */
+  clickIcon(id) { if (this._onSelect) this._onSelect(id); }
+
+  /**
+   * Format a reachability assessment as the focused icon's estimate line,
+   * e.g. 'ΔV 320 · Xe 2.1 kg · 14 min'. Pure + static.
+   * @param {{dvCost:number, fuelKg:number, timeS:number}} a
+   * @returns {string}
+   */
+  static estimateLine(a) {
+    if (!a) return '';
+    const dv = Number.isFinite(a.dvCost) ? Math.round(a.dvCost) : '\u2014';
+    const xe = Number.isFinite(a.fuelKg) ? (Math.round(a.fuelKg * 10) / 10) : '\u2014';
+    return `\u0394V ${dv} \u00b7 Xe ${xe} kg \u00b7 ${ClusterIcons.formatTime(a.timeS)}`;
+  }
+
+  /**
+   * Compact duration for the estimate line. Pure + static.
+   * @param {number} s - seconds
+   * @returns {string} '45 s' / '14 min' / '2.5 h' ('—' for non-finite)
+   */
+  static formatTime(s) {
+    if (!Number.isFinite(s)) return '\u2014';
+    if (s < 90) return `${Math.round(s)} s`;
+    if (s < 5400) return `${Math.round(s / 60)} min`;
+    return `${(s / 3600).toFixed(1)} h`;
   }
 
   /**
@@ -108,11 +162,20 @@ export class ClusterIcons {
    * @param {object} [opts]
    * @param {number} [opts.budget] - max labelled icons (default F6 labelBudget = 7)
    * @param {*} [opts.focusId] - the currently-focused cluster id (SELECTION white)
-   * @returns {Array<{id:*, name:string, count:number, x:number, y:number, sizePx:number, focused:boolean}>}
+   * @param {Map|object} [opts.assessments] - FUEL-REACHABILITY: clusterId →
+   *                 ReachabilityModel.assess() result. Absent → the pre-reach
+   *                 rendering, byte-identical.
+   * @returns {Array<{id:*, name:string, count:number, x:number, y:number, sizePx:number,
+   *                  focused:boolean, verdict:?string, estimate:?string, dimmed:boolean}>}
    */
   render(clusters, project, opts = {}) {
     const budget = (opts.budget != null) ? opts.budget : FloorContract.FLOORS[5].labelBudget;
     const focusId = (opts.focusId != null) ? opts.focusId : null;
+    const assessments = opts.assessments || null;
+    const assessFor = (id) => {
+      if (!assessments) return null;
+      return (typeof assessments.get === 'function') ? (assessments.get(id) || null) : (assessments[id] || null);
+    };
     const ranked = ClusterIcons.rank(clusters, budget);
 
     const descriptors = [];
@@ -122,9 +185,16 @@ export class ClusterIcons {
       if (!p || !p.visible) continue;
       const sizePx = ClusterIcons.sizeForCount(c.count);
       const focused = focusId != null && c.id === focusId;
-      descriptors.push({ id: c.id, name: c.name, count: c.count, x: p.x, y: p.y, sizePx, focused });
+      const a = assessFor(c.id);
+      const verdict = a ? a.verdict : null;
+      const estimate = (focused && a) ? ClusterIcons.estimateLine(a) : null;
+      const dimmed = verdict === 'unreachable';
+      descriptors.push({
+        id: c.id, name: c.name, count: c.count, x: p.x, y: p.y, sizePx, focused,
+        verdict, estimate, dimmed,
+      });
       seen.add(c.id);
-      this._paintIcon(c, p, sizePx, focused);
+      this._paintIcon(c, p, sizePx, focused, verdict, estimate);
     }
     // Retire icons no longer in the visible set (idempotent — G1 churn fix).
     for (const [id, rec] of this._icons) {
@@ -137,7 +207,7 @@ export class ClusterIcons {
   }
 
   /** @private Build/position one ring+count icon. */
-  _paintIcon(cluster, p, sizePx, focused) {
+  _paintIcon(cluster, p, sizePx, focused, verdict = null, estimate = null) {
     if (!this._root) return;
     let rec = this._icons.get(cluster.id);
     if (!rec) {
@@ -149,6 +219,18 @@ export class ClusterIcons {
       label.style.cssText = 'margin-top:2px;white-space:nowrap;';
       el.appendChild(ring);
       el.appendChild(label);
+      // Click-to-select: the ROOT stays pointer-events:none; only the ring +
+      // count label are hitboxes (12–30 px + a short number — small enough to
+      // never block canvas interaction elsewhere). The listener sits on the
+      // wrapper and dispatches through clickIcon() → the onSelect sink.
+      ring.style.pointerEvents = 'auto';
+      ring.style.cursor = 'pointer';
+      label.style.pointerEvents = 'auto';
+      label.style.cursor = 'pointer';
+      el.addEventListener('click', (ev) => {
+        if (ev && ev.stopPropagation) ev.stopPropagation();
+        this.clickIcon(cluster.id);
+      });
       this._root.appendChild(el);
       // The `_`-prefixed fields cache the last WRITTEN value of every property
       // that rarely changes, so the per-frame render only touches left/top
@@ -158,11 +240,20 @@ export class ClusterIcons {
       // childList mutations at one add+remove per icon per frame (~17 Hz
       // headless, would be ~120 Hz at 120 fps) for text that almost never
       // changes. Same-value style writes are cached on the same principle.
-      rec = { el, ring, label, _display: null, _dim: null, _focused: null, _color: null, _count: null };
+      // est (the focused estimate line) is created LAZILY on first use so the
+      // no-assessment path leaves the DOM exactly as before (byte-identical).
+      rec = {
+        el, ring, label, est: null,
+        _display: null, _dim: null, _focused: null, _color: null, _count: null,
+        _dimmed: false, _dashed: false, _estText: null,
+      };
       this._icons.set(cluster.id, rec);
     }
-    const color = focused ? VisualLaw.COLORS.SELECTION : VisualLaw.COLORS.INFO;
-    // Focus is double-encoded: color (white) AND a thicker ring + slight scale.
+    // FUEL-REACHABILITY verdict encoding (never color-alone): marginal = VALUE
+    // gold + dashed; unreachable = dimmed + dashed; reachable/unknown = INFO
+    // solid. Focus stays SELECTION white (double-encoded: thicker ring + scale).
+    const color = focused ? VisualLaw.COLORS.SELECTION
+      : (verdict === 'marginal' ? VisualLaw.COLORS.VALUE : VisualLaw.COLORS.INFO);
     const scale = focused ? 1.25 : 1;
     const dim = Math.round(sizePx * scale);
     if (rec._display !== 'block') { rec.el.style.display = 'block'; rec._display = 'block'; }
@@ -182,9 +273,36 @@ export class ClusterIcons {
       rec.label.style.color = color;
       rec._color = color;
     }
+    const dimmed = verdict === 'unreachable';
+    if (rec._dimmed !== dimmed) {
+      rec.el.style.opacity = dimmed ? String(UNREACHABLE_DIM_OPACITY) : '1';
+      rec._dimmed = dimmed;
+    }
+    const dashed = verdict === 'marginal' || verdict === 'unreachable';
+    if (rec._dashed !== dashed) {
+      rec.ring.style.borderStyle = dashed ? 'dashed' : 'solid';
+      rec._dashed = dashed;
+    }
     if (rec._count !== cluster.count) {
       rec.label.textContent = String(cluster.count);
       rec._count = cluster.count;
+    }
+    if (rec._estText !== estimate) {
+      if (estimate) {
+        if (!rec.est) {
+          const est = document.createElement('div');
+          est.style.cssText = 'margin-top:1px;white-space:nowrap;opacity:0.85;pointer-events:none;';
+          rec.el.appendChild(est);
+          rec.est = est;
+        }
+        rec.est.style.display = 'block';
+        rec.est.style.color = rec._color;
+        rec.est.textContent = estimate;
+      } else if (rec.est) {
+        rec.est.style.display = 'none';
+        rec.est.textContent = '';
+      }
+      rec._estText = estimate;
     }
   }
 

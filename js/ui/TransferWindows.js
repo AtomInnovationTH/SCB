@@ -9,9 +9,12 @@
  * (computeTransferWindow / coOrbitalReadout); this module is the read-only
  * costume that formats + paints it.
  *
- * Pure formatting (`formatDuration`, `readout`) is static + THREE/DOM-free so the
- * planning readout is unit-testable exactly like the legacy DebrisMap readout
- * (coOrbitalReadout precedent). The DOM panel is fully guarded (inert headless).
+ * Pure formatting (`formatDuration`, `readout`, `fuelLine`) is static +
+ * THREE/DOM-free so the planning readout is unit-testable exactly like the
+ * legacy DebrisMap readout (coOrbitalReadout precedent). The DOM panel is fully
+ * guarded (inert headless). FUEL-REACHABILITY: `readout`/`refresh` accept an
+ * optional `opts.assessment` (ReachabilityModel.assess result) and surface a
+ * verdict + xenon + margin row; without it the model/markup are unchanged.
  *
  * FLOOR CONTENT (parallel track): no game loop, no autopilot, no event emission —
  * NavcomFloor feeds it a window; the plan-transfer VERB (Space on F6) is what
@@ -100,20 +103,30 @@ export class TransferWindows {
    * @param {object|null} win - a computeTransferWindow() result (or null)
    * @param {object} [opts]
    * @param {string} [opts.targetName] - focused cluster name
+   * @param {object} [opts.assessment] - FUEL-REACHABILITY: the focused cluster's
+   *                 ReachabilityModel.assess() result ({verdict, fuelKg,
+   *                 budgetAfter, ...}). Absent → fuelText '' (pre-reach model).
+   * @param {object} [opts.budget] - getMassBudget() sample (reserved; the row
+   *                 reads budgetAfter so remaining fuel is post-burn honest)
    * @returns {{
    *   empty:boolean, coOrbital:boolean, targetName:string,
    *   departText:string, transferText:string, arriveText:string,
-   *   dvText:string, periodText:string, imminent:boolean, showArrive:boolean
+   *   dvText:string, periodText:string, imminent:boolean, showArrive:boolean,
+   *   fuelText:string, verdict:?string
    * }}
    */
   static readout(win, opts = {}) {
     const targetName = opts.targetName || '\u2014';
+    const a = opts.assessment || null;
+    const fuelText = (win && a) ? TransferWindows.fuelLine(a) : '';
+    const verdict = (win && a) ? (a.verdict || null) : null;
     if (!win) {
       return {
         empty: true, coOrbital: false, targetName,
         departText: 'NO TARGET', transferText: '', arriveText: '',
         dvText: '', periodText: 'aim a cluster to plan a transfer',
         imminent: false, showArrive: false,
+        fuelText: '', verdict: null,
       };
     }
     const dvText = `\u0394V ${Math.round(win.dvTotal)} m/s`;
@@ -123,6 +136,7 @@ export class TransferWindows {
         empty: false, coOrbital: true, targetName,
         departText: co.departText, transferText: '', arriveText: '',
         dvText, periodText: co.periodText, imminent: false, showArrive: co.showArrive,
+        fuelText, verdict,
       };
     }
     return {
@@ -134,7 +148,21 @@ export class TransferWindows {
       periodText: `window every ${TransferWindows.formatDuration(win.synodic)}`,
       imminent: win.departIn <= IMMINENT_S,
       showArrive: true,
+      fuelText, verdict,
     };
+  }
+
+  /**
+   * FUEL-REACHABILITY row text: verdict + xenon cost + post-burn ΔV margin,
+   * e.g. 'REACHABLE · Xe 2.1 kg · 512 m/s left'. Pure + static.
+   * @param {{verdict:string, fuelKg:number, budgetAfter:number}} a
+   * @returns {string}
+   */
+  static fuelLine(a) {
+    if (!a || !a.verdict) return '';
+    const xe = Number.isFinite(a.fuelKg) ? (Math.round(a.fuelKg * 10) / 10) : '\u2014';
+    const left = Number.isFinite(a.budgetAfter) ? Math.round(a.budgetAfter) : '\u2014';
+    return `${String(a.verdict).toUpperCase()} \u00b7 Xe ${xe} kg \u00b7 ${left} m/s left`;
   }
 
   // ── DOM (guarded) ───────────────────────────────────────────────────────────
@@ -162,7 +190,7 @@ export class TransferWindows {
   /**
    * Paint the transfer-window readout for the focused cluster.
    * @param {object|null} win - computeTransferWindow() result (or null)
-   * @param {object} [opts] - { targetName }
+   * @param {object} [opts] - { targetName, assessment, budget }
    * @returns {object} the display model that was rendered (readout())
    */
   refresh(win, opts = {}) {
@@ -170,7 +198,8 @@ export class TransferWindows {
     if (!this._root) return model;
     // G1 warp churn cap: structural changes paint immediately; countdown-only
     // ticks are bounded to ≤4 Hz real (see shouldWrite / DOM_WRITE_MIN_INTERVAL_MS).
-    const structKey = `${model.targetName}|${model.empty}|${model.coOrbital}|${model.imminent}|${model.dvText}|${model.showArrive}`;
+    // The fuel row is structural: a verdict/margin change repaints immediately.
+    const structKey = `${model.targetName}|${model.empty}|${model.coOrbital}|${model.imminent}|${model.dvText}|${model.showArrive}|${model.fuelText}`;
     const now = this._now();
     if (!TransferWindows.shouldWrite(structKey, this._lastStructKey, now, this._lastWriteMs)) {
       return model;
@@ -179,11 +208,21 @@ export class TransferWindows {
     // is double-encoded: SELECTION-white depart line + the [IMMINENT] tag.
     const departColor = model.imminent ? VisualLaw.COLORS.SELECTION : VisualLaw.COLORS.INFO;
     const rows = [
-      `<div style="color:${VisualLaw.COLORS.PLAYER}">NAVCOM · ${model.targetName}</div>`,
+      `<div style="color:${VisualLaw.COLORS.PLAYER}">NAVCOM \u00b7 ${model.targetName}</div>`,
       `<div style="color:${departColor}">${model.departText}${model.imminent ? '  [IMMINENT]' : ''}</div>`,
     ];
-    if (model.showArrive) rows.push(`<div>${model.transferText} → ${model.arriveText}</div>`);
+    if (model.showArrive) rows.push(`<div>${model.transferText} \u2192 ${model.arriveText}</div>`);
     if (model.dvText) rows.push(`<div>${model.dvText}</div>`);
+    if (model.fuelText) {
+      // Verdict color: reachable = PLAYER green, marginal = VALUE gold (steady),
+      // unreachable = dim INFO (the WORD carries it — THREAT red must pulse and
+      // this is a planning surface, not an alarm). Never color-alone.
+      const fuelColor = model.verdict === 'reachable' ? VisualLaw.COLORS.PLAYER
+        : model.verdict === 'marginal' ? VisualLaw.COLORS.VALUE
+        : VisualLaw.COLORS.INFO;
+      const fuelDim = model.verdict === 'unreachable' ? ';opacity:0.6' : '';
+      rows.push(`<div style="color:${fuelColor}${fuelDim}">${model.fuelText}</div>`);
+    }
     rows.push(`<div style="opacity:0.7">${model.periodText}</div>`);
     // M3 review fix: refresh() is ticked every frame while F6 is active, but the
     // readout only changes ~1/s at 1× (formatDuration rounds to seconds) — skip
