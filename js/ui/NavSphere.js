@@ -8,6 +8,7 @@
 
 import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
+import { VisualLaw } from '../core/VisualLaw.js';
 import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { GameStates } from '../core/GameState.js';
@@ -164,6 +165,19 @@ export class NavSphere {
     /** @type {number|null} Timestamp (ms) until which the comms-bottom cache is
      *  recomputed every draw, covering the comms panel's ~0.3s height animation. */
     this._commsResizeSettleAt = null;
+
+    // --- Zoom Ladder F5 additive opts (S4, 'NavSphere:corner-minimap') ---
+    // Both null by default ⇒ every shipped code path below is byte-identical.
+    // While CORNER-MOUNTED (ProxMiniSphere.mount) the sphere shrinks in place
+    // to this radius and the layer is FORCED ON (the minimap is the F5 floor
+    // costume — the manual 8-key hold and the minimized one-liner are
+    // suspended, not overwritten: their flags survive for the unmount).
+    /** @type {number|null} corner-minimap radius (px), null = unmounted */
+    this._cornerMountRadiusPx = null;
+    // Floor-fed tactical layer drawn over the radar (focused cluster bearing +
+    // selected insertion point). Plain descriptor, see ProxMiniSphere.
+    /** @type {{clusterPos:?{x,y,z}, clusterName:?string, insertionPos:?{x,y,z}, insertionZone:?string}|null} */
+    this._tacticalOverlay = null;
 
     this._createCanvas();
     this._onResize();
@@ -338,6 +352,9 @@ export class NavSphere {
    * @returns {number} px
    */
   getReservedHeight() {
+    // Corner-mounted (Zoom Ladder F5): the minimap is force-shown at the mount
+    // radius regardless of the suspended hidden/minimized flags.
+    if (this._cornerMountRadiusPx != null) return 2 * this._cornerMountRadiusPx;
     if (this._hidden || !this._visible) return 0;
     if (this._minimized) return MIN_READOUT_HEIGHT;
     return 2 * SPHERE_RADIUS;
@@ -345,6 +362,41 @@ export class NavSphere {
 
   /** @param {number|null} id */
   setSelectedTarget(id) { this._selectedTargetId = id; }
+
+  /**
+   * Zoom Ladder F5 additive opt — corner-minimap mount (S4,
+   * FloorContract.FLOORS[4].costume 'NavSphere:corner-minimap', transform
+   * 'navsphere-to-minimap'). While mounted the sphere draws at `radiusPx` in
+   * its usual comms-anchored top-right corner, the canvas is forced visible
+   * (the minimap is the floor costume — `_hidden`/`_minimized` are suspended
+   * but PRESERVED, so the player's 8-key state resumes on unmount), and the
+   * [8] badge is suppressed. Pass null to unmount and restore the shipped
+   * display state. Never called by shipped code paths (ProxMiniSphere only).
+   * @param {number|null} radiusPx
+   */
+  setCornerMount(radiusPx) {
+    this._cornerMountRadiusPx = (radiusPx > 0) ? radiusPx : null;
+    this._frameSkip = -1; // redraw at the new geometry on the next frame
+    if (!this.canvas) return;
+    if (this._cornerMountRadiusPx != null) {
+      this.canvas.style.display = 'block';
+    } else {
+      // Same resting expression the shipped toggles use.
+      this.canvas.style.display = (this._hidden || !this._visible) ? 'none' : 'block';
+    }
+  }
+
+  /**
+   * Zoom Ladder F5 additive opt — the floor-fed tactical layer (see
+   * ProxMiniSphere): focused cluster bearing + selected insertion point,
+   * drawn by update() over the radar contacts. The descriptor is stored by
+   * reference (the adapter mutates ONE reused object; no per-frame stores).
+   * Null (default) ⇒ nothing extra is drawn — shipped frames byte-identical.
+   * @param {{clusterPos:?{x,y,z}, clusterName:?string, insertionPos:?{x,y,z}, insertionZone:?string}|null} overlay
+   */
+  setTacticalOverlay(overlay) {
+    this._tacticalOverlay = overlay || null;
+  }
 
   /**
    * Main per-frame update.
@@ -360,7 +412,16 @@ export class NavSphere {
    * @param {object}        [data.armManager] - ArmManager for jellyfish tether viz
    */
   update(dt, data) {
-    if (this._hidden) return;
+    // Corner-mounted (Zoom Ladder F5): the mount suspends the manual hold —
+    // the minimap draws while the flags keep the player's choice for unmount.
+    if (this._hidden && this._cornerMountRadiusPx == null) return;
+    // Self-heal the forced display against shipped flag-driven hides
+    // (setVisible/setOrbHidden/toggleMinimized write display directly; while
+    // mounted, the mount owns the layer). Style write only when it differs.
+    if (this._cornerMountRadiusPx != null && this.canvas
+        && this.canvas.style.display !== 'block') {
+      this.canvas.style.display = 'block';
+    }
     this._time += dt;
 
     // Throttle Canvas2D redraws to every 6th frame (≈10Hz at 60fps)
@@ -391,7 +452,8 @@ export class NavSphere {
 
     // Minimized (8 key): draw only the LAT/LON/ALT one-liner and skip the
     // sphere. _geoCache above is still refreshed so the readout stays live.
-    if (this._minimized) {
+    // (Suspended while corner-mounted — the F5 minimap always draws the orb.)
+    if (this._minimized && this._cornerMountRadiusPx == null) {
       this._drawMinReadout();
       return;
     }
@@ -426,7 +488,11 @@ export class NavSphere {
     // §13 Sprint 4 (Phase 3 audit): cache the comms-panel bottom across draws
     // to avoid a per-draw sync layout flush. Invalidated on resize and
     // VIEW_CONFIG_CHANGE. At 10 Hz this saves ~10 layout flushes/s.
-    const cx = this._width  - MARGIN_RIGHT - SPHERE_RADIUS;
+    // Zoom Ladder F5: while corner-mounted the SAME corner anchor applies at
+    // the mount radius — the orb visually shrinks in place (the costume
+    // transform 'navsphere-to-minimap').
+    const R = this._cornerMountRadiusPx != null ? this._cornerMountRadiusPx : SPHERE_RADIUS;
+    const cx = this._width  - MARGIN_RIGHT - R;
     if (this._commsBottomCache == null) {
       if (!this._commsElCache) {
         this._commsElCache = document.getElementById('hud-comms-panel');
@@ -437,8 +503,7 @@ export class NavSphere {
     }
     const commsBottom = this._commsBottomCache;
     const marginTop = commsBottom + COMMS_GAP;
-    const cy = marginTop + SPHERE_RADIUS;
-    const R  = SPHERE_RADIUS;
+    const cy = marginTop + R;
     const ctx = this.ctx;
 
     ctx.save();
@@ -580,6 +645,14 @@ export class NavSphere {
       }
     }
 
+    // ---- Zoom Ladder F5 tactical overlay (additive; null ⇒ skipped) ----
+    // Floor-fed context over the radar: focused cluster bearing + selected
+    // insertion point (see setTacticalOverlay / ProxMiniSphere). Drawn before
+    // the selected target + player dot so the actionables stay on top.
+    if (this._tacticalOverlay) {
+      this._drawTacticalOverlay(ctx, cx, cy, R, playerPos);
+    }
+
     // ---- Selected target drawn LAST (painter's order — on top of all others) ----
     if (_selectedDebrisTarget) {
       this._drawDebrisDot(ctx, cx, cy, R, _selectedDebrisTarget, playerPos);
@@ -638,7 +711,11 @@ export class NavSphere {
     }
 
     // [8] hotkey badge at the sphere's top-right corner (matches [7]/[0]).
-    this._drawKeyBadge(ctx, cx + R - 4, cy - R + 4);
+    // Suppressed while corner-mounted: the F5 minimap is the floor costume,
+    // not the 8-key orb — the key badge would advertise a suspended toggle.
+    if (this._cornerMountRadiusPx == null) {
+      this._drawKeyBadge(ctx, cx + R - 4, cy - R + 4);
+    }
 
     ctx.restore();
   }
@@ -655,6 +732,93 @@ export class NavSphere {
     ctx.textAlign = 'right';
     ctx.textBaseline = 'top';
     ctx.fillText('[8]', rightX, topY);
+    ctx.restore();
+  }
+
+  /**
+   * @private Zoom Ladder F5 tactical overlay (additive — only drawn when
+   * setTacticalOverlay() stored a descriptor). VisualLaw grammar, never
+   * color-alone:
+   *   - focused cluster bearing: VALUE-gold RING (the cluster 'ring-count'
+   *     shape) + name label, distance-encoded via _toSphereWithDistance and
+   *     clamped to the rim (the F5 corridor target usually sits beyond the
+   *     sensor's outer zone);
+   *   - selected insertion point: SELECTION-white ring + cross-hair ticks +
+   *     zone label (the ProxOverlay insertion grammar; white = selection ONLY).
+   * Behind-camera points dim to the house 0.4 alpha like every other contact.
+   * @param {CanvasRenderingContext2D} ctx
+   * @param {number} cx - sphere center X
+   * @param {number} cy - sphere center Y
+   * @param {number} R  - sphere radius px (mount-resolved)
+   * @param {THREE.Vector3|{x,y,z}} playerPos
+   */
+  _drawTacticalOverlay(ctx, cx, cy, R, playerPos) {
+    const ov = this._tacticalOverlay;
+    if (!ov || !playerPos) return;
+    const RIM = 0.92; // max fraction of R — keep markers inside the clip
+
+    /** Project a world position; returns {sx, sy, z} clamped to the rim. */
+    const projectClamped = (posU) => {
+      this._tmpDir.set(posU.x - playerPos.x, posU.y - playerPos.y, posU.z - playerPos.z);
+      if (this._tmpDir.lengthSq() < 1e-16) return null;
+      const { sx, sy, z } = this._toSphereWithDistance(this._tmpDir, cx, cy, R);
+      const dx = sx - cx, dy = sy - cy;
+      const r = Math.sqrt(dx * dx + dy * dy);
+      const max = R * RIM;
+      if (r > max && r > 1e-6) {
+        return { sx: cx + (dx / r) * max, sy: cy + (dy / r) * max, z };
+      }
+      return { sx, sy, z };
+    };
+
+    ctx.save();
+    ctx.font = '8px monospace';
+
+    // Focused cluster bearing — gold ring + name (cluster icon grammar).
+    if (ov.clusterPos) {
+      const p = projectClamped(ov.clusterPos);
+      if (p) {
+        ctx.globalAlpha = p.z > 0 ? 0.9 : 0.4;
+        ctx.strokeStyle = VisualLaw.COLORS.VALUE; // gold (steady — never pulses)
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(p.sx, p.sy, 6, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(p.sx, p.sy, 1.5, 0, Math.PI * 2);
+        ctx.fillStyle = VisualLaw.COLORS.VALUE;
+        ctx.fill();
+        if (ov.clusterName) {
+          ctx.textAlign = 'left';
+          ctx.fillText(String(ov.clusterName), p.sx + 9, p.sy + 3);
+        }
+      }
+    }
+
+    // Selected insertion point — white ring + ticks + zone (selection ONLY).
+    if (ov.insertionPos) {
+      const p = projectClamped(ov.insertionPos);
+      if (p) {
+        ctx.globalAlpha = p.z > 0 ? 0.95 : 0.4;
+        ctx.strokeStyle = VisualLaw.COLORS.SELECTION; // white = selection ONLY
+        ctx.lineWidth = 1.5;
+        const r = 5;
+        ctx.beginPath();
+        ctx.arc(p.sx, p.sy, r, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(p.sx - r - 3, p.sy); ctx.lineTo(p.sx - r + 2, p.sy);
+        ctx.moveTo(p.sx + r - 2, p.sy); ctx.lineTo(p.sx + r + 3, p.sy);
+        ctx.stroke();
+        if (ov.insertionZone) {
+          ctx.fillStyle = VisualLaw.COLORS.SELECTION;
+          ctx.textAlign = 'left';
+          ctx.fillText(String(ov.insertionZone).toUpperCase(), p.sx + r + 4, p.sy + 3);
+        }
+      }
+    }
+
+    ctx.globalAlpha = 1;
     ctx.restore();
   }
 

@@ -24,7 +24,19 @@
  *     wiring routes it into AutopilotSystem.engageCluster(cluster,
  *     { arrivalPoint }). Verb dispatch itself arrives via LadderController in
  *     the serial pass (see the session HANDOFF): its _dispatchVerb gains a
- *     `verb === 'approach'` case calling proxNet.approach().
+ *     `verb === 'approach'` case calling proxNet.approach();
+ *   - the CORNER MINIMAP (costume 'NavSphere:corner-minimap', transform
+ *     'navsphere-to-minimap'): with the OPTIONAL `navSphere` dep (the shipped
+ *     instance) a ProxMiniSphere adapter shrinks the orb into the corner on
+ *     activate, restores it on deactivate, and update() feeds it the focused
+ *     cluster bearing + selected insertion point per frame. Rendering stays
+ *     on the shipped main.js NavSphere ticker (see ProxMiniSphere's header).
+ *     Absent dep ⇒ no adapter, byte-identical;
+ *   - the 'tactical-approach' CONTEXT PANEL (FloorContract F5 contextPanel):
+ *     ProxContextPanel (TransferWindows house pattern — DOM-guarded, G1
+ *     write-on-change) mounted/unmounted with the floor and fed {cluster,
+ *     candidates, selectedIndex, approach} per frame. Self-contained — no
+ *     generic context-panel framework exists yet (F6/F7 shipped without one).
  *
  * DESIGN (docs/ladder/03-plan.md, PARALLEL track — the NavcomFloor pattern):
  *   - Every dependency is INJECTED and optional, so the module is
@@ -47,6 +59,8 @@
 
 import { FloorContract } from '../core/FloorContract.js';
 import { ProxOverlay } from '../ui/ProxOverlay.js';
+import { ProxMiniSphere } from '../ui/ProxMiniSphere.js';
+import { ProxContextPanel } from '../ui/ProxContextPanel.js';
 import { shellCounts, SHELL_RADII_KM } from '../entities/FieldRiskModel.js';
 import { plan as planInsertion } from '../entities/InsertionPlanner.js';
 
@@ -90,6 +104,14 @@ export class ProxNetFloor {
    *                 void — production: autopilot engageCluster(cluster,
    *                 { arrivalPoint })
    * @param {object} [deps.proxOverlay]  - ProxOverlay instance (default: fresh)
+   * @param {object} [deps.navSphere]    - the SHIPPED NavSphere instance for the
+   *                 F5 corner minimap ('NavSphere:corner-minimap'); wrapped in
+   *                 a ProxMiniSphere adapter. Absent (with no miniSphere) ⇒ no
+   *                 minimap — byte-identical to the pre-minimap module
+   * @param {object} [deps.miniSphere]   - ProxMiniSphere-shaped adapter override
+   *                 (tests); takes precedence over deps.navSphere
+   * @param {object} [deps.contextPanel] - ProxContextPanel instance (default:
+   *                 fresh — DOM-guarded, inert headless)
    * @param {function} [deps.now]        - monotonic ms clock (tests)
    */
   constructor(deps = {}) {
@@ -98,6 +120,13 @@ export class ProxNetFloor {
     this._getFocusedCluster = deps.getFocusedCluster || null;
     this._onApproach = deps.onApproach || null;
     this._overlay = deps.proxOverlay || new ProxOverlay();
+    // F5 corner minimap: only ever constructed AROUND an injected NavSphere
+    // (the shipped singleton) — never fresh, so no dep means no adapter at all.
+    this._mini = deps.miniSphere
+      || (deps.navSphere ? new ProxMiniSphere({ navSphere: deps.navSphere }) : null);
+    // 'tactical-approach' context panel (default fresh, the ProxOverlay
+    // precedent: DOM-guarded ⇒ headless-inert).
+    this._panel = deps.contextPanel || new ProxContextPanel();
     this._now = deps.now || _nowMs;
 
     this._active = false;
@@ -105,6 +134,8 @@ export class ProxNetFloor {
     this._shells = [];           // FieldRiskModel shell reads (ship-centered)
     this._plan = null;           // InsertionPlanner.plan() result
     this._selectedZone = null;   // selection survives re-plans by zone id
+    this._cluster = null;        // last refreshed focused cluster (panel/minimap)
+    this._approachCommit = null; // {clusterId, zone} after the approach verb
     this._lastRefreshMs = -Infinity;
     this._lastShipPos = null;    // last ticked ship position (refresh anchor)
   }
@@ -114,6 +145,12 @@ export class ProxNetFloor {
 
   /** The view instance (for the serial track to mount / tests). */
   get overlay() { return this._overlay; }
+
+  /** The corner-minimap adapter (null without the navSphere dep) — tests. */
+  get miniSphere() { return this._mini; }
+
+  /** The 'tactical-approach' context panel — tests. */
+  get contextPanel() { return this._panel; }
 
   /** The current insertion plan (read-only probe for rail/context panels). */
   getPlan() { return this._plan; }
@@ -126,6 +163,10 @@ export class ProxNetFloor {
     this._active = true;
     this.refresh();
     if (this._overlay.show) this._overlay.show();
+    // Corner minimap + context panel arrive with the costume ('NavSphere:
+    // corner-minimap' + contextPanel 'tactical-approach').
+    if (this._mini) this._mini.mount();
+    if (this._panel && this._panel.show) this._panel.show();
   }
 
   /** Leave F5: hide the costume (state kept so re-entry is cheap). */
@@ -133,6 +174,9 @@ export class ProxNetFloor {
     if (!this._active) return;
     this._active = false;
     if (this._overlay.hide) this._overlay.hide();
+    // Restore the shipped orb (its 8-key state resumes) + drop the panel.
+    if (this._mini) this._mini.unmount();
+    if (this._panel && this._panel.hide) this._panel.hide();
   }
 
   // ── Data refresh (throttled — never per frame) ─────────────────────────────
@@ -180,6 +224,12 @@ export class ProxNetFloor {
     const cluster = (typeof this._getFocusedCluster === 'function')
       ? (this._getFocusedCluster() || null)
       : null;
+    this._cluster = cluster;
+    // A re-aim (or losing the aim) invalidates a committed approach — the
+    // panel's EN ROUTE line must never survive a target change.
+    if (this._approachCommit && (!cluster || this._approachCommit.clusterId !== cluster.id)) {
+      this._approachCommit = null;
+    }
     if (cluster && cluster.center) {
       const near = (this._debrisSource && this._debrisSource.getDebrisNear)
         ? (p, r) => this._debrisSource.getDebrisNear(vecLike(p), r)
@@ -285,7 +335,7 @@ export class ProxNetFloor {
       });
     }
 
-    return this._overlay.render({
+    const frame = this._overlay.render({
       targets,
       shipPos: ctx.shipPos || this._lastShipPos || undefined,
       shipAngleRad: ctx.shipAngleRad || 0,
@@ -296,6 +346,23 @@ export class ProxNetFloor {
         : null,
       labelBudget: F5.labelBudget,
     }, ctx.project);
+
+    // Feed the corner minimap + the context panel from the floor's own state.
+    // Both are cheap per frame: the adapter mutates ONE reused descriptor (the
+    // shipped NavSphere ticker paints at its own 10 Hz), and the panel's G1
+    // gate (html cache + ≤4 Hz cap) bounds real DOM writes to actual changes.
+    if (this._mini) {
+      this._mini.update({ cluster: this._cluster, selected: this.getSelectedInsertion() });
+    }
+    if (this._panel && this._panel.refresh) {
+      this._panel.refresh({
+        cluster: this._cluster,
+        candidates: this._plan ? this._plan.candidates : null,
+        selectedIndex: this.getSelectedIndex(),
+        approach: this._approachCommit,
+      });
+    }
+    return frame;
   }
 
   // ── The Space verb: approach ────────────────────────────────────────────────
@@ -320,11 +387,28 @@ export class ProxNetFloor {
     if (!this._plan || this._plan.clusterId !== cluster.id) this.refresh();
     const arrivalPoint = this.getSelectedInsertion();
     if (typeof this._onApproach === 'function') this._onApproach(cluster, arrivalPoint);
+    // Remember the commitment for the context panel's autopilot state line
+    // (cleared by refresh() when the aim changes) and surface it immediately —
+    // the readout doubles as the "approach committed" cue (the planTransfer
+    // precedent).
+    if (arrivalPoint) {
+      this._approachCommit = { clusterId: cluster.id, zone: arrivalPoint.zone };
+      if (this._panel && this._panel.refresh) {
+        this._panel.refresh({
+          cluster: this._cluster,
+          candidates: this._plan ? this._plan.candidates : null,
+          selectedIndex: this.getSelectedIndex(),
+          approach: this._approachCommit,
+        });
+      }
+    }
     return { cluster, arrivalPoint };
   }
 
-  /** Tear down the owned view. */
+  /** Tear down the owned view (the shared NavSphere is only unmounted). */
   dispose() {
     if (this._overlay.dispose) this._overlay.dispose();
+    if (this._mini) this._mini.unmount();
+    if (this._panel && this._panel.dispose) this._panel.dispose();
   }
 }
