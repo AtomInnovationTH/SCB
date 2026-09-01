@@ -64,6 +64,11 @@ export class LadderController {
    * @param {object} [deps.starfield]    - Starfield: isConstellationsVisible()/
    *   setConstellationsVisible(bool). Optional — F7 hides the constellation figures
    *   under the full-screen SDA chart and restores the player's prior on leave.
+   * @param {object} [deps.cityLabels]   - CityLabels: setSuppressed(bool). Optional —
+   *   F7 suppresses the city/landmark pills under the SDA chart (they read as
+   *   clutter over the altitude bands). Suppression is transient by contract
+   *   (CityLabels.setSuppressed never persists), so the player's 5-key
+   *   preference owns the resting state on leave/disengage.
    * @param {object} [deps.targetReticle]  - TargetReticle: setVisible(bool). Optional —
    *   suppressed on the ship-is-icon floors (F6/F7), restored on floors <= 5 / disengage.
    * @param {object} [deps.dockingReticle] - DockingReticle: setVisible(bool). Optional —
@@ -82,6 +87,7 @@ export class LadderController {
     this._sdaFloor = deps.sdaFloor || null;
     this._hullcam = deps.hullcam || null;
     this._starfield = deps.starfield || null;
+    this._cityLabels = deps.cityLabels || null;
     this._targetReticle = deps.targetReticle || null;
     this._dockingReticle = deps.dockingReticle || null;
     /** True while the engaged floor (>= 6) suppresses the aiming reticles. */
@@ -90,6 +96,8 @@ export class LadderController {
     this._constellationsHidden = false;
     /** Player's 6-key visibility captured when F7 hid the figures (restored on leave). */
     this._constellationsPrior = null;
+    /** True while F7 suppresses the city/landmark pills (mirrors _reticlesHidden). */
+    this._cityLabelsHidden = false;
     this._now = deps.now || (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()));
     // The DEFAULT core (the production path — main.js injects no ladder) honors
     // the dev-phase full-access flag: Constants.LADDER.DEV_FULL_ACCESS (ships
@@ -291,6 +299,9 @@ export class LadderController {
     this._setReticlesHidden(false);
     // Restore the constellation figures F7 hid (no-op if not suppressed).
     this._setConstellationsHidden(false);
+    // Clear the F7 city/landmark-pill suppression (no-op if not suppressed;
+    // the 5-key preference decides whether the pills actually reappear).
+    this._setCityLabelsHidden(false);
     if (this._rail && this._rail.hide) this._rail.hide();
   }
 
@@ -424,7 +435,9 @@ export class LadderController {
     }
     // F7 (SDA): 'massBands' drives the full-screen chart; the constellation
     // figures hide under it (screen-space chart — the star figures would read
-    // as chart strokes) and restore on any other floor / disengage.
+    // as chart strokes) and restore on any other floor / disengage. The Earth
+    // city/landmark pills hide with them (dozens of DOM pills over a chart-
+    // scale Earth read as clutter over the altitude bands).
     const massBands = !!(f && f.fidelity && f.fidelity.debrisMode === 'massBands');
     if (this._sdaFloor) {
       if (massBands) {
@@ -434,6 +447,7 @@ export class LadderController {
       }
     }
     this._setConstellationsHidden(massBands);
+    this._setCityLabelsHidden(massBands);
     // F3 (HULL CAM): keyed on FLOOR ID 3 — NOT fidelity.debrisMode, which is
     // 'full' on BOTH F3 and F4 and cannot discriminate.
     if (this._hullcam) {
@@ -497,6 +511,28 @@ export class LadderController {
         this._starfield.setConstellationsVisible(this._constellationsPrior);
       }
       this._constellationsPrior = null;
+    }
+  }
+
+  /**
+   * Suppress/clear the Earth city + landmark pills for the F7 SDA chart — a
+   * mirror of _setReticlesHidden. Idempotent (guarded on the flag flip); the
+   * cityLabels dep is optional — absent it this is a pure flag write.
+   *
+   * Simpler than the constellation pair by design: no prior capture is needed
+   * because CityLabels.setSuppressed is a TRANSIENT gate orthogonal to the
+   * persisted 5-key preference (`visible && !suppressed` shows a layer, and
+   * suppression never writes localStorage). Clearing it therefore restores
+   * exactly the player's own resting state — never a force-show, never a
+   * clobbered preference. setVisible() would persist and is deliberately NOT
+   * used here.
+   * @private
+   */
+  _setCityLabelsHidden(hidden) {
+    if (hidden === this._cityLabelsHidden) return;
+    this._cityLabelsHidden = hidden;
+    if (this._cityLabels && this._cityLabels.setSuppressed) {
+      this._cityLabels.setSuppressed(hidden);
     }
   }
 

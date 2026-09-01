@@ -392,6 +392,15 @@ export class CityLabels {
     this._layers = [];
     /** @type {boolean} master visibility (persisted; default ON) */
     this._visible = true;
+    /**
+     * @type {boolean} transient suppression (NOT persisted) — the Zoom Ladder
+     * hides the city/landmark pills under F7's full-screen SDA chart
+     * (LadderController._setCityLabelsHidden) and clears this on leave /
+     * disengage. Orthogonal to the player's 5-key `_visible` preference: a
+     * pill layer shows only when `_visible && !_suppressed`, and suppression
+     * never touches localStorage, so F7 can never clobber the saved choice.
+     */
+    this._suppressed = false;
     this._loadPreference();
 
     eventBus.on(Events.CITY_LABELS_TOGGLE, () => this.toggle());
@@ -399,6 +408,29 @@ export class CityLabels {
 
   /** @returns {boolean} */
   isVisible() { return this._visible; }
+
+  /** @returns {boolean} true while the ladder's F7 chart suppresses the pills. */
+  isSuppressed() { return this._suppressed; }
+
+  /**
+   * Transient show/hide gate for the Zoom Ladder's F7 (SDA DOWNLINK) chart —
+   * the Earth shrinks to a chart backdrop there and dozens of city/landmark
+   * pills read as clutter over the altitude bands. Unlike setVisible() this
+   * NEVER persists: the player's 5-key preference owns the resting state, so
+   * clearing the suppression restores exactly what the player had.
+   * @param {boolean} v
+   */
+  setSuppressed(v) {
+    v = !!v;
+    if (v === this._suppressed) return;
+    this._suppressed = v;
+    for (const layer of this._layers) {
+      layer.root.style.display = (this._visible && !this._suppressed) ? 'block' : 'none';
+    }
+    // Re-place labels immediately on un-suppress (update() skipped while
+    // suppressed, so positions are stale by however long F7 was up).
+    if (!this._suppressed && this._visible) this.update();
+  }
 
   /**
    * Whether the player has ever explicitly toggled labels (stored '0' or '1').
@@ -473,7 +505,7 @@ export class CityLabels {
     const root = document.createElement('div');
     root.className = 'sc-city-labels';
     root.style.cssText = 'position:absolute;top:0;left:0;width:0;height:0;';
-    root.style.display = this._visible ? 'block' : 'none';
+    root.style.display = (this._visible && !this._suppressed) ? 'block' : 'none';
     if (container) container.appendChild(root);
 
     const items = [];
@@ -544,7 +576,7 @@ export class CityLabels {
    * wholesale when its `isActive` gate is false.
    */
   update() {
-    if (!this._visible || typeof window === 'undefined') return;
+    if (!this._visible || this._suppressed || typeof window === 'undefined') return;
     const W = window.innerWidth, H = window.innerHeight;
     for (const layer of this._layers) {
       const active = (!layer.isActive || layer.isActive()) && layer.parent.visible !== false;
@@ -709,10 +741,10 @@ export class CityLabels {
   setVisible(v) {
     this._visible = !!v;
     for (const layer of this._layers) {
-      layer.root.style.display = this._visible ? 'block' : 'none';
+      layer.root.style.display = (this._visible && !this._suppressed) ? 'block' : 'none';
     }
     this._savePreference();
-    if (this._visible) this.update();
+    if (this._visible && !this._suppressed) this.update();
   }
 
   /** @private */
