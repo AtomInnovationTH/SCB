@@ -2,7 +2,7 @@
  * ProxNetFloor.js — the Zoom Ladder F5 (PROX NET) floor content orchestrator
  * (S4, FloorContract.FLOORS[4]).
  *
- * F5 is the ship-anchored tactical floor (120 m – 120 km, debrisMode
+ * F5 is the ship-anchored tactical floor (100 m – 120 km, debrisMode
  * 'tactical'): threat/density context around the ship, approach-corridor
  * picking against the aimed cluster, cluster context at range. This module is
  * the F5 "costume" controller — it owns the floor's tactical overlay

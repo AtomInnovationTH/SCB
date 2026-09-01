@@ -46,7 +46,7 @@ export const INSERTION_ZONES = [
 ];
 
 /** Cluster-radius floor (km): a degenerate/empty spread still yields a usable
- *  corridor (the F5 range spans 120 m – 120 km; a zero-radius cluster would
+ *  corridor (the F5 range spans 100 m – 120 km; a zero-radius cluster would
  *  collapse the three candidates onto one point). */
 export const MIN_CLUSTER_RADIUS_KM = 25;
 

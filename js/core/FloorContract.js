@@ -174,9 +174,16 @@ export const FloorContract = {
       name: 'COMMAND',
       anchor: 'ship',
       // FOV 55 = today's Constants.CAMERA_FOV; near = Constants.CAMERA_NEAR (~3 m).
-      camera: { distU: [1.2e-4, 1.2e-3], rangeLog10: logRange(1.2e-4, 1.2e-3), fov: 55, near: 3e-5, far: 500, upFrame: 'ship' },
+      // Top = 100 m: the Wave-3 F4 range shrink (playtest "level up earlier").
+      // 100 m is the shipped CHASE wheel clamp (CameraSystem.js `Math.min(0.001,
+      // offsetBehind)`) — the same continuity-with-the-shipped-game anchor as
+      // FOV 55. The M0 table's 120 m decade had no shipped counterpart; the
+      // 100–120 m strip was dead range the capture camera never used. The F4/F5
+      // boundary moved WITH it (floors stay contiguous; docs/ladder/01-numbers.md).
+      camera: { distU: [1.2e-4, 1e-3], rangeLog10: logRange(1.2e-4, 1e-3), fov: 55, near: 3e-5, far: 500, upFrame: 'ship' },
       // The 12 m lower bound inherits the shipped inspect Schmitt (12 m/18 m);
-      // the wall/entry rule replaces it (docs/ladder/00-spec.md §2).
+      // the wall/entry rule replaces it (docs/ladder/00-spec.md §2). That
+      // anchor is why the shrink moved the F4/F5 boundary, never this one.
       humps: { inFirmness: 1.6 },
       timeCap: 1,
       fidelity: { nearField: true, physicsMode: 'realtime', debrisMode: 'full' },
@@ -190,7 +197,8 @@ export const FloorContract = {
       id: 5,
       name: 'PROX NET',
       anchor: 'ship',
-      camera: { distU: [1.2e-3, 1.2], rangeLog10: logRange(1.2e-3, 1.2), fov: 60, near: 3e-5, far: 500, upFrame: 'ship' },
+      // Bottom = 100 m: shares the F4/F5 boundary (Wave-3 F4 shrink — see F4).
+      camera: { distU: [1e-3, 1.2], rangeLog10: logRange(1e-3, 1.2), fov: 60, near: 3e-5, far: 500, upFrame: 'ship' },
       humps: { inFirmness: 1.6 },
       timeCap: 4, // danger-capped: conjunction inside horizon ramps to 1x before the knock
       fidelity: { nearField: true, physicsMode: 'realtime', debrisMode: 'tactical' },

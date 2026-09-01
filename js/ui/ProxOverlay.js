@@ -2,7 +2,7 @@
  * ProxOverlay.js — the Zoom Ladder F5 (PROX NET) tactical overlay (S4).
  *
  * On F5 the near field stays live (fidelity.debrisMode 'tactical') but the
- * working range is 120 m – 120 km: individual meshes are sub-pixel, so this
+ * working range is 100 m – 120 km: individual meshes are sub-pixel, so this
  * layer draws the tactical read over them:
  *   - VALUE-CODED OBJECT MARKERS from DebrisField.getEnhancedTargetList()
  *     (estimatedPoints/risk fields): VisualLaw VALUE gold, steady, marker
