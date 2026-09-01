@@ -106,6 +106,19 @@ export class LadderController {
    */
   reticlesSuppressed() { return this._reticlesHidden; }
 
+  /**
+   * Current ladder floor id (1..7), or null when unavailable. Read-only probe
+   * for the iPad zoom-feel telemetry beacon (ui/touchTelemetry.js); never
+   * throws and allocates nothing beyond the core's own getState snapshot.
+   */
+  currentFloor() {
+    try {
+      return (this._ladder && this._ladder.getState) ? this._ladder.getState().floor : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /** G1 pin surface: the derived holdoff window (ms). */
   static get ADAPT_HOLDOFF_MS() { return ADAPT_HOLDOFF_MS; }
 

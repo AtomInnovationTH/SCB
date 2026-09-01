@@ -117,6 +117,7 @@ import { TimeAuthority } from './systems/TimeAuthority.js';
 import { FloorContract } from './core/FloorContract.js';
 import { RailIndicator } from './ui/RailIndicator.js';
 import { TouchControls } from './ui/TouchControls.js';
+import { TouchTelemetry } from './ui/touchTelemetry.js';
 import { captureNetVisual, worldTumbleForKitAttitude, boxRowsForKitAttitude } from './ui/CaptureNetVisual.js';
 import { furnaceBreakdownVisual } from './ui/FurnaceBreakdownVisual.js';
 import { captureNetSystem, isInsideCone, coneRadiusAtDepth } from './entities/CaptureNet.js';
@@ -1224,16 +1225,28 @@ async function init() {
   });
   wheelRouter.start();
 
-  // --- iPad port Phase 1 (Ipad.md §4.5): touch controls, real-detection gated.
+  // --- iPad port (Ipad.md §4.5): touch controls, real-detection gated.
   // Desktop and headless contexts see zero listeners + zero DOM by
-  // construction, so every existing suite stays byte-identical. Pinch and the
-  // +/− buttons synthesize wheel input through the SAME WheelRouter dispatch
-  // as the physical wheel; the pane slider drives the PaneDensity ladder.
+  // construction, so every existing suite stays byte-identical. Pinch
+  // synthesizes wheel input through the SAME WheelRouter dispatch as the
+  // physical wheel; a one-finger drag on the ladder rail drives
+  // ladderController.jump({toFloor}) (its own rail-notch API); the pane slider
+  // drives the PaneDensity ladder. An optional telemetry beacon logs zoom-feel
+  // gestures + the floor crossings they cause to the cable server (touch-only).
   if (TouchControls.detect()) {
+    const stampEl = (typeof document !== 'undefined') ? document.getElementById('build-stamp') : null;
+    const touchTelemetry = new TouchTelemetry({
+      build: stampEl ? stampEl.textContent : null,
+      getFloor: () => (ladderController && ladderController.currentFloor
+        ? ladderController.currentFloor() : null),
+    });
+    touchTelemetry.start();
     touchControls = new TouchControls({
       canvas,
       wheelRouter,
+      ladderController,
       paneDensity: hud ? hud.paneDensity : null,
+      telemetry: touchTelemetry,
     });
     touchControls.start();
     _bootMark('TouchControls started');

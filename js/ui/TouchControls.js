@@ -1,19 +1,30 @@
 /**
  * TouchControls.js — the iPad / touch-glass input layer (Phase 1 of the port,
- * see Ipad.md).
+ * see Ipad.md; Phase 4 rail-drag added post-play-test).
  *
  * Scope (deliberately small): the two verbs a sealed-iPad build needs to be a
  * watchable, explorable sim —
- *   1. ZOOM between Zoom-Ladder floors: two-finger pinch on the game canvas
- *      plus fixed +/− buttons. Both synthesize wheel input through
- *      `WheelRouter.routeSyntheticWheel(...)` — the SAME dispatch recipe as the
- *      physical wheel (Ipad.md §5.1 "one behavior, two triggers"), so arm-SK
- *      priority, StrategicMap ownership, ladder active/inactive and the legacy
- *      camera zoom all keep working without a second input path.
+ *   1. ZOOM between Zoom-Ladder floors, two ways, both one-handed:
+ *        a. two-finger PINCH on the game canvas → synthetic wheel through
+ *           `WheelRouter.routeSyntheticWheel(...)`, the SAME dispatch recipe as
+ *           the physical wheel (Ipad.md §5.1 "one behavior, two triggers"), so
+ *           arm-SK priority, StrategicMap ownership, ladder active/inactive and
+ *           the legacy camera zoom all keep working through one path;
+ *        b. a one-finger DRAG on an invisible grip laid over the visible
+ *           Zoom-Ladder rail (#ladder-rail) → `ladderController.jump({toFloor})`,
+ *           the ladder's own "rail-notch jump" API. Drag to the floor you want;
+ *           a dock-gated floor (DEPOT) flashes its notch instead of entering,
+ *           exactly like the wheel path, because jump() runs the same wall
+ *           decisions. (The old fixed +/− buttons were removed once pinch +
+ *           rail-drag proved enough on glass.)
  *   2. HUD pane density: a slider bound to the PaneDensity ladder —
  *      slide left = fewer panes (`-`), right = more (`+`), via
  *      `paneDensity.setLevel(n)` which re-reads live pane visibility so the
  *      keyboard keys and per-pane toggles compose.
+ *
+ * Optional zoom-feel telemetry (Ipad.md §6): when a `telemetry` sink is
+ * injected, each pinch/rail gesture and every floor crossing is logged for
+ * tuning. Purely additive — no sink, no logging.
  *
  * Gate (Ipad.md §4.5): construct this ONLY when `TouchControls.detect()` is
  * true — real touch hardware. Desktop and headless bench contexts then see
@@ -33,24 +44,27 @@
  * wrapper concern, not a fork).
  *
  * Node-safe: importing this file touches no window/document; everything DOM
- * happens inside start(). Pure math (`pinchWheelDeltaY`) is exported for the
- * Node test suite.
+ * happens inside start(). Pure math (`pinchWheelDeltaY`, `railFloorForY`) is
+ * exported for the Node test suite.
  *
  * @module ui/TouchControls
  */
 
 import { NOTCH_PX } from '../systems/WheelRouter.js';
+import { FloorContract } from '../core/FloorContract.js';
+
+/** Number of Zoom-Ladder floors (SSOT: FloorContract). */
+const FLOOR_COUNT = FloorContract.FLOORS.length;
 
 /** Field-tunable knobs (overridable, not forked — window.__TOUCH_TUNE). */
 export const TOUCH_TUNE = {
   pinchGain: 1.6,     // px of wheel deltaY per px of pinch-distance change
   pinchMaxStepPx: 240, // per-event clamp (≤ 2.4 notches; router caps mag at 4)
   pinchMinStepPx: 1,   // ignore sub-px jitter
-  buttonNotches: 1,    // notches per +/− button tap
   idleFadeMs: 4000,    // controls fade (never vanish) after this idle time
   idleOpacity: 0.35,   // faded opacity
   activeOpacity: 0.92, // touched/recent opacity
-  sliderSyncMs: 700,   // pane-slider re-sync cadence (live count → thumb)
+  sliderSyncMs: 700,   // pane-slider + rail-grip re-sync cadence
 };
 
 /**
@@ -71,6 +85,26 @@ export function pinchWheelDeltaY(prevDist, curDist, tune = TOUCH_TUNE) {
   return Math.max(-cap, Math.min(cap, raw));
 }
 
+/**
+ * Finger Y → target Zoom-Ladder floor id (1..count) for the invisible rail
+ * grip. The rail (#ladder-rail) is column-reverse: F1 (innermost, zoom-in) sits
+ * at the BOTTOM, floor `count` (outermost, zoom-out) at the TOP — so the top of
+ * the rail maps to the highest floor. Even spacing over the rail's box, rounded
+ * to the nearest notch, clamped to [1, count]. Pure + exported for the suite.
+ *
+ * @param {number} clientY  touch Y (viewport px)
+ * @param {number} topY     rail bounding-rect top (px)
+ * @param {number} bottomY  rail bounding-rect bottom (px)
+ * @param {number} count    floor count (FLOOR_COUNT)
+ * @returns {number} floor id 1..count (1 on degenerate input)
+ */
+export function railFloorForY(clientY, topY, bottomY, count = FLOOR_COUNT) {
+  if (!Number.isFinite(clientY) || !(bottomY > topY) || !(count >= 1)) return 1;
+  const fromBottom = (bottomY - clientY) / (bottomY - topY); // 0 at bottom, 1 at top
+  const idx = Math.round(Math.max(0, Math.min(1, fromBottom)) * (count - 1));
+  return idx + 1;
+}
+
 export class TouchControls {
   /**
    * Real-touch detection (Ipad.md §4.5). Headless bench Chromium and desktops
@@ -89,22 +123,30 @@ export class TouchControls {
 
   /**
    * @param {object} deps
-   * @param {HTMLCanvasElement} deps.canvas        the game canvas
-   * @param {object} deps.wheelRouter              provides routeSyntheticWheel(deltaY, target)
-   * @param {object|null} [deps.paneDensity]       PaneDensity: total/visibleCount()/setLevel(n)
-   * @param {object} [deps.tune]                   TOUCH_TUNE override (tests)
+   * @param {HTMLCanvasElement} deps.canvas          the game canvas
+   * @param {object} deps.wheelRouter                provides routeSyntheticWheel(deltaY, target)
+   * @param {object|null} [deps.ladderController]     provides jump({toFloor}) — the rail-drag sink
+   * @param {object|null} [deps.paneDensity]         PaneDensity: total/visibleCount()/setLevel(n)
+   * @param {object|null} [deps.telemetry]           optional zoom-feel sink: log(kind, data)
+   * @param {object} [deps.tune]                     TOUCH_TUNE override (tests)
    */
-  constructor({ canvas, wheelRouter, paneDensity = null, tune = null } = {}) {
+  constructor({ canvas, wheelRouter, ladderController = null, paneDensity = null,
+                telemetry = null, tune = null } = {}) {
     this._canvas = canvas || null;
     this._router = wheelRouter || null;
+    this._ladder = ladderController;   // rail-drag → jump({toFloor})
     this._paneDensity = paneDensity;
+    this._telemetry = telemetry;
     const userTune = (typeof window !== 'undefined' && window.__TOUCH_TUNE) || null;
     this._tune = Object.assign({}, TOUCH_TUNE, tune || {}, userTune || {});
 
     this._root = null;          // fixed overlay containing all touch chrome
     this._slider = null;
+    this._grip = null;          // invisible drag surface over #ladder-rail
     this._sliderDragging = false;
     this._dragDirty = false;    // a drag changed pane state → announce on release
+    this._railActive = false;   // a one-finger rail drag is live
+    this._railLastFloor = null; // last floor jumped to this drag (dedupe)
     this._sliderTimer = null;
     this._idleTimer = null;
     this._wakeLock = null;
@@ -116,6 +158,9 @@ export class TouchControls {
     this._onTouchMove = this._handleTouchMove.bind(this);
     this._onTouchEnd = this._handleTouchEnd.bind(this);
     this._onVisibility = this._handleVisibility.bind(this);
+    this._onGripStart = this._handleGripStart.bind(this);
+    this._onGripMove = this._handleGripMove.bind(this);
+    this._onGripEnd = this._handleGripEnd.bind(this);
   }
 
   /** Build the DOM chrome + bind canvas touch listeners. Idempotent. */
@@ -127,9 +172,9 @@ export class TouchControls {
     // and on-device DevTools witness that gestures actually flow. Created only
     // here — desktop/headless-without-touch contexts never see the global.
     if (typeof window !== 'undefined') {
-      window.__TOUCH = this._stats = { pinch: 0, notches: 0, slider: 0 };
+      window.__TOUCH = this._stats = { pinch: 0, rail: 0, slider: 0 };
     } else {
-      this._stats = { pinch: 0, notches: 0, slider: 0 };
+      this._stats = { pinch: 0, rail: 0, slider: 0 };
     }
 
     // The canvas owns its touches (§3): passive:false so preventDefault works.
@@ -142,7 +187,7 @@ export class TouchControls {
     this._injectStyles();
     this._buildChrome();
     this._armIdleFade();
-    this._startSliderSync();
+    this._startSync();
   }
 
   /** Remove listeners + DOM (tests / teardown). */
@@ -156,6 +201,14 @@ export class TouchControls {
     document.removeEventListener('visibilitychange', this._onVisibility);
     if (this._sliderTimer) { clearInterval(this._sliderTimer); this._sliderTimer = null; }
     if (this._idleTimer) { clearTimeout(this._idleTimer); this._idleTimer = null; }
+    if (this._grip) {
+      this._grip.removeEventListener('touchstart', this._onGripStart);
+      this._grip.removeEventListener('touchmove', this._onGripMove);
+      this._grip.removeEventListener('touchend', this._onGripEnd);
+      this._grip.removeEventListener('touchcancel', this._onGripEnd);
+      if (this._grip.parentNode) this._grip.parentNode.removeChild(this._grip);
+      this._grip = null;
+    }
     if (this._root && this._root.parentNode) this._root.parentNode.removeChild(this._root);
     this._root = null;
     this._slider = null;
@@ -209,6 +262,7 @@ export class TouchControls {
       this._router.routeSyntheticWheel(dy, this._canvas);
       this._pinch.dist = cur;          // consume only what was emitted
       if (this._stats) this._stats.pinch++;
+      if (this._telemetry) this._telemetry.log('pinch', { dy });
     }
   }
 
@@ -234,6 +288,55 @@ export class TouchControls {
     }
   }
 
+  // ── rail drag (one finger, invisible grip over #ladder-rail) ──────────────
+
+  /** @private Map a touch to a floor and jump the ladder there (once per floor). */
+  _railJumpTo(touch) {
+    if (!touch || !this._ladder || typeof this._ladder.jump !== 'function') return;
+    if (typeof document === 'undefined') return;
+    const rail = document.getElementById('ladder-rail');
+    if (!rail) return;
+    const r = rail.getBoundingClientRect();
+    if (!(r.height > 0)) return;
+    const floor = railFloorForY(touch.clientY, r.top, r.bottom, FLOOR_COUNT);
+    if (floor === this._railLastFloor) return;   // still on the same notch
+    this._railLastFloor = floor;
+    // jump() runs the same wall/dock decisions as the wheel path: a blocked
+    // floor flashes its notch (rail.flashDenied) instead of entering, and no-ops
+    // when already there. Returns [] unless the ladder is engaged.
+    this._ladder.jump({ toFloor: floor });
+    if (this._stats) this._stats.rail++;
+    if (this._telemetry) this._telemetry.log('rail', { floor });
+  }
+
+  /** @private */
+  _handleGripStart(e) {
+    if (e.cancelable) e.preventDefault();
+    e.stopPropagation();                 // the grip owns its region, not the canvas
+    if (e.touches.length !== 1) return;  // two fingers here = accidental; ignore
+    this._touched();
+    this._requestWakeLock();
+    this._railActive = true;
+    this._railLastFloor = null;          // first move always jumps
+    this._railJumpTo(e.touches[0]);
+  }
+
+  /** @private */
+  _handleGripMove(e) {
+    if (!this._railActive) return;
+    if (e.cancelable) e.preventDefault();
+    e.stopPropagation();
+    if (e.touches.length !== 1) return;
+    this._touched();
+    this._railJumpTo(e.touches[0]);
+  }
+
+  /** @private */
+  _handleGripEnd(e) {
+    if (e.cancelable) e.preventDefault();
+    this._railActive = false;
+  }
+
   // ── DOM chrome ───────────────────────────────────────────────────────────
 
   /** @private One-time stylesheet (range thumbs need real CSS, not inline). */
@@ -250,26 +353,6 @@ export class TouchControls {
         -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
       }
       #touch-controls.touch-idle { opacity: ${this._tune.idleOpacity}; }
-      .touch-zoom-col {
-        position: absolute;
-        /* Left of the ladder rail (#ladder-rail: right 10px, ~135px wide,
-           bottom-anchored, gameplay-only) and above the pane dock — the
-           bottom-right ocean region the HUD deliberately leaves empty. */
-        right: calc(160px + env(safe-area-inset-right, 0px));
-        bottom: calc(92px + env(safe-area-inset-bottom, 0px));
-        display: flex; flex-direction: row; gap: 14px;
-      }
-      .touch-zoom-btn {
-        pointer-events: auto; touch-action: manipulation;
-        width: 56px; height: 56px;
-        font: 28px 'Courier New', monospace; color: #00ff88;
-        background: rgba(5, 10, 20, 0.78);
-        border: 1px solid rgba(0, 255, 136, 0.45); border-radius: 8px;
-        display: flex; align-items: center; justify-content: center;
-      }
-      .touch-zoom-btn:active {
-        background: rgba(0, 255, 136, 0.25);
-      }
       .touch-pane-dock {
         position: absolute;
         right: calc(160px + env(safe-area-inset-right, 0px));
@@ -300,6 +383,13 @@ export class TouchControls {
         border: 2px solid rgba(0, 255, 136, 0.8);
         box-shadow: 0 0 10px rgba(0, 255, 136, 0.35);
       }
+      /* Invisible one-finger zoom grip laid over the visible ladder rail.
+         No pixels of its own — the rail IS the affordance; touch-action:none so
+         the drag never scroll-bounces. Positioned + toggled by _syncGrip. */
+      #touch-ladder-grip {
+        position: fixed; z-index: 36; pointer-events: none;
+        background: transparent; touch-action: none;
+      }
     `;
     document.head.appendChild(s);
   }
@@ -308,49 +398,6 @@ export class TouchControls {
   _buildChrome() {
     const root = document.createElement('div');
     root.id = 'touch-controls';
-
-    // Zoom floor steps — right edge, thumb-reachable, 56 px targets (§3).
-    const col = document.createElement('div');
-    col.className = 'touch-zoom-col';
-    const mkBtn = (text, sign, label) => {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'touch-zoom-btn';
-      b.textContent = text;
-      b.setAttribute('aria-label', label);
-      // ONE dispatch path for both triggers (touch + mouse click) so stats,
-      // fade and wake lock can never diverge between them.
-      let lastTouchMs = -Infinity;
-      const fire = () => {
-        this._touched();
-        this._requestWakeLock();
-        if (this._router && this._router.routeSyntheticWheel) {
-          this._router.routeSyntheticWheel(sign * this._tune.buttonNotches * NOTCH_PX, this._canvas);
-          if (this._stats) this._stats.notches += this._tune.buttonNotches;
-        }
-      };
-      b.addEventListener('touchstart', (e) => {
-        // Own the tap: no double-tap zoom. (cancelable guard — see canvas note.)
-        if (e.cancelable) e.preventDefault();
-        e.stopPropagation();
-        lastTouchMs = performance.now();
-        fire();
-      }, { passive: false });
-      // Desktop-with-touchscreen convenience: clicks still work. A click that
-      // trails a touch is the browser-synthesized one — preventDefault on a
-      // NON-cancelable touchstart cannot suppress it, and Chromium synthesizes
-      // it with detail=1, so suppress by recency, not by e.detail.
-      b.addEventListener('click', (e) => {
-        e.preventDefault();
-        if (performance.now() - lastTouchMs < 700) return;
-        fire();
-      });
-      return b;
-    };
-    // Wheel convention: deltaY < 0 = zoom in.
-    col.appendChild(mkBtn('+', -1, 'Zoom in one floor'));
-    col.appendChild(mkBtn('−', +1, 'Zoom out one floor'));
-    root.appendChild(col);
 
     // Pane-density slider — bottom-right dock. Left = fewer panes, right = more.
     if (this._paneDensity && typeof this._paneDensity.setLevel === 'function') {
@@ -398,16 +445,61 @@ export class TouchControls {
 
     document.body.appendChild(root);
     this._root = root;
+
+    // Rail grip lives OUTSIDE #touch-controls: it must stack above the rail
+    // (#ladder-rail z-index 35), which the root's z-index 15 stacking context
+    // could never reach from within. Invisible; aligned to the rail by
+    // _syncGrip, and only pointer-active while the rail is showing.
+    if (this._ladder && typeof this._ladder.jump === 'function') {
+      const grip = document.createElement('div');
+      grip.id = 'touch-ladder-grip';
+      grip.addEventListener('touchstart', this._onGripStart, { passive: false });
+      grip.addEventListener('touchmove', this._onGripMove, { passive: false });
+      grip.addEventListener('touchend', this._onGripEnd, { passive: false });
+      grip.addEventListener('touchcancel', this._onGripEnd, { passive: false });
+      document.body.appendChild(grip);
+      this._grip = grip;
+    }
   }
 
-  /** @private Keep the slider honest against keys / per-pane toggles (§ no-counter). */
-  _startSliderSync() {
-    if (!this._slider || !this._paneDensity) return;
+  /** @private Keep the slider honest + the grip aligned to the live rail. */
+  _startSync() {
+    if (!this._slider && !this._grip) return;
     this._sliderTimer = setInterval(() => {
-      if (this._sliderDragging || !this._slider) return;
-      const live = String(this._paneDensity.visibleCount());
-      if (this._slider.value !== live) this._slider.value = live;
+      if (this._slider && this._paneDensity && !this._sliderDragging) {
+        const live = String(this._paneDensity.visibleCount());
+        if (this._slider.value !== live) this._slider.value = live;
+      }
+      this._syncGrip();
     }, this._tune.sliderSyncMs);
+  }
+
+  /**
+   * @private Align the invisible grip to #ladder-rail's live rect and toggle its
+   * pointer-events with the rail's visibility. The rail is bottom-anchored and
+   * static during gameplay, so the pane-sync cadence is ample; when the rail is
+   * hidden (menus) the grip goes inert so it never eats a bottom-right touch.
+   */
+  _syncGrip() {
+    const grip = this._grip;
+    if (!grip || typeof document === 'undefined') return;
+    const rail = document.getElementById('ladder-rail');
+    let visible = false;
+    if (rail) {
+      const shown = typeof getComputedStyle === 'function'
+        ? getComputedStyle(rail).opacity !== '0'
+        : rail.style.opacity !== '0';
+      const r = rail.getBoundingClientRect();
+      if (shown && r.height > 0) {
+        visible = true;
+        grip.style.left = `${Math.max(0, r.left - 8)}px`;
+        grip.style.top = `${r.top}px`;
+        grip.style.width = `${r.width + 16}px`;
+        grip.style.height = `${r.height}px`;
+      }
+    }
+    grip.style.pointerEvents = visible ? 'auto' : 'none';
+    if (!visible) this._railActive = false;
   }
 
   // ── idle fade (fade, never vanish — §3) ─────────────────────────────────
