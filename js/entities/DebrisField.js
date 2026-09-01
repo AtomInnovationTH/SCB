@@ -3787,20 +3787,21 @@ export class DebrisField {
   // ==========================================================================
 
   /**
-   * Zoom Ladder F6 render-block seam (T1, docs/ladder/01-numbers.md per-floor
+   * Zoom Ladder F6/F7 render-block seam (T1, docs/ladder/01-numbers.md per-floor
    * fidelity). On F6 (NAVCOM) the floor's `debrisMode` is 'clusters': the full
-   * debris meshes are replaced by NAVCOM cluster ring+count icons, so hide the
-   * whole DebrisField group (all InstancedMeshes + background Points). Any other
-   * mode ('full'/'tactical'/'hidden'/null) restores it. `getDebrisClusters()`
-   * reads the debris DATA, not the meshes, so cluster icons keep working while
-   * the meshes are hidden. SceneManager re-asserts this after applyTier() (the
-   * same lifecycle as nearFieldEnabled), and restores it on disengage. Non-hub;
-   * a no-op path for every non-'clusters' mode keeps flag-off byte-identical.
-   * (F7's 'massBands' hide lands with the F7 mass-band render in M4.)
+   * debris meshes are replaced by NAVCOM cluster ring+count icons. On F7 (SDA
+   * DOWNLINK, M4) it is 'massBands': the field reads as chart altitude bands
+   * (SdaChart), so the meshes hide the same way. Any other mode
+   * ('full'/'tactical'/'hidden'/null) restores the group. `getDebrisClusters()`
+   * reads the debris DATA, not the meshes, so the chart's band aggregation keeps
+   * working while the meshes are hidden. SceneManager re-asserts this after
+   * applyTier() (the same lifecycle as nearFieldEnabled), and restores it on
+   * disengage. Non-hub; a no-op path for every non-iconizing mode keeps
+   * flag-off byte-identical.
    * @param {?string} mode - the arrival floor's fidelity.debrisMode (or null)
    */
   setLadderDebrisMode(mode) {
-    const hide = (mode === 'clusters');
+    const hide = (mode === 'clusters' || mode === 'massBands');
     if (this.group) this.group.visible = !hide;
   }
 
