@@ -116,6 +116,7 @@ import { NavcomFloor } from './systems/NavcomFloor.js';
 import { ProxNetFloor } from './systems/ProxNetFloor.js';
 import { SdaFloor } from './systems/SdaFloor.js';
 import { HullCamFloor } from './systems/HullCamFloor.js';
+import { ArchiveFloor } from './systems/ArchiveFloor.js';
 import { TimeAuthority } from './systems/TimeAuthority.js';
 import { FloorContract } from './core/FloorContract.js';
 import { RailIndicator } from './ui/RailIndicator.js';
@@ -556,6 +557,7 @@ let navcomFloor;
 let proxNetFloor;
 let sdaFloor;
 let hullcamFloor;
+let archiveFloor;
 
 // Zoom Ladder F6 world→screen projector, built off the live ladder camera.
 // NavcomFloor consumes it to place the cluster ring+count icons and the ship
@@ -1302,6 +1304,17 @@ async function init() {
       // rows from the blueprint manifest carry that card.
     },
   });
+  // Zoom Ladder F1 (ARCHIVE) bridge (Wave 3): arriving on the innermost floor
+  // drops into the Tech Library — ArchiveFloor HOSTS the existing
+  // codexViewerUI as the floor costume (00-spec §3/§11 "bridge, don't merge").
+  // Hosted mode reroutes the viewer's every self-close path (ESC, backdrop,
+  // CLOSE, I) to onExitUp = ride one floor up; leaving F1 un-hosts and closes.
+  // TimeAuthority already pauses the world on F1 (timeCap 0). Inert while
+  // LADDER.ENABLED is false (never activated): byte-identical.
+  archiveFloor = new ArchiveFloor({
+    codex: codexViewerUI,
+    onExitUp: () => { if (ladderController) ladderController.command({ type: 'esc' }); },
+  });
   ladderController = new LadderController({
     cameraSystem,
     sceneManager,
@@ -1311,6 +1324,7 @@ async function init() {
     proxNet: proxNetFloor,
     sdaFloor,
     hullcam: hullcamFloor,
+    archive: archiveFloor,
     // F7 hides the constellation figures under the SDA chart and restores the
     // player's 6-key prior on leave/disengage.
     starfield,

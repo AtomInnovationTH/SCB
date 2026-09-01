@@ -467,14 +467,27 @@ export class InputManager {
     }
 
     // --- F17: Codex overlay intercept — suppress all input except I (toggle) and ESC (close) ---
+    // Zoom Ladder F1 (ARCHIVE): while the viewer is HOSTED by the engaged
+    // ladder (ArchiveFloor — the Tech Library IS the F1 floor costume, not a
+    // modal), the ladder keeps its navigation keys: PgUp/PgDn (floor jumps) and
+    // Space (floor verb) fall through to the engaged-ladder branches below.
+    // I still toggles — hosted toggle() routes to the ladder ride-up
+    // (CodexViewerUI._requestClose), so no CODEX_OPENED skills emit here. ESC
+    // never reaches this handler either way: the viewer's capture-phase
+    // listener owns it (free-standing → hide; hosted → ride-up).
     if (d.codexViewerUI && d.codexViewerUI.isVisible()) {
+      const hostedByLadder = !!(typeof d.codexViewerUI.isHosted === 'function'
+        && d.codexViewerUI.isHosted() && this._ladderIfEngaged());
       if (e.code === 'KeyI') {
         d.codexViewerUI.toggle();
         d.audioSystem?.playClick();
         e.preventDefault();
+        return;
       }
-      // ESC is handled by CodexViewerUI's own capture-phase listener
-      return; // block all other keys while codex is open
+      if (!(hostedByLadder && (e.code === 'PageUp' || e.code === 'PageDown' || e.code === 'Space'))) {
+        return; // block all other keys while codex is open
+      }
+      // hosted + ladder navigation key → fall through
     }
 
     // --- ST-6.4: Strategic Map intercept — suppress all gameplay input while map is open ---

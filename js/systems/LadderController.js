@@ -61,6 +61,10 @@ export class LadderController {
    *   activate/deactivate/isActive/update/flipLens. Optional — no-op without it.
    * @param {object} [deps.hullcam]      - F3 (HULL CAM) content controller (HullCamFloor):
    *   activate/deactivate/isActive/update/lensToggle. Optional — no-op without it.
+   * @param {object} [deps.archive]      - F1 (ARCHIVE) content bridge (ArchiveFloor):
+   *   activate/deactivate/isActive. Optional — no-op without it. Floor-keyed
+   *   like hullcam (F1's debrisMode 'hidden' is shared with F2): arriving on
+   *   floor 1 drops into the hosted Tech Library, any other floor closes it.
    * @param {object} [deps.starfield]    - Starfield: isConstellationsVisible()/
    *   setConstellationsVisible(bool). Optional — F7 hides the constellation figures
    *   under the full-screen SDA chart and restores the player's prior on leave.
@@ -86,6 +90,7 @@ export class LadderController {
     this._proxNet = deps.proxNet || null;
     this._sdaFloor = deps.sdaFloor || null;
     this._hullcam = deps.hullcam || null;
+    this._archive = deps.archive || null;
     this._starfield = deps.starfield || null;
     this._cityLabels = deps.cityLabels || null;
     this._targetReticle = deps.targetReticle || null;
@@ -293,6 +298,7 @@ export class LadderController {
     if (this._proxNet && this._proxNet.deactivate) this._proxNet.deactivate();
     if (this._sdaFloor && this._sdaFloor.deactivate) this._sdaFloor.deactivate();
     if (this._hullcam && this._hullcam.deactivate) this._hullcam.deactivate();
+    if (this._archive && this._archive.deactivate) this._archive.deactivate();
     // Restore the reticles the icon floors hid (no-op if not suppressed). On a
     // disengage caused by LEAVING gameplay, the restore resolves to hidden —
     // matching TargetReticle's own GAME_STATE_CHANGE rule (see _setReticlesHidden).
@@ -453,6 +459,13 @@ export class LadderController {
     if (this._hullcam) {
       if (floor === 3) { if (this._hullcam.activate) this._hullcam.activate(); }
       else if (this._hullcam.deactivate) this._hullcam.deactivate();
+    }
+    // F1 (ARCHIVE): keyed on FLOOR ID 1 — its debrisMode 'hidden' is shared
+    // with F2 (DEPOT). Arrival hosts + opens the Tech Library (the codex IS
+    // the floor costume, 00-spec §3); leaving / disengaging closes it.
+    if (this._archive) {
+      if (floor === 1) { if (this._archive.activate) this._archive.activate(); }
+      else if (this._archive.deactivate) this._archive.deactivate();
     }
   }
 

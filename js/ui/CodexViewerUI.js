@@ -93,6 +93,20 @@ export class CodexViewerUI {
     /** @type {string|null} deep-link target id for the next show()'s auto-select */
     this._pendingOpenId = null;
 
+    /**
+     * Zoom Ladder F1 (ARCHIVE) hosted mode — null when free-standing (the
+     * shipped I-key overlay). While hosted, the viewer is the F1 floor
+     * COSTUME: every self-close path (capture-phase ESC, backdrop click, the
+     * CLOSE button, an I-key toggle) routes through _requestClose() to the
+     * host's onRequestClose (ladder ride-up) instead of hide() — closing the
+     * costume without leaving the floor would strand an empty ARCHIVE and
+     * fight the ladder for ESC. The host (ArchiveFloor) owns hide(): it
+     * un-hosts first, then hides, on deactivate. In-viewer navigation
+     * (arrows / enter / search / narrow-mode "ESC back to list") is untouched.
+     * @type {?{ onRequestClose: Function }}
+     */
+    this._hosted = null;
+
     /** @type {*} debounce handle for the window resize listener */
     this._resizeDebounce = null;
 
@@ -114,7 +128,30 @@ export class CodexViewerUI {
   // PUBLIC
   // ==========================================================================
 
-  toggle() { this._visible ? this.hide() : this.show(); }
+  toggle() { this._visible ? this._requestClose() : this.show(); }
+
+  /**
+   * Enter/leave Zoom Ladder hosted mode (F1 ARCHIVE costume). Pass
+   * `{ onRequestClose }` to host, null to release. Idempotent; never touches
+   * visibility itself — ArchiveFloor sequences setHosted/show/hide.
+   * @param {?{ onRequestClose: Function }} host
+   */
+  setHosted(host) {
+    this._hosted = (host && typeof host.onRequestClose === 'function') ? host : null;
+  }
+
+  /** @returns {boolean} true while the ladder hosts the viewer as the F1 costume. */
+  isHosted() { return this._hosted !== null; }
+
+  /**
+   * The single close decision for every self-close path: hosted → ask the
+   * host (ladder rides up; the floor change hides the viewer), free-standing →
+   * plain hide(). @private
+   */
+  _requestClose() {
+    if (this._hosted) { this._hosted.onRequestClose(); return; }
+    this.hide();
+  }
 
   show() {
     this._visible = true;
@@ -191,7 +228,7 @@ export class CodexViewerUI {
       justifyContent: 'center', alignItems: 'center',
       fontFamily: "'Courier New', monospace", color: '#ccc',
     });
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) this.hide(); });
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) this._requestClose(); });
 
     // --- Panel ---
     const panel = document.createElement('div');
@@ -315,7 +352,7 @@ export class CodexViewerUI {
     this._overlay = overlay;
 
     // Close button
-    overlay.querySelector('#codex-close-btn').addEventListener('click', () => this.hide());
+    overlay.querySelector('#codex-close-btn').addEventListener('click', () => this._requestClose());
 
     // UX-11 #10: live search — filters across ALL categories as you type;
     // sidebar selection is ignored while a query is active. Debounced (each
@@ -1481,11 +1518,12 @@ export class CodexViewerUI {
         e.stopImmediatePropagation();
         e.preventDefault();
         // Narrow mode with the reading pane open: ESC returns to the list.
-        // Otherwise ESC closes the viewer.
+        // Otherwise ESC closes the viewer — via _requestClose, so the ladder
+        // host (F1 ARCHIVE) turns it into a ride-up instead of a self-hide.
         if (this._narrow && this._selectedEntry) {
           this._showList();
         } else {
-          this.hide();
+          this._requestClose();
         }
         return;
       }
