@@ -112,6 +112,7 @@ import { persistenceManager } from './systems/PersistenceManager.js';
 import { StrategicMap } from './ui/StrategicMap.js';
 import { WheelRouter } from './systems/WheelRouter.js';
 import { LadderController } from './systems/LadderController.js';
+import { LadderAudioBeds } from './systems/LadderAudioBeds.js';
 import { NavcomFloor } from './systems/NavcomFloor.js';
 import { ProxNetFloor } from './systems/ProxNetFloor.js';
 import { SdaFloor } from './systems/SdaFloor.js';
@@ -558,6 +559,12 @@ let proxNetFloor;
 let sdaFloor;
 let hullcamFloor;
 let archiveFloor;
+
+// Zoom Ladder per-floor audio beds (S6, Wave-3 serial hub wire): constructed
+// in the ladder block against AudioSystem GETTERS (the unlock pattern) and
+// injected into LadderController, which crossfades beds on floor arrivals and
+// fades to silence on disengage. Inert while LADDER.ENABLED is false.
+let ladderAudioBeds;
 
 // Zoom Ladder F6 world→screen projector, built off the live ladder camera.
 // NavcomFloor consumes it to place the cluster ring+count icons and the ship
@@ -1236,6 +1243,9 @@ async function init() {
   proxNetFloor = new ProxNetFloor({
     debrisSource: debrisField,
     player,
+    // F5 corner minimap ('NavSphere:corner-minimap'): the SHIPPED orb,
+    // re-mounted small while PROX NET is active (ProxMiniSphere adapter).
+    navSphere,
     getFocusedCluster: () => navcomFloor.getFocusedCluster(),
     onApproach: (cluster, arrivalPoint) =>
       autopilotSystem.engageCluster(cluster, { arrivalPoint }),
@@ -1315,6 +1325,16 @@ async function init() {
     codex: codexViewerUI,
     onExitUp: () => { if (ladderController) ladderController.command({ type: 'esc' }); },
   });
+  // Zoom Ladder per-floor audio beds (FloorContract audioBed). GETTERS, not
+  // refs: audioSystem.ctx/padBus are null until the menu-click gesture runs
+  // audioSystem.init() (unlock pattern) — the beds resolve them lazily on the
+  // first post-unlock floor change. padBus ⇒ beds ride padBus → sfxBus →
+  // master, so alarm ducking, setVolume, and the §12.12 suspend gate govern
+  // them for free. Inert while LADDER.ENABLED is false (never driven).
+  ladderAudioBeds = new LadderAudioBeds({
+    context: () => audioSystem.ctx,
+    destination: () => audioSystem.padBus || audioSystem.master,
+  });
   ladderController = new LadderController({
     cameraSystem,
     sceneManager,
@@ -1325,6 +1345,7 @@ async function init() {
     sdaFloor,
     hullcam: hullcamFloor,
     archive: archiveFloor,
+    audioBeds: ladderAudioBeds,
     // F7 hides the constellation figures under the SDA chart and restores the
     // player's 6-key prior on leave/disengage.
     starfield,
@@ -1797,6 +1818,13 @@ async function init() {
     } catch (e) {
       console.warn('[AutoProfile] init failed:', e);
     }
+  }
+
+  // ── Flick-trace recorder (?trace=1): read-only gesture instrument, docs/ladder/07-flick-tuning.md ──
+  if (new URLSearchParams(window.location.search).get('trace') === '1') {
+    import('./dev/FlickTraceRecorder.js')
+      .then(({ FlickTraceRecorder }) => { new FlickTraceRecorder({ probe: ladderController }).start(); })   // publishes window.__FLICK_TRACE
+      .catch((e) => console.warn('[FlickTrace] init failed:', e));
   }
 
   // --- Net-visual screenshot loop (Phase 0 + auto-capture) ---

@@ -65,6 +65,8 @@ export class LadderController {
    *   activate/deactivate/isActive. Optional — no-op without it. Floor-keyed
    *   like hullcam (F1's debrisMode 'hidden' is shared with F2): arriving on
    *   floor 1 drops into the hosted Tech Library, any other floor closes it.
+   * @param {object} [deps.audioBeds]    - per-floor audio beds (LadderAudioBeds):
+   *   setFloor(floorId|null). Optional — absent it beds are a no-op.
    * @param {object} [deps.starfield]    - Starfield: isConstellationsVisible()/
    *   setConstellationsVisible(bool). Optional — F7 hides the constellation figures
    *   under the full-screen SDA chart and restores the player's prior on leave.
@@ -91,6 +93,7 @@ export class LadderController {
     this._sdaFloor = deps.sdaFloor || null;
     this._hullcam = deps.hullcam || null;
     this._archive = deps.archive || null;
+    this._audioBeds = deps.audioBeds || null;
     this._starfield = deps.starfield || null;
     this._cityLabels = deps.cityLabels || null;
     this._targetReticle = deps.targetReticle || null;
@@ -299,6 +302,8 @@ export class LadderController {
     if (this._sdaFloor && this._sdaFloor.deactivate) this._sdaFloor.deactivate();
     if (this._hullcam && this._hullcam.deactivate) this._hullcam.deactivate();
     if (this._archive && this._archive.deactivate) this._archive.deactivate();
+    // Per-floor audio bed: fade to silence on disengage (optional dep).
+    if (this._audioBeds && this._audioBeds.setFloor) this._audioBeds.setFloor(null);
     // Restore the reticles the icon floors hid (no-op if not suppressed). On a
     // disengage caused by LEAVING gameplay, the restore resolves to hidden —
     // matching TargetReticle's own GAME_STATE_CHANGE rule (see _setReticlesHidden).
@@ -467,6 +472,9 @@ export class LadderController {
       if (floor === 1) { if (this._archive.activate) this._archive.activate(); }
       else if (this._archive.deactivate) this._archive.deactivate();
     }
+    // Per-floor audio bed (FloorContract audioBed): crossfade to the arrival
+    // floor's bed. Optional dep — absent it this is a no-op (parallel track).
+    if (this._audioBeds && this._audioBeds.setFloor) this._audioBeds.setFloor(floor);
   }
 
   /**
