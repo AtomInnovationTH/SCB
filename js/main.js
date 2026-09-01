@@ -1167,6 +1167,13 @@ async function init() {
     setLastTime: (t) => { lastTime = t; },
     setApproachTarget: (t) => { gameFlowManager.approachTarget = t; },
     setApproachComplete: (v) => { gameFlowManager.approachComplete = v; },
+    // Zoom Ladder key bindings (00-spec §5: Esc / PgUp / PgDn / Space ride or
+    // verb the ladder). A closure, not a direct ref, because LadderController is
+    // constructed in the ladder block BELOW this init call — same late-binding
+    // style as the gameFlowManager closures above. InputManager forwards these
+    // keys only while ladderController.isActive() (flag on + gameplay + engaged),
+    // so with LADDER.ENABLED false the key handling is byte-identical.
+    getLadderController: () => ladderController,
   });
   inputManager.start();
   // 2026-08-26: the lasso catch cut never STARTS over active piloting — a key
@@ -1197,6 +1204,10 @@ async function init() {
     player,
     project: navcomProject,
     onPlanTransfer: (cluster) => autopilotSystem.engageCluster(cluster),
+    // F6 FUEL-REACHABILITY: Tsiolkovsky remaining-ΔV SSOT. Optional dep — without it
+    // the floor renders as before. armManager is constructed earlier (~:715). Inert
+    // while LADDER.ENABLED is false.
+    getMassBudget: () => armManager.getMassBudget(),
   });
   ladderController = new LadderController({
     cameraSystem,
@@ -1204,12 +1215,20 @@ async function init() {
     gameState,
     rail: railIndicator,
     navcom: navcomFloor,
+    // Reticle gating (F6/F7 ship-is-icon floors): the controller hides the
+    // aiming reticles on floors >= 6 and restores them on <= 5 / disengage.
+    // Optional deps — inert while LADDER.ENABLED is false (never engaged).
+    targetReticle,
+    dockingReticle,
   });
   // Zoom Ladder F6/F7 render-block content refs (T1 'ship-to-icon'): SceneManager
   // hides the full debris meshes + the world ship mesh on floors whose debrisMode
   // iconizes them (F6 'clusters'), and re-asserts the hide across applyTier().
-  // Storing refs mutates nothing and the hide only fires from an engaged floor's
-  // re-assert, so with LADDER.ENABLED false this is byte-identical.
+  // The starfield ref drives the Earth-anchored floors' camera-follow star shell
+  // (F6/F7 BLACK-SKY fix — SceneManager.setLadderFloorFidelity toggles
+  // Starfield.setFollowCamera; the per-frame starfield.update() already receives
+  // the camera). Storing refs mutates nothing and the hide/follow only fires from
+  // an engaged floor's request, so with LADDER.ENABLED false this is byte-identical.
   if (sceneManager.setLadderContentRefs) {
     sceneManager.setLadderContentRefs({ debrisField, ship: player, starfield });
   }
@@ -1824,11 +1843,15 @@ async function init() {
 
         // Occlusion: is the target inside the Earth limb as seen from the
         // camera? Reuses _limbFadeFactor's geometry — factor 0 means fully
-        // inside the limb (hidden), 1 means clear.
+        // inside the limb (hidden), 1 means clear. The star's world position
+        // includes the shell group's offset: (0,0,0) world-fixed (shipped), or
+        // the camera pose while the ladder's F6/F7 follow mode is on
+        // (Starfield.setFollowCamera) — without the add, this hook desyncs
+        // from the followed shell.
         let occluded = false;
         const cam = cameraSystem.camera;
         if (cam && starfield) {
-          const worldPos = dir.clone().multiplyScalar(R);
+          const worldPos = dir.clone().multiplyScalar(R).add(starfield.group.position);
           occluded = starfield._limbFadeFactor(worldPos, cam) === 0;
         }
         return { theta, phi, occluded };
@@ -1849,10 +1872,15 @@ async function init() {
       // Project a sky direction (ra hours, dec degrees) to canvas pixels, so a
       // capture harness can aim a crop / measurement at an exact star without
       // re-deriving the sky basis. Returns { x, y, behind } in CSS pixels.
+      // The shell-group offset keeps this honest in the ladder's F6/F7
+      // camera-follow mode (Starfield.setFollowCamera): world-fixed (shipped)
+      // the group sits at the origin and the add is a no-op.
       window.__scbProject = (ra, dec) => {
         const cam = cameraSystem && cameraSystem.camera;
         if (!cam) return null;
-        const v = raDec2xyz(ra, dec, Constants.STAR_SPHERE_RADIUS).project(cam);
+        const v = raDec2xyz(ra, dec, Constants.STAR_SPHERE_RADIUS)
+          .add(starfield.group.position)
+          .project(cam);
         const cv = document.getElementById('game-canvas');
         return {
           x: (v.x * 0.5 + 0.5) * cv.width,
@@ -4456,7 +4484,15 @@ function gameLoop(timestamp) {
 
     // --- Docking Reticle update (ARM PILOT overlay) ---
     if (dockingReticle) {
-      if (inputManager.isArmPilotMode() && cameraSystem) {
+      // Zoom Ladder F6/F7: while the engaged floor iconizes the ship, the
+      // ladder suppresses the aiming reticles (LadderController._setReticlesHidden
+      // owns the hide). This per-frame re-show must not fight it — while
+      // suppressed, fall to the else branch so the overlay stays hidden every
+      // frame. reticlesSuppressed() is allocation-free and false whenever the
+      // ladder is off/disengaged, so the shipped path is byte-identical.
+      const _ladderReticleSuppress = !!(ladderController
+        && ladderController.reticlesSuppressed && ladderController.reticlesSuppressed());
+      if (!_ladderReticleSuppress && inputManager.isArmPilotMode() && cameraSystem) {
         const pilotArm = cameraSystem.getPilotedArm();
         if (pilotArm) {
           dockingReticle.setArmData(pilotArm, pilotArm.target);

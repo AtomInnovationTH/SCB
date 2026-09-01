@@ -371,6 +371,23 @@ export class InputManager {
   }
 
   /**
+   * Zoom Ladder key bindings (00-spec §5): resolve the LadderController and
+   * return it ONLY while it is engaged — `isActive()` is the controller's
+   * documented engagement probe (flag on + gameplay + engaged), so with
+   * `Constants.LADDER.ENABLED` false this always returns null and every key
+   * below falls through to its legacy case byte-identically. The dep arrives
+   * as a getter closure (`getLadderController`) because main.js constructs
+   * the ladder block after `inputManager.init()`.
+   * @private
+   * @returns {object|null} the engaged LadderController, or null
+   */
+  _ladderIfEngaged() {
+    const get = this._deps && this._deps.getLadderController;
+    const lc = get ? get() : null;
+    return (lc && lc.isActive && lc.isActive()) ? lc : null;
+  }
+
+  /**
    * Handle keydown events — routes to game systems.
    * @param {KeyboardEvent} e
    */
@@ -603,13 +620,30 @@ export class InputManager {
         break;
 
       // Escape — pause or back
-      case 'Escape':
+      case 'Escape': {
         // (ST-6.4: Strategic map Escape handled by top-level intercept above)
         // Debris Map intercept: Escape closes map before other handling
         if (d.debrisMap && d.debrisMap.isVisible()) {
           d.debrisMap.hide();
           e.preventDefault();
           break;
+        }
+        // Zoom Ladder (00-spec §5): "Esc = ride one floor up; if something modal
+        // is open, cancel that instead." ORDERING: every modal/takeover Esc path
+        // stays ABOVE this branch — the hotkey overlay, codex and strategic map
+        // intercepts, the debris-map close (both the top-level intercept and the
+        // in-case check just above), and the launch/net ceremony skips all return
+        // before the ladder sees the key. The ladder branch then PRECEDES the
+        // legacy state-transition + camera-view fallbacks (INTERACTION/APPROACH
+        // exits, inspection exit, arm-pilot exit, pause), because while engaged
+        // the ladder replaces those mode keys (00-spec §1). Alarm auto-ride
+        // cancel lives inside the core (command 'esc' cancels it first). Engaged
+        // only in gameplay with LADDER.ENABLED — flag-off is byte-identical.
+        const escLadder = this._ladderIfEngaged();
+        if (escLadder) {
+          escLadder.command({ type: 'esc' });
+          e.preventDefault();
+          return;
         }
         if (currentState === GameStates.BRIEFING) {
           d.transitionToState(GameStates.MENU);
@@ -656,6 +690,7 @@ export class InputManager {
           }
         }
         break;
+      }
 
       // Camera view toggle (V key) / Strategic Map (Shift+V).
       // 2026-07-23 audit: V in MOTHER mode cycles FLY ↔ LOOK AROUND (close
@@ -1019,19 +1054,39 @@ export class InputManager {
       // free — Comma is the ROSA furl/unfurl toggle (see the 'Comma' case).
       // Shift+C city-labels moved to 5 in the 2026-06-14 revamp and is also free.
 
-      // ST-5.1: PageUp / PageDown — comms history scrolling
-      case 'PageUp':
+      // ST-5.1: PageUp / PageDown — comms history scrolling.
+      // Zoom Ladder (00-spec §5): PgUp/PgDn = ride one floor up/down, so the
+      // engaged ladder claims both keys BEFORE the legacy comms scroll (the
+      // debris-map intercept deliberately lets these two keys fall through to
+      // here, so the engaged ladder also wins over the map's comms use — the
+      // ladder is the primary navigation instrument while it is engaged).
+      // Flag-off (never engaged) leaves the comms scroll byte-identical.
+      case 'PageUp': {
+        const puLadder = this._ladderIfEngaged();
+        if (puLadder) {
+          puLadder.command({ type: 'pageUp' });
+          e.preventDefault();
+          return;
+        }
         if (isGameplay) {
           eventBus.emit(Events.COMMS_SCROLL_UP);
           e.preventDefault();
         }
         break;
-      case 'PageDown':
+      }
+      case 'PageDown': {
+        const pdLadder = this._ladderIfEngaged();
+        if (pdLadder) {
+          pdLadder.command({ type: 'pageDown' });
+          e.preventDefault();
+          return;
+        }
         if (isGameplay) {
           eventBus.emit(Events.COMMS_SCROLL_DOWN);
           e.preventDefault();
         }
         break;
+      }
 
       // N key — net/capture verb (hotkey cleanup 2026-06-13) + Shift+N
       // "Auto-target + launch at debris in range" (hotkey revamp 2026-06-14):
@@ -1168,6 +1223,18 @@ export class InputManager {
       // Daughter launch → Capture — one step per press, so anyone can mash
       // Space to rip through a full capture cycle (daughter-first, net fallback).
       case 'Space': {
+        // Zoom Ladder (00-spec §5): Space = the per-floor verb (F3 lens toggle,
+        // F4 approach-autopilot, F5 approach, F6 plan transfer, F7 flip lens).
+        // The engaged ladder claims Space BEFORE the legacy resolver below —
+        // note the launch/net ceremony Space-skips (top-level intercepts) still
+        // return before this, keeping their takeover-cancel priority. Flag-off
+        // (never engaged) leaves the legacy chain byte-identical.
+        const spaceLadder = this._ladderIfEngaged();
+        if (spaceLadder) {
+          spaceLadder.command({ type: 'space' });
+          e.preventDefault();
+          return;
+        }
         if (!isGameplay) break;
         // Restrict to the loop-relevant states (launch-ceremony Space-skip is
         // handled earlier and returns before this switch).

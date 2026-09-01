@@ -974,11 +974,12 @@ export class Starfield {
    * disengage cannot strand the shell off-center.
    *
    * Known follow-mode limits (cosmetic/dev-only, owned by the ladder wiring):
-   * the ?shot=1 harness (__scbSkyPose/__scbProject, main.js ~1740–1811)
-   * projects the WORLD-fixed shell and desyncs while following; the SunLight
-   * body depth masks (BODY_DEPTH_MASK_DIST, coupled to the world-fixed shell)
-   * can sit beyond the followed stars for far-side bodies, letting stars show
-   * through a body disc at F6/F7 ranges.
+   * the SunLight body depth masks (BODY_DEPTH_MASK_DIST, coupled to the
+   * world-fixed shell) can sit beyond the followed stars for far-side bodies,
+   * letting stars show through a body disc at F6/F7 ranges. (The ?shot=1
+   * harness hooks — __scbSkyPose/__scbProject, main.js — add the shell
+   * group's offset since the serial hub wiring, so they stay in sync in
+   * follow mode.)
    *
    * @param {boolean} enabled
    * @returns {boolean} the NEW follow state

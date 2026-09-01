@@ -220,7 +220,11 @@ export const FloorContract = {
       name: 'SDA DOWNLINK',
       anchor: 'earth',
       // far = 2000 u > Constants.CAMERA_FAR (500): S2 owns the per-floor far
-      // plane AND the STAR_SPHERE_RADIUS < far constraint (Constants.js:333).
+      // plane. NOTE: R < far was a FALSE invariant (corrected at Constants.js
+      // STAR_SPHERE_RADIUS) — a world-fixed shell needs far >= D_max + R.
+      // Earth-anchored floors use the camera-following shell instead
+      // (Starfield.setFollowCamera), so stars sit at exactly R = 400 from the
+      // camera on F6/F7.
       camera: { distU: [500, 1300], rangeLog10: logRange(500, 1300), fov: 35, near: 0.5, far: 2000, upFrame: 'earth-north' },
       humps: { inFirmness: 1.6 },
       timeCap: 100,
