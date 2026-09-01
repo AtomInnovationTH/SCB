@@ -108,6 +108,13 @@ export class AutopilotSystem {
     /** @type {object|null} Debris Map cluster target (ST-4.A) */
     this._debrisMapCluster = null;
 
+    /** @type {THREE.Vector3|null} F5 (PROX NET) resolved arrival point for the
+     *  cluster heading — an InsertionPlanner candidate committed via
+     *  engageCluster(cluster, { arrivalPoint }). Lives and dies with
+     *  _debrisMapCluster; null (the default) keeps the shipped
+     *  cluster-center heading byte-identical. */
+    this._clusterArrivalPoint = null;
+
     /** @type {object|null} Locked target reference (persists through target cycling) */
     this._lockedTargetRef = null;
 
@@ -410,16 +417,33 @@ export class AutopilotSystem {
    * Bypasses selected-target and trawl-active checks since clusters are not
    * individual targets.
    * @param {object} cluster — cluster object with .center { x, y, z } and .id
+   * @param {object} [opts] — F5 (PROX NET) extension. Omitted ⇒ behavior is
+   *   byte-identical to the pre-opts signature (pinned in
+   *   test-AutopilotSystem.js "engageCluster arrivalPoint").
+   * @param {object} [opts.arrivalPoint] — an InsertionPlanner candidate
+   *   ({ pos: {x,y,z}, ... }) or a bare {x,y,z}: the resolved arrival point
+   *   the heading should prefer over cluster.center.
    */
-  engageCluster(cluster) {
+  engageCluster(cluster, opts = {}) {
     if (!cluster?.center) return;
     this._debrisMapCluster = cluster;
+    // F5 arrival point: resolve {pos:{x,y,z}} (planner candidate) or bare
+    // {x,y,z}; anything else (including no opts) leaves the shipped
+    // cluster-center heading untouched.
+    const ap = opts && opts.arrivalPoint;
+    const apPos = ap ? (ap.pos || ap) : null;
+    this._clusterArrivalPoint =
+      (apPos && Number.isFinite(apPos.x) && Number.isFinite(apPos.y) && Number.isFinite(apPos.z))
+        ? new THREE.Vector3(apPos.x, apPos.y, apPos.z)
+        : null;
     this._trawlActive = false;  // override trawl if active
     this._engaged = true;
     this._setPhase(PHASE.RENDEZVOUS_FAR);
     this._holdTimer = 0;
     this._headingMode = 'CLUSTER';
-    this._headingTarget = new THREE.Vector3(cluster.center.x, cluster.center.y, cluster.center.z);
+    this._headingTarget = this._clusterArrivalPoint
+      ? this._clusterArrivalPoint.clone()
+      : new THREE.Vector3(cluster.center.x, cluster.center.y, cluster.center.z);
     this._lockedTargetRef = null;
 
     if (this._player) {
@@ -456,6 +480,7 @@ export class AutopilotSystem {
     this._engaged = false;
     this._lockedTargetRef = null;
     this._debrisMapCluster = null;
+    this._clusterArrivalPoint = null;
     this._goalPos = null;
     this._holdTimer = 0;
     this._holdExitDwell = 0;
@@ -1011,7 +1036,11 @@ export class AutopilotSystem {
   _determineHeading() {
     // --- Priority 0: Debris Map cluster target (highest — explicit player choice) ---
     if (this._debrisMapCluster?.center) {
-      const c = this._debrisMapCluster.center;
+      // F5 (PROX NET): a committed InsertionPlanner arrival point overrides the
+      // cluster CENTER as the rendezvous position (engageCluster opts). Absent
+      // (every pre-F5 caller), the heading is the shipped center — pinned
+      // byte-identical in test-AutopilotSystem.js.
+      const c = this._clusterArrivalPoint || this._debrisMapCluster.center;
       return {
         position: new THREE.Vector3(c.x, c.y, c.z),
         mode: 'CLUSTER',
