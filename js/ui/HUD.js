@@ -866,6 +866,13 @@ export class HUD {
     this._paneDensity.attach(eventBus, Events);
   }
 
+  /**
+   * The pane-density ladder instance — consumed by the iPad touch slider
+   * (js/ui/TouchControls.js), which drives it via setLevel()/visibleCount()
+   * so keys, per-pane toggles and the slider all compose on live state.
+   */
+  get paneDensity() { return this._paneDensity; }
+
   // ==========================================================================
   // EVENT LISTENERS
   // ==========================================================================

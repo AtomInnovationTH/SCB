@@ -44,8 +44,27 @@ else
   URL="http://localhost:$PORT/"
 fi
 
-# Open in default browser
-open "$URL"
+# Open in default browser.
+#
+# --disable-features=SkiaGraphite: Brave Nightly / Chromium canary channels
+# ship the experimental Skia Graphite Metal compositing backend (brave://gpu
+# → "Skia Graphite: Enabled"), which drops the WebGL canvas IOSurface at
+# composite time → flashing BLACK RECTANGLES over the game while the
+# framebuffer stays healthy (proven by ?bfp=2 pixel reads, 2026-08-31, dumps
+# bfp-dump-1788217897/1788218027; a window resize heals it by rebuilding the
+# swap-chain). Stable channels run Graphite disabled, so the flag is a
+# harmless no-op there.
+#
+# CAVEAT: Chromium-family browsers apply launch flags ONLY on a fresh process
+# start. If the browser is already running, the URL opens in the existing
+# instance and the flag is ignored — fully quit the browser first (Cmd+Q).
+BROWSER_FLAGS="--disable-features=SkiaGraphite"
+if pgrep -f "Brave Browser Nightly" >/dev/null 2>&1; then
+    echo "   ⚠️  Brave Nightly is already running — $BROWSER_FLAGS only applies"
+    echo "      on a fresh launch. Quit it fully (Cmd+Q) and re-run ./start.sh,"
+    echo "      or ignore this if you're playing in stable Brave/Safari/Chrome."
+fi
+open "$URL" --args $BROWSER_FLAGS
 
 echo "   ✅ Server running at: $URL"
 echo "   🎮 Opening game in browser..."

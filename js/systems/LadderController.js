@@ -55,6 +55,11 @@ export class LadderController {
    * @param {object} [deps.rail]         - rail indicator: show/hide/refresh(state)/flashDenied(hint, floor)
    * @param {object} [deps.navcom]       - F6 (NAVCOM) content controller (NavcomFloor):
    *   activate/deactivate/isActive/update/planTransfer. Optional — no-op without it.
+   * @param {object} [deps.targetReticle]  - TargetReticle: setVisible(bool). Optional —
+   *   suppressed on the ship-is-icon floors (F6/F7), restored on floors <= 5 / disengage.
+   * @param {object} [deps.dockingReticle] - DockingReticle: setVisible(bool). Optional —
+   *   same F6/F7 suppression; its re-show is owned per-frame by main.js's ARM PILOT
+   *   block, which consults reticlesSuppressed().
    * @param {function} [deps.now]        - monotonic clock (ms); defaults to performance.now
    * @param {object} [deps.ladder]       - injectable ZoomLadder (tests); defaults to a fresh core
    */
@@ -64,6 +69,10 @@ export class LadderController {
     this._gameState = deps.gameState || null;
     this._rail = deps.rail || null;
     this._navcom = deps.navcom || null;
+    this._targetReticle = deps.targetReticle || null;
+    this._dockingReticle = deps.dockingReticle || null;
+    /** True while the engaged floor (>= 6) suppresses the aiming reticles. */
+    this._reticlesHidden = false;
     this._now = deps.now || (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()));
     // The DEFAULT core (the production path — main.js injects no ladder) honors
     // the dev-phase full-access flag: Constants.LADDER.DEV_FULL_ACCESS (ships
@@ -88,6 +97,14 @@ export class LadderController {
 
   /** The underlying pure core (read-only use — rail/tests). */
   get ladder() { return this._ladder; }
+
+  /**
+   * True while the engaged floor iconizes the ship (F6/F7) and the aiming
+   * reticles are suppressed. main.js's per-frame ARM PILOT DockingReticle
+   * re-show consults this — allocation-free (gameLoop hot path; no getState()
+   * snapshot). Flag-off: never engaged → never set → always false.
+   */
+  reticlesSuppressed() { return this._reticlesHidden; }
 
   /** G1 pin surface: the derived holdoff window (ms). */
   static get ADAPT_HOLDOFF_MS() { return ADAPT_HOLDOFF_MS; }
@@ -159,6 +176,19 @@ export class LadderController {
     // with the live camera projector right after cameraSystem.update, so the icons
     // read this frame's pose and never render twice). This controller only owns
     // the navcom activate/deactivate lifecycle (_applyFloorContent / _disengage).
+    //
+    // Reticle re-assert (F6/F7): TargetReticle self-SHOWS on any gameplay-entering
+    // GAME_STATE_CHANGE (TargetReticle.js:253-256), so a gameplay↔gameplay
+    // transition (e.g. ORBITAL_VIEW→APPROACH) mid-F6 would resurrect it between
+    // floor changes. This class deliberately has no EventBus dep, so the minimal
+    // robust counter is re-asserting the hide from the existing per-frame update —
+    // setVisible(false) is a single style assignment (no DOM read, no layout).
+    // DockingReticle needs no re-assert: its state-change listener only ever
+    // HIDES, and its per-frame owner (main.js ARM PILOT block) consults
+    // reticlesSuppressed() and keeps it hidden while suppressed.
+    if (this._reticlesHidden && this._targetReticle && this._targetReticle.setVisible) {
+      this._targetReticle.setVisible(false);
+    }
     this._refreshRail();
     return decisions;
   }
@@ -222,6 +252,10 @@ export class LadderController {
       this._sceneManager.setLadderFloorFidelity(null);
     }
     if (this._navcom && this._navcom.deactivate) this._navcom.deactivate();
+    // Restore the reticles the icon floors hid (no-op if not suppressed). On a
+    // disengage caused by LEAVING gameplay, the restore resolves to hidden —
+    // matching TargetReticle's own GAME_STATE_CHANGE rule (see _setReticlesHidden).
+    this._setReticlesHidden(false);
     if (this._rail && this._rail.hide) this._rail.hide();
   }
 
@@ -318,10 +352,19 @@ export class LadderController {
    * Consume the arrival floor's `fidelity.debrisMode` (T1 plumbing) to drive the
    * floor content controllers. F6's 'clusters' mode swaps the full debris meshes
    * for the NAVCOM cluster-icon + transfer-window costume; every other floor
-   * deactivates it. No-op without a navcom dep (parallel track — the serial track
-   * injects NavcomFloor). @private
+   * deactivates it. Also gates the aiming reticles on the icon floors (>= 6).
+   * Every content dep is optional (parallel track — the serial track injects
+   * NavcomFloor + the reticles); absent deps make each part a no-op. @private
    */
   _applyFloorContent(floor) {
+    // Reticle gating (F6/F7 'ship-to-icon' floors): the target + docking
+    // reticles aim at subjects that are icons at Earth-anchored ranges, so both
+    // hide while the engaged floor is >= 6 and restore on floors <= 5 (and on
+    // disengage) — mirroring the navcom activate/deactivate pattern below.
+    // Keyed on the floor number, not debrisMode: F7 ('massBands') must suppress
+    // too, while its costume owner (M4) is not landed yet. Independent of the
+    // navcom dep so the reticle deps work standalone.
+    this._setReticlesHidden(floor >= 6);
     if (!this._navcom) return;
     const f = FloorContract.FLOORS[floor - 1];
     const clusters = !!(f && f.fidelity && f.fidelity.debrisMode === 'clusters');
@@ -329,6 +372,33 @@ export class LadderController {
       if (this._navcom.activate) this._navcom.activate();
     } else if (this._navcom.deactivate) {
       this._navcom.deactivate();
+    }
+  }
+
+  /**
+   * Hide/restore the aiming reticles for the ship-is-icon floors (F6/F7).
+   * Idempotent (guarded on the flag flip). Both deps optional — absent deps
+   * make this a pure flag write, byte-identical to the pre-reticle controller.
+   *
+   * Hide: setVisible(false) on both.
+   * Restore: TargetReticle mirrors its own GAME_STATE_CHANGE rule — visible
+   * exactly when gameplay (TargetReticle.js:253-256) — so a mid-gameplay floor
+   * change restores it and a disengage-by-leaving-gameplay keeps it hidden.
+   * DockingReticle is deliberately NOT force-shown: the main.js ARM PILOT
+   * block owns it PER FRAME (setVisible every frame) and re-shows it the
+   * moment reticlesSuppressed() clears — forcing it visible here could flash
+   * it for a frame outside ARM_PILOT mode.
+   * @private
+   */
+  _setReticlesHidden(hidden) {
+    if (hidden === this._reticlesHidden) return;
+    this._reticlesHidden = hidden;
+    if (hidden) {
+      if (this._targetReticle && this._targetReticle.setVisible) this._targetReticle.setVisible(false);
+      if (this._dockingReticle && this._dockingReticle.setVisible) this._dockingReticle.setVisible(false);
+    } else if (this._targetReticle && this._targetReticle.setVisible) {
+      const gameplay = !!(this._gameState && this._gameState.isGameplay && this._gameState.isGameplay());
+      this._targetReticle.setVisible(gameplay);
     }
   }
 

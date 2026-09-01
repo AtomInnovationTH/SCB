@@ -45,6 +45,71 @@ export class PaneDensity {
     this.rungs = Array.isArray(rungs) ? rungs.slice() : [];
     this._notify = typeof notify === 'function' ? notify : () => {};
     this._log = typeof log === 'function' ? log : () => {};
+    /** @private true while setLevel() walks — per-step notices are silenced. */
+    this._silent = false;
+  }
+
+  /** Total rung count — the touch slider's max (iPad port, Ipad.md §5.1). */
+  get total() { return this.rungs.length; }
+
+  /**
+   * Live count of visible rungs. The slider's position source of truth — read
+   * fresh every time (no counter), so it composes with the individual pane
+   * toggles exactly like `-`/`+` do.
+   * @returns {number}
+   */
+  visibleCount() {
+    return this.rungs.reduce((n, r) => n + (this._safeVisible(r) ? 1 : 0), 0);
+  }
+
+  /**
+   * Touch-slider entry (iPad port): walk the ladder until exactly `level`
+   * rungs are visible. Each step is a real down()/up() that re-reads live
+   * visibility, so out-of-band pane toggles compose. Per-step notices are
+   * silenced; ONE summary notice/log fires if anything changed — unless
+   * `quiet` is set (a live drag emits per-detent input events; the caller
+   * then announces ONCE on release via announceLevel()).
+   *
+   * Bounded: stops when a step reports no rung OR when a step fails to change
+   * the live count (a refusing/broken adapter must never loop forever).
+   *
+   * @param {number} level  target visible-rung count (clamped to 0..total)
+   * @param {{quiet?: boolean}} [opts]
+   * @returns {number} steps actually performed
+   */
+  setLevel(level, { quiet = false } = {}) {
+    const target = Math.max(0, Math.min(this.rungs.length, Math.round(Number(level) || 0)));
+    let cur = this.visibleCount();
+    let steps = 0;
+    this._silent = true;
+    try {
+      while (cur !== target) {
+        const stepped = cur > target ? this.down() : this.up();
+        if (!stepped) break;                     // ladder end / nothing to act on
+        const next = this.visibleCount();
+        if (next === cur) break;                 // adapter refused — no progress
+        cur = next;
+        steps++;
+      }
+    } finally {
+      this._silent = false;
+    }
+    if (steps > 0 && !quiet) this.announceLevel();
+    return steps;
+  }
+
+  /**
+   * Emit the level summary (notice + comms log) from LIVE state. setLevel()
+   * calls this itself unless quiet; a dragging slider calls it once on
+   * release so an 11-detent slide is one line, not eleven.
+   */
+  announceLevel() {
+    const cur = this.visibleCount();
+    const text = cur === 0
+      ? 'HUD clear — pure scenery · slide right to restore'
+      : `HUD panes · ${cur}/${this.rungs.length} visible`;
+    this._notify(text);
+    this._log(text);
   }
 
   /**
@@ -56,7 +121,7 @@ export class PaneDensity {
     const rung = this.rungs.find(r => this._safeVisible(r));
     if (!rung) {
       // Everything is already hidden — remind the player how to get it back.
-      this._notify('HUD already clear · + restores');
+      if (!this._silent) this._notify('HUD already clear · + restores');
       return null;
     }
     rung.setVisible(false);
@@ -64,8 +129,10 @@ export class PaneDensity {
     const text = pure
       ? 'HUD clear — pure scenery · + restores'
       : `HUD − · ${rung.label} hidden · + restores`;
-    this._notify(text);
-    this._log(text);
+    if (!this._silent) {
+      this._notify(text);
+      this._log(text);
+    }
     return rung;
   }
 
@@ -81,14 +148,16 @@ export class PaneDensity {
       if (!this._safeVisible(this.rungs[i])) { rung = this.rungs[i]; break; }
     }
     if (!rung) {
-      this._notify('All panes visible');
+      if (!this._silent) this._notify('All panes visible');
       return null;
     }
     rung.setVisible(true);
     const all = this.rungs.every(r => this._safeVisible(r));
     const text = all ? 'All panes visible' : `HUD + · ${rung.label} shown`;
-    this._notify(text);
-    this._log(text);
+    if (!this._silent) {
+      this._notify(text);
+      this._log(text);
+    }
     return rung;
   }
 

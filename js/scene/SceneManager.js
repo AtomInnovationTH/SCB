@@ -185,6 +185,12 @@ export class SceneManager {
     this._ladderDebrisField = null;
     /** @type {?{visible:boolean}} world ship mesh hidden on ship-is-icon floors. */
     this._ladderShip = null;
+    /**
+     * @type {?{setFollowCamera?:function}} star shell switched to camera-follow on
+     * the Earth-anchored floors (F6/F7 — see setLadderFloorFidelity), back to the
+     * shipped world-fixed pose on floors <= 5 and on disengage.
+     */
+    this._ladderStarfield = null;
 
     // --- Clock ---
     this.clock = new THREE.Clock();
@@ -674,11 +680,17 @@ export class SceneManager {
           this._ladderDebrisField.setLadderDebrisMode(null);
         }
         if (this._ladderShip) this._ladderShip.visible = true;
+        // Restore the shipped world-fixed star shell (Starfield.setFollowCamera
+        // resets the group to the Earth-centered origin pose on the way off).
+        if (this._ladderStarfield?.setFollowCamera) this._ladderStarfield.setFollowCamera(false);
       }
       this._ladderFidelity = null;
       return;
     }
     this._ladderFidelity = fid;
+    // Earth-anchored floors (F6/F7): a world-fixed 400 u shell needs far >= D_max + R,
+    // which F6 breaks (BLACK-SKY); camera-follow puts every star at exactly R = 400.
+    if (this._ladderStarfield?.setFollowCamera) this._ladderStarfield.setFollowCamera(fid.floor >= 6);
     this._reassertLadderFidelity();
   }
 
@@ -704,8 +716,11 @@ export class SceneManager {
       let changed = false;
       if (f.near != null && this.camera.near !== f.near) { this.camera.near = f.near; changed = true; }
       if (f.far != null && this.camera.far !== f.far) { this.camera.far = f.far; changed = true; }
-      // STAR_SPHERE_RADIUS (400) < every floor's far (500/2000), so no per-floor
-      // starfield scaling is needed to keep it inside the far plane (T1).
+      // Starfield: R < far is NOT sufficient for the world-fixed shell — a star
+      // directly behind Earth sits at camera distance D + R (need far >= D_max + R),
+      // which F6 (D <= 255, far 500) breaks. Earth-anchored floors run the shell
+      // camera-attached instead (Starfield.setFollowCamera, wired from
+      // setLadderFloorFidelity), so every star sits at exactly R = 400 (T1).
       if (changed) this.camera.updateProjectionMatrix();
     }
     // Zoom Ladder F6/F7 costume 'ship-to-icon' (T1): the full debris meshes are
@@ -773,11 +788,12 @@ export class SceneManager {
    * so headless/tests need not provide them. Storing refs mutates nothing, and
    * the hide is applied only from _reassertLadderFidelity (guarded on an engaged
    * fidelity), so this call is byte-identical while the ladder is disengaged.
-   * @param {{debrisField?:object, ship?:object}} [refs]
+   * @param {{debrisField?:object, ship?:object, starfield?:object}} [refs]
    */
-  setLadderContentRefs({ debrisField, ship } = {}) {
+  setLadderContentRefs({ debrisField, ship, starfield } = {}) {
     this._ladderDebrisField = debrisField || null;
     this._ladderShip = ship || null;
+    this._ladderStarfield = starfield || null;
   }
 
   /**

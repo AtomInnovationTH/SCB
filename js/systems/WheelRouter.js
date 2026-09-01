@@ -34,14 +34,17 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
 
-/** One wheel notch ≈ 100 px of deltaY in the default pixel delta mode. */
-const NOTCH_PX = 100;
+/** One wheel notch ≈ 100 px of deltaY in the default pixel delta mode.
+ *  EXPORTED (with MAX_MAG) as the single source of notch scale: TouchControls
+ *  builds synthetic deltas and its tests derive bounds from these — a retune
+ *  here must rescale touch input in lockstep, never silently diverge. */
+export const NOTCH_PX = 100;
 /** deltaMode 1 (DOM_DELTA_LINE): approximate one line as this many px. */
 const LINE_PX = 16;
 /** Per-event magnitude cap. The core does NOT bound per-event travel
  *  (06-core-api.md S1 notes) — bounding mag is the ROUTER's obligation, so one
  *  oversized trackpad flick can't leap the whole floor in a single event. */
-const MAX_MAG = 4;
+export const MAX_MAG = 4;
 
 /**
  * Normalize a WheelEvent's deltaY to notch-scale ladder input, applying the
@@ -109,6 +112,30 @@ export class WheelRouter {
   _ladderOwnsWheel() {
     return !!(Constants.LADDER && Constants.LADDER.ENABLED &&
       this._ladder && this._ladder.isActive && this._ladder.isActive());
+  }
+
+  /**
+   * Touch bridge (iPad port — Ipad.md §5.1 "same code path" doctrine): route a
+   * SYNTHETIC wheel of `deltaY` px through the exact dispatch recipe below, so
+   * pinch gestures and on-screen zoom buttons inherit every routing rule —
+   * arm-SK priority, StrategicMap ownership, ladder active/inactive, and the
+   * legacy canvas-only camera zoom — without growing a second input path.
+   *
+   * @param {number} deltaY  px, wheel convention (negative = zoom in)
+   * @param {EventTarget|null} [target]  event target for the canvas-only
+   *   legacy branch; defaults to the game canvas so camera zoom still works
+   *   when the ladder is off.
+   */
+  routeSyntheticWheel(deltaY, target = this._canvas) {
+    if (!Number.isFinite(deltaY) || deltaY === 0) return;
+    this._handleWheel({
+      deltaY,
+      deltaMode: 0,
+      ctrlKey: false,
+      target,
+      preventDefault() {},
+      stopPropagation() {},
+    });
   }
 
   /**

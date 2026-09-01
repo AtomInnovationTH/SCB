@@ -2,7 +2,16 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <!-- iPad port Phase 1 (Ipad.md §2.8): home-screen web-app shell. The WebClip /
+       Add-to-Home-Screen container reads these to run fullscreen without
+       browser chrome; viewport-fit=cover unlocks env(safe-area-inset-*). -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Space Cowboy">
+  <meta name="theme-color" content="#000000">
+  <link rel="apple-touch-icon" href="./icon-180.png">
   <title>Space Cowboy — VLEO Debris Remediation</title>
 
   <style>
@@ -28,6 +37,26 @@
       width: 100%;
       height: 100%;
       display: block;
+      /* iPad port (Ipad.md §3): the canvas owns its touches — no scroll,
+         no pinch-page-zoom, no long-press callout, no text selection. */
+      touch-action: none;
+      -webkit-user-select: none;
+      user-select: none;
+      -webkit-touch-callout: none;
+    }
+
+    /* Build stamp (Ipad.md §2.5 update-honesty law): the corner hash is the
+       ONLY proof a cable update landed. Filled from ./data/build-tag.json. */
+    #build-stamp {
+      position: fixed;
+      left: calc(6px + env(safe-area-inset-left, 0px));
+      bottom: calc(4px + env(safe-area-inset-bottom, 0px));
+      z-index: 11;
+      font: 10px 'Courier New', monospace;
+      color: rgba(0, 255, 136, 0.35);
+      pointer-events: none;
+      -webkit-user-select: none;
+      user-select: none;
     }
 
     /* === HUD OVERLAY === */
@@ -442,6 +471,22 @@
 
   <!-- HUD overlay (pointer-events: none — clicks pass through to canvas) -->
   <div id="hud-overlay"></div>
+
+  <!-- Build stamp (Ipad.md §2.5): a visible content hash is the only honest
+       update witness on a sealed device — "I relaunched it" proves nothing.
+       ./data/build-tag.json is network-first in sw.js (data/ route), so over
+       the cable it is always the just-served build, and offline it falls back
+       to the cached copy — which is exactly the build actually running. -->
+  <div id="build-stamp"></div>
+  <script>
+    fetch('./data/build-tag.json', { cache: 'no-cache' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (t) {
+        var el = document.getElementById('build-stamp');
+        if (el && t && t.tag) el.textContent = t.tag;
+      })
+      .catch(function () { /* no tag file (dev) — stamp stays empty */ });
+  </script>
 
   <!-- Game bootstrap -->
   <!-- F7 boot resilience — this classic script runs BEFORE the deferred ES

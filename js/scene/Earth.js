@@ -9,6 +9,7 @@
 import * as THREE from 'three';
 import { Constants } from '../core/Constants.js';
 import { profileFlags } from '../core/ProfileFlags.js';
+import { TouchControls } from '../ui/TouchControls.js';
 
 // ============================================================================
 // EARTH SURFACE SHADER (texture-based day/night with specular oceans)
@@ -829,6 +830,39 @@ export function selectNightLOD(quality, isAppleGPU = false) {
 }
 
 /**
+ * iPad port Phase 2 (Ipad.md §4.2 resolution discipline + §4.5 touch gate):
+ * cap the WHOLE texture stack at 8k on real touch hardware.
+ *
+ * Why this exists — two independent reasons, both device-verified classes:
+ *   1. Offline permanence: the sw.js precache is capped at the 8k tier
+ *      (no *_16k.* — scripts/build-precache.mjs), so an iPad that selected
+ *      16k would request a file the offline cache can never hold and boot a
+ *      black Earth the first time it's launched unplugged. The clamp makes
+ *      the capped precache exactly cover what glass ever requests.
+ *   2. Resolution discipline on glass: an iPad reports Apple GPU +
+ *      maxTextureSize 16384 and would walk into the 512 MB (+mips) 16k day
+ *      map — the exact resource class that goes residency-black in long
+ *      sessions on Apple GPUs (OPEN-2, selectNightLOD above) — on a device
+ *      with none of a Mac's memory headroom.
+ *
+ * Gate: TouchControls.detect() — the ONE touch gate (Ipad.md §4.5). Desktops
+ * and headless bench contexts report no touch, so desktop texture selection
+ * is byte-identical by construction. The `?tex=16k` URL override in
+ * getTextureQuality() bypasses this clamp (it returns before detection), so
+ * the full 16k set stays one URL away for on-glass A/B.
+ *
+ * Pure + exported for the Node suite, like selectLOD/selectNightLOD.
+ *
+ * @param {'16k'|'8k'|''} quality  overall tier from selectLOD()
+ * @param {boolean} hasTouch      real-touch detection result
+ * @returns {'16k'|'8k'|''} day-map tier (== quality except 16k-on-touch → 8k)
+ */
+export function clampLODForGlass(quality, hasTouch) {
+  if (hasTouch && quality === '16k') return '8k';
+  return quality;
+}
+
+/**
  * Detect hardware capability and return the best texture quality tier.
  * Gathers runtime inputs, delegates to selectLOD() for the actual decision.
  * @returns {{quality: '16k'|'8k'|'', nightQuality: '16k'|'8k'|''}}
@@ -871,7 +905,11 @@ function getTextureQuality() {
     }
   }
 
-  const quality = selectLOD(maxTextureSize, deviceMemory, isAppleGPU);
+  const quality = clampLODForGlass(
+    selectLOD(maxTextureSize, deviceMemory, isAppleGPU),
+    // Touch gate (Ipad.md §4.5): glass caps at 8k — see clampLODForGlass.
+    TouchControls.detect()
+  );
   // OPEN-2: the night map rides one tier lower on Apple GPUs (see selectNightLOD).
   const nightQuality = selectNightLOD(quality, isAppleGPU);
   // PR 5 / P2.10: gate verbose LOD log behind DEBUG flag (?debug=1).

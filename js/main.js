@@ -116,6 +116,7 @@ import { NavcomFloor } from './systems/NavcomFloor.js';
 import { TimeAuthority } from './systems/TimeAuthority.js';
 import { FloorContract } from './core/FloorContract.js';
 import { RailIndicator } from './ui/RailIndicator.js';
+import { TouchControls } from './ui/TouchControls.js';
 import { captureNetVisual, worldTumbleForKitAttitude, boxRowsForKitAttitude } from './ui/CaptureNetVisual.js';
 import { furnaceBreakdownVisual } from './ui/FurnaceBreakdownVisual.js';
 import { captureNetSystem, isInsideCone, coneRadiusAtDepth } from './entities/CaptureNet.js';
@@ -287,10 +288,13 @@ function _getScheduleIntervalMs() {
  // returns at `document.hidden` without calling _scheduleNextFrame, so this
  // branch is only hit when an event listener wakes the loop while hidden.
  if (document.hidden) return 200;
- // §14.1 Window blurred (Cmd-Tab to another app): throttle identically to
- // hidden-tab. The browser window is still on-screen but the user is in
- // another application — no need for full frame rate.
- if (_windowBlurred) return 200;
+ // §14.1 (revision 4, 2026-08-31) Window blurred (Cmd-Tab / click into another
+ // app): the window is still ON-SCREEN, so run at ~30 fps — bfp evidence
+ // (dump-1788177490) showed black-rectangle flicker persisting even with 5 Hz
+ // keepalive presents; a 30 fps present cadence leaves the compositor no purge
+ // window at all. The sim stays frozen (gameLoop blurred branch); only
+ // present cost remains. Truly hidden tabs still fully halt above.
+ if (_windowBlurred) return 33;
   // Menu / Briefing / Shop / Game-over / Win — user is reading UI, not flying.
   // 30 Hz is indistinguishable from display refresh for static-camera
   // background scenes (entity sim already runs at 10 % speed in `!isActive`).
@@ -525,6 +529,7 @@ let strategicMap;
 let wheelRouter;
 let ladderController;
 let railIndicator;
+let touchControls;
 
 // Zoom Ladder S3 — the ONE world-time choke point (T2). Owns dtWorld/warp; pins
 // the shipped base rate whenever the ladder is disengaged (byte-identical).
@@ -1205,7 +1210,7 @@ async function init() {
   // Storing refs mutates nothing and the hide only fires from an engaged floor's
   // re-assert, so with LADDER.ENABLED false this is byte-identical.
   if (sceneManager.setLadderContentRefs) {
-    sceneManager.setLadderContentRefs({ debrisField, ship: player });
+    sceneManager.setLadderContentRefs({ debrisField, ship: player, starfield });
   }
   // S3 — the ONE dtReal/dtWorld choke point (T2). Ticked each frame from the
   // game loop; pins the shipped base rate while the ladder is disengaged.
@@ -1218,6 +1223,21 @@ async function init() {
     ladderController,
   });
   wheelRouter.start();
+
+  // --- iPad port Phase 1 (Ipad.md §4.5): touch controls, real-detection gated.
+  // Desktop and headless contexts see zero listeners + zero DOM by
+  // construction, so every existing suite stays byte-identical. Pinch and the
+  // +/− buttons synthesize wheel input through the SAME WheelRouter dispatch
+  // as the physical wheel; the pane slider drives the PaneDensity ladder.
+  if (TouchControls.detect()) {
+    touchControls = new TouchControls({
+      canvas,
+      wheelRouter,
+      paneDensity: hud ? hud.paneDensity : null,
+    });
+    touchControls.start();
+    _bootMark('TouchControls started');
+  }
 
   // --- Item 3: anti-stuck idle watchdog (data-driven, veteran-gated) ---
   armIdleAdvisor.init({
@@ -1460,7 +1480,24 @@ async function init() {
   eventBus.on(Events.MENU_START, _triggerPowerupFlash);
   eventBus.on(Events.MENU_CONTINUE, _triggerPowerupFlash);
 
-  window.addEventListener('resize', onResize);
+  // iPad web-app (Ipad.md §3): viewport truth lives in visualViewport — bar
+  // swipes and the home-screen container resize it without a window resize
+  // event, so BOTH sources are wired. onResize renders synchronously (~2–3 ms
+  // GPU, see its comment), and one rotation gesture fires both sources — the
+  // size-key guard makes each effective size change pay exactly once.
+  let _lastResizeKey = '';
+  const _resizeDeduped = () => {
+    const vv = window.visualViewport;
+    const key = `${window.innerWidth}x${window.innerHeight}` +
+      (vv ? `|${Math.round(vv.width)}x${Math.round(vv.height)}@${vv.scale}` : '');
+    if (key === _lastResizeKey) return;
+    _lastResizeKey = key;
+    onResize();
+  };
+  window.addEventListener('resize', _resizeDeduped);
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', _resizeDeduped);
+  }
 
   // --- PR 3 / P1.4: Pause render loop on hidden tab to save CPU/GPU and prevent
   // dt-spike on resume. Also stop any looping audio so it doesn't drone in
@@ -3873,30 +3910,35 @@ function gameLoop(timestamp) {
     lastTime = timestamp;
     return;
   }
-  // §14.1 (revised 2, 2026-08-30) — Window blurred (user clicked another macOS
+  // §14.1 (revised 3, 2026-08-31) — Window blurred (user clicked another macOS
   // app; the browser window can still be fully VISIBLE beside it). The sim
   // halts (zero update work, dt frozen via lastTime), but the canvas layer is
-  // KEPT ALIVE by re-presenting one frame every ~2 s on a ~5 Hz wake cadence:
-  // after several seconds with no present, Chromium's compositor purges the
-  // layer's tiles and the visible-but-unfocused window shows a flickering
-  // BLACK RECTANGLE over the canvas (this was the long-hunted "black flicker"
-  // — probe evidence in js/core/BlackFrameProbe.js dumps: 12–28 s rAF
-  // starvations with visibilityState 'visible' and zero occlusion events,
-  // healing on any focus-restoring window event: resize, fullscreen,
-  // DevTools). The original §14.1 full halt is what painted the black.
-  // Wake + re-present is ≈0.4 % of the 120 Hz frame budget, so the §14.1
-  // energy goal ("GPU idles when switching apps") is preserved.
+  // KEPT ALIVE by re-presenting one frame on EVERY ~5 Hz wake while blurred:
+  // after seconds with no present, Chromium's compositor purges the layer's
+  // tiles and the visible-but-unfocused window shows a flickering BLACK
+  // RECTANGLE over the canvas (the long-hunted "black flicker" — probe
+  // evidence in js/core/BlackFrameProbe.js dumps: 12–28 s rAF starvations with
+  // visibilityState 'visible' and zero occlusion events, healing on any
+  // focus-restoring window event: resize, fullscreen, DevTools).
+  // Revision 3 evidence (bfp-dump-1788174453, Chrome 152 / ANGLE-Metal M4 Max):
+  // the revised-2 cadence of one present per 2 s STILL flickered black during a
+  // 7.4 s blur window at F6/F7 — the compositor purged tiles between the 2 s
+  // presents. Present-per-wake is ~5 fps ≈ 4 % of the 120 Hz frame budget, so
+  // the §14.1 energy goal ("GPU idles when switching apps") still holds.
+  // Revision 4 (2026-08-31, bfp-dump-1788177490): rev-3's 5 Hz presents STILL
+  // flickered black (0 starve / 0 gap events, blur windows 3.2 s + 4.4 s) —
+  // present cadence alone is not the whole story on Chrome 152 + ANGLE-Metal.
+  // Now: render EVERY blurred wake at a ~30 fps schedule (see
+  // _getScheduleIntervalMs) — no compositor purge window, sim still frozen.
   if (_windowBlurred) {
     lastTime = timestamp;
-    if (timestamp - _blurKeepalivePresentTs >= 2000) {
-      _blurKeepalivePresentTs = timestamp;
-      try {
-        if (strategicMap && strategicMap.isOpen()) strategicMap.render();
-        else if (sceneManager) sceneManager.render();
-        if (blackFrameProbe) blackFrameProbe.tick(timestamp);
-      } catch (_e) { /* keepalive must never break the halt path */ }
-    }
-    _scheduleNextFrame(); // 200 ms interval while blurred (_getScheduleIntervalMs)
+    _blurKeepalivePresentTs = timestamp;
+    try {
+      if (strategicMap && strategicMap.isOpen()) strategicMap.render();
+      else if (sceneManager) sceneManager.render();
+      if (blackFrameProbe) blackFrameProbe.tick(timestamp);
+    } catch (_e) { /* keepalive must never break the halt path */ }
+    _scheduleNextFrame(); // ~33 ms interval while blurred (_getScheduleIntervalMs)
     return;
   }
 
