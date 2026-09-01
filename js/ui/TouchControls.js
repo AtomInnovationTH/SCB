@@ -17,10 +17,12 @@
  *           exactly like the wheel path, because jump() runs the same wall
  *           decisions. (The old fixed +/− buttons were removed once pinch +
  *           rail-drag proved enough on glass.)
- *   2. HUD pane density: a slider bound to the PaneDensity ladder —
+   *   2. HUD pane density: a slider bound to the PaneDensity ladder —
  *      slide left = fewer panes (`-`), right = more (`+`), via
  *      `paneDensity.setLevel(n)` which re-reads live pane visibility so the
- *      keyboard keys and per-pane toggles compose.
+ *      keyboard keys and per-pane toggles compose. Gameplay-gated: the chrome
+ *      is hidden on the menu / briefing / end screens (gameState.isGameplay()),
+ *      so the slider never floats over a non-play screen.
  *
  * Optional zoom-feel telemetry (Ipad.md §6): when a `telemetry` sink is
  * injected, each pinch/rail gesture and every floor crossing is logged for
@@ -126,15 +128,17 @@ export class TouchControls {
    * @param {HTMLCanvasElement} deps.canvas          the game canvas
    * @param {object} deps.wheelRouter                provides routeSyntheticWheel(deltaY, target)
    * @param {object|null} [deps.ladderController]     provides jump({toFloor}) — the rail-drag sink
+   * @param {object|null} [deps.gameState]           provides isGameplay() — gates the chrome (menu hides it)
    * @param {object|null} [deps.paneDensity]         PaneDensity: total/visibleCount()/setLevel(n)
    * @param {object|null} [deps.telemetry]           optional zoom-feel sink: log(kind, data)
    * @param {object} [deps.tune]                     TOUCH_TUNE override (tests)
    */
-  constructor({ canvas, wheelRouter, ladderController = null, paneDensity = null,
-                telemetry = null, tune = null } = {}) {
+  constructor({ canvas, wheelRouter, ladderController = null, gameState = null,
+                paneDensity = null, telemetry = null, tune = null } = {}) {
     this._canvas = canvas || null;
     this._router = wheelRouter || null;
     this._ladder = ladderController;   // rail-drag → jump({toFloor})
+    this._gameState = gameState;       // isGameplay() → hide the chrome off-play
     this._paneDensity = paneDensity;
     this._telemetry = telemetry;
     const userTune = (typeof window !== 'undefined' && window.__TOUCH_TUNE) || null;
@@ -398,6 +402,13 @@ export class TouchControls {
   _buildChrome() {
     const root = document.createElement('div');
     root.id = 'touch-controls';
+    // Gameplay-gated: the PANES slider has no business on the menu / briefing /
+    // end screens. Start hidden when we're off-play; _syncChrome reveals it in
+    // gameplay. No gameState (tests / other hosts) ⇒ previous always-visible.
+    if (this._gameState && typeof this._gameState.isGameplay === 'function'
+        && !this._gameState.isGameplay()) {
+      root.style.display = 'none';
+    }
 
     // Pane-density slider — bottom-right dock. Left = fewer panes, right = more.
     if (this._paneDensity && typeof this._paneDensity.setLevel === 'function') {
@@ -462,16 +473,29 @@ export class TouchControls {
     }
   }
 
-  /** @private Keep the slider honest + the grip aligned to the live rail. */
+  /** @private Keep the slider honest + the grip aligned + the chrome gated. */
   _startSync() {
-    if (!this._slider && !this._grip) return;
+    if (!this._slider && !this._grip && !this._gameState) return;
     this._sliderTimer = setInterval(() => {
       if (this._slider && this._paneDensity && !this._sliderDragging) {
         const live = String(this._paneDensity.visibleCount());
         if (this._slider.value !== live) this._slider.value = live;
       }
       this._syncGrip();
+      this._syncChrome();
     }, this._tune.sliderSyncMs);
+  }
+
+  /**
+   * @private Show the touch chrome (the PANES slider) only in gameplay. The
+   * menu / briefing / end screens hide it — gated on gameState.isGameplay(),
+   * polled on the sync cadence like the rail grip. No gameState ⇒ no gating.
+   */
+  _syncChrome() {
+    if (!this._root || !this._gameState ||
+        typeof this._gameState.isGameplay !== 'function') return;
+    const want = this._gameState.isGameplay() ? '' : 'none';
+    if (this._root.style.display !== want) this._root.style.display = want;
   }
 
   /**

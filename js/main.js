@@ -1245,6 +1245,7 @@ async function init() {
       canvas,
       wheelRouter,
       ladderController,
+      gameState,
       paneDensity: hud ? hud.paneDensity : null,
       telemetry: touchTelemetry,
     });
