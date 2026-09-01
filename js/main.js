@@ -113,6 +113,9 @@ import { StrategicMap } from './ui/StrategicMap.js';
 import { WheelRouter } from './systems/WheelRouter.js';
 import { LadderController } from './systems/LadderController.js';
 import { NavcomFloor } from './systems/NavcomFloor.js';
+import { ProxNetFloor } from './systems/ProxNetFloor.js';
+import { SdaFloor } from './systems/SdaFloor.js';
+import { HullCamFloor } from './systems/HullCamFloor.js';
 import { TimeAuthority } from './systems/TimeAuthority.js';
 import { FloorContract } from './core/FloorContract.js';
 import { RailIndicator } from './ui/RailIndicator.js';
@@ -545,6 +548,15 @@ const _taFrameArgs = { dtReal: 0, active: false, targetCap: 1, dangerActive: fal
 // ticked explicitly from the loop with the live projector below.
 let navcomFloor;
 
+// Zoom Ladder Wave-2 floor content orchestrators (S4 serial hub wire): F5
+// (PROX NET), F7 (SDA), F3 (HULL CAM). Same lifecycle as navcomFloor —
+// constructed in the ladder block, injected into LadderController (which owns
+// activate/deactivate + Space verbs), ticked from the loop below (single-ticker
+// pattern). Inert while LADDER.ENABLED is false (never activated).
+let proxNetFloor;
+let sdaFloor;
+let hullcamFloor;
+
 // Zoom Ladder F6 world→screen projector, built off the live ladder camera.
 // NavcomFloor consumes it to place the cluster ring+count icons and the ship
 // chevron; |z| <= 1 keeps only points inside the camera near/far planes visible.
@@ -559,6 +571,10 @@ function navcomProject(worldVec3) {
     visible: Math.abs(v.z) <= 1,
   };
 }
+
+// Zoom Ladder F3 (HULL CAM) scratch vector: ship-local → world → screen
+// projector composition + one-time anchor resolution (no per-frame allocation).
+const _hullTmp = new THREE.Vector3();
 
 // Input
 let inputManager;
@@ -1209,12 +1225,95 @@ async function init() {
     // while LADDER.ENABLED is false.
     getMassBudget: () => armManager.getMassBudget(),
   });
+  // Zoom Ladder F5 (PROX NET) content orchestrator (S4). Same contract as
+  // navcomFloor: constructed inside the ladder block, injected into
+  // LadderController (activates it on debrisMode 'tactical', dispatches its
+  // 'approach' Space verb). getFocusedCluster is the F6→F5 HANDOFF — the
+  // cluster focused on NAVCOM is the corridor target here. Inert while
+  // LADDER.ENABLED is false (never activated): byte-identical.
+  proxNetFloor = new ProxNetFloor({
+    debrisSource: debrisField,
+    player,
+    getFocusedCluster: () => navcomFloor.getFocusedCluster(),
+    onApproach: (cluster, arrivalPoint) =>
+      autopilotSystem.engageCluster(cluster, { arrivalPoint }),
+  });
+  // Zoom Ladder F7 (SDA) content orchestrator (S4): screen-space mass-band
+  // chart over live cluster/active-sat/Kessler aggregates (both singletons
+  // imported above). Activated on debrisMode 'massBands'; Space flips the
+  // VALUE↔THREAT lens. Inert while LADDER.ENABLED is false.
+  sdaFloor = new SdaFloor({
+    clusterSource: debrisField,
+    satSource: () => catalogLoader.getAllActiveSats(),
+    kessler: kesslerSystem,
+  });
+  // Zoom Ladder F3 (HULL CAM) content orchestrator (S4): ship-local blueprint
+  // callouts. The projector composes player.localToWorld with the SAME
+  // world→screen projector navcomFloor uses; anchor positions resolve from the
+  // live ship meshes once per name (MotherCallouts._resolveAnchor pattern —
+  // the anchor meshes are static, e.g. AftThrusterDeck). Providers feed the
+  // detail-lens live rows (MotherCallouts._liveRows sources); every ref
+  // guarded, and HullCamFloor itself swallows provider throws (best-effort).
+  hullcamFloor = new HullCamFloor({
+    player,
+    shipMeshSource: {
+      _cache: new Map(),
+      getAnchorLocalU(name) {
+        if (this._cache.has(name)) return this._cache.get(name);
+        const m = player.getObjectByName(name);
+        let out = null;
+        if (m) {
+          m.getWorldPosition(_hullTmp);
+          player.worldToLocal(_hullTmp);
+          out = { x: _hullTmp.x, y: _hullTmp.y, z: _hullTmp.z };
+        }
+        this._cache.set(name, out);   // static mesh — resolve once per name
+        return out;
+      },
+    },
+    project: (localU) => {            // ship-local → world → the navcom projector
+      _hullTmp.set(localU.x, localU.y, localU.z);
+      player.localToWorld(_hullTmp);
+      return navcomProject(_hullTmp);
+    },
+    providers: {
+      power: () => (powerDistribution && powerDistribution.getSolarInput
+        ? [`SOLAR ${Math.round(powerDistribution.getSolarInput())} W`] : []),
+      engineering: () => {
+        // Fuel row honesty rule (MotherCallouts 'feep' live row, R4): a
+        // cargo-fed metal is NOT drawn from the xenon tank — never report
+        // xenon kg under its name.
+        if (!resourceSystem || !resourceSystem.getStatus) return [];
+        const st = resourceSystem.getStatus();
+        const fuel = resourceSystem.getCurrentFuel ? resourceSystem.getCurrentFuel() : null;
+        if (fuel && !fuel.fromCargo) return [`FUEL ${st.currentFuelName} ${Math.round(st.xenon)}/${st.xenonMax} kg`];
+        if (fuel) return [`FUEL ${st.currentFuelName} (CARGO)`];
+        return [`FUEL ${Math.round(st.xenon)}/${st.xenonMax} kg`];
+      },
+      comms: () => (commsSystem && commsSystem.getSuppressionTier
+        ? [`LINK: ${commsSystem.getSuppressionTier() > 0 ? 'SUPPRESSED' : 'NOMINAL'}`] : []),
+      cargo: () => {
+        if (!tetherReel || !tetherReel.getAllReelStates) return [];
+        const states = tetherReel.getAllReelStates() || [];
+        const active = states.filter((s) => s && s.state && s.state !== 'STOWED').length;
+        return [`REELS ACTIVE ${active}/${states.length || 4}`];
+      },
+      // thermal: omitted until the flower refit lands — the static MLI spec
+      // rows from the blueprint manifest carry that card.
+    },
+  });
   ladderController = new LadderController({
     cameraSystem,
     sceneManager,
     gameState,
     rail: railIndicator,
     navcom: navcomFloor,
+    proxNet: proxNetFloor,
+    sdaFloor,
+    hullcam: hullcamFloor,
+    // F7 hides the constellation figures under the SDA chart and restores the
+    // player's 6-key prior on leave/disengage.
+    starfield,
     // Reticle gating (F6/F7 ship-is-icon floors): the controller hides the
     // aiming reticles on floors >= 6 and restores them on <= 5 / disengage.
     // Optional deps — inert while LADDER.ENABLED is false (never engaged).
@@ -4743,6 +4842,38 @@ function updateCamera(dt, timestamp) {
     });
     const shipAngleRad = Math.atan2(s1.y - s0.y, s1.x - s0.x);
     navcomFloor.update({ project: navcomProject, shipPos, shipAngleRad });
+  }
+
+  // Zoom Ladder F5 (PROX NET): same single-ticker pattern as navcom — after
+  // cameraSystem.update so the overlay reads this frame's pose. F5 and F6
+  // are never active together, so at most one block runs per frame.
+  if (proxNetFloor && proxNetFloor.isActive()) {
+    const shipPos = player.getPosition();
+    const vel = player.getVelocity();
+    const vmag = Math.hypot(vel.x, vel.y, vel.z) || 1;
+    const eps = 0.05;
+    const s0 = navcomProject(shipPos);
+    const s1 = navcomProject({
+      x: shipPos.x + (vel.x / vmag) * eps,
+      y: shipPos.y + (vel.y / vmag) * eps,
+      z: shipPos.z + (vel.z / vmag) * eps,
+    });
+    const shipAngleRad = Math.atan2(s1.y - s0.y, s1.x - s0.x);
+    proxNetFloor.update({ project: navcomProject, shipPos, shipAngleRad });
+  }
+
+  // Zoom Ladder F7 (SDA): screen-space chart — no projector or ship pose
+  // needed; the floor self-throttles its data refresh (2 s cadence).
+  if (sdaFloor && sdaFloor.isActive()) sdaFloor.update();
+
+  // Zoom Ladder F3 (HULL CAM): the camera→subject distance in METRES drives
+  // the overview/detail lens split; centerX (the subject's screen x) picks the
+  // rail side for the callout cards. Reads this frame's camera pose, so it
+  // stays in the same after-cameraSystem.update slot as navcom.
+  if (hullcamFloor && hullcamFloor.isActive()) {
+    const _hcam = cameraSystem.camera;
+    const distM = _hcam.position.distanceTo(playerPos) / Constants.SCENE_UNITS_PER_METER;
+    hullcamFloor.update({ distM, centerX: navcomProject(playerPos).x });
   }
 
   // Detail-LOD cull (Phase 6): feed the fresh camera→craft distance (scene units)

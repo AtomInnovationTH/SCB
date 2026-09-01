@@ -603,6 +603,28 @@ export class CameraSystem {
       _upTo: new THREE.Vector3(),
       _upQuat: new THREE.Quaternion(),
       _upQuatE: new THREE.Quaternion(),
+      // F5/F6 drag-to-rotate (S4): mouse drag rotates lc.dir — the dolly
+      // direction captured at ladderEngage — around the floor's up-frame with
+      // ORBIT's velocity+damping feel (constants mirror this.orbit). Enabled
+      // only on floors 5/6 (F7 stays chart-locked; F3/F4 keep shipped
+      // behavior); every consumer is additionally gated on lc.active, so the
+      // shipped mouse handling is byte-identical while the ladder is off.
+      drag: {
+        enabled: false,
+        isDragging: false,
+        lastMouseX: 0,
+        lastMouseY: 0,
+        velocityTheta: 0,
+        velocityPhi: 0,
+        rotateSpeed: 0.005,   // mirrors this.orbit.rotateSpeed
+        damping: 0.92,        // mirrors this.orbit.damping
+      },
+      _dragUp: new THREE.Vector3(),
+      _dragRight: new THREE.Vector3(),
+      // F3 (HULL CAM) inspect side-effect absorption (T6): true while the
+      // engaged ladder floor is 3 and the inspect dim/overlay effects are
+      // applied. See _ladderApplyInspectFx.
+      inspectFxActive: false,
     };
 
     this._boundMouseDown = this._onMouseDown.bind(this);
@@ -1329,6 +1351,11 @@ export class CameraSystem {
    * @private
    */
   _evaluateInspectZoom() {
+    // ZOOM LADDER (S4): while the ladder is engaged the shipped 12/18 m
+    // Schmitt is BYPASSED — the F3/F4 wall/entry pair owns the inspect optics
+    // (_ladderApplyInspectFx keys them on the engaged floor id). Gated on
+    // lc.active, so the flag-off path is byte-identical.
+    if (this._ladderCam.active) return;
     if (this.currentView !== CameraViews.ORBIT) return;
 
     const o = this.orbit;
@@ -3460,6 +3487,25 @@ export class CameraSystem {
 
   /** @private */
   _onMouseDown(e) {
+    // ZOOM LADDER (S4): while the ladder owns the camera, its drag branch owns
+    // the mouse — RETURN so the legacy ORBIT/INSPECTION/free-look paths can
+    // never double-fire. Gated on lc.active: byte-identical when disengaged.
+    if (this._ladderCam.active) {
+      // The shipped "any mouse button aborts the lasso cut" garnish rule holds
+      // under the ladder too.
+      if (this._lassoCut.active) this.abortLassoCut();
+      const d = this._ladderCam.drag;
+      // Left or right click starts a rotate drag on the drag-enabled floors
+      // (F5/F6). Rides own the camera — drags are ignored while riding.
+      if (d.enabled && !this._ladderCam.riding && (e.button === 0 || e.button === 2)) {
+        d.isDragging = true;
+        d.lastMouseX = e.clientX;
+        d.lastMouseY = e.clientY;
+        d.velocityTheta = 0;
+        d.velocityPhi = 0;
+      }
+      return;
+    }
     // 2026-08-26: any mouse button aborts the lasso cut instantly (the cut is
     // garnish, never a wall) — the press then acts on the restored view.
     if (this._lassoCut.active) this.abortLassoCut();
@@ -3485,6 +3531,23 @@ export class CameraSystem {
 
   /** @private */
   _onMouseMove(e) {
+    // ZOOM LADDER (S4): accumulate rotate-drag velocities exactly like ORBIT
+    // (velocity = last-move delta × rotateSpeed; damping decays it per frame in
+    // _updateLadderCamera). Deliberately NO CAMERA_ORBIT_DRAG emit — that is an
+    // ORBIT-view skills-discovery signal; the ladder keeps the events graph
+    // unchanged. RETURN keeps the legacy paths unreachable while engaged.
+    if (this._ladderCam.active) {
+      const d = this._ladderCam.drag;
+      if (d.isDragging) {
+        const dx = e.clientX - d.lastMouseX;
+        const dy = e.clientY - d.lastMouseY;
+        d.lastMouseX = e.clientX;
+        d.lastMouseY = e.clientY;
+        d.velocityTheta = -dx * d.rotateSpeed;
+        d.velocityPhi = dy * d.rotateSpeed;
+      }
+      return;
+    }
     if ((this.currentView === CameraViews.ORBIT || this.currentView === CameraViews.INSPECTION) &&
         (this.currentView === CameraViews.INSPECTION ? this.inspection.isDragging : this.orbit.isDragging)) {
       const cfg = this.currentView === CameraViews.INSPECTION ? this.inspection : this.orbit;
@@ -3517,6 +3580,13 @@ export class CameraSystem {
 
   /** @private */
   _onMouseUp(e) {
+    // ZOOM LADDER (S4): release the rotate drag; the accumulated velocities
+    // decay as momentum in _updateLadderCamera (ORBIT feel). RETURN keeps the
+    // legacy release paths unreachable while the ladder owns the camera.
+    if (this._ladderCam.active) {
+      this._ladderCam.drag.isDragging = false;
+      return;
+    }
     if (this.currentView === CameraViews.ORBIT) {
       this.orbit.isDragging = false;
     }
@@ -3622,6 +3692,15 @@ export class CameraSystem {
     const d = lc._tmp.copy(this.camera.position).sub(anchorPos);
     if (d.lengthSq() > 1e-20) lc.dir.copy(d).normalize();
     this._baseFov = frame.fov;
+    // F5/F6 drag-to-rotate: ladder frames carry their floor id
+    // (LadderController._frame). Fresh engage starts with no drag in flight.
+    lc.drag.enabled = (frame.floor === 5 || frame.floor === 6);
+    lc.drag.isDragging = false;
+    lc.drag.velocityTheta = 0;
+    lc.drag.velocityPhi = 0;
+    // F3 inspect absorption: engaging directly on F3 applies the arrival
+    // effects (a re-engage mid-session restores the floor's costume).
+    this._ladderApplyInspectFx(frame.floor);
   }
 
   /** Disengage the ladder camera; the normal view path resumes next frame. */
@@ -3630,6 +3709,16 @@ export class CameraSystem {
     lc.active = false;
     lc.riding = false;
     lc.onDone = null;
+    // Reset the whole drag block — nothing may leak into the next engage.
+    lc.drag.enabled = false;
+    lc.drag.isDragging = false;
+    lc.drag.lastMouseX = 0;
+    lc.drag.lastMouseY = 0;
+    lc.drag.velocityTheta = 0;
+    lc.drag.velocityPhi = 0;
+    // F3 inspect absorption: a disengage while on F3 reverts the arrival
+    // effects (dim off, overlays off) — the shipped views resume clean.
+    this._ladderApplyInspectFx(null);
   }
 
   /**
@@ -3642,6 +3731,8 @@ export class CameraSystem {
     lc.anchor = frame.anchor;
     lc.targetDistU = frame.distU;
     lc.fov = frame.fov;
+    lc.drag.enabled = (frame.floor === 5 || frame.floor === 6);
+    this._ladderApplyInspectFx(frame.floor);
   }
 
   /**
@@ -3668,6 +3759,17 @@ export class CameraSystem {
     lc.targetDistU = opts.distU;
     lc.fov = opts.fov;
     lc.onDone = (typeof opts.onDone === 'function') ? opts.onDone : null;
+    // A ride owns the camera (G3 flick replacements included): cancel any
+    // in-flight drag and its momentum; re-gate on the destination floor.
+    lc.drag.enabled = (opts.floor === 5 || opts.floor === 6);
+    lc.drag.isDragging = false;
+    lc.drag.velocityTheta = 0;
+    lc.drag.velocityPhi = 0;
+    // F3 inspect absorption: the 3/4 down-hump ride applies the ARRIVAL
+    // effects at ride start (destination floor 3 — same moment the render
+    // block swaps, LadderController._startRide); the up-hump ride's
+    // destination floor 4 applies the DEPARTURE inverses.
+    this._ladderApplyInspectFx(opts.floor);
   }
 
   /** @returns {boolean} whether the ladder camera currently owns the view. */
@@ -3693,6 +3795,50 @@ export class CameraSystem {
     // anchor uses the live cached player position.
     if (anchor === 'earth') return this._tmpVecA.set(0, 0, 0);
     return this._tmpVecA.copy(this._lastPlayerPos);
+  }
+
+  /**
+   * F3 (HULL CAM) inspect side-effect absorption (T6). The five side-effects
+   * of the OVERVIEW zoom Schmitt's _setInspectZoom(true) become
+   * the 3/4 down-hump's ARRIVAL effects and their inverses the up-hump's
+   * DEPARTURE effects, keyed on the engaged ladder frame's floor id:
+   *   1. FOV narrow — no code here: the ride engine already lerps to F3's
+   *      contract fov 35 and restores F4's 55 on the up-hump.
+   *   2. Dynamic near-plane — no code here: SceneManager's per-floor render
+   *      block applies/restores F3's camera.near via setLadderFloorFidelity.
+   *   3. Background dim — the _applyInspectDim path, both directions.
+   *   4. Hull overlays — INSPECTION_TOGGLE + INSPECT_HULL_OUTLINE events, so
+   *      MotherCallouts and the hull outline keep working UNMODIFIED.
+   *   5. Onboarding — MOTHER_INSPECTION_ENGAGED on each F3 arrival (mirrors
+   *      _setInspectZoom, which fires it on every engage, never exit) + the
+   *      one-shot SHOW_NOTIFICATION learning beat (the shared
+   *      orbit.inspectTaught flag, so zoom-path and ladder-path teach once).
+   * Idempotent per state flip. While the ladder is engaged the shipped
+   * 12/18 m Schmitt is bypassed (_evaluateInspectZoom), so the F3/F4
+   * wall/entry pair fully replaces it. Flag-off: the ladder never engages →
+   * never called → shipped behavior byte-identical.
+   * @param {number|null|undefined} floor - engaged floor id (null = disengage)
+   * @private
+   */
+  _ladderApplyInspectFx(floor) {
+    const lc = this._ladderCam;
+    const on = (floor === 3);
+    if (on === lc.inspectFxActive) return;
+    lc.inspectFxActive = on;
+    if (on) {
+      this._applyInspectDim(true);
+      eventBus.emit(Events.INSPECTION_TOGGLE, { subject: 'mother', targetId: null });
+      eventBus.emit(Events.INSPECT_HULL_OUTLINE, { visible: true });
+      eventBus.emit(Events.MOTHER_INSPECTION_ENGAGED, {});
+      if (!this.orbit.inspectTaught) {
+        this.orbit.inspectTaught = true;
+        eventBus.emit(Events.SHOW_NOTIFICATION, { text: '🔍 INSPECTION. Overlays active' });
+      }
+    } else {
+      this._applyInspectDim(false);
+      eventBus.emit(Events.INSPECTION_TOGGLE, { subject: 'mother' });
+      eventBus.emit(Events.INSPECT_HULL_OUTLINE, { visible: false });
+    }
   }
 
   /**
@@ -3725,6 +3871,35 @@ export class CameraSystem {
       }
       this._baseFov = lc.fov;
       this.camera.fov = lc.fov;
+
+      // F5/F6 drag-to-rotate (S4): rotate the dolly direction by the
+      // accumulated drag velocities — yaw around the floor's up-frame pole,
+      // pitch around camera-right clamped to ORBIT's pole window — then decay
+      // the velocities (ORBIT momentum: ×damping per frame, snap to 0 below
+      // 1e-5). Incremental per-frame rotations keep F5's MOVING radial
+      // up-frame consistent (each step rotates relative to this frame's up);
+      // the lookAt(anchorPos) below is unchanged. Rides never reach here
+      // (non-riding branch), and ladderStartRide cancels in-flight drags.
+      const dg = lc.drag;
+      if (dg.enabled && (dg.velocityTheta !== 0 || dg.velocityPhi !== 0)) {
+        const up = this._ladderUpFor(lc.anchor, radialDir, lc._dragUp);
+        lc.dir.applyAxisAngle(up, dg.velocityTheta);            // yaw around the pole
+        const right = lc._dragRight.crossVectors(up, lc.dir);
+        if (right.lengthSq() > 1e-12) {
+          right.normalize();
+          // Rotating around `right = up × dir` by +a INCREASES the angle from
+          // the pole (right-hand rule); clamp the resulting polar angle to
+          // ORBIT's gimbal window [0.1, π−0.1] (see _computeOrbit).
+          const angle = Math.acos(Math.max(-1, Math.min(1, lc.dir.dot(up))));
+          const target = Math.max(0.1, Math.min(Math.PI - 0.1, angle + dg.velocityPhi));
+          if (target !== angle) lc.dir.applyAxisAngle(right, target - angle);
+        }
+        lc.dir.normalize();
+        dg.velocityTheta *= dg.damping;
+        dg.velocityPhi *= dg.damping;
+        if (Math.abs(dg.velocityTheta) < 1e-5) dg.velocityTheta = 0;
+        if (Math.abs(dg.velocityPhi) < 1e-5) dg.velocityPhi = 0;
+      }
     }
 
     // Anchor position. During a ride the anchor is LERPED from the source frame's

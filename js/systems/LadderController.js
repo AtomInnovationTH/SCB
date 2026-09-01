@@ -55,6 +55,15 @@ export class LadderController {
    * @param {object} [deps.rail]         - rail indicator: show/hide/refresh(state)/flashDenied(hint, floor)
    * @param {object} [deps.navcom]       - F6 (NAVCOM) content controller (NavcomFloor):
    *   activate/deactivate/isActive/update/planTransfer. Optional — no-op without it.
+   * @param {object} [deps.proxNet]      - F5 (PROX NET) content controller (ProxNetFloor):
+   *   activate/deactivate/isActive/update/approach. Optional — no-op without it.
+   * @param {object} [deps.sdaFloor]     - F7 (SDA) content controller (SdaFloor):
+   *   activate/deactivate/isActive/update/flipLens. Optional — no-op without it.
+   * @param {object} [deps.hullcam]      - F3 (HULL CAM) content controller (HullCamFloor):
+   *   activate/deactivate/isActive/update/lensToggle. Optional — no-op without it.
+   * @param {object} [deps.starfield]    - Starfield: isConstellationsVisible()/
+   *   setConstellationsVisible(bool). Optional — F7 hides the constellation figures
+   *   under the full-screen SDA chart and restores the player's prior on leave.
    * @param {object} [deps.targetReticle]  - TargetReticle: setVisible(bool). Optional —
    *   suppressed on the ship-is-icon floors (F6/F7), restored on floors <= 5 / disengage.
    * @param {object} [deps.dockingReticle] - DockingReticle: setVisible(bool). Optional —
@@ -69,10 +78,18 @@ export class LadderController {
     this._gameState = deps.gameState || null;
     this._rail = deps.rail || null;
     this._navcom = deps.navcom || null;
+    this._proxNet = deps.proxNet || null;
+    this._sdaFloor = deps.sdaFloor || null;
+    this._hullcam = deps.hullcam || null;
+    this._starfield = deps.starfield || null;
     this._targetReticle = deps.targetReticle || null;
     this._dockingReticle = deps.dockingReticle || null;
     /** True while the engaged floor (>= 6) suppresses the aiming reticles. */
     this._reticlesHidden = false;
+    /** True while F7 suppresses the constellation figures (mirrors _reticlesHidden). */
+    this._constellationsHidden = false;
+    /** Player's 6-key visibility captured when F7 hid the figures (restored on leave). */
+    this._constellationsPrior = null;
     this._now = deps.now || (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()));
     // The DEFAULT core (the production path — main.js injects no ladder) honors
     // the dev-phase full-access flag: Constants.LADDER.DEV_FULL_ACCESS (ships
@@ -265,10 +282,15 @@ export class LadderController {
       this._sceneManager.setLadderFloorFidelity(null);
     }
     if (this._navcom && this._navcom.deactivate) this._navcom.deactivate();
+    if (this._proxNet && this._proxNet.deactivate) this._proxNet.deactivate();
+    if (this._sdaFloor && this._sdaFloor.deactivate) this._sdaFloor.deactivate();
+    if (this._hullcam && this._hullcam.deactivate) this._hullcam.deactivate();
     // Restore the reticles the icon floors hid (no-op if not suppressed). On a
     // disengage caused by LEAVING gameplay, the restore resolves to hidden —
     // matching TargetReticle's own GAME_STATE_CHANGE rule (see _setReticlesHidden).
     this._setReticlesHidden(false);
+    // Restore the constellation figures F7 hid (no-op if not suppressed).
+    this._setConstellationsHidden(false);
     if (this._rail && this._rail.hide) this._rail.hide();
   }
 
@@ -364,10 +386,14 @@ export class LadderController {
   /**
    * Consume the arrival floor's `fidelity.debrisMode` (T1 plumbing) to drive the
    * floor content controllers. F6's 'clusters' mode swaps the full debris meshes
-   * for the NAVCOM cluster-icon + transfer-window costume; every other floor
-   * deactivates it. Also gates the aiming reticles on the icon floors (>= 6).
-   * Every content dep is optional (parallel track — the serial track injects
-   * NavcomFloor + the reticles); absent deps make each part a no-op. @private
+   * for the NAVCOM cluster-icon + transfer-window costume; F5's 'tactical' mode
+   * drives the PROX NET corridor costume; F7's 'massBands' mode drives the SDA
+   * chart (and hides the constellation figures under it); F3 (HULL CAM) keys on
+   * the floor ID — its debrisMode 'full' is shared with F4 and cannot
+   * discriminate. Every other floor deactivates each. Also gates the aiming
+   * reticles on the icon floors (>= 6). Every content dep is optional (parallel
+   * track — the serial track injects the floors + the reticles); absent deps
+   * make each part a no-op. @private
    */
   _applyFloorContent(floor) {
     // Reticle gating (F6/F7 'ship-to-icon' floors): the target + docking
@@ -375,16 +401,44 @@ export class LadderController {
     // hide while the engaged floor is >= 6 and restore on floors <= 5 (and on
     // disengage) — mirroring the navcom activate/deactivate pattern below.
     // Keyed on the floor number, not debrisMode: F7 ('massBands') must suppress
-    // too, while its costume owner (M4) is not landed yet. Independent of the
-    // navcom dep so the reticle deps work standalone.
+    // too. Independent of the content deps so the reticle deps work standalone.
     this._setReticlesHidden(floor >= 6);
-    if (!this._navcom) return;
     const f = FloorContract.FLOORS[floor - 1];
-    const clusters = !!(f && f.fidelity && f.fidelity.debrisMode === 'clusters');
-    if (clusters) {
-      if (this._navcom.activate) this._navcom.activate();
-    } else if (this._navcom.deactivate) {
-      this._navcom.deactivate();
+    if (this._navcom) {
+      const clusters = !!(f && f.fidelity && f.fidelity.debrisMode === 'clusters');
+      if (clusters) {
+        if (this._navcom.activate) this._navcom.activate();
+      } else if (this._navcom.deactivate) {
+        this._navcom.deactivate();
+      }
+    }
+    // F5 (PROX NET): the arrival floor's debrisMode 'tactical' drives the
+    // ProxNetFloor costume — same activate/deactivate pattern as navcom.
+    if (this._proxNet) {
+      const tactical = !!(f && f.fidelity && f.fidelity.debrisMode === 'tactical');
+      if (tactical) {
+        if (this._proxNet.activate) this._proxNet.activate();
+      } else if (this._proxNet.deactivate) {
+        this._proxNet.deactivate();
+      }
+    }
+    // F7 (SDA): 'massBands' drives the full-screen chart; the constellation
+    // figures hide under it (screen-space chart — the star figures would read
+    // as chart strokes) and restore on any other floor / disengage.
+    const massBands = !!(f && f.fidelity && f.fidelity.debrisMode === 'massBands');
+    if (this._sdaFloor) {
+      if (massBands) {
+        if (this._sdaFloor.activate) this._sdaFloor.activate();
+      } else if (this._sdaFloor.deactivate) {
+        this._sdaFloor.deactivate();
+      }
+    }
+    this._setConstellationsHidden(massBands);
+    // F3 (HULL CAM): keyed on FLOOR ID 3 — NOT fidelity.debrisMode, which is
+    // 'full' on BOTH F3 and F4 and cannot discriminate.
+    if (this._hullcam) {
+      if (floor === 3) { if (this._hullcam.activate) this._hullcam.activate(); }
+      else if (this._hullcam.deactivate) this._hullcam.deactivate();
     }
   }
 
@@ -416,13 +470,58 @@ export class LadderController {
   }
 
   /**
-   * Dispatch a per-floor Space verb decision (FloorContract spaceVerb). Only F6's
-   * 'plan-transfer' is wired here (M3); F3/F4/F5/F7 verbs are S4/S5 follow-ups.
+   * Hide/restore the constellation figures for the F7 SDA chart — a mirror of
+   * _setReticlesHidden. Idempotent (guarded on the flag flip); the starfield dep
+   * is optional — absent it this is a pure flag write, byte-identical to the
+   * pre-SDA controller.
+   *
+   * Hide: capture the player's current 6-key visibility ONCE into
+   * _constellationsPrior, then setConstellationsVisible(false).
+   * Restore: put back the captured prior and null it — the player's 6-key
+   * toggle owns the resting state, so F7 never force-shows figures the player
+   * had off (and never strands them hidden after leaving F7 / disengaging).
+   * @private
+   */
+  _setConstellationsHidden(hidden) {
+    if (hidden === this._constellationsHidden) return;
+    this._constellationsHidden = hidden;
+    if (!this._starfield) return;
+    if (hidden) {
+      this._constellationsPrior = this._starfield.isConstellationsVisible
+        ? this._starfield.isConstellationsVisible() : null;
+      if (this._starfield.setConstellationsVisible) {
+        this._starfield.setConstellationsVisible(false);
+      }
+    } else {
+      if (this._constellationsPrior != null && this._starfield.setConstellationsVisible) {
+        this._starfield.setConstellationsVisible(this._constellationsPrior);
+      }
+      this._constellationsPrior = null;
+    }
+  }
+
+  /**
+   * Dispatch a per-floor Space verb decision (FloorContract spaceVerb). Wired:
+   * F6 'plan-transfer' (M3), F5 'approach', F7 'flip-lens', F3 'lens-toggle'
+   * (S4 serial wiring). F4's 'approach-autopilot' remains a follow-up.
    * @private
    */
   _dispatchVerb(verb) {
     if (verb === 'plan-transfer' && this._navcom && this._navcom.planTransfer) {
       this._navcom.planTransfer();
+    }
+    // F5 Space verb (FloorContract.FLOORS[4].spaceVerb): commit the selected
+    // insertion point — ProxNetFloor.approach() → onApproach → autopilot.
+    if (verb === 'approach' && this._proxNet && this._proxNet.approach) {
+      this._proxNet.approach();
+    }
+    // F7 Space verb: flip the SDA chart lens (VALUE ↔ THREAT).
+    if (verb === 'flip-lens' && this._sdaFloor && this._sdaFloor.flipLens) {
+      this._sdaFloor.flipLens();
+    }
+    // F3 Space verb: cycle the HULL CAM lens (overview → per-subsystem detail).
+    if (verb === 'lens-toggle' && this._hullcam && this._hullcam.lensToggle) {
+      this._hullcam.lensToggle();
     }
   }
 

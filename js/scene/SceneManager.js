@@ -731,13 +731,13 @@ export class SceneManager {
       this._ladderDebrisField.setLadderDebrisMode(f.debrisMode);
     }
     if (this._ladderShip) {
-      // Ship-is-icon predicate — keep the THREE sibling gates in lockstep (M3
-      // review): this ship hide, DebrisField.setLadderDebrisMode's debris hide,
-      // and LadderController._applyFloorContent's navcom activation ALL key on
-      // debrisMode === 'clusters' (F6), so the mesh only vanishes where the
-      // chevron replaces it. F7's 'massBands' hide lands WITH its M4 costume —
-      // hiding earlier would strand F7 with no ship and full debris visible.
-      const shipIsIcon = (f.debrisMode === 'clusters');
+      // Ship-is-icon predicate — keep the sibling gates in lockstep (M3 review):
+      // this ship hide, DebrisField.setLadderDebrisMode's debris hide, and
+      // LadderController._applyFloorContent's floor arms. The world ship mesh
+      // vanishes where a costume replaces it: F6 'clusters' (NAVCOM chevron)
+      // and — now that the F7 SDA chart costume has landed (Wave-2 wire) —
+      // F7 'massBands', whose full-screen chart owns the frame.
+      const shipIsIcon = (f.debrisMode === 'clusters' || f.debrisMode === 'massBands');
       this._ladderShip.visible = !shipIsIcon;
     }
   }
