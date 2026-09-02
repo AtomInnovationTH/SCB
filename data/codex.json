@@ -4121,7 +4121,8 @@
         "welcome_cowboy",
         "core_loop",
         "arm_sacrifice",
-        "robotic_arm"
+        "robotic_arm",
+        "pane_discoveries"
       ],
       "i18n": {
         "title": "Tech Level Explained",
@@ -4131,6 +4132,158 @@
       },
       "track": "cowboy_basics",
       "trackOrder": 10
+    },
+    {
+      "id": "pane_comms_log",
+      "category": "PLAYBOOK",
+      "icon": "📻",
+      "startUnlocked": true,
+      "related": [
+        "ground_station_pass",
+        "tdrs_relay",
+        "telemetry"
+      ],
+      "i18n": {
+        "title": "The Comms Log",
+        "shortText": "Houston and your systems talk here. Watch it for warnings and next steps; the serious lines arrive in amber and red.",
+        "fullText": "The log in the top-right corner is your radio. Houston calls out milestones and warnings, your own systems report what they are doing, and the most serious lines arrive in amber or red. When something needs a decision, it is said here first — glance at it whenever the tone of the mission changes. The 7 key grows or shrinks the pane.\n\nReal spacecraft do not chat this freely. A satellite in low orbit sees a given ground station for only a few minutes per pass, so operators pack commands and downlink into short scheduled windows, or route through relay satellites parked high above. Your always-on link is a kindness; the habit of reading the log is exactly what a flight controller would recognize.",
+        "unlockHint": "Reach orbit."
+      }
+    },
+    {
+      "id": "pane_discoveries",
+      "category": "PLAYBOOK",
+      "icon": "💡",
+      "startUnlocked": true,
+      "related": [
+        "pane_upgrade_pin",
+        "tech_level"
+      ],
+      "i18n": {
+        "title": "Discoveries & Skills",
+        "shortText": "Every new technology you touch lands in this list and unlocks its Library page. It is the running record of what flying has taught you.",
+        "fullText": "The DISCOVERIES pane on the left is a running list of the technology you have met so far. Touch a new system in flight — a thruster type, a sensor, a capture tool — and it appears here as the matching Library page unlocks. The counter shows how much of the library your flying has opened; click the header to see the whole skill tree.\n\nThat is the teaching model of this game: nothing is explained before you have seen it work. Real programs run the same direction — flight experience first, then the paperwork. When a row appears here, you did something for the first time. The Library page behind it tells you what that thing really is, and its Tech Level badge says how proven the real version is.",
+        "unlockHint": "Reach orbit."
+      }
+    },
+    {
+      "id": "pane_upgrade_pin",
+      "category": "PLAYBOOK",
+      "icon": "📌",
+      "startUnlocked": true,
+      "related": [
+        "pane_discoveries",
+        "what_10000kg_buys"
+      ],
+      "i18n": {
+        "title": "The Upgrade Pin",
+        "shortText": "Pin an upgrade at the depot and this bar tracks your credits toward it. A goal on screen beats a goal remembered.",
+        "fullText": "Pin an upgrade in the depot and it follows you back into flight as a small gold bar on the left: name, price, and how close your wallet is. When you can afford it, the bar turns green and Houston mentions it once — nothing pops up, nothing interrupts the flying.\n\nIt earns its screen space by answering one question at a glance: what am I saving for? Real missions run on the same discipline. Hardware is budgeted long before it flies, and every kilogram to orbit has a price, so operators always know the next purchase and what it costs. The pin is that habit shrunk to one line.",
+        "unlockHint": "Reach orbit."
+      }
+    },
+    {
+      "id": "pane_conjunction_alerts",
+      "category": "PLAYBOOK",
+      "icon": "⚠️",
+      "startUnlocked": true,
+      "related": [
+        "conjunction_assessment",
+        "iridium_cosmos",
+        "relative_velocity"
+      ],
+      "i18n": {
+        "title": "Conjunction Alerts",
+        "shortText": "A conjunction is a predicted close pass. GREEN informs, YELLOW cautions, RED means act now — real operators get the same call.",
+        "fullText": "A conjunction is a predicted close approach between you and another tracked object. The alert names the object, the time of closest approach (TCA), and the predicted miss distance, tiered GREEN for information, YELLOW for caution, and RED for act-now, with a suggested evasion direction. Only RED takes the center of the screen; the quieter tiers go to the comms log.\n\nThis is lifted almost directly from real operations. Tracking networks screen the catalog and send operators conjunction warnings days ahead, and the International Space Station typically maneuvers when the collision odds get worse than about 1 in 10,000. The 2009 Iridium–Kosmos collision — two intact satellites, neither of which moved — is why nobody ignores these messages anymore.",
+        "unlockHint": "Reach orbit."
+      }
+    },
+    {
+      "id": "pane_space_weather",
+      "category": "PLAYBOOK",
+      "icon": "🌞",
+      "startUnlocked": true,
+      "related": [
+        "geomagnetic_storm",
+        "solar_storm",
+        "south_atlantic_anomaly"
+      ],
+      "i18n": {
+        "title": "Space Weather",
+        "shortText": "Solar storms swell the thin upper air and raise the radiation dose. These badges say the environment itself just changed.",
+        "fullText": "The badges in the top-left corner report the space environment itself: a solar storm, a geomagnetic storm, a radiation spike. While one is showing, expect the environment to push back — more drag, more sensor noise, more risk to electronics — until the badge clears.\n\nSpace weather is real weather. A strong solar storm heats the thin upper atmosphere until it swells outward, multiplying drag on everything in low orbit; one 2022 storm dragged down 38 newly launched Starlink satellites before they could climb to safety. Charged particles also age solar panels and upset unshielded computers, which is why operators watch the Sun the way sailors watch the sky.",
+        "unlockHint": "Reach orbit."
+      }
+    },
+    {
+      "id": "pane_ladder_rail",
+      "category": "PLAYBOOK",
+      "icon": "🪜",
+      "startUnlocked": true,
+      "related": [
+        "pane_debris_chart",
+        "pane_transfer_windows",
+        "pane_tactical_approach"
+      ],
+      "i18n": {
+        "title": "The Ladder Rail",
+        "shortText": "The rail marks how far you have zoomed, floor by floor, plus the time rate. Each floor shows only what makes sense at its scale.",
+        "fullText": "The rail on the right edge is the zoom ladder: each notch is a floor, from the hull close-up at the bottom to the whole-Earth chart at the top. It marks where you are, fills toward the next floor as you scroll, and carries the current time rate — zoomed out, time fast-forwards, and alarms always pull it back to normal speed.\n\nThe ladder obeys a map rule: what gets labeled depends on how far you have zoomed, like house numbers up close and city names far out, never both. Distances and orbits are never bent — only time is compressed, and the rail says so while it happens. If the screen feels calmer as you zoom out, that is the rule working.",
+        "unlockHint": "Reach orbit."
+      }
+    },
+    {
+      "id": "pane_transfer_windows",
+      "category": "PLAYBOOK",
+      "icon": "🕰️",
+      "startUnlocked": true,
+      "related": [
+        "hohmann_transfer",
+        "delta_v",
+        "pane_ladder_rail"
+      ],
+      "i18n": {
+        "title": "Transfer Windows",
+        "shortText": "Orbits are clocks: leaving at the right moment costs far less fuel. This panel counts down the cheap departures to your target.",
+        "fullText": "At the route-planning zoom, this panel reads out the transfer to your chosen cluster: when the next cheap departure window opens, how long the coast lasts, what it costs in delta-v, and whether your tanks can afford it. IMMINENT means the window is about to open — decide now or wait a lap.\n\nOrbits make travel a matter of timing. Because you and the target both circle Earth at different rates, the geometry repeats on a schedule, and burning at the right moment costs a fraction of a brute-force chase. That is the transfer-window logic every real mission planner lives by: wait for the alignment, then spend the fuel once, properly.",
+        "unlockHint": "Reach orbit."
+      }
+    },
+    {
+      "id": "pane_tactical_approach",
+      "category": "PLAYBOOK",
+      "icon": "🧭",
+      "startUnlocked": true,
+      "related": [
+        "rendezvous",
+        "relative_velocity",
+        "pane_ladder_rail"
+      ],
+      "i18n": {
+        "title": "Tactical Approach",
+        "shortText": "Before entering a debris field you pick an insertion point. This panel ranks the options by collision risk and fuel cost.",
+        "fullText": "At the approach zoom, this panel scores your ways into the debris field ahead: three insertion zones, each with a collision risk, how often debris crosses it, and a delta-v price, with the selected zone expanded. It keeps updating as the field drifts and your approach changes.\n\nReal rendezvous works the same careful way. Operators define keep-out zones and approach corridors around anything they close with, and they pick the path that trades fuel against risk rather than the straightest line. Flying into a cloud of uncontrolled objects is exactly when you want the numbers before the burn — that is what this panel is for.",
+        "unlockHint": "Reach orbit."
+      }
+    },
+    {
+      "id": "pane_debris_chart",
+      "category": "PLAYBOOK",
+      "icon": "📊",
+      "startUnlocked": true,
+      "related": [
+        "debris_classification",
+        "trackable_vs_dark",
+        "kessler_syndrome",
+        "pane_ladder_rail"
+      ],
+      "i18n": {
+        "title": "The Debris Chart",
+        "shortText": "Size, mass, tumble, material — the fact sheet of what you are about to grab. Know the junk before you send a daughter after it.",
+        "fullText": "Up close, this pane is the fact sheet of the selected piece: identity, size, mass, tumble rate, and material, drawn as a rotating schematic. It is the pre-capture checklist — a heavy, fast-tumbling slab wants a different tool and a gentler approach than a small aluminum bracket. The 9 key collapses it to one line when you only need the summary.\n\nZoomed all the way out, the same job is done by the whole-Earth chart: instead of one object's shape you see the shape of the whole problem — where the debris bands sit and how crowded each altitude is. Both views answer the operator's first question: what exactly am I dealing with? Real trackers do this daily, fusing radar and telescope data into a catalog of tens of thousands of objects.",
+        "unlockHint": "Reach orbit."
+      }
     },
     {
       "id": "space_radiator",

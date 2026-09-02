@@ -17,6 +17,7 @@ import { CommsPanel } from './hud/CommsPanel.js';
 import { HintTicker } from './hud/HintTicker.js';
 import { NetInventoryPanel } from './hud/NetInventoryPanel.js';
 import { PaneDensity } from './hud/PaneDensity.js';
+import { PaneHelp } from './hud/PaneHelp.js';
 import { pinProgress } from './shopPin.js'; // S1 retention: pinned-upgrade progress math (pure, DOM-free)
  import { DebrisWireframe }   from './DebrisWireframe.js';
  import { DaughterWireframe } from './DaughterWireframe.js';
@@ -614,6 +615,16 @@ export class HUD {
 
     // --- S1 retention: pinned next-upgrade progress widget ---
     this._buildPinWidget();
+
+    // --- Pane help (Wave 4, 08-workbench §11): data-help on every pane header,
+    // ONE delegated handler set (glossaryDom pattern) for hover-tooltip /
+    // click-deep-link / long-press-on-touch. Entries resolve lazily because
+    // setCodexSystem() is wired from main.js after construction.
+    this.paneHelp = new PaneHelp({
+      getEntry: (id) => (this._codexSystem && typeof this._codexSystem.getEntry === 'function')
+        ? this._codexSystem.getEntry(id) : null,
+    });
+    this.paneHelp.install();
   }
 
   /**
@@ -1500,9 +1511,11 @@ export class HUD {
 
   /**
    * F17: Set the CodexSystem reference for unseen entry badge.
+   * Also feeds the pane-help tooltips (data-help → entry shortText).
    * @param {import('../systems/CodexSystem.js').CodexSystem} codexSystem
    */
   setCodexSystem(codexSystem) {
+    this._codexSystem = codexSystem;
     this.statusPanel.setCodexSystem(codexSystem);
   }
 
@@ -2029,11 +2042,23 @@ export class HUD {
     // Header
     const header = panel.querySelector('#hud-conjunction-header');
     if (header) {
-      header.innerHTML = `⚠ CONJUNCTION ALERT <span id="hud-conjunction-help" style="cursor:pointer;opacity:0.7;font-size:11px;margin-left:6px;" title="Open Tech Library">[?]</span>`;
+      header.innerHTML = `⚠ CONJUNCTION ALERT <span id="hud-conjunction-help" style="cursor:pointer;pointer-events:auto;opacity:0.7;font-size:11px;margin-left:6px;" title="What is a conjunction? Open the Library page">[?]</span>`;
       header.style.color = tc.text;
-      // ST-2.1: [?] glyph → open codex to conjunction entry
+      // ST-2.1 → Wave 4 (08-workbench §11): the [?] glyph is a REAL deep link.
+      // It used to emit bare CODEX_OPENED, which nothing routes to the viewer
+      // (and the panel inherited pointer-events:none, so the handler was
+      // unreachable — decorative). Now: stop propagation so the pane-level
+      // data-help click doesn't double-fire, then deep-link the Conjunction
+      // Alerts entry via CODEX_OPEN_ENTRY (main.js → CodexViewerUI.openEntry),
+      // the same path glossary terms use. PaneHelp's rescan enables pointer
+      // events on the panel, which is what makes this glyph clickable at all.
       const helpGlyph = header.querySelector('#hud-conjunction-help');
-      if (helpGlyph) helpGlyph.onclick = () => eventBus.emit(Events.CODEX_OPENED);
+      if (helpGlyph) {
+        helpGlyph.onclick = (e) => {
+          if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
+          eventBus.emit(Events.CODEX_OPEN_ENTRY, { id: 'pane_conjunction_alerts' });
+        };
+      }
     }
 
     // Evasion direction hint

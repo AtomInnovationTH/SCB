@@ -19,7 +19,9 @@ export const Constants = {
   // actual releases.
   // '1003'→'1004': P2 thermal-arc codex batch (20 entries, single-stamp rule —
   // later phases add ZERO codex stamps; P1 ledger §9).
-  DATA_VERSION: '1004',
+  // '1004'→'1005': Wave-4 pane-help PLAYBOOK batch (9 pane_* entries,
+  // docs/ladder/08-workbench.md §11).
+  DATA_VERSION: '1005',
 
   // ============================================================================
   // === INPUT (Delegation 1, 2026-05-31) ===
