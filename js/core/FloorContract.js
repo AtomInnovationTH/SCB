@@ -161,11 +161,15 @@ export const FloorContract = {
       fidelity: { nearField: true, physicsMode: 'realtime', debrisMode: 'full' },
       // Down-hump arrival absorbs the shipped inspect side-effects
       // (CameraSystem._setInspectZoom, see docs/ladder/02-traps.md T6).
-      // F3 single costume (docs/ladder/08-workbench.md §2, landed 2026-09-02):
-      // the DOM blueprint cards + the cyan hull outline ARE the costume;
-      // MotherCallouts' sprite cards retire on F3 (setSuppressed while the
-      // ladder holds the floor). Pinned in test-FloorContract.js.
-      costume: { leave: ['HUD:capture'], arrive: ['BlueprintOverlay', 'HullOutline'], transform: 'lens-split-5m' },
+      // F3 costume = MotherCallouts + the cyan hull outline (owner, playtest
+      // 2026-09-02). The morning's "single costume" note (BlueprintOverlay's
+      // seven title pills, MotherCallouts suppressed) was overturned by the
+      // owner's playtest the same day: the shipped in-world cards — 26 parts in
+      // 8 colour-coded systems, live rows, Library links, clickable — are the
+      // hull floor's costume, and their three zoom bands (SYSTEM / PART /
+      // COMPONENT) realize the 5 m lens split. BlueprintOverlay is shelved as
+      // the refit-index renderer (Wave 5 decides). Pinned in test-FloorContract.js.
+      costume: { leave: ['HUD:capture'], arrive: ['MotherCallouts', 'HullOutline'], transform: 'lens-split-5m' },
       contextPanel: 'inspect-detail',
       spaceVerb: 'lens-toggle',
       labelBudget: 7,

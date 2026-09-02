@@ -1,7 +1,19 @@
 /**
  * BlueprintOverlay.js — the Zoom Ladder F3 (HULL CAM) blueprint callout layer
- * (S4, FloorContract.FLOORS[2], costume.arrive 'BlueprintOverlay' — with the
- * cyan hull outline it IS the F3 workbench costume, 08-workbench §2).
+ * (S4, FloorContract.FLOORS[2]).
+ *
+ * STATUS (owner, playtest 2026-09-02): NO LONGER THE F3 COSTUME. The morning's
+ * "single costume" default (this layer's seven title pills on the hull,
+ * MotherCallouts suppressed) was overturned the same day — parts were not
+ * clickable, four pills pointed at hidden or anchorless spots, the 26 cards
+ * were gone. The F3 costume is MotherCallouts + the cyan hull outline
+ * (FloorContract F3 costume.arrive ['MotherCallouts', 'HullOutline'];
+ * docs/ladder/08-workbench.md §2, 03-plan 2026-09-02 entry). This module is
+ * SHELVED as the refit-index renderer: main.js still constructs HullCamFloor
+ * (which constructs this) but does not inject it into the ladder, so nothing
+ * shows it; the Wave-5 REFIT pane decides whether it renders again. No
+ * behavior in this file changed — everything below describes the module as
+ * built.
  *
  * F3 is the close-inspection floor: this layer draws the "blueprint" costume —
  * labeled subsystem callouts (the seven-entry D9 manifest,
