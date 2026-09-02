@@ -1,6 +1,7 @@
 /**
  * BlueprintOverlay.js — the Zoom Ladder F3 (HULL CAM) blueprint callout layer
- * (S4, FloorContract.FLOORS[2], costume.arrive 'HullOverlays' family).
+ * (S4, FloorContract.FLOORS[2], costume.arrive 'BlueprintOverlay' — with the
+ * cyan hull outline it IS the F3 workbench costume, 08-workbench §2).
  *
  * F3 is the close-inspection floor: this layer draws the "blueprint" costume —
  * labeled subsystem callouts (ENGINEERING / POWER / COMMS / THERMAL / CARGO,

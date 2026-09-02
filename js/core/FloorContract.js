@@ -161,7 +161,11 @@ export const FloorContract = {
       fidelity: { nearField: true, physicsMode: 'realtime', debrisMode: 'full' },
       // Down-hump arrival absorbs the shipped inspect side-effects
       // (CameraSystem._setInspectZoom, see docs/ladder/02-traps.md T6).
-      costume: { leave: ['HUD:capture'], arrive: ['DockingReticle', 'MotherCallouts', 'HullOverlays'], transform: 'lens-split-5m' },
+      // F3 single costume (docs/ladder/08-workbench.md §2, landed 2026-09-02):
+      // the DOM blueprint cards + the cyan hull outline ARE the costume;
+      // MotherCallouts' sprite cards retire on F3 (setSuppressed while the
+      // ladder holds the floor). Pinned in test-FloorContract.js.
+      costume: { leave: ['HUD:capture'], arrive: ['BlueprintOverlay', 'HullOutline'], transform: 'lens-split-5m' },
       contextPanel: 'inspect-detail',
       spaceVerb: 'lens-toggle',
       labelBudget: 7,
