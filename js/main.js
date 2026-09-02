@@ -1422,11 +1422,6 @@ async function init() {
     // transient (never persisted), so the 5-key preference owns the resting
     // state on leave/disengage.
     cityLabels,
-    // F3 single costume (08-workbench §2): BlueprintOverlay + the hull outline
-    // ARE the costume, so MotherCallouts' sprite cards are suppressed while the
-    // engaged floor is 3 — the same transient contract as cityLabels. The
-    // shipped inspect Schmitt never touches this gate (byte-identical flag-off).
-    motherCallouts,
     // Reticle gating (F6/F7 ship-is-icon floors): the controller hides the
     // aiming reticles on floors >= 6 and restores them on <= 5 / disengage.
     // Optional deps — inert while LADDER.ENABLED is false (never engaged).

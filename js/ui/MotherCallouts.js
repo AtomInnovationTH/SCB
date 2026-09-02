@@ -400,14 +400,16 @@ export class MotherCallouts {
 
     this._viewInspect = false;
     this._zoomInspect = false;
-    // Zoom Ladder F3 single costume (docs/ladder/08-workbench.md §2 "F3
-    // costume"): a TRANSIENT gate mirroring CityLabels.setSuppressed — while
-    // the ladder is on F3 the BlueprintOverlay DOM cards + the cyan hull outline
-    // ARE the costume and these sprite cards retire. Never persisted; the
-    // inspection signals (CAMERA_VIEW_CHANGE / INSPECT_HULL_OUTLINE) keep owning
-    // the resting state, so clearing it restores exactly what they say. The
-    // shipped Schmitt path never calls setSuppressed → `_suppressed` stays false
-    // → `_applyActive()` reduces to the pre-ladder `viewInspect || zoomInspect`.
+    // A general TRANSIENT show/hide gate mirroring CityLabels.setSuppressed:
+    // active = (viewInspect || zoomInspect) && !suppressed. Never persisted;
+    // the inspection signals (CAMERA_VIEW_CHANGE / INSPECT_HULL_OUTLINE) keep
+    // owning the resting state, so clearing it restores exactly what they say.
+    // NOT used by the Zoom Ladder since 2026-09-02: the morning's "F3 single
+    // costume" suppressed these cards on the hull floor and the owner's
+    // playtest overturned it the same day — MotherCallouts IS the F3 costume
+    // (docs/ladder/08-workbench.md §2). Nothing calls setSuppressed in
+    // production today; with `_suppressed` false `_applyActive()` reduces to
+    // the pre-ladder `viewInspect || zoomInspect`.
     this._suppressed = false;
     this._onViewChange = ({ view } = {}) => {
       this._viewInspect = (view === 'INSPECTION');
@@ -421,15 +423,17 @@ export class MotherCallouts {
     eventBus.on(Events.INSPECT_HULL_OUTLINE, this._onHullOutline);
   }
 
-  /** @returns {boolean} true while the ladder's F3 costume suppresses the sprite cards. */
+  /** @returns {boolean} true while the transient gate hides the sprite cards (unused in production today). */
   isSuppressed() { return this._suppressed; }
 
   /**
-   * Transient show/hide gate for the Zoom Ladder's F3 (HULL CAM) costume —
-   * BlueprintOverlay owns the callout grammar there, so the in-world sprite
-   * cards hide while the hull outline (INSPECT_HULL_OUTLINE) keeps working
-   * unmodified. Like CityLabels.setSuppressed this NEVER persists and never
-   * touches the inspection flags: `active = inspecting && !suppressed`.
+   * General transient show/hide gate (CityLabels.setSuppressed parity): hides
+   * the in-world sprite cards while the hull outline (INSPECT_HULL_OUTLINE)
+   * keeps working unmodified. NEVER persists and never touches the inspection
+   * flags: `active = inspecting && !suppressed`. Not used by the ladder since
+   * 2026-09-02 (the F3 "single costume" was overturned by playtest —
+   * MotherCallouts is the F3 costume); nothing calls it in production today.
+   * Kept as the house gate for any future per-floor suppression.
    * @param {boolean} v
    */
   setSuppressed(v) {

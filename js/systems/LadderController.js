@@ -80,11 +80,6 @@ export class LadderController {
    *   clutter over the altitude bands). Suppression is transient by contract
    *   (CityLabels.setSuppressed never persists), so the player's 5-key
    *   preference owns the resting state on leave/disengage.
-   * @param {object} [deps.motherCallouts] - MotherCallouts: setSuppressed(bool). Optional —
-   *   F3's single costume (08-workbench §2): BlueprintOverlay + the cyan hull
-   *   outline ARE the costume, so the in-world sprite cards are suppressed while
-   *   the engaged floor is 3 (transient gate, same contract as cityLabels; the
-   *   INSPECT_HULL_OUTLINE signal keeps firing so the outline stays).
    * @param {object} [deps.targetReticle]  - TargetReticle: setVisible(bool). Optional —
    *   suppressed on the ship-is-icon floors (F6/F7), restored on floors <= 5 / disengage.
    * @param {object} [deps.dockingReticle] - DockingReticle: setVisible(bool). Optional —
@@ -108,7 +103,6 @@ export class LadderController {
     this._sfx = deps.sfx || null;
     this._starfield = deps.starfield || null;
     this._cityLabels = deps.cityLabels || null;
-    this._motherCallouts = deps.motherCallouts || null;
     this._targetReticle = deps.targetReticle || null;
     this._dockingReticle = deps.dockingReticle || null;
     /** True while the engaged floor (>= 6) suppresses the aiming reticles. */
@@ -119,8 +113,6 @@ export class LadderController {
     this._constellationsPrior = null;
     /** True while F7 suppresses the city/landmark pills (mirrors _reticlesHidden). */
     this._cityLabelsHidden = false;
-    /** True while F3 suppresses MotherCallouts' sprite cards (mirrors _cityLabelsHidden). */
-    this._motherCalloutsHidden = false;
     this._now = deps.now || (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()));
     // The DEFAULT core (the production path — main.js injects no ladder) honors
     // the dev-phase full-access flag: Constants.LADDER.DEV_FULL_ACCESS (ships
@@ -293,11 +285,9 @@ export class LadderController {
     this._engaged = true;
     const s = this._ladder.getState();
     const frame = this._frame(s.floor, s.z01);
-    this._hullCostumeBeforeCamera(s.floor);
     if (this._cameraSystem && this._cameraSystem.ladderEngage) {
       this._cameraSystem.ladderEngage(frame);
     }
-    this._hullCostumeAfterCamera(s.floor);
     this._applyFidelity(s.floor);
     this._applyFloorContent(s.floor);
     if (this._rail && this._rail.show) this._rail.show();
@@ -309,10 +299,6 @@ export class LadderController {
     if (this._cameraSystem && this._cameraSystem.ladderDisengage) {
       this._cameraSystem.ladderDisengage();
     }
-    // F3 costume: clear the sprite-card suppression AFTER the camera reverted
-    // the inspect effects (its INSPECT_HULL_OUTLINE false already landed), so
-    // the shipped Schmitt resumes with the cards free to follow it.
-    this._hullCostumeAfterCamera(null);
     // Clearing the fidelity request makes SceneManager.applyTier() byte-identical
     // to the shipped path again (no re-assertion).
     if (this._sceneManager && this._sceneManager.setLadderFloorFidelity) {
@@ -421,7 +407,6 @@ export class LadderController {
       if (isCross && this._sfx && this._sfx.onUndoWindow) this._sfx.onUndoWindow(true);
       this._refreshRail();
     };
-    this._hullCostumeBeforeCamera(toFloor);
     if (this._cameraSystem && this._cameraSystem.ladderStartRide) {
       this._cameraSystem.ladderStartRide({ ...frame, rideMs, onDone: done });
     } else {
@@ -429,7 +414,6 @@ export class LadderController {
       // the core never wedges in `riding`.
       done();
     }
-    this._hullCostumeAfterCamera(toFloor);
   }
 
   /** Push a floor's fidelity block to SceneManager (T1). @private */
@@ -600,42 +584,6 @@ export class LadderController {
     this._cityLabelsHidden = hidden;
     if (this._cityLabels && this._cityLabels.setSuppressed) {
       this._cityLabels.setSuppressed(hidden);
-    }
-  }
-
-  /**
-   * F3 single costume (docs/ladder/08-workbench.md §2 "F3 costume"): while the
-   * engaged floor is 3, BlueprintOverlay's DOM cards + the cyan hull outline
-   * ARE the costume, so MotherCallouts' in-world sprite cards are suppressed
-   * (a transient gate with the cityLabels contract — the inspection signals
-   * keep owning the resting state; the shipped Schmitt path never calls it).
-   *
-   * ORDER IS SEMANTIC. The camera's F3 arrival effect is the very signal that
-   * activates the cards (INSPECT_HULL_OUTLINE {visible:true}, which must keep
-   * firing — the outline is part of the costume), so the suppression must be
-   * set BEFORE the camera applies F3's arrival effects and cleared AFTER it
-   * applies the departure inverses; otherwise the cards flash active for one
-   * synchronous call (pointer attach/detach, CALLOUT_BAND_CHANGE churn, the
-   * guided-tour one-shot burned). Hence a before/after pair around every
-   * camera call in _engage / _startRide, and after-only in _disengage.
-   * Idempotent; the dep is optional (absent → pure flag write).
-   * @private
-   */
-  _hullCostumeBeforeCamera(floor) {
-    if (floor === 3) this._setMotherCalloutsHidden(true);
-  }
-
-  /** @private See _hullCostumeBeforeCamera. `null` (disengage) clears. */
-  _hullCostumeAfterCamera(floor) {
-    if (floor !== 3) this._setMotherCalloutsHidden(false);
-  }
-
-  /** @private Idempotent flag flip → MotherCallouts.setSuppressed (optional dep). */
-  _setMotherCalloutsHidden(hidden) {
-    if (hidden === this._motherCalloutsHidden) return;
-    this._motherCalloutsHidden = hidden;
-    if (this._motherCallouts && this._motherCallouts.setSuppressed) {
-      this._motherCallouts.setSuppressed(hidden);
     }
   }
 
