@@ -60,7 +60,17 @@ const FLOOR_COUNT = FloorContract.FLOORS.length;
 
 /** Field-tunable knobs (overridable, not forked — window.__TOUCH_TUNE). */
 export const TOUCH_TUNE = {
-  pinchGain: 1.6,     // px of wheel deltaY per px of pinch-distance change
+  // px of wheel deltaY per px of pinch-distance change. Calibrated 2026-09-02
+  // to EQUAL WheelRouter.WHEEL_TUNE.pinchGain (pinned in test-TouchControls):
+  // glass and trackpad pinches must produce the same notch rate per px, because
+  // the ladder's hump grammar (CHARGE_THRESHOLD 1.2 × 1.6 inbound, CHARGE_TAU
+  // 250 ms, MIN_SPAN 200 ms, FLICK_MIN_MAG) was tuned on the ctrl-pinch path.
+  // At the earlier 1.6 a typical 200 px glass pinch moved z01 by ~0.13 (three
+  // pinches to reach a wall) and at the wall its charge peaked at ~0.67 of the
+  // inbound threshold — the iPad could never cross toward the hull ("stuck on
+  // F4"). At 4.0 one pinch flicks to the wall and the next crosses, both
+  // directions, every floor (headless emulation, docs/ladder/08-workbench.md).
+  pinchGain: 4.0,
   pinchMaxStepPx: 240, // per-event clamp (≤ 2.4 notches; router caps mag at 4)
   pinchMinStepPx: 1,   // ignore sub-px jitter
   idleFadeMs: 4000,    // controls fade (never vanish) after this idle time
