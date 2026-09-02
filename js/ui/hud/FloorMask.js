@@ -20,9 +20,10 @@
  * attribute whose CSS `!important` beats every inline `display` write from
  * view-switch / update code, and the pane's own keys (7/8/9/0, the density
  * `+`) already clear that attribute — so there is exactly ONE visibility bit
- * per pane and every party composes on it. The one §4 pane with no rung
- * (the debris-targeting reticle canvas) gets a mask-owned attribute
- * (`data-floor-gone`) with the same `!important` discipline.
+ * per pane and every party composes on it. The §4 panes with no rung of
+ * their own (the debris-targeting reticle canvas; since 2026-09-02 evening the
+ * hint-ticker strip) get a mask-owned attribute (`data-floor-gone`) with the
+ * same `!important` discipline.
  *
  * D5 (per-floor player memory — "rooms you can rearrange"): on every floor
  * change the mask first CAPTURES the departing floor's live pane visibility
@@ -97,6 +98,16 @@ export const REDUCED_CROSSFADE_MS = 200;
  * violate D7; the mask's 'reticles' pane touches ONLY the targeting-bracket
  * canvas), and the 'skylabels'/'craft' world rungs (scene objects, owned by
  * their own floor systems — the map rule here governs PANES).
+ *
+ * 'hints' (2026-09-02 evening, owner): the bottom-screen HintTicker strip —
+ * onboarding beats ("Launch net (N)"), scan/lasso verbs, the codex ack chip.
+ * Every chip it carries teaches or acknowledges the FLYING view, and in the F3
+ * restore witnesses the tease_lock beat sat over the hull. Same shape as the
+ * reticles pane: an ATTRIBUTE pane on the strip element only (the density
+ * 'score' rung bundles the strip with the score panel for the 0-key
+ * convenience — that rung is never driven, and the score panel itself is never
+ * touched, so D7 holds). The ticker keeps its items and timers while hidden;
+ * whatever is still alive reappears on the next floor.
  */
 export const MASK_PANES = Object.freeze({
   targets:     Object.freeze({ rung: 'targets',     els: Object.freeze(['#hud-targets-panel']),      memory: true }),
@@ -107,6 +118,7 @@ export const MASK_PANES = Object.freeze({
   mother:      Object.freeze({ rung: 'mother',      els: Object.freeze(['#hud-mother-panel']),        memory: true }),
   arms:        Object.freeze({ rung: 'arms',        els: Object.freeze(['#hud-arms-panel']),          memory: true }),
   reticles:    Object.freeze({ rung: null,          els: Object.freeze(['#reticle-canvas']),          memory: false }),
+  hints:       Object.freeze({ rung: null,          els: Object.freeze(['#hud-hint-ticker']),         memory: false }),
 });
 
 /**
@@ -137,31 +149,38 @@ export const ALWAYS_ON = Object.freeze([
  *                                        aid at the hull, and its top-left slot is
  *                                        exactly where the left callout rail
  *                                        paints; skill toasts land regardless).
+ *                                        The hint ticker goes too (same evening:
+ *                                        its chips teach the flying view — the
+ *                                        tease_lock "Launch net (N)" beat sat over
+ *                                        the hull; it is back on F4 with whatever
+ *                                        is still alive).
  *   F4 flying view    (capture):        everything shipped — the home floor.
  *   F5 approach view  (insertion):      corner orb + daughters; lists go.
  *   F6 route planning (transfer):       daughters faint (out flying); rest go.
- *   F7 whole-Earth chart (survey):      chart + score + alerts only.
+ *   F7 whole-Earth chart (survey):      chart + score + alerts only (the hint
+ *                                        ticker stays shown on F5–F7 for now —
+ *                                        only F3 was decided).
  */
 export const DEFAULT_ROOMS = Object.freeze({
   3: Object.freeze({
     targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'gone',
-    pin: 'gone', mother: 'gone', arms: 'gone', discoveries: 'gone',
+    pin: 'gone', mother: 'gone', arms: 'gone', discoveries: 'gone', hints: 'gone',
   }),
   4: Object.freeze({
     targets: 'shown', debris: 'shown', navsphere: 'shown', reticles: 'shown',
-    pin: 'shown', mother: 'shown', arms: 'shown', discoveries: 'shown',
+    pin: 'shown', mother: 'shown', arms: 'shown', discoveries: 'shown', hints: 'shown',
   }),
   5: Object.freeze({
     targets: 'gone', debris: 'gone', navsphere: 'shown', reticles: 'shown',
-    pin: 'gone', mother: 'gone', arms: 'shown', discoveries: 'gone',
+    pin: 'gone', mother: 'gone', arms: 'shown', discoveries: 'gone', hints: 'shown',
   }),
   6: Object.freeze({
     targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'gone',
-    pin: 'gone', mother: 'gone', arms: 'faint', discoveries: 'gone',
+    pin: 'gone', mother: 'gone', arms: 'faint', discoveries: 'gone', hints: 'shown',
   }),
   7: Object.freeze({
     targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'gone',
-    pin: 'gone', mother: 'gone', arms: 'gone', discoveries: 'gone',
+    pin: 'gone', mother: 'gone', arms: 'gone', discoveries: 'gone', hints: 'shown',
   }),
 });
 

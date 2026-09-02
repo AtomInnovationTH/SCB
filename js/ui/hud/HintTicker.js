@@ -144,6 +144,11 @@ export class HintTicker {
     if (!_hasDOM() || !this._container) return;
     const T = _tuning();
     const strip = document.createElement('div');
+    // Zoom Ladder (FloorMask, 08-workbench §4): on the F3 hull floor the mask
+    // sets `data-floor-gone` on this strip (display:none !important) and clears
+    // it on the next floor — the ticker itself never knows; items and timers
+    // keep running and whatever is still alive reappears. The density 'score'
+    // rung's `data-density-hidden` is the other, independent bit on this node.
     strip.id = 'hud-hint-ticker';
     strip.style.cssText = [
       'position:fixed',
