@@ -110,6 +110,23 @@ export class TimeAuthority {
   }
 
   /**
+   * D10 calm-cap rule (docs/ladder/08-workbench.md §1, 00-spec §7: "time
+   * settles to 1× while a workbench pane is open"). Applied to the per-frame
+   * warp target AFTER ladderTargetCap: an open Library/REFIT pane clamps the
+   * cap to 1× (nobody reads at 20×) — the same shape as the danger clamp in
+   * update(), so it never RAISES a cap (a cap-0 floor stays paused; never a
+   * full pause here — only the depot pauses). Pure; no consumer until the
+   * Wave-5 panes exist (the hub-serial session wires the pane-open signal,
+   * stubbed false until then).
+   * @param {number} floorCap - the cap from ladderTargetCap (current/hold floor)
+   * @param {boolean} paneOpen - a workbench pane (REFIT / TECH LIBRARY) is open
+   * @returns {number} the cap to feed `update({ targetCap })`
+   */
+  static calmCap(floorCap, paneOpen) {
+    return paneOpen ? Math.min(1, floorCap) : floorCap;
+  }
+
+  /**
    * @param {object} [opts]
    * @param {number} [opts.rampUpTauMs=400]   - exponential τ ramping warp UP (gentle auto-warp drift)
    * @param {number} [opts.rampDownTauMs=120] - exponential τ ramping warp DOWN (fast safety / down-crossing pre-ramp)
