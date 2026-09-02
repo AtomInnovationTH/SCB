@@ -917,7 +917,15 @@ async function init() {
         }
       } catch (_e) { /* context is best-effort */ }
       const hasTarget = !!(targetSelector && targetSelector.getActiveTarget && targetSelector.getActiveTarget());
-      return { trackedContacts, nearestDebrisM, hasTarget, targetOutOfRange: _onboardingTargetOutOfRange };
+      // Zoom Ladder (owner, 2026-09-02 evening): away from the flying view
+      // (F3 hull / F5–F7 icon floors) the player is exploring, not stuck —
+      // the Director defers its stall escalation and ignores ladder inputs.
+      // ladderController is constructed later in boot; read live, guarded.
+      let ladderAway = false;
+      try {
+        ladderAway = !!(ladderController && ladderController.isActive() && ladderController.currentFloor() !== 4);
+      } catch (_e) { /* best-effort */ }
+      return { trackedContacts, nearestDebrisM, hasTarget, targetOutOfRange: _onboardingTargetOutOfRange, ladderAway };
     },
   });
 

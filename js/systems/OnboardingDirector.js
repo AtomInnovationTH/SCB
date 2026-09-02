@@ -217,7 +217,10 @@ export class OnboardingDirector {
    *                                             we keep our own storage key)
    * @param {Function} [deps.contextProvider]  — returns live game context for
    *   conditional beats: { trackedContacts:number, nearestDebrisM:number|null,
-   *   hasTarget:boolean }. Optional; beats degrade gracefully without it.
+   *   hasTarget:boolean, targetOutOfRange?:boolean, ladderAway?:boolean }.
+   *   `ladderAway` (2026-09-02): true while the Zoom Ladder holds a floor other
+   *   than the flying view (F4) — the stall escalation defers and ladder inputs
+   *   don't count as unrelated. Optional; beats degrade gracefully without it.
    */
   constructor(deps = {}) {
     this._eventBus = deps.eventBus;
@@ -1036,9 +1039,43 @@ export class OnboardingDirector {
     return !!(this._guidance && typeof this._guidance.isMinimal === 'function' && this._guidance.isMinimal());
   }
 
+  /**
+   * @private Zoom Ladder (owner, 2026-09-02 evening): is the player AWAY from
+   * the flying view — riding the ladder on the F3 hull floor or the F5–F7
+   * icon floors? Every onboarding beat lives at the flying view (F4), so time
+   * spent inspecting the hull or reading the chart is exploring, not being
+   * stuck: the stall escalation (idle clock + unrelated-input counter) must
+   * not fire there. Read from the contextProvider's `ladderAway` flag (main.js
+   * wires `ladderController.isActive() && currentFloor() !== 4`); absent
+   * provider/flag → false, i.e. the shipped behaviour, byte-identical.
+   * @returns {boolean}
+   */
+  _ladderAway() {
+    if (!this._context) return false;
+    try {
+      const ctx = this._context();
+      return !!(ctx && ctx.ladderAway);
+    } catch (_e) {
+      return false;
+    }
+  }
+
   _escalate(beat) {
     if (!this._active || this._active.beat.id !== beat.id) return;
     if (this._active.escalated) return;
+    // Away on the ladder (F3 hull / F5–F7): not a stall — defer. The idle
+    // clock restarts for a full window so the "you look stuck" card can only
+    // land after IDLE_ESCALATION_MS of the player actually being back at the
+    // flying view with the beat still unsatisfied. (Real timers only: the
+    // synchronous test fallback would recurse.)
+    if (this._ladderAway()) {
+      if (beat.escalationText && typeof setTimeout === 'function') {
+        if (this._active.idleTimer != null && typeof clearTimeout === 'function') clearTimeout(this._active.idleTimer);
+        const idleMs = Constants.ONBOARDING?.IDLE_ESCALATION_MS || 15000;
+        this._active.idleTimer = this._setTimeout(() => this._escalate(beat), idleMs);
+      }
+      return;
+    }
     this._active.escalated = true;
     // A stall is a struggle signal — let the GuidanceDirector re-escalate one
     // tier so a player who quietly de-escalated then got stuck gets help back.
@@ -1091,6 +1128,10 @@ export class OnboardingDirector {
     // Aim-before-launch: freeze the counter during the auto-rotation slew so
     // repeated N/D presses (the beat's own action, pre-fire) don't escalate.
     if (this._aimActive) return;
+    // Zoom Ladder: riding away from the flying view (pinch/scroll to the hull
+    // or the chart) emits CAMERA_ZOOM_INPUT / MOTHER_INSPECTION_ENGAGED — that
+    // is exploring, not fumbling the beat's key. Don't count it.
+    if (this._ladderAway()) return;
     this._active.unrelatedInputs++;
     const threshold = Constants.ONBOARDING?.UNRELATED_INPUT_THRESHOLD || 6;
     if (this._active.unrelatedInputs > threshold) {

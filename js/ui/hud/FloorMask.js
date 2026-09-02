@@ -157,9 +157,9 @@ export const ALWAYS_ON = Object.freeze([
  *   F4 flying view    (capture):        everything shipped — the home floor.
  *   F5 approach view  (insertion):      corner orb + daughters; lists go.
  *   F6 route planning (transfer):       daughters faint (out flying); rest go.
- *   F7 whole-Earth chart (survey):      chart + score + alerts only (the hint
- *                                        ticker stays shown on F5–F7 for now —
- *                                        only F3 was decided).
+ *   F7 whole-Earth chart (survey):      chart + score + alerts only.
+ *   The hint ticker is gone on every floor but F4 (owner, 2026-09-02 evening:
+ *   "same clean-up" for the far floors) — its chips teach the flying view.
  */
 export const DEFAULT_ROOMS = Object.freeze({
   3: Object.freeze({
@@ -172,15 +172,15 @@ export const DEFAULT_ROOMS = Object.freeze({
   }),
   5: Object.freeze({
     targets: 'gone', debris: 'gone', navsphere: 'shown', reticles: 'shown',
-    pin: 'gone', mother: 'gone', arms: 'shown', discoveries: 'gone', hints: 'shown',
+    pin: 'gone', mother: 'gone', arms: 'shown', discoveries: 'gone', hints: 'gone',
   }),
   6: Object.freeze({
     targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'gone',
-    pin: 'gone', mother: 'gone', arms: 'faint', discoveries: 'gone', hints: 'shown',
+    pin: 'gone', mother: 'gone', arms: 'faint', discoveries: 'gone', hints: 'gone',
   }),
   7: Object.freeze({
     targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'gone',
-    pin: 'gone', mother: 'gone', arms: 'gone', discoveries: 'gone', hints: 'shown',
+    pin: 'gone', mother: 'gone', arms: 'gone', discoveries: 'gone', hints: 'gone',
   }),
 });
 
