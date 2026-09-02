@@ -129,7 +129,14 @@ export const ALWAYS_ON = Object.freeze([
  * deferred 7→5 contract change) fall back to all-'shown' (full cockpit under
  * their DOM overlays). Edit per D5 as you play — player memory wins.
  *
- *   F3 ship close-up  (inspect/refit):  hull is the index; panes clear out.
+ *   F3 ship close-up  (inspect/refit):  hull is the index; EVERY pane clears
+ *                                        out — discoveries too (owner, 2026-09-02
+ *                                        evening, from the restore witnesses: the
+ *                                        skills it lists teach the flying view,
+ *                                        MotherCallouts' cards are the learning
+ *                                        aid at the hull, and its top-left slot is
+ *                                        exactly where the left callout rail
+ *                                        paints; skill toasts land regardless).
  *   F4 flying view    (capture):        everything shipped — the home floor.
  *   F5 approach view  (insertion):      corner orb + daughters; lists go.
  *   F6 route planning (transfer):       daughters faint (out flying); rest go.
@@ -138,7 +145,7 @@ export const ALWAYS_ON = Object.freeze([
 export const DEFAULT_ROOMS = Object.freeze({
   3: Object.freeze({
     targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'gone',
-    pin: 'gone', mother: 'gone', arms: 'gone', discoveries: 'shown',
+    pin: 'gone', mother: 'gone', arms: 'gone', discoveries: 'gone',
   }),
   4: Object.freeze({
     targets: 'shown', debris: 'shown', navsphere: 'shown', reticles: 'shown',
