@@ -27,6 +27,17 @@
  *     is HOSTED and the ladder is engaged, so PgUp/PgDn/I reach the ladder's
  *     own bindings.
  *
+ * Deep link (Wave 4, 08-workbench D1/D2 — "the library is a tool that opens
+ * FROM what you clicked"): the F3 workbench focus persists across floors, so
+ * riding down to the library floor lands on THAT part's page. activate() takes
+ * an optional `{ entryId }` (explicit deep link) and the constructor an optional
+ * `getSubject` getter (main.js wires hullcamFloor.getFocusedSubsystem — the
+ * focused manifest subsystem, whose `codexId` is the link). Order pinned:
+ * host → show → openEntry — the viewer is hosted/visible before the entry
+ * opens, so a re-entrant close during openEntry still routes through the host.
+ * No entryId + no subject (or a subject without a codexId) ⇒ byte-identical to
+ * the plain host + show.
+ *
  * Every dep is optional/injected; absent deps make every method a byte-identical
  * no-op (parallel-track law). No DOM, no THREE, no clock — pure orchestration.
  */
@@ -35,15 +46,21 @@ export class ArchiveFloor {
   /**
    * @param {object} [deps]
    * @param {object} [deps.codex]    - CodexViewerUI: setHosted(host|null)/show()/
-   *   hide()/isVisible(). Optional — absent it activate/deactivate are no-ops.
+   *   hide()/isVisible()/openEntry(id). Optional — absent it activate/deactivate
+   *   are no-ops; openEntry is method-guarded (a viewer without it still hosts).
    * @param {Function} [deps.onExitUp] - the viewer's hosted close verb: ride one
    *   floor up (main.js injects `() => ladderController.command({ type: 'esc' })`).
    *   Optional — absent it hosted close requests are swallowed (the ladder's own
    *   ESC/PgUp bindings still work; nothing can strand the player).
+   * @param {Function} [deps.getSubject] - zero-arg getter for the workbench
+   *   subject: the F3 focused subsystem descriptor (`{ codexId, ... }`) or null.
+   *   Its string `codexId` deep-links the arrival page. Optional — absent it (or
+   *   returning null / no codexId) the arrival is the plain host + show.
    */
   constructor(deps = {}) {
     this._codex = deps.codex || null;
     this._onExitUp = deps.onExitUp || null;
+    this._getSubject = deps.getSubject || null;
     this._active = false;
     // One stable host object (identity matters only for debugging; setHosted
     // replaces wholesale). Bound once so activate() allocates nothing.
@@ -54,16 +71,22 @@ export class ArchiveFloor {
   isActive() { return this._active; }
 
   /**
-   * F1 arrival: host the viewer (close paths become ride-up), then show it.
-   * Order matters — hosting first means a pathological synchronous close event
-   * during show() already routes to the ladder, never a self-hide.
+   * F1 arrival: host the viewer (close paths become ride-up), then show it,
+   * THEN deep-link the page. Order matters — hosting first means a pathological
+   * synchronous close event during show() (or openEntry) already routes to the
+   * ladder, never a self-hide.
+   * @param {object} [opts]
+   * @param {string} [opts.entryId] - explicit codex entry to open (wins over the
+   *   getSubject subject). Absent ⇒ the subject's codexId, if any.
    */
-  activate() {
+  activate(opts) {
     if (this._active) return;
     this._active = true;
     if (!this._codex) return;
     if (this._codex.setHosted) this._codex.setHosted(this._host);
     if (this._codex.show) this._codex.show();
+    const entryId = this._deepLinkId(opts);
+    if (entryId && this._codex.openEntry) this._codex.openEntry(entryId);
   }
 
   /**
@@ -78,6 +101,23 @@ export class ArchiveFloor {
     if (!this._codex) return;
     if (this._codex.setHosted) this._codex.setHosted(null);
     if (this._codex.hide) this._codex.hide();
+  }
+
+  /**
+   * Resolve the arrival deep link: an explicit string `opts.entryId` wins; else
+   * the subject getter's `codexId` (string) — else null (plain arrival). The
+   * getter is best-effort: a throwing subject source must never strand the F1
+   * arrival (the HullCamFloor provider rule), so it resolves to "no link".
+   * @param {object} [opts]
+   * @returns {string|null}
+   * @private
+   */
+  _deepLinkId(opts) {
+    if (opts && typeof opts.entryId === 'string') return opts.entryId;
+    if (!this._getSubject) return null;
+    let subject = null;
+    try { subject = this._getSubject(); } catch (_e) { subject = null; }
+    return (subject && typeof subject.codexId === 'string') ? subject.codexId : null;
   }
 
   dispose() { this.deactivate(); }

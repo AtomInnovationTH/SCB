@@ -113,6 +113,8 @@ import { StrategicMap } from './ui/StrategicMap.js';
 import { WheelRouter } from './systems/WheelRouter.js';
 import { LadderController } from './systems/LadderController.js';
 import { LadderAudioBeds } from './systems/LadderAudioBeds.js';
+import { FloorMask } from './ui/hud/FloorMask.js';
+import { LadderSfx } from './systems/LadderSfx.js';
 import { NavcomFloor } from './systems/NavcomFloor.js';
 import { ProxNetFloor } from './systems/ProxNetFloor.js';
 import { SdaFloor } from './systems/SdaFloor.js';
@@ -545,6 +547,14 @@ let timeAuthority;
 // runs on the shipped flag-off path too, so the args must not allocate per
 // frame; TimeAuthority.update destructures synchronously and retains nothing).
 const _taFrameArgs = { dtReal: 0, active: false, targetCap: 1, dangerActive: false };
+// D10 pane-open signal (08-workbench §1): true while a workbench pane (REFIT /
+// TECH LIBRARY) is open — feeds TimeAuthority.calmCap so time settles to 1×
+// while reading. STUB false until the Wave-5 panes exist; the pane wire is
+// then a one-line assignment (refitPane.isOpen() || libraryPane.isOpen()).
+let _workbenchPaneOpen = false;
+// Q10 level-phase sound edge state: last frame's camera leveling flag (rise
+// edge → one LadderSfx settle cue). False whenever the ladder is disengaged.
+let _ladderLevelingPrev = false;
 
 // Zoom Ladder F6 (NAVCOM) floor content orchestrator (S5). Constructed in the
 // ladder block, injected into LadderController (activates/ticks on F6), and
@@ -566,6 +576,19 @@ let archiveFloor;
 // injected into LadderController, which crossfades beds on floor arrivals and
 // fades to silence on disengage. Inert while LADDER.ENABLED is false.
 let ladderAudioBeds;
+// Zoom Ladder Wave-4 FloorMask (08-workbench D8/§4 map rule): per-floor HUD
+// pane tiers (shown/faint/gone) over the pane-density rung layer + the
+// always-on vitals line. Constructed in the ladder block against the live
+// hud; injected into LadderController (applies rooms on floor arrivals,
+// restores the shipped cockpit on disengage). Inert while LADDER.ENABLED is
+// false (never driven).
+let ladderFloorMask;
+// Zoom Ladder interaction sfx (S4 Wave 4, serial hub wire): constructed in the
+// ladder block against AudioSystem GETTERS (the unlock pattern) and injected
+// into LadderController as the optional `sfx` dep — ratchet from `charge`,
+// clunk from `cross.direction`, flick tick, undo chime (06-core-api: audio is
+// not a decision type). Inert while LADDER.ENABLED is false.
+let ladderSfx;
 
 // Zoom Ladder F6 world→screen projector, built off the live ladder camera.
 // NavcomFloor consumes it to place the cluster ring+count icons and the ship
@@ -1342,6 +1365,13 @@ async function init() {
   archiveFloor = new ArchiveFloor({
     codex: codexViewerUI,
     onExitUp: () => { if (ladderController) ladderController.command({ type: 'esc' }); },
+    // Deep link (08-workbench D1/D2): the library is a TOOL that opens FROM
+    // what you clicked — the F3 workbench focus (HullCamFloor.focusById, the
+    // card click) persists across floors, so riding down to the library floor
+    // lands on that part's page (its manifest codexId). hullcamFloor is
+    // constructed above in this block; the guard keeps the arrival a plain
+    // host + show when no focus exists.
+    getSubject: () => (hullcamFloor && hullcamFloor.getFocusedSubsystem ? hullcamFloor.getFocusedSubsystem() : null),
   });
   // Zoom Ladder per-floor audio beds (FloorContract audioBed). GETTERS, not
   // refs: audioSystem.ctx/padBus are null until the menu-click gesture runs
@@ -1352,6 +1382,24 @@ async function init() {
   ladderAudioBeds = new LadderAudioBeds({
     context: () => audioSystem.ctx,
     destination: () => audioSystem.padBus || audioSystem.master,
+  });
+  // Zoom Ladder Wave-4 FloorMask: reads hud.paneDensity.rungs (the ONE pane
+  // visibility bit, T8) and owns the always-set VitalsLine. GETTER for the
+  // time rate, not a ref: timeAuthority is constructed AFTER this block (the
+  // ladder-block order), so the vitals line resolves it lazily per 10 Hz beat.
+  ladderFloorMask = new FloorMask({
+    hud,
+    getTimeRate: () => (timeAuthority ? timeAuthority.rate : 1),
+  });
+  // Zoom Ladder interaction sfx (00-spec §4 + 08-workbench §2 "Sound").
+  // GETTERS, not refs (the unlock pattern above). tickBus, NOT padBus: these
+  // are input confirms — the TICK family is where gameplay input-confirm cues
+  // live (AudioSystem.playClick → tickBus; FAMILY_GAIN.tick 0.8) — riding
+  // tickBus → sfxBus → master so alarm ducking, setVolume, and the §12.12
+  // suspend gate govern them for free.
+  ladderSfx = new LadderSfx({
+    context: () => audioSystem.ctx,
+    destination: () => audioSystem.tickBus || audioSystem.master,
   });
   ladderController = new LadderController({
     cameraSystem,
@@ -1364,6 +1412,9 @@ async function init() {
     hullcam: hullcamFloor,
     archive: archiveFloor,
     audioBeds: ladderAudioBeds,
+    // Wave-4 map rule (D8/§4): per-floor pane rooms + the vitals always-set.
+    floorMask: ladderFloorMask,
+    sfx: ladderSfx,
     // F7 hides the constellation figures under the SDA chart and restores the
     // player's 6-key prior on leave/disengage.
     starfield,
@@ -4340,7 +4391,18 @@ function gameLoop(timestamp) {
     const _hold = (cameraSystem && cameraSystem.ladderWarpHoldFloor) ? cameraSystem.ladderWarpHoldFloor() : null;
     const _holdCap = (_hold != null && FloorContract.FLOORS[_hold - 1]) ? FloorContract.FLOORS[_hold - 1].timeCap : null;
     _floorCap = TimeAuthority.ladderTargetCap(_floorCap, _holdCap);
+    // D10 calm cap (00-spec §7): a workbench pane open settles time to 1× —
+    // applied AFTER the Q10 hold rule; never raises (a cap-0 floor stays 0).
+    _floorCap = TimeAuthority.calmCap(_floorCap, _workbenchPaneOpen);
   }
+  // Q10 level-phase sound (S4): one settle cue on the RISE edge of the
+  // camera's post-arrival level-to-north phase (~600 ms, "its own sound" —
+  // 08-workbench §8 Q10). Flag-off/disengaged: _ladderActive false pins the
+  // edge state false — zero work on the shipped path.
+  const _leveling = _ladderActive &&
+    !!(cameraSystem && cameraSystem.isLadderLeveling && cameraSystem.isLadderLeveling());
+  if (_leveling && !_ladderLevelingPrev && ladderSfx) ladderSfx.onLevelPhase();
+  _ladderLevelingPrev = _leveling;
   // Danger cap: only meaningful while warp can apply (ladder engaged), so skip
   // the getStatus() read entirely on the shipped flag-off path (no per-frame
   // allocation there). timeAuthority.update ignores dangerActive when inactive.

@@ -67,6 +67,11 @@ export class LadderController {
    *   floor 1 drops into the hosted Tech Library, any other floor closes it.
    * @param {object} [deps.audioBeds]    - per-floor audio beds (LadderAudioBeds):
    *   setFloor(floorId|null). Optional — absent it beds are a no-op.
+   * @param {object} [deps.floorMask]    - per-floor HUD pane mask (FloorMask,
+   *   08-workbench D8/§4): setFloor(floorId|null). Optional — absent it the
+   *   mask is a no-op (shipped cockpit byte-identical).
+   * @param {object} [deps.sfx]          - interaction sfx (LadderSfx): onCharge/
+   *   onCross/onRide/onUndoWindow/reset. Optional — absent it sfx are a no-op.
    * @param {object} [deps.starfield]    - Starfield: isConstellationsVisible()/
    *   setConstellationsVisible(bool). Optional — F7 hides the constellation figures
    *   under the full-screen SDA chart and restores the player's prior on leave.
@@ -99,6 +104,8 @@ export class LadderController {
     this._hullcam = deps.hullcam || null;
     this._archive = deps.archive || null;
     this._audioBeds = deps.audioBeds || null;
+    this._floorMask = deps.floorMask || null;
+    this._sfx = deps.sfx || null;
     this._starfield = deps.starfield || null;
     this._cityLabels = deps.cityLabels || null;
     this._motherCallouts = deps.motherCallouts || null;
@@ -318,6 +325,12 @@ export class LadderController {
     if (this._archive && this._archive.deactivate) this._archive.deactivate();
     // Per-floor audio bed: fade to silence on disengage (optional dep).
     if (this._audioBeds && this._audioBeds.setFloor) this._audioBeds.setFloor(null);
+    // Per-floor HUD pane mask: restore the shipped fully-visible cockpit and
+    // hide the vitals line on disengage (optional dep — the beds contract).
+    if (this._floorMask && this._floorMask.setFloor) this._floorMask.setFloor(null);
+    // Interaction sfx: clear transient gesture state (ratchet step / armed
+    // undo window) so a re-engage starts clean (optional dep).
+    if (this._sfx && this._sfx.reset) this._sfx.reset();
     // Restore the reticles the icon floors hid (no-op if not suppressed). On a
     // disengage caused by LEAVING gameplay, the restore resolves to hidden —
     // matching TargetReticle's own GAME_STATE_CHANGE rule (see _setReticlesHidden).
@@ -348,10 +361,14 @@ export class LadderController {
           break;
 
         case 'cross':
-          this._startRide(d.toFloor, d.entryZ01, CROSS_RIDE_MS, tMs);
+          // 00-spec §4: the clunk derives from cross.direction ('out' ↑ / 'in' ↓).
+          if (this._sfx && this._sfx.onCross) this._sfx.onCross(d.direction);
+          this._startRide(d.toFloor, d.entryZ01, CROSS_RIDE_MS, tMs, true);
           break;
 
         case 'ride':
+          // G3 flick-to-wall soft tick (LadderSfx only sounds kind 'flickWall').
+          if (this._sfx && this._sfx.onRide) this._sfx.onRide(d.kind);
           this._startRide(d.toFloor, d.entryZ01, d.miniMs != null ? d.miniMs : CROSS_RIDE_MS, tMs);
           break;
 
@@ -366,8 +383,12 @@ export class LadderController {
           this._dispatchVerb(d.verb);
           break;
 
-        // charge → rail fill (handled by _refreshRail); reaim → S4+.
+        // charge → rail fill (handled by _refreshRail) + the ratchet ticks
+        // (06-core-api: "S2 derives ratchet from charge"). reaim → S4+.
         case 'charge':
+          if (this._sfx && this._sfx.onCharge) this._sfx.onCharge(d.charge, d.side);
+          break;
+
         case 'reaim':
         case 'alarm':
         default:
@@ -385,7 +406,7 @@ export class LadderController {
    * reversal / undo) is dropped instead of delivering a STALE rideFinished.
    * @private
    */
-  _startRide(toFloor, entryZ01, rideMs, tMs) {
+  _startRide(toFloor, entryZ01, rideMs, tMs, isCross) {
     this._applyFidelity(toFloor);
     this._applyFloorContent(toFloor);
     const frame = this._frame(toFloor, entryZ01);
@@ -394,6 +415,10 @@ export class LadderController {
       if (seq !== this._rideSeq) return;   // superseded — the new ride owns completion
       const t = this._now();
       this._ladder.rideFinished({ tMs: t });
+      // A completed CROSS arms the 800 ms FLICK_UNDO_WINDOW (G3) — the "↶"
+      // undo-affordance chime. Superseded rides never arm (the seq guard
+      // above): only the LATEST ride's completion counts, matching the core.
+      if (isCross && this._sfx && this._sfx.onUndoWindow) this._sfx.onUndoWindow(true);
       this._refreshRail();
     };
     this._hullCostumeBeforeCamera(toFloor);
@@ -491,6 +516,11 @@ export class LadderController {
     // Per-floor audio bed (FloorContract audioBed): crossfade to the arrival
     // floor's bed. Optional dep — absent it this is a no-op (parallel track).
     if (this._audioBeds && this._audioBeds.setFloor) this._audioBeds.setFloor(floor);
+    // Per-floor HUD pane mask (08-workbench D8/§4 map rule): apply the arrival
+    // floor's room LAST, after every floor system above has landed, so the
+    // destination panes fade in with the ride (this method runs on _engage and
+    // at every _startRide start). Optional dep — absent it this is a no-op.
+    if (this._floorMask && this._floorMask.setFloor) this._floorMask.setFloor(floor);
   }
 
   /**
