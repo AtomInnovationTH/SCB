@@ -5,9 +5,10 @@
  * F3 is the subject-anchored close-inspection floor (2–12 m). This module is
  * the F3 "costume" controller: it owns the blueprint/inspect surface while the
  * ladder is on the floor (costume.transform 'lens-split-5m'):
- *   - the BlueprintOverlay callout layer — leader-lined labels on the five
- *     manifest subsystems (ENGINEERING / POWER / COMMS / THERMAL / CARGO,
- *     js/data/blueprintSubsystems.js), ranked to the floor's labelBudget (7);
+ *   - the BlueprintOverlay callout layer — leader-lined labels on the seven
+ *     manifest subsystems (ENGINEERING / POWER / BERTHS / COMMS / CARGO /
+ *     SENSORS / THERMAL — D9, js/data/blueprintSubsystems.js), filling the
+ *     floor's labelBudget (7) exactly;
  *   - the LENS SPLIT at 5 m (F3.lens.splitAtM, 00-spec.md §3): the camera
  *     distance picks the DEFAULT lens — *detail* below the split (ONE focused
  *     subsystem, expanded readout from real systems via injected providers)
@@ -30,11 +31,16 @@
  *   - `providers[readout]()` feeds the detail lens live rows (power/thermal/…
  *     numbers); absent or throwing providers degrade to the static spec rows
  *     (MotherCallouts._liveRows best-effort precedent).
- *   - It emits NO events. The legacy inspect side-effects (FOV narrow, dynamic
- *     near-plane, background dim, hull-overlay events, onboarding signal —
- *     CameraSystem._setInspectZoom, 02-traps.md T6) are SERIAL-track territory:
- *     they become the 3/4 down-hump's arrival effects and are specced in
- *     HANDOFF.md, deliberately NOT reimplemented here.
+ *   - CLICK (Wave 4, 08-workbench D2): the constructor wires the overlay's
+ *     setOnSelect sink into focusById (the ClusterIcons → NavcomFloor shape),
+ *     so a card click focuses that subsystem; title clicks deep-link the Tech
+ *     Library from inside BlueprintOverlay (CODEX_OPEN_ENTRY — the
+ *     MotherCallouts grammar). codexId rides the render items.
+ *   - It emits NO events itself. The legacy inspect side-effects (FOV narrow,
+ *     dynamic near-plane, background dim, hull-overlay events, onboarding
+ *     signal — CameraSystem._setInspectZoom, 02-traps.md T6) are SERIAL-track
+ *     territory: they become the 3/4 down-hump's arrival effects and are
+ *     specced in HANDOFF.md, deliberately NOT reimplemented here.
  *
  * LadderController drives this (HANDOFF spec): it activates the floor content
  * on arrival at floor 3, deactivates on leaving, and dispatches the
@@ -79,6 +85,15 @@ export class HullCamFloor {
     this._project = deps.project || null;
     this._overlay = deps.overlay || new BlueprintOverlay();
     this._providers = deps.providers || null;
+
+    // Card click → subsystem focus: the exact ClusterIcons →
+    // NavcomFloor.focusById wiring shape (08-workbench §7). Title clicks
+    // deep-link the codex inside the overlay itself (CODEX_OPEN_ENTRY, the
+    // MotherCallouts grammar) — no wiring needed here. Changes nothing
+    // headless and paints nothing extra.
+    if (typeof this._overlay.setOnSelect === 'function') {
+      this._overlay.setOnSelect((id) => this.focusById(id));
+    }
 
     this._active = false;
     /** Priority-ranked manifest (the carousel + budget order — one law). */
@@ -213,6 +228,7 @@ export class HullCamFloor {
       anchorU: this._anchorU(sub),
       focused: sub.id === this._focusId,
       rows: (lens === LENS_DETAIL) ? this._readoutRows(sub) : [],
+      codexId: sub.codexId,       // title click → Tech Library deep-link (D2)
     }));
 
     const callouts = this._overlay.render(items, project, {
