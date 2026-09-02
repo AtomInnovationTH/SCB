@@ -460,6 +460,33 @@ export class MotherCallouts {
     this._liveCtx = ctx || null;
   }
 
+  /**
+   * The part the player is looking at — the Zoom Ladder's F1 deep-link source
+   * (docs/ladder/08-workbench.md D1/D2: the Tech Library opens FROM the part
+   * you were looking at). In the COMPONENT band (< BAND.compIn, the close lens
+   * of the 5 m split) `_focusPart` is the major part nearest screen-centre,
+   * re-picked every update(); outside that band there is no focus and this
+   * returns null. Pure read; the small allocation is fine — main.js calls it
+   * only on an F1 arrival (ArchiveFloor.getSubject), never per frame.
+   * `codexId` is the part table's entry id/alias exactly as CodexSystem
+   * resolves it (the same string the card click emits in CODEX_OPEN_ENTRY);
+   * parts without a briefing report `codexId: null`, which ArchiveFloor treats
+   * as "no link" (plain arrival).
+   * @returns {{ id: string, name: string, codexId: string|null, systemId: string }|null}
+   */
+  getFocusedPart() {
+    if (this._band !== 'COMPONENT') return null;
+    const rec = this._focusPart;
+    if (!rec || !rec.def) return null;
+    const def = rec.def;
+    return {
+      id: def.id,
+      name: def.name,
+      codexId: (typeof def.codexId === 'string') ? def.codexId : null,
+      systemId: rec.sysId,
+    };
+  }
+
   // --------------------------------------------------------------------------
   // BUILD
   // --------------------------------------------------------------------------

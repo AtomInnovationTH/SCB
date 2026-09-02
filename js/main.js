@@ -1365,13 +1365,18 @@ async function init() {
   archiveFloor = new ArchiveFloor({
     codex: codexViewerUI,
     onExitUp: () => { if (ladderController) ladderController.command({ type: 'esc' }); },
-    // Deep link (08-workbench D1/D2): the library is a TOOL that opens FROM
-    // what you clicked — the F3 workbench focus (HullCamFloor.focusById, the
-    // card click) persists across floors, so riding down to the library floor
-    // lands on that part's page (its manifest codexId). hullcamFloor is
-    // constructed above in this block; the guard keeps the arrival a plain
-    // host + show when no focus exists.
-    getSubject: () => (hullcamFloor && hullcamFloor.getFocusedSubsystem ? hullcamFloor.getFocusedSubsystem() : null),
+    // Deep link (08-workbench D1/D2): the library opens FROM the part you were
+    // looking at. The subject is MotherCallouts' focused part — the one nearest
+    // screen-centre in its close (COMPONENT) band, the F3 costume's own lens
+    // split — read at F1 arrival (ArchiveFloor.activate runs inside
+    // _applyFloorContent, BEFORE the camera fires F3's departure signal, so the
+    // focus is still live). Its codexId is the same string the card click
+    // emits. Outside the close band there is no focus → null → the arrival is
+    // a plain host + show. motherCallouts is constructed far above (the
+    // inspection-callouts block); the guard keeps a missing getter harmless.
+    // (Re-pointed 2026-09-02 from hullcamFloor.getFocusedSubsystem — the pill
+    // focus — when the owner's playtest made MotherCallouts the F3 costume.)
+    getSubject: () => (motherCallouts && motherCallouts.getFocusedPart ? motherCallouts.getFocusedPart() : null),
   });
   // Zoom Ladder per-floor audio beds (FloorContract audioBed). GETTERS, not
   // refs: audioSystem.ctx/padBus are null until the menu-click gesture runs
@@ -1409,7 +1414,16 @@ async function init() {
     navcom: navcomFloor,
     proxNet: proxNetFloor,
     sdaFloor,
-    hullcam: hullcamFloor,
+    // NO `hullcam` injection (owner, 2026-09-02): HullCamFloor/BlueprintOverlay
+    // are NOT the F3 costume — MotherCallouts is (the shipped in-world cards:
+    // 26 parts in 8 colour-coded systems, zoom bands = the 5 m lens split, live
+    // rows, Library links; it activates itself on the camera's F3 arrival
+    // signal, INSPECT_HULL_OUTLINE). The seven title pills the hullcam floor
+    // painted on the hull leave with this line. hullcamFloor stays constructed
+    // above as the seven-subsystem refit index (fittingCatalog imports its
+    // manifest) for the Wave-5 REFIT pane, which decides whether to re-inject;
+    // its per-frame tick below is guarded on isActive() and so stays inert.
+    // The controller's `hullcam` seam itself is unchanged (pinned).
     archive: archiveFloor,
     audioBeds: ladderAudioBeds,
     // Wave-4 map rule (D8/§4): per-floor pane rooms + the vitals always-set.
