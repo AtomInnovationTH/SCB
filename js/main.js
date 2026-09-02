@@ -616,6 +616,25 @@ async function init() {
       Constants.DEBUG.PERF_REPORT_OVERLAY = true;
       console.info('[PerfReport] overlay scheduled via ?perfReport=1');
     }
+    // Zoom Ladder dev/test boot override (iPad port, 2026-09-02): ?ladder=1
+    // flips the master switch for THIS boot only — the shipped source default
+    // stays false (test-FloorContract pin "ships disabled" reads the source
+    // constant in Node, where no URL exists). Every consumer (LadderController
+    // engage, WheelRouter ownership, InputManager floor keys, CameraSystem
+    // anchors, main's adapt-holdoff) reads Constants.LADDER.ENABLED LIVE, so a
+    // boot-time flip is behaviorally identical to shipping true. ?ladder=0 is
+    // the symmetric force-off for A/B on a WebClip whose saved URL carries =1.
+    // This is how the sealed-iPad build reaches the seven floors ("levels")
+    // for play-testing: bake ?ladder=1 into the WebClip URL at creation.
+    {
+      const lp = urlParams.get('ladder');
+      if (lp === '1') {
+        Constants.LADDER.ENABLED = true;
+        console.info('[Ladder] enabled via ?ladder=1 (dev/test boot override)');
+      } else if (lp === '0') {
+        Constants.LADDER.ENABLED = false;
+      }
+    }
     // Guidance cleanup (Phase 4): ?guidanceLog=1 enables dev-only guidance
     // telemetry (prompt→action latency, contradiction + overlap counts).
     // No-op in the default build; snapshot via window.__dumpGuidanceLog().
@@ -1410,6 +1429,24 @@ async function init() {
       ladderController,
       gameState,
       paneDensity: hud ? hud.paneDensity : null,
+      // STORE / LIBRARY tap chips (iPad port 2026-09-02): glass has no KeyB /
+      // KeyI, so the chips call the SAME paths the keys drive — the KeyB
+      // ORBITAL_VIEW guard and the KeyI toggle + CODEX_OPENED-on-open-only
+      // rule (InputManager) are mirrored here verbatim.
+      openShop: () => {
+        if (gameState.getState() === GameStates.ORBITAL_VIEW) {
+          gameFlowManager.transitionToState(GameStates.SHOP);
+          audioSystem?.playClick?.();
+        }
+      },
+      toggleLibrary: () => {
+        if (!codexViewerUI) return;
+        codexViewerUI.toggle();
+        audioSystem?.playClick?.();
+        if (typeof codexViewerUI.isVisible !== 'function' || codexViewerUI.isVisible()) {
+          eventBus.emit(Events.CODEX_OPENED);
+        }
+      },
       telemetry: touchTelemetry,
     });
     touchControls.start();

@@ -130,16 +130,21 @@ export class TouchControls {
    * @param {object|null} [deps.ladderController]     provides jump({toFloor}) — the rail-drag sink
    * @param {object|null} [deps.gameState]           provides isGameplay() — gates the chrome (menu hides it)
    * @param {object|null} [deps.paneDensity]         PaneDensity: total/visibleCount()/setLevel(n)
+   * @param {object|null} [deps.openShop]            callback: open the store (KeyB path; guards its own state)
+   * @param {object|null} [deps.toggleLibrary]       callback: toggle the Tech Library (KeyI path)
    * @param {object|null} [deps.telemetry]           optional zoom-feel sink: log(kind, data)
    * @param {object} [deps.tune]                     TOUCH_TUNE override (tests)
    */
   constructor({ canvas, wheelRouter, ladderController = null, gameState = null,
-                paneDensity = null, telemetry = null, tune = null } = {}) {
+                paneDensity = null, openShop = null, toggleLibrary = null,
+                telemetry = null, tune = null } = {}) {
     this._canvas = canvas || null;
     this._router = wheelRouter || null;
     this._ladder = ladderController;   // rail-drag → jump({toFloor})
     this._gameState = gameState;       // isGameplay() → hide the chrome off-play
     this._paneDensity = paneDensity;
+    this._openShop = (typeof openShop === 'function') ? openShop : null;
+    this._toggleLibrary = (typeof toggleLibrary === 'function') ? toggleLibrary : null;
     this._telemetry = telemetry;
     const userTune = (typeof window !== 'undefined' && window.__TOUCH_TUNE) || null;
     this._tune = Object.assign({}, TOUCH_TUNE, tune || {}, userTune || {});
@@ -176,9 +181,9 @@ export class TouchControls {
     // and on-device DevTools witness that gestures actually flow. Created only
     // here — desktop/headless-without-touch contexts never see the global.
     if (typeof window !== 'undefined') {
-      window.__TOUCH = this._stats = { pinch: 0, rail: 0, slider: 0 };
+      window.__TOUCH = this._stats = { pinch: 0, rail: 0, slider: 0, nav: 0 };
     } else {
-      this._stats = { pinch: 0, rail: 0, slider: 0 };
+      this._stats = { pinch: 0, rail: 0, slider: 0, nav: 0 };
     }
 
     // The canvas owns its touches (§3): passive:false so preventDefault works.
@@ -387,6 +392,29 @@ export class TouchControls {
         border: 2px solid rgba(0, 255, 136, 0.8);
         box-shadow: 0 0 10px rgba(0, 255, 136, 0.35);
       }
+      /* STORE / LIBRARY tap chips — bottom-left, ≥44pt targets (Ipad.md §3),
+         same fade family as the rest of the chrome. */
+      .touch-nav-dock {
+        position: absolute;
+        left: calc(12px + env(safe-area-inset-left, 0px));
+        bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+        pointer-events: auto;
+        display: flex; gap: 10px;
+      }
+      .touch-nav-chip {
+        min-width: 96px; min-height: 44px;
+        background: rgba(5, 10, 20, 0.78);
+        border: 1px solid rgba(0, 255, 136, 0.3); border-radius: 8px;
+        color: rgba(0, 255, 136, 0.85);
+        font-family: 'Courier New', monospace;
+        font-size: 12px; letter-spacing: 0.14em;
+        padding: 10px 14px;
+        -webkit-user-select: none; user-select: none; touch-action: manipulation;
+      }
+      .touch-nav-chip:active {
+        background: rgba(0, 255, 136, 0.18);
+        border-color: rgba(0, 255, 136, 0.8);
+      }
       /* Invisible one-finger zoom grip laid over the visible ladder rail.
          No pixels of its own — the rail IS the affordance; touch-action:none so
          the drag never scroll-bounces. Positioned + toggled by _syncGrip. */
@@ -452,6 +480,32 @@ export class TouchControls {
       dock.appendChild(slider);
       root.appendChild(dock);
       this._slider = slider;
+    }
+
+    // STORE / LIBRARY tap chips — bottom-left dock (iPad port: the desktop
+    // openers are KeyB / KeyI, which do not exist on glass; these call the
+    // SAME open paths, injected from main.js so state guards stay in ONE
+    // place). Only rendered when a callback was actually provided, so hosts
+    // without the deps (tests, other embeds) see zero extra DOM.
+    if (this._openShop || this._toggleLibrary) {
+      const nav = document.createElement('div');
+      nav.className = 'touch-nav-dock';
+      const mkChip = (text, cb) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'touch-nav-chip';
+        b.textContent = text;
+        b.addEventListener('click', () => {
+          this._touched();
+          if (this._stats) this._stats.nav++;
+          cb();
+        });
+        nav.appendChild(b);
+        return b;
+      };
+      if (this._openShop) mkChip('STORE', this._openShop);
+      if (this._toggleLibrary) mkChip('LIBRARY', this._toggleLibrary);
+      root.appendChild(nav);
     }
 
     document.body.appendChild(root);

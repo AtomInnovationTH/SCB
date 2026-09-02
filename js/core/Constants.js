@@ -4682,7 +4682,7 @@ export const Constants = {
   // js/core/VisualLaw.js.
   // ============================================================================
   LADDER: {
-    ENABLED: false,          // master switch — ships false until M6 (docs/ladder/03-plan.md)
+    ENABLED: false,          // master switch — ships false until M6 (docs/ladder/03-plan.md); dev/test boot override: ?ladder=1 (main.js init(), the ?debug idiom — every consumer reads this live)
     DEV_FULL_ACCESS: true,   // all 7 floors reachable now; campaign unlock gating is roadmap
     INVERT_SCROLL: false,    // S2 WheelRouter: invert scroll direction (00-spec §4 "an invert setting exists")
   },
