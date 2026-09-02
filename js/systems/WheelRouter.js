@@ -22,11 +22,17 @@
  *          glass pinch via routeSyntheticWheel): zooms; ctrl deltas are small,
  *          so they get WHEEL_TUNE.pinchGain (synthetic pinches arrive
  *          pre-scaled by TouchControls and skip the gain).
- *        - 'mouse'  (discrete physical wheel): zooms (mouseWheelZoom, default on).
- *        - 'scroll' (trackpad two-finger scroll): MUTED by default
- *          (scrollZoom=false) — deliberate pinch is the zoom gesture; a palm
- *          scroll can no longer rocket the ladder. Still consumed
- *          (preventDefault) so the page never scrolls/zooms under the game.
+  *        - 'mouse'  (discrete physical wheel): zooms (mouseWheelZoom, default on).
+  *        - 'scroll' (trackpad two-finger scroll): zooms (scrollZoom, default
+  *          ON again since 2026-09-02 — owner: "laptop should be two-finger
+  *          scroll, like before"; the 09-01 retune had muted it). The G2/G3
+  *          hump + flick grammar was tuned on exactly these trackpad traces.
+  *          Glass is unaffected by construction: touches never produce wheel
+  *          events (TouchControls → tagged synthetic pinch), so the iPad keeps
+  *          pinch; only an external trackpad on the iPad sees scroll-zoom, the
+  *          same as a laptop. `window.__WHEEL_TUNE = {scrollZoom:false}`
+  *          restores pinch-first live. Always consumed (preventDefault) so the
+  *          page never scrolls/zooms under the game.
  * F1/F2 DOM-overlay scroll passthrough (do NOT blanket-preventDefault so the
  * shop can scroll) is an S6 concern — in M1 those floors have no active costume
  * and the ladder is gameplay-gated, so SHOP/codex overlays run under the
@@ -63,14 +69,20 @@ export const MAX_MAG = 4;
  * The 2026-09-01 pinch-first retune: deliberate PINCH is the ladder zoom
  * gesture on trackpads (laptop + iPad Magic Keyboard). Two-finger scroll had
  * the classic failure — every incidental scroll gesture rocketed through
- * floors — so 'scroll' ships muted. Physical mouse wheels keep zooming: their
- * discrete detents are the original ladder instrument (00-spec §0).
+ * floors — so 'scroll' shipped muted for one day. Physical mouse wheels keep
+ * zooming: their discrete detents are the original ladder instrument (00-spec §0).
+ *
+ * 2026-09-02 owner flip: 'scroll' zooms again on the laptop ("like before") —
+ * the G3 flick grammar (rising-mag detector, tail rejection, 800 ms undo) is
+ * what actually tamed the rocketing, and it was tuned on real trackpad scroll
+ * traces. Pinch stays on everywhere; glass never emits wheel events, so the
+ * iPad is untouched. Pinch-first is one override away: `{scrollZoom:false}`.
  */
 export const WHEEL_TUNE = {
   pinchZoom: true,      // ctrl+wheel (trackpad pinch) + iPad glass pinch drive the ladder
   pinchGain: 4.0,       // browsers emit small ctrl+wheel deltas per pinch frame — scale to notch feel
   mouseWheelZoom: true, // discrete physical wheel detents keep zooming
-  scrollZoom: false,    // trackpad two-finger scroll: muted (the user's pinch-first ask)
+  scrollZoom: true,     // trackpad two-finger scroll zooms (owner flip 2026-09-02; was muted 09-01)
   mouseIntThresholdPx: 80, // pixel-mode integer |deltaY| at/over this reads as a mouse detent
   gesturePxPerScale: 300,  // WebKit GestureEvent bridge: px of wheel deltaY per 1.0 of e.scale change
 };
@@ -262,7 +274,7 @@ export class WheelRouter {
       const feed = src === 'pinch' ? tune.pinchZoom
         : src === 'mouse' ? tune.mouseWheelZoom
         : tune.scrollZoom;
-      if (!feed) return; // muted class (default: trackpad scroll) — consumed, not fed
+      if (!feed) return; // muted class (an override, e.g. {scrollZoom:false}) — consumed, not fed
       // ctrl-pinch deltas are tiny per frame — scale toward notch feel.
       // Tagged synthetic pinches (iPad glass) arrive pre-scaled: gain 1.
       const ev = (src === 'pinch' && e.ctrlKey)
