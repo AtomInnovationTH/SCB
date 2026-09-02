@@ -77,9 +77,11 @@ export class LadderController {
    *   under the full-screen SDA chart and restores the player's prior on leave.
    * @param {object} [deps.cityLabels]   - CityLabels: setSuppressed(bool). Optional —
    *   F7 suppresses the city/landmark pills under the SDA chart (they read as
-   *   clutter over the altitude bands). Suppression is transient by contract
-   *   (CityLabels.setSuppressed never persists), so the player's 5-key
-   *   preference owns the resting state on leave/disengage.
+   *   clutter over the altitude bands) and F3 suppresses them at the hull (the
+   *   map rule, D8 — city names never among house numbers; 2026-09-02 evening).
+   *   Suppression is transient by contract (CityLabels.setSuppressed never
+   *   persists), so the player's 5-key preference owns the resting state on
+   *   leave/disengage.
    * @param {object} [deps.targetReticle]  - TargetReticle: setVisible(bool). Optional —
    *   suppressed on the ship-is-icon floors (F6/F7), restored on floors <= 5 / disengage.
    * @param {object} [deps.dockingReticle] - DockingReticle: setVisible(bool). Optional —
@@ -111,7 +113,7 @@ export class LadderController {
     this._constellationsHidden = false;
     /** Player's 6-key visibility captured when F7 hid the figures (restored on leave). */
     this._constellationsPrior = null;
-    /** True while F7 suppresses the city/landmark pills (mirrors _reticlesHidden). */
+    /** True while F7 or F3 suppresses the city/landmark pills (mirrors _reticlesHidden). */
     this._cityLabelsHidden = false;
     this._now = deps.now || (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()));
     // The DEFAULT core (the production path — main.js injects no ladder) honors
@@ -323,7 +325,7 @@ export class LadderController {
     this._setReticlesHidden(false);
     // Restore the constellation figures F7 hid (no-op if not suppressed).
     this._setConstellationsHidden(false);
-    // Clear the F7 city/landmark-pill suppression (no-op if not suppressed;
+    // Clear the F7/F3 city/landmark-pill suppression (no-op if not suppressed;
     // the 5-key preference decides whether the pills actually reappear).
     this._setCityLabelsHidden(false);
     if (this._rail && this._rail.hide) this._rail.hide();
@@ -483,7 +485,14 @@ export class LadderController {
       }
     }
     this._setConstellationsHidden(massBands);
-    this._setCityLabelsHidden(massBands);
+    // City/landmark pills hide on F7 (above) AND on F3 (owner, 2026-09-02
+    // evening — the map rule, 08-workbench D8: "house numbers up close, city
+    // names far out, never both"). At the hull, Earth is a backdrop 2–12 m
+    // behind the ship and the pills land among the hull callout cards in the
+    // same pill grammar. F3 is keyed on FLOOR ID (debrisMode is 'full' on both
+    // F3 and F4); F4 keeps the shipped pills — the player's 5-key choice. Same
+    // transient gate, same restore on leave/disengage; F5/F6 untouched.
+    this._setCityLabelsHidden(massBands || floor === 3);
     // F3 (HULL CAM): keyed on FLOOR ID 3 — NOT fidelity.debrisMode, which is
     // 'full' on BOTH F3 and F4 and cannot discriminate.
     if (this._hullcam) {
@@ -566,9 +575,11 @@ export class LadderController {
   }
 
   /**
-   * Suppress/clear the Earth city + landmark pills for the F7 SDA chart — a
-   * mirror of _setReticlesHidden. Idempotent (guarded on the flag flip); the
-   * cityLabels dep is optional — absent it this is a pure flag write.
+   * Suppress/clear the Earth city + landmark pills — for the F7 SDA chart and,
+   * since 2026-09-02 (evening), for the F3 hull floor (the map rule: never
+   * city names among house numbers). A mirror of _setReticlesHidden.
+   * Idempotent (guarded on the flag flip); the cityLabels dep is optional —
+   * absent it this is a pure flag write.
    *
    * Simpler than the constellation pair by design: no prior capture is needed
    * because CityLabels.setSuppressed is a TRANSIENT gate orthogonal to the
