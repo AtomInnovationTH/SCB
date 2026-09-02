@@ -131,6 +131,7 @@ import { isAvifSupported } from './scene/Earth.js';
 import { profileFlags } from './core/ProfileFlags.js';
 import { devShotGate } from './core/DevShotGate.js';
 import { installBlackFrameProbe } from './core/BlackFrameProbe.js';
+import { viewCover, coverSkipsPaint } from './ui/viewCover.js';
 import { AutoProfileSweep } from './systems/AutoProfileSweep.js';
 import { gameState as _gameStateRefForProfile } from './core/GameState.js';
 
@@ -1353,6 +1354,11 @@ async function init() {
     // transient (never persisted), so the 5-key preference owns the resting
     // state on leave/disengage.
     cityLabels,
+    // F3 single costume (08-workbench §2): BlueprintOverlay + the hull outline
+    // ARE the costume, so MotherCallouts' sprite cards are suppressed while the
+    // engaged floor is 3 — the same transient contract as cityLabels. The
+    // shipped inspect Schmitt never touches this gate (byte-identical flag-off).
+    motherCallouts,
     // Reticle gating (F6/F7 ship-is-icon floors): the controller hides the
     // aiming reticles on floors >= 6 and restores them on <= 5 / disengage.
     // Optional deps — inert while LADDER.ENABLED is false (never engaged).
@@ -4284,11 +4290,21 @@ function gameLoop(timestamp) {
   // pre-ramps toward the arrival rate during the ride. An active conjunction
   // alert is the danger signal that clamps warp back to 1× (S4 refines this to
   // the full alarm horizon).
+  //
+  // Q10 (docs/ladder/08-workbench.md §8, "the roll is its own phase"): while a
+  // cross-anchor ride is going UP (F5→F6) — and until its post-ride level phase
+  // completes — the camera reports the DEPARTURE floor as a hold, whose cap
+  // wins, so the time-lapse engages only after arrival + leveling, never during
+  // the flight. Down-rides report no hold: the existing destination pre-ramp
+  // settles time first (TimeAuthority.ladderTargetCap is the pure rule).
   const _ladderActive = !!(ladderController && ladderController.isActive && ladderController.isActive());
   let _floorCap = 1;
   if (_ladderActive && ladderController.ladder && ladderController.ladder.getState) {
     const _lf = ladderController.ladder.getState().floor;
     _floorCap = FloorContract.FLOORS[_lf - 1] ? FloorContract.FLOORS[_lf - 1].timeCap : 1;
+    const _hold = (cameraSystem && cameraSystem.ladderWarpHoldFloor) ? cameraSystem.ladderWarpHoldFloor() : null;
+    const _holdCap = (_hold != null && FloorContract.FLOORS[_hold - 1]) ? FloorContract.FLOORS[_hold - 1].timeCap : null;
+    _floorCap = TimeAuthority.ladderTargetCap(_floorCap, _holdCap);
   }
   // Danger cap: only meaningful while warp can apply (ladder engaged), so skip
   // the getStatus() read entirely on the shipped flag-off path (no per-frame
@@ -4301,8 +4317,26 @@ function gameLoop(timestamp) {
   _taFrameArgs.dangerActive = _danger;
   timeAuthority.update(_taFrameArgs);
   const dtWorld = timeAuthority.dtWorld;
+  // Rail warp readout (VisualLaw.RAIL.SHOWS 'warp-readout'; 08-workbench §2):
+  // the live rate, only while the ladder is engaged. setRate is write-on-change
+  // and ≤ 4 Hz internally (G1), so the per-frame call is free. Flag-off:
+  // _ladderActive is false → never called.
+  if (_ladderActive && railIndicator && railIndicator.setRate) railIndicator.setRate(timeAuthority.rate);
 
   const currentState = gameState.currentState;
+
+  // Render policy (08-workbench §2): ONE viewCover signal per frame. Under a
+  // 'full' cover (Tech Library open / ShopScreen plate — both ~opaque) the
+  // scene paint and the HUD DOM writes are skipped below; the SIM POLICY IS
+  // UNCHANGED (every system still ticks). MenuScreen is not a cover (its plate
+  // is translucent; the live scene behind it is the design). Never skipped
+  // while the BlackFrameProbe (?bfp) or the ?shot harness is armed — both read
+  // the framebuffer and a skipped render would read as the black they triage.
+  const _cover = viewCover({
+    codexVisible: !!(codexViewerUI && codexViewerUI.isVisible && codexViewerUI.isVisible()),
+    shopVisible: !!(shopScreen && shopScreen.visible),
+  });
+  const _skipPaint = coverSkipsPaint(_cover, { diagnosticsArmed: !!blackFrameProbe || !!devShotGate.requested });
 
   // --- Always update visuals (scene renders behind menus) ---
   const sunDir = sunLight.update(dt, player.getPosition());
@@ -4529,8 +4563,10 @@ function gameLoop(timestamp) {
     // --- Camera update via CameraSystem ---
     updateCamera(dt, timestamp);
 
-    // HUD update
-    hud.update(dt, {
+    // HUD update — skipped under a 'full' viewCover (the HUD is invisible
+    // behind the plate; it re-syncs on the first uncovered frame — its own
+    // 10 Hz / 2 Hz timers keep polling, nothing is event-driven inside).
+    if (!_skipPaint) hud.update(dt, {
       player,
       debrisField,
       activeSatellites,
@@ -4723,8 +4759,11 @@ function gameLoop(timestamp) {
   }
   if (strategicMap && strategicMap.isOpen()) {
     strategicMap.update(dt);
-    strategicMap.render();
-  } else {
+    if (!_skipPaint) strategicMap.render();
+  } else if (!_skipPaint) {
+    // viewCover 'full' (Tech Library / ShopScreen plate): the whole composer
+    // pipeline is skipped — the canvas keeps its last presented frame under
+    // the ~opaque plate. Never skipped while ?bfp / ?shot are armed.
     sceneManager.render();
   }
   if (_bootFirstRenderCall) {

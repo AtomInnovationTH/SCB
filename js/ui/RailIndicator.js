@@ -3,8 +3,16 @@
  *
  * Right-edge, 7 notches labelled with instrument names + a spring-charge fill,
  * driven by LadderController from `ladder.getState()` / charge decisions
- * (docs/ladder/00-spec.md §10, VisualLaw.RAIL). Still no costumes, time-warp
- * readout, subject line, or clickable notches — those are S4+.
+ * (docs/ladder/00-spec.md §10, VisualLaw.RAIL), plus the time-rate readout
+ * at the rail's head (VisualLaw.RAIL.SHOWS 'warp-readout'; 08-workbench §2
+ * "time rate" vitals / §11 Wave 4 "rail warp readout"). Still no costumes,
+ * subject line, or clickable notches — those are S4+.
+ *
+ * Warp readout (setRate): '1×' / '4×' / '20×' / '100×' — the live
+ * TimeAuthority.rate rounded to the nearest integer (intermediate ramp values
+ * show rounded), fed per frame by main.js while the ladder is engaged. Write-
+ * on-change AND throttled to ≤ RATE_WRITE_MIN_MS (4 Hz) — G1: no per-frame
+ * DOM churn even while the rate ramps through every integer.
  *
  * G3 (post-M3 play-test):
  * - BOTTOM-anchored on the right edge (was vertically centered, where it
@@ -36,6 +44,8 @@ const TOAST_HOLD_MS = 1800;
 const DENY_FLASH_MS = 320;
 /** Shipped HUD warning amber (DockingReticle.warning) — not a law color. */
 const WARN_AMBER = '#ffaa00';
+/** Warp readout: minimum interval between DOM writes (ms) — 4 Hz cap (G1). */
+export const RATE_WRITE_MIN_MS = 250;
 
 /** Notch resting/active palette (INFO instrument frame, PLAYER current). */
 const NOTCH_REST_BORDER = 'rgba(0,204,255,0.35)';
@@ -52,6 +62,37 @@ export class RailIndicator {
     // Reused notchState() output — refresh() runs per frame; no per-notch
     // literal allocation in the hot path (G5 review follow-up).
     this._notchScratch = { current: false, fillPct: 0 };
+    // Warp readout (setRate): the element, the last label WRITTEN, and when.
+    this._rate = null;
+    this._rateLabel = null;
+    this._rateWriteMs = -Infinity;
+  }
+
+  /**
+   * Pure warp-readout label law (headless-testable): the live rate rounded to
+   * the nearest integer with the × glyph — '1×', '4×', '20×', '100×'; ramp
+   * intermediates show rounded ('7×'). Non-finite input reads as the shipped 1×.
+   * @param {number} rate - TimeAuthority.rate (warp multiplier on the base scale)
+   * @returns {string}
+   */
+  static rateLabel(rate) {
+    const n = Number.isFinite(rate) ? Math.max(0, Math.round(rate)) : 1;
+    return `${n}\u00d7`;
+  }
+
+  /**
+   * Pure write-gate law: write when the label CHANGED and at least
+   * RATE_WRITE_MIN_MS passed since the last write (≤ 4 Hz). A label that is
+   * still pending after the window is written on the next call (the settled
+   * value is never lost — the caller feeds every frame).
+   * @param {string} label - candidate label
+   * @param {string|null} lastLabel - last label written (null = never)
+   * @param {number} lastWriteMs - time of the last write (-Infinity = never)
+   * @param {number} nowMs - caller clock
+   * @returns {boolean}
+   */
+  static shouldWriteRate(label, lastLabel, lastWriteMs, nowMs) {
+    return label !== lastLabel && (nowMs - lastWriteMs) >= RATE_WRITE_MIN_MS;
   }
 
   /**
@@ -129,6 +170,19 @@ export class RailIndicator {
       this._notches[f.id - 1] = { el: notch, fill, _cur: null, _pct: null, _deny: false, _denyTimer: null };
     }
 
+    // Warp readout at the rail's HEAD: column-reverse puts a later child at
+    // the TOP (above F7). INFO instrument color, small, right-aligned; empty
+    // until the first setRate() write.
+    const rate = document.createElement('div');
+    rate.id = 'ladder-rail-rate';
+    rate.style.cssText = [
+      'padding:0 8px 2px', 'text-align:right', 'white-space:nowrap',
+      `color:${VisualLaw.COLORS.INFO}`, 'font-size:0.62rem', 'letter-spacing:0.12em',
+      'opacity:0.85',
+    ].join(';');
+    root.appendChild(rate);
+    this._rate = rate;
+
     // Denial toast: sits ABOVE the rail (bottom-right region is otherwise
     // empty), amber warning, hidden until flashDenied() with a hint.
     const toast = document.createElement('div');
@@ -185,6 +239,27 @@ export class RailIndicator {
         n._pct = fillPct;
       }
     }
+  }
+
+  /**
+   * Time-rate readout at the rail's head (VisualLaw.RAIL.SHOWS 'warp-readout').
+   * Fed per frame by main.js with `timeAuthority.rate` while the ladder is
+   * engaged. Write-on-change, ≤ 4 Hz (RATE_WRITE_MIN_MS) — G1. Headless: no
+   * DOM → returns before touching any state.
+   * @param {number} rate - TimeAuthority.rate (1 = shipped speed)
+   * @param {number} [nowMs] - caller clock (defaults to performance.now())
+   * @returns {boolean} whether a DOM write happened this call
+   */
+  setRate(rate, nowMs) {
+    if (!this._rate) return false;
+    const label = RailIndicator.rateLabel(rate);
+    const t = (nowMs != null) ? nowMs
+      : (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    if (!RailIndicator.shouldWriteRate(label, this._rateLabel, this._rateWriteMs, t)) return false;
+    this._rate.textContent = label;
+    this._rateLabel = label;
+    this._rateWriteMs = t;
+    return true;
   }
 
   /**

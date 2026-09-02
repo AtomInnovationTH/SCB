@@ -68,6 +68,33 @@ const VIEW_LABELS = {
 };
 
 // ============================================================================
+// ZOOM LADDER crossing choreography (Q10 — docs/ladder/08-workbench.md §8:
+// "one change at a time — the roll is its own phase"). In-module constants,
+// NOT FloorContract numbers: the ride timing the core sees (rideMs / onDone)
+// is untouched; these shape only what the camera does with the up-vector.
+// ============================================================================
+
+/**
+ * UP-rides (ship→Earth, F5→F6): the source (ship-radial) up is HELD for the
+ * whole flight; the horizon then levels to Earth-north in a separate post-ride
+ * camera phase of this length (cubic in-out). On-floor exactness resumes when
+ * the phase ends.
+ */
+export const LADDER_LEVEL_MS = 600;
+
+/**
+ * DOWN-rides (Earth→ship, F6→F5): the roll back to ship-up completes within
+ * this FRACTION of the ride (the cubic in-out barely moves the dolly there),
+ * so the camera is fully ship-up before the dive dominates.
+ */
+export const LADDER_DOWN_ROLL_FRAC = 0.45;
+
+/** Cubic in-out ease shared by the ride engine, the down-ride roll and the level phase. */
+function cubicInOut(t) {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+// ============================================================================
 // CAMERA SYSTEM
 // ============================================================================
 
@@ -572,17 +599,19 @@ export class CameraSystem {
     // ========================================================================
     // ZOOM LADDER camera (S2 ride engine — docs/ladder/06-core-api.md, T6).
     // A separate override slot (parallel to the launch/net ceremonies) driven by
-    // LadderController: it dollies the camera along a fixed world direction from
-    // the floor's anchor (ship for F3–F5, Earth CENTRE for F6–F7 → Earth-fixed
+    // LadderController: it dollies the camera along a direction from the
+    // floor's anchor (ship for F3–F5, Earth CENTRE for F6–F7 → Earth-fixed
     // framing, which setView() offset lerps cannot do) at the (floor, z01)
-    // distance, cubic-in-out for crossing rides. Active only while the ladder is
-    // engaged (Constants.LADDER.ENABLED + gameplay); untouched when the flag is
-    // off, so shipped views stay byte-identical.
+    // distance, cubic-in-out for crossing rides. The direction is HEADING-
+    // RELATIVE on ship anchors (B1, see `local` below) and inertial on Earth
+    // anchors. Active only while the ladder is engaged (Constants.LADDER.ENABLED
+    // + gameplay); untouched when the flag is off, so shipped views stay
+    // byte-identical.
     // ========================================================================
     this._ladderCam = {
       active: false,
       anchor: 'ship',            // 'ship' | 'earth'
-      dir: new THREE.Vector3(0, 0.35, 1).normalize(), // anchor→camera unit dir
+      dir: new THREE.Vector3(0, 0.35, 1).normalize(), // anchor→camera unit dir (WORLD; rebuilt from `local` on ship anchors — B1)
       curDistU: 0.0004,          // eased current distance (scene units)
       targetDistU: 0.0004,       // free-scroll / settle target
       fov: Constants.CAMERA_FOV,
@@ -597,15 +626,16 @@ export class CameraSystem {
       rideAnchorFrom: 'ship',
       onDone: null,
       _tmp: new THREE.Vector3(),
-      // Cross-anchor up-frame interpolation temps (F5↔F6 reorientation lives
-      // INSIDE the ride — see _updateLadderCamera; camera never rolls on-floor).
-      _upFrom: new THREE.Vector3(),
+      // Cross-anchor up-frame interpolation temps (F5↔F6 reorientation — Q10:
+      // down-rides roll early in the ride, up-rides level AFTER it; see
+      // _updateLadderCamera / _ladderSlerpUp).
       _upTo: new THREE.Vector3(),
       _upQuat: new THREE.Quaternion(),
       _upQuatE: new THREE.Quaternion(),
-      // F5/F6 drag-to-rotate (S4): mouse drag rotates lc.dir — the dolly
-      // direction captured at ladderEngage — around the floor's up-frame with
-      // ORBIT's velocity+damping feel (constants mirror this.orbit). Enabled
+      // F5/F6 drag-to-rotate (S4): mouse drag rotates the dolly direction —
+      // the LOCAL orbital-frame pose on F5 (heading-relative, B1), the inertial
+      // world dir on F6 — around the floor's up-frame with ORBIT's
+      // velocity+damping feel (constants mirror this.orbit). Enabled
       // only on floors 5/6 (F7 stays chart-locked; F3/F4 keep shipped
       // behavior); every consumer is additionally gated on lc.active, so the
       // shipped mouse handling is byte-identical while the ladder is off.
@@ -625,6 +655,46 @@ export class CameraSystem {
       // engaged ladder floor is 3 and the inspect dim/overlay effects are
       // applied. See _ladderApplyInspectFx.
       inspectFxActive: false,
+      // B1 (docs/ladder/08-workbench.md §8) — "flying backwards" fix. On SHIP
+      // anchors the dolly offset lives in the ship's ORBITAL frame — R = radial,
+      // T = velocity (Gram-Schmidt against R; identical for circular orbits),
+      // N = R × T — as unit local coefficients `local = (r, t, n)`, and the
+      // world `dir` is rebuilt from the LIVE frame every frame, exactly what the
+      // shipped CHASE does with velDir/radialDir. The camera therefore follows
+      // the heading instead of drifting behind → beside → ahead over half an
+      // orbit. Earth anchors keep the inertial world `dir` (that is what makes
+      // Earth's spin visible on F6/F7). Cross-anchor rides: ship→Earth freezes
+      // the current world dir (continuity, then inertial); Earth→ship slerps the
+      // world dir from the frozen inertial start toward the ARRIVAL local pose
+      // (the player's per-floor drag memory, else the canonical chase-behind
+      // pose) recomputed each frame from the live frame, on the ride's ease.
+      local: new THREE.Vector3(0, 1, 0),   // (r, t, n): x along R, y along T, z along N
+      localSeeded: false,                  // false ⇒ project the world dir on the next ship-anchored frame
+      floor: null,                         // engaged frame's floor id (drag-memory key)
+      dragMemory: {},                      // floor → Vector3 local pose last dragged there (D5: per-floor framing memory)
+      rideDirFrom: new THREE.Vector3(),    // Earth→ship ride: frozen inertial start dir
+      rideDirSlerp: false,                 // true while a ride slerps `dir` toward the local arrival pose
+      _R: new THREE.Vector3(1, 0, 0),
+      _T: new THREE.Vector3(0, 0, 1),      // persists across frames: the degenerate-velocity fallback
+      _N: new THREE.Vector3(0, -1, 0),
+      _frameTmp: new THREE.Vector3(),
+      _arrival: new THREE.Vector3(),
+      _dirQuat: new THREE.Quaternion(),
+      _dirQuatE: new THREE.Quaternion(),
+      _localUp: new THREE.Vector3(1, 0, 0),   // the R axis in local coordinates (the ship floors' pole)
+      _localRight: new THREE.Vector3(),
+      // Q10 — the roll is its own phase (see LADDER_LEVEL_MS / LADDER_DOWN_ROLL_FRAC).
+      // `_upStart` is the camera.up captured at ride start: an UP-ride holds it
+      // for the whole flight and then levels it to Earth-north in the post-ride
+      // `leveling` phase; a DOWN-ride rolls it to the live ship-radial during
+      // the first LADDER_DOWN_ROLL_FRAC of the ride. `levelHoldFloor` is the
+      // up-ride's DEPARTURE floor, whose timeCap main.js keeps feeding the
+      // TimeAuthority until the level phase completes (ladderWarpHoldFloor).
+      _upStart: new THREE.Vector3(0, 1, 0),
+      leveling: false,
+      levelT: 0,
+      rideFloorFrom: null,
+      levelHoldFloor: null,
     };
 
     this._boundMouseDown = this._onMouseDown.bind(this);
@@ -864,7 +934,7 @@ export class CameraSystem {
     // Bypasses the normal view path entirely; the follow-light rig + shake below
     // still run so the ship stays lit on the ladder.
     if (this._ladderCam.active) {
-      this._updateLadderCamera(dt, playerPos, radialDir);
+      this._updateLadderCamera(dt, playerPos, velDir, radialDir);
     } else if (this._launchCeremony.active) {
       // V-7: Launch ceremony override — bypass normal view computation
       const result = this._updateLaunchCeremony(dt, playerPos, velDir, radialDir, playerQuat);
@@ -3667,7 +3737,8 @@ export class CameraSystem {
   //
   // The ceremony-BEAT pattern applied to the ladder: LadderController hands the
   // camera a target FRAME { distU, fov, anchor } derived from (floor, z01), and
-  // this engine dollies along a fixed world direction from the anchor. Rides
+  // this engine dollies along a direction from the anchor — heading-relative on
+  // ship anchors (the ship's orbital frame, B1), inertial on Earth anchors. Rides
   // (crossings / mini-rides) cubic-in-out interpolate distance + FOV; free
   // scroll / settle ease toward the live target. Anchor 'earth' aims at the
   // scene ORIGIN (Earth centre) — the Earth-fixed framing setView() cannot do.
@@ -3691,6 +3762,17 @@ export class CameraSystem {
     const anchorPos = this._ladderAnchorPos(frame.anchor);
     const d = lc._tmp.copy(this.camera.position).sub(anchorPos);
     if (d.lengthSq() > 1e-20) lc.dir.copy(d).normalize();
+    // B1: the local (orbital-frame) coefficients are projected from THIS world
+    // dir on the first ship-anchored frame (update() owns the live velDir), so
+    // the pose at engage is exactly today's — the frame only starts co-rotating
+    // afterwards. Per-floor drag memory deliberately survives (D5).
+    lc.localSeeded = false;
+    lc.rideDirSlerp = false;
+    lc.floor = (frame.floor != null) ? frame.floor : null;
+    lc.leveling = false;
+    lc.levelT = 0;
+    lc.rideFloorFrom = null;
+    lc.levelHoldFloor = null;
     this._baseFov = frame.fov;
     // F5/F6 drag-to-rotate: ladder frames carry their floor id
     // (LadderController._frame). Fresh engage starts with no drag in flight.
@@ -3709,6 +3791,9 @@ export class CameraSystem {
     lc.active = false;
     lc.riding = false;
     lc.onDone = null;
+    lc.leveling = false;
+    lc.levelT = 0;
+    lc.levelHoldFloor = null;
     // Reset the whole drag block — nothing may leak into the next engage.
     lc.drag.enabled = false;
     lc.drag.isDragging = false;
@@ -3728,9 +3813,13 @@ export class CameraSystem {
   ladderSetTarget(frame) {
     const lc = this._ladderCam;
     if (!lc.active) return;
+    // Anchors only change through rides; should a target ever switch anchor
+    // without one, re-project the (continuous) world dir into the new frame.
+    if (frame.anchor !== lc.anchor) lc.localSeeded = false;
     lc.anchor = frame.anchor;
     lc.targetDistU = frame.distU;
     lc.fov = frame.fov;
+    if (frame.floor != null) lc.floor = frame.floor;
     lc.drag.enabled = (frame.floor === 5 || frame.floor === 6);
     this._ladderApplyInspectFx(frame.floor);
   }
@@ -3747,6 +3836,7 @@ export class CameraSystem {
       if (typeof opts.onDone === 'function') opts.onDone();
       return;
     }
+    const wasRiding = lc.riding;       // B1: a replacement ride may inherit an in-flight dir slerp
     lc.riding = true;
     lc.rideT = 0;
     lc.rideDur = Math.max(0.001, (opts.rideMs || 550) / 1000);
@@ -3759,6 +3849,48 @@ export class CameraSystem {
     lc.targetDistU = opts.distU;
     lc.fov = opts.fov;
     lc.onDone = (typeof opts.onDone === 'function') ? opts.onDone : null;
+    // B1 — direction policy per anchor pair (docs/ladder/08-workbench.md B1):
+    //   ship→Earth : `dir` simply stops being rebuilt from the local pose — the
+    //                last rebuilt world dir is frozen (continuity) and then
+    //                holds inertial on the Earth floors.
+    //   Earth→ship : freeze the inertial start dir and slerp it, on the ride's
+    //                ease, toward the live world vector of the ARRIVAL local
+    //                pose — the player's drag memory for the destination floor
+    //                (D5) else the canonical chase-behind pose — so every
+    //                descent lands "back in the cockpit", never facing backwards.
+    //   ship→ship  : the local pose carries over (heading-relative throughout);
+    //                a ride replacing an in-flight Earth→ship slerp (G3 flick
+    //                upgrade/undo) continues that slerp from the current dir so
+    //                the direction never snaps mid-flight.
+    if (opts.anchor === 'ship') {
+      if (lc.rideAnchorFrom === 'earth') {
+        lc.rideDirFrom.copy(lc.dir);
+        const mem = (opts.floor != null) ? lc.dragMemory[opts.floor] : null;
+        if (mem) lc.local.copy(mem); else this._ladderChaseLocal(lc.local);
+        lc.localSeeded = true;
+        lc.rideDirSlerp = true;
+      } else if (wasRiding && lc.rideDirSlerp) {
+        lc.rideDirFrom.copy(lc.dir);       // continue the interrupted slerp from here
+      } else {
+        lc.rideDirSlerp = false;
+      }
+    } else {
+      lc.rideDirSlerp = false;
+    }
+    lc.rideFloorFrom = lc.floor;
+    lc.floor = (opts.floor != null) ? opts.floor : null;
+    // Q10: the up at ride start is what an UP-ride holds and a DOWN-ride rolls
+    // away from (so a ride that interrupts a level phase or reverses a half-
+    // rolled ride starts from the CURRENT horizon — never a snap). A cross-
+    // anchor ride owns the up from here, cancelling any level phase; a same-
+    // anchor ride (F6→F7 flicked during leveling) does not touch the up state,
+    // so a running level phase completes on its own clock.
+    if (lc.rideAnchorFrom !== opts.anchor) {
+      lc._upStart.copy(this.camera.up).normalize();
+      lc.leveling = false;
+      lc.levelT = 0;
+      lc.levelHoldFloor = null;
+    }
     // A ride owns the camera (G3 flick replacements included): cancel any
     // in-flight drag and its momentum; re-gate on the destination floor.
     lc.drag.enabled = (opts.floor === 5 || opts.floor === 6);
@@ -3775,6 +3907,26 @@ export class CameraSystem {
   /** @returns {boolean} whether the ladder camera currently owns the view. */
   isLadderActive() { return this._ladderCam.active; }
 
+  /**
+   * Q10 warp-feed rule (hub wire in main.js): while a cross-anchor ride is going
+   * UP (ship→Earth) — and until its post-ride level phase completes — the
+   * DEPARTURE floor's timeCap must keep driving the TimeAuthority, so the
+   * time-lapse engages only after arrival + leveling, never during the flight.
+   * Down-rides keep the existing destination pre-ramp (time settles first).
+   * @returns {number|null} the departure floor id to hold, or null (the core's
+   *   current floor drives, as before)
+   */
+  ladderWarpHoldFloor() {
+    const lc = this._ladderCam;
+    if (!lc.active) return null;
+    if (lc.riding && lc.rideAnchorFrom === 'ship' && lc.anchor === 'earth') return lc.rideFloorFrom;
+    if (lc.leveling) return lc.levelHoldFloor;
+    return null;
+  }
+
+  /** @returns {boolean} true while the post-up-ride level-to-north phase runs (Q10). */
+  isLadderLeveling() { return this._ladderCam.leveling; }
+
   /** @private world position of the frame anchor (Earth centre = scene origin;
    *  ship = the live player position). Writes into `out` and returns it. */
   _anchorWorld(anchor, playerPos, out) {
@@ -3789,12 +3941,80 @@ export class CameraSystem {
     return anchor === 'earth' ? out.set(0, 1, 0) : out.copy(radialDir);
   }
 
+  /**
+   * @private Write camera.up = slerp(fromUp → toUp, e) (unit vectors, e in 0..1).
+   * Endpoints are exact (e ≤ 0 → fromUp, e ≥ 1 → toUp). setFromUnitVectors is
+   * robust to the near-antiparallel (dot ≈ −1) case (it picks an orthogonal
+   * axis), so a ship at the sub-Earth pole doesn't blow up the nlerp; the
+   * already-aligned case short-circuits (avoids a degenerate quat).
+   */
+  _ladderSlerpUp(fromUp, toUp, e) {
+    const lc = this._ladderCam;
+    if (e >= 1 || fromUp.dot(toUp) > 0.999999) { this.camera.up.copy(toUp); return; }
+    if (e <= 0) { this.camera.up.copy(fromUp); return; }
+    lc._upQuat.setFromUnitVectors(fromUp, toUp);
+    lc._upQuatE.identity().slerp(lc._upQuat, e);
+    this.camera.up.copy(fromUp).applyQuaternion(lc._upQuatE).normalize();
+  }
+
   /** @private world position of the frame anchor. */
   _ladderAnchorPos(anchor) {
     // Earth centre = scene origin (radialDir is playerPos.normalize()). The ship
     // anchor uses the live cached player position.
     if (anchor === 'earth') return this._tmpVecA.set(0, 0, 0);
     return this._tmpVecA.copy(this._lastPlayerPos);
+  }
+
+  /**
+   * B1 — build the ship's live orbital frame into lc._R/_T/_N. R = radialDir;
+   * T = velDir orthogonalized against R (Gram-Schmidt — identical to velDir on
+   * a circular orbit, and it keeps the frame orthonormal so the engage-time
+   * projection reproduces the pose exactly); N = R × T (unit, right-handed).
+   * A degenerate velocity (zero, or parallel to R) falls back to the PREVIOUS
+   * T re-orthogonalized against the new R, so the frame never collapses.
+   * @private
+   */
+  _ladderShipFrame(radialDir, velDir) {
+    const lc = this._ladderCam;
+    const R = lc._R.copy(radialDir);
+    const T = lc._T;
+    const c = lc._frameTmp;
+    if (velDir && velDir.lengthSq() > 1e-12) c.copy(velDir); else c.copy(T);
+    c.addScaledVector(R, -c.dot(R));
+    if (c.lengthSq() < 1e-12) {
+      // Live velocity AND the previous T are radial — pick any perpendicular.
+      c.copy(T).addScaledVector(R, -T.dot(R));
+      if (c.lengthSq() < 1e-12) c.set(0, 1, 0).addScaledVector(R, -R.y);
+      if (c.lengthSq() < 1e-12) c.set(1, 0, 0).addScaledVector(R, -R.x);
+    }
+    T.copy(c).normalize();
+    lc._N.crossVectors(R, T);
+  }
+
+  /** @private local (r,t,n) → unit world direction on the CURRENT frame. */
+  _ladderLocalToWorld(local, out) {
+    const lc = this._ladderCam;
+    return out.set(0, 0, 0)
+      .addScaledVector(lc._R, local.x)
+      .addScaledVector(lc._T, local.y)
+      .addScaledVector(lc._N, local.z)
+      .normalize();
+  }
+
+  /** @private unit world direction → local (r,t,n) on the CURRENT frame. */
+  _ladderWorldToLocal(dir, out) {
+    const lc = this._ladderCam;
+    return out.set(dir.dot(lc._R), dir.dot(lc._T), dir.dot(lc._N)).normalize();
+  }
+
+  /**
+   * @private The canonical chase-behind local pose: behind (t < 0) and slightly
+   * above (r > 0, n = 0) with the elevation of the shipped CHASE offset
+   * (offsetAbove / offsetBehind), so an Earth→ship descent lands where the
+   * shipped chase camera would sit.
+   */
+  _ladderChaseLocal(out) {
+    return out.set(this.chase.offsetAbove, -this.chase.offsetBehind, 0).normalize();
   }
 
   /**
@@ -3843,20 +4063,37 @@ export class CameraSystem {
 
   /**
    * Per-frame ladder camera driver (called from update() when engaged).
+   * @param {number} dt - real seconds
+   * @param {THREE.Vector3} playerPos - live ship position (scene units)
+   * @param {THREE.Vector3} velDir - unit ship velocity (zero when degenerate)
+   * @param {THREE.Vector3} radialDir - unit ship radial (playerPos normalized)
    * @private
    */
-  _updateLadderCamera(dt, playerPos, radialDir) {
+  _updateLadderCamera(dt, playerPos, velDir, radialDir) {
     const lc = this._ladderCam;
 
+    // B1: on a ship anchor the dolly direction is heading-relative — build the
+    // live orbital frame first (the drag and the direction rebuild below both
+    // need it), and seed the local pose from the world dir the FIRST time a
+    // ship-anchored frame runs after engage (byte-identical pose at engage).
+    const shipAnchored = (lc.anchor === 'ship');
+    if (shipAnchored) {
+      this._ladderShipFrame(radialDir, velDir);
+      if (!lc.localSeeded) {
+        this._ladderWorldToLocal(lc.dir, lc.local);
+        lc.localSeeded = true;
+      }
+    }
+
     let ease = 0;
+    const wasRiding = lc.riding;   // Q10: the completion frame still counts as in-flight for the up rule
     if (lc.riding) {
       lc.rideT += dt / lc.rideDur;
       if (lc.rideT >= 1) {
         lc.rideT = 1;
         lc.riding = false;
       }
-      const t = lc.rideT;
-      ease = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; // cubic in-out
+      ease = cubicInOut(lc.rideT); // cubic in-out
       lc.curDistU = lc.rideFromDistU + (lc.rideToDistU - lc.rideFromDistU) * ease;
       const fov = lc.rideFromFov + (lc.rideToFov - lc.rideFromFov) * ease;
       this._baseFov = fov;
@@ -3876,29 +4113,61 @@ export class CameraSystem {
       // accumulated drag velocities — yaw around the floor's up-frame pole,
       // pitch around camera-right clamped to ORBIT's pole window — then decay
       // the velocities (ORBIT momentum: ×damping per frame, snap to 0 below
-      // 1e-5). Incremental per-frame rotations keep F5's MOVING radial
-      // up-frame consistent (each step rotates relative to this frame's up);
-      // the lookAt(anchorPos) below is unchanged. Rides never reach here
+      // 1e-5). On a SHIP anchor (F5) the rotation is applied to the LOCAL pose
+      // — yaw about local R, pitch about local right — so a drag stays
+      // heading-relative as the ship orbits (B1), and the result is remembered
+      // per floor (D5) as the Earth→ship arrival pose. On an Earth anchor (F6)
+      // it rotates the inertial world dir about Earth-north, unchanged. The
+      // lookAt(anchorPos) below is unchanged. Rides never reach here
       // (non-riding branch), and ladderStartRide cancels in-flight drags.
       const dg = lc.drag;
       if (dg.enabled && (dg.velocityTheta !== 0 || dg.velocityPhi !== 0)) {
-        const up = this._ladderUpFor(lc.anchor, radialDir, lc._dragUp);
-        lc.dir.applyAxisAngle(up, dg.velocityTheta);            // yaw around the pole
-        const right = lc._dragRight.crossVectors(up, lc.dir);
+        const v = shipAnchored ? lc.local : lc.dir;
+        const up = shipAnchored ? lc._localUp : this._ladderUpFor(lc.anchor, radialDir, lc._dragUp);
+        v.applyAxisAngle(up, dg.velocityTheta);                 // yaw around the pole
+        const right = lc._dragRight.crossVectors(up, v);
         if (right.lengthSq() > 1e-12) {
           right.normalize();
           // Rotating around `right = up × dir` by +a INCREASES the angle from
           // the pole (right-hand rule); clamp the resulting polar angle to
           // ORBIT's gimbal window [0.1, π−0.1] (see _computeOrbit).
-          const angle = Math.acos(Math.max(-1, Math.min(1, lc.dir.dot(up))));
+          const angle = Math.acos(Math.max(-1, Math.min(1, v.dot(up))));
           const target = Math.max(0.1, Math.min(Math.PI - 0.1, angle + dg.velocityPhi));
-          if (target !== angle) lc.dir.applyAxisAngle(right, target - angle);
+          if (target !== angle) v.applyAxisAngle(right, target - angle);
         }
-        lc.dir.normalize();
+        v.normalize();
+        if (shipAnchored && lc.floor != null) {
+          const m = lc.dragMemory[lc.floor] || (lc.dragMemory[lc.floor] = new THREE.Vector3());
+          m.copy(v);
+        }
         dg.velocityTheta *= dg.damping;
         dg.velocityPhi *= dg.damping;
         if (Math.abs(dg.velocityTheta) < 1e-5) dg.velocityTheta = 0;
         if (Math.abs(dg.velocityPhi) < 1e-5) dg.velocityPhi = 0;
+      }
+    }
+
+    // B1 — resolve the world dolly direction for this frame. Ship anchor: the
+    // local pose on the LIVE frame (heading-relative, like CHASE); during an
+    // Earth→ship ride slerp from the frozen inertial start toward that live
+    // arrival vector on the ride's ease (endpoints exact: ease 0 = start,
+    // ease 1 = arrival). Earth anchor: `dir` is inertial and left untouched
+    // (a ship→Earth ride therefore freezes it at ride start).
+    if (shipAnchored) {
+      const arrival = this._ladderLocalToWorld(lc.local, lc._arrival);
+      if (lc.riding && lc.rideDirSlerp) {
+        const from = lc.rideDirFrom;
+        const dot = from.dot(arrival);
+        if (dot > 0.999999) {
+          lc.dir.copy(arrival);
+        } else {
+          lc._dirQuat.setFromUnitVectors(from, arrival);
+          lc._dirQuatE.identity().slerp(lc._dirQuat, ease);
+          lc.dir.copy(from).applyQuaternion(lc._dirQuatE).normalize();
+        }
+      } else {
+        lc.dir.copy(arrival);
+        lc.rideDirSlerp = false;
       }
     }
 
@@ -3916,29 +4185,38 @@ export class CameraSystem {
     }
     // camera = anchor + dir * distance
     this.camera.position.copy(anchorPos).addScaledVector(lc.dir, lc.curDistU);
-    // Up-frame. On-floor (and same-anchor rides) the up rule is exact: radial for
-    // a ship anchor (roll-free), Earth-north for an earth anchor. During a
-    // CROSS-anchor ride (F5↔F6) the destination anchor is live from ride start
-    // (ladderStartRide sets lc.anchor = opts.anchor), so applying the destination
-    // rule directly would SNAP camera.up on frame 1. Instead interpolate up from
-    // the source frame's up to the destination's with the SAME cubic `ease` the
-    // anchor-lerp uses, so the whole reorientation lives inside the ~550 ms
-    // flight (01-numbers: camera never rolls ON-floor).
-    if (lc.riding && lc.rideAnchorFrom !== lc.anchor) {
-      const fromUp = this._ladderUpFor(lc.rideAnchorFrom, radialDir, lc._upFrom);
-      const toUp = this._ladderUpFor(lc.anchor, radialDir, lc._upTo);
-      const dot = fromUp.dot(toUp);
-      if (dot > 0.999999) {
-        // Already aligned — no rotation to interpolate (avoids a degenerate quat).
-        this.camera.up.copy(toUp);
-      } else {
-        // slerp fromUp→toUp by `ease`. setFromUnitVectors is robust to the
-        // near-antiparallel (dot ≈ −1) degenerate case (it picks an orthogonal
-        // axis), so a ship at the sub-Earth pole doesn't blow up the nlerp.
-        lc._upQuat.setFromUnitVectors(fromUp, toUp);
-        lc._upQuatE.identity().slerp(lc._upQuat, ease);
-        this.camera.up.copy(fromUp).applyQuaternion(lc._upQuatE).normalize();
+    // Up-frame (Q10 — "one change at a time: the roll is its own phase"). On-
+    // floor (and same-anchor rides) the up rule is exact: radial for a ship
+    // anchor (roll-free), Earth-north for an earth anchor. Cross-anchor rides
+    // (F5↔F6) are asymmetric so the horizon never rolls during the fast part of
+    // the flight:
+    //   UP   (ship→Earth): the up captured at ride start is HELD for the whole
+    //        flight; on completion the `leveling` phase levels it to Earth-north
+    //        over LADDER_LEVEL_MS (cubic in-out) and exactness resumes after.
+    //   DOWN (Earth→ship): roll from the start up to the LIVE ship-radial during
+    //        the first LADDER_DOWN_ROLL_FRAC of the ride (the dolly barely moves
+    //        there), fully ship-up before the dive dominates.
+    // `wasRiding` classifies the completion frame as still-in-flight so the
+    // held up is what the ride ends on (no snap into the level phase).
+    const crossRide = wasRiding && lc.rideAnchorFrom !== lc.anchor;
+    if (crossRide && lc.anchor === 'earth') {
+      this.camera.up.copy(lc._upStart);
+      if (!lc.riding) {                       // arrived: arm the level phase
+        lc.leveling = true;
+        lc.levelT = 0;
+        lc.levelHoldFloor = lc.rideFloorFrom;
       }
+    } else if (crossRide) {
+      const rollEase = cubicInOut(Math.min(1, lc.rideT / LADDER_DOWN_ROLL_FRAC));
+      this._ladderSlerpUp(lc._upStart, this._ladderUpFor('ship', radialDir, lc._upTo), rollEase);
+    } else if (lc.leveling) {
+      lc.levelT = Math.min(1, lc.levelT + dt / (LADDER_LEVEL_MS / 1000));
+      if (lc.levelT >= 1 - 1e-9) {          // tolerate fp accumulation of frame dts
+        lc.levelT = 1;
+        lc.leveling = false;
+        lc.levelHoldFloor = null;
+      }
+      this._ladderSlerpUp(lc._upStart, this._ladderUpFor('earth', radialDir, lc._upTo), cubicInOut(lc.levelT));
     } else {
       this._ladderUpFor(lc.anchor, radialDir, this.camera.up);
     }

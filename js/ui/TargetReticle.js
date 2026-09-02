@@ -61,6 +61,12 @@ export class TargetReticle {
     this._height = 0;
     this._halfW = 0;
     this._halfH = 0;
+    // Perf (2026-09-02): mirrors the canvas display state so update() can skip
+    // the whole paint while hidden — setVisible() used to flip CSS only, and a
+    // display:none canvas was still cleared + fully drawn every frame (menus,
+    // the shop, the F6/F7 icon floors). The canvas starts visible (no display
+    // rule in _createCanvas); main.js hides it at boot via setVisible(false).
+    this._visible = true;
 
     // Reusable math objects
     this._tempVec3 = new THREE.Vector3();
@@ -396,6 +402,16 @@ export class TargetReticle {
       }
     }
 
+    // Perf (2026-09-02): hidden canvas → no paint. Everything above (timers,
+    // ceremony/lasso/catch bookkeeping) has run so state stays correct across
+    // a hide; the closure-rate derivative resets so the first visible frame
+    // cannot spike off a stale distance. Nothing below is read by another
+    // system — every cross-system input to the reticle arrives via events.
+    if (!this._visible) {
+      this._prevSelectedTargetDist = null;
+      return;
+    }
+
     this.ctx.clearRect(0, 0, this._width, this._height);
 
     // Phase 6: Screen micro-shake on lasso fire (2px, 100ms)
@@ -584,12 +600,17 @@ export class TargetReticle {
   }
 
   /**
-   * Show/hide the canvas.
+   * Show/hide the canvas. Also gates the per-frame paint in update() (perf):
+   * a hidden reticle keeps its timers ticking but draws nothing.
    * @param {boolean} visible
    */
   setVisible(visible) {
+    this._visible = !!visible;
     this.canvas.style.display = visible ? 'block' : 'none';
   }
+
+  /** @returns {boolean} whether the reticle canvas is shown (and painted). */
+  isVisible() { return this._visible; }
 
   /**
    * Sim mode: catch pulse is disabled — no bracket flash, no green glow.

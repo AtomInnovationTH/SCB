@@ -483,11 +483,11 @@ export class ScoringSystem {
       credits: this.credits,
       totalScore: this.totalScore,
       captureCreditsEarned: this.captureCreditsEarned,  // S1 taper (per-run)
-      missionNumber: Math.floor(gameState.debrisCleared / 5) + 1,  // S1 Fix M1
+      missionNumber: Math.floor(gameState.debrisCleared / Constants.MISSIONS.DEBRIS_PER_MISSION) + 1,  // S1 Fix M1 (T8 SSOT)
       debrisCleared: gameState.debrisCleared,  // S1 Fix M1
       totalCaptures: gameState.debrisCleared,  // S1 Fix M1
       manualCaptures: 0,  // not yet tracked individually
-      missionsCompleted: Math.floor(gameState.debrisCleared / 5),  // S1 Fix M1
+      missionsCompleted: Math.floor(gameState.debrisCleared / Constants.MISSIONS.DEBRIS_PER_MISSION),  // S1 Fix M1 (T8 SSOT)
       bestMissionScore: this.totalScore,
       bestStreak: this.bestStreak,
       currentStreak: this.currentStreak,

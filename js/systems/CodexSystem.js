@@ -59,6 +59,22 @@ export const CodexCategory = {
 export const ALIASES = Object.create(null);
 
 /**
+ * Instant "+ Library" acknowledgment (docs/ladder/08-workbench.md §11 Wave 4
+ * "immediate codex-unlock chip"). Unlocks are QUEUED — 20 s cooldown +
+ * 30 s startup grace — so the chime and the Discoveries row can land 30–50 s
+ * after the action that earned them. The moment an unlock REQUEST is accepted
+ * (first request for a locked entry), a HintTicker chip names the entry so
+ * the player connects cause and reward; the chime/CODEX_UNLOCKED/TECH_UNLOCKED
+ * still fire on the queue's own schedule. A ticker chip, NOT a toast: the
+ * flight-HUD rule (test-hud-activate-keys) forbids center-screen popups on
+ * unlock; the bottom-strip ticker is the same surface the codex "did you
+ * know?" reminder already uses, glossary-decorated so terms deep-link.
+ */
+export const CODEX_ACK_CHIP_MS = 6000;
+/** HINT_POSTED id prefix for the acknowledgment chip (one id per entry). */
+export const CODEX_ACK_CHIP_ID = 'codex-ack:';
+
+/**
  * Pure search predicate — case-insensitive substring on
  * title / shortText / fullText / category. Exported for the viewer + tests.
  * @param {object} entry
@@ -275,6 +291,12 @@ export class CodexSystem {
   _queueUnlock(entry) {
     if (entry.unlocked) return;
     if (this._unlockQueue.some(e => e.id === entry.id)) return;
+    // The request is ACCEPTED from here (locked, not yet queued): acknowledge
+    // it instantly on the ticker, whether the unlock itself performs now or
+    // waits out the grace/cooldown queue. Exactly one chip per accepted
+    // request — the two guards above make duplicates and already-unlocked
+    // entries return before reaching this line.
+    this._postAckChip(entry);
     // During the mission-start grace window, always queue — the update() drain
     // releases entries one-at-a-time once _missionTime passes the grace, so no
     // unlock chime collides with the startup comms/departure cluster.
@@ -284,6 +306,24 @@ export class CodexSystem {
     } else {
       this._unlockQueue.push(entry);
     }
+  }
+
+  /**
+   * @private Post the "+ Library: <title>" acknowledgment chip (HINT_POSTED,
+   * CODEX_ACK_CHIP_MS). Glyph is the Info key — the ticker's chip is a KEY
+   * chip by convention (see OnboardingDirector's codex reminder) and tells the
+   * player how to reach the entry; the entry's own icon rides in the text.
+   */
+  _postAckChip(entry) {
+    eventBus.emit(Events.HINT_POSTED, {
+      id: CODEX_ACK_CHIP_ID + entry.id,
+      text: `+ Library: ${entry.icon ? entry.icon + ' ' : ''}${entry.title}`,
+      glyph: 'I',
+      keys: [],
+      duration: CODEX_ACK_CHIP_MS,
+      priority: 'normal',
+      _codexAck: true,          // tag for tests / downstream filters
+    });
   }
 
   /** @private Perform the actual unlock — set flag, emit events, start cooldown. */

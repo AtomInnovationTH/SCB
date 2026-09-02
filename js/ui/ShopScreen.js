@@ -24,7 +24,9 @@ import {
 } from '../systems/ArmTierCatalog.js';
 
 /**
- * Upgrade definitions — 32 items across 8 categories, all wired to live systems.
+ * Upgrade definitions — 33 items across 9 categories, all wired to live systems
+ * (UPGRADES.length / distinct `cat` values are the SSOT; test-shop-cadence pins
+ * this header to them).
  * ST-6.6: Each upgrade carries a `trl` (NASA TRL 1-9) and optional `trlRationale`
  * for colour-coded badge display. TRL is display-only — NEVER used in gating.
  * Exported for Node.js test harness (test-TRL.js integrity check).

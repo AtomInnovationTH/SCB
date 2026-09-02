@@ -1,5 +1,6 @@
 /**
- * OnboardingDirector.js — orchestrates the 16-beat first-experience pipeline.
+ * OnboardingDirector.js — orchestrates the 9-beat first-experience pipeline
+ * (ONBOARDING_BEATS.length is the SSOT; test-shop-cadence pins this header to it).
  *
  * Delegation 2 (2026-05-31). Walks new players through the reward-first capture
  * spine (v3 beat list, 2026-06-17):

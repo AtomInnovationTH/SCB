@@ -55,7 +55,7 @@ export class KesslerSystem {
     this._missionNumber = 1;
     eventBus.on(Events.SCORE_UPDATE, (d) => {
         if (typeof d?.debrisCleared === 'number') {
-            this._missionNumber = Math.floor(d.debrisCleared / 5) + 1;
+            this._missionNumber = Math.floor(d.debrisCleared / Constants.MISSIONS.DEBRIS_PER_MISSION) + 1;  // T8 SSOT
         }
     });
 

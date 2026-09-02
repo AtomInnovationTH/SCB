@@ -36,6 +36,17 @@ import {
   KESSLER_SYSTEM, CAPTURE_NET, RUNTIME, ARM_MANAGER_EVENT, CARGO_SYSTEM,
 } from './upgradeEffectRoutes.js';
 
+/**
+ * Shop cadence — the depot stop fires at every MISSION boundary, i.e. every
+ * DEBRIS_PER_MISSION credited clears. ONE source of truth
+ * (Constants.MISSIONS.DEBRIS_PER_MISSION, the same number ScoringSystem's
+ * mission counter and missionProgress.js divide by); the three former `% 5`
+ * literals here were the T8 "shop cadence hardcoded" trap
+ * (docs/ladder/02-traps.md). Exported so test-shop-cadence can pin the
+ * equality with ScoringSystem's mission length.
+ */
+export const SHOP_CADENCE = Constants.MISSIONS.DEBRIS_PER_MISSION;
+
 export class GameFlowManager {
   constructor() {
     /** @type {boolean} */
@@ -474,7 +485,7 @@ export class GameFlowManager {
       eventBus.emit(Events.PERSISTENCE_LOADED);
 
       // Returning players already know what the score bar is — activate it
-      // immediately (no 5s delay). The ORBITAL_VIEW timer is gated behind
+      // immediately (no 2 s settle delay). The ORBITAL_VIEW timer is gated behind
       // _firstOrbitalView (set false above) so it won't fire for this path.
       eventBus.emit(Events.HUD_GROUP_ACTIVATE, { group: 'score' });
 
@@ -680,8 +691,9 @@ export class GameFlowManager {
       gameState.clearDebris();
       timerManager.setTimeout(() => {
         if (gameState.currentState === GameStates.INTERACTION) {
-          // Check for shop visit every 5 clears
-          if (gameState.debrisCleared % 5 === 0 && gameState.debrisCleared > 0) {
+          // Check for shop visit at every mission boundary (SHOP_CADENCE = the
+          // mission length, Constants.MISSIONS.DEBRIS_PER_MISSION — T8 SSOT)
+          if (gameState.debrisCleared % SHOP_CADENCE === 0 && gameState.debrisCleared > 0) {
             this.transitionToState(GameStates.SHOP);
           } else {
             this.transitionToState(GameStates.ORBITAL_VIEW);
@@ -694,7 +706,7 @@ export class GameFlowManager {
       gameState.clearDebris();
       timerManager.setTimeout(() => {
         if (gameState.currentState === GameStates.INTERACTION) {
-          if (gameState.debrisCleared % 5 === 0 && gameState.debrisCleared > 0) {
+          if (gameState.debrisCleared % SHOP_CADENCE === 0 && gameState.debrisCleared > 0) {
             this.transitionToState(GameStates.SHOP);
           } else {
             this.transitionToState(GameStates.ORBITAL_VIEW);
@@ -1071,13 +1083,12 @@ export class GameFlowManager {
           }, 2000, { owner: this }); // 2 second delay for cinematic hold
         }
 
-        // ── Shop trigger: every 5 debris cleared ──
+        // ── Shop trigger: every SHOP_CADENCE (= DEBRIS_PER_MISSION) debris cleared ──
         // (digested completions didn't advance the counter — the modulo would
-        // re-fire on the mate's multiple of 5; S13(c). Same for a body the
+        // re-fire on the mate's multiple; S13(c). Same for a body the
         // ledger already paid — register item 37.)
         const debrisCount = gameState.debrisCleared;
-        const SHOP_INTERVAL = 5;
-        if (payCredit && debrisCount > 0 && debrisCount % SHOP_INTERVAL === 0) {
+        if (payCredit && debrisCount > 0 && debrisCount % SHOP_CADENCE === 0) {
           if (gameState.isGameplay()) {
             eventBus.emit(Events.COMMS_MESSAGE, {
               text: `${debrisCount} debris cleared. Return to depot for resupply`,

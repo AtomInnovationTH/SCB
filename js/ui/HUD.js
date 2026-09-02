@@ -889,7 +889,7 @@ export class HUD {
   enableSkillReveal(initialGroups) {
     this._skillRevealActive = true;
     this._skillActiveGroups = initialGroups instanceof Set ? new Set(initialGroups) : new Set();
-    // Score-group activates via HUD_GROUP_ACTIVATE (5s timer in GameFlowManager)
+    // Score-group activates via HUD_GROUP_ACTIVATE (2 s settle-aligned timer in GameFlowManager)
     if (this.visible) {
       this._applySkillReveal();
     }

@@ -400,16 +400,48 @@ export class MotherCallouts {
 
     this._viewInspect = false;
     this._zoomInspect = false;
+    // Zoom Ladder F3 single costume (docs/ladder/08-workbench.md §2 "F3
+    // costume"): a TRANSIENT gate mirroring CityLabels.setSuppressed — while
+    // the ladder is on F3 the BlueprintOverlay DOM cards + the cyan hull outline
+    // ARE the costume and these sprite cards retire. Never persisted; the
+    // inspection signals (CAMERA_VIEW_CHANGE / INSPECT_HULL_OUTLINE) keep owning
+    // the resting state, so clearing it restores exactly what they say. The
+    // shipped Schmitt path never calls setSuppressed → `_suppressed` stays false
+    // → `_applyActive()` reduces to the pre-ladder `viewInspect || zoomInspect`.
+    this._suppressed = false;
     this._onViewChange = ({ view } = {}) => {
       this._viewInspect = (view === 'INSPECTION');
-      this._setActive(this._viewInspect || this._zoomInspect);
+      this._applyActive();
     };
     this._onHullOutline = ({ visible } = {}) => {
       this._zoomInspect = !!visible;
-      this._setActive(this._viewInspect || this._zoomInspect);
+      this._applyActive();
     };
     eventBus.on(Events.CAMERA_VIEW_CHANGE, this._onViewChange);
     eventBus.on(Events.INSPECT_HULL_OUTLINE, this._onHullOutline);
+  }
+
+  /** @returns {boolean} true while the ladder's F3 costume suppresses the sprite cards. */
+  isSuppressed() { return this._suppressed; }
+
+  /**
+   * Transient show/hide gate for the Zoom Ladder's F3 (HULL CAM) costume —
+   * BlueprintOverlay owns the callout grammar there, so the in-world sprite
+   * cards hide while the hull outline (INSPECT_HULL_OUTLINE) keeps working
+   * unmodified. Like CityLabels.setSuppressed this NEVER persists and never
+   * touches the inspection flags: `active = inspecting && !suppressed`.
+   * @param {boolean} v
+   */
+  setSuppressed(v) {
+    v = !!v;
+    if (v === this._suppressed) return;
+    this._suppressed = v;
+    this._applyActive();
+  }
+
+  /** @private Resolve the activation gate: inspecting (either signal) and not suppressed. */
+  _applyActive() {
+    this._setActive((this._viewInspect || this._zoomInspect) && !this._suppressed);
   }
 
   /**

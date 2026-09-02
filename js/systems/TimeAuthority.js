@@ -92,6 +92,24 @@ export class TimeAuthority {
   }
 
   /**
+   * Q10 warp-feed rule (docs/ladder/08-workbench.md §8: "time changes only at
+   * the slow end of a flight"). The per-frame `targetCap` is normally the
+   * CURRENT floor's timeCap (the core reports the destination during a ride —
+   * the pre-ramp). While a cross-anchor ride is going UP, and until its
+   * post-ride level phase completes, the camera reports a HOLD floor (the
+   * departure) whose cap wins, so the time-lapse engages only after arrival +
+   * leveling — never during the flight. Down-rides pass no hold (the fast
+   * destination pre-ramp still settles time first). Pure.
+   * @param {number} floorCap - the core's current/destination floor timeCap
+   * @param {number|null|undefined} holdCap - the departure floor's timeCap while
+   *   an up-crossing holds (CameraSystem.ladderWarpHoldFloor), else null
+   * @returns {number} the cap to feed `update({ targetCap })`
+   */
+  static ladderTargetCap(floorCap, holdCap) {
+    return (holdCap != null && Number.isFinite(holdCap)) ? holdCap : floorCap;
+  }
+
+  /**
    * @param {object} [opts]
    * @param {number} [opts.rampUpTauMs=400]   - exponential τ ramping warp UP (gentle auto-warp drift)
    * @param {number} [opts.rampDownTauMs=120] - exponential τ ramping warp DOWN (fast safety / down-crossing pre-ramp)
