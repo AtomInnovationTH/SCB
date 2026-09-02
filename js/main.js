@@ -616,16 +616,14 @@ async function init() {
       Constants.DEBUG.PERF_REPORT_OVERLAY = true;
       console.info('[PerfReport] overlay scheduled via ?perfReport=1');
     }
-    // Zoom Ladder dev/test boot override (iPad port, 2026-09-02): ?ladder=1
-    // flips the master switch for THIS boot only — the shipped source default
-    // stays false (test-FloorContract pin "ships disabled" reads the source
-    // constant in Node, where no URL exists). Every consumer (LadderController
-    // engage, WheelRouter ownership, InputManager floor keys, CameraSystem
-    // anchors, main's adapt-holdoff) reads Constants.LADDER.ENABLED LIVE, so a
-    // boot-time flip is behaviorally identical to shipping true. ?ladder=0 is
-    // the symmetric force-off for A/B on a WebClip whose saved URL carries =1.
-    // This is how the sealed-iPad build reaches the seven floors ("levels")
-    // for play-testing: bake ?ladder=1 into the WebClip URL at creation.
+    // Zoom Ladder per-boot override (iPad port, 2026-09-02). The shipped
+    // source default is TRUE since 2026-09-02 (owner flip; test-FloorContract
+    // pins it), so ?ladder=1 is a no-op and ?ladder=0 is the useful one: a
+    // symmetric force-OFF for this boot only (A/B against the legacy zoom).
+    // Every consumer (LadderController engage, WheelRouter ownership,
+    // InputManager floor keys, CameraSystem anchors, main's adapt-holdoff)
+    // reads Constants.LADDER.ENABLED LIVE, so a boot-time flip is
+    // behaviorally identical to shipping the other value.
     {
       const lp = urlParams.get('ladder');
       if (lp === '1') {
@@ -1234,7 +1232,7 @@ async function init() {
   // arm-SK branch, the ladder (flag on), or the legacy zoom (flag off).
   // LadderController owns the pure ZoomLadder core + the CameraSystem ride
   // engine + the per-floor render block; the rail is the S2 stub. Everything is
-  // inert while Constants.LADDER.ENABLED is false (ships false) — shipped
+  // inert while Constants.LADDER.ENABLED is false (?ladder=0) — shipped
   // behavior stays byte-identical.
   railIndicator = new RailIndicator();
   // Zoom Ladder F6 (NAVCOM) content orchestrator (S5, M3). Constructed INSIDE the
