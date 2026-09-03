@@ -113,6 +113,12 @@ export class RefitPane {
    * @param {function} [deps.onGhost] - (partIds|null) => void (MotherCallouts.setGhostOutline)
    * @param {function} [deps.onOpenEntry] - (codexId) => void (the Library deep link)
    * @param {function} [deps.onOpenChange] - (isOpen) => void (the D10 calm-cap signal)
+   * @param {function} [deps.adapterDeps] - () => object: the fittingCatalog
+   *   `current`-adapter deps ({ player, resourceSystem, kesslerSystem,
+   *   sensorSystem, cargoSystem, armManager, captureNetSystem, hasUpgrade })
+   *   — a GETTER, resolved per refresh, because some systems construct after
+   *   the pane (Session B commit 4; see _adapterDeps). Absent/throwing → {}
+   *   (the static catalog base — the honest headless fallback).
    * @param {boolean|function} [deps.reducedMotion] - override for the matchMedia probe
    */
   constructor(deps = {}) {
@@ -127,6 +133,7 @@ export class RefitPane {
     this._onGhost = deps.onGhost || null;
     this._onOpenEntry = deps.onOpenEntry || null;
     this._onOpenChange = deps.onOpenChange || null;
+    this._adapterDepsFn = deps.adapterDeps || null;
     this._reducedMotionDep = deps.reducedMotion;
 
     this._enabled = false;
@@ -464,11 +471,19 @@ export class RefitPane {
     };
   }
 
-  /** @private Adapter deps for fittingCatalog `current` reads: the pane
-   *  injects NO live systems (main.js feeds live rows through providers
-   *  instead), so adapters return undefined and the row shows the static
-   *  base — honest headless (see FINDINGS in the Wave-5 (2) report). */
-  _adapterDeps() { return {}; }
+  /** @private Adapter deps for fittingCatalog `current` reads (Session B
+   *  commit 4 — the Wave-5 (2) FINDINGS, closed): main.js injects a GETTER
+   *  returning { player, resourceSystem, kesslerSystem, sensorSystem,
+   *  cargoSystem, armManager, captureNetSystem, hasUpgrade } so every
+   *  alternative row shows the LIVE number and the delta arrow compares
+   *  live → new. Resolved per refresh (never cached — some systems construct
+   *  after the pane); absent or throwing → {} and the catalog's safeAdapter
+   *  wrapper returns undefined → the row shows the static base (the honest
+   *  headless fallback, exactly the pre-commit-4 behaviour). */
+  _adapterDeps() {
+    if (!this._adapterDepsFn) return {};
+    try { return this._adapterDepsFn() || {}; } catch (_e) { return {}; }
+  }
 
   /** @private Live rows for a manifest entry, falling back to its spec. */
   _rowsFor(sub) {

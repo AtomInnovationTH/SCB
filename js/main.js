@@ -1471,6 +1471,21 @@ async function init() {
       // Alternative hover → the hull hardware pulses cyan (MotherCallouts
       // ghost outlines, the one outline system).
       onGhost: (ids) => motherCallouts.setGhostOutline(ids),
+      // Live alternative rows (Session B commit 4 — the Wave-5 (2) FINDINGS,
+      // closed): the fittingCatalog `current` adapters read these deps. A
+      // GETTER returning a fresh object, so every read resolves the LIVE
+      // module bindings (kesslerSystem/captureNetSystem are imported
+      // singletons; the rest are init()-order lets — some construct after
+      // this pane). hasUpgrade mirrors the pane's own getUpgradeLevel truth
+      // (ShopScreen.purchasedUpgrades — the same map GameFlowManager's
+      // runtime checks walk). The catalog's safeAdapter wrapper turns any
+      // missing/throwing read into undefined → the static base, never a
+      // crash.
+      adapterDeps: () => ({
+        player, resourceSystem, kesslerSystem, sensorSystem, cargoSystem,
+        armManager, captureNetSystem,
+        hasUpgrade: (id) => (shopScreen.purchasedUpgrades.get(id) || 0) > 0,
+      }),
       // Card title / spec term → the TECH LIBRARY PANE on that entry while
       // the pane exists (08-workbench §3 "tap → TECH LIBRARY slides in"; the
       // full-screen viewer stays one click away via MAXIMIZE). Without the
