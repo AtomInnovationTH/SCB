@@ -247,7 +247,13 @@ const SYSTEMS = [
         massKg: 0.5, priority: 2, specs: ['GNSS patch pair'],
         pick: ['GPS_Patch_0', 'GPS_Patch_1'],
         anchor: [ 0.376 * M, -0.137 * M, 0.87 * M ] },
-      { id: 'ttc_aft', name: 'S-BAND OMNI (AFT)', risk: 'GREEN', tier: 'detail', codexId: 'comms_blackout',
+      // codexId remap (owner review, 2026-09-03): the aft whip is the second
+      // half of the omni PAIR — one S-band radio system, one briefing
+      // (`frequency_bands`: "a small omnidirectional antenna holds the link"),
+      // like the two flower parts share theirs. `comms_blackout` (ionospheric
+      // scintillation, reentry plasma) stays reachable by its own gameplay
+      // unlock and the frequency_bands related chip.
+      { id: 'ttc_aft', name: 'S-BAND OMNI (AFT)', risk: 'GREEN', tier: 'detail', codexId: 'frequency_bands',
         massKg: 1, priority: 1, specs: ['Aft whip of the omni pair'],
         pick: ['TTC_Omni_1'],
         anchor: [ 0, 0.40 * M, -0.92 * M ] },
@@ -276,7 +282,12 @@ const SYSTEMS = [
         mesh: 'ReelCartridge_0', dynamic: true,
         pick: ['ReelHousing_0', 'ReelHousing_1', 'ReelHousing_2', 'ReelHousing_3'],
         anchor: [ 0.20 * M, 0.346 * M, -0.46 * M ] },
-      { id: 'hinges', name: 'STRUT HINGES', risk: 'YELLOW', tier: 'detail', codexId: 'robotic_arm',
+      // codexId remap (owner review, 2026-09-03): the Double-A clevises are
+      // the cradle struts' HINGES — `vacuum_mechanisms` ("Mechanisms in
+      // Vacuum": cold-welding hinges, dry films) is their briefing, beside the
+      // flower hinge family; `robotic_arm` describes the DAUGHTER craft, whose
+      // cards already deep-link weaver_gripper / spinner_pad.
+      { id: 'hinges', name: 'STRUT HINGES', risk: 'YELLOW', tier: 'detail', codexId: 'vacuum_mechanisms',
         massKg: 2, priority: 2, specs: ['Double-A clevis, 4×'],
         pick: ['AFrame_60_L', 'AFrame_60_R', 'AFrame_120_L', 'AFrame_120_R',
           'AFrame_240_L', 'AFrame_240_R', 'AFrame_300_L', 'AFrame_300_R'],

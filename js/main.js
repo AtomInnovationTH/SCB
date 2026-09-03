@@ -983,8 +983,10 @@ async function init() {
         // click's visible verb stays the REFIT card). Runs AFTER refit.open()
         // so the <1100 px one-pane rule has settled first: below the
         // breakpoint that open just collapsed the library, isOpen() is false,
-        // and the retarget is skipped — one pane, as documented.
-        if (libraryPane && libraryPane.isOpen() && part && part.codexId) libraryPane.openEntry(part.codexId);
+        // and the retarget is skipped — one pane, as documented. `via` is the
+        // clicked callout name: the library header leads with it (owner
+        // review 2026-09-03 — the page confirms the click before it teaches).
+        if (libraryPane && libraryPane.isOpen() && part && part.codexId) libraryPane.openEntry(part.codexId, { via: part.name });
         // Subnautica rule (08-workbench §2 "clicking a locked part's card
         // unlocks its entry — exploration is how the library fills"): a
         // LOCKED entry gets an unlock request over the ONE existing path

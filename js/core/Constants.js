@@ -25,7 +25,10 @@ export const Constants = {
   // symmetric PLAYBOOK backlinks, docs/ladder/08-workbench.md §2).
   // '1006'→'1007': Wave-5 (Session B) TECH LIBRARY pane PLAYBOOK entry
   // (pane_library + the two symmetric backlinks, docs/ladder/08-workbench.md §2).
-  DATA_VERSION: '1007',
+  // '1007'→'1008': Wave-5 (Session C) callout-bridge review — two hardwareNames
+  // moves (STRUT HINGES → vacuum_mechanisms, S-BAND OMNI (AFT) →
+  // frequency_bands; no entries added or removed, docs/ladder/08-workbench.md §2).
+  DATA_VERSION: '1008',
 
   // ============================================================================
   // === INPUT (Delegation 1, 2026-05-31) ===

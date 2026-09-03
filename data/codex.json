@@ -2466,9 +2466,6 @@
     },
     {
       "id": "comms_blackout",
-      "hardwareNames": [
-        "S-BAND OMNI (AFT)"
-      ],
       "category": "COMMS",
       "trl": 9,
       "icon": "📵",
@@ -2548,7 +2545,8 @@
     {
       "id": "frequency_bands",
       "hardwareNames": [
-        "S-BAND RADIO OMNIS"
+        "S-BAND RADIO OMNIS",
+        "S-BAND OMNI (AFT)"
       ],
       "category": "COMMS",
       "trl": 9,
@@ -4024,9 +4022,6 @@
     },
     {
       "id": "robotic_arm",
-      "hardwareNames": [
-        "STRUT HINGES"
-      ],
       "category": "TETHERS",
       "trl": 9,
       "icon": "🦾",
@@ -4505,7 +4500,8 @@
       "id": "vacuum_mechanisms",
       "hardwareNames": [
         "AFT FLOWER STRUTS",
-        "FLOWER HINGE BRACKETS"
+        "FLOWER HINGE BRACKETS",
+        "STRUT HINGES"
       ],
       "category": "MATERIALS",
       "trl": 9,

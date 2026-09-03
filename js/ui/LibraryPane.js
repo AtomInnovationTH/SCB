@@ -14,7 +14,15 @@
  *
  * CONTENT: the shipped viewer's ENTRY rendered as a side pane (the adapter
  * over the shipped viewer 08-workbench §10 names) —
- *   - header: the entry's emoji icon + title + category, topped — when the
+ *   - header: the entry's emoji icon + a LEAD line + a subtitle. A HARDWARE
+ *     entry (one with `hardwareNames`, the callout vocabulary) leads with the
+ *     PART — the clicked callout name (`openEntry(id, { via })`, honoured
+ *     only when it is one of the entry's own names) else every name it
+ *     documents — and carries "briefing · <entry title> · <category>" as the
+ *     subtitle, so a click on SPIN-BRAKE LASER lands on "SPIN-BRAKE LASER /
+ *     briefing · Detumbling Captured Debris · Attitude" and the page confirms
+ *     the click before it teaches (owner review 2026-09-03). Concept entries
+ *     keep title-then-category. The header is topped — when the
  *     frame could be read — by **the photo you just took** (08-workbench §2;
  *     Session C, owner decision 2): a crop of the live frame around the
  *     subject, taken ONCE per open / entry change, never per frame. The
@@ -209,6 +217,7 @@ export class LibraryPane {
     this._enabled = false;
     this._open = false;
     this._entryId = null;         // the entry the pane is showing (null = prompt)
+    this._via = null;             // the clicked part's callout name behind the entry (header lead), else null
     this._built = false;
     this._root = null;
     this._tab = null;
@@ -259,12 +268,42 @@ export class LibraryPane {
 
   /**
    * A HARDWARE entry documents in-game hardware: it carries `hardwareNames`
-   * (26 entries in data/codex.json — the callout-vocabulary bridge). Pure.
-   * @param {object|null} entry
+   * (the MotherCallouts vocabulary — the search bridge CodexSystem uses).
+   * @param {object} entry
    * @returns {boolean}
    */
   static isHardware(entry) {
     return !!(entry && Array.isArray(entry.hardwareNames) && entry.hardwareNames.length > 0);
+  }
+
+  /**
+   * The entry header's two lines (owner review 2026-09-03, "labels ↔ library"
+   * item 1). Players click a PART and expect the page to be about that part;
+   * the codex is a concept library ("Detumbling Captured Debris" behind the
+   * SPIN-BRAKE LASER), so a concept title reads as a wrong link. For a
+   * hardware entry the header LEADS with the part name — the one clicked
+   * (`via`, honoured only when it is one of the entry's own `hardwareNames`;
+   * never arbitrary text) else every name the entry documents — and carries
+   * the briefing's own title + category as the subtitle: the page confirms
+   * the click before it teaches. Concept entries keep the shipped header
+   * (title, then category). Pure; the data already carries the bridge
+   * (`hardwareNames`), nothing is invented.
+   * @param {object} entry - codex entry (title, hardwareNames)
+   * @param {string|null} via - the clicked part's callout name, if any
+   * @param {string} categoryLabel - the entry's category label
+   * @returns {{ lead: string, sub: string, hardware: boolean }}
+   */
+  static headerLead(entry, via, categoryLabel) {
+    const title = (entry && (entry.title || entry.id)) || '';
+    const cat = categoryLabel || '';
+    if (!LibraryPane.isHardware(entry)) return { lead: title, sub: cat, hardware: false };
+    const names = entry.hardwareNames.filter((n) => typeof n === 'string' && n.length > 0);
+    const lead = (typeof via === 'string' && names.includes(via)) ? via : names.join(' \u00b7 ');
+    return {
+      lead: lead || title,
+      sub: cat ? `briefing \u00b7 ${title} \u00b7 ${cat}` : `briefing \u00b7 ${title}`,
+      hardware: true,
+    };
   }
 
   /**
@@ -387,17 +426,23 @@ export class LibraryPane {
    * open (never a throw, never a blank crash — the viewer's "safe no-op"
    * contract). While disabled the entry is stored for the next open.
    * @param {string} id - codex entry id
+   * @param {{ via?: string }} [opts] - `via`: the clicked part's callout name
+   *   (main.js passes `part.name`); the header leads with it when it is one
+   *   of the entry's own `hardwareNames`. Absent (REFIT title, related chip,
+   *   MAXIMIZE) → the header leads with every name the entry documents.
    * @returns {boolean} true when the entry resolved
    */
-  openEntry(id) {
+  openEntry(id, opts = {}) {
     const entry = this._entry(id);
     let changed = false;
     if (entry) {
+      const via = (opts && typeof opts.via === 'string') ? opts.via : null;
       if (entry.id !== this._entryId) {
         this._entryId = entry.id;
         this._clearSeenTimer();
         changed = true;
       }
+      if (via !== this._via) { this._via = via; changed = true; }   // a sibling part of the same entry: new lead, new photo
     }
     const wasOpen = this._open;
     this.open();                       // a fresh open takes its own photo
@@ -505,6 +550,7 @@ export class LibraryPane {
     const entry = (typeof id === 'string') ? this._entry(id) : null;
     if (!entry) return false;
     this._entryId = entry.id;
+    this._via = null;               // adopted, not clicked: the header leads with every name the entry documents
     this._clearSeenTimer();
     return true;
   }
@@ -544,6 +590,7 @@ export class LibraryPane {
       entry ? entry.id : '',
       entry ? (entry.unlocked ? 1 : 0) : 0,
       photo ? 1 : 0,
+      this._via || '',
       unread,
       specs.map((s) => `${s.k}:${s.v}`).join('|'),
       related.map((r) => `${r.id}:${r.unlocked ? 1 : 0}`).join('|'),
@@ -733,13 +780,16 @@ export class LibraryPane {
       );
     }
     // Entry header: emoji icon (the codex's own icon vocabulary; alone when
-    // no photo could be read) + title + category.
+    // no photo could be read) + the lead line + the subtitle. Hardware entries
+    // lead with the PART (the clicked callout name when known) and carry the
+    // briefing's title as the subtitle — see headerLead().
+    const head = LibraryPane.headerLead(e, this._via, m.category);
     parts.push(
       '<div class="library-entry-header" style="display:flex;gap:8px;align-items:flex-start;margin-bottom:8px">' +
       `<span style="font-size:1.6rem;line-height:1.2${locked ? ';opacity:0.6' : ''}">${e.icon}</span>` +
       '<span style="flex:1;min-width:0">' +
-      `<span class="library-title" style="display:block;color:${locked ? C.INFO : C.SELECTION};font-weight:bold">${e.title}${locked ? ' \ud83d\udd12' : ''}</span>` +
-      `<span style="display:block;opacity:0.6">${m.category}</span>` +
+      `<span class="library-title" style="display:block;color:${locked ? C.INFO : C.SELECTION};font-weight:bold">${head.lead}${locked ? ' \ud83d\udd12' : ''}</span>` +
+      `<span class="library-sub" style="display:block;opacity:${head.hardware ? 0.8 : 0.6}">${head.sub}</span>` +
       '</span>' +
       '</div>',
     );
