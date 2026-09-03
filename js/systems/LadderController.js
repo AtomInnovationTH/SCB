@@ -289,6 +289,29 @@ export class LadderController {
     return decisions;
   }
 
+  /**
+   * Esc grammar (08-workbench §2, the hosted-codex rule: "Esc closes the
+   * topmost pane first, then rides up"). Close the topmost OPEN workbench pane
+   * and report whether one was — InputManager calls this ONCE before it would
+   * command 'esc', and returns on true, so the ride-up is the NEXT Esc. The
+   * pane order lives here, never in InputManager: today the only pane is REFIT
+   * (`_refit`, Wave 5 (2)); the TECH LIBRARY pane joins this method as the
+   * topmost when it lands (Session B). Absent dep / closed pane / disengaged →
+   * false (the shipped ride-up runs). The pane's own close() fires its
+   * onOpenChange edge (D10 calm cap + the camera inset release) — no second
+   * signal here. Not a ladder input for adaptHoldoff (no camera flight).
+   * @returns {boolean} true when a pane was open and is now closed
+   */
+  closeTopPane() {
+    if (!this._engaged) return false;
+    const r = this._refit;
+    if (r && r.isOpen && r.isOpen()) {
+      if (r.close) r.close();
+      return true;
+    }
+    return false;
+  }
+
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
   _engage(tMs) {

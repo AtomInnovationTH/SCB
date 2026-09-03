@@ -652,8 +652,19 @@ export class InputManager {
         // the ladder replaces those mode keys (00-spec §1). Alarm auto-ride
         // cancel lives inside the core (command 'esc' cancels it first). Engaged
         // only in gameplay with LADDER.ENABLED — flag-off is byte-identical.
+        // Wave 5 (3) — 08-workbench §2 (the hosted-codex rule): "Esc closes the
+        // topmost pane first, then rides up". ONE controller call decides — the
+        // pane order (REFIT today, the TECH LIBRARY later) lives in
+        // LadderController.closeTopPane(); this branch knows no pane by name.
+        // true → a pane was open and is now closed: consume the key, the
+        // ride-up is the NEXT Esc. false (no pane / closed / a controller
+        // without the method) → the shipped ride-up, unchanged.
         const escLadder = this._ladderIfEngaged();
         if (escLadder) {
+          if (typeof escLadder.closeTopPane === 'function' && escLadder.closeTopPane()) {
+            e.preventDefault();
+            return;
+          }
           escLadder.command({ type: 'esc' });
           e.preventDefault();
           return;
