@@ -1437,6 +1437,15 @@ async function init() {
         : (refitOpen ? refitPane.widthPx()
           : (libraryOpen ? -libraryPane.widthPx() : 0));
       cameraSystem.setLadderPaneInset(inset);
+      // Consumer 3 (commit 3): the callout columns' pane-edge PAIR — unlike
+      // the camera's netted single value, the cards need BOTH edges so
+      // neither column ever sits under a pane (left edge = refit width,
+      // right edge = W − library width; 06-core-api "Known non-consumer"
+      // FINDINGS, now consumed).
+      motherCallouts.setPaneInsets(
+        refitOpen ? refitPane.widthPx() : 0,
+        libraryOpen ? libraryPane.widthPx() : 0,
+      );
     };
     // The below-~1100-px one-pane rule (01-numbers "One-pane breakpoint",
     // exported by LibraryPane): opening one pane collapses the other to its

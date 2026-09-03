@@ -491,6 +491,21 @@ export class MotherCallouts {
     // Per-frame projection state (populated in update()).
     this._halfH = 1; this._halfW = 1;
     this._railL = -0.5; this._railR = 0.5;
+    // Workbench pane insets (Wave 5 Session B, 08-workbench §2): CSS-px widths
+    // of the LEFT (REFIT) and RIGHT (TECH LIBRARY) panes while open, fed on
+    // the panes' onOpenChange edge from main.js _syncWorkbenchPanes (the ONE
+    // pane edge — never per frame). The column layout treats the covered
+    // strips as the screen edges and the focus pick measures from the centre
+    // of the UNCOVERED strip — where the camera's look-at bias puts the ship.
+    // Both default 0: every formula below reduces to the shipped constants
+    // and a ?ladder=0 boot (which never constructs a pane) is byte-identical.
+    this._paneInsetL = 0;
+    this._paneInsetR = 0;
+    // Derived per frame in _updatePaneEdges(): the usable screen edges (NDC)
+    // and the uncovered strip's centre X (NDC).
+    this._edgeL = -1;
+    this._edgeR = 1;
+    this._stripCX = 0;
 
     // Clickable-label interaction (codex deep-links) + hull-part hover (D2's
     // first verb): the same 10 Hz pick tests the card sprites FIRST, then the
@@ -601,6 +616,55 @@ export class MotherCallouts {
    */
   setLiveCtx(ctx) {
     this._liveCtx = ctx || null;
+  }
+
+  /**
+   * Workbench pane insets (Wave 5 Session B — the 06-core-api "Known
+   * non-consumer" FINDINGS, now consumed): the CSS-px widths of the LEFT
+   * (REFIT) and RIGHT (TECH LIBRARY) panes while open, 0 when closed. Fed
+   * from main.js `_syncWorkbenchPanes()` on the panes' onOpenChange edge —
+   * the ONE pane-edge signal (beside the D10 calm cap and the camera's
+   * look-at inset), NEVER per frame. Effect (see _updatePaneEdges): the
+   * callout columns treat the left screen edge as `leftPx` and the right
+   * edge as `W − rightPx` (cards never under a pane), and _pickFocusPart
+   * measures "nearest screen-centre" from the centre of the UNCOVERED strip
+   * — which is where the camera's pane bias now puts the ship. Non-finite /
+   * negative values clamp to 0 (never a guess).
+   * @param {number} leftPx  - LEFT pane width while open (REFIT), else 0
+   * @param {number} rightPx - RIGHT pane width while open (TECH LIBRARY), else 0
+   */
+  setPaneInsets(leftPx, rightPx) {
+    this._paneInsetL = (Number.isFinite(leftPx) && leftPx > 0) ? leftPx : 0;
+    this._paneInsetR = (Number.isFinite(rightPx) && rightPx > 0) ? rightPx : 0;
+  }
+
+  /**
+   * Derive the usable screen edges (NDC) + the uncovered strip's centre from
+   * the pane insets — once per update(), before the rail X computation reads
+   * them. The px→NDC conversion follows the CameraSystem pane-bias law: the
+   * viewport width is the render CANVAS's clientWidth (SceneManager sizes it
+   * to innerWidth — the same number camera.aspect is built from; never
+   * `window`), and an unknown width means NO inset — never a guess. A
+   * degenerate strip (panes covering ~everything, < 0.2 NDC ≈ 10 % of the
+   * screen) falls back to the full edges rather than inverting the rails —
+   * the hub's <1100 px one-pane rule keeps real layouts far from this.
+   * Insets 0 (every shipped boot) → (-1, 1, 0): the exact shipped operands.
+   * @private
+   */
+  _updatePaneEdges() {
+    let eL = -1, eR = 1;
+    if (this._paneInsetL > 0 || this._paneInsetR > 0) {
+      const vw = (this.canvas && Number.isFinite(this.canvas.clientWidth))
+        ? this.canvas.clientWidth : 0;
+      if (vw > 0) {
+        eL = -1 + 2 * this._paneInsetL / vw;
+        eR = 1 - 2 * this._paneInsetR / vw;
+        if (eR - eL < 0.2) { eL = -1; eR = 1; }
+      }
+    }
+    this._edgeL = eL;
+    this._edgeR = eR;
+    this._stripCX = (eL + eR) / 2;
   }
 
   /**
@@ -1751,8 +1815,13 @@ export class MotherCallouts {
     const camAspect = this.camera.aspect || 1;
     const railCardW = 2 * CFG.SIZE_MAJOR * CARD_W_OVER_TITLE_H / camAspect;
 
-    this._railL = Math.max(-1 + margin + railCardW, this._shipNDC.x - screenR - CFG.RAIL_INSET_NDC);
-    this._railR = Math.min(1 - margin - railCardW, this._shipNDC.x + screenR + CFG.RAIL_INSET_NDC);
+    // Workbench panes (Wave 5 Session B): the usable screen edges. With no
+    // pane open _edgeL/_edgeR are exactly -1/+1 and every line below is the
+    // shipped arithmetic, byte-identical.
+    this._updatePaneEdges();
+
+    this._railL = Math.max(this._edgeL + margin + railCardW, this._shipNDC.x - screenR - CFG.RAIL_INSET_NDC);
+    this._railR = Math.min(this._edgeR - margin - railCardW, this._shipNDC.x + screenR + CFG.RAIL_INSET_NDC);
 
     this._updateBand(distM);
     this._updateGuide(dt);
@@ -1831,7 +1900,12 @@ export class MotherCallouts {
       this.player.localToWorld(this._vAnchor);
       this._vTmp.copy(this._vAnchor).project(this.camera);
       if (this._vTmp.z > 1) continue;
-      const d = this._vTmp.x * this._vTmp.x + this._vTmp.y * this._vTmp.y;
+      // "Nearest screen-centre" measures from the centre of the UNCOVERED
+      // strip (Wave 5 Session B) — with a workbench pane open the camera's
+      // look-at bias puts the ship there, so the focused part stays the one
+      // the player is actually looking at. No pane → _stripCX 0, shipped.
+      const dx = this._vTmp.x - this._stripCX;
+      const d = dx * dx + this._vTmp.y * this._vTmp.y;
       if (d < bestD) { bestD = d; best = p; }
     }
     return best;
@@ -2167,9 +2241,11 @@ export class MotherCallouts {
     let tx = rec._anchorX + (side === 'L' ? -0.12 : 0.12);
     let ty = rec._anchorY + 0.07;
 
-    // Clamp X: card extends outward from anchor, so reserve width on that side.
-    if (side === 'L') tx = Math.max(tx, -1 + margin + cardW);
-    else tx = Math.min(tx, 1 - margin - cardW);
+    // Clamp X: card extends outward from anchor, so reserve width on that
+    // side — against the PANE-AWARE edges (Wave 5 Session B: the focus card
+    // never sits under a workbench pane; no pane → -1/+1, shipped).
+    if (side === 'L') tx = Math.max(tx, this._edgeL + margin + cardW);
+    else tx = Math.min(tx, this._edgeR - margin - cardW);
     // Clamp Y: card is centred vertically on ty.
     ty = Math.max(-1 + margin + cardH / 2, Math.min(1 - margin - cardH / 2, ty));
 
