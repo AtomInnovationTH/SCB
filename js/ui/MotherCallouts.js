@@ -27,9 +27,10 @@
  * Hull-part hover (D2's first verb, Wave 5): parts with `pick:` hull-object
  * names raycast alongside the card sprites at the same 10 Hz — hovering the
  * part outlines it in the house cyan (EdgesGeometry lines + a translucent
- * inflated shell, children of the picked meshes) and brightens its card;
- * clicking the part is identical to clicking its card (one hover state
- * `_hoverRec`, one CODEX_OPEN_ENTRY emitter).
+ * inflated shell, children of the picked meshes, drawn depth-free like the
+ * cards) and brightens its card; clicking the part is identical to clicking
+ * its card (one hover state `_hoverRec`, one CODEX_OPEN_ENTRY emitter). The
+ * stationary re-pick is sticky (see _refreshHover) so the highlight is steady.
  *
  * Gating mirrors the hull outline: active while either the discrete INSPECTION
  * view (CAMERA_VIEW_CHANGE) or the OVERVIEW zoom sub-state (INSPECT_HULL_OUTLINE)
@@ -361,6 +362,12 @@ const FADE_RATE = 6.0;      // opacity ease rate for band crossfades
 const LINE_OP_SCALE = 0.8;  // line opacity = labelOp × this (round 4: hairline)
 const LINE_HALF_WIDTH_FRAC = 0.0012; // leader ribbon half-width / camera-ship dist (round 4: hairline)
 
+// Hover stickiness (playtest 2026-09-03 "parts flicker"): the stationary 10 Hz
+// re-pick (_refreshHover) keeps a held hover through this many consecutive
+// misses minus one and clears it on the Nth (3 ticks ≈ 300 ms at 10 Hz). Only
+// the stationary re-pick is sticky — see _refreshHover.
+const HOVER_MISS_TICKS = 3;
+
 export class MotherCallouts {
   /**
    * @param {THREE.Object3D} playerGroup  The PlayerSatellite group (labels parent here).
@@ -437,6 +444,7 @@ export class MotherCallouts {
     this._setHoverRec(null);   // one hover state, initialized through its ONE writer (source-pinned)
     this._pointerPos = null;   // last pointer client coords, for hover re-pick (R13)
     this._hoverPickT = 0;      // hover re-pick cadence guard (R13)
+    this._hoverMisses = 0;     // consecutive stationary re-pick misses with a hover held (stickiness)
     this._onPointerMove = (e) => this._handlePointerMove(e);
     this._onPointerDown = (e) => this._handlePointerDown(e);
     this._onPointerUp = (e) => this._handlePointerUp(e);
@@ -1180,10 +1188,14 @@ export class MotherCallouts {
    * hover state whatever the source — card sprite or hull mesh. Swaps the part
    * outline and keeps the hand cursor in sync; the card treatment (opacity
    * lift, scale bump, leader whitening) reads `_hoverRec` in _positionCard.
+   * Every applied pick result — a hit (same rec or a switch) or an explicit
+   * clear — also ends the stationary miss run (`_hoverMisses`, see
+   * _refreshHover), so a stale count can never shorten the next hover.
    * @private @param {object|null} rec
    */
   _setHoverRec(rec) {
     const next = rec || null;
+    this._hoverMisses = 0;
     if (next === this._hoverRec) return;
     const old = this._hoverRec;
     this._hoverRec = next;
@@ -1225,10 +1237,23 @@ export class MotherCallouts {
    *      scale the edges back down. The house threshold is untouched.
    *   2. A translucent cyan shell (the pre-approved fallback for weak edges):
    *      a Mesh SHARING the hull mesh's geometry (never disposed here),
-   *      inflated 3% so it clears the coplanar depth fight — flat panels read
-   *      as a cyan rim, closed bodies as a soft cyan tint + silhouette halo.
-   *      The witness showed edge lines alone are near-invisible on the flat
-   *      ROSA panels (equal-depth fragments lose the LESS depth test).
+   *      inflated 3% — closed bodies read as a soft cyan tint + silhouette
+   *      halo, flat panels as a cyan rim + tint. The witness showed edge
+   *      lines alone are near-invisible on the flat ROSA panels.
+   *
+   * DEPTH (refinement, playtest 2026-09-03 "parts flicker"): BOTH layers draw
+   * `depthTest:false, depthWrite:false` — the house treatment of the card,
+   * dot and leader materials (this pass runs after clearDepth; see _makeLine).
+   * The flat ROSA panels are PlaneGeometry with zero z-extent: a uniform
+   * `scale.setScalar(1.03)` cannot lift a z=0 plane off its own plane, so the
+   * shell (and the edge lines) sat exactly coplanar with the hull that had
+   * already written depth and shimmered (equal-depth fragments flip the LESS
+   * test frame to frame). As a depth-free overlay the highlight is steady.
+   * Accepted trade-off: a nearer non-part hull mesh no longer occludes the
+   * highlight — right for a "you are pointing at THIS" cue, and already true
+   * of the cards. (The alternative, an along-normal geometric Z stagger —
+   * the technique Constants.RENDER_ORDER recommends over polygonOffset under
+   * the logarithmic depth buffer — is not needed while this holds.)
    *
    * One LineBasicMaterial + one MeshBasicMaterial per rec — their own, never
    * a hull material, never shared across recs. Caches null when outlines are
@@ -1244,16 +1269,21 @@ export class MotherCallouts {
     const targets = this._pickTargets(rec);
     if (!targets.length) return null;
     const INS = Constants.INSPECTION || {};
+    // Both materials: depth-free overlay (depthTest + depthWrite off) — see the
+    // DEPTH note above. Never a hull material.
     const material = new THREE.LineBasicMaterial({
       color: INS.HULL_OUTLINE_COLOR ?? 0x00ffcc,
       transparent: true,
       opacity: 0.85,
+      depthWrite: false,
+      depthTest: false,
     });
     const shellMaterial = new THREE.MeshBasicMaterial({
       color: INS.HULL_OUTLINE_COLOR ?? 0x00ffcc,
       transparent: true,
       opacity: 0.3,
       depthWrite: false,
+      depthTest: false,
       side: THREE.DoubleSide,
     });
     const NORM = 1 / M; // metre-scale normalization for the EdgesGeometry hash
@@ -1319,6 +1349,35 @@ export class MotherCallouts {
    * stationary pointer), so the hover would otherwise go stale. Runs at
    * ~10 Hz from _layout; cheap (the card sprites, then the eligible parts'
    * pick meshes via _pickBestRec).
+   *
+   * STALE WORLD MATRICES (the witnessed cause of the stationary blink,
+   * 2026-09-03): this runs inside the frame's update, BEFORE the render's
+   * scene.updateMatrixWorld(), and update() refreshes only the player itself
+   * (updateWorldMatrix(true, false)) — every hull mesh and card sprite still
+   * carries LAST frame's matrixWorld while the camera is already at THIS
+   * frame's pose. The ship covers ~7.7 km/s along its orbit (~130 m per 60 Hz
+   * frame, 60× its own length), so the ray through a still pointer met the
+   * panel where it WAS and missed on every frame the camera did not look
+   * along the velocity — the in-frame pick missed while the same pick run
+   * after the render hit every time (headless witness: panel matrixWorld
+   * 7,700 m stale per tick; hover cleared 3 ticks after each pointer event).
+   * Refresh the player subtree first (396 objects, ~0.06 ms, at 10 Hz).
+   *
+   * HOVER STICKINESS (refinement, playtest 2026-09-03 "parts flicker"): this
+   * stationary re-pick used to clear the hover on ANY miss, and thin parts,
+   * part edges and the ship turning under a still pointer can still miss for
+   * a frame — the outline blinked on/off. The rule, in order:
+   *   1. a hit on the HELD rec confirms it (miss run reset, nothing else);
+   *   2. a hit on a DIFFERENT pickable rec switches immediately (old outline
+   *      hidden, new shown — the pointer really is on something else);
+   *   3. a miss with a hover held KEEPS it, unless the held rec is no longer
+   *      `_recPickable` (facing gate dropped, rail-culled, band left, briefing
+   *      gone — cleared at once) or this is the HOVER_MISS_TICKS-th
+   *      consecutive miss (3 ticks ≈ 300 ms at 10 Hz — cleared);
+   *   4. a miss with nothing held does nothing.
+   * Only this path is sticky. The explicit clears stay immediate and
+   * unchanged: _handlePointerLeave (pointerleave), _detachPointer,
+   * _setActive(false), and a real _handlePointerMove onto empty space.
    * @private
    */
   _refreshHover() {
@@ -1331,8 +1390,19 @@ export class MotherCallouts {
       ((this._pointerPos.clientX - rect.left) / rect.width) * 2 - 1,
       -((this._pointerPos.clientY - rect.top) / rect.height) * 2 + 1,
     );
+    // In-frame: bring the hull meshes + card sprites to THIS frame's pose
+    // before casting (see STALE WORLD MATRICES above).
+    this.player.updateWorldMatrix(true, true);
     this._raycaster.setFromCamera(this._ndc, this.camera);
-    this._setHoverRec(this._pickBestRec());
+    const hit = this._pickBestRec();
+    if (hit) { this._setHoverRec(hit); return; }          // rules 1 + 2 (same rec → no-op + reset)
+    const held = this._hoverRec;
+    if (!held) return;                                      // rule 4
+    // Rule 3: tolerate a transient miss; clear when the held rec is genuinely
+    // ineligible or the miss run reaches the threshold.
+    if (!this._recPickable(held) || ++this._hoverMisses >= HOVER_MISS_TICKS) {
+      this._setHoverRec(null);
+    }
   }
 
   _handlePointerDown(e) {
