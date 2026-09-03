@@ -76,7 +76,9 @@ export class LadderController {
    *   LIBRARY is the TOPMOST workbench pane (it opens FROM the REFIT card,
    *   08-workbench §3, so it is the most recently opened in the one flow that
    *   opens both; with both open Library-closes-first is the documented
-   *   order).
+   *   order). Session C: both panes also page from the horizontal two-finger
+   *   swipe — WheelRouter asks `wantsPaneSwipe()` (F3 + a pane dep) and emits
+   *   ONE `pagePane({toward})` per flick; the carousel law lives there.
    * @param {object} [deps.archive]      - F1 (ARCHIVE) content bridge (ArchiveFloor):
    *   activate/deactivate/isActive. Optional — no-op without it. Floor-keyed
    *   like hullcam (F1's debrisMode 'hidden' is shared with F2): arriving on
@@ -328,6 +330,65 @@ export class LadderController {
       return true;
     }
     return false;
+  }
+
+  /**
+   * Horizontal-swipe eligibility (Wave 5 Session C — 08-workbench §2
+   * "Horizontal = what (panes)"): true while the ladder is engaged ON THE
+   * WORKBENCH FLOOR (F3) with at least one pane dep to page. WheelRouter
+   * consults this per HORIZONTAL-dominant wheel event (|deltaX| > |deltaY|)
+   * before it claims the event away from the zoom feed — never per frame,
+   * never for a vertical event. Everywhere else (other floors, disengaged,
+   * no panes) the router leaves the axis exactly as shipped. Reads the core
+   * floor through `currentFloor()` (a getState snapshot — event-rate only).
+   * @returns {boolean}
+   */
+  wantsPaneSwipe() {
+    if (!this._engaged || !(this._refit || this._library)) return false;
+    return this.currentFloor() === 3;
+  }
+
+  /**
+   * The ONE horizontal page verb (Wave 5 Session C): step the workbench
+   * carousel **[REFIT] — [ship] — [LIBRARY]** one position toward a screen
+   * side. WheelRouter's accumulator decides WHEN (one call per flick, never
+   * per event); this method decides WHAT — the house pattern (the router
+   * emits, the hub executes through the panes' own open()/close(), whose
+   * onOpenChange edges carry the D10 calm cap + the camera inset exactly as
+   * a tab click would; no signal is added here).
+   *
+   *   toward 'left'  (the REFIT side):  an open LIBRARY closes (paging away
+   *                  from it), else a closed REFIT opens, else nothing (wall).
+   *   toward 'right' (the LIBRARY side): an open REFIT closes, else a closed
+   *                  LIBRARY opens, else nothing.
+   *
+   * The "away" pane is checked FIRST, so the both-open state (reachable only
+   * by clicks — the swipe grammar stays 3-position) resolves to one pane on
+   * the first swipe. 'left'/'right' are SCREEN sides: the panes' RTL mirror
+   * is their own CSS variable, not this grammar. Guards: disengaged, off-F3
+   * or an unknown `toward` → null and no pane is touched; an absent pane dep
+   * is skipped, never thrown on. Like closeTopPane(), NOT a ladder input for
+   * adaptHoldoff (a 270 ms pane yaw, no floor flight).
+   * @param {{ tMs?: number, toward: 'left'|'right' }} arg
+   * @returns {'open-refit'|'close-refit'|'open-library'|'close-library'|null}
+   *   the action taken (null = nothing to do)
+   */
+  pagePane({ toward } = {}) {
+    if (!this._engaged || this.currentFloor() !== 3) return null;
+    const lib = this._library, r = this._refit;
+    const libOpen = !!(lib && lib.isOpen && lib.isOpen());
+    const refitOpen = !!(r && r.isOpen && r.isOpen());
+    if (toward === 'left') {
+      if (libOpen) { if (lib.close) lib.close(); return 'close-library'; }
+      if (r && !refitOpen) { if (r.open) r.open(); return 'open-refit'; }
+      return null;
+    }
+    if (toward === 'right') {
+      if (refitOpen) { if (r.close) r.close(); return 'close-refit'; }
+      if (lib && !libOpen) { if (lib.open) lib.open(); return 'open-library'; }
+      return null;
+    }
+    return null;
   }
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────

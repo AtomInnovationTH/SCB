@@ -33,6 +33,14 @@
   *          same as a laptop. `window.__WHEEL_TUNE = {scrollZoom:false}`
   *          restores pinch-first live. Always consumed (preventDefault) so the
   *          page never scrolls/zooms under the game.
+ *      Before the class feed, on the WORKBENCH floor only (Wave 5 Session C —
+ *      08-workbench §2 "Vertical = where, Horizontal = what"): a HORIZONTAL-
+ *      dominant event (|deltaX| > |deltaY|, not a pinch) is CLAIMED by the
+ *      pane-swipe accumulator and never reaches the zoom feed — see
+ *      _claimPaneSwipe + the paneSwipe* tunables. The classifier still reads
+ *      any deltaX as 'scroll'; the claim runs first, exactly as the
+ *      06-core-api Wave-5 note asked. Everywhere else the axis is fed/muted
+ *      exactly as before (ladder-off byte-identical).
  * F1/F2 DOM-overlay scroll passthrough (do NOT blanket-preventDefault so the
  * shop can scroll) is an S6 concern — in M1 those floors have no active costume
  * and the ladder is gameplay-gated, so SHOP/codex overlays run under the
@@ -85,6 +93,11 @@ export const WHEEL_TUNE = {
   scrollZoom: true,     // trackpad two-finger scroll zooms (owner flip 2026-09-02; was muted 09-01)
   mouseIntThresholdPx: 80, // pixel-mode integer |deltaY| at/over this reads as a mouse detent
   gesturePxPerScale: 300,  // WebKit GestureEvent bridge: px of wheel deltaY per 1.0 of e.scale change
+  // ── Horizontal pane swipe (Wave 5 Session C; workbench floor F3 only) ──
+  paneSwipe: true,      // claim |deltaX| > |deltaY| events on F3 and page the panes ({paneSwipe:false} → fed as scroll, the pre-Session-C axis)
+  paneSwipePx: 140,     // accumulated |deltaX| (px, one gesture) that fires ONE page verb — a deliberate short flick, never an incidental drift
+  paneSwipeSign: 1,     // +1: positive deltaX (a two-finger swipe LEFT under natural scrolling — content follows the finger) pages toward the RIGHT pane (LIBRARY); −1 flips (owner decision 3, 2026-09-03)
+  paneSwipeGapMs: 220,  // silence on the horizontal axis ≥ this ends the gesture: accumulator resets, the one-verb latch releases (a momentum tail never pages twice)
 };
 
 /**
@@ -142,6 +155,66 @@ export function normalizeWheel(e, invert) {
   return { dir, mag };
 }
 
+/**
+ * Is this wheel event HORIZONTAL-dominant — the pane axis (08-workbench §2
+ * "Horizontal = what")? Pure + exported for the suite. Pinches (ctrl or the
+ * tagged synthetic glass pinch) are ZOOM whatever their axis and never
+ * qualify; a tie (|dx| == |dy|, incl. 0/0) is vertical (the settled grammar
+ * keeps every event it had).
+ * @param {WheelEvent|object} e
+ * @returns {boolean}
+ */
+export function isHorizontalWheel(e) {
+  if (e.ctrlKey || e.__syntheticPinch) return false;
+  const dx = e.deltaX || 0, dy = e.deltaY || 0;
+  return Math.abs(dx) > Math.abs(dy);
+}
+
+/**
+ * A wheel event's deltaX in CSS px (the same deltaMode scaling normalizeWheel
+ * applies to deltaY: lines × LINE_PX, pages × 3 notches). Pure.
+ * @param {WheelEvent|object} e
+ * @returns {number}
+ */
+export function wheelDeltaXPx(e) {
+  let dx = e.deltaX || 0;
+  if (e.deltaMode === 1) dx *= LINE_PX;
+  else if (e.deltaMode === 2) dx *= NOTCH_PX * 3;
+  return dx;
+}
+
+/**
+ * The pane-swipe accumulator law (Wave 5 Session C) as a pure step, so the
+ * suite pins it headless and the router just applies it: one gesture = the
+ * run of horizontal events with gaps < gapMs; the signed deltaX px sum
+ * crossing ±thresholdPx fires ONE verb and LATCHES the gesture (its tail —
+ * the finger still moving, the platform's momentum events — is eaten, never
+ * a second page); a gap ≥ gapMs starts a fresh gesture. Reversals inside a
+ * gesture cancel (the sum is signed). `toward` is a SCREEN side: with sign
+ * +1 a positive sum (natural-scrolling swipe LEFT) pages toward the RIGHT
+ * pane — the LIBRARY — content following the finger; sign −1 flips.
+ *
+ * @param {{ acc:number, lastMs:number, latched:boolean }} s - gesture state (mutated + returned)
+ * @param {number} dxPx  - this event's deltaX in px
+ * @param {number} tMs   - this event's clock
+ * @param {{ paneSwipePx:number, paneSwipeSign:number, paneSwipeGapMs:number }} tune
+ * @returns {'left'|'right'|null} the ONE verb to emit, or null
+ */
+export function stepPaneSwipe(s, dxPx, tMs, tune) {
+  const gap = Number.isFinite(tune.paneSwipeGapMs) ? tune.paneSwipeGapMs : WHEEL_TUNE.paneSwipeGapMs;
+  const thr = Number.isFinite(tune.paneSwipePx) ? tune.paneSwipePx : WHEEL_TUNE.paneSwipePx;
+  const sign = (tune.paneSwipeSign === -1) ? -1 : 1;
+  if (tMs - s.lastMs >= gap) { s.acc = 0; s.latched = false; }   // a new gesture
+  s.lastMs = tMs;
+  if (s.latched) return null;                                      // the flick already paged: eat the tail
+  s.acc += dxPx;
+  if (Math.abs(s.acc) < thr) return null;
+  const toward = (s.acc * sign) > 0 ? 'right' : 'left';
+  s.acc = 0;
+  s.latched = true;
+  return toward;
+}
+
 export class WheelRouter {
   /**
    * @param {object} deps
@@ -149,7 +222,9 @@ export class WheelRouter {
    * @param {object} [deps.inputManager]  - provides handleArmPilotWheel(e) -> boolean
    * @param {object} [deps.cameraSystem]  - provides handleWheelZoom(e) (legacy zoom)
    * @param {object} [deps.strategicMap]  - provides isOpen() + handleWheel(e)
-   * @param {object} [deps.ladderController] - provides isActive() + wheel({tMs,dir,mag})
+   * @param {object} [deps.ladderController] - provides isActive() + wheel({tMs,dir,mag});
+   *   Session C (optional, duck-typed): wantsPaneSwipe() + pagePane({tMs,toward}) for the
+   *   F3 horizontal pane swipe — absent, horizontal events flow to the zoom feed as before
    * @param {function} [deps.now] - monotonic clock (ms); defaults to performance.now
    */
   constructor(deps = {}) {
@@ -165,6 +240,9 @@ export class WheelRouter {
     this._onGestureEnd = this._handleGestureEnd.bind(this);
     /** @type {?number} last GestureEvent scale while a WebKit pinch is live */
     this._gestureScale = null;
+    /** Pane-swipe gesture state (Session C): signed deltaX px sum, the last
+     *  horizontal event's clock, and the one-verb-per-flick latch. */
+    this._swipe = { acc: 0, lastMs: -Infinity, latched: false };
     this._started = false;
   }
 
@@ -270,6 +348,10 @@ export class WheelRouter {
       // source class (pinch-first retune; see WHEEL_TUNE).
       if (typeof e.preventDefault === 'function') e.preventDefault();
       const tune = this._tune();
+      // Session C: on the workbench floor the HORIZONTAL axis is the pane
+      // axis — a horizontal-dominant event is claimed here, BEFORE the class
+      // feed, and never reaches the zoom core (06-core-api Wave-5 note).
+      if (this._claimPaneSwipe(e, tune)) return;
       const src = classifyWheelSource(e, tune);
       const feed = src === 'pinch' ? tune.pinchZoom
         : src === 'mouse' ? tune.mouseWheelZoom
@@ -310,6 +392,35 @@ export class WheelRouter {
     const t = e && e.target;
     if (t === this._canvas) return true;
     return !!(t && typeof this._canvas.contains === 'function' && this._canvas.contains(t));
+  }
+
+  // ── Horizontal pane swipe (Wave 5 Session C, 08-workbench §2 grammar) ─────
+
+  /**
+   * Claim a HORIZONTAL-dominant wheel event for the workbench panes. Runs on
+   * the ladder-owned path only (the caller has already preventDefaulted).
+   * Returns true when the event belongs to the pane axis — the caller then
+   * returns WITHOUT feeding the zoom core — and false when the event is the
+   * zoom grammar's (vertical-dominant, a pinch, the tunable off, or the hub
+   * says the swipe is not live: off the workbench floor, no pane deps, or a
+   * controller without `wantsPaneSwipe`). The accumulator law is the pure
+   * `stepPaneSwipe`; a verb reaches `ladderController.pagePane({tMs,
+   * toward})` ONCE per flick (the router decides WHEN, the hub decides WHAT).
+   * Byte-identical everywhere the claim declines: the event flows on exactly
+   * as before this session.
+   * @private
+   * @param {WheelEvent} e
+   * @param {typeof WHEEL_TUNE} tune
+   * @returns {boolean} claimed
+   */
+  _claimPaneSwipe(e, tune) {
+    if (!tune.paneSwipe || !isHorizontalWheel(e)) return false;
+    const lc = this._ladder;
+    if (!lc || typeof lc.wantsPaneSwipe !== 'function' || !lc.wantsPaneSwipe()) return false;
+    const t = this._now();
+    const toward = stepPaneSwipe(this._swipe, wheelDeltaXPx(e), t, tune);
+    if (toward && typeof lc.pagePane === 'function') lc.pagePane({ tMs: t, toward });
+    return true;
   }
 
   // ── WebKit GestureEvent pinch bridge (Safari / iPad trackpad) ──────────────
