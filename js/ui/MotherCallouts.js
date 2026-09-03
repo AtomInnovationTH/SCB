@@ -24,6 +24,12 @@
  * First time inspection engages, a one-shot "guided pulse" sweeps a highlight
  * through the systems so a new player learns the vocabulary passively.
  *
+ * Hull-part hover (D2's first verb, Wave 5): parts with `pick:` hull-object
+ * names raycast alongside the card sprites at the same 10 Hz — hovering the
+ * part outlines it in the house cyan (EdgesGeometry children of the picked
+ * meshes) and brightens its card; clicking the part is identical to clicking
+ * its card (one hover state `_hoverRec`, one CODEX_OPEN_ENTRY emitter).
+ *
  * Gating mirrors the hull outline: active while either the discrete INSPECTION
  * view (CAMERA_VIEW_CHANGE) or the OVERVIEW zoom sub-state (INSPECT_HULL_OUTLINE)
  * reports inspection on.
@@ -80,6 +86,16 @@ const RISK = CFG.RISK_COLORS;
 //            `anchor` with a one-time console.warn if the name doesn't resolve.
 //   dynamic  re-resolve the mesh anchor EVERY frame (the mesh moves, e.g. the
 //            strut-mounted reel cartridges). Static meshes resolve once.
+//   pick     PlayerSatellite object names used ONLY for hull hover: the raycast
+//            targets and the cyan edge outline (D2's first verb — hover the part
+//            itself, not just its card). NEVER moves an anchor (anchors are
+//            `mesh`/`anchor` only), so every leader/dot/card stays byte-identical
+//            with or without `pick`. Names resolve via player.traverse collecting
+//            ALL matches (SensorSpoke ×4 etc. share a name), so the sets must be
+//            DISJOINT subtrees across parts. Absent → defaults to
+//            `mesh ? [mesh] : []`. Card-only parts (berths/mli/daughters/THERMAL
+//            + the anchorless structure plates) carry no `pick` on purpose — see
+//            the FINDINGS in the Wave-5 hull-hover report for each reason.
 const SYSTEMS = [
   {
     id: 'POWER', label: 'POWER',
@@ -89,17 +105,27 @@ const SYSTEMS = [
       { id: 'rosa_wings', name: 'ROLL-OUT SOLAR WINGS', risk: 'GREEN', tier: 'major', codexId: 'rosa_solar_array',
         massKg: 22, priority: 9, live: 'rosa',
         specs: ['2× 1×2 m roll-out arrays', '~2.2 kW peak (BOL)'],
+        pick: ['ROSA_Panel_Front_0deg', 'ROSA_Panel_Back_0deg', 'ROSA_Panel_Front_180deg', 'ROSA_Panel_Back_180deg'],
         anchor: [ 1.1 * M, 0, 0 ] },
       { id: 'body_cells', name: 'HULL SOLAR CELLS', risk: 'GREEN', tier: 'detail', codexId: 'gallium_arsenide',
         massKg: 3, priority: 2, specs: ['Body-mounted GaAs cells'],
         // az 33.75° facet centre, central PV row (face radius barrelR×1.014).
         // The old az-0° anchor sat in the ROSA-root keep-out on bare hull and
         // collided with NAV LIGHTS (2 cm).
+        // pick: the 28 barrel PV boxes (0..27, verified 2026-09-02 — the model
+        // builds 28 not 30: aft rows near the strut azimuths are skipped) plus
+        // the 4 end-band gap cells.
+        pick: [
+          ...Array.from({ length: 28 }, (_, i) => `BarrelSolarPanel_${i}`),
+          'BarrelSolarPanel_gap_90_F', 'BarrelSolarPanel_gap_90_A',
+          'BarrelSolarPanel_gap_270_F', 'BarrelSolarPanel_gap_270_A',
+        ],
         anchor: [ 0.337 * M, 0.2254 * M, 0 ] },
       { id: 'array_roll', name: 'SOLAR WING SPOOL', risk: 'GREEN', tier: 'detail', codexId: 'solar_power',
         massKg: 4, priority: 2, specs: ['Roll-out drum + drive'],
         // The real spool/drum sits rootX = brkLen + drumR×0.4 = 0.08 outboard
         // of the pivot at barrelR → x = 0.48.
+        pick: ['ROSA_Spool_0deg', 'ROSA_Spool_180deg'],
         anchor: [ 0.48 * M, 0, 0 ] },
     ],
   },
@@ -111,9 +137,13 @@ const SYSTEMS = [
       { id: 'feep', name: 'ION THRUSTERS (FEEP)', risk: 'YELLOW', tier: 'major', codexId: 'feep_thruster',
         massKg: 8, priority: 8, live: 'feep',
         specs: ['4× emitter clusters', 'Isp ~4000 s'],
+        // The 4 emitter cluster bodies (NOT FEEP_Boss/FEEP_GridDisc — those share
+        // duplicate names and are cull-hidden mm detail).
+        pick: ['MainFEEP_0', 'MainFEEP_1', 'MainFEEP_2', 'MainFEEP_3'],
         anchor: [ 0, -0.20 * M, -1.05 * M ] },
       { id: 'rcs', name: 'COLD-GAS STEERING', risk: 'GREEN', tier: 'major', codexId: 'cold_gas_rcs',
         massKg: 3, priority: 5, specs: ['GN2 thruster ring'],
+        pick: ['RCSPod_0', 'RCSPod_1', 'RCSPod_2', 'RCSPod_3'],
         anchor: [ -0.03 * M, 0.42 * M, -0.795 * M ] },
       { id: 'mli', name: 'THERMAL BLANKET (MLI)', risk: 'GREEN', tier: 'detail', codexId: 'mli_insulation',
         massKg: 2, priority: 2, specs: ['Multi-layer insulation'],
@@ -135,10 +165,15 @@ const SYSTEMS = [
         massKg: 9, priority: 9, live: 'despin',
         specs: ['Photon-pressure despin', '~5 W fibre laser'],
         // Gimbal child — dynamic so the anchor tracks if the turret articulates.
+        // pick: the telescope + baffle bodies. LaserMuzzle stays the ANCHOR mesh
+        // but is a geometry-less Object3D (PlayerSatellite.js:3255), so it can't
+        // outline — the two real gimbal meshes carry the hover instead.
         mesh: 'LaserMuzzle', dynamic: true,
+        pick: ['LaserTelescope', 'LaserBaffle'],
         anchor: [ -0.184 * M, 0.184 * M, 1.20 * M ] },
       { id: 'net_launcher', name: 'LARGE NET LAUNCHER', risk: 'GREEN', tier: 'major', codexId: 'miura_ori_net',
         massKg: 5, priority: 7, specs: ['Miura-ori net, ~5 m span'],
+        pick: ['NetLauncher_0', 'NetLauncher_1'],
         anchor: [ 0, 0, 1.30 * M ] },
     ],
   },
@@ -149,18 +184,25 @@ const SYSTEMS = [
     parts: [
       { id: 'gimbal', name: 'SENSOR TURRET', risk: 'GREEN', tier: 'major', codexId: 'docking_precision',
         massKg: 5, priority: 6, specs: ['2-axis pointing platform'],
+        // SensorGimbal itself is a geometry-less Group; pick its hub ring + the
+        // four spokes (SensorSpoke ×4 share a name → traverse collects all).
+        pick: ['SensorHubRing', 'SensorSpoke'],
         anchor: [ 0, 0, 1.00 * M ] },
       { id: 'eo_cam', name: 'DAYLIGHT CAMERA', risk: 'GREEN', tier: 'major', codexId: 'pose_estimation',
         massKg: 2, priority: 4, specs: ['Visible-band imager (EO)'],
+        pick: ['EO_Camera'],
         anchor: [ 0.184 * M, 0.184 * M, 1.11 * M ] },
       { id: 'ir_cam', name: 'HEAT (INFRARED) CAM', risk: 'GREEN', tier: 'major', codexId: 'trackable_vs_dark',
         massKg: 2, priority: 4, specs: ['LWIR — spots dark debris'],
+        pick: ['IR_Sensor'],
         anchor: [ -0.184 * M, -0.184 * M, 1.08 * M ] },
       { id: 'lidar', name: 'LASER RANGEFINDER', risk: 'GREEN', tier: 'major', codexId: 'lidar_ranging',
         massKg: 3, priority: 5, specs: ['Flash LIDAR — range + pose'],
+        pick: ['LIDAR_Dome'],
         anchor: [ 0.184 * M, -0.184 * M, 1.10 * M ] },
       { id: 'star_trackers', name: 'STAR TRACKERS', risk: 'GREEN', tier: 'major', codexId: 'star_tracker',
         massKg: 1, priority: 3, specs: ['2× — attitude from starfield'],
+        pick: ['StarTracker_0', 'StarTracker_1'],
         anchor: [ 0.042 * M, 0.398 * M, 0.90 * M ] },
       { id: 'fore_bulkhead', name: 'FORE BULKHEAD', risk: 'GREEN', tier: 'major',
         massKg: 6, priority: 3, specs: ['Fore end cap — 0.8 m plate', 'Carries the sensor deck'],
@@ -172,6 +214,7 @@ const SYSTEMS = [
         anchor: [ 0, 0.30 * M, 1.03 * M ] },
       { id: 'sun_sensors', name: 'SUN SENSORS', risk: 'GREEN', tier: 'detail', codexId: 'sun_sensor',
         massKg: 0.5, priority: 2, specs: ['Coarse sun sensing, 4×'],
+        pick: ['SunSensor_0', 'SunSensor_1', 'SunSensor_2', 'SunSensor_3'],
         anchor: [ 0.28 * M, -0.20 * M, 1.0 * M ] },
       { id: 'nav_lights', name: 'NAVIGATION LIGHTS', risk: 'GREEN', tier: 'detail',
         massKg: 1, priority: 1, specs: ['Port/starboard running lights'],
@@ -185,15 +228,19 @@ const SYSTEMS = [
     parts: [
       { id: 'ttc', name: 'S-BAND RADIO OMNIS', risk: 'GREEN', tier: 'major', codexId: 'frequency_bands',
         massKg: 2, priority: 5, live: 'ttc', specs: ['Pair — command + telemetry'],
+        pick: ['TTC_Omni_0'],
         anchor: [ 0, -0.40 * M, 0.92 * M ] },
       { id: 'mga', name: 'MEDIUM-GAIN ANTENNA', risk: 'GREEN', tier: 'detail', codexId: 'bandwidth_limits',
         massKg: 1, priority: 2, specs: ['Tangent patch, higher rate'],
+        pick: ['MGA_Patch'],
         anchor: [ 0.363 * M, 0.169 * M, 0.87 * M ] },
       { id: 'gps', name: 'GPS ANTENNAS', risk: 'GREEN', tier: 'detail', codexId: 'gps_denied',
         massKg: 0.5, priority: 2, specs: ['GNSS patch pair'],
+        pick: ['GPS_Patch_0', 'GPS_Patch_1'],
         anchor: [ 0.376 * M, -0.137 * M, 0.87 * M ] },
       { id: 'ttc_aft', name: 'S-BAND OMNI (AFT)', risk: 'GREEN', tier: 'detail', codexId: 'comms_blackout',
         massKg: 1, priority: 1, specs: ['Aft whip of the omni pair'],
+        pick: ['TTC_Omni_1'],
         anchor: [ 0, 0.40 * M, -0.92 * M ] },
     ],
   },
@@ -215,15 +262,23 @@ const SYSTEMS = [
       { id: 'tether_reels', name: 'TETHER WINCHES', risk: 'GREEN', tier: 'major', codexId: 'reel_mechanics',
         massKg: 4, priority: 6, live: 'tether', specs: ['4× Dyneema SK78 reels'],
         // Reel cartridges ride the struts (stowed z≈−0.46, deployed ≈1.5 m out).
+        // ReelCartridge_0 stays the ANCHOR mesh (reel #0 only); pick the 4 reel
+        // housings so hover covers all four winches.
         mesh: 'ReelCartridge_0', dynamic: true,
+        pick: ['ReelHousing_0', 'ReelHousing_1', 'ReelHousing_2', 'ReelHousing_3'],
         anchor: [ 0.20 * M, 0.346 * M, -0.46 * M ] },
       { id: 'hinges', name: 'STRUT HINGES', risk: 'YELLOW', tier: 'detail', codexId: 'robotic_arm',
         massKg: 2, priority: 2, specs: ['Double-A clevis, 4×'],
+        pick: ['AFrame_60_L', 'AFrame_60_R', 'AFrame_120_L', 'AFrame_120_R',
+          'AFrame_240_L', 'AFrame_240_R', 'AFrame_300_L', 'AFrame_300_R'],
         anchor: [ 0.22 * M, 0.381 * M, 0.90 * M ] },
       { id: 'cradle_spring', name: 'CROSSBOW SPRING', risk: 'YELLOW', tier: 'detail', codexId: 'spring_energy',
         massKg: 1, priority: 2, specs: ['Spring ejector — launches daughters'],
         // Spring group rides the strut (stowed z≈−0.62, deployed ≈1.7 m out).
+        // CrossbowSpring_0 stays the ANCHOR mesh (reel #0 only); pick the 4 spring
+        // housings so hover covers all four ejectors.
         mesh: 'CrossbowSpring_0', dynamic: true,
+        pick: ['SpringHousing_0', 'SpringHousing_1', 'SpringHousing_2', 'SpringHousing_3'],
         anchor: [ 0.20 * M, 0.346 * M, -0.62 * M ] },
       // NET LAUNCHERS (DAUGHTERS) deleted: that hardware lives on the ArmUnit
       // (ArmUnit.js:660-667), never on the Mother. The fact moved into the
@@ -359,7 +414,11 @@ export class MotherCallouts {
     this._halfH = 1; this._halfW = 1;
     this._railL = -0.5; this._railR = 0.5;
 
-    // Clickable-label interaction (codex deep-links).
+    // Clickable-label interaction (codex deep-links) + hull-part hover (D2's
+    // first verb): the same 10 Hz pick tests the card sprites FIRST, then the
+    // parts' `pick` hull meshes, so hovering/clicking the part itself behaves
+    // exactly like its card (one hover state `_hoverRec`, written only by
+    // _setHoverRec; one CODEX_OPEN_ENTRY emitter in _handlePointerUp).
     this._raycaster = new THREE.Raycaster();
     // The callouts group rides inside the player subtree, which SceneManager
     // registers as a NEAR_FIELD root — moving every sprite to
@@ -374,18 +433,14 @@ export class MotherCallouts {
     this._hoverT = 0;
     this._cursorSet = false;
     this._listening = false;
-    this._hoverRec = null;
+    this._setHoverRec(null);   // one hover state, initialized through its ONE writer (source-pinned)
     this._pointerPos = null;   // last pointer client coords, for hover re-pick (R13)
     this._hoverPickT = 0;      // hover re-pick cadence guard (R13)
     this._onPointerMove = (e) => this._handlePointerMove(e);
     this._onPointerDown = (e) => this._handlePointerDown(e);
     this._onPointerUp = (e) => this._handlePointerUp(e);
     this._onPointerCancel = () => { this._pointerDown = null; };
-    this._onPointerLeave = () => {
-      this._hoverRec = null;
-      this._pointerPos = null;   // stop re-picking once the pointer exits (R13)
-      this._restoreCursor();
-    };
+    this._onPointerLeave = () => this._handlePointerLeave();
 
     this._group = new THREE.Group();
     this._group.name = 'MotherCallouts';
@@ -487,6 +542,27 @@ export class MotherCallouts {
     };
   }
 
+  /**
+   * The part under the pointer — card sprite or hull `pick` mesh, one hover
+   * state (`_hoverRec`), same record shape as getFocusedPart(). NO band gate:
+   * hover exists wherever a part's card is eligible (PART and COMPONENT bands;
+   * in the SYSTEM band nothing on the hull hovers). Null when nothing is
+   * hovered. Pure read; allocates a fresh object per call — never call it per
+   * frame.
+   * @returns {{ id: string, name: string, codexId: string|null, systemId: string }|null}
+   */
+  getHoveredPart() {
+    const rec = this._hoverRec;
+    if (!rec || !rec.def) return null;
+    const def = rec.def;
+    return {
+      id: def.id,
+      name: def.name,
+      codexId: (typeof def.codexId === 'string') ? def.codexId : null,
+      systemId: rec.sysId,
+    };
+  }
+
   // --------------------------------------------------------------------------
   // BUILD
   // --------------------------------------------------------------------------
@@ -578,6 +654,8 @@ export class MotherCallouts {
         cardKey: null, card: null,
         anchor: new THREE.Vector3(...sys.anchor),
         _mesh: null, _meshTried: false,
+        _pickObjs: null, _pickTried: false,
+        _outline: null, _outlineTried: false,
         _cardCache: null, _railOrder: null, _targetOp: 0,
         _h: 0, _wasFocus: false, _isFocus: false,
         _anchorX: 0, _anchorY: 0, _anchorZ: 0,
@@ -603,6 +681,8 @@ export class MotherCallouts {
           cardKey: null, card: null,
           anchor: new THREE.Vector3(...part.anchor),
           _mesh: null, _meshTried: false,
+          _pickObjs: null, _pickTried: false,
+          _outline: null, _outlineTried: false,
           _cardCache: null, _railOrder: null, _targetOp: 0,
           _h: 0, _wasFocus: false, _isFocus: false,
           _anchorX: 0, _anchorY: 0, _anchorZ: 0,
@@ -924,6 +1004,10 @@ export class MotherCallouts {
       // a quick dip in/out of inspection can't replay the dim tour indefinitely.
       this._guidedDone = true;
       this._detachPointer();
+      this._setHoverRec(null); // canvas-less instances never attach — clear hover explicitly
+      // T4: hover outlines are children of the hull meshes, NOT of this._group,
+      // so `_group.visible = false` cannot hide them — hide each one explicitly.
+      for (const p of this._partLabels) this._setOutlineVisible(p, false);
       eventBus.emit(Events.CALLOUT_BAND_CHANGE, { band: null });
     }
   }
@@ -951,8 +1035,8 @@ export class MotherCallouts {
     this.canvas.removeEventListener('pointerleave', this._onPointerLeave);
     this._listening = false;
     this._pointerDown = null;
+    this._handlePointerLeave();   // clears _hoverRec (outline off), _pointerPos, cursor
     this._restoreCursor();
-    if (this._hoverRec) { this._hoverRec = null; }
   }
 
   _restoreCursor() {
@@ -972,42 +1056,207 @@ export class MotherCallouts {
   }
 
   /**
-   * Shared raycast pick over the part labels with the camera ray already set.
-   * Returns the nearest eligible rec or null. Single source for the
-   * eligibility filter so hover and click can never drift apart (review).
+   * Card/part pick eligibility — EXACTLY the filter the sprite pick used
+   * inline (round 6), extracted so the card loop and the hull-mesh loop in
+   * _pickBestRec can never drift apart: hover, click, card and mesh all pass
+   * through this one gate.
+   * @private @param {object} p part rec @returns {boolean}
+   */
+  _recPickable(p) {
+    if (!p.def.codexId || !p.sprite.visible) return false;
+    // Round 6 review: gate on RESOLVABILITY, not codexId truthiness — a drifted
+    // codexId renders "structure — no briefing" (see _codexState) and must not
+    // stay clickable with a dead no-op click.
+    if (this._codexState(p.def) === null) return false;
+    // Gate on whichever is larger of eased vs target opacity, so picking
+    // follows what the player can actually see. Derived from the legibility
+    // floor (MIN_CARD_OP) so the two can't drift: a card is either clearly
+    // readable-and-clickable or hidden — no muddy half-pickable band. The
+    // 0.8 factor keeps the gate strictly below the floor (round 6).
+    if (Math.max(p.op ?? 0, p._targetOp ?? 0) <= (CFG.MIN_CARD_OP ?? 0.5) * 0.8) return false;
+    return true;
+  }
+
+  /**
+   * Resolve a rec's `pick` hull objects (lazy, once). Default when the table
+   * row carries no `pick`: `mesh ? [mesh] : []`. Resolution collects ALL
+   * objects with a matching name via player.traverse — getObjectByName returns
+   * only the FIRST match and several pick names are shared (SensorSpoke ×4).
+   * One-time console.warn per rec for names that resolve to nothing (mirrors
+   * the anchor mesh-miss warn). Never throws when `player` is absent.
+   * @private @returns {THREE.Object3D[]}
+   */
+  _pickTargets(rec) {
+    if (rec._pickTried) return rec._pickObjs || [];
+    rec._pickTried = true;
+    rec._pickObjs = [];
+    const def = rec.def;
+    const names = Array.isArray(def.pick) ? def.pick : (def.mesh ? [def.mesh] : []);
+    if (!names.length || !this.player) return rec._pickObjs;
+    const wanted = new Set(names);
+    const found = new Set();
+    this.player.traverse((o) => {
+      if (o.name && wanted.has(o.name)) {
+        rec._pickObjs.push(o);
+        found.add(o.name);
+      }
+    });
+    if (found.size < wanted.size && typeof console !== 'undefined') {
+      const missing = names.filter((n) => !found.has(n));
+      console.warn(`[MotherCallouts] pick name(s) "${missing.join('", "')}" not found for "${def.name}" — hull hover reduced`);
+    }
+    return rec._pickObjs;
+  }
+
+  /**
+   * True when `obj` and every parent up to and including `root` are `.visible`.
+   * Raycaster.intersectObject tests LAYERS only, never `.visible` (T1) — hidden
+   * plumes, furled panels and docked daughter bodies would otherwise be hit.
+   * @private
+   */
+  _chainVisible(obj, root) {
+    let o = obj;
+    while (o) {
+      if (!o.visible) return false;
+      if (o === root) return true;
+      o = o.parent;
+    }
+    return true;
+  }
+
+  /**
+   * Shared raycast pick with the camera ray already set: the card sprites
+   * FIRST (a card hit ALWAYS beats a mesh hit — cards are depthTest:false and
+   * draw on top of the hull), then the eligible parts' `pick` hull meshes.
+   * Returns the nearest eligible rec or null. Single source for the pick so
+   * hover and click can never drift apart (review).
    * @private
    */
   _pickBestRec() {
     let best = null, bestDist = Infinity;
     for (const p of this._partLabels) {
-      if (!p.def.codexId || !p.sprite.visible) continue;
-      // Round 6 review: gate on RESOLVABILITY, not codexId truthiness — a drifted
-      // codexId renders "structure — no briefing" (see _codexState) and must not
-      // stay clickable with a dead no-op click.
-      if (this._codexState(p.def) === null) continue;
-      // Gate on whichever is larger of eased vs target opacity, so picking
-      // follows what the player can actually see. Derived from the legibility
-      // floor (MIN_CARD_OP) so the two can't drift: a card is either clearly
-      // readable-and-clickable or hidden — no muddy half-pickable band. The
-      // 0.8 factor keeps the gate strictly below the floor (round 6).
-      if (Math.max(p.op ?? 0, p._targetOp ?? 0) <= (CFG.MIN_CARD_OP ?? 0.5) * 0.8) continue;
+      if (!this._recPickable(p)) continue;
       const hits = this._raycaster.intersectObject(p.sprite, false);
       if (hits.length && hits[0].distance < bestDist) {
         bestDist = hits[0].distance;
         best = p;
       }
     }
+    if (best) return best;
+    // Hull-part pick (D2's first verb): the same ray against each eligible
+    // part's `pick` meshes. Nearest visible-Mesh hit across all recs wins.
+    for (const p of this._partLabels) {
+      if (!this._recPickable(p)) continue;
+      for (const target of this._pickTargets(p)) {
+        const hits = this._raycaster.intersectObject(target, true);
+        for (const hit of hits) {
+          // T2: raycaster.params.Line.threshold is 1 WORLD UNIT and the ship is
+          // 2e-5 units long — any Line child (CableHarness_*, our own outline)
+          // hits from anywhere. Meshes only.
+          if (!hit.object.isMesh) continue;
+          // T1: skip hits whose chain up to the pick target is hidden.
+          if (!this._chainVisible(hit.object, target)) continue;
+          if (hit.distance < bestDist) { bestDist = hit.distance; best = p; }
+          break; // hits are distance-sorted — the first eligible is this target's nearest
+        }
+      }
+    }
     return best;
   }
 
   /**
-   * Nearest clickable label sprite under the pointer.
+   * Nearest clickable label sprite or hull pick mesh under the pointer.
    * @private @returns {object|null}
    */
   _pickLabel(e) {
     if (!this.camera) return null;
     this._raycaster.setFromCamera(this._pointerNDC(e), this.camera);
     return this._pickBestRec();
+  }
+
+  /**
+   * The SOLE writer of `_hoverRec` (source-pinned in test-MotherCallouts): one
+   * hover state whatever the source — card sprite or hull mesh. Swaps the part
+   * outline and keeps the hand cursor in sync; the card treatment (opacity
+   * lift, scale bump, leader whitening) reads `_hoverRec` in _positionCard.
+   * @private @param {object|null} rec
+   */
+  _setHoverRec(rec) {
+    const next = rec || null;
+    if (next === this._hoverRec) return;
+    const old = this._hoverRec;
+    this._hoverRec = next;
+    if (old) this._setOutlineVisible(old, false);
+    if (next) {
+      if (!this._cursorSet && typeof document !== 'undefined') {
+        document.body.style.cursor = 'pointer';
+        this._cursorSet = true;
+      }
+      this._ensureOutline(next);
+      this._setOutlineVisible(next, true);
+    } else {
+      this._restoreCursor();
+    }
+  }
+
+  /** Pointer left the canvas: clear the hover and stop re-picking (R13). @private */
+  _handlePointerLeave() {
+    this._setHoverRec(null);
+    this._pointerPos = null;   // stop re-picking once the pointer exits (R13)
+  }
+
+  /** Hull-outline master switch (a method so tests can stub it). @private */
+  _outlineEnabled() {
+    return Constants.INSPECTION?.HULL_OUTLINE !== false;
+  }
+
+  /**
+   * Lazily build a rec's hover outline (once, cached): one house-style
+   * EdgesGeometry LineSegments per Mesh in the pick subtrees, parented to THAT
+   * MESH so it follows every live transform (gimbal, furl, strut ride). One
+   * LineBasicMaterial per rec — its own, never a hull material, never shared
+   * across recs. Caches null when outlines are disabled or nothing picks.
+   * @private @returns {{lines: THREE.LineSegments[], material: THREE.LineBasicMaterial}|null}
+   */
+  _ensureOutline(rec) {
+    if (rec._outlineTried) return rec._outline;
+    rec._outlineTried = true;
+    rec._outline = null;
+    if (!this._outlineEnabled()) return null;
+    const targets = this._pickTargets(rec);
+    if (!targets.length) return null;
+    const INS = Constants.INSPECTION || {};
+    const material = new THREE.LineBasicMaterial({
+      color: INS.HULL_OUTLINE_COLOR ?? 0x00ffcc,
+      transparent: true,
+      opacity: 0.85,
+    });
+    const lines = [];
+    for (const target of targets) {
+      target.traverse((o) => {
+        // Meshes with real geometry only — skip Sprites/Lines/Points and
+        // position-less geometry (EdgesGeometry would throw).
+        if (!o.isMesh || !o.geometry?.attributes?.position) return;
+        const edges = new THREE.EdgesGeometry(o.geometry, INS.HULL_OUTLINE_THRESHOLD_DEG ?? 20);
+        const line = new THREE.LineSegments(edges, material);
+        line.name = 'MotherCalloutOutline';
+        line.userData.partId = rec.def.id;
+        line.raycast = () => {};          // T2: never hit by our own recursive pick
+        line.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;
+        line.visible = false;
+        o.add(line);
+        lines.push(line);
+      });
+    }
+    if (!lines.length) { material.dispose(); return null; }
+    rec._outline = { lines, material };
+    return rec._outline;
+  }
+
+  /** Toggle a rec's hover outline (no-op when it has none). @private */
+  _setOutlineVisible(rec, on) {
+    if (!rec._outline) return;
+    for (const line of rec._outline.lines) line.visible = !!on;
   }
 
   _handlePointerMove(e) {
@@ -1018,21 +1267,15 @@ export class MotherCallouts {
     const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
     if (now - this._hoverT < 100) return;   // ~10 Hz
     this._hoverT = now;
-    const hit = this._pickLabel(e);
-    const rec = hit || null;
-    if (rec && !this._cursorSet) {
-      document.body.style.cursor = 'pointer';
-      this._cursorSet = true;
-    } else if (!rec && this._cursorSet) {
-      this._restoreCursor();
-    }
-    this._hoverRec = rec;
+    this._setHoverRec(this._pickLabel(e));
   }
 
   /**
-   * Re-pick the hovered card from the stored pointer position (R13). Cards slide
-   * in screen space as the ship rotates, so with a stationary pointer the hover
-   * would otherwise go stale. Runs at ~10 Hz from _layout; cheap (29 raycasts).
+   * Re-pick the hover from the stored pointer position (R13). Cards slide in
+   * screen space as the ship rotates (and the hull meshes rotate under a
+   * stationary pointer), so the hover would otherwise go stale. Runs at
+   * ~10 Hz from _layout; cheap (the card sprites, then the eligible parts'
+   * pick meshes via _pickBestRec).
    * @private
    */
   _refreshHover() {
@@ -1046,16 +1289,7 @@ export class MotherCallouts {
       -((this._pointerPos.clientY - rect.top) / rect.height) * 2 + 1,
     );
     this._raycaster.setFromCamera(this._ndc, this.camera);
-    const best = this._pickBestRec() || null;
-    if (best !== this._hoverRec) {
-      this._hoverRec = best;
-      if (best && !this._cursorSet) {
-        document.body.style.cursor = 'pointer';
-        this._cursorSet = true;
-      } else if (!best && this._cursorSet) {
-        this._restoreCursor();
-      }
-    }
+    this._setHoverRec(this._pickBestRec());
   }
 
   _handlePointerDown(e) {
@@ -1074,8 +1308,10 @@ export class MotherCallouts {
     const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
     if (moved > 5 || (now - down.t) > 400) return;   // drag / long-press → ignore
     const hit = this._pickLabel(e);
-    // T7: the WHOLE card is clickable — hover and click now agree (the old
-    // title-strip UV gate made ~⅔ of a focused card a dead zone with a hand cursor).
+    // T7: the WHOLE card is clickable — hover and click agree (the old
+    // title-strip UV gate made ~⅔ of a focused card a dead zone with a hand
+    // cursor). Hull-part clicks arrive through the same _pickLabel (the mesh
+    // loop in _pickBestRec), so clicking a part IS clicking its card.
     if (hit && hit.def.codexId) {
       eventBus.emit(Events.CODEX_OPEN_ENTRY, { id: hit.def.codexId });
     }
@@ -1690,6 +1926,16 @@ export class MotherCallouts {
       s.line?.geometry?.dispose();
       s.line?.material?.dispose();
       s.dot?.material?.dispose();
+      // Hover outlines live under the hull meshes (not _group) — detach and
+      // dispose each LineSegments' own EdgesGeometry, then the rec's material.
+      if (s._outline) {
+        for (const line of s._outline.lines) {
+          line.parent?.remove(line);
+          line.geometry.dispose();
+        }
+        s._outline.material.dispose();
+        s._outline = null;
+      }
     }
     this.player.remove(this._group);
   }
