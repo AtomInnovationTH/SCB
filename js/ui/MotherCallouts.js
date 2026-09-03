@@ -27,10 +27,11 @@
  * Hull-part hover (D2's first verb, Wave 5): parts with `pick:` hull-object
  * names raycast alongside the card sprites at the same 10 Hz — hovering the
  * part outlines it in the house cyan (EdgesGeometry lines + a translucent
- * inflated shell, children of the picked meshes, drawn depth-free like the
- * cards) and brightens its card; clicking the part is identical to clicking
- * its card (one hover state `_hoverRec`, one CODEX_OPEN_ENTRY emitter). The
- * stationary re-pick is sticky (see _refreshHover) so the highlight is steady.
+ * inflated shell, children of the picked meshes, depth-tested and pulled
+ * 1.5 mm toward the camera so the hull hides far-side layers) and brightens
+ * its card; clicking the part is identical to clicking its card (one hover
+ * state `_hoverRec`, one CODEX_OPEN_ENTRY emitter). The stationary re-pick is
+ * sticky (see _refreshHover) so the highlight is steady.
  *
  * Gating mirrors the hull outline: active while either the discrete INSPECTION
  * view (CAMERA_VIEW_CHANGE) or the OVERVIEW zoom sub-state (INSPECT_HULL_OUTLINE)
@@ -368,6 +369,15 @@ const LINE_HALF_WIDTH_FRAC = 0.0012; // leader ribbon half-width / camera-ship d
 // the stationary re-pick is sticky — see _refreshHover.
 const HOVER_MISS_TICKS = 3;
 
+// Hover-outline depth stagger (owner, 2026-09-03: "parts on the far side show
+// through the mother — confusing"): the outline layers keep the depth test
+// (so the hull occludes far-side layers and anything crossing in front of the
+// part) and are pulled this far toward the camera each frame so they win the
+// test against their OWN surface. 1.5 mm is ~150× the log-depth resolution at
+// F3 (~10 µm at 7.7 m), under the ROSA blanket's 4 mm front/back gap (the
+// hidden face's layer stays hidden), and ~0.15 px on screen at F3.
+const HOVER_OUTLINE_STAGGER_M = 0.0015;
+
 export class MotherCallouts {
   /**
    * @param {THREE.Object3D} playerGroup  The PlayerSatellite group (labels parent here).
@@ -417,6 +427,10 @@ export class MotherCallouts {
     this._rC3 = new THREE.Vector3();
     this._vCamLocal = new THREE.Vector3();
     this._leaderHalfWidth = 0;
+    // Hover-outline stagger scratch (_updateOutlineStagger).
+    this._vStag = new THREE.Vector3();
+    this._vStagDir = new THREE.Vector3();
+    this._vStagCam = new THREE.Vector3();
 
     // Per-frame projection state (populated in update()).
     this._halfH = 1; this._halfW = 1;
@@ -1207,6 +1221,7 @@ export class MotherCallouts {
       }
       this._ensureOutline(next);
       this._setOutlineVisible(next, true);
+      this._updateOutlineStagger();   // staggered on its very first drawn frame
     } else {
       this._restoreCursor();
     }
@@ -1241,19 +1256,23 @@ export class MotherCallouts {
    *      halo, flat panels as a cyan rim + tint. The witness showed edge
    *      lines alone are near-invisible on the flat ROSA panels.
    *
-   * DEPTH (refinement, playtest 2026-09-03 "parts flicker"): BOTH layers draw
-   * `depthTest:false, depthWrite:false` — the house treatment of the card,
-   * dot and leader materials (this pass runs after clearDepth; see _makeLine).
-   * The flat ROSA panels are PlaneGeometry with zero z-extent: a uniform
-   * `scale.setScalar(1.03)` cannot lift a z=0 plane off its own plane, so the
-   * shell (and the edge lines) sat exactly coplanar with the hull that had
-   * already written depth and shimmered (equal-depth fragments flip the LESS
-   * test frame to frame). As a depth-free overlay the highlight is steady.
-   * Accepted trade-off: a nearer non-part hull mesh no longer occludes the
-   * highlight — right for a "you are pointing at THIS" cue, and already true
-   * of the cards. (The alternative, an along-normal geometric Z stagger —
-   * the technique Constants.RENDER_ORDER recommends over polygonOffset under
-   * the logarithmic depth buffer — is not needed while this holds.)
+   * DEPTH (refinements, 2026-09-03): BOTH layers keep `depthTest` ON and
+   * `depthWrite` OFF, and are pulled HOVER_OUTLINE_STAGGER_M (1.5 mm) toward
+   * the camera every frame (_updateOutlineStagger) — the house "tiny geometric
+   * Z stagger" SceneManager prescribes over polygonOffset under the
+   * logarithmic depth buffer (the ROSA blanket's own 2 mm front/back standoff
+   * is the precedent). Why not scale, why not depth-free:
+   *   - The flat ROSA panels are PlaneGeometry with zero z-extent: a uniform
+   *     `scale.setScalar(1.03)` cannot lift a z=0 plane off its own plane, so
+   *     the shell and the edge lines sat exactly coplanar with the hull that
+   *     had already written depth and shimmered (equal-depth fragments flip
+   *     the LESS test frame to frame). The pull toward the camera does lift
+   *     them, whatever the geometry.
+   *   - Session 1b first drew both layers `depthTest:false` (the card/dot/
+   *     leader treatment): steady, but far-side layers (the 4 RCS pods, the
+   *     back ROSA face, the 28 barrel cells) showed THROUGH the mother and a
+   *     radiator plate crossing a wing was tinted over — owner playtest:
+   *     confusing. With the depth test on, the hull's own depth hides them.
    *
    * One LineBasicMaterial + one MeshBasicMaterial per rec — their own, never
    * a hull material, never shared across recs. Caches null when outlines are
@@ -1269,21 +1288,21 @@ export class MotherCallouts {
     const targets = this._pickTargets(rec);
     if (!targets.length) return null;
     const INS = Constants.INSPECTION || {};
-    // Both materials: depth-free overlay (depthTest + depthWrite off) — see the
-    // DEPTH note above. Never a hull material.
+    // Both materials: depth test ON (the hull occludes far-side layers), depth
+    // write OFF (an overlay never writes depth) — see the DEPTH note above. The
+    // stagger that wins the test against the part's own surface is geometric
+    // (_updateOutlineStagger), never polygonOffset. Never a hull material.
     const material = new THREE.LineBasicMaterial({
       color: INS.HULL_OUTLINE_COLOR ?? 0x00ffcc,
       transparent: true,
       opacity: 0.85,
       depthWrite: false,
-      depthTest: false,
     });
     const shellMaterial = new THREE.MeshBasicMaterial({
       color: INS.HULL_OUTLINE_COLOR ?? 0x00ffcc,
       transparent: true,
       opacity: 0.3,
       depthWrite: false,
-      depthTest: false,
       side: THREE.DoubleSide,
     });
     const NORM = 1 / M; // metre-scale normalization for the EdgesGeometry hash
@@ -1330,6 +1349,50 @@ export class MotherCallouts {
     if (!rec._outline) return;
     for (const line of rec._outline.lines) line.visible = !!on;
     for (const shell of rec._outline.shells || []) shell.visible = !!on;
+  }
+
+  /**
+   * Pull the hovered rec's outline layers HOVER_OUTLINE_STAGGER_M toward the
+   * camera, in each parent mesh's LOCAL frame, so they win the depth test
+   * against their own surface while the hull still occludes far-side layers
+   * (see the DEPTH note on _ensureOutline). Runs per frame at the end of
+   * update() (after _layout's re-pick, so a switched hover is staggered before
+   * it is drawn) and once from _setHoverRec (a pointer-event hover is drawn
+   * staggered on its very first frame). Each parent's world matrix is
+   * refreshed first (in-frame they are one frame stale — see _refreshHover);
+   * the offset is exact under any parent rotation and non-uniform scale (the
+   * ROSA roll-out wrapper scales x) because it goes through worldToLocal.
+   * ≤ 32 small objects (body_cells) — ~tens of µs. No-op without a real
+   * camera (test stubs) or without an outline.
+   * @private
+   */
+  _updateOutlineStagger() {
+    const rec = this._hoverRec;
+    const out = rec && rec._outline;
+    const cam = this.camera;
+    if (!out || !cam || !cam.matrixWorld) return;
+    cam.getWorldPosition(this._vStagCam);                           // C (never mutated below)
+    const eps = HOVER_OUTLINE_STAGGER_M * M;
+    const lines = out.lines;
+    const shells = out.shells || [];
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const parent = line.parent;
+      if (!parent) continue;
+      parent.updateWorldMatrix(true, false);
+      parent.getWorldPosition(this._vStag);                         // P (parent origin, world)
+      this._vStagDir.copy(this._vStagCam).sub(this._vStag);         // P → C
+      const len = this._vStagDir.length();
+      if (len > 1e-30) {
+        this._vStag.addScaledVector(this._vStagDir, eps / len);     // P + ε·dir (world)
+        parent.worldToLocal(this._vStag);                           // → offset in the parent's frame
+      } else {
+        this._vStag.set(0, 0, 0);
+      }
+      line.position.copy(this._vStag);
+      const shell = shells[i];                                      // built pairwise with lines[i]
+      if (shell) shell.position.copy(this._vStag);
+    }
   }
 
   _handlePointerMove(e) {
@@ -1489,6 +1552,9 @@ export class MotherCallouts {
     else this._focusPart = null;
 
     this._layout(dt);
+    // After the re-pick inside _layout: pull the hovered outline toward the
+    // camera for THIS frame's pose (depth-honest highlight, see _ensureOutline).
+    this._updateOutlineStagger();
   }
 
   _updateBand(distM) {
