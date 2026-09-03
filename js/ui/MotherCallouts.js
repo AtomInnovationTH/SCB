@@ -33,6 +33,12 @@
  * state `_hoverRec`, one CODEX_OPEN_ENTRY emitter). The stationary re-pick is
  * sticky (see _refreshHover) so the highlight is steady.
  *
+ * REFIT ghosts (Wave 5 (2)): setGhostOutline(partIds) shows the SAME outline
+ * steady-on for a set of parts (the pane's alternative hover), pulsed
+ * 0.35×–1× at 1.2 Hz on the recs' own materials; getPartsBySystem() feeds the
+ * pane's bookkeeping; the optional onPartClick hook (D-a) routes a resolved
+ * part/card click to the REFIT card instead of the Library emit.
+ *
  * Gating mirrors the hull outline: active while either the discrete INSPECTION
  * view (CAMERA_VIEW_CHANGE) or the OVERVIEW zoom sub-state (INSPECT_HULL_OUTLINE)
  * reports inspection on.
@@ -378,17 +384,67 @@ const HOVER_MISS_TICKS = 3;
 // hidden face's layer stays hidden), and ~0.15 px on screen at F3.
 const HOVER_OUTLINE_STAGGER_M = 0.0015;
 
+// REFIT ghost pulse (Wave 5 (2), 08-workbench §2: hovering an alternative
+// "pulses the part's ghost outline on the hull"). Ghost recs' OWN outline
+// materials oscillate between GHOST_PULSE_MIN× and 1× of their base opacity
+// (lines 0.85, shell 0.3 — captured at _ensureOutline build) at
+// GHOST_PULSE_HZ; bases are restored on clear. The hover rec never pulses
+// (hover wins on overlap) and hull materials are never touched.
+const GHOST_PULSE_HZ = 1.2;
+const GHOST_PULSE_MIN = 0.35;
+
+/**
+ * One rec's outline-layer pull toward the camera already captured in
+ * `self._vStagCam` (see _updateOutlineStagger — the only caller). A module
+ * function, not a prototype method, so prototype-borrowing test rigs that
+ * lift `_updateOutlineStagger` onto plain objects keep working; uses only
+ * the rig-provided scratch vectors.
+ * @param {MotherCallouts|object} self
+ * @param {{lines:THREE.LineSegments[], shells:THREE.Mesh[]}|null} out
+ */
+function staggerOutlineLayers(self, out) {
+  if (!out) return;
+  const eps = HOVER_OUTLINE_STAGGER_M * M;
+  const lines = out.lines;
+  const shells = out.shells || [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const parent = line.parent;
+    if (!parent) continue;
+    parent.updateWorldMatrix(true, false);
+    parent.getWorldPosition(self._vStag);                         // P (parent origin, world)
+    self._vStagDir.copy(self._vStagCam).sub(self._vStag);         // P → C
+    const len = self._vStagDir.length();
+    if (len > 1e-30) {
+      self._vStag.addScaledVector(self._vStagDir, eps / len);     // P + ε·dir (world)
+      parent.worldToLocal(self._vStag);                           // → offset in the parent's frame
+    } else {
+      self._vStag.set(0, 0, 0);
+    }
+    line.position.copy(self._vStag);
+    const shell = shells[i];                                      // built pairwise with lines[i]
+    if (shell) shell.position.copy(self._vStag);
+  }
+}
+
 export class MotherCallouts {
   /**
    * @param {THREE.Object3D} playerGroup  The PlayerSatellite group (labels parent here).
    * @param {THREE.Camera}   camera
    * @param {object} [opts]
    * @param {HTMLCanvasElement|null} [opts.canvas]  Render canvas for pointer events.
+   * @param {function|null} [opts.onPartClick]  Wave 5 (2) D-a hook (owner,
+   *   2026-09-03): when set, a resolved part/card click calls
+   *   `onPartClick(getHoveredPart())` INSTEAD of emitting CODEX_OPEN_ENTRY —
+   *   main.js wires it to the REFIT pane ONLY while the ladder flag is on.
+   *   Absent (the shipped default and every ?ladder=0 boot), the click emits
+   *   exactly as shipped. The ONE emitter in _handlePointerUp stays the one.
    */
-  constructor(playerGroup, camera, { canvas = null } = {}) {
+  constructor(playerGroup, camera, { canvas = null, onPartClick = null } = {}) {
     this.player = playerGroup;
     this.camera = camera;
     this.canvas = canvas;
+    this._onPartClick = onPartClick;
 
     this._active = false;
     this._band = 'SYSTEM';
@@ -456,6 +512,15 @@ export class MotherCallouts {
     this._cursorSet = false;
     this._listening = false;
     this._setHoverRec(null);   // one hover state, initialized through its ONE writer (source-pinned)
+    // REFIT ghost outlines (Wave 5 (2)): the ONE ghost set — recs whose hover
+    // outline is shown steady-on by the pane's alternative hover (reusing
+    // _ensureOutline/_setOutlineVisible, 06-core-api: never a second outline
+    // system). Pulsed in update() on the recs' OWN materials; the hover rec
+    // wins on overlap. Source-pinned in test-MotherCallouts row l: the set is
+    // constructed HERE exactly once — every other site mutates, never replaces.
+    this._ghostRecs = new Set();
+    this._ghostPulse = true;    // setGhostOutline({ pulse }) — false = steady
+    this._ghostPhaseT = 0;      // pulse phase clock (s), reset on empty→shown
     this._pointerPos = null;   // last pointer client coords, for hover re-pick (R13)
     this._hoverPickT = 0;      // hover re-pick cadence guard (R13)
     this._hoverMisses = 0;     // consecutive stationary re-pick misses with a hover held (stickiness)
@@ -584,6 +649,142 @@ export class MotherCallouts {
       codexId: (typeof def.codexId === 'string') ? def.codexId : null,
       systemId: rec.sysId,
     };
+  }
+
+  /**
+   * REFIT ghost outlines (Wave 5 (2)): show the hover outline steady-on for a
+   * set of parts — the pane's "hover an alternative → the hardware pulses
+   * cyan on the hull" affordance. REUSES the one outline system
+   * (_ensureOutline + _setOutlineVisible, 06-core-api.md:551-553: "do not
+   * build a second outline system"); update() pulses the ghost recs' OWN
+   * materials 0.35×–1× of base at 1.2 Hz and _updateOutlineStagger staggers
+   * them exactly like the hover.
+   *
+   * Rules:
+   *   - ids resolving to card-only parts (no pick geometry → _ensureOutline
+   *     null) and unknown ids are SKIPPED, never thrown on (D-c: unowned
+   *     hardware without a mesh cannot ghost — a FINDING, not a feature);
+   *   - inactive (`!_active`): nothing is shown (every id reports skipped);
+   *   - `setGhostOutline(null)` clears: hides every ghost that is not the
+   *     live `_hoverRec` and restores base opacities;
+   *   - the hover rec wins on overlap (steady base, no pulse) and clearing
+   *     ghosts never hides a live hover.
+   * Allocates (a scratch set + the report) — call on hover edges, never per
+   * frame.
+   * @param {string[]|null} partIds — MotherCallouts part ids (refitIndex.partsForSubsystem output)
+   * @param {{ pulse?: boolean }} [opts] — pulse=false holds the ghosts steady at base
+   * @returns {{ shown: string[], skipped: string[] }}
+   */
+  setGhostOutline(partIds, { pulse = true } = {}) {
+    const shown = [];
+    const skipped = [];
+    const want = Array.isArray(partIds) ? partIds : [];
+    const next = new Set();
+    for (const id of want) {
+      const rec = this._active ? this._partLabels.find((p) => p.def.id === id) : null;
+      if (!rec || !this._ensureOutline(rec)) { skipped.push(id); continue; }
+      next.add(rec);
+      shown.push(id);
+    }
+    // Recs leaving the set: restore base opacities and hide — unless the rec
+    // is the live hover, which keeps its outline (steady, as a plain hover).
+    for (const rec of this._ghostRecs) {
+      if (next.has(rec)) continue;
+      this._restoreGhostBase(rec);
+      if (rec !== this._hoverRec) this._setOutlineVisible(rec, false);
+    }
+    const hadAny = this._ghostRecs.size > 0;
+    this._ghostRecs.clear();
+    for (const rec of next) {
+      this._ghostRecs.add(rec);
+      this._setOutlineVisible(rec, true);
+    }
+    this._ghostPulse = !!pulse;
+    if (!hadAny && this._ghostRecs.size) this._ghostPhaseT = 0; // pulse starts at full
+    // Staggered on their very first drawn frame (the hover-write precedent).
+    this._updateOutlineStagger();
+    return { shown, skipped };
+  }
+
+  /**
+   * The callout parts of one MotherCallouts system — the REFIT pane's
+   * focusPart/ghost bookkeeping read. `hasGeometry` reports whether the part
+   * can outline on the hull (its pick subtree resolves to ≥1 real Mesh):
+   * card-only parts (mli, berths, nav_lights…) and the docked daughters
+   * report false — D-c: no unowned-hardware ghosts. Allocates a fresh array
+   * of fresh records — never call per frame.
+   * @param {string} systemId — a MOTHER_CALLOUT_SYSTEMS id (e.g. 'POWER')
+   * @returns {Array<{ id: string, name: string, codexId: string|null, systemId: string, hasGeometry: boolean }>}
+   */
+  getPartsBySystem(systemId) {
+    const out = [];
+    for (const rec of this._partLabels) {
+      if (rec.sysId !== systemId) continue;
+      const def = rec.def;
+      let hasGeometry = false;
+      for (const target of this._pickTargets(rec)) {
+        target.traverse((o) => {
+          if (o.isMesh && o.geometry?.attributes?.position && !o.userData.partId) hasGeometry = true;
+        });
+        if (hasGeometry) break;
+      }
+      out.push({
+        id: def.id,
+        name: def.name,
+        codexId: (typeof def.codexId === 'string') ? def.codexId : null,
+        systemId: rec.sysId,
+        hasGeometry,
+      });
+    }
+    return out;
+  }
+
+  /** @private Restore a ghost rec's outline materials to their build-time base
+   *  opacities (no-op without an outline; tolerates hand-built outlines
+   *  without base fields by leaving their current opacity). */
+  _restoreGhostBase(rec) {
+    const out = rec && rec._outline;
+    if (!out) return;
+    if (out.lineBaseOp != null) out.material.opacity = out.lineBaseOp;
+    if (out.shellBaseOp != null && out.shellMaterial) out.shellMaterial.opacity = out.shellBaseOp;
+  }
+
+  /** @private Empty the ghost set: bases restored, non-hover outlines hidden.
+   *  Used by _setActive(false), dispose() and guarded so rigs without the set
+   *  never reach it. */
+  _clearGhosts() {
+    if (!this._ghostRecs || !this._ghostRecs.size) return;
+    for (const rec of this._ghostRecs) {
+      this._restoreGhostBase(rec);
+      if (rec !== this._hoverRec) this._setOutlineVisible(rec, false);
+    }
+    this._ghostRecs.clear();
+  }
+
+  /**
+   * @private Per-frame ghost pulse (update() tail): every ghost rec's OWN
+   * outline materials oscillate GHOST_PULSE_MIN×–1× of base at GHOST_PULSE_HZ
+   * — never a hull material, never the hover rec (hover wins on overlap:
+   * held steady at base). pulse=false ghosts hold base. No allocation.
+   */
+  _updateGhostPulse(dt) {
+    const ghosts = this._ghostRecs;
+    if (!ghosts || !ghosts.size) return;
+    this._ghostPhaseT += dt;
+    // 1 → GHOST_PULSE_MIN → 1 (starts at full brightness on a fresh set).
+    const f01 = 0.5 - 0.5 * Math.cos(2 * Math.PI * GHOST_PULSE_HZ * this._ghostPhaseT);
+    const factor = 1 - (1 - GHOST_PULSE_MIN) * f01;
+    for (const rec of ghosts) {
+      const out = rec._outline;
+      if (!out) continue;
+      const steady = (rec === this._hoverRec) || !this._ghostPulse;
+      if (out.lineBaseOp != null) {
+        out.material.opacity = steady ? out.lineBaseOp : out.lineBaseOp * factor;
+      }
+      if (out.shellBaseOp != null && out.shellMaterial) {
+        out.shellMaterial.opacity = steady ? out.shellBaseOp : out.shellBaseOp * factor;
+      }
+    }
   }
 
   // --------------------------------------------------------------------------
@@ -1028,6 +1229,10 @@ export class MotherCallouts {
       this._guidedDone = true;
       this._detachPointer();
       this._setHoverRec(null); // canvas-less instances never attach — clear hover explicitly
+      // Wave 5 (2): REFIT ghost outlines clear with the costume (bases
+      // restored, set emptied) — guarded so prototype-borrowing rigs without
+      // the set skip it; the explicit hide-all below catches every layer.
+      if (this._ghostRecs) this._clearGhosts();
       // T4: hover outlines are children of the hull meshes, NOT of this._group,
       // so `_group.visible = false` cannot hide them — hide each one explicitly.
       for (const p of this._partLabels) this._setOutlineVisible(p, false);
@@ -1213,7 +1418,11 @@ export class MotherCallouts {
     if (next === this._hoverRec) return;
     const old = this._hoverRec;
     this._hoverRec = next;
-    if (old) this._setOutlineVisible(old, false);
+    // A rec that is ALSO ghosted keeps its outline on hover-out (the REFIT
+    // ghost pulse resumes in update()); plain hovers hide as shipped.
+    if (old && !(this._ghostRecs && this._ghostRecs.has(old))) {
+      this._setOutlineVisible(old, false);
+    }
     if (next) {
       if (!this._cursorSet && typeof document !== 'undefined') {
         document.body.style.cursor = 'pointer';
@@ -1340,7 +1549,13 @@ export class MotherCallouts {
       });
     }
     if (!lines.length) { material.dispose(); shellMaterial.dispose(); return null; }
-    rec._outline = { lines, shells, material, shellMaterial };
+    rec._outline = {
+      lines, shells, material, shellMaterial,
+      // Build-time base opacities — the REFIT ghost pulse oscillates around
+      // these and _restoreGhostBase puts them back on clear.
+      lineBaseOp: material.opacity,
+      shellBaseOp: shellMaterial.opacity,
+    };
     return rec._outline;
   }
 
@@ -1352,46 +1567,35 @@ export class MotherCallouts {
   }
 
   /**
-   * Pull the hovered rec's outline layers HOVER_OUTLINE_STAGGER_M toward the
-   * camera, in each parent mesh's LOCAL frame, so they win the depth test
-   * against their own surface while the hull still occludes far-side layers
-   * (see the DEPTH note on _ensureOutline). Runs per frame at the end of
-   * update() (after _layout's re-pick, so a switched hover is staggered before
-   * it is drawn) and once from _setHoverRec (a pointer-event hover is drawn
-   * staggered on its very first frame). Each parent's world matrix is
-   * refreshed first (in-frame they are one frame stale — see _refreshHover);
-   * the offset is exact under any parent rotation and non-uniform scale (the
-   * ROSA roll-out wrapper scales x) because it goes through worldToLocal.
-   * ≤ 32 small objects (body_cells) — ~tens of µs. No-op without a real
-   * camera (test stubs) or without an outline.
+   * Pull EVERY outlined rec's layers HOVER_OUTLINE_STAGGER_M toward the
+   * camera — the hovered rec AND the REFIT ghost recs (Wave 5 (2) extended
+   * the shipped hover-only stagger per the 06-core-api note: "extend it if a
+   * second rec ever shows an outline") — in each parent mesh's LOCAL frame,
+   * so they win the depth test against their own surface while the hull still
+   * occludes far-side layers (see the DEPTH note on _ensureOutline). Runs per
+   * frame at the end of update() (after _layout's re-pick, so a switched
+   * hover is staggered before it is drawn), once from _setHoverRec and once
+   * from setGhostOutline (both are drawn staggered on their very first
+   * frame). Each parent's world matrix is refreshed first (in-frame they are
+   * one frame stale — see _refreshHover); the offset is exact under any
+   * parent rotation and non-uniform scale (the ROSA roll-out wrapper scales
+   * x) because it goes through worldToLocal. ≤ 32 small objects per rec
+   * (body_cells) — ~tens of µs. No per-frame allocation; no-op without a
+   * real camera (test stubs) or without any outlined rec.
    * @private
    */
   _updateOutlineStagger() {
-    const rec = this._hoverRec;
-    const out = rec && rec._outline;
     const cam = this.camera;
-    if (!out || !cam || !cam.matrixWorld) return;
+    if (!cam || !cam.matrixWorld) return;
+    const hover = this._hoverRec;
+    const ghosts = (this._ghostRecs && this._ghostRecs.size) ? this._ghostRecs : null;
+    if (!hover && !ghosts) return;
     cam.getWorldPosition(this._vStagCam);                           // C (never mutated below)
-    const eps = HOVER_OUTLINE_STAGGER_M * M;
-    const lines = out.lines;
-    const shells = out.shells || [];
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      const parent = line.parent;
-      if (!parent) continue;
-      parent.updateWorldMatrix(true, false);
-      parent.getWorldPosition(this._vStag);                         // P (parent origin, world)
-      this._vStagDir.copy(this._vStagCam).sub(this._vStag);         // P → C
-      const len = this._vStagDir.length();
-      if (len > 1e-30) {
-        this._vStag.addScaledVector(this._vStagDir, eps / len);     // P + ε·dir (world)
-        parent.worldToLocal(this._vStag);                           // → offset in the parent's frame
-      } else {
-        this._vStag.set(0, 0, 0);
+    if (hover) staggerOutlineLayers(this, hover._outline);
+    if (ghosts) {
+      for (const rec of ghosts) {
+        if (rec !== hover) staggerOutlineLayers(this, rec._outline);
       }
-      line.position.copy(this._vStag);
-      const shell = shells[i];                                      // built pairwise with lines[i]
-      if (shell) shell.position.copy(this._vStag);
     }
   }
 
@@ -1489,7 +1693,18 @@ export class MotherCallouts {
     // cursor). Hull-part clicks arrive through the same _pickLabel (the mesh
     // loop in _pickBestRec), so clicking a part IS clicking its card.
     if (hit && hit.def.codexId) {
-      eventBus.emit(Events.CODEX_OPEN_ENTRY, { id: hit.def.codexId });
+      // Wave 5 (2) D-a (owner, 2026-09-03): with the REFIT hook injected the
+      // click opens the part's REFIT card INSTEAD of the Library — the hook
+      // receives the getHoveredPart() record (the clicked rec is written
+      // through the ONE hover writer first, so hovered == clicked even on a
+      // synthetic click). Absent hook (shipped / ?ladder=0): the one
+      // CODEX_OPEN_ENTRY emit below runs exactly as today.
+      if (this._onPartClick) {
+        this._setHoverRec(hit);
+        this._onPartClick(this.getHoveredPart());
+      } else {
+        eventBus.emit(Events.CODEX_OPEN_ENTRY, { id: hit.def.codexId });
+      }
     }
   }
 
@@ -1552,9 +1767,11 @@ export class MotherCallouts {
     else this._focusPart = null;
 
     this._layout(dt);
-    // After the re-pick inside _layout: pull the hovered outline toward the
-    // camera for THIS frame's pose (depth-honest highlight, see _ensureOutline).
+    // After the re-pick inside _layout: pull every outlined rec (hover +
+    // REFIT ghosts) toward the camera for THIS frame's pose (depth-honest
+    // highlight, see _ensureOutline), then advance the ghost pulse.
     this._updateOutlineStagger();
+    this._updateGhostPulse(dt);
   }
 
   _updateBand(distM) {
@@ -2084,6 +2301,10 @@ export class MotherCallouts {
 
   dispose() {
     this._detachPointer();
+    // Wave 5 (2): drop the REFIT ghost set before the outline teardown below
+    // (bases restored is moot — the materials are about to dispose — but the
+    // set must not hold freed recs). Guarded like _setActive for rig stubs.
+    if (this._ghostRecs && this._ghostRecs.size) this._clearGhosts();
     // T2a: if inspection was active, tell the HUD breadcrumb to hide before
     // we tear down — otherwise it stays on screen permanently.
     if (this._active) {
