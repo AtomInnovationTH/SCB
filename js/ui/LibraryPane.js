@@ -14,10 +14,24 @@
  *
  * CONTENT: the shipped viewer's ENTRY rendered as a side pane (the adapter
  * over the shipped viewer 08-workbench §10 names) —
- *   - header: the entry's emoji icon + title + category. The §2 "photo you
- *     just took" live-frame crop is NOT built (it needs a renderer readback
- *     per open — see the Wave-5 Session-B FINDINGS); the emoji icon is the
- *     sanctioned fallback.
+ *   - header: the entry's emoji icon + title + category, topped — when the
+ *     frame could be read — by **the photo you just took** (08-workbench §2;
+ *     Session C, owner decision 2): a crop of the live frame around the
+ *     subject, taken ONCE per open / entry change, never per frame. The
+ *     read is DEFERRED ONE ANIMATION FRAME: a synchronous `drawImage` /
+ *     `toDataURL` in the click task is BLANK on the shipped renderer
+ *     (`preserveDrawingBuffer` is false — probed 2026-09-03: 0 of 16000
+ *     crop pixels lit), while the same read inside the next rAF callback —
+ *     after the game's render in that frame, before present — is the
+ *     BlackFrameProbe-legal read and is valid (16000/16000) with no
+ *     SceneManager change. The crop is composited onto black (the WebGL
+ *     frame carries alpha 0 — the `__netShot` precedent), sampled for
+ *     blankness, retried up to PHOTO_TRIES frames (a frame the loop skipped
+ *     rendering reads blank), and on any failure the emoji header stands
+ *     alone — the sanctioned fallback, byte-identical to Session B's header.
+ *     The source (canvas + subject point) arrives through the injected
+ *     `photoSource` getter; the frame scheduler through `raf`/`cancelRaf`
+ *     (window's by default; absent headless → no photo, no throw).
  *   - `shortText` — the plain-English "why it matters" line every entry has.
  *   - a generated SPECS block for HARDWARE entries (entries carrying
  *     `hardwareNames`), from the entry's EXISTING fields only (no invented
@@ -110,6 +124,20 @@ export const PANE_Z_INDEX = 35;
 /** Edge tab stacking — ONE step above the root so the open pane never paints
  *  over its own tab (08-workbench §2 "edge tab always visible"; Session C). */
 export const TAB_Z_INDEX = 36;
+/** The photo crop: source region height as a fraction of the canvas height
+ *  (16:10 — PHOTO_W × PHOTO_H output px), centred on the subject point. */
+export const PHOTO_CROP_H_FRAC = 0.42;
+/** Photo output size (device px of the thumbnail canvas). */
+export const PHOTO_W = 320;
+export const PHOTO_H = 200;
+/** Frames the photo read is retried when the buffer reads blank (a frame the
+ *  loop skipped rendering) before the emoji header stands alone. */
+export const PHOTO_TRIES = 3;
+/** Blank test: a sampled pixel "lights" when r+g+b exceeds this (the
+ *  crop-probe threshold, 2026-09-03). */
+const PHOTO_LIT_SUM = 24;
+/** Blank test sampling stride (px) — a coarse grid, never the full crop. */
+const PHOTO_SAMPLE_STRIDE = 8;
 
 /** G1 write cap — the ProxContextPanel/TransferWindows house value. */
 const DOM_WRITE_MIN_INTERVAL_MS = 250;
@@ -150,6 +178,15 @@ export class LibraryPane {
    *   codexId, then the REFIT card's manifest deep link. Consulted ONLY when
    *   the pane opens with NO entry (tab click / toggle); a null / unknown /
    *   throwing answer keeps the prompt copy.
+   * @param {function} [deps.photoSource] - () => ({ canvas, x, y })|null
+   *   (Session C, decision 2): the live render canvas + the subject's point
+   *   in CANVAS (drawing-buffer) px to crop around — main.js projects the
+   *   ship. Read once per photo, on the open / entry edge only.
+   * @param {function} [deps.raf] - (cb) => handle: the frame scheduler for
+   *   the deferred photo read (default window.requestAnimationFrame; absent →
+   *   no photo, the emoji header stands alone)
+   * @param {function} [deps.cancelRaf] - (handle) => void (default
+   *   window.cancelAnimationFrame)
    * @param {boolean|function} [deps.reducedMotion] - override for the matchMedia probe
    */
   constructor(deps = {}) {
@@ -162,6 +199,11 @@ export class LibraryPane {
     this._onViewed = deps.onViewed || null;
     this._onOpenChange = deps.onOpenChange || null;
     this._subject = deps.subject || null;
+    this._photoSource = deps.photoSource || null;
+    this._raf = deps.raf !== undefined ? deps.raf
+      : (typeof requestAnimationFrame === 'function' ? (cb) => requestAnimationFrame(cb) : null);
+    this._cancelRaf = deps.cancelRaf !== undefined ? deps.cancelRaf
+      : (typeof cancelAnimationFrame === 'function' ? (h) => cancelAnimationFrame(h) : null);
     this._reducedMotionDep = deps.reducedMotion;
 
     this._enabled = false;
@@ -186,6 +228,15 @@ export class LibraryPane {
     this._idleTimer = null;
     // Seen-dwell state (READ = SEEN, the viewer's contract).
     this._seenTimer = null;
+    // The photo you just took (Session C): { id, url } for the entry it was
+    // taken for (shown only while that entry is the one on screen), the
+    // pending deferred-read handle, the retry count, and the ONE reused
+    // thumbnail canvas (built lazily on the first photo).
+    this._photo = null;
+    this._photoHandle = null;
+    this._photoTry = 0;
+    this._photoCanvas = null;
+    this._photoCount = 0;         // photos taken (tests/witness probe)
     this._disposed = false;
   }
 
@@ -307,6 +358,7 @@ export class LibraryPane {
     this._wake();
     this.refresh();
     this._armSeenTimer();
+    this._takePhoto();
     if (this._onOpenChange) { try { this._onOpenChange(true); } catch (_e) { /* dep */ } }
   }
 
@@ -317,6 +369,7 @@ export class LibraryPane {
     this._applyOpenState();
     this._clearIdleTimer();
     this._clearSeenTimer();
+    this._cancelPhoto();
     if (this._onOpenChange) { try { this._onOpenChange(false); } catch (_e) { /* dep */ } }
   }
 
@@ -338,15 +391,23 @@ export class LibraryPane {
    */
   openEntry(id) {
     const entry = this._entry(id);
+    let changed = false;
     if (entry) {
       if (entry.id !== this._entryId) {
         this._entryId = entry.id;
         this._clearSeenTimer();
+        changed = true;
       }
     }
-    this.open();
+    const wasOpen = this._open;
+    this.open();                       // a fresh open takes its own photo
     this.refresh();
-    if (this._open) this._armSeenTimer();
+    if (this._open) {
+      this._armSeenTimer();
+      // Already open and the entry changed (the hull-click follow / a
+      // related chip): the photo you just took is THIS click's frame.
+      if (wasOpen && changed) this._takePhoto();
+    }
     return !!entry;
   }
 
@@ -404,6 +465,9 @@ export class LibraryPane {
     this._clearIdleTimer();
     this._clearSeenTimer();
     this._clearPulseTimer();
+    this._cancelPhoto();
+    this._photo = null;
+    this._photoCanvas = null;
     if (this._open && this._onOpenChange) {
       try { this._onOpenChange(false); } catch (_e) { /* dep */ }
     }
@@ -468,6 +532,9 @@ export class LibraryPane {
       id: r.id, icon: r.icon, title: r.title, unlocked: !!r.unlocked,
     })) : [];
     const specs = (entry && entry.unlocked) ? LibraryPane.specsFor(entry) : [];
+    // The photo shows only for the entry it was taken for (never a stale
+    // frame under a newer entry); absent → the emoji header stands alone.
+    const photo = (entry && this._photo && this._photo.id === entry.id) ? this._photo.url : null;
     let unread = 0;
     try {
       unread = LibraryPane.unreadCount(this._codex ? this._codex.entries : null);
@@ -476,6 +543,7 @@ export class LibraryPane {
       this._open ? 1 : 0,
       entry ? entry.id : '',
       entry ? (entry.unlocked ? 1 : 0) : 0,
+      photo ? 1 : 0,
       unread,
       specs.map((s) => `${s.k}:${s.v}`).join('|'),
       related.map((r) => `${r.id}:${r.unlocked ? 1 : 0}`).join('|'),
@@ -485,6 +553,7 @@ export class LibraryPane {
       category: entry ? this._categoryLabel(entry.category) : '',
       specs,
       related,
+      photo,
       unread,
       structKey,
     };
@@ -655,8 +724,16 @@ export class LibraryPane {
     }
     const e = m.entry;
     const locked = !e.unlocked;
-    // Entry header: emoji icon (the "photo you just took" crop is a FINDINGS
-    // item — renderer readback per open) + title + category.
+    // The photo you just took (Session C): a banner above the entry header
+    // when the deferred frame read succeeded; otherwise nothing here and the
+    // emoji header below stands alone (the fallback = Session B's header).
+    if (m.photo) {
+      parts.push(
+        `<img class="library-photo" alt="" src="${m.photo}" style="display:block;width:100%;height:110px;object-fit:cover;border:1px solid rgba(0,204,255,0.35);border-radius:4px;margin-bottom:8px${locked ? ';opacity:0.7' : ''}">`,
+      );
+    }
+    // Entry header: emoji icon (the codex's own icon vocabulary; alone when
+    // no photo could be read) + title + category.
     parts.push(
       '<div class="library-entry-header" style="display:flex;gap:8px;align-items:flex-start;margin-bottom:8px">' +
       `<span style="font-size:1.6rem;line-height:1.2${locked ? ';opacity:0.6' : ''}">${e.icon}</span>` +
@@ -766,6 +843,118 @@ export class LibraryPane {
     if (!entry || !entry.unlocked || entry.seen) return;
     if (this._onViewed) { try { this._onViewed(entry.id); } catch (_e) { /* dep */ } }
     this.refresh();
+  }
+
+  // ── The photo you just took (Session C, decision 2 — 08-workbench §2) ─────
+
+  /** @private Drop a pending deferred read (entry change / close / dispose). */
+  _cancelPhoto() {
+    if (this._photoHandle != null) {
+      if (this._cancelRaf) { try { this._cancelRaf(this._photoHandle); } catch (_e) { /* dep */ } }
+      this._photoHandle = null;
+    }
+    this._photoTry = 0;
+  }
+
+  /**
+   * @private Arm ONE deferred frame read for the current entry (called on the
+   * open edge and on an in-place entry change — never per frame, never from
+   * refresh()). Requires an entry, an open pane, a source getter and a frame
+   * scheduler; otherwise the emoji header stands alone. A pending read is
+   * replaced (the newest edge owns the photo).
+   */
+  _takePhoto() {
+    this._cancelPhoto();
+    if (!this._open || this._disposed || !this._entryId || !this._photoSource || !this._raf) return;
+    this._photoTry = 0;
+    this._armPhotoFrame();
+  }
+
+  /** @private */
+  _armPhotoFrame() {
+    try {
+      this._photoHandle = this._raf(() => this._photoTick());
+    } catch (_e) {
+      this._photoHandle = null;
+    }
+  }
+
+  /**
+   * @private The deferred read (rAF-fired; tests drive it directly): runs
+   * AFTER the game loop's render in this frame and BEFORE present, so the
+   * drawing buffer is readable without preserveDrawingBuffer (the
+   * BlackFrameProbe legality). Crop PHOTO_CROP_H_FRAC of the canvas height
+   * (16:10) around the subject point, clamped inside the canvas, composited
+   * onto black (the frame's alpha is 0 — the __netShot precedent), sampled on
+   * a coarse grid: a blank read (a frame the loop skipped) is retried next
+   * frame up to PHOTO_TRIES, then dropped — the emoji header stands alone.
+   * Any throw (a tainted canvas, a missing 2D context) drops it the same way.
+   */
+  _photoTick() {
+    this._photoHandle = null;
+    if (!this._open || this._disposed || !this._entryId) return;
+    let ok = false;
+    try { ok = this._readPhoto(); } catch (_e) { ok = false; }
+    if (ok) return;
+    if (++this._photoTry < PHOTO_TRIES) this._armPhotoFrame();
+    else this._photoTry = 0;
+  }
+
+  /** @private One read attempt. @returns {boolean} true when a photo landed. */
+  _readPhoto() {
+    const src = this._photoSource ? this._photoSource() : null;
+    const cv = src && src.canvas;
+    const W = cv ? Number(cv.width) : 0, H = cv ? Number(cv.height) : 0;
+    if (!cv || !(W > 0) || !(H > 0)) return false;
+    const doc = this._doc;
+    if (!doc || typeof doc.createElement !== 'function') return false;
+    if (!this._photoCanvas) {
+      this._photoCanvas = doc.createElement('canvas');
+      this._photoCanvas.width = PHOTO_W;
+      this._photoCanvas.height = PHOTO_H;
+    }
+    const ctx = this._photoCanvas.getContext('2d');
+    if (!ctx) return false;
+    // Source crop: PHOTO_CROP_H_FRAC of the height, 16:10, centred on the
+    // subject, clamped inside the canvas (a subject near an edge slides the
+    // crop rather than shrinking it).
+    const ch = Math.min(H, Math.max(1, Math.round(H * PHOTO_CROP_H_FRAC)));
+    const cw = Math.min(W, Math.round(ch * PHOTO_W / PHOTO_H));
+    const cx = Number.isFinite(src.x) ? src.x : W / 2;
+    const cy = Number.isFinite(src.y) ? src.y : H / 2;
+    const sx = Math.max(0, Math.min(W - cw, Math.round(cx - cw / 2)));
+    const sy = Math.max(0, Math.min(H - ch, Math.round(cy - ch / 2)));
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, PHOTO_W, PHOTO_H);
+    ctx.drawImage(cv, sx, sy, cw, ch, 0, 0, PHOTO_W, PHOTO_H);
+    if (!LibraryPane.photoLit(ctx.getImageData(0, 0, PHOTO_W, PHOTO_H))) return false;
+    const url = this._photoCanvas.toDataURL('image/jpeg', 0.8);
+    if (typeof url !== 'string' || url.length < 64) return false;
+    this._photo = { id: this._entryId, url };
+    this._photoCount++;
+    this.refresh();                    // structural (photo 0 → 1): writes at once
+    return true;
+  }
+
+  /**
+   * Blank test over an ImageData: true when ANY pixel on the coarse
+   * PHOTO_SAMPLE_STRIDE grid lights (r+g+b > PHOTO_LIT_SUM). Pure + exported
+   * for the suite; a cleared drawing buffer (the synchronous read without
+   * preserveDrawingBuffer, or a frame the loop skipped) reads all-black after
+   * the black composite and fails it.
+   * @param {{ data: Uint8ClampedArray|number[], width: number, height: number }} img
+   * @returns {boolean}
+   */
+  static photoLit(img) {
+    if (!img || !img.data || !(img.width > 0) || !(img.height > 0)) return false;
+    const d = img.data, w = img.width, h = img.height, s = PHOTO_SAMPLE_STRIDE;
+    for (let y = 0; y < h; y += s) {
+      for (let x = 0; x < w; x += s) {
+        const i = (y * w + x) * 4;
+        if ((d[i] + d[i + 1] + d[i + 2]) > PHOTO_LIT_SUM) return true;
+      }
+    }
+    return false;
   }
 
   // ── Idle fade (open panes dim to 70 %, pointer wakes — §2 Motion) ─────────

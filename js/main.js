@@ -625,6 +625,9 @@ function navcomProject(worldVec3) {
 // Zoom Ladder F3 (HULL CAM) scratch vector: ship-local → world → screen
 // projector composition + one-time anchor resolution (no per-frame allocation).
 const _hullTmp = new THREE.Vector3();
+// Session C: the LIBRARY pane's photo subject projection scratch (read on the
+// pane's open / entry edge only — never per frame; one reused vector).
+const _photoTmp = new THREE.Vector3();
 
 // Input
 let inputManager;
@@ -1546,6 +1549,25 @@ async function init() {
       subject: () => {
         const part = (motherCallouts && motherCallouts.getFocusedPart) ? motherCallouts.getFocusedPart() : null;
         return (part && part.codexId) || (refitPane ? refitPane.focusedCodexId() : null);
+      },
+      // Session C, owner decision 2 — "the photo you just took" (08-workbench
+      // §2): the pane crops the LIVE render canvas around the subject. The
+      // subject point is the ship's projection (the F3 subject; the callout
+      // anchor itself is not exposed — MotherCallouts is read-only here) in
+      // drawing-buffer px (canvas.width/height, not CSS px — drawImage source
+      // space). The pane defers the read ONE animation frame (a synchronous
+      // read in the click task is blank on the shipped renderer —
+      // preserveDrawingBuffer is false; the next rAF runs after this loop's
+      // render, before present: the BlackFrameProbe legality) and falls back
+      // to the emoji header on any failure. A GETTER, read per photo on the
+      // open / entry edge only — never per frame. SceneManager untouched.
+      photoSource: () => {
+        _photoTmp.copy(player.getPosition()).project(camera);
+        return {
+          canvas,
+          x: (_photoTmp.x * 0.5 + 0.5) * canvas.width,
+          y: (-_photoTmp.y * 0.5 + 0.5) * canvas.height,
+        };
       },
       onOpenChange: (isOpen) => {
         if (isOpen) _onePaneRule(refitPane);
