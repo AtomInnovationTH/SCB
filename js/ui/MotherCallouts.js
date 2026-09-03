@@ -26,9 +26,10 @@
  *
  * Hull-part hover (D2's first verb, Wave 5): parts with `pick:` hull-object
  * names raycast alongside the card sprites at the same 10 Hz — hovering the
- * part outlines it in the house cyan (EdgesGeometry children of the picked
- * meshes) and brightens its card; clicking the part is identical to clicking
- * its card (one hover state `_hoverRec`, one CODEX_OPEN_ENTRY emitter).
+ * part outlines it in the house cyan (EdgesGeometry lines + a translucent
+ * inflated shell, children of the picked meshes) and brightens its card;
+ * clicking the part is identical to clicking its card (one hover state
+ * `_hoverRec`, one CODEX_OPEN_ENTRY emitter).
  *
  * Gating mirrors the hull outline: active while either the discrete INSPECTION
  * view (CAMERA_VIEW_CHANGE) or the OVERVIEW zoom sub-state (INSPECT_HULL_OUTLINE)
@@ -1211,12 +1212,29 @@ export class MotherCallouts {
   }
 
   /**
-   * Lazily build a rec's hover outline (once, cached): one house-style
-   * EdgesGeometry LineSegments per Mesh in the pick subtrees, parented to THAT
-   * MESH so it follows every live transform (gimbal, furl, strut ride). One
-   * LineBasicMaterial per rec — its own, never a hull material, never shared
-   * across recs. Caches null when outlines are disabled or nothing picks.
-   * @private @returns {{lines: THREE.LineSegments[], material: THREE.LineBasicMaterial}|null}
+   * Lazily build a rec's hover outline (once, cached), two layers per Mesh in
+   * the pick subtrees, both parented to THAT MESH so they follow every live
+   * transform (gimbal, furl, strut ride):
+   *
+   *   1. House-style EdgesGeometry LineSegments (the hull-outline look, same
+   *      threshold). SCALE TRAP: EdgesGeometry hashes vertices at a fixed 1e4
+   *      precision and the ship is built at M = 1e-5 scene units per metre —
+   *      raw hull geometry collapses into ONE hash bucket and yields ZERO
+   *      edges (silently: an empty, invisible LineSegments; the shipped hull
+   *      outline has the same trap). Edge a ×1/M clone at metre scale, then
+   *      scale the edges back down. The house threshold is untouched.
+   *   2. A translucent cyan shell (the pre-approved fallback for weak edges):
+   *      a Mesh SHARING the hull mesh's geometry (never disposed here),
+   *      inflated 3% so it clears the coplanar depth fight — flat panels read
+   *      as a cyan rim, closed bodies as a soft cyan tint + silhouette halo.
+   *      The witness showed edge lines alone are near-invisible on the flat
+   *      ROSA panels (equal-depth fragments lose the LESS depth test).
+   *
+   * One LineBasicMaterial + one MeshBasicMaterial per rec — their own, never
+   * a hull material, never shared across recs. Caches null when outlines are
+   * disabled or nothing picks.
+   * @private @returns {{lines: THREE.LineSegments[], shells: THREE.Mesh[],
+   *   material: THREE.LineBasicMaterial, shellMaterial: THREE.MeshBasicMaterial}|null}
    */
   _ensureOutline(rec) {
     if (rec._outlineTried) return rec._outline;
@@ -1231,13 +1249,28 @@ export class MotherCallouts {
       transparent: true,
       opacity: 0.85,
     });
+    const shellMaterial = new THREE.MeshBasicMaterial({
+      color: INS.HULL_OUTLINE_COLOR ?? 0x00ffcc,
+      transparent: true,
+      opacity: 0.3,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    const NORM = 1 / M; // metre-scale normalization for the EdgesGeometry hash
     const lines = [];
+    const shells = [];
     for (const target of targets) {
       target.traverse((o) => {
-        // Meshes with real geometry only — skip Sprites/Lines/Points and
-        // position-less geometry (EdgesGeometry would throw).
+        // Meshes with real geometry only — skip Sprites/Lines/Points, the
+        // outline layers themselves (userData.partId), and position-less
+        // geometry (EdgesGeometry would throw).
         if (!o.isMesh || !o.geometry?.attributes?.position) return;
-        const edges = new THREE.EdgesGeometry(o.geometry, INS.HULL_OUTLINE_THRESHOLD_DEG ?? 20);
+        if (o.userData.partId) return;
+        const src = o.geometry.clone();
+        src.scale(NORM, NORM, NORM);
+        const edges = new THREE.EdgesGeometry(src, INS.HULL_OUTLINE_THRESHOLD_DEG ?? 20);
+        edges.scale(M, M, M);
+        src.dispose();
         const line = new THREE.LineSegments(edges, material);
         line.name = 'MotherCalloutOutline';
         line.userData.partId = rec.def.id;
@@ -1246,10 +1279,19 @@ export class MotherCallouts {
         line.visible = false;
         o.add(line);
         lines.push(line);
+        const shell = new THREE.Mesh(o.geometry, shellMaterial); // SHARED geometry
+        shell.name = 'MotherCalloutOutline';
+        shell.userData.partId = rec.def.id;
+        shell.raycast = () => {};         // T2 again — a shell must never self-hit
+        shell.renderOrder = Constants.RENDER_ORDER.SPACECRAFT_ADDITIVE;
+        shell.scale.setScalar(1.03);
+        shell.visible = false;
+        o.add(shell);
+        shells.push(shell);
       });
     }
-    if (!lines.length) { material.dispose(); return null; }
-    rec._outline = { lines, material };
+    if (!lines.length) { material.dispose(); shellMaterial.dispose(); return null; }
+    rec._outline = { lines, shells, material, shellMaterial };
     return rec._outline;
   }
 
@@ -1257,6 +1299,7 @@ export class MotherCallouts {
   _setOutlineVisible(rec, on) {
     if (!rec._outline) return;
     for (const line of rec._outline.lines) line.visible = !!on;
+    for (const shell of rec._outline.shells || []) shell.visible = !!on;
   }
 
   _handlePointerMove(e) {
@@ -1927,13 +1970,19 @@ export class MotherCallouts {
       s.line?.material?.dispose();
       s.dot?.material?.dispose();
       // Hover outlines live under the hull meshes (not _group) — detach and
-      // dispose each LineSegments' own EdgesGeometry, then the rec's material.
+      // dispose each LineSegments' own EdgesGeometry, then the rec's materials.
+      // Shell meshes SHARE the hull meshes' geometry: remove them but NEVER
+      // dispose that geometry (it belongs to the live model).
       if (s._outline) {
         for (const line of s._outline.lines) {
           line.parent?.remove(line);
           line.geometry.dispose();
         }
+        for (const shell of s._outline.shells || []) {
+          shell.parent?.remove(shell);
+        }
         s._outline.material.dispose();
+        s._outline.shellMaterial?.dispose();
         s._outline = null;
       }
     }
