@@ -120,6 +120,7 @@ import { ProxNetFloor } from './systems/ProxNetFloor.js';
 import { SdaFloor } from './systems/SdaFloor.js';
 import { HullCamFloor } from './systems/HullCamFloor.js';
 import { RefitPane } from './ui/RefitPane.js';
+import { LibraryPane, ONE_PANE_BREAKPOINT_PX } from './ui/LibraryPane.js';
 import { ArchiveFloor } from './systems/ArchiveFloor.js';
 import { TimeAuthority } from './systems/TimeAuthority.js';
 import { FloorContract } from './core/FloorContract.js';
@@ -550,8 +551,9 @@ let timeAuthority;
 const _taFrameArgs = { dtReal: 0, active: false, targetCap: 1, dangerActive: false };
 // D10 pane-open signal (08-workbench §1): true while a workbench pane (REFIT /
 // TECH LIBRARY) is open — feeds TimeAuthority.calmCap so time settles to 1×
-// while reading. STUB false until the Wave-5 panes exist; the pane wire is
-// then a one-line assignment (refitPane.isOpen() || libraryPane.isOpen()).
+// while reading. Written by _syncWorkbenchPanes (the ONE pane edge, Session B)
+// from both panes' onOpenChange; false whenever the ladder is off (the sync
+// helper only exists inside the LADDER.ENABLED gate).
 let _workbenchPaneOpen = false;
 // Q10 level-phase sound edge state: last frame's camera leveling flag (rise
 // edge → one LadderSfx settle cue). False whenever the ladder is disengaged.
@@ -578,6 +580,13 @@ let archiveFloor;
 // and the shipped part-click → Library path stays byte-identical (pinned in
 // test-LadderController).
 let refitPane;
+// Zoom Ladder Wave 5 (Session B) — the F3 TECH LIBRARY pane (08-workbench §2,
+// right pane: the shipped viewer's entry as a side pane). Same construction
+// law as refitPane: built ONLY while Constants.LADDER.ENABLED is true, so a
+// ?ladder=0 boot builds no pane and every shipped codex path (part click →
+// full-screen Library, I key, deep links) stays byte-identical (pinned in
+// test-LadderController).
+let libraryPane;
 
 // Zoom Ladder per-floor audio beds (S6, Wave-3 serial hub wire): constructed
 // in the ladder block against AudioSystem GETTERS (the unlock pattern) and
@@ -964,6 +973,13 @@ async function init() {
         if (!refitPane) return;
         refitPane.focusPart(part);
         refitPane.open();
+        // Subnautica rule (08-workbench §2 "clicking a locked part's card
+        // unlocks its entry — exploration is how the library fills"): a
+        // LOCKED entry gets an unlock request over the ONE existing path
+        // (LibraryPane.scanPart → CODEX_UNLOCK_REQUEST → CodexSystem's
+        // queue + ticker ack chip). Unlocked/unknown parts are no-ops; the
+        // LIBRARY tab pulses once when the unlock lands.
+        if (libraryPane) libraryPane.scanPart(part);
       },
     } : {}),
   });
@@ -1399,7 +1415,38 @@ async function init() {
   // Constants.LADDER.ENABLED every ladder consumer reads (?ladder=0 boots
   // build no pane; test-LadderController pins it). Beside hullcamFloor by
   // design: it shares hullcamProviders (the SAME live-row objects).
+  // Wave 5 (Session B): the TECH LIBRARY pane joins it in the same gate.
   if (Constants.LADDER && Constants.LADDER.ENABLED) {
+    // ONE workbench-pane edge, three consumers (Session B — never a second
+    // signal path). Both panes' onOpenChange call this; it writes:
+    //   1. `_workbenchPaneOpen` — the D10 calm-cap signal the loop already
+    //      applies through TimeAuthority.calmCap (either pane open → 1×);
+    //   2. the ONE `CameraSystem.setLadderPaneInset` value (Wave 5 (3)),
+    //      NETTED per 08-workbench §2: REFIT open → +refit width (LEFT),
+    //      LIBRARY open → −library width (RIGHT), BOTH open → 0 ("both panes
+    //      open → centered"), none → 0. The camera does the rest (F3-only,
+    //      270 ms ease, reduced-motion snap, released on ride/close/disengage);
+    //   3. the MotherCallouts pane-edge inset pair (Session B commit 3) so
+    //      the callout columns stay out from under the panes.
+    // widthPx() is a layout read — edges only, never per frame (G1).
+    const _syncWorkbenchPanes = () => {
+      const refitOpen = !!(refitPane && refitPane.isOpen());
+      const libraryOpen = !!(libraryPane && libraryPane.isOpen());
+      _workbenchPaneOpen = refitOpen || libraryOpen;
+      const inset = (refitOpen && libraryOpen) ? 0
+        : (refitOpen ? refitPane.widthPx()
+          : (libraryOpen ? -libraryPane.widthPx() : 0));
+      cameraSystem.setLadderPaneInset(inset);
+    };
+    // The below-~1100-px one-pane rule (01-numbers "One-pane breakpoint",
+    // exported by LibraryPane): opening one pane collapses the other to its
+    // tab. The close() re-enters _syncWorkbenchPanes through its own
+    // onOpenChange edge first; the opener's edge then settles the final
+    // state — both writes idempotent, an interaction edge, never per frame.
+    const _onePaneRule = (other) => {
+      if (other && other.isOpen && other.isOpen() &&
+        window.innerWidth < ONE_PANE_BREAKPOINT_PX) other.close();
+    };
     refitPane = new RefitPane({
       providers: hullcamProviders,
       getCredits: () => scoringSystem.credits,
@@ -1415,27 +1462,56 @@ async function init() {
       // Alternative hover → the hull hardware pulses cyan (MotherCallouts
       // ghost outlines, the one outline system).
       onGhost: (ids) => motherCallouts.setGhostOutline(ids),
-      // Card title / spec term → the Tech Library, through the EXACT
-      // CODEX_OPEN_ENTRY path every hosted-codex deep link uses today
-      // (the eventBus listener above routes it to codexViewerUI.openEntry).
+      // Card title / spec term → the TECH LIBRARY PANE on that entry while
+      // the pane exists (08-workbench §3 "tap → TECH LIBRARY slides in"; the
+      // full-screen viewer stays one click away via MAXIMIZE). Without the
+      // pane the emit below is the shipped deep-link path, byte-identical —
+      // and it IS the flag-off path by construction (no pane is ever built
+      // there, so onOpenEntry itself never exists).
       onOpenEntry: (codexId) => {
-        if (codexId) eventBus.emit(Events.CODEX_OPEN_ENTRY, { id: codexId });
+        if (!codexId) return;
+        if (libraryPane) { libraryPane.openEntry(codexId); return; }
+        eventBus.emit(Events.CODEX_OPEN_ENTRY, { id: codexId });
       },
-      // D10: a workbench pane open settles time to 1× — the SAME
-      // _workbenchPaneOpen → TimeAuthority.calmCap signal the loop already
-      // applies (the one-line wire the stub comment promised; never a second
-      // mechanism).
-      // Wave 5 (3): the SAME open edge feeds CameraSystem its ONE look-at-bias
-      // inset (08-workbench §2 "the subject reframes toward the pane-free
-      // center"): the pane's laid-out CSS width while open (LEFT pane →
-      // positive; a right pane would subtract), 0 when closed. The camera
-      // applies it only on F3 and eases it (LADDER_PANE_REFRAME_MS = the pane
-      // slide). This is the single call site — never a second signal path.
+      // D10 + the camera inset + (commit 3) the callout insets: ONE edge,
+      // fanned by _syncWorkbenchPanes above. The <1100 px one-pane rule runs
+      // first so the sync sees the settled pair.
       onOpenChange: (isOpen) => {
-        _workbenchPaneOpen = !!isOpen;
-        cameraSystem.setLadderPaneInset(isOpen ? refitPane.widthPx() : 0);
+        if (isOpen) _onePaneRule(libraryPane);
+        _syncWorkbenchPanes();
       },
     });
+    // The TECH LIBRARY pane (08-workbench §2 right pane; §10's LibraryPane —
+    // the adapter over the shipped viewer). Reads the SAME codexSystem the
+    // viewer reads; every routed action rides an EXISTING path:
+    //   onMaximize    → the CODEX_OPEN_ENTRY deep link (the full-screen
+    //                   viewer — the exact route every deep link uses today);
+    //   requestUnlock → CODEX_UNLOCK_REQUEST (the ONE unlock path:
+    //                   CodexSystem's queue → ticker ack chip → chime +
+    //                   CODEX_UNLOCKED on its own schedule — Subnautica §2);
+    //   onViewed      → CODEX_VIEWED (the viewer's own seen contract —
+    //                   CodexSystem.markSeen stays the one seen-writer).
+    libraryPane = new LibraryPane({
+      codex: codexSystem,
+      onMaximize: (id) => {
+        if (id) eventBus.emit(Events.CODEX_OPEN_ENTRY, { id });
+      },
+      requestUnlock: (id) => {
+        if (id) eventBus.emit(Events.CODEX_UNLOCK_REQUEST, { id });
+      },
+      onViewed: (id) => {
+        if (id) eventBus.emit(Events.CODEX_VIEWED, { id });
+      },
+      onOpenChange: (isOpen) => {
+        if (isOpen) _onePaneRule(refitPane);
+        _syncWorkbenchPanes();
+      },
+    });
+    // Tab truth on change, never per frame (G1): a landed unlock repaints the
+    // unread count (and fires the pane's ONE pulse); a read entry drops it.
+    // Registered inside the gate — a ?ladder=0 boot adds no listeners.
+    eventBus.on(Events.CODEX_UNLOCKED, () => { if (libraryPane) libraryPane.refresh(); });
+    eventBus.on(Events.CODEX_VIEWED, () => { if (libraryPane) libraryPane.refresh(); });
   }
   // Zoom Ladder F1 (ARCHIVE) bridge (Wave 3): arriving on the innermost floor
   // drops into the Tech Library — ArchiveFloor HOSTS the existing
@@ -1513,6 +1589,12 @@ async function init() {
     // controller path is byte-identical, and Space on F3 stays the shipped
     // silent no-op.
     refit: refitPane,
+    // Wave 5 (Session B): the TECH LIBRARY pane — floor-3 keyed EXACTLY like
+    // `refit` (enable on 3, disable + close elsewhere and on disengage) and
+    // the TOPMOST pane in closeTopPane() (it opens FROM the REFIT card, so
+    // Esc unwinds reading → fitting → ride up). Flag-off: libraryPane is
+    // undefined (never constructed) → the dep is null → byte-identical.
+    library: libraryPane,
     archive: archiveFloor,
     audioBeds: ladderAudioBeds,
     // Wave-4 map rule (D8/§4): per-floor pane rooms + the vitals always-set.
@@ -2337,6 +2419,8 @@ async function init() {
       // Wave 5 (2): the REFIT pane handle for the witness harness (undefined
       // on a ?ladder=0 boot — the pane is never constructed there).
       window.__refit = refitPane;
+      // Wave 5 (Session B): the TECH LIBRARY pane handle, same contract.
+      window.__library = libraryPane;
       // Debug handle for SunLight — lets a capture harness inspect bodies and
       // (for verification) temporarily reposition a body that is occluded all
       // session. Read-only intent; mutations are the harness's responsibility.

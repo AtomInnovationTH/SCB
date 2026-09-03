@@ -4158,7 +4158,8 @@
       "startUnlocked": true,
       "related": [
         "pane_upgrade_pin",
-        "tech_level"
+        "tech_level",
+        "pane_library"
       ],
       "i18n": {
         "title": "Discoveries & Skills",
@@ -4294,12 +4295,29 @@
       "startUnlocked": true,
       "related": [
         "pane_upgrade_pin",
-        "salvage_economy"
+        "salvage_economy",
+        "pane_library"
       ],
       "i18n": {
         "title": "The REFIT Pane",
         "shortText": "Zoom to the hull and press Space, or click a part: the left pane shows what is installed and the three best upgrades for it.",
         "fullText": "At the ship close-up the left edge grows a REFIT tab — the gold number is how many upgrades you can afford right now. Space opens it, and so does clicking any hull part or its card: the pane lands on that subsystem with the installed hardware pinned at top and the three most sensible alternatives ranked below — buy-now first, then almost-affordable with a catches-to-go estimate, then the dream fit. BUY is one click, live, mid-flight; hover an alternative and the hardware it replaces pulses cyan on the hull; the card title opens its Library page.\n\nReal operators call this a refit sheet: what is flying, what could fly, and what it costs. Servicing missions budget exactly this way — every replacement is weighed against the launch and integration price of the alternative — and since 2019, in-orbit servicing vehicles have made the swap-in-place column real. Yours is just faster paperwork.",
+        "unlockHint": "Reach orbit."
+      }
+    },
+    {
+      "id": "pane_library",
+      "category": "PLAYBOOK",
+      "icon": "📖",
+      "startUnlocked": true,
+      "related": [
+        "pane_refit",
+        "pane_discoveries"
+      ],
+      "i18n": {
+        "title": "The Library Pane",
+        "shortText": "Tap a name anywhere on the hull and the Tech Library slides in beside the ship: what the part is, its specs, and why it matters.",
+        "fullText": "At the ship close-up the right edge grows a LIBRARY tab — its number is how many unlocked pages you have not read yet, and it pulses once whenever exploring unlocks a new one. Tap a card title or a spec term and the page slides in beside the ship: the one-line why-it-matters, the hardware specs, and the related topics one tap deeper. MAXIMIZE opens the full library when a side column is not enough; Esc slides the pane away and leaves you exactly where you were.\n\nClicking a part whose page is still locked unlocks it — walking the hull is how the library fills. That is a field naturalist's habit, and real crews keep it too: every vehicle flies with its own reference files, and flight engineers read them next to the hardware, not in a separate room. The pane is that habit — the manual open on the workbench, never instead of the work.",
         "unlockHint": "Reach orbit."
       }
     },

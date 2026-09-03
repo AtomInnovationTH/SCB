@@ -23,7 +23,9 @@ export const Constants = {
   // docs/ladder/08-workbench.md §11).
   // '1005'→'1006': Wave-5 (2) REFIT pane PLAYBOOK entry (pane_refit + the two
   // symmetric PLAYBOOK backlinks, docs/ladder/08-workbench.md §2).
-  DATA_VERSION: '1006',
+  // '1006'→'1007': Wave-5 (Session B) TECH LIBRARY pane PLAYBOOK entry
+  // (pane_library + the two symmetric backlinks, docs/ladder/08-workbench.md §2).
+  DATA_VERSION: '1007',
 
   // ============================================================================
   // === INPUT (Delegation 1, 2026-05-31) ===

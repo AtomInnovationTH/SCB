@@ -68,6 +68,15 @@ export class LadderController {
    *   closes it too. When present it claims the F3 'lens-toggle' Space verb
    *   (toggle()) — D-b, owner 2026-09-03; absent, the verb falls through to the
    *   hullcam branch exactly as shipped.
+   * @param {object} [deps.library]      - F3 TECH LIBRARY pane (LibraryPane,
+   *   Wave 5 Session B): setEnabled/open/close/toggle/isOpen. Optional — no-op
+   *   without it. Floor-3 keyed EXACTLY like `refit` (enable on 3, disable +
+   *   close elsewhere and on disengage). It claims NO Space verb (D-b keeps
+   *   Space = REFIT); Esc reaches it first through closeTopPane() — the
+   *   LIBRARY is the TOPMOST workbench pane (it opens FROM the REFIT card,
+   *   08-workbench §3, so it is the most recently opened in the one flow that
+   *   opens both; with both open Library-closes-first is the documented
+   *   order).
    * @param {object} [deps.archive]      - F1 (ARCHIVE) content bridge (ArchiveFloor):
    *   activate/deactivate/isActive. Optional — no-op without it. Floor-keyed
    *   like hullcam (F1's debrisMode 'hidden' is shared with F2): arriving on
@@ -107,6 +116,7 @@ export class LadderController {
     this._sdaFloor = deps.sdaFloor || null;
     this._hullcam = deps.hullcam || null;
     this._refit = deps.refit || null;
+    this._library = deps.library || null;
     this._archive = deps.archive || null;
     this._audioBeds = deps.audioBeds || null;
     this._floorMask = deps.floorMask || null;
@@ -294,16 +304,24 @@ export class LadderController {
    * topmost pane first, then rides up"). Close the topmost OPEN workbench pane
    * and report whether one was — InputManager calls this ONCE before it would
    * command 'esc', and returns on true, so the ride-up is the NEXT Esc. The
-   * pane order lives here, never in InputManager: today the only pane is REFIT
-   * (`_refit`, Wave 5 (2)); the TECH LIBRARY pane joins this method as the
-   * topmost when it lands (Session B). Absent dep / closed pane / disengaged →
-   * false (the shipped ride-up runs). The pane's own close() fires its
-   * onOpenChange edge (D10 calm cap + the camera inset release) — no second
-   * signal here. Not a ladder input for adaptHoldoff (no camera flight).
+   * pane order lives here, never in InputManager: the TECH LIBRARY closes
+   * FIRST (Wave 5 Session B — it is the topmost: it opens FROM the REFIT card
+   * in the one flow that opens both, 08-workbench §3, so Esc unwinds
+   * reading → fitting → ride up; with both open Library-first is the
+   * DOCUMENTED order, 06-core-api "Camera + Esc"), then REFIT (`_refit`,
+   * Wave 5 (2)). Absent deps / closed panes / disengaged → false (the shipped
+   * ride-up runs). The pane's own close() fires its onOpenChange edge (D10
+   * calm cap + the camera inset release) — no second signal here. Not a
+   * ladder input for adaptHoldoff (no camera flight).
    * @returns {boolean} true when a pane was open and is now closed
    */
   closeTopPane() {
     if (!this._engaged) return false;
+    const lib = this._library;
+    if (lib && lib.isOpen && lib.isOpen()) {
+      if (lib.close) lib.close();
+      return true;
+    }
     const r = this._refit;
     if (r && r.isOpen && r.isOpen()) {
       if (r.close) r.close();
@@ -346,6 +364,11 @@ export class LadderController {
     if (this._refit) {
       if (this._refit.setEnabled) this._refit.setEnabled(false);
       if (this._refit.close) this._refit.close();
+    }
+    // Wave 5 (Session B): the TECH LIBRARY pane closes with the ladder too.
+    if (this._library) {
+      if (this._library.setEnabled) this._library.setEnabled(false);
+      if (this._library.close) this._library.close();
     }
     if (this._archive && this._archive.deactivate) this._archive.deactivate();
     // Per-floor audio bed: fade to silence on disengage (optional dep).
@@ -546,6 +569,18 @@ export class LadderController {
       } else {
         if (this._refit.setEnabled) this._refit.setEnabled(false);
         if (this._refit.close) this._refit.close();
+      }
+    }
+    // F3 TECH LIBRARY pane (Wave 5 Session B): keyed EXACTLY like `refit` —
+    // enable the edge tab on floor 3, disable AND close anywhere else. Its
+    // close() fires the pane's own onOpenChange edge (the calm cap + the
+    // camera inset release ride that, never a controller signal).
+    if (this._library) {
+      if (floor === 3) {
+        if (this._library.setEnabled) this._library.setEnabled(true);
+      } else {
+        if (this._library.setEnabled) this._library.setEnabled(false);
+        if (this._library.close) this._library.close();
       }
     }
     // F1 (ARCHIVE): keyed on FLOOR ID 1 — its debrisMode 'hidden' is shared
