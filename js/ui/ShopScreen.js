@@ -1253,6 +1253,18 @@ export class ShopScreen {
   // PURCHASE
   // ========================================================================
 
+  /**
+   * Public one-click purchase — the Wave-5 (2) REFIT pane's BUY path
+   * (docs/ladder/08-workbench.md §2: "Buying is one click … no browser
+   * confirm(), no undo"; buying LIVE is allowed — the shipped B key already
+   * allows it). Runs the EXACT private flow below (maxLevel gate, the E5
+   * shopGating prereq guard, wallet spend, UPGRADE_PURCHASED emit, refresh),
+   * so a pane buy and a depot buy are indistinguishable; the pane then
+   * re-renders from purchasedUpgrades/credits truth.
+   * @param {string} upgradeId
+   */
+  purchaseUpgrade(upgradeId) { return this._purchaseUpgrade(upgradeId); }
+
   /** @private Purchase an upgrade */
   _purchaseUpgrade(upgradeId) {
     const upgrade = UPGRADES.find(u => u.id === upgradeId);
