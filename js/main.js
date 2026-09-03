@@ -1425,7 +1425,16 @@ async function init() {
       // _workbenchPaneOpen → TimeAuthority.calmCap signal the loop already
       // applies (the one-line wire the stub comment promised; never a second
       // mechanism).
-      onOpenChange: (isOpen) => { _workbenchPaneOpen = !!isOpen; },
+      // Wave 5 (3): the SAME open edge feeds CameraSystem its ONE look-at-bias
+      // inset (08-workbench §2 "the subject reframes toward the pane-free
+      // center"): the pane's laid-out CSS width while open (LEFT pane →
+      // positive; a right pane would subtract), 0 when closed. The camera
+      // applies it only on F3 and eases it (LADDER_PANE_REFRAME_MS = the pane
+      // slide). This is the single call site — never a second signal path.
+      onOpenChange: (isOpen) => {
+        _workbenchPaneOpen = !!isOpen;
+        cameraSystem.setLadderPaneInset(isOpen ? refitPane.widthPx() : 0);
+      },
     });
   }
   // Zoom Ladder F1 (ARCHIVE) bridge (Wave 3): arriving on the innermost floor

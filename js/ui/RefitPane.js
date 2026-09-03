@@ -309,6 +309,19 @@ export class RefitPane {
   isEnabled() { return this._enabled; }
   /** @returns {string} the focused subsystem id (always one of the seven) */
   focusedSubsystem() { return this._focused; }
+  /**
+   * The pane's laid-out width in CSS px (its box, border-box: the
+   * clamp(300px, 24vw, 340px) of 01-numbers) — 0 headless or before the root
+   * is built. The ONE number main.js feeds `CameraSystem.setLadderPaneInset`
+   * on the onOpenChange edge so the subject reframes toward the pane-free
+   * centre (08-workbench §2, Wave 5 (3)). A layout read: call it on edges
+   * only, never per frame.
+   * @returns {number}
+   */
+  widthPx() {
+    const w = this._root ? this._root.offsetWidth : 0;
+    return (Number.isFinite(w) && w > 0) ? w : 0;
+  }
 
   /**
    * Enable on F3 arrival / disable on leave (LadderController `refit` dep).

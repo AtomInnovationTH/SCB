@@ -89,6 +89,16 @@ export const LADDER_LEVEL_MS = 600;
  */
 export const LADDER_DOWN_ROLL_FRAC = 0.45;
 
+/**
+ * Wave 5 (3) — the F3 look-at bias ease (08-workbench §2 "Motion": "240–300 ms
+ * for pane slides and subject reframes", one curve). Deliberately the SAME
+ * number as RefitPane.PANE_SLIDE_MS (270) so the subject and the pane arrive
+ * together; VisualLaw still has no pane-timing entry (01-numbers "Workbench
+ * panes" is canonical until the entries land per 08-workbench §9 — do not add
+ * one here). Reduced motion snaps instead.
+ */
+export const LADDER_PANE_REFRAME_MS = 270;
+
 /** Cubic in-out ease shared by the ride engine, the down-ride roll and the level phase. */
 function cubicInOut(t) {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
@@ -695,6 +705,24 @@ export class CameraSystem {
       levelT: 0,
       rideFloorFrom: null,
       levelHoldFloor: null,
+      // Wave 5 (3) — the F3 look-at bias (08-workbench §2 / 01-numbers "F3
+      // look-at bias"): while a workbench pane covers one edge of the viewport
+      // the subject reframes toward the PANE-FREE centre. main.js feeds ONE
+      // signed CSS-px inset through setLadderPaneInset (positive = a pane on
+      // the LEFT edge, negative = RIGHT; both open → the caller nets them) from
+      // the pane's onOpenChange edge — the same signal that feeds the D10 calm
+      // cap. The per-frame TARGET is that inset only while the engaged floor is
+      // 3, else 0 (so a ride away, a disengage or a close all release it),
+      // eased over LADDER_PANE_REFRAME_MS on the ride ease (reduced motion →
+      // snap). The bias is a pure YAW about the camera's own up, applied AFTER
+      // the shipped lookAt — position, distance, up, the dolly frame and the
+      // ride engine are untouched — sized so the anchor projects to
+      // x_ndc = inset / viewport width: exactly the centre of the uncovered strip.
+      paneInsetPx: 0,       // the request (setLadderPaneInset) — 0 forever on a flag-off boot
+      paneBiasPx: 0,        // the eased inset applied this frame
+      paneBiasFrom: 0,
+      paneBiasTo: 0,
+      paneBiasT: 1,         // ease progress (1 = settled)
     };
 
     this._boundMouseDown = this._onMouseDown.bind(this);
@@ -3780,6 +3808,10 @@ export class CameraSystem {
     lc.drag.isDragging = false;
     lc.drag.velocityTheta = 0;
     lc.drag.velocityPhi = 0;
+    // Wave 5 (3): the look-at bias starts settled at 0 on every engage (the
+    // pane is enabled by the controller only AFTER engage); the request itself
+    // (paneInsetPx) stays the caller's — main.js owns it through the setter.
+    this._ladderResetPaneBias();
     // F3 inspect absorption: engaging directly on F3 applies the arrival
     // effects (a re-engage mid-session restores the floor's costume).
     this._ladderApplyInspectFx(frame.floor);
@@ -3801,9 +3833,50 @@ export class CameraSystem {
     lc.drag.lastMouseY = 0;
     lc.drag.velocityTheta = 0;
     lc.drag.velocityPhi = 0;
+    // Wave 5 (3): no eased look-at bias may leak into the next engage either.
+    this._ladderResetPaneBias();
     // F3 inspect absorption: a disengage while on F3 reverts the arrival
     // effects (dim off, overlays off) — the shipped views resume clean.
     this._ladderApplyInspectFx(null);
+  }
+
+  /**
+   * Wave 5 (3) — the F3 look-at bias (08-workbench §2, 01-numbers "F3 look-at
+   * bias"): the ONE inset value. `px` is the signed CSS-pixel width of the
+   * workbench pane covering a viewport edge — positive = a pane on the LEFT
+   * edge (the subject reframes right, to the centre of the uncovered strip),
+   * negative = a pane on the RIGHT edge, 0 = none (both panes open → the caller
+   * nets the two). main.js calls this from the pane's onOpenChange edge — the
+   * SAME signal that feeds the D10 calm cap — never a second path. The camera
+   * applies it only while the engaged floor is 3 (else the per-frame target is
+   * 0), eased over LADDER_PANE_REFRAME_MS (reduced motion → snap). Non-finite
+   * → 0. Flag-off: the pane is never constructed, this is never called, the
+   * request stays 0 and the ladder never engages → byte-identical.
+   * @param {number} px
+   */
+  setLadderPaneInset(px) {
+    this._ladderCam.paneInsetPx = Number.isFinite(px) ? px : 0;
+  }
+
+  /** @private Settle the eased look-at bias at 0 (engage / disengage). */
+  _ladderResetPaneBias() {
+    const lc = this._ladderCam;
+    lc.paneBiasPx = 0;
+    lc.paneBiasFrom = 0;
+    lc.paneBiasTo = 0;
+    lc.paneBiasT = 1;
+  }
+
+  /**
+   * @private CSS-px viewport width for the inset → NDC conversion: the render
+   * canvas's clientWidth (SceneManager sizes it to window.innerWidth, the same
+   * number camera.aspect is built from; tests inject it on the mock canvas).
+   * 0 when unknown → no bias is applied (never NaN, never a guess).
+   */
+  _ladderViewportWidthPx() {
+    const c = this.canvas;
+    const w = c ? c.clientWidth : 0;
+    return (Number.isFinite(w) && w > 0) ? w : 0;
   }
 
   /**
@@ -4220,7 +4293,41 @@ export class CameraSystem {
     } else {
       this._ladderUpFor(lc.anchor, radialDir, this.camera.up);
     }
+    // Wave 5 (3) — the F3 look-at bias (08-workbench §2). Target = the requested
+    // pane inset while the engaged floor is 3, else 0: a ride away sets lc.floor
+    // to the destination at ride start, so the bias eases OUT during the flight
+    // (the controller closes the pane at the same moment → the request drops to
+    // 0 too); a same-floor flick ride keeps lc.floor = 3, so an open pane never
+    // wobbles. On a target edge the ease re-arms from the CURRENT value (a
+    // reversal mid-ease never snaps); reduced motion settles at once. The bias
+    // is a pure YAW about the camera's own up AFTER the shipped lookAt: by
+    // θ = atan(tan(fov/2) · aspect · b), b = inset / viewport width, so the
+    // anchor projects to x_ndc = b exactly (y_ndc stays 0) — the centre of the
+    // uncovered strip. (Offsetting the look-at point instead would let lookAt
+    // re-orthogonalize the radial up against the new forward → a residual tilt;
+    // the yaw keeps the up exact.) Position, distance, up and the dolly frame
+    // above are untouched; bias 0 → no rotation, the pre-Wave-5 (3) frame
+    // byte-for-byte.
+    const insetTarget = (lc.floor === 3) ? lc.paneInsetPx : 0;
+    if (insetTarget !== lc.paneBiasTo) {
+      lc.paneBiasFrom = lc.paneBiasPx;
+      lc.paneBiasTo = insetTarget;
+      lc.paneBiasT = this._prefersReducedMotion() ? 1 : 0;
+    }
+    if (lc.paneBiasT < 1) {
+      lc.paneBiasT = Math.min(1, lc.paneBiasT + dt / (LADDER_PANE_REFRAME_MS / 1000));
+    }
+    lc.paneBiasPx = lc.paneBiasFrom + (lc.paneBiasTo - lc.paneBiasFrom) * cubicInOut(lc.paneBiasT);
     this.camera.lookAt(anchorPos);
+    if (lc.paneBiasPx !== 0) {
+      const viewportW = this._ladderViewportWidthPx();   // 0 when unknown → no bias, never a guess
+      if (viewportW > 0) {
+        const b = Math.max(-0.9, Math.min(0.9, lc.paneBiasPx / viewportW));
+        const halfW = Math.tan(THREE.MathUtils.DEG2RAD * 0.5 * this.camera.fov) * (this.camera.aspect || 1);
+        // +θ about local Y pans the camera LEFT → the subject lands RIGHT of centre (a left pane).
+        this.camera.rotateY(Math.atan(halfW * b));
+      }
+    }
     this.camera.updateProjectionMatrix();
 
     // Fire the ride-complete callback once, AFTER the final pose is written.
