@@ -973,6 +973,15 @@ async function init() {
         if (!refitPane) return;
         refitPane.focusPart(part);
         refitPane.open();
+        // Wave 5 Session C (the 2026-09-03 "Library is blank" playtest bug):
+        // while the TECH LIBRARY is OPEN, every part/card click retargets it
+        // over the ONE openEntry path the REFIT title rides — the library
+        // follows the hull. A CLOSED library is never opened here (D-a: the
+        // click's visible verb stays the REFIT card). Runs AFTER refit.open()
+        // so the <1100 px one-pane rule has settled first: below the
+        // breakpoint that open just collapsed the library, isOpen() is false,
+        // and the retarget is skipped — one pane, as documented.
+        if (libraryPane && libraryPane.isOpen() && part && part.codexId) libraryPane.openEntry(part.codexId);
         // Subnautica rule (08-workbench §2 "clicking a locked part's card
         // unlocks its entry — exploration is how the library fills"): a
         // LOCKED entry gets an unlock request over the ONE existing path
@@ -1525,6 +1534,18 @@ async function init() {
       },
       onViewed: (id) => {
         if (id) eventBus.emit(Events.CODEX_VIEWED, { id });
+      },
+      // Session C: what the player is looking at, for an ENTRY-LESS open (tab
+      // click / toggle) — the pane lands on it instead of the prompt. The
+      // focused hull part first (MotherCallouts.getFocusedPart — live in the
+      // COMPONENT band, null elsewhere; the same getter ArchiveFloor's F1
+      // deep link reads), else the REFIT card's manifest deep link
+      // (RefitPane.focusedCodexId — the id its title already carries; no new
+      // mapping). A GETTER: read on the open edge only, never per frame; the
+      // pane stays eventless and never sees either module.
+      subject: () => {
+        const part = (motherCallouts && motherCallouts.getFocusedPart) ? motherCallouts.getFocusedPart() : null;
+        return (part && part.codexId) || (refitPane ? refitPane.focusedCodexId() : null);
       },
       onOpenChange: (isOpen) => {
         if (isOpen) _onePaneRule(refitPane);

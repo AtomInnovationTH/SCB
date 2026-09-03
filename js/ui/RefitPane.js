@@ -46,7 +46,13 @@
  *
  * LAYOUT: LEFT pane, width clamp(300px, 24vw, 340px) (01-numbers), root
  * `#ladder-refit`, header `.refit-header`, edge tab `#ladder-refit-tab`
- * always visible while enabled carrying the GOLD count of affordable refits.
+ * always visible while enabled carrying the GOLD count of affordable refits;
+ * the tab sits ONE z step above the root (TAB_Z_INDEX 36 over PANE_Z_INDEX
+ * 35 — Session C) so the open pane never paints over it and a tab click
+ * toggles the pane closed. The header title is the pane's ONE Tech Library
+ * deep link (`.refit-title[data-codex]` = the manifest codexId, also read by
+ * `focusedCodexId()`); alternative rows carry no data-codex — shop rows have
+ * no entries and none are invented (Session C decision d).
  * ONE CSS variable (`--refit-dir`, default 1) mirrors the slide direction for
  * RTL: an RTL boot sets `--refit-dir:-1` (and right-anchors the pane) and
  * every transform follows.
@@ -68,6 +74,11 @@ export const PANE_SLIDE_MS = 270;
 export const IDLE_FADE_OPACITY = 0.7;
 /** Idle threshold before the fade applies (ms). */
 export const IDLE_FADE_MS = 6000;
+/** Pane root stacking (the shipped workbench-pane layer). */
+export const PANE_Z_INDEX = 35;
+/** Edge tab stacking — ONE step above the root so the open pane never paints
+ *  over its own tab (08-workbench §2 "edge tab always visible"; Session C). */
+export const TAB_Z_INDEX = 36;
 
 /** G1 write cap — the ProxContextPanel/TransferWindows house value. */
 const DOM_WRITE_MIN_INTERVAL_MS = 250;
@@ -317,6 +328,19 @@ export class RefitPane {
   /** @returns {string} the focused subsystem id (always one of the seven) */
   focusedSubsystem() { return this._focused; }
   /**
+   * The focused card's Tech Library deep link — the blueprint manifest's own
+   * `codexId` for the focused subsystem, EXACTLY the id the header's
+   * `.refit-title[data-codex]` carries (one mapping, never a second table).
+   * Session C: main.js chains it behind the focused hull part as the
+   * LibraryPane `subject` so an entry-less library open lands on the card
+   * the player is fitting instead of the prompt. Pure read.
+   * @returns {string|null}
+   */
+  focusedCodexId() {
+    const m = MANIFEST_BY_ID.get(this._focused);
+    return (m && typeof m.codexId === 'string') ? m.codexId : null;
+  }
+  /**
    * The pane's laid-out width in CSS px (its box, border-box: the
    * clamp(300px, 24vw, 340px) of 01-numbers) — 0 headless or before the root
    * is built. The ONE number main.js feeds `CameraSystem.setLadderPaneInset`
@@ -560,11 +584,13 @@ export class RefitPane {
 
     // The edge tab — always visible while enabled (08-workbench §2 Grammar:
     // "Edge tabs are always visible in the workbench (REFIT: gold count of
-    // affordable refits)").
+    // affordable refits)"). ONE z step above the root (Session C): the open
+    // pane slides in UNDER the tab, so the tab never disappears behind its
+    // own pane and a click toggles it closed.
     const tab = doc.createElement('div');
     tab.id = 'ladder-refit-tab';
     tab.style.cssText = [
-      'position:absolute', 'left:0', 'top:38%', 'z-index:35',
+      'position:absolute', 'left:0', 'top:38%', `z-index:${TAB_Z_INDEX}`,
       'padding:8px 6px 8px 4px', 'border:1px solid rgba(0,204,255,0.4)', 'border-left:none',
       'border-radius:0 6px 6px 0', 'background:rgba(0,16,32,0.85)',
       'color:' + VisualLaw.COLORS.INFO, 'cursor:pointer',
@@ -592,7 +618,7 @@ export class RefitPane {
     root.id = 'ladder-refit';
     root.className = reduced ? 'refit-reduced' : '';
     root.style.cssText = [
-      'position:absolute', 'left:0', 'top:56px', 'bottom:96px', 'z-index:35',
+      'position:absolute', 'left:0', 'top:56px', 'bottom:96px', `z-index:${PANE_Z_INDEX}`,
       'width:clamp(300px, 24vw, 340px)', 'box-sizing:border-box',
       'padding:10px 12px', 'overflow-y:auto',
       'border:1px solid rgba(0,204,255,0.4)', 'border-left:none', 'border-radius:0 6px 6px 0',

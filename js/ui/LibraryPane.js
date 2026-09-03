@@ -38,6 +38,22 @@
  *     entry's own `unlockHint` (full briefing stays MAXIMIZE-away once
  *     unlocked).
  *
+ * THE LIBRARY FOLLOWS CLICKS (Wave 5 Session C — the 2026-09-03 playtest
+ * "Library is blank" bug, a one-element deep-link surface, fixed at the hub):
+ *   - while the pane is OPEN, every hull part / callout-card click retargets
+ *     it through the SAME `openEntry(codexId)` path the REFIT title rides
+ *     (main.js's flag-gated onPartClick hook — one line, no second path); a
+ *     CLOSED library is never opened by a part click (D-a: the click's
+ *     visible verb stays the REFIT card, 08-workbench §3 unchanged).
+ *   - opening with NO entry (tab click / toggle) lands on something real
+ *     instead of the prompt: the injected `subject` getter answers "what is
+ *     the player looking at" — main.js chains the focused hull part's
+ *     codexId (MotherCallouts.getFocusedPart, COMPONENT band) then the REFIT
+ *     card's manifest deep link (RefitPane.focusedCodexId) — consulted ONLY
+ *     when the pane has no entry (a shown entry survives close → re-open);
+ *     unknown / null / throwing → the prompt copy stays. The pane stays
+ *     eventless: it never reads MotherCallouts or the REFIT itself.
+ *
  * READ = SEEN: an entry resting open ≥ SEEN_DWELL_MS (1500 — the shipped
  * CodexViewerUI dwell) fires the injected `onViewed(id)` once for unlocked,
  * unseen entries — main.js routes it over the SAME CODEX_VIEWED event the
@@ -57,7 +73,11 @@
  * `#ladder-library`, header `.library-header`, edge tab `#ladder-library-tab`
  * always visible while enabled carrying the UNREAD count (unlocked, not yet
  * seen), which PULSES ONCE when a new unlock lands (reduced motion: the
- * count changes, no animation). ONE CSS variable (`--library-dir`, default 1)
+ * count changes, no animation). The tab sits ONE z step above the root
+ * (TAB_Z_INDEX 36 over PANE_Z_INDEX 35 — Session C): the open pane slides
+ * in under the tab, so the tab stays visible (08-workbench §2 "edge tabs
+ * are always visible in the workbench") and a click on it toggles the pane
+ * closed. ONE CSS variable (`--library-dir`, default 1)
  * mirrors the slide direction for RTL (the `--refit-dir` law): an RTL boot
  * sets `--library-dir:-1` (and left-anchors the pane) and every transform
  * follows. ONE_PANE_BREAKPOINT_PX = 1100 is exported for the hub's
@@ -85,6 +105,11 @@ export const ONE_PANE_BREAKPOINT_PX = 1100;
  *  SEEN_DWELL_MS (CodexViewerUI.js:58), mirrored so the pane and the viewer
  *  share one reading contract. */
 export const SEEN_DWELL_MS = 1500;
+/** Pane root stacking (the shipped workbench-pane layer). */
+export const PANE_Z_INDEX = 35;
+/** Edge tab stacking — ONE step above the root so the open pane never paints
+ *  over its own tab (08-workbench §2 "edge tab always visible"; Session C). */
+export const TAB_Z_INDEX = 36;
 
 /** G1 write cap — the ProxContextPanel/TransferWindows house value. */
 const DOM_WRITE_MIN_INTERVAL_MS = 250;
@@ -120,6 +145,11 @@ export class LibraryPane {
    *   CODEX_VIEWED emit → CodexSystem.markSeen, the one seen-writer)
    * @param {function} [deps.onOpenChange] - (isOpen) => void (the D10
    *   calm-cap edge; main.js fans it into _syncWorkbenchPanes)
+   * @param {function} [deps.subject] - () => codexId|null (Session C): what
+   *   the player is looking at — main.js chains the focused hull part's
+   *   codexId, then the REFIT card's manifest deep link. Consulted ONLY when
+   *   the pane opens with NO entry (tab click / toggle); a null / unknown /
+   *   throwing answer keeps the prompt copy.
    * @param {boolean|function} [deps.reducedMotion] - override for the matchMedia probe
    */
   constructor(deps = {}) {
@@ -131,6 +161,7 @@ export class LibraryPane {
     this._requestUnlock = deps.requestUnlock || null;
     this._onViewed = deps.onViewed || null;
     this._onOpenChange = deps.onOpenChange || null;
+    this._subject = deps.subject || null;
     this._reducedMotionDep = deps.reducedMotion;
 
     this._enabled = false;
@@ -264,9 +295,13 @@ export class LibraryPane {
     }
   }
 
-  /** Open the pane (no-op while disabled). Fires onOpenChange(true) once. */
+  /** Open the pane (no-op while disabled). Fires onOpenChange(true) once.
+   *  An ENTRY-LESS open (tab click / toggle — never openEntry, which has its
+   *  entry) first adopts the injected `subject` so the pane lands on the part
+   *  the player is looking at instead of the prompt (Session C). */
   open() {
     if (!this._enabled || this._open) return;
+    if (this._entryId == null) this._adoptSubject();
     this._open = true;
     this._applyOpenState();
     this._wake();
@@ -291,7 +326,11 @@ export class LibraryPane {
   /**
    * Deep-link into the pane: show one entry and open (the REFIT card title /
    * spec term route — 03-plan §3 "tap → TECH LIBRARY slides in"; also the
-   * related-chip navigation). Unknown ids keep the current view and still
+   * related-chip navigation, and — Session C — the hull part / callout-card
+   * click while the pane is already open: main.js's onPartClick hook calls
+   * this ONE path with the part's codexId, so an open library FOLLOWS every
+   * click in place, entry + seen dwell retargeted, no second open edge).
+   * Unknown ids keep the current view and still
    * open (never a throw, never a blank crash — the viewer's "safe no-op"
    * contract). While disabled the entry is stored for the next open.
    * @param {string} id - codex entry id
@@ -388,6 +427,24 @@ export class LibraryPane {
     try { return this._codex.getEntry(id) || null; } catch (_e) { return null; }
   }
 
+  /**
+   * @private The entry-less open lands on the player's subject (Session C):
+   * read the injected `subject` getter ONCE, adopt its id when the codex
+   * resolves it. Null / unknown / throwing → nothing adopted, the prompt copy
+   * stays. Never called while an entry is shown (the caller gates on it).
+   * @returns {boolean} true when an entry was adopted
+   */
+  _adoptSubject() {
+    if (!this._subject) return false;
+    let id = null;
+    try { id = this._subject(); } catch (_e) { id = null; }
+    const entry = (typeof id === 'string') ? this._entry(id) : null;
+    if (!entry) return false;
+    this._entryId = entry.id;
+    this._clearSeenTimer();
+    return true;
+  }
+
   /** @private Guarded related read (viewer parity: resolved entries only). */
   _related(id) {
     if (!id || !this._codex || typeof this._codex.getRelated !== 'function') return [];
@@ -452,11 +509,13 @@ export class LibraryPane {
     const reduced = this._reducedMotion();
 
     // The edge tab — always visible while enabled (08-workbench §2 Grammar:
-    // "LIBRARY: unread count, pulses once on a new unlock").
+    // "LIBRARY: unread count, pulses once on a new unlock"). ONE z step above
+    // the root (Session C): the open pane slides in UNDER the tab, so the tab
+    // never disappears behind its own pane and a click toggles it closed.
     const tab = doc.createElement('div');
     tab.id = 'ladder-library-tab';
     tab.style.cssText = [
-      'position:absolute', 'right:0', 'top:38%', 'z-index:35',
+      'position:absolute', 'right:0', 'top:38%', `z-index:${TAB_Z_INDEX}`,
       'padding:8px 4px 8px 6px', 'border:1px solid rgba(0,204,255,0.4)', 'border-right:none',
       'border-radius:6px 0 0 6px', 'background:rgba(0,16,32,0.85)',
       'color:' + VisualLaw.COLORS.INFO, 'cursor:pointer',
@@ -487,7 +546,7 @@ export class LibraryPane {
     root.id = 'ladder-library';
     root.className = reduced ? 'library-reduced' : '';
     root.style.cssText = [
-      'position:absolute', 'right:0', 'top:56px', 'bottom:96px', 'z-index:35',
+      'position:absolute', 'right:0', 'top:56px', 'bottom:96px', `z-index:${PANE_Z_INDEX}`,
       'width:clamp(380px, 28vw, 440px)', 'box-sizing:border-box',
       'padding:10px 12px', 'overflow-y:auto',
       'border:1px solid rgba(0,204,255,0.4)', 'border-right:none', 'border-radius:6px 0 0 6px',
