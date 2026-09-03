@@ -418,7 +418,14 @@ export class WheelRouter {
     const lc = this._ladder;
     if (!lc || typeof lc.wantsPaneSwipe !== 'function' || !lc.wantsPaneSwipe()) return false;
     const t = this._now();
-    const toward = stepPaneSwipe(this._swipe, wheelDeltaXPx(e), t, tune);
+    // The gesture GAP is measured on the INPUT timeline when the event carries
+    // one (e.timeStamp — a DOMHighResTimeStamp on the performance.now()
+    // timeline in every current browser): events queued behind a long frame
+    // keep their hardware-time stamps, so a main-thread stall between two
+    // events of one swipe can never split it into two gestures. The verb's
+    // tMs stays the router clock (the ladder timeline).
+    const tIn = (Number.isFinite(e.timeStamp) && e.timeStamp > 0) ? e.timeStamp : t;
+    const toward = stepPaneSwipe(this._swipe, wheelDeltaXPx(e), tIn, tune);
     if (toward && typeof lc.pagePane === 'function') lc.pagePane({ tMs: t, toward });
     return true;
   }
