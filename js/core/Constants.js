@@ -21,7 +21,9 @@ export const Constants = {
   // later phases add ZERO codex stamps; P1 ledger §9).
   // '1004'→'1005': Wave-4 pane-help PLAYBOOK batch (9 pane_* entries,
   // docs/ladder/08-workbench.md §11).
-  DATA_VERSION: '1005',
+  // '1005'→'1006': Wave-5 (2) REFIT pane PLAYBOOK entry (pane_refit + the two
+  // symmetric PLAYBOOK backlinks, docs/ladder/08-workbench.md §2).
+  DATA_VERSION: '1006',
 
   // ============================================================================
   // === INPUT (Delegation 1, 2026-05-31) ===

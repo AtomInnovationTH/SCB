@@ -119,6 +119,7 @@ import { NavcomFloor } from './systems/NavcomFloor.js';
 import { ProxNetFloor } from './systems/ProxNetFloor.js';
 import { SdaFloor } from './systems/SdaFloor.js';
 import { HullCamFloor } from './systems/HullCamFloor.js';
+import { RefitPane } from './ui/RefitPane.js';
 import { ArchiveFloor } from './systems/ArchiveFloor.js';
 import { TimeAuthority } from './systems/TimeAuthority.js';
 import { FloorContract } from './core/FloorContract.js';
@@ -570,6 +571,13 @@ let proxNetFloor;
 let sdaFloor;
 let hullcamFloor;
 let archiveFloor;
+// Zoom Ladder Wave 5 (2) — the F3 REFIT pane (08-workbench §2, left pane on
+// the seven-subsystem index). UNLIKE the floor orchestrators above it is only
+// CONSTRUCTED while Constants.LADDER.ENABLED is true (the same live flag every
+// ladder gate reads): a ?ladder=0 boot builds no pane, wires no onPartClick,
+// and the shipped part-click → Library path stays byte-identical (pinned in
+// test-LadderController).
+let refitPane;
 
 // Zoom Ladder per-floor audio beds (S6, Wave-3 serial hub wire): constructed
 // in the ladder block against AudioSystem GETTERS (the unlock pattern) and
@@ -941,7 +949,24 @@ async function init() {
 
   // --- Mothership inspection callouts (in-world 3D labels; replaces the 2D
   // wireframe pane). Gated internally on the inspection events. ---
-  motherCallouts = new MotherCallouts(player, camera, { canvas });
+  motherCallouts = new MotherCallouts(player, camera, {
+    canvas,
+    // Wave 5 (2) D-a (owner, 2026-09-03): with the ladder ON, clicking a hull
+    // part or its card opens its REFIT card — focusPart routes through the
+    // 8→7 refitIndex, then the pane opens. refitPane is constructed in the
+    // ladder block BELOW (late-binding closure, the getLadderController
+    // style); the guard makes a pre-construction click a no-op. Flag-off
+    // (?ladder=0): NO onPartClick key is passed at all, so MotherCallouts'
+    // one CODEX_OPEN_ENTRY emitter runs exactly as shipped (byte-identical,
+    // pinned in test-LadderController).
+    ...((Constants.LADDER && Constants.LADDER.ENABLED) ? {
+      onPartClick: (part) => {
+        if (!refitPane) return;
+        refitPane.focusPart(part);
+        refitPane.open();
+      },
+    } : {}),
+  });
 
   // --- Camera: start following the player ---
   const startPos = player.getPosition();
@@ -1315,6 +1340,34 @@ async function init() {
   // the anchor meshes are static, e.g. AftThrusterDeck). Providers feed the
   // detail-lens live rows (MotherCallouts._liveRows sources); every ref
   // guarded, and HullCamFloor itself swallows provider throws (best-effort).
+  // The providers object is HOISTED so the Wave-5 REFIT pane consumes the
+  // SAME rows (one source of live-row truth — 08-workbench §2 "the providers
+  // that already feed SOLAR / FUEL / LINK / REELS").
+  const hullcamProviders = {
+    power: () => (powerDistribution && powerDistribution.getSolarInput
+      ? [`SOLAR ${Math.round(powerDistribution.getSolarInput())} W`] : []),
+    engineering: () => {
+      // Fuel row honesty rule (MotherCallouts 'feep' live row, R4): a
+      // cargo-fed metal is NOT drawn from the xenon tank — never report
+      // xenon kg under its name.
+      if (!resourceSystem || !resourceSystem.getStatus) return [];
+      const st = resourceSystem.getStatus();
+      const fuel = resourceSystem.getCurrentFuel ? resourceSystem.getCurrentFuel() : null;
+      if (fuel && !fuel.fromCargo) return [`FUEL ${st.currentFuelName} ${Math.round(st.xenon)}/${st.xenonMax} kg`];
+      if (fuel) return [`FUEL ${st.currentFuelName} (CARGO)`];
+      return [`FUEL ${Math.round(st.xenon)}/${st.xenonMax} kg`];
+    },
+    comms: () => (commsSystem && commsSystem.getSuppressionTier
+      ? [`LINK: ${commsSystem.getSuppressionTier() > 0 ? 'SUPPRESSED' : 'NOMINAL'}`] : []),
+    cargo: () => {
+      if (!tetherReel || !tetherReel.getAllReelStates) return [];
+      const states = tetherReel.getAllReelStates() || [];
+      const active = states.filter((s) => s && s.state && s.state !== 'STOWED').length;
+      return [`REELS ACTIVE ${active}/${states.length || 4}`];
+    },
+    // thermal: omitted until the flower refit lands — the static MLI spec
+    // rows from the blueprint manifest carry that card.
+  };
   hullcamFloor = new HullCamFloor({
     player,
     shipMeshSource: {
@@ -1337,32 +1390,44 @@ async function init() {
       player.localToWorld(_hullTmp);
       return navcomProject(_hullTmp);
     },
-    providers: {
-      power: () => (powerDistribution && powerDistribution.getSolarInput
-        ? [`SOLAR ${Math.round(powerDistribution.getSolarInput())} W`] : []),
-      engineering: () => {
-        // Fuel row honesty rule (MotherCallouts 'feep' live row, R4): a
-        // cargo-fed metal is NOT drawn from the xenon tank — never report
-        // xenon kg under its name.
-        if (!resourceSystem || !resourceSystem.getStatus) return [];
-        const st = resourceSystem.getStatus();
-        const fuel = resourceSystem.getCurrentFuel ? resourceSystem.getCurrentFuel() : null;
-        if (fuel && !fuel.fromCargo) return [`FUEL ${st.currentFuelName} ${Math.round(st.xenon)}/${st.xenonMax} kg`];
-        if (fuel) return [`FUEL ${st.currentFuelName} (CARGO)`];
-        return [`FUEL ${Math.round(st.xenon)}/${st.xenonMax} kg`];
-      },
-      comms: () => (commsSystem && commsSystem.getSuppressionTier
-        ? [`LINK: ${commsSystem.getSuppressionTier() > 0 ? 'SUPPRESSED' : 'NOMINAL'}`] : []),
-      cargo: () => {
-        if (!tetherReel || !tetherReel.getAllReelStates) return [];
-        const states = tetherReel.getAllReelStates() || [];
-        const active = states.filter((s) => s && s.state && s.state !== 'STOWED').length;
-        return [`REELS ACTIVE ${active}/${states.length || 4}`];
-      },
-      // thermal: omitted until the flower refit lands — the static MLI spec
-      // rows from the blueprint manifest carry that card.
-    },
+    providers: hullcamProviders,
   });
+  // Zoom Ladder Wave 5 (2) — the REFIT pane (08-workbench §2: LEFT, the
+  // seven-subsystem index, exactly three ranked alternatives, one-click BUY;
+  // D-b: it claims Space on F3 via the controller's `refit` dep below).
+  // Constructed ONLY while the ladder flag is on — the same live
+  // Constants.LADDER.ENABLED every ladder consumer reads (?ladder=0 boots
+  // build no pane; test-LadderController pins it). Beside hullcamFloor by
+  // design: it shares hullcamProviders (the SAME live-row objects).
+  if (Constants.LADDER && Constants.LADDER.ENABLED) {
+    refitPane = new RefitPane({
+      providers: hullcamProviders,
+      getCredits: () => scoringSystem.credits,
+      // "N catches away" (08-workbench §2): average credits per catch from the
+      // running totals; null before the first catch → the pane shows cost only.
+      getAvgCreditsPerCatch: () => (gameState.debrisCleared > 0
+        ? scoringSystem.captureCreditsEarned / gameState.debrisCleared
+        : null),
+      getUpgradeLevel: (id) => shopScreen.purchasedUpgrades.get(id) || 0,
+      // One-click LIVE buy through the shop's own guarded flow (maxLevel /
+      // E5 prereqs / wallet) — ShopScreen.purchaseUpgrade, the public wrapper.
+      purchase: (id) => shopScreen.purchaseUpgrade(id),
+      // Alternative hover → the hull hardware pulses cyan (MotherCallouts
+      // ghost outlines, the one outline system).
+      onGhost: (ids) => motherCallouts.setGhostOutline(ids),
+      // Card title / spec term → the Tech Library, through the EXACT
+      // CODEX_OPEN_ENTRY path every hosted-codex deep link uses today
+      // (the eventBus listener above routes it to codexViewerUI.openEntry).
+      onOpenEntry: (codexId) => {
+        if (codexId) eventBus.emit(Events.CODEX_OPEN_ENTRY, { id: codexId });
+      },
+      // D10: a workbench pane open settles time to 1× — the SAME
+      // _workbenchPaneOpen → TimeAuthority.calmCap signal the loop already
+      // applies (the one-line wire the stub comment promised; never a second
+      // mechanism).
+      onOpenChange: (isOpen) => { _workbenchPaneOpen = !!isOpen; },
+    });
+  }
   // Zoom Ladder F1 (ARCHIVE) bridge (Wave 3): arriving on the innermost floor
   // drops into the Tech Library — ArchiveFloor HOSTS the existing
   // codexViewerUI as the floor costume (00-spec §3/§11 "bridge, don't merge").
@@ -1432,6 +1497,13 @@ async function init() {
     // manifest) for the Wave-5 REFIT pane, which decides whether to re-inject;
     // its per-frame tick below is guarded on isActive() and so stays inert.
     // The controller's `hullcam` seam itself is unchanged (pinned).
+    // Wave 5 (2): the REFIT pane is the F3 floor-keyed dep instead — enabled
+    // on floor 3, disabled+closed elsewhere/on disengage, and Space's
+    // 'lens-toggle' now toggles it (D-b, owner 2026-09-03). Flag-off:
+    // refitPane is undefined (never constructed) → the dep is null → every
+    // controller path is byte-identical, and Space on F3 stays the shipped
+    // silent no-op.
+    refit: refitPane,
     archive: archiveFloor,
     audioBeds: ladderAudioBeds,
     // Wave-4 map rule (D8/§4): per-floor pane rooms + the vitals always-set.
@@ -2253,6 +2325,9 @@ async function init() {
       };
       // Debug handle for click-path / layout introspection (codex click debug).
       window.__callouts = motherCallouts;
+      // Wave 5 (2): the REFIT pane handle for the witness harness (undefined
+      // on a ?ladder=0 boot — the pane is never constructed there).
+      window.__refit = refitPane;
       // Debug handle for SunLight — lets a capture harness inspect bodies and
       // (for verification) temporarily reposition a body that is occluded all
       // session. Read-only intent; mutations are the harness's responsibility.

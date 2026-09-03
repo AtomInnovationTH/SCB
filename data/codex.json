@@ -3129,7 +3129,8 @@
         "delta_v_doctrine",
         "what_10000kg_buys",
         "core_loop",
-        "solar_furnace"
+        "solar_furnace",
+        "pane_refit"
       ],
       "i18n": {
         "title": "The Salvage Economy",
@@ -4173,7 +4174,8 @@
       "startUnlocked": true,
       "related": [
         "pane_discoveries",
-        "what_10000kg_buys"
+        "what_10000kg_buys",
+        "pane_refit"
       ],
       "i18n": {
         "title": "The Upgrade Pin",
@@ -4282,6 +4284,22 @@
         "title": "The Debris Chart",
         "shortText": "Size, mass, tumble, material — the fact sheet of what you are about to grab. Know the junk before you send a daughter after it.",
         "fullText": "Up close, this pane is the fact sheet of the selected piece: identity, size, mass, tumble rate, and material, drawn as a rotating schematic. It is the pre-capture checklist — a heavy, fast-tumbling slab wants a different tool and a gentler approach than a small aluminum bracket. The 9 key collapses it to one line when you only need the summary.\n\nZoomed all the way out, the same job is done by the whole-Earth chart: instead of one object's shape you see the shape of the whole problem — where the debris bands sit and how crowded each altitude is. Both views answer the operator's first question: what exactly am I dealing with? Real trackers do this daily, fusing radar and telescope data into a catalog of tens of thousands of objects.",
+        "unlockHint": "Reach orbit."
+      }
+    },
+    {
+      "id": "pane_refit",
+      "category": "PLAYBOOK",
+      "icon": "🔧",
+      "startUnlocked": true,
+      "related": [
+        "pane_upgrade_pin",
+        "salvage_economy"
+      ],
+      "i18n": {
+        "title": "The REFIT Pane",
+        "shortText": "Zoom to the hull and press Space, or click a part: the left pane shows what is installed and the three best upgrades for it.",
+        "fullText": "At the ship close-up the left edge grows a REFIT tab — the gold number is how many upgrades you can afford right now. Space opens it, and so does clicking any hull part or its card: the pane lands on that subsystem with the installed hardware pinned at top and the three most sensible alternatives ranked below — buy-now first, then almost-affordable with a catches-to-go estimate, then the dream fit. BUY is one click, live, mid-flight; hover an alternative and the hardware it replaces pulses cyan on the hull; the card title opens its Library page.\n\nReal operators call this a refit sheet: what is flying, what could fly, and what it costs. Servicing missions budget exactly this way — every replacement is weighed against the launch and integration price of the alternative — and since 2019, in-orbit servicing vehicles have made the swap-in-place column real. Yours is just faster paperwork.",
         "unlockHint": "Reach orbit."
       }
     },

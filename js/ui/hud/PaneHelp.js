@@ -87,6 +87,7 @@ export const PANE_HELP = [
   { pane: 'ladder rail',        selector: '#ladder-rail',                            codexId: 'pane_ladder_rail',        key: null, rung: 'always shown' },
   { pane: 'transfer windows',   selector: '#ladder-transfer-windows',                codexId: 'pane_transfer_windows',   key: null, rung: 'route-planning instrument' },
   { pane: 'tactical approach',  selector: '#ladder-prox-context',                    codexId: 'pane_tactical_approach',  key: null, rung: 'approach instrument' },
+  { pane: 'refit',              selector: '#ladder-refit .refit-header',             codexId: 'pane_refit',              key: null, rung: 'refit instrument' },
 ];
 
 /**

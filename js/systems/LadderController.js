@@ -61,6 +61,13 @@ export class LadderController {
    *   activate/deactivate/isActive/update/flipLens. Optional — no-op without it.
    * @param {object} [deps.hullcam]      - F3 (HULL CAM) content controller (HullCamFloor):
    *   activate/deactivate/isActive/update/lensToggle. Optional — no-op without it.
+   * @param {object} [deps.refit]        - F3 REFIT pane (RefitPane, Wave 5 (2)):
+   *   setEnabled/open/close/toggle/isOpen. Optional — no-op without it. Floor-keyed
+   *   like hullcam (F3's debrisMode 'full' is shared with F4): arriving on floor 3
+   *   enables the edge tab, any other floor disables AND closes the pane, disengage
+   *   closes it too. When present it claims the F3 'lens-toggle' Space verb
+   *   (toggle()) — D-b, owner 2026-09-03; absent, the verb falls through to the
+   *   hullcam branch exactly as shipped.
    * @param {object} [deps.archive]      - F1 (ARCHIVE) content bridge (ArchiveFloor):
    *   activate/deactivate/isActive. Optional — no-op without it. Floor-keyed
    *   like hullcam (F1's debrisMode 'hidden' is shared with F2): arriving on
@@ -99,6 +106,7 @@ export class LadderController {
     this._proxNet = deps.proxNet || null;
     this._sdaFloor = deps.sdaFloor || null;
     this._hullcam = deps.hullcam || null;
+    this._refit = deps.refit || null;
     this._archive = deps.archive || null;
     this._audioBeds = deps.audioBeds || null;
     this._floorMask = deps.floorMask || null;
@@ -310,6 +318,12 @@ export class LadderController {
     if (this._proxNet && this._proxNet.deactivate) this._proxNet.deactivate();
     if (this._sdaFloor && this._sdaFloor.deactivate) this._sdaFloor.deactivate();
     if (this._hullcam && this._hullcam.deactivate) this._hullcam.deactivate();
+    // Wave 5 (2): the REFIT pane closes with the ladder — tab hidden, pane
+    // shut (its own close() fires the D10 open-signal false edge).
+    if (this._refit) {
+      if (this._refit.setEnabled) this._refit.setEnabled(false);
+      if (this._refit.close) this._refit.close();
+    }
     if (this._archive && this._archive.deactivate) this._archive.deactivate();
     // Per-floor audio bed: fade to silence on disengage (optional dep).
     if (this._audioBeds && this._audioBeds.setFloor) this._audioBeds.setFloor(null);
@@ -499,6 +513,18 @@ export class LadderController {
       if (floor === 3) { if (this._hullcam.activate) this._hullcam.activate(); }
       else if (this._hullcam.deactivate) this._hullcam.deactivate();
     }
+    // F3 REFIT pane (Wave 5 (2)): the same FLOOR-ID key as hullcam. Arrival
+    // on 3 enables the edge tab (always visible while enabled — 08-workbench
+    // §2); any other floor disables it AND closes the pane, so a ride away
+    // never strands an open pane (the D10 calm cap releases with the close).
+    if (this._refit) {
+      if (floor === 3) {
+        if (this._refit.setEnabled) this._refit.setEnabled(true);
+      } else {
+        if (this._refit.setEnabled) this._refit.setEnabled(false);
+        if (this._refit.close) this._refit.close();
+      }
+    }
     // F1 (ARCHIVE): keyed on FLOOR ID 1 — its debrisMode 'hidden' is shared
     // with F2 (DEPOT). Arrival hosts + opens the Tech Library (the codex IS
     // the floor costume, 00-spec §3); leaving / disengaging closes it.
@@ -617,9 +643,17 @@ export class LadderController {
     if (verb === 'flip-lens' && this._sdaFloor && this._sdaFloor.flipLens) {
       this._sdaFloor.flipLens();
     }
-    // F3 Space verb: cycle the HULL CAM lens (overview → per-subsystem detail).
-    if (verb === 'lens-toggle' && this._hullcam && this._hullcam.lensToggle) {
-      this._hullcam.lensToggle();
+    // F3 Space verb: the REFIT pane claims it when injected (D-b, owner
+    // 2026-09-03 — "Space toggles the REFIT pane"); FloorContract's verb
+    // string stays 'lens-toggle'. Absent the pane, the shipped hullcam branch
+    // runs (un-injected in production today → the silent no-op stands).
+    if (verb === 'lens-toggle') {
+      if (this._refit && this._refit.toggle) {
+        this._refit.toggle();
+      } else if (this._hullcam && this._hullcam.lensToggle) {
+        // F3 Space verb: cycle the HULL CAM lens (overview → per-subsystem detail).
+        this._hullcam.lensToggle();
+      }
     }
   }
 
