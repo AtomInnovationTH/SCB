@@ -1083,24 +1083,14 @@ export class GameFlowManager {
           }, 2000, { owner: this }); // 2 second delay for cinematic hold
         }
 
-        // ── Shop trigger: every SHOP_CADENCE (= DEBRIS_PER_MISSION) debris cleared ──
+        // ── Mission boundary: every SHOP_CADENCE (= DEBRIS_PER_MISSION) debris cleared ──
         // (digested completions didn't advance the counter — the modulo would
         // re-fire on the mate's multiple; S13(c). Same for a body the
-        // ledger already paid — register item 37.)
+        // ledger already paid — register item 37.) The ONE depot decision per
+        // catch lives in _onMissionBoundary (Wave 5 Session E).
         const debrisCount = gameState.debrisCleared;
         if (payCredit && debrisCount > 0 && debrisCount % SHOP_CADENCE === 0) {
-          if (gameState.isGameplay()) {
-            eventBus.emit(Events.COMMS_MESSAGE, {
-              text: `${debrisCount} debris cleared. Return to depot for resupply`,
-              priority: 'high',
-            });
-            this._shopTimeoutId = timerManager.setTimeout(() => {
-              if (gameState.isGameplay()) {
-                this.transitionToState(GameStates.SHOP);
-              }
-              this._shopTimeoutId = null;
-            }, 2500, { owner: this });
-          }
+          if (gameState.isGameplay()) this._onMissionBoundary(debrisCount);
         }
       }
     });
@@ -1746,6 +1736,73 @@ export class GameFlowManager {
     eventBus.emit(Events.PERSISTENCE_GATHER, saveData);
 
     persistenceManager.save(saveData);
+  }
+
+  // ==========================================================================
+  // DEPOT AND CHAPTERS (Wave 5 Session E — docs/ladder/08-workbench.md §5 D3)
+  // ==========================================================================
+
+  /**
+   * The ONE depot decision at a mission boundary — called by the CATCH_PROCESSED
+   * handler when a credited catch lands exactly on a SHOP_CADENCE multiple while
+   * in gameplay (the sole live SHOP-entry decision per catch; the legacy
+   * INTERACTION_* timers below are production-unreachable — see
+   * test-shop-cadence "legacy INTERACTION paths").
+   *
+   *   • Ladder OFF (`?ladder=0` / LADDER.ENABLED false): the shipped path,
+   *     byte-identical — the comms line + the silent 2500 ms `_shopTimeoutId`
+   *     → SHOP. Chapters and the doorway are workbench features built behind
+   *     the ladder flag (08-workbench §10); without the rail and the F3
+   *     doorway an invitation has nowhere to point.
+   *   • Chapters 1..FORCED_DEPOT_CHAPTERS (the completed chapter — every
+   *     boundary catch closes one): the forced stop made CEREMONIAL. The comms
+   *     line stays; a "MISSION N COMPLETE" card lands on the shipped teaching
+   *     toast (TEACHING_MOMENT_FORCE → TeachingSystem._forceShow →
+   *     TeachingOverlay — owner decision 4: reuse, no new DOM surface) and
+   *     the SAME `_shopTimeoutId` timer, now the card's dwell
+   *     (MISSIONS.COMPLETE_CARD_MS — owner decision 1: a fixed 2.5 s, the old
+   *     timer's length), flips into the SHOP as the card finishes fading (the
+   *     card holds for dwell − TEACHING.FADE_OUT_MS). The card IS the cause:
+   *     one timer, one number, no silent cut.
+   *   • Chapter FORCED_DEPOT_CHAPTERS+1 on: no forced stop — the depot is an
+   *     INVITATION (lands with the next commit; until then the shipped stop,
+   *     comms + the silent 2500 ms).
+   *
+   * @param {number} debrisCount - gameState.debrisCleared at the boundary (a
+   *   positive multiple of SHOP_CADENCE)
+   * @private
+   */
+  _onMissionBoundary(debrisCount) {
+    const M = Constants.MISSIONS;
+    const ladderOn = !!(Constants.LADDER && Constants.LADDER.ENABLED);
+    const { missionsCompleted } = getMissionProgress(debrisCount);
+    // The card ceremony: ladder on AND the completed chapter is a forced-stop one.
+    // (Chapter FORCED_DEPOT_CHAPTERS+1 on with the ladder on takes the shipped
+    // stop until the invitation lands — the next commit.)
+    const ceremony = ladderOn && missionsCompleted <= M.FORCED_DEPOT_CHAPTERS;
+    // The comms line stays on every forced stop (shipped text, shipped priority).
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      text: `${debrisCount} debris cleared. Return to depot for resupply`,
+      priority: 'high',
+    });
+    let dwellMs = 2500;   // the shipped silent cut (ladder off)
+    if (ceremony) {
+      dwellMs = M.COMPLETE_CARD_MS;
+      const fadeMs = (Constants.TEACHING && Constants.TEACHING.FADE_OUT_MS) || 500;
+      eventBus.emit(Events.TEACHING_MOMENT_FORCE, {
+        id: `mission_complete_${missionsCompleted}`,
+        title: `MISSION ${missionsCompleted} COMPLETE`,
+        body: `${debrisCount} debris cleared. Opening the depot for resupply.`,
+        duration: Math.max(0, dwellMs - fadeMs),
+        icon: '\u25C6',
+      });
+    }
+    this._shopTimeoutId = timerManager.setTimeout(() => {
+      if (gameState.isGameplay()) {
+        this.transitionToState(GameStates.SHOP);
+      }
+      this._shopTimeoutId = null;
+    }, dwellMs, { owner: this });
   }
 
   /**

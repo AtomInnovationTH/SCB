@@ -4286,6 +4286,12 @@ export const Constants = {
   // =========================================================================
   MISSIONS: {
     DEBRIS_PER_MISSION: 5,    // matches existing Math.floor(debrisCleared / 5) + 1
+    // Wave 5 Session E — the chapter ceremony (docs/ladder/08-workbench.md §5
+    // D3; numbers in docs/ladder/01-numbers.md "Depot and chapters"). Both
+    // gate on Constants.LADDER.ENABLED — a ?ladder=0 boot keeps the shipped
+    // catch → comms → 2500 ms → SHOP path byte-identical.
+    FORCED_DEPOT_CHAPTERS: 3, // the end of chapters 1..N forces the depot stop (the card → SHOP); from chapter N+1 on the depot is an INVITATION
+    COMPLETE_CARD_MS: 2500,   // "MISSION N COMPLETE" card → SHOP dwell (owner decision 1: a fixed dwell, the old silent timer's length); the card holds for this minus TEACHING.FADE_OUT_MS so it has faded when the depot opens
     PROFILES: [
       {
         minMission: 1,
