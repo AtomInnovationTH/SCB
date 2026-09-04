@@ -137,7 +137,18 @@ export class LadderController {
    *   setFloor(floorId|null). Optional — absent it beds are a no-op.
    * @param {object} [deps.floorMask]    - per-floor HUD pane mask (FloorMask,
    *   08-workbench D8/§4): setFloor(floorId|null). Optional — absent it the
-   *   mask is a no-op (shipped cockpit byte-identical).
+   *   mask is a no-op (shipped cockpit byte-identical). With a `viewStore` its
+   *   D5 memory is imported at construction and exported on every floor change.
+   * @param {object} [deps.viewStore]    - the PLAYER-owned view store
+   *   (LadderViewStore, Wave 5 Session G — D5 persistence): rooms()/setRooms()
+   *   round-trip FloorMask's exportMemory/importMemory; panes()/setPanes() hold
+   *   the F3 workbench pane open-state, written on the panes' open/close edge
+   *   (main.js's ONE `_syncWorkbenchPanes` edge calls `notePaneChange()`) while
+   *   engaged on F3, and re-applied at ENGAGE on F3 (the depot return, a
+   *   continued run) — "the room as you left it". Optional — absent it rooms
+   *   stay in-memory (FloorMask) and the panes close as shipped. main.js
+   *   constructs it only inside the LADDER.ENABLED gate (flag-off: never read
+   *   or written).
    * @param {object} [deps.sfx]          - interaction sfx (LadderSfx): onCharge/
    *   onCross/onRide/onUndoWindow/reset. Optional — absent it sfx are a no-op.
    * @param {object} [deps.starfield]    - Starfield: isConstellationsVisible()/
@@ -173,6 +184,7 @@ export class LadderController {
     this._depot = deps.depot || null;
     this._audioBeds = deps.audioBeds || null;
     this._floorMask = deps.floorMask || null;
+    this._viewStore = deps.viewStore || null;
     this._sfx = deps.sfx || null;
     this._starfield = deps.starfield || null;
     this._cityLabels = deps.cityLabels || null;
@@ -223,6 +235,46 @@ export class LadderController {
      * entry. null = no free rest known on this floor yet → the entry fallback.
      */
     this._restZ01 = null;
+    /**
+     * D5: the working position as it stood BEFORE the current wheel drive (a
+     * same-direction run of free moves with gaps < GESTURE_LOCK_SILENCE_MS —
+     * the core's own gesture boundary). A flick's driven phase emits a few
+     * free `move`s before the detector fires (the accumulation ramp), and
+     * those are part of the LEAVING gesture, not a place the player worked:
+     * when the drive ends in a flick-to-wall ride, `_restZ01` rolls back to
+     * this (the doorway witness: 0.75 → ramp 0.68 → flick → the return lands
+     * at 0.75). `_lastMoveT` / `_lastMoveDir` delimit the drive.
+     */
+    this._restBeforeDrive = null;
+    this._lastMoveT = -Infinity;
+    this._lastMoveDir = 0;
+    /**
+     * D5: the doorway ride in flight — `{ floor, z01 }` of the origin (the hull
+     * the player is leaving + their working position) from ride START until
+     * its completion or replacement. `viewState()` reports THIS while set, so
+     * a run save taken during the 550 ms ride into F2 records the hull, never
+     * the doorway (a continue must re-engage where the player worked, not in
+     * the F2 room). null otherwise.
+     */
+    this._doorway = null;
+    /** True while `_restorePanes` drives the panes itself (its edges are not player intent). */
+    this._paneRestoring = false;
+    /**
+     * D5: the shipped initial view, captured from the core at construction —
+     * `resetView()` (GAME_RESET) places the core back here so a NEW run starts
+     * on the shipped floor (the intro ride as shipped), whatever floor the last
+     * run ended on. The player's rooms (FloorMask memory / the view store) are
+     * NOT touched by a reset — they belong to the player, not the run.
+     */
+    const s0 = (this._ladder && this._ladder.getState) ? this._ladder.getState() : null;
+    this._initialView = s0 ? { floor: s0.floor, z01: s0.z01 } : null;
+    // D5: the player's rooms ride in from the store ONCE, before the first
+    // setFloor (FloorMask.importMemory validates its half: pane names, booleans).
+    if (this._viewStore && this._floorMask && typeof this._floorMask.importMemory === 'function' &&
+        typeof this._viewStore.rooms === 'function') {
+      const rooms = this._viewStore.rooms();
+      if (rooms) this._floorMask.importMemory(rooms);
+    }
   }
 
   /** The underlying pure core (read-only use — rail/tests). */
@@ -477,6 +529,189 @@ export class LadderController {
     return null;
   }
 
+  // ── D5 persistence (Wave 5 Session G — 08-workbench §11 "persistence of view prefs + floor") ──
+
+  /**
+   * The panes' open/close EDGE, from main.js's ONE `_syncWorkbenchPanes`
+   * (the same edge that feeds the D10 calm cap + the camera inset — never a
+   * second signal path). Records the F3 pane open-state into the player store
+   * as the player's intent — ONLY while engaged on F3 and not driven by the
+   * controller itself: `_disengage` clears `_engaged` and `_applyFloorContent`
+   * writes `_floorApplied` BEFORE their teardown closes fire, and
+   * `_restorePanes` sets `_paneRestoring`, so the controller's own closes and
+   * re-opens are never mistaken for the player closing a pane. Write-on-change
+   * (the store compares). No store → nothing. Never throws.
+   */
+  notePaneChange() {
+    if (!this._viewStore || this._paneRestoring) return;
+    if (!this._engaged || this._floorApplied !== 3) return;
+    if (typeof this._viewStore.setPanes !== 'function') return;
+    const isOpen = (p) => !!(p && typeof p.isOpen === 'function' && p.isOpen());
+    this._viewStore.setPanes({ refit: isOpen(this._refit), library: isOpen(this._library) });
+  }
+
+  /**
+   * The run-scoped half of D5 for the RUN SAVE (main.js gathers it on
+   * PERSISTENCE_GATHER as `save.ladder`, inside the LADDER.ENABLED gate): the
+   * core's live `(floor, z01)` — or, during a doorway ride into F2, the hull
+   * the player is leaving at their working position (`_doorway`), so a save
+   * taken mid-ride never records the doorway. A plain fresh object; never a
+   * throw (null if the core has no snapshot).
+   * @returns {{floor: number, z01: number}|null}
+   */
+  viewState() {
+    if (this._doorway) return { floor: this._doorway.floor, z01: this._doorway.z01 };
+    try {
+      const s = this._ladder.getState();
+      return (s && Number.isFinite(s.floor) && Number.isFinite(s.z01)) ? { floor: s.floor, z01: s.z01 } : null;
+    } catch (_e) {
+      return null;
+    }
+  }
+
+  /**
+   * Restore a saved view (`save.ladder`, from main.js on PERSISTENCE_LOADED)
+   * into the core BEFORE the first engage of a continued run — the next
+   * gameplay frame's `_engage` then reads the core and re-engages where the
+   * player left. Validated: an object with `floor` ∈ FloorContract.FLOORS and
+   * a finite `z01` (ZoomLadder.place clamps it to [0,1]); anything else → the
+   * shipped default stands, no throw. Refused while engaged in gameplay (a cut
+   * under a live camera is never invisible — 06-core-api "place"); a controller
+   * left engaged because gameplay ended without a frame yet is disengaged
+   * first (exactly what the next update() would do). A ride the core still
+   * reports while disengaged is stale by construction (the camera dropped its
+   * completion at disengage) and is settled before the placement.
+   * @param {{floor?: number, z01?: number}|null|undefined} saved
+   * @returns {boolean} true when the core was placed
+   */
+  restoreView(saved) {
+    if (!saved || typeof saved !== 'object') return false;
+    const floor = saved.floor, z01 = saved.z01;
+    if (!Number.isFinite(floor) || !FloorContract.FLOORS.some((f) => f.id === floor)) return false;
+    if (typeof z01 !== 'number' || !Number.isFinite(z01)) return false;
+    return this._placeWhileHidden(floor, z01);
+  }
+
+  /**
+   * GAME_RESET (main.js, inside the LADDER.ENABLED gate): the run's floor memory
+   * is cleared — the core goes back to the shipped initial view captured at
+   * construction, so a NEW game starts on the shipped floor with the intro ride
+   * as shipped, whatever floor the last run ended on. A CONTINUE restores the
+   * saved view again right after (GameFlowManager emits PERSISTENCE_LOADED after
+   * resetGame()). The player's rooms and pane memory are NOT touched (D5: they
+   * belong to the player, not the run). Same engaged-in-gameplay refusal as
+   * restoreView.
+   * @returns {boolean} true when the core was placed
+   */
+  resetView() {
+    if (!this._initialView) return false;
+    return this._placeWhileHidden(this._initialView.floor, this._initialView.z01);
+  }
+
+  /**
+   * @private The ONE invisible placement path shared by restoreView/resetView:
+   * refuse while engaged in gameplay; disengage a stale engagement; settle a
+   * stale ride; place.
+   */
+  _placeWhileHidden(floor, z01) {
+    if (typeof this._ladder.place !== 'function') return false;
+    if (this._engaged) {
+      if (this._wantEngaged()) return false;   // a live camera — never a cut
+      this._disengage();                        // gameplay already ended; the next update() would do this
+    }
+    this._settleStaleRide();
+    return !!this._ladder.place({ tMs: this._now(), floor, z01 });
+  }
+
+  /**
+   * @private A core that reports `riding` while the controller is DISENGAGED
+   * can never be completed by the camera (CameraSystem.ladderDisengage drops
+   * `onDone`; the headless path completes synchronously), so the ride is stale
+   * by construction — report it finished so the placement is not refused.
+   */
+  _settleStaleRide() {
+    if (this._engaged) return;
+    const riding = this._ladder.isRiding ? this._ladder.isRiding()
+      : (this._ladder.getState && this._ladder.getState().mode === 'riding');
+    if (riding && typeof this._ladder.rideFinished === 'function') {
+      this._ladder.rideFinished({ tMs: this._now() });
+    }
+  }
+
+  /** @private D5: export FloorMask's memory to the player store (write-on-change inside the store). */
+  _persistRooms() {
+    if (!this._viewStore || !this._floorMask) return;
+    if (typeof this._floorMask.exportMemory !== 'function' || typeof this._viewStore.setRooms !== 'function') return;
+    this._viewStore.setRooms(this._floorMask.exportMemory());
+  }
+
+  /**
+   * @private D5: (re)seed the working-position memory at an engage or a floor
+   * arrival — `z01` is the rest (null when not a free rest) and no drive is
+   * in progress.
+   */
+  _seedRest(z01) {
+    this._restZ01 = isFreeRest(z01) ? z01 : null;
+    this._restBeforeDrive = this._restZ01;
+    this._lastMoveT = -Infinity;
+    this._lastMoveDir = 0;
+  }
+
+  /**
+   * @private D5: a free-zone `move` on the applied floor at `tMs`. A new DRIVE
+   * begins when the gap since the last free move reaches the core's gesture
+   * boundary (GESTURE_LOCK_SILENCE_MS) or the direction flips — the working
+   * position as it stood then is kept in `_restBeforeDrive` so a flick that
+   * grows out of this drive can roll back its own ramp-up moves.
+   */
+  _noteFreeMove(z01, tMs) {
+    const silence = FloorContract.HUMP_SPRING.GESTURE_LOCK_SILENCE_MS;
+    const dir = (this._restZ01 == null || z01 >= this._restZ01) ? 1 : -1;
+    const newDrive = !(tMs - this._lastMoveT < silence) || dir !== this._lastMoveDir;
+    if (newDrive) this._restBeforeDrive = this._restZ01;
+    this._restZ01 = z01;
+    this._lastMoveT = tMs;
+    this._lastMoveDir = dir;
+  }
+
+  /**
+   * @private D5: a flick-to-wall ride fired at `tMs`. If it grew out of the
+   * drive in progress (the last free move is inside the gesture boundary),
+   * its ramp-up moves were the leaving gesture: the working position rolls
+   * back to where it stood before that drive. A flick with no ramp (a single
+   * big event after a pause) rolls nothing back — the rest before it stands.
+   */
+  _rollBackDrive(tMs) {
+    const silence = FloorContract.HUMP_SPRING.GESTURE_LOCK_SILENCE_MS;
+    if (Number.isFinite(this._lastMoveT) && tMs - this._lastMoveT < silence && this._restBeforeDrive != null) {
+      this._restZ01 = this._restBeforeDrive;
+    }
+    this._lastMoveT = -Infinity;
+    this._lastMoveDir = 0;
+  }
+
+  /**
+   * @private D5 (owner decision 3): re-open the F3 workbench panes as the
+   * player left them — at ENGAGE on F3 (the depot return, a continued run),
+   * after `_applyFloorContent(3)` has enabled the tabs (open() is a no-op while
+   * disabled). REFIT first, then the LIBRARY (the one flow that opens both;
+   * Esc unwinds library → refit). The panes' own open() fires their
+   * onOpenChange edge (the D10 calm cap + the camera inset, exactly as a tab
+   * click would); `_paneRestoring` keeps notePaneChange from re-recording it.
+   */
+  _restorePanes() {
+    if (!this._viewStore || typeof this._viewStore.panes !== 'function') return;
+    const want = this._viewStore.panes();
+    if (!want) return;
+    this._paneRestoring = true;
+    try {
+      if (want.refit && this._refit && this._refit.open) this._refit.open();
+      if (want.library && this._library && this._library.open) this._library.open();
+    } finally {
+      this._paneRestoring = false;
+    }
+  }
+
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
   _engage(tMs) {
@@ -488,15 +723,21 @@ export class LadderController {
     }
     // D5: the engage position seeds the working-position memory for this floor
     // (a parked depot return / a restored save re-engage exactly here).
-    this._restZ01 = isFreeRest(s.z01) ? s.z01 : null;
+    this._seedRest(s.z01);
     this._applyFidelity(s.floor);
     this._applyFloorContent(s.floor);
+    // D5: the F3 room as the player left it — the panes re-open at ENGAGE on
+    // the hull (the depot return; a continued run), never at a ride arrival.
+    if (s.floor === 3) this._restorePanes();
     if (this._rail && this._rail.show) this._rail.show();
     this._refreshRail();
   }
 
   _disengage() {
     this._engaged = false;
+    // D5: a doorway ride cannot complete once disengaged (the camera drops its
+    // completion) — the origin record dies with it.
+    this._doorway = null;
     if (this._cameraSystem && this._cameraSystem.ladderDisengage) {
       this._cameraSystem.ladderDisengage();
     }
@@ -526,6 +767,10 @@ export class LadderController {
     // Per-floor HUD pane mask: restore the shipped fully-visible cockpit and
     // hide the vitals line on disengage (optional dep — the beds contract).
     if (this._floorMask && this._floorMask.setFloor) this._floorMask.setFloor(null);
+    // D5: setFloor(null) captured the departing floor's live room into the
+    // mask's memory — export it to the player store now (write-on-change; a
+    // floor-change moment, never per frame — G1). The SHOP entry lands here.
+    this._persistRooms();
     // Interaction sfx: clear transient gesture state (ratchet step / armed
     // undo window) so a re-engage starts clean (optional dep).
     if (this._sfx && this._sfx.reset) this._sfx.reset();
@@ -560,7 +805,7 @@ export class LadderController {
           // is where the player is working; wall creep (move.inWall) and the
           // settle-back to an edge are the leaving gesture and never count.
           if (d.type === 'move' && !d.inWall && d.floor === this._floorApplied && isFreeRest(d.z01)) {
-            this._restZ01 = d.z01;
+            this._noteFreeMove(d.z01, tMs);
           }
           break;
 
@@ -573,6 +818,9 @@ export class LadderController {
         case 'ride':
           // G3 flick-to-wall soft tick (LadderSfx only sounds kind 'flickWall').
           if (this._sfx && this._sfx.onRide) this._sfx.onRide(d.kind);
+          // D5: a flick-to-wall ride ends the drive whose ramp-up moves just
+          // landed — the working position rolls back to before that drive.
+          if (d.kind === 'flickWall') this._rollBackDrive(tMs);
           this._startRide(d.toFloor, d.entryZ01, d.miniMs != null ? d.miniMs : CROSS_RIDE_MS, tMs);
           break;
 
@@ -619,13 +867,21 @@ export class LadderController {
     if (toFloor !== fromFloor) {
       // A floor change re-seeds the working position from the arrival entry
       // (0.25 / 0.75 — always a free rest). A same-floor flickWall ride lands
-      // on a wall EDGE and leaves the memory alone (the player is still here).
-      this._restZ01 = isFreeRest(entryZ01) ? entryZ01 : null;
+      // on a wall EDGE and leaves the memory alone (the player is still here;
+      // _rollBackDrive already discounted its ramp-up moves).
+      this._seedRest(entryZ01);
     }
     this._applyFidelity(toFloor);
     this._applyFloorContent(toFloor);
     const frame = this._frame(toFloor, entryZ01);
     const seq = ++this._rideSeq;
+    // D5: a ride INTO the doorway from above — while it flies, a run save must
+    // record the hull the player is leaving (viewState), never F2. Any new ride
+    // (including a flick-undo back out) replaces this record.
+    const isDoorway = toFloor === DEPOT_FLOOR_ID && fromFloor != null && fromFloor > DEPOT_FLOOR_ID;
+    this._doorway = isDoorway
+      ? { floor: fromFloor, z01: departZ01 != null ? departZ01 : FloorContract.LADDER_GEOMETRY.ENTRY_Z01_FROM_BELOW }
+      : null;
     const done = () => {
       if (seq !== this._rideSeq) return;   // superseded — the new ride owns completion
       const t = this._now();
@@ -643,6 +899,12 @@ export class LadderController {
       if (toFloor === DEPOT_FLOOR_ID && fromFloor != null && fromFloor > DEPOT_FLOOR_ID) {
         this._enterDepot(fromFloor, t, departZ01);
       }
+      // D5: the origin record outlives the flip on purpose — the FIRST depot
+      // visit saves synchronously inside transitionToState(SHOP)
+      // (GameFlowManager._applyFirstDepotFloor → saveGame), while the core is
+      // still on F2; viewState() must report the hull there. Cleared only once
+      // the core is parked back on it.
+      this._doorway = null;
     };
     if (this._cameraSystem && this._cameraSystem.ladderStartRide) {
       this._cameraSystem.ladderStartRide({ ...frame, rideMs, onDone: done });
@@ -823,6 +1085,9 @@ export class LadderController {
     // destination panes fade in with the ride (this method runs on _engage and
     // at every _startRide start). Optional dep — absent it this is a no-op.
     if (this._floorMask && this._floorMask.setFloor) this._floorMask.setFloor(floor);
+    // D5: the mask just captured the departing floor's room — export to the
+    // player store (write-on-change inside the store; a floor-change moment).
+    this._persistRooms();
   }
 
   /**

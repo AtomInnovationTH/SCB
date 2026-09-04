@@ -87,6 +87,15 @@ class PersistenceManager {
         // GlossaryState (§11.8). Additive (no SAVE_VERSION bump): old saves lack
         // this key and GlossaryState's restore guard handles its absence.
         glossary: data.glossary ?? null,
+        // Zoom Ladder view (D5, Wave 5 Session G): the floor + z01 the player
+        // left, `{ floor, z01 }` — contributed via PERSISTENCE_GATHER by
+        // main.js (LadderController.viewState) ONLY while Constants.LADDER.
+        // ENABLED, restored on PERSISTENCE_LOADED before the first engage of a
+        // continued run. Additive (no SAVE_VERSION bump): old saves lack it
+        // and the restore validates + defaults. Unlike the other contributors
+        // it is OMITTED when absent (not `null`): with the ladder off nothing
+        // gathers it, and the flag-off save blob must stay byte-identical.
+        ...(data.ladder != null ? { ladder: data.ladder } : {}),
         // ST-9.2: Active arm tier (Y0_QUAD / Y1_HEX / Y3_OCTO)
         armTier: data.armTier ?? 'Y0_QUAD',
         // Q2 Net-Launch Ceremony first-time flags (CEREMONY_REDESIGN.md §5.6)

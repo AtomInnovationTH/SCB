@@ -23,6 +23,15 @@ export const StorageKeys = {
   SAVE_BACKUP: 'spacecowboy_save_v1_backup',
   /** SettingsManager preferences blob. */
   SETTINGS:    'sc_settings_v1',
+  /**
+   * Zoom Ladder VIEW preferences (LadderViewStore — D5 "rooms you can
+   * rearrange", Wave 5 Session G): the FloorMask per-floor room memory + the
+   * F3 workbench pane open-state. PLAYER-owned like SETTINGS — deliberately
+   * NOT in the run save, which New Game wipes; a rearranged room belongs to
+   * the player, not the run. Written only while `Constants.LADDER.ENABLED`
+   * (a ?ladder=0 boot never reads or writes it).
+   */
+  LADDER_VIEW: 'sc_ladder_view_v1',
   /** CityLabels visibility toggle ('0' | '1'). */
   CITY_LABELS: 'sc_city_labels_visible',
   // Owned by Constants (they sit beside related tuning) but mirrored here so the

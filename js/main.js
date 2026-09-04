@@ -114,6 +114,7 @@ import { WheelRouter } from './systems/WheelRouter.js';
 import { LadderController } from './systems/LadderController.js';
 import { LadderAudioBeds } from './systems/LadderAudioBeds.js';
 import { FloorMask } from './ui/hud/FloorMask.js';
+import { LadderViewStore } from './systems/LadderViewStore.js';
 import { LadderSfx } from './systems/LadderSfx.js';
 import { NavcomFloor } from './systems/NavcomFloor.js';
 import { ProxNetFloor } from './systems/ProxNetFloor.js';
@@ -587,6 +588,13 @@ let refitPane;
 // full-screen Library, I key, deep links) stays byte-identical (pinned in
 // test-LadderController).
 let libraryPane;
+// Zoom Ladder Wave 5 (Session G) — the PLAYER-owned view store (D5 "rooms you
+// can rearrange": FloorMask's per-floor room memory + the F3 pane open-state,
+// its own key `sc_ladder_view_v1`, separate from the run save — the
+// SettingsManager rule). Same construction law as the panes: built ONLY while
+// Constants.LADDER.ENABLED is true, so a ?ladder=0 boot never reads or writes
+// the key (pinned in test-LadderController).
+let ladderViewStore;
 
 // Zoom Ladder per-floor audio beds (S6, Wave-3 serial hub wire): constructed
 // in the ladder block against AudioSystem GETTERS (the unlock pattern) and
@@ -1470,6 +1478,13 @@ async function init() {
         refitOpen ? refitPane.widthPx() : 0,
         libraryOpen ? libraryPane.widthPx() : 0,
       );
+      // Consumer 4 (Wave 5 Session G — D5 pane memory): the controller records
+      // the F3 pane open-state into the player store as the player's intent —
+      // only while engaged on F3 and never for its own teardown closes / the
+      // engage re-open (it tells them apart itself). Same ONE edge, no second
+      // signal path; write-on-change inside the store (G1). ladderController is
+      // constructed below — read live, guarded (this closure runs on edges only).
+      if (ladderController) ladderController.notePaneChange();
     };
     // The below-~1100-px one-pane rule (01-numbers "One-pane breakpoint",
     // exported by LibraryPane): opening one pane collapses the other to its
@@ -1601,6 +1616,38 @@ async function init() {
     eventBus.on(Events.DEPOT_INVITATION, (d) => {
       if (railIndicator) railIndicator.setDepotInvitation(!!(d && d.open));
     });
+    // Wave 5 (Session G) — D5 persistence of view prefs + floor (08-workbench
+    // §11), two stores by ownership (owner decisions 1a / 1b, 2026-09-04):
+    //   PLAYER store `sc_ladder_view_v1` (LadderViewStore — the SettingsManager
+    //   pattern: own key, load in ctor, save on change, private-mode-safe):
+    //   FloorMask's per-floor rooms + the F3 pane open-state. Survives New Game —
+    //   a rearranged room belongs to the player, not the run. The controller
+    //   imports the rooms at construction, exports them on every floor change,
+    //   records the panes on the ONE edge above, re-opens them at engage on F3.
+    //   RUN save `save.ladder = { floor, z01 }`: gathered here on
+    //   PERSISTENCE_GATHER (LadderController.viewState — the hull, never the
+    //   doorway mid-ride), restored on PERSISTENCE_LOADED into the core BEFORE
+    //   the first engage (MENU_CONTINUE emits it before ORBITAL_VIEW), so a
+    //   continue re-engages where the player left; a NEW game has no save →
+    //   the intro ride as shipped. GAME_RESET clears the run's floor memory
+    //   (the core back to the shipped initial view) but NOT the player's rooms.
+    // All inside the gate: a ?ladder=0 boot constructs no store, registers no
+    // listener, never writes the key, and its save never carries `ladder`
+    // (PersistenceManager omits the key when absent) — byte-identical.
+    ladderViewStore = new LadderViewStore();
+    eventBus.on(Events.PERSISTENCE_GATHER, (saveData) => {
+      if (!saveData || !ladderController) return;
+      const view = ladderController.viewState();
+      if (view) saveData.ladder = view;
+    });
+    eventBus.on(Events.PERSISTENCE_LOADED, () => {
+      if (!ladderController) return;
+      const save = persistenceManager.peek();
+      ladderController.restoreView(save ? save.ladder : null);
+    });
+    eventBus.on(Events.GAME_RESET, () => {
+      if (ladderController) ladderController.resetView();
+    });
   }
   // Zoom Ladder F1 (ARCHIVE) bridge (Wave 3): arriving on the innermost floor
   // drops into the Tech Library — ArchiveFloor HOSTS the existing
@@ -1696,6 +1743,10 @@ async function init() {
     audioBeds: ladderAudioBeds,
     // Wave-4 map rule (D8/§4): per-floor pane rooms + the vitals always-set.
     floorMask: ladderFloorMask,
+    // Wave 5 (Session G): the PLAYER-owned view store — FloorMask's rooms +
+    // the F3 pane open-state persist through it (D5). Flag-off: ladderViewStore
+    // is undefined (never constructed) → the dep is null → byte-identical.
+    viewStore: ladderViewStore,
     sfx: ladderSfx,
     // F7 hides the constellation figures under the SDA chart and restores the
     // player's 6-key prior on leave/disengage.
