@@ -26,14 +26,16 @@
  * same `!important` discipline.
  *
  * D5 (per-floor player memory — "rooms you can rearrange"): on every floor
- * change the mask first CAPTURES the departing floor's live pane visibility
- * (rung.isVisible(), the same source PaneDensity trusts), then applies the
- * arrival floor's layout = player memory where it exists, the §4 default
- * room otherwise. A pane re-shown with its own key (which clears the
- * attribute) is therefore remembered for THAT floor and reapplied on return;
- * global toggles apply within the mask. In-memory this wave; the state shape
- * (exportMemory/importMemory: plain JSON booleans keyed floor → pane) is the
- * Wave-5 persistence surface.
+ * change the mask first CAPTURES the departing floor's pane INTENT (the ONE
+ * density bit on each pane's elements — `_isVisible`; never on-screen
+ * presence, which the rung adapters fold in for PaneDensity's own reasons),
+ * then applies the arrival floor's layout = player memory where it exists,
+ * the §4 default room otherwise. A pane re-shown with its own key (which
+ * clears the attribute) is therefore remembered for THAT floor and reapplied
+ * on return; global toggles apply within the mask. Persisted since Wave 5
+ * Session G (2026-09-04): the state shape (exportMemory/importMemory: plain
+ * JSON booleans keyed floor → pane) rides the player store `sc_ladder_view_v1`
+ * through LadderController + LadderViewStore.
  *
  * D7 + vitals (the always set): alerts (warnings strip, conjunction panel,
  * comms), the rail, the score strip, and the vitals line are NEVER masked on
@@ -109,6 +111,14 @@ export const REDUCED_CROSSFADE_MS = 200;
  * touched, so D7 holds). The ticker keeps its items and timers while hidden;
  * whatever is still alive reappears on the next floor.
  */
+/**
+ * The pane-density rungs' OWN hide bit (HUD._initPaneDensity domRung): set on
+ * a pane's elements by `rung.setVisible(false)`, cleared by `setVisible(true)`
+ * and by the pane's keys. The mask READS it (intent — see `_isVisible`) and
+ * never writes it: every write goes through the rung adapter, the one writer.
+ */
+const DENSITY_HIDDEN_ATTR = 'data-density-hidden';
+
 export const MASK_PANES = Object.freeze({
   targets:     Object.freeze({ rung: 'targets',     els: Object.freeze(['#hud-targets-panel']),      memory: true }),
   debris:      Object.freeze({ rung: 'debris',      els: Object.freeze(['#hud-wireframe-container']), memory: true }),
@@ -405,14 +415,30 @@ export class FloorMask {
   }
 
   /**
-   * @private A pane's ONE live visibility bit. Rung panes read the rung
-   * adapter (the same source PaneDensity trusts); attribute panes read the
-   * mask-owned attribute. null = unknowable (no rung, no elements) — skipped.
+   * @private A pane's ONE visibility bit — the player's INTENT, never on-screen
+   * presence. A rung pane whose elements resolve reads the rung's own
+   * `data-density-hidden` attribute on them (set by the rung's setVisible — the
+   * density `-`, this mask — and cleared by the pane's keys; the mask never
+   * writes it directly, the rung stays the ONE writer). NOT the adapter's
+   * `isVisible()`: HUD's DOM rungs answer false for a pane that is merely OFF
+   * SCREEN (their getClientRects check — PaneDensity's "don't waste a rung"
+   * rule), and reading that as "hidden" captured `pin: false` on F4 for every
+   * player who had not pinned an upgrade goal yet (the widget is display:none
+   * until then), then density-hid the widget the moment they pinned one (Wave 4
+   * behaviour; fixed 2026-09-04, Session G review, once the D5 store began
+   * persisting the capture). Element-less rungs (the navsphere orb —
+   * `isOrbVisible()` IS its intent flag) and headless runs (no doc) fall back to
+   * the adapter. Attribute panes read the mask-owned `data-floor-gone`.
+   * null = unknowable (no rung, no elements) — skipped.
    */
   _isVisible(id, pane) {
     if (pane.rung) {
       const rung = this._rungs.get(pane.rung);
       if (!rung) return null;
+      const els = this._els(pane);
+      if (els.length) {
+        return els.some((el) => !(el.hasAttribute && el.hasAttribute(DENSITY_HIDDEN_ATTR)));
+      }
       try { return !!rung.isVisible(); } catch (_e) { return null; }
     }
     const els = this._els(pane);
