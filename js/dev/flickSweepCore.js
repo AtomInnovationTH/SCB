@@ -42,7 +42,9 @@
  */
 
 import { ZoomLadder } from '../core/ZoomLadder.js';
-import { normalizeWheel, classifyWheelSource, WHEEL_TUNE } from '../systems/WheelRouter.js';
+import {
+  normalizeWheel, classifyWheelSource, WHEEL_TUNE, isHorizontalWheel, wheelDeltaXPx, stepPaneSwipe,
+} from '../systems/WheelRouter.js';
 import { FloorContract } from '../core/FloorContract.js';
 
 /** Sweep knobs (every one overridable per call; defaults documented in 07). */
@@ -58,6 +60,11 @@ export const SWEEP_DEFAULTS = {
     undo: 1.0,              // undos per burst
     latency: 0.5,           // medianLatencyMs / 1000
   },
+  // ── The pane-swipe scorer (Wave 5 Session D; 07-flick-tuning §5 closed) ──
+  paneReversalMs: 1500,     // a page then a REVERSE page within this = a FALSE page (observational, fixed)
+  paneMissLowPx: 90,        // an unfired gesture whose peak |sum| ∈ [this, paneSwipePx) = a MISSED page
+  paneRiseFactor: 1.5,      // inside a latched tail: |dx| ≥ prev × this (and ≥ prev + paneRiseMinPx) after ≥ 2 decaying events = an EATEN second flick
+  paneRiseMinPx: 8,
 };
 
 /** Default candidate grid — includes the shipped baseline values
@@ -187,6 +194,11 @@ export function replayTrace(events, opts = {}) {
       ladder.rideFinished({ tMs: endT });   // arms the undo window on-clock
     }
     record(t, ladder.update(t));            // settle-back etc. on the trace clock
+    // Session D: an event the live router CLAIMED for the pane carousel never
+    // reached the zoom core — replay skips it too (flick-trace-2 traces carry
+    // deltaX + the recorded claim verdict; older traces have neither and replay
+    // exactly as before).
+    if (isClaimedEvent(raw, tune)) continue;
     const le = ladderEventFromTrace(raw, tune, opts.invert);
     if (!le) continue;                      // muted class / zero mag: the core never saw it live either
     record(t, ladder.wheel(le));
@@ -195,6 +207,133 @@ export function replayTrace(events, opts = {}) {
     ladder.rideFinished({ tMs: pendingRideEndMs });
   }
   return { decisions, finalState: ladder.getState() };
+}
+
+// ── The pane-swipe monitor (Wave 5 Session D — 07-flick-tuning §5, closed) ──
+
+/**
+ * Would the live router have CLAIMED this recorded event for the pane
+ * carousel? Exactly `WheelRouter._claimPaneSwipe`'s gate replayed from the
+ * recorded fields: the tune's `paneSwipe` on, `isHorizontalWheel` (|deltaX| >
+ * |deltaY|, never a pinch — a recorded `kind:'pinch'` is the tagged synthetic
+ * pinch) and the hub's verdict `wantsPaneSwipe` recorded AT CAPTURE (engaged +
+ * F3 + a pane dep). A trace without `deltaX` (flick-trace-1) or without the
+ * verdict (no pane probe) never claims — replay then matches the pre-Session-C
+ * axis, which is what those traces recorded. Pure.
+ * @param {object} ev - recorded event
+ * @param {typeof WHEEL_TUNE} [tune] - the trace's recorded tune
+ * @returns {boolean}
+ */
+export function isClaimedEvent(ev, tune = WHEEL_TUNE) {
+  if (!ev || !tune.paneSwipe || ev.wantsPaneSwipe !== true) return false;
+  if (!Number.isFinite(ev.deltaX) || ev.deltaX === 0) return false;
+  return isHorizontalWheel({
+    deltaX: ev.deltaX, deltaY: ev.deltaY || 0, ctrlKey: !!ev.ctrlKey,
+    __syntheticPinch: ev.kind === 'pinch',
+  });
+}
+
+/**
+ * Replay the recorded horizontal axis through the pure pane-swipe law
+ * (`stepPaneSwipe` with the recorded `WHEEL_TUNE.paneSwipe*` view, the gesture
+ * gap measured on the INPUT timeline `tIn` when recorded — the router's own
+ * rule — else `tMs`) and score what the player's hands did against what the
+ * grammar decided. Pure; the input array is never mutated.
+ *
+ * A GESTURE is a run of claimed horizontal events whose gaps are < the
+ * recorded `paneSwipeGapMs` (the accumulator's own segmentation — not the
+ * zoom sweep's --gap). Metrics (comparative; read 07-flick-tuning §3):
+ *   gestures        — claimed runs
+ *   pages           — verbs fired (`toward` left/right), pagesPerGesture
+ *   falsePages      — a page followed by a REVERSE page within paneReversalMs
+ *                     (the player walking a page back — a swipe that read wrong)
+ *   missedPages     — unfired gestures whose PEAK |signed sum| reached
+ *                     [paneMissLowPx, paneSwipePx): a flick that almost paged
+ *   eatenFlicks     — rising edges of |deltaX| inside a LATCHED tail (after a
+ *                     page fired, ≥ 2 decaying events, then |dx| ≥ prev ×
+ *                     paneRiseFactor and ≥ prev + paneRiseMinPx): a second
+ *                     deliberate flick the gap law swallowed — the evidence a
+ *                     rising-edge re-arm would need (owner decision 4: NO until
+ *                     these say so)
+ *   fireLatencies   — gesture start → the firing event (ms, input timeline);
+ *                     medianFireLatencyMs
+ *   claimedEvents / horizontalUnclaimed (horizontal-dominant but the hub said
+ *   no — off F3, disengaged, no panes) / pinchEvents (never horizontal)
+ * Traces without `deltaX` report `{ available: false }` (flick-trace-1).
+ *
+ * @param {Array} events - recorded trace events
+ * @param {typeof WHEEL_TUNE} [tune] - the trace's recorded tune (meta.tune)
+ * @param {object} [opts] {paneReversalMs, paneMissLowPx, paneRiseFactor, paneRiseMinPx}
+ * @returns {object} metrics
+ */
+export function scorePaneSwipe(events, tune = WHEEL_TUNE, opts = {}) {
+  const T = { ...WHEEL_TUNE, ...(tune || {}) };
+  const revMs = Number.isFinite(opts.paneReversalMs) ? opts.paneReversalMs : SWEEP_DEFAULTS.paneReversalMs;
+  const missLow = Number.isFinite(opts.paneMissLowPx) ? opts.paneMissLowPx : SWEEP_DEFAULTS.paneMissLowPx;
+  const riseK = Number.isFinite(opts.paneRiseFactor) ? opts.paneRiseFactor : SWEEP_DEFAULTS.paneRiseFactor;
+  const riseMin = Number.isFinite(opts.paneRiseMinPx) ? opts.paneRiseMinPx : SWEEP_DEFAULTS.paneRiseMinPx;
+  const gapMs = Number.isFinite(T.paneSwipeGapMs) ? T.paneSwipeGapMs : WHEEL_TUNE.paneSwipeGapMs;
+  const thr = Number.isFinite(T.paneSwipePx) ? T.paneSwipePx : WHEEL_TUNE.paneSwipePx;
+
+  const list = (events || []).filter((e) => e && Number.isFinite(e.tMs)).slice().sort((a, b) => a.tMs - b.tMs);
+  const available = list.some((e) => Number.isFinite(e.deltaX));
+  const base = {
+    available, tune: { paneSwipe: !!T.paneSwipe, paneSwipePx: thr, paneSwipeGapMs: gapMs, paneSwipeSign: T.paneSwipeSign === -1 ? -1 : 1 },
+    events: list.length, claimedEvents: 0, horizontalUnclaimed: 0, pinchEvents: 0,
+    gestures: 0, pages: 0, pagesPerGesture: 0, falsePages: 0, missedPages: 0, eatenFlicks: 0,
+    fireLatencies: [], medianFireLatencyMs: null, pageLog: [],
+  };
+  if (!available) return base;
+
+  const s = { acc: 0, lastMs: -Infinity, latched: false };
+  let g = null;                     // the open gesture
+  const closeGesture = () => {
+    if (!g) return;
+    base.gestures++;
+    if (!g.fired && g.peak >= missLow && g.peak < thr) base.missedPages++;
+    g = null;
+  };
+  for (const ev of list) {
+    if (ev.kind === 'pinch' || ev.ctrlKey) { base.pinchEvents++; continue; }
+    const horizontal = isHorizontalWheel({ deltaX: ev.deltaX || 0, deltaY: ev.deltaY || 0, ctrlKey: false });
+    if (!horizontal) continue;
+    if (!isClaimedEvent(ev, T)) { base.horizontalUnclaimed++; continue; }
+    base.claimedEvents++;
+    const tIn = Number.isFinite(ev.tIn) ? ev.tIn : ev.tMs;
+    const dx = wheelDeltaXPx({ deltaX: ev.deltaX, deltaMode: ev.deltaMode || 0 });
+    if (g && tIn - g.lastIn >= gapMs) closeGesture();
+    if (!g) g = { startIn: tIn, lastIn: tIn, peak: 0, fired: false, prevAbs: null, decaying: 0 };
+    const toward = stepPaneSwipe(s, dx, tIn, T);
+    g.lastIn = tIn;
+    if (!g.fired) {
+      const a = Math.abs(s.acc);
+      if (a > g.peak) g.peak = a;
+    }
+    if (toward) {
+      g.fired = true;
+      g.peak = thr;
+      base.pages++;
+      base.fireLatencies.push(tIn - g.startIn);
+      base.pageLog.push({ tMs: ev.tMs, toward });
+      g.prevAbs = Math.abs(dx); g.decaying = 0;
+    } else if (g.fired) {
+      // Inside the latched tail: watch for a rising edge (a second flick).
+      const a = Math.abs(dx);
+      if (g.prevAbs != null) {
+        if (a < g.prevAbs) g.decaying++;
+        else if (g.decaying >= 2 && a >= g.prevAbs * riseK && a >= g.prevAbs + riseMin) { base.eatenFlicks++; g.decaying = 0; }
+      }
+      g.prevAbs = a;
+    }
+  }
+  closeGesture();
+  for (let i = 1; i < base.pageLog.length; i++) {
+    const p = base.pageLog[i], q = base.pageLog[i - 1];
+    if (p.toward !== q.toward && (p.tMs - q.tMs) <= revMs) base.falsePages++;
+  }
+  base.pagesPerGesture = base.pages / (base.gestures || 1);
+  base.medianFireLatencyMs = median(base.fireLatencies);
+  return base;
 }
 
 // ── Scoring ─────────────────────────────────────────────────────────────────

@@ -37,15 +37,30 @@
  * (netshot pattern); headless / Blob-less contexts get the JSON on
  * console.log instead. Both paths return the JSON string.
  *
- * Event shape   {tMs, kind:'wheel'|'pinch', deltaY, deltaMode, ctrlKey, sourceClass}
- * State shape   {tMs, floor, z01, engaged}
+ * Event shape   {tMs, tIn, kind:'wheel'|'pinch', deltaX, deltaY, deltaMode,
+ *                ctrlKey, sourceClass, wantsPaneSwipe}
+ * State shape   {tMs, floor, z01, engaged, refit, library, wantsPaneSwipe}
  * Meta shape    {version, startedAt, t0Ms, tune, touchTune, spring, eventCap,
  *                stateCap, sampleHz, droppedEvents, droppedStates}
  *
  * sourceClass comes from the REAL classifier (classifyWheelSource — a pure
  * WheelRouter export) with the live __WHEEL_TUNE override view, so replay
- * never has to re-derive 'mouse' vs 'scroll' from fields the trace doesn't
- * carry (deltaX is consumed by classification, not recorded).
+ * never has to re-derive 'mouse' vs 'scroll' from the raw fields.
+ *
+ * THE SWIPE MONITOR (Wave 5 Session D — 07-flick-tuning §5, closed): since
+ * Session C the live router CLAIMS horizontal-dominant wheel events on the
+ * workbench floor for the pane carousel (WheelRouter._claimPaneSwipe:
+ * isHorizontalWheel + stepPaneSwipe, gated on LadderController.
+ * wantsPaneSwipe()). So every wheel event now also carries `deltaX` (the
+ * pane axis), `tIn` (e.timeStamp — the INPUT-timeline stamp the router
+ * measures the gesture gap on; null when the event carries none) and
+ * `wantsPaneSwipe` (the hub's live claim verdict at capture time, read
+ * through the probe's read-only `paneState()`; null without it), and the
+ * 10 Hz sample carries the two panes' open state + the same verdict. The
+ * sweep's pane-swipe scorer (flickSweepCore.scorePaneSwipe) replays the
+ * claim from exactly these fields with the recorded WHEEL_TUNE.paneSwipe*
+ * view. Traces recorded before this shape (flick-trace-1) carry no deltaX —
+ * the scorer reports them honestly as unavailable.
  *
  * @module dev/FlickTraceRecorder
  */
@@ -54,8 +69,10 @@ import { classifyWheelSource, WHEEL_TUNE } from '../systems/WheelRouter.js';
 import { pinchWheelDeltaY, TOUCH_TUNE } from '../ui/TouchControls.js';
 import { FloorContract } from '../core/FloorContract.js';
 
-/** Trace-format version tag (bump on shape changes; the sweep validates it). */
-export const TRACE_VERSION = 'flick-trace-1';
+/** Trace-format version tag (bump on shape changes; the sweep validates it).
+ *  'flick-trace-2' (Session D): + deltaX / tIn / wantsPaneSwipe per event,
+ *  + refit / library / wantsPaneSwipe per state sample. */
+export const TRACE_VERSION = 'flick-trace-2';
 
 /** Bounds + cadence defaults (overridable via constructor deps, tests use tiny caps). */
 export const TRACE_DEFAULTS = {
@@ -216,16 +233,25 @@ export class FlickTraceRecorder {
    */
   handleWheel(e) {
     if (!this._recording || !e) return;
+    const ps = this._readPaneState();
     this._events.push({
       tMs: this._stamp(),
+      // The INPUT-timeline stamp (a DOMHighResTimeStamp on the performance.now()
+      // timeline) — the clock WheelRouter measures the pane-swipe gesture gap
+      // on; null when the event carries none (synthetic stubs).
+      tIn: (Number.isFinite(e.timeStamp) && e.timeStamp > 0) ? _round1(e.timeStamp) : null,
       kind: 'wheel',
+      deltaX: _round3(e.deltaX || 0),
       deltaY: _round3(e.deltaY || 0),
       deltaMode: e.deltaMode | 0,
       ctrlKey: !!e.ctrlKey,
-      // The REAL classifier + the LIVE tune view: 'mouse'/'scroll' need
-      // deltaX + integer-detent context that the recorded shape doesn't
-      // carry, so classification happens at capture time, not replay time.
+      // The REAL classifier + the LIVE tune view, at capture time (the
+      // recorded verdict wins in replay — never re-derived).
       sourceClass: classifyWheelSource(e, this._liveWheelTune()),
+      // The hub's live claim verdict for THIS event (LadderController.
+      // paneState().wantsPaneSwipe — engaged + F3 + a pane dep); null when
+      // the probe has no pane surface. Read, never written.
+      wantsPaneSwipe: ps ? ps.wantsPaneSwipe : null,
     });
   }
 
@@ -251,11 +277,14 @@ export class FlickTraceRecorder {
       if (dy !== 0) {
         this._events.push({
           tMs: this._stamp(),
+          tIn: null,              // a derived sample, not a DOM event: no input stamp
           kind: 'pinch',
+          deltaX: 0,              // a pinch is zoom whatever its axis (isHorizontalWheel excludes it)
           deltaY: _round3(dy),
           deltaMode: 0,
           ctrlKey: false,
           sourceClass: 'pinch',   // by construction: routeSyntheticWheel tags __syntheticPinch
+          wantsPaneSwipe: null,   // never claimed — not a wheel event
         });
       }
     }
@@ -276,11 +305,18 @@ export class FlickTraceRecorder {
     if (!this._recording) return;
     const s = this._readProbe();
     if (!s) return;
+    // The pane state (Session D): a function probe may carry it on its own
+    // snapshot; a LadderController-shaped probe answers through paneState().
+    const ps = this._readPaneState() || {};
+    const bool = (a, b) => (typeof a === 'boolean') ? a : ((typeof b === 'boolean') ? b : null);
     this._states.push({
       tMs: this._stamp(),
       floor: Number.isFinite(s.floor) ? s.floor : null,
       z01: Number.isFinite(s.z01) ? _round4(s.z01) : null,
       engaged: typeof s.engaged === 'boolean' ? s.engaged : null,
+      refit: bool(s.refit, ps.refit),
+      library: bool(s.library, ps.library),
+      wantsPaneSwipe: bool(s.wantsPaneSwipe, ps.wantsPaneSwipe),
     });
   }
 
@@ -369,6 +405,26 @@ export class FlickTraceRecorder {
   }
 
   /**
+   * @private The pane surface of the probe (Session D): a LadderController
+   * (or any object) exposing the read-only `paneState()` → {refit, library,
+   * wantsPaneSwipe}; a function probe carrying those keys on its snapshot is
+   * honoured by sampleState directly. Absent / throwing → null, never a
+   * throw, never a write.
+   */
+  _readPaneState() {
+    const p = this._probe;
+    if (!p || typeof p.paneState !== 'function') return null;
+    try {
+      const ps = p.paneState();
+      if (!ps) return null;
+      const bool = (v) => (typeof v === 'boolean') ? v : null;
+      return { refit: bool(ps.refit), library: bool(ps.library), wantsPaneSwipe: bool(ps.wantsPaneSwipe) };
+    } catch (_e) {
+      return null;
+    }
+  }
+
+  /**
    * @private Resolve the injected probe to {floor, z01, engaged}. Accepts a
    * function (returning that shape or a ZoomLadder getState() snapshot) or a
    * LadderController-shaped object. Never throws.
@@ -409,5 +465,6 @@ function _twoFingerDist(e) {
   return Math.hypot(dx, dy);
 }
 
+function _round1(x) { return Math.round(x * 10) / 10; }
 function _round3(x) { return Math.round(x * 1000) / 1000; }
 function _round4(x) { return Math.round(x * 10000) / 10000; }

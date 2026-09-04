@@ -349,6 +349,24 @@ export class LadderController {
   }
 
   /**
+   * Read-only pane probe for the `?trace=1` FlickTraceRecorder (Wave 5
+   * Session D — the swipe monitor, 07-flick-tuning §5 closed): the two
+   * workbench panes' open state and the live swipe-claim verdict, so a
+   * recorded trace can replay `_claimPaneSwipe` exactly as it ran live and a
+   * 10 Hz sample shows which pane the player was in. `refit` / `library` are
+   * null when the dep is absent (a boot without that pane); `wantsPaneSwipe`
+   * is the same answer WheelRouter gets. A getState snapshot at event rate —
+   * never per frame, never a write, never a throw.
+   * @returns {{ refit: boolean|null, library: boolean|null, wantsPaneSwipe: boolean }}
+   */
+  paneState() {
+    const isOpen = (p) => (p && typeof p.isOpen === 'function') ? !!p.isOpen() : null;
+    let wants = false;
+    try { wants = this.wantsPaneSwipe(); } catch (_e) { wants = false; }
+    return { refit: isOpen(this._refit), library: isOpen(this._library), wantsPaneSwipe: wants };
+  }
+
+  /**
    * The ONE horizontal page verb (Wave 5 Session C): step the workbench
    * carousel **[REFIT] — [ship] — [LIBRARY]** one position toward a screen
    * side. WheelRouter's accumulator decides WHEN (one call per flick, never
