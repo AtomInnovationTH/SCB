@@ -377,8 +377,14 @@ export class ScoringSystem {
       totalMassKg: this.totalMassRecovered,
     });
 
-    // ST-4.C: Check for mission transition after debris cleared count changes
-    this._checkMissionTransition();
+    // ST-4.C mission transition check — MOVED (Wave 5 Session F, D4). It ran
+    // here, BEFORE the caller's gameState.clearDebris() incremented the count
+    // (this method never touches gameState.debrisCleared — S1 Fix M1), so at
+    // the 5th catch getMissionNumber() still read mission 1 and MISSION_START
+    // { missionNumber: 2 } fired one catch LATE, on the 6th. The counter's owner
+    // (GameFlowManager) now calls checkMissionTransition() right after each
+    // clearDebris(), so the event fires ON the boundary catch with the new
+    // number (03-plan Session E FINDINGS (f)).
 
     // S1 Fix M1+L2: Win check REMOVED from ScoringSystem.
     // GameState.update() is the sole win-condition emitter.
@@ -541,6 +547,26 @@ export class ScoringSystem {
   // ==========================================================================
   // ST-4.C: Mission Profile Helpers
   // ==========================================================================
+
+  /**
+   * Mission boundary check — the ONE public entry (Wave 5 Session F, D4).
+   * Called by the counter's owner (GameFlowManager) right AFTER
+   * `gameState.clearDebris()` on every credited clear (the CATCH_PROCESSED and
+   * ARM_DEORBIT paths), so MISSION_START { missionNumber, profile } fires ON the
+   * boundary catch — the 5th catch starts mission 2, the 20th mission 5 — with
+   * the number the mission-keyed onsets (MissionCoach chapters, the ISS /
+   * Starlink bosses) and the field / weather / threat profiles key on.
+   *
+   * Dedupes on `_lastMissionNumber` (reset() → 1), so a second call at the same
+   * count is a no-op. NOT called by the restore path: MENU_CONTINUE assigns
+   * `gameState.debrisCleared` directly and emits no start at resume — the
+   * first credited clear after a continue re-asserts the restored mission to
+   * every consumer, the shipped continue behaviour (HUD.js documents that
+   * MISSION_START is not emitted on a bare continue).
+   */
+  checkMissionTransition() {
+    this._checkMissionTransition();
+  }
 
   /**
    * Check if mission number has changed and emit MISSION_START if so.

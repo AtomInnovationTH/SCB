@@ -1042,6 +1042,14 @@ export class GameFlowManager {
 
         // Update game state debris counter (belt-and-suspenders with scoringSystem)
         if (payCredit) gameState.clearDebris();
+        // Wave 5 Session F (D4): the mission boundary check runs HERE, right
+        // after the increment — not inside awardPoints() above, where it read
+        // the pre-catch count and fired MISSION_START one catch late (03-plan
+        // Session E FINDINGS (f)). The 5th catch now starts mission 2 with
+        // { missionNumber: 2 }; the ONE depot decision (_onMissionBoundary
+        // below) follows it in the same tick. A digested / already-paid body
+        // (payCredit false) moved no counter and starts nothing.
+        if (payCredit) scoringSystem.checkMissionTransition();
 
         // Furnace consumed the catch — remove it from the field (emits
         // DEBRIS_REMOVED; wireframe/pins self-clear). Deferred here from the old
@@ -1178,6 +1186,12 @@ export class GameFlowManager {
 
       // Update game state
       gameState.clearDebris();
+      // Wave 5 Session F (D4): the second credited-clear path (Ctrl+Shift+D →
+      // ARM_DEORBIT_CMD → ArmUnit.startDeorbit) — the mission boundary check
+      // follows its increment too, so a sacrifice that lands the 5th clear
+      // starts mission 2 on time. (This path has never carried the depot
+      // decision — pre-existing, FINDINGS.)
+      scoringSystem.checkMissionTransition();
       this.saveGame();
 
       // Wireframe self-clears via DEBRIS_REMOVED listener (Batch 3)
