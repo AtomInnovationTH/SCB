@@ -76,7 +76,15 @@ export const Events = {
 
   // === MISSION (ST-4.C) ===
   /** Emitted when mission number increments (every DEBRIS_PER_MISSION captures).
-   *  Payload: { missionNumber: number, profile: object } */
+   *  Payload: { missionNumber: number, profile: object }
+   *  Wave 5 Session F (D4): fires ON the boundary catch — the credited clear that
+   *  makes debrisCleared = DEBRIS_PER_MISSION × (N−1) starts mission N (the 5th
+   *  catch → 2, the 20th → 5, the 40th → 9); GameFlowManager calls
+   *  ScoringSystem.checkMissionTransition() right after each clearDebris(). The
+   *  boss / chapter-coach onsets key on it (arm here, fire on the first gameplay
+   *  frame with no depot stop pending — _bossLifecycle.MissionOnset). Not
+   *  emitted for mission 1, nor at a continue (the first clear after a resume
+   *  re-asserts the restored mission). */
   MISSION_START:      'mission:start',
 
   // === MISSION MID-FLIGHT EVENTS (ST-4.D) ===
@@ -275,10 +283,13 @@ export const Events = {
    * entry) or the window lapses on the next credited catch (`reason: 'lapsed'`;
    * owner decision 2, 2026-09-04) or the game resets (`reason: 'reset'`).
    * The ONE new key of the session: no shipped event carries "the doorway is
-   * open" — MISSION_START fires one catch late (ScoringSystem checks the
-   * mission number BEFORE the counter increments), DEBRIS_CLEARED would make
-   * the rail re-derive the chapter rule (two owners of one decision), and
-   * COMMS_MESSAGE is prose. Consumer: main.js → RailIndicator.setDepotInvitation
+   * open" — MISSION_START fired one catch late at the time (ScoringSystem checked
+   * the mission number BEFORE the counter incremented; fixed in Wave 5 Session F,
+   * c87a61e — it is on the boundary catch now, and the boss / coach onsets ride
+   * it; this key stays because it carries the doorway's open/closed STATE,
+   * which a start never will), DEBRIS_CLEARED would make the rail re-derive the
+   * chapter rule (two owners of one decision), and COMMS_MESSAGE is prose.
+   * Consumer: main.js → RailIndicator.setDepotInvitation
    * (registered inside the LADDER.ENABLED gate; never emitted with the ladder off).
    */
   DEPOT_INVITATION:   'depot:invitation',
