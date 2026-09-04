@@ -29,6 +29,15 @@
  *   Warning amber #ffaa00 is the shipped HUD warning family (DockingReticle) —
  *   deliberately NOT a new VisualLaw law color (the 5-color pin stands).
  *
+ * Wave 5 Session E (08-workbench §5 D3 — the depot INVITATION): from chapter
+ * 4 on a mission boundary no longer forces the depot stop; instead the DEPOT
+ * notch GLOWS — VisualLaw VALUE gold, STEADY (gold never pulses), border +
+ * label + a soft halo (the shape channel: colour is never the sole channel) —
+ * until the player pushes into the doorway or the window lapses. Driven by
+ * `setDepotInvitation(open)` from main.js's DEPOT_INVITATION listener (the
+ * rail stays EventBus-free). The paint law is pure (`notchPaint`): a denial
+ * flash still wins while it flashes, then the glow returns.
+ *
  * Fully DOM-guarded so it is inert (and constructible) in headless tests; no
  * timers are ever allocated unless the DOM exists.
  *
@@ -50,6 +59,13 @@ export const RATE_WRITE_MIN_MS = 250;
 /** Notch resting/active palette (INFO instrument frame, PLAYER current). */
 const NOTCH_REST_BORDER = 'rgba(0,204,255,0.35)';
 const NOTCH_REST_COLOR = 'rgba(0,204,255,0.62)';
+/**
+ * The invitation halo — VisualLaw.COLORS.VALUE (#ffd166) at 0.55 alpha, a
+ * STEADY box-shadow (no animation, no transition pulse: gold never pulses).
+ */
+export const INVITE_HALO = '0 0 10px rgba(255,209,102,0.55)';
+/** The floor whose notch carries the invitation (FloorContract F2, 'DEPOT'). */
+const DEPOT_FLOOR = (FloorContract.FLOORS.find((f) => f.name === 'DEPOT') || { id: 2 }).id;
 
 export class RailIndicator {
   constructor() {
@@ -66,6 +82,8 @@ export class RailIndicator {
     this._rate = null;
     this._rateLabel = null;
     this._rateWriteMs = -Infinity;
+    /** The depot invitation (Wave 5 Session E): true while the DEPOT notch glows. */
+    this._invite = false;
   }
 
   /**
@@ -124,6 +142,48 @@ export class RailIndicator {
     const text = (typeof hint === 'string' && hint.trim()) ? hint.trim() : '';
     return { show: text.length > 0, text };
   }
+
+  /**
+   * Pure notch paint law (headless-testable) — what colours a notch wears:
+   *   deny    → THREAT border + label (the G2i hard-wall flash; wins while it flashes)
+   *   invite  → VALUE border + label + the steady INVITE_HALO (the depot invitation,
+   *             Wave 5 Session E — gold never pulses; the halo is the shape channel)
+   *   current → PLAYER border + label (the engaged floor)
+   *   else    → the INFO resting frame
+   * `invite` outranks `current` (a notch that is both — the player standing on the
+   * glowing depot — is transient: arriving on F2 enters the SHOP and closes it).
+   * @param {{current:boolean, deny?:boolean, invite?:boolean}} flags
+   * @returns {{borderColor:string, color:string, boxShadow:string}}
+   */
+  static notchPaint({ current, deny = false, invite = false }) {
+    if (deny) return { borderColor: VisualLaw.COLORS.THREAT, color: VisualLaw.COLORS.THREAT, boxShadow: 'none' };
+    if (invite) return { borderColor: VisualLaw.COLORS.VALUE, color: VisualLaw.COLORS.VALUE, boxShadow: INVITE_HALO };
+    if (current) return { borderColor: VisualLaw.COLORS.PLAYER, color: VisualLaw.COLORS.PLAYER, boxShadow: 'none' };
+    return { borderColor: NOTCH_REST_BORDER, color: NOTCH_REST_COLOR, boxShadow: 'none' };
+  }
+
+  /** The DEPOT notch's 1-based floor id (FloorContract F2). */
+  static get DEPOT_FLOOR() { return DEPOT_FLOOR; }
+
+  /**
+   * The depot invitation (08-workbench §5 D3): `open` true → the DEPOT notch
+   * glows VALUE gold, steady, until `open` false (the player entered, the
+   * window lapsed, or the game reset). Fed by main.js from DEPOT_INVITATION —
+   * the rail never derives the chapter rule itself. Headless / not yet built:
+   * the flag is kept and painted on the first refresh after build. Write-on-
+   * change: the notch repaints once per flip, never per frame.
+   * @param {boolean} open
+   */
+  setDepotInvitation(open) {
+    const want = !!open;
+    if (want === this._invite) return;
+    this._invite = want;
+    const n = this._notches[DEPOT_FLOOR - 1];
+    if (n) n._cur = null;                 // force the next refresh to repaint it
+  }
+
+  /** @returns {boolean} true while the DEPOT notch glows (the invitation is open). */
+  isDepotInvited() { return this._invite; }
 
   /** Lazily build the DOM (idempotent, no-op headless). @private */
   _build() {
@@ -230,8 +290,14 @@ export class RailIndicator {
       if (!n) continue;
       const { current, fillPct } = RailIndicator.notchState(state, i + 1, this._notchScratch);
       if (n._cur !== current && !n._deny) {
-        n.el.style.borderColor = current ? VisualLaw.COLORS.PLAYER : NOTCH_REST_BORDER;
-        n.el.style.color = current ? VisualLaw.COLORS.PLAYER : NOTCH_REST_COLOR;
+        // The depot invitation (Wave 5 Session E) paints through the same law
+        // as the current-floor mark; a flip of either repaints once (the
+        // invite flip nulls _cur — setDepotInvitation). Denial flash wins.
+        const invite = this._invite && (i + 1 === DEPOT_FLOOR);
+        const p = RailIndicator.notchPaint({ current, invite });
+        n.el.style.borderColor = p.borderColor;
+        n.el.style.color = p.color;
+        n.el.style.boxShadow = p.boxShadow;
         n._cur = current;
       }
       if (n._pct !== fillPct) {
@@ -289,8 +355,10 @@ export class RailIndicator {
     const n = this._notches[(floor ?? -1) - 1];
     if (n) {
       n._deny = true;
-      n.el.style.borderColor = VisualLaw.COLORS.THREAT;
-      n.el.style.color = VisualLaw.COLORS.THREAT;
+      const p = RailIndicator.notchPaint({ current: false, deny: true });
+      n.el.style.borderColor = p.borderColor;
+      n.el.style.color = p.color;
+      n.el.style.boxShadow = p.boxShadow;   // the flash also lifts an invitation halo for its 320 ms
       if (n._denyTimer) clearTimeout(n._denyTimer);
       n._denyTimer = setTimeout(() => {
         n._denyTimer = null;

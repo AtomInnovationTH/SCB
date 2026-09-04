@@ -61,6 +61,15 @@ export class GameFlowManager {
     /** @type {number|null} */
     this._shopTimeoutId = null;
 
+    /**
+     * Wave 5 Session E (08-workbench §5 D3): the open depot INVITATION, or
+     * null — `{ chapter, debrisCleared }` from the boundary catch that opened
+     * it. In-memory only (never saved): a reload simply has no invitation
+     * open. Closed by any SHOP entry ('entered'), the next credited catch
+     * ('lapsed' — owner decision 2), terminal states and resetGame ('reset').
+     */
+    this._depotInvitation = null;
+
     /** @type {number|null} Timer for delayed score-group HUD activation in ORBITAL_VIEW */
     this._scoreGroupTimer = null;
 
@@ -180,9 +189,10 @@ export class GameFlowManager {
     // true before ShopScreen reads storage in its own handler).
     let firstDepotVisit = false;
 
-    // Clear pending shop timeout on terminal states
+    // Clear pending shop timeout on terminal states (and any open depot invitation)
     if (state === GameStates.GAME_OVER || state === GameStates.WIN) {
       if (this._shopTimeoutId) { timerManager.clear(this._shopTimeoutId); this._shopTimeoutId = null; }
+      this._closeDepotInvitation('reset');
     }
 
     // Force state for reset scenarios
@@ -310,6 +320,9 @@ export class GameFlowManager {
       case GameStates.SHOP:
         // HUD self-manages visibility via GAME_STATE_CHANGE
         firstDepotVisit = this._applyFirstDepotFloor();
+        // Any depot entry (the doorway, the B key, the iPad chip) takes the
+        // open invitation up — the notch glow ends (Wave 5 Session E).
+        this._closeDepotInvitation('entered');
         break;
 
       case GameStates.GAME_OVER:
@@ -1091,6 +1104,10 @@ export class GameFlowManager {
         const debrisCount = gameState.debrisCleared;
         if (payCredit && debrisCount > 0 && debrisCount % SHOP_CADENCE === 0) {
           if (gameState.isGameplay()) this._onMissionBoundary(debrisCount);
+        } else if (payCredit) {
+          // The invitation window is "until the next credited catch" (owner
+          // decision 2, 2026-09-04): a catch that is not a boundary lapses it.
+          this._closeDepotInvitation('lapsed');
         }
       }
     });
@@ -1622,6 +1639,8 @@ export class GameFlowManager {
       timerManager.clear(this._shopTimeoutId);
       this._shopTimeoutId = null;
     }
+    // An open depot invitation belongs to the game that just ended.
+    this._closeDepotInvitation('reset');
     timerManager.clearByOwner(this);
   }
 
@@ -1764,9 +1783,16 @@ export class GameFlowManager {
    *     timer's length), flips into the SHOP as the card finishes fading (the
    *     card holds for dwell − TEACHING.FADE_OUT_MS). The card IS the cause:
    *     one timer, one number, no silent cut.
-   *   • Chapter FORCED_DEPOT_CHAPTERS+1 on: no forced stop — the depot is an
-   *     INVITATION (lands with the next commit; until then the shipped stop,
-   *     comms + the silent 2500 ms).
+   *   • Chapter FORCED_DEPOT_CHAPTERS+1 on: NO forced stop — the depot is an
+   *     INVITATION (`_openDepotInvitation`): comms "DEPOT DOORWAY OPEN", ONE
+   *     `DEPOT_INVITATION { open: true }` (the rail's DEPOT notch glows —
+   *     VisualLaw VALUE, steady), and the first-depot 600 cr floor moves to the
+   *     first invitation if the depot was never entered (the SAME
+   *     `_applyFirstDepotFloor` — one grant rule, one place, two callers). The
+   *     doorway itself is the ordinary F3→F2 ride (LadderController `depot`
+   *     host); nothing in ZoomLadder softens. The window is "until the next
+   *     credited catch" (owner decision 2): the CATCH_PROCESSED handler lapses
+   *     it; any SHOP entry closes it as 'entered'.
    *
    * @param {number} debrisCount - gameState.debrisCleared at the boundary (a
    *   positive multiple of SHOP_CADENCE)
@@ -1776,17 +1802,19 @@ export class GameFlowManager {
     const M = Constants.MISSIONS;
     const ladderOn = !!(Constants.LADDER && Constants.LADDER.ENABLED);
     const { missionsCompleted } = getMissionProgress(debrisCount);
-    // The card ceremony: ladder on AND the completed chapter is a forced-stop one.
-    // (Chapter FORCED_DEPOT_CHAPTERS+1 on with the ladder on takes the shipped
-    // stop until the invitation lands — the next commit.)
-    const ceremony = ladderOn && missionsCompleted <= M.FORCED_DEPOT_CHAPTERS;
-    // The comms line stays on every forced stop (shipped text, shipped priority).
+    if (ladderOn && missionsCompleted > M.FORCED_DEPOT_CHAPTERS) {
+      this._openDepotInvitation(debrisCount, missionsCompleted);
+      return;
+    }
+    // The forced stop (every chapter with the ladder off; chapters 1..N with it
+    // on). The comms line stays (shipped text, shipped priority).
     eventBus.emit(Events.COMMS_MESSAGE, {
       text: `${debrisCount} debris cleared. Return to depot for resupply`,
       priority: 'high',
     });
     let dwellMs = 2500;   // the shipped silent cut (ladder off)
-    if (ceremony) {
+    if (ladderOn) {
+      // The card ceremony — the dwell becomes the card's.
       dwellMs = M.COMPLETE_CARD_MS;
       const fadeMs = (Constants.TEACHING && Constants.TEACHING.FADE_OUT_MS) || 500;
       eventBus.emit(Events.TEACHING_MOMENT_FORCE, {
@@ -1806,6 +1834,45 @@ export class GameFlowManager {
   }
 
   /**
+   * Open the depot invitation (chapter FORCED_DEPOT_CHAPTERS+1 on, ladder on).
+   * A boundary landing while one is already open (only possible if the window
+   * outlived a whole chapter — it cannot, the next catch lapses it) simply
+   * re-opens it for the new chapter: the notch glow is idempotent.
+   * @param {number} debrisCount
+   * @param {number} missionsCompleted - the chapter just completed
+   * @private
+   */
+  _openDepotInvitation(debrisCount, missionsCompleted) {
+    // The first-depot floor moves to the first INVITATION when the depot was
+    // never entered — the same one-shot rule + flag as the SHOP entry (a
+    // visited profile returns false and pays nothing).
+    const firstInvitation = this._applyFirstDepotFloor();
+    this._depotInvitation = { chapter: missionsCompleted + 1, debrisCleared: debrisCount };
+    eventBus.emit(Events.COMMS_MESSAGE, {
+      text: `DEPOT DOORWAY OPEN \u2014 ${debrisCount} debris cleared. Push in when ready, or fly on.`,
+      priority: 'high',
+    });
+    eventBus.emit(Events.DEPOT_INVITATION, {
+      open: true, chapter: missionsCompleted + 1, debrisCleared: debrisCount, firstInvitation,
+    });
+  }
+
+  /**
+   * Close the open depot invitation, if any: ONE `DEPOT_INVITATION { open:
+   * false, reason }` so the rail's notch glow ends. Idempotent — nothing open,
+   * nothing emitted (every caller is a "maybe": SHOP entry, the next catch,
+   * terminal states, resetGame).
+   * @param {'entered'|'lapsed'|'reset'} reason
+   * @private
+   */
+  _closeDepotInvitation(reason) {
+    if (!this._depotInvitation) return;
+    const was = this._depotInvitation;
+    this._depotInvitation = null;
+    eventBus.emit(Events.DEPOT_INVITATION, { open: false, reason, chapter: was.chapter });
+  }
+
+  /**
    * First-depot settlement (first-credit legibility + early-shop tension plan).
    * On the player's true first depot visit only — gated by the profile-permanent
    * FIRST_DEPOT_VISITED ceremony flag — pay a one-time, on-theme "first cleanup
@@ -1813,7 +1880,10 @@ export class GameFlowManager {
    * if it is below that. This guarantees one ~500 starter is affordable without
    * gifting two upgrades or the 800 net. Runs once per profile and survives
    * GAMEOVER_CONTINUE (which resets debrisCleared but not the flag).
-   * Called on SHOP entry (a depot arrival), never on SHOP_DEPLOY (exit).
+   * Called on SHOP entry (a depot arrival), never on SHOP_DEPLOY (exit) — and,
+   * since Wave 5 Session E, at the first depot INVITATION (chapter 4+, the
+   * boundary that no longer forces the stop): the floor moves to the invitation
+   * when the depot was never entered. ONE rule, ONE flag, two callers.
    * @returns {boolean} true when this was the first depot visit (so the shop can
    *   render its one-time first-visit framing + recommended-starter ⭐). The
    *   FIRST_DEPOT_VISITED flag is persisted here, so callers must use this

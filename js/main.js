@@ -1585,6 +1585,16 @@ async function init() {
     // Registered inside the gate — a ?ladder=0 boot adds no listeners.
     eventBus.on(Events.CODEX_UNLOCKED, () => { if (libraryPane) libraryPane.refresh(); });
     eventBus.on(Events.CODEX_VIEWED, () => { if (libraryPane) libraryPane.refresh(); });
+    // Wave 5 (Session E) — the depot INVITATION (08-workbench §5 D3): from
+    // chapter 4 on GameFlowManager (the ONE depot decision per catch) emits
+    // DEPOT_INVITATION instead of forcing the stop; the rail's DEPOT notch
+    // glows (VALUE gold, steady) until { open: false } — entered / lapsed /
+    // reset. The rail stays EventBus-free (this is its one feed); the
+    // controller is not involved (no chapter knowledge in the hub). Inside
+    // the gate: a ?ladder=0 boot adds no listener, and never emits it either.
+    eventBus.on(Events.DEPOT_INVITATION, (d) => {
+      if (railIndicator) railIndicator.setDepotInvitation(!!(d && d.open));
+    });
   }
   // Zoom Ladder F1 (ARCHIVE) bridge (Wave 3): arriving on the innermost floor
   // drops into the Tech Library — ArchiveFloor HOSTS the existing

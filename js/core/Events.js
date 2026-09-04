@@ -265,6 +265,23 @@ export const Events = {
   BRIEFING_COMMENCE:  'briefing:commence',
   BRIEFING_SKIP:      'briefing:skip',
   SHOP_DEPLOY:        'shop:deploy',
+  /**
+   * Wave 5 Session E (docs/ladder/08-workbench.md §5 D3): the depot INVITATION.
+   * From chapter MISSIONS.FORCED_DEPOT_CHAPTERS+1 on, a mission-boundary catch
+   * no longer forces the depot stop — GameFlowManager (the ONE depot decision
+   * per catch) emits `{ open: true, chapter, debrisCleared, firstInvitation }`
+   * and the rail's DEPOT notch glows (VisualLaw VALUE, steady) until the player
+   * pushes into the doorway (`{ open: false, reason: 'entered' }` on any SHOP
+   * entry) or the window lapses on the next credited catch (`reason: 'lapsed'`;
+   * owner decision 2, 2026-09-04) or the game resets (`reason: 'reset'`).
+   * The ONE new key of the session: no shipped event carries "the doorway is
+   * open" — MISSION_START fires one catch late (ScoringSystem checks the
+   * mission number BEFORE the counter increments), DEBRIS_CLEARED would make
+   * the rail re-derive the chapter rule (two owners of one decision), and
+   * COMMS_MESSAGE is prose. Consumer: main.js → RailIndicator.setDepotInvitation
+   * (registered inside the LADDER.ENABLED gate; never emitted with the ladder off).
+   */
+  DEPOT_INVITATION:   'depot:invitation',
   GAMEOVER_RETRY:     'gameover:retry',
   GAMEOVER_MENU:      'gameover:menu',
   GAMEOVER_CONTINUE:  'gameover:continue',
