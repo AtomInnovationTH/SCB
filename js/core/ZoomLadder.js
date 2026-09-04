@@ -44,6 +44,11 @@
  *   spring.CHARGE_THRESHOLD 3, rules.wheelZ01Step 0.04,
  *   rules.knockToKlaxonMs 1000, rules.initialFloor 4 / initialZ01 0.5.
  *
+ * D5 (Wave 5 Session G): `place({tMs, floor, z01})` is the ONE placement
+ * method — a settled cut with no decision, for S2's invisible moments only
+ * (the depot park under the SHOP overlay; the saved-view restore before the
+ * first engage). Every visible transition is still a ride (00-spec §4).
+ *
  * @module core/ZoomLadder
  */
 
@@ -413,6 +418,41 @@ export class ZoomLadder {
     if (this._ride) return [];
     if (toFloor === this._floor || !this._byId.has(toFloor)) return [];
     return this._rideTo(toFloor, 'jump', this._rules.miniRideMs);
+  }
+
+  /**
+   * D5 placement (Wave 5 Session G, docs/ladder/06-core-api.md "place"): a
+   * settled CUT of the ladder position to (floor, z01) — no ride, no decision
+   * emitted, nothing for S2 to fly. The ONE exception to "never a cut"
+   * (00-spec §4 is about VISIBLE transitions): S2 calls this only where no
+   * camera ride can be seen — parking the core back on the hull under the
+   * SHOP overlay (the depot return lands at the exact z01 the player left) and
+   * restoring a saved (floor, z01) before the first engage of a continued run.
+   *
+   * Refusals (state untouched, returns false): a ride in flight (S2 must
+   * `rideFinished` first — a cut under a flying camera would desync them), an
+   * unknown floor, a non-finite z01. Otherwise z01 is clamped to [0, 1] and
+   * the spring, settle latch, alarm revert point and the G3 undo window are
+   * released — the placed position is a fresh rest, exactly as after a
+   * completed ride. It is NOT an input (`_lastInputTMs` untouched): a z01
+   * placed inside a wall band settles to the edge on the next update, so a
+   * placement can never leave the camera resting in the wall (02-traps T6).
+   *
+   * @param {{ tMs: number, floor: number, z01: number }} arg
+   * @returns {boolean} true when placed
+   */
+  place({ tMs, floor, z01 }) {
+    if (this._ride) return false;
+    if (!this._byId.has(floor)) return false;
+    if (typeof z01 !== 'number' || !Number.isFinite(z01)) return false;
+    if (Number.isFinite(tMs)) this._tick(tMs);
+    this._floor = floor;
+    this._z01 = Math.min(1, Math.max(0, z01));
+    this._settled = false;
+    this._preRide = null;
+    this._releaseSpring();
+    this._clearUndoWindow();
+    return true;
   }
 
   /** Click = re-aim the elevator; double-click adds a one-floor ride down. */

@@ -22,7 +22,9 @@
  * Wave 5 Session E (08-workbench §5 D1/D3): floor 2 (DEPOT) is a DOORWAY —
  * a ride that arrives on it from a floor above enters the SHOP GameState at
  * ride END through the optional `depot` host (`_enterDepot`), and the core is
- * parked back on the floor the player left so the return lands there.
+ * parked back on the floor the player left so the return lands there — since
+ * Wave 5 Session G (D5) at the exact working z01 they left, through the ONE
+ * core placement method (`ZoomLadder.place`).
  *
  * Activation: the ladder lives entirely INSIDE gameplay states (T4). It engages
  * when `Constants.LADDER.ENABLED` and `gameState.isGameplay()`, and disengages
@@ -47,6 +49,25 @@ const CROSS_RIDE_MS = 550;
  * Retires with the deferred 7→5 contract change (00-spec §3 F2 amendment).
  */
 const DEPOT_FLOOR_ID = 2;
+
+/**
+ * D5 (Wave 5 Session G): is `z01` a FREE-zone rest on a floor — strictly
+ * between the two wall edges (`WALL_ZONE_FRAC` … 1 − `WALL_ZONE_FRAC`)? The
+ * controller remembers the last such position per applied floor as the
+ * player's WORKING position (`_restZ01`): the wall edges themselves (a
+ * flick-to-wall landing, a settle-back) and the creep inside a band are the
+ * GESTURE of leaving a floor, not a place the player was working, so the depot
+ * return parks at the position before the push began (the Session E doorway
+ * witness left F3 at 0.75 through the 0.15 wall — the return lands at 0.75),
+ * and never at the doorway's own threshold (02-traps T6: re-entering a floor
+ * must not resume inside the wall band).
+ * @param {number} z01
+ * @returns {boolean}
+ */
+function isFreeRest(z01) {
+  const w = FloorContract.LADDER_GEOMETRY.WALL_ZONE_FRAC;
+  return typeof z01 === 'number' && Number.isFinite(z01) && z01 > w && z01 < 1 - w;
+}
 
 /**
  * G1 (post-M3): runtime-adapt holdoff window after the last ladder input.
@@ -104,8 +125,9 @@ export class LadderController {
    *   END — so the cross clunk (`sfx.onCross`, fired at the decision) precedes
    *   the flip by the whole 550 ms ride (02-traps T8: the SHOP state suspends
    *   the audio context synchronously). After a landed flip the core is parked
-   *   back on the floor the player LEFT (its own (floor, z01) is the in-memory
-   *   floor memory across the SHOP state — `_disengage` never resets it), so the
+   *   back on the floor the player LEFT, at the working z01 they left it at
+   *   (D5, `ZoomLadder.place`; its own (floor, z01) is the in-memory floor
+   *   memory across the SHOP state — `_disengage` never resets it), so the
    *   return re-engages on the hull, never on F2 again (which would re-enter the
    *   depot) and never on F4. Optional — absent it F2 is the empty room it was.
    *   Engaging DIRECTLY on floor 2 (no ride) never enters; arrivals from F1
@@ -191,6 +213,16 @@ export class LadderController {
      * to park the core for the return). null until the first engage.
      */
     this._floorApplied = null;
+    /**
+     * D5 (Wave 5 Session G): the last FREE-zone rest z01 on the applied floor —
+     * the player's working position (see `isFreeRest`). Seeded at engage and
+     * at every floor ARRIVAL from the entry z01, advanced by every free `move`
+     * decision, untouched by flick-to-wall landings / settles / creep. Read at
+     * the START of a ride into the depot doorway so `_enterDepot` can park the
+     * core back at exactly this z01 (ZoomLadder.place) instead of the contract
+     * entry. null = no free rest known on this floor yet → the entry fallback.
+     */
+    this._restZ01 = null;
   }
 
   /** The underlying pure core (read-only use — rail/tests). */
@@ -454,6 +486,9 @@ export class LadderController {
     if (this._cameraSystem && this._cameraSystem.ladderEngage) {
       this._cameraSystem.ladderEngage(frame);
     }
+    // D5: the engage position seeds the working-position memory for this floor
+    // (a parked depot return / a restored save re-engage exactly here).
+    this._restZ01 = isFreeRest(s.z01) ? s.z01 : null;
     this._applyFidelity(s.floor);
     this._applyFloorContent(s.floor);
     if (this._rail && this._rail.show) this._rail.show();
@@ -521,6 +556,12 @@ export class LadderController {
           if (this._cameraSystem && this._cameraSystem.ladderSetTarget) {
             this._cameraSystem.ladderSetTarget(this._frame(d.floor, d.z01));
           }
+          // D5 working-position memory: a free-zone move on the applied floor
+          // is where the player is working; wall creep (move.inWall) and the
+          // settle-back to an edge are the leaving gesture and never count.
+          if (d.type === 'move' && !d.inWall && d.floor === this._floorApplied && isFreeRest(d.z01)) {
+            this._restZ01 = d.z01;
+          }
           break;
 
         case 'cross':
@@ -572,6 +613,15 @@ export class LadderController {
   _startRide(toFloor, entryZ01, rideMs, tMs, isCross) {
     // The ORIGIN floor — read BEFORE the destination's content lands below.
     const fromFloor = this._floorApplied;
+    // D5: the origin floor's working position, read BEFORE the arrival re-seeds
+    // it — the depot doorway parks the core back here (`_enterDepot`).
+    const departZ01 = this._restZ01;
+    if (toFloor !== fromFloor) {
+      // A floor change re-seeds the working position from the arrival entry
+      // (0.25 / 0.75 — always a free rest). A same-floor flickWall ride lands
+      // on a wall EDGE and leaves the memory alone (the player is still here).
+      this._restZ01 = isFreeRest(entryZ01) ? entryZ01 : null;
+    }
     this._applyFidelity(toFloor);
     this._applyFloorContent(toFloor);
     const frame = this._frame(toFloor, entryZ01);
@@ -591,7 +641,7 @@ export class LadderController {
       // state flip by the full ride (T8). A superseded ride (flick undo back
       // out mid-flight) never reaches here — the seq guard above.
       if (toFloor === DEPOT_FLOOR_ID && fromFloor != null && fromFloor > DEPOT_FLOOR_ID) {
-        this._enterDepot(fromFloor, t);
+        this._enterDepot(fromFloor, t, departZ01);
       }
     };
     if (this._cameraSystem && this._cameraSystem.ladderStartRide) {
@@ -617,30 +667,36 @@ export class LadderController {
    *   2. Did the flip land? `gameState.isGameplay()` is false the moment it
    *      did. A rejected transition (or a host that declined) leaves the
    *      core on F2 exactly as shipped — the room, not a loop.
-   *   3. Park: `ladder.jump({ toFloor: fromFloor })` moves the core to
-   *      (fromFloor, the contract's arrive-from-below entry z01) and we
-   *      complete that ride synchronously — a hidden cut under the SHOP
-   *      overlay, NOT routed through _apply: no camera ride (the ladder
-   *      disengages on the next update() — SHOP is not a gameplay state, T4),
-   *      no content swap (the SHOP owns the screen; the return's _engage
-   *      applies the floor's content + camera frame from the core's state).
-   *      The core's (floor, z01) is the ONE in-memory floor memory across the
-   *      SHOP state: _disengage never resets it (pinned), and _engage reads
-   *      it — so the return re-engages on the hull the player left, never on
-   *      F2 (which would re-enter the depot) and never on F4. The exact z01
-   *      the player left at is NOT restored: ZoomLadder exposes no (floor,
-   *      z01) placement (jump lands on ENTRY_Z01_FROM_BELOW) — the D5
-   *      persistence session adds the core method; recorded in 03-plan.
+   *   3. Park (D5, Wave 5 Session G): `ladder.place({ floor: fromFloor, z01:
+   *      departZ01 })` — a settled cut to the floor the player left, at the
+   *      WORKING position they left it at (`_restZ01`, read at the doorway
+   *      ride's start: the last free-zone rest, never the wall edge the push
+   *      went through). A hidden cut under the SHOP overlay, NOT routed
+   *      through _apply: no camera ride (the ladder disengages on the next
+   *      update() — SHOP is not a gameplay state, T4), no content swap (the
+   *      SHOP owns the screen; the return's _engage applies the floor's
+   *      content + camera frame from the core's state). The core's (floor,
+   *      z01) is the ONE in-memory floor memory across the SHOP state:
+   *      _disengage never resets it (pinned), and _engage reads it — so the
+   *      return re-engages on the hull the player left, at the z01 they left,
+   *      never on F2 (which would re-enter the depot) and never on F4. With no
+   *      working position known (engaged straight onto a wall edge and pushed
+   *      through — no free rest ever seen) the Session E parking stands:
+   *      `jump({ toFloor })` + a synchronous `rideFinished` → the contract's
+   *      arrive-from-below entry 0.25.
    * @param {number} fromFloor - the floor the ride into F2 departed from (> 2)
    * @param {number} tMs - the ride-completion clock (the core's timeline)
+   * @param {number|null} [departZ01] - the origin floor's working position
    * @private
    */
-  _enterDepot(fromFloor, tMs) {
+  _enterDepot(fromFloor, tMs, departZ01 = null) {
     const host = this._depot;
     if (!host || typeof host.enter !== 'function') return;   // no host → the F2 room, as shipped
     host.enter();
     const gs = this._gameState;
     if (gs && gs.isGameplay && gs.isGameplay()) return;      // the flip did not land → stay on F2
+    if (departZ01 != null && typeof this._ladder.place === 'function' &&
+        this._ladder.place({ tMs, floor: fromFloor, z01: departZ01 })) return;
     const decisions = this._ladder.jump({ tMs, toFloor: fromFloor });
     if (decisions.some((d) => d.type === 'ride')) this._ladder.rideFinished({ tMs });
   }
