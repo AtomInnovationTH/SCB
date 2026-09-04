@@ -1776,6 +1776,26 @@ export class GameFlowManager {
   // ==========================================================================
 
   /**
+   * Wave 5 Session F (D4): is a depot STOP pending — the boundary dwell timer
+   * (`_shopTimeoutId`: the card's COMPLETE_CARD_MS with the ladder on, the
+   * shipped silent 2500 ms with it off) scheduled and not yet fired? The
+   * mission-keyed onsets (MissionCoach chapters, the ISS / Starlink bosses) ARM
+   * on MISSION_START — which now fires on the boundary catch, in this same
+   * handler, BEFORE `_onMissionBoundary` schedules the stop — and hold while
+   * this is true, so a boss never starts under the depot overlay; they fire on
+   * the first gameplay frame after the SHOP closes (the timer nulls itself when
+   * it fires; DEPLOY or the Esc exit both resume gameplay). An invitation
+   * (chapter FORCED_DEPOT_CHAPTERS+1 on, ladder on) schedules nothing → false →
+   * the onset fires at once, invitation open or not. Wired to the three
+   * consumers as a predicate by main.js (`_bossLifecycle.MissionOnset` is the
+   * shared rule). Read-only; nothing else keys on it.
+   * @returns {boolean}
+   */
+  isDepotStopPending() {
+    return this._shopTimeoutId != null;
+  }
+
+  /**
    * The ONE depot decision at a mission boundary — called by the CATCH_PROCESSED
    * handler when a credited catch lands exactly on a SHOP_CADENCE multiple while
    * in gameplay (the sole live SHOP-entry decision per catch; the legacy

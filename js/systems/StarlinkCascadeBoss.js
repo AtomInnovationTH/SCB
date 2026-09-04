@@ -1,11 +1,15 @@
 /**
  * StarlinkCascadeBoss.js — CH9 "race-the-cascade" boss (MISSION_ARC §6).
  *
- * On `SHOP_DEPLOY` into mission `Constants.STARLINK_BOSS.MISSION`, burst-spawn
- * FRAG_COUNT Starlink fragments and start a WINDOW_MIN game-time timer. The
- * Kessler-cascade tension is delivered as escalating comms — this boss does NOT
- * force a KesslerSystem game-over (failure is never a hard punishment, §9).
- * Outcome is emergent from play:
+ * At the MISSION BOUNDARY into mission `Constants.STARLINK_BOSS.MISSION` (the
+ * 40th credited catch → `MISSION_START { missionNumber: 9 }`; Wave 5 Session F
+ * re-homed the onset here from `SHOP_DEPLOY`, which the chapter-4+ depot
+ * INVITATION made optional), ARM; on the first gameplay frame with no depot stop
+ * pending (`_bossLifecycle.MissionOnset` — never under the depot overlay),
+ * burst-spawn FRAG_COUNT Starlink fragments and start a WINDOW_MIN game-time
+ * timer. The Kessler-cascade tension is delivered as escalating comms — this
+ * boss does NOT force a KesslerSystem game-over (failure is never a hard
+ * punishment, §9). Outcome is emergent from play:
  *
  *   • CONTAINED — clear ALL frags before the window → +CONTAIN_BONUS_KG toward
  *     the elevator contract, +CONTAIN_BONUS_CREDITS, and the "contained" codex.
@@ -13,16 +17,17 @@
  *   • CASCADE   — clear < PARTIAL_FRACTION by the window → "cascade" codex, no bonus.
  *
  * The two codex entries auto-unlock from `STARLINK_BOSS_RESOLVED { outcome }`.
- * Node-safe (no THREE / DOM); shares clear-tracking + the elevator award with
- * the ISS boss via `_bossLifecycle`.
+ * Node-safe (no THREE / DOM); shares clear-tracking, the onset rule + the
+ * elevator award with the ISS boss via `_bossLifecycle`.
  *
  * @module systems/StarlinkCascadeBoss
  */
 
 import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
+import { GameStates } from '../core/GameState.js';
 import { TimeAuthority } from './TimeAuthority.js';
-import { ThreatSet, awardElevatorMass } from './_bossLifecycle.js';
+import { ThreatSet, awardElevatorMass, MissionOnset } from './_bossLifecycle.js';
 
 export class StarlinkCascadeBoss {
   /**
@@ -32,16 +37,21 @@ export class StarlinkCascadeBoss {
    * @param {object} [deps.debrisField]        — spawnStarlinkField({count}) => { ids }
    * @param {object} [deps.shopScreen]
    * @param {object} [deps.persistenceManager]
+   * @param {Function} [deps.depotStopPending] — () => boolean: GameFlowManager.isDepotStopPending(),
+   *   wired by main.js; the armed onset holds while it returns true. Default: never.
    */
-  constructor({ eventBus, scoringSystem = null, debrisField = null, shopScreen = null, persistenceManager = null } = {}) {
+  constructor({ eventBus, scoringSystem = null, debrisField = null, shopScreen = null, persistenceManager = null, depotStopPending = null } = {}) {
     this._eventBus = eventBus;
     this._scoring = scoringSystem;
     this._debrisField = debrisField;
     this._shop = shopScreen;
     this._pm = persistenceManager;
+    this._depotStopPending = typeof depotStopPending === 'function' ? depotStopPending : () => false;
 
     this._completed = false;
     this._active = false;
+    /** @type {MissionOnset} armed at the boundary, fired on the first free gameplay frame. */
+    this._onset = new MissionOnset();
     this._threats = new ThreatSet();
     /** @type {number} game-seconds left in the containment window. */
     this._windowRemainingS = 0;
@@ -59,7 +69,10 @@ export class StarlinkCascadeBoss {
   init() {
     if (this._disposed || !this._eventBus) return;
     const on = (evt, h) => { if (evt) this._unsubs.push(this._eventBus.on(evt, h)); };
-    on(Events.SHOP_DEPLOY, (d) => this._onShopDeploy(d));
+    on(Events.MISSION_START, (d) => this._onMissionStart(d));
+    on(Events.GAME_STATE_CHANGE, (d) => {
+      if (d && (d.to === GameStates.GAME_OVER || d.to === GameStates.WIN)) this._onset.cancel();
+    });
     on(Events.GAME_RESET, () => this.reset());
     on(Events.PERSISTENCE_GATHER, (save) => { if (save) save.starlinkBoss = this._serialize(); });
     on(Events.PERSISTENCE_LOADED, () => {
@@ -68,8 +81,11 @@ export class StarlinkCascadeBoss {
     });
   }
 
+  /** Per-frame tick (gameplay frames only) — fires an armed onset, then runs the containment window. */
   update(dt) {
-    if (this._disposed || !this._active) return;
+    if (this._disposed) return;
+    if (this._onset.armed && this._onset.poll(this._depotStopPending()) != null) this._fire();
+    if (!this._active) return;
     this._windowRemainingS -= dt * (TimeAuthority.BASE_SCALE || 1);
 
     const imminentS = (Constants.STARLINK_BOSS.IMMINENT_MIN || 1) * 60;
@@ -91,18 +107,21 @@ export class StarlinkCascadeBoss {
   }
 
   isActive() { return this._active; }
+  isArmed() { return this._onset.armed; }
   hasCompleted() { return this._completed; }
   getWindowRemainingMin() { return this._active ? Math.max(0, this._windowRemainingS / 60) : 0; }
   getProgress() { return { cleared: this._threats.clearedCount, total: this._threats.total }; }
 
   reset() {
     this._endRun();
+    this._onset.cancel();
     this._completed = false;
   }
 
   dispose() {
     this._disposed = true;
     this._endRun();
+    this._onset.cancel();
     for (const u of this._unsubs) { if (typeof u === 'function') u(); }
     this._unsubs.length = 0;
   }
@@ -111,16 +130,22 @@ export class StarlinkCascadeBoss {
   // INTERNAL
   // --------------------------------------------------------------------------
 
-  /** @private */
-  _onShopDeploy(data) {
+  /** @private ARM at the boundary into the boss mission (`_active || _completed`: once per game). */
+  _onMissionStart(data) {
     if (this._active || this._completed) return;
     const cfg = Constants.STARLINK_BOSS;
     if (!cfg) return;
-    const mission = (data && typeof data.mission === 'number')
-      ? data.mission
+    const mission = (data && typeof data.missionNumber === 'number')
+      ? data.missionNumber
       : (this._scoring && typeof this._scoring.getMissionNumber === 'function'
         ? this._scoring.getMissionNumber() : 1);
     if (mission !== cfg.MISSION) return;
+    this._onset.arm(mission);
+  }
+
+  /** @private FIRE on the first free gameplay frame — the guard re-checked. */
+  _fire() {
+    if (this._active || this._completed) return;
     this._start();
   }
 

@@ -1011,7 +1011,12 @@ async function init() {
   commsSystem = new CommsSystem();
 
   // --- CP-4 MissionCoach (chapters 2+ coaching; chapter 1 stays with OnboardingDirector) ---
-  missionCoach = new MissionCoach({ eventBus, scoringSystem, persistenceManager, commsSystem });
+  // Wave 5 Session F (D4): the chapter onset keys on MISSION_START (the mission
+  // boundary) and holds while a depot stop is pending — the predicate is
+  // GameFlowManager's (the ONE depot decision per catch); gameFlowManager is the
+  // imported singleton, read lazily per gameplay frame, so init() order is moot.
+  const depotStopPending = () => gameFlowManager.isDepotStopPending();
+  missionCoach = new MissionCoach({ eventBus, scoringSystem, persistenceManager, commsSystem, depotStopPending });
   missionCoach.init();
 
   // Late-bind live-data + codex context into the inspection callouts. Done here
@@ -1146,15 +1151,16 @@ async function init() {
 
   // --- CH5 ISS conjunction boss (MISSION_ARC §6) — protect-the-asset event ---
   // Needs the shop (elevator-mass award) + debrisField (ISS-track spawn), so it
-  // is constructed after shopScreen is wired, unlike MissionCoach above.
+  // is constructed after shopScreen is wired, unlike MissionCoach above. Onset:
+  // MISSION_START into mission 5 + the same depotStopPending hold (D4).
   issConjunctionBoss = new IssConjunctionBoss({
-    eventBus, scoringSystem, debrisField, shopScreen, persistenceManager,
+    eventBus, scoringSystem, debrisField, shopScreen, persistenceManager, depotStopPending,
   });
   issConjunctionBoss.init();
 
   // --- CH9 Starlink fragmentation boss (MISSION_ARC §6) — race-the-cascade event ---
   starlinkCascadeBoss = new StarlinkCascadeBoss({
-    eventBus, scoringSystem, debrisField, shopScreen, persistenceManager,
+    eventBus, scoringSystem, debrisField, shopScreen, persistenceManager, depotStopPending,
   });
   starlinkCascadeBoss.init();
 

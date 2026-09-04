@@ -2,14 +2,89 @@
  * _bossLifecycle.js — shared, pure primitives for the protect-the-asset / race
  * boss systems (CH5 ISS, CH9 Starlink, …). No EventBus / DOM / THREE — fully
  * Node-testable. Each boss keeps its own outcome + award logic; this module owns
- * the one piece that MUST behave identically across bosses: deciding when a
- * tagged threat fragment has been neutralised (so they can't drift).
+ * the pieces that MUST behave identically across bosses: deciding when a
+ * tagged threat fragment has been neutralised (so they can't drift), and — since
+ * Wave 5 Session F (D4) — WHEN a mission-keyed onset may start (`MissionOnset`,
+ * shared with the MissionCoach chapters: one arm/hold/fire rule, three consumers).
  *
  * @module systems/_bossLifecycle
  */
 
 import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
+
+/**
+ * Wave 5 Session F (D4 — docs/ladder/08-workbench.md §5): the ONE onset rule
+ * for a mission-keyed event (a boss field, a coach chapter). The onsets used to
+ * key on `SHOP_DEPLOY` — "leaving the shop" — which Session E made OPTIONAL from
+ * chapter 4 on (the depot is an invitation), so a player who never pushed into
+ * the doorway never met the ISS / Starlink bosses or heard chapters 5+. They now
+ * key on the MISSION BOUNDARY (`MISSION_START { missionNumber }`, on time since
+ * commit c87a61e) through this rule (owner decision 1, 2026-09-04):
+ *
+ *   • ARM at the boundary — `arm(mission)`; a later arm replaces one that never
+ *     fired (the boundary moved on; a skipped chapter is not queued, as before).
+ *   • FIRE on the first gameplay frame after it that has NO depot stop pending —
+ *     `poll(hold)` once per gameplay update returns the armed mission exactly
+ *     once when it may start, else null. `hold` is the caller's composed
+ *     condition: GameFlowManager.isDepotStopPending() (the forced stop's dwell
+ *     timer is live — chapters 1..FORCED_DEPOT_CHAPTERS with the ladder on,
+ *     every chapter with ?ladder=0) plus any consumer-local reason (the coach's
+ *     "never overlap chapters"). A boss therefore never starts under the depot
+ *     overlay: with a stop pending it holds through the card dwell and the SHOP
+ *     and fires on the first gameplay frame after the SHOP closes (DEPLOY or the
+ *     Esc exit — both resume gameplay; the SHOP itself never ticks these
+ *     systems). With no stop pending (a chapter-4+ invitation, or a clear that
+ *     carried no depot decision) it fires at once.
+ *   • It never fires in the update cycle that armed it. DebrisField's own
+ *     MISSION_START handler re-seats the mission-N welcome cluster on ITS next
+ *     update, and the threat spawner skips `welcomeSpawn` pieces — so the
+ *     spawn must run after that re-seat or the cluster could repurpose the
+ *     boss's frags a frame later (ordering, not timing: no number here).
+ *   • `cancel()` — a terminal state (GAME_OVER / WIN) or a reset drops the arm.
+ *
+ * Pure / Node-safe; pinned by test-bossLifecycle.
+ */
+export class MissionOnset {
+  constructor() {
+    /** @type {number|null} the armed mission, or null. */
+    this._mission = null;
+    /** @type {boolean} armed during the current update cycle — skip one poll. */
+    this._fresh = false;
+  }
+
+  /** @returns {boolean} */
+  get armed() { return this._mission != null; }
+  /** @returns {number|null} */
+  get mission() { return this._mission; }
+
+  /** @param {number} mission */
+  arm(mission) {
+    this._mission = mission;
+    this._fresh = true;
+  }
+
+  /** Drop the arm (terminal state / reset). */
+  cancel() {
+    this._mission = null;
+    this._fresh = false;
+  }
+
+  /**
+   * One gameplay update. Returns the armed mission exactly once when it may
+   * fire — never in the arming cycle, never while `hold` is true.
+   * @param {boolean} [hold=false] — a depot stop is pending / the consumer is busy
+   * @returns {number|null}
+   */
+  poll(hold = false) {
+    if (this._mission == null) return null;
+    if (this._fresh) { this._fresh = false; return null; }
+    if (hold) return null;
+    const mission = this._mission;
+    this._mission = null;
+    return mission;
+  }
+}
 
 /**
  * Pull a debris id out of the various capture/removal payloads

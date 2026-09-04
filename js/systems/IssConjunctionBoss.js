@@ -1,9 +1,15 @@
 /**
  * IssConjunctionBoss.js — CH5 "protect-the-asset" boss (MISSION_ARC_IMPLEMENTATION §6).
  *
- * On `SHOP_DEPLOY` into mission `Constants.ISS_BOSS.MISSION`, spawn FRAG_COUNT
- * Cosmos-1408 threat fragments in the ISS forward track and start a TCA_HOURS
- * game-time countdown. The player's choice is emergent from play (no modal):
+ * At the MISSION BOUNDARY into mission `Constants.ISS_BOSS.MISSION` (the 20th
+ * credited catch → `MISSION_START { missionNumber: 5 }`; Wave 5 Session F
+ * re-homed the onset here from `SHOP_DEPLOY`, which the chapter-4+ depot
+ * INVITATION made optional), ARM; on the first gameplay frame with no depot
+ * stop pending (`_bossLifecycle.MissionOnset` — never under the depot overlay;
+ * at once behind an invitation, after DEPLOY when a forced stop intervened),
+ * spawn FRAG_COUNT Cosmos-1408 threat fragments in the ISS forward track and
+ * start a TCA_HOURS game-time countdown. The player's choice is emergent from
+ * play (no modal):
  *
  *   • INTERCEPT — clear ALL threat frags before TCA → +INTERCEPT_BONUS_KG toward
  *     the elevator contract, +INTERCEPT_BONUS_CREDITS, and the "ISS Saver" codex.
@@ -24,8 +30,9 @@
 
 import { Events } from '../core/Events.js';
 import { Constants } from '../core/Constants.js';
+import { GameStates } from '../core/GameState.js';
 import { TimeAuthority } from './TimeAuthority.js';
-import { ThreatSet, awardElevatorMass } from './_bossLifecycle.js';
+import { ThreatSet, awardElevatorMass, MissionOnset } from './_bossLifecycle.js';
 
 export class IssConjunctionBoss {
   /**
@@ -35,18 +42,23 @@ export class IssConjunctionBoss {
    * @param {object} [deps.debrisField]        — spawnIssThreatField({count}) => { ids }
    * @param {object} [deps.shopScreen]         — get/setContractMass() for the elevator award
    * @param {object} [deps.persistenceManager] — peek() for restore
+   * @param {Function} [deps.depotStopPending] — () => boolean: GameFlowManager.isDepotStopPending(),
+   *   wired by main.js; the armed onset holds while it returns true. Default: never.
    */
-  constructor({ eventBus, scoringSystem = null, debrisField = null, shopScreen = null, persistenceManager = null } = {}) {
+  constructor({ eventBus, scoringSystem = null, debrisField = null, shopScreen = null, persistenceManager = null, depotStopPending = null } = {}) {
     this._eventBus = eventBus;
     this._scoring = scoringSystem;
     this._debrisField = debrisField;
     this._shop = shopScreen;
     this._pm = persistenceManager;
+    this._depotStopPending = typeof depotStopPending === 'function' ? depotStopPending : () => false;
 
     /** @type {boolean} boss already run+resolved this game. */
     this._completed = false;
     /** @type {boolean} boss currently running. */
     this._active = false;
+    /** @type {MissionOnset} armed at the boundary, fired on the first free gameplay frame. */
+    this._onset = new MissionOnset();
     /** @type {ThreatSet} the spawned threat frags + which are neutralised. */
     this._threats = new ThreatSet();
     /** @type {number} game-seconds until closest approach. */
@@ -69,7 +81,11 @@ export class IssConjunctionBoss {
     if (this._disposed || !this._eventBus) return;
     const on = (evt, h) => { if (evt) this._unsubs.push(this._eventBus.on(evt, h)); };
 
-    on(Events.SHOP_DEPLOY, (d) => this._onShopDeploy(d));
+    on(Events.MISSION_START, (d) => this._onMissionStart(d));
+    // A terminal state before the armed onset fires cancels it.
+    on(Events.GAME_STATE_CHANGE, (d) => {
+      if (d && (d.to === GameStates.GAME_OVER || d.to === GameStates.WIN)) this._onset.cancel();
+    });
     on(Events.GAME_RESET, () => this.reset());
     on(Events.PERSISTENCE_GATHER, (save) => { if (save) save.issBoss = this._serialize(); });
     on(Events.PERSISTENCE_LOADED, () => {
@@ -78,9 +94,11 @@ export class IssConjunctionBoss {
     });
   }
 
-  /** Per-frame tick — advances the game-time TCA countdown. */
+  /** Per-frame tick (gameplay frames only) — fires an armed onset, then advances the game-time TCA countdown. */
   update(dt) {
-    if (this._disposed || !this._active) return;
+    if (this._disposed) return;
+    if (this._onset.armed && this._onset.poll(this._depotStopPending()) != null) this._fire();
+    if (!this._active) return;
     this._tcaRemainingS -= dt * (TimeAuthority.BASE_SCALE || 1);
 
     const imminentS = (Constants.ISS_BOSS.IMMINENT_HOURS || 4) * 3600;
@@ -105,6 +123,9 @@ export class IssConjunctionBoss {
   /** @returns {boolean} */
   isActive() { return this._active; }
 
+  /** @returns {boolean} armed at the boundary, not yet started (holding for the depot / the next frame). */
+  isArmed() { return this._onset.armed; }
+
   /** @param {number} [mission] @returns {boolean} */
   hasCompleted() { return this._completed; }
 
@@ -117,6 +138,7 @@ export class IssConjunctionBoss {
   /** Clear all state (GAME_RESET / new game). */
   reset() {
     this._endRun();
+    this._onset.cancel();
     this._completed = false;
   }
 
@@ -124,6 +146,7 @@ export class IssConjunctionBoss {
   dispose() {
     this._disposed = true;
     this._endRun();
+    this._onset.cancel();
     for (const u of this._unsubs) { if (typeof u === 'function') u(); }
     this._unsubs.length = 0;
   }
@@ -132,18 +155,24 @@ export class IssConjunctionBoss {
   // INTERNAL
   // --------------------------------------------------------------------------
 
-  /** @private */
-  _onShopDeploy(data) {
+  /** @private ARM at the boundary into the boss mission (the `_active || _completed` guard: once per game). */
+  _onMissionStart(data) {
     if (this._active || this._completed) return;
     const cfg = Constants.ISS_BOSS;
     if (!cfg) return;
 
-    const mission = (data && typeof data.mission === 'number')
-      ? data.mission
+    const mission = (data && typeof data.missionNumber === 'number')
+      ? data.missionNumber
       : (this._scoring && typeof this._scoring.getMissionNumber === 'function'
         ? this._scoring.getMissionNumber() : 1);
     if (mission !== cfg.MISSION) return;
 
+    this._onset.arm(mission);
+  }
+
+  /** @private FIRE (the first free gameplay frame) — the guard re-checked: a restore during the hold may have completed it. */
+  _fire() {
+    if (this._active || this._completed) return;
     this._start();
   }
 
