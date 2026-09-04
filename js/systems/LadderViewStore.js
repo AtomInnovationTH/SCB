@@ -57,10 +57,16 @@ function _defaultStorage() {
   }
 }
 
+/** @private Keys stored JSON may carry that must never be copied onto an object
+ *  (`floors["__proto__"] = row` would run the accessor and swap the object's
+ *  prototype — contained, but a sanitizer must not let data steer a prototype). */
+const SPECIAL_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
 /**
  * @private Validate a rooms snapshot into a fresh plain-JSON copy, or null.
- * Keeps the FloorMask exportMemory envelope; drops non-object rows and
- * non-boolean values. Pane-name validation is FloorMask.importMemory's.
+ * Keeps the FloorMask exportMemory envelope; drops non-object rows,
+ * non-boolean values and prototype-steering keys. Pane-name validation is
+ * FloorMask.importMemory's.
  */
 function _sanitizeRooms(snapshot) {
   if (!snapshot || typeof snapshot !== 'object') return null;
@@ -68,10 +74,12 @@ function _sanitizeRooms(snapshot) {
   if (!src || typeof src !== 'object' || Array.isArray(src)) return null;
   const floors = {};
   for (const key of Object.keys(src)) {
+    if (SPECIAL_KEYS.has(key)) continue;
     const row = src[key];
     if (!row || typeof row !== 'object' || Array.isArray(row)) continue;
     const out = {};
     for (const pane of Object.keys(row)) {
+      if (SPECIAL_KEYS.has(pane)) continue;
       if (typeof row[pane] === 'boolean') out[pane] = row[pane];
     }
     floors[key] = out;

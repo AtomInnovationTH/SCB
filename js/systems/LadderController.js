@@ -249,6 +249,15 @@ export class LadderController {
     this._lastMoveT = -Infinity;
     this._lastMoveDir = 0;
     /**
+     * The core's z01 as the controller last saw it (every move incl. wall
+     * creep, every settle, every ride landing, the engage/arrival seed) — the
+     * PREVIOUS POSITION a free move's direction is measured against. Never the
+     * rest: after a rollback the rest is the pre-gesture value, and measuring
+     * against it mis-signs the first move of the next opposite drive (review
+     * finding, 2026-09-04 — the doorway return parked at a ramp position).
+     */
+    this._lastPosZ01 = null;
+    /**
      * D5: the doorway ride in flight — `{ floor, z01 }` of the origin (the hull
      * the player is leaving + their working position) from ride START until
      * its completion or replacement. `viewState()` reports THIS while set, so
@@ -655,6 +664,7 @@ export class LadderController {
     this._restBeforeDrive = this._restZ01;
     this._lastMoveT = -Infinity;
     this._lastMoveDir = 0;
+    this._lastPosZ01 = (typeof z01 === 'number' && Number.isFinite(z01)) ? z01 : null;
   }
 
   /**
@@ -662,11 +672,13 @@ export class LadderController {
    * begins when the gap since the last free move reaches the core's gesture
    * boundary (GESTURE_LOCK_SILENCE_MS) or the direction flips — the working
    * position as it stood then is kept in `_restBeforeDrive` so a flick that
-   * grows out of this drive can roll back its own ramp-up moves.
+   * grows out of this drive can roll back its own ramp-up moves. Direction is
+   * measured against the PREVIOUS POSITION (`_lastPosZ01`), never the rest.
    */
   _noteFreeMove(z01, tMs) {
     const silence = FloorContract.HUMP_SPRING.GESTURE_LOCK_SILENCE_MS;
-    const dir = (this._restZ01 == null || z01 >= this._restZ01) ? 1 : -1;
+    const prev = this._lastPosZ01;
+    const dir = (prev == null || z01 >= prev) ? 1 : -1;
     const newDrive = !(tMs - this._lastMoveT < silence) || dir !== this._lastMoveDir;
     if (newDrive) this._restBeforeDrive = this._restZ01;
     this._restZ01 = z01;
@@ -675,15 +687,18 @@ export class LadderController {
   }
 
   /**
-   * @private D5: a flick-to-wall ride fired at `tMs`. If it grew out of the
-   * drive in progress (the last free move is inside the gesture boundary),
-   * its ramp-up moves were the leaving gesture: the working position rolls
-   * back to where it stood before that drive. A flick with no ramp (a single
-   * big event after a pause) rolls nothing back — the rest before it stands.
+   * @private D5: a flick-to-wall ride fired at `tMs` in direction `flickDir`
+   * (+1 out / −1 in). If it grew out of the drive in progress (the last free
+   * move is inside the gesture boundary AND went the same way — a flick's ramp
+   * is same-direction by construction), its ramp-up moves were the leaving
+   * gesture: the working position rolls back to where it stood before that
+   * drive. A flick with no ramp (a single big event after a pause) or a flick
+   * that REVERSES a drive (the scroll was the player's) rolls nothing back.
    */
-  _rollBackDrive(tMs) {
+  _rollBackDrive(tMs, flickDir) {
     const silence = FloorContract.HUMP_SPRING.GESTURE_LOCK_SILENCE_MS;
-    if (Number.isFinite(this._lastMoveT) && tMs - this._lastMoveT < silence && this._restBeforeDrive != null) {
+    if (Number.isFinite(this._lastMoveT) && tMs - this._lastMoveT < silence &&
+        this._lastMoveDir === flickDir && this._restBeforeDrive != null) {
       this._restZ01 = this._restBeforeDrive;
     }
     this._lastMoveT = -Infinity;
@@ -710,6 +725,12 @@ export class LadderController {
     } finally {
       this._paneRestoring = false;
     }
+    // Converge the store to what actually stands: below the one-pane
+    // breakpoint main.js's `_onePaneRule` closes the other pane on the second
+    // open edge (its edge was suppressed above), and a both-open memory would
+    // otherwise replay an open→close REFIT flash on every F3 engage while the
+    // store never learned. Write-on-change: a wide viewport records nothing new.
+    this.notePaneChange();
   }
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -803,10 +824,13 @@ export class LadderController {
           }
           // D5 working-position memory: a free-zone move on the applied floor
           // is where the player is working; wall creep (move.inWall) and the
-          // settle-back to an edge are the leaving gesture and never count.
+          // settle-back to an edge are the leaving gesture and never count —
+          // but every one of them is the PREVIOUS POSITION for the next move's
+          // direction, so _lastPosZ01 follows them all.
           if (d.type === 'move' && !d.inWall && d.floor === this._floorApplied && isFreeRest(d.z01)) {
             this._noteFreeMove(d.z01, tMs);
           }
+          this._lastPosZ01 = d.z01;
           break;
 
         case 'cross':
@@ -820,7 +844,8 @@ export class LadderController {
           if (this._sfx && this._sfx.onRide) this._sfx.onRide(d.kind);
           // D5: a flick-to-wall ride ends the drive whose ramp-up moves just
           // landed — the working position rolls back to before that drive.
-          if (d.kind === 'flickWall') this._rollBackDrive(tMs);
+          // The flick's direction is the wall it landed on (lower edge = in).
+          if (d.kind === 'flickWall') this._rollBackDrive(tMs, d.entryZ01 <= 0.5 ? -1 : 1);
           this._startRide(d.toFloor, d.entryZ01, d.miniMs != null ? d.miniMs : CROSS_RIDE_MS, tMs);
           break;
 
@@ -871,13 +896,17 @@ export class LadderController {
       // _rollBackDrive already discounted its ramp-up moves).
       this._seedRest(entryZ01);
     }
+    // Every ride lands the core at entryZ01 — the previous position for the
+    // next free move's direction (a flickWall landing included).
+    this._lastPosZ01 = entryZ01;
     this._applyFidelity(toFloor);
     this._applyFloorContent(toFloor);
     const frame = this._frame(toFloor, entryZ01);
     const seq = ++this._rideSeq;
-    // D5: a ride INTO the doorway from above — while it flies, a run save must
-    // record the hull the player is leaving (viewState), never F2. Any new ride
-    // (including a flick-undo back out) replaces this record.
+    // The ONE doorway predicate for this ride: a ride INTO F2 from a floor
+    // ABOVE. Arms the D5 origin record now (a run save during the flight must
+    // record the hull the player is leaving, never F2) and gates the SHOP entry
+    // in done() below — one evaluation, one source of truth.
     const isDoorway = toFloor === DEPOT_FLOOR_ID && fromFloor != null && fromFloor > DEPOT_FLOOR_ID;
     this._doorway = isDoorway
       ? { floor: fromFloor, z01: departZ01 != null ? departZ01 : FloorContract.LADDER_GEOMETRY.ENTRY_Z01_FROM_BELOW }
@@ -896,7 +925,7 @@ export class LadderController {
       // cross clunk fired at the decision (before _startRide), so it leads the
       // state flip by the full ride (T8). A superseded ride (flick undo back
       // out mid-flight) never reaches here — the seq guard above.
-      if (toFloor === DEPOT_FLOOR_ID && fromFloor != null && fromFloor > DEPOT_FLOOR_ID) {
+      if (isDoorway) {
         this._enterDepot(fromFloor, t, departZ01);
       }
       // D5: the origin record outlives the flip on purpose — the FIRST depot
