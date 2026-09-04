@@ -31,7 +31,11 @@
  * 1.5 mm toward the camera so the hull hides far-side layers) and brightens
  * its card; clicking the part is identical to clicking its card (one hover
  * state `_hoverRec`, one CODEX_OPEN_ENTRY emitter). The stationary re-pick is
- * sticky (see _refreshHover) so the highlight is steady.
+ * sticky (see _refreshHover) so the highlight is steady. Since Wave 5
+ * Session D the hull MESHES are pickable whenever they can be on screen in
+ * the PART/COMPONENT bands — regardless of the card's rail cull, facing gate
+ * or detail tier (the mesh is literally under the pointer) — while the CARD
+ * keeps the shipped visibility gate; see _recPickable's two tiers.
  *
  * REFIT ghosts (Wave 5 (2)): setGhostOutline(partIds) shows the SAME outline
  * steady-on for a set of parts (the pane's alternative hover), pulsed
@@ -159,7 +163,9 @@ const SYSTEMS = [
         // Bare-MLI shoulder band above the fore cell row (cells end at z=0.72).
         // The old z=0.50 anchor pointed at MLI seam rings deleted 2026-07-23.
         anchor: [ 0.404 * M, 0, 0.78 * M ] },
-      { id: 'aft_deck', name: 'AFT THRUSTER DECK', risk: 'GREEN', tier: 'detail',
+      // Briefings for the structure parts (Session D, owner decision 1): the
+      // five blanks got short codex entries so every click lands somewhere.
+      { id: 'aft_deck', name: 'AFT THRUSTER DECK', risk: 'GREEN', tier: 'detail', codexId: 'aft_thruster_deck',
         massKg: 4, priority: 1, specs: ['Aft plate — 0.6 m deck'],
         mesh: 'AftThrusterDeck',
         anchor: [ 0, 0.20 * M, -1.008 * M ] },
@@ -213,11 +219,11 @@ const SYSTEMS = [
         massKg: 1, priority: 3, specs: ['2× — attitude from starfield'],
         pick: ['StarTracker_0', 'StarTracker_1'],
         anchor: [ 0.042 * M, 0.398 * M, 0.90 * M ] },
-      { id: 'fore_bulkhead', name: 'FORE BULKHEAD', risk: 'GREEN', tier: 'major',
+      { id: 'fore_bulkhead', name: 'FORE BULKHEAD', risk: 'GREEN', tier: 'major', codexId: 'fore_bulkhead',
         massKg: 6, priority: 3, specs: ['Fore end cap — 0.8 m plate', 'Carries the sensor deck'],
         mesh: 'FrontCap_ConfigG',
         anchor: [ 0.30 * M, -0.28 * M, 1.005 * M ] },
-      { id: 'sensor_deck', name: 'SENSOR DECK', risk: 'GREEN', tier: 'detail',
+      { id: 'sensor_deck', name: 'SENSOR DECK', risk: 'GREEN', tier: 'detail', codexId: 'sensor_deck',
         massKg: 2, priority: 2, specs: ['Instrument mounting annulus'],
         mesh: 'SensorDeck',
         anchor: [ 0, 0.30 * M, 1.03 * M ] },
@@ -225,7 +231,7 @@ const SYSTEMS = [
         massKg: 0.5, priority: 2, specs: ['Coarse sun sensing, 4×'],
         pick: ['SunSensor_0', 'SunSensor_1', 'SunSensor_2', 'SunSensor_3'],
         anchor: [ 0.28 * M, -0.20 * M, 1.0 * M ] },
-      { id: 'nav_lights', name: 'NAVIGATION LIGHTS', risk: 'GREEN', tier: 'detail',
+      { id: 'nav_lights', name: 'NAVIGATION LIGHTS', risk: 'GREEN', tier: 'detail', codexId: 'nav_lights',
         massKg: 1, priority: 1, specs: ['Port/starboard running lights'],
         anchor: [ 0.42 * M, 0, 0.30 * M ] },
     ],
@@ -328,7 +334,7 @@ const SYSTEMS = [
         massKg: 10, priority: 6, flowerGated: true,
         specs: ['4× aft-pivot booms, 2.5 m', 'They open LIKE A FLOWER — O deploys / stows'],
         anchor: [ 0.283 * M, 0.283 * M, -1.10 * M ] },
-      { id: 'flower_tips', name: 'TIP HARDPOINTS', risk: 'GREEN', tier: 'detail',
+      { id: 'flower_tips', name: 'TIP HARDPOINTS', risk: 'GREEN', tier: 'detail', codexId: 'tip_hardpoints',
         massKg: 2, priority: 2, flowerGated: true,
         specs: ['Inert cargo bosses at the strut tips', 'Cold-cell refit will bolt on here'],
         anchor: [ -0.283 * M, -0.283 * M, -1.12 * M ] },
@@ -448,8 +454,12 @@ export class MotherCallouts {
    *   2026-09-03): when set, a resolved part/card click calls
    *   `onPartClick(getHoveredPart())` INSTEAD of emitting CODEX_OPEN_ENTRY —
    *   main.js wires it to the REFIT pane ONLY while the ladder flag is on.
-   *   Absent (the shipped default and every ?ladder=0 boot), the click emits
-   *   exactly as shipped. The ONE emitter in _handlePointerUp stays the one.
+   *   Session D: with the hook set, parts WITHOUT a briefing are pickable and
+   *   fire it too (their REFIT verb needs no entry; the record's codexId is
+   *   null and the hub gates its library actions on it). Absent (the shipped
+   *   default and every ?ladder=0 boot), the click emits exactly as shipped —
+   *   briefing-less parts stay unpickable there. The ONE emitter in
+   *   _handlePointerUp stays the one.
    */
   constructor(playerGroup, camera, { canvas = null, onPartClick = null } = {}) {
     this.player = playerGroup;
@@ -1359,24 +1369,47 @@ export class MotherCallouts {
   }
 
   /**
-   * Card/part pick eligibility — EXACTLY the filter the sprite pick used
-   * inline (round 6), extracted so the card loop and the hull-mesh loop in
-   * _pickBestRec can never drift apart: hover, click, card and mesh all pass
-   * through this one gate.
-   * @private @param {object} p part rec @returns {boolean}
+   * Card/part pick eligibility — ONE gate for hover, click, card and mesh, so
+   * they can never drift apart (round 6). Two tiers since Wave 5 Session D:
+   *
+   *   CARD (`mesh` false — the sprite loop): EXACTLY the shipped visibility
+   *   filter — the sprite is drawn and past the legibility gate — so a card
+   *   is pickable precisely when the player can read it.
+   *
+   *   MESH (`mesh` true — the hull loop in _pickBestRec): the part's `pick`
+   *   hull meshes are pickable whenever they can be ON SCREEN in the
+   *   PART/COMPONENT bands, REGARDLESS of the card's rail cull, facing gate or
+   *   detail tier — the mesh is literally under the pointer (a rail-culled
+   *   wing, a barrel PV box at the PART band whose card waits for the
+   *   COMPONENT band). Only pickability widens: the card itself stays
+   *   governed by its own rules (_targetOpacity / _stackRail), anchors,
+   *   leaders and layout are untouched. Hidden hardware never picks: the
+   *   SYSTEM band (nothing on the hull hovers there), purchase-gated flower
+   *   parts before the buy, daughters away from their berth.
+   *
+   * The briefing gate (both tiers): a RESOLVABLE codexId (round 6: a drifted
+   * id renders "structure — no briefing" and must not stay clickable with a
+   * dead no-op click) — OR the injected onPartClick hook, whose D-a REFIT
+   * verb never needed an entry (Session D; the hub gates its own
+   * codexId-dependent actions). Absent hook + no briefing (the shipped
+   * `?ladder=0` boot): unpickable, exactly as shipped.
+   * @private @param {object} p part rec @param {boolean} [mesh] the hull-mesh tier
+   * @returns {boolean}
    */
-  _recPickable(p) {
-    if (!p.def.codexId || !p.sprite.visible) return false;
-    // Round 6 review: gate on RESOLVABILITY, not codexId truthiness — a drifted
-    // codexId renders "structure — no briefing" (see _codexState) and must not
-    // stay clickable with a dead no-op click.
-    if (this._codexState(p.def) === null) return false;
-    // Gate on whichever is larger of eased vs target opacity, so picking
-    // follows what the player can actually see. Derived from the legibility
-    // floor (MIN_CARD_OP) so the two can't drift: a card is either clearly
-    // readable-and-clickable or hidden — no muddy half-pickable band. The
-    // 0.8 factor keeps the gate strictly below the floor (round 6).
-    if (Math.max(p.op ?? 0, p._targetOp ?? 0) <= (CFG.MIN_CARD_OP ?? 0.5) * 0.8) return false;
+  _recPickable(p, mesh = false) {
+    if (this._codexState(p.def) === null && !this._onPartClick) return false;
+    if (!mesh) {
+      if (!p.sprite.visible) return false;
+      // Gate on whichever is larger of eased vs target opacity, so picking
+      // follows what the player can actually see. Derived from the legibility
+      // floor (MIN_CARD_OP) so the two can't drift: a card is either clearly
+      // readable-and-clickable or hidden — no muddy half-pickable band. The
+      // 0.8 factor keeps the gate strictly below the floor (round 6).
+      if (Math.max(p.op ?? 0, p._targetOp ?? 0) <= (CFG.MIN_CARD_OP ?? 0.5) * 0.8) return false;
+      return true;
+    }
+    if (this._band === 'SYSTEM') return false;
+    if (p._neverShow || p._armGone || p._flowerGone) return false;
     return true;
   }
 
@@ -1447,9 +1480,11 @@ export class MotherCallouts {
     }
     if (best) return best;
     // Hull-part pick (D2's first verb): the same ray against each eligible
-    // part's `pick` meshes. Nearest visible-Mesh hit across all recs wins.
+    // part's `pick` meshes — the MESH tier of _recPickable (Session D: on
+    // screen in the PART/COMPONENT bands, whatever the card is doing).
+    // Nearest visible-Mesh hit across all recs wins.
     for (const p of this._partLabels) {
-      if (!this._recPickable(p)) continue;
+      if (!this._recPickable(p, true)) continue;
       for (const target of this._pickTargets(p)) {
         const hits = this._raycaster.intersectObject(target, true);
         for (const hit of hits) {
@@ -1741,8 +1776,9 @@ export class MotherCallouts {
     const held = this._hoverRec;
     if (!held) return;                                      // rule 4
     // Rule 3: tolerate a transient miss; clear when the held rec is genuinely
-    // ineligible or the miss run reaches the threshold.
-    if (!this._recPickable(held) || ++this._hoverMisses >= HOVER_MISS_TICKS) {
+    // ineligible on BOTH tiers (card hidden AND its hull meshes out of reach —
+    // band left, briefing gone) or the miss run reaches the threshold.
+    if (!(this._recPickable(held) || this._recPickable(held, true)) || ++this._hoverMisses >= HOVER_MISS_TICKS) {
       this._setHoverRec(null);
     }
   }
@@ -1767,19 +1803,21 @@ export class MotherCallouts {
     // title-strip UV gate made ~⅔ of a focused card a dead zone with a hand
     // cursor). Hull-part clicks arrive through the same _pickLabel (the mesh
     // loop in _pickBestRec), so clicking a part IS clicking its card.
-    if (hit && hit.def.codexId) {
-      // Wave 5 (2) D-a (owner, 2026-09-03): with the REFIT hook injected the
-      // click opens the part's REFIT card INSTEAD of the Library — the hook
-      // receives the getHoveredPart() record (the clicked rec is written
-      // through the ONE hover writer first, so hovered == clicked even on a
-      // synthetic click). Absent hook (shipped / ?ladder=0): the one
-      // CODEX_OPEN_ENTRY emit below runs exactly as today.
-      if (this._onPartClick) {
-        this._setHoverRec(hit);
-        this._onPartClick(this.getHoveredPart());
-      } else {
-        eventBus.emit(Events.CODEX_OPEN_ENTRY, { id: hit.def.codexId });
-      }
+    if (!hit) return;
+    // Wave 5 (2) D-a (owner, 2026-09-03): with the REFIT hook injected the
+    // click opens the part's REFIT card INSTEAD of the Library — the hook
+    // receives the getHoveredPart() record (the clicked rec is written
+    // through the ONE hover writer first, so hovered == clicked even on a
+    // synthetic click). Session D: the hook fires for parts WITHOUT a
+    // briefing too — the REFIT verb never needed an entry; the hub gates its
+    // own codexId-dependent actions (library retarget, scan) on the record.
+    // Absent hook (shipped / ?ladder=0): the one CODEX_OPEN_ENTRY emit below
+    // runs exactly as today, still gated on a codexId.
+    if (this._onPartClick) {
+      this._setHoverRec(hit);
+      this._onPartClick(this.getHoveredPart());
+    } else if (hit.def.codexId) {
+      eventBus.emit(Events.CODEX_OPEN_ENTRY, { id: hit.def.codexId });
     }
   }
 

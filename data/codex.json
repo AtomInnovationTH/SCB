@@ -422,7 +422,8 @@
         "specific_impulse",
         "feep_indium",
         "mpd_burst",
-        "xenon_propellant"
+        "xenon_propellant",
+        "aft_thruster_deck"
       ],
       "i18n": {
         "title": "FEEP Thrusters",
@@ -710,7 +711,8 @@
       "related": [
         "cold_gas_thruster",
         "recoil_cancellation",
-        "rcs_attitude_control"
+        "rcs_attitude_control",
+        "aft_thruster_deck"
       ],
       "i18n": {
         "title": "Cold Gas RCS",
@@ -1352,7 +1354,9 @@
       "related": [
         "titanium_alloys",
         "carbon_composites",
-        "solar_furnace"
+        "solar_furnace",
+        "aft_thruster_deck",
+        "fore_bulkhead"
       ],
       "i18n": {
         "title": "Aluminum in Space",
@@ -1570,7 +1574,8 @@
         "net_yo_yo_despin",
         "bolas_weapon",
         "tether_materials",
-        "net_neck_winch"
+        "net_neck_winch",
+        "fore_bulkhead"
       ],
       "i18n": {
         "title": "Miura-Ori Net Folding",
@@ -2247,7 +2252,8 @@
       "related": [
         "lidar_sensing",
         "pose_estimation",
-        "docking_precision"
+        "docking_precision",
+        "sensor_deck"
       ],
       "i18n": {
         "title": "LIDAR Ranging",
@@ -2273,7 +2279,8 @@
         "rendezvous",
         "docking_berthing",
         "pulse_scan_radar",
-        "news_mev1_servicing"
+        "news_mev1_servicing",
+        "nav_lights"
       ],
       "i18n": {
         "title": "Proximity Navigation",
@@ -2301,7 +2308,8 @@
         "kalman_filtering",
         "pose_estimation",
         "gps_denied",
-        "attitude_control_system"
+        "attitude_control_system",
+        "sensor_deck"
       ],
       "i18n": {
         "title": "Star Trackers",
@@ -3823,7 +3831,8 @@
         "world_who_removes",
         "docking_berthing",
         "heritage_solar_max",
-        "heritage_hubble_servicing"
+        "heritage_hubble_servicing",
+        "tip_hardpoints"
       ],
       "i18n": {
         "title": "The Servicing Economy",
@@ -3955,7 +3964,9 @@
         "docking_precision",
         "kalman_filtering",
         "star_tracker",
-        "lidar_sensing"
+        "lidar_sensing",
+        "sensor_deck",
+        "nav_lights"
       ],
       "i18n": {
         "title": "Visual Pose Estimation",
@@ -4351,7 +4362,8 @@
         "loop_heat_pipe",
         "pcm_bank",
         "selective_surfaces",
-        "vacuum_mechanisms"
+        "vacuum_mechanisms",
+        "tip_hardpoints"
       ],
       "i18n": {
         "title": "Space Radiators",
@@ -4533,7 +4545,8 @@
         "in_space_metallurgy",
         "niti_superelastic",
         "space_radiator",
-        "loop_heat_pipe"
+        "loop_heat_pipe",
+        "tip_hardpoints"
       ],
       "i18n": {
         "title": "Mechanisms in Vacuum",
@@ -4733,6 +4746,130 @@
         "realWorld": "Apollo LM struts used crushable Al honeycomb cartridges; automotive crush zones use the same constant-force principle.",
         "trlRationale": "Flown on every Apollo landing; honeycomb absorbers are standard impact hardware.",
         "unlockHint": "Bring in a heavy catch slightly hot and wish for a crumple zone."
+      }
+    },
+    {
+      "id": "aft_thruster_deck",
+      "hardwareNames": [
+        "AFT THRUSTER DECK"
+      ],
+      "category": "MATERIALS",
+      "trl": 9,
+      "icon": "🔩",
+      "related": [
+        "fore_bulkhead",
+        "aluminum_space",
+        "feep_thruster",
+        "cold_gas_rcs"
+      ],
+      "startUnlocked": true,
+      "i18n": {
+        "title": "Thrust Structure & Load Paths",
+        "shortText": "Every newton a thruster makes has to go somewhere; a thrust deck turns four small pushes into one clean load on the hull.",
+        "hardwareNote": "The aft thruster deck is the 0.6 m plate the FEEP clusters and cold-gas pods bolt to; it carries their thrust into the barrel as one load path.",
+        "fullText": "A thruster does not push a spacecraft; it pushes the bracket it is bolted to, and that bracket pushes whatever it is bolted to, all the way into the primary structure. Engineers call that chain a load path. If any link in it is soft, the thrust arrives late and crooked, the structure flexes, and the attitude controller ends up fighting its own ship.\n\nYour aft deck is that link made deliberately stiff: one plate closing the barrel’s aft end, with the four FEEP clusters and the cold-gas ring mounted on it so their forces meet the hull along the same short path. The deck also shades the aft bulkhead from thruster heat and gives the maintenance crew, human or robotic, one flat face to work on.",
+        "realWorld": "Thrust structures carry engine loads into primary structure on every propulsive spacecraft (the Apollo service module’s thrust cone, launch-vehicle thrust frames); stiffness, not strength, usually sizes them.",
+        "trlRationale": "Primary and thrust structure is flight heritage on every spacecraft flown.",
+        "unlockHint": "Zoom in to the hull and click the aft plate behind the thruster ring."
+      }
+    },
+    {
+      "id": "fore_bulkhead",
+      "hardwareNames": [
+        "FORE BULKHEAD"
+      ],
+      "category": "MATERIALS",
+      "trl": 9,
+      "icon": "🔩",
+      "related": [
+        "aft_thruster_deck",
+        "sensor_deck",
+        "aluminum_space",
+        "miura_ori_net"
+      ],
+      "startUnlocked": true,
+      "i18n": {
+        "title": "Bulkheads & Primary Structure",
+        "shortText": "End caps and bulkheads close a spacecraft’s barrel and carry its heaviest loads; primary structure is where the mass budget starts.",
+        "hardwareNote": "The fore bulkhead is the 0.8 m end cap closing the barrel; it carries the sensor deck and the net launchers and takes the capture loads.",
+        "fullText": "Primary structure is the part of a spacecraft that holds everything else up: the barrel, the end bulkheads that close it, and the rings that pass launch loads down to the rocket. It is designed first and argued over longest, because every kilogram of it is a kilogram not spent on payload, and because it must survive the launch, the worst minute of the mission, before it does anything useful.\n\nYour fore bulkhead is the barrel’s forward cap. It carries the sensor deck and both net launchers, and when a net goes taut on a catch, the tether load comes home through it. It is sized for that jerk, not for the quiet cruise in between, which is why it looks heavier than the plate at the other end.",
+        "realWorld": "Primary structure is typically 10–20 % of a spacecraft’s dry mass; end bulkheads and adapter rings (payload attach fittings, ISS module end cones) carry launch and docking loads.",
+        "trlRationale": "Machined and honeycomb bulkheads are flight heritage on every spacecraft flown.",
+        "unlockHint": "Zoom in to the hull and click the fore end cap."
+      }
+    },
+    {
+      "id": "sensor_deck",
+      "hardwareNames": [
+        "SENSOR DECK"
+      ],
+      "category": "SENSORS",
+      "trl": 9,
+      "icon": "📐",
+      "related": [
+        "fore_bulkhead",
+        "star_tracker",
+        "pose_estimation",
+        "lidar_ranging",
+        "nav_lights"
+      ],
+      "startUnlocked": true,
+      "i18n": {
+        "title": "The Optical Bench",
+        "shortText": "Cameras, lidar and star trackers only agree if they never move relative to each other; one stiff deck is how they stay aligned.",
+        "hardwareNote": "The sensor deck is the stiff annulus on the fore cap that holds the cameras, lidar and star trackers on one common boresight.",
+        "fullText": "A rendezvous sensor suite is only as good as its alignment. The star trackers say which way the ship points, the cameras and lidar say where the target is, and fusing those answers assumes the instruments share one frame to a fraction of a degree. Mount them on separate brackets and thermal expansion, launch vibration, or a single hard dock will quietly bend the frames apart.\n\nSo the instruments share a bench: one stiff, thermally stable deck, aligned once on the ground and checked in flight against the stars. Your sensor deck is that annulus on the fore cap. Everything that looks at a target lives on it, and the turret that points the cameras is bolted to it too, so the whole suite moves as one body.",
+        "realWorld": "Rendezvous sensor suites (Dragon, Cygnus, HTV) mount cameras and lidar on a common stiff structure and hold boresight alignment to arcseconds; optical benches are standard practice in space instruments.",
+        "trlRationale": "Common-mount optical benches are flight heritage across rendezvous and science spacecraft.",
+        "unlockHint": "Zoom in to the hull and click the instrument ring on the fore cap."
+      }
+    },
+    {
+      "id": "nav_lights",
+      "hardwareNames": [
+        "NAVIGATION LIGHTS"
+      ],
+      "category": "SENSORS",
+      "trl": 9,
+      "icon": "🔦",
+      "related": [
+        "pose_estimation",
+        "docking_precision",
+        "sensor_deck"
+      ],
+      "startUnlocked": true,
+      "i18n": {
+        "title": "Running Lights & Visual Aids",
+        "shortText": "Running lights and markers make a spacecraft easy to see and read; debris carries none, which is why catching it is hard.",
+        "hardwareNote": "The port and starboard running lights mark the mothership’s attitude for a returning daughter’s camera; debris carries no such aids.",
+        "fullText": "Ships and aircraft carry running lights so that another crew can tell at a glance where they are and which way they are heading. Spacecraft that expect visitors do the same: lit markers, high-contrast patterns and retroreflectors give an approaching vehicle’s cameras and lidar something unambiguous to lock onto. The target is cooperative; it helps you find it.\n\nYour mothership carries port and starboard running lights for exactly that reason. A daughter coming home reads them to confirm the ship’s attitude before the final approach. The derelicts you hunt offer nothing of the kind: no lights, no markers, no radio, often no power. Every catch starts by working out a pose the target refuses to announce.",
+        "realWorld": "Cooperative targets such as the ISS carry retroreflectors and lit markers for a visiting vehicle’s cameras and lidar (HTV, Dragon); derelict debris carries none, the defining problem of non-cooperative capture.",
+        "trlRationale": "Approach lights and reflector targets are flight heritage on every crewed and cargo docking system.",
+        "unlockHint": "Zoom in to the hull and click a running light on the barrel."
+      }
+    },
+    {
+      "id": "tip_hardpoints",
+      "hardwareNames": [
+        "TIP HARDPOINTS"
+      ],
+      "category": "MATERIALS",
+      "trl": 9,
+      "icon": "🔩",
+      "related": [
+        "vacuum_mechanisms",
+        "space_radiator",
+        "world_servicing"
+      ],
+      "startUnlocked": true,
+      "i18n": {
+        "title": "Hardpoints & Servicing Interfaces",
+        "shortText": "A hardpoint is a bolt pattern that waits for hardware; standard interfaces are what make in-orbit refits possible.",
+        "hardwareNote": "The tip hardpoints are inert bosses at the ends of the flower struts; the cold-cell refit bolts on here through a standard interface.",
+        "fullText": "A hardpoint is structure built for a load that is not there yet: a machined boss with a known bolt pattern, an alignment feature and a power or data pass-through, placed where a future unit will go. On the ground it is cheap insurance. In orbit it is the only way a spacecraft ever gains hardware it did not launch with.\n\nYour flower struts end in exactly that: four inert bosses, each carrying the same interface. Nothing is on them yet. When the cold-cell refit is bought, its units bolt to these tips, and the struts that today only hold radiator plates become the mounts for the ship’s next cooling stage. The interface was decided before the hardware was, which is the whole point.",
+        "realWorld": "Standard mechanical interfaces let hardware be added in orbit: ISS FRAM plates and orbital replacement units, servicer docking plates (Astroscale ELSA-d), Northrop Grumman’s Mission Extension Pods bolted onto client satellites.",
+        "trlRationale": "Standardised attachment interfaces are flight heritage on the ISS and on commercial servicing missions.",
+        "unlockHint": "Buy an aft flower pair, then zoom in and click a strut tip on the hull."
       }
     }
   ]

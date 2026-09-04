@@ -31,7 +31,11 @@ export const Constants = {
   // '1008'→'1009': Wave-5 (Session D) bridge lines — one `hardwareNote`
   // sentence on each of the 24 hardware entries (the part and what it does on
   // THIS ship, then the concept; no entries added or removed, 08-workbench §2).
-  DATA_VERSION: '1009',
+  // '1009'→'1010': Wave-5 (Session D) structure briefings — five entries for
+  // the briefing-less callout parts (aft_thruster_deck, fore_bulkhead,
+  // sensor_deck, nav_lights, tip_hardpoints; owner decision 1) + their
+  // symmetric backlinks; 215 → 220 entries (08-workbench §2 / §7).
+  DATA_VERSION: '1010',
 
   // ============================================================================
   // === INPUT (Delegation 1, 2026-05-31) ===
