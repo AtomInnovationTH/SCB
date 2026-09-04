@@ -22,7 +22,11 @@
  *     subtitle, so a click on SPIN-BRAKE LASER lands on "SPIN-BRAKE LASER /
  *     briefing · Detumbling Captured Debris · Attitude" and the page confirms
  *     the click before it teaches (owner review 2026-09-03). Concept entries
- *     keep title-then-category. The header is topped — when the
+ *     keep title-then-category. **The bridge line (Session D):** a HARDWARE
+ *     entry's authored `hardwareNote` — one sentence naming the part and what
+ *     it does on THIS ship, then handing off to the concept — renders under
+ *     the header, above `shortText`; absent → nothing (never the shortText
+ *     twice, never a stub); concept entries carry none. The header is topped — when the
  *     frame could be read — by **the photo you just took** (08-workbench §2;
  *     Session C, owner decision 2): a crop of the live frame around the
  *     subject, taken ONCE per open / entry change, never per frame. The
@@ -307,6 +311,22 @@ export class LibraryPane {
   }
 
   /**
+   * The bridge line under the header (Session D): the entry's authored
+   * `hardwareNote` for a HARDWARE entry only — a non-empty string, trimmed;
+   * anything else (a concept entry, an absent / empty / non-string note) →
+   * null and the pane renders nothing there. Pure.
+   * @param {object|null} entry
+   * @returns {string|null}
+   */
+  static hardwareNote(entry) {
+    if (!LibraryPane.isHardware(entry)) return null;
+    const n = entry.hardwareNote;
+    if (typeof n !== 'string') return null;
+    const t = n.trim();
+    return t.length ? t : null;
+  }
+
+  /**
    * The generated SPECS block (§2 "a generated SPECS block for hardware
    * entries") — from the entry's EXISTING fields only, no invented data:
    *   HARDWARE   — the `hardwareNames` list (what this documents in-game)
@@ -578,6 +598,8 @@ export class LibraryPane {
       id: r.id, icon: r.icon, title: r.title, unlocked: !!r.unlocked,
     })) : [];
     const specs = (entry && entry.unlocked) ? LibraryPane.specsFor(entry) : [];
+    // The bridge line (Session D): hardware entries only, authored data.
+    const note = LibraryPane.hardwareNote(entry);
     // The photo shows only for the entry it was taken for (never a stale
     // frame under a newer entry); absent → the emoji header stands alone.
     const photo = (entry && this._photo && this._photo.id === entry.id) ? this._photo.url : null;
@@ -592,6 +614,7 @@ export class LibraryPane {
       photo ? 1 : 0,
       this._via || '',
       unread,
+      note || '',
       specs.map((s) => `${s.k}:${s.v}`).join('|'),
       related.map((r) => `${r.id}:${r.unlocked ? 1 : 0}`).join('|'),
     ].join('\u0001');
@@ -601,6 +624,7 @@ export class LibraryPane {
       specs,
       related,
       photo,
+      note,
       unread,
       structKey,
     };
@@ -793,6 +817,16 @@ export class LibraryPane {
       '</span>' +
       '</div>',
     );
+    // The bridge line (Session D): the authored hardwareNote — the part and
+    // what it does on THIS ship, then the hand-off to the concept — under the
+    // header for HARDWARE entries only; absent → nothing here (never the
+    // shortText twice). Rendered even while locked: it names hardware the
+    // player is looking at, not the briefing's depth.
+    if (m.note) {
+      parts.push(
+        `<div class="library-note" style="color:${C.INFO};line-height:1.5;margin:-2px 0 8px 0;opacity:${locked ? 0.7 : 0.9}">${m.note}</div>`,
+      );
+    }
     // shortText — the one-line "why it matters" (always visible, the
     // syllabus rule).
     parts.push(

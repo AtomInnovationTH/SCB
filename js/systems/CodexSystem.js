@@ -177,6 +177,12 @@ export class CodexSystem {
       // translatable fields (interpolated against live Constants)
       title: i.title || e.id,
       shortText: interpolate(i.shortText || '', Constants),
+      // The bridge line (Wave 5 Session D): one sentence naming the part and
+      // what it does on THIS ship before the concept briefing — hardware
+      // entries only (data-authored beside hardwareNames; the TECH LIBRARY
+      // pane renders it under its header). Absent → null, never a stub.
+      hardwareNote: (typeof i.hardwareNote === 'string' && i.hardwareNote)
+        ? interpolate(i.hardwareNote, Constants) : null,
       fullText: interpolate(i.fullText || '', Constants),
       realWorld: i.realWorld ? interpolate(i.realWorld, Constants) : null,
       formula: i.formula || null,

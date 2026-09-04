@@ -427,6 +427,7 @@
       "i18n": {
         "title": "FEEP Thrusters",
         "shortText": "Field-emission electric propulsion: liquid metal ionised and flung by an electric field at extreme efficiency.",
+        "hardwareNote": "The four FEEP clusters on the aft deck are the mothership’s cruise engines: micronewtons of thrust, held for hours, from ionised indium.",
         "fullText": "Field-emission electric propulsion (FEEP) ionises a liquid metal, usually indium or cesium, and accelerates the ions through a strong electric field. The thrust is tiny, in the micronewton range, but the efficiency is extraordinary, with specific impulse above 6,000 seconds.\n\nThat profile suits precision, not power. FEEP is how you nudge a spacecraft by fractions of a millimetre per second for formation flying or fine positioning, spending almost no propellant to do it. Your daughters carry miniaturised FEEP units for exactly that: patient, delicate maneuvering in a crowded debris field where a heavy hand would do more harm than good.",
         "realWorld": "Enpulsion IFM Nano; flew on Gaia (2013) and LISA Pathfinder (2016); micronewton thrust, Isp >6,000 s.",
         "formula": "F = ṁ · v_exhaust  (micronewton class)",
@@ -714,6 +715,7 @@
       "i18n": {
         "title": "Cold Gas RCS",
         "shortText": "Nitrogen jets for fine positioning: low thrust and thirsty, but zero ignition risk right next to debris.",
+        "hardwareNote": "The four cold-gas pods around the aft ring nudge the mothership’s attitude and creep speed; nitrogen puffs are safe to fire beside a catch.",
         "fullText": "A cold-gas reaction control system expels stored pressurised nitrogen through small nozzles for attitude and position control. Each jet produces only about a newton, and the poor specific impulse of roughly 73 seconds means it drinks propellant quickly, so it is not for big maneuvers.\n\nIts virtue is that it is utterly safe to fire in close quarters: no combustion, no contamination, and no ignition source near volatile or fuel-laden debris. That safety is exactly what you want during the delicate final metres of an approach, so your mothership uses cold gas for fine positioning where a hotter thruster would be a hazard. Precision and safety, bought with propellant you spend freely.",
         "realWorld": "Cold-gas RCS provides fine, ignition-free attitude control on most spacecraft; Isp ~73 s.",
         "formula": "impulse-bit limited (mN·s)",
@@ -760,6 +762,7 @@
       "i18n": {
         "title": "Spring-Launched Daughters",
         "shortText": "A wound spring flings a daughter free of propellant cost. Spring tier sets the ceiling; the dial picks the shot that sweeps a wide field.",
+        "hardwareNote": "The crossbow spring in each cradle flings a daughter clear without propellant; the wound spring’s stored energy sets the launch speed.",
         "fullText": "Instead of burning propellant to release a daughter, your cradle stores mechanical energy in a compressed spring, wound up through a worm gear to hold a couple of joules. On release that elastic energy accelerates the daughter to the dialed launch speed. The launch itself costs no propellant at all, only the electricity that wound the spring, which is the whole appeal, since fuel is the resource you cannot refill up here. The daughter's own FEEP thrusters then take over for the final approach.\n\nEvery shot leaves the cradle at the 10 m/s fleet default — the launch-speed dial that would trade reload time for range is designed in but not yet wired to a control. That matters because the shop's upper spring tiers (Composite, Nanolam, Metamat) only raise the ceiling: until the dial exists, a purchased 25 m/s spring still fires at 10 m/s. The physics is honest about the trade — rewind time grows with the square of launch speed (a 6.6 kg Weaver arm needs about 27.5 s at 10 m/s, 172 s at 25 m/s, on the 15 W worm-gear motor at 80 % efficiency), so speed is range, not rate.\n\nPair a top-tier spring with a graphene super laminate tether (rated to 10 km) and the doctrine opens up: daughters on long tethers, fired fast, sweeping a 16 km sphere around Mother clean of small debris — the wide-sweep cleanup the late missions are written for. Today's build still gates launches to 500 m pending the dial, the tether-aware range gate, and the long-range autopilot; the 16 km sweep is the upgrade path those are being built for.",
         "realWorld": "Stored elastic energy (½kx²) for propellant-free deployment; a game-speculative cradle mechanism. Graphene-laminate tethers of multi-km reach extend real graphene strength research (no flight heritage).",
         "formula": "E = ½ k x² · reload = ½ m v² / (P η)",
@@ -902,6 +905,7 @@
       "i18n": {
         "title": "Multi-Layer Insulation (MLI)",
         "shortText": "Those gold and silver blankets aren't styling: they're the most mass-efficient thermal armour there is.",
+        "hardwareNote": "The gold blanket wrapping the barrel is the mothership’s thermal armour; twenty layers of film keep the Sun’s heat out and the ship’s heat in.",
         "fullText": "The gold and silver sheen of a spacecraft comes from multi-layer insulation (MLI): stacks of thin aluminised film separated by fine mesh spacers. Each layer reflects infrared radiation back, and twenty or thirty layers together cut radiative heat transfer by around 99%.\n\nBecause the layers are feather-light, MLI is the most mass-efficient thermal protection available, which is why nearly every spacecraft wears it. It keeps the deep cold of shadow out and trapped heat in, smoothing the brutal swing between sunlight and eclipse. On your ship it is the first line of the thermal system, the passive blanket the heaters and radiators only have to trim.",
         "realWorld": "20-30 layers of aluminised film cut radiative transfer ~99%; standard exterior on essentially all spacecraft.",
         "trlRationale": "Ubiquitous: standard exterior on all spacecraft.",
@@ -1002,6 +1006,7 @@
       "i18n": {
         "title": "Solar Panel Power Generation",
         "shortText": "Solar panels turn sunlight into electricity, and make nothing the moment you cross into Earth's shadow.",
+        "hardwareNote": "Each wing spool is the drum a roll-out array unwinds from; the sunlight it exposes is the ship’s only power, and eclipse takes it away.",
         "fullText": "Sunlight is free power, and in low Earth orbit a panel delivers on the order of 300 watts per square metre while it is lit. The catch is the shadow: a low orbit spends roughly a third of every lap in eclipse, when the panels produce nothing at all.\n\nThat rhythm defines your power budget. The distribution system charges batteries in daylight and rations draw in darkness, and it must keep doing so as the panels slowly lose output to radiation and ultraviolet aging. Your mothership has run on this cycle since the first burn; every watt you spend on thrust, sensors, or daughters comes out of it.",
         "realWorld": "Flown on essentially every spacecraft since Vanguard 1 (1958); LEO arrays deliver ~300 W/m² in sunlight, zero in eclipse.",
         "formula": "P = η · G · A   (efficiency × solar flux × area)",
@@ -1397,6 +1402,7 @@
       "i18n": {
         "title": "Gallium Arsenide Solar Cells",
         "shortText": "GaAs cells convert ~30% of sunlight and shrug off radiation. They are the gold standard for space power, at a gold-standard price.",
+        "hardwareNote": "The dark tiles on the barrel are body-mounted GaAs cells, topping up the batteries when the wings are furled or off-Sun; the material is the briefing.",
         "fullText": "Gallium arsenide (GaAs) is the semiconductor of choice for space solar power. It converts around 30% of incident sunlight, close to double a silicon cell, and it tolerates radiation far better, which matters over a long mission. Nearly every high-value satellite flies GaAs multi-junction cells.\n\nThe drawback is cost: GaAs runs on the order of a hundred times more per watt than silicon. That flips the economics for a salvager, because a dead satellite's array is studded with a material worth far more than its mass in scrap aluminium. Your forge can recover gallium from captured panels, turning a derelict's wings into genuinely valuable feedstock.",
         "realWorld": "Space GaAs cells ~29-32% efficient and radiation-tolerant; ~100× the per-watt cost of silicon.",
         "trlRationale": "GaAs cells standard on GEO satellites and deep-space probes.",
@@ -1569,6 +1575,7 @@
       "i18n": {
         "title": "Miura-Ori Net Folding",
         "shortText": "A fold pattern from origami packs a net flat, then unfurls it completely with one pull.",
+        "hardwareNote": "The two launchers on the fore cap fire the mothership’s large nets; a Miura-ori fold is what lets a flat-packed net open with one pull.",
         "fullText": "Miura-ori is a rigid folding pattern devised by Koryo Miura to stow satellite solar arrays. It collapses a flat sheet into a compact stack that springs fully open from a single diagonal pull, with no snagging and no separate hinges.\n\nYour capture nets borrow it. Stowed, the net is a tight package; on contact a shape-memory-alloy cinch wire triggers, and the Miura-ori pattern unfolds the mesh to envelop the target in under three seconds. The appeal is reliability: one actuation, one clean deployment, in an environment where a jammed fold means a missed catch. The pattern first flew on Japan's SFU spacecraft in 1995.",
         "realWorld": "Miura-ori flown on Japan's SFU (1995); net capture demonstrated by RemoveDEBRIS (2018).",
         "trlRationale": "Miura-ori flown on SFU (1995); net capture via RemoveDEBRIS (2018).",
@@ -1595,6 +1602,7 @@
       "i18n": {
         "title": "Motorized Reel Mechanics",
         "shortText": "The mothership reel motor does the hauling on electricity alone: retrieval that spends watts, not fuel.",
+        "hardwareNote": "The four tether winches on the cradle struts haul a caught object home on electricity alone; the reel and its brake are the briefing.",
         "fullText": "Most capture concepts burn propellant to drag a catch back. Yours does not: a motorised reel on the mothership winches the tether in, drawing about 15 watts and pulling at a quarter-metre per second under load, half that empty. The mechanical advantage means retrieval costs electricity, never fuel.\n\nA tumbling catch fights back, so the reel carries a brake to ride out the tension spikes as an off-balance target jerks the line. Get it right and a dead satellite comes home on winch power alone. Get it wrong and a spike can snap the tether, which is why the reel controls tension as carefully as it controls speed.",
         "realWorld": "Mothership-mounted powered reel (~15 W, ~0.25 m/s loaded) is game-speculative; grounded in real winch-capture research.",
         "trlRationale": "Mothership-mounted reel is game-speculative.",
@@ -2116,6 +2124,7 @@
       "i18n": {
         "title": "Trackable vs Dark Debris",
         "shortText": "Only objects above ~10 cm are reliably tracked; the rest is dark debris: invisible to radar, lethal to hardware.",
+        "hardwareNote": "The infrared camera on the fore cap picks up the heat glow of debris too small or too dark for radar to track; that gap is the briefing.",
         "fullText": "Ground surveillance reliably tracks objects down to roughly 10 cm in low Earth orbit. Everything smaller is dark debris: present, dangerous, and effectively invisible to the catalogue. For every tracked object there are estimated to be dozens of untracked pieces in the 1-10 cm range.\n\nThat mismatch is the core hazard of a working orbit. Dark debris is too small to dodge because nobody sees it coming, yet large enough to end a mission on impact. Onboard sensing is the only answer at close range, and your daughters' scanners and lidar pick out returns the ground network never logged, turning some of the dark population back into targets you can avoid or remove.",
         "realWorld": "SSN tracks to ~10 cm; an estimated 25-30 untracked 1-10 cm pieces exist per tracked object (published studies).",
         "trlRationale": "Gap characterised by multiple published studies.",
@@ -2159,6 +2168,7 @@
       "i18n": {
         "title": "GPS-Denied Navigation",
         "shortText": "Lose the satnav fix and you fall back on stars and inertial sensors: dead reckoning until the signal returns.",
+        "hardwareNote": "The two GPS patches fix the mothership’s position while the constellation is in view; when it is not, the ship navigates by stars and inertia.",
         "fullText": "Satellite navigation is not guaranteed in orbit. Solar storms, South Atlantic Anomaly passes, and simple geometry can block or degrade the signal, leaving a spacecraft to find itself another way.\n\nThe fallback is onboard: a star tracker matching star patterns for absolute attitude, and an inertial unit dead-reckoning motion, with a Kalman filter fusing the two into a usable position estimate. Military spacecraft are built to run this way from the start, never trusting an outside signal an adversary could deny. Your ship treats a lost fix the same way, leaning on its own senses rather than waiting for the constellation to come back.",
         "realWorld": "GPS-denied navigation via star trackers + inertial units + Kalman fusion; standard on military spacecraft.",
         "trlRationale": "Military GPS-denied nav; still maturing on civilian platforms.",
@@ -2242,6 +2252,7 @@
       "i18n": {
         "title": "LIDAR Ranging",
         "shortText": "Up close, lidar maps a target to the millimetre: enough to model its tumble before you commit to a catch.",
+        "hardwareNote": "The flash-lidar dome on the fore cap ranges a target to the millimetre in the last hundred metres and models its tumble before a catch.",
         "fullText": "At close range, under a kilometre, lidar does more than range: it builds a centimetre-resolution three-dimensional map of a target's surface, accurate to the millimetre in distance. That detail turns a blip into something you can plan a capture against.\n\nYour daughters run lidar through the approach, assembling a tumble model of the derelict, its spin axis, rate, and shape, before anyone commits a net. Grab without that model and a fast or off-axis tumble will slap the net aside or wrench the tether. The map is the difference between a clean envelope and a fumbled catch that only adds to the mess.",
         "realWorld": "Close-range flash lidar gives mm-precision ranging and cm-resolution 3-D maps; used for rendezvous on Dragon and Cygnus.",
         "trlRationale": "Flash lidar rendezvous heritage on Dragon and Cygnus.",
@@ -2267,6 +2278,7 @@
       "i18n": {
         "title": "Proximity Navigation",
         "shortText": "The last hundred metres of an approach demand centimetre accuracy; one clumsy nudge sends the target tumbling.",
+        "hardwareNote": "The two-axis sensor turret on the fore cap keeps the cameras and lidar on the target through the final approach; the precision is the briefing.",
         "fullText": "Rendezvous and proximity operations live or die in the final hundred metres. Getting there means fusing lidar, optical cameras, and relative satellite navigation into a position estimate good to centimetres, with closing speed dropping below a tenth of a metre per second and alignment held within a few degrees.\n\nYour daughters run the same discipline on final approach to a derelict. Come in too fast or off-axis and you do not capture the target, you punch it into an unpredictable tumble that is harder and more dangerous to catch on the next try. Precision here is not elegance for its own sake; it is the difference between a clean grip and making the problem worse.",
         "realWorld": "RPO fuses lidar, optical, and relative satellite navigation to cm precision; docking systems operational on Dragon and Starliner.",
         "trlRationale": "IDSS/NDS operational on Dragon, Starliner.",
@@ -2294,6 +2306,7 @@
       "i18n": {
         "title": "Star Trackers",
         "shortText": "A camera that reads the star field like a fingerprint, fixing which way you point to a thousandth of a degree.",
+        "hardwareNote": "The two star trackers on the fore deck photograph the sky and fix the mothership’s attitude to a thousandth of a degree; the method is the briefing.",
         "fullText": "A star tracker photographs the sky and matches the pattern it sees against an onboard catalogue of a few thousand stars. From that match it works out which way the spacecraft is pointing, to arcsecond accuracy, the finest attitude reference most vehicles carry.\n\nThat precision is what lets you aim an antenna, a sensor, or a thruster with confidence. It has limits: point one near the Sun and it is blinded, near the Moon and the pattern-matcher can be fooled, so a spacecraft carries several facing different ways. Paired with a sun sensor for coarse reference and an inertial unit to coast between fixes, the star tracker anchors the whole attitude solution.",
         "realWorld": "Pattern-matches a few thousand catalogued stars to arcsecond accuracy; ubiquitous attitude sensor since the 1980s.",
         "trlRationale": "Ubiquitous attitude sensor since 1980s.",
@@ -2317,6 +2330,7 @@
       "i18n": {
         "title": "Detumbling Captured Debris",
         "shortText": "Stopping a spinning derelict takes reaction torque and patience, and a bad tumble can defeat the grab entirely.",
+        "hardwareNote": "The spin-brake laser ablates a spot on the tumbling catch; the recoil of the vapour is the counter-torque.",
         "fullText": "Dead satellites and debris tumble unpredictably, sometimes at rates up to 60° per second, and you cannot safely haul a spinning target. Before it comes home it has to be de-spun, which means applying a counter-torque through the grapple point using thrusters or reaction wheels.\n\nThe difficulty is that real objects are not simple. An asymmetric body tumbles about all three axes at once, so the spin does not lie on a single clean axis, and knowing its moment of inertia is what tells you how much effort the job will take. A fast, awkward tumble can defeat a grab outright, which is why reading the target's motion comes before committing a net or an arm.",
         "realWorld": "Debris tumbles up to ~60°/s; de-spin via grapple-point counter-torque is a core active-debris-removal problem.",
         "trlRationale": "Detumble control demonstrated; non-cooperative capture still maturing.",
@@ -2458,6 +2472,7 @@
       "i18n": {
         "title": "Bandwidth & Data Rates",
         "shortText": "A satellite downlink is thinner than bad home internet; every bit has to earn its place in the stream.",
+        "hardwareNote": "The medium-gain patch on the fore hull carries the mothership’s heavy data — sensor returns and video — at a rate that still fills in seconds.",
         "fullText": "A common S-band downlink carries only about 2 megabits per second, less than a weak home connection, and it is shared across everything the ship wants to say. With six daughters generating telemetry, sensor returns, and video at once, the pipe fills instantly.\n\nSo you triage the bits. Compression, prioritisation, and store-and-forward all help, but sometimes the honest answer is that only one daughter gets a live feed while the rest send numbers. Bandwidth is a budget like any other up here, and choosing what not to send is as much a part of the job as choosing what to.",
         "realWorld": "Typical S-band downlink ~2 Mbps, shared across all traffic; compression and prioritisation are standard practice.",
         "trlRationale": "Fundamental comms architecture.",
@@ -2560,6 +2575,7 @@
       "i18n": {
         "title": "S-Band vs Ka-Band",
         "shortText": "Higher radio bands carry more data but demand bigger dishes and finer aim: power and pointing for throughput.",
+        "hardwareNote": "The two S-band whips, fore and aft, hold the command link from any attitude; the band’s trade of robustness for data rate is the briefing.",
         "fullText": "Radio bands trade robustness for capacity. S-band, near 2 gigahertz, is forgiving: a small omnidirectional antenna holds the link, but it tops out around 2 megabits per second. Ka-band, near 26 gigahertz, offers roughly ten times the data rate but needs a steerable dish aimed precisely. X-band, near 8 gigahertz, sits between them and serves military and deep-space work.\n\nThe higher you climb in frequency, the more you pay in antenna size, pointing accuracy, and power, and the more weather and ionospheric disturbances bite. Your ship begins on S-band and earns its way up: reaching Ka-band or an optical link means first affording the attitude control and power that finer beams demand.",
         "realWorld": "S-band ~2 GHz (robust, ~2 Mbps); X-band ~8 GHz; Ka-band ~26 GHz (~10× data, needs precise pointing); ITU-coordinated.",
         "trlRationale": "ITU-coordinated bands since 1960s.",
@@ -2918,6 +2934,7 @@
       "i18n": {
         "title": "Docking vs Berthing",
         "shortText": "Two ways to connect: the craft flies itself in (docking), or an arm grabs it and bolts it down (berthing).",
+        "hardwareNote": "The four berths carved into the barrel hold two large and two small daughters; a returning craft is berthed by strut and latch, not flown in.",
         "fullText": "Rendezvous only gets you alongside; you still have to connect. Docking is active: the arriving craft flies itself into a mating ring under its own control and latches on contact. It is quick, but it demands precise alignment and a cooperative, steady partner.\n\nBerthing is passive: a robotic arm captures the free-floating object, then an operator walks it onto a fixture to be bolted down. It is slower but far gentler, and it can handle a target that is uncooperative or tumbling. Debris removal is almost always a berthing problem, because the thing you are grabbing is dead, usually spinning, and has to be de-spun before contact. Your daughters berth.",
         "realWorld": "Docking: Apollo, Crew Dragon. Berthing: Canadarm2 (SSRMS) capturing Cygnus and HTV cargo ships.",
         "trlRationale": "Mature operational technique.",
@@ -3918,6 +3935,7 @@
       "i18n": {
         "title": "Sun Sensors",
         "shortText": "The cheapest, oldest trick in attitude control: look at the Sun, and you know which way you're facing.",
+        "hardwareNote": "The four sun sensors on the fore cap give the mothership a coarse fix on where the Sun is — enough to spin out of a tumble or aim the wings.",
         "fullText": "A sun sensor measures the direction to the Sun, giving a quick, dependable reference for which way a spacecraft points. Coarse versions are little more than light detectors reporting roughly where the Sun sits, enough to spin up out of a tumble or aim solar panels. Fine versions are far more precise and feed the attitude determination system directly.\n\nThey are among the simplest, cheapest, and oldest attitude sensors, flown since the earliest satellites, and almost every spacecraft still carries some form as a backstop to the fussier star tracker. When the fancy sensor is blinded by sunlight or confused, the humble sun sensor is often what keeps a vehicle oriented. Reliability, not precision, is its whole point.",
         "realWorld": "Flown since the earliest satellites; coarse and fine variants on nearly every spacecraft.",
         "trlRationale": "Flown since the dawn of the satellite era.",
@@ -3942,6 +3960,7 @@
       "i18n": {
         "title": "Visual Pose Estimation",
         "shortText": "Your target is tumbling, unlit, and never built to be caught; a camera and hard math still work out its exact pose.",
+        "hardwareNote": "The daylight camera on the fore cap images a target and hands the pose solver its frames; how a picture becomes a six-axis pose is the briefing.",
         "fullText": "To grab a derelict you first have to know precisely where it is and how it is tumbling: its full six-degrees-of-freedom pose, position plus orientation. A cooperative spacecraft makes this easy with markers or a radio link, but debris offers none of that. It is non-cooperative, with no beacons, no markers, and often spinning in shadow.\n\nVisual pose estimation solves it with cameras and algorithms that either match the live image against a three-dimensional model of the target or track its features frame to frame, recovering the relative pose in real time. It is the perception layer beneath every capture, and it is being actively demonstrated in European and Japanese debris-removal and servicing programs. Non-cooperative capture is exactly where it is still maturing.",
         "realWorld": "Vision-based relative navigation for non-cooperative targets; demonstrated in ESA and JAXA debris-removal and servicing programs.",
         "trlRationale": "Demonstrated in servicing/ADR programs; non-cooperative capture still maturing.",
@@ -3969,6 +3988,7 @@
       "i18n": {
         "title": "Roll-Out Solar Array (ROSA)",
         "shortText": "A solar panel that unrolls like a tape measure. Composite booms store the spring energy, so there are no motors to deploy it.",
+        "hardwareNote": "The two roll-out wings are the mothership’s main power source, about 2.2 kW in sunlight; their spring-boom deployment is the briefing.",
         "fullText": "A roll-out solar array ships coiled up like a window shade. Its structure is a pair of flexible composite booms that hold strain energy while rolled. Released, they straighten under their own stored energy and pull the blanket of solar cells out flat. Nothing drives the deployment: no motors, no explosive bolts, so there is far less to fail.\n\nROSA was demonstrated on the International Space Station in June 2017. Larger iROSA arrays began upgrading the station's power in June 2021, and the DART asteroid mission flew ROSA wings the same year. Rolled up, the array is lighter and far more compact than rigid hinged panels of the same output. The deployable panels on your ship are roll-out arrays built on this design.",
         "realWorld": "Demonstrated on the ISS June 2017; iROSA upgrade arrays installed from June 2021; DART flew ROSA wings (2021).",
         "trlRationale": "Flown and operational on the ISS and DART.",
@@ -4078,6 +4098,7 @@
       "i18n": {
         "title": "Mechanical Gripper",
         "shortText": "Jaws or adhesive pads that grasp a solid feature on the target. It gives a firm, reusable hold a net cannot.",
+        "hardwareNote": "The two large daughters carry Weaver grippers and medium nets; the gripper takes a firm, reusable hold where a net would only wrap.",
         "fullText": "A gripper captures by grasping rather than wrapping. Some designs close mechanical jaws around a rail or fitting; others use gecko-inspired adhesive pads that stick to a smooth surface without needing anything to hook onto. Either way the result is a firm, precise, reusable hold on a specific feature of the target.\n\nResearch hardware points the way. NASA JPL's LEMUR robot climbed with gecko-adhesive grippers, and Astroscale has tested capture mechanisms for grabbing satellites. A gripper beats a net when the target has a solid rail or fitting to grab and you want a clean hold you can release and reuse, instead of wrapping the whole object in mesh.",
         "realWorld": "Mechanical and gecko-adhesion grippers (JPL LEMUR, Astroscale capture research); firm reusable grasp of a solid feature.",
         "trlRationale": "Demonstrated on research robots; capture grippers still maturing.",
@@ -4101,6 +4122,7 @@
       "i18n": {
         "title": "Contact Pad",
         "shortText": "A pad that touches a tumbling object and matches its spin, slowing it enough to handle without a hard grab.",
+        "hardwareNote": "The two small daughters carry Spinner pads and small nets; the pad matches a tumbling target’s spin and bleeds it off by contact.",
         "fullText": "Most debris tumbles, and grabbing a spinning object hard can fling your daughter away or add fresh damage. A contact pad handles it gently. It touches the target and, by matching spin before and during contact, bleeds off rotation instead of fighting it, bringing a tumbling object under control for a proper capture.\n\nThe idea is related to yo-yo despin, a long-standing technique for slowing a spinning spacecraft. Contact and despin handling trades the firm grip of a gripper or magnet for a softer touch that suits fragile or fast-tumbling targets. When a piece is spinning too hard to net or grab safely, the pad is the way in.",
         "realWorld": "Contact-based despin handling of tumbling objects; related to the flight-proven yo-yo despin technique.",
         "trlRationale": "Builds on proven despin methods; contact despin capture is still developmental.",
@@ -4334,6 +4356,7 @@
       "i18n": {
         "title": "Space Radiators",
         "shortText": "Spacecraft can only dump heat by radiating it: big flat panels glowing in infrared. Area, emissivity, and T⁴ set the whole budget.",
+        "hardwareNote": "The four radiator plates along the aft flower struts dump the ship’s waste heat as infrared; area, emissivity and T⁴ set how much.",
         "fullText": "In vacuum there is no air to blow across a hot part, so every watt a spacecraft makes must eventually leave as infrared light. The only dials that matter are radiator area, surface emissivity, and temperature — and temperature enters as T to the fourth power, so a slightly hotter panel sheds dramatically more heat. The ISS carries hundreds of square metres of white radiator wing for exactly this reason.\n\nYour aft flower is this hardware: four rigid struts carrying flat plates that swing aft of the rim, plumbed to nothing yet. Once the thermal loop is fitted, those panels become the ceiling on how hard the furnace and drives can run — the whole heat budget hangs off how much plate you fly and how hot you dare run it.",
         "realWorld": "ISS EATCS rejects ~70 kW through deployable ammonia radiators; every spacecraft big or small budgets heat by A·ε·σT⁴.",
         "trlRationale": "Deployable rigid radiators flown for decades (ISS HRS/EATCS class).",
@@ -4515,6 +4538,7 @@
       "i18n": {
         "title": "Mechanisms in Vacuum",
         "shortText": "Vacuum kills mechanisms: bare metals cold-weld, oils evaporate. MoS₂ films, gold plate, and heaters keep hinges honest for years.",
+        "hardwareNote": "The flower struts, their hinge brackets and the cradle strut hinges are the mothership’s moving joints; keeping them from cold-welding is the briefing.",
         "fullText": "On Earth every metal surface wears an invisible oxide glove. Vacuum strips the glove and never lets it regrow — press two clean metals together and they simply become one part. Add that ordinary oils boil away at low pressure and that a −150°C cold soak turns grease to brick, and you see why hinges, not electronics, are the classic spacecraft killers. Galileo's main antenna died this way: ribs cold-welded to their pins after the lubricant wore off.\n\nThe survival kit is boring and rigorous: molybdenum-disulphide dry films that lubricate without vapour, gold plating on contacts that must touch, dissimilar metal pairs that refuse to weld, and small heaters that keep mechanisms above their brittle range. The flower's hinge clevises carry exactly this treatment — dull grey films and heater lines, engineering against a failure mode with no repair verb.",
         "realWorld": "Galileo HGA ribs cold-welded (1991); MoS₂ films and gold plate are standard on every flight mechanism since.",
         "trlRationale": "Dry-film lubrication and anti-cold-weld practice are universal flight standards.",

@@ -28,7 +28,10 @@ export const Constants = {
   // '1007'→'1008': Wave-5 (Session C) callout-bridge review — two hardwareNames
   // moves (STRUT HINGES → vacuum_mechanisms, S-BAND OMNI (AFT) →
   // frequency_bands; no entries added or removed, docs/ladder/08-workbench.md §2).
-  DATA_VERSION: '1008',
+  // '1008'→'1009': Wave-5 (Session D) bridge lines — one `hardwareNote`
+  // sentence on each of the 24 hardware entries (the part and what it does on
+  // THIS ship, then the concept; no entries added or removed, 08-workbench §2).
+  DATA_VERSION: '1009',
 
   // ============================================================================
   // === INPUT (Delegation 1, 2026-05-31) ===
