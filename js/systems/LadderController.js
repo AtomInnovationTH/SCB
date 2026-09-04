@@ -19,6 +19,11 @@
  * effect goes through injected deps whose methods are all optional, so the
  * controller is unit-testable with plain stubs.
  *
+ * Wave 5 Session E (08-workbench §5 D1/D3): floor 2 (DEPOT) is a DOORWAY —
+ * a ride that arrives on it from a floor above enters the SHOP GameState at
+ * ride END through the optional `depot` host (`_enterDepot`), and the core is
+ * parked back on the floor the player left so the return lands there.
+ *
  * Activation: the ladder lives entirely INSIDE gameplay states (T4). It engages
  * when `Constants.LADDER.ENABLED` and `gameState.isGameplay()`, and disengages
  * otherwise — restoring the shipped camera. With the flag off it never engages,
@@ -34,6 +39,14 @@ import { Constants } from '../core/Constants.js';
 
 /** Crossing-ride duration: midpoint of the locked 450–650 ms window. */
 const CROSS_RIDE_MS = 550;
+
+/**
+ * The DEPOT floor id (FloorContract F2). Wave 5 Session E (08-workbench §5,
+ * D1/D3): F2 is a DOORWAY into the SHOP GameState, not a room — a ride that
+ * ARRIVES on it from a floor above enters the depot (see `_enterDepot`).
+ * Retires with the deferred 7→5 contract change (00-spec §3 F2 amendment).
+ */
+const DEPOT_FLOOR_ID = 2;
 
 /**
  * G1 (post-M3): runtime-adapt holdoff window after the last ladder input.
@@ -83,6 +96,21 @@ export class LadderController {
    *   activate/deactivate/isActive. Optional — no-op without it. Floor-keyed
    *   like hullcam (F1's debrisMode 'hidden' is shared with F2): arriving on
    *   floor 1 drops into the hosted Tech Library, any other floor closes it.
+   * @param {object} [deps.depot]        - F2 (DEPOT) doorway host (Wave 5 Session
+   *   E, 08-workbench §5 D3): `enter()` flips the game into the SHOP GameState
+   *   (main.js injects `() => gameFlowManager.transitionToState(GameStates.SHOP)`).
+   *   NOT floor-keyed content: a ride that ARRIVES on floor 2 from a floor above
+   *   (the F3 inner-wall push-through, or a rail-notch jump) calls it at ride
+   *   END — so the cross clunk (`sfx.onCross`, fired at the decision) precedes
+   *   the flip by the whole 550 ms ride (02-traps T8: the SHOP state suspends
+   *   the audio context synchronously). After a landed flip the core is parked
+   *   back on the floor the player LEFT (its own (floor, z01) is the in-memory
+   *   floor memory across the SHOP state — `_disengage` never resets it), so the
+   *   return re-engages on the hull, never on F2 again (which would re-enter the
+   *   depot) and never on F4. Optional — absent it F2 is the empty room it was.
+   *   Engaging DIRECTLY on floor 2 (no ride) never enters; arrivals from F1
+   *   (Esc / PgUp out of the archive) never enter either — the doorway is only
+   *   ever pushed INTO.
    * @param {object} [deps.audioBeds]    - per-floor audio beds (LadderAudioBeds):
    *   setFloor(floorId|null). Optional — absent it beds are a no-op.
    * @param {object} [deps.floorMask]    - per-floor HUD pane mask (FloorMask,
@@ -120,6 +148,7 @@ export class LadderController {
     this._refit = deps.refit || null;
     this._library = deps.library || null;
     this._archive = deps.archive || null;
+    this._depot = deps.depot || null;
     this._audioBeds = deps.audioBeds || null;
     this._floorMask = deps.floorMask || null;
     this._sfx = deps.sfx || null;
@@ -155,6 +184,13 @@ export class LadderController {
     // makes the controller safe even against a camera (or test stub) that
     // fires a superseded onDone anyway.
     this._rideSeq = 0;
+    /**
+     * The floor whose content is on screen (written by _applyFloorContent at
+     * engage and at every ride START) — the ORIGIN floor of the next ride. The
+     * depot doorway reads it to know a ride into F2 came from above (and where
+     * to park the core for the return). null until the first engage.
+     */
+    this._floorApplied = null;
   }
 
   /** The underlying pure core (read-only use — rail/tests). */
@@ -534,6 +570,8 @@ export class LadderController {
    * @private
    */
   _startRide(toFloor, entryZ01, rideMs, tMs, isCross) {
+    // The ORIGIN floor — read BEFORE the destination's content lands below.
+    const fromFloor = this._floorApplied;
     this._applyFidelity(toFloor);
     this._applyFloorContent(toFloor);
     const frame = this._frame(toFloor, entryZ01);
@@ -547,6 +585,14 @@ export class LadderController {
       // above): only the LATEST ride's completion counts, matching the core.
       if (isCross && this._sfx && this._sfx.onUndoWindow) this._sfx.onUndoWindow(true);
       this._refreshRail();
+      // Wave 5 Session E — the depot DOORWAY (08-workbench §5): a ride that
+      // arrived on F2 from a floor ABOVE enters the SHOP now, at ride END. The
+      // cross clunk fired at the decision (before _startRide), so it leads the
+      // state flip by the full ride (T8). A superseded ride (flick undo back
+      // out mid-flight) never reaches here — the seq guard above.
+      if (toFloor === DEPOT_FLOOR_ID && fromFloor != null && fromFloor > DEPOT_FLOOR_ID) {
+        this._enterDepot(fromFloor, t);
+      }
     };
     if (this._cameraSystem && this._cameraSystem.ladderStartRide) {
       this._cameraSystem.ladderStartRide({ ...frame, rideMs, onDone: done });
@@ -555,6 +601,48 @@ export class LadderController {
       // the core never wedges in `riding`.
       done();
     }
+  }
+
+  /**
+   * The depot doorway (Wave 5 Session E — 08-workbench §5 D3, 00-spec §3 F2
+   * amendment): a ride ARRIVED on F2 from `fromFloor` (> 2). Flip into the
+   * SHOP GameState through the injected host, then park the core back on the
+   * floor the player left so the return lands there.
+   *
+   * Order and why:
+   *   1. `depot.enter()` → GameFlowManager.transitionToState(SHOP): the
+   *      GAME_STATE_CHANGE payload still carries `firstDepotVisit` (the one
+   *      grant rule lives in GameFlowManager — nothing is duplicated here).
+   *      The clunk already sounded at the cross decision, 550 ms ago (T8).
+   *   2. Did the flip land? `gameState.isGameplay()` is false the moment it
+   *      did. A rejected transition (or a host that declined) leaves the
+   *      core on F2 exactly as shipped — the room, not a loop.
+   *   3. Park: `ladder.jump({ toFloor: fromFloor })` moves the core to
+   *      (fromFloor, the contract's arrive-from-below entry z01) and we
+   *      complete that ride synchronously — a hidden cut under the SHOP
+   *      overlay, NOT routed through _apply: no camera ride (the ladder
+   *      disengages on the next update() — SHOP is not a gameplay state, T4),
+   *      no content swap (the SHOP owns the screen; the return's _engage
+   *      applies the floor's content + camera frame from the core's state).
+   *      The core's (floor, z01) is the ONE in-memory floor memory across the
+   *      SHOP state: _disengage never resets it (pinned), and _engage reads
+   *      it — so the return re-engages on the hull the player left, never on
+   *      F2 (which would re-enter the depot) and never on F4. The exact z01
+   *      the player left at is NOT restored: ZoomLadder exposes no (floor,
+   *      z01) placement (jump lands on ENTRY_Z01_FROM_BELOW) — the D5
+   *      persistence session adds the core method; recorded in 03-plan.
+   * @param {number} fromFloor - the floor the ride into F2 departed from (> 2)
+   * @param {number} tMs - the ride-completion clock (the core's timeline)
+   * @private
+   */
+  _enterDepot(fromFloor, tMs) {
+    const host = this._depot;
+    if (!host || typeof host.enter !== 'function') return;   // no host → the F2 room, as shipped
+    host.enter();
+    const gs = this._gameState;
+    if (gs && gs.isGameplay && gs.isGameplay()) return;      // the flip did not land → stay on F2
+    const decisions = this._ladder.jump({ tMs, toFloor: fromFloor });
+    if (decisions.some((d) => d.type === 'ride')) this._ladder.rideFinished({ tMs });
   }
 
   /** Push a floor's fidelity block to SceneManager (T1). @private */
@@ -584,6 +672,8 @@ export class LadderController {
    * make each part a no-op. @private
    */
   _applyFloorContent(floor) {
+    // The origin-floor record for the next ride (the depot doorway reads it).
+    this._floorApplied = floor;
     // Reticle gating (F6/F7 'ship-to-icon' floors): the target + docking
     // reticles aim at subjects that are icons at Earth-anchored ranges, so both
     // hide while the engaged floor is >= 6 and restore on floors <= 5 (and on

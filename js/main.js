@@ -1669,6 +1669,14 @@ async function init() {
     // undefined (never constructed) → the dep is null → byte-identical.
     library: libraryPane,
     archive: archiveFloor,
+    // Wave 5 (Session E): the F2 DEPOT doorway (08-workbench §5 D3). A ride
+    // that arrives on floor 2 from above enters the SHOP GameState at ride
+    // END — the ONE shipped SHOP transition, so ShopScreen's GAME_STATE_CHANGE
+    // self-show and the firstDepotVisit payload ride it unchanged. The cross
+    // clunk (LadderSfx, at the decision) leads the flip by the 550 ms ride
+    // (T8: SHOP suspends the audio context synchronously). Flag-off: the
+    // controller never engages → the host is never called → byte-identical.
+    depot: { enter: () => gameFlowManager.transitionToState(GameStates.SHOP) },
     audioBeds: ladderAudioBeds,
     // Wave-4 map rule (D8/§4): per-floor pane rooms + the vitals always-set.
     floorMask: ladderFloorMask,
