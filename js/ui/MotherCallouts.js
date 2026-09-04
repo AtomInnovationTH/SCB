@@ -383,6 +383,10 @@ const GUIDE_STEP_S = 1.1;   // seconds each system stays highlighted in the tour
 const GUIDE_HOLD_S = 0.6;   // initial hold before the tour starts
 
 const FADE_RATE = 6.0;      // opacity ease rate for band crossfades
+
+// Scratch for _recBounds (a per-click edge, never per frame — module-level so
+// the record builder allocates only the record it returns).
+const _recBoundsScratch = new THREE.Vector3();
 const LINE_OP_SCALE = 0.8;  // line opacity = labelOp × this (round 4: hairline)
 const LINE_HALF_WIDTH_FRAC = 0.0012; // leader ribbon half-width / camera-ship dist (round 4: hairline)
 
@@ -695,24 +699,20 @@ export class MotherCallouts {
    * of the 5 m split) `_focusPart` is the major part nearest screen-centre,
    * re-picked every update(); outside that band there is no focus and this
    * returns null. Pure read; the small allocation is fine — main.js calls it
-   * only on an F1 arrival (ArchiveFloor.getSubject), never per frame.
+   * only on an F1 arrival (ArchiveFloor.getSubject) and on the LIBRARY pane's
+   * entry-less open edge, never per frame.
    * `codexId` is the part table's entry id/alias exactly as CodexSystem
    * resolves it (the same string the card click emits in CODEX_OPEN_ENTRY);
    * parts without a briefing report `codexId: null`, which ArchiveFloor treats
-   * as "no link" (plain arrival).
-   * @returns {{ id: string, name: string, codexId: string|null, systemId: string }|null}
+   * as "no link" (plain arrival). `screen` / `bounds`: see _partRecord.
+   * @returns {{ id: string, name: string, codexId: string|null, systemId: string,
+   *   screen: {x:number,y:number}|null, bounds: {x0:number,y0:number,x1:number,y1:number}|null }|null}
    */
   getFocusedPart() {
     if (this._band !== 'COMPONENT') return null;
     const rec = this._focusPart;
     if (!rec || !rec.def) return null;
-    const def = rec.def;
-    return {
-      id: def.id,
-      name: def.name,
-      codexId: (typeof def.codexId === 'string') ? def.codexId : null,
-      systemId: rec.sysId,
-    };
+    return this._partRecord(rec);
   }
 
   /**
@@ -721,19 +721,93 @@ export class MotherCallouts {
    * hover exists wherever a part's card is eligible (PART and COMPONENT bands;
    * in the SYSTEM band nothing on the hull hovers). Null when nothing is
    * hovered. Pure read; allocates a fresh object per call — never call it per
-   * frame.
-   * @returns {{ id: string, name: string, codexId: string|null, systemId: string }|null}
+   * frame (the click hook calls it once per click).
+   * @returns {{ id: string, name: string, codexId: string|null, systemId: string,
+   *   screen: {x:number,y:number}|null, bounds: {x0:number,y0:number,x1:number,y1:number}|null }|null}
    */
   getHoveredPart() {
     const rec = this._hoverRec;
     if (!rec || !rec.def) return null;
+    return this._partRecord(rec);
+  }
+
+  /**
+   * The ONE record builder behind getHoveredPart()/getFocusedPart() (Wave 5
+   * Session D — "the photo on the clicked part"). Beside the shipped four
+   * fields it carries WHERE the part is on screen, in DRAWING-BUFFER px
+   * (`canvas.width/height`, the space a `drawImage` crop reads — the same
+   * convention as main.js's photoSource), so the LIBRARY pane can crop its
+   * photo around the clicked part instead of the ship:
+   *   screen — the callout ANCHOR's projection (rec._anchorX/_anchorY, the
+   *            NDC written by _layout every frame) × the canvas size; null
+   *            when the canvas is unknown / sizeless or the anchor is not on
+   *            screen (behind the camera, non-finite).
+   *   bounds — the projected pick-mesh box: every pick target's meshes'
+   *            geometry bounding boxes, 8 corners each through matrixWorld
+   *            (refreshed here — the in-frame matrices are a frame stale, the
+   *            STALE WORLD MATRICES note) and the camera → the screen-space
+   *            {x0,y0,x1,y1} in drawing-buffer px; null when the part has no
+   *            pick geometry (card-only parts) or nothing projects in front
+   *            of the camera. Computed ONCE per call — per click, never per
+   *            frame (the record allocates anyway).
+   * Never throws: any missing dep degrades that field to null.
+   * @private @param {object} rec
+   */
+  _partRecord(rec) {
     const def = rec.def;
     return {
       id: def.id,
       name: def.name,
       codexId: (typeof def.codexId === 'string') ? def.codexId : null,
       systemId: rec.sysId,
+      screen: this._recScreen(rec),
+      bounds: this._recBounds(rec),
     };
+  }
+
+  /** @private Canvas drawing-buffer size, or null when unknown / sizeless. */
+  _bufferSize() {
+    const cv = this.canvas;
+    const w = cv ? Number(cv.width) : 0, h = cv ? Number(cv.height) : 0;
+    return (w > 0 && h > 0) ? { w, h } : null;
+  }
+
+  /** @private The rec's anchor projection in drawing-buffer px (see _partRecord). */
+  _recScreen(rec) {
+    const size = this._bufferSize();
+    if (!size) return null;
+    const ax = rec._anchorX, ay = rec._anchorY, az = rec._anchorZ;
+    if (!Number.isFinite(ax) || !Number.isFinite(ay)) return null;
+    if (Number.isFinite(az) && az > 1) return null;          // behind the camera
+    return { x: (ax * 0.5 + 0.5) * size.w, y: (-ay * 0.5 + 0.5) * size.h };
+  }
+
+  /** @private The rec's projected pick-mesh box in drawing-buffer px (see _partRecord). */
+  _recBounds(rec) {
+    const size = this._bufferSize();
+    if (!size || !this.camera || typeof this._pickTargets !== 'function') return null;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, any = false;
+    const v = _recBoundsScratch;
+    for (const target of this._pickTargets(rec)) {
+      if (typeof target.updateWorldMatrix === 'function') target.updateWorldMatrix(true, true);
+      target.traverse((o) => {
+        if (!o.isMesh || !o.geometry?.attributes?.position || o.userData.partId) return;   // never our own outline shells
+        const g = o.geometry;
+        if (!g.boundingBox) g.computeBoundingBox();
+        const bb = g.boundingBox;
+        if (!bb) return;
+        for (let k = 0; k < 8; k++) {
+          v.set(k & 1 ? bb.max.x : bb.min.x, k & 2 ? bb.max.y : bb.min.y, k & 4 ? bb.max.z : bb.min.z);
+          v.applyMatrix4(o.matrixWorld).project(this.camera);
+          if (!Number.isFinite(v.x) || !Number.isFinite(v.y) || v.z > 1) continue;
+          const px = (v.x * 0.5 + 0.5) * size.w, py = (-v.y * 0.5 + 0.5) * size.h;
+          if (px < x0) x0 = px; if (px > x1) x1 = px;
+          if (py < y0) y0 = py; if (py > y1) y1 = py;
+          any = true;
+        }
+      });
+    }
+    return any ? { x0, y0, x1, y1 } : null;
   }
 
   /**

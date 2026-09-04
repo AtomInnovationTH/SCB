@@ -986,7 +986,11 @@ async function init() {
         // and the retarget is skipped — one pane, as documented. `via` is the
         // clicked callout name: the library header leads with it (owner
         // review 2026-09-03 — the page confirms the click before it teaches).
-        if (libraryPane && libraryPane.isOpen() && part && part.codexId) libraryPane.openEntry(part.codexId, { via: part.name });
+        // `anchor` (Session D): the clicked part's screen point + projected
+        // pick-mesh bounds in drawing-buffer px (the getHoveredPart record) —
+        // the pane's photo crops around the PART for this edge; the anchor
+        // rides the call, so it can never go stale (no stored click state).
+        if (libraryPane && libraryPane.isOpen() && part && part.codexId) libraryPane.openEntry(part.codexId, { via: part.name, anchor: part.screen ? { x: part.screen.x, y: part.screen.y, bounds: part.bounds } : null });
         // Subnautica rule (08-workbench §2 "clicking a locked part's card
         // unlocks its entry — exploration is how the library fills"): a
         // LOCKED entry gets an unlock request over the ONE existing path

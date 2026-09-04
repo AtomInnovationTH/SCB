@@ -43,7 +43,16 @@
  *     alone — the sanctioned fallback, byte-identical to Session B's header.
  *     The source (canvas + subject point) arrives through the injected
  *     `photoSource` getter; the frame scheduler through `raf`/`cancelRaf`
- *     (window's by default; absent headless → no photo, no throw).
+ *     (window's by default; absent headless → no photo, no throw). **Session
+ *     D — the photo on the clicked PART:** `openEntry(id, { anchor })` carries
+ *     the hull-click record's screen point + projected pick-mesh bounds
+ *     (drawing-buffer px, from MotherCallouts.getHoveredPart); the photo
+ *     taken for that edge crops PHOTO_CROP_H_FRAC_PART of the height around
+ *     the part (grown to its bounds, capped at the ship crop) and the banner
+ *     flashes once on arrival (reduced motion: none). Entry-less opens (tab /
+ *     toggle / pagePane) and un-anchored openEntry calls (REFIT title, chips)
+ *     frame the ship exactly as Session C shipped — the anchor rides ONE edge
+ *     and can never go stale under a later camera move.
  *   - `shortText` — the plain-English "why it matters" line every entry has.
  *   - a generated SPECS block for HARDWARE entries (entries carrying
  *     `hardwareNames`), from the entry's EXISTING fields only (no invented
@@ -137,8 +146,17 @@ export const PANE_Z_INDEX = 35;
  *  over its own tab (08-workbench §2 "edge tab always visible"; Session C). */
 export const TAB_Z_INDEX = 36;
 /** The photo crop: source region height as a fraction of the canvas height
- *  (16:10 — PHOTO_W × PHOTO_H output px), centred on the subject point. */
+ *  (16:10 — PHOTO_W × PHOTO_H output px), centred on the subject point — the
+ *  SHIP's projection (the tab / REFIT-title / chip opens). */
 export const PHOTO_CROP_H_FRAC = 0.42;
+/** The photo crop when ANCHORED on a clicked part (Session D, owner decision
+ *  2): tighter than the ship crop; grows to fit the part's projected bounds
+ *  (× PHOTO_BOUNDS_PAD) but never past PHOTO_CROP_H_FRAC. */
+export const PHOTO_CROP_H_FRAC_PART = 0.26;
+/** Padding factor applied to the part's bounds when the anchored crop grows. */
+export const PHOTO_BOUNDS_PAD = 1.15;
+/** The one-shot banner flash when a photo lands (ms) — reduced motion: none. */
+export const PHOTO_FLASH_MS = 600;
 /** Photo output size (device px of the thumbnail canvas). */
 export const PHOTO_W = 320;
 export const PHOTO_H = 200;
@@ -250,6 +268,13 @@ export class LibraryPane {
     this._photoTry = 0;
     this._photoCanvas = null;
     this._photoCount = 0;         // photos taken (tests/witness probe)
+    // The click anchor behind the CURRENT openEntry edge (Session D): { x, y,
+    // bounds } in drawing-buffer px from main.js's hook — the photo crops
+    // around the clicked PART instead of the ship. Set by openEntry, cleared
+    // by every entry-less open (tab / toggle / pagePane) so it can never go
+    // stale under a later camera move; read at frame time by _readPhoto.
+    this._photoAnchor = null;
+    this._photoFlashes = 0;       // banner flashes fired (tests/witness probe)
     this._disposed = false;
   }
 
@@ -406,10 +431,18 @@ export class LibraryPane {
   }
 
   /** Open the pane (no-op while disabled). Fires onOpenChange(true) once.
-   *  An ENTRY-LESS open (tab click / toggle — never openEntry, which has its
-   *  entry) first adopts the injected `subject` so the pane lands on the part
-   *  the player is looking at instead of the prompt (Session C). */
+   *  An ENTRY-LESS open (tab click / toggle / the swipe's pagePane — never
+   *  openEntry, which has its entry) first adopts the injected `subject` so
+   *  the pane lands on the part the player is looking at instead of the
+   *  prompt (Session C). No click is behind it, so any click anchor from an
+   *  earlier openEntry is dropped: the photo frames the ship (Session D). */
   open() {
+    this._photoAnchor = null;
+    this._openCore();
+  }
+
+  /** @private The open edge shared by open() and openEntry(). */
+  _openCore() {
     if (!this._enabled || this._open) return;
     if (this._entryId == null) this._adoptSubject();
     this._open = true;
@@ -446,10 +479,16 @@ export class LibraryPane {
    * open (never a throw, never a blank crash — the viewer's "safe no-op"
    * contract). While disabled the entry is stored for the next open.
    * @param {string} id - codex entry id
-   * @param {{ via?: string }} [opts] - `via`: the clicked part's callout name
-   *   (main.js passes `part.name`); the header leads with it when it is one
-   *   of the entry's own `hardwareNames`. Absent (REFIT title, related chip,
-   *   MAXIMIZE) → the header leads with every name the entry documents.
+   * @param {{ via?: string, anchor?: {x:number,y:number,bounds?:object}|null }} [opts]
+   *   `via`: the clicked part's callout name (main.js passes `part.name`);
+   *   the header leads with it when it is one of the entry's own
+   *   `hardwareNames`. `anchor` (Session D): the clicked part's screen point
+   *   (+ its projected pick-mesh `bounds`) in DRAWING-BUFFER px — main.js
+   *   passes `part.screen` / `part.bounds` from the hull-click record; the
+   *   photo taken for THIS edge crops around it (PHOTO_CROP_H_FRAC_PART,
+   *   grown to the bounds, capped at the ship crop). Absent (REFIT title,
+   *   related chip, MAXIMIZE) → the header leads with every name the entry
+   *   documents and the photo frames the ship.
    * @returns {boolean} true when the entry resolved
    */
   openEntry(id, opts = {}) {
@@ -464,8 +503,14 @@ export class LibraryPane {
       }
       if (via !== this._via) { this._via = via; changed = true; }   // a sibling part of the same entry: new lead, new photo
     }
+    // The click anchor rides THIS edge only (the newest edge owns the photo):
+    // a finite point is kept with its bounds; anything else → the ship.
+    const a = opts && opts.anchor;
+    this._photoAnchor = (a && Number.isFinite(a.x) && Number.isFinite(a.y))
+      ? { x: a.x, y: a.y, bounds: LibraryPane._finiteBounds(a.bounds) }
+      : null;
     const wasOpen = this._open;
-    this.open();                       // a fresh open takes its own photo
+    this._openCore();                  // a fresh open takes its own photo (anchored when the click supplied one)
     this.refresh();
     if (this._open) {
       this._armSeenTimer();
@@ -999,25 +1044,91 @@ export class LibraryPane {
     }
     const ctx = this._photoCanvas.getContext('2d');
     if (!ctx) return false;
-    // Source crop: PHOTO_CROP_H_FRAC of the height, 16:10, centred on the
-    // subject, clamped inside the canvas (a subject near an edge slides the
-    // crop rather than shrinking it).
-    const ch = Math.min(H, Math.max(1, Math.round(H * PHOTO_CROP_H_FRAC)));
-    const cw = Math.min(W, Math.round(ch * PHOTO_W / PHOTO_H));
-    const cx = Number.isFinite(src.x) ? src.x : W / 2;
-    const cy = Number.isFinite(src.y) ? src.y : H / 2;
-    const sx = Math.max(0, Math.min(W - cw, Math.round(cx - cw / 2)));
-    const sy = Math.max(0, Math.min(H - ch, Math.round(cy - ch / 2)));
+    // Source crop (the pure law, pinned): the ship crop centred on the
+    // source point, or — when this edge came from a hull click — the tighter
+    // PART crop centred on the clicked part, grown to its bounds.
+    const c = LibraryPane.photoCrop(W, H, src, this._photoAnchor);
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, PHOTO_W, PHOTO_H);
-    ctx.drawImage(cv, sx, sy, cw, ch, 0, 0, PHOTO_W, PHOTO_H);
+    ctx.drawImage(cv, c.sx, c.sy, c.cw, c.ch, 0, 0, PHOTO_W, PHOTO_H);
     if (!LibraryPane.photoLit(ctx.getImageData(0, 0, PHOTO_W, PHOTO_H))) return false;
     const url = this._photoCanvas.toDataURL('image/jpeg', 0.8);
     if (typeof url !== 'string' || url.length < 64) return false;
-    this._photo = { id: this._entryId, url };
+    this._photo = { id: this._entryId, url, anchored: c.anchored };
     this._photoCount++;
     this.refresh();                    // structural (photo 0 → 1): writes at once
+    this._flashBanner();               // the one-shot arrival flash (reduced motion: none)
     return true;
+  }
+
+  /**
+   * The photo crop law (pure, exported for the suite). A 16:10 source rect
+   * (PHOTO_W × PHOTO_H output) inside a W × H canvas:
+   *   - no anchor → PHOTO_CROP_H_FRAC of the height, centred on the source
+   *     point (the ship's projection; an unprojectable point → the centre);
+   *   - anchor (a hull click, Session D) → PHOTO_CROP_H_FRAC_PART of the
+   *     height, centred on the PART's screen point; when the anchor carries
+   *     the part's projected bounds the crop grows so the whole part fits
+   *     (the farthest bounds edge from the anchor, × PHOTO_BOUNDS_PAD, in
+   *     either axis) but never past the ship crop — a small sensor gets the
+   *     tight frame, a wing gets the ship's.
+   * The rect is CLAMPED inside the canvas (an edge subject slides the crop,
+   * never shrinks it). Owner decision 2 (2026-09-04): PART fraction 0.26.
+   * @param {number} W @param {number} H - canvas drawing-buffer size
+   * @param {{x?:number,y?:number}|null} src - the photoSource point
+   * @param {{x:number,y:number,bounds?:{x0,y0,x1,y1}|null}|null} anchor
+   * @returns {{ sx:number, sy:number, cw:number, ch:number, anchored:boolean }}
+   */
+  static photoCrop(W, H, src, anchor) {
+    const anchored = !!(anchor && Number.isFinite(anchor.x) && Number.isFinite(anchor.y));
+    const cx = anchored ? anchor.x : ((src && Number.isFinite(src.x)) ? src.x : W / 2);
+    const cy = anchored ? anchor.y : ((src && Number.isFinite(src.y)) ? src.y : H / 2);
+    const shipH = H * PHOTO_CROP_H_FRAC;
+    let hPx = anchored ? H * PHOTO_CROP_H_FRAC_PART : shipH;
+    const b = anchored ? LibraryPane._finiteBounds(anchor.bounds) : null;
+    if (b) {
+      const needH = 2 * Math.max(Math.abs(b.y0 - cy), Math.abs(b.y1 - cy)) * PHOTO_BOUNDS_PAD;
+      const needW = 2 * Math.max(Math.abs(b.x0 - cx), Math.abs(b.x1 - cx)) * PHOTO_BOUNDS_PAD;
+      hPx = Math.max(hPx, needH, needW * PHOTO_H / PHOTO_W);
+      hPx = Math.min(hPx, shipH);
+    }
+    const ch = Math.min(H, Math.max(1, Math.round(hPx)));
+    const cw = Math.min(W, Math.round(ch * PHOTO_W / PHOTO_H));
+    const sx = Math.max(0, Math.min(W - cw, Math.round(cx - cw / 2)));
+    const sy = Math.max(0, Math.min(H - ch, Math.round(cy - ch / 2)));
+    return { sx, sy, cw, ch, anchored };
+  }
+
+  /** @private A bounds box with four finite edges, else null. */
+  static _finiteBounds(b) {
+    if (!b || !Number.isFinite(b.x0) || !Number.isFinite(b.y0) || !Number.isFinite(b.x1) || !Number.isFinite(b.y1)) return null;
+    return { x0: Math.min(b.x0, b.x1), y0: Math.min(b.y0, b.y1), x1: Math.max(b.x0, b.x1), y1: Math.max(b.y0, b.y1) };
+  }
+
+  /**
+   * @private The one-shot arrival flash on the banner (Session D): right after
+   * the structural repaint that inserted `.library-photo`, run a PHOTO_FLASH_MS
+   * brightness/ring animation on it through the Web Animations API — no
+   * stylesheet, no second style write, no timer, the element returns to its
+   * inline style by itself. Reduced motion → none (the banner's arrival is
+   * the signal). Headless (no querySelector / no animate) → counted, not
+   * drawn. Never per frame: once per photo landed.
+   */
+  _flashBanner() {
+    this._photoFlashes++;
+    if (this._reducedMotion()) return;
+    const host = this._root;
+    const img = (host && typeof host.querySelector === 'function') ? host.querySelector('.library-photo') : null;
+    if (!img || typeof img.animate !== 'function') return;
+    try {
+      img.animate(
+        [
+          { filter: 'brightness(1.9)', boxShadow: `0 0 0 2px ${VisualLaw.COLORS.VALUE}` },
+          { filter: 'brightness(1)', boxShadow: '0 0 0 0 rgba(0,0,0,0)' },
+        ],
+        { duration: PHOTO_FLASH_MS, easing: 'ease-out' },
+      );
+    } catch (_e) { /* an animation is a flourish, never a failure */ }
   }
 
   /**
