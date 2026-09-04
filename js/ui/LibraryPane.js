@@ -108,15 +108,21 @@
  * `#ladder-library`, header `.library-header`, edge tab `#ladder-library-tab`
  * always visible while enabled carrying the UNREAD count (unlocked, not yet
  * seen), which PULSES ONCE when a new unlock lands (reduced motion: the
- * count changes, no animation). The tab sits ONE z step above the root
- * (TAB_Z_INDEX 36 over PANE_Z_INDEX 35 — Session C): the open pane slides
- * in under the tab, so the tab stays visible (08-workbench §2 "edge tabs
- * are always visible in the workbench") and a click on it toggles the pane
- * closed. ONE CSS variable (`--library-dir`, default 1)
- * mirrors the slide direction for RTL (the `--refit-dir` law): an RTL boot
- * sets `--library-dir:-1` (and left-anchors the pane) and every transform
- * follows. ONE_PANE_BREAKPOINT_PX = 1100 is exported for the hub's
- * below-~1100-px one-pane rule (01-numbers "One-pane breakpoint").
+ * count changes, no animation). STRUCTURE (Session D, owner decision 3): the
+ * root is the positioning + TRANSFORM shell (width, z, the slide; paints
+ * nothing, takes no pointer events); inside it the BODY (`.library-body`:
+ * border, background, padding, the scrolling innerHTML) and the TAB — a child
+ * of the root at the pane's INNER edge, so it rides the slide: closed = the
+ * screen edge, open = the pane's inner edge, never over the content (the
+ * Session C z-36 overlay covered ~22 px of its own open pane; retired).
+ * Reduced motion fades the BODY, the root never moves, and the tab flips
+ * between the screen edge and the inner edge through `--library-open`
+ * (visible + clickable while the pane is closed). ONE CSS variable
+ * (`--library-dir`, default 1) mirrors the slide direction AND the tab's
+ * side for RTL (the `--refit-dir` law): an RTL boot sets `--library-dir:-1`
+ * (and left-anchors the pane) and every transform follows.
+ * ONE_PANE_BREAKPOINT_PX = 1100 is exported for the hub's below-~1100-px
+ * one-pane rule (01-numbers "One-pane breakpoint").
  *
  * @module ui/LibraryPane
  */
@@ -140,11 +146,12 @@ export const ONE_PANE_BREAKPOINT_PX = 1100;
  *  SEEN_DWELL_MS (CodexViewerUI.js:58), mirrored so the pane and the viewer
  *  share one reading contract. */
 export const SEEN_DWELL_MS = 1500;
-/** Pane root stacking (the shipped workbench-pane layer). */
+/** Pane root stacking (the shipped workbench-pane layer). The edge tab is a
+ *  CHILD of the root at the pane's inner edge since Session D (owner decision
+ *  3) — it rides the pane's transform and needs no z step of its own (the
+ *  Session C TAB_Z_INDEX 36 overlay, which covered ~22 px of the open pane,
+ *  is retired). */
 export const PANE_Z_INDEX = 35;
-/** Edge tab stacking — ONE step above the root so the open pane never paints
- *  over its own tab (08-workbench §2 "edge tab always visible"; Session C). */
-export const TAB_Z_INDEX = 36;
 /** The photo crop: source region height as a fraction of the canvas height
  *  (16:10 — PHOTO_W × PHOTO_H output px), centred on the subject point — the
  *  SHIP's projection (the tab / REFIT-title / chip opens). */
@@ -174,6 +181,15 @@ const DOM_WRITE_MIN_INTERVAL_MS = 250;
 
 /** Monotonic ms clock (DOM-guarded module — Date.now fallback headless). */
 const _nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+
+/** Write a CSS custom property (the real DOM needs setProperty; a fake-DOM
+ *  style object takes the key directly — tests read it back). */
+function _setVar(el, name, value) {
+  const st = el && el.style;
+  if (!st) return;
+  if (typeof st.setProperty === 'function') st.setProperty(name, value);
+  else st[name] = value;
+}
 
 /** House reduced-motion probe (the FloorMask.js:188-196 shape). */
 function _prefersReducedMotion() {
@@ -241,8 +257,9 @@ export class LibraryPane {
     this._entryId = null;         // the entry the pane is showing (null = prompt)
     this._via = null;             // the clicked part's callout name behind the entry (header lead), else null
     this._built = false;
-    this._root = null;
-    this._tab = null;
+    this._root = null;            // the transform shell (#ladder-library)
+    this._body = null;            // the panel inside it (.library-body — the innerHTML target)
+    this._tab = null;             // the edge tab, a child of the root at its inner edge
     this._tabCount = null;
     this._lastHtml = null;
     this._lastStructKey = null;
@@ -561,7 +578,7 @@ export class LibraryPane {
     }
     const html = this._html(model);
     if (html !== this._lastHtml) {
-      this._root.innerHTML = html;
+      this._body.innerHTML = html;          // the panel (Session D: the root is the transform shell)
       this._lastHtml = html;
       this._lastStructKey = structKey;
       this._lastWriteMs = now;
@@ -582,9 +599,10 @@ export class LibraryPane {
       try { this._onOpenChange(false); } catch (_e) { /* dep */ }
     }
     this._open = false;
-    if (this._root && this._root.remove) this._root.remove();
+    if (this._root && this._root.remove) this._root.remove();   // takes the body + tab with it
     if (this._tab && this._tab.remove) this._tab.remove();
     this._root = null;
+    this._body = null;
     this._tab = null;
     this._tabCount = null;
     this._built = false;
@@ -693,14 +711,60 @@ export class LibraryPane {
     this._built = true;
     const reduced = this._reducedMotion();
 
+    // The pane ROOT — RIGHT, 380–440 px (01-numbers) — is the positioning +
+    // TRANSFORM shell (Session D): it carries the slide, the width clamp and
+    // the z layer, paints nothing itself and takes no pointer events; the
+    // BODY (the panel: border, background, padding, the scrolling content)
+    // and the edge TAB are its children, so the tab RIDES the pane's
+    // transform. --library-dir is the ONE RTL mirror variable (the --refit-dir
+    // law: an RTL boot flips it to -1 and left-anchors the pane) — every
+    // transform AND the tab's side follow it. --library-open (0|1) is the
+    // reduced-motion tab position (the root never moves there; see
+    // _applyOpenState).
+    const root = doc.createElement('div');
+    root.id = 'ladder-library';
+    root.className = reduced ? 'library-reduced' : '';
+    root.style.cssText = [
+      'position:absolute', 'right:0', 'top:56px', 'bottom:96px', `z-index:${PANE_Z_INDEX}`,
+      'width:clamp(380px, 28vw, 440px)', 'box-sizing:border-box',
+      'pointer-events:none', '--library-dir:1', '--library-open:1',
+      // Slide (transform) in the normal path; the reduced-motion class swaps
+      // the slide for a fade of the BODY at the same duration (08-workbench §2
+      // Motion) — the root then never moves, so the tab stays visible.
+      reduced
+        ? ''
+        : `transition:transform ${PANE_SLIDE_MS}ms cubic-bezier(0.65,0,0.35,1), opacity 400ms ease`,
+    ].join(';');
+
+    // The body — the panel the player reads. Fills the root; scrolls.
+    const body = doc.createElement('div');
+    body.className = 'library-body';
+    body.style.cssText = [
+      'position:absolute', 'top:0', 'right:0', 'bottom:0', 'left:0', 'box-sizing:border-box',
+      'padding:10px 12px', 'overflow-y:auto',
+      'border:1px solid rgba(0,204,255,0.4)', 'border-right:none', 'border-radius:6px 0 0 6px',
+      'background:rgba(0,16,32,0.82)', 'color:' + VisualLaw.COLORS.INFO,
+      'font-family:"Courier New",monospace', 'font-size:0.68rem', 'letter-spacing:0.05em',
+      'pointer-events:auto',
+      reduced ? `transition:opacity ${PANE_SLIDE_MS}ms ease` : '',
+    ].join(';');
+    root.appendChild(body);
+
     // The edge tab — always visible while enabled (08-workbench §2 Grammar:
-    // "LIBRARY: unread count, pulses once on a new unlock"). ONE z step above
-    // the root (Session C): the open pane slides in UNDER the tab, so the tab
-    // never disappears behind its own pane and a click toggles it closed.
+    // "LIBRARY: unread count, pulses once on a new unlock"). A CHILD of the
+    // root at the pane's INNER edge (Session D, owner decision 3): closed, the
+    // root's slide parks it exactly at the screen edge; open, it sits on the
+    // pane's inner edge — never over the content. The side follows the RTL
+    // variable: left = 50% − dir·50% (dir 1 → the root's left edge) and the
+    // −100 % self-translate puts the tab outside the box; under reduced motion
+    // --library-open flips it between the screen edge (closed) and the inner
+    // edge (open) because the root never moves.
     const tab = doc.createElement('div');
     tab.id = 'ladder-library-tab';
     tab.style.cssText = [
-      'position:absolute', 'right:0', 'top:38%', `z-index:${TAB_Z_INDEX}`,
+      'position:absolute', 'top:38%', 'z-index:1',
+      'left:calc(50% - var(--library-dir, 1) * (2 * var(--library-open, 1) - 1) * 50%)',
+      'transform:translateX(calc((-1 - var(--library-dir, 1)) * 50%))',
       'padding:8px 4px 8px 6px', 'border:1px solid rgba(0,204,255,0.4)', 'border-right:none',
       'border-radius:6px 0 0 6px', 'background:rgba(0,16,32,0.85)',
       'color:' + VisualLaw.COLORS.INFO, 'cursor:pointer',
@@ -720,59 +784,54 @@ export class LibraryPane {
     tab.appendChild(tabLabel);
     tab.appendChild(tabCount);
     tab.addEventListener('click', () => { this._wake(); this.toggle(); });
-    doc.body.appendChild(tab);
-    this._tab = tab;
-    this._tabCount = tabCount;
+    root.appendChild(tab);
 
-    // The pane root — RIGHT, 380–440 px (01-numbers), slid fully off-canvas
-    // while closed. --library-dir is the ONE RTL mirror variable (the
-    // --refit-dir law: an RTL boot flips it to -1 and left-anchors the pane).
-    const root = doc.createElement('div');
-    root.id = 'ladder-library';
-    root.className = reduced ? 'library-reduced' : '';
-    root.style.cssText = [
-      'position:absolute', 'right:0', 'top:56px', 'bottom:96px', `z-index:${PANE_Z_INDEX}`,
-      'width:clamp(380px, 28vw, 440px)', 'box-sizing:border-box',
-      'padding:10px 12px', 'overflow-y:auto',
-      'border:1px solid rgba(0,204,255,0.4)', 'border-right:none', 'border-radius:6px 0 0 6px',
-      'background:rgba(0,16,32,0.82)', 'color:' + VisualLaw.COLORS.INFO,
-      'font-family:"Courier New",monospace', 'font-size:0.68rem', 'letter-spacing:0.05em',
-      'pointer-events:auto', '--library-dir:1',
-      // Slide (transform) in the normal path; the reduced-motion class swaps
-      // the slide for a fade at the same duration (08-workbench §2 Motion).
-      reduced
-        ? `transition:opacity ${PANE_SLIDE_MS}ms ease`
-        : `transition:transform ${PANE_SLIDE_MS}ms cubic-bezier(0.65,0,0.35,1), opacity 400ms ease`,
-    ].join(';');
     doc.body.appendChild(root);
     this._root = root;
+    this._body = body;
+    this._tab = tab;
+    this._tabCount = tabCount;
     this._applyOpenState();
 
     // Delegated interactions (one listener set — G1, the PaneHelp pattern):
+    // on the root, so the body's content and the tab share it (the tab's own
+    // click above toggles; here it only wakes).
     root.addEventListener('click', (e) => this._onClick(e));
     root.addEventListener('pointermove', () => this._wake());
     root.addEventListener('pointerdown', () => this._wake());
   }
 
-  /** @private Slide/fade the root + tab to the current open state. */
+  /** @private Slide (root) / fade (body) to the current open state; the tab
+   *  rides the root in the slide path and flips edges in the fade path. */
   _applyOpenState() {
     const root = this._root;
     if (!root) return;
+    const body = this._body;
     const reduced = this._reducedMotion();
     if (reduced) {
       root.className = 'library-reduced';
-      root.style.transform = 'none';
-      root.style.opacity = this._open ? '1' : '0';
-      root.style.visibility = this._open ? 'visible' : 'hidden';
+      root.style.transform = 'none';              // the root never moves: the fade is the body's
+      root.style.visibility = 'visible';
+      if (body) {
+        body.style.opacity = this._open ? '1' : '0';
+        body.style.visibility = this._open ? 'visible' : 'hidden';
+      }
+      // The tab stays visible + clickable while the body is hidden: closed it
+      // sits at the screen edge, open at the pane's inner edge (a snap —
+      // reduced motion permits it).
+      _setVar(root, '--library-open', this._open ? '1' : '0');
     } else {
       root.className = '';
       // One CSS variable mirrors the slide for RTL (--library-dir: -1 flips
-      // it); the RIGHT pane slides out toward +X.
+      // it); the RIGHT pane slides out toward +X by exactly its width, so the
+      // tab riding at its inner edge parks at the screen edge when closed.
       root.style.transform = this._open
         ? 'translateX(0)'
-        : 'translateX(calc(var(--library-dir, 1) * 110%))';
+        : 'translateX(calc(var(--library-dir, 1) * 100%))';
       root.style.opacity = this._open ? '1' : '0.999'; // keep painted for the slide
       root.style.visibility = 'visible';
+      if (body) { body.style.opacity = '1'; body.style.visibility = 'visible'; }
+      _setVar(root, '--library-open', '1');
     }
   }
 
@@ -1117,7 +1176,7 @@ export class LibraryPane {
   _flashBanner() {
     this._photoFlashes++;
     if (this._reducedMotion()) return;
-    const host = this._root;
+    const host = this._body || this._root;
     const img = (host && typeof host.querySelector === 'function') ? host.querySelector('.library-photo') : null;
     if (!img || typeof img.animate !== 'function') return;
     try {

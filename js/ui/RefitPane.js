@@ -46,16 +46,23 @@
  *
  * LAYOUT: LEFT pane, width clamp(300px, 24vw, 340px) (01-numbers), root
  * `#ladder-refit`, header `.refit-header`, edge tab `#ladder-refit-tab`
- * always visible while enabled carrying the GOLD count of affordable refits;
- * the tab sits ONE z step above the root (TAB_Z_INDEX 36 over PANE_Z_INDEX
- * 35 — Session C) so the open pane never paints over it and a tab click
- * toggles the pane closed. The header title is the pane's ONE Tech Library
+ * always visible while enabled carrying the GOLD count of affordable refits.
+ * STRUCTURE (Session D, owner decision 3): the root is the positioning +
+ * TRANSFORM shell (width, z, the slide; paints nothing, takes no pointer
+ * events); inside it the BODY (`.refit-body`: border, background, padding,
+ * the scrolling innerHTML) and the TAB — a child of the root at the pane's
+ * INNER edge, so it rides the slide: closed = the screen edge, open = the
+ * pane's inner edge, never over the content (the Session C z-36 overlay
+ * covered ~22 px of its own open pane; retired). Reduced motion fades the
+ * BODY, the root never moves, and the tab flips between the screen edge and
+ * the inner edge through `--refit-open` (visible + clickable while the pane
+ * is closed). The header title is the pane's ONE Tech Library
  * deep link (`.refit-title[data-codex]` = the manifest codexId, also read by
  * `focusedCodexId()`); alternative rows carry no data-codex — shop rows have
  * no entries and none are invented (Session C decision d).
- * ONE CSS variable (`--refit-dir`, default 1) mirrors the slide direction for
- * RTL: an RTL boot sets `--refit-dir:-1` (and right-anchors the pane) and
- * every transform follows.
+ * ONE CSS variable (`--refit-dir`, default 1) mirrors the slide direction AND
+ * the tab's side for RTL: an RTL boot sets `--refit-dir:-1` (and right-anchors
+ * the pane) and every transform follows.
  *
  * @module ui/RefitPane
  */
@@ -74,17 +81,27 @@ export const PANE_SLIDE_MS = 270;
 export const IDLE_FADE_OPACITY = 0.7;
 /** Idle threshold before the fade applies (ms). */
 export const IDLE_FADE_MS = 6000;
-/** Pane root stacking (the shipped workbench-pane layer). */
+/** Pane root stacking (the shipped workbench-pane layer). The edge tab is a
+ *  CHILD of the root at the pane's inner edge since Session D (owner decision
+ *  3) — it rides the pane's transform and needs no z step of its own (the
+ *  Session C TAB_Z_INDEX 36 overlay, which covered ~22 px of the open pane,
+ *  is retired). */
 export const PANE_Z_INDEX = 35;
-/** Edge tab stacking — ONE step above the root so the open pane never paints
- *  over its own tab (08-workbench §2 "edge tab always visible"; Session C). */
-export const TAB_Z_INDEX = 36;
 
 /** G1 write cap — the ProxContextPanel/TransferWindows house value. */
 const DOM_WRITE_MIN_INTERVAL_MS = 250;
 
 /** Monotonic ms clock (DOM-guarded module — Date.now fallback headless). */
 const _nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+
+/** Write a CSS custom property (the real DOM needs setProperty; a fake-DOM
+ *  style object takes the key directly — tests read it back). */
+function _setVar(el, name, value) {
+  const st = el && el.style;
+  if (!st) return;
+  if (typeof st.setProperty === 'function') st.setProperty(name, value);
+  else st[name] = value;
+}
 
 /** House reduced-motion probe (the FloorMask.js:188-196 shape). */
 function _prefersReducedMotion() {
@@ -151,8 +168,9 @@ export class RefitPane {
     this._open = false;
     this._focused = SUBSYSTEM_ORDER[0];   // POWER — the highest-priority card
     this._built = false;
-    this._root = null;
-    this._tab = null;
+    this._root = null;            // the transform shell (#ladder-refit)
+    this._body = null;            // the panel inside it (.refit-body — the innerHTML target)
+    this._tab = null;             // the edge tab, a child of the root at its inner edge
     this._tabCount = null;
     this._lastHtml = null;
     this._lastStructKey = null;
@@ -441,7 +459,7 @@ export class RefitPane {
     }
     const html = this._html(model);
     if (html !== this._lastHtml) {
-      this._root.innerHTML = html;
+      this._body.innerHTML = html;          // the panel (Session D: the root is the transform shell)
       this._lastHtml = html;
       this._lastStructKey = structKey;
       this._lastWriteMs = now;
@@ -458,9 +476,10 @@ export class RefitPane {
     }
     this._open = false;
     this._setGhosting(false);
-    if (this._root && this._root.remove) this._root.remove();
+    if (this._root && this._root.remove) this._root.remove();   // takes the body + tab with it
     if (this._tab && this._tab.remove) this._tab.remove();
     this._root = null;
+    this._body = null;
     this._tab = null;
     this._tabCount = null;
     this._built = false;
@@ -582,15 +601,58 @@ export class RefitPane {
     this._built = true;
     const reduced = this._reducedMotion();
 
+    // The pane ROOT — LEFT, 300–340 px (01-numbers) — is the positioning +
+    // TRANSFORM shell (Session D): it carries the slide, the width clamp and
+    // the z layer, paints nothing itself and takes no pointer events; the
+    // BODY (the panel: border, background, padding, the scrolling content)
+    // and the edge TAB are its children, so the tab RIDES the pane's
+    // transform. --refit-dir is the ONE RTL mirror variable — every transform
+    // AND the tab's side follow it; --refit-open (0|1) is the reduced-motion
+    // tab position (the root never moves there; see _applyOpenState).
+    const root = doc.createElement('div');
+    root.id = 'ladder-refit';
+    root.className = reduced ? 'refit-reduced' : '';
+    root.style.cssText = [
+      'position:absolute', 'left:0', 'top:56px', 'bottom:96px', `z-index:${PANE_Z_INDEX}`,
+      'width:clamp(300px, 24vw, 340px)', 'box-sizing:border-box',
+      'pointer-events:none', '--refit-dir:1', '--refit-open:1',
+      // Slide (transform) in the normal path; the reduced-motion class swaps
+      // the slide for a fade of the BODY at the same duration (08-workbench §2
+      // Motion) — the root then never moves, so the tab stays visible.
+      reduced
+        ? ''
+        : `transition:transform ${PANE_SLIDE_MS}ms cubic-bezier(0.65,0,0.35,1), opacity 400ms ease`,
+    ].join(';');
+
+    // The body — the panel the player reads. Fills the root; scrolls.
+    const body = doc.createElement('div');
+    body.className = 'refit-body';
+    body.style.cssText = [
+      'position:absolute', 'top:0', 'right:0', 'bottom:0', 'left:0', 'box-sizing:border-box',
+      'padding:10px 12px', 'overflow-y:auto',
+      'border:1px solid rgba(0,204,255,0.4)', 'border-left:none', 'border-radius:0 6px 6px 0',
+      'background:rgba(0,16,32,0.82)', 'color:' + VisualLaw.COLORS.INFO,
+      'font-family:"Courier New",monospace', 'font-size:0.68rem', 'letter-spacing:0.05em',
+      'pointer-events:auto',
+      reduced ? `transition:opacity ${PANE_SLIDE_MS}ms ease` : '',
+    ].join(';');
+    root.appendChild(body);
+
     // The edge tab — always visible while enabled (08-workbench §2 Grammar:
     // "Edge tabs are always visible in the workbench (REFIT: gold count of
-    // affordable refits)"). ONE z step above the root (Session C): the open
-    // pane slides in UNDER the tab, so the tab never disappears behind its
-    // own pane and a click toggles it closed.
+    // affordable refits)"). A CHILD of the root at the pane's INNER edge
+    // (Session D, owner decision 3): closed, the root's slide parks it exactly
+    // at the screen edge; open, it sits on the pane's inner edge — never over
+    // the content. The side follows the RTL variable: left = 50% + dir·50%
+    // (dir 1 → the root's right edge, the tab's own left edge on it); under
+    // reduced motion --refit-open flips it between the screen edge (closed)
+    // and the inner edge (open) because the root never moves.
     const tab = doc.createElement('div');
     tab.id = 'ladder-refit-tab';
     tab.style.cssText = [
-      'position:absolute', 'left:0', 'top:38%', `z-index:${TAB_Z_INDEX}`,
+      'position:absolute', 'top:38%', 'z-index:1',
+      'left:calc(50% + var(--refit-dir, 1) * (2 * var(--refit-open, 1) - 1) * 50%)',
+      'transform:translateX(calc((var(--refit-dir, 1) - 1) * 50%))',
       'padding:8px 6px 8px 4px', 'border:1px solid rgba(0,204,255,0.4)', 'border-left:none',
       'border-radius:0 6px 6px 0', 'background:rgba(0,16,32,0.85)',
       'color:' + VisualLaw.COLORS.INFO, 'cursor:pointer',
@@ -608,34 +670,18 @@ export class RefitPane {
     tab.appendChild(tabLabel);
     tab.appendChild(tabCount);
     tab.addEventListener('click', () => { this._wake(); this.toggle(); });
-    doc.body.appendChild(tab);
-    this._tab = tab;
-    this._tabCount = tabCount;
+    root.appendChild(tab);
 
-    // The pane root — LEFT, 300–340 px (01-numbers), slid fully off-canvas
-    // while closed. --refit-dir is the ONE RTL mirror variable.
-    const root = doc.createElement('div');
-    root.id = 'ladder-refit';
-    root.className = reduced ? 'refit-reduced' : '';
-    root.style.cssText = [
-      'position:absolute', 'left:0', 'top:56px', 'bottom:96px', `z-index:${PANE_Z_INDEX}`,
-      'width:clamp(300px, 24vw, 340px)', 'box-sizing:border-box',
-      'padding:10px 12px', 'overflow-y:auto',
-      'border:1px solid rgba(0,204,255,0.4)', 'border-left:none', 'border-radius:0 6px 6px 0',
-      'background:rgba(0,16,32,0.82)', 'color:' + VisualLaw.COLORS.INFO,
-      'font-family:"Courier New",monospace', 'font-size:0.68rem', 'letter-spacing:0.05em',
-      'pointer-events:auto', '--refit-dir:1',
-      // Slide (transform) in the normal path; the reduced-motion class swaps
-      // the slide for a fade at the same duration (08-workbench §2 Motion).
-      reduced
-        ? `transition:opacity ${PANE_SLIDE_MS}ms ease`
-        : `transition:transform ${PANE_SLIDE_MS}ms cubic-bezier(0.65,0,0.35,1), opacity 400ms ease`,
-    ].join(';');
     doc.body.appendChild(root);
     this._root = root;
+    this._body = body;
+    this._tab = tab;
+    this._tabCount = tabCount;
     this._applyOpenState();
 
     // Delegated interactions (one listener set — G1, the PaneHelp pattern):
+    // on the root, so the body's content and the tab share it (the tab's own
+    // click above toggles; here it only wakes).
     root.addEventListener('click', (e) => this._onClick(e));
     root.addEventListener('pointerover', (e) => this._onPointerOver(e));
     root.addEventListener('pointerout', (e) => this._onPointerOut(e));
@@ -643,24 +689,37 @@ export class RefitPane {
     root.addEventListener('pointerdown', () => this._wake());
   }
 
-  /** @private Slide/fade the root + tab to the current open state. */
+  /** @private Slide (root) / fade (body) to the current open state; the tab
+   *  rides the root in the slide path and flips edges in the fade path. */
   _applyOpenState() {
     const root = this._root;
     if (!root) return;
+    const body = this._body;
     const reduced = this._reducedMotion();
     if (reduced) {
       root.className = 'refit-reduced';
-      root.style.transform = 'none';
-      root.style.opacity = this._open ? '1' : '0';
-      root.style.visibility = this._open ? 'visible' : 'hidden';
+      root.style.transform = 'none';              // the root never moves: the fade is the body's
+      root.style.visibility = 'visible';
+      if (body) {
+        body.style.opacity = this._open ? '1' : '0';
+        body.style.visibility = this._open ? 'visible' : 'hidden';
+      }
+      // The tab stays visible + clickable while the body is hidden: closed it
+      // sits at the screen edge, open at the pane's inner edge (a snap —
+      // reduced motion permits it).
+      _setVar(root, '--refit-open', this._open ? '1' : '0');
     } else {
       root.className = '';
-      // One CSS variable mirrors the slide for RTL (--refit-dir: -1 flips it).
+      // One CSS variable mirrors the slide for RTL (--refit-dir: -1 flips it);
+      // the LEFT pane slides out toward −X by exactly its width, so the tab
+      // riding at its inner edge parks at the screen edge when closed.
       root.style.transform = this._open
         ? 'translateX(0)'
-        : 'translateX(calc(var(--refit-dir, 1) * -110%))';
+        : 'translateX(calc(var(--refit-dir, 1) * -100%))';
       root.style.opacity = this._open ? '1' : '0.999'; // keep painted for the slide
       root.style.visibility = 'visible';
+      if (body) { body.style.opacity = '1'; body.style.visibility = 'visible'; }
+      _setVar(root, '--refit-open', '1');
     }
   }
 
