@@ -1818,15 +1818,17 @@ export class GameFlowManager {
    *     card holds for dwell − TEACHING.FADE_OUT_MS). The card IS the cause:
    *     one timer, one number, no silent cut.
    *   • Chapter FORCED_DEPOT_CHAPTERS+1 on: NO forced stop — the depot is an
-   *     INVITATION (`_openDepotInvitation`): comms "DEPOT DOORWAY OPEN", ONE
-   *     `DEPOT_INVITATION { open: true }` (the rail's DEPOT notch glows —
-   *     VisualLaw VALUE, steady), and the first-depot 600 cr floor moves to the
-   *     first invitation if the depot was never entered (the SAME
-   *     `_applyFirstDepotFloor` — one grant rule, one place, two callers). The
-   *     doorway itself is the ordinary F3→F2 ride (LadderController `depot`
-   *     host); nothing in ZoomLadder softens. The window is "until the next
-   *     credited catch" (owner decision 2): the CATCH_PROCESSED handler lapses
-   *     it; any SHOP entry closes it as 'entered'.
+   *     INVITATION (`_openDepotInvitation`): comms "UPGRADES AVAILABLE" (owner
+   *     wording 2026-09-05 — the doorway is retired, Session H), ONE
+   *     `DEPOT_INVITATION { open: true }` (the WHERE rail's notch 1 AND the
+   *     REFIT tab glow — VisualLaw VALUE, steady), and the first-depot 600 cr
+   *     floor moves to the first invitation if the depot was never entered
+   *     (the SAME `_applyFirstDepotFloor` — one grant rule, one place, two
+   *     callers). Getting there is the ordinary ride down to floor 1 — the
+   *     shop is the REFIT drawer, one shop, one place; nothing in ZoomLadder
+   *     softens. The window is "until the next credited catch" (owner decision
+   *     2): the CATCH_PROCESSED handler lapses it; any SHOP entry closes it as
+   *     'entered'.
    *
    * @param {number} debrisCount - gameState.debrisCleared at the boundary (a
    *   positive multiple of SHOP_CADENCE)
@@ -1883,7 +1885,7 @@ export class GameFlowManager {
     const firstInvitation = this._applyFirstDepotFloor();
     this._depotInvitation = { chapter: missionsCompleted + 1, debrisCleared: debrisCount };
     eventBus.emit(Events.COMMS_MESSAGE, {
-      text: `DEPOT DOORWAY OPEN \u2014 ${debrisCount} debris cleared. Push in when ready, or fly on.`,
+      text: `UPGRADES AVAILABLE \u2014 ${debrisCount} debris cleared. Come down when ready, or fly on.`,
       priority: 'high',
     });
     eventBus.emit(Events.DEPOT_INVITATION, {
