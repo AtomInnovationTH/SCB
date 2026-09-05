@@ -235,22 +235,40 @@ export class TargetPanel {
 
   /**
    * Show/hide the target pane (hotkey revamp 2026-06-14 — the 0 key,
-   * "Target pane" toggle). Toggles the panel container's display and emits a
-   * reactive comms line naming the undo key. Pressing 0 ALWAYS re-reveals the
-   * pane, even when the pane-density ladder (−) hid it.
+   * "Target pane" toggle). Emits a reactive comms line naming the undo key.
+   * Pressing 0 ALWAYS re-reveals the pane, even when the pane-density ladder
+   * (−) hid it.
+   *
+   * Wave 5 Session H (owner lift 2026-09-05 — 03-plan Session H FINDINGS (i)):
+   * the HIDE direction drives the pane's ONE visibility bit — the density
+   * ladder's `data-density-hidden` attribute (CSS `display:none !important`,
+   * HUD._injectStyles) — never an inline `display:none`. That attribute is the
+   * bit FloorMask's room memory reads (intent, never presence — Session G), the
+   * bit the density `+` restores, and the bit view-switch / skill-reveal
+   * re-shows cannot resurrect (the HUD's own rule for the attribute). Before
+   * this, a 0-key hide wrote inline display and the room captured "shown": the
+   * hide never survived a reload, and `+` on it was a dead press. An inline
+   * `display:none` (HUD._applyViewConfig's view hide, or a pre-fix state) still
+   * reads as hidden here and is cleared on the re-reveal, so 0 never goes dead.
    */
   toggleVisible() {
     const panel = this.panels && this.panels.targets;
     if (!panel) return;
     let nowVisible;
     if (panel.hasAttribute('data-density-hidden')) {
-      // Density ladder hid it — this press reveals it regardless of inline state.
+      // Hidden by the ONE bit (the density ladder, this key, a floor's room) —
+      // this press reveals it regardless of inline state.
       panel.removeAttribute('data-density-hidden');
       panel.style.display = '';
       nowVisible = true;
+    } else if (panel.style.display === 'none') {
+      // Inline-hidden (view config / legacy) — reveal.
+      panel.style.display = '';
+      nowVisible = true;
     } else {
-      nowVisible = panel.style.display === 'none';   // was hidden → now shown
-      panel.style.display = nowVisible ? '' : 'none';
+      // HIDE: the ONE bit, never an inline write (doc comment above).
+      panel.setAttribute('data-density-hidden', '');
+      nowVisible = false;
     }
     eventBus.emit(Events.COMMS_MESSAGE, {
       text: nowVisible ? 'Target pane shown (0 to hide)' : 'Target pane hidden (0 to show)',
