@@ -93,20 +93,6 @@ export class CodexViewerUI {
     /** @type {string|null} deep-link target id for the next show()'s auto-select */
     this._pendingOpenId = null;
 
-    /**
-     * Zoom Ladder F1 (ARCHIVE) hosted mode — null when free-standing (the
-     * shipped I-key overlay). While hosted, the viewer is the F1 floor
-     * COSTUME: every self-close path (capture-phase ESC, backdrop click, the
-     * CLOSE button, an I-key toggle) routes through _requestClose() to the
-     * host's onRequestClose (ladder ride-up) instead of hide() — closing the
-     * costume without leaving the floor would strand an empty ARCHIVE and
-     * fight the ladder for ESC. The host (ArchiveFloor) owns hide(): it
-     * un-hosts first, then hides, on deactivate. In-viewer navigation
-     * (arrows / enter / search / narrow-mode "ESC back to list") is untouched.
-     * @type {?{ onRequestClose: Function }}
-     */
-    this._hosted = null;
-
     /** @type {*} debounce handle for the window resize listener */
     this._resizeDebounce = null;
 
@@ -131,25 +117,13 @@ export class CodexViewerUI {
   toggle() { this._visible ? this._requestClose() : this.show(); }
 
   /**
-   * Enter/leave Zoom Ladder hosted mode (F1 ARCHIVE costume). Pass
-   * `{ onRequestClose }` to host, null to release. Idempotent; never touches
-   * visibility itself — ArchiveFloor sequences setHosted/show/hide.
-   * @param {?{ onRequestClose: Function }} host
-   */
-  setHosted(host) {
-    this._hosted = (host && typeof host.onRequestClose === 'function') ? host : null;
-  }
-
-  /** @returns {boolean} true while the ladder hosts the viewer as the F1 costume. */
-  isHosted() { return this._hosted !== null; }
-
-  /**
-   * The single close decision for every self-close path: hosted → ask the
-   * host (ladder rides up; the floor change hides the viewer), free-standing →
-   * plain hide(). @private
+   * The single close decision for every self-close path (capture-phase ESC,
+   * backdrop click, the CLOSE button, an I-key toggle) — one seam, so a close
+   * can be rerouted in one place. (The Zoom Ladder hosted mode that used this
+   * seam left with ArchiveFloor — Session H; deleted 2026-09-05, tidy-up (4).)
+   * @private
    */
   _requestClose() {
-    if (this._hosted) { this._hosted.onRequestClose(); return; }
     this.hide();
   }
 
@@ -1518,8 +1492,8 @@ export class CodexViewerUI {
         e.stopImmediatePropagation();
         e.preventDefault();
         // Narrow mode with the reading pane open: ESC returns to the list.
-        // Otherwise ESC closes the viewer — via _requestClose, so the ladder
-        // host (F1 ARCHIVE) turns it into a ride-up instead of a self-hide.
+        // Otherwise ESC closes the viewer via _requestClose (the ONE close
+        // seam for every self-close path).
         if (this._narrow && this._selectedEntry) {
           this._showList();
         } else {
