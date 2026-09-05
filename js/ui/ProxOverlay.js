@@ -54,8 +54,8 @@ export const TRAJ_WIDTH_MAX_PX = 3;
 /** Insertion-point ring radius (px); the selected ring draws 1.4×. */
 export const INSERTION_RING_PX = 8;
 
-/** The F5 contract row (labelBudget source) — by id (Session H prep). */
-const F5 = FloorContract.byId(5);
+/** The F3 (PROX NET) contract row (labelBudget source) — by id (Session H). */
+const F5 = FloorContract.byId(3);
 
 /** @private clamp to [0,1] */
 const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);

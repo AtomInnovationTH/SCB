@@ -26,12 +26,16 @@ export const StorageKeys = {
   /**
    * Zoom Ladder VIEW preferences (LadderViewStore — D5 "rooms you can
    * rearrange", Wave 5 Session G): the FloorMask per-floor room memory + the
-   * F3 workbench pane open-state. PLAYER-owned like SETTINGS — deliberately
+   * F1 workbench pane open-state. PLAYER-owned like SETTINGS — deliberately
    * NOT in the run save, which New Game wipes; a rearranged room belongs to
    * the player, not the run. Written only while `Constants.LADDER.ENABLED`
-   * (a ?ladder=0 boot never reads or writes it).
+   * (a ?ladder=0 boot never reads or writes it). v2 (Wave 5 Session H): the
+   * 7→5 renumber changed what every floor KEY means (old 3–7 → new 1–5), so
+   * the key bumps and v1 blobs are abandoned in place rather than migrated —
+   * rooms are cheap to re-arrange, wrong rooms silently applied are not
+   * (plan step 7).
    */
-  LADDER_VIEW: 'sc_ladder_view_v1',
+  LADDER_VIEW: 'sc_ladder_view_v2',
   /** CityLabels visibility toggle ('0' | '1'). */
   CITY_LABELS: 'sc_city_labels_visible',
   // Owned by Constants (they sit beside related tuning) but mirrored here so the

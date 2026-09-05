@@ -42,7 +42,7 @@
  * S1-chosen defaults for contract gaps (documented in 06-core-api.md
  * "S1 implementation notes", all overridable via constructor deps):
  *   spring.CHARGE_THRESHOLD 3, rules.wheelZ01Step 0.04,
- *   rules.knockToKlaxonMs 1000, rules.initialFloor 4 / initialZ01 0.5.
+ *   rules.knockToKlaxonMs 1000, rules.initialFloor 2 / initialZ01 0.5.
  *
  * D5 (Wave 5 Session G): `place({tMs, floor, z01})` is the ONE placement
  * method — a settled cut with no decision, for S2's invisible moments only
@@ -99,11 +99,15 @@ const DEFAULT_SPRING_EXTENSIONS = { CHARGE_THRESHOLD: 3, MIN_SPAN_MS: 0 };
 
 /** S1 defaults for behavior knobs the contract leaves to the caller. */
 const DEFAULT_RULES = {
-  initialFloor: 4,        // COMMAND — the shipped gameplay floor
+  initialFloor: 2,        // COMMAND — the shipped gameplay floor (id 2 since the
+                          // Session H 7→5 renumber; same physical floor)
   initialZ01: 0.5,
   initialDocked: false,
-  devFullAccess: false,   // true bypasses entry gates (F2 dock gate) — dev-phase
-                          // "all floors reachable now" (00-spec §9 roadmap note);
+  devFullAccess: false,   // true bypasses entry gates — dev-phase "all floors
+                          // reachable now" (00-spec §9 roadmap note). INERT since
+                          // the Session H renumber: the F2 DEPOT dock gate it
+                          // bypassed left with that row (no shipping floor
+                          // carries entryRequiresDock; injected test tables can).
                           // LadderController injects Constants.LADDER.DEV_FULL_ACCESS
                           // into its DEFAULT core only. Ladder ENDS still deny.
   wheelZ01Step: 0.04,     // free-scroll z01 per unit mag (scroll gain)

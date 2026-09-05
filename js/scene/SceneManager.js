@@ -688,9 +688,10 @@ export class SceneManager {
       return;
     }
     this._ladderFidelity = fid;
-    // Earth-anchored floors (F6/F7): a world-fixed 400 u shell needs far >= D_max + R,
-    // which F6 breaks (BLACK-SKY); camera-follow puts every star at exactly R = 400.
-    if (this._ladderStarfield?.setFollowCamera) this._ladderStarfield.setFollowCamera(fid.floor >= 6);
+    // Earth-anchored floors (F4/F5 since the Session H renumber): a world-fixed
+    // 400 u shell needs far >= D_max + R, which NAVCOM breaks (BLACK-SKY);
+    // camera-follow puts every star at exactly R = 400.
+    if (this._ladderStarfield?.setFollowCamera) this._ladderStarfield.setFollowCamera(fid.floor >= 4);
     this._reassertLadderFidelity();
   }
 

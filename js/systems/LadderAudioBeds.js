@@ -1,6 +1,6 @@
 /**
  * LadderAudioBeds.js — the Zoom Ladder's per-floor ambient audio beds
- * (FloorContract `audioBed`: archive-hush, depot-hum, hull-detail,
+ * (FloorContract `audioBed`: hull-detail,
  * command-deck, prox-tactical, navcom-drone, downlink-static).
  *
  * One module owns all seven beds. Each bed is a procedural WebAudio loop in
@@ -80,26 +80,9 @@ export const BED_NOISE_BUFFER_S = 2;
  * are the floor's room tone, below every gameplay cue.
  */
 export const BED_RECIPES = {
-  // F1 ARCHIVE — the codex, world paused. Filtered near-silence that swells
-  // and recedes very slowly: a reading-room hush, more absence than presence.
-  'archive-hush': {
-    gain: 0.010,
-    layers: [
-      { kind: 'noise', filter: { type: 'lowpass', freq: 220, Q: 0.7 }, gain: 0.6,
-        lfo: { rate: 0.05, depth: 0.45, target: 'gain' } },
-    ],
-  },
-  // F2 DEPOT — dock-side machinery through the hull: low sine + harmonics.
-  'depot-hum': {
-    gain: 0.014,
-    layers: [
-      { kind: 'osc', wave: 'sine', freq: 55, gain: 0.7,
-        lfo: { rate: 0.11, depth: 0.18, target: 'gain' } },
-      { kind: 'osc', wave: 'sine', freq: 110, gain: 0.3 },
-      { kind: 'osc', wave: 'sine', freq: 165, gain: 0.12 },
-    ],
-  },
-  // F3 HULL CAM — EVA closeness: suit-air band of noise, faint structural
+  // (The old F1 ARCHIVE 'archive-hush' and F2 DEPOT 'depot-hum' recipes left
+  // with their floors — Wave 5 Session H, the 7→5 renumber.)
+  // F1 HULL CAM — EVA closeness: suit-air band of noise, faint structural
   // fundamental; the bandpass center wanders slowly (helmet-turn air).
   'hull-detail': {
     gain: 0.011,
@@ -109,7 +92,7 @@ export const BED_RECIPES = {
       { kind: 'osc', wave: 'sine', freq: 120, gain: 0.25 },
     ],
   },
-  // F4 COMMAND — the shipped gameplay floor: barely-there deck air so every
+  // F2 COMMAND — the shipped gameplay floor: barely-there deck air so every
   // capture cue keeps its full contrast. The quietest bed by design.
   'command-deck': {
     gain: 0.008,
@@ -119,7 +102,7 @@ export const BED_RECIPES = {
       { kind: 'osc', wave: 'triangle', freq: 90, gain: 0.18 },
     ],
   },
-  // F5 PROX NET — tactical tension: mid noise band + a slow sweep pulse on a
+  // F3 PROX NET — tactical tension: mid noise band + a slow sweep pulse on a
   // low tone (radar-scan feel, far under the real conjunction alarms).
   'prox-tactical': {
     gain: 0.012,
@@ -130,7 +113,7 @@ export const BED_RECIPES = {
         lfo: { rate: 0.25, depth: 0.16, target: 'gain' } },
     ],
   },
-  // F6 NAVCOM — planning drone: a detuned low pair through a lowpass; the
+  // F4 NAVCOM — planning drone: a detuned low pair through a lowpass; the
   // ~0.7 Hz beat between them IS the drone character (no LFO needed on the
   // pair — the detune supplies the motion; one slow breath on the noise).
   'navcom-drone': {
@@ -142,7 +125,7 @@ export const BED_RECIPES = {
         lfo: { rate: 0.06, depth: 0.18, target: 'gain' } },
     ],
   },
-  // F7 SDA DOWNLINK — telemetry static: a narrow high noise band gated by a
+  // F5 SDA DOWNLINK — telemetry static: a narrow high noise band gated by a
   // square LFO into soft ticks, over a faint carrier whistle.
   'downlink-static': {
     gain: 0.010,

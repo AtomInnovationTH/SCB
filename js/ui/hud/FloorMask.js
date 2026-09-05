@@ -103,7 +103,7 @@ export const REDUCED_CROSSFADE_MS = 200;
  *
  * 'hints' (2026-09-02 evening, owner): the bottom-screen HintTicker strip —
  * onboarding beats ("Launch net (N)"), scan/lasso verbs, the codex ack chip.
- * Every chip it carries teaches or acknowledges the FLYING view, and in the F3
+ * Every chip it carries teaches or acknowledges the FLYING view, and in the F1
  * restore witnesses the tease_lock beat sat over the hull. Same shape as the
  * reticles pane: an ATTRIBUTE pane on the strip element only (the density
  * 'score' rung bundles the strip with the score panel for the 0-key
@@ -146,12 +146,12 @@ export const ALWAYS_ON = Object.freeze([
 
 /**
  * DEFAULT_ROOMS — the §4 default-rooms table, floor → pane → tier.
- * Exhaustive over MASK_PANES for floors 3–7 (the F3–F7 ladder, D1); floors
- * without a row (F1/F2 — retired as floors, rail notches remain until the
- * deferred 7→5 contract change) fall back to all-'shown' (full cockpit under
- * their DOM overlays). Edit per D5 as you play — player memory wins.
+ * Exhaustive over MASK_PANES for every FloorContract floor (ids 1–5 since the
+ * Session H 7→5 renumber; same physical rooms, new keys). An id without a row
+ * (out-of-table — nothing ships one) falls back to all-'shown' (full cockpit).
+ * Edit per D5 as you play — player memory wins.
  *
- *   F3 ship close-up  (inspect/refit):  hull is the index; EVERY pane clears
+ *   F1 ship close-up  (inspect/refit):  hull is the index; EVERY pane clears
  *                                        out — discoveries too (owner, 2026-09-02
  *                                        evening, from the restore witnesses: the
  *                                        skills it lists teach the flying view,
@@ -162,33 +162,33 @@ export const ALWAYS_ON = Object.freeze([
  *                                        The hint ticker goes too (same evening:
  *                                        its chips teach the flying view — the
  *                                        tease_lock "Launch net (N)" beat sat over
- *                                        the hull; it is back on F4 with whatever
+ *                                        the hull; it is back on F2 with whatever
  *                                        is still alive).
- *   F4 flying view    (capture):        everything shipped — the home floor.
- *   F5 approach view  (insertion):      corner orb + daughters; lists go.
- *   F6 route planning (transfer):       daughters faint (out flying); rest go.
- *   F7 whole-Earth chart (survey):      chart + score + alerts only.
- *   The hint ticker is gone on every floor but F4 (owner, 2026-09-02 evening:
+ *   F2 flying view    (capture):        everything shipped — the home floor.
+ *   F3 approach view  (insertion):      corner orb + daughters; lists go.
+ *   F4 route planning (transfer):       daughters faint (out flying); rest go.
+ *   F5 whole-Earth chart (survey):      chart + score + alerts only.
+ *   The hint ticker is gone on every floor but F2 (owner, 2026-09-02 evening:
  *   "same clean-up" for the far floors) — its chips teach the flying view.
  */
 export const DEFAULT_ROOMS = Object.freeze({
-  3: Object.freeze({
+  1: Object.freeze({
     targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'gone',
     pin: 'gone', mother: 'gone', arms: 'gone', discoveries: 'gone', hints: 'gone',
   }),
-  4: Object.freeze({
+  2: Object.freeze({
     targets: 'shown', debris: 'shown', navsphere: 'shown', reticles: 'shown',
     pin: 'shown', mother: 'shown', arms: 'shown', discoveries: 'shown', hints: 'shown',
   }),
-  5: Object.freeze({
+  3: Object.freeze({
     targets: 'gone', debris: 'gone', navsphere: 'shown', reticles: 'shown',
     pin: 'gone', mother: 'gone', arms: 'shown', discoveries: 'gone', hints: 'gone',
   }),
-  6: Object.freeze({
+  4: Object.freeze({
     targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'gone',
     pin: 'gone', mother: 'gone', arms: 'faint', discoveries: 'gone', hints: 'gone',
   }),
-  7: Object.freeze({
+  5: Object.freeze({
     targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'gone',
     pin: 'gone', mother: 'gone', arms: 'gone', discoveries: 'gone', hints: 'gone',
   }),
@@ -402,7 +402,7 @@ export class FloorMask {
   /** @private Apply floor `floor`'s room: memory over defaults, tiers, fade. */
   _applyRoom(floor) {
     this._appliedFloor = floor;
-    const room = DEFAULT_ROOMS[floor] || null;   // no row (F1/F2) → all shown
+    const room = DEFAULT_ROOMS[floor] || null;   // no row (out-of-table id) → all shown
     const mem = this._memory.get(floor) || null;
     const fadeMs = this._reducedMotion() ? REDUCED_CROSSFADE_MS : TRANSITION_FADE_MS;
     for (const [id, pane] of Object.entries(MASK_PANES)) {

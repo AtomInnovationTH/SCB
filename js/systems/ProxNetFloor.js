@@ -64,8 +64,8 @@ import { ProxContextPanel } from '../ui/ProxContextPanel.js';
 import { shellCounts, SHELL_RADII_KM } from '../entities/FieldRiskModel.js';
 import { plan as planInsertion } from '../entities/InsertionPlanner.js';
 
-/** The F5 (PROX NET) contract row — by id, never by index (Session H prep). */
-const F5 = FloorContract.byId(5);
+/** The F3 (PROX NET) contract row — by id, never by index (Session H). */
+const F5 = FloorContract.byId(3);
 
 /** Minimum real-time interval between debris re-polls (target list, shell
  *  counts, insertion re-plan) while F5 is active. Own-module tunable (house

@@ -951,7 +951,7 @@ async function init() {
       // ladderController is constructed later in boot; read live, guarded.
       let ladderAway = false;
       try {
-        ladderAway = !!(ladderController && ladderController.isActive() && ladderController.currentFloor() !== 4);
+        ladderAway = !!(ladderController && ladderController.isActive() && ladderController.currentFloor() !== 2);
       } catch (_e) { /* best-effort */ }
       return { trackedContacts, nearestDebrisM, hasTarget, targetOutOfRange: _onboardingTargetOutOfRange, ladderAway };
     },
@@ -1745,14 +1745,9 @@ async function init() {
     // undefined (never constructed) → the dep is null → byte-identical.
     library: libraryPane,
     archive: archiveFloor,
-    // Wave 5 (Session E): the F2 DEPOT doorway (08-workbench §5 D3). A ride
-    // that arrives on floor 2 from above enters the SHOP GameState at ride
-    // END — the ONE shipped SHOP transition, so ShopScreen's GAME_STATE_CHANGE
-    // self-show and the firstDepotVisit payload ride it unchanged. The cross
-    // clunk (LadderSfx, at the decision) leads the flip by the 550 ms ride
-    // (T8: SHOP suspends the audio context synchronously). Flag-off: the
-    // controller never engages → the host is never called → byte-identical.
-    depot: { enter: () => gameFlowManager.transitionToState(GameStates.SHOP) },
+    // (The Session E F2 DEPOT doorway host retired with the F2 row — Wave 5
+    // Session H, the 7→5 renumber. The SHOP still arrives through
+    // GameFlowManager's own transitions: mission boundaries and the B key.)
     audioBeds: ladderAudioBeds,
     // Wave-4 map rule (D8/§4): per-floor pane rooms + the vitals always-set.
     floorMask: ladderFloorMask,

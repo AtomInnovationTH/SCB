@@ -11,14 +11,14 @@
  *   - This file and docs/ladder/01-numbers.md change in the SAME commit.
  *   - js/test/test-FloorContract.js pins the canonical values; a validator
  *     failure on a number change is the desired tripwire, not an obstacle.
- *   - Floor 7's mass table is MASS_BANDS below. Never reuse
+ *   - Floor 5's mass table is MASS_BANDS below. Never reuse
  *     Constants.DEBRIS.ALT_BANDS (count-based spawn weights) or DebrisMap.js's
  *     private 5-band UI array for mass.
  *
  * The ladder position model:
  *   position = (floor, z01), z01 = normalized log10(camera distance) within
  *   the floor's [minDistU, maxDistU]. There is NO global continuous axis:
- *   floors 3-5 anchor to ship/subject, 6-7 to Earth center; the crossing ride
+ *   floors 1-3 anchor to ship/subject, 4-5 to Earth center; the crossing ride
  *   performs the reframe. The outer WALL_ZONE_FRAC of z01 on each side is the
  *   spring-wall; after a crossing you enter at ENTRY_Z01_FROM_BELOW /
  *   ENTRY_Z01_FROM_ABOVE — that offset IS the hysteresis.
@@ -108,51 +108,23 @@ export const FloorContract = {
   },
 
   /**
-   * The seven floors, F1 (innermost) -> F7 (outermost).
+   * The five floors, F1 (innermost, the workbench) -> F5 (outermost).
+   * Renumbered 2026-09-05 (Wave 5 Session H, plan D-A): the old F1 ARCHIVE and
+   * F2 DEPOT interior rows are DELETED — the Tech Library is a pane + the
+   * full-screen reader (MAXIMIZE / I), the shop is the REFIT drawer's job
+   * (one shop, one place — plan D-B), and nothing lies below floor 1: the
+   * ladder ends at the hull.
    *
-   * camera.distU are camera->anchor distances in scene units; F1/F2 are DOM
-   * interiors whose distU is a VIRTUAL dolly (scroll feel + exit hump only,
-   * hence camera.fov/near/far = null). near/far are S2 starting points
-   * (docs/ladder/01-numbers.md "per-floor render block").
+   * camera.distU are camera->anchor distances in scene units. near/far are S2
+   * starting points (docs/ladder/01-numbers.md "per-floor render block").
    *
-   * fidelity.nearField MUST stay false on F6/F7 (T1: x1e5 bracket collapse +
+   * fidelity.nearField MUST stay false on F4/F5 (T1: x1e5 bracket collapse +
    * ship-is-icon) and must be re-asserted after SceneManager.applyTier()
    * rebuilds the pass (NearFieldRenderPass.js:106 resets it to true).
    */
   FLOORS: [
     {
       id: 1,
-      name: 'ARCHIVE',
-      anchor: 'interior',
-      camera: { distU: [1e-6, 5e-6], rangeLog10: logRange(1e-6, 5e-6), fov: null, near: null, far: null, upFrame: 'interior' },
-      humps: { inFirmness: 1.6 },
-      timeCap: 0, // codex pauses the world
-      fidelity: { nearField: false, physicsMode: 'paused', debrisMode: 'hidden' },
-      costume: { leave: [], arrive: ['CodexViewerUI'], transform: 'dom-codex' },
-      contextPanel: 'codex',
-      spaceVerb: null,
-      labelBudget: 0,
-      audioBed: 'archive-hush',
-    },
-    {
-      id: 2,
-      name: 'DEPOT',
-      anchor: 'interior',
-      camera: { distU: [5e-6, 2e-5], rangeLog10: logRange(5e-6, 2e-5), fov: null, near: null, far: null, upFrame: 'interior' },
-      // Undocked: browse-only overlay, the F3->F2 hump is a HARD WALL w/ hint.
-      // Docked: entry bridges into the real SHOP GameState (time 0 there is the
-      // state's, not this floor's). Clunk plays BEFORE the state flip (T8).
-      humps: { inFirmness: 1.6, entryRequiresDock: true, deniedHint: 'DOCK TO ENTER DEPOT' },
-      timeCap: 1, // undocked overlay: sim keeps running, buying disabled
-      fidelity: { nearField: false, physicsMode: 'realtime', debrisMode: 'hidden' },
-      costume: { leave: [], arrive: ['ShopScreen:browse'], transform: 'dom-depot-overlay' },
-      contextPanel: 'depot-browse',
-      spaceVerb: null,
-      labelBudget: 0,
-      audioBed: 'depot-hum',
-    },
-    {
-      id: 3,
       name: 'HULL CAM',
       anchor: 'subject',
       camera: { distU: [2e-5, 1.2e-4], rangeLog10: logRange(2e-5, 1.2e-4), fov: 35, near: 4e-7, far: 500, upFrame: 'ship' },
@@ -161,7 +133,7 @@ export const FloorContract = {
       fidelity: { nearField: true, physicsMode: 'realtime', debrisMode: 'full' },
       // Down-hump arrival absorbs the shipped inspect side-effects
       // (CameraSystem._setInspectZoom, see docs/ladder/02-traps.md T6).
-      // F3 costume = MotherCallouts + the cyan hull outline (owner, playtest
+      // F1 costume = MotherCallouts + the cyan hull outline (owner, playtest
       // 2026-09-02). The morning's "single costume" note (BlueprintOverlay's
       // seven title pills, MotherCallouts suppressed) was overturned by the
       // owner's playtest the same day: the shipped in-world cards — 26 parts in
@@ -178,20 +150,21 @@ export const FloorContract = {
       lens: { splitAtM: 5, modes: ['detail', 'overview'] },
     },
     {
-      id: 4,
+      id: 2,
       name: 'COMMAND',
       anchor: 'ship',
       // FOV 55 = today's Constants.CAMERA_FOV; near = Constants.CAMERA_NEAR (~3 m).
-      // Top = 100 m: the Wave-3 F4 range shrink (playtest "level up earlier").
+      // Top = 100 m: the Wave-3 COMMAND-floor range shrink (playtest "level up earlier").
       // 100 m is the shipped CHASE wheel clamp (CameraSystem.js `Math.min(0.001,
       // offsetBehind)`) — the same continuity-with-the-shipped-game anchor as
       // FOV 55. The M0 table's 120 m decade had no shipped counterpart; the
-      // 100–120 m strip was dead range the capture camera never used. The F4/F5
-      // boundary moved WITH it (floors stay contiguous; docs/ladder/01-numbers.md).
+      // 100–120 m strip was dead range the capture camera never used. The
+      // COMMAND/PROX boundary moved WITH it (floors stay contiguous;
+      // docs/ladder/01-numbers.md).
       camera: { distU: [1.2e-4, 1e-3], rangeLog10: logRange(1.2e-4, 1e-3), fov: 55, near: 3e-5, far: 500, upFrame: 'ship' },
       // The 12 m lower bound inherits the shipped inspect Schmitt (12 m/18 m);
       // the wall/entry rule replaces it (docs/ladder/00-spec.md §2). That
-      // anchor is why the shrink moved the F4/F5 boundary, never this one.
+      // anchor is why the shrink moved the COMMAND/PROX boundary, never this one.
       humps: { inFirmness: 1.6 },
       timeCap: 1,
       fidelity: { nearField: true, physicsMode: 'realtime', debrisMode: 'full' },
@@ -202,10 +175,10 @@ export const FloorContract = {
       audioBed: 'command-deck',
     },
     {
-      id: 5,
+      id: 3,
       name: 'PROX NET',
       anchor: 'ship',
-      // Bottom = 100 m: shares the F4/F5 boundary (Wave-3 F4 shrink — see F4).
+      // Bottom = 100 m: shares the COMMAND/PROX boundary (Wave-3 shrink — see F2).
       camera: { distU: [1e-3, 1.2], rangeLog10: logRange(1e-3, 1.2), fov: 60, near: 3e-5, far: 500, upFrame: 'ship' },
       humps: { inFirmness: 1.6 },
       timeCap: 4, // danger-capped: conjunction inside horizon ramps to 1x before the knock
@@ -217,7 +190,7 @@ export const FloorContract = {
       audioBed: 'prox-tactical',
     },
     {
-      id: 6,
+      id: 4,
       name: 'NAVCOM',
       anchor: 'earth',
       // 1.1-4 R_E: 70..255 u (R_E = Constants.EARTH_RADIUS = 63.71 u).
@@ -232,7 +205,7 @@ export const FloorContract = {
       audioBed: 'navcom-drone',
     },
     {
-      id: 7,
+      id: 5,
       name: 'SDA DOWNLINK',
       anchor: 'earth',
       // far = 2000 u > Constants.CAMERA_FAR (500): S2 owns the per-floor far
@@ -240,7 +213,7 @@ export const FloorContract = {
       // STAR_SPHERE_RADIUS) — a world-fixed shell needs far >= D_max + R.
       // Earth-anchored floors use the camera-following shell instead
       // (Starfield.setFollowCamera), so stars sit at exactly R = 400 from the
-      // camera on F6/F7.
+      // camera on F4/F5.
       camera: { distU: [500, 1300], rangeLog10: logRange(500, 1300), fov: 35, near: 0.5, far: 2000, upFrame: 'earth-north' },
       humps: { inFirmness: 1.6 },
       timeCap: 100,
@@ -264,7 +237,7 @@ export const FloorContract = {
   ],
 
   /**
-   * MASS ON ORBIT (~17,000 t) — the F7 VALUE-lens table.
+   * MASS ON ORBIT (~17,000 t) — the F5 (SDA) VALUE-lens table.
    * Sourced 2026: ESA DISCOSweb / Space Environment Report; NASA ODPO.
    * REGIMES are catalog-backed; LEO_SUB_BANDS are ESTIMATE-flagged derivations
    * (cite the estimate flag wherever they are shown — mass-honesty rule).
@@ -291,7 +264,7 @@ export const FloorContract = {
   },
 
   /**
-   * KESSLER TIMELINE — the F7 THREAT-lens data. Tracked-object keyframes;
+   * KESSLER TIMELINE — the F5 (SDA) THREAT-lens data. Tracked-object keyframes;
    * `tracked` = cumulative catalog count where sourced, `delta` = single-event
    * fragment injections (NASA ODPO). Years strictly increase.
    */
@@ -326,7 +299,7 @@ export const FloorContract = {
     'pre-2020 count jumps are partly better sensors, not only more debris',
     'cascade onset timing is disputed',
     'sub-LEO band masses are estimates (ESTIMATE flag shown)',
-    'F7 MEO radial compression is tagged on screen',
+    'F5 MEO radial compression is tagged on screen',
   ],
 
   /** Scene-unit helpers mirrored for consumers that must not import THREE. */

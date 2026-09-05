@@ -55,8 +55,8 @@ import { FloorContract } from '../core/FloorContract.js';
 import { BlueprintOverlay, CARD_ROW_BUDGET } from '../ui/BlueprintOverlay.js';
 import { BLUEPRINT_SUBSYSTEMS, anchorLocalU } from '../data/blueprintSubsystems.js';
 
-/** The F3 (HULL CAM) contract row — by id, never by index (Session H prep). */
-const F3 = FloorContract.byId(3);
+/** The F1 (HULL CAM) contract row — by id, never by index (Session H). */
+const F3 = FloorContract.byId(1);
 
 /** The two lens modes, straight from the contract (['detail', 'overview']). */
 const [LENS_DETAIL, LENS_OVERVIEW] = F3.lens.modes;

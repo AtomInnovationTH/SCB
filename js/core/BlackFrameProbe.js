@@ -80,7 +80,7 @@ const STARVE_MS = 2600;
  * flag the "matches NO contract" mixed near/far state seen once in the field.
  * (Deliberately not imported from FloorContract: dev probe, no dep creep.)
  */
-const FLOOR_CLIP = { 6: { near: 0.05, far: 500 }, 7: { near: 0.5, far: 2000 } };
+const FLOOR_CLIP = { 4: { near: 0.05, far: 500 }, 5: { near: 0.5, far: 2000 } };
 
 /** @returns {0|1|2} parsed `?bfp=` mode (0 = off) */
 function parseMode() {
@@ -460,13 +460,13 @@ export function installBlackFrameProbe({ sceneManager, earth } = {}) {
     if (glErrNow !== 0) alerts.push(`glerr(0x${glErrNow.toString(16)})`);
     if (scTest) alerts.push(`sciss(${sc ? `${sc[0]},${sc[1]},${sc[2]}x${sc[3]}` : '?'})`);
     if (vp && (vp[2] !== dbw || vp[3] !== dbh)) alerts.push(`vp(${vp[0]},${vp[1]},${vp[2]}x${vp[3]})`);
-    if (floor === 6 || floor === 7) {
+    if (floor === 4 || floor === 5) {
       const want = FLOOR_CLIP[floor];
       if (cam.near !== want.near || cam.far !== want.far) {
         alerts.push(`clip(F${floor} ${cam.near}/${cam.far})`);
       }
       // nfOn=true here is either the T1 re-assert bug or a deliberate ?nf=1
-      // run — visible in the badge as `nf1` on F6/F7, not alert-latched.
+      // run — visible in the badge as `nf1` on F4/F5, not alert-latched.
     }
     // memdrop: transition against the PREVIOUS sample (not high-water, which
     // would latch the alert forever after one drop); high-water kept for dumps.

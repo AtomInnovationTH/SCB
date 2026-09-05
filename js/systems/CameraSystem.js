@@ -3802,9 +3802,10 @@ export class CameraSystem {
     lc.rideFloorFrom = null;
     lc.levelHoldFloor = null;
     this._baseFov = frame.fov;
-    // F5/F6 drag-to-rotate: ladder frames carry their floor id
-    // (LadderController._frame). Fresh engage starts with no drag in flight.
-    lc.drag.enabled = (frame.floor === 5 || frame.floor === 6);
+    // F3/F4 drag-to-rotate (PROX NET / NAVCOM): ladder frames carry their
+    // floor id (LadderController._frame). Fresh engage starts with no drag in
+    // flight. Floor ids renumbered 2026-09-05 (Session H 7→5).
+    lc.drag.enabled = (frame.floor === 3 || frame.floor === 4);
     lc.drag.isDragging = false;
     lc.drag.velocityTheta = 0;
     lc.drag.velocityPhi = 0;
@@ -3893,7 +3894,7 @@ export class CameraSystem {
     lc.targetDistU = frame.distU;
     lc.fov = frame.fov;
     if (frame.floor != null) lc.floor = frame.floor;
-    lc.drag.enabled = (frame.floor === 5 || frame.floor === 6);
+    lc.drag.enabled = (frame.floor === 3 || frame.floor === 4);
     this._ladderApplyInspectFx(frame.floor);
   }
 
@@ -3966,7 +3967,7 @@ export class CameraSystem {
     }
     // A ride owns the camera (G3 flick replacements included): cancel any
     // in-flight drag and its momentum; re-gate on the destination floor.
-    lc.drag.enabled = (opts.floor === 5 || opts.floor === 6);
+    lc.drag.enabled = (opts.floor === 3 || opts.floor === 4);
     lc.drag.isDragging = false;
     lc.drag.velocityTheta = 0;
     lc.drag.velocityPhi = 0;
@@ -4115,7 +4116,7 @@ export class CameraSystem {
    */
   _ladderApplyInspectFx(floor) {
     const lc = this._ladderCam;
-    const on = (floor === 3);
+    const on = (floor === 1);   // HULL CAM (id 1 since the Session H renumber)
     if (on === lc.inspectFxActive) return;
     lc.inspectFxActive = on;
     if (on) {
@@ -4308,7 +4309,7 @@ export class CameraSystem {
     // the yaw keeps the up exact.) Position, distance, up and the dolly frame
     // above are untouched; bias 0 → no rotation, the pre-Wave-5 (3) frame
     // byte-for-byte.
-    const insetTarget = (lc.floor === 3) ? lc.paneInsetPx : 0;
+    const insetTarget = (lc.floor === 1) ? lc.paneInsetPx : 0;
     if (insetTarget !== lc.paneBiasTo) {
       lc.paneBiasFrom = lc.paneBiasPx;
       lc.paneBiasTo = insetTarget;

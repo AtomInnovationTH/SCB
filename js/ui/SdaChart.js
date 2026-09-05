@@ -65,8 +65,8 @@ import { Constants } from '../core/Constants.js';
 import { VisualLaw } from '../core/VisualLaw.js';
 import { FloorContract } from '../core/FloorContract.js';
 
-/** The F7 contract row (chart framing + labelBudget + lenses) — by id (Session H prep). */
-const F7 = FloorContract.byId(7);
+/** The F5 (SDA) contract row (chart framing + labelBudget + lenses) — by id (Session H). */
+const F7 = FloorContract.byId(5);
 
 /** The two lenses, in flip order. VALUE is the arrival default (00-spec §3). */
 export const LENSES = F7.chart.lenses; // ['VALUE', 'THREAT']

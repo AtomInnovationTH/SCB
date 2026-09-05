@@ -45,8 +45,8 @@ import { computeTransferWindow, clusterToOrbitKm } from '../entities/LaunchWindo
 import { orbitToKm, sceneToKm } from '../entities/OrbitalMechanics.js';
 import { assess } from '../entities/ReachabilityModel.js';
 
-/** The F6 (NAVCOM) contract row — by id, never by index (Session H prep). */
-const F6 = FloorContract.byId(6);
+/** The F4 (NAVCOM) contract row — by id, never by index (Session H). */
+const F6 = FloorContract.byId(4);
 
 /**
  * FUEL-REACHABILITY: minimum real-time interval between getMassBudget() polls

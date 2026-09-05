@@ -19,12 +19,14 @@
  * effect goes through injected deps whose methods are all optional, so the
  * controller is unit-testable with plain stubs.
  *
- * Wave 5 Session E (08-workbench §5 D1/D3): floor 2 (DEPOT) is a DOORWAY —
- * a ride that arrives on it from a floor above enters the SHOP GameState at
- * ride END through the optional `depot` host (`_enterDepot`), and the core is
- * parked back on the floor the player left so the return lands there — since
- * Wave 5 Session G (D5) at the exact working z01 they left, through the ONE
- * core placement method (`ZoomLadder.place`).
+ * Wave 5 Session H (the 7→5 renumber, plan D-A/D-B): the ladder is FIVE floors,
+ * ids 1..5 — 1 HULL CAM (the workbench: REFIT/LIBRARY panes, callouts), 2
+ * COMMAND (the shipped flying view), 3 PROX NET, 4 NAVCOM, 5 SDA DOWNLINK. The
+ * old F1 ARCHIVE and F2 DEPOT interior rows are deleted: the Tech Library is
+ * the pane + the full-screen reader, the shop is the REFIT drawer's job, and
+ * the Session E doorway (`_enterDepot`) retired with its floor — the SHOP
+ * GameState still arrives through GameFlowManager's own transitions (mission
+ * boundaries, the B key), never through a ladder ride.
  *
  * Activation: the ladder lives entirely INSIDE gameplay states (T4). It engages
  * when `Constants.LADDER.ENABLED` and `gameState.isGameplay()`, and disengages
@@ -43,24 +45,15 @@ import { Constants } from '../core/Constants.js';
 const CROSS_RIDE_MS = 550;
 
 /**
- * The DEPOT floor id (FloorContract F2). Wave 5 Session E (08-workbench §5,
- * D1/D3): F2 is a DOORWAY into the SHOP GameState, not a room — a ride that
- * ARRIVES on it from a floor above enters the depot (see `_enterDepot`).
- * Retires with the deferred 7→5 contract change (00-spec §3 F2 amendment).
- */
-const DEPOT_FLOOR_ID = 2;
-
-/**
  * D5 (Wave 5 Session G): is `z01` a FREE-zone rest on a floor — strictly
  * between the two wall edges (`WALL_ZONE_FRAC` … 1 − `WALL_ZONE_FRAC`)? The
  * controller remembers the last such position per applied floor as the
  * player's WORKING position (`_restZ01`): the wall edges themselves (a
  * flick-to-wall landing, a settle-back) and the creep inside a band are the
- * GESTURE of leaving a floor, not a place the player was working, so the depot
- * return parks at the position before the push began (the Session E doorway
- * witness left F3 at 0.75 through the 0.15 wall — the return lands at 0.75),
- * and never at the doorway's own threshold (02-traps T6: re-entering a floor
- * must not resume inside the wall band).
+ * GESTURE of leaving a floor, not a place the player was working (02-traps T6:
+ * re-entering a floor must not resume inside the wall band). Since the Session
+ * H doorway retirement nothing reads it — kept for the Session N intro-ride
+ * landing (03-plan Session H FINDINGS).
  * @param {number} z01
  * @returns {boolean}
  */
@@ -87,52 +80,38 @@ export class LadderController {
    * @param {object} [deps.sceneManager] - per-floor render block: setLadderFloorFidelity(fid|null)
    * @param {object} [deps.gameState]    - isGameplay() gate
    * @param {object} [deps.rail]         - rail indicator: show/hide/refresh(state)/flashDenied(hint, floor)
-   * @param {object} [deps.navcom]       - F6 (NAVCOM) content controller (NavcomFloor):
+   * @param {object} [deps.navcom]       - F4 (NAVCOM) content controller (NavcomFloor):
    *   activate/deactivate/isActive/update/planTransfer. Optional — no-op without it.
-   * @param {object} [deps.proxNet]      - F5 (PROX NET) content controller (ProxNetFloor):
+   * @param {object} [deps.proxNet]      - F3 (PROX NET) content controller (ProxNetFloor):
    *   activate/deactivate/isActive/update/approach. Optional — no-op without it.
-   * @param {object} [deps.sdaFloor]     - F7 (SDA) content controller (SdaFloor):
+   * @param {object} [deps.sdaFloor]     - F5 (SDA) content controller (SdaFloor):
    *   activate/deactivate/isActive/update/flipLens. Optional — no-op without it.
-   * @param {object} [deps.hullcam]      - F3 (HULL CAM) content controller (HullCamFloor):
+   * @param {object} [deps.hullcam]      - F1 (HULL CAM) content controller (HullCamFloor):
    *   activate/deactivate/isActive/update/lensToggle. Optional — no-op without it.
-   * @param {object} [deps.refit]        - F3 REFIT pane (RefitPane, Wave 5 (2)):
+   * @param {object} [deps.refit]        - F1 REFIT pane (RefitPane, Wave 5 (2)):
    *   setEnabled/open/close/toggle/isOpen. Optional — no-op without it. Floor-keyed
-   *   like hullcam (F3's debrisMode 'full' is shared with F4): arriving on floor 3
+   *   like hullcam (F1's debrisMode 'full' is shared with F2): arriving on floor 1
    *   enables the edge tab, any other floor disables AND closes the pane, disengage
-   *   closes it too. When present it claims the F3 'lens-toggle' Space verb
+   *   closes it too. When present it claims the F1 'lens-toggle' Space verb
    *   (toggle()) — D-b, owner 2026-09-03; absent, the verb falls through to the
    *   hullcam branch exactly as shipped.
-   * @param {object} [deps.library]      - F3 TECH LIBRARY pane (LibraryPane,
+   * @param {object} [deps.library]      - F1 TECH LIBRARY pane (LibraryPane,
    *   Wave 5 Session B): setEnabled/open/close/toggle/isOpen. Optional — no-op
-   *   without it. Floor-3 keyed EXACTLY like `refit` (enable on 3, disable +
+   *   without it. Floor-1 keyed EXACTLY like `refit` (enable on 1, disable +
    *   close elsewhere and on disengage). It claims NO Space verb (D-b keeps
    *   Space = REFIT); Esc reaches it first through closeTopPane() — the
    *   LIBRARY is the TOPMOST workbench pane (it opens FROM the REFIT card,
    *   08-workbench §3, so it is the most recently opened in the one flow that
    *   opens both; with both open Library-closes-first is the documented
    *   order). Session C: both panes also page from the horizontal two-finger
-   *   swipe — WheelRouter asks `wantsPaneSwipe()` (F3 + a pane dep) and emits
+   *   swipe — WheelRouter asks `wantsPaneSwipe()` (F1 + a pane dep) and emits
    *   ONE `pagePane({toward})` per flick; the carousel law lives there.
-   * @param {object} [deps.archive]      - F1 (ARCHIVE) content bridge (ArchiveFloor):
-   *   activate/deactivate/isActive. Optional — no-op without it. Floor-keyed
-   *   like hullcam (F1's debrisMode 'hidden' is shared with F2): arriving on
-   *   floor 1 drops into the hosted Tech Library, any other floor closes it.
-   * @param {object} [deps.depot]        - F2 (DEPOT) doorway host (Wave 5 Session
-   *   E, 08-workbench §5 D3): `enter()` flips the game into the SHOP GameState
-   *   (main.js injects `() => gameFlowManager.transitionToState(GameStates.SHOP)`).
-   *   NOT floor-keyed content: a ride that ARRIVES on floor 2 from a floor above
-   *   (the F3 inner-wall push-through, or a rail-notch jump) calls it at ride
-   *   END — so the cross clunk (`sfx.onCross`, fired at the decision) precedes
-   *   the flip by the whole 550 ms ride (02-traps T8: the SHOP state suspends
-   *   the audio context synchronously). After a landed flip the core is parked
-   *   back on the floor the player LEFT, at the working z01 they left it at
-   *   (D5, `ZoomLadder.place`; its own (floor, z01) is the in-memory floor
-   *   memory across the SHOP state — `_disengage` never resets it), so the
-   *   return re-engages on the hull, never on F2 again (which would re-enter the
-   *   depot) and never on F4. Optional — absent it F2 is the empty room it was.
-   *   Engaging DIRECTLY on floor 2 (no ride) never enters; arrivals from F1
-   *   (Esc / PgUp out of the archive) never enter either — the doorway is only
-   *   ever pushed INTO.
+   * @param {object} [deps.archive]      - the retired ARCHIVE floor's content
+   *   bridge (ArchiveFloor): deactivate/isActive. Since the Session H 7→5
+   *   renumber NO floor activates it (the old F1 ARCHIVE row is deleted — the
+   *   Tech Library is the pane + the full-screen reader); the dep remains only
+   *   so _disengage can close a viewer it might still host. Removed entirely
+   *   with the module (Session H commit 4).
    * @param {object} [deps.audioBeds]    - per-floor audio beds (LadderAudioBeds):
    *   setFloor(floorId|null). Optional — absent it beds are a no-op.
    * @param {object} [deps.floorMask]    - per-floor HUD pane mask (FloorMask,
@@ -142,9 +121,9 @@ export class LadderController {
    * @param {object} [deps.viewStore]    - the PLAYER-owned view store
    *   (LadderViewStore, Wave 5 Session G — D5 persistence): rooms()/setRooms()
    *   round-trip FloorMask's exportMemory/importMemory; panes()/setPanes() hold
-   *   the F3 workbench pane open-state, written on the panes' open/close edge
+   *   the F1 workbench pane open-state, written on the panes' open/close edge
    *   (main.js's ONE `_syncWorkbenchPanes` edge calls `notePaneChange()`) while
-   *   engaged on F3, and re-applied at ENGAGE on F3 (the depot return, a
+   *   engaged on F1, and re-applied at ENGAGE on F1 (the SHOP return, a
    *   continued run) — "the room as you left it". Optional — absent it rooms
    *   stay in-memory (FloorMask) and the panes close as shipped. main.js
    *   constructs it only inside the LADDER.ENABLED gate (flag-off: never read
@@ -152,19 +131,19 @@ export class LadderController {
    * @param {object} [deps.sfx]          - interaction sfx (LadderSfx): onCharge/
    *   onCross/onRide/onUndoWindow/reset. Optional — absent it sfx are a no-op.
    * @param {object} [deps.starfield]    - Starfield: isConstellationsVisible()/
-   *   setConstellationsVisible(bool). Optional — F7 hides the constellation figures
+   *   setConstellationsVisible(bool). Optional — F5 hides the constellation figures
    *   under the full-screen SDA chart and restores the player's prior on leave.
    * @param {object} [deps.cityLabels]   - CityLabels: setSuppressed(bool). Optional —
-   *   F7 suppresses the city/landmark pills under the SDA chart (they read as
-   *   clutter over the altitude bands) and F3 suppresses them at the hull (the
+   *   F5 suppresses the city/landmark pills under the SDA chart (they read as
+   *   clutter over the altitude bands) and F1 suppresses them at the hull (the
    *   map rule, D8 — city names never among house numbers; 2026-09-02 evening).
    *   Suppression is transient by contract (CityLabels.setSuppressed never
    *   persists), so the player's 5-key preference owns the resting state on
    *   leave/disengage.
    * @param {object} [deps.targetReticle]  - TargetReticle: setVisible(bool). Optional —
-   *   suppressed on the ship-is-icon floors (F6/F7), restored on floors <= 5 / disengage.
+   *   suppressed on the ship-is-icon floors (F4/F5), restored on floors <= 3 / disengage.
    * @param {object} [deps.dockingReticle] - DockingReticle: setVisible(bool). Optional —
-   *   same F6/F7 suppression; its re-show is owned per-frame by main.js's ARM PILOT
+   *   same F4/F5 suppression; its re-show is owned per-frame by main.js's ARM PILOT
    *   block, which consults reticlesSuppressed().
    * @param {function} [deps.now]        - monotonic clock (ms); defaults to performance.now
    * @param {object} [deps.ladder]       - injectable ZoomLadder (tests); defaults to a fresh core
@@ -181,7 +160,6 @@ export class LadderController {
     this._refit = deps.refit || null;
     this._library = deps.library || null;
     this._archive = deps.archive || null;
-    this._depot = deps.depot || null;
     this._audioBeds = deps.audioBeds || null;
     this._floorMask = deps.floorMask || null;
     this._viewStore = deps.viewStore || null;
@@ -190,20 +168,20 @@ export class LadderController {
     this._cityLabels = deps.cityLabels || null;
     this._targetReticle = deps.targetReticle || null;
     this._dockingReticle = deps.dockingReticle || null;
-    /** True while the engaged floor (>= 6) suppresses the aiming reticles. */
+    /** True while the engaged floor (>= 4) suppresses the aiming reticles. */
     this._reticlesHidden = false;
-    /** True while F7 suppresses the constellation figures (mirrors _reticlesHidden). */
+    /** True while F5 suppresses the constellation figures (mirrors _reticlesHidden). */
     this._constellationsHidden = false;
-    /** Player's 6-key visibility captured when F7 hid the figures (restored on leave). */
+    /** Player's 6-key visibility captured when F5 hid the figures (restored on leave). */
     this._constellationsPrior = null;
-    /** True while F7 or F3 suppresses the city/landmark pills (mirrors _reticlesHidden). */
+    /** True while F5 or F1 suppresses the city/landmark pills (mirrors _reticlesHidden). */
     this._cityLabelsHidden = false;
     this._now = deps.now || (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()));
-    // The DEFAULT core (the production path — main.js injects no ladder) honors
-    // the dev-phase full-access flag: Constants.LADDER.DEV_FULL_ACCESS (ships
-    // true until M6 campaign gating) opens the F2 dock gate so every floor is
-    // reachable in play-testing (00-spec §9). Injected ladders (tests) keep
-    // strict gates unless their own rules say otherwise.
+    // The DEFAULT core (the production path — main.js injects no ladder) still
+    // forwards the dev-phase full-access flag: Constants.LADDER.DEV_FULL_ACCESS
+    // (ships true until M6 campaign gating; 00-spec §9). INERT since the
+    // Session H renumber — the F2 dock gate it bypassed left with that row —
+    // but the wire keeps its pinned shape (03-plan Session H FINDINGS).
     this._ladder = deps.ladder || new ZoomLadder({
       rules: { devFullAccess: !!(Constants.LADDER && Constants.LADDER.DEV_FULL_ACCESS) },
     });
@@ -220,19 +198,17 @@ export class LadderController {
     this._rideSeq = 0;
     /**
      * The floor whose content is on screen (written by _applyFloorContent at
-     * engage and at every ride START) — the ORIGIN floor of the next ride. The
-     * depot doorway reads it to know a ride into F2 came from above (and where
-     * to park the core for the return). null until the first engage.
+     * engage and at every ride START) — the ORIGIN floor of the next ride.
+     * null until the first engage.
      */
     this._floorApplied = null;
     /**
      * D5 (Wave 5 Session G): the last FREE-zone rest z01 on the applied floor —
      * the player's working position (see `isFreeRest`). Seeded at engage and
      * at every floor ARRIVAL from the entry z01, advanced by every free `move`
-     * decision, untouched by flick-to-wall landings / settles / creep. Read at
-     * the START of a ride into the depot doorway so `_enterDepot` can park the
-     * core back at exactly this z01 (ZoomLadder.place) instead of the contract
-     * entry. null = no free rest known on this floor yet → the entry fallback.
+     * decision, untouched by flick-to-wall landings / settles / creep. Its one
+     * reader (the doorway park) retired with the Session H renumber — kept for
+     * the Session N intro-ride landing (03-plan Session H FINDINGS).
      */
     this._restZ01 = null;
     /**
@@ -257,15 +233,6 @@ export class LadderController {
      * finding, 2026-09-04 — the doorway return parked at a ramp position).
      */
     this._lastPosZ01 = null;
-    /**
-     * D5: the doorway ride in flight — `{ floor, z01 }` of the origin (the hull
-     * the player is leaving + their working position) from ride START until
-     * its completion or replacement. `viewState()` reports THIS while set, so
-     * a run save taken during the 550 ms ride into F2 records the hull, never
-     * the doorway (a continue must re-engage where the player worked, not in
-     * the F2 room). null otherwise.
-     */
-    this._doorway = null;
     /** True while `_restorePanes` drives the panes itself (its edges are not player intent). */
     this._paneRestoring = false;
     /**
@@ -290,7 +257,7 @@ export class LadderController {
   get ladder() { return this._ladder; }
 
   /**
-   * True while the engaged floor iconizes the ship (F6/F7) and the aiming
+   * True while the engaged floor iconizes the ship (F4/F5) and the aiming
    * reticles are suppressed. main.js's per-frame ARM PILOT DockingReticle
    * re-show consults this — allocation-free (gameLoop hot path; no getState()
    * snapshot). Flag-off: never engaged → never set → always false.
@@ -298,7 +265,7 @@ export class LadderController {
   reticlesSuppressed() { return this._reticlesHidden; }
 
   /**
-   * Current ladder floor id (1..7), or null when unavailable. Read-only probe
+   * Current ladder floor id (1..5), or null when unavailable. Read-only probe
    * for the iPad zoom-feel telemetry beacon (ui/touchTelemetry.js); never
    * throws and allocates nothing beyond the core's own getState snapshot.
    */
@@ -464,7 +431,7 @@ export class LadderController {
   /**
    * Horizontal-swipe eligibility (Wave 5 Session C — 08-workbench §2
    * "Horizontal = what (panes)"): true while the ladder is engaged ON THE
-   * WORKBENCH FLOOR (F3) with at least one pane dep to page. WheelRouter
+   * WORKBENCH FLOOR (F1) with at least one pane dep to page. WheelRouter
    * consults this per HORIZONTAL-dominant wheel event (|deltaX| > |deltaY|)
    * before it claims the event away from the zoom feed — never per frame,
    * never for a vertical event. Everywhere else (other floors, disengaged,
@@ -474,7 +441,7 @@ export class LadderController {
    */
   wantsPaneSwipe() {
     if (!this._engaged || !(this._refit || this._library)) return false;
-    return this.currentFloor() === 3;
+    return this.currentFloor() === 1;
   }
 
   /**
@@ -512,7 +479,7 @@ export class LadderController {
    * The "away" pane is checked FIRST, so the both-open state (reachable only
    * by clicks — the swipe grammar stays 3-position) resolves to one pane on
    * the first swipe. 'left'/'right' are SCREEN sides: the panes' RTL mirror
-   * is their own CSS variable, not this grammar. Guards: disengaged, off-F3
+   * is their own CSS variable, not this grammar. Guards: disengaged, off-F1
    * or an unknown `toward` → null and no pane is touched; an absent pane dep
    * is skipped, never thrown on. Like closeTopPane(), NOT a ladder input for
    * adaptHoldoff (a 270 ms pane yaw, no floor flight).
@@ -521,7 +488,7 @@ export class LadderController {
    *   the action taken (null = nothing to do)
    */
   pagePane({ toward } = {}) {
-    if (!this._engaged || this.currentFloor() !== 3) return null;
+    if (!this._engaged || this.currentFloor() !== 1) return null;
     const lib = this._library, r = this._refit;
     const libOpen = !!(lib && lib.isOpen && lib.isOpen());
     const refitOpen = !!(r && r.isOpen && r.isOpen());
@@ -543,8 +510,8 @@ export class LadderController {
   /**
    * The panes' open/close EDGE, from main.js's ONE `_syncWorkbenchPanes`
    * (the same edge that feeds the D10 calm cap + the camera inset — never a
-   * second signal path). Records the F3 pane open-state into the player store
-   * as the player's intent — ONLY while engaged on F3 and not driven by the
+   * second signal path). Records the F1 pane open-state into the player store
+   * as the player's intent — ONLY while engaged on F1 and not driven by the
    * controller itself: `_disengage` clears `_engaged` and `_applyFloorContent`
    * writes `_floorApplied` BEFORE their teardown closes fire, and
    * `_restorePanes` sets `_paneRestoring`, so the controller's own closes and
@@ -553,7 +520,7 @@ export class LadderController {
    */
   notePaneChange() {
     if (!this._viewStore || this._paneRestoring) return;
-    if (!this._engaged || this._floorApplied !== 3) return;
+    if (!this._engaged || this._floorApplied !== 1) return;
     if (typeof this._viewStore.setPanes !== 'function') return;
     const isOpen = (p) => !!(p && typeof p.isOpen === 'function' && p.isOpen());
     this._viewStore.setPanes({ refit: isOpen(this._refit), library: isOpen(this._library) });
@@ -583,14 +550,12 @@ export class LadderController {
   /**
    * The run-scoped half of D5 for the RUN SAVE (main.js gathers it on
    * PERSISTENCE_GATHER as `save.ladder`, inside the LADDER.ENABLED gate): the
-   * core's live `(floor, z01)` — or, during a doorway ride into F2, the hull
-   * the player is leaving at their working position (`_doorway`), so a save
-   * taken mid-ride never records the doorway. A plain fresh object; never a
-   * throw (null if the core has no snapshot).
+   * core's live `(floor, z01)`. A plain fresh object; never a throw (null if
+   * the core has no snapshot). (The Session G doorway branch — "a save during
+   * the ride into F2 records the hull" — retired with the doorway, Session H.)
    * @returns {{floor: number, z01: number}|null}
    */
   viewState() {
-    if (this._doorway) return { floor: this._doorway.floor, z01: this._doorway.z01 };
     try {
       const s = this._ladder.getState();
       return (s && Number.isFinite(s.floor) && Number.isFinite(s.z01)) ? { floor: s.floor, z01: s.z01 } : null;
@@ -727,9 +692,9 @@ export class LadderController {
   }
 
   /**
-   * @private D5 (owner decision 3): re-open the F3 workbench panes as the
-   * player left them — at ENGAGE on F3 (the depot return, a continued run),
-   * after `_applyFloorContent(3)` has enabled the tabs (open() is a no-op while
+   * @private D5 (owner decision 3): re-open the F1 workbench panes as the
+   * player left them — at ENGAGE on F1 (the SHOP return, a continued run),
+   * after `_applyFloorContent(1)` has enabled the tabs (open() is a no-op while
    * disabled). REFIT first, then the LIBRARY (the one flow that opens both;
    * Esc unwinds library → refit). The panes' own open() fires their
    * onOpenChange edge (the D10 calm cap + the camera inset, exactly as a tab
@@ -768,18 +733,15 @@ export class LadderController {
     this._seedRest(s.z01);
     this._applyFidelity(s.floor);
     this._applyFloorContent(s.floor);
-    // D5: the F3 room as the player left it — the panes re-open at ENGAGE on
-    // the hull (the depot return; a continued run), never at a ride arrival.
-    if (s.floor === 3) this._restorePanes();
+    // D5: the F1 room as the player left it — the panes re-open at ENGAGE on
+    // the hull (the SHOP return; a continued run), never at a ride arrival.
+    if (s.floor === 1) this._restorePanes();
     if (this._rail && this._rail.show) this._rail.show();
     this._refreshRail();
   }
 
   _disengage() {
     this._engaged = false;
-    // D5: a doorway ride cannot complete once disengaged (the camera drops its
-    // completion) — the origin record dies with it.
-    this._doorway = null;
     if (this._cameraSystem && this._cameraSystem.ladderDisengage) {
       this._cameraSystem.ladderDisengage();
     }
@@ -907,9 +869,6 @@ export class LadderController {
   _startRide(toFloor, entryZ01, rideMs, tMs, isCross) {
     // The ORIGIN floor — read BEFORE the destination's content lands below.
     const fromFloor = this._floorApplied;
-    // D5: the origin floor's working position, read BEFORE the arrival re-seeds
-    // it — the depot doorway parks the core back here (`_enterDepot`).
-    const departZ01 = this._restZ01;
     if (toFloor !== fromFloor) {
       // A floor change re-seeds the working position from the arrival entry
       // (0.25 / 0.75 — always a free rest). A same-floor flickWall ride lands
@@ -924,14 +883,6 @@ export class LadderController {
     this._applyFloorContent(toFloor);
     const frame = this._frame(toFloor, entryZ01);
     const seq = ++this._rideSeq;
-    // The ONE doorway predicate for this ride: a ride INTO F2 from a floor
-    // ABOVE. Arms the D5 origin record now (a run save during the flight must
-    // record the hull the player is leaving, never F2) and gates the SHOP entry
-    // in done() below — one evaluation, one source of truth.
-    const isDoorway = toFloor === DEPOT_FLOOR_ID && fromFloor != null && fromFloor > DEPOT_FLOOR_ID;
-    this._doorway = isDoorway
-      ? { floor: fromFloor, z01: departZ01 != null ? departZ01 : FloorContract.LADDER_GEOMETRY.ENTRY_Z01_FROM_BELOW }
-      : null;
     const done = () => {
       if (seq !== this._rideSeq) return;   // superseded — the new ride owns completion
       const t = this._now();
@@ -941,20 +892,6 @@ export class LadderController {
       // above): only the LATEST ride's completion counts, matching the core.
       if (isCross && this._sfx && this._sfx.onUndoWindow) this._sfx.onUndoWindow(true);
       this._refreshRail();
-      // Wave 5 Session E — the depot DOORWAY (08-workbench §5): a ride that
-      // arrived on F2 from a floor ABOVE enters the SHOP now, at ride END. The
-      // cross clunk fired at the decision (before _startRide), so it leads the
-      // state flip by the full ride (T8). A superseded ride (flick undo back
-      // out mid-flight) never reaches here — the seq guard above.
-      if (isDoorway) {
-        this._enterDepot(fromFloor, t, departZ01);
-      }
-      // D5: the origin record outlives the flip on purpose — the FIRST depot
-      // visit saves synchronously inside transitionToState(SHOP)
-      // (GameFlowManager._applyFirstDepotFloor → saveGame), while the core is
-      // still on F2; viewState() must report the hull there. Cleared only once
-      // the core is parked back on it.
-      this._doorway = null;
     };
     if (this._cameraSystem && this._cameraSystem.ladderStartRide) {
       this._cameraSystem.ladderStartRide({ ...frame, rideMs, onDone: done });
@@ -963,54 +900,6 @@ export class LadderController {
       // the core never wedges in `riding`.
       done();
     }
-  }
-
-  /**
-   * The depot doorway (Wave 5 Session E — 08-workbench §5 D3, 00-spec §3 F2
-   * amendment): a ride ARRIVED on F2 from `fromFloor` (> 2). Flip into the
-   * SHOP GameState through the injected host, then park the core back on the
-   * floor the player left so the return lands there.
-   *
-   * Order and why:
-   *   1. `depot.enter()` → GameFlowManager.transitionToState(SHOP): the
-   *      GAME_STATE_CHANGE payload still carries `firstDepotVisit` (the one
-   *      grant rule lives in GameFlowManager — nothing is duplicated here).
-   *      The clunk already sounded at the cross decision, 550 ms ago (T8).
-   *   2. Did the flip land? `gameState.isGameplay()` is false the moment it
-   *      did. A rejected transition (or a host that declined) leaves the
-   *      core on F2 exactly as shipped — the room, not a loop.
-   *   3. Park (D5, Wave 5 Session G): `ladder.place({ floor: fromFloor, z01:
-   *      departZ01 })` — a settled cut to the floor the player left, at the
-   *      WORKING position they left it at (`_restZ01`, read at the doorway
-   *      ride's start: the last free-zone rest, never the wall edge the push
-   *      went through). A hidden cut under the SHOP overlay, NOT routed
-   *      through _apply: no camera ride (the ladder disengages on the next
-   *      update() — SHOP is not a gameplay state, T4), no content swap (the
-   *      SHOP owns the screen; the return's _engage applies the floor's
-   *      content + camera frame from the core's state). The core's (floor,
-   *      z01) is the ONE in-memory floor memory across the SHOP state:
-   *      _disengage never resets it (pinned), and _engage reads it — so the
-   *      return re-engages on the hull the player left, at the z01 they left,
-   *      never on F2 (which would re-enter the depot) and never on F4. With no
-   *      working position known (engaged straight onto a wall edge and pushed
-   *      through — no free rest ever seen) the Session E parking stands:
-   *      `jump({ toFloor })` + a synchronous `rideFinished` → the contract's
-   *      arrive-from-below entry 0.25.
-   * @param {number} fromFloor - the floor the ride into F2 departed from (> 2)
-   * @param {number} tMs - the ride-completion clock (the core's timeline)
-   * @param {number|null} [departZ01] - the origin floor's working position
-   * @private
-   */
-  _enterDepot(fromFloor, tMs, departZ01 = null) {
-    const host = this._depot;
-    if (!host || typeof host.enter !== 'function') return;   // no host → the F2 room, as shipped
-    host.enter();
-    const gs = this._gameState;
-    if (gs && gs.isGameplay && gs.isGameplay()) return;      // the flip did not land → stay on F2
-    if (departZ01 != null && typeof this._ladder.place === 'function' &&
-        this._ladder.place({ tMs, floor: fromFloor, z01: departZ01 })) return;
-    const decisions = this._ladder.jump({ tMs, toFloor: fromFloor });
-    if (decisions.some((d) => d.type === 'ride')) this._ladder.rideFinished({ tMs });
   }
 
   /** Push a floor's fidelity block to SceneManager (T1). @private */
@@ -1029,26 +918,26 @@ export class LadderController {
 
   /**
    * Consume the arrival floor's `fidelity.debrisMode` (T1 plumbing) to drive the
-   * floor content controllers. F6's 'clusters' mode swaps the full debris meshes
-   * for the NAVCOM cluster-icon + transfer-window costume; F5's 'tactical' mode
-   * drives the PROX NET corridor costume; F7's 'massBands' mode drives the SDA
-   * chart (and hides the constellation figures under it); F3 (HULL CAM) keys on
-   * the floor ID — its debrisMode 'full' is shared with F4 and cannot
+   * floor content controllers. F4's 'clusters' mode swaps the full debris meshes
+   * for the NAVCOM cluster-icon + transfer-window costume; F3's 'tactical' mode
+   * drives the PROX NET corridor costume; F5's 'massBands' mode drives the SDA
+   * chart (and hides the constellation figures under it); F1 (HULL CAM) keys on
+   * the floor ID — its debrisMode 'full' is shared with F2 and cannot
    * discriminate. Every other floor deactivates each. Also gates the aiming
-   * reticles on the icon floors (>= 6). Every content dep is optional (parallel
+   * reticles on the icon floors (>= 4). Every content dep is optional (parallel
    * track — the serial track injects the floors + the reticles); absent deps
    * make each part a no-op. @private
    */
   _applyFloorContent(floor) {
     // The origin-floor record for the next ride (the depot doorway reads it).
     this._floorApplied = floor;
-    // Reticle gating (F6/F7 'ship-to-icon' floors): the target + docking
+    // Reticle gating (F4/F5 'ship-to-icon' floors): the target + docking
     // reticles aim at subjects that are icons at Earth-anchored ranges, so both
-    // hide while the engaged floor is >= 6 and restore on floors <= 5 (and on
+    // hide while the engaged floor is >= 4 and restore on floors <= 3 (and on
     // disengage) — mirroring the navcom activate/deactivate pattern below.
-    // Keyed on the floor number, not debrisMode: F7 ('massBands') must suppress
+    // Keyed on the floor number, not debrisMode: F5 ('massBands') must suppress
     // too. Independent of the content deps so the reticle deps work standalone.
-    this._setReticlesHidden(floor >= 6);
+    this._setReticlesHidden(floor >= 4);
     const f = FloorContract.byId(floor);
     if (this._navcom) {
       const clusters = !!(f && f.fidelity && f.fidelity.debrisMode === 'clusters');
@@ -1058,7 +947,7 @@ export class LadderController {
         this._navcom.deactivate();
       }
     }
-    // F5 (PROX NET): the arrival floor's debrisMode 'tactical' drives the
+    // F3 (PROX NET): the arrival floor's debrisMode 'tactical' drives the
     // ProxNetFloor costume — same activate/deactivate pattern as navcom.
     if (this._proxNet) {
       const tactical = !!(f && f.fidelity && f.fidelity.debrisMode === 'tactical');
@@ -1068,7 +957,7 @@ export class LadderController {
         this._proxNet.deactivate();
       }
     }
-    // F7 (SDA): 'massBands' drives the full-screen chart; the constellation
+    // F5 (SDA): 'massBands' drives the full-screen chart; the constellation
     // figures hide under it (screen-space chart — the star figures would read
     // as chart strokes) and restore on any other floor / disengage. The Earth
     // city/landmark pills hide with them (dozens of DOM pills over a chart-
@@ -1082,51 +971,49 @@ export class LadderController {
       }
     }
     this._setConstellationsHidden(massBands);
-    // City/landmark pills hide on F7 (above) AND on F3 (owner, 2026-09-02
+    // City/landmark pills hide on F5 (above) AND on F1 (owner, 2026-09-02
     // evening — the map rule, 08-workbench D8: "house numbers up close, city
     // names far out, never both"). At the hull, Earth is a backdrop 2–12 m
     // behind the ship and the pills land among the hull callout cards in the
-    // same pill grammar. F3 is keyed on FLOOR ID (debrisMode is 'full' on both
-    // F3 and F4); F4 keeps the shipped pills — the player's 5-key choice. Same
-    // transient gate, same restore on leave/disengage; F5/F6 untouched.
-    this._setCityLabelsHidden(massBands || floor === 3);
-    // F3 (HULL CAM): keyed on FLOOR ID 3 — NOT fidelity.debrisMode, which is
-    // 'full' on BOTH F3 and F4 and cannot discriminate.
+    // same pill grammar. F1 is keyed on FLOOR ID (debrisMode is 'full' on both
+    // F1 and F2); F2 keeps the shipped pills — the player's 5-key choice. Same
+    // transient gate, same restore on leave/disengage; F3/F4 untouched.
+    this._setCityLabelsHidden(massBands || floor === 1);
+    // F1 (HULL CAM): keyed on FLOOR ID 1 — NOT fidelity.debrisMode, which is
+    // 'full' on BOTH F1 and F2 and cannot discriminate.
     if (this._hullcam) {
-      if (floor === 3) { if (this._hullcam.activate) this._hullcam.activate(); }
+      if (floor === 1) { if (this._hullcam.activate) this._hullcam.activate(); }
       else if (this._hullcam.deactivate) this._hullcam.deactivate();
     }
-    // F3 REFIT pane (Wave 5 (2)): the same FLOOR-ID key as hullcam. Arrival
-    // on 3 enables the edge tab (always visible while enabled — 08-workbench
+    // F1 REFIT pane (Wave 5 (2)): the same FLOOR-ID key as hullcam. Arrival
+    // on 1 enables the edge tab (always visible while enabled — 08-workbench
     // §2); any other floor disables it AND closes the pane, so a ride away
     // never strands an open pane (the D10 calm cap releases with the close).
     if (this._refit) {
-      if (floor === 3) {
+      if (floor === 1) {
         if (this._refit.setEnabled) this._refit.setEnabled(true);
       } else {
         if (this._refit.setEnabled) this._refit.setEnabled(false);
         if (this._refit.close) this._refit.close();
       }
     }
-    // F3 TECH LIBRARY pane (Wave 5 Session B): keyed EXACTLY like `refit` —
-    // enable the edge tab on floor 3, disable AND close anywhere else. Its
+    // F1 TECH LIBRARY pane (Wave 5 Session B): keyed EXACTLY like `refit` —
+    // enable the edge tab on floor 1, disable AND close anywhere else. Its
     // close() fires the pane's own onOpenChange edge (the calm cap + the
     // camera inset release ride that, never a controller signal).
     if (this._library) {
-      if (floor === 3) {
+      if (floor === 1) {
         if (this._library.setEnabled) this._library.setEnabled(true);
       } else {
         if (this._library.setEnabled) this._library.setEnabled(false);
         if (this._library.close) this._library.close();
       }
     }
-    // F1 (ARCHIVE): keyed on FLOOR ID 1 — its debrisMode 'hidden' is shared
-    // with F2 (DEPOT). Arrival hosts + opens the Tech Library (the codex IS
-    // the floor costume, 00-spec §3); leaving / disengaging closes it.
-    if (this._archive) {
-      if (floor === 1) { if (this._archive.activate) this._archive.activate(); }
-      else if (this._archive.deactivate) this._archive.deactivate();
-    }
+    // The retired ARCHIVE bridge (Session H): NO floor activates it any more —
+    // the old F1 ARCHIVE row left the contract (the Tech Library is the pane +
+    // the full-screen reader). Any floor arrival closes a viewer it might
+    // still host; the module leaves entirely in commit 4.
+    if (this._archive && this._archive.deactivate) this._archive.deactivate();
     // Per-floor audio bed (FloorContract audioBed): crossfade to the arrival
     // floor's bed. Optional dep — absent it this is a no-op (parallel track).
     if (this._audioBeds && this._audioBeds.setFloor) this._audioBeds.setFloor(floor);
@@ -1141,7 +1028,7 @@ export class LadderController {
   }
 
   /**
-   * Hide/restore the aiming reticles for the ship-is-icon floors (F6/F7).
+   * Hide/restore the aiming reticles for the ship-is-icon floors (F4/F5).
    * Idempotent (guarded on the flag flip). Both deps optional — absent deps
    * make this a pure flag write, byte-identical to the pre-reticle controller.
    *
@@ -1168,7 +1055,7 @@ export class LadderController {
   }
 
   /**
-   * Hide/restore the constellation figures for the F7 SDA chart — a mirror of
+   * Hide/restore the constellation figures for the F5 SDA chart — a mirror of
    * _setReticlesHidden. Idempotent (guarded on the flag flip); the starfield dep
    * is optional — absent it this is a pure flag write, byte-identical to the
    * pre-SDA controller.
@@ -1176,8 +1063,8 @@ export class LadderController {
    * Hide: capture the player's current 6-key visibility ONCE into
    * _constellationsPrior, then setConstellationsVisible(false).
    * Restore: put back the captured prior and null it — the player's 6-key
-   * toggle owns the resting state, so F7 never force-shows figures the player
-   * had off (and never strands them hidden after leaving F7 / disengaging).
+   * toggle owns the resting state, so F5 never force-shows figures the player
+   * had off (and never strands them hidden after leaving F5 / disengaging).
    * @private
    */
   _setConstellationsHidden(hidden) {
@@ -1199,8 +1086,8 @@ export class LadderController {
   }
 
   /**
-   * Suppress/clear the Earth city + landmark pills — for the F7 SDA chart and,
-   * since 2026-09-02 (evening), for the F3 hull floor (the map rule: never
+   * Suppress/clear the Earth city + landmark pills — for the F5 SDA chart and,
+   * since 2026-09-02 (evening), for the F1 hull floor (the map rule: never
    * city names among house numbers). A mirror of _setReticlesHidden.
    * Idempotent (guarded on the flag flip); the cityLabels dep is optional —
    * absent it this is a pure flag write.
@@ -1224,24 +1111,24 @@ export class LadderController {
 
   /**
    * Dispatch a per-floor Space verb decision (FloorContract spaceVerb). Wired:
-   * F6 'plan-transfer' (M3), F5 'approach', F7 'flip-lens', F3 'lens-toggle'
-   * (S4 serial wiring). F4's 'approach-autopilot' remains a follow-up.
+   * F4 'plan-transfer' (M3), F3 'approach', F5 'flip-lens', F1 'lens-toggle'
+   * (S4 serial wiring). F2's 'approach-autopilot' remains a follow-up.
    * @private
    */
   _dispatchVerb(verb) {
     if (verb === 'plan-transfer' && this._navcom && this._navcom.planTransfer) {
       this._navcom.planTransfer();
     }
-    // F5 Space verb (FloorContract.FLOORS[4].spaceVerb): commit the selected
+    // F3 Space verb (FloorContract PROX NET row): commit the selected
     // insertion point — ProxNetFloor.approach() → onApproach → autopilot.
     if (verb === 'approach' && this._proxNet && this._proxNet.approach) {
       this._proxNet.approach();
     }
-    // F7 Space verb: flip the SDA chart lens (VALUE ↔ THREAT).
+    // F5 Space verb: flip the SDA chart lens (VALUE ↔ THREAT).
     if (verb === 'flip-lens' && this._sdaFloor && this._sdaFloor.flipLens) {
       this._sdaFloor.flipLens();
     }
-    // F3 Space verb: the REFIT pane claims it when injected (D-b, owner
+    // F1 Space verb: the REFIT pane claims it when injected (D-b, owner
     // 2026-09-03 — "Space toggles the REFIT pane"); FloorContract's verb
     // string stays 'lens-toggle'. Absent the pane, the shipped hullcam branch
     // runs (un-injected in production today → the silent no-op stands).
@@ -1249,7 +1136,7 @@ export class LadderController {
       if (this._refit && this._refit.toggle) {
         this._refit.toggle();
       } else if (this._hullcam && this._hullcam.lensToggle) {
-        // F3 Space verb: cycle the HULL CAM lens (overview → per-subsystem detail).
+        // F1 Space verb: cycle the HULL CAM lens (overview → per-subsystem detail).
         this._hullcam.lensToggle();
       }
     }
@@ -1257,8 +1144,8 @@ export class LadderController {
 
   /**
    * Resolve a (floor, z01) into a camera frame: distance from anchor, FOV,
-   * anchor kind. F3's 'subject' anchor maps to 'ship' in M1 (subject re-aim is
-   * S4); F6/F7 'earth' anchor lets the ride engine aim Earth-fixed (T6).
+   * anchor kind. F1's 'subject' anchor maps to 'ship' in M1 (subject re-aim is
+   * S4); F4/F5 'earth' anchor lets the ride engine aim Earth-fixed (T6).
    * @private
    */
   _frame(floor, z01) {

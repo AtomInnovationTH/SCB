@@ -22,16 +22,17 @@
  * - Instrument identity: INFO-blue frame/labels (VisualLaw.COLORS.INFO) so the
  *   rail reads as a CONTROL, distinct from the green/dark content panes; the
  *   current floor keeps the PLAYER green identity, charge fill stays PLAYER.
- * - G2i: flashDenied(hint, floor) is real now — a hard wall (undocked F2 /
- *   ladder end) flashes the blocked notch THREAT-red once (one-shot ≤ 3 Hz,
- *   VisualLaw.KLAXON.FLASH_HZ_MAX) and, when the contract provides a hint
- *   ('DOCK TO ENTER DEPOT'), shows a small amber toast above the rail.
+ * - G2i: flashDenied(hint, floor) is real now — a hard wall (a ladder end;
+ *   historically the undocked F2 dock gate) flashes the blocked notch
+ *   THREAT-red once (one-shot ≤ 3 Hz, VisualLaw.KLAXON.FLASH_HZ_MAX) and,
+ *   when the contract provides a deniedHint, shows a small amber toast above
+ *   the rail. (No shipping floor carries one since the Session H renumber.)
  *   Warning amber #ffaa00 is the shipped HUD warning family (DockingReticle) —
  *   deliberately NOT a new VisualLaw law color (the 5-color pin stands).
  *
- * Wave 5 Session E (08-workbench §5 D3 — the depot INVITATION): from chapter
- * 4 on a mission boundary no longer forces the depot stop; instead the DEPOT
- * notch GLOWS — VisualLaw VALUE gold, STEADY (gold never pulses), border +
+ * Wave 5 Session E (08-workbench §5 D3 — the depot INVITATION; retargeted to
+ * notch 1 in Session H): from chapter 4 on a mission boundary no longer forces
+ * the depot stop; instead the WORKBENCH notch GLOWS — VisualLaw VALUE gold, STEADY (gold never pulses), border +
  * label + a soft halo (the shape channel: colour is never the sole channel) —
  * until the player pushes into the doorway or the window lapses. Driven by
  * `setDepotInvitation(open)` from main.js's DEPOT_INVITATION listener (the
@@ -64,8 +65,14 @@ const NOTCH_REST_COLOR = 'rgba(0,204,255,0.62)';
  * STEADY box-shadow (no animation, no transition pulse: gold never pulses).
  */
 export const INVITE_HALO = '0 0 10px rgba(255,209,102,0.55)';
-/** The floor whose notch carries the invitation (FloorContract F2, 'DEPOT'). */
-const DEPOT_FLOOR = (FloorContract.FLOORS.find((f) => f.name === 'DEPOT') || { id: 2 }).id;
+/**
+ * The floor whose notch carries the depot INVITATION — floor 1 (HULL CAM, the
+ * workbench) since the Session H 7→5 renumber: the F2 DEPOT row is gone, the
+ * shop is the REFIT drawer's job, so the glow says "come down to the workbench"
+ * (plan D-B/D-H). The name `setDepotInvitation` stays: the signal is still
+ * Events.DEPOT_INVITATION and the glow means the same doorway-open state.
+ */
+const INVITE_FLOOR = 1;
 
 export class RailIndicator {
   constructor() {
@@ -82,7 +89,7 @@ export class RailIndicator {
     this._rate = null;
     this._rateLabel = null;
     this._rateWriteMs = -Infinity;
-    /** The depot invitation (Wave 5 Session E): true while the DEPOT notch glows. */
+    /** The depot invitation (Wave 5 Session E): true while notch 1 glows. */
     this._invite = false;
   }
 
@@ -150,8 +157,9 @@ export class RailIndicator {
    *             Wave 5 Session E — gold never pulses; the halo is the shape channel)
    *   current → PLAYER border + label (the engaged floor)
    *   else    → the INFO resting frame
-   * `invite` outranks `current` (a notch that is both — the player standing on the
-   * glowing depot — is transient: arriving on F2 enters the SHOP and closes it).
+   * `invite` outranks `current` (a notch that is both — the player already at
+   * the glowing workbench — resolves when the shop is opened or the window
+   * lapses; gold stays the stronger claim meanwhile).
    * @param {{current:boolean, deny?:boolean, invite?:boolean}} flags
    * @returns {{borderColor:string, color:string, boxShadow:string}}
    */
@@ -162,27 +170,30 @@ export class RailIndicator {
     return { borderColor: NOTCH_REST_BORDER, color: NOTCH_REST_COLOR, boxShadow: 'none' };
   }
 
-  /** The DEPOT notch's 1-based floor id (FloorContract F2). */
-  static get DEPOT_FLOOR() { return DEPOT_FLOOR; }
+  /** The invitation notch's 1-based floor id (F1 HULL CAM — the workbench). */
+  static get INVITE_FLOOR() { return INVITE_FLOOR; }
 
   /**
-   * The depot invitation (08-workbench §5 D3): `open` true → the DEPOT notch
-   * glows VALUE gold, steady, until `open` false (the player entered, the
-   * window lapsed, or the game reset). Fed by main.js from DEPOT_INVITATION —
-   * the rail never derives the chapter rule itself. Headless / not yet built:
-   * the flag is kept and painted on the first refresh after build. Write-on-
-   * change: the notch repaints once per flip, never per frame.
+   * The depot invitation (08-workbench §5 D3): `open` true → the WORKBENCH
+   * notch (floor 1) glows VALUE gold, steady, until `open` false (the player
+   * entered the shop, the window lapsed, or the game reset). Retargeted from
+   * the retired DEPOT notch in the Session H renumber — the shop lives in the
+   * F1 REFIT drawer now, so the glow points where the buying is. Fed by
+   * main.js from DEPOT_INVITATION — the rail never derives the chapter rule
+   * itself. Headless / not yet built: the flag is kept and painted on the
+   * first refresh after build. Write-on-change: the notch repaints once per
+   * flip, never per frame.
    * @param {boolean} open
    */
   setDepotInvitation(open) {
     const want = !!open;
     if (want === this._invite) return;
     this._invite = want;
-    const n = this._notches[DEPOT_FLOOR - 1];
+    const n = this._notches[INVITE_FLOOR - 1];
     if (n) n._cur = null;                 // force the next refresh to repaint it
   }
 
-  /** @returns {boolean} true while the DEPOT notch glows (the invitation is open). */
+  /** @returns {boolean} true while the invitation notch glows (the window is open). */
   isDepotInvited() { return this._invite; }
 
   /** Lazily build the DOM (idempotent, no-op headless). @private */
@@ -204,7 +215,7 @@ export class RailIndicator {
       'z-index:35', 'pointer-events:none', 'opacity:0', 'transition:opacity 0.3s',
     ].join(';');
 
-    // column-reverse so F1 sits at the bottom, F7 at the top (elevator order).
+    // column-reverse so F1 sits at the bottom, F5 at the top (elevator order).
     for (const f of FloorContract.FLOORS) {
       const notch = document.createElement('div');
       notch.style.cssText = [
@@ -231,7 +242,7 @@ export class RailIndicator {
     }
 
     // Warp readout at the rail's HEAD: column-reverse puts a later child at
-    // the TOP (above F7). INFO instrument color, small, right-aligned; empty
+    // the TOP (above F5). INFO instrument color, small, right-aligned; empty
     // until the first setRate() write.
     const rate = document.createElement('div');
     rate.id = 'ladder-rail-rate';
@@ -290,10 +301,11 @@ export class RailIndicator {
       if (!n) continue;
       const { current, fillPct } = RailIndicator.notchState(state, i + 1, this._notchScratch);
       if (n._cur !== current && !n._deny) {
-        // The depot invitation (Wave 5 Session E) paints through the same law
-        // as the current-floor mark; a flip of either repaints once (the
-        // invite flip nulls _cur — setDepotInvitation). Denial flash wins.
-        const invite = this._invite && (i + 1 === DEPOT_FLOOR);
+        // The depot invitation (Wave 5 Session E; notch 1 since Session H)
+        // paints through the same law as the current-floor mark; a flip of
+        // either repaints once (the invite flip nulls _cur —
+        // setDepotInvitation). Denial flash wins.
+        const invite = this._invite && (i + 1 === INVITE_FLOOR);
         const p = RailIndicator.notchPaint({ current, invite });
         n.el.style.borderColor = p.borderColor;
         n.el.style.color = p.color;
@@ -331,7 +343,8 @@ export class RailIndicator {
   /**
    * Denied feedback for a hard wall (G2i). Flashes the blocked notch
    * THREAT-red once (one-shot, ≤3 Hz law) and, when the FloorContract
-   * provides a deniedHint ('DOCK TO ENTER DEPOT'), shows the amber toast.
+   * provides a deniedHint, shows the amber toast (no shipping floor carries
+   * one since the Session H renumber — the mechanism stays, G2i-pinned).
    * Re-calls restart both timers. The restore timer is PER NOTCH (G4 review
    * follow-up): a shared timer let a second denial on a DIFFERENT notch
    * cancel the first notch's restore, stranding it THREAT-red — unreachable

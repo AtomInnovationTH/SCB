@@ -300,7 +300,7 @@ export class BlueprintOverlay {
    *                  codexId:?string, leader:Array<Array<number>>}>}
    */
   render(items, project, opts = {}) {
-    const budget = (opts.budget != null) ? opts.budget : FloorContract.byId(3).labelBudget;
+    const budget = (opts.budget != null) ? opts.budget : FloorContract.byId(1).labelBudget;
     const lens = opts.lens || 'overview';
     const ranked = BlueprintOverlay.rank(items, budget);
 
