@@ -12,6 +12,7 @@ import { tetherReel } from '../../systems/TetherReel.js';
 import { BridleRing } from '../../entities/BridleRing.js';
 import { captureNetSystem } from '../../entities/CaptureNet.js';
 import { PaneChrome } from './PaneChrome.js';
+import { pressKey } from '../../core/KeyDispatch.js';
 
 // ST-6.6: Active-tool → NASA TRL metadata used to live here, feeding a
 // bottom-center "RCS / COLD GAS / MPD BURST / ARM PILOT" control-mode badge.
@@ -47,10 +48,25 @@ const NET_COLOR = '#f0ecd8'; // ivory white
 const WHEEL_PIPS = ['▯▯▯', '▮▯▯', '▮▮▯', '▮▮▮'];
 const WHEEL_SHOW_FLOOR = 0.25; // normalized units — one fire (1.0) bleeds past this ~22 s later
 
+// Session J (D-I): how many FLEET rows a tap can select. A row tap presses
+// Digit(idx+1) — InputManager binds only Digit1-4 to `_handleArmKey` (arms 5-8
+// are deferred until tiers ship, D2), so rows past the 4th are display-only.
+export const FLEET_TAP_ROWS = 4;
+
 export class StatusPanel {
-  constructor(container) {
+  /**
+   * @param {HTMLElement} container - the HUD overlay the panes mount into
+   * @param {{ keyDispatch?: (code: string, opts?: object) => boolean }} [deps]
+   *   `keyDispatch` — Session J (D-I): the ONE way the FLEET pane's tap
+   *   affordances act. Defaults to KeyDispatch.pressKey (synthetic keydown →
+   *   keyup on window, InputManager's listener target); tests inject a
+   *   recorder. Also settable later via setKeyDispatch().
+   */
+  constructor(container, { keyDispatch = pressKey } = {}) {
     this._container = container;
     this._armManager = null;
+    this._keyDispatch = keyDispatch;
+    this._fleetClickBound = false;   // the ONE #hud-arms-status click delegate, attached once
     this._initialDeltaV = null;
     this._forgeRevealed = false;
     this._cargoStatus = null;   // cached from CARGO_UPDATED events
@@ -571,6 +587,15 @@ export class StatusPanel {
     `;
     this._leftColumn.appendChild(this.panels.arms);
     this.panels.arms.style.position = 'relative';
+    // Session J (D-I): the FLEET pane is a tap surface — rows tap-select, the
+    // selected row carries DEPLOY / REEL IN / RECALL buttons. Mirror TargetPanel
+    // (`panels.targets.style.pointerEvents = 'auto'`) so the pane receives
+    // clicks even where the .hud-panel default is pointer-events:none; ONE
+    // click delegate on #hud-arms-status, attached once here (the list body is
+    // re-rendered via innerHTML, so per-row listeners would not survive).
+    this.panels.arms.style.pointerEvents = 'auto';
+    this._injectFleetButtonStyle();
+    this._bindFleetClicks();
 
     // --- Resize chrome for the MOTHER pane (2-step: min / normal) ---
     // The MOTHER pane defaults to 'min' (compact digest only); hovering reveals
@@ -1284,6 +1309,53 @@ export class StatusPanel {
     document.head.appendChild(style);
   }
 
+  /**
+   * @private Inject CSS for the FLEET pane's tap buttons (Session J, D-I).
+   * Styled like the pane's existing chrome: small monospace caps, cyan (the
+   * selected-row colour) hairline border, quiet until hovered / pressed.
+   * `.fleet-row` rows show a pointer only where a tap does something.
+   */
+  _injectFleetButtonStyle() {
+    if (typeof document === 'undefined' || !document.head) return;
+    if (document.getElementById('fleet-button-style')) return;
+    const style = document.createElement('style');
+    style.id = 'fleet-button-style';
+    style.textContent = `
+      #hud-arms-status .fleet-btn {
+        font: bold 10px/1.2 'Courier New', monospace;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #00ffff;
+        background: rgba(0, 255, 255, 0.08);
+        border: 1px solid rgba(0, 255, 255, 0.55);
+        border-radius: 3px;
+        padding: 3px 10px;
+        margin: 0 6px 0 0;
+        min-height: 18px;
+        cursor: pointer;
+        pointer-events: auto;
+        touch-action: manipulation;
+        -webkit-tap-highlight-color: transparent;
+        user-select: none;
+        vertical-align: middle;
+        transition: background 0.15s ease, border-color 0.15s ease;
+      }
+      #hud-arms-status .fleet-btn:hover {
+        background: rgba(0, 255, 255, 0.18);
+        border-color: #00ffff;
+      }
+      #hud-arms-status .fleet-btn:active {
+        background: rgba(0, 255, 255, 0.35);
+        color: #ffffff;
+      }
+      #hud-arms-status .fleet-btn:focus { outline: none; }
+      #hud-arms-status .fleet-row-tap:hover {
+        background: rgba(0, 255, 255, 0.05);
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
   /** @private Inject CSS for power panel collapse/expand (B5) */
   _injectPowerCollapseStyle() {
     if (document.getElementById('power-collapse-style')) return;
@@ -1664,6 +1736,76 @@ export class StatusPanel {
     el.innerHTML = html;
   }
 
+  // ==========================================================================
+  // FLEET pane tap grammar (Session J, D-I)
+  // ==========================================================================
+
+  /**
+   * Replace the key dispatcher the FLEET pane's taps act through. A non-
+   * function restores the default (KeyDispatch.pressKey → synthetic keydown /
+   * keyup on window, the SAME path the physical keyboard drives).
+   * @param {(code: string, opts?: object) => boolean} [fn]
+   */
+  setKeyDispatch(fn) {
+    this._keyDispatch = typeof fn === 'function' ? fn : pressKey;
+  }
+
+  /**
+   * @private Attach the ONE click delegate for the FLEET list (#hud-arms-status)
+   * — once. The list body is re-rendered via innerHTML on every ARM_SELECT /
+   * fire / reload, so listeners live on the stable container, never on rows.
+   * Mirrors TargetPanel's #hud-target-list delegate. Idempotent + DOM-guarded.
+   * @returns {boolean} true when the delegate is (already) attached
+   */
+  _bindFleetClicks() {
+    if (this._fleetClickBound) return true;
+    const pane = this.panels && this.panels.arms;
+    let list = null;
+    if (pane && typeof pane.querySelector === 'function') list = pane.querySelector('#hud-arms-status');
+    if (!list && typeof document !== 'undefined' && document && typeof document.getElementById === 'function') {
+      list = document.getElementById('hud-arms-status');
+    }
+    if (!list || typeof list.addEventListener !== 'function') return false;
+    list.addEventListener('click', (e) => this._onFleetClick(e));
+    this._fleetClickBound = true;
+    return true;
+  }
+
+  /**
+   * @private The FLEET list click delegate. Two affordances, ONE key path each:
+   *   • a `.fleet-btn` → press its `data-press` code (KeyD deploy / KeyR reel
+   *     in + recall) and stop there — the row underneath must NOT also toggle
+   *     the selection (stopPropagation + early return);
+   *   • a row (`[data-arm-idx]`) → press Digit(idx+1): InputManager's
+   *     `_handleArmKey` select path, including its re-press-to-deselect toggle.
+   *     Only digits 1-4 exist today (arms 5-8 deferred, D2) → other rows no-op.
+   * The pressed button is blurred so a later Space / Enter cannot re-click it.
+   * @param {Event} e
+   * @returns {string|null} the code pressed (for tests / logging), or null
+   */
+  _onFleetClick(e) {
+    const t = e && e.target;
+    if (!t || typeof t.closest !== 'function') return null;
+
+    const btn = t.closest('.fleet-btn');
+    if (btn) {
+      if (typeof e.stopPropagation === 'function') e.stopPropagation();
+      if (typeof btn.blur === 'function') btn.blur();
+      const code = btn.dataset ? btn.dataset.press : null;
+      if (!code) return null;
+      this._keyDispatch(code);
+      return code;
+    }
+
+    const row = t.closest('[data-arm-idx]');
+    if (!row || !row.dataset) return null;
+    const idx = parseInt(row.dataset.armIdx, 10);
+    if (!Number.isInteger(idx) || idx < 0 || idx >= FLEET_TAP_ROWS) return null;
+    const code = 'Digit' + (idx + 1);
+    this._keyDispatch(code);
+    return code;
+  }
+
   /** @private Render the V5 crossbow arm status panel */
   _renderArmPanel() {
     const el = document.getElementById('hud-arms-status');
@@ -1784,23 +1926,28 @@ export class StatusPanel {
   }
 
   /**
-   * @private The hotkey hint shown on the selected daughter's 2nd line — the
-   * key(s) relevant to its current state, in plain words. Empty when it's busy /
+   * @private The action line shown on the selected daughter's 2nd line — the
+   * ONE verb relevant to its current state, as a tap button (Session J, D-I:
+   * DEPLOY / REEL IN / RECALL, each pressing its key through `_keyDispatch`)
+   * followed by the desktop letter hint in plain words. Empty when it's busy /
    * not actionable. Daughters fly on autopilot, so the only verbs surfaced are
    * launch (D) and recall (R).
    */
   _daughterHotkeys(a) {
     const key = (k, verb) => `<span style="color:#00ffff;font-weight:bold;">${k}</span>`
       + `<span style="opacity:0.8;"> ${verb}</span>`;
+    // type=button (never submits), tabindex=-1 (Tab is a game key; the button
+    // must not become the keyboard's focus target).
+    const btn = (code, label) => `<button type="button" class="fleet-btn" tabindex="-1" data-press="${code}">${label}</button>`;
     switch (a.state) {
       case 'DOCKED':
-        return (a.springCharged && a.fuel > 0) ? key('D', 'launch') : '';
+        return (a.springCharged && a.fuel > 0) ? btn('KeyD', 'DEPLOY') + key('D', 'launch') : '';
       case 'EXPENDED': case 'RELOADING': case 'HOLDING_CATCH': case 'DOCKING':
         return '';
       case 'ADRIFT':
-        return key('R', 'reel in');
+        return btn('KeyR', 'REEL IN') + key('R', 'reel in');
       default:
-        return key('R', 'recall');
+        return btn('KeyR', 'RECALL') + key('R', 'recall');
     }
   }
 
@@ -2002,17 +2149,27 @@ export class StatusPanel {
     // 2nd line: pilot telemetry for launched daughters (empty when docked).
     const telemetryLine = this._renderDaughterTelemetry(a, armObj, idx);
 
+    // Session J (D-I): every row names its arm (data-arm-idx = the ORIGINAL
+    // index, not the size-sorted position) so the #hud-arms-status click
+    // delegate can press Digit(idx+1). Rows a tap can select (1-4) read as
+    // tappable (cursor:pointer + .fleet-row-tap hover); the rest stay display-only.
+    const tappable = idx >= 0 && idx < FLEET_TAP_ROWS;
+    const rowAttrs = `class="fleet-row${tappable ? ' fleet-row-tap' : ''}" data-arm-idx="${idx}"`;
+    const rowCursor = tappable ? 'cursor:pointer;' : '';
+
     if (!isSel) {
-      return `<div style="padding:1px 4px;border-left:2px solid transparent;">${detailLine}${telemetryLine}</div>`;
+      return `<div ${rowAttrs} style="padding:1px 4px;border-left:2px solid transparent;${rowCursor}">${detailLine}${telemetryLine}</div>`;
     }
 
-    // Line 2 — the relevant hotkey(s), indented to sit under the status column.
+    // Line 2 — the action button + the relevant hotkey hint, indented to sit
+    // under the status column (inline flow: the hint's leading space must
+    // survive, so no flex here; the button vertical-aligns to the text middle).
     const keys = this._daughterHotkeys(a);
-    const keysLine = `<div style="padding-left:28px;font-size:10px;margin-top:1px;">`
+    const keysLine = `<div style="padding-left:28px;font-size:10px;margin-top:2px;">`
       + (keys || '<span style="opacity:0.4;">busy…</span>')
       + `</div>`;
 
-    return `<div style="padding:2px 4px;background:rgba(0,255,255,0.08);border-left:2px solid #00ffff;">`
+    return `<div ${rowAttrs} style="padding:2px 4px;background:rgba(0,255,255,0.08);border-left:2px solid #00ffff;${rowCursor}">`
       + detailLine
       + telemetryLine
       + keysLine
