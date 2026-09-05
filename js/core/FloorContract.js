@@ -334,4 +334,20 @@ export const FloorContract = {
     METERS_TO_UNITS: M,                      // 1 m = 1e-5 u (1 u = 100 km)
     EARTH_RADIUS_U: Constants.EARTH_RADIUS,  // 63.71 u
   },
+
+  /**
+   * The ONE floor lookup by id (Wave 5 Session H prep — the 7→5 renumber):
+   * consumers must resolve a floor ROW through this, never through index
+   * arithmetic (`FLOORS[id - 1]` breaks the moment ids and positions diverge).
+   * Returns the SAME row object the FLOORS array holds, or null for an unknown
+   * id. Pure data lookup — a Map built once below, no allocation per call.
+   * @param {number} id - FloorContract floor id
+   * @returns {object|null}
+   */
+  byId(id) {
+    return FLOORS_BY_ID.get(id) || null;
+  },
 };
+
+/** @private id → row, built once from the table above (byId's backing). */
+const FLOORS_BY_ID = new Map(FloorContract.FLOORS.map((f) => [f.id, f]));

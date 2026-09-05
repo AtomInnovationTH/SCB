@@ -1016,7 +1016,7 @@ export class LadderController {
   /** Push a floor's fidelity block to SceneManager (T1). @private */
   _applyFidelity(floor) {
     if (!this._sceneManager || !this._sceneManager.setLadderFloorFidelity) return;
-    const f = FloorContract.FLOORS[floor - 1];
+    const f = FloorContract.byId(floor);
     if (!f) return;
     this._sceneManager.setLadderFloorFidelity({
       nearField: f.fidelity.nearField,
@@ -1049,7 +1049,7 @@ export class LadderController {
     // Keyed on the floor number, not debrisMode: F7 ('massBands') must suppress
     // too. Independent of the content deps so the reticle deps work standalone.
     this._setReticlesHidden(floor >= 6);
-    const f = FloorContract.FLOORS[floor - 1];
+    const f = FloorContract.byId(floor);
     if (this._navcom) {
       const clusters = !!(f && f.fidelity && f.fidelity.debrisMode === 'clusters');
       if (clusters) {
@@ -1262,7 +1262,7 @@ export class LadderController {
    * @private
    */
   _frame(floor, z01) {
-    const f = FloorContract.FLOORS[floor - 1];
+    const f = FloorContract.byId(floor);
     const distU = distanceFromZ01(f, z01);
     const anchor = (f.anchor === 'earth') ? 'earth' : 'ship';
     const fov = (f.camera.fov != null) ? f.camera.fov : Constants.CAMERA_FOV;

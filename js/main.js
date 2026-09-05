@@ -4733,9 +4733,11 @@ function gameLoop(timestamp) {
   let _floorCap = 1;
   if (_ladderActive && ladderController.ladder && ladderController.ladder.getState) {
     const _lf = ladderController.ladder.getState().floor;
-    _floorCap = FloorContract.FLOORS[_lf - 1] ? FloorContract.FLOORS[_lf - 1].timeCap : 1;
+    const _lfRow = FloorContract.byId(_lf);
+    _floorCap = _lfRow ? _lfRow.timeCap : 1;
     const _hold = (cameraSystem && cameraSystem.ladderWarpHoldFloor) ? cameraSystem.ladderWarpHoldFloor() : null;
-    const _holdCap = (_hold != null && FloorContract.FLOORS[_hold - 1]) ? FloorContract.FLOORS[_hold - 1].timeCap : null;
+    const _holdRow = (_hold != null) ? FloorContract.byId(_hold) : null;
+    const _holdCap = _holdRow ? _holdRow.timeCap : null;
     _floorCap = TimeAuthority.ladderTargetCap(_floorCap, _holdCap);
     // D10 calm cap (00-spec §7): a workbench pane open settles time to 1× —
     // applied AFTER the Q10 hold rule; never raises (a cap-0 floor stays 0).

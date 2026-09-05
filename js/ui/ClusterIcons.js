@@ -169,7 +169,7 @@ export class ClusterIcons {
    *                  focused:boolean, verdict:?string, estimate:?string, dimmed:boolean}>}
    */
   render(clusters, project, opts = {}) {
-    const budget = (opts.budget != null) ? opts.budget : FloorContract.FLOORS[5].labelBudget;
+    const budget = (opts.budget != null) ? opts.budget : FloorContract.byId(6).labelBudget;
     const focusId = (opts.focusId != null) ? opts.focusId : null;
     const assessments = opts.assessments || null;
     const assessFor = (id) => {

@@ -42,8 +42,8 @@
 import { FloorContract } from '../core/FloorContract.js';
 import { SdaChart, aggregateBands, buildTimeline, LENSES } from '../ui/SdaChart.js';
 
-/** F7 index in FloorContract.FLOORS (id 7). */
-const F7 = FloorContract.FLOORS[6];
+/** The F7 (SDA) contract row — by id, never by index (Session H prep). */
+const F7 = FloorContract.byId(7);
 
 /**
  * Minimum real-time interval between source re-polls (cluster walk + sat list
