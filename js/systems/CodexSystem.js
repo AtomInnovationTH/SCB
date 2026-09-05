@@ -319,6 +319,10 @@ export class CodexSystem {
    * CODEX_ACK_CHIP_MS). Glyph is the Info key — the ticker's chip is a KEY
    * chip by convention (see OnboardingDirector's codex reminder) and tells the
    * player how to reach the entry; the entry's own icon rides in the text.
+   * `codexId` (Session J item 3, "the unlock chip's tap opens SPECS on the
+   * new entry") names the entry for the presenter: HintTicker renders a row
+   * that carries it as tappable and hands `{ id }` to its `setChipTap` sink.
+   * Data only — this emitter knows nothing about panes.
    */
   _postAckChip(entry) {
     eventBus.emit(Events.HINT_POSTED, {
@@ -326,6 +330,7 @@ export class CodexSystem {
       text: `+ Library: ${entry.icon ? entry.icon + ' ' : ''}${entry.title}`,
       glyph: 'I',
       keys: [],
+      codexId: entry.id,
       duration: CODEX_ACK_CHIP_MS,
       priority: 'normal',
       _codexAck: true,          // tag for tests / downstream filters

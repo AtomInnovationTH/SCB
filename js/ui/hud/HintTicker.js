@@ -19,6 +19,14 @@
  * Inline CSS only — matches the project pattern of self-contained UI modules
  * (TeachingOverlay.js, CommsPanel.js).  No new CSS files.
  *
+ * Glass (Session J item 5): the payload stays KEY-based; at render time the
+ * chip and the body consult GestureHints — on a touch device a `keys:
+ * ['KeyN']` hint paints "HOLD → NET" and "Press N" prose speaks the gesture.
+ * Off glass GestureHints is inert (null chip, same-instance text), so desktop
+ * is byte-identical. The "+ Library" unlock chip (CodexSystem, `codexId`) is
+ * the one tappable row: its click reaches `setChipTap(fn)` — the hub wires it
+ * to the SPECS pane so an unlock is a doorway, not a notification.
+ *
  * @module ui/hud/HintTicker
  */
 
@@ -27,6 +35,7 @@ import { Events } from '../../core/Events.js';
 import { Constants } from '../../core/Constants.js';
 import { decorateGlossary } from '../../systems/codex/glossary.js';
 import { ensureGlossaryCss, delegateGlossaryClicks } from '../glossaryDom.js';
+import { GestureHints } from './GestureHints.js';
 
 // Lazy DOM probe — checked on each use so Node-side tests can install a
 // minimal document shim AFTER the module has been first evaluated.
@@ -78,6 +87,13 @@ export class HintTicker {
     /** @type {HTMLElement|null} Container strip element */
     this._strip = null;
 
+    /**
+     * @type {((info: { id: string }) => void)|null} The unlock-chip tap sink
+     * (`setChipTap`). Called with `{ id: payload.codexId }` when a row that
+     * carries a string `codexId` is clicked. Null = the row is inert.
+     */
+    this._onChipTap = null;
+
     this._build();
     this._wireListeners();
   }
@@ -92,6 +108,18 @@ export class HintTicker {
   /** Programmatic satisfy (used by tests). */
   satisfy(id) {
     this._onHintSatisfied({ id });
+  }
+
+  /**
+   * Wire the unlock-chip tap. A HINT_POSTED payload with a string `codexId`
+   * (CodexSystem's "+ Library" acknowledgment) renders as a tappable row; its
+   * click calls `fn({ id: codexId })`. The hub points this at the SPECS pane
+   * (`libraryPane.openEntry(id)`, else the CODEX_OPEN_ENTRY deep link) so the
+   * unlock chip opens the new entry. Pass a non-function to unwire.
+   * @param {((info: { id: string }) => void)|null} fn
+   */
+  setChipTap(fn) {
+    this._onChipTap = (typeof fn === 'function') ? fn : null;
   }
 
   /** Number of currently-visible hint rows. */
@@ -333,6 +361,11 @@ export class HintTicker {
     const T = _tuning();
     const row = _hasDOM() ? document.createElement('div') : null;
     if (!row) return row;
+    // The unlock chip (CodexSystem `_postAckChip`, `codexId: entry.id`) is
+    // the ONE tappable row: pointer events back on, a pointer cursor, and a
+    // click that reaches the `setChipTap` sink. Every other row stays
+    // click-through (the strip is pointer-events:none).
+    const tappable = (typeof payload.codexId === 'string');
     row.className = 'hint-ticker-item';
     row.dataset.hintId = payload.id;
     row.style.cssText = [
@@ -346,14 +379,18 @@ export class HintTicker {
       'color:#ccddee',
       `font-size:${highlight ? T.FONT_LATEST_PX : T.FONT_OLDER_PX}px`,
       'letter-spacing:0.02em',
-      'pointer-events:none',
+      tappable ? 'pointer-events:auto' : 'pointer-events:none',
       'box-shadow:0 0 4px rgba(0,204,255,0.18)',
       'opacity:1',
       'transform:scale(1)',
       'will-change:opacity,transform',
-    ].join(';') + ';';
+    ].concat(tappable ? ['cursor:pointer'] : []).join(';') + ';';
 
-    // Glyph chip (left).
+    // Glyph chip (left). On glass a keyed hint's chip is the GESTURE
+    // ("HOLD → NET", see _resolveGlyph) — several words, so the chip must be
+    // free to grow: it keeps its 22 px height and never shrinks or wraps
+    // inside the flex row. Off glass the chip is one key glyph and the style
+    // list is exactly what it was (desktop byte-identical).
     const chipText = this._resolveGlyph(payload);
     if (chipText) {
       const chip = document.createElement('span');
@@ -373,22 +410,43 @@ export class HintTicker {
         "font-family:'Courier New', monospace",
         'font-size:12px',
         'letter-spacing:0.04em',
-      ].join(';') + ';';
+      ].concat(GestureHints.isGlass() ? ['flex-shrink:0', 'white-space:nowrap'] : []).join(';') + ';';
       row.appendChild(chip);
     }
 
     // Body text (right) — inline glossary decorated. `pointer-events:auto`
     // re-enables hit-testing inside the click-through strip so glossary terms
     // are clickable; decorateGlossary escapes the source before wrapping.
+    // GestureHints.speak rewrites "[N]" / "(N)" / "Press N" as the gesture on
+    // glass and hands back the SAME string off glass.
     const body = document.createElement('span');
-    body.innerHTML = decorateGlossary(payload.text || '', { once: true });
+    body.innerHTML = decorateGlossary(GestureHints.speak(payload.text || ''), { once: true });
     body.style.cssText = 'color:#ccddee;pointer-events:auto;';
     row.appendChild(body);
+
+    if (tappable) {
+      row.addEventListener('click', (e) => {
+        // A glossary term inside the body is its own deep link (glossaryDom's
+        // delegated handler on the strip) — one intent per tap: yield to it.
+        const t = e && e.target;
+        if (t && typeof t.closest === 'function' && t.closest('.glossary-term[data-entry]')) return;
+        if (typeof this._onChipTap === 'function') this._onChipTap({ id: payload.codexId });
+      });
+    }
 
     return row;
   }
 
+  /**
+   * The chip text for a hint row. On glass a KEYED hint paints its gesture
+   * (GestureHints.chipFor — the first key with a table row) even when the
+   * payload also carries a `glyph`; glyph-only hints (`keys: []` — the '!'
+   * refusal, the '…' hold, the codex 'I' ack) keep their glyph. Off glass
+   * chipFor is always null and the key-glyph fallbacks below are untouched.
+   */
   _resolveGlyph(payload) {
+    const g = GestureHints.chipFor(payload.keys);
+    if (g) return g;
     if (payload.glyph) return payload.glyph;
     if (Array.isArray(payload.keys) && payload.keys.length > 0) {
       // Friendly fallback: just take first character of first key.

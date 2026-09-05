@@ -11,6 +11,7 @@
 import { Constants } from '../core/Constants.js';
 import { decorateGlossary } from '../systems/codex/glossary.js';
 import { ensureGlossaryCss, delegateGlossaryClicks } from './glossaryDom.js';
+import { GestureHints } from './hud/GestureHints.js';
 
 const _hasDOM = typeof document !== 'undefined';
 
@@ -185,9 +186,11 @@ export class TeachingOverlay {
 
     // Body text — inline glossary decorated (escapes the source, then wraps
     // jargon). Switched from textContent to innerHTML; decorateGlossary handles
-    // escaping so this stays injection-safe.
+    // escaping so this stays injection-safe. GestureHints.speak first: on
+    // glass the stall card's "Press N to launch the net." speaks the gesture
+    // (Session J item 5); off glass it returns the same string instance.
     const bodyP = document.createElement('p');
-    bodyP.innerHTML = decorateGlossary(moment.body, { once: true });
+    bodyP.innerHTML = decorateGlossary(GestureHints.speak(moment.body), { once: true });
     bodyP.style.cssText = `
       margin: 0;
       color: ${C.OVERLAY_BODY_COLOR || '#ccddee'};
