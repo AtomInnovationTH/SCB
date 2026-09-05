@@ -128,6 +128,7 @@ import { FloorContract } from './core/FloorContract.js';
 import { RailIndicator } from './ui/RailIndicator.js';
 import { TouchControls } from './ui/TouchControls.js';
 import { TouchTelemetry } from './ui/touchTelemetry.js';
+import { GestureHints } from './ui/hud/GestureHints.js';
 import { captureNetVisual, worldTumbleForKitAttitude, boxRowsForKitAttitude } from './ui/CaptureNetVisual.js';
 import { furnaceBreakdownVisual } from './ui/FurnaceBreakdownVisual.js';
 import { captureNetSystem, isInsideCone, coneRadiusAtDepth } from './entities/CaptureNet.js';
@@ -1710,6 +1711,16 @@ async function init() {
     // Registered inside the gate — a ?ladder=0 boot adds no listeners.
     eventBus.on(Events.CODEX_UNLOCKED, () => { if (libraryPane) libraryPane.refresh(); });
     eventBus.on(Events.CODEX_VIEWED, () => { if (libraryPane) libraryPane.refresh(); });
+    // Session J item 3 (plan D-C): "the unlock chip's tap opens SPECS on the
+    // new entry" — the ticker's "+ Library" ack row (CodexSystem posts it with
+    // `codexId`) is tappable ONLY while this sink is wired, and it lands on the
+    // SPECS pane through the ONE openEntry path (the fourth and last caller —
+    // the pane opens if closed: a tap on a doorway is the player's verb).
+    // Inside the gate: a ?ladder=0 boot wires no sink → the row renders the
+    // shipped click-through chip byte-for-byte.
+    if (hud && hud.hintTicker && hud.hintTicker.setChipTap) {
+      hud.hintTicker.setChipTap(({ id }) => { if (id && libraryPane) libraryPane.openEntry(id); });
+    }
     // Session J (plan D-C) — a TARGET SELECTION is a subject change on the
     // flying floors: (1) the Subnautica rule generalises from hull parts to
     // targets — a selected target whose entry is LOCKED requests its unlock
@@ -1935,6 +1946,12 @@ async function init() {
   // drives the PaneDensity ladder. An optional telemetry beacon logs zoom-feel
   // gestures + the floor crossings they cause to the cable server (touch-only).
   if (TouchControls.detect()) {
+    // Session J item 5 (plan D-I): on glass every verb hint SPEAKS ITS GESTURE
+    // — the ONE key→gesture table (GestureHints) is consulted at render time
+    // by the ticker chip/body and the stall card; the data stays key-based.
+    // Flipped once, here, under the same broad touch gate as the affordances;
+    // desktop never flips it → desktop rendering byte-identical.
+    GestureHints.setGlass(true);
     const stampEl = (typeof document !== 'undefined') ? document.getElementById('build-stamp') : null;
     const touchTelemetry = new TouchTelemetry({
       build: stampEl ? stampEl.textContent : null,

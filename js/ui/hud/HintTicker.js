@@ -364,8 +364,11 @@ export class HintTicker {
     // The unlock chip (CodexSystem `_postAckChip`, `codexId: entry.id`) is
     // the ONE tappable row: pointer events back on, a pointer cursor, and a
     // click that reaches the `setChipTap` sink. Every other row stays
-    // click-through (the strip is pointer-events:none).
-    const tappable = (typeof payload.codexId === 'string');
+    // click-through (the strip is pointer-events:none). Tappable ONLY while a
+    // sink is wired at build time: the hub wires it inside the LADDER.ENABLED
+    // gate, so a ?ladder=0 boot (no SPECS pane, no sink) renders the shipped
+    // click-through row byte-for-byte — never a dead pointer target.
+    const tappable = (typeof payload.codexId === 'string') && (typeof this._onChipTap === 'function');
     row.className = 'hint-ticker-item';
     row.dataset.hintId = payload.id;
     row.style.cssText = [
