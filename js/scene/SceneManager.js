@@ -295,7 +295,10 @@ export class SceneManager {
    * iPad the devicePixelRatio-2 render target quadruples fragment work for
    * detail the game never leans on (aviation-display UI, bloom-heavy scene);
    * tier caps (HIGH/MEDIUM 1.5) still burn ~2.25× the pixels of 1.0. main.js
-   * calls this once at init when TouchControls.detect() is true; the current
+   * calls this once at init when TouchControls.detectGlass() is true (the
+   * NARROW gate — a coarse PRIMARY pointer + touch points; the broad detect()
+   * stays the touch-affordance gate so a hybrid laptop on a mouse keeps its
+   * hi-DPI picture); the current
    * tier's ratio re-applies immediately. Desktop never calls it —
    * byte-identical. The `?pixelRatio=N` profiling override and the
    * applyTierWithOverrides sweep path still WIN over the clamp (profiling

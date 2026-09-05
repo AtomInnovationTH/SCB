@@ -460,6 +460,12 @@ let _lastRafTs = 0;
 // purchase), on the rAF/performance.now clock.
 let _schedLastInputMs = -1e9;
 let _schedTick = 0;                 // rAF-entry counter for the Nth-beat draw
+// Review (unpushed, 2026-09-05): the cadence median is CACHED — recomputed on
+// drawn ticks only (a skipped tick must not pay a 30-sample clone+sort at
+// native refresh) — and plan() reads ONE reused args object (G1, the
+// _taFrameArgs pattern). null until the sample window fills → N = 1.
+let _rafPeriodMs = null;
+const _planArgs = { cover: 'none', nowMs: 0, lastInputMs: 0, riding: false, dragLive: false, periodMs: null, perf: Constants.PERF };
 let _launchCeremonyLive = false;    // intro ride (LAUNCH_CEREMONY_* events)
 // THE published policy witness (one object, fields mutated per frame; the
 // headless gate asserts POLICY — mode + n — never fps: SwiftShader runs
@@ -4732,23 +4738,31 @@ function gameLoop(timestamp) {
   _schedTick++;
   if (gameState.isGameplay()) {
     const _dragS = (cameraSystem && cameraSystem._ladderCam) ? cameraSystem._ladderCam.drag : null;
-    const _sched = FrameSched.plan({
-      cover: _cover,
-      nowMs: timestamp,
-      lastInputMs: _schedLastInputMs,
-      riding: _launchCeremonyLive
-        || !!(ladderController && ladderController.isRiding && ladderController.isRiding()),
-      dragLive: !!(_dragS && (_dragS.isDragging
-        || Math.abs(_dragS.velocityTheta) > 1e-4 || Math.abs(_dragS.velocityPhi) > 1e-4)),
-      periodMs: FrameSched.medianPeriodMs(_rafDeltas),
-      perf: Constants.PERF,
-    });
+    // Review (unpushed, 2026-09-05): ONE reused args object (the _taFrameArgs
+    // pattern — G1) and the CACHED cadence median — a skipped tick must stay
+    // near-free, so neither an object literal nor the 30-sample clone+sort
+    // runs here at native refresh; the median refreshes on drawn ticks below.
+    _planArgs.cover = _cover;
+    _planArgs.nowMs = timestamp;
+    _planArgs.lastInputMs = _schedLastInputMs;
+    _planArgs.riding = _launchCeremonyLive
+      || !!(ladderController && ladderController.isRiding && ladderController.isRiding());
+    _planArgs.dragLive = !!(_dragS && (_dragS.isDragging
+      || Math.abs(_dragS.velocityTheta) > 1e-4 || Math.abs(_dragS.velocityPhi) > 1e-4));
+    _planArgs.periodMs = _rafPeriodMs;
+    const _sched = FrameSched.plan(_planArgs);
     _frameSched.mode = _sched.mode;
     _frameSched.n = (blackFrameProbe || devShotGate.requested) ? 1 : _sched.n;
     if (!FrameSched.shouldDraw(_schedTick, _frameSched.n)) {
       if (_logPauseEnabled) _logPauseFramesSkipped++;
       return; // whole tick skipped — next rAF is already scheduled
     }
+    // Drawn tick: refresh the cached cadence median at the DRAW rate (10/s
+    // under hold, 60 at rest, native under boost) instead of every rAF entry.
+    // The window is 0.25 s of samples and the display cadence is slow-moving,
+    // so a ≤ 100 ms lag in the estimate is invisible; N only ever errs toward
+    // drawing more (a stale, larger period → a smaller N).
+    _rafPeriodMs = FrameSched.medianPeriodMs(_rafDeltas);
   } else {
     _frameSched.mode = 'rest';
     _frameSched.n = 1;
