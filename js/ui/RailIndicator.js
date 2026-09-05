@@ -16,10 +16,14 @@
  * DOM churn even while the rate ramps through every integer.
  *
  * G3 (post-M3 play-test):
- * - BOTTOM-anchored on the right edge (was vertically centered, where it
- *   overlapped TARGET DOSSIER / TRACKED TARGETS in #hud-right-column at every
- *   common viewport). Bottom-anchoring keeps it clear even when the panes
- *   above grow.
+ * - Anchored on the right edge. G3 moved it to the BOTTOM (the vertically
+ *   centred original overlapped TARGET DOSSIER / TRACKED TARGETS in
+ *   #hud-right-column at every common viewport); Session J (plan D-H) moved it
+ *   back to MID-HEIGHT through the shared RailGeometry table (`midHeightCss`)
+ *   so both rails — this WHERE rail and the left WHAT rail (PaneRail) — sit
+ *   clear of the bottom ~100 pt iPad thumb rest. The right HUD column is
+ *   masked to the floor's room by FloorMask now, so the G3 overlap the bottom
+ *   anchor solved no longer has its cause on the ladder floors.
  * - Instrument identity: INFO-blue frame/labels (VisualLaw.COLORS.INFO) so the
  *   rail reads as a CONTROL, distinct from the green/dark content panes; the
  *   current floor keeps the PLAYER green identity, charge fill stays PLAYER.
@@ -48,6 +52,7 @@
 
 import { FloorContract } from '../core/FloorContract.js';
 import { VisualLaw } from '../core/VisualLaw.js';
+import { midHeightCss } from './RailGeometry.js';
 
 /** Denial toast hold time (ms) — fade handled by the 0.3 s opacity transition. */
 const TOAST_HOLD_MS = 1800;
@@ -207,9 +212,11 @@ export class RailIndicator {
 
     const root = document.createElement('div');
     root.id = 'ladder-rail';
-    root.style.cssText = [
-      // G3: bottom-anchored, clear of the right HUD column at 1024-1440 px.
-      'position:absolute', 'bottom:14px', 'right:10px',
+    // Session J (plan D-H): MID-HEIGHT on the right edge via the shared rail
+    // geometry (was G3's `bottom:14px; right:10px`) — clear of the bottom
+    // ~100 pt thumb rest, level with the left WHAT rail. The fragment ends in
+    // ';' so it prefixes the joined list cleanly.
+    root.style.cssText = midHeightCss('right') + [
       'display:flex', 'flex-direction:column-reverse', 'gap:5px',
       'font-family:"Courier New",monospace', 'font-size:0.6rem', 'letter-spacing:0.08em',
       'text-transform:uppercase',
@@ -258,8 +265,11 @@ export class RailIndicator {
     root.appendChild(rate);
     this._rate = rate;
 
-    // Denial toast: sits ABOVE the rail (bottom-right region is otherwise
-    // empty), amber warning, hidden until flashDenied() with a hint.
+    // Denial toast: sits ABOVE the rail's head — `bottom:calc(100% + 8px)` is
+    // relative to the (absolutely positioned) root, so it rides the root's
+    // mid-height anchor and still lands 8 px above the top notch / readout
+    // (the column-reverse head). Amber warning, hidden until flashDenied()
+    // with a hint.
     const toast = document.createElement('div');
     toast.id = 'ladder-rail-toast';
     toast.style.cssText = [
