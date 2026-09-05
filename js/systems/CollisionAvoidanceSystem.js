@@ -213,6 +213,10 @@ export class CollisionAvoidanceSystem {
     // mother is being flung/repositioned (arm deploy), so a ceremony ≠ a collision.
     eventBus.on(Events.LAUNCH_CEREMONY_START, () => { this._ceremonyActive = true; });
     eventBus.on(Events.LAUNCH_CEREMONY_COMPLETE, () => { this._ceremonyActive = false; });
+    // Session I follow-up (review): a skipped ceremony emits ABORT, not
+    // COMPLETE — without this row _ceremonyActive stuck true after one
+    // ESC/Space/Enter/D skip and auto-dodge stayed DISABLED for the session.
+    eventBus.on(Events.LAUNCH_CEREMONY_ABORT, () => { this._ceremonyActive = false; });
     // Aim-before-launch: the auto-rotation slew repositions the mother's
     // attitude for several seconds — treat it like a ceremony so avoidance
     // impulses don't fight the slew (and an aim ≠ a collision).

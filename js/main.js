@@ -2231,6 +2231,10 @@ async function init() {
   // same TeachingSystem blocker signal pair — plan Session I step 2).
   if (Events.LAUNCH_CEREMONY_START) eventBus.on(Events.LAUNCH_CEREMONY_START, () => { _launchCeremonyLive = true; });
   if (Events.LAUNCH_CEREMONY_COMPLETE) eventBus.on(Events.LAUNCH_CEREMONY_COMPLETE, () => { _launchCeremonyLive = false; });
+  // Session I follow-up (review): a SKIPPED ceremony (ESC/Space/Enter/D, or
+  // the dead-arm guard) never emitted COMPLETE — _launchCeremonyLive stayed
+  // true and the scheduler boosted to native for the rest of the session.
+  if (Events.LAUNCH_CEREMONY_ABORT) eventBus.on(Events.LAUNCH_CEREMONY_ABORT, () => { _launchCeremonyLive = false; });
 
   // --- Hide loading screen ---
   // F7 boot resilience: this is the ONE place the loading screen is dismissed —

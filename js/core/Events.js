@@ -61,6 +61,15 @@ export const Events = {
   VIEW_CONFIG_CHANGE: 'view:configChange',   // { showClosureRate, showNavSphere, ... } — view info-level config
   LAUNCH_CEREMONY_START:    'camera:launchCeremonyStart',    // { arm }
   LAUNCH_CEREMONY_COMPLETE: 'camera:launchCeremonyComplete', // { arm }
+  // Session I follow-up (review): the ceremony ended WITHOUT the pilot handoff
+  // — ESC/Space/Enter/D skip, or the mid-ceremony dead-arm guard. COMPLETE
+  // means "deployed, hand the player the daughter" (ArmPilot entry, FOV keep,
+  // enableManual); ABORT only tells the ceremony-STATE listeners to stand down
+  // (main.js _launchCeremonyLive, TeachingSystem 'launchCeremony' blocker,
+  // CollisionAvoidanceSystem._ceremonyActive). Before it existed, one skipped
+  // cinematic left all three stuck for the session: permanent native-refresh
+  // boost, teaching moments queued forever, auto-dodge disabled.
+  LAUNCH_CEREMONY_ABORT:    'camera:launchCeremonyAbort',    // { arm }
 
   // === GAME STATE ===
   STATE_CHANGE:       'state:change',

@@ -516,6 +516,10 @@ export class TeachingSystem {
     // (UX-11 #9: the C-hold radial-menu blocker was removed with the radial.)
     if (Events.LAUNCH_CEREMONY_START)    on(Events.LAUNCH_CEREMONY_START,    () => this._blockers.add('launchCeremony'));
     if (Events.LAUNCH_CEREMONY_COMPLETE) on(Events.LAUNCH_CEREMONY_COMPLETE, () => this._blockers.delete('launchCeremony'));
+    // Session I follow-up (review): a skipped ceremony emits ABORT, not
+    // COMPLETE — without this row the blocker stuck for the session and
+    // queued teaching moments never drained again.
+    if (Events.LAUNCH_CEREMONY_ABORT)    on(Events.LAUNCH_CEREMONY_ABORT,    () => this._blockers.delete('launchCeremony'));
     if (Events.NET_CEREMONY_START)    on(Events.NET_CEREMONY_START,    () => this._blockers.add('netCeremony'));
     if (Events.NET_CEREMONY_COMPLETE) on(Events.NET_CEREMONY_COMPLETE, () => this._blockers.delete('netCeremony'));
     // Aim-before-launch: block queued teaching moments during the multi-second

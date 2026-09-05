@@ -1803,6 +1803,17 @@ export class CameraSystem {
     this.camera.updateProjectionMatrix();
     if (enterPilot && arm) {
       eventBus.emit(Events.LAUNCH_CEREMONY_COMPLETE, { arm });
+    } else {
+      // Session I follow-up (review): every exit that does NOT hand off to the
+      // pilot must still stand the ceremony-state listeners down. Without this,
+      // one ESC/Space/Enter/D skip (or the dead-arm guard above the phase
+      // machine) left _launchCeremonyLive true in main.js — the frame
+      // scheduler boosted to native refresh for the REST OF THE SESSION — and
+      // stuck TeachingSystem's 'launchCeremony' blocker and
+      // CollisionAvoidanceSystem._ceremonyActive (auto-dodge disabled).
+      // ABORT deliberately skips the COMPLETE side effects (ArmPilot entry,
+      // FOV keep, enableManual — InputManager's COMPLETE handler).
+      eventBus.emit(Events.LAUNCH_CEREMONY_ABORT, { arm });
     }
   }
 
