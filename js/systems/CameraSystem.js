@@ -642,13 +642,18 @@ export class CameraSystem {
       _upTo: new THREE.Vector3(),
       _upQuat: new THREE.Quaternion(),
       _upQuatE: new THREE.Quaternion(),
-      // F5/F6 drag-to-rotate (S4): mouse drag rotates the dolly direction —
-      // the LOCAL orbital-frame pose on F5 (heading-relative, B1), the inertial
-      // world dir on F6 — around the floor's up-frame with ORBIT's
-      // velocity+damping feel (constants mirror this.orbit). Enabled
-      // only on floors 5/6 (F7 stays chart-locked; F3/F4 keep shipped
-      // behavior); every consumer is additionally gated on lc.active, so the
-      // shipped mouse handling is byte-identical while the ladder is off.
+      // Drag-to-rotate (S4; renumbered ids): mouse drag rotates the dolly
+      // direction — the LOCAL orbital-frame pose on ship anchors
+      // (heading-relative, B1), the inertial world dir on Earth anchors —
+      // around the floor's up-frame with ORBIT's velocity+damping feel
+      // (constants mirror this.orbit). Enabled on floors 3/4 (PROX NET /
+      // NAVCOM) always, and on floor 1 (the workbench) WHILE a drawer is open
+      // — the Session I TURNTABLE (plan D-F): arrows + one-finger drag orbit
+      // the CAMERA around the ship at held time, never the ship. The floor-5
+      // chart stays locked; floor 2 keeps shipped behavior. Every consumer is
+      // additionally gated on lc.active, so the shipped mouse handling is
+      // byte-identical while the ladder is off.
+      paneOpen: false,        // main.js feeds setLadderPaneOpen (the ONE pane edge)
       drag: {
         enabled: false,
         isDragging: false,
@@ -3802,10 +3807,9 @@ export class CameraSystem {
     lc.rideFloorFrom = null;
     lc.levelHoldFloor = null;
     this._baseFov = frame.fov;
-    // F3/F4 drag-to-rotate (PROX NET / NAVCOM): ladder frames carry their
-    // floor id (LadderController._frame). Fresh engage starts with no drag in
-    // flight. Floor ids renumbered 2026-09-05 (Session H 7→5).
-    lc.drag.enabled = (frame.floor === 3 || frame.floor === 4);
+    // Drag gating: floors 3/4 always; floor 1 while a drawer is open (the
+    // Session I turntable). Fresh engage starts with no drag in flight.
+    lc.drag.enabled = this._ladderDragEnabledFor(frame.floor);
     lc.drag.isDragging = false;
     lc.drag.velocityTheta = 0;
     lc.drag.velocityPhi = 0;
@@ -3859,6 +3863,62 @@ export class CameraSystem {
     this._ladderCam.paneInsetPx = Number.isFinite(px) ? px : 0;
   }
 
+  /**
+   * Session I (plan D-F, the TURNTABLE) — the drawer-open bit for the drag
+   * gate. main.js's ONE workbench-pane edge (_syncWorkbenchPanes) feeds it;
+   * the drag arms on floor 1 only while it is true. LIVE re-gate: a drawer
+   * opening while the player already stands on floor 1 must arm the drag
+   * without a ride, and closing it disarms mid-hold (any in-flight drag and
+   * its momentum are cancelled — the pointer-up path can never race a
+   * disabled gate). Flag-off: the panes are never constructed, this is never
+   * called → byte-identical.
+   * @param {boolean} open
+   */
+  setLadderPaneOpen(open) {
+    const lc = this._ladderCam;
+    lc.paneOpen = !!open;
+    const want = this._ladderDragEnabledFor(lc.floor);
+    if (want !== lc.drag.enabled) {
+      lc.drag.enabled = want;
+      lc.drag.isDragging = false;
+      lc.drag.velocityTheta = 0;
+      lc.drag.velocityPhi = 0;
+    }
+  }
+
+  /**
+   * @private The ONE drag-gate rule (Session I): floors 3/4 (PROX NET /
+   * NAVCOM) always; floor 1 (the workbench) while a drawer is open — the
+   * turntable. Floors 2/5 and floorless legacy frames never arm.
+   * @param {number|null|undefined} floor
+   * @returns {boolean}
+   */
+  _ladderDragEnabledFor(floor) {
+    return floor === 3 || floor === 4 || (floor === 1 && this._ladderCam.paneOpen);
+  }
+
+  /**
+   * Session I (plan D-F) — the turntable's ARROW nudge: LadderController maps
+   * held arrow keys to this while a drawer is open on floor 1. Same math as
+   * the pointer path (_onMouseMove): the px delta becomes rotation velocity
+   * through drag.rotateSpeed, decays through drag.damping — one drag feel,
+   * two inputs. Gated exactly like a pointer drag: engaged + drag-enabled +
+   * not riding (rides own the camera). A nudge is a SET like the pointer's
+   * (never accumulates across frames), so holding a key rotates at a steady
+   * px-per-call rate and release coasts on the shipped momentum.
+   * @param {number} dxPx - horizontal pointer-equivalent px (+ = drag right)
+   * @param {number} dyPx - vertical pointer-equivalent px (+ = drag down)
+   */
+  ladderDragNudge(dxPx, dyPx) {
+    const lc = this._ladderCam;
+    if (!lc.active || !lc.drag.enabled || lc.riding) return;
+    const dx = Number.isFinite(dxPx) ? dxPx : 0;
+    const dy = Number.isFinite(dyPx) ? dyPx : 0;
+    if (dx === 0 && dy === 0) return;
+    lc.drag.velocityTheta = -dx * lc.drag.rotateSpeed;
+    lc.drag.velocityPhi = dy * lc.drag.rotateSpeed;
+  }
+
   /** @private Settle the eased look-at bias at 0 (engage / disengage). */
   _ladderResetPaneBias() {
     const lc = this._ladderCam;
@@ -3894,7 +3954,7 @@ export class CameraSystem {
     lc.targetDistU = frame.distU;
     lc.fov = frame.fov;
     if (frame.floor != null) lc.floor = frame.floor;
-    lc.drag.enabled = (frame.floor === 3 || frame.floor === 4);
+    lc.drag.enabled = this._ladderDragEnabledFor(frame.floor);
     this._ladderApplyInspectFx(frame.floor);
   }
 
@@ -3967,7 +4027,7 @@ export class CameraSystem {
     }
     // A ride owns the camera (G3 flick replacements included): cancel any
     // in-flight drag and its momentum; re-gate on the destination floor.
-    lc.drag.enabled = (opts.floor === 3 || opts.floor === 4);
+    lc.drag.enabled = this._ladderDragEnabledFor(opts.floor);
     lc.drag.isDragging = false;
     lc.drag.velocityTheta = 0;
     lc.drag.velocityPhi = 0;

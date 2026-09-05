@@ -444,6 +444,9 @@ let _launchCeremonyLive = false;    // intro ride (LAUNCH_CEREMONY_* events)
 // ~4 fps and its measured period clamps N to 1 by design).
 const _frameSched = { mode: 'rest', n: 1 };
 if (typeof window !== 'undefined') window.__frameSched = _frameSched;
+// Session I turntable (D-F): scratch for the arrow-blanking shim around
+// inputManager.processInput (one object, reused — G1).
+const _turnSaved = { up: false, down: false, left: false, right: false };
 /** Note a boost-worthy input on the rAF clock (passive; never wakes the loop —
  *  in gameplay the loop always has a pending rAF, so the next entry sees it). */
 function _noteSchedInput() {
@@ -571,11 +574,13 @@ let timeAuthority;
 // runs on the shipped flag-off path too, so the args must not allocate per
 // frame; TimeAuthority.update destructures synchronously and retains nothing).
 const _taFrameArgs = { dtReal: 0, active: false, targetCap: 1, dangerActive: false };
-// D10 pane-open signal (08-workbench §1): true while a workbench pane (REFIT /
-// TECH LIBRARY) is open — feeds TimeAuthority.calmCap so time settles to 1×
-// while reading. Written by _syncWorkbenchPanes (the ONE pane edge, Session B)
-// from both panes' onOpenChange; false whenever the ladder is off (the sync
-// helper only exists inside the LADDER.ENABLED gate).
+// Drawer-open signal (Session I, plan D-F — was the D10 calm cap): true while
+// a workbench drawer (REFIT / TECH LIBRARY) is open — feeds
+// TimeAuthority.calmCap so the world clock STOPS while reading (rail: HOLD),
+// the viewCover 'partial' value (the frame scheduler's heartbeat) and the
+// camera's turntable gate. Written by _syncWorkbenchPanes (the ONE pane edge,
+// Session B) from both panes' onOpenChange; false whenever the ladder is off
+// (the sync helper only exists inside the LADDER.ENABLED gate).
 let _workbenchPaneOpen = false;
 // Q10 level-phase sound edge state: last frame's camera leveling flag (rise
 // edge → one LadderSfx settle cue). False whenever the ladder is disengaged.
@@ -1471,8 +1476,9 @@ async function init() {
   if (Constants.LADDER && Constants.LADDER.ENABLED) {
     // ONE workbench-pane edge, three consumers (Session B — never a second
     // signal path). Both panes' onOpenChange call this; it writes:
-    //   1. `_workbenchPaneOpen` — the D10 calm-cap signal the loop already
-    //      applies through TimeAuthority.calmCap (either pane open → 1×);
+    //   1. `_workbenchPaneOpen` — the held-world signal (Session I, D-F) the
+    //      loop applies through TimeAuthority.calmCap (drawer open → clock 0),
+    //      the scheduler's 'partial' cover and the turntable gate;
     //   2. the ONE `CameraSystem.setLadderPaneInset` value (Wave 5 (3)),
     //      NETTED per 08-workbench §2: REFIT open → +refit width (LEFT),
     //      LIBRARY open → −library width (RIGHT), BOTH open → 0 ("both panes
@@ -1486,8 +1492,11 @@ async function init() {
       const libraryOpen = !!(libraryPane && libraryPane.isOpen());
       _workbenchPaneOpen = refitOpen || libraryOpen;
       // Session I: a pane slide is a boost-worthy edge (FrameSched — the
-      // drawer animates at native rate).
+      // drawer animates at native rate), and the camera learns the drawer
+      // state for the floor-1 TURNTABLE drag gate (D-F; live re-gate — no
+      // ride needed to arm/disarm).
       _noteSchedInput();
+      if (cameraSystem.setLadderPaneOpen) cameraSystem.setLadderPaneOpen(_workbenchPaneOpen);
       const inset = (refitOpen && libraryOpen) ? 0
         : (refitOpen ? refitPane.widthPx()
           : (libraryOpen ? -libraryPane.widthPx() : 0));
@@ -1728,6 +1737,12 @@ async function init() {
     navcom: navcomFloor,
     proxNet: proxNetFloor,
     sdaFloor,
+    // Session I (plan D-F, the turntable): the PUBLIC key-state map — held
+    // arrows orbit the camera while a drawer is open on the workbench floor
+    // (the controller maps them to ladderDragNudge; the gameLoop shim blanks
+    // them around processInput so the ship never sees them). InputManager
+    // itself is untouched (do-not-edit; `keys` is public by the D-I grammar).
+    inputKeys: inputManager.keys,
     // NO `hullcam` injection (owner, 2026-09-02): HullCamFloor/BlueprintOverlay
     // are NOT the F3 costume — MotherCallouts is (the shipped in-world cards:
     // 26 parts in 8 colour-coded systems, zoom bands = the 5 m lens split, live
@@ -4802,8 +4817,11 @@ function gameLoop(timestamp) {
     const _holdRow = (_hold != null) ? FloorContract.byId(_hold) : null;
     const _holdCap = _holdRow ? _holdRow.timeCap : null;
     _floorCap = TimeAuthority.ladderTargetCap(_floorCap, _holdCap);
-    // D10 calm cap (00-spec §7): a workbench pane open settles time to 1× —
-    // applied AFTER the Q10 hold rule; never raises (a cap-0 floor stays 0).
+    // Held world (Session I, plan D-F — supersedes the D10 1× calm cap): an
+    // open workbench drawer clamps the warp target to 0 — the world clock
+    // STOPS while you shop or read (the rail reads HOLD; the frame scheduler
+    // is on its 10 fps heartbeat). Applied AFTER the Q10 hold rule; a clamp,
+    // never a raise.
     _floorCap = TimeAuthority.calmCap(_floorCap, _workbenchPaneOpen);
   }
   // Q10 level-phase sound (S4): one settle cue on the RISE edge of the
@@ -4871,8 +4889,29 @@ function gameLoop(timestamp) {
     frameCount++;
     debrisField.setFrameId(frameCount);
 
-    // Process input
-    inputManager.processInput(dt);
+    // Process input. Session I TURNTABLE shim (plan D-F): while a drawer is
+    // open on the workbench floor, the ARROWS belong to the camera turntable
+    // (LadderController maps them to ladderDragNudge in its update below) and
+    // must never steer the SHIP — no attitude command, no RCS puff, at held
+    // time. InputManager is do-not-edit; its `keys` map is a PUBLIC object
+    // (the D-I grammar), so the arrows are blanked around this ONE consumer
+    // and restored immediately — the physical key state survives for the
+    // controller's read and for ordinary flying the moment the drawer closes.
+    // (The keydown-path side effect — autopilot disengage on the FIRST arrow
+    // press, InputManager :445-450 — is out of this shim's reach: FINDINGS.)
+    const _turntable = !!(ladderController && ladderController.turntableActive
+      && ladderController.turntableActive());
+    if (_turntable) {
+      const k = inputManager.keys;
+      _turnSaved.up = !!k.ArrowUp; _turnSaved.down = !!k.ArrowDown;
+      _turnSaved.left = !!k.ArrowLeft; _turnSaved.right = !!k.ArrowRight;
+      k.ArrowUp = k.ArrowDown = k.ArrowLeft = k.ArrowRight = false;
+      inputManager.processInput(dt);
+      k.ArrowUp = _turnSaved.up; k.ArrowDown = _turnSaved.down;
+      k.ArrowLeft = _turnSaved.left; k.ArrowRight = _turnSaved.right;
+    } else {
+      inputManager.processInput(dt);
+    }
 
     // F15: Autopilot steering + thrust (before player.update applies thrustInput)
     try { autopilotSystem.update(dt, dtWorld); } catch (e) { console.error('[GameLoop] autopilotSystem:', e); }

@@ -110,20 +110,22 @@ export class TimeAuthority {
   }
 
   /**
-   * D10 calm-cap rule (docs/ladder/08-workbench.md §1, 00-spec §7: "time
-   * settles to 1× while a workbench pane is open"). Applied to the per-frame
-   * warp target AFTER ladderTargetCap: an open Library/REFIT pane clamps the
-   * cap to 1× (nobody reads at 20×) — the same shape as the danger clamp in
-   * update(), so it never RAISES a cap (a cap-0 floor stays paused; never a
-   * full pause here — only the depot pauses). Pure; no consumer until the
-   * Wave-5 panes exist (the hub-serial session wires the pane-open signal,
-   * stubbed false until then).
+   * The HELD-WORLD rule (Session I, plan D-F; supersedes the D10 calm cap's
+   * 1×). Applied to the per-frame warp target AFTER ladderTargetCap: an open
+   * workbench drawer (REFIT / TECH LIBRARY) clamps the cap to **0** — the
+   * world clock STOPS while you shop or read (nothing bad happens; the rail
+   * reads HOLD). The ramp to 0 is the shipped cap-0 mechanism the retired
+   * ARCHIVE floor pinned (rate ramps down and snaps to 0; the danger clamp is
+   * a min() and can never un-pause — test-TimeAuthority). Same shape as the
+   * danger clamp: it never RAISES a cap. Pure; main.js feeds
+   * `_workbenchPaneOpen` (the ONE pane edge). History: D10 (00-spec §7)
+   * settled to 1× — owner decision D-F (2026-09-05) holds the world outright.
    * @param {number} floorCap - the cap from ladderTargetCap (current/hold floor)
-   * @param {boolean} paneOpen - a workbench pane (REFIT / TECH LIBRARY) is open
+   * @param {boolean} paneOpen - a workbench drawer (REFIT / TECH LIBRARY) is open
    * @returns {number} the cap to feed `update({ targetCap })`
    */
   static calmCap(floorCap, paneOpen) {
-    return paneOpen ? Math.min(1, floorCap) : floorCap;
+    return paneOpen ? 0 : floorCap;
   }
 
   /**

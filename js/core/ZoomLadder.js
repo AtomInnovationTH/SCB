@@ -575,6 +575,14 @@ export class ZoomLadder {
    */
   isRiding() { return !!this._ride; }
 
+  /**
+   * Allocation-free floor probe: exactly getState().floor without the
+   * snapshot (Session I: the turntable gate reads it per gameLoop frame —
+   * the same G4 law as isRiding()).
+   * @returns {number}
+   */
+  floorId() { return this._floor; }
+
   getState() {
     let mode = 'free';
     if (this._ride) mode = 'riding';

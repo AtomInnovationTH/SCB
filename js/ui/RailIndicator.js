@@ -10,7 +10,8 @@
  *
  * Warp readout (setRate): '1×' / '4×' / '20×' / '100×' — the live
  * TimeAuthority.rate rounded to the nearest integer (intermediate ramp values
- * show rounded), fed per frame by main.js while the ladder is engaged. Write-
+ * show rounded; a rate rounding to 0 reads 'HOLD' — the Session I held world,
+ * plan D-F), fed per frame by main.js while the ladder is engaged. Write-
  * on-change AND throttled to ≤ RATE_WRITE_MIN_MS (4 Hz) — G1: no per-frame
  * DOM churn even while the rate ramps through every integer.
  *
@@ -102,7 +103,10 @@ export class RailIndicator {
    */
   static rateLabel(rate) {
     const n = Number.isFinite(rate) ? Math.max(0, Math.round(rate)) : 1;
-    return `${n}\u00d7`;
+    // Session I (plan D-F): a held world reads HOLD, never "0×" — the drawer
+    // stopped the clock (TimeAuthority.calmCap 0) and the readout says so in
+    // a word. Mid-ramp rates below 0.5 read HOLD too (the world is stopping).
+    return n === 0 ? 'HOLD' : `${n}\u00d7`;
   }
 
   /**

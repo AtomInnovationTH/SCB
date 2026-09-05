@@ -72,6 +72,15 @@ function isFreeRest(z01) {
 const ADAPT_HOLDOFF_MS =
   VisualLaw.TIMINGS.RIDE_MAX_MS + FloorContract.HUMP_SPRING.SETTLE_IDLE_MS;
 
+/**
+ * Session I (plan D-F, the TURNTABLE): held-arrow orbit rate, expressed as
+ * pointer-equivalent px per second so the camera's ONE drag feel applies
+ * (CameraSystem drag.rotateSpeed 0.005 rad/px → 240 px/s ≈ 1.2 rad/s ≈ 69°/s
+ * steady yaw, frame-rate independent — the nudge is dt-scaled). Own-module
+ * tunable (house rule); the owner tunes the number at a picture gate.
+ */
+const ARROW_TURN_PX_PER_S = 240;
+
 export class LadderController {
   /**
    * @param {object} deps
@@ -140,6 +149,8 @@ export class LadderController {
    *   same F4/F5 suppression; its re-show is owned per-frame by main.js's ARM PILOT
    *   block, which consults reticlesSuppressed().
    * @param {function} [deps.now]        - monotonic clock (ms); defaults to performance.now
+   * @param {object} [deps.inputKeys]    - InputManager's PUBLIC `keys` map (Session I
+   *   turntable: held arrows → camera drag nudge while a drawer is open on floor 1)
    * @param {object} [deps.ladder]       - injectable ZoomLadder (tests); defaults to a fresh core
    */
   constructor(deps = {}) {
@@ -161,6 +172,16 @@ export class LadderController {
     this._cityLabels = deps.cityLabels || null;
     this._targetReticle = deps.targetReticle || null;
     this._dockingReticle = deps.dockingReticle || null;
+    // Session I (plan D-F, the TURNTABLE): the PUBLIC key-state map
+    // (inputManager.keys — the D-I grammar; InputManager itself is never
+    // edited). While a drawer is open on the workbench floor, held arrows are
+    // read here each update and mapped to CameraSystem.ladderDragNudge — the
+    // camera orbits the ship, never the ship itself (main.js blanks the
+    // arrows around processInput for the same window). Absent ⇒ no turntable
+    // arrows (pointer drag still works through the camera's own gate).
+    this._inputKeys = deps.inputKeys || null;
+    /** Last update clock for the arrow-nudge dt (ms; null until first update). */
+    this._turnPrevMs = null;
     /** True while the engaged floor (>= 4) suppresses the aiming reticles. */
     this._reticlesHidden = false;
     /** True while F5 suppresses the constellation figures (mirrors _reticlesHidden). */
@@ -369,8 +390,53 @@ export class LadderController {
     if (this._reticlesHidden && this._targetReticle && this._targetReticle.setVisible) {
       this._targetReticle.setVisible(false);
     }
+    // Session I turntable (D-F): held arrows orbit the camera while a drawer
+    // is open on the workbench floor (dt-scaled; a no-op everywhere else).
+    this._turntableArrows(t);
     this._refreshRail();
     return decisions;
+  }
+
+  /**
+   * Session I (plan D-F) — is the TURNTABLE live? Engaged, standing on the
+   * workbench floor (id 1), with a drawer (REFIT / TECH LIBRARY) open.
+   * Allocation-free (the core's floorId probe — the G4 law); main.js consults
+   * it per frame to blank the arrows around processInput so they never steer
+   * the SHIP, and _turntableArrows maps them to the camera drag instead.
+   * @returns {boolean}
+   */
+  turntableActive() {
+    if (!this._engaged) return false;
+    const f = this._ladder.floorId ? this._ladder.floorId() : this._ladder.getState().floor;
+    if (f !== 1) return false;
+    const open = (p) => !!(p && p.isOpen && p.isOpen());
+    return open(this._refit) || open(this._library);
+  }
+
+  /**
+   * @private Map held arrows to a camera drag nudge (Session I, D-F). The
+   * nudge rides the camera's OWN drag mechanism (velocity + damping — one
+   * feel for pointer and keys), dt-scaled by ARROW_TURN_PX_PER_S so the rate
+   * is frame-rate independent. Counts as ladder input for adaptHoldoff (a
+   * turning camera is a transient, not steady state). No-ops without the
+   * keys map / camera nudge, off the turntable, and while riding (the camera
+   * ignores nudges mid-ride anyway — rides own the camera).
+   * @param {number} tMs
+   */
+  _turntableArrows(tMs) {
+    const prev = this._turnPrevMs;
+    this._turnPrevMs = tMs;
+    const k = this._inputKeys;
+    if (!k || !this._cameraSystem || !this._cameraSystem.ladderDragNudge) return;
+    if (!this.turntableActive()) return;
+    const dx = (k.ArrowRight ? 1 : 0) - (k.ArrowLeft ? 1 : 0);
+    const dy = (k.ArrowDown ? 1 : 0) - (k.ArrowUp ? 1 : 0);
+    if (dx === 0 && dy === 0) return;
+    const dtS = (prev == null) ? 0 : Math.min(0.1, Math.max(0, (tMs - prev) / 1000));
+    if (dtS === 0) return;
+    const px = ARROW_TURN_PX_PER_S * dtS;
+    this._cameraSystem.ladderDragNudge(dx * px, dy * px);
+    this._lastInputMs = tMs;
   }
 
   /** Router entry: one router-normalized wheel event. */
