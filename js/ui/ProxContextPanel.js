@@ -38,8 +38,19 @@
  */
 
 import { VisualLaw } from '../core/VisualLaw.js';
+import { FloorContract } from '../core/FloorContract.js';
 import { ProxOverlay } from './ProxOverlay.js';
 import { ZONE_CORE_MIN, ZONE_MID_MIN } from '../entities/FieldRiskModel.js';
+
+/**
+ * Player-facing floor labels, read from the ONE source (FloorContract `name`
+ * — the rail paints the same `${id} ${name}`; owner relabel 2026-09-05:
+ * 3 DEBRIS, 4 LEO). Never hard-code a floor name in a panel.
+ */
+const THIS_FLOOR = FloorContract.byId(3);
+const PLAN_FLOOR = FloorContract.byId(4);
+const FLOOR_TITLE = THIS_FLOOR ? THIS_FLOOR.name : 'DEBRIS';
+const PLAN_FLOOR_LABEL = PLAN_FLOOR ? `${PLAN_FLOOR.id} ${PLAN_FLOOR.name}` : '4 LEO';
 
 /**
  * G1 write cap: minimum real-time interval between innerHTML writes when the
@@ -152,7 +163,7 @@ export class ProxContextPanel {
         rows: [],
         stateText: 'NO TARGET', engaged: false,
         hintText: '',
-        guideText: 'aim a cluster on NAVCOM to plan an approach',
+        guideText: `aim a cluster on ${PLAN_FLOOR_LABEL} to plan an approach`,
       };
     }
     const v = ProxContextPanel.verdict(cands);
@@ -236,7 +247,7 @@ export class ProxContextPanel {
   /** @private Markup for a display model (VisualLaw colors; see header). */
   _html(m) {
     const rows = [
-      `<div style="color:${VisualLaw.COLORS.PLAYER}">PROX NET \u00b7 ${m.clusterName}</div>`,
+      `<div style="color:${VisualLaw.COLORS.PLAYER}">${FLOOR_TITLE} \u00b7 ${m.clusterName}</div>`,
     ];
     if (m.empty) {
       rows.push(`<div>${m.stateText}</div>`);

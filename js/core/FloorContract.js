@@ -115,6 +115,18 @@ export const FloorContract = {
    * (one shop, one place — plan D-B), and nothing lies below floor 1: the
    * ladder ends at the hull.
    *
+   * `name` is the PLAYER-FACING label (the rail paints `${id} ${name}`; the
+   * floor panels title themselves from it). Relabelled by the owner
+   * 2026-09-05 — one plain word per floor, read top-down as the game's loop:
+   *   5 GEO      the whole picture (the chart frames the GEO ring)
+   *   4 LEO      your neighbourhood of routes
+   *   3 DEBRIS   the problem, resolved into things to pick between
+   *   2 CATCH    the job — the shipped capture game
+   *   1 UPGRADE  the reward — the workbench (REFIT + LIBRARY)
+   * The INSTRUMENT names the code and docs grew up with (HULL CAM, COMMAND,
+   * PROX NET, NAVCOM, SDA DOWNLINK) stay as the modules' and the docs' internal
+   * names (HullCamFloor, ProxNetFloor, NavcomFloor, SdaFloor…) — never shown.
+   *
    * camera.distU are camera->anchor distances in scene units. near/far are S2
    * starting points (docs/ladder/01-numbers.md "per-floor render block").
    *
@@ -125,7 +137,7 @@ export const FloorContract = {
   FLOORS: [
     {
       id: 1,
-      name: 'HULL CAM',
+      name: 'UPGRADE',       // player label (owner 2026-09-05); instrument name HULL CAM
       anchor: 'subject',
       camera: { distU: [2e-5, 1.2e-4], rangeLog10: logRange(2e-5, 1.2e-4), fov: 35, near: 4e-7, far: 500, upFrame: 'ship' },
       humps: { inFirmness: 1.6 },
@@ -151,7 +163,7 @@ export const FloorContract = {
     },
     {
       id: 2,
-      name: 'COMMAND',
+      name: 'CATCH',         // player label; instrument name COMMAND (the shipped flying view)
       anchor: 'ship',
       // FOV 55 = today's Constants.CAMERA_FOV; near = Constants.CAMERA_NEAR (~3 m).
       // Top = 100 m: the Wave-3 COMMAND-floor range shrink (playtest "level up earlier").
@@ -176,7 +188,7 @@ export const FloorContract = {
     },
     {
       id: 3,
-      name: 'PROX NET',
+      name: 'DEBRIS',        // player label; instrument name PROX NET
       anchor: 'ship',
       // Bottom = 100 m: shares the COMMAND/PROX boundary (Wave-3 shrink — see F2).
       camera: { distU: [1e-3, 1.2], rangeLog10: logRange(1e-3, 1.2), fov: 60, near: 3e-5, far: 500, upFrame: 'ship' },
@@ -191,7 +203,7 @@ export const FloorContract = {
     },
     {
       id: 4,
-      name: 'NAVCOM',
+      name: 'LEO',           // player label; instrument name NAVCOM
       anchor: 'earth',
       // 1.1-4 R_E: 70..255 u (R_E = Constants.EARTH_RADIUS = 63.71 u).
       camera: { distU: [70, 255], rangeLog10: logRange(70, 255), fov: 45, near: 0.05, far: 500, upFrame: 'earth-north' },
@@ -206,7 +218,7 @@ export const FloorContract = {
     },
     {
       id: 5,
-      name: 'SDA DOWNLINK',
+      name: 'GEO',           // player label; instrument name SDA DOWNLINK
       anchor: 'earth',
       // far = 2000 u > Constants.CAMERA_FAR (500): S2 owns the per-floor far
       // plane. NOTE: R < far was a FALSE invariant (corrected at Constants.js

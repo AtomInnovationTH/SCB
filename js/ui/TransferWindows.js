@@ -24,11 +24,20 @@
  */
 
 import { Constants } from '../core/Constants.js';
+import { FloorContract } from '../core/FloorContract.js';
 import { VisualLaw } from '../core/VisualLaw.js';
 import { coOrbitalReadout } from '../entities/LaunchWindow.js';
 
 /** T-minus threshold at which a window reads "imminent" (shared with DebrisMap). */
 const IMMINENT_S = Constants.DEBRIS_MAP.WINDOW_IMMINENT_S;
+
+/**
+ * The panel titles itself from the ONE source of floor labels (FloorContract
+ * `name`; the rail paints the same word — owner relabel 2026-09-05: 4 LEO).
+ * Never hard-code a floor name in a panel.
+ */
+const THIS_FLOOR = FloorContract.byId(4);
+const FLOOR_TITLE = THIS_FLOOR ? THIS_FLOOR.name : 'LEO';
 
 /**
  * G1 (post-M3 play-test): minimum real-time interval between innerHTML writes.
@@ -208,7 +217,7 @@ export class TransferWindows {
     // is double-encoded: SELECTION-white depart line + the [IMMINENT] tag.
     const departColor = model.imminent ? VisualLaw.COLORS.SELECTION : VisualLaw.COLORS.INFO;
     const rows = [
-      `<div style="color:${VisualLaw.COLORS.PLAYER}">NAVCOM \u00b7 ${model.targetName}</div>`,
+      `<div style="color:${VisualLaw.COLORS.PLAYER}">${FLOOR_TITLE} \u00b7 ${model.targetName}</div>`,
       `<div style="color:${departColor}">${model.departText}${model.imminent ? '  [IMMINENT]' : ''}</div>`,
     ];
     if (model.showArrive) rows.push(`<div>${model.transferText} \u2192 ${model.arriveText}</div>`);
