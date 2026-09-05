@@ -4899,6 +4899,17 @@ function gameLoop(timestamp) {
   _taFrameArgs.dangerActive = _danger;
   timeAuthority.update(_taFrameArgs);
   const dtWorld = timeAuthority.dtWorld;
+  // Session I follow-up (review, FINDINGS (k)): THE HELD WORLD IS HELD. While a
+  // workbench drawer is open the world clock is 0 (calmCap → 0, the rail reads
+  // HOLD) — but the hazard systems below ticked on REAL dt regardless: the ISS
+  // TCA and the Starlink window (dt × BASE_SCALE game-time), the MMOD damage
+  // rolls / SAFE_MODE, and the collision-consequence scan (up to a game-over)
+  // all advanced while the player shopped or read — D-F's "nothing bad
+  // happens" was not true. The ONE gate: a system that can change the
+  // player's fate does not tick while the world clock is stopped. Flag-off is
+  // byte-identical (inactive TimeAuthority pins rate 1 → dtWorld > 0); the
+  // ~0.6 s ramp to 0 on the open edge still ticks (rate > 0), by design.
+  const _worldHeld = !(dtWorld > 0);
   // Rail warp readout (VisualLaw.RAIL.SHOWS 'warp-readout'; 08-workbench §2):
   // the live rate, only while the ladder is engaged. setRate is write-on-change
   // and ≤ 4 Hz internally (G1), so the per-frame call is free. Flag-off:
@@ -4973,7 +4984,8 @@ function gameLoop(timestamp) {
     try { autopilotSystem.update(dt, dtWorld); } catch (e) { console.error('[GameLoop] autopilotSystem:', e); }
 
     // Collision Avoidance — after autopilot, before player.update (dodge impulse applied to _rcsVelocity)
-    try { collisionAvoidanceSystem.update(dt); } catch (e) { console.error('[GameLoop] collisionAvoidance:', e); }
+    // Held world (Session I follow-up): no scan, no dodge, no consequence while the clock is 0.
+    if (!_worldHeld) { try { collisionAvoidanceSystem.update(dt); } catch (e) { console.error('[GameLoop] collisionAvoidance:', e); } }
 
     // Update game state timer
     gameState.update(dt);
@@ -5021,9 +5033,13 @@ function gameLoop(timestamp) {
     // CP-4: MissionCoach beat timers (narrative dwell + interactive escalation)
     try { if (missionCoach) missionCoach.update(dt); } catch (e) { console.error('[GameLoop] missionCoach:', e); }
     // CH5: ISS conjunction boss TCA countdown (game-time)
-    try { if (issConjunctionBoss) issConjunctionBoss.update(dt); } catch (e) { console.error('[GameLoop] issConjunctionBoss:', e); }
     // CH9: Starlink cascade boss containment window (game-time)
-    try { if (starlinkCascadeBoss) starlinkCascadeBoss.update(dt); } catch (e) { console.error('[GameLoop] starlinkCascadeBoss:', e); }
+    // Held world (Session I follow-up): the countdowns (and an armed onset) wait
+    // for the world clock — a boss cannot start or run out while you shop or read.
+    if (!_worldHeld) {
+      try { if (issConjunctionBoss) issConjunctionBoss.update(dt); } catch (e) { console.error('[GameLoop] issConjunctionBoss:', e); }
+      try { if (starlinkCascadeBoss) starlinkCascadeBoss.update(dt); } catch (e) { console.error('[GameLoop] starlinkCascadeBoss:', e); }
+    }
 
     // V-9: Tier progression visual transition animation
     try { tierVisualManager.update(dt); } catch (e) { console.error('[GameLoop] tierVisualManager:', e); }
@@ -5101,7 +5117,8 @@ function gameLoop(timestamp) {
     } catch (e) { console.error('[GameLoop] spaceWeatherSystem:', e); }
 
     // Update environment hazards (ST-6.7 — AO, MMOD, Safe-Mode, Radiation, Battery DOD)
-    if (environmentSystem) {
+    // Held world (Session I follow-up): no erosion, no MMOD roll, no DOD tick while the clock is 0.
+    if (environmentSystem && !_worldHeld) {
       try { environmentSystem.update(dt); } catch (e) { console.error('[GameLoop] environmentSystem:', e); }
     }
 
