@@ -305,6 +305,17 @@ export class SceneManager {
   setGlassPixelRatioCap(on) {
     this._glassPR1 = !!on;
     if (this.tierConfig) this._applyRendererPixelRatio(this.tierConfig);
+    // Session I follow-up (review): a ratio change must REBUILD the composer
+    // chain NOW. The ctor sizes composer/bloom/SMAA/FXAA from the PRE-clamp
+    // ratio (main.js flips this setter right after construction), and an iPad
+    // may never fire a window resize — the live probe (DPR 2, tier cap 1.5)
+    // measured the composer render target stuck at 1.5× against the 1× canvas
+    // until the first resize: the whole post chain kept burning 2.25× the
+    // fragments the clamp was landed to save, then downscaled into the 1×
+    // canvas. resize() re-sizes composer + bloom + SMAA + FXAA + the net-mesh
+    // resolution from renderer.getPixelRatio() — the one heal path that
+    // already exists.
+    if (this.composer) this.resize();
   }
 
   /** @private The glass clamp: tier cap → min(cap, 1) on real touch devices. */
