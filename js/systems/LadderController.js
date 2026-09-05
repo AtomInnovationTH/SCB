@@ -104,17 +104,31 @@ export class LadderController {
    *   closes it too. When present it claims the F1 'lens-toggle' Space verb
    *   (toggle()) — D-b, owner 2026-09-03; absent, the verb falls through to the
    *   hullcam branch exactly as shipped.
-   * @param {object} [deps.library]      - F1 TECH LIBRARY pane (LibraryPane,
-   *   Wave 5 Session B): setEnabled/open/close/toggle/isOpen. Optional — no-op
-   *   without it. Floor-1 keyed EXACTLY like `refit` (enable on 1, disable +
-   *   close elsewhere and on disengage). It claims NO Space verb (D-b keeps
-   *   Space = REFIT); Esc reaches it first through closeTopPane() — the
-   *   LIBRARY is the TOPMOST workbench pane (it opens FROM the REFIT card,
+   * @param {object} [deps.library]      - the SPECS pane (LibraryPane, Wave 5
+   *   Session B; player name SPECS since plan D-C): setEnabled/open/close/
+   *   toggle/isOpen/openEntry. Optional — no-op without it. **Session J (D-C):
+   *   enabled on EVERY floor** — arrival on any floor enables the edge tab and
+   *   an open pane stays open across a ride (the world stays held, D-F); only
+   *   disengage disables + closes it. It claims NO Space verb (D-b keeps
+   *   Space = REFIT on floor 1); Esc reaches it first through closeTopPane() —
+   *   the LIBRARY is the TOPMOST workbench pane (it opens FROM the REFIT card,
    *   08-workbench §3, so it is the most recently opened in the one flow that
    *   opens both; with both open Library-closes-first is the documented
    *   order). Session C: both panes also page from the horizontal two-finger
-   *   swipe — WheelRouter asks `wantsPaneSwipe()` (F1 + a pane dep) and emits
-   *   ONE `pagePane({toward})` per flick; the carousel law lives there.
+   *   swipe — WheelRouter asks `wantsPaneSwipe()` and emits ONE
+   *   `pagePane({toward})` per flick; the carousel law lives there (floor 1:
+   *   [REFIT] — [ship] — [SPECS]; every other floor: [view] — [SPECS]).
+   * @param {function} [deps.onSubjectChange] - Session J (D-C, "the library
+   *   follows"): called with the floor id after every floor ARRIVAL
+   *   (_applyFloorContent) and after a subject-changing Space verb (the SDA
+   *   lens flip, the NAVCOM plan) so the hub can retarget an OPEN SPECS pane
+   *   through its ONE `openEntry` path (SpecsSubject resolves what). Optional.
+   * @param {object} [deps.autopilot]    - AutopilotSystem: toggle(). Session J
+   *   item 6 — floor 2's declared Space verb 'approach-autopilot' (a no-op
+   *   since S4) is the `A` path: autopilot to the selected target. Optional.
+   * @param {object} [deps.paneRail]     - the WHAT rail (PaneRail, Session J
+   *   D-H): show/hide/populate(floor). Mirrors `rail`: shown at engage, hidden
+   *   at disengage, re-populated at every floor arrival. Optional.
    * @param {object} [deps.audioBeds]    - per-floor audio beds (LadderAudioBeds):
    *   setFloor(floorId|null). Optional — absent it beds are a no-op.
    * @param {object} [deps.floorMask]    - per-floor HUD pane mask (FloorMask,
@@ -164,6 +178,11 @@ export class LadderController {
     this._hullcam = deps.hullcam || null;
     this._refit = deps.refit || null;
     this._library = deps.library || null;
+    // Session J (D-C / item 6 / D-H): the subject-change hook, the autopilot
+    // for floor 2's Space verb, the WHAT rail. All optional (parallel tracks).
+    this._onSubjectChange = (typeof deps.onSubjectChange === 'function') ? deps.onSubjectChange : null;
+    this._autopilot = deps.autopilot || null;
+    this._paneRail = deps.paneRail || null;
     this._audioBeds = deps.audioBeds || null;
     this._floorMask = deps.floorMask || null;
     this._viewStore = deps.viewStore || null;
@@ -505,18 +524,21 @@ export class LadderController {
 
   /**
    * Horizontal-swipe eligibility (Wave 5 Session C — 08-workbench §2
-   * "Horizontal = what (panes)"): true while the ladder is engaged ON THE
-   * WORKBENCH FLOOR (F1) with at least one pane dep to page. WheelRouter
-   * consults this per HORIZONTAL-dominant wheel event (|deltaX| > |deltaY|)
-   * before it claims the event away from the zoom feed — never per frame,
-   * never for a vertical event. Everywhere else (other floors, disengaged,
-   * no panes) the router leaves the axis exactly as shipped. Reads the core
-   * floor through `currentFloor()` (a getState snapshot — event-rate only).
+   * "Horizontal = what (panes)"): true while the ladder is engaged with at
+   * least one pane dep to page ON THIS FLOOR — floor 1 pages REFIT and SPECS,
+   * every other floor pages SPECS alone (Session J, D-C: the SPECS tab lives
+   * on every floor; REFIT stays the floor-1 place you ride down to).
+   * WheelRouter consults this per HORIZONTAL-dominant wheel event (|deltaX| >
+   * |deltaY|) before it claims the event away from the zoom feed — never per
+   * frame, never for a vertical event. Everywhere else (disengaged, no pane
+   * for the floor) the router leaves the axis exactly as shipped. Reads the
+   * core floor through `currentFloor()` (a getState snapshot — event-rate only).
    * @returns {boolean}
    */
   wantsPaneSwipe() {
-    if (!this._engaged || !(this._refit || this._library)) return false;
-    return this.currentFloor() === 1;
+    if (!this._engaged) return false;
+    if (this.currentFloor() === 1) return !!(this._refit || this._library);
+    return !!this._library;
   }
 
   /**
@@ -554,17 +576,20 @@ export class LadderController {
    * The "away" pane is checked FIRST, so the both-open state (reachable only
    * by clicks — the swipe grammar stays 3-position) resolves to one pane on
    * the first swipe. 'left'/'right' are SCREEN sides: the panes' RTL mirror
-   * is their own CSS variable, not this grammar. Guards: disengaged, off-F1
-   * or an unknown `toward` → null and no pane is touched; an absent pane dep
-   * is skipped, never thrown on. Like closeTopPane(), NOT a ladder input for
-   * adaptHoldoff (a 270 ms pane yaw, no floor flight).
+   * is their own CSS variable, not this grammar. **Off floor 1 (Session J,
+   * D-C) the carousel is two-position — [view] — [SPECS]: REFIT is never
+   * touched there** ('left' closes an open SPECS, 'right' opens it). Guards:
+   * disengaged or an unknown `toward` → null and no pane is touched; an
+   * absent pane dep is skipped, never thrown on. Like closeTopPane(), NOT a
+   * ladder input for adaptHoldoff (a 270 ms pane yaw, no floor flight).
    * @param {{ tMs?: number, toward: 'left'|'right' }} arg
    * @returns {'open-refit'|'close-refit'|'open-library'|'close-library'|null}
    *   the action taken (null = nothing to do)
    */
   pagePane({ toward } = {}) {
-    if (!this._engaged || this.currentFloor() !== 1) return null;
-    const lib = this._library, r = this._refit;
+    if (!this._engaged) return null;
+    const lib = this._library;
+    const r = (this.currentFloor() === 1) ? this._refit : null;   // REFIT pages on floor 1 only
     const libOpen = !!(lib && lib.isOpen && lib.isOpen());
     const refitOpen = !!(r && r.isOpen && r.isOpen());
     if (toward === 'left') {
@@ -620,6 +645,87 @@ export class LadderController {
     if (typeof this._floorMask.capture !== 'function') return;
     this._floorMask.capture();
     this._persistRooms();
+  }
+
+  /**
+   * RESET ROOM (Session J, plan D-H: "long-press rail head = RESET ROOM"):
+   * forget the applied floor's remembered pane layout and re-apply its
+   * default room, then export (the store learns the reset — write-on-change).
+   * The WHAT rail's long-press calls this through the hub. No-op disengaged,
+   * without a mask, or before the mask learned resetRoom. Event-rate only.
+   * @returns {boolean} true when a room was reset
+   */
+  resetRoom() {
+    if (!this._engaged || !this._floorMask) return false;
+    if (typeof this._floorMask.resetRoom !== 'function') return false;
+    const floor = this._floorApplied;
+    if (floor == null) return false;
+    this._floorMask.resetRoom(floor);
+    this._persistRooms();
+    if (this._paneRail && this._paneRail.populate) this._paneRail.populate(floor);
+    return true;
+  }
+
+  /**
+   * Session J input routing — the CAPTURE-phase keydown router the hub
+   * installs on window inside the LADDER.ENABLED gate, ahead of InputManager's
+   * bubble-phase handler (InputManager is do-not-edit; its `keys` map is the
+   * D-I public seam). Returns true when the key was CONSUMED — the hub then
+   * `stopImmediatePropagation()`s so InputManager never sees it. Three rules,
+   * every one floor-gated and inert when disengaged (flag-off: never engaged,
+   * never installed → byte-identical):
+   *
+   *   1. ARROWS under the TURNTABLE (Session I FINDINGS (b), closed here): the
+   *      per-frame shim could blank the arrows around processInput, but the
+   *      keydown-path side effect ran first — InputManager's handler disengages
+   *      autopilot on the FIRST arrow press (:445–452) before any frame runs.
+   *      While `turntableActive()` the arrow keydown writes the SAME public
+   *      key bit InputManager would have (`keys[code] = true`, so
+   *      _turntableArrows still reads it) and is consumed; keyup is left to
+   *      InputManager (it only clears the bit — consistent either way, and a
+   *      drawer closed mid-hold still releases cleanly). preventDefault keeps
+   *      the page from scrolling, exactly as the shipped handler does.
+   *   2. TAB on floor 3 (DEBRIS / PROX NET): cycles the insertion candidates
+   *      (`proxNet.cycleInsertion(±1)`, Shift reverses) — the verb NO input
+   *      produced (item 6). Consumed only when a candidate was cycled; with no
+   *      plan the shipped debris cycle runs untouched.
+   *   3. TAB on floor 4 (LEO / NAVCOM): steps the focused cluster
+   *      (`navcom.focusStep(±1)`); consumed when a cluster is focused after
+   *      the step.
+   *
+   * Never throws; never a ladder input for adaptHoldoff (no camera flight —
+   * the arrows' own nudge already counts inside _turntableArrows).
+   * @param {{ code?: string, shiftKey?: boolean, preventDefault?: function }} e
+   * @returns {boolean} true when consumed
+   */
+  routeKeyDown(e) {
+    if (!this._engaged || !e || typeof e.code !== 'string') return false;
+    const code = e.code;
+    if (code === 'ArrowUp' || code === 'ArrowDown' || code === 'ArrowLeft' || code === 'ArrowRight') {
+      if (!this.turntableActive()) return false;
+      if (this._inputKeys) this._inputKeys[code] = true;
+      if (typeof e.preventDefault === 'function') e.preventDefault();
+      return true;
+    }
+    if (code === 'Tab') {
+      const f = this._ladder.floorId ? this._ladder.floorId() : this._ladder.getState().floor;
+      const dir = e.shiftKey ? -1 : 1;
+      if (f === 3 && this._proxNet && typeof this._proxNet.cycleInsertion === 'function') {
+        const c = this._proxNet.cycleInsertion(dir);
+        if (!c) return false;
+        if (typeof e.preventDefault === 'function') e.preventDefault();
+        return true;
+      }
+      if (f === 4 && this._navcom && typeof this._navcom.focusStep === 'function') {
+        this._navcom.focusStep(dir);
+        const focused = (typeof this._navcom.getFocusedCluster === 'function')
+          ? this._navcom.getFocusedCluster() : null;
+        if (!focused) return false;
+        if (typeof e.preventDefault === 'function') e.preventDefault();
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -821,6 +927,7 @@ export class LadderController {
     // the hull (the SHOP return; a continued run), never at a ride arrival.
     if (s.floor === 1) this._restorePanes();
     if (this._rail && this._rail.show) this._rail.show();
+    if (this._paneRail && this._paneRail.show) this._paneRail.show();
     this._refreshRail();
   }
 
@@ -844,7 +951,8 @@ export class LadderController {
       if (this._refit.setEnabled) this._refit.setEnabled(false);
       if (this._refit.close) this._refit.close();
     }
-    // Wave 5 (Session B): the TECH LIBRARY pane closes with the ladder too.
+    // Wave 5 (Session B): the SPECS pane closes with the ladder too (the ONE
+    // place it is disabled since Session J — every floor carries the tab).
     if (this._library) {
       if (this._library.setEnabled) this._library.setEnabled(false);
       if (this._library.close) this._library.close();
@@ -871,6 +979,7 @@ export class LadderController {
     // the 5-key preference decides whether the pills actually reappear).
     this._setCityLabelsHidden(false);
     if (this._rail && this._rail.hide) this._rail.hide();
+    if (this._paneRail && this._paneRail.hide) this._paneRail.hide();
   }
 
   // ── Decision translation ───────────────────────────────────────────────────
@@ -1080,18 +1189,13 @@ export class LadderController {
         if (this._refit.close) this._refit.close();
       }
     }
-    // F1 TECH LIBRARY pane (Wave 5 Session B): keyed EXACTLY like `refit` —
-    // enable the edge tab on floor 1, disable AND close anywhere else. Its
-    // close() fires the pane's own onOpenChange edge (the calm cap + the
-    // camera inset release ride that, never a controller signal).
-    if (this._library) {
-      if (floor === 1) {
-        if (this._library.setEnabled) this._library.setEnabled(true);
-      } else {
-        if (this._library.setEnabled) this._library.setEnabled(false);
-        if (this._library.close) this._library.close();
-      }
-    }
+    // The SPECS pane (Wave 5 Session B; plan D-C since Session J): enabled on
+    // EVERY floor — the tab paints everywhere and an open pane RIDES ALONG
+    // (the world stays held under it, D-F; the camera inset bias applies on
+    // every floor since the CameraSystem :4384 lift). Only _disengage disables
+    // and closes it. The subject hook below lets the hub retarget an open
+    // pane to the arrival floor's subject through the pane's ONE openEntry.
+    if (this._library && this._library.setEnabled) this._library.setEnabled(true);
     // Per-floor audio bed (FloorContract audioBed): crossfade to the arrival
     // floor's bed. Optional dep — absent it this is a no-op (parallel track).
     if (this._audioBeds && this._audioBeds.setFloor) this._audioBeds.setFloor(floor);
@@ -1103,6 +1207,18 @@ export class LadderController {
     // D5: the mask just captured the departing floor's room — export to the
     // player store (write-on-change inside the store; a floor-change moment).
     this._persistRooms();
+    // Session J (D-H): the WHAT rail lists the arrival floor's room — after the
+    // mask applied it, so the lit/dim paint reads the settled panes.
+    if (this._paneRail && this._paneRail.populate) this._paneRail.populate(floor);
+    // Session J (D-C): the floor's SUBJECT changed — the hub retargets an open
+    // SPECS pane (never opens one; SpecsSubject decides what).
+    this._noteSubjectChange(floor);
+  }
+
+  /** @private Session J: fire the optional subject hook, never throw. */
+  _noteSubjectChange(floor) {
+    if (!this._onSubjectChange) return;
+    try { this._onSubjectChange(floor); } catch (_e) { /* dep */ }
   }
 
   /**
@@ -1190,21 +1306,35 @@ export class LadderController {
   /**
    * Dispatch a per-floor Space verb decision (FloorContract spaceVerb). Wired:
    * F4 'plan-transfer' (M3), F3 'approach', F5 'flip-lens', F1 'lens-toggle'
-   * (S4 serial wiring). F2's 'approach-autopilot' remains a follow-up.
+   * (S4 serial wiring), and — Session J item 6 — F2 'approach-autopilot' (the
+   * `A` path: AutopilotSystem.toggle(), which resolves the selected target
+   * itself and re-acquires the best one when none is selected — the smart
+   * default; a second press disengages, exactly like the key). The two verbs
+   * that change the floor's SUBJECT (the lens flip, the plan) fire the
+   * subject hook afterwards so an open SPECS pane follows (D-C).
    * @private
    */
   _dispatchVerb(verb) {
     if (verb === 'plan-transfer' && this._navcom && this._navcom.planTransfer) {
       this._navcom.planTransfer();
+      this._noteSubjectChange(4);
     }
     // F3 Space verb (FloorContract PROX NET row): commit the selected
     // insertion point — ProxNetFloor.approach() → onApproach → autopilot.
     if (verb === 'approach' && this._proxNet && this._proxNet.approach) {
       this._proxNet.approach();
     }
+    // F2 Space verb (Session J item 6; a silent no-op since S4): autopilot to
+    // the selected target through the injected AutopilotSystem — the same
+    // toggle() the A key calls (InputManager KeyA), so the target resolution,
+    // the re-acquire and the disengage-on-second-press are all the shipped ones.
+    if (verb === 'approach-autopilot' && this._autopilot && typeof this._autopilot.toggle === 'function') {
+      this._autopilot.toggle();
+    }
     // F5 Space verb: flip the SDA chart lens (VALUE ↔ THREAT).
     if (verb === 'flip-lens' && this._sdaFloor && this._sdaFloor.flipLens) {
       this._sdaFloor.flipLens();
+      this._noteSubjectChange(5);
     }
     // F1 Space verb: the REFIT pane claims it when injected (D-b, owner
     // 2026-09-03 — "Space toggles the REFIT pane"); FloorContract's verb

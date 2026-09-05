@@ -122,6 +122,7 @@ import { SdaFloor } from './systems/SdaFloor.js';
 import { HullCamFloor } from './systems/HullCamFloor.js';
 import { RefitPane } from './ui/RefitPane.js';
 import { LibraryPane, ONE_PANE_BREAKPOINT_PX } from './ui/LibraryPane.js';
+import { resolveSubject as resolveSpecsSubject } from './systems/SpecsSubject.js';
 import { TimeAuthority } from './systems/TimeAuthority.js';
 import { FloorContract } from './core/FloorContract.js';
 import { RailIndicator } from './ui/RailIndicator.js';
@@ -641,6 +642,10 @@ let refitPane;
 // full-screen Library, I key, deep links) stays byte-identical (pinned in
 // test-LadderController).
 let libraryPane;
+// Session J (plan D-C) — "the library follows": retarget an OPEN SPECS pane to
+// the current floor's subject (assigned inside the LADDER.ENABLED gate; null
+// flag-off, so the controller's onSubjectChange dep is a no-op there).
+let _specsFollow = null;
 // Zoom Ladder Wave 5 (Session G) — the PLAYER-owned view store (D5 "rooms you
 // can rearrange": FloorMask's per-floor room memory + the F3 pane open-state,
 // its own key `sc_ladder_view_v1`, separate from the run save — the
@@ -1563,6 +1568,35 @@ async function init() {
       if (other && other.isOpen && other.isOpen() &&
         window.innerWidth < ONE_PANE_BREAKPOINT_PX) other.close();
     };
+    // Session J (plan D-C, item 3) — the SPECS SUBJECT: what the player is
+    // looking at on the CURRENT floor, gathered from live reads on an edge
+    // (pane open / target selected / floor arrival / lens flip — never per
+    // frame) and resolved by the ONE pure table module. Every read is guarded:
+    // the modules construct in ladder-block order and some are absent flag-off
+    // (this closure only exists inside the gate anyway).
+    const _specsSubject = () => {
+      const floor = (ladderController && ladderController.currentFloor) ? ladderController.currentFloor() : null;
+      const part = (motherCallouts && motherCallouts.getFocusedPart) ? motherCallouts.getFocusedPart() : null;
+      return resolveSpecsSubject({
+        floor,
+        partCodexId: (part && part.codexId) || null,
+        refitCodexId: (refitPane && refitPane.focusedCodexId) ? refitPane.focusedCodexId() : null,
+        target: targetSelector.getActiveTarget(),
+        clusterFocused: !!(navcomFloor && navcomFloor.getFocusedCluster && navcomFloor.getFocusedCluster()),
+        lens: (sdaFloor && sdaFloor.getLens) ? sdaFloor.getLens() : null,
+      });
+    };
+    // "The library follows" (Session C for hull clicks; Session J generalises
+    // it to every floor): retarget an OPEN SPECS pane to the current subject
+    // through the pane's ONE openEntry path. Never opens a closed pane — the
+    // click's visible verb stays what it was (D-a); a null subject leaves the
+    // entry alone (the reader keeps its page). Module-level so the controller's
+    // onSubjectChange dep (constructed after the gate) can reach it.
+    _specsFollow = () => {
+      if (!libraryPane || !libraryPane.isOpen()) return;
+      const id = _specsSubject();
+      if (id) libraryPane.openEntry(id);
+    };
     refitPane = new RefitPane({
       providers: hullcamProviders,
       getCredits: () => scoringSystem.credits,
@@ -1634,17 +1668,19 @@ async function init() {
         if (id) eventBus.emit(Events.CODEX_VIEWED, { id });
       },
       // Session C: what the player is looking at, for an ENTRY-LESS open (tab
-      // click / toggle) — the pane lands on it instead of the prompt. The
-      // focused hull part first (MotherCallouts.getFocusedPart — live in the
-      // COMPONENT band, null elsewhere), else the REFIT card's manifest deep
-      // link
-      // (RefitPane.focusedCodexId — the id its title already carries; no new
-      // mapping). A GETTER: read on the open edge only, never per frame; the
-      // pane stays eventless and never sees either module.
-      subject: () => {
-        const part = (motherCallouts && motherCallouts.getFocusedPart) ? motherCallouts.getFocusedPart() : null;
-        return (part && part.codexId) || (refitPane ? refitPane.focusedCodexId() : null);
-      },
+      // click / toggle / the swipe) — the pane lands on it instead of the
+      // prompt. Session J (plan D-C, "SPECS on every floor"): PER FLOOR, through
+      // the ONE resolver (SpecsSubject.resolveSubject — pure, pinned tables):
+      // floor 1 the focused hull part (MotherCallouts.getFocusedPart — live in
+      // the COMPONENT band, null elsewhere), else the REFIT card's manifest
+      // deep link (RefitPane.focusedCodexId), exactly as shipped; floors 2–3
+      // the SELECTED TARGET's entry (catalog name → catalog_* entry, untracked
+      // → dark debris, else the mass band → the tool that catches it); floor 4
+      // the focused cluster → the transfer physics, else the window concept;
+      // floor 5 the chart lens. A GETTER: read on the open edge only, never per
+      // frame; the pane stays eventless and never sees any of these modules.
+      // The floor comes from the controller (constructed below — read live).
+      subject: () => _specsSubject(),
       // Session C, owner decision 2 — "the photo you just took" (08-workbench
       // §2): the pane crops the LIVE render canvas around the subject. The
       // subject point is the ship's projection (the F3 subject; the callout
@@ -1674,6 +1710,38 @@ async function init() {
     // Registered inside the gate — a ?ladder=0 boot adds no listeners.
     eventBus.on(Events.CODEX_UNLOCKED, () => { if (libraryPane) libraryPane.refresh(); });
     eventBus.on(Events.CODEX_VIEWED, () => { if (libraryPane) libraryPane.refresh(); });
+    // Session J (plan D-C) — a TARGET SELECTION is a subject change on the
+    // flying floors: (1) the Subnautica rule generalises from hull parts to
+    // targets — a selected target whose entry is LOCKED requests its unlock
+    // through the pane's ONE scanPart path (CodexSystem's queue: ack chip now,
+    // chime + CODEX_UNLOCKED on its own schedule; startUnlocked entries are
+    // safe no-ops) — "exploration is how the library fills"; (2) an OPEN pane
+    // follows the selection. TARGET_SELECTED is the ONE downstream of every
+    // selection path (the HUD row click's HUD_TARGET_CLICK → GameFlowManager →
+    // targetSelector.setTarget, Tab/T, the Session J canvas tap, autopilot's
+    // re-acquire), so one listener covers them all. Floors 2–3 only — the
+    // target is the subject there; elsewhere the floor's own subject stands.
+    eventBus.on(Events.TARGET_SELECTED, () => {
+      if (!libraryPane || !ladderController) return;
+      const floor = ladderController.currentFloor();
+      if (floor !== 2 && floor !== 3) return;
+      const id = _specsSubject();
+      if (id) libraryPane.scanPart({ codexId: id });
+      _specsFollow();
+    });
+    // Session J — the CAPTURE-phase key router (LadderController.routeKeyDown):
+    // arrows under the turntable (Session I FINDINGS (b) — the keydown-path
+    // autopilot disengage in InputManager :445–452 ran before any per-frame
+    // shim could blank the key; here the press writes the public key bit and
+    // never reaches InputManager's bubble-phase handler), Tab on floors 3/4
+    // (the insertion-candidate / cluster cycles no input produced — item 6).
+    // Capture on window runs BEFORE InputManager's own window listener
+    // (bubble); stopImmediatePropagation drops the event for it. Inside the
+    // gate: a ?ladder=0 boot installs nothing, and the router is inert while
+    // disengaged, so every other key and every flag-off frame is byte-identical.
+    window.addEventListener('keydown', (e) => {
+      if (ladderController && ladderController.routeKeyDown(e)) e.stopImmediatePropagation();
+    }, true);
     // Wave 5 (Session E) — the depot INVITATION (08-workbench §5 D3): from
     // chapter 4 on GameFlowManager (the ONE depot decision per catch) emits
     // DEPOT_INVITATION instead of forcing the stop. Since the Session H 7→5
@@ -1802,6 +1870,13 @@ async function init() {
     // Esc unwinds reading → fitting → ride up). Flag-off: libraryPane is
     // undefined (never constructed) → the dep is null → byte-identical.
     library: libraryPane,
+    // Session J (plan D-C): the floor's SUBJECT changed (arrival, lens flip,
+    // plan) → an OPEN SPECS pane follows through its ONE openEntry path.
+    // Flag-off: _specsFollow stays null → the dep is a no-op.
+    onSubjectChange: () => { if (_specsFollow) _specsFollow(); },
+    // Session J item 6: floor 2's Space verb 'approach-autopilot' = the A path
+    // (AutopilotSystem.toggle — the SAME call InputManager's KeyA makes).
+    autopilot: autopilotSystem,
     // (The Wave-3 `archive` bridge and the Session E `depot` doorway host both
     // retired with their floors — Wave 5 Session H, the 7→5 renumber. The SHOP
     // still arrives through GameFlowManager's own transitions: mission

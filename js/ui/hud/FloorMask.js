@@ -330,6 +330,27 @@ export class FloorMask {
   getCurrentFloor() { return this._floor; }
 
   /**
+   * RESET ROOM (Wave 5 Session J, plan D-H "long-press rail head = RESET
+   * ROOM"): forget floor `floor`'s D5 memory row and, when it is the APPLIED
+   * floor, re-apply its DEFAULT_ROOMS row now (memory over defaults with no
+   * memory = the defaults; the arrival fade runs as on a ride). Other floors'
+   * rows are untouched. No-op while disposed; a non-applied floor only loses
+   * its row (applied on the next arrival). LadderController.resetRoom() calls
+   * this and exports afterwards. Event-rate only (a long-press).
+   * @param {number} floor - FloorContract floor id
+   * @returns {boolean} true when a row was dropped or the room re-applied
+   */
+  resetRoom(floor) {
+    if (this._disposed || typeof floor !== 'number') return false;
+    const had = this._memory.delete(floor);
+    if (this._enabled && this._resolve() && this._appliedFloor === floor) {
+      this._applyRoom(floor);
+      return true;
+    }
+    return had;
+  }
+
+  /**
    * D5 memory as a plain-JSON persistence surface (Wave 5 serializes this):
    * `{ floors: { "<floorId>": { "<paneId>": boolean } } }`.
    * @returns {{floors: Object<string, Object<string, boolean>>}}

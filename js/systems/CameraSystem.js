@@ -3864,8 +3864,9 @@ export class CameraSystem {
    * negative = a pane on the RIGHT edge, 0 = none (both panes open → the caller
    * nets the two). main.js calls this from the pane's onOpenChange edge — the
    * SAME signal that feeds the D10 calm cap — never a second path. The camera
-   * applies it only while the engaged floor is 3 (else the per-frame target is
-   * 0), eased over LADDER_PANE_REFRAME_MS (reduced motion → snap). Non-finite
+   * applies it on every engaged floor (Session J, plan D-C — the SPECS drawer
+   * lives on every floor; floor 1 only before that), eased over
+   * LADDER_PANE_REFRAME_MS (reduced motion → snap). Non-finite
    * → 0. Flag-off: the pane is never constructed, this is never called, the
    * request stays 0 and the ladder never engages → byte-identical.
    * @param {number} px
@@ -4365,23 +4366,26 @@ export class CameraSystem {
     } else {
       this._ladderUpFor(lc.anchor, radialDir, this.camera.up);
     }
-    // Wave 5 (3) — the F1 look-at bias (08-workbench §2; F3 before the Session H
-    // renumber). Target = the requested
-    // pane inset while the engaged floor is 1, else 0: a ride away sets lc.floor
-    // to the destination at ride start, so the bias eases OUT during the flight
-    // (the controller closes the pane at the same moment → the request drops to
-    // 0 too); a same-floor flick ride keeps lc.floor = 1, so an open pane never
-    // wobbles. On a target edge the ease re-arms from the CURRENT value (a
-    // reversal mid-ease never snaps); reduced motion settles at once. The bias
-    // is a pure YAW about the camera's own up AFTER the shipped lookAt: by
-    // θ = atan(tan(fov/2) · aspect · b), b = inset / viewport width, so the
-    // anchor projects to x_ndc = b exactly (y_ndc stays 0) — the centre of the
-    // uncovered strip. (Offsetting the look-at point instead would let lookAt
-    // re-orthogonalize the radial up against the new forward → a residual tilt;
-    // the yaw keeps the up exact.) Position, distance, up and the dolly frame
-    // above are untouched; bias 0 → no rotation, the pre-Wave-5 (3) frame
-    // byte-for-byte.
-    const insetTarget = (lc.floor === 1) ? lc.paneInsetPx : 0;
+    // Wave 5 (3) — the look-at bias (08-workbench §2; F3 before the Session H
+    // renumber, floor 1 until Session J). Target = the requested pane inset
+    // on EVERY engaged floor (Session J, plan D-C: the SPECS drawer lives on
+    // every floor, so the subject reframes into the uncovered strip wherever
+    // a drawer covers an edge — the D-M lift named for Session J, item 3):
+    // the request itself is the ONE pane edge (main.js _syncWorkbenchPanes),
+    // 0 when no drawer is open, so a ride away with the drawer closing drops
+    // the bias exactly as before; a ride with the drawer OPEN carries the bias
+    // to the destination floor. On a target edge the ease re-arms from the
+    // CURRENT value (a reversal mid-ease never snaps); reduced motion settles
+    // at once. The bias is a pure YAW about the camera's own up AFTER the
+    // shipped lookAt: by θ = atan(tan(fov/2) · aspect · b), b = inset /
+    // viewport width, so the anchor projects to x_ndc = b exactly (y_ndc stays
+    // 0) — the centre of the uncovered strip, on ship- and Earth-anchored
+    // floors alike. (Offsetting the look-at point instead would let lookAt
+    // re-orthogonalize the radial up against the new forward → a residual
+    // tilt; the yaw keeps the up exact.) Position, distance, up and the dolly
+    // frame above are untouched; bias 0 → no rotation, the pre-Wave-5 (3)
+    // frame byte-for-byte.
+    const insetTarget = lc.paneInsetPx;
     if (insetTarget !== lc.paneBiasTo) {
       lc.paneBiasFrom = lc.paneBiasPx;
       lc.paneBiasTo = insetTarget;
