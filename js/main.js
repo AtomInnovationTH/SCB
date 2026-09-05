@@ -4769,8 +4769,16 @@ function gameLoop(timestamp) {
     // Zoom Ladder G1: ladder ride/gesture frames are excluded the same way —
     // they are deliberate camera-flight transients, not steady state (see
     // _ladderAdaptHoldoff above).
+    // Session I follow-up (review): only NATIVE frames feed the history —
+    // `_frameSched.n === 1`. When the scheduler is deliberately skipping
+    // (hold n≈6-12, rest n=2 on a >60 Hz display), 1/realDt measures the
+    // SCHEDULE, not the machine (live probe: 30 s idle in a drawer sampled
+    // ~10-20 fps and drove HIGH → MEDIUM → LOW, a full post-chain rebuild
+    // flash mid-read). The gate self-heals for genuine slowness: a machine
+    // that cannot hold the target stretches the measured rAF period until
+    // skipFactor collapses to n = 1 — and its honest fps samples flow again.
     const _adaptHold = _ladderAdaptHoldoff(timestamp);
-    if (gameState.isGameplay() && timestamp >= _perfSettleUntil && !_adaptHold && Number.isFinite(fps) && fps > 0) {
+    if (gameState.isGameplay() && timestamp >= _perfSettleUntil && !_adaptHold && Number.isFinite(fps) && fps > 0 && _frameSched.n === 1) {
       _fpsHistory.push(fps);
       if (_fpsHistory.length > Constants.PERF.FPS_HISTORY_SIZE) _fpsHistory.shift();
     }
@@ -4784,7 +4792,11 @@ function gameLoop(timestamp) {
     // configurations (otherwise the disable-X delta-vs-baseline is measuring
     // tier-change drift instead of the toggled feature). Skip runtimeAdapt
     // entirely while a profile sweep session is live.
-    if (sceneManager && gameState.isGameplay() && !profileFlags.autoProfile && !profileFlags.pinTier && timestamp >= _perfSettleUntil && !_adaptHold && (_framesSinceLastTierChange % _ADAPT_CHECK_INTERVAL) === 0) {
+    // Session I follow-up (review): never DECIDE under an open drawer either
+    // (`_cover === 'partial'`) — the world is held, the history is pre-hold
+    // data, and an applyTier rebuild is a visible full-screen flash while the
+    // player reads. Adapt resumes on the close edge with the same history.
+    if (sceneManager && gameState.isGameplay() && !profileFlags.autoProfile && !profileFlags.pinTier && timestamp >= _perfSettleUntil && !_adaptHold && _cover !== 'partial' && (_framesSinceLastTierChange % _ADAPT_CHECK_INTERVAL) === 0) {
       const decision = runtimeAdapt({
         currentTier: sceneManager.currentTier,
         fpsHistory: _fpsHistory,
