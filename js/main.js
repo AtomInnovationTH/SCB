@@ -2621,6 +2621,10 @@ async function init() {
       window.__refit = refitPane;
       // Wave 5 (Session B): the TECH LIBRARY pane handle, same contract.
       window.__library = libraryPane;
+      // Session I: the world-clock handle for the thermal gate (rate 0 under
+      // HOLD — the policy witness beside window.__frameSched, which is always
+      // published). ?shot-gated like every harness handle here.
+      window.__timeAuthority = timeAuthority;
       // Debug handle for SunLight — lets a capture harness inspect bodies and
       // (for verification) temporarily reposition a body that is occluded all
       // session. Read-only intent; mutations are the harness's responsibility.
