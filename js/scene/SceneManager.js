@@ -105,6 +105,11 @@ export class SceneManager {
     this.currentTier = this._detectInitialTier();
     this.tierConfig = Constants.PERF.QUALITY_TIERS[this.currentTier];
 
+    // Session I (plan D-G, step 4): glass renders at pixel ratio 1.0 — main.js
+    // flips this via setGlassPixelRatioCap when TouchControls.detect() says
+    // the device is real touch. False by default: desktop is byte-identical.
+    this._glassPR1 = false;
+
     // setPixelRatio is honored by the tier (see _applyRendererPixelRatio).
     this._applyRendererPixelRatio(this.tierConfig);
     this.renderer.setSize(window.innerWidth, window.innerHeight);
@@ -286,6 +291,28 @@ export class SceneManager {
   }
 
   /**
+   * Session I (plan D-G, step 4) — glass renders at PIXEL RATIO 1.0. On an
+   * iPad the devicePixelRatio-2 render target quadruples fragment work for
+   * detail the game never leans on (aviation-display UI, bloom-heavy scene);
+   * tier caps (HIGH/MEDIUM 1.5) still burn ~2.25× the pixels of 1.0. main.js
+   * calls this once at init when TouchControls.detect() is true; the current
+   * tier's ratio re-applies immediately. Desktop never calls it —
+   * byte-identical. The `?pixelRatio=N` profiling override and the
+   * applyTierWithOverrides sweep path still WIN over the clamp (profiling
+   * must measure what it asked for).
+   * @param {boolean} on
+   */
+  setGlassPixelRatioCap(on) {
+    this._glassPR1 = !!on;
+    if (this.tierConfig) this._applyRendererPixelRatio(this.tierConfig);
+  }
+
+  /** @private The glass clamp: tier cap → min(cap, 1) on real touch devices. */
+  _pixelRatioCapFor(cap) {
+    return this._glassPR1 ? Math.min(cap, 1) : cap;
+  }
+
+  /**
    * Apply pixel-ratio cap from the tier config.
    * @private
    * @param {object} tier
@@ -293,7 +320,12 @@ export class SceneManager {
   _applyRendererPixelRatio(tier) {
     const devicePR = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
     let cap = (tier && Number.isFinite(tier.pixelRatioCap)) ? tier.pixelRatioCap : 2;
-    // Sprint 3 GPU profiling — `?pixelRatio=N` forces the cap regardless of tier.
+    // Session I: the glass clamp applies to every TIER cap (never above 1.0
+    // on real touch) …
+    cap = this._pixelRatioCapFor(cap);
+    // … while the Sprint 3 `?pixelRatio=N` profiling override still forces
+    // the cap regardless of tier AND glass — a profile run must measure
+    // exactly what it asked for.
     if (profileFlags.pixelRatioOverride !== null) {
       cap = profileFlags.pixelRatioOverride;
     }

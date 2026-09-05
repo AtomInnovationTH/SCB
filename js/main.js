@@ -749,6 +749,12 @@ async function init() {
 
   // --- Scene Manager (renderer, camera, post-processing) ---
   sceneManager = new SceneManager(canvas);
+  // Session I (plan D-G, step 4): glass renders at pixel ratio 1.0 — the
+  // retina render target quadruples fragment work the game never leans on.
+  // Real-touch detection only (TouchControls.detect: ontouchstart /
+  // pointer:coarse); desktop never takes the clamp — byte-identical. The
+  // current tier's ratio re-applies inside the setter.
+  if (TouchControls.detect()) sceneManager.setGlassPixelRatioCap(true);
   const scene = sceneManager.getScene();
   const camera = sceneManager.getCamera();
   _bootMark('SceneManager constructed (renderer + composer + bloom)');
