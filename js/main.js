@@ -260,6 +260,19 @@ if (_logBootEnabled) {
 // change, PAUSE_RESUME event) explicitly call `_scheduleNextFrame()` to
 // restart the loop.
 let _rafScheduled = false;
+// Session I follow-up (review, 2026-09-05): the pending rAF's id. `_flushScheduledFrame`
+// could always cancel a pending throttle setTimeout but NEVER a directly-scheduled
+// rAF — so any wake hook (focus, PAUSE_RESUME, STATE_CHANGE, visibilitychange)
+// that fired while an rAF was pending scheduled a SECOND loop, permanently:
+// probe evidence (tmp/probe-session-i-dup.mjs, headed Chromium, 120 Hz M4 Max)
+// showed entries/frame 1→2→3→4 with each window 'focus', i.e. 240–480 full
+// composer renders/s. The handle makes every pending frame cancellable.
+let _rafHandle = 0;
+// Belt-and-braces for the same leak: all rAF callbacks of one animation frame
+// share ONE DOMHighResTimeStamp, so a second gameLoop entry with the SAME
+// timestamp is always a duplicate loop — it returns without rescheduling and
+// the extra loop dies even if it somehow got scheduled.
+let _lastLoopTs = -1;
 // §14.1 Window-blur throttle flag. `visibilitychange` only fires when the
 // *tab* is hidden (e.g. switching to another browser tab). It does NOT fire
 // when the user Cmd-Tabs to another macOS app — the browser window is still
@@ -332,10 +345,10 @@ function _scheduleNextFrame() {
   if (intervalMs > 0) {
     _scheduleTimeoutHandle = setTimeout(() => {
       _scheduleTimeoutHandle = null;
-      requestAnimationFrame(gameLoop);
+      _rafHandle = requestAnimationFrame(gameLoop);
     }, intervalMs);
   } else {
-    requestAnimationFrame(gameLoop);
+    _rafHandle = requestAnimationFrame(gameLoop);
   }
 }
 
@@ -349,6 +362,15 @@ function _flushScheduledFrame() {
   if (_scheduleTimeoutHandle != null) {
     clearTimeout(_scheduleTimeoutHandle);
     _scheduleTimeoutHandle = null;
+  }
+  // Session I follow-up (review): a directly-pending rAF must be cancelled too,
+  // or this flush schedules a SECOND loop beside it — each survives forever
+  // (both reschedule at the end of their own gameLoop entry). This was the
+  // duplicate-loop leak: one Cmd-Tab / focus / state flip while an rAF was
+  // pending doubled every subsequent frame's sim + composer render.
+  if (_rafHandle) {
+    cancelAnimationFrame(_rafHandle);
+    _rafHandle = 0;
   }
   _rafScheduled = false;
   _scheduleNextFrame();
@@ -4565,6 +4587,14 @@ function gameLoop(timestamp) {
   if (_logBootEnabled && !_bootFirstFrameMarked) {
     _bootMark('first gameLoop() entry (rAF fired)');
   }
+  // Session I follow-up (review): duplicate-loop guard. Every rAF callback of
+  // one animation frame receives the SAME DOMHighResTimeStamp, so a second
+  // entry with an identical timestamp is always a duplicate scheduled loop
+  // (the _flushScheduledFrame leak, now also cancelled at the source). Return
+  // WITHOUT touching _rafScheduled and WITHOUT rescheduling — the extra loop
+  // dies here; the frame's real entry already owns the reschedule.
+  if (timestamp === _lastLoopTs) return;
+  _lastLoopTs = timestamp;
   // We're now running this tick — clear the dedup flag so wakeups can
   // re-schedule. Schedule the next frame only at the end (when we know
   // we want to keep running). Wake hooks call `_scheduleNextFrame()` to
