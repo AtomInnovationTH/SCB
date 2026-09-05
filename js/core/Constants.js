@@ -5496,10 +5496,18 @@ export const Constants = {
 
   // === PERFORMANCE TUNING (PR 3 + PR 4) ===
   PERF: {
-    // null | 60 | 120 — cap RAF to a target FPS (null = no cap, follow display refresh).
-    // On 120/144 Hz displays a hard 60 fps gate causes every-other-frame skips
-    // (judder). Default `null` lets the browser run at native refresh.
-    FRAME_CAP: null,
+    // --- Session I (2026-09-05): the adaptive frame schedule (plan D-G/D-F).
+    // Pacing is "draw every Nth refresh" by FRAME COUNTING against the
+    // measured rAF period (js/core/FrameSched.js), never a time threshold —
+    // the old opt-in FRAME_CAP ms-gate is RETIRED (it skipped unevenly against
+    // a 120 Hz rAF stream; its null default had shipped no cap since PR 3).
+    // The skip factor clamps at N = max(1, round(measuredHz / target)), so a
+    // display at or below the target (60 Hz at rest, headless SwiftShader)
+    // never skips a frame.
+    REST_FPS: 60,        // gameplay at rest: draw ~60 fps (native during input/rides)
+    BOOST_MS: 1000,      // native-refresh window after any input in gameplay
+    HOLD_FPS: 10,        // drawer-open heartbeat (world clock 0 — D-F held world)
+    HOLD_BOOST_MS: 500,  // native window after input while a drawer is open
 
     // --- PR 4 / P1.5: Quality tier system ---
     // Each tier is a config object consumed by SceneManager._setupPostProcessing()

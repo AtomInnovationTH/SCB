@@ -136,6 +136,7 @@ import { profileFlags } from './core/ProfileFlags.js';
 import { devShotGate } from './core/DevShotGate.js';
 import { installBlackFrameProbe } from './core/BlackFrameProbe.js';
 import { viewCover, coverSkipsPaint } from './ui/viewCover.js';
+import { FrameSched, SAMPLE_WINDOW, MAX_SAMPLE_MS } from './core/FrameSched.js';
 import { AutoProfileSweep } from './systems/AutoProfileSweep.js';
 import { gameState as _gameStateRefForProfile } from './core/GameState.js';
 
@@ -422,11 +423,32 @@ function _emitRafCallerDiagnostic(timestamp) {
   console.log(`[logPause] _scheduleNextFrame callers/s: ${summary}`);
 }
 
-// Frame pacing — opt-in cap via Constants.PERF.FRAME_CAP (null = native refresh).
-// Historic FRAME_INTERVAL hard-gate to 60 fps removed: it caused every-other-frame
-// judder on 120/144 Hz displays. See PR 3 / Subtask P1.7.
-let lastFrameTime = 0;
+// Session I (2026-09-05) — the adaptive frame schedule (plan D-G/D-F; the
+// policy laws live in js/core/FrameSched.js, this block owns the loop state).
+// Pacing is "draw every Nth refresh" by FRAME COUNTING against the MEASURED
+// rAF period — never a time threshold. The historic FRAME_CAP ms-gate is
+// RETIRED (its null default had shipped "no cap" since PR 3; a ms interval
+// against a 120 Hz rAF stream skips unevenly — the old judder).
 let frameCount = 0;
+// Rolling rAF-to-rAF deltas (bounded at FrameSched.SAMPLE_WINDOW; deltas over
+// MAX_SAMPLE_MS are scheduling gaps, not display cadence, and are dropped).
+const _rafDeltas = [];
+let _lastRafTs = 0;
+// Last boost-worthy input (pointer / touch / wheel / key / pane edge /
+// purchase), on the rAF/performance.now clock.
+let _schedLastInputMs = -1e9;
+let _schedTick = 0;                 // rAF-entry counter for the Nth-beat draw
+let _launchCeremonyLive = false;    // intro ride (LAUNCH_CEREMONY_* events)
+// THE published policy witness (one object, fields mutated per frame; the
+// headless gate asserts POLICY — mode + n — never fps: SwiftShader runs
+// ~4 fps and its measured period clamps N to 1 by design).
+const _frameSched = { mode: 'rest', n: 1 };
+if (typeof window !== 'undefined') window.__frameSched = _frameSched;
+/** Note a boost-worthy input on the rAF clock (passive; never wakes the loop —
+ *  in gameplay the loop always has a pending rAF, so the next entry sees it). */
+function _noteSchedInput() {
+  _schedLastInputMs = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+}
 
 // PR 4 / P1.5 — Quality tier auto-adapt rolling FPS history + cooldown counter.
 // Owned here (not inside SceneManager) so the gameLoop owns both the producer
@@ -1463,6 +1485,9 @@ async function init() {
       const refitOpen = !!(refitPane && refitPane.isOpen());
       const libraryOpen = !!(libraryPane && libraryPane.isOpen());
       _workbenchPaneOpen = refitOpen || libraryOpen;
+      // Session I: a pane slide is a boost-worthy edge (FrameSched — the
+      // drawer animates at native rate).
+      _noteSchedInput();
       const inset = (refitOpen && libraryOpen) ? 0
         : (refitOpen ? refitPane.widthPx()
           : (libraryOpen ? -libraryPane.widthPx() : 0));
@@ -2101,10 +2126,9 @@ async function init() {
       }
       _syncAudioCtxState();
     } else {
-      // Newly visible — reset last-frame timers so next dt is small.
+      // Newly visible — reset the last-frame timer so next dt is small.
       const now = performance.now();
       lastTime = now;
-      lastFrameTime = now;
       _syncAudioCtxState();   // resumes ctx if state policy says so
       _flushScheduledFrame(); // wakes loop (gameLoop's hidden early-return
                               // skipped scheduling the next rAF)
@@ -2144,10 +2168,26 @@ async function init() {
     _windowBlurred = false;
     const now = performance.now();
     lastTime = now;
-    lastFrameTime = now;
     _syncAudioCtxState();
     _flushScheduledFrame();
   });
+
+  // Session I — boost sources for the adaptive frame schedule (FrameSched):
+  // any pointer / touch / wheel / key input returns the loop to native refresh
+  // for PERF.BOOST_MS (HOLD_BOOST_MS under an open drawer). Capture-phase +
+  // passive: sees every input regardless of target/preventDefault, costs one
+  // timestamp write. Hover changes ride the pointermove note (a hover IS a
+  // pointer move); pane slides and purchases are noted below (the pane edge in
+  // _syncWorkbenchPanes, UPGRADE_PURCHASED here — a card click is already a
+  // pointerdown, the event covers keyboard/queued purchases).
+  for (const ev of ['pointerdown', 'pointermove', 'wheel', 'keydown', 'touchstart']) {
+    window.addEventListener(ev, _noteSchedInput, { capture: true, passive: true });
+  }
+  eventBus.on(Events.UPGRADE_PURCHASED, _noteSchedInput);
+  // The intro launch ceremony is a camera ride: native while it flies (the
+  // same TeachingSystem blocker signal pair — plan Session I step 2).
+  if (Events.LAUNCH_CEREMONY_START) eventBus.on(Events.LAUNCH_CEREMONY_START, () => { _launchCeremonyLive = true; });
+  if (Events.LAUNCH_CEREMONY_COMPLETE) eventBus.on(Events.LAUNCH_CEREMONY_COMPLETE, () => { _launchCeremonyLive = false; });
 
   // --- Hide loading screen ---
   // F7 boot resilience: this is the ONE place the loading screen is dismissed —
@@ -4545,20 +4585,19 @@ function gameLoop(timestamp) {
     return;
   }
 
-  // PR 3 / P1.7 — Opt-in frame cap (default: null → no cap, follow display refresh).
-  // Old hard-coded 60 fps gate caused judder on 120/144 Hz displays.
-  const frameCap = Constants.PERF.FRAME_CAP;
-  if (frameCap !== null) {
-    const interval = 1000 / frameCap;
-    if (timestamp - lastFrameTime < interval) return;
-    // Drift correction: increment by interval, not assign timestamp, so the cap
-    // averages cleanly. If we fell behind badly, snap forward to avoid
-    // spiral-of-death.
-    lastFrameTime += interval;
-    if (timestamp - lastFrameTime > interval * 4) lastFrameTime = timestamp;
-  } else {
-    lastFrameTime = timestamp;
+  // Session I — measure the display's real rAF cadence (median of the last
+  // SAMPLE_WINDOW deltas → FrameSched.medianPeriodMs). Sampled on every
+  // visible, unblurred rAF entry — skipped ticks included, because the sample
+  // measures the DISPLAY, not the draw rate. Deltas above MAX_SAMPLE_MS are
+  // scheduling gaps (menus/pause throttles, tab switches), not cadence.
+  if (_lastRafTs > 0) {
+    const _rafDelta = timestamp - _lastRafTs;
+    if (_rafDelta > 0 && _rafDelta <= MAX_SAMPLE_MS) {
+      _rafDeltas.push(_rafDelta);
+      if (_rafDeltas.length > SAMPLE_WINDOW) _rafDeltas.shift();
+    }
   }
+  _lastRafTs = timestamp;
 
   // Debug: record frame time (pre-existing — runs even when paused, like before)
   if (debugOverlay) {
@@ -4599,6 +4638,52 @@ function gameLoop(timestamp) {
   // the function) so that the `document.hidden` and `gameFlowManager.paused`
   // early-returns above genuinely halt the loop.
   _scheduleNextFrame();
+
+  // Render policy (08-workbench §2): ONE viewCover signal per frame, computed
+  // HERE so both consumers read the same value — the frame SCHEDULER below
+  // ('partial' = a workbench drawer is open → the held-world heartbeat) and
+  // the paint skip at the render site ('full' = an opaque plate covers the
+  // canvas → the whole composer + HUD write is skipped). Session I plumbs the
+  // pane-open bit (plan step 1): _workbenchPaneOpen is the same D-F signal
+  // that zeroes the world clock through TimeAuthority.calmCap.
+  const _cover = viewCover({
+    codexVisible: !!(codexViewerUI && codexViewerUI.isVisible && codexViewerUI.isVisible()),
+    shopVisible: !!(shopScreen && shopScreen.visible),
+    paneOpen: _workbenchPaneOpen,
+  });
+  const _skipPaint = coverSkipsPaint(_cover, { diagnosticsArmed: !!blackFrameProbe || !!devShotGate.requested });
+
+  // Session I — the adaptive frame schedule (FrameSched; plan D-G/D-F).
+  // Draw every Nth REFRESH by frame counting; a skipped refresh skips the
+  // WHOLE tick (sim + render) after the reschedule above, so `dt` accumulates
+  // to the drawn frame — identical to a slower display, no partial-tick
+  // logic. Gameplay only: menus/pause/hidden/blur keep their shipped interval
+  // throttles above. Diagnostics that read the framebuffer force native
+  // (?bfp; a pending ?shot capture) — same law as coverSkipsPaint.
+  _schedTick++;
+  if (gameState.isGameplay()) {
+    const _dragS = (cameraSystem && cameraSystem._ladderCam) ? cameraSystem._ladderCam.drag : null;
+    const _sched = FrameSched.plan({
+      cover: _cover,
+      nowMs: timestamp,
+      lastInputMs: _schedLastInputMs,
+      riding: _launchCeremonyLive
+        || !!(ladderController && ladderController.isRiding && ladderController.isRiding()),
+      dragLive: !!(_dragS && (_dragS.isDragging
+        || Math.abs(_dragS.velocityTheta) > 1e-4 || Math.abs(_dragS.velocityPhi) > 1e-4)),
+      periodMs: FrameSched.medianPeriodMs(_rafDeltas),
+      perf: Constants.PERF,
+    });
+    _frameSched.mode = _sched.mode;
+    _frameSched.n = (blackFrameProbe || devShotGate.requested) ? 1 : _sched.n;
+    if (!FrameSched.shouldDraw(_schedTick, _frameSched.n)) {
+      if (_logPauseEnabled) _logPauseFramesSkipped++;
+      return; // whole tick skipped — next rAF is already scheduled
+    }
+  } else {
+    _frameSched.mode = 'rest';
+    _frameSched.n = 1;
+  }
 
   // Delta time in seconds (cap to prevent spiral of death)
   const realDt = Math.min((timestamp - lastTime) / 1000, 0.1);
@@ -4748,18 +4833,15 @@ function gameLoop(timestamp) {
 
   const currentState = gameState.currentState;
 
-  // Render policy (08-workbench §2): ONE viewCover signal per frame. Under a
-  // 'full' cover (Tech Library open / ShopScreen plate — both ~opaque) the
-  // scene paint and the HUD DOM writes are skipped below; the SIM POLICY IS
-  // UNCHANGED (every system still ticks). MenuScreen is not a cover (its plate
-  // is translucent; the live scene behind it is the design). Never skipped
-  // while the BlackFrameProbe (?bfp) or the ?shot harness is armed — both read
-  // the framebuffer and a skipped render would read as the black they triage.
-  const _cover = viewCover({
-    codexVisible: !!(codexViewerUI && codexViewerUI.isVisible && codexViewerUI.isVisible()),
-    shopVisible: !!(shopScreen && shopScreen.visible),
-  });
-  const _skipPaint = coverSkipsPaint(_cover, { diagnosticsArmed: !!blackFrameProbe || !!devShotGate.requested });
+  // Render policy: `_cover` / `_skipPaint` were computed at the TOP of the
+  // tick (the ONE viewCover signal per frame — the frame scheduler consumes
+  // 'partial' there; Session I). Under a 'full' cover (Tech Library open /
+  // ShopScreen plate — both ~opaque) the scene paint and the HUD DOM writes
+  // are skipped below; the SIM POLICY IS UNCHANGED (every system still
+  // ticks). MenuScreen is not a cover (its plate is translucent; the live
+  // scene behind it is the design). Never skipped while the BlackFrameProbe
+  // (?bfp) or the ?shot harness is armed — both read the framebuffer and a
+  // skipped render would read as the black they triage.
 
   // --- Always update visuals (scene renders behind menus) ---
   const sunDir = sunLight.update(dt, player.getPosition());

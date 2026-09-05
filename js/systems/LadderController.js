@@ -321,6 +321,22 @@ export class LadderController {
   }
 
   /**
+   * Is a ladder camera ride in flight? (Session I — the frame scheduler's
+   * ride signal: rides run at native refresh, plan D-G.) The truth is the
+   * CORE's ride token — set by `rideStarted` in `_startRide`, cleared by
+   * `rideFinished` in the ride's `done` (the `_rideSeq` guard drops
+   * superseded completions, so a replacement ride keeps this true until ITS
+   * end). Allocation-free (the adaptHoldoff law); guarded for injected
+   * ladder stubs that pre-date the core accessor. Disengaged/flag-off: false.
+   * @returns {boolean}
+   */
+  isRiding() {
+    if (!this._engaged) return false;
+    return !!(this._ladder.isRiding ? this._ladder.isRiding()
+      : this._ladder.getState().mode === 'riding');
+  }
+
+  /**
    * Per-frame tick. Handles engage/disengage lifecycle, the core's escalation
    * timers (charge decay, settle-back, alarms), and rail refresh.
    * @param {number} [tMs] - monotonic clock; defaults to now()
