@@ -352,8 +352,8 @@ export const Constants = {
   // constraint is far >= D_max + R (D = camera distance from Earth center),
   // because a star directly behind Earth sits at camera distance D + R. The
   // shipped far (500) therefore only covers D <= 100 u; the ladder's
-  // Earth-anchored floors (F6 D <= 255 @ far 500, F7 D <= 1300 @ far 2000)
-  // break it — far-plane clipping blacks out the F6 sky and the F7 camera
+  // Earth-anchored floors (F4 D <= 255 @ far 500, F5 D <= 1300 @ far 2000)
+  // break it — far-plane clipping blacks out the F4 sky and the F5 camera
   // exits the shell entirely. Fix: follow mode (Starfield.setFollowCamera)
   // re-centers the shell on the camera each update, making stars pure
   // direction chrome at camera distance exactly R — inside every floor's far
@@ -4705,7 +4705,7 @@ export const Constants = {
   // ============================================================================
   LADDER: {
     ENABLED: true,           // master switch — ON since 2026-09-02 (owner decision, early M6 flip; docs/ladder/03-plan.md); ?ladder=0 forces off for this boot (A/B), ?ladder=1 is now a no-op
-    DEV_FULL_ACCESS: true,   // all 7 floors reachable now; campaign unlock gating is roadmap
+    DEV_FULL_ACCESS: true,   // INERT since the Session H renumber: no shipping floor carries entryRequiresDock (03-plan Session H FINDINGS (d)); the ZoomLadder gate mechanism stays live for the M6 campaign-gating roadmap
     INVERT_SCROLL: false,    // S2 WheelRouter: invert scroll direction (00-spec §4 "an invert setting exists")
   },
 

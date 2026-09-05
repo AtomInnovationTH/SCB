@@ -1,15 +1,15 @@
 /**
- * HullCamFloor.js — the Zoom Ladder F3 (HULL CAM) floor content orchestrator
+ * HullCamFloor.js — the Zoom Ladder HULL CAM floor (id 1) content orchestrator
  * (S4, FloorContract.FLOORS[2]).
  *
- * F3 is the subject-anchored close-inspection floor (2–12 m). This module is
- * the F3 "costume" controller: it owns the blueprint/inspect surface while the
+ * HULL CAM is the subject-anchored close-inspection floor (2–12 m). This module is
+ * the floor's "costume" controller: it owns the blueprint/inspect surface while the
  * ladder is on the floor (costume.transform 'lens-split-5m'):
  *   - the BlueprintOverlay callout layer — leader-lined labels on the seven
  *     manifest subsystems (ENGINEERING / POWER / BERTHS / COMMS / CARGO /
  *     SENSORS / THERMAL — D9, js/data/blueprintSubsystems.js), filling the
  *     floor's labelBudget (7) exactly;
- *   - the LENS SPLIT at 5 m (F3.lens.splitAtM, 00-spec.md §3): the camera
+ *   - the LENS SPLIT at 5 m (FLOOR.lens.splitAtM, 00-spec.md §3 F1): the camera
  *     distance picks the DEFAULT lens — *detail* below the split (ONE focused
  *     subsystem, expanded readout from real systems via injected providers)
  *     vs *overview* at/above it (all callouts, compact). Crossing the split
@@ -56,10 +56,10 @@ import { BlueprintOverlay, CARD_ROW_BUDGET } from '../ui/BlueprintOverlay.js';
 import { BLUEPRINT_SUBSYSTEMS, anchorLocalU } from '../data/blueprintSubsystems.js';
 
 /** The F1 (HULL CAM) contract row — by id, never by index (Session H). */
-const F3 = FloorContract.byId(1);
+const FLOOR = FloorContract.byId(1);
 
 /** The two lens modes, straight from the contract (['detail', 'overview']). */
-const [LENS_DETAIL, LENS_OVERVIEW] = F3.lens.modes;
+const [LENS_DETAIL, LENS_OVERVIEW] = FLOOR.lens.modes;
 
 export class HullCamFloor {
   /**
@@ -106,17 +106,17 @@ export class HullCamFloor {
     this._lensOverride = null;
   }
 
-  /** The lens split boundary in metres (= FloorContract F3 lens.splitAtM). */
-  static get SPLIT_M() { return F3.lens.splitAtM; }
+  /** The lens split boundary in metres (= the HULL CAM row's lens.splitAtM). */
+  static get SPLIT_M() { return FLOOR.lens.splitAtM; }
 
   /**
    * The lens the camera distance picks by default: detail below the split,
-   * overview at/above it (00-spec.md §3 F3). Pure + static.
+   * overview at/above it (00-spec.md §3 F1). Pure + static.
    * @param {number} distM - camera→subject distance in metres
    * @returns {string} 'detail' | 'overview'
    */
   static lensDefaultForDistM(distM) {
-    return (distM < F3.lens.splitAtM) ? LENS_DETAIL : LENS_OVERVIEW;
+    return (distM < FLOOR.lens.splitAtM) ? LENS_DETAIL : LENS_OVERVIEW;
   }
 
   /** @returns {boolean} */
@@ -135,14 +135,14 @@ export class HullCamFloor {
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────
 
-  /** Enter F3: show the blueprint costume (state kept across re-entry). */
+  /** Enter HULL CAM: show the blueprint costume (state kept across re-entry). */
   activate() {
     if (this._active) return;
     this._active = true;
     if (this._overlay.show) this._overlay.show();
   }
 
-  /** Leave F3: hide the costume. */
+  /** Leave HULL CAM: hide the costume. */
   deactivate() {
     if (!this._active) return;
     this._active = false;
@@ -170,7 +170,7 @@ export class HullCamFloor {
   // ── The Space verb: lens-toggle ────────────────────────────────────────────
 
   /**
-   * Dispatch the F3 Space verb (FloorContract.FLOORS[2].spaceVerb
+   * Dispatch the HULL CAM Space verb (FloorContract.byId(1).spaceVerb
    * 'lens-toggle'). One key cycles the whole inspection carousel:
    *   overview → detail(sub₁) → detail(sub₂) → … → detail(subₙ) → overview →…
    * so it toggles the lens (00-spec §3) AND switches the focused subsystem
@@ -202,7 +202,7 @@ export class HullCamFloor {
   // ── Per-frame ──────────────────────────────────────────────────────────────
 
   /**
-   * Render one frame of the F3 costume. No-op while inactive.
+   * Render one frame of the HULL CAM costume. No-op while inactive.
    * @param {object} [ctx]
    * @param {number} [ctx.distM]    - camera→subject distance in metres (drives
    *                 the lens default; non-finite → the last default holds)
@@ -233,7 +233,7 @@ export class HullCamFloor {
 
     const callouts = this._overlay.render(items, project, {
       lens,
-      budget: F3.labelBudget,
+      budget: FLOOR.labelBudget,
       centerX: ctx.centerX,
     });
     return { lens, focusId: this._focusId, callouts };

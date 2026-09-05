@@ -253,7 +253,7 @@ export class FloorMask {
    * → restore the shipped fully-visible cockpit and hide the vitals line.
    * Idempotent for the already-applied floor. While disabled only the floor
    * is remembered.
-   * @param {number|null} floorId - FloorContract floor id (1..7) or null
+   * @param {number|null} floorId - FloorContract floor id (1..5) or null
    */
   setFloor(floorId) {
     if (this._disposed) return;
@@ -442,7 +442,7 @@ export class FloorMask {
    * writes it directly, the rung stays the ONE writer). NOT the adapter's
    * `isVisible()`: HUD's DOM rungs answer false for a pane that is merely OFF
    * SCREEN (their getClientRects check — PaneDensity's "don't waste a rung"
-   * rule), and reading that as "hidden" captured `pin: false` on F4 for every
+   * rule), and reading that as "hidden" captured `pin: false` on the flying floor (pre-renumber F4, now F2) for every
    * player who had not pinned an upgrade goal yet (the widget is display:none
    * until then), then density-hid the widget the moment they pinned one (Wave 4
    * behaviour; fixed 2026-09-04, Session G review, once the D5 store began

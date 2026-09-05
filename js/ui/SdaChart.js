@@ -1,8 +1,8 @@
 /**
- * SdaChart.js — the Zoom Ladder F7 (SDA DOWNLINK) whole-domain chart overlay
+ * SdaChart.js — the Zoom Ladder SDA DOWNLINK (id 5) whole-domain chart overlay
  * (S5, M4, FloorContract.FLOORS[6]).
  *
- * On F7 the camera sits 500–1300 u from Earth center and the domain is read as
+ * On the SDA floor the camera sits 500–1300 u from Earth center and the domain is read as
  * a CHART, not a scene: an Earth-centered altitude-band diagram of the 200–2000
  * km LEO shells with aggregated object counts per band (live debris clusters +
  * active satellites), the GEO ring pinned to the left/right screen edges by the
@@ -10,7 +10,7 @@
  * the map is actually compressed — never silently distort), and a decade-scale
  * Kessler timeline strip along the bottom.
  *
- * TWO LENSES (FloorContract.FLOORS[6].chart.lenses, flipped by the F7 Space
+ * TWO LENSES (FloorContract.byId(5).chart.lenses, flipped by the SDA Space
  * verb 'flip-lens'):
  *   - VALUE  — gold (VisualLaw.COLORS.VALUE, STEADY — gold never pulses):
  *     salvage mass per band from the canonical FloorContract.MASS_BANDS table
@@ -34,7 +34,7 @@
  *
  * VISUAL LAW: color is never the sole channel (lens is double-encoded: ramp
  * color AND which figures are drawn — mass tonnage vs density bars — AND the
- * THREAT pulse); at most `labelBudget` (F7 = 7) named labels are painted,
+ * THREAT pulse); at most `labelBudget` (SDA = 7) named labels are painted,
  * ranked by lens weight (rankLabels). Axis numerals / honesty tags are chart
  * chrome, not world labels.
  *
@@ -44,7 +44,7 @@
  * centered), so render() rasterizes ONLY when the frame signature changes
  * (lens, viewport, band aggregates, timeline inputs). The THREAT pulse (the
  * one legitimately time-varying element) repaints at most every
- * PULSE_TICK_MS (250 ms → ≤4 Hz real, the F6 DOM-write cap precedent), never
+ * PULSE_TICK_MS (250 ms → ≤4 Hz real, the NAVCOM DOM-write cap precedent), never
  * per frame. The gate is the pure static shouldPaint() so tests pin it
  * headless. render() always computes and returns frame descriptors; painting
  * is the gated side effect.
@@ -54,7 +54,7 @@
  * DOM-guarded (inert + constructible in Node tests).
  *
  * FLOOR CONTENT (parallel track, docs/ladder/03-plan.md): no camera, no debris
- * source, no game loop, no EventBus — SdaFloor (the F7 orchestrator) feeds it
+ * source, no game loop, no EventBus — SdaFloor (the floor orchestrator) feeds it
  * aggregates + a viewport and owns the lifecycle; the serial track wires
  * SdaFloor into main.js/LadderController.
  *
@@ -65,16 +65,16 @@ import { Constants } from '../core/Constants.js';
 import { VisualLaw } from '../core/VisualLaw.js';
 import { FloorContract } from '../core/FloorContract.js';
 
-/** The F5 (SDA) contract row (chart framing + labelBudget + lenses) — by id (Session H). */
-const F7 = FloorContract.byId(5);
+/** The SDA DOWNLINK (id 5) contract row (chart framing + labelBudget + lenses) — by id (Session H). */
+const FLOOR = FloorContract.byId(5);
 
 /** The two lenses, in flip order. VALUE is the arrival default (00-spec §3). */
-export const LENSES = F7.chart.lenses; // ['VALUE', 'THREAT']
+export const LENSES = FLOOR.chart.lenses; // ['VALUE', 'THREAT']
 
 /**
  * THREAT-pulse repaint quantum (ms): the only time-varying paint input is the
  * pulse phase, quantized so the canvas rasterizes at ≤4 Hz real — the same cap
- * the F6 planner uses for warp-driven countdown text (G1). VALUE is STEADY
+ * the NAVCOM planner uses for warp-driven countdown text (G1). VALUE is STEADY
  * (gold never pulses — VisualLaw law), so on VALUE nothing repaints until the
  * data/viewport/lens signature changes. Own-module tunable (house rule).
  */
@@ -106,7 +106,7 @@ export const CASCADE_CEIL_FACTOR = 20;
  */
 export const BAU_QUADRUPLE_YEAR = 2059;
 
-/** Chart chrome colors (not VisualLaw semantics — the F7 chart costume). */
+/** Chart chrome colors (not VisualLaw semantics — the SDA chart costume). */
 const CHART_EARTH_BLUE = 'rgba(24, 62, 100, 0.92)'; // chart-blue flat disc
 const CHART_GRID = 'rgba(0, 204, 255, 0.18)';       // faint INFO grid/rings
 
@@ -134,7 +134,7 @@ export function satAltKm(sat) {
 }
 
 /**
- * Aggregate live objects into the F7 altitude bands.
+ * Aggregate live objects into the SDA altitude bands.
  *
  * Bands are the canonical FloorContract.MASS_BANDS.LEO_SUB_BANDS shells
  * (never Constants.DEBRIS.ALT_BANDS / DebrisMap's UI array — the SSOT rule):
@@ -331,7 +331,7 @@ export function buildTimeline(opts = {}) {
 }
 
 /**
- * Aspect-derived radial map (the MEO compression, 00-spec §3 F7).
+ * Aspect-derived radial map (the MEO compression, 00-spec §3 F5).
  *
  * The LEO zone (Earth disc + shells up to the last band's top) is drawn at an
  * HONEST linear scale sized to LEO_VFRAC of the half-height; the MEO zone
@@ -352,7 +352,7 @@ export function meoRadialMap(vp) {
   const bands = FloorContract.MASS_BANDS.LEO_SUB_BANDS;
   const leoTopKm = bands[bands.length - 1].altKm[1]; // 2000 km
   const leoTopU = RE_U + leoTopKm * Constants.SCENE_SCALE; // 83.71 u
-  const geoU = F7.chart.geoRingU;
+  const geoU = FLOOR.chart.geoRingU;
 
   const leoTopPx = (h / 2) * LEO_VFRAC;
   const sLeoPxPerU = leoTopPx / leoTopU;
@@ -379,13 +379,13 @@ export function radiusPxForAltKm(map, altKm) {
 }
 
 /**
- * Rank label candidates for the floor's labelBudget (F7 = 7): weight-desc,
+ * Rank label candidates for the floor's labelBudget (SDA = 7): weight-desc,
  * stable on ties by id, truncate. Pure — mirrors ClusterIcons.rank.
  * @param {Array<{id:*, weight:number}>} candidates
- * @param {number} [budget] - default F7.labelBudget
+ * @param {number} [budget] - default FLOOR.labelBudget (the SDA row)
  * @returns {Array}
  */
-export function rankLabels(candidates, budget = F7.labelBudget) {
+export function rankLabels(candidates, budget = FLOOR.labelBudget) {
   const list = Array.isArray(candidates) ? candidates.slice() : [];
   list.sort((a, b) => {
     const dw = (b.weight || 0) - (a.weight || 0);
@@ -406,7 +406,7 @@ export class SdaChart {
     this._ctx2d = null;
     this._built = false;
     this._visible = false;
-    this._lens = LENSES[0]; // VALUE — the arrival default (00-spec §3 F7)
+    this._lens = LENSES[0]; // VALUE — the arrival default (00-spec §3 F5)
     // Write-on-change state (G1): last painted signature + paint clock.
     this._lastSig = null;
     this._lastPaintMs = -Infinity;
@@ -428,7 +428,7 @@ export class SdaChart {
     return this._lens;
   }
 
-  /** Flip VALUE↔THREAT (the F7 'flip-lens' Space verb). @returns {string} new lens */
+  /** Flip VALUE↔THREAT (the SDA 'flip-lens' Space verb). @returns {string} new lens */
   flipLens() {
     this._lens = LENSES[(LENSES.indexOf(this._lens) + 1) % LENSES.length];
     return this._lens;
@@ -482,7 +482,7 @@ export class SdaChart {
     this._built = true;
     const canvas = document.createElement('canvas');
     canvas.id = 'ladder-sda-chart';
-    // z-index 33: the F7 costume layer (the F6 icon layer is hidden on F7 —
+    // z-index 33: the SDA costume layer (the NAVCOM icon layer is hidden on the SDA floor —
     // the two floors never paint together).
     canvas.style.cssText = [
       'position:absolute', 'left:0', 'top:0', 'width:100%', 'height:100%',
@@ -509,7 +509,7 @@ export class SdaChart {
     this._visible = false;
     if (this._canvas) {
       this._canvas.style.opacity = '0';
-      // Clear immediately so a re-shown F7 never flashes a stale frame.
+      // Clear immediately so a re-shown chart never flashes a stale frame.
       if (this._ctx2d) this._ctx2d.clearRect(0, 0, this._canvas.width, this._canvas.height);
     }
   }
@@ -577,7 +577,7 @@ export class SdaChart {
       text: 'KESSLER TIMELINE 1957\u21922126',
       rPx: 0,
     });
-    const labels = rankLabels(candidates, F7.labelBudget);
+    const labels = rankLabels(candidates, FLOOR.labelBudget);
 
     const timeline = m.timeline || null;
     const sig = SdaChart.frameSig({
@@ -623,7 +623,7 @@ export class SdaChart {
       : 1;
 
     // Earth: chart-blue flat disc (the chart costume — an overlay, the real
-    // Earth mesh is untouched; the F7 visual-defaults revisit owns the 3D
+    // Earth mesh is untouched; the SDA visual-defaults revisit owns the 3D
     // overlay sphere).
     const rEarth = Constants.EARTH_RADIUS * map.sLeoPxPerU;
     g.beginPath();
@@ -669,7 +669,7 @@ export class SdaChart {
     g.textAlign = 'center';
     g.fillStyle = VisualLaw.COLORS.INFO;
     g.globalAlpha = 0.8;
-    if (map.compressed) g.fillText(F7.chart.compressionTag, cx, 16);
+    if (map.compressed) g.fillText(FLOOR.chart.compressionTag, cx, 16);
     if (lens === 'VALUE') {
       g.fillText('sub-LEO band masses are estimates (EST)', cx, 30);
     } else {

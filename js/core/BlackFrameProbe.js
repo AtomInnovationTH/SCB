@@ -1,11 +1,11 @@
 /**
  * BlackFrameProbe.js — in-page black-flicker triage instrument (dev-only).
  *
- * CONTEXT (black-flicker triage, 2026-08): on ladder floors F6/F7 a large black
+ * CONTEXT (black-flicker triage, 2026-08): on the Earth-anchored ladder floors (now F4/F5; F6/F7 at the time) a large black
  * rectangle intermittently covers most of the WebGL canvas on the user's
  * machine (Brave / ANGLE-Metal / dpr2 / 120 Hz). It flickers frame-to-frame,
  * DOM renders fine on top, and ANY window resize heals it instantly. It has
- * NEVER reproduced headless (SwiftShader renders F6/F7 flawlessly), and the
+ * NEVER reproduced headless (SwiftShader renders them flawlessly), and the
  * user is done running console snippets — so this probe is fully self-serve:
  * add `?bfp=2` to the URL and play; it renders its own verdict badge.
  *

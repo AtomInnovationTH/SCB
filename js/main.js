@@ -1741,12 +1741,13 @@ async function init() {
     // F7 hides the constellation figures under the SDA chart and restores the
     // player's 6-key prior on leave/disengage.
     starfield,
-    // F7 also suppresses the Earth city/landmark pills under the chart —
+    // F5 (SDA) also suppresses the Earth city/landmark pills under the chart —
     // transient (never persisted), so the 5-key preference owns the resting
     // state on leave/disengage.
     cityLabels,
-    // Reticle gating (F6/F7 ship-is-icon floors): the controller hides the
-    // aiming reticles on floors >= 6 and restores them on <= 5 / disengage.
+    // Reticle gating (F4/F5 ship-is-icon floors — NAVCOM/SDA): the controller
+    // hides the aiming reticles on floors >= 4 and restores them on <= 3 /
+    // disengage.
     // Optional deps — inert while LADDER.ENABLED is false (never engaged).
     targetReticle,
     dockingReticle,

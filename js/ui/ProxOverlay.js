@@ -1,13 +1,13 @@
 /**
- * ProxOverlay.js — the Zoom Ladder F5 (PROX NET) tactical overlay (S4).
+ * ProxOverlay.js — the Zoom Ladder PROX NET (id 3) tactical overlay (S4).
  *
- * On F5 the near field stays live (fidelity.debrisMode 'tactical') but the
+ * On the PROX NET floor the near field stays live (fidelity.debrisMode 'tactical') but the
  * working range is 100 m – 120 km: individual meshes are sub-pixel, so this
  * layer draws the tactical read over them:
  *   - VALUE-CODED OBJECT MARKERS from DebrisField.getEnhancedTargetList()
  *     (estimatedPoints/risk fields): VisualLaw VALUE gold, steady, marker
  *     radius exaggerated by value (MARKER_MIN_PX..MARKER_MAX_PX against
- *     VALUE_REF_PTS) — never color-alone. At most `labelBudget` (F5 = 7)
+ *     VALUE_REF_PTS) — never color-alone. At most `labelBudget` (PROX NET = 7)
  *     markers carry a text label, ranked by estimatedPoints.
  *   - PLAYER MARKER + orbit direction: a PLAYER-green chevron rotated to the
  *     screen-space velocity heading (the ClusterIcons ship grammar).
@@ -21,8 +21,8 @@
  *     white with a heavier ring (selection is the ONLY use of white).
  *
  * Pattern-matches the ClusterIcons/ReachOrb overlay style: one full-screen
- * canvas, pointer-events:none (F5 selection is CYCLED by the floor controller
- * — click/keyboard-free per the F5 brief — so no hitboxes are mounted), built
+ * canvas, pointer-events:none (selection is CYCLED by the floor controller
+ * — click/keyboard-free per the PROX NET brief — so no hitboxes are mounted), built
  * lazily on show(), opacity-transitioned, fully DOM-guarded (inert +
  * constructible headless). render() always computes and RETURNS the frame
  * descriptors so tests assert layout/ranking/colors without a browser;
@@ -54,8 +54,8 @@ export const TRAJ_WIDTH_MAX_PX = 3;
 /** Insertion-point ring radius (px); the selected ring draws 1.4×. */
 export const INSERTION_RING_PX = 8;
 
-/** The F3 (PROX NET) contract row (labelBudget source) — by id (Session H). */
-const F5 = FloorContract.byId(3);
+/** The PROX NET (id 3) contract row (labelBudget source) — by id (Session H). */
+const FLOOR = FloorContract.byId(3);
 
 /** @private clamp to [0,1] */
 const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
@@ -195,9 +195,9 @@ export class ProxOverlay {
     this._built = true;
     const canvas = document.createElement('canvas');
     canvas.id = 'ladder-prox-overlay';
-    // z-index 32 (ReachOrb's slot — the two never coexist: orb is F6, this is
-    // F5): beneath the cluster icons (33) + transfer panel (34). No hitboxes:
-    // F5 selection cycling is dispatch-driven (ProxNetFloor.cycleInsertion),
+    // z-index 32 (ReachOrb's slot — the two never coexist: orb is NAVCOM, this is
+    // PROX NET): beneath the cluster icons (33) + transfer panel (34). No hitboxes:
+    // selection cycling is dispatch-driven (ProxNetFloor.cycleInsertion),
     // so the whole layer stays pointer-events:none.
     canvas.style.cssText = [
       'position:absolute', 'left:0', 'top:0', 'width:100%', 'height:100%',
@@ -214,7 +214,7 @@ export class ProxOverlay {
     this._visible = false;
     if (this._canvas) {
       this._canvas.style.opacity = '0';
-      // Clear immediately so a re-shown F5 never flashes a stale frame.
+      // Clear immediately so a re-shown overlay never flashes a stale frame.
       if (this._ctx2d) this._ctx2d.clearRect(0, 0, this._canvas.width, this._canvas.height);
     }
   }
@@ -235,7 +235,7 @@ export class ProxOverlay {
    *                 {radiusU, radiusKm, sat01, cumCount} (rings center on ship)
    * @param {object|null} [frame.insertion] - {candidates, selectedIndex} from
    *                 the InsertionPlanner via ProxNetFloor
-   * @param {number} [frame.labelBudget] - default F5 labelBudget (7)
+   * @param {number} [frame.labelBudget] - default FLOOR.labelBudget (7)
    * @param {(pos:{x,y,z}) => {x,y,visible}} project - world→screen
    * @returns {{
    *   markers: Array<{id, x, y, visible, rPx, color, labeled, label, risk}>,
@@ -248,7 +248,7 @@ export class ProxOverlay {
    * }}
    */
   render(frame = {}, project) {
-    const budget = (frame.labelBudget != null) ? frame.labelBudget : F5.labelBudget;
+    const budget = (frame.labelBudget != null) ? frame.labelBudget : FLOOR.labelBudget;
     const proj = (typeof project === 'function')
       ? project
       : () => ({ x: 0, y: 0, visible: false });

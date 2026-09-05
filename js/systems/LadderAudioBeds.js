@@ -173,7 +173,7 @@ export class LadderAudioBeds {
    * Crossfade the beds to `floorId`'s audioBed (~BED_FADE_MS). null fades to
    * silence (ladder disengage). Idempotent for the already-active bed. While
    * disabled (setEnabled(false)) only the floor is remembered — no nodes.
-   * @param {number|null} floorId - FloorContract floor id (1..7) or null
+   * @param {number|null} floorId - FloorContract floor id (1..5) or null
    */
   setFloor(floorId) {
     if (this._disposed) return;

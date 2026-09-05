@@ -166,10 +166,10 @@ export class NavSphere {
      *  recomputed every draw, covering the comms panel's ~0.3s height animation. */
     this._commsResizeSettleAt = null;
 
-    // --- Zoom Ladder F5 additive opts (S4, 'NavSphere:corner-minimap') ---
+    // --- Zoom Ladder PROX NET (id 3) additive opts (S4, 'NavSphere:corner-minimap') ---
     // Both null by default ⇒ every shipped code path below is byte-identical.
     // While CORNER-MOUNTED (ProxMiniSphere.mount) the sphere shrinks in place
-    // to this radius and the layer is FORCED ON (the minimap is the F5 floor
+    // to this radius and the layer is FORCED ON (the minimap is the PROX NET floor
     // costume — the manual 8-key hold and the minimized one-liner are
     // suspended, not overwritten: their flags survive for the unmount).
     /** @type {number|null} corner-minimap radius (px), null = unmounted */
@@ -356,7 +356,7 @@ export class NavSphere {
    * @returns {number} px
    */
   getReservedHeight() {
-    // Corner-mounted (Zoom Ladder F5): the minimap is force-shown at the mount
+    // Corner-mounted (Zoom Ladder PROX NET): the minimap is force-shown at the mount
     // radius regardless of the suspended hidden/minimized flags.
     if (this._cornerMountRadiusPx != null) return 2 * this._cornerMountRadiusPx;
     if (this._hidden || !this._visible) return 0;
@@ -368,7 +368,7 @@ export class NavSphere {
   setSelectedTarget(id) { this._selectedTargetId = id; }
 
   /**
-   * Zoom Ladder F5 additive opt — corner-minimap mount (S4,
+   * Zoom Ladder PROX NET additive opt — corner-minimap mount (S4,
    * FloorContract.FLOORS[4].costume 'NavSphere:corner-minimap', transform
    * 'navsphere-to-minimap'). While mounted the sphere draws at `radiusPx` in
    * its usual comms-anchored top-right corner, the canvas is forced visible
@@ -391,7 +391,7 @@ export class NavSphere {
   }
 
   /**
-   * Zoom Ladder F5 additive opt — the floor-fed tactical layer (see
+   * Zoom Ladder PROX NET additive opt — the floor-fed tactical layer (see
    * ProxMiniSphere): focused cluster bearing + selected insertion point,
    * drawn by update() over the radar contacts. The descriptor is stored by
    * reference (the adapter mutates ONE reused object; no per-frame stores).
@@ -416,7 +416,7 @@ export class NavSphere {
    * @param {object}        [data.armManager] - ArmManager for jellyfish tether viz
    */
   update(dt, data) {
-    // Corner-mounted (Zoom Ladder F5): the mount suspends the manual hold —
+    // Corner-mounted (Zoom Ladder PROX NET): the mount suspends the manual hold —
     // the minimap draws while the flags keep the player's choice for unmount.
     if (this._hidden && this._cornerMountRadiusPx == null) return;
     // Self-heal the forced display against shipped flag-driven hides
@@ -456,7 +456,7 @@ export class NavSphere {
 
     // Minimized (8 key): draw only the LAT/LON/ALT one-liner and skip the
     // sphere. _geoCache above is still refreshed so the readout stays live.
-    // (Suspended while corner-mounted — the F5 minimap always draws the orb.)
+    // (Suspended while corner-mounted — the PROX NET minimap always draws the orb.)
     if (this._minimized && this._cornerMountRadiusPx == null) {
       this._drawMinReadout();
       return;
@@ -492,7 +492,7 @@ export class NavSphere {
     // §13 Sprint 4 (Phase 3 audit): cache the comms-panel bottom across draws
     // to avoid a per-draw sync layout flush. Invalidated on resize and
     // VIEW_CONFIG_CHANGE. At 10 Hz this saves ~10 layout flushes/s.
-    // Zoom Ladder F5: while corner-mounted the SAME corner anchor applies at
+    // Zoom Ladder PROX NET: while corner-mounted the SAME corner anchor applies at
     // the mount radius — the orb visually shrinks in place (the costume
     // transform 'navsphere-to-minimap').
     const R = this._cornerMountRadiusPx != null ? this._cornerMountRadiusPx : SPHERE_RADIUS;
@@ -649,7 +649,7 @@ export class NavSphere {
       }
     }
 
-    // ---- Zoom Ladder F5 tactical overlay (additive; null ⇒ skipped) ----
+    // ---- Zoom Ladder PROX NET tactical overlay (additive; null ⇒ skipped) ----
     // Floor-fed context over the radar: focused cluster bearing + selected
     // insertion point (see setTacticalOverlay / ProxMiniSphere). Drawn before
     // the selected target + player dot so the actionables stay on top.
@@ -715,7 +715,7 @@ export class NavSphere {
     }
 
     // [8] hotkey badge at the sphere's top-right corner (matches [7]/[0]).
-    // Suppressed while corner-mounted: the F5 minimap is the floor costume,
+    // Suppressed while corner-mounted: the PROX NET minimap is the floor costume,
     // not the 8-key orb — the key badge would advertise a suspended toggle.
     if (this._cornerMountRadiusPx == null) {
       this._drawKeyBadge(ctx, cx + R - 4, cy - R + 4);
@@ -740,12 +740,12 @@ export class NavSphere {
   }
 
   /**
-   * @private Zoom Ladder F5 tactical overlay (additive — only drawn when
+   * @private Zoom Ladder PROX NET tactical overlay (additive — only drawn when
    * setTacticalOverlay() stored a descriptor). VisualLaw grammar, never
    * color-alone:
    *   - focused cluster bearing: VALUE-gold RING (the cluster 'ring-count'
    *     shape) + name label, distance-encoded via _toSphereWithDistance and
-   *     clamped to the rim (the F5 corridor target usually sits beyond the
+   *     clamped to the rim (the PROX NET corridor target usually sits beyond the
    *     sensor's outer zone);
    *   - selected insertion point: SELECTION-white ring + cross-hair ticks +
    *     zone label (the ProxOverlay insertion grammar; white = selection ONLY).

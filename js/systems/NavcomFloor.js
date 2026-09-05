@@ -1,8 +1,8 @@
 /**
- * NavcomFloor.js — the Zoom Ladder F6 (NAVCOM) floor content orchestrator
+ * NavcomFloor.js — the Zoom Ladder NAVCOM floor (id 4) content orchestrator
  * (S5, M3, FloorContract.FLOORS[5]).
  *
- * F6 is Earth-anchored orbital-neighborhood planning. This module is the F6
+ * NAVCOM is Earth-anchored orbital-neighborhood planning. This module is its
  * "costume" controller: it owns the floor's replacement content while the near
  * field is off and the full debris meshes are hidden
  * (fidelity.debrisMode === 'clusters', costume.transform 'ship-to-icon'):
@@ -32,7 +32,7 @@
  *     not. The verb instead calls the injected `onPlanTransfer(cluster, window)`.
  *
  * LadderController drives this: it activates the floor when the arrival floor's
- * debrisMode is 'clusters' (F6) and ticks update() each frame while active.
+ * debrisMode is 'clusters' (NAVCOM) and ticks update() each frame while active.
  *
  * @module systems/NavcomFloor
  */
@@ -45,12 +45,12 @@ import { computeTransferWindow, clusterToOrbitKm } from '../entities/LaunchWindo
 import { orbitToKm, sceneToKm } from '../entities/OrbitalMechanics.js';
 import { assess } from '../entities/ReachabilityModel.js';
 
-/** The F4 (NAVCOM) contract row — by id, never by index (Session H). */
-const F6 = FloorContract.byId(4);
+/** The NAVCOM (id 4) contract row — by id, never by index (Session H). */
+const FLOOR = FloorContract.byId(4);
 
 /**
  * FUEL-REACHABILITY: minimum real-time interval between getMassBudget() polls
- * while F6 is active. Assessments recompute on refresh/focus and whenever a
+ * while the NAVCOM floor is active. Assessments recompute on refresh/focus and whenever a
  * poll sees the ΔV budget move (a burn, cargo change) — never per frame.
  * Own-module tunable (house rule: not FloorContract/Constants).
  */
@@ -71,7 +71,7 @@ export class NavcomFloor {
    * @param {function} [deps.getMassBudget] - OPTIONAL fuel-reachability source:
    *                 () => ArmManager.getMassBudget(). When present, per-cluster
    *                 ΔV/fuel/time assessments + the reachability orb light up;
-   *                 when absent, behavior is byte-identical to the pre-F6-reach
+   *                 when absent, behavior is byte-identical to the pre-reachability
    *                 module (no budget reads, no orb DOM, no clock reads).
    * @param {object} [deps.reachOrb]      - ReachOrb instance (default: fresh)
    * @param {function} [deps.now]         - monotonic ms clock (tests)
@@ -114,7 +114,7 @@ export class NavcomFloor {
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────
 
-  /** Enter F6: show the costume + take a first cluster sample. */
+  /** Enter NAVCOM: show the costume + take a first cluster sample. */
   activate() {
     if (this._active) return;
     this._active = true;
@@ -126,7 +126,7 @@ export class NavcomFloor {
     if (this._getMassBudget && this._orb.show) this._orb.show();
   }
 
-  /** Leave F6: hide the costume (state kept so re-entry is cheap). */
+  /** Leave NAVCOM: hide the costume (state kept so re-entry is cheap). */
   deactivate() {
     if (!this._active) return;
     this._active = false;
@@ -253,7 +253,7 @@ export class NavcomFloor {
   // ── Per-frame ────────────────────────────────────────────────────────────────
 
   /**
-   * Render one frame of the F6 costume. No-op while inactive.
+   * Render one frame of the NAVCOM costume. No-op while inactive.
    * @param {object} [ctx]
    * @param {function} [ctx.project] - world→screen (overrides the dep for this frame)
    * @param {{x,y,z}} [ctx.shipPos]  - ship world position (chevron)
@@ -267,7 +267,7 @@ export class NavcomFloor {
     this._maybePollBudget();
     const project = ctx.project || this._project;
     const icons = this._icons.render(this._clusters, project, {
-      budget: F6.labelBudget,
+      budget: FLOOR.labelBudget,
       focusId: this._focusId,
       assessments: this._getMassBudget ? this._assessments : null,
     });
@@ -299,7 +299,7 @@ export class NavcomFloor {
   // ── The Space verb: plan-transfer ────────────────────────────────────────────
 
   /**
-   * Dispatch the F6 Space verb (FloorContract.FLOORS[5].spaceVerb 'plan-transfer').
+   * Dispatch the NAVCOM Space verb (FloorContract.byId(4).spaceVerb 'plan-transfer').
    * Selects the focused cluster, computes its transfer window, refreshes the
    * planner surface, and hands (cluster, window) to the injected sink for the
    * serial track to engage autopilot + fan out to legacy consumers.

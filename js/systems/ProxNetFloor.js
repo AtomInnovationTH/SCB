@@ -1,11 +1,11 @@
 /**
- * ProxNetFloor.js — the Zoom Ladder F5 (PROX NET) floor content orchestrator
+ * ProxNetFloor.js — the Zoom Ladder PROX NET floor (id 3) content orchestrator
  * (S4, FloorContract.FLOORS[4]).
  *
- * F5 is the ship-anchored tactical floor (100 m – 120 km, debrisMode
+ * PROX NET is the ship-anchored tactical floor (100 m – 120 km, debrisMode
  * 'tactical'): threat/density context around the ship, approach-corridor
  * picking against the aimed cluster, cluster context at range. This module is
- * the F5 "costume" controller — it owns the floor's tactical overlay
+ * the floor's "costume" controller — it owns the floor's tactical overlay
  * (ProxOverlay) and the data behind it:
  *   - VALUE MARKERS: DebrisField.getEnhancedTargetList() entries
  *     (estimatedPoints/risk) merged with each target's LIVE canonical debris
@@ -15,10 +15,10 @@
  *     (getDebrisNear), drawn as translucent rings in the orbital plane;
  *   - INSERTION PLAN: when a target cluster is aimed, InsertionPlanner's
  *     edge/mid/core arrival candidates with risk-colored trajectories.
- *     The cluster comes from the injected `getFocusedCluster` — the F6→F5
+ *     The cluster comes from the injected `getFocusedCluster` — the NAVCOM→PROX NET
  *     HANDOFF (production wiring: () => navcomFloor.getFocusedCluster(), so
  *     the cluster focused on NAVCOM is the corridor target on PROX NET);
- *   - the Space verb 'approach' (00-spec.md §5, FloorContract F5 spaceVerb):
+ *   - the Space verb 'approach' (00-spec.md §5, the floor row's spaceVerb):
  *     approach() commits the SELECTED arrival point and hands
  *     (cluster, arrivalPoint) to the injected `onApproach` sink — production
  *     wiring routes it into AutopilotSystem.engageCluster(cluster,
@@ -32,11 +32,11 @@
  *     cluster bearing + selected insertion point per frame. Rendering stays
  *     on the shipped main.js NavSphere ticker (see ProxMiniSphere's header).
  *     Absent dep ⇒ no adapter, byte-identical;
- *   - the 'tactical-approach' CONTEXT PANEL (FloorContract F5 contextPanel):
+ *   - the 'tactical-approach' CONTEXT PANEL (the floor row's contextPanel):
  *     ProxContextPanel (TransferWindows house pattern — DOM-guarded, G1
  *     write-on-change) mounted/unmounted with the floor and fed {cluster,
  *     candidates, selectedIndex, approach} per frame. Self-contained — no
- *     generic context-panel framework exists yet (F6/F7 shipped without one).
+ *     generic context-panel framework exists yet (NAVCOM/SDA shipped without one).
  *
  * DESIGN (docs/ladder/03-plan.md, PARALLEL track — the NavcomFloor pattern):
  *   - Every dependency is INJECTED and optional, so the module is
@@ -50,7 +50,7 @@
  *   - Debris scans (target list, shell counts, insertion risk) run on a
  *     REFRESH_MS throttle + on activate/selection — never per frame. Per
  *     frame is projection + painting only.
- *   - SELECTION is cycled, not clicked (click/keyboard-free per the F5
+ *   - SELECTION is cycled, not clicked (click/keyboard-free per the PROX NET
  *     brief): cycleInsertion(±1) steps edge→mid→core; the serial pass may
  *     bind it to any input it likes. The selected zone survives re-plans.
  *
@@ -64,17 +64,17 @@ import { ProxContextPanel } from '../ui/ProxContextPanel.js';
 import { shellCounts, SHELL_RADII_KM } from '../entities/FieldRiskModel.js';
 import { plan as planInsertion } from '../entities/InsertionPlanner.js';
 
-/** The F3 (PROX NET) contract row — by id, never by index (Session H). */
-const F5 = FloorContract.byId(3);
+/** The PROX NET (id 3) contract row — by id, never by index (Session H). */
+const FLOOR = FloorContract.byId(3);
 
 /** Minimum real-time interval between debris re-polls (target list, shell
- *  counts, insertion re-plan) while F5 is active. Own-module tunable (house
+ *  counts, insertion re-plan) while the PROX NET floor is active. Own-module tunable (house
  *  rule: not FloorContract/Constants). */
 export const REFRESH_MS = 500;
 
-/** Marker search radius: the F5 working range's outer edge (120 km in scene
+/** Marker search radius: the floor's working range's outer edge (120 km in scene
  *  units) — matches camera.distU[1] of the floor. */
-export const TACTICAL_RANGE_U = F5.camera.distU[1];
+export const TACTICAL_RANGE_U = FLOOR.camera.distU[1];
 
 /** Monotonic ms clock (headless-safe; injectable for tests). */
 const _nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
@@ -98,14 +98,14 @@ export class ProxNetFloor {
    *                 getDebrisNear, getDebrisById (each individually optional)
    * @param {object} [deps.player]       - getPosition/getVelocity + orbit /
    *                 getOrbitalElements() (ΔV estimates, shell plane)
-   * @param {function} [deps.getFocusedCluster] - the F6→F5 handoff: returns the
+   * @param {function} [deps.getFocusedCluster] - the NAVCOM→PROX NET handoff: returns the
    *                 aimed cluster (NavcomFloor.getFocusedCluster) or null
    * @param {function} [deps.onApproach] - verb sink: (cluster, arrivalPoint) =>
    *                 void — production: autopilot engageCluster(cluster,
    *                 { arrivalPoint })
    * @param {object} [deps.proxOverlay]  - ProxOverlay instance (default: fresh)
    * @param {object} [deps.navSphere]    - the SHIPPED NavSphere instance for the
-   *                 F5 corner minimap ('NavSphere:corner-minimap'); wrapped in
+   *                 PROX NET corner minimap ('NavSphere:corner-minimap'); wrapped in
    *                 a ProxMiniSphere adapter. Absent (with no miniSphere) ⇒ no
    *                 minimap — byte-identical to the pre-minimap module
    * @param {object} [deps.miniSphere]   - ProxMiniSphere-shaped adapter override
@@ -120,7 +120,7 @@ export class ProxNetFloor {
     this._getFocusedCluster = deps.getFocusedCluster || null;
     this._onApproach = deps.onApproach || null;
     this._overlay = deps.proxOverlay || new ProxOverlay();
-    // F5 corner minimap: only ever constructed AROUND an injected NavSphere
+    // PROX NET corner minimap: only ever constructed AROUND an injected NavSphere
     // (the shipped singleton) — never fresh, so no dep means no adapter at all.
     this._mini = deps.miniSphere
       || (deps.navSphere ? new ProxMiniSphere({ navSphere: deps.navSphere }) : null);
@@ -157,7 +157,7 @@ export class ProxNetFloor {
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────
 
-  /** Enter F5: show the costume + take a first data sample. */
+  /** Enter PROX NET: show the costume + take a first data sample. */
   activate() {
     if (this._active) return;
     this._active = true;
@@ -169,7 +169,7 @@ export class ProxNetFloor {
     if (this._panel && this._panel.show) this._panel.show();
   }
 
-  /** Leave F5: hide the costume (state kept so re-entry is cheap). */
+  /** Leave PROX NET: hide the costume (state kept so re-entry is cheap). */
   deactivate() {
     if (!this._active) return;
     this._active = false;
@@ -219,7 +219,7 @@ export class ProxNetFloor {
       this._shells = shellCounts(near, pos, SHELL_RADII_KM).shells;
     }
 
-    // Insertion plan against the aimed cluster (the F6→F5 handoff).
+    // Insertion plan against the aimed cluster (the NAVCOM→PROX NET handoff).
     this._plan = null;
     const cluster = (typeof this._getFocusedCluster === 'function')
       ? (this._getFocusedCluster() || null)
@@ -261,7 +261,7 @@ export class ProxNetFloor {
     return (o && o.semiMajorAxis > 0) ? o : null;
   }
 
-  // ── Insertion selection (cycled — click/keyboard-free per the F5 brief) ────
+  // ── Insertion selection (cycled — click/keyboard-free per the PROX NET brief) ────
 
   /** @returns {number} index of the selected candidate (−1 without a plan). */
   getSelectedIndex() {
@@ -294,7 +294,7 @@ export class ProxNetFloor {
   // ── Per-frame ───────────────────────────────────────────────────────────────
 
   /**
-   * Render one frame of the F5 costume. No-op while inactive. Debris scans are
+   * Render one frame of the PROX NET costume. No-op while inactive. Debris scans are
    * throttled (REFRESH_MS); the per-frame work is marker position reads +
    * projection + painting.
    * @param {object} [ctx]
@@ -344,7 +344,7 @@ export class ProxNetFloor {
       insertion: this._plan
         ? { candidates: this._plan.candidates, selectedIndex: this.getSelectedIndex() }
         : null,
-      labelBudget: F5.labelBudget,
+      labelBudget: FLOOR.labelBudget,
     }, ctx.project);
 
     // Feed the corner minimap + the context panel from the floor's own state.
@@ -368,7 +368,7 @@ export class ProxNetFloor {
   // ── The Space verb: approach ────────────────────────────────────────────────
 
   /**
-   * Dispatch the F5 Space verb (FloorContract.FLOORS[4].spaceVerb 'approach').
+   * Dispatch the PROX NET Space verb (FloorContract.byId(3).spaceVerb 'approach').
    * Commits the SELECTED arrival point against the aimed cluster and hands
    * (cluster, arrivalPoint) to the injected sink — production wiring routes it
    * into AutopilotSystem.engageCluster(cluster, { arrivalPoint }). The verb

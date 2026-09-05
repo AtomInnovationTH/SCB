@@ -7,7 +7,7 @@
  *
  * The whole sky lives in one group ('StarfieldGroup'), world-fixed at the
  * origin by default. setFollowCamera(true) re-centers that shell on the camera
- * every update() — the Zoom Ladder F6/F7 BLACK-SKY fix (see setFollowCamera).
+ * every update() — the Zoom Ladder F4/F5 (NAVCOM/SDA) BLACK-SKY fix (see setFollowCamera).
  * @module scene/Starfield
  */
 
@@ -104,7 +104,7 @@ export class Starfield {
 
     // Accumulated time for the star twinkle shader uniform.
     this._time = 0;
-    // Camera-follow mode (Zoom Ladder F6/F7 BLACK-SKY fix) — OFF by default:
+    // Camera-follow mode (Zoom Ladder F4/F5 BLACK-SKY fix) — OFF by default:
     // the shipped shell is world-fixed at the origin and update() never touches
     // the group transform. See setFollowCamera().
     this._followCamera = false;
@@ -944,17 +944,17 @@ export class Starfield {
   }
 
   /**
-   * Enable/disable camera-follow mode (Zoom Ladder F6/F7 BLACK-SKY fix).
+   * Enable/disable camera-follow mode (Zoom Ladder F4/F5 BLACK-SKY fix).
    *
    * The starfield is a world-fixed shell of radius STAR_SPHERE_RADIUS (400 u)
    * centered on Earth. A world-fixed shell is only fully visible while
    * far >= D_max + R, where D is the camera's distance from Earth center —
    * a star directly behind Earth sits at camera distance D + R, NOT R. The
    * shipped pairing (far 500) therefore only covers D <= 100 u, which the
-   * Earth-anchored ladder floors exceed: on F6 (D ∈ [70, 255], far 500)
+   * Earth-anchored ladder floors exceed: on F4 (D ∈ [70, 255], far 500)
    * far-plane point clipping opens a black annulus around Earth's disk
-   * (appearing at D ≈ 123, swallowing the whole sky by D ≈ 167 — F6 max is
-   * 255), and on F7 (D ∈ [500, 1300], far 2000) the camera EXITS the 400 u
+   * (appearing at D ≈ 123, swallowing the whole sky by D ≈ 167 — F4 max is
+   * 255), and on F5 (D ∈ [500, 1300], far 2000) the camera EXITS the 400 u
    * shell entirely, leaving stars only in an 18–53° cap.
    *
    * Following re-centers the shell on the camera's WORLD position every
@@ -976,7 +976,7 @@ export class Starfield {
    * Known follow-mode limits (cosmetic/dev-only, owned by the ladder wiring):
    * the SunLight body depth masks (BODY_DEPTH_MASK_DIST, coupled to the
    * world-fixed shell) can sit beyond the followed stars for far-side bodies,
-   * letting stars show through a body disc at F6/F7 ranges. (The ?shot=1
+   * letting stars show through a body disc at F4/F5 ranges. (The ?shot=1
    * harness hooks — __scbSkyPose/__scbProject, main.js — add the shell
    * group's offset since the serial hub wiring, so they stay in sync in
    * follow mode.)
@@ -1022,7 +1022,7 @@ export class Starfield {
     // sin(uTime*2.5 + phase) continuous across the wrap so twinkle never jumps.
     this._time = (this._time + dt) % 251.327;
 
-    // Camera-follow (F6/F7 BLACK-SKY fix — rationale in setFollowCamera): copy
+    // Camera-follow (F4/F5 BLACK-SKY fix — rationale in setFollowCamera): copy
     // the camera's WORLD position into the group BEFORE anything below derives
     // world poses this frame (the label limb fade reads label.getWorldPosition).
     // Duck-typed cameras without getWorldPosition (tests / older call shapes)

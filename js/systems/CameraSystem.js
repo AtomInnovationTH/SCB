@@ -661,8 +661,8 @@ export class CameraSystem {
       },
       _dragUp: new THREE.Vector3(),
       _dragRight: new THREE.Vector3(),
-      // F3 (HULL CAM) inspect side-effect absorption (T6): true while the
-      // engaged ladder floor is 3 and the inspect dim/overlay effects are
+      // HULL CAM (floor 1) inspect side-effect absorption (T6): true while the
+      // engaged ladder floor is 1 and the inspect dim/overlay effects are
       // applied. See _ladderApplyInspectFx.
       inspectFxActive: false,
       // B1 (docs/ladder/08-workbench.md §8) — "flying backwards" fix. On SHIP
@@ -4294,11 +4294,12 @@ export class CameraSystem {
     } else {
       this._ladderUpFor(lc.anchor, radialDir, this.camera.up);
     }
-    // Wave 5 (3) — the F3 look-at bias (08-workbench §2). Target = the requested
-    // pane inset while the engaged floor is 3, else 0: a ride away sets lc.floor
+    // Wave 5 (3) — the F1 look-at bias (08-workbench §2; F3 before the Session H
+    // renumber). Target = the requested
+    // pane inset while the engaged floor is 1, else 0: a ride away sets lc.floor
     // to the destination at ride start, so the bias eases OUT during the flight
     // (the controller closes the pane at the same moment → the request drops to
-    // 0 too); a same-floor flick ride keeps lc.floor = 3, so an open pane never
+    // 0 too); a same-floor flick ride keeps lc.floor = 1, so an open pane never
     // wobbles. On a target edge the ease re-arms from the CURRENT value (a
     // reversal mid-ease never snaps); reduced motion settles at once. The bias
     // is a pure YAW about the camera's own up AFTER the shipped lookAt: by

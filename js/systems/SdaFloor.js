@@ -1,8 +1,8 @@
 /**
- * SdaFloor.js — the Zoom Ladder F7 (SDA DOWNLINK) floor content orchestrator
+ * SdaFloor.js — the Zoom Ladder SDA DOWNLINK floor (id 5) content orchestrator
  * (S5, M4, FloorContract.FLOORS[6]).
  *
- * F7 is the Earth-anchored whole-domain strategic chart. This module is the F7
+ * SDA DOWNLINK is the Earth-anchored whole-domain strategic chart. This module is its
  * "costume" controller: it owns the floor's replacement content while the near
  * field is off, the full debris meshes are hidden, and the ship is out of
  * frame (fidelity.debrisMode === 'massBands', costume.transform
@@ -15,7 +15,7 @@
  *     projection from KesslerSystem's quadratic density model);
  *   - the two lenses — VALUE (gold, mass-weighted) / THREAT (red,
  *     count-weighted + timeline) — with VALUE the arrival default
- *     (00-spec §3 F7) and the endings free to land on THREAT via setLens();
+ *     (00-spec §3 F5) and the endings free to land on THREAT via setLens();
  *   - the Space verb 'flip-lens' (00-spec §5): flipLens(), dispatched by
  *     LadderController (HANDOFF — the serial track wires the verb case).
  *
@@ -33,7 +33,7 @@
  *   - DATA CADENCE: sources are re-polled on activate() and then at most
  *     every DATA_REFRESH_MS from the per-frame tick — never per frame (the
  *     cluster pass walks the whole debris list). The chart itself rasterizes
- *     write-on-change only (SdaChart's G1 gate), so a calm F7 costs zero
+ *     write-on-change only (SdaChart's G1 gate), so a calm SDA floor costs zero
  *     paints and one aggregation pass per refresh window.
  *
  * @module systems/SdaFloor
@@ -42,12 +42,12 @@
 import { FloorContract } from '../core/FloorContract.js';
 import { SdaChart, aggregateBands, buildTimeline, LENSES } from '../ui/SdaChart.js';
 
-/** The F5 (SDA) contract row — by id, never by index (Session H). */
-const F7 = FloorContract.byId(5);
+/** The SDA DOWNLINK (id 5) contract row — by id, never by index (Session H). */
+const FLOOR = FloorContract.byId(5);
 
 /**
  * Minimum real-time interval between source re-polls (cluster walk + sat list
- * + kessler status) while F7 is active. The chart reads slow strategic data;
+ * + kessler status) while the SDA floor is active. The chart reads slow strategic data;
  * per-frame aggregation would be pure waste (G1 discipline at the data layer).
  * Own-module tunable (house rule: not FloorContract/Constants).
  */
@@ -92,7 +92,7 @@ export class SdaFloor {
   // ── Lifecycle ──────────────────────────────────────────────────────────────
 
   /**
-   * Enter F7: reset the lens to the arrival default (VALUE — 00-spec §3 F7),
+   * Enter the SDA floor: reset the lens to the arrival default (VALUE — 00-spec §3 F5),
    * take a fresh data sample, and show the chart.
    */
   activate() {
@@ -103,7 +103,7 @@ export class SdaFloor {
     if (this._chart.show) this._chart.show();
   }
 
-  /** Leave F7: hide the chart (state kept so re-entry is cheap). */
+  /** Leave the SDA floor: hide the chart (state kept so re-entry is cheap). */
   deactivate() {
     if (!this._active) return;
     this._active = false;
@@ -172,7 +172,7 @@ export class SdaFloor {
   getLens() { return this._chart.getLens(); }
 
   /**
-   * Dispatch the F7 Space verb (FloorContract.FLOORS[6].spaceVerb
+   * Dispatch the SDA Space verb (FloorContract.byId(5).spaceVerb
    * 'flip-lens'): flip VALUE↔THREAT. The next update() repaints (the flip
    * changes the frame signature). Callable while inactive (harmless — the
    * lens is reset to VALUE on the next arrival anyway).
@@ -190,7 +190,7 @@ export class SdaFloor {
   // ── Per-frame ──────────────────────────────────────────────────────────────
 
   /**
-   * Render one frame of the F7 costume. No-op while inactive. Re-polls the
+   * Render one frame of the SDA costume. No-op while inactive. Re-polls the
    * sources at most every DATA_REFRESH_MS; the chart rasterizes only when its
    * frame signature changed (write-on-change — G1).
    * @param {object} [ctx]

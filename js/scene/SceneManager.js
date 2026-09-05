@@ -38,7 +38,7 @@ const NEAR_FIELD_FAR_DEFAULT = 0.01;   // 1 km — construction default, replace
 const _nfWorldPos = new THREE.Vector3();   // scratch for _updateNearCamera (no per-frame alloc)
 const _nfSetNearLayer = (o) => { o.layers.set(NEAR_FIELD_LAYER); };  // traverse cb (no per-frame closure alloc)
 // Black-flicker triage (H1 discriminator): `?nf=1` forces the near-field pass
-// to stay ENABLED on ladder floors whose contract disables it (F6/F7). The
+// to stay ENABLED on ladder floors whose contract disables it (F4/F5 — NAVCOM/SDA). The
 // disabled path is the only per-floor render-sequence difference on the floors
 // that black out; if a forced-on session never blacks, the disabled path is
 // convicted. Opt-in, exact-value only, parsed once (DevShotGate idiom);
@@ -173,8 +173,8 @@ export class SceneManager {
     this._ladderFidelity = null;
 
     /**
-     * Zoom Ladder F6/F7 render-block content refs (T1 costume 'ship-to-icon').
-     * On floors whose `debrisMode` iconizes the field (F6 'clusters'), the full
+     * Zoom Ladder F4/F5 (NAVCOM/SDA) render-block content refs (T1 costume 'ship-to-icon').
+     * On floors whose `debrisMode` iconizes the field (F4 'clusters'), the full
      * debris meshes are replaced by cluster icons and the world ship mesh by a
      * chevron, so both are hidden and RE-ASSERTED across applyTier() alongside
      * nearFieldEnabled. Registered once from main.js (setLadderContentRefs); null
@@ -187,7 +187,7 @@ export class SceneManager {
     this._ladderShip = null;
     /**
      * @type {?{setFollowCamera?:function}} star shell switched to camera-follow on
-     * the Earth-anchored floors (F6/F7 — see setLadderFloorFidelity), back to the
+     * the Earth-anchored floors (F4/F5 — see setLadderFloorFidelity), back to the
      * shipped world-fixed pose on floors <= 5 and on disengage.
      */
     this._ladderStarfield = null;
@@ -655,14 +655,14 @@ export class SceneManager {
    * this on floor arrival with the FloorContract fidelity + clip planes, or with
    * `null` on disengage — which RESTORES the shipped render block (near-field on,
    * camera.near/far back to Constants.CAMERA_NEAR/FAR) so a flag-on session that
-   * reached F6/F7 doesn't leave those at ladder values, and keeps applyTier()
+   * reached F4/F5 doesn't leave those at ladder values, and keeps applyTier()
    * byte-identical to the shipped path afterwards.
    * @param {{nearField:boolean, near:?number, far:?number, debrisMode:?string, floor:?number}|null} fid
    */
   setLadderFloorFidelity(fid) {
     if (!fid) {
       // Disengage: restore the SHIPPED render block so a flag-on session that
-      // reached F6/F7 (far 2000, near-field OFF) doesn't leave the clip planes /
+      // reached F4/F5 (far 2000, near-field OFF) doesn't leave the clip planes /
       // near-field pass at ladder values until the next applyTier() rebuild.
       // Guarded on a prior engaged request, so with the flag off (never engaged)
       // this is never called and applyTier() stays byte-identical.
@@ -674,7 +674,7 @@ export class SceneManager {
           this.camera.updateProjectionMatrix();
         }
         // Restore the full debris meshes + world ship mesh the ship-is-icon
-        // floors hid (F6/F7). Guarded on a prior engaged request, so flag-off
+        // floors hid (F4/F5). Guarded on a prior engaged request, so flag-off
         // (never engaged) never runs this and applyTier() stays byte-identical.
         if (this._ladderDebrisField && this._ladderDebrisField.setLadderDebrisMode) {
           this._ladderDebrisField.setLadderDebrisMode(null);
@@ -719,12 +719,12 @@ export class SceneManager {
       if (f.far != null && this.camera.far !== f.far) { this.camera.far = f.far; changed = true; }
       // Starfield: R < far is NOT sufficient for the world-fixed shell — a star
       // directly behind Earth sits at camera distance D + R (need far >= D_max + R),
-      // which F6 (D <= 255, far 500) breaks. Earth-anchored floors run the shell
+      // which F4 (NAVCOM, D <= 255, far 500) breaks. Earth-anchored floors run the shell
       // camera-attached instead (Starfield.setFollowCamera, wired from
       // setLadderFloorFidelity), so every star sits at exactly R = 400 (T1).
       if (changed) this.camera.updateProjectionMatrix();
     }
-    // Zoom Ladder F6/F7 costume 'ship-to-icon' (T1): the full debris meshes are
+    // Zoom Ladder F4/F5 costume 'ship-to-icon' (T1): the full debris meshes are
     // replaced by cluster icons and the world ship mesh by a chevron. Hang the
     // hide off the SAME re-assert as nearFieldEnabled so it survives applyTier()
     // rebuilds. Guarded on the registered refs (null on flag-off/headless → no-op).
@@ -735,9 +735,9 @@ export class SceneManager {
       // Ship-is-icon predicate — keep the sibling gates in lockstep (M3 review):
       // this ship hide, DebrisField.setLadderDebrisMode's debris hide, and
       // LadderController._applyFloorContent's floor arms. The world ship mesh
-      // vanishes where a costume replaces it: F6 'clusters' (NAVCOM chevron)
-      // and — now that the F7 SDA chart costume has landed (Wave-2 wire) —
-      // F7 'massBands', whose full-screen chart owns the frame.
+      // vanishes where a costume replaces it: F4 'clusters' (NAVCOM chevron)
+      // and — now that the F5 SDA chart costume has landed (Wave-2 wire) —
+      // F5 'massBands', whose full-screen chart owns the frame.
       const shipIsIcon = (f.debrisMode === 'clusters' || f.debrisMode === 'massBands');
       this._ladderShip.visible = !shipIsIcon;
     }
@@ -750,7 +750,7 @@ export class SceneManager {
    * unconditionally on their exit paths with zero ladder awareness — inspect
    * exit, launch/net ceremony teardown (CameraSystem.js:1672/1735/1785/2763/
    * 2820/3221) and the dynamic near-plane — which produced the field-captured
-   * `near=0.5 far=500` "matches NO contract" pair, and a `far` stomp on F7
+   * `near=0.5 far=500` "matches NO contract" pair, and a `far` stomp on F5
    * (contract 2000) would clip the 1020 u chart framing outright. Patching
    * every present and future writer is whack-a-mole; the render loop enforcing
    * ownership is self-healing by construction. Cost: two float compares per
@@ -784,7 +784,7 @@ export class SceneManager {
 
   /**
    * Zoom Ladder: register the render-block content the per-floor `debrisMode`
-   * hides on the ship-is-icon floors (F6/F7) — the full debris meshes and the
+   * hides on the ship-is-icon floors (F4/F5) — the full debris meshes and the
    * world ship mesh. Called once from main.js after both exist; refs are optional
    * so headless/tests need not provide them. Storing refs mutates nothing, and
    * the hide is applied only from _reassertLadderFidelity (guarded on an engaged
