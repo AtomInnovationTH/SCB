@@ -106,12 +106,6 @@ export class LadderController {
    *   order). Session C: both panes also page from the horizontal two-finger
    *   swipe — WheelRouter asks `wantsPaneSwipe()` (F1 + a pane dep) and emits
    *   ONE `pagePane({toward})` per flick; the carousel law lives there.
-   * @param {object} [deps.archive]      - the retired ARCHIVE floor's content
-   *   bridge (ArchiveFloor): deactivate/isActive. Since the Session H 7→5
-   *   renumber NO floor activates it (the old F1 ARCHIVE row is deleted — the
-   *   Tech Library is the pane + the full-screen reader); the dep remains only
-   *   so _disengage can close a viewer it might still host. Removed entirely
-   *   with the module (Session H commit 4).
    * @param {object} [deps.audioBeds]    - per-floor audio beds (LadderAudioBeds):
    *   setFloor(floorId|null). Optional — absent it beds are a no-op.
    * @param {object} [deps.floorMask]    - per-floor HUD pane mask (FloorMask,
@@ -159,7 +153,6 @@ export class LadderController {
     this._hullcam = deps.hullcam || null;
     this._refit = deps.refit || null;
     this._library = deps.library || null;
-    this._archive = deps.archive || null;
     this._audioBeds = deps.audioBeds || null;
     this._floorMask = deps.floorMask || null;
     this._viewStore = deps.viewStore || null;
@@ -765,7 +758,6 @@ export class LadderController {
       if (this._library.setEnabled) this._library.setEnabled(false);
       if (this._library.close) this._library.close();
     }
-    if (this._archive && this._archive.deactivate) this._archive.deactivate();
     // Per-floor audio bed: fade to silence on disengage (optional dep).
     if (this._audioBeds && this._audioBeds.setFloor) this._audioBeds.setFloor(null);
     // Per-floor HUD pane mask: restore the shipped fully-visible cockpit and
@@ -1009,11 +1001,6 @@ export class LadderController {
         if (this._library.close) this._library.close();
       }
     }
-    // The retired ARCHIVE bridge (Session H): NO floor activates it any more —
-    // the old F1 ARCHIVE row left the contract (the Tech Library is the pane +
-    // the full-screen reader). Any floor arrival closes a viewer it might
-    // still host; the module leaves entirely in commit 4.
-    if (this._archive && this._archive.deactivate) this._archive.deactivate();
     // Per-floor audio bed (FloorContract audioBed): crossfade to the arrival
     // floor's bed. Optional dep — absent it this is a no-op (parallel track).
     if (this._audioBeds && this._audioBeds.setFloor) this._audioBeds.setFloor(floor);

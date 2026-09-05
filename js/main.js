@@ -122,7 +122,6 @@ import { SdaFloor } from './systems/SdaFloor.js';
 import { HullCamFloor } from './systems/HullCamFloor.js';
 import { RefitPane } from './ui/RefitPane.js';
 import { LibraryPane, ONE_PANE_BREAKPOINT_PX } from './ui/LibraryPane.js';
-import { ArchiveFloor } from './systems/ArchiveFloor.js';
 import { TimeAuthority } from './systems/TimeAuthority.js';
 import { FloorContract } from './core/FloorContract.js';
 import { RailIndicator } from './ui/RailIndicator.js';
@@ -573,7 +572,6 @@ let navcomFloor;
 let proxNetFloor;
 let sdaFloor;
 let hullcamFloor;
-let archiveFloor;
 // Zoom Ladder Wave 5 (2) — the F3 REFIT pane (08-workbench §2, left pane on
 // the seven-subsystem index). UNLIKE the floor orchestrators above it is only
 // CONSTRUCTED while Constants.LADDER.ENABLED is true (the same live flag every
@@ -1568,8 +1566,8 @@ async function init() {
       // Session C: what the player is looking at, for an ENTRY-LESS open (tab
       // click / toggle) — the pane lands on it instead of the prompt. The
       // focused hull part first (MotherCallouts.getFocusedPart — live in the
-      // COMPONENT band, null elsewhere; the same getter ArchiveFloor's F1
-      // deep link reads), else the REFIT card's manifest deep link
+      // COMPONENT band, null elsewhere), else the REFIT card's manifest deep
+      // link
       // (RefitPane.focusedCodexId — the id its title already carries; no new
       // mapping). A GETTER: read on the open edge only, never per frame; the
       // pane stays eventless and never sees either module.
@@ -1662,29 +1660,9 @@ async function init() {
       if (ladderController) ladderController.noteRoomChange();
     });
   }
-  // Zoom Ladder F1 (ARCHIVE) bridge (Wave 3): arriving on the innermost floor
-  // drops into the Tech Library — ArchiveFloor HOSTS the existing
-  // codexViewerUI as the floor costume (00-spec §3/§11 "bridge, don't merge").
-  // Hosted mode reroutes the viewer's every self-close path (ESC, backdrop,
-  // CLOSE, I) to onExitUp = ride one floor up; leaving F1 un-hosts and closes.
-  // TimeAuthority already pauses the world on F1 (timeCap 0). Inert while
-  // LADDER.ENABLED is false (never activated): byte-identical.
-  archiveFloor = new ArchiveFloor({
-    codex: codexViewerUI,
-    onExitUp: () => { if (ladderController) ladderController.command({ type: 'esc' }); },
-    // Deep link (08-workbench D1/D2): the library opens FROM the part you were
-    // looking at. The subject is MotherCallouts' focused part — the one nearest
-    // screen-centre in its close (COMPONENT) band, the F3 costume's own lens
-    // split — read at F1 arrival (ArchiveFloor.activate runs inside
-    // _applyFloorContent, BEFORE the camera fires F3's departure signal, so the
-    // focus is still live). Its codexId is the same string the card click
-    // emits. Outside the close band there is no focus → null → the arrival is
-    // a plain host + show. motherCallouts is constructed far above (the
-    // inspection-callouts block); the guard keeps a missing getter harmless.
-    // (Re-pointed 2026-09-02 from hullcamFloor.getFocusedSubsystem — the pill
-    // focus — when the owner's playtest made MotherCallouts the F3 costume.)
-    getSubject: () => (motherCallouts && motherCallouts.getFocusedPart ? motherCallouts.getFocusedPart() : null),
-  });
+  // (The Wave-3 ArchiveFloor bridge — the hosted codex as the old F1 costume —
+  // left with the ARCHIVE row in the Session H 7→5 renumber. The Tech Library
+  // is the F1 workbench pane + the full-screen reader, exactly as before.)
   // Zoom Ladder per-floor audio beds (FloorContract audioBed). GETTERS, not
   // refs: audioSystem.ctx/padBus are null until the menu-click gesture runs
   // audioSystem.init() (unlock pattern) — the beds resolve them lazily on the
@@ -1744,10 +1722,10 @@ async function init() {
     // Esc unwinds reading → fitting → ride up). Flag-off: libraryPane is
     // undefined (never constructed) → the dep is null → byte-identical.
     library: libraryPane,
-    archive: archiveFloor,
-    // (The Session E F2 DEPOT doorway host retired with the F2 row — Wave 5
-    // Session H, the 7→5 renumber. The SHOP still arrives through
-    // GameFlowManager's own transitions: mission boundaries and the B key.)
+    // (The Wave-3 `archive` bridge and the Session E `depot` doorway host both
+    // retired with their floors — Wave 5 Session H, the 7→5 renumber. The SHOP
+    // still arrives through GameFlowManager's own transitions: mission
+    // boundaries and the B key; the codex through the LIBRARY pane + MAXIMIZE.)
     audioBeds: ladderAudioBeds,
     // Wave-4 map rule (D8/§4): per-floor pane rooms + the vitals always-set.
     floorMask: ladderFloorMask,
