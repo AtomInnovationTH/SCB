@@ -176,6 +176,9 @@ export class RefitPane {
     this._lastStructKey = null;
     this._lastWriteMs = -Infinity;
     this._lastTabText = null;
+    /** Wave 5 Session H (plan D-H): true while the depot INVITATION window is
+     *  open — the tab wears the VALUE-gold edge (steady; gold never pulses). */
+    this._invited = false;
     // Idle fade state (open panes fade to 70 % after IDLE_FADE_MS, pointer wakes).
     this._lastActivityMs = this._now();
     this._idle = false;
@@ -373,7 +376,42 @@ export class RefitPane {
   }
 
   /**
-   * Enable on F3 arrival / disable on leave (LadderController `refit` dep).
+   * The depot INVITATION on the tab (Wave 5 Session H, plan D-H): from chapter
+   * 4 on, a mission-boundary catch opens the buying window instead of forcing
+   * the shop stop — main.js's ONE DEPOT_INVITATION listener feeds the rail's
+   * notch-1 glow (WHERE: come down to the workbench) AND this tab glow (WHAT:
+   * the REFIT drawer is the shop). `open` true → the tab edge wears VALUE gold
+   * with the steady halo (VisualLaw: gold never pulses); false (entered /
+   * lapsed / reset) → the resting INFO frame. Write-on-change; state survives
+   * enable/disable cycles (the tab keeps its dress while hidden); headless =
+   * pure flag. The tab itself stays governed by setEnabled — off the workbench
+   * floor the rail glow is the visible cue.
+   * @param {boolean} open
+   */
+  setInvitation(open) {
+    const want = !!open;
+    if (want === this._invited) return;
+    this._invited = want;
+    this._applyInvitation();
+  }
+
+  /** @returns {boolean} true while the invitation window is open (the tab glows). */
+  isInvited() { return this._invited; }
+
+  /** @private Dress/undress the tab edge for the invitation (steady, G1: edges only). */
+  _applyInvitation() {
+    if (!this._tab) return;
+    if (this._invited) {
+      this._tab.style.borderColor = VisualLaw.COLORS.VALUE;
+      this._tab.style.boxShadow = '0 0 10px rgba(255,209,102,0.55)';   // the rail's INVITE_HALO law
+    } else {
+      this._tab.style.borderColor = 'rgba(0,204,255,0.4)';             // the resting INFO frame
+      this._tab.style.boxShadow = 'none';
+    }
+  }
+
+  /**
+   * Enable on F1 arrival / disable on leave (LadderController `refit` dep).
    * Enabled: the edge tab shows (always visible while enabled). Disabled:
    * tab hides and the pane closes. Idempotent; headless no-op beyond state.
    * @param {boolean} on
@@ -677,6 +715,7 @@ export class RefitPane {
     this._body = body;
     this._tab = tab;
     this._tabCount = tabCount;
+    this._applyInvitation();      // a pre-build setInvitation lands once built (Session H)
     this._applyOpenState();
 
     // Delegated interactions (one listener set — G1, the PaneHelp pattern):
