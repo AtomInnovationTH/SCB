@@ -509,10 +509,16 @@ export class RefitPane {
   dispose() {
     this._disposed = true;
     this._clearIdleTimer();
-    if (this._open && this._onOpenChange) {
+    // Session I follow-up (review, (h)): the close edge must observe
+    // isOpen() === false — main.js's _syncWorkbenchPanes re-reads BOTH panes'
+    // isOpen() inside the callback, so firing it while _open was still true
+    // re-armed the held-world signal as the pane died (clock stuck at 0, rail
+    // HOLD, the 10 fps heartbeat — forever). Same order close() already uses.
+    const wasOpen = this._open;
+    this._open = false;
+    if (wasOpen && this._onOpenChange) {
       try { this._onOpenChange(false); } catch (_e) { /* dep */ }
     }
-    this._open = false;
     this._setGhosting(false);
     if (this._root && this._root.remove) this._root.remove();   // takes the body + tab with it
     if (this._tab && this._tab.remove) this._tab.remove();

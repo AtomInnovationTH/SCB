@@ -773,10 +773,12 @@ async function init() {
   sceneManager = new SceneManager(canvas);
   // Session I (plan D-G, step 4): glass renders at pixel ratio 1.0 — the
   // retina render target quadruples fragment work the game never leans on.
-  // Real-touch detection only (TouchControls.detect: ontouchstart /
-  // pointer:coarse); desktop never takes the clamp — byte-identical. The
-  // current tier's ratio re-applies inside the setter.
-  if (TouchControls.detect()) sceneManager.setGlassPixelRatioCap(true);
+  // Session I follow-up (review, (l)): the NARROW glass gate — a coarse PRIMARY
+  // pointer + real touch points (TouchControls.detectGlass) — so a hybrid
+  // laptop driven by a mouse keeps its hi-DPI picture; the broad detect() stays
+  // the touch-affordance gate below. Desktop never takes the clamp —
+  // byte-identical. The current tier's ratio re-applies inside the setter.
+  if (TouchControls.detectGlass()) sceneManager.setGlassPixelRatioCap(true);
   const scene = sceneManager.getScene();
   const camera = sceneManager.getCamera();
   _bootMark('SceneManager constructed (renderer + composer + bloom)');
@@ -4649,7 +4651,15 @@ function gameLoop(timestamp) {
   // visible, unblurred rAF entry — skipped ticks included, because the sample
   // measures the DISPLAY, not the draw rate. Deltas above MAX_SAMPLE_MS are
   // scheduling gaps (menus/pause throttles, tab switches), not cadence.
-  if (_lastRafTs > 0) {
+  // Session I follow-up (review, (i)): UNPAUSED GAMEPLAY entries only — the
+  // menu/shop/briefing states run on a ~33 ms setTimeout throttle and ESC
+  // pause on 200 ms, both under MAX_SAMPLE_MS, so they were entering the
+  // window as fake cadence (a ~0.25 s over-draw after every menu visit). The
+  // gameplay samples survive a menu visit untouched — the display did not
+  // change — so N is right on the very first frame back. `_lastRafTs` still
+  // advances on every entry (the first gameplay delta is measured against a
+  // real neighbour, never a stale one).
+  if (_lastRafTs > 0 && gameState.isGameplay() && !gameFlowManager.paused) {
     const _rafDelta = timestamp - _lastRafTs;
     if (_rafDelta > 0 && _rafDelta <= MAX_SAMPLE_MS) {
       _rafDeltas.push(_rafDelta);
@@ -4658,11 +4668,11 @@ function gameLoop(timestamp) {
   }
   _lastRafTs = timestamp;
 
-  // Debug: record frame time (pre-existing — runs even when paused, like before)
-  if (debugOverlay) {
-    const frameTime = timestamp - (lastTime || timestamp);
-    debugOverlay.recordFrame(frameTime);
-  }
+  // Debug overlay frame time: recorded on DRAWN frames only, below (Session I
+  // follow-up (j)) — a skipped tick is not a frame. It used to record here on
+  // every rAF entry against `lastTime`, which only advances on drawn frames, so
+  // the overlay painted a sawtooth (8, 17, 25 … 100 ms under the 10 fps hold)
+  // instead of the true cadence.
 
   if (gameFlowManager.paused) {
     audioSystem.stopThrusterHum();
@@ -4746,6 +4756,10 @@ function gameLoop(timestamp) {
 
   // Delta time in seconds (cap to prevent spiral of death)
   const realDt = Math.min((timestamp - lastTime) / 1000, 0.1);
+  // Debug overlay frame time — DRAWN frames only, unclamped (Session I
+  // follow-up (j)): the true time between two presented frames (100 ms under
+  // the 10 fps hold; 8.3 under boost on 120 Hz), never a skipped-tick ramp.
+  if (debugOverlay && lastTime > 0) debugOverlay.recordFrame(timestamp - lastTime);
   lastTime = timestamp;
 
   // PR 4 / P1.5 — Quality tier FPS sampling + auto-adapt.
@@ -4973,9 +4987,15 @@ function gameLoop(timestamp) {
       _turnSaved.up = !!k.ArrowUp; _turnSaved.down = !!k.ArrowDown;
       _turnSaved.left = !!k.ArrowLeft; _turnSaved.right = !!k.ArrowRight;
       k.ArrowUp = k.ArrowDown = k.ArrowLeft = k.ArrowRight = false;
-      inputManager.processInput(dt);
-      k.ArrowUp = _turnSaved.up; k.ArrowDown = _turnSaved.down;
-      k.ArrowLeft = _turnSaved.left; k.ArrowRight = _turnSaved.right;
+      // Session I follow-up (review, (g)): the restore rides a finally — a
+      // throw inside processInput must never leave the arrows blanked (the
+      // physical key state would be dead until the next keydown re-set it).
+      try {
+        inputManager.processInput(dt);
+      } finally {
+        k.ArrowUp = _turnSaved.up; k.ArrowDown = _turnSaved.down;
+        k.ArrowLeft = _turnSaved.left; k.ArrowRight = _turnSaved.right;
+      }
     } else {
       inputManager.processInput(dt);
     }

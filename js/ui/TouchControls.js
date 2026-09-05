@@ -134,6 +134,36 @@ export class TouchControls {
   }
 
   /**
+   * Session I follow-up (review, (l)) — is the PRIMARY pointer the glass?
+   * The thermal clamp (SceneManager.setGlassPixelRatioCap → pixel ratio 1.0)
+   * is for tablets and phones; a hybrid laptop (Surface class: touch hardware
+   * + a mouse, hi-DPI) must keep its sharp picture, yet `detect()` says true
+   * there (Chromium exposes `ontouchstart` whenever touch hardware exists).
+   * `detect()` stays the broad "has touch at all" gate for the touch
+   * affordances — a Surface with a mouse still benefits from them. This is the
+   * narrow one: a COARSE primary pointer AND real touch points. An iPad with a
+   * Magic Keyboard keeps a coarse primary pointer (the trackpad is
+   * `any-pointer: fine`) → still glass; a hybrid laptop driven by a mouse has
+   * a fine primary pointer → not glass; the same laptop in tablet mode (no
+   * mouse) → glass, which is what it is at that moment.
+   * @param {object} [win=window] - injectable for tests (needs matchMedia)
+   * @param {object} [nav=navigator] - injectable for tests (needs maxTouchPoints)
+   * @returns {boolean}
+   */
+  static detectGlass(win, nav) {
+    const w = win !== undefined ? win : (typeof window !== 'undefined' ? window : undefined);
+    const n = nav !== undefined ? nav : (typeof navigator !== 'undefined' ? navigator : undefined);
+    if (!w || !n) return false;
+    try {
+      const coarse = !!(w.matchMedia && w.matchMedia('(pointer: coarse)').matches);
+      const touch = (Number(n.maxTouchPoints) || 0) > 0;
+      return coarse && touch;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /**
    * @param {object} deps
    * @param {HTMLCanvasElement} deps.canvas          the game canvas
    * @param {object} deps.wheelRouter                provides routeSyntheticWheel(deltaY, target)

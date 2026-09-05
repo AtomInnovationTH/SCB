@@ -595,10 +595,15 @@ export class LibraryPane {
     this._cancelPhoto();
     this._photo = null;
     this._photoCanvas = null;
-    if (this._open && this._onOpenChange) {
+    // Session I follow-up (review, (h)): the close edge must observe
+    // isOpen() === false — main.js's _syncWorkbenchPanes re-reads BOTH panes'
+    // isOpen() inside the callback, so firing it while _open was still true
+    // re-armed the held-world signal as the pane died. Same order as close().
+    const wasOpen = this._open;
+    this._open = false;
+    if (wasOpen && this._onOpenChange) {
       try { this._onOpenChange(false); } catch (_e) { /* dep */ }
     }
-    this._open = false;
     if (this._root && this._root.remove) this._root.remove();   // takes the body + tab with it
     if (this._tab && this._tab.remove) this._tab.remove();
     this._root = null;

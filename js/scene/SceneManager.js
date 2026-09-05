@@ -324,6 +324,28 @@ export class SceneManager {
   }
 
   /**
+   * @private Sweep config merge for applyTierWithOverrides: an explicit override
+   * wins raw (a profile measures exactly what it asked for — the `?pixelRatio=N`
+   * law), but an UN-overridden pixel ratio re-asserts the glass clamp. Session I
+   * follow-up (review, (m)): the sweep's baseline restore
+   * (`applyTierWithOverrides({})`) used the raw tier cap and silently dropped
+   * the clamp on glass until the next applyTier.
+   * @param {object} base - the live tierConfig
+   * @param {object} overrides - per-key overrides (see applyTierWithOverrides)
+   * @returns {object} merged tier config
+   */
+  _mergeSweepTier(base, overrides) {
+    const o = overrides || {};
+    return {
+      msaaSamples: o.msaaSamples !== undefined ? o.msaaSamples : base.msaaSamples,
+      enableBloom: o.enableBloom !== undefined ? o.enableBloom : base.enableBloom,
+      enableSMAA:  o.enableSMAA  !== undefined ? o.enableSMAA  : base.enableSMAA,
+      pixelRatioCap: o.pixelRatioCap !== undefined ? o.pixelRatioCap : this._pixelRatioCapFor(base.pixelRatioCap),
+      useFXAAFallback: base.useFXAAFallback,
+    };
+  }
+
+  /**
    * Apply pixel-ratio cap from the tier config.
    * @private
    * @param {object} tier
@@ -867,13 +889,7 @@ export class SceneManager {
    */
   applyTierWithOverrides(overrides) {
     const base = this.tierConfig;
-    const merged = {
-      msaaSamples: overrides.msaaSamples !== undefined ? overrides.msaaSamples : base.msaaSamples,
-      enableBloom: overrides.enableBloom !== undefined ? overrides.enableBloom : base.enableBloom,
-      enableSMAA:  overrides.enableSMAA  !== undefined ? overrides.enableSMAA  : base.enableSMAA,
-      pixelRatioCap: overrides.pixelRatioCap !== undefined ? overrides.pixelRatioCap : base.pixelRatioCap,
-      useFXAAFallback: base.useFXAAFallback,
-    };
+    const merged = this._mergeSweepTier(base, overrides);
 
     // Pixel ratio (sweep paths bypass `_applyRendererPixelRatio` to ignore
     // any `?pixelRatio=N` URL flag — sweep configs win).
