@@ -1648,6 +1648,19 @@ async function init() {
     eventBus.on(Events.GAME_RESET, () => {
       if (ladderController) ladderController.resetView();
     });
+    // Wave 5 (Session H) — JOB A, the D5 room-memory WRITE GAP (03-plan
+    // Session G FINDINGS (c)): a pane shown/hidden by its key (0/9/8, the
+    // density -/+ or the iPad slider) and then a reload with NO floor change
+    // in between was never persisted — FloorMask captures only inside
+    // setFloor(). The four player edges emit ONE ladder-agnostic signal AFTER
+    // the bit flips (Events.HUD_PANE_VISIBILITY); this ONE listener — inside
+    // the gate, so a ?ladder=0 boot registers nothing and does no work —
+    // captures the applied floor's room and exports it to the player store
+    // (write-on-change inside the store; an event-rate edge, never per frame).
+    // ladderController is constructed below — read live, guarded.
+    eventBus.on(Events.HUD_PANE_VISIBILITY, () => {
+      if (ladderController) ladderController.noteRoomChange();
+    });
   }
   // Zoom Ladder F1 (ARCHIVE) bridge (Wave 3): arriving on the innermost floor
   // drops into the Tech Library — ArchiveFloor HOSTS the existing

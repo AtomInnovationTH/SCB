@@ -560,6 +560,27 @@ export class LadderController {
   }
 
   /**
+   * The HUD pane-visibility EDGE (Wave 5 Session H, Job A — the D5 room-memory
+   * WRITE GAP, 03-plan Session G FINDINGS (c)): a pane was shown/hidden by a
+   * PLAYER key (0/9/8, the density `-`/`+`/the iPad slider —
+   * Events.HUD_PANE_VISIBILITY, emitted AFTER the bit flips) with no floor
+   * change to capture it. Capture the applied floor's room NOW and export it
+   * to the player store — the same capture-then-persist the floor-change
+   * moments run, at event rate (a key press), never per frame (G1; the store
+   * still compares, so an unchanged room writes nothing). The mask's own
+   * capture() guards make a mask-less / disabled / never-applied state a no-op;
+   * disengaged (the shipped cockpit — not a room) returns before touching
+   * either dep; flag-off never reaches here (the ONE listener lives inside
+   * main.js's LADDER.ENABLED gate). Never throws.
+   */
+  noteRoomChange() {
+    if (!this._engaged || !this._floorMask) return;
+    if (typeof this._floorMask.capture !== 'function') return;
+    this._floorMask.capture();
+    this._persistRooms();
+  }
+
+  /**
    * The run-scoped half of D5 for the RUN SAVE (main.js gathers it on
    * PERSISTENCE_GATHER as `save.ladder`, inside the LADDER.ENABLED gate): the
    * core's live `(floor, z01)` — or, during a doorway ride into F2, the hull

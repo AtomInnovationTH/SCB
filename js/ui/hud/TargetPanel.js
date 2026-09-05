@@ -257,6 +257,10 @@ export class TargetPanel {
       priority: 'info',
       _reactive: true,
     });
+    // Wave 5 Session H (Job A): the 0 key just flipped the pane's ONE
+    // visibility bit — the room-memory write trigger (emitted AFTER the flip;
+    // the consumer is gated in main.js, so this is ladder-agnostic HUD).
+    eventBus.emit(Events.HUD_PANE_VISIBILITY, { pane: 'targets', shown: nowVisible });
   }
 
   /** @private */

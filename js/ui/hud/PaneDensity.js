@@ -39,12 +39,20 @@ export class PaneDensity {
    *   (index 0 is hidden FIRST by `-`, restored LAST by `+`).
    * @param {(text: string) => void} [opts.notify]  Transient on-screen notice.
    * @param {(text: string) => void} [opts.log]     Reactive comms-history line.
+   * @param {(paneId: string, shown: boolean) => void} [opts.onFlip]  Fired once
+   *   per FLIPPED rung, AFTER its setVisible ran (Wave 5 Session H, Job A —
+   *   the D5 room-memory write trigger). Injected like notify/log so this
+   *   module stays pure/EventBus-free; HUD.js wires it to the ONE
+   *   HUD_PANE_VISIBILITY emit. No-op presses (down() with nothing visible,
+   *   up() with nothing hidden) never fire it; setLevel() fires it once per
+   *   rung it actually flips (`_silent` silences notices, never this edge).
    */
-  constructor({ rungs, notify, log } = {}) {
+  constructor({ rungs, notify, log, onFlip } = {}) {
     /** @type {DensityRung[]} */
     this.rungs = Array.isArray(rungs) ? rungs.slice() : [];
     this._notify = typeof notify === 'function' ? notify : () => {};
     this._log = typeof log === 'function' ? log : () => {};
+    this._onFlip = typeof onFlip === 'function' ? onFlip : null;
     /** @private true while setLevel() walks — per-step notices are silenced. */
     this._silent = false;
   }
@@ -125,6 +133,7 @@ export class PaneDensity {
       return null;
     }
     rung.setVisible(false);
+    if (this._onFlip) this._onFlip(rung.id, false);   // AFTER the bit flip (Job A)
     const pure = this.rungs.every(r => !this._safeVisible(r));
     const text = pure
       ? 'HUD clear — pure scenery · + restores'
@@ -152,6 +161,7 @@ export class PaneDensity {
       return null;
     }
     rung.setVisible(true);
+    if (this._onFlip) this._onFlip(rung.id, true);    // AFTER the bit flip (Job A)
     const all = this.rungs.every(r => this._safeVisible(r));
     const text = all ? 'All panes visible' : `HUD + · ${rung.label} shown`;
     if (!this._silent) {

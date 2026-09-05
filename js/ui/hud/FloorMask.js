@@ -306,6 +306,26 @@ export class FloorMask {
   /** The currently applied floor id, or null (tests/debug). */
   getAppliedFloor() { return this._appliedFloor; }
 
+  /**
+   * Capture the APPLIED floor's live pane intent into D5 memory NOW, without a
+   * floor change — the same read `setFloor` performs at its capture moment
+   * (`_captureMemory`, the ONE intent read). Wave 5 Session H (Job A — the D5
+   * room-memory WRITE GAP, 03-plan Session G FINDINGS (c)): a pane shown or
+   * hidden by its own key (0/9/8, the density `-`/`+`/slider) and then a
+   * reload with NO floor change in between was never persisted, because the
+   * mask captured only inside setFloor(). LadderController.noteRoomChange()
+   * calls this on the Events.HUD_PANE_VISIBILITY edge, then exports. No-op
+   * while disposed / disabled (the cockpit is restored — a key press there is
+   * not a room edit) / unresolved (absent deps) / disengaged (no applied
+   * floor). Event-rate only (a key press), never per frame — G1.
+   */
+  capture() {
+    if (this._disposed || !this._enabled) return;
+    if (!this._resolve()) return;
+    if (this._appliedFloor == null) return;
+    this._captureMemory();
+  }
+
   /** The last requested floor id, or null (tests/debug — beds parity). */
   getCurrentFloor() { return this._floor; }
 

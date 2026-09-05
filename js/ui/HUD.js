@@ -873,6 +873,15 @@ export class HUD {
       log: (text) => eventBus.emit(Events.COMMS_MESSAGE, {
         text, priority: 'info', source: 'HUD', _reactive: true,
       }),
+      // Wave 5 Session H (Job A — the D5 room-memory write trigger): the
+      // density ladder's flip edge, once per FLIPPED rung, after its
+      // setVisible ran. Wired here (not inside PaneDensity — that module is
+      // pure/EventBus-free by design) and NOT on the rung adapters: FloorMask
+      // drives rung.setVisible directly on every floor change, and a mask
+      // write must never read as a player edit.
+      onFlip: (paneId, shown) => eventBus.emit(Events.HUD_PANE_VISIBILITY, {
+        pane: paneId, shown,
+      }),
     });
     this._paneDensity.attach(eventBus, Events);
   }

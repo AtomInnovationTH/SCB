@@ -705,6 +705,25 @@ export const Events = {
   /** Bare `+`/`=` — restore the highest-priority currently-hidden HUD pane
    *  (reverse of HUD_DENSITY_DOWN). Payload: {} */
   HUD_DENSITY_UP:         'hud:densityUp',
+  /**
+   * Wave 5 Session H (JOB A — the D5 room-memory WRITE GAP, 03-plan Session G
+   * FINDINGS (c)): a HUD pane's ONE visibility bit flipped on a PLAYER edge.
+   * Emitted AFTER the bit flips by the four edges that change it without a
+   * floor change: TargetPanel.toggleVisible (the 0 key), DebrisWireframe.
+   * toggleMinimized (the 9 key — its two visibility-bit paths, never the
+   * minimize fold), NavSphere.toggleMinimized (the 8 key — the un-hide path;
+   * the minimize fold is not the intent bit), and the PaneDensity ladder
+   * (`-`/`+`/the iPad slider — once per FLIPPED rung, via HUD's onFlip wire;
+   * PaneDensity itself stays EventBus-free). No-op presses (a `-` at "HUD
+   * already clear", an `+` at "all visible") emit nothing. The emitters are
+   * HUD modules and fire regardless of the ladder; the ONE consumer lives
+   * inside main.js's LADDER.ENABLED gate → LadderController.noteRoomChange()
+   * → FloorMask.capture() → the player store (write-on-change), so a
+   * ?ladder=0 boot registers no listener and does no work.
+   * Payload: { pane, shown } — pane = the density rung id ('targets',
+   * 'debris', 'navsphere', …); shown = the bit's new value.
+   */
+  HUD_PANE_VISIBILITY:    'hud:paneVisibility',
 
   // === Epic 8 events — STATION_KEEP & FEEP ===
   /** Orbit adjust input. Payload: { armId, theta, phi, radius, fine, dt } */

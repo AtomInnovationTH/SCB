@@ -303,6 +303,10 @@ export class NavSphere {
       this._frameSkip = -1;
       this.canvas.style.display = this._visible ? 'block' : 'none';
       shown = true;
+      // Wave 5 Session H (Job A): the un-hide path flipped `_hidden` — the
+      // intent flag isOrbVisible() reads (the rung's bit). The minimize fold
+      // below never touches it, so only THIS path signals (after the flip).
+      eventBus.emit(Events.HUD_PANE_VISIBILITY, { pane: 'navsphere', shown: true });
     } else {
       this._minimized = !this._minimized;
       this._frameSkip = -1; // redraw immediately on the next frame

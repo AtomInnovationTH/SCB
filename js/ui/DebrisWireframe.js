@@ -1595,6 +1595,9 @@ export class DebrisWireframe {
     if (!this._hasContainer || !this._minLine) {
       this.setVisible(!this._visible);
       this._emitPaneToggle(this._visible);
+      // Wave 5 Session H (Job A): the floating fallback flips the pane's
+      // visibility bit itself — the room-memory write trigger (after the flip).
+      eventBus.emit(Events.HUD_PANE_VISIBILITY, { pane: 'debris', shown: this._visible });
       return;
     }
     // 9 always re-reveals the pane, even when the pane-density ladder (−) hid
@@ -1606,6 +1609,9 @@ export class DebrisWireframe {
       this._canvas.style.display = 'block';
       this._frameSkip = -1;
       this._emitPaneToggle(true);
+      // Wave 5 Session H (Job A): the attribute-clear path flipped the ONE
+      // density bit (the intent FloorMask captures) — after the flip.
+      eventBus.emit(Events.HUD_PANE_VISIBILITY, { pane: 'debris', shown: true });
       return;
     }
     this._minimized = !this._minimized;
@@ -1618,6 +1624,8 @@ export class DebrisWireframe {
       this._canvas.style.display = 'block';
       this._frameSkip = -1; // redraw the wireframe immediately on restore
     }
+    // No HUD_PANE_VISIBILITY here: the minimize fold is NOT the visibility bit
+    // (the container stays on screen; the intent FloorMask reads is unchanged).
     this._emitPaneToggle(!this._minimized);
   }
 
