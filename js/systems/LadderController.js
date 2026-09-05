@@ -797,6 +797,15 @@ export class LadderController {
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
   _engage(tMs) {
+    // Session I follow-up (review, FINDINGS (f)): a ride that was in flight
+    // when the controller DISENGAGED (gameplay ended mid-ride) can never be
+    // completed — CameraSystem.ladderDisengage dropped the ride's onDone — so
+    // the core still reports `riding` at the next engage. Left alone, that
+    // stale token made isRiding() true for the rest of the session: the frame
+    // scheduler read "ride in flight" and boosted to native refresh forever
+    // (the same permanent-boost class as the ceremony leak). Settle it FIRST —
+    // the helper is a no-op while engaged, so it must run before the flag.
+    this._settleStaleRide();
     this._engaged = true;
     const s = this._ladder.getState();
     const frame = this._frame(s.floor, s.z01);
