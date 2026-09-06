@@ -67,6 +67,7 @@ import { eventBus } from '../core/EventBus.js';
 import { Events } from '../core/Events.js';
 import { createCardTexture, CARD_W_OVER_TITLE_H, wrapHint } from '../scene/labelTexture.js';
 import { orderRail } from '../scene/railOrder.js';
+import { RAIL_GEOMETRY } from './RailGeometry.js';
 import { TAP_SLOP_PX, TAP_SLOP_MS } from '../systems/TapPick.js';
 
 // 1 metre in scene units (mirrors PlayerSatellite's M = 0.00001).
@@ -527,6 +528,14 @@ export class MotherCallouts {
     // and a ?ladder=0 boot (which never constructs a pane) is byte-identical.
     this._paneInsetL = 0;
     this._paneInsetR = 0;
+    // Rail insets (Session L, Session K FINDINGS (a)): the SECOND inset source
+    // — the WHAT rail's reach from the left screen edge and the WHERE rail's
+    // reach from the right, each + RAIL_GEOMETRY.DODGE_GAP_PX, fed by the hub
+    // from the rails' own 1 Hz dodge reads (setRailInsets, write-on-change).
+    // Merged with the pane insets by max per side in _updatePaneEdges — the
+    // ONE merge point — so neither writer clobbers the other. 0 = no rail.
+    this._railInsetL = 0;
+    this._railInsetR = 0;
     // Derived per frame in _updatePaneEdges(): the usable screen edges (NDC)
     // and the uncovered strip's centre X (NDC).
     this._edgeL = -1;
@@ -665,6 +674,37 @@ export class MotherCallouts {
   }
 
   /**
+   * Rail insets (Session L — Session K FINDINGS (a): on the 13-inch iPad the
+   * floor-1 hull callout columns sat UNDER both rails on the PARTS band, the
+   * rails painting on top). The rails are the SECOND inset source beside the
+   * drawers: `leftPx` is the WHAT rail's RIGHT edge (its reach from the left
+   * screen edge, `paneRail.rightPx()`), `rightPx` the WHERE rail's reach from
+   * the RIGHT screen edge (`innerWidth − railIndicator.leftPx()`), CSS px, or
+   * null while that rail is hidden / unmeasured. Each non-null value gains
+   * RAIL_GEOMETRY.DODGE_GAP_PX (the rails' own clearance) so the column starts
+   * a rail-gap clear of the rail. Safe to call per frame (the hub does, off
+   * the rails' 1 Hz reads): write-on-change — the same pair returns without
+   * touching anything; a change re-derives the edges at once
+   * (_updatePaneEdges) so the next pick / layout reads them. Merged with the
+   * pane insets by max per side in _updatePaneEdges — the ONE merge point —
+   * so neither source clobbers the other. Non-finite / negative / null → 0
+   * (no rail on that side; never a guess).
+   * @param {number|null} leftPx  - the WHAT rail's right edge (px from the left screen edge), or null
+   * @param {number|null} rightPx - the WHERE rail's reach from the right screen edge (px), or null
+   * @returns {boolean} whether the stored rail insets changed
+   */
+  setRailInsets(leftPx, rightPx) {
+    const gap = RAIL_GEOMETRY.DODGE_GAP_PX;
+    const l = (Number.isFinite(leftPx) && leftPx > 0) ? leftPx + gap : 0;
+    const r = (Number.isFinite(rightPx) && rightPx > 0) ? rightPx + gap : 0;
+    if (l === this._railInsetL && r === this._railInsetR) return false;
+    this._railInsetL = l;
+    this._railInsetR = r;
+    this._updatePaneEdges();
+    return true;
+  }
+
+  /**
    * Derive the usable screen edges (NDC) + the uncovered strip's centre from
    * the pane insets — once per update(), before the rail X computation reads
    * them. The px→NDC conversion follows the CameraSystem pane-bias law: the
@@ -675,16 +715,22 @@ export class MotherCallouts {
    * screen) falls back to the full edges rather than inverting the rails —
    * the hub's <1100 px one-pane rule keeps real layouts far from this.
    * Insets 0 (every shipped boot) → (-1, 1, 0): the exact shipped operands.
+   * Session L: the EFFECTIVE inset per side is max(pane, rail) — the ONE
+   * merge point of the two sources. The rule trips only when the two insets
+   * cover > 90 % of the width; the rails alone (169 + 130 px of 1376, or of
+   * 1280) cover ~22 %, so the threshold stands unchanged.
    * @private
    */
   _updatePaneEdges() {
+    const inL = Math.max(this._paneInsetL, this._railInsetL);
+    const inR = Math.max(this._paneInsetR, this._railInsetR);
     let eL = -1, eR = 1;
-    if (this._paneInsetL > 0 || this._paneInsetR > 0) {
+    if (inL > 0 || inR > 0) {
       const vw = (this.canvas && Number.isFinite(this.canvas.clientWidth))
         ? this.canvas.clientWidth : 0;
       if (vw > 0) {
-        eL = -1 + 2 * this._paneInsetL / vw;
-        eR = 1 - 2 * this._paneInsetR / vw;
+        eL = -1 + 2 * inL / vw;
+        eR = 1 - 2 * inR / vw;
         if (eR - eL < 0.2) { eL = -1; eR = 1; }
       }
     }
@@ -1220,7 +1266,7 @@ export class MotherCallouts {
       // library". Pushed before TRL so it survives the budget slice.
       const codexTitle = codex ? this._codexTitle(def) : null;
       if (codex === 'linked') {
-        rows.push({ text: `▸ ${codexTitle || 'open tech library'}`, dim: true, color: rec.hue });
+        rows.push({ text: `▸ ${codexTitle || 'open SPECS'}`, dim: true, color: rec.hue });
         const trl = this._partTRL(def);
         if (trl != null) rows.push({ text: `Readiness: L${trl}`, dim: true });
       } else if (codex === 'locked' && codexTitle) {

@@ -334,6 +334,19 @@ export class RailIndicator {
   bottomPx() { return this._visible ? this._railBottom : null; }
 
   /**
+   * Session L (Session K FINDINGS (a)): the rail's LEFT edge in CSS px
+   * wherever it sits — dodged or mid-height — else null while hidden /
+   * unmeasured. The hub feeds it (as `innerWidth - leftPx()`, the rail's reach
+   * from the RIGHT screen edge) to MotherCallouts.setRailInsets so the hull
+   * callouts' right column starts left of the rail instead of under it.
+   * Recorded by the 1 Hz dodge read from the SAME root rect that gives railH;
+   * no layout read of its own. `_railLeft` is first written by that read
+   * (unwritten reads as null here).
+   * @returns {number|null}
+   */
+  leftPx() { return (this._visible && this._railLeft != null) ? this._railLeft : null; }
+
+  /**
    * Refresh from a ZoomLadder state snapshot (docs/ladder/06-core-api.md).
    * Named `refresh` (not `update`) because it is driven by LadderController from
    * ladder state, not ticked directly by the main loop. Writes are cached — this
@@ -383,11 +396,15 @@ export class RailIndicator {
     const cr = (col && typeof col.getBoundingClientRect === 'function') ? col.getBoundingClientRect() : null;
     const colBottom = (cr && cr.height > 0) ? cr.bottom : -Infinity;
     const innerH = (typeof window !== 'undefined') ? Number(window.innerHeight) : 0;
-    const railH = root.getBoundingClientRect().height;
+    const rr = root.getBoundingClientRect();   // the ONE root read: .height (the dodge) + .left (leftPx)
+    const railH = rr.height;
     const top = dodgeTop({ railH, colBottom, innerH });
     this._dodgeBottom = (top == null) ? null : top + railH;   // what rides under the rail (the SPECS tab) reads this
     // Session K: the rail's bottom wherever it sits (mid-height = the 50 % anchor).
     this._railBottom = (railH > 0) ? ((top == null) ? (innerH / 2 + railH / 2) : top + railH) : null;
+    // Session L: the rail's LEFT edge from the SAME rect — the hull callouts'
+    // second inset source (leftPx → the hub → MotherCallouts.setRailInsets).
+    this._railLeft = (railH > 0) ? rr.left : null;
     if (top === this._dodgeTop) return;
     this._dodgeTop = top;
     if (top == null) {

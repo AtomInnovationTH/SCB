@@ -172,6 +172,8 @@ export class PaneRail {
     this._lastScanMs = -Infinity;
     /** @private the dodge's last applied top (null = mid-height) — write-on-change */
     this._dodgeTop = null;
+    /** @private Session L: the root's RIGHT edge (CSS px) from the dodge's 1 Hz read; null unmeasured (rightPx) */
+    this._railRight = null;
     // Idle fade (RefitPane pattern): activity clock, flag, timer.
     this._lastActivityMs = this._now();
     this._idle = false;
@@ -289,6 +291,17 @@ export class PaneRail {
 
   /** @returns {number|null} the floor the rail was last populated for. */
   floor() { return this._floor; }
+
+  /**
+   * Session L (Session K FINDINGS (a)): the rail's RIGHT edge in CSS px
+   * wherever it sits — dodged or mid-height — else null while hidden / no
+   * DOM / unmeasured. The hub feeds it to MotherCallouts.setRailInsets so the
+   * hull callouts' left column starts right of the rail instead of under it.
+   * Recorded by the 1 Hz dodge read from the SAME root rect that gives railH;
+   * no layout read of its own.
+   * @returns {number|null}
+   */
+  rightPx() { return this._visible ? this._railRight : null; }
 
   /**
    * Re-plan the rail for `floor` (the hub calls this at every ride start and
@@ -480,7 +493,11 @@ export class PaneRail {
     const col = doc.getElementById(SIDE_COLUMN_ID);
     const cr = (col && typeof col.getBoundingClientRect === 'function') ? col.getBoundingClientRect() : null;
     const colBottom = (cr && cr.height > 0) ? cr.bottom : -Infinity;
-    const top = dodgeTop({ railH: root.getBoundingClientRect().height, colBottom, innerH });
+    const rr = root.getBoundingClientRect();   // the ONE root read: .height (the dodge) + .right (rightPx)
+    // Session L: the rail's RIGHT edge from the SAME rect — the hull callouts'
+    // second inset source (rightPx → the hub → MotherCallouts.setRailInsets).
+    this._railRight = (rr.height > 0) ? rr.right : null;
+    const top = dodgeTop({ railH: rr.height, colBottom, innerH });
     if (top === this._dodgeTop) return;
     this._dodgeTop = top;
     if (top == null) {
