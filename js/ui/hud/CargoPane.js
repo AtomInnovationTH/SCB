@@ -161,6 +161,7 @@ export class CargoPane {
     this._rowCount = 1;              // rows the natural height is computed from (>= 1)
     this._empty = true;
     this._mode = 'hidden';           // until the first setDodge places the pane
+    this._topPx = null;              // the placed top (Session M: the NEXT pane rides above it)
     this._underPx = undefined;       // last setDodge inputs (write-on-change)
     this._floorPx = undefined;
     this._heightPx = 0;              // cached rendered height (offsetHeight, read once per change)
@@ -237,6 +238,21 @@ export class CargoPane {
 
   /** The current mode: 'full' | 'compact' | 'hidden' ('hidden' until the first setDodge, and headless). */
   mode() { return this._mode; }
+
+  /**
+   * Session M — the right-edge chain: the pane's PLACED top edge (CSS px) while
+   * it is on screen (placed, not clipped, its density bit clear), else null.
+   * The NEXT pane rides ABOVE this pane and takes this as its floor (the hub's
+   * gameLoop wire), so CARGO keeps its bottom slot and its own law. A cached
+   * layout number + one attribute read — never a layout read.
+   * @returns {number|null}
+   */
+  topPx() {
+    const el = this._root;
+    if (!el || this._mode === 'hidden' || this._topPx == null) return null;
+    if (el.hasAttribute && el.hasAttribute(DENSITY_HIDDEN_ATTR)) return null;
+    return this._topPx;
+  }
 
   /** The cached rendered height (px): offsetHeight read once per render / dodge change, never per frame. */
   heightPx() { return this._heightPx; }
@@ -660,6 +676,7 @@ export class CargoPane {
       wrote = this._setStyle(root, 'top', `${Math.round(top)}px`) || wrote;
       wrote = this._setStyle(root, 'maxHeight', `${Math.round(maxH)}px`) || wrote;
     }
+    this._topPx = mode === 'hidden' ? null : Math.round(top);
     this._expectedPx = mode === 'hidden' ? 0 : Math.min(maxH, mode === 'full' ? natural : compactMin);
     return wrote;
   }

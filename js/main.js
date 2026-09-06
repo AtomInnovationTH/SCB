@@ -29,7 +29,7 @@ import { regimeFromStartOrbit } from './entities/CatalogConverter.js';
 import { computeStartOrbit } from './systems/startOrbitMath.js';
 import { ActiveSatellites } from './entities/ActiveSatellite.js';
 import { ArmManager } from './entities/ArmManager.js';
-import { orbitToSceneCartesianInto } from './entities/OrbitalMechanics.js';
+import { orbitToSceneCartesianInto, subSatellitePoint } from './entities/OrbitalMechanics.js';
 import { CeremonyTimeScale } from './systems/CeremonyTimeScale.js';
 
 // Systems
@@ -129,6 +129,10 @@ import { FloorContract } from './core/FloorContract.js';
 import { RailIndicator } from './ui/RailIndicator.js';
 import { PaneRail } from './ui/PaneRail.js';
 import { CargoPane } from './ui/hud/CargoPane.js';
+import { OrbitPane } from './ui/hud/OrbitPane.js';
+import { FmaStrip } from './ui/hud/FmaStrip.js';
+import { NextPane } from './ui/hud/NextPane.js';
+import { CopilotVoice } from './systems/CopilotVoice.js';
 import { RAIL_GEOMETRY } from './ui/RailGeometry.js';
 import { TouchControls } from './ui/TouchControls.js';
 import { TouchTelemetry } from './ui/touchTelemetry.js';
@@ -676,6 +680,37 @@ let libraryPane;
 // wrappers, a pane-density rung. Same construction law: built ONLY inside the
 // LADDER.ENABLED gate (a ?ladder=0 boot builds no pane, pushes no rung).
 let cargoPane = null;
+// Wave 5 Session M (plan "Session M — Instruments") — the three instruments +
+// the copilot's voice: ORBIT (js/ui/hud/OrbitPane.js, the fixed slots + the
+// revived OrbitMFD as its track view), COPILOT (js/ui/hud/FmaStrip.js, the
+// flight-mode annunciator inside the left column + js/systems/CopilotVoice.js,
+// the spoken phrases) and NEXT (js/ui/hud/NextPane.js, the upcoming events).
+// Same construction law as CARGO: built ONLY inside the LADDER.ENABLED gate.
+let orbitPane = null;
+let fmaStrip = null;
+let nextPane = null;
+let copilotVoice = null;
+/** Session M: the hint ticker's band from the bottom (its BOTTOM_PX + ROW_HEIGHT_PX) — the ORBIT pane's floor never enters it. */
+const _HINT_BAND_PX = ((Constants.ONBOARDING && Constants.ONBOARDING.TICKER) || {}).BOTTOM_PX + ((Constants.ONBOARDING && Constants.ONBOARDING.TICKER) || {}).ROW_HEIGHT_PX;
+/** Session M: the debris clusters for the NEXT pane's TRANSFER row, re-bucketed at most every CLUSTERS_MS (getDebrisClusters walks every debris). */
+let _clustersCache = null;
+let _clustersAt = -Infinity;
+const _CLUSTERS_MS = 10000;
+function _instrumentClusters() {
+  if (!debrisField || typeof debrisField.getDebrisClusters !== 'function') return null;
+  const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+  if (_clustersCache && (now - _clustersAt) < _CLUSTERS_MS) return _clustersCache;
+  let list = null;
+  try { list = debrisField.getDebrisClusters(); } catch (_e) { list = null; }
+  // The row is 280 px wide: the subject is the cluster ID (`iss-400`), upper-
+  // cased — not the long display name; the live members ride along so the
+  // pane phases the window from the representative orbit (clusterToOrbitKm).
+  _clustersCache = Array.isArray(list)
+    ? list.map((c) => ({ id: c.id, name: String(c.id || c.name || '').toUpperCase(), avgAltKm: c.avgAltKm, targets: c.targets }))
+    : null;
+  _clustersAt = now;
+  return _clustersCache;
+}
 /** The boot's ONE glass read (TouchControls' narrow detectGlass gate; module scope: init sets it, the gameLoop reads it). */
 let _glassBoot = false;
 // Session J (plan D-C) — "the library follows": retarget an OPEN SPECS pane to
@@ -2066,6 +2101,75 @@ async function init() {
       const at = rungs.findIndex((r) => r && r.id === 'arms');
       rungs.splice(at >= 0 ? at + 1 : rungs.length, 0, cargoPane.rung());
     }
+    // Wave 5 Session M (plan "Session M — Instruments"): ORBIT, COPILOT, NEXT.
+    // Three more RUNG panes of the CARGO shape, constructed HERE (before
+    // ladderFloorMask, before the first setFloor — FloorMask._resolve caches
+    // the rung map once) with GETTER deps (timeAuthority is constructed after
+    // this block; every other source is read live, guarded). Rooms:
+    // FloorMask.DEFAULT_ROOMS (ORBIT + COPILOT F2/F3, COPILOT faint F4, NEXT
+    // F3/F4). Anchors and 1 Hz ticks ride the gameLoop below. Inside the gate:
+    // a ?ladder=0 boot builds none of this and pushes no rung.
+    orbitPane = new OrbitPane({
+      glass: _glassBoot,
+      player,
+      inShadow: () => !!(player && player._inShadow),           // the MotherCallouts precedent: no public reader (FINDINGS)
+      budget: () => (armManager && armManager.getMassBudget) ? armManager.getMassBudget() : null,
+      missionTime: () => gameState.missionTime,
+      sunDir: () => (sunLight ? sunLight.sunDirection : null),
+      sunDirAt: (aheadS, out) => ((sunLight && sunLight.directionAt) ? sunLight.directionAt(aheadS, out) : null),
+      clock: () => ({ rate: timeAuthority ? timeAuthority.rate : 1, baseScale: TimeAuthority.BASE_SCALE }),
+      orbitMFD,
+    });
+    // The voice: SpeechSynthesis when the platform has it, armed by the first
+    // pointer / key gesture (iPad Safari speaks only inside a gesture — the
+    // wake-lock precedent), silent under ?shot (the devShotGate singleton —
+    // the ONE reader), silent whenever the audio policy says the game is not
+    // audible (no AudioSystem, ?noAudio=1, paused / hidden / blurred / menu),
+    // ducking the mix through AudioSystem's reserved TTS hook while it speaks.
+    copilotVoice = new CopilotVoice({
+      synth: (typeof window !== 'undefined' && window.speechSynthesis) ? window.speechSynthesis : null,
+      Utterance: (typeof window !== 'undefined' && window.SpeechSynthesisUtterance) ? window.SpeechSynthesisUtterance : null,
+      enabled: !devShotGate.requested,
+      isMuted: () => !(audioSystem && audioSystem.available) || !_shouldAudioRun(),
+      duck: (on) => { if (audioSystem && typeof audioSystem.duckForVoice === 'function') audioSystem.duckForVoice(on); },
+    });
+    copilotVoice.attach(window);
+    fmaStrip = new FmaStrip({
+      fma: () => ((autopilotSystem && autopilotSystem.fmaState) ? autopilotSystem.fmaState() : null),
+      onPhaseChange: (prev, next, state) => { if (copilotVoice) copilotVoice.phase(prev, next, state); },
+    });
+    nextPane = new NextPane({
+      glass: _glassBoot,
+      clusters: _instrumentClusters,
+      playerAltKm: () => (player ? player.getAltitudeKm() : null),
+      orbit: () => (player ? player.getOrbitalElements() : null),
+      tca: () => {
+        const st = (conjunctionSystem && conjunctionSystem.getStatus) ? conjunctionSystem.getStatus() : null;
+        const t = st && st.currentThreat;
+        if (!t) return null;
+        return { id: t.debrisId, label: t.debrisType || t.debrisId, tcaS: t.tca, distM: t.distMeters, tier: t.tier };
+      },
+      eclipse: () => (orbitPane ? orbitPane.eclipse() : null),
+      subPoint: subSatellitePoint,
+      stations: () => {
+        const list = (catalogLoader && catalogLoader.getAllGroundStations) ? catalogLoader.getAllGroundStations() : null;
+        if (!Array.isArray(list) || !list.length) return null;
+        return list.map((g) => ({ name: g.name || g.id, lat: g.lat_deg, lon: g.lon_deg }));
+      },
+    });
+    if (hud && hud.paneDensity && Array.isArray(hud.paneDensity.rungs)) {
+      // Priorities (index 0 hides FIRST on `-`): NEXT ahead of the debris pane,
+      // ORBIT ahead of the target pane, COPILOT right after CARGO (before
+      // MOTHER) — instruments shed before the ship's own panes.
+      const rungs = hud.paneDensity.rungs;
+      const before = (id, rung) => {
+        const at = rungs.findIndex((r) => r && r.id === id);
+        rungs.splice(at >= 0 ? at : rungs.length, 0, rung);
+      };
+      before('debris', nextPane.rung());
+      before('targets', orbitPane.rung());
+      before('mother', fmaStrip.rung());
+    }
   }
   // (The Wave-3 ArchiveFloor bridge — the hosted codex as the old F1 costume —
   // left with the ARCHIVE row in the Session H 7→5 renumber. The Tech Library
@@ -3126,6 +3230,11 @@ async function init() {
       window.__paneRail = ladderPaneRail;
       // Session K: the CARGO pane (null on a ?ladder=0 boot — never constructed).
       window.__cargoPane = cargoPane;
+      // Session M: the instruments + the voice (null on a ?ladder=0 boot).
+      window.__orbitPane = orbitPane;
+      window.__fmaStrip = fmaStrip;
+      window.__nextPane = nextPane;
+      window.__copilotVoice = copilotVoice;
       // Session J gate witnesses (getters, the __scbSceneManager pattern): the
       // debris field (to project a target for the tap), the input manager (its
       // PUBLIC keys map — the drag's witness), the autopilot (the F2 Space verb).
@@ -5454,6 +5563,33 @@ function gameLoop(timestamp) {
     cargoPane.setDodge(tabBottom != null ? tabBottom : railIndicator.bottomPx(),
       window.innerHeight - (_glassBoot ? RAIL_GEOMETRY.THUMB_REST_PX : 0));
   }
+  // Session M — the instruments' edges (owner law: by the 13-inch numbers).
+  // ORBIT rides bottom-LEFT: right of the WHAT rail (its cached rightPx) and
+  // above BOTH the thumb rest and the hint ticker's band (min of the two
+  // floors — the ticker is bottom-anchored at BOTTOM_PX + ROW_HEIGHT_PX).
+  // NEXT rides the right edge ABOVE the CARGO pane: same rider above (the SPECS
+  // tab / the WHERE rail), its floor is CARGO's placed top while CARGO shows,
+  // else the thumb floor — CARGO keeps its bottom slot and its law; NEXT
+  // compacts to its two soonest rows, then hides. Cached numbers only.
+  if (_ladderActive && (orbitPane || nextPane)) {
+    const thumbFloor = window.innerHeight - (_glassBoot ? RAIL_GEOMETRY.THUMB_REST_PX : 0);
+    if (orbitPane && orbitPane.setAnchor) {
+      // Never a guess: until the rail's first 1 Hz read lands (rightPx() null
+      // for the first second of a floor, and while the rail is hidden) the
+      // pane keeps its last anchor — unplaced, it stays hidden rather than
+      // sitting in the rail's own column.
+      const railRight = (ladderPaneRail && ladderPaneRail.rightPx) ? ladderPaneRail.rightPx() : null;
+      if (railRight != null) {
+        orbitPane.setAnchor(railRight, Math.min(thumbFloor, window.innerHeight - _HINT_BAND_PX));
+      }
+    }
+    if (nextPane && nextPane.setDodge && railIndicator && railIndicator.bottomPx) {
+      const tabBottom = (libraryPane && libraryPane.tabBottom) ? libraryPane.tabBottom() : null;
+      const cargoTop = (cargoPane && cargoPane.topPx) ? cargoPane.topPx() : null;
+      nextPane.setDodge(tabBottom != null ? tabBottom : railIndicator.bottomPx(),
+        cargoTop != null ? cargoTop : thumbFloor);
+    }
+  }
 
   const currentState = gameState.currentState;
 
@@ -5740,6 +5876,15 @@ function gameLoop(timestamp) {
       forgeState: forgeSystem.getState(),
       cargoStatus: cargoSystem.getStatus(),
     });
+    // Session M: the instruments' 1 Hz ticks (each self-throttles on the frame
+    // clock and writes on change; under a full cover the DOM is invisible, so
+    // they wait with the HUD). Flag-off / disengaged: never constructed / never
+    // called.
+    if (!_skipPaint && _ladderActive) {
+      if (orbitPane) orbitPane.update(timestamp);
+      if (fmaStrip) fmaStrip.update(timestamp);
+      if (nextPane) nextPane.update(timestamp);
+    }
 
     // Orbit MFD update (Phase 6: pass cachedTargets for route planner)
     if (orbitMFD) {

@@ -484,8 +484,14 @@ export class PaneRail {
     for (const r of this._rungs()) {
       if (r && !displayed.has(r.id) && _safeVisible(r)) { promote = true; break; }
     }
-    if (promote) { this._replan(false); return; }
-    this._paintAll();
+    // A visible rest rung re-plans (it is promoted into the list — or stays
+    // behind MORE when the cap ranks the room's defaults first). Either way the
+    // dodge read runs EVERY scan: Session M found the early return here had
+    // starved it whenever a visible extra sat behind MORE (the home floor since
+    // Session J: comms / craft), so the rail never dodged there and rightPx()
+    // / bottomPx() never landed. `_replan` paints; the plain path paints here.
+    if (promote) this._replan(false);
+    else this._paintAll();
     this._applyDodge();
   }
 
