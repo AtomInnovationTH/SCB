@@ -14,7 +14,8 @@
  *
  * CONTENT: the shipped viewer's ENTRY rendered as a side pane (the adapter
  * over the shipped viewer 08-workbench §10 names) —
- *   - header: the entry's emoji icon + a LEAD line + a subtitle. A HARDWARE
+ *   - header: a LEAD line + a subtitle (no glyph — the entry's data `icon`
+ *     is never rendered, plan D-J). A HARDWARE
  *     entry (one with `hardwareNames`, the callout vocabulary) leads with the
  *     PART — the clicked callout name (`openEntry(id, { via })`, honoured
  *     only when it is one of the entry's own names) else every name it
@@ -39,7 +40,7 @@
  *     SceneManager change. The crop is composited onto black (the WebGL
  *     frame carries alpha 0 — the `__netShot` precedent), sampled for
  *     blankness, retried up to PHOTO_TRIES frames (a frame the loop skipped
- *     rendering reads blank), and on any failure the emoji header stands
+ *     rendering reads blank), and on any failure the text header stands
  *     alone — the sanctioned fallback, byte-identical to Session B's header.
  *     The source (canvas + subject point) arrives through the injected
  *     `photoSource` getter; the frame scheduler through `raf`/`cancelRaf`
@@ -59,7 +60,7 @@
  *     data): HARDWARE (the in-game hardware names), TECH LEVEL (trl + the
  *     Constants tier label), FORMULA. Unlocked depth only, like the viewer.
  *   - `related` chips — click navigates the PANE to that entry (locked
- *     relateds show 🔒 and navigate to the locked stub, viewer parity).
+ *     relateds show a LOCKED tag and navigate to the locked stub, viewer parity).
  *   - MAXIMIZE — the full-screen viewer on this entry through the injected
  *     `onMaximize` (main.js routes it over the EXACT CODEX_OPEN_ENTRY path
  *     every deep link rides today; never a fork).
@@ -69,7 +70,7 @@
  *     existing unlock path (CODEX_UNLOCK_REQUEST → CodexSystem's queue → the
  *     ticker ack chip → CODEX_UNLOCKED). Never a second unlock mechanism;
  *     already-unlocked / unknown / briefing-less parts are safe no-ops.
- *   - locked entries render the viewer's honest locked stub: 🔒 + the
+ *   - locked entries render the viewer's honest locked stub: LOCKED + the
  *     entry's own `unlockHint` (full briefing stays MAXIMIZE-away once
  *     unlocked).
  *
@@ -169,13 +170,18 @@ export const PHOTO_FLASH_MS = 600;
 export const PHOTO_W = 320;
 export const PHOTO_H = 200;
 /** Frames the photo read is retried when the buffer reads blank (a frame the
- *  loop skipped rendering) before the emoji header stands alone. */
+ *  loop skipped rendering) before the text header stands alone. */
 export const PHOTO_TRIES = 3;
 /** Blank test: a sampled pixel "lights" when r+g+b exceeds this (the
  *  crop-probe threshold, 2026-09-03). */
 const PHOTO_LIT_SUM = 24;
 /** Blank test sampling stride (px) — a coarse grid, never the full crop. */
 const PHOTO_SAMPLE_STRIDE = 8;
+/** The LOCKED marker after a locked entry's title (Session L, plan D-J: no
+ *  glyphs in chrome): a small letter-spaced text chip, `.library-lock`. */
+const LOCK_CHIP_HTML = ' <span class="library-lock" style="display:inline-block;vertical-align:middle;font-size:0.7em;letter-spacing:0.1em;padding:0 4px;border:1px solid currentColor;border-radius:2px;opacity:0.85">LOCKED</span>';
+/** The same marker inside a RELATED chip (already a bordered pill): text only. */
+const LOCK_TAG_HTML = ' <span class="library-lock" style="font-size:0.75em;letter-spacing:0.1em;opacity:0.85">LOCKED</span>';
 
 /** G1 write cap — the ProxContextPanel/TransferWindows house value. */
 const DOM_WRITE_MIN_INTERVAL_MS = 250;
@@ -231,7 +237,7 @@ export class LibraryPane {
    *   ship. Read once per photo, on the open / entry edge only.
    * @param {function} [deps.raf] - (cb) => handle: the frame scheduler for
    *   the deferred photo read (default window.requestAnimationFrame; absent →
-   *   no photo, the emoji header stands alone)
+   *   no photo, the text header stands alone)
    * @param {function} [deps.cancelRaf] - (handle) => void (default
    *   window.cancelAnimationFrame)
    * @param {boolean|function} [deps.reducedMotion] - override for the matchMedia probe
@@ -732,13 +738,13 @@ export class LibraryPane {
   _model() {
     const entry = this._entry(this._entryId);
     const related = entry ? this._related(entry.id).map((r) => ({
-      id: r.id, icon: r.icon, title: r.title, unlocked: !!r.unlocked,
+      id: r.id, title: r.title, unlocked: !!r.unlocked,
     })) : [];
     const specs = (entry && entry.unlocked) ? LibraryPane.specsFor(entry) : [];
     // The bridge line (Session D): hardware entries only, authored data.
     const note = LibraryPane.hardwareNote(entry);
     // The photo shows only for the entry it was taken for (never a stale
-    // frame under a newer entry); absent → the emoji header stands alone.
+    // frame under a newer entry); absent → the text header stands alone.
     const photo = (entry && this._photo && this._photo.id === entry.id) ? this._photo.url : null;
     let unread = 0;
     try {
@@ -851,7 +857,7 @@ export class LibraryPane {
     // Built as real children (never innerHTML) so the count node survives
     // every repaint and fake-DOM test docs need no querySelector.
     const tabLabel = doc.createElement('span');
-    tabLabel.textContent = 'LIBRARY ';
+    tabLabel.textContent = 'SPECS ';
     const tabCount = doc.createElement('span');
     tabCount.className = 'library-tab-count';
     tabCount.style.cssText = `color:${VisualLaw.COLORS.VALUE};font-weight:bold`;
@@ -962,7 +968,7 @@ export class LibraryPane {
     // viewer — the old F1 — one click away, never hidden).
     parts.push(
       `<div class="library-header" style="display:flex;justify-content:space-between;align-items:baseline;color:${C.PLAYER};border-bottom:1px solid rgba(0,204,255,0.25);padding-bottom:6px;margin-bottom:8px">` +
-      '<span>TECH LIBRARY</span>' +
+      '<span>SPECS</span>' +
       (m.entry
         ? `<button class="library-max" data-max="${m.entry.id}" style="cursor:pointer;background:none;border:1px solid rgba(0,204,255,0.4);color:${C.INFO};font:inherit;padding:0 6px;border-radius:3px">MAXIMIZE \u2197</button>`
         : '') +
@@ -978,22 +984,23 @@ export class LibraryPane {
     const locked = !e.unlocked;
     // The photo you just took (Session C): a banner above the entry header
     // when the deferred frame read succeeded; otherwise nothing here and the
-    // emoji header below stands alone (the fallback = Session B's header).
+    // text header below stands alone (the fallback = Session B's header).
     if (m.photo) {
       parts.push(
         `<img class="library-photo" alt="" src="${m.photo}" style="display:block;width:100%;height:110px;object-fit:cover;border:1px solid rgba(0,204,255,0.35);border-radius:4px;margin-bottom:8px${locked ? ';opacity:0.7' : ''}">`,
       );
     }
-    // Entry header: emoji icon (the codex's own icon vocabulary; alone when
-    // no photo could be read) + the lead line + the subtitle. Hardware entries
-    // lead with the PART (the clicked callout name when known) and carry the
-    // briefing's title as the subtitle — see headerLead().
+    // Entry header: the lead line + the subtitle, text only — the entry's data
+    // `icon` is never rendered (plan D-J); a locked entry carries a LOCKED text
+    // chip (.library-lock) after the title span. Hardware entries lead with the
+    // PART (the clicked callout name when known) and carry the briefing's
+    // title as the subtitle — see headerLead().
     const head = LibraryPane.headerLead(e, this._via, m.category);
     parts.push(
       '<div class="library-entry-header" style="display:flex;gap:8px;align-items:flex-start;margin-bottom:8px">' +
-      `<span style="font-size:1.6rem;line-height:1.2${locked ? ';opacity:0.6' : ''}">${e.icon}</span>` +
       '<span style="flex:1;min-width:0">' +
-      `<span class="library-title" style="display:block;color:${locked ? C.INFO : C.SELECTION};font-weight:bold">${head.lead}${locked ? ' \ud83d\udd12' : ''}</span>` +
+      `<span class="library-title" style="display:inline-block;color:${locked ? C.INFO : C.SELECTION};font-weight:bold">${head.lead}</span>` +
+      (locked ? LOCK_CHIP_HTML : '') +
       `<span class="library-sub" style="display:block;opacity:${head.hardware ? 0.8 : 0.6}">${head.sub}</span>` +
       '</span>' +
       '</div>',
@@ -1017,7 +1024,7 @@ export class LibraryPane {
       // The viewer's honest locked stub: how to unlock, nothing invented.
       parts.push(
         `<div class="library-locked" style="color:${C.VALUE};border:1px dashed rgba(255,209,102,0.5);border-radius:3px;padding:6px 8px;margin-bottom:8px">` +
-        `\ud83d\udd12 How to unlock: ${e.unlockHint || 'Discover through gameplay.'}` +
+        `LOCKED \u00b7 How to unlock: ${e.unlockHint || 'Discover through gameplay.'}` +
         '</div>',
       );
     } else if (m.specs.length) {
@@ -1034,8 +1041,8 @@ export class LibraryPane {
       }
       parts.push('</div>');
     }
-    // Related chips — click navigates the PANE (locked relateds keep the
-    // viewer's 🔒 and navigate to the locked stub).
+    // Related chips — click navigates the PANE (locked relateds carry the
+    // viewer's LOCKED text tag and navigate to the locked stub; no entry icon).
     if (m.related.length) {
       parts.push('<div class="library-related" style="margin-top:8px">');
       parts.push(`<div style="color:${C.PLAYER};margin-bottom:4px">RELATED</div>`);
@@ -1043,7 +1050,7 @@ export class LibraryPane {
       for (const r of m.related) {
         parts.push(
           `<span class="library-rel" data-rel="${r.id}" style="cursor:pointer;padding:1px 6px;border:1px solid rgba(0,204,255,0.35);border-radius:3px;${r.unlocked ? '' : 'opacity:0.6'}">` +
-          `${r.icon || ''} ${r.title}${r.unlocked ? '' : ' \ud83d\udd12'}` +
+          `${r.title}${r.unlocked ? '' : LOCK_TAG_HTML}` +
           '</span>',
         );
       }
@@ -1125,7 +1132,7 @@ export class LibraryPane {
    * @private Arm ONE deferred frame read for the current entry (called on the
    * open edge and on an in-place entry change — never per frame, never from
    * refresh()). Requires an entry, an open pane, a source getter and a frame
-   * scheduler; otherwise the emoji header stands alone. A pending read is
+   * scheduler; otherwise the text header stands alone. A pending read is
    * replaced (the newest edge owns the photo).
    */
   _takePhoto() {
@@ -1152,7 +1159,7 @@ export class LibraryPane {
    * (16:10) around the subject point, clamped inside the canvas, composited
    * onto black (the frame's alpha is 0 — the __netShot precedent), sampled on
    * a coarse grid: a blank read (a frame the loop skipped) is retried next
-   * frame up to PHOTO_TRIES, then dropped — the emoji header stands alone.
+   * frame up to PHOTO_TRIES, then dropped — the text header stands alone.
    * Any throw (a tainted canvas, a missing 2D context) drops it the same way.
    */
   _photoTick() {

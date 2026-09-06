@@ -33,7 +33,6 @@ const HOTKEY_GROUPS = [
     // Mother command-chair verbs, in onboarding teach order (orient → look →
     // target → capture → scan → deploy), then the Shift fleet commands.
     title: 'Mother',
-    icon: '🛰',
     rows: [
       [['↑ ↓ ← →'], 'Rotate'],
       [['V'], 'View — fly / look around'],
@@ -172,7 +171,7 @@ export class HotkeyOverlay {
       </div>
       <button id="hotkey-close-btn" style="background:none;border:1px solid rgba(255,255,255,0.2);
         color:#aaa;font-size:16px;cursor:pointer;padding:4px 12px;border-radius:3px;
-        font-family:'Courier New',monospace;">ESC ✕</button>
+        font-family:'Courier New',monospace;">ESC ×</button>
     `;
 
     const body = document.createElement('div');
@@ -212,7 +211,8 @@ export class HotkeyOverlay {
       letterSpacing: '0.05em', marginBottom: '10px',
       borderBottom: '1px solid rgba(0,212,255,0.12)', paddingBottom: '6px',
     });
-    title.textContent = group.icon ? `${group.icon} ${group.title}` : group.title;
+    // Text only: a group's title is its name (no glyph — Session L, plan D-J).
+    title.textContent = group.title;
     card.appendChild(title);
 
     for (const row of group.rows) {

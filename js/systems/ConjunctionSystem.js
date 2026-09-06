@@ -596,7 +596,7 @@ export class ConjunctionSystem {
         eventBus.emit(Events.COMMS_MESSAGE, {
           source: 'HOUSTON',
           priority: 'INFO',
-          text: 'CONJUNCTION TRACKING ONLINE<br>Orbital debris paths sometimes cross yours. Green = informational.<br>Check Tech Library [?] for details.',
+          text: 'CONJUNCTION TRACKING ONLINE<br>Orbital debris paths sometimes cross yours. Green = informational.<br>Check SPECS [?] for details.',
         });
         return; // Don't emit alert yet — primer leads by 5s
       }

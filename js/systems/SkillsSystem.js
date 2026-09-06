@@ -128,7 +128,7 @@ export class SkillsSystem {
     /**
      * Slice 8 — inject the CodexSystem so the `manage_codex` reminder can point
      * the player at an unlocked-but-unread entry. Purely additive: no codex ref
-     * means the reminder stays the generic "Tech Library" nudge.
+     * means the reminder stays the generic "SPECS" nudge.
      * @param {Object} codex - CodexSystem instance (getUnlockedEntries/getCategories)
      */
     setCodexSystem(codex) {
@@ -172,7 +172,8 @@ export class SkillsSystem {
             return a.id < b.id ? -1 : (a.id > b.id ? 1 : 0);
         })[0];
 
-        return { id: best.id, icon: best.icon || '📄', title: best.title || best.id };
+        // `icon` is a data passthrough only (never an invented glyph — plan D-J).
+        return { id: best.id, icon: best.icon || '', title: best.title || best.id };
     }
 
     // ═══════════════════════════════════════════════════════════════════════

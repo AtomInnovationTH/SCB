@@ -165,7 +165,7 @@ export class CodexSystem {
       category: e.category,
       subcategory: e.subcategory || null,
       trl: hasTrl ? e.trl : null,         // PLAYBOOK/CATALOG/WORLD_INDUSTRY → null
-      icon: e.icon || '📄',
+      icon: e.icon || '',                 // data passthrough; never rendered by the readers (plan D-J)
       related: Array.isArray(e.related) ? e.related : [],
       // In-game hardware name(s) this entry documents (bridges the callout
       // vocabulary → Tech Library search; MotherCallouts links here).
@@ -315,10 +315,11 @@ export class CodexSystem {
   }
 
   /**
-   * @private Post the "+ Library: <title>" acknowledgment chip (HINT_POSTED,
+   * @private Post the "+ SPECS: <title>" acknowledgment chip (HINT_POSTED,
    * CODEX_ACK_CHIP_MS). Glyph is the Info key — the ticker's chip is a KEY
    * chip by convention (see OnboardingDirector's codex reminder) and tells the
-   * player how to reach the entry; the entry's own icon rides in the text.
+   * player how to reach the entry; the text is the title alone (Session L: the
+   * entry's data icon is never rendered — plan D-J).
    * `codexId` (Session J item 3, "the unlock chip's tap opens SPECS on the
    * new entry") names the entry for the presenter: HintTicker renders a row
    * that carries it as tappable and hands `{ id }` to its `setChipTap` sink.
@@ -327,7 +328,7 @@ export class CodexSystem {
   _postAckChip(entry) {
     eventBus.emit(Events.HINT_POSTED, {
       id: CODEX_ACK_CHIP_ID + entry.id,
-      text: `+ Library: ${entry.icon ? entry.icon + ' ' : ''}${entry.title}`,
+      text: `+ SPECS: ${entry.title}`,
       glyph: 'I',
       keys: [],
       codexId: entry.id,
@@ -358,7 +359,7 @@ export class CodexSystem {
       category: entry.category,
     });
 
-    console.log(`[CodexSystem] Unlocked: ${entry.icon} ${entry.title}`);
+    console.log(`[CodexSystem] Unlocked: ${entry.title}`);
 
     // Slice 7 — first-100% completion comms for the entry's category and track.
     this._checkCompletion(entry);
@@ -503,7 +504,7 @@ export class CodexSystem {
     return keys.map(key => ({
       key,
       label: (meta[key] && meta[key].label) || key,
-      icon: (meta[key] && meta[key].icon) || '📄',
+      icon: (meta[key] && meta[key].icon) || '',
       color: (meta[key] && meta[key].color) || '#00d4ff',
       order: (meta[key] && typeof meta[key].order === 'number') ? meta[key].order : 999,
     })).sort((a, b) => a.order - b.order);

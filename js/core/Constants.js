@@ -4152,7 +4152,7 @@ export const Constants = {
       { id: 'collect_dual_fire',       label: 'Dual Launch',            key: null, tier: 3, category: 'collect', hudGroup: null,          prereqs: [],  prereqType: 'hard', noReminder: false, triggerEvent: 'DUAL_FIRE' },
       { id: 'manage_power',            label: 'Power Distribution',   key: 'Shift+1/2/3', tier: 3, category: 'manage', hudGroup: 'power',    prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'POWER_BUS_SELECTED' },
       { id: 'manage_comms',            label: 'Comms Menu',           key: '7',  tier: 3, category: 'manage', hudGroup: 'comms',       prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'COMMS_OPENED' },
-      { id: 'manage_codex',            label: 'Tech Library',         key: 'I',  tier: 3, category: 'manage', hudGroup: null,          prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'CODEX_OPENED' },
+      { id: 'manage_codex',            label: 'SPECS',                key: 'I',  tier: 3, category: 'manage', hudGroup: null,          prereqs: [],  prereqType: 'none', noReminder: false, triggerEvent: 'CODEX_OPENED' },
       // ── CP-4 ch2 (MissionCoach): Daughter piloting (payload-discriminated via triggerFilter) ──
       { id: 'arm_pilot',         label: 'Daughter Piloting', key: '1-4', tier: 3, category: 'collect', hudGroup: 'fleet', prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'CONTROL_MODE_CHANGE', triggerFilter: (d) => d && d.mode === 'ARM_PILOT' },
       { id: 'arm_pilot_capture', label: 'Manual Capture',    key: 'N', tier: 3, category: 'collect', hudGroup: 'fleet', prereqs: [], prereqType: 'none', noReminder: false, triggerEvent: 'ARM_CAPTURED',        triggerFilter: (d) => d && d.manual === true },
@@ -4783,7 +4783,7 @@ export const Constants = {
           id: 'ch3_codex',
           type: 'interactive',
           source: 'HOUSTON',
-          text: 'New contacts logged to the Tech Library. Press I to open Info. Know what you\'re grabbing before you commit fuel to it.',
+          text: 'New contacts logged to SPECS. Press I to open Info. Know what you\'re grabbing before you commit fuel to it.',
           skillId: 'manage_codex',
           triggerEvent: 'CODEX_OPENED',
           title: 'THE CODEX',

@@ -30,8 +30,9 @@ const RING2_CAP = 12;
  * @property {number} y        - y coordinate within the 1000×700 viewBox
  * @property {0|1|2} ring      - 0 focus, 1 direct related, 2 two-hop related
  * @property {boolean} locked  - whether the entry is still locked
- * @property {string} icon     - entry icon glyph
- * @property {string} title    - entry title
+ * @property {string} title    - entry title (the node's only text — the data
+ *                               `icon` is not carried; nothing renders it,
+ *                               Session L plan D-J)
  * @property {string} category - entry category key
  */
 
@@ -55,7 +56,6 @@ function toNode(entry, x, y, ring) {
     y,
     ring,
     locked: !entry.unlocked,
-    icon: entry.icon || '·',
     title: entry.title || entry.id,
     category: entry.category || '',
   };

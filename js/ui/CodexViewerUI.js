@@ -5,7 +5,7 @@
  * Layout (Slice 1 overhaul): full-screen overlay → centered panel with a
  * **3-column master-detail** interior:
  *   • sidebar (categories + learning paths)
- *   • compact entry list (dense rows — icon · title · one-line hook · NEW/🔒 pip)
+ *   • compact entry list (dense rows — title · one-line hook · NEW/LOCKED pip)
  *   • persistent reading pane (QUICK LOOK → BRIEFING → TECH LEVEL → REAL WORLD →
  *     FORMULA → RELATED → prev/next)
  *
@@ -26,31 +26,74 @@ import {
   Constants, trlToBadgeColor, trlToLabel, techLevelBadgeText,
 } from '../core/Constants.js';
 
-// Fallback category labels/icons used only if the system supplies no meta
-// (e.g. codex.json failed to load). Authoritative meta — including per-category
-// colour — comes from data/codex.json via codexSystem.getCategories().
+// Fallback category labels used only if the system supplies no meta (e.g.
+// codex.json failed to load). Authoritative meta — including per-category
+// colour — comes from data/codex.json via codexSystem.getCategories(). The
+// data's `icon` fields are inert here: a category renders as a colour swatch +
+// a small-caps label, an entry as its title (Session L, plan D-J).
 const CATEGORY_META_FALLBACK = {
-  ORBITAL_MECHANICS: { label: 'Orbital Mechanics', icon: '🌍' },
-  PROPULSION:        { label: 'Propulsion',        icon: '🔥' },
-  POWER:             { label: 'Power',              icon: '⚡' },
-  SPACE_ENVIRONMENT: { label: 'Environment',        icon: '🌌' },
-  MATERIALS:         { label: 'Materials',           icon: '🔩' },
-  TETHERS:           { label: 'Tethers',             icon: '🪢' },
-  DEBRIS:            { label: 'Debris',              icon: '💥' },
-  SENSORS:           { label: 'Sensors',             icon: '📡' },
-  ATTITUDE:          { label: 'Attitude Control',    icon: '🌀' },
-  AVIONICS:          { label: 'Avionics',            icon: '🖥️' },
-  COMMS:             { label: 'Communications',      icon: '📶' },
-  CATALOG:           { label: 'Catalog',             icon: '🛰️' },
-  HERITAGE:          { label: 'Heritage',            icon: '🏛️' },
-  WORLD_INDUSTRY:    { label: 'World & Industry',    icon: '🌐' },
-  NEWS:              { label: 'News & Events',       icon: '📰' },
-  PLAYBOOK:          { label: 'Playbook',            icon: '🎮' },
+  ORBITAL_MECHANICS: { label: 'Orbital Mechanics' },
+  PROPULSION:        { label: 'Propulsion' },
+  POWER:             { label: 'Power' },
+  SPACE_ENVIRONMENT: { label: 'Environment' },
+  MATERIALS:         { label: 'Materials' },
+  TETHERS:           { label: 'Tethers' },
+  DEBRIS:            { label: 'Debris' },
+  SENSORS:           { label: 'Sensors' },
+  ATTITUDE:          { label: 'Attitude Control' },
+  AVIONICS:          { label: 'Avionics' },
+  COMMS:             { label: 'Communications' },
+  CATALOG:           { label: 'Catalog' },
+  HERITAGE:          { label: 'Heritage' },
+  WORLD_INDUSTRY:    { label: 'World & Industry' },
+  NEWS:              { label: 'News & Events' },
+  PLAYBOOK:          { label: 'Playbook' },
 };
+
+/**
+ * The swatch colour for a category (or a `track:`/`map:` pseudo-category).
+ * Rule: the data's own colour when it has one; otherwise a deterministic hue
+ * from the key — FNV-1a over the key's UTF-16 code units, hue = hash mod 360,
+ * at a fixed 60% saturation / 55% lightness — so a colourless category always
+ * paints the same swatch and two different keys rarely collide. Pure.
+ * @param {string} key
+ * @param {string} [color] - the data colour, if any
+ * @returns {string} a CSS colour
+ */
+export function categorySwatchColor(key, color) {
+  if (typeof color === 'string' && color.trim()) return color.trim();
+  const s = String(key || '');
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return `hsl(${h % 360},60%,55%)`;
+}
+
+/**
+ * The category marker: a 10x10 px colour swatch followed by the category's
+ * name in small caps. Never a glyph (plan D-J). `.codex-cat-swatch` /
+ * `.codex-cat-label` are the stable hooks tests read.
+ * @param {string} label - the category's display name
+ * @param {string} swatch - a CSS colour (see categorySwatchColor)
+ * @returns {string} HTML
+ */
+export function categoryLabelHtml(label, swatch) {
+  return `<span class="codex-cat-swatch" style="display:inline-block;width:10px;height:10px;` +
+    `border-radius:2px;background:${swatch};flex-shrink:0;vertical-align:middle;"></span>` +
+    `<span class="codex-cat-label" style="font-variant:small-caps;letter-spacing:0.06em;` +
+    `overflow:hidden;text-overflow:ellipsis;">${label}</span>`;
+}
 
 // Below this panel width the 3-column interior collapses to a 2-pane swap
 // (list ⇄ reading), mirroring the pre-overhaul Back navigation.
 const NARROW_BREAKPOINT = 1000;
+
+// The LOCKED marker that trails a locked entry's title inside a chip: a tiny
+// letter-spaced text tag (plan D-J: chrome glyphs became text). Leading space
+// keeps it off the title.
+const LOCKED_TAG_HTML = ' <span class="codex-locked-tag" style="font-size:9px;letter-spacing:0.08em;opacity:0.8;">LOCKED</span>';
 
 // Dwell before an entry is marked seen. `CODEX_VIEWED` fires only once the
 // selection has *rested* on an unlocked/unseen entry this long — arrow-scrubbing
@@ -224,7 +267,7 @@ export class CodexViewerUI {
     });
     header.innerHTML = `
       <div style="display:flex;align-items:center;gap:14px;flex:1;min-width:0;">
-        <span style="font-size:20px;color:#00d4ff;font-weight:bold;letter-spacing:2px;white-space:nowrap;">🔧 TECH LIBRARY</span>
+        <span style="font-size:20px;color:#00d4ff;font-weight:bold;letter-spacing:2px;white-space:nowrap;">SPECS</span>
         <span id="codex-progress" style="font-size:13px;color:#888;white-space:nowrap;"></span>
         <div id="codex-progress-bar" title="overall briefings unlocked"
           style="width:120px;height:6px;border-radius:3px;background:rgba(255,255,255,0.08);
@@ -232,14 +275,14 @@ export class CodexViewerUI {
           <div id="codex-progress-fill" style="height:100%;width:0%;
             background:linear-gradient(90deg,#00d4ff,#7af);transition:width 0.3s ease;"></div>
         </div>
-        <input id="codex-search" type="text" placeholder="🔍 search topics…" spellcheck="false"
+        <input id="codex-search" type="text" placeholder="search topics…" spellcheck="false"
           style="flex:1;max-width:320px;margin-left:8px;background:rgba(0,0,0,0.4);
                  border:1px solid rgba(0,212,255,0.25);border-radius:3px;color:#cfefff;
                  font-family:'Courier New',monospace;font-size:14px;padding:6px 10px;outline:none;" />
       </div>
       <button id="codex-close-btn" style="background:none;border:1px solid rgba(255,255,255,0.2);
         color:#888;font-size:16px;cursor:pointer;padding:4px 12px;border-radius:3px;
-        font-family:'Courier New',monospace;">ESC ✕</button>
+        font-family:'Courier New',monospace;">ESC ×</button>
     `;
 
     // --- Body (sidebar + list + reading pane) ---
@@ -348,14 +391,17 @@ export class CodexViewerUI {
     });
   }
 
-  /** @private Resolve category meta {label, icon, color} from the system, with fallback. */
+  /** @private Resolve category meta {label, color, swatch} from the system, with
+   * fallback. `color` is the accent (tints; cyan default); `swatch` is the
+   * marker colour — the data colour, else a key-derived hue (categorySwatchColor).
+   * The data's `icon` is deliberately not surfaced (plan D-J). */
   _catMeta(key) {
     const m = (typeof this._codex.getCategoryMeta === 'function') ? this._codex.getCategoryMeta(key) : null;
-    const fb = CATEGORY_META_FALLBACK[key] || { label: key, icon: '📄' };
+    const fb = CATEGORY_META_FALLBACK[key] || { label: key };
     return {
       label: (m && m.label) || fb.label,
-      icon: (m && m.icon) || fb.icon,
       color: (m && m.color) || '#00d4ff',
+      swatch: categorySwatchColor(key, m && m.color),
     };
   }
 
@@ -370,7 +416,7 @@ export class CodexViewerUI {
         ? this._codex.getCategoryProgress(c.key).total > 0
         : true;
       if (!hasEntries) continue;
-      const tab = this._makeSidebarTab(c.key, c.icon, c.label, c.key, c.color);
+      const tab = this._makeSidebarTab(c.key, c.label, c.key, c.color);
       sidebar.appendChild(tab);
     }
 
@@ -391,7 +437,7 @@ export class CodexViewerUI {
         .sort((a, b) => (a[1].order ?? 999) - (b[1].order ?? 999))
         .forEach(([tid, meta]) => {
           const tab = this._makeSidebarTab(
-            `track:${tid}`, '🧭', meta.label || tid, `track:${tid}`, meta.color,
+            `track:${tid}`, meta.label || tid, `track:${tid}`, meta.color,
           );
           sidebar.appendChild(tab);
         });
@@ -408,7 +454,7 @@ export class CodexViewerUI {
       color: '#566', borderTop: '1px solid rgba(255,255,255,0.06)', marginTop: '8px',
     });
     sidebar.appendChild(mapDivider);
-    const mapTab = this._makeSidebarTab('map:', '🕸', 'Map', 'map:', '#8ab',
+    const mapTab = this._makeSidebarTab('map:', 'Map', 'map:', '#8ab',
       () => this._openMapFromSidebar());
     sidebar.appendChild(mapTab);
   }
@@ -443,16 +489,17 @@ export class CodexViewerUI {
     return cats.length ? cats[0].key : null;
   }
 
-  /** @private Create a sidebar tab element.
+  /** @private Create a sidebar tab element: a colour swatch + a small-caps
+   * label (never a glyph — plan D-J). The swatch is the category's data colour
+   * or, for a colourless key, the deterministic hue from categorySwatchColor.
    * @param {string} key
-   * @param {string} icon
    * @param {string} label
    * @param {string} category - dataset.category (may be a `track:`/`map:` pseudo-key)
    * @param {string} color
    * @param {Function} [onClick] - Slice 8: custom click handler; when supplied,
    *        replaces the default category-switch behaviour (used by the map tab).
    */
-  _makeSidebarTab(key, icon, label, category, color, onClick) {
+  _makeSidebarTab(key, label, category, color, onClick) {
     const tab = document.createElement('div');
     tab.dataset.category = category;
     // Phase 3 hue theming: stash the category accent on the element so the
@@ -465,7 +512,8 @@ export class CodexViewerUI {
       display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px',
     });
     // Per-category progress counter, refreshed on every render.
-    tab.innerHTML = `<span style="overflow:hidden;text-overflow:ellipsis;">${icon} ${label}</span>` +
+    tab.innerHTML = `<span style="display:inline-flex;align-items:center;gap:7px;min-width:0;overflow:hidden;">` +
+      categoryLabelHtml(label, categorySwatchColor(key, color)) + '</span>' +
       `<span class="codex-tab-count" style="font-size:11px;color:#557;flex-shrink:0;"></span>`;
     tab.addEventListener('mouseenter', () => {
       if (tab.dataset.category !== this._selectedCategory) {
@@ -610,7 +658,7 @@ export class CodexViewerUI {
       listEl.appendChild(empty);
     }
     // 2a: a dim, non-interactive reassurance banner when the whole list is
-    // locked (default 'all' filter, no search) — turns a wall-of-🔒 first
+    // locked (default 'all' filter, no search) — turns a wall-of-LOCKED first
     // impression into "these unlock as you fly" guidance.
     if (this._shouldShowZeroUnlockedBanner(entries)) {
       const banner = document.createElement('div');
@@ -622,7 +670,7 @@ export class CodexViewerUI {
         border: '1px solid rgba(90,220,150,0.2)', borderRadius: '4px',
         pointerEvents: 'none',
       });
-      banner.textContent = '🔒 Locked for now. Entries unlock as you fly. Open one to see how.';
+      banner.textContent = 'Locked for now. Entries unlock as you fly. Open one to see how.';
       listEl.appendChild(banner);
     }
     entries.forEach((entry, i) => listEl.appendChild(this._makeRow(entry, i)));
@@ -695,8 +743,9 @@ export class CodexViewerUI {
   }
 
   /** @private Create a single compact entry row.
-   * Reveal model (UX-11 #10): title + icon + one-liner are ALWAYS visible — the
-   * library is a syllabus. Locked rows read as "not yet detailed": dimmed + 🔒.
+   * Reveal model (UX-11 #10): title + one-liner are ALWAYS visible — the
+   * codex is a syllabus. Locked rows read as "not yet detailed": dimmed + a
+   * LOCKED text pip. The entry's data `icon` is never rendered (plan D-J).
    */
   _makeRow(entry, index) {
     const row = document.createElement('div');
@@ -726,11 +775,10 @@ export class CodexViewerUI {
     const pip = isNew
       ? `<span title="new" style="flex-shrink:0;align-self:center;font-size:9px;font-weight:bold;color:${accent};letter-spacing:0.06em;text-shadow:0 0 6px ${accent};">NEW</span>`
       : (isLocked
-        ? `<span title="locked" style="flex-shrink:0;align-self:center;font-size:12px;color:#667;">🔒</span>`
+        ? `<span title="locked" class="codex-locked-pip" style="flex-shrink:0;align-self:center;font-size:9px;font-weight:bold;color:#667;letter-spacing:0.08em;padding:0 4px;border:1px solid #445;border-radius:2px;">LOCKED</span>`
         : '');
 
     row.innerHTML = `
-      <span style="font-size:17px;flex-shrink:0;line-height:1.3;${isLocked ? 'opacity:0.6;' : ''}">${entry.icon}</span>
       <span style="flex:1;min-width:0;">
         <span style="display:block;font-size:13px;font-weight:bold;color:${isLocked ? '#9ab' : '#eee'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${entry.title}</span>
         <span style="display:block;font-size:11px;line-height:1.35;color:#889;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:${isLocked ? 0.6 : 0.85};">${entry.shortText}</span>
@@ -1015,15 +1063,15 @@ export class CodexViewerUI {
           transition:background 0.15s;">← Back to list</div>`
       : '';
 
-    // Title header
+    // Title header: the title carries the entry (no glyph); the category reads
+    // as its colour swatch + small-caps name (plan D-J).
     const titleHtml = `
       <div style="display:flex;align-items:center;gap:14px;margin-bottom:18px;">
-        <span style="font-size:40px;${isLocked ? 'opacity:0.6;' : ''}">${entry.icon}</span>
-        <div style="flex:1;">
+        <div style="flex:1;min-width:0;">
           <div style="font-size:22px;font-weight:bold;color:${isLocked ? '#9ab' : '#eee'};">${entry.title}</div>
-          <div style="font-size:12px;color:${accent};opacity:0.85;">${catMeta.icon} ${catMeta.label}</div>
+          <div class="codex-cat" style="display:flex;align-items:center;gap:6px;font-size:12px;color:${accent};opacity:0.85;">${categoryLabelHtml(catMeta.label, catMeta.swatch)}</div>
         </div>
-        ${entry.unlocked ? this._mapToggleHtml('🕸 MAP', accent, accentBg) : ''}
+        ${entry.unlocked ? this._mapToggleHtml('MAP', accent, accentBg) : ''}
       </div>`;
 
     // QUICK LOOK — the ELI5 lead, always shown (even when locked).
@@ -1044,7 +1092,7 @@ export class CodexViewerUI {
       const rat = (!isLocked && entry.trlRationale) ? entry.trlRationale : '';
       trlHtml = `
         <div style="margin-bottom:22px;">
-          ${sectionHeader('⚠ TECH LEVEL', col)}
+          ${sectionHeader('TECH LEVEL', col)}
           <div class="codex-related-chip" data-id="tech_level"
                title="Tech Level (real-world readiness) ${dTrl}. ${lbl}. Click to read 'Tech Level' in the Playbook."
                style="display:flex;align-items:center;gap:10px;cursor:pointer;
@@ -1055,7 +1103,7 @@ export class CodexViewerUI {
                          background:rgba(0,0,0,0.35);">${techLevelBadgeText(dTrl)}</span>
             <span style="color:${col};font-weight:bold;letter-spacing:0.04em;">${lbl}</span>
             ${rat ? `<span style="color:#888;font-style:italic;flex:1;">${rat}</span>` : ''}
-            ${isLocked ? '<span style="color:#667;font-style:italic;flex:1;text-align:right;">🔒 details locked</span>' : ''}
+            ${isLocked ? '<span style="color:#667;font-style:italic;flex:1;text-align:right;">details locked</span>' : ''}
           </div>
         </div>`;
     }
@@ -1068,7 +1116,7 @@ export class CodexViewerUI {
         <div style="margin-bottom:22px;">
           <div style="font-size:13px;color:#ffaa00;line-height:1.6;
             padding:10px 14px;border:1px dashed rgba(255,170,0,0.4);border-radius:3px;">
-            🔒 <b>How to unlock:</b> ${hint}
+            <b>LOCKED · How to unlock:</b> ${hint}
           </div>
           <div style="font-size:14px;color:#667;font-style:italic;line-height:1.6;margin-top:12px;">
             Full briefing unlocks when you encounter this in flight.
@@ -1090,7 +1138,7 @@ export class CodexViewerUI {
       if (entry.realWorld) {
         realWorldHtml = `
           <div style="margin-bottom:22px;">
-            ${sectionHeader('🌍 IN THE REAL WORLD', accent)}
+            ${sectionHeader('IN THE REAL WORLD', accent)}
             <div style="padding:12px 16px;border-radius:4px;
               background:${accentBg(0.06)};border:1px solid ${accentBg(0.25)};
               font-size:14px;color:#cde;line-height:1.6;">${decorateGlossary(entry.realWorld, { once: true })}</div>
@@ -1099,7 +1147,7 @@ export class CodexViewerUI {
       if (entry.formula) {
         formulaHtml = `
           <div style="margin-bottom:22px;">
-            ${sectionHeader('ƒ FORMULA')}
+            ${sectionHeader('FORMULA')}
             <div style="padding:10px 14px;border-radius:4px;
               background:rgba(0,0,0,0.4);border:1px solid rgba(255,255,255,0.12);
               font-size:15px;color:#e8f4ff;letter-spacing:0.02em;
@@ -1108,17 +1156,18 @@ export class CodexViewerUI {
       }
     }
 
-    // RELATED — clickable chips (locked relateds still navigate).
+    // RELATED — clickable chips (locked relateds still navigate; a LOCKED text
+    // tag marks them, never a glyph; the entry icon is not rendered).
     const related = (typeof this._codex.getRelated === 'function')
       ? this._codex.getRelated(entry.id)
       : [];
     let relatedHtml = '';
     if (related.length) {
       const chips = related.map(r => this._relatedChipHtml(r.id, !r.unlocked, accentBg,
-        `<span>${r.icon}</span>${r.title}${!r.unlocked ? ' 🔒' : ''}`)).join('');
+        `${r.title}${!r.unlocked ? LOCKED_TAG_HTML : ''}`)).join('');
       relatedHtml = `
         <div style="margin-bottom:22px;">
-          ${sectionHeader('🔗 RELATED')}
+          ${sectionHeader('RELATED')}
           <div style="display:flex;flex-wrap:wrap;gap:8px;">${chips}</div>
         </div>`;
     }
@@ -1245,7 +1294,7 @@ export class CodexViewerUI {
   }
 
   /** @private Slice 8 — the map/read toggle pill, shared by the article header
-   * (🕸 MAP) and the map header (📖 READ) so their styling never drifts. The two
+   * (MAP) and the map header (READ) so their styling never drifts. The two
    * render paths are mutually exclusive full-innerHTML replaces, so the shared
    * `codex-map-toggle` id never collides at runtime.
    * @param {string} label
@@ -1289,8 +1338,8 @@ export class CodexViewerUI {
       const hint = r.unlockHint || 'Discover through gameplay.';
       const text = (kind === 'locked')
         ? `Locked: ${r.title}. To unlock: ${hint}`
-        : `${r.title} is in your library, unread.`;
-      const inner = `<span>${r.icon || '📄'}</span><span>${text}</span>`;
+        : `${r.title} is in SPECS, unread.`;
+      const inner = `<span>${text}</span>`;
       return this._relatedChipHtml(r.id, kind === 'locked', accentBg, inner,
         'gap:6px;padding:7px 12px;line-height:1.4;');
     }).join('');
@@ -1348,8 +1397,9 @@ export class CodexViewerUI {
 
   /** @private Slice 8 — render the reading pane as an SVG ego-map for `entry`.
    * Single-click a node → re-center (stay in map); dblclick / Enter → openEntry
-   * (exits map). Nodes are focusable for Enter. Locked nodes dimmed with 🔒 and
-   * a visible title. No physics/pan/zoom.
+   * (exits map). Nodes are focusable for Enter. Locked nodes are dimmed, dashed,
+   * and their label leads with [LOCKED]. Nodes carry no glyph: the label under
+   * each circle is the entry's title (plan D-J). No physics/pan/zoom.
    * @param {object} entry
    * @param {{accent:string, accentBg:(a:number)=>string}} theme
    */
@@ -1385,9 +1435,8 @@ export class CodexViewerUI {
       const op = n.ring === 2 ? 0.35 : 1;
       const stroke = isFocus ? accent : (n.locked ? '#556' : accentBg(0.6));
       const fill = isFocus ? accentBg(0.18) : 'rgba(10,14,20,0.9)';
-      const iconSize = isFocus ? 26 : (n.ring === 1 ? 20 : 16);
       const labelY = n.y + r + 16;
-      const label = `${n.locked ? '🔒 ' : ''}${n.title}`;
+      const label = `${n.locked ? '[LOCKED] ' : ''}${n.title}`;
       const labelColor = n.locked ? '#89a' : (isFocus ? '#eee' : '#bcd');
       const cursor = isFocus ? 'default' : 'pointer';
       return `<g class="codex-map-node" data-id="${n.id}" data-ring="${n.ring}"
@@ -1395,9 +1444,6 @@ export class CodexViewerUI {
         <circle cx="${n.x.toFixed(1)}" cy="${n.y.toFixed(1)}" r="${r}"
           fill="${fill}" stroke="${stroke}" stroke-width="${isFocus ? 2.5 : 1.5}"
           ${n.locked ? 'stroke-dasharray="4 3"' : ''} />
-        <text x="${n.x.toFixed(1)}" y="${(n.y + iconSize * 0.35).toFixed(1)}"
-          text-anchor="middle" font-size="${iconSize}"
-          ${n.locked ? 'opacity="0.6"' : ''}>${n.icon}</text>
         <text x="${n.x.toFixed(1)}" y="${labelY.toFixed(1)}" text-anchor="middle"
           font-size="12" fill="${labelColor}"
           style="font-family:inherit;">${label}</text>
@@ -1409,10 +1455,10 @@ export class CodexViewerUI {
         <div style="display:flex;align-items:center;gap:14px;margin-bottom:14px;">
           <div style="flex:1;">
             <div style="font-size:11px;letter-spacing:0.14em;font-weight:bold;color:${accent};">CONNECTIONS</div>
-            <div style="font-size:16px;font-weight:bold;color:#eee;">${entry.icon} ${entry.title}</div>
+            <div style="font-size:16px;font-weight:bold;color:#eee;">${entry.title}</div>
             <div style="font-size:11px;color:#889;margin-top:2px;">Click a node to re-center · double-click or Enter to open</div>
           </div>
-          ${this._mapToggleHtml('📖 READ', accent, accentBg)}
+          ${this._mapToggleHtml('READ', accent, accentBg)}
         </div>
         <svg viewBox="0 0 ${VW} ${VH}" width="100%"
           style="display:block;max-height:70vh;background:rgba(0,0,0,0.25);

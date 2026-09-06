@@ -88,7 +88,7 @@ export const PANE_HELP = [
   { pane: 'transfer windows',   selector: '#ladder-transfer-windows',                codexId: 'pane_transfer_windows',   key: null, rung: 'route-planning instrument' },
   { pane: 'tactical approach',  selector: '#ladder-prox-context',                    codexId: 'pane_tactical_approach',  key: null, rung: 'approach instrument' },
   { pane: 'refit',              selector: '#ladder-refit .refit-header',             codexId: 'pane_refit',              key: null, rung: 'refit instrument' },
-  { pane: 'library',            selector: '#ladder-library .library-header',         codexId: 'pane_library',            key: null, rung: 'library instrument' },
+  { pane: 'library',            selector: '#ladder-library .library-header',         codexId: 'pane_library',            key: null, rung: 'SPECS instrument' },
 ];
 
 /**
@@ -101,7 +101,8 @@ export const INTERACTIVE_GUARD =
 
 /**
  * Pure tooltip content model (Node-tested): the entry's shortText plus the
- * pane's toggle key and density rung.
+ * pane's toggle key and density rung. The title is the entry title alone —
+ * the data `icon` is never rendered (Session L, plan D-J).
  * @param {{icon?:string,title?:string,shortText?:string}|null} entry
  * @param {{key:(string|null), rung:string}} row
  * @returns {{title:string, short:string, meta:string}|null} null without an entry
@@ -111,9 +112,9 @@ export function helpTooltipModel(entry, row) {
   const metaParts = [];
   if (row && row.key) metaParts.push(`[${row.key}] toggles`);
   if (row && row.rung) metaParts.push(`density: ${row.rung}`);
-  metaParts.push('click for the Library page');
+  metaParts.push('click for the SPECS page');
   return {
-    title: `${entry.icon ? entry.icon + ' ' : ''}${entry.title || ''}`.trim(),
+    title: `${entry.title || ''}`.trim(),
     short: entry.shortText || '',
     meta: metaParts.join(' · '),
   };
