@@ -60,8 +60,14 @@ const CATEGORY_META_FALLBACK = {
  * @param {string} [color] - the data colour, if any
  * @returns {string} a CSS colour
  */
+/** A CSS colour TOKEN and nothing else — hex, rgb()/hsl(), or a colour word
+ *  (no `;`, no `url(`, no quotes): the data colour is interpolated into an
+ *  inline style, so anything that is not a token falls back to the hash hue.
+ *  Session L review (defence in depth; codex.json is same-origin static data). */
+const SWATCH_COLOR_RE = /^(#[0-9a-f]{3,8}|(?:rgb|hsl)a?\([0-9.,%\s/deg]+\)|[a-z]{3,20})$/i;
+
 export function categorySwatchColor(key, color) {
-  if (typeof color === 'string' && color.trim()) return color.trim();
+  if (typeof color === 'string' && SWATCH_COLOR_RE.test(color.trim())) return color.trim();
   const s = String(key || '');
   let h = 0x811c9dc5;
   for (let i = 0; i < s.length; i++) {
@@ -80,10 +86,13 @@ export function categorySwatchColor(key, color) {
  * @returns {string} HTML
  */
 export function categoryLabelHtml(label, swatch) {
+  // Session L review (defence in depth): the label is data (codex.json
+  // categories / the fallback table) and the swatch a colour token validated
+  // by categorySwatchColor — escape the one and never trust the other.
   return `<span class="codex-cat-swatch" style="display:inline-block;width:10px;height:10px;` +
     `border-radius:2px;background:${swatch};flex-shrink:0;vertical-align:middle;"></span>` +
     `<span class="codex-cat-label" style="font-variant:small-caps;letter-spacing:0.06em;` +
-    `overflow:hidden;text-overflow:ellipsis;">${label}</span>`;
+    `overflow:hidden;text-overflow:ellipsis;">${escapeHtml(String(label ?? ''))}</span>`;
 }
 
 // Below this panel width the 3-column interior collapses to a 2-pane swap

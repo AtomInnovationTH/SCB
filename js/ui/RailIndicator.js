@@ -73,10 +73,17 @@ export const RATE_WRITE_MIN_MS = 250;
 const NOTCH_REST_BORDER = 'rgba(0,204,255,0.35)';
 const NOTCH_REST_COLOR = 'rgba(0,204,255,0.62)';
 /**
- * The invitation halo — VisualLaw.COLORS.VALUE (#ffd166) at 0.55 alpha, a
- * STEADY box-shadow (no animation, no transition pulse: gold never pulses).
+ * The invitation halo — VisualLaw.COLORS.VALUE at 0.55 alpha, a STEADY
+ * box-shadow (no animation, no transition pulse: gold never pulses). Derived
+ * from the law colour since the Session L review (it had hard-coded the
+ * pre-champagne gold rgba(255,209,102) beside a VALUE border): ONE definition,
+ * imported by RefitPane for the tab's own glow.
  */
-export const INVITE_HALO = '0 0 10px rgba(255,209,102,0.55)';
+const _rgba = (hex, a) => {
+  const n = parseInt(String(hex).replace('#', ''), 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+};
+export const INVITE_HALO = `0 0 10px ${_rgba(VisualLaw.COLORS.VALUE, 0.55)}`;
 /**
  * The floor whose notch carries the depot INVITATION — floor 1 (HULL CAM, the
  * workbench) since the Session H 7→5 renumber: the F2 DEPOT row is gone, the

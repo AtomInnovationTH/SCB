@@ -1271,7 +1271,7 @@ export class DebrisWireframe {
       this._minLine.id = 'hud-debris-min-summary';
       Object.assign(this._minLine.style, {
         display: 'none',
-        font: "11px 'Courier New', monospace",
+        font: '11px var(--font-mono)',   // Session L review: the DOM line rides the house token (the canvas fonts above stay literal by design)
         color: 'rgba(0,255,136,0.8)',
         padding: '4px 6px',
         border: `1px solid ${BORDER_COLOR}`,
@@ -1299,7 +1299,7 @@ export class DebrisWireframe {
         position: 'absolute',
         top: '5px',
         right: container.dataset && container.dataset.activateKey ? '34px' : '7px',
-        font: "bold 10px 'Courier New', monospace",
+        font: 'bold 10px var(--font-mono)',
         color: 'rgba(0,255,136,0.35)',
         letterSpacing: '0.5px',
         pointerEvents: 'none',

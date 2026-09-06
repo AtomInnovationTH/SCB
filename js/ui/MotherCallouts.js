@@ -397,6 +397,11 @@ const LINE_HALF_WIDTH_FRAC = 0.0012; // leader ribbon half-width / camera-ship d
 // misses minus one and clears it on the Nth (3 ticks ≈ 300 ms at 10 Hz). Only
 // the stationary re-pick is sticky — see _refreshHover.
 const HOVER_MISS_TICKS = 3;
+/** Session L review: the render canvas width behind the pane/rail NDC law is a
+ *  LAYOUT-affected read (clientWidth forces a synchronous layout when the DOM
+ *  is dirty). It is re-read at most this often on the per-frame path — the
+ *  rails' own 1 Hz cadence — and a resize is picked up within one tick. */
+const VW_READ_MS = 1000;
 
 // Hover-outline depth stagger (owner, 2026-09-03: "parts on the far side show
 // through the mother — confusing"): the outline layers keep the depth test
@@ -536,6 +541,9 @@ export class MotherCallouts {
     // ONE merge point — so neither writer clobbers the other. 0 = no rail.
     this._railInsetL = 0;
     this._railInsetR = 0;
+    /** Session L review: the canvas width behind the NDC law, read ≤ 1 Hz (VW_READ_MS) on the frame clock. */
+    this._vwCache = 0;
+    this._vwReadAt = null;
     // Derived per frame in _updatePaneEdges(): the usable screen edges (NDC)
     // and the uncovered strip's centre X (NDC).
     this._edgeL = -1;
@@ -726,8 +734,23 @@ export class MotherCallouts {
     const inR = Math.max(this._paneInsetR, this._railInsetR);
     let eL = -1, eR = 1;
     if (inL > 0 || inR > 0) {
-      const vw = (this.canvas && Number.isFinite(this.canvas.clientWidth))
-        ? this.canvas.clientWidth : 0;
+      // Session L review: clientWidth is a LAYOUT-affected read and, with the
+      // rails as a second inset source, this ran on EVERY active floor-1 frame
+      // (before: drawer-open frames only). Cached for VW_READ_MS on the frame
+      // clock (_nowMs, stamped by _layout — 0 in the bare test rigs, where the
+      // first read then serves the rig for good); an unknown width (no canvas /
+      // 0 / NaN) is never cached, so "no inset, never a guess" is retried as
+      // shipped. The INSETS are not cached — a drawer or rail change still
+      // re-derives the edges at once with the cached width; only a resize waits
+      // ≤ 1 s, the rails' own dodge cadence.
+      const now = this._nowMs || 0;
+      let vw = (this._vwCache > 0 && this._vwReadAt != null && (now - this._vwReadAt) < VW_READ_MS) ? this._vwCache : -1;
+      if (vw < 0) {
+        const cw = this.canvas ? this.canvas.clientWidth : NaN;   // ONE read (the shipped form read the getter twice)
+        vw = Number.isFinite(cw) ? cw : 0;
+        this._vwCache = vw;
+        this._vwReadAt = now;
+      }
       if (vw > 0) {
         eL = -1 + 2 * inL / vw;
         eR = 1 - 2 * inR / vw;
@@ -738,6 +761,7 @@ export class MotherCallouts {
     this._edgeR = eR;
     this._stripCX = (eL + eR) / 2;
   }
+
 
   /**
    * The part the player is looking at — the Zoom Ladder's F1 deep-link source

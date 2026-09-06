@@ -78,6 +78,7 @@ import { FITTING_CATALOG, groupBySubsystem } from '../data/fittingCatalog.js';
 import { BLUEPRINT_SUBSYSTEMS } from '../data/blueprintSubsystems.js';
 import { subsystemForPart, partsForSubsystem } from '../data/refitIndex.js';
 import { upgradePrereqsMet } from './shopGating.js';
+import { INVITE_HALO } from './RailIndicator.js';
 
 /** Pane slide duration (ms) — inside the 240–300 ms house window
  *  (01-numbers "Workbench panes"; VisualLaw pane-timing entry pending). */
@@ -481,7 +482,7 @@ export class RefitPane {
     if (!this._tab) return;
     if (this._invited) {
       this._tab.style.borderColor = VisualLaw.COLORS.VALUE;
-      this._tab.style.boxShadow = '0 0 10px rgba(255,209,102,0.55)';   // the rail's INVITE_HALO law
+      this._tab.style.boxShadow = INVITE_HALO;                          // the rail's INVITE_HALO law — ONE definition (Session L review)
     } else {
       this._tab.style.borderColor = 'rgba(0,204,255,0.4)';             // the resting INFO frame
       this._tab.style.boxShadow = 'none';
@@ -987,7 +988,7 @@ export class RefitPane {
         parts.push(
           `<button class="refit-act" data-act="${a.key}" aria-pressed="${a.pressed ? 'true' : 'false'}"` +
           (a.disabled ? ' disabled aria-disabled="true"' : '') +
-          ` style="min-height:${minH}px;min-width:${this._glass ? 44 : 0}px;box-sizing:border-box;padding:0 8px;border-radius:3px;font:inherit;letter-spacing:inherit;touch-action:manipulation;-webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none;` +
+          ` style="min-height:${minH}px;min-width:${this._glass ? 44 : 0}px;box-sizing:border-box;padding:0 8px;border-radius:3px;font:inherit;letter-spacing:inherit;touch-action:manipulation;-webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;` +
           `border:1px solid ${frame};color:${C.INFO};background:${a.pressed && !a.disabled ? 'rgba(0,204,255,0.15)' : 'transparent'};` +
           `${a.disabled ? 'opacity:0.5;cursor:default' : 'cursor:pointer'}">${a.text}</button>`,
         );

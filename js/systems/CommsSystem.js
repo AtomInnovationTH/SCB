@@ -76,7 +76,12 @@ function sourceToChannel(source, payload) {
   // ALERT: messages starting with warning-like prefixes. Plan D-J (no emoji):
   // the former leading warning glyph became the words CAUTION: / WARNING:
   // (CRITICAL: where the sentence already carried it), so those words classify.
-  if (/^(ALERT:|WARNING:|CAUTION:|CRITICAL:|CONJUNCTION)/.test(text)) return 'ALERT';
+  // The escaped U+26A0 branch is the do-not-edit COMPATIBILITY branch (Session
+  // L review): GameFlowManager's two sourceless Hazmat lines still lead with
+  // the glyph (a lift to request — 03-plan Session L review), and without it
+  // they silently fell from ALERT to FLAVOR. Nothing renders the glyph here;
+  // drop the branch when the last unpurged emitter is lifted.
+  if (/^(ALERT:|WARNING:|CAUTION:|CRITICAL:|CONJUNCTION|\u26A0)/.test(text)) return 'ALERT';
   // SCI: discovery/codex/identification
   if (/^(DISCOVERY|CODEX|IDENTIFIED)/.test(text)) return 'SCI';
   // CMD: arm deploy/reel/detach confirmations

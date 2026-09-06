@@ -1649,6 +1649,12 @@ async function init() {
         partCodexId: (part && part.codexId) || null,
         refitCodexId: (refitPane && refitPane.focusedCodexId) ? refitPane.focusedCodexId() : null,
         target: targetSelector.getActiveTarget(),
+        // Session L review (J FINDINGS (d), the wire the cut hub session
+        // missed): the focused NAVCOM cluster OBJECT — SpecsSubject resolves
+        // it to its inclination-family entry (cluster_<family>) with the
+        // altitude band as `secondary`; `clusterFocused` stays the shipped
+        // flag-only fallback (hohmann_transfer) for a cluster it cannot name.
+        cluster: (navcomFloor && navcomFloor.getFocusedCluster) ? navcomFloor.getFocusedCluster() : null,
         clusterFocused: !!(navcomFloor && navcomFloor.getFocusedCluster && navcomFloor.getFocusedCluster()),
         lens: (sdaFloor && sdaFloor.getLens) ? sdaFloor.getLens() : null,
       });
@@ -1728,34 +1734,47 @@ async function init() {
       // Session L: the boot's glass answer — the actuator chips wear the 44 pt box.
       glass: _glassBoot,
       // Session L (plan item 4 — "REFIT cards gain actuator toggles ... through
-      // the existing actions"): the SAME methods the hotkeys drive
-      // (InputManager Comma / Period / KeyO, untouched) and the same input
-      // events, emitted here as the hotkey handler emits them. The get()s read
-      // the COMMANDED target each toggle writes (the pane refreshes on
-      // interaction edges, so a progress read would leave the chip stale until
-      // the next tap); PlayerSatellite has no public readers for the three
-      // targets — read by the MotherCallouts.js `_rosaFurlProgress` precedent.
+      // the existing actions"): the SAME PlayerSatellite / ArmManager surface
+      // the hotkeys drive (InputManager Comma / Period / KeyO, untouched) and
+      // the same input events, emitted here as the hotkey handler emits them.
+      // The get()s read the COMMANDED target each toggle writes (the pane
+      // refreshes on interaction edges, so a progress read would leave the
+      // chip stale until the next tap); PlayerSatellite has no public readers
+      // for the three targets — read by the MotherCallouts.js
+      // `_rosaFurlProgress` precedent. Session L review: a chip that SHOWS the
+      // commanded state must REVERSE it on a tap — the hotkeys' toggle*()
+      // decide from the live animated pose, so a second tap before the slew's
+      // mid-point re-asserted the same target (a dead window of half a slew:
+      // ~1.25 s arrays, ~1.9 s flower) while the label read the new state. The
+      // chips therefore go through the public SETTERS (setRosaFurl /
+      // setRosaFeather / setFlowerPose — the same commanded-target writes, the
+      // same events) and flip what the label shows; the keys keep their law.
       actuators: {
         rosaFurl: {
-          get: () => (player && typeof player.toggleRosaFurl === 'function')
+          get: () => (player && typeof player.setRosaFurl === 'function')
             ? (player._rosaFurlTarget < 0.5 ? 'FURLED' : 'DEPLOYED') : null,
           toggle: () => {
-            const target = player.toggleRosaFurl();
+            const target = player.setRosaFurl(player._rosaFurlTarget < 0.5 ? 1.0 : 0.0);
             audioSystem?.playClick?.();
             eventBus.emit(Events.ROSA_FURL_INPUT, { target });
           },
         },
         rosaFeather: {
-          get: () => (player && typeof player.toggleRosaFeather === 'function')
+          get: () => (player && typeof player.setRosaFeather === 'function')
             ? (player._rosaFeatherTarget >= 0.5 ? 'FEATHERED' : 'FLAT') : null,
           toggle: () => {
-            const feathered = player.toggleRosaFeather();
+            const feathered = player.setRosaFeather(player._rosaFeatherTarget >= 0.5 ? 0.0 : 1.0) >= 0.5;
             audioSystem?.playClick?.();
             eventBus.emit(Events.ROSA_FEATHER_INPUT, { feathered });
           },
         },
         struts: {
-          get: () => (armManager && armManager.arms && armManager.arms.length && typeof armManager.strutsDeployed === 'function')
+          // No chip unless a DOCKED daughter can take the write (toggleStruts
+          // returns null otherwise — a STOWED chip whose tap did nothing was
+          // the Session L review's NIT); daughters away → the card shows no
+          // STRUTS chip until one berths.
+          get: () => (armManager && armManager.arms && typeof armManager.strutsDeployed === 'function'
+            && armManager.arms.some((a) => a && a.state === Constants.ARM_STATES.DOCKED))
             ? (armManager.strutsDeployed() ? 'DEPLOYED' : 'STOWED') : null,
           toggle: () => {
             if (!armManager || typeof armManager.toggleStruts !== 'function' || armManager.toggleStruts() === null) return;
@@ -1774,7 +1793,11 @@ async function init() {
           },
           toggle: () => {
             if (!player || player.getFlowerPairCount() === 0) return;
-            const deploying = player.toggleFlowerDeploy();
+            const FL = Constants.THERMAL.FLOWER;
+            const mid = ((FL.POSE_STOW_DEG + FL.POSE_CARGO_DEG) / 2) * Math.PI / 180;
+            // Reverse the COMMANDED pose (what the chip shows), not the live one.
+            const deploying = !((player._flowerTargetTheta ?? player._flowerThetaRad) <= mid);
+            if (player.setFlowerPose(deploying ? 'CARGO' : 'STOW') === null) return;
             audioSystem?.playClick?.();
             eventBus.emit(Events.THERMAL_FLOWER_INPUT, { deploying });
             // The KeyO comms line, verbatim (InputManager's handler is the source).

@@ -389,7 +389,7 @@ export class ArmManager {
     // Power distribution: block deployment if ARM bus is at 0%
     if (powerDistribution.armMultiplier <= 0) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: '⚠ DAUGHTER BEACON OFFLINE. Increase DAUGHTER power to deploy',
+        text: 'CAUTION: DAUGHTER BEACON OFFLINE. Increase DAUGHTER power to deploy',
         priority: 'warning',
       });
       return false;
@@ -586,7 +586,7 @@ export class ArmManager {
     // Power distribution: block deployment if ARM bus is at 0%
     if (powerDistribution.armMultiplier <= 0) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: '⚠ DAUGHTER BEACON OFFLINE. Increase DAUGHTER power to deploy',
+        text: 'CAUTION: DAUGHTER BEACON OFFLINE. Increase DAUGHTER power to deploy',
         priority: 'warning',
       });
       return false;
@@ -648,7 +648,7 @@ export class ArmManager {
   deployTrawl(direction = null) {    // Power distribution: block deployment if ARM bus is at 0%
     if (powerDistribution.armMultiplier <= 0) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: '⚠ DAUGHTER BEACON OFFLINE. Increase DAUGHTER power to deploy',
+        text: 'CAUTION: DAUGHTER BEACON OFFLINE. Increase DAUGHTER power to deploy',
         priority: 'warning',
       });
       return false;
@@ -690,7 +690,7 @@ export class ArmManager {
     // Power distribution: block if ARM bus offline
     if (powerDistribution.armMultiplier <= 0) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: '⚠ DAUGHTER BEACON OFFLINE. Increase DAUGHTER power for web shot',
+        text: 'CAUTION: DAUGHTER BEACON OFFLINE. Increase DAUGHTER power for web shot',
         priority: 'warning',
       });
       return false;
@@ -873,14 +873,14 @@ export class ArmManager {
     // ST-6.7: Safe-mode guard
     if (this.playerSatellite && this.playerSatellite.safeMode) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: '⚠ SAFE MODE. Daughter deployment locked', priority: 'warning',
+        text: 'CAUTION: SAFE MODE. Daughter deployment locked', priority: 'warning',
       });
       return 0;
     }
     // Power distribution guard
     if (powerDistribution.armMultiplier <= 0) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: '⚠ DAUGHTER BEACON OFFLINE. Increase DAUGHTER power to deploy', priority: 'warning',
+        text: 'CAUTION: DAUGHTER BEACON OFFLINE. Increase DAUGHTER power to deploy', priority: 'warning',
       });
       return 0;
     }
@@ -923,14 +923,14 @@ export class ArmManager {
     // ST-6.7: Safe-mode guard
     if (this.playerSatellite && this.playerSatellite.safeMode) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: '⚠ SAFE MODE. Daughter deployment locked', priority: 'warning',
+        text: 'CAUTION: SAFE MODE. Daughter deployment locked', priority: 'warning',
       });
       return 0;
     }
     // Power distribution guard
     if (powerDistribution.armMultiplier <= 0) {
       eventBus.emit(Events.COMMS_MESSAGE, {
-        text: '⚠ DAUGHTER BEACON OFFLINE. Increase DAUGHTER power to deploy', priority: 'warning',
+        text: 'CAUTION: DAUGHTER BEACON OFFLINE. Increase DAUGHTER power to deploy', priority: 'warning',
       });
       return 0;
     }
