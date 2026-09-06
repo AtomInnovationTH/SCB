@@ -36,6 +36,16 @@ export const StorageKeys = {
    * (plan step 7).
    */
   LADDER_VIEW: 'sc_ladder_view_v2',
+  /**
+   * The first-run TOUCH MAP / KEY MAP checklist (TouchMapStore — Session N
+   * onboarding, Ipad.md §5.5 / §5.8 "advance only on the witnessed real
+   * input"): which of the six rows the player has witnessed, and whether the
+   * map was skipped. PLAYER-owned like LADDER_VIEW — once per player, never
+   * in the run save (a New Game does not re-teach the gestures). Written only
+   * while `Constants.LADDER.ENABLED` (constructed inside the hub's gate; a
+   * ?ladder=0 boot never reads or writes it).
+   */
+  TOUCH_MAP:   'sc_touch_map_v1',
   /** CityLabels visibility toggle ('0' | '1'). */
   CITY_LABELS: 'sc_city_labels_visible',
   // Owned by Constants (they sit beside related tuning) but mirrored here so the
