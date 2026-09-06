@@ -151,7 +151,7 @@ function fmtTminus(s) {
 
 /** @private Metres to 1-decimal km. */
 function fmtKm(m) {
-  const n = Number(m);
+  const n = num(m);                                 // null / '' are NOT zero (Session M review)
   return Number.isFinite(n) ? `${(Math.max(0, n) / 1000).toFixed(1)} km` : UNKNOWN;
 }
 

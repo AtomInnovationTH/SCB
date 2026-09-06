@@ -589,11 +589,15 @@ export function nextShadowTransition(orbit, sunDirAt, opts = {}) {
     o.trueAnomaly = nu0;
     if (tReal > 0) propagateOrbit(o, tReal * rate * baseScale, mu);
     keplerianToCartesianInto(o, _nstPos, _nstVel, mu);
-    const s = sunDirAt(tReal, _nstSun) || _nstSun;
+    const s = sunDirAt(tReal, _nstSun);
+    // An unusable sun sample aborts the prediction (null) — never the previous
+    // sample's scratch vector (Session M review).
+    if (!s || !Number.isFinite(s.x) || !Number.isFinite(s.y) || !Number.isFinite(s.z)) return null;
     return isInShadow(_nstPos, s, earthRadius);
   };
 
   const now = stateAt(0);
+  if (now === null) return { inShadow: false, secondsToFlipReal: null };
   const scale = rate * baseScale;
   if (!(scale > 0) || !Number.isFinite(scale)) return { inShadow: now, secondsToFlipReal: null };
 
@@ -605,10 +609,14 @@ export function nextShadowTransition(orbit, sunDirAt, opts = {}) {
   let lo = 0;
   for (let i = 1; i <= samples; i++) {
     let hi = i * step;
-    if (stateAt(hi) !== now) {
+    const st = stateAt(hi);
+    if (st === null) return { inShadow: now, secondsToFlipReal: null };
+    if (st !== now) {
       for (let k = 0; k < 6; k++) {                 // 6 bisection steps: precision step / 64
         const mid = (lo + hi) / 2;
-        if (stateAt(mid) === now) lo = mid; else hi = mid;
+        const sm = stateAt(mid);
+        if (sm === null) return { inShadow: now, secondsToFlipReal: null };
+        if (sm === now) lo = mid; else hi = mid;
       }
       return { inShadow: now, secondsToFlipReal: hi };
     }

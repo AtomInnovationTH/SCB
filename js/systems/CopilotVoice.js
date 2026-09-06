@@ -22,10 +22,16 @@
  * that follow. No touch* listener anywhere (the desktop touch-listener law).
  *
  * CUES: `cue(key)` is a no-op unless enabled && armed && synth && Utterance
- * && !isMuted(); utterances are rate-limited to >= 1500 ms apart; a PHASE cue
- * (match / align / arrived / drift / off / off_manual) cancels the current
- * utterance first (the newest state wins); `duck(true)` on utterance start,
+ * && !isMuted(); utterances are rate-limited to >= 1500 ms apart (inside the
+ * limit the FIRST cue wins — the later one is dropped, never queued); a PHASE
+ * cue (match / align / arrived / drift / off / off_manual) past the limit
+ * cancels the current utterance first; `duck(true)` on utterance start,
  * `duck(false)` on end / error / cancel (balanced — one duck per utterance).
+ * The PRIMER is protected: no cancel() while it may still be queued (until its
+ * end / error event, or PRIMER_GRACE_MS after arming when no event comes) —
+ * iOS unlocks on the utterance that actually plays inside the gesture, and a
+ * cancel() in that window would purge it and leave the voice dead for the
+ * session (Session M review).
  *
  * WIRING: the bus gives engage / off / no_target (AUTOPILOT_ENGAGE — the first
  * one of an engagement only, since the AP re-emits it on a heading-mode change
@@ -63,6 +69,9 @@ export const RATE_LIMIT_MS = 1500;
 
 /** The primer spoken inside the arming gesture: one space at volume 0. */
 export const PRIMER_TEXT = ' ';
+
+/** How long after arming the primer stays safe from a phase cue's cancel() when no end / error event arrives (ms). */
+export const PRIMER_GRACE_MS = 3000;
 
 /**
  * The cue for an autopilot phase change (AutopilotSystem PHASE keys), or null.
@@ -111,6 +120,9 @@ export class CopilotVoice {
     this._rate = Number.isFinite(deps.rate) ? deps.rate : 1.0;
 
     this._armed = false;
+    this._gen = 0;                   // utterance generation: a cancelled utterance's late end / error never touches the duck of the next
+    this._primerDone = false;        // the primer's end / error event arrived
+    this._primerUntilMs = null;      // arm time + PRIMER_GRACE_MS (the cancel() guard when no event comes)
     this._disposed = false;
     this._lastMs = null;             // the last utterance's start (rate limit)
     this._ducked = false;            // one duck outstanding (balanced on end / error / cancel)
@@ -156,8 +168,18 @@ export class CopilotVoice {
     if (!this._enabled || this._armed || this._disposed) return false;
     this._armed = true;
     this._detach();
-    this._speak(PRIMER_TEXT, { volume: 0, duck: false });
+    const t = Number(this._now());
+    this._primerDone = false;
+    this._primerUntilMs = Number.isFinite(t) ? t + PRIMER_GRACE_MS : null;
+    this._speak(PRIMER_TEXT, { volume: 0, duck: false, onDone: () => { this._primerDone = true; } });
     return true;
+  }
+
+  /** @private True while the primer may still be queued (no end / error yet, inside the grace window). */
+  _primerPending() {
+    if (this._primerDone || this._primerUntilMs == null) return false;
+    const t = Number(this._now());
+    return Number.isFinite(t) && t < this._primerUntilMs;
   }
 
   /**
@@ -202,7 +224,7 @@ export class CopilotVoice {
     }
     this._unsubs = [];
     this._detach();
-    this._cancel();
+    this._cancel(true);
   }
 
   // ── Bus ────────────────────────────────────────────────────────────────────
@@ -220,8 +242,9 @@ export class CopilotVoice {
     };
     wire(E.AUTOPILOT_ENGAGE, () => {
       if (this._engaged) return;               // a heading-mode re-emit mid-flight, not a new engagement
-      this._engaged = true;
-      this.cue('engage');
+      // The flag records a SPOKEN engagement: a dropped cue (unarmed yet, muted,
+      // inside the rate limit) leaves the door open for the re-emit (review).
+      if (this.cue('engage')) this._engaged = true;
     });
     wire(E.AUTOPILOT_DISENGAGE, (data) => {
       this._engaged = false;
@@ -251,10 +274,17 @@ export class CopilotVoice {
       u.lang = this._lang;
       u.rate = this._rate;
       if (opts.volume !== undefined) u.volume = opts.volume;
-      if (opts.duck && this._duck) {
-        u.onstart = () => this._setDuck(true);
-        u.onend = () => this._setDuck(false);
-        u.onerror = () => this._setDuck(false);
+      const duck = !!(opts.duck && this._duck);
+      const done = typeof opts.onDone === 'function' ? opts.onDone : null;
+      // The duck handlers act only while THIS utterance is the latest one: a
+      // cancelled utterance's end / error arrives asynchronously, possibly
+      // after the next one's start — it must not release the new duck (review).
+      const gen = ++this._gen;
+      if (duck) u.onstart = () => { if (gen === this._gen) this._setDuck(true); };
+      if (duck || done) {
+        const end = () => { if (duck && gen === this._gen) this._setDuck(false); if (done) done(); };
+        u.onend = end;
+        u.onerror = end;
       }
       synth.speak(u);
       return true;
@@ -263,10 +293,14 @@ export class CopilotVoice {
     }
   }
 
-  /** @private Cancel whatever is being spoken (guarded) and release the duck — no event may follow a cancel. */
-  _cancel() {
+  /**
+   * @private Cancel whatever is being spoken (guarded) and release the duck —
+   * no event may follow a cancel. While the PRIMER may still be queued the
+   * synth is left alone (`force` = dispose: cancel regardless).
+   */
+  _cancel(force = false) {
     const synth = this._synth;
-    if (synth && typeof synth.cancel === 'function') {
+    if (synth && typeof synth.cancel === 'function' && (force || !this._primerPending())) {
       try { synth.cancel(); } catch (_e) { /* swallowed */ }
     }
     this._setDuck(false);

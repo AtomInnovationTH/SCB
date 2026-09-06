@@ -404,6 +404,10 @@ export class FmaStrip {
         : `AP ${DOT} ${word} ${DOT} ${rangeText} ${DOT} ${closingText}`;
     const el = this._el;
     if (!el || !this._root) return;
+    // Density-hidden (the room / a flip): the line is tracked, the DOM is left
+    // alone — every write below is write-on-change, so the next visible tick
+    // catches up in one pass (Session M review; the OrbitPane / NextPane rule).
+    if (this._root.hasAttribute && this._root.hasAttribute(DENSITY_HIDDEN_ATTR)) return;
     this._setAttr(this._root, MODE_ATTR, mode);
     this._setText(el.phase, word);
     this._setText(el.range, rangeText);

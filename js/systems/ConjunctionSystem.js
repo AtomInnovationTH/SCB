@@ -618,7 +618,7 @@ export class ConjunctionSystem {
     this._alertActive = true;
 
     const distMeters = Math.round(distScene / M);
-    this._currentThreat = { tier, debrisId: debris.id, tca, distMeters };
+    this._currentThreat = { tier, debrisId: debris.id, debrisType: debris.type, tca, distMeters };   // Session M: the NEXT pane's TCA row labels by type
 
     // Display duration by tier
     switch (tier) {

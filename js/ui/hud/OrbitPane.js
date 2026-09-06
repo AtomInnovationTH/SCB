@@ -99,8 +99,9 @@ export const CHANGE_FLASH_MS = 1200;
  * 20 m², 130 kg) as sma *= 1 − 2·a·dt/v per world second; at 400 km (ρ =
  * 2.8e-11 kg/m³, v = 7.67 km/s) that is 4.9e-4 km per WORLD second, i.e.
  * 4.9e-3 km per REAL second at BASE_SCALE 10 / rate 1. One fifth of it: the
- * EMA (TREND_EMA) crosses the line on the second sample at 400 km, within
- * five at 500 km, and a steady orbit (no drag above 600 km) stays blank.
+ * EMA (TREND_EMA, seeded at 0.15 of the first rate = 7.4e-4) crosses the line
+ * on the THIRD sample at 400 km (the second EMA step, 1.36e-3), within five
+ * at 500 km, and a steady orbit (no drag above 600 km) stays blank.
  */
 export const ALT_TREND_KM_PER_S = 1e-3;
 
