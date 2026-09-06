@@ -59,8 +59,9 @@ export const LADDER_VIEW_VERSION = 1;
  * heavier tool — this is the surgical one). Written on every save.
  *   1 — implicit: the Session G/H rooms (F2 = everything shown)
  *   2 — 2026-09-06 (owner): F2 nav orb + discoveries gone by default
+ *   3 — 2026-09-06 (Session K): the CARGO pane joins MASK_PANES / DEFAULT_ROOMS (shown on the shop floor, gone elsewhere)
  */
-export const ROOMS_GENERATION = 2;
+export const ROOMS_GENERATION = 3;
 
 /** The shipped pane state: both workbench panes closed. */
 export const DEFAULT_PANES = Object.freeze({ refit: false, library: false });

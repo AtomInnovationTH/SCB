@@ -589,6 +589,38 @@ export class ShopScreen {
   }
 
   // ========================================================================
+  // PUBLIC SELL / CONTRIBUTE WRAPPERS (Session K — the CARGO HUD pane)
+  // ========================================================================
+
+  /**
+   * Public wrappers over the private sell / contribute paths below. They exist
+   * for the CARGO pane (js/ui/hud/CargoPane.js, Session K): the pane's SELL /
+   * SELL ALL / -> ELEVATOR buttons act through THESE and never touch
+   * CargoSystem.removeMetal directly, so the sale pipeline (ScoringSystem.
+   * processSale), the contract mass, the CONTRACT_UPDATE / CONTRACT_COMPLETE
+   * emits and the market comms stay in one place. Pure delegation: no logic.
+   * @param {string} metalId - manifest metalId to sell in full
+   */
+  sellMetal(metalId) {
+    return this._sellCargo(metalId);
+  }
+
+  /** Sell the whole manifest (bulk bonus on the total) — see `_sellAllCargo`. */
+  sellAllCargo() {
+    return this._sellAllCargo();
+  }
+
+  /**
+   * Contribute `massKg` of `metalId` to the space elevator contract — see
+   * `_contributeToElevator` (the win check fires inside).
+   * @param {string} metalId
+   * @param {number} massKg
+   */
+  contributeToElevator(metalId, massKg) {
+    return this._contributeToElevator(metalId, massKg);
+  }
+
+  // ========================================================================
   // SELL / CONTRIBUTE (Phase 5)
   // ========================================================================
 

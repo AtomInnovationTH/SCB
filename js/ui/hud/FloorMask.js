@@ -110,6 +110,14 @@ export const REDUCED_CROSSFADE_MS = 200;
  * convenience — that rung is never driven, and the score panel itself is never
  * touched, so D7 holds). The ticker keeps its items and timers while hidden;
  * whatever is still alive reappears on the next floor.
+ *
+ * 'cargo' (2026-09-06, Session K): the CARGO pane (js/ui/hud/CargoPane.js) —
+ * the manifest with SELL / SELL ALL / -> ELEVATOR over CargoSystem through
+ * ShopScreen's public wrappers. A RUNG pane like the others: the pane owns a
+ * pane-density rung ('cargo', pushed into hud.paneDensity.rungs by main.js
+ * BEFORE the first setFloor) whose ONE bit is `data-density-hidden` on the
+ * root `#hud-cargo-pane` (a direct child of #hud-overlay), so the WHAT rail
+ * lists it as a notch and D5 remembers it per floor.
  */
 /**
  * The pane-density rungs' OWN hide bit (HUD._initPaneDensity domRung): set on
@@ -129,6 +137,7 @@ export const MASK_PANES = Object.freeze({
   arms:        Object.freeze({ rung: 'arms',        els: Object.freeze(['#hud-arms-panel']),          memory: true }),
   reticles:    Object.freeze({ rung: null,          els: Object.freeze(['#reticle-canvas']),          memory: false }),
   hints:       Object.freeze({ rung: null,          els: Object.freeze(['#hud-hint-ticker']),         memory: false }),
+  cargo:       Object.freeze({ rung: 'cargo',       els: Object.freeze(['#hud-cargo-pane']),          memory: true }),
 });
 
 /**
@@ -147,9 +156,11 @@ export const ALWAYS_ON = Object.freeze([
 /**
  * DEFAULT_ROOMS — the §4 default-rooms table, floor → pane → tier.
  * Exhaustive over MASK_PANES for every FloorContract floor (ids 1–5 since the
- * Session H 7→5 renumber; same physical rooms, new keys). An id without a row
- * (out-of-table — nothing ships one) falls back to all-'shown' (full cockpit).
- * Edit per D5 as you play — player memory wins.
+ * Session H 7→5 renumber; same physical rooms, new keys) — since Session K
+ * (2026-09-06) that set includes the 'cargo' pane, so every row carries a
+ * `cargo` tier. An id without a row (out-of-table — nothing ships one) falls
+ * back to all-'shown' (full cockpit). Edit per D5 as you play — player memory
+ * wins.
  *
  *   F1 ship close-up  (inspect/refit):  hull is the index; EVERY pane clears
  *                                        out — discoveries too (owner, 2026-09-02
@@ -181,27 +192,38 @@ export const ALWAYS_ON = Object.freeze([
  *   F5 whole-Earth chart (survey):      chart + score + alerts only.
  *   The hint ticker is gone on every floor but F2 (owner, 2026-09-02 evening:
  *   "same clean-up" for the far floors) — its chips teach the flying view.
+ *   The CARGO pane (Session K, 2026-09-06, owner call by the 13-inch iPad
+ *   numbers) is 'shown' on F1 only — the shop floor, where selling and
+ *   contributing happen — and 'gone' on F2–F5: on F2 the bottom-right slot has
+ *   8 px of slack under the SPECS tab at the default room, so the pane sits
+ *   behind the WHAT rail's MORE there and D5 remembers it per room once
+ *   flipped.
  */
 export const DEFAULT_ROOMS = Object.freeze({
   1: Object.freeze({
     targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'gone',
     pin: 'gone', mother: 'gone', arms: 'gone', discoveries: 'gone', hints: 'gone',
+    cargo: 'shown',
   }),
   2: Object.freeze({
     targets: 'shown', debris: 'shown', navsphere: 'gone', reticles: 'shown',
     pin: 'shown', mother: 'shown', arms: 'shown', discoveries: 'gone', hints: 'shown',
+    cargo: 'gone',
   }),
   3: Object.freeze({
     targets: 'gone', debris: 'gone', navsphere: 'shown', reticles: 'shown',
     pin: 'gone', mother: 'gone', arms: 'shown', discoveries: 'gone', hints: 'gone',
+    cargo: 'gone',
   }),
   4: Object.freeze({
     targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'gone',
     pin: 'gone', mother: 'gone', arms: 'faint', discoveries: 'gone', hints: 'gone',
+    cargo: 'gone',
   }),
   5: Object.freeze({
     targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'gone',
     pin: 'gone', mother: 'gone', arms: 'gone', discoveries: 'gone', hints: 'gone',
+    cargo: 'gone',
   }),
 });
 
