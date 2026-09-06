@@ -279,6 +279,7 @@ export const Events = {
   // main.js fires the power-up cut flash only for 'partial' (the fly-around is
   // orientation-seamless and needs no mask).
   MENU_ORIENT_MODE: 'menu:orientMode',
+  UPDATE_AVAILABLE: 'app:updateAvailable',   // { hash, tag, bullets } — UpdateWatch → MenuScreen (Session J.5)
   BRIEFING_COMMENCE:  'briefing:commence',
   BRIEFING_SKIP:      'briefing:skip',
   SHOP_DEPLOY:        'shop:deploy',

@@ -15,6 +15,7 @@ import { LANGUAGES } from '../core/Languages.js';
 import { FlagDecalSystem } from './FlagDecalSystem.js';
 import { MenuScene3D } from './MenuScene3D.js';
 import { resolvePrimaryMenuAction, startRequiresConfirm, NEW_GAME_CONFIRM_MESSAGE } from './menuActions.js';
+import { buildUpdateCard } from './UpdateCard.js';
 export class MenuScreen {
   /**
    * @param {string|null} [initialTier] — current SceneManager quality tier so the
@@ -40,6 +41,13 @@ export class MenuScreen {
     // Which event _finishDeparture emits (MENU_START for new game, MENU_CONTINUE
     // for a returning player — T8). Set when a departure begins.
     this._departEvent = null;
+    // Session J.5 — the menu UPDATE card. `_update` = the last UPDATE_AVAILABLE
+    // payload ({ hash, tag, bullets }) or null; `_updateDismissed` = the hash
+    // the player answered LATER to (never nag twice per build, this page
+    // session). The card is built lazily and ONLY inside #menu-header.
+    this._update = null;
+    this._updateDismissed = null;
+    this._updateCard = null;
     this._build();
 
     // Self-manage visibility via EventBus (decoupled from GameFlowManager)
@@ -47,6 +55,9 @@ export class MenuScreen {
       if (to === GameStates.MENU) this.show();
       else this.hide();
     });
+    // Session J.5: UpdateWatch → "NEW VERSION READY" (mounted now if visible,
+    // else on the next show()). Flag-independent: no LADDER gate here.
+    eventBus.on(Events.UPDATE_AVAILABLE, (p) => this._onUpdateAvailable(p));
   }
 
   /** @private */
@@ -986,6 +997,66 @@ export class MenuScreen {
     }
   }
 
+  // ── Session J.5 — the menu UPDATE card ─────────────────────────────────────
+
+  /**
+   * @private Events.UPDATE_AVAILABLE `{ hash, tag, bullets }` (UpdateWatch emits
+   * it once per new hash). Remember it; mount now only while the menu is
+   * visible — otherwise show() mounts it on the next menu visit.
+   */
+  _onUpdateAvailable(p) {
+    if (!p || typeof p.hash !== 'string' || !p.hash) return;
+    this._update = p;
+    if (this.visible) this._mountUpdateCard();
+  }
+
+  /**
+   * @private Build the card (ui/UpdateCard.js) and insert it into #menu-header
+   * right AFTER #menu-continue-wrapper, so it sits centered under the START /
+   * CONTINUE buttons and cascades out with the header on departure. Idempotent
+   * per hash; a hash the player already answered LATER to never re-mounts.
+   * The card never exists outside #menu-screen: the mount target is looked up
+   * on this.element only.
+   */
+  _mountUpdateCard() {
+    const p = this._update;
+    if (!p || !this.element) return;
+    if (this._updateDismissed === p.hash) return;
+    if (this._updateCard && this._updateCard._hash === p.hash) return;
+    this._unmountUpdateCard();
+    const anchor = this.element.querySelector('#menu-continue-wrapper');
+    if (!anchor || !anchor.insertAdjacentElement) return;
+    const card = buildUpdateCard(document, {
+      hash: p.hash,
+      bullets: p.bullets,
+      onUpdate: () => this._reload(),
+      onLater: () => {
+        this._updateDismissed = p.hash;   // remember for this page session only
+        this._unmountUpdateCard();
+      },
+    });
+    card._hash = p.hash;
+    anchor.insertAdjacentElement('afterend', card);
+    this._updateCard = card;
+  }
+
+  /** @private Remove the card from the header (no-op when absent). */
+  _unmountUpdateCard() {
+    if (this._updateCard) {
+      if (this._updateCard.remove) this._updateCard.remove();
+      this._updateCard = null;
+    }
+  }
+
+  /**
+   * @private TAP TO UPDATE. HTML / js / data are network-first in sw.js and the
+   * worker installs with skipWaiting() + clients.claim(), so a plain reload IS
+   * the update. Overridable for tests.
+   */
+  _reload() {
+    window.location.reload();
+  }
+
   show() {
     this.visible = true;
     // Clear any leftover departure state from a prior run (e.g. returning to
@@ -1009,6 +1080,9 @@ export class MenuScreen {
     if (startHint) {
       startHint.textContent = hasSave ? 'Click to start new (confirms)' : 'Press Enter or Click';
     }
+    // Session J.5: an update that arrived while the menu was hidden (or that
+    // the watcher found before the first show) mounts its card now.
+    if (this._update) this._mountUpdateCard();
     this.element.style.display = 'flex';
     this.element.style.opacity = '1';
     // Listen for keyboard input while menu is shown
