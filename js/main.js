@@ -1603,12 +1603,21 @@ async function init() {
     };
     // "The library follows" (Session C for hull clicks; Session J generalises
     // it to every floor): retarget an OPEN SPECS pane to the current subject
-    // through the pane's ONE openEntry path. Never opens a closed pane — the
-    // click's visible verb stays what it was (D-a); a null subject leaves the
-    // entry alone (the reader keeps its page). Module-level so the controller's
-    // onSubjectChange dep (constructed after the gate) can reach it.
+    // through the pane's ONE openEntry path; a CLOSED pane forgets its page so
+    // the next open lands on the new subject. Never opens a closed pane — the
+    // click's visible verb stays what it was (D-a); a null subject leaves an
+    // open pane's entry alone (the reader keeps its page). Module-level so the
+    // controller's onSubjectChange dep (constructed after the gate) can reach it.
     _specsFollow = () => {
-      if (!libraryPane || !libraryPane.isOpen()) return;
+      if (!libraryPane) return;
+      if (!libraryPane.isOpen()) {
+        // Closed: forget the page from before the subject changed, so the NEXT
+        // entry-less open adopts THIS floor's subject (D-C: "opens on the
+        // floor's subject"); Session C's same-floor re-open rule is untouched
+        // because nothing calls this without a subject change.
+        libraryPane.forgetEntry();
+        return;
+      }
       const id = _specsSubject();
       if (id) libraryPane.openEntry(id);
     };
@@ -2855,6 +2864,18 @@ async function init() {
       // HOLD — the policy witness beside window.__frameSched, which is always
       // published). ?shot-gated like every harness handle here.
       window.__timeAuthority = timeAuthority;
+      // Session J: the controller (floor / turntable / isActive probes for the
+      // hasTouch gate) and the WHAT rail — undefined on a ?ladder=0 boot for
+      // the rail (never constructed there), the same contract as __refit.
+      window.__ladder = ladderController;
+      window.__paneRail = ladderPaneRail;
+      // Session J gate witnesses (getters, the __scbSceneManager pattern): the
+      // debris field (to project a target for the tap), the input manager (its
+      // PUBLIC keys map — the drag's witness), the autopilot (the F2 Space verb).
+      window.__scbDebrisField = () => debrisField;
+      window.__scbInputManager = () => inputManager;
+      window.__scbAutopilot = () => autopilotSystem;
+      window.__touchControls = () => touchControls;   // undefined on a no-touch boot (never constructed)
       // Debug handle for SunLight — lets a capture harness inspect bodies and
       // (for verification) temporarily reposition a body that is occluded all
       // session. Read-only intent; mutations are the harness's responsibility.

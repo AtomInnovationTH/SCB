@@ -486,6 +486,26 @@ export class LibraryPane {
   toggle() { if (this._open) this.close(); else this.open(); }
 
   /**
+   * Session J (plan D-C, "SPECS opens on the floor's subject"): forget the
+   * remembered entry while CLOSED, so the NEXT entry-less open adopts the
+   * injected `subject` instead of re-showing a page from another floor. The
+   * hub calls it on a floor arrival / a selection change while the pane is
+   * shut (an OPEN pane is retargeted through openEntry instead — the follow).
+   * Session C's rule stands on the same floor: nothing here runs without a
+   * subject change, so close → re-open still returns to the shown entry.
+   * No-op while open (never a cut under the reader) or disabled-with-nothing.
+   * @returns {boolean} true when an entry was forgotten
+   */
+  forgetEntry() {
+    if (this._open || this._entryId == null) return false;
+    this._entryId = null;
+    this._via = null;
+    this._photoAnchor = null;
+    this._clearSeenTimer();
+    return true;
+  }
+
+  /**
    * Deep-link into the pane: show one entry and open (the REFIT card title /
    * spec term route — 03-plan §3 "tap → TECH LIBRARY slides in"; also the
    * related-chip navigation, and — Session C — the hull part / callout-card
