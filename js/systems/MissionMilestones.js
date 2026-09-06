@@ -159,6 +159,16 @@ export class MissionMilestones {
     eventBus.on(Events.SHOP_DEPLOY, () => {
       this._postRecap();
     });
+    // Wave 5 Session K (one shop): with the ladder on the depot stop is the
+    // WORKBENCH BREAK, not the SHOP GameState, and SHOP_DEPLOY never fires in
+    // gameplay — the break's end (both drawers closed) is the same "leaving
+    // the shop" moment, so the recap rides it too. Never emitted with the
+    // ladder off (byte-identical there).
+    if (Events.WORKBENCH_RESUME) {
+      eventBus.on(Events.WORKBENCH_RESUME, () => {
+        this._postRecap();
+      });
+    }
 
     // defer-trawl: clearing a cluster is a natural "chunk of work finished"
     // beat — restate progress + the next step, and nudge toward the next

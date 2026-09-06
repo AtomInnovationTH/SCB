@@ -373,6 +373,7 @@ export class CargoPane {
         flex: 1 1 auto; min-height: 0; margin: ${G.LIST_PAD_PX / 2}px 0;
         overflow-y: auto; overflow-x: hidden;
         -webkit-overflow-scrolling: touch; touch-action: pan-y;
+        overscroll-behavior: contain;
       }
       #${CARGO_PANE_ID} .cargo-row {
         display: flex; align-items: center; gap: 6px; height: ${G.ROW_PX}px; white-space: nowrap;

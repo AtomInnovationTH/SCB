@@ -441,7 +441,18 @@ export class ZoomLadder {
     this._tick(tMs);
     this._lastInputTMs = tMs;
     if (toFloor === this._floor || !this._byId.has(toFloor)) return [];
-    return this._rideTo(toFloor, 'ceremony', null);
+    const decisions = [];
+    // An ALARM auto-ride in flight yields to the ceremony the way a scroll
+    // cancels it (K review): its stage closes as 'cancelled' — S2 hears the
+    // abort — and its revert point dies with it (the ceremony is deliberate;
+    // nothing reverts). The revert may land the core back on the target floor
+    // already: then there is nothing left to ride.
+    if (this._ride && this._ride.kind === 'alarmAuto') {
+      this._cancelAlarmAutoRide(decisions);
+      if (toFloor === this._floor) return decisions;
+    }
+    decisions.push(...this._rideTo(toFloor, 'ceremony', null));
+    return decisions;
   }
 
   /**

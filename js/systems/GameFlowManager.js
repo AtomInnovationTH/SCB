@@ -791,16 +791,19 @@ export class GameFlowManager {
     // ORBITAL_VIEW.
     // Wave 5 Session K (GFM lift, site 4 of 4 — the win RE-HOME): with one
     // shop the contribution comes from the CARGO pane IN gameplay (the drawer
-    // holds no GameState), so when the contract completes in a gameplay state
-    // the win fires NOW (ORBITAL_VIEW → WIN is legal; 08 §2 "ORBITAL_VIEW →
-    // WIN"); the full-screen SHOP (ladder off, the GAME_OVER continue) still
-    // waits for SHOP_DEPLOY. Contract-first ordering survives: the flag is set
-    // before either fire, `_winTriggered` keeps the WIN single (test-win-race).
+    // holds no GameState), and a boss crossing the target (awardElevatorMass)
+    // would otherwise never reach a SHOP_DEPLOY with the ladder on — so when
+    // the contract completes in a gameplay state WITH THE LADDER ON the win
+    // fires NOW (ORBITAL_VIEW → WIN is legal; 08 §2 "ORBITAL_VIEW → WIN").
+    // Ladder off (K review): the shipped flag-and-wait, byte-identical — the
+    // full-screen SHOP fires it on SHOP_DEPLOY. Contract-first ordering
+    // survives: the flag is set before either fire, `_winTriggered` keeps the
+    // WIN single (test-win-race).
     // ==================================================================
 
     eventBus.on(Events.CONTRACT_COMPLETE, () => {
       this._elevatorWinTriggered = true;
-      if (gameState.isGameplay()) this._fireElevatorWin();
+      if (this._ladderOn() && gameState.isGameplay()) this._fireElevatorWin();
     });
 
     // Resource depletion → game over (from ResourceSystem)
