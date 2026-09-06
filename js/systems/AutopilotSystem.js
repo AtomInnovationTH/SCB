@@ -74,6 +74,12 @@ export class AutopilotSystem {
     /** @type {THREE.Vector3|null} Latest computed goal position (P_m*) in scene units */
     this._goalPos = null;
 
+    /** @type {number|null} Session M (COPILOT): the per-frame range to the goal
+     *  pose (posErrM, metres) stored for the flight-mode annunciator's 1 Hz
+     *  poll via fmaState(). null while disengaged or without a resolvable
+     *  goal (the prograde fallback). Never emitted — the strip polls. */
+    this._fmaRangeM = null;
+
     /** @type {string} 'NONE'|'TARGET'|'TRAWL'|'DEBRIS'|'PROGRADE' */
     this._headingMode = 'NONE';
 
@@ -207,6 +213,34 @@ export class AutopilotSystem {
 
   /** @returns {boolean} True while an aim-before-launch attitude sequence is active. */
   isAiming() { return !!this._aimCoroutine; }
+
+  /**
+   * Session M (COPILOT): the flight-mode-annunciator snapshot, polled at
+   * <= 1 Hz by the FMA strip (js/ui/hud/FmaStrip.js). A fresh plain object per
+   * call (the strip is not hot-path; it self-throttles). `rangeM` is the
+   * per-frame goal range stored by update() — null while disengaged, before
+   * the first engaged update, or on the prograde fallback (no goal).
+   * `headingMode` / `targetName` are null while disengaged.
+   * @returns {{ engaged: boolean, aiming: boolean, phase: string,
+   *   headingMode: (string|null), targetName: (string|null), rangeM: (number|null) }}
+   */
+  fmaState() {
+    const engaged = !!this._engaged;
+    const range = this._fmaRangeM;
+    let targetName = null;
+    if (engaged) {
+      const c = this._headingMode === 'CLUSTER' ? this._debrisMapCluster : null;
+      targetName = c ? String(c.name || c.id || 'CLUSTER') : this._getTargetLabel();
+    }
+    return {
+      engaged,
+      aiming: !!this._aimCoroutine,
+      phase: this._phase,
+      headingMode: engaged ? this._headingMode : null,
+      targetName,
+      rangeM: (engaged && typeof range === 'number' && Number.isFinite(range)) ? range : null,
+    };
+  }
 
   /**
    * Hold the mother's orientation steady (catch capture/reel-in). Suppresses the
@@ -395,6 +429,7 @@ export class AutopilotSystem {
     // already satisfy tighter phases on the first update tick.
     this._setPhase(PHASE.RENDEZVOUS_FAR);
     this._holdTimer = 0;
+    this._fmaRangeM = null;                                // first engaged update fills it
 
     // Emit target lock for CollisionAvoidanceSystem
     this._refreshTargetLock();
@@ -440,6 +475,7 @@ export class AutopilotSystem {
     this._engaged = true;
     this._setPhase(PHASE.RENDEZVOUS_FAR);
     this._holdTimer = 0;
+    this._fmaRangeM = null;                                // first engaged update fills it
     this._headingMode = 'CLUSTER';
     this._headingTarget = this._clusterArrivalPoint
       ? this._clusterArrivalPoint.clone()
@@ -482,6 +518,7 @@ export class AutopilotSystem {
     this._debrisMapCluster = null;
     this._clusterArrivalPoint = null;
     this._goalPos = null;
+    this._fmaRangeM = null;
     this._holdTimer = 0;
     this._holdExitDwell = 0;
     this._stationKeepDeltaV = 0;
@@ -546,6 +583,7 @@ export class AutopilotSystem {
     const targetState = this._resolveTargetState(dt);
     if (!targetState) {
       // Prograde fallback — just rotate toward current velocity, no thrust.
+      this._fmaRangeM = null;                              // no goal ⇒ no range
       this._updateProgradeOnly(dt);
       return;
     }
@@ -596,6 +634,7 @@ export class AutopilotSystem {
 
     const posErrM = relP.length() / M;                     // metres
     const velErrMps = relV.length() * 1000;                // m/s
+    this._fmaRangeM = posErrM;                             // Session M: the FMA strip's range sample
 
     // Angle error: ship nose (+Z local) vs. v̂_d
     const noseWorld = this._noseWorld.set(0, 0, 1).applyQuaternion(this._player.quaternion);
