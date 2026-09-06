@@ -112,7 +112,7 @@ import { settingsManager } from './systems/SettingsManager.js';
 import { persistenceManager } from './systems/PersistenceManager.js';
 import { StrategicMap } from './ui/StrategicMap.js';
 import { WheelRouter } from './systems/WheelRouter.js';
-import { LadderController } from './systems/LadderController.js';
+import { LadderController, INTRO_RIDE_MS } from './systems/LadderController.js';
 import { LadderAudioBeds } from './systems/LadderAudioBeds.js';
 import { FloorMask, DEFAULT_ROOMS as LADDER_DEFAULT_ROOMS } from './ui/hud/FloorMask.js';
 import { LadderViewStore } from './systems/LadderViewStore.js';
@@ -133,6 +133,8 @@ import { OrbitPane } from './ui/hud/OrbitPane.js';
 import { FmaStrip } from './ui/hud/FmaStrip.js';
 import { NextPane } from './ui/hud/NextPane.js';
 import { CopilotVoice } from './systems/CopilotVoice.js';
+import { TouchMapPane } from './ui/hud/TouchMapPane.js';
+import { TouchMapStore } from './systems/TouchMapStore.js';
 import { RAIL_GEOMETRY } from './ui/RailGeometry.js';
 import { TouchControls } from './ui/TouchControls.js';
 import { TouchTelemetry } from './ui/touchTelemetry.js';
@@ -690,6 +692,33 @@ let orbitPane = null;
 let fmaStrip = null;
 let nextPane = null;
 let copilotVoice = null;
+// Wave 5 Session N (plan "Session N — Onboarding for glass + intro") — the
+// first-run MAP pane (js/ui/hud/TouchMapPane.js: the touch map on glass, the
+// key map on desktop; six rows that advance ONLY on witnessed input) and its
+// player-owned store (js/systems/TouchMapStore.js, StorageKeys.TOUCH_MAP).
+// Built ONLY inside the LADDER.ENABLED gate, and only for a FIRST RUN.
+let touchMapStore = null;
+let touchMapPane = null;
+/**
+ * Session N: the ?shot harness boots a fresh context every run, so a first-run
+ * surface (the MAP pane, the intro ride) would land in EVERY gate picture;
+ * the harness suppresses both unless the run asks for them with `&intro=1`
+ * (read once at boot beside the other URL flags — a dev-only override, never
+ * a `shot` reader: DevShotGate stays the ONE of those).
+ */
+let _introForced = false;
+/** Session N: is this boot a first-time player's run? (the MAP store's bit, under the harness policy above) */
+function _introFirstRun() {
+  if (!touchMapStore || typeof touchMapStore.isFirstRun !== 'function') return false;
+  if (devShotGate.requested && !_introForced) return false;
+  try { return !!touchMapStore.isFirstRun(); } catch (_e) { return false; }
+}
+/** Session N: the a11y preference — the intro is PLACED, not ridden, when the player asked for reduced motion. */
+function _prefersReducedMotion() {
+  try {
+    return !!(typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  } catch (_e) { return false; }
+}
 /** Session M: the hint ticker's band from the bottom (its BOTTOM_PX + ROW_HEIGHT_PX) — the ORBIT pane's floor never enters it. */
 const _HINT_BAND_PX = ((Constants.ONBOARDING && Constants.ONBOARDING.TICKER) || {}).BOTTOM_PX + ((Constants.ONBOARDING && Constants.ONBOARDING.TICKER) || {}).ROW_HEIGHT_PX;
 /** Session M: the debris clusters for the NEXT pane's TRANSFER row, re-bucketed at most every CLUSTERS_MS (getDebrisClusters walks every debris). */
@@ -816,6 +845,9 @@ async function init() {
         Constants.LADDER.ENABLED = false;
       }
     }
+    // Session N: `&intro=1` lets a ?shot harness run see the first-run intro
+    // ride + MAP pane (suppressed under the harness otherwise — see _introFirstRun).
+    _introForced = urlParams.get('intro') === '1';
     // Guidance cleanup (Phase 4): ?guidanceLog=1 enables dev-only guidance
     // telemetry (prompt→action latency, contradiction + overlap counts).
     // No-op in the default build; snapshot via window.__dumpGuidanceLog().
@@ -2010,6 +2042,10 @@ async function init() {
     // listener, never writes the key, and its save never carries `ladder`
     // (PersistenceManager omits the key when absent) — byte-identical.
     ladderViewStore = new LadderViewStore();
+    // Session N: the MAP store — player-owned like the view store (its own
+    // key, load in ctor, save on change, private-mode-safe); its first-run bit
+    // is the ONE signal for the intro ride below and the MAP pane.
+    touchMapStore = new TouchMapStore();
     eventBus.on(Events.PERSISTENCE_GATHER, (saveData) => {
       if (!saveData || !ladderController) return;
       const view = ladderController.viewState();
@@ -2017,11 +2053,27 @@ async function init() {
     });
     eventBus.on(Events.PERSISTENCE_LOADED, () => {
       if (!ladderController) return;
+      // Session N: a CONTINUE is not a new game — an intro ride armed by the
+      // GAME_RESET that resetGame() emitted a moment ago is dropped here, and
+      // the saved view is restored as before.
+      ladderController.disarmIntroRide();
       const save = persistenceManager.peek();
       ladderController.restoreView(save ? save.ladder : null);
     });
     eventBus.on(Events.GAME_RESET, () => {
-      if (ladderController) ladderController.resetView();
+      if (!ladderController) return;
+      ladderController.resetView();
+      // Session N (plan item 2; 08-workbench §8 Q6): a FIRST-TIME player's new
+      // game rides in from the top floor to the workbench — the ship close-up
+      // — at the first engage (INTRO_RIDE_MS, silent), where the MAP pane's
+      // workbench beat waits; the flying lessons (the OnboardingDirector's
+      // beats) stay deferred until the player rides up. Reduced motion places
+      // the core on the workbench instead (no ride). Veterans (the map done or
+      // skipped) and the ?shot harness (unless &intro=1) keep the shipped
+      // floor. A CONTINUE disarms this on PERSISTENCE_LOADED (above).
+      if (_introFirstRun()) {
+        ladderController.armIntroRide({ rideMs: INTRO_RIDE_MS, reducedMotion: _prefersReducedMotion() });
+      }
     });
     // Wave 5 (Session H) — JOB A, the D5 room-memory WRITE GAP (03-plan
     // Session G FINDINGS (c)): a pane shown/hidden by its key (0/9/8, the
@@ -2169,6 +2221,25 @@ async function init() {
       before('debris', nextPane.rung());
       before('targets', orbitPane.rung());
       before('mother', fmaStrip.rung());
+    }
+    // Session N — the first-run MAP pane: the LAST child of #hud-left-column
+    // (on the workbench the column is otherwise empty, so the card sits
+    // top-left alone; on the flying floor it follows the fleet rows and the
+    // WHAT rail's existing column dodge covers it). Not a rung, not a room
+    // pane: it shows on every floor until done or skipped, once per player.
+    // Witnesses: the bus (zoom / select / net — subscribed inside the pane)
+    // and three 1 Hz getters — the floor reads null while a ride is in flight
+    // so the intro's own descent never counts as the player's "ride up".
+    // Built only for a first run under the harness policy (a ?shot boot
+    // without &intro=1 never sees it); a veteran's boot constructs nothing.
+    if (_introFirstRun()) {
+      touchMapPane = new TouchMapPane({
+        glass: _glassBoot,
+        store: touchMapStore,
+        floor: () => ((ladderController && !ladderController.isRiding()) ? ladderController.currentFloor() : null),
+        refitOpen: () => !!(refitPane && typeof refitPane.isOpen === 'function' && refitPane.isOpen()),
+        libraryOpen: () => !!(libraryPane && typeof libraryPane.isOpen === 'function' && libraryPane.isOpen()),
+      });
     }
   }
   // (The Wave-3 ArchiveFloor bridge — the hosted codex as the old F1 costume —
@@ -3235,6 +3306,9 @@ async function init() {
       window.__fmaStrip = fmaStrip;
       window.__nextPane = nextPane;
       window.__copilotVoice = copilotVoice;
+      // Session N: the first-run map + its store (the pane is null unless this boot is a first run under the harness policy).
+      window.__touchMapPane = touchMapPane;
+      window.__touchMapStore = touchMapStore;
       // Session J gate witnesses (getters, the __scbSceneManager pattern): the
       // debris field (to project a target for the tap), the input manager (its
       // PUBLIC keys map — the drag's witness), the autopilot (the F2 Space verb).
@@ -5884,6 +5958,7 @@ function gameLoop(timestamp) {
       if (orbitPane) orbitPane.update(timestamp);
       if (fmaStrip) fmaStrip.update(timestamp);
       if (nextPane) nextPane.update(timestamp);
+      if (touchMapPane) touchMapPane.update(timestamp);   // Session N: the first-run map's polled witnesses
     }
 
     // Orbit MFD update (Phase 6: pass cachedTargets for route planner)

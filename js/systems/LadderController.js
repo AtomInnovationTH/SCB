@@ -45,6 +45,18 @@ import { Constants } from '../core/Constants.js';
 const CROSS_RIDE_MS = 550;
 
 /**
+ * Wave 5 Session N (plan "Session N — Onboarding for glass + intro", item 2;
+ * 08-workbench §8 Q6 "the intro ride ends on the ship close-up for mission
+ * 1"): the INTRO RIDE's duration — one continuous descent from the TOP floor
+ * to the workbench at the first engage of a first-time player's new game.
+ * Longer than a crossing (550) because it spans the whole ladder and is the
+ * one ride that is watched, not commanded; short enough that the workbench's
+ * first beat (the MAP pane) is on screen within three seconds of START. A
+ * controller ride number like CROSS_RIDE_MS (01-numbers "Session N").
+ */
+export const INTRO_RIDE_MS = 2400;
+
+/**
  * Wave 5 Session K: the WORKBENCH floor — where the REFIT drawer (the one
  * shop) lives; the same floor id `_applyFloorContent` keys the REFIT tab on.
  * An id, never a name (FloorContract owns the player labels).
@@ -242,6 +254,13 @@ export class LadderController {
      * null until the first engage.
      */
     this._floorApplied = null;
+    /**
+     * Session N: the armed intro ride's duration (ms) — set by armIntroRide()
+     * before the first engage of a first-time player's new game, consumed by
+     * _engage() (the ride starts the moment the ladder owns the screen),
+     * cleared by disarmIntroRide() (a CONTINUE restores a saved view instead).
+     */
+    this._introPending = null;
     /**
      * D5 (Wave 5 Session G): the last FREE-zone rest z01 on the applied floor —
      * the player's working position (see `isFreeRest`). Seeded at engage and
@@ -842,6 +861,43 @@ export class LadderController {
   }
 
   /**
+   * Wave 5 Session N — the INTRO RIDE (plan item 2; 08-workbench §8 Q6). The
+   * hub calls this right after resetView() on GAME_RESET when the run is a
+   * first-time player's NEW game (the MAP store's first-run bit; never under
+   * the ?shot harness unless asked): the core is PLACED (a cut while hidden —
+   * the same invisible path as restoreView) on the TOP floor of the contract,
+   * and the ride to the workbench is ARMED — `_engage` starts it the moment
+   * the ladder owns the screen, at INTRO_RIDE_MS (or `rideMs`), through the
+   * same `_apply` → `_startRide` path as every ride (fidelity, the floor
+   * content — the REFIT tab enables on the floor-1 arrival — the mask, both
+   * rails), silently (no clunk: it is watched, not commanded). Under REDUCED
+   * MOTION (`reducedMotion: true`) the core is placed on the workbench itself
+   * and nothing is armed — the first frame IS the ship close-up. Refused (false,
+   * nothing armed) while engaged in gameplay, when the contract has no top /
+   * workbench floor, or when the placement fails.
+   * @param {{ rideMs?: number, reducedMotion?: boolean }} [arg]
+   * @returns {boolean} whether the intro was armed (or, reduced, placed)
+   */
+  armIntroRide({ rideMs, reducedMotion = false } = {}) {
+    this._introPending = null;
+    const ids = FloorContract.FLOORS.map((f) => f.id).filter((id) => Number.isFinite(id));
+    if (!ids.length || !ids.includes(WORKBENCH_FLOOR)) return false;
+    if (reducedMotion) return this._placeWhileHidden(WORKBENCH_FLOOR, 0.5);
+    const top = Math.max(...ids);
+    if (top === WORKBENCH_FLOOR) return this._placeWhileHidden(WORKBENCH_FLOOR, 0.5);
+    if (!this._placeWhileHidden(top, 0.5)) return false;
+    const ms = Number(rideMs);
+    this._introPending = (Number.isFinite(ms) && ms > 0) ? ms : INTRO_RIDE_MS;
+    return true;
+  }
+
+  /** Session N: a CONTINUE (PERSISTENCE_LOADED) is not a new game — drop an armed intro ride. */
+  disarmIntroRide() { this._introPending = null; }
+
+  /** Session N: true while an intro ride is armed and not yet flown. */
+  introRidePending() { return this._introPending !== null; }
+
+  /**
    * @private The ONE invisible placement path shared by restoreView/resetView:
    * refuse while engaged in gameplay; disengage a stale engagement; settle a
    * stale ride; place.
@@ -990,6 +1046,19 @@ export class LadderController {
     if (this._rail && this._rail.show) this._rail.show();
     if (this._paneRail && this._paneRail.show) this._paneRail.show();
     this._refreshRail();
+    // Session N: an ARMED intro ride flies now — the core was placed on the
+    // top floor while hidden; the ceremony decision rides to the workbench at
+    // the intro duration (never the 550 ms crossing), with no clunk.
+    if (this._introPending !== null) {
+      const ms = this._introPending;
+      this._introPending = null;
+      const t = (tMs === undefined) ? this._now() : tMs;
+      const decisions = (typeof this._ladder.ceremonyRide === 'function')
+        ? this._ladder.ceremonyRide({ tMs: t, toFloor: WORKBENCH_FLOOR })
+        : this._ladder.jump({ tMs: t, toFloor: WORKBENCH_FLOOR });
+      this._apply(decisions, t, { rideMs: ms, silent: true });
+      this._refreshRail();
+    }
   }
 
   _disengage() {
@@ -1050,7 +1119,11 @@ export class LadderController {
    * @param {number} tMs
    * @private
    */
-  _apply(decisions, tMs) {
+  _apply(decisions, tMs, opts = null) {
+    // Session N: the intro ride overrides the ride duration and mutes the sfx
+    // (`{ rideMs, silent }`); every other caller passes nothing.
+    const rideOverride = (opts && Number.isFinite(opts.rideMs) && opts.rideMs > 0) ? opts.rideMs : null;
+    const silent = !!(opts && opts.silent);
     for (const d of decisions) {
       switch (d.type) {
         case 'move':
@@ -1077,16 +1150,17 @@ export class LadderController {
 
         case 'ride':
           // G3 flick-to-wall soft tick (LadderSfx only sounds kind 'flickWall').
-          if (this._sfx && this._sfx.onRide) this._sfx.onRide(d.kind);
+          if (!silent && this._sfx && this._sfx.onRide) this._sfx.onRide(d.kind);
           // Session K: the ceremony ride is a crossing in all but name — it
           // flies at CROSS_RIDE_MS and lands on a new floor — so it gets the
           // descending clunk (the same onCross the wheel crossing sounds).
-          if (d.kind === 'ceremony' && this._sfx && this._sfx.onCross) this._sfx.onCross('in');
+          if (!silent && d.kind === 'ceremony' && this._sfx && this._sfx.onCross) this._sfx.onCross('in');
           // D5: a flick-to-wall ride ends the drive whose ramp-up moves just
           // landed — the working position rolls back to before that drive.
           // The flick's direction is the wall it landed on (lower edge = in).
           if (d.kind === 'flickWall') this._rollBackDrive(tMs, d.entryZ01 <= 0.5 ? -1 : 1);
-          this._startRide(d.toFloor, d.entryZ01, d.miniMs != null ? d.miniMs : CROSS_RIDE_MS, tMs);
+          this._startRide(d.toFloor, d.entryZ01,
+            rideOverride !== null ? rideOverride : (d.miniMs != null ? d.miniMs : CROSS_RIDE_MS), tMs);
           break;
 
         case 'denied':

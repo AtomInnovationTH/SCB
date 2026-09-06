@@ -5022,8 +5022,13 @@ export const Constants = {
     /** localStorage key for the OnboardingDirector save blob.
      *  v3 (2026-06-17): reward-first capture spine replaces the 18-beat
      *  camera/attitude lecture (new beat ids). Bumped so v1/v2 saves don't
-     *  resume mid-pipeline against the new beat list. */
-    STORAGE_KEY: 'spacecowboy_onboarding_v3',
+     *  resume mid-pipeline against the new beat list.
+     *  v4 (2026-09-06, Wave 5 Session N): the intro ride now lands a first-time
+     *  player on the workbench (floor 1) where the MAP pane's beat runs before
+     *  the flying lessons; a mid-pipeline v3 blob would resume the flying beats
+     *  against the new opening — bumped so every player starts the spine
+     *  fresh (04-test-pins 5). */
+    STORAGE_KEY: 'spacecowboy_onboarding_v4',
 
     /** Default credit award per satisfied beat (where `credit` not set). */
     DEFAULT_CREDIT: 10,

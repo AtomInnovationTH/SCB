@@ -20,7 +20,7 @@
  * (KeyB / KeyI / Equal / Tab / KeyN); the ride row has its own words (the rail
  * drag has no key chip). Desktop labels name the key.
  *
- * WITNESSES. Bus: `Events.CAMERA_ZOOM_INPUT` → zoom, `Events.TARGET_SELECTED`
+ * WITNESSES. Bus: `Events.CAMERA_ZOOM_INPUT` → zoom, `Events.HUD_TARGET_CLICK`
  * → select, `Events.LASSO_FIRED` or `Events.NET_FIRED` → net — exactly four
  * subscriptions through the injected `bus` (default: the eventBus singleton),
  * event-rate, no hot path. Polled, inside `update(nowMs)` at <= 1 Hz
@@ -111,7 +111,11 @@ export const ROWS = Object.freeze([
   Object.freeze({ id: 'zoom', glass: TABLE.Equal.chip, desktop: `WHEEL ${ARROW} ZOOM`,
     witness: Object.freeze({ kind: 'bus', events: Object.freeze(['CAMERA_ZOOM_INPUT']) }) }),
   Object.freeze({ id: 'select', glass: TABLE.Tab.chip, desktop: `CLICK ${ARROW} SELECT`,
-    witness: Object.freeze({ kind: 'bus', events: Object.freeze(['TARGET_SELECTED']) }) }),
+    // HUD_TARGET_CLICK is the player's own tap / click on a target (main.js's
+    // ONE selection event); TARGET_SELECTED also fires for the boot auto-lock
+    // ("it locks the nearest piece for you") and the Tab cycle — the first gate
+    // picture showed the row ticked before the player touched anything.
+    witness: Object.freeze({ kind: 'bus', events: Object.freeze(['HUD_TARGET_CLICK']) }) }),
   Object.freeze({ id: 'net', glass: TABLE.KeyN.chip, desktop: `N ${ARROW} NET`,
     witness: Object.freeze({ kind: 'bus', events: Object.freeze(['LASSO_FIRED', 'NET_FIRED']) }) }),
 ]);
@@ -122,6 +126,8 @@ const DONE_ATTR = 'data-touch-map-done';
 const SURFACE_ATTR = 'data-tm-surface';
 /** done | current | upcoming on a row. */
 const STATE_ATTR = 'data-tm-state';
+/** A done row past its linger: folded out of the list (the tally keeps the count). */
+const FOLDED_ATTR = 'data-tm-folded';
 /** The attention pulse: present on the row that just became current (moved on change). */
 const PULSE_ATTR = 'data-tm-pulse';
 
@@ -163,6 +169,7 @@ export class TouchMapPane {
     // already holds (a previous session's ✓ marks seed the card).
     const firstRun = this._firstRun();
     this._done = new Set(this._storeDone());
+    this._doneAt = new Map();                      // id → the tick clock at completion (rows from the store have no entry → fold at once)
     this._current = null;            // the id wearing the pulse (write-on-change against it)
     this._lastMs = null;             // last accepted tick
     this._floor0 = undefined;        // the floor seen on the first tick (undefined = not yet observed)
@@ -198,6 +205,11 @@ export class TouchMapPane {
       if (t - this._completeAt >= DONE_LINGER_MS) this._hide();
       return;
     }
+
+    // Done rows fold after their linger (their stamp is the tick clock — a bus
+    // witness between ticks takes the NEXT tick's stamp, so it lingers a full
+    // TICK_MS longer at most); a compare per row, no DOM read.
+    this._fold(t);
 
     if (this._lastMs !== null && t - this._lastMs < TICK_MS) return;
     this._lastMs = t;
@@ -278,7 +290,19 @@ export class TouchMapPane {
     root.style.pointerEvents = 'none';           // display-only but for the chip (pointer-events: auto)
     root.setAttribute(SURFACE_ATTR, this._glass ? 'glass' : 'desktop');
 
-    const header = mk('div', 'tm-header', this._glass ? HEADER_GLASS : HEADER_DESKTOP);
+    // The header ROW carries the title, the tally and the SKIP chip (the one
+    // 44 pt element on glass): the card has no foot, so with six rows it is
+    // 184 px tall on glass — the left column with MOTHER + DAUGHTERS + the FMA
+    // strip + this card ends at 454 and the WHAT rail (457 tall) still dodges
+    // under it above the thumb rest (454 + 8 + 457 = 919 < 932 at 1032 tall).
+    // The first gate picture, with a 240 px card (24 px rows + a 54 px foot),
+    // pushed the column to 510 and the rail could only overlap it.
+    const header = mk('div', 'tm-header');
+    const title = mk('span', 'tm-title', this._glass ? HEADER_GLASS : HEADER_DESKTOP);
+    const count = mk('span', 'tm-count', '');
+    const chip = mk('button', 'tm-chip', SKIP_LABEL);
+    if (chip.setAttribute) { chip.setAttribute('type', 'button'); chip.setAttribute('tabindex', '-1'); }
+    header.appendChild(title); header.appendChild(count); header.appendChild(chip);
     root.appendChild(header);
 
     const list = mk('div', 'tm-rows');
@@ -294,18 +318,11 @@ export class TouchMapPane {
     }
     root.appendChild(list);
 
-    const foot = mk('div', 'tm-foot');
-    const count = mk('span', 'tm-count', '');
-    const chip = mk('button', 'tm-chip', SKIP_LABEL);
-    if (chip.setAttribute) { chip.setAttribute('type', 'button'); chip.setAttribute('tabindex', '-1'); }
-    foot.appendChild(count); foot.appendChild(chip);
-    root.appendChild(foot);
-
     parent.appendChild(root);
     if (chip.addEventListener) chip.addEventListener('click', () => this.skip());
 
     this._root = root;
-    this._el = { header, rows, count, chip };
+    this._el = { header, title, rows, count, chip };
   }
 
   /** @private The one <style id="touch-map-style"> (per document). No backdrop-filter. */
@@ -336,14 +353,25 @@ export class TouchMapPane {
       }
       /* The terminal bit: skipped or completed (after the linger). */
       #${TOUCH_MAP_ID}[${DONE_ATTR}] { display: none !important; }
+      /* The header ROW: title + tally on the left, the SKIP chip on the right
+       * (the chip's box sets the row height: 44 px glass / 24 px desktop). */
       #${TOUCH_MAP_ID} .tm-header {
+        display: flex; align-items: center; gap: 8px;
+        margin-bottom: 4px;
+      }
+      #${TOUCH_MAP_ID} .tm-title {
         font-size: 10px;
         font-variant-caps: small-caps;
         letter-spacing: 0.12em;
         opacity: 0.6;
-        margin-bottom: 4px;
+        flex: 1 1 auto;
+        min-width: 0; overflow: hidden; text-overflow: ellipsis;
       }
       #${TOUCH_MAP_ID} .tm-rows { display: flex; flex-direction: column; gap: 2px; }
+      /* A done row FOLDS after its linger (the tally keeps the count): the card
+       * shows what is left to learn and shrinks as the player learns it, so the
+       * column under it never grows past the WHAT rail's dodge budget. */
+      #${TOUCH_MAP_ID} .tm-row[${FOLDED_ATTR}] { display: none; }
       #${TOUCH_MAP_ID} .tm-row {
         display: grid;
         grid-template-columns: 16px 1fr;
@@ -354,7 +382,6 @@ export class TouchMapPane {
         border-left: 2px solid transparent;
         border-radius: 2px;
       }
-      #${TOUCH_MAP_ID}[${SURFACE_ATTR}="glass"] .tm-row { min-height: 24px; }
       #${TOUCH_MAP_ID} .tm-mark { text-align: center; font-weight: bold; }
       #${TOUCH_MAP_ID} .tm-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
       /* Upcoming: dim. */
@@ -389,12 +416,7 @@ export class TouchMapPane {
         #${TOUCH_MAP_ID} .tm-row[${PULSE_ATTR}] { animation: none; opacity: 1; }
         #${TOUCH_MAP_ID} .tm-row[${STATE_ATTR}="done"] { animation: none; opacity: 0.45; }
       }
-      #${TOUCH_MAP_ID} .tm-foot {
-        display: flex; align-items: center; justify-content: space-between; gap: 8px;
-        margin-top: 6px; padding-top: 4px;
-        border-top: 1px solid rgba(0, 255, 136, 0.2);
-      }
-      #${TOUCH_MAP_ID} .tm-count { font-size: 10px; opacity: 0.7; }
+      #${TOUCH_MAP_ID} .tm-count { font-size: 10px; opacity: 0.7; flex: 0 0 auto; }
       /* The ONE tappable element: the CargoPane .cargo-btn shape; 24 px on the
        * desktop, 44 pt on glass with the five touch rules. */
       #${TOUCH_MAP_ID} .tm-chip {
@@ -424,7 +446,7 @@ export class TouchMapPane {
     doc.head.appendChild(style);
   }
 
-  /** @private Exactly the four bus witnesses (CAMERA_ZOOM_INPUT, TARGET_SELECTED, LASSO_FIRED, NET_FIRED). */
+  /** @private Exactly the four bus witnesses (CAMERA_ZOOM_INPUT, HUD_TARGET_CLICK, LASSO_FIRED, NET_FIRED). */
   _subscribe() {
     const bus = this._bus;
     const E = this._events;
@@ -499,6 +521,7 @@ export class TouchMapPane {
   _witness(id, t) {
     if (this._disposed || this._hidden || this._done.has(id)) return;
     this._done.add(id);
+    this._doneAt.set(id, (t !== null && Number.isFinite(t)) ? t : null);   // null: stamped by the next update()
     const s = this._store;
     if (s && typeof s.markDone === 'function') {
       try { s.markDone(id); } catch (_e) { /* the store swallows its own storage faults; a stub's bug is not the pane's */ }
@@ -508,6 +531,20 @@ export class TouchMapPane {
       else this._completePending = true;
     }
     if (t === null) this._paint();                 // a bus witness paints at event time; a poll paints at the tick's end
+  }
+
+  /** @private Fold every done row whose linger has run (rows done at construction fold at once). */
+  _fold(t) {
+    const el = this._el;
+    if (!el || this._hidden || this._disposed) return;
+    for (const id of this._done) {
+      const cell = el.rows.get(id);
+      if (!cell || (cell.row.hasAttribute && cell.row.hasAttribute(FOLDED_ATTR))) continue;
+      if (!this._doneAt.has(id)) { this._setFlag(cell.row, FOLDED_ATTR, true); continue; }   // done before this boot (the store): no linger to watch
+      let at = this._doneAt.get(id);
+      if (at === null) { at = t; this._doneAt.set(id, t); }      // a bus witness between ticks: its linger starts now
+      if (t - at >= DONE_LINGER_MS) this._setFlag(cell.row, FOLDED_ATTR, true);
+    }
   }
 
   /** @private The terminal hide: the bit, the listeners, no further DOM writes. */

@@ -51,7 +51,7 @@ export const StorageKeys = {
   // Owned by Constants (they sit beside related tuning) but mirrored here so the
   // registry is complete and the collision/drift test can see them.
   /** OnboardingDirector cleared-state blob. */
-  ONBOARDING:  Constants.ONBOARDING?.STORAGE_KEY || 'spacecowboy_onboarding_v3',
+  ONBOARDING:  Constants.ONBOARDING?.STORAGE_KEY || 'spacecowboy_onboarding_v4',
   /** TeachingSystem seen-moments set. */
   TEACHING:    Constants.TEACHING?.PERSISTENCE_KEY || 'teachingSeen',
 };
