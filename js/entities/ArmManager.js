@@ -26,6 +26,13 @@ const M = 0.00001;
 // never retained across calls).
 const _poseDirTmp = new THREE.Vector3();
 
+/** The "." toggle's live sweep read (InputManager.js Period case, mirrored
+ *  for toggleStruts / strutsDeployed): a pending `_strutTargetAlpha` latch
+ *  wins, else the ACTUAL angle — never the latch alone, which clears to
+ *  undefined once the slew finishes. @private */
+const _strutLiveAlpha = (a) =>
+  a._strutTargetAlpha ?? (a.getAimAlpha ? a.getAimAlpha() : 0);
+
 // V5 Constants (destructured for readability)
 const {
   V5_ARM_COUNT, V5_FRONT_ARM_TYPE, V5_BACK_ARM_TYPE,
@@ -1475,6 +1482,43 @@ export class ArmManager {
     });
 
     return Promise.all(promises);
+  }
+
+  /**
+   * Session L (plan item 4): the "." hotkey's strut toggle as a PUBLIC method
+   * — the REFIT BERTHS card's STRUTS chip drives it through the hub. It MIRRORS
+   * InputManager's Period case (do-not-edit there; both paths must agree —
+   * test-ArmManager-Salvage pins the same latch field + the same guard against
+   * that source and drives both on one stub arm set): the same
+   * `_strutTargetAlpha` write on the same arm set (DOCKED only), the same
+   * decision (any docked strut at/past π/2 → stow ALL to 0, else deploy ALL
+   * to π zenith), the same live read (getAimAlpha, a pending latch winning —
+   * never the latch alone, it clears to undefined on arrival). Emitting
+   * Events.STRUT_DEPLOY_INPUT stays the CALLER's job (InputManager emits its
+   * own; the hub emits for the pane), as does the click.
+   * @returns {boolean|null} the new state — true = deploying (π), false =
+   *   stowing (0); null when no DOCKED arm could take the write (nothing
+   *   toggled — the caller should skip its emit).
+   */
+  toggleStruts() {
+    const docked = (this.arms || []).filter((a) => a && a.state === ARM_STATES.DOCKED);
+    if (!docked.length) return null;
+    const anyDeployed = docked.some((a) => _strutLiveAlpha(a) >= Math.PI / 2);
+    const targetAlpha = anyDeployed ? 0 : Math.PI;
+    for (const arm of docked) arm._strutTargetAlpha = targetAlpha;
+    return !anyDeployed;
+  }
+
+  /**
+   * Read-only: the SAME predicate toggleStruts() decides from — true while any
+   * DOCKED strut is at/past π/2 (a pending latch counts, so the read flips the
+   * instant the toggle writes; the REFIT chip re-reads truth, no optimism).
+   * No docked arm → false.
+   * @returns {boolean}
+   */
+  strutsDeployed() {
+    return (this.arms || []).some((a) =>
+      a && a.state === ARM_STATES.DOCKED && _strutLiveAlpha(a) >= Math.PI / 2);
   }
 
   /**

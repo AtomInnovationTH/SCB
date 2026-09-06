@@ -35,6 +35,11 @@
  *     08-workbench.md:102-104) through the injected `purchase`
  *     (ShopScreen.purchaseUpgrade); the pane then re-renders from the
  *     injected getUpgradeLevel/getCredits TRUTH, never from optimism.
+ *   - Session L (plan item 4): the INSTALLED block of the OWNING card carries
+ *     the actuator TOGGLE chips (POWER: arrays furl + feather; BERTHS: struts;
+ *     THERMAL: flower) through the injected `actuators` dep — the SAME actions
+ *     the `,` / Shift+`,` / `.` / `O` hotkeys drive; a tap toggles, then the
+ *     pane re-reads truth (see ACTUATOR_CHIPS and the ctor doc).
  *
  * TIMINGS (module constants — VisualLaw has no pane-timing entry yet; the
  * 01-numbers "Workbench panes" table is the canonical source until the
@@ -125,6 +130,33 @@ const MANIFEST_BY_ID = new Map(BLUEPRINT_SUBSYSTEMS.map((s) => [s.id, s]));
 /** Catalog entry by upgrade id (name lookups for prereq chips). @private */
 const CATALOG_BY_ID = new Map(FITTING_CATALOG.map((e) => [e.id, e]));
 
+/**
+ * Session L (plan item 4): the actuator TOGGLE chips — the hotkey actions
+ * (`,` arrays furl / Shift+`,` feather, `.` struts, `O` flower) reachable
+ * from the card of the subsystem that OWNS the hardware, through the
+ * injected `actuators` dep (the hub wires each `get`/`toggle` onto the SAME
+ * player / ArmManager methods InputManager calls — never a second path).
+ * Keyed by the dep field name; `sub` = the hosting blueprintSubsystems id,
+ * `name` = the chip's hardware word, `on` = the state that reads
+ * aria-pressed="true" (the actuated pose), `words` = the house voice per
+ * `get()` value (STATE-first: 'ARRAYS · FURLED'). Pure data.
+ */
+export const ACTUATOR_CHIPS = Object.freeze({
+  rosaFurl:    Object.freeze({ sub: 'POWER',   name: 'ARRAYS',  on: 'FURLED',    words: Object.freeze({ FURLED: 'FURLED', DEPLOYED: 'DEPLOYED' }) }),
+  rosaFeather: Object.freeze({ sub: 'POWER',   name: 'FEATHER', on: 'FEATHERED', words: Object.freeze({ FEATHERED: 'ON', FLAT: 'FLAT' }) }),
+  struts:      Object.freeze({ sub: 'BERTHS',  name: 'STRUTS',  on: 'DEPLOYED',  words: Object.freeze({ DEPLOYED: 'DEPLOYED', STOWED: 'STOWED' }) }),
+  flower:      Object.freeze({ sub: 'THERMAL', name: 'FLOWER',  on: 'OPEN',      words: Object.freeze({ OPEN: 'OPEN', CLOSED: 'CLOSED' }) }),
+});
+/** The present-but-unowned `get()` value: a DISABLED chip with that text. */
+export const ACTUATOR_NOT_FITTED = 'NOT FITTED';
+/** Chip minimum height (px). The pane has NO glass dep (main.js wires none),
+ *  so this is the desktop row; a `glass` dep + the 44 px HIG box is a hub
+ *  follow-up (PaneRail's `deps.glass` idiom). */
+export const ACTUATOR_CHIP_MIN_H_PX = 28;
+
+/** Minimal HTML escape for a duck-typed dep string (a pass-through state). @private */
+const _esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
 export class RefitPane {
   /**
    * Every dep optional; the pane is inert headless (no DOM at import, no DOM
@@ -154,6 +186,16 @@ export class RefitPane {
    *   the first-visit framing the full-screen shop used to (plan D-B; owner
    *   2026-09-06: "the first-depot RECOMMENDED chip = the REFIT header chip").
    *   Read on `open({ firstVisit: true })` only; absent → no chip.
+   * @param {object} [deps.actuators] - Session L (plan item 4): the actuator
+   *   toggles, all optional, duck-typed, never trusted to not throw:
+   *   `{ rosaFurl: { get(): 'FURLED'|'DEPLOYED'|null, toggle() },
+   *      rosaFeather: { get(): 'FEATHERED'|'FLAT'|null, toggle() },
+   *      struts: { get(): 'DEPLOYED'|'STOWED'|null, toggle() },
+   *      flower: { get(): 'OPEN'|'CLOSED'|'NOT FITTED'|null, toggle() } }`.
+   *   `get()` null (or absent / throwing) = the hardware is not present → no
+   *   chip; 'NOT FITTED' = present-but-unowned → a disabled chip. A tap calls
+   *   `toggle()` then re-reads truth (no optimistic flip). The hub wires each
+   *   onto the SAME methods the hotkeys call and emits the input events itself.
    */
   constructor(deps = {}) {
     this._doc = deps.doc !== undefined ? deps.doc
@@ -170,6 +212,7 @@ export class RefitPane {
     this._adapterDepsFn = deps.adapterDeps || null;
     this._reducedMotionDep = deps.reducedMotion;
     this._getRecommended = deps.getRecommended || null;
+    this._actuators = (deps.actuators && typeof deps.actuators === 'object') ? deps.actuators : null;
     /** Session K: the first-visit framing — true from open({firstVisit}) to close(). */
     this._firstVisit = false;
 
@@ -347,6 +390,27 @@ export class RefitPane {
       return String(Math.round(v * 100) / 100);
     }
     return String(v);
+  }
+
+  /**
+   * Session L: one actuator chip from a dep `get()` value. Pure. null when
+   * the key is unknown or the state is null/undefined (hardware absent → no
+   * chip); 'NOT FITTED' → a disabled chip; a known state → the house word
+   * ('FEATHERED' reads 'FEATHER · ON'); an unknown non-null state passes
+   * through uppercased (truth is shown, never invented) and reads unpressed.
+   * @param {string} key - ACTUATOR_CHIPS key
+   * @param {*} state - the dep's get() value
+   * @returns {{ key:string, text:string, pressed:boolean, disabled:boolean }|null}
+   */
+  static actuatorChip(key, state) {
+    const def = ACTUATOR_CHIPS[key];
+    if (!def || state === null || state === undefined) return null;
+    const s = String(state).toUpperCase();
+    if (s === ACTUATOR_NOT_FITTED) {
+      return { key, text: `${def.name} \u00b7 ${ACTUATOR_NOT_FITTED}`, pressed: false, disabled: true };
+    }
+    const word = Object.prototype.hasOwnProperty.call(def.words, s) ? def.words[s] : _esc(s);
+    return { key, text: `${def.name} \u00b7 ${word}`, pressed: s === def.on, disabled: false };
   }
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────
@@ -624,6 +688,42 @@ export class RefitPane {
     return { rows: rows || sub.spec || [], live: !!rows };
   }
 
+  /** @private One actuator's `get()` — null on a missing dep / a throw. */
+  _readActuator(key) {
+    const dep = this._actuators && this._actuators[key];
+    if (!dep || typeof dep.get !== 'function') return null;
+    try { const v = dep.get(); return v === undefined ? null : v; } catch (_e) { return null; }
+  }
+
+  /** @private The chips hosted by one subsystem card (ACTUATOR_CHIPS order). */
+  _actuatorChipsFor(sub) {
+    if (!this._actuators) return [];
+    const chips = [];
+    for (const key of Object.keys(ACTUATOR_CHIPS)) {
+      if (ACTUATOR_CHIPS[key].sub !== sub) continue;
+      const chip = RefitPane.actuatorChip(key, this._readActuator(key));
+      if (chip) chips.push(chip);
+    }
+    return chips;
+  }
+
+  /**
+   * Session L: route one actuator tap — `toggle()` through the dep, then
+   * re-read truth (the pane never flips a label optimistically). Inert for a
+   * missing / absent (null) / NOT FITTED actuator — a disabled <button> drops
+   * the browser click, but the delegated handler guards it again so a synthetic
+   * or stale target can never fire a toggle. Never throws.
+   * @param {string} key - ACTUATOR_CHIPS key
+   */
+  _actuate(key) {
+    const dep = this._actuators && this._actuators[key];
+    const chip = RefitPane.actuatorChip(key, this._readActuator(key));
+    if (dep && chip && !chip.disabled && typeof dep.toggle === 'function') {
+      try { dep.toggle(); } catch (_e) { /* dep */ }
+    }
+    this.refresh();
+  }
+
   /** @private The full display model (pure reads; no DOM). */
   _model() {
     const ctx = this._ctx();
@@ -651,17 +751,21 @@ export class RefitPane {
     });
     const affordable = RefitPane.countAffordable(FITTING_CATALOG, ctx);
     const recommended = this._recommended();
+    const acts = this._actuatorChipsFor(this._focused);
     const structKey = [
       this._focused, this._open ? 1 : 0, ctx.credits, affordable,
       installed.rows.join('|'), installed.live ? 1 : 0,
       alts.map((a) => `${a.id}:${a.chip.kind}:${a.chip.text}:${a.num}${a.arrow}`).join('|'),
       recommended ? `reco:${recommended.id}` : '',
+      // Session L: the actuator states ride the key so a toggle re-renders at once.
+      acts.map((a) => `act:${a.key}:${a.text}${a.disabled ? ':off' : ''}`).join('|'),
     ].join('\u0001');
     return {
       focused: this._focused,
       label: focused.label,
       codexId: focused.codexId,
       installed,
+      acts,
       alts,
       empty: (groups[this._focused] || []).length === 0,
       credits: ctx.credits,
@@ -864,6 +968,26 @@ export class RefitPane {
     for (const row of m.installed.rows) {
       parts.push(`<div style="opacity:0.85;padding-left:8px">${row}</div>`);
     }
+    // Session L: the actuator toggle chips — real <button>s (aria-pressed =
+    // the actuated pose), STATE-first labels, one per actuator the hub
+    // reports present on THIS card's hardware. A tap routes through
+    // [data-act] → _actuate → toggle() → refresh (truth re-read). NOT FITTED
+    // = present-but-unowned: disabled + aria-disabled, the purchase row
+    // below is the way in. Desktop min-height (no glass dep — see the const).
+    if (m.acts && m.acts.length) {
+      parts.push('<div class="refit-acts" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:5px;padding-left:8px">');
+      for (const a of m.acts) {
+        const frame = a.disabled ? 'rgba(0,204,255,0.25)' : (a.pressed ? C.INFO : 'rgba(0,204,255,0.45)');
+        parts.push(
+          `<button class="refit-act" data-act="${a.key}" aria-pressed="${a.pressed ? 'true' : 'false'}"` +
+          (a.disabled ? ' disabled aria-disabled="true"' : '') +
+          ` style="min-height:${ACTUATOR_CHIP_MIN_H_PX}px;box-sizing:border-box;padding:0 8px;border-radius:3px;font:inherit;letter-spacing:inherit;` +
+          `border:1px solid ${frame};color:${C.INFO};background:${a.pressed && !a.disabled ? 'rgba(0,204,255,0.15)' : 'transparent'};` +
+          `${a.disabled ? 'opacity:0.5;cursor:default' : 'cursor:pointer'}">${a.text}</button>`,
+        );
+      }
+      parts.push('</div>');
+    }
     parts.push('</div>');
     // Exactly three ranked alternatives (fewer when fewer candidates exist).
     if (m.empty) {
@@ -903,6 +1027,13 @@ export class RefitPane {
   /** @private */
   _onClick(e) {
     this._wake();
+    // Session L: an actuator chip — the tap is activity like a BUY (the wake
+    // above), toggles through the dep, and re-renders from truth.
+    const act = this._closest(e.target, '[data-act]');
+    if (act) {
+      this._actuate(act.getAttribute('data-act'));
+      return;
+    }
     const buy = this._closest(e.target, '[data-buy]');
     if (buy) {
       const id = buy.getAttribute('data-buy');
