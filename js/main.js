@@ -2001,6 +2001,55 @@ async function init() {
   // SPECS-everywhere tab replaced them); the STORE chip stays until Session K.
   // An optional telemetry beacon logs zoom-feel gestures + the floor crossings
   // they cause to the cable server (touch-only).
+  //
+  // Session J (D-I, item 2) — THE TAP: the ONE selection universe. On the
+  // flying floors (2–3) the nearest member of the TARGET PANE's list — the
+  // SAME TPI-sorted list Tab/T cycle (TargetAcquisition.getEligibleTargets:
+  // debrisField.getEnhancedTargetList + the tracked-unless-IR filter
+  // InputManager._cycleTarget applies — ONE helper, review fix) — projected
+  // through the live camera (navcomProject, CSS px), within
+  // TapPick.TAP_RADIUS_PX 44 → the ONE selection event HUD_TARGET_CLICK {id}
+  // (GameFlowManager / HUD / TargetReticle / NavSphere already listen; the
+  // Session J TARGET_SELECTED follow rides downstream); on floor 3 an
+  // insertion candidate's screen point wins first (ProxNetFloor.
+  // lastInsertionPoints → selectInsertion(zone) — the overlay canvas is
+  // pointer-events:none, so the hit-test lives here). Tap empty → SCAN_QUICK
+  // (the S key's event) unless `opts.scanOnMiss === false` (the desktop click
+  // below — tap-empty = scan is glass grammar, desktop has S). Floor 1 is
+  // MotherCallouts' pointer path (a hull part — untouched), floor 4's cluster
+  // icons take their own taps, floor 5 has no tap verb; the ladder disengaged
+  // → nothing (the flag-off glass boot keeps the shipped tap-nothing).
+  // Allocation at tap rate only. Session J FINDINGS (a) CLOSED (owner
+  // 2026-09-06): the resolver is hoisted out of the touch gate so the desktop
+  // canvas click (inside the LADDER gate, below) resolves through the SAME
+  // function — one selection universe, two input surfaces.
+  const _touchTap = ({ x, y }, opts) => {
+    if (!ladderController || !ladderController.isActive()) return null;
+    const floor = ladderController.currentFloor();
+    if (floor === 3 && proxNetFloor && proxNetFloor.lastInsertionPoints) {
+      const hit = tapNearestWithin(proxNetFloor.lastInsertionPoints(), x, y);
+      if (hit) { proxNetFloor.selectInsertion(hit.point.zone); return 'insertion'; }
+    }
+    if (floor !== 2 && floor !== 3) return null;
+    // The ONE eligibility rule (review fix): TargetAcquisition.getEligibleTargets
+    // owns "the TPI list, tracked unless the IR scanner sees dark" — the same
+    // rule InputManager._cycleTarget applies — so the tap can never split the
+    // selection universe from the Tab/T cycle.
+    const list = targetAcquisition.getEligibleTargets();
+    const pts = [];
+    for (const t of list) {
+      const d = debrisField.getDebrisById(t.id);
+      const pos = d && d._scenePosition;
+      if (!pos) continue;
+      const p = navcomProject(pos);
+      pts.push({ id: t.id, x: p.x, y: p.y, visible: p.visible });
+    }
+    const hit = tapNearestWithin(pts, x, y);
+    if (hit) { eventBus.emit(Events.HUD_TARGET_CLICK, { id: hit.point.id }); return 'target'; }
+    if (opts && opts.scanOnMiss === false) return null;
+    eventBus.emit(Events.SCAN_QUICK);
+    return 'scan';
+  };
   if (TouchControls.detect()) {
     // Session J item 5 (plan D-I): on glass every verb hint SPEAKS ITS GESTURE
     // — the ONE key→gesture table (GestureHints) is consulted at render time
@@ -2015,48 +2064,6 @@ async function init() {
         ? ladderController.currentFloor() : null),
     });
     touchTelemetry.start();
-    // Session J (D-I, item 2) — THE TAP: the ONE selection universe. On the
-    // flying floors (2–3) the nearest member of the TARGET PANE's list — the
-    // SAME TPI-sorted list Tab/T cycle (TargetAcquisition.getEligibleTargets:
-    // debrisField.getEnhancedTargetList + the tracked-unless-IR filter
-    // InputManager._cycleTarget applies — ONE helper, review fix) — projected
-    // through the live camera (navcomProject, CSS px), within
-    // TapPick.TAP_RADIUS_PX 44 → the ONE selection event HUD_TARGET_CLICK {id}
-    // (GameFlowManager / HUD / TargetReticle / NavSphere already listen; the
-    // Session J TARGET_SELECTED follow rides downstream); on floor 3 an
-    // insertion candidate's screen point wins first (ProxNetFloor.
-    // lastInsertionPoints → selectInsertion(zone) — the overlay canvas is
-    // pointer-events:none, so the hit-test lives here). Tap empty → SCAN_QUICK
-    // (the S key's event). Floor 1 is MotherCallouts' pointer path (a hull
-    // part — untouched), floor 4's cluster icons take their own taps, floor 5
-    // has no tap verb; the ladder disengaged → nothing (the flag-off glass
-    // boot keeps the shipped tap-nothing). Allocation at tap rate only.
-    const _touchTap = ({ x, y }) => {
-      if (!ladderController || !ladderController.isActive()) return null;
-      const floor = ladderController.currentFloor();
-      if (floor === 3 && proxNetFloor && proxNetFloor.lastInsertionPoints) {
-        const hit = tapNearestWithin(proxNetFloor.lastInsertionPoints(), x, y);
-        if (hit) { proxNetFloor.selectInsertion(hit.point.zone); return 'insertion'; }
-      }
-      if (floor !== 2 && floor !== 3) return null;
-      // The ONE eligibility rule (review fix): TargetAcquisition.getEligibleTargets
-      // owns "the TPI list, tracked unless the IR scanner sees dark" — the same
-      // rule InputManager._cycleTarget applies — so the tap can never split the
-      // selection universe from the Tab/T cycle.
-      const list = targetAcquisition.getEligibleTargets();
-      const pts = [];
-      for (const t of list) {
-        const d = debrisField.getDebrisById(t.id);
-        const pos = d && d._scenePosition;
-        if (!pos) continue;
-        const p = navcomProject(pos);
-        pts.push({ id: t.id, x: p.x, y: p.y, visible: p.visible });
-      }
-      const hit = tapNearestWithin(pts, x, y);
-      if (hit) { eventBus.emit(Events.HUD_TARGET_CLICK, { id: hit.point.id }); return 'target'; }
-      eventBus.emit(Events.SCAN_QUICK);
-      return 'scan';
-    };
     // THE HOLD: a long-press on the SELECTED target (within the same 44 px of
     // its projection, floors 2–3, ladder engaged) → the radial opens.
     const _touchHold = ({ x, y }) => {
@@ -2103,6 +2110,35 @@ async function init() {
     });
     touchControls.start();
     _bootMark('TouchControls started');
+  }
+
+  // Session J FINDINGS (a) CLOSED (owner call 2026-09-06) — DESKTOP
+  // CLICK-TO-SELECT. D-I assumed the tap "falls out free" of a shared pointer
+  // path; it lived in the touch layer. Now a canvas `click` resolves through
+  // the SAME _touchTap above (one selection universe, two input surfaces).
+  // Rules: (1) inside the LADDER gate — a ?ladder=0 boot binds nothing (the
+  // shipped desktop has no canvas click verb; byte-identical, pinned); (2)
+  // pointer-typed — a `touch` pointer belongs to TouchControls (its tap already
+  // resolved; its preventDefault suppresses the trailing click anyway), so
+  // only mouse / pen presses count; (3) MotherCallouts' slop law (:1874 — 5 px
+  // + 400 ms) — a drag-release (the floors 3/4 camera drag, the floor-1
+  // turntable) is never a click; (4) select-only (`scanOnMiss:false`) — a
+  // click on empty sky does nothing, the desktop has S. HUD surfaces sit on
+  // #hud-overlay children with their own pointer-events, so only canvas
+  // clicks arrive here. Allocation at click rate only.
+  if (Constants.LADDER && Constants.LADDER.ENABLED) {
+    let _clickDown = null;
+    canvas.addEventListener('pointerdown', (e) => {
+      _clickDown = (e.isPrimary === false) ? null
+        : { x: e.clientX, y: e.clientY, t: performance.now(), type: e.pointerType };
+    });
+    canvas.addEventListener('click', (e) => {
+      const d = _clickDown;
+      _clickDown = null;
+      if (!d || d.type === 'touch') return;
+      if (Math.abs(e.clientX - d.x) > 5 || Math.abs(e.clientY - d.y) > 5 || (performance.now() - d.t) > 400) return;
+      _touchTap({ x: e.clientX, y: e.clientY }, { scanOnMiss: false });
+    });
   }
 
   // --- Item 3: anti-stuck idle watchdog (data-driven, veteran-gated) ---
