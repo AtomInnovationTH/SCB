@@ -410,7 +410,12 @@ function _syncAudioCtxState() {
   if (!audioSystem || !audioSystem.ctx) return;
   const should = _shouldAudioRun();
   const state = audioSystem.ctx.state;
-  if (should && state === 'suspended') {
+  // 'interrupted' is WebKit's non-standard park state (an iPadOS audio
+  // interruption that ended while the page was hidden stays there on return —
+  // visibilitychange lands HERE, and the one-shot InputManager unlock never
+  // re-fires). Resuming from it is the only way sound comes back. Job 1 iPad
+  // audit 2026-09-06; pinned (test-main-wiring). 'closed' is never resumed.
+  if (should && (state === 'suspended' || state === 'interrupted')) {
     audioSystem.ctx.resume();
   } else if (!should && state === 'running') {
     audioSystem.ctx.suspend();

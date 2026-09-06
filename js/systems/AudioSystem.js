@@ -290,9 +290,18 @@ class AudioSystem {
     }
   }
 
-  /** Resume context if suspended (autoplay policy) */
+  /**
+   * Resume context if suspended (autoplay policy) or interrupted (WebKit:
+   * an iPadOS audio interruption — Siri, a call, another app seizing the
+   * session — parks the ctx in the NON-STANDARD 'interrupted' state; a
+   * 'suspended'-only gate leaves the game silent for the rest of the session
+   * because the InputManager unlock is one-shot. Job 1 iPad audit 2026-09-06;
+   * pinned in audio-vocabulary.test.js. 'closed' is never resumed.)
+   */
   resume() {
-    if (this.ctx && this.ctx.state === 'suspended') {
+    if (!this.ctx) return;
+    const s = this.ctx.state;
+    if (s === 'suspended' || s === 'interrupted') {
       this.ctx.resume();
     }
   }

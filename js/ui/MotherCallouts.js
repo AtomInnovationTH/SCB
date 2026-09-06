@@ -1860,6 +1860,15 @@ export class MotherCallouts {
 
   _handlePointerDown(e) {
     if (!this._active) return;
+    // The PINCH GUARD (Session J plan item 2 named "isPrimary + slop"; the
+    // slop half landed in J — this is the isPrimary half, Job 1 iPad audit
+    // 2026-09-06). A second finger landing mid-gesture NULLS the slot instead
+    // of overwriting it, so an anchored pinch (one finger still) can never
+    // register a part click no matter WHICH finger is the still one: the
+    // primary's later up finds no slot, the secondary's up returns below.
+    // `=== false` keeps mouse events and the unit rigs (no isPrimary field)
+    // on the primary path — same pattern as main.js's click resolver.
+    if (e.isPrimary === false) { this._pointerDown = null; return; }
     this._pointerDown = {
       x: e.clientX, y: e.clientY,
       t: (typeof performance !== 'undefined' ? performance.now() : Date.now()),
@@ -1867,7 +1876,9 @@ export class MotherCallouts {
   }
 
   _handlePointerUp(e) {
-    if (!this._active || !this._pointerDown) return;
+    if (!this._active) return;
+    if (e.isPrimary === false) { this._pointerDown = null; return; }   // pinch guard belt (see _handlePointerDown)
+    if (!this._pointerDown) return;
     const down = this._pointerDown;
     this._pointerDown = null;
     const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
