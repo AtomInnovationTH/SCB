@@ -118,6 +118,17 @@ export const REDUCED_CROSSFADE_MS = 200;
  * BEFORE the first setFloor) whose ONE bit is `data-density-hidden` on the
  * root `#hud-cargo-pane` (a direct child of #hud-overlay), so the WHAT rail
  * lists it as a notch and D5 remembers it per floor.
+ *
+ * 'orbit' / 'copilot' / 'next' (2026-09-06, Session M — Instruments): three
+ * more RUNG panes of the same shape. ORBIT (js/ui/hud/OrbitPane.js,
+ * `#hud-orbit-pane`, bottom-left right of the WHAT rail: the fixed
+ * instrument slots + the OrbitMFD plot as its track view), COPILOT
+ * (js/ui/hud/FmaStrip.js, `#hud-fma-strip`, the flight-mode annunciator that
+ * rides as the LAST child of #hud-left-column — the WHAT rail dodges the
+ * column, so nothing else moves) and NEXT (js/ui/hud/NextPane.js,
+ * `#hud-next-pane`, the right edge above the CARGO slot: transfer window /
+ * TCA / shadow / ground pass). Each pushes its rung into
+ * hud.paneDensity.rungs from main.js BEFORE the first setFloor.
  */
 /**
  * The pane-density rungs' OWN hide bit (HUD._initPaneDensity domRung): set on
@@ -138,6 +149,9 @@ export const MASK_PANES = Object.freeze({
   reticles:    Object.freeze({ rung: null,          els: Object.freeze(['#reticle-canvas']),          memory: false }),
   hints:       Object.freeze({ rung: null,          els: Object.freeze(['#hud-hint-ticker']),         memory: false }),
   cargo:       Object.freeze({ rung: 'cargo',       els: Object.freeze(['#hud-cargo-pane']),          memory: true }),
+  orbit:       Object.freeze({ rung: 'orbit',       els: Object.freeze(['#hud-orbit-pane']),          memory: true }),
+  copilot:     Object.freeze({ rung: 'copilot',     els: Object.freeze(['#hud-fma-strip']),           memory: true }),
+  next:        Object.freeze({ rung: 'next',        els: Object.freeze(['#hud-next-pane']),           memory: true }),
 });
 
 /**
@@ -198,32 +212,42 @@ export const ALWAYS_ON = Object.freeze([
  *   8 px of slack under the SPECS tab at the default room, so the pane sits
  *   behind the WHAT rail's MORE there and D5 remembers it per room once
  *   flipped.
+ *   The Session M instruments (2026-09-06, owner law: by the 13-inch iPad
+ *   numbers): ORBIT and COPILOT are 'shown' on the two flying floors F2 + F3
+ *   (the WHAT rail's eight room-default notches on F2 are then exactly pin,
+ *   debris, targets, mother, arms, reticles, orbit, copilot — the sky-label
+ *   and score extras move behind MORE); COPILOT stays 'faint' on F4 with the
+ *   daughters rows (the autopilot can be flying a cluster leg while the player
+ *   plans); NEXT is 'shown' on the approach and route floors F3 + F4 (TCA and
+ *   the transfer window are their subjects) and 'gone' on the home floor F2
+ *   (D-L: a later-wave pane — one dim notch away behind MORE, D5 remembers);
+ *   all three 'gone' on the hull F1 and the chart F5.
  */
 export const DEFAULT_ROOMS = Object.freeze({
   1: Object.freeze({
     targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'gone',
     pin: 'gone', mother: 'gone', arms: 'gone', discoveries: 'gone', hints: 'gone',
-    cargo: 'shown',
+    cargo: 'shown', orbit: 'gone', copilot: 'gone', next: 'gone',
   }),
   2: Object.freeze({
     targets: 'shown', debris: 'shown', navsphere: 'gone', reticles: 'shown',
     pin: 'shown', mother: 'shown', arms: 'shown', discoveries: 'gone', hints: 'shown',
-    cargo: 'gone',
+    cargo: 'gone', orbit: 'shown', copilot: 'shown', next: 'gone',
   }),
   3: Object.freeze({
     targets: 'gone', debris: 'gone', navsphere: 'shown', reticles: 'shown',
     pin: 'gone', mother: 'gone', arms: 'shown', discoveries: 'gone', hints: 'gone',
-    cargo: 'gone',
+    cargo: 'gone', orbit: 'shown', copilot: 'shown', next: 'shown',
   }),
   4: Object.freeze({
     targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'gone',
     pin: 'gone', mother: 'gone', arms: 'faint', discoveries: 'gone', hints: 'gone',
-    cargo: 'gone',
+    cargo: 'gone', orbit: 'gone', copilot: 'faint', next: 'shown',
   }),
   5: Object.freeze({
     targets: 'gone', debris: 'gone', navsphere: 'gone', reticles: 'gone',
     pin: 'gone', mother: 'gone', arms: 'gone', discoveries: 'gone', hints: 'gone',
-    cargo: 'gone',
+    cargo: 'gone', orbit: 'gone', copilot: 'gone', next: 'gone',
   }),
 });
 
