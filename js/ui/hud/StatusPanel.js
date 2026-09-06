@@ -53,6 +53,19 @@ const WHEEL_SHOW_FLOOR = 0.25; // normalized units — one fire (1.0) bleeds pas
 // are deferred until tiers ship, D2), so rows past the 4th are display-only.
 export const FLEET_TAP_ROWS = 4;
 
+/**
+ * Session J review fix: the FLEET tap grammar (tappable rows, the DEPLOY /
+ * REEL IN / RECALL buttons, the click delegate) is part of the Zoom-Ladder
+ * programme and rides its ONE flag — `?ladder=0` (Constants.LADDER.ENABLED
+ * false) must render the SHIPPED fleet pane byte-for-byte (text-only letter
+ * hints, no buttons, no row handlers). Read live (the flag is a boot-time
+ * constant; a getter keeps tests honest).
+ * @returns {boolean}
+ */
+export function fleetTapEnabled() {
+  return !!(Constants.LADDER && Constants.LADDER.ENABLED);
+}
+
 export class StatusPanel {
   /**
    * @param {HTMLElement} container - the HUD overlay the panes mount into
@@ -593,9 +606,13 @@ export class StatusPanel {
     // clicks even where the .hud-panel default is pointer-events:none; ONE
     // click delegate on #hud-arms-status, attached once here (the list body is
     // re-rendered via innerHTML, so per-row listeners would not survive).
-    this.panels.arms.style.pointerEvents = 'auto';
-    this._injectFleetButtonStyle();
-    this._bindFleetClicks();
+    // Flag-gated (review fix): a ?ladder=0 boot keeps the shipped pane —
+    // no pointer opt-in, no button style, no delegate.
+    if (fleetTapEnabled()) {
+      this.panels.arms.style.pointerEvents = 'auto';
+      this._injectFleetButtonStyle();
+      this._bindFleetClicks();
+    }
 
     // --- Resize chrome for the MOTHER pane (2-step: min / normal) ---
     // The MOTHER pane defaults to 'min' (compact digest only); hovering reveals
@@ -1938,7 +1955,11 @@ export class StatusPanel {
       + `<span style="opacity:0.8;"> ${verb}</span>`;
     // type=button (never submits), tabindex=-1 (Tab is a game key; the button
     // must not become the keyboard's focus target).
-    const btn = (code, label) => `<button type="button" class="fleet-btn" tabindex="-1" data-press="${code}">${label}</button>`;
+    // Flag-gated (review fix): flag-off, the shipped letter hint alone.
+    const on = fleetTapEnabled();
+    const btn = (code, label) => (on
+      ? `<button type="button" class="fleet-btn" tabindex="-1" data-press="${code}">${label}</button>`
+      : '');
     switch (a.state) {
       case 'DOCKED':
         return (a.springCharged && a.fuel > 0) ? btn('KeyD', 'DEPLOY') + key('D', 'launch') : '';
@@ -2153,23 +2174,27 @@ export class StatusPanel {
     // index, not the size-sorted position) so the #hud-arms-status click
     // delegate can press Digit(idx+1). Rows a tap can select (1-4) read as
     // tappable (cursor:pointer + .fleet-row-tap hover); the rest stay display-only.
-    const tappable = idx >= 0 && idx < FLEET_TAP_ROWS;
-    const rowAttrs = `class="fleet-row${tappable ? ' fleet-row-tap' : ''}" data-arm-idx="${idx}"`;
+    // Flag-gated (review fix): with the ladder off the rows are the SHIPPED
+    // markup byte-for-byte (no class, no data-arm-idx, no cursor).
+    const on = fleetTapEnabled();
+    const tappable = on && idx >= 0 && idx < FLEET_TAP_ROWS;
+    const rowAttrs = on ? `class="fleet-row${tappable ? ' fleet-row-tap' : ''}" data-arm-idx="${idx}" ` : '';
     const rowCursor = tappable ? 'cursor:pointer;' : '';
 
     if (!isSel) {
-      return `<div ${rowAttrs} style="padding:1px 4px;border-left:2px solid transparent;${rowCursor}">${detailLine}${telemetryLine}</div>`;
+      return `<div ${rowAttrs}style="padding:1px 4px;border-left:2px solid transparent;${rowCursor}">${detailLine}${telemetryLine}</div>`;
     }
 
     // Line 2 — the action button + the relevant hotkey hint, indented to sit
     // under the status column (inline flow: the hint's leading space must
     // survive, so no flex here; the button vertical-aligns to the text middle).
+    // Flag-off keeps the shipped 1 px top margin (no button to align).
     const keys = this._daughterHotkeys(a);
-    const keysLine = `<div style="padding-left:28px;font-size:10px;margin-top:2px;">`
+    const keysLine = `<div style="padding-left:28px;font-size:10px;margin-top:${on ? 2 : 1}px;">`
       + (keys || '<span style="opacity:0.4;">busy…</span>')
       + `</div>`;
 
-    return `<div ${rowAttrs} style="padding:2px 4px;background:rgba(0,255,255,0.08);border-left:2px solid #00ffff;${rowCursor}">`
+    return `<div ${rowAttrs}style="padding:2px 4px;background:rgba(0,255,255,0.08);border-left:2px solid #00ffff;${rowCursor}">`
       + detailLine
       + telemetryLine
       + keysLine

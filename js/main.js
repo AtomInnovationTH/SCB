@@ -1851,7 +1851,7 @@ async function init() {
       if (ladderController) ladderController.noteRoomChange();
       // Session J: the WHAT rail flashes the notch that just changed (the
       // `-`/`+` keys, 0/9/8, its own tap) and repaints now (forced — the
-      // per-frame refresh is throttled to ≤ 4 Hz).
+      // per-frame poll is throttled to 1 Hz — review fix).
       if (ladderPaneRail) {
         if (d && typeof d.pane === 'string') ladderPaneRail.flash(d.pane);
         ladderPaneRail.refresh({ force: true });
@@ -2017,8 +2017,9 @@ async function init() {
     touchTelemetry.start();
     // Session J (D-I, item 2) — THE TAP: the ONE selection universe. On the
     // flying floors (2–3) the nearest member of the TARGET PANE's list — the
-    // SAME TPI-sorted list Tab/T cycle (debrisField.getEnhancedTargetList +
-    // the untracked filter InputManager._cycleTarget applies) — projected
+    // SAME TPI-sorted list Tab/T cycle (TargetAcquisition.getEligibleTargets:
+    // debrisField.getEnhancedTargetList + the tracked-unless-IR filter
+    // InputManager._cycleTarget applies — ONE helper, review fix) — projected
     // through the live camera (navcomProject, CSS px), within
     // TapPick.TAP_RADIUS_PX 44 → the ONE selection event HUD_TARGET_CLICK {id}
     // (GameFlowManager / HUD / TargetReticle / NavSphere already listen; the
@@ -2038,11 +2039,13 @@ async function init() {
         if (hit) { proxNetFloor.selectInsertion(hit.point.zone); return 'insertion'; }
       }
       if (floor !== 2 && floor !== 3) return null;
-      const list = debrisField.getEnhancedTargetList(player.getPosition(), player.getOrbitalElements());
-      const canDetect = !!(sensorSystem && sensorSystem.canDetectUntracked);
+      // The ONE eligibility rule (review fix): TargetAcquisition.getEligibleTargets
+      // owns "the TPI list, tracked unless the IR scanner sees dark" — the same
+      // rule InputManager._cycleTarget applies — so the tap can never split the
+      // selection universe from the Tab/T cycle.
+      const list = targetAcquisition.getEligibleTargets();
       const pts = [];
       for (const t of list) {
-        if (t.tracked === false && !canDetect) continue;
         const d = debrisField.getDebrisById(t.id);
         const pos = d && d._scenePosition;
         if (!pos) continue;
@@ -5161,8 +5164,9 @@ function gameLoop(timestamp) {
   // _ladderActive is false → never called.
   if (_ladderActive && railIndicator && railIndicator.setRate) railIndicator.setRate(timeAuthority.rate);
   // Session J: the WHAT rail's lit/dim paint follows the live pane bits
-  // (write-on-change per notch, ≤ 4 Hz inside — G1); the pane-visibility
-  // edge listener (inside the ladder gate) forces an immediate repaint.
+  // (write-on-change per notch, a 1 Hz poll inside — G1; each scan is a
+  // layout read per HUD rung, so announced changes repaint at once through
+  // the pane-visibility edge listener inside the ladder gate instead).
   if (_ladderActive && ladderPaneRail) ladderPaneRail.refresh();
 
   const currentState = gameState.currentState;

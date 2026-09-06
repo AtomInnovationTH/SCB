@@ -693,13 +693,22 @@ export class LadderController {
    *      (`navcom.focusStep(±1)`); consumed when a cluster is focused after
    *      the step.
    *
+   * A key whose target is a text field (INPUT / TEXTAREA / contentEditable —
+   * the Codex search box) is never routed: InputManager's own guard, mirrored,
+   * so a capture-phase router cannot swallow a caret's arrows or Tab.
    * Never throws; never a ladder input for adaptHoldoff (no camera flight —
    * the arrows' own nudge already counts inside _turntableArrows).
-   * @param {{ code?: string, shiftKey?: boolean, preventDefault?: function }} e
+   * @param {{ code?: string, shiftKey?: boolean, target?: object, preventDefault?: function }} e
    * @returns {boolean} true when consumed
    */
   routeKeyDown(e) {
     if (!this._engaged || !e || typeof e.code !== 'string') return false;
+    // Never route a key aimed at a TEXT FIELD (the Codex search box opens
+    // during gameplay) — the same guard InputManager applies before it reads
+    // any key (:400–403); a capture-phase router that ran ahead of it would
+    // otherwise eat the caret's arrows and Tab while the player types.
+    const tgt = e.target;
+    if (tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.isContentEditable)) return false;
     const code = e.code;
     if (code === 'ArrowUp' || code === 'ArrowDown' || code === 'ArrowLeft' || code === 'ArrowRight') {
       if (!this.turntableActive()) return false;

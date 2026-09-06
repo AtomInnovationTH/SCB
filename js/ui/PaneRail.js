@@ -60,8 +60,17 @@ export const LONG_PRESS_MS = 600;
 export const NOTCH_DIM_OPACITY = 0.35;
 /** Desktop hover lifts a dim notch by this much (CSS only — the peek). */
 export const HOVER_PEEK = 0.15;
-/** Per-frame refresh() scan cap (ms) — the house ≤ 4 Hz DOM-write law (G1). */
-export const REFRESH_MIN_MS = 250;
+/**
+ * The per-frame refresh throttle. Review fix (Session J): 1000 ms, not 250 —
+ * every scan asks each rung's `isVisible()`, and the HUD's dom rungs answer
+ * with `getClientRects()` (a forced layout read); at 4 Hz that was ~50 layout
+ * reads/s inside the rAF loop for a state that changes at event rate. The
+ * per-frame poll now only catches the bits no event announces (a view-config
+ * toggle, the pin widget's goal-less collapse); every announced change — the
+ * HUD_PANE_VISIBILITY edge (the 0/9/8 keys, `-`/`+`, the rail's own tap) and
+ * the floor arrival (`populate`) — repaints at once through `force`.
+ */
+export const REFRESH_MIN_MS = 1000;
 /** The MORE notch's pane id (never a rung id). */
 export const MORE_ID = '__more';
 /** The injected stylesheet's element id. */
@@ -287,7 +296,7 @@ export class PaneRail {
 
   /**
    * Cheap per-frame sync (write-on-change per notch from live `isVisible()`),
-   * throttled to ≤ 4 Hz unless `force` (the HUD_PANE_VISIBILITY edge). A rest
+   * throttled to 1 Hz (REFRESH_MIN_MS) unless `force` (the HUD_PANE_VISIBILITY edge). A rest
    * rung found visible is promoted into the list (re-plan, same floor/room).
    * @param {{force?:boolean}} [opts]
    * @returns {boolean} whether a scan ran this call
