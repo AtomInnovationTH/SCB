@@ -113,7 +113,7 @@ import { StrategicMap } from './ui/StrategicMap.js';
 import { WheelRouter } from './systems/WheelRouter.js';
 import { LadderController } from './systems/LadderController.js';
 import { LadderAudioBeds } from './systems/LadderAudioBeds.js';
-import { FloorMask } from './ui/hud/FloorMask.js';
+import { FloorMask, DEFAULT_ROOMS as LADDER_DEFAULT_ROOMS } from './ui/hud/FloorMask.js';
 import { LadderViewStore } from './systems/LadderViewStore.js';
 import { LadderSfx } from './systems/LadderSfx.js';
 import { NavcomFloor } from './systems/NavcomFloor.js';
@@ -126,6 +126,7 @@ import { resolveSubject as resolveSpecsSubject } from './systems/SpecsSubject.js
 import { TimeAuthority } from './systems/TimeAuthority.js';
 import { FloorContract } from './core/FloorContract.js';
 import { RailIndicator } from './ui/RailIndicator.js';
+import { PaneRail } from './ui/PaneRail.js';
 import { TouchControls } from './ui/TouchControls.js';
 import { TouchTelemetry } from './ui/touchTelemetry.js';
 import { GestureHints } from './ui/hud/GestureHints.js';
@@ -595,6 +596,14 @@ let strategicMap;
 let wheelRouter;
 let ladderController;
 let railIndicator;
+// Session J (plan D-H, item 1) — the left WHAT rail (PaneRail): one notch per
+// HUD pane this floor allows, lit = shown, dim = hidden; tap toggles through
+// the rung and emits the ONE pane-visibility edge (room memory follows);
+// long-press the head = RESET ROOM. Constructed ONLY inside the LADDER.ENABLED
+// gate (a ?ladder=0 boot builds no rail — the density slider it replaces was
+// glass-only too); shown/hidden/populated by LadderController (the `rail`
+// mirror), refreshed per frame here while the ladder is active.
+let ladderPaneRail;
 let touchControls;
 
 // Zoom Ladder S3 — the ONE world-time choke point (T2). Owns dtWorld/warp; pins
@@ -1809,8 +1818,30 @@ async function init() {
     // captures the applied floor's room and exports it to the player store
     // (write-on-change inside the store; an event-rate edge, never per frame).
     // ladderController is constructed below — read live, guarded.
-    eventBus.on(Events.HUD_PANE_VISIBILITY, () => {
+    // Session J (plan D-H, item 1): the WHAT rail. Deps are all getters /
+    // callbacks — the rail imports no bus and never sees the HUD: the live
+    // rungs (the ONE pane-visibility bit, T8 — the same adapters FloorMask
+    // reads), the floor's DEFAULT room row (the height rule lists the room's
+    // shown/faint panes + whatever is visible, ≤ 8 + MORE), the flip sink
+    // (the fifth HUD_PANE_VISIBILITY emitter — emitted AFTER the rung flipped,
+    // the Job A contract, so the listener below captures the room exactly as
+    // for the 0/9/8 keys), and the head long-press → the controller's
+    // resetRoom (FloorMask.resetRoom + export + re-populate).
+    ladderPaneRail = new PaneRail({
+      rungs: () => ((hud && hud.paneDensity && Array.isArray(hud.paneDensity.rungs)) ? hud.paneDensity.rungs : []),
+      roomTiers: (floor) => LADDER_DEFAULT_ROOMS[floor] || null,
+      onFlip: (pane, shown) => eventBus.emit(Events.HUD_PANE_VISIBILITY, { pane, shown }),
+      onResetRoom: () => { if (ladderController) ladderController.resetRoom(); },
+    });
+    eventBus.on(Events.HUD_PANE_VISIBILITY, (d) => {
       if (ladderController) ladderController.noteRoomChange();
+      // Session J: the WHAT rail flashes the notch that just changed (the
+      // `-`/`+` keys, 0/9/8, its own tap) and repaints now (forced — the
+      // per-frame refresh is throttled to ≤ 4 Hz).
+      if (ladderPaneRail) {
+        if (d && typeof d.pane === 'string') ladderPaneRail.flash(d.pane);
+        ladderPaneRail.refresh({ force: true });
+      }
     });
   }
   // (The Wave-3 ArchiveFloor bridge — the hosted codex as the old F1 costume —
@@ -1849,6 +1880,10 @@ async function init() {
     sceneManager,
     gameState,
     rail: railIndicator,
+    // Session J (plan D-H): the WHAT rail — the `rail` mirror (show at
+    // engage, hide at disengage, populate(floor) at every arrival). Flag-off:
+    // never constructed → null → byte-identical.
+    paneRail: ladderPaneRail,
     navcom: navcomFloor,
     proxNet: proxNetFloor,
     sdaFloor,
@@ -5035,6 +5070,10 @@ function gameLoop(timestamp) {
   // and ≤ 4 Hz internally (G1), so the per-frame call is free. Flag-off:
   // _ladderActive is false → never called.
   if (_ladderActive && railIndicator && railIndicator.setRate) railIndicator.setRate(timeAuthority.rate);
+  // Session J: the WHAT rail's lit/dim paint follows the live pane bits
+  // (write-on-change per notch, ≤ 4 Hz inside — G1); the pane-visibility
+  // edge listener (inside the ladder gate) forces an immediate repaint.
+  if (_ladderActive && ladderPaneRail) ladderPaneRail.refresh();
 
   const currentState = gameState.currentState;
 
