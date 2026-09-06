@@ -73,6 +73,7 @@ import { catalogLoader } from './systems/CatalogLoader.js';
 import { HUD } from './ui/HUD.js';
 import { MotherCallouts } from './ui/MotherCallouts.js';
 import { MenuScreen } from './ui/MenuScreen.js';
+import { UpdateWatch } from './core/UpdateWatch.js';
 import { BriefingScreen } from './ui/BriefingScreen.js';
 import { ShopScreen } from './ui/ShopScreen.js';
 import { GameOverScreen } from './ui/GameOverScreen.js';
@@ -572,6 +573,7 @@ let environmentSystem;
 // UI
 let hud;
 let menuScreen;
+let updateWatch;      // Session J.5 — the menu UPDATE card's watcher (flag-independent)
 let briefingScreen;
 let shopScreen;
 let gameOverScreen;
@@ -1125,6 +1127,19 @@ async function init() {
   // The panel still mounts so internal event tracking works, but setVisible
   // is never called.
   menuScreen = new MenuScreen(sceneManager ? sceneManager.currentTier : null);
+  // Session J.5 (owner item 5) — the menu NEW VERSION READY card's watcher.
+  // data/build-tag.json is the ONE update truth (sw.js serves data/ network-
+  // first; the running page's own sha is baked nowhere else): the tag read
+  // here at boot is the baseline, re-read on entering the MENU state (+ a
+  // 60 s poll while the menu shows), on visibilitychange → visible (the iPad
+  // resumed days later) and on a serviceWorker controllerchange (a reason to
+  // re-read, never a second truth). A new hash → Events.UPDATE_AVAILABLE once
+  // per build → MenuScreen mounts the card (menu ONLY). Flag-INDEPENDENT by
+  // owner law: a ?ladder=0 fallback build must still be able to say "update
+  // ready" (the module never reads Constants.LADDER; no DOM until a change).
+  // Started BEFORE the boot MENU transition below so the first menu counts.
+  updateWatch = new UpdateWatch({ eventBus, events: Events, menuState: GameStates.MENU });
+  updateWatch.start();
   briefingScreen = new BriefingScreen();
   shopScreen = new ShopScreen();
   gameOverScreen = new GameOverScreen();
@@ -2903,6 +2918,9 @@ async function init() {
       // HOLD — the policy witness beside window.__frameSched, which is always
       // published). ?shot-gated like every harness handle here.
       window.__timeAuthority = timeAuthority;
+      // Session J.5: the update watcher (booted hash / check() / pending()) for
+      // the MODE=update gate leg — always constructed (flag-independent).
+      window.__updateWatch = updateWatch;
       // Session J: the controller (floor / turntable / isActive probes for the
       // hasTouch gate) and the WHAT rail — undefined on a ?ladder=0 boot for
       // the rail (never constructed there), the same contract as __refit.
