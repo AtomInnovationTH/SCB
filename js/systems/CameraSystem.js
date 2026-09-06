@@ -647,10 +647,13 @@ export class CameraSystem {
       // (heading-relative, B1), the inertial world dir on Earth anchors —
       // around the floor's up-frame with ORBIT's velocity+damping feel
       // (constants mirror this.orbit). Enabled on floors 3/4 (PROX NET /
-      // NAVCOM) always, and on floor 1 (the workbench) WHILE a drawer is open
-      // — the Session I TURNTABLE (plan D-F): arrows + one-finger drag orbit
-      // the CAMERA around the ship at held time, never the ship. The floor-5
-      // chart stays locked; floor 2 keeps shipped behavior. Every consumer is
+      // NAVCOM) always, and on the ship-anchored floors 1–2 (the workbench,
+      // the flying view) WHILE a drawer is open — the TURNTABLE (plan D-F;
+      // floor 1 Session I, floor 2 Session J.5): arrows + one-finger drag
+      // orbit the CAMERA around the ship at held time, never the ship. The
+      // floor-5 chart stays locked; closing the drawer on floor 2 forgets the
+      // turntable pose (setLadderPaneOpen) so the flying view is exactly as
+      // shipped again. Every consumer is
       // additionally gated on lc.active, so the shipped mouse handling is
       // byte-identical while the ladder is off.
       paneOpen: false,        // main.js feeds setLadderPaneOpen (the ONE pane edge)
@@ -3878,17 +3881,28 @@ export class CameraSystem {
   /**
    * Session I (plan D-F, the TURNTABLE) — the drawer-open bit for the drag
    * gate. main.js's ONE workbench-pane edge (_syncWorkbenchPanes) feeds it;
-   * the drag arms on floor 1 only while it is true. LIVE re-gate: a drawer
-   * opening while the player already stands on floor 1 must arm the drag
-   * without a ride, and closing it disarms mid-hold (any in-flight drag and
-   * its momentum are cancelled — the pointer-up path can never race a
-   * disabled gate). Flag-off: the panes are never constructed, this is never
-   * called → byte-identical.
+   * the drag arms on the ship-anchored floors 1–2 only while it is true
+   * (floor 1 since Session I; floor 2 since Session J.5 — the owner's lift,
+   * D-F "any ship-anchored floor"). LIVE re-gate: a drawer opening while the
+   * player already stands on the floor must arm the drag without a ride, and
+   * closing it disarms mid-hold (any in-flight drag and its momentum are
+   * cancelled — the pointer-up path can never race a disabled gate).
+   * FLOOR-2 CLOSE RULE (Session J.5): floor 2 is the shipped flying view, so
+   * "drawer closed → arrows steer the ship as today" must hold for the
+   * CAMERA too — closing the drawer on floor 2 FORGETS the turntable pose
+   * (the local dolly pose returns to the canonical chase-behind pose and the
+   * D5 memory for floor 2 is dropped); floor 1 keeps its D5 memory (the
+   * workbench pose is the player's). Flag-off: the panes are never
+   * constructed, this is never called → byte-identical.
    * @param {boolean} open
    */
   setLadderPaneOpen(open) {
     const lc = this._ladderCam;
     lc.paneOpen = !!open;
+    if (!lc.paneOpen && lc.floor === 2) {
+      this._ladderChaseLocal(lc.local);
+      delete lc.dragMemory[2];
+    }
     const want = this._ladderDragEnabledFor(lc.floor);
     if (want !== lc.drag.enabled) {
       lc.drag.enabled = want;
@@ -3899,14 +3913,16 @@ export class CameraSystem {
   }
 
   /**
-   * @private The ONE drag-gate rule (Session I): floors 3/4 (PROX NET /
-   * NAVCOM) always; floor 1 (the workbench) while a drawer is open — the
-   * turntable. Floors 2/5 and floorless legacy frames never arm.
+   * @private The ONE drag-gate rule (Session I; floor 2 added Session J.5):
+   * floors 3/4 (PROX NET / NAVCOM) always; the ship-anchored floors 1–2 (the
+   * workbench, the flying view) while a drawer is open — the turntable (plan
+   * D-F, "any ship-anchored floor"). Floor 5 and floorless legacy frames
+   * never arm.
    * @param {number|null|undefined} floor
    * @returns {boolean}
    */
   _ladderDragEnabledFor(floor) {
-    return floor === 3 || floor === 4 || (floor === 1 && this._ladderCam.paneOpen);
+    return floor === 3 || floor === 4 || ((floor === 1 || floor === 2) && this._ladderCam.paneOpen);
   }
 
   /**

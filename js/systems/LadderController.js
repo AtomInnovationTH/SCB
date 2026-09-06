@@ -417,17 +417,22 @@ export class LadderController {
   }
 
   /**
-   * Session I (plan D-F) — is the TURNTABLE live? Engaged, standing on the
-   * workbench floor (id 1), with a drawer (REFIT / TECH LIBRARY) open.
-   * Allocation-free (the core's floorId probe — the G4 law); main.js consults
-   * it per frame to blank the arrows around processInput so they never steer
-   * the SHIP, and _turntableArrows maps them to the camera drag instead.
+   * Session I (plan D-F) — is the TURNTABLE live? Engaged, standing on a
+   * SHIP-anchored floor (the workbench, id 1 — Session I; the flying view,
+   * id 2 — Session J.5, the owner's lift of D-F's "any ship-anchored floor"),
+   * with a drawer (REFIT / SPECS) open. Allocation-free (the core's floorId
+   * probe — the G4 law); main.js consults it per frame to blank the arrows
+   * around processInput so they never steer the SHIP, _turntableArrows maps
+   * them to the camera drag instead, routeKeyDown consumes them ahead of
+   * InputManager, and TouchControls' one-finger drag orbits the camera
+   * instead of writing the turn keys. CameraSystem._ladderDragEnabledFor is
+   * the camera-side twin of this rule (floors 1–2 && paneOpen).
    * @returns {boolean}
    */
   turntableActive() {
     if (!this._engaged) return false;
     const f = this._ladder.floorId ? this._ladder.floorId() : this._ladder.getState().floor;
-    if (f !== 1) return false;
+    if (f !== 1 && f !== 2) return false;
     const open = (p) => !!(p && p.isOpen && p.isOpen());
     return open(this._refit) || open(this._library);
   }
