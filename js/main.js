@@ -707,6 +707,13 @@ let touchMapPane = null;
  * a `shot` reader: DevShotGate stays the ONE of those).
  */
 let _introForced = false;
+/**
+ * Session N review: the intro flies ONCE per boot — a GAMEOVER retry's GAME_RESET
+ * in the same session must not replay the descent (its first engage may be an
+ * APPROACH frame); set when armed, cleared by a CONTINUE's disarm (that player
+ * never saw the ride).
+ */
+let _introFlown = false;
 /** Session N: is this boot a first-time player's run? (the MAP store's bit, under the harness policy above) */
 function _introFirstRun() {
   if (!touchMapStore || typeof touchMapStore.isFirstRun !== 'function') return false;
@@ -2057,6 +2064,7 @@ async function init() {
       // GAME_RESET that resetGame() emitted a moment ago is dropped here, and
       // the saved view is restored as before.
       ladderController.disarmIntroRide();
+      _introFlown = false;
       const save = persistenceManager.peek();
       ladderController.restoreView(save ? save.ladder : null);
     });
@@ -2071,8 +2079,9 @@ async function init() {
       // the core on the workbench instead (no ride). Veterans (the map done or
       // skipped) and the ?shot harness (unless &intro=1) keep the shipped
       // floor. A CONTINUE disarms this on PERSISTENCE_LOADED (above).
-      if (_introFirstRun()) {
+      if (_introFirstRun() && !_introFlown) {
         ladderController.armIntroRide({ rideMs: INTRO_RIDE_MS, reducedMotion: _prefersReducedMotion() });
+        _introFlown = true;
       }
     });
     // Wave 5 (Session H) — JOB A, the D5 room-memory WRITE GAP (03-plan

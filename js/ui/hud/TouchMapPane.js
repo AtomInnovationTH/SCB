@@ -29,7 +29,7 @@
  * tick → ride (any floor change). Every getter is read defensively (absent /
  * throwing → unknown, no tick).
  *
- * LIFECYCLE. The hub constructs the pane every boot (inside its LADDER gate);
+ * LIFECYCLE. The hub constructs the pane for a FIRST RUN only (inside its LADDER gate; a veteran's boot builds nothing);
  * the pane is INERT — builds nothing, subscribes nothing — when
  * `store.isFirstRun()` is false. Otherwise it appends itself as the LAST child
  * of `#hud-left-column` (deps.parent default) and shows on every floor (it is
@@ -160,7 +160,8 @@ export class TouchMapPane {
     };
 
     this._root = null;
-    this._el = null;                 // { header, rows: Map<id, {row, mark, label}>, count, chip }
+    this._el = null;                 // { header, title, rows: Map<id, {row, mark, label}>, count, chip }
+    this._onChip = null;             // the SKIP chip's click handler (released at hide / dispose)
     this._unsubs = [];
     this._disposed = false;
     this._hidden = false;
@@ -195,7 +196,7 @@ export class TouchMapPane {
    */
   update(nowMs) {
     if (this._disposed || !this._root || this._hidden) return;
-    let t = Number(nowMs);
+    let t = (nowMs == null || nowMs === '') ? NaN : Number(nowMs);   // null is unknown, never 0 (review)
     if (!Number.isFinite(t) && this._now) t = Number(this._now());
     if (!Number.isFinite(t)) return;
 
@@ -292,11 +293,15 @@ export class TouchMapPane {
 
     // The header ROW carries the title, the tally and the SKIP chip (the one
     // 44 pt element on glass): the card has no foot, so with six rows it is
-    // 184 px tall on glass — the left column with MOTHER + DAUGHTERS + the FMA
-    // strip + this card ends at 454 and the WHAT rail (457 tall) still dodges
-    // under it above the thumb rest (454 + 8 + 457 = 919 < 932 at 1032 tall).
+    // ~180 px tall on glass (8 padding + 44 + 2 header + 6 × ~20 rows + 5 × 1
+    // gaps) — the left column with MOTHER + DAUGHTERS + the FMA strip + this
+    // card ends ≈ 450 and the WHAT rail (457 tall) still dodges under it above
+    // the thumb rest (`dodgeTop`'s limit is a column bottom of 467 at 1032
+    // tall); once the ride row folds — on the flying floor it always has, the
+    // player rode up — the card is ~160 and the budget has ~40 px to spare.
     // The first gate picture, with a 240 px card (24 px rows + a 54 px foot),
-    // pushed the column to 510 and the rail could only overlap it.
+    // pushed the column to 510 and the rail could only overlap it; the review
+    // then measured the 6 px / 8 px version at 460 and tightened the frame.
     const header = mk('div', 'tm-header');
     const title = mk('span', 'tm-title', this._glass ? HEADER_GLASS : HEADER_DESKTOP);
     const count = mk('span', 'tm-count', '');
@@ -319,7 +324,8 @@ export class TouchMapPane {
     root.appendChild(list);
 
     parent.appendChild(root);
-    if (chip.addEventListener) chip.addEventListener('click', () => this.skip());
+    this._onChip = () => this.skip();
+    if (chip.addEventListener) chip.addEventListener('click', this._onChip);
 
     this._root = root;
     this._el = { header, title, rows, count, chip };
@@ -341,7 +347,7 @@ export class TouchMapPane {
         flex-direction: column;
         flex: 0 0 auto;
         box-sizing: border-box;
-        padding: 6px 8px;
+        padding: 4px 8px;                 /* review: the fit budget — 4 not 6 */
         font: 11px/1.3 var(--font-mono);
         font-variant-numeric: tabular-nums;
         color: ${VisualLaw.COLORS.PLAYER};
@@ -357,7 +363,7 @@ export class TouchMapPane {
        * (the chip's box sets the row height: 44 px glass / 24 px desktop). */
       #${TOUCH_MAP_ID} .tm-header {
         display: flex; align-items: center; gap: 8px;
-        margin-bottom: 4px;
+        margin-bottom: 2px;
       }
       #${TOUCH_MAP_ID} .tm-title {
         font-size: 10px;
@@ -367,7 +373,7 @@ export class TouchMapPane {
         flex: 1 1 auto;
         min-width: 0; overflow: hidden; text-overflow: ellipsis;
       }
-      #${TOUCH_MAP_ID} .tm-rows { display: flex; flex-direction: column; gap: 2px; }
+      #${TOUCH_MAP_ID} .tm-rows { display: flex; flex-direction: column; gap: 1px; }
       /* A done row FOLDS after its linger (the tally keeps the count): the card
        * shows what is left to learn and shrinks as the player learns it, so the
        * column under it never grows past the WHAT rail's dodge budget. */
@@ -385,8 +391,9 @@ export class TouchMapPane {
       #${TOUCH_MAP_ID} .tm-mark { text-align: center; font-weight: bold; }
       #${TOUCH_MAP_ID} .tm-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
       /* Upcoming: dim. */
-      #${TOUCH_MAP_ID} .tm-row[${STATE_ATTR}="upcoming"] { color: rgba(160, 160, 160, 0.55); }
-      #${TOUCH_MAP_ID} .tm-row[${STATE_ATTR}="upcoming"] .tm-mark { color: rgba(120, 120, 120, 0.6); }
+      /* Upcoming stays a STATE, not an unreadable one: ~4.5:1 on the 0.95 plate (review — 0.55 read 2.7:1). */
+      #${TOUCH_MAP_ID} .tm-row[${STATE_ATTR}="upcoming"] { color: rgba(170, 170, 170, 0.78); }
+      #${TOUCH_MAP_ID} .tm-row[${STATE_ATTR}="upcoming"] .tm-mark { color: rgba(150, 150, 150, 0.75); }
       /* Done: the law's positive colour on the check; the row settles dim after
        * a 3 s linger (a finite fill-mode animation — no timer, no loop). */
       #${TOUCH_MAP_ID} .tm-row[${STATE_ATTR}="done"] { color: rgba(140, 220, 160, 0.85); animation: tm-fade-done ${DONE_LINGER_MS}ms ease forwards; }
@@ -552,6 +559,13 @@ export class TouchMapPane {
     if (this._hidden) return;
     this._hidden = true;
     this._unsubscribe();
+    // The chip's own click leaves with the bus listeners (review: the header
+    // said "released at hide" — now it is; display none had made it moot).
+    const chip = this._el && this._el.chip;
+    if (chip && this._onChip && chip.removeEventListener) {
+      try { chip.removeEventListener('click', this._onChip); } catch (_e) { /* stub element */ }
+    }
+    this._onChip = null;
     this._setFlag(this._root, DONE_ATTR, true);
   }
 

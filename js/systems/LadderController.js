@@ -1063,6 +1063,7 @@ export class LadderController {
 
   _disengage() {
     this._engaged = false;
+    this._introPending = null;   // Session N review: an arm that never engaged does not survive into a later run
     if (this._cameraSystem && this._cameraSystem.ladderDisengage) {
       this._cameraSystem.ladderDisengage();
     }
@@ -1144,8 +1145,10 @@ export class LadderController {
 
         case 'cross':
           // 00-spec §4: the clunk derives from cross.direction ('out' ↑ / 'in' ↓).
-          if (this._sfx && this._sfx.onCross) this._sfx.onCross(d.direction);
-          this._startRide(d.toFloor, d.entryZ01, CROSS_RIDE_MS, tMs, true);
+          // (The intro's `silent` / `rideMs` reach here too — latent: the
+          // ceremony decision is always a 'ride'; Session N review.)
+          if (!silent && this._sfx && this._sfx.onCross) this._sfx.onCross(d.direction);
+          this._startRide(d.toFloor, d.entryZ01, rideOverride !== null ? rideOverride : CROSS_RIDE_MS, tMs, true);
           break;
 
         case 'ride':

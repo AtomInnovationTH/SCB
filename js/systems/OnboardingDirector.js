@@ -22,7 +22,7 @@
  *   • Idle ≥ IDLE_ESCALATION_MS without satisfaction → emit TEACHING_MOMENT_FORCE
  *   • > UNRELATED_INPUT_THRESHOLD unrelated inputs without satisfaction → same
  *
-  * Persistence: localStorage['spacecowboy_onboarding_v3'] = {
+  * Persistence: localStorage['spacecowboy_onboarding_v4'] = {
  *   completedBeats:[], skippedBeats:[], mastered:bool
  * }
  *
@@ -405,7 +405,7 @@ export class OnboardingDirector {
     // Every other major system (SkillsSystem, CommsSystem, KesslerSystem,
     // MissionEventSystem, ReputationSystem, EnvironmentSystem, SpaceWeatherSystem,
     // TrawlManager, DebrisField …) self-resets on GAME_RESET.  The Director
-    // never subscribed — so its localStorage blob (`spacecowboy_onboarding_v3`)
+    // never subscribed — so its localStorage blob (`spacecowboy_onboarding_v4`)
     // accumulated across QA / "new game" sessions, and the pipeline resumed
     // at whichever beat the previous run had reached (e.g. the player
     // satisfied target on run #3 → next run posts `autopilot` first).
