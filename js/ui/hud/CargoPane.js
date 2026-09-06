@@ -213,8 +213,10 @@ export class CargoPane {
    * rides above the pane on the right edge (null = nothing: bottom-anchored);
    * `floorPx` = the lowest allowed bottom edge. Write-on-change on the two
    * inputs: repeated identical inputs return before any DOM access.
-   *   top    = underPx + GAP_PX (or bottom − min(FULL_MAX_PX, natural) when null)
-   *   bottom = floorPx − GAP_PX;  avail = bottom − top
+   *   bottom = floorPx − GAP_PX;  want = bottom − min(FULL_MAX_PX, natural)
+   *   top    = want, pushed DOWN to underPx + GAP_PX only when that is lower
+   *            (bottom-anchored; it yields upward only as far as it must)
+   *   avail  = bottom − top
    *   mode   = 'full' (avail ≥ fullMinPx) | 'compact' (avail ≥ COMPACT_*) | 'hidden'
    * Writes data-cargo-mode, top and max-height (min(FULL_MAX_PX, avail) in full).
    * @param {number|null} underPx
@@ -630,9 +632,13 @@ export class CargoPane {
     const glass = this._glass;
     const natural = naturalPx(this._rowCount, glass);
     const bottom = this._floorPx - G.GAP_PX;
-    let top = (this._underPx == null)
-      ? bottom - Math.min(G.FULL_MAX_PX, natural)
-      : this._underPx + G.GAP_PX;
+    // BOTTOM-ANCHORED: the pane hugs the floor (the thumb-rest line on glass)
+    // and gives ground UPWARD only as far as what rides above it forces —
+    // never higher than it must (the hub's gate on the 13-inch iPad: the
+    // hull callout columns end ~700 px on the shop floor; a pane parked at
+    // `under + GAP` sat over the PROPULSION card's last line).
+    const want = bottom - Math.min(G.FULL_MAX_PX, natural);
+    let top = (this._underPx == null) ? want : Math.max(want, this._underPx + G.GAP_PX);
     if (top < 0) top = 0;
     const avail = bottom - top;
     const compactMin = glass ? G.COMPACT_GLASS_PX : G.COMPACT_PX;

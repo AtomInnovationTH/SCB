@@ -425,6 +425,26 @@ export class ZoomLadder {
   }
 
   /**
+   * Wave 5 Session K (plan D-E — the mission break is a ride, not a state):
+   * the CEREMONY ride. Like `jump`, but (1) at the CROSSING duration — the
+   * decision carries `miniMs: null`, so S2 flies it at its CROSS_RIDE_MS (550)
+   * instead of the 200 ms hotkey mini-ride: a ceremony is seen, never a cut —
+   * and (2) it SUPERSEDES a ride in flight: the boundary dwell landing a frame
+   * after a flick must still bring the player down (S2's ride token drops the
+   * superseded completion; `_rideTo` re-targets the core exactly as a flick
+   * upgrade does). Same floor → [] (already there — the caller opens the
+   * drawer); unknown floor → []. Counts as an input (settle clock).
+   * @param {{ tMs: number, toFloor: number }} arg
+   * @returns {Array} Decision[] — one `ride` (kind 'ceremony') or []
+   */
+  ceremonyRide({ tMs, toFloor }) {
+    this._tick(tMs);
+    this._lastInputTMs = tMs;
+    if (toFloor === this._floor || !this._byId.has(toFloor)) return [];
+    return this._rideTo(toFloor, 'ceremony', null);
+  }
+
+  /**
    * D5 placement (Wave 5 Session G, docs/ladder/06-core-api.md "place"): a
    * settled CUT of the ladder position to (floor, z01) — no ride, no decision
    * emitted, nothing for S2 to fly. The ONE exception to "never a cut"

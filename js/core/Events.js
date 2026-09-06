@@ -303,6 +303,24 @@ export const Events = {
    * (registered inside the LADDER.ENABLED gate; never emitted with the ladder off).
    */
   DEPOT_INVITATION:   'depot:invitation',
+  /**
+   * Wave 5 Session K (plan D-B / D-E — ONE SHOP): the WORKBENCH BREAK. With the
+   * ladder on, gameplay never enters the SHOP GameState any more: every depot
+   * entry — the chapter 1–3 boundary dwell, the B key, the glass STORE chip,
+   * any legacy caller of transitionToState(SHOP) — is redirected by
+   * GameFlowManager (the ONE redirect) into `WORKBENCH_STOP`
+   * `{ chapter, missionsCompleted, firstDepotVisit, boundary }`: the hub rides
+   * the player down to the workbench floor at the crossing duration and opens
+   * the REFIT drawer (the one shop). The world is held under the drawer (D-F);
+   * `isDepotStopPending()` stays true until the hub emits `WORKBENCH_RESUME`
+   * `{ reason }` — both drawers closed (a ride up closes REFIT) — which is the
+   * new home of what SHOP_DEPLOY did for the full-screen shop (saveGame + the
+   * milestone recap). Neither key is ever emitted with the ladder off: the
+   * ?ladder=0 boot keeps the full-screen ShopScreen byte-identical, and the
+   * GAME_OVER → SHOP continue (not gameplay) still uses it with the ladder on.
+   */
+  WORKBENCH_STOP:     'workbench:stop',
+  WORKBENCH_RESUME:   'workbench:resume',
   GAMEOVER_RETRY:     'gameover:retry',
   GAMEOVER_MENU:      'gameover:menu',
   GAMEOVER_CONTINUE:  'gameover:continue',

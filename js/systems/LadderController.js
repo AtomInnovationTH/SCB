@@ -45,6 +45,13 @@ import { Constants } from '../core/Constants.js';
 const CROSS_RIDE_MS = 550;
 
 /**
+ * Wave 5 Session K: the WORKBENCH floor — where the REFIT drawer (the one
+ * shop) lives; the same floor id `_applyFloorContent` keys the REFIT tab on.
+ * An id, never a name (FloorContract owns the player labels).
+ */
+const WORKBENCH_FLOOR = 1;
+
+/**
  * D5 (Wave 5 Session G): is `z01` a FREE-zone rest on a floor — strictly
  * between the two wall edges (`WALL_ZONE_FRAC` … 1 − `WALL_ZONE_FRAC`)? The
  * controller remembers the last such position per applied floor as the
@@ -491,6 +498,33 @@ export class LadderController {
     const t = (tMs === undefined) ? this._now() : tMs;
     this._lastInputMs = t;
     const decisions = this._ladder.jump({ tMs: t, toFloor });
+    this._apply(decisions, t);
+    this._refreshRail();
+    return decisions;
+  }
+
+  /**
+   * Wave 5 Session K (plan D-B / D-E — one shop): the CEREMONY ride to the
+   * workbench. The hub calls this on WORKBENCH_STOP (GameFlowManager's ONE
+   * ladder-on depot entry: the chapter dwell, the B key, the STORE chip) and
+   * then opens the REFIT drawer. The ride is the core's `ceremonyRide` —
+   * floor 1 at the CROSSING duration (the decision carries no miniMs, so
+   * `_apply` flies it at CROSS_RIDE_MS 550, not the 200 ms hotkey mini-ride:
+   * the break is seen), superseding a ride in flight — through the SAME
+   * `_apply` → `_startRide` path as every ride (fidelity, floor content — the
+   * REFIT tab enables on the floor-1 arrival — the mask, both rails). Already
+   * on floor 1 → [] (the drawer simply opens). Disengaged → [] (the ladder
+   * does not own the screen; the hub's stop handler releases the break).
+   * @param {{ tMs?: number }} [arg]
+   * @returns {Array} the decisions applied (jump()'s shape)
+   */
+  rideToWorkbench({ tMs } = {}) {
+    if (!this._engaged) return [];
+    const t = (tMs === undefined) ? this._now() : tMs;
+    this._lastInputMs = t;
+    const decisions = (typeof this._ladder.ceremonyRide === 'function')
+      ? this._ladder.ceremonyRide({ tMs: t, toFloor: WORKBENCH_FLOOR })
+      : this._ladder.jump({ tMs: t, toFloor: WORKBENCH_FLOOR });
     this._apply(decisions, t);
     this._refreshRail();
     return decisions;
@@ -1031,6 +1065,10 @@ export class LadderController {
         case 'ride':
           // G3 flick-to-wall soft tick (LadderSfx only sounds kind 'flickWall').
           if (this._sfx && this._sfx.onRide) this._sfx.onRide(d.kind);
+          // Session K: the ceremony ride is a crossing in all but name — it
+          // flies at CROSS_RIDE_MS and lands on a new floor — so it gets the
+          // descending clunk (the same onCross the wheel crossing sounds).
+          if (d.kind === 'ceremony' && this._sfx && this._sfx.onCross) this._sfx.onCross('in');
           // D5: a flick-to-wall ride ends the drive whose ramp-up moves just
           // landed — the working position rolls back to before that drive.
           // The flick's direction is the wall it landed on (lower edge = in).

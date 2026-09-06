@@ -148,6 +148,12 @@ export class RefitPane {
    *   the pane (Session B commit 4; see _adapterDeps). Absent/throwing → {}
    *   (the static catalog base — the honest headless fallback).
    * @param {boolean|function} [deps.reducedMotion] - override for the matchMedia probe
+   * @param {function} [deps.getRecommended] - () => (string|null): the shop's
+   *   recommended-starter id for a FIRST depot visit (ShopScreen's pure
+   *   `recommendedStarter`) — Wave 5 Session K: the one-shop REFIT drawer hosts
+   *   the first-visit framing the full-screen shop used to (plan D-B; owner
+   *   2026-09-06: "the first-depot RECOMMENDED chip = the REFIT header chip").
+   *   Read on `open({ firstVisit: true })` only; absent → no chip.
    */
   constructor(deps = {}) {
     this._doc = deps.doc !== undefined ? deps.doc
@@ -163,6 +169,9 @@ export class RefitPane {
     this._onOpenChange = deps.onOpenChange || null;
     this._adapterDepsFn = deps.adapterDeps || null;
     this._reducedMotionDep = deps.reducedMotion;
+    this._getRecommended = deps.getRecommended || null;
+    /** Session K: the first-visit framing — true from open({firstVisit}) to close(). */
+    this._firstVisit = false;
 
     this._enabled = false;
     this._open = false;
@@ -430,10 +439,24 @@ export class RefitPane {
     }
   }
 
-  /** Open the pane (no-op while disabled). Fires onOpenChange(true) once. */
-  open() {
+  /**
+   * Open the pane (no-op while disabled). Fires onOpenChange(true) once.
+   * Wave 5 Session K: `{ firstVisit: true }` (the hub, from WORKBENCH_STOP's
+   * `firstDepotVisit` — the ONE first-depot grant rule in GameFlowManager)
+   * dresses the header with the RECOMMENDED chip for the shop's starter pick
+   * and focuses that starter's card, so the first fit is one tap away — the
+   * full-screen shop's first-visit framing, hosted here. One-time: close()
+   * clears it. Already open → nothing changes (the player is already here).
+   * @param {{ firstVisit?: boolean }} [opts]
+   */
+  open(opts) {
     if (!this._enabled || this._open) return;
     this._open = true;
+    this._firstVisit = !!(opts && opts.firstVisit);
+    if (this._firstVisit) {
+      const reco = this._recommended();
+      if (reco && reco.sub && MANIFEST_BY_ID.has(reco.sub)) this._focused = reco.sub;
+    }
     this._applyOpenState();
     this._wake();
     this.refresh();
@@ -444,11 +467,15 @@ export class RefitPane {
   close() {
     if (!this._open) return;
     this._open = false;
+    this._firstVisit = false;
     this._setGhosting(false);
     this._applyOpenState();
     this._clearIdleTimer();
     if (this._onOpenChange) { try { this._onOpenChange(false); } catch (_e) { /* dep */ } }
   }
+
+  /** @returns {boolean} Session K: true while the first-visit framing is showing. */
+  isFirstVisit() { return this._open && this._firstVisit; }
 
   /** Space on F3 (D-b): toggle. */
   toggle() { if (this._open) this.close(); else this.open(); }
@@ -558,6 +585,21 @@ export class RefitPane {
     };
   }
 
+  /**
+   * @private Session K: the first-visit RECOMMENDED pick, resolved against the
+   * fitting catalog — `{ id, name, sub }` or null (no dep / nothing to
+   * recommend / an id the catalog does not carry). Never throws.
+   */
+  _recommended() {
+    if (!this._firstVisit || typeof this._getRecommended !== 'function') return null;
+    let id = null;
+    try { id = this._getRecommended(); } catch (_e) { id = null; }
+    if (!id) return null;
+    const entry = CATALOG_BY_ID.get(id);
+    if (!entry) return null;
+    return { id, name: entry.shop?.name || id, sub: entry.subsystem || null };
+  }
+
   /** @private Adapter deps for fittingCatalog `current` reads (Session B
    *  commit 4 — the Wave-5 (2) FINDINGS, closed): main.js injects a GETTER
    *  returning { player, resourceSystem, kesslerSystem, sensorSystem,
@@ -608,10 +650,12 @@ export class RefitPane {
       };
     });
     const affordable = RefitPane.countAffordable(FITTING_CATALOG, ctx);
+    const recommended = this._recommended();
     const structKey = [
       this._focused, this._open ? 1 : 0, ctx.credits, affordable,
       installed.rows.join('|'), installed.live ? 1 : 0,
       alts.map((a) => `${a.id}:${a.chip.kind}:${a.chip.text}:${a.num}${a.arrow}`).join('|'),
+      recommended ? `reco:${recommended.id}` : '',
     ].join('\u0001');
     return {
       focused: this._focused,
@@ -623,6 +667,7 @@ export class RefitPane {
       credits: ctx.credits,
       affordable,
       order: SUBSYSTEM_ORDER,
+      recommended,
       structKey,
     };
   }
@@ -789,6 +834,19 @@ export class RefitPane {
       `REFIT \u00b7 <span class="refit-title" data-codex="${m.codexId}" style="cursor:pointer;text-decoration:underline">${m.label}</span>` +
       '</div>',
     );
+    // Session K (one shop): the FIRST-VISIT framing the full-screen shop used
+    // to carry — the RECOMMENDED chip (VALUE gold, the header chip; a tap
+    // focuses the starter's card through the [data-sub] grammar) and the
+    // one-line budget note. Only while open({ firstVisit }) — see open().
+    if (m.recommended) {
+      const r = m.recommended;
+      parts.push(
+        `<div class="refit-firstvisit" style="margin:-2px 0 8px;color:${C.VALUE}">` +
+        `<span class="refit-reco" data-sub="${r.sub || ''}" style="cursor:pointer;padding:1px 6px;border:1px solid ${C.VALUE};border-radius:3px">RECOMMENDED \u00b7 ${r.name}</span>` +
+        '<div style="margin-top:4px;opacity:0.85">credits are your refit budget \u2014 pick one fit that pays for itself</div>' +
+        '</div>',
+      );
+    }
     // The seven-subsystem index, manifest priority order.
     parts.push('<div class="refit-index" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px">');
     for (const id of m.order) {

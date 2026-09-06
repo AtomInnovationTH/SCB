@@ -437,10 +437,26 @@ export class LibraryPane {
       const rootTop = (this._root && typeof this._root.getBoundingClientRect === 'function')
         ? (this._root.getBoundingClientRect().top || 0) : 0;
       if (h > 0 && want + h <= fl) top = Math.round(want - rootTop);
+      // Session K: the tab's bottom in VIEWPORT px while it rides under the
+      // rail (what the CARGO pane rides under in turn); null at 38 %.
+      this._tabBottomPx = (top == null) ? null : want + h;
+    } else {
+      this._tabBottomPx = null;
     }
     const css = top == null ? '38%' : `${top}px`;
     if (this._tab.style.top !== css) this._tab.style.top = css;
   }
+
+  /**
+   * Wave 5 Session K: the SPECS tab's bottom edge in CSS px while it is
+   * riding UNDER the dodged WHERE rail (setTabDodge placed it), else null
+   * (the 38 % design anchor, which sits above the mid-height rail's bottom at
+   * every common viewport). The hub feeds `tabBottom() ?? rail.bottomPx()` to
+   * the CARGO pane — the right edge's LAST rider. Cached by setTabDodge; no
+   * layout read of its own.
+   * @returns {number|null}
+   */
+  tabBottom() { return (this._tab && this._enabled) ? this._tabBottomPx : null; }
   /** @returns {boolean} */
   isEnabled() { return this._enabled; }
   /** @returns {string|null} the entry the pane is showing (null = the prompt) */
@@ -850,6 +866,7 @@ export class LibraryPane {
     this._tab = tab;
     this._tabDodgeIn = undefined;   // setTabDodge write-on-change inputs
     this._tabDodgeFloor = undefined;
+    this._tabBottomPx = null;       // Session K: tabBottom() — set by setTabDodge
     this._tabCount = tabCount;
     this._applyOpenState();
 

@@ -92,6 +92,7 @@ export class RailIndicator {
     this._dodgeTop = null;
     this._dodgeAtMs = -Infinity;
     this._dodgeBottom = null;
+    this._railBottom = null;   // Session K: the rail's bottom wherever it sits (bottomPx)
     this._toast = null;
     this._notches = [];   // per-floor { el, fill, _cur, _pct, _deny, _denyTimer } (index 0 = F1)
     this._visible = false;
@@ -320,6 +321,18 @@ export class RailIndicator {
   dodgeBottom() { return this._visible ? this._dodgeBottom : null; }
 
   /**
+   * Wave 5 Session K: the rail's bottom edge in CSS px wherever it sits —
+   * dodged (`dodgeBottom`) OR mid-height (innerH/2 + railH/2, the `top:50%;
+   * translateY(-50%)` anchor) — else null while hidden / unmeasured. The hub
+   * feeds it (with the SPECS tab's bottom) to the CARGO pane, which rides
+   * LAST on the right edge: under whatever is above it, compacting, then
+   * hiding — never the other way round. Refreshed with the 1 Hz dodge read;
+   * no layout read of its own.
+   * @returns {number|null}
+   */
+  bottomPx() { return this._visible ? this._railBottom : null; }
+
+  /**
    * Refresh from a ZoomLadder state snapshot (docs/ladder/06-core-api.md).
    * Named `refresh` (not `update`) because it is driven by LadderController from
    * ladder state, not ticked directly by the main loop. Writes are cached — this
@@ -372,6 +385,8 @@ export class RailIndicator {
     const railH = root.getBoundingClientRect().height;
     const top = dodgeTop({ railH, colBottom, innerH });
     this._dodgeBottom = (top == null) ? null : top + railH;   // what rides under the rail (the SPECS tab) reads this
+    // Session K: the rail's bottom wherever it sits (mid-height = the 50 % anchor).
+    this._railBottom = (railH > 0) ? ((top == null) ? (innerH / 2 + railH / 2) : top + railH) : null;
     if (top === this._dodgeTop) return;
     this._dodgeTop = top;
     if (top == null) {

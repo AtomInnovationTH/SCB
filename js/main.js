@@ -75,7 +75,7 @@ import { MotherCallouts } from './ui/MotherCallouts.js';
 import { MenuScreen } from './ui/MenuScreen.js';
 import { UpdateWatch } from './core/UpdateWatch.js';
 import { BriefingScreen } from './ui/BriefingScreen.js';
-import { ShopScreen } from './ui/ShopScreen.js';
+import { ShopScreen, recommendedStarter, UPGRADES } from './ui/ShopScreen.js';
 import { GameOverScreen } from './ui/GameOverScreen.js';
 import { TargetReticle } from './ui/TargetReticle.js';
 import { NavSphere } from './ui/NavSphere.js';
@@ -128,6 +128,7 @@ import { TimeAuthority } from './systems/TimeAuthority.js';
 import { FloorContract } from './core/FloorContract.js';
 import { RailIndicator } from './ui/RailIndicator.js';
 import { PaneRail } from './ui/PaneRail.js';
+import { CargoPane } from './ui/hud/CargoPane.js';
 import { RAIL_GEOMETRY } from './ui/RailGeometry.js';
 import { TouchControls } from './ui/TouchControls.js';
 import { TouchTelemetry } from './ui/touchTelemetry.js';
@@ -632,6 +633,13 @@ const _taFrameArgs = { dtReal: 0, active: false, targetCap: 1, dangerActive: fal
 // Session B) from both panes' onOpenChange; false whenever the ladder is off
 // (the sync helper only exists inside the LADDER.ENABLED gate).
 let _workbenchPaneOpen = false;
+// Wave 5 Session K (plan D-B — one shop): the WORKBENCH BREAK is open — set on
+// GameFlowManager's WORKBENCH_STOP (after the ride + the REFIT open took),
+// cleared when the hub emits WORKBENCH_RESUME (both drawers closed, from the
+// SAME _syncWorkbenchPanes edge) or when gameplay ends. Lives here (not in
+// GameFlowManager's flag) because the END of a break is a drawer edge only the
+// hub sees. False whenever the ladder is off (never set outside the gate).
+let _workbenchBreak = false;
 // Q10 level-phase sound edge state: last frame's camera leveling flag (rise
 // edge → one LadderSfx settle cue). False whenever the ladder is disengaged.
 let _ladderLevelingPrev = false;
@@ -663,6 +671,11 @@ let refitPane;
 // full-screen Library, I key, deep links) stays byte-identical (pinned in
 // test-LadderController).
 let libraryPane;
+// Wave 5 Session K (plan D-B / D-L) — the CARGO pane (js/ui/hud/CargoPane.js):
+// the manifest + SELL / SELL ALL / -> ELEVATOR over ShopScreen's public
+// wrappers, a pane-density rung. Same construction law: built ONLY inside the
+// LADDER.ENABLED gate (a ?ladder=0 boot builds no pane, pushes no rung).
+let cargoPane = null;
 /** The boot's ONE glass read (TouchControls' narrow detectGlass gate; module scope: init sets it, the gameLoop reads it). */
 let _glassBoot = false;
 // Session J (plan D-C) — "the library follows": retarget an OPEN SPECS pane to
@@ -1568,6 +1581,18 @@ async function init() {
     //   3. the MotherCallouts pane-edge inset pair (Session B commit 3) so
     //      the callout columns stay out from under the panes.
     // widthPx() is a layout read — edges only, never per frame (G1).
+    // Session K: the END of a workbench break is this same edge — both drawers
+    // closed while a break is open → ONE WORKBENCH_RESUME (GameFlowManager
+    // releases its onset hold + saves; MissionMilestones recaps). A ride up
+    // gets here too (LadderController closes REFIT off the workbench floor).
+    // Leaving gameplay never emits (GameFlowManager's exit rule releases the
+    // flag itself; the GAME_STATE_CHANGE listener below drops ours).
+    const _endWorkbenchBreak = (reason) => {
+      if (!_workbenchBreak) return;
+      _workbenchBreak = false;
+      if (!gameState.isGameplay()) return;
+      eventBus.emit(Events.WORKBENCH_RESUME, { reason });
+    };
     const _syncWorkbenchPanes = () => {
       const refitOpen = !!(refitPane && refitPane.isOpen());
       const libraryOpen = !!(libraryPane && libraryPane.isOpen());
@@ -1598,6 +1623,8 @@ async function init() {
       // signal path; write-on-change inside the store (G1). ladderController is
       // constructed below — read live, guarded (this closure runs on edges only).
       if (ladderController) ladderController.notePaneChange();
+      // Session K: both drawers closed during a break → the break ends.
+      if (!_workbenchPaneOpen) _endWorkbenchBreak('closed');
     };
     // The below-~1100-px one-pane rule (01-numbers "One-pane breakpoint",
     // exported by LibraryPane): opening one pane collapses the other to its
@@ -1694,6 +1721,10 @@ async function init() {
         if (isOpen) _onePaneRule(libraryPane);
         _syncWorkbenchPanes();
       },
+      // Session K (one shop): the first-visit RECOMMENDED chip — the shop's
+      // own pure starter pick (un-owned + affordable, fades once any starter
+      // is owned), read once on open({ firstVisit }).
+      getRecommended: () => recommendedStarter(UPGRADES, shopScreen.purchasedUpgrades, scoringSystem.credits),
     });
     // The TECH LIBRARY pane (08-workbench §2 right pane; §10's LibraryPane —
     // the adapter over the shipped viewer). Reads the SAME codexSystem the
@@ -1815,6 +1846,30 @@ async function init() {
       if (railIndicator) railIndicator.setDepotInvitation(!!(d && d.open));
       if (refitPane && refitPane.setInvitation) refitPane.setInvitation(!!(d && d.open));
     });
+    // Wave 5 Session K (plan D-B / D-E — ONE SHOP): the WORKBENCH BREAK.
+    // GameFlowManager's ONE ladder-on depot entry (the chapter 1–3 dwell, the
+    // B key, the glass STORE chip — every transitionToState(SHOP) from
+    // gameplay is redirected there) emits WORKBENCH_STOP; the hub answers with
+    // the CEREMONY RIDE (LadderController.rideToWorkbench: floor 1 at the
+    // crossing duration, the same _apply path as every ride — the REFIT tab
+    // enables on arrival) and opens the REFIT drawer (the shop) with the
+    // first-visit RECOMMENDED chip when GameFlowManager says so. The world is
+    // held under the drawer (D-F). The break ends on the drawer edge above
+    // (_endWorkbenchBreak → WORKBENCH_RESUME). If the ride/open could not take
+    // (the ladder not engaged — no screen to hold), the break ends at once so
+    // nothing stays pending. Inside the gate: never emitted with the ladder
+    // off, so the ?ladder=0 boot keeps the full-screen shop as shipped.
+    eventBus.on(Events.WORKBENCH_STOP, (d) => {
+      if (ladderController && ladderController.rideToWorkbench) ladderController.rideToWorkbench();
+      if (refitPane) refitPane.open({ firstVisit: !!(d && d.firstDepotVisit) });
+      _workbenchBreak = true;
+      if (!_workbenchPaneOpen) _endWorkbenchBreak('refused');
+    });
+    // Leaving gameplay ends the break without a RESUME (GameFlowManager's own
+    // exit rule released its flag; the ladder disengages and closes the drawers).
+    eventBus.on(Events.GAME_STATE_CHANGE, () => {
+      if (_workbenchBreak && !gameState.isGameplay()) _workbenchBreak = false;
+    });
     // Wave 5 (Session G) — D5 persistence of view prefs + floor (08-workbench
     // §11), two stores by ownership (owner decisions 1a / 1b, 2026-09-04):
     //   PLAYER store `sc_ladder_view_v1` (LadderViewStore — the SettingsManager
@@ -1902,6 +1957,29 @@ async function init() {
     // `?ladder=0` boot never reaches here → the shipped one-rung `-`/`+`.
     // FloorMask.setFloor voids the `+` stash when a new room applies.
     if (hud && hud.paneDensity) hud.paneDensity.clearOnDown = true;
+    // Wave 5 Session K (plan D-B / D-L) — the CARGO pane: the cargo manifest
+    // with SELL / SELL ALL / -> ELEVATOR through ShopScreen's PUBLIC wrappers
+    // (the one sale pipeline), a pane-density RUNG like TARGET / FLEET. A
+    // DIRECT child of #hud-overlay, not a column: HUD.js dims both columns to
+    // 0.35 + pointer-events:none under the hull callouts, and the shop floor
+    // IS the callout floor. Its rung is spliced into hud.paneDensity.rungs
+    // right after FLEET, HERE — before ladderFloorMask is constructed and long
+    // before the first setFloor (FloorMask._resolve caches the rung map ONCE
+    // at that first apply; the WHAT rail reads the same live array). Fed per
+    // frame by setDodge in the gameLoop (it rides LAST on the right edge:
+    // under the SPECS tab / the WHERE rail, compacting, then hiding). Inside
+    // the gate: a ?ladder=0 boot builds no pane and pushes no rung — the
+    // shipped seven rungs and the shipped `-`/`+` order are byte-identical.
+    cargoPane = new CargoPane({
+      cargo: cargoSystem,
+      shop: shopScreen,
+      glass: _glassBoot,
+    });
+    if (hud && hud.paneDensity && Array.isArray(hud.paneDensity.rungs)) {
+      const rungs = hud.paneDensity.rungs;
+      const at = rungs.findIndex((r) => r && r.id === 'arms');
+      rungs.splice(at >= 0 ? at + 1 : rungs.length, 0, cargoPane.rung());
+    }
   }
   // (The Wave-3 ArchiveFloor bridge — the hosted codex as the old F1 costume —
   // left with the ARCHIVE row in the Session H 7→5 renumber. The Tech Library
@@ -2128,9 +2206,12 @@ async function init() {
       gameState,
       // The STORE tap chip (iPad port 2026-09-02): glass has no KeyB, so the
       // chip calls the SAME path the key drives — the KeyB ORBITAL_VIEW guard
-      // (InputManager) mirrored here verbatim. Stays until Session K retires
-      // the full-screen shop. (The LIBRARY chip left with Session J: the SPECS
-      // tab lives on every floor and the right-edge swipe opens it.)
+      // (InputManager) mirrored here verbatim. Session K KEPT it (owner law,
+      // by the numbers: the one-tap shop in the thumb rest): with the ladder
+      // on this very call is GameFlowManager's ONE redirect → the ceremony
+      // ride + the REFIT drawer; with ?ladder=0 the full-screen shop as
+      // shipped. (The LIBRARY chip left with Session J: the SPECS tab lives
+      // on every floor and the right-edge swipe opens it.)
       openShop: () => {
         if (gameState.getState() === GameStates.ORBITAL_VIEW) {
           gameFlowManager.transitionToState(GameStates.SHOP);
@@ -2957,6 +3038,8 @@ async function init() {
       // the rail (never constructed there), the same contract as __refit.
       window.__ladder = ladderController;
       window.__paneRail = ladderPaneRail;
+      // Session K: the CARGO pane (null on a ?ladder=0 boot — never constructed).
+      window.__cargoPane = cargoPane;
       // Session J gate witnesses (getters, the __scbSceneManager pattern): the
       // debris field (to project a target for the tap), the input manager (its
       // PUBLIC keys map — the drag's witness), the autopilot (the F2 Space verb).
@@ -5260,6 +5343,17 @@ function gameLoop(timestamp) {
   // measures only when its inputs change), so the per-frame call is free.
   if (_ladderActive && libraryPane && libraryPane.setTabDodge && railIndicator && railIndicator.dodgeBottom) {
     libraryPane.setTabDodge(railIndicator.dodgeBottom(),
+      window.innerHeight - (_glassBoot ? RAIL_GEOMETRY.THUMB_REST_PX : 0));
+  }
+  // Session K: the CARGO pane rides LAST on the right edge — under the SPECS
+  // tab while the tab rides under the rail, else under the rail wherever it
+  // sits (dodged or mid-height) — down to the same floor; it compacts, then
+  // hides, never the other way round (the rail and the tab keep their law).
+  // Every input is a cached number (no layout read here); setDodge is
+  // write-on-change on the pair, so the per-frame call is free.
+  if (_ladderActive && cargoPane && railIndicator && railIndicator.bottomPx) {
+    const tabBottom = (libraryPane && libraryPane.tabBottom) ? libraryPane.tabBottom() : null;
+    cargoPane.setDodge(tabBottom != null ? tabBottom : railIndicator.bottomPx(),
       window.innerHeight - (_glassBoot ? RAIL_GEOMETRY.THUMB_REST_PX : 0));
   }
 

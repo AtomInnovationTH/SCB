@@ -62,6 +62,17 @@ export class GameFlowManager {
     this._shopTimeoutId = null;
 
     /**
+     * Wave 5 Session K (plan D-B / D-E — one shop): true from the
+     * WORKBENCH_STOP this manager emits (the ladder-on-gameplay depot entry,
+     * `_stopAtWorkbench`) until the hub's WORKBENCH_RESUME (both drawers
+     * closed) or any exit from gameplay. `isDepotStopPending()` reads it
+     * alongside the dwell timer so the mission-keyed onsets (MissionCoach, the
+     * bosses) hold through the break exactly as they held through the
+     * full-screen SHOP. Never set with the ladder off.
+     */
+    this._workbenchBreak = false;
+
+    /**
      * Wave 5 Session E (08-workbench §5 D3): the open depot INVITATION, or
      * null — `{ chapter, debrisCleared }` from the boundary catch that opened
      * it. In-memory only (never saved): a reload simply has no invitation
@@ -182,6 +193,26 @@ export class GameFlowManager {
     // debrisWireframe: self-manages via TARGET_SELECTED/CLEARED + GAME_RESET
 
     const from = gameState.currentState;
+
+    // Wave 5 Session K (plan D-B — ONE SHOP; the granted GFM lift, site 1 of
+    // 4): with the ladder on, GAMEPLAY never enters the SHOP GameState. Every
+    // caller that asks for it from a gameplay state — the chapter 1–3 boundary
+    // dwell (site 2 calls the same method directly), the B key (InputManager),
+    // the glass STORE chip (main.js openShop), any legacy timer — is redirected
+    // into the WORKBENCH BREAK: one event, the hub rides the player down to the
+    // workbench and opens the REFIT drawer (the shop). Not gameplay (the
+    // GAME_OVER → SHOP continue) or ladder off → the shipped state flip below,
+    // byte-identical.
+    if (state === GameStates.SHOP && this._ladderOn() && gameState.isGameplay()) {
+      this._stopAtWorkbench(false);
+      return;
+    }
+    // The break is a GAMEPLAY condition: any exit from gameplay (GAME_OVER /
+    // WIN / the pause menu's MENU) ends it — the ladder disengages and closes
+    // the drawer on its own; nothing may stay pending into the next run.
+    if (state === GameStates.GAME_OVER || state === GameStates.WIN || state === GameStates.MENU) {
+      this._workbenchBreak = false;
+    }
 
     // First-depot visit signal, computed BEFORE the flag is persisted so the
     // shop can render its one-time framing/⭐ on the actual first visit. Passed
@@ -595,18 +626,21 @@ export class GameFlowManager {
 
       // Phase 5: Elevator contract win — trigger after returning to gameplay
       // (SHOP → WIN is not a valid state transition, so we go via ORBITAL_VIEW)
-      if (this._elevatorWinTriggered) {
-        // Phase E: tag the win so the GameOverScreen shows the anchor-run
-        // (elevator) variant and the endgame codex unlocks gate correctly.
-        const { shopScreen } = this._refs;
-        const totalMassKg = (shopScreen && typeof shopScreen.getContractMass === 'function')
-          ? shopScreen.getContractMass() : 0;
-        eventBus.emit(Events.GAME_WIN, {
-          ...scoringSystem.getStats(),
-          winType: 'elevator',
-          totalMassKg,
-        });
-      }
+      if (this._elevatorWinTriggered) this._fireElevatorWin();
+    });
+
+    // Wave 5 Session K (GFM lift, site 4 of 4): the WORKBENCH BREAK ends — the
+    // hub emits this when both drawers are closed after a WORKBENCH_STOP (a
+    // ride up closes REFIT; leaving gameplay never gets here — the redirect's
+    // exit rule releases the flag instead). The new home of what SHOP_DEPLOY
+    // did for the full-screen shop: the save (upgrades already applied live on
+    // UPGRADE_PURCHASED; `applyUpgrades` is the shipped no-op) and the release
+    // of the onset hold. No state flip: the player never left ORBITAL_VIEW.
+    // MissionMilestones keeps its own listener for the recap.
+    eventBus.on(Events.WORKBENCH_RESUME, () => {
+      if (!this._workbenchBreak) return;
+      this._workbenchBreak = false;
+      this.saveGame();
     });
 
     // ==================================================================
@@ -755,10 +789,18 @@ export class GameFlowManager {
     // for the win transition here — SHOP → WIN is invalid, so the actual
     // GAME_WIN fires in the SHOP_DEPLOY handler after returning to
     // ORBITAL_VIEW.
+    // Wave 5 Session K (GFM lift, site 4 of 4 — the win RE-HOME): with one
+    // shop the contribution comes from the CARGO pane IN gameplay (the drawer
+    // holds no GameState), so when the contract completes in a gameplay state
+    // the win fires NOW (ORBITAL_VIEW → WIN is legal; 08 §2 "ORBITAL_VIEW →
+    // WIN"); the full-screen SHOP (ladder off, the GAME_OVER continue) still
+    // waits for SHOP_DEPLOY. Contract-first ordering survives: the flag is set
+    // before either fire, `_winTriggered` keeps the WIN single (test-win-race).
     // ==================================================================
 
     eventBus.on(Events.CONTRACT_COMPLETE, () => {
       this._elevatorWinTriggered = true;
+      if (gameState.isGameplay()) this._fireElevatorWin();
     });
 
     // Resource depletion → game over (from ResourceSystem)
@@ -1668,6 +1710,28 @@ export class GameFlowManager {
   }
 
   /**
+   * The elevator-contract GAME_WIN (Phase 5 / Phase E), in ONE place since
+   * Wave 5 Session K: fired from SHOP_DEPLOY after the full-screen shop (the
+   * shipped path — SHOP → WIN is invalid, so it waits for ORBITAL_VIEW) and
+   * directly from CONTRACT_COMPLETE when the contribution lands in gameplay
+   * (the CARGO pane, one shop). The GAME_WIN handler's `_winTriggered` guard
+   * keeps the WIN single whichever path fires first. Tags the win so the
+   * GameOverScreen shows the anchor-run (elevator) variant and the endgame
+   * codex unlocks gate correctly.
+   * @private
+   */
+  _fireElevatorWin() {
+    const { shopScreen } = this._refs || {};
+    const totalMassKg = (shopScreen && typeof shopScreen.getContractMass === 'function')
+      ? shopScreen.getContractMass() : 0;
+    eventBus.emit(Events.GAME_WIN, {
+      ...scoringSystem.getStats(),
+      winType: 'elevator',
+      totalMassKg,
+    });
+  }
+
+  /**
    * Apply a specific upgrade effect — routes to the correct system(s) via the
    * exported EFFECT_ROUTES map (F4). Every catalog effect is guaranteed a route
    * by test-shop-effects.js, so a shop item can no longer be silently inert.
@@ -1789,10 +1853,53 @@ export class GameFlowManager {
    * the onset fires at once, invitation open or not. Wired to the three
    * consumers as a predicate by main.js (`_bossLifecycle.MissionOnset` is the
    * shared rule). Read-only; nothing else keys on it.
+   *
+   * Wave 5 Session K (GFM lift, site 3 of 4): with the ladder on the stop is
+   * no longer a GameState — the break happens IN gameplay (the workbench
+   * floor, the REFIT drawer open) — so the hold ALSO covers the WORKBENCH
+   * BREAK: true from `_stopAtWorkbench` (WORKBENCH_STOP) until the hub's
+   * WORKBENCH_RESUME (both drawers closed) or any exit from gameplay. Chapter
+   * beats start only after the drawer closes, exactly as they started only
+   * after the SHOP closed. Ladder off `_workbenchBreak` is never set: the
+   * predicate reads the dwell timer alone, as shipped.
    * @returns {boolean}
    */
   isDepotStopPending() {
-    return this._shopTimeoutId != null;
+    return this._shopTimeoutId != null || this._workbenchBreak;
+  }
+
+  /** @private The ladder flag, read live (tests flip it per rig). */
+  _ladderOn() {
+    return !!(Constants.LADDER && Constants.LADDER.ENABLED);
+  }
+
+  /**
+   * Wave 5 Session K — the ONE ladder-on-gameplay depot entry (plan D-B: one
+   * shop, one place). Called by the `transitionToState(SHOP)` redirect (site 1)
+   * and by the boundary dwell (site 2); never with the ladder off, never
+   * outside gameplay. Does what the SHOP entry did for the depot bookkeeping —
+   * the first-depot grant (`_applyFirstDepotFloor`, the one rule) and the
+   * invitation close ('entered') — then opens the break and emits
+   * WORKBENCH_STOP for the hub (ride down at the crossing duration + open the
+   * REFIT drawer with the first-visit chip). A stop while the break is already
+   * open (B pressed at the workbench; the dwell landing after a B-key visit
+   * that is still open) is a no-op: the player is already there.
+   * @param {boolean} boundary - true from the chapter dwell, false from B /
+   *   the STORE chip / a legacy caller
+   * @private
+   */
+  _stopAtWorkbench(boundary) {
+    if (this._workbenchBreak) return;
+    const firstDepotVisit = this._applyFirstDepotFloor();
+    this._closeDepotInvitation('entered');
+    const { missionsCompleted } = getMissionProgress(gameState.debrisCleared);
+    this._workbenchBreak = true;
+    eventBus.emit(Events.WORKBENCH_STOP, {
+      chapter: missionsCompleted + 1,
+      missionsCompleted,
+      firstDepotVisit,
+      boundary: !!boundary,
+    });
   }
 
   /**
@@ -1863,7 +1970,12 @@ export class GameFlowManager {
     }
     this._shopTimeoutId = timerManager.setTimeout(() => {
       if (gameState.isGameplay()) {
-        this.transitionToState(GameStates.SHOP);
+        // Session K (GFM lift, site 2 of 4): the dwell lands on the WORKBENCH
+        // with the ladder on — the ride down + the REFIT drawer, the boundary
+        // flagged so the hub can tell the ceremony from a B-key visit. Ladder
+        // off: the shipped SHOP flip, byte-identical.
+        if (this._ladderOn()) this._stopAtWorkbench(true);
+        else this.transitionToState(GameStates.SHOP);
       }
       this._shopTimeoutId = null;
     }, dwellMs, { owner: this });
