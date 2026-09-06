@@ -164,7 +164,18 @@ export const ALWAYS_ON = Object.freeze([
  *                                        tease_lock "Launch net (N)" beat sat over
  *                                        the hull; it is back on F2 with whatever
  *                                        is still alive).
- *   F2 flying view    (capture):        everything shipped — the home floor.
+ *   F2 flying view    (capture):        the home floor — everything shipped
+ *                                        EXCEPT the nav orb and the discoveries
+ *                                        pane (owner, 2026-09-06, from the first
+ *                                        screen look: both are tall, both sat
+ *                                        where the mid-height rails land — the
+ *                                        orb under the WHERE rail, discoveries
+ *                                        under the WHAT rail. Gone by default
+ *                                        saves the vertical space; 8 / the WHAT
+ *                                        rail's dim notch bring either back and
+ *                                        D5 remembers). The orb was off in the
+ *                                        shipped cockpit too — F2 'shown' had
+ *                                        been turning it ON.
  *   F3 approach view  (insertion):      corner orb + daughters; lists go.
  *   F4 route planning (transfer):       daughters faint (out flying); rest go.
  *   F5 whole-Earth chart (survey):      chart + score + alerts only.
@@ -177,8 +188,8 @@ export const DEFAULT_ROOMS = Object.freeze({
     pin: 'gone', mother: 'gone', arms: 'gone', discoveries: 'gone', hints: 'gone',
   }),
   2: Object.freeze({
-    targets: 'shown', debris: 'shown', navsphere: 'shown', reticles: 'shown',
-    pin: 'shown', mother: 'shown', arms: 'shown', discoveries: 'shown', hints: 'shown',
+    targets: 'shown', debris: 'shown', navsphere: 'gone', reticles: 'shown',
+    pin: 'shown', mother: 'shown', arms: 'shown', discoveries: 'gone', hints: 'shown',
   }),
   3: Object.freeze({
     targets: 'gone', debris: 'gone', navsphere: 'shown', reticles: 'shown',
@@ -262,11 +273,22 @@ export class FloorMask {
     if (!this._resolve()) return;           // absent deps: state-only no-op
     if (this._floor === this._appliedFloor) return;   // idempotent
     this._captureMemory();
+    // A NEW room is about to apply: a pending clean-view stash (PaneDensity
+    // `-` = clear all, owner 2026-09-06) belonged to the departing floor's
+    // room — void it, so `+` on the arrival floor walks that floor's ladder
+    // and never restores floor 2's panes onto floor 4. Optional method.
+    this._dropDensityStash();
     if (this._floor === null) {
       this._restoreAll();
       return;
     }
     this._applyRoom(this._floor);
+  }
+
+  /** @private PaneDensity.dropStash() when the injected HUD has it (duck-typed). */
+  _dropDensityStash() {
+    const pd = this._hud && this._hud.paneDensity;
+    if (pd && typeof pd.dropStash === 'function') pd.dropStash();
   }
 
   /**

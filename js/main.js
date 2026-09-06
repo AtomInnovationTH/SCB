@@ -416,7 +416,8 @@ function _syncAudioCtxState() {
   // re-fires). Resuming from it is the only way sound comes back. Job 1 iPad
   // audit 2026-09-06; pinned (test-main-wiring). 'closed' is never resumed.
   if (should && (state === 'suspended' || state === 'interrupted')) {
-    audioSystem.ctx.resume();
+    const p = audioSystem.ctx.resume();
+    if (p && typeof p.catch === 'function') p.catch(() => {});   // review hygiene: never an unhandled rejection
   } else if (!should && state === 'running') {
     audioSystem.ctx.suspend();
   }
@@ -1877,6 +1878,14 @@ async function init() {
         ladderPaneRail.refresh({ force: true });
       }
     });
+    // CLEAN VIEW (owner, 2026-09-06): on the ladder, `-` clears EVERY pane in
+    // one press (pure scenery) and `+` from the cleared screen brings the room
+    // back in one press; the WHAT rail's notches still toggle singly. The
+    // flag lives on PaneDensity (HUD.js untouched — do-not-edit); it is read
+    // LIVE at press time, so this line lands after HUD.js's attach(). A
+    // `?ladder=0` boot never reaches here → the shipped one-rung `-`/`+`.
+    // FloorMask.setFloor voids the `+` stash when a new room applies.
+    if (hud && hud.paneDensity) hud.paneDensity.clearOnDown = true;
   }
   // (The Wave-3 ArchiveFloor bridge — the hosted codex as the old F1 costume —
   // left with the ARCHIVE row in the Session H 7→5 renumber. The Tech Library

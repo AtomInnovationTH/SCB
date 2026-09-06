@@ -302,7 +302,11 @@ class AudioSystem {
     if (!this.ctx) return;
     const s = this.ctx.state;
     if (s === 'suspended' || s === 'interrupted') {
-      this.ctx.resume();
+      // resume() returns a promise in browsers (a stub may return nothing);
+      // a rejection (NotAllowedError before any gesture) is not ours to
+      // surface — Job 1 review hygiene: never an unhandled rejection.
+      const p = this.ctx.resume();
+      if (p && typeof p.catch === 'function') p.catch(() => {});
     }
   }
 

@@ -22,25 +22,64 @@
  * The shared rail geometry (px = CSS px; on glass 1 CSS px = 1 pt).
  *
  *   EDGE_PX        inset from the screen edge (left:10px / right:10px)
- *   NOTCH_PX       notch pitch — the 40 pt row an iPad thumb can hit reliably
  *   SLOP_PX        tap hit slop (Apple HIG 44 pt): a pointerdown→pointerup pair
  *                  further apart than this is a drag, never a tap
  *   THUMB_REST_PX  the bottom band both rails must clear (two-thumb grip)
  *   IDLE_FADE      resting opacity after IDLE_FADE_MS without interaction
  *   IDLE_FADE_MS   the idle window (any tap / hover / populate wakes the rail)
- *   MAX_NOTCHES    the WHAT rail's height cap (8 × 40 pt + head fits an 11"
- *                  iPad landscape with the thumb rest clear; the rest goes
- *                  behind ONE `MORE` notch)
+ *   MAX_NOTCHES    the WHAT rail's height cap: the listed rows before the rest
+ *                  folds behind ONE `MORE` notch (8 keeps the rail a glance,
+ *                  not a menu; the rows themselves are the WHERE rail's
+ *                  compact text rows — owner 2026-09-06 — so height is no
+ *                  longer the constraint it was at 40 pt per row)
+ *
+ * (NOTCH_PX 40 — the fixed 40 pt WHAT-rail row — was RETIRED 2026-09-06: the
+ * WHAT rail now wears the WHERE rail's rows, which have no fixed height. The
+ * touch hit height of a notch is its text row, ~17 px + the 5 px gap — see
+ * the 03-plan Job 1 follow-up FINDINGS for the glass hit-size question.)
  */
 export const RAIL_GEOMETRY = Object.freeze({
   EDGE_PX: 10,
-  NOTCH_PX: 40,
   SLOP_PX: 44,
   THUMB_REST_PX: 100,
   IDLE_FADE: 0.35,
   IDLE_FADE_MS: 4000,
   MAX_NOTCHES: 8,
+  DODGE_GAP_PX: 8,
 });
+
+/**
+ * THE DODGE (owner, 2026-09-06: "the floor pane and the pane selector are
+ * overlapping other panes"). Mid-height is the DESIGN anchor (D-H, thumb
+ * reach), but the HUD columns on each side are top-anchored stacks whose
+ * height depends on the room (nav orb on, discoveries on, a long fleet…), so
+ * on a short screen a tall column reaches the rail's band. Rule: when the
+ * column on the rail's side ends below where the mid-height rail would START,
+ * the rail slides DOWN to sit DODGE_GAP_PX under the column — clamped so its
+ * bottom never enters the THUMB_REST_PX band. Returns the CSS `top` in px, or
+ * null = "mid-height as designed" (the column ends above the rail, or there
+ * is no room to dodge at all — then the rail stays put and the overlap is the
+ * lesser evil against a rail in the thumb rest). PURE: the caller measures.
+ *
+ *   dodgeTop({ railH:135, colBottom:480, innerH:800 })  → 488   (mid would be 332.5)
+ *   dodgeTop({ railH:223, colBottom:220, innerH:800 })  → null  (mid 288.5 already clears it)
+ *   dodgeTop({ railH:135, colBottom:700, innerH:800 })  → null  (708+135 > 700: no room)
+ *
+ * @param {{railH:number, colBottom:number, innerH:number}} m  measured px
+ *   (colBottom = the side column's bottom edge; pass -Infinity when the column
+ *   is absent / empty)
+ * @returns {number|null}
+ */
+export function dodgeTop({ railH, colBottom, innerH } = {}) {
+  const h = Number(railH), cb = Number(colBottom), ih = Number(innerH);
+  if (!(h > 0) || !(ih > 0) || Number.isNaN(cb)) return null;
+  const midTop = (ih - h) / 2;
+  const want = cb + RAIL_GEOMETRY.DODGE_GAP_PX;
+  if (!(want > midTop)) return null;                           // mid-height clears the column
+  const floor = ih - RAIL_GEOMETRY.THUMB_REST_PX - h;          // the lowest top that keeps the thumb rest
+  if (want > floor) return null;                               // cannot CLEAR the column above the thumb rest: stay mid
+  return Math.round(want);
+}
 
 /**
  * The inline-CSS fragment that anchors a rail MID-HEIGHT on one screen edge:

@@ -7,7 +7,9 @@
  * the two things the player arranges on the workbench and expects to find as
  * they left them after the SHOP and after a reload:
  *   - `rooms` — FloorMask's D5 per-floor pane memory, exactly its
- *     exportMemory() shape `{ floors: { "<floorId>": { "<paneId>": boolean } } }`;
+ *     exportMemory() shape `{ floors: { "<floorId>": { "<paneId>": boolean } } }`,
+ *     stamped with `roomsGen` (ROOMS_GENERATION — the DEFAULT_ROOMS generation
+ *     it was captured against; a stale stamp drops the rooms on load);
  *   - `panes` — the F3 workbench panes' open-state `{ refit, library }`.
  *
  * Stored in its OWN key, deliberately separate from the run save
@@ -45,6 +47,20 @@ const VIEW_KEY = StorageKeys.LADDER_VIEW;
 
 /** Envelope version — additive fields never bump it. */
 export const LADDER_VIEW_VERSION = 1;
+
+/**
+ * The DEFAULT-ROOMS generation the stored `rooms` were captured against.
+ * FloorMask._captureMemory records EVERY memory pane of a floor the moment any
+ * pane flips, so a player who ever touched a pane carries a full room row that
+ * outranks DEFAULT_ROOMS forever — a defaults change would never reach them.
+ * Bump this when DEFAULT_ROOMS changes: a stored envelope whose `roomsGen`
+ * differs (or is absent — the pre-stamp v2 writes) drops its ROOMS only; the
+ * `panes` memory and the key itself survive (the Session H key bump was the
+ * heavier tool — this is the surgical one). Written on every save.
+ *   1 — implicit: the Session G/H rooms (F2 = everything shown)
+ *   2 — 2026-09-06 (owner): F2 nav orb + discoveries gone by default
+ */
+export const ROOMS_GENERATION = 2;
 
 /** The shipped pane state: both workbench panes closed. */
 export const DEFAULT_PANES = Object.freeze({ refit: false, library: false });
@@ -182,7 +198,9 @@ export class LadderViewStore {
       if (!raw) return;
       const parsed = JSON.parse(raw);
       if (!parsed || typeof parsed !== 'object') return;
-      this._rooms = _sanitizeRooms(parsed.rooms);
+      // Rooms captured against an older DEFAULT_ROOMS generation are dropped
+      // (the new defaults must land); panes memory is generation-free.
+      this._rooms = (parsed.roomsGen === ROOMS_GENERATION) ? _sanitizeRooms(parsed.rooms) : null;
       this._panes = _sanitizePanes(parsed.panes);
       this._lastJson = this._serialize();
     } catch (_e) {
@@ -194,7 +212,7 @@ export class LadderViewStore {
 
   /** @private The envelope as written. */
   _serialize() {
-    return JSON.stringify({ v: LADDER_VIEW_VERSION, rooms: this._rooms, panes: this._panes });
+    return JSON.stringify({ v: LADDER_VIEW_VERSION, roomsGen: ROOMS_GENERATION, rooms: this._rooms, panes: this._panes });
   }
 
   /** @private Persist (non-fatal on failure; skipped when nothing changed). */

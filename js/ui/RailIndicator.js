@@ -52,7 +52,12 @@
 
 import { FloorContract } from '../core/FloorContract.js';
 import { VisualLaw } from '../core/VisualLaw.js';
-import { midHeightCss } from './RailGeometry.js';
+import { midHeightCss, dodgeTop } from './RailGeometry.js';
+
+/** The HUD column on the WHERE rail's side — what the dodge measures (HUD.js's right stack). */
+export const SIDE_COLUMN_ID = 'hud-right-column';
+/** The dodge's layout read runs at most this often (the per-frame HUD-poll law: ≤ 1 Hz). */
+export const DODGE_MIN_MS = 1000;
 
 /** Denial toast hold time (ms) — fade handled by the 0.3 s opacity transition. */
 const TOAST_HOLD_MS = 1800;
@@ -83,6 +88,9 @@ const INVITE_FLOOR = 1;
 export class RailIndicator {
   constructor() {
     this._root = null;
+    /** @private the dodge: last applied top (null = mid-height) + last layout read */
+    this._dodgeTop = null;
+    this._dodgeAtMs = -Infinity;
     this._toast = null;
     this._notches = [];   // per-floor { el, fill, _cur, _pct, _deny, _denyTimer } (index 0 = F1)
     this._visible = false;
@@ -330,6 +338,36 @@ export class RailIndicator {
         n.fill.style.width = `${fillPct}%`;
         n._pct = fillPct;
       }
+    }
+    this._applyDodge();
+  }
+
+  /**
+   * @private THE DODGE (RailGeometry.dodgeTop; owner 2026-09-06): the rail
+   * slides under the RIGHT HUD column when mid-height would overlap it, and
+   * back to mid-height when it clears (a room change, a resize). ONE layout
+   * read per DODGE_MIN_MS (refresh runs per frame — the ≤ 1 Hz poll law);
+   * write-on-change on `top`/`transform`. Headless / no column → mid-height.
+   */
+  _applyDodge() {
+    const root = this._root;
+    if (!root || typeof document === 'undefined' || typeof root.getBoundingClientRect !== 'function') return;
+    const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    if (now - this._dodgeAtMs < DODGE_MIN_MS) return;
+    this._dodgeAtMs = now;
+    const col = document.getElementById(SIDE_COLUMN_ID);
+    const cr = (col && typeof col.getBoundingClientRect === 'function') ? col.getBoundingClientRect() : null;
+    const colBottom = (cr && cr.height > 0) ? cr.bottom : -Infinity;
+    const innerH = (typeof window !== 'undefined') ? Number(window.innerHeight) : 0;
+    const top = dodgeTop({ railH: root.getBoundingClientRect().height, colBottom, innerH });
+    if (top === this._dodgeTop) return;
+    this._dodgeTop = top;
+    if (top == null) {
+      root.style.top = '50%';
+      root.style.transform = 'translateY(-50%)';
+    } else {
+      root.style.top = `${top}px`;
+      root.style.transform = 'none';
     }
   }
 

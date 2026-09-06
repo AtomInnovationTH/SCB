@@ -48,7 +48,7 @@
  */
 
 import { VisualLaw } from '../core/VisualLaw.js';
-import { RAIL_GEOMETRY, midHeightCss } from './RailGeometry.js';
+import { RAIL_GEOMETRY, midHeightCss, dodgeTop } from './RailGeometry.js';
 
 // ── Tunables (own-module exports; the house rule) ───────────────────────────
 
@@ -77,6 +77,8 @@ export const MORE_ID = '__more';
 export const STYLE_ID = 'pane-rail-style';
 /** Root element id. */
 export const ROOT_ID = 'ladder-pane-rail';
+/** The HUD column on the WHAT rail's side — what the dodge measures (HUD.js's left stack). */
+export const SIDE_COLUMN_ID = 'hud-left-column';
 /** Fade transition for the root opacity (ms) — the WHERE rail's 0.3 s. */
 const ROOT_FADE_MS = 300;
 
@@ -161,6 +163,8 @@ export class PaneRail {
     this._plan = { listed: [], rest: [] };
     this._planKey = null;
     this._lastScanMs = -Infinity;
+    /** @private the dodge's last applied top (null = mid-height) — write-on-change */
+    this._dodgeTop = null;
     // Idle fade (RefitPane pattern): activity clock, flag, timer.
     this._lastActivityMs = this._now();
     this._idle = false;
@@ -211,13 +215,16 @@ export class PaneRail {
   }
 
   /**
-   * Notch text law: the rung label UPPERCASE, plus the hotkey suffix glyph
+   * Notch text law: the rung label UPPERCASE with a trailing " PANE" dropped
+   * (owner, 2026-09-06: the WHAT rail wears the WHERE rail's compact rows —
+   * `TARGET ·0` beside a floor row, not `TARGET PANE ·0`; every notch on this
+   * rail IS a pane, the word carried nothing), plus the hotkey suffix glyph
    * (` ·0` — a middle dot then the digit) when the table maps this id.
    * @param {string} label @param {string|undefined|null} key
    * @returns {{text:string, key:string}} key = '' when unmapped
    */
   static notchLabel(label, key) {
-    const text = String(label == null ? '' : label).toUpperCase();
+    const text = String(label == null ? '' : label).toUpperCase().replace(/\s+PANE$/, '');
     const k = (typeof key === 'string' && key.length) ? `\u00b7${key}` : '';
     return { text, key: k };
   }
@@ -447,6 +454,35 @@ export class PaneRail {
     }
     if (promote) { this._replan(false); return; }
     this._paintAll();
+    this._applyDodge();
+  }
+
+  /**
+   * @private THE DODGE (RailGeometry.dodgeTop): the rail slides under the LEFT
+   * HUD column when mid-height would overlap it, back to mid-height when it
+   * clears. Runs inside the 1 Hz scan (the ONE layout read per second this
+   * module makes — the per-frame law); write-on-change on `top`/`transform`.
+   * Headless / no column element → mid-height (nothing measured, nothing written).
+   */
+  _applyDodge() {
+    const root = this._root;
+    const doc = this._doc;
+    if (!root || !doc || typeof root.getBoundingClientRect !== 'function' || typeof doc.getElementById !== 'function') return;
+    const win = doc.defaultView || (typeof window !== 'undefined' ? window : null);
+    const innerH = win ? Number(win.innerHeight) : 0;
+    const col = doc.getElementById(SIDE_COLUMN_ID);
+    const cr = (col && typeof col.getBoundingClientRect === 'function') ? col.getBoundingClientRect() : null;
+    const colBottom = (cr && cr.height > 0) ? cr.bottom : -Infinity;
+    const top = dodgeTop({ railH: root.getBoundingClientRect().height, colBottom, innerH });
+    if (top === this._dodgeTop) return;
+    this._dodgeTop = top;
+    if (top == null) {
+      root.style.top = '50%';
+      root.style.transform = 'translateY(-50%)';
+    } else {
+      root.style.top = `${top}px`;
+      root.style.transform = 'none';
+    }
   }
 
   /** @private */
@@ -499,7 +535,7 @@ export class PaneRail {
     const root = doc.createElement('div');
     root.id = ROOT_ID;
     root.style.cssText = midHeightCss('left') + [
-      'display:flex', 'flex-direction:column-reverse', 'gap:4px',
+      'display:flex', 'flex-direction:column-reverse', 'gap:5px',
       'font-family:"Courier New",monospace', 'font-size:0.6rem', 'letter-spacing:0.08em',
       'text-transform:uppercase',
       'padding:6px 8px 6px 6px',
@@ -511,12 +547,16 @@ export class PaneRail {
 
     // The notch column — rebuilt on every populate; a child of the root so the
     // head (appended after it) stays at the top of the column-reverse root.
+    // gap 5px = the WHERE rail's row gap (RailIndicator root) — the two rails
+    // read as one instrument family.
     const stack = doc.createElement('div');
     stack.className = 'pane-rail-stack';
-    stack.style.cssText = 'display:flex;flex-direction:column-reverse;gap:4px';
+    stack.style.cssText = 'display:flex;flex-direction:column-reverse;gap:5px';
     root.appendChild(stack);
 
-    // HEAD cap: the rail's name and the long-press RESET ROOM target.
+    // HEAD cap: the rail's name and the long-press RESET ROOM target. Styled
+    // as the WHERE rail's warp readout row (its head): INFO colour, one text
+    // row, no fixed height (owner 2026-09-06 — the compact rows).
     const head = doc.createElement('div');
     head.className = 'pane-rail-head';
     head.textContent = 'WHAT';
@@ -524,7 +564,7 @@ export class PaneRail {
       'padding:0 8px 2px', 'text-align:left', 'white-space:nowrap',
       `color:${VisualLaw.COLORS.INFO}`, 'font-size:0.62rem', 'letter-spacing:0.12em',
       'opacity:0.85', 'pointer-events:auto', 'cursor:default',
-      `min-height:${RAIL_GEOMETRY.NOTCH_PX / 2}px`, 'display:flex', 'align-items:flex-end',
+      'display:flex', 'align-items:flex-end',
     ].join(';');
     this._bindHead(head);
     root.appendChild(head);
@@ -623,11 +663,19 @@ export class PaneRail {
     this._applyExpanded();
   }
 
-  /** @private 40 px notch, left-aligned text toward the edge, hit surface opt-in. */
+  /**
+   * @private ONE notch row = the WHERE rail's notch row (RailIndicator:
+   * `min-width:96px; padding:2px 8px; 1px border; radius 3px; the same plate`)
+   * mirrored to left-aligned text toward its edge — the compact vertical style
+   * the owner asked for (2026-09-06; was a fixed 40 px row). No fixed height:
+   * the row is the text's own height (~17 px at 0.6rem), so the rail is
+   * ~4 px per row taller than the WHERE rail's and reads as its twin. Hit
+   * surface opt-in (the root is pointer-events:none).
+   */
   _notchCss() {
     return [
-      'position:relative', `height:${RAIL_GEOMETRY.NOTCH_PX}px`, 'box-sizing:border-box',
-      'min-width:96px', 'padding:0 8px', 'display:flex', 'align-items:center',
+      'position:relative', 'box-sizing:border-box',
+      'min-width:96px', 'padding:2px 8px', 'display:flex', 'align-items:center',
       `border:1px solid ${NOTCH_REST_BORDER}`, 'border-radius:3px',
       'background:rgba(0,14,28,0.55)', `color:${NOTCH_REST_COLOR}`,
       'text-align:left', 'white-space:nowrap', 'overflow:hidden',

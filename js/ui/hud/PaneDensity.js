@@ -55,6 +55,17 @@ export class PaneDensity {
     this._onFlip = typeof onFlip === 'function' ? onFlip : null;
     /** @private true while setLevel() walks — per-step notices are silenced. */
     this._silent = false;
+    /**
+     * CLEAN VIEW (owner, 2026-09-06; Zoom Ladder only — main.js flips this
+     * inside the LADDER gate, so a `?ladder=0` boot keeps the shipped
+     * one-rung `-`/`+`): while true the bus `-` CLEARS every pane in one
+     * press (clearAll) and the bus `+` from a cleared screen RESTORES the
+     * room that was showing (restore) — one press each way. Default false.
+     * @type {boolean}
+     */
+    this.clearOnDown = false;
+    /** @private the rung ids a clearAll() hid — what `+` brings back; null = none */
+    this._stash = null;
   }
 
   /** Total rung count — the touch slider's max (iPad port, Ipad.md §5.1). */
@@ -173,15 +184,75 @@ export class PaneDensity {
 
   /**
    * Wire the ladder to the event bus. Kept out of the constructor so tests can
-   * drive `down()` / `up()` directly without an event bus.
+   * drive `down()` / `up()` directly without an event bus. The routing reads
+   * `clearOnDown` LIVE at press time (main.js sets it after attach, inside the
+   * LADDER gate): false → the shipped one-rung walk; true → the clean view.
    * @param {{on: Function}} bus
    * @param {{HUD_DENSITY_DOWN: string, HUD_DENSITY_UP: string}} events
    */
   attach(bus, events) {
     if (!bus || !events) return;
-    bus.on(events.HUD_DENSITY_DOWN, () => this.down());
-    bus.on(events.HUD_DENSITY_UP, () => this.up());
+    bus.on(events.HUD_DENSITY_DOWN, () => (this.clearOnDown ? this.clearAll() : this.down()));
+    bus.on(events.HUD_DENSITY_UP, () => ((this.clearOnDown && this._stash && this.visibleCount() === 0)
+      ? this.restore() : this.up()));
   }
+
+  /**
+   * CLEAN VIEW `-` — hide EVERY visible rung in one press and remember which
+   * they were (the stash `+` restores). Each hide is a real down() step (the
+   * onFlip edge fires per rung → the D5 room memory records the clean room,
+   * exactly as eight `-` presses would). Already clear → the shipped no-op
+   * notice, and the previous stash is KEPT (a second `-` must not forget the
+   * room). ONE notice.
+   * @returns {number} rungs hidden
+   */
+  clearAll() {
+    const shown = this.rungs.filter((r) => this._safeVisible(r)).map((r) => r.id);
+    if (!shown.length) {
+      this._notify('HUD already clear · + restores');
+      return 0;
+    }
+    const steps = this.setLevel(0, { quiet: true });
+    if (steps > 0) this._stash = shown;
+    const text = 'HUD clear — pure scenery · + restores';
+    this._notify(text);
+    this._log(text);
+    return steps;
+  }
+
+  /**
+   * CLEAN VIEW `+` — bring back the stashed room: every stashed rung that is
+   * still hidden is shown (onFlip per rung), the stash is consumed, ONE
+   * summary notice. Rungs the player re-showed by hand meanwhile are left
+   * alone; a stashed id that no longer exists is skipped. No stash → 0 and
+   * nothing happens (attach() falls through to the shipped up() instead).
+   * @returns {number} rungs shown
+   */
+  restore() {
+    const stash = this._stash;
+    this._stash = null;
+    if (!stash || !stash.length) return 0;
+    let shown = 0;
+    for (const id of stash) {
+      const rung = this.rungs.find((r) => r && r.id === id);
+      if (!rung || this._safeVisible(rung)) continue;
+      rung.setVisible(true);
+      if (this._onFlip) this._onFlip(rung.id, true);
+      shown++;
+    }
+    if (shown > 0) this.announceLevel();
+    return shown;
+  }
+
+  /**
+   * Forget the stash (the hub calls this on a FLOOR CHANGE: a room stashed on
+   * floor 2 must never be restored onto floor 4 — the new floor's own room
+   * applies and `+` walks the shipped ladder there).
+   */
+  dropStash() { this._stash = null; }
+
+  /** @returns {boolean} true while a clearAll() stash is waiting for `+` */
+  hasStash() { return !!(this._stash && this._stash.length); }
 
   /** @private Defensive isVisible() — a throwing/absent adapter reads as hidden. */
   _safeVisible(rung) {
