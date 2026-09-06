@@ -164,7 +164,10 @@
         "news_starlink_storm",
         "news_iss_pallet",
         "news_aeolus_reentry",
-        "vleo_survival"
+        "vleo_survival",
+        "band_180_400",
+        "band_400_600",
+        "band_600_900"
       ],
       "i18n": {
         "title": "Atmospheric Drag",
@@ -214,7 +217,14 @@
         "orbital_period_altitude",
         "prograde_paradox",
         "thaicom_graveyard",
-        "news_thaicom4"
+        "news_thaicom4",
+        "cluster_canaveral",
+        "cluster_iss",
+        "cluster_russian65",
+        "cluster_russian72",
+        "cluster_russian_sso",
+        "cluster_sso",
+        "cluster_scattered"
       ],
       "i18n": {
         "title": "Hohmann Transfer",
@@ -236,7 +246,9 @@
       "related": [
         "raan_precession",
         "orbital_inclination",
-        "keplerian_orbit"
+        "keplerian_orbit",
+        "cluster_russian65",
+        "cluster_sso"
       ],
       "i18n": {
         "title": "J2 Oblateness",
@@ -282,7 +294,14 @@
       "related": [
         "keplerian_orbit",
         "j2_perturbation",
-        "raan_precession"
+        "raan_precession",
+        "cluster_canaveral",
+        "cluster_iss",
+        "cluster_russian65",
+        "cluster_russian72",
+        "cluster_russian_sso",
+        "cluster_sso",
+        "cluster_scattered"
       ],
       "i18n": {
         "title": "Orbital Inclination",
@@ -307,7 +326,12 @@
         "relative_velocity",
         "hohmann_transfer",
         "thaicom_graveyard",
-        "catalog_vanguard1"
+        "catalog_vanguard1",
+        "band_180_400",
+        "band_400_600",
+        "band_600_900",
+        "band_900_1200",
+        "band_1200_2000"
       ],
       "i18n": {
         "title": "Period vs Altitude",
@@ -329,7 +353,8 @@
       "related": [
         "j2_perturbation",
         "orbital_inclination",
-        "keplerian_orbit"
+        "keplerian_orbit",
+        "cluster_sso"
       ],
       "i18n": {
         "title": "RAAN Precession",
@@ -350,7 +375,8 @@
       "related": [
         "rendezvous",
         "prograde_paradox",
-        "orbital_period_altitude"
+        "orbital_period_altitude",
+        "cluster_scattered"
       ],
       "i18n": {
         "title": "Relative Velocity in LEO",
@@ -1211,7 +1237,10 @@
         "catalog_kosmos1408",
         "news_yunhai_collision",
         "news_ast_spacemobile",
-        "news_starlink_breakup"
+        "news_starlink_breakup",
+        "band_600_900",
+        "band_900_1200",
+        "band_1200_2000"
       ],
       "i18n": {
         "title": "Kessler Syndrome",
@@ -1910,7 +1939,8 @@
         "breakup_events",
         "kessler_syndrome",
         "catalog_fengyun1c",
-        "catalog_kosmos1408"
+        "catalog_kosmos1408",
+        "band_600_900"
       ],
       "i18n": {
         "title": "FengYun-1C ASAT Test",
@@ -2100,7 +2130,9 @@
         "conjunction_assessment",
         "fengyun_test",
         "catalog_cosmos_iridium",
-        "iridium_avionics"
+        "iridium_avionics",
+        "cluster_russian72",
+        "band_600_900"
       ],
       "i18n": {
         "title": "The Iridium-Cosmos Collision",
@@ -2979,7 +3011,9 @@
         "adr_methods_real",
         "conjunction_assessment",
         "debris_classification",
-        "catalog_kosmos482"
+        "catalog_kosmos482",
+        "cluster_sso",
+        "band_600_900"
       ],
       "i18n": {
         "title": "Envisat: The 8-Tonne Derelict",
@@ -3332,7 +3366,8 @@
         "kessler_syndrome",
         "fengyun_test",
         "hypervelocity",
-        "catalog_kosmos1408"
+        "catalog_kosmos1408",
+        "cluster_sso"
       ],
       "i18n": {
         "title": "Fengyun-1C: The Worst Cloud",
@@ -3386,7 +3421,9 @@
       "related": [
         "adr_methods_real",
         "kessler_syndrome",
-        "world_who_removes"
+        "world_who_removes",
+        "cluster_russian72",
+        "band_600_900"
       ],
       "i18n": {
         "title": "SL-16 Rocket Bodies: The Heavy Hazards",
@@ -3404,7 +3441,8 @@
       "related": [
         "atmospheric_drag",
         "kessler_syndrome",
-        "news_iss_pallet"
+        "news_iss_pallet",
+        "cluster_scattered"
       ],
       "i18n": {
         "title": "Long March 5B: The Falling Core",
@@ -3423,7 +3461,8 @@
         "kessler_syndrome",
         "fengyun_test",
         "conjunction_assessment",
-        "catalog_fengyun1c"
+        "catalog_fengyun1c",
+        "cluster_russian_sso"
       ],
       "i18n": {
         "title": "Kosmos 1408: The 2021 Debris Cloud",
@@ -3808,7 +3847,8 @@
       "related": [
         "world_adr_mandate",
         "world_why_now",
-        "adr_methods_real"
+        "adr_methods_real",
+        "band_400_600"
       ],
       "i18n": {
         "title": "The Five-Year Rule",
@@ -4480,7 +4520,8 @@
       "related": [
         "atmospheric_drag",
         "edt_deorbit",
-        "mli_insulation"
+        "mli_insulation",
+        "band_180_400"
       ],
       "i18n": {
         "title": "Surviving VLEO",
@@ -4870,6 +4911,271 @@
         "realWorld": "Standard mechanical interfaces let hardware be added in orbit: ISS FRAM plates and orbital replacement units, servicer docking plates (Astroscale ELSA-d), Northrop Grumman’s Mission Extension Pods bolted onto client satellites.",
         "trlRationale": "Standardised attachment interfaces are flight heritage on the ISS and on commercial servicing missions.",
         "unlockHint": "Buy an aft flower pair, then zoom in and click a strut tip on the hull."
+      }
+    },
+    {
+      "id": "cluster_canaveral",
+      "category": "ORBITAL_MECHANICS",
+      "trl": 9,
+      "icon": "📐",
+      "startUnlocked": true,
+      "related": [
+        "orbital_inclination",
+        "hohmann_transfer",
+        "cluster_iss"
+      ],
+      "i18n": {
+        "title": "The 28.5° Family: Cape Canaveral",
+        "shortText": "Launch due east from the Cape and you inherit its latitude, 28.5°, for free. Half a century of US hardware lives in that tilt.",
+        "fullText": "An orbit's inclination can never be lower than the latitude of the pad that launched it without a costly dogleg, so a due-east launch from Cape Canaveral at 28.5° N lands in a 28.5° orbit. That is the cheapest plane on the US East Coast, and it caught most of the early Explorers, the Shuttle's low-inclination missions and the Hubble Space Telescope, which still circles a little above 500 km at this tilt.\n\nWhat you find here is old and mostly American: spent upper stages, adapters and the odd dead payload, plus the perigee ends of geostationary transfer orbits, since GTO departures from the Cape start within a few degrees of this plane. Reaching it from the station's 51.6° family means a 23° plane change, about 3 km/s at 7.7 km/s of orbital speed: far more than any Hohmann hop between altitudes. Work this family only when you are already in it.",
+        "realWorld": "Cape Canaveral sits at 28.5° N; a due-east launch inherits the pad latitude as its minimum inclination. Hubble (1990) flies at 28.5°, now a little above 500 km and slowly decaying; US geostationary transfer orbits leave from within a few degrees of this plane.",
+        "trlRationale": "Launch-site geometry; the population reads straight off the public catalog.",
+        "unlockHint": "Aim at a Cape Canaveral cluster at the route-planning zoom, then open SPECS."
+      }
+    },
+    {
+      "id": "cluster_iss",
+      "category": "ORBITAL_MECHANICS",
+      "trl": 9,
+      "icon": "📐",
+      "startUnlocked": true,
+      "related": [
+        "orbital_inclination",
+        "hohmann_transfer",
+        "cluster_canaveral",
+        "band_400_600"
+      ],
+      "i18n": {
+        "title": "The 51.6° Family: The Station Plane",
+        "shortText": "51.6° is Baikonur's compromise: the lowest tilt a Soyuz can fly without dropping stages on China. The ISS inherited it.",
+        "fullText": "Baikonur sits at 45.6° N, but a due-east launch would carry spent stages over China, so Soviet crewed flights settled on a 51.6° azimuth instead. Salyut and Mir flew there, and when the International Space Station had to be reachable from both Baikonur and Florida, 51.6° was the only plane that worked: the Shuttle paid a payload penalty to reach it, the Soyuz paid nothing. The station has held that tilt near 400-420 km since 1998.\n\nThe classifier folds anything within 3° of 51.6° into this family, which pulls in the Starlink 53° shells near 550 km and Globalstar at 1,414 km along with decades of Progress and Soyuz hardware. It is the busiest crewed plane in orbit, so a fragment here is a fragment on the station's track. Plane changes out of it are the usual tax: about 1.8 km/s to the 65° family and 3 km/s down to the Cape's 28.5°. Match the plane first; the altitude hop after it is the cheap part.",
+        "realWorld": "ISS: 51.6°, 400-420 km, continuously crewed since 2000. Baikonur is at 45.6° N; 51.6° is its standard crewed azimuth (Salyut, Mir, Soyuz). Starlink Group 1 shells: 53° at ~550 km. Globalstar: 52° at 1,414 km.",
+        "trlRationale": "The station's orbit and its launch geometry are public record.",
+        "unlockHint": "Aim at an ISS Band cluster at the route-planning zoom, then open SPECS."
+      }
+    },
+    {
+      "id": "cluster_russian65",
+      "category": "ORBITAL_MECHANICS",
+      "trl": 9,
+      "icon": "📐",
+      "startUnlocked": true,
+      "related": [
+        "orbital_inclination",
+        "hohmann_transfer",
+        "j2_perturbation",
+        "band_900_1200"
+      ],
+      "i18n": {
+        "title": "The 65° Family: Tsyklon Country",
+        "shortText": "The 65° plane is Soviet ocean surveillance: Tsyklon-2 stages and the parked reactor cores of the RORSAT fleet.",
+        "fullText": "From 1967 to 2006 Baikonur's Tsyklon-2 flew almost every launch into a 65° orbit, carrying the US-A radar ocean-reconnaissance satellites (RORSAT) and their US-P electronic-intelligence cousins. The radar birds ran a nuclear reactor at about 250-270 km; at end of life the core was boosted into a disposal orbit near 950 km, where the spent Buk reactors still circle. Their leaked sodium-potassium coolant left a cloud of metal droplets in the same shell.\n\nThe plane also brushes the 63.4° critical inclination, where Earth's oblateness stops swinging an ellipse's perigee around, which is why Molniya's twelve-hour orbits sit just inside this family's tilt. For salvage the lesson is the same as everywhere: 65° is 13° from the station family and 7° from the 72° family, about 1.8 and 0.9 km/s of plane change respectively, so a cluster here is worked from inside its own plane or not at all. The reactor cores are heavy, radioactive and on nobody's salvage manifest.",
+        "realWorld": "Tsyklon-2 flew from Baikonur 1967-2006, almost entirely to 65°. RORSAT reactors were boosted to ~950 km disposal orbits after use; Kosmos 954 failed to boost and scattered radioactive debris over Canada in January 1978. GLONASS also uses 64.8°, but at 19,100 km.",
+        "trlRationale": "Public launch records and the RORSAT disposal-orbit population documented by NASA and ESA debris offices.",
+        "unlockHint": "Aim at a Russian 65° cluster at the route-planning zoom, then open SPECS."
+      }
+    },
+    {
+      "id": "cluster_russian72",
+      "category": "ORBITAL_MECHANICS",
+      "trl": 9,
+      "icon": "📐",
+      "startUnlocked": true,
+      "related": [
+        "orbital_inclination",
+        "hohmann_transfer",
+        "catalog_sl16",
+        "iridium_cosmos",
+        "band_600_900"
+      ],
+      "i18n": {
+        "title": "The 72° Family: Zenit Stages and Strela",
+        "shortText": "Zenit-2's nine-tonne second stages at 71° and the Strela relay fleets at 74° make this the heaviest family of Soviet junk.",
+        "fullText": "Two Soviet programmes fill the 70-74° tilt. Zenit-2 launched the Tselina-2 signals-intelligence satellites from Baikonur into 71° orbits near 850 km, and each flight left its second stage, the SL-16 of the catalogs, in the same orbit: an intact steel cylinder of roughly nine tonnes. From Plesetsk the Kosmos-3M put the Strela store-and-forward relays into 74° orbits, and it was a Strela-2M, Cosmos 2251, that hit Iridium 33 at 789 km in 2009.\n\nThe mass sits at the top of the shell, 800-1,000 km, where drag will not clear it for centuries. The SL-16 stages are the top-ranked removal targets in most published risk studies because one collision among them could seed a cascade. For your plan, 72° is a 7° change from the 65° family (about 0.9 km/s) and 10° from the 82° family (about 1.3 km/s), so this is a plane to commit to for a long campaign, with the biggest single hauls in low orbit waiting at the end of it.",
+        "realWorld": "Zenit-2/Tselina-2: 71°, ~850 km; SL-16 second stages ~8.8-9 t, ~17-20 in orbit near 800-1,000 km. Cosmos 2251 (a Strela-2M at 74°) collided with Iridium 33 on 10 Feb 2009 at ~789 km.",
+        "trlRationale": "Catalogued population; the SL-16 risk ranking is a published 2020 analysis.",
+        "unlockHint": "Aim at a Russian 72° cluster at the route-planning zoom, then open SPECS."
+      }
+    },
+    {
+      "id": "cluster_russian_sso",
+      "category": "ORBITAL_MECHANICS",
+      "trl": 9,
+      "icon": "📐",
+      "startUnlocked": true,
+      "related": [
+        "orbital_inclination",
+        "hohmann_transfer",
+        "catalog_kosmos1408",
+        "band_900_1200"
+      ],
+      "i18n": {
+        "title": "The 82° Family: Plesetsk Near-Polar",
+        "shortText": "Plesetsk's 82-83° near-polar plane: Meteor weather birds, Tselina-D listeners, Parus navsats and the 2021 Kosmos 1408 cloud.",
+        "fullText": "Plesetsk at 62.9° N is the world's northernmost major cosmodrome, and its workhorse azimuth put payloads into 82-83° orbits: near-polar, but not sun-synchronous, which needs about 98°. Tsyklon-3 carried the Meteor weather satellites and Tselina-D listeners there; Kosmos-3M carried the Parus and Tsikada navigation fleets to about 1,000 km at 83°. Each launch left an upper stage behind, and the Kosmos-3M stages are one of the most numerous rocket-body families in the catalog.\n\nThe family made news in November 2021 when Russia destroyed Kosmos 1408, a dead Tselina-D at 82.6° and about 480 km, with a missile; the ISS crew sheltered as roughly 1,500 trackable fragments spread out. Most of that low cloud has since decayed. The older hardware near 1,000 km has not, and will not for a thousand years. From the 72° family this plane is a 10° change, about 1.3 km/s; from sun-synchronous, 15°, about 2 km/s. Cross to it once, then stay.",
+        "realWorld": "Plesetsk is at 62.9° N. Meteor, Tselina-D and Parus/Tsikada payloads fly near 82-83°; Parus/Tsikada at ~1,000 km. Kosmos 1408 (Tselina-D, 82.6°) was destroyed by a Russian ASAT test on 15 Nov 2021: ~1,500 trackable fragments.",
+        "trlRationale": "Public launch records; the Kosmos 1408 event is documented by US Space Command and ESA.",
+        "unlockHint": "Aim at a Russian SSO cluster at the route-planning zoom, then open SPECS."
+      }
+    },
+    {
+      "id": "cluster_sso",
+      "category": "ORBITAL_MECHANICS",
+      "trl": 9,
+      "icon": "📐",
+      "startUnlocked": true,
+      "related": [
+        "orbital_inclination",
+        "hohmann_transfer",
+        "raan_precession",
+        "j2_perturbation",
+        "catalog_envisat",
+        "catalog_fengyun1c",
+        "band_600_900"
+      ],
+      "i18n": {
+        "title": "The 98° Family: Sun-Synchronous",
+        "shortText": "Tilt an orbit to about 98° and Earth's bulge turns its plane once a year, locking it to the Sun. Every imaging fleet lives here.",
+        "fullText": "Earth's equatorial bulge (the J2 term) drags an orbit's node westward, faster the lower and flatter the orbit. Tilt a 700 km orbit slightly retrograde, to about 98°, and the drift runs eastward at 0.986° a day, one lap a year: the plane keeps the same angle to the Sun and the ground below is lit the same way on every pass. Landsat, Sentinel, the SPOT and Pleiades imagers, the polar weather satellites and hundreds of smallsats all buy that constant lighting with the same tilt.\n\nThe result is the most crowded plane in low orbit, stacked from 500 to 900 km. It holds Envisat, eight tonnes drifting near 770 km, and the Fengyun-1C cloud from the 2007 test at 865 km. Two sun-synchronous orbits with different local times are still different planes, and the node cost adds to the inclination cost, so even inside this family you pay to switch. The 15° gap to the 82° family costs about 2 km/s; treat a sun-synchronous cluster as its own campaign and clear it altitude by altitude.",
+        "realWorld": "Sun-synchronous orbits need ~98° at 700-800 km (Landsat 8: 705 km, 98.2°; Sentinel-2: 786 km, 98.6°). Envisat: 98.5°, ~770 km, 8.2 t, silent since 2012. Fengyun-1C was destroyed on 11 Jan 2007 at ~865 km, 98.8°.",
+        "trlRationale": "J2 nodal precession is the basis of every sun-synchronous mission since the 1960s.",
+        "unlockHint": "Aim at an SSO Band cluster at the route-planning zoom, then open SPECS."
+      }
+    },
+    {
+      "id": "cluster_scattered",
+      "category": "ORBITAL_MECHANICS",
+      "trl": 9,
+      "icon": "📐",
+      "startUnlocked": true,
+      "related": [
+        "orbital_inclination",
+        "hohmann_transfer",
+        "relative_velocity",
+        "catalog_cz5b"
+      ],
+      "i18n": {
+        "title": "Scattered: Outside the Named Families",
+        "shortText": "Everything that fits no family: 41° Chinese stages, 87-90° polar fleets, one-off test orbits. Each is its own plane and its own bill.",
+        "fullText": "The classifier sorts debris into six named inclination families and calls the rest scattered: anything that sits too far from every family centre. That catches the 41° core stages of China's Long March 5B out of Wenchang, the Iridium and OneWeb constellations at 86-88°, the old US Transit navsats at 90°, plus every oddball test orbit and transfer stage in between. The tag means nobody built a neighbourhood here; it does not mean the pieces are small.\n\nFor a salvage plan that is the whole story. Two scattered clusters share nothing, so the plane-change tax applies between every pair: at 7.7 km/s a 10° change costs about 1.3 km/s and 45° costs nearly 6 km/s, most of an orbital velocity spent going nowhere. Crossing planes at these angles is also where relative speeds are worst: two 800 km orbits 90° apart meet at over 10 km/s. Pick one scattered cluster, work it, and let the rest keep drifting until the tanks say otherwise.",
+        "realWorld": "Long March 5B core stages (2020-2022) orbited near 41° before their uncontrolled reentries. Iridium flies at 86.4° (780 km), OneWeb at 87.9° (1,200 km). Two circular 800 km orbits crossing at 90° meet at about 10.5 km/s.",
+        "trlRationale": "Catalog inclination distribution; the plane-change and crossing-speed figures follow from the orbital velocity geometry.",
+        "unlockHint": "Aim at a Scattered cluster at the route-planning zoom, then open SPECS."
+      }
+    },
+    {
+      "id": "band_180_400",
+      "category": "DEBRIS",
+      "trl": 9,
+      "icon": "💥",
+      "startUnlocked": true,
+      "related": [
+        "atmospheric_drag",
+        "orbital_period_altitude",
+        "vleo_survival",
+        "band_400_600"
+      ],
+      "i18n": {
+        "title": "180-400 km: Very Low Earth Orbit",
+        "shortText": "The drag shelf. Below 400 km the air wins in months, so this band is self-cleaning: nothing stays without an engine.",
+        "fullText": "Below 400 km the residual atmosphere is thin enough to orbit through and thick enough to notice on every pass. Lifetimes are short: a dead satellite at 300 km reenters within months, at 200 km within days, and the top of the band buys a year or two at most. Tiangong holds near 390 km on regular reboosts, and the ISS keeps just above the band's ceiling at about 420 km, spending propellant on 2 km of lost altitude a month.\n\nThat decay is the salvage economics of the band. Debris here needs no deorbit burn from you; the atmosphere is already doing it, and every freshly broken cloud, including most of the 2021 Kosmos 1408 fragments from 480 km, works its way down through this shelf on the way out. What is here is transient: recent stages, fresh fragments, a crewed station's neighbourhood. There is no long game at this height, and your own orbit decays as fast as the target's.",
+        "realWorld": "Tiangong orbits near 390 km; the ISS near 420 km loses ~2 km/month and reboosts. Objects below ~200 km reenter within days, at ~300 km within months. GOCE held 255 km only on continuous ion thrust (2009-2013).",
+        "trlRationale": "Decay rates in this band are measured on every reentry since Sputnik 1.",
+        "unlockHint": "Aim at a cluster below 400 km at the route-planning zoom, then open SPECS."
+      }
+    },
+    {
+      "id": "band_400_600",
+      "category": "DEBRIS",
+      "trl": 9,
+      "icon": "💥",
+      "startUnlocked": true,
+      "related": [
+        "atmospheric_drag",
+        "orbital_period_altitude",
+        "world_five_year_rule",
+        "cluster_iss",
+        "band_180_400",
+        "band_600_900"
+      ],
+      "i18n": {
+        "title": "400-600 km: The Constellation Shell",
+        "shortText": "Station height to the Starlink shell. Drag still clears this band in years, which is why the megaconstellations chose it.",
+        "fullText": "This is where the crowd is: the ISS at 400-420 km, Hubble a little above 500 km, thousands of Starlink satellites in 53° and 97.6° shells around 550 km, and most of the smallsat traffic of the last decade. It is a deliberate choice. At 550 km a dead satellite decays in about five years without any help, so a failed unit cleans itself up inside the disposal rules, and a collision here does not leave a permanent cloud.\n\nFor salvage that makes it a live-traffic band rather than a graveyard: the objects are fresh, intact and often still owned, and the room is full of things that manoeuvre. Fragments are short-lived and mostly at the small end. What is worth catching is the occasional whole failed satellite before it decays, or a stage left low. Expect to share the sky, and expect anything you leave alone to be gone within a decade.",
+        "realWorld": "ISS: 400-420 km. Starlink: ~550 km in 53° and 97.6° shells; SpaceX cites roughly five years to natural decay from that height. The FCC five-year post-mission disposal rule (adopted 2022, effective 2024) is written for exactly this band.",
+        "trlRationale": "Decay lifetimes at 500-600 km are measured on thousands of catalogued objects.",
+        "unlockHint": "Aim at a cluster between 400 and 600 km at the route-planning zoom, then open SPECS."
+      }
+    },
+    {
+      "id": "band_600_900",
+      "category": "DEBRIS",
+      "trl": 9,
+      "icon": "💥",
+      "startUnlocked": true,
+      "related": [
+        "atmospheric_drag",
+        "orbital_period_altitude",
+        "kessler_syndrome",
+        "iridium_cosmos",
+        "fengyun_test",
+        "catalog_envisat",
+        "catalog_sl16",
+        "cluster_sso",
+        "cluster_russian72",
+        "band_400_600",
+        "band_900_1200"
+      ],
+      "i18n": {
+        "title": "600-900 km: The Crowded Shell",
+        "shortText": "Sun-synchronous imagers, nine-tonne Zenit stages, Envisat and the two worst debris clouds share this shell. Lifetimes: centuries.",
+        "fullText": "Above 600 km the atmosphere stops helping. A dead object at 800 km stays for centuries, so everything ever left here is still here: the sun-synchronous imaging fleets at 700-800 km, Envisat's eight tonnes near 770 km, the Iridium constellation at 780 km and the Zenit-2 second stages at about 840 km. It is also where the two largest fragmentation events happened: the Fengyun-1C test at 865 km in 2007 and the Iridium 33 and Cosmos 2251 collision at 789 km in 2009, together more than 5,000 tracked fragments.\n\nThe 800-1,000 km region carries the highest object density in low orbit, and this shell owns the lower half of it, which is why the removal studies keep pointing here and why the densest clusters on your chart tend to sit in it. Big intact masses and a thick fragment background make it the most valuable and the most dangerous band you will work: a nine-tonne stage is a season's haul, and the same shell is full of dark fragments below tracking size. Plan the plane first, then work the altitude sub-bands one at a time.",
+        "realWorld": "Fengyun-1C (11 Jan 2007, ~865 km) and Iridium 33/Cosmos 2251 (10 Feb 2009, ~789 km): 3,000+ and 2,000+ tracked fragments. Envisat: 8.2 t near 770 km. SL-16 stages: ~8.8-9 t near 840 km. Iridium: 780 km.",
+        "trlRationale": "The 800-1,000 km density peak is documented in every ESA and NASA debris environment report.",
+        "unlockHint": "Aim at a cluster between 600 and 900 km at the route-planning zoom, then open SPECS."
+      }
+    },
+    {
+      "id": "band_900_1200",
+      "category": "DEBRIS",
+      "trl": 9,
+      "icon": "💥",
+      "startUnlocked": true,
+      "related": [
+        "orbital_period_altitude",
+        "kessler_syndrome",
+        "cluster_russian_sso",
+        "cluster_russian65",
+        "band_600_900",
+        "band_1200_2000"
+      ],
+      "i18n": {
+        "title": "900-1,200 km: The Thousand-Year Shell",
+        "shortText": "Nothing decays from here. Cold War navsats, Kosmos-3M stages and parked reactor cores will outlast every treaty written about them.",
+        "fullText": "At 1,000 km the atmosphere is effectively gone and orbital lifetimes run to a thousand years or more. The band was filled in the 1970s and 1980s and has not emptied since: the Soviet Parus and Tsikada navigation fleets at about 1,000 km and 83°, the Kosmos-3M upper stages that carried them, the Meteor-2 weather satellites near 950 km, the RORSAT reactor cores parked near 950 km at 65°, and the American Transit navsats at 1,100 km. The Zenit-2 stages sit just below the band's floor at about 840 km.\n\nThe 900-1,000 km region is the upper half of low orbit's density peak and one of the two shells analysts argue is already past the Kessler threshold. Traffic is thin, so conjunctions are rarer than lower down, but nothing here is going to leave on its own. That is the band's value to you: an object caught here is an object removed from a permanent population, and a heavy one is a cascade seed taken off the table. Work it in the plane you arrive in; the altitude spread is narrow, the plane spread is not.",
+        "realWorld": "Parus/Tsikada navsats and their Kosmos-3M stages: ~1,000 km, 83°. RORSAT reactor cores: ~950 km disposal orbits at 65°. Kessler & Cour-Palais (1978) and later studies flag the 900-1,000 km shell as near or past critical density.",
+        "trlRationale": "Population and lifetime figures from the public catalog and the ESA/NASA environment reports.",
+        "unlockHint": "Aim at a cluster between 900 and 1,200 km at the route-planning zoom, then open SPECS."
+      }
+    },
+    {
+      "id": "band_1200_2000",
+      "category": "DEBRIS",
+      "trl": 9,
+      "icon": "💥",
+      "startUnlocked": true,
+      "related": [
+        "orbital_period_altitude",
+        "kessler_syndrome",
+        "band_900_1200"
+      ],
+      "i18n": {
+        "title": "1,200-2,000 km: The Thin Top of LEO",
+        "shortText": "Sparse, radiation-soaked and permanent: Globalstar, OneWeb, old Strela relays and their Kosmos-3M stages at the top of low orbit.",
+        "fullText": "Above 1,200 km the population thins out, partly because the inner Van Allen belt starts to bite and electronics age fast. What is here was put here on purpose: Globalstar's phones at 1,414 km and 52°, OneWeb's internet shell at 1,200 km and 87.9°, the Soviet Strela-1M and Strela-3 relay swarms near 1,400-1,500 km with the Kosmos-3M stages that launched them, and a scatter of legacy military payloads. Orbital lifetimes here are measured in millennia; nothing decays.\n\nThe clusters are small and far apart, which is the salvage problem. Transfers up from the 800 km shells cost a few hundred metres per second each way, the trip through the belt costs radiation dose, and the mass is spread thin. The ~1,500 km region is the second shell analysts flag as near critical density, so a cleared cluster here stays cleared for good. Come for a named heavy object or a dense Strela swarm; do not come to browse.",
+        "realWorld": "Globalstar: 1,414 km, 52°. OneWeb: 1,200 km, 87.9°. Strela-1M/Strela-3 relays and their Kosmos-3M stages: ~1,400-1,500 km. Kessler analyses flag the ~1,500 km shell alongside 900-1,000 km as near critical density.",
+        "trlRationale": "Public catalog population; the density-threshold argument is the published Kessler analysis.",
+        "unlockHint": "Aim at a cluster above 1,200 km at the route-planning zoom, then open SPECS."
       }
     }
   ]

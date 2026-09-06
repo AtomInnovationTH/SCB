@@ -25,10 +25,18 @@
  *                                  second copy of the numbers); no target →
  *                                  floor 2 reads the HUD primer, floor 3 the
  *                                  approach pane's own entry;
- *   floor 4 (LEO, NAVCOM)        → a focused cluster → the transfer physics
- *                                  (Hohmann), else the transfer-window
- *                                  concept (no per-cluster entries exist —
- *                                  03-plan Session J FINDINGS);
+ *   floor 4 (LEO, NAVCOM)        → the FOCUSED CLUSTER's inclination-FAMILY
+ *                                  entry (`cluster_*`, from the cluster id's
+ *                                  `<family>-<altMin>` prefix — DebrisField
+ *                                  INC_NAMES), with the ALTITUDE-BAND entry
+ *                                  (`band_*`, from the `<altMin>` suffix —
+ *                                  Constants.DEBRIS.ALT_BANDS) as the
+ *                                  SECONDARY (resolveSubjectDetail); a
+ *                                  focused cluster the hub reports only as a
+ *                                  flag (or an unrecognised family) → the
+ *                                  transfer physics (Hohmann), none → the
+ *                                  transfer-window concept (Session L closed
+ *                                  the 03-plan Session J FINDINGS (d));
  *   floor 5 (GEO, SDA)           → the chart LENS: THREAT → Kessler, VALUE
  *                                  → the chart's own entry.
  *
@@ -92,6 +100,56 @@ export const FLOOR_ENTRIES = Object.freeze({
 });
 
 /**
+ * Floor 4 — the cluster id's FAMILY prefix (DebrisField INC_NAMES `name`,
+ * the part before the last '-') → the codex `cluster_*` entry. Session L
+ * data pass: seven inclination-family briefings. An unlisted family (a
+ * retuned INC_NAMES) falls back to FLOOR_ENTRIES[4].cluster, never to
+ * `cluster_scattered` — scattered is a real family with its own meaning.
+ */
+export const CLUSTER_FAMILIES = Object.freeze({
+  canaveral: 'cluster_canaveral',
+  iss: 'cluster_iss',
+  russian65: 'cluster_russian65',
+  russian72: 'cluster_russian72',
+  russianSSO: 'cluster_russian_sso',
+  sso: 'cluster_sso',
+  scattered: 'cluster_scattered',
+});
+
+/**
+ * Floor 4 — the cluster id's ALTITUDE-BAND suffix (Constants.DEBRIS.ALT_BANDS
+ * `min`, km) → the codex `band_*` entry: the five low-orbit bands only. The
+ * MEO / GEO cells have no band entry (secondary null).
+ */
+export const CLUSTER_BANDS = Object.freeze({
+  180: 'band_180_400',
+  400: 'band_400_600',
+  600: 'band_600_900',
+  900: 'band_900_1200',
+  1200: 'band_1200_2000',
+});
+
+/**
+ * The entries a NAVCOM cluster documents: its inclination FAMILY (the subject)
+ * and its ALTITUDE BAND (the secondary), from the DebrisField cluster id
+ * `${family}-${altMin}` (getDebrisClusters / classifyClusterId).
+ * @param {{ id?: string }|string|null|undefined} cluster - the focused cluster
+ *   (DebrisField.getDebrisClusters shape) or its id
+ * @returns {{ family: string, band: string|null }|null} null for no cluster,
+ *   a junk id, or an unrecognised family
+ */
+export function clusterEntries(cluster) {
+  const id = (typeof cluster === 'string') ? cluster
+    : (cluster && typeof cluster === 'object' && typeof cluster.id === 'string') ? cluster.id : '';
+  if (!id) return null;
+  const dash = id.lastIndexOf('-');
+  const family = CLUSTER_FAMILIES[dash < 0 ? id : id.slice(0, dash)];
+  if (!family) return null;
+  const alt = dash < 0 ? NaN : Number(id.slice(dash + 1));
+  return { family, band: (Number.isFinite(alt) && CLUSTER_BANDS[alt]) || null };
+}
+
+/**
  * The entry a debris TARGET documents, or null for no target.
  * @param {{ name?: string, tracked?: boolean, mass?: number }|null|undefined} target
  *   the TargetSelector's active debris (DebrisField shape: `name`, `tracked`,
@@ -126,7 +184,10 @@ export function targetEntry(target) {
  * @param {string|null} [view.partCodexId]  - floor 1: the focused hull part's codexId
  * @param {string|null} [view.refitCodexId] - floor 1: the REFIT card's manifest entry
  * @param {object|null} [view.target]       - floors 2–3: the active debris target
+ * @param {object|string|null} [view.cluster] - floor 4: the focused NAVCOM cluster
+ *   (NavcomFloor.getFocusedCluster — `{ id }` or the id) → its family entry
  * @param {boolean} [view.clusterFocused]   - floor 4: a NAVCOM cluster is focused
+ *   (the flag-only read: the transfer physics, as shipped)
  * @param {string|null} [view.lens]         - floor 5: the SDA chart lens ('VALUE'|'THREAT')
  * @returns {string|null} a codex entry id, or null (the pane's own fallback stands)
  */
@@ -142,7 +203,9 @@ export function resolveSubject(view) {
     return targetEntry(view.target) || FLOOR_ENTRIES[floor].idle;
   }
   if (floor === 4) {
-    return view.clusterFocused ? FLOOR_ENTRIES[4].cluster : FLOOR_ENTRIES[4].idle;
+    const entries = clusterEntries(view.cluster);
+    if (entries) return entries.family;
+    return (view.cluster || view.clusterFocused) ? FLOOR_ENTRIES[4].cluster : FLOOR_ENTRIES[4].idle;
   }
   if (floor === 5) {
     const lens = (typeof view.lens === 'string') ? view.lens.toUpperCase() : null;
@@ -151,13 +214,30 @@ export function resolveSubject(view) {
   return null;
 }
 
+/**
+ * resolveSubject plus the optional SECONDARY entry a reader may ignore: on
+ * floor 4 with a recognised cluster, its altitude-band `band_*` entry; null
+ * everywhere else. `id` is exactly resolveSubject(view).
+ * @param {object} view - as resolveSubject
+ * @returns {{ id: string|null, secondary: string|null }}
+ */
+export function resolveSubjectDetail(view) {
+  const id = resolveSubject(view);
+  const entries = (view && typeof view === 'object' && view.floor === 4) ? clusterEntries(view.cluster) : null;
+  return { id, secondary: (entries && entries.band) || null };
+}
+
 export const SpecsSubject = Object.freeze({
   CATALOG_NAMES,
   DARK_ENTRY,
   TOOL_ENTRIES,
   FLOOR_ENTRIES,
+  CLUSTER_FAMILIES,
+  CLUSTER_BANDS,
   targetEntry,
+  clusterEntries,
   resolveSubject,
+  resolveSubjectDetail,
 });
 
 export default SpecsSubject;

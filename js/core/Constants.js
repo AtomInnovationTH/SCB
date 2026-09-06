@@ -35,7 +35,7 @@ export const Constants = {
   // the briefing-less callout parts (aft_thruster_deck, fore_bulkhead,
   // sensor_deck, nav_lights, tip_hardpoints; owner decision 1) + their
   // symmetric backlinks; 215 → 220 entries (08-workbench §2 / §7).
-  DATA_VERSION: '1010',
+  DATA_VERSION: '1011',
 
   // ============================================================================
   // === INPUT (Delegation 1, 2026-05-31) ===
